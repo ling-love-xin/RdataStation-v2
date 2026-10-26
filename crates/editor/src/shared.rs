@@ -169,6 +169,12 @@ pub struct EditorShared {
     /// 【#20】内核注册表端口（宿主注入 `rds_kernel::detect_kernels()` 的快照；
     /// 未注入 = 空列表，菜单如实置灰）
     kernel_port: Rc<RefCell<Option<Rc<dyn crate::kernel::KernelsPort>>>>,
+    /// 【2026-10-27】用户折叠开关（工具栏按钮切换；默认开）。
+    ///
+    /// 与能力表 / 大文件档位并成 [`Self::folding_enabled`] 的最终判据：关掉时折叠候选
+    /// 整体不喂（不是"只看不折"）——`sync_fold` 会落 `set_folding(false)`，槽位与
+    /// chevron 一并消失，与能力表关闭同口径。
+    show_folds: Rc<std::cell::Cell<bool>>,
     /// 执行回执队列（宿主轮询取走；见 [`ExecReceipt`]）
     receipts: Rc<RefCell<Vec<ExecReceipt>>>,
     /// 【#54 B】语义诊断目录快照（**按文档存**：多文档可各绑各连接，扫描只认
@@ -208,6 +214,7 @@ impl Clone for EditorShared {
             receipts: self.receipts.clone(),
             catalog_snapshots: self.catalog_snapshots.clone(),
             show_document_port: self.show_document_port.clone(),
+            show_folds: self.show_folds.clone(),
         }
     }
 }
@@ -244,6 +251,7 @@ impl EditorShared {
             receipts: Rc::new(RefCell::new(Vec::new())),
             catalog_snapshots: Rc::new(RefCell::new(std::collections::HashMap::new())),
             show_document_port: Rc::new(RefCell::new(None)),
+            show_folds: Rc::new(std::cell::Cell::new(true)),
         }
     }
 
@@ -1311,16 +1319,31 @@ impl EditorShared {
         snapshots.retain(|doc, _| alive.contains(doc));
     }
 
-    /// 折叠开不开：能力表 + 文件档位
+    /// 折叠开不开：用户开关 + 能力表 + 文件档位
     ///
     /// 与 [`Self::completion_enabled`] 同形，但**不看编辑器只读**——折叠是「看结构」的能力，
     /// 只读文档（查看历史快照 / 只读预览）照样能折，把它关掉只会让长脚本更难读。
+    /// 用户开关（工具栏按钮）在最前：关了折叠就是整体不喂候选（`sync_fold` 落
+    /// `set_folding(false)`，与能力表关闭同口径），而不是只留一个静默判据。
     pub fn folding_enabled(&self, document: &DocumentId) -> bool {
+        if !self.show_folds.get() {
+            return false;
+        }
         let service = self.service.borrow();
         let Some(doc) = service.find(document) else {
             return false;
         };
         doc.capabilities().folding && !doc.tier().disables_folding()
+    }
+
+    /// 用户折叠开关（工具栏按钮切换；2026-10-27 恢复折叠时加入）
+    pub fn show_folds(&self) -> bool {
+        self.show_folds.get()
+    }
+
+    /// 切换用户折叠开关（事件路径：按钮点击 → set + 宿主重跑 `sync_fold` + notify）
+    pub fn set_show_folds(&self, on: bool) {
+        self.show_folds.set(on);
     }
 
     /// 【B18】后台扫描的范围（折叠 / 诊断两个重活开不开）

@@ -98,12 +98,14 @@ pub struct StatusInputs<'a> {
 /// 文案走 [`labels`]（纯函数、可穷举），控件走这里——两者分开才能把“该显示什么”测干净。
 #[derive(Default)]
 pub struct StatusControls {
-    /// 【T2c-1】连接 ▸ 库 ▸ Schema 面包屑（可点切换；有它时替代文本连接段——它自己带连接信息）
-    pub breadcrumb: Option<AnyElement>,
-    /// 【T2c-3】行｜列编辑切换入口（PopupMenu；列编辑内核多光标 API 未公开 → 列项置灰标注）
+    /// 【T2c-3】行｜列编辑切换（**循环按钮**：点击在 行编辑/列编辑 间翻转，无下拉）
     pub edit_mode: Option<AnyElement>,
-    /// 【T2c-4】重设菜单入口（编码 / 换行 / 缩进；缩进真改内核 TabSize，编码换行置灰标注）
+    /// 【2026-10-27】重设菜单（仅缩进 + 显示；编码 / 换行已拆独立段，各自直接可点）
     pub reset_menu: Option<AnyElement>,
+    /// 【2026-10-27】编码段（点击弹出编码选择对话框；见 `view/encoding_dialog.rs`）
+    pub encoding: Option<AnyElement>,
+    /// 【2026-10-27】换行段（点击在 LF / CRLF 间循环，无下拉）
+    pub eol: Option<AnyElement>,
     /// 【B4】事务区控件（自动提交开关 + 事务开启时的提交 / 回滚），挂在**左段**
     pub tx: Option<AnyElement>,
     /// 【B13】执行方式控件（源库 / 加速 / 联邦可切），挂在**左段**（方言之后、正文之前）
@@ -163,28 +165,25 @@ pub fn right_badges(inputs: &StatusInputs) -> Vec<StatusBadge> {
         icon: None,
         text: format!("Ln {}, Col {}", inputs.line, inputs.column),
     });
-    // 选区：选中字符（Ch）+ 选中行（Row）——原型 §2.5 的 `Ch 0` · `Row 1`；无选区不摆
+    // 选区：人读中文徽标（2026-10-27 友好化：原 `Ch N` · `Row N` 太技术化）。
+    // 跨多行 = 「已选 N 行 · M 字符」，单行 = 「已选 M 字符」；无选区不摆
     if inputs.selected_chars > 0 {
+        let text = if inputs.selected_rows > 1 {
+            format!(
+                "已选 {} 行 · {} 字符",
+                inputs.selected_rows, inputs.selected_chars
+            )
+        } else {
+            format!("已选 {} 字符", inputs.selected_chars)
+        };
         badges.push(StatusBadge {
             icon: None,
-            text: format!("Ch {}", inputs.selected_chars),
+            text,
         });
     }
-    if inputs.selected_rows > 0 {
-        badges.push(StatusBadge {
-            icon: None,
-            text: format!("Row {}", inputs.selected_rows),
-        });
-    }
-    // 编码 / 换行 / 缩进 / 大小：文档级保存格式（2c：打开按磁盘检测、菜单可切），独立微标
-    badges.push(StatusBadge {
-        icon: None,
-        text: inputs.format.encoding.short_label().to_string(),
-    });
-    badges.push(StatusBadge {
-        icon: None,
-        text: inputs.format.eol.label().to_string(),
-    });
+    // 缩进 / 大小：文档级设置（缩进菜单在右侧 reset_menu；大小纯数据，独立微标）
+    // 编码 / 换行：2026-10-27 起由右侧**交互段**呈现（`controls.encoding` 按钮弹窗选择、
+    // `controls.eol` 按钮 LF/CRLF 循环切换）——一个值只在一处显示，数据徽标不再重复画。
     badges.push(StatusBadge {
         icon: None,
         text: if inputs.hard_tabs {
@@ -339,8 +338,10 @@ pub fn render(
     let muted = theme.colors.muted_foreground;
     let border = theme.colors.border;
 
-    // 面包屑优先于文本连接段（它自己显示 连接 ▸ 库 ▸ Schema，比纯文本信息量更大）
-    let has_breadcrumb = controls.breadcrumb.is_some();
+    // 左段 = 方言（引擎）→ 执行方式控件 → 正文（事务 · 环境族 · 未保存 · 执行中 · 提示）。
+    // 2026-10-27：连接 ▸ 库 ▸ Schema 定位整体迁工具栏右区（连接名称 + schema@db 两固定区，
+    // 见 `view/host.rs::render_conn_slots`）；状态栏左段只留引擎/事务等**当前上下文**，
+    // 不再占路径。`labels().connection` 仍保留计算（纯函数测试继续覆盖），render 不再消费。
     let left = div()
         .h_flex()
         .items_center()
@@ -349,11 +350,7 @@ pub fn render(
         .text_color(muted)
         .flex_1()
         .min_w_0()
-        .children(controls.breadcrumb)
-        .when(!has_breadcrumb, |row| {
-            row.child(text.connection.unwrap_or_default())
-        })
-        // 方言段紧跟连接（面包屑/文本连接段之后）：它是「这个连接是什么引擎」，不是路径
+        // 方言段（它是「这个连接是什么引擎」，不是路径）
         .when(text.dialect.is_some(), |row| {
             row.child(text.dialect.clone().unwrap())
         })
@@ -380,6 +377,9 @@ pub fn render(
         .text_color(muted)
         .flex_none()
         .children(controls.edit_mode)
+        // 换行（LF/CRLF 循环）→ 编码（点击弹窗）→ 缩进菜单：交互段与数据微标分开
+        .children(controls.eol)
+        .children(controls.encoding)
         .children(controls.reset_menu);
     for (index, badge) in badges.iter().enumerate() {
         if index > 0 {
@@ -615,7 +615,7 @@ mod tests {
             text.right
         );
         assert!(
-            !text.right.iter().any(|b| b.contains("Ch")),
+            !text.right.iter().any(|b| b.contains("已选")),
             "没有选区就不显示选区段：{:?}",
             text.right
         );
@@ -624,14 +624,19 @@ mod tests {
         selecting.selected_chars = 7;
         selecting.selected_rows = 2;
         assert!(
-            labels(&selecting).right.iter().any(|b| b.contains("Ch 7")),
-            "{:?}",
+            labels(&selecting).right.iter().any(|b| b.contains("已选 2 行 · 7 字符")),
+            "跨行选区合并成人读中文徽标：{:?}",
             labels(&selecting).right
         );
+
+        // 单行选区（selected_rows = 1）只报字符数
+        let mut single_line = inputs(ReadOnly::none());
+        single_line.selected_chars = 5;
+        single_line.selected_rows = 1;
         assert!(
-            labels(&selecting).right.iter().any(|b| b.contains("Row 2")),
-            "选中行数微标：{:?}",
-            labels(&selecting).right
+            labels(&single_line).right.iter().any(|b| b.contains("已选 5 字符")),
+            "单行选区只报字符数：{:?}",
+            labels(&single_line).right
         );
     }
 
@@ -783,8 +788,8 @@ mod tests {
             text.right
         );
         assert!(
-            text.right.iter().any(|b| b.contains("UTF-8")),
-            "{:?}",
+            text.right.iter().any(|b| b.contains("Spaces: 2")),
+            "缩进微标独立：{:?}",
             text.right
         );
     }
@@ -808,16 +813,6 @@ mod tests {
         assert!(
             text.right.iter().any(|b| b.contains("Ln 12, Col 4")),
             "行/列：{:?}",
-            text.right
-        );
-        assert!(
-            text.right.iter().any(|b| b.contains("UTF-8")),
-            "编码微标独立：{:?}",
-            text.right
-        );
-        assert!(
-            text.right.iter().any(|b| b.contains("LF")),
-            "换行微标独立：{:?}",
             text.right
         );
         assert!(
@@ -851,23 +846,24 @@ mod tests {
         );
     }
 
-    /// 【2c】编码/换行微标跟随文档保存格式（不硬编码 UTF-8 · LF）
+    /// 【2c / 2026-10-27】编码 / 换行段从数据徽标移除：右侧由**交互段**呈现
+    ///（encoding 按钮点击弹窗选择、eol 按钮点击循环 LF/CRLF）——一个值只在一处显示。
     #[test]
-    fn encoding_and_eol_badges_follow_save_format() {
-        // 默认 UTF-8 · LF
+    fn encoding_and_eol_are_interactive_segments_not_data_badges() {
+        // 默认 UTF-8 · LF：数据徽标里**不再**有编码 / 换行（交互段在 StatusControls）
         let text = labels(&inputs(ReadOnly::none()));
         assert!(
-            text.right.iter().any(|b| b == "UTF-8"),
-            "默认编码微标：{:?}",
+            !text.right.iter().any(|b| b == "UTF-8"),
+            "编码段由交互按钮呈现，不再重复数据徽标：{:?}",
             text.right
         );
         assert!(
-            text.right.iter().any(|b| b == "LF"),
-            "默认换行微标：{:?}",
+            !text.right.iter().any(|b| b == "LF"),
+            "换行段由交互按钮呈现，不再重复数据徽标：{:?}",
             text.right
         );
 
-        // GBK + CRLF：两个微标都跟着变
+        // GBK + CRLF 同理：数据徽标不含，缩进/大小等仍独立
         let mut gbk = inputs(ReadOnly::none());
         gbk.format = crate::encoding::SaveFormat {
             encoding: crate::encoding::TextEncoding::Gbk,
@@ -875,21 +871,13 @@ mod tests {
         };
         let text = labels(&gbk);
         assert!(
-            text.right.iter().any(|b| b == "GBK") && text.right.iter().any(|b| b == "CRLF"),
-            "GBK/CRLF 微标：{:?}",
+            !text.right.iter().any(|b| b == "GBK") && !text.right.iter().any(|b| b == "CRLF"),
+            "编码/换行不再进数据徽标：{:?}",
             text.right
         );
-
-        // UTF-8 BOM 用短标（状态栏一行放不下长名）
-        let mut bom = inputs(ReadOnly::none());
-        bom.format = crate::encoding::SaveFormat {
-            encoding: crate::encoding::TextEncoding::Utf8Bom,
-            eol: crate::encoding::LineEnding::Lf,
-        };
-        let text = labels(&bom);
         assert!(
-            text.right.iter().any(|b| b == "UTF-8 BOM") && text.right.iter().any(|b| b == "LF"),
-            "UTF-8 BOM 短标：{:?}",
+            text.right.iter().any(|b| b.contains("Spaces: 2")),
+            "缩进微标仍独立：{:?}",
             text.right
         );
     }

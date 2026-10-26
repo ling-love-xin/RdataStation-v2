@@ -1,14 +1,15 @@
 //! 折叠的**视图侧**（B17）：把纯函数算出的候选喂给编辑内核
 //!
-//! ## 当前状态（2026-10-21：行号槽收窄，折叠入口随槽关闭）
+//! ## 当前状态（2026-10-27：折叠恢复）
 //!
-//! 用户确认「关折叠槽」后，折叠 chevron 没有 18px 槽位可画，点击折叠入口随之消失：
-//! `Capabilities::folding` 置 `false`，`sync_fold` 恒走 `set_folding(false)` 分支，
-//! 本模块的 `install` / `refresh` 不再被调用（`fold_spans` 纯文本分析仍保留，测试可复用）。
-//! 若未来恢复折叠：把能力表 `folding` 置回 `true` 并同步打开行号槽（vendor
-//! `layout_line_numbers` 的折叠槽分支），本模块即可直接复活。
+//! 能力表 `Capabilities::folding` 已置回 `true`（General / SQL），内核 `mode.is_folding()`
+//! 自动在行号槽右侧加折叠槽并自绘 chevron / 点击折叠（`element.rs` 的
+//! `layout_fold_icons` / `paint_fold_icons`）；本模块的 `install` / `refresh` 恢复被调用
+//! （`sync_fold` 按 [`EditorShared::folding_enabled`] 喂候选，大文件档位仍运行时降级）。
+//! 用户开关 = `shared.show_folds`（工具栏按钮，可关；见 `shared.rs`）。
+//! 分析模式折叠属单元层结构（1c），能力表保持关闭。
 //!
-//! ## 内核这边是什么情况（读 `gpui-base` 0.7.1 源码得来，别猜）
+//! ## 内核这边是什么情况（读 `gpui-base` 0.8.1 源码得来，别猜）
 //!
 //! 机制齐全、候选外供：
 //!
@@ -20,8 +21,8 @@
 //! | 喂候选的公开入口 | `EditorState::apply_highlighter_fold_candidates`（`state.rs:825`） | 公开可用（自带 `mode.is_folding()` 门） |
 //! | 渲染与点击折叠 | `element.rs` 的 `paint_fold_icons`（chevron + 点击） | 内核负责，我们不画 |
 //!
-//! 关闭前本模块只做两件事：**打开文档时喂一次**、**每次文本变更后再喂一次**（不重喂会指到别的行——
-//! 这一点是本模块存在的主要理由，不是"顺手补个功能"）。代码路径保留（见上），便于恢复。
+//! 本模块只做两件事：**打开文档时喂一次**、**每次文本变更后再喂一次**（不重喂会指到别的行——
+//! 这一点是本模块存在的主要理由，不是"顺手补个功能"）。代码路径自 B17 起保留。
 //!
 //! ## 三条取舍
 //!
@@ -40,10 +41,10 @@ use crate::model::EditorMode;
 
 /// 该模式是否启用折叠
 ///
-/// 行号槽收窄后折叠入口随槽关闭（chevron 没有槽位可画，点击折叠入口消失），
-/// `Capabilities::folding` 一并置 false；本函数与能力表同口径，恢复折叠需同步开两处。
-pub fn is_enabled(_mode: EditorMode) -> bool {
-    false
+/// 2026-10-27 恢复：General / SQL 开启（能力表 `folding: true` 同口径）；分析模式的折叠
+/// 属单元层结构（1c），能力表关闭、这里同口径。用户开关 `shared.show_folds` 可再关。
+pub fn is_enabled(mode: EditorMode) -> bool {
+    matches!(mode, EditorMode::General | EditorMode::Sql)
 }
 
 /// 候选 → 内核形状（纯函数，可逐条断言）
@@ -103,10 +104,11 @@ mod tests {
     use crate::model::EditorMode;
 
     #[test]
-    fn folding_is_off_everywhere_after_the_gutter_shrunk() {
-        // 行号槽收窄后折叠入口随槽关闭：所有模式都不开（能力表 `folding: false` 同口径）
-        assert!(!is_enabled(EditorMode::General));
-        assert!(!is_enabled(EditorMode::Sql));
+    fn folding_is_enabled_for_script_and_sql_modes() {
+        // 折叠恢复（2026-10-27）：脚本文档与 SQL 都开（能力表 `folding: true` 同口径）；
+        // 分析模式折叠属单元层结构（1c），保持关闭
+        assert!(is_enabled(EditorMode::General));
+        assert!(is_enabled(EditorMode::Sql));
         assert!(!is_enabled(EditorMode::Analysis));
     }
 

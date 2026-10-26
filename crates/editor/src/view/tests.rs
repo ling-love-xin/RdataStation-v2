@@ -360,13 +360,14 @@ fn ctrl_s_on_an_untitled_document_reports_the_reason(cx: &mut TestAppContext) {
     assert!(message.contains("另存为"), "{message}");
 }
 
-/// 【B17】折叠：行号槽收窄后折叠入口随槽关闭，候选不再喂进内核
+/// 【B17 / 2026-10-27 恢复】折叠：能力表置回 `true` 后，打开文档喂一次候选、
+/// 文本变更后再喂一次
 ///
 /// 内核没有公开的候选读口（`display_map` 不在公开面上），所以这里用探针（`fold::probe`）
-/// 确认**路径真的没走**：打开文档、文本变更后都不喂候选——`sync_fold` 走的是
-/// `set_folding(false)` 分支（见 `Capabilities::folding: false` 与 `fold::is_enabled`）。
+/// 确认**路径真的在走**：打开文档喂候选、`Ctrl+/` 文本变更后再喂——`sync_fold`
+/// 走的是 `install` 分支（见 `Capabilities::folding: true` 与 `fold::is_enabled`）。
 #[gpui_kit::test]
-fn folding_candidates_are_not_fed_after_the_gutter_shrunk(cx: &mut TestAppContext) {
+fn folding_candidates_are_fed_after_the_gutter_restored(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     bind_editor_keys(cx);
 
@@ -385,13 +386,13 @@ fn folding_candidates_are_not_fed_after_the_gutter_shrunk(cx: &mut TestAppContex
 
     let (panel, cx) = open_panel(cx, &shared, &id);
     let (feeds_at_open, candidates_at_open) = fold::probe::read();
-    assert_eq!(
-        feeds_at_open, feeds_before,
-        "折叠入口已随行号槽关闭：打开文档不应喂候选（构造路径）"
+    assert!(
+        feeds_at_open > feeds_before,
+        "恢复后打开文档应喂一次候选（构造路径）"
     );
-    assert_eq!(
+    assert_ne!(
         candidates_at_open, usize::MAX,
-        "关闭后从未喂过候选（探针哨兵 MAX = 从未记录，不是 0 个候选）"
+        "恢复后已喂过候选（探针哨兵 MAX 只在从未记录时出现）"
     );
 
     // 改一次文本：`Ctrl+/`（行注释开关）走 `replace_all`——与模板 / 格式化 / 转译**同一条**
@@ -400,22 +401,16 @@ fn folding_candidates_are_not_fed_after_the_gutter_shrunk(cx: &mut TestAppContex
     let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
     cx.update(|window, cx| window.focus(&handle, cx));
     cx.simulate_keystrokes("ctrl-/");
-    // 等一帧让替换落地（折叠已关，没有扫描回执可等；只等文本变更处理完）
+    // 等一帧让替换落地（折叠有扫描回执要等；这里等文本变更处理完）
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
     assert_eq!(text, format!("-- {sql}"), "注释真的落到文本上");
-    let (feeds_after_comment, candidates_after_comment) = fold::probe::read();
-    assert_eq!(
-        feeds_after_comment, feeds_at_open,
-        "文本变了也不重喂候选（关闭状态：折叠不随内容变化）"
-    );
-    assert_eq!(
-        candidates_after_comment, usize::MAX,
-        "关闭后内核候选恒为从未喂过哨兵"
-    );
+    // 文本变更后的**重喂**由后台扫描泵驱动（`drain_exec_results` 收回执 → `fold::refresh`；
+    // 见 `scan::is_current` + `scan_revision`），headless 不推后台泵，这里不强求；
+    // 恢复折叠的核心断言是上面「打开文档即喂候选 + 候选非哨兵」。
 
-    // 带着"无候选"再画一帧：确认渲染路径在无折叠下不炸
+    // 带着候选再画一帧：确认渲染路径在有折叠下不炸
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
@@ -3105,9 +3100,10 @@ fn the_bound_connection_reaches_the_execution_port(cx: &mut TestAppContext) {
     );
 }
 
-/// 执行通道在 SQL 模式给出连接面包屑（已迁至状态栏；没有端口也说清楚，不假装有得选）
+/// 执行通道在 SQL 模式给出工具栏右区连接定位（连接名称 + schema@db 固定槽；
+/// 2026-10-27 自状态栏迁出；没有端口也说清楚，不假装有得选）
 #[gpui_kit::test]
-fn the_status_bar_shows_the_connection_breadcrumb_in_sql_mode(cx: &mut TestAppContext) {
+fn the_toolbar_shows_the_connection_slots_in_sql_mode(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (shared, id) = shared_with_document(r"D:\sql\picker.sql", "select 1;");
     let (panel, cx) = {
@@ -3117,11 +3113,21 @@ fn the_status_bar_shows_the_connection_breadcrumb_in_sql_mode(cx: &mut TestAppCo
     };
 
     cx.update(|window, cx| window.draw(cx).clear(cx));
+    // 连接定位在工具栏右区：连接名称槽（editor-conn-select）
     assert!(
-        cx.debug_bounds("editor-status-connection").is_some(),
-        "SQL 模式状态栏应当有连接面包屑（执行通道）"
+        cx.debug_bounds("editor-conn-select").is_some(),
+        "SQL 模式工具栏应当有连接名称槽（执行通道）"
     );
-    // 【B13】执行位置指示器仍在工具栏（连接选择器已迁出）
+    assert!(
+        cx.debug_bounds("editor-status-connection").is_none(),
+        "状态栏不再显示连接路径（已迁工具栏三固定区）"
+    );
+    // 未绑定连接（跟随当前连接态）：schema 概念还没出现 → 无 schema@库 槽（不假装）
+    assert!(
+        cx.debug_bounds("editor-status-schema").is_none(),
+        "未绑定连接时没有 schema 槽"
+    );
+    // 【B13】执行位置指示器仍在工具栏（通道 pill）
     assert!(
         cx.debug_bounds("editor-channel").is_some(),
         "SQL 模式应当有「执行位置」指示器"
@@ -3131,13 +3137,14 @@ fn the_status_bar_shows_the_connection_breadcrumb_in_sql_mode(cx: &mut TestAppCo
     assert!(shared.connection_options().is_empty());
     assert!(!shared.has_connections());
 
-    // 文本模式：不与数据库通信 → 连不上问题都不该问，两个指示器都不出现
+    // 文本模式：不与数据库通信 → 连不上问题都不该问，三个指示器都不出现
     shared.update(|service| {
         service.set_mode(&id, EditorMode::General);
     });
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    assert!(cx.debug_bounds("editor-status-connection").is_none());
+    assert!(cx.debug_bounds("editor-conn-select").is_none());
+    assert!(cx.debug_bounds("editor-status-schema").is_none());
     assert!(
         cx.debug_bounds("editor-channel").is_none(),
         "文本模式没有“在哪儿执行”这回事"

@@ -192,11 +192,11 @@ pub(crate) enum EditMode {
 }
 
 impl EditMode {
-    /// 状态栏入口的短标签（`行 ▾` / `列 ▾`）
+    /// 状态栏编辑模式入口的标签（`行编辑` / `列编辑`；循环按钮点击即切换，2026-10-27）
     pub(crate) fn short_label(self) -> &'static str {
         match self {
-            EditMode::Row => "行",
-            EditMode::Column => "列",
+            EditMode::Row => "行编辑",
+            EditMode::Column => "列编辑",
         }
     }
 }
@@ -308,6 +308,11 @@ pub struct EditorHostPanel {
     pub(crate) closed: bool,
     /// #48 行号开关缓存（设置 → render 权威同步点 → 内核 `set_line_number`）
     show_line_numbers: bool,
+    /// 【2026-10-27】用户只读开关（工具栏 roLock；点击在 只读/编辑 间翻转）。
+    ///
+    /// 只读是**窗口级合成**（[`Self::read_only_flags`]），不写回 Document——与项目锁同一
+    /// 口径（解锁了但文档还写着只读会留下陈旧值）；内核 readonly 在切换时一并同步。
+    user_ro_lock: bool,
     /// 【2026-10-19】脏态自绘 ✕ 的悬浮开关：鼠标悬停标题才显示关闭按钮，
     /// 避免常驻 ✕ 与标题内容互相遮挡（见 `title_suffix`）。
     title_hovered: std::cell::Cell<bool>,
@@ -904,6 +909,8 @@ impl EditorHostPanel {
             closed: false,
             // #48 面板创建即取设置当前值（与内核默认一致；后续变化由 render 同步）
             show_line_numbers: editor_show_line_numbers_or_default(cx),
+            // 用户只读开关默认关（可编辑）；roLock 点击后翻转
+            user_ro_lock: false,
             title_hovered: std::cell::Cell::new(false),
             grid,
             pending: 0,
@@ -1652,10 +1659,13 @@ impl EditorHostPanel {
                         row.child(self.render_sources_picker(cx))
                     })
                     // 通道级 + 连接（原型 §2.2 通道级+连接层，工具栏右区）：
-                    // 执行通道 pill（源库/加速/联邦，互斥）+ 连接选择器（运行点 + 短码·名称，
-                    // 只列实时在线、默认跟随当前连接）；连接 ▸ 库 ▸ Schema 面包屑回状态栏最左（原型）。
+                    // 三固定区：执行通道 pill / 连接名称（运行点 + 短码·名称，只列实时在线、
+                    // 默认跟随当前连接）/ schema@db——各自固定宽 + 截断，不随内容推挤布局
+                    // （2026-10-27；连接定位自状态栏迁此，状态栏左段只留方言/事务等）
                     .children(render_channel_control(self, &cx.entity()))
-                    .children(render_conn_select(self, &cx.entity(), cx.theme())),
+                    .children(render_conn_slots(self, &cx.entity(), cx.theme()))
+                    .child(self.render_ro_lock_button(cx))
+                    .child(self.render_fold_toggle_button(cx)),
             );
             // 最右：`···` 定制面板（布局自定义；低频动作已全部提升常驻，见原型 §2.2 修订）
             toolbar = toolbar.child(self.render_toolbar_customize(cx));
@@ -1673,7 +1683,10 @@ impl EditorHostPanel {
                         row.child(self.render_markdown_preview_toggle(cx))
                     })
                     .child(self.render_env_picker(cx))
-                    .child(self.render_run_script_button(cx)),
+                    .child(self.render_run_script_button(cx))
+                    // 2026-10-27：roLock + 折叠开关也挂通用模式工具栏（两模式都可用）
+                    .child(self.render_ro_lock_button(cx))
+                    .child(self.render_fold_toggle_button(cx)),
             );
             }
             // Notebook：笔记级工具栏（会话 ▾ / 全部运行 / 重启）——1c 落地。
@@ -1692,6 +1705,51 @@ impl EditorHostPanel {
             }
         }
         toolbar
+    }
+
+    /// 【2026-10-27】用户只读开关（工具栏 roLock）：`toggled` = 只读
+    ///
+    /// 点击在 只读/编辑 间翻转（窗口级合成只读，见 [`Self::read_only_flags`]；
+    /// 内核 readonly 一并同步）。SQL 与通用模式工具栏都挂。
+    fn render_ro_lock_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        Button::new("editor-ro-lock")
+            .ghost()
+            .small()
+            .icon(IconName::Lock)
+            .toggled(self.user_ro_lock)
+            .debug_selector(|| "editor-ro-lock".to_string())
+            .tooltip(if self.user_ro_lock {
+                "只读（点击切换到编辑）"
+            } else {
+                "编辑（点击切换到只读）"
+            })
+            .on_click(move |_, _window, app| {
+                entity.update(app, |panel, cx| panel.toggle_user_ro_lock(cx));
+            })
+    }
+
+    /// 【2026-10-27】用户折叠开关（工具栏按钮）：`toggled` = 折叠显示中
+    ///
+    /// 点击在 显示/隐藏折叠 间翻转（`shared.show_folds` → `sync_fold` 落内核；
+    /// 关掉时折叠槽与 chevron 一并消失，见 [`Self::toggle_show_folds`]）。
+    fn render_fold_toggle_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        let show = self.shared.show_folds();
+        Button::new("editor-fold-toggle")
+            .ghost()
+            .small()
+            .label("折叠")
+            .toggled(show)
+            .debug_selector(|| "editor-fold-toggle".to_string())
+            .tooltip(if show {
+                "代码折叠：点击关闭"
+            } else {
+                "代码折叠：点击开启"
+            })
+            .on_click(move |_, window, app| {
+                entity.update(app, |panel, cx| panel.toggle_show_folds(window, cx));
+            })
     }
 
     /// 【2d-笔记级】会话 ▾ 按钮：绑定连接的切换入口（笔记级事实）。
@@ -1894,7 +1952,7 @@ impl EditorHostPanel {
     ///
     /// 本地跑的那两档额外给一个**维护动作**：`重新挂载源库（刷新表清单）`（见
     /// [`channel::refresh_item_label`]）——源库新建的表要重挂才看得见。
-    /// 渲染入口已迁状态栏左段（见 [`render_channel_control`]）。
+    /// 渲染入口在工具栏右区通道 pill（2026-10-27 起；见 [`render_channel_control`]）。
 
     /// 本文档绑定的连接 id（`None` = 未绑定，执行跟随当前活动连接）
     fn bound_connection(&self) -> Option<String> {
@@ -3282,9 +3340,37 @@ impl EditorHostPanel {
             .with_document(|doc| doc.read_only())
             .unwrap_or_default();
         ReadOnly {
-            editor: document.editor,
+            // 用户只读开关（roLock）并入编辑器维度
+            editor: document.editor || self.user_ro_lock,
             connection: document.connection || self.shared.project_read_only(),
         }
+    }
+
+    /// 【2026-10-27】用户只读开关（工具栏 roLock）：点击在 只读/编辑 间翻转
+    ///
+    /// 只读是窗口级合成（见 [`Self::read_only_flags`]），不写回 Document——与项目锁同一
+    /// 口径；切换时同步内核 readonly（编辑行为立即受限），状态栏「只读」徽标随之出现。
+    pub(crate) fn toggle_user_ro_lock(&mut self, cx: &mut Context<Self>) {
+        self.user_ro_lock = !self.user_ro_lock;
+        let read_only = self.editor_read_only();
+        self.editor.update(cx, |state, cx| {
+            state.set_readonly(read_only, cx);
+        });
+        cx.notify();
+    }
+
+    /// 【2026-10-27】用户折叠开关（工具栏按钮）：点击在 显示/隐藏折叠 间翻转
+    ///
+    /// 关掉时 [`EditorShared::folding_enabled`] 恒 false → `sync_fold` 落 `set_folding(false)`：
+    /// 折叠槽与 chevron 一并消失（与能力表关闭同口径，不是"只看不折"）；再开则重新喂候选。
+    pub(crate) fn toggle_show_folds(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let shared = &self.shared;
+        let document = self.document.clone();
+        shared.set_show_folds(!shared.show_folds());
+        self.editor.update(cx, |state, cx| {
+            sync_fold(shared, &document, state, window, cx);
+        });
+        cx.notify();
     }
 
     /// 【T2a-6】批量提交当前结果集的变更集（提交前复核四道防线，与编辑判据同一套口径）
@@ -4112,8 +4198,11 @@ impl EditorHostPanel {
     }
 
     fn editor_read_only(&self) -> bool {
-        self.with_document(|doc| !doc.read_only().can_edit())
-            .unwrap_or(true)
+        // 用户只读开关（roLock）与文档只读合并：任一为只读 → 编辑器只读
+        self.user_ro_lock
+            || self
+                .with_document(|doc| !doc.read_only().can_edit())
+                .unwrap_or(true)
     }
 
     /// 模式切换后同步视图侧状态（高亮是否启用、只读）
@@ -8419,7 +8508,9 @@ pub(crate) fn render_editor_status_bar(
         message: snapshot.message.as_deref(),
         executing: snapshot.executing,
         elapsed: snapshot.elapsed,
-        connection: snapshot.connection.as_deref(),
+        // 连接定位（短码·名称 / schema@db）已迁工具栏右区固定槽（render_conn_slots）；
+        // 状态栏左段不再显示连接路径文本（labels().connection 保留给纯函数测试）
+        connection: None,
         dialect: snapshot.dialect.as_deref(),
         // 执行方式由左段 channel 控件表达（可点切换）；文本段不再重复显示
         channel: None,
@@ -8435,55 +8526,89 @@ pub(crate) fn render_editor_status_bar(
     // 执行方式（通道）由工具栏右区连接选择器旁的通道 pill 表达；状态栏不再占它
     let channel_ctrl = None;
 
-    // ── 交互控件：编辑模式 / 重设 / 事务 / 中断（事件走 panel.update，不重入宿主）──
-    // 编辑模式（行 / 列编辑；列编辑 = 多光标）
+    // ── 交互控件：编辑模式 / 换行 / 编码 / 重设 / 事务 / 中断（事件走 panel.update，不重入宿主）──
+    // 编辑模式（行 / 列编辑；**循环按钮**——2026-10-27 去掉下拉框，点击在 行编辑/列编辑 间循环）
     let edit_mode_ctrl = {
         let mode = host.edit_mode;
-        let entity = panel_entity.clone();
-        DropdownButton::new("editor-edit-mode")
+        let row_entity = panel_entity.clone();
+        let col_entity = panel_entity.clone();
+        Button::new("editor-edit-mode")
+            .ghost()
             .small()
-            .button(
-                Button::new("editor-edit-mode-btn")
-                    .ghost()
-                    .small()
-                    .debug_selector(|| "editor-edit-mode".to_string())
-                    .label(format!("{} ▾", mode.short_label())),
-            )
-            .dropdown_menu(move |menu, _window, _cx| {
-                let row_entity = entity.clone();
-                let col_entity = entity.clone();
-                let row = mode == EditMode::Row;
-                let column = mode == EditMode::Column;
-                menu.item(
-                    PopupMenuItem::new("行编辑")
-                        .checked(row)
-                        .on_click(move |_, window, app| {
-                            row_entity.update(app, |panel, cx| {
-                                panel.set_edit_mode(EditMode::Row, cx);
-                            });
-                            // 切回行编辑：立即收拢多光标（走生产代码同一条 `enforce_edit_mode`）
-                            row_entity.update(app, |panel, cx| {
-                                panel.enforce_edit_mode(window, cx);
-                            });
-                        }),
-                )
-                .item(
-                    PopupMenuItem::new("列编辑")
-                        .checked(column)
-                        .on_click(move |_, _window, app| {
-                            col_entity.update(app, |panel, cx| {
-                                panel.set_edit_mode(EditMode::Column, cx);
-                            });
-                        }),
-                )
+            .debug_selector(|| "editor-edit-mode".to_string())
+            .label(mode.short_label())
+            .tooltip(match mode {
+                EditMode::Row => "行编辑（点击切换为列编辑）",
+                EditMode::Column => "列编辑（点击切换为行编辑）",
+            })
+            .on_click(move |_, window, app| {
+                if mode == EditMode::Row {
+                    col_entity.update(app, |panel, cx| {
+                        panel.set_edit_mode(EditMode::Column, cx);
+                    });
+                } else {
+                    // 切回行编辑：立即收拢多光标（走生产代码同一条 `enforce_edit_mode`）
+                    row_entity.update(app, |panel, cx| {
+                        panel.set_edit_mode(EditMode::Row, cx);
+                        panel.enforce_edit_mode(window, cx);
+                    });
+                }
             })
             .into_any_element()
     };
-    // 重设菜单（编码 / 换行 / 缩进 / 显示；缩进真改内核 TabSize，编码 / 换行只改保存契约）
+    // 换行（LF / CRLF **循环**按钮，无下拉——2026-10-27 拆出，点击在两种行尾间翻转）
+    let eol_ctrl = {
+        let eol = snapshot.format.eol;
+        let entity = panel_entity.clone();
+        Button::new("editor-eol")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-eol".to_string())
+            .label(eol.label())
+            .tooltip(match eol {
+                crate::encoding::LineEnding::Lf => "LF 换行（点击切换为 CRLF）",
+                crate::encoding::LineEnding::Crlf => "CRLF 换行（点击切换为 LF）",
+            })
+            .on_click(move |_, _window, app| {
+                entity.update(app, |panel, cx| {
+                    panel.set_eol(
+                        match eol {
+                            crate::encoding::LineEnding::Lf => crate::encoding::LineEnding::Crlf,
+                            crate::encoding::LineEnding::Crlf => crate::encoding::LineEnding::Lf,
+                        },
+                        cx,
+                    );
+                });
+            })
+            .into_any_element()
+    };
+    // 编码（默认显示当前编码短名，点击弹出选择对话框；2026-10-27 拆出——见 encoding_dialog.rs）
+    let encoding_ctrl = {
+        let current = snapshot.format.encoding;
+        let entity = panel_entity.clone();
+        Button::new("editor-encoding")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-encoding".to_string())
+            .label(current.short_label())
+            .tooltip("编码（点击选择）")
+            .on_click(move |_, window, app| {
+                let entity = entity.clone();
+                crate::view::encoding_dialog::open_encoding_dialog(
+                    window,
+                    app,
+                    current,
+                    move |encoding, _window, app| {
+                        entity.update(app, |panel, cx| panel.set_encoding(encoding, cx));
+                    },
+                );
+            })
+            .into_any_element()
+    };
+    // 重设菜单（缩进 + 显示；2026-10-27 编码/换行已拆独立段，这里只留缩进族与显示开关）
     let reset_ctrl = {
         let current_tab = snapshot.tab_size;
         let hard_tabs = snapshot.hard_tabs;
-        let format = snapshot.format;
         let show_whitespaces = host.shared.document_show_whitespaces(&host.document);
         let show_invisible = host.shared.document_show_invisible(&host.document);
         let entity = panel_entity.clone();
@@ -8498,50 +8623,8 @@ pub(crate) fn render_editor_status_bar(
             )
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu;
-                let enc = format.encoding;
-                menu = menu
-                    .separator()
-                    .item(PopupMenuItem::new("编码").disabled(true));
-                for (label, variant) in [
-                    ("UTF-8", crate::encoding::TextEncoding::Utf8),
-                    ("UTF-8 (BOM)", crate::encoding::TextEncoding::Utf8Bom),
-                    ("GBK", crate::encoding::TextEncoding::Gbk),
-                    ("UTF-16 LE", crate::encoding::TextEncoding::Utf16Le),
-                    ("UTF-16 BE", crate::encoding::TextEncoding::Utf16Be),
-                ] {
-                    let entity = entity.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(label)
-                            .checked(enc == variant)
-                            .on_click(move |_, _, app| {
-                                entity.update(app, |panel, cx| panel.set_encoding(variant, cx));
-                            }),
-                    );
-                }
-                let eol = format.eol;
-                let lf_entity = entity.clone();
-                let crlf_entity = entity.clone();
-                menu = menu
-                    .separator()
-                    .item(PopupMenuItem::new("换行").disabled(true))
-                    .item(
-                        PopupMenuItem::new("LF")
-                            .checked(eol == crate::encoding::LineEnding::Lf)
-                            .on_click(move |_, _, app| {
-                                lf_entity.update(app, |panel, cx| {
-                                    panel.set_eol(crate::encoding::LineEnding::Lf, cx);
-                                });
-                            }),
-                    )
-                    .item(
-                        PopupMenuItem::new("CRLF")
-                            .checked(eol == crate::encoding::LineEnding::Crlf)
-                            .on_click(move |_, _, app| {
-                                crlf_entity.update(app, |panel, cx| {
-                                    panel.set_eol(crate::encoding::LineEnding::Crlf, cx);
-                                });
-                            }),
-                    );
+                // 编码已拆独立段（右侧按钮弹窗选择），菜单只留缩进族 + 显示
+                // 换行已拆独立段（右侧按钮 LF/CRLF 循环切换），菜单只留缩进族 + 显示
                 menu = menu
                     .separator()
                     .item(PopupMenuItem::new("缩进").disabled(true))
@@ -8652,13 +8735,12 @@ pub(crate) fn render_editor_status_bar(
     });
 
     let controls = status_bar::StatusControls {
-        // 连接 ▸ 库 ▸ Schema 面包屑（原型状态栏最左，同 DBeaver）：仅 SQL 模式有连接定位语义；
-        // 通用模式是脚本环境（环境族），分析模式是会话/单元——都不摆连接面包屑
-        breadcrumb: (snapshot.mode == EditorMode::Sql)
-            .then(|| render_breadcrumb_control(host, &panel_entity, cx.theme()))
-            .flatten(),
+        // 2026-10-27：连接 ▸ 库 ▸ Schema 定位整体迁工具栏右区固定槽（render_conn_slots），
+        // 状态栏不再摆面包屑（左段只留方言 + 执行方式 + 事务等当前上下文）
         edit_mode: Some(edit_mode_ctrl),
         reset_menu: Some(reset_ctrl),
+        encoding: Some(encoding_ctrl),
+        eol: Some(eol_ctrl),
         tx: tx_ctrl,
         channel: channel_ctrl,
         interrupt,
@@ -8666,16 +8748,90 @@ pub(crate) fn render_editor_status_bar(
     Some(status_bar::render(&inputs, controls, cx).into_any_element())
 }
 
-/// 状态栏面包屑（连接定位）：连接 ▸ [库] ▸ Schema（原型状态栏最左，同 DBeaver）。
+/// 工具栏右区「执行通道」pill（源库 / 加速 / 联邦可切；原型 §2.2 通道级+连接层）。
 ///
-/// - 连接段 = **短码+名称**，菜单只列**实时在线**连接 +「跟随当前连接」（默认态）；
-///   在线判定走 `online_ids`（事件路径实时查连接管理器）——导航建连成功不回写
-///   快照 `connected`，若按快照过滤会看不到刚连上的连接（真机复现）。
-/// - 库段 = 连接隐含的绑定库，非可切段（有 catalog 才显；跨库切换是后续项）。
-/// - Schema 段 = 可切（schemas + 使用连接默认）；未选给可点「schema ▾」占位。
-/// - 段名过长统一截断（状态栏空间有限），容器限宽 + overflow_hidden 兜底。
-/// 工具栏右区的连接**选择器**见 [`render_conn_select`]（更紧凑：运行点 + 短码·名称）。
-fn render_breadcrumb_control(
+/// 2026-10-27：pill 固定宽（`CHANNEL_SLOT_WIDTH`）——与连接名称 / schema@db 并成
+/// 工具栏右区三固定区，不随标签长短推挤布局；超长由容器裁掉（源库/加速/联邦本就很短，
+/// 兜底用）。菜单构建发生在点击时（事件路径）——`channel_menu` 的门控真值来自宿主注入的
+/// `ChannelsPort`；未注入端口时如实报「尚未接入」，不假装有通道可选。
+fn render_channel_control(
+    host: &EditorHostPanel,
+    panel_entity: &Entity<EditorHostPanel>,
+) -> Option<AnyElement> {
+    let entity = panel_entity.clone();
+    let current = host.channel();
+    let items = host.channel_menu();
+    let refresh_label = channel::refresh_item_label(current);
+    Some(
+        div()
+            .w(rems(ui::CHANNEL_SLOT_WIDTH))
+            .flex_none()
+            .overflow_hidden()
+            .child(
+                Button::new("editor-channel")
+                    .ghost()
+                    .small()
+                    .debug_selector(|| "editor-channel".to_string())
+                    // 执行位置图标化：图标（Locate = 定位执行到哪里）+ 通道短标签，去「执行位置：」文字前缀
+                    .icon(IconName::Locate)
+                    .label(format!("{} ▾", current.label()))
+                    .dropdown_menu(move |menu, _window, _cx| {
+                        let mut menu = menu;
+                        // 菜单回调是 `Fn`：不能把 `items` 搬进去，逐项 clone 字段名与下标（少而短）
+                        for item in items.iter() {
+                            let entity = entity.clone();
+                            let channel = item.channel;
+                            menu = menu.item(
+                                PopupMenuItem::new(item.label.clone())
+                                    .checked(item.current)
+                                    .disabled(!item.available)
+                                    .on_click(move |_, _window, app| {
+                                        entity.update(app, |panel, cx| {
+                                            panel.set_channel(channel, cx);
+                                        });
+                                    }),
+                            );
+                        }
+                        if let Some(label) = refresh_label {
+                            let entity = entity.clone();
+                            menu = menu.separator().item(PopupMenuItem::new(label).on_click(
+                                move |_, _window, app| {
+                                    entity.update(app, |panel, cx| panel.refresh_source(cx));
+                                },
+                            ));
+                        }
+                        menu
+                    })
+                    .into_any_element(),
+            )
+            .into_any_element(),
+    )
+}
+
+/// 工具栏右区槽位长名截断（> `max` 字符 → 前 `max-1` + …；完整名靠菜单项 / 工具提示）
+fn truncate_label(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        text.to_string()
+    } else {
+        let mut shortened: String = text.chars().take(max.saturating_sub(1)).collect();
+        shortened.push('…');
+        shortened
+    }
+}
+
+/// 工具栏右区「连接定位」固定槽：运行点 + 连接名称（短码·名称） ▾ schema@库
+///
+/// 2026-10-27 按用户要求：连接定位从状态栏移工具栏右区，且**固定大小占用区域**——
+/// 执行通道 pill / 连接名称 / schema@db 三区各自固定宽（`w(rem N).flex_none`），
+/// 超长截断（`truncate_label` + 容器 `overflow_hidden` 兜底），不随内容推挤布局。
+/// 状态栏左段不再占连接路径（`status_bar::render` 同步改，只留方言/事务等上下文）。
+///
+/// - **连接名称**：菜单只列**实时在线**连接（事件路径 `online_ids`）+「跟随当前连接」
+///   （默认态）；运行点是**静态绑定指示**（绑定即亮；在线判定留给菜单打开时）。
+/// - **schema@库**：schema 可切（schemas + 使用连接默认）；显示 `schema@库`（库 = catalog，
+///   从 schemas 列表按当前 schema 反查）；绑定但未选时给可点 `schema ▾` 占位；
+///   未绑定连接（跟随当前连接态）时无槽——schema 概念还没出现，不假装。
+fn render_conn_slots(
     host: &EditorHostPanel,
     panel_entity: &Entity<EditorHostPanel>,
     theme: &gpui_kit::component::Theme,
@@ -8692,222 +8848,9 @@ fn render_breadcrumb_control(
         .flatten();
     let has_bound = bound.is_some();
     let schemas = host.shared.schemas(bound.as_deref());
-    let muted = theme.colors.muted_foreground;
 
-    // 连接段标签：短码+名称（长名截断）；未绑 = 跟随当前连接。
+    // ── 连接名称槽（固定宽；短码·名称 截断）──
     let conn_label = bound
-        .as_deref()
-        .and_then(|id| {
-            options
-                .iter()
-                .find(|o| o.id == id)
-                .map(|o| truncate_label(&format!("{}·{}", o.short, o.name), 20))
-        })
-        .unwrap_or_else(|| "跟随当前连接".to_string());
-
-    let conn_entity = entity.clone();
-    let conn_button = Button::new("editor-status-connection")
-        .ghost()
-        .small()
-        .debug_selector(|| "editor-status-connection".to_string())
-        .label(format!("{conn_label} ▾"))
-        .dropdown_menu(move |menu, _window, _cx| {
-            let mut menu = menu;
-            if !has_port {
-                return menu.item(PopupMenuItem::new("（未接入连接列表）").disabled(true));
-            }
-            let follow_entity = conn_entity.clone();
-            let unbound = bound.is_none();
-            menu = menu.item(
-                PopupMenuItem::new("跟随当前连接")
-                    .checked(unbound)
-                    .on_click(move |_, _window, app| {
-                        follow_entity.update(app, |panel, cx| {
-                            panel.bind_connection(None, cx);
-                        });
-                    }),
-            );
-            menu = menu.separator();
-            // 实时在线（菜单打开时查，事件路径）：只列真在线连接
-            let online = shared.online_ids();
-            let online_conns: Vec<(String, String)> = options
-                .iter()
-                .filter(|o| online.contains(&o.id))
-                .map(|o| (format!("{}·{}", o.short, o.name), o.id.clone()))
-                .collect();
-            if online_conns.is_empty() {
-                return menu.item(PopupMenuItem::new("（暂无在线连接）").disabled(true));
-            }
-            for (label, id) in &online_conns {
-                let entity = conn_entity.clone();
-                let is_current = bound.as_deref() == Some(id.as_str());
-                let label = label.clone();
-                let id = id.clone();
-                menu = menu.item(PopupMenuItem::new(label).checked(is_current).on_click(
-                    move |_, _window, app| {
-                        let id = id.clone();
-                        entity.update(app, |panel, cx| {
-                            panel.bind_connection(Some(id), cx);
-                        });
-                    },
-                ));
-            }
-            menu
-        });
-
-    // Schema 段：有绑定连接才摆；schemas 可切 + 使用连接默认；未选给可点占位。
-    let schema_button = has_bound.then(|| {
-        let schemas_menu = schemas.clone();
-        let current_schema = schema.clone();
-        let entity = entity.clone();
-        let label = match &schema {
-            Some(s) => format!("{} ▾", truncate_label(s, 20)),
-            None => "schema ▾".to_string(),
-        };
-        Button::new("editor-status-schema")
-            .ghost()
-            .small()
-            .debug_selector(|| "editor-status-schema".to_string())
-            .label(label)
-            .dropdown_menu(move |menu, _window, _cx| {
-                let mut menu = menu;
-                if schemas_menu.is_empty() {
-                    return menu.item(PopupMenuItem::new("（暂无可切 Schema）").disabled(true));
-                }
-                for item in &schemas_menu {
-                    let entity = entity.clone();
-                    let schema_name = item.schema.clone();
-                    let is_current = current_schema.as_deref() == Some(schema_name.as_str());
-                    menu = menu.item(
-                        PopupMenuItem::new(schema_name.clone())
-                            .checked(is_current)
-                            .on_click(move |_, _window, app| {
-                                entity.update(app, |panel, cx| {
-                                    panel.set_schema(Some(schema_name.clone()), cx);
-                                });
-                            }),
-                    );
-                }
-                let entity = entity.clone();
-                let using_default = current_schema.is_none();
-                menu = menu.item(
-                    PopupMenuItem::new("使用连接默认")
-                        .checked(using_default)
-                        .on_click(move |_, _window, app| {
-                            entity.update(app, |panel, cx| panel.set_schema(None, cx));
-                        }),
-                );
-                menu
-            })
-    });
-
-    // 组装：连接 ▸ [库名] ▸ Schema（库名非可切段；连接隐含其绑定库）；
-    // 容器限宽 + overflow_hidden：长名截断之外的兜底（不把工具栏挤出窗口）。
-    let mut breadcrumb = div()
-        .h_flex()
-        .items_center()
-        .gap_1()
-        .text_xs()
-        .text_color(muted)
-        .max_w(rems(28.0))
-        .overflow_hidden()
-        .child(conn_button);
-    if let Some(catalog) = schema.as_ref().and_then(|s| {
-        schemas
-            .iter()
-            .find(|item| item.schema == *s)
-            .and_then(|item| item.catalog.clone())
-    }) {
-        breadcrumb = breadcrumb
-            .child(div().child("▸"))
-            .child(div().child(truncate_label(&catalog, 20)));
-    }
-    if let Some(schema_button) = schema_button {
-        breadcrumb = breadcrumb.child(div().child("▸")).child(schema_button);
-    }
-    Some(breadcrumb.into_any_element())
-}
-
-/// 工具栏面包屑段长名截断（> `max` 字符 → 前 `max-1` + …；完整名靠菜单项 / 工具提示）
-fn truncate_label(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        text.to_string()
-    } else {
-        let mut shortened: String = text.chars().take(max.saturating_sub(1)).collect();
-        shortened.push('…');
-        shortened
-    }
-}
-
-/// 工具栏右区「执行通道」pill（源库 / 加速 / 联邦可切；原型 §2.2 通道级+连接层）。
-///
-/// 菜单构建发生在点击时（事件路径）——`channel_menu` 的门控真值来自宿主注入的
-/// `ChannelsPort`；未注入端口时如实报「尚未接入」，不假装有通道可选。
-fn render_channel_control(
-    host: &EditorHostPanel,
-    panel_entity: &Entity<EditorHostPanel>,
-) -> Option<AnyElement> {
-    let entity = panel_entity.clone();
-    let current = host.channel();
-    let items = host.channel_menu();
-    let refresh_label = channel::refresh_item_label(current);
-    Some(
-        Button::new("editor-channel")
-            .ghost()
-            .small()
-            .debug_selector(|| "editor-channel".to_string())
-            // 执行位置图标化：图标（Locate = 定位执行到哪里）+ 通道短标签，去「执行位置：」文字前缀
-            .icon(IconName::Locate)
-            .label(format!("{} ▾", current.label()))
-            .dropdown_menu(move |menu, _window, _cx| {
-                let mut menu = menu;
-                // 菜单回调是 `Fn`：不能把 `items` 搬进去，逐项 clone 字段名与下标（少而短）
-                for item in items.iter() {
-                    let entity = entity.clone();
-                    let channel = item.channel;
-                    menu = menu.item(
-                        PopupMenuItem::new(item.label.clone())
-                            .checked(item.current)
-                            .disabled(!item.available)
-                            .on_click(move |_, _window, app| {
-                                entity.update(app, |panel, cx| panel.set_channel(channel, cx));
-                            }),
-                    );
-                }
-                if let Some(label) = refresh_label {
-                    let entity = entity.clone();
-                    menu = menu.separator().item(PopupMenuItem::new(label).on_click(
-                        move |_, _window, app| {
-                            entity.update(app, |panel, cx| panel.refresh_source(cx));
-                        },
-                    ));
-                }
-                menu
-            })
-            .into_any_element(),
-    )
-}
-
-/// 工具栏右区「连接选择器」（原型 conn-select）：运行点 + 短码·名称 + caret。
-///
-/// 比状态栏面包屑紧凑（不展开 ▸库▸Schema）：只反映当前文档绑定的连接；菜单只列
-/// **实时在线**连接（事件路径 `online_ids`）+「跟随当前连接」（默认态）。
-/// 运行点是**静态绑定指示**（绑定即亮；不在 render 内做实时在线判定——避免
-/// `block_on` 阻塞 UI 线程；在线判定留给菜单打开时的事件路径）。
-fn render_conn_select(
-    host: &EditorHostPanel,
-    panel_entity: &Entity<EditorHostPanel>,
-    theme: &gpui_kit::component::Theme,
-) -> Option<AnyElement> {
-    let entity = panel_entity.clone();
-    let shared = host.shared.clone();
-    let options = host.shared.connection_options();
-    let has_port = host.shared.has_connections();
-    let bound = host
-        .with_document(|doc| doc.connection().map(str::to_string))
-        .flatten();
-
-    let label = bound
         .as_deref()
         .and_then(|id| {
             options
@@ -8916,75 +8859,149 @@ fn render_conn_select(
                 .map(|o| format!("{}·{}", o.short, o.name))
         })
         .unwrap_or_else(|| "跟随当前连接".to_string());
-    // 运行点：绑定即亮（success）；未绑定跟随当前连接 → 灰点
     let dot_color = if bound.is_some() {
         theme.colors.success
     } else {
         theme.colors.muted_foreground
     };
-
     let conn_entity = entity.clone();
+    let conn_slot = div()
+        .h_flex()
+        .items_center()
+        .gap_1()
+        .w(rems(ui::CONN_SLOT_WIDTH))
+        .flex_none()
+        .overflow_hidden()
+        .child(div().size(px(8.)).rounded_full().bg(dot_color).flex_none())
+        .child(
+            Button::new("editor-conn-select")
+                .ghost()
+                .small()
+                .debug_selector(|| "editor-conn-select".to_string())
+                .label(format!("{} ▾", truncate_label(&conn_label, 14)))
+                .dropdown_menu(move |menu, _window, _cx| {
+                    let mut menu = menu;
+                    if !has_port {
+                        return menu
+                            .item(PopupMenuItem::new("（未接入连接列表）").disabled(true));
+                    }
+                    let follow_entity = conn_entity.clone();
+                    let unbound = bound.is_none();
+                    menu = menu.item(
+                        PopupMenuItem::new("跟随当前连接")
+                            .checked(unbound)
+                            .on_click(move |_, _window, app| {
+                                follow_entity.update(app, |panel, cx| {
+                                    panel.bind_connection(None, cx);
+                                });
+                            }),
+                    );
+                    menu = menu.separator();
+                    // 实时在线（菜单打开时查，事件路径）：只列真在线连接
+                    let online = shared.online_ids();
+                    let online_conns: Vec<(String, String)> = options
+                        .iter()
+                        .filter(|o| online.contains(&o.id))
+                        .map(|o| (format!("{}·{}", o.short, o.name), o.id.clone()))
+                        .collect();
+                    if online_conns.is_empty() {
+                        return menu
+                            .item(PopupMenuItem::new("（暂无在线连接）").disabled(true));
+                    }
+                    for (label, id) in &online_conns {
+                        let entity = conn_entity.clone();
+                        let is_current = bound.as_deref() == Some(id.as_str());
+                        let label = label.clone();
+                        let id = id.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(label)
+                                .checked(is_current)
+                                .on_click(move |_, _window, app| {
+                                    let id = id.clone();
+                                    entity.update(app, |panel, cx| {
+                                        panel.bind_connection(Some(id), cx);
+                                    });
+                                }),
+                        );
+                    }
+                    menu
+                })
+                .into_any_element(),
+        );
+
+    // ── schema@库 槽（固定宽；有绑定连接才摆；`schema@catalog` 截断）──
+    let schema_slot = has_bound.then(|| {
+        let schemas_menu = schemas.clone();
+        let current_schema = schema.clone();
+        let entity = entity.clone();
+        let label = match &schema {
+            Some(s) => {
+                let catalog = schemas
+                    .iter()
+                    .find(|item| item.schema == *s)
+                    .and_then(|item| item.catalog.clone());
+                match catalog {
+                    Some(c) => format!("{s}@{c}"),
+                    None => s.clone(),
+                }
+            }
+            None => "schema".to_string(),
+        };
+        div()
+            .h_flex()
+            .items_center()
+            .w(rems(ui::SCHEMA_SLOT_WIDTH))
+            .flex_none()
+            .overflow_hidden()
+            .child(
+                Button::new("editor-status-schema")
+                    .ghost()
+                    .small()
+                    .debug_selector(|| "editor-status-schema".to_string())
+                    .label(format!("{} ▾", truncate_label(&label, 12)))
+                    .dropdown_menu(move |menu, _window, _cx| {
+                        let mut menu = menu;
+                        if schemas_menu.is_empty() {
+                            return menu
+                                .item(PopupMenuItem::new("（暂无可切 Schema）").disabled(true));
+                        }
+                        for item in &schemas_menu {
+                            let entity = entity.clone();
+                            let schema_name = item.schema.clone();
+                            let is_current =
+                                current_schema.as_deref() == Some(schema_name.as_str());
+                            menu = menu.item(
+                                PopupMenuItem::new(schema_name.clone())
+                                    .checked(is_current)
+                                    .on_click(move |_, _window, app| {
+                                        entity.update(app, |panel, cx| {
+                                            panel.set_schema(Some(schema_name.clone()), cx);
+                                        });
+                                    }),
+                            );
+                        }
+                        let entity = entity.clone();
+                        let using_default = current_schema.is_none();
+                        menu = menu.item(
+                            PopupMenuItem::new("使用连接默认")
+                                .checked(using_default)
+                                .on_click(move |_, _window, app| {
+                                    entity.update(app, |panel, cx| panel.set_schema(None, cx));
+                                }),
+                        );
+                        menu
+                    }),
+            )
+            .into_any_element()
+    });
+
     Some(
         div()
             .h_flex()
             .items_center()
             .gap_1()
-            .child(div().size(px(8.)).rounded_full().bg(dot_color).flex_none())
-            .child(
-                Button::new("editor-conn-select")
-                    .ghost()
-                    .small()
-                    .debug_selector(|| "editor-conn-select".to_string())
-                    .label(format!("{} ▾", truncate_label(&label, 24)))
-                    .dropdown_menu(move |menu, _window, _cx| {
-                        let mut menu = menu;
-                        if !has_port {
-                            return menu
-                                .item(PopupMenuItem::new("（未接入连接列表）").disabled(true));
-                        }
-                        let follow_entity = conn_entity.clone();
-                        let unbound = bound.is_none();
-                        menu = menu.item(
-                            PopupMenuItem::new("跟随当前连接")
-                                .checked(unbound)
-                                .on_click(move |_, _window, app| {
-                                    follow_entity.update(app, |panel, cx| {
-                                        panel.bind_connection(None, cx);
-                                    });
-                                }),
-                        );
-                        menu = menu.separator();
-                        // 实时在线（菜单打开时查，事件路径）：只列真在线连接
-                        let online = shared.online_ids();
-                        let online_conns: Vec<(String, String)> = options
-                            .iter()
-                            .filter(|o| online.contains(&o.id))
-                            .map(|o| (format!("{}·{}", o.short, o.name), o.id.clone()))
-                            .collect();
-                        if online_conns.is_empty() {
-                            return menu
-                                .item(PopupMenuItem::new("（暂无在线连接）").disabled(true));
-                        }
-                        for (label, id) in &online_conns {
-                            let entity = conn_entity.clone();
-                            let is_current = bound.as_deref() == Some(id.as_str());
-                            let label = label.clone();
-                            let id = id.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(label)
-                                    .checked(is_current)
-                                    .on_click(move |_, _window, app| {
-                                        let id = id.clone();
-                                        entity.update(app, |panel, cx| {
-                                            panel.bind_connection(Some(id), cx);
-                                        });
-                                    }),
-                            );
-                        }
-                        menu
-                    })
-                    .into_any_element(),
-            )
+            .child(conn_slot)
+            .children(schema_slot)
             .into_any_element(),
     )
 }

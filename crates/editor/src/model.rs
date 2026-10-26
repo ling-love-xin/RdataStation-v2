@@ -191,9 +191,9 @@ impl Capabilities {
                 kind: DocumentKind::Document,
                 language: LanguageService::None,
                 completion: false,
-                // 行号槽收窄后折叠入口随槽关闭（chevron 没有槽位可画）；
-                // 恢复折叠需先恢复行号区折叠槽（vendor `layout_line_numbers`）
-                folding: false,
+                // 折叠：能力表置回 true（内核 `is_folding()` 自动加折叠槽并自绘 chevron/点击，
+                // 2026-10-27 恢复；用户开关见 shared.show_folds，大文件档位仍运行时降级）
+                folding: true,
                 execute: false,
                 output: OutputTarget::None,
                 channel: false,
@@ -204,8 +204,8 @@ impl Capabilities {
                 kind: DocumentKind::Document,
                 language: LanguageService::Sql,
                 completion: true,
-                // 同上：行号槽收窄，折叠入口关闭
-                folding: false,
+                // 同上：恢复折叠（能力表置回 true，2026-10-27）
+                folding: true,
                 execute: true,
                 output: OutputTarget::DockPanel,
                 channel: true,
@@ -259,8 +259,8 @@ mod tests {
         assert!(!caps.channel);
         assert_eq!(caps.output, OutputTarget::None);
         assert_eq!(caps.toolbar, ToolbarStyle::Minimal);
-        // 行号槽收窄后折叠入口随槽关闭（chevron 无槽可画）；不是语言服务问题
-        assert!(!caps.folding);
+        // 折叠已恢复（2026-10-27）：脚本文档也可折叠（用户开关 shared.show_folds 可关）
+        assert!(caps.folding);
         assert_eq!(caps.language, LanguageService::None);
     }
 

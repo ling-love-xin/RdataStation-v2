@@ -6,6 +6,7 @@
 pub mod analysis;
 pub mod completion;
 pub mod dialogs;
+pub mod encoding_dialog;
 pub mod fold;
 pub mod function_manual;
 pub mod highlight;

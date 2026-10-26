@@ -152,3 +152,21 @@ pub const FUNCTION_MANUAL_ROW_HEIGHT: f32 = 3.0;
 /// 【#54-C4】签名帮助对话框宽度（32rem = 512px：签名 + 参数表 + 描述，无需函数手册
 /// 那么宽——没有搜索框与结果列表）
 pub const SIGNATURE_HELP_DIALOG_WIDTH: f32 = 32.0;
+
+/// 【2026-10-27】工具栏右区「执行通道」pill 固定宽（7.5rem = 120px：图标 + 源库/加速/联邦
+/// 短标签 + caret；固定大小占用区域，不随内容把布局推挤变形）
+pub const CHANNEL_SLOT_WIDTH: f32 = 7.5;
+
+/// 【2026-10-27】工具栏右区「连接名称」槽固定宽（11.5rem = 184px：运行点 + 短码·名称截断
+/// 14 字符 + caret；见 `view/host.rs::render_conn_slots`）
+pub const CONN_SLOT_WIDTH: f32 = 11.5;
+
+/// 【2026-10-27】工具栏右区「schema@库」槽固定宽（10.0rem = 160px：schema@catalog 截断
+/// 12 字符 + caret）
+pub const SCHEMA_SLOT_WIDTH: f32 = 10.0;
+
+/// 【2026-10-27】编码选择对话框宽度（20rem = 320px：单列短列表，5 项编码）
+pub const ENCODING_DIALOG_WIDTH: f32 = 20.0;
+
+/// 【2026-10-27】编码选择行高（2.0rem = 32px：单行式——编码名 + 当前勾选）
+pub const ENCODING_DIALOG_ROW_HEIGHT: f32 = 2.0;
