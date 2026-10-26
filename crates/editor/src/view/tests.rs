@@ -3105,9 +3105,9 @@ fn the_bound_connection_reaches_the_execution_port(cx: &mut TestAppContext) {
     );
 }
 
-/// 工具栏在 SQL 模式给出连接选择器（没有端口也说清楚，不假装有得选）
+/// 执行通道在 SQL 模式给出连接面包屑（已迁至状态栏；没有端口也说清楚，不假装有得选）
 #[gpui_kit::test]
-fn the_toolbar_shows_the_connection_picker_in_sql_mode(cx: &mut TestAppContext) {
+fn the_status_bar_shows_the_connection_breadcrumb_in_sql_mode(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (shared, id) = shared_with_document(r"D:\sql\picker.sql", "select 1;");
     let (panel, cx) = {
@@ -3118,10 +3118,10 @@ fn the_toolbar_shows_the_connection_picker_in_sql_mode(cx: &mut TestAppContext) 
 
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
-        cx.debug_bounds("editor-connection").is_some(),
-        "SQL 模式应当有连接选择器"
+        cx.debug_bounds("editor-status-connection").is_some(),
+        "SQL 模式状态栏应当有连接面包屑（执行通道）"
     );
-    // 【B13】执行位置与连接同属“右对齐的通道级”两栏（原型 §2.2）
+    // 【B13】执行位置指示器仍在工具栏（连接选择器已迁出）
     assert!(
         cx.debug_bounds("editor-channel").is_some(),
         "SQL 模式应当有「执行位置」指示器"
@@ -3131,13 +3131,13 @@ fn the_toolbar_shows_the_connection_picker_in_sql_mode(cx: &mut TestAppContext) 
     assert!(shared.connection_options().is_empty());
     assert!(!shared.has_connections());
 
-    // 文本模式：不与数据库通信 → 连不上问题都不该问，两个选择器都不出现
+    // 文本模式：不与数据库通信 → 连不上问题都不该问，两个指示器都不出现
     shared.update(|service| {
         service.set_mode(&id, EditorMode::General);
     });
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    assert!(cx.debug_bounds("editor-connection").is_none());
+    assert!(cx.debug_bounds("editor-status-connection").is_none());
     assert!(
         cx.debug_bounds("editor-channel").is_none(),
         "文本模式没有“在哪儿执行”这回事"

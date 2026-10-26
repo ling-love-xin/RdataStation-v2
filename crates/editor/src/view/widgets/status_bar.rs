@@ -383,6 +383,8 @@ pub fn render(
     StatusBar::new()
         .left(left)
         .right(right)
+        // 编辑栏用侧栏底色（内嵌表面），与全局珊瑚色栏区分
+        .bg(theme.colors.sidebar)
         .h(rems(ui::EDITOR_STATUS_BAR_HEIGHT))
         .border_t(ui::HAIRLINE)
         .border_color(border)

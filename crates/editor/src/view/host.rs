@@ -1607,8 +1607,8 @@ impl EditorHostPanel {
                     .when(current_channel == ExecChannel::Federated, |row| {
                         row.child(self.render_sources_picker(cx))
                     })
-                    .child(self.render_channel_picker(cx))
-                    .child(self.render_connection_picker(cx)),
+                    // 连接选择器已迁到状态栏面包屑（执行通道：连接 ▸ Schema）——工具栏去拥挤
+                    .child(self.render_channel_picker(cx)),
             );
             // 最右：`···` 定制面板（布局自定义；低频动作已全部提升常驻，见原型 §2.2 修订）
             toolbar = toolbar.child(self.render_toolbar_customize(cx));
@@ -3442,100 +3442,7 @@ impl EditorHostPanel {
         }
     }
 
-    /// 连接选择器（工具栏右侧）：本文档执行时用哪个连接（B1）
-    ///
-    /// - 已绑定 → 菜单里打勾；未绑定 → 菜单第一项「跟随当前连接」打勾（1a 口径，如实说明）
-    /// - 选中一个连接时**先自动建连**（同 M4）：建连失败就**不绑定**，并在状态栏给出原因
-    /// - 未接端口（宿主没给列表）时菜单直说“未接入连接列表”，不假装有可选项
-    fn render_connection_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let entity = cx.entity();
-        let options = self.shared.connection_options();
-        let has_port = self.shared.has_connections();
-        let bound = self
-            .with_document(|doc| doc.connection().map(str::to_string))
-            .flatten();
-        // 连接 ▸ 当前 Schema（对齐状态栏面包屑：schema 未选不占段，零 UI 造数据）
-        let schema = self
-            .with_document(|doc| doc.schema().map(str::to_string))
-            .flatten();
-        let label = match self.shared.connection_chip(bound.as_deref()) {
-            Some(chip) => match schema.as_deref() {
-                Some(s) => format!("{} ▸ {} ▾", chip.text(), s),
-                None => format!("{} ▾", chip.text()),
-            },
-            None => "未绑定连接 ▾".to_string(),
-        };
-        let current = bound.clone();
-        let current_schema = schema.clone();
-        let schemas = self.shared.schemas(bound.as_deref());
-
-        Button::new("editor-connection")
-            .ghost()
-            .small()
-            .debug_selector(|| "editor-connection".to_string())
-            .label(label)
-            .dropdown_menu(move |menu, _window, _cx| {
-                let mut menu = menu;
-                if !has_port {
-                    return menu.item(PopupMenuItem::new("（未接入连接列表）").disabled(true));
-                }
-                // 不绑定也是合法选择：执行跟随当前活动连接（与 1a 一致）
-                let follow_entity = entity.clone();
-                menu = menu.item(
-                    PopupMenuItem::new("跟随当前连接")
-                        .checked(current.is_none())
-                        .on_click(move |_, _window, app| {
-                            follow_entity.update(app, |panel, cx| {
-                                panel.bind_connection(None, cx);
-                            });
-                        }),
-                );
-                menu = menu.separator();
-                for option in options.iter() {
-                    let is_current = current.as_deref() == Some(option.id.as_str());
-                    let entity = entity.clone();
-                    let label = format!("{} · {}", option.short, option.name);
-                    let id = option.id.clone();
-                    menu = menu.item(PopupMenuItem::new(label).checked(is_current).on_click(
-                        move |_, _window, app| {
-                            let id = id.clone();
-                            entity.update(app, |panel, cx| {
-                                panel.bind_connection(Some(id), cx);
-                            });
-                        },
-                    ));
-                }
-                // 【T2c-1 扩展】当前 Schema（作用域：执行 / 补全 / 血缘同源）：切换写回文档绑定
-                if !schemas.is_empty() {
-                    menu = menu.separator().item(
-                        PopupMenuItem::new("当前 Schema（作用域：执行 / 补全 / 血缘）").disabled(true),
-                    );
-                    for item in schemas.iter() {
-                        let entity = entity.clone();
-                        let schema_name = item.schema.clone();
-                        let is_current = current_schema.as_deref() == Some(schema_name.as_str());
-                        menu = menu.item(
-                            PopupMenuItem::new(schema_name.clone())
-                                .checked(is_current)
-                                .on_click(move |_, _window, app| {
-                                    entity.update(app, |panel, cx| {
-                                        panel.set_schema(Some(schema_name.clone()), cx);
-                                    });
-                                }),
-                        );
-                    }
-                    let entity = entity.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new("使用连接默认").on_click(move |_, _window, app| {
-                            entity.update(app, |panel, cx| panel.set_schema(None, cx));
-                        }),
-                    );
-                }
-                menu
-            })
-    }
-
-    /// 绑定连接（工具栏选择器调用）：先用端口确保已建连，失败就**不绑定**并留原因
+    /// 绑定连接（工具栏/状态栏面包屑调用）：先用端口确保已建连，失败就**不绑定**并留原因
     ///
     /// `None` = 解绑（跟随当前连接）。绑定是**文档属性**，同一窗口的多份文档互不影响。
     pub(crate) fn bind_connection(&mut self, conn_id: Option<String>, cx: &mut Context<Self>) {
@@ -8437,25 +8344,11 @@ impl Render for EditorHostPanel {
                 div().flex_1().min_h_0().overflow_hidden().child(panel_render),
             );
         }
-        // 编辑器自身状态栏（需求③ / 状态栏去杂乱）：文档级上下文迁出全局栏、
-        // 挂到编辑器 tab 底部。控件事件回调走实体句柄更新，不重入本次 render。
+        // 编辑器自身状态栏（§2.5 定稿规格；需求③/去杂乱）：挂到编辑器 tab 底部。
+        // 栏体由 `status_bar::render` 自绘（侧栏底 + 顶分隔线 + 固定高），
+        // 文档级上下文（面包屑/方言/事务/微标/控件）都在其内，不再重复包一层。
         if let Some(status_bar) = render_editor_status_bar(self, &cx.entity(), cx) {
-            // 栏样式：侧栏底色 + 顶部分隔线 + 固定高——编辑器栏是内嵌表面，
-            // 与全局珊瑚色栏区分；文字色随内容（`render_editor_status_bar` 内取 muted）。
-            let theme = cx.theme();
-            let bar_bg = theme.colors.sidebar;
-            let bar_border = theme.colors.border;
-            root = root.child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .px_2()
-                    .h(rems(ui::EDITOR_STATUS_BAR_HEIGHT))
-                    .border_t(ui::HAIRLINE)
-                    .border_color(bar_border)
-                    .bg(bar_bg)
-                    .child(status_bar),
-            );
+            root = root.child(status_bar);
         }
         root
     }
@@ -8479,115 +8372,57 @@ pub(crate) fn render_editor_status_bar(
         return None;
     }
     let snapshot = host.status_snapshot(cx)?;
-    let theme = cx.theme();
-    let muted = theme.colors.muted_foreground;
-    let border = theme.colors.border;
     let panel_entity = panel_entity.clone();
 
-    // ── 左段：连接 ▸ Schema · 通道 · 事务（SQL）/ 环境族（通用）· 未保存 · 执行中 · 消息 ──
-    let mut left_parts: Vec<String> = Vec::new();
-    if snapshot.mode == EditorMode::Sql {
-        if let Some(conn) = &snapshot.connection {
-            let mut segment = conn.clone();
-            if let Some(schema) = &snapshot.schema {
-                segment.push_str(" ▸ ");
-                segment.push_str(schema);
-            }
-            left_parts.push(segment);
-        }
-        if let Some(channel) = &snapshot.channel {
-            left_parts.push(channel.clone());
-        }
-        if let Some(tx) = &snapshot.tx {
-            left_parts.push(tx.clone());
-        }
-    } else if snapshot.mode == EditorMode::General {
-        if let Some(env) = &snapshot.env {
-            left_parts.push(env.clone());
-        }
-        if let Some(file_type) = &snapshot.file_type {
-            left_parts.push(file_type.clone());
-        }
-        if let Some(lsp) = &snapshot.lsp {
-            left_parts.push(lsp.clone());
-        }
-    }
-    if snapshot.dirty {
-        left_parts.push("未保存".to_string());
-    }
-    if snapshot.executing {
-        let running = match snapshot.elapsed {
-            Some(elapsed) => format!("执行中 {}…", status_bar::elapsed_text(elapsed)),
-            None => "执行中…".to_string(),
+    // §2.5 右段微标补全：文档字节数 + 选区（字符 / 行数）从编辑器内核取（render 只读）。
+    let (bytes, selected_chars, selected_rows) = {
+        let state = host.editor.read(cx);
+        let value = state.value();
+        let range = state.selected_range();
+        let start = range.start.min(value.len());
+        let end = range.end.min(value.len());
+        let selected_chars = value[start..end].chars().count();
+        let selected_rows = if start == end {
+            0
+        } else {
+            value[start..end].chars().filter(|c| *c == '\n').count() + 1
         };
-        left_parts.push(running);
-    }
-    if let Some(message) = &snapshot.message {
-        left_parts.push(message.clone());
-    }
-    let left = div()
-        .h_flex()
-        .items_center()
-        .gap_1()
-        .text_xs()
-        .text_color(muted)
-        .child(left_parts.join(" · "));
+        (value.len(), selected_chars, selected_rows)
+    };
 
-    // ── 右段徽标（VSCode 式独立分段）：行-列 · 编码 · 换行 · 缩进 · 模式 · 脏 ──
-    let mut right = div()
-        .h_flex()
-        .items_center()
-        .gap_1()
-        .text_xs()
-        .text_color(muted);
-    let badges: Vec<(String, Option<IconName>)> = vec![
-        (
-            format!("Ln {}, Col {}", snapshot.line, snapshot.column),
-            None,
-        ),
-        (snapshot.format.encoding.short_label().to_string(), None),
-        (snapshot.format.eol.label().to_string(), None),
-        (
-            if snapshot.hard_tabs {
-                "Tab".to_string()
-            } else {
-                format!("Spaces: {}", snapshot.tab_size)
-            },
-            None,
-        ),
-        (
-            snapshot.mode.short_label().to_string(),
-            Some(crate::toolbar::mode_icon(snapshot.mode)),
-        ),
-    ];
-    for (ix, (text, icon)) in badges.iter().enumerate() {
-        if ix > 0 {
-            right = right.child(
-                div()
-                    .h(rems(ui::EDITOR_STATUS_BAR_HEIGHT * 0.5))
-                    .w_px()
-                    .bg(border),
-            );
-        }
-        let mut content = div().h_flex().items_center().gap_0p5();
-        if let Some(icon) = icon {
-            content = content.child(Icon::new(*icon).size_3().text_color(muted));
-        }
-        content = content.child(text.clone());
-        right = right.child(content.flex_none());
-    }
-    if snapshot.dirty {
-        right = right
-            .child(div().h(rems(ui::EDITOR_STATUS_BAR_HEIGHT * 0.5)).w_px().bg(border))
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_0p5()
-                    .child(Icon::new(IconName::Circle).size_3().text_color(muted))
-                    .child("脏"),
-            );
-    }
+    // 状态栏输入（全部来自真实状态；无数据源的字段不放进结构体）
+    let inputs = status_bar::StatusInputs {
+        mode: snapshot.mode,
+        dirty: snapshot.dirty,
+        read_only: snapshot.read_only,
+        statements: snapshot.statements,
+        line: snapshot.line,
+        column: snapshot.column,
+        // 该字段 §2.5 未渲染；占位 0，真实全文偏移如需要再接入
+        cursor_offset: 0,
+        cursor_count: snapshot.cursor_count,
+        tab_size: snapshot.tab_size,
+        hard_tabs: snapshot.hard_tabs,
+        format: snapshot.format,
+        bytes,
+        selected_chars,
+        selected_rows,
+        message: snapshot.message.as_deref(),
+        executing: snapshot.executing,
+        elapsed: snapshot.elapsed,
+        connection: snapshot.connection.as_deref(),
+        dialect: snapshot.dialect.as_deref(),
+        channel: snapshot.channel.as_deref(),
+        env: snapshot.env.as_deref(),
+        file_type: snapshot.file_type.as_deref(),
+        lsp: snapshot.lsp.as_deref(),
+        tx: snapshot.tx.as_deref(),
+    };
+
+    // 面包屑（执行通道）：仅 SQL 模式——连接 ▸ [库] ▸ Schema，替代纯文本连接段。
+    let breadcrumb = (snapshot.mode == EditorMode::Sql)
+        .then(|| render_breadcrumb_control(host, &panel_entity, cx))
+        .flatten();
 
     // ── 交互控件：编辑模式 / 重设 / 事务 / 中断（事件走 panel.update，不重入宿主）──
     // 编辑模式（行 / 列编辑；列编辑 = 多光标）
@@ -8805,24 +8640,165 @@ pub(crate) fn render_editor_status_bar(
             .into_any_element()
     });
 
-    Some(
-        div()
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .text_xs()
-            .child(left)
-            .child(edit_mode_ctrl)
-            .child(reset_ctrl)
-            .children(tx_ctrl)
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_1()
-                    .child(right)
-                    .children(interrupt),
-            )
-            .into_any_element(),
-    )
+    let controls = status_bar::StatusControls {
+        breadcrumb,
+        edit_mode: Some(edit_mode_ctrl),
+        reset_menu: Some(reset_ctrl),
+        tx: tx_ctrl,
+        interrupt,
+    };
+    Some(status_bar::render(&inputs, controls, cx).into_any_element())
+}
+
+/// SQL 模式状态栏左段面包屑（§2.5 / 执行通道）：连接 ▸ [库] ▸ Schema。
+///
+/// - 连接段 = **短码+名称**（不显示 ●/○ 点：列表只列在线连接，点信息冗余）；
+///   菜单只列**已建连**连接 +「跟随当前连接」（默认态，未绑即跟随活动连接）。
+/// - 库段 = 连接隐含的绑定库，非可切段（有 catalog 才显；跨库切换是后续项）。
+/// - Schema 段 = 可切（schemas + 使用连接默认）；未选给可点「schema ▾」占位。
+fn render_breadcrumb_control(
+    host: &EditorHostPanel,
+    panel_entity: &Entity<EditorHostPanel>,
+    cx: &App,
+) -> Option<AnyElement> {
+    let entity = panel_entity.clone();
+    let options = host.shared.connection_options();
+    let has_port = host.shared.has_connections();
+    let bound = host
+        .with_document(|doc| doc.connection().map(str::to_string))
+        .flatten();
+    let schema = host
+        .with_document(|doc| doc.schema().map(str::to_string))
+        .flatten();
+    let has_bound = bound.is_some();
+    let schemas = host.shared.schemas(bound.as_deref());
+    let muted = cx.theme().colors.muted_foreground;
+
+    // 在线连接预算成 (label, id) 列表，移进菜单闭包（避免 move 整个 options）。
+    let online_conns: Vec<(String, String)> = options
+        .iter()
+        .filter(|o| o.connected)
+        .map(|o| (format!("{}·{}", o.short, o.name), o.id.clone()))
+        .collect();
+
+    // 连接段标签：短码+名称；未绑 = 跟随当前连接。
+    let conn_label = bound
+        .as_deref()
+        .and_then(|id| {
+            options
+                .iter()
+                .find(|o| o.id == id)
+                .map(|o| format!("{}·{}", o.short, o.name))
+        })
+        .unwrap_or_else(|| "跟随当前连接".to_string());
+
+    let conn_entity = entity.clone();
+    let conn_button = Button::new("editor-status-connection")
+        .ghost()
+        .small()
+        .debug_selector(|| "editor-status-connection".to_string())
+        .label(format!("{conn_label} ▾"))
+        .dropdown_menu(move |menu, _window, _cx| {
+            let mut menu = menu;
+            if !has_port {
+                return menu.item(PopupMenuItem::new("（未接入连接列表）").disabled(true));
+            }
+            let follow_entity = conn_entity.clone();
+            let unbound = bound.is_none();
+            menu = menu.item(
+                PopupMenuItem::new("跟随当前连接")
+                    .checked(unbound)
+                    .on_click(move |_, _window, app| {
+                        follow_entity.update(app, |panel, cx| {
+                            panel.bind_connection(None, cx);
+                        });
+                    }),
+            );
+            menu = menu.separator();
+            if online_conns.is_empty() {
+                return menu.item(PopupMenuItem::new("（暂无在线连接）").disabled(true));
+            }
+            for (label, id) in &online_conns {
+                let entity = conn_entity.clone();
+                let is_current = bound.as_deref() == Some(id.as_str());
+                let label = label.clone();
+                let id = id.clone();
+                menu = menu.item(PopupMenuItem::new(label).checked(is_current).on_click(
+                    move |_, _window, app| {
+                        let id = id.clone();
+                        entity.update(app, |panel, cx| {
+                            panel.bind_connection(Some(id), cx);
+                        });
+                    },
+                ));
+            }
+            menu
+        });
+
+    // Schema 段：有绑定连接才摆；schemas 可切 + 使用连接默认；未选给可点占位。
+    let schema_button = has_bound.then(|| {
+        let schemas_menu = schemas.clone();
+        let current_schema = schema.clone();
+        let entity = entity.clone();
+        let label = match &schema {
+            Some(s) => format!("{s} ▾"),
+            None => "schema ▾".to_string(),
+        };
+        Button::new("editor-status-schema")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-status-schema".to_string())
+            .label(label)
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                if schemas_menu.is_empty() {
+                    return menu.item(PopupMenuItem::new("（暂无可切 Schema）").disabled(true));
+                }
+                for item in &schemas_menu {
+                    let entity = entity.clone();
+                    let schema_name = item.schema.clone();
+                    let is_current = current_schema.as_deref() == Some(schema_name.as_str());
+                    menu = menu.item(
+                        PopupMenuItem::new(schema_name.clone())
+                            .checked(is_current)
+                            .on_click(move |_, _window, app| {
+                                entity.update(app, |panel, cx| {
+                                    panel.set_schema(Some(schema_name.clone()), cx);
+                                });
+                            }),
+                    );
+                }
+                let entity = entity.clone();
+                let using_default = current_schema.is_none();
+                menu = menu.item(
+                    PopupMenuItem::new("使用连接默认")
+                        .checked(using_default)
+                        .on_click(move |_, _window, app| {
+                            entity.update(app, |panel, cx| panel.set_schema(None, cx));
+                        }),
+                );
+                menu
+            })
+    });
+
+    // 组装：连接 ▸ [库名] ▸ Schema（库名非可切段；连接隐含其绑定库）。
+    let mut breadcrumb = div()
+        .h_flex()
+        .items_center()
+        .gap_1()
+        .text_xs()
+        .text_color(muted)
+        .child(conn_button);
+    if let Some(catalog) = schema.as_ref().and_then(|s| {
+        schemas
+            .iter()
+            .find(|item| item.schema == *s)
+            .and_then(|item| item.catalog.clone())
+    }) {
+        breadcrumb = breadcrumb.child(div().child("▸")).child(div().child(catalog));
+    }
+    if let Some(schema_button) = schema_button {
+        breadcrumb = breadcrumb.child(div().child("▸")).child(schema_button);
+    }
+    Some(breadcrumb.into_any_element())
 }
