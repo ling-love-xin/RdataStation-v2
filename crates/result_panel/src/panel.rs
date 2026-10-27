@@ -220,6 +220,8 @@ pub struct ResultPanel {
     /// 【B1】列头直接显示注释的面板级临时开关（覆盖全局偏好 `result_panel.show_column_comments`；
     /// 默认 false——全局偏好开启时由 host 在 sync 时同步过来）。
     show_column_comments: bool,
+    /// 【DBeaver 对齐】状态栏中段行数输入框（可编辑，输入行号跳转；暂不接跳转逻辑）
+    row_count_input: Entity<InputState>,
 }
 
 impl ResultPanel {
@@ -270,6 +272,13 @@ impl ResultPanel {
         );
         let _ = column_search_sub;
 
+        // 【DBeaver 对齐】状态栏中段行数输入框：可编辑，输入行号跳转（暂不接跳转逻辑）
+        let row_count_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_placeholder("200", window, cx);
+            state
+        });
+
         // 占位网格：编辑器构造真网格（含钩子）后经 `set_grids` 替换；占位仅保证
         // 构造后到接线前这段窗口里实体非空（渲染不会走到——还没 sync 过）
         let grid = result_grid::new_table_state(
@@ -298,6 +307,7 @@ impl ResultPanel {
             selected_col: None,
             column_search_input,
             column_search: String::new(),
+            row_count_input,
             presentation: Presentation::Grid,
             right_tab: RightTab::Browser,
             compare_active: 0,
@@ -1895,7 +1905,7 @@ impl ResultPanel {
     fn render_right_sidebar(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let queue = self.queue.clone();
-        let labels = ["列浏览器", "值详情", "计算", "分组"];
+        let labels = ["列浏览器", "值详情", "计算", "分组", "引用"];
         let children: Vec<Tab> = labels
             .iter()
             .map(|label| Tab::new().label(SharedString::from(*label)))
@@ -1913,6 +1923,7 @@ impl ResultPanel {
             RightTab::Value => self.render_value_tab(cx),
             RightTab::Stats => self.render_stats_tab(cx),
             RightTab::Group => self.render_group_tab(cx),
+            RightTab::Reference => self.render_reference_tab(cx),
         };
         // 【页签关闭】非默认「列浏览器」页时，行尾给一个 ×：退回默认页（不收起右栏——
         // 拍板口径：× 只退页，右栏开合仍由工具栏「列浏览器」开关控制）。
@@ -2143,6 +2154,11 @@ impl ResultPanel {
             .into_any_element()
     }
 
+    /// 【引用】外键引用查看页签（对齐 DBeaver 引用页签；backlog 空态）
+    fn render_reference_tab(&self, cx: &App) -> AnyElement {
+        self.sidebar_empty("选中一个列查看外键引用", cx)
+    }
+
     /// 【侧栏】右栏各页共用的空态（居中灰字；页内容区 `flex_1`）
     fn sidebar_empty(&self, text: &str, cx: &App) -> AnyElement {
         div()
@@ -2364,6 +2380,7 @@ fn right_tab_from_index(index: usize) -> RightTab {
         1 => RightTab::Value,
         2 => RightTab::Stats,
         3 => RightTab::Group,
+        4 => RightTab::Reference,
         _ => RightTab::Browser,
     }
 }
