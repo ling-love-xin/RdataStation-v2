@@ -3405,6 +3405,8 @@ pub struct ResultToolbar {
     pub fact_tier: Option<CurrentTier>,
     /// 【B5】事实档 Rust 堆估算字节：仅内存档有意义；表档 batches 已释放报 0，段上不摆字节。
     pub fact_bytes: usize,
+    /// 【DBeaver 对齐】来源 SQL 全文（工具栏最左侧 SQL 按钮点击显示；`None` = 不摆按钮）
+    pub sql: Option<String>,
 }
 
 impl ResultToolbar {
@@ -3765,6 +3767,28 @@ pub fn render(
                         .items_center()
                         .gap_2()
                         .min_w_0()
+                        // 【DBeaver 对齐】工具栏最左侧 SQL 预览（hover 看全文）
+                        .children(toolbar.sql.clone().map(|sql| {
+                            let preview: SharedString = if sql.len() > 60 {
+                                format!("{}…", &sql[..60]).into()
+                            } else {
+                                sql.as_str().into()
+                            };
+                            div()
+                                .id("editor-result-sql-preview")
+                                .h_flex()
+                                .items_center()
+                                .gap_1()
+                                .text_xs()
+                                .text_color(muted)
+                                .truncate()
+                                .child(SharedString::from("SQL: "))
+                                .child(preview)
+                                .tooltip(move |window, cx| {
+                                    Tooltip::new(sql.clone()).build(window, cx)
+                                })
+                                .into_any_element()
+                        }))
                         .children(
                             toolbar
                                 .segments()

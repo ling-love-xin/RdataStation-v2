@@ -474,10 +474,12 @@ impl ResultPanel {
                 })
             });
 
-        let toolbar = self.toolbar.clone().unwrap_or(ResultToolbar {
+        let mut toolbar = self.toolbar.clone().unwrap_or(ResultToolbar {
             elapsed_ms: None,
             ..Default::default()
         });
+        // 【DBeaver 对齐】工具栏最左侧显示 SQL 预览（tooltip 看全文）
+        toolbar.sql = self.result_sql.clone();
         // 【原型对齐】结果集标签条始终显示（即使只有 1 个结果集）：
         // 单个结果集时也显示名称（用户可重命名），对齐 DBeaver 口径。
         let tabs = (!self.tabs.is_empty()).then(|| {
