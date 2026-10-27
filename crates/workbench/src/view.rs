@@ -3149,8 +3149,9 @@ impl Render for WorkbenchView {
             let left_width = settings::SettingsService::layout_left_sidebar_width(cx);
             let right_width = settings::SettingsService::layout_right_sidebar_width(cx);
             area.update(cx, |area, cx| {
-                area.set_dock_size(DockPlacement::Left, Pixels(left_width as f32), window, cx);
-                area.set_dock_size(DockPlacement::Right, Pixels(right_width as f32), window, cx);
+                // `Pixels` 内部字段私有不能直接 `Pixels(x)` 构造，走 `px()`（gpui 构造函数）
+                area.set_dock_size(DockPlacement::Left, px(left_width as f32), window, cx);
+                area.set_dock_size(DockPlacement::Right, px(right_width as f32), window, cx);
             });
         }
         // 【2026-10-27】结果区从全局底部 dock 拆回编辑器宿主内嵌（DBeaver 口径：
