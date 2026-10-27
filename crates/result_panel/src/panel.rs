@@ -947,6 +947,7 @@ impl ResultPanel {
             // 主 pane 包一层 flex_1：它自身 `w_full`，在 h_flex 里不包会跟侧栏抢宽
             row = row.child(div().flex_1().min_w_0().h_full().child(result_pane));
             row = row.child(self.render_right_sidebar(cx));
+            row = row.child(self.render_right_edge_bar(cx));
             return row.into_any_element();
         }
         // 无侧栏：竖条 + 主 pane
@@ -1472,6 +1473,44 @@ impl ResultPanel {
             .child(text_btn)
             .child(record_btn)
             .children(record_nav)
+            .into_any_element()
+    }
+
+    /// 【右缘竖条】最右侧边缘面板图标条（对齐 DBeaver 最右缘）：
+    /// - 顶部：右侧边栏开合开关（点击切换 show_value_sidebar）
+    /// - 下方：预留面板切换图标位置（图表/统计等，backlog）
+    ///
+    /// 宽度与左缘竖条一致；背景 sidebar；按钮 ghost 小尺寸。
+    fn render_right_edge_bar(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let queue = self.queue.clone();
+        // 侧边栏开合开关：开着时图标高亮
+        let sidebar_toggle = Button::new("editor-result-edge-sidebar")
+            .ghost()
+            .small()
+            .icon(IconName::PanelRight)
+            .debug_selector(|| "editor-result-edge-sidebar".to_string())
+            .toggled(self.show_value_sidebar)
+            .tooltip(if self.show_value_sidebar {
+                "关闭右侧边栏"
+            } else {
+                "打开右侧边栏"
+            })
+            .on_click(move |_, _window, _app| {
+                queue.push(ResultRequest::ToggleValueSidebar);
+            });
+        div()
+            .w(rems(ui::RESULT_VERTICAL_BAR_WIDTH))
+            .h_full()
+            .flex_none()
+            .border_l(ui::HAIRLINE)
+            .bg(theme.colors.sidebar)
+            .debug_selector(|| "editor-result-edge-bar".to_string())
+            .v_flex()
+            .items_center()
+            .gap_1()
+            .pt_2()
+            .child(sidebar_toggle)
             .into_any_element()
     }
 
