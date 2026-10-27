@@ -293,7 +293,7 @@ impl ResultPanel {
             transposed: false,
             transpose_row: 0,
             compare_mode: false,
-            show_value_sidebar: false,
+            show_value_sidebar: true,
             selection_pos: None,
             selected_col: None,
             column_search_input,
@@ -468,7 +468,9 @@ impl ResultPanel {
             elapsed_ms: None,
             ..Default::default()
         });
-        let tabs = (self.tabs.len() >= 2).then(|| {
+        // 【原型对齐】结果集标签条始终显示（即使只有 1 个结果集）：
+        // 单个结果集时也显示名称（用户可重命名），对齐 DBeaver 口径。
+        let tabs = (!self.tabs.is_empty()).then(|| {
             let queue_pick = self.queue.clone();
             let queue_rename = self.queue.clone();
             let queue_pin = self.queue.clone();

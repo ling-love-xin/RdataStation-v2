@@ -167,7 +167,7 @@ pub fn render(
         .debug_selector(|| "editor-result-tabs".to_string())
         .child(
             TabBar::new("editor-result-sets")
-                .segmented()
+                .folder()
                 .with_size(Size::Small)
                 .track_scroll(scroll_handle)
                 .menu(true)
