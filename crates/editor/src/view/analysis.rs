@@ -32,6 +32,7 @@ use gpui_kit::*;
 
 use crate::cell::{Cell, CellLanguage, CellState, NotebookState, Output};
 use crate::connection::ConnectionOption;
+use crate::view::editor_menu::{editor_context_menu_entries, menu_from_entries};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -278,6 +279,18 @@ fn cell_card(
                 .when_some(cell_editor, |body, editor| {
                     // 内核编辑器（#10）：定高 + 无边框融入卡片；语言在面板创建
                     // EditorState 时按单元类型设好（SQL / markdown）。
+                    // 【B2 延伸】cell 编辑器也挂中文右键菜单（覆盖内核英文默认）：
+                    // 与主编辑器同款——能力位在闭包里读捕获的内核实体判断。
+                    let editor_entity = editor.clone();
+                    let context_menu = move |_menu: gpui_kit::component::native_menu::NativeMenu,
+                                            _window: &mut Window,
+                                            cx: &mut App| {
+                        let entries = {
+                            let state = editor_entity.read(cx);
+                            editor_context_menu_entries(state)
+                        };
+                        menu_from_entries(entries)
+                    };
                     // 外层 div 带业务键 id + test_support：headless 测试据此定位 / 点击
                     body.child(
                         div()
@@ -286,7 +299,8 @@ fn cell_card(
                             .child(
                                 Editor::new(&editor)
                                     .bordered(false)
-                                    .h(rems(ui::NOTEBOOK_CELL_EDITOR_HEIGHT)),
+                                    .h(rems(ui::NOTEBOOK_CELL_EDITOR_HEIGHT))
+                                    .context_menu(context_menu),
                             ),
                     )
                 }),
