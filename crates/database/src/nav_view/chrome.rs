@@ -560,6 +560,10 @@ impl NavView {
                             && cur_filters.tag.is_none();
                         let show_tags = self.host.show_tags(cx);
                         let show_scope = self.host.show_scope(cx);
+                        let show_chips = self.host.show_chips(cx);
+                        let show_search = self.host.show_search(cx);
+                        let host_chips = self.host.clone();
+                        let host_search = self.host.clone();
                         let source_short = self.host.source_short_code(cx);
                         let show_inline_stats = self.host.show_inline_stats(cx);
                         // 需求② 表行统计各子项开关：总开关开时仍受各自子项门控。
@@ -592,6 +596,26 @@ impl NavView {
                                         let host_short = host_short.clone();
                                         move |_, _, app| {
                                             host_short.set_source_short_code(!source_short, app);
+                                        }
+                                    }),
+                            )
+                            .item(
+                                PopupMenuItem::new("显示来源筛选行")
+                                    .checked(show_chips)
+                                    .on_click({
+                                        let host = host_chips.clone();
+                                        move |_, _, app| {
+                                            host.set_show_chips(!show_chips, app);
+                                        }
+                                    }),
+                            )
+                            .item(
+                                PopupMenuItem::new("显示搜索行")
+                                    .checked(show_search)
+                                    .on_click({
+                                        let host = host_search.clone();
+                                        move |_, _, app| {
+                                            host.set_show_search(!show_search, app);
                                         }
                                     }),
                             )
@@ -1229,9 +1253,9 @@ impl NavView {
             .min_h_0()
             .pt_1()
             .child(header)
-            .child(search_row)
+            .when(self.host.show_search(cx), |this| this.child(search_row))
             .when_some(search_options, |this, options| this.child(options))
-            .child(chips)
+            .when(self.host.show_chips(cx), |this| this.child(chips))
             .child(div().h(ui::HAIRLINE).w_full().bg(border))
             .child(body)
             .when_some(self.render_nav_status_bar(cx), |this, status| {

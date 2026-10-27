@@ -575,6 +575,12 @@ pub struct Navigator {
     /// 连接行是否显示归属域列（默认开）。
     #[serde(default = "default_true")]
     pub show_scope: bool,
+    /// 面板是否显示来源筛选 chips 行（全部/项目/全局/共享，默认开）。
+    #[serde(default = "default_true")]
+    pub show_chips: bool,
+    /// 面板是否显示搜索行（输入框 + 模式切换，默认开）。
+    #[serde(default = "default_true")]
+    pub show_search: bool,
     /// 连接名称前是否以 `[简称]` 显示类型简称（如 `[MY] 192.168.3.138`）。默认开。
     /// 简称来自 `type_short_map`（「类型简称映射…」弹窗维护），缺省回退徽标缩写。
     #[serde(default = "default_true")]
@@ -664,6 +670,8 @@ impl Default for Navigator {
             source_short_code: true,
             show_tags: false,
             show_scope: true,
+            show_chips: true,
+            show_search: true,
             show_name_type_short: true,
             type_short_map: default_type_short_map(),
             filters: NavigatorFilters::default(),

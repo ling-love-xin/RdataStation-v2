@@ -103,6 +103,14 @@ mod stub_host {
             false
         }
         fn set_show_scope(&self, _value: bool, _cx: &mut App) {}
+        fn show_chips(&self, _cx: &App) -> bool {
+            true
+        }
+        fn set_show_chips(&self, _value: bool, _cx: &mut App) {}
+        fn show_search(&self, _cx: &App) -> bool {
+            true
+        }
+        fn set_show_search(&self, _value: bool, _cx: &mut App) {}
         fn show_inline_stats(&self, _cx: &App) -> bool {
             false
         }

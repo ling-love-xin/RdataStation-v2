@@ -1226,6 +1226,38 @@ impl SettingsService {
         cx.refresh_windows();
     }
 
+    /// 面板是否显示来源筛选 chips 行。
+    pub fn show_chips(cx: &App) -> bool {
+        cx.global::<Settings>().navigator.show_chips
+    }
+
+    /// 设置并持久化「显示来源筛选 chips 行」开关。
+    pub fn set_show_chips(show: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.navigator.show_chips = show;
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        cx.refresh_windows();
+    }
+
+    /// 面板是否显示搜索行。
+    pub fn show_search(cx: &App) -> bool {
+        cx.global::<Settings>().navigator.show_search
+    }
+
+    /// 设置并持久化「显示搜索行」开关。
+    pub fn set_show_search(show: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.navigator.show_search = show;
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        cx.refresh_windows();
+    }
+
     /// 表/视图行右侧统计徽标是否整体显示（需求④）：分区 / 继承 / ≈行估计 / 大小 /
     /// 注释副标 的总开关。开启时仍受各驱动档案门控（PG 支持、SQLite/DuckDB 无）。
     pub fn show_inline_stats(cx: &App) -> bool {

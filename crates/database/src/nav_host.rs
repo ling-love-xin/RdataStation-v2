@@ -97,6 +97,19 @@ pub struct SavedViewMeta {
     pub filters: NavFilters,
 }
 
+/// 全局通知类型（映射到 gpui-kit `NotificationType`；宿主实现负责转换）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostNotify {
+    /// 信息提示（中性）。
+    Info,
+    /// 操作成功（绿色）。
+    Success,
+    /// 警告（黄色）。
+    Warning,
+    /// 错误（红色）。
+    Error,
+}
+
 /// 宿主注入的能力（`workbench` 实现，见 `crates/workbench/src/panels/nav_host.rs`）。
 pub trait NavHost: 'static {
     // ==================== 宿主状态（读） ====================
@@ -119,6 +132,11 @@ pub trait NavHost: 'static {
     /// 状态栏提示（一行文本；由宿主决定展示与清除时机）。
     fn notice(&self, message: String, cx: &mut App);
 
+    /// 全局浮层通知（连接成功 / 失败等事件路径调用）。默认空实现：宿主未接入
+    /// 通知系统时静默丢弃，不影响行为。宿主实现见 `workbench::components::nav_host`
+    /// （内部经 `workbench::notification` 弹全局通知）。
+    fn notify(&self, _kind: HostNotify, _title: String, _message: Option<String>, _cx: &mut App) {}
+
     /// 让宿主重绘。模态层（连接对话框等）挂在宿主 `render` 上，只 `cx.notify` 子视图不够。
     fn notify_host(&self, cx: &mut App);
 
@@ -131,6 +149,14 @@ pub trait NavHost: 'static {
     /// 行内是否显示归属域（`P` / `G` / `GP`）。
     fn show_scope(&self, cx: &App) -> bool;
     fn set_show_scope(&self, value: bool, cx: &mut App);
+
+    /// 面板是否显示来源筛选 chips 行（全部/项目/全局/共享）。
+    fn show_chips(&self, cx: &App) -> bool;
+    fn set_show_chips(&self, value: bool, cx: &mut App);
+
+    /// 面板是否显示搜索行（输入框 + 模式切换）。
+    fn show_search(&self, cx: &App) -> bool;
+    fn set_show_search(&self, value: bool, cx: &mut App);
 
     /// 表 / 视图行右侧统计徽标整体开关（需求④，默认开）：关闭后右侧 meta /
     /// 注释副标 / 分区·继承 / ≈N / 大小徽标全部不显。`row_estimate` 是更内层

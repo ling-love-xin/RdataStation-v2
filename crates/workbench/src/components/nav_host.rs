@@ -88,6 +88,17 @@ impl NavHost for WorkbenchNavHost {
         self.shared.notify_host(cx);
     }
 
+    fn notify(&self, kind: database::nav_host::HostNotify, title: String, message: Option<String>, cx: &mut App) {
+        use gpui_kit::component::notification::NotificationType;
+        let kind = match kind {
+            database::nav_host::HostNotify::Info => NotificationType::Info,
+            database::nav_host::HostNotify::Success => NotificationType::Success,
+            database::nav_host::HostNotify::Warning => NotificationType::Warning,
+            database::nav_host::HostNotify::Error => NotificationType::Error,
+        };
+        crate::notification::notify(kind, title, message, cx);
+    }
+
     fn notify_host(&self, cx: &mut App) {
         self.shared.notify_host(cx);
     }
@@ -108,6 +119,22 @@ impl NavHost for WorkbenchNavHost {
 
     fn set_show_scope(&self, value: bool, cx: &mut App) {
         settings::SettingsService::set_show_scope(value, cx);
+    }
+
+    fn show_chips(&self, cx: &App) -> bool {
+        settings::SettingsService::show_chips(cx)
+    }
+
+    fn set_show_chips(&self, value: bool, cx: &mut App) {
+        settings::SettingsService::set_show_chips(value, cx);
+    }
+
+    fn show_search(&self, cx: &App) -> bool {
+        settings::SettingsService::show_search(cx)
+    }
+
+    fn set_show_search(&self, value: bool, cx: &mut App) {
+        settings::SettingsService::set_show_search(value, cx);
     }
 
     fn show_inline_stats(&self, cx: &App) -> bool {
