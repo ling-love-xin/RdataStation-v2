@@ -18,7 +18,7 @@ use gpui_kit::base::text::TextView;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::separator::Separator;
@@ -8565,29 +8565,43 @@ pub(crate) fn render_editor_status_bar(
             })
             .into_any_element()
     };
-    // 换行（LF / CRLF **循环**按钮，无下拉——2026-10-27 拆出，点击在两种行尾间翻转）
+    // 换行（LF / CRLF；VSCode 式菜单二选一，2026-10-27 由循环按钮改为下拉菜单）
     let eol_ctrl = {
         let eol = snapshot.format.eol;
         let entity = panel_entity.clone();
-        Button::new("editor-eol")
-            .ghost()
+        DropdownButton::new("editor-eol")
             .small()
-            .debug_selector(|| "editor-eol".to_string())
-            .label(eol.label())
-            .tooltip(match eol {
-                crate::encoding::LineEnding::Lf => "LF 换行（点击切换为 CRLF）",
-                crate::encoding::LineEnding::Crlf => "CRLF 换行（点击切换为 LF）",
-            })
-            .on_click(move |_, _window, app| {
-                entity.update(app, |panel, cx| {
-                    panel.set_eol(
-                        match eol {
-                            crate::encoding::LineEnding::Lf => crate::encoding::LineEnding::Crlf,
-                            crate::encoding::LineEnding::Crlf => crate::encoding::LineEnding::Lf,
-                        },
-                        cx,
+            .button(
+                Button::new("editor-eol-btn")
+                    .ghost()
+                    .small()
+                    .debug_selector(|| "editor-eol".to_string())
+                    .label(eol.label()),
+            )
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                let lf_entity = entity.clone();
+                let crlf_entity = entity.clone();
+                menu = menu
+                    .item(
+                        PopupMenuItem::new("LF")
+                            .checked(eol == crate::encoding::LineEnding::Lf)
+                            .on_click(move |_, _window, app| {
+                                lf_entity.update(app, |panel, cx| {
+                                    panel.set_eol(crate::encoding::LineEnding::Lf, cx);
+                                });
+                            }),
+                    )
+                    .item(
+                        PopupMenuItem::new("CRLF")
+                            .checked(eol == crate::encoding::LineEnding::Crlf)
+                            .on_click(move |_, _window, app| {
+                                crlf_entity.update(app, |panel, cx| {
+                                    panel.set_eol(crate::encoding::LineEnding::Crlf, cx);
+                                });
+                            }),
                     );
-                });
+                menu
             })
             .into_any_element()
     };
@@ -8614,34 +8628,45 @@ pub(crate) fn render_editor_status_bar(
             })
             .into_any_element()
     };
-    // 重设菜单（缩进 + 显示；2026-10-27 编码/换行已拆独立段，这里只留缩进族与显示开关）
-    let reset_ctrl = {
+    // 缩进（VSCode 式菜单：`Tab` / `空格: N`，点击弹菜单选择 制表符 / 空格宽度；
+    // 2026-10-27 合并 indent_kind + tab_size 两维度到一个入口，替换原「重设 ▾」里的缩进族）
+    let indent_ctrl = {
         let current_tab = snapshot.tab_size;
         let hard_tabs = snapshot.hard_tabs;
         let show_whitespaces = host.shared.document_show_whitespaces(&host.document);
-        let show_invisible = host.shared.document_show_invisible(&host.document);
         let entity = panel_entity.clone();
-        DropdownButton::new("editor-reset-menu")
+        DropdownButton::new("editor-indent")
             .small()
             .button(
-                Button::new("editor-reset-menu-btn")
+                Button::new("editor-indent-btn")
                     .ghost()
                     .small()
-                    .debug_selector(|| "editor-reset-menu".to_string())
-                    .label("重设 ▾"),
+                    .debug_selector(|| "editor-indent".to_string())
+                    .label(if hard_tabs {
+                        "Tab".to_string()
+                    } else {
+                        format!("空格: {current_tab}")
+                    }),
             )
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu;
-                // 编码已拆独立段（右侧按钮弹窗选择），菜单只留缩进族 + 显示
-                // 换行已拆独立段（右侧按钮 LF/CRLF 循环切换），菜单只留缩进族 + 显示
+                // 缩进方式 + 宽度（VSCode 缩进菜单同构：制表符 / 空格 2/4/8）
                 menu = menu
-                    .separator()
-                    .item(PopupMenuItem::new("缩进").disabled(true))
+                    .item({
+                        let entity = entity.clone();
+                        PopupMenuItem::new("制表符")
+                            .checked(hard_tabs)
+                            .on_click(move |_, _window, app| {
+                                entity.update(app, |panel, cx| {
+                                    panel.set_hard_tabs(true, cx);
+                                });
+                            })
+                    })
                     .item({
                         let entity = entity.clone();
                         PopupMenuItem::new("空格: 2")
                             .checked(!hard_tabs && current_tab == 2)
-                            .on_click(move |_, _, app| {
+                            .on_click(move |_, _window, app| {
                                 entity.update(app, |panel, cx| {
                                     panel.set_hard_tabs(false, cx);
                                     panel.set_tab_size(2, cx);
@@ -8652,7 +8677,7 @@ pub(crate) fn render_editor_status_bar(
                         let entity = entity.clone();
                         PopupMenuItem::new("空格: 4")
                             .checked(!hard_tabs && current_tab == 4)
-                            .on_click(move |_, _, app| {
+                            .on_click(move |_, _window, app| {
                                 entity.update(app, |panel, cx| {
                                     panel.set_hard_tabs(false, cx);
                                     panel.set_tab_size(4, cx);
@@ -8663,27 +8688,18 @@ pub(crate) fn render_editor_status_bar(
                         let entity = entity.clone();
                         PopupMenuItem::new("空格: 8")
                             .checked(!hard_tabs && current_tab == 8)
-                            .on_click(move |_, _, app| {
+                            .on_click(move |_, _window, app| {
                                 entity.update(app, |panel, cx| {
                                     panel.set_hard_tabs(false, cx);
                                     panel.set_tab_size(8, cx);
                                 });
                             })
-                    })
-                    .item({
-                        let entity = entity.clone();
-                        PopupMenuItem::new("制表符")
-                            .checked(hard_tabs)
-                            .on_click(move |_, _, app| {
-                                entity.update(app, |panel, cx| panel.set_hard_tabs(true, cx));
-                            })
                     });
+                // 渲染空白开关（原「重设 ▾」里的显示项迁此；缩进语境相关，VSCode 缩进菜单同款）
                 let ws_entity = entity.clone();
-                let inv_entity = entity.clone();
                 menu.separator()
-                    .item(PopupMenuItem::new("显示").disabled(true))
                     .item(
-                        PopupMenuItem::new("显示空白字符")
+                        PopupMenuItem::new("渲染空白")
                             .checked(show_whitespaces)
                             .on_click(move |_, window, app| {
                                 ws_entity.update(app, |panel, cx| {
@@ -8691,15 +8707,29 @@ pub(crate) fn render_editor_status_bar(
                                 });
                             }),
                     )
-                    .item(
-                        PopupMenuItem::new("显示隐藏字符")
-                            .checked(show_invisible)
-                            .on_click(move |_, _window, app| {
-                                inv_entity.update(app, |panel, cx| {
-                                    panel.set_show_invisible(!show_invisible, cx);
-                                });
-                            }),
-                    )
+            })
+            .into_any_element()
+    };
+    // 不可见字符开关（独立 toggle 按钮 + tooltip；2026-10-27 由「重设 ▾」里的显示项拆出，
+    // 标注零宽 / 全角空格 / 双向控制 / 控制字符——`hidden.rs` 收录范围；用 VSCode 同款 ¶ 符号）
+    let invisible_ctrl = {
+        let show_invisible = host.shared.document_show_invisible(&host.document);
+        let entity = panel_entity.clone();
+        Button::new("editor-invisible")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-invisible".to_string())
+            .label("¶")
+            .toggled(show_invisible)
+            .tooltip(if show_invisible {
+                "隐藏不可见字符（¶ 高亮零宽 / 全角空格 / 双向控制 / 控制字符）"
+            } else {
+                "显示不可见字符：标注零宽、全角/特殊空格、双向控制（RTL）与控制字符"
+            })
+            .on_click(move |_, _window, app| {
+                entity.update(app, |panel, cx| {
+                    panel.set_show_invisible(!show_invisible, cx);
+                });
             })
             .into_any_element()
     };
@@ -8747,9 +8777,10 @@ pub(crate) fn render_editor_status_bar(
         // 2026-10-27：连接 ▸ 库 ▸ Schema 定位整体迁工具栏右区固定槽（render_conn_slots），
         // 状态栏不再摆面包屑（左段只留方言 + 执行方式 + 事务等当前上下文）
         edit_mode: Some(edit_mode_ctrl),
-        reset_menu: Some(reset_ctrl),
+        indent: Some(indent_ctrl),
         encoding: Some(encoding_ctrl),
         eol: Some(eol_ctrl),
+        invisible: Some(invisible_ctrl),
         tx: tx_ctrl,
         channel: channel_ctrl,
         interrupt,
@@ -8778,7 +8809,9 @@ fn render_channel_control(
             .overflow_hidden()
             .child(
                 Button::new("editor-channel")
-                    .ghost()
+                    // 执行通道 pill 带背景（2026-10-27）：与连接/schema 两个 ghost 槽区分，
+                    // 一眼看出「执行发往哪一档」
+                    .with_variant(ButtonVariant::Secondary)
                     .small()
                     .debug_selector(|| "editor-channel".to_string())
                     // 执行位置图标化：图标（Locate = 定位执行到哪里）+ 通道短标签，去「执行位置：」文字前缀
@@ -8874,6 +8907,84 @@ fn render_conn_slots(
         theme.colors.muted_foreground
     };
     let conn_entity = entity.clone();
+    // 连接名称槽（2026-10-27 拆两段）：名称区点击弹「选择数据源」窗（选连接绑定），
+    // ▾ 区点击弹现有下拉（跟随当前连接 + 只列在线）。固定宽 + 截断，不随内容推挤。
+    let conn_name = Button::new("editor-conn-name")
+        .ghost()
+        .small()
+        .debug_selector(|| "editor-conn-name".to_string())
+        .label(truncate_label(&conn_label, 14))
+        .on_click({
+            let entity = entity.clone();
+            let shared = shared.clone();
+            let bound = bound.clone();
+            move |_, window, app| {
+                let options = shared.connection_options();
+                let current = bound.clone();
+                let entity = entity.clone();
+                crate::view::dialogs::open_connection_picker(
+                    window,
+                    app,
+                    options,
+                    current,
+                    move |id, _window, app| {
+                        entity.update(app, |panel, cx| panel.bind_connection(id, cx));
+                    },
+                );
+            }
+        });
+    let conn_dropdown = Button::new("editor-conn-dropdown")
+        .ghost()
+        .small()
+        .debug_selector(|| "editor-conn-dropdown".to_string())
+        .label("▾")
+        .dropdown_menu(move |menu, _window, _cx| {
+            let mut menu = menu;
+            if !has_port {
+                return menu
+                    .item(PopupMenuItem::new("（未接入连接列表）").disabled(true));
+            }
+            let follow_entity = conn_entity.clone();
+            let unbound = bound.is_none();
+            menu = menu.item(
+                PopupMenuItem::new("跟随当前连接")
+                    .checked(unbound)
+                    .on_click(move |_, _window, app| {
+                        follow_entity.update(app, |panel, cx| {
+                            panel.bind_connection(None, cx);
+                        });
+                    }),
+            );
+            menu = menu.separator();
+            // 实时在线（菜单打开时查，事件路径）：只列真在线连接
+            let online = shared.online_ids();
+            let online_conns: Vec<(String, String)> = options
+                .iter()
+                .filter(|o| online.contains(&o.id))
+                .map(|o| (format!("{}·{}", o.short, o.name), o.id.clone()))
+                .collect();
+            if online_conns.is_empty() {
+                return menu
+                    .item(PopupMenuItem::new("（暂无在线连接）").disabled(true));
+            }
+            for (label, id) in &online_conns {
+                let entity = conn_entity.clone();
+                let is_current = bound.as_deref() == Some(id.as_str());
+                let label = label.clone();
+                let id = id.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(label)
+                        .checked(is_current)
+                        .on_click(move |_, _window, app| {
+                            let id = id.clone();
+                            entity.update(app, |panel, cx| {
+                                panel.bind_connection(Some(id), cx);
+                            });
+                        }),
+                );
+            }
+            menu
+        });
     let conn_slot = div()
         .h_flex()
         .items_center()
@@ -8882,63 +8993,13 @@ fn render_conn_slots(
         .flex_none()
         .overflow_hidden()
         .child(div().size(px(8.)).rounded_full().bg(dot_color).flex_none())
-        .child(
-            Button::new("editor-conn-select")
-                .ghost()
-                .small()
-                .debug_selector(|| "editor-conn-select".to_string())
-                .label(format!("{} ▾", truncate_label(&conn_label, 14)))
-                .dropdown_menu(move |menu, _window, _cx| {
-                    let mut menu = menu;
-                    if !has_port {
-                        return menu
-                            .item(PopupMenuItem::new("（未接入连接列表）").disabled(true));
-                    }
-                    let follow_entity = conn_entity.clone();
-                    let unbound = bound.is_none();
-                    menu = menu.item(
-                        PopupMenuItem::new("跟随当前连接")
-                            .checked(unbound)
-                            .on_click(move |_, _window, app| {
-                                follow_entity.update(app, |panel, cx| {
-                                    panel.bind_connection(None, cx);
-                                });
-                            }),
-                    );
-                    menu = menu.separator();
-                    // 实时在线（菜单打开时查，事件路径）：只列真在线连接
-                    let online = shared.online_ids();
-                    let online_conns: Vec<(String, String)> = options
-                        .iter()
-                        .filter(|o| online.contains(&o.id))
-                        .map(|o| (format!("{}·{}", o.short, o.name), o.id.clone()))
-                        .collect();
-                    if online_conns.is_empty() {
-                        return menu
-                            .item(PopupMenuItem::new("（暂无在线连接）").disabled(true));
-                    }
-                    for (label, id) in &online_conns {
-                        let entity = conn_entity.clone();
-                        let is_current = bound.as_deref() == Some(id.as_str());
-                        let label = label.clone();
-                        let id = id.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(label)
-                                .checked(is_current)
-                                .on_click(move |_, _window, app| {
-                                    let id = id.clone();
-                                    entity.update(app, |panel, cx| {
-                                        panel.bind_connection(Some(id), cx);
-                                    });
-                                }),
-                        );
-                    }
-                    menu
-                })
-                .into_any_element(),
-        );
+        .child(conn_name)
+        .child(conn_dropdown);
 
     // ── schema@库 槽（固定宽；有绑定连接才摆；`schema@catalog` 截断）──
+    // 2026-10-27 拆两段：名称区点击弹「选择 Database/Schema」窗（左库右 Schema 选绑定），
+    // ▾ 区点击弹现有 schema 下拉（含「使用连接默认」）。显示规则：有 schema 时 `schema@库`，
+    // 库即 Schema（catalog 为空）时只显示库名——与弹窗同一口径。
     let schema_slot = has_bound.then(|| {
         let schemas_menu = schemas.clone();
         let current_schema = schema.clone();
@@ -8956,51 +9017,78 @@ fn render_conn_slots(
             }
             None => "schema".to_string(),
         };
+        let schema_name = Button::new("editor-schema-name")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-schema-name".to_string())
+            .label(truncate_label(&label, 12))
+            .on_click({
+                let entity = entity.clone();
+                let schemas = schemas.clone();
+                let schema = schema.clone();
+                move |_, window, app| {
+                    let schemas = schemas.clone();
+                    let schema = schema.clone();
+                    let entity = entity.clone();
+                    crate::view::dialogs::open_schema_picker(
+                        window,
+                        app,
+                        schemas,
+                        schema,
+                        move |sch, _window, app| {
+                            entity.update(app, |panel, cx| {
+                                panel.set_schema(Some(sch), cx);
+                            });
+                        },
+                    );
+                }
+            });
+        let schema_dropdown = Button::new("editor-schema-dropdown")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-schema-dropdown".to_string())
+            .label("▾")
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                if schemas_menu.is_empty() {
+                    return menu
+                        .item(PopupMenuItem::new("（暂无可切 Schema）").disabled(true));
+                }
+                for item in &schemas_menu {
+                    let entity = entity.clone();
+                    let schema_name = item.schema.clone();
+                    let is_current =
+                        current_schema.as_deref() == Some(schema_name.as_str());
+                    menu = menu.item(
+                        PopupMenuItem::new(schema_name.clone())
+                            .checked(is_current)
+                            .on_click(move |_, _window, app| {
+                                entity.update(app, |panel, cx| {
+                                    panel.set_schema(Some(schema_name.clone()), cx);
+                                });
+                            }),
+                    );
+                }
+                let entity = entity.clone();
+                let using_default = current_schema.is_none();
+                menu = menu.item(
+                    PopupMenuItem::new("使用连接默认")
+                        .checked(using_default)
+                        .on_click(move |_, _window, app| {
+                            entity.update(app, |panel, cx| panel.set_schema(None, cx));
+                        }),
+                );
+                menu
+            });
         div()
             .h_flex()
             .items_center()
+            .gap_1()
             .w(rems(ui::SCHEMA_SLOT_WIDTH))
             .flex_none()
             .overflow_hidden()
-            .child(
-                Button::new("editor-status-schema")
-                    .ghost()
-                    .small()
-                    .debug_selector(|| "editor-status-schema".to_string())
-                    .label(format!("{} ▾", truncate_label(&label, 12)))
-                    .dropdown_menu(move |menu, _window, _cx| {
-                        let mut menu = menu;
-                        if schemas_menu.is_empty() {
-                            return menu
-                                .item(PopupMenuItem::new("（暂无可切 Schema）").disabled(true));
-                        }
-                        for item in &schemas_menu {
-                            let entity = entity.clone();
-                            let schema_name = item.schema.clone();
-                            let is_current =
-                                current_schema.as_deref() == Some(schema_name.as_str());
-                            menu = menu.item(
-                                PopupMenuItem::new(schema_name.clone())
-                                    .checked(is_current)
-                                    .on_click(move |_, _window, app| {
-                                        entity.update(app, |panel, cx| {
-                                            panel.set_schema(Some(schema_name.clone()), cx);
-                                        });
-                                    }),
-                            );
-                        }
-                        let entity = entity.clone();
-                        let using_default = current_schema.is_none();
-                        menu = menu.item(
-                            PopupMenuItem::new("使用连接默认")
-                                .checked(using_default)
-                                .on_click(move |_, _window, app| {
-                                    entity.update(app, |panel, cx| panel.set_schema(None, cx));
-                                }),
-                        );
-                        menu
-                    }),
-            )
+            .child(schema_name)
+            .child(schema_dropdown)
             .into_any_element()
     });
 

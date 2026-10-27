@@ -3113,9 +3113,9 @@ fn the_toolbar_shows_the_connection_slots_in_sql_mode(cx: &mut TestAppContext) {
     };
 
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    // 连接定位在工具栏右区：连接名称槽（editor-conn-select）
+    // 连接定位在工具栏右区：连接名称槽（editor-conn-name；2026-10-27 拆为名称+▾ 两段）
     assert!(
-        cx.debug_bounds("editor-conn-select").is_some(),
+        cx.debug_bounds("editor-conn-name").is_some(),
         "SQL 模式工具栏应当有连接名称槽（执行通道）"
     );
     assert!(
@@ -3124,7 +3124,7 @@ fn the_toolbar_shows_the_connection_slots_in_sql_mode(cx: &mut TestAppContext) {
     );
     // 未绑定连接（跟随当前连接态）：schema 概念还没出现 → 无 schema@库 槽（不假装）
     assert!(
-        cx.debug_bounds("editor-status-schema").is_none(),
+        cx.debug_bounds("editor-schema-name").is_none(),
         "未绑定连接时没有 schema 槽"
     );
     // 【B13】执行位置指示器仍在工具栏（通道 pill）
@@ -3143,8 +3143,8 @@ fn the_toolbar_shows_the_connection_slots_in_sql_mode(cx: &mut TestAppContext) {
     });
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    assert!(cx.debug_bounds("editor-conn-select").is_none());
-    assert!(cx.debug_bounds("editor-status-schema").is_none());
+    assert!(cx.debug_bounds("editor-conn-name").is_none());
+    assert!(cx.debug_bounds("editor-schema-name").is_none());
     assert!(
         cx.debug_bounds("editor-channel").is_none(),
         "文本模式没有“在哪儿执行”这回事"

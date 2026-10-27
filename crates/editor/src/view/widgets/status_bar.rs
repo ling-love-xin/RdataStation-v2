@@ -100,12 +100,16 @@ pub struct StatusInputs<'a> {
 pub struct StatusControls {
     /// 【T2c-3】行｜列编辑切换（**循环按钮**：点击在 行编辑/列编辑 间翻转，无下拉）
     pub edit_mode: Option<AnyElement>,
-    /// 【2026-10-27】重设菜单（仅缩进 + 显示；编码 / 换行已拆独立段，各自直接可点）
-    pub reset_menu: Option<AnyElement>,
+    /// 【2026-10-27】缩进段（VSCode 式：`Tab` / `空格: N` 点击弹菜单，选择 制表符 / 空格宽度；
+    /// 合并 `indent_kind`（硬 Tab / 空格）与 `tab_size`（宽度）两个维度到一个入口）
+    pub indent: Option<AnyElement>,
+    /// 【2026-10-27】换行段（VSCode 式菜单：`LF` / `CRLF` 点击弹菜单二选一，非循环）
+    pub eol: Option<AnyElement>,
     /// 【2026-10-27】编码段（点击弹出编码选择对话框；见 `view/encoding_dialog.rs`）
     pub encoding: Option<AnyElement>,
-    /// 【2026-10-27】换行段（点击在 LF / CRLF 间循环，无下拉）
-    pub eol: Option<AnyElement>,
+    /// 【2026-10-27】不可见字符显示开关（toggle 按钮 + tooltip 说明支持哪些不可见字符；
+    /// 零宽 / 全角空格 / 双向控制 / 控制字符——`hidden.rs` 收录范围）
+    pub invisible: Option<AnyElement>,
     /// 【B4】事务区控件（自动提交开关 + 事务开启时的提交 / 回滚），挂在**左段**
     pub tx: Option<AnyElement>,
     /// 【B13】执行方式控件（源库 / 加速 / 联邦可切），挂在**左段**（方言之后、正文之前）
@@ -181,7 +185,7 @@ pub fn right_badges(inputs: &StatusInputs) -> Vec<StatusBadge> {
             text,
         });
     }
-    // 缩进 / 大小：文档级设置（缩进菜单在右侧 reset_menu；大小纯数据，独立微标）
+    // 缩进 / 大小：文档级设置（缩进交互段在右侧 `controls.indent`；大小纯数据，独立微标）
     // 编码 / 换行：2026-10-27 起由右侧**交互段**呈现（`controls.encoding` 按钮弹窗选择、
     // `controls.eol` 按钮 LF/CRLF 循环切换）——一个值只在一处显示，数据徽标不再重复画。
     badges.push(StatusBadge {
@@ -377,10 +381,12 @@ pub fn render(
         .text_color(muted)
         .flex_none()
         .children(controls.edit_mode)
-        // 换行（LF/CRLF 循环）→ 编码（点击弹窗）→ 缩进菜单：交互段与数据微标分开
+        // 交互段（VSCode 式，从左到右）：缩进（Tab / 空格:N）→ 换行（LF / CRLF）→
+        // 编码（弹窗）→ 不可见字符开关；与数据微标分开（一个值只在一处显示）
+        .children(controls.indent)
         .children(controls.eol)
         .children(controls.encoding)
-        .children(controls.reset_menu);
+        .children(controls.invisible);
     for (index, badge) in badges.iter().enumerate() {
         if index > 0 {
             right = right.child(

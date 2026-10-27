@@ -22,13 +22,17 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::input::{Textarea, TextareaState};
+use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{Sizable as _, WindowExt as _};
+use gpui_kit::component::{Icon, IndexPath, Sizable as _, WindowExt as _};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::mode::{CellGranularity, ConfirmKind};
@@ -503,4 +507,509 @@ pub fn open_bind_dialog(
             .child(body)
             .footer(DialogFooter::new().child(cancel).child(run))
     });
+}
+
+// ==== 连接选择器（工具栏「连接名称」点击弹窗；2026-10-27）====
+//
+// 图：标题「选择数据源」+ 连接列表（短码·名称 + 类型 + 在线标记 + 当前勾选）+
+// 底部「仅显示连接的数据库」复选（取消 = 显示全部）。点击 / 回车绑定该连接并关闭；
+// Esc / 点遮罩 = 取消（不改绑定）。回调 `None` 语义留给调用方（绑定 None = 跟随当前连接，
+// 但此选择器只给出 `Some(id)`——跟随项由工具栏 ▾ 下拉提供）。
+
+/// 连接选择列表代理：一行 = 一条连接；`only_connected` 过滤由底部复选切换
+/// （`ListState::delegate_mut` 重绘，不重建对话框）。
+pub struct ConnectionPickerDelegate {
+    /// 全部连接（内存快照；渲染路径只读）
+    options: Vec<crate::connection::ConnectionOption>,
+    /// 仅显示已建连的连接（图 1 底部复选；默认开）
+    only_connected: bool,
+    /// 当前文档绑定的连接 id（勾选标记）
+    current: Option<String>,
+    selected: Option<IndexPath>,
+    /// 宿主绑定回调（`Some(id)` = 绑定该连接）
+    on_pick: Rc<dyn Fn(Option<String>, &mut Window, &mut App)>,
+}
+
+impl ConnectionPickerDelegate {
+    fn filtered(&self) -> Vec<&crate::connection::ConnectionOption> {
+        self.options
+            .iter()
+            .filter(|o| !self.only_connected || o.connected)
+            .collect()
+    }
+}
+
+impl ListDelegate for ConnectionPickerDelegate {
+    type Item = ListItem;
+
+    fn items_count(&self, _section: usize, _cx: &App) -> usize {
+        self.filtered().len()
+    }
+
+    fn render_item(
+        &mut self,
+        ix: IndexPath,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Option<Self::Item> {
+        let filtered = self.filtered();
+        let opt = filtered.get(ix.row)?;
+        let theme = cx.theme();
+        let checked = self.current.as_deref() == Some(opt.id.as_str());
+        Some(
+            ListItem::new(SharedString::from(format!("conn-picker-{}", opt.id)))
+                .h(rems(ui::ENCODING_DIALOG_ROW_HEIGHT))
+                .py_0()
+                .px_2p5()
+                .gap_2()
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .justify_between()
+                        .w_full()
+                        .child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .text_sm()
+                                .text_color(theme.colors.foreground)
+                                .child(format!("{}·{}", opt.short, opt.name))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.colors.muted_foreground)
+                                        .child(opt.db_type.clone()),
+                                ),
+                        )
+                        .when(checked, |row| {
+                            row.child(
+                                Icon::new(IconName::Check)
+                                    .size_3()
+                                    .text_color(theme.colors.success),
+                            )
+                        })
+                        .when(!opt.connected, |row| {
+                            row.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.muted_foreground)
+                                    .child("未连接"),
+                            )
+                        }),
+                ),
+        )
+    }
+
+    fn render_empty(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        div()
+            .v_flex()
+            .items_center()
+            .py_6()
+            .text_xs()
+            .text_color(theme.colors.muted_foreground)
+            .child("（无可用连接）")
+            .into_any_element()
+    }
+
+    fn set_selected_index(
+        &mut self,
+        ix: Option<IndexPath>,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) {
+        self.selected = ix;
+        cx.notify();
+    }
+
+    fn confirm(
+        &mut self,
+        _secondary: bool,
+        window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) {
+        let Some(ix) = self.selected else {
+            return;
+        };
+        let filtered = self.filtered();
+        let Some(opt) = filtered.get(ix.row) else {
+            return;
+        };
+        let id = opt.id.clone();
+        let on_pick = self.on_pick.clone();
+        window.close_dialog(cx);
+        on_pick(Some(id), window, cx);
+    }
+}
+
+/// 打开连接选择器对话框
+///
+/// `on_pick`：确认后携带选中连接 id 回调宿主（宿主负责 `bind_connection` + 状态刷新）。
+/// 返回 `ListState` 实体：测试经它直接驱动确认（headless 口径，见模块头）。
+pub fn open_connection_picker(
+    window: &mut Window,
+    cx: &mut App,
+    options: Vec<crate::connection::ConnectionOption>,
+    current: Option<String>,
+    on_pick: impl Fn(Option<String>, &mut Window, &mut App) + 'static,
+) -> Entity<ListState<ConnectionPickerDelegate>> {
+    let delegate = ConnectionPickerDelegate {
+        options,
+        only_connected: true,
+        current,
+        selected: None,
+        on_pick: Rc::new(on_pick),
+    };
+    let state = cx.new(|cx| {
+        ListState::new(delegate, window, cx)
+            .searchable(false)
+            .selectable(true)
+    });
+    let list = state.clone();
+
+    window.open_dialog(cx, move |dialog, _window, cx| {
+        let theme = cx.theme();
+        let only = list.clone();
+        let check = Checkbox::new("conn-picker-only-connected")
+            .checked(list.read(cx).delegate().only_connected)
+            .label("仅显示连接的数据库")
+            .on_click(move |checked, _window, cx| {
+                only.update(cx, |list, cx| {
+                    list.delegate_mut().only_connected = *checked;
+                    cx.notify();
+                });
+            });
+        let body = div()
+            .v_flex()
+            .w_full()
+            .gap_2()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child("选择要绑定到本文档的连接（回车 / 点击确认，Esc 关闭）"),
+            )
+            .child(List::new(&list).max_h(rems(ui::PICKER_LIST_MAX_HEIGHT)))
+            .child(check);
+        dialog
+            .title("选择数据源")
+            .w(theme.font_size * ui::ENCODING_DIALOG_WIDTH)
+            .child(body)
+    });
+    state
+}
+
+// ==== 活跃 Database / Schema 选择器（工具栏「schema@库」点击弹窗；2026-10-27）====
+//
+// 图：左栏 Database 列表 + 右栏该库的 Schema 列表。左栏选中切右栏；点击右栏 Schema
+// 绑定并关闭。显示规则：有独立 Schema 层时 `schema@库`，库即 Schema（MySQL 等 catalog
+// 为 None）时只显示库（Schema）名——与工具栏槽位同一口径。
+//
+// 需要左栏切换驱动右栏重绘，故状态用 `Entity<SchemaPickerState>`（对话框内局部状态
+// 的正当形状：点击即改，`cx.notify` 触发重绘，见 dialogs 模块头取舍 #2 的例外）。
+
+/// 库 / Schema 选择器内部状态（两栏：左 Database、右 Schema）
+pub struct SchemaPickerState {
+    /// 去重后的库（catalog）列表；`None` = 库即 Schema（MySQL 无独立 Catalog 层）
+    catalogs: Vec<Option<String>>,
+    /// 每个库下的 Schema 列表（与 `catalogs` 对齐）
+    schemas_by: Vec<Vec<String>>,
+    /// 左栏当前选中的库下标
+    selected: usize,
+    /// 当前文档绑定的 Schema（勾选标记）
+    current: Option<String>,
+    /// 宿主绑定回调（确认后写文档 Schema + 状态刷新）
+    on_pick: Rc<dyn Fn(String, &mut Window, &mut App)>,
+}
+
+impl SchemaPickerState {
+    /// 从 SchemaInfo 列表聚合出「库 → Schema」两栏数据（去重、保序）
+    pub fn new(
+        schemas: Vec<crate::connection::SchemaInfo>,
+        current: Option<String>,
+        on_pick: impl Fn(String, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        let mut catalogs: Vec<Option<String>> = Vec::new();
+        let mut schemas_by: Vec<Vec<String>> = Vec::new();
+        for item in schemas {
+            let idx = catalogs
+                .iter()
+                .position(|c| c == &item.catalog)
+                .unwrap_or_else(|| {
+                    catalogs.push(item.catalog.clone());
+                    schemas_by.push(Vec::new());
+                    catalogs.len() - 1
+                });
+            schemas_by[idx].push(item.schema);
+        }
+        let selected = schemas_by
+            .iter()
+            .position(|schs| current.as_ref().is_some_and(|c| schs.contains(c)))
+            .unwrap_or(0);
+        Self {
+            catalogs,
+            schemas_by,
+            selected,
+            current,
+            on_pick: Rc::new(on_pick),
+        }
+    }
+
+    /// 渲染对话框正文（左库 + 右 Schema 两栏 + 底部当前绑定；只读，交互经捕获实体回写）
+    fn body(&self, entity: Entity<Self>, _window: &mut Window, cx: &App) -> impl IntoElement {
+        let theme = cx.theme();
+        let muted = theme.colors.muted_foreground;
+        let foreground = theme.colors.foreground;
+        let border = theme.colors.border;
+
+        // 左栏：Database 列表（当前选中 toggled）
+        let left = div()
+            .v_flex()
+            .flex_1()
+            .min_w_0()
+            .children(self.catalogs.iter().enumerate().map(|(i, cat)| {
+                let entity = entity.clone();
+                let label = match cat {
+                    Some(c) => c.clone(),
+                    None => "默认库".to_string(),
+                };
+                Button::new(SharedString::from(format!("schema-picker-cat-{i}")))
+                    .ghost()
+                    .small()
+                    .toggled(i == self.selected)
+                    .debug_selector(move || format!("schema-picker-cat-{i}"))
+                    .label(label)
+                    .on_click(move |_, _window, cx| {
+                        entity.update(cx, |state, cx| {
+                            state.selected = i;
+                            cx.notify();
+                        });
+                    })
+            }));
+
+        // 右栏：当前库下的 Schema 列表（点击绑定并关闭）
+        let right_schemas = self.schemas_by.get(self.selected).cloned().unwrap_or_default();
+        let right_on_pick = self.on_pick.clone();
+        let right = div()
+            .v_flex()
+            .flex_1()
+            .min_w_0()
+            .children(right_schemas.iter().map(|schema| {
+                let on_pick = right_on_pick.clone();
+                let schema = schema.clone();
+                let selector = format!("schema-picker-sch-{schema}");
+                let checked = self.current.as_deref() == Some(schema.as_str());
+                Button::new(SharedString::from(selector.clone()))
+                    .ghost()
+                    .small()
+                    .toggled(checked)
+                    .debug_selector(move || selector.clone())
+                    .label(schema.clone())
+                    .on_click(move |_, window, cx| {
+                        window.close_dialog(cx);
+                        on_pick(schema.clone(), window, cx);
+                    })
+            }));
+
+        // 底部当前绑定（`schema@库` / 仅库名，与工具栏槽位同口径）
+        let current_label = match &self.current {
+            Some(s) => {
+                let catalog = self.catalogs.get(self.selected).and_then(|c| c.clone());
+                match catalog {
+                    Some(c) => format!("{s}@{c}"),
+                    None => s.clone(),
+                }
+            }
+            None => "（未选 Schema）".to_string(),
+        };
+
+        div()
+            .v_flex()
+            .w_full()
+            .gap_2()
+            .child(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .items_stretch()
+                    .child(
+                        div()
+                            .v_flex()
+                            .gap_1()
+                            .flex_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child("Database"),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .border_1()
+                                    .border_color(border)
+                                    .rounded_md()
+                                    .p_1()
+                                    .child(left),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .v_flex()
+                            .gap_1()
+                            .flex_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child("Schema"),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .border_1()
+                                    .border_color(border)
+                                    .rounded_md()
+                                    .p_1()
+                                    .child(right),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(if self.current.is_some() { foreground } else { muted })
+                    .child(current_label),
+            )
+    }
+}
+
+/// 打开 Database / Schema 选择器对话框
+///
+/// 数据 = 绑定连接的 `Vec<SchemaInfo>`（聚合出 库 → Schema 两栏）；`on_pick` 携带选中的
+/// Schema 名回调宿主（`set_schema`）。返回 `Entity<SchemaPickerState>` 供测试驱动。
+pub fn open_schema_picker(
+    window: &mut Window,
+    cx: &mut App,
+    schemas: Vec<crate::connection::SchemaInfo>,
+    current: Option<String>,
+    on_pick: impl Fn(String, &mut Window, &mut App) + 'static,
+) -> Entity<SchemaPickerState> {
+    let state = cx.new(|_cx| SchemaPickerState::new(schemas, current, on_pick));
+    let entity = state.clone();
+    window.open_dialog(cx, move |dialog, _window, cx| {
+        let body = entity.read(cx).body(entity.clone(), _window, cx);
+        let width = cx.theme().font_size * ui::SCHEMA_PICKER_DIALOG_WIDTH;
+        dialog
+            .title("选择 Database/Schema")
+            .w(width)
+            .child(body)
+    });
+    state
+}
+
+// ═══ 连接 / 库 / Schema 选择器纯逻辑测试（headless 口径：不点对话框，驱动实体方法/纯函数）═══
+#[cfg(test)]
+mod picker_tests {
+    use std::rc::Rc;
+
+    use gpui_kit::{App, Window};
+
+    use super::{ConnectionPickerDelegate, SchemaPickerState};
+    use crate::connection::{ConnectionOption, SchemaInfo};
+
+    fn conn(id: &str, name: &str, connected: bool) -> ConnectionOption {
+        ConnectionOption {
+            id: id.into(),
+            short: id.chars().next().unwrap_or('?').to_string(),
+            name: name.into(),
+            connected,
+            db_type: "test".into(),
+        }
+    }
+
+    #[test]
+    fn schema_picker_groups_by_catalog_and_preserves_order() {
+        let schemas = vec![
+            SchemaInfo {
+                catalog: Some("postgres".into()),
+                schema: "public".into(),
+            },
+            SchemaInfo {
+                catalog: Some("warehouse_supply_chain".into()),
+                schema: "public".into(),
+            },
+            SchemaInfo {
+                catalog: Some("warehouse_supply_chain".into()),
+                schema: "rds_nav_probe_a".into(),
+            },
+            SchemaInfo {
+                catalog: None,
+                schema: "main".into(), // MySQL 无 Catalog 层：库即 Schema
+            },
+        ];
+        let state = SchemaPickerState::new(schemas, Some("rds_nav_probe_a".into()), |_, _, _| {});
+        // 库列表去重保序：postgres → warehouse_supply_chain → None(默认库)
+        assert_eq!(
+            state.catalogs,
+            vec![
+                Some("postgres".to_string()),
+                Some("warehouse_supply_chain".to_string()),
+                None
+            ]
+        );
+        assert_eq!(state.schemas_by[0], vec!["public"]);
+        assert_eq!(state.schemas_by[1], vec!["public", "rds_nav_probe_a"]);
+        assert_eq!(state.schemas_by[2], vec!["main"]);
+        // 当前 schema 在非首库 → 左栏定位到对应库（选中 warehouse_supply_chain 那栏）
+        assert_eq!(state.selected, 1);
+    }
+
+    #[test]
+    fn schema_picker_defaults_to_first_catalog_when_current_is_missing() {
+        let schemas = vec![SchemaInfo {
+            catalog: Some("postgres".into()),
+            schema: "public".into(),
+        }];
+        let state = SchemaPickerState::new(schemas, Some("nope".into()), |_, _, _| {});
+        assert_eq!(state.selected, 0);
+        assert_eq!(state.current.as_deref(), Some("nope"));
+    }
+
+    #[test]
+    fn connection_picker_filters_to_connected_when_toggled() {
+        let delegate = ConnectionPickerDelegate {
+            options: vec![
+                conn("a", "Alpha", true),
+                conn("b", "Beta", false),
+                conn("c", "Gamma", true),
+            ],
+            only_connected: true,
+            current: None,
+            selected: None,
+            on_pick: Rc::new(|_: Option<String>, _: &mut Window, _: &mut App| {}),
+        };
+        let ids: Vec<&str> = delegate.filtered().iter().map(|o| o.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "c"]);
+    }
+
+    #[test]
+    fn connection_picker_shows_all_when_only_connected_is_off() {
+        let delegate = ConnectionPickerDelegate {
+            options: vec![conn("a", "Alpha", true), conn("b", "Beta", false)],
+            only_connected: false,
+            current: None,
+            selected: None,
+            on_pick: Rc::new(|_: Option<String>, _: &mut Window, _: &mut App| {}),
+        };
+        assert_eq!(delegate.filtered().len(), 2);
+    }
 }

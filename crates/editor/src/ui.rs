@@ -170,3 +170,9 @@ pub const ENCODING_DIALOG_WIDTH: f32 = 20.0;
 
 /// 【2026-10-27】编码选择行高（2.0rem = 32px：单行式——编码名 + 当前勾选）
 pub const ENCODING_DIALOG_ROW_HEIGHT: f32 = 2.0;
+
+/// 【2026-10-27】连接 / 库 / Schema 选择器对话框列表最大高度（rems：超长滚动）
+pub const PICKER_LIST_MAX_HEIGHT: f32 = 18.0;
+
+/// 【2026-10-27】Database / Schema 选择器对话框宽度（rems：两栏——左库右 Schema）
+pub const SCHEMA_PICKER_DIALOG_WIDTH: f32 = 30.0;
