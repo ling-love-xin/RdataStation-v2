@@ -167,7 +167,7 @@ pub fn render(
         .debug_selector(|| "editor-result-tabs".to_string())
         .child(
             TabBar::new("editor-result-sets")
-                .folder()
+                // 【DBeaver 对齐】tab 样式和 SQL 编辑器一致（TabVariant::Tab，不是 Folder）
                 .with_size(Size::Small)
                 .track_scroll(scroll_handle)
                 .menu(true)
