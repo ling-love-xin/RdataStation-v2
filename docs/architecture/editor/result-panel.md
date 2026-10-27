@@ -809,6 +809,37 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 
 **测试基线**：`cargo test -p rds-result-panel --lib` = **196 passed / 0 failed**。
 
+### 8.19 gpui-kit table 组件能力释放（2026-10-27）
+
+在 `TableState::new()` 链式调用里开启之前未用的 5 项能力：
+
+| 能力 | 方法 | DBeaver 对标 | 说明 |
+| --- | --- | --- | --- |
+| 列序拖拽 | `.col_movable(true)` | ✅ | 拖拽列头改变列顺序 |
+| 列头排序 | `.sortable(true)` | ✅ | 点击列头排序 |
+| 选中整列 | `.col_selectable(true)` | ✅ | 选中整列 |
+| 键盘循环选择 | `.loop_selection(true)` | ⚠️ | 键盘导航到末尾后循环回开头 |
+| Ctrl+点击多选 | `.select_on_modifier_click(true)` | ✅ | Ctrl+点击多选 |
+
+**已用能力（之前已开启）**：
+- `.col_resizable(true)`：列宽可调
+- `.row_selectable(true)`：行可选
+- `.cell_selectable(true)`：单元格可选
+- `.row_header(false)`：隐藏组件自带行头（用自己的 `#` 列）
+
+**释放后能力清单**（gpui-kit table 组件全部 11 项能力已开启）：
+1. col_resizable ✅
+2. row_selectable ✅
+3. cell_selectable ✅
+4. row_header(false) ✅
+5. col_movable ✅（本轮新增）
+6. sortable ✅（本轮新增）
+7. col_selectable ✅（本轮新增）
+8. loop_selection ✅（本轮新增）
+9. select_on_modifier_click ✅（本轮新增）
+10. ColumnWidthsChanged 事件 ✅
+11. RightClickedRow / RightClickedCell 事件 ✅
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
