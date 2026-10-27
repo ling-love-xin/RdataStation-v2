@@ -140,6 +140,7 @@ fn active_set_index(shared: &EditorShared, document: &crate::model::DocumentId) 
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::{TableDelegate as _, TableEvent, TableState};
+use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -701,7 +702,8 @@ impl EditorHostPanel {
                     result_panel.update(cx, |panel, cx| {
                         panel.set_selected_cell(Some(Self::clip_cell_preview(&text)), cx);
                         // 【侧栏】右侧辅助栏（值详情 / 列浏览器）要位置：选中格的原生事件就带着
-                        panel.set_selection_pos(Some((*row, *col)), cx);
+                        // window 同步列浏览器 List 内部选中高亮（网格反推路径）
+                        panel.set_selection_pos(Some((*row, *col)), window, cx);
                     });
                     Some(result_grid::GridSelection::Cell { row: *row, col: *col })
                 }
@@ -709,14 +711,14 @@ impl EditorHostPanel {
                     result_panel.update(cx, |panel, cx| {
                         panel.set_selected_cell(None, cx);
                         // 【侧栏】选整行不投影单格值详情
-                        panel.set_selection_pos(None, cx);
+                        panel.set_selection_pos(None, window, cx);
                     });
                     Some(result_grid::GridSelection::Row { row: *row })
                 }
                 TableEvent::ClearSelection => {
                     result_panel.update(cx, |panel, cx| {
                         panel.set_selected_cell(None, cx);
-                        panel.set_selection_pos(None, cx);
+                        panel.set_selection_pos(None, window, cx);
                     });
                     None
                 }
@@ -1684,15 +1686,16 @@ impl EditorHostPanel {
         let toolbar_entity = entity.clone();
         let current_channel = self.channel();
 
-        let mut toolbar = div()
-            .h_flex()
-            .items_center()
-            .gap_1()
-            .px_2()
+        // 【组件统一化】外壳迁移到 gpui-kit Toolbar（获得：左右方向键焦点漫游 +
+        // 档位统一）。Small 档是 min_h_8(32px)，editor 按原型 2.25rem 定高覆盖；
+        // Small 档 p_1=4px 内距，恢复原型水平 8px（px_2 覆盖）。
+        let mut toolbar = Toolbar::new("editor-toolbar")
+            .small()
             .h(rems(ui::EDITOR_TOOLBAR_HEIGHT))
+            .px_2()
             .border_b(ui::HAIRLINE)
             .border_color(border)
-            .child(
+            .content(
                 Button::new("editor-mode-indicator")
                     .ghost()
                     .small()
@@ -1746,11 +1749,11 @@ impl EditorHostPanel {
             );
             let groups = self.toolbar.groups();
             for group in &groups {
-                toolbar = toolbar.child(self.render_toolbar_group(group, cx));
+                toolbar = toolbar.content(self.render_toolbar_group(group, cx));
             }
             // 通道级 + 连接（右对齐）：原型 §2.2 两栏——“执行位置”在“连接”左边；
             // T2c-5 固定不动（右对齐语义稳定）。
-            toolbar = toolbar.child(
+            toolbar = toolbar.content(
                 div()
                     .ml_auto()
                     .h_flex()
@@ -1769,12 +1772,12 @@ impl EditorHostPanel {
                     .child(self.render_ro_lock_button(cx)),
             );
             // 最右：`···` 定制面板（布局自定义；低频动作已全部提升常驻，见原型 §2.2 修订）
-            toolbar = toolbar.child(self.render_toolbar_customize(cx));
+            toolbar = toolbar.content(self.render_toolbar_customize(cx));
             }
             crate::model::ToolbarStyle::Minimal => {
             // 【2b】通用模式：环境选择器 + 运行按钮（无连接档：不摆执行位置 / 连接面包屑）
             // Markdown 文档额外有「预览 / 源码」切换（渲染态是只读视图）。
-            toolbar = toolbar.child(
+            toolbar = toolbar.content(
                 div()
                     .ml_auto()
                     .h_flex()
@@ -1792,7 +1795,7 @@ impl EditorHostPanel {
             // Notebook：笔记级工具栏（会话 ▾ / 全部运行 / 重启）——1c 落地。
             // 与 SQL 组模型无关：会话绑定（连接）是笔记级事实，执行是顺序跑全部单元。
             crate::model::ToolbarStyle::Notebook => {
-                toolbar = toolbar.child(
+                toolbar = toolbar.content(
                     div()
                         .ml_auto()
                         .h_flex()
