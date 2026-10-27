@@ -1115,6 +1115,15 @@ impl ResultPanel {
     pub fn toggle_transpose(&mut self, cx: &mut Context<Self>) {
         let open = !self.transposed;
         self.transposed = open;
+        // 【DBeaver 对齐】打开记录视图时，从当前选中行开始（而不是固定第 0 行）；
+        // 没有选中行时保持 transpose_row 不变（默认 0）。
+        if open {
+            if let Some(status) = &self.status {
+                if let Some(selected) = status.selected_row {
+                    self.transpose_row = selected;
+                }
+            }
+        }
         let row = self.transpose_row;
         let grid = self.grid.clone();
         grid.update(cx, |state, cx| {
