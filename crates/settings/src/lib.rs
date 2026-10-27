@@ -226,6 +226,9 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         }
         Slot::EditorShowLineNumbers => SettingValue::Bool(settings.editor.show_line_numbers),
         Slot::EditorShowFolds => SettingValue::Bool(settings.editor.show_folds),
+        Slot::EditorSoftWrap => SettingValue::Bool(settings.editor.soft_wrap),
+        Slot::EditorAutoClose => SettingValue::Bool(settings.editor.auto_close),
+        Slot::EditorSmartIndent => SettingValue::Bool(settings.editor.smart_indent),
         Slot::EditorDefaultTabSize => {
             SettingValue::Number(settings.editor.default_tab_size as f64)
         }
@@ -411,6 +414,24 @@ impl SettingsService {
                     return false;
                 };
                 Self::set_show_folds(on, cx);
+            }
+            Slot::EditorSoftWrap => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_soft_wrap(on, cx);
+            }
+            Slot::EditorAutoClose => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_auto_close(on, cx);
+            }
+            Slot::EditorSmartIndent => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_smart_indent(on, cx);
             }
             Slot::EditorDefaultTabSize => {
                 let Some(n) = value.as_number() else {
@@ -775,6 +796,63 @@ impl SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.editor.show_folds = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+
+    /// 读取「自动换行」开关（设在设置页；`EditorHostPanel::render` 渲染权威同步点
+    /// 读取 → 与面板缓存比较后同步内核 `set_soft_wrap`）。
+    pub fn soft_wrap(cx: &App) -> bool {
+        cx.global::<Settings>().editor.soft_wrap
+    }
+
+    /// 自动换行开关：更新 global → 持久化 → 立即重绘所有窗口。
+    ///
+    /// 即时生效靠 `refresh_windows`：下一帧 `EditorHostPanel::render` 读到新值，
+    /// 与面板缓存比较后同步内核 `set_soft_wrap`（值相同不通知，无重绘循环）。
+    pub fn set_soft_wrap(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.soft_wrap = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+
+    /// 读取「自动闭合括号」开关（设在设置页；`EditorHostPanel::render` 渲染权威同步点
+    /// 读取 → 与面板缓存比较后同步内核 `set_auto_close`）。
+    pub fn auto_close(cx: &App) -> bool {
+        cx.global::<Settings>().editor.auto_close
+    }
+
+    /// 自动闭合括号开关：更新 global → 持久化 → 立即重绘所有窗口。
+    ///
+    /// 即时生效靠 `refresh_windows`：下一帧 `EditorHostPanel::render` 读到新值，
+    /// 与面板缓存比较后同步内核 `set_auto_close`（值相同不通知，无重绘循环）。
+    pub fn set_auto_close(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.auto_close = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+
+    /// 读取「智能缩进」开关（设在设置页；`EditorHostPanel::render` 渲染权威同步点
+    /// 读取 → 与面板缓存比较后同步内核 `set_smart_indent`）。
+    pub fn smart_indent(cx: &App) -> bool {
+        cx.global::<Settings>().editor.smart_indent
+    }
+
+    /// 智能缩进开关：更新 global → 持久化 → 立即重绘所有窗口。
+    ///
+    /// 即时生效靠 `refresh_windows`：下一帧 `EditorHostPanel::render` 读到新值，
+    /// 与面板缓存比较后同步内核 `set_smart_indent`（值相同不通知，无重绘循环）。
+    pub fn set_smart_indent(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.smart_indent = on;
         }
         persist(&cx.global::<Settings>().clone());
         cx.refresh_windows();

@@ -105,6 +105,12 @@ pub enum Slot {
     EditorShowLineNumbers,
     /// 【2026-10-27】代码折叠开关（标量布尔，默认开；设在设置页，编辑器 render 同步）。
     EditorShowFolds,
+    /// 【2026-10-27】软换行开关（标量布尔，默认开，与内核一致；设在设置页，编辑器 render 同步）。
+    EditorSoftWrap,
+    /// 【2026-10-27】自动闭合括号 / 引号（标量布尔，默认开；设在设置页，编辑器 render 同步）。
+    EditorAutoClose,
+    /// 【2026-10-27】智能缩进（标量布尔，默认开；设在设置页，编辑器 render 同步）。
+    EditorSmartIndent,
     EditorDefaultTabSize,
     EditorDefaultHardTabs,
     EditorDefaultLineEnding,
@@ -168,6 +174,9 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "appearance.theme_mode" => Slot::AppearanceThemeMode,
         "editor.show_line_numbers" => Slot::EditorShowLineNumbers,
         "editor.show_folds" => Slot::EditorShowFolds,
+        "editor.soft_wrap" => Slot::EditorSoftWrap,
+        "editor.auto_close" => Slot::EditorAutoClose,
+        "editor.smart_indent" => Slot::EditorSmartIndent,
         "editor.default_tab_size" => Slot::EditorDefaultTabSize,
         "editor.default_hard_tabs" => Slot::EditorDefaultHardTabs,
         "editor.default_line_ending" => Slot::EditorDefaultLineEnding,
@@ -216,9 +225,12 @@ pub fn slot_for(key: &str) -> Option<Slot> {
 pub fn slot_kind(slot: Slot) -> KindTag {
     match slot {
         Slot::AppearanceThemeMode => KindTag::Enum,
-        Slot::EditorShowLineNumbers | Slot::EditorDefaultHardTabs | Slot::EditorShowFolds => {
-            KindTag::Bool
-        }
+        Slot::EditorShowLineNumbers
+        | Slot::EditorDefaultHardTabs
+        | Slot::EditorShowFolds
+        | Slot::EditorSoftWrap
+        | Slot::EditorAutoClose
+        | Slot::EditorSmartIndent => KindTag::Bool,
         Slot::EditorDefaultTabSize => KindTag::Number,
         Slot::EditorDefaultLineEnding | Slot::EditorDefaultEncoding => KindTag::Enum,
         Slot::AppearanceFontSize => KindTag::Number,
@@ -463,6 +475,48 @@ pub const REGISTRY: &[SettingSpec] = &[
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Page,
         consumer: "crates/editor/src/view/host.rs::EditorHostPanel（render 同步 shared.show_folds → sync_fold）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "editor.soft_wrap",
+        section: "editor",
+        section_label: "编辑器",
+        label: "自动换行",
+        hint: "长行是否软换行（默认开；关闭后长行横向滚动，状态栏不再挤占换行微标）",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/editor/src/view/host.rs::EditorHostPanel（render 同步内核 set_soft_wrap）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "editor.auto_close",
+        section: "editor",
+        section_label: "编辑器",
+        label: "自动闭合括号",
+        hint: "输入 ( [ { 与引号时自动补全另一半（默认开；关闭后需手动补全）",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/editor/src/view/host.rs::EditorHostPanel（render 同步内核 set_auto_close）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "editor.smart_indent",
+        section: "editor",
+        section_label: "编辑器",
+        label: "智能缩进",
+        hint: "回车后按括号结构与语言规则自动选择缩进（默认开；关闭后回车固定行首）",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/editor/src/view/host.rs::EditorHostPanel（render 同步内核 set_smart_indent）",
         composite: false,
     },
     SettingSpec {

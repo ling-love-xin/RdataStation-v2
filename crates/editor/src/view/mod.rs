@@ -6,12 +6,15 @@
 pub mod analysis;
 pub mod completion;
 pub mod dialogs;
+pub mod editor_menu;
 pub mod encoding_dialog;
 pub mod fold;
 pub mod function_manual;
 pub mod highlight;
 pub mod history;
 pub mod host;
+pub mod indent_dialog;
+pub mod invisible_dialog;
 pub mod manage_env;
 pub mod results;
 pub mod signature_help;

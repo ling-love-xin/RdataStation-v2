@@ -353,6 +353,18 @@ pub struct Editor {
     /// `sync_fold` 重跑（install / set_folding(false)）。
     #[serde(default = "default_show_folds")]
     pub show_folds: bool,
+    /// 是否软换行（默认开，与内核 `EditorState` 默认一致；关闭后长行横向滚动）。
+    /// 即时生效：编辑器 render 权威同步点把设置值同步到内核 `set_soft_wrap`。
+    #[serde(default = "default_soft_wrap")]
+    pub soft_wrap: bool,
+    /// 是否自动闭合括号 / 引号（默认开，与内核一致；关闭后输入 `(` 不再补 `)`）。
+    /// 即时生效：编辑器 render 权威同步点同步内核 `set_auto_close`。
+    #[serde(default = "default_auto_close")]
+    pub auto_close: bool,
+    /// 是否智能缩进（默认开；Enter 后按括号结构 / 语言规则选缩进）。
+    /// 即时生效：编辑器 render 权威同步点同步内核 `set_smart_indent`。
+    #[serde(default = "default_smart_indent")]
+    pub smart_indent: bool,
     /// 新文档默认缩进宽度（空格数；文档级「重设 ▾」可改单个文档）。
     #[serde(default = "default_tab_size")]
     pub default_tab_size: i64,
@@ -373,6 +385,9 @@ impl Default for Editor {
         Self {
             show_line_numbers: default_show_line_numbers(),
             show_folds: default_show_folds(),
+            soft_wrap: default_soft_wrap(),
+            auto_close: default_auto_close(),
+            smart_indent: default_smart_indent(),
             default_tab_size: default_tab_size(),
             default_hard_tabs: default_hard_tabs(),
             default_line_ending: default_line_ending(),
@@ -387,6 +402,21 @@ fn default_show_line_numbers() -> bool {
 
 /// 折叠默认开（2026-10-27：能力表置回 true 后，开关只控制是否显示，不关掉能力）
 fn default_show_folds() -> bool {
+    true
+}
+
+/// 软换行默认开（与内核 `EditorState::new` 的 `soft_wrap: true` 一致）
+fn default_soft_wrap() -> bool {
+    true
+}
+
+/// 自动闭合默认开（与内核 `LayoutMode::code_editor` 的 `auto_close: true` 一致）
+fn default_auto_close() -> bool {
+    true
+}
+
+/// 智能缩进默认开（与内核 `LayoutMode::code_editor` 的 `smart_indent: true` 一致）
+fn default_smart_indent() -> bool {
     true
 }
 

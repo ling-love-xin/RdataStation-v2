@@ -104,7 +104,31 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 | --- | --- | --- |
 | `README.md` L417 | 「sqlglot-rust 0.10.29（精确锁定）」 | ✅ 已改为 0.10.33 并补「SQL 语义层（optimizer）」用途 |
 
-## 八、未决项（不编造，记录现状）
+## 八、内核能力释放（2026-10-27，A1/A2/B2/B3/B4）
+
+对照 vendor `gpui-base/src/input/` 能力面 vs `crates/editor/src/` 使用面盘点后，
+用户拍板「释放全部能力、AI 置灰、1~4 项都实现」，本轮落地：
+
+| 项 | 内容 | 落点 | 状态 |
+| --- | --- | --- | --- |
+| A1 | 代码操作（code_action_providers） | 新建 `lsp/sql_code_action.rs`（自研动作 ADD_WHERE/ADD_LIMIT 挂内核槽位）+ `lsp/bridge.rs` LSP 版转发 + host.rs 三分支接线（Sql / Lsp / None） | ✅ 3 单测全绿 |
+| A2 | 文档颜色（document_color_provider） | 新建 `lsp/document_color.rs`：SQL 十六进制字面量 `#rgb/#rrggbb/#rrggbbaa` 色块；SQL 分支挂、通用 LSP 分支不挂（避免语言服务重复报色） | ✅ 4 单测全绿 |
+| B2 | 编辑器正文右键菜单 | 新建 `view/editor_menu.rs`：能力位 → 中文菜单项纯函数（剪切/复制/粘贴/全选/转到定义/代码操作）；host.rs `Editor::context_menu` 定制（覆盖 Input 自带英文默认菜单），能力位从内核实体读（is_editable / selected_range / lsp providers） | ✅ 5 单测全绿 |
+| B3 | 软换行开关（set_soft_wrap） | 设置模块加 `editor.soft_wrap`（默认 true，与内核一致）；render 权威同步点比对缓存后同步内核；设置页自动出开关（registry spec 驱动） | ✅ settings 35 全绿 |
+| B4 | 语言编辑规则（set_language_config + 开关） | ① 设置模块加 `editor.auto_close`（自动闭合括号/引号）+ `editor.smart_indent`（智能缩进），render 同步 `set_auto_close`/`set_smart_indent`；② 新建 `lsp/language_config.rs`：`set_language_config("sql", …)` 注册 SQL 括号/引号配对；③ 主编辑器按高亮类型设语言键（`editor_language_key`：Sql→sql / Python→python / … / CSV/Log→空），cell 编辑器已用 `as_key()` 自动吃到 | ✅ 2 单测全绿 |
+| B1 | Inline Completion（AI 置灰） | 内核槽位 = 覆写 `CompletionProvider::inline_completion()`（无独立装配方法）；「置灰」UX 未定（设置/状态栏开关 disabled + 默认关？还是预留安装口不挂？）——**下期定口径** | 待排期 |
+
+已知取舍（记录，不硬做）：
+
+- **SQL 的 `not_in([String, Comment])` 不生效**：syntax context 只来自全局 `LanguageProvider`
+  （gpui-component 的 `ComponentLanguages`，查 tree-sitter grammar registry）；本仓 SQL 高亮走
+  **自研词法**（`engine::sql::highlight`）不注册 grammar → `context_at` 恒 `Code` → 字符串/注释
+  内输入引号/括号也会自动闭合。**不替换全局 provider**（会破坏 text/json/python 既有默认）；
+  未来给 SQL 装 tree-sitter grammar 后自动生效，`lsp/language_config.rs` 无需改动。
+- `view/mod.rs` 的 `indent_dialog` / `invisible_dialog` 模块注册属并行线（缩进/不可见字符），
+  未随本线提交。
+
+## 九、未决项（不编造，记录现状）
 
 - AGENTS.md 标「GPUI-kit 0.8.x」而 vendor / 代码按 0.7.1（版本口径是否有意，未确认）
 - 执行上下文模型（DBeaver per-context 独立连接）：讨论定稿未开工（0.2.4 不实现，见 `../connection/execution-context-model.md`）

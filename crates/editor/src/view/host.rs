@@ -61,6 +61,55 @@ fn editor_show_folds_or_default(cx: &App) -> bool {
     }
 }
 
+/// 【B3】读「自动换行」开关（测试环境回退默认 true，与内核一致）。
+fn editor_soft_wrap_or_default(cx: &App) -> bool {
+    if cx.has_global::<settings::model::Settings>() {
+        SettingsService::soft_wrap(cx)
+    } else {
+        true
+    }
+}
+
+/// 【B4】读「自动闭合括号」开关（测试环境回退默认 true，与内核一致）。
+fn editor_auto_close_or_default(cx: &App) -> bool {
+    if cx.has_global::<settings::model::Settings>() {
+        SettingsService::auto_close(cx)
+    } else {
+        true
+    }
+}
+
+/// 【B4】读「智能缩进」开关（测试环境回退默认 true，与内核一致）。
+fn editor_smart_indent_or_default(cx: &App) -> bool {
+    if cx.has_global::<settings::model::Settings>() {
+        SettingsService::smart_indent(cx)
+    } else {
+        true
+    }
+}
+
+/// 【B4】高亮类型 → 编辑器语言键（决定自动闭合 / 智能缩进的规则来源）
+///
+/// - Sql / 未识别扩展名 → `"sql"`（走 `language_config::install` 注册的 SQL 规则）；
+/// - 脚本类型 → gpui-component 默认键（`ComponentLanguages` 对 python 有缩进规则，
+///   json 有专属配对，其余落 fallback 默认 `()[]{}`+引号）；
+/// - None（不上色：CSV / 分析模式）→ 不设语言（保持空键，内核默认）。
+fn editor_language_key(kind: crate::view::highlight::HighlightKind) -> Option<&'static str> {
+    use crate::mode::ScriptFileType;
+    use crate::view::highlight::HighlightKind;
+    match kind {
+        HighlightKind::Sql => Some("sql"),
+        HighlightKind::Script(ScriptFileType::Python) => Some("python"),
+        HighlightKind::Script(ScriptFileType::R) => Some("r"),
+        HighlightKind::Script(ScriptFileType::Rust) => Some("rust"),
+        HighlightKind::Script(ScriptFileType::Markdown) => Some("markdown"),
+        HighlightKind::Script(ScriptFileType::Json) => Some("json"),
+        // CSV 走表格展示、Log 无专属编辑规则：留空键 = 内核默认
+        HighlightKind::Script(ScriptFileType::Csv | ScriptFileType::Log) => None,
+        HighlightKind::None => None,
+    }
+}
+
 /// 【B3】读事实档载体偏好快照（分析 / 带类型导出在事件路径上取一次，随请求带入工作线程：
 /// `QueryRunner` 是 `Send + Sync + 'static` 且方法签名无 `cx`，工作线程内不能自己读 global）。
 /// 测试环境未注册 Settings global 时回退 `Auto`（生产在 app 启动经 `SettingsService::init` 注册）。
@@ -119,6 +168,7 @@ use crate::translate;
 use crate::ui;
 use crate::view::completion;
 use crate::view::dialogs;
+use crate::view::editor_menu::{editor_context_menu_entries, menu_from_entries};
 use crate::view::fold;
 use crate::view::highlight;
 use crate::view::results::error_card::ErrorCard;
@@ -317,6 +367,12 @@ pub struct EditorHostPanel {
     pub(crate) closed: bool,
     /// #48 行号开关缓存（设置 → render 权威同步点 → 内核 `set_line_number`）
     show_line_numbers: bool,
+    /// #64 自动换行开关缓存（设置 → render 权威同步点 → 内核 `set_soft_wrap`）
+    soft_wrap: bool,
+    /// #65 自动闭合括号开关缓存（设置 → render 权威同步点 → 内核 `set_auto_close`）
+    auto_close: bool,
+    /// #65 智能缩进开关缓存（设置 → render 权威同步点 → 内核 `set_smart_indent`）
+    smart_indent: bool,
     /// 【2026-10-27】用户只读开关（工具栏 roLock；点击在 只读/编辑 间翻转）。
     ///
     /// 只读是**窗口级合成**（[`Self::read_only_flags`]），不写回 Document——与项目锁同一
@@ -468,6 +524,9 @@ impl EditorHostPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
+        // 【B4】语言编辑规则全局注册（幂等：重复注册同键覆盖）。面板首次创建时
+        // 完成一次即可——`set_language_config` 是叠加注册，多面板重复调用无害。
+        crate::lsp::language_config::install(cx);
 
         let (content, editor_read_only, mode) = {
             let service = shared.service();
@@ -494,6 +553,12 @@ impl EditorHostPanel {
 
         let editor = cx.new(|cx| {
             let mut state = EditorState::new(window, cx);
+            // 【B4】语言编辑规则：SQL 走注册表（`set_language_config("sql", …)`），
+            // 脚本类型走 gpui-component 默认（text / json / python 已有 config）。
+            // language 键决定自动闭合 / 智能缩进的规则来源，与高亮类型一致。
+            if let Some(language) = editor_language_key(highlight_kind) {
+                state = state.language(language);
+            }
             state.set_value(content, window, cx);
             state.set_readonly(editor_read_only, cx);
             // A4：语义着色（SQL 词法；通用模式按脚本类型分派；CSV / 分析模式不上色）
@@ -926,6 +991,11 @@ impl EditorHostPanel {
             closed: false,
             // #48 面板创建即取设置当前值（与内核默认一致；后续变化由 render 同步）
             show_line_numbers: editor_show_line_numbers_or_default(cx),
+            // #64 自动换行缓存：创建时取设置值，render 权威同步点比对后同步内核
+            soft_wrap: editor_soft_wrap_or_default(cx),
+            // #65 自动闭合 / 智能缩进缓存：同 soft_wrap（创建时取设置值）
+            auto_close: editor_auto_close_or_default(cx),
+            smart_indent: editor_smart_indent_or_default(cx),
             // 用户只读开关默认关（可编辑）；roLock 点击后翻转
             user_ro_lock: false,
             title_hovered: std::cell::Cell::new(false),
@@ -3294,10 +3364,28 @@ impl EditorHostPanel {
             // 直接可编辑（导航打开的 SQL 同理，免点按钮直接进编辑期 SQL 模式）。
             // 写入模式提示作为居中水印叠加在空编辑器背景上，输入任意字符即消失。
             let read_only = self.editor_read_only();
+            // 【B2】正文右键菜单：用 `Editor::context_menu` 定制中文菜单（覆盖 Input
+            // 自带英文默认菜单）。能力位在闭包里读**捕获的内核实体**判断：
+            // - 可编辑（非只读/未禁用）→ 剪切/粘贴可用；有选区 → 复制/剪切可用；
+            // - 挂了 definition / code action provider → 显示对应项。
+            // 菜单项纯函数化（`editor_context_menu_entries`）便于 headless 断言顺序与禁用态。
+            let editor_entity = self.editor.clone();
+            let context_menu = move |_menu: gpui_kit::component::native_menu::NativeMenu,
+                                      _window: &mut Window,
+                                      cx: &mut App| {
+                // 先在小作用域里读状态构造条目（`entries` 是拥有型 Vec，
+                // 块结束即释放 `cx` 上的不可变借用），再翻译成菜单
+                let entries = {
+                    let state = editor_entity.read(cx);
+                    editor_context_menu_entries(state)
+                };
+                menu_from_entries(entries)
+            };
             let editor = Editor::new(&self.editor)
                 .appearance(false)
                 .bordered(false)
                 .readonly(read_only)
+                .context_menu(context_menu)
                 .size_full();
             let mut body = div().relative().size_full().child(editor);
             if !read_only && self.editor_is_empty() {
@@ -4322,6 +4410,15 @@ impl EditorHostPanel {
                         session.uri.clone(),
                     ));
                     crate::lsp::bridge::install_hover(state, hover);
+                    // 【A1】通用模式语言服务的 code action：转发 `textDocument/codeAction`
+                    // 到同一会话（诊断 / 补全 / hover 同源）。Ctrl+. 由内核绑定，挂上即弹层。
+                    crate::lsp::sql_code_action::install(
+                        state,
+                        std::rc::Rc::new(crate::lsp::bridge::LspCodeActionProvider::new(
+                            session.client.clone(),
+                            session.uri.clone(),
+                        )),
+                    );
                 }
             }
             crate::lsp::CompletionChoice::Sql => {
@@ -4347,12 +4444,40 @@ impl EditorHostPanel {
                 // 虚拟 URI 先问宿主（端口已注入则解析成导航树定位并返回 true）；未注入
                 // / 其他 scheme → None（内核走默认文档内移动，无副作用）。
                 crate::lsp::bridge::install_show_document(state, self.shared.show_document_port());
+                // 【A1】SQL 改写型 code action（ADD_WHERE / ADD_LIMIT）：挂内核
+                // `code_action_providers` 槽位（多槽 Vec，push 不顶掉别的）。Ctrl+. 已由
+                // 内核绑定（`ToggleCodeActions`），挂上即可弹层。通道参与判定（ADD_WHERE
+                // 只在源库档给：加速 / 联邦对源库只读挂载，改写无意义）。文档 URI 用
+                // 磁盘路径（无路径 = 未命名文档，用 rds://editor/<id> 占位——内核应用
+                // 编辑走编辑器本地坐标，URI 只用于 WorkspaceEdit 结构完整性）。
+                let uri = self
+                    .with_document(|doc| {
+                        doc.path()
+                            .map(|path| path.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| format!("rds://editor/{}", doc.id()))
+                    })
+                    .unwrap_or_else(|| "rds://editor/untitled".to_string());
+                crate::lsp::sql_code_action::install(
+                    state,
+                    crate::lsp::sql_code_action::SqlCodeActionProvider::new(
+                        dialect,
+                        self.channel(),
+                        uri,
+                    ),
+                );
+                // 【A2】颜色字面量色块：识别 `#rgb` / `#rrggbb` / `#rrggbbaa`（含字符串 /
+                // 注释 / x'…' 内）。内核 100ms 防抖自动调 `document_colors()` 并渲染色块，
+                // 这里只补数据源。SQL 模式挂（自研语义层不参与颜色）；通用模式走语言服务
+                // 的 LSP 分支**不挂**（语言服务真 LSP 自己报颜色，别双重）。
+                crate::lsp::document_color::install(state);
             }
             crate::lsp::CompletionChoice::None => {
                 crate::lsp::bridge::uninstall(state);
                 crate::lsp::bridge::uninstall_hover(state);
                 crate::lsp::bridge::uninstall_definition(state);
                 crate::lsp::bridge::uninstall_show_document(state);
+                crate::lsp::sql_code_action::uninstall(state);
+                crate::lsp::document_color::uninstall(state);
                 completion::uninstall(state);
             }
         }
@@ -8454,6 +8579,30 @@ impl Render for EditorHostPanel {
             let document = self.document.clone();
             self.editor.update(cx, |state, cx| {
                 sync_fold(shared, &document, state, window, cx);
+            });
+        }
+        // #64 自动换行：设置 → 面板缓存 → 内核（render 权威同步点，同 #48 行号）。
+        // 内核 `set_soft_wrap` 值相同内部直接 return，不 notify → 无重绘循环。
+        let want_soft_wrap = editor_soft_wrap_or_default(cx);
+        if self.soft_wrap != want_soft_wrap {
+            self.soft_wrap = want_soft_wrap;
+            self.editor.update(cx, |state, cx| {
+                state.set_soft_wrap(want_soft_wrap, window, cx);
+            });
+        }
+        // #65 自动闭合括号 / 智能缩进：与 soft_wrap 同款同步（render 权威同步点）。
+        let want_auto_close = editor_auto_close_or_default(cx);
+        if self.auto_close != want_auto_close {
+            self.auto_close = want_auto_close;
+            self.editor.update(cx, |state, cx| {
+                state.set_auto_close(want_auto_close, window, cx);
+            });
+        }
+        let want_smart_indent = editor_smart_indent_or_default(cx);
+        if self.smart_indent != want_smart_indent {
+            self.smart_indent = want_smart_indent;
+            self.editor.update(cx, |state, cx| {
+                state.set_smart_indent(want_smart_indent, window, cx);
             });
         }
         let (bg, primary, muted) = {
