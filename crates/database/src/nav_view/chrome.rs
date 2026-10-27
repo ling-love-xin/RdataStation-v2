@@ -993,6 +993,41 @@ impl NavView {
                             )
                         }
                     });
+                    // 匹配模式子菜单：前缀/包含 + 注释/定义维度
+                    menu = menu.separator();
+                    let e_mode = entity.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(if matches!(entity.read(cx).nav.borrow().search_name_mode, nav_jobs::NameMatchMode::StartsWith) {
+                            "○ 前缀匹配"
+                        } else {
+                            "○ 包含匹配"
+                        })
+                        .on_click(move |_, _, app| {
+                            e_mode.update(app, |this, cx| {
+                                let current = this.nav.borrow().search_name_mode;
+                                this.nav.borrow_mut().search_name_mode = match current {
+                                    nav_jobs::NameMatchMode::StartsWith => nav_jobs::NameMatchMode::Contains,
+                                    nav_jobs::NameMatchMode::Contains => nav_jobs::NameMatchMode::StartsWith,
+                                };
+                                this.rerun_nav_search(cx);
+                            });
+                        }),
+                    );
+                    let e_comments = entity.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(if entity.read(cx).nav.borrow().search_comments {
+                            "☑ 搜索注释"
+                        } else {
+                            "☐ 搜索注释"
+                        })
+                        .on_click(move |_, _, app| {
+                            e_comments.update(app, |this, cx| {
+                                let current = this.nav.borrow().search_comments;
+                                this.nav.borrow_mut().search_comments = !current;
+                                this.rerun_nav_search(cx);
+                            });
+                        }),
+                    );
                     // B-1 全局对象名过滤器入口（面板偏好，跨项目；空规则 = 不启用）。
                     let host_global = host_mask.clone();
                     menu = menu.separator();
@@ -1201,12 +1236,8 @@ impl NavView {
                 .tooltip("待内省采集：视图 / 例程定义批量采集链路接通后启用");
             let _ = include_definitions;
 
-            // 匹配模式按钮合并到搜索行（不单独占一行）
-            search_row = search_row.child(prefix_btn)
-                .child(contains_btn)
-                .child(div().h(rems(1.)).w(ui::HAIRLINE).bg(border))
-                .child(comments_btn)
-                .child(definition_btn);
+            // 匹配模式按钮移到筛选弹层里（不占搜索行）
+            let _ = (prefix_btn, contains_btn, comments_btn, definition_btn);
 
             search_row = search_row.child(
                 div()
