@@ -875,8 +875,49 @@ panel.rs 删掉手搓过滤 / 行渲染 / 搜索框约 200 行。
 编译过程中并行线 Toolbar 迁移曾以中间态报 `Toolbar::child` 的 `Sizable` 约束错，该线改完（`child`→`content`）
 后编译通过，非本线因果）。
 
-**提交状态**：`crates/result_panel/src/{column_browser.rs, panel.rs, lib.rs}` 待提交；
+**提交状态**：`crates/result_panel/src/{column_browser.rs, panel.rs, lib.rs}` 已提交（`2d295be6`）；
 `crates/editor/src/view/host.rs` 与并行线 Toolbar 迁移混合，按纪律不提交（待该线或用户裁定）。
+
+### 8.19 四行布局重构（2026-10-28 拍板）
+
+**骨架**（用户拍板口径：「第一行 tab 名，第二行工具栏，第三行（左|内容|右），第四行状态栏」）：
+
+```
+┌─ 第一行 结果集标签条（跨全宽；含 C1 重命名条） ──────────────┐
+├─ 第二行 工具栏（跨全宽） ─────────────────────────────┤
+├─ 第三行 主体：左栏 | 内容 | 右栏（对比模式双栏） ───────────┤
+├─ 第四行 状态栏（跨全宽；左端左栏开关 · 右端右栏开关） ───────┤
+```
+
+- **左右栏 DBeaver 式**：默认展开（对齐 DBeaver 常驻），状态栏两端开关可**完全收起**
+  （收起 = 不占宽度，不是折叠成窄条）。左栏 = 网格 / 文本 / 记录竖条
+  （`show_left_sidebar`，默认 true）；右栏 = 列浏览器 / 值详情 / 计算 / 分组同栏页签
+  （`show_value_sidebar`，默认 true）。
+- **开关位置**：状态栏最左端 `PanelLeft` ↔ `PanelLeftOpen`（新按钮，
+  `ResultRequest::ToggleLeftSidebar` → host 分派 `toggle_left_sidebar`）；
+  最右端 `PanelRight` ↔ `PanelRightOpen`（原工具栏「列浏览器」文字按钮迁来，tooltip 联动开合文案）。
+- **文本视图不提前 return**：文本只是第三行主体的一种内容，四行骨架统一组装；
+  文本视图有状态栏，右栏让位（无选中格语义），只留左栏开关。
+- **对比模式**：主体 = 主栏（竖条可收起 + 主 pane）‖ 对比 pane，左右辅助栏让位
+  （三栏会把网格挤没）；状态栏照常渲染第四行（`status_controls` 与主栏同一批动作）。
+
+**实现要点（AnyElement 不实现 Clone 的约束）**：
+
+- `grid.rs::render_status_row` 从 render 内状态行⑦抽出（面板级第四行调用），
+  签名**按值收 `ResultControls`**——状态动作按钮（more / fetch_all / 行级 / 撤销重做）
+  只渲染一处：面板解构 `controls` 后重组 `status_controls`（移动，不 clone），
+  `ResultPane.controls = ResultControls::default()`（grid.rs render 解构 `..` 忽略，
+  不再读按钮字段）。
+- `ResultPane.status / tabs / row_count_input` 全部 `None`（标签条提面板级第一行、
+  状态行提第四行、行数框随状态栏）；`elapsed_ms` 在 `toolbar` 移动进 pane **之前**取出。
+- 面板级根 `debug_selector("editor-result-root")`；主体行保留
+  `editor-result-sidebars`（普通 / 文本）与 `editor-result-compare-layout`（对比）语义。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **196 passed / 0 failed**；
+`cargo check -p rds-editor` 通过（host.rs 分派新增 `ToggleLeftSidebar` 分支）。
+
+**提交状态**：`crates/result_panel/src/{grid.rs, panel.rs, ports.rs}` +
+`crates/editor/src/view/host.rs`（仅分派分支；与并行线 Toolbar 迁移混合，待裁定）待提交。
 
 ## 8. 协作纪律
 

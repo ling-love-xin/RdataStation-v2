@@ -65,6 +65,8 @@ pub enum ResultRequest {
     SetPushdown { open: bool },
     /// 工具栏「辅助栏」开关：结果面板右侧辅助栏（列浏览器 / 值详情 / 计算 / 分组）开合
     ToggleValueSidebar,
+    /// 状态栏左端开关：左侧栏（网格 / 文本 / 记录竖条）开合（完全收起 = 不占宽度）
+    ToggleLeftSidebar,
     /// 左栏列浏览器清单行眼睛：切换该列隐藏 / 显示（宿主 update 网格 + 面板）
     ToggleColumnVisibility(usize),
     /// 列浏览器清单单击选中一列（数据列序）：写清单选中态 + 网格列高亮联动

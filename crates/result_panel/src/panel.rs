@@ -165,6 +165,9 @@ pub struct ResultPanel {
     transposed: bool,
     transpose_row: usize,
     compare_mode: bool,
+    /// 【侧栏】左侧栏（网格 / 文本 / 记录竖条）开关；默认开（对齐 DBeaver 左缘
+    /// 竖条常驻），状态栏左端开关可收起（完全收起 = 不占宽度）。
+    show_left_sidebar: bool,
     /// 【侧栏】右侧辅助栏（列浏览器 / 值详情 / 计算 / 分组）开关；默认关
     /// （不挤网格，工具栏「列浏览器」可开）。列浏览器与值详情等共用这一栏、页签切换。
     show_value_sidebar: bool,
@@ -324,6 +327,7 @@ impl ResultPanel {
             transposed: false,
             transpose_row: 0,
             compare_mode: false,
+            show_left_sidebar: true,
             show_value_sidebar: true,
             selection_pos: None,
             selected_col: None,
@@ -612,28 +616,8 @@ impl ResultPanel {
 
         // 【呈现】文本视图（DBeaver「显示方式 → 文本」）：主区换成 TSV 纯文本
         // （可选中复制）；标签条保留（可切结果集）；侧栏让位（无选中格语义——
-        // 文本没有「格」）。分支放这里因为 `tabs` 随后会被 `ResultPane` 拿走。
-        if self.presentation == Presentation::Text && !self.compare_mode {
-            let body = div()
-                .h_flex()
-                .items_stretch()
-                .w_full()
-                .h_full()
-                .min_h_0()
-                .debug_selector(|| "editor-result-text-view".to_string())
-                .child(self.render_vertical_bar(cx))
-                .child(
-                    div()
-                        .v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .min_h_0()
-                        .when_some(tabs, |body, tabs| body.child(tabs))
-                        .child(self.render_text_view(cx)),
-                );
-            return body.into_any_element();
-        }
+        // 文本没有「格」）。不提前 return：文本视图只是**第三行主体**的一种内容，
+        // 四行骨架（tabs / 工具栏 / 主体 / 状态栏）统一在下方组装。
 
         // 【B15】本地筛选框：只作用于视图层，不重查数据库；输入走 300ms 防抖
         // （`on_filter_input`），有词时给一个 ✕ 清除；「下发源库」开关开着时应用
@@ -683,11 +667,10 @@ impl ResultPanel {
             })
             .into_any_element();
 
-        // 【侧栏】左右分栏开关（DBeaver 结果面板的左右辅助区）：默认关（不挤网格），
-        // 点开才让出左右两栏。用文字按钮——眼睛 / 面板类图标不在 kit 图标表，不猜名。
         // 【侧栏】右侧辅助栏开合（对齐 DBeaver 右侧面板组：列浏览器 / 值详情 / 计算 / 分组
-        // 同栏页签切换）：默认关（不挤网格），点开才让出右栏。用文字按钮——面板类图标不在
-        // kit 图标表，不猜名。
+        // 同栏页签切换）：默认开（对齐 DBeaver 右栏常驻）；开关从工具栏移到**状态栏右端**
+        // （2026-10-28 四行布局拍板：开关在状态栏左右两侧），可完全收起（收起 = 不占宽度）。
+        // 收起态图标用 PanelRightOpen（点击动作 = 展开），展开态 PanelRight（当前状态）。
         let value_sidebar = self.result_can_copy.then(|| {
             let queue = self.queue.clone();
             Button::new("editor-result-value-sidebar")
@@ -695,8 +678,16 @@ impl ResultPanel {
                 .small()
                 .debug_selector(|| "editor-result-value-sidebar".to_string())
                 .toggled(self.show_value_sidebar)
-                .label("列浏览器")
-                .tooltip("右栏：列浏览器 / 值详情 / 计算 / 分组")
+                .icon(if self.show_value_sidebar {
+                    IconName::PanelRight
+                } else {
+                    IconName::PanelRightOpen
+                })
+                .tooltip(if self.show_value_sidebar {
+                    "收起右栏（列浏览器 / 值详情 / 计算 / 分组）"
+                } else {
+                    "展开右栏（列浏览器 / 值详情 / 计算 / 分组）"
+                })
                 .on_click(move |_, _window, _app| {
                     queue.push(ResultRequest::ToggleValueSidebar);
                 })
@@ -1004,7 +995,9 @@ impl ResultPanel {
             redo: Some(redo),
         };
         // 【DBeaver 对齐】工具栏横跨整个顶部（从主 pane 里抽出来）
-        // 解构 controls，取出工具栏需要的字段，剩余字段留给 result_grid::render
+        // 解构 controls，取出工具栏需要的字段；状态栏（面板级第四行）与主 pane
+        // 各拿一份：AnyElement 不实现 Clone，状态动作按钮只渲染一处——pane 内已不再
+        // 读它们（grid.rs render 只渲染网格），故移动进状态栏，pane.controls 传 default。
         let result_grid::ResultControls {
             filter,
             value_sidebar,
@@ -1022,10 +1015,23 @@ impl ResultPanel {
             undo,
             redo,
         } = controls;
+        // 【四行布局】状态栏动作控件 = 解构出的移动字段重组（more / fetch_all / 行级 /
+        // 撤销重做；`..Default` 兜底其余槽位）
+        let status_controls = result_grid::ResultControls {
+            more,
+            fetch_all,
+            insert_row,
+            duplicate_row,
+            delete_row,
+            undo,
+            redo,
+            ..Default::default()
+        };
+        // 工具栏：右栏开关已移状态栏右端，这里不再摆（None）
         let toolbar_el = result_grid::render_toolbar(
             &toolbar,
             filter,
-            value_sidebar,
+            None,
             compare,
             commit,
             analysis,
@@ -1034,52 +1040,76 @@ impl ResultPanel {
             copy,
             cx,
         );
+        // 状态栏右段耗时取自工具栏投影；先取出再移动 `toolbar` 进 pane
+        let elapsed_ms = toolbar.elapsed_ms;
 
         let result_pane = result_grid::render(
             &self.grid,
             result_grid::ResultPane {
                 toolbar,
-                status: self.status.clone(),
-                controls: result_grid::ResultControls {
-                    filter: None,
-                    value_sidebar: None,
-                    compare: None,
-                    commit: None,
-                    analysis: None,
-                    copy: None,
-                    export: None,
-                    refresh: None,
-                    more,
-                    fetch_all,
-                    insert_row,
-                    duplicate_row,
-                    delete_row,
-                    undo,
-                    redo,
-                },
+                // 状态行已抽到面板级第四行（render_status_row），pane 内不再渲染
+                status: None,
+                // 状态动作按钮只由 render_status_row 消费，pane 不需要第二份
+                controls: result_grid::ResultControls::default(),
                 card,
-                tabs,
+                // 标签条已提到面板级第一行（跨全宽），主 pane 不再渲染
+                tabs: None,
                 notice: self.notice.clone(),
-                row_count_input: Some(self.row_count_input.clone()),
+                row_count_input: None,
             },
             cx,
         )
         .into_any_element();
 
-        // 【侧栏】右侧辅助栏（对齐 DBeaver 结果面板形态：列浏览器 / 值详情 / 计算 / 分组
-        // 同栏页签切换）：普通视图 + 辅助栏开着 → 竖条 + 主 pane + 右栏。对比模式已双栏，
-        // 辅助栏让位（三栏会把网格挤没，辅助栏信息在双栏里都有）。竖条常驻网格左缘
-        // （视图方式切换入口），右栏可独立开合；网格宽度不再被左侧栏挤占。
-        if !self.compare_mode && self.show_value_sidebar {
-            let mut top = div()
-                .v_flex()
+        // 【四行布局】（2026-10-28 拍板）：
+        //   第一行 tabs（跨全宽）→ 第二行工具栏（跨全宽）→ 第三行主体（左栏|内容|右栏）
+        //   → 第四行状态栏（跨全宽，左端左栏开关 / 右端右栏开关）。
+        // 左右栏 DBeaver 式：默认展开（对齐 DBeaver 常驻），状态栏两端开关可完全收起
+        // （收起 = 不占宽度）。对比模式双栏，左右辅助栏让位（三栏会把网格挤没，
+        // 辅助栏信息在双栏里都有）。
+
+        // 【侧栏】左栏开关（状态栏最左）：左侧栏 = 网格 / 文本 / 记录竖条。
+        // 收起态图标用 PanelLeftOpen（点击动作 = 展开），展开态 PanelLeft（当前状态）。
+        let left_switch = {
+            let queue = self.queue.clone();
+            Button::new("editor-result-left-sidebar-toggle")
+                .ghost()
+                .small()
+                .debug_selector(|| "editor-result-left-sidebar-toggle".to_string())
+                .toggled(self.show_left_sidebar)
+                .icon(if self.show_left_sidebar {
+                    IconName::PanelLeft
+                } else {
+                    IconName::PanelLeftOpen
+                })
+                .tooltip(if self.show_left_sidebar {
+                    "收起左栏（网格 / 文本 / 记录）"
+                } else {
+                    "展开左栏（网格 / 文本 / 记录）"
+                })
+                .on_click(move |_, _window, _app| {
+                    queue.push(ResultRequest::ToggleLeftSidebar);
+                })
+                .into_any_element()
+        };
+
+        // 第三行主体：文本视图 / 普通视图 / 对比模式 三态
+        let body = if self.presentation == Presentation::Text && !self.compare_mode {
+            // 文本视图：左栏（可收起）+ 文本主区；右栏让位（无选中格语义）
+            let mut row = div()
+                .h_flex()
+                .items_stretch()
                 .w_full()
                 .h_full()
                 .min_h_0()
-                .debug_selector(|| "editor-result-top".to_string());
-            // 工具栏横跨整个顶部
-            top = top.child(toolbar_el);
-            // 下面是左右分栏
+                .debug_selector(|| "editor-result-text-view".to_string());
+            if self.show_left_sidebar {
+                row = row.child(self.render_vertical_bar(cx));
+            }
+            row.child(div().flex_1().min_w_0().h_full().child(self.render_text_view(cx)))
+                .into_any_element()
+        } else if !self.compare_mode {
+            // 普通视图：左栏（可收起）+ 主 pane + 右栏（可收起）
             let mut row = div()
                 .h_flex()
                 .items_stretch()
@@ -1087,103 +1117,136 @@ impl ResultPanel {
                 .h_full()
                 .min_h_0()
                 .debug_selector(|| "editor-result-sidebars".to_string());
-            row = row.child(self.render_vertical_bar(cx));
+            if self.show_left_sidebar {
+                row = row.child(self.render_vertical_bar(cx));
+            }
             row = row.child(div().flex_1().min_w_0().h_full().child(result_pane));
-            row = row.child(self.render_right_sidebar(cx));
-            top = top.child(row);
-            return top.into_any_element();
-        }
-        // 无侧栏：竖条 + 主 pane
-        if !self.compare_mode {
-            return div()
-                .h_flex()
-                .items_stretch()
-                .w_full()
-                .h_full()
-                .min_h_0()
-                .debug_selector(|| "editor-result-body".to_string())
-                .child(self.render_vertical_bar(cx))
-                .child(div().flex_1().min_w_0().h_full().child(result_pane))
-                .into_any_element();
-        }
-        // 【并排对比】对比模式双栏：左栏 = 主选中（上面组装好的主 pane），
-        // 右栏 = 对比选中（自己的标签条 + 只读网格）。右栏数据由编辑器
-        // `sync_compare_grid` 提前拷进 `compare_grid`（render 只读网格状态）。
-        // 右栏不接 filter/transpose/commit/analysis/export/refresh/more——那些
-        // 动作的语义都归主栏，并排对照不需要第二套动作。
-        if !self.compare_mode {
-            return result_pane;
-        }
-        let compare_tabs = (self.tabs.len() >= 2).then(|| {
-            let queue = self.queue.clone();
-            let compare_active = self.compare_active;
-            result_sets::render(
-                &self.tabs,
-                compare_active,
-                move |index, _window, _app| {
-                    let index = *index;
-                    queue.push(ResultRequest::SelectCompare(index));
-                },
-                result_sets::TabActions::default(),
-                cx,
-                &self.tabs_scroll,
-            )
-            .into_any_element()
-        });
-        // 对比栏的工具栏 / 状态行：编辑器在 `sync_compare_grid` 时投影好存进
-        // `compare_toolbar` / `compare_status`（与主栏同口径；只读，互动真值不需要）
-        let compare_pane = self.compare_grid.as_ref().map(|compare_grid| {
-            result_grid::render(
-                compare_grid,
-                result_grid::ResultPane {
-                    toolbar: self.compare_toolbar.clone().unwrap_or_default(),
-                    status: self.compare_status.clone(),
-                    controls: result_grid::ResultControls::default(),
-                    card: None,
-                    tabs: compare_tabs,
-                    notice: None,
-                    row_count_input: None,
-                },
-                cx,
-            )
-            .into_any_element()
-        });
-        let Some(compare_pane) = compare_pane else {
-            return result_pane;
+            if self.show_value_sidebar {
+                row = row.child(self.render_right_sidebar(cx));
+            }
+            row.into_any_element()
+        } else {
+            // 【并排对比】对比模式双栏：左栏 = 主选中（上面组装好的主 pane），
+            // 右栏 = 对比选中（自己的标签条 + 只读网格）。右栏数据由编辑器
+            // `sync_compare_grid` 提前拷进 `compare_grid`（render 只读网格状态）。
+            // 右栏不接 filter/transpose/commit/analysis/export/refresh/more——那些
+            // 动作的语义都归主栏，并排对照不需要第二套动作。
+            let compare_tabs = (self.tabs.len() >= 2).then(|| {
+                let queue = self.queue.clone();
+                let compare_active = self.compare_active;
+                result_sets::render(
+                    &self.tabs,
+                    compare_active,
+                    move |index, _window, _app| {
+                        let index = *index;
+                        queue.push(ResultRequest::SelectCompare(index));
+                    },
+                    result_sets::TabActions::default(),
+                    cx,
+                    &self.tabs_scroll,
+                )
+                .into_any_element()
+            });
+            // 对比栏的工具栏 / 状态行：编辑器在 `sync_compare_grid` 时投影好存进
+            // `compare_toolbar` / `compare_status`（与主栏同口径；只读，互动真值不需要）
+            let compare_pane = self.compare_grid.as_ref().map(|compare_grid| {
+                result_grid::render(
+                    compare_grid,
+                    result_grid::ResultPane {
+                        toolbar: self.compare_toolbar.clone().unwrap_or_default(),
+                        status: self.compare_status.clone(),
+                        controls: result_grid::ResultControls::default(),
+                        card: None,
+                        tabs: compare_tabs,
+                        notice: None,
+                        row_count_input: None,
+                    },
+                    cx,
+                )
+                .into_any_element()
+            });
+            match compare_pane {
+                // 双栏：中间一条竖分隔线（结构元素用 `ui::HAIRLINE`），两栏各占一半
+                Some(compare_pane) => div()
+                    .h_flex()
+                    .items_stretch()
+                    .w_full()
+                    .h_full()
+                    .min_h_0()
+                    .debug_selector(|| "editor-result-compare-layout".to_string())
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_stretch()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .border_r(ui::HAIRLINE)
+                            .debug_selector(|| "editor-result-compare-main".to_string())
+                            // 对比模式竖条只挂主栏左侧：视图方式切换只作用于主栏，对比栏
+                            // 只读；竖条 = 左栏，跟随 `show_left_sidebar` 可收起
+                            .when(self.show_left_sidebar, |main| {
+                                main.child(self.render_vertical_bar(cx))
+                            })
+                            .child(div().flex_1().min_w_0().h_full().child(result_pane)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .debug_selector(|| "editor-result-compare-pane".to_string())
+                            .child(compare_pane),
+                    )
+                    .into_any_element(),
+                // 无对比选中（对比开关开着但没选中可比对象）：退化为单主栏
+                None => div()
+                    .h_flex()
+                    .items_stretch()
+                    .w_full()
+                    .h_full()
+                    .min_h_0()
+                    .debug_selector(|| "editor-result-sidebars".to_string())
+                    .when(self.show_left_sidebar, |row| {
+                        row.child(self.render_vertical_bar(cx))
+                    })
+                    .child(div().flex_1().min_w_0().h_full().child(result_pane))
+                    .into_any_element(),
+            }
         };
-        // 双栏：中间一条竖分隔线（结构元素用 `ui::HAIRLINE`），两栏各占一半
+
+        // 第四行：状态栏（跨全宽，横跨左右栏之下；左端左栏开关、右端右栏开关）。
+        // 文本视图也有 status（行数等），故状态栏在三种主体形态下都渲染。
+        let status_row = self.status.as_ref().map(|status| {
+            result_grid::render_status_row(
+                status,
+                status_controls,
+                Some(&self.row_count_input),
+                elapsed_ms,
+                Some(left_switch),
+                value_sidebar,
+                cx,
+            )
+            .into_any_element()
+        });
+
         div()
-            .h_flex()
-            .items_stretch()
+            .v_flex()
             .w_full()
             .h_full()
             .min_h_0()
-            .debug_selector(|| "editor-result-compare-layout".to_string())
-            .child(
-                div()
-                    .h_flex()
-                    .items_stretch()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .border_r(ui::HAIRLINE)
-                    .debug_selector(|| "editor-result-compare-main".to_string())
-                    // 对比模式竖条只挂主栏左侧：视图方式切换只作用于主栏，对比栏只读
-                    .child(self.render_vertical_bar(cx))
-                    .child(div().flex_1().min_w_0().h_full().child(result_pane)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .debug_selector(|| "editor-result-compare-pane".to_string())
-                    .child(compare_pane),
-            )
+            .debug_selector(|| "editor-result-root".to_string())
+            // 第一行：结果集标签条（跨全宽；含 C1 重命名条）
+            .children(tabs)
+            // 第二行：工具栏（跨全宽）
+            .child(toolbar_el)
+            // 第三行：主体
+            .child(body)
+            // 第四行：状态栏
+            .children(status_row)
             .into_any_element()
     }
 
-    // ── 视图层动作（面板内自洽：只碰网格 delegate 与本实体状态） ──────────────
 
     /// 【B15】筛选输入变化（300ms 防抖，到点才重算视图行序）
     pub fn on_filter_input(&mut self, text: String, cx: &mut Context<Self>) {
@@ -1320,6 +1383,12 @@ impl ResultPanel {
     /// 【侧栏】右侧辅助栏开关：只翻面板状态（网格数据不动）
     pub fn toggle_value_sidebar(&mut self, cx: &mut Context<Self>) {
         self.show_value_sidebar = !self.show_value_sidebar;
+        cx.notify();
+    }
+
+    /// 【侧栏】左侧栏（网格 / 文本 / 记录竖条）开关：只翻面板状态（网格数据不动）
+    pub fn toggle_left_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.show_left_sidebar = !self.show_left_sidebar;
         cx.notify();
     }
 

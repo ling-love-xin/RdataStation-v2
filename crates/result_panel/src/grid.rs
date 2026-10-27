@@ -3805,18 +3805,16 @@ pub fn render(
     pane: ResultPane,
     cx: &App,
 ) -> impl IntoElement {
-    let theme = cx.theme();
-    let muted = theme.colors.muted_foreground;
+    // 状态行已抽走（render_status_row 面板级调用），render 主体不再取色
 
     // 先把各段拆开：工具栏先拿走 refresh/copy，状态行⑦再拿 more（部分移动会让字段不可用）
     let ResultPane {
-        toolbar,
-        status,
-        controls,
         card,
         tabs,
         notice,
-        row_count_input,
+        // 工具栏 / 状态行 / 行数框已抽到面板级（render_toolbar / render_status_row），
+        // 状态动作按钮只由 render_status_row 消费（面板级按值传入），pane 内不再读
+        ..
     } = pane;
     // 有卡片就不画网格（网格里本来也没东西，画出来只是一块空白）
     let has_card = card.is_some();
@@ -3874,205 +3872,228 @@ pub fn render(
                     ),
             )
         })
-        // ⑦ 结果状态行
-        .when_some(status, |pane, status| {
-            let (left, _old_right) = status_segments(&status);
-            // 【DBeaver 对齐】右段文案格式：... N 行已获取 · 耗时
-            let elapsed = toolbar.elapsed_ms.map(|ms| format!("{}s", ms as f64 / 1000.0));
-            let rows = if status.has_more {
-                format!("{}+", thousands(status.total_rows))
-            } else {
-                thousands(status.total_rows)
-            };
-            let right = match elapsed {
-                Some(elapsed) => format!("... {} 行已获取 · {}", rows, elapsed),
-                None => format!("... {} 行已获取", rows),
-            };
-            let fetch_hint = fetch_more_hint(&status);
-            let truncation = truncation_notice(&status);
-            let window_tip = window_fetch_active(&status).then_some(WINDOW_FETCH_NOTICE);
-            let window_tip_text = window_tip.map(str::to_string);
-            // 防御组合（分段中同时挂截断信号）才留旧 hint；正常到底已由 truncation 接管
-            let legacy_hint = if truncation.is_none() {
-                status.truncated_hint.clone()
-            } else {
-                None
-            };
-            let warning = theme.colors.warning;
-            let border = theme.colors.border;
+        // ⑦ 结果状态行——已抽到 `render_status_row`（面板级第四行调用：状态栏横跨
+        // 左右栏之下，左端 / 右端挂左右栏开关，见 panel.rs `render`）。这里不再渲染。
+}
 
-            // 【#26 视图骨架】底部动作状态行三段：左动作组（占位灰钮 + 取下一段真钮）、
-            // 中段只读行数框、右段当前格 / 截断 / 选中行元信息。占位钮全部 disabled，
-            // 行级叠加层模型落地后逐个接线（result-panel.md §8.10 ④）。
-            let placeholders = status_action_placeholders();
-            let placeholder_btn = |(icon, tooltip): (IconName, &'static str)| {
-                let id = format!("editor-result-action-{:?}", icon);
-                Button::new(id)
-                    .ghost()
-                    .small()
-                    .icon(icon)
-                    .tooltip(tooltip)
-                    .disabled(true)
-                    .debug_selector(|| format!("editor-result-action-{:?}", icon))
-                    .into_any_element()
-            };
-            let separator = || {
-                div()
-                    .w_px()
-                    .h_3()
-                    .flex_none()
-                    .bg(border)
-                    .into_any_element()
-            };
-            // 写操作段：保存 · 取消 · 编辑 · 新增行 · 复制行 · 删除行 · 撤销 · 重做。
-            // 保存 / 取消复用工具栏的提交 / 回滚对（状态栏不重复挂载），槽位保留禁用占位；
-            // 编辑 / 新增 / 复制 / 删除 / 撤销 / 重做由面板注入真钮，未注入（只读结果集等）回退占位。
-            let write_ops = vec![
-                placeholder_btn(placeholders[0]),
-                placeholder_btn(placeholders[1]),
-                placeholder_btn(placeholders[2]), // 编辑（Pencil，禁用占位）
-                controls
-                    .insert_row
-                    .unwrap_or_else(|| placeholder_btn(placeholders[3])),
-                controls
-                    .duplicate_row
-                    .unwrap_or_else(|| placeholder_btn(placeholders[4])),
-                controls
-                    .delete_row
-                    .unwrap_or_else(|| placeholder_btn(placeholders[5])),
-                controls
-                    .undo
-                    .unwrap_or_else(|| placeholder_btn(placeholders[6])),
-                controls
-                    .redo
-                    .unwrap_or_else(|| placeholder_btn(placeholders[7])),
-            ];
-            // 翻页段占位：首页 · 上页（下页 = 现有取下一段真钮；末页占位）
-            let pager_before = [
-                placeholder_btn(placeholders[FIRST_PAGER_ACTION]),
-                placeholder_btn(placeholders[FIRST_PAGER_ACTION + 1]),
-            ];
-            let last_pager = placeholder_btn(placeholders[FIRST_SYSTEM_ACTION - 1]);
-            // 系统段：导出 · 设置
-            let system_ops = placeholders[FIRST_SYSTEM_ACTION..]
-                .iter()
-                .copied()
-                .map(placeholder_btn)
-                .collect::<Vec<_>>();
+/// 【DBeaver 对齐】结果状态行（面板级第四行）：左动作组（写操作 ‖ 翻页 ‖ 系统）→
+/// 中段行数框 → 右段当前格 / 截断 / 选中行元信息。
+///
+/// 从 `render` 里抽出（2026-10-28 面板四行布局）：状态栏从网格 pane 内提到面板级，
+/// 横跨左右栏之下；左端 / 右端由面板注入左右栏开关（`left_switch` / `right_switch`，
+/// `None` 不摆——文本视图无左栏语义时不注入左栏开关）。
+pub fn render_status_row(
+    status: &ResultStatus,
+    // 按值传入（移动）：状态动作按钮（more / fetch_all / 行级 / 撤销重做）只在这里渲染，
+    // 主 pane 不再读它们（面板解构后重组这份，见 panel.rs `render`）
+    controls: ResultControls,
+    row_count_input: Option<&gpui::Entity<gpui_kit::component::input::InputState>>,
+    elapsed_ms: Option<u64>,
+    left_switch: Option<AnyElement>,
+    right_switch: Option<AnyElement>,
+    cx: &App,
+) -> AnyElement {
+    let theme = cx.theme();
+    let muted = theme.colors.muted_foreground;
+    let (left, _old_right) = status_segments(status);
+    // 【DBeaver 对齐】右段文案格式：... N 行已获取 · 耗时
+    let elapsed = elapsed_ms.map(|ms| format!("{}s", ms as f64 / 1000.0));
+    let rows = if status.has_more {
+        format!("{}+", thousands(status.total_rows))
+    } else {
+        thousands(status.total_rows)
+    };
+    let right = match elapsed {
+        Some(elapsed) => format!("... {} 行已获取 · {}", rows, elapsed),
+        None => format!("... {} 行已获取", rows),
+    };
+    let fetch_hint = fetch_more_hint(status);
+    let truncation = truncation_notice(status);
+    let window_tip = window_fetch_active(status).then_some(WINDOW_FETCH_NOTICE);
+    let window_tip_text = window_tip.map(str::to_string);
+    // 防御组合（分段中同时挂截断信号）才留旧 hint；正常到底已由 truncation 接管
+    let legacy_hint = if truncation.is_none() {
+        status.truncated_hint.clone()
+    } else {
+        None
+    };
+    let warning = theme.colors.warning;
+    let border = theme.colors.border;
 
-            pane.child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
-                    .text_xs()
-                    .text_color(muted)
-                    .debug_selector(|| "editor-result-status-row".to_string())
-                    // 左·动作组（写操作 ‖ 翻页 ‖ 系统，段间发丝分隔）
-                    .child(
+    // 【#26 视图骨架】底部动作状态行三段：左动作组（占位灰钮 + 取下一段真钮）、
+    // 中段只读行数框、右段当前格 / 截断 / 选中行元信息。占位钮全部 disabled，
+    // 行级叠加层模型落地后逐个接线（result-panel.md §8.10 ④）。
+    let placeholders = status_action_placeholders();
+    let placeholder_btn = |(icon, tooltip): (IconName, &'static str)| {
+        let id = format!("editor-result-action-{:?}", icon);
+        Button::new(id)
+            .ghost()
+            .small()
+            .icon(icon)
+            .tooltip(tooltip)
+            .disabled(true)
+            .debug_selector(|| format!("editor-result-action-{:?}", icon))
+            .into_any_element()
+    };
+    let separator = || {
+        div()
+            .w_px()
+            .h_3()
+            .flex_none()
+            .bg(border)
+            .into_any_element()
+    };
+    // 写操作段：保存 · 取消 · 编辑 · 新增行 · 复制行 · 删除行 · 撤销 · 重做。
+    // 保存 / 取消复用工具栏的提交 / 回滚对（状态栏不重复挂载），槽位保留禁用占位；
+    // 编辑 / 新增 / 复制 / 删除 / 撤销 / 重做由面板注入真钮，未注入（只读结果集等）回退占位。
+    let write_ops = vec![
+        placeholder_btn(placeholders[0]),
+        placeholder_btn(placeholders[1]),
+        placeholder_btn(placeholders[2]), // 编辑（Pencil，禁用占位）
+        controls
+            .insert_row
+            .unwrap_or_else(|| placeholder_btn(placeholders[3])),
+        controls
+            .duplicate_row
+            .unwrap_or_else(|| placeholder_btn(placeholders[4])),
+        controls
+            .delete_row
+            .unwrap_or_else(|| placeholder_btn(placeholders[5])),
+        controls
+            .undo
+            .unwrap_or_else(|| placeholder_btn(placeholders[6])),
+        controls
+            .redo
+            .unwrap_or_else(|| placeholder_btn(placeholders[7])),
+    ];
+    // 翻页段占位：首页 · 上页（下页 = 现有取下一段真钮；末页占位）
+    let pager_before = [
+        placeholder_btn(placeholders[FIRST_PAGER_ACTION]),
+        placeholder_btn(placeholders[FIRST_PAGER_ACTION + 1]),
+    ];
+    let last_pager = placeholder_btn(placeholders[FIRST_SYSTEM_ACTION - 1]);
+    // 系统段：导出 · 设置
+    let system_ops = placeholders[FIRST_SYSTEM_ACTION..]
+        .iter()
+        .copied()
+        .map(placeholder_btn)
+        .collect::<Vec<_>>();
+
+    div()
+        .h_flex()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
+        .text_xs()
+        .text_color(muted)
+        .debug_selector(|| "editor-result-status-row".to_string())
+        // 最左：左栏开关（面板注入；`None` 不摆——无左栏语义时不注入）
+        .children(left_switch)
+        // 左·动作组（写操作 ‖ 翻页 ‖ 系统，段间发丝分隔）
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .flex_none()
+                .children(write_ops)
+                .child(separator())
+                .children(pager_before)
+                // 【B5b】下页 = 取下一段真钮（只在还有下一段时由面板注入）
+                .children(controls.more)
+                // 【DBeaver 对齐】取全部行（一次性抓全量）
+                .children(controls.fetch_all)
+                .child(last_pager)
+                .child(separator())
+                .children(system_ops),
+        )
+        // 中段·行数框（DBeaver：输入行号跳转；未注入 InputState 时摆只读文案）
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .justify_center()
+                .flex_none()
+                .w(rems(ui::RESULT_ROW_COUNT_BOX_WIDTH))
+                .border_b(ui::HAIRLINE)
+                .border_color(border)
+                .children(row_count_input.as_ref().map(|state| {
+                    gpui_kit::component::input::Input::new(state)
+                        .with_size(gpui_kit::component::Size::Small)
+                        .into_any_element()
+                }))
+                .when(row_count_input.is_none(), |d| {
+                    d.child(SharedString::from(left))
+                }),
+        )
+        // 右·元信息：当前格预览 · 截断警告 · 已选行
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .min_w_0()
+                .ml_auto()
+                // 当前格值预览（DBeaver 对齐：状态行显示当前格，长值已由
+                // 编辑器截断；`·` 分隔避免与选中行文案粘连）
+                .when_some(status.selected_cell.clone(), |row, value| {
+                    row.child(
                         div()
-                            .h_flex()
-                            .items_center()
-                            .gap_1()
-                            .flex_none()
-                            .children(write_ops)
-                            .child(separator())
-                            .children(pager_before)
-                            // 【B5b】下页 = 取下一段真钮（只在还有下一段时由面板注入）
-                            .children(controls.more)
-                            // 【DBeaver 对齐】取全部行（一次性抓全量）
-                            .children(controls.fetch_all)
-                            .child(last_pager)
-                            .child(separator())
-                            .children(system_ops),
-                    )
-                    // 中段·行数框（DBeaver：输入行号跳转；未注入 InputState 时摆只读文案）
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .justify_center()
-                            .flex_none()
-                            .w(rems(ui::RESULT_ROW_COUNT_BOX_WIDTH))
-                            .border_b(ui::HAIRLINE)
-                            .border_color(border)
-                            .children(row_count_input.as_ref().map(|state| {
-                                gpui_kit::component::input::Input::new(state)
-                                    .with_size(gpui_kit::component::Size::Small)
-                                    .into_any_element()
-                            }))
-                            .when(row_count_input.is_none(), |d| {
-                                d.child(SharedString::from(left))
-                            }),
-                    )
-                    // 右·元信息：当前格预览 · 截断警告 · 已选行
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
                             .min_w_0()
-                            .ml_auto()
-                            // 当前格值预览（DBeaver 对齐：状态行显示当前格，长值已由
-                            // 编辑器截断；`·` 分隔避免与选中行文案粘连）
-                            .when_some(status.selected_cell, |row, value| {
-                                row.child(
-                                    div()
-                                        .min_w_0()
-                                        .truncate()
-                                        .child(SharedString::from(format!("· {}", value))),
-                                )
+                            .truncate()
+                            .child(SharedString::from(format!("· {}", value))),
+                    )
+                })
+                // 【B5b】还有更多：次级说明；悬停看窗口分段代价（不等价于游标）。
+                // `.id(...)` 先把裸 div 转成 Stateful<Div>，tooltip 是交互态方法
+                .when_some(fetch_hint, |row, hint| {
+                    row.child(
+                        div()
+                            .id("editor-result-fetch-hint")
+                            .min_w_0()
+                            .truncate()
+                            .when_some(window_tip_text.clone(), |cell, tip| {
+                                let tip = tip.clone();
+                                cell.tooltip(move |window, cx| {
+                                    Tooltip::new(tip.clone()).build(window, cx)
+                                })
                             })
-                            // 【B5b】还有更多：次级说明；悬停看窗口分段代价（不等价于游标）。
-                            // `.id(...)` 先把裸 div 转成 Stateful<Div>，tooltip 是交互态方法
-                            .when_some(fetch_hint, |row, hint| {
-                                row.child(
-                                    div()
-                                        .id("editor-result-fetch-hint")
-                                        .min_w_0()
-                                        .truncate()
-                                        .when_some(window_tip_text.clone(), |cell, tip| {
-                                            let tip = tip.clone();
-                                            cell.tooltip(move |window, cx| {
-                                                Tooltip::new(tip.clone()).build(window, cx)
-                                            })
-                                        })
-                                        .child(SharedString::from(hint)),
-                                )
+                            .child(SharedString::from(hint)),
+                    )
+                })
+                // 撞单段上限、已到底：警告色（数据不完整）；悬停看窗口代价
+                .when_some(truncation, |row, hint| {
+                    row.child(
+                        div()
+                            .id("editor-result-truncation")
+                            .min_w_0()
+                            .truncate()
+                            .text_color(warning)
+                            .when_some(window_tip_text.clone(), |cell, tip| {
+                                let tip = tip.clone();
+                                cell.tooltip(move |window, cx| {
+                                    Tooltip::new(tip.clone()).build(window, cx)
+                                })
                             })
-                            // 撞单段上限、已到底：警告色（数据不完整）；悬停看窗口代价
-                            .when_some(truncation, |row, hint| {
-                                row.child(
-                                    div()
-                                        .id("editor-result-truncation")
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_color(warning)
-                                        .when_some(window_tip_text.clone(), |cell, tip| {
-                                            let tip = tip.clone();
-                                            cell.tooltip(move |window, cx| {
-                                                Tooltip::new(tip.clone()).build(window, cx)
-                                            })
-                                        })
-                                        .child(SharedString::from(hint)),
-                                )
-                            })
-                            // 防御组合：分段中同时挂截断信号时旧 hint 兜底显示（正常到底已走上面 notice）
-                            .when_some(legacy_hint, |row, hint| {
-                                row.child(
-                                    div()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_color(warning)
-                                        .child(SharedString::from(hint)),
-                                )
-                            })
-                            .child(SharedString::from(right)),
-                    ),
-            )
-        })
+                            .child(SharedString::from(hint)),
+                    )
+                })
+                // 防御组合：分段中同时挂截断信号时旧 hint 兜底显示（正常到底已走上面 notice）
+                .when_some(legacy_hint, |row, hint| {
+                    row.child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(warning)
+                            .child(SharedString::from(hint)),
+                    )
+                })
+                .child(SharedString::from(right)),
+        )
+        // 最右：右栏开关（面板注入；`None` 不摆——文本视图无右栏语义时不注入）
+        .children(right_switch)
+        .into_any_element()
 }
 
 #[cfg(test)]
