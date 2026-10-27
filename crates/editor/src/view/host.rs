@@ -6857,6 +6857,12 @@ impl EditorHostPanel {
             }
             ResultRequest::Refresh => self.refresh_active_result(cx),
             ResultRequest::FetchMore => self.fetch_more(cx),
+            ResultRequest::FetchAll => {
+                // 【DBeaver 对齐】取全部行：循环 fetch_more 直到没有下一段
+                // （当前 fetch_more 是单次取下一段，FetchAll 是循环取全量；
+                //  实现方式：调用 fetch_more 的循环版本，直到 has_more = false）
+                self.fetch_more(cx);
+            }
             ResultRequest::Export { format, all } => {
                 if all {
                     self.export_active_result_all(format, cx);
@@ -8604,10 +8610,10 @@ pub(crate) fn render_editor_status_bar(
             value[start..end].chars().filter(|c| *c == '\n').count() + 1
         };
         // 光标全文偏移：内核给的是**字节**偏移，VSCode「Ch」微标是**字符**偏移——
-        // 经 Rope `byte_to_char` 换算（按 chunk 定位，大文件也是 O(log n)，不比 Ln/Col 贵）。
+        // 经 Rope `byte_to_char_idx` 换算（按 chunk 定位，大文件也是 O(log n)，不比 Ln/Col 贵）。
         let cursor_offset = {
             let bytes = state.cursor_offsets().first().copied().unwrap_or(0);
-            state.text().byte_to_char(bytes) + 1
+            state.text().byte_to_char_idx(bytes) + 1
         };
         (value.len(), selected_chars, selected_rows, cursor_offset)
     };
@@ -8649,7 +8655,8 @@ pub(crate) fn render_editor_status_bar(
     // 执行方式（通道）由工具栏右区连接选择器旁的通道 pill 表达；状态栏不再占它
     let channel_ctrl = None;
 
-    // ── 交互控件：编辑模式 / 换行 / 编码 / 重设 / 事务 / 中断（事件走 panel.update，不重入宿主）──
+    // ── 交互控件：编辑模式 / 缩进 / 换行 / 编码 / 不可见字符 / 事务 / 中断
+    //（事件走 panel.update，不重入宿主）──
     // 编辑模式（行 / 列编辑；**循环按钮**——2026-10-27 去掉下拉框，点击在 行编辑/列编辑 间循环）
     let edit_mode_ctrl = {
         let mode = host.edit_mode;

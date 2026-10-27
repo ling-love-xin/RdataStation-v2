@@ -53,6 +53,8 @@ pub enum ResultRequest {
     Refresh,
     /// 取下一段
     FetchMore,
+    /// 取全部行（DBeaver 对齐：抓全量数据）
+    FetchAll,
     /// 导出（格式 × 范围）
     Export { format: ExportFormat, all: bool },
     /// 错误卡片「复制错误」
