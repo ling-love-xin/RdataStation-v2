@@ -3604,6 +3604,8 @@ pub struct ResultPane {
     pub tabs: Option<AnyElement>,
     /// 【B13】结果区顶部那一行提示（切通道后“旧结果来自 X”）；`None` = 不摆
     pub notice: Option<String>,
+    /// 【DBeaver 对齐】中段行数输入框（行号跳转；`None` = 摆只读文案）
+    pub row_count_input: Option<gpui::Entity<gpui_kit::component::input::InputState>>,
 }
 
 /// 截断提示文案（达到驱动行数上限时；原型 §2.4 的口径是 `已截断至 N 行`）
@@ -3712,6 +3714,7 @@ pub fn render(
         card,
         tabs,
         notice,
+        row_count_input,
     } = pane;
     // 有卡片就不画网格（网格里本来也没东西，画出来只是一块空白）
     let has_card = card.is_some();
@@ -3949,7 +3952,7 @@ pub fn render(
                             .child(separator())
                             .children(system_ops),
                     )
-                    // 中段·只读行数框（行号跳转输入是 backlog；本轮只摆槽位与共 N[+] 行文案）
+                    // 中段·行数框（DBeaver：输入行号跳转；未注入 InputState 时摆只读文案）
                     .child(
                         div()
                             .h_flex()
@@ -3959,7 +3962,14 @@ pub fn render(
                             .w(rems(ui::RESULT_ROW_COUNT_BOX_WIDTH))
                             .border_b(ui::HAIRLINE)
                             .border_color(border)
-                            .child(SharedString::from(left)),
+                            .children(row_count_input.as_ref().map(|state| {
+                                gpui_kit::component::input::Input::new(state)
+                                    .with_size(gpui_kit::component::Size::Small)
+                                    .into_any_element()
+                            }))
+                            .when(row_count_input.is_none(), |d| {
+                                d.child(SharedString::from(left))
+                            }),
                     )
                     // 右·元信息：当前格预览 · 截断警告 · 已选行
                     .child(

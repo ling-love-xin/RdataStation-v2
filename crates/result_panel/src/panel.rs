@@ -938,6 +938,7 @@ impl ResultPanel {
                 card,
                 tabs,
                 notice: self.notice.clone(),
+                row_count_input: Some(self.row_count_input.clone()),
             },
             cx,
         )
@@ -1011,6 +1012,7 @@ impl ResultPanel {
                     card: None,
                     tabs: compare_tabs,
                     notice: None,
+                    row_count_input: None,
                 },
                 cx,
             )
