@@ -782,6 +782,33 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 - renaming 输入框预填值是当前 label（含自定义标题或自动序号），用户清空后提交 = 恢复序号；
 - 手动 tab 分组（C2）与拖放分组（C3）后置。
 
+### 8.18 DBeaver 布局对齐（2026-10-27）
+
+本轮全方面对齐 DBeaver Data Editor 布局：
+
+**已落地**：
+- **左缘竖条**（`render_vertical_bar`）：三枚幽灵小钮竖排互斥——网格 `Table2` / 文本 `FileText` / 记录 `UserRound`（记录钮下方追加上下行导航）；宽 `RESULT_VERTICAL_BAR_WIDTH = 2.25rem`（36px）。
+- **右缘竖条**（`render_right_edge_bar`）：最右侧边缘面板图标条，顶部 `PanelRight` 图标控制右侧边栏开合；预留面板切换图标位置（图表/统计等，backlog）。
+- **右侧边栏 5 页签**：`RightTab = Browser(0, 默认) / Value(1) / Stats(2) / Group(3) / Reference(4)`；labels = `["列浏览器", "值详情", "计算", "分组", "引用"]`；引用页签空态占位（外键引用查看，backlog）。
+- **状态栏左段 8 按钮**：保存 `Save` / 取消 `X` / 编辑 `Pencil` / 新增 `Plus` / 复制 `CopyPlus` / 删除 `Trash` / 撤销 `Undo2` / 重做 `Redo2`（写操作段 `0..8`；翻页段 `8..11`；系统段 `11..`）。
+- **状态栏右段格式**：`... N 行已获取 · 0.025s`（对齐 DBeaver）。
+- **工具栏最左侧 SQL 预览**：SQL 前 60 字符 + …，hover tooltip 看全文；点击复制到剪贴板（`ResultRequest::CopySql`）。
+- **中段行数输入框**：`Input` 组件（`row_count_input: Entity<InputState>`，`panel.rs` 构造时创建，`ResultPane.row_count_input` 传入 `render`）。
+- **列头排序箭头指示**：当前列是排序列时显示 `↑`（升序）或 `↓`（降序），在筛选▽左边。
+
+**剩余 backlog**（需要架构改动或跨 crate 接线）：
+1. **SQL 按钮点击弹窗**：当前是 tooltip hover + 点击复制，需改成 Popover 点击弹窗（需要 `PopoverState` 状态管理）。
+2. **SQL 按钮双击新编辑器**：双击 SQL 预览另打开新编辑器，SQL 也在上面（需要 editor 宿主提供"打开新编辑器"入口，跨 crate 接线）。
+3. **列头下拉菜单**：当前走右键菜单 + DropdownButton，DBeaver 是每列箭头菜单（交互细节未对齐）。
+4. **取全部行 / 计算总行数**：底部工具栏按钮（`ResultRequest::FetchAll` 变体未加）。
+5. **结果面板最大化**：`Ctrl+Shift+6`（dock 面板 `zoom_control` 未实现）。
+6. **引用页签**：外键引用查看（面包屑 + 引用表只读预览，需下发 SQL 查源库）。
+7. **多选批量动作**：列浏览器多选批量动作（需多选模型 + 批量动作入口）。
+8. **列序拖拽**：列顺序拖拽（`move_column` 钩子 + 列序模型与隐藏/冻结/转置映射改造）。
+9. **列宽 backlog**：双击列头边缘自动适应内容宽度、右键列头「设置列宽」输入数值、列宽跨会话持久化（当前只会话内按列名记）。
+
+**测试基线**：`cargo test -p rds-result-panel --lib` = **196 passed / 0 failed**。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
