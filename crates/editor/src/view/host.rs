@@ -5335,7 +5335,9 @@ impl EditorHostPanel {
     pub(crate) fn execute_preferring_selection(&mut self, cx: &mut Context<Self>) {
         let (text, selection) = self.editor_snapshot(cx);
         let target = execution::resolve_target(&text, selection);
-        self.execute(target, ResultPlacement::Replace, cx);
+        // 2026-10-27：主执行动作（快捷键）也是「每次执行 = 新结果 tab」——
+        // 与工具栏执行按钮同口径（用户要求多次执行不挤在同一 tab）。
+        self.execute(target, ResultPlacement::NewSet, cx);
     }
 
     /// `Ctrl+Shift+Enter`：执行全部
@@ -5354,7 +5356,8 @@ impl EditorHostPanel {
     pub fn run_all(&mut self, cx: &mut Context<Self>) {
         let (text, _selection) = self.editor_snapshot(cx);
         let target = execution::all_target(&text);
-        self.execute(target, ResultPlacement::Replace, cx);
+        // 2026-10-27：执行全部同样是「每次执行 = 新结果 tab」（同主执行口径）。
+        self.execute(target, ResultPlacement::NewSet, cx);
     }
 
     /// 提交一次执行
@@ -6446,6 +6449,8 @@ impl EditorHostPanel {
                     // 【B5】事实档载体段（内存档报列式占用；表档只标载体；无事实档不摆）
                     fact_tier,
                     fact_bytes,
+                    // 来源 SQL 全文（工具栏最左侧 SQL 按钮点击显示）
+                    sql: Some(entry.sql.clone()),
                 }),
                 // 【B5】状态行（⑦）：只有网格才给（写语句的“共 0 行”、失败时的“共 0 行”都是噪音）
                 entry
@@ -6841,6 +6846,13 @@ impl EditorHostPanel {
                     self.copy_csv_table(cx);
                 } else {
                     self.copy_active_result(cx);
+                }
+            }
+            ResultRequest::CopySql => {
+                // 复制来源 SQL（工具栏最左侧 SQL 预览点击）
+                let sql = self.result_panel.read(cx).sql().unwrap_or("").to_string();
+                if !sql.is_empty() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(sql));
                 }
             }
             ResultRequest::Refresh => self.refresh_active_result(cx),
@@ -8578,8 +8590,8 @@ pub(crate) fn render_editor_status_bar(
     let snapshot = host.status_snapshot(cx)?;
     let panel_entity = panel_entity.clone();
 
-    // §2.5 右段微标补全：文档字节数 + 选区（字符 / 行数）从编辑器内核取（render 只读）。
-    let (bytes, selected_chars, selected_rows) = {
+    // §2.5 右段微标补全：文档字节数 + 选区（字符 / 行数）+ 光标全文偏移从编辑器内核取（render 只读）。
+    let (bytes, selected_chars, selected_rows, cursor_offset) = {
         let state = host.editor.read(cx);
         let value = state.value();
         let range = state.selected_range();
@@ -8591,7 +8603,13 @@ pub(crate) fn render_editor_status_bar(
         } else {
             value[start..end].chars().filter(|c| *c == '\n').count() + 1
         };
-        (value.len(), selected_chars, selected_rows)
+        // 光标全文偏移：内核给的是**字节**偏移，VSCode「Ch」微标是**字符**偏移——
+        // 经 Rope `byte_to_char` 换算（按 chunk 定位，大文件也是 O(log n)，不比 Ln/Col 贵）。
+        let cursor_offset = {
+            let bytes = state.cursor_offsets().first().copied().unwrap_or(0);
+            state.text().byte_to_char(bytes) + 1
+        };
+        (value.len(), selected_chars, selected_rows, cursor_offset)
     };
 
     // 状态栏输入（全部来自真实状态；无数据源的字段不放进结构体）
@@ -8602,8 +8620,7 @@ pub(crate) fn render_editor_status_bar(
         statements: snapshot.statements,
         line: snapshot.line,
         column: snapshot.column,
-        // 该字段 §2.5 未渲染；占位 0，真实全文偏移如需要再接入
-        cursor_offset: 0,
+        cursor_offset,
         cursor_count: snapshot.cursor_count,
         tab_size: snapshot.tab_size,
         hard_tabs: snapshot.hard_tabs,

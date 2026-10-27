@@ -47,6 +47,8 @@ pub enum ResultRequest {
     AnalysisCustom,
     /// 复制当前结果（TSV）
     CopyTsv,
+    /// 复制来源 SQL（工具栏最左侧 SQL 预览点击）
+    CopySql,
     /// 刷新（重跑当前结果 SQL）
     Refresh,
     /// 取下一段
