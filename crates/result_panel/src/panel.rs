@@ -33,7 +33,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::table::{TableDelegate, TableState};
+use gpui_kit::component::table::{TableDelegate, TableEvent, TableState};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder as _;
 
@@ -285,6 +285,36 @@ impl ResultPanel {
             ResultGridDelegate::empty("尚未执行"),
             window,
             cx,
+        );
+
+        // 【DBeaver 对齐】订阅 table 事件：双击单元格编辑 / 列序拖拽 / 清除选择
+        let _grid_sub = cx.subscribe_in(
+            &grid,
+            window,
+            |this, _table, event: &TableEvent, _window, cx| {
+                match event {
+                    // 双击单元格：进入编辑态（当前走行级叠加层）
+                    TableEvent::DoubleClickedCell(row_ix, col_ix) => {
+                        // 选中该单元格（delegate 坐标），让行级模型知道要编辑哪格
+                        this.selection_pos = Some((*row_ix, *col_ix));
+                        cx.notify();
+                    }
+                    // 列序拖拽：记录新列序（当前只记录，不持久化）
+                    TableEvent::MoveColumn(from, to) => {
+                        // TODO: 持久化列序（跨会话）
+                        let _ = (from, to);
+                    }
+                    // 清除选择：清空选中格位置
+                    TableEvent::ClearSelection => {
+                        this.selection_pos = None;
+                        this.selected_col = None;
+                        cx.notify();
+                    }
+                    // 其他事件忽略（SelectRow / SelectColumn / SelectCell 已由
+                    // delegate 内联处理或后续接线）
+                    _ => {}
+                }
+            },
         );
 
         Self {
