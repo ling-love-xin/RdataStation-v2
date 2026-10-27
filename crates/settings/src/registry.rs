@@ -152,6 +152,14 @@ pub enum Slot {
     ResultPanelFactStorage,
     /// 列头是否直接显示字段注释（默认 false；面板工具栏另有 B1 临时开关）。
     ResultPanelShowColumnComments,
+    /// 列头是否显示类型徽标（123/Aa/◷/✓/01 浅底符号）。
+    ResultPanelShowTypeBadge,
+    /// 键盘导航是否循环选择（到末尾后循环回开头）。
+    ResultPanelLoopSelection,
+    /// 是否启用 Ctrl+点击多选（修饰键多选）。
+    ResultPanelSelectOnModifierClick,
+    /// 列宽是否跨会话持久化（关闭则只在当前会话内记忆）。
+    ResultPanelPersistColumnWidths,
 }
 
 /// key → 槽位（登记项都必须有槽位；由契约测试保证）。
@@ -196,6 +204,10 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "insight.status_usage" => Slot::InsightStatusUsage,
         "result_panel.fact_storage" => Slot::ResultPanelFactStorage,
         "result_panel.show_column_comments" => Slot::ResultPanelShowColumnComments,
+        "result_panel.show_type_badge" => Slot::ResultPanelShowTypeBadge,
+        "result_panel.loop_selection" => Slot::ResultPanelLoopSelection,
+        "result_panel.select_on_modifier_click" => Slot::ResultPanelSelectOnModifierClick,
+        "result_panel.persist_column_widths" => Slot::ResultPanelPersistColumnWidths,
         _ => return None,
     })
 }
@@ -243,6 +255,8 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::InsightFullScanConfirm | Slot::InsightStatusUsage => KindTag::Bool,
         Slot::ResultPanelFactStorage => KindTag::Enum,
         Slot::ResultPanelShowColumnComments => KindTag::Bool,
+        Slot::ResultPanelShowTypeBadge | Slot::ResultPanelLoopSelection
+        | Slot::ResultPanelSelectOnModifierClick | Slot::ResultPanelPersistColumnWidths => KindTag::Bool,
     }
 }
 
@@ -961,6 +975,62 @@ pub const REGISTRY: &[SettingSpec] = &[
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Page,
         consumer: "crates/result_panel/src/grid.rs::render_th（列头第二行注释小字）；面板工具栏 B1 临时开关在 sync 时覆盖",
+        composite: false,
+    },
+    SettingSpec {
+        key: "result_panel.show_type_badge",
+        section: "result_panel",
+        section_label: "结果集面板",
+        label: "列头显示类型徽标",
+        hint: "开启后列名前显示类型符号徽标（123=数字、Aa=字符、◷=日期、✓=布尔、01=二进制）",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/result_panel/src/grid.rs::render_th（类型徽标渲染）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "result_panel.loop_selection",
+        section: "result_panel",
+        section_label: "结果集面板",
+        label: "键盘循环选择",
+        hint: "键盘导航到末尾后循环回开头（关闭则到末尾停止）",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::NextUse,
+        entry: SettingEntry::Page,
+        consumer: "crates/result_panel/src/grid.rs::new_table_state（TableState::loop_selection）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "result_panel.select_on_modifier_click",
+        section: "result_panel",
+        section_label: "结果集面板",
+        label: "Ctrl+点击多选",
+        hint: "开启后 Ctrl+点击可多选行/列/单元格",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::NextUse,
+        entry: SettingEntry::Page,
+        consumer: "crates/result_panel/src/grid.rs::new_table_state（TableState::select_on_modifier_click）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "result_panel.persist_column_widths",
+        section: "result_panel",
+        section_label: "结果集面板",
+        label: "列宽跨会话持久化",
+        hint: "开启后列宽记忆跨会话保留；关闭则只在当前会话内记忆",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::NextUse,
+        entry: SettingEntry::Page,
+        consumer: "crates/result_panel/src/grid.rs::column_widths（会话内记忆；跨会话持久化 backlog）",
         composite: false,
     },
 ];

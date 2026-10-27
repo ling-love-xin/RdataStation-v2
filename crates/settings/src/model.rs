@@ -122,6 +122,18 @@ pub struct ResultPanel {
     /// 面板工具栏另有 B1 临时开关，覆盖此全局偏好。
     #[serde(default)]
     pub show_column_comments: bool,
+    /// 【DBeaver 对齐】列头是否显示类型徽标（123/Aa/◷/✓/01 浅底符号）。
+    #[serde(default = "default_true")]
+    pub show_type_badge: bool,
+    /// 【DBeaver 对齐】键盘导航是否循环选择（到末尾后循环回开头）。
+    #[serde(default = "default_true")]
+    pub loop_selection: bool,
+    /// 【DBeaver 对齐】是否启用 Ctrl+点击多选（修饰键多选）。
+    #[serde(default = "default_true")]
+    pub select_on_modifier_click: bool,
+    /// 【DBeaver 对齐】列宽是否跨会话持久化（关闭则只在当前会话内记忆）。
+    #[serde(default = "default_true")]
+    pub persist_column_widths: bool,
 }
 
 impl Default for ResultPanel {
@@ -129,6 +141,10 @@ impl Default for ResultPanel {
         Self {
             fact_storage: default_result_fact_storage(),
             show_column_comments: false,
+            show_type_badge: true,
+            loop_selection: true,
+            select_on_modifier_click: true,
+            persist_column_widths: true,
         }
     }
 }

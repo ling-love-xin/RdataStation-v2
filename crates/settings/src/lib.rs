@@ -291,6 +291,18 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResultPanelShowColumnComments => {
             SettingValue::Bool(settings.result_panel.show_column_comments)
         }
+        Slot::ResultPanelShowTypeBadge => {
+            SettingValue::Bool(settings.result_panel.show_type_badge)
+        }
+        Slot::ResultPanelLoopSelection => {
+            SettingValue::Bool(settings.result_panel.loop_selection)
+        }
+        Slot::ResultPanelSelectOnModifierClick => {
+            SettingValue::Bool(settings.result_panel.select_on_modifier_click)
+        }
+        Slot::ResultPanelPersistColumnWidths => {
+            SettingValue::Bool(settings.result_panel.persist_column_widths)
+        }
     })
 }
 
@@ -600,6 +612,46 @@ impl SettingsService {
                 }
                 persist(&cx.global::<Settings>().clone());
                 // Immediate：面板在下次 sync 时重读偏好并重绘列头（渲染路径读本偏好）。
+            }
+            Slot::ResultPanelShowTypeBadge => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.show_type_badge = on;
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelLoopSelection => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.loop_selection = on;
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelSelectOnModifierClick => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.select_on_modifier_click = on;
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelPersistColumnWidths => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.persist_column_widths = on;
+                }
+                persist(&cx.global::<Settings>().clone());
             }
         }
         true
