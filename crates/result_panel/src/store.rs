@@ -9,9 +9,9 @@
 //! 原型 §2.4：「每次执行产生一个结果集」——批量执行每句一个、重查与分析派生新结果集
 //! 而不就地覆盖。因此每份文档记的是 `Vec<ResultEntry>` + **当前选中项**：
 //!
-//! - [`ResultPlacement::Replace`]：替换**当前选中**的那一份（普通执行的既有语义）；
-//! - [`ResultPlacement::NewSet`]：追加一份新的，**选中项不动**（原型 §4.4：别动用户在看的
-//!   那一份，新的放旁边）——首次执行没有可保留的选中项时才落到新的一份上。
+//! - [`ResultPlacement::Replace`]：替换**当前选中**的那一份（「刷新」等显式重查路径）；
+//! - [`ResultPlacement::NewSet`]：追加一份新的并**切到新结果**（每次执行 = 一个新 tab，看
+//!   最新结果；2026-10-27 起默认执行 / 批量 / 新标签全部走这里）。
 //!
 //! 上限 [`MAX_RESULT_SETS`]（原型 §2.4：上限 5、超出淘汰最旧）淘汰的是**最旧的未选中项**：
 //! 正在看的那一份永远不会被自己的下一个结果挤掉。
@@ -874,7 +874,9 @@ impl ResultStore {
                     slot.active = 0;
                 }
             }
-            // 追加一份新的，选中项**不动**；只有“还没有任何结果”时新结果才需要被选中
+            // 追加一份新的，并**切到新结果集**（2026-10-27：用户要「每次执行一个 tab 且看
+            // 最新结果」；原实现「选中项不动」导致执行后看不到新结果——观感像『一个 tab
+            // 容纳了好多结果』。原型 §4.4「别动用户在看的」就此让位给「每次执行看新结果」）
             ResultPlacement::NewSet => {
                 slot.sets.push(entry);
                 slot.changes.push(ChangeSet::new());
@@ -883,9 +885,7 @@ impl ResultStore {
                 slot.row_histories.push(RowHistory::new());
                 slot.facts.push(FactState::from_fact(fact));
                 slot.pinned.push(false);
-                if slot.sets.len() == 1 {
-                    slot.active = 0;
-                }
+                slot.active = slot.sets.len() - 1;
             }
             // 【B5b】接在选中那份后面（取下一段）：列形状不一致时落成一份新结果
             ResultPlacement::Append => {
@@ -1714,16 +1714,18 @@ mod tests {
     }
 
     /// 新结果集落位：追加一份，用户在看的旧那份**仍然选中**（原型 §4.4）
+    /// 追加一份新结果后**切到它**（2026-10-27：每次执行 = 一个新 tab，执行后看最新结果；
+    /// 原「选中项不动」让执行后看不到新结果，观感像『一个 tab 容纳了好多结果』）
     #[test]
-    fn a_new_set_keeps_the_previous_one_selected() {
+    fn a_new_set_becomes_selected() {
         let mut store = ResultStore::new();
         let document = DocumentId::new("doc-1");
         store.push(entry("doc-1", "first", 1), ResultPlacement::NewSet, None);
         store.push(entry("doc-1", "second", 2), ResultPlacement::NewSet, None);
 
         assert_eq!(store.set_count(&document), 2);
-        assert_eq!(store.active_index(&document), Some(0), "选中项不动");
-        assert_eq!(active_sql(&store, "doc-1"), Some("first".to_string()));
+        assert_eq!(store.active_index(&document), Some(1), "新结果被选中");
+        assert_eq!(active_sql(&store, "doc-1"), Some("second".to_string()));
 
         let sqls: Vec<String> = store.sets(&document).iter().map(|e| e.sql.clone()).collect();
         assert_eq!(sqls, ["first".to_string(), "second".to_string()], "按产生顺序");
@@ -1748,8 +1750,13 @@ mod tests {
         for sql in ["s1", "s2", "s3"] {
             store.push(entry("doc-1", sql, 1), ResultPlacement::NewSet, None);
         }
+        // NewSet 追加后 active = 最新（第三次执行 = s3）
+        assert_eq!(store.active_index(&document), Some(2));
 
-        assert!(store.select(&document, 2), "点标签要能切过去");
+        assert!(store.select(&document, 0), "点标签要能切过去");
+        assert_eq!(store.active_index(&document), Some(0));
+        assert_eq!(active_sql(&store, "doc-1"), Some("s1".to_string()));
+        assert!(store.select(&document, 2), "再切到第三份");
         assert_eq!(store.active_index(&document), Some(2));
         assert_eq!(active_sql(&store, "doc-1"), Some("s3".to_string()));
 
@@ -1767,10 +1774,11 @@ mod tests {
         for sql in ["s1", "s2", "s3"] {
             store.push(entry("doc-1", sql, 1), ResultPlacement::NewSet, None);
         }
-        // 用户切到第 2 份（下标 1），随后反复执行（Replace 落到选中项，不增加条数）
+        // 用户切到第 2 份（下标 1），随后「刷新」（Replace 落到选中项，不增加条数）
         assert!(store.select(&document, 1));
         store.push(entry("doc-1", "replace-active", 1), ResultPlacement::Replace, None);
         assert_eq!(store.set_count(&document), 3);
+        assert_eq!(active_sql(&store, "doc-1"), Some("replace-active".to_string()));
 
         for sql in ["s4", "s5", "s6"] {
             store.push(entry("doc-1", sql, 1), ResultPlacement::NewSet, None);
@@ -1783,10 +1791,11 @@ mod tests {
             "选中项必须留下：{sqls:?}"
         );
         assert!(!sqls.contains(&"s1".to_string()), "最旧的先走：{sqls:?}");
+        // 每次 NewSet 都会切到最新；最后一次执行（s6）是当前选中（2026-10-27）
         assert_eq!(
             active_sql(&store, "doc-1"),
-            Some("replace-active".to_string()),
-            "淘汰后选中项还是原来那份"
+            Some("s6".to_string()),
+            "最新执行的结果被选中"
         );
     }
 
@@ -1999,15 +2008,17 @@ mod tests {
         let document = DocumentId::new("doc-1");
         store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
         store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet, None);
+        // 2026-10-27：NewSet 追加后 active = 最新（index 1）
+        assert_eq!(store.active_index(&document), Some(1));
 
         assert!(
-            !store.select_compare(&document, 0),
-            "active（0）不能当自己的对比项"
+            !store.select_compare(&document, 1),
+            "active（1）不能当自己的对比项"
         );
         assert_eq!(store.compare_index(&document), None);
 
-        assert!(store.select_compare(&document, 1), "另一份可以做对比项");
-        assert_eq!(store.compare_index(&document), Some(1));
+        assert!(store.select_compare(&document, 0), "另一份可以做对比项");
+        assert_eq!(store.compare_index(&document), Some(0));
         assert!(store.compare_entry(&document).is_some());
     }
 
@@ -2018,13 +2029,14 @@ mod tests {
         let document = DocumentId::new("doc-1");
         store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
         store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet, None);
-        assert!(store.select_compare(&document, 1));
+        // active = 1（select 2）；选第 0 份做对比
+        assert!(store.select_compare(&document, 0));
 
-        assert!(store.select(&document, 1), "切到对比项本身");
+        assert!(store.select(&document, 0), "切到对比项本身");
         assert_eq!(store.compare_index(&document), None, "自己对比自己失效");
 
-        assert!(store.select(&document, 0), "切回主选中");
-        assert!(store.select_compare(&document, 1), "还能再设回来");
+        assert!(store.select(&document, 1), "切回主选中");
+        assert!(store.select_compare(&document, 0), "还能再设回来");
     }
 
     /// 再点同一份 = 取消对比（toggle 语义）；点别的份 = 换对比项
@@ -2035,13 +2047,15 @@ mod tests {
         store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
         store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet, None);
         store.push(entry("doc-1", "select 3", 3), ResultPlacement::NewSet, None);
+        // active = 2（select 3，最新）；选非 active 的份做对比
+        assert_eq!(store.active_index(&document), Some(2));
 
-        assert!(store.toggle_compare(&document, 2), "第一次点 = 设上");
-        assert_eq!(store.compare_index(&document), Some(2));
-        assert!(store.toggle_compare(&document, 2), "再点同一份 = 取消");
-        assert_eq!(store.compare_index(&document), None);
-        assert!(store.toggle_compare(&document, 1), "点别的份 = 换成它");
+        assert!(store.toggle_compare(&document, 1), "第一次点 = 设上（非 active）");
         assert_eq!(store.compare_index(&document), Some(1));
+        assert!(store.toggle_compare(&document, 1), "再点同一份 = 取消");
+        assert_eq!(store.compare_index(&document), None);
+        assert!(store.toggle_compare(&document, 0), "点别的份 = 换成它");
+        assert_eq!(store.compare_index(&document), Some(0));
         assert!(!store.toggle_compare(&document, 99), "越界不改");
     }
 
@@ -2050,7 +2064,7 @@ mod tests {
     fn evicting_the_compare_set_clears_or_rewinds_it() {
         let mut store = ResultStore::new();
         let document = DocumentId::new("doc-1");
-        // 灌满到上限（MAX_RESULT_SETS），active 保持第 0 份（Replace 不换份）
+        // 灌满到上限（MAX_RESULT_SETS）；NewSet 追加后 active = 最新（2026-10-27）
         for i in 0..MAX_RESULT_SETS {
             store.push(
                 entry("doc-1", &format!("select {i}"), i + 1),
@@ -2062,8 +2076,10 @@ mod tests {
                 None,
             );
         }
-        assert!(store.select_compare(&document, 1), "对比第 1 份");
-        // 再落一份：淘汰最旧的未选中（第 1 份），对比项被挤掉 → 清空
+        assert_eq!(store.active_index(&document), Some(MAX_RESULT_SETS - 1));
+        // 对比第 0 份（最旧的未选中，非 active）
+        assert!(store.select_compare(&document, 0), "对比第 0 份");
+        // 再落一份：淘汰最旧的未选中（第 0 份 = 对比项）→ 对比清空
         store.push(
             entry("doc-1", "select new", 1),
             ResultPlacement::NewSet,
@@ -2071,18 +2087,14 @@ mod tests {
         );
         assert_eq!(store.compare_index(&document), None, "对比对象被淘汰 = 对比失效");
 
-        // 对比第 2 份；再落一份淘汰第 2 份之前的（active=0 保留）→ 第 2 份前移为 1
-        assert!(store.select_compare(&document, 2));
+        // 对比第 2 份；再落一份淘汰它之前的 select1（最旧未选中）→ 对比项前移为 1
+        assert!(store.select_compare(&document, 2), "对比第 2 份");
         store.push(
-            entry("doc-1", "select newer", 1),
+            entry("doc-1", "select new2", 1),
             ResultPlacement::NewSet,
             None,
         );
-        assert_eq!(
-            store.compare_index(&document),
-            Some(1),
-            "淘汰发生在对比项之前 → 对比项下标前移 1"
-        );
+        assert_eq!(store.compare_index(&document), Some(1), "对比项前移为 1");
     }
 
     /// 【撤销】编辑历史与变更集同序：新结果带空历史，替换作废旧历史
@@ -2099,14 +2111,15 @@ mod tests {
         assert_eq!(store.sets(&document).len(), 2);
         assert!(store.history(&document, 1).is_some_and(|h| !h.can_undo()));
 
-        // 替换选中那份：历史作废（旧编辑没有可撤销的对象了）
-        store.mutate_history(&document, 0, |h| {
+        // 替换选中那份：历史作废（旧编辑没有可撤销的对象了）——2026-10-27 起执行落到最新
+        // 结果集（active=index 1），替换发生在新的一份上
+        store.mutate_history(&document, 1, |h| {
             h.push(crate::changes::CellChange::pending(0, 0, "a", "b"));
         });
-        assert!(store.history(&document, 0).is_some_and(|h| h.can_undo()));
+        assert!(store.history(&document, 1).is_some_and(|h| h.can_undo()));
         store.push(entry("doc-1", "select 1b", 1), ResultPlacement::Replace, None);
         assert!(
-            store.history(&document, 0).is_some_and(|h| !h.can_undo()),
+            store.history(&document, 1).is_some_and(|h| !h.can_undo()),
             "替换后历史清空"
         );
     }
@@ -2143,21 +2156,21 @@ mod tests {
         assert_eq!(store.sets(&document).len(), 2);
         assert!(store.local_rows(&document, 1).is_some_and(|set| set.is_empty()));
 
-        // 往第 0 份写本地行 + 删除标记
-        store.mutate_local_rows(&document, 0, |set| {
+        // 往最新那份（active=index 1）写本地行 + 删除标记
+        store.mutate_local_rows(&document, 1, |set| {
             let id = set.next_id();
             set.push_local(LocalRow::new(id, vec!["".to_string()]));
             set.mark_deleted(0);
         });
         assert!(store
-            .local_rows(&document, 0)
+            .local_rows(&document, 1)
             .is_some_and(|set| !set.is_empty()));
 
         // 替换选中那份：本地叠加层作废（新数据是新结果，旧本地行没有可归属的对象）
         store.push(entry("doc-1", "select 1b", 1), ResultPlacement::Replace, None);
         assert!(
             store
-                .local_rows(&document, 0)
+                .local_rows(&document, 1)
                 .is_some_and(|set| set.is_empty()),
             "替换后本地叠加层清空"
         );
@@ -2179,18 +2192,18 @@ mod tests {
         assert_eq!(store.sets(&document).len(), 2);
         assert!(store.row_history(&document, 1).is_some_and(|h| !h.can_undo()));
 
-        store.mutate_row_history(&document, 0, |h| {
+        store.mutate_row_history(&document, 1, |h| {
             h.push(RowOp::InsertLocal {
                 local_id: 1,
                 anchor: None,
             });
         });
-        assert!(store.row_history(&document, 0).is_some_and(|h| h.can_undo()));
+        assert!(store.row_history(&document, 1).is_some_and(|h| h.can_undo()));
 
         store.push(entry("doc-1", "select 1b", 1), ResultPlacement::Replace, None);
         assert!(
             store
-                .row_history(&document, 0)
+                .row_history(&document, 1)
                 .is_some_and(|h| !h.can_undo()),
             "替换后行级历史清空"
         );
