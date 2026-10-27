@@ -22,8 +22,11 @@
 
 pub mod bridge;
 pub mod client;
+pub mod document_color;
 pub mod frame;
 pub mod host;
+pub mod language_config;
+pub mod sql_code_action;
 pub mod sql_definition;
 pub mod sql_hover;
 

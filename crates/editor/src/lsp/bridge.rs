@@ -30,10 +30,14 @@ use std::time::Duration;
 
 use anyhow::Result;
 use gpui_kit::component::input::{
-    CompletionProvider, DefinitionProvider, EditorState, HoverProvider, Rope, RopeExt as _,
+    CodeActionProvider, CompletionProvider, DefinitionProvider, EditorState, HoverProvider, Rope,
+    RopeExt as _,
 };
 use gpui_kit::*;
-use lsp_types::{CompletionContext, CompletionResponse, Diagnostic, Hover, Position};
+use lsp_types::{
+    CodeAction, CompletionContext, CompletionResponse, Diagnostic, Hover, OneOf, Position,
+    WorkspaceEdit,
+};
 
 use super::client::LspClient;
 
@@ -166,6 +170,132 @@ fn request_completions(
         COMPLETION_TIMEOUT,
     )?;
     Ok(serde_json::from_value(result)?)
+}
+
+/// 【A1】把请求转发给语言服务的 code action provider（无状态：可随时建、可共享）
+///
+/// 与补全 / hover 同构：后台线程走 `textDocument/codeAction`，把响应解析回 `Vec<CodeAction>`；
+/// `perform` 时把语言服务给的 `WorkspaceEdit` 里的文本编辑直接应用回编辑器
+/// （用内核 `replace` 的 UTF-16 选区路径：`TextEdit` 的 range 转 offset → `set_selected_range`
+/// → `replace_text_in_range`。只处理**同文档**的单条 `TextDocumentEdit`；跨文档 / 多种
+/// changes 一律空转——语言服务改别的文件是宿主职责，不是编辑器正文改写）。
+pub struct LspCodeActionProvider {
+    client: Arc<LspClient>,
+    document_uri: String,
+}
+
+impl LspCodeActionProvider {
+    pub fn new(client: Arc<LspClient>, document_uri: impl Into<String>) -> Self {
+        Self {
+            client,
+            document_uri: document_uri.into(),
+        }
+    }
+}
+
+/// code action 请求的超时：与补全 / hover 同档
+const CODE_ACTION_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// 纯逻辑（可测）：组 `textDocument/codeAction` 请求参数
+///
+/// `range` = 触发时的内核选区（字节区间 → 0 基行列，`RopeExt` 同编码）。`context` 给
+/// 空（不含诊断触发；改写型动作不需要）。返回 `serde_json` 值——`LspClient::call` 只认
+/// JSON 值，序列化由请求方做。
+fn build_code_action_params(
+    uri: &str,
+    text: &str,
+    range: std::ops::Range<usize>,
+) -> serde_json::Value {
+    let start = byte_position_for(text, range.start);
+    let end = byte_position_for(text, range.end);
+    serde_json::json!({
+        "textDocument": { "uri": uri },
+        "range": {
+            "start": { "line": start.line, "character": start.character },
+            "end": { "line": end.line, "character": end.character },
+        },
+        "context": { "diagnostics": [] },
+    })
+}
+
+/// 字节偏移 → LSP `Position`（0 基、列按**字符**数，与内核 `RopeExt` 同编码）
+fn byte_position_for(text: &str, offset: usize) -> Position {
+    let offset = text.floor_char_boundary(offset.min(text.len()));
+    let before = &text[..offset];
+    let line = before.matches('\n').count();
+    let line_start = before.rfind('\n').map(|index| index + 1).unwrap_or(0);
+    Position::new(line as u32, text[line_start..offset].chars().count() as u32)
+}
+
+/// 纯逻辑（可测）：发 code action 请求并解析响应（**阻塞**；生产在后台线程跑）
+fn request_code_actions(
+    client: &LspClient,
+    uri: &str,
+    text: &str,
+    range: std::ops::Range<usize>,
+) -> Result<Vec<CodeAction>> {
+    let result = client.call(
+        "textDocument/codeAction",
+        build_code_action_params(uri, text, range),
+        CODE_ACTION_TIMEOUT,
+    )?;
+    Ok(serde_json::from_value(result)?)
+}
+
+impl CodeActionProvider for LspCodeActionProvider {
+    fn id(&self) -> SharedString {
+        "rds-lsp".into()
+    }
+
+    fn code_actions(
+        &self,
+        _state: Entity<EditorState>,
+        range: std::ops::Range<usize>,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Vec<CodeAction>>> {
+        let client = Arc::clone(&self.client);
+        let uri = self.document_uri.clone();
+        // 拿当前文本算请求坐标；`LspClient::call` 同步阻塞 → 放后台线程
+        let text = _state.read(cx).text().to_string();
+        cx.background_spawn(async move {
+            request_code_actions(&client, &uri, &text, range)
+        })
+    }
+
+    fn perform_code_action(
+        &self,
+        state: Entity<EditorState>,
+        action: CodeAction,
+        push_to_history: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<()>> {
+        // 只认同文档单条 `TextDocumentEdit` 的单条文本编辑；其余一律空转（返回 Ok）
+        let Some(WorkspaceEdit {
+            document_changes: Some(lsp_types::DocumentChanges::Edits(changes)),
+            ..
+        }) = action.edit
+        else {
+            return Task::ready(Ok(()));
+        };
+        let Some(change) = changes.first() else {
+            return Task::ready(Ok(()));
+        };
+        let Some(OneOf::Left(edit)) = change.edits.first() else {
+            return Task::ready(Ok(()));
+        };
+        let _ = push_to_history;
+        // 应用编辑：LSP 行列 → 内核 offset（`RopeExt` 与发送时同一编码）→ 替换
+        state.update(cx, |state, cx| {
+            let start = state.text().position_to_offset(&edit.range.start);
+            let end = state.text().position_to_offset(&edit.range.end);
+            state.set_selected_range(start..end, cx);
+            state.replace_text_in_range(None, &edit.new_text, window, cx);
+            cx.notify();
+        });
+        Task::ready(Ok(()))
+    }
 }
 
 /// 把 `textDocument/publishDiagnostics` 通知的 params 翻译成 LSP 诊断列表
