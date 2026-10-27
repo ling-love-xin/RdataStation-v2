@@ -22,7 +22,7 @@ use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _, Dr
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::separator::Separator;
-use gpui_kit::component::{Icon};
+use gpui_kit::component::{Icon, WindowExt as _};
 use gpui_kit::component::dock::{
     BasePanel, DockArea, Panel as ComponentPanel, PanelEvent as BasePanelEvent, PanelId, TabGroup,
 };
@@ -588,6 +588,20 @@ impl EditorHostPanel {
                     }
                     // 内核 → 服务：内容只落到 `EditorService`，脏状态由它比较基线得出
                     let text = this.editor_text(cx);
+                    // 【#54-C4 二期】输入 `(` 自动弹签名帮助：光标前一字符是 `(` 且
+                    // `auto_call` 识别出函数调用才弹（打字中光标紧随参数/逗号天然不触发）；
+                    // 已有模态 Dialog 时不抢（保险：签名帮助打开期间编辑器已失焦）
+                    if !window.has_active_dialog(cx) {
+                        let cursor = state
+                            .read(cx)
+                            .cursor_offsets()
+                            .first()
+                            .copied()
+                            .unwrap_or(0);
+                        if let Some(view) = crate::view::signature_help::auto_call(&text, cursor) {
+                            crate::view::signature_help::open_signature_help(window, cx, view);
+                        }
+                    }
                     // 【LSP】全文同步给语言服务（版本自增；会话健康才发，死了不写）
                     if this.lsp_alive {
                         if let Some(session) = this.lsp.as_ref() {

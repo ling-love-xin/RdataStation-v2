@@ -97,6 +97,23 @@ pub fn current_call(sql: &str, offset: usize) -> Option<SignatureView> {
     Some(view)
 }
 
+/// 「输入 `(` 自动弹」判定（#54-C4 二期）：光标前一字符是 `(`（刚输入左括号，
+/// 或光标停在调用括号后）且 [`current_call`] 识别出函数调用 → 弹。
+///
+/// 为什么不需要文本 diff / 去抖：打字中光标紧随参数 / 逗号 / 函数名，前导字符
+/// 不是 `(`，判定天然不触发——「刚输入 `(`」与「在调用内继续输入」可由
+/// 光标前一字符直接区分。
+pub fn auto_call(sql: &str, offset: usize) -> Option<SignatureView> {
+    let offset = sql.floor_char_boundary(offset.min(sql.len()));
+    if offset == 0 {
+        return None;
+    }
+    if sql[..offset].chars().last() != Some('(') {
+        return None;
+    }
+    current_call(sql, offset)
+}
+
 /// FunctionSignature → SignatureView（格式化签名 + 当前参数位）
 fn signature_view(sig: &FunctionSignature, active: usize) -> SignatureView {
     let params: Vec<ParamInfo> = sig.params.clone();
@@ -182,21 +199,7 @@ pub fn open_signature_help(
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{current_call, signature_view};
-    use engine::sql::{FunctionSignature, ParamInfo};
-
-    fn substr_sig() -> FunctionSignature {
-        FunctionSignature {
-            name: "substr".into(),
-            params: vec![
-                ParamInfo { name: Some("x".into()), type_name: Some("text".into()), default: None },
-                ParamInfo { name: Some("start".into()), type_name: Some("int".into()), default: None },
-                ParamInfo { name: Some("length".into()), type_name: Some("int".into()), default: Some("1".into()) },
-            ],
-            return_type: Some("text".into()),
-            description: Some("截取子串".into()),
-        }
-    }
+    use super::{auto_call, current_call};
 
     #[test]
     fn identifies_call_and_active_parameter() {
@@ -235,5 +238,21 @@ mod tests {
     fn unknown_function_yields_none() {
         // 不编造：内置目录查不到的名字不产签名
         assert!(current_call("SELECT no_such_fn(a", 22).is_none());
+    }
+
+    #[test]
+    fn auto_call_triggers_only_right_after_open_paren() {
+        // 输入 `(` 后光标紧随其后：识别出调用
+        let view = auto_call("SELECT substr(", 14).expect("刚输入 ( 应触发");
+        assert_eq!(view.name, "SUBSTR");
+        assert_eq!(view.active, 0);
+        // 继续输入参数：光标前一字符不是 `(`，不再触发
+        assert!(auto_call("SELECT substr(x", 15).is_none(), "参数输入中不触发");
+        assert!(auto_call("SELECT substr(x,", 16).is_none(), "逗号输入中不触发");
+        // 光标在开头 / 空文本：不触发
+        assert!(auto_call("", 0).is_none());
+        assert!(auto_call("SELECT 1", 8).is_none(), "前导字符不是 ( 不触发");
+        // 字符串字面量里的 `(` 仍会误判（current_call 首版已知限制，手动+自动共用）
+        assert!(auto_call("SELECT 'substr('", 15).is_some(), "已知限制：字符串内 ( 会误判为调用");
     }
 }
