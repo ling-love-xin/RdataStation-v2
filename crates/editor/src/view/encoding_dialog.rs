@@ -150,7 +150,7 @@ pub fn open_encoding_dialog(
     };
     let state = cx.new(|cx| {
         ListState::new(delegate, window, cx)
-            .searchable(false)
+            .searchable(true)
             .selectable(true)
     });
     let list = state.clone();
@@ -165,7 +165,7 @@ pub fn open_encoding_dialog(
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("选择保存编码（回车确认 / Esc 关闭）"),
+                    .child("选择操作（搜索编码 / 回车确认 / Esc 关闭）"),
             )
             .child(List::new(&list));
         dialog

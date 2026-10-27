@@ -7,8 +7,12 @@
 use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
+use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::component::{IconName, Size, Sizable};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::view::RightPanel;
@@ -82,7 +86,8 @@ impl BasePanel for InsightPanelTab {
 
 impl ComponentPanel for InsightPanelTab {
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
-        Some(RightPanel::Insight.label().into())
+        // 返回 None：tab 条用 title() 渲染（图标 + 文字），对齐 VSCode 风格
+        None
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -100,12 +105,42 @@ impl ComponentPanel for InsightPanelTab {
     }
 
     fn zoom_control(&self, _cx: &App) -> Option<PanelControl> {
-        None
+        Some(PanelControl::Menu)
+    }
+
+    fn toolbar_buttons(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Vec<Button>> {
+        // 标题栏工具栏按钮：刷新 + 导出
+        Some(vec![
+            Button::new("refresh")
+                .icon(IconName::RefreshCw)
+                .ghost()
+                .size(px(28.)),
+            Button::new("export")
+                .icon(IconName::FolderOpen)
+                .ghost()
+                .size(px(28.)),
+        ])
+    }
+
+    fn dropdown_menu(
+        &mut self,
+        menu: PopupMenu,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> PopupMenu {
+        // 标题栏省略号菜单
+        menu.item(PopupMenuItem::new("刷新"))
+            .item(PopupMenuItem::new("导出报告..."))
+            .separator()
+            .item(PopupMenuItem::new("对比分析"))
+            .item(PopupMenuItem::new("设置"))
     }
 
 }
-
-/// Mock 生成 tab：内容 = `mock` crate 的 `MockPanel`（清单 + 面板内工具栏自持）。
 pub struct MockPanelTab {
     shared: Shared,
     focus_handle: FocusHandle,
@@ -158,7 +193,8 @@ impl BasePanel for MockPanelTab {
 
 impl ComponentPanel for MockPanelTab {
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
-        Some(RightPanel::Mock.label().into())
+        // 返回 None：tab 条用 title() 渲染（图标 + 文字），对齐 VSCode 风格
+        None
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -176,12 +212,48 @@ impl ComponentPanel for MockPanelTab {
     }
 
     fn zoom_control(&self, _cx: &App) -> Option<PanelControl> {
-        None
+        Some(PanelControl::Menu)
+    }
+
+    fn toolbar_buttons(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Vec<Button>> {
+        // 标题栏工具栏按钮：新建表 + 导入结构 + 生成
+        Some(vec![
+            Button::new("new_table")
+                .icon(IconName::Plus)
+                .ghost()
+                .size(px(28.)),
+            Button::new("import_schema")
+                .icon(IconName::FolderOpen)
+                .ghost()
+                .size(px(28.)),
+            Button::new("generate")
+                .icon(IconName::RefreshCw)
+                .ghost()
+                .size(px(28.)),
+        ])
+    }
+
+    fn dropdown_menu(
+        &mut self,
+        menu: PopupMenu,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> PopupMenu {
+        // 标题栏省略号菜单
+        menu.item(PopupMenuItem::new("新建表"))
+            .item(PopupMenuItem::new("导入结构..."))
+            .separator()
+            .item(PopupMenuItem::new("生成数据"))
+            .item(PopupMenuItem::new("导出数据..."))
+            .separator()
+            .item(PopupMenuItem::new("Mock 设置"))
     }
 
 }
-
-/// 历史 tab：内容 = `editor` crate 的 `HistoryView`（重放端口在右栏构造期已注入）。
 pub struct HistoryPanelTab {
     shared: Shared,
     focus_handle: FocusHandle,
@@ -239,7 +311,8 @@ impl BasePanel for HistoryPanelTab {
 
 impl ComponentPanel for HistoryPanelTab {
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
-        Some(RightPanel::History.label().into())
+        // 返回 None：tab 条用 title() 渲染（图标 + 文字），对齐 VSCode 风格
+        None
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -257,12 +330,42 @@ impl ComponentPanel for HistoryPanelTab {
     }
 
     fn zoom_control(&self, _cx: &App) -> Option<PanelControl> {
-        None
+        Some(PanelControl::Menu)
+    }
+
+    fn toolbar_buttons(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Vec<Button>> {
+        // 标题栏工具栏按钮：搜索 + 清空
+        Some(vec![
+            Button::new("search")
+                .icon(IconName::Search)
+                .ghost()
+                .size(px(28.)),
+            Button::new("clear")
+                .icon(IconName::EllipsisVertical)
+                .ghost()
+                .size(px(28.)),
+        ])
+    }
+
+    fn dropdown_menu(
+        &mut self,
+        menu: PopupMenu,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> PopupMenu {
+        // 标题栏省略号菜单
+        menu.item(PopupMenuItem::new("搜索历史"))
+            .item(PopupMenuItem::new("清空历史"))
+            .separator()
+            .item(PopupMenuItem::new("导出历史..."))
+            .item(PopupMenuItem::new("历史设置"))
     }
 
 }
-
-/// 存档详情 tab：内容 = 左栏「资产库」选中项的归档凭证（`render_detail`）。
 ///
 /// 选中变化经宿主观察（`init_workspace` 观察资产库面板实体 → 唤醒本面板）；
 /// 未选中时显示空态——说的是「去哪儿选」，不是一句「无数据」。
@@ -298,6 +401,7 @@ impl ArchivePanel {
                     .v_flex()
                     .size_full()
                     .min_h_0()
+                    .pt_2()
                     .child(render_detail(&detail, Some(actions), cx))
             }
             None => {
@@ -305,6 +409,8 @@ impl ArchivePanel {
                 div()
                     .v_flex()
                     .size_full()
+                    .min_h_0()
+                    .pt_2()
                     .items_center()
                     .justify_center()
                     .gap_2()
@@ -355,7 +461,8 @@ impl BasePanel for ArchivePanel {
 
 impl ComponentPanel for ArchivePanel {
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
-        Some(RightPanel::Archive.label().into())
+        // 返回 None：tab 条用 title() 渲染（图标 + 文字），对齐 VSCode 风格
+        None
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -373,7 +480,38 @@ impl ComponentPanel for ArchivePanel {
     }
 
     fn zoom_control(&self, _cx: &App) -> Option<PanelControl> {
-        None
+        Some(PanelControl::Menu)
+    }
+
+    fn toolbar_buttons(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Vec<Button>> {
+        // 标题栏工具栏按钮：刷新 + 导出
+        Some(vec![
+            Button::new("refresh")
+                .icon(IconName::RefreshCw)
+                .ghost()
+                .size(px(28.)),
+            Button::new("export")
+                .icon(IconName::FolderOpen)
+                .ghost()
+                .size(px(28.)),
+        ])
+    }
+
+    fn dropdown_menu(
+        &mut self,
+        menu: PopupMenu,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> PopupMenu {
+        // 标题栏省略号菜单
+        menu.item(PopupMenuItem::new("刷新"))
+            .item(PopupMenuItem::new("导出报告..."))
+            .separator()
+            .item(PopupMenuItem::new("归档设置"))
     }
 
 }

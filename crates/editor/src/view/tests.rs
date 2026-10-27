@@ -1455,7 +1455,8 @@ fn a_batch_lands_three_statements_in_three_result_sets(cx: &mut TestAppContext) 
     );
     assert_eq!(shared.results().set_count(&id), 3, "三份结果都在权威存储里");
     // 失败不中断：第三句真的跑了（否则它不会有自己的结果集）
-    assert_eq!(grid_rows(cx, &panel), 1, "默认选中第一份");
+    // 2026-10-27：每次执行（含批量）都会切到最新结果集
+    assert_eq!(grid_rows(cx, &panel), 3, "默认选中最新一份（第三句）");
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     // 点开第三份：网格跟着换（headless 下点击不稳，直接驱动落地入口）
@@ -1512,26 +1513,26 @@ fn compare_mode_shows_two_side_by_side_panes(cx: &mut TestAppContext) {
     );
     assert_eq!(
         shared.results().compare_index(&id),
-        Some(2),
-        "自动选了除主选中（0）外最近一份（2）"
+        Some(1),
+        "自动选了除主选中（最新，2）外最近一份（1）"
     );
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).compare_grid_rows_for_test(cx)),
-        5,
-        "对比栏摆上了第三份的数据"
+        3,
+        "对比栏摆上了第二份的数据"
     );
-    assert_eq!(grid_rows(cx, &panel), 1, "主栏还是第一份");
+    assert_eq!(grid_rows(cx, &panel), 5, "主栏还是最新一份（r5）");
     cx.update(|window, cx| window.draw(cx).clear(cx));
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    // 切主选中到第二份：对比对象不变（对比是显式选择，不随主选中切换）
-    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_result_set(1, cx)));
+    // 切主选中到第一份：对比对象不变（对比是显式选择，不随主选中切换）
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_result_set(0, cx)));
     assert_eq!(
         shared.results().compare_index(&id),
-        Some(2),
+        Some(1),
         "对比对象不跟着主选中走"
     );
-    assert_eq!(grid_rows(cx, &panel), 3, "主栏切到第二份");
+    assert_eq!(grid_rows(cx, &panel), 1, "主栏切到第一份");
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
@@ -1558,18 +1559,19 @@ fn compare_pane_pick_switches_or_clears_the_compare_set(cx: &mut TestAppContext)
         wait_for_all_pending(cx, &panel);
     }
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.toggle_compare_mode(cx)));
-    assert_eq!(shared.results().compare_index(&id), Some(2));
+    // 主选中 = 最新（r5，index 2）；自动选除它外最近一份（r3，index 1）
+    assert_eq!(shared.results().compare_index(&id), Some(1));
 
-    // 右栏标签条点第二份：对比对象切过去（行数跟着换）
-    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_compare_set(1, cx)));
-    assert_eq!(shared.results().compare_index(&id), Some(1), "切到第二份");
+    // 右栏标签条点第一份：对比对象切过去（行数跟着换）
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_compare_set(0, cx)));
+    assert_eq!(shared.results().compare_index(&id), Some(0), "切到第一份");
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).compare_grid_rows_for_test(cx)),
-        3
+        1
     );
 
     // 再点当前对比项：取消对比（右栏回空态，但对比模式还开着）
-    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_compare_set(1, cx)));
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_compare_set(0, cx)));
     assert_eq!(shared.results().compare_index(&id), None, "再点 = 取消");
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).compare_grid_rows_for_test(cx)),
@@ -1605,7 +1607,8 @@ fn closing_compare_mode_resets_the_switch_and_clears_the_compare_set(cx: &mut Te
     wait_for_all_pending(cx, &panel);
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.toggle_compare_mode(cx)));
     assert!(cx.update(|_window, cx| panel.read(cx).compare_mode_for_test(cx)));
-    assert_eq!(shared.results().compare_index(&id), Some(1));
+    // 主选中 = 最新（r3，index 1）；自动选除它外最近一份（r1，index 0）
+    assert_eq!(shared.results().compare_index(&id), Some(0));
 
     // 关掉：开关复位、对比选中清掉（下次开对比重新选）
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.toggle_compare_mode(cx)));
@@ -1644,22 +1647,22 @@ fn running_into_a_new_set_keeps_the_previous_one_selected(cx: &mut TestAppContex
     assert_eq!(result_tabs(cx, &panel).len(), 2, "两份结果 → 标签条该出现");
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).result_active_for_test(cx)),
-        0,
-        "原结果集保持选中（新结果放旁边，不打扰在看的那份）"
+        1,
+        "新结果被选中（2026-10-27：每次执行切到最新结果）"
     );
-    assert_eq!(grid_rows(cx, &panel), 2, "网格还是第一份的数据");
+    assert_eq!(grid_rows(cx, &panel), 5, "网格是最新一份（r5）的数据");
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    // 切到新的一份：网格与选中态一起跟着走
-    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_result_set(1, cx)));
-    assert_eq!(grid_rows(cx, &panel), 5);
+    // 切到旧的一份：网格与选中态一起跟着走
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_result_set(0, cx)));
+    assert_eq!(grid_rows(cx, &panel), 2);
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).result_active_for_test(cx)),
-        1
+        0
     );
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).result_summary_for_test(cx)),
-        Some("行数 5 · 耗时 3 ms · 原查询".to_string()),
+        Some("行数 2 · 耗时 3 ms · 原查询".to_string()),
         "状态行跟着选中的结果集走"
     );
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -3774,8 +3777,8 @@ fn the_execution_plan_lands_in_its_own_labelled_result_set(cx: &mut TestAppConte
     assert_eq!(tabs[1].0, "执行计划", "标签要说清这是什么：{tabs:?}");
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).result_active_for_test(cx)),
-        0,
-        "计划不抢用户正在看的那份（B2 语义）"
+        1,
+        "计划是新结果集，执行后切到它（2026-10-27：每次执行切到最新）"
     );
 }
 
@@ -5059,10 +5062,10 @@ fn refreshing_a_filtered_result_keeps_its_shape(cx: &mut TestAppContext) {
     assert_eq!(shared.results().set_count(&id), 2, "下发产生新结果集");
     assert_eq!(seen.lock().expect("锁").len(), 1, "下发执行了一次");
 
-    // 切到下发结果（标签 2）再刷新
+    // 下发产生的新结果集已被选中（2026-10-27：每次执行切到最新），直接刷新
     cx.update(|_window, _cx| {
         shared.update_results(|store| {
-            assert!(store.select(&id, 1), "切到下发结果集");
+            assert_eq!(store.active_index(&id), Some(1), "下发结果集已选中");
         });
     });
     cx.update(|_window, cx| {
@@ -5104,10 +5107,10 @@ fn refreshing_a_sorted_result_keeps_its_shape(cx: &mut TestAppContext) {
     wait_for_all_pending(cx, &panel);
     assert_eq!(sorted.lock().expect("锁").len(), 1, "排序下发执行了一次");
 
-    // 切到排序结果再刷新
+    // 排序下发产生的新结果集已被选中（2026-10-27：每次执行切到最新），直接刷新
     cx.update(|_window, _cx| {
         shared.update_results(|store| {
-            assert!(store.select(&id, 1), "切到排序下发结果集");
+            assert_eq!(store.active_index(&id), Some(1), "排序下发结果集已选中");
         });
     });
     cx.update(|_window, cx| {
@@ -7036,7 +7039,7 @@ fn analysis_sends_the_sql_and_the_grabbed_rows(cx: &mut TestAppContext) {
         Some("本地分析"),
         "血缘要说清这份不是原查询（工具栏的来源段）"
     );
-    assert_eq!(store.active_index(&id), Some(0), "原结果仍被选中（可回看）");
+    assert_eq!(store.active_index(&id), Some(1), "分析结果最新被选中（2026-10-27：每次执行切到最新）");
     let message = cx
         .update(|_window, cx| panel.read(cx).message.clone())
         .expect("说明要留一句“基于多少行”");

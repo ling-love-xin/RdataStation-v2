@@ -1066,7 +1066,7 @@ impl ScratchpadView {
                 .on_click(move |ev, window, app| handler(ev, window, app))
         };
 
-        let mut toolbar = div().v_flex().w_full().gap_1().px_1p5().py_1();
+        let mut toolbar = div().v_flex().w_full();
         // ── 更多设置（2026-10-11 原型 644-658 对齐 + 持久化接线）：菜单勾选显示/隐藏
         // 各入口 + 左右位置调整 + 重置为默认布局；配置项 `settings.scratchpad.toolbar`
         // （空表 = 全部显示 + 默认位置（5 左 2 右））。状态快照在渲染时捕获进菜单：菜单每次
@@ -1377,6 +1377,10 @@ impl ScratchpadView {
                 .items_center()
                 .gap_1()
                 .w_full()
+                .h(rems(ui::PANEL_HEADER_HEIGHT))
+                .px(rems(ui::PANEL_PADDING))
+                .border_b_1()
+                .border_color(theme.colors.border)
                 .child(left)
                 .child(div().flex_1())
                 .child(right)

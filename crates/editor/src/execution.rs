@@ -445,11 +445,14 @@ impl ExecMenuKind {
     }
 
     /// 这一项要不要落到新结果集
+    ///
+    /// 【2026-10-27】全部执行项都落**新结果集**：每次执行 = 一个新的结果 tab（用户反馈
+    /// 「每次执行的结果应该就是一个 tab，但一个 tab 容纳了好多结果」——原默认 `Replace`
+    /// 让多次执行覆盖同一 tab）。`Replace` 保留给「刷新」等显式重查路径（见 store）。
     pub fn placement(self) -> ResultPlacement {
         match self {
-            // 批量每句一个结果集：都往新结果集里放（原结果集留着回看）
             Self::Batch | Self::NewSet => ResultPlacement::NewSet,
-            Self::CurrentStatement | Self::Selection | Self::All => ResultPlacement::Replace,
+            Self::CurrentStatement | Self::Selection | Self::All => ResultPlacement::NewSet,
         }
     }
 
@@ -1768,7 +1771,8 @@ mod tests {
         assert_eq!(batch_target("-- 只是注释"), ExecTarget::Empty);
     }
 
-    /// 落位：批量与新标签执行都往新结果集放；其余三项换掉当前那份
+    /// 落位：全部执行项都往新结果集放（每次执行 = 一个新结果 tab；2026-10-27 起默认执行
+    /// 不再覆盖当前 tab——用户反馈「一个 tab 容纳了好多结果」）
     #[test]
     fn batch_and_new_set_land_in_new_result_sets() {
         assert_eq!(ExecMenuKind::Batch.placement(), ResultPlacement::NewSet);
@@ -1778,7 +1782,7 @@ mod tests {
             ExecMenuKind::Selection,
             ExecMenuKind::All,
         ] {
-            assert_eq!(kind.placement(), ResultPlacement::Replace, "{kind:?}");
+            assert_eq!(kind.placement(), ResultPlacement::NewSet, "{kind:?}");
         }
 
         // “在新结果标签中执行”只换落位：目标就是主按钮那一套（选区优先）

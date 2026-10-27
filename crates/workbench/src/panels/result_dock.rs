@@ -6,9 +6,12 @@
 
 use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
-use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Size, Sizable};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use std::cell::RefCell;
@@ -92,7 +95,8 @@ impl BasePanel for ResultPanelDock {
 
 impl ComponentPanel for ResultPanelDock {
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
-        Some("结果".into())
+        // 返回 None：tab 条用 title() 渲染（图标 + 文字），对齐 VSCode 风格
+        None
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -100,6 +104,7 @@ impl ComponentPanel for ResultPanelDock {
             .h_flex()
             .items_center()
             .gap_2()
+            .child(Icon::default().path("icons/table.svg"))
             .child(
                 div()
                     .text_sm()
@@ -109,6 +114,38 @@ impl ComponentPanel for ResultPanelDock {
     }
 
     fn zoom_control(&self, _cx: &App) -> Option<PanelControl> {
-        None
+        Some(PanelControl::Menu)
+    }
+
+    fn toolbar_buttons(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Vec<Button>> {
+        // 标题栏工具栏按钮：导出 + 刷新
+        Some(vec![
+            Button::new("export")
+                .icon(IconName::FolderOpen)
+                .ghost()
+                .size(px(28.)),
+            Button::new("refresh")
+                .icon(IconName::RefreshCw)
+                .ghost()
+                .size(px(28.)),
+        ])
+    }
+
+    fn dropdown_menu(
+        &mut self,
+        menu: PopupMenu,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> PopupMenu {
+        // 标题栏省略号菜单
+        menu.item(PopupMenuItem::new("导出 CSV..."))
+            .item(PopupMenuItem::new("导出 Excel..."))
+            .separator()
+            .item(PopupMenuItem::new("刷新"))
+            .item(PopupMenuItem::new("结果设置"))
     }
 }

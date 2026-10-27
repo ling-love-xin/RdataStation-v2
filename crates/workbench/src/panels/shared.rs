@@ -254,6 +254,8 @@ pub struct Shared {
     pub quick_open: Rc<Cell<bool>>,
     /// 设置面板开关（活动栏底部 ⚙ / OpenSettings 命令）。
     pub settings_open: Rc<Cell<bool>>,
+    /// 布局锁定（防止意外拖拽调整面板大小/位置）。
+    pub layout_locked: Rc<Cell<bool>>,
     pub selected: Rc<Cell<Option<usize>>>,
     pub connections: Rc<RefCell<Vec<ConnectionItem>>>,
     pub notice: Rc<RefCell<Option<String>>>,
@@ -390,6 +392,7 @@ impl Shared {
             right_mode_before_hidden: Rc::new(Cell::new(SidebarMode::Expanded)),
             quick_open: Rc::new(Cell::new(false)),
             settings_open: Rc::new(Cell::new(false)),
+            layout_locked: Rc::new(Cell::new(false)),
             selected: Rc::new(Cell::new(if connections.is_empty() {
                 None
             } else {

@@ -19,39 +19,91 @@
 
 use std::ops::Range;
 
-/// 隐藏字符的字节区间（不重叠、按出现顺序）
+/// 不可见字符的类别（双栏配置面板的粒度：用户可自定义每类显示 / 隐藏）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HiddenCategory {
+    /// 零宽与连字控制（ZWSP / ZWNJ / ZWJ / 词连接符 / BOM）
+    ZeroWidth,
+    /// 特殊空格（NBSP / 古爱尔兰空格 / 各种 Unicode 空格 / 全角空格）
+    SpecialSpaces,
+    /// 双向控制（RTL 混淆代码的攻击面）
+    Bidi,
+    /// 控制字符（C0 排除 `\t` `\n` `\r` + C1）
+    Control,
+}
+
+/// 全部类别（面板左栏顺序）
+pub fn all_categories() -> [HiddenCategory; 4] {
+    [
+        HiddenCategory::ZeroWidth,
+        HiddenCategory::SpecialSpaces,
+        HiddenCategory::Bidi,
+        HiddenCategory::Control,
+    ]
+}
+
+/// 类别的位掩码位（0..3，存进文档 `invisible_mask`）
+pub fn category_bit(cat: HiddenCategory) -> u8 {
+    match cat {
+        HiddenCategory::ZeroWidth => 1 << 0,
+        HiddenCategory::SpecialSpaces => 1 << 1,
+        HiddenCategory::Bidi => 1 << 2,
+        HiddenCategory::Control => 1 << 3,
+    }
+}
+
+/// 全部类别位掩码（¶ 总开关「全显示」口径）
+pub const FULL_MASK: u8 = 0b0000_1111;
+
+/// 单个字符属于哪个类别（不属于不可见集合返回 `None`）
+pub fn category_of(ch: char) -> Option<HiddenCategory> {
+    let cp = ch as u32;
+    let c1 = 0x007F..=0x009F;
+    match cp {
+        // 零宽 + 连字控制（ZWSP / ZWNJ / ZWJ / 词连接符）
+        0x200B..=0x200D | 0x2060 | 0xFEFF => Some(HiddenCategory::ZeroWidth),
+        // 特殊空格（NBSP / 古爱尔兰空格 / 各种 Unicode 空格 / 全角空格）
+        0x00A0 | 0x1680 | 0x2000..=0x200A | 0x202F | 0x205F | 0x3000 => {
+            Some(HiddenCategory::SpecialSpaces)
+        }
+        // 双向控制（RTL 混淆）
+        0x202A..=0x202E | 0x2066..=0x2069 => Some(HiddenCategory::Bidi),
+        // 控制字符（C0 排除 \t(09) \n(0A) \r(0D)：09/0A/0D 分列于上述 range 间隙，天然排除）
+        _ if (0x0000..=0x0008).contains(&cp)
+            || (0x000B..=0x000C).contains(&cp)
+            || (0x000E..=0x001F).contains(&cp)
+            || c1.contains(&cp) =>
+        {
+            Some(HiddenCategory::Control)
+        }
+        _ => None,
+    }
+}
+
+/// 单个字符是否属于「不可见 / 需标注」集合（任一类别命中）
+pub fn is_hidden(ch: char) -> bool {
+    category_of(ch).is_some()
+}
+
+/// 隐藏字符的字节区间（不重叠、按出现顺序；**全部类别**——兼容既有调用）
 pub fn hidden_ranges(text: &str) -> Vec<Range<usize>> {
+    hidden_ranges_filtered(text, &all_categories())
+}
+
+/// 隐藏字符的字节区间，只标**启用类别**命中的字符（双栏自定义面板的渲染口径）
+pub fn hidden_ranges_filtered(text: &str, enabled: &[HiddenCategory]) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     let mut byte = 0usize;
     for ch in text.chars() {
         let start = byte;
         byte += ch.len_utf8();
-        if is_hidden(ch) {
-            ranges.push(start..byte);
+        if let Some(cat) = category_of(ch) {
+            if enabled.contains(&cat) {
+                ranges.push(start..byte);
+            }
         }
     }
     ranges
-}
-
-/// 单个字符是否属于「不可见 / 需标注」集合
-pub fn is_hidden(ch: char) -> bool {
-    let cp = ch as u32;
-    matches!(cp,
-        // C0 控制字符（排除 \t(09) \n(0A) \r(0D)：有正常换行/缩进语义）
-        0x0000..=0x0008
-        | 0x000B..=0x000C
-        | 0x000E..=0x001F
-        // DEL + C1 控制字符
-        | 0x007F..=0x009F
-        // NBSP / 古爱尔兰空格 / 各种 Unicode 空格
-        | 0x00A0 | 0x1680 | 0x2000..=0x200A | 0x202F | 0x205F | 0x3000
-        // 零宽 + 连字控制（ZWSP / ZWNJ / ZWJ / 词连接符）
-        | 0x200B..=0x200D | 0x2060
-        // 双向控制（RTL 混淆）
-        | 0x202A..=0x202E | 0x2066..=0x2069
-        // BOM / 文内 ZWSP
-        | 0xFEFF
-    )
 }
 
 #[cfg(test)]

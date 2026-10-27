@@ -279,9 +279,10 @@ impl NavView {
             // 30px 裸值（`rems(1.875)`），与编辑器工具条 / 设置页 / 资产库面板头对不齐
             // （规范：`ui-design-spec.md` §2.1）。
             .h(rems(ui::PANEL_HEADER_HEIGHT))
-            .pl_2p5()
-            .pr_2()
+            .px(rems(ui::PANEL_PADDING))
             .gap_1()
+            .border_b_1()
+            .border_color(border)
             .child(
                 div()
                     .text_xs()

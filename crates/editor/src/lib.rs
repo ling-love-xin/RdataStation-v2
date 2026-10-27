@@ -123,6 +123,8 @@ pub mod fold;
 pub mod format;
 pub mod hidden;
 pub mod history;
+/// 【2026-10-27】缩进操作纯函数（检测 / 转换 / 裁剪尾随空格，VSCode 缩进面板落地能力）
+pub mod indent;
 pub mod language_service;
 pub mod limits;
 /// LSP 客户端（JSON-RPC 2.0 over stdio）：宿主侧 provider bridge 的数据源

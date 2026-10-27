@@ -15,7 +15,7 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
-use gpui_kit::component::{ActiveTheme, IconName, Sizable as _};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _};
 use gpui_kit::*;
 use workbench_shell::ui;
 
@@ -590,13 +590,21 @@ impl BasePanel for EditorPanel {
 
 impl ComponentPanel for EditorPanel {
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
-        Some("工作台".into())
+        // 返回 None：tab 条用 title() 渲染（图标 + 文字），对齐 VSCode 风格
+        None
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .text_sm()
-            .font_weight(FontWeight::MEDIUM)
-            .child("工作台")
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .child(Icon::default().path("icons/layout-dashboard.svg"))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("工作台"),
+            )
     }
 }

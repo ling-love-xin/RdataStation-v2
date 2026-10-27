@@ -1048,12 +1048,22 @@ impl EditorShared {
         self.update(|svc| svc.set_document_show_whitespaces(id, show))
     }
 
-    /// 【2c】文档是否显示隐藏字符标注
+    /// 【2c】文档是否显示隐藏字符标注（¶ 总开关：任一类别显示）
     pub fn document_show_invisible(&self, id: &DocumentId) -> bool {
         self.service().document_show_invisible(id)
     }
 
-    /// 【2c】重设显示隐藏字符标注；返回是否真变
+    /// 【2c】文档不可见字符的类别位掩码（双栏面板真相源）
+    pub fn document_invisible_mask(&self, id: &DocumentId) -> u8 {
+        self.service().document_invisible_mask(id)
+    }
+
+    /// 【2c】重设不可见字符类别位掩码；返回是否真变
+    pub fn set_document_invisible_mask(&self, id: &DocumentId, mask: u8) -> bool {
+        self.update(|svc| svc.set_document_invisible_mask(id, mask))
+    }
+
+    /// 【2c】重设显示隐藏字符标注（旧 bool 总开关：全开 / 全关）；返回是否真变
     pub fn set_document_show_invisible(&self, id: &DocumentId, show: bool) -> bool {
         self.update(|svc| svc.set_document_show_invisible(id, show))
     }

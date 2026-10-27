@@ -363,7 +363,7 @@ impl Render for HistoryView {
             .h_flex()
             .items_center()
             .gap_1()
-            .px_2()
+            .px(rems(workbench_shell::ui::PANEL_PADDING))
             .py_1()
             .child(div().flex_1().min_w_0().child(Input::new(&self.query)))
             .child({
@@ -447,7 +447,7 @@ impl Render for HistoryView {
             .h_flex()
             .items_center()
             .gap_1()
-            .px_2()
+            .px(rems(workbench_shell::ui::PANEL_PADDING))
             .py_0p5()
             .child(success_bar)
             .child(db_button)
@@ -553,8 +553,16 @@ impl Render for HistoryView {
             .size_full()
             .min_h_0()
             .debug_selector(|| "history-panel".to_string())
-            .child(search)
-            .child(filter_row)
+            .child(
+                div()
+                    .v_flex()
+                    .w_full()
+                    .flex_none()
+                    .border_b_1()
+                    .border_color(theme.colors.border)
+                    .child(search)
+                    .child(filter_row),
+            )
             .when(self.items.is_empty(), |panel| {
                 panel.child(
                     div()

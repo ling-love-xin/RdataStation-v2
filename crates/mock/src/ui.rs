@@ -23,6 +23,10 @@ pub use workbench_shell::ui::ROW_HEIGHT;
 pub use workbench_shell::ui::CONTROL_HEIGHT_SM;
 /// 固定描边（工具栏底部分隔线）
 pub use workbench_shell::ui::HAIRLINE;
+/// 面板头高度（36px）
+pub use workbench_shell::ui::PANEL_HEADER_HEIGHT;
+/// 面板内距（8px）
+pub use workbench_shell::ui::PANEL_PADDING;
 
 // ===== 本 crate 自有尺寸 =====
 

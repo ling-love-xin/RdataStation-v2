@@ -53,8 +53,9 @@ pub struct Document {
     hard_tabs: bool,
     /// 【2c】显示空白字符（空格 `•` / 制表符 `→`；视图偏好，不随会话持久化）
     show_whitespaces: bool,
-    /// 【2c】显示隐藏字符标注（零宽 / 全角空格 / 控制字符；视图偏好，不随会话持久化）
-    show_invisible: bool,
+    /// 【2c】显示隐藏字符标注的**类别位掩码**（bit0-3 = 零宽/特殊空格/双向控制/控制；
+    /// 视图偏好，不随会话持久化）
+    invisible_mask: u8,
     /// 【2c】当前保存格式（编码 + 换行；文档级权威值）
     format: crate::encoding::SaveFormat,
     /// 【2c】上次加载 / 保存时的保存格式（格式切换也是未保存的改动）
@@ -93,7 +94,7 @@ impl Document {
             tab_size: 2,
             hard_tabs: false,
             show_whitespaces: false,
-            show_invisible: false,
+            invisible_mask: 0,
             saved_format: format,
             format,
         }
@@ -164,9 +165,14 @@ impl Document {
         self.show_whitespaces
     }
 
-    /// 【2c】是否显示隐藏字符标注
+    /// 【2c】不可见字符的类别位掩码（0 = 全不显示；bit0-3 = 零宽/特殊空格/双向/控制）
+    pub fn invisible_mask(&self) -> u8 {
+        self.invisible_mask
+    }
+
+    /// 【2c】是否有任一类别显示（旧 bool 总开关语义；双栏面板的 ¶ 按钮 toggled 用）
     pub fn show_invisible(&self) -> bool {
-        self.show_invisible
+        self.invisible_mask != 0
     }
 
     /// 【2c】当前保存格式（编码 + 换行）
@@ -188,9 +194,12 @@ impl Document {
         self.capabilities().output
     }
 
-    /// 是否与基线不同（脏判据：内容变了，或保存格式换了——保存会产出不同字节）
+    /// 是否与基线不同（脏判据：内容变了，或保存**编码**换了——编码改变保存产出不同字节）。
+    ///
+    /// 换行符（eol）不参与脏判据：eol 切换是显示/保存契约层面的设置，不产生内容差异，
+    /// 不把文档标「未保存」（用户要求：切换 eol 不影响文本、不置脏）。
     pub fn is_dirty(&self) -> bool {
-        self.content != self.baseline || self.format != self.saved_format
+        self.content != self.baseline || self.format.encoding != self.saved_format.encoding
     }
 
     /// 供视图做差异比较的基线长度等统计（不暴露基线本身，避免外部改写）
@@ -669,7 +678,7 @@ impl EditorService {
         true
     }
 
-    /// 【2c】文档是否显示隐藏字符标注
+    /// 【2c】文档是否有任一不可见字符类别显示（¶ 总开关语义）
     pub fn document_show_invisible(&self, id: &DocumentId) -> bool {
         self.documents
             .iter()
@@ -678,16 +687,30 @@ impl EditorService {
             .unwrap_or(false)
     }
 
-    /// 【2c】重设显示隐藏字符标注；返回是否真变
-    pub fn set_document_show_invisible(&mut self, id: &DocumentId, show: bool) -> bool {
+    /// 【2c】文档不可见字符的类别位掩码（双栏面板的真相源）
+    pub fn document_invisible_mask(&self, id: &DocumentId) -> u8 {
+        self.documents
+            .iter()
+            .find(|doc| doc.id() == id)
+            .map(|doc| doc.invisible_mask())
+            .unwrap_or(0)
+    }
+
+    /// 【2c】重设不可见字符类别位掩码；返回是否真变
+    pub fn set_document_invisible_mask(&mut self, id: &DocumentId, mask: u8) -> bool {
         let Some(doc) = self.documents.iter_mut().find(|doc| doc.id() == id) else {
             return false;
         };
-        if doc.show_invisible == show {
+        if doc.invisible_mask == mask {
             return false;
         }
-        doc.show_invisible = show;
+        doc.invisible_mask = mask;
         true
+    }
+
+    /// 【2c】重设显示隐藏字符标注（旧 bool 总开关：全开 / 全关）；返回是否真变
+    pub fn set_document_show_invisible(&mut self, id: &DocumentId, show: bool) -> bool {
+        self.set_document_invisible_mask(id, if show { crate::hidden::FULL_MASK } else { 0 })
     }
 
     /// 【2c】文档当前保存格式（编码 + 换行）

@@ -16,7 +16,6 @@ use gpui_kit::base::{Disableable as _, Selectable, StyledExt};
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_kit::component::dialog::{Dialog, DialogButtonProps, DialogContent};
-use gpui_kit::base::dock::PanelId;
 use gpui_kit::component::dock::{
     DockArea, DockLayout, DockPlacement, DockSkin, PanelStyle, panel_handle,
 };
@@ -1484,64 +1483,6 @@ impl WorkbenchView {
         Some(layout)
     }
 
-    /// 底部结果 dock 布局（Dock 化阶段 3）：单面板 = 结果薄壳。
-    fn bottom_dock_layout(&self, cx: &Context<Self>) -> Option<DockLayout> {
-        let Some(dock) = self.result_dock.clone() else {
-            return None;
-        };
-        let mut layout = DockLayout::tabs();
-        layout = layout.panel_view(panel_handle(dock), cx);
-        Some(layout)
-    }
-
-    /// 底部结果 dock 同步（render 权威点，Dock 化阶段 3）：
-    /// 活动文档有结果集 → 自动开（12rem 起步，用户可拖拽）；无结果 / 无活动 → 自动关不占位。
-    /// 结果变化走 `StatusChanged` → 宿主重绘 → 每帧重判（`has_dock` / `is_dock_open` 幂等，
-    /// 不会反复开关）。薄壳槽与渲染共用同一 Rc<RefCell>，这里换槽即换渲染目标。
-    fn sync_result_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(dock) = self.result_dock.clone() else {
-            return;
-        };
-        let active_id = self.editor_service.service().active_id().cloned();
-        let active_host = active_id.as_ref().and_then(|id| {
-            self.editor_hosts
-                .iter()
-                .find(|panel| panel.read(cx).document() == id)
-                .cloned()
-        });
-        let has_results = active_host
-            .as_ref()
-            .map(|host| host.read(cx).result_panel().read(cx).has_content())
-            .unwrap_or(false);
-        let slot = dock.read(cx).active_host();
-        *slot.borrow_mut() = active_host.as_ref().map(|host| host.downgrade());
-        let layout = self.bottom_dock_layout(cx);
-        if let Some(area) = self.area.clone()
-            && let Some(layout) = layout
-        {
-            area.update(cx, |area, cx| {
-                if has_results {
-                    if !area.has_dock(DockPlacement::Bottom) {
-                        area.set_dock(DockPlacement::Bottom, layout, window, cx);
-                        // 起步高度 12rem（用户已确认；结构尺寸登记在 ui.rs）
-                        area.set_dock_size(
-                            DockPlacement::Bottom,
-                            cx.theme().font_size * ui::RESULT_DOCK_HEIGHT,
-                            window,
-                            cx,
-                        );
-                    } else if !area.is_dock_open(DockPlacement::Bottom) {
-                        area.toggle_dock(DockPlacement::Bottom, window, cx);
-                    }
-                } else if area.has_dock(DockPlacement::Bottom)
-                    && area.is_dock_open(DockPlacement::Bottom)
-                {
-                    area.toggle_dock(DockPlacement::Bottom, window, cx);
-                }
-            });
-        }
-    }
-
     fn apply_left_mode(&self, window: &mut Window, cx: &mut Context<Self>) {
         let mode = self.shared.left_mode.get();
         let (Some(area), Some(layout)) = (self.area.clone(), self.left_dock_layout(cx)) else {
@@ -2800,6 +2741,27 @@ impl WorkbenchView {
             move |app| toggle_sidebar_hidden(&right_shared, &right_entity, false, app),
         );
 
+        // 布局锁定开关。
+        let layout_locked = self.shared.layout_locked.get();
+        let lock_shared = shared.clone();
+        let lock_entity = entity.clone();
+        let lock_toggle = sb_toggle(
+            "toggle-layout-lock",
+            IconName::Settings,
+            if layout_locked {
+                "解锁布局"
+            } else {
+                "锁定布局"
+            },
+            theme.colors.primary_foreground,
+            theme.colors.primary_active,
+            move |app| {
+                let new_state = !lock_shared.layout_locked.get();
+                lock_shared.layout_locked.set(new_state);
+                lock_entity.update(app, |_, cx| cx.notify());
+            },
+        );
+
         // 状态栏背景品牌珊瑚色（theme.colors.primary 派生，见 theme-design §5.4），文字取配对前景色。
         StatusBar::new()
             .bg(theme.colors.primary)
@@ -2825,6 +2787,7 @@ impl WorkbenchView {
                     .children(mock_chip)
                     .child(div().child(format!("连接：{selected}")))
                     .child(lsp_item)
+                    .child(lock_toggle)
                     .child(right_toggle),
             )
     }
@@ -3169,6 +3132,13 @@ impl Render for WorkbenchView {
         // 三模式权威同步点：Shared 状态 → Dock。
         self.apply_left_mode(window, cx);
         self.apply_right_mode(window, cx);
+        // 布局锁定同步：Shared 状态 → Dock。
+        if let Some(area) = self.area.clone() {
+            let locked = self.shared.layout_locked.get();
+            area.update(cx, |area, cx| {
+                area.set_locked(locked, window, cx);
+            });
+        }
         // 【2026-10-27】结果区从全局底部 dock 拆回编辑器宿主内嵌（DBeaver 口径：
         // 结果集跟编辑器 tab 走，不再挂全局 dock）。sync_result_dock 不再需要——
         // 结果区有无内容由编辑器宿主自己 render 判断（v_resizable 分栏，无内容时不占位）。
