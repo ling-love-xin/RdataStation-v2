@@ -1084,30 +1084,96 @@ impl NavView {
             let entity_regex = cx.entity();
             let entity_cs = cx.entity();
             let entity_conn = cx.entity();
-            let reg_btn = div()
-                .id("nav-search-regex")
-                .h_flex()
-                .items_center()
-                .justify_center()
+            let reg_trigger = Button::new("nav-search-regex")
+                .ghost()
+                .xsmall()
                 .px_1()
-                .h_5()
-                .rounded_sm()
-                .cursor_pointer()
                 .text_xs()
-                .text_color(if regex { fg } else { muted })
-                .when(regex, |this| this.bg(selected_bg))
-                .when(!regex, move |s| s.hover(move |s| s.bg(hover_bg)))
-                .child(".*")
-                .on_click(move |_, _, app| {
-                    entity_regex.update(app, |this, cx| {
-                        {
-                            let mut v = this.nav.borrow_mut();
-                            v.search_regex = !v.search_regex;
+                .label(".*")
+                .text_color(if regex { fg } else { muted });
+            use gpui_kit::base::StyledExt;
+            use gpui_kit::component::popover::Popover;
+            let reg_popover = Popover::new("nav-search-regex-popover")
+                .trigger(reg_trigger)
+                .content({
+                    let entity_regex = entity_regex.clone();
+                    let input_clone = input.clone();
+                    move |_state, _window, cx| {
+                        let theme = cx.theme();
+                        let fg = theme.colors.foreground;
+                        let muted = theme.colors.muted_foreground;
+                        let mut body = div()
+                            .v_flex()
+                            .gap_1()
+                            .min_w(rems(16.))
+                            .p_2()
+                            .text_xs();
+                        // 正则开关
+                        body = body.child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_color(if regex { fg } else { muted })
+                                        .child(if regex { "☑ 正则模式" } else { "☐ 正则模式" }),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(muted)
+                                        .child("开启后搜索词按正则解析"),
+                                ),
+                        );
+                        body = body.child(div().h_px().w_full().bg(border));
+                        // 常用样例
+                        body = body.child(
+                            div()
+                                .text_color(muted)
+                                .child("常用样例（点击填入搜索框）："),
+                        );
+                        let samples = [
+                            ("^user", "前缀匹配（以 user 开头）"),
+                            ("order.*id", "模糊匹配（order 后接任意字符再接 id）"),
+                            ("(prod|staging)", "多选（prod 或 staging）"),
+                            ("^t_", "前缀匹配（以 t_ 开头）"),
+                        ];
+                        for (pattern, desc) in samples.iter() {
+                            let pattern = pattern.to_string();
+                            let desc = desc.to_string();
+                            let input = input_clone.clone();
+                            body = body.child(
+                                Button::new(ElementId::Name(SharedString::from(format!("regex-sample-{pattern}"))))
+                                    .ghost()
+                                    .xsmall()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .font_family("monospace")
+                                            .text_color(fg)
+                                            .child(pattern.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(muted)
+                                            .child(desc),
+                                    )
+                                    .on_click(move |_, window, app| {
+                                        input.update(app, |s, cx| s.set_value(pattern.clone(), window, cx));
+                                    }),
+                            );
                         }
-                        this.mark_panel_state_dirty(cx);
-                        this.rerun_nav_search(cx);
-                        cx.notify();
-                    });
+                        body = body.child(div().h_px().w_full().bg(border));
+                        // 语法速查
+                        body = body.child(
+                            div()
+                                .text_color(muted)
+                                .child("语法速查：^ 开头 · $ 结尾 · .* 任意字符 · | 或 · () 分组"),
+                        );
+                        body
+                    }
                 });
             let case_btn = div()
                 .id("nav-search-case")
@@ -1255,7 +1321,7 @@ impl NavView {
                                     .items_center()
                                     .gap_0p5()
                                     .child(case_btn)
-                                    .child(reg_btn)
+                                    .child(reg_popover)
                                     .child(conn_btn),
                             ),
                     ),
