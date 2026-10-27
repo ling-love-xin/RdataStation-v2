@@ -3742,7 +3742,8 @@ pub fn render(
                 .debug_selector(|| "editor-result-notice".to_string())
                 .child(SharedString::from(text))
         }))
-        // ⑥ 结果工具栏
+        // ⑥ 结果工具栏（flex_none：dock 高度不足时不被压缩而压到网格；border_b 与网格表头
+        // 分隔——用户反馈「工具栏遮挡了结果集的字段」）
         .child(
             div()
                 .h_flex()
@@ -3751,6 +3752,9 @@ pub fn render(
                 .gap_2()
                 .px_2()
                 .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
+                .flex_none()
+                .border_b(ui::HAIRLINE)
+                .border_color(theme.colors.border)
                 .text_xs()
                 .text_color(muted)
                 // 测试按选择器断言原型 §2.4 的竖向顺序（⑤ 标签条 → ⑥ 工具栏 → 网格 → ⑦ 状态行）
@@ -3810,7 +3814,18 @@ pub fn render(
         })
         // ⑦ 结果状态行
         .when_some(status, |pane, status| {
-            let (left, right) = status_segments(&status);
+            let (left, _old_right) = status_segments(&status);
+            // 【DBeaver 对齐】右段文案格式：... N 行已获取 · 耗时
+            let elapsed = toolbar.elapsed_ms.map(|ms| format!("{}s", ms as f64 / 1000.0));
+            let rows = if status.has_more {
+                format!("{}+", thousands(status.total_rows))
+            } else {
+                thousands(status.total_rows)
+            };
+            let right = match elapsed {
+                Some(elapsed) => format!("... {} 行已获取 · {}", rows, elapsed),
+                None => format!("... {} 行已获取", rows),
+            };
             let fetch_hint = fetch_more_hint(&status);
             let truncation = truncation_notice(&status);
             let window_tip = window_fetch_active(&status).then_some(WINDOW_FETCH_NOTICE);
