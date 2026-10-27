@@ -1201,21 +1201,12 @@ impl NavView {
                 .tooltip("待内省采集：视图 / 例程定义批量采集链路接通后启用");
             let _ = include_definitions;
 
-            search_options = Some(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_1()
-                    .w_full()
-                    .px_2()
-                    .pb_1p5()
-                    .bg(cx.theme().colors.group_box)
-                    .child(prefix_btn)
-                    .child(contains_btn)
-                    .child(div().h(rems(1.)).w(ui::HAIRLINE).bg(border))
-                    .child(comments_btn)
-                    .child(definition_btn),
-            );
+            // 匹配模式按钮合并到搜索行（不单独占一行）
+            search_row = search_row.child(prefix_btn)
+                .child(contains_btn)
+                .child(div().h(rems(1.)).w(ui::HAIRLINE).bg(border))
+                .child(comments_btn)
+                .child(definition_btn);
 
             search_row = search_row.child(
                 div()
@@ -1249,7 +1240,6 @@ impl NavView {
             .pt_1()
             .child(header)
             .when(self.host.show_search(cx), |this| this.child(search_row))
-            .when_some(search_options, |this, options| this.child(options))
             .when(self.host.show_chips(cx), |this| this.child(chips))
             .child(div().h(ui::HAIRLINE).w_full().bg(border))
             .child(body)

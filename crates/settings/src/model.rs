@@ -670,7 +670,7 @@ impl Default for Navigator {
             source_short_code: true,
             show_tags: false,
             show_scope: true,
-            show_chips: true,
+            show_chips: false,
             show_search: true,
             show_name_type_short: true,
             type_short_map: default_type_short_map(),
