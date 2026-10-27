@@ -1187,7 +1187,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         section: "layout",
         section_label: "布局",
         label: "左侧侧边栏宽度",
-        hint: "左侧面板的默认宽度（px）",
+        hint: "左侧面板的默认宽度（px）；上方示意图显示占比",
         kind: SettingKind::Number,
         presets: &[
             (200, "200px"),
@@ -1207,7 +1207,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         section: "layout",
         section_label: "布局",
         label: "右侧侧边栏宽度",
-        hint: "右侧面板的默认宽度（px）",
+        hint: "右侧面板的默认宽度（px）；上方示意图显示占比",
         kind: SettingKind::Number,
         presets: &[
             (250, "250px"),
