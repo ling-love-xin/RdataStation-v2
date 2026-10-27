@@ -28,10 +28,12 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme as _, InteractiveElementExt as _, Size, Sizable as _};
+use gpui_kit::component::list::{List, ListState};
+use gpui_kit::component::IndexPath;
+use gpui_kit::component::{ActiveTheme as _, Size, Sizable as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::{TableDelegate, TableEvent, TableState};
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -40,6 +42,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 use ::shared::FactFrame;
 
+use crate::column_browser::ColumnBrowserDelegate;
 use crate::error_card::{self, ErrorCard};
 use crate::export;
 use crate::grid::{self as result_grid, ResultGridDelegate, ResultStatus, ResultToolbar};
@@ -172,10 +175,10 @@ pub struct ResultPanel {
     /// 清单单击写入；网格选中格经 `selection_pos` 反推同步；新结果集 / 切标签 /
     /// 对比模式重置为 `None`（渲染兜底第一可见列）。清单选中 ≠ 网格焦点。
     selected_col: Option<usize>,
-    /// 【列浏览器】搜索框输入框实体（单输入源；过滤真值在 [`Self::column_search`]）
-    column_search_input: Entity<InputState>,
-    /// 【列浏览器】搜索词真值（忽略大小写包含匹配列名 / 类型名 / 注释；空 = 不过滤）
-    column_search: String,
+    /// 【列浏览器】清单 List 实体（kit `list::{ListState, ListDelegate}` 承载；
+    /// 选中高亮由 List 内部 `selected_index` 管理，搜索框也在 List 内置里——
+    /// 面板不再自持搜索输入框 / 搜索词，见 [`crate::column_browser`]）
+    browser_list: Entity<ListState<ColumnBrowserDelegate>>,
     /// 【呈现】显示方式（DBeaver 左栏「显示方式」）：网格 / 文本。面板级持续——
     /// 切结果集不重置（用户选择的是「怎么看结果」，不是某份结果的属性）。
     presentation: Presentation,
@@ -253,25 +256,6 @@ impl ResultPanel {
         // 订阅句柄仅持有（防重复建立）；面板实体自身不需要额外使用
         let _ = filter_sub;
 
-        // 【列浏览器】列搜索框：本地小集合纯过滤（列名 / 类型 / 注释包含匹配），
-        // 即时重渲染、不防抖——不像全局筛选要逐行扫全表。
-        let column_search_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx);
-            state.set_placeholder("搜索列名 / 类型 / 注释…", window, cx);
-            state
-        });
-        let column_search_sub = cx.subscribe_in(
-            &column_search_input,
-            window,
-            |this, state, event: &InputEvent, _window, cx| {
-                if matches!(event, InputEvent::Change) {
-                    this.column_search = state.read(cx).value().to_string();
-                    cx.notify();
-                }
-            },
-        );
-        let _ = column_search_sub;
-
         // 【DBeaver 对齐】状态栏中段行数输入框：可编辑，输入行号跳转（暂不接跳转逻辑）
         let row_count_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx);
@@ -286,6 +270,14 @@ impl ResultPanel {
             window,
             cx,
         );
+
+        // 【列浏览器】清单 List（kit 组件承载：搜索框 / 键盘导航 / 滚动条内置）：
+        // delegate 只持投影，数据由 `sync` 灌入；占位网格句柄先借用，`set_grids`
+        // 替换网格后 `sync` 会重灌（构造后到接线前不会渲染，见 grid 占位注释）
+        let browser_list = cx.new(|cx| {
+            ListState::new(ColumnBrowserDelegate::new(queue.clone(), grid.clone()), window, cx)
+                .searchable(true)
+        });
 
         // 【DBeaver 对齐】订阅 table 事件：双击单元格编辑 / 列序拖拽 / 清除选择
         let _grid_sub = cx.subscribe_in(
@@ -335,8 +327,7 @@ impl ResultPanel {
             show_value_sidebar: true,
             selection_pos: None,
             selected_col: None,
-            column_search_input,
-            column_search: String::new(),
+            browser_list,
             row_count_input,
             presentation: Presentation::Grid,
             right_tab: RightTab::Browser,
@@ -452,6 +443,38 @@ impl ResultPanel {
             state.delegate_mut().set_conflict(input.conflict);
             state.refresh(cx);
         });
+
+        // 【列浏览器】清单数据跟随网格投影重灌（换结果集 / 刷新 / 取段都走到这里；
+        // 搜索词**跨结果保留**的既有口径不变——`set_data` 只换投影，不清搜索框）。
+        // List 内部选中高亮（selected_index）没有窗口句柄可在这里复位，换结果后
+        // 可能残留旧行高亮，用户点击 / 搜索 / 网格反推后即纠正（记录在案）。
+        {
+            let grid = self.grid.clone();
+            let browser = self.browser_list.clone();
+            browser.update(cx, |list, cx| {
+                // 先换真实网格再灌投影：构造期 delegate 持有的是占位网格（面板建好
+                // 表状态前 ListState 就要先建），右键动作（冻结/隐藏/显示全部/清排序）
+                // 直接 update 网格，不换会落在空数据上（功能回归）
+                list.delegate_mut().set_grid(grid.clone());
+                let delegate = grid.read(&*cx).delegate();
+                let columns = delegate.columns().to_vec();
+                let type_names: Vec<String> = delegate
+                    .column_types()
+                    .iter()
+                    .map(|t| t.as_ref().map(|t| t.name.clone()).unwrap_or_default())
+                    .collect();
+                let hidden: Vec<bool> = (0..columns.len())
+                    .map(|c| delegate.is_hidden_column(c))
+                    .collect();
+                let comments: Vec<Option<String>> = delegate
+                    .column_annotations()
+                    .iter()
+                    .map(|a| a.as_ref().and_then(|a| a.comment.clone()))
+                    .collect();
+                list.delegate_mut()
+                    .set_data(columns, type_names, hidden, comments);
+            });
+        }
     }
 
     /// 结果区整体渲染（主栏组装 + 对比模式双栏；按钮动作分两类：
@@ -1368,14 +1391,31 @@ impl ResultPanel {
     ///
     /// 同时把选中格反推成**数据列序**写入 [`Self::selected_col`]，驱动右栏列浏览器
     /// 清单高亮与底部明细；选行 / 清选 / 转置视图 / 行号槽列时不反推（保持清单当前选中）。
-    pub fn set_selection_pos(&mut self, pos: Option<(usize, usize)>, cx: &mut Context<Self>) {
-        tracing::info!(pos = ?pos, "【探针】set_selection_pos：结果网格格选中变化");
+    pub fn set_selection_pos(
+        &mut self,
+        pos: Option<(usize, usize)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.selection_pos = pos;
         if let Some((_row, col)) = pos {
             if col > 0 {
                 let delegate = self.grid.read(cx).delegate();
                 if !delegate.is_transposed() {
-                    self.selected_col = Some(delegate.data_column(col - 1));
+                    let data_col = delegate.data_column(col - 1);
+                    self.selected_col = Some(data_col);
+                    // 同步清单高亮：把面板权威的选中列换算成 List 过滤后行号，
+                    // 驱动 kit List 内部 selected_index（过滤掉该列时无对应行 → 不清高亮）
+                    let browser = self.browser_list.clone();
+                    browser.update(cx, |list, cx| {
+                        let ix = list
+                            .delegate()
+                            .matched()
+                            .iter()
+                            .position(|&c| c == data_col)
+                            .map(IndexPath::new);
+                        list.set_selected_index(ix, window, cx);
+                    });
                 }
             }
         }
@@ -1410,11 +1450,11 @@ impl ResultPanel {
         cx.notify();
     }
 
-    /// 【列浏览器】清空搜索词（搜索框 ✕ / ESC 入口；需要 `window`，与 `clear_filter` 同口径）
+    /// 【列浏览器】清空搜索词（搜索框 ✕ / ESC 入口；`window` 转手给 List 内置
+    /// 搜索框，与 `clear_filter` 同口径）
     pub fn clear_column_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.column_search.clear();
-        let input = self.column_search_input.clone();
-        input.update(cx, |state, cx| state.set_value("", window, cx));
+        let browser = self.browser_list.clone();
+        browser.update(cx, |list, cx| list.set_query("", window, cx));
         cx.notify();
     }
 
@@ -1602,11 +1642,12 @@ impl ResultPanel {
     /// - 下方：预留面板切换图标位置（图表/统计等，backlog）
     ///
     /// 宽度与左缘竖条一致；背景 sidebar；按钮 ghost 小尺寸。
-    /// 【右栏·列浏览器页签】（对齐 DBeaver metadata 面板）：顶部搜索框 + 中部列清单 +
-    /// 底部元数据明细，整体作为右栏「列浏览器」页签内容（宽度由右栏外壳统一控制）。
+    /// 【右栏·列浏览器页签】（对齐 DBeaver metadata 面板）：顶部搜索框（kit List 内置）+
+    /// 中部列清单（kit List）+ 底部元数据明细，整体作为右栏「列浏览器」页签内容。
     ///
-    /// - 搜索：列名 / 类型名 / 注释忽略大小写包含匹配；隐藏列保留在清单（置灰斜体）。
-    /// - 清单：单击选中列（写 `selected_col` + 网格列高亮联动），双击定位到该列首行；
+    /// - 搜索：列名 / 类型名 / 注释忽略大小写包含匹配（List 内置搜索框 → `perform_search`）；
+    ///   隐藏列保留在清单（置灰斜体）。
+    /// - 清单：单击选中列（List `confirm` → 网格列高亮联动），双击定位到该列首行；
     ///   行尾眼睛 = 切换隐藏（单击眼睛不改变选中列）；冻结 / 排序 / 统计 / 复制 / 显示全部
     ///   走右键菜单（清单行上不摆图钉 / 排序箭头 / 拖拽手柄，见拍板口径）。
     /// - 明细：只读 `selected_col`（越界 / 被隐藏时兜底第一可见列）。
@@ -1622,12 +1663,6 @@ impl ResultPanel {
             .iter()
             .map(|t| t.as_ref().map(|t| t.name.clone()).unwrap_or_default())
             .collect();
-        let comments: Vec<Option<String>> = annotations
-            .iter()
-            .map(|a| a.as_ref().and_then(|a| a.comment.clone()))
-            .collect();
-        let visible: Vec<usize> =
-            filter_browser_columns(&columns, &type_names, &comments, &self.column_search);
 
         // 明细兜底：当前选中列越界 / 被隐藏时退回第一可见列；一份结果无可见列 = None
         let detail_col = self
@@ -1689,215 +1724,18 @@ impl ResultPanel {
             Some((title, items))
         });
 
-        // ── 清单行：单击选中 / 双击定位 / 眼睛切显隐 / 右键列级本地动作 ──
-        let rows: Vec<AnyElement> = visible
-            .iter()
-            .map(|&data_col| {
-                let queue = self.queue.clone();
-                // 行单击 / 双击两个闭包各持一份队列句柄（`move` 不能共享一个 `Rc` 以外的
-                // 已被捕获值；队列本身是 `Rc`，这里 clone 的是 `Rc` 句柄而非 Vec）
-                let queue_click = queue.clone();
-                let queue_double = queue.clone();
-                let grid_entity = self.grid.clone();
-                let name = columns[data_col].clone();
-                let type_name = type_names[data_col].clone();
-                let hidden = delegate.is_hidden_column(data_col);
-                let selected = !hidden && self.selected_col == Some(data_col);
-                let frozen = delegate.is_frozen(data_col);
-                let sort_active = delegate
-                    .sort_state()
-                    .is_some_and(|(sort_col, _)| sort_col == data_col);
-                let target = result_grid::ContextTarget {
-                    value: String::new(),
-                    column_name: name.clone(),
-                    column: data_col,
-                    row: 0,
-                    rows: delegate.view_len(),
-                    frozen,
-                    hidden_columns: delegate.hidden_count(),
-                    insight: false,
-                    table: None,
-                    column_filter_active: false,
-                    column_values: Vec::new(),
-                    sort_active,
-                    // 列浏览器菜单没有行身份：行级三项只出现在单元格右键菜单
-                    row_ref: crate::rowset::RowRef::default(),
-                    editable: false,
-                    is_deleted: false,
-                };
-                let menu_items = result_grid::column_browser_menu_items(&target);
-                // 复制整列文本在闭包外算好：菜单闭包活到比这一次 render 长，
-                // 「当时这一列是什么」只有现在知道（与列头菜单同口径）
-                let copy_text = delegate.column_text(data_col);
-                // 列统计载荷同样在 read 期间取好（钩子 + 列名 + 文本），点击直调钩子，
-                // 不包 `grid_entity.update`（避免闭包内二次可变借用 app）
-                let stats_payload = delegate.column_stats_payload(data_col);
+        // 清单：kit List（搜索框内置 + 键盘导航 + 滚动条）；行内容 / 眼睛 / 右键菜单 /
+        // 双击定位逻辑全在 [`crate::column_browser::ColumnBrowserDelegate`]（render 期
+        // 只读实体挂元素，List 内部 prepare 时由 delegate 现算过滤结果）
+        let browser = self.browser_list.clone();
+        let list_body: AnyElement = List::new(&browser)
+            .with_size(Size::Small)
+            .search_placeholder("搜索列名 / 类型 / 注释…")
+            .scrollbar_visible(true)
+            .flex_1()
+            .min_h_0()
+            .into_any_element();
 
-                let eye = {
-                    let queue = queue.clone();
-                    Button::new(("editor-result-col-browser-eye", data_col))
-                        .ghost()
-                        .small()
-                        .icon(if hidden { IconName::EyeOff } else { IconName::Eye })
-                        .tooltip(if hidden { "显示此列" } else { "隐藏此列" })
-                        .debug_selector(move || {
-                            format!("editor-result-col-browser-eye-{data_col}")
-                        })
-                        .on_click(move |_, _window, app| {
-                            // 眼睛只切显隐，不冒泡触发行选中
-                            app.stop_propagation();
-                            queue.push(ResultRequest::ToggleColumnVisibility(data_col));
-                        })
-                };
-
-                div()
-                    .id(("editor-result-col-browser-row", data_col))
-                    .h_flex()
-                    .items_center()
-                    .gap_1()
-                    .px_1()
-                    .h_6()
-                    .text_xs()
-                    .cursor_pointer()
-                    .when(selected, |r| r.bg(theme.colors.list_active))
-                    .when(hidden, |r| r.text_color(muted).italic())
-                    .debug_selector(move || {
-                        format!("editor-result-col-browser-row-{data_col}")
-                    })
-                    .on_click(move |_, _window, _app| {
-                        queue_click.push(ResultRequest::SelectColumn(data_col));
-                    })
-                    .on_double_click(move |_, _window, _app| {
-                        queue_double.push(ResultRequest::LocateColumn(data_col));
-                    })
-                    .context_menu(move |mut menu, _window, _cx| {
-                        for item in menu_items.clone() {
-                            match item.action {
-                                result_grid::ContextAction::CopyColumn(_) => {
-                                    let text = copy_text.clone();
-                                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                                        move |_, _window, app| {
-                                            app.write_to_clipboard(ClipboardItem::new_string(
-                                                text.clone(),
-                                            ));
-                                        },
-                                    ));
-                                }
-                                result_grid::ContextAction::ToggleFreeze(column) => {
-                                    let grid_entity = grid_entity.clone();
-                                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                                        move |_, _window, app| {
-                                            grid_entity.update(app, |state, cx| {
-                                                state.delegate_mut().toggle_freeze(column);
-                                                state.refresh(cx);
-                                            });
-                                        },
-                                    ));
-                                }
-                                result_grid::ContextAction::HideColumn(column) => {
-                                    let grid_entity = grid_entity.clone();
-                                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                                        move |_, _window, app| {
-                                            grid_entity.update(app, |state, cx| {
-                                                state.delegate_mut().hide_column(column);
-                                                state.refresh(cx);
-                                            });
-                                        },
-                                    ));
-                                }
-                                result_grid::ContextAction::ShowAllColumns => {
-                                    let grid_entity = grid_entity.clone();
-                                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                                        move |_, _window, app| {
-                                            grid_entity.update(app, |state, cx| {
-                                                state.delegate_mut().show_all_columns();
-                                                state.refresh(cx);
-                                            });
-                                        },
-                                    ));
-                                }
-                                result_grid::ContextAction::ColumnStats { column: _ } => {
-                                    if let Some((hook, name, text)) = stats_payload.clone() {
-                                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                                            move |_, _window, app| hook(name.clone(), text.clone(), app),
-                                        ));
-                                    }
-                                }
-                                result_grid::ContextAction::ClearSort => {
-                                    let grid_entity = grid_entity.clone();
-                                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                                        move |_, _window, app| {
-                                            grid_entity.update(app, |state, cx| {
-                                                state.delegate_mut().clear_sort();
-                                                state.refresh(cx);
-                                            });
-                                        },
-                                    ));
-                                }
-                                _ => {
-                                    // 排序下发 / 筛选 / 洞察 / 值与行动作属于列头与单元格，
-                                    // 清单入口不生成（`column_browser_menu_items` 也不摆这些项）
-                                }
-                            }
-                        }
-                        menu
-                    })
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_ellipsis()
-                            .child(SharedString::from(name)),
-                    )
-                    .when(!type_name.is_empty(), |r| {
-                        r.child(
-                            div()
-                                .flex_none()
-                                .text_xs()
-                                .text_color(muted)
-                                .child(SharedString::from(type_name)),
-                        )
-                    })
-                    .child(eye)
-                    .into_any_element()
-            })
-            .collect();
-
-        // 搜索框 ✕：有词才摆（空态不摆僵尸按钮）
-        let clear = (!self.column_search.trim().is_empty()).then(|| {
-            let queue = self.queue.clone();
-            Button::new("editor-result-col-browser-clear")
-                .ghost()
-                .small()
-                .icon(IconName::Close)
-                .tooltip("清除搜索")
-                .debug_selector(|| "editor-result-col-browser-clear".to_string())
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::ClearColumnSearch);
-                })
-                .into_any_element()
-        });
-
-        let list_body: AnyElement = if rows.is_empty() {
-            div()
-                .flex_1()
-                .min_h_0()
-                .v_flex()
-                .items_center()
-                .justify_center()
-                .px_2()
-                .text_xs()
-                .text_color(muted)
-                .child("无匹配列")
-                .into_any_element()
-        } else {
-            div()
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scrollbar()
-                .children(rows)
-                .into_any_element()
-        };
 
         let detail_body: AnyElement = match detail {
             Some((title, items)) => div()
@@ -1942,26 +1780,6 @@ impl ResultPanel {
                     .text_xs()
                     .text_color(muted)
                     .child(SharedString::from(format!("列浏览器 · {} 列", columns.len()))),
-            )
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .pb_1()
-                    .debug_selector(|| "editor-result-col-browser-search".to_string())
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                Input::new(&self.column_search_input)
-                                    .with_size(Size::Small)
-                                    .prefix(IconName::Search),
-                            ),
-                    )
-                    .children(clear),
             )
             .child(list_body)
             .child(
@@ -2420,39 +2238,6 @@ impl ResultPanel {
     pub fn selected_col(&self) -> Option<usize> {
         self.selected_col
     }
-
-    /// 列浏览器搜索词（测试断言）
-    pub fn column_search(&self) -> &str {
-        &self.column_search
-    }
-}
-
-/// 列浏览器搜索过滤（纯函数）：忽略大小写包含匹配列名 / 类型名 / 注释；
-/// 空词 = 全量原序；隐藏列保留在清单（置灰斜体由渲染层处理，过滤不剔隐藏列）。
-fn filter_browser_columns(
-    names: &[String],
-    type_names: &[String],
-    comments: &[Option<String>],
-    needle: &str,
-) -> Vec<usize> {
-    let needle = needle.trim().to_lowercase();
-    (0..names.len())
-        .filter(|&i| {
-            if needle.is_empty() {
-                return true;
-            }
-            names[i].to_lowercase().contains(&needle)
-                || type_names
-                    .get(i)
-                    .map(|t| t.to_lowercase().contains(&needle))
-                    .unwrap_or(false)
-                || comments
-                    .get(i)
-                    .and_then(|c| c.as_ref())
-                    .map(|c| c.to_lowercase().contains(&needle))
-                    .unwrap_or(false)
-        })
-        .collect()
 }
 
 /// 【右栏】页签下标 → 枚举（TabBar 回调用；与 `RightTab` 定义顺序一致——
@@ -2510,7 +2295,8 @@ fn fmt_stat(value: Option<f64>) -> String {
 #[cfg(test)]
 mod tests {
     // 安全模式：不通配导入（`use gpui_kit::*` 会把 test 宏带进作用域导致 recursion limit）
-    use super::{filter_browser_columns, right_tab_from_index};
+    use crate::column_browser::filter_browser_columns;
+    use super::right_tab_from_index;
     use crate::ports::RightTab;
 
     /// 三份等长样本：列名 / 类型名 / 注释（注释可空）

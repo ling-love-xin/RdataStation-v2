@@ -840,6 +840,44 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 10. ColumnWidthsChanged 事件 ✅
 11. RightClickedRow / RightClickedCell 事件 ✅
 
+### 8.18 列浏览器清单 List 组件迁移（gpui-kit list）
+
+**背景**：排查「gpui-kit 支持但我们手搓」后，列浏览器清单行（`div().cursor_pointer().on_click(...)` 手搓行）迁移到
+`list::{List, ListState, ListDelegate}`，获得 hover / 键盘上下 + Enter 确认 / 焦点管理 / 搜索框（`searchable` 自带
+cleanable）/ 滚动条 / a11y。新文件 `crates/result_panel/src/column_browser.rs`（`ColumnBrowserDelegate`），
+panel.rs 删掉手搓过滤 / 行渲染 / 搜索框约 200 行。
+
+**迁移关键事实（vendor 0.8.0 实测，供后续参考）**：
+
+- **右键菜单不能挂 ListItem 本体**：`context_menu` 会把元素包装成 `ContextMenu<Self>`，而 List 要求
+  `render_item` 返回 `ListItem`（List 内部要覆盖 `.selected()` / `.secondary_selected()`，`Selectable` 是硬约束）。
+  菜单挂在**行内容 div** 上（`.id()` 带业务键 → `Stateful` 满足 `InteractiveElement + ParentElement + Styled`）；
+  内容 div `w_full()`，右键命中区覆盖整行，与手搓版一致。内容 div 的 id 必须逐行唯一——
+  同一调用点渲染多行时菜单状态按 id 区分（ContextMenu 的 RowsRoot 用例：#3134，无 id 会共享弹层状态）。
+- **`ClickEvent::click_count` 是方法不是字段**（gpui 0.3.8）：双击判定写 `e.click_count() >= 2`。
+- **`ListState` 0.8.0 的 `items_count` 签名带 `section`**：`items_count(&self, section: usize, &App) -> usize`。
+- **result_panel 不直接依赖 gpui crate**：`gpui::*` 全部走 `gpui_kit::*` 顶层重导出（`div` / `SharedString` /
+  `ClickEvent` / `IndexPath` 从 `gpui_kit::component::IndexPath` 等）。
+- **双击无原生通道**：`ListItem` 无 `on_double_click`，单击留给 List 内部 confirm（SelectColumn），双击在
+  `on_click` 里按 `click_count >= 2` 判定入队 LocateColumn；键盘 Enter 走同一 confirm 路径，不会产生 click_count。
+- **搜索**：`searchable(true)` 内置搜索框，`perform_search` 收到每次输入；`set_query("")` 程序化清空不重发
+  Change 事件（`clear_column_search` 借此实现）。搜索范围 = 列名 + 类型名 + 注释（`filter_browser_columns`
+  纯函数迁至 column_browser.rs）；隐藏列保留在清单（置灰斜体）。
+
+**正确性修正（发现并处理）**：`ColumnBrowserDelegate` 构造时持有的是**占位网格**（面板建好表状态前
+`ListState` 要先建），`sync` 若只 `set_data` 不换网格，右键动作（冻结 / 隐藏 / 显示全部 / 清排序）会落在
+空数据上。新增 `set_grid`，`sync` 浏览器段先 `set_grid(grid.clone())` 再 `set_data(...)`。
+
+**验证**：`cargo check -p rds-result-panel --lib` 全绿（0 error / 0 warning）；
+`cargo test -p rds-result-panel --lib` = **196 passed / 0 failed**（与历史基线一致，无新增测试——交互口径
+未变，纯函数 `filter_browser_columns` / 菜单素材测试沿用既有）；
+`cargo check -p rds-editor` 通过（连带验证 host.rs 的 `set_selection_pos` 3 处 `window` 适配；
+编译过程中并行线 Toolbar 迁移曾以中间态报 `Toolbar::child` 的 `Sizable` 约束错，该线改完（`child`→`content`）
+后编译通过，非本线因果）。
+
+**提交状态**：`crates/result_panel/src/{column_browser.rs, panel.rs, lib.rs}` 待提交；
+`crates/editor/src/view/host.rs` 与并行线 Toolbar 迁移混合，按纪律不提交（待该线或用户裁定）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

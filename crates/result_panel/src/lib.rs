@@ -25,6 +25,7 @@
 
 pub mod analysis;
 pub mod changes;
+pub mod column_browser;
 pub mod error_card;
 pub mod export;
 pub mod grid;
