@@ -398,6 +398,30 @@ ellipsis，hover tooltip 看全——tooltip 已含注释分块，不重复造�
 
 **边界**：转置视图 / 行号槽不画类型 badge 也不画注释；列宽拖拽 / 冻结 / 隐藏不受影响。
 
+**A3 定稿（用户拍板）**：放弃 A1 实色 Tag，改成浅底 + 彩色符号：
+
+| 族 | 符号 | 浅底色 |
+| --- | --- | --- |
+| 数字（Int/Float/Decimal） | `123` | primary 18% 透明度底 + primary 字 |
+| 文本（Text/Uuid/Json） | `Aa` | success 18% 透明度底 + success 字 |
+| 时间（Timestamp/Date/Time） | `◷` | info 18% 透明度底 + info 字 |
+| 布尔（Boolean） | `✓` | warning 18% 透明度底 + warning 字 |
+| 二进制（Binary） | `01` | secondary 25% 透明度底 + secondary 字 |
+
+实现：`grid.rs::type_kind_sym()` 返回符号字符串；render 时 match kind 取 theme.colors 族色，
+`div().bg(color.opacity(0.18)).text_color(color).px_1().text_xs().rounded(3.)` 手搓 badge。
+不依赖 Tag 组件（Tag 实色太重），零裸色值（族色全走 theme.colors）。
+
+**空结果集保留列头**：DataTable 组件在 rows=0 时切到 `render_empty` 不画表头；用户要求
+0 行也要看到字段名（DBeaver 口径）。方案：`set_data` 时若 rows 为空且 columns 非空，
+塞一行全空字符串（`vec![vec![String::new(); columns.len()]]`），让组件画表头 + 一行空白数据区。
+空态文案在状态栏/工具栏显示，不在网格里画。
+
+**列宽 backlog（未实现，DBeaver 有）**：
+- 双击列头边缘自动适应内容宽度（auto-fit）
+- 右键列头「设置列宽」输入数值
+- 列宽跨会话持久化（当前只会话内按列名记）
+
 **既定路线**：分组 / 统计用纯函数补齐（可测、无新依赖）；大表分析继续走 DuckDB。
 
 ### 8.9 DBeaver 四区落地（2026-10-24，提交 817c4621）

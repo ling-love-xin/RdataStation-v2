@@ -51,7 +51,6 @@ use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableState};
-use gpui_kit::component::tag::{Tag, TagVariant};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -698,6 +697,14 @@ impl ResultGridDelegate {
 
     /// 换一批数据（结果集变化时从权威拷贝一次；网格不持有第二份真值）
     pub fn set_data(&mut self, columns: Vec<String>, rows: Vec<Vec<String>>) {
+        // 【空态】0 行时塞一行全空数据：DataTable 组件在 rows=0 时切到 render_empty 不画表头，
+        // 用户要求空结果集也要看到字段名（DBeaver 口径）。塞一行空行让组件画表头 + 空白数据区，
+        // 空态文案在状态栏/工具栏显示，不在网格里画。
+        let rows = if rows.is_empty() && !columns.is_empty() {
+            vec![vec![String::new(); columns.len()]]
+        } else {
+            rows
+        };
         self.columns = columns;
         self.rows = rows;
         self.empty_text = "查询返回 0 行".to_string();
@@ -1488,33 +1495,15 @@ impl ResultGridDelegate {
             .map(|column| column.name.as_str())
     }
 
-    /// 【A1】类型族 → 短码（列头 badge 内文；Unknown 不画 badge）
-    pub(crate) fn type_kind_short(kind: ColumnKind) -> Option<&'static str> {
+    /// 【A3】类型族 → 符号短码（列头 badge 内文；Unknown 不画 badge）。
+    /// 比 A1 的 INT/FLT/TXT 短一半：数字=123 / 文本=Aa / 时间=◷ / 布尔=✓ / 二进制=01。
+    pub(crate) fn type_kind_sym(kind: ColumnKind) -> Option<&'static str> {
         match kind {
-            ColumnKind::Integer => Some("INT"),
-            ColumnKind::Float => Some("FLT"),
-            ColumnKind::Decimal => Some("DEC"),
-            ColumnKind::Boolean => Some("BOOL"),
-            ColumnKind::Text => Some("TXT"),
-            ColumnKind::Timestamp => Some("TS"),
-            ColumnKind::Date => Some("DATE"),
-            ColumnKind::Time => Some("TIME"),
-            ColumnKind::Uuid => Some("UUID"),
-            ColumnKind::Json => Some("JSON"),
-            ColumnKind::Binary => Some("BIN"),
-            ColumnKind::Unknown => None,
-        }
-    }
-
-    /// 【A1】类型族 → Tag 变体（数字=Primary 蓝 / 文本=Success 绿 / 时间=Info 紫 /
-    /// 布尔=Warning 橙 / 二进制=Secondary 灰；Unknown 不画 badge）
-    pub(crate) fn type_kind_tag(kind: ColumnKind) -> Option<TagVariant> {
-        match kind {
-            ColumnKind::Integer | ColumnKind::Float | ColumnKind::Decimal => Some(TagVariant::Primary),
-            ColumnKind::Text | ColumnKind::Uuid | ColumnKind::Json => Some(TagVariant::Success),
-            ColumnKind::Timestamp | ColumnKind::Date | ColumnKind::Time => Some(TagVariant::Info),
-            ColumnKind::Boolean => Some(TagVariant::Warning),
-            ColumnKind::Binary => Some(TagVariant::Secondary),
+            ColumnKind::Integer | ColumnKind::Float | ColumnKind::Decimal => Some("123"),
+            ColumnKind::Boolean => Some("✓"),
+            ColumnKind::Timestamp | ColumnKind::Date | ColumnKind::Time => Some("◷"),
+            ColumnKind::Text | ColumnKind::Uuid | ColumnKind::Json => Some("Aa"),
+            ColumnKind::Binary => Some("01"),
             ColumnKind::Unknown => None,
         }
     }
@@ -2717,21 +2706,33 @@ impl TableDelegate for ResultGridDelegate {
         };
         let muted = cx.theme().colors.muted_foreground;
 
-        // 【A1】类型族 badge：从列名右侧 muted 纯文字改成 Tag 组件（色块 + 短码），
-        // 位置移到列名前（用户口径「徽标 + 列名」）。类型族未知不画 badge。
+        // 【A3】类型族 badge：浅底 + 彩色符号（123/Aa/◷/✓/01）。
+        // 位置在列名前；类型族未知不画 badge。浅底 = 族色 18% 透明度，文字 = 族色。
         let kind = if Self::is_row_number(col_ix) || self.transposed {
             ColumnKind::Unknown
         } else {
             self.column_kind(col_ix)
         };
-        let type_badge = Self::type_kind_short(kind)
-            .zip(Self::type_kind_tag(kind))
-            .map(|(short, variant)| {
-                Tag::new()
-                    .with_variant(variant)
-                    .small()
-                    .child(SharedString::from(short))
-            });
+        let theme = cx.theme();
+        let type_badge = Self::type_kind_sym(kind).map(|sym| {
+            // 族色 → 浅底 + 文字色
+            let color = match kind {
+                ColumnKind::Integer | ColumnKind::Float | ColumnKind::Decimal => theme.colors.primary,
+                ColumnKind::Text | ColumnKind::Uuid | ColumnKind::Json => theme.colors.success,
+                ColumnKind::Timestamp | ColumnKind::Date | ColumnKind::Time => theme.colors.info,
+                ColumnKind::Boolean => theme.colors.warning,
+                ColumnKind::Binary => theme.colors.secondary,
+                ColumnKind::Unknown => theme.colors.muted_foreground,
+            };
+            div()
+                .bg(color.opacity(0.18))
+                .text_color(color)
+                .px_1()
+                .text_xs()
+                .rounded(gpui_kit::px(3.))
+                .flex_none()
+                .child(SharedString::from(sym))
+        });
 
         // 【B1】列名主行：badge + 列名(flex_1) + 筛选▽
         let main_row = div()
