@@ -3620,6 +3620,89 @@ pub struct ResultPane {
     pub row_count_input: Option<gpui::Entity<gpui_kit::component::input::InputState>>,
 }
 
+/// 【DBeaver 对齐】渲染工具栏（横跨整个顶部）
+///
+/// 从 `result_grid::render` 里抽出来，放到最顶部——用户反馈「工具栏遮挡了结果集的字段」。
+pub fn render_toolbar(
+    toolbar: &ResultToolbar,
+    filter: Option<AnyElement>,
+    value_sidebar: Option<AnyElement>,
+    compare: Option<AnyElement>,
+    commit: Option<AnyElement>,
+    analysis: Option<AnyElement>,
+    export: Option<AnyElement>,
+    refresh: Option<AnyElement>,
+    copy: Option<AnyElement>,
+    cx: &App,
+) -> AnyElement {
+    let theme = cx.theme();
+    let muted = theme.colors.muted_foreground;
+    div()
+        .h_flex()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .px_2()
+        .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
+        .flex_none()
+        .border_b(ui::HAIRLINE)
+        .border_color(theme.colors.border)
+        .text_xs()
+        .text_color(muted)
+        .debug_selector(|| "editor-result-toolbar".to_string())
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .min_w_0()
+                // 【DBeaver 对齐】工具栏最左侧 SQL 预览（hover 看全文）
+                .children(toolbar.sql.clone().map(|sql| {
+                    let preview: SharedString = if sql.len() > 60 {
+                        format!("{}…", &sql[..60]).into()
+                    } else {
+                        sql.as_str().into()
+                    };
+                    div()
+                        .id("editor-result-sql-preview")
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .text_xs()
+                        .text_color(muted)
+                        .truncate()
+                        .child(SharedString::from("SQL: "))
+                        .child(preview)
+                        .tooltip(move |window, cx| {
+                            Tooltip::new(sql.clone()).build(window, cx)
+                        })
+                        .into_any_element()
+                }))
+                .children(
+                    toolbar
+                        .segments()
+                        .into_iter()
+                        .map(|segment| SharedString::from(segment)),
+                ),
+        )
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                // 顺序照原型 §2.4 的右段：⌕ 筛选 · 列浏览器 · ⧉ 对比 · 提交变更 · ⚗ 分析 ▾ · ⤓ 导出 ▾ · ⟳ · 复制
+                .children(filter)
+                .children(value_sidebar)
+                .children(compare)
+                .children(commit)
+                .children(analysis)
+                .children(export)
+                .children(refresh)
+                .children(copy),
+        )
+        .into_any_element()
+}
+
 /// 截断提示文案（达到驱动行数上限时；原型 §2.4 的口径是 `已截断至 N 行`）
 ///
 /// 只报**我们真拿到多少行**；上限是驱动侧的事（`engine` 侧 10000 行），编辑器不猜那个数。
@@ -3766,75 +3849,7 @@ pub fn render(
                 .debug_selector(|| "editor-result-notice".to_string())
                 .child(SharedString::from(text))
         }))
-        // ⑥ 结果工具栏（flex_none：dock 高度不足时不被压缩而压到网格；border_b 与网格表头
-        // 分隔——用户反馈「工具栏遮挡了结果集的字段」）
-        .child(
-            div()
-                .h_flex()
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .px_2()
-                .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
-                .flex_none()
-                .border_b(ui::HAIRLINE)
-                .border_color(theme.colors.border)
-                .text_xs()
-                .text_color(muted)
-                // 测试按选择器断言原型 §2.4 的竖向顺序（⑤ 标签条 → ⑥ 工具栏 → 网格 → ⑦ 状态行）
-                .debug_selector(|| "editor-result-toolbar".to_string())
-                .child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_2()
-                        .min_w_0()
-                        // 【DBeaver 对齐】工具栏最左侧 SQL 预览（hover 看全文）
-                        .children(toolbar.sql.clone().map(|sql| {
-                            let preview: SharedString = if sql.len() > 60 {
-                                format!("{}…", &sql[..60]).into()
-                            } else {
-                                sql.as_str().into()
-                            };
-                            div()
-                                .id("editor-result-sql-preview")
-                                .h_flex()
-                                .items_center()
-                                .gap_1()
-                                .text_xs()
-                                .text_color(muted)
-                                .truncate()
-                                .child(SharedString::from("SQL: "))
-                                .child(preview)
-                                .tooltip(move |window, cx| {
-                                    Tooltip::new(sql.clone()).build(window, cx)
-                                })
-                                .into_any_element()
-                        }))
-                        .children(
-                            toolbar
-                                .segments()
-                                .into_iter()
-                                .map(|segment| SharedString::from(segment)),
-                        ),
-                )
-                .child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_1()
-                        // 顺序照原型 §2.4 的右段：⌕ 筛选 · 列浏览器 · ⧉ 对比 · 提交变更 · ⚗ 分析 ▾ · ⤓ 导出 ▾ · ⟳ · 复制
-                        // （网格 / 文本 / 记录视图切换已迁到左缘竖条，不在顶部工具栏）
-                        .children(controls.filter)
-                        .children(controls.value_sidebar)
-                        .children(controls.compare)
-                        .children(controls.commit)
-                        .children(controls.analysis)
-                        .children(controls.export)
-                        .children(controls.refresh)
-                        .children(controls.copy),
-                ),
-        )
+        // ⑥ 结果工具栏——已抽出来放到最顶部（render_toolbar 函数）
         // 有卡片：卡片替掉网格；否则画网格
         .children(card)
         .when(!has_card, |pane| {

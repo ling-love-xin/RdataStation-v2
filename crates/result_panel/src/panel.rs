@@ -944,26 +944,73 @@ impl ResultPanel {
                 .into_any_element()
         });
 
+        let controls = result_grid::ResultControls {
+            filter: Some(filter),
+            value_sidebar,
+            compare,
+            commit,
+            analysis,
+            copy,
+            export,
+            refresh,
+            more,
+            insert_row,
+            duplicate_row,
+            delete_row,
+            undo: Some(undo),
+            redo: Some(redo),
+        };
+        // 【DBeaver 对齐】工具栏横跨整个顶部（从主 pane 里抽出来）
+        // 解构 controls，取出工具栏需要的字段，剩余字段留给 result_grid::render
+        let result_grid::ResultControls {
+            filter,
+            value_sidebar,
+            compare,
+            commit,
+            analysis,
+            copy,
+            export,
+            refresh,
+            more,
+            insert_row,
+            duplicate_row,
+            delete_row,
+            undo,
+            redo,
+        } = controls;
+        let toolbar_el = result_grid::render_toolbar(
+            &toolbar,
+            filter,
+            value_sidebar,
+            compare,
+            commit,
+            analysis,
+            export,
+            refresh,
+            copy,
+            cx,
+        );
+
         let result_pane = result_grid::render(
             &self.grid,
             result_grid::ResultPane {
                 toolbar,
                 status: self.status.clone(),
                 controls: result_grid::ResultControls {
-                    filter: Some(filter),
-                    value_sidebar,
-                    compare,
-                    commit,
-                    analysis,
-                    copy,
-                    export,
-                    refresh,
+                    filter: None,
+                    value_sidebar: None,
+                    compare: None,
+                    commit: None,
+                    analysis: None,
+                    copy: None,
+                    export: None,
+                    refresh: None,
                     more,
                     insert_row,
                     duplicate_row,
                     delete_row,
-                    undo: Some(undo),
-                    redo: Some(redo),
+                    undo,
+                    redo,
                 },
                 card,
                 tabs,
@@ -979,6 +1026,15 @@ impl ResultPanel {
         // 辅助栏让位（三栏会把网格挤没，辅助栏信息在双栏里都有）。竖条常驻网格左缘
         // （视图方式切换入口），右栏可独立开合；网格宽度不再被左侧栏挤占。
         if !self.compare_mode && self.show_value_sidebar {
+            let mut top = div()
+                .v_flex()
+                .w_full()
+                .h_full()
+                .min_h_0()
+                .debug_selector(|| "editor-result-top".to_string());
+            // 工具栏横跨整个顶部
+            top = top.child(toolbar_el);
+            // 下面是左右分栏
             let mut row = div()
                 .h_flex()
                 .items_stretch()
@@ -987,11 +1043,10 @@ impl ResultPanel {
                 .min_h_0()
                 .debug_selector(|| "editor-result-sidebars".to_string());
             row = row.child(self.render_vertical_bar(cx));
-            // 主 pane 包一层 flex_1：它自身 `w_full`，在 h_flex 里不包会跟侧栏抢宽
             row = row.child(div().flex_1().min_w_0().h_full().child(result_pane));
             row = row.child(self.render_right_sidebar(cx));
-            // 【DBeaver 对齐】删除右缘竖条——右栏 dock 自带标题栏 + 关闭按钮，不需要额外开合条
-            return row.into_any_element();
+            top = top.child(row);
+            return top.into_any_element();
         }
         // 无侧栏：竖条 + 主 pane
         if !self.compare_mode {
