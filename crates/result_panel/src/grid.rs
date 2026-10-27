@@ -3536,6 +3536,7 @@ pub fn status_action_placeholders() -> Vec<(IconName, &'static str)> {
     vec![
         (IconName::Save, "保存（待行级模型落地）"),
         (IconName::X, "取消（回滚待提交变更）"),
+        (IconName::Pencil, "编辑选中格（双击单元格进入编辑）"),
         (IconName::Plus, "新增行（暂未支持下发）"),
         (IconName::CopyPlus, "复制行（暂未支持下发）"),
         (IconName::Trash, "删除行（暂未支持下发）"),
@@ -3551,8 +3552,8 @@ pub fn status_action_placeholders() -> Vec<(IconName, &'static str)> {
 
 /// 占位动作钮分组下标的分界（写操作段 `0..FIRST_PAGER_ACTION`；翻页段 `FIRST_PAGER_ACTION..FIRST_SYSTEM_ACTION`；
 /// 系统段 `FIRST_SYSTEM_ACTION..`）。render 层据此在段间插发丝分隔线。
-const FIRST_PAGER_ACTION: usize = 7;
-const FIRST_SYSTEM_ACTION: usize = 10;
+const FIRST_PAGER_ACTION: usize = 8;
+const FIRST_SYSTEM_ACTION: usize = 11;
 
 /// 结果工具栏右段的动作控件（由面板构造：它知道点击该干什么）
 ///
@@ -3886,27 +3887,28 @@ pub fn render(
                     .bg(border)
                     .into_any_element()
             };
-            // 写操作段：保存 · 取消 · 新增行 · 复制行 · 删除行 · 撤销 · 重做。
+            // 写操作段：保存 · 取消 · 编辑 · 新增行 · 复制行 · 删除行 · 撤销 · 重做。
             // 保存 / 取消复用工具栏的提交 / 回滚对（状态栏不重复挂载），槽位保留禁用占位；
-            // 新增 / 复制 / 删除 / 撤销 / 重做由面板注入真钮，未注入（只读结果集等）回退占位。
+            // 编辑 / 新增 / 复制 / 删除 / 撤销 / 重做由面板注入真钮，未注入（只读结果集等）回退占位。
             let write_ops = vec![
                 placeholder_btn(placeholders[0]),
                 placeholder_btn(placeholders[1]),
+                placeholder_btn(placeholders[2]), // 编辑（Pencil，禁用占位）
                 controls
                     .insert_row
-                    .unwrap_or_else(|| placeholder_btn(placeholders[2])),
-                controls
-                    .duplicate_row
                     .unwrap_or_else(|| placeholder_btn(placeholders[3])),
                 controls
-                    .delete_row
+                    .duplicate_row
                     .unwrap_or_else(|| placeholder_btn(placeholders[4])),
                 controls
-                    .undo
+                    .delete_row
                     .unwrap_or_else(|| placeholder_btn(placeholders[5])),
                 controls
-                    .redo
+                    .undo
                     .unwrap_or_else(|| placeholder_btn(placeholders[6])),
+                controls
+                    .redo
+                    .unwrap_or_else(|| placeholder_btn(placeholders[7])),
             ];
             // 翻页段占位：首页 · 上页（下页 = 现有取下一段真钮；末页占位）
             let pager_before = [
@@ -5083,9 +5085,9 @@ mod tests {
     #[test]
     fn status_action_placeholders_follow_dbeaver_group_order() {
         let slots = status_action_placeholders();
-        assert_eq!(slots.len(), 12, "占位钮共 12 个（下页真钮另由 controls.more 注入）");
+        assert_eq!(slots.len(), 13, "占位钮共 13 个（下页真钮另由 controls.more 注入）");
 
-        // 写操作段：保存 · 取消 · 新增行 · 复制行 · 删除行 · 撤销 · 重做
+        // 写操作段：保存 · 取消 · 编辑 · 新增行 · 复制行 · 删除行 · 撤销 · 重做
         let write: Vec<IconName> = slots[0..FIRST_PAGER_ACTION]
             .iter()
             .map(|(icon, _)| *icon)
@@ -5095,6 +5097,7 @@ mod tests {
             vec![
                 IconName::Save,
                 IconName::X,
+                IconName::Pencil,
                 IconName::Plus,
                 IconName::CopyPlus,
                 IconName::Trash,
