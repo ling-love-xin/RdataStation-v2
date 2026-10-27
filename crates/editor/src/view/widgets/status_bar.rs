@@ -169,6 +169,11 @@ pub fn right_badges(inputs: &StatusInputs) -> Vec<StatusBadge> {
         icon: None,
         text: format!("Ln {}, Col {}", inputs.line, inputs.column),
     });
+    // 全文偏移（VSCode `Ch N`：光标距文档开头的字符数，1 基；数据微标，纯文字）
+    badges.push(StatusBadge {
+        icon: None,
+        text: format!("Ch {}", inputs.cursor_offset),
+    });
     // 选区：人读中文徽标（2026-10-27 友好化：原 `Ch N` · `Row N` 太技术化）。
     // 跨多行 = 「已选 N 行 · M 字符」，单行 = 「已选 M 字符」；无选区不摆
     if inputs.selected_chars > 0 {
@@ -618,6 +623,11 @@ mod tests {
         assert!(
             text.right.iter().any(|b| b.contains("Ln 12, Col 4")),
             "{:?}",
+            text.right
+        );
+        assert!(
+            text.right.iter().any(|b| b.contains("Ch 42")),
+            "光标全文偏移（VSCode Ch 微标）应显示真实值：{:?}",
             text.right
         );
         assert!(
