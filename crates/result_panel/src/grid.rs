@@ -2734,7 +2734,14 @@ impl TableDelegate for ResultGridDelegate {
                 .child(SharedString::from(sym))
         });
 
-        // 【B1】列名主行：badge + 列名(flex_1) + 筛选▽
+        // 【B1】列名主行：badge + 列名(flex_1) + 筛选▽ + 排序↑/↓
+        let sort_indicator = self.sort_state().and_then(|(sort_col, descending)| {
+            if sort_col == column {
+                Some(if descending { "↓" } else { "↑" })
+            } else {
+                None
+            }
+        });
         let main_row = div()
             .h_flex()
             .items_center()
@@ -2750,6 +2757,11 @@ impl TableDelegate for ResultGridDelegate {
                     .truncate()
                     .child(SharedString::from(name.clone())),
             )
+            .when_some(sort_indicator, |row, arrow| {
+                row.child(
+                    div().text_xs().text_color(muted).child(SharedString::from(arrow)),
+                )
+            })
             .when(self.has_column_filter(column), |row| {
                 row.child(
                     div().text_xs().text_color(muted).child(SharedString::from("▽")),
