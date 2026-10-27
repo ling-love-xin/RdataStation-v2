@@ -242,6 +242,65 @@ fn mark_functions(sql: &str, spans: &mut [HighlightSpan]) {
     }
 }
 
+/// 语法上下文类别（供编辑器编辑行为判定：字符串 / 注释内不自动配对等）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextKind {
+    Code,
+    String,
+    Comment,
+}
+
+/// 判定 `offset`（字节）处的语法上下文——与高亮共用同一 `Tokenizer` 与字节
+/// 区间换算，保证「高亮理解」与「编辑上下文理解」同源，不引入第二套语法
+/// （tree-sitter grammar 的方言差异）。
+///
+/// 边界口径（对齐 tree-sitter 语法上下文，`not_in([String, Comment])` 消费方
+/// 语义）：行注释 `start..=end` 都算 Comment（`-- abc` 末尾未换行时插入仍
+/// 延续注释）；块注释 / 字符串 `start..end` 内算（含定界符本身），闭合后
+/// （`offset == end`）算 Code。词法失败（未闭合字符串等）整体算 Code，
+/// **不猜内容**（未闭合态是临时的，补上闭合符后立即正确）。
+pub fn context_kind_at(sql: &str, offset: usize) -> ContextKind {
+    let offset = sql.floor_char_boundary(offset.min(sql.len()));
+    let Ok(tokens) = Tokenizer::with_comments(sql).tokenize() else {
+        return ContextKind::Code;
+    };
+    let starts = byte_offsets(sql, &tokens);
+    for (index, token) in tokens.iter().enumerate() {
+        let Some((start, end)) = raw_range(sql, &starts, index) else {
+            continue;
+        };
+        if offset < start {
+            // token 位置单调不减：后面的区间都在 offset 之后，无需继续
+            break;
+        }
+        if offset > end {
+            continue;
+        }
+        return match token.token_type {
+            TokenType::LineComment => ContextKind::Comment,
+            TokenType::BlockComment => {
+                if offset < end {
+                    ContextKind::Comment
+                } else {
+                    ContextKind::Code
+                }
+            }
+            TokenType::String
+            | TokenType::NationalString
+            | TokenType::BitString
+            | TokenType::HexString => {
+                if offset < end {
+                    ContextKind::String
+                } else {
+                    ContextKind::Code
+                }
+            }
+            _ => ContextKind::Code,
+        };
+    }
+    ContextKind::Code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,6 +451,29 @@ mod tests {
                 assert!(span.start < span.end);
             }
         }
+    }
+
+    #[test]
+    fn context_kind_distinguishes_string_comment_code() {
+        use ContextKind::{Code, Comment, String as S};
+        // "SELECT 'abc' -- 注释\nAND 1"
+        let sql = "SELECT 'abc' -- 注释\nAND 1";
+        assert_eq!(context_kind_at(sql, 0), Code);   // SELECT 关键字区
+        assert_eq!(context_kind_at(sql, 8), S);      // 字符串内 'a'
+        assert_eq!(context_kind_at(sql, 11), S);     // 闭合引号字符上
+        assert_eq!(context_kind_at(sql, 12), Code);  // 字符串闭合后
+        assert_eq!(context_kind_at(sql, 16), Comment); // 行注释内（中文按 3 字节，注=16..19）
+        assert_eq!(context_kind_at(sql, 19), Comment); // 行注释内（释=19..22）
+        assert_eq!(context_kind_at(sql, 22), Comment); // 行注释末尾（\n 前，未换行仍算注释）
+        assert_eq!(context_kind_at(sql, 23), Code);    // 换行后代码（AND）
+        // 块注释：闭合前 Comment、闭合后 Code
+        let sql2 = "SELECT /* x */ 1";
+        assert_eq!(context_kind_at(sql2, 9), Comment);
+        assert_eq!(context_kind_at(sql2, 14), Code);
+        // 词法失败（未闭合字符串）：不猜内容，整体 Code
+        assert_eq!(context_kind_at("SELECT 'abc", 11), Code);
+        // 多字节安全：offset 落在中文字符中间会被 floor 到边界
+        assert_eq!(context_kind_at("SELECT '中文'", 12), S);
     }
 
     #[test]

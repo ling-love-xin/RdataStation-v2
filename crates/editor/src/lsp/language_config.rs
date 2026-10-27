@@ -16,17 +16,19 @@
 //! ## 方案与取舍
 //!
 //! - **不替换全局 LanguageProvider**：`ComponentLanguages` 是 gpui-component 内部
-//!   私有实现，替换会破坏 text / json / python 的既有默认；因此 SQL 的
-//!   `not_in` 保持不命中——字符串 / 注释内输入引号也会配对（与默认 fallback
-//!   行为一致，接受为已知取舍，记录在 editor-backlog）。
+//!   私有实现，替换会破坏 text / json / python 的既有默认。SQL 的 `not_in`
+//!   在 **A 方案落地后命中**：vendor patch 给 gpui-component 加了
+//!   `register_syntax_context_provider` 注册点（优先于 grammar 生效），SQL 挂
+//!   自研词法判定（`lsp::sql_syntax_context::SqlSyntaxContext`，与高亮同源），
+//!   字符串 / 注释内输入引号不再配对——首版「不命中」取舍已解除。
 //! - **追加注册**：`set_language_config` 是**叠加**的（`Languages::configs` 按
 //!   注册顺序倒序查找），不覆盖 provider，安全。SQL 用方言无关的通用编辑规则
 //!   （SQL 括号语义各库一致：`()` 函数 / 分组，`[]` 数组 / 标识符，`{}` 仅少数
 //!   方言），脚本语言保持 ComponentLanguages 默认（text / json / python 已有）。
-//! - 若未来给 SQL 装 tree-sitter grammar，`not_in` 自动生效，本模块无需改动。
 
 use gpui_kit::component::input::{
-    AutoClosingPair, BracketPair, SyntaxContext, set_language_config,
+    AutoClosingPair, BracketPair, SyntaxContext, register_syntax_context_provider,
+    set_language_config,
 };
 // `LanguageConfig` 未从 `component::input` 重导出（只导出 AutoClosingPair / BracketPair
 // / IndentationRules），走 gpui_kit::base（= gpui-base）全路径。
@@ -67,6 +69,18 @@ pub fn sql_language_config() -> LanguageConfig {
 /// 与主编辑器共用规则，无需单独注册。
 pub fn install(cx: &mut App) {
     set_language_config("sql", sql_language_config(), cx);
+    // A 方案：SQL 语法上下文挂自研 provider（vendor patch 注册点）。
+    // 工厂每次现造（provider 无状态，内核会缓存）；优先于 tree-sitter grammar
+    // 生效——字符串 / 注释判定与高亮同源（同一 sqlglot Tokenizer）。
+    register_syntax_context_provider(
+        "sql",
+        std::sync::Arc::new(|| {
+            Some(
+                std::rc::Rc::new(crate::lsp::sql_syntax_context::SqlSyntaxContext)
+                    as std::rc::Rc<dyn gpui_kit::base::input::SyntaxContextProvider>,
+            )
+        }),
+    );
 }
 
 #[cfg(test)]

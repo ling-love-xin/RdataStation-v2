@@ -43,14 +43,22 @@ pub struct SignatureView {
 /// 当前参数位（嵌套括号内的逗号不计数）；名字查 [`builtin_signatures`]（不区分
 /// 大小写）。查不到 / 不是调用 → `None`（不编造签名）。
 ///
-/// 限制（首版）：字符串字面量里的 `(` 不区分（`SELECT 'a(b'` 会误判为调用），
-/// 触发是手动 `Ctrl+Shift+Space`，误判成本低，去留二期按实测再定。
+/// 字符串 / 注释排除（A 方案，2026-10-27）：找到的调用括号如果落在字符串或
+/// 注释内（`engine::sql::highlight::context_kind_at` 判定，与高亮同一词法器），
+/// 不识别为调用——修复首版「`SELECT 'substr('` 误弹」限制。判定括号而非光标，
+/// 覆盖「光标在字符串闭合引号后、最近 `(` 在字符串内」的位置。
 pub fn current_call(sql: &str, offset: usize) -> Option<SignatureView> {
+    use engine::sql::ContextKind;
+
     let offset = sql.floor_char_boundary(offset.min(sql.len()));
     let head = &sql[..offset];
 
     // 1) 从光标往前找最近 `(`（函数调用括号）
     let open_at = head.rfind('(')?;
+    // 1b) 调用括号若在字符串 / 注释内，不是调用（词法判定与高亮同源）
+    if engine::sql::context_kind_at(sql, open_at) != ContextKind::Code {
+        return None;
+    }
     // 2) 括号前（跳过空白）必须是标识符 → 函数名（`substr (` 带空格也认）
     let before = &head[..open_at];
     let name_start = before
@@ -252,7 +260,10 @@ mod tests {
         // 光标在开头 / 空文本：不触发
         assert!(auto_call("", 0).is_none());
         assert!(auto_call("SELECT 1", 8).is_none(), "前导字符不是 ( 不触发");
-        // 字符串字面量里的 `(` 仍会误判（current_call 首版已知限制，手动+自动共用）
-        assert!(auto_call("SELECT 'substr('", 15).is_some(), "已知限制：字符串内 ( 会误判为调用");
+        // 字符串 / 注释内的调用括号已排除（A 方案：词法判定，修复首版误弹）
+        // "SELECT 'substr('" —— 光标 16 在闭合引号后，最近 ( 在字符串内
+        assert!(current_call("SELECT 'substr('", 16).is_none(), "字符串内的 ( 不识别");
+        // "SELECT -- substr(\n1" —— 最近 ( 在行注释内（光标 18 在 1 后）
+        assert!(current_call("SELECT -- substr(\n1", 18).is_none(), "注释内的 ( 不识别");
     }
 }

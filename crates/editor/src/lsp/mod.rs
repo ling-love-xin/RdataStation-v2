@@ -29,6 +29,7 @@ pub mod language_config;
 pub mod sql_code_action;
 pub mod sql_definition;
 pub mod sql_hover;
+pub mod sql_syntax_context;
 
 pub use client::{
     CallError, LspClient, LspEvent, LspHandle, LspNotification, LspReader, LspWriter, ProcessIo,

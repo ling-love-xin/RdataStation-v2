@@ -47,7 +47,7 @@ pub use functions::{
     ParamInfo,
 };
 pub use function_manual::{search_manual, ManualCategory, ManualEntry, MANUAL};
-pub use highlight::{highlight_spans, HighlightSpan, TokenClass};
+pub use highlight::{context_kind_at, highlight_spans, ContextKind, HighlightSpan, TokenClass};
 pub use hover::{hover_at, HoverInfo, HoverKind};
 pub use jump::{jump_at, JumpKind, JumpTarget};
 pub use parser::ProjectionSource;

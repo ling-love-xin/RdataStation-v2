@@ -120,13 +120,27 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 
 已知取舍（记录，不硬做）：
 
-- **SQL 的 `not_in([String, Comment])` 不生效**：syntax context 只来自全局 `LanguageProvider`
-  （gpui-component 的 `ComponentLanguages`，查 tree-sitter grammar registry）；本仓 SQL 高亮走
-  **自研词法**（`engine::sql::highlight`）不注册 grammar → `context_at` 恒 `Code` → 字符串/注释
-  内输入引号/括号也会自动闭合。**不替换全局 provider**（会破坏 text/json/python 既有默认）；
-  未来给 SQL 装 tree-sitter grammar 后自动生效，`lsp/language_config.rs` 无需改动。
+- **SQL 的 `not_in([String, Comment])` 已生效（A 方案，2026-10-27）**：syntax context 原只来自
+  全局 `LanguageProvider`（gpui-component 查 tree-sitter grammar registry），本仓 SQL 走自研
+  词法不注册 grammar → `context_at` 恒 `Code` → 字符串/注释内引号仍配对。**A 方案**（见下节）
+  以 vendor patch 注册点 + 自研 provider 解除此取舍，`lsp/language_config.rs` 无需装 grammar。
 - `view/mod.rs` 的 `indent_dialog` / `invisible_dialog` 模块注册属并行线（缩进/不可见字符），
   未随本线提交。
+
+### A 方案：SQL 语法上下文自研封装（2026-10-27 落地，commit 见本线提交）
+
+- **动机**：不装 tree-sitter-sql（避免「内核 grammar 理解 vs 自研 sqlglot 理解」两套偏差），
+  字符串/注释判定**收口到自研词法器**，与高亮同源。
+- **落地**：① vendor patch `gpui-component/input/syntax_context.rs` 新增
+  `register_syntax_context_provider`（自定义 provider **优先于** tree-sitter grammar；
+  `input/mod.rs` re-export，diff 备份 `tools/_archive/` 或 `.rds/tmp/patch-081/`）；② engine
+  新增 `context_kind_at`（与 `highlight_spans` 共用同一 `Tokenizer`：行注释 `start..=end` 算
+  Comment、块注释/字符串闭合后 Code、词法失败不猜 → Code）；③ editor 新建
+  `lsp/sql_syntax_context.rs::SqlSyntaxContext` 实现内核 `SyntaxContextProvider`，
+  `language_config::install` 注册 `"sql"`。
+- **附带修复**：签名帮助 `current_call` 排除字符串/注释内的调用括号（判定 `open_at` 处上下文
+  而非光标处，`SELECT 'substr('` 不再误弹）。
+- **已知边界**：未闭合字符串（词法失败）整体 Code——签名帮助可能临时误弹，补上闭合引号即正确。
 
 ## 九、未决项（不编造，记录现状）
 

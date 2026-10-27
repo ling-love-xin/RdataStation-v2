@@ -17,6 +17,9 @@ mod syntax_context;
 
 pub(crate) use clear_button::*;
 pub use content_type::*;
+// RdataStation A 方案：自定义语法上下文提供者注册点（自研 SQL 词法判定，
+// 优先于 tree-sitter grammar 生效）——从 `syntax_context` 私有模块 re-export
+pub use syntax_context::{register_syntax_context_provider, SyntaxContextFactory};
 #[cfg(not(feature = "tree-sitter"))]
 pub struct Tree;
 /// The shared editing engine. Internal to the framework: components reach it
