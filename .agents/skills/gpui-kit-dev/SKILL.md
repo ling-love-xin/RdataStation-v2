@@ -60,7 +60,29 @@ use gpui_kit::prelude::FluentBuilder as _;
 | 列表 / 树行 | `list::{List, ListState, ListDelegate}`；虚拟化用 `v_virtual_list` | 手搓 hover/选中态行 |
 | 禁用态 | `gpui_kit::base::Disableable as _` 的 `.disabled(bool)`（Input 是本体方法） | 自绘控件漏掉 disabled（实例：对话框三个自绘开关未接 `form_disabled`） |
 
+### 容器层组件（0.7.0 新增 / 0.8.0 已有，同样禁止手搓）
+
+具体控件用上面的表；**容器层组件**（面板头按钮行、空态、徽标、分隔线等）也必须用标准组件，手搓会导致各面板按钮高度/间距/空态布局不一致，且丢 a11y 语义与上游升级跟进。
+
+| 需求 | 用 | 不要 |
+| --- | --- | --- |
+| 面板头 / 工具条命令按钮行 | `toolbar::{Toolbar, ToolbarGroup}`（`Toolbar::new(id).children([...])`，自带 roving 方向键焦点 + toolbar a11y 语义 + 统一 size 托管；背景/边框/高度外层自己画；标题/徽标/弹簧走 `.content()` 槽） | `div().h_flex().gap_1().child(Button)` 手搓按钮行 |
+| 空态（无数据 / 无连接 / 空搜索结果） | `empty::Empty::new().header(EmptyHeader::new().media(EmptyMedia::new()).title("…").description("…"))`（自带居中布局 + 虚线框 + 图标变体；主按钮走 `.content()` 槽） | 手搓 `div().v_flex().items_center().justify_center().child(图标块).child(标题).child(说明).child(按钮)` |
+| 计数 / 状态点 / 图标徽标 | `badge::Badge::new().dot()` / `.count(n).max(n)` / `.icon(IconName::…).color(hsla)` | 手搓 `div().rounded_full().bg(color).child(计数)` |
+| 工具栏 / 菜单分组间视觉分隔 | `separator::Separator`（菜单里 `.separator()` 已有先例；工具栏垂直分隔 `Separator::vertical()`） | 手搓 `div().w_px().bg(…)` 或 `gap_1` 无分隔 |
+| 悬停触发明细卡片 | `hover_card::HoverCard::new(id).open_delay(Duration).trigger(el).content(|_,_,cx| …)` | 用 `Popover` 做 hover 触发（Popover 是点击触发） |
+| 通知 / 反馈消息 | `notification::{Notification, NotificationList, NotificationType}`（`Notification::info/success/warning/error(msg)`） | 手搓 toast div |
+| 窗口级底部状态栏 | `status_bar::StatusBar::new().left(…).right(…)`（三区域 left/center/right；导航面板底部小状态行是面板内摘要，不用这个） | 手篦通栏底部 div |
+| 不确定加载中转圈 | `spinner::Spinner` / `skeleton::Skeleton`（骨架屏） | 手篦转圈 div / 文字"加载中…" |
+| 可拖拽分栏面板组 | `resizable::ResizablePanelGroup::horizontal()/vertical()` + `ResizeHandle` | 手篦拖拽分栏 |
+| 命令面板（搜索框 + 过滤命令列表 + 快捷键提示） | `command::CommandPalette` | 自实现搜索框 + 过滤列表 |
+
+> **树行例外**：导航树这类复合行模型（staged 删除线 / 行内重命名 Input / 分段高亮 / 统计元素 / 呼吸动画 / 增量 diff-merge）超出 `tree::Tree`（gpui-base TreeState `set_items` 整棵替换、不支持增量）的设计边界，**继续用 `v_virtual_list` + 自绘行模型**，但行内控件（按钮/输入/徽标/折叠箭头）仍须用标准组件，颜色/高度/缩进走 `workbench_shell::tree` 共享原语与 `ui.rs` 常量。
+> **折叠分组例外**：`accordion::Accordion` / `collapsible::Collapsible` 是面板级折叠（手风琴内容块），不是树节点展开/收起子树；树行折叠用 `tree::disclosure_slot()` + `tree::disclosure_icon()` 共享原语。
+
 > 已知反例（技术债，不要照抄）：`panels/` 的 `tool_btn` / 树展开字符 / 文本按钮。反向结论（“库没有 Tabs/Switch/List”）已作废——`connection_dialog` 已在 2026-09-20 完成 TabBar / Switch / **List** 迁移（侧栏两处列表 = `list::{List, ListItem}` + 委托，行尾与添加动作 = `Button::ghost()`）。
+>
+> **容器层反例（2026-10-28 审计登记）**：`crates/database/src/nav_view/chrome.rs` 面板头手篦 `div().h_flex().gap_1().child(Button)`（应迁 `toolbar::Toolbar`）；`render_nav_empty_state` 手篦居中图标块（应迁 `empty::Empty`）；连接状态点 / 待删除计数 / 预热计数手篦 div 徽标（应迁 `badge::Badge`，全仓首次引入）。迁移批次 M1（Toolbar+Separator）/ M2（Empty）/ M3（Badge）。
 >
 > 补充事实（2026-09-19 查证 0.6.1、2026-10-02 复核 0.7.0、**2026-10-11 复测 0.7.1**）：**0.6.1** 的 `PopupMenuItem` / `DropdownButton` **没有 shortcut 槽位**（菜单项显示不了 `Ctrl+Shift+P`）；**0.7.0 起** `PopupMenuItem::Item` 带 `action` 字段，`PopupMenu::render_key_binding` 经 `Kbd::binding_for_action_in` / `global_binding_for_action` **自动渲染快捷键**（实测 0.7.1 `popup_menu.rs:1119/:1143`，挂 action + 注册 key binding 即可显示，见 `project-dev-plan` C2 解阻）。`PopupMenuItem::ready_for_use()` 之类探针不存在，`PopupMenu` 不暴露菜单项（只有 `is_empty()`）。
 
