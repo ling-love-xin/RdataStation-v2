@@ -117,12 +117,18 @@ pub struct ResultPanel {
     /// `table`（强制表档；B 批接通后直灌常驻表，A 批未接通时按降级档处理）。
     #[serde(default = "default_result_fact_storage")]
     pub fact_storage: FactStoragePref,
+    /// 列头是否**直接显示**字段注释（默认 `false`：注释只在 hover tooltip 里）。
+    /// 开启后列名下方第二行小字显示注释（截短 + ellipsis；注释为空不占位）。
+    /// 面板工具栏另有 B1 临时开关，覆盖此全局偏好。
+    #[serde(default)]
+    pub show_column_comments: bool,
 }
 
 impl Default for ResultPanel {
     fn default() -> Self {
         Self {
             fact_storage: default_result_fact_storage(),
+            show_column_comments: false,
         }
     }
 }

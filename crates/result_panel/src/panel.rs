@@ -217,6 +217,9 @@ pub struct ResultPanel {
     renaming: Option<usize>,
     /// 【C1】重命名输入框实体（懒创建：第一次进重命名态时建；重命名态关闭后保留实体复用）
     renaming_input: Option<Entity<InputState>>,
+    /// 【B1】列头直接显示注释的面板级临时开关（覆盖全局偏好 `result_panel.show_column_comments`；
+    /// 默认 false——全局偏好开启时由 host 在 sync 时同步过来）。
+    show_column_comments: bool,
 }
 
 impl ResultPanel {
@@ -318,6 +321,7 @@ impl ResultPanel {
             pushdown: false,
             renaming: None,
             renaming_input: None,
+            show_column_comments: false,
         }
     }
 
@@ -598,6 +602,16 @@ impl ResultPanel {
                     .on_click(move |checked, _window, _app| {
                         let open = *checked;
                         queue.push(ResultRequest::SetPushdown { open });
+                    })
+            })
+            .child({
+                let queue = self.queue.clone();
+                Switch::new("editor-result-show-comments")
+                    .checked(self.show_column_comments)
+                    .label("注释")
+                    .on_click(move |checked, _window, _app| {
+                        let open = *checked;
+                        queue.push(ResultRequest::SetShowColumnComments { open });
                     })
             })
             .into_any_element();
@@ -1203,6 +1217,17 @@ impl ResultPanel {
     pub fn cancel_rename(&mut self, cx: &mut Context<Self>) {
         self.renaming = None;
         cx.notify();
+    }
+
+    /// 【B1】切换列头直接显示注释（面板级临时开关；host 也可从全局偏好同步过来）。
+    pub fn set_show_column_comments(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.show_column_comments = on;
+        cx.notify();
+    }
+
+    /// 【B1】当前是否直接显示注释（delegate 读这个决定列头画不画第二行注释）。
+    pub fn show_column_comments(&self) -> bool {
+        self.show_column_comments
     }
 
     /// 【侧栏】最近选中格位置（`TableEvent::SelectCell` 事件路径写入；选行 / 清选 =

@@ -363,6 +363,41 @@ Grid / Text / Record 多视图呈现：`ResultControls` / `ResultPane` 已是呈
 分组维度、且不想下发 SQL 的只读结果）。届时先做 polars vs DuckDB（已有）实测对比——大概率
 DuckDB 已够用；polars 只在需要 Rust 原生 pandas 式 API 时加分。
 
+### 8.17 列头类型徽标 + 注释直接显示（A1/B1/B2）
+
+用户拍板：列头类型从「列名右侧 muted 纯文字」改成「色块短码 Tag 前置」；字段注释从「只在
+hover tooltip」改成「列名下方第二行小字可开关」。
+
+**类型族分类（`grid.rs::type_kind_short` / `type_kind_tag`）**：
+
+| 类型族 | 覆盖 ColumnKind | 短码 | Tag 变体 |
+| --- | --- | --- | --- |
+| 数字 | Integer / Float / Decimal | INT / FLT / DEC | Primary（蓝） |
+| 文本 | Text / Uuid / Json | TXT / UUID / JSON | Success（绿） |
+| 时间 | Timestamp / Date / Time | TS / DATE / TIME | Info（紫） |
+| 布尔 | Boolean | BOOL | Warning（橙） |
+| 二进制 | Binary | BIN | Secondary（灰） |
+| 未知 | Unknown | — | 不画 badge |
+
+**A1 色块短码 Tag**（本轮已落地）：列头顺序 = `[badge] [列名(flex_1, truncate)] [筛选▽]`。
+用 gpui-kit `Tag::new().with_variant(..).small().child(short)`——主题自动处理明暗底色/文字色，
+零裸色值。
+
+**A2 纯图标版**（待用户在原型里选）：不画底色文字，只画一个 8px 方块按族着色。原型
+工具栏有 `A1 / A2` 切换按钮可并排看效果。
+
+**B1 面板级临时开关**：工具栏「注释」Switch（跟「下发源库」并排），`ResultRequest::
+SetShowColumnComments { open }` 经队列回 host 调 `panel.set_show_column_comments(open)`。
+开关开启时列头变两行：第一行 badge+列名+筛选▽，第二行 `muted text_xs` 注释小字（截短
+ellipsis，hover tooltip 看全——tooltip 已含注释分块，不重复造）。注释为空时不占位（列头
+回到单行高）。
+
+**B2 全局偏好**：`settings` 注册 `result_panel.show_column_comments`（Bool，默认 false）。
+面板启动时 host 从 `cx.try_global::<Settings>()` 读偏好同步给面板；用户在面板工具栏切换
+后是面板级临时态，不回写全局——全局只控「默认开不开」。
+
+**边界**：转置视图 / 行号槽不画类型 badge 也不画注释；列宽拖拽 / 冻结 / 隐藏不受影响。
+
 **既定路线**：分组 / 统计用纯函数补齐（可测、无新依赖）；大表分析继续走 DuckDB。
 
 ### 8.9 DBeaver 四区落地（2026-10-24，提交 817c4621）

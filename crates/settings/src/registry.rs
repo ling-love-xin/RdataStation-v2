@@ -150,6 +150,8 @@ pub enum Slot {
     /// 结果集事实档载体偏好（auto / memory / table；分流纯函数在 `shared::fact`，
     /// 触发物化路径 B 批接通消费）。
     ResultPanelFactStorage,
+    /// 列头是否直接显示字段注释（默认 false；面板工具栏另有 B1 临时开关）。
+    ResultPanelShowColumnComments,
 }
 
 /// key → 槽位（登记项都必须有槽位；由契约测试保证）。
@@ -193,6 +195,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "insight.work_set_limit" => Slot::InsightWorkSetLimit,
         "insight.status_usage" => Slot::InsightStatusUsage,
         "result_panel.fact_storage" => Slot::ResultPanelFactStorage,
+        "result_panel.show_column_comments" => Slot::ResultPanelShowColumnComments,
         _ => return None,
     })
 }
@@ -239,6 +242,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::InsightMemoryLimitMb | Slot::InsightWorkSetLimit => KindTag::Number,
         Slot::InsightFullScanConfirm | Slot::InsightStatusUsage => KindTag::Bool,
         Slot::ResultPanelFactStorage => KindTag::Enum,
+        Slot::ResultPanelShowColumnComments => KindTag::Bool,
     }
 }
 
@@ -943,6 +947,20 @@ pub const REGISTRY: &[SettingSpec] = &[
         effect: SettingEffect::NextUse,
         entry: SettingEntry::Page,
         consumer: "crates/shared/src/fact.rs::storage_choice / dual_estimate（分流纯函数）；B 批由 workbench 装配层在触发物化路径读取本偏好并映射到 shared::StoragePref",
+        composite: false,
+    },
+    SettingSpec {
+        key: "result_panel.show_column_comments",
+        section: "result_panel",
+        section_label: "结果集面板",
+        label: "列头直接显示注释",
+        hint: "开启后列名下方第二行小字显示字段注释（截短 + 悬停看全）；关闭时注释只在列头悬停 tooltip 里。面板工具栏另有临时开关可覆盖此偏好",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "false",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/result_panel/src/grid.rs::render_th（列头第二行注释小字）；面板工具栏 B1 临时开关在 sync 时覆盖",
         composite: false,
     },
 ];

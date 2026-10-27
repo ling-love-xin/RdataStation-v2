@@ -101,6 +101,8 @@ pub enum ResultRequest {
     CommitRename,
     /// 【C1】取消重命名（不发请求，面板退出 renaming 态）
     CancelRename,
+    /// 【B1】面板级临时开关：列头直接显示注释（覆盖全局偏好）
+    SetShowColumnComments { open: bool },
 }
 
 /// 结果集呈现方式（DBeaver Data Editor 的显示方式：网格 / 文本）

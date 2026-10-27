@@ -51,6 +51,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableState};
+use gpui_kit::component::tag::{Tag, TagVariant};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -593,6 +594,9 @@ pub struct ResultGridDelegate {
     /// 只影响表头 tooltip（来源表 / 来源列 / 注释 / 类型 / 可空 / 默认值）；没报时与今天完全一致。
     /// 由面板在 `set_data` **之后**同一次同步里给（见 [`ResultGridDelegate::set_column_annotations`]）。
     column_annotations: Vec<Option<ColumnAnnotation>>,
+    /// 【B1】列头是否直接显示注释（列名下方第二行小字；默认 false——注释只在 hover tooltip 里）。
+    /// 由面板在切换「注释」开关时同步过来；开启后列头变高（两行：列名 + 注释小字）。
+    show_column_comments: bool,
     /// 空态文案（没有结果 / 执行失败都在这里说清楚）
     empty_text: String,
     /// 这份结果**还能不能取下一段**（面板从权威结果同步过来；`load_more` 据此决定要不要真的取）
@@ -743,6 +747,12 @@ impl ResultGridDelegate {
     /// 面板紧跟给新的一份；漏给 = 表头只画列名，不套旧注释。
     pub fn set_column_annotations(&mut self, annotations: Vec<Option<ColumnAnnotation>>) {
         self.column_annotations = annotations;
+    }
+
+    /// 【B1】面板切换「注释」开关时同步：列头是否直接显示注释（第二行小字）。
+    /// 不随 `set_data` 清掉——这是面板视图偏好，不是这份结果自己的元数据。
+    pub fn set_show_column_comments(&mut self, on: bool) {
+        self.show_column_comments = on;
     }
 
     /// 【P1-5】记下组件拖宽后报来的全部列宽（会话内记忆；不做落盘持久化，见 backlog）。
@@ -1476,6 +1486,37 @@ impl ResultGridDelegate {
             .get(self.data_column(col_ix - 1))
             .and_then(Option::as_ref)
             .map(|column| column.name.as_str())
+    }
+
+    /// 【A1】类型族 → 短码（列头 badge 内文；Unknown 不画 badge）
+    pub(crate) fn type_kind_short(kind: ColumnKind) -> Option<&'static str> {
+        match kind {
+            ColumnKind::Integer => Some("INT"),
+            ColumnKind::Float => Some("FLT"),
+            ColumnKind::Decimal => Some("DEC"),
+            ColumnKind::Boolean => Some("BOOL"),
+            ColumnKind::Text => Some("TXT"),
+            ColumnKind::Timestamp => Some("TS"),
+            ColumnKind::Date => Some("DATE"),
+            ColumnKind::Time => Some("TIME"),
+            ColumnKind::Uuid => Some("UUID"),
+            ColumnKind::Json => Some("JSON"),
+            ColumnKind::Binary => Some("BIN"),
+            ColumnKind::Unknown => None,
+        }
+    }
+
+    /// 【A1】类型族 → Tag 变体（数字=Primary 蓝 / 文本=Success 绿 / 时间=Info 紫 /
+    /// 布尔=Warning 橙 / 二进制=Secondary 灰；Unknown 不画 badge）
+    pub(crate) fn type_kind_tag(kind: ColumnKind) -> Option<TagVariant> {
+        match kind {
+            ColumnKind::Integer | ColumnKind::Float | ColumnKind::Decimal => Some(TagVariant::Primary),
+            ColumnKind::Text | ColumnKind::Uuid | ColumnKind::Json => Some(TagVariant::Success),
+            ColumnKind::Timestamp | ColumnKind::Date | ColumnKind::Time => Some(TagVariant::Info),
+            ColumnKind::Boolean => Some(TagVariant::Warning),
+            ColumnKind::Binary => Some(TagVariant::Secondary),
+            ColumnKind::Unknown => None,
+        }
     }
 
     // ---------- 【T2a-4】单元格编辑 ----------
@@ -2676,14 +2717,31 @@ impl TableDelegate for ResultGridDelegate {
         };
         let muted = cx.theme().colors.muted_foreground;
 
-        let head = div()
+        // 【A1】类型族 badge：从列名右侧 muted 纯文字改成 Tag 组件（色块 + 短码），
+        // 位置移到列名前（用户口径「徽标 + 列名」）。类型族未知不画 badge。
+        let kind = if Self::is_row_number(col_ix) || self.transposed {
+            ColumnKind::Unknown
+        } else {
+            self.column_kind(col_ix)
+        };
+        let type_badge = Self::type_kind_short(kind)
+            .zip(Self::type_kind_tag(kind))
+            .map(|(short, variant)| {
+                Tag::new()
+                    .with_variant(variant)
+                    .small()
+                    .child(SharedString::from(short))
+            });
+
+        // 【B1】列名主行：badge + 列名(flex_1) + 筛选▽
+        let main_row = div()
             .h_flex()
             .items_center()
             .gap_1()
             .size_full()
             .min_w_0()
             .truncate()
-            .debug_selector(move || format!("editor-result-th-{col_ix}"))
+            .when_some(type_badge, |row, badge| row.child(badge))
             .child(
                 div()
                     .flex_1()
@@ -2691,22 +2749,40 @@ impl TableDelegate for ResultGridDelegate {
                     .truncate()
                     .child(SharedString::from(name.clone())),
             )
-            .when(self.has_column_filter(column), |head| {
-                // 列级筛选生效：列名后加 muted 小标记（DBeaver 列头筛选指示的轻量版；
-                // 不用 emoji——`▽` 是几何字符，与排序箭头的 `▾/▴` 区分）
-                head.child(
+            .when(self.has_column_filter(column), |row| {
+                row.child(
                     div().text_xs().text_color(muted).child(SharedString::from("▽")),
                 )
-            })
-            .when_some(label.clone(), |head, label| {
-                head.child(
-                    div()
-                        .flex_none()
-                        .text_size(rems(ui::RESULT_HEADER_TYPE_FONT_SIZE))
-                        .text_color(muted)
-                        .child(SharedString::from(label)),
-                )
             });
+
+        // 【B1】注释第二行：开关开启 + 列有注释时画（muted 小字，截短；hover tooltip 看全）
+        let comment_line = if self.show_column_comments && !Self::is_row_number(col_ix) && !self.transposed {
+            self.column_annotations
+                .get(col_ix - 1)
+                .cloned()
+                .flatten()
+                .and_then(|a| a.comment)
+                .filter(|c| !c.trim().is_empty())
+                .map(|comment| {
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(SharedString::from(comment))
+                })
+        } else {
+            None
+        };
+
+        let head = div()
+            .v_flex()
+            .size_full()
+            .min_w_0()
+            .debug_selector(move || format!("editor-result-th-{col_ix}"))
+            .child(main_row)
+            .when_some(comment_line, |head, line| head.child(line));
         // 转置视图只画列名（类型是混合的，注释表头没有意义）；行号槽 / 空列名同理
         if self.transposed || Self::is_row_number(col_ix) || name.is_empty() {
             return head.into_any_element();

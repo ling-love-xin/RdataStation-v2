@@ -288,6 +288,9 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResultPanelFactStorage => SettingValue::Text(
             settings.result_panel.fact_storage.as_str().to_string(),
         ),
+        Slot::ResultPanelShowColumnComments => {
+            SettingValue::Bool(settings.result_panel.show_column_comments)
+        }
     })
 }
 
@@ -586,6 +589,17 @@ impl SettingsService {
                 }
                 persist(&cx.global::<Settings>().clone());
                 // NextUse：下次触发物化路径读取；渲染与文本导出不读本偏好，无需通知重绘。
+            }
+            Slot::ResultPanelShowColumnComments => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.show_column_comments = on;
+                }
+                persist(&cx.global::<Settings>().clone());
+                // Immediate：面板在下次 sync 时重读偏好并重绘列头（渲染路径读本偏好）。
             }
         }
         true

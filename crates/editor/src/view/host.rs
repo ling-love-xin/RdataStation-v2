@@ -589,6 +589,14 @@ impl EditorHostPanel {
         let result_panel = cx.new(|cx| {
             let mut panel = ResultPanel::new(window, cx, result_action_queue.clone());
             panel.set_grids(grid.clone(), Some(compare_grid.clone()));
+            // 【B2】全局偏好 `result_panel.show_column_comments` 启动时同步到面板（面板级临时开关
+            // 覆盖此默认值；用户在面板工具栏切换后不再回写全局——全局只控"默认开不开"）
+            if let Some(settings) = cx.try_global::<settings::model::Settings>() {
+                let on = settings.result_panel.show_column_comments;
+                if on {
+                    panel.set_show_column_comments(true, cx);
+                }
+            }
             panel
         });
         // Dock 化 §8.5（用户已确认「editor 宿主订阅自 drain」）：面板按钮 push 队列 →
@@ -6851,6 +6859,10 @@ impl EditorHostPanel {
             }
             ResultRequest::CancelRename => {
                 self.result_panel.update(cx, |p, cx| p.cancel_rename(cx));
+            }
+            // 【B1】列头直接显示注释（面板级临时开关）
+            ResultRequest::SetShowColumnComments { open } => {
+                self.result_panel.update(cx, |p, cx| p.set_show_column_comments(open, cx));
             }
         }
     }
