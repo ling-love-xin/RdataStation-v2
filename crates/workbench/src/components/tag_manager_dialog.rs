@@ -24,6 +24,7 @@ use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::{DialogButtonProps, DialogFooter};
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::sheet::Sheet;
 use gpui_kit::component::{ActiveTheme, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -313,7 +314,56 @@ fn confirm_cleanup(
     });
 }
 
-/// 打开「管理标签」覆盖层对话框。
+/// 单个标签删除确认（软删）。
+fn confirm_delete_tag(
+    window: &mut Window,
+    cx: &mut App,
+    shared: Shared,
+    rows: Rc<RefCell<Vec<TagRow>>>,
+    error: Rc<RefCell<Option<String>>>,
+    tag_id: &str,
+    tag_name: &str,
+    project: bool,
+) {
+    let root = shared.project_root();
+    let tag_id = tag_id.to_string();
+    let tag_name = tag_name.to_string();
+    window.open_alert_dialog(cx, move |alert, _window, _cx| {
+        let tag_id = tag_id.clone();
+        let tag_name = tag_name.clone();
+        let root = root.clone();
+        let rows = rows.clone();
+        let error = error.clone();
+        let shared = shared.clone();
+        alert
+            .confirm()
+            .title("删除标签")
+            .description(format!(
+                "确定删除标签「{tag_name}」？软删除：已打标的对象不受影响，同名标签可重新创建。"
+            ))
+            .button_props(
+                DialogButtonProps::default()
+                    .ok_text("删除")
+                    .ok_variant(ButtonVariant::Danger)
+                    .show_cancel(true),
+            )
+            .on_ok(move |_, _, app| {
+                match open_table(root.as_deref(), project).and_then(|s| s.delete_tag(&tag_id)) {
+                    Ok(()) => {
+                        *error.borrow_mut() = None;
+                        *rows.borrow_mut() = collect_rows(root.as_deref()).0;
+                    }
+                    Err(e) => {
+                        *error.borrow_mut() = Some(format!("删除标签失败：{e}"));
+                    }
+                }
+                shared.notify_host(app);
+                true
+            })
+    });
+}
+
+/// 打开「管理标签」覆盖层对话框（Sheet 侧边抽屉，2026-10-28 从 Dialog 迁移）。
 pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
     let root = shared.project_root();
     let (collected, _empty, err0) = collect_rows(root.as_deref());
@@ -322,8 +372,11 @@ pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Share
     let rows_build = rows.clone();
     let error_build = error.clone();
     let shared_build = shared.clone();
+    // 新建标签输入框
+    let new_input = cx.new(|cx| InputState::new(window, cx).placeholder("新标签名称"));
+    let new_input_build = new_input.clone();
 
-    window.open_dialog(cx, move |dialog, _window, cx| {
+    window.open_sheet(cx, move |sheet, _window, cx| {
         let theme = cx.theme();
         let list = rows_build.borrow();
         let err = error_build.borrow();
@@ -347,6 +400,50 @@ pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Share
                     .child(msg.clone()),
             );
         }
+
+        // 新建标签行
+        let new_name = new_input_build.read(cx).value().trim().to_string();
+        let new_empty = new_name.is_empty();
+        body = body.child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .child(div().flex_1().child(Input::new(&new_input_build)))
+                .child(
+                    Button::new("tag-mgr-create")
+                        .ghost()
+                        .small()
+                        .label("新建")
+                        .disabled(new_empty)
+                        .on_click({
+                            let rows = rows_build.clone();
+                            let error = error_build.clone();
+                            let shared = shared_build.clone();
+                            let new_input = new_input_build.clone();
+                            move |_, window, app| {
+                                let name = new_input.read(app).value().trim().to_string();
+                                if name.is_empty() {
+                                    return;
+                                }
+                                let root = shared.project_root();
+                                match tag::TagTable::open_global()
+                                    .and_then(|s| s.create_tag(&name, None, None))
+                                {
+                                    Ok(_) => {
+                                        *error.borrow_mut() = None;
+                                        *rows.borrow_mut() = collect_rows(root.as_deref()).0;
+                                        new_input.update(app, |s, cx| s.set_value("", window, cx));
+                                    }
+                                    Err(e) => {
+                                        *error.borrow_mut() = Some(format!("新建标签失败：{e}"));
+                                    }
+                                }
+                                shared.notify_host(app);
+                            }
+                        }),
+                ),
+        );
         if list.is_empty() {
             body = body.child(
                 div()
@@ -360,6 +457,8 @@ pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Share
                 let rname = r.name.clone();
                 let rcount = r.count;
                 let rproject = r.project;
+                let rid_del = rid.clone();
+                let rname_del = rname.clone();
 
                 body = body.child(
                     div()
@@ -414,6 +513,26 @@ pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Share
                                     );
                                 }
                             }),
+                        )
+                        .child(
+                            Button::new(ElementId::Name(SharedString::from(format!(
+                                "tag-mgr-delete-{rid_del}"
+                            ))))
+                            .ghost()
+                            .small()
+                            .label("删除")
+                            .danger()
+                            .on_click({
+                                let rows = rows_build.clone();
+                                let error = error_build.clone();
+                                let shared = shared_build.clone();
+                                let rid = rid_del.clone();
+                                let rname = rname_del.clone();
+                                let rproject = rproject;
+                                move |_, window, app| {
+                                    confirm_delete_tag(window, app, shared.clone(), rows.clone(), error.clone(), &rid, &rname, rproject);
+                                }
+                            }),
                         ),
                 );
             }
@@ -447,14 +566,9 @@ pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Share
                 ),
         );
 
-        dialog
+        sheet
             .title("管理标签")
+            .size(px(420.))
             .child(body)
-            .footer(DialogFooter::new().child(
-                Button::new("tag-mgr-close")
-                    .ghost()
-                    .label("关闭")
-                    .on_click(move |_, window, cx| window.close_dialog(cx)),
-            ))
     });
 }
