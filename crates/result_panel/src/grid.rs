@@ -3703,6 +3703,12 @@ pub fn new_table_state(
             // 就是行把手，两条并列各能点一半是纯粹的干扰。关掉后仍能选整行——
             // **再点一下已选中的格子**升级为整行（组件自己的口径，`row_selectable` 已开）
             .row_header(false)
+            // 【DBeaver 对齐】释放 gpui-kit table 组件全部能力：
+            .col_movable(true)           // 列序拖拽（拖拽列头改变列顺序）
+            .sortable(true)              // 列头排序（点击列头排序）
+            .col_selectable(true)        // 选中整列
+            .loop_selection(true)        // 键盘导航循环选择
+            .select_on_modifier_click(true) // Ctrl+点击多选
     })
 }
 
