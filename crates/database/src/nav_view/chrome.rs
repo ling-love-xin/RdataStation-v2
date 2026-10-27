@@ -1870,112 +1870,84 @@ impl NavView {
     /// 空态：没有任何连接（引导新建）/ 有连接但都过不了筛选。
     ///
     /// 原型空态三要素：居中大图标块 + 标题 + 说明 + 主按钮（居中布局，非左上角文本）。
-    pub(super) fn render_nav_empty_state(&self, cx: &mut Context<Self>) -> Div {
+    pub(super) fn render_nav_empty_state(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_kit::component::empty::{Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle};
         let muted = cx.theme().colors.muted_foreground;
-        let fg = cx.theme().colors.foreground;
-        let icon_tile = |path: &'static str, cx: &mut Context<Self>| {
-            div()
-                .w(rems(2.75))
-                .h(rems(2.75))
-                .flex_none()
-                .rounded_md()
-                .bg(cx.theme().colors.list_hover)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    Icon::empty()
-                        .path(path)
-                        .size(rems(1.375))
-                        .text_color(muted),
-                )
-        };
+        // 图标走 EmptyMedia::Icon 变体（2rem 圆角 muted 底 + 居中图标），
+        // 与 analytics_resource / insight / project 空态统一。
         if self.host.connections().is_empty() {
             let host = self.host.clone();
-            let tile = icon_tile("icons/database.svg", cx);
-            return div()
-                .w_full()
-                .flex_1()
-                .px_3()
-                .v_flex()
-                .items_center()
-                .justify_center()
-                .gap_1p5()
-                .text_center()
-                .child(tile)
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(fg)
-                        .child("还没有数据源"),
+            return Empty::new()
+                .header(
+                    EmptyHeader::new()
+                        .media(
+                            EmptyMedia::new()
+                                .with_variant(gpui_kit::component::empty::EmptyMediaVariant::Icon)
+                                .child(
+                                    Icon::empty()
+                                        .path("icons/database.svg")
+                                        .text_color(muted),
+                                ),
+                        )
+                        .title(EmptyTitle::new().child("还没有数据源"))
+                        .description(
+                            EmptyDescription::new().child("当前项目与全局库均无连接。点击下方「新建连接」开始。"),
+                        ),
                 )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child("当前项目与全局库均无连接。点击右上角「＋」新建。"),
-                )
-                .child(
-                    Button::new("nav-empty-new-connection")
-                        .primary()
-                        .small()
-                        .icon(IconName::Plus)
-                        .label("新建连接")
-                        .on_click(move |_, window, app: &mut App| {
-                            host.new_connection(window, app);
-                        }),
+                .content(
+                    EmptyContent::new().child(
+                        Button::new("nav-empty-new-connection")
+                            .primary()
+                            .small()
+                            .icon(IconName::Plus)
+                            .label("新建连接")
+                            .on_click(move |_, window, app: &mut App| {
+                                host.new_connection(window, app);
+                            }),
+                    ),
                 );
         }
         // 连接都在，只是都被筛掉了：空列表必须给出**出路**（原型 v9 修订点）——
         // 只说「没有匹配」而不说「谁把它筛空的」+「怎么回去」，用户只能自己回上面逐项找。
-        //
-        // 为何不再判「有没有搜索命中」：命中行已并入列表（`NavRow::SearchHit`），
-        // 有命中时 `self.rows` 非空，就走不到空态——旧写法要显式挡一下才不至于让
-        // 「没有匹配的数据源」与一批命中同屏打架，那层判断现在由行集合自己承担。
         let entity = cx.entity();
         let input = self.nav_search.clone();
         let summary = self.nav_filter_summary(cx);
-        let tile = icon_tile("icons/search.svg", cx);
-        let mut card = div()
-            .w_full()
-            .flex_1()
-            .px_3()
-            .v_flex()
-            .items_center()
-            .justify_center()
-            .gap_1p5()
-            .text_center()
-            .child(tile)
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(fg)
-                    .child("没有匹配的数据源"),
-            );
-        if !summary.is_empty() {
-            card = card.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(format!("当前筛选：{}", summary.join(" · "))),
-            );
-        }
-        card.child(
-            Button::new("nav-empty-clear-filters")
-                .ghost()
-                .small()
-                .label("清除筛选")
-                .on_click(move |_, window, app: &mut App| {
-                    // 搜索词与 facet 是两个独立入口，清就一起清：
-                    // 只清一边，点完还是空列表。
-                    if let Some(input) = &input {
-                        input.update(app, |s, cx| s.set_value("", window, cx));
-                    }
-                    entity.update(app, |this, cx| this.clear_nav_filters(cx));
-                }),
-        )
+        let description = if summary.is_empty() {
+            "试试调整搜索词或筛选条件。".to_string()
+        } else {
+            format!("当前筛选：{}", summary.join(" · "))
+        };
+        Empty::new()
+            .header(
+                EmptyHeader::new()
+                    .media(
+                        EmptyMedia::new()
+                            .with_variant(gpui_kit::component::empty::EmptyMediaVariant::Icon)
+                            .child(
+                                Icon::empty()
+                                    .path("icons/search.svg")
+                                    .text_color(muted),
+                            ),
+                    )
+                    .title(EmptyTitle::new().child("没有匹配的数据源"))
+                    .description(EmptyDescription::new().child(description)),
+            )
+            .content(
+                EmptyContent::new().child(
+                    Button::new("nav-empty-clear-filters")
+                        .ghost()
+                        .small()
+                        .label("清除筛选")
+                        .on_click(move |_, window, app: &mut App| {
+                            // 搜索词与 facet 是两个独立入口，清就一起清：
+                            // 只清一边，点完还是空列表。
+                            if let Some(input) = &input {
+                                input.update(app, |s, cx| s.set_value("", window, cx));
+                            }
+                            entity.update(app, |this, cx| this.clear_nav_filters(cx));
+                        }),
+                ),
+            )
     }
 
     /// 搜索结果**标题行**（树顶；有查询词时出现）。
