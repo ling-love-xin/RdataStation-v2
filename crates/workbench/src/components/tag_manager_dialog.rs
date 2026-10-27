@@ -24,7 +24,6 @@ use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::{DialogButtonProps, DialogFooter};
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::sheet::Sheet;
 use gpui_kit::component::{ActiveTheme, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -362,6 +361,9 @@ fn confirm_delete_tag(
             })
     });
 }
+
+/// 合并标签弹窗：选目标标签 → 把源标签所有引用转到目标 → 软删源标签。
+/// TODO: 跨模块关联表 UPDATE，需协调导航/资源/草稿箱三域，暂不实现。
 
 /// 打开「管理标签」覆盖层对话框（Sheet 侧边抽屉，2026-10-28 从 Dialog 迁移）。
 pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
