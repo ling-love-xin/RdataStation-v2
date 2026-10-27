@@ -3169,8 +3169,10 @@ impl Render for WorkbenchView {
         // 三模式权威同步点：Shared 状态 → Dock。
         self.apply_left_mode(window, cx);
         self.apply_right_mode(window, cx);
-        // 底部结果 dock 同步（Dock 化阶段 3）：活动文档有结果 → 自动开 / 无 → 自动关。
-        self.sync_result_dock(window, cx);
+        // 【2026-10-27】结果区从全局底部 dock 拆回编辑器宿主内嵌（DBeaver 口径：
+        // 结果集跟编辑器 tab 走，不再挂全局 dock）。sync_result_dock 不再需要——
+        // 结果区有无内容由编辑器宿主自己 render 判断（v_resizable 分栏，无内容时不占位）。
+        // self.sync_result_dock(window, cx);
         // 真面板化：版本 / 修复 / 回收站 / 标签对话框与导航「定位」请求原在
         // `SidebarPanel::render` 消费（外壳已不再渲染），提升到宿主 render——
         // render 仍是权威同步点，副作用不放到事件路径；动作仍经 `sidebar` 实体转发。

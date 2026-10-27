@@ -34,6 +34,9 @@ pub const RESULT_PANE_HEIGHT: f32 = 18.0;
 /// 结果区可拖拽的最大高度（48rem = 768px：再高编辑区就没地方了）
 pub const RESULT_MAX_HEIGHT: f32 = 48.0;
 
+/// 结果区可拖拽的最小高度（4rem = 64px：再小就只剩工具栏了）
+pub const RESULT_PANE_MIN_HEIGHT: f32 = 4.0;
+
 /// 结果区状态行高（1.5rem = 24px，与编辑器状态栏同档；结果工具栏同高）
 pub const RESULT_STATUS_BAR_HEIGHT: f32 = 1.5;
 
@@ -167,6 +170,22 @@ pub const SCHEMA_SLOT_WIDTH: f32 = 10.0;
 
 /// 【2026-10-27】编码选择对话框宽度（20rem = 320px：单列短列表，5 项编码）
 pub const ENCODING_DIALOG_WIDTH: f32 = 20.0;
+
+/// 【2026-10-27】状态栏换行段固定宽（以 CRLF 为基准，2.2rem：LF/CRLF 两种标签中最宽者；
+/// 循环切换时宽度不变，状态栏布局不抖动——见 `view/host.rs` 的 eol_ctrl）
+pub const EOL_SLOT_WIDTH: f32 = 2.2;
+
+/// 【2026-10-27】不可见字符配置对话框宽度（rems：双栏——左栏类别开关 + 右栏符号明细）
+pub const INVISIBLE_DIALOG_WIDTH: f32 = 46.0;
+
+/// 【2026-10-27】不可见字符面板右栏（符号明细）固定宽（rems）
+pub const INVISIBLE_DETAIL_WIDTH: f32 = 26.0;
+
+/// 【2026-10-27】缩进对话框宽度（rems：双语列表 + 右侧分组标签）
+pub const INDENT_DIALOG_WIDTH: f32 = 34.0;
+
+/// 【2026-10-27】tab_size 自定义输入对话框宽度（rems）
+pub const TAB_SIZE_DIALOG_WIDTH: f32 = 22.0;
 
 /// 【2026-10-27】编码选择行高（2.0rem = 32px：单行式——编码名 + 当前勾选）
 pub const ENCODING_DIALOG_ROW_HEIGHT: f32 = 2.0;

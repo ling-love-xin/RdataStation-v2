@@ -547,7 +547,7 @@ impl EditorHostPanel {
                     // 【2c】显示隐藏字符开启时：正文变了，标注区间要跟着重算（区间是字节偏移，
                     // 文字一动就全失效；没开显示则集合为空 / 未建，直接跳过）
                     if this.shared.document_show_invisible(&this.document) {
-                        let ranges = crate::hidden::hidden_ranges(&this.editor_text(cx));
+                        let ranges = this.invisible_ranges_for(cx);
                         this.refresh_invisible_decorations(ranges, cx);
                     }
                     // 重绘以刷新标签脏点与状态栏
@@ -2350,6 +2350,61 @@ impl EditorHostPanel {
         }
     }
 
+    /// 【2026-10-27】从内容检测缩进方式（VSCode「从内容中检测缩进方式」）：
+    /// 只推断 制表符/空格宽度并写 `tab_size` + `hard_tabs`，**不置脏**（不触碰正文）。
+    pub(crate) fn detect_indent_from_content(&mut self, cx: &mut Context<Self>) {
+        let text = self.editor_text(cx);
+        let (hard, size) = crate::indent::detect_indent(&text);
+        self.set_hard_tabs(hard, cx);
+        self.set_tab_size(size.max(1), cx);
+        self.set_message(
+            Some(format!(
+                "已按内容检测缩进：{}（宽度 {}）",
+                if hard { "制表符" } else { "空格" },
+                size.max(1)
+            )),
+            cx,
+        );
+    }
+
+    /// 【2026-10-27】将缩进转换为空格 / 制表符（VSCode「将缩进转换为…」）：读全文 → 重写
+    /// 前导缩进 → 写回文档 + 内核重载。**会标脏**（正文变了），符合 VSCode 行为。
+    pub(crate) fn convert_indent(
+        &mut self,
+        to_hard_tabs: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.editor_text(cx);
+        let size = self.shared.document_tab_size(&self.document).max(1);
+        let converted = crate::indent::convert_indent(&text, to_hard_tabs, size);
+        if converted != text {
+            self.shared
+                .update(|service| service.set_content(&self.document, converted));
+            self.reload_from_document(window, cx);
+            self.set_message(
+                Some(format!(
+                    "缩进已转换为{}（宽度 {}）",
+                    if to_hard_tabs { "制表符" } else { "空格" },
+                    size
+                )),
+                cx,
+            );
+        }
+    }
+
+    /// 【2026-10-27】裁剪尾随空格（VSCode「裁剪尾随空格」）：去每行行尾空白，写回 + 内核重载。
+    pub(crate) fn trim_trailing_whitespace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.editor_text(cx);
+        let trimmed = crate::indent::trim_trailing_whitespace(&text);
+        if trimmed != text {
+            self.shared
+                .update(|service| service.set_content(&self.document, trimmed));
+            self.reload_from_document(window, cx);
+            self.set_message(Some("已裁剪尾随空格".to_string()), cx);
+        }
+    }
+
     /// 【2c】重设文档保存编码（UTF-8 / UTF-8 (BOM) / GBK / UTF-16 LE / UTF-16 BE）
     ///
     /// 只改**保存契约**：内核文本永远是 Unicode，切换编码不会实时重新解码（无从重解码），
@@ -2374,7 +2429,8 @@ impl EditorHostPanel {
     /// 【2c】重设文档保存换行符（LF / CRLF）
     ///
     /// 同上：只改保存契约；load 时 CRLF 原样进内核（编辑语义不变），保存时才按这里
-    /// 的 eol 统一生成。切换即标脏（会产出不同字节）。
+    /// 的 eol 统一生成。**切换不标脏**（2026-10-27：eol 是显示/保存契约级设置，不影响文本，
+    /// 脏判据只比较编码——见 `service::is_dirty`）。
     pub(crate) fn set_eol(&mut self, eol: crate::encoding::LineEnding, cx: &mut Context<Self>) {
         let current = self.shared.document_save_format(&self.document);
         if current.eol == eol {
@@ -2406,29 +2462,43 @@ impl EditorHostPanel {
         }
     }
 
-    /// 【2c】显示隐藏字符标注（零宽 / 全角空格 / 控制字符）：文档状态 + 内核 RangeDecoration 双写
+    /// 【2c】显示隐藏字符标注（**按类别**）：文档位掩码 + 内核 RangeDecoration 双写
     ///
-    /// 启用时懒创建标注集合（`.set` 会把当前正文里所有隐藏字符刷一遍）；停用时清空集合。
-    pub(crate) fn set_show_invisible(&mut self, show: bool, cx: &mut Context<Self>) {
-        let changed = self
-            .shared
-            .set_document_show_invisible(&self.document, show);
+    /// 启用时懒创建标注集合（`.set` 会把当前正文里所有**启用类别**的隐藏字符刷一遍）；
+    /// 全关时清空集合。双栏面板每勾一类调用一次；¶ 总开关走 [`Self::set_show_invisible`]。
+    pub(crate) fn set_invisible_categories(&mut self, mask: u8, cx: &mut Context<Self>) {
+        let changed = self.shared.set_document_invisible_mask(&self.document, mask);
         if !changed {
             return;
         }
-        if show {
+        if mask != 0 {
             if self.invisible_decorations.is_none() {
                 // 懒创建：句柄借内核实体，面板 drop 随内核一起释放
                 self.invisible_decorations = Some(self.editor.update(cx, |state, cx| {
                     state.create_range_decorations_collection(Vec::new(), cx)
                 }));
             }
-            let ranges = crate::hidden::hidden_ranges(&self.editor_text(cx));
+            let ranges = self.invisible_ranges_for(cx);
             self.refresh_invisible_decorations(ranges, cx);
         } else if let Some(collection) = &self.invisible_decorations {
             collection.clear(cx);
         }
         cx.notify();
+    }
+
+    /// 【2c】旧 bool 总开关：全开（所有类别） / 全关
+    pub(crate) fn set_show_invisible(&mut self, show: bool, cx: &mut Context<Self>) {
+        self.set_invisible_categories(if show { crate::hidden::FULL_MASK } else { 0 }, cx);
+    }
+
+    /// 当前文档启用类别的隐藏字符区间（双栏面板 / 内容变化重算共用同一口径）
+    fn invisible_ranges_for(&self, cx: &mut Context<Self>) -> Vec<std::ops::Range<usize>> {
+        let mask = self.shared.document_invisible_mask(&self.document);
+        let enabled: Vec<_> = crate::hidden::all_categories()
+            .into_iter()
+            .filter(|c| mask & crate::hidden::category_bit(*c) != 0)
+            .collect();
+        crate::hidden::hidden_ranges_filtered(&self.editor_text(cx), &enabled)
     }
 
     /// 【2c】把当前隐藏字符区间刷进标注集合（`None` = 没开显示，什么都不做）
@@ -4391,7 +4461,7 @@ impl EditorHostPanel {
         // 【2c】同上：隐藏字符标注也走不到 Change 事件（区间是字节偏移，整篇换文本必失效），
         // 开着显示就显式重算一遍；没开则集合未建，直接跳过。
         if self.shared.document_show_invisible(&self.document) {
-            let ranges = crate::hidden::hidden_ranges(&self.editor_text(cx));
+            let ranges = self.invisible_ranges_for(cx);
             self.refresh_invisible_decorations(ranges, cx);
         }
         cx.notify();
@@ -8432,37 +8502,52 @@ impl Render for EditorHostPanel {
                     .child(SharedString::from(notice)),
             );
         }
-        // 编辑区：Dock 化（§8）后编辑器宿主只渲染编辑区主体，结果区由底部 dock 薄壳承载
-        // （数据投影照旧走 `sync_result_view` 推进面板实体）。无 `v_resizable` 分栏：
-        // 原「结果高度」拖拽语义随嵌式结果区一并移除（面板在 dock 里，尺寸归 dock）。
+        // 编辑区 + 结果区：v_resizable 上下分栏（DBeaver 口径，结果集跟编辑器 tab 走，
+        // 不再挂全局底部 dock）。结果区有内容时才加第二个 panel（无内容时高度为 0 不占位）。
+        let result_has_content = self.result_panel.read(cx).has_content();
+        let font_size = cx.theme().font_size;
+        let edit_area = div()
+            .flex_1()
+            .min_h_0()
+            .debug_selector(|| "editor-code-area".to_string())
+            .px_2()
+            .on_drop({
+                let entity = cx.entity();
+                move |payload: &::shared::InsertFileDrag, window, app| {
+                    entity.update(app, |this, cx| {
+                        this.insert_file_contents(payload, window, cx)
+                    });
+                }
+            })
+            .child(self.render_editor_body(cx));
+
+        let split = if result_has_content {
+            gpui_kit::component::resizable::v_resizable("editor-result-split")
+                .child(
+                    gpui_kit::component::resizable::resizable_panel()
+                        .child(edit_area),
+                )
+                .child(
+                    gpui_kit::component::resizable::resizable_panel()
+                        .child(
+                            div()
+                                .size_full()
+                                .min_h_0()
+                                .child(self.result_panel.read(cx).render(cx)),
+                        )
+                        .size(font_size * ui::RESULT_PANE_HEIGHT)
+                        .size_range(font_size * ui::RESULT_PANE_MIN_HEIGHT..font_size * ui::RESULT_MAX_HEIGHT),
+                )
+                .into_any_element()
+        } else {
+            edit_area.into_any_element()
+        };
         root = root.child(
             div()
                 .flex_1()
                 .min_h_0()
-                // 测试按选择器断言“结果区没有把编辑区挤掉”
-                .debug_selector(|| "editor-code-area".to_string())
-                // 局部内距走 Tailwind 尺度（8px）；结构尺寸才进 ui.rs 常量表
-                .px_2()
-                // 拖放落点（原型 §4.5：拖文件节点到编辑区 → 插入文件内容到光标处）
-                .on_drop({
-                    let entity = cx.entity();
-                    move |payload: &::shared::InsertFileDrag, window, app| {
-                        entity.update(app, |this, cx| {
-                            this.insert_file_contents(payload, window, cx)
-                        });
-                    }
-                })
-                .child(self.render_editor_body(cx)),
+                .child(split),
         );
-        // 测试保真：Dock 化后结果区归面板实体，但单测仍按「结果区元素」断言
-        // （find / click editor-result-* 系列）。生产不挂——dock 由 workbench 薄壳承载。
-        #[cfg(test)]
-        {
-            let panel_render = self.result_panel.read(cx).render(cx);
-            root = root.child(
-                div().flex_1().min_h_0().overflow_hidden().child(panel_render),
-            );
-        }
         // 编辑器自身状态栏（§2.5 定稿规格；需求③/去杂乱）：挂到编辑器 tab 底部。
         // 栏体由 `status_bar::render` 自绘（侧栏底 + 顶分隔线 + 固定高），
         // 文档级上下文（面包屑/方言/事务/微标/控件）都在其内，不再重复包一层。
@@ -8577,43 +8662,27 @@ pub(crate) fn render_editor_status_bar(
             })
             .into_any_element()
     };
-    // 换行（LF / CRLF；VSCode 式菜单二选一，2026-10-27 由循环按钮改为下拉菜单）
+    // 换行（LF / CRLF；2026-10-27 由下拉菜单改回**纯按钮循环切换**：点击 LF↔CRLF 翻转，
+    // 无下拉箭头；宽度固定（以 CRLF 为基准）——切换时状态栏布局不乱动）
     let eol_ctrl = {
         let eol = snapshot.format.eol;
         let entity = panel_entity.clone();
-        DropdownButton::new("editor-eol")
+        Button::new("editor-eol")
+            .ghost()
             .small()
-            .button(
-                Button::new("editor-eol-btn")
-                    .ghost()
-                    .small()
-                    .debug_selector(|| "editor-eol".to_string())
-                    .label(eol.label()),
-            )
-            .dropdown_menu(move |menu, _window, _cx| {
-                let mut menu = menu;
-                let lf_entity = entity.clone();
-                let crlf_entity = entity.clone();
-                menu = menu
-                    .item(
-                        PopupMenuItem::new("LF")
-                            .checked(eol == crate::encoding::LineEnding::Lf)
-                            .on_click(move |_, _window, app| {
-                                lf_entity.update(app, |panel, cx| {
-                                    panel.set_eol(crate::encoding::LineEnding::Lf, cx);
-                                });
-                            }),
-                    )
-                    .item(
-                        PopupMenuItem::new("CRLF")
-                            .checked(eol == crate::encoding::LineEnding::Crlf)
-                            .on_click(move |_, _window, app| {
-                                crlf_entity.update(app, |panel, cx| {
-                                    panel.set_eol(crate::encoding::LineEnding::Crlf, cx);
-                                });
-                            }),
-                    );
-                menu
+            .debug_selector(|| "editor-eol".to_string())
+            .label(eol.label())
+            .w(rems(ui::EOL_SLOT_WIDTH))
+            .flex_none()
+            .tooltip("换行符（点击切换 LF / CRLF）")
+            .on_click(move |_, _window, app| {
+                let next = match eol {
+                    crate::encoding::LineEnding::Lf => crate::encoding::LineEnding::Crlf,
+                    crate::encoding::LineEnding::Crlf => crate::encoding::LineEnding::Lf,
+                };
+                entity.update(app, |panel, cx| {
+                    panel.set_eol(next, cx);
+                });
             })
             .into_any_element()
     };
@@ -8645,87 +8714,63 @@ pub(crate) fn render_editor_status_bar(
     let indent_ctrl = {
         let current_tab = snapshot.tab_size;
         let hard_tabs = snapshot.hard_tabs;
-        let show_whitespaces = host.shared.document_show_whitespaces(&host.document);
         let entity = panel_entity.clone();
-        DropdownButton::new("editor-indent")
+        // 对齐 VSCode：点击弹出缩进命令面板（双语项 + 分组标签 + tab_size 自定义输入框）
+        Button::new("editor-indent")
+            .ghost()
             .small()
-            .button(
-                Button::new("editor-indent-btn")
-                    .ghost()
-                    .small()
-                    .debug_selector(|| "editor-indent".to_string())
-                    .label(if hard_tabs {
-                        "Tab".to_string()
-                    } else {
-                        format!("空格: {current_tab}")
-                    }),
-            )
-            .dropdown_menu(move |menu, _window, _cx| {
-                let mut menu = menu;
-                // 缩进方式 + 宽度（VSCode 缩进菜单同构：制表符 / 空格 2/4/8）
-                menu = menu
-                    .item({
+            .debug_selector(|| "editor-indent".to_string())
+            .label(if hard_tabs {
+                "Tab".to_string()
+            } else {
+                format!("空格: {current_tab}")
+            })
+            .tooltip("缩进设置（点击打开）")
+            .on_click(move |_, window, app| {
+                let entity = entity.clone();
+                let hard = hard_tabs;
+                let tab = current_tab;
+                crate::view::indent_dialog::open_indent_dialog(
+                    window,
+                    app,
+                    hard,
+                    tab,
+                    move |action, _window, app| {
                         let entity = entity.clone();
-                        PopupMenuItem::new("制表符")
-                            .checked(hard_tabs)
-                            .on_click(move |_, _window, app| {
-                                entity.update(app, |panel, cx| {
-                                    panel.set_hard_tabs(true, cx);
-                                });
-                            })
-                    })
-                    .item({
-                        let entity = entity.clone();
-                        PopupMenuItem::new("空格: 2")
-                            .checked(!hard_tabs && current_tab == 2)
-                            .on_click(move |_, _window, app| {
-                                entity.update(app, |panel, cx| {
-                                    panel.set_hard_tabs(false, cx);
-                                    panel.set_tab_size(2, cx);
-                                });
-                            })
-                    })
-                    .item({
-                        let entity = entity.clone();
-                        PopupMenuItem::new("空格: 4")
-                            .checked(!hard_tabs && current_tab == 4)
-                            .on_click(move |_, _window, app| {
-                                entity.update(app, |panel, cx| {
-                                    panel.set_hard_tabs(false, cx);
-                                    panel.set_tab_size(4, cx);
-                                });
-                            })
-                    })
-                    .item({
-                        let entity = entity.clone();
-                        PopupMenuItem::new("空格: 8")
-                            .checked(!hard_tabs && current_tab == 8)
-                            .on_click(move |_, _window, app| {
-                                entity.update(app, |panel, cx| {
-                                    panel.set_hard_tabs(false, cx);
-                                    panel.set_tab_size(8, cx);
-                                });
-                            })
-                    });
-                // 渲染空白开关（原「重设 ▾」里的显示项迁此；缩进语境相关，VSCode 缩进菜单同款）
-                let ws_entity = entity.clone();
-                menu.separator()
-                    .item(
-                        PopupMenuItem::new("渲染空白")
-                            .checked(show_whitespaces)
-                            .on_click(move |_, window, app| {
-                                ws_entity.update(app, |panel, cx| {
-                                    panel.set_show_whitespaces(!show_whitespaces, window, cx);
-                                });
-                            }),
-                    )
+                        entity.update(app, |panel, cx| match action {
+                            crate::view::indent_dialog::IndentAction::UseSpaces => {
+                                panel.set_hard_tabs(false, cx);
+                            }
+                            crate::view::indent_dialog::IndentAction::UseTabs => {
+                                panel.set_hard_tabs(true, cx);
+                            }
+                            crate::view::indent_dialog::IndentAction::ChangeTabDisplaySize(size) => {
+                                panel.set_hard_tabs(false, cx);
+                                panel.set_tab_size(size.max(1), cx);
+                            }
+                            crate::view::indent_dialog::IndentAction::DetectFromContent => {
+                                panel.detect_indent_from_content(cx);
+                            }
+                            crate::view::indent_dialog::IndentAction::ConvertToSpaces => {
+                                panel.convert_indent(false, _window, cx);
+                            }
+                            crate::view::indent_dialog::IndentAction::ConvertToTabs => {
+                                panel.convert_indent(true, _window, cx);
+                            }
+                            crate::view::indent_dialog::IndentAction::TrimTrailingWhitespace => {
+                                panel.trim_trailing_whitespace(_window, cx);
+                            }
+                        });
+                    },
+                );
             })
             .into_any_element()
     };
-    // 不可见字符开关（独立 toggle 按钮 + tooltip；2026-10-27 由「重设 ▾」里的显示项拆出，
-    // 标注零宽 / 全角空格 / 双向控制 / 控制字符——`hidden.rs` 收录范围；用 VSCode 同款 ¶ 符号）
+    // 不可见字符开关（2026-10-27 升级：点击弹出**双栏配置面板**，自定义每类符号显示/隐藏；
+    // ¶ 按钮 toggled 表示「当前有类别在标注」；面板见 `view/invisible_dialog.rs`）
     let invisible_ctrl = {
         let show_invisible = host.shared.document_show_invisible(&host.document);
+        let mask = host.shared.document_invisible_mask(&host.document);
         let entity = panel_entity.clone();
         Button::new("editor-invisible")
             .ghost()
@@ -8733,15 +8778,20 @@ pub(crate) fn render_editor_status_bar(
             .debug_selector(|| "editor-invisible".to_string())
             .label("¶")
             .toggled(show_invisible)
-            .tooltip(if show_invisible {
-                "隐藏不可见字符（¶ 高亮零宽 / 全角空格 / 双向控制 / 控制字符）"
-            } else {
-                "显示不可见字符：标注零宽、全角/特殊空格、双向控制（RTL）与控制字符"
-            })
-            .on_click(move |_, _window, app| {
-                entity.update(app, |panel, cx| {
-                    panel.set_show_invisible(!show_invisible, cx);
-                });
+            .tooltip("不可见字符标注（点击自定义：零宽 / 特殊空格 / 双向控制 / 控制字符）")
+            .on_click(move |_, window, app| {
+                let entity = entity.clone();
+                let current_mask = mask;
+                crate::view::invisible_dialog::open_invisible_dialog(
+                    window,
+                    app,
+                    current_mask,
+                    move |new_mask, _window, app| {
+                        entity.update(app, |panel, cx| {
+                            panel.set_invisible_categories(new_mask, cx);
+                        });
+                    },
+                );
             })
             .into_any_element()
     };
@@ -8922,7 +8972,9 @@ fn render_conn_slots(
     // 连接名称槽（2026-10-27 拆两段）：名称区点击弹「选择数据源」窗（选连接绑定），
     // ▾ 区点击弹现有下拉（跟随当前连接 + 只列在线）。固定宽 + 截断，不随内容推挤。
     let conn_name = Button::new("editor-conn-name")
-        .ghost()
+        // 2026-10-27：连接名称槽带背景（与执行通道 pill 同款 Secondary），一眼看出「当前执行/绑定
+        // 发往哪台数据源」；▾ 区保持 ghost 以区分「名称弹窗选绑定 / ▾ 下拉切在线」
+        .with_variant(ButtonVariant::Secondary)
         .small()
         .debug_selector(|| "editor-conn-name".to_string())
         .label(truncate_label(&conn_label, 14))
@@ -9030,7 +9082,9 @@ fn render_conn_slots(
             None => "schema".to_string(),
         };
         let schema_name = Button::new("editor-schema-name")
-            .ghost()
+            // 2026-10-27：schema@库 槽带背景（与执行通道 pill / 连接名称同款 Secondary）；
+            // ▾ 区保持 ghost 区分「名称弹窗选 Database/Schema / ▾ 下拉切 schema」
+            .with_variant(ButtonVariant::Secondary)
             .small()
             .debug_selector(|| "editor-schema-name".to_string())
             .label(truncate_label(&label, 12))
