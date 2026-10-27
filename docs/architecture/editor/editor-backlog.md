@@ -116,7 +116,7 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 | B2 | 编辑器正文右键菜单 | 新建 `view/editor_menu.rs`：能力位 → 中文菜单项纯函数（剪切/复制/粘贴/全选/转到定义/代码操作）；host.rs `Editor::context_menu` 定制（覆盖 Input 自带英文默认菜单），能力位从内核实体读（is_editable / selected_range / lsp providers） | ✅ 5 单测全绿 |
 | B3 | 软换行开关（set_soft_wrap） | 设置模块加 `editor.soft_wrap`（默认 true，与内核一致）；render 权威同步点比对缓存后同步内核；设置页自动出开关（registry spec 驱动） | ✅ settings 35 全绿 |
 | B4 | 语言编辑规则（set_language_config + 开关） | ① 设置模块加 `editor.auto_close`（自动闭合括号/引号）+ `editor.smart_indent`（智能缩进），render 同步 `set_auto_close`/`set_smart_indent`；② 新建 `lsp/language_config.rs`：`set_language_config("sql", …)` 注册 SQL 括号/引号配对；③ 主编辑器按高亮类型设语言键（`editor_language_key`：Sql→sql / Python→python / … / CSV/Log→空），cell 编辑器已用 `as_key()` 自动吃到 | ✅ 2 单测全绿 |
-| B1 | Inline Completion（AI 置灰） | 内核槽位 = 覆写 `CompletionProvider::inline_completion()`（无独立装配方法）；「置灰」UX 未定（设置/状态栏开关 disabled + 默认关？还是预留安装口不挂？）——**下期定口径** | 待排期 |
+| B1 | Inline Completion（AI 置灰） | 设置模块加 `editor.inline_completion`（**disabled 置灰** + 默认关 + hint「能力已预留，放开后立即生效」）；`SettingSpec` 新增 `disabled` 字段、设置页 Bool 开关渲染为禁用态；model/lib 全接线（放开 disabled 即用，无需改设置侧）。**行为层天然置灰**：内核 `CompletionProvider::inline_completion()` 默认返回空数组，未挂任何 AI 源，恒不产出建议 | ✅ 已落地（随并行线 `56404b36` 提交落库；代码为本线所写，提交信息为并行线「布局设置项完整实现」） |
 
 已知取舍（记录，不硬做）：
 
