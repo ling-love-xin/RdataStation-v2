@@ -1592,7 +1592,11 @@ impl ResultPanel {
             .or_else(|| (0..columns.len()).find(|c| !delegate.is_hidden_column(*c)));
 
         // 明细素材在 read 期间一次取好（标题 + 键值行）；渲染闭包不持有 delegate 借用
-        let detail: Option<(String, Vec<(String, String)>)> = detail_col.map(|data_col| {
+        let detail: Option<(String, Vec<(String, String)>)> = detail_col.and_then(|data_col| {
+            // 【修复】中间态：columns 非空但 type_names 为空时越界——加边界检查
+            if data_col >= columns.len() || data_col >= type_names.len() {
+                return None;
+            }
             let name = columns[data_col].clone();
             let type_name = type_names[data_col].clone();
             let title = if type_name.is_empty() {
@@ -1638,7 +1642,7 @@ impl ResultPanel {
                     items.push(("默认值".into(), default_value));
                 }
             }
-            (title, items)
+            Some((title, items))
         });
 
         // ── 清单行：单击选中 / 双击定位 / 眼睛切显隐 / 右键列级本地动作 ──
