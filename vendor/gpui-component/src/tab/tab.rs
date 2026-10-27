@@ -2,6 +2,7 @@ use std::{rc::Rc, time::Duration};
 
 use crate::animation::{Lerp, ease_in_out_cubic};
 use crate::{ActiveTheme, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex};
+use crate::menu::{ContextMenuExt, PopupMenu};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, Background, ClickEvent, Edges, ElementId,
@@ -560,6 +561,8 @@ pub struct Tab {
     pub(super) hovered: bool,
     pub(super) max_width: Option<Pixels>,
     pub(super) on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
+    /// RdataStation vendor patch: right-click context menu builder.
+    pub(super) on_context_menu: Option<Rc<dyn Fn(PopupMenu, &mut Window, &mut App) -> PopupMenu + 'static>>,
 }
 
 impl From<&'static str> for Tab {
@@ -615,6 +618,7 @@ impl Default for Tab {
             size: Size::default(),
             max_width: None,
             on_click: None,
+            on_context_menu: None,
         }
     }
 }
@@ -707,6 +711,15 @@ impl Tab {
         on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_click = Some(Rc::new(on_click));
+        self
+    }
+
+    /// RdataStation vendor patch: set the right-click context menu builder.
+    pub fn on_context_menu(
+        mut self,
+        builder: impl Fn(PopupMenu, &mut Window, &mut App) -> PopupMenu + 'static,
+    ) -> Self {
+        self.on_context_menu = Some(Rc::new(builder));
         self
     }
 
@@ -916,7 +929,7 @@ impl RenderOnce for Tab {
             inner_content.into_any_element()
         };
 
-        self.base
+        let tab_element = self.base
             .id(self.ix)
             .selected(self.selected)
             .disabled(self.disabled)
@@ -1064,7 +1077,17 @@ impl RenderOnce for Tab {
             })
             .when_some(self.on_click.clone(), |this, on_click| {
                 this.on_click(move |event, window, cx| on_click(event, window, cx))
-            })
+            });
+        // 右键菜单：`context_menu`（ContextMenuExt）返回 `ContextMenu<T>` 链尾包装，
+        // 嵌在 `when_some` 里类型不匹配（闭包需返回 `T`）。链结束后包住整个元素；
+        // 无菜单时原样返回，两分支用 `into_any_element` 统一（render 返回 impl IntoElement）。
+        if let Some(builder) = self.on_context_menu.clone() {
+            tab_element
+                .context_menu(move |menu, window, cx| builder(menu, window, cx))
+                .into_any_element()
+        } else {
+            tab_element.into_any_element()
+        }
     }
 }
 

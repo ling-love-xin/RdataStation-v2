@@ -3591,6 +3591,8 @@ pub struct ResultControls {
     pub refresh: Option<AnyElement>,
     /// 【B5b】取下一段（只在这份结果还有下一段时给）
     pub more: Option<AnyElement>,
+    /// 【DBeaver 对齐】取全部行（一次性抓全量；只在这份结果还有下一段时给）
+    pub fetch_all: Option<AnyElement>,
     /// 【#28-B3】新增行（面板注入；只读结果集不注入 → 回退禁用占位钮）
     pub insert_row: Option<AnyElement>,
     /// 【#28-B3】复制当前选中行为本地行（同上）
@@ -3981,6 +3983,8 @@ pub fn render(
                             .children(pager_before)
                             // 【B5b】下页 = 取下一段真钮（只在还有下一段时由面板注入）
                             .children(controls.more)
+                            // 【DBeaver 对齐】取全部行（一次性抓全量）
+                            .children(controls.fetch_all)
                             .child(last_pager)
                             .child(separator())
                             .children(system_ops),

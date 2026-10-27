@@ -771,6 +771,24 @@ impl ResultPanel {
                     })
                     .into_any_element()
             });
+        // 【DBeaver 对齐】取全部行：只在这份结果真还有下一段时摆（一次性抓全量）
+        let fetch_all = self
+            .status
+            .as_ref()
+            .is_some_and(|status| status.has_more)
+            .then(|| {
+                let queue = self.queue.clone();
+                Button::new("editor-result-fetch-all")
+                    .ghost()
+                    .small()
+                    .debug_selector(|| "editor-result-fetch-all".to_string())
+                    .label("取全部")
+                    .tooltip("一次性抓取全部行")
+                    .on_click(move |_, _window, _app| {
+                        queue.push(ResultRequest::FetchAll);
+                    })
+                    .into_any_element()
+            });
 
         // 【#28-B3】状态栏行级动作钮：新增 / 复制 / 删除一行。只读结果集（`!editable`）
         // 不注入，回退 grid.rs 的禁用占位钮；复制 / 删除必须有选中行才可用。
@@ -954,6 +972,7 @@ impl ResultPanel {
             export,
             refresh,
             more,
+            fetch_all,
             insert_row,
             duplicate_row,
             delete_row,
@@ -972,6 +991,7 @@ impl ResultPanel {
             export,
             refresh,
             more,
+            fetch_all,
             insert_row,
             duplicate_row,
             delete_row,
@@ -1006,6 +1026,7 @@ impl ResultPanel {
                     export: None,
                     refresh: None,
                     more,
+                    fetch_all,
                     insert_row,
                     duplicate_row,
                     delete_row,
