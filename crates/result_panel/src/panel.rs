@@ -754,7 +754,7 @@ impl ResultPanel {
                 })
                 .into_any_element()
         });
-        // 【B5b】取下一段：只在这份结果真还有下一段时摆（状态行⑦里）
+        // 【B5b】获取数据：只在这份结果真还有下一段时摆（状态行⑦里）
         let more = self
             .status
             .as_ref()
@@ -765,13 +765,14 @@ impl ResultPanel {
                     .ghost()
                     .small()
                     .debug_selector(|| "editor-result-more".to_string())
-                    .label("取下一段")
+                    .label("获取数据")
+                    .tooltip("获取下一段数据")
                     .on_click(move |_, _window, _app| {
                         queue.push(ResultRequest::FetchMore);
                     })
                     .into_any_element()
             });
-        // 【DBeaver 对齐】取全部行：只在这份结果真还有下一段时摆（一次性抓全量）
+        // 【DBeaver 对齐】获取全部数据：只在这份结果真还有下一段时摆（一次性抓全量）
         let fetch_all = self
             .status
             .as_ref()
@@ -782,7 +783,7 @@ impl ResultPanel {
                     .ghost()
                     .small()
                     .debug_selector(|| "editor-result-fetch-all".to_string())
-                    .label("取全部")
+                    .label("获取全部数据")
                     .tooltip("一次性抓取全部行")
                     .on_click(move |_, _window, _app| {
                         queue.push(ResultRequest::FetchAll);

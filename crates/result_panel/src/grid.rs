@@ -3548,7 +3548,7 @@ pub fn status_action_placeholders() -> Vec<(IconName, &'static str)> {
     vec![
         (IconName::Save, "保存（待行级模型落地）"),
         (IconName::X, "取消（回滚待提交变更）"),
-        (IconName::Pencil, "编辑选中格（双击单元格进入编辑）"),
+        (IconName::Pencil, "修改选中格（双击单元格进入编辑）"),
         (IconName::Plus, "新增行（暂未支持下发）"),
         (IconName::CopyPlus, "复制行（暂未支持下发）"),
         (IconName::Trash, "删除行（暂未支持下发）"),
@@ -3558,7 +3558,6 @@ pub fn status_action_placeholders() -> Vec<(IconName, &'static str)> {
         (IconName::ChevronLeft, "上页（窗口化取数暂不支持）"),
         (IconName::SkipForward, "末页（窗口化取数暂不支持）"),
         (IconName::Download, "导出"),
-        (IconName::Settings, "设置"),
     ]
 }
 
@@ -5132,7 +5131,7 @@ mod tests {
     #[test]
     fn status_action_placeholders_follow_dbeaver_group_order() {
         let slots = status_action_placeholders();
-        assert_eq!(slots.len(), 13, "占位钮共 13 个（下页真钮另由 controls.more 注入）");
+        assert_eq!(slots.len(), 12, "占位钮共 12 个（下页真钮另由 controls.more 注入）");
 
         // 写操作段：保存 · 取消 · 编辑 · 新增行 · 复制行 · 删除行 · 撤销 · 重做
         let write: Vec<IconName> = slots[0..FIRST_PAGER_ACTION]
@@ -5161,12 +5160,12 @@ mod tests {
         assert_eq!(pager, vec![IconName::SkipBack, IconName::ChevronLeft, IconName::SkipForward]);
         assert!(!slots.iter().any(|(icon, _)| *icon == IconName::ChevronRight));
 
-        // 系统段：导出 · 设置
+        // 系统段：导出（设置按钮已移除，DBeaver 状态栏没有设置按钮）
         let system: Vec<IconName> = slots[FIRST_SYSTEM_ACTION..]
             .iter()
             .map(|(icon, _)| *icon)
             .collect();
-        assert_eq!(system, vec![IconName::Download, IconName::Settings]);
+        assert_eq!(system, vec![IconName::Download]);
 
         // 每个占位钮都带可读 tooltip（说明为何禁用 / 待哪一轮接线）
         assert!(slots.iter().all(|(_, tooltip)| !tooltip.is_empty()));
