@@ -474,6 +474,33 @@ impl NavHost for WorkbenchNavHost {
         crate::components::tag_manager_dialog::open_tag_manager_dialog(window, cx, &self.shared);
     }
 
+    fn open_tag_assign_dialog(&self, conn_id: &str, window: &mut Window, cx: &mut App) {
+        crate::components::tag_assign_dialog::open_tag_assign_dialog(window, cx, &self.shared, conn_id);
+    }
+
+    fn list_tags_for(&self, conn_id: &str) -> Vec<String> {
+        let root = self.shared.project_root();
+        database::nav_store::list_tags(conn_id, root.as_deref())
+    }
+
+    fn assign_tags(&self, conn_id: &str, tags: &[String], cx: &mut App) {
+        let root = self.shared.project_root();
+        if let Err(e) = database::nav_store::set_tags(conn_id, root.as_deref(), tags) {
+            self.notice(format!("保存标签失败：{e}"), cx);
+        }
+    }
+
+    fn all_tag_names(&self) -> Vec<String> {
+        let root = self.shared.project_root();
+        database::nav_store::list_all_tags(root.as_deref())
+            .into_values()
+            .flatten()
+            .map(|t| t.name)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     fn open_visible_databases_dialog(&self, conn_id: &str, window: &mut Window, cx: &mut App) {
         // 弹框候选清单按「当前项目根」定位元数据缓存（None = 全局连接缓存）。
         let root = self.shared.project_root().map(|p| p.to_string_lossy().to_string());

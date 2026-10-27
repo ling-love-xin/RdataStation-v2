@@ -5,9 +5,11 @@ pub mod cache_dialog;
 // 连接对话框已下沉 `rds-connection-dialog`（2026-10-15）：此处重导保持
 // `crate::components::connection_dialog::*` 路径不变（editor.rs 等引用点零改动）。
 pub use connection_dialog::components::connection_dialog;
+pub mod dialog_helpers;
 pub mod group_form_dialog;
 pub mod group_manager_dialog;
 pub mod tag_manager_dialog;
+pub mod tag_assign_dialog;
 pub mod saved_view_dialog;
 pub mod visible_databases_dialog;
 pub mod object_mask_dialog;

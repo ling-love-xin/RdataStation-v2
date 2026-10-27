@@ -182,6 +182,14 @@ mod stub_host {
         fn open_cache_dialog(&self, _window: &mut Window, _cx: &mut App) {}
         fn open_group_manager(&self, _window: &mut Window, _cx: &mut App) {}
         fn open_tag_manager(&self, _window: &mut Window, _cx: &mut App) {}
+        fn open_tag_assign_dialog(&self, _conn_id: &str, _window: &mut Window, _cx: &mut App) {}
+        fn list_tags_for(&self, _conn_id: &str) -> Vec<String> {
+            Vec::new()
+        }
+        fn assign_tags(&self, _conn_id: &str, _tags: &[String], _cx: &mut App) {}
+        fn all_tag_names(&self) -> Vec<String> {
+            Vec::new()
+        }
         fn open_visible_databases_dialog(&self, _conn_id: &str, _window: &mut Window, _cx: &mut App) {}
         fn saved_views(&self, _cx: &App) -> Vec<SavedViewMeta> {
             Vec::new()

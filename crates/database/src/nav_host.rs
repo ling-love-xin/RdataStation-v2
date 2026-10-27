@@ -323,6 +323,18 @@ pub trait NavHost: 'static {
     /// 打开「管理标签」覆盖层对话框（批量重命名 / 清理空标签；标签定义跨模块共享）。
     fn open_tag_manager(&self, window: &mut Window, cx: &mut App);
 
+    /// 打开「打标签」对话框（勾选已有标签 + 输入新标签名）。
+    fn open_tag_assign_dialog(&self, conn_id: &str, window: &mut Window, cx: &mut App);
+
+    /// 读取连接当前标签（逗号分隔字符串列表）。
+    fn list_tags_for(&self, conn_id: &str) -> Vec<String>;
+
+    /// 覆盖式设置连接标签（打标签对话框确认后调用）。
+    fn assign_tags(&self, conn_id: &str, tags: &[String], cx: &mut App);
+
+    /// 全部标签定义名（global + project 两域合并去重）。
+    fn all_tag_names(&self) -> Vec<String>;
+
     /// 展开右 Dock 并切到指定面板（右键「查看洞察」等）。
     fn open_right_panel(&self, panel: RightPanel, cx: &mut App);
 

@@ -1940,12 +1940,25 @@ impl NavView {
                                     e.update(app, |this, cx| this.ensure_nav_pump(cx));
                                 }
                             }))
-                            .item(PopupMenuItem::new("编辑连接…").on_click(move |_, window, app| {
-                                let cid = cid_edit.clone();
-                                e_edit.update(app, |this, cx| {
-                                    // 命令端口：直接开对话框（不再置位请求字段等渲染消费）。
-                                    this.host.edit_connection(&cid, window, cx);
-                                });
+                            .item(PopupMenuItem::new("编辑连接…").on_click({
+                                let cid_edit2 = cid_edit.clone();
+                                let e_edit2 = e_edit.clone();
+                                move |_, window, app| {
+                                    let cid = cid_edit2.clone();
+                                    e_edit2.update(app, |this, cx| {
+                                        this.host.edit_connection(&cid, window, cx);
+                                    });
+                                }
+                            }))
+                            .item(PopupMenuItem::new("打标签…").on_click({
+                                let cid_tag = cid_edit.clone();
+                                let e_tag = e_edit.clone();
+                                move |_, window, app| {
+                                    let cid = cid_tag.clone();
+                                    e_tag.update(app, |this, cx| {
+                                        this.host.open_tag_assign_dialog(&cid, window, cx);
+                                    });
+                                }
                             }))
                             .item(
                                 // S4-③ 能力门控（blanco 参照）：可见性弹框要**同步查库**（打开时
@@ -2429,22 +2442,27 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             .as_ref()
             .map(|c| c.key == node.key)
             .unwrap_or(false);
-        let title = if renaming {
+        let title: AnyElement = if renaming {
             match &self.nav_rename_input {
-                Some(input) => div().flex_1().min_w_0().child(Input::new(input)),
+                Some(input) => div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Input::new(input))
+                    .into_any_element(),
                 // 建框晚一帧（render_nav 建框在列表渲染前）：空帧给占位，避免闪缩。
                 None => div()
                     .flex_1()
                     .min_w_0()
                     .text_xs()
                     .text_color(fg)
-                    .child(node.name.clone()),
+                    .child(node.name.clone())
+                    .into_any_element(),
             }
         } else {
             // B6 待提交删除态：文字换弱 danger 色 + 删除线；命中分段由高亮函数内部分段补挂
             // （删除线不穿透内层 Div，R2 风险在纯函数层闭环）。
             let title_fg = if staged_hit { staged_drop } else { fg };
-            div()
+            let title_el = div()
                 .flex_1()
                 .min_w_0()
                 .overflow_hidden()
@@ -2458,7 +2476,63 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     product_tokens::get(cx).search_match_background(cx.theme()),
                     title_fg,
                     staged_hit,
-                ))
+                ));
+            // 表 / 视图名 hover 卡（2026-10-28 实现）：类型 + 约行数 + 注释 + 归属连接。
+            // 只挂对象行不挂连接 / 目录 / 列——鼠标扫过整棵树时不至于弹层乱闪
+            // （与徽标 hover 卡同一 300ms 延迟口径，见 `primitives::nav_badge_hover_card`）。
+            // 待提交删除态不挂：行已是删除线弱色，弹卡没有增量信息。
+            if !staged_hit && matches!(&node.kind, NavNodeKind::Table { .. } | NavNodeKind::View) {
+                let hover_id = SharedString::from(format!("nav-node-hover::{}", node.key));
+                let n_name = node.name.clone();
+                let n_comment = node.comment.clone();
+                let n_conn_label2 = n_conn_label.clone();
+                let is_view = matches!(&node.kind, NavNodeKind::View);
+                let row_estimate = match &node.kind {
+                    NavNodeKind::Table { row_estimate } => *row_estimate,
+                    _ => None,
+                };
+                HoverCard::new(hover_id)
+                    .open_delay(std::time::Duration::from_millis(300))
+                    // trigger 占满行内标题槽（flex_1），卡片锚点跟随整块标题而非文字。
+                    .trigger_style(
+                        gpui_kit::StyleRefinement::default()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden(),
+                    )
+                    .trigger(title_el)
+                    .content(move |_, _window, cx| {
+                        let fg = cx.theme().colors.foreground;
+                        let muted = cx.theme().colors.muted_foreground;
+                        let mut body = div().v_flex().gap(gpui_kit::rems(0.125)).text_xs();
+                        body = body.child(
+                            div()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(fg)
+                                .child(if is_view {
+                                    format!("视图：{n_name}")
+                                } else {
+                                    format!("表：{n_name}")
+                                }),
+                        );
+                        if let Some(est) = row_estimate {
+                            body = body.child(
+                                div().text_color(muted).child(format!("约 {est} 行")),
+                            );
+                        }
+                        if let Some(c) = n_comment.as_deref() {
+                            if !c.is_empty() {
+                                body = body.child(
+                                    div().text_color(muted).child(format!("注释：{c}")),
+                                );
+                            }
+                        }
+                        body.child(div().text_color(muted).child(format!("连接：{n_conn_label2}")))
+                    })
+                    .into_any_element()
+            } else {
+                title_el.into_any_element()
+            }
         };
         row = row.child(title);
         // 需求④ 右侧 meta（列类型 + PK/FK）随总开关显隐。
