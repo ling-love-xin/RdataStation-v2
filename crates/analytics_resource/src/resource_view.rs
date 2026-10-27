@@ -30,6 +30,7 @@ use gpui_kit::component::IndexPath;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
+use gpui_kit::component::empty::{Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
@@ -2470,11 +2471,12 @@ impl ResourcesPanel {
         skeleton
     }
 
-    fn render_empty(&self, cx: &mut Context<Self>) -> Div {
-        let muted = cx.theme().colors.muted_foreground;
+    fn render_empty(&self, _cx: &mut Context<Self>) -> Empty {
         let read_only = self.snapshot.read_only;
         // 空态按实例分流（§13.2）：全局实例不直接归档，只给一句"升级上来"的引导，
         // 不摆草稿箱 / 本地文件两个项目侧入口；项目与「全部」视图保持原归档引导。
+        // 组件选型：gpui-kit `empty::Empty`（规格 §7.2 UI 统一；自带居中布局 + 虚线框），
+        // 标题 / 说明 / 按钮分别进 `EmptyHeader` / `EmptyContent` 槽位。
         let is_global = self.instance == InstanceFilter::Global;
         let (title, hint) = if is_global {
             (
@@ -2488,80 +2490,69 @@ impl ResourcesPanel {
             )
         };
 
-        let mut body = div()
-            .flex_1()
-            .v_flex()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .child(div().text_sm().text_color(muted).child(title))
-            .child(
-                div()
-                    .px_4()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(hint),
-            );
+        let empty = Empty::new().header(
+            EmptyHeader::new()
+                .title(EmptyTitle::new().child(title))
+                .description(EmptyDescription::new().child(hint)),
+        );
 
-        if !is_global {
+        if is_global {
+            empty
+        } else {
             // 两个按钮各拿一份（`Rc` 不是 `Copy`：两个闭包都要 `move` 走它）。
             let host_for_drafts = self.host.clone();
             let host_for_file = self.host.clone();
-            body = body
-                .child(
-                    Button::new("archive-for-empty")
-                        .primary()
-                        .debug_selector(|| "archive-empty-action".to_string())
-                        .label("从草稿箱归档…")
-                        .disabled(read_only)
-                        .on_click(move |_, window, cx| {
-                            host_for_drafts.request_archive_from_drafts(window, cx)
-                        }),
-                )
-                .child(
-                    Button::new("archive-for-empty-file")
-                        .secondary()
-                        .label("从本地文件归档…")
-                        .disabled(read_only)
-                        .on_click(move |_, window, cx| {
-                            host_for_file.request_archive_from_file(window, cx)
-                        }),
-                );
+            empty.content(
+                EmptyContent::new()
+                    .child(
+                        Button::new("archive-for-empty")
+                            .primary()
+                            .debug_selector(|| "archive-empty-action".to_string())
+                            .label("从草稿箱归档…")
+                            .disabled(read_only)
+                            .on_click(move |_, window, cx| {
+                                host_for_drafts.request_archive_from_drafts(window, cx)
+                            }),
+                    )
+                    .child(
+                        Button::new("archive-for-empty-file")
+                            .secondary()
+                            .label("从本地文件归档…")
+                            .disabled(read_only)
+                            .on_click(move |_, window, cx| {
+                                host_for_file.request_archive_from_file(window, cx)
+                            }),
+                    ),
+            )
         }
-        body
     }
 
     /// 搜索 / 筛选无结果：**不是空库态**（原型 §5 状态与空态矩阵）。
     ///
     /// 两态的出口才是关键区别：空库引导"归档"（没有东西可用），无匹配引导"清筛选"
     /// （东西在，只是被挡住了）。文案混用会把用户引到错误的下一步。
-    fn render_no_match(&self, cx: &mut Context<Self>) -> Div {
-        let muted = cx.theme().colors.muted_foreground;
+    fn render_no_match(&self, cx: &mut Context<Self>) -> Empty {
         let panel = cx.entity();
 
-        div()
-            .flex_1()
-            .v_flex()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .child(div().text_sm().text_color(muted).child("没有匹配的存档"))
-            .child(
-                div()
-                    .px_4()
-                    .text_xs()
-                    .text_color(muted)
-                    // 副文案由数据层给（`filter::no_match_hint`）：搜的是“匹配面”，
-                    // 能搜哪些字段就该由管匹配面的那处说了算，而不是渲染层自己编一句。
-                    .child(filter::no_match_hint(&self.filter.query)),
+        // 副文案由数据层给（`filter::no_match_hint`）：搜的是“匹配面”，
+        // 能搜哪些字段就该由管匹配面的那处说了算，而不是渲染层自己编一句。
+        Empty::new()
+            .header(
+                EmptyHeader::new()
+                    .title(EmptyTitle::new().child("没有匹配的存档"))
+                    .description(
+                        EmptyDescription::new().child(filter::no_match_hint(&self.filter.query)),
+                    ),
             )
-            .child(
-                Button::new("archive-clear-filter")
-                    .ghost()
-                    .label("清空筛选")
-                    .on_click(move |_, window, app| {
-                        panel.update(app, |panel, cx| panel.clear_filter(window, cx));
-                    }),
+            .content(
+                EmptyContent::new().child(
+                    Button::new("archive-clear-filter")
+                        .ghost()
+                        .label("清空筛选")
+                        .on_click(move |_, window, app| {
+                            panel.update(app, |panel, cx| panel.clear_filter(window, cx));
+                        }),
+                ),
             )
     }
 }
