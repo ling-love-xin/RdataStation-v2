@@ -257,6 +257,7 @@ impl NavView {
         let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
         let border = cx.theme().colors.border;
+        let sidebar_bg = cx.theme().colors.sidebar;
         let accent = cx.theme().colors.primary;
         let source_filter = self.nav.borrow().source_filter;
         // B6 staged：待提交条目数（面板头「提交 N」按钮预算；空集不渲染、不占槽位）。
@@ -285,9 +286,7 @@ impl NavView {
 
         let header = div()
             .w_full()
-            // 面板头高取 App 统一的 `PANEL_HEADER_HEIGHT`（36px）：这里曾是本仓唯一的
-            // 30px 裸值（`rems(1.875)`），与编辑器工具条 / 设置页 / 资产库面板头对不齐
-            // （规范：`ui-design-spec.md` §2.1）。
+            .bg(sidebar_bg)
             .h(rems(ui::PANEL_HEADER_HEIGHT))
             .border_b_1()
             .border_color(border)
@@ -587,8 +586,7 @@ impl NavView {
                                 },
                             ))
                             .separator()
-                            // 来源标识组（#29）：短码 / 归属域列 并排可独立开关；
-                            // 均即时生效并持久化（settings registry）。
+                            // === 显示组 ===
                             .item(
                                 PopupMenuItem::new("来源短码")
                                     .checked(source_short)
@@ -629,10 +627,7 @@ impl NavView {
                                         }
                                     }),
                             )
-                            .separator()
                             .item(
-                                // 选中态用 `checked`（与同文件的「设为主组」菜单一致）：
-                                // 文本拼 `✓ ` 会在有勾 / 无勾时改变文案宽度。
                                 PopupMenuItem::new("显示标签").checked(show_tags).on_click({
                                     let host_tags = host_tags.clone();
                                     move |_, _, app| {
@@ -640,9 +635,9 @@ impl NavView {
                                     }
                                 }),
                             )
+                            .separator()
+                            // === 表行统计组 ===
                             .item(
-                                // 表行统计徽标总开关（需求④）：关闭后表 / 视图行右侧的
-                                // meta / 注释副标 / 分区·继承 / ≈N / 大小徽标全部不显。
                                 PopupMenuItem::new("表行统计徽标")
                                     .checked(show_inline_stats)
                                     .on_click({
@@ -652,7 +647,6 @@ impl NavView {
                                         }
                                     }),
                             )
-                            // 需求② 表行统计子项独立开关：总开关开时仍受各自子项门控。
                             .item(
                                 PopupMenuItem::new("注释副标")
                                     .checked(show_inline_comment)
@@ -684,6 +678,7 @@ impl NavView {
                                     }),
                             )
                             .separator()
+                            // === 视图组 ===
                             .item(
                                 // 已保存视图（#10）：把当前四项 facet 存为命名视图 / 一键应用 /
                                 // 管理删除。只动 facet，不动搜索框。
