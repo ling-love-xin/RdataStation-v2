@@ -53,7 +53,7 @@ P1 边界（已实现，勿当缺口）：`SELECT *` 只展开实体表；表达
 
 | 项 | 现状 | 影响 / 处置 |
 | --- | --- | --- |
-| origin/main 未推送 | 本地领先 14 个 commit（0.8.0 升级、P0、P1、多文档恢复、值查看器等） | 等用户拍板推送 |
+| origin/main 推送 | ✅ 已推送（2026-10-28）：44 个 commit 同步（0 领先 0 落后），含内核能力释放 / A 方案 / cell 菜单 / 结果集 tab 一致化等 | 完成 |
 | insight 线大量未提交 | 工作区 47 处：`crates/insight/*`、`plugin/*`、`workbench/tests/*`（3 个）、docs/insight 等 | 阻塞 `cargo test -p rds-workbench` 整包（test-cfg 编译错误）；P 线提交不碰 Cargo.lock / insight 文件 |
 | Cargo.lock 未提交改动 | 被其他线改过 | 不随 P 线提交 |
 
