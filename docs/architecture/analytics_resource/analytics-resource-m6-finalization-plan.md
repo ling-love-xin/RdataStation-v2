@@ -1,5 +1,7 @@
 # 资产库（M6）收口方案：问题点 · 解决方案 · 实施方案 · 优劣（2026-10-25）
 
+> **落地状态注记（2026-10-28 回写）**：批1–4（§2 八项）已全部实现并通过验证（详见 gap-review §5）；追加的 gpui-kit 组件化 P1–P5 已处理完毕——P1a/P1c/P3 落地（`detail_view.rs` / `resource_view.rs`）、P2a/P2b/P4/P5 实证评估不落地、P1b 确认已用 `Tag`，提交 `ecbf0f21`。验证：`rds-analytics-resource` lib **170 passed** / dialog_window **10** / panel_window **25**，0 failed。原型 HTML 同步见 §批5（本文档对应内容已并入 `analytics-resource-gap-review.md` §3/§5）。
+
 > 用途：对 `crates/analytics_resource` 与宿主接线（`crates/workbench` 资源面板 / 宿主 / job 层）现存问题一次性盘点、分级、出方案，经裁决后按批次实现。
 > 证据口径：所有「现状」均来自本轮工作区源码实读；定位锚点 = `文件:符号`（行号随代码演进会漂，以符号名为准）。规格依据 = `analytics-resource-prototype-design.md` §12.1.1 / §12.2.1 / §13。
 > 基线（盘点时实测）：`cargo check --workspace` 绿；`cargo test -p rds-analytics-resource --lib` **169 passed**；`cargo test -p rds-workbench --lib` **96 passed**。

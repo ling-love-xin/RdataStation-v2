@@ -324,15 +324,15 @@ table.dt tr.on td{background:var(--accent);}
 .toast.on{opacity:1;transform:translateX(-50%) translateY(0);}
 
 /* ── 状态可见性（场景 → 视图） ── */
-[data-panel="list"] .st-list,[data-panel="anomaly"] .st-anomaly,[data-panel="empty"] .st-empty,[data-panel="noresult"] .st-noresult{display:block;}
+[data-panel="list"] .st-list,[data-panel="anomaly"] .st-anomaly,[data-panel="empty"] .st-empty,[data-panel="noresult"] .st-noresult,[data-panel="empty-global"] .st-empty-global{display:block;}
 [data-status="normal"] .pst-normal,[data-status="anomaly"] .pst-anomaly,[data-status="zero"] .pst-zero{display:flex;}
-[data-detail="file"] .dp-file,[data-detail="ref"] .dp-ref,[data-detail="insight"] .dp-insight{display:flex;}
+[data-detail="file"] .dp-file,[data-detail="ref"] .dp-ref,[data-detail="insight"] .dp-insight,[data-detail="global"] .dp-global,[data-detail="ref-stale"] .dp-ref-stale{display:flex;}
 [data-detail="none"] .detail{display:none;}
 [data-tabs="file"] .ct-file,[data-tabs="ref"] .ct-ref,[data-tabs="none"] .ct-none{display:flex;}
 [data-tabs="file"] .cb-file,[data-tabs="ref"] .cb-ref{display:block;}
 [data-tabs="none"] .cb-none{display:flex;}
 [data-strip="ro"] .s-ro,[data-strip="ref"] .s-ref,[data-strip="reject"] .s-reject{display:flex;}
-[data-dialog="archive"] .dlg-archive,[data-dialog="checkout"] .dlg-checkout,[data-dialog="versions"] .dlg-versions,[data-dialog="trash"] .dlg-trash,[data-dialog="repair"] .dlg-repair,[data-dialog="insight-archive"] .dlg-insight-archive{display:flex;}
+[data-dialog="archive"] .dlg-archive,[data-dialog="checkout"] .dlg-checkout,[data-dialog="versions"] .dlg-versions,[data-dialog="trash"] .dlg-trash,[data-dialog="repair"] .dlg-repair,[data-dialog="insight-archive"] .dlg-insight-archive,[data-dialog="conflict"] .dlg-conflict{display:flex;}
 .dlg-archive{width:544px;}
 .dlg-checkout{width:480px;}
 .dlg-versions{width:768px;}
@@ -441,6 +441,10 @@ table.dt tr.on td{background:var(--accent);}
   <button data-go="menu">右键菜单</button>
   <button data-go="readonly">只读：直接编辑被拒</button>
   <button data-go="insight">洞察联动（右栏集合 + 归档）</button>
+  <button data-go="conflict">升级冲突对话框（A1）</button>
+  <button data-go="empty-global">全局空态（A5）</button>
+  <button data-go="global-detail">全局详情（A4）</button>
+  <button data-go="ref-stale">引用失效条（B2）</button>
 </div>
 
 <div class="workbench" id="wb" data-state="default" data-panel="list" data-status="normal" data-detail="file" data-tabs="file" data-strip="ro" data-dialog="none">
@@ -696,6 +700,22 @@ table.dt tr.on td{background:var(--accent);}
           </div>
         </div>
 
+        <!-- 全局实例空态（A5，§13.2）：切到「全局」实例且全局为空 -->
+        <div class="st st-empty-global">
+          <div class="empty-state">
+            <div class="big"><svg><use href="#i-grid" xlink:href="#i-grid"/></svg></div>
+            <div class="t">全局实例暂无资源</div>
+            <div class="d">全局分析库（G_ 连接）是跨项目的共享层。<br>项目里的存档可通过右键「升级到全局…」共享到全局，再供其他项目分发。</div>
+            <div class="btns">
+              <button class="btn-s">了解全局共享规则</button>
+            </div>
+            <div class="sug">
+              <svg class="ico-sm ic"><use href="#i-info" xlink:href="#i-info"/></svg>
+              <span>全局不能直接归档：只能由项目行升级而来；全局 → 项目分发是跨项目唯一法定路径（§13）</span>
+            </div>
+          </div>
+        </div>
+
         <!-- 搜索无结果 -->
         <div class="st st-noresult">
           <div class="empty-state">
@@ -810,6 +830,7 @@ table.dt tr.on td{background:var(--accent);}
 
           <div class="sect">
             <div class="sect-h">基本信息<span class="lock">只读</span></div>
+            <div class="kv"><span class="k">实例</span><span class="v"><span class="scope-badge">项目</span></span></div>
             <div class="kv"><span class="k">大小</span><span class="v">1.2 KB</span></div>
             <div class="kv"><span class="k">修改时间</span><span class="v">2026-09-12 10:24</span></div>
             <div class="kv"><span class="k">归档时间</span><span class="v">2026-09-15 09:12</span></div>
@@ -909,6 +930,72 @@ GROUP BY channel...</div>
 
           <div class="danger-zone">
             <button class="btn-d" data-go="trash">移入回收站</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 全局行轻量详情（A4，§13.2）：只读，动作收敛到「分发到本项目…」 -->
+      <div class="dstate dp-global">
+        <div class="dhead">
+          <svg class="ico-sm ic"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+          <span class="dnm">mock_orders</span>
+          <span class="dver">全局</span>
+        </div>
+        <div class="dsub">kind 分析表 · 全局共享层（G_ 连接）</div>
+        <div class="dbody">
+
+          <div class="sect">
+            <div class="sect-h">基本信息<span class="lock">只读</span></div>
+            <div class="kv"><span class="k">实例</span><span class="v"><span class="scope-badge">全局</span></span></div>
+            <div class="kv"><span class="k">规模</span><span class="v">12,480 行 × 18 列</span></div>
+            <div class="kv"><span class="k">来源表</span><span class="v mono">mock_orders</span></div>
+            <div class="kv"><span class="k">共享源</span><span class="v">项目「营销分析」升级而来</span></div>
+            <div class="locknote"><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg><span>全局共享层：只读，分发到项目后可在项目侧编辑</span></div>
+          </div>
+
+          <div class="sect">
+            <div class="sect-h">分发</div>
+            <div class="kv blk"><span class="k">目标项目</span><span class="v">分发 = Parquet 中转进项目分析库（P_）并建项目登记 + 版本链（§13.6）</span></div>
+          </div>
+
+          <div class="danger-zone">
+            <button class="btn-p" data-toast="已把全局 mock_orders 分发到本项目（P_）· 项目登记 + v1 版本链（§13.6）">分发到本项目…</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- reference 型详情 + 失效条（B2，§12.1.1 ②）：源已变更 → 不打开 + 顶部失效条 + 两动作 -->
+      <div class="dstate dp-ref-stale">
+        <div class="warnstrip">
+          <svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg>
+          <span class="grow">源已变更，快照失效<br><span style="opacity:.85">期望 3f9a2c7b1e04 · 实际 7d20b9c4f1a8 · 打开被拦截（懒校验 §12.1.1 ②）</span></span>
+          <button class="btn-s warn" id="acceptRefBtn">接受当前内容</button>
+        </div>
+        <div class="dhead">
+          <svg class="ico-sm ic"><use href="#i-link" xlink:href="#i-link"/></svg>
+          <span class="dnm">sales_daily.csv</span>
+          <span class="dver">v2</span>
+        </div>
+        <div class="dsub">kind 文件 · 引用型（本体留源位置，只存元数据）</div>
+        <div class="dbody">
+
+          <div class="sect">
+            <div class="sect-h">基本信息<span class="lock">只读</span></div>
+            <div class="kv"><span class="k">实例</span><span class="v"><span class="scope-badge">项目</span></span></div>
+            <div class="kv"><span class="k">大小</span><span class="v">源文件大小（读取中）</span></div>
+            <div class="kv"><span class="k">内容指纹</span><span class="v mono">3f9a2c7b1e04</span></div>
+            <div class="kv blk"><span class="k">源位置</span><span class="v mono">/data/exports/sales_daily.csv</span></div>
+            <div class="locknote"><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg><span>引用型：本体在源位置，源变更后快照失效</span></div>
+          </div>
+
+          <div class="sect">
+            <div class="sect-h">失效处置</div>
+            <div class="kv blk"><span class="k">接受当前内容</span><span class="v">以当前源生成新版本（v3）+ 新指纹；成功后清除失效条</span></div>
+            <div class="kv blk"><span class="k">从历史还原</span><span class="v"><span class="dlink" style="margin:0" data-go="versions">打开版本历史…</span>挑一版取回</span></div>
+          </div>
+
+          <div class="danger-zone">
+            <button class="btn-d" data-toast="引用型：本体留源位置，只删除登记记录，之后可从回收站还原登记行（§12.1.1 ③）">移入回收站</button>
           </div>
         </div>
       </div>
@@ -1021,7 +1108,7 @@ GROUP BY channel...</div>
     <div class="mi">打标签…</div>
     <div class="mi">移动到分组 ▾</div>
     <div class="sep"></div>
-    <div class="mi" data-toast="已把 mock_orders 表 + 版本信息复制到全局 DuckDB（G_ 连接）· scope=global · 项目行保留并标记「已升级」（§13.3）">升级到全局…</div>
+    <div class="mi" data-go="conflict">升级到全局…</div>
     <div class="sep"></div>
     <div class="mi" data-toast="已在系统中显示 resources/reports/dau_report.sql">在系统中显示</div>
     <div class="mi" data-toast="已复制路径 resources/reports/dau_report.sql">复制路径</div>
@@ -1058,9 +1145,10 @@ GROUP BY channel...</div>
       <div class="fgrid">
         <div class="fl">显示名</div>
         <div class="fw"><input class="inp" value="dau_report"></div>
-        <div class="fl">目标位置</div>
-        <div class="fw"><input class="inp ro" value="resources/reports/dau_report.sql" readonly></div>
-        <div class="fhint">不可编辑：保留草稿目录结构，避免同名冲突</div>
+        <div class="fl" id="modeLbl">目标位置</div>
+        <div class="fw" id="modeCopyBox"><input class="inp ro" value="resources/reports/dau_report.sql" readonly></div>
+        <div class="fw" id="modeRefBox" style="display:none"><input class="inp ro" value="/data/scratchpad/reports/dau_report.sql" readonly></div>
+        <div class="fhint" id="modeHint">不可编辑：保留草稿目录结构，避免同名冲突（复制 → 目标位置）</div>
 
         <div class="fl">分组</div>
         <div class="fw"><span class="selw">报表<span class="ar">▾</span></span></div>
@@ -1078,8 +1166,8 @@ GROUP BY channel...</div>
 
         <div class="fl">归档模式</div>
         <div class="fw"><div class="radios">
-          <label><span class="rdot on"></span>复制（默认）</label>
-          <label><span class="rdot"></span>引用（大文件省盘）</label>
+          <label id="modeCopy" data-mode="copy"><span class="rdot on"></span>复制（默认）</label>
+          <label id="modeRef" data-mode="reference"><span class="rdot"></span>引用（大文件省盘）</label>
         </div></div>
         <div class="fhint">复制：本体进 <span class="mono">resources/</span> + 只读，草稿保留为工作副本；引用：本体留原位只存元数据，打开时校验指纹（2026-10-13 两档粒度）</div>
 
@@ -1102,6 +1190,36 @@ GROUP BY channel...</div>
       <span class="grow"></span>
       <button class="btn-s" data-go="default">取消</button>
       <button class="btn-p" data-toast="已归档 dau_report.sql → resources/reports/（v1）· 草稿保留为工作副本" data-go="default">归档</button>
+    </div>
+  </div>
+
+  <!-- 升级 / 分发同名冲突三选对话框（A1，§13.3） -->
+  <div class="dlg dlg-conflict">
+    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-warn" xlink:href="#i-warn"/></svg>升级到全局<span class="sub2">冲突：全局已有同名资源</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x" xlink:href="#i-x"/></svg></button></div>
+    <div class="dlg-body">
+      <div class="srcbar">
+        <svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+        <span class="mono">mock_orders</span>
+        <span class="tagn">项目分析表 · 待升级</span>
+      </div>
+      <div class="locknote" style="margin-top:0"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg><span>全局 DuckDB（G_ 连接）已有同名表 <span class="mono">mock_orders</span>（v4 · 来自另一项目）。同名冲突不能静默覆盖，需先处置。</span></div>
+      <div class="fgrid" style="margin-top:10px">
+        <div class="fl">冲突处置</div>
+        <div class="fw"><div class="radios">
+          <label><span class="rdot on"></span>覆盖全局旧版本（版本链接续）</label>
+          <label><span class="rdot"></span>改名升级（新名入全局）</label>
+          <label><span class="rdot"></span>取消</label>
+        </div></div>
+        <div class="fhint">覆盖 = 删全局旧表 + 软删旧登记后重走升级（<span class="mono">overwritten=true</span>）；改名 = 目标新名重排升级路径（§13.3）</div>
+      </div>
+      <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>跨项目唯一法定路径 = 项目 → 全局 → 项目；项目 ↔ 项目禁止直传。</span></div>
+    </div>
+    <div class="dlg-foot">
+      <span>升级会把表 + 版本信息复制进全局 DuckDB（G_ 连接）</span>
+      <span class="grow"></span>
+      <button class="btn-s" data-go="default">取消</button>
+      <button class="btn-s" data-toast="请输入目标新名（非空）后重发升级" data-go="conflict">改名</button>
+      <button class="btn-p" data-toast="已覆盖全局 mock_orders（v5）· overwritten=true · 全局登记软删后重走升级" data-go="default">覆盖</button>
     </div>
   </div>
 
@@ -1500,7 +1618,11 @@ var SCENES = {
   'trash':    {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'trash'},
   'repair':   {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'repair'},
   'insight':  {panel:'list',    status:'normal',  detail:'insight', tabs:'file', strip:'ro',     dialog:'none'},
-  'insight-archive': {panel:'list', status:'normal', detail:'insight', tabs:'file', strip:'ro', dialog:'insight-archive'}
+  'insight-archive': {panel:'list', status:'normal', detail:'insight', tabs:'file', strip:'ro', dialog:'insight-archive'},
+  'conflict': {panel:'list', status:'normal', detail:'file', tabs:'file', strip:'ro', dialog:'conflict'},
+  'empty-global': {panel:'empty-global', status:'zero', detail:'none', tabs:'none', strip:'none', dialog:'none'},
+  'global-detail': {panel:'list', status:'normal', detail:'global', tabs:'file', strip:'ro', dialog:'none'},
+  'ref-stale': {panel:'list', status:'normal', detail:'ref-stale', tabs:'ref', strip:'ref', dialog:'none'}
 };
 
 var root = document.documentElement;
@@ -1545,6 +1667,26 @@ function applyState(name){
     document.getElementById('sortBtn').classList.add('on');
   }
   document.getElementById('q').value = (name === 'noresult') ? '渠道' : '';
+}
+
+/* 归档对话框：copy / reference 模式切换（B1，§12.1.1 ①）——表单随模式切换（目标位置 / 源位置 + note） */
+var modeCopy = document.getElementById('modeCopy');
+var modeRef = document.getElementById('modeRef');
+if (modeCopy && modeRef) {
+  function setArchiveMode(m){
+    modeCopy.querySelector('.rdot').classList.toggle('on', m === 'copy');
+    modeRef.querySelector('.rdot').classList.toggle('on', m === 'reference');
+    var cb = document.getElementById('modeCopyBox'), rb = document.getElementById('modeRefBox');
+    if (cb) cb.style.display = m === 'copy' ? 'block' : 'none';
+    if (rb) rb.style.display = m === 'reference' ? 'block' : 'none';
+    var lbl = document.getElementById('modeLbl'), hint = document.getElementById('modeHint');
+    if (lbl) lbl.textContent = m === 'copy' ? '目标位置' : '源位置';
+    if (hint) hint.textContent = m === 'copy'
+      ? '不可编辑：保留草稿目录结构，避免同名冲突（复制 → 目标位置）'
+      : '本体留原位，只存元数据（地址 + 指纹 + 版本）；源变更后快照失效（引用 → 源位置）';
+  }
+  modeCopy.addEventListener('click', function(){ setArchiveMode('copy'); });
+  modeRef.addEventListener('click', function(){ setArchiveMode('reference'); });
 }
 
 document.getElementById('statebar').addEventListener('click', function(e){
