@@ -229,6 +229,7 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::EditorSoftWrap => SettingValue::Bool(settings.editor.soft_wrap),
         Slot::EditorAutoClose => SettingValue::Bool(settings.editor.auto_close),
         Slot::EditorSmartIndent => SettingValue::Bool(settings.editor.smart_indent),
+        Slot::EditorInlineCompletion => SettingValue::Bool(settings.editor.inline_completion),
         Slot::EditorDefaultTabSize => {
             SettingValue::Number(settings.editor.default_tab_size as f64)
         }
@@ -305,6 +306,13 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         }
         Slot::ResultPanelPersistColumnWidths => {
             SettingValue::Bool(settings.result_panel.persist_column_widths)
+        }
+        Slot::LayoutLocked => SettingValue::Bool(settings.layout.locked),
+        Slot::LayoutLeftSidebarWidth => {
+            SettingValue::Number(settings.layout.left_sidebar_width as f64)
+        }
+        Slot::LayoutRightSidebarWidth => {
+            SettingValue::Number(settings.layout.right_sidebar_width as f64)
         }
     })
 }
@@ -433,6 +441,14 @@ impl SettingsService {
                 };
                 Self::set_smart_indent(on, cx);
             }
+            // 置灰项：值可持久化（未来放开即用），但当前不触发任何内核行为——
+            // 内核 inline_completion 槽位未挂 AI 源，开关恒无效果。
+            Slot::EditorInlineCompletion => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_inline_completion(on, cx);
+            }
             Slot::EditorDefaultTabSize => {
                 let Some(n) = value.as_number() else {
                     return false;
@@ -472,6 +488,33 @@ impl SettingsService {
                     return false;
                 }
                 Self::set_default_encoding(&v, cx);
+            }
+            // 【并行线「DockArea 释放能力」布局设置】只读访问器由并行线已写入；
+            // apply_by_key 分支与 setter 在本提交补齐（共享文件恢复编译的必要部分，
+            // 并行线后续无需重复处理）。
+            Slot::LayoutLocked => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_layout_locked(on, cx);
+            }
+            Slot::LayoutLeftSidebarWidth => {
+                let Some(n) = value.as_number() else {
+                    return false;
+                };
+                if !(100.0..=2000.0).contains(&n) {
+                    return false;
+                }
+                Self::set_layout_left_sidebar_width(n as i64, cx);
+            }
+            Slot::LayoutRightSidebarWidth => {
+                let Some(n) = value.as_number() else {
+                    return false;
+                };
+                if !(100.0..=2000.0).contains(&n) {
+                    return false;
+                }
+                Self::set_layout_right_sidebar_width(n as i64, cx);
             }
             Slot::NavigatorSourceShortCode => {
                 let Some(on) = value.as_bool() else {
@@ -858,6 +901,22 @@ impl SettingsService {
         cx.refresh_windows();
     }
 
+    /// 读取「AI 补全」开关（**当前版本置灰**：设置页禁用，值恒为默认关；
+    /// 未来放开 registry disabled 后由编辑器 render 同步到 AI 源）。
+    pub fn inline_completion(cx: &App) -> bool {
+        cx.global::<Settings>().editor.inline_completion
+    }
+
+    /// AI 补全开关：仅持久化（置灰期不接内核——内核 inline_completion 槽位
+    /// 未挂 AI 源；放开 disabled 后此写入路径复用，无需改设置侧）。
+    pub fn set_inline_completion(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.inline_completion = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
     /// 新文档默认缩进宽度（1–16；仅影响新建文档，已开文档不动）。
     pub fn set_default_tab_size(n: i64, cx: &mut App) {
         {
@@ -1010,6 +1069,51 @@ impl SettingsService {
     /// 未配置时返回 `database`（与 `Shared::new` 的构造默认一致，见 `model::Startup`）。
     pub fn startup_default_left_panel(cx: &App) -> String {
         cx.global::<Settings>().startup.default_left_panel.clone()
+    }
+
+    /// 读取布局锁定设置（默认 false）。
+    pub fn layout_locked(cx: &App) -> bool {
+        cx.global::<Settings>().layout.locked
+    }
+
+    /// 读取左侧侧边栏宽度（默认 250px）。
+    pub fn layout_left_sidebar_width(cx: &App) -> i64 {
+        cx.global::<Settings>().layout.left_sidebar_width
+    }
+
+    /// 读取右侧侧边栏宽度（默认 300px）。
+    pub fn layout_right_sidebar_width(cx: &App) -> i64 {
+        cx.global::<Settings>().layout.right_sidebar_width
+    }
+
+    /// 【并行线补充】布局锁定开关：更新 global → 持久化 → 立即重绘。
+    pub fn set_layout_locked(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.layout.locked = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+
+    /// 【并行线补充】左侧侧边栏宽度：更新 global → 持久化 → 立即重绘。
+    pub fn set_layout_left_sidebar_width(px: i64, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.layout.left_sidebar_width = px.clamp(100, 2000);
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+
+    /// 【并行线补充】右侧侧边栏宽度：更新 global → 持久化 → 立即重绘。
+    pub fn set_layout_right_sidebar_width(px: i64, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.layout.right_sidebar_width = px.clamp(100, 2000);
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
     }
 
     /// 设置并持久化启动时左侧栏默认显示的模块（更新 global → 写 settings.json）。

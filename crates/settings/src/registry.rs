@@ -111,6 +111,8 @@ pub enum Slot {
     EditorAutoClose,
     /// 【2026-10-27】智能缩进（标量布尔，默认开；设在设置页，编辑器 render 同步）。
     EditorSmartIndent,
+    /// 【2026-10-27】AI 补全开关（标量布尔，默认关；**当前置灰**——能力预留，放开前恒不产出）。
+    EditorInlineCompletion,
     EditorDefaultTabSize,
     EditorDefaultHardTabs,
     EditorDefaultLineEnding,
@@ -166,6 +168,12 @@ pub enum Slot {
     ResultPanelSelectOnModifierClick,
     /// 列宽是否跨会话持久化（关闭则只在当前会话内记忆）。
     ResultPanelPersistColumnWidths,
+    /// 布局锁定（默认 false；render 时同步到 DockArea::set_locked）。
+    LayoutLocked,
+    /// 左侧侧边栏宽度（默认 250px；render 时同步到 DockArea::set_dock_size）。
+    LayoutLeftSidebarWidth,
+    /// 右侧侧边栏宽度（默认 300px；render 时同步到 DockArea::set_dock_size）。
+    LayoutRightSidebarWidth,
 }
 
 /// key → 槽位（登记项都必须有槽位；由契约测试保证）。
@@ -177,6 +185,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "editor.soft_wrap" => Slot::EditorSoftWrap,
         "editor.auto_close" => Slot::EditorAutoClose,
         "editor.smart_indent" => Slot::EditorSmartIndent,
+        "editor.inline_completion" => Slot::EditorInlineCompletion,
         "editor.default_tab_size" => Slot::EditorDefaultTabSize,
         "editor.default_hard_tabs" => Slot::EditorDefaultHardTabs,
         "editor.default_line_ending" => Slot::EditorDefaultLineEnding,
@@ -217,6 +226,9 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "result_panel.loop_selection" => Slot::ResultPanelLoopSelection,
         "result_panel.select_on_modifier_click" => Slot::ResultPanelSelectOnModifierClick,
         "result_panel.persist_column_widths" => Slot::ResultPanelPersistColumnWidths,
+        "layout.locked" => Slot::LayoutLocked,
+        "layout.left_sidebar_width" => Slot::LayoutLeftSidebarWidth,
+        "layout.right_sidebar_width" => Slot::LayoutRightSidebarWidth,
         _ => return None,
     })
 }
@@ -230,7 +242,8 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         | Slot::EditorShowFolds
         | Slot::EditorSoftWrap
         | Slot::EditorAutoClose
-        | Slot::EditorSmartIndent => KindTag::Bool,
+        | Slot::EditorSmartIndent
+        | Slot::EditorInlineCompletion => KindTag::Bool,
         Slot::EditorDefaultTabSize => KindTag::Number,
         Slot::EditorDefaultLineEnding | Slot::EditorDefaultEncoding => KindTag::Enum,
         Slot::AppearanceFontSize => KindTag::Number,
@@ -269,6 +282,8 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::ResultPanelShowColumnComments => KindTag::Bool,
         Slot::ResultPanelShowTypeBadge | Slot::ResultPanelLoopSelection
         | Slot::ResultPanelSelectOnModifierClick | Slot::ResultPanelPersistColumnWidths => KindTag::Bool,
+        Slot::LayoutLocked => KindTag::Bool,
+        Slot::LayoutLeftSidebarWidth | Slot::LayoutRightSidebarWidth => KindTag::Number,
     }
 }
 
@@ -334,6 +349,9 @@ pub struct SettingSpec {
     pub consumer: &'static str,
     /// 复合值：契约测试不展开它的子键。
     pub composite: bool,
+    /// 置灰（能力存在但暂不可用）：设置页渲染为禁用态（开关不可操作），
+    /// 默认值保留在 model（未来放开即用）。用于「已预留但未实现」的能力位。
+    pub disabled: bool,
 }
 
 impl SettingSpec {
@@ -374,6 +392,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Both,
         consumer: "app/src/main.rs（启动应用 + 系统外观监听）+ SettingsService::set_theme_mode",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "appearance.font_size",
@@ -394,6 +413,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/app/src/main.rs（启动应用 + open_window 同步 rem）+ SettingsService::set_font_size（运行时：Theme::update + Window::set_rem_size）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "appearance.locale",
@@ -408,6 +428,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "SettingsService::set_locale（同步 shared::i18n + refresh_windows）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "appearance.tab_bar_max_width",
@@ -428,6 +449,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/workbench/src/view.rs（装配 DockSkin 应用）+ vendor/gpui-component/src/dock/tab_panel.rs（渲染读取）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "appearance.tab_bar_variant",
@@ -448,6 +470,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/workbench/src/view.rs（装配 DockSkin 应用）+ vendor/gpui-component/src/dock/tab_panel.rs（渲染读取）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "editor.show_line_numbers",
@@ -462,6 +485,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/editor/src/view/host.rs::EditorHostPanel（render 同步内核 set_line_number）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "editor.show_folds",
@@ -476,6 +500,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/editor/src/view/host.rs::EditorHostPanel（render 同步 shared.show_folds → sync_fold）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "editor.soft_wrap",
@@ -490,6 +515,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/editor/src/view/host.rs::EditorHostPanel（render 同步内核 set_soft_wrap）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "editor.auto_close",
@@ -504,6 +530,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/editor/src/view/host.rs::EditorHostPanel（render 同步内核 set_auto_close）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "editor.smart_indent",
@@ -518,6 +545,22 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/editor/src/view/host.rs::EditorHostPanel（render 同步内核 set_smart_indent）",
         composite: false,
+        disabled: false,
+    },
+    SettingSpec {
+        key: "editor.inline_completion",
+        section: "editor",
+        section_label: "编辑器",
+        label: "AI 补全（Inline Completion）",
+        hint: "输入停顿后由 AI 建议后续代码（灰字预览，Tab 接受）——能力已预留，当前版本暂不可用，放开后此开关立即生效",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "false",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/editor/src/lsp/completions.rs::CompletionProvider::inline_completion（内核槽位，未挂 AI 源）",
+        composite: false,
+        disabled: true,
     },
     SettingSpec {
         key: "editor.default_tab_size",
@@ -536,6 +579,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/editor/src/view/host.rs::EditorHostPanel::apply_settings_defaults（新建文档）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "editor.default_hard_tabs",
@@ -550,6 +594,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/editor/src/view/host.rs::EditorHostPanel::apply_settings_defaults（新建文档）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "editor.default_line_ending",
@@ -564,6 +609,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/editor/src/view/host.rs::EditorHostPanel::apply_settings_defaults（新建文档）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "editor.default_encoding",
@@ -584,6 +630,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/editor/src/view/host.rs::EditorHostPanel::apply_settings_defaults（新建文档）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "navigator.source_short_code",
@@ -601,6 +648,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "workbench/src/database/src/nav_view.rs::render_connection_row",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "navigator.show_tags",
@@ -615,6 +663,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Both,
         consumer: "workbench/src/database/src/nav_view.rs::render_connection_row",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "navigator.show_scope",
@@ -629,6 +678,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Both,
         consumer: "workbench/src/database/src/nav_view.rs::render_connection_row",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "navigator.show_name_type_short",
@@ -643,6 +693,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Both,
         consumer: "workbench/src/database/src/nav_view.rs::render_connection_row",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "navigator.filters",
@@ -657,6 +708,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Module,
         consumer: "workbench/src/panels/mod.rs::SidebarPanel::new + nav.rs::write_nav_filters",
         composite: true,
+        disabled: false,
     },
     SettingSpec {
         key: "navigator.saved_views",
@@ -671,6 +723,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Module,
         consumer: "workbench/src/components/saved_view_dialog.rs + nav_view/chrome.rs（⋯ 菜单视图组）",
         composite: true,
+        disabled: false,
     },
     SettingSpec {
         key: "navigator.visible_databases",
@@ -685,6 +738,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Module,
         consumer: "database/src/navigator_service.rs（树加载过滤，经 NavHost 快照传入）+ workbench/src/components/visible_databases_dialog.rs",
         composite: true,
+        disabled: false,
     },
     SettingSpec {
         key: "navigator.row_estimate",
@@ -699,6 +753,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "database/src/nav_view/actions.rs（row_estimate 门控估计任务）+ nav_view/rows.rs（≈ N 徽标渲染）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "navigator.show_inline_stats",
@@ -713,6 +768,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "database/src/nav_view/rows.rs::render_nav_node（表行右侧徽标总闸）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "navigator.show_inline_comment",
@@ -727,6 +783,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "database/src/nav_view/rows.rs::render_nav_node（comment_subline）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "navigator.show_inline_size",
@@ -741,6 +798,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "database/src/nav_view/rows.rs::render_nav_node（≈ KB 徽标）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "navigator.global_mask",
@@ -755,6 +813,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Module,
         consumer: "workbench/src/components/object_mask_dialog.rs + database/src/nav_view/actions.rs / rows.rs（每连接 mask 与全局 mask 叠加过滤）",
         composite: true,
+        disabled: false,
     },
     SettingSpec {
         key: "resources.keep_versions",
@@ -775,6 +834,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "workbench/src/services/resource_jobs.rs::open_service（归档 / 版本还原作业）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "resources.default_sort",
@@ -795,6 +855,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Both,
         consumer: "workbench/src/components/resource_host.rs::remember_sort（写）+ panels/resources.rs::build_resources_panel（读）→ analytics_resource::ResourcesPanel::set_sort",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "resources.collapsed_groups",
@@ -809,6 +870,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Module,
         consumer: "workbench/src/components/resource_host.rs::remember_collapsed（写）+ panels/resources.rs::build_resources_panel（读）→ analytics_resource::ResourcesPanel::set_collapsed",
         composite: true,
+        disabled: false,
     },
     SettingSpec {
         key: "resources.default_group",
@@ -823,6 +885,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Module,
         consumer: "workbench/src/components/resource_host.rs::remember_default_group（写）+ archive_seed / build_resources_panel（读）→ analytics_resource::dialogs::archive::ArchiveDialogSeed::group_id",
         composite: true,
+        disabled: false,
     },
     SettingSpec {
         key: "connection_defaults.connect_timeout_ms",
@@ -842,6 +905,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "workbench/src/services/connection_service.rs::connect_with_type",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "connection_defaults.lan_disable_tls",
@@ -859,6 +923,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "workbench/src/services/connection_service.rs::apply_lan_tls_default",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "projects.sort_mode",
@@ -877,6 +942,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Both,
         consumer: "workbench/src/view.rs::WorkbenchView::new（读）+ components/project_host.rs（写）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "logging.min_level",
@@ -897,6 +963,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/app/src/main.rs（启动取值）+ engine::logging::reload_log_level（运行时，经装配层注册的 sink）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "startup.default_left_panel",
@@ -916,6 +983,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "workbench/src/view.rs::WorkbenchView::init_workspace（读设置 → Shared.active_left）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "scratchpad.toolbar",
@@ -930,6 +998,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Module,
         consumer: "crates/scratchpad/src/scratchpad_view/chrome.rs::（⋯ 菜单读写）+ scratchpad_view.rs::ScratchpadView::new（启动读入）",
         composite: true,
+        disabled: false,
     },
     SettingSpec {
         key: "insight.memory_limit_mb",
@@ -950,6 +1019,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/workbench/src/services/duckdb_host.rs（装配层经 install_insight_memory_limit_sink 应用到 DuckDBManager::set_memory_limit_mb）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "insight.full_scan_confirm",
@@ -964,6 +1034,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/workbench/src/components/insight_actions.rs::insight_full_confirm_requested（宿主弹窗判断）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "insight.work_set_limit",
@@ -984,6 +1055,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/workbench/src/components/insight_actions.rs::apply_insight_prefs（宿主推送）+ crates/insight/src/view/set.rs（渲染）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "insight.status_usage",
@@ -998,6 +1070,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/workbench/src/components/insight_actions.rs::apply_insight_prefs（宿主推送）+ crates/insight/src/workspace.rs（轮询与渲染）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "result_panel.fact_storage",
@@ -1016,6 +1089,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/shared/src/fact.rs::storage_choice / dual_estimate（分流纯函数）；B 批由 workbench 装配层在触发物化路径读取本偏好并映射到 shared::StoragePref",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "result_panel.show_column_comments",
@@ -1030,6 +1104,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/result_panel/src/grid.rs::render_th（列头第二行注释小字）；面板工具栏 B1 临时开关在 sync 时覆盖",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "result_panel.show_type_badge",
@@ -1044,6 +1119,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/result_panel/src/grid.rs::render_th（类型徽标渲染）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "result_panel.loop_selection",
@@ -1058,6 +1134,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/result_panel/src/grid.rs::new_table_state（TableState::loop_selection）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "result_panel.select_on_modifier_click",
@@ -1072,6 +1149,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/result_panel/src/grid.rs::new_table_state（TableState::select_on_modifier_click）",
         composite: false,
+        disabled: false,
     },
     SettingSpec {
         key: "result_panel.persist_column_widths",
@@ -1086,6 +1164,63 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/result_panel/src/grid.rs::column_widths（会话内记忆；跨会话持久化 backlog）",
         composite: false,
+        disabled: false,
+    },
+    // ===== 布局设置 =====
+    SettingSpec {
+        key: "layout.locked",
+        section: "layout",
+        section_label: "布局",
+        label: "锁定布局",
+        hint: "开启后用户不能通过拖动调整面板大小或位置",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "false",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/workbench/src/view.rs（render 时同步到 DockArea::set_locked）",
+        composite: false,
+        disabled: false,
+    },
+    SettingSpec {
+        key: "layout.left_sidebar_width",
+        section: "layout",
+        section_label: "布局",
+        label: "左侧侧边栏宽度",
+        hint: "左侧面板的默认宽度（px）",
+        kind: SettingKind::Number,
+        presets: &[
+            (200, "200px"),
+            (250, "250px（默认）"),
+            (300, "300px"),
+            (350, "350px"),
+        ],
+        default_json: "250",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/workbench/src/view.rs（render 时同步到 DockArea::set_dock_size）",
+        composite: false,
+        disabled: false,
+    },
+    SettingSpec {
+        key: "layout.right_sidebar_width",
+        section: "layout",
+        section_label: "布局",
+        label: "右侧侧边栏宽度",
+        hint: "右侧面板的默认宽度（px）",
+        kind: SettingKind::Number,
+        presets: &[
+            (250, "250px"),
+            (300, "300px（默认）"),
+            (350, "350px"),
+            (400, "400px"),
+        ],
+        default_json: "300",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/workbench/src/view.rs（render 时同步到 DockArea::set_dock_size）",
+        composite: false,
+        disabled: false,
     },
 ];
 

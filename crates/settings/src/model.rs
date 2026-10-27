@@ -51,6 +51,48 @@ pub struct Settings {
     /// 触发物化路径 B 批接通消费）。
     #[serde(default)]
     pub result_panel: ResultPanel,
+    /// 布局设置（侧边栏宽度、布局锁定等）。
+    #[serde(default)]
+    pub layout: Layout,
+}
+
+/// 布局设置。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Layout {
+    /// 是否锁定布局（用户不能通过拖动调整面板大小或位置）。
+    #[serde(default = "default_layout_locked")]
+    pub locked: bool,
+    /// 左侧侧边栏宽度（px）。
+    #[serde(default = "default_layout_left_sidebar_width")]
+    pub left_sidebar_width: i64,
+    /// 右侧侧边栏宽度（px）。
+    #[serde(default = "default_layout_right_sidebar_width")]
+    pub right_sidebar_width: i64,
+}
+
+impl Default for Layout {
+    fn default() -> Self {
+        Self {
+            locked: default_layout_locked(),
+            left_sidebar_width: default_layout_left_sidebar_width(),
+            right_sidebar_width: default_layout_right_sidebar_width(),
+        }
+    }
+}
+
+/// 布局锁定：默认关闭。
+fn default_layout_locked() -> bool {
+    false
+}
+
+/// 左侧侧边栏宽度：默认 250px。
+fn default_layout_left_sidebar_width() -> i64 {
+    250
+}
+
+/// 右侧侧边栏宽度：默认 300px。
+fn default_layout_right_sidebar_width() -> i64 {
+    300
 }
 
 /// 洞察模块资源与交互偏好。
@@ -365,6 +407,11 @@ pub struct Editor {
     /// 即时生效：编辑器 render 权威同步点同步内核 `set_smart_indent`。
     #[serde(default = "default_smart_indent")]
     pub smart_indent: bool,
+    /// AI 补全（Inline Completion）开关——**当前版本置灰**（registry 登记 disabled），
+    /// 内核槽位 `CompletionProvider::inline_completion` 未挂任何 AI 源，恒不产出建议。
+    /// 默认关；未来接入 AI 源后放开 disabled，此值立即生效。
+    #[serde(default = "default_inline_completion")]
+    pub inline_completion: bool,
     /// 新文档默认缩进宽度（空格数；文档级「重设 ▾」可改单个文档）。
     #[serde(default = "default_tab_size")]
     pub default_tab_size: i64,
@@ -388,6 +435,7 @@ impl Default for Editor {
             soft_wrap: default_soft_wrap(),
             auto_close: default_auto_close(),
             smart_indent: default_smart_indent(),
+            inline_completion: default_inline_completion(),
             default_tab_size: default_tab_size(),
             default_hard_tabs: default_hard_tabs(),
             default_line_ending: default_line_ending(),
@@ -418,6 +466,11 @@ fn default_auto_close() -> bool {
 /// 智能缩进默认开（与内核 `LayoutMode::code_editor` 的 `smart_indent: true` 一致）
 fn default_smart_indent() -> bool {
     true
+}
+
+/// AI 补全默认关（当前版本置灰不可用；放开后接入 AI 源再改默认）
+fn default_inline_completion() -> bool {
+    false
 }
 
 fn default_tab_size() -> i64 {

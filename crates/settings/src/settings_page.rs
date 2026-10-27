@@ -17,6 +17,7 @@
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt;
+use gpui_kit::base::Disableable as _;
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -571,8 +572,11 @@ impl SettingsPage {
                     .as_ref()
                     .and_then(SettingValue::as_bool)
                     .unwrap_or(false);
+                let disabled = spec.disabled;
                 Switch::new(key)
                     .checked(on)
+                    // 置灰项（能力存在但暂不可用）：禁用开关，未来放开即用
+                    .disabled(disabled)
                     .on_click(move |want: &bool, window, app| {
                         commit(&entity, key, SettingValue::Bool(*want), window, app)
                     })

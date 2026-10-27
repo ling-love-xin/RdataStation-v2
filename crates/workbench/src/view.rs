@@ -1126,6 +1126,11 @@ impl WorkbenchView {
                 self.shared.active_left.set(panel);
             }
         }
+        // 读取布局设置：布局锁定、侧边栏宽度。
+        {
+            let locked = settings::SettingsService::layout_locked(cx);
+            self.shared.layout_locked.set(locked);
+        }
         // 真面板化：初始 tab 集 = 当前激活模块（tab 条只显示点过的模块，
         // 其余模块等用户点活动栏时经 `open_left_panel` 动态挂载）。
         *self.shared.left_open_panels.borrow_mut() = vec![self.shared.active_left.get()];
@@ -3137,6 +3142,15 @@ impl Render for WorkbenchView {
             let locked = self.shared.layout_locked.get();
             area.update(cx, |area, cx| {
                 area.set_locked(locked, window, cx);
+            });
+        }
+        // 侧边栏宽度同步：设置值 → Dock。
+        if let Some(area) = self.area.clone() {
+            let left_width = settings::SettingsService::layout_left_sidebar_width(cx);
+            let right_width = settings::SettingsService::layout_right_sidebar_width(cx);
+            area.update(cx, |area, cx| {
+                area.set_dock_size(DockPlacement::Left, Pixels(left_width as f32), window, cx);
+                area.set_dock_size(DockPlacement::Right, Pixels(right_width as f32), window, cx);
             });
         }
         // 【2026-10-27】结果区从全局底部 dock 拆回编辑器宿主内嵌（DBeaver 口径：
