@@ -13,6 +13,7 @@ use crate::nav::action_registry;
 use crate::nav::actions::{ActionGroup, NavActionId};
 use crate::nav::capability::{NavOp, family_ops, nav_node_object_kind};
 use crate::nav_jobs::JobPriority;
+use gpui_kit::component::badge::Badge;
 
 impl NavView {
     /// 把某一行滚进视口（虚拟列表换来的可编程滚动入口）。
@@ -1352,47 +1353,41 @@ impl NavView {
         let (badge_path, badge_letters) = nav_type_badge(&type_id);
         let badge_color = badge_status.color(cx.theme());
         // 双通道徽标：颜色 = 状态（能不能用），形状 = 类型（是什么库，内叠 2 字母）。
-        let badge = div()
-            .relative()
-            .w(rems(ui::NAV_BADGE_SIZE))
-            .h(rems(ui::NAV_BADGE_SIZE))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
+        // 状态点（连接/断开）用标准 Badge::dot() 叠加在类型徽标右上角——
+        // Badge 自带 relative 容器 + absolute 圆点（6px），与全应用角标视觉统一。
+        let badge = Badge::new()
+            .dot()
+            .color(badge_color)
             .child(
                 div()
-                    .absolute()
-                    .inset_0()
+                    .w(rems(ui::NAV_BADGE_SIZE))
+                    .h(rems(ui::NAV_BADGE_SIZE))
+                    .flex_none()
                     .flex()
                     .items_center()
                     .justify_center()
                     .child(
-                        Icon::empty()
-                            .path(badge_path)
-                            .size(rems(ui::NAV_BADGE_SIZE))
-                            .text_color(badge_color),
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                Icon::empty()
+                                    .path(badge_path)
+                                    .size(rems(ui::NAV_BADGE_SIZE))
+                                    .text_color(badge_color),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .relative()
+                            .text_size(rems(0.4))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(badge_color)
+                            .child(badge_letters),
                     ),
-            )
-            .child(
-                div()
-                    .relative()
-                    .text_size(rems(0.4))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(badge_color)
-                    .child(badge_letters),
-            )
-            // 需求③ 连接状态点：徽标右上角小圆点，把「连接 / 断开」显式点出来
-            // （与徽标同一 `badge_status` 取色——已连=绿 / 未连=灰 / 失败=红 /
-            // 连接中=info 且徽标整体呼吸）。形状仍表达库类型，圆点承担「连/断」语义。
-            .child(
-                div()
-                    .absolute()
-                    .top(gpui_kit::px(-1.0))
-                    .right(gpui_kit::px(-1.0))
-                    .size_1p5()
-                    .rounded_full()
-                    .bg(badge_color),
             );
 
         // 「连接中」才呼吸（原型设计 §2.3：`info` + 脉冲）。
@@ -1401,21 +1396,23 @@ impl NavView {
         // 其余状态（已连 / 未连 / 失败）是普通元素，零开销。
         // 为何不是装饰：「在连」这个事实另有静态表达（`info` 色 + hover 卡写「连接中」），
         // 动效只是把「还在动」说清楚（上游动效规范：不得让动画成为唯一的状态表达）。
+        // Badge 本身不支持 .opacity()，包一层 div 挂呼吸动画。
         let badge: AnyElement = if nav_badge_pulses(badge_status) {
-            badge
+            div()
+                .child(badge)
                 .with_animation(
                     // id 必须**逐行唯一**：动画起始时刻存在按全局 id 索引的元素状态里，
                     // 同帧两个徽标共用一个 id 会互相抢状态（相位抖动），
                     // 与行内既有元素 id 同一口径（`{分组}::{连接}`）。
                     SharedString::from(format!("nav-badge-pulse-{scope_key}::{}", conn.id)),
-                    // 缓动必须**首尾同值**：`bounce` 把 0→1→0 折回来，循环接缝处不会“啪”地跳一下，
+                    // 缓动必须**首尾同值**：`bounce` 把 0→1→0 折回来，循环接缝处不会"啪"地跳一下，
                     // 且 delta = 0 时得 1.0——`reduce_motion` 下动画停下时徽标正好是全不透明
                     // （用 `pulsating_between` 会停在中值上，稳态看起来像被蒙了一层）。
                     Animation::new(std::time::Duration::from_millis(ui::NAV_BADGE_PULSE_MS))
                         .repeat()
                         .with_easing(bounce(ease_in_out)),
                     // 只能改透明度：gpui 的 Style 没有 transform，`Transformation` 仅服务 SVG。
-                    |badge, delta| badge.opacity(1.0 - delta * 0.5),
+                    |el, delta| el.opacity(1.0 - delta * 0.5),
                 )
                 .into_any_element()
         } else {
