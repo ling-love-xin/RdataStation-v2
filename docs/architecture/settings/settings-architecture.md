@@ -90,7 +90,7 @@ graph TD
 | 为什么缓存管理不在本 crate | 缓存对话框要 engine（`rusqlite` / 元数据缓存清理）→ 引入 engine 会把数据库依赖拖进视图 crate；继续由宿主的 `on_open_cache` 回调承接 |
 | 宿主桥 | `SettingsHost { on_close, on_open_cache, (将来) on_restart }`——宿主提供副作用，crate 只表达意图 |
 
-**crate 现状**：`lib.rs`（服务 + 持久化 + `apply_by_key` / `value_by_key` 唯一读写路径）/ `model.rs`（分节 model）/ `registry.rs`（登记表 + `Slot` 分发表 + `presets` + 契约测试）/ `settings_page.rs`（两栏页面，**已接到工作台**）/ `commands.rs`（Action：`OpenSettings` / `CloseSettings` / `FocusSettingsSearch`）；**产品语义 token 已迁至 `workbench_shell::product_tokens`**（本 crate 重导，见 §13 K6）。
+**crate 现状**（目录拆分后，域垂直切片）：`lib.rs`（薄骨架：mod 声明 + re-export + tests）/ `persistence.rs`（`config_dir` / `settings_path` / `load_settings` / `save_settings` / `last_save_error` / `connection_defaults` 进程级快照）/ `model/`（`mod.rs` 聚合 `Settings` + 跨域枚举 + 13 个按域 struct 文件）/ `registry/`（`mod.rs` 登记表 + `Slot` 分发表 + `presets` + 契约测试 + `entries/` 13 个按域登记文件）/ `service/`（`mod.rs` 骨架：`SettingsService` 的 `init/get/snapshot/apply_by_key` + `value_by_key` + 主题 helper + `install_*_sink` 出口 + 13 个按域 `apply_slot` / `impl SettingsService` 文件）/ `ui/`（`settings_page.rs` 两栏页面 + `fields.rs` 字段适配 + `skeleton.rs` 骨架 + `bridge.rs` 值桥）/ `commands.rs`（Action：`OpenSettings` / `CloseSettings` / `FocusSettingsSearch`）；**产品语义 token 已迁至 `workbench_shell::product_tokens`**（本 crate 重导，见 §13 K6）。
 
 > 旧单列 `settings_view.rs` 与自持的 `ui.rs` **均已删除**：页面尺寸常量回归**壳层单点** `crates/workbench_shell/src/ui.rs`（依赖方向：`settings → workbench_shell`，而 shell 不依赖任何特性 crate）。
 
@@ -99,10 +99,10 @@ graph TD
 | 角色 | 唯一性 | 位置 |
 | --- | --- | --- |
 | 设置状态 | **单一 global**：`Settings`（GPUI `Global`） | `cx.set_global`（`SettingsService::init`） |
-| 写入者 | **只有 `SettingsService::set_*`** | `lib.rs` |
+| 写入者 | **只有 `SettingsService::set_*`** | `service/<域>.rs` 的 `impl SettingsService` |
 | 读路径（有 `App`） | `SettingsService::get_*`（`cx.global::<Settings>()`） | 视图 / 宿主 |
-| 读路径（无 `App` 的 async） | 进程级快照 `settings::connection_defaults()`（`RwLock`，由 `save_settings` / `init` 发布） | `lib.rs` |
-| 落盘 | `save_settings(&Settings)`：全量写 JSON | `lib.rs` |
+| 读路径（无 `App` 的 async） | 进程级快照 `settings::connection_defaults()`（`RwLock`，由 `save_settings` / `init` 发布） | `persistence.rs` |
+| 落盘 | `save_settings(&Settings)`：全量写 JSON | `persistence.rs` |
 
 **写时序**（每个 `set_*` 固定三步）：`global_mut` 改值 → `save_settings` 全量落盘 → 通知（`Theme::change` / `cx.refresh_windows()` / 定向 `cx.notify()`）。
 
@@ -124,7 +124,7 @@ graph TD
 
 ## 6. 设置项登记表（权威）
 
-> 本表 = 页面清单（原型 §5）+ 搜索索引 + 契约测试基准 + 文档生成来源。新增项必须**同轮**改五处：`model.rs`（字段 + 默认）→ `lib.rs`（读写方法）→ 消费方 → 本表 → 原型 §5 清单。
+> 本表 = 页面清单（原型 §5）+ 搜索索引 + 契约测试基准 + 文档生成来源。新增项必须**同轮**改五处：`model/`（字段 + 默认）→ `service/`（读写方法）→ 消费方 → 本表 → 原型 §5 清单。
 
 | key | 节 | 类型 | 默认 | 生效 | 消费方 | 入口 | 期次 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -152,8 +152,8 @@ graph TD
 > 命名约定：JSON 字段一律 **snake_case**（与现有 `theme_mode` / `source_short_code` / `sort_mode` 一致）。M6 文档里写的 `resources.keepVersions` 是同一项的早期命名，**已于 2026-09-18 落地为 `resources.keep_versions`**（M6 侧同步改口）。
 > **设置层不依赖 `engine`**：`logging.min_level` 在设置侧是独立的 `LogMinLevel`（同词表），改级别后的“重载日志系统”由装配层（`crates/app`）注册的 sink 完成——反向依赖会把双引擎拖进设置层的依赖图。
 > `navigator.filters` 是**复合值**（4 个可选筛选项打包），登记为一项；若将来拆成多个独立开关，需重新过准入五条。
-> **代码侧权威是 `crates/settings/src/registry.rs`**（`SettingSpec` / `REGISTRY` / `sections()` / `page_rows()` + **`Slot` 分发表**（`slot_for` / `slot_kind` / `slot_is_scalar`）+ `presets` + 11 项契约测试）：本表与它必须逐项一致。改动顺序：**先改代码表 → 再改消费方 → 最后同步本表**。
-> **唯一读写路径**：页面对某项的"读当前值 / 写新值 / 判是否偏离默认"全部走 `lib.rs::{value_by_key, apply_by_key}`（按 `Slot` 分发）；页面不直接碰 model 字段，也不落盘。新增项的接入首续：登记 → 模型 → 槽位 → 消费方 → 文档表。
+> **代码侧权威是 `crates/settings/src/registry/`**（`mod.rs`：`SettingSpec` / `registry()`（OnceLock + `entries::all()`）/ `sections()` / `page_rows()` + **`Slot` 分发表**（`slot_for` / `slot_kind` / `slot_is_scalar`）+ `presets` + 契约测试；`entries/` 13 个按域登记文件，`entries/mod.rs::all()` 固定域序）：本表与它必须逐项一致。改动顺序：**先改代码表 → 再改消费方 → 最后同步本表**。
+> **唯一读写路径**：页面对某项的"读当前值 / 写新值 / 判是否偏离默认"全部走 `service/mod.rs::{value_by_key, apply_by_key}`（按 `Slot` 分发到 `service/<域>.rs::apply_slot`）；页面不直接碰 model 字段，也不落盘。新增项的接入首续：登记 → 模型 → 槽位 → 消费方 → 文档表。
 
 > **分组（gpui-kit demo 两级导航）**：`SettingSpec` 新增 `group`（节内子分组 id）与 `group_label`（显示名）。页面按 `registry::page_groups(section)`（登记顺序去重）生成分组卡片，侧栏据此渲染两级导航——对齐 gpui-kit demo：**多分组节**（外观=主题/标签栏、编辑器=编辑行为/新文档默认值、数据源导航=名称/过滤/行内信息、结果集面板=数据/选择与操作/对齐/着色）分组带标题；**单分组节**（资产库/连接/项目/日志/启动/草稿箱/洞察/布局/通知，`group_label = None`）渲染为无名分组，对齐 demo 的 General 页；动作行（「查看日志…」等）归入独立「操作」分组。**纯 Module 节**（如草稿箱，设置全在面板本地菜单/拖拽 handle）不进导航，避免空页面——`sections()` 只返回有上页内容的节。契约测试 `groups_are_contiguous_and_consistently_named` 保证同节分组连续、同名分组显示名一致、`page_groups` 顺序与登记一致、多分组节分组必有标题。
 
@@ -229,7 +229,7 @@ graph TD
 
 | 层 | 用例 | 现状 |
 | --- | --- | --- |
-| 纯函数 | 旧配置兼容（缺节 / 缺字段回退默认）、序列化往返、默认值表 | ✅ 2 项（`model.rs`），扩大覆盖到全部登记项 |
+| 纯函数 | 旧配置兼容（缺节 / 缺字段回退默认）、序列化往返、默认值表 | ✅ 2 项（`model/`），扩大覆盖到全部登记项 |
 | **登记表一致性（新增契约测试）** | 扫描 `model.rs` 字段 ↔ 登记表 ↔ 页面行：**不允许"有字段无消费方"或"有行无字段"**；槽位形态与登记形态一致；上页的数值行必须有预设档 | ✅ 已落地（共 **22 项**：registry 11 / 页面 4 / lib 3 / model 2 / product_tokens 1，全绿零告警） |
 | 视图窗口测试 | 切节、搜索过滤、恢复默认、禁用态带原因（按 `project/src/ui/tests.rs` 骨架，注意 `#[gpui_kit::test]` 与通配导入的坑） | 🟡 冒烟已补（渲染 + 默认节 + 程序性改词）；键盘输入路径无自动化覆盖，见 K10 |
 | 写入路径 | 每个 `set_*` 之后 global 与磁盘一致（临时目录隔离） | ⬜ 新增 |
@@ -246,8 +246,10 @@ graph TD
 | 尺寸常量 | `crates/workbench_shell/src/ui.rs`（5 个 `SETTINGS_*`，原型 §7） |
 | 宿主 overlay 与互斥 | `crates/workbench/src/view.rs::render_settings_panel` |
 | 命令 | `crates/settings/src/commands.rs`（`OpenSettings` 已有；`ToggleThemeMode` 待接线或删除） |
-| 登记表落地 | 表格在本文 §6；实现侧以 `model.rs` 字段 + `lib.rs` 方法为准，契约测试负责两者一致 |
-| 僵尸项裁撤 | `crates/settings/src/model.rs` + `settings_view.rs`（同轮删字段与行） |
+| 登记表落地 | 表格在本文 §6；实现侧以 `model/` 字段 + `service/` 方法为准，契约测试负责两者一致 |
+| 僵尸项裁撤 | `crates/settings/src/model/`（对应域文件删字段）+ `settings_view.rs`（同轮删字段与行） |
+
+**新增一个设置域（6 步，旧域零接触）**：① `model/<域>.rs`（struct + 默认值 + 默认函数）→ ② `model/mod.rs` 登记字段 + re-export → ③ `registry/entries/<域>.rs` 登记 `Slot` + `slot_for` + `slot_kind` + `entries/mod.rs::all()` 登记 → ④ `service/<域>.rs` 写 `apply_slot` + `impl SettingsService` 访问器 → ⑤ `service/mod.rs` 骨架 `apply_by_key` 补一组分发 arm → ⑥ 消费方接线 + 文档 §6 登记表。契约测试（`every_model_leaf_is_registered` 等）自动校验字段↔登记↔槽位一致。
 
 **落地顺序（P0、P1、P2、P3 已完成；P4 与 P3.5/P3.6 待做）**：0 工作区收尾 → 1 model 裁撤 + 登记表与契约测试 ✅ → 1b 两栏页面实体 + 槽位分发表 ✅ → 1c 宿主替换 + 常量归位壳层 + 互斥与键位（P1.6 / P3.1–P3.4）✅ → 2 搜索 + 写盘失败可见 + 窗口测试 ✅ → 3 契约扫描 ✅ → 4 接线延伸（M6 `keep_versions` / 项目排序行；`ToggleThemeMode` 与 K1 待拍板）。逐项任务、验收与风险见 `settings-dev-plan.md` §2–§4。
 

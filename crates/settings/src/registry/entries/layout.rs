@@ -1,0 +1,72 @@
+//! 布局设置项登记。
+use crate::registry::{SettingEffect, SettingEntry, SettingKind, SettingSpec};
+
+/// 本域全部登记项（`registry::registry()` 惰性合并，顺序 = 登记顺序）。
+pub fn entries() -> Vec<SettingSpec> {
+    vec![
+        SettingSpec {
+        key: "layout.locked",
+        section: "layout",
+        section_label: "布局",
+        group: "layout",
+        group_label: None,
+        label: "锁定布局",
+        hint: "开启后用户不能通过拖动调整面板大小或位置",
+        hint_inline: false,
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "false",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/workbench/src/view.rs（render 时同步到 DockArea::set_locked）",
+        composite: false,
+        disabled: false,
+        },
+        SettingSpec {
+        key: "layout.left_sidebar_width",
+        section: "layout",
+        section_label: "布局",
+        group: "layout",
+        group_label: None,
+        label: "左侧侧边栏宽度",
+        hint: "左侧面板的默认宽度（px）；上方示意图显示占比",
+        hint_inline: false,
+        kind: SettingKind::Number,
+        presets: &[
+        (200, "200px"),
+        (250, "250px（默认）"),
+        (300, "300px"),
+        (350, "350px"),
+        ],
+        default_json: "250",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/workbench/src/view.rs（render 时同步到 DockArea::set_dock_size）",
+        composite: false,
+        disabled: false,
+        },
+        SettingSpec {
+        key: "layout.right_sidebar_width",
+        section: "layout",
+        section_label: "布局",
+        group: "layout",
+        group_label: None,
+        label: "右侧侧边栏宽度",
+        hint: "右侧面板的默认宽度（px）；上方示意图显示占比",
+        hint_inline: false,
+        kind: SettingKind::Number,
+        presets: &[
+        (250, "250px"),
+        (300, "300px（默认）"),
+        (350, "350px"),
+        (400, "400px"),
+        ],
+        default_json: "300",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/workbench/src/view.rs（render 时同步到 DockArea::set_dock_size）",
+        composite: false,
+        disabled: false,
+        },
+    ]
+}

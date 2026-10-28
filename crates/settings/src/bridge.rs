@@ -77,11 +77,11 @@ pub fn reset_to_default(
 mod tests {
     use super::*;
     use crate::model::Settings;
-    use crate::registry::{KindTag, REGISTRY};
+    use crate::registry::{registry, KindTag};
 
     #[test]
     fn is_changed_tracks_registry_default() {
-        let spec = REGISTRY
+        let spec = registry()
             .iter()
             .find(|s| s.key == "editor.show_line_numbers")
             .expect("登记表必须有 show_line_numbers");
@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn composite_has_no_scalar_default_so_is_not_changed() {
-        let spec = REGISTRY
+        let spec = registry()
             .iter()
             .find(|s| s.composite)
             .expect("登记表必须有复合值项");
