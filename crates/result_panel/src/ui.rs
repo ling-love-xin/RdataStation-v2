@@ -28,6 +28,10 @@ pub const RESULT_MAX_HEIGHT: f32 = 48.0;
 /// 结果区状态行高（1.5rem = 24px，与编辑器状态栏同档；结果工具栏同高）
 pub const RESULT_STATUS_BAR_HEIGHT: f32 = 1.5;
 
+/// 结果区工具栏高（2.25rem = 36px；2026-10-28 工具栏迁 `Toolbar` 组件后独立成档——
+/// Toolbar XSmall = min_h_7(28px) + p_1(8px)，24px 状态栏档放不下）
+pub const RESULT_TOOLBAR_HEIGHT: f32 = 2.25;
+
 /// 结果集标签条高（1.5rem = 24px，与状态行同档；TabBar 的 Small 档就是这个高）
 pub const RESULT_TABS_HEIGHT: f32 = 1.5;
 

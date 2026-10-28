@@ -57,8 +57,9 @@
 | `scratchpad_file_info` | scratchpad 写 → 宿主 overlay 读 | 文件属性弹窗（右键 → 属性；信息少走弹窗不走面板，2026-10-10） |
 | `open_file_request` | scratchpad 写 → shared → 宿主 | 在编辑器中打开文件（`QueryRequest` 同形，已收为私有字段 + 方法对） |
 | `project_ui` | editor / scratchpad | 项目管理 UI 状态 |
+| `layout_locked` / `prev_left_sidebar_width` / `prev_right_sidebar_width` | 设置页 → 宿主 | 布局锁定 + 边栏宽度同步（`settings` 写、宿主 render 读；M-layout，2026-10-28） |
 
-共 12 个字段跨模块。它们**没有类型级保护**：任何模块都能写任何字段，改一处语义不会有编译错误，
+共 15 个字段跨模块。它们**没有类型级保护**：任何模块都能写任何字段，改一处语义不会有编译错误，
 只能靠约定与 review。
 
 > 另一类不在此列的字段是**宿主 ↔ 特性 crate 视图的实体弱句柄**（`mock_panel` / `mock_details` / `insight_panel` / `resources_panel` / `property_panel`）：

@@ -505,6 +505,17 @@ impl NavView {
                     }
                 }
                 self.host.note_connection_used(&r.conn_id);
+                // 连接成功 → 全局通知（右上角浮层）。
+                // 预连（启动时自动恢复展开态）不弹通知：用户没点，不需要逐个知道；
+                // 手动连接才弹——这是用户主动发起的操作，需要确认反馈。
+                if !was_prewarm {
+                    self.host.notify(
+                        HostNotify::Success,
+                        "连接成功".into(),
+                        Some(format!("{} 已连接", r.conn_id)),
+                        cx,
+                    );
+                }
                 // 建连是后台调度式（修 UI 卡死）：展开动作发生在连接注册进
                 // `ConnectionManager` 之前，会先吃一次 `CONN_NOT_FOUND` 失败。
                 // 连接就绪后若不自动重载，树就一直空着——用户得收起再展开一次。
@@ -536,6 +547,13 @@ impl NavView {
                 view.prewarming.remove(&r.conn_id);
                 drop(view);
                 self.host.notice(format!("连接失败: {}", r.message), cx);
+                // 连接失败 → 全局通知（与状态栏提示同文案）。
+                self.host.notify(
+                    HostNotify::Error,
+                    "连接失败".into(),
+                    Some(r.message.clone()),
+                    cx,
+                );
             }
         }
     }

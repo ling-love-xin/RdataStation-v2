@@ -265,6 +265,8 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::NavigatorVisibleDatabases => return None,
         // 复合值（全局对象名 mask，B-1）：读写走对象名过滤器对话框。
         Slot::NavigatorGlobalMask => return None,
+        Slot::NavigatorShowChips => SettingValue::Bool(settings.navigator.show_chips),
+        Slot::NavigatorShowSearch => SettingValue::Bool(settings.navigator.show_search),
         Slot::ResourcesKeepVersions => {
             SettingValue::Number(settings.resources.keep_versions as f64)
         }
@@ -284,6 +286,8 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         }
         // 复合值（工具栏按钮布局）：读写走草稿箱 ⋯ 菜单自己的入口。
         Slot::ScratchpadToolbar => return None,
+        // 分区高度上限（数值）：读写走分区拖拽 handle，无标量入口。
+        Slot::ScratchpadGroupMaxH => SettingValue::Number(settings.scratchpad.group_max_h as f64),
         Slot::InsightMemoryLimitMb => {
             SettingValue::Number(settings.insight.memory_limit_mb as f64)
         }
@@ -309,6 +313,46 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         }
         Slot::ResultPanelPersistColumnWidths => {
             SettingValue::Bool(settings.result_panel.persist_column_widths)
+        }
+        // 【类型样式】13 项枚举：落盘值 → 设置页显示
+        Slot::ResultPanelNumberFormat => {
+            SettingValue::Text(settings.result_panel.number_format.as_str().to_string())
+        }
+        Slot::ResultPanelNullPlaceholder => {
+            SettingValue::Text(settings.result_panel.null_placeholder.as_str().to_string())
+        }
+        Slot::ResultPanelBoolDisplay => {
+            SettingValue::Text(settings.result_panel.bool_display.as_str().to_string())
+        }
+        Slot::ResultPanelAlignNumeric => {
+            SettingValue::Text(settings.result_panel.align_numeric.as_str().to_string())
+        }
+        Slot::ResultPanelAlignText => {
+            SettingValue::Text(settings.result_panel.align_text.as_str().to_string())
+        }
+        Slot::ResultPanelAlignTemporal => {
+            SettingValue::Text(settings.result_panel.align_temporal.as_str().to_string())
+        }
+        Slot::ResultPanelAlignBool => {
+            SettingValue::Text(settings.result_panel.align_bool.as_str().to_string())
+        }
+        Slot::ResultPanelAlignBlob => {
+            SettingValue::Text(settings.result_panel.align_blob.as_str().to_string())
+        }
+        Slot::ResultPanelColorNumeric => {
+            SettingValue::Text(settings.result_panel.color_numeric.as_str().to_string())
+        }
+        Slot::ResultPanelColorText => {
+            SettingValue::Text(settings.result_panel.color_text.as_str().to_string())
+        }
+        Slot::ResultPanelColorTemporal => {
+            SettingValue::Text(settings.result_panel.color_temporal.as_str().to_string())
+        }
+        Slot::ResultPanelColorBool => {
+            SettingValue::Text(settings.result_panel.color_bool.as_str().to_string())
+        }
+        Slot::ResultPanelColorBlob => {
+            SettingValue::Text(settings.result_panel.color_blob.as_str().to_string())
         }
         Slot::LayoutLocked => SettingValue::Bool(settings.layout.locked),
         Slot::LayoutLeftSidebarWidth => {
@@ -567,12 +611,26 @@ impl SettingsService {
                 };
                 Self::set_show_inline_size(on, cx);
             }
+            Slot::NavigatorShowChips => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_show_chips(on, cx);
+            }
+            Slot::NavigatorShowSearch => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_show_search(on, cx);
+            }
             // 复合值没有标量写入路径：拒绝而不是"猜一半"。
             Slot::NavigatorFilters
             | Slot::NavigatorSavedViews
             | Slot::NavigatorVisibleDatabases
             | Slot::NavigatorGlobalMask => return false,
             Slot::ResourcesCollapsedGroups | Slot::ResourcesDefaultGroup => return false,
+            // 复合值（分区高度上限）：读写走分区拖拽 handle，拒绝标量写入。
+            Slot::ScratchpadGroupMaxH => return false,
             Slot::ResourcesKeepVersions => {
                 let Some(value) = value.as_number() else {
                     return false;
@@ -717,6 +775,152 @@ impl SettingsService {
                 {
                     let settings = cx.global_mut::<Settings>();
                     settings.result_panel.persist_column_widths = on;
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            // 【类型样式】13 项枚举：parse 对未知值回退默认（不拒绝写入）；
+            // 即时生效由 workbench `on_settings_changed` 钩子遍历编辑器推送
+            // （host.apply_result_style → 面板 set_type_style → delegate 重绘）。
+            Slot::ResultPanelNumberFormat => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.number_format =
+                        workbench_shell::result_style::NumberFormatPref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelNullPlaceholder => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.null_placeholder =
+                        workbench_shell::result_style::NullPlaceholderPref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelBoolDisplay => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.bool_display =
+                        workbench_shell::result_style::BoolDisplayPref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelAlignNumeric => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.align_numeric =
+                        workbench_shell::result_style::AlignPref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelAlignText => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.align_text =
+                        workbench_shell::result_style::AlignPref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelAlignTemporal => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.align_temporal =
+                        workbench_shell::result_style::AlignPref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelAlignBool => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.align_bool =
+                        workbench_shell::result_style::AlignPref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelAlignBlob => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.align_blob =
+                        workbench_shell::result_style::AlignPref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelColorNumeric => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.color_numeric =
+                        workbench_shell::result_style::ColorRolePref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelColorText => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.color_text =
+                        workbench_shell::result_style::ColorRolePref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelColorTemporal => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.color_temporal =
+                        workbench_shell::result_style::ColorRolePref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelColorBool => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.color_bool =
+                        workbench_shell::result_style::ColorRolePref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelColorBlob => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.color_blob =
+                        workbench_shell::result_style::ColorRolePref::parse(text);
                 }
                 persist(&cx.global::<Settings>().clone());
             }

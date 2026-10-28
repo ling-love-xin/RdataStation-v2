@@ -21,3 +21,4 @@ pub mod rename;
 pub mod tag;
 pub mod trash;
 pub mod version;
+pub mod version_diff;

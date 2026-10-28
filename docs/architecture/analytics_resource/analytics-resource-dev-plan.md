@@ -893,7 +893,7 @@
 | 前端 LRU + TTL 缓存 | 本地 SQLite 无 IPC 成本；v1 该实现本身有缺陷 |
 | 拖拽到 SQL 编辑器 | 有"取回→打开"路径，复杂度不值 |
 | `config` JSON 手工编辑 | 字段进表单、扩展进详情面板 |
-| 版本行级 diff | 文本 diff 归编辑器 |
+| 版本行级 diff | 文本 diff 归编辑器；2026-10-28 起版本历史提供**只读行级 diff 查看**（选中历史版 vs 当前本体，Unified/Split，见 `analytics-resource-version-diff-plan.md`）——"归编辑器"仅指**编辑**能力归编辑器 |
 | 自动索引修复（静默导入/删除） | 会让"存档"变成用户没同意过的东西 |
 | 归档本体的原地编辑 | 一旦允许，`content_hash` 与版本失去意义 |
 | v1 设计文档中从未实现的 17 条命令（`extract_table` / `generate_sql_reference` / `check_delete_safe` / `cleanup_expired` …） | 无消费方、无真实需求；**不承诺** |

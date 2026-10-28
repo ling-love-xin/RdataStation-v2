@@ -17,6 +17,8 @@ use gpui_kit::*;
 use settings::model::default_type_short_map;
 use settings::SettingsService;
 
+use crate::components::dialog_helpers::standard_dialog_body;
+
 /// type_id → 显示名（`mysql` → `MySQL`；未识别回退原串）。
 fn type_display_name(type_id: &str) -> String {
     let mut chars = type_id.chars();
@@ -124,7 +126,7 @@ pub fn open_type_short_map_dialog(window: &mut Window, cx: &mut App) {
         let rows_primary = rows.clone();
         dialog
             .title("类型简称映射")
-            .child(body)
+            .child(standard_dialog_body(body))
             .footer(
                 DialogFooter::new()
                     .child(

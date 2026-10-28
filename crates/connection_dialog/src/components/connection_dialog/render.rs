@@ -751,12 +751,11 @@ impl<H: 'static> ConnectionDialogState<H> {
                                     .child(div().text_xs().text_color(theme.colors.muted_foreground).child("="))
                                     .child(div().text_xs().flex_1().child(v))
                                     .child(
-                                        div()
-                                            // ElementId 用业务键（属性 key）：增删行后 id 不位移，
-                                            // 也与“同 key 覆盖”的写入语义一致（#17）。
-                                            .id(ElementId::Name(SharedString::from(format!("prop-del-{k}"))))
-                                            .cursor_pointer()
-                                            .text_xs()
+                                        // 删除属性行：语义 `Button`（ghost + danger）——悬停 / 焦点 /
+                                        // 键盘 / a11y 都由组件给，不再手搓可点 div（2026-10-28 审计）。
+                                        Button::new(ElementId::Name(SharedString::from(format!("prop-del-{k}"))))
+                                            .ghost()
+                                            .with_size(Size::XSmall)
                                             .text_color(theme.colors.danger)
                                             .child(tr("删除"))
                                             .on_click(move |_, _, app| {
@@ -2098,12 +2097,12 @@ impl<H: 'static> ConnectionDialogState<H> {
                                     .h_flex()
                                     .gap_2()
                                     .child(
-                                        div()
-                                            .id("conn-result-toggle")
-                                            .test_support()
-                                            .text_xs()
+                                        // 详情 / 收起：语义 `Button`（ghost + primary 文案）——
+                                        // 不再手搓可点 div（2026-10-28 审计）。
+                                        Button::new("conn-result-toggle")
+                                            .ghost()
+                                            .with_size(Size::XSmall)
                                             .text_color(theme.colors.primary)
-                                            .cursor_pointer()
                                             .child(if expanded { tr("收起") } else { tr("详情") })
                                             .on_click(move |_, _, app| {
                                                 toggle_expanded.set(!toggle_expanded.get());
@@ -2111,12 +2110,12 @@ impl<H: 'static> ConnectionDialogState<H> {
                                             }),
                                     )
                                     .child(
-                                        div()
-                                            .id("conn-result-copy")
-                                            .test_support()
-                                            .text_xs()
+                                        // 复制：语义 `Button`（ghost + primary 文案）——
+                                        // 不再手搓可点 div（2026-10-28 审计）。
+                                        Button::new("conn-result-copy")
+                                            .ghost()
+                                            .with_size(Size::XSmall)
                                             .text_color(theme.colors.primary)
-                                            .cursor_pointer()
                                             .child(tr("复制"))
                                             .on_click(move |_, _, app| {
                                                 app.write_to_clipboard(

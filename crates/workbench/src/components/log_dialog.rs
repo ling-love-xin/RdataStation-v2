@@ -28,6 +28,8 @@ use engine::{LogLevel, LogQuery, LogRecord};
 
 use workbench_shell::ui;
 
+use crate::components::dialog_helpers::standard_dialog_body;
+
 /// 一次取多少条（`LogStore` 服务端上限 500）。
 const PAGE_SIZE: u32 = 500;
 
@@ -320,7 +322,7 @@ pub fn open_log_dialog(window: &mut Window, cx: &mut App) {
         dialog
             .title("日志")
             .child(head)
-            .child(body)
+            .child(standard_dialog_body(body))
             .child(
                 div()
                     .text_xs()

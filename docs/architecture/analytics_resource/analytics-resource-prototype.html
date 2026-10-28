@@ -332,10 +332,32 @@ table.dt tr.on td{background:var(--accent);}
 [data-tabs="file"] .cb-file,[data-tabs="ref"] .cb-ref{display:block;}
 [data-tabs="none"] .cb-none{display:flex;}
 [data-strip="ro"] .s-ro,[data-strip="ref"] .s-ref,[data-strip="reject"] .s-reject{display:flex;}
-[data-dialog="archive"] .dlg-archive,[data-dialog="checkout"] .dlg-checkout,[data-dialog="versions"] .dlg-versions,[data-dialog="trash"] .dlg-trash,[data-dialog="repair"] .dlg-repair,[data-dialog="insight-archive"] .dlg-insight-archive,[data-dialog="conflict"] .dlg-conflict{display:flex;}
+[data-dialog="archive"] .dlg-archive,[data-dialog="checkout"] .dlg-checkout,[data-dialog="versions"] .dlg-versions,[data-dialog="version-diff"] .dlg-version-diff,[data-dialog="trash"] .dlg-trash,[data-dialog="repair"] .dlg-repair,[data-dialog="insight-archive"] .dlg-insight-archive,[data-dialog="conflict"] .dlg-conflict{display:flex;}
 .dlg-archive{width:544px;}
 .dlg-checkout{width:480px;}
 .dlg-versions{width:768px;}
+.dlg-version-diff{width:1024px;}
+/* 版本 diff 对比对话框（§4.3 扩展 · 只读查看器） */
+.dlg-version-diff .difftool{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;}
+.dlg-version-diff .difftool .dflabel{font-size:10.5px;color:var(--muted);}
+.dlg-version-diff .mode-sw{display:flex;gap:4px;}
+.dlg-version-diff .mode-sw button{font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--fg);cursor:pointer;}
+.dlg-version-diff .mode-sw button.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);}
+.diffview{max-height:340px;overflow:auto;border:1px solid var(--border);border-radius:6px;font-size:11px;line-height:1.6;}
+.diffview .drow{display:flex;padding:0 8px;border-bottom:1px solid color-mix(in srgb,var(--sidebar-border) 55%,transparent);}
+.diffview .drow .dno{width:34px;flex:none;text-align:right;color:var(--muted);user-select:none;padding-right:8px;}
+.diffview .drow .dc{flex:1;white-space:pre;overflow:hidden;text-overflow:ellipsis;color:var(--fg);}
+.diffview .drow.add{background:color-mix(in srgb,var(--success) 12%,transparent);}
+.diffview .drow.del{background:color-mix(in srgb,var(--danger) 10%,transparent);}
+.diffview .drow.add .dno{color:var(--success);}
+.diffview .drow.del .dno{color:var(--danger);}
+.diffview .drow.add .dc::before{content:"+ ";color:var(--success);}
+.diffview .drow.del .dc::before{content:"− ";color:var(--danger);}
+.diffview .drow.ctx .dc::before{content:"  ";}
+/* 并排：两栏各自滚动 */
+.diffview.split{display:flex;align-items:stretch;}
+.diffview.split .dcol{flex:1;min-width:0;overflow:auto;max-height:340px;}
+.diffview.split .dcol+.dcol{border-left:1px solid var(--border);}
 .dlg-trash{width:640px;}
 .dlg-repair{width:864px;}
 
@@ -432,6 +454,7 @@ table.dt tr.on td{background:var(--accent);}
   <button data-go="archive">归档确认对话框</button>
   <button data-go="checkout">取回（检出）对话框</button>
   <button data-go="versions">版本历史对话框</button>
+  <button data-go="version-diff">版本 diff 对比对话框</button>
   <button data-go="trash">回收站对话框</button>
   <button data-go="repair">索引修复对话框</button>
   <button data-go="empty">空库态</button>
@@ -1292,14 +1315,68 @@ GROUP BY channel...</div>
       </table>
       <div class="actbar" id="verActs">
         <span class="al" id="verLabel">对选中版本 v2 的动作：</span>
+        <button class="btn-s" data-go="version-diff">与当前版本对比…</button>
         <button class="btn-s" data-vact="restore">还原为当前版本</button>
         <button class="btn-s" data-vact="checkout">取回该版本为草稿</button>
         <button class="btn-s" data-vact="drop">删除该版本的内容副本</button>
       </div>
-      <div class="note warn"><svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg><span>不做原地回滚：还原 = 用旧内容生成新版本（与 git <span class="mono">revert</span> 同构）；也不做行级 diff（文本 diff 归编辑器）。内容副本按「最近 5 份」保留，超出只留元数据。</span></div>
+      <div class="note warn"><svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg><span>不做原地回滚：还原 = 用旧内容生成新版本（与 git <span class="mono">revert</span> 同构）。<b>与当前版本对比…</b> 是只读的文本 diff 查看器（选中历史版 vs 当前本体，Unified/Split 切换）；只读项目也能看，不写库。内容副本按「最近 5 份」保留，超出只留元数据。</span></div>
     </div>
     <div class="dlg-foot">
       <span>共 3 个版本 · 2 份内容副本 · 保留策略「最近 5 份」</span>
+      <span class="grow"></span>
+      <button class="btn-p" data-go="default">关闭</button>
+    </div>
+  </div>
+
+  <!-- 版本 diff 对比对话框（§4.3 扩展 · 只读查看器） -->
+  <div class="dlg dlg-version-diff">
+    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-history" xlink:href="#i-history"/></svg>dau_report.sql · v2 → v3<span class="sub2">只读 · 文本 diff</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x" xlink:href="#i-x"/></svg></button></div>
+    <div class="dlg-body">
+      <div class="difftool">
+        <span class="dflabel">v2 → v3（当前）的差异 · 只读</span>
+        <div class="mode-sw" id="diffMode">
+          <button class="on" data-dmode="unified">统一</button>
+          <button data-dmode="split">并排</button>
+        </div>
+      </div>
+      <div class="diffview mono" id="diffViewUnified">
+        <div class="drow ctx"><span class="dno">1</span><span class="dc">-- 渠道日报（自动生成）</span></div>
+        <div class="drow ctx"><span class="dno">2</span><span class="dc">SELECT</span></div>
+        <div class="drow ctx"><span class="dno">3</span><span class="dc">  channel,</span></div>
+        <div class="drow del"><span class="dno">4</span><span class="dc">  DATE(order_time) AS day,</span></div>
+        <div class="drow add"><span class="dno">4</span><span class="dc">  DATE_FORMAT(order_time,'%Y-%m-%d') AS day,</span></div>
+        <div class="drow ctx"><span class="dno">5</span><span class="dc">  COUNT(*) AS orders,</span></div>
+        <div class="drow del"><span class="dno">6</span><span class="dc">  SUM(IF(status='paid',amount,0)) AS gmv,</span></div>
+        <div class="drow add"><span class="dno">6</span><span class="dc">  SUM(CASE WHEN status='paid' THEN amount ELSE 0 END) AS gmv,</span></div>
+        <div class="drow ctx"><span class="dno">7</span><span class="dc">FROM orders</span></div>
+        <div class="drow ctx"><span class="dno">8</span><span class="dc">GROUP BY channel, day</span></div>
+      </div>
+      <div class="diffview split mono" id="diffViewSplit" style="display:none">
+        <div class="dcol">
+          <div class="drow ctx"><span class="dno">1</span><span class="dc">-- 渠道日报（自动生成）</span></div>
+          <div class="drow ctx"><span class="dno">2</span><span class="dc">SELECT</span></div>
+          <div class="drow ctx"><span class="dno">3</span><span class="dc">  channel,</span></div>
+          <div class="drow del"><span class="dno">4</span><span class="dc">  DATE(order_time) AS day,</span></div>
+          <div class="drow ctx"><span class="dno">5</span><span class="dc">  COUNT(*) AS orders,</span></div>
+          <div class="drow del"><span class="dno">6</span><span class="dc">  SUM(IF(status='paid',amount,0)) AS gmv,</span></div>
+          <div class="drow ctx"><span class="dno">7</span><span class="dc">FROM orders</span></div>
+          <div class="drow ctx"><span class="dno">8</span><span class="dc">GROUP BY channel, day</span></div>
+        </div>
+        <div class="dcol">
+          <div class="drow ctx"><span class="dno">1</span><span class="dc">-- 渠道日报（自动生成）</span></div>
+          <div class="drow ctx"><span class="dno">2</span><span class="dc">SELECT</span></div>
+          <div class="drow ctx"><span class="dno">3</span><span class="dc">  channel,</span></div>
+          <div class="drow add"><span class="dno">4</span><span class="dc">  DATE_FORMAT(order_time,'%Y-%m-%d') AS day,</span></div>
+          <div class="drow ctx"><span class="dno">5</span><span class="dc">  COUNT(*) AS orders,</span></div>
+          <div class="drow add"><span class="dno">6</span><span class="dc">  SUM(CASE WHEN status='paid' THEN amount ELSE 0 END) AS gmv,</span></div>
+          <div class="drow ctx"><span class="dno">7</span><span class="dc">FROM orders</span></div>
+          <div class="drow ctx"><span class="dno">8</span><span class="dc">GROUP BY channel, day</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <span>2 处变更 · 8 行上下文</span>
       <span class="grow"></span>
       <button class="btn-p" data-go="default">关闭</button>
     </div>
@@ -1615,6 +1692,7 @@ var SCENES = {
   'archive':  {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'archive'},
   'checkout': {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'checkout'},
   'versions': {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'versions'},
+  'version-diff': {panel:'list', status:'normal', detail:'file', tabs:'file', strip:'ro', dialog:'version-diff'},
   'trash':    {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'trash'},
   'repair':   {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'repair'},
   'insight':  {panel:'list',    status:'normal',  detail:'insight', tabs:'file', strip:'ro',     dialog:'none'},
@@ -1862,6 +1940,21 @@ document.getElementById('verActs').addEventListener('click', function(e){
   };
   showToast(msgs[b.dataset.vact]);
 });
+
+/* 版本 diff 对比：统一 / 并排 切换（只改显示，不碰数据） */
+var diffModeBtns = document.querySelectorAll('#diffMode button');
+function setDiffMode(m){
+  diffModeBtns.forEach(function(b){ b.classList.toggle('on', b.dataset.dmode === m); });
+  document.getElementById('diffViewUnified').style.display = (m === 'unified') ? 'block' : 'none';
+  document.getElementById('diffViewSplit').style.display = (m === 'split') ? 'flex' : 'none';
+}
+var diffModeBox = document.getElementById('diffMode');
+if (diffModeBox){
+  diffModeBox.addEventListener('click', function(e){
+    var b = e.target.closest('button[data-dmode]');
+    if (b) setDiffMode(b.dataset.dmode);
+  });
+}
 
 applyState('default');
 </script>

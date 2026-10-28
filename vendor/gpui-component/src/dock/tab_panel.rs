@@ -35,7 +35,7 @@ use crate::{
         toggle_dock_by_user,
     },
     h_flex,
-    menu::DropdownMenu as _,
+    menu::{DropdownMenu as _, PopupMenuItem},
     tab::{Tab, TabBar},
 };
 
@@ -479,8 +479,14 @@ impl TabGroupSkin {
             }
         }
 
+        // RdataStation vendor patch: apply tab bar variant and max width from SkinShared.
+        let tab_bar_variant = self.shared.tab_bar_variant();
+        let tab_bar_max_width = px(self.shared.tab_bar_max_width());
+
         TabBar::new("tab-bar")
             .track_scroll(&self.scroll_handle)
+            .with_variant(tab_bar_variant)
+            .max_width(tab_bar_max_width)
             .when(has_leading, |this| {
                 this.prefix(
                     h_flex()
@@ -499,7 +505,7 @@ impl TabGroupSkin {
                 )
             })
             .children(
-                visible
+                visible.clone()
                     .into_iter()
                     .map(|ix| {
                         let panel = &group.panels()[ix];
@@ -589,6 +595,79 @@ impl TabGroupSkin {
                                         });
                                     }
                                 }
+                            })
+                            // RdataStation vendor patch: right-click context menu.
+                            .when(!collapsed, |this| {
+                                let group = group.clone();
+                                let panel_id = panel.panel_id(cx);
+                                let is_closable = group.is_panel_closable(panel_id, cx);
+                                let is_zoomed = group.is_zoomed();
+                                let panels = group.panels().to_vec();
+                                let visible_count = visible.len();
+                                this.on_context_menu(move |menu, _window, _cx| {
+                                    let mut menu = menu;
+                                    // 缩放/最大化
+                                    menu = menu.item(
+                                        PopupMenuItem::new(if is_zoomed { "还原" } else { "缩放" })
+                                            .on_click({
+                                                let group = group.clone();
+                                                move |_, window, cx| {
+                                                    group.toggle_zoom(window, cx);
+                                                }
+                                            }),
+                                    );
+                                    // 分隔线
+                                    menu = menu.item(PopupMenuItem::separator());
+                                    // 关闭当前标签
+                                    if is_closable {
+                                        menu = menu.item(
+                                            PopupMenuItem::new("关闭")
+                                                .on_click({
+                                                    let group = group.clone();
+                                                    let panel_id = panel_id;
+                                                    move |_, window, cx| {
+                                                        group.close(panel_id, window, cx);
+                                                    }
+                                                }),
+                                        );
+                                    }
+                                    // 关闭其他标签（仅当有多个标签时）
+                                    if visible_count > 1 {
+                                        menu = menu.item(
+                                            PopupMenuItem::new("关闭其他标签")
+                                                .on_click({
+                                                    let group = group.clone();
+                                                    let panel_id = panel_id;
+                                                    let panels = panels.clone();
+                                                    move |_, window, cx| {
+                                                        for panel in panels.iter() {
+                                                            let pid = panel.panel_id(cx);
+                                                            if pid != panel_id && group.is_panel_closable(pid, cx) {
+                                                                group.close(pid, window, cx);
+                                                            }
+                                                        }
+                                                    }
+                                                }),
+                                        );
+                                        // 关闭全部标签
+                                        menu = menu.item(
+                                            PopupMenuItem::new("关闭全部标签")
+                                                .on_click({
+                                                    let group = group.clone();
+                                                    let panels = panels.clone();
+                                                    move |_, window, cx| {
+                                                        for panel in panels.iter() {
+                                                            let pid = panel.panel_id(cx);
+                                                            if group.is_panel_closable(pid, cx) {
+                                                                group.close(pid, window, cx);
+                                                            }
+                                                        }
+                                                    }
+                                                }),
+                                        );
+                                    }
+                                    menu
+                                })
                             })
                             // A collapsed group is a strip of tabs with no
                             // content, so there is nothing to rearrange in it.

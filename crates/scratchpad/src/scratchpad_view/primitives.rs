@@ -517,6 +517,69 @@ pub(super) fn scratchpad_icon_color(
     }
 }
 
+/// 标签名 → 语义色点（B4，2026-10-28）：按名称稳定映射到主题语义色。
+///
+/// 与导航树 `nav_tag_color` 同口径（规格 §14 color→TagVariant 映射；不直渲 hex——
+/// 标签颜色统一走语义 token）。暂在模块内实现；抽公共层时与 database 的
+/// `nav_tag_color` 合并为一份（两者都无裸色值，仅调色板顺序差异）。
+pub(super) fn scratchpad_tag_color(name: &str, colors: ScratchpadRowColors) -> Hsla {
+    let palette = [
+        colors.info,
+        colors.success,
+        colors.primary,
+        colors.muted,
+        colors.info,
+        colors.success,
+        colors.primary,
+        colors.muted,
+    ];
+    palette[scratchpad_tag_palette_index(name, palette.len())]
+}
+
+/// FNV-1a 哈希 → 色板索引（稳定：同名同档，跨调用不变）。
+pub(super) fn scratchpad_tag_palette_index(name: &str, len: usize) -> usize {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in name.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (h as usize) % len
+}
+
+/// 树行标签 chip（B4，2026-10-28）：≤2 个 chip + `+N`（与导航树同款：
+/// 色点 + 名字、浅底圆角、flex_none）；chip 内色点用标准 `Badge`（.dot()），
+/// 名字文本取 muted。`tags` 已按名称排好序（store 查询 ORDER BY name）。
+pub(super) fn scratchpad_tag_chips(tags: &[tag::Tag], colors: ScratchpadRowColors) -> Div {
+    let mut chips = div()
+        .h_flex()
+        .items_center()
+        .gap_0p5()
+        .flex_none()
+        .text_xs();
+    for t in tags.iter().take(2) {
+        let dot = scratchpad_tag_color(&t.name, colors);
+        chips = chips.child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_0p5()
+                .px_1()
+                .rounded_sm()
+                .bg(colors.hover_bg)
+                .child(Badge::new().dot().color(dot))
+                .child(div().text_color(colors.muted).child(t.name.clone())),
+        );
+    }
+    if tags.len() > 2 {
+        chips = chips.child(
+            div()
+                .text_color(colors.muted)
+                .child(format!("+{}", tags.len() - 2)),
+        );
+    }
+    chips
+}
+
 #[cfg(test)]
 mod tests {
     // 不 `use super::*`：通配会把 gpui 的 `test` 宏带进作用域（gpui-kit-dev §窗口测试）。
@@ -637,5 +700,52 @@ mod tests {
         assert_eq!(out[0].1.name, "sub");
         assert_eq!(out[1].0, 0);
         assert_eq!(out[1].1.name, "a.sql");
+    }
+
+    /// 标签色板：同名同档（跨调用稳定）；不同名分布在不同档（至少不完全扎堆）。
+    #[test]
+    fn tag_palette_is_stable_and_spread() {
+        use super::scratchpad_tag_palette_index;
+        assert_eq!(
+            scratchpad_tag_palette_index("报表", 8),
+            scratchpad_tag_palette_index("报表", 8)
+        );
+        let names = ["报表", "核心", "待整理", "月报", "prod", "archive"];
+        let mut seen = std::collections::HashSet::new();
+        for n in names {
+            seen.insert(scratchpad_tag_palette_index(n, 8));
+        }
+        assert!(seen.len() >= 2, "不同标签应落在不同色档（至少两档）");
+    }
+
+    /// 树行标签 chip：≤2 chip + `+N`（构造 3 标签验证不 panic 且渲染成功）；
+    /// Div 无法内省子节点，本测试只钉「可渲染 + 色点映射不崩」。
+    #[test]
+    fn tag_chips_render_without_panic() {
+        use super::{scratchpad_tag_chips, ScratchpadRowColors};
+        use gpui_kit::Hsla;
+        let colors = ScratchpadRowColors {
+            hover_bg: Hsla { h: 0., s: 0., l: 0.9, a: 1. },
+            selected_bg: Hsla { h: 0., s: 0., l: 0.85, a: 1. },
+            fg: Hsla { h: 0., s: 0., l: 0.1, a: 1. },
+            muted: Hsla { h: 0., s: 0., l: 0.5, a: 1. },
+            folder_color: Hsla { h: 0., s: 0., l: 0.4, a: 1. },
+            primary: Hsla { h: 0.6, s: 0.8, l: 0.5, a: 1. },
+            info: Hsla { h: 0.55, s: 0.8, l: 0.5, a: 1. },
+            success: Hsla { h: 0.33, s: 0.8, l: 0.5, a: 1. },
+            active_border: Hsla { h: 0.6, s: 0.8, l: 0.5, a: 1. },
+        };
+        let mk = |id: &str, name: &str| tag::Tag {
+            id: id.to_string(),
+            name: name.to_string(),
+            color: None,
+            icon: None,
+            scope: "project".to_string(),
+            created_at: String::new(),
+            deleted_at: None,
+        };
+        let tags = vec![mk("t1", "报表"), mk("t2", "核心"), mk("t3", "待整理")];
+        let _ = scratchpad_tag_chips(&tags, colors);
+        let _ = scratchpad_tag_chips(&[], colors);
     }
 }

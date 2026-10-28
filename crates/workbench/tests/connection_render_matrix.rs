@@ -365,16 +365,6 @@ fn driver(
     }
 }
 
-/// 出几帧让布局稳定。
-///
-/// 首帧与稳定帧的内容可能不同（引导条 / 目录回填等都在 render 里判），
-/// 拿首帧的量当基线会得到偏差几帧才收敛的位置——做几何对比前先稳住。
-fn draw_frames(cx: &mut VisualTestContext, n: usize) {
-    for _ in 0..n {
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-    }
-}
-
 /// 推进组件内 spring（揭示动效）直到收敛。
 ///
 /// headless 下时钟不会自己走（`spring` 取的是 `background_executor().now()`，只有显式推进才动），
@@ -409,8 +399,10 @@ fn outline_section_collapses_from_its_whole_title_row(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);
     open_new(&harness, cx);
-    // 先出几帧让布局收敛（实测前 4 帧内容还在长高，第 5 帧起稳定）。
-    draw_frames(cx, 8);
+    // 先让布局收敛到**稳定帧**再量基线：conn 正文含组件内 spring 揭示动效，只 draw 不推时钟
+    // 会让 spring 停在半展开态（基线偏矮，曾实测 951px vs 稳定 1043px）；必须“推时钟 + 出帧”
+    // 成对推进到收敛（gpui-kit 动效规范「首帧 ≠ 稳定帧」）。
+    settle_reveal(cx);
     let dialog = cx.update(|_, cx| harness.read(cx).dialog(cx));
 
     let is_collapsed = |cx: &mut VisualTestContext, id: &'static str| {

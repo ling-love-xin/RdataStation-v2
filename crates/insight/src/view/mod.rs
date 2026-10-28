@@ -48,6 +48,7 @@ pub(crate) mod table;
 
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::empty::{Empty, EmptyHeader, EmptyMedia, EmptyTitle};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::tab::{Tab, TabBar};
@@ -247,24 +248,22 @@ fn tab_hint(tab: PanelTab) -> &'static str {
 
 /// 空态：居中图标 + 一句引导
 fn empty_state(icon: IconName, hint: &str, theme: &Theme, icon_px: Pixels) -> Div {
-    div()
-        .v_flex()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .py_4()
-        .child(
-            Icon::new(icon)
-                .with_size(Size::Size(icon_px))
-                .text_color(theme.colors.muted_foreground),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_center()
-                .text_color(theme.colors.muted_foreground)
-                .child(hint.to_string()),
-        )
+    // 用 gpui-kit Empty 组件：自带居中布局 + 虚线边框 + 媒体/标题槽位
+    let empty = Empty::new()
+        .header(
+            EmptyHeader::new()
+                .media(
+                    EmptyMedia::new()
+                        .with_variant(gpui_kit::component::empty::EmptyMediaVariant::Icon)
+                        .child(
+                            Icon::new(icon)
+                                .with_size(Size::Size(icon_px))
+                                .text_color(theme.colors.muted_foreground),
+                        ),
+                )
+                .title(EmptyTitle::new().child(SharedString::from(hint))),
+        );
+    div().w_full().flex_1().child(empty)
 }
 
 /// 加载骨架（基础统计 5 行 + 分布 4 条；`Skeleton` 自带 shimmer 循环动效，

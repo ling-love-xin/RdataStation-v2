@@ -12,6 +12,7 @@
 
 pub mod commands;
 pub mod components;
+pub mod notification;
 pub mod panels;
 mod quick_open;
 pub mod services;

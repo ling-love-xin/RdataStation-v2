@@ -12,18 +12,19 @@
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName as CatalogIcon;
-use gpui_kit::base::{Disableable as _, Selectable, StyledExt};
+use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_kit::component::dialog::{Dialog, DialogButtonProps, DialogContent};
 use gpui_kit::component::dock::{
     DockArea, DockLayout, DockPlacement, DockSkin, PanelStyle, panel_handle,
 };
-use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
+use gpui_kit::component::sidebar::{Sidebar, SidebarCollapsible, SidebarFooter, SidebarMenu, SidebarMenuItem};
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::tab::TabVariant;
-use gpui_kit::component::{ActiveTheme, Icon, IconName, TitleBar};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Side, TitleBar};
 use gpui_kit::*;
 
 use scratchpad::scratchpad_view::render_scratchpad_file_info_pane;
@@ -606,8 +607,23 @@ impl WorkbenchView {
         let _status_sub = cx.subscribe_in(
             &panel,
             window,
-            |_this, _panel, _event: &editor::view::host::EditorHostEvent, _window, cx| {
-                cx.notify();
+            |_this, _panel, event: &editor::view::host::EditorHostEvent, _window, cx| {
+                match event {
+                    editor::view::host::EditorHostEvent::StatusChanged => {
+                        cx.notify();
+                    }
+                    editor::view::host::EditorHostEvent::ExecutionFailed(reason) => {
+                        // 执行失败 → 弹全局错误通知（Error 类型，不自动消失）。
+                        // 显式 to_string：`impl Into<String>` 参数在闭包内无法自推断（E0283）。
+                        crate::notification::notify(
+                            gpui_kit::component::notification::NotificationType::Error,
+                            "SQL 执行失败".to_string(),
+                            Some(reason.as_str().to_string()),
+                            cx,
+                        );
+                        cx.notify();
+                    }
+                }
             },
         );
         self._editor_status_subs.push(_status_sub);
@@ -2053,249 +2069,181 @@ impl WorkbenchView {
 
     // ===== 活动栏 =====
 
-    fn render_left_activity_bar(&self, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme();
-        let pt = settings::product_tokens::get(cx);
+    fn render_left_activity_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let active = self.shared.active_left.get();
-        let mut bar = div()
-            .v_flex()
-            .items_center()
-            .w_12()
-            .h_full()
-            .pt_2()
-            .pb_2()
-            .gap_1()
-            .border_r_1()
-            .border_color(theme.colors.border)
-            // 活动栏背景（产品语义 token activity_bar.background）。
-            .bg(pt.activity_bar_background(theme));
+        let shared = self.shared.clone();
+        let entity = cx.entity();
 
+        let mut menu = SidebarMenu::new();
         for panel in LeftPanel::ALL {
-            let entity = cx.entity();
-            let shared = self.shared.clone();
             let selected = active == panel;
-            // 右键菜单需要独立句柄（左键 on_click 已 move 上面的 shared/entity）。
-            let shared_menu = shared.clone();
-            let entity_menu = entity.clone();
-            // VSCode 行为：激活项左侧 2px 亮条（activity_bar.active_border）。
-            bar = bar.child(
-                div()
-                    .w_11()
-                    .h_10()
-                    .h_flex()
-                    .items_center()
-                    .justify_center()
-                    .border_l_2()
-                    .border_color(if selected {
-                        pt.activity_bar_active_border(theme)
-                    } else {
-                        transparent_black()
-                    })
-                    .child(
-                        Button::new(format!("left-activity-{}", panel.label()))
-                            .icon(panel.icon())
-                            .size_7()
-                            .ghost()
-                            .selected(selected)
-                            .toggled(selected)
-                            .on_click(move |_, window, app| {
-                                let mode = shared.left_mode.get();
-                                // 激活（而非收起）时才需要取数；收起路径不动面板状态。
-                                let activating = !(mode == SidebarMode::Expanded
-                                    && shared.active_left.get() == panel);
-                                if !activating {
-                                    // 再次点击当前激活项 → 收起。
-                                    shared.left_mode.set(SidebarMode::Collapsed);
-                                } else {
-                                    shared.active_left.set(panel);
-                                    shared.left_mode.set(SidebarMode::Expanded);
-                                }
-                                let activating_resources =
-                                    activating && panel == LeftPanel::Resources;
-                                entity.update(app, |this, cx| {
-                                    // 真面板化：展开时打开对应模块 tab（首次挂载 / 已开则切换）。
-                                    if activating {
-                                        this.open_left_panel(panel, window, cx);
-                                    }
-                                    // M6：切到资产库时取一次列表（结果由面板轮询回填）。
-                                    if activating_resources {
-                                        this.request_resources_refresh(cx);
-                                    }
-                                    cx.notify();
-                                });
-                            })
-                            // 右键：隐藏 / 收起整个左侧栏（mode 写入后由 render 的
-                            // `apply_left_mode` 同步 dock 树）。
-                            .context_menu(move |menu, _, _| {
-                                let mut menu = menu.item(PopupMenuItem::label("左侧栏"));
-                                menu = menu.item(PopupMenuItem::separator());
-                                // builder 是 `Fn`（可多次调用）：每次求值时 clone 再 move，
-                                // 保证每轮 on_click 闭包持有自己的句柄。
-                                menu = menu.item(
-                                    PopupMenuItem::new("隐藏侧边栏").on_click({
-                                        let shared = shared_menu.clone();
-                                        let entity = entity_menu.clone();
-                                        move |_, _, app| {
-                                            shared.left_mode.set(SidebarMode::Hidden);
-                                            entity.update(app, |_, cx| cx.notify());
-                                        }
-                                    }),
-                                );
-                                menu.item(PopupMenuItem::new("收起侧边栏").on_click({
-                                    let shared = shared_menu.clone();
-                                    let entity = entity_menu.clone();
-                                    move |_, _, app| {
-                                        shared.left_mode.set(SidebarMode::Collapsed);
-                                        entity.update(app, |_, cx| cx.notify());
-                                    }
-                                }))
-                            }),
-                    ),
-            );
+            let panel_clone = panel;
+
+            let item = SidebarMenuItem::new(panel.label())
+                .icon(panel.icon())
+                .active(selected)
+                .on_click({
+                    // 每个回调各自 clone：on_click 与 context_menu 都 move 捕获，
+                    // 共享同一份 clone 会触发 E0382（partially moved value）。
+                    let shared = shared.clone();
+                    let entity = entity.clone();
+                    move |_, window, app| {
+                        let mode = shared.left_mode.get();
+                        let activating = !(mode == SidebarMode::Expanded
+                            && shared.active_left.get() == panel_clone);
+                        if !activating {
+                            shared.left_mode.set(SidebarMode::Collapsed);
+                        } else {
+                            shared.active_left.set(panel_clone);
+                            shared.left_mode.set(SidebarMode::Expanded);
+                        }
+                        let activating_resources =
+                            activating && panel_clone == LeftPanel::Resources;
+                        entity.update(app, |this, cx| {
+                            if activating {
+                                this.open_left_panel(panel_clone, window, cx);
+                            }
+                            if activating_resources {
+                                this.request_resources_refresh(cx);
+                            }
+                            cx.notify();
+                        });
+                    }
+                })
+                .context_menu({
+                    let shared = shared.clone();
+                    let entity = entity.clone();
+                    move |menu, _, _| {
+                        let mut menu = menu.item(PopupMenuItem::label("左侧栏"));
+                        menu = menu.item(PopupMenuItem::separator());
+                        let shared = shared.clone();
+                        let entity = entity.clone();
+                        menu = menu.item(PopupMenuItem::new("隐藏侧边栏").on_click({
+                            let shared = shared.clone();
+                            let entity = entity.clone();
+                            move |_, _, app| {
+                                shared.left_mode.set(SidebarMode::Hidden);
+                                entity.update(app, |_, cx| cx.notify());
+                            }
+                        }));
+                        menu.item(PopupMenuItem::new("收起侧边栏").on_click({
+                            let shared = shared.clone();
+                            let entity = entity.clone();
+                            move |_, _, app| {
+                                shared.left_mode.set(SidebarMode::Collapsed);
+                                entity.update(app, |_, cx| cx.notify());
+                            }
+                        }))
+                    }
+                });
+            menu = menu.child(item);
         }
 
-        // 底部：弹性占位 + 分隔线 + 设置入口（Step 5 接 crates/settings）。
-        let entity = cx.entity();
-        let shared = self.shared.clone();
-        bar = bar
-            .child(div().flex_1())
-            .child(
-                div()
-                    .w(rems(ui::ACTIVITY_ICON_SIZE))
-                    .h(ui::HAIRLINE)
-                    .bg(theme.colors.border),
-            )
-            .child(
-                Button::new("left-settings")
-                    .icon(IconName::Settings)
-                    .size_7()
-                    .ghost()
-                    .on_click(move |_, _, app| {
-                        shared.settings_open.set(true);
-                        shared.quick_open.set(false); // 互斥：与 Quick Open 不同时显示
-                        entity.update(app, |_, cx| cx.notify());
-                    }),
-            );
-        bar
+        let settings_shared = shared.clone();
+        let settings_entity = entity.clone();
+        let footer = SidebarFooter::new().child(
+            Button::new("left-settings")
+                .icon(Icon::new(IconName::Settings))
+                .ghost()
+                .on_click(move |_, _, app| {
+                    settings_shared.settings_open.set(true);
+                    settings_shared.quick_open.set(false);
+                    settings_entity.update(app, |_, cx| cx.notify());
+                }),
+        );
+
+        Sidebar::new("left-activity")
+            .side(Side::Left)
+            .collapsible(SidebarCollapsible::Icon)
+            .collapsed(true)
+            .child(menu)
+            .footer(footer)
+            .into_any_element()
     }
 
-    fn render_right_activity_bar(&self, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme();
-        let pt = settings::product_tokens::get(cx);
+    fn render_right_activity_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let active = self.shared.active_right.get();
-        let mut bar = div()
-            .v_flex()
-            .items_center()
-            .w_12()
-            .h_full()
-            .pt_2()
-            .pb_2()
-            .gap_1()
-            .border_l_1()
-            .border_color(theme.colors.border)
-            .bg(pt.activity_bar_background(theme));
+        let shared = self.shared.clone();
+        let entity = cx.entity();
 
+        let mut menu = SidebarMenu::new();
         for panel in RightPanel::ALL {
-            let entity = cx.entity();
-            let shared = self.shared.clone();
             let selected = active == panel;
-            // 右键菜单需要独立句柄（左键 on_click 已 move 上面的 shared/entity）。
-            let shared_menu = shared.clone();
-            let entity_menu = entity.clone();
-            // 与左侧镜像：激活项 2px 亮条在右。
-            bar = bar.child(
-                div()
-                    .w_11()
-                    .h_10()
-                    .h_flex()
-                    .items_center()
-                    .justify_center()
-                    .border_r_2()
-                    .border_color(if selected {
-                        pt.activity_bar_active_border(theme)
-                    } else {
-                        transparent_black()
-                    })
-                    .child(
-                        Button::new(format!("right-activity-{}", panel.label()))
-                            .icon(panel.icon())
-                            .size_7()
-                            .ghost()
-                            .selected(selected)
-                            .toggled(selected)
-                            .on_click(move |_, window, app| {
-                                let mode = shared.right_mode.get();
-                                // 激活（而非收起）时才需要重读面板状态；收起路径不动面板。
-                                let activating = !(mode == SidebarMode::Expanded
-                                    && shared.active_right.get() == panel);
-                                if !activating {
-                                    // 再次点击当前激活项 → 收起。
-                                    shared.right_mode.set(SidebarMode::Collapsed);
-                                } else {
-                                    // 展开走 `Shared::open_right_panel`：Mock 面板的候选清单与生成历史
-                                    // 就在那儿重读（四个入口共用这一条，见该方法的注释）。
-                                    shared.open_right_panel(panel, app);
-                                }
-                                entity.update(app, |this, cx| {
-                                    // 真面板化：展开时打开对应模块 tab（首次挂载 / 已开则切换）。
-                                    if activating {
-                                        this.open_right_panel(panel, window, cx);
-                                    }
-                                    cx.notify();
-                                });
-                            })
-                            // 右键：隐藏 / 收起整个右侧栏（mode 写入后由 render 的
-                            // `apply_right_mode` 同步 dock 树）。
-                            .context_menu(move |menu, _, _| {
-                                let mut menu = menu.item(PopupMenuItem::label("右侧栏"));
-                                menu = menu.item(PopupMenuItem::separator());
-                                // builder 是 `Fn`（可多次调用）：每次求值时 clone 再 move，
-                                // 保证每轮 on_click 闭包持有自己的句柄。
-                                menu = menu.item(
-                                    PopupMenuItem::new("隐藏侧边栏").on_click({
-                                        let shared = shared_menu.clone();
-                                        let entity = entity_menu.clone();
-                                        move |_, _, app| {
-                                            shared.right_mode.set(SidebarMode::Hidden);
-                                            entity.update(app, |_, cx| cx.notify());
-                                        }
-                                    }),
-                                );
-                                menu.item(PopupMenuItem::new("收起侧边栏").on_click({
-                                    let shared = shared_menu.clone();
-                                    let entity = entity_menu.clone();
-                                    move |_, _, app| {
-                                        shared.right_mode.set(SidebarMode::Collapsed);
-                                        entity.update(app, |_, cx| cx.notify());
-                                    }
-                                }))
-                            }),
-                    ),
-            );
+            let panel_clone = panel;
+
+            let item = SidebarMenuItem::new(panel.label())
+                .icon(panel.icon())
+                .active(selected)
+                .on_click({
+                    // 同左栏：每个回调各自 clone，避免 move 冲突（E0382）。
+                    let shared = shared.clone();
+                    let entity = entity.clone();
+                    move |_, window, app| {
+                        let mode = shared.right_mode.get();
+                        let activating = !(mode == SidebarMode::Expanded
+                            && shared.active_right.get() == panel_clone);
+                        if !activating {
+                            shared.right_mode.set(SidebarMode::Collapsed);
+                        } else {
+                            shared.open_right_panel(panel_clone, app);
+                        }
+                        entity.update(app, |this, cx| {
+                            if activating {
+                                this.open_right_panel(panel_clone, window, cx);
+                            }
+                            cx.notify();
+                        });
+                    }
+                })
+                .context_menu({
+                    let shared = shared.clone();
+                    let entity = entity.clone();
+                    move |menu, _, _| {
+                        let mut menu = menu.item(PopupMenuItem::label("右侧栏"));
+                        menu = menu.item(PopupMenuItem::separator());
+                        let shared = shared.clone();
+                        let entity = entity.clone();
+                        menu = menu.item(PopupMenuItem::new("隐藏侧边栏").on_click({
+                            let shared = shared.clone();
+                            let entity = entity.clone();
+                            move |_, _, app| {
+                                shared.right_mode.set(SidebarMode::Hidden);
+                                entity.update(app, |_, cx| cx.notify());
+                            }
+                        }));
+                        menu.item(PopupMenuItem::new("收起侧边栏").on_click({
+                            let shared = shared.clone();
+                            let entity = entity.clone();
+                            move |_, _, app| {
+                                shared.right_mode.set(SidebarMode::Collapsed);
+                                entity.update(app, |_, cx| cx.notify());
+                            }
+                        }))
+                    }
+                });
+            menu = menu.child(item);
         }
 
-        let entity = cx.entity();
-        let shared = self.shared.clone();
-        bar = bar
-            .child(div().flex_1())
-            .child(
-                div()
-                    .w(rems(ui::ACTIVITY_ICON_SIZE))
-                    .h(ui::HAIRLINE)
-                    .bg(theme.colors.border),
-            )
-            .child(
-                Button::new("right-settings")
-                    .icon(IconName::Settings)
-                    .size_7()
-                    .ghost()
-                    .on_click(move |_, _, app| {
-                        shared.settings_open.set(true);
-                        shared.quick_open.set(false); // 互斥：与 Quick Open 不同时显示
-                        entity.update(app, |_, cx| cx.notify());
-                    }),
-            );
-        bar
+        let settings_shared = shared.clone();
+        let settings_entity = entity.clone();
+        let footer = SidebarFooter::new().child(
+            Button::new("right-settings")
+                .icon(Icon::new(IconName::Settings))
+                .ghost()
+                .on_click(move |_, _, app| {
+                    settings_shared.settings_open.set(true);
+                    settings_shared.quick_open.set(false);
+                    settings_entity.update(app, |_, cx| cx.notify());
+                }),
+        );
+
+        Sidebar::new("right-activity")
+            .side(Side::Right)
+            .collapsible(SidebarCollapsible::Icon)
+            .collapsed(true)
+            .child(menu)
+            .footer(footer)
+            .into_any_element()
     }
 
     /// 设置页 overlay：居中渲染 `SettingsPage`（懒创建实体）。
@@ -2366,6 +2314,9 @@ impl WorkbenchView {
             // 设置（即时生效），面板偏好（内存显示开关 / 工作集阈值）转发给面板实体。
             // 与 sink（`install_insight_memory_limit_sink`）双写幂等，这里兜底启动与面板重建。
             let shared_for_insight = self.shared.clone();
+            // 【类型样式】结果集偏好（13 项）变更 → 遍历编辑器宿主推 `apply_result_style`
+            // 即时生效（读当前 Settings 聚合，幂等；不随结果集 set_data 清掉）。
+            let hosts_for_style = self.editor_hosts.clone();
             let on_settings_changed: std::rc::Rc<dyn Fn(&mut App)> =
                 std::rc::Rc::new(move |app| {
                     if let Some(skin) = &dock_skin {
@@ -2375,6 +2326,9 @@ impl WorkbenchView {
                         &shared_for_insight,
                         app,
                     );
+                    for host in &hosts_for_style {
+                        host.update(app, |host, cx| host.apply_result_style(cx));
+                    }
                 });
             let host = SettingsHost {
                 on_close,
@@ -2399,6 +2353,7 @@ impl WorkbenchView {
                 .items_center()
                 .justify_center()
                 .bg(theme.colors.overlay)
+                .occlude() // 防止鼠标穿透，遮挡下面的内容
                 .child(page),
         )
     }
@@ -2761,8 +2716,12 @@ impl WorkbenchView {
             theme.colors.primary_foreground,
             theme.colors.primary_active,
             move |app| {
-                let new_state = !lock_shared.layout_locked.get();
+                let old_state = lock_shared.layout_locked.get();
+                let new_state = !old_state;
+                eprintln!("[DEBUG] 点击布局锁定开关：旧状态 = {}, 新状态 = {}", old_state, new_state);
                 lock_shared.layout_locked.set(new_state);
+                // 同步到设置页面
+                settings::SettingsService::set_layout_locked(new_state, app);
                 lock_entity.update(app, |_, cx| cx.notify());
             },
         );
@@ -3137,22 +3096,36 @@ impl Render for WorkbenchView {
         // 三模式权威同步点：Shared 状态 → Dock。
         self.apply_left_mode(window, cx);
         self.apply_right_mode(window, cx);
-        // 布局锁定同步：Shared 状态 → Dock。
-        if let Some(area) = self.area.clone() {
-            let locked = self.shared.layout_locked.get();
-            area.update(cx, |area, cx| {
-                area.set_locked(locked, window, cx);
-            });
-        }
+        // 布局锁定同步：Settings 状态 → Shared 状态 → Dock。
+        // 从设置页面读取布局锁定状态，然后同步到 Shared 结构体。
+        // 暂时注释掉，看看是否能解决分割线不能拖动的问题。
+        // let settings_locked = settings::SettingsService::layout_locked(cx);
+        // let shared_locked = self.shared.layout_locked.get();
+        // if settings_locked != shared_locked {
+        //     eprintln!("[DEBUG] 布局锁定同步：Settings.locked = {}, Shared.locked = {}, 正在同步", settings_locked, shared_locked);
+        //     self.shared.layout_locked.set(settings_locked);
+        // }
+        // if let Some(area) = self.area.clone() {
+        //     let locked = self.shared.layout_locked.get();
+        //     area.update(cx, |area, cx| {
+        //         area.set_locked(locked, window, cx);
+        //     });
+        // }
         // 侧边栏宽度同步：设置值 → Dock。
-        if let Some(area) = self.area.clone() {
-            let left_width = settings::SettingsService::layout_left_sidebar_width(cx);
-            let right_width = settings::SettingsService::layout_right_sidebar_width(cx);
-            area.update(cx, |area, cx| {
-                // `Pixels` 内部字段私有不能直接 `Pixels(x)` 构造，走 `px()`（gpui 构造函数）
-                area.set_dock_size(DockPlacement::Left, px(left_width as f32), window, cx);
-                area.set_dock_size(DockPlacement::Right, px(right_width as f32), window, cx);
-            });
+        // 只在设置页面的值发生变化时，才同步侧边栏宽度到 Dock，避免覆盖用户拖动分割线后的大小。
+        let left_width = settings::SettingsService::layout_left_sidebar_width(cx) as f32;
+        let right_width = settings::SettingsService::layout_right_sidebar_width(cx) as f32;
+        let prev_left_width = self.shared.prev_left_sidebar_width.get();
+        let prev_right_width = self.shared.prev_right_sidebar_width.get();
+        if left_width != prev_left_width || right_width != prev_right_width {
+            if let Some(area) = self.area.clone() {
+                area.update(cx, |area, cx| {
+                    area.set_dock_size(DockPlacement::Left, px(left_width), window, cx);
+                    area.set_dock_size(DockPlacement::Right, px(right_width), window, cx);
+                });
+            }
+            self.shared.prev_left_sidebar_width.set(left_width);
+            self.shared.prev_right_sidebar_width.set(right_width);
         }
         // 【2026-10-27】结果区从全局底部 dock 拆回编辑器宿主内嵌（DBeaver 口径：
         // 结果集跟编辑器 tab 走，不再挂全局 dock）。sync_result_dock 不再需要——
@@ -3405,6 +3378,9 @@ impl Render for WorkbenchView {
         }
         // 对话框层：gpui-kit 0.7.1 的 Root 已自动挂载 dialog 层（WindowState::dialog_layer），
         // 连接对话框与项目对话框不再需要手动渲染。
-        root
+        // 全局通知系统（NotificationList）：懒初始化并挂载到渲染树。
+        // 用 absolute 定位，不影响主布局。
+        let notification_list = crate::notification::ensure_notifications(window, cx);
+        root.child(div().absolute().size_full().child(notification_list))
     }
 }

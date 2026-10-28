@@ -5,10 +5,11 @@
 
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::accordion::Accordion;
+use gpui_kit::component::chart::BarChart;
 use gpui_kit::component::{Icon, IconName, Sizable as _, Size, Theme};
 use gpui_kit::*;
 
-use super::{muted_line, ratio_bar};
+use super::muted_line;
 use crate::insight_view::{ColumnSection, InsightView};
 use crate::model::{
     ColumnKind, ColumnProfileView, DistributionBar, Emphasis, NoteLevel, QualityNote, SampleCell,
@@ -107,7 +108,7 @@ fn stat_row(row: &StatRow, theme: &Theme) -> Div {
         )
 }
 
-/// 数据分布：条 + 占比；无数可画时说明原因（不造假分布）
+/// 数据分布：BarChart 直方图（自带 hover/tooltip/动画）；无数可画时说明原因
 fn distribution_zone(profile: &ColumnProfileView, theme: &Theme) -> Vec<AnyElement> {
     if profile.distribution.is_empty() {
         let hint = match profile.kind {
@@ -116,54 +117,15 @@ fn distribution_zone(profile: &ColumnProfileView, theme: &Theme) -> Vec<AnyEleme
         };
         return vec![muted_line(hint, theme).into_any_element()];
     }
-    // 布尔列只有一条 True 占比：用矮条（Small），其余用直方图条高（Medium）
-    let bar_size = if profile.kind == ColumnKind::Boolean {
-        Size::Small
-    } else {
-        Size::Medium
-    };
-    profile
-        .distribution
-        .iter()
-        .map(|bar| distribution_bar(bar, bar_size, theme).into_any_element())
-        .collect()
-}
-
-fn distribution_bar(bar: &DistributionBar, bar_size: Size, theme: &Theme) -> Div {
-    let colors = theme.colors;
-    let ratio = bar.ratio.clamp(0.0, 1.0) as f32;
-    div()
-        .v_flex()
-        .w_full()
-        .gap_1()
-        .child(
-            div()
-                .h_flex()
-                .gap_2()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_xs()
-                        .text_ellipsis()
-                        .text_color(colors.muted_foreground)
-                        .child(bar.label.clone()),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_xs()
-                        .text_color(colors.muted_foreground)
-                        .child(bar.text.clone()),
-                ),
-        )
-        // 元素 id 用值域标签：同一分布内每个值域只出现一次（若未来同标签多行，需加下标兜底）
-        .child(ratio_bar(
-            format!("insight-dist-{}", bar.label),
-            ratio,
-            bar_size,
-            colors.primary,
-        ))
+    // 用 gpui-kit BarChart 渲染分布直方图：X 轴=值域标签，Y 轴=占比，hover 显示完整文案
+    let chart = BarChart::new(profile.distribution.clone())
+        .band(|b: &DistributionBar| b.label.clone())
+        .value(|b: &DistributionBar| b.ratio)
+        .label_axis(true)
+        .value_axis(true)
+        .grid(true)
+        .tooltip_value(|b: &DistributionBar, _v: f64| b.text.clone().into());
+    vec![div().h(rems(6.)).child(chart).into_any_element()]
 }
 
 /// 数据质量：提示列表（Info / Warning 两档）

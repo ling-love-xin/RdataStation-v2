@@ -32,6 +32,7 @@ use gpui_kit::component::list::{List, ListState};
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::{ActiveTheme as _, Size, Sizable as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
+use gpui_kit::component::toolbar::ToolbarGroup;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::switch::Switch;
@@ -51,6 +52,8 @@ use crate::script_card::{self, ScriptCard};
 use crate::sets::{self as result_sets, ResultSetTab};
 use crate::ui;
 use workbench_shell::model::ColumnAnnotation;
+/// 【类型样式】全局偏好聚合（shell 层：settings 持久化与渲染消费共用）。
+use workbench_shell::result_style::TypeStylePrefs;
 
 /// 一次投影里交到网格的数据（列 / 行 / 类型 / 来源表 / 字段注释；`set_data` 之后
 /// 的类型与注释要紧接着设——`set_data` 会清空它们，见 [`crate::grid`] 实现）
@@ -226,6 +229,10 @@ pub struct ResultPanel {
     /// 【B1】列头直接显示注释的面板级临时开关（覆盖全局偏好 `result_panel.show_column_comments`；
     /// 默认 false——全局偏好开启时由 host 在 sync 时同步过来）。
     show_column_comments: bool,
+    /// 【类型样式】全局偏好（数字格式 / NULL 占位 / 布尔映射 / 按族对齐与前景色）。
+    /// host 构造时同步（settings.result_panel.type_style()），设置页变更由 workbench
+    /// 钩子推 `set_type_style` 即时生效；只影响渲染显示。
+    type_style: TypeStylePrefs,
     /// 【DBeaver 对齐】状态栏中段行数输入框（可编辑，输入行号跳转；暂不接跳转逻辑）
     row_count_input: Entity<InputState>,
 }
@@ -357,6 +364,8 @@ impl ResultPanel {
             renaming: None,
             renaming_input: None,
             show_column_comments: false,
+            // 类型样式默认全继承 / 原始值（与渲染现状一致；host 构造时按全局偏好覆盖）
+            type_style: TypeStylePrefs::default(),
         }
     }
 
@@ -733,13 +742,17 @@ impl ResultPanel {
                 .on_click(move |_, _window, _app| {
                     queue.push(ResultRequest::RollbackPending);
                 });
+            // 提交/撤销成对：2026-10-28 从手搓 `div().h_flex().gap_1()` 迁
+            // `toolbar::ToolbarGroup`（组件统一化 §3 容器层反例修复）。外层无样式观测壳
+            // div（仅 debug_selector 锚点）：ToolbarGroup 是 RenderOnce 无 debug_selector，
+            // 测试靠壳锚点断言“按钮组在不在”（观测专用，不承载任何布局/交互语义）
             div()
-                .h_flex()
-                .items_center()
-                .gap_1()
                 .debug_selector(|| "editor-result-commit-group".to_string())
-                .child(commit_btn)
-                .child(discard)
+                .child(
+                    ToolbarGroup::new("editor-result-commit-group")
+                        .child(commit_btn)
+                        .child(discard),
+                )
                 .into_any_element()
         });
 
@@ -1016,7 +1029,8 @@ impl ResultPanel {
             redo,
         } = controls;
         // 【四行布局】状态栏动作控件 = 解构出的移动字段重组（more / fetch_all / 行级 /
-        // 撤销重做；`..Default` 兜底其余槽位）
+        // 撤销重做 / 导出 / 刷新；`..Default` 兜底其余槽位）。导出 / 刷新 2026-10-28
+        // 从工具栏移入状态栏（用户口径：执行信息与导出刷新都归结果集状态栏）
         let status_controls = result_grid::ResultControls {
             more,
             fetch_all,
@@ -1025,23 +1039,36 @@ impl ResultPanel {
             delete_row,
             undo,
             redo,
+            export,
+            refresh,
             ..Default::default()
         };
-        // 工具栏：右栏开关已移状态栏右端，这里不再摆（None）
+        // 工具栏：右栏开关已移状态栏右端，这里不再摆（None）；导出/刷新已移状态栏
         let toolbar_el = result_grid::render_toolbar(
             &toolbar,
             filter,
-            None,
             compare,
             commit,
             analysis,
-            export,
-            refresh,
             copy,
             cx,
         );
         // 状态栏右段耗时取自工具栏投影；先取出再移动 `toolbar` 进 pane
         let elapsed_ms = toolbar.elapsed_ms;
+        // 【执行信息归状态栏】工具栏 segments 中状态栏右段不重复的部分：行数 / 耗时
+        // 已由状态栏右段自己的文案覆盖（`…N 行已获取 · 耗时`），这里过滤掉避免重复
+        let status_summary: Vec<String> = toolbar
+            .segments()
+            .into_iter()
+            .filter(|s| !s.starts_with("行数 ") && !s.starts_with("耗时 "))
+            .collect();
+        // 【四行布局】状态行渲染条件放宽：网格有状态行；写语句 / 失败只有执行信息
+        // （affected_rows / failed / elapsed_ms）也给状态栏——用户口径：导出 / 刷新 /
+        // 执行信息都在状态栏，写语句也要能刷新（须在 `toolbar` 移动进 pane 之前算）
+        let show_status = self.status.is_some()
+            || toolbar.affected_rows.is_some()
+            || toolbar.failed
+            || toolbar.elapsed_ms.is_some();
 
         let result_pane = result_grid::render(
             &self.grid,
@@ -1217,14 +1244,18 @@ impl ResultPanel {
 
         // 第四行：状态栏（跨全宽，横跨左右栏之下；左端左栏开关、右端右栏开关）。
         // 文本视图也有 status（行数等），故状态栏在三种主体形态下都渲染。
-        let status_row = self.status.as_ref().map(|status| {
+        // 【四行布局】状态行渲染条件放宽：网格有状态行；写语句 / 失败只有执行信息
+        // （affected_rows / failed / elapsed_ms）也给状态栏——用户口径：导出 / 刷新 /
+        // 执行信息都在状态栏，写语句也要能刷新（cell_edit_esc 回归教训同源）
+        let status_row = show_status.then(|| {
             result_grid::render_status_row(
-                status,
+                self.status.as_ref(),
                 status_controls,
-                Some(&self.row_count_input),
+                self.status.as_ref().and(Some(&self.row_count_input)),
                 elapsed_ms,
                 Some(left_switch),
                 value_sidebar,
+                &status_summary,
                 cx,
             )
             .into_any_element()
@@ -1453,6 +1484,20 @@ impl ResultPanel {
     /// 【B1】当前是否直接显示注释（delegate 读这个决定列头画不画第二行注释）。
     pub fn show_column_comments(&self) -> bool {
         self.show_column_comments
+    }
+
+    /// 【类型样式】同步全局偏好（数字格式 / NULL 占位 / 布尔映射 / 按族对齐与前景色）。
+    ///
+    /// host 构造时（`settings.result_panel.type_style()`）与 workbench 设置变更钩子
+    /// （设置页改动 → 遍历 editor_hosts → 本方法）都会调用；面板再把偏好推给 delegate，
+    /// 由 delegate 的 `render_td` / `render_th` 消费——不经过 `set_data`，不会丢。
+    pub fn set_type_style(&mut self, prefs: TypeStylePrefs, cx: &mut Context<Self>) {
+        self.type_style = prefs.clone();
+        self.grid.update(cx, |state, cx| {
+            state.delegate_mut().set_type_style(prefs);
+            state.refresh(cx);
+        });
+        cx.notify();
     }
 
     /// 【侧栏】最近选中格位置（`TableEvent::SelectCell` 事件路径写入；选行 / 清选 =

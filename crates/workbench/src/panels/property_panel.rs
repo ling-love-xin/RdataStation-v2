@@ -18,6 +18,7 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
+use gpui_kit::component::form::{Field, Form};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_kit::component::switch::Switch;
@@ -620,14 +621,17 @@ impl PropertyHostPanel {
             return section;
         }
         let cols = if rows.len() > 8 { 3 } else { 2 };
-        for chunk in rows.chunks(cols) {
-            let mut line = div().h_flex().items_start().w_full().gap_2();
-            for row in chunk {
-                line = line.child(self.render_property_cell(entity.clone(), row, theme, window, cx));
-            }
-            line = line.child(div().flex_1().min_w_0());
-            section = section.child(line);
-        }
+        // 网格容器：`Form::vertical()` + `columns`（gpui-component 0.8.1）——
+        // label 上 / 控件下 + 列网格均分，替代手搓 chunks 行（2026-10-28 迁移）。
+        section = section.child(
+            Form::vertical()
+                .with_size(Size::Small)
+                .columns(cols)
+                .children(
+                    rows.iter()
+                        .map(|row| self.render_property_cell(entity.clone(), row, theme, window, cx)),
+                ),
+        );
         section
     }
 
@@ -1071,21 +1075,21 @@ impl PropertyHostPanel {
         theme: &Theme,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Div {
+    ) -> Field {
         let fg = theme.colors.foreground;
         let muted = theme.colors.muted_foreground;
-
-        let label = div().text_xs().text_color(muted).child(row.label.clone());
+        // label 文案共享捕获：label_fn 约束是 `Fn`（Field 内部 Rc 存储、可多次调用），
+        // 各分支 Rc::clone 一份进闭包，内部借用渲染（避免跨分支 move 冲突）。
+        let label_text = Rc::new(row.label.clone());
 
         if !row.editable {
             // 只读：文本（DBeaver 只读属性）。
-            return div()
-                .v_flex()
-                .flex_1()
-                .min_w_0()
-                .gap_1()
-                .text_xs()
-                .child(label)
+            let lt = Rc::clone(&label_text);
+            return Field::new()
+                .items_start()
+                .label_fn(move |_: &mut Window, _: &mut App| {
+                    div().text_xs().text_color(muted).child(lt.to_string())
+                })
                 .child(div().w_full().min_w_0().text_color(fg).child(row.value.clone()));
         }
 
@@ -1095,13 +1099,12 @@ impl PropertyHostPanel {
                 let checked = row.value == "true";
                 let entity = entity.clone();
                 let rid = row.id.clone();
-                div()
-                    .v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_1()
-                    .text_xs()
-                    .child(label)
+                let lt = Rc::clone(&label_text);
+                Field::new()
+                    .items_start()
+                    .label_fn(move |_: &mut Window, _: &mut App| {
+                        div().text_xs().text_color(muted).child(lt.to_string())
+                    })
                     .child(
                         div()
                             .w_full()
@@ -1118,13 +1121,12 @@ impl PropertyHostPanel {
             }
             PropertyValueKind::Select if row.select_options.is_empty() => {
                 // 空候选回退文本展示（provider 未给候选时不做空下拉）。
-                div()
-                    .v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_1()
-                    .text_xs()
-                    .child(label)
+                let lt = Rc::clone(&label_text);
+                Field::new()
+                    .items_start()
+                    .label_fn(move |_: &mut Window, _: &mut App| {
+                        div().text_xs().text_color(muted).child(lt.to_string())
+                    })
                     .child(div().w_full().min_w_0().text_color(fg).child(row.value.clone()))
             }
             PropertyValueKind::Select => {
@@ -1164,13 +1166,12 @@ impl PropertyHostPanel {
                         s.set_selected_value(&value, window, cx);
                     });
                 }
-                div()
-                    .v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_1()
-                    .text_xs()
-                    .child(label)
+                let lt = Rc::clone(&label_text);
+                Field::new()
+                    .items_start()
+                    .label_fn(move |_: &mut Window, _: &mut App| {
+                        div().text_xs().text_color(muted).child(lt.to_string())
+                    })
                     .child(
                         div()
                             .w_full()
@@ -1190,13 +1191,12 @@ impl PropertyHostPanel {
                     let save_entity = entity.clone();
                     let cancel_entity = entity.clone();
                     let input = Input::new(&edit.input).id(format!("prop-edit-{}", row.id)).w_full();
-                    div()
-                        .v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .gap_1()
-                        .text_xs()
-                        .child(label)
+                    let lt = Rc::clone(&label_text);
+                    Field::new()
+                        .items_start()
+                        .label_fn(move |_: &mut Window, _: &mut App| {
+                            div().text_xs().text_color(muted).child(lt.to_string())
+                        })
                         .child(
                             div()
                                 .w_full()
@@ -1235,13 +1235,12 @@ impl PropertyHostPanel {
                     let entity = entity.clone();
                     let rid = row.id.clone();
                     let initial = row.value.clone();
-                    div()
-                        .v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .gap_1()
-                        .text_xs()
-                        .child(label)
+                    let lt = Rc::clone(&label_text);
+                    Field::new()
+                        .items_start()
+                        .label_fn(move |_: &mut Window, _: &mut App| {
+                            div().text_xs().text_color(muted).child(lt.to_string())
+                        })
                         .child(
                             div()
                                 .h_flex()

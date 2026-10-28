@@ -72,6 +72,18 @@ impl ScratchpadView {
             active_border,
         } = colors;
         let key = entry.path.to_string_lossy().to_string();
+        // B4（2026-10-28）：树行标签数据（键 = 模块内相对路径，store §7.3 口径）。
+        // 文件夹不打标（与右键「标签…」入口一致）；无标签文件为空 Vec。
+        let entry_tags = if entry.kind == ScratchpadEntryKind::Folder {
+            Vec::new()
+        } else {
+            self.scratchpad
+                .borrow()
+                .entry_tags
+                .get(&key)
+                .cloned()
+                .unwrap_or_default()
+        };
 
         // 本行正在重命名 → 渲染内联输入。
         if let Some(ScratchpadEdit::Rename { path }) = &ctx.edit {
@@ -229,9 +241,14 @@ impl ScratchpadView {
                     })
                     .child(entry.name.clone()),
             )
-            // 脏点（原型 §2/§3：名字 · ● · 大小时间；只有文件画）
+            // B4（2026-10-28）：树行标签 chip（非文件夹 + 有标签才画；≤2 + N，色点 = 名称
+            // 映射语义色，与导航树标签 chip 同款）。位置在文件名后、脏点前。
+            .when(!entry_tags.is_empty(), |this| {
+                this.child(scratchpad_tag_chips(&entry_tags, colors))
+            })
+            // 脏点（原型 §2/§3：名字 · ● · 大小时间；只有文件画）——标准 Badge 状态点
             .when(scratchpad_shows_dirty_dot(&ctx.dirty, entry), |this| {
-                this.child(div().w_2().h_2().flex_none().rounded_full().bg(primary))
+                this.child(Badge::new().dot().color(primary))
             })
             // 命中数角标（用户点名 2026-10-10：过滤态树行显示命中数，对齐 VSCode 搜索面板
             // 左侧每文件命中数）：Content 模式 + 过滤非空 + 文件内容有命中行时才画
@@ -299,45 +316,27 @@ impl ScratchpadView {
             };
             row = row
                 .child(
-                    div()
-                        .id(format!("sp-open-{key}"))
-                        .w(rems(ui::ROW_ACTION_SIZE))
-                        .h_flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(muted)
-                        .hover(move |s| s.bg(hover_bg))
-                        .child("↗")
+                    Button::new(format!("sp-open-{key}"))
+                        .ghost()
+                        .small()
+                        .icon(IconName::ExternalLink)
+                        .tooltip("打开位置")
                         .on_click(open_location),
                 )
                 .child(
-                    div()
-                        .id(format!("sp-ren-{key}"))
-                        .w(rems(ui::ROW_ACTION_SIZE))
-                        .h_flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(muted)
-                        .hover(move |s| s.bg(hover_bg))
-                        .child("✎")
+                    Button::new(format!("sp-ren-{key}"))
+                        .ghost()
+                        .small()
+                        .icon(Icon::empty().path("icons/pencil.svg"))
+                        .tooltip("重命名")
                         .on_click(rename),
                 )
                 .child(
-                    div()
-                        .id(format!("sp-del-{key}"))
-                        .w(rems(ui::ROW_ACTION_SIZE))
-                        .h_flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(muted)
-                        .hover(move |s| s.bg(hover_bg))
-                        .child("✕")
+                    Button::new(format!("sp-del-{key}"))
+                        .ghost()
+                        .small()
+                        .icon(IconName::Close)
+                        .tooltip("删除")
                         .on_click(delete),
                 );
         }
@@ -533,8 +532,8 @@ impl ScratchpadView {
     /// 内联编辑行（新建 / 重命名通用；新建文件统一空白起步，无模板 chip 行）。
     pub(super) fn render_scratchpad_edit_row(&self, depth: usize, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
-        let muted = theme.colors.muted_foreground;
-        let primary = theme.colors.primary;
+        let _muted = theme.colors.muted_foreground;
+        let _primary = theme.colors.primary;
 
         let Some(input) = self.scratchpad.borrow().name_input.clone() else {
             return div();
@@ -567,29 +566,19 @@ impl ScratchpadView {
             // 边框保持 1px 细边框（`bordered` 默认 true：`border_1` + 主题 `input` 色）。
             .child(div().flex_1().min_w_0().child(Input::new(&input).xsmall().w_full()))
             .child(
-                div()
-                    .id("sp-edit-ok")
-                    .h_flex()
-                    .items_center()
-                    .justify_center()
-                    .w_5()
-                    .cursor_pointer()
-                    .text_xs()
-                    .text_color(primary)
-                    .child("✓")
+                Button::new("sp-edit-ok")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Check)
+                    .tooltip("确认")
                     .on_click(commit),
             )
             .child(
-                div()
-                    .id("sp-edit-cancel")
-                    .h_flex()
-                    .items_center()
-                    .justify_center()
-                    .w_5()
-                    .cursor_pointer()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("✕")
+                Button::new("sp-edit-cancel")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Close)
+                    .tooltip("取消")
                     .on_click(cancel),
             );
 
@@ -630,11 +619,11 @@ impl ScratchpadView {
         entity: &Entity<Self>,
         filter: &str,
         cx: &mut Context<Self>,
-    ) -> Div {
+    ) -> AnyElement {
         let theme = cx.theme();
         let muted = theme.colors.muted_foreground;
-        let fg = theme.colors.foreground;
-        let icon_color = theme.colors.border;
+        let _fg = theme.colors.foreground;
+        let _icon_color = theme.colors.border;
         let entity = entity.clone();
 
         if !filter.is_empty() {
@@ -646,9 +635,12 @@ impl ScratchpadView {
                 .px_2()
                 .text_xs()
                 .text_color(muted)
-                .child("没有匹配的文件");
+                .child("没有匹配的文件")
+                .into_any_element();
         }
 
+        // B2（2026-10-28）：真空态迁 `empty::Empty` 标准组件（居中布局 + 虚线框 + 图标
+        // 变体 + content 槽放动作按钮）；filter 态保持单行轻提示（树滚动区内非全屏空态）。
         let new_file = {
             let entity = entity.clone();
             move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
@@ -672,65 +664,49 @@ impl ScratchpadView {
             }
         };
 
-        div()
-            .v_flex()
-            .items_center()
-            .w_full()
-            .pt_8()
-            .px_2()
-            .gap_2()
-            .child(
-                div()
-                    .text_color(icon_color)
-                    .text_size(rems(ui::SCRATCHPAD_EMPTY_ICON_SIZE))
-                    .child("🗒"),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(fg)
-                    .child("草稿箱是空的"),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("随手写点东西，或从外部导入文件"),
-            )
-            // 原型 664-668：空态第二行说明（2026-10-11 对齐；措辞同步语义定义：
-            // 根 = 项目下的 scratchpad/；导入 = 复制，引用 = 链接）。
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("草稿箱根 = 项目下的 scratchpad/；导入 = 复制，引用 = 链接"),
-            )
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        Button::new("sp-empty-new")
-                            .small()
-                            .primary()
-                            .label("＋ 新建")
-                            .on_click(new_file),
+        Empty::new()
+            .header(
+                EmptyHeader::new()
+                    .media(
+                        EmptyMedia::new()
+                            .with_variant(EmptyMediaVariant::Icon)
+                            .child(Icon::empty().path("icons/file-text.svg")),
                     )
-                    .child(
-                        Button::new("sp-empty-folder")
-                            .small()
-                            .label("🗀 文件夹")
-                            .on_click(new_folder),
-                    )
-                    .child(
-                        Button::new("sp-empty-import")
-                            .small()
-                            .label("⬇ 导入")
-                            .on_click(import),
+                    .title(EmptyTitle::new().child("草稿箱是空的"))
+                    .description(
+                        EmptyDescription::new().child(
+                            "随手写点东西，或从外部导入文件\n草稿箱根 = 项目下的 scratchpad/；导入 = 复制，引用 = 链接",
+                        ),
                     ),
             )
+            .content(
+                EmptyContent::new().child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Button::new("sp-empty-new")
+                                .small()
+                                .primary()
+                                .label("＋ 新建")
+                                .on_click(new_file),
+                        )
+                        .child(
+                            Button::new("sp-empty-folder")
+                                .small()
+                                .label("🗀 文件夹")
+                                .on_click(new_folder),
+                        )
+                        .child(
+                            Button::new("sp-empty-import")
+                                .small()
+                                .label("⬇ 导入")
+                                .on_click(import),
+                        ),
+                ),
+            )
+            .into_any_element()
     }
 
     /// 侧栏搜索结果树（2026-10-11 用户点名：结构与草稿箱树一致）。

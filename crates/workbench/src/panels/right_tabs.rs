@@ -11,8 +11,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
-use gpui_kit::component::{IconName, Size, Sizable};
-use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::component::IconName;
 use gpui_kit::*;
 
 use crate::view::RightPanel;
@@ -113,17 +112,8 @@ impl ComponentPanel for InsightPanelTab {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Vec<Button>> {
-        // 标题栏工具栏按钮：刷新 + 导出
-        Some(vec![
-            Button::new("refresh")
-                .icon(IconName::RefreshCw)
-                .ghost()
-                .size(px(28.)),
-            Button::new("export")
-                .icon(IconName::FolderOpen)
-                .ghost()
-                .size(px(28.)),
-        ])
+        // 业务按钮移到模块内部工具栏，Dock 标题栏只做容器管理。
+        None
     }
 
     fn dropdown_menu(
@@ -132,12 +122,8 @@ impl ComponentPanel for InsightPanelTab {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> PopupMenu {
-        // 标题栏省略号菜单
-        menu.item(PopupMenuItem::new("刷新"))
-            .item(PopupMenuItem::new("导出报告..."))
-            .separator()
-            .item(PopupMenuItem::new("对比分析"))
-            .item(PopupMenuItem::new("设置"))
+        // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
+        menu
     }
 
 }
@@ -220,21 +206,8 @@ impl ComponentPanel for MockPanelTab {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Vec<Button>> {
-        // 标题栏工具栏按钮：新建表 + 导入结构 + 生成
-        Some(vec![
-            Button::new("new_table")
-                .icon(IconName::Plus)
-                .ghost()
-                .size(px(28.)),
-            Button::new("import_schema")
-                .icon(IconName::FolderOpen)
-                .ghost()
-                .size(px(28.)),
-            Button::new("generate")
-                .icon(IconName::RefreshCw)
-                .ghost()
-                .size(px(28.)),
-        ])
+        // 业务按钮移到模块内部工具栏，Dock 标题栏只做容器管理。
+        None
     }
 
     fn dropdown_menu(
@@ -243,14 +216,8 @@ impl ComponentPanel for MockPanelTab {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> PopupMenu {
-        // 标题栏省略号菜单
-        menu.item(PopupMenuItem::new("新建表"))
-            .item(PopupMenuItem::new("导入结构..."))
-            .separator()
-            .item(PopupMenuItem::new("生成数据"))
-            .item(PopupMenuItem::new("导出数据..."))
-            .separator()
-            .item(PopupMenuItem::new("Mock 设置"))
+        // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
+        menu
     }
 
 }
@@ -338,17 +305,8 @@ impl ComponentPanel for HistoryPanelTab {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Vec<Button>> {
-        // 标题栏工具栏按钮：搜索 + 清空
-        Some(vec![
-            Button::new("search")
-                .icon(IconName::Search)
-                .ghost()
-                .size(px(28.)),
-            Button::new("clear")
-                .icon(IconName::EllipsisVertical)
-                .ghost()
-                .size(px(28.)),
-        ])
+        // 业务按钮移到模块内部工具栏，Dock 标题栏只做容器管理。
+        None
     }
 
     fn dropdown_menu(
@@ -357,12 +315,8 @@ impl ComponentPanel for HistoryPanelTab {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> PopupMenu {
-        // 标题栏省略号菜单
-        menu.item(PopupMenuItem::new("搜索历史"))
-            .item(PopupMenuItem::new("清空历史"))
-            .separator()
-            .item(PopupMenuItem::new("导出历史..."))
-            .item(PopupMenuItem::new("历史设置"))
+        // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
+        menu
     }
 
 }
@@ -488,17 +442,8 @@ impl ComponentPanel for ArchivePanel {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Vec<Button>> {
-        // 标题栏工具栏按钮：刷新 + 导出
-        Some(vec![
-            Button::new("refresh")
-                .icon(IconName::RefreshCw)
-                .ghost()
-                .size(px(28.)),
-            Button::new("export")
-                .icon(IconName::FolderOpen)
-                .ghost()
-                .size(px(28.)),
-        ])
+        // 业务按钮移到模块内部工具栏，Dock 标题栏只做容器管理。
+        None
     }
 
     fn dropdown_menu(
@@ -507,11 +452,8 @@ impl ComponentPanel for ArchivePanel {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> PopupMenu {
-        // 标题栏省略号菜单
-        menu.item(PopupMenuItem::new("刷新"))
-            .item(PopupMenuItem::new("导出报告..."))
-            .separator()
-            .item(PopupMenuItem::new("归档设置"))
+        // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
+        menu
     }
 
 }

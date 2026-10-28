@@ -41,11 +41,16 @@ use std::rc::Rc;
 
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::{StyledExt, VirtualListScrollHandle, v_virtual_list};
+use gpui_kit::component::badge::Badge;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::empty::{
+    Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
+};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::toolbar::{Toolbar, ToolbarGroup};
 use gpui_kit::component::{ActiveTheme, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -528,6 +533,13 @@ impl ScratchpadView {
             .unwrap_or_default();
         let mut state = ScratchpadViewState::default();
         state.toolbar_cfg = toolbar_cfg;
+        // B3（2026-10-28）：分区高度持久化——启动时读 `settings.scratchpad.group_max_h`
+        // （模型默认 7.5 = 面板默认），越界值收敛到面板 clamp 区间。
+        state.group_max_h = cx
+            .try_global::<settings::model::Settings>()
+            .map(|s| s.scratchpad.group_max_h)
+            .unwrap_or(7.5)
+            .clamp(2.0, 18.0);
         Self {
             host,
             focus_handle: cx.focus_handle(),

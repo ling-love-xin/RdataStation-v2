@@ -30,6 +30,7 @@ use analytics_resource::dialogs::index_repair::{RepairAction, RepairRow};
 use analytics_resource::dialogs::tag::{TagChoice, TagDialogSeed};
 use analytics_resource::dialogs::trash::{ForeignTrash, TrashAction, TrashDialogSeed, TrashRow};
 use analytics_resource::dialogs::version::{VersionAction, VersionDialogSeed};
+use analytics_resource::dialogs::version_diff::VersionDiffSeed;
 use analytics_resource::payload::PayloadStore;
 use analytics_resource::present::{
     ArchiveStatuses, PreviewMap, SnapshotInputs, build_repair_rows, build_snapshot,
@@ -41,6 +42,8 @@ use analytics_resource::{
     AnalyticsResource, AnalyticsResourceStore, ArchiveKind, ArchiveRequest, ArchiveService,
     ArchiveStatus, ArchiveUndo, CheckoutRequest, IndexIssue, IndexRepair, KeepVersions, TagTarget,
 };
+
+use similar::TextDiff;
 
 /// 连接池大小：与其它项目库访问点一致（`data_source_service` / `workspace_loader` 同为 4）。
 const SQLITE_POOL_SIZE: usize = 4;
@@ -104,6 +107,14 @@ struct VersionActionJob {
     action: VersionAction,
     /// 历史内容保留策略（还原会把当前内容留成副本，之后要按策略裁剪）。
     keep_versions: KeepVersions,
+}
+
+/// 一次版本 diff 取数任务（**只读查看**：读两版文本 + 生成 unified patch）。
+struct VersionDiffJob {
+    project_root: PathBuf,
+    resource_id: String,
+    /// 对比的旧版本号（版本历史里选的那一版；新侧 = 本体当前版本）。
+    old_version: i32,
 }
 
 /// 一次索引扫描任务（扫描不改任何状态，所以不带只读标志）。
@@ -199,6 +210,13 @@ pub struct VersionRows {
     pub seed: VersionDialogSeed,
 }
 
+/// 版本 diff 取数结果（宿主据此开 diff 对话框）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionDiffRows {
+    pub resource_id: String,
+    pub seed: VersionDiffSeed,
+}
+
 /// 索引扫描结果（宿主据此开窗，或刷新已经开着的那个窗）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexScanRows {
@@ -222,6 +240,7 @@ enum Job {
     Trash(TrashJob),
     Versions(VersionsJob),
     VersionAction(VersionActionJob),
+    VersionDiff(VersionDiffJob),
     IndexScan(IndexScanJob),
     IndexRepairAction(IndexRepairActionJob),
     TrashList(TrashListJob),
@@ -359,6 +378,8 @@ struct Jobs {
     op_result: Mutex<Option<OpOutcome>>,
     /// 版本历史槽：只留最新一份（版本对话框一次只开一个）。
     versions: Mutex<Option<Result<VersionRows, String>>>,
+    /// 版本 diff 槽：只留最新一份（diff 对话框一次只开一个）。
+    version_diff: Mutex<Option<Result<VersionDiffRows, String>>>,
     /// 索引扫描槽：只留最新一份（索引修复对话框一次只开一个）。
     index_scan: Mutex<Option<Result<IndexScanRows, String>>>,
     /// 回收站槽：只留最新一份（回收站对话框一次只开一个）。
@@ -382,6 +403,7 @@ fn jobs() -> &'static Jobs {
             result: Mutex::new(None),
             op_result: Mutex::new(None),
             versions: Mutex::new(None),
+            version_diff: Mutex::new(None),
             index_scan: Mutex::new(None),
             trash_rows: Mutex::new(None),
             tag_rows: Mutex::new(None),
@@ -440,6 +462,11 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 }));
                 *lock(&jobs().versions) = Some(result);
                 refresh_after_op(&rt, job.project_root, job.read_only);
+            }
+            Job::VersionDiff(job) => {
+                // 只读查看：不改任何数据，只回填 diff 对话框。
+                let result = rt.block_on(load_version_diff(&job));
+                *lock(&jobs().version_diff) = Some(result);
             }
             Job::IndexScan(job) => {
                 let result = rt.block_on(load_index_report(&job));
@@ -925,6 +952,73 @@ async fn load_versions(job: &VersionsJob) -> Result<VersionRows, String> {
     })
 }
 
+/// 取两版文本并生成 unified patch（只读；文本类 / 大小上限在此挡）。
+async fn load_version_diff(job: &VersionDiffJob) -> Result<VersionDiffRows, String> {
+    let service = open_service(job.project_root.clone(), None).await?;
+    let current = service
+        .store()
+        .get_resource_by_id(&job.resource_id)
+        .await
+        .map_err(|e| format!("读取存档失败：{e}"))?;
+    // 新侧 = 本体当前文本；旧侧 = 选中版本的副本（缺失 = 保留策略已裁剪）。
+    let new_text = read_resource_text(&service, &current).await?;
+    let old_path = service
+        .payload()
+        .version_copy_file(&job.resource_id, job.old_version)
+        .await
+        .map_err(|e| format!("读取历史副本失败：{e}"))?
+        .ok_or_else(|| "该版本的内容副本不在（已被保留策略裁剪），无法对比".to_string())?;
+    let old_text = read_text_file(&old_path)?;
+    if new_text.len() > DIFF_MAX_TEXT_BYTES || old_text.len() > DIFF_MAX_TEXT_BYTES {
+        return Err("文件过大，请用编辑器查看差异".to_string());
+    }
+    let name = current.name.clone();
+    let (old_v, new_v) = (job.old_version, current.version);
+    let patch = TextDiff::from_lines(&old_text, &new_text)
+        .unified_diff()
+        .context_radius(3)
+        .header(
+            &format!("a/{name}@{old_v}"),
+            &format!("b/{name}@{new_v}"),
+        )
+        .to_string();
+    Ok(VersionDiffRows {
+        resource_id: job.resource_id.clone(),
+        seed: VersionDiffSeed {
+            name,
+            old_version: old_v,
+            current_version: new_v,
+            patch,
+        },
+    })
+}
+
+/// 读本体的 UTF-8 文本（diff 只对文本类有意义；非 UTF-8 / 本体缺失直接报错）。
+async fn read_resource_text(
+    service: &ArchiveService,
+    current: &AnalyticsResource,
+) -> Result<String, String> {
+    let rel = current
+        .file_rel_path
+        .as_deref()
+        .ok_or_else(|| "该存档没有本体路径（可能是分析表档），无法对比".to_string())?;
+    let path = service
+        .payload()
+        .resolve(rel)
+        .map_err(|e| format!("解析本体路径失败：{e}"))?;
+    if !path.is_file() {
+        return Err("本体不在位（可能是缺失存档），无法对比".to_string());
+    }
+    read_text_file(&path)
+}
+
+/// 读一个文件为 UTF-8 文本（二进制判为不可读，diff 对二进制无意义）。
+fn read_text_file(path: &Path) -> Result<String, String> {
+    let bytes =
+        std::fs::read(path).map_err(|e| format!("读取文件失败（{}）：{e}", path.display()))?;
+    String::from_utf8(bytes).map_err(|_| "该文件不是文本（可能是二进制），无法对比".to_string())
+}
+
 /// 执行一次版本历史动作（工作线程上执行）。
 async fn run_version_action(job: &VersionActionJob) -> OpOutcome {
     let service = match open_service(job.project_root.clone(), Some(job.keep_versions)).await {
@@ -938,6 +1032,11 @@ async fn run_version_action(job: &VersionActionJob) -> OpOutcome {
     };
 
     match job.action {
+        // 对比是只读查看，已在 `request_version_action` 分流（`enqueue_version_diff`），
+        // 不会走到动作执行——保留 arm 只为 match 完整。
+        VersionAction::Diff { .. } => {
+            unreachable!("diff 不走版本动作执行（对比在宿主已分流）")
+        }
         VersionAction::Restore { version } => {
             match service.restore_version(&job.resource_id, version).await {
                 Ok(outcome) if outcome.created_new_version => OpOutcome::VersionActionDone {
@@ -1820,6 +1919,21 @@ pub fn enqueue_version_action(
     }));
 }
 
+/// diff 对比的单侧文本大小上限（字节）：超过就不给对比，避免取数线程白算一个大文件。
+const DIFF_MAX_TEXT_BYTES: usize = 512 * 1024;
+
+/// 提交一次版本 diff 取数（**事件路径**调用：版本对话框动作栏「与当前版本对比…」）。
+///
+/// 只读查看：不改任何数据，job 线程读两版文本 + 生成 unified patch 后回填 `version_diff` 槽。
+pub fn enqueue_version_diff(project_root: PathBuf, resource_id: String, old_version: i32) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::VersionDiff(VersionDiffJob {
+        project_root,
+        resource_id,
+        old_version,
+    }));
+}
+
 /// 还有排队或执行中的作业。
 pub fn has_pending() -> bool {
     jobs().pending.load(Ordering::SeqCst) > 0
@@ -1838,6 +1952,11 @@ pub fn drain_op() -> Option<OpOutcome> {
 /// 取走最新版本历史取数结果（未就绪时 `None`）。
 pub fn drain_versions() -> Option<Result<VersionRows, String>> {
     lock(&jobs().versions).take()
+}
+
+/// 取走最新版本 diff 取数结果（未就绪时 `None`）。
+pub fn drain_version_diff() -> Option<Result<VersionDiffRows, String>> {
+    lock(&jobs().version_diff).take()
 }
 
 /// 提交一次索引扫描（**事件路径**调用：状态行「修复…」与面板头「重建索引…」）。

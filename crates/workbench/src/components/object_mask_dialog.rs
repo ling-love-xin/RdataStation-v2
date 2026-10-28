@@ -21,6 +21,8 @@ use gpui_kit::*;
 
 use settings::model::ObjectMaskRule;
 
+use crate::components::dialog_helpers::standard_dialog_body;
+
 /// 解析 Textarea 文本为模式列表（每行一条、trim、空行忽略）。
 fn parse_lines(raw: &str) -> Vec<String> {
     raw.lines()
@@ -175,7 +177,7 @@ pub fn open_object_mask_dialog(
             );
         dialog
             .title(title.clone())
-            .child(body)
+            .child(standard_dialog_body(body))
             .footer(
                 DialogFooter::new()
                     .child(

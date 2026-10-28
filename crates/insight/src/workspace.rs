@@ -35,6 +35,7 @@ use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, Size, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -592,82 +593,82 @@ impl InsightWorkspacePanel {
             .target()
             .map(|t| (t.detail().unwrap_or_else(|| "DuckDB".into()), t.title()));
 
+        // 面板头命令按钮行（刷新/取样/导出）：2026-10-28 迁移到 `toolbar::Toolbar`
+        // （容器层反例修复）——Toolbar 统一 size 托管 + roving 方向键焦点 + toolbar a11y；
+        // 按钮保留 ghost 语义（`prepare_for_toolbar` 强制 ghost+compact，与面板头一致）。
+        let refresh_btn = Button::new("insight-ws-refresh")
+            .ghost()
+            .icon(IconName::RotateCw)
+            .label("刷新")
+            .tooltip("重算当前画像")
+            .on_click({
+                let entity = entity.clone();
+                move |_, _, app| {
+                    entity.update(app, |panel, cx| panel.refresh(cx));
+                }
+            });
+        let sample_btn = Button::new("insight-ws-sample")
+            .ghost()
+            .label("取样")
+            .tooltip("重新从源库取样并画像（源目标）")
+            .on_click({
+                let entity = entity.clone();
+                move |_, _, app| {
+                    // 与 scope 按钮同口径：切回取样口径并重新画像。
+                    // 对临时表/结果集目标静默忽略（数据已是既定内容）。
+                    entity.update(app, |panel, cx| {
+                        panel.view.update(cx, |view, cx| view.request_sample(cx));
+                    });
+                }
+            });
+        let export_btn = Button::new("insight-ws-export")
+            .ghost()
+            .icon(IconName::FileText)
+            .label("导出")
+            .tooltip("导出画像报告（Markdown）")
+            .disabled(!matches!(
+                *self.view.read(cx).state(),
+                InsightPanelState::Data
+            ))
+            .on_click({
+                let view = self.view.clone();
+                move |_, _, app| {
+                    // 报告内容由面板算好（D36：导出「用户看到的这份结论」）；
+                    // 事件路径里组装，不占 render。无画像时 title 用于日志。
+                    let title = view
+                        .read(app)
+                        .target()
+                        .map(|t| t.title())
+                        .unwrap_or_default();
+                    let content = view
+                        .read(app)
+                        .data()
+                        .table
+                        .as_ref()
+                        .map(render_markdown_report);
+                    if let Some(content) = content {
+                        view.update(app, |v, cx| {
+                            v.request_report_export(content, cx);
+                        });
+                    } else {
+                        tracing::info!("导出报告：无画像数据（{title}）");
+                    }
+                }
+            });
+        // 面板头容器：背景/边框/高度外层自画；命令按钮行由 Toolbar 渲染
+        // （统一 size 托管 + roving 方向键焦点 + toolbar a11y 语义）。
         div()
             .flex_none()
             .h(rems(ui::PANEL_HEADER_HEIGHT))
             .px(rems(ui::PANEL_PADDING))
             .flex()
             .items_center()
-            .gap_1()
             .border_b_1()
             .border_color(colors.border)
             .child(
-                Button::new("insight-ws-refresh")
-                    .ghost()
+                Toolbar::new("insight-ws-toolbar")
                     .xsmall()
-                    .icon(IconName::RotateCw)
-                    .label("刷新")
-                    .tooltip("重算当前画像")
-                    .on_click({
-                        let entity = entity.clone();
-                        move |_, _, app| {
-                            entity.update(app, |panel, cx| panel.refresh(cx));
-                        }
-                    }),
-            )
-            .child(
-                Button::new("insight-ws-sample")
-                    .ghost()
-                    .xsmall()
-                    .label("取样")
-                    .tooltip("重新从源库取样并画像（源目标）")
-                    .on_click({
-                        let entity = entity.clone();
-                        move |_, _, app| {
-                            // 与 scope 按钮同口径：切回取样口径并重新画像。
-                            // 对临时表/结果集目标静默忽略（数据已是既定内容）。
-                            entity.update(app, |panel, cx| {
-                                panel.view.update(cx, |view, cx| view.request_sample(cx));
-                            });
-                        }
-                    }),
-            )
-            .child(
-                Button::new("insight-ws-export")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::FileText)
-                    .label("导出")
-                    .tooltip("导出画像报告（Markdown）")
-                    .disabled(!matches!(
-                        *self.view.read(cx).state(),
-                        InsightPanelState::Data
-                    ))
-                    .on_click({
-                        let view = self.view.clone();
-                        move |_, _, app| {
-                            // 报告内容由面板算好（D36：导出「用户看到的这份结论」）；
-                            // 事件路径里组装，不占 render。无画像时 title 用于日志。
-                            let title = view
-                                .read(app)
-                                .target()
-                                .map(|t| t.title())
-                                .unwrap_or_default();
-                            let content = view
-                                .read(app)
-                                .data()
-                                .table
-                                .as_ref()
-                                .map(render_markdown_report);
-                            if let Some(content) = content {
-                                view.update(app, |v, cx| {
-                                    v.request_report_export(content, cx);
-                                });
-                            } else {
-                                tracing::info!("导出报告：无画像数据（{title}）");
-                            }
-                        }
-                    }),
+                    .children([refresh_btn, sample_btn, export_btn]),
             )
             .child(divider(theme))
             // 目标切换下拉：已进入洞察的目标 → 切换画像；末项 → 打开多表对比。

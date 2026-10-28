@@ -44,6 +44,10 @@ pub const PICK_DIALOG_WIDTH: f32 = 34.0;
 pub const PICK_LIST_MAX_HEIGHT: f32 = 18.0;
 /// 版本历史对话框宽（48.0rem = 768px；原型 §7.1——版本表格多列）。
 pub const VERSION_DIALOG_WIDTH: f32 = 48.0;
+/// 版本 diff 对比对话框宽（64.0rem = 1024px）：代码 diff 是阅读场景，需要宽幅。
+pub const DIFF_DIALOG_WIDTH: f32 = 64.0;
+/// diff 区域最大高度（28.0rem = 448px）：diff 行多，靠滚动而不是加高对话框。
+pub const DIFF_LIST_MAX_HEIGHT: f32 = 28.0;
 /// 版本列表最大高度（20.0rem = 320px）：版本行可积上百条，靠滚动而不是加高对话框。
 pub const VERSION_LIST_MAX_HEIGHT: f32 = 20.0;
 /// 版本表格的列宽（rem）：固定宽 + 差异列弹性，避免长短值抽动列位。

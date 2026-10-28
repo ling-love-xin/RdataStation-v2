@@ -47,6 +47,8 @@ rds-kernel.workspace = true
 rfd.workspace = true
 # 在系统文件管理器里打开日志目录（设置页的动作行）
 opener.workspace = true
+# 资源对比 job（resource_jobs.rs 文本 diff，workspace 级依赖，2026-10-28 补声明）
+similar.workspace = true
 
 # ===== LSP（#54 C6/C7 跳转定义目标解析：`rds://navigator` Uri 解析）=====
 # 版本/features 对齐 workspace（须与 gpui-base 同 0.97.0 + `proposed`）

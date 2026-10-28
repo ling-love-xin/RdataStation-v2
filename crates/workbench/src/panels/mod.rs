@@ -33,6 +33,7 @@ use analytics_resource::dialogs::conflict::{
 use analytics_resource::dialogs::tag::{TagDialogState, open_tag_dialog};
 use analytics_resource::dialogs::trash::{TrashDialogState, open_trash_dialog};
 use analytics_resource::dialogs::version::{VersionDialogState, open_version_dialog};
+use analytics_resource::dialogs::version_diff::open_version_diff_dialog;
 use analytics_resource::resource_view::ResourcesPanel;
 use database::nav_view::NavView;
 use scratchpad::ScratchpadView;
@@ -219,6 +220,20 @@ impl SidebarPanel {
                 }
             },
         );
+    }
+
+    /// 消费「待开的版本 diff 对比对话框」（M6）：一次性只读查看，开窗即清。
+    pub(crate) fn ensure_version_diff_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(rows) = self.shared.version_diff_dialog.borrow_mut().pending.take() else {
+            return;
+        };
+        open_version_diff_dialog(window, cx, rows.seed, |_cx| {
+            // 开窗即清：pending 已在上面 take 掉；diff 是只读查看，没有会话要记账。
+        });
     }
 
     /// 消费「待开的索引修复对话框」（M6）：与版本历史同一形态（见 `ensure_version_dialog`）。
@@ -440,8 +455,9 @@ impl Focusable for SidebarPanel {
 
 impl Render for SidebarPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // M6：版本历史 / 索引修复 / 回收站 / 标签四个对话框的待开数据都在这一帧消费（开窗要 `Window`）。
+        // M6：版本历史 / 版本 diff / 索引修复 / 回收站 / 标签四个对话框的待开数据都在这一帧消费（开窗要 `Window`）。
         self.ensure_version_dialog(window, cx);
+        self.ensure_version_diff_dialog(window, cx);
         self.ensure_repair_dialog(window, cx);
         self.ensure_trash_dialog(window, cx);
         self.ensure_tag_dialog(window, cx);

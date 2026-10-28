@@ -8,7 +8,8 @@
 
 use gpui_kit::base::{Disableable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{IconName, Sizable as _, Theme};
+use gpui_kit::component::toolbar::Toolbar;
+use gpui_kit::component::{IconName, Theme};
 use gpui_kit::*;
 
 use super::kind_badge;
@@ -28,40 +29,38 @@ impl InsightView {
             .gap_1()
             .border_b_1()
             .border_color(colors.border)
-            // 右 Dock 面板：标题靠右（与左栏镜像），操作按钮靠左
+            // 右 Dock 面板：操作按钮用 Toolbar 统一 size + roving 键盘焦点；标题靠右
             .child(
-                Button::new("insight-rules")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::Settings)
-                    // 规则落在项目目录下（`{项目}/.RSmeta/insight-rules/`）：
-                    // 无项目时不给入口，而不是给一个点了没反应的按钮
-                    .disabled(!self.project_open)
-                    .tooltip(if self.project_open {
-                        "规则管理"
-                    } else {
-                        "规则管理（需先打开项目）"
-                    })
-                    .on_click({
-                        let rules = self.rules.clone();
-                        move |_, window, app| {
-                            // 开窗 + 发一次取数请求；数据由接缝回填
-                            rules.update(app, |view, cx| view.begin_load(window, cx));
-                        }
-                    }),
-            )
-            .child(
-                Button::new("insight-refresh")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::RotateCw)
-                    .tooltip("重算")
-                    .on_click({
-                        let entity = entity.clone();
-                        move |_, _, app| {
-                            entity.update(app, |view, cx| view.reload(cx));
-                        }
-                    }),
+                Toolbar::new("insight-header-toolbar")
+                    .child(
+                        Button::new("insight-rules")
+                            .ghost()
+                            .icon(IconName::Settings)
+                            .disabled(!self.project_open)
+                            .tooltip(if self.project_open {
+                                "规则管理"
+                            } else {
+                                "规则管理（需先打开项目）"
+                            })
+                            .on_click({
+                                let rules = self.rules.clone();
+                                move |_, window, app| {
+                                    rules.update(app, |view, cx| view.begin_load(window, cx));
+                                }
+                            }),
+                    )
+                    .child(
+                        Button::new("insight-refresh")
+                            .ghost()
+                            .icon(IconName::RotateCw)
+                            .tooltip("重算")
+                            .on_click({
+                                let entity = entity.clone();
+                                move |_, _, app| {
+                                    entity.update(app, |view, cx| view.reload(cx));
+                                }
+                            }),
+                    ),
             )
             .child(
                 div()

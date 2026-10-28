@@ -126,6 +126,16 @@ pub struct VersionDialogFlow {
     pub session: Option<VersionDialogSession>,
 }
 
+/// M6：版本 diff 对比对话框的流转（取数 → 开窗）。
+///
+/// diff 是**一次性只读查看**（无行刷新、无动作回执），所以只有"待开"，没有会话复用——
+/// 版本对话框选不同版本可以多次触发对比，每次都是一个新的待开数据，开窗即清。
+#[derive(Default)]
+pub struct VersionDiffDialogFlow {
+    /// 待开的数据（取数回来时置位，侧栏 render 消费开窗）。
+    pub pending: Option<crate::services::resource_jobs::VersionDiffRows>,
+}
+
 /// M6：索引修复对话框的一次会话（行集合可被宿主换掉，与版本历史同一形态）。
 pub struct RepairDialogSession {
     pub state: RepairDialogState,
@@ -256,6 +266,10 @@ pub struct Shared {
     pub settings_open: Rc<Cell<bool>>,
     /// 布局锁定（防止意外拖拽调整面板大小/位置）。
     pub layout_locked: Rc<Cell<bool>>,
+    /// 上次同步的左侧侧边栏宽度（用于检测设置页面的值是否发生变化）。
+    pub prev_left_sidebar_width: Rc<Cell<f32>>,
+    /// 上次同步的右侧侧边栏宽度（用于检测设置页面的值是否发生变化）。
+    pub prev_right_sidebar_width: Rc<Cell<f32>>,
     pub selected: Rc<Cell<Option<usize>>>,
     pub connections: Rc<RefCell<Vec<ConnectionItem>>>,
     pub notice: Rc<RefCell<Option<String>>>,
@@ -337,6 +351,8 @@ pub struct Shared {
     pub resources_bridge: Rc<RefCell<Option<ResourcesBridge>>>,
     /// M6：版本历史对话框的流转（取数 → 开窗 → 动作后刷新行；见 `VersionDialogFlow`）。
     pub version_dialog: Rc<RefCell<VersionDialogFlow>>,
+    /// M6：版本 diff 对比对话框的流转（取数 → 开窗；见 `VersionDiffDialogFlow`）。
+    pub version_diff_dialog: Rc<RefCell<VersionDiffDialogFlow>>,
     /// M6：索引修复对话框的流转（扫描 → 开窗 → 修复后重扫换行；见 `RepairDialogFlow`）。
     pub repair_dialog: Rc<RefCell<RepairDialogFlow>>,
     /// M6：回收站对话框的流转（取数 → 开窗 → 动作后重取换行；见 `TrashDialogFlow`）。
@@ -393,6 +409,8 @@ impl Shared {
             quick_open: Rc::new(Cell::new(false)),
             settings_open: Rc::new(Cell::new(false)),
             layout_locked: Rc::new(Cell::new(false)),
+            prev_left_sidebar_width: Rc::new(Cell::new(0.0)),
+            prev_right_sidebar_width: Rc::new(Cell::new(0.0)),
             selected: Rc::new(Cell::new(if connections.is_empty() {
                 None
             } else {
@@ -421,6 +439,7 @@ impl Shared {
             resources_panel: Rc::new(RefCell::new(None)),
             resources_bridge: Rc::new(RefCell::new(None)),
             version_dialog: Rc::new(RefCell::new(VersionDialogFlow::default())),
+            version_diff_dialog: Rc::new(RefCell::new(VersionDiffDialogFlow::default())),
             repair_dialog: Rc::new(RefCell::new(RepairDialogFlow::default())),
             trash_dialog: Rc::new(RefCell::new(TrashDialogFlow::default())),
             tag_dialog: Rc::new(RefCell::new(TagDialogFlow::default())),

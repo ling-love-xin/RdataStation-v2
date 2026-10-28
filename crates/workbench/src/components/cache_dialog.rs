@@ -20,6 +20,7 @@ use engine::persistence::{
     list_orphan_cache_entries, prune_cache_index_orphans,
 };
 
+use crate::components::dialog_helpers::standard_dialog_body;
 use crate::panels::Shared;
 use crate::view::ConnectionItem;
 
@@ -301,7 +302,7 @@ pub fn open_cache_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
 
         dialog
             .title("缓存管理")
-            .child(body)
+            .child(standard_dialog_body(body))
             .child(
                 div()
                     .text_xs()

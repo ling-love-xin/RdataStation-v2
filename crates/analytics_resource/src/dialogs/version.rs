@@ -69,15 +69,18 @@ pub enum VersionAction {
     CheckoutDraft { version: i32 },
     /// 删除该版本的内容副本（**保留版本行**；删了不可恢复，所以要确认）。
     DeleteCopy { version: i32 },
+    /// 与当前版本对比（只读查看，不入动作回执、不写库；文本 diff 查看器 `version_diff`）。
+    Diff { version: i32 },
 }
 
 impl VersionAction {
-    /// 版本号（三种动作都要它）。
+    /// 版本号（四种动作都要它）。
     pub fn version(self) -> i32 {
         match self {
             Self::Restore { version }
             | Self::CheckoutDraft { version }
-            | Self::DeleteCopy { version } => version,
+            | Self::DeleteCopy { version }
+            | Self::Diff { version } => version,
         }
     }
 }
@@ -486,6 +489,9 @@ fn action_bar(
     let version = row.version;
     // 当前版本不走这两个动作（它就是本体）：取回走详情面板的「取回（检出）…」。
     let can_act = !row.is_current && row.has_copy && !busy && !read_only;
+    // 对比是**只读查看**（不写库，只读项目也能看），只要求"这一版内容还在"；
+    // 文本类型与大小上限由宿主在取数线程挡（对话框不查文件系统）。
+    let can_diff = !row.is_current && row.has_copy && !busy;
     let hint = if read_only {
         "项目处于只读模式：还原 / 取回 / 删副本都是写操作"
     } else if row.is_current {
@@ -513,6 +519,15 @@ fn action_bar(
             state.set_busy(true);
             state.set_note(Some(format!("正在取回 v{version}…")));
             on_action(VersionAction::CheckoutDraft { version }, window, cx);
+        }
+    };
+    // 对比不置忙、不开回执：它是**查看**，打开 diff 对话框（独立窗口），版本对话框保持打开。
+    let diff = {
+        let state = state.clone();
+        let on_action = on_action.clone();
+        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+            state.set_selected(Some(version));
+            on_action(VersionAction::Diff { version }, window, cx);
         }
     };
     // 删副本不可恢复（不进回收站）：先过一个确认框，再交给宿主。
@@ -553,6 +568,16 @@ fn action_bar(
                 .h_flex()
                 .w_full()
                 .gap_2()
+                .child(
+                    Button::new("version-diff")
+                        .ghost()
+                        .small()
+                        .debug_selector(|| "version-diff".to_string())
+                        .label("与当前版本对比…")
+                        .tooltip("打开文本 diff 查看器，看这一版和当前版本差在哪（只读）")
+                        .disabled(!can_diff)
+                        .on_click(diff),
+                )
                 .child(
                     Button::new("version-restore")
                         .small()

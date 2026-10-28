@@ -10,8 +10,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Size, Sizable};
-use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::component::{ActiveTheme, Icon, IconName};
 use gpui_kit::*;
 
 use std::cell::RefCell;
@@ -122,17 +121,8 @@ impl ComponentPanel for ResultPanelDock {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Vec<Button>> {
-        // 标题栏工具栏按钮：导出 + 刷新
-        Some(vec![
-            Button::new("export")
-                .icon(IconName::FolderOpen)
-                .ghost()
-                .size(px(28.)),
-            Button::new("refresh")
-                .icon(IconName::RefreshCw)
-                .ghost()
-                .size(px(28.)),
-        ])
+        // 业务按钮移到模块内部工具栏，Dock 标题栏只做容器管理。
+        None
     }
 
     fn dropdown_menu(
@@ -141,11 +131,7 @@ impl ComponentPanel for ResultPanelDock {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> PopupMenu {
-        // 标题栏省略号菜单
-        menu.item(PopupMenuItem::new("导出 CSV..."))
-            .item(PopupMenuItem::new("导出 Excel..."))
-            .separator()
-            .item(PopupMenuItem::new("刷新"))
-            .item(PopupMenuItem::new("结果设置"))
+        // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
+        menu
     }
 }

@@ -4179,9 +4179,13 @@ fn the_result_pane_sits_in_a_split_without_squeezing_the_editor(cx: &mut TestApp
         after.as_f32() > 0.0,
         "编辑区不能被结果区压成 0（实得 {after:?}）"
     );
+    // 可拖拽分栏（2026-10-28 恢复 v_resizable：此前被固定高度 div 替换）：结果区
+    // 占下半区，编辑区相应变矮——断言「确实分栏了」比旧断言（无分栏时的
+    // `after >= before`）更贴近当前语义；拖拽高度由组件库 ResizableState 管理，
+    // 上限 `RESULT_MAX_HEIGHT` 保证编辑区始终有空间（不在本用例内重复验证）。
     assert!(
-        after >= before,
-        "Dock 化后编辑区不被结果区压缩（v_resizable 分栏已移除：{before:?} → {after:?}）"
+        after < before,
+        "结果区分栏后编辑区应变矮（{before:?} → {after:?}）"
     );
 }
 
@@ -7721,6 +7725,9 @@ fn commit_controls_appear_with_pending_changes(cx: &mut TestAppContext) {
         panel.update(cx, |panel, cx| panel.sync_result_view(cx));
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
+    // 2026-10-28 commit 组迁 `toolbar::ToolbarGroup`：ToolbarGroup 是 RenderOnce 无
+    // debug_selector（debug_bounds 查不到、find 需 test_support 注册也查不到），面板在
+    // 组件外层挂了无样式观测壳 div（debug_selector 锚点），断言仍走 debug_bounds
     assert!(
         cx.debug_bounds("editor-result-commit-group").is_some(),
         "有待提交变更时提交/回滚对应出现"

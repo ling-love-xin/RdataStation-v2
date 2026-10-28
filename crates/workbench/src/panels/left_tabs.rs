@@ -112,17 +112,8 @@ impl ComponentPanel for DatabaseNavPanel {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Vec<Button>> {
-        // 标题栏工具栏按钮：搜索 + 新建连接
-        Some(vec![
-            Button::new("search")
-                .icon(IconName::Search)
-                .ghost()
-                .size(px(28.)),
-            Button::new("add_connection")
-                .icon(IconName::Plus)
-                .ghost()
-                .size(px(28.)),
-        ])
+        // 模块内部已有完整工具栏（NavView 自带 Toolbar），Dock 标题栏只做容器管理。
+        None
     }
 
     fn dropdown_menu(
@@ -131,11 +122,8 @@ impl ComponentPanel for DatabaseNavPanel {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> PopupMenu {
-        // 标题栏省略号菜单
-        menu.item(PopupMenuItem::new("新建连接"))
-            .item(PopupMenuItem::new("新建分组"))
-            .item(PopupMenuItem::Separator)
-            .item(PopupMenuItem::new("刷新"))
+        // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
+        menu
     }
 
 }
@@ -221,21 +209,8 @@ impl ComponentPanel for ScratchPanel {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Vec<Button>> {
-        // 标题栏工具栏按钮：新建文件 + 新建文件夹 + 刷新
-        Some(vec![
-            Button::new("new_file")
-                .icon(IconName::Plus)
-                .ghost()
-                .size(px(28.)),
-            Button::new("new_folder")
-                .icon(IconName::Plus)
-                .ghost()
-                .size(px(28.)),
-            Button::new("refresh")
-                .icon(IconName::RefreshCw)
-                .ghost()
-                .size(px(28.)),
-        ])
+        // 模块内部已有可拖拽排序工具栏，Dock 标题栏只做容器管理。
+        None
     }
 
     fn dropdown_menu(
@@ -244,12 +219,8 @@ impl ComponentPanel for ScratchPanel {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> PopupMenu {
-        // 标题栏省略号菜单
-        menu.item(PopupMenuItem::new("新建文件"))
-            .item(PopupMenuItem::new("新建文件夹"))
-            .separator()
-            .item(PopupMenuItem::new("刷新"))
-            .item(PopupMenuItem::new("导入文件..."))
+        // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
+        menu
     }
 
 }
@@ -338,17 +309,8 @@ impl ComponentPanel for ResourcePanelTab {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Vec<Button>> {
-        // 标题栏工具栏按钮：搜索 + 刷新
-        Some(vec![
-            Button::new("search")
-                .icon(IconName::Search)
-                .ghost()
-                .size(px(28.)),
-            Button::new("refresh")
-                .icon(IconName::RefreshCw)
-                .ghost()
-                .size(px(28.)),
-        ])
+        // 模块内部已有工具栏（搜索框/筛选/排序/更多），Dock 标题栏只做容器管理。
+        None
     }
 
     fn dropdown_menu(
@@ -357,11 +319,8 @@ impl ComponentPanel for ResourcePanelTab {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> PopupMenu {
-        // 标题栏省略号菜单
-        menu.item(PopupMenuItem::new("刷新"))
-            .item(PopupMenuItem::new("扫描资源"))
-            .separator()
-            .item(PopupMenuItem::new("导出报告..."))
+        // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
+        menu
     }
 
 }
@@ -751,17 +710,8 @@ impl ComponentPanel for PluginPanel {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Vec<Button>> {
-        // 标题栏工具栏按钮：安装插件 + 刷新
-        Some(vec![
-            Button::new("install_plugin")
-                .icon(IconName::Plus)
-                .ghost()
-                .size(px(28.)),
-            Button::new("refresh")
-                .icon(IconName::RefreshCw)
-                .ghost()
-                .size(px(28.)),
-        ])
+        // 业务按钮移到模块内部工具栏，Dock 标题栏只做容器管理。
+        None
     }
 
     fn dropdown_menu(
@@ -770,12 +720,8 @@ impl ComponentPanel for PluginPanel {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> PopupMenu {
-        // 标题栏省略号菜单
-        menu.item(PopupMenuItem::new("安装插件..."))
-            .item(PopupMenuItem::new("刷新"))
-            .separator()
-            .item(PopupMenuItem::new("管理插件"))
-            .item(PopupMenuItem::new("开发者模式"))
+        // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
+        menu
     }
 
 }

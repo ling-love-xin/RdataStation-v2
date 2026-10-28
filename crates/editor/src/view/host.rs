@@ -6,7 +6,7 @@
 //!
 //! 多文档 = 同一个 tab 组里的多个面板：`DockLayout::tabs()` 里逐个 `panel_view` 即可。
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use result_panel::panel::{ExportCtx, GridPayload, ResultPanel, ResultSyncInput};
 use result_panel::ports::{ResultActionQueue, ResultRequest};
 use result_panel::rowset::{LocalRow, RowOp, RowRef};
@@ -21,8 +21,10 @@ use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::popover::Popover;
+use gpui_kit::component::resizable::{resizable_panel, v_resizable};
 use gpui_kit::component::separator::Separator;
-use gpui_kit::component::{Icon, WindowExt as _};
+use gpui_kit::component::{Icon, InteractiveElementExt as _, WindowExt as _};
+use gpui_kit::StatefulInteractiveElement as _;
 use gpui_kit::component::dock::{
     BasePanel, DockArea, Panel as ComponentPanel, PanelEvent as BasePanelEvent, PanelId, TabGroup,
 };
@@ -335,6 +337,8 @@ pub struct EditorStatusSnapshot {
 pub enum EditorHostEvent {
     /// 状态栏可见的文档状态变了（内容 / 连接 / 通道 / Schema / 事务 / 执行 / 消息）
     StatusChanged,
+    /// 执行失败（原因文本）——宿主据此弹全局错误通知。
+    ExecutionFailed(String),
 }
 
 impl EventEmitter<EditorHostEvent> for EditorHostPanel {}
@@ -414,6 +418,9 @@ pub struct EditorHostPanel {
     /// 结果面板实体（Dock 化：面板归 workbench dock 渲染；编辑器只做两件事——
     /// 事件路径算 [`ResultSyncInput`] 投影 + `drain_result_actions` 分派面板动作）
     result_panel: Entity<ResultPanel>,
+    /// 【结果区分栏】拖拽高度（rem；面板存活期间记住，结果区关闭重开仍沿用；
+    /// 跨会话持久化属 workbench context 层，字段已存在见遗留 #5）
+    result_height: std::rc::Rc<Cell<f32>>,
     /// 面板动作队列（面板渲染期 `push`；编辑器事件路径这里 `drain` 分派回动作方法）
     result_action_queue: ResultActionQueue,
     /// 【并排对比】对比栏的网格（第二份结果集的 delegate；惰性创建，面板生命周期内复用）
@@ -672,10 +679,16 @@ impl EditorHostPanel {
             // 【B2】全局偏好 `result_panel.show_column_comments` 启动时同步到面板（面板级临时开关
             // 覆盖此默认值；用户在面板工具栏切换后不再回写全局——全局只控"默认开不开"）
             if let Some(settings) = cx.try_global::<settings::model::Settings>() {
+                // 先拷贝偏好值、释放 `settings` 借用，再对 panel 可变借用 `cx`
+                //（try_global 的借用与 `cx` 可变借用冲突 → E0502，2026-10-28 修复）。
                 let on = settings.result_panel.show_column_comments;
+                let type_style = settings.result_panel.type_style();
                 if on {
                     panel.set_show_column_comments(true, cx);
                 }
+                // 【类型样式】全局偏好启动同步（数字格式 / NULL 占位 / 布尔映射 / 按族对齐与前景色）；
+                // 设置页后续变更走 `apply_result_style`（workbench 钩子）即时生效
+                panel.set_type_style(type_style, cx);
             }
             panel
         });
@@ -1029,6 +1042,7 @@ impl EditorHostPanel {
             export_pending: 0,
             pending_labels: std::collections::VecDeque::new(),
             result_panel,
+            result_height: std::rc::Rc::new(Cell::new(ui::RESULT_PANE_HEIGHT)),
             result_action_queue,
             compare_grid: Some(compare_grid),
             pending_bind: None,
@@ -1678,7 +1692,7 @@ impl EditorHostPanel {
     ///   （右对齐语义稳定；T2c-6 随会话持久化时再放开）。
     /// - 最右：**`···` 定制按钮**——打开「工具栏自定义」面板（可见性 / 折叠 / 移动 /
     ///   竖线分隔符 / 重置）。
-    fn render_toolbar(&self, mode: EditorMode, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_toolbar(&self, mode: EditorMode, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let border = cx.theme().colors.border;
         let entity = cx.entity();
         // 模式指示器的 dropdown_menu 闭包会 move 走 `entity`，工具栏按钮也要用宿主：
@@ -1688,13 +1702,13 @@ impl EditorHostPanel {
 
         // 【组件统一化】外壳迁移到 gpui-kit Toolbar（获得：左右方向键焦点漫游 +
         // 档位统一）。Small 档是 min_h_8(32px)，editor 按原型 2.25rem 定高覆盖；
-        // Small 档 p_1=4px 内距，恢复原型水平 8px（px_2 覆盖）。
+        // Small 档 p_1=4px 内距，恢复原型水平 8px（px_2 覆盖）。底部边框随外层
+        // 滚动容器走（2026-10-28），避免横向滚动时边框跟着内容一起滚。
+        tracing::info!("【Toolbar埋点】使用 gpui-kit Toolbar 组件渲染编辑器工具栏");
         let mut toolbar = Toolbar::new("editor-toolbar")
             .small()
             .h(rems(ui::EDITOR_TOOLBAR_HEIGHT))
             .px_2()
-            .border_b(ui::HAIRLINE)
-            .border_color(border)
             .content(
                 Button::new("editor-mode-indicator")
                     .ghost()
@@ -1807,7 +1821,99 @@ impl EditorHostPanel {
                 );
             }
         }
-        toolbar
+        // 【工具栏溢出滚动】（2026-10-28）：gpui-kit Toolbar 组件 `flex_shrink_0` 不收缩，
+        // 面板被右侧 Dock 挤窄时按钮溢出会被遮挡。外包横向滚动视口 + 两端悬浮箭头按钮：
+        // 溢出判定读 ScrollHandle 上一帧 `max_offset`（负值 = 内容确实溢出），箭头只在
+        // 对应方向还有内容时出现——右侧 Dock 挤压时右侧按钮可滚动查看，不再被盖住。
+        // 悬浮箭头是独立按钮（标准 Button），不手搓控件；滚动是无动画的 offset 平移。
+        // 视口用 gpui 原生横向滚动（`.id()` 后挂 `overflow_x_scroll` + `track_scroll`）而非
+        // kit Scrollable：后者会把内层元素 id 换成 `(id, "content")`，工具栏内 `editor-conn-name`
+        // 等元素的 id 会脱离测试观测（debug_bounds 找不到）；原生滚动不替换 id，行为与 TabBar 同构。
+        let scroll_handle: ScrollHandle = window
+            .use_keyed_state("editor-toolbar-scroll", cx, |_, _| ScrollHandle::default())
+            .read(cx)
+            .clone();
+        let offset_x = scroll_handle.offset().x;
+        let max_off = scroll_handle.max_offset().x;
+        let has_overflow = max_off < px(0.0);
+        let show_left = has_overflow && offset_x < px(0.0);
+        let show_right = has_overflow && offset_x > max_off;
+        // 单步约 5 个图标按钮宽（toolbar small 档按钮 ≈32px）。
+        let arrow_step = px(160.0);
+        let theme = cx.theme();
+        let arrow_bg = theme.colors.sidebar;
+
+        let mut bar = div()
+            .relative()
+            .h_flex()
+            .w_full()
+            .min_w_0()
+            .h(rems(ui::EDITOR_TOOLBAR_HEIGHT))
+            .border_b(ui::HAIRLINE)
+            .border_color(border)
+            .child(
+                div()
+                    .id("editor-toolbar-viewport")
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_x_scroll()
+                    .lock_scroll_axis()
+                    .track_scroll(&scroll_handle)
+                    .child(toolbar),
+            );
+        if show_left {
+            let handle = scroll_handle.clone();
+            bar = bar.child(
+                div()
+                    .absolute()
+                    .left(px(0.))
+                    .top(px(2.))
+                    .bottom(px(2.))
+                    .v_flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        Button::new("editor-toolbar-scroll-left")
+                            .ghost()
+                            .small()
+                            .icon(IconName::ChevronLeft)
+                            .tooltip("向左滚动工具栏")
+                            .bg(arrow_bg.opacity(0.9))
+                            .on_click(move |_, _, _| {
+                                let cur = handle.offset().x;
+                                // 回看左侧：offset 增加（趋近 0），最左即 0。
+                                handle.set_offset(point((cur + arrow_step).min(px(0.0)), px(0.0)));
+                            }),
+                    ),
+            );
+        }
+        if show_right {
+            let handle = scroll_handle.clone();
+            bar = bar.child(
+                div()
+                    .absolute()
+                    .right(px(0.))
+                    .top(px(2.))
+                    .bottom(px(2.))
+                    .v_flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        Button::new("editor-toolbar-scroll-right")
+                            .ghost()
+                            .small()
+                            .icon(IconName::ChevronRight)
+                            .tooltip("向右滚动工具栏")
+                            .bg(arrow_bg.opacity(0.9))
+                            .on_click(move |_, _, _| {
+                                let cur = handle.offset().x;
+                                // 看右侧：offset 减小（更负），最右 clamp 到 max_offset。
+                                handle.set_offset(point((cur - arrow_step).max(max_off), px(0.0)));
+                            }),
+                    ),
+            );
+        }
+        bar
     }
 
     /// 【2026-10-27】用户只读开关（工具栏 roLock）：`toggled` = 只读
@@ -5961,6 +6067,16 @@ impl EditorHostPanel {
         self.result_panel.clone()
     }
 
+    /// 【类型样式】全局偏好即时生效入口：读当前 Settings 的 `result_panel.type_style()`
+    /// 推给结果面板（面板再推 delegate 重绘）。workbench 设置页变更钩子
+    /// （`on_settings_changed` 遍历 `editor_hosts`）调用；不随 `set_data` 清掉。
+    pub fn apply_result_style(&self, cx: &mut Context<Self>) {
+        if let Some(settings) = cx.try_global::<settings::model::Settings>() {
+            let prefs = settings.result_panel.type_style();
+            self.result_panel.update(cx, |p, cx| p.set_type_style(prefs, cx));
+        }
+    }
+
     /// 把光标放到指定位移（供测试断言“执行的是光标所在那句”；键位路径仍走真按键）
     pub fn set_caret_for_test(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.editor
@@ -6331,6 +6447,8 @@ impl EditorHostPanel {
         // 【B14】落在**新结果集**上的失败：它不抢选中（B2 的语义），所以结果区不会报它——
         // 状态栏补一句，否则用户只看到标签上多个红点，不知道为什么
         let mut background_failure: Option<String> = None;
+        // 执行失败原因的克隆——用于循环结束后弹全局通知（避免 if let 移动后再用）
+        let mut exec_failure_notice: Option<String> = None;
         for outcome in outcomes {
             let is_mine = outcome.document == self.document;
             let outcome_ok = outcome.result.is_ok();
@@ -6426,6 +6544,8 @@ impl EditorHostPanel {
             self.sync_result_view(cx);
             // 【B5b】取段失败的原因在这里说（同步结果区会按“选中那份”重写提示）
             let segment_reason = segment_failure.is_some();
+            // 先克隆一份用于全局通知——避免下面 if let 移动后再用
+            exec_failure_notice = background_failure.clone().or(segment_failure.clone());
             if let Some(reason) = segment_failure {
                 self.set_message(Some(reason), cx);
             }
@@ -6449,6 +6569,12 @@ impl EditorHostPanel {
                 && self.error_site.is_some()
             {
                 self.jump_to_error_site(cx);
+            }
+            // 执行失败 → 宿主弹全局错误通知（Error 类型，不自动消失）。
+            // 用循环内提前克隆的副本，避免变量已被 if let 移动（2026-10-28 修正：
+            // 原第二处 if 把引用放到了本块之外 → E0425 作用域不可见）。
+            if let Some(reason) = exec_failure_notice {
+                cx.emit(EditorHostEvent::ExecutionFailed(reason));
             }
         }
         // 执行收口（executing 徽标 / 耗时消失）：成功无提示时也要通知宿主刷新全局段
@@ -7018,6 +7144,10 @@ impl EditorHostPanel {
             // 【侧栏】右侧辅助栏开合：只翻面板状态
             ResultRequest::ToggleValueSidebar => {
                 self.result_panel.update(cx, |p, cx| p.toggle_value_sidebar(cx))
+            }
+            // 【侧栏】状态栏左端开关：左侧栏（网格 / 文本 / 记录竖条）开合
+            ResultRequest::ToggleLeftSidebar => {
+                self.result_panel.update(cx, |p, cx| p.toggle_left_sidebar(cx))
             }
             // 【侧栏】清单行眼睛：切换该列隐藏 / 显示（网格是另一实体，
             // update 它安全；面板再 notify 重画列浏览器的隐藏标记）
@@ -8665,7 +8795,7 @@ impl Render for EditorHostPanel {
         let mode = self
             .with_document(|doc| doc.mode())
             .unwrap_or(EditorMode::General);
-        root = root.child(self.render_toolbar(mode, cx));
+        root = root.child(self.render_toolbar(mode, window, cx));
         // 提示卡（A13）：档位带来的限制要在界面上说清，而不是让用户自己撞上（“能编辑却改不了”）
         if let Some(notice) = self.tier_notice() {
             let theme = cx.theme();
@@ -8688,6 +8818,9 @@ impl Render for EditorHostPanel {
         }
         // 编辑区 + 结果区：v_resizable 上下分栏（DBeaver 口径，结果集跟编辑器 tab 走，
         // 不再挂全局底部 dock）。结果区有内容时才加第二个 panel（无内容时高度为 0 不占位）。
+        // 2026-10-28 修复「结果区不可拉伸」：此前被换成固定高度 div（去 Resizable 修遮挡
+        // 的中间态），现恢复组件库 `v_resizable / resizable_panel`（不手搓拖动条），
+        // 拖到哪记到哪（on_resize 回写 `result_height`，结果区关闭重开仍沿用）。
         let result_has_content = self.result_panel.read(cx).has_content();
         let font_size = cx.theme().font_size;
         let edit_area = div()
@@ -8705,23 +8838,34 @@ impl Render for EditorHostPanel {
             })
             .child(self.render_editor_body(cx));
 
+        // 编辑区 + 结果区：上下分栏（结果区有内容时才显示）
         let split = if result_has_content {
-            gpui_kit::component::resizable::v_resizable("editor-result-split")
+            let result_height = self.result_height.clone();
+            v_resizable("editor-result-split")
                 .child(
-                    gpui_kit::component::resizable::resizable_panel()
+                    resizable_panel()
                         .child(edit_area),
                 )
                 .child(
-                    gpui_kit::component::resizable::resizable_panel()
+                    resizable_panel()
                         .child(
                             div()
                                 .size_full()
                                 .min_h_0()
                                 .child(self.result_panel.read(cx).render(cx)),
                         )
-                        .size(font_size * ui::RESULT_PANE_HEIGHT)
-                        .size_range(font_size * ui::RESULT_PANE_MIN_HEIGHT..font_size * ui::RESULT_MAX_HEIGHT),
+                        .size(font_size * self.result_height.get())
+                        .size_range(
+                            font_size * ui::RESULT_PANE_MIN_HEIGHT..font_size * ui::RESULT_MAX_HEIGHT,
+                        ),
                 )
+                .on_resize(move |state, _window, _cx| {
+                    // 拖到哪记到哪：上下分栏末位 panel 即结果区，换算回 rem 存面板字段
+                    //（Pixels Div → f32；`px.0` 字段是 pub(crate) 不可外读）
+                    if let Some(px) = state.read(_cx).sizes().last().copied() {
+                        result_height.set(px / font_size);
+                    }
+                })
                 .into_any_element()
         } else {
             edit_area.into_any_element()
@@ -8730,6 +8874,11 @@ impl Render for EditorHostPanel {
             div()
                 .flex_1()
                 .min_h_0()
+                // 中间层必须是 flex_col：否则 edit_area 的 flex_1 在 block 布局里无效，
+                // 无结果集时编辑器高度退化为内容高度（第 3 行被裁切、下面大片空白）。
+                // 与 gpui-kit tab_group.rs / tab_panel.rs 注释里的 block 忽略 flex_grow 同因。
+                .flex()
+                .flex_col()
                 .child(split),
         );
         // 编辑器自身状态栏（§2.5 定稿规格；需求③/去杂乱）：挂到编辑器 tab 底部。
@@ -9056,7 +9205,6 @@ fn render_channel_control(
     let refresh_label = channel::refresh_item_label(current);
     Some(
         div()
-            .w(rems(ui::CHANNEL_SLOT_WIDTH))
             .flex_none()
             .overflow_hidden()
             .child(
@@ -9159,14 +9307,15 @@ fn render_conn_slots(
         theme.colors.muted_foreground
     };
     let conn_entity = entity.clone();
-    // 连接名称槽（2026-10-27 拆两段）：名称区点击弹「选择数据源」窗（选连接绑定），
-    // ▾ 区点击弹现有下拉（跟随当前连接 + 只列在线）。固定宽 + 截断，不随内容推挤。
-    let conn_name = Button::new("editor-conn-name")
-        // 2026-10-27：连接名称槽带背景（与执行通道 pill 同款 Secondary），一眼看出「当前执行/绑定
-        // 发往哪台数据源」；▾ 区保持 ghost 以区分「名称弹窗选绑定 / ▾ 下拉切在线」
-        .with_variant(ButtonVariant::Secondary)
-        .small()
-        .debug_selector(|| "editor-conn-name".to_string())
+    // 连接名称槽（2026-10-28 重构）：使用 DropdownButton 组件，左边是名称按钮，
+    // 右边是下拉箭头，合并成一个整体，避免两个按钮分开的视觉问题。
+    let conn_name_button = Button::new("editor-conn-name")
+        .icon(
+            Icon::empty()
+                .path("icons/dot.svg")
+                .size(px(6.))
+                .text_color(dot_color),
+        )
         .label(truncate_label(&conn_label, 14))
         .on_click({
             let entity = entity.clone();
@@ -9187,11 +9336,8 @@ fn render_conn_slots(
                 );
             }
         });
-    let conn_dropdown = Button::new("editor-conn-dropdown")
-        .ghost()
-        .small()
-        .debug_selector(|| "editor-conn-dropdown".to_string())
-        .label("▾")
+    let conn_slot = DropdownButton::new("editor-conn-dropdown")
+        .button(conn_name_button)
         .dropdown_menu(move |menu, _window, _cx| {
             let mut menu = menu;
             if !has_port {
@@ -9238,17 +9384,10 @@ fn render_conn_slots(
                 );
             }
             menu
-        });
-    let conn_slot = div()
-        .h_flex()
-        .items_center()
-        .gap_1()
-        .w(rems(ui::CONN_SLOT_WIDTH))
-        .flex_none()
-        .overflow_hidden()
-        .child(div().size(px(8.)).rounded_full().bg(dot_color).flex_none())
-        .child(conn_name)
-        .child(conn_dropdown);
+        })
+        .with_variant(ButtonVariant::Secondary)
+        .small()
+        .into_any_element();
 
     // ── schema@库 槽（固定宽；有绑定连接才摆；`schema@catalog` 截断）──
     // 2026-10-27 拆两段：名称区点击弹「选择 Database/Schema」窗（左库右 Schema 选绑定），
@@ -9271,12 +9410,7 @@ fn render_conn_slots(
             }
             None => "schema".to_string(),
         };
-        let schema_name = Button::new("editor-schema-name")
-            // 2026-10-27：schema@库 槽带背景（与执行通道 pill / 连接名称同款 Secondary）；
-            // ▾ 区保持 ghost 区分「名称弹窗选 Database/Schema / ▾ 下拉切 schema」
-            .with_variant(ButtonVariant::Secondary)
-            .small()
-            .debug_selector(|| "editor-schema-name".to_string())
+        let schema_name_button = Button::new("editor-schema-name")
             .label(truncate_label(&label, 12))
             .on_click({
                 let entity = entity.clone();
@@ -9299,11 +9433,8 @@ fn render_conn_slots(
                     );
                 }
             });
-        let schema_dropdown = Button::new("editor-schema-dropdown")
-            .ghost()
-            .small()
-            .debug_selector(|| "editor-schema-dropdown".to_string())
-            .label("▾")
+        DropdownButton::new("editor-schema-dropdown")
+            .button(schema_name_button)
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu;
                 if schemas_menu.is_empty() {
@@ -9335,16 +9466,9 @@ fn render_conn_slots(
                         }),
                 );
                 menu
-            });
-        div()
-            .h_flex()
-            .items_center()
-            .gap_1()
-            .w(rems(ui::SCHEMA_SLOT_WIDTH))
-            .flex_none()
-            .overflow_hidden()
-            .child(schema_name)
-            .child(schema_dropdown)
+            })
+            .with_variant(ButtonVariant::Secondary)
+            .small()
             .into_any_element()
     });
 

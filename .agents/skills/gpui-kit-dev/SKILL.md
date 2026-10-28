@@ -86,24 +86,29 @@ use gpui_kit::prelude::FluentBuilder as _;
 >
 > 补充事实（2026-09-19 查证 0.6.1、2026-10-02 复核 0.7.0、**2026-10-11 复测 0.7.1**）：**0.6.1** 的 `PopupMenuItem` / `DropdownButton` **没有 shortcut 槽位**（菜单项显示不了 `Ctrl+Shift+P`）；**0.7.0 起** `PopupMenuItem::Item` 带 `action` 字段，`PopupMenu::render_key_binding` 经 `Kbd::binding_for_action_in` / `global_binding_for_action` **自动渲染快捷键**（实测 0.7.1 `popup_menu.rs:1119/:1143`，挂 action + 注册 key binding 即可显示，见 `project-dev-plan` C2 解阻）。`PopupMenuItem::ready_for_use()` 之类探针不存在，`PopupMenu` 不暴露菜单项（只有 `is_empty()`）。
 
-### 0.7.1 组件总清单（实测，写控件前先在这里找）
+### 0.8.1 组件总清单（vendor 实测，写控件前先在这里找）
 
-`gpui_kit::component::` 下 **68 个模块**（下表按用途分组，源自 0.7.1 的 `lib.rs` 实测，不是估计；0.6.1 → 0.7.0 新增 `carousel` / `empty` / `questionnaire` / `toolbar`；0.7.0 → 0.7.1 新增 `speech`，全程无删除）：
+`gpui_kit::component::` 下 **69 个 `pub mod` + 若干 re-export**（下表按用途分组，源自 vendor `gpui-component/src/lib.rs` 实测，不是估计；版本演进：0.6.1 → 0.7.0 新增 `carousel` / `empty` / `questionnaire` / `toolbar`；0.7.0 → 0.7.1 新增 `speech`；0.8.x 新增 `diff`（0.7.1 无），全程无删除）：
 
 | 用途 | 模块 |
 | --- | --- |
-| 布局与容器 | `dock`、`resizable`、`scroll`、`virtual_list`（`VirtualList` / `v_virtual_list` / `h_virtual_list`）、`sidebar`、`title_bar`、`status_bar`、`group_box`、`separator`、`root`、`styled` |
+| 布局与容器 | `dock`、`resizable`、`scroll`、`virtual_list`（`VirtualList` / `v_virtual_list` / `h_virtual_list`）、`sidebar`、`title_bar`、`status_bar`、`group_box`、`separator`、`root`、`styled`、`global_state`（`GlobalState` 全局状态容器，re-export 自 gpui-base；本仓 `ProductTokenSet: Global` 即此模式）、`window_border`（`WindowBorder` / `window_border()` / `window_paddings`，窗口边框容器） |
 | 按钮与动作 | `button`（`Button` / `ButtonVariants` / 图标按钮）、`link`、`kbd`、`clipboard`、`tooltip`、`hover_card`、`menu`（`PopupMenu` / `DropdownMenu` / `DropdownButton`）、`native_menu`、`command`、`history`、`toolbar`（0.7 新增） |
 | 输入与表单 | `input`（编辑器内核 + `Input` / `InputState`）、`select`、`combobox`、`searchable_list`、`checkbox`、`radio`、`switch`、`slider`、`rating`、`color_picker`、`stepper`、`form`、`questionnaire`（0.7 新增）、`speech`（0.7.1 新增：语音识别输入，`SpeechButton` / `Microphone`） |
-| 数据展示 | `list`（`List` / `ListState` / `ListDelegate`）、`table`、`tree`、`tag`、`badge`、`avatar`、`breadcrumb`、`pagination`、`description_list`、`label`、`marker`、`plot`、`chart`、`carousel`（0.7 新增） |
+| 数据展示 | `list`（`List` / `ListState` / `ListDelegate`）、`table`、`tree`、`tag`、`badge`、`avatar`、`breadcrumb`、`pagination`、`description_list`（`DescriptionList` + `DescriptionItem{label,value,span}`，只读 label/value 列表，DBeaver 属性检查器风格）、`label`、`marker`、`plot`、`chart`、`carousel`（0.7 新增） |
+| 文本与 diff | `text`（`Text` / `TextView` 组件族 + `TextViewStyle` + `frontmatter`，富文本/文本渲染；re-export 聚合 `gpui_base::text`）、`diff`（**0.8.x 新增**：`Diff` / `DiffState` / `DiffMode` / `DiffAnnotation` / `DiffFile`，代码 diff 查看器） |
 | 反馈与浮层 | `dialog`、`sheet`、`notification`、`message` + `message_scroller`、`alert`、`bubble`、`popover`、`progress`、`skeleton`、`shimmer`、`spinner`、`attachment`、`inspector`、`empty`（0.7 新增空态组件） |
 | 折叠与设置 | `accordion`、`collapsible`、`tab`（`Tab` / `TabBar`）、`setting`（设置页骨架）、`highlighter`、`icon`、`theme`、`index_path` |
 | 动效 | `gpui_base::animation`（`EffectTransition` / `Lerp` / `cubic_bezier` / `ease_*`）、`gpui_base::motion`（`transition` / `spring` / `animate_keyframes` / `MotionReveal` / `Presence` / `Stagger`）、`Animation` + `AnimationExt`（来自 `gpui-pre`，重导出在 `gpui_kit::*` 顶层）|
+| 扩展原语 | `element_ext`（`AnyChildElement` 子元素包装）、`styled::*`、`icon::*`、`Disableable`、`index_path::IndexPath`、`input::{Rope, RopeExt, RopeLines}`、`WindowExt` |
 
 > 勘误（2026-10-02 初记，2026-10-11 修正）：`time` 相关模块**没有 `pub mod time`**（`grep "^pub mod"` 查不到，故早期清单误判为"不存在"）；但 0.7.0 与 0.7.1 的 `lib.rs` 均有 **`pub use time::{calendar, date_picker, time_field}`**（隐藏 mod re-export，实测），`calendar` / `date_picker` / `time_field` 组件实际可用。
+>
+> 勘误（2026-10-28）：**`inspector` 是 gpui 内置的元素调试器**（Ctrl+Shift+I 的 `DivInspector` / `render_inspector`，供开发期检查元素树），**不是"属性检查器面板"容器**——做 DBeaver 风格属性面板用 `description_list::DescriptionList` 或自绘网格，不要误解 `inspector` 的用途。
 
-- **先查再写**：不确定某个控件库里有不有时，`grep -n "^pub mod" <vendor>/gpui-component/src/lib.rs`（vendor 即 0.7.1 权威），再读那个模块的 `pub fn`。本仓曾多次出现「库没有 X」的错误结论（Tabs / Switch / TabBar 已作废）。
+- **先查再写**：不确定某个控件库里有不有时，`grep -n "^pub mod" <vendor>/gpui-component/src/lib.rs`（vendor 即 0.8.1 权威），再读那个模块的 `pub fn`。本仓曾多次出现「库没有 X」的错误结论（Tabs / Switch / TabBar 已作废）。
 - **弹层 / 提示 / 进度 / 加载骨架 / 旋转指示器也都是现成的**：`popover` / `tooltip` / `hover_card` / `dialog` / `sheet` / `notification` / `progress` / `skeleton` / `shimmer` / `spinner`——它们自带**入场动效**（fade / slide / spring），不要自己再包一层。
+- **容器选型速查（2026-10-28 增补）**：看到"手搓容器"先对号——空态 → `empty::Empty`；label/值只读列表 → `description_list::DescriptionList`；表单（label + 控件 + 列网格 + footer）→ `form::{Form, Field}`（`horizontal()`/`vertical()`/`columns(n)`/`label_width(px)`）；带标题的分组框 → `group_box::GroupBox`；多折叠组 → `accordion::Accordion`（`multiple(true)` 可同时展开）；单折叠块 → `collapsible::Collapsible`；全局状态容器 → `global_state::GlobalState`；窗口边框 → `window_border::WindowBorder`；代码 diff 展示 → `diff::DiffState`（0.8.1）。
 
 **可点元素都要键盘可达**：优先换成语义 `Button`（自带 `track_focus` + `tab_stop`，Enter/Space 在 **KeyUp** 上激活，见下）——选择器 Tab / 状态筛选 / 排序这种自绘可点 `div` 改 `Button` 后同时拿到 hover / 焦点 / 键盘。若确实要自绘，必须 `.track_focus(&handle).tab_stop(true)` 并自己处理键盘激活；且 **`ElementId` 不能随状态变化**（例：id 拼上筛选键 → 一换筛选就丢焦点）。
 

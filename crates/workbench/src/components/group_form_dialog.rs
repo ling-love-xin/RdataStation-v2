@@ -22,6 +22,8 @@ use gpui_kit::component::{ActiveTheme, Theme, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::components::dialog_helpers::standard_dialog_body;
+
 pub use workbench_shell::model::GroupFormSeed;
 
 /// 打开分组表单对话框。
@@ -81,7 +83,7 @@ pub fn open_group_form_dialog(
         let submit_key = submit_for_frame.clone();
         dialog
             .title(title)
-            .child(
+            .child(standard_dialog_body(
                 div()
                     .v_flex()
                     .w_full()
@@ -93,7 +95,7 @@ pub fn open_group_form_dialog(
                     })
                     .child(field_label(theme, "描述"))
                     .child(Input::new(&desc_input)),
-            )
+            ))
             .footer(
                 DialogFooter::new()
                     .child(

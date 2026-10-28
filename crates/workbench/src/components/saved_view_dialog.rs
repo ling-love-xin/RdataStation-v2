@@ -23,6 +23,7 @@ use gpui_kit::*;
 use database::nav_host::NavFilters;
 use settings::model::NavigatorFilters;
 
+use crate::components::dialog_helpers::standard_dialog_body;
 use crate::panels::Shared;
 
 /// 筛选摘要文案（非空项拼 `source:x · type:y`；全空 = `全部`）。
@@ -116,7 +117,7 @@ pub fn open_save_view_dialog(window: &mut Window, cx: &mut App, filters: NavFilt
             );
         dialog
             .title("将当前筛选存为视图")
-            .child(body)
+            .child(standard_dialog_body(body))
             .footer(
                 DialogFooter::new()
                     .child(
@@ -151,7 +152,7 @@ pub fn open_manage_views_dialog(window: &mut Window, cx: &mut App, shared: &Shar
     let error_build = error.clone();
     let shared_build = shared.clone();
 
-    window.open_dialog(cx, move |dialog, _window, cx| {
+    window.open_sheet(cx, move |sheet, _window, cx| {
         let theme = cx.theme();
         let list = rows_build.borrow();
         let err = error_build.borrow();
@@ -251,8 +252,9 @@ pub fn open_manage_views_dialog(window: &mut Window, cx: &mut App, shared: &Shar
             }
         }
 
-        dialog
+        sheet
             .title("管理视图")
+            .size(px(420.))
             .child(body)
             .child(
                 div()
@@ -260,12 +262,6 @@ pub fn open_manage_views_dialog(window: &mut Window, cx: &mut App, shared: &Shar
                     .text_color(theme.colors.muted_foreground)
                     .child("删除只移除视图定义，当前导航筛选不变。"),
             )
-            .footer(DialogFooter::new().child(
-                Button::new("saved-view-mgr-close")
-                    .ghost()
-                    .label("关闭")
-                    .on_click(move |_, window, cx| window.close_dialog(cx)),
-            ))
     });
 }
 

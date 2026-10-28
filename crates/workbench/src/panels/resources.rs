@@ -95,6 +95,13 @@ impl SidebarPanel {
             self.finish_version_action("还没有打开项目".to_string(), cx);
             return;
         };
+        // 对比是**只读查看**：不拒只读（只读项目也能看差异）、不入动作回执，
+        // 直接走独立 diff 取数 job（读两版文本 + 生成 unified patch → 开 diff 对话框）。
+        if let VersionAction::Diff { version } = action {
+            resource_jobs::enqueue_version_diff(root, resource_id.to_string(), version);
+            self.ensure_resources_pump(cx);
+            return;
+        }
         if read_only {
             self.finish_version_action("项目为只读模式，不能改版本".to_string(), cx);
             return;
@@ -331,6 +338,14 @@ impl SidebarPanel {
                         return;
                     }
                 }
+                if let Some(result) = resource_jobs::drain_version_diff() {
+                    if weak
+                        .update(cx, |this, cx| this.apply_version_diff(result, cx))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
                 if let Some(result) = resource_jobs::drain_index_scan() {
                     if weak
                         .update(cx, |this, cx| this.apply_index_scan(result, cx))
@@ -419,6 +434,29 @@ impl SidebarPanel {
             }
             Err(err) => {
                 self.finish_version_action(format!("读取版本历史失败：{err}"), cx);
+            }
+        }
+    }
+
+    /// 回填一份版本 diff 取数结果（置 `pending`，下一次侧栏渲染开窗）。
+    fn apply_version_diff(
+        &mut self,
+        result: Result<resource_jobs::VersionDiffRows, String>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(rows) => {
+                self.shared.version_diff_dialog.borrow_mut().pending = Some(rows);
+                // 侧栏自己重绘一帧就能开窗；宿主也要重绘（pending 消费需要 Window）。
+                self.shared.notify_host(cx);
+                cx.notify();
+            }
+            Err(err) => {
+                // 对比失败不是"动作失败"，不该走版本动作回执；用面板通知条告知。
+                *self.shared.notice.borrow_mut() =
+                    Some(format!("资产库：无法对比版本：{err}"));
+                self.shared.notify_host(cx);
+                cx.notify();
             }
         }
     }

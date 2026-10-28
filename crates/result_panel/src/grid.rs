@@ -52,6 +52,7 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableState};
 use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -64,6 +65,8 @@ use ::shared::{CurrentTier, FactColumnStats, FactFrame, FactKind};
 use crate::rowset::{LocalRow, LocalRowSet, RowRef};
 use crate::store::{ColumnKind, ColumnType};
 use crate::status::elapsed_text;
+/// 【类型样式】偏好模型（shell 层：settings 持久化与渲染消费共用）。
+use workbench_shell::result_style::{AlignPref, ColorRolePref, NumberFormatPref, TypeFamily, TypeStylePrefs};
 use crate::ui;
 use workbench_shell::model::ColumnAnnotation;
 use workbench_shell::product_tokens;
@@ -596,6 +599,10 @@ pub struct ResultGridDelegate {
     /// 【B1】列头是否直接显示注释（列名下方第二行小字；默认 false——注释只在 hover tooltip 里）。
     /// 由面板在切换「注释」开关时同步过来；开启后列头变高（两行：列名 + 注释小字）。
     show_column_comments: bool,
+    /// 【类型样式】全局偏好（数字格式 / NULL 占位 / 布尔映射 / 按族对齐与前景色）。
+    /// 面板在 `set_data` 同一次同步里（或偏好变更时）同步过来；只影响渲染显示，
+    /// 复制 / 导出 / 编辑仍用原始值。
+    type_style: TypeStylePrefs,
     /// 空态文案（没有结果 / 执行失败都在这里说清楚）
     empty_text: String,
     /// 这份结果**还能不能取下一段**（面板从权威结果同步过来；`load_more` 据此决定要不要真的取）
@@ -760,6 +767,14 @@ impl ResultGridDelegate {
     /// 不随 `set_data` 清掉——这是面板视图偏好，不是这份结果自己的元数据。
     pub fn set_show_column_comments(&mut self, on: bool) {
         self.show_column_comments = on;
+    }
+
+    /// 【类型样式】同步全局偏好（数字格式 / NULL 占位 / 布尔映射 / 按族对齐与前景色）。
+    ///
+    /// 与 [`Self::set_show_column_comments`] 同口径：**面板视图偏好**，不随 `set_data` 清掉；
+    /// 由面板在构造、`set_data` 同步与偏好变更（workbench 设置钩子）时调用。
+    pub fn set_type_style(&mut self, prefs: TypeStylePrefs) {
+        self.type_style = prefs;
     }
 
     /// 【P1-5】记下组件拖宽后报来的全部列宽（会话内记忆；不做落盘持久化，见 backlog）。
@@ -2235,18 +2250,80 @@ struct CellStyle {
     align: TextAlign,
     /// 用等宽字体吗（布尔 / 时间族；字体族从主题取，不引新依赖）
     monospace: bool,
+    /// 按族前景色角色（`Inherit` = 不染色，跟随普通前景；渲染时映射到主题语义色）
+    color_role: ColorRolePref,
 }
 
-/// 列类型 → 这一列所有格子的样式
-fn cell_style(kind: ColumnKind) -> CellStyle {
-    CellStyle {
-        align: if kind.is_numeric() {
-            TextAlign::Right
-        } else {
-            TextAlign::Left
-        },
-        monospace: kind.is_monospace(),
+/// 列类型 → 类型族（与设置页的五族口径一致；未知类型按文本渲染）
+fn type_family(kind: ColumnKind) -> TypeFamily {
+    match kind {
+        ColumnKind::Integer | ColumnKind::Float | ColumnKind::Decimal => TypeFamily::Numeric,
+        ColumnKind::Timestamp | ColumnKind::Date | ColumnKind::Time => TypeFamily::Temporal,
+        ColumnKind::Boolean => TypeFamily::Boolean,
+        ColumnKind::Binary => TypeFamily::Blob,
+        ColumnKind::Text | ColumnKind::Json | ColumnKind::Uuid | ColumnKind::Unknown => {
+            TypeFamily::Text
+        }
     }
+}
+
+/// 列类型 + 全局偏好 → 这一列所有格子的样式
+///
+/// 【类型样式】对齐覆盖：`AlignPref::Inherit` = 跟随类型默认（数字右对齐 / 其余左对齐）；
+/// 其余显式覆盖。前景色角色直接进 `CellStyle`，渲染时按角色取主题语义色（零裸色值）。
+fn cell_style(kind: ColumnKind, prefs: &TypeStylePrefs) -> CellStyle {
+    let default_align = if kind.is_numeric() {
+        TextAlign::Right
+    } else {
+        TextAlign::Left
+    };
+    let align = match prefs.align_for(type_family(kind)) {
+        AlignPref::Left => TextAlign::Left,
+        AlignPref::Center => TextAlign::Center,
+        AlignPref::Right => TextAlign::Right,
+        AlignPref::Inherit => default_align,
+    };
+    CellStyle {
+        align,
+        monospace: kind.is_monospace(),
+        color_role: prefs.color_for(type_family(kind)),
+    }
+}
+
+/// 【类型样式】单元格显示文本的纯函数：NULL 占位 / 布尔映射 / 数字格式。
+///
+/// 输入**原始驱动文本**（`text == "NULL"` 判定在这里做，与渲染灰斜体口径同一处）；
+/// 只影响显示——复制 / 导出 / 编辑 / 悬停 tooltip 仍用原始值。
+/// JSON 美化与 BLOB 摘要在渲染层先于本函数处理，不进这里（职责单一）。
+pub fn format_cell_text(kind: ColumnKind, text: &str, prefs: &TypeStylePrefs) -> String {
+    if text == "NULL" {
+        return prefs.null_placeholder.rendered().to_string();
+    }
+    if kind == ColumnKind::Boolean {
+        let (yes, no) = prefs.bool_display.rendered();
+        return match text {
+            "true" => yes.to_string(),
+            "false" => no.to_string(),
+            // 驱动给了其它形态（如 `1`/`0`、大小写变体）：保持原文，不猜映射
+            _ => text.to_string(),
+        };
+    }
+    if kind.is_numeric() {
+        return match prefs.number_format {
+            NumberFormatPref::Raw => text.to_string(),
+            // 千分位只对整数值分组（小数 / 异常样本回退原文；与既有 format_integer_cell 同口径）
+            NumberFormatPref::Grouped => format_integer_cell(text).unwrap_or_else(|| text.to_string()),
+            NumberFormatPref::Fixed2 => text
+                .parse::<f64>()
+                .map(|v| format!("{v:.2}"))
+                .unwrap_or_else(|_| text.to_string()),
+            NumberFormatPref::Scientific => text
+                .parse::<f64>()
+                .map(|v| format!("{v:e}"))
+                .unwrap_or_else(|_| text.to_string()),
+        };
+    }
+    text.to_string()
 }
 
 /// 【P2-3】一列的统计结果（数值字段只在列里有可解析的数值样本时才填）
@@ -3023,12 +3100,23 @@ impl TableDelegate for ResultGridDelegate {
         } else {
             self.column_kind(col_ix)
         };
-        let style = cell_style(kind);
+        let style = cell_style(kind, &self.type_style);
         let theme = cx.theme();
         let muted = theme.colors.muted_foreground;
         let foreground = theme.colors.foreground;
         // 字体族从主题取（不引新依赖）：只在真要等宽的那几类上取一次
         let mono_family = style.monospace.then(|| theme.mono_font_family.clone());
+        // 【类型样式】按族前景色角色 → 主题语义色（零裸色值；`Inherit` = 不染色）。
+        // NULL / 被删行的灰字优先级高于染色（它们是「非数据」语义，先灰再谈颜色）。
+        let role_color = match style.color_role {
+            ColorRolePref::Info => Some(theme.colors.info),
+            ColorRolePref::Success => Some(theme.colors.success),
+            ColorRolePref::Warning => Some(theme.colors.warning),
+            ColorRolePref::Danger => Some(theme.colors.danger),
+            ColorRolePref::Primary => Some(theme.colors.primary),
+            ColorRolePref::Muted => Some(theme.colors.muted_foreground),
+            ColorRolePref::Inherit => None,
+        };
 
         // 行号槽永远是灰的（它不是数据）
         if Self::is_row_number(col_ix) {
@@ -3064,15 +3152,12 @@ impl TableDelegate for ResultGridDelegate {
         let display = if is_blob {
             blob_summary(&text).unwrap_or_else(|| text.clone())
         } else {
-            // 展示派生顺序：JSON 美化 → 数值列整数分组 → 原文；最后统一字符级裁剪。
-            // `text` 原文仍给悬停 tooltip / 右键菜单 / 复制 / 导出 / 编辑（下方 full = text.clone()）。
+            // 展示派生顺序：JSON 美化 → 类型样式格式化（NULL 占位 / 布尔映射 / 数字格式）
+            // → 原文；最后统一字符级裁剪。`text` 原文仍给悬停 tooltip / 右键菜单 /
+            // 复制 / 导出 / 编辑（下方 full = text.clone()）。
             let shown = match pretty_json_display(&text) {
                 Some(pretty) => pretty,
-                // 【P2】数值列整数值加千分位；解析不成整数（小数 / 异常样本）回退原文
-                None if kind.is_numeric() => {
-                    format_integer_cell(&text).unwrap_or_else(|| text.clone())
-                }
-                None => text.clone(),
+                None => format_cell_text(kind, &text, &self.type_style),
             };
             clip_cell_display(&shown, CELL_DISPLAY_LIMIT)
         };
@@ -3090,8 +3175,12 @@ impl TableDelegate for ResultGridDelegate {
             .px_2()
             .truncate()
             .text_xs()
-            // 被删行灰字（与 NULL 同走 muted；NULL 斜体口径不变）
-            .text_color(if is_null || is_deleted { muted } else { foreground })
+            // 被删行灰字（与 NULL 同走 muted；NULL 斜体口径不变）；其余按类型样式角色染色
+            .text_color(if is_null || is_deleted {
+                muted
+            } else {
+                role_color.unwrap_or(foreground)
+            })
             // 【#28-B4】本地行底色（先铺，脏格 / 冲突格后续底色覆盖其上）
             .when_some(local_bg, |cell, bg| cell.bg(bg))
             // 【T2a-3】脏格（未提交变更）：浅警告底色，一眼看出哪些格子会被写回
@@ -3560,7 +3649,6 @@ pub fn status_action_placeholders() -> Vec<(IconName, &'static str)> {
         (IconName::Download, "导出"),
     ]
 }
-
 /// 占位动作钮分组下标的分界（写操作段 `0..FIRST_PAGER_ACTION`；翻页段 `FIRST_PAGER_ACTION..FIRST_SYSTEM_ACTION`；
 /// 系统段 `FIRST_SYSTEM_ACTION..`）。render 层据此在段间插发丝分隔线。
 const FIRST_PAGER_ACTION: usize = 8;
@@ -3624,15 +3712,19 @@ pub struct ResultPane {
 /// 【DBeaver 对齐】渲染工具栏（横跨整个顶部）
 ///
 /// 从 `result_grid::render` 里抽出来，放到最顶部——用户反馈「工具栏遮挡了结果集的字段」。
+/// 2026-10-28 重构（组件统一化 §3）：
+/// - 右段纯按钮序列 → `toolbar::Toolbar` 组件（统一容器 + a11y；按钮已是标准 Button /
+///   DropdownButton，经 `.contents()` 挂入，保留各自 ghost/small 外观）
+/// - 左段 = SQL 预览 + 本地筛选（非按钮内容，Toolbar child 只收 Sizable，走外层 content）
+/// - 执行信息（行数/耗时/失败/血缘/连接…）**不在工具栏**：移入状态栏（见
+///   `render_status_row` 的 `summary` 参数）——用户口径：执行信息归结果集状态栏
+/// - 导出 / 刷新同样移入状态栏（左动作组系统段），工具栏不再摆
 pub fn render_toolbar(
     toolbar: &ResultToolbar,
     filter: Option<AnyElement>,
-    value_sidebar: Option<AnyElement>,
     compare: Option<AnyElement>,
     commit: Option<AnyElement>,
     analysis: Option<AnyElement>,
-    export: Option<AnyElement>,
-    refresh: Option<AnyElement>,
     copy: Option<AnyElement>,
     cx: &App,
 ) -> AnyElement {
@@ -3644,7 +3736,11 @@ pub fn render_toolbar(
         .justify_between()
         .gap_2()
         .px_2()
-        .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
+        // 工具栏比状态栏高：Toolbar XSmall（min_h_7 + p_1 = 36px）放不进 24px 状态栏档。
+        // 注意：36px 会压缩结果主体——结果区默认高度已同步提到 10rem（editor/ui.rs
+        // RESULT_PANE_HEIGHT），保证网格表头 + 前两行可见（编辑行被虚拟列表裁剪会
+        // 丢 Input 焦点链，cell_edit_esc 曾因此回归）
+        .h(rems(ui::RESULT_TOOLBAR_HEIGHT))
         .flex_none()
         .border_b(ui::HAIRLINE)
         .border_color(theme.colors.border)
@@ -3679,27 +3775,22 @@ pub fn render_toolbar(
                         })
                         .into_any_element()
                 }))
-                .children(
-                    toolbar
-                        .segments()
-                        .into_iter()
-                        .map(|segment| SharedString::from(segment)),
-                ),
+                // 执行信息（segments：行数/耗时/失败/血缘/连接…）已移状态栏（用户口径）
+                .children(filter),
         )
         .child(
-            div()
-                .h_flex()
-                .items_center()
-                .gap_1()
-                // 顺序照原型 §2.4 的右段：⌕ 筛选 · 列浏览器 · ⧉ 对比 · 提交变更 · ⚗ 分析 ▾ · ⤓ 导出 ▾ · ⟳ · 复制
-                .children(filter)
-                .children(value_sidebar)
-                .children(compare)
-                .children(commit)
-                .children(analysis)
-                .children(export)
-                .children(refresh)
-                .children(copy),
+            // 右段：纯按钮序列 → Toolbar 组件（统一容器 + a11y 语义；contents 槽收
+            // AnyElement，按钮保留 ghost/small 外观；顺序照原型 §2.4 右段：
+            // ⌕ 筛选（左段）· ⧉ 对比 · 提交变更 · ⚗ 分析 ▾ · 复制；导出 ▾ / ⟳ 刷新
+            // 已移状态栏系统段）
+            Toolbar::new("editor-result-toolbar-actions")
+                .xsmall()
+                .contents(
+                    [compare, commit, analysis, copy]
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>(),
+                ),
         )
         .into_any_element()
 }
@@ -3883,37 +3974,54 @@ pub fn render(
 /// 横跨左右栏之下；左端 / 右端由面板注入左右栏开关（`left_switch` / `right_switch`，
 /// `None` 不摆——文本视图无左栏语义时不注入左栏开关）。
 pub fn render_status_row(
-    status: &ResultStatus,
-    // 按值传入（移动）：状态动作按钮（more / fetch_all / 行级 / 撤销重做）只在这里渲染，
-    // 主 pane 不再读它们（面板解构后重组这份，见 panel.rs `render`）
+    // 状态行（只有网格时才给）。2026-10-28 起写语句 / 失败也有状态栏（用户口径：
+    // 导出 / 刷新 / 执行信息都在状态栏），`None` 时跳过网格专属段（行数 / 当前格 /
+    // 截断提示），左动作组与系统段（导出 / 刷新）照常渲染
+    status: Option<&ResultStatus>,
+    // 按值传入（移动）：状态动作按钮（more / fetch_all / 行级 / 撤销重做 / 导出 / 刷新）
+    // 只在这里渲染，主 pane 不再读它们（面板解构后重组这份，见 panel.rs `render`）
     controls: ResultControls,
     row_count_input: Option<&gpui::Entity<gpui_kit::component::input::InputState>>,
     elapsed_ms: Option<u64>,
     left_switch: Option<AnyElement>,
     right_switch: Option<AnyElement>,
+    // 【执行信息归状态栏】工具栏 segments 中状态栏右段不重复的部分（影响行 / 已筛选 /
+    // 失败 / 血缘 / 连接 / 事实档；行数与耗时由右段自己的文案覆盖，面板过滤后传入）
+    summary: &[String],
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
     let muted = theme.colors.muted_foreground;
-    let (left, _old_right) = status_segments(status);
+    let (left, _old_right) = status
+        .map(status_segments)
+        .unwrap_or_default();
     // 【DBeaver 对齐】右段文案格式：... N 行已获取 · 耗时
     let elapsed = elapsed_ms.map(|ms| format!("{}s", ms as f64 / 1000.0));
-    let rows = if status.has_more {
-        format!("{}+", thousands(status.total_rows))
-    } else {
-        thousands(status.total_rows)
+    let rows = status
+        .map(|status| {
+            if status.has_more {
+                format!("{}+", thousands(status.total_rows))
+            } else {
+                thousands(status.total_rows)
+            }
+        })
+        .unwrap_or_default();
+    let right = match (rows.is_empty(), elapsed) {
+        (false, Some(elapsed)) => format!("... {} 行已获取 · {}", rows, elapsed),
+        (false, None) => format!("... {} 行已获取", rows),
+        // 无网格（写语句）：没有行数段；耗时也不在这摆（右段只出 summary 执行信息）
+        (true, _) => String::new(),
     };
-    let right = match elapsed {
-        Some(elapsed) => format!("... {} 行已获取 · {}", rows, elapsed),
-        None => format!("... {} 行已获取", rows),
-    };
-    let fetch_hint = fetch_more_hint(status);
-    let truncation = truncation_notice(status);
-    let window_tip = window_fetch_active(status).then_some(WINDOW_FETCH_NOTICE);
-    let window_tip_text = window_tip.map(str::to_string);
+    let fetch_hint = status.map(fetch_more_hint).flatten();
+    let truncation = status.map(truncation_notice).flatten();
+    let window_tip_text = status
+        .map(window_fetch_active)
+        .unwrap_or(false)
+        .then_some(WINDOW_FETCH_NOTICE)
+        .map(str::to_string);
     // 防御组合（分段中同时挂截断信号）才留旧 hint；正常到底已由 truncation 接管
     let legacy_hint = if truncation.is_none() {
-        status.truncated_hint.clone()
+        status.and_then(|s| s.truncated_hint.clone())
     } else {
         None
     };
@@ -3972,12 +4080,17 @@ pub fn render_status_row(
         placeholder_btn(placeholders[FIRST_PAGER_ACTION + 1]),
     ];
     let last_pager = placeholder_btn(placeholders[FIRST_SYSTEM_ACTION - 1]);
-    // 系统段：导出 · 设置
-    let system_ops = placeholders[FIRST_SYSTEM_ACTION..]
-        .iter()
-        .copied()
-        .map(placeholder_btn)
-        .collect::<Vec<_>>();
+    // 系统段：导出 · 刷新（2026-10-28 从工具栏移入状态栏；面板注入真钮，
+    // 未注入（无导出上下文 / 不可刷新）回退禁用占位——占位仍占位，布局不跳）
+    let refresh_placeholder = (IconName::RotateCw, "刷新（重跑当前 SQL）");
+    let system_ops = vec![
+        controls
+            .export
+            .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_SYSTEM_ACTION])),
+        controls
+            .refresh
+            .unwrap_or_else(|| placeholder_btn(refresh_placeholder)),
+    ];
 
     div()
         .h_flex()
@@ -4037,14 +4150,17 @@ pub fn render_status_row(
                 .ml_auto()
                 // 当前格值预览（DBeaver 对齐：状态行显示当前格，长值已由
                 // 编辑器截断；`·` 分隔避免与选中行文案粘连）
-                .when_some(status.selected_cell.clone(), |row, value| {
-                    row.child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .child(SharedString::from(format!("· {}", value))),
-                    )
-                })
+                .when_some(
+                    status.and_then(|s| s.selected_cell.clone()),
+                    |row, value| {
+                        row.child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .child(SharedString::from(format!("· {}", value))),
+                        )
+                    },
+                )
                 // 【B5b】还有更多：次级说明；悬停看窗口分段代价（不等价于游标）。
                 // `.id(...)` 先把裸 div 转成 Stateful<Div>，tooltip 是交互态方法
                 .when_some(fetch_hint, |row, hint| {
@@ -4089,7 +4205,17 @@ pub fn render_status_row(
                             .child(SharedString::from(hint)),
                     )
                 })
-                .child(SharedString::from(right)),
+                // 【执行信息归状态栏】工具栏 segments 的非重复部分（血缘 / 连接 / 失败 /
+                // 影响行 / 已筛选 / 事实档）——用户口径：执行信息在结果集状态栏，不在工具栏
+                .children(
+                    summary
+                        .iter()
+                        .map(|s| SharedString::from(s.clone())),
+                )
+                // 无网格（写语句）：右段没有“行数已获取”文案，只出 summary
+                .when(!right.is_empty(), |row| {
+                    row.child(SharedString::from(right))
+                }),
         )
         // 最右：右栏开关（面板注入；`None` 不摆——文本视图无右栏语义时不注入）
         .children(right_switch)
@@ -4105,13 +4231,15 @@ mod tests {
         blob_summary, cell_matches, cell_style, clip_cell_display, column_distinct_values,
         column_stats, column_stats_from_values, compare_cells, context_menu_items, duration_text, fetch_more_hint,
         find_in_cell, fmt_stat_num, group_by_values, header_tooltip_lines, column_menu_items,
-        column_browser_menu_items, format_integer_cell, pretty_json_display, preview_of,
+        column_browser_menu_items, format_cell_text, format_integer_cell, pretty_json_display, preview_of,
         stats_lines, status_action_placeholders,
         status_segments, thousands, truncation_notice, truncated_hint, validate_edit_value,
         window_fetch_active, FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION,
     };
     use gpui_kit::assets::IconName;
     use workbench_shell::model::ColumnAnnotation;
+    /// 【类型样式】测试用偏好枚举（与产品导入同源）。
+    use workbench_shell::result_style::{AlignPref, ColorRolePref, TypeStylePrefs};
     use crate::rowset::{LocalRow, LocalRowSet, RowRef};
     use crate::store::{ColumnKind, ColumnType};
     use gpui_kit::App;
@@ -4670,8 +4798,10 @@ mod tests {
     /// 类型 → 格子样式（表驱动）：数字右对齐、布尔 / 时间族等宽、**未知档就是今天的样式**
     ///
     /// 这条钉的是“类型感知渲染”的最后一跳：模型说“是数字”还不够，渲染得真按右对齐画。
+    /// 默认偏好（`TypeStylePrefs::default()`）下与历史逐项一致：对齐全继承类型默认、不染色。
     #[test]
     fn the_cell_style_follows_the_column_type_and_unknown_stays_as_today() {
+        let prefs = TypeStylePrefs::default();
         let cases: &[(ColumnKind, TextAlign, bool)] = &[
             (ColumnKind::Integer, TextAlign::Right, false),
             (ColumnKind::Float, TextAlign::Right, false),
@@ -4688,10 +4818,112 @@ mod tests {
             (ColumnKind::Unknown, TextAlign::Left, false),
         ];
         for (kind, align, monospace) in cases {
-            let style = cell_style(*kind);
+            let style = cell_style(*kind, &prefs);
             assert_eq!(style.align, *align, "{kind:?} 的对齐");
             assert_eq!(style.monospace, *monospace, "{kind:?} 的字体");
+            assert_eq!(style.color_role, ColorRolePref::Inherit, "{kind:?} 默认不染色");
         }
+    }
+
+    /// 【类型样式】按族对齐覆盖：显式对齐覆盖类型默认；`Inherit` 保持原默认。
+    #[test]
+    fn the_cell_style_honors_per_family_align_overrides() {
+        let prefs = TypeStylePrefs {
+            align_numeric: AlignPref::Left,
+            align_text: AlignPref::Center,
+            align_bool: AlignPref::Right,
+            ..Default::default()
+        };
+        assert_eq!(
+            cell_style(ColumnKind::Integer, &prefs).align,
+            TextAlign::Left,
+            "数字默认右对齐被显式覆盖为左"
+        );
+        assert_eq!(
+            cell_style(ColumnKind::Text, &prefs).align,
+            TextAlign::Center
+        );
+        assert_eq!(
+            cell_style(ColumnKind::Boolean, &prefs).align,
+            TextAlign::Right
+        );
+        // 时间 / BLOB 没覆盖：继承类型默认（左）
+        assert_eq!(
+            cell_style(ColumnKind::Timestamp, &prefs).align,
+            TextAlign::Left
+        );
+        assert_eq!(
+            cell_style(ColumnKind::Binary, &prefs).align,
+            TextAlign::Left
+        );
+        // 数字被覆盖为左后，等宽仍然不引（整数不是等宽族）
+        assert!(!cell_style(ColumnKind::Integer, &prefs).monospace);
+    }
+
+    /// 【类型样式】前景色角色进 CellStyle（渲染时映射主题色；默认不染色）。
+    #[test]
+    fn the_cell_style_carries_the_color_role() {
+        let prefs = TypeStylePrefs {
+            color_numeric: ColorRolePref::Info,
+            color_blob: ColorRolePref::Warning,
+            ..Default::default()
+        };
+        assert_eq!(
+            cell_style(ColumnKind::Integer, &prefs).color_role,
+            ColorRolePref::Info
+        );
+        assert_eq!(
+            cell_style(ColumnKind::Binary, &prefs).color_role,
+            ColorRolePref::Warning
+        );
+        assert_eq!(
+            cell_style(ColumnKind::Text, &prefs).color_role,
+            ColorRolePref::Inherit
+        );
+    }
+
+    /// 【类型样式】显示文本纯函数：NULL 占位 / 布尔映射 / 数字格式；原文路径不动。
+    #[test]
+    fn format_cell_text_applies_type_style_only_to_display() {
+        let prefs = TypeStylePrefs {
+            null_placeholder: workbench_shell::result_style::NullPlaceholderPref::Dash,
+            bool_display: workbench_shell::result_style::BoolDisplayPref::Cn,
+            number_format: workbench_shell::result_style::NumberFormatPref::Grouped,
+            ..Default::default()
+        };
+        // NULL 占位
+        assert_eq!(format_cell_text(ColumnKind::Text, "NULL", &prefs), "—");
+        // 布尔映射（原文判定）
+        assert_eq!(format_cell_text(ColumnKind::Boolean, "true", &prefs), "是");
+        assert_eq!(format_cell_text(ColumnKind::Boolean, "false", &prefs), "否");
+        assert_eq!(format_cell_text(ColumnKind::Boolean, "1", &prefs), "1", "未知形态保持原文");
+        // 数字千分位（整数值分组）
+        assert_eq!(format_cell_text(ColumnKind::Integer, "1234567", &prefs), "1,234,567");
+        // 非数字 / 不可解析保持原文
+        assert_eq!(format_cell_text(ColumnKind::Text, "1234567", &prefs), "1234567");
+        assert_eq!(format_cell_text(ColumnKind::Integer, "abc", &prefs), "abc");
+    }
+
+    /// 【类型样式】固定两位小数 / 科学计数只改显示。
+    #[test]
+    fn format_cell_text_number_modes() {
+        let fixed = TypeStylePrefs {
+            number_format: workbench_shell::result_style::NumberFormatPref::Fixed2,
+            ..Default::default()
+        };
+        let sci = TypeStylePrefs {
+            number_format: workbench_shell::result_style::NumberFormatPref::Scientific,
+            ..Default::default()
+        };
+        assert_eq!(format_cell_text(ColumnKind::Decimal, "1234.5", &fixed), "1234.50");
+        assert_eq!(format_cell_text(ColumnKind::Float, "123456.789", &sci), "1.23456789e5");
+        // 解析失败回退原文
+        assert_eq!(format_cell_text(ColumnKind::Decimal, "12.3.x", &fixed), "12.3.x");
+        // 原始值模式一个字符不改
+        assert_eq!(
+            format_cell_text(ColumnKind::Integer, "00123", &TypeStylePrefs::default()),
+            "00123"
+        );
     }
 
     /// 表头类型小标签：驱动报了才摆（行号槽永不摆），名字**原样**（方言名照显示）

@@ -54,6 +54,49 @@ pub struct Settings {
     /// 布局设置（侧边栏宽度、布局锁定等）。
     #[serde(default)]
     pub layout: Layout,
+    /// 通知设置（自动消失时间、批量合并）。
+    #[serde(default)]
+    pub notifications: Notifications,
+}
+
+/// 通知设置。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Notifications {
+    /// 成功/信息类通知自动消失时间（秒）。0 = 不自动消失。
+    #[serde(default = "default_notify_success_autohide_secs")]
+    pub success_autohide_secs: u32,
+    /// 警告类通知自动消失时间（秒）。0 = 不自动消失。
+    #[serde(default = "default_notify_warning_autohide_secs")]
+    pub warning_autohide_secs: u32,
+    /// 错误类通知是否自动消失（默认 false，必须手动关闭）。
+    #[serde(default)]
+    pub error_autohide: bool,
+    /// 同类通知合并窗口（秒）。短时间内连续多个同类通知合并成一个计数。0 = 不合并。
+    #[serde(default = "default_notify_merge_window_secs")]
+    pub merge_window_secs: u32,
+}
+
+impl Default for Notifications {
+    fn default() -> Self {
+        Self {
+            success_autohide_secs: default_notify_success_autohide_secs(),
+            warning_autohide_secs: default_notify_warning_autohide_secs(),
+            error_autohide: false,
+            merge_window_secs: default_notify_merge_window_secs(),
+        }
+    }
+}
+
+fn default_notify_success_autohide_secs() -> u32 {
+    3
+}
+
+fn default_notify_warning_autohide_secs() -> u32 {
+    5
+}
+
+fn default_notify_merge_window_secs() -> u32 {
+    2
 }
 
 /// 布局设置。
@@ -176,6 +219,37 @@ pub struct ResultPanel {
     /// 【DBeaver 对齐】列宽是否跨会话持久化（关闭则只在当前会话内记忆）。
     #[serde(default = "default_true")]
     pub persist_column_widths: bool,
+    /// 【类型样式】数字显示格式（默认原始值；只影响渲染显示，复制 / 导出仍用原始值）。
+    #[serde(default)]
+    pub number_format: workbench_shell::result_style::NumberFormatPref,
+    /// 【类型样式】NULL 显示占位（默认 `NULL` 原文；判定仍按原文）。
+    #[serde(default)]
+    pub null_placeholder: workbench_shell::result_style::NullPlaceholderPref,
+    /// 【类型样式】布尔显示映射（默认 `true` / `false`）。
+    #[serde(default)]
+    pub bool_display: workbench_shell::result_style::BoolDisplayPref,
+    /// 【类型样式】按族对齐覆盖（默认全部跟随类型默认：数字右对齐 / 其余左对齐）。
+    #[serde(default)]
+    pub align_numeric: workbench_shell::result_style::AlignPref,
+    #[serde(default)]
+    pub align_text: workbench_shell::result_style::AlignPref,
+    #[serde(default)]
+    pub align_temporal: workbench_shell::result_style::AlignPref,
+    #[serde(default)]
+    pub align_bool: workbench_shell::result_style::AlignPref,
+    #[serde(default)]
+    pub align_blob: workbench_shell::result_style::AlignPref,
+    /// 【类型样式】按族前景色角色（默认全部不染色；预设色板从主题语义 token 派生）。
+    #[serde(default)]
+    pub color_numeric: workbench_shell::result_style::ColorRolePref,
+    #[serde(default)]
+    pub color_text: workbench_shell::result_style::ColorRolePref,
+    #[serde(default)]
+    pub color_temporal: workbench_shell::result_style::ColorRolePref,
+    #[serde(default)]
+    pub color_bool: workbench_shell::result_style::ColorRolePref,
+    #[serde(default)]
+    pub color_blob: workbench_shell::result_style::ColorRolePref,
 }
 
 impl Default for ResultPanel {
@@ -187,6 +261,44 @@ impl Default for ResultPanel {
             loop_selection: true,
             select_on_modifier_click: true,
             persist_column_widths: true,
+            // 类型样式默认全继承 / 原始值（与渲染现状逐项一致）
+            number_format: workbench_shell::result_style::NumberFormatPref::Raw,
+            null_placeholder: workbench_shell::result_style::NullPlaceholderPref::Null,
+            bool_display: workbench_shell::result_style::BoolDisplayPref::TrueFalse,
+            align_numeric: workbench_shell::result_style::AlignPref::Inherit,
+            align_text: workbench_shell::result_style::AlignPref::Inherit,
+            align_temporal: workbench_shell::result_style::AlignPref::Inherit,
+            align_bool: workbench_shell::result_style::AlignPref::Inherit,
+            align_blob: workbench_shell::result_style::AlignPref::Inherit,
+            color_numeric: workbench_shell::result_style::ColorRolePref::Inherit,
+            color_text: workbench_shell::result_style::ColorRolePref::Inherit,
+            color_temporal: workbench_shell::result_style::ColorRolePref::Inherit,
+            color_bool: workbench_shell::result_style::ColorRolePref::Inherit,
+            color_blob: workbench_shell::result_style::ColorRolePref::Inherit,
+        }
+    }
+}
+
+impl ResultPanel {
+    /// 【类型样式】导出为渲染消费用的聚合偏好。
+    ///
+    /// 消费方（editor host 构造同步 / workbench 设置变更推送）都从这里取，
+    /// 不必各自把 13 项字段再拼一遍；偏好与模型字段一一对应。
+    pub fn type_style(&self) -> workbench_shell::result_style::TypeStylePrefs {
+        workbench_shell::result_style::TypeStylePrefs {
+            number_format: self.number_format,
+            null_placeholder: self.null_placeholder,
+            bool_display: self.bool_display,
+            align_numeric: self.align_numeric,
+            align_text: self.align_text,
+            align_temporal: self.align_temporal,
+            align_bool: self.align_bool,
+            align_blob: self.align_blob,
+            color_numeric: self.color_numeric,
+            color_text: self.color_text,
+            color_temporal: self.color_temporal,
+            color_bool: self.color_bool,
+            color_blob: self.color_blob,
         }
     }
 }
@@ -254,12 +366,17 @@ pub struct Scratchpad {
     /// `reference`/`import`/`sort`/`refresh`）；值 = 显示/隐藏 + 左/右位置。
     #[serde(default)]
     pub toolbar: BTreeMap<String, ToolbarButtonCfg>,
+    /// 草稿/引用/回收站可拖拽分区的最大高度（rem，默认 7.5 = 面板默认，
+    /// 区间 [2.0, 18.0]，2026-10-28 B3 接线持久化；数值形态方便设置契约）。
+    #[serde(default)]
+    pub group_max_h: f32,
 }
 
 impl Default for Scratchpad {
     fn default() -> Self {
         Self {
             toolbar: BTreeMap::new(),
+            group_max_h: 7.5,
         }
     }
 }

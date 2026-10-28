@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
-use gpui_kit::component::dialog::{DialogButtonProps, DialogFooter};
+use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme, Sizable as _, WindowExt as _};
 use gpui_kit::*;
@@ -101,7 +101,7 @@ pub fn open_group_manager_dialog(window: &mut Window, cx: &mut App, shared: &Sha
     let error_build = error.clone();
     let shared_build = shared.clone();
 
-    window.open_dialog(cx, move |dialog, _window, cx| {
+    window.open_sheet(cx, move |sheet, _window, cx| {
         let theme = cx.theme();
         let list = rows_build.borrow();
         let err = error_build.borrow();
@@ -354,8 +354,9 @@ pub fn open_group_manager_dialog(window: &mut Window, cx: &mut App, shared: &Sha
             }
         }
 
-        dialog
+        sheet
             .title("管理分组")
+            .size(px(420.))
             .child(body)
             .child(
                 div()
@@ -363,12 +364,6 @@ pub fn open_group_manager_dialog(window: &mut Window, cx: &mut App, shared: &Sha
                     .text_color(theme.colors.muted_foreground)
                     .child("合并会把源组全部成员并入目标组；删除只移除分组结构。"),
             )
-            .footer(DialogFooter::new().child(
-                Button::new("group-mgr-close")
-                    .ghost()
-                    .label("关闭")
-                    .on_click(move |_, window, cx| window.close_dialog(cx)),
-            ))
     });
 }
 

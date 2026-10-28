@@ -53,7 +53,7 @@ pub const ACTIVITY_ITEM_HEIGHT: f32 = 2.5;
 
 /// 左侧边栏起步宽度（18rem = 288px，2026-10-19 由 240px 调大）
 pub const LEFT_DOCK_WIDTH: f32 = 18.0;
-/// 右侧边栏起步宽度（20rem = 320px，2026-10-19 由 280px 调大）
+/// 右侧边栏起步宽度（20rem = 320px，对齐 ui-design-spec §2.1；左侧仍为 288px）
 pub const RIGHT_DOCK_WIDTH: f32 = 20.0;
 /// 底部结果 dock 起步高度（12rem；结果区自 2026-10-27 拆回编辑器宿主内嵌
 /// `v_resizable` 分栏后，本常量已无消费——`sync_result_dock` 停用，保留原值备用）

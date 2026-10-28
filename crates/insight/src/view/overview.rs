@@ -11,6 +11,7 @@
 //! Overview 返回 `None`），只用已加载的载荷渲染。
 
 use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::progress::{Progress, ProgressCircle};
 use gpui_kit::component::{Icon, IconName, Sizable as _, Size, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -184,13 +185,13 @@ fn overview_table(
                                 .child(source),
                         ),
                 )
-                .child(kv_row("总行数", format!("{}", profile.row_count), theme))
-                .child(kv_row("列数", profile.columns.len().to_string(), theme))
-                .child(kv_row(
-                    "取样",
-                    crate::service::persistence::SOURCE_SAMPLE_LIMIT.to_string(),
-                    theme,
-                )),
+                .child(
+                    DescriptionList::vertical()
+                        .bordered(false)
+                        .item("总行数", format!("{}", profile.row_count), 1)
+                        .item("列数", profile.columns.len().to_string(), 1)
+                        .item("取样", crate::service::persistence::SOURCE_SAMPLE_LIMIT.to_string(), 1),
+                )
         )
         // 卡②检查器命中：68px 环（适用/命中计数，无评级）+ 检查器四态列表 + 事实占比条
         .child(
@@ -390,12 +391,17 @@ fn overview_column(
                 .child(div().flex_1())
                 .child(kind_badge(profile.kind)),
         )
-        .child(kv_row("总行数", profile.total_count.to_string(), theme))
-        .child(kv_row("空值率", null_rate, theme))
-        .child(kv_row("样本", profile.sample.len().to_string(), theme))
+        .child(
+            DescriptionList::vertical()
+                .bordered(false)
+                .item("总行数", profile.total_count.to_string(), 1)
+                .item("空值率", null_rate, 1)
+                .item("样本", profile.sample.len().to_string(), 1),
+        )
 }
 
-/// 摘要卡容器（原型 .summary-card）
+/// 摘要卡容器（原型 .summary-card）：手搓但取色走主题 token，不用 GroupBox
+/// （outline 变体默认 p_4 在 280px 右栏太宽，content_style 覆盖 padding 类型复杂）
 fn summary_card(theme: &Theme) -> Div {
     div()
         .v_flex()
@@ -405,26 +411,4 @@ fn summary_card(theme: &Theme) -> Div {
         .rounded_sm()
         .border_1()
         .border_color(theme.colors.border)
-}
-
-/// 卡内键值行（原型 .kv）
-fn kv_row(key: &str, value: String, theme: &Theme) -> Div {
-    div()
-        .w_full()
-        .flex()
-        .items_center()
-        .gap_2()
-        .child(
-            div()
-                .flex_1()
-                .text_xs()
-                .text_color(theme.colors.muted_foreground)
-                .child(key.to_string()),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.colors.foreground)
-                .child(value),
-        )
 }
