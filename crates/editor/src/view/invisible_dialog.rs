@@ -43,7 +43,7 @@ pub fn open_invisible_dialog(
         // ── 左栏：类别清单（每类一行：名称 + 短述 + 右侧 Switch）──
         let left = div()
             .v_flex()
-            .gap_1p5()
+            .gap_2()
             .flex_1()
             .min_w_0()
             .children(hidden::all_categories().into_iter().map(|cat| {
@@ -81,7 +81,7 @@ pub fn open_invisible_dialog(
         // ── 右栏：各类别的符号明细（码点范围说明）──
         let right = div()
             .v_flex()
-            .gap_1p5()
+            .gap_2()
             .w(rems(ui::INVISIBLE_DETAIL_WIDTH))
             .flex_none()
             .child(

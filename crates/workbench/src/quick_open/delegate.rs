@@ -241,7 +241,7 @@ impl QuickOpenDelegate {
         ListItem::new(SharedString::from(format!("qo-row-{}", row.key)))
             .h(rems(height))
             .py_0()
-            .px_2p5()
+            .px_2()
             .gap_2()
             .text_xs()
             .child(content)

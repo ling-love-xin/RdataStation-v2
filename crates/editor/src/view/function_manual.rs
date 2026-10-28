@@ -91,7 +91,7 @@ impl ListDelegate for ManualDelegate {
             ListItem::new(SharedString::from(format!("fn-manual-{}", entry.name)))
                 .h(rems(ui::FUNCTION_MANUAL_ROW_HEIGHT))
                 .py_0()
-                .px_2p5()
+                .px_2()
                 .gap_2()
                 .child(
                     div()

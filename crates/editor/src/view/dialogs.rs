@@ -560,7 +560,7 @@ impl ListDelegate for ConnectionPickerDelegate {
             ListItem::new(SharedString::from(format!("conn-picker-{}", opt.id)))
                 .h(rems(ui::ENCODING_DIALOG_ROW_HEIGHT))
                 .py_0()
-                .px_2p5()
+                .px_2()
                 .gap_2()
                 .child(
                     div()

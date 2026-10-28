@@ -60,7 +60,7 @@ impl ListDelegate for EncodingDelegate {
             ListItem::new(SharedString::from(format!("encoding-{}", label)))
                 .h(rems(ui::ENCODING_DIALOG_ROW_HEIGHT))
                 .py_0()
-                .px_2p5()
+                .px_2()
                 .gap_2()
                 // 当前编码右侧勾选标记（主文案左对齐，勾选右对齐）
                 .child(

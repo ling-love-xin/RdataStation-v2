@@ -142,7 +142,7 @@ impl ListDelegate for IndentDelegate {
         Some(
             ListItem::new(SharedString::from(format!("indent-{}", entry.zh)))
                 .py_0()
-                .px_2p5()
+                .px_2()
                 .gap_2()
                 .child(
                     div()

@@ -570,23 +570,22 @@ impl RenderOnce for Input {
             },
             cx,
         );
-        state.set_editor_paddings(
-            if state.presentation(cx).is_multi_line() {
-                Edges {
-                    top: self.size.input_py(),
-                    right: self.size.input_px(),
-                    bottom: self.size.input_py(),
-                    left: if state.presentation(cx).is_code_editor() {
-                        self.size.input_px().min(px(6.))
-                    } else {
-                        self.size.input_px()
-                    },
-                }
-            } else {
-                Edges::default()
-            },
-            cx,
-        );
+        let paddings = if state.presentation(cx).is_multi_line() {
+            Edges {
+                top: self.size.input_py(),
+                right: self.size.input_px(),
+                bottom: self.size.input_py(),
+                left: if state.presentation(cx).is_code_editor() {
+                    // RDS vendor patch：代码编辑器左边 padding 为 0，让行号顶到最左边
+                    px(0.)
+                } else {
+                    self.size.input_px()
+                },
+            }
+        } else {
+            Edges::default()
+        };
+        state.set_editor_paddings(paddings, cx);
         state.set_disabled(self.disabled, cx);
         state.set_readonly(self.readonly, cx);
         state.set_text_align(text_align, cx);

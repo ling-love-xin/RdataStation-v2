@@ -49,9 +49,9 @@ fn diagnostic_highlight_style(
 
 const BOTTOM_MARGIN_ROWS: usize = 3;
 pub(super) const RIGHT_MARGIN: Pixels = px(10.);
-pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(6.);
+pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(2.);
 const FOLD_ICON_WIDTH: Pixels = px(14.);
-const FOLD_ICON_HITBOX_WIDTH: Pixels = px(18.);
+const FOLD_ICON_HITBOX_WIDTH: Pixels = px(14.);
 const MAX_HIGHLIGHT_LINE_LENGTH: usize = 10_000;
 const MIN_LINE_NUMBER_DIGITS: usize = 3;
 const MAX_LINE_NUMBER_DIGITS: usize = 7;
@@ -345,7 +345,7 @@ fn editor_gutter_bounds(
     ghost_lines_height: Pixels,
     paddings: Edges<Pixels>,
 ) -> Bounds<Pixels> {
-    Bounds {
+    let bounds = Bounds {
         origin: point(
             input_bounds.origin.x - paddings.left,
             input_bounds.origin.y - paddings.top,
@@ -354,7 +354,9 @@ fn editor_gutter_bounds(
             line_number_width + paddings.left,
             input_bounds.size.height + ghost_lines_height + paddings.top + paddings.bottom,
         ),
-    }
+    };
+
+    bounds
 }
 
 use super::MASK_CHAR;
