@@ -1303,9 +1303,8 @@ impl ScratchpadView {
                 .gap_1()
                 .w_full()
                 .h(rems(ui::PANEL_HEADER_HEIGHT))
-                .bg(theme.colors.sidebar)
                 .px(rems(ui::PANEL_PADDING))
-                .border_b_1()
+                .border_b(ui::HAIRLINE)
                 .border_color(theme.colors.border)
                 .child(
                     // Toolbar 容器：自带 roving 方向键焦点 + toolbar a11y 语义 + 统一 size；

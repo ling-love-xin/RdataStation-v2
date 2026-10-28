@@ -286,9 +286,8 @@ impl NavView {
 
         let header = div()
             .w_full()
-            .bg(sidebar_bg)
             .h(rems(ui::PANEL_HEADER_HEIGHT))
-            .border_b_1()
+            .border_b(ui::HAIRLINE)
             .border_color(border)
             .child(
                 // 面板头按钮行迁移到标准 `Toolbar`：自带 roving 方向键焦点 + toolbar a11y
