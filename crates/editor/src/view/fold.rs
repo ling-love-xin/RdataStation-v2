@@ -59,8 +59,15 @@ pub fn to_kernel(spans: Vec<FoldSpan>) -> Vec<FoldRange> {
 }
 
 /// 打开文档时喂一次候选（构造路径；此时 `Context<EditorState>` 直接可得）
-pub fn install(state: &mut EditorState, text: &str, cx: &mut Context<EditorState>) {
-    refresh(state, fold::spans(text), cx);
+pub fn install(
+    state: &mut EditorState,
+    text: &str,
+    indent_folding: bool,
+    open_keywords: &[String],
+    close_keywords: &[String],
+    cx: &mut Context<EditorState>,
+) {
+    refresh(state, fold::spans(text, indent_folding, open_keywords, close_keywords), cx);
 }
 
 /// 文本变更后重喂候选（**内核不会替我们平移**，见模块文档的上表）
@@ -114,7 +121,10 @@ mod tests {
 
     #[test]
     fn kernel_ranges_keep_the_same_lines() {
-        let spans = fold::spans("SELECT (\n  1\n) AS x");
+        let open = vec!["CASE".to_string(), "BEGIN".to_string()];
+        let close = vec!["END".to_string()];
+        // 结构语义（括号折叠）：关闭缩进折叠，只留括号候选
+        let spans = fold::spans("SELECT (\n  1\n) AS x", false, &open, &close);
         assert_eq!(spans.len(), 1);
         let kernel = to_kernel(spans);
         assert_eq!(kernel.len(), 1);
@@ -123,7 +133,9 @@ mod tests {
 
     #[test]
     fn an_empty_candidate_list_is_a_valid_answer() {
-        assert!(to_kernel(fold::spans("SELECT 1")).is_empty());
+        let open: Vec<String> = vec![];
+        let close: Vec<String> = vec![];
+        assert!(to_kernel(fold::spans("SELECT 1", true, &open, &close)).is_empty());
     }
 
     #[test]

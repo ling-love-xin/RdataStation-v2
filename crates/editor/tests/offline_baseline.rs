@@ -453,21 +453,28 @@ fn fold_candidates_baseline() {
         fold::MAX_BYTES,
     ));
 
-    // 先确认测的是真东西：每个 12 行单元产 3 个候选（CASE 块 / 括号组 / 多行注释各一）
+    // 先确认测的是真东西：每个 12 行单元产 3 个候选（CASE 块 / 括号组 / 多行注释各一）。
+    // 块关键字传**生产默认**（与 `shared.rs` 折叠设置同口径：CASE/BEGIN/IF/… ↔ END）——
+    // 2026-10-29 起块关键字改为可配置列表，传空表 = 关闭关键字折叠，CASE 块候选会消失。
+    let open: Vec<String> = "CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT"
+        .split(',')
+        .map(|s| s.to_string())
+        .collect();
+    let close: Vec<String> = "END".split(',').map(|s| s.to_string()).collect();
     for (label, text) in [
         ("100 行", &small),
         ("5 千行", &medium),
         ("贴合门槛", &at_gate),
     ] {
         assert_eq!(
-            fold::spans(text).len(),
+            fold::spans(text, false, &open, &close).len(),
             3 * units_of(text),
             "{label} 的候选数不对：候选算空的话这条基线就没有意义了"
         );
     }
     // 门槛两侧：同样的内容，门槛内**有**候选、超门槛**没有**——空结果只可能来自那道门
     assert!(
-        at_gate.len() <= fold::MAX_BYTES && !fold::spans(&at_gate).is_empty(),
+        at_gate.len() <= fold::MAX_BYTES && !fold::spans(&at_gate, false, &[], &[]).is_empty(),
         "门槛内必须有候选"
     );
     assert!(
@@ -475,13 +482,13 @@ fn fold_candidates_baseline() {
         "超门槛的输入要真的超门槛"
     );
     assert!(
-        fold::spans(&over_gate).is_empty(),
+        fold::spans(&over_gate, false, &[], &[]).is_empty(),
         "超门槛必须是「直接返回空」——这是把它压住的机制本身"
     );
 
     let small_stats = report.record(
         measure("折叠候选 · 100 行小脚本", 20, 200, || {
-            fold::spans(&small).len()
+            fold::spans(&small, false, &[], &[]).len()
         }),
         8.0,
         "实测 p95 1.1~1.6ms（多次运行）；8ms ≈ 5 倍余量，只有「小文本也开始全量重扫」这类数量级退化才触发",
@@ -491,7 +498,7 @@ fn fold_candidates_baseline() {
             format!("折叠候选 · 5 千行（{}）", kb(&medium)),
             3,
             25,
-            || fold::spans(&medium).len(),
+            || fold::spans(&medium, false, &[], &[]).len(),
         ),
         350.0,
         "实测 p95 46~71ms（多次运行）；350ms ≈ 5 倍余量，只抓「多扫一遍 / 换更慢的词法器」",
@@ -501,14 +508,14 @@ fn fold_candidates_baseline() {
             format!("折叠候选 · 贴着门槛（{}）", kb(&at_gate)),
             1,
             10,
-            || fold::spans(&at_gate).len(),
+            || fold::spans(&at_gate, false, &[], &[]).len(),
         ),
         2_500.0,
         "门槛内最坏情况（全文词法 + 配对 + 排序）：实测 p95 338~508ms；2500ms ≈ 5 倍余量",
     );
     let over_stats = report.record(
         measure("折叠候选 · 超门槛（直接返回空）", 50, 1_000, || {
-            fold::spans(&over_gate).len()
+            fold::spans(&over_gate, false, &[], &[]).len()
         }),
         0.05,
         "O(1) 早退（只比长度）：实测 p95 0.1µs，这里给的是**绝对下限** 50µs——它要抓的是「门槛没了 → 全文扫 300ms 量级」",

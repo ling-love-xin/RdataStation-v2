@@ -57,7 +57,17 @@ enum Opener {
 }
 
 /// 计算折叠候选（**纯函数**；返回按起始行升序、同起始行按结束行升序，已去重）
-pub fn spans(text: &str) -> Vec<FoldSpan> {
+///
+/// 三层来源：
+/// 1. **括号组**：`(` ... `)`
+/// 2. **块关键字**：自定义开/闭关键字列表（默认：CASE/BEGIN/IF/LOOP/WHILE/FOR/REPEAT ↔ END）
+/// 3. **缩进块**（VS Code 风格）：只要下一行缩进比当前行大，就认为是一个块的开始
+pub fn spans(
+    text: &str,
+    indent_folding: bool,
+    open_keywords: &[String],
+    close_keywords: &[String],
+) -> Vec<FoldSpan> {
     if text.len() > MAX_BYTES {
         return Vec::new();
     }
@@ -69,6 +79,8 @@ pub fn spans(text: &str) -> Vec<FoldSpan> {
 
     let starts = line_starts(text);
     let mut found: Vec<FoldSpan> = Vec::new();
+    // 括号组区间（仅 `Paren` 闭合产生的跨行候选）：缩进折叠据此排除括号内部的块
+    let mut bracket_spans: Vec<FoldSpan> = Vec::new();
     // 未闭合的开括号。SQL 里括号与块关键字可以互相嵌套（`(CASE … END)`），所以按"最近匹配"
     // 收：闭括号只找**同类**里最近的那个，中间夹着别的类不影响。
     let mut open: Vec<(Opener, usize)> = Vec::new();
@@ -80,22 +92,38 @@ pub fn spans(text: &str) -> Vec<FoldSpan> {
         match token.class {
             TokenClass::Punctuation => match token.text(text) {
                 "(" => open.push((Opener::Paren, line)),
-                ")" => close(&mut open, &mut found, Opener::Paren, line),
+                ")" => {
+                    if let Some(span) = close(&mut open, &mut found, Opener::Paren, line) {
+                        bracket_spans.push(span);
+                    }
+                }
                 _ => {}
             },
             TokenClass::Keyword => {
                 let upper = token.text(text).to_ascii_uppercase();
-                match head_word(&upper) {
-                    "CASE" | "BEGIN" | "IF" => open.push((Opener::Block, line)),
-                    "END" => {
-                        close(&mut open, &mut found, Opener::Block, line);
-                        // `END IF` / `END CASE` / `END LOOP` 在词法上是**两个 token**：
-                        // 后面那个词属于同一个闭合词，不能当开括号用（跳过它）
-                        if continues_closing_word(&tokens, index, text) {
-                            index += 1;
+                let head = head_word(&upper);
+                // 检查是不是自定义开块关键字
+                if open_keywords.iter().any(|kw| kw == head) {
+                    open.push((Opener::Block, line))
+                }
+                // CREATE 系列：函数/存储过程/触发器/视图（保留硬编码，因为是复合关键字）
+                else if head == "CREATE" {
+                    // 看看后面是不是 FUNCTION / PROCEDURE / TRIGGER / VIEW
+                    if let Some(next) = tokens.get(index + 1) {
+                        let next_upper = next.text(text).to_ascii_uppercase();
+                        if matches!(head_word(&next_upper), "FUNCTION" | "PROCEDURE" | "TRIGGER" | "VIEW" | "INDEX" | "TABLE") {
+                            open.push((Opener::Block, line));
                         }
                     }
-                    _ => {}
+                }
+                // 检查是不是自定义闭块关键字
+                else if close_keywords.iter().any(|kw| kw == head) {
+                    close(&mut open, &mut found, Opener::Block, line);
+                    // `END IF` / `END CASE` / `END LOOP` 在词法上是**两个 token**：
+                    // 后面那个词属于同一个闭合词，不能当开括号用（跳过它）
+                    if continues_closing_word(&tokens, index, text) {
+                        index += 1;
+                    }
                 }
             }
             // 跨行的字面量与注释本身就可以折（多行 `/* … */`、含换行的字符串）
@@ -108,9 +136,109 @@ pub fn spans(text: &str) -> Vec<FoldSpan> {
         index += 1;
     }
 
+    // 第三层：基于缩进的折叠（VS Code 风格），可开关。
+    // 括号组内部的缩进块不产生：括号组已覆盖该区域的折叠，内部再折只是重复候选
+    // （2026-10-29 修复：`SELECT (\n  1\n)` 此前同时算出括号组与缩进块两个重叠候选）。
+    if indent_folding {
+        add_indent_folds(text, &mut found, &bracket_spans);
+    }
+
     found.sort_unstable();
     found.dedup();
     found
+}
+
+/// 基于缩进的折叠：只要下一行缩进比当前行大，就认为是一个块的开始
+///
+/// 规则：
+/// 1. 计算每行的前导空格数（缩进级别）
+/// 2. 对于每一行 i，如果下一行 i+1 的缩进 > 行 i 的缩进，说明行 i 是块开始
+/// 3. 找到块结束：从行 i+1 开始，第一行缩进 <= 行 i 缩进的行 j
+/// 4. 折叠区间 = [i, j-1]（行 i 可见，行 j 可见，中间折起来）
+///
+/// 排除：
+/// - 空行
+/// - 纯注释行
+/// - 缩进差太小（< 2 个空格）的，避免误判
+fn add_indent_folds(text: &str, found: &mut Vec<FoldSpan>, bracket_spans: &[FoldSpan]) {
+    let lines: Vec<&str> = text.lines().collect();
+    let line_count = lines.len();
+    if line_count < 2 {
+        return;
+    }
+
+    // 计算每行的缩进（前导空格数），空行和注释行标记为 None
+    let mut indents: Vec<Option<usize>> = Vec::with_capacity(line_count);
+    for line in &lines {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            indents.push(None); // 空行
+        } else if trimmed.starts_with("--") || trimmed.starts_with("/*") || trimmed.starts_with("*") {
+            indents.push(None); // 注释行
+        } else {
+            let leading_spaces = line.len() - trimmed.len();
+            indents.push(Some(leading_spaces));
+        }
+    }
+
+    // 基于缩进级别生成折叠候选
+    let mut i = 0;
+    while i < line_count {
+        let Some(current_indent) = indents[i] else {
+            i += 1;
+            continue;
+        };
+
+        // 找下一个有内容的行（跳过空行和注释行）
+        let mut next_content_line = None;
+        let mut j = i + 1;
+        while j < line_count {
+            if let Some(next_indent) = indents[j] {
+                next_content_line = Some((j, next_indent));
+                break;
+            }
+            j += 1;
+        }
+
+        let Some((next_line, next_indent)) = next_content_line else {
+            break; // 后面没有内容了
+        };
+
+        // 下一行缩进比当前行大至少 2 个空格，才认为是一个块
+        if next_indent <= current_indent + 1 {
+            i += 1;
+            continue;
+        }
+
+        // 找块结束：第一个缩进 <= 当前行缩进的行
+        let mut end_line = next_line;
+        let mut k = next_line + 1;
+        while k < line_count {
+            if let Some(k_indent) = indents[k] {
+                if k_indent <= current_indent {
+                    // 这一行是块结束的下一行：折叠区间应到它的上一行（最后一块内容行）
+                    end_line = k - 1;
+                    break;
+                }
+                end_line = k; // 继续往后找
+            }
+            k += 1;
+        }
+
+        // 块结束行 = 最后一个缩进 > 当前行缩进的行
+        // 折叠区间 = [i, end_line]（i 是块开始，end_line 是块的最后一行）
+        // 排除括号组内部的缩进块（括号组已覆盖该区域，内部不另折——2026-10-29）
+        let inside_bracket = bracket_spans
+            .iter()
+            .any(|b| i >= b.start_line && i <= b.end_line);
+        if inside_bracket {
+            i += 1;
+            continue;
+        }
+        push(found, i, end_line);
+
+        i += 1; // 下一行继续检查（嵌套块）
+    }
 }
 
 /// `END` 后面那一个词是不是同一个闭合词的一部分（`END IF` / `END CASE` / `END LOOP` …）
@@ -126,17 +254,29 @@ fn continues_closing_word(tokens: &[engine::sql::HighlightSpan], index: usize, t
 }
 
 /// 收一个开括号：找**最近**的同类开括号，命中才产候选（找不到就什么都不做）
+///
+/// 返回产生的候选（仅跨行的）——调用方（`spans` 的 `)` 分支）用它收集括号组区间，
+/// 供缩进折叠排除「括号组内部的缩进块」（括号已覆盖的区域不再冗余折叠）。
 fn close(
     open: &mut Vec<(Opener, usize)>,
     found: &mut Vec<FoldSpan>,
     kind: Opener,
     end_line: usize,
-) {
+) -> Option<FoldSpan> {
     let Some(index) = open.iter().rposition(|(candidate, _)| *candidate == kind) else {
-        return;
+        return None;
     };
     let (_, start_line) = open.remove(index);
-    push(found, start_line, end_line);
+    let span = FoldSpan {
+        start_line,
+        end_line,
+    };
+    if start_line < end_line {
+        found.push(span.clone());
+        Some(span)
+    } else {
+        None
+    }
 }
 
 /// 只收跨行的（同行的折了等于没折）
@@ -179,8 +319,14 @@ mod tests {
     use super::{FoldSpan, MAX_BYTES, spans};
 
     /// 断言用形状：(起始行, 结束行)
+    ///
+    /// 结构折叠测试（括号 / CASE / BEGIN / LOOP …）的公共口径：**关闭缩进折叠**，
+    /// 只测词法结构。缩进折叠是独立的折叠来源，由 `indent_based_*` 测试显式开启
+    /// （`spans(text, true, &[], &[])`）单独验证，避免两类折叠互相干扰。
     fn lines(text: &str) -> Vec<(usize, usize)> {
-        spans(text)
+        let open: Vec<String> = "CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT".split(',').map(|s| s.to_string()).collect();
+        let close: Vec<String> = "END".split(',').map(|s| s.to_string()).collect();
+        spans(text, false, &open, &close)
             .into_iter()
             .map(|span| (span.start_line, span.end_line))
             .collect()
@@ -286,7 +432,10 @@ mod tests {
         // 第二组括号从第 2 行的 `(`（`), (`）开到第 4 行的 `)`
         assert_eq!(lines(sql), [(0, 2), (2, 4)]);
 
-        let found = spans(sql);
+        let open: Vec<String> = "CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT".split(',').map(|s| s.to_string()).collect();
+        let close: Vec<String> = "END".split(',').map(|s| s.to_string()).collect();
+        // 结构语义（括号组的去重与排序）：关闭缩进折叠，避免缩进候选干扰断言
+        let found = spans(sql, false, &open, &close);
         assert!(found.iter().all(
             |FoldSpan {
                  start_line,
@@ -297,5 +446,55 @@ mod tests {
             found.windows(2).all(|pair| pair[0] <= pair[1]),
             "顺序必须确定"
         );
+    }
+
+    #[test]
+    fn indent_based_folding_works() {
+        // 基本缩进折叠：SELECT 后面的列缩进了（缩进折叠只依赖文本，不开关键字折叠）
+        let sql = "SELECT\n  column1,\n  column2,\n  column3\nFROM t";
+        // 应该有一个折叠：第 0 行（SELECT）→ 第 3 行（column3）
+        let result: Vec<(usize, usize)> = spans(sql, true, &[], &[])
+            .into_iter()
+            .map(|span| (span.start_line, span.end_line))
+            .collect();
+        assert!(result.contains(&(0, 3)), "应该有基于缩进的折叠: {:?}", result);
+    }
+
+    #[test]
+    fn indent_based_folding_handles_nesting() {
+        // 嵌套缩进：WHERE 后面的条件又缩进了一层
+        let sql = "SELECT *\nFROM t\nWHERE\n  a = 1\n  AND\n    b = 2\n  AND c = 3";
+        // 应该有：
+        // 1. WHERE 块：第 2 行 → 第 6 行
+        // 2. AND 里面的嵌套：第 4 行 → 第 5 行
+        let result: Vec<(usize, usize)> = spans(sql, true, &[], &[])
+            .into_iter()
+            .map(|span| (span.start_line, span.end_line))
+            .collect();
+        assert!(result.len() >= 2, "应该有嵌套缩进折叠: {:?}", result);
+    }
+
+    #[test]
+    fn indent_based_folding_skips_empty_and_comment_lines() {
+        // 空行和注释行不参与缩进计算
+        let sql = "SELECT\n  column1,\n  -- 这是注释\n  column2\nFROM t";
+        let result: Vec<(usize, usize)> = spans(sql, true, &[], &[])
+            .into_iter()
+            .map(|span| (span.start_line, span.end_line))
+            .collect();
+        // 应该还是有 SELECT 块的折叠
+        assert!(result.contains(&(0, 3)), "空行和注释行不影响缩进折叠: {:?}", result);
+    }
+
+    #[test]
+    fn indent_based_folding_does_not_fold_when_indent_is_same() {
+        // 缩进相同的行不折叠
+        let sql = "SELECT 1\nFROM t\nWHERE a = 1";
+        let result: Vec<(usize, usize)> = spans(sql, true, &[], &[])
+            .into_iter()
+            .map(|span| (span.start_line, span.end_line))
+            .collect();
+        // 缩进都是 0，不应该有基于缩进的折叠
+        assert!(!result.iter().any(|(start, end)| *start == 0 && *end == 2), "缩进相同不应该折叠: {:?}", result);
     }
 }
