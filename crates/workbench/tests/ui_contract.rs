@@ -292,6 +292,19 @@ fn view_layer_has_no_raw_size_literals() {
             "editor/view/host/results.rs",
             include_str!("../../editor/src/view/host/results.rs"),
         ),
+        // Step 5 拆分（2026-10-29）：host/mod.rs 尾部迁出 render/ops/panel_traits 三个子模块
+        (
+            "editor/view/host/render.rs",
+            include_str!("../../editor/src/view/host/render.rs"),
+        ),
+        (
+            "editor/view/host/ops.rs",
+            include_str!("../../editor/src/view/host/ops.rs"),
+        ),
+        (
+            "editor/view/host/panel_traits.rs",
+            include_str!("../../editor/src/view/host/panel_traits.rs"),
+        ),
         (
             "editor/view/dialogs.rs",
             include_str!("../../editor/src/view/dialogs.rs"),
@@ -532,6 +545,19 @@ fn ui_sources_have_no_raw_color_literals() {
         (
             "editor/view/host/results.rs",
             include_str!("../../editor/src/view/host/results.rs"),
+        ),
+        // Step 5 拆分（2026-10-29）：host/mod.rs 尾部迁出 render/ops/panel_traits 三个子模块
+        (
+            "editor/view/host/render.rs",
+            include_str!("../../editor/src/view/host/render.rs"),
+        ),
+        (
+            "editor/view/host/ops.rs",
+            include_str!("../../editor/src/view/host/ops.rs"),
+        ),
+        (
+            "editor/view/host/panel_traits.rs",
+            include_str!("../../editor/src/view/host/panel_traits.rs"),
         ),
         (
             "editor/view/dialogs.rs",
