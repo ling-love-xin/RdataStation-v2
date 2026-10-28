@@ -155,6 +155,10 @@ graph TD
 > **代码侧权威是 `crates/settings/src/registry.rs`**（`SettingSpec` / `REGISTRY` / `sections()` / `page_rows()` + **`Slot` 分发表**（`slot_for` / `slot_kind` / `slot_is_scalar`）+ `presets` + 11 项契约测试）：本表与它必须逐项一致。改动顺序：**先改代码表 → 再改消费方 → 最后同步本表**。
 > **唯一读写路径**：页面对某项的"读当前值 / 写新值 / 判是否偏离默认"全部走 `lib.rs::{value_by_key, apply_by_key}`（按 `Slot` 分发）；页面不直接碰 model 字段，也不落盘。新增项的接入首续：登记 → 模型 → 槽位 → 消费方 → 文档表。
 
+> **分组（gpui-kit demo 两级导航）**：`SettingSpec` 新增 `group`（节内子分组 id）与 `group_label`（显示名）。页面按 `registry::page_groups(section)`（登记顺序去重）生成分组卡片，侧栏据此渲染两级导航——对齐 gpui-kit demo：**多分组节**（外观=主题/标签栏、编辑器=编辑行为/新文档默认值、数据源导航=名称/过滤/行内信息、结果集面板=数据/选择与操作/对齐/着色）分组带标题；**单分组节**（资产库/连接/项目/日志/启动/草稿箱/洞察/布局/通知，`group_label = None`）渲染为无名分组，对齐 demo 的 General 页；动作行（「查看日志…」等）归入独立「操作」分组。**纯 Module 节**（如草稿箱，设置全在面板本地菜单/拖拽 handle）不进导航，避免空页面——`sections()` 只返回有上页内容的节。契约测试 `groups_are_contiguous_and_consistently_named` 保证同节分组连续、同名分组显示名一致、`page_groups` 顺序与登记一致、多分组节分组必有标题。
+
+> **说明呈现（`hint_inline`）**：`SettingSpec` 新增 `hint_inline: bool`——`true` = 行内常显小字（`SettingItem::description`）；`false` = 行内不留说明，改为**悬停控件时以 `HoverCard` 提示**（对齐 gpui-kit tooltip 交互惯例，默认 600ms 延迟），适合 label 本身自明的好理解参数，让设置页更清爽。当前 30 条好理解参数标 `false`（外观.locale/tab_bar_variant、编辑器的显示行号/代码折叠/自动换行/自动闭合括号/默认缩进族、导航的标签与行内信息族、结果集的循环选择/多选/列宽持久化、布局.locked 与侧栏宽度、通知的自动消失秒数等）；复杂项（含生效方式、规则、档位说明）保留行内 `true`。字段在 `fields.rs::value_item` 消费：`!hint_inline` 时不渲染 `.description()`，控件外包 `HoverCard::new(key).trigger(body).content(提示文案)`（`cx.theme()` 在 content 闭包可用）。
+
 ## 7. 准入与退役
 
 ### 7.1 准入五条（缺一不入）

@@ -14,6 +14,8 @@ use std::rc::Rc;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::hover_card::HoverCard;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::setting::{RenderOptions, SettingField, SettingItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar, TabVariant};
@@ -58,15 +60,34 @@ pub fn value_item(
             ))
             .when_some(reset, |row, btn| row.child(btn));
         // RdataStation vendor patch：标签栏样式实时预览（紧跟控件下方）。
-        if spec.key == "appearance.tab_bar_variant" {
+        let body: AnyElement = if spec.key == "appearance.tab_bar_variant" {
             div()
                 .v_flex()
                 .items_end()
-                .gap_1p5()
+                .gap_2()
                 .child(controls)
                 .child(tab_bar_preview(cx))
+                .into_any_element()
         } else {
-            controls
+            controls.into_any_element()
+        };
+        // 好理解的参数不占行内说明空间：行内只留 label + 控件，说明挪到
+        // 悬停控件时的 HoverCard 提示（对齐 gpui-kit tooltip 交互惯例）。
+        if spec.hint_inline {
+            body.into_any_element()
+        } else {
+            let hint = spec.hint;
+            HoverCard::new(ElementId::Name(SharedString::from(spec.key)))
+                .trigger(body)
+                .content(move |_, _window, cx| {
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(cx.theme().colors.muted_foreground)
+                        .child(hint)
+                })
+                .into_any_element()
         }
     })
     .on_reset(
@@ -76,10 +97,14 @@ pub fn value_item(
         },
     );
 
-    SettingItem::new(spec.label, field)
-        .description(spec.hint)
+    let mut item = SettingItem::new(spec.label, field)
         .disabled(spec.disabled)
-        .keywords([SharedString::from(spec.key), SharedString::from(spec.section_label)])
+        .keywords([SharedString::from(spec.key), SharedString::from(spec.section_label)]);
+    // 只有行内说明的才给组件 `.description`；悬停提示的由上面的 HoverCard 承担。
+    if spec.hint_inline {
+        item = item.description(spec.hint);
+    }
+    item
 }
 
 /// 动作行（不是设置项，无 key / 默认值 / 生效方式）：跳转到宿主提供的副作用。
@@ -202,8 +227,8 @@ pub fn layout_preview() -> SettingItem {
 fn render_control(
     spec: &'static SettingSpec,
     options: &RenderOptions,
-    _window: &mut Window,
-    cx: &App,
+    window: &mut Window,
+    cx: &mut App,
     notify: &Rc<dyn Fn(&mut App)>,
     host_changed: &Rc<dyn Fn(&mut App)>,
 ) -> AnyElement {
@@ -306,6 +331,41 @@ fn render_control(
                     }
                 },
             )
+        }
+        // 自由文本（如逗号分隔的关键字列表）：输入框 + 用户输入即写。
+        // InputState 用 `use_keyed_state` 惰性创建并跨帧保留（每帧 `cx.new` 会丢焦点），
+        // 订阅挂在 keyed state 的实体上（listener 的 `Context<T>` Deref 到 `App`，可写设置）。
+        SettingKind::Text => {
+            let current = bridge::current_value(cx, spec.key)
+                .and_then(|v| v.as_text().map(|s| s.to_string()))
+                .unwrap_or_default();
+            let notify = notify.clone();
+            let host_changed = host_changed.clone();
+            let key = spec.key;
+            let state = window.use_keyed_state(key, cx, move |window, cx| {
+                let mut state = InputState::new(window, cx).placeholder(spec.hint);
+                state.set_value(current.clone(), window, cx);
+                // init 的 `cx` 是输入框实体的 `Context`：订阅自身 `Change`，
+                // listener 的 `Context<T>` Deref 到 `App`，可直接写设置。
+                let entity = cx.entity();
+                let sub_entity = entity.clone();
+                let _ = cx.subscribe(&sub_entity, move |_, _, _: &InputEvent, cx| {
+                    let text = entity.read(cx).value().to_string();
+                    bridge::write_scalar(
+                        key,
+                        SettingValue::Text(text),
+                        None,
+                        &notify,
+                        &host_changed,
+                        cx,
+                    );
+                });
+                state
+            });
+            Input::new(&state)
+                .flex_shrink_0()
+                .disabled(options.is_disabled())
+                .into_any_element()
         }
         // 复合值不上页（`page_rows` 保证）；真出现了就明说，不画假控件。
         SettingKind::Composite => unreachable!("page_rows 保证页面只渲染标量行"),

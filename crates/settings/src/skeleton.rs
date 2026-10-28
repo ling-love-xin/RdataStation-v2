@@ -12,7 +12,7 @@ use gpui_kit::component::setting::{SelectIndex, SettingGroup, SettingPage, Setti
 use gpui_kit::App;
 
 use crate::fields;
-use crate::registry::{self, SettingSpec};
+use crate::registry::{self};
 use crate::settings_page::SettingsHost;
 
 /// 构造设置页骨架。
@@ -28,20 +28,33 @@ pub fn build(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> Settings {
         });
 
     for (section, section_label) in registry::sections() {
-        let mut group = SettingGroup::new();
-        // 布局分节：顶部先放左右侧边栏占比预览示意图。
-        if section == "layout" {
-            group = group.item(fields::layout_preview());
+        // 行按子分组归入带标题的分组卡片（对齐 gpui-kit demo 的两级导航）；
+        // 单分组节（`group_label == None`，如布局 / 资产库）渲染为无名分组，
+        // 对齐 demo 的 General 页。
+        let page_groups = registry::page_groups(section);
+        let mut groups: Vec<SettingGroup> = Vec::new();
+        for (gid, glabel) in &page_groups {
+            let mut group = SettingGroup::new();
+            if let Some(label) = glabel {
+                group = group.title(*label);
+            }
+            // 布局分节：顶部先放左右侧边栏占比预览示意图。
+            if section == "layout" && *gid == page_groups[0].0 {
+                group = group.item(fields::layout_preview());
+            }
+            for spec in registry::page_rows().filter(|s| s.section == section && s.group == *gid)
+            {
+                group = group.item(fields::value_item(spec, host, notify));
+            }
+            groups.push(group);
         }
-        let rows: Vec<&'static SettingSpec> = registry::page_rows()
-            .filter(|s| s.section == section)
-            .collect();
-        for spec in rows {
-            group = group.item(fields::value_item(spec, host, notify));
+        // 动作行（不是设置项，见 `fields::action_row`）：按节挂宿主提供的副作用，
+        // 归入独立的「操作」分组（与设置项分开，不参与 reset-all）。
+        let actions = action_rows(section, host);
+        if !actions.is_empty() {
+            groups.push(SettingGroup::new().title("操作").items(actions));
         }
-        // 动作行（不是设置项）：按节挂宿主提供的副作用。
-        group = group.items(action_rows(section, host));
-        settings = settings.page(SettingPage::new(section_label).group(group));
+        settings = settings.page(SettingPage::new(section_label).groups(groups));
     }
     settings
 }

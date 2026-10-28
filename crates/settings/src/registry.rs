@@ -31,6 +31,8 @@ pub enum SettingKind {
     /// 当前页面**一律用分段控件**（≤ 4 项最舒展，5 项也能放下）；条目更多时
     /// 再引入下拉，别在这里写"超过 N 项换控件"的愿望——页面不会读这句话。
     Enum(&'static [(&'static str, &'static str)]),
+    /// 自由文本（页面用输入框；落盘为字符串）。如逗号分隔的关键字列表。
+    Text,
     /// 数值（页面用输入框 + 校验）。
     Number,
     /// 复合值：多个子键打成一个登记项（子键不单独登记）。
@@ -43,6 +45,7 @@ pub enum KindTag {
     Bool,
     BoolPair,
     Enum,
+    Text,
     Number,
     Composite,
 }
@@ -54,6 +57,7 @@ impl SettingKind {
             Self::Bool => KindTag::Bool,
             Self::BoolPair { .. } => KindTag::BoolPair,
             Self::Enum(_) => KindTag::Enum,
+            Self::Text => KindTag::Text,
             Self::Number => KindTag::Number,
             Self::Composite => KindTag::Composite,
         }
@@ -316,7 +320,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         | Slot::EditorInlineCompletion => KindTag::Bool,
         Slot::EditorDefaultTabSize => KindTag::Number,
         Slot::EditorDefaultLineEnding | Slot::EditorDefaultEncoding => KindTag::Enum,
-        Slot::EditorFoldOpenKeywords | Slot::EditorFoldCloseKeywords => KindTag::Enum,
+        Slot::EditorFoldOpenKeywords | Slot::EditorFoldCloseKeywords => KindTag::Text,
         Slot::AppearanceFontSize => KindTag::Number,
         Slot::AppearanceLocale => KindTag::Enum,
         Slot::AppearanceTabBarMaxWidth => KindTag::Number,
@@ -474,7 +478,7 @@ impl SettingSpec {
             KindTag::Number => serde_json::from_str::<f64>(self.default_json)
                 .ok()
                 .map(SettingValue::Number),
-            KindTag::Enum => serde_json::from_str::<String>(self.default_json)
+            KindTag::Enum | KindTag::Text => serde_json::from_str::<String>(self.default_json)
                 .ok()
                 .map(SettingValue::Text),
             KindTag::Composite => None,
@@ -657,7 +661,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         label: "折叠开块关键字",
         hint: "逗号分隔的关键字列表，大写匹配（默认：CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT）",
         hint_inline: true,
-        kind: SettingKind::Enum(&[]),
+        kind: SettingKind::Text,
         presets: &[],
         default_json: "\"CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT\"",
         effect: SettingEffect::Immediate,
@@ -675,7 +679,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         label: "折叠闭块关键字",
         hint: "逗号分隔的关键字列表，大写匹配（默认：END，含 END IF / END CASE 等复合词）",
         hint_inline: true,
-        kind: SettingKind::Enum(&[]),
+        kind: SettingKind::Text,
         presets: &[],
         default_json: "\"END\"",
         effect: SettingEffect::Immediate,
@@ -2501,7 +2505,7 @@ mod tests {
                     matches!(s.default_value(), Some(SettingValue::Bool(_)))
                 }
                 KindTag::Number => matches!(s.default_value(), Some(SettingValue::Number(_))),
-                KindTag::Enum => matches!(s.default_value(), Some(SettingValue::Text(_))),
+                KindTag::Enum | KindTag::Text => matches!(s.default_value(), Some(SettingValue::Text(_))),
                 KindTag::Composite => s.default_value().is_none(),
             };
             assert!(ok, "`{}` 的默认值形态与登记形态不符", s.key);
