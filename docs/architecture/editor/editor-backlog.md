@@ -92,6 +92,38 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
    - ④ 跳转定义已提交（C6/C7：`lsp/sql_definition.rs` + `install_definition`，`rds://navigator` 由 workbench show_document handler 解析定位导航树）
    - ④ 收尾：workbench 侧注入（文档绑定连接→目录快照推送 + show_document 的 rds://navigator 定位）属并行线设计，注入后 B1-B4 / C2 / C3 / C6 / C7 实测解锁
 4. P3 钻取（下期）
+5. **SQL 格式化增强（2026-10-28 用户定：优先级高）**——见「十、SQL 格式化增强」
+
+## 十、SQL 格式化增强（2026-10-28，优先级高）——已实施（本线提交）
+
+**现状（已盘点）**：主链路完整——工具栏「格式化」按钮 → `format_document`（选区感知，只格式化选区）→ `format::plan` → 引擎 `formatter.rs`（sqlglot `generate_pretty` AST 排版，多语句安全：切分→逐条格式化→原位回填，一条失败不影响其它条；前导注释保留；解析失败原样返回并报条数）。
+
+**已落地（2026-10-28）**：
+1. **格式化选项**：`engine/sql/formatter.rs` 新增 `KeywordCase{Preserve,Uppercase,Lowercase}` + `FormatOptions{keyword_case,indent_width}`（Default = preserve / 2）；`format_with_report` / `format_single` 签名加 options。**安全后处理**：关键字大小写复用 `highlight_spans` 的 `TokenClass::Keyword` 区间改写（字符串/注释/标识符天然不碰）；缩进宽度逐行重排行首 2 空格倍数（行首落入 String/Comment 保护区间的行不碰）。**kept_verbatim 逐字保留语义高于选项**。
+2. **设置入口**：`settings` 三个新项——`editor.format_keyword_case`（Enum：preserve/upper/lower）、`editor.format_indent_width`（Number：2/4/8 预设）、`editor.format_on_save`（Bool 默认关）；model / lib / registry 全接线，设置页按 registry 自动渲染。
+3. **保存时自动格式化**：`host.rs::on_save`（Ctrl+S）开头按 `format_on_save` 开关先格式化再落盘；`Self::format_options(cx)` 异常档位回退 preserve/2 不猜。
+4. **边界**：尾随注释会被 sqlglot 生成器丢弃（模块头已知边界，测试用前导注释）；行宽重排 sqlglot-rust 不支持（不做，已记录）。
+
+**测试**：formatter 12 单测全绿（含关键字只改关键字、前导注释不改写、缩进含保护区不碰）；settings 契约除存量 `fold_open_keywords` 登记怪癖（Enum(&[]) 空候选 + 文本默认值）外全绿。
+
+**缺口**（已解决）：
+1. ~~无格式化选项~~ → 已实现 A/B（关键字大小写 + 缩进宽度）
+2. ~~设置模块无格式化项~~ → 已登记三设置项（section editor / group "format"）
+3. ~~保存时自动格式化~~ → 已实现 C（format_on_save 开关）
+
+## 十一、高亮 token 自定义（2026-10-28 记录在案，优先级低于格式化）
+
+**需求**：VS Code `editor.tokenColorCustomizations` 式——用户自定义「词 → token 类 / 颜色」。
+
+**现状（已盘点）**：高亮三层全硬编码——① `engine/sql/highlight.rs::class_of`（TokenType 语义 + `TYPE_NAMES` 硬编码类型名表 + 函数启发式）；② `view/highlight.rs::token_name`（TokenClass → 14 个主题词汇，写死）；③ resolver = `theme.highlight_theme`（查 `rds-theme.json` highlight.syntax）。**无配置入口**。
+
+**内核能力（已查证）**：`HighlightStyleResolver`（gpui-base `highlighting.rs:13`，`fn style(&self, name) -> Option<HighlightStyle>`）是应用侧 trait，`InputEditorStyle.highlight_styles: Arc<dyn HighlightStyleResolver>` 可任意提供——**支持包一层用户覆盖 resolver**（默认查主题 + 命中覆盖表先返回覆盖值）。
+
+**方案（A+B）**：
+- A 词级分类表：设置 JSON 声明「词 → token 类」，引擎 `class_of` 前先查覆盖表（TYPE_NAMES 同级数据驱动）
+- B 颜色覆盖：设置声明「token 名 → 色值」，resolver 包一层用户覆盖表
+- 新增 token 类（TOKEN_NAMES + 资产项）机制已成熟（14 项就是那么扩的）
+- scope 级匹配（「字符串里的关键字」）需 token 携带 scope 链，大工程，**不做**
 
 ## 七、文档残留（#54 相关，2026-10-24 已核实清理）
 

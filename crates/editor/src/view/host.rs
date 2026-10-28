@@ -2180,6 +2180,29 @@ impl EditorHostPanel {
     /// 计划（格式化哪一段 / 光标去哪 / 有几条没动）由纯函数 [`crate::format::plan`] 算；
     /// 这里只做三件事：**只读拒绝**、落一次**可撤销**的替换（`replace_all` 保留撤销历史）、
     /// 把结果如实说给用户（“改了 N 条” / “M 条解析不了，原样保留”）。
+    /// 【格式化增强】从设置解析格式化选项（关键字大小写 + 缩进宽度）。
+    ///
+    /// 设置异常（未知档位 / 越界）回退 sqlglot 原生（preserve / 2），不猜。
+    /// `cx` 借了 `Context`（Deref 到 `App`），读设置是只读，放这里安全。
+    fn format_options(cx: &mut Context<Self>) -> engine::sql::FormatOptions {
+        let editor = editor_settings_or_default(cx);
+        let keyword_case = match editor.format_keyword_case.as_str() {
+            "upper" => engine::sql::KeywordCase::Uppercase,
+            "lower" => engine::sql::KeywordCase::Lowercase,
+            _ => engine::sql::KeywordCase::Preserve,
+        };
+        let indent_width = editor.format_indent_width.clamp(2, 8) as u8;
+        engine::sql::FormatOptions {
+            keyword_case,
+            indent_width,
+        }
+    }
+
+    /// 【格式化增强】保存时自动格式化是否开启（设置在设置页；测试环境回退默认关）。
+    fn format_on_save_enabled(&self, cx: &Context<Self>) -> bool {
+        editor_settings_or_default(cx).format_on_save
+    }
+
     pub(crate) fn format_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.editor_read_only() {
             self.set_message(Some("只读文档不能格式化".to_string()), cx);
@@ -2192,7 +2215,8 @@ impl EditorHostPanel {
         }
         let (text, selection) = self.editor_snapshot(cx);
         let dialect = format::dialect_of(&self.connection_db_type());
-        let plan = format::plan(&text, selection, dialect);
+        let options = Self::format_options(cx);
+        let plan = format::plan(&text, selection, dialect, options);
 
         if !plan.changes(&text) {
             // 没改动也要说清楚是“本来就是格式化好的”还是“解析不了”——两者感受完全不同
@@ -4723,10 +4747,16 @@ impl EditorHostPanel {
     pub(crate) fn on_save(
         &mut self,
         _: &SaveDocument,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         tracing::info!(doc = %self.document, "【探针】on_save：保存文档（Ctrl+S）");
+        // 【格式化增强】保存时自动格式化（设置开）：先格式化再落盘——内核 Change 事件
+        // 会把新文本写回服务层，`save` 拿到的就是格式化后的内容。
+        // 格式化内部的提示消息会被下面的成功 / 失败分支覆盖，不打扰保存反馈。
+        if self.format_on_save_enabled(cx) {
+            self.format_document(window, cx);
+        }
         match self.save(cx) {
             Ok(_) => {
                 // A12：保存时顺便把会话（光标/选区/模式）落库——用户按 Ctrl+S 是最自然的时机

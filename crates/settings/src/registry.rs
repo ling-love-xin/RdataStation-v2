@@ -377,6 +377,10 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         | Slot::NotificationWarningAutohideSecs
         | Slot::NotificationMergeWindowSecs => KindTag::Number,
         Slot::NotificationErrorAutohide => KindTag::Bool,
+        // 【2026-10-28】SQL 格式化：关键字大小写是枚举，缩进宽度是数值，保存时格式化是布尔。
+        Slot::EditorFormatKeywordCase => KindTag::Enum,
+        Slot::EditorFormatIndentWidth => KindTag::Number,
+        Slot::EditorFormatOnSave => KindTag::Bool,
     }
 }
 
@@ -865,8 +869,8 @@ pub const REGISTRY: &[SettingSpec] = &[
         label: "缩进宽度",
         hint: "格式化后行首缩进空格数（2 = sqlglot 原生；仅作用于格式化输出，多行字符串内的缩进不受影响）",
         hint_inline: false,
-        kind: SettingKind::Enum(&[("2", "2 空格"), ("4", "4 空格"), ("8", "8 空格")]),
-        presets: &[],
+        kind: SettingKind::Number,
+        presets: &[(2, "2 空格（默认）"), (4, "4 空格"), (8, "8 空格")],
         default_json: "2",
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Page,

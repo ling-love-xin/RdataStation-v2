@@ -225,8 +225,15 @@ impl SqlEngine {
     ///
     /// 与 [`Self::format`] 的差别：它是**语句为单位**的（P0.4 的词法切分拿到区间，逐条
     /// 格式化再回填原位），所以脚本里有一句没写完，不影响其它语句被格式化。
-    pub fn format_report(sql: &str, dialect: SqlDialect) -> formatter::FormatReport {
-        formatter::format_with_report(sql, dialect)
+    ///
+    /// `options` 是格式化选项（关键字大小写 / 缩进宽度），默认 [`formatter::FormatOptions::default`]
+    /// 等于 sqlglot 原生输出。
+    pub fn format_report(
+        sql: &str,
+        dialect: SqlDialect,
+        options: formatter::FormatOptions,
+    ) -> formatter::FormatReport {
+        formatter::format_with_report(sql, dialect, options)
     }
 
     /// 方言转换

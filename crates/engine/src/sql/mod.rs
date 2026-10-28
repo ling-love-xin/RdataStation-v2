@@ -40,7 +40,7 @@ pub use builder::QualifiedTable;
 pub use bind::{param_names, substitute_params};
 pub use engine::{AlterOperation, ColumnDefInfo, DdlInfo, SqlDialect, SqlEngine, SqlStatementType};
 pub use explain::explain_sql;
-pub use formatter::FormatReport;
+pub use formatter::{FormatOptions, FormatReport, KeywordCase};
 pub use filter::{Rewrite, rewrite_with_filter, rewrite_with_order};
 pub use functions::{
     builtin_signatures, catalog_query, parameter_query, parse_catalog_rows, FunctionSignature,

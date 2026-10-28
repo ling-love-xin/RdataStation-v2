@@ -577,6 +577,31 @@ impl SettingsService {
                 }
                 Self::set_default_encoding(&v, cx);
             }
+            Slot::EditorFormatKeywordCase => {
+                let Some(v) = value.as_text() else {
+                    return false;
+                };
+                // 只认三档（preserve / upper / lower；手改坏时拒绝，不猜）。
+                if !(v == "preserve" || v == "upper" || v == "lower") {
+                    return false;
+                }
+                Self::set_format_keyword_case(&v, cx);
+            }
+            Slot::EditorFormatIndentWidth => {
+                let Some(n) = value.as_number() else {
+                    return false;
+                };
+                if !(2.0..=8.0).contains(&n) {
+                    return false;
+                }
+                Self::set_format_indent_width(n as i64, cx);
+            }
+            Slot::EditorFormatOnSave => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_format_on_save(on, cx);
+            }
             // 【并行线「DockArea 释放能力」布局设置】只读访问器由并行线已写入；
             // apply_by_key 分支与 setter 在本提交补齐（共享文件恢复编译的必要部分，
             // 并行线后续无需重复处理）。

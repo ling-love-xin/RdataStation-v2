@@ -20,7 +20,7 @@
 
 use std::ops::Range;
 
-use engine::sql::{SqlDialect, SqlEngine, split_statements};
+use engine::sql::{FormatOptions, SqlDialect, SqlEngine, split_statements};
 
 /// 一次格式化要做的全部事情（纯计算，不碰窗口）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,12 +89,19 @@ pub fn dialect_of_known(db_type: &str) -> Option<SqlDialect> {
 ///
 /// `selection` 是当前选区（无选区时 `start == end`）。有选区**只格式化选区**：
 /// 用户选了一段就是想只动那一段，顺手把整篇重排是越权。
-pub fn plan(text: &str, selection: Range<usize>, dialect: SqlDialect) -> FormatPlan {
+///
+/// `options` 是格式化选项（关键字大小写 / 缩进宽度），由设置注入；默认等于 sqlglot 原生。
+pub fn plan(
+    text: &str,
+    selection: Range<usize>,
+    dialect: SqlDialect,
+    options: FormatOptions,
+) -> FormatPlan {
     let has_selection = selection.end > selection.start;
     if has_selection {
         let clamped = clamp_range(text, selection);
         let slice = &text[clamped.clone()];
-        let report = SqlEngine::format_report(slice, dialect);
+        let report = SqlEngine::format_report(slice, dialect, options);
         let mut out = String::with_capacity(text.len());
         out.push_str(&text[..clamped.start]);
         out.push_str(&report.text);
@@ -110,7 +117,7 @@ pub fn plan(text: &str, selection: Range<usize>, dialect: SqlDialect) -> FormatP
         };
     }
 
-    let report = SqlEngine::format_report(text, dialect);
+    let report = SqlEngine::format_report(text, dialect, options);
     let cursor = map_offset(text, &report.text, selection.start);
     FormatPlan {
         text: report.text,
@@ -154,7 +161,7 @@ pub fn map_offset(old: &str, new: &str, offset: usize) -> usize {
 mod tests {
     // 安全模式：**不通配导入**
     use super::{dialect_of, dialect_of_known, map_offset, plan};
-    use engine::sql::SqlDialect;
+    use engine::sql::{FormatOptions, SqlDialect};
 
     #[test]
     fn the_dialect_comes_from_the_driver() {
@@ -185,7 +192,7 @@ mod tests {
             start: text.find("select a,b").expect("选区在"),
             end: text.find("where x=1").expect("选区在") + "where x=1".len(),
         };
-        let plan = plan(text, selection.clone(), SqlDialect::Ansi);
+        let plan = plan(text, selection.clone(), SqlDialect::Ansi, FormatOptions::default());
         // 选区之前（含注释）逐字不动
         assert!(
             plan.text.starts_with("select 1;\n\n-- 这段别动\n"),
@@ -217,7 +224,7 @@ mod tests {
         let text = "select 1;\nselect a,b from t where x=1;\nselect 3;";
         // 光标落在第二条语句的 `where` 上
         let offset = text.find("where").expect("找得到") + 2;
-        let plan = plan(text, offset..offset, SqlDialect::Ansi);
+        let plan = plan(text, offset..offset, SqlDialect::Ansi, FormatOptions::default());
         assert!(plan.text.contains("SELECT\n  1;"), "{:?}", plan.text);
         assert!(plan.selection.is_none(), "整篇格式化不选中任何东西");
         // 光标还在第二条语句的区间内
@@ -234,7 +241,7 @@ mod tests {
     #[test]
     fn unparseable_statements_are_kept_and_counted() {
         let text = "select 1;\nselect (\n";
-        let plan = plan(text, 0..0, SqlDialect::Ansi);
+        let plan = plan(text, 0..0, SqlDialect::Ansi, FormatOptions::default());
         assert_eq!(plan.formatted, 1);
         assert_eq!(plan.kept_verbatim, 1, "没写完的那句要如实报出来");
         assert!(plan.text.contains("select (\nselect") || plan.text.contains("select ("), "{:?}", plan.text);
@@ -243,7 +250,7 @@ mod tests {
     #[test]
     fn an_already_formatted_document_is_left_alone() {
         let text = "SELECT\n  1;\n\nSELECT\n  2;\n";
-        let plan = plan(text, 0..0, SqlDialect::Ansi);
+        let plan = plan(text, 0..0, SqlDialect::Ansi, FormatOptions::default());
         assert!(!plan.changes(text), "已经是格式化后的样子就不该改动：{:?}", plan.text);
     }
 
