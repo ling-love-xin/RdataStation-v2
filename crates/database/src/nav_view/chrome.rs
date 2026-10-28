@@ -1325,7 +1325,6 @@ impl NavView {
             .w_full()
             .h_full()
             .min_h_0()
-            .pt_0p5()
             .child(header)
             .when(self.host.show_search(cx), |this| this.child(search_row))
             .when(self.host.show_chips(cx), |this| this.child(chips))
