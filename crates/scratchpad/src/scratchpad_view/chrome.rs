@@ -125,7 +125,7 @@ impl ScratchpadView {
                 .gap_1()
                 .w_full()
                 .px_1p5()
-                .pb_1();
+                .py_0p5();
             if let Some(input) = filter_input {
                 row = row
                     .child(div().flex_1().min_w_0().child(
@@ -214,7 +214,7 @@ impl ScratchpadView {
                     div()
                         .flex_1()
                         .w_full()
-                        .px_2p5()
+                        .px_2()
                         .py_3()
                         .text_xs()
                         .text_color(muted)
@@ -1303,6 +1303,7 @@ impl ScratchpadView {
                 .gap_1()
                 .w_full()
                 .h(rems(ui::PANEL_HEADER_HEIGHT))
+                .bg(theme.colors.sidebar)
                 .px(rems(ui::PANEL_PADDING))
                 .border_b_1()
                 .border_color(theme.colors.border)
