@@ -38,7 +38,7 @@ use crate::commands::{
 use crate::panels::{
     ArchivePanel, DatabaseNavPanel, EditorPanel, HistoryPanelTab, InsightPanelTab, MockPanelTab,
     PluginPanel, ProjectActionRequest, PropertyRequest, QueryRequest, ResourcePanelTab,
-    ResultPanelDock, RightSidebarPanel, ScratchPanel, Shared, SidebarPanel,
+    RightSidebarPanel, ScratchPanel, Shared, SidebarPanel,
 };
 use crate::quick_open::model::{Action, Mode};
 use crate::quick_open::palette::{QuickOpenHost, QuickOpenPalette};
@@ -118,9 +118,6 @@ pub struct WorkbenchView {
     editor_service: editor::shared::EditorShared,
     /// 已开的编辑面板（按 `DocumentId` 复用：同文档不重复建面板）。
     editor_hosts: Vec<Entity<editor::view::host::EditorHostPanel>>,
-    /// 底部结果 dock 薄壳（Dock 化阶段 3：只渲染活动文档的结果面板；开/关由
-    /// render 权威点 `sync_result_dock` 按「有结果自动开 / 无结果自动关」驱动）
-    result_dock: Option<Entity<ResultPanelDock>>,
     /// 编辑器面板状态变化订阅（#47 状态栏上抛：host 发 `EditorHostEvent::StatusChanged`
     /// 时宿主重绘，全局状态栏活动文档上下文段随之刷新）。句柄必须被持有，drop 即失效；
     /// 面板关闭后订阅随实体 drop 失效，Vec 里留着无害（文档数有限）。
@@ -290,7 +287,6 @@ impl WorkbenchView {
             _insight_rules_watcher: None,
             editor_service,
             editor_hosts: Vec::new(),
-            result_dock: None,
             _editor_status_subs: Vec::new(),
             scratchpad_meta_pump: None,
             catalog_pump: None,
@@ -1184,9 +1180,6 @@ impl WorkbenchView {
             HistoryPanelTab::new(shared.clone(), history_entity, cx)
         }));
         self.right_archive_tab = Some(cx.new(|cx| ArchivePanel::new(shared.clone(), cx)));
-        // 底部结果 dock 薄壳（Dock 化阶段 3）：只渲染活动文档的结果面板；
-        // 开/关由 render 权威点 `sync_result_dock` 按「有结果自动开 / 无结果自动关」驱动
-        self.result_dock = Some(cx.new(|cx| ResultPanelDock::new(cx)));
         // B12：旧“编辑区”的 SQL 框已删；M1 的未保存草稿拦截改看**编辑器的未命名文档**
         // （见 `components/project_host.rs` 的 `EditorBridge`），不再需要 `Shared::editor_clear`。
         // S2：编辑区命令端口——导航 / 草稿箱改调这里，不再直写 `Shared` 的请求字段
@@ -1904,7 +1897,7 @@ impl WorkbenchView {
             .gap_2()
             .w_80()
             .h(rems(ui::QUICK_OPEN_ENTRY_HEIGHT))
-            .px_2p5()
+            .px_2()
             .rounded_sm()
             .bg(theme.colors.border)
             .cursor_pointer()
@@ -2141,16 +2134,21 @@ impl WorkbenchView {
 
         let settings_shared = shared.clone();
         let settings_entity = entity.clone();
-        let footer = SidebarFooter::new().child(
-            Button::new("left-settings")
-                .icon(Icon::new(IconName::Settings))
-                .ghost()
-                .on_click(move |_, _, app| {
-                    settings_shared.settings_open.set(true);
-                    settings_shared.quick_open.set(false);
-                    settings_entity.update(app, |_, cx| cx.notify());
-                }),
-        );
+        let footer = div()
+            .h_flex()
+            .w_full()
+            .p_2()
+            .justify_center()
+            .child(
+                Button::new("left-settings")
+                    .icon(Icon::new(IconName::Settings))
+                    .ghost()
+                    .on_click(move |_, _, app| {
+                        settings_shared.settings_open.set(true);
+                        settings_shared.quick_open.set(false);
+                        settings_entity.update(app, |_, cx| cx.notify());
+                    }),
+            );
 
         Sidebar::new("left-activity")
             .side(Side::Left)
@@ -2226,16 +2224,21 @@ impl WorkbenchView {
 
         let settings_shared = shared.clone();
         let settings_entity = entity.clone();
-        let footer = SidebarFooter::new().child(
-            Button::new("right-settings")
-                .icon(Icon::new(IconName::Settings))
-                .ghost()
-                .on_click(move |_, _, app| {
-                    settings_shared.settings_open.set(true);
-                    settings_shared.quick_open.set(false);
-                    settings_entity.update(app, |_, cx| cx.notify());
-                }),
-        );
+        let footer = div()
+            .h_flex()
+            .w_full()
+            .p_2()
+            .justify_center()
+            .child(
+                Button::new("right-settings")
+                    .icon(Icon::new(IconName::Settings))
+                    .ghost()
+                    .on_click(move |_, _, app| {
+                        settings_shared.settings_open.set(true);
+                        settings_shared.quick_open.set(false);
+                        settings_entity.update(app, |_, cx| cx.notify());
+                    }),
+            );
 
         Sidebar::new("right-activity")
             .side(Side::Right)
@@ -3128,9 +3131,9 @@ impl Render for WorkbenchView {
             self.shared.prev_right_sidebar_width.set(right_width);
         }
         // 【2026-10-27】结果区从全局底部 dock 拆回编辑器宿主内嵌（DBeaver 口径：
-        // 结果集跟编辑器 tab 走，不再挂全局 dock）。sync_result_dock 不再需要——
-        // 结果区有无内容由编辑器宿主自己 render 判断（v_resizable 分栏，无内容时不占位）。
-        // self.sync_result_dock(window, cx);
+        // 结果集跟编辑器 tab 走，不再挂全局 dock）。结果区有无内容由编辑器宿主自己
+        // render 判断（v_resizable 分栏，无内容时不占位）。旧 `result_dock.rs` 薄壳
+        // 与 `sync_result_dock` 已整体移除（孤儿实体，见 2026-10-28 清理）。
         // 真面板化：版本 / 修复 / 回收站 / 标签对话框与导航「定位」请求原在
         // `SidebarPanel::render` 消费（外壳已不再渲染），提升到宿主 render——
         // render 仍是权威同步点，副作用不放到事件路径；动作仍经 `sidebar` 实体转发。

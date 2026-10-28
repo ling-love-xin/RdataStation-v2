@@ -28,7 +28,8 @@ pub struct TabActions {
     /// 用户点了「重命名」：宿主进入重命名输入态（弹输入框），输入确认后再发 RenameSet
     pub on_rename: Option<Rc<dyn Fn(usize, &mut Window, &mut App) + 'static>>,
     /// 用户点了「钉住 / 取消钉住」：宿主直接切 store.pinned
-    pub on_toggle_pin: Option<Rc<dyn Fn(usize) + 'static>>,
+    /// （签名带 `&mut App`：按钮点击经 [`ResultActionQueue::request`] 立即通知面板 → 宿主 drain）
+    pub on_toggle_pin: Option<Rc<dyn Fn(usize, &mut App) + 'static>>,
 }
 
 /// 一个结果集标签的展示数据（**纯计算**：渲染路径不临时算这些）
@@ -134,6 +135,8 @@ pub fn render(
                         .ghost()
                         .small()
                         .icon(IconName::Ellipsis)
+                        .debug_selector(|| format!("editor-result-tab-rename-{index}"))
+                        .tooltip("重命名结果集".to_string())
                         .on_click(move |_e, w, cx| on_rename(idx, w, cx)),
                 );
             }
@@ -150,7 +153,7 @@ pub fn render(
                 let pin_button = match pin_click {
                     Some(on_toggle_pin) => {
                         let idx = index;
-                        pin_button.on_click(move |_e, _w, _cx| on_toggle_pin(idx))
+                        pin_button.on_click(move |_e, _w, cx| on_toggle_pin(idx, cx))
                     }
                     None => pin_button,
                 };

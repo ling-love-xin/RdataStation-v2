@@ -103,6 +103,9 @@ pub struct SavedSession {
     pub tab_size: Option<usize>,
     /// 【T2c-4 余项】缩进是否制表符（默认 false；`None` = 旧会话没存过 → 不覆盖当前）
     pub hard_tabs: Option<bool>,
+    /// 【结果集 #296】结果集列序（列名数组；`None` = 没拖过 → 默认序）。
+    /// 同文档重跑 / 重启后恢复用户拖过的列序（结果面板按列名匹配重排）
+    pub result_column_order: Option<Vec<String>>,
 }
 
 /// 会话存储端口（宿主注入）
@@ -235,6 +238,7 @@ mod tests {
             schema: None,
             tab_size: None,
             hard_tabs: None,
+            result_column_order: None,
         }
     }
 

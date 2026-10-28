@@ -38,7 +38,7 @@ use gpui_kit::component::IndexPath;
 use gpui_kit::component::{ActiveTheme as _, Size, Sizable as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::toolbar::ToolbarGroup;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::{TableDelegate, TableEvent, TableState};
@@ -46,7 +46,7 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder as _;
 
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
-use ::shared::FactFrame;
+use ::shared::{CurrentTier, FactFrame};
 
 use crate::column_browser::ColumnBrowserDelegate;
 use crate::error_card::{self, ErrorCard};
@@ -173,12 +173,30 @@ pub struct ResultPanel {
     transposed: bool,
     transpose_row: usize,
     compare_mode: bool,
+    /// 【2026-10-28 微调】SQL 预览**弹出窗口**开关：点击工具栏 SQL 文本框置 true，
+    /// render 根挂浮层（遮罩 + 居中卡片 + 只读 Textarea）。**不用 kit Dialog**：
+    /// `Dialog::new` 需 `&mut App`，而本面板 render 是 `&App`（host 手动调
+    /// `result_panel.read(cx).render(cx)`）——等效浮层 + kit Textarea 满足"弹出窗口 +
+    /// 文本组件"，Esc / 遮罩点击 / 关闭按钮三路关闭。
+    sql_dialog_open: bool,
+    /// 【2026-10-28 微调】SQL 预览弹窗里的只读 Textarea 实体（懒创建：`TextareaState::new`
+    /// 需要 window + &mut App，也在事件路径建；SQL 变化时 `set_text` 刷新）。
+    /// render 期 `Textarea::new(&entity)` 只需 &Entity，可直接挂浮层。
+    sql_textarea: Option<Entity<TextareaState>>,
+    /// 【1.2】筛选框展开态：点击筛选组展开按钮后，工具栏下方出现顶宽筛选条
+    /// （输入框全宽 + ▶ 运行 + ✕ 清除 + wrapped SQL 预览）。默认收起。
+    filter_expanded: bool,
     /// 【侧栏】左侧栏（网格 / 文本 / 记录竖条）开关；默认开（对齐 DBeaver 左缘
     /// 竖条常驻），状态栏左端开关可收起（完全收起 = 不占宽度）。
     show_left_sidebar: bool,
     /// 【侧栏】右侧辅助栏（列浏览器 / 值详情 / 计算 / 分组）开关；默认关
     /// （不挤网格，工具栏「列浏览器」可开）。列浏览器与值详情等共用这一栏、页签切换。
     show_value_sidebar: bool,
+    /// 【2026-10-28 微调】右缘竖条可见性——右侧开关**三态**（比左侧多一个展开态）：
+    /// `(edge_bar_visible, show_value_sidebar)` = (false,false)=收起 / (true,false)=窄展开
+    /// （只显右缘竖条图标条）/ (true,true)=宽展开（竖条 + 右栏内容）。不变量：宽展开 ⟹
+    /// 竖条可见。开关在状态栏右端（render_status_row 的 right_switch，三态循环点击）。
+    edge_bar_visible: bool,
     /// 【侧栏丝滑】左右栏展开 / 收起动画代次（每次开合 +1；0 = 首帧免动画）。
     /// 动画 id 拼 epoch → with_animation 换 id 即重播（与 vendor sidebar 同机制）。
     left_sidebar_epoch: u64,
@@ -209,6 +227,9 @@ pub struct ResultPanel {
     compare_toolbar: Option<ResultToolbar>,
     compare_status: Option<ResultStatus>,
     result_sql: Option<String>,
+    /// 【1.2】筛选框运行生成的 wrapped SQL（`select * from (原SQL) where …`）；
+    /// 执行完成后写入，右栏「执行SQL」页签展示（只读 + 复制）。空 = 页签空态。
+    exec_sql: Option<String>,
     result_is_analysis: bool,
     result_can_copy: bool,
     fetching_more: bool,
@@ -357,8 +378,12 @@ impl ResultPanel {
             compare_mode: false,
             show_left_sidebar: true,
             show_value_sidebar: true,
+            edge_bar_visible: true,
             left_sidebar_epoch: 0,
             right_sidebar_epoch: 0,
+            sql_dialog_open: false,
+            sql_textarea: None,
+            filter_expanded: false,
             selection_pos: None,
             // 【结果集 #296】列序默认空 = 数据序；宿主构造期注入持久化列序
             column_order: Vec::new(),
@@ -371,6 +396,7 @@ impl ResultPanel {
             compare_toolbar: None,
             compare_status: None,
             result_sql: None,
+            exec_sql: None,
             result_is_analysis: false,
             result_can_copy: false,
             fetching_more: false,
@@ -536,8 +562,8 @@ impl ResultPanel {
                         .small()
                         .debug_selector(|| "editor-result-error-locate".to_string())
                         .label(label)
-                        .on_click(move |_, _window, _app| {
-                            queue.push(ResultRequest::LocateError);
+                        .on_click(move |_, _window, app| {
+                            queue.request(ResultRequest::LocateError, app);
                         })
                         .into_any_element()
                 });
@@ -547,8 +573,8 @@ impl ResultPanel {
                     .small()
                     .debug_selector(|| "editor-result-error-copy".to_string())
                     .label("复制")
-                    .on_click(move |_, _window, _app| {
-                        queue.push(ResultRequest::CopyError);
+                    .on_click(move |_, _window, app| {
+                        queue.request(ResultRequest::CopyError, app);
                     })
                     .into_any_element();
                 error_card::render(
@@ -580,20 +606,20 @@ impl ResultPanel {
             let queue_rename = self.queue.clone();
             let queue_pin = self.queue.clone();
             let actions = result_sets::TabActions {
-                // 「⋯」按钮：进入重命名态（事件路径；render 闭包拿不到 &mut App）
-                on_rename: Some(std::rc::Rc::new(move |index, _w, _app| {
-                    queue_rename.push(ResultRequest::BeginRename(index));
+                // 「⋯」按钮：进入重命名态（事件路径；request 立即通知面板 → 宿主 drain）
+                on_rename: Some(std::rc::Rc::new(move |index, _w, app| {
+                    queue_rename.request(ResultRequest::BeginRename(index), app);
                 })),
-                on_toggle_pin: Some(std::rc::Rc::new(move |index| {
-                    queue_pin.push(ResultRequest::TogglePin(index));
+                on_toggle_pin: Some(std::rc::Rc::new(move |index, app| {
+                    queue_pin.request(ResultRequest::TogglePin(index), app);
                 })),
             };
             result_sets::render(
                 &self.tabs,
                 self.active,
-                move |index, _window, _app| {
+                move |index, _window, app| {
                     let index = *index;
-                    queue_pick.push(ResultRequest::SelectSet(index));
+                    queue_pick.request(ResultRequest::SelectSet(index), app);
                 },
                 actions,
                 cx,
@@ -603,11 +629,17 @@ impl ResultPanel {
         });
 
         // 【C1】重命名态：tab 条下方插入一个输入框条（输入框 + ✓ 提交 + ✕ 取消）
+        // 【2026-10-28 微调】输入框聚焦时 Enter 提交 / Esc 取消（§8.14 已知遗留补齐）。
+        // kit Input 不消费 Enter/Esc（input.rs 无 key_down 挂载），事件沿 Bubble 冒泡到
+        // 本容器（div.on_key_down 在 Bubble 阶段触发）；走队列端口（CommitRename /
+        // CancelRename 变体已存在），与 ✓/✕ 按钮同口径。
         let tabs = match (tabs, self.renaming) {
             (Some(tabs_el), Some(_index)) => {
                 let input = self.renaming_input.clone();
                 let queue_confirm = self.queue.clone();
                 let queue_cancel = self.queue.clone();
+                let queue_enter = self.queue.clone();
+                let queue_esc = self.queue.clone();
                 Some(
                     div()
                         .v_flex()
@@ -620,6 +652,13 @@ impl ResultPanel {
                                 .px_2()
                                 .py_1()
                                 .debug_selector(|| "editor-result-rename-bar".to_string())
+                                .on_key_down(move |event, _window, app| {
+                                    if event.keystroke.key == "enter" {
+                                        queue_enter.request(ResultRequest::CommitRename, app);
+                                    } else if event.keystroke.key == "escape" {
+                                        queue_esc.request(ResultRequest::CancelRename, app);
+                                    }
+                                })
                                 .child(
                                     div()
                                         .w(rems(ui::RESULT_FILTER_WIDTH))
@@ -630,8 +669,8 @@ impl ResultPanel {
                                         .ghost()
                                         .small()
                                         .icon(IconName::Check)
-                                        .on_click(move |_e, _w, _app| {
-                                            queue_confirm.push(ResultRequest::CommitRename);
+                                        .on_click(move |_e, _w, app| {
+                                            queue_confirm.request(ResultRequest::CommitRename, app);
                                         }),
                                 )
                                 .child(
@@ -639,8 +678,8 @@ impl ResultPanel {
                                         .ghost()
                                         .small()
                                         .icon(IconName::Close)
-                                        .on_click(move |_e, _w, _app| {
-                                            queue_cancel.push(ResultRequest::CancelRename);
+                                        .on_click(move |_e, _w, app| {
+                                            queue_cancel.request(ResultRequest::CancelRename, app);
                                         }),
                                 ),
                         )
@@ -657,18 +696,57 @@ impl ResultPanel {
 
         // 【B15】本地筛选框：只作用于视图层，不重查数据库；输入走 300ms 防抖
         // （`on_filter_input`），有词时给一个 ✕ 清除；「下发源库」开关开着时应用
-        // 筛选会重查（入队，结果落新结果集）
+        // 筛选会重查（入队，结果落新结果集）。
+        // 【1.3 对齐】下发源库 / 注释两个 Switch 从筛选组拆出，交给工具栏右段
+        // Toolbar 统一容器（与对比 / 分析 / 复制同基线），筛选组只留输入与清除。
+        // 【1.2】筛选框升级：常态 180px 输入框内嵌 ▶ 运行（RunFilterAsQuery，
+        // 用 `select * from (原SQL) where 词` 替换当前结果集重查）；展开按钮
+        // （Maximize2）打开顶宽筛选条（filter_expanded，输入框移到工具栏下方全宽）。
+        // 展开态下工具栏筛选组不再渲染输入框（同一 InputState 实体一帧只能渲染
+        // 一处，双渲染会元素 id 冲突），只留展开按钮（toggled 高亮指示展开态）。
         let filter = div()
             .h_flex()
             .items_center()
             .gap_1()
             .debug_selector(|| "editor-result-filter".to_string())
-            .child(
-                div()
-                    .w(rems(ui::RESULT_FILTER_WIDTH))
-                    .child(Input::new(&self.filter_input)),
-            )
-            .when(!self.filter_text.trim().is_empty(), |row| {
+            .when(!self.filter_expanded, |row| {
+                let run_queue = self.queue.clone();
+                row.child(
+                    div()
+                        .w(rems(ui::RESULT_FILTER_WIDTH))
+                        .child(
+                            Input::new(&self.filter_input).suffix(
+                                Button::new("editor-result-filter-run")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::Play)
+                                    .debug_selector(|| "editor-result-filter-run".to_string())
+                                    .tooltip("用 select * from (原SQL) where 词 重查（替换当前结果集）")
+                                    .on_click(move |_, _window, app| {
+                                        run_queue.request(ResultRequest::RunFilterAsQuery, app);
+                                    }),
+                            ),
+                        ),
+                )
+            })
+            .child({
+                let expand_queue = self.queue.clone();
+                Button::new("editor-result-filter-expand")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Maximize2)
+                    .toggled(self.filter_expanded)
+                    .debug_selector(|| "editor-result-filter-expand".to_string())
+                    .tooltip(if self.filter_expanded {
+                        "收起筛选（回到工具栏输入框）"
+                    } else {
+                        "展开筛选（顶宽输入框）"
+                    })
+                    .on_click(move |_, _window, app| {
+                        expand_queue.request(ResultRequest::ToggleFilterExpand, app);
+                    })
+            })
+            .when(!self.filter_text.trim().is_empty() && !self.filter_expanded, |row| {
                 let queue = self.queue.clone();
                 row.child(
                     Button::new("editor-result-filter-clear")
@@ -676,59 +754,41 @@ impl ResultPanel {
                         .small()
                         .debug_selector(|| "editor-result-filter-clear".to_string())
                         .label("✕")
-                        .on_click(move |_, _window, _app| {
-                            queue.push(ResultRequest::ClearFilter);
+                        .on_click(move |_, _window, app| {
+                            queue.request(ResultRequest::ClearFilter, app);
                         }),
                 )
             })
-            .child({
-                let queue = self.queue.clone();
-                Switch::new("editor-result-pushdown")
-                    .checked(self.pushdown)
-                    .label("下发源库")
-                    .on_click(move |checked, _window, _app| {
-                        let open = *checked;
-                        queue.push(ResultRequest::SetPushdown { open });
-                    })
-            })
-            .child({
-                let queue = self.queue.clone();
-                Switch::new("editor-result-show-comments")
-                    .checked(self.show_column_comments)
-                    .label("注释")
-                    .on_click(move |checked, _window, _app| {
-                        let open = *checked;
-                        queue.push(ResultRequest::SetShowColumnComments { open });
-                    })
-            })
             .into_any_element();
 
-        // 【侧栏】右侧辅助栏开合（对齐 DBeaver 右侧面板组：列浏览器 / 值详情 / 计算 / 分组
-        // 同栏页签切换）：默认开（对齐 DBeaver 右栏常驻）；开关从工具栏移到**状态栏右端**
-        // （2026-10-28 四行布局拍板：开关在状态栏左右两侧），可完全收起（收起 = 不占宽度）。
-        // 收起态图标用 PanelRightOpen（点击动作 = 展开），展开态 PanelRight（当前状态）。
-        let value_sidebar = self.result_can_copy.then(|| {
+        // 【B15】「下发源库」开关：开着时应用筛选会重查（拼 WHERE 到原查询）
+        let pushdown = {
             let queue = self.queue.clone();
-            Button::new("editor-result-value-sidebar")
-                .ghost()
-                .small()
-                .debug_selector(|| "editor-result-value-sidebar".to_string())
-                .toggled(self.show_value_sidebar)
-                .icon(if self.show_value_sidebar {
-                    IconName::PanelRight
-                } else {
-                    IconName::PanelRightOpen
-                })
-                .tooltip(if self.show_value_sidebar {
-                    "收起右栏（列浏览器 / 值详情 / 计算 / 分组）"
-                } else {
-                    "展开右栏（列浏览器 / 值详情 / 计算 / 分组）"
-                })
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::ToggleValueSidebar);
+            Switch::new("editor-result-pushdown")
+                .checked(self.pushdown)
+                .label("下发源库")
+                .on_click(move |checked, _window, app| {
+                    let open = *checked;
+                    queue.request(ResultRequest::SetPushdown { open }, app);
                 })
                 .into_any_element()
-        });
+        };
+        // 列注释开关（对齐 DBeaver：列浏览器里显示列注释）
+        let comments = {
+            let queue = self.queue.clone();
+            Switch::new("editor-result-show-comments")
+                .checked(self.show_column_comments)
+                .label("注释")
+                .on_click(move |checked, _window, app| {
+                    let open = *checked;
+                    queue.request(ResultRequest::SetShowColumnComments { open }, app);
+                })
+                .into_any_element()
+        };
+
+        // 【右缘竖条】右侧辅助栏开合开关已移到最右缘竖条顶部（`render_right_edge_bar`，
+        // 单入口；2026-10-28 落地），状态栏右端不再挂右栏开关，`ResultControls.value_sidebar`
+        // 与 `render_status_row.right_switch` 均传 `None`。
 
         // 【并排对比】工具栏开关：两份以上结果才摆（一份结果没有可比的；对比栏
         // 数据只读，编辑 / 取段 / 洞察等动作仍只作用于主栏）
@@ -741,8 +801,8 @@ impl ResultPanel {
                 .icon(IconName::Columns2)
                 .tooltip("并排对比")
                 .debug_selector(|| "editor-result-compare".to_string())
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::ToggleCompareMode);
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::ToggleCompareMode, app);
                 })
                 .into_any_element()
         });
@@ -757,8 +817,8 @@ impl ResultPanel {
                 .debug_selector(|| "editor-result-commit".to_string())
                 .disabled(submitting)
                 .label(format!("提交变更 ({})", self.pending_changes))
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::CommitPending);
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::CommitPending, app);
                 });
             let queue = self.queue.clone();
             let discard = Button::new("editor-result-discard")
@@ -766,8 +826,8 @@ impl ResultPanel {
                 .small()
                 .debug_selector(|| "editor-result-discard".to_string())
                 .label("撤销变更")
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::RollbackPending);
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::RollbackPending, app);
                 });
             // 提交/撤销成对：2026-10-28 从手搓 `div().h_flex().gap_1()` 迁
             // `toolbar::ToolbarGroup`（组件统一化 §3 容器层反例修复）。外层无样式观测壳
@@ -791,8 +851,8 @@ impl ResultPanel {
                 .small()
                 .debug_selector(|| "editor-result-copy".to_string())
                 .label("复制")
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::CopyTsv);
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::CopyTsv, app);
                 })
                 .into_any_element()
         });
@@ -803,8 +863,8 @@ impl ResultPanel {
                 .small()
                 .debug_selector(|| "editor-result-refresh".to_string())
                 .label("⟳ 刷新")
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::Refresh);
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::Refresh, app);
                 })
                 .into_any_element()
         });
@@ -821,8 +881,8 @@ impl ResultPanel {
                     .debug_selector(|| "editor-result-more".to_string())
                     .label("获取数据")
                     .tooltip("获取下一段数据")
-                    .on_click(move |_, _window, _app| {
-                        queue.push(ResultRequest::FetchMore);
+                    .on_click(move |_, _window, app| {
+                        queue.request(ResultRequest::FetchMore, app);
                     })
                     .into_any_element()
             });
@@ -839,8 +899,8 @@ impl ResultPanel {
                     .debug_selector(|| "editor-result-fetch-all".to_string())
                     .label("获取全部数据")
                     .tooltip("一次性抓取全部行")
-                    .on_click(move |_, _window, _app| {
-                        queue.push(ResultRequest::FetchAll);
+                    .on_click(move |_, _window, app| {
+                        queue.request(ResultRequest::FetchAll, app);
                     })
                     .into_any_element()
             });
@@ -862,8 +922,8 @@ impl ResultPanel {
                 .icon(IconName::Plus)
                 .tooltip("在下方插入新行")
                 .debug_selector(|| "editor-result-insert-row".to_string())
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::InsertRowBelow(anchor));
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::InsertRowBelow(anchor), app);
                 })
                 .into_any_element()
         });
@@ -877,9 +937,9 @@ impl ResultPanel {
                 .tooltip("复制此行")
                 .disabled(row.is_none())
                 .debug_selector(|| "editor-result-duplicate-row".to_string())
-                .on_click(move |_, _window, _app| {
+                .on_click(move |_, _window, app| {
                     if let Some(row) = row {
-                        queue.push(ResultRequest::DuplicateRow(row));
+                        queue.request(ResultRequest::DuplicateRow(row), app);
                     }
                 })
                 .into_any_element()
@@ -894,9 +954,9 @@ impl ResultPanel {
                 .tooltip("删除此行")
                 .disabled(row.is_none())
                 .debug_selector(|| "editor-result-delete-row".to_string())
-                .on_click(move |_, _window, _app| {
+                .on_click(move |_, _window, app| {
                     if let Some(row) = row {
-                        queue.push(ResultRequest::DeleteRow(row));
+                        queue.request(ResultRequest::DeleteRow(row), app);
                     }
                 })
                 .into_any_element()
@@ -912,8 +972,8 @@ impl ResultPanel {
                 .tooltip("撤销")
                 .disabled(!self.can_undo)
                 .debug_selector(|| "editor-result-undo".to_string())
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::UndoAction);
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::UndoAction, app);
                 })
                 .into_any_element()
         };
@@ -926,8 +986,8 @@ impl ResultPanel {
                 .tooltip("重做")
                 .disabled(!self.can_redo)
                 .debug_selector(|| "editor-result-redo".to_string())
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::RedoAction);
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::RedoAction, app);
                 })
                 .into_any_element()
         };
@@ -966,11 +1026,11 @@ impl ResultPanel {
                         };
                         let queue = queue.clone();
                         menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                            move |_, _window, _app| {
-                                queue.push(ResultRequest::Export {
+                            move |_, _window, app| {
+                                queue.request(ResultRequest::Export {
                                     format,
                                     all: matches!(scope, export::ExportScope::All),
-                                });
+                                }, app);
                             },
                         ));
                     }
@@ -999,17 +1059,17 @@ impl ResultPanel {
                         let queue = queue.clone();
                         let sql = item.sql.clone();
                         menu = menu.item(PopupMenuItem::new(item.label.clone()).on_click(
-                            move |_, _window, _app| {
+                            move |_, _window, app| {
                                 let sql = sql.clone();
-                                queue.push(ResultRequest::Analysis { sql });
+                                queue.request(ResultRequest::Analysis { sql }, app);
                             },
                         ));
                     }
                     let queue = queue.clone();
                     menu.separator().item(
                         PopupMenuItem::new(crate::analysis::CUSTOM_LABEL).on_click(
-                            move |_, _window, _app| {
-                                queue.push(ResultRequest::AnalysisCustom);
+                            move |_, _window, app| {
+                                queue.request(ResultRequest::AnalysisCustom, app);
                             },
                         ),
                     )
@@ -1019,7 +1079,7 @@ impl ResultPanel {
 
         let controls = result_grid::ResultControls {
             filter: Some(filter),
-            value_sidebar,
+            value_sidebar: None,
             compare,
             commit,
             analysis,
@@ -1040,7 +1100,7 @@ impl ResultPanel {
         // 读它们（grid.rs render 只渲染网格），故移动进状态栏，pane.controls 传 default。
         let result_grid::ResultControls {
             filter,
-            value_sidebar,
+            value_sidebar: _,
             compare,
             commit,
             analysis,
@@ -1070,10 +1130,33 @@ impl ResultPanel {
             refresh,
             ..Default::default()
         };
+        // 【2026-10-28 微调】SQL 预览：工具栏最左侧可点击元素（Button 自带 hover 高亮 +
+        // 手型，提示可点击）。点击**弹出窗口**显示完整原始 SQL（kit Dialog + 只读
+        // Textarea）；hover 仍给全文 tooltip。
+        let sql_preview = toolbar.sql.clone().map(|sql| {
+            let preview: SharedString = if sql.len() > 60 {
+                format!("{}…", &sql[..60]).into()
+            } else {
+                sql.as_str().into()
+            };
+            let queue = self.queue.clone();
+            Button::new("editor-result-sql-preview")
+                .ghost()
+                .small()
+                .debug_selector(|| "editor-result-sql-preview".to_string())
+                .label(SharedString::from(format!("SQL: {}", preview)))
+                .tooltip("点击查看完整 SQL（弹出窗口）")
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::OpenSqlDialog, app);
+                })
+                .into_any_element()
+        });
         // 工具栏：右栏开关已移状态栏右端，这里不再摆（None）；导出/刷新已移状态栏
         let toolbar_el = result_grid::render_toolbar(
-            &toolbar,
+            sql_preview,
             filter,
+            Some(pushdown),
+            Some(comments),
             compare,
             commit,
             analysis,
@@ -1082,13 +1165,18 @@ impl ResultPanel {
         );
         // 状态栏右段耗时取自工具栏投影；先取出再移动 `toolbar` 进 pane
         let elapsed_ms = toolbar.elapsed_ms;
-        // 【执行信息归状态栏】工具栏 segments 中状态栏右段不重复的部分：行数 / 耗时
-        // 已由状态栏右段自己的文案覆盖（`…N 行已获取 · 耗时`），这里过滤掉避免重复
-        let status_summary: Vec<String> = toolbar
-            .segments()
-            .into_iter()
-            .filter(|s| !s.starts_with("行数 ") && !s.starts_with("耗时 "))
-            .collect();
+        // 【状态栏三项】右段只显示 内存 / 查询时间 / 查询条数（用户口径 2026-10-28）。
+        // 内存文案在这里从 toolbar 投影（取完就随 toolbar 移进 pane，不能再读）：
+        // 内存档报列式占用；表档只标载体；无事实档不摆段。
+        let status_memory = match toolbar.fact_tier {
+            Some(CurrentTier::InMemory) if toolbar.fact_bytes > 0 => {
+                Some(format!("内存 {}", result_grid::bytes_text(toolbar.fact_bytes)))
+            }
+            Some(CurrentTier::InMemory) => Some("内存档".to_string()),
+            Some(CurrentTier::OnDuckDb) | Some(CurrentTier::None) | None => None,
+        };
+        // 【状态栏三项】写语句影响行数（网格行数由 status 提供；这里补写语句口径）
+        let status_affected = toolbar.affected_rows;
         // 【四行布局】状态行渲染条件放宽：网格有状态行；写语句 / 失败只有执行信息
         // （affected_rows / failed / elapsed_ms）也给状态栏——用户口径：导出 / 刷新 /
         // 执行信息都在状态栏，写语句也要能刷新（须在 `toolbar` 移动进 pane 之前算）
@@ -1141,8 +1229,31 @@ impl ResultPanel {
                 } else {
                     "展开左栏（网格 / 文本 / 记录）"
                 })
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::ToggleLeftSidebar);
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::ToggleLeftSidebar, app);
+                })
+                .into_any_element()
+        };
+
+        // 【2026-10-28 微调】右侧开关（状态栏右端）：三态循环（收起 → 窄展开 → 宽展开 →
+        // 收起；比左侧开关多一个展开态）。图标：PanelRight（收起）/ PanelRightDashed（窄展开，
+        // 只显右缘竖条图标条）/ PanelRightOpen（宽展开，竖条 + 右栏内容）。
+        let right_switch = {
+            let queue = self.queue.clone();
+            let (icon, toggled, tooltip) = match (self.edge_bar_visible, self.show_value_sidebar) {
+                (false, _) => (IconName::PanelRight, false, "展开右栏（图标条）"),
+                (true, false) => (IconName::PanelRightDashed, true, "展开右栏（内容）"),
+                (true, true) => (IconName::PanelRightOpen, true, "收起右栏"),
+            };
+            Button::new("editor-result-right-sidebar-toggle")
+                .ghost()
+                .small()
+                .debug_selector(|| "editor-result-right-sidebar-toggle".to_string())
+                .toggled(toggled)
+                .icon(icon)
+                .tooltip(tooltip)
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::ToggleValueSidebar, app);
                 })
                 .into_any_element()
         };
@@ -1163,7 +1274,7 @@ impl ResultPanel {
             row.child(div().flex_1().min_w_0().h_full().child(self.render_text_view(cx)))
                 .into_any_element()
         } else if !self.compare_mode {
-            // 普通视图：左栏（可收起）+ 主 pane + 右栏（可收起）
+            // 普通视图：左栏（可收起）+ 主 pane + 右栏（可收起）+ 右缘竖条（常驻）
             let mut row = div()
                 .h_flex()
                 .items_stretch()
@@ -1174,6 +1285,12 @@ impl ResultPanel {
             row = row.child(self.render_vertical_bar(cx));
             row = row.child(div().flex_1().min_w_0().h_full().child(result_pane));
             row = row.child(self.render_right_sidebar(cx));
+            // 【右缘竖条】三态开关控制可见性（`edge_bar_visible`）；有可复制语义
+            // （有网格结果）时才挂（与右栏页签同条件）
+            row = row.children(
+                (self.edge_bar_visible && self.result_can_copy)
+                    .then(|| self.render_right_edge_bar(cx)),
+            );
             row.into_any_element()
         } else {
             // 【并排对比】对比模式双栏：左栏 = 主选中（上面组装好的主 pane），
@@ -1187,9 +1304,9 @@ impl ResultPanel {
                 result_sets::render(
                     &self.tabs,
                     compare_active,
-                    move |index, _window, _app| {
+                    move |index, _window, app| {
                         let index = *index;
-                        queue.push(ResultRequest::SelectCompare(index));
+                        queue.request(ResultRequest::SelectCompare(index), app);
                     },
                     result_sets::TabActions::default(),
                     cx,
@@ -1274,8 +1391,10 @@ impl ResultPanel {
                 self.status.as_ref().and(Some(&self.row_count_input)),
                 elapsed_ms,
                 Some(left_switch),
-                value_sidebar,
-                &status_summary,
+                // 【2026-10-28 微调】右侧开关回状态栏右端（三态：收起 / 窄展开 / 宽展开）
+                Some(right_switch),
+                status_memory,
+                status_affected,
                 cx,
             )
             .into_any_element()
@@ -1291,10 +1410,15 @@ impl ResultPanel {
             .children(tabs)
             // 第二行：工具栏（跨全宽）
             .child(toolbar_el)
+            // 【1.2】筛选展开条：点击筛选组展开按钮后，工具栏下方顶宽输入框 + ▶ + ✕
+            .children(self.filter_expanded.then(|| self.render_filter_expand_bar(cx)))
             // 第三行：主体
             .child(body)
             // 第四行：状态栏
             .children(status_row)
+            // 【2026-10-28 微调】SQL 预览弹窗**最后挂**（绘制顺序在全部内容之上，
+            // 浮层才能盖住工具栏 / 主体；遮罩 absolute inset_0 铺满面板根）
+            .children(self.sql_dialog_open.then(|| self.render_sql_dialog(cx)))
             .into_any_element()
     }
 
@@ -1425,16 +1549,70 @@ impl ResultPanel {
         cx.notify();
     }
 
-    /// 【右栏】标签页切换（列浏览器 / 值详情 / 计算 / 分组）
+    /// 【右栏】标签页切换（列浏览器 / 值详情 / 计算 / 分组 / 引用）。
+    /// 右栏收起时切页签会自动展开（DBeaver 口径：右缘竖条点图标即展开对应面板）。
     pub fn set_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) {
         self.right_tab = tab;
+        if !self.show_value_sidebar {
+            // 窄展开 / 收起态点页签图标 → 宽展开（竖条可见性保持；收起态在窄态已置 true）
+            self.edge_bar_visible = true;
+            self.show_value_sidebar = true;
+            self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
+        }
         cx.notify();
     }
 
-    /// 【侧栏】右侧辅助栏开关：只翻面板状态（网格数据不动）；epoch 递增让
-    /// 展开 / 收起宽度动画重播（首帧 epoch=0 免动画，见 `sidebar_width_anim`）
+    /// 【1.2】筛选框展开 / 收起（点击筛选组展开按钮 / 展开条收起按钮触发）
+    pub fn toggle_filter_expand(&mut self, cx: &mut Context<Self>) {
+        self.filter_expanded = !self.filter_expanded;
+        cx.notify();
+    }
+
+    /// 【2026-10-28 微调】SQL 预览**弹出窗口**：置 open 标志 + 懒建只读 Textarea 实体
+    /// （`TextareaState::new` 需要 window，走端口事件路径调用——面板 render 只有
+    /// &App 建不了）。SQL 变化时 `set_value` 刷新；render 期 `Textarea::new(&entity)`
+    /// 直接挂浮层（只需 &Entity）。
+    pub fn open_sql_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let sql = self
+            .exec_sql
+            .clone()
+            .or_else(|| self.result_sql.clone())
+            .unwrap_or_default();
+        if self.sql_textarea.is_none() {
+            let textarea = cx.new(|cx| TextareaState::new(window, cx).default_value(sql));
+            self.sql_textarea = Some(textarea);
+        } else if let Some(ta) = self.sql_textarea.clone() {
+            ta.update(cx, |state, cx| state.set_value(sql.clone(), window, cx));
+        }
+        self.sql_dialog_open = true;
+        cx.notify();
+    }
+
+    /// 【2026-10-28 微调】关闭 SQL 预览弹窗（✕ 按钮 / Esc 触发）
+    pub fn close_sql_dialog(&mut self, cx: &mut Context<Self>) {
+        self.sql_dialog_open = false;
+        cx.notify();
+    }
+
+    /// 【1.2】筛选框运行后宿主写入 wrapped SQL（执行完成后），并切到「执行SQL」页签    /// （右栏收起时自动展开——用户要在右侧栏看到执行 SQL）
+    pub fn set_exec_sql(&mut self, sql: Option<String>, cx: &mut Context<Self>) {
+        self.exec_sql = sql;
+        self.right_tab = RightTab::ExecSql;
+        if !self.show_value_sidebar {
+            self.edge_bar_visible = true;
+            self.show_value_sidebar = true;
+            self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
+        }
+        cx.notify();
+    }
+
+    /// 【侧栏】右侧开关：**三态循环**（比左侧多一个展开态；开关在状态栏右端）——
+    /// 收起（竖条 + 右栏都不显示）→ 窄展开（只显右缘竖条图标条）→ 宽展开（竖条 + 右栏
+    /// 内容）→ 收起。epoch 递增让宽度动画重播（首帧 epoch=0 免动画，见 `sidebar_width_anim`）
     pub fn toggle_value_sidebar(&mut self, cx: &mut Context<Self>) {
-        self.show_value_sidebar = !self.show_value_sidebar;
+        let (edge, show) = next_right_edge_state(self.edge_bar_visible, self.show_value_sidebar);
+        self.edge_bar_visible = edge;
+        self.show_value_sidebar = show;
         self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
         cx.notify();
     }
@@ -1663,8 +1841,8 @@ impl ResultPanel {
                             .label("网格")
                             .on_click({
                                 let queue = queue.clone();
-                                move |_, _window, _app| {
-                                    queue.push(ResultRequest::SetPresentation(Presentation::Grid));
+                                move |_, _window, app| {
+                                    queue.request(ResultRequest::SetPresentation(Presentation::Grid), app);
                                 }
                             }),
                     )
@@ -1717,8 +1895,8 @@ impl ResultPanel {
             .debug_selector(|| "editor-result-bar-grid".to_string())
             .toggled(!self.transposed && !is_text)
             .tooltip("网格视图")
-            .on_click(move |_, _window, _app| {
-                queue.push(ResultRequest::SetPresentation(Presentation::Grid));
+            .on_click(move |_, _window, app| {
+                queue.request(ResultRequest::SetPresentation(Presentation::Grid), app);
             });
         let queue = self.queue.clone();
         let text_btn = Button::new("editor-result-bar-text")
@@ -1728,8 +1906,8 @@ impl ResultPanel {
             .debug_selector(|| "editor-result-bar-text".to_string())
             .toggled(is_text)
             .tooltip("文本视图")
-            .on_click(move |_, _window, _app| {
-                queue.push(ResultRequest::SetPresentation(Presentation::Text));
+            .on_click(move |_, _window, app| {
+                queue.request(ResultRequest::SetPresentation(Presentation::Text), app);
             });
         let queue = self.queue.clone();
         let record_btn = Button::new("editor-result-bar-record")
@@ -1743,8 +1921,8 @@ impl ResultPanel {
             .disabled(is_text)
             .toggled(self.transposed)
             .tooltip("记录视图（单行转置）")
-            .on_click(move |_, _window, _app| {
-                queue.push(ResultRequest::ToggleTranspose);
+            .on_click(move |_, _window, app| {
+                queue.request(ResultRequest::ToggleTranspose, app);
             });
         // 记录视图激活时：竖条按钮下方跟上一行 / 下一行导航（与原工具栏转置组同功能，
         // 只是位置从顶部迁到竖条——动作仍是队列里的 TransposePrev / Next）。
@@ -1756,8 +1934,8 @@ impl ResultPanel {
                 .icon(IconName::ChevronUp)
                 .debug_selector(|| "editor-result-bar-record-prev".to_string())
                 .tooltip("上一行")
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::TransposePrev);
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::TransposePrev, app);
                 });
             let queue = self.queue.clone();
             let next = Button::new("editor-result-bar-record-next")
@@ -1766,8 +1944,8 @@ impl ResultPanel {
                 .icon(IconName::ChevronDown)
                 .debug_selector(|| "editor-result-bar-record-next".to_string())
                 .tooltip("下一行")
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::TransposeNext);
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::TransposeNext, app);
                 });
             div()
                 .v_flex()
@@ -1906,6 +2084,22 @@ impl ResultPanel {
         // 双击定位逻辑全在 [`crate::column_browser::ColumnBrowserDelegate`]（render 期
         // 只读实体挂元素，List 内部 prepare 时由 delegate 现算过滤结果）
         let browser = self.browser_list.clone();
+        // 【2026-10-28 微调】表头行：与 List 行（列名 flex_1 / 类型 flex_none / 眼睛操作列）
+        // 同 padding（px_3/py_1/gap_x_1 = kit ListItem 行内边距）对齐，列浏览器呈现
+        // "表格 + 内嵌操作行"形态（行渲染仍在 delegate，眼睛即行内操作）。
+        let table_head = div()
+            .h_flex()
+            .items_center()
+            .gap_x_1()
+            .px_3()
+            .py_1()
+            .border_b(ui::HAIRLINE)
+            .text_xs()
+            .text_color(muted)
+            .child(div().flex_1().min_w_0().child("列名"))
+            .child(div().flex_none().child("类型"))
+            .child(div().flex_none().child(""))
+            .into_any_element();
         let list_body: AnyElement = List::new(&browser)
             .with_size(Size::Small)
             .search_placeholder("搜索列名 / 类型 / 注释…")
@@ -1959,6 +2153,7 @@ impl ResultPanel {
                     .text_color(muted)
                     .child(SharedString::from(format!("列浏览器 · {} 列", columns.len()))),
             )
+            .child(table_head)
             .child(list_body)
             .child(
                 div()
@@ -1983,26 +2178,38 @@ impl ResultPanel {
     fn render_right_sidebar(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let show = self.show_value_sidebar;
-        let queue = self.queue.clone();
-        let labels = ["列浏览器", "值详情", "计算", "分组", "引用"];
-        let children: Vec<Tab> = labels
-            .iter()
-            .map(|label| Tab::new().label(SharedString::from(*label)))
+        // 【2026-10-28 微调】横 tab 栏**只显示当前点击的页签**（其他页签不显示）：
+        // 页签切换靠右缘竖条图标（render_right_edge_bar），横条只当「当前页签标题 +
+        // 关闭钮」使用（DBeaver 侧栏收起后只留边缘图标，展开时标题区极简）。
+        let active_tab = match self.right_tab {
+            RightTab::Browser => (IconName::Table2, "列浏览器"),
+            RightTab::Value => (IconName::Eye, "值详情"),
+            RightTab::Stats => (IconName::Sigma, "计算"),
+            RightTab::Group => (IconName::Funnel, "分组"),
+            RightTab::Reference => (IconName::Link, "引用"),
+            RightTab::ExecSql => (IconName::Braces, "执行SQL"),
+        };
+        let children: Vec<Tab> = std::iter::once(active_tab)
+            .map(|(icon, label)| {
+                Tab::new()
+                    .icon(icon)
+                    .label(SharedString::from(label))
+            })
             .collect();
         let tab_bar = TabBar::new("editor-result-right-tabs")
             .segmented()
             .with_size(Size::Small)
-            .selected_index(self.right_tab as usize)
+            .selected_index(0)
             .children(children)
-            .on_click(move |index, _window, _app| {
-                queue.push(ResultRequest::SetRightTab(right_tab_from_index(*index)));
-            });
+            // 单 tab 只作标题展示；页签切换在右缘竖条（render_right_edge_bar）
+            .on_click(move |_index, _window, _app| {});
         let content = match self.right_tab {
             RightTab::Browser => self.render_browser_tab(cx),
             RightTab::Value => self.render_value_tab(cx),
             RightTab::Stats => self.render_stats_tab(cx),
             RightTab::Group => self.render_group_tab(cx),
             RightTab::Reference => self.render_reference_tab(cx),
+            RightTab::ExecSql => self.render_exec_sql_tab(cx),
         };
         // 【页签关闭】非默认「列浏览器」页时，行尾给一个 ×：退回默认页（不收起右栏——
         // 拍板口径：× 只退页，右栏开合仍由工具栏「列浏览器」开关控制）。
@@ -2014,8 +2221,8 @@ impl ResultPanel {
                 .icon(IconName::X)
                 .debug_selector(|| "editor-result-right-tab-close".to_string())
                 .tooltip("关闭页签，返回列浏览器")
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::SetRightTab(RightTab::Browser));
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::SetRightTab(RightTab::Browser), app);
                 })
                 .into_any_element()
         });
@@ -2059,6 +2266,241 @@ impl ResultPanel {
             .into_any_element()
     }
 
+    /// 【2026-10-28 微调】右缘竖条：页签快捷图标区（列浏览器 / 值详情 / 计算 / 分组 /
+    /// 引用 / 执行SQL），点击切页签（右栏收起时自动展开，见 [`Self::set_right_tab`]），
+    /// 当前页签高亮。开合开关**已移到状态栏右端**（`right_switch` 三态：收起 / 窄展开 /
+    /// 宽展开），竖条顶部不再挂开关。
+    /// - 常驻固定宽度（与左缘竖条一致 `RESULT_VERTICAL_BAR_WIDTH`）；可见性由
+    ///   `edge_bar_visible` 决定（窄展开 = 只显本竖条；宽展开 = 竖条 + 右栏内容）。
+    fn render_right_edge_bar(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        // 页签快捷图标：与右栏页签同一组图标（见 render_right_sidebar）
+        let tabs = [
+            (RightTab::Browser, IconName::Table2, "列浏览器"),
+            (RightTab::Value, IconName::Eye, "值详情"),
+            (RightTab::Stats, IconName::Sigma, "计算"),
+            (RightTab::Group, IconName::Funnel, "分组"),
+            (RightTab::Reference, IconName::Link, "引用"),
+            (RightTab::ExecSql, IconName::Braces, "执行SQL"),
+        ];
+        let queue = self.queue.clone();
+        let active = self.right_tab;
+        div()
+            .h_full()
+            .flex_none()
+            .w(px(ui::RESULT_VERTICAL_BAR_WIDTH * 16.0))
+            .overflow_hidden()
+            .border_l(ui::HAIRLINE)
+            .bg(theme.colors.sidebar)
+            .debug_selector(|| "editor-result-right-edge-bar".to_string())
+            .v_flex()
+            .items_center()
+            .gap_1()
+            .pt_2()
+            .children(tabs.into_iter().map(|(tab, icon, label)| {
+                let queue = queue.clone();
+                Button::new(format!("editor-result-edge-{:?}", tab))
+                    .ghost()
+                    .small()
+                    .debug_selector(|| format!("editor-result-edge-{:?}", tab))
+                    .toggled(active == tab)
+                    .icon(icon)
+                    .tooltip(label)
+                    .on_click(move |_, _window, app| {
+                        queue.request(ResultRequest::SetRightTab(tab), app);
+                    })
+                    .into_any_element()
+            }))
+            .into_any_element()
+    }
+
+    /// 【1.2】顶宽筛选条：点击筛选组展开按钮后，工具栏下方全宽输入框
+    /// （suffix ▶ 运行）+ ✕ 清除 + 收起按钮 + 生成的 wrapped SQL 预览（词非空时）。
+    fn render_filter_expand_bar(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let run_queue = self.queue.clone();
+        let clear_queue = self.queue.clone();
+        let collapse_queue = self.queue.clone();
+        let collapse_queue2 = self.queue.clone();
+        // wrapped SQL 预览：词非空且有原 SQL 时拼 `select * from (原SQL) where 词`
+        let preview = (!self.filter_text.trim().is_empty() && self.result_sql.is_some()).then(|| {
+            let sql = self.result_sql.clone().unwrap_or_default();
+            let word = self.filter_text.trim();
+            let wrapped = format!("select * from ({}) as _q where {}", sql, word);
+            let preview_text: SharedString = if wrapped.len() > 80 {
+                format!("{}…", &wrapped[..80]).into()
+            } else {
+                wrapped.into()
+            };
+            div()
+                .min_w_0()
+                .truncate()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(preview_text)
+        });
+        div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .flex_none()
+            .min_h_0()
+            .border_b(ui::HAIRLINE)
+            .border_color(theme.colors.border)
+            .bg(theme.colors.background)
+            .px_2()
+            .py_1()
+            .text_xs()
+            .debug_selector(|| "editor-result-filter-expand-bar".to_string())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        // 【2026-10-28 微调（纠正）】输入框内两个内嵌组件：
+                        // **最左侧 = 展开**（prefix：Maximize2，点击收起筛选条，标识本框为
+                        // 展开态）；**最右侧 = 运行**（suffix：▶，wrapped 重查）；
+                        // 输入框无边框（bordered(false)，与工具栏融为搜索条风格）。
+                        Input::new(&self.filter_input)
+                            .bordered(false)
+                            .prefix(
+                                Button::new("editor-result-filter-expand-toggle")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::Maximize2)
+                                    .debug_selector(|| "editor-result-filter-expand-toggle".to_string())
+                                    .tooltip("收起筛选条（回到工具栏输入框）")
+                                    .on_click(move |_, _window, app| {
+                                        collapse_queue.request(ResultRequest::ToggleFilterExpand, app);
+                                    }),
+                            )
+                            .suffix(
+                                Button::new("editor-result-filter-expand-run")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::Play)
+                                    .debug_selector(|| "editor-result-filter-expand-run".to_string())
+                                    .tooltip("用 select * from (原SQL) where 词 重查（替换当前结果集）")
+                                    .on_click(move |_, _window, app| {
+                                        run_queue.request(ResultRequest::RunFilterAsQuery, app);
+                                    }),
+                            ),
+                    ),
+            )
+            .when(!self.filter_text.trim().is_empty(), |row| {
+                row.child(
+                    Button::new("editor-result-filter-expand-clear")
+                        .ghost()
+                        .small()
+                        .debug_selector(|| "editor-result-filter-expand-clear".to_string())
+                        .label("✕ 清除")
+                        .on_click(move |_, _window, app| {
+                            clear_queue.request(ResultRequest::ClearFilter, app);
+                        }),
+                )
+            })
+            .children(preview)
+            .child(
+                Button::new("editor-result-filter-expand-collapse")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Minimize)
+                    .debug_selector(|| "editor-result-filter-expand-collapse".to_string())
+                    .label("收起")
+                    .tooltip("回到工具栏输入框".to_string())
+                    .on_click(move |_, _window, app| {
+                        collapse_queue2.request(ResultRequest::ToggleFilterExpand, app);
+                    }),
+            )
+            .into_any_element()
+    }
+
+    /// 【2026-10-28 微调】SQL 预览**弹出窗口**（等效浮层：半透明遮罩 + 居中卡片 +
+    /// 只读 Textarea 展示原始 SQL）。不用 kit Dialog——`Dialog::new` 需 `&mut App`，
+    /// 面板 render 只有 `&App`（host 手动调 `result_panel.read(cx).render(cx)`）；
+    /// Textarea 实体已在事件路径预建（`TextareaState::new` 需要 window），render 期
+    /// 只需 `Textarea::new(&entity)`。两路关闭：关闭按钮 / Esc。
+    fn render_sql_dialog(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let close_queue = self.queue.clone();
+        let close_queue2 = self.queue.clone();
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            // 遮罩：半透明黑（深浅模式通用；theme.colors 无 scrim 字段）。无点击关闭
+            // （kit Div 无 on_click，交互走 ✕ 按钮 / Esc）
+            .bg(gpui::hsla(0., 0., 0., 0.45))
+            .debug_selector(|| "editor-result-sql-dialog".to_string())
+            .on_key_down(move |event, _window, app| {
+                if event.keystroke.key == "escape" {
+                    close_queue.request(ResultRequest::CloseSqlDialog, app);
+                }
+            })
+            .child(
+                div()
+                    .relative()
+                    .flex_col()
+                    .w(px(680.))
+                    .max_h(px(480.))
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .bg(theme.colors.background)
+                    .overflow_hidden()
+                    .debug_selector(|| "editor-result-sql-dialog-card".to_string())
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .justify_between()
+                            .px_3()
+                            .py_2()
+                            .border_b(ui::HAIRLINE)
+                            .border_color(theme.colors.border)
+                            .child(div().text_sm().child("原始 SQL"))
+                            .child(
+                                Button::new("editor-result-sql-dialog-close")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::X)
+                                    .debug_selector(|| "editor-result-sql-dialog-close".to_string())
+                                    .tooltip("关闭".to_string())
+                                    .on_click(move |_, _window, app| {
+                                        close_queue2.request(ResultRequest::CloseSqlDialog, app);
+                                    }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .p_3()
+                            .child(
+                                self.sql_textarea
+                                    .as_ref()
+                                    .map(|ta| {
+                                        Textarea::new(ta)
+                                            .readonly(true)
+                                            .h(px(360.))
+                                            .into_any_element()
+                                    })
+                                    .unwrap_or_else(|| {
+                                        div()
+                                            .p_4()
+                                            .text_color(theme.colors.muted_foreground)
+                                            .child("（无 SQL）")
+                                            .into_any_element()
+                                    }),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
     /// 【右栏】值详情页（数值查看器）：选中格的完整值 + 元数据（列名 / 类型 / 位置）。
     ///
     /// 与状态行「当前格值」的区别：状态行截断（防撑爆），这里**原样看全**
@@ -2095,12 +2537,21 @@ impl ResultPanel {
         };
         // 【#28-B4】位置标注：本地新增 / 复制行标「本地」，被删底层行标「已删除」；
         // 行号仍是视图行号（D6：不另造本地序号体系，身份靠标注与网格底色 / 删除线区分）。
-        let row_marker = if delegate.row_is_local(row) {
-            format!("第 {} 行 · 本地", row + 1)
-        } else if delegate.is_deleted_row(row) {
-            format!("第 {} 行 · 已删除", row + 1)
-        } else {
-            format!("第 {} 行", row + 1)
+        // 【2026-10-28 微调】第一行 = 值位置信息：行 + 列号（col 含行号槽，col==0 是行号
+        // 槽本身，无列号可标；普通列标「第 N 列」）。
+        let row_marker = {
+            let base = if col == 0 {
+                format!("第 {} 行", row + 1)
+            } else {
+                format!("第 {} 行 · 第 {} 列", row + 1, col)
+            };
+            if delegate.row_is_local(row) {
+                format!("{base} · 本地")
+            } else if delegate.is_deleted_row(row) {
+                format!("{base} · 已删除")
+            } else {
+                base
+            }
         };
         div()
             .flex_1()
@@ -2255,6 +2706,58 @@ impl ResultPanel {
         self.sidebar_empty("选中一个列查看外键引用", cx)
     }
 
+    /// 【1.2】「执行SQL」页签：筛选框运行后生成的 wrapped SQL 原文（只读 + 复制）。
+    fn render_exec_sql_tab(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let Some(sql) = self.exec_sql.clone() else {
+            return self.sidebar_empty("在工具栏筛选框输入词并点 ▶ 运行，生成 SQL 会显示在这里", cx);
+        };
+        let copy_queue = self.queue.clone();
+        div()
+            .v_flex()
+            .w_full()
+            .h_full()
+            .gap_2()
+            .p_2()
+            .debug_selector(|| "editor-result-exec-sql-tab".to_string())
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child(SharedString::from("生成的 SQL")),
+                    )
+                    .child(
+                        Button::new("editor-result-exec-sql-copy")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Copy)
+                            .label("复制")
+                            .tooltip("复制生成的 SQL".to_string())
+                            .on_click(move |_, _window, app| {
+                                copy_queue.request(ResultRequest::CopyExecSql, app);
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .bg(theme.colors.background)
+                    .p_2()
+                    .rounded_md()
+                    .text_xs()
+                    .text_color(theme.colors.foreground)
+                    .child(SharedString::from(sql)),
+            )
+            .into_any_element()
+    }
+
     /// 【侧栏】右栏各页共用的空态（居中灰字；页内容区 `flex_1`）
     fn sidebar_empty(&self, text: &str, cx: &App) -> AnyElement {
         div()
@@ -2355,9 +2858,19 @@ impl ResultPanel {
         self.status.as_ref()
     }
 
+    /// 当前呈现方式（网格 / 文本）——供测试断言左竖条按钮点击链路
+    pub fn presentation(&self) -> Presentation {
+        self.presentation
+    }
+
     /// 当前选中结果集的 SQL（「刷新」重跑它；`None` = 无可重跑）
     pub fn sql(&self) -> Option<&str> {
         self.result_sql.as_deref()
+    }
+
+    /// 【1.2】筛选框运行生成的 wrapped SQL（右栏「执行SQL」页签；`None` = 未运行过）
+    pub fn exec_sql(&self) -> Option<&str> {
+        self.exec_sql.as_deref()
     }
 
     /// 有没有可复制的东西（没网格不摆复制 / 转置 / 导出）
@@ -2482,13 +2995,17 @@ fn reorder_by(
 }
 
 /// 【右栏】页签下标 → 枚举（TabBar 回调用；与 `RightTab` 定义顺序一致——
-/// Browser=0 / Value=1 / Stats=2 / Group=3，对齐 DBeaver 右侧页签顺序）
+/// Browser=0 / Value=1 / Stats=2 / Group=3 / Reference=4 / ExecSql=5，
+/// 对齐 DBeaver 右侧页签顺序）
+/// 【2026-10-28 微调】生产横 tab 栏只显激活页签后，索引映射仅供测试用
+#[cfg(test)]
 fn right_tab_from_index(index: usize) -> RightTab {
     match index {
         1 => RightTab::Value,
         2 => RightTab::Stats,
         3 => RightTab::Group,
         4 => RightTab::Reference,
+        5 => RightTab::ExecSql,
         _ => RightTab::Browser,
     }
 }
@@ -2550,10 +3067,22 @@ fn sidebar_width_anim(epoch: u64, show: bool, full: Pixels) -> (Pixels, Pixels) 
     (from, to)
 }
 
+/// 【2026-10-28 微调】右侧开关三态转移（纯函数，`toggle_value_sidebar` 调用）：
+/// 收起 `(false,false)` → 窄展开 `(true,false)` → 宽展开 `(true,true)` → 收起。
+/// 返回值 = `(edge_bar_visible, show_value_sidebar)`；不变量：宽展开 ⟹ 竖条可见。
+fn next_right_edge_state(edge_bar_visible: bool, show_value_sidebar: bool) -> (bool, bool) {
+    match (edge_bar_visible, show_value_sidebar) {
+        (false, _) => (true, false),    // 收起 → 窄展开（只显右缘竖条图标条）
+        (true, false) => (true, true),  // 窄展开 → 宽展开（右栏内容出现）
+        (true, true) => (false, false), // 宽展开 → 收起（竖条与右栏一起隐去）
+    }
+}
+
 #[cfg(test)]
 mod tests {
     // 安全模式：不通配导入（`use gpui_kit::*` 会把 test 宏带进作用域导致 recursion limit）
     use crate::column_browser::filter_browser_columns;
+    use super::next_right_edge_state;
     use super::reorder_by;
     use super::right_tab_from_index;
     use super::sidebar_width_anim;
@@ -2581,8 +3110,6 @@ mod tests {
         (names, types, comments)
     }
 
-    /// 空词 / 纯空白 = 全量原序（隐藏列由渲染层置灰，过滤本身不剔列）
-    #[test]
     /// 侧栏宽度动画参数：首帧免动画（from==to）/ 展开 0→全宽 / 收起 全宽→0
     #[test]
     fn sidebar_width_anim_first_frame_and_directions() {
@@ -2604,6 +3131,23 @@ mod tests {
         assert_eq!(to, px(0.));
         // 类型约束（Pixels 参与计算，编译期校验）
         let _: (Pixels, Pixels) = sidebar_width_anim(2, true, full);
+    }
+
+    /// 右侧开关三态循环：收起 → 窄展开 → 宽展开 → 收起；每次点击恰好在三态间轮转
+    #[test]
+    fn right_edge_state_cycles_through_three_states() {
+        // 从宽展开（初始默认）出发，点击三次回原态
+        assert_eq!(next_right_edge_state(true, true), (false, false));
+        assert_eq!(next_right_edge_state(false, false), (true, false));
+        assert_eq!(next_right_edge_state(true, false), (true, true));
+        // 宽展开恒有竖条可见（不变量）
+        let (edge, show) = next_right_edge_state(true, false);
+        assert!(show);
+        assert!(edge);
+        // 收起态点击直接进窄展开，不跨到宽展开（比左侧多一个展开态：窄 = 只显图标条）
+        let (edge, show) = next_right_edge_state(false, false);
+        assert!(edge);
+        assert!(!show);
     }
 
     /// 空词 / 纯空白 = 全量原序（隐藏列由渲染层置灰，过滤本身不剔列）

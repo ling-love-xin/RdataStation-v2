@@ -102,6 +102,10 @@ pub struct EditorContext {
     /// 【遗留 #5】结果区分栏高度（rem；默认 18 = `editor::ui::RESULT_PANE_HEIGHT`）。
     /// 重启后结果区不该回到默认高度——用户拖出来的比例是**布局的一部分**。
     pub result_height: f32,
+    /// 【结果集 #296】结果集列序（列名逗号串；空串 = 默认序）。
+    /// 用户拖过列序后同文档重跑保持——按列名记（与列宽同口径，见 result_panel 的
+    /// column_widths）。结果面板自持运行时序，重启恢复走这里。
+    pub result_column_order: String,
     /// 更新时间
     pub updated_at_ms: u64,
 }
@@ -168,6 +172,7 @@ impl WorkbenchContextStore {
                     tab_size INTEGER NOT NULL DEFAULT 2,
                     hard_tabs INTEGER NOT NULL DEFAULT 0,
                     result_height REAL NOT NULL DEFAULT 18,
+                    result_column_order TEXT NOT NULL DEFAULT '',
                     updated_at_ms INTEGER NOT NULL
                 )",
                 [],
@@ -202,6 +207,13 @@ impl WorkbenchContextStore {
             ensure_column(conn, "editor_contexts", "hard_tabs", "INTEGER NOT NULL DEFAULT 0")?;
             // 【遗留 #5】老库也要能存结果区分栏高度（默认 18rem 与 editor 默认一致）
             ensure_column(conn, "editor_contexts", "result_height", "REAL NOT NULL DEFAULT 18")?;
+            // 【结果集 #296】老库也要能存结果集列序（空串 = 默认序）
+            ensure_column(
+                conn,
+                "editor_contexts",
+                "result_column_order",
+                "TEXT NOT NULL DEFAULT ''",
+            )?;
 
             Ok(())
         })
@@ -271,8 +283,8 @@ impl WorkbenchContextStore {
             conn.execute(
                 "INSERT OR REPLACE INTO editor_contexts
                  (id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
-                  toolbar, schema, tab_size, hard_tabs, result_height, updated_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                  toolbar, schema, tab_size, hard_tabs, result_height, result_column_order, updated_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     context.id,
                     context.connection_id,
@@ -287,6 +299,7 @@ impl WorkbenchContextStore {
                     context.tab_size as i64,
                     context.hard_tabs as i64,
                     context.result_height,
+                    context.result_column_order,
                     context.updated_at_ms as i64,
                 ],
             ).map_err(|e| CoreError::storage(StorageError::Persistence {
@@ -304,7 +317,7 @@ impl WorkbenchContextStore {
         self.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
-                        toolbar, schema, tab_size, hard_tabs, result_height, updated_at_ms
+                        toolbar, schema, tab_size, hard_tabs, result_height, result_column_order, updated_at_ms
                  FROM editor_contexts WHERE id = ?1"
             ).map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -327,7 +340,8 @@ impl WorkbenchContextStore {
                     tab_size: row.get::<_, i64>(10)? as usize,
                     hard_tabs: row.get::<_, i64>(11)? != 0,
                     result_height: row.get::<_, f64>(12)? as f32,
-                    updated_at_ms: row.get::<_, i64>(13)? as u64,
+                    result_column_order: row.get(13)?,
+                    updated_at_ms: row.get::<_, i64>(14)? as u64,
                 })
             }).optional().map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -348,7 +362,7 @@ impl WorkbenchContextStore {
             let mut stmt = conn
                 .prepare(
                     "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
-                            toolbar, schema, tab_size, hard_tabs, result_height, updated_at_ms
+                            toolbar, schema, tab_size, hard_tabs, result_height, result_column_order, updated_at_ms
                      FROM editor_contexts ORDER BY updated_at_ms DESC LIMIT 1",
                 )
                 .map_err(|e| {
@@ -375,7 +389,8 @@ impl WorkbenchContextStore {
                         tab_size: row.get::<_, i64>(10)? as usize,
                         hard_tabs: row.get::<_, i64>(11)? != 0,
                         result_height: row.get::<_, f64>(12)? as f32,
-                        updated_at_ms: row.get::<_, i64>(13)? as u64,
+                        result_column_order: row.get(13)?,
+                        updated_at_ms: row.get::<_, i64>(14)? as u64,
                     })
                 })
                 .optional()
@@ -400,7 +415,7 @@ impl WorkbenchContextStore {
             let mut stmt = conn
                 .prepare(
                     "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
-                            toolbar, schema, tab_size, hard_tabs, result_height, updated_at_ms
+                            toolbar, schema, tab_size, hard_tabs, result_height, result_column_order, updated_at_ms
                      FROM editor_contexts ORDER BY updated_at_ms DESC",
                 )
                 .map_err(|e| {
@@ -427,7 +442,8 @@ impl WorkbenchContextStore {
                         tab_size: row.get::<_, i64>(10)? as usize,
                         hard_tabs: row.get::<_, i64>(11)? != 0,
                         result_height: row.get::<_, f64>(12)? as f32,
-                        updated_at_ms: row.get::<_, i64>(13)? as u64,
+                        result_column_order: row.get(13)?,
+                        updated_at_ms: row.get::<_, i64>(14)? as u64,
                     })
                 })
                 .map_err(|e| {
@@ -581,6 +597,7 @@ mod tests {
             tab_size: 2,
             hard_tabs: false,
             result_height: 18.0,
+            result_column_order: String::new(),
             updated_at_ms: 1_700_000_000_000,
         }
     }

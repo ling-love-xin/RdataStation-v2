@@ -581,10 +581,28 @@ pub fn column_distinct_values(
     seen
 }
 
+/// 【文本视图】TSV 文本指纹（缓存 key）：任何影响文本输出的状态变化都会改变指纹。
+/// 指纹不依赖逐个方法标脏——排序 / 筛选 / 隐藏 / 数据行数变化都直接反映在上面；
+/// 内容型变更（set_data / set_local_snapshot 替换）在入口显式清缓存兜底。
+#[derive(Clone, PartialEq, Eq)]
+struct TextFingerprint {
+    col_count: usize,
+    view_len: usize,
+    hidden: Vec<usize>,
+    filter: String,
+    column_filter: Option<(usize, String)>,
+    sort: Option<(usize, bool)>,
+}
+
 /// 网格数据（表头 + 行）
 #[derive(Default)]
 pub struct ResultGridDelegate {
     columns: Vec<String>,
+    /// 【结果集 #296】列头拖拽后的**显示序**（列名数组；与 `columns` 无关——只记用户
+    /// 拖出来的顺序，供面板持久化 / 恢复时按列名重排）。`move_column` 是组件拖拽
+    /// 时调的 hook（`TableDelegate::move_column` 默认空），这里重排本数组即可；
+    /// 组件自身的 `col_groups` 已让渲染立即按新序走，delegate 不需要改渲染。
+    display_order: Vec<String>,
     rows: Vec<Vec<String>>,
     /// **每列的类型**（与 `columns` 同序；空 = 这份结果没带类型）
     ///
@@ -618,7 +636,12 @@ pub struct ResultGridDelegate {
     column_filter: Option<(usize, String)>,
     /// 【B15】本地排序（列下标按**数据列**算，`0` = 第一数据列；`None` = 原顺序）
     sort: Option<(usize, bool /* 降序 */)>,
-    /// 【B14】最近右键的单元格（视图行号，列下标含行号槽）——组件库没给访问器，
+    /// 【文本视图】TSV 缓存：指纹命中直接复用，避免大结果集每次渲染全量重拼
+    /// （bench：50k×8 一次拼 ~120ms，动画期间每帧重拼会卡住 UI——"点击文本
+    /// 半天才出来"的根因）。指纹覆盖影响文本的所有输入（视图行数 / 列数 /
+    /// 隐藏列 / 全局筛选 / 列筛选 / 排序），内容型变更（set_data、本地快照
+    /// 替换）在入口显式失效，双保险不依赖逐个方法标脏。
+    text_cache: std::cell::RefCell<Option<(TextFingerprint, String)>>,    /// 【B14】最近右键的单元格（视图行号，列下标含行号槽）——组件库没给访问器，
     /// 所以在 `render_td` 上自己记（事件从最内层开始派发，不会丢）
     context_cell: Option<(usize, usize)>,
     /// 【B15】冻结的数据列（原生 `Column.fixed`：横向滚动时钉在左侧）
@@ -702,6 +725,12 @@ impl ResultGridDelegate {
         }
     }
 
+    /// 【结果集 #296】当前显示序（列名数组；数据序 = 没拖过）。面板在
+    /// `TableEvent::MoveColumn` 订阅里读这份快照做持久化。
+    pub fn display_order(&self) -> Vec<String> {
+        self.display_order.clone()
+    }
+
     /// 换一批数据（结果集变化时从权威拷贝一次；网格不持有第二份真值）
     pub fn set_data(&mut self, columns: Vec<String>, rows: Vec<Vec<String>>) {
         // 【空态】0 行时塞一行全空数据：DataTable 组件在 rows=0 时切到 render_empty 不画表头，
@@ -714,6 +743,9 @@ impl ResultGridDelegate {
         };
         self.columns = columns;
         self.rows = rows;
+        // 【结果集 #296】新结果 = 新一批列：显示序重置为数据序（恢复重排在面板层做——
+        // set_data 前按持久化列名序重排 columns，这里以重排后的为准）
+        self.display_order = self.columns.clone();
         self.empty_text = "查询返回 0 行".to_string();
         // 换了一份结果，旧的排序与筛选不该跟过来（列都可能不是同一批）
         self.sort = None;
@@ -744,6 +776,8 @@ impl ResultGridDelegate {
         // 【#28】本地叠加层同理：换结果不套上一份的本地行（面板随后紧跟 set_local_snapshot）
         self.local = None;
         self.rebuild_view_rows();
+        // 【文本视图】换数据 = 文本输出失效（行数 / 列数可能没变但内容变了）
+        *self.text_cache.borrow_mut() = None;
     }
 
     /// 同步每列的类型（**与 `set_data` 同一次同步里、在它之后调**）
@@ -819,6 +853,8 @@ impl ResultGridDelegate {
     /// 注入后立即重算视图序列：本地行追加在底层行之后（筛选命中才出现，排序不参与）。
     pub fn set_local_snapshot(&mut self, local: Option<LocalRowSet>) {
         self.local = local;
+        // 【文本视图】本地行快照替换（含格内容编辑回写）不改变指纹里的行数，须显式失效
+        *self.text_cache.borrow_mut() = None;
         self.rebuild_view_rows();
     }
 
@@ -1162,7 +1198,32 @@ impl ResultGridDelegate {
     ///
     /// 列头 = 可见数据列名；行 = `visible_rows()`（已滤筛选 / 排序）按可见列取。
     /// 约定与导出一致：NULL 原样输出、Tab 分隔、行末不带 `\t`。隐藏列不参与。
+    /// 文本视图的整份 TSV（可见列头 + 可见行；隐藏列不参与；行序随筛选 / 排序）。
+    /// **缓存版**：指纹命中直接复用上次结果（bench：50k×8 一次拼 ~120ms，若每次
+    /// 渲染都重拼，动画 / 滚动期间会卡住 UI——用户"点击文本半天才出来"即此）。
+    /// 指纹变化（排序 / 筛选 / 隐藏 / 行数）自动失效；内容型变更（set_data /
+    /// set_local_snapshot）在入口显式清缓存。
     pub fn text_presentation(&self) -> String {
+        let fp = TextFingerprint {
+            col_count: self.columns.len(),
+            view_len: self.view_len(),
+            hidden: self.hidden.clone(),
+            filter: self.filter.clone(),
+            column_filter: self.column_filter.clone(),
+            sort: self.sort,
+        };
+        if let Some((cached_fp, text)) = &*self.text_cache.borrow() {
+            if cached_fp == &fp {
+                return text.clone();
+            }
+        }
+        let text = self.compute_text_presentation();
+        *self.text_cache.borrow_mut() = Some((fp, text.clone()));
+        text
+    }
+
+    /// 【文本视图】TSV 拼接本体（`text_presentation` 缓存未命中时调用）
+    fn compute_text_presentation(&self) -> String {
         let visible: Vec<usize> = (0..self.columns.len())
             .filter(|col| !self.hidden.contains(col))
             .collect();
@@ -2639,6 +2700,28 @@ impl TableDelegate for ResultGridDelegate {
         self.view_len()
     }
 
+    /// 【结果集 #296】列头拖拽：组件已让渲染按新序走（内部 `col_groups` 重排），
+    /// 这里只需把 `display_order` 同步成用户拖出来的显示序，供面板读取持久化。
+    /// `col_ix` / `to_ix` 是含行号槽的列下标（0 = 行号槽；跟 perform_sort 同一口径）。
+    fn move_column(
+        &mut self,
+        col_ix: usize,
+        to_ix: usize,
+        _window: &mut Window,
+        _cx: &mut Context<TableState<Self>>,
+    ) {
+        if self.transposed || Self::is_row_number(col_ix) || Self::is_row_number(to_ix) {
+            return;
+        }
+        let from = self.data_column(col_ix - 1);
+        let to = self.data_column(to_ix - 1);
+        if from >= self.display_order.len() || to >= self.display_order.len() {
+            return;
+        }
+        let moved = self.display_order.remove(from);
+        self.display_order.insert(to, moved);
+    }
+
     /// 【B15】列头点击排序：组件库已在它那边循环 `Default → Descending → Ascending`，
     /// 交到这里的已经是**新值**；本 delegate 只负责记住它并重算视图行序（本地排序，不重查）。
     /// `col_ix` 是含行号槽的列下标，折算成数据列。
@@ -3716,12 +3799,16 @@ pub struct ResultPane {
 /// - 右段纯按钮序列 → `toolbar::Toolbar` 组件（统一容器 + a11y；按钮已是标准 Button /
 ///   DropdownButton，经 `.contents()` 挂入，保留各自 ghost/small 外观）
 /// - 左段 = SQL 预览 + 本地筛选（非按钮内容，Toolbar child 只收 Sizable，走外层 content）
+/// - 【1.3 对齐】下发源库 / 注释两个 Switch 也收进右段 Toolbar（统一容器管高度与
+///   基线，避免 Switch 默认档与按钮小号高度不一致导致的错位）
 /// - 执行信息（行数/耗时/失败/血缘/连接…）**不在工具栏**：移入状态栏（见
-///   `render_status_row` 的 `summary` 参数）——用户口径：执行信息归结果集状态栏
+///   `render_status_row` 的 `memory` / `affected_rows` 参数）——用户口径：执行信息归结果集状态栏
 /// - 导出 / 刷新同样移入状态栏（左动作组系统段），工具栏不再摆
 pub fn render_toolbar(
-    toolbar: &ResultToolbar,
+    sql_preview: Option<AnyElement>,
     filter: Option<AnyElement>,
+    pushdown: Option<AnyElement>,
+    comments: Option<AnyElement>,
     compare: Option<AnyElement>,
     commit: Option<AnyElement>,
     analysis: Option<AnyElement>,
@@ -3753,40 +3840,21 @@ pub fn render_toolbar(
                 .items_center()
                 .gap_2()
                 .min_w_0()
-                // 【DBeaver 对齐】工具栏最左侧 SQL 预览（hover 看全文）
-                .children(toolbar.sql.clone().map(|sql| {
-                    let preview: SharedString = if sql.len() > 60 {
-                        format!("{}…", &sql[..60]).into()
-                    } else {
-                        sql.as_str().into()
-                    };
-                    div()
-                        .id("editor-result-sql-preview")
-                        .h_flex()
-                        .items_center()
-                        .gap_1()
-                        .text_xs()
-                        .text_color(muted)
-                        .truncate()
-                        .child(SharedString::from("SQL: "))
-                        .child(preview)
-                        .tooltip(move |window, cx| {
-                            Tooltip::new(sql.clone()).build(window, cx)
-                        })
-                        .into_any_element()
-                }))
+                // 【1.1】工具栏最左侧 SQL 预览：面板构造的可点击元素（Button 自带 hover
+                // 高亮 + 手型提示可点击；点击展开完整 SQL 条，见 panel.rs render）
+                .children(sql_preview)
                 // 执行信息（segments：行数/耗时/失败/血缘/连接…）已移状态栏（用户口径）
                 .children(filter),
         )
         .child(
             // 右段：纯按钮序列 → Toolbar 组件（统一容器 + a11y 语义；contents 槽收
             // AnyElement，按钮保留 ghost/small 外观；顺序照原型 §2.4 右段：
-            // ⌕ 筛选（左段）· ⧉ 对比 · 提交变更 · ⚗ 分析 ▾ · 复制；导出 ▾ / ⟳ 刷新
-            // 已移状态栏系统段）
+            // ⌕ 筛选（左段）· 下发源库 / 注释 switch · ⧉ 对比 · 提交变更 · ⚗ 分析 ▾ ·
+            // 复制；导出 ▾ / ⟳ 刷新已移状态栏系统段）
             Toolbar::new("editor-result-toolbar-actions")
                 .xsmall()
                 .contents(
-                    [compare, commit, analysis, copy]
+                    [pushdown, comments, compare, commit, analysis, copy]
                         .into_iter()
                         .flatten()
                         .collect::<Vec<_>>(),
@@ -3968,15 +4036,16 @@ pub fn render(
 }
 
 /// 【DBeaver 对齐】结果状态行（面板级第四行）：左动作组（写操作 ‖ 翻页 ‖ 系统）→
-/// 中段行数框 → 右段当前格 / 截断 / 选中行元信息。
+/// 中段行数框 → 右段执行信息（【状态栏三项】内存 / 查询时间 / 查询条数）。
 ///
 /// 从 `render` 里抽出（2026-10-28 面板四行布局）：状态栏从网格 pane 内提到面板级，
 /// 横跨左右栏之下；左端 / 右端由面板注入左右栏开关（`left_switch` / `right_switch`，
 /// `None` 不摆——文本视图无左栏语义时不注入左栏开关）。
+/// 2026-10-28 用户口径：状态栏信息只显示 内存 / 查询时间 / 查询条数，其它不显示。
 pub fn render_status_row(
     // 状态行（只有网格时才给）。2026-10-28 起写语句 / 失败也有状态栏（用户口径：
-    // 导出 / 刷新 / 执行信息都在状态栏），`None` 时跳过网格专属段（行数 / 当前格 /
-    // 截断提示），左动作组与系统段（导出 / 刷新）照常渲染
+    // 导出 / 刷新 / 执行信息都在状态栏），`None` 时跳过网格专属段（行数框只读文案），
+    // 左动作组与系统段（导出 / 刷新）照常渲染
     status: Option<&ResultStatus>,
     // 按值传入（移动）：状态动作按钮（more / fetch_all / 行级 / 撤销重做 / 导出 / 刷新）
     // 只在这里渲染，主 pane 不再读它们（面板解构后重组这份，见 panel.rs `render`）
@@ -3985,9 +4054,12 @@ pub fn render_status_row(
     elapsed_ms: Option<u64>,
     left_switch: Option<AnyElement>,
     right_switch: Option<AnyElement>,
-    // 【执行信息归状态栏】工具栏 segments 中状态栏右段不重复的部分（影响行 / 已筛选 /
-    // 失败 / 血缘 / 连接 / 事实档；行数与耗时由右段自己的文案覆盖，面板过滤后传入）
-    summary: &[String],
+    // 【状态栏三项】右段只显示 内存 / 查询时间 / 查询条数（用户口径 2026-10-28：
+    // 只留这三项，其它信息不显示）。内存文案由面板算好传入（内存档 fact_bytes →
+    // 「内存 X」；表档 / 无事实档 = None）；写语句影响行数单独传（有值时条数文案
+    // 用「影响 N 行」）。
+    memory: Option<String>,
+    affected_rows: Option<u32>,
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
@@ -3995,38 +4067,21 @@ pub fn render_status_row(
     let (left, _old_right) = status
         .map(status_segments)
         .unwrap_or_default();
-    // 【DBeaver 对齐】右段文案格式：... N 行已获取 · 耗时
-    let elapsed = elapsed_ms.map(|ms| format!("{}s", ms as f64 / 1000.0));
-    let rows = status
-        .map(|status| {
-            if status.has_more {
-                format!("{}+", thousands(status.total_rows))
-            } else {
-                thousands(status.total_rows)
-            }
-        })
-        .unwrap_or_default();
-    let right = match (rows.is_empty(), elapsed) {
-        (false, Some(elapsed)) => format!("... {} 行已获取 · {}", rows, elapsed),
-        (false, None) => format!("... {} 行已获取", rows),
-        // 无网格（写语句）：没有行数段；耗时也不在这摆（右段只出 summary 执行信息）
-        (true, _) => String::new(),
-    };
-    let fetch_hint = status.map(fetch_more_hint).flatten();
-    let truncation = status.map(truncation_notice).flatten();
-    let window_tip_text = status
-        .map(window_fetch_active)
-        .unwrap_or(false)
-        .then_some(WINDOW_FETCH_NOTICE)
-        .map(str::to_string);
-    // 防御组合（分段中同时挂截断信号）才留旧 hint；正常到底已由 truncation 接管
-    let legacy_hint = if truncation.is_none() {
-        status.and_then(|s| s.truncated_hint.clone())
-    } else {
-        None
-    };
-    let warning = theme.colors.warning;
     let border = theme.colors.border;
+    // 【状态栏三项】右段信息 = 内存 · 查询时间 · 查询条数
+    let mem_text = memory;
+    let elapsed = elapsed_ms.map(|ms| format!("耗时 {}", duration_text(ms)));
+    // 查询条数：写语句显示「影响 N 行」，网格显示「查询条数 N 行」（还有下一段 = N+）
+    let row_text = match affected_rows {
+        Some(affected) => Some(format!("影响 {} 行", thousands(affected as usize))),
+        None => status.map(|status| {
+            if status.has_more {
+                format!("查询条数 {}+ 行", thousands(status.total_rows))
+            } else {
+                format!("查询条数 {} 行", thousands(status.total_rows))
+            }
+        }),
+    };
 
     // 【#26 视图骨架】底部动作状态行三段：左动作组（占位灰钮 + 取下一段真钮）、
     // 中段只读行数框、右段当前格 / 截断 / 选中行元信息。占位钮全部 disabled，
@@ -4140,7 +4195,8 @@ pub fn render_status_row(
                     d.child(SharedString::from(left))
                 }),
         )
-        // 右·元信息：当前格预览 · 截断警告 · 已选行
+        // 右·元信息（【状态栏三项】只显示 内存 / 查询时间 / 查询条数，其它不显示；
+        // 右段弹性收缩 + 每项 truncate：宽度不足时截断而非重叠/溢出）
         .child(
             div()
                 .h_flex()
@@ -4148,73 +4204,29 @@ pub fn render_status_row(
                 .gap_2()
                 .min_w_0()
                 .ml_auto()
-                // 当前格值预览（DBeaver 对齐：状态行显示当前格，长值已由
-                // 编辑器截断；`·` 分隔避免与选中行文案粘连）
-                .when_some(
-                    status.and_then(|s| s.selected_cell.clone()),
-                    |row, value| {
-                        row.child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .child(SharedString::from(format!("· {}", value))),
-                        )
-                    },
-                )
-                // 【B5b】还有更多：次级说明；悬停看窗口分段代价（不等价于游标）。
-                // `.id(...)` 先把裸 div 转成 Stateful<Div>，tooltip 是交互态方法
-                .when_some(fetch_hint, |row, hint| {
-                    row.child(
-                        div()
-                            .id("editor-result-fetch-hint")
-                            .min_w_0()
-                            .truncate()
-                            .when_some(window_tip_text.clone(), |cell, tip| {
-                                let tip = tip.clone();
-                                cell.tooltip(move |window, cx| {
-                                    Tooltip::new(tip.clone()).build(window, cx)
-                                })
-                            })
-                            .child(SharedString::from(hint)),
-                    )
-                })
-                // 撞单段上限、已到底：警告色（数据不完整）；悬停看窗口代价
-                .when_some(truncation, |row, hint| {
-                    row.child(
-                        div()
-                            .id("editor-result-truncation")
-                            .min_w_0()
-                            .truncate()
-                            .text_color(warning)
-                            .when_some(window_tip_text.clone(), |cell, tip| {
-                                let tip = tip.clone();
-                                cell.tooltip(move |window, cx| {
-                                    Tooltip::new(tip.clone()).build(window, cx)
-                                })
-                            })
-                            .child(SharedString::from(hint)),
-                    )
-                })
-                // 防御组合：分段中同时挂截断信号时旧 hint 兜底显示（正常到底已走上面 notice）
-                .when_some(legacy_hint, |row, hint| {
+                .when_some(mem_text, |row, text| {
                     row.child(
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_color(warning)
-                            .child(SharedString::from(hint)),
+                            .child(SharedString::from(text)),
                     )
                 })
-                // 【执行信息归状态栏】工具栏 segments 的非重复部分（血缘 / 连接 / 失败 /
-                // 影响行 / 已筛选 / 事实档）——用户口径：执行信息在结果集状态栏，不在工具栏
-                .children(
-                    summary
-                        .iter()
-                        .map(|s| SharedString::from(s.clone())),
-                )
-                // 无网格（写语句）：右段没有“行数已获取”文案，只出 summary
-                .when(!right.is_empty(), |row| {
-                    row.child(SharedString::from(right))
+                .when_some(elapsed, |row, text| {
+                    row.child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .child(SharedString::from(text)),
+                    )
+                })
+                .when_some(row_text, |row, text| {
+                    row.child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .child(SharedString::from(text)),
+                    )
                 }),
         )
         // 最右：右栏开关（面板注入；`None` 不摆——文本视图无右栏语义时不注入）
@@ -6511,5 +6523,34 @@ mod tests {
         grid.apply_sort(Some((0, false)));
         assert_eq!(grid.visible_rows()[0][0], "2");
         assert_eq!(grid.visible_rows()[1][0], "10");
+    }
+
+    /// 【基准】文本视图 TSV 拼接：首拼全量 50k 行 ~120ms，指纹缓存命中后应接近 0
+    /// （hot 必须 < cold/10：缓存是文本视图切换流畅性的核心，防回归）。
+    #[test]
+    fn bench_text_presentation_large_set() {
+        let mut grid = ResultGridDelegate::default();
+        let cols: Vec<String> = (0..8).map(|i| format!("col{}", i)).collect();
+        let rows: Vec<Vec<String>> = (0..50_000)
+            .map(|r| (0..8).map(|c| format!("v{}:{}", r, c)).collect())
+            .collect();
+        grid.set_data(cols, rows);
+        let t0 = std::time::Instant::now();
+        let text = grid.text_presentation();
+        let cold = t0.elapsed();
+        let t1 = std::time::Instant::now();
+        let cached = grid.text_presentation();
+        let hot = t1.elapsed();
+        eprintln!(
+            "BENCH text_presentation 50k x 8: cold={:?} hot={:?} len={}",
+            cold,
+            hot,
+            text.len()
+        );
+        assert_eq!(text, cached, "同指纹命中缓存，文本一致");
+        assert!(
+            hot < cold / 10,
+            "缓存命中应远快于首拼（cold={cold:?} hot={hot:?}）"
+        );
     }
 }

@@ -150,7 +150,7 @@ impl ListDelegate for ColumnBrowserDelegate {
                 .tooltip(if hidden { "显示此列" } else { "隐藏此列" })
                 .on_click(move |_, _window, app| {
                     app.stop_propagation();
-                    queue.push(ResultRequest::ToggleColumnVisibility(data_col));
+                    queue.request(ResultRequest::ToggleColumnVisibility(data_col), app);
                 })
         };
 
@@ -298,9 +298,9 @@ impl ListDelegate for ColumnBrowserDelegate {
             .px_2()
             .text_xs()
             .child(content)
-            .on_click(move |e: &ClickEvent, _window, _app| {
+            .on_click(move |e: &ClickEvent, _window, app| {
                 if e.click_count() >= 2 {
-                    queue_double.push(ResultRequest::LocateColumn(data_col));
+                    queue_double.request(ResultRequest::LocateColumn(data_col), app);
                 }
             });
 

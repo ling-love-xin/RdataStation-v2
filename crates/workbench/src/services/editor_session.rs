@@ -76,6 +76,12 @@ impl WorkbenchSessionStore {
             //（结果区高度由结果面板自持）；engine 持久化列保留供旧库兼容，
             // 桥接层固定写列默认 18——editor 不再消费它。
             result_height: 18.0,
+            // 【结果集 #296】列序编码为逗号串（空串 = 没存过 → 默认序）
+            result_column_order: session
+                .result_column_order
+                .clone()
+                .unwrap_or_default()
+                .join(","),
             updated_at_ms: now_ms(),
         }
     }
@@ -102,6 +108,15 @@ impl WorkbenchSessionStore {
             // 缩进列总有值（默认 2 / false）：旧会话恢复成默认而不是不覆盖——列默认即语义默认
             tab_size: Some(context.tab_size),
             hard_tabs: Some(context.hard_tabs),
+            // 【结果集 #296】空串 = 没存过 → 默认序；非空按列名顺序恢复
+            result_column_order: (!context.result_column_order.is_empty())
+                .then(|| {
+                    context
+                        .result_column_order
+                        .split(',')
+                        .map(|column| column.to_string())
+                        .collect()
+                }),
         }
     }
 }
@@ -170,6 +185,7 @@ mod tests {
             schema: None,
             tab_size: None,
             hard_tabs: None,
+            result_column_order: None,
         }
     }
 
@@ -265,6 +281,27 @@ mod tests {
         row.selection_start = None;
         row.selection_end = None;
         assert_eq!(WorkbenchSessionStore::to_session(row).selection, None);
+    }
+
+    /// 【结果集 #296】列序以逗号串存库、按列名数组认回来；没存过 = 默认序
+    #[test]
+    fn the_result_column_order_travels_as_a_comma_list() {
+        let mut customized = session();
+        customized.result_column_order =
+            Some(vec!["name".to_string(), "id".to_string(), "created_at".to_string()]);
+        let row = WorkbenchSessionStore::to_context(&customized);
+        assert_eq!(row.result_column_order, "name,id,created_at");
+
+        let back = WorkbenchSessionStore::to_session(row);
+        assert_eq!(
+            back.result_column_order.as_deref(),
+            Some(&["name".to_string(), "id".to_string(), "created_at".to_string()][..]),
+            "按列名顺序原样回来"
+        );
+
+        // 空串 = 没存过 → 默认序（None）
+        let plain = WorkbenchSessionStore::to_session(WorkbenchSessionStore::to_context(&session()));
+        assert_eq!(plain.result_column_order, None, "空串 = 没拖过列序");
     }
 
     #[test]

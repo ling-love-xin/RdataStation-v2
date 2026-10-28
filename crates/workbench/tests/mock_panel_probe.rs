@@ -110,9 +110,8 @@ fn no_project_mock_panel_still_renders(cx: &mut TestAppContext) {
     cx.update(|_, app| shared.open_right_panel(RightPanel::Mock, app));
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    let icon = snap(cx, "right-activity-Mock 生成");
-    assert!(icon.visible(), "Mock 图标应高亮");
-
+    // 活动栏项已迁移为 `SidebarMenuItem`（0.8.1 组件无业务 id，旧 `right-activity-*`
+    // id 断言失效）：高亮由 `active(selected)` 承担，此处断言右 Dock 打开后的实际渲染。
     let dock = cx.update(|window, _| {
         window.try_find(ElementId::Name(SharedString::from("dock-area")))
     });

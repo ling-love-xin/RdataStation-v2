@@ -37,6 +37,11 @@ pub enum ResultRequest {
     ClearFilter,
     /// 下发源库开关翻转后的重查（开着时应用筛选会重查数据库）
     PushdownFilter { value: String },
+    /// 【1.2】筛选框运行按钮：用 `select * from (原SQL) where 词` **替换**当前结果集
+    /// 重查（词取面板实时筛选词）；生成 SQL 写入面板 `exec_sql`（右栏 ExecSql 页签展示）
+    RunFilterAsQuery,
+    /// 【1.2】筛选框展开 / 收起（点击展开按钮后出现顶宽筛选条）
+    ToggleFilterExpand,
     /// 批量提交待提交变更
     CommitPending,
     /// 批量撤销待提交变更
@@ -49,6 +54,14 @@ pub enum ResultRequest {
     CopyTsv,
     /// 复制来源 SQL（工具栏最左侧 SQL 预览点击）
     CopySql,
+    /// 【2026-10-28 微调】SQL 预览：点击工具栏 SQL 文本框弹出**窗口**显示原始 SQL
+    /// （kit Dialog + 只读 Textarea；面板在事件路径预建实体——render 期只有 &App，
+    /// `Dialog::new` 需 `&mut App`，走端口转手）
+    OpenSqlDialog,
+    /// 【2026-10-28 微调】关闭 SQL 预览弹窗（Dialog 关闭按钮 / 遮罩点击触发）
+    CloseSqlDialog,
+    /// 【1.2】复制「执行SQL」页签里的 wrapped SQL（筛选框运行生成的）
+    CopyExecSql,
     /// 刷新（重跑当前结果 SQL）
     Refresh,
     /// 取下一段
@@ -97,6 +110,9 @@ pub enum ResultRequest {
     /// `Some(name)` = 覆盖自动标签（空白串宿主侧归一为恢复 `结果 N`）；`None` = 恢复自动标签。
     /// 会话级，不落盘。
     RenameSet(usize, Option<String>),
+    /// 【结果集 #296】列头拖拽出新列序（列名数组，按显示序）——宿主持久化到会话
+    /// （跨会话恢复：同文档重跑按列名匹配重排）。空数组 = 不该发生（拖拽必有新序）。
+    ColumnOrderChanged { order: Vec<String> },
     /// 【C1】切换第 `index` 份结果集的钉住态（钉住不被 FIFO 淘汰；会话级）。
     TogglePin(usize),
     /// 【C1】进入第 `index` 份结果集的重命名态（面板弹输入框；输入确认后再发
@@ -137,6 +153,9 @@ pub enum RightTab {
     Group,
     /// 引用：外键引用查看（选中列被哪些表引用，对齐 DBeaver 引用页签；backlog 空态）
     Reference,
+    /// 【1.2】执行 SQL：筛选框运行后生成的 wrapped SQL（`select * from (原SQL) where …`）
+    /// 原文展示（只读 + 复制）。执行完成后自动切到此页签。
+    ExecSql,
 }
 
 /// 结果动作队列（`Rc<RefCell<Vec<_>>>` 共享句柄）
@@ -147,6 +166,11 @@ pub enum RightTab {
 #[derive(Clone, Debug, Default)]
 pub struct ResultActionQueue {
     inner: Rc<RefCell<Vec<ResultRequest>>>,
+    /// 【#8-按钮断链修复】通知目标（结果面板实体弱引用）。按钮 `request` 在
+    /// 入队后立即 `notify` 面板 → 宿主 `observe_in` 回调 drain。此前按钮只 `push`
+    /// 不通知，宿主 drain 依赖面板"碰巧"的 notify，点击要么延迟生效要么永不生效
+    /// （用户实测：记录按钮无反应、文本视图半天才切出来——同一根因）。
+    panel: Rc<std::cell::RefCell<Option<gpui_kit::WeakEntity<super::panel::ResultPanel>>>>,
 }
 
 impl ResultActionQueue {
@@ -155,7 +179,22 @@ impl ResultActionQueue {
         Self::default()
     }
 
-    /// 入队一条动作（渲染期调用；纯写，无副作用）
+    /// 【#8】宿主在面板实体创建后注入通知目标（弱引用，不产生循环）
+    pub fn set_panel(&self, panel: gpui_kit::WeakEntity<super::panel::ResultPanel>) {
+        *self.panel.borrow_mut() = Some(panel);
+    }
+
+    /// 【#8】入队并立即通知面板（按钮 `on_click` 专用：有 `&mut App`）：
+    /// `push` + `app.notify(&panel)`。通知触发宿主 `observe_in` 回调 → `drain_result_actions`
+    /// 在同一次事件里分派，点击即时生效。面板方法内部仍用纯 `push`（方法自身会 notify）。
+    pub fn request(&self, request: ResultRequest, app: &mut gpui_kit::App) {
+        self.inner.borrow_mut().push(request);
+        if let Some(panel) = self.panel.borrow().clone() {
+            app.notify(panel.entity_id());
+        }
+    }
+
+    /// 入队一条动作（面板方法内部调用：自身随后 notify；纯写，无副作用）
     pub fn push(&self, request: ResultRequest) {
         self.inner.borrow_mut().push(request);
     }
