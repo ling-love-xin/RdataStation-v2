@@ -13,6 +13,8 @@
 | `driver-capability-matrix.md` | 驱动能力**横向台账** | **谁连得上、看得见什么**：三条接入路径（原生 / 联邦 scanner / L3 桥接）与判据 / `DriverKind` 8 取值 vs 1 个实现 / 6 个原生驱动的引擎与备注 / **元数据内省覆盖矩阵（catalogs…触发器…例程源码）** / 能力位（事务·流式·Arrow·联邦）/ 补一个驱动要签的 4 个 trait / 联邦三层 scanner 与验收状态 / **空壳与死路（JDBC·WASM·Sidecar 死代码）** / 三步接新驱动 / 已知缺口 6 条 |
 | `data-layer-wiring-matrix.md` | 数据层**接线台账** | **有什么、谁在用、缺在哪**：判据四级（活 / 半接线 / 零调用 / 有意不做）/ 驱动接口面 / **L1 十三组 key 与 L2 十四张表的消费者逐行状态** / 持久化层方法面规模与纪律推论 / 缓存事实源纪律 / **缓做三项调查结论（稳定 ID 设计已回避 · L2 行类型转换点仍 1 处 · `dbi` 层 2100 行死代码与三套扩展清单）** / 本轮接线清单（含顺带修的两个坏 SQL）/ 已知缺口 6 条 |
 | `crate-ownership-proposal.html` | crate 归属 | app / workbench / settings / Feature / shared / 资产 归属示意 |
+| `file-meta/README.md` | 文件元信息（`rds-file-meta`）**模块入口** | **先读这个**：一句话定位（每个文件一份快照式 sidecar 元信息）/ 依赖方向（基础元数据 crate，无应用依赖）/ 当前状态（P0 全绿 · 方案 A · 第③步迁移）/ 验证命令 |
+| `file-meta/file-meta-design.md` | 文件元信息**设计与实现** | 需求（快照 / `extra` 扩展）/ sidecar 位置策略（默认同目录 + `_at` 自定义目录）/ 数据结构与 API / 消费方（editor 书签 · scratchpad 连接迁移）/ 实现状态 |
 | `module-status.md` | 模块状态与测试基线（**实测版**） | **全仓唯一一份「刚跑过」的台账**：工作区 `85 目标 / 2005 通过 / 0 失败 / 51 忽略`（另有「项目自身套件 84 目标 / 2004 项」口径）· 逐包基线（lib + 集成）· 工作台 32 个集成目标明细 · 模块接通状态 · 零调用清单 · **复现命令（含 rustup shim `Permission denied` 的绕行）** · 本轮实测发现（本机诊断脚本入库事件 / 失败目标的环境归因 / **两次复跑的漂移修正表**）· 维护约定 |
 | `layout/layout-proposal.html` | 布局示意（v5） | 五段布局最终共识的可视化示意 |
 | `layout/layout-design.md` | 布局方案 | 五段结构 / 三模式交互 / Quick Open / 改动清单 / 实施步骤 |
@@ -110,7 +112,7 @@
 
 ## 阅读顺序建议
 
-1. `overview.md` → 2. `crate-ownership-proposal.html` → 3. 按需进入 `layout/` / `quick_open/` / `theme/` / `settings/` / `connection/` / `database/` / `project/` / `scratchpad/` / `editor/` / `insight/` / `analytics_resource/` / `mock/` / `federation/` / `release/`
+1. `overview.md` → 2. `crate-ownership-proposal.html` → 3. 按需进入 `layout/` / `quick_open/` / `theme/` / `settings/` / `connection/` / `database/` / `project/` / `scratchpad/` / `editor/` / `file-meta/` / `insight/` / `analytics_resource/` / `mock/` / `federation/` / `release/`
 
 ## 模块文档集约定（每模块应具备的类型）
 
@@ -136,8 +138,10 @@
 | `analytics_resource/` | ✅ | ✅ | ✅ `analytics-resource-architecture.md`（本轮新增，兼语义裁决书） | ✅ | ✅ `analytics-resource-user-guide.md`（本轮新增） |
 | `mock/` | ✅（本轮新增） | ✅（自 v1 迁入） | ✅ `mock-architecture.md`（本轮新增） | ✅ `mock-dev-plan.md`（本轮新增） | ✅ `mock-user-guide.md` |
 | `federation/` | ✅（本轮新增） | ⬜ 缺交互稿（实现后补） | ✅ `federation-architecture.md`（本轮新增） | ✅ `federation-dev-plan.md`（本轮新增，**第一期未开工**） | ⬜ 缺使用手册（实现后补） |
+| `file-meta/`（基础元数据 crate，无 UI） | ⬜ 无 UI | ⬜ 无 UI | ✅ `file-meta-design.md`（本轮新增） | ✅ 实现随设计（`file-meta-design.md` §8 实现状态） | ⬜ 无 UI |
 
 > `layout/` / `theme/` / `ui/` / `dependencies/` 属**规格类**（单文档即可，不强制五件套）。
+> `file-meta/` 属**基础元数据 crate**（无 UI，`README.md` + `file-meta-design.md` 即可，原型 / 交互稿 / 使用手册不适用）。
 
 ### `settings/` 的定位（跨行）
 

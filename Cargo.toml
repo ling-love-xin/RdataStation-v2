@@ -22,7 +22,7 @@ members = [
     "crates/shared",
     "crates/settings",
     "crates/workbench_shell",
-    "crates/result_panel",
+    "crates/result_panel", "crates/file-meta",
 ]
 # 默认构建只覆盖 app 依赖图；plugin 的 wasm 轨（extism → wasmtime）已由 `wasm` feature
 # 门控、**默认不编译**（见 crates/plugin/Cargo.toml），裸 `cargo build/check/run` 不碰 wasmtime。
@@ -69,6 +69,8 @@ plugin = { path = "crates/plugin", package = "rds-plugin" }
 # 结果集面板（DBeaver Data Editor 方向）：结果域视图 + 结果存储独立成 crate，
 # 依赖方向 result_panel → {engine, gpui-kit, workbench_shell}，editor 依赖它、它不反向依赖 editor
 result_panel = { path = "crates/result_panel", package = "rds-result-panel" }
+# 文件元信息（Sidecar 快照：书签 / 连接 / 视图），编辑器书签接入
+file_meta = { path = "crates/file-meta", package = "rds-file-meta" }
 
 # ===== 表现层 =====
 # gpui-kit 与 gpui 版本强绑定：gpui-kit / gpui-base / gpui-component /
@@ -220,6 +222,8 @@ once_cell = "1.21.4"
 lru = "0.18.4"
 rand = "0.10.2"
 regex = "1.13.1"
+# 测试用临时目录（dev-dependency 专用；已在 Cargo.lock 作为传递依赖解析到 3.27.0）
+tempfile = "3.27.0"
 include_dir = "0.7.4"
 toml = "1.1.5"
 # flate2 曾于 2026-09-19 移除（metadata_cache 压缩分支零调用）；2026-10-15 随

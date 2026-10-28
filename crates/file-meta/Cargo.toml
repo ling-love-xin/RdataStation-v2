@@ -1,0 +1,17 @@
+[package]
+name = "rds-file-meta"
+version.workspace = true
+edition.workspace = true
+description = "RdataStation v2 file meta crate: 文件元信息（书签、上次连接、执行历史等），Sidecar 文件持久化"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+paths.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# 契约：凡依赖 `paths` 的成员，dev-deps 必须开启 test-support（测试数据根隔离）
+paths = { workspace = true, features = ["test-support"] }
