@@ -246,6 +246,13 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::EditorDefaultEncoding => {
             SettingValue::Text(settings.editor.default_encoding.clone())
         }
+        Slot::EditorFormatKeywordCase => {
+            SettingValue::Text(settings.editor.format_keyword_case.clone())
+        }
+        Slot::EditorFormatIndentWidth => {
+            SettingValue::Number(settings.editor.format_indent_width as f64)
+        }
+        Slot::EditorFormatOnSave => SettingValue::Bool(settings.editor.format_on_save),
         Slot::NavigatorSourceShortCode => SettingValue::Bool(settings.navigator.source_short_code),
         Slot::NavigatorShowTags => SettingValue::Bool(settings.navigator.show_tags),
         Slot::NavigatorShowScope => SettingValue::Bool(settings.navigator.show_scope),
@@ -270,6 +277,7 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::NavigatorGlobalMask => return None,
         Slot::NavigatorShowChips => SettingValue::Bool(settings.navigator.show_chips),
         Slot::NavigatorShowSearch => SettingValue::Bool(settings.navigator.show_search),
+        Slot::NavigatorAutoConnectStartup => SettingValue::Bool(settings.navigator.auto_connect_on_startup),
         Slot::ResourcesKeepVersions => {
             SettingValue::Number(settings.resources.keep_versions as f64)
         }
@@ -689,6 +697,18 @@ impl SettingsService {
                     return false;
                 };
                 Self::set_show_search(on, cx);
+            }
+            Slot::NavigatorAutoConnectStartup => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                // 启动时开关只在下次启动生效，不需要即时刷新窗口。
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.navigator.auto_connect_on_startup = on;
+                }
+                let settings = cx.global::<Settings>().clone();
+                persist(&settings);
             }
             // 复合值没有标量写入路径：拒绝而不是"猜一半"。
             Slot::NavigatorFilters
@@ -1272,6 +1292,48 @@ impl SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.editor.default_encoding = v.to_string();
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// SQL 格式化关键字大小写（`"preserve"` / `"upper"` / `"lower"`）。
+    pub fn format_keyword_case(cx: &App) -> String {
+        cx.global::<Settings>().editor.format_keyword_case.clone()
+    }
+
+    /// 设置 SQL 格式化关键字大小写：更新 global → 持久化。
+    pub fn set_format_keyword_case(v: &str, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.format_keyword_case = v.to_string();
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// SQL 格式化缩进宽度（空格数；2 = sqlglot 原生）。
+    pub fn format_indent_width(cx: &App) -> i64 {
+        cx.global::<Settings>().editor.format_indent_width
+    }
+
+    /// 设置 SQL 格式化缩进宽度：更新 global → 持久化。
+    pub fn set_format_indent_width(v: i64, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.format_indent_width = v;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 保存时自动格式化 SQL（默认关）。
+    pub fn format_on_save(cx: &App) -> bool {
+        cx.global::<Settings>().editor.format_on_save
+    }
+
+    /// 保存时自动格式化开关：更新 global → 持久化。
+    pub fn set_format_on_save(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.format_on_save = on;
         }
         persist(&cx.global::<Settings>().clone());
     }

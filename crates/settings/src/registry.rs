@@ -105,6 +105,12 @@ pub enum Slot {
     EditorShowLineNumbers,
     /// 【2026-10-27】代码折叠开关（标量布尔，默认开；设在设置页，编辑器 render 同步）。
     EditorShowFolds,
+    /// 【2026-10-28】基于缩进的折叠开关（标量布尔，默认开；设在设置页，编辑器 render 同步）。
+    EditorIndentFolds,
+    /// 【2026-10-28】自定义开块关键字列表（折叠用；逗号分隔）。
+    EditorFoldOpenKeywords,
+    /// 【2026-10-28】自定义闭块关键字列表（折叠用；逗号分隔）。
+    EditorFoldCloseKeywords,
     /// 【2026-10-27】软换行开关（标量布尔，默认开，与内核一致；设在设置页，编辑器 render 同步）。
     EditorSoftWrap,
     /// 【2026-10-27】自动闭合括号 / 引号（标量布尔，默认开；设在设置页，编辑器 render 同步）。
@@ -117,6 +123,12 @@ pub enum Slot {
     EditorDefaultHardTabs,
     EditorDefaultLineEnding,
     EditorDefaultEncoding,
+    /// 【2026-10-28】SQL 格式化关键字大小写（`"preserve"` / `"upper"` / `"lower"`）。
+    EditorFormatKeywordCase,
+    /// 【2026-10-28】SQL 格式化缩进宽度（空格数；2 = sqlglot 原生）。
+    EditorFormatIndentWidth,
+    /// 【2026-10-28】保存时自动格式化 SQL（默认关）。
+    EditorFormatOnSave,
     AppearanceFontSize,
     AppearanceLocale,
     AppearanceTabBarMaxWidth,
@@ -144,6 +156,8 @@ pub enum Slot {
     NavigatorShowChips,
     /// 导航树顶部文件搜索框显隐开关（合并分支新增字段，2026-10-28 补登记）。
     NavigatorShowSearch,
+    /// 启动时自动连接上次打开的连接（默认关，2026-10-28 补登记）。
+    NavigatorAutoConnectStartup,
     ResourcesKeepVersions,
     ResourcesDefaultSort,
     ResourcesCollapsedGroups,
@@ -198,6 +212,10 @@ pub enum Slot {
     LayoutLeftSidebarWidth,
     /// 右侧侧边栏宽度（默认 300px；render 时同步到 DockArea::set_dock_size）。
     LayoutRightSidebarWidth,
+    NotificationSuccessAutohideSecs,
+    NotificationWarningAutohideSecs,
+    NotificationErrorAutohide,
+    NotificationMergeWindowSecs,
 }
 
 /// key → 槽位（登记项都必须有槽位；由契约测试保证）。
@@ -206,6 +224,9 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "appearance.theme_mode" => Slot::AppearanceThemeMode,
         "editor.show_line_numbers" => Slot::EditorShowLineNumbers,
         "editor.show_folds" => Slot::EditorShowFolds,
+        "editor.indent_folding" => Slot::EditorIndentFolds,
+        "editor.fold_open_keywords" => Slot::EditorFoldOpenKeywords,
+        "editor.fold_close_keywords" => Slot::EditorFoldCloseKeywords,
         "editor.soft_wrap" => Slot::EditorSoftWrap,
         "editor.auto_close" => Slot::EditorAutoClose,
         "editor.smart_indent" => Slot::EditorSmartIndent,
@@ -214,6 +235,9 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "editor.default_hard_tabs" => Slot::EditorDefaultHardTabs,
         "editor.default_line_ending" => Slot::EditorDefaultLineEnding,
         "editor.default_encoding" => Slot::EditorDefaultEncoding,
+        "editor.format_keyword_case" => Slot::EditorFormatKeywordCase,
+        "editor.format_indent_width" => Slot::EditorFormatIndentWidth,
+        "editor.format_on_save" => Slot::EditorFormatOnSave,
         "appearance.font_size" => Slot::AppearanceFontSize,
         "appearance.locale" => Slot::AppearanceLocale,
         "appearance.tab_bar_max_width" => Slot::AppearanceTabBarMaxWidth,
@@ -232,6 +256,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "navigator.global_mask" => Slot::NavigatorGlobalMask,
         "navigator.show_chips" => Slot::NavigatorShowChips,
         "navigator.show_search" => Slot::NavigatorShowSearch,
+        "navigator.auto_connect_on_startup" => Slot::NavigatorAutoConnectStartup,
         "resources.keep_versions" => Slot::ResourcesKeepVersions,
         "resources.default_sort" => Slot::ResourcesDefaultSort,
         "resources.collapsed_groups" => Slot::ResourcesCollapsedGroups,
@@ -269,6 +294,10 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "layout.locked" => Slot::LayoutLocked,
         "layout.left_sidebar_width" => Slot::LayoutLeftSidebarWidth,
         "layout.right_sidebar_width" => Slot::LayoutRightSidebarWidth,
+        "notifications.success_autohide_secs" => Slot::NotificationSuccessAutohideSecs,
+        "notifications.warning_autohide_secs" => Slot::NotificationWarningAutohideSecs,
+        "notifications.error_autohide" => Slot::NotificationErrorAutohide,
+        "notifications.merge_window_secs" => Slot::NotificationMergeWindowSecs,
         _ => return None,
     })
 }
@@ -280,12 +309,14 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::EditorShowLineNumbers
         | Slot::EditorDefaultHardTabs
         | Slot::EditorShowFolds
+        | Slot::EditorIndentFolds
         | Slot::EditorSoftWrap
         | Slot::EditorAutoClose
         | Slot::EditorSmartIndent
         | Slot::EditorInlineCompletion => KindTag::Bool,
         Slot::EditorDefaultTabSize => KindTag::Number,
         Slot::EditorDefaultLineEnding | Slot::EditorDefaultEncoding => KindTag::Enum,
+        Slot::EditorFoldOpenKeywords | Slot::EditorFoldCloseKeywords => KindTag::Enum,
         Slot::AppearanceFontSize => KindTag::Number,
         Slot::AppearanceLocale => KindTag::Enum,
         Slot::AppearanceTabBarMaxWidth => KindTag::Number,
@@ -310,7 +341,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::NavigatorSavedViews => KindTag::Composite,
         Slot::NavigatorVisibleDatabases => KindTag::Composite,
         Slot::NavigatorGlobalMask => KindTag::Composite,
-        Slot::NavigatorShowChips | Slot::NavigatorShowSearch => KindTag::Bool,
+        Slot::NavigatorShowChips | Slot::NavigatorShowSearch | Slot::NavigatorAutoConnectStartup => KindTag::Bool,
         Slot::LanDisableTls => KindTag::BoolPair,
         Slot::ProjectSortMode => KindTag::Enum,
         Slot::LogMinLevel => KindTag::Enum,
@@ -341,6 +372,11 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         | Slot::ResultPanelColorBlob => KindTag::Enum,
         Slot::LayoutLocked => KindTag::Bool,
         Slot::LayoutLeftSidebarWidth | Slot::LayoutRightSidebarWidth => KindTag::Number,
+        // 【通知】三个秒数（0 = 不自动消失 / 不合并）是数值，错误自动消失是布尔。
+        Slot::NotificationSuccessAutohideSecs
+        | Slot::NotificationWarningAutohideSecs
+        | Slot::NotificationMergeWindowSecs => KindTag::Number,
+        Slot::NotificationErrorAutohide => KindTag::Bool,
     }
 }
 
@@ -389,10 +425,19 @@ pub struct SettingSpec {
     pub section: &'static str,
     /// 节的显示名。
     pub section_label: &'static str,
+    /// 节内子分组 id（页面把同节行按分组归入带标题的卡片；`None` = 单分组节）。
+    pub group: &'static str,
+    /// 子分组显示名（侧栏两级导航与分组卡片标题；`None` 表示该节无子分组，
+    /// 页面渲染为无名分组，对齐 gpui-kit demo 的 General 页）。
+    pub group_label: Option<&'static str>,
     /// 行标签（页面上那一行叫什么）。
     pub label: &'static str,
     /// 行说明（弱化小字；也承载"生效方式"这类边界说明）。
     pub hint: &'static str,
+    /// 说明的呈现方式：`true` = 行内常显小字；`false` = 不占行内空间，
+    /// 改为**悬停控件时以 HoverCard 提示**（适合 label 本身自明的好理解参数，
+    /// 让设置页更清爽）。
+    pub hint_inline: bool,
     pub kind: SettingKind,
     /// 数值项的预设档（`(落盘值, 显示名)`；空 = 无预设档）。
     ///
@@ -441,8 +486,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "appearance.theme_mode",
         section: "appearance",
         section_label: "外观",
+        group: "theme",
+        group_label: Some("主题与语言"),
         label: "主题模式",
         hint: "立即切换明暗配色并持久化；「跟随系统」随系统外观实时变化",
+        hint_inline: true,
         kind: SettingKind::Enum(&[("light", "浅色"), ("dark", "深色"), ("system", "跟随系统")]),
         presets: &[],
         default_json: "\"light\"",
@@ -456,8 +504,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "appearance.font_size",
         section: "appearance",
         section_label: "外观",
+        group: "theme",
+        group_label: Some("主题与语言"),
         label: "界面字号",
         hint: "整界面缩放（主题字号与窗口 rem 基准同步）；档位越小控件越紧凑，改完立即生效",
+        hint_inline: true,
         kind: SettingKind::Number,
         presets: &[
             (13, "13px"),
@@ -477,8 +528,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "appearance.locale",
         section: "appearance",
         section_label: "外观",
+        group: "theme",
+        group_label: Some("主题与语言"),
         label: "界面语言",
         hint: "中英双语界面文案即时切换并持久化（未登记词回退中文）",
+        hint_inline: false,
         kind: SettingKind::Enum(&[("zh", "中文"), ("en", "English")]),
         presets: &[],
         default_json: "\"zh\"",
@@ -492,8 +546,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "appearance.tab_bar_max_width",
         section: "appearance",
         section_label: "外观",
+        group: "tabbar",
+        group_label: Some("标签栏"),
         label: "标签栏最大宽度",
         hint: "窗口多 / 连接名长时的标签宽度上限（px）；标签文字省略，关闭按钮 ✕ 保持完整",
+        hint_inline: true,
         kind: SettingKind::Number,
         presets: &[
             (120, "120px"),
@@ -513,8 +570,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "appearance.tab_bar_variant",
         section: "appearance",
         section_label: "外观",
+        group: "tabbar",
+        group_label: Some("标签栏"),
         label: "标签栏样式",
         hint: "标签条形态：标签页 / 描边 / 胶囊 / 分段 / 下划线（对应 TabVariant 五态）",
+        hint_inline: false,
         kind: SettingKind::Enum(&[
             ("tab", "标签页"),
             ("outline", "描边"),
@@ -534,8 +594,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "editor.show_line_numbers",
         section: "editor",
         section_label: "编辑器",
+        group: "editing",
+        group_label: Some("编辑行为"),
         label: "显示行号",
         hint: "编辑区行号槽（已开文档立即生效；行号槽收窄的折叠入口不随此开关恢复）",
+        hint_inline: false,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "true",
@@ -549,8 +612,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "editor.show_folds",
         section: "editor",
         section_label: "编辑器",
+        group: "editing",
+        group_label: Some("编辑行为"),
         label: "代码折叠",
         hint: "显示/隐藏代码折叠（默认开；关闭时折叠槽与 chevron 一并消失，大文件档位仍自动降级）",
+        hint_inline: false,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "true",
@@ -561,11 +627,68 @@ pub const REGISTRY: &[SettingSpec] = &[
         disabled: false,
     },
     SettingSpec {
+        key: "editor.indent_folding",
+        section: "editor",
+        section_label: "编辑器",
+        group: "editing",
+        group_label: Some("编辑行为"),
+        label: "基于缩进的折叠",
+        hint: "VS Code 风格：只要下一行缩进比当前行大就出现折叠按钮（默认开；关闭后只保留括号和关键字折叠）",
+        hint_inline: true,
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/editor/src/view/host.rs::EditorHostPanel（render 同步 shared.indent_folding → sync_fold）",
+        composite: false,
+        disabled: false,
+    },
+    SettingSpec {
+        key: "editor.fold_open_keywords",
+        section: "editor",
+        section_label: "编辑器",
+        group: "editing",
+        group_label: Some("编辑行为"),
+        label: "折叠开块关键字",
+        hint: "逗号分隔的关键字列表，大写匹配（默认：CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT）",
+        hint_inline: true,
+        kind: SettingKind::Enum(&[]),
+        presets: &[],
+        default_json: "\"CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT\"",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/editor/src/view/host.rs::EditorHostPanel（render 同步 shared.fold_open_keywords → sync_fold）",
+        composite: false,
+        disabled: false,
+    },
+    SettingSpec {
+        key: "editor.fold_close_keywords",
+        section: "editor",
+        section_label: "编辑器",
+        group: "editing",
+        group_label: Some("编辑行为"),
+        label: "折叠闭块关键字",
+        hint: "逗号分隔的关键字列表，大写匹配（默认：END，含 END IF / END CASE 等复合词）",
+        hint_inline: true,
+        kind: SettingKind::Enum(&[]),
+        presets: &[],
+        default_json: "\"END\"",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/editor/src/view/host.rs::EditorHostPanel（render 同步 shared.fold_close_keywords → sync_fold）",
+        composite: false,
+        disabled: false,
+    },
+    SettingSpec {
         key: "editor.soft_wrap",
         section: "editor",
         section_label: "编辑器",
+        group: "editing",
+        group_label: Some("编辑行为"),
         label: "自动换行",
         hint: "长行是否软换行（默认开；关闭后长行横向滚动，状态栏不再挤占换行微标）",
+        hint_inline: false,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "true",
@@ -579,8 +702,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "editor.auto_close",
         section: "editor",
         section_label: "编辑器",
+        group: "editing",
+        group_label: Some("编辑行为"),
         label: "自动闭合括号",
         hint: "输入 ( [ { 与引号时自动补全另一半（默认开；关闭后需手动补全）",
+        hint_inline: false,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "true",
@@ -594,8 +720,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "editor.smart_indent",
         section: "editor",
         section_label: "编辑器",
+        group: "editing",
+        group_label: Some("编辑行为"),
         label: "智能缩进",
         hint: "回车后按括号结构与语言规则自动选择缩进（默认开；关闭后回车固定行首）",
+        hint_inline: true,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "true",
@@ -609,8 +738,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "editor.inline_completion",
         section: "editor",
         section_label: "编辑器",
+        group: "editing",
+        group_label: Some("编辑行为"),
         label: "AI 补全（Inline Completion）",
         hint: "输入停顿后由 AI 建议后续代码（灰字预览，Tab 接受）——能力已预留，当前版本暂不可用，放开后此开关立即生效",
+        hint_inline: true,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "false",
@@ -624,8 +756,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "editor.default_tab_size",
         section: "editor",
         section_label: "编辑器",
+        group: "defaults",
+        group_label: Some("新文档默认值"),
         label: "默认缩进",
         hint: "新文档的缩进宽度（空格数）；已开文档用「重设 ▾」单独改",
+        hint_inline: false,
         kind: SettingKind::Number,
         presets: &[
             (2, "2 空格"),
@@ -643,8 +778,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "editor.default_hard_tabs",
         section: "editor",
         section_label: "编辑器",
+        group: "defaults",
+        group_label: Some("新文档默认值"),
         label: "默认缩进用制表符",
         hint: "新文档缩进用 Tab（与「默认缩进」宽度并存：Tab = 该宽度）；已开文档用「重设 ▾」单独改",
+        hint_inline: false,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "false",
@@ -658,8 +796,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "editor.default_line_ending",
         section: "editor",
         section_label: "编辑器",
+        group: "defaults",
+        group_label: Some("新文档默认值"),
         label: "默认换行",
         hint: "新文档的换行符（LF / CRLF）；已开文档用「重设 ▾」单独改",
+        hint_inline: false,
         kind: SettingKind::Enum(&[("LF", "LF"), ("CRLF", "CRLF")]),
         presets: &[],
         default_json: "\"LF\"",
@@ -673,8 +814,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "editor.default_encoding",
         section: "editor",
         section_label: "编辑器",
+        group: "defaults",
+        group_label: Some("新文档默认值"),
         label: "默认编码",
         hint: "新文档的保存编码（与「重设 ▾」同一套编码档）；已开文档用「重设 ▾」单独改",
+        hint_inline: false,
         kind: SettingKind::Enum(&[
             ("UTF-8", "UTF-8"),
             ("UTF-8-BOM", "UTF-8 (BOM)"),
@@ -691,11 +835,72 @@ pub const REGISTRY: &[SettingSpec] = &[
         disabled: false,
     },
     SettingSpec {
+        key: "editor.format_keyword_case",
+        section: "editor",
+        section_label: "编辑器",
+        group: "format",
+        group_label: Some("SQL 格式化"),
+        label: "关键字大小写",
+        hint: "格式化后关键字统一大小写（保留原样 / 大写 / 小写）；只改关键字，字符串与注释内容不受影响",
+        hint_inline: false,
+        kind: SettingKind::Enum(&[
+            ("preserve", "保持原样"),
+            ("upper", "大写"),
+            ("lower", "小写"),
+        ]),
+        presets: &[],
+        default_json: "\"preserve\"",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/editor/src/view/host.rs::EditorHostPanel::format_document（读设置注入 FormatOptions）",
+        composite: false,
+        disabled: false,
+    },
+    SettingSpec {
+        key: "editor.format_indent_width",
+        section: "editor",
+        section_label: "编辑器",
+        group: "format",
+        group_label: Some("SQL 格式化"),
+        label: "缩进宽度",
+        hint: "格式化后行首缩进空格数（2 = sqlglot 原生；仅作用于格式化输出，多行字符串内的缩进不受影响）",
+        hint_inline: false,
+        kind: SettingKind::Enum(&[("2", "2 空格"), ("4", "4 空格"), ("8", "8 空格")]),
+        presets: &[],
+        default_json: "2",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/editor/src/view/host.rs::EditorHostPanel::format_document（读设置注入 FormatOptions）",
+        composite: false,
+        disabled: false,
+    },
+    SettingSpec {
+        key: "editor.format_on_save",
+        section: "editor",
+        section_label: "编辑器",
+        group: "format",
+        group_label: Some("SQL 格式化"),
+        label: "保存时自动格式化",
+        hint: "Ctrl+S 落盘前先格式化（解析不了的部分原样保留）；仅 SQL / 通用模式生效",
+        hint_inline: false,
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "false",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/editor/src/view/host.rs::EditorHostPanel（保存流程先 format_document 再落盘）",
+        composite: false,
+        disabled: false,
+    },
+    SettingSpec {
         key: "navigator.source_short_code",
         section: "navigator",
         section_label: "数据源导航",
+        group: "names",
+        group_label: Some("名称与标签"),
         label: "来源标识",
         hint: "连接行右端显示短码或文字（同一列，宽度随模式切换）",
+        hint_inline: false,
         kind: SettingKind::BoolPair {
             on: "短码 P/G/GP",
             off: "文字（项目 / 全局 / 共享）",
@@ -712,8 +917,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "navigator.show_tags",
         section: "navigator",
         section_label: "数据源导航",
+        group: "names",
+        group_label: Some("名称与标签"),
         label: "显示标签",
         hint: "连接行名称下方最多 2 个标签 chip，其余折叠为 +N",
+        hint_inline: false,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "false",
@@ -727,8 +935,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "navigator.show_scope",
         section: "navigator",
         section_label: "数据源导航",
+        group: "names",
+        group_label: Some("名称与标签"),
         label: "显示归属域",
         hint: "「来源标识」的一部分：行尾右对齐的归属域列（可独立于短码开关关闭；关闭后整列隐藏）",
+        hint_inline: true,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "true",
@@ -742,8 +953,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "navigator.show_name_type_short",
         section: "navigator",
         section_label: "数据源导航",
+        group: "names",
+        group_label: Some("名称与标签"),
         label: "连接名称显示类型简称",
         hint: "名称前以方括号显示类型简称（如 `[MY] 192.168.3.138`；简称表可在「类型简称映射…」弹窗维护，默认同徽标缩写）",
+        hint_inline: true,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "true",
@@ -757,8 +971,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "navigator.filters",
         section: "navigator",
         section_label: "数据源导航",
+        group: "filter",
+        group_label: Some("过滤与视图"),
         label: "facet 筛选",
         hint: "归属域 / 类型 / 驱动 / 标签筛选（导航面板内 chips 与「筛选 ▾」）",
+        hint_inline: true,
         kind: SettingKind::Composite,
         presets: &[],
         default_json: "{\"source\":null,\"db_type\":null,\"driver\":null,\"tag\":null}",
@@ -772,8 +989,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "navigator.saved_views",
         section: "navigator",
         section_label: "数据源导航",
+        group: "filter",
+        group_label: Some("过滤与视图"),
         label: "已保存视图",
         hint: "命名 facet 快照列表（导航面板 ⋯ 菜单「将当前筛选存为视图…」保存、子菜单应用）",
+        hint_inline: true,
         kind: SettingKind::Composite,
         presets: &[],
         default_json: "{}",
@@ -787,8 +1007,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "navigator.visible_databases",
         section: "navigator",
         section_label: "数据源导航",
+        group: "filter",
+        group_label: Some("过滤与视图"),
         label: "可见库白名单",
         hint: "每连接的可见库白名单（空 / 未设置 = 默认隐藏系统库与系统 schema；设置后原样展示白名单，含系统对象）。连接行右键「数据库可见性…」维护",
+        hint_inline: true,
         kind: SettingKind::Composite,
         presets: &[],
         default_json: "{}",
@@ -799,11 +1022,68 @@ pub const REGISTRY: &[SettingSpec] = &[
         disabled: false,
     },
     SettingSpec {
+        key: "navigator.global_mask",
+        section: "navigator",
+        section_label: "数据源导航",
+        group: "filter",
+        group_label: Some("过滤与视图"),
+        label: "全局对象名过滤器",
+        hint: "面板内全部连接对象名的兜底 glob 过滤（include/exclude 每行一条，exclude 优先于 include）；空规则 = 不启用，与每连接 mask 取 AND。经导航面板 ⋯ 菜单「全局对象名过滤器…」维护",
+        hint_inline: true,
+        kind: SettingKind::Composite,
+        presets: &[],
+        default_json: "{\"include\":[],\"exclude\":[],\"use_regex\":false}",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Module,
+        consumer: "workbench/src/components/object_mask_dialog.rs + database/src/nav_view/actions.rs / rows.rs（每连接 mask 与全局 mask 叠加过滤）",
+        composite: true,
+        disabled: false,
+    },
+    SettingSpec {
+        key: "navigator.show_search",
+        section: "navigator",
+        section_label: "数据源导航",
+        group: "filter",
+        group_label: Some("过滤与视图"),
+        label: "导航文件搜索框显隐",
+        hint: "导航树顶部文件搜索输入框是否显示（合并分支新增字段，2026-10-28 补登记）。读写走导航面板工具栏开关",
+        hint_inline: false,
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Module,
+        consumer: "database/src/nav_view/（导航树顶部搜索框显隐）",
+        composite: false,
+        disabled: false,
+    },
+    SettingSpec {
+        key: "navigator.auto_connect_on_startup",
+        section: "navigator",
+        section_label: "数据源导航",
+        group: "filter",
+        group_label: Some("过滤与视图"),
+        label: "启动时自动连接上次打开的连接",
+        hint: "应用启动时是否自动连接上次展开的连接（默认关）。开启后启动后台建连，用户无需手动点击",
+        hint_inline: false,
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "false",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Module,
+        consumer: "database/src/nav_view/actions.rs（prewarm_expanded_connections 开头判断）",
+        composite: false,
+        disabled: false,
+    },
+    SettingSpec {
         key: "navigator.row_estimate",
         section: "navigator",
         section_label: "数据源导航",
+        group: "inline",
+        group_label: Some("行内信息"),
         label: "行估计徽标",
         hint: "表/视图行尾显示后台回填的行数估计（≈ N）；关闭后不排估计任务、不显示徽标。PG 取 reltuples、MySQL 取 TABLE_ROWS，其余驱动不支持",
+        hint_inline: false,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "true",
@@ -817,8 +1097,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "navigator.show_inline_stats",
         section: "navigator",
         section_label: "数据源导航",
+        group: "inline",
+        group_label: Some("行内信息"),
         label: "表行统计徽标",
         hint: "表/视图行右侧统计徽标总开关（注释副标、≈ KB 大小、分区·继承等）；关闭则全部不显，子开关语义不冲突",
+        hint_inline: false,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "true",
@@ -832,8 +1115,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "navigator.show_inline_comment",
         section: "navigator",
         section_label: "数据源导航",
+        group: "inline",
+        group_label: Some("行内信息"),
         label: "表行注释副标",
         hint: "表/视图行显示对象注释副标（总开关开时仍受此开关）",
+        hint_inline: false,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "true",
@@ -847,8 +1133,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "navigator.show_inline_size",
         section: "navigator",
         section_label: "数据源导航",
+        group: "inline",
+        group_label: Some("行内信息"),
         label: "表行大小徽标",
         hint: "表/视图行显示 ≈ KB 大小徽标（总开关开时仍受此开关）",
+        hint_inline: false,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "true",
@@ -859,26 +1148,14 @@ pub const REGISTRY: &[SettingSpec] = &[
         disabled: false,
     },
     SettingSpec {
-        key: "navigator.global_mask",
-        section: "navigator",
-        section_label: "数据源导航",
-        label: "全局对象名过滤器",
-        hint: "面板内全部连接对象名的兜底 glob 过滤（include/exclude 每行一条，exclude 优先于 include）；空规则 = 不启用，与每连接 mask 取 AND。经导航面板 ⋯ 菜单「全局对象名过滤器…」维护",
-        kind: SettingKind::Composite,
-        presets: &[],
-        default_json: "{\"include\":[],\"exclude\":[],\"use_regex\":false}",
-        effect: SettingEffect::Immediate,
-        entry: SettingEntry::Module,
-        consumer: "workbench/src/components/object_mask_dialog.rs + database/src/nav_view/actions.rs / rows.rs（每连接 mask 与全局 mask 叠加过滤）",
-        composite: true,
-        disabled: false,
-    },
-    SettingSpec {
         key: "navigator.show_chips",
         section: "navigator",
         section_label: "数据源导航",
+        group: "inline",
+        group_label: Some("行内信息"),
         label: "连接行标签 chip 常显",
         hint: "连接行尾部标签 chip 是否常显；关闭时悬停/选中才出现（合并分支新增字段，2026-10-28 补登记）。读写走导航面板 ⋯ 菜单「显示标签」开关",
+        hint_inline: false,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "false",
@@ -889,26 +1166,14 @@ pub const REGISTRY: &[SettingSpec] = &[
         disabled: false,
     },
     SettingSpec {
-        key: "navigator.show_search",
-        section: "navigator",
-        section_label: "数据源导航",
-        label: "导航文件搜索框显隐",
-        hint: "导航树顶部文件搜索输入框是否显示（合并分支新增字段，2026-10-28 补登记）。读写走导航面板工具栏开关",
-        kind: SettingKind::Bool,
-        presets: &[],
-        default_json: "true",
-        effect: SettingEffect::Immediate,
-        entry: SettingEntry::Module,
-        consumer: "database/src/nav_view/（导航树顶部搜索框显隐）",
-        composite: false,
-        disabled: false,
-    },
-    SettingSpec {
         key: "resources.keep_versions",
         section: "resources",
         section_label: "资产库",
+        group: "resources",
+        group_label: None,
         label: "历史内容保留",
         hint: "每份存档保留几份历史内容副本（版本行永久保留，界面上以「副本缺失」标注）；对之后的归档 / 版本还原生效",
+        hint_inline: true,
         kind: SettingKind::Number,
         presets: &[
             (0, "只留元数据"),
@@ -928,8 +1193,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "resources.default_sort",
         section: "resources",
         section_label: "资产库",
+        group: "resources",
+        group_label: None,
         label: "默认排序",
         hint: "资产的列表排序字段（在面板里点排序会记住上次的选择；方向按字段惯例：名称升序，时间 / 大小 / 版本降序）",
+        hint_inline: true,
         kind: SettingKind::Enum(&[
             ("name", "名称"),
             ("archived_at", "归档时间"),
@@ -949,8 +1217,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "resources.collapsed_groups",
         section: "resources",
         section_label: "资产库",
+        group: "resources",
+        group_label: None,
         label: "分组折叠状态",
         hint: "每个项目里折叠了哪些分组（面板内点击即记；按项目分开存，换项目各归各的）",
+        hint_inline: true,
         kind: SettingKind::Composite,
         presets: &[],
         default_json: "{}",
@@ -964,8 +1235,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "resources.default_group",
         section: "resources",
         section_label: "资产库",
+        group: "resources",
+        group_label: None,
         label: "默认分组",
         hint: "归档时预选哪个分组（分组头右键里设；按项目分开存，未设 = 未分组）",
+        hint_inline: true,
         kind: SettingKind::Composite,
         presets: &[],
         default_json: "{}",
@@ -979,8 +1253,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "connection_defaults.connect_timeout_ms",
         section: "connection",
         section_label: "连接默认值",
+        group: "connection",
+        group_label: None,
         label: "建连超时",
         hint: "超时判定本次尝试失败并自动重试一次；对之后新建的连接生效",
+        hint_inline: true,
         kind: SettingKind::Number,
         presets: &[
             (5_000, "5s"),
@@ -999,8 +1276,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "connection_defaults.lan_disable_tls",
         section: "connection",
         section_label: "连接默认值",
+        group: "connection",
+        group_label: None,
         label: "LAN 直连 TLS",
         hint: "LAN / 本机直连时显式关闭 TLS（规避 sqlx 默认 prefer 的握手卡顿）；公网不受影响",
+        hint_inline: true,
         kind: SettingKind::BoolPair {
             on: "关 TLS",
             off: "保留 TLS",
@@ -1017,8 +1297,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "projects.sort_mode",
         section: "projects",
         section_label: "项目",
+        group: "projects",
+        group_label: None,
         label: "列表排序",
         hint: "项目选择器的排序方式（选择器内也有循环按钮）",
+        hint_inline: false,
         kind: SettingKind::Enum(&[
             ("last_opened", "最近打开"),
             ("name", "名称"),
@@ -1036,8 +1319,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "logging.min_level",
         section: "logging",
         section_label: "日志",
+        group: "logging",
+        group_label: None,
         label: "日志级别",
         hint: "低于该级别的记录不写文件也不落库（改完立即生效；排障时可临时调成 DEBUG）",
+        hint_inline: true,
         kind: SettingKind::Enum(&[
             ("TRACE", "TRACE"),
             ("DEBUG", "DEBUG"),
@@ -1057,8 +1343,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "startup.default_left_panel",
         section: "startup",
         section_label: "启动",
+        group: "startup",
+        group_label: None,
         label: "启动时默认显示的模块",
         hint: "应用启动时左侧栏默认停在哪一个模块（活动栏也可以随时切换）",
+        hint_inline: false,
         kind: SettingKind::Enum(&[
             ("database", "数据库导航"),
             ("draft", "草稿箱"),
@@ -1077,8 +1366,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "scratchpad.toolbar",
         section: "scratchpad",
         section_label: "草稿箱",
+        group: "scratchpad",
+        group_label: None,
         label: "工具栏按钮（显示/隐藏与位置）",
         hint: "⋯ 更多设置：每个按钮可切换显示/隐藏与左/右位置；空配置 = 全部显示 + 默认位置（左 5 右 2）；改完立即生效并持久化",
+        hint_inline: true,
         kind: SettingKind::Composite,
         presets: &[],
         default_json: "{}",
@@ -1092,8 +1384,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "scratchpad.group_max_h",
         section: "scratchpad",
         section_label: "草稿箱",
+        group: "scratchpad",
+        group_label: None,
         label: "分区高度上限",
         hint: "草稿/引用/回收站可拖拽分区的高度上限（rems，默认 7.5 = 面板默认）；拖拽 handle 写回（B3 新增，2026-10-28 补登记）。不上设置页，读写走分区拖拽 handle",
+        hint_inline: true,
         kind: SettingKind::Number,
         presets: &[],
         default_json: "7.5",
@@ -1107,8 +1402,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "insight.memory_limit_mb",
         section: "insight",
         section_label: "洞察",
+        group: "insight",
+        group_label: None,
         label: "分析引擎内存上限",
         hint: "内存 DuckDB（洞察 / 结果集 / Mock 临时表共享）的内存上限（MB）；超限溢写到磁盘临时目录；改完立即生效，已在内存的数据不因此释放",
+        hint_inline: true,
         kind: SettingKind::Number,
         presets: &[
             (512, "512 MB"),
@@ -1128,8 +1426,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "insight.full_scan_confirm",
         section: "insight",
         section_label: "洞察",
+        group: "insight",
+        group_label: None,
         label: "全量统计前确认",
         hint: "源目标切「全量」口径前先弹确认（大表全量会慢且占内存）；关闭后点「全量统计」直接执行",
+        hint_inline: true,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "true",
@@ -1143,8 +1444,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "insight.work_set_limit",
         section: "insight",
         section_label: "洞察",
+        group: "insight",
+        group_label: None,
         label: "工作集提示阈值",
         hint: "洞察集合内表数超过该值，集合卡以警告色提示先清理（集合表跳过 TTL / 上限清理，一直占内存）；0 = 不提示",
+        hint_inline: true,
         kind: SettingKind::Number,
         presets: &[
             (0, "不提示"),
@@ -1164,8 +1468,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "insight.status_usage",
         section: "insight",
         section_label: "洞察",
+        group: "insight",
+        group_label: None,
         label: "显示内存占用",
         hint: "中间页工具栏显示分析引擎内存占用（「内存 X MB / 上限 · 临时表 N」）；关闭后停止轮询采样",
+        hint_inline: false,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "true",
@@ -1179,8 +1486,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "result_panel.fact_storage",
         section: "result_panel",
         section_label: "结果集面板",
+        group: "data",
+        group_label: Some("数据与显示"),
         label: "事实档载体",
         hint: "进分析 / 带类型导出 / 表格快照时事实数据的存放方式：自动按估算水位分流（8 MiB 上界 / 3 MiB 滞回线）；强制内存档常驻 Rust 堆；强制表档进 DuckDB 常驻表（表档 B 批接通，未接通时按降级档处理）；网格渲染与文本导出不受此偏好影响",
+        hint_inline: true,
         kind: SettingKind::Enum(&[
             ("auto", "自动"),
             ("memory", "内存档"),
@@ -1198,8 +1508,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "result_panel.show_column_comments",
         section: "result_panel",
         section_label: "结果集面板",
+        group: "data",
+        group_label: Some("数据与显示"),
         label: "列头直接显示注释",
         hint: "开启后列名下方第二行小字显示字段注释（截短 + 悬停看全）；关闭时注释只在列头悬停 tooltip 里。面板工具栏另有临时开关可覆盖此偏好",
+        hint_inline: true,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "false",
@@ -1213,8 +1526,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "result_panel.show_type_badge",
         section: "result_panel",
         section_label: "结果集面板",
+        group: "data",
+        group_label: Some("数据与显示"),
         label: "列头显示类型徽标",
         hint: "开启后列名前显示类型符号徽标（123=数字、Aa=字符、◷=日期、✓=布尔、01=二进制）",
+        hint_inline: false,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "true",
@@ -1225,57 +1541,14 @@ pub const REGISTRY: &[SettingSpec] = &[
         disabled: false,
     },
     SettingSpec {
-        key: "result_panel.loop_selection",
-        section: "result_panel",
-        section_label: "结果集面板",
-        label: "键盘循环选择",
-        hint: "键盘导航到末尾后循环回开头（关闭则到末尾停止）",
-        kind: SettingKind::Bool,
-        presets: &[],
-        default_json: "true",
-        effect: SettingEffect::NextUse,
-        entry: SettingEntry::Page,
-        consumer: "crates/result_panel/src/grid.rs::new_table_state（TableState::loop_selection）",
-        composite: false,
-        disabled: false,
-    },
-    SettingSpec {
-        key: "result_panel.select_on_modifier_click",
-        section: "result_panel",
-        section_label: "结果集面板",
-        label: "Ctrl+点击多选",
-        hint: "开启后 Ctrl+点击可多选行/列/单元格",
-        kind: SettingKind::Bool,
-        presets: &[],
-        default_json: "true",
-        effect: SettingEffect::NextUse,
-        entry: SettingEntry::Page,
-        consumer: "crates/result_panel/src/grid.rs::new_table_state（TableState::select_on_modifier_click）",
-        composite: false,
-        disabled: false,
-    },
-    SettingSpec {
-        key: "result_panel.persist_column_widths",
-        section: "result_panel",
-        section_label: "结果集面板",
-        label: "列宽跨会话持久化",
-        hint: "开启后列宽记忆跨会话保留；关闭则只在当前会话内记忆",
-        kind: SettingKind::Bool,
-        presets: &[],
-        default_json: "true",
-        effect: SettingEffect::NextUse,
-        entry: SettingEntry::Page,
-        consumer: "crates/result_panel/src/grid.rs::column_widths（会话内记忆；跨会话持久化 backlog）",
-        composite: false,
-        disabled: false,
-    },
-    // ===== 类型样式设置（2026-10-28 拍板：按类型族 / 全局统一 / 预设色板） =====
-    SettingSpec {
         key: "result_panel.number_format",
         section: "result_panel",
         section_label: "结果集面板",
+        group: "data",
+        group_label: Some("数据与显示"),
         label: "数字显示格式",
         hint: "数字族（整数 / 浮点 / 定点小数）的显示格式：原始值 / 千分位 / 两位小数 / 科学计数。只影响网格显示，复制与导出仍用原始值",
+        hint_inline: true,
         kind: SettingKind::Enum(&[
             ("raw", "原始值"),
             ("grouped", "千分位"),
@@ -1294,8 +1567,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "result_panel.null_placeholder",
         section: "result_panel",
         section_label: "结果集面板",
+        group: "data",
+        group_label: Some("数据与显示"),
         label: "NULL 显示占位",
         hint: "NULL 值的显示占位（判定仍按原始值 `NULL`；灰斜体渲染不变）：NULL 原文 / ∅ / 破折号",
+        hint_inline: true,
         kind: SettingKind::Enum(&[
             ("null", "NULL"),
             ("emptyset", "∅"),
@@ -1313,8 +1589,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "result_panel.bool_display",
         section: "result_panel",
         section_label: "结果集面板",
+        group: "data",
+        group_label: Some("数据与显示"),
         label: "布尔显示映射",
         hint: "布尔列的显示形态：true/false / 是/否 / 1/0（等宽字体渲染不变）",
+        hint_inline: true,
         kind: SettingKind::Enum(&[
             ("true_false", "true / false"),
             ("cn", "是 / 否"),
@@ -1329,11 +1608,68 @@ pub const REGISTRY: &[SettingSpec] = &[
         disabled: false,
     },
     SettingSpec {
+        key: "result_panel.loop_selection",
+        section: "result_panel",
+        section_label: "结果集面板",
+        group: "interaction",
+        group_label: Some("选择与操作"),
+        label: "键盘循环选择",
+        hint: "键盘导航到末尾后循环回开头（关闭则到末尾停止）",
+        hint_inline: false,
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::NextUse,
+        entry: SettingEntry::Page,
+        consumer: "crates/result_panel/src/grid.rs::new_table_state（TableState::loop_selection）",
+        composite: false,
+        disabled: false,
+    },
+    SettingSpec {
+        key: "result_panel.select_on_modifier_click",
+        section: "result_panel",
+        section_label: "结果集面板",
+        group: "interaction",
+        group_label: Some("选择与操作"),
+        label: "Ctrl+点击多选",
+        hint: "开启后 Ctrl+点击可多选行/列/单元格",
+        hint_inline: false,
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::NextUse,
+        entry: SettingEntry::Page,
+        consumer: "crates/result_panel/src/grid.rs::new_table_state（TableState::select_on_modifier_click）",
+        composite: false,
+        disabled: false,
+    },
+    SettingSpec {
+        key: "result_panel.persist_column_widths",
+        section: "result_panel",
+        section_label: "结果集面板",
+        group: "interaction",
+        group_label: Some("选择与操作"),
+        label: "列宽跨会话持久化",
+        hint: "开启后列宽记忆跨会话保留；关闭则只在当前会话内记忆",
+        hint_inline: false,
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::NextUse,
+        entry: SettingEntry::Page,
+        consumer: "crates/result_panel/src/grid.rs::column_widths（会话内记忆；跨会话持久化 backlog）",
+        composite: false,
+        disabled: false,
+    },
+    SettingSpec {
         key: "result_panel.align_numeric",
         section: "result_panel",
         section_label: "结果集面板",
+        group: "align",
+        group_label: Some("对齐"),
         label: "对齐：数字",
         hint: "数字族的对齐覆盖（继承 = 数字默认右对齐）",
+        hint_inline: true,
         kind: SettingKind::Enum(&[
             ("inherit", "继承默认"),
             ("left", "左对齐"),
@@ -1352,8 +1688,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "result_panel.align_text",
         section: "result_panel",
         section_label: "结果集面板",
+        group: "align",
+        group_label: Some("对齐"),
         label: "对齐：文本",
         hint: "文本族（文本 / JSON / UUID / 未知）的对齐覆盖（继承 = 左对齐）",
+        hint_inline: true,
         kind: SettingKind::Enum(&[
             ("inherit", "继承默认"),
             ("left", "左对齐"),
@@ -1372,8 +1711,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "result_panel.align_temporal",
         section: "result_panel",
         section_label: "结果集面板",
+        group: "align",
+        group_label: Some("对齐"),
         label: "对齐：时间",
         hint: "时间族（时间戳 / 日期 / 时间）的对齐覆盖（继承 = 左对齐 + 等宽）",
+        hint_inline: true,
         kind: SettingKind::Enum(&[
             ("inherit", "继承默认"),
             ("left", "左对齐"),
@@ -1392,8 +1734,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "result_panel.align_bool",
         section: "result_panel",
         section_label: "结果集面板",
+        group: "align",
+        group_label: Some("对齐"),
         label: "对齐：布尔",
         hint: "布尔族的对齐覆盖（继承 = 左对齐 + 等宽）",
+        hint_inline: true,
         kind: SettingKind::Enum(&[
             ("inherit", "继承默认"),
             ("left", "左对齐"),
@@ -1412,8 +1757,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "result_panel.align_blob",
         section: "result_panel",
         section_label: "结果集面板",
+        group: "align",
+        group_label: Some("对齐"),
         label: "对齐：BLOB",
         hint: "BLOB 族的对齐覆盖（继承 = 左对齐；BLOB 摘要格）",
+        hint_inline: true,
         kind: SettingKind::Enum(&[
             ("inherit", "继承默认"),
             ("left", "左对齐"),
@@ -1432,8 +1780,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "result_panel.color_numeric",
         section: "result_panel",
         section_label: "结果集面板",
+        group: "color",
+        group_label: Some("着色"),
         label: "前景色：数字",
         hint: "数字族的前景色角色（预设色板从主题语义 token 派生，明暗主题自动适配；继承 = 不染色）",
+        hint_inline: true,
         kind: SettingKind::Enum(&[
             ("inherit", "不染色"),
             ("info", "信息蓝"),
@@ -1455,8 +1806,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "result_panel.color_text",
         section: "result_panel",
         section_label: "结果集面板",
+        group: "color",
+        group_label: Some("着色"),
         label: "前景色：文本",
         hint: "文本族的前景色角色（预设色板从主题语义 token 派生；继承 = 不染色）",
+        hint_inline: true,
         kind: SettingKind::Enum(&[
             ("inherit", "不染色"),
             ("info", "信息蓝"),
@@ -1478,8 +1832,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "result_panel.color_temporal",
         section: "result_panel",
         section_label: "结果集面板",
+        group: "color",
+        group_label: Some("着色"),
         label: "前景色：时间",
         hint: "时间族的前景色角色（预设色板从主题语义 token 派生；继承 = 不染色）",
+        hint_inline: true,
         kind: SettingKind::Enum(&[
             ("inherit", "不染色"),
             ("info", "信息蓝"),
@@ -1501,8 +1858,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "result_panel.color_bool",
         section: "result_panel",
         section_label: "结果集面板",
+        group: "color",
+        group_label: Some("着色"),
         label: "前景色：布尔",
         hint: "布尔族的前景色角色（预设色板从主题语义 token 派生；继承 = 不染色）",
+        hint_inline: true,
         kind: SettingKind::Enum(&[
             ("inherit", "不染色"),
             ("info", "信息蓝"),
@@ -1524,8 +1884,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "result_panel.color_blob",
         section: "result_panel",
         section_label: "结果集面板",
+        group: "color",
+        group_label: Some("着色"),
         label: "前景色：BLOB",
         hint: "BLOB 族的前景色角色（预设色板从主题语义 token 派生；继承 = 不染色）",
+        hint_inline: true,
         kind: SettingKind::Enum(&[
             ("inherit", "不染色"),
             ("info", "信息蓝"),
@@ -1548,8 +1911,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "layout.locked",
         section: "layout",
         section_label: "布局",
+        group: "layout",
+        group_label: None,
         label: "锁定布局",
         hint: "开启后用户不能通过拖动调整面板大小或位置",
+        hint_inline: false,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "false",
@@ -1563,8 +1929,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "layout.left_sidebar_width",
         section: "layout",
         section_label: "布局",
+        group: "layout",
+        group_label: None,
         label: "左侧侧边栏宽度",
         hint: "左侧面板的默认宽度（px）；上方示意图显示占比",
+        hint_inline: false,
         kind: SettingKind::Number,
         presets: &[
             (200, "200px"),
@@ -1583,8 +1952,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "layout.right_sidebar_width",
         section: "layout",
         section_label: "布局",
+        group: "layout",
+        group_label: None,
         label: "右侧侧边栏宽度",
         hint: "右侧面板的默认宽度（px）；上方示意图显示占比",
+        hint_inline: false,
         kind: SettingKind::Number,
         presets: &[
             (250, "250px"),
@@ -1604,8 +1976,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "notifications.success_autohide_secs",
         section: "notifications",
         section_label: "通知",
+        group: "notifications",
+        group_label: None,
         label: "成功/信息自动消失",
         hint: "操作成功、普通信息类通知自动消失的秒数；0 = 不自动消失",
+        hint_inline: false,
         kind: SettingKind::Number,
         presets: &[
             (0, "不自动消失"),
@@ -1624,8 +1999,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "notifications.warning_autohide_secs",
         section: "notifications",
         section_label: "通知",
+        group: "notifications",
+        group_label: None,
         label: "警告自动消失",
         hint: "警告类通知自动消失的秒数；0 = 不自动消失",
+        hint_inline: false,
         kind: SettingKind::Number,
         presets: &[
             (0, "不自动消失"),
@@ -1644,8 +2022,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "notifications.error_autohide",
         section: "notifications",
         section_label: "通知",
+        group: "notifications",
+        group_label: None,
         label: "错误自动消失",
         hint: "错误类通知是否自动消失；默认关闭（必须手动关闭），避免漏掉错误",
+        hint_inline: true,
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "false",
@@ -1659,8 +2040,11 @@ pub const REGISTRY: &[SettingSpec] = &[
         key: "notifications.merge_window_secs",
         section: "notifications",
         section_label: "通知",
+        group: "notifications",
+        group_label: None,
         label: "同类通知合并窗口",
         hint: "短时间内连续多个同类通知合并成一个计数（如批量连接时）；0 = 不合并",
+        hint_inline: true,
         kind: SettingKind::Number,
         presets: &[
             (0, "不合并"),
@@ -1684,8 +2068,11 @@ pub fn spec(key: &str) -> Option<&'static SettingSpec> {
 
 /// 节清单（按登记顺序去重）——页面的分节导航直接用它，顺序不由视图另定。
 pub fn sections() -> Vec<(&'static str, &'static str)> {
+    // 只返回**上页**的节：导航只列出有实际内容的分节页面。
+    // 纯 Module 节（如草稿箱，其设置全在面板本地菜单/拖拽 handle 上）不进导航，
+    // 否则会渲染一个空页面。顺序按登记顺序去重。
     let mut out: Vec<(&'static str, &'static str)> = Vec::new();
-    for s in REGISTRY {
+    for s in page_rows() {
         if !out.iter().any(|(id, _)| *id == s.section) {
             out.push((s.section, s.section_label));
         }
@@ -1699,6 +2086,21 @@ pub fn section_label(id: &str) -> Option<&'static str> {
         .iter()
         .find(|s| s.section == id)
         .map(|s| s.section_label)
+}
+
+/// 一个节内的子分组（按登记顺序去重）：页面按它生成分组卡片，侧栏据它生成两级导航。
+///
+/// `label` 为 `None` 的单分组节（如布局 / 资产库）渲染为**无名**分组卡片，
+/// 对齐 gpui-kit demo 的 General 页；多分组节（外观 / 编辑器 / 数据源导航 / 结果集面板）
+/// 每个分组带标题。
+pub fn page_groups(section: &str) -> Vec<(&'static str, Option<&'static str>)> {
+    let mut out: Vec<(&'static str, Option<&'static str>)> = Vec::new();
+    for s in page_rows() {
+        if s.section == section && !out.iter().any(|(id, _)| *id == s.group) {
+            out.push((s.group, s.group_label));
+        }
+    }
+    out
 }
 
 /// 上设置页的行（`entry` 非 `Module`）；页面只渲染这些。
@@ -1927,7 +2329,18 @@ mod tests {
                 current = Some(s.section);
             }
         }
-        assert_eq!(sections().len(), seen.len(), "节清单与登记表不一致");
+        // 导航只列出有上页内容的节：纯 Module 节（如草稿箱）不渲染空页面。
+        let page_section_count = REGISTRY
+            .iter()
+            .filter(|s| s.entry != SettingEntry::Module)
+            .map(|s| s.section)
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        assert_eq!(
+            sections().len(),
+            page_section_count,
+            "导航只应列出有上页内容的节（纯 Module 节应被排除）"
+        );
         for (id, label) in sections() {
             assert_eq!(
                 section_label(id),
@@ -1946,6 +2359,65 @@ mod tests {
             "page_rows 与 entry 分类不一致（页面会多渲染或少渲染行）"
         );
         assert!(page_rows().next().is_some(), "页面至少要有一行");
+    }
+
+    /// 分组（gpui-kit demo 两级导航）：每行必须归入某分组；同节分组不能被打断
+    /// （A → B → A）；同一 `(节, 分组)` 的显示名必须一致；`page_groups` 与登记顺序一致；
+    /// 多分组节的分组都必须带标题（单分组节为无名分组）。
+    #[test]
+    fn groups_are_contiguous_and_consistently_named() {
+        for s in page_rows() {
+            assert!(!s.group.is_empty(), "`{}` 缺分组 id", s.key);
+        }
+        // 同节内分组必须连续：允许同组多行连续出现（如「主题与语言」3 行），
+        // 但分组不能在离开后再次出现（A → B → A 会打乱侧栏两级导航顺序）。
+        let mut current_section: Option<&str> = None;
+        let mut seen_groups: Vec<(&str, &str)> = Vec::new();
+        for s in REGISTRY {
+            if current_section != Some(s.section) {
+                current_section = Some(s.section);
+                seen_groups.clear();
+            }
+            let key = (s.section, s.group);
+            if seen_groups.last() != Some(&key) {
+                if seen_groups.contains(&key) {
+                    panic!(
+                        "节 `{}` 的分组 `{}` 被打断（页面导航顺序会前后跳）",
+                        s.section, s.group
+                    );
+                }
+                seen_groups.push(key);
+            }
+        }
+        // 同一 (section, group) 的显示名必须一致。
+        let mut labels: std::collections::HashMap<(&str, &str), Option<&'static str>> =
+            Default::default();
+        for s in page_rows() {
+            let k = (s.section, s.group);
+            if let Some(existing) = labels.get(&k) {
+                assert_eq!(*existing, s.group_label, "分组 `{}` 的显示名不一致", s.group);
+            } else {
+                labels.insert(k, s.group_label);
+            }
+        }
+        // page_groups：顺序与登记一致；单分组节恰一个分组；多分组节分组都带标题。
+        for (section, _) in sections() {
+            let groups = page_groups(section);
+            assert!(!groups.is_empty(), "节 `{}` 无分组", section);
+            let mut expected: Vec<&str> = Vec::new();
+            for s in page_rows() {
+                if s.section == section && !expected.contains(&s.group) {
+                    expected.push(s.group);
+                }
+            }
+            let actual: Vec<&str> = groups.iter().map(|(g, _)| *g).collect();
+            assert_eq!(actual, expected, "节 `{}` 的 page_groups 顺序与登记不一致", section);
+            if groups.len() > 1 {
+                for (_, label) in groups {
+                    assert!(label.is_some(), "多分组节 `{}` 的分组必须有标题", section);
+                }
+            }
+        }
     }
 
     /// 每个登记项都要有槽位，且**槽位形态与登记形态一致**——不一致就是

@@ -557,6 +557,16 @@ pub struct Editor {
     /// 落盘值，消费方按文本解析）。
     #[serde(default = "default_encoding")]
     pub default_encoding: String,
+    /// SQL 格式化关键字大小写（`"preserve"` / `"upper"` / `"lower"`；消费方按文本解析）。
+    /// 优先级：SQL 格式化增强（2026-10-28 用户定高优先级）。
+    #[serde(default = "default_format_keyword_case")]
+    pub format_keyword_case: String,
+    /// SQL 格式化缩进宽度（空格数；2 = sqlglot 原生）。
+    #[serde(default = "default_format_indent_width")]
+    pub format_indent_width: i64,
+    /// 保存时自动格式化 SQL（默认关；开启后 Ctrl+S 落盘前先跑格式化）。
+    #[serde(default = "default_format_on_save")]
+    pub format_on_save: bool,
 }
 
 impl Default for Editor {
@@ -575,6 +585,9 @@ impl Default for Editor {
             default_hard_tabs: default_hard_tabs(),
             default_line_ending: default_line_ending(),
             default_encoding: default_encoding(),
+            format_keyword_case: default_format_keyword_case(),
+            format_indent_width: default_format_indent_width(),
+            format_on_save: default_format_on_save(),
         }
     }
 }
@@ -637,6 +650,21 @@ fn default_line_ending() -> String {
 
 fn default_encoding() -> String {
     "UTF-8".to_string()
+}
+
+/// SQL 格式化关键字大小写默认：保持原样（sqlglot 原生输出）
+fn default_format_keyword_case() -> String {
+    "preserve".to_string()
+}
+
+/// SQL 格式化缩进宽度默认：2 空格（= sqlglot pretty 原生）
+fn default_format_indent_width() -> i64 {
+    2
+}
+
+/// 保存时自动格式化默认：关
+fn default_format_on_save() -> bool {
+    false
 }
 
 /// 主题模式：显式明暗，或跟随系统外观。
