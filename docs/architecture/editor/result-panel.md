@@ -919,6 +919,49 @@ panel.rs 删掉手搓过滤 / 行渲染 / 搜索框约 200 行。
 **提交状态**：`crates/result_panel/src/{grid.rs, panel.rs, ports.rs}` +
 `crates/editor/src/view/host.rs`（仅分派分支；与并行线 Toolbar 迁移混合，待裁定）待提交。
 
+### 8.20 类型样式设置（2026-10-28 拍板：按类型族 / 全局统一 / 预设色板）
+
+**口径**（用户逐项拍板）：① 按类型族配置（五族：数字 / 文本 / 时间 / 布尔 / BLOB）；
+②「位置」= 值在格内的对齐位置（与「对齐」合并为一项）；③ 全局统一生效
+（先不做 per-结果集覆盖）；④ 预设色板（主题语义 token 派生，零裸色值约束不变）。
+
+**13 项设置**（`settings.json` 的 `result_panel` 节；设置页「结果集面板」分组，全部即时生效）：
+
+| 设置 | 枚举值 | 默认 | 渲染消费点 |
+| --- | --- | --- | --- |
+| `number_format` | raw / grouped / fixed2 / scientific | raw | `grid.rs::format_cell_text`（数字族） |
+| `null_placeholder` | null / emptyset / dash | null | `grid.rs::format_cell_text`（`text == "NULL"` 判定，只换显示） |
+| `bool_display` | true_false / cn / digits | true_false | `grid.rs::format_cell_text`（布尔族） |
+| `align_numeric/text/temporal/bool/blob` | inherit / left / center / right | inherit | `grid.rs::cell_style`（对齐覆盖） |
+| `color_numeric/text/temporal/bool/blob` | inherit / info / success / warning / danger / primary / muted | inherit | `grid.rs::render_td`（角色 → `theme.colors.*`） |
+
+**模型归属**（打破循环依赖的关键决策）：枚举与聚合 `TypeStylePrefs` 放
+**`crates/workbench_shell/src/result_style.rs`**（与 `product_tokens` 同例）——
+`settings`（持久化 + 设置页）与 `result_panel`（渲染消费）双向依赖环由此解开；
+枚举 parse 对未知落盘值回退默认（不拒绝写入、不炸设置文件）。
+
+**生效链路**（三层）：
+
+1. **启动**：editor `host.rs` 构造面板时读 `settings.result_panel.type_style()` 同步
+   （`panel.set_type_style` → delegate；不随 `set_data` 清掉——视图偏好口径同
+   `show_column_comments`）。
+2. **设置页变更**：`settings` apply 分支写 global + persist；
+   workbench `view.rs::render_settings_panel` 的 `on_settings_changed` 钩子
+   遍历 `editor_hosts` 调 `host.apply_result_style(cx)` → 面板 → delegate 重绘。
+3. **渲染**：`grid.rs::render_td` 用 `cell_style(kind, &type_style)`（对齐覆盖 +
+   前景色角色）+ `format_cell_text(kind, text, prefs)`（NULL 占位 / 布尔映射 / 数字格式）。
+
+**显示 / 取值分离**（用户已确认）：所有格式只影响**渲染显示**；复制 / 导出 /
+编辑 / 悬停 tooltip 仍用驱动原始值。NULL 判定仍按原文 `== "NULL"`，灰斜体渲染不变；
+被删行灰字优先级高于类型染色。JSON 美化与 BLOB 摘要先于 `format_cell_text` 处理。
+
+**验证**：`cargo test -p rds-workbench-shell` = 13 passed（含 3 个新增 parse/往返测试）；
+`cargo test -p rds-result-panel --lib` = **200 passed / 0 failed**（196 基线 + 4 个新增：
+按族对齐覆盖 / 颜色角色 / 显示文本纯函数 / 数字格式模式）；`cargo check -p rds-editor`
+与 `-p rds-workbench` 通过。settings `every_model_leaf_is_registered` 契约测试仍被
+**并行线** 3 个未登记字段（navigator.show_chips / show_search、scratchpad.group_max_h）阻塞，
+本线 13 项登记齐全，不替并行线登记。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

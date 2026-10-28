@@ -17,10 +17,13 @@
 //! - [`tree`]：树 / 列表**行的共用原语**（激活条 / 展开指示 / 缩进 / 行高预算）；
 //! - [`model`]：面板枚举、边栏模式、连接条目等**纯数据**；
 //! - [`product_tokens`]：产品语义 token（主题取色的产品角色层）；
-//! - [`db_icons`]：数据库类型 → 图标（微标）。
+//! - [`db_icons`]：数据库类型 → 图标（微标）；
+//! - [`result_style`]：结果集「类型样式」偏好模型（settings 持久化与 result_panel
+//!   渲染消费共用的枚举 / 聚合，打破双向依赖）。
 
 pub mod db_icons;
 pub mod model;
 pub mod product_tokens;
+pub mod result_style;
 pub mod tree;
 pub mod ui;
