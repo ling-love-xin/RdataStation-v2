@@ -99,6 +99,10 @@ pub struct FileMeta {
     pub bound_connections: Vec<String>,
 }
 
+/// sidecar 里承载 scratchpad 专属字段的 `extra` key。
+pub(crate) const EXTRA_BOUND_CONNECTIONS: &str = "scratchpad.bound_connections";
+pub(crate) const EXTRA_LAST_EXECUTED_AT: &str = "scratchpad.last_executed_at";
+
 impl FileMeta {
     /// 打开草稿时预选的连接：**显式绑定优先**，其次回退到最近一次执行用过的连接。
     ///
@@ -108,6 +112,55 @@ impl FileMeta {
             .first()
             .map(String::as_str)
             .or(self.last_connection_id.as_deref())
+    }
+
+    /// 从 sidecar 的 `rds-file-meta::FileMeta` 提取本模块的连接元信息。
+    ///
+    /// 只读 `last_connection` 与 `extra` 里本模块的两个 key；sidecar 里书签/折叠等
+    /// 其他字段与本模块无关，一律忽略（互不干扰）。
+    pub(crate) fn from_file_meta(fm: &file_meta::FileMeta) -> Self {
+        let bound = fm
+            .extra
+            .get(EXTRA_BOUND_CONNECTIONS)
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let last_executed = fm
+            .extra
+            .get(EXTRA_LAST_EXECUTED_AT)
+            .and_then(|v| v.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+        Self {
+            last_connection_id: fm.last_connection.clone(),
+            last_executed_at: last_executed,
+            bound_connections: bound,
+        }
+    }
+
+    /// 把本模块的连接元信息写进 sidecar 的 `rds-file-meta::FileMeta`。
+    ///
+    /// 只改 `last_connection` 与 `extra` 里本模块的两个 key，**保留** sidecar 里
+    /// 已有的其他字段（书签 / 折叠 / 其他模块的扩展属性）——read-modify-write 由
+    /// 调用方（`store`）负责先读全量。
+    pub(crate) fn apply_to(&self, fm: &mut file_meta::FileMeta) {
+        fm.last_connection = self.last_connection_id.clone();
+        fm.extra.insert(
+            EXTRA_BOUND_CONNECTIONS.to_string(),
+            serde_json::json!(self.bound_connections),
+        );
+        if let Some(ts) = self.last_executed_at {
+            fm.extra.insert(
+                EXTRA_LAST_EXECUTED_AT.to_string(),
+                serde_json::json!(ts.to_rfc3339()),
+            );
+        } else {
+            fm.extra.remove(EXTRA_LAST_EXECUTED_AT);
+        }
     }
 }
 
@@ -190,5 +243,37 @@ mod tests {
             Some("P_1"),
             "显式绑定列表取首个（顺序即优先级）"
         );
+    }
+
+    #[test]
+    fn file_meta_roundtrip_via_sidecar() {
+        let mut meta = FileMeta::default();
+        meta.last_connection_id = Some("G_9".to_string());
+        meta.bound_connections = vec!["P_1".to_string(), "P_2".to_string()];
+        meta.last_executed_at = Some(Utc::now());
+
+        let mut fm = file_meta::FileMeta::default();
+        // 预置一个与 scratchpad 无关的书签，验证 apply_to 保留它
+        fm.bookmarks.push(file_meta::Bookmark {
+            line: 3,
+            label: "旧书签".to_string(),
+        });
+        meta.apply_to(&mut fm);
+
+        let back = FileMeta::from_file_meta(&fm);
+        assert_eq!(back.last_connection_id.as_deref(), Some("G_9"));
+        assert_eq!(back.bound_connections, vec!["P_1", "P_2"]);
+        assert!(back.last_executed_at.is_some(), "时间戳经 RFC3339 往返保留");
+        assert_eq!(fm.bookmarks.len(), 1, "apply_to 不动书签等无关字段");
+    }
+
+    #[test]
+    fn from_file_meta_missing_keys_means_default() {
+        let fm = file_meta::FileMeta::default();
+        let meta = FileMeta::from_file_meta(&fm);
+        assert_eq!(meta.last_connection_id, None);
+        assert!(meta.bound_connections.is_empty());
+        assert!(meta.last_executed_at.is_none());
+        assert_eq!(meta.preferred_connection(), None);
     }
 }

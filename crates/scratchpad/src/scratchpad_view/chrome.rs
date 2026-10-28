@@ -1303,7 +1303,6 @@ impl ScratchpadView {
                 .gap_1()
                 .w_full()
                 .h(rems(ui::PANEL_HEADER_HEIGHT))
-                .px(rems(ui::PANEL_PADDING))
                 .border_b(ui::HAIRLINE)
                 .border_color(theme.colors.border)
                 .child(

@@ -23,6 +23,8 @@ const MAX_COPY_ATTEMPTS: usize = 1000;
 pub(crate) const META_DIR_NAME: &str = ".RSmeta";
 /// 草稿箱在项目元数据目录下的子目录名。
 const META_SUBDIR: &str = "scratchpad";
+/// per-file sidecar 元信息子目录：`{project}/.RSmeta/scratchpad/meta/`（第③步迁移）。
+const META_SUBDIR_FILES: &str = "meta";
 /// 草稿箱内容目录名（模块根，位于项目根下、可见）。
 pub const MODULE_DIR_NAME: &str = "scratchpad";
 /// 回收站条目来源：草稿箱。
@@ -133,6 +135,8 @@ impl ScratchpadStore {
     pub async fn ensure_dir(&self) -> Result<(), CoreError> {
         // 先做一次旧布局迁移（仅当旧目录存在时执行，幂等且非破坏）。
         self.migrate_legacy_layout().await;
+        // 第③步：把旧集中式 `config.json::file_meta` 迁到 per-file sidecar（幂等）。
+        self.migrate_file_meta_to_sidecar().await;
 
         fs::create_dir_all(&self.scratchpad_dir)
             .await
@@ -142,6 +146,27 @@ impl ScratchpadStore {
             .map_err(|e| io_err(&self.meta_dir, "create_meta_dir", e.to_string()))?;
         self.trash.ensure_dir().await?;
         Ok(())
+    }
+
+    /// 一次性迁移：旧 `config.json` 里的 `file_meta` → per-file sidecar，并清空 config。
+    ///
+    /// 幂等：迁移后 `config.file_meta` 为空，下次进入直接跳过；单文件失败只记录、不阻断。
+    async fn migrate_file_meta_to_sidecar(&self) {
+        let Ok(mut config) = self.load_config().await else {
+            return;
+        };
+        if config.file_meta.is_empty() {
+            return;
+        }
+        let entries: Vec<(String, FileMeta)> = config.file_meta.drain().collect();
+        for (rel, meta) in entries {
+            if let Err(e) = self.update_sidecar(&rel, move |fm| meta.apply_to(fm)).await {
+                tracing::warn!("[Scratchpad] 迁移 file_meta → sidecar 失败 {rel}: {e}");
+            }
+        }
+        if let Err(e) = self.write_config_direct(&config).await {
+            tracing::warn!("[Scratchpad] 迁移后保存 config 失败: {e}");
+        }
     }
 
     /// 旧布局迁移（幂等、非破坏）：
@@ -272,6 +297,12 @@ impl ScratchpadStore {
 
     pub async fn save_config(&self, config: &ScratchpadConfig) -> Result<(), CoreError> {
         self.ensure_dir().await?;
+        self.write_config_direct(config).await
+    }
+
+    /// 写 config 文件 + 更新缓存（**不**调 [`Self::ensure_dir`]，供 `ensure_dir` 内部路径
+    /// 使用，避免递归）。调用方需保证 `.RSmeta/scratchpad/` 已存在。
+    async fn write_config_direct(&self, config: &ScratchpadConfig) -> Result<(), CoreError> {
         let json = serde_json::to_string_pretty(config).map_err(|e| {
             CoreError::storage(StorageError::Serialization {
                 format: "JSON".to_string(),
@@ -446,11 +477,26 @@ impl ScratchpadStore {
         let config = self.load_config().await?;
         let local_entries = self.list_local_entries(0).await?;
 
+        // per-file sidecar → 连接元信息 map（前端结构不变）：只收有实际记录的（读侧返回 None 跳过）。
+        let mut file_meta = std::collections::HashMap::new();
+        for entry in Self::flatten_entries_from_ref(&local_entries) {
+            if entry.kind != ScratchpadEntryKind::File {
+                continue;
+            }
+            let Ok(relative) = entry.path.strip_prefix(&self.scratchpad_dir) else {
+                continue;
+            };
+            let rel_str = relative.to_string_lossy().replace('\\', "/");
+            if let Some(meta) = self.read_sidecar(&rel_str).await? {
+                file_meta.insert(rel_str, meta);
+            }
+        }
+
         Ok(ScratchpadResponse {
             local_entries,
             external_references: config.external_references.clone(),
             scratchpad_path: self.scratchpad_dir.clone(),
-            file_meta: config.file_meta.clone(),
+            file_meta,
         })
     }
 
@@ -541,6 +587,10 @@ impl ScratchpadStore {
         self.trash
             .move_to_trash(&target_path, ORIGIN_SCRATCHPAD, relative_path)
             .await?;
+        // 快照语义：源文件离开草稿箱 → 清理其 sidecar（回收站还原不恢复连接预选）。
+        if target_path.is_file() {
+            self.remove_sidecar(relative_path).await?;
+        }
         Ok(())
     }
 
@@ -650,14 +700,27 @@ impl ScratchpadStore {
             ))
         })?;
 
-        if let Ok(mut config) = self.load_config().await {
-            if let Some(meta) = config.file_meta.remove(relative_path) {
-                if let Ok(new_relative) = new_path.strip_prefix(&self.scratchpad_dir) {
-                    config
-                        .file_meta
-                        .insert(new_relative.to_string_lossy().to_string(), meta);
-                    let _ = self.save_config(&config).await;
-                }
+        // sidecar 随文件迁移（仅文件；目录无 sidecar）。快照跟随文件走。
+        if !is_dir {
+            let old_sidecar = self.sidecar_path(relative_path);
+            if let Ok(new_relative) = new_path.strip_prefix(&self.scratchpad_dir) {
+                let new_rel = new_relative.to_string_lossy().to_string();
+                let new_sidecar = self.sidecar_path(&new_rel);
+                let old_disp = old_sidecar.clone();
+                tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
+                    if old_sidecar.exists() && !new_sidecar.exists() {
+                        if let Some(parent) = new_sidecar.parent() {
+                            std::fs::create_dir_all(parent).map_err(|e| {
+                                io_err(parent, "create_sidecar_dir", e.to_string())
+                            })?;
+                        }
+                        std::fs::rename(&old_sidecar, &new_sidecar)
+                            .map_err(|e| io_err(&old_sidecar, "rename_meta", e.to_string()))?;
+                    }
+                    Ok(())
+                })
+                .await
+                .map_err(|e| io_err(&old_disp, "spawn_blocking", e.to_string()))??;
             }
         }
 
@@ -1053,19 +1116,87 @@ impl ScratchpadStore {
             .collect())
     }
 
+    // ===== per-file sidecar 元信息（第③步：连接元信息迁移到 rds-file-meta sidecar）=====
+
+    /// 某草稿文件的 sidecar 路径：`{project}/.RSmeta/scratchpad/meta/{相对目录}/{文件名}.meta.json`。
+    ///
+    /// 集中放隐藏元数据目录（不污染草稿箱目录；`.RSmeta/` 已被 watch 排除 → 无自激刷新）；
+    /// 按源文件相对路径组织，rename/remove 时同步迁移/清理。
+    fn sidecar_path(&self, relative_path: &str) -> PathBuf {
+        let p = Path::new(relative_path);
+        let mut out = self.meta_dir.join(META_SUBDIR_FILES);
+        if let Some(dir) = p.parent() {
+            if !dir.as_os_str().is_empty() {
+                out = out.join(dir);
+            }
+        }
+        let name = p.file_name().unwrap_or_default().to_string_lossy();
+        out.join(format!("{name}.meta.json"))
+    }
+
+    /// 读单个草稿的 sidecar（无记录返回 `None`）。同步 IO 走 `spawn_blocking`，不阻塞事件线程。
+    async fn read_sidecar(&self, relative_path: &str) -> Result<Option<FileMeta>, CoreError> {
+        let sidecar = self.sidecar_path(relative_path);
+        tokio::task::spawn_blocking(move || -> Result<Option<FileMeta>, CoreError> {
+            if !sidecar.exists() {
+                return Ok(None);
+            }
+            let fm = file_meta::read_meta_at(&sidecar)
+                .map_err(|e| io_err(&sidecar, "read_meta", e.to_string()))?;
+            Ok(Some(FileMeta::from_file_meta(&fm)))
+        })
+        .await
+        .map_err(|e| io_err(&self.sidecar_path(relative_path), "spawn_blocking", e.to_string()))?
+    }
+
+    /// read-modify-write：读全量 sidecar（无则默认）→ `f` 只改调用方关心的字段 → 写回。
+    ///
+    /// 保留 sidecar 里其他模块的字段（书签 / 折叠等）。`f` 在 `spawn_blocking` 内执行，
+    /// 必须 `Send + 'static`（捕获调用方的数据）。
+    async fn update_sidecar(
+        &self,
+        relative_path: &str,
+        f: impl FnOnce(&mut file_meta::FileMeta) + Send + 'static,
+    ) -> Result<(), CoreError> {
+        let sidecar = self.sidecar_path(relative_path);
+        tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
+            let mut fm = file_meta::read_meta_at(&sidecar)
+                .map_err(|e| io_err(&sidecar, "read_meta", e.to_string()))?;
+            f(&mut fm);
+            file_meta::write_meta_at(&sidecar, &fm)
+                .map_err(|e| io_err(&sidecar, "write_meta", e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| io_err(&self.sidecar_path(relative_path), "spawn_blocking", e.to_string()))?
+    }
+
+    /// 删除某文件的 sidecar（快照语义：源文件离开草稿箱时清理；回收站还原不恢复连接预选）。
+    async fn remove_sidecar(&self, relative_path: &str) -> Result<(), CoreError> {
+        let sidecar = self.sidecar_path(relative_path);
+        tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
+            if sidecar.exists() {
+                std::fs::remove_file(&sidecar)
+                    .map_err(|e| io_err(&sidecar, "remove_meta", e.to_string()))?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| io_err(&self.sidecar_path(relative_path), "spawn_blocking", e.to_string()))?
+    }
+
     /// 绑定文件使用的数据源（仅存连接 ID，不落凭据）。
     pub async fn bind_connections(
         &self,
         relative_path: &str,
         connections: Vec<String>,
     ) -> Result<(), CoreError> {
-        let mut config = self.load_config().await?;
-        let entry = config
-            .file_meta
-            .entry(relative_path.to_string())
-            .or_default();
-        entry.bound_connections = connections;
-        self.save_config(&config).await
+        self.update_sidecar(relative_path, move |fm| {
+            let mut meta = FileMeta::from_file_meta(fm);
+            meta.bound_connections = connections;
+            meta.apply_to(fm);
+        })
+        .await
     }
 
     pub async fn update_file_meta(
@@ -1073,19 +1204,15 @@ impl ScratchpadStore {
         relative_path: &str,
         connection_id: Option<String>,
     ) -> Result<(), CoreError> {
-        let mut config = self.load_config().await?;
-
-        let entry = config
-            .file_meta
-            .entry(relative_path.to_string())
-            .or_default();
-
-        if let Some(cid) = connection_id {
-            entry.last_connection_id = Some(cid);
-        }
-        entry.last_executed_at = Some(Utc::now());
-
-        self.save_config(&config).await
+        self.update_sidecar(relative_path, move |fm| {
+            let mut meta = FileMeta::from_file_meta(fm);
+            if let Some(cid) = connection_id {
+                meta.last_connection_id = Some(cid);
+            }
+            meta.last_executed_at = Some(Utc::now());
+            meta.apply_to(fm);
+        })
+        .await
     }
 
     /// 读取单个草稿的元数据（连接绑定 / 最近执行）——打开草稿预选连接的读侧。
@@ -1093,12 +1220,7 @@ impl ScratchpadStore {
     /// 无记录时返回默认值（空绑定、无最近执行）：调用方只需问「该用哪个连接」，
     /// 不需要区分「没有记录」与「记录为空」。
     pub async fn file_meta(&self, relative_path: &str) -> Result<FileMeta, CoreError> {
-        let config = self.load_config().await?;
-        Ok(config
-            .file_meta
-            .get(relative_path)
-            .cloned()
-            .unwrap_or_default())
+        Ok(self.read_sidecar(relative_path).await?.unwrap_or_default())
     }
 
     fn resolve_path(&self, relative_path: &str) -> Result<PathBuf, CoreError> {
@@ -1329,14 +1451,27 @@ impl ScratchpadStore {
             ))
         })?;
 
-        if let Ok(mut config) = self.load_config().await {
-            if let Some(meta) = config.file_meta.remove(from_relative_path) {
-                if let Ok(new_relative) = dest_path.strip_prefix(&self.scratchpad_dir) {
-                    config
-                        .file_meta
-                        .insert(new_relative.to_string_lossy().to_string(), meta);
-                    let _ = self.save_config(&config).await;
-                }
+        // sidecar 随文件迁移（仅文件；目录无 sidecar）。快照跟随文件走。
+        if !is_dir {
+            let old_sidecar = self.sidecar_path(from_relative_path);
+            if let Ok(new_relative) = dest_path.strip_prefix(&self.scratchpad_dir) {
+                let new_rel = new_relative.to_string_lossy().to_string();
+                let new_sidecar = self.sidecar_path(&new_rel);
+                let old_disp = old_sidecar.clone();
+                tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
+                    if old_sidecar.exists() && !new_sidecar.exists() {
+                        if let Some(parent) = new_sidecar.parent() {
+                            std::fs::create_dir_all(parent).map_err(|e| {
+                                io_err(parent, "create_sidecar_dir", e.to_string())
+                            })?;
+                        }
+                        std::fs::rename(&old_sidecar, &new_sidecar)
+                            .map_err(|e| io_err(&old_sidecar, "move_meta", e.to_string()))?;
+                    }
+                    Ok(())
+                })
+                .await
+                .map_err(|e| io_err(&old_disp, "spawn_blocking", e.to_string()))??;
             }
         }
 
@@ -2008,12 +2143,12 @@ mod tests {
             .unwrap();
 
         let reloaded = ScratchpadStore::new(project.clone());
-        let cfg = reloaded.load_config().await.unwrap();
+        // file_meta 已迁 per-file sidecar（第③步迁移后 config.json 不再存绑定）：
+        // 读侧走 `file_meta()`（读 sidecar），`load_config()` 只读 config.json。
+        let meta = reloaded.file_meta("q.sql").await.unwrap();
         assert_eq!(
-            cfg.file_meta
-                .get("q.sql")
-                .map(|m| m.bound_connections.clone()),
-            Some(vec!["P_1".to_string(), "G_2".to_string()])
+            meta.bound_connections,
+            vec!["P_1".to_string(), "G_2".to_string()]
         );
 
         std::fs::remove_dir_all(&project).ok();
