@@ -21,8 +21,8 @@ use gpui_kit::{
 
 use crate::channel::{ChannelAvailability, ChannelAvailabilitySet, ChannelsPort, ExecChannel};
 use crate::commands::{
-    CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, SaveDocument, ToggleComment,
-    TriggerCompletion,
+    CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, NextBookmark, PrevBookmark,
+    SaveDocument, ToggleBookmark, ToggleComment, TriggerCompletion,
 };
 use crate::completion::{Candidate, CandidateKind, Catalog};
 use crate::connection::{ConnectionOption, ConnectionsPort, SchemaInfo};
@@ -80,6 +80,10 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
             KeyBinding::new("ctrl-shift-enter", ExecuteAll, Some("editor")),
             KeyBinding::new("ctrl-shift-f", FormatDocument, Some("editor")),
             KeyBinding::new("ctrl-space", TriggerCompletion, Some("editor")),
+            // 【书签】与生产同一套键位：切换 / 下一个 / 上一个
+            KeyBinding::new("ctrl-shift-b", ToggleBookmark, Some("editor")),
+            KeyBinding::new("f8", NextBookmark, Some("editor")),
+            KeyBinding::new("shift-f8", PrevBookmark, Some("editor")),
             // 【B14】结果网格里的 `Ctrl+C`（上下文只在那层元素上，与生产同一份注册）
             KeyBinding::new(
                 "ctrl-c",
@@ -332,6 +336,86 @@ fn ctrl_s_writes_the_file_and_clears_dirty(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 【书签·第①步】切换当前行书签：落盘 sidecar（`.query.sql.meta.json`）→ 空书签也回写 →
+/// 重开面板从 sidecar 读回。行号 1 起。
+#[gpui_kit::test]
+fn bookmarks_toggle_persists_to_and_loads_from_the_sidecar(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let dir = temp_dir("bookmark");
+    let path = dir.join("query.sql");
+    std::fs::write(&path, "select 1\nselect 2\nselect 3").expect("写盘");
+    let sidecar = dir.join(".query.sql.meta.json");
+
+    let shared = EditorShared::new();
+    let id = crate::persist::open_file(&shared, &path, EditorMode::Sql)
+        .expect("打开")
+        .id()
+        .clone();
+
+    let (harness, cx) = {
+        let shared = shared.clone();
+        let id = id.clone();
+        cx.add_window_view(move |window, cx| {
+            let (area, _skin) = DockSkin::dock_area("editor-bookmark", Some(1), window, cx);
+            let panel = cx.new(|cx| EditorHostPanel::new(shared.clone(), id, window, cx));
+            let handle = panel.clone();
+            area.update(cx, |area, cx| {
+                area.add_panel(handle, DockPlacement::Center, None, window, cx);
+            });
+            Harness {
+                area,
+                panels: vec![panel],
+            }
+        })
+    };
+    // 面板已进 Dock（on_added_to → load_bookmarks；初始 sidecar 缺失 = 空）
+    let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
+
+    // 打开时无书签
+    assert!(shared.bookmarks(&id).is_empty());
+
+    // 画一帧建 dispatch tree → 聚焦 → 按 Ctrl+Shift+B 切换当前行（光标默认第 1 行）
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+    cx.simulate_keystrokes("ctrl-shift-b");
+
+    // 内存书签 + sidecar 都应有第 1 行
+    assert_eq!(shared.bookmarks(&id).len(), 1, "切换后内存应有一枚书签");
+    assert_eq!(shared.bookmarks(&id)[0].line, 1, "书签行号 1 起");
+    assert!(sidecar.exists(), "切换后必须落盘 sidecar");
+    let meta = file_meta::read_meta(&path).expect("读回 meta");
+    assert_eq!(meta.bookmarks.len(), 1, "sidecar 应有一枚书签");
+    assert_eq!(meta.bookmarks[0].line, 1, "sidecar 行号 1 起");
+
+    // 再切一次 → 移除并回写为空（空书签也落盘，即“清空即持久化”）
+    cx.simulate_keystrokes("ctrl-shift-b");
+    assert!(shared.bookmarks(&id).is_empty(), "再切应移除书签");
+    assert!(sidecar.exists(), "清空后 sidecar 仍应存在（记录当前空状态）");
+    let meta = file_meta::read_meta(&path).expect("读回 meta");
+    assert!(meta.bookmarks.is_empty(), "sidecar 应无书签");
+
+    // 落一条书签 → 清掉内存 → 开第二个面板 → 应**从 sidecar 读回**（而非沿用内存）
+    cx.simulate_keystrokes("ctrl-shift-b");
+    shared.set_bookmarks(&id, vec![]);
+    // 复用同一 Dock：第二个面板进 Dock（on_added_to → load_bookmarks）会从 sidecar 读回书签
+    let _panel2 = cx.update(|window, cx| {
+        let area = harness.read(cx).area.clone();
+        let panel = cx.new(|cx| EditorHostPanel::new(shared.clone(), id.clone(), window, cx));
+        let handle = panel.clone();
+        area.update(cx, |area, cx| {
+            area.add_panel(handle, DockPlacement::Center, None, window, cx);
+        });
+        panel
+    });
+    assert_eq!(shared.bookmarks(&id).len(), 1, "重开面板应从 sidecar 读回书签");
+    assert_eq!(shared.bookmarks(&id)[0].line, 1);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[gpui_kit::test]
 fn ctrl_s_on_an_untitled_document_reports_the_reason(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -373,7 +457,8 @@ fn folding_candidates_are_fed_after_the_gutter_restored(cx: &mut TestAppContext)
 
     let sql = "SELECT (\n  1,\n  2\n) AS x\nFROM t";
     assert_eq!(
-        fold_spans(sql),
+        // 默认折叠参数（缩进折叠开、无自定义关键字）；该段只有括号块
+        fold_spans(sql, true, &[], &[]),
         [FoldSpan {
             start_line: 0,
             end_line: 3
@@ -428,7 +513,15 @@ fn ctrl_slash_comments_the_selection(cx: &mut TestAppContext) {
     let (panel, cx) = {
         let shared = shared.clone();
         let id = id.clone();
-        cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
+        let panel_slot = Rc::new(std::cell::RefCell::new(None::<Entity<EditorHostPanel>>));
+        let slot = panel_slot.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let shell = cx.new(|cx| EditorHostPanel::new(shared, id, window, cx));
+            *slot.borrow_mut() = Some(shell.clone());
+            Root::new(shell, window, cx)
+        });
+        let panel = panel_slot.borrow().clone().expect("EditorHostPanel 已创建");
+        (panel, cx)
     };
 
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -1268,7 +1361,18 @@ fn open_panel<'a>(
 ) -> (Entity<EditorHostPanel>, &'a mut VisualTestContext) {
     let shared = shared.clone();
     let id = id.clone();
-    cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
+    // 窗口挂组件 Root（EditorHostPanel 作为应用内容）：事件路径里的 `has_active_dialog`
+    // 等查询依赖组件窗口状态（WindowState 插件），裸 `add_window_view` 缺 Root 会 panic。
+    // 与 function_manual.rs 的测试模式同口径；Root::new 会把已注册的组件插件一并挂上。
+    let panel_slot = Rc::new(std::cell::RefCell::new(None::<Entity<EditorHostPanel>>));
+    let slot = panel_slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let shell = cx.new(|cx| EditorHostPanel::new(shared, id, window, cx));
+        *slot.borrow_mut() = Some(shell.clone());
+        Root::new(shell, window, cx)
+    });
+    let panel = panel_slot.borrow().clone().expect("EditorHostPanel 已创建");
+    (panel, cx)
 }
 
 /// 等结果回填（真后台线程；测试里手动跑轮询泵的那一步，带超时）
@@ -3112,7 +3216,15 @@ fn the_toolbar_shows_the_connection_slots_in_sql_mode(cx: &mut TestAppContext) {
     let (panel, cx) = {
         let shared = shared.clone();
         let id = id.clone();
-        cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
+        let panel_slot = Rc::new(std::cell::RefCell::new(None::<Entity<EditorHostPanel>>));
+        let slot = panel_slot.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let shell = cx.new(|cx| EditorHostPanel::new(shared, id, window, cx));
+            *slot.borrow_mut() = Some(shell.clone());
+            Root::new(shell, window, cx)
+        });
+        let panel = panel_slot.borrow().clone().expect("EditorHostPanel 已创建");
+        (panel, cx)
     };
 
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -4366,6 +4478,85 @@ fn the_status_row_reports_the_selected_row(cx: &mut TestAppContext) {
         dialog_button_rendered(cx, "editor-result-status-row"),
         "状态行要真的画出来"
     );
+}
+
+/// 【8-左栏】无选中行时点「记录」也应打开转置（第 0 行兜底）——用户反馈
+/// "记录按钮点击没反应，只有选中一行才可以"。直调面板方法验证 toggle_transpose
+/// 在无选中行时确实生效（选中行只是改变转置起点，不是必要条件）。
+#[gpui_kit::test]
+fn transpose_opens_without_selection(cx: &mut TestAppContext) {
+    use result_panel::rowset::RowRef;
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    // 无选中行
+    let status = cx
+        .update(|_window, cx| panel.read(cx).result_status_for_test(cx))
+        .expect("有网格就有状态行");
+    assert_eq!(status.selected_row, None, "刚跑完没选中任何行");
+
+    // 直调「记录」按钮的最终动作（无选中行）
+    let rp = cx.update(|_window, cx| panel.read(cx).result_panel_for_test());
+    cx.update(|_window, cx| rp.update(cx, |p, cx| p.toggle_transpose(cx)));
+    let transposed = cx
+        .update(|_window, cx| rp.read(cx).grid().read(cx).delegate().is_transposed());
+    assert!(transposed, "无选中行点记录也应打开转置（第 0 行兜底）");
+
+    // 转置到第 0 行（数据行 0）
+    let row = cx.update(|_window, cx| rp.read(cx).grid().read(cx).delegate().transpose_row());
+    assert_eq!(row, RowRef::Data(0), "无选中行时从第 0 行开始竖排");
+}
+
+/// 【8-左栏】竖条「记录」按钮的真实点击要能打开转置——用户反馈"记录按钮点击
+/// 没有反应"。方法层已验证（见 transpose_opens_without_selection），这里走真实
+/// 点击路径验证按钮事件 → 队列 → 分派整条链路。
+#[gpui_kit::test]
+fn the_left_record_button_toggles_transpose_on_real_click(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 【对照】同竖条「文本」按钮：点击后不手动 drain，验证 request 自动通知生效
+    let text_btn = cx
+        .debug_bounds("editor-result-bar-text")
+        .expect("文本按钮要画出来");
+    cx.simulate_click(text_btn.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    let presentation = cx.update(|_window, cx| panel.read(cx).presentation_for_test(cx));
+    assert_eq!(
+        presentation,
+        result_panel::ports::Presentation::Text,
+        "文本按钮点击应立即切到文本（request 自动通知宿主 drain）"
+    );
+
+    // 切回网格
+    let grid_btn = cx
+        .debug_bounds("editor-result-bar-grid")
+        .expect("网格按钮要画出来");
+    cx.simulate_click(grid_btn.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    let presentation = cx.update(|_window, cx| panel.read(cx).presentation_for_test(cx));
+    assert_eq!(
+        presentation,
+        result_panel::ports::Presentation::Grid,
+        "网格按钮点击应立即切回网格"
+    );
+
+    let btn = cx
+        .debug_bounds("editor-result-bar-record")
+        .expect("记录按钮要画出来");
+    cx.simulate_click(btn.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+
+    let transposed = cx.update(|_window, cx| {
+        let rp = panel.read(cx).result_panel_for_test();
+        rp.read(cx).grid().read(cx).delegate().is_transposed()
+    });
+    assert!(transposed, "真实点击「记录」按钮应打开转置");
 }
 
 /// 能定位的失败：卡片带「定位到第 N 行」按钮，且它真能把光标送到出错词
@@ -6130,6 +6321,7 @@ fn the_channel_comes_back_with_the_session_or_falls_back_with_a_reason(cx: &mut 
         schema: None,
         tab_size: None,
         hard_tabs: None,
+        result_column_order: None,
     };
     cx.update(|window, cx| {
         panel.update(cx, |panel, cx| panel.restore_session(&session, window, cx));
@@ -6213,6 +6405,7 @@ fn the_connection_binding_comes_back_with_the_session(cx: &mut TestAppContext) {
         schema: None,
         tab_size: None,
         hard_tabs: None,
+        result_column_order: None,
     };
 
     // ① 连接还在列表里 → 绑定真的写回文档
@@ -6366,6 +6559,7 @@ fn the_toolbar_layout_rides_along_with_the_session(cx: &mut TestAppContext) {
         schema: None,
         tab_size: None,
         hard_tabs: None,
+        result_column_order: None,
     };
     let (panel3, cx) = open_panel(cx, &shared, &id);
     legacy.toolbar = None;
@@ -6397,6 +6591,7 @@ fn the_schema_binding_comes_back_with_the_session(cx: &mut TestAppContext) {
         schema: schema.map(str::to_string),
         tab_size: None,
         hard_tabs: None,
+        result_column_order: None,
     };
 
     // ① schema 在列表里 → 绑定真的写回文档

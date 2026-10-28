@@ -136,6 +136,26 @@ pub enum InputEvent {
     Blur,
 }
 
+/// 一次文本编辑在行维度的增量（0 基）。
+///
+/// 与折叠平移 `DisplayMap::adjust_folds_for_edit` 同一套口径：编辑发生在
+/// `start_line`（闭）到 `start_line + deleted_lines`（开）这段行之间，替换为
+/// `inserted_lines` 行。编辑点之后的行号锚点（书签等）应整体平移
+/// `inserted_lines as isize - deleted_lines as isize` 行。
+///
+/// 订阅者收到 `InputEvent::Change` 后经 [`EditorState::take_last_edit_delta`] 消费，
+/// 用它校正行号锚点；程序化写入（`set_value` 内部 `emit_events = false`）不发
+/// `Change`，也就没有消费入口（其整段替换语义下锚点本来就该由调用方决定）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineDelta {
+    /// 编辑起点所在行（0 基）
+    pub start_line: usize,
+    /// 被替换掉的行数
+    pub deleted_lines: usize,
+    /// 替换后新增的行数
+    pub inserted_lines: usize,
+}
+
 pub(super) const CONTEXT: &str = "Input";
 
 pub(crate) fn init(cx: &mut App) {
@@ -572,6 +592,9 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) silent_replace_text: bool,
     /// A flag to indicate if we should emit InputEvents.
     pub(super) emit_events: bool,
+    /// 【项目私有 patch】最近一次文本编辑的行增量（供 [`Self::take_last_edit_delta`]
+    /// 消费；无未消费的编辑 = `None`）。见 `docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md` §3。
+    last_edit_delta: Option<LineDelta>,
 
     _subscriptions: Vec<Subscription>,
 
@@ -1019,6 +1042,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             overlay_action_handler: None,
             silent_replace_text: false,
             emit_events: true,
+            last_edit_delta: None,
             _subscriptions,
             _pending_update: false,
             cursor_line_end_affinity: false,
@@ -1314,6 +1338,32 @@ impl<M: InputModeKind> InputBaseState<M> {
             this.replace_text_in_range_silent(None, &text, window, cx);
             let end = this.active_selection().end;
             this.set_cursor_to(end);
+        });
+    }
+
+    /// 【项目私有 patch】取出自上次调用以来最后一次文本编辑的行增量（`None` = 无未
+    /// 消费的编辑）。订阅者在收到 `InputEvent::Change` 后调用，用它校正行号锚点
+    /// （书签等）；消费即清空，避免同一增量被重复应用。
+    pub fn take_last_edit_delta(&mut self) -> Option<LineDelta> {
+        self.last_edit_delta.take()
+    }
+
+    /// 记录一次文本编辑的行增量（0 基，与 `adjust_folds_for_edit` 同口径）。
+    ///
+    /// 所有文本变更（打字 / 退格 / 粘贴 / 撤销重做 / IME）最终都落在
+    /// `display_map.on_text_changed` 的三个调用点，改动只在这三处顺带记录，
+    /// 不破坏既有行为。
+    fn record_edit_delta(&mut self, old_text: &Rope, range: &Range<usize>, new_text: &str) {
+        let start_line = old_text.offset_to_point(range.start).row;
+        let end_line = old_text
+            .offset_to_point(range.end.min(old_text.len()))
+            .row;
+        let deleted_lines = end_line.saturating_sub(start_line);
+        let inserted_lines = new_text.chars().filter(|c| *c == '\n').count();
+        self.last_edit_delta = Some(LineDelta {
+            start_line,
+            deleted_lines,
+            inserted_lines,
         });
     }
 
@@ -4329,6 +4379,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             // Incremental, single-range updates must run per edit.
             self.display_map
                 .adjust_folds_for_edit(&old_text, range, new_text);
+            self.record_edit_delta(&old_text, range, new_text);
             self.display_map
                 .on_text_changed(&self.text, range, &Rope::from(*new_text), cx);
 
@@ -4726,6 +4777,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         // Adjust folds before updating wrap map: remove overlapping folds and shift others
         self.display_map
             .adjust_folds_for_edit(&old_text, &range, new_text);
+        self.record_edit_delta(&old_text, &range, new_text);
         self.display_map
             .on_text_changed(&self.text, &range, &Rope::from(new_text), cx);
 
@@ -4844,6 +4896,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         // Adjust folds before updating wrap map: remove overlapping folds and shift others
         self.display_map
             .adjust_folds_for_edit(&old_text, &range, new_text);
+        self.record_edit_delta(&old_text, &range, new_text);
         self.display_map
             .on_text_changed(&self.text, &range, &Rope::from(new_text), cx);
 

@@ -63,6 +63,35 @@ fn editor_show_folds_or_default(cx: &App) -> bool {
     }
 }
 
+/// 【2026-10-28】读「基于缩进的折叠」开关（测试环境回退默认 true）。
+fn editor_indent_folding_or_default(cx: &App) -> bool {
+    if cx.has_global::<settings::model::Settings>() {
+        SettingsService::indent_folding(cx)
+    } else {
+        true
+    }
+}
+
+/// 【2026-10-28】读「自定义开块关键字」（逗号分隔字符串解析为 Vec<String>；测试环境用默认）。
+fn editor_fold_open_keywords_or_default(cx: &App) -> Vec<String> {
+    if cx.has_global::<settings::model::Settings>() {
+        let s = SettingsService::fold_open_keywords(cx);
+        s.split(',').map(|kw| kw.trim().to_uppercase()).filter(|kw| !kw.is_empty()).collect()
+    } else {
+        vec!["CASE".to_string(), "BEGIN".to_string(), "IF".to_string(), "LOOP".to_string(), "WHILE".to_string(), "FOR".to_string(), "REPEAT".to_string()]
+    }
+}
+
+/// 【2026-10-28】读「自定义闭块关键字」（逗号分隔字符串解析为 Vec<String>；测试环境用默认）。
+fn editor_fold_close_keywords_or_default(cx: &App) -> Vec<String> {
+    if cx.has_global::<settings::model::Settings>() {
+        let s = SettingsService::fold_close_keywords(cx);
+        s.split(',').map(|kw| kw.trim().to_uppercase()).filter(|kw| !kw.is_empty()).collect()
+    } else {
+        vec!["END".to_string()]
+    }
+}
+
 /// 【B3】读「自动换行」开关（测试环境回退默认 true，与内核一致）。
 fn editor_soft_wrap_or_default(cx: &App) -> bool {
     if cx.has_global::<settings::model::Settings>() {
@@ -148,9 +177,10 @@ use gpui_kit::*;
 
 use crate::changes::CellChange;
 use crate::channel::{self, ExecChannel};
+use crate::bookmark;
 use crate::commands::{
-    CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, RedoResultEdit, SaveDocument,
-    ToggleComment, UndoResultEdit,
+    CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, NextBookmark, PrevBookmark,
+    RedoResultEdit, SaveDocument, ToggleBookmark, ToggleComment, UndoResultEdit,
 };
 use crate::diagnostics;
 use crate::edit;
@@ -501,6 +531,8 @@ pub struct EditorHostPanel {
     ///
     /// 集合句柄借的是内核实体：面板 drop 时随内核一起释放，无需手动 `dispose`。
     invisible_decorations: Option<RangeDecorationCollection>,
+    /// 【书签】书签行标记集合（懒创建；`None` = 无书签 / 未建）。借内核实体，随面板释放。
+    bookmark_decorations: Option<RangeDecorationCollection>,
     /// 【LSP】本文档的语言服务会话（`None` = 宿主办无可用的服务；didOpen 已发）
     lsp: Option<crate::lsp::LspSession>,
     /// 【LSP】本文档的 LSP 文档版本（didOpen = 1，此后每次 didChange 自增）
@@ -569,6 +601,13 @@ impl EditorHostPanel {
             }
             state.set_value(content, window, cx);
             state.set_readonly(editor_read_only, cx);
+            // 去掉编辑器默认左边 padding（让文字顶到最左边）
+            state.set_editor_paddings(gpui::Edges {
+                top: Pixels::ZERO,
+                right: Pixels::from(8.),
+                bottom: Pixels::ZERO,
+                left: Pixels::ZERO,
+            });
             // A4：语义着色（SQL 词法；通用模式按脚本类型分派；CSV / 分析模式不上色）
             if highlight::is_enabled(mode) {
                 highlight::install(&mut state, cx, highlight_kind);
@@ -631,6 +670,8 @@ impl EditorHostPanel {
                     //（每次击键全量解析对大数据文件有开销，但 CSV 预览场景数据量
                     //  通常可控；卡顿再换防抖泵）
                     this.sync_csv_grid(cx);
+                    // 【方案 A】书签偏移校正：取内核本次编辑的行增量，平移 shared 书签并回写
+                    this.adjust_bookmarks_for_edit(state, cx);
                     // 【2c】显示隐藏字符开启时：正文变了，标注区间要跟着重算（区间是字节偏移，
                     // 文字一动就全失效；没开显示则集合为空 / 未建，直接跳过）
                     if this.shared.document_show_invisible(&this.document) {
@@ -692,6 +733,9 @@ impl EditorHostPanel {
             }
             panel
         });
+        // 【#8-按钮断链修复】队列通知目标 = 结果面板实体（弱引用）。此后按钮 `request`
+        // 入队即通知面板 → 下方 observe_in 回调 drain，点击不再依赖"碰巧的 notify"。
+        result_action_queue.set_panel(result_panel.downgrade());
         // Dock 化 §8.5（用户已确认「editor 宿主订阅自 drain」）：面板按钮 push 队列 →
         // 面板 notify → 本宿主观察回调 drain 分派回动作方法。gpui 的通知延迟到事务
         // 边界派发（app.rs notify → pending_effects），回调执行时面板已不在 update 中，
@@ -1068,6 +1112,7 @@ impl EditorHostPanel {
             commit_in_flight: None,
             toolbar: crate::toolbar::ToolbarLayout::default(),
             invisible_decorations: None,
+            bookmark_decorations: None,
             lsp: None,
             lsp_version: 0,
             lsp_alive: false,
@@ -1297,6 +1342,11 @@ impl EditorHostPanel {
             // 【T2c-4 余项】缩进随会话走（文档级权威值）
             tab_size: Some(self.shared.document_tab_size(&self.document)),
             hard_tabs: Some(self.shared.document_hard_tabs(&self.document)),
+            // 【结果集 #296】列序随会话走（面板自持；空 = 没拖过 → None 不落库）
+            result_column_order: {
+                let order = self.result_panel.read(cx).column_order();
+                (!order.is_empty()).then_some(order)
+            },
         })
     }
 
@@ -1509,6 +1559,15 @@ impl EditorHostPanel {
         }
         if let Some(hard) = session.hard_tabs {
             self.set_hard_tabs(hard, cx);
+        }
+        // 【结果集 #296】列序随会话回来：注入面板（新结果按列名匹配重排）。
+        // 面板在文档打开时已构造，这里 update 一次即可。
+        if let Some(order) = session.result_column_order.as_deref() {
+            if !order.is_empty() {
+                self.result_panel.update(cx, |panel, _cx| {
+                    panel.set_column_order(order.to_vec());
+                });
+            }
         }
         cx.notify();
     }
@@ -1835,11 +1894,11 @@ impl EditorHostPanel {
             .clone();
         let offset_x = scroll_handle.offset().x;
         let max_off = scroll_handle.max_offset().x;
-        let has_overflow = max_off < px(0.0);
-        let show_left = has_overflow && offset_x < px(0.0);
+        let has_overflow = max_off < Pixels::from(0.);
+        let show_left = has_overflow && offset_x < Pixels::from(0.);
         let show_right = has_overflow && offset_x > max_off;
         // 单步约 5 个图标按钮宽（toolbar small 档按钮 ≈32px）。
-        let arrow_step = px(160.0);
+        let arrow_step = Pixels::from(160.);
         let theme = cx.theme();
         let arrow_bg = theme.colors.sidebar;
 
@@ -1866,9 +1925,9 @@ impl EditorHostPanel {
             bar = bar.child(
                 div()
                     .absolute()
-                    .left(px(0.))
-                    .top(px(2.))
-                    .bottom(px(2.))
+                    .left(Pixels::from(0.))
+                    .top(Pixels::from(2.))
+                    .bottom(Pixels::from(2.))
                     .v_flex()
                     .items_center()
                     .justify_center()
@@ -1882,7 +1941,7 @@ impl EditorHostPanel {
                             .on_click(move |_, _, _| {
                                 let cur = handle.offset().x;
                                 // 回看左侧：offset 增加（趋近 0），最左即 0。
-                                handle.set_offset(point((cur + arrow_step).min(px(0.0)), px(0.0)));
+                                handle.set_offset(point((cur + arrow_step).min(Pixels::from(0.)), Pixels::from(0.)));
                             }),
                     ),
             );
@@ -1892,9 +1951,9 @@ impl EditorHostPanel {
             bar = bar.child(
                 div()
                     .absolute()
-                    .right(px(0.))
-                    .top(px(2.))
-                    .bottom(px(2.))
+                    .right(Pixels::from(0.))
+                    .top(Pixels::from(2.))
+                    .bottom(Pixels::from(2.))
                     .v_flex()
                     .items_center()
                     .justify_center()
@@ -1908,7 +1967,7 @@ impl EditorHostPanel {
                             .on_click(move |_, _, _| {
                                 let cur = handle.offset().x;
                                 // 看右侧：offset 减小（更负），最右 clamp 到 max_offset。
-                                handle.set_offset(point((cur - arrow_step).max(max_off), px(0.0)));
+                                handle.set_offset(point((cur - arrow_step).max(max_off), Pixels::from(0.)));
                             }),
                     ),
             );
@@ -2739,6 +2798,167 @@ impl EditorHostPanel {
         collection.set(decorations, cx);
     }
 
+    /// 【书签】本文档书签的 sidecar 路径（`None` = 未命名文档，无落盘）
+    fn bookmark_path(&self) -> Option<std::path::PathBuf> {
+        self.document_path()
+    }
+
+    /// 【书签】从 sidecar 读入本文档书签并刷新标记（事件路径；未命名文档 / 无 meta = 空）
+    ///
+    /// 挂在 `on_added_to`（进 Dock 即读一次）。`read_meta` 对缺失文件返回默认空 meta，
+    /// 所以「没建过书签的文件」与「空书签」同口径，不报错。
+    fn load_bookmarks(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.bookmark_path() else {
+            return;
+        };
+        match file_meta::read_meta(&path) {
+            Ok(meta) => {
+                let mut bookmarks = meta.bookmarks;
+                bookmark::normalize(&mut bookmarks);
+                self.shared.set_bookmarks(&self.document, bookmarks);
+            }
+            Err(_) => {
+                self.set_message(Some("书签读取失败".to_string()), cx);
+            }
+        }
+        self.refresh_bookmark_decorations(cx);
+    }
+
+    /// 【书签】把本文档当前书签写回 sidecar（事件路径；未命名文档 = 不落盘）
+    ///
+    /// 快照式：只写当前书签列表（默认说明 = 行号），不记历史。
+    fn sync_bookmarks(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.bookmark_path() else {
+            return;
+        };
+        let mut meta = file_meta::FileMeta::default();
+        meta.bookmarks = self.shared.bookmarks(&self.document);
+        if let Err(_) = file_meta::write_meta(&path, &meta) {
+            self.set_message(Some("书签写入失败".to_string()), cx);
+        }
+    }
+
+    /// 【书签】把本文档书签刷成行级 Fill 标记（懒创建集合；样式同隐藏字符先例）
+    ///
+    /// 书签行号 1 起（sidecar 口径）→ 内核 0 起换算；超出文档行数的书签直接跳过
+    /// （行号漂移暂不校正，见 rds-file-meta 文档）。
+    fn refresh_bookmark_decorations(&mut self, cx: &mut Context<Self>) {
+        use gpui_kit::component::input::RopeExt as _;
+        // 懒创建集合（先 update 再取色：`cx.theme()` 借用了 `cx`，见 gpui-kit-dev 规范）
+        if self.bookmark_decorations.is_none() {
+            self.bookmark_decorations = Some(self.editor.update(cx, |state, cx| {
+                state.create_range_decorations_collection(Vec::new(), cx)
+            }));
+        }
+        let color = cx.theme().colors.primary.opacity(0.14);
+        let lines = bookmark::lines(&self.shared.bookmarks(&self.document));
+        let rope = self.editor.read(cx).text().clone();
+        let decorations = lines
+            .into_iter()
+            .filter_map(|line_1| {
+                let row = line_1.saturating_sub(1);
+                if row >= rope.lines_len() {
+                    return None;
+                }
+                let range = rope.line_start_offset(row)..rope.line_end_offset(row);
+                Some(
+                    RangeDecoration::new(range)
+                        .with_style(RangeDecorationStyle::Fill)
+                        .with_color(color),
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(collection) = &self.bookmark_decorations {
+            collection.set(decorations, cx);
+        }
+    }
+
+    /// 【书签】当前光标所在行（1 起；编辑器内核行号 0 起）
+    fn cursor_line_1(&self, cx: &App) -> usize {
+        use gpui_kit::component::input::RopeExt as _;
+        let state = self.editor.read(cx);
+        let offset = state.selected_range().end;
+        state.text().offset_to_point(offset).row + 1
+    }
+
+    /// 【方案 A】文本变更后取内核记录的编辑行增量，校正 shared 书签并回写。
+    ///
+    /// 在 `InputEvent::Change` 回调里调用：内核在 `on_text_changed` 时记录了本次编辑的
+    /// `LineDelta`，这里 `take` 出来（消费即清空，避免重复应用），按「编辑区之前不动 /
+    /// 区内的锚定到编辑区首行 / 区后的整体平移」校正书签。书签有实际位移才重绘 + 落 sidecar。
+    fn adjust_bookmarks_for_edit(&mut self, state: &Entity<EditorState>, cx: &mut Context<Self>) {
+        let Some(delta) = state.update(cx, |s, _| s.take_last_edit_delta()) else {
+            return;
+        };
+        let mut bookmarks = self.shared.bookmarks(&self.document);
+        if bookmark::adjust_for_edit(&mut bookmarks, delta) {
+            self.shared.set_bookmarks(&self.document, bookmarks);
+            self.refresh_bookmark_decorations(cx);
+            self.sync_bookmarks(cx);
+        }
+    }
+
+    /// 【书签】`Ctrl+Shift+B`：切换当前行书签（书签不改文本，只读文档也可用）
+    pub(crate) fn on_toggle_bookmark(
+        &mut self,
+        _: &ToggleBookmark,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let line_1 = self.cursor_line_1(cx);
+        let mut bookmarks = self.shared.bookmarks(&self.document);
+        bookmark::toggle(&mut bookmarks, line_1);
+        bookmark::normalize(&mut bookmarks);
+        self.shared.set_bookmarks(&self.document, bookmarks);
+        self.refresh_bookmark_decorations(cx);
+        self.sync_bookmarks(cx);
+        cx.notify();
+    }
+
+    /// 【书签】`F8`：跳转到下一个书签（循环）
+    pub(crate) fn on_next_bookmark(
+        &mut self,
+        _: &NextBookmark,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.jump_to_bookmark(bookmark::next_after, window, cx);
+    }
+
+    /// 【书签】`Shift+F8`：跳转到上一个书签（循环）
+    pub(crate) fn on_prev_bookmark(
+        &mut self,
+        _: &PrevBookmark,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.jump_to_bookmark(bookmark::prev_before, window, cx);
+    }
+
+    /// 【书签】把光标移到某个书签行（内核 0 起）；无书签给一条提示，不静默
+    fn jump_to_bookmark(
+        &mut self,
+        pick: fn(&[file_meta::Bookmark], usize) -> Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (from_line_1, bookmarks) = {
+            let from = self.cursor_line_1(cx);
+            (from, self.shared.bookmarks(&self.document))
+        };
+        let Some(target_1) = pick(&bookmarks, from_line_1) else {
+            self.set_message(Some("没有书签".to_string()), cx);
+            return;
+        };
+        let target_0 = target_1.saturating_sub(1);
+        // `Position` 是 lsp-types 的 (line, character)，字段为 `u32`；行号在 u32 范围内
+        let target_0 = u32::try_from(target_0).unwrap_or(0);
+        self.editor.update(cx, |state, cx| {
+            state.set_cursor_position(Position::new(target_0, 0), window, cx);
+        });
+        cx.notify();
+    }
+
     /// 【T2c-3 收尾】切换编辑内容模式（行编辑 / 列编辑）。只改面板态并重绘；
     /// 切回行编辑时的多光标收拢由调用方（菜单 on_click 持有 window）经 [`Self::enforce_edit_mode`] 触发。
     pub(crate) fn set_edit_mode(&mut self, mode: EditMode, cx: &mut Context<Self>) {
@@ -3534,7 +3754,7 @@ impl EditorHostPanel {
                 .readonly(read_only)
                 .context_menu(context_menu)
                 .size_full();
-            let mut body = div().relative().size_full().child(editor);
+            let mut body = div().relative().size_full().pl_0().child(editor);
             if !read_only && self.editor_is_empty() {
                 body = body.child(self.render_write_hint(cx));
             }
@@ -5991,6 +6211,11 @@ impl EditorHostPanel {
         self.result_panel.read(cx).status().cloned()
     }
 
+    /// 测试用：当前呈现方式（网格 / 文本）——验证左竖条按钮真实点击链路
+    pub fn presentation_for_test(&self, cx: &App) -> result_panel::ports::Presentation {
+        self.result_panel.read(cx).presentation()
+    }
+
     /// 当前选中结果集的可重跑 SQL / 可复制（供测试断言按钮显隐）
     pub fn result_actions_for_test(&self, cx: &App) -> (Option<String>, bool) {
         let panel = self.result_panel.read(cx);
@@ -6092,7 +6317,8 @@ impl EditorHostPanel {
         self.result_panel.clone()
     }
 
-    /// 结果面板实体（Dock 化阶段 3：workbench 底部 dock 薄壳经它渲染活动文档的结果区）
+    /// 结果面板实体（编辑器宿主内嵌：`v_resizable` 分栏渲染活动文档的结果区；2026-10-27 起
+    /// 不再挂全局 dock 薄壳，此入口供编辑器内部与测试取面板实体）
     pub fn result_panel(&self) -> Entity<ResultPanel> {
         self.result_panel.clone()
     }
@@ -6477,8 +6703,9 @@ impl EditorHostPanel {
         // 【B14】落在**新结果集**上的失败：它不抢选中（B2 的语义），所以结果区不会报它——
         // 状态栏补一句，否则用户只看到标签上多个红点，不知道为什么
         let mut background_failure: Option<String> = None;
-        // 执行失败原因的克隆——用于循环结束后弹全局通知（避免 if let 移动后再用）
-        let mut exec_failure_notice: Option<String> = None;
+        // 执行失败原因的克隆——用于循环结束后弹全局通知（避免 if let 移动后再用）。
+        // 延迟绑定：只在 `mine_arrived > 0` 分支里赋值，同分支消费，无未初始化路径。
+        let exec_failure_notice;
         for outcome in outcomes {
             let is_mine = outcome.document == self.document;
             let outcome_ok = outcome.result.is_ok();
@@ -7075,11 +7302,10 @@ impl EditorHostPanel {
 
     /// 【Dock 化 §8.4】取走在途的结果面板动作并按变体分派到编辑器动作方法
     ///
-    /// 消费方 = 结果面板按钮（[`ResultActionQueue::push`]，面板不反向依赖编辑器）
-    /// + 宿主事件路径 drain（阶段 3 由 workbench dock 薄壳在面板 notify 后转手调用）。
+    /// 消费方 = 结果面板按钮（[`ResultActionQueue::request`]：入队即 notify 面板，面板不反向依赖
+    /// 编辑器）+ 宿主 `observe_in(&result_panel)` 回调（面板 notify 时本函数被调用）。
     /// 处理中可能**再入队**（如 `SetPushdown` 打开且有词 → 面板入队 `PushdownFilter`），
     /// 所以循环 drain 直到队列空——新请求落进下一轮，同一次事件里一并消化。
-    #[cfg_attr(not(test), allow(dead_code))] // 阶段 3 dock 接入前生产侧无调用者；测试直接调
     pub(crate) fn drain_result_actions(&mut self, cx: &mut Context<Self>) {
         let mut pending = self.result_action_queue.drain();
         while !pending.is_empty() {
@@ -7149,6 +7375,32 @@ impl EditorHostPanel {
             ResultRequest::CopySql => {
                 // 复制来源 SQL（工具栏最左侧 SQL 预览点击）
                 let sql = self.result_panel.read(cx).sql().unwrap_or("").to_string();
+                if !sql.is_empty() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(sql));
+                }
+            }
+            // 【2026-10-28 微调】SQL 预览：弹出窗口（kit Dialog + 只读 Textarea）。
+            // `Dialog::new` 需 `&mut App`，面板 render 只有 `&App`——走窗口句柄转手，
+            // 面板方法在事件路径预建 Dialog 元素 / Textarea 实体（与 BeginRename 同模式）
+            ResultRequest::OpenSqlDialog => {
+                let panel = self.result_panel.clone();
+                let _ = self.window.update(cx, |_panel, window, app| {
+                    panel.update(app, |p, cx| p.open_sql_dialog(window, cx));
+                });
+            }
+            ResultRequest::CloseSqlDialog => {
+                self.result_panel.update(cx, |p, cx| p.close_sql_dialog(cx));
+            }
+            // 【1.2】筛选框运行：wrapped SQL（select * from (原SQL) where 词）替换重查，
+            // 生成 SQL 写入面板 exec_sql（右栏「执行SQL」页签）
+            ResultRequest::RunFilterAsQuery => self.run_filter_as_query(cx),
+            // 【1.2】筛选框展开 / 收起（顶宽筛选条）
+            ResultRequest::ToggleFilterExpand => {
+                self.result_panel.update(cx, |p, cx| p.toggle_filter_expand(cx))
+            }
+            // 【1.2】复制「执行SQL」页签里的 wrapped SQL
+            ResultRequest::CopyExecSql => {
+                let sql = self.result_panel.read(cx).exec_sql().unwrap_or("").to_string();
                 if !sql.is_empty() {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(sql));
                 }
@@ -7228,6 +7480,12 @@ impl EditorHostPanel {
             ResultRequest::RenameSet(index, title) => {
                 self.shared
                     .update_results(|store| store.set_title(&self.document, index, title));
+                cx.notify();
+            }
+            // 【结果集 #296】列序拖拽：面板订阅里已更新 `column_order`（权威值），
+            // 这里只需触发落库（与 Ctrl+S 同一条快照链路，改动即存）
+            ResultRequest::ColumnOrderChanged { .. } => {
+                self.save_session_now(cx);
                 cx.notify();
             }
             // 【C1】切换第 index 份结果集的钉住态（钉住不被 FIFO 淘汰）
@@ -7359,12 +7617,11 @@ impl EditorHostPanel {
         });
     }
 
-    /// 跳转的**落地入口**（供测试驱动；真机走上面的窗口句柄路径）
     /// 跳转的**落地入口**：手上有窗口时直接做（错误卡片上那个按钮，以及测试）
     ///
     /// 真机的自动跳转走上面的窗口句柄路径（回填发生在没有窗口的后台轮询里）；这条入口是
     /// 按下去就有窗口的情况，也是测试能驱动的那一半（与对话框“真点击”同一口径，架构 §12 #29）。
-    #[cfg_attr(not(test), allow(dead_code))] // Dock 化后错误卡按钮走队列 LocateError→jump_to_error_site；本入口保留给测试与阶段 3
+    #[cfg_attr(not(test), allow(dead_code))] // 生产错误卡按钮走队列 LocateError→jump_to_error_site；本入口测试直接调
     pub(crate) fn jump_to_error_site_with(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(site) = self.error_site.clone() else {
             return;
@@ -7544,18 +7801,30 @@ impl EditorHostPanel {
         grid.update(cx, |state, _cx| state.delegate_mut().set_loading_more(true));
     }
 
-    /// 【B15】把当前筛选词应用到网格（事件路径：重算一次视图行序）。
-    /// 状态与网格同步在面板实体（`drain_result_actions` 分派回来时调用；
-    /// 面板 `apply_filter` 含「下发源库开着且有词 → 入队 PushdownFilter」）。
-    ///
-    /// 注：筛选框输入与 300ms 防抖已随 Dock 化迁入面板实体（`ResultPanel::on_filter_input`），
-    /// 编辑器不再持有筛选框 / 防抖任务。
-    #[cfg_attr(not(test), allow(dead_code))] // 面板筛选路径自洽；本入口保留给测试与阶段 3 直接调
-    pub(crate) fn apply_filter(&mut self, cx: &mut Context<Self>) {
-        self.result_panel.update(cx, |p, cx| p.apply_filter(cx));
+    /// 【1.2】筛选框运行：用 `select * from (原SQL) where 词` **替换**当前结果集重查
+    /// （用户口径：刷新结果集）。词取面板**实时**筛选词（运行按钮点击时面板已定稿）。
+    /// 生成的 wrapped SQL 写入面板 `exec_sql`（右栏「执行SQL」页签展示）。
+    pub(crate) fn run_filter_as_query(&mut self, cx: &mut Context<Self>) {
+        let value = self.result_panel.read(cx).filter_text().trim().to_string();
+        if value.is_empty() {
+            self.set_message(Some("先填一个筛选词再运行".to_string()), cx);
+            return;
+        }
+        let Some(entry) = self
+            .shared
+            .results_active(&self.document)
+            .filter(ResultEntry::has_grid)
+        else {
+            self.set_message(Some("没有可执行的结果集".to_string()), cx);
+            return;
+        };
+        let wrapped = format!("select * from ({}) as _q where {}", entry.sql, value);
+        self.result_panel
+            .update(cx, |p, cx| p.set_exec_sql(Some(wrapped.clone()), cx));
+        self.execute(ExecTarget::Statement(wrapped), ResultPlacement::Replace, cx);
     }
 
-    /// 【B14】下发源库：把当前筛选词交给执行器拼 `WHERE` 重查（结果落**新结果集**）
+    /// 【B15】下发源库：把当前筛选词交给执行器拼 `WHERE` 重查（结果落**新结果集**）
     pub(crate) fn pushdown_filter(&mut self, cx: &mut Context<Self>) {
         let Some(entry) = self
             .shared
@@ -7826,13 +8095,6 @@ impl EditorHostPanel {
     pub(crate) fn set_pushdown(&mut self, open: bool, cx: &mut Context<Self>) {
         self.result_panel.update(cx, |p, _| p.set_pushdown(open));
         cx.notify();
-    }
-
-    /// 【B15】清除筛选（工具栏那个 ✕）：输入框清空 + 立即应用空词（面板内自洽；
-    /// 需要 `window`——`InputState::set_value` 签名，编辑器分派时转手）
-    #[cfg_attr(not(test), allow(dead_code))] // 生产走队列 ClearFilter→clear_filter_via_window；本入口保留给测试与阶段 3
-    pub(crate) fn clear_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.result_panel.update(cx, |p, cx| p.clear_filter(window, cx));
     }
 
     /// 【B15】测试用：直接应用筛选词（跳过 300ms 防抖，验“应用之后怎样”）
@@ -8601,7 +8863,10 @@ fn sync_fold(
 ) {
     if shared.folding_enabled(document) {
         let text = state.value().to_string();
-        fold::install(state, &text, cx);
+        let indent_folding = shared.indent_folding();
+        let open_keywords = shared.fold_open_keywords();
+        let close_keywords = shared.fold_close_keywords();
+        fold::install(state, &text, indent_folding, &open_keywords, &close_keywords, cx);
     } else {
         state.set_folding(false, window, cx);
     }
@@ -8640,6 +8905,8 @@ impl BasePanel for EditorHostPanel {
         self.group = Some(group);
         // 【遗留 #10】分析模式：进 Dock 时把单元编辑器建齐（事件路径；构造期不能建）
         self.sync_cell_editors(window, cx);
+        // 【书签】进 Dock 读一次 sidecar（有路径才读；事件路径，render 不碰 I/O）
+        self.load_bookmarks(cx);
     }
 
     /// 成为当前显示的标签 → 把焦点交给编辑内核，切过去就能直接打字
@@ -8758,6 +9025,29 @@ impl Render for EditorHostPanel {
                 sync_fold(shared, &document, state, window, cx);
             });
         }
+        // 【2026-10-28】基于缩进的折叠开关：设置 → shared.indent_folding → 重新计算折叠候选。
+        // 与 show_folds 同款同步逻辑。
+        let want_indent_folding = editor_indent_folding_or_default(cx);
+        if self.shared.indent_folding() != want_indent_folding {
+            self.shared.set_indent_folding(want_indent_folding);
+            let shared = &self.shared;
+            let document = self.document.clone();
+            self.editor.update(cx, |state, cx| {
+                sync_fold(shared, &document, state, window, cx);
+            });
+        }
+        // 【2026-10-28】自定义折叠关键字：设置 → shared → 重新计算折叠候选。
+        let want_open_keywords = editor_fold_open_keywords_or_default(cx);
+        let want_close_keywords = editor_fold_close_keywords_or_default(cx);
+        if self.shared.fold_open_keywords() != want_open_keywords || self.shared.fold_close_keywords() != want_close_keywords {
+            self.shared.set_fold_open_keywords(want_open_keywords);
+            self.shared.set_fold_close_keywords(want_close_keywords);
+            let shared = &self.shared;
+            let document = self.document.clone();
+            self.editor.update(cx, |state, cx| {
+                sync_fold(shared, &document, state, window, cx);
+            });
+        }
         // #64 自动换行：设置 → 面板缓存 → 内核（render 权威同步点，同 #48 行号）。
         // 内核 `set_soft_wrap` 值相同内部直接 return，不 notify → 无重绘循环。
         let want_soft_wrap = editor_soft_wrap_or_default(cx);
@@ -8820,7 +9110,11 @@ impl Render for EditorHostPanel {
             // 【撤销/重做】网格里的 `Ctrl+Z` / `Ctrl+Shift+Z`：同挂在网格上下文上；
             // 编辑框内 `Ctrl+Z` 由输入内核处理，只有焦点在网格（非编辑框）时才到这两个
             .on_action(cx.listener(Self::on_undo_result_edit))
-            .on_action(cx.listener(Self::on_redo_result_edit));
+            .on_action(cx.listener(Self::on_redo_result_edit))
+            // 【书签】`Ctrl+Shift+B` 切换 / `F8` 下一 / `Shift+F8` 上一（键位在 crates/app 注册）
+            .on_action(cx.listener(Self::on_toggle_bookmark))
+            .on_action(cx.listener(Self::on_next_bookmark))
+            .on_action(cx.listener(Self::on_prev_bookmark));
         // 工具栏（②）：模式指示器在这里，模式不再是只能从状态栏读到的短标签
         let mode = self
             .with_document(|doc| doc.mode())
@@ -8857,7 +9151,9 @@ impl Render for EditorHostPanel {
             .flex_1()
             .min_h_0()
             .debug_selector(|| "editor-code-area".to_string())
-            .px_2()
+            // 行号区域左侧对齐 Dock 面板左边：去掉左边 padding，只保留右边
+            .pl_0()
+            .pr_2()
             .on_drop({
                 let entity = cx.entity();
                 move |payload: &::shared::InsertFileDrag, window, app| {
@@ -9340,10 +9636,11 @@ fn render_conn_slots(
     // 连接名称槽（2026-10-28 重构）：使用 DropdownButton 组件，左边是名称按钮，
     // 右边是下拉箭头，合并成一个整体，避免两个按钮分开的视觉问题。
     let conn_name_button = Button::new("editor-conn-name")
+        .debug_selector(|| "editor-conn-name".to_string())
         .icon(
             Icon::empty()
                 .path("icons/dot.svg")
-                .size(px(6.))
+                .size(theme.font_size * ui::STATUS_DOT_SIZE)
                 .text_color(dot_color),
         )
         .label(truncate_label(&conn_label, 14))
@@ -9441,6 +9738,7 @@ fn render_conn_slots(
             None => "schema".to_string(),
         };
         let schema_name_button = Button::new("editor-schema-name")
+            .debug_selector(|| "editor-schema-name".to_string())
             .label(truncate_label(&label, 12))
             .on_click({
                 let entity = entity.clone();

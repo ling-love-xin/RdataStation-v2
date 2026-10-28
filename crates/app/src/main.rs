@@ -19,9 +19,10 @@ use analytics_resource::commands::{
 };
 use editor::commands::{
     CloseDocument, CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, FunctionManual,
+    NextBookmark, PrevBookmark,
     SignatureHelp,
     OpenDocument,
-    RedoResultEdit, SaveDocument, SaveDocumentAs, ToggleComment, TriggerCompletion,
+    RedoResultEdit, SaveDocument, SaveDocumentAs, ToggleBookmark, ToggleComment, TriggerCompletion,
     UndoResultEdit,
 };
 use gpui_kit::component::{Root, Theme, ThemeRegistry, TitleBar};
@@ -247,6 +248,11 @@ fn run_app() {
                 // 【B9 切片二】手动补全：`Ctrl+Space`（内核没占用：grep 过 `input/` 下的 `ctrl-space` /
                 // `"space"` 均为空；打字触发那条路由内核自己管，这条只是“再请一次候选”）
                 KeyBinding::new("ctrl-space", TriggerCompletion, Some("editor")),
+                // 【书签】`Ctrl+Shift+B` 切换当前行 / `F8` 下一个 / `Shift+F8` 上一个
+                // （书签不改文本，只读文档也可用；键位已核对：editor context 与内核均无占用）
+                KeyBinding::new("ctrl-shift-b", ToggleBookmark, Some("editor")),
+                KeyBinding::new("f8", NextBookmark, Some("editor")),
+                KeyBinding::new("shift-f8", PrevBookmark, Some("editor")),
                 // 【B14】结果网格里的 `Ctrl+C` = 复制选中的一格 / 一整行。**另一个 context**：
                 // 它只挂在结果网格那层元素上，所以编辑区里按 `Ctrl+C` 仍是内核的文本复制
                 // ——两个 context 互不覆盖（配对处见 `commands::RESULT_GRID_CONTEXT` 的注释）

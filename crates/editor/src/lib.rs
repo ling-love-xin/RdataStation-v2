@@ -105,6 +105,8 @@
 //! 不在本 crate 重复实现。
 
 pub mod analysis;
+/// 【书签】编辑器接入 `rds-file-meta` 的纯逻辑（切换 / 跳转 / 排序），I/O 在 `view/host`
+pub mod bookmark;
 pub mod cell;
 pub mod changes;
 pub mod channel;

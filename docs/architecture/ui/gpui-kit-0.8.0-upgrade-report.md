@@ -32,6 +32,7 @@
 | ③ | `collapse_cursors` | 仍缺失 | `undo_manager.break_transaction_coalescing` + `selections.remove_all_but_active`（0.8.0 均 crate 内可见） |
 | ④ | `cursor_count/cursor_offsets` | 仍缺失 | `selections.len` / 遍历 `cursor_offset`，插入在 `active_selection` 之前 |
 | ⑤ | `select_columnar_block` | 官方两版（0.7.1/0.8.0）均无 | 从 0.7.1 vendor 移植（`git show HEAD`），依赖 0.8.0 `ColumnarPoint::new`（state.rs:320/325 pub(super)）与 `build_columnar_selection`（2509 pub(super)），签名兼容 |
+| ⑥ | `LineDelta` + `take_last_edit_delta`（编辑行增量，2026-10-28） | 官方无 | 书签偏移校正（方案A）：新增 `LineDelta{start_line,deleted_lines,inserted_lines}` 结构 + `EditorState.last_edit_delta` 字段 + `record_edit_delta()`（私有，0 基，与 `adjust_folds_for_edit` 同口径）+ `take_last_edit_delta()`（公开，消费即清空）；在 `on_text_changed` 的 3 个调用点（`replace_text_in_ranges`/`replace_text_in_range`/`replace_and_mark_text_in_range`）顺带记录。升级重放：加结构 + 字段（含构造初始化 None）+ 2 方法 + 3 调用点，MD5 自检；编辑器经 `gpui_kit::component::input::{InputEvent,LineDelta}` 消费 |
 
 ### gpui-component（`src/dock/mod.rs`，+105）
 

@@ -175,6 +175,13 @@ pub struct EditorShared {
     /// 整体不喂（不是"只看不折"）——`sync_fold` 会落 `set_folding(false)`，槽位与
     /// chevron 一并消失，与能力表关闭同口径。
     show_folds: Rc<std::cell::Cell<bool>>,
+    /// 【2026-10-28】基于缩进的折叠开关（设置页切换；默认开）。
+    /// 开启后只要下一行缩进比当前行大，就会出现折叠按钮。
+    indent_folding: Rc<std::cell::Cell<bool>>,
+    /// 【2026-10-28】自定义开块关键字列表（折叠用；逗号分隔解析后）。
+    fold_open_keywords: Rc<std::cell::RefCell<Vec<String>>>,
+    /// 【2026-10-28】自定义闭块关键字列表（折叠用；逗号分隔解析后）。
+    fold_close_keywords: Rc<std::cell::RefCell<Vec<String>>>,
     /// 执行回执队列（宿主轮询取走；见 [`ExecReceipt`]）
     receipts: Rc<RefCell<Vec<ExecReceipt>>>,
     /// 【#54 B】语义诊断目录快照（**按文档存**：多文档可各绑各连接，扫描只认
@@ -184,6 +191,11 @@ pub struct EditorShared {
     catalog_snapshots: Rc<RefCell<std::collections::HashMap<crate::model::DocumentId, Arc<Catalog>>>>,
     /// 【#54 C6/C7】跳转定义目标解析端口（宿主注入；未注入 = 内核走默认文档内移动）
     show_document_port: Rc<RefCell<Option<ShowDocumentPort>>>,
+    /// 【书签】每文档一份书签（与 sidecar 同一数据源：`file_meta::Bookmark`）。
+    ///
+    /// 打开文档时从 `.filename.meta.json` 读入、切换后写回（事件路径，`view/host`）；
+    /// 渲染只读。无条目 = 该文档还没有书签记录（与空书签同口径）。
+    bookmarks: Rc<RefCell<std::collections::HashMap<crate::model::DocumentId, Vec<file_meta::Bookmark>>>>,
 }
 
 impl Clone for EditorShared {
@@ -215,6 +227,10 @@ impl Clone for EditorShared {
             catalog_snapshots: self.catalog_snapshots.clone(),
             show_document_port: self.show_document_port.clone(),
             show_folds: self.show_folds.clone(),
+            indent_folding: self.indent_folding.clone(),
+            fold_open_keywords: self.fold_open_keywords.clone(),
+            fold_close_keywords: self.fold_close_keywords.clone(),
+            bookmarks: self.bookmarks.clone(),
         }
     }
 }
@@ -252,6 +268,14 @@ impl EditorShared {
             catalog_snapshots: Rc::new(RefCell::new(std::collections::HashMap::new())),
             show_document_port: Rc::new(RefCell::new(None)),
             show_folds: Rc::new(std::cell::Cell::new(true)),
+            indent_folding: Rc::new(std::cell::Cell::new(true)),
+            fold_open_keywords: Rc::new(std::cell::RefCell::new(
+                "CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT".split(',').map(|s| s.to_string()).collect()
+            )),
+            fold_close_keywords: Rc::new(std::cell::RefCell::new(
+                "END".split(',').map(|s| s.to_string()).collect()
+            )),
+            bookmarks: Rc::new(RefCell::new(std::collections::HashMap::new())),
         }
     }
 
@@ -286,6 +310,26 @@ impl EditorShared {
     /// 便捷：打开文档（同路径重复打开 = 激活）
     pub fn open(&self, request: OpenRequest) -> OpenOutcome {
         self.update(|service| service.open(request))
+    }
+
+    /// 某文档当前书签（克隆一份；无记录 = 空，与空书签同口径）
+    pub fn bookmarks(&self, document: &crate::model::DocumentId) -> Vec<file_meta::Bookmark> {
+        self.bookmarks
+            .borrow()
+            .get(document)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// 覆写某文档书签（打开加载 / 切换写回共用；事件路径）
+    pub fn set_bookmarks(
+        &self,
+        document: &crate::model::DocumentId,
+        bookmarks: Vec<file_meta::Bookmark>,
+    ) {
+        self.bookmarks
+            .borrow_mut()
+            .insert(document.clone(), bookmarks);
     }
 
     /// 注入执行器（**宿主调用一次**；重复注入会换掉旧通道，旧通道的工作线程随之退出）
@@ -1354,6 +1398,36 @@ impl EditorShared {
     /// 切换用户折叠开关（事件路径：按钮点击 → set + 宿主重跑 `sync_fold` + notify）
     pub fn set_show_folds(&self, on: bool) {
         self.show_folds.set(on);
+    }
+
+    /// 基于缩进的折叠开关（设置页切换；2026-10-28 加入）
+    pub fn indent_folding(&self) -> bool {
+        self.indent_folding.get()
+    }
+
+    /// 切换基于缩进的折叠开关（事件路径：设置页 → set + 宿主重跑 `sync_fold` + notify）
+    pub fn set_indent_folding(&self, on: bool) {
+        self.indent_folding.set(on);
+    }
+
+    /// 自定义开块关键字列表（折叠用）
+    pub fn fold_open_keywords(&self) -> Vec<String> {
+        self.fold_open_keywords.borrow().clone()
+    }
+
+    /// 设置自定义开块关键字列表（逗号分隔字符串解析后）
+    pub fn set_fold_open_keywords(&self, keywords: Vec<String>) {
+        *self.fold_open_keywords.borrow_mut() = keywords;
+    }
+
+    /// 自定义闭块关键字列表（折叠用）
+    pub fn fold_close_keywords(&self) -> Vec<String> {
+        self.fold_close_keywords.borrow().clone()
+    }
+
+    /// 设置自定义闭块关键字列表（逗号分隔字符串解析后）
+    pub fn set_fold_close_keywords(&self, keywords: Vec<String>) {
+        *self.fold_close_keywords.borrow_mut() = keywords;
     }
 
     /// 【B18】后台扫描的范围（折叠 / 诊断两个重活开不开）

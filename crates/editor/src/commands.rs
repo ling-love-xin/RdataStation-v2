@@ -36,7 +36,10 @@ actions!(
         UndoResultEdit,
         RedoResultEdit,
         FunctionManual,
-        SignatureHelp
+        SignatureHelp,
+        ToggleBookmark,
+        NextBookmark,
+        PrevBookmark,
     ]
 );
 
