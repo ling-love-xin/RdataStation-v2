@@ -213,11 +213,22 @@ pub fn format(sql: &str, dialect: SqlDialect) -> String {
 
             let mut out = bodies.join(";\n\n");
             out.push(';');
+            // 注释保真：格式化不得静默丢弃用户注释。sqlglot 对**尾随行注释**
+            // 已知可解析但 pretty 输出会丢掉（2026-10-29 实测行为变化）；
+            // 输入输出注释标记数不一致 → 原样返回，保护用户内容。
+            if comment_mark_count(sql) != comment_mark_count(&out) {
+                return sql.to_string();
+            }
             out
         }
         // 空输入 / 解析失败（文本可能还没写完）：原样返回，不静默改写用户内容
         Ok(_) | Err(_) => sql.to_string(),
     }
+}
+
+/// 注释标记计数（行注释 `--` / 块注释 `/*` / MySQL `#`）——格式化保真判据
+fn comment_mark_count(text: &str) -> usize {
+    text.matches("--").count() + text.matches("/*").count() + text.matches('#').count()
 }
 
 #[cfg(test)]
