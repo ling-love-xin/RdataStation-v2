@@ -1420,7 +1420,11 @@ impl NavView {
     ///
     /// 触发点：`chrome.rs` 首次渲染的 `defer_in`（每个连接只跑一次，天然是「启动预连」）。
     /// 静默语义：失败只留日志（不弹提示、不阻塞 UI），用户手动展开仍会走原有建连路径。
-    pub(super) fn prewarm_expanded_connections(&self) {
+    pub(super) fn prewarm_expanded_connections(&self, cx: &mut Context<Self>) {
+        // 启动预连开关：默认关，用户可在设置里开启。
+        if !self.host.auto_connect_on_startup(cx) {
+            return;
+        }
         // 展开根的集合（连接 id 去重），按连接列表顺序——取前几个做预连。
         let root_set: std::collections::HashSet<String> = {
             let view = self.nav.borrow();

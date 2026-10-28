@@ -229,6 +229,9 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         }
         Slot::EditorShowLineNumbers => SettingValue::Bool(settings.editor.show_line_numbers),
         Slot::EditorShowFolds => SettingValue::Bool(settings.editor.show_folds),
+        Slot::EditorIndentFolds => SettingValue::Bool(settings.editor.indent_folding),
+        Slot::EditorFoldOpenKeywords => SettingValue::Text(settings.editor.fold_open_keywords.clone()),
+        Slot::EditorFoldCloseKeywords => SettingValue::Text(settings.editor.fold_close_keywords.clone()),
         Slot::EditorSoftWrap => SettingValue::Bool(settings.editor.soft_wrap),
         Slot::EditorAutoClose => SettingValue::Bool(settings.editor.auto_close),
         Slot::EditorSmartIndent => SettingValue::Bool(settings.editor.smart_indent),
@@ -361,6 +364,18 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::LayoutRightSidebarWidth => {
             SettingValue::Number(settings.layout.right_sidebar_width as f64)
         }
+        Slot::NotificationSuccessAutohideSecs => {
+            SettingValue::Number(settings.notifications.success_autohide_secs as f64)
+        }
+        Slot::NotificationWarningAutohideSecs => {
+            SettingValue::Number(settings.notifications.warning_autohide_secs as f64)
+        }
+        Slot::NotificationErrorAutohide => {
+            SettingValue::Bool(settings.notifications.error_autohide)
+        }
+        Slot::NotificationMergeWindowSecs => {
+            SettingValue::Number(settings.notifications.merge_window_secs as f64)
+        }
     })
 }
 
@@ -470,6 +485,24 @@ impl SettingsService {
                 };
                 Self::set_show_folds(on, cx);
             }
+            Slot::EditorIndentFolds => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_indent_folding(on, cx);
+            }
+            Slot::EditorFoldOpenKeywords => {
+                let Some(keywords) = value.as_text() else {
+                    return false;
+                };
+                Self::set_fold_open_keywords(keywords.to_string(), cx);
+            }
+            Slot::EditorFoldCloseKeywords => {
+                let Some(keywords) = value.as_text() else {
+                    return false;
+                };
+                Self::set_fold_close_keywords(keywords.to_string(), cx);
+            }
             Slot::EditorSoftWrap => {
                 let Some(on) = value.as_bool() else {
                     return false;
@@ -562,6 +595,40 @@ impl SettingsService {
                     return false;
                 }
                 Self::set_layout_right_sidebar_width(n as i64, cx);
+            }
+            Slot::NotificationSuccessAutohideSecs => {
+                let Some(n) = value.as_number() else {
+                    return false;
+                };
+                // 只认 0–3600 秒（页面只给预设档；手改坏时拒绝，不猜）。
+                if !(0.0..=3600.0).contains(&n) {
+                    return false;
+                }
+                Self::set_notify_success_autohide_secs(n as u32, cx);
+            }
+            Slot::NotificationWarningAutohideSecs => {
+                let Some(n) = value.as_number() else {
+                    return false;
+                };
+                if !(0.0..=3600.0).contains(&n) {
+                    return false;
+                }
+                Self::set_notify_warning_autohide_secs(n as u32, cx);
+            }
+            Slot::NotificationErrorAutohide => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_notify_error_autohide(on, cx);
+            }
+            Slot::NotificationMergeWindowSecs => {
+                let Some(n) = value.as_number() else {
+                    return false;
+                };
+                if !(0.0..=3600.0).contains(&n) {
+                    return false;
+                }
+                Self::set_notify_merge_window_secs(n as u32, cx);
             }
             Slot::NavigatorSourceShortCode => {
                 let Some(on) = value.as_bool() else {
@@ -1051,6 +1118,55 @@ impl SettingsService {
         cx.refresh_windows();
     }
 
+    /// 读取「基于缩进的折叠」开关（设在设置页；`EditorHostPanel::render` 渲染权威同步点
+    /// 读取 → 重新计算折叠候选）。
+    pub fn indent_folding(cx: &App) -> bool {
+        cx.global::<Settings>().editor.indent_folding
+    }
+
+    /// 基于缩进的折叠开关：更新 global → 持久化 → 立即重绘所有窗口。
+    ///
+    /// 即时生效靠 `refresh_windows`：下一帧 `EditorHostPanel::render` 读到新值，
+    /// 重新计算折叠候选。
+    pub fn set_indent_folding(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.indent_folding = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+
+    /// 读取自定义开块关键字列表（折叠用；逗号分隔）。
+    pub fn fold_open_keywords(cx: &App) -> String {
+        cx.global::<Settings>().editor.fold_open_keywords.clone()
+    }
+
+    /// 自定义开块关键字列表：更新 global → 持久化 → 立即重绘所有窗口。
+    pub fn set_fold_open_keywords(keywords: String, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.fold_open_keywords = keywords;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+
+    /// 读取自定义闭块关键字列表（折叠用；逗号分隔）。
+    pub fn fold_close_keywords(cx: &App) -> String {
+        cx.global::<Settings>().editor.fold_close_keywords.clone()
+    }
+
+    /// 自定义闭块关键字列表：更新 global → 持久化 → 立即重绘所有窗口。
+    pub fn set_fold_close_keywords(keywords: String, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.fold_close_keywords = keywords;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+
     /// 读取「自动换行」开关（设在设置页；`EditorHostPanel::render` 渲染权威同步点
     /// 读取 → 与面板缓存比较后同步内核 `set_soft_wrap`）。
     pub fn soft_wrap(cx: &App) -> bool {
@@ -1323,6 +1439,46 @@ impl SettingsService {
         cx.refresh_windows();
     }
 
+    /// 设置并持久化成功/信息类通知自动消失秒数（0 = 不自动消失）。
+    pub fn set_notify_success_autohide_secs(secs: u32, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.notifications.success_autohide_secs = secs.clamp(0, 3600);
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+
+    /// 设置并持久化警告类通知自动消失秒数（0 = 不自动消失）。
+    pub fn set_notify_warning_autohide_secs(secs: u32, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.notifications.warning_autohide_secs = secs.clamp(0, 3600);
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+
+    /// 设置并持久化错误类通知是否自动消失（默认关闭，必须手动关闭错误通知）。
+    pub fn set_notify_error_autohide(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.notifications.error_autohide = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+
+    /// 设置并持久化同类通知合并窗口秒数（0 = 不合并）。
+    pub fn set_notify_merge_window_secs(secs: u32, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.notifications.merge_window_secs = secs.clamp(0, 3600);
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+
     /// 设置并持久化启动时左侧栏默认显示的模块（更新 global → 写 settings.json）。
     pub fn set_startup_default_left_panel(key: &str, cx: &mut App) {
         {
@@ -1449,6 +1605,11 @@ impl SettingsService {
     /// 面板是否显示搜索行。
     pub fn show_search(cx: &App) -> bool {
         cx.global::<Settings>().navigator.show_search
+    }
+
+    /// 启动时是否自动连接上次打开的连接。
+    pub fn auto_connect_on_startup(cx: &App) -> bool {
+        cx.global::<Settings>().navigator.auto_connect_on_startup
     }
 
     /// 设置并持久化「显示搜索行」开关。

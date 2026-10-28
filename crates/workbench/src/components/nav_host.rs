@@ -137,6 +137,10 @@ impl NavHost for WorkbenchNavHost {
         settings::SettingsService::set_show_search(value, cx);
     }
 
+    fn auto_connect_on_startup(&self, cx: &App) -> bool {
+        settings::SettingsService::auto_connect_on_startup(cx)
+    }
+
     fn show_inline_stats(&self, cx: &App) -> bool {
         settings::SettingsService::show_inline_stats(cx)
     }

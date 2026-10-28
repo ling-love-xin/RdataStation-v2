@@ -512,6 +512,21 @@ pub struct Editor {
     /// `sync_fold` 重跑（install / set_folding(false)）。
     #[serde(default = "default_show_folds")]
     pub show_folds: bool,
+    /// 是否启用基于缩进的折叠（VS Code 风格；默认开）。
+    /// 开启后只要下一行缩进比当前行大，就会出现折叠按钮。
+    /// 即时生效：编辑器 render 权威同步点重新计算折叠候选。
+    #[serde(default = "default_indent_folding")]
+    pub indent_folding: bool,
+    /// 自定义开块关键字列表（折叠用；逗号分隔，大写匹配）。
+    /// 默认：`CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT`
+    /// 即时生效：编辑器 render 权威同步点重新计算折叠候选。
+    #[serde(default = "default_fold_open_keywords")]
+    pub fold_open_keywords: String,
+    /// 自定义闭块关键字列表（折叠用；逗号分隔，大写匹配）。
+    /// 默认：`END`（含 `END IF` / `END CASE` 等复合词）
+    /// 即时生效：编辑器 render 权威同步点重新计算折叠候选。
+    #[serde(default = "default_fold_close_keywords")]
+    pub fold_close_keywords: String,
     /// 是否软换行（默认开，与内核 `EditorState` 默认一致；关闭后长行横向滚动）。
     /// 即时生效：编辑器 render 权威同步点把设置值同步到内核 `set_soft_wrap`。
     #[serde(default = "default_soft_wrap")]
@@ -549,6 +564,9 @@ impl Default for Editor {
         Self {
             show_line_numbers: default_show_line_numbers(),
             show_folds: default_show_folds(),
+            indent_folding: default_indent_folding(),
+            fold_open_keywords: default_fold_open_keywords(),
+            fold_close_keywords: default_fold_close_keywords(),
             soft_wrap: default_soft_wrap(),
             auto_close: default_auto_close(),
             smart_indent: default_smart_indent(),
@@ -568,6 +586,21 @@ fn default_show_line_numbers() -> bool {
 /// 折叠默认开（2026-10-27：能力表置回 true 后，开关只控制是否显示，不关掉能力）
 fn default_show_folds() -> bool {
     true
+}
+
+/// 基于缩进的折叠默认开（VS Code 风格，用户习惯）
+fn default_indent_folding() -> bool {
+    true
+}
+
+/// 折叠开块关键字默认列表（逗号分隔）
+fn default_fold_open_keywords() -> String {
+    "CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT".to_string()
+}
+
+/// 折叠闭块关键字默认列表（逗号分隔）
+fn default_fold_close_keywords() -> String {
+    "END".to_string()
 }
 
 /// 软换行默认开（与内核 `EditorState::new` 的 `soft_wrap: true` 一致）
@@ -698,6 +731,9 @@ pub struct Navigator {
     /// 面板是否显示搜索行（输入框 + 模式切换，默认开）。
     #[serde(default = "default_true")]
     pub show_search: bool,
+    /// 启动时是否自动连接上次打开的连接（默认关）。
+    #[serde(default)]
+    pub auto_connect_on_startup: bool,
     /// 连接名称前是否以 `[简称]` 显示类型简称（如 `[MY] 192.168.3.138`）。默认开。
     /// 简称来自 `type_short_map`（「类型简称映射…」弹窗维护），缺省回退徽标缩写。
     #[serde(default = "default_true")]
@@ -789,6 +825,7 @@ impl Default for Navigator {
             show_scope: true,
             show_chips: false,
             show_search: true,
+            auto_connect_on_startup: false,
             show_name_type_short: true,
             type_short_map: default_type_short_map(),
             filters: NavigatorFilters::default(),

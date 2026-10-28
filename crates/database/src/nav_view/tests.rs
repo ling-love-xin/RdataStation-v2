@@ -111,6 +111,9 @@ mod stub_host {
             true
         }
         fn set_show_search(&self, _value: bool, _cx: &mut App) {}
+        fn auto_connect_on_startup(&self, _cx: &App) -> bool {
+            false
+        }
         fn show_inline_stats(&self, _cx: &App) -> bool {
             false
         }

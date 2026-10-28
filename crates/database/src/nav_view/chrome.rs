@@ -83,7 +83,7 @@ impl NavView {
                 }
                 // 启动预连：所有连接的展开态恢复完成后，对「上次展开过」的连接后台建连。
                 // 连接成功后 `apply_connect_results` 自动展开加载（无需用户再点一次）。
-                this.prewarm_expanded_connections();
+                this.prewarm_expanded_connections(cx);
                 // 面板级状态需窗口（把搜索词写回输入框），所以放在这个 `defer_in` 里。
                 if need_panel_state {
                     this.ensure_panel_state_loaded(window, cx);

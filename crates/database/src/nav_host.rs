@@ -158,6 +158,9 @@ pub trait NavHost: 'static {
     fn show_search(&self, cx: &App) -> bool;
     fn set_show_search(&self, value: bool, cx: &mut App);
 
+    /// 启动时是否自动连接上次打开的连接（默认关）。
+    fn auto_connect_on_startup(&self, cx: &App) -> bool;
+
     /// 表 / 视图行右侧统计徽标整体开关（需求④，默认开）：关闭后右侧 meta /
     /// 注释副标 / 分区·继承 / ≈N / 大小徽标全部不显。`row_estimate` 是更内层
     /// 的独立开关，此处是更上层总闸。
