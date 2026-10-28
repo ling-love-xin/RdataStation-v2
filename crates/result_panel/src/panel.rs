@@ -3247,4 +3247,91 @@ mod tests {
         assert_eq!(out_columns, vec!["a".to_string(), "b".to_string()]);
         assert_eq!(out_rows, vec![vec!["1".to_string(), "2".to_string()]]);
     }
+
+    /// 【2026-10-29】结果集 UI 渲染断言（gpui-kit 测试框架 `TestAppContext` /
+    /// `TestWindowExt` / `VisualTestContext::debug_bounds`）：渲染**真实面板**（非纯函数），
+    /// 断言本轮微调的关键 UI 元素存在且可见——**防回退**：
+    /// - 空面板根 `editor-result-root` 恒渲染；
+    /// - 展开筛选条后：`editor-result-filter-expand-bar` + **两内嵌按钮**
+    ///   （左=展开 `-toggle` / 右=运行 `-run`，无边框输入框）；
+    /// - SQL 预览弹窗：`open_sql_dialog` 后遮罩 `editor-result-sql-dialog` 出现、
+    ///   `close_sql_dialog` 后消失。
+    ///
+    /// 查询机制（gpui-kit 0.8.1 实测）：
+    /// - `TestWindowExt.find/try_find` 只匹配**显式 ElementId** 元素
+    ///   （`Button::new(id)` / `.id()` / EffectTransition 包装）——纯 `div().debug_selector()`
+    ///   的 div **不注册**（`Observed::new` 要求 `Element::id().is_some()`）；
+    /// - `div().debug_selector()` 走 gpui 原生 `debug_bounds` 注册路径
+    ///   （`VisualTestContext::debug_bounds(&'static str)`，paint 阶段注册）；
+    /// - 故 `visible()` 兜底查询两路：显式 id 走 `try_find().visible()`，
+    ///   debug_selector div 走 `debug_bounds().is_some()`。
+    ///
+    /// 谁删了弹窗 / 改回旧展开条 / 拆掉两内嵌按钮，此测试即红。
+    #[gpui_kit::test]
+    fn rendered_ui_elements_survive(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::component::Root;
+        use gpui_kit::test::TestWindowExt as _;
+        use gpui_kit::{AppContext as _, ElementId, Entity, IntoElement, Render, SharedString};
+
+        cx.update(gpui_kit::init);
+        let slot: std::rc::Rc<std::cell::RefCell<Option<Entity<super::ResultPanel>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let slot_in = slot.clone();
+        // 宿主壳：ResultPanel 无标准 `Render`（自定义 `render(&self, cx)`，host 手动调），
+        // 测试仿 host.rs 9075（`result_panel.read(cx).render(cx)`）包一层 Render 实体
+        struct PanelHost {
+            panel: Entity<super::ResultPanel>,
+        }
+        impl Render for PanelHost {
+            fn render(&mut self, _window: &mut gpui_kit::Window, cx: &mut gpui_kit::Context<Self>) -> impl IntoElement {
+                self.panel.read(cx).render(cx)
+            }
+        }
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let queue = crate::ports::ResultActionQueue::new();
+            let panel = cx.new(|cx| super::ResultPanel::new(window, cx, queue));
+            *slot_in.borrow_mut() = Some(panel.clone());
+            let host = cx.new(|_| PanelHost { panel });
+            Root::new(host, window, cx)
+        });
+        let panel = slot.borrow().clone().expect("ResultPanel 已创建");
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let visible = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> bool {
+            let by_id = cx.update(|window, _| {
+                window
+                    .try_find(ElementId::Name(SharedString::from(id.to_string())))
+                    .is_some_and(|snap| snap.visible())
+            });
+            // 无显式 ElementId 的 div（纯 debug_selector）走 gpui debug_bounds 注册路径
+            by_id || cx.debug_bounds(id).is_some()
+        };
+
+        // 1) 空面板根恒渲染
+        assert!(visible("editor-result-root", cx), "空面板根应渲染可见");
+
+        // 2) 展开筛选条：两内嵌按钮（左=展开 / 右=运行）随条出现
+        cx.update(|_, app| panel.update(app, |p, cx| p.toggle_filter_expand(cx)));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        for id in [
+            "editor-result-filter-expand-bar",
+            "editor-result-filter-expand-toggle",
+            "editor-result-filter-expand-run",
+        ] {
+            assert!(visible(id, cx), "展开筛选条元素 {id} 应渲染可见（回退检查）");
+        }
+
+        // 3) SQL 预览弹窗：open 出现 / close 消失
+        cx.update(|window, app| {
+            panel.update(app, |p, cx| p.open_sql_dialog(window, cx));
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(visible("editor-result-sql-dialog", cx), "SQL 弹窗应渲染（回退检查）");
+        cx.update(|_, app| panel.update(app, |p, cx| p.close_sql_dialog(cx)));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            !visible("editor-result-sql-dialog", cx),
+            "关闭后 SQL 弹窗应消失"
+        );
+    }
 }

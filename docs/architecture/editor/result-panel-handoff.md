@@ -41,7 +41,7 @@
 
 ```powershell
 $env:RUST_MIN_STACK='268435456'; cd D:\RdataStation\RDS\RdataStation-v2
-cargo test -p rds-result-panel --lib    # 基线：206 passed / 0 failed
+cargo test -p rds-result-panel --lib    # 基线：207 passed / 0 failed（含 rendered_ui_elements_survive 防回退）
 cargo check -p rds-editor -p rds-workbench -p rds-workbench-shell  # 通过（workbench 7 warnings 为并行线遗留）
 ```
 
@@ -150,6 +150,17 @@ cargo check -p rds-editor -p rds-workbench -p rds-workbench-shell  # 通过（wo
 
 清理：`ToggleSqlPreview` 变体 / `sql_preview_open` 字段 / `render_sql_preview_bar` 函数（工具栏下方展开条）**整体删除**，全仓零残留；`Textarea` / `TextareaState` import 走 `gpui_kit::component::input`。测试：result-panel 基线仍 206 passed / 0 failed。
 
+### 2.10 2026-10-29（UI 回退核查 + 渲染断言测试防回退）
+
+**回退核查结论：代码零回退。** git 工作区干净（HEAD `5fe75961`）；最近含结果集大改的提交 `330e0631`（feat(result_panel): 文本视图缓存、列序拖拽恢复、按钮断链修复与 SQL 预览，16 files +1104/−494）已包含全部本轮改动（`render_sql_dialog` / `sql_dialog_open` / `filter-expand-toggle/-run` 均在该提交 diff 内）；grep 复核全部 UI 标志物在库。gpui-kit 0.8.1 自带 `gpui_kit::test` 测试框架（`pub mod test`，lib.rs:128），已用于新增**渲染断言测试**防回退：
+
+| # | 项 | 内容 |
+| --- | --- | --- |
+| k | 渲染断言测试 `rendered_ui_elements_survive` | `#[gpui_kit::test]` + `cx.update(gpui_kit::init)` + `add_window_view` + `Root::new(host)` + `draw/clear`；因 ResultPanel **无标准 `Render` trait**（自定义 `render(&self, cx)`），测试内定义 `PanelHost` 壳（仿 host.rs 9075 手动调 `panel.read(cx).render(cx)`）。断言：空面板根 `editor-result-root` 恒渲染；展开筛选条后两内嵌按钮（左 `-toggle` 展开 / 右 `-run` 运行）出现；`open_sql_dialog` 后遮罩 `editor-result-sql-dialog` 出现、`close_sql_dialog` 后消失 |
+| l | **测试查询机制（实测，勿踩）** | `TestWindowExt.find/try_find` 只匹配**显式 ElementId** 元素（`Button::new(id)` / `.id()` / EffectTransition 包装）；纯 `div().debug_selector()` 的 div **不注册**（gpui-base `test_support::Observed::new` 断言 `Element::id().is_some()`）——`editor-result-root` 这类 div 必须用 `VisualTestContext::debug_bounds(&'static str)`（gpui 原生路径，paint 阶段注册）。故测试 `visible()` 两路兜底：id 元素走 `try_find().visible()`，div 走 `debug_bounds().is_some()`。**`gpui_kit::test_support` 不存在**（test_support 是 gpui-base 内部模块；gpui_kit 只 re-export `test::{TestWindowExt, ElementSnapshot, ...}`）；`debug_bounds` 参数要求 `&'static str`（闭包参数须标注 'static） |
+
+基线：`cargo test -p rds-result-panel --lib` = **207 passed / 0 failed**；`cargo check -p rds-editor -p rds-workbench` 通过。测试装配模板参照 `crates/workbench/tests/mock_panel_probe.rs`。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）
@@ -174,7 +185,7 @@ cargo check -p rds-editor -p rds-workbench -p rds-workbench-shell  # 通过（wo
 
 ## 5. 常用锚点（行号随近期提交微移，以现场 grep 为准）
 
-- `panel.rs`：`render(&self, cx)` 主体（~522）；四行主体组装（~1309-1324）；左栏开关（~1199）/ 右栏开关 right_switch（~1238，状态栏右端三态）；`render_vertical_bar`（~1862，左缘竖条：网格/文本/记录/上一行/下一行）；`render_right_edge_bar`（~2234，右缘竖条，页签图标区）；`render_right_sidebar`（~2137，横 tab 只显激活页签）；`render_browser_tab`（~1986）/ `render_value_tab`（~2470）/ `render_stats_tab`（~2501）/ `render_group_tab`（~2552）/ `render_reference_tab`（~2612，backlog 空态）/ `render_exec_sql_tab`（~2617）；`render_sql_dialog`（~2425，SQL 预览弹窗浮层）/ `render_filter_expand_bar`（~2324，展开条：左=展开右=运行无边框）；`toggle_value_sidebar`（三态）/ `next_right_edge_state`（~2980）纯函数；`toggle_transpose`（~1494）；`sidebar_width_anim`（~2965）纯函数；`open_sql_dialog` / `close_sql_dialog`（~1572，事件路径，需 window）。
+- `panel.rs`：`render(&self, cx)` 主体（~522）；四行主体组装（~1309-1324）；左栏开关（~1199）/ 右栏开关 right_switch（~1238，状态栏右端三态）；`render_vertical_bar`（~1862，左缘竖条：网格/文本/记录/上一行/下一行）；`render_right_edge_bar`（~2234，右缘竖条，页签图标区）；`render_right_sidebar`（~2137，横 tab 只显激活页签）；`render_browser_tab`（~1986）/ `render_value_tab`（~2470）/ `render_stats_tab`（~2501）/ `render_group_tab`（~2552）/ `render_reference_tab`（~2612，backlog 空态）/ `render_exec_sql_tab`（~2617）；`render_sql_dialog`（~2425，SQL 预览弹窗浮层）/ `render_filter_expand_bar`（~2324，展开条：左=展开右=运行无边框）；`toggle_value_sidebar`（三态）/ `next_right_edge_state`（~2980）纯函数；`toggle_transpose`（~1494）；`sidebar_width_anim`（~2965）纯函数；`open_sql_dialog` / `close_sql_dialog`（~1572，事件路径，需 window）；`mod tests` 尾部 `rendered_ui_elements_survive`（~3260，渲染断言防回退，见 §2.10）。
 - `ui.rs`：`RESULT_VERTICAL_BAR_WIDTH`（2.25）/ `RESULT_SIDEBAR_RIGHT_WIDTH`（20.0）/ `RESULT_STATUS_BAR_HEIGHT`（1.5）/ `RESULT_TOOLBAR_HEIGHT`（2.25）。
 - `ports.rs`：`ResultRequest` 全集（含 #7 / §2.9 新增变体 `RunFilterAsQuery` / `ToggleFilterExpand` / `OpenSqlDialog` / `CloseSqlDialog`；`ToggleSqlPreview` 已删）+ `ResultActionQueue`（`request` / `set_panel` / `push` / `drain`）。
 - `grid.rs`：`ResultGridDelegate`（TableDelegate 实现）/ `cell_style` / `format_cell_text` / `render_status_row`（三项新签名）/ `text_presentation` 指纹缓存。
