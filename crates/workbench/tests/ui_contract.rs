@@ -251,9 +251,46 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../../connection_dialog/src/components/connection_dialog/mod.rs"),
         ),
         // 编辑器 crate（A15 纳入扫描；UI 尺寸/颜色契约同样适用）
+        // host.rs 已按能力域拆为 view/host/ 目录（2026-10-29 Step 3）：mod.rs + 9 个子模块全部纳入扫描
         (
-            "editor/view/host.rs",
-            include_str!("../../editor/src/view/host.rs"),
+            "editor/view/host/mod.rs",
+            include_str!("../../editor/src/view/host/mod.rs"),
+        ),
+        (
+            "editor/view/host/session.rs",
+            include_str!("../../editor/src/view/host/session.rs"),
+        ),
+        (
+            "editor/view/host/toolbar.rs",
+            include_str!("../../editor/src/view/host/toolbar.rs"),
+        ),
+        (
+            "editor/view/host/env.rs",
+            include_str!("../../editor/src/view/host/env.rs"),
+        ),
+        (
+            "editor/view/host/format.rs",
+            include_str!("../../editor/src/view/host/format.rs"),
+        ),
+        (
+            "editor/view/host/bookmarks.rs",
+            include_str!("../../editor/src/view/host/bookmarks.rs"),
+        ),
+        (
+            "editor/view/host/notebook.rs",
+            include_str!("../../editor/src/view/host/notebook.rs"),
+        ),
+        (
+            "editor/view/host/editor_body.rs",
+            include_str!("../../editor/src/view/host/editor_body.rs"),
+        ),
+        (
+            "editor/view/host/exec.rs",
+            include_str!("../../editor/src/view/host/exec.rs"),
+        ),
+        (
+            "editor/view/host/results.rs",
+            include_str!("../../editor/src/view/host/results.rs"),
         ),
         (
             "editor/view/dialogs.rs",
@@ -455,9 +492,46 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../../settings/src/settings_page.rs"),
         ),
         // 编辑器 crate（A15 纳入扫描）
+        // host.rs 已按能力域拆为 view/host/ 目录（2026-10-29 Step 3）：mod.rs + 9 个子模块全部纳入扫描
         (
-            "editor/view/host.rs",
-            include_str!("../../editor/src/view/host.rs"),
+            "editor/view/host/mod.rs",
+            include_str!("../../editor/src/view/host/mod.rs"),
+        ),
+        (
+            "editor/view/host/session.rs",
+            include_str!("../../editor/src/view/host/session.rs"),
+        ),
+        (
+            "editor/view/host/toolbar.rs",
+            include_str!("../../editor/src/view/host/toolbar.rs"),
+        ),
+        (
+            "editor/view/host/env.rs",
+            include_str!("../../editor/src/view/host/env.rs"),
+        ),
+        (
+            "editor/view/host/format.rs",
+            include_str!("../../editor/src/view/host/format.rs"),
+        ),
+        (
+            "editor/view/host/bookmarks.rs",
+            include_str!("../../editor/src/view/host/bookmarks.rs"),
+        ),
+        (
+            "editor/view/host/notebook.rs",
+            include_str!("../../editor/src/view/host/notebook.rs"),
+        ),
+        (
+            "editor/view/host/editor_body.rs",
+            include_str!("../../editor/src/view/host/editor_body.rs"),
+        ),
+        (
+            "editor/view/host/exec.rs",
+            include_str!("../../editor/src/view/host/exec.rs"),
+        ),
+        (
+            "editor/view/host/results.rs",
+            include_str!("../../editor/src/view/host/results.rs"),
         ),
         (
             "editor/view/dialogs.rs",
