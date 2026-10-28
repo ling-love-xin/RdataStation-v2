@@ -104,49 +104,23 @@
 //! 状态的 SQL 文本原语，属 engine（`core/sql` 是 sqlglot 的唯一接入点），editor 直接消费，
 //! 不在本 crate 重复实现。
 
-pub mod analysis;
-/// 【书签】编辑器接入 `rds-file-meta` 的纯逻辑（切换 / 跳转 / 排序），I/O 在 `view/host`
-pub mod bookmark;
-pub mod cell;
-pub mod changes;
-pub mod channel;
-pub mod commands;
-pub mod completion;
-pub mod connection;
-pub mod diagnostics;
-pub mod edit;
-/// 【2c】文本编码与换行（检测 / 解码 / 编码 / 换行规范化的纯函数）
-pub mod encoding;
-pub mod editability;
-pub mod env;
-pub mod execution;
-pub mod export;
-pub mod fold;
-pub mod format;
-pub mod hidden;
-pub mod history;
-/// 【2026-10-27】缩进操作纯函数（检测 / 转换 / 裁剪尾随空格，VSCode 缩进面板落地能力）
-pub mod indent;
-pub mod language_service;
-pub mod limits;
+// 能力域目录（2026-10-29 目录化）：core / exec / language / notebook / support
+pub mod core;
+pub mod shared;
+pub mod exec;
+pub mod language;
+pub mod notebook;
+pub mod support;
 /// LSP 客户端（JSON-RPC 2.0 over stdio）：宿主侧 provider bridge 的数据源
 pub mod lsp;
-/// 【#20】内核注册表端口：执行源「内核」档的宿主接口与解析纯函数
-pub mod kernel;
-pub mod mode;
-pub mod model;
-/// 【#14】Jupyter mime bundle → 原生输出的纯函数分发器
-pub mod media;
-pub mod persist;
-pub mod project;
-pub mod scan;
-pub mod service;
-pub mod session;
-pub mod shared;
-/// 【T1.6】联邦源清单（「源清单 ▾」浮层的数据侧与纯函数模型）
-pub mod sources;
-pub mod store;
-pub mod toolbar;
-pub mod translate;
-pub mod ui;
 pub mod view;
+
+// ═══════════════════════════════════════════════════════════════════════
+// 兼容层：目录化后保持 `editor::xxx` 与 `crate::xxx` 旧路径可用。
+// 外部消费方（workbench / app）的 use 语句无需改动；新代码优先走目录路径。
+// ═══════════════════════════════════════════════════════════════════════
+pub use core::{limits, mode, model, service};
+pub use exec::{analysis, changes, channel, editability, env, execution, export, store};
+pub use language::{completion, language_service};
+pub use notebook::{cell, kernel, media, session};
+pub use support::{bookmark, commands, connection, diagnostics, edit, encoding, fold, format, hidden, history, indent, persist, project, scan, sources, toolbar, translate, ui};
