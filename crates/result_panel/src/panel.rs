@@ -22,11 +22,16 @@
 
 use std::cell::RefCell;
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui_kit::*;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
+/// 【侧栏丝滑】宽度过渡用 `EffectTransition::width`（元素级动画，动画状态按元素 id
+/// 挂在 gpui 元素树上——render 无需 `&mut App`；id 变化即重启，故用 epoch 区分每次
+/// 开合，与 vendor sidebar 组件同款机制）。
+use gpui_kit::base::animation::{ease_in_out_cubic, EffectTransition};
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::list::{List, ListState};
 use gpui_kit::component::IndexPath;
@@ -174,9 +179,17 @@ pub struct ResultPanel {
     /// 【侧栏】右侧辅助栏（列浏览器 / 值详情 / 计算 / 分组）开关；默认关
     /// （不挤网格，工具栏「列浏览器」可开）。列浏览器与值详情等共用这一栏、页签切换。
     show_value_sidebar: bool,
+    /// 【侧栏丝滑】左右栏展开 / 收起动画代次（每次开合 +1；0 = 首帧免动画）。
+    /// 动画 id 拼 epoch → with_animation 换 id 即重播（与 vendor sidebar 同机制）。
+    left_sidebar_epoch: u64,
+    right_sidebar_epoch: u64,
     /// 【侧栏】最近选中格位置（**视图行**, 含行号槽列；宿主 `TableEvent::SelectCell`
     /// 事件写入，选行 / 清选置 `None`）。右栏值详情据此读网格取完整值 / 列名 / 类型。
     selection_pos: Option<(usize, usize)>,
+    /// 【结果集 #296】持久化的列序（列名数组；空 = 默认序）。宿主在构造期注入
+    /// （重启恢复），`TableEvent::MoveColumn` 订阅更新，并经
+    /// `ResultRequest::ColumnOrderChanged` 回写宿主落库。换新结果时按列名匹配重排。
+    column_order: Vec<String>,
     /// 【列浏览器】清单当前选中列（**数据列序**，与隐藏 / 冻结同一套下标空间）。
     /// 清单单击写入；网格选中格经 `selection_pos` 反推同步；新结果集 / 切标签 /
     /// 对比模式重置为 `None`（渲染兜底第一可见列）。清单选中 ≠ 网格焦点。
@@ -301,10 +314,18 @@ impl ResultPanel {
                         this.selection_pos = Some((*row_ix, *col_ix));
                         cx.notify();
                     }
-                    // 列序拖拽：记录新列序（当前只记录，不持久化）
+                    // 列序拖拽：记下新显示序（delegate 的 `display_order` 快照），
+                    // 并推 `ColumnOrderChanged` 让宿主落库（跨会话持久化）
                     TableEvent::MoveColumn(from, to) => {
-                        // TODO: 持久化列序（跨会话）
                         let _ = (from, to);
+                        let order = this.grid.read(cx).delegate().display_order();
+                        if order != this.column_order {
+                            this.column_order = order;
+                            this.queue.push(ResultRequest::ColumnOrderChanged {
+                                order: this.column_order.clone(),
+                            });
+                        }
+                        cx.notify();
                     }
                     // 清除选择：清空选中格位置
                     TableEvent::ClearSelection => {
@@ -336,7 +357,11 @@ impl ResultPanel {
             compare_mode: false,
             show_left_sidebar: true,
             show_value_sidebar: true,
+            left_sidebar_epoch: 0,
+            right_sidebar_epoch: 0,
             selection_pos: None,
+            // 【结果集 #296】列序默认空 = 数据序；宿主构造期注入持久化列序
+            column_order: Vec::new(),
             selected_col: None,
             browser_list,
             row_count_input,
@@ -431,7 +456,9 @@ impl ResultPanel {
         self.grid.update(cx, |state, cx| {
             match input.grid {
                 Some(payload) => {
-                    state.delegate_mut().set_data(payload.columns, payload.rows);
+                    // 【结果集 #296】先按持久化列名序重排（空 = 默认序，原样直通）
+                    let (columns, rows) = self.apply_column_order(payload.columns, payload.rows);
+                    state.delegate_mut().set_data(columns, rows);
                     // 【Q6】类型必须**在 set_data 之后**设：`set_data` 会清空类型
                     state.delegate_mut().set_column_types(payload.column_types);
                     // 【A9】来源表名同理（set_data 会清掉旧的）
@@ -1130,9 +1157,9 @@ impl ResultPanel {
                 .h_full()
                 .min_h_0()
                 .debug_selector(|| "editor-result-text-view".to_string());
-            if self.show_left_sidebar {
-                row = row.child(self.render_vertical_bar(cx));
-            }
+            // 【侧栏丝滑】左右栏容器**始终挂载**（内部宽度补间 + 按 show 挂内容），
+            // 不再条件渲染——收起 = 宽度平滑收缩，展开 = 宽度露出内容
+            row = row.child(self.render_vertical_bar(cx));
             row.child(div().flex_1().min_w_0().h_full().child(self.render_text_view(cx)))
                 .into_any_element()
         } else if !self.compare_mode {
@@ -1144,13 +1171,9 @@ impl ResultPanel {
                 .h_full()
                 .min_h_0()
                 .debug_selector(|| "editor-result-sidebars".to_string());
-            if self.show_left_sidebar {
-                row = row.child(self.render_vertical_bar(cx));
-            }
+            row = row.child(self.render_vertical_bar(cx));
             row = row.child(div().flex_1().min_w_0().h_full().child(result_pane));
-            if self.show_value_sidebar {
-                row = row.child(self.render_right_sidebar(cx));
-            }
+            row = row.child(self.render_right_sidebar(cx));
             row.into_any_element()
         } else {
             // 【并排对比】对比模式双栏：左栏 = 主选中（上面组装好的主 pane），
@@ -1211,10 +1234,9 @@ impl ResultPanel {
                             .border_r(ui::HAIRLINE)
                             .debug_selector(|| "editor-result-compare-main".to_string())
                             // 对比模式竖条只挂主栏左侧：视图方式切换只作用于主栏，对比栏
-                            // 只读；竖条 = 左栏，跟随 `show_left_sidebar` 可收起
-                            .when(self.show_left_sidebar, |main| {
-                                main.child(self.render_vertical_bar(cx))
-                            })
+                            // 只读；竖条 = 左栏，跟随 `show_left_sidebar` 可收起（宽度动画在
+                            // render_vertical_bar 内部，此处始终挂载）
+                            .child(self.render_vertical_bar(cx))
                             .child(div().flex_1().min_w_0().h_full().child(result_pane)),
                     )
                     .child(
@@ -1234,9 +1256,7 @@ impl ResultPanel {
                     .h_full()
                     .min_h_0()
                     .debug_selector(|| "editor-result-sidebars".to_string())
-                    .when(self.show_left_sidebar, |row| {
-                        row.child(self.render_vertical_bar(cx))
-                    })
+                    .child(self.render_vertical_bar(cx))
                     .child(div().flex_1().min_w_0().h_full().child(result_pane))
                     .into_any_element(),
             }
@@ -1411,15 +1431,19 @@ impl ResultPanel {
         cx.notify();
     }
 
-    /// 【侧栏】右侧辅助栏开关：只翻面板状态（网格数据不动）
+    /// 【侧栏】右侧辅助栏开关：只翻面板状态（网格数据不动）；epoch 递增让
+    /// 展开 / 收起宽度动画重播（首帧 epoch=0 免动画，见 `sidebar_width_anim`）
     pub fn toggle_value_sidebar(&mut self, cx: &mut Context<Self>) {
         self.show_value_sidebar = !self.show_value_sidebar;
+        self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
         cx.notify();
     }
 
-    /// 【侧栏】左侧栏（网格 / 文本 / 记录竖条）开关：只翻面板状态（网格数据不动）
+    /// 【侧栏】左侧栏（网格 / 文本 / 记录竖条）开关：只翻面板状态（网格数据不动）；
+    /// epoch 递增同上
     pub fn toggle_left_sidebar(&mut self, cx: &mut Context<Self>) {
         self.show_left_sidebar = !self.show_left_sidebar;
+        self.left_sidebar_epoch = self.left_sidebar_epoch.wrapping_add(1);
         cx.notify();
     }
 
@@ -1491,8 +1515,24 @@ impl ResultPanel {
     /// host 构造时（`settings.result_panel.type_style()`）与 workbench 设置变更钩子
     /// （设置页改动 → 遍历 editor_hosts → 本方法）都会调用；面板再把偏好推给 delegate，
     /// 由 delegate 的 `render_td` / `render_th` 消费——不经过 `set_data`，不会丢。
-    pub fn set_type_style(&mut self, prefs: TypeStylePrefs, cx: &mut Context<Self>) {
-        self.type_style = prefs.clone();
+    /// 【结果集 #296】宿主注入持久化的列序（重启恢复；空 = 默认序）。
+    /// 只在文档重开时调用一次，换结果集不清空（列名匹配由 `apply_column_order` 做）。
+    pub fn set_column_order(&mut self, order: Vec<String>) {
+        self.column_order = order;
+    }
+
+    /// 【结果集 #296】当前持久化目标列序（宿主保存会话时读取）
+    pub fn column_order(&self) -> Vec<String> {
+        self.column_order.clone()
+    }
+
+    /// 【结果集 #296】按持久化列名序重排一份新结果的列与行（列名匹配，未匹配列
+    /// 保持数据序附加在末尾——用户拖过的列还在就保持，新列不猜）。
+    fn apply_column_order(&self, columns: Vec<String>, rows: Vec<Vec<String>>) -> (Vec<String>, Vec<Vec<String>>) {
+        reorder_by(&self.column_order, columns, rows)
+    }
+
+    pub fn set_type_style(&mut self, prefs: TypeStylePrefs, cx: &mut Context<Self>) {        self.type_style = prefs.clone();
         self.grid.update(cx, |state, cx| {
             state.delegate_mut().set_type_style(prefs);
             state.refresh(cx);
@@ -1668,6 +1708,7 @@ impl ResultPanel {
     fn render_vertical_bar(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let is_text = self.presentation == Presentation::Text;
+        let show = self.show_left_sidebar;
         let queue = self.queue.clone();
         let grid_btn = Button::new("editor-result-bar-grid")
             .ghost()
@@ -1694,7 +1735,10 @@ impl ResultPanel {
         let record_btn = Button::new("editor-result-bar-record")
             .ghost()
             .small()
-            .icon(IconName::UserRound)
+            // 【记录视图图标】单行转置（# / 字段 / 值 竖排）是「一条记录的字段列表」，
+            // 用 Lucide `form`（三条横档的表单条）；原 `UserRound`（人形）语义是"用户"，
+            // 与记录无关，且与列浏览器里的其他图标气质不符。
+            .icon(IconName::Form)
             .debug_selector(|| "editor-result-bar-record".to_string())
             .disabled(is_text)
             .toggled(self.transposed)
@@ -1733,21 +1777,41 @@ impl ResultPanel {
                 .child(next)
                 .into_any_element()
         });
-        div()
-            .w(rems(ui::RESULT_VERTICAL_BAR_WIDTH))
+        // 【侧栏丝滑】左栏收起 / 展开 = 宽度过渡（EffectTransition 元素级动画，与
+        // vendor `sidebar` 组件同款机制：动画状态按 id 挂元素树，render 无需 &mut App）。
+        // 容器**始终挂载**（动画驱动宽度，收起后宽 0 不占空间）、内容按 show 挂载——
+        // 展开时内容随宽度露出，收起时宽度平滑收缩，消除「条件渲染瞬爆」。每次开合
+        // `left_sidebar_epoch` 递增 → 动画 id 变化 → 重播；首帧（epoch=0）from==to 免动画。
+        // 注：动画宽度按 gpui 默认 rem 基准（16px）换算，zoom 改 rem_size 属已知限制。
+        let full = px(ui::RESULT_VERTICAL_BAR_WIDTH * 16.0);
+        let (from, to) = sidebar_width_anim(self.left_sidebar_epoch, show, full);
+        let wrapper = div()
             .h_full()
             .flex_none()
+            .overflow_hidden()
             .border_r(ui::HAIRLINE)
             .bg(theme.colors.sidebar)
             .debug_selector(|| "editor-result-vertical-bar".to_string())
-            .v_flex()
-            .items_center()
-            .gap_1()
-            .pt_2()
-            .child(grid_btn)
-            .child(text_btn)
-            .child(record_btn)
-            .children(record_nav)
+            .when(show, |el| {
+                el.v_flex()
+                    .items_center()
+                    .gap_1()
+                    .pt_2()
+                    .child(grid_btn)
+                    .child(text_btn)
+                    .child(record_btn)
+                    .children(record_nav)
+            });
+        EffectTransition::new(Duration::from_millis(160))
+            .ease(ease_in_out_cubic)
+            .width(from, to)
+            .apply(
+                wrapper,
+                SharedString::from(format!(
+                    "editor-result-left-bar-w-{}",
+                    self.left_sidebar_epoch
+                )),
+            )
             .into_any_element()
     }
 
@@ -1918,6 +1982,7 @@ impl ResultPanel {
     /// GROUP BY 是后续项，记在文档）。
     fn render_right_sidebar(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
+        let show = self.show_value_sidebar;
         let queue = self.queue.clone();
         let labels = ["列浏览器", "值详情", "计算", "分组", "引用"];
         let children: Vec<Tab> = labels
@@ -1954,26 +2019,43 @@ impl ResultPanel {
                 })
                 .into_any_element()
         });
-        div()
-            .w(rems(ui::RESULT_SIDEBAR_RIGHT_WIDTH))
+        // 【侧栏丝滑】右栏收起 / 展开与左栏同法：宽度过渡 + 容器始终挂载（宽 0 不占
+        // 空间），页签条与内容按 show 挂载（收起时无焦点残留）。开合由
+        // `right_sidebar_epoch` 递增重播动画；首帧（epoch=0）免动画。
+        let full = px(ui::RESULT_SIDEBAR_RIGHT_WIDTH * 16.0);
+        let (from, to) = sidebar_width_anim(self.right_sidebar_epoch, show, full);
+        let wrapper = div()
             .h_full()
             .flex_none()
+            .overflow_hidden()
             .border_l(ui::HAIRLINE)
             .bg(theme.colors.sidebar)
             .debug_selector(|| "editor-result-value-sidebar".to_string())
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
-                    .flex_1()
-                    .min_w_0()
-                    .child(div().flex_1().min_w_0().child(tab_bar))
-                    .children(close),
+            .when(show, |el| {
+                el.child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().flex_1().min_w_0().child(tab_bar))
+                        .children(close),
+                )
+                .child(content)
+            });
+        EffectTransition::new(Duration::from_millis(160))
+            .ease(ease_in_out_cubic)
+            .width(from, to)
+            .apply(
+                wrapper,
+                SharedString::from(format!(
+                    "editor-result-right-bar-w-{}",
+                    self.right_sidebar_epoch
+                )),
             )
-            .child(content)
             .into_any_element()
     }
 
@@ -2354,6 +2436,51 @@ impl ResultPanel {
     }
 }
 
+/// 【结果集 #296】按持久化列名序重排一份新结果的列与行（纯函数，测试直接覆盖）：
+/// 列名匹配（保留持久化序），未匹配列按数据序附加末尾——用户拖过的列还在就保持，
+/// 新列不猜。空 `order` = 默认序，原样直通。
+fn reorder_by(
+    order: &[String],
+    columns: Vec<String>,
+    rows: Vec<Vec<String>>,
+) -> (Vec<String>, Vec<Vec<String>>) {
+    if order.is_empty() {
+        return (columns, rows);
+    }
+    // 先按持久化序收集匹配列（重复列名只取第一个出现；去重防双写）
+    let mut ordered: Vec<String> = Vec::new();
+    for column in order {
+        if columns.contains(column) && !ordered.contains(column) {
+            ordered.push(column.clone());
+        }
+    }
+    // 未匹配列按数据序附加末尾（新列不猜位置）
+    let leftover: Vec<String> = columns
+        .iter()
+        .filter(|c| !order.contains(*c))
+        .cloned()
+        .collect();
+    ordered.extend(leftover);
+    // 行按同序重排（行宽与列数不符时原样保留——不猜形状）
+    let row_len = columns.len();
+    let mut perm: Vec<usize> = Vec::with_capacity(row_len);
+    for column in &ordered {
+        if let Some(at) = columns.iter().position(|c| c == column) {
+            perm.push(at);
+        }
+    }
+    let rows = rows
+        .into_iter()
+        .map(|row| {
+            if row.len() != row_len {
+                return row;
+            }
+            perm.iter().map(|at| row[*at].clone()).collect()
+        })
+        .collect();
+    (ordered, rows)
+}
+
 /// 【右栏】页签下标 → 枚举（TabBar 回调用；与 `RightTab` 定义顺序一致——
 /// Browser=0 / Value=1 / Stats=2 / Group=3，对齐 DBeaver 右侧页签顺序）
 fn right_tab_from_index(index: usize) -> RightTab {
@@ -2406,12 +2533,33 @@ fn fmt_stat(value: Option<f64>) -> String {
         .unwrap_or_else(|| "—".to_string())
 }
 
+/// 【侧栏丝滑】展开 / 收起宽度动画的 `(from, to)` 计算（纯函数，render 调用）：
+/// - `epoch == 0`（首帧）：`from == to`，无动画直接落位（面板初始展开，不能开场就来一遍滑入）
+/// - `epoch > 0` 且展开：`0 → 全宽`（内容随宽度露出）
+/// - `epoch > 0` 且收起：`全宽 → 0`（宽度平滑收缩）
+/// 每次开合 `toggle_*_sidebar` 递增 epoch，动画 id 拼 epoch → `with_animation` 换 id 重播。
+fn sidebar_width_anim(epoch: u64, show: bool, full: Pixels) -> (Pixels, Pixels) {
+    let to = if show { full } else { px(0.) };
+    let from = if epoch == 0 {
+        to
+    } else if show {
+        px(0.)
+    } else {
+        full
+    };
+    (from, to)
+}
+
 #[cfg(test)]
 mod tests {
     // 安全模式：不通配导入（`use gpui_kit::*` 会把 test 宏带进作用域导致 recursion limit）
     use crate::column_browser::filter_browser_columns;
+    use super::reorder_by;
     use super::right_tab_from_index;
+    use super::sidebar_width_anim;
     use crate::ports::RightTab;
+    use gpui_kit::px;
+    use gpui_kit::Pixels;
 
     /// 三份等长样本：列名 / 类型名 / 注释（注释可空）
     fn sample() -> (Vec<String>, Vec<String>, Vec<Option<String>>) {
@@ -2431,6 +2579,31 @@ mod tests {
             None,
         ];
         (names, types, comments)
+    }
+
+    /// 空词 / 纯空白 = 全量原序（隐藏列由渲染层置灰，过滤本身不剔列）
+    #[test]
+    /// 侧栏宽度动画参数：首帧免动画（from==to）/ 展开 0→全宽 / 收起 全宽→0
+    #[test]
+    fn sidebar_width_anim_first_frame_and_directions() {
+        let full = px(36.);
+        // 首帧（epoch=0）：无论开合都直接落位，不开场动画
+        let (from, to) = sidebar_width_anim(0, true, full);
+        assert_eq!(from, to);
+        assert_eq!(to, full);
+        let (from, to) = sidebar_width_anim(0, false, full);
+        assert_eq!(from, to);
+        assert_eq!(to, px(0.));
+        // 展开（epoch>0）：0 → 全宽
+        let (from, to) = sidebar_width_anim(1, true, full);
+        assert_eq!(from, px(0.));
+        assert_eq!(to, full);
+        // 收起（epoch>0）：全宽 → 0
+        let (from, to) = sidebar_width_anim(1, false, full);
+        assert_eq!(from, full);
+        assert_eq!(to, px(0.));
+        // 类型约束（Pixels 参与计算，编译期校验）
+        let _: (Pixels, Pixels) = sidebar_width_anim(2, true, full);
     }
 
     /// 空词 / 纯空白 = 全量原序（隐藏列由渲染层置灰，过滤本身不剔列）
@@ -2480,5 +2653,54 @@ mod tests {
         assert_eq!(right_tab_from_index(2), RightTab::Stats);
         assert_eq!(right_tab_from_index(3), RightTab::Group);
         assert_eq!(right_tab_from_index(99), RightTab::Browser);
+    }
+
+    /// 【结果集 #296】空列序 = 默认序原样直通（列 / 行一字不差）
+    #[test]
+    fn empty_order_passes_columns_through_unchanged() {
+        let columns = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let rows = vec![
+            vec!["1".to_string(), "2".to_string(), "3".to_string()],
+            vec!["4".to_string(), "5".to_string(), "6".to_string()],
+        ];
+        let (out_columns, out_rows) = reorder_by(&[], columns.clone(), rows.clone());
+        assert_eq!(out_columns, columns);
+        assert_eq!(out_rows, rows);
+    }
+
+    /// 【结果集 #296】按持久化列名序重排：列序与行内容同步换位
+    #[test]
+    fn reorder_moves_columns_and_rows_together() {
+        let order = vec!["b".to_string(), "a".to_string()];
+        let columns = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let rows = vec![
+            vec!["1".to_string(), "2".to_string(), "3".to_string()],
+            vec!["4".to_string(), "5".to_string(), "6".to_string()],
+        ];
+        let (out_columns, out_rows) = reorder_by(&order, columns, rows);
+        assert_eq!(
+            out_columns,
+            vec!["b".to_string(), "a".to_string(), "c".to_string()],
+            "持久化序在前，未匹配列（c）按数据序附加末尾"
+        );
+        assert_eq!(
+            out_rows,
+            vec![
+                vec!["2".to_string(), "1".to_string(), "3".to_string()],
+                vec!["5".to_string(), "4".to_string(), "6".to_string()],
+            ],
+            "行按列同序换位"
+        );
+    }
+
+    /// 【结果集 #296】持久化序里的列已不在新结果里 → 只匹配存在的；全不匹配 = 数据序
+    #[test]
+    fn reorder_keeps_only_matching_columns() {
+        let order = vec!["gone".to_string(), "x".to_string()];
+        let columns = vec!["a".to_string(), "b".to_string()];
+        let rows = vec![vec!["1".to_string(), "2".to_string()]];
+        let (out_columns, out_rows) = reorder_by(&order, columns, rows);
+        assert_eq!(out_columns, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(out_rows, vec![vec!["1".to_string(), "2".to_string()]]);
     }
 }
