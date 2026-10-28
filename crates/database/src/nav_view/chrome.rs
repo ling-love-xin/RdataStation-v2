@@ -297,15 +297,7 @@ impl NavView {
                 // 透明穿透到面板容器。
                 Toolbar::new("nav-header")
                     .h_full()
-                    .content(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(fg)
-                            .child("数据源"),
-                    )
-                    // 面板头连接状态徽标（原型建议①）：`N 连接 · M 在线` 常驻一眼可见，
-                    // hover 出逐连接明细（状态点 + 名称 + 状态/失败原因）。与底部状态行同口径。
+                    // 面板头连接状态徽标：移到最左侧（去掉"数据源"标题）
                     .when_some(self.render_nav_conn_badge(cx), |t, badge| t.content(badge))
                     .content(div().flex_1())
                     // C1 预热进度（后台任务进行中时显示，可取消）。
@@ -1334,7 +1326,7 @@ impl NavView {
             .w_full()
             .h_full()
             .min_h_0()
-            .pt_1()
+            .pt_0p5()
             .child(header)
             .when(self.host.show_search(cx), |this| this.child(search_row))
             .when(self.host.show_chips(cx), |this| this.child(chips))

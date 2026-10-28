@@ -718,7 +718,6 @@ impl NavView {
             .h(rems(ui::NAV_ROW_GROUP))
             .px_1()
             .gap_1()
-            .rounded_md()
             .bg(bg)
             .cursor_pointer()
             .hover(move |s| s.bg(hover))
@@ -1175,7 +1174,6 @@ impl NavView {
             .h(rems(ui::NAV_ROW_CONNECTION))
             .px_1()
             .gap_1()
-            .rounded_md()
             .relative()
             .cursor_pointer()
             .when(selected, |s| {
@@ -1646,7 +1644,6 @@ impl NavView {
                 .h(rems(ui::NAV_ROW_CONNECTION))
                 .px_1()
                 .gap_1()
-                .rounded_md()
                 .relative()
                 .cursor_pointer()
                 // 悬停**不覆盖**选中：否则鼠标一停在选中行上，选中态就消失。
@@ -2421,7 +2418,6 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             .pr_1()
             .pl(rems(indent))
             .gap_1()
-            .rounded_md()
             .relative()
             .cursor_pointer()
             // 悬停**不覆盖**选中：否则鼠标一停在选中行上，选中态就消失（失去“我在哪”的锚点）。
@@ -3192,7 +3188,6 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             .h(rems(ui::NAV_ROW_TREE))
             .pl(rems(indent))
             .pr_1()
-            .rounded_md()
             .relative()
             .cursor_pointer()
             .when(selected, |s| {
@@ -3279,7 +3274,6 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             .h(rems(ui::NAV_ROW_TREE))
             .pl(rems(indent))
             .pr_1()
-            .rounded_md()
             .relative()
             .cursor_pointer()
             .when(selected, |s| {
@@ -3358,7 +3352,6 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             .h(rems(ui::NAV_ROW_TREE))
             .pl(rems(indent))
             .pr_1()
-            .rounded_md()
             .relative()
             .child(
                 div()
@@ -3423,7 +3416,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             .debug_selector(|| "nav-row-search-hit".to_string())
             .h_flex()
             .items_center()
-            .gap_1p5()
+            .gap_1()
             .w_full()
             .h(rems(ui::NAV_ROW_TREE))
             .px_1()
