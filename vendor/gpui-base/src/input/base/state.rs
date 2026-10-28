@@ -4511,7 +4511,13 @@ impl<M: InputModeKind> InputBaseState<M> {
         };
 
         let fold_ranges = highlighter.fold_ranges(&self.text);
-        self.display_map.set_fold_candidates(fold_ranges);
+        // RDS vendor patch：空候选不覆盖已有候选。哑高亮器（语义着色用的
+        // EmptyHighlighter）`fold_ranges` 恒空，若照常覆盖，会把宿主经
+        // `apply_highlighter_fold_candidates` 喂的外供候选在 render 刷新路径
+        // 上清空（候选仍非空时，空结果只可能是高亮器没产候选，不是“确实没有”）。
+        if !fold_ranges.is_empty() || !self.display_map.has_fold_candidates() {
+            self.display_map.set_fold_candidates(fold_ranges);
+        }
     }
 
     /// Incrementally update fold candidates after a text edit.
@@ -4532,11 +4538,17 @@ impl<M: InputModeKind> InputBaseState<M> {
 
         // The new byte range in the updated text after the edit
         let new_end = edit_range.start + new_text.len();
-        self.display_map.update_fold_candidates_for_edit(
-            |range, text| highlighter.fold_ranges_for_edit(range, text),
-            edit_range.start..new_end,
-            &self.text,
-        );
+        let new_candidates = highlighter.fold_ranges_for_edit(edit_range.clone(), &self.text);
+        // RDS vendor patch：外供候选模式下（候选非空），空增量不触发 merge——
+        // merge 会把编辑区内旧候选删掉，宿主随后全量重喂会覆盖，但中间会造成
+        // 折叠箭头闪烁 / 消失；哑高亮器恒返回空，跳过即可由宿主重喂收敛。
+        if !new_candidates.is_empty() || !self.display_map.has_fold_candidates() {
+            self.display_map.update_fold_candidates_for_edit(
+                |_, _| new_candidates.clone(),
+                edit_range.start..new_end,
+                &self.text,
+            );
+        }
     }
 }
 

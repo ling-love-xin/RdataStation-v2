@@ -158,6 +158,15 @@ impl DisplayMap {
         self.fold_map.is_fold_candidate(start_line)
     }
 
+    /// Whether any fold candidates are currently registered.
+    ///
+    /// RDS vendor patch：供刷新路径区分「外供候选」（`apply_highlighter_fold_candidates`）
+    /// 与「内核自产候选」——候选非空时，高亮器空结果不应把它清掉。
+    #[inline]
+    pub fn has_fold_candidates(&self) -> bool {
+        !self.fold_map.fold_candidates().is_empty()
+    }
+
     /// Get all currently folded ranges
     #[inline]
     pub fn folded_ranges(&self) -> &[FoldRange] {
