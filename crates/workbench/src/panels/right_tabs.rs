@@ -107,6 +107,11 @@ impl ComponentPanel for InsightPanelTab {
         Some(PanelControl::Menu)
     }
 
+    fn inner_padding(&self, _cx: &App) -> bool {
+        // 我们自己的面板有自己的工具栏，不需要 Dock 再加顶部 padding
+        false
+    }
+
     fn toolbar_buttons(
         &mut self,
         _window: &mut Window,
@@ -199,6 +204,11 @@ impl ComponentPanel for MockPanelTab {
 
     fn zoom_control(&self, _cx: &App) -> Option<PanelControl> {
         Some(PanelControl::Menu)
+    }
+
+    fn inner_padding(&self, _cx: &App) -> bool {
+        // 我们自己的面板有自己的工具栏，不需要 Dock 再加顶部 padding
+        false
     }
 
     fn toolbar_buttons(
@@ -298,6 +308,11 @@ impl ComponentPanel for HistoryPanelTab {
 
     fn zoom_control(&self, _cx: &App) -> Option<PanelControl> {
         Some(PanelControl::Menu)
+    }
+
+    fn inner_padding(&self, _cx: &App) -> bool {
+        // 我们自己的面板有自己的工具栏，不需要 Dock 再加顶部 padding
+        false
     }
 
     fn toolbar_buttons(
@@ -435,6 +450,11 @@ impl ComponentPanel for ArchivePanel {
 
     fn zoom_control(&self, _cx: &App) -> Option<PanelControl> {
         Some(PanelControl::Menu)
+    }
+
+    fn inner_padding(&self, _cx: &App) -> bool {
+        // 我们自己的面板有自己的工具栏，不需要 Dock 再加顶部 padding
+        false
     }
 
     fn toolbar_buttons(

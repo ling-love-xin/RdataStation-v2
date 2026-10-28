@@ -12,12 +12,20 @@
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use gpui_kit::{App, AppContext as _, Entity, Window};
+use gpui_kit::{App, AppContext as _, Entity, SharedString, Window};
 use gpui_kit::component::notification::{Notification, NotificationList, NotificationType};
 use settings::SettingsService;
 
-/// 全局 NotificationList entity 指针。
-static NOTIFICATION_LIST: OnceLock<Entity<NotificationList>> = OnceLock::new();
+/// 全局 NotificationList 句柄（**per-App 全局**，非进程级单例）。
+///
+/// 为什么不能存进程级 `static Entity`：实体绑定创建它的 App；测试与多 App
+/// 场景下跨 App 复用会触发 gpui 的 `used a entity with the wrong context`
+/// （渲染通知层时 panic）。放 gpui global 里，每个 App 自动一份，生产单
+/// App 语义不变（同一窗口树复用同一列表，合并窗口成立）。
+#[derive(Clone)]
+struct NotificationHandle(Entity<NotificationList>);
+
+impl gpui_kit::Global for NotificationHandle {}
 
 /// 待合并的通知缓存。
 ///
@@ -66,7 +74,9 @@ fn pending_merge() -> &'static std::sync::Mutex<Option<PendingMerge>> {
 /// 在 WorkbenchView 初始化时调用一次，创建 NotificationList entity。
 pub fn init_notifications(window: &mut Window, cx: &mut App) -> Entity<NotificationList> {
     let list = cx.new(|cx| NotificationList::new(window, cx));
-    let _ = NOTIFICATION_LIST.set(list.clone());
+    if !cx.has_global::<NotificationHandle>() {
+        cx.set_global(NotificationHandle(list.clone()));
+    }
     list
 }
 
@@ -75,19 +85,12 @@ pub fn init_notifications(window: &mut Window, cx: &mut App) -> Entity<Notificat
 /// 在 render 时调用，确保第一次 render 时创建 NotificationList。
 /// 返回的 Entity 可以直接作为 child 挂载到渲染树。
 pub fn ensure_notifications(window: &mut Window, cx: &mut App) -> Entity<NotificationList> {
-    if let Some(list) = NOTIFICATION_LIST.get() {
-        return list.clone();
+    if let Some(handle) = cx.try_global::<NotificationHandle>() {
+        return handle.0.clone();
     }
     let list = cx.new(|cx| NotificationList::new(window, cx));
-    let _ = NOTIFICATION_LIST.set(list.clone());
+    cx.set_global(NotificationHandle(list.clone()));
     list
-}
-
-/// 获取全局 NotificationList entity。
-///
-/// 如果未初始化，返回 None。
-pub fn notification_list() -> Option<&'static Entity<NotificationList>> {
-    NOTIFICATION_LIST.get()
 }
 
 /// 读取设置里的通知配置。
@@ -122,7 +125,7 @@ pub fn notify(
     message: Option<impl Into<String>>,
     cx: &mut App,
 ) {
-    let Some(list) = NOTIFICATION_LIST.get() else {
+    let Some(NotificationHandle(list)) = cx.try_global::<NotificationHandle>().cloned() else {
         tracing::warn!("NotificationList not initialized, dropping notification: {}", title.into());
         return;
     };
@@ -181,14 +184,14 @@ pub fn notify(
     };
 
     let mut notification = match type_ {
-        NotificationType::Info => Notification::info(final_title.as_str().into()),
-        NotificationType::Success => Notification::success(final_title.as_str().into()),
-        NotificationType::Warning => Notification::warning(final_title.as_str().into()),
-        NotificationType::Error => Notification::error(final_title.as_str().into()),
+        NotificationType::Info => Notification::info(SharedString::from(final_title.as_str())),
+        NotificationType::Success => Notification::success(SharedString::from(final_title.as_str())),
+        NotificationType::Warning => Notification::warning(SharedString::from(final_title.as_str())),
+        NotificationType::Error => Notification::error(SharedString::from(final_title.as_str())),
     };
 
     if let Some(ref msg) = final_message {
-        notification = notification.message(msg.as_str().into());
+        notification = notification.message(SharedString::from(msg.as_str()));
     }
 
     // 按类型设置 autohide（从设置读取）

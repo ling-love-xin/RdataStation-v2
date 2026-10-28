@@ -365,7 +365,7 @@ impl Render for EditorPanel {
                 );
             }
             content = content.child(
-                div().v_flex().gap_2().w_full().rounded_md().pl_3().pr_3().pt_2p5().pb_2p5()
+                div().v_flex().gap_2().w_full().rounded_md().pl_3().pr_3().pt_2().pb_2()
                     .border_1().border_color(theme.colors.border)
                     .child(
                         div().h_flex().items_center().gap_2()
