@@ -167,7 +167,7 @@ cargo check -p rds-editor -p rds-workbench -p rds-workbench-shell  # 通过（wo
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。
 - 当前未提交（并行线在动，改前先 `git status` 确认归属）：
-  - 本线混合：`grid.rs` / `ports.rs` / `host.rs` / `settings/*` / `workbench/src/view.rs` / `panels/mod.rs` / `tests/ui_contract.rs` / `workbench_shell/src/ui.rs`
+  - 本线混合：`result_panel/src/{store/, export/, grid/, panel/}`（2026-10-29 拆分目录）/ `ports.rs` / `host.rs` / `settings/*` / `workbench/src/view.rs` / `panels/mod.rs` / `tests/ui_contract.rs` / `workbench_shell/src/ui.rs`
   - 并行线：`database/src/nav_view/rows.rs`、`editor/src/{session.rs, view/dialogs.rs, encoding_dialog.rs, function_manual.rs, indent_dialog.rs, invisible_dialog.rs, tests.rs}`、`engine/src/persistence/workbench_context_store.rs`、`scratchpad/chrome.rs`、`workbench/src/{notification.rs, panels/editor.rs, quick_open/delegate.rs, services/editor_session.rs}`、`workbench_shell/src/ui.rs`、`.agents/skills/rds-design/`、`docs/architecture/{settings/settings-architecture.md, ui/design-spec.md, ui/theme-spec.md}` 等
 - 注释 / commit 信息一律简体中文（`feat:` / `fix:` / `refactor:` 前缀）。
 - 过程产物（日志 / 临时脚本）落 `.rds/tmp/` 或 `tools/_archive/`，不入库、不留工作目录。
@@ -177,7 +177,7 @@ cargo check -p rds-editor -p rds-workbench -p rds-workbench-shell  # 通过（wo
 
 ## 4. 接手指引（新会话建议顺序）
 
-1. 先重跑 §1.3 三条验证命令，确认基线（尤其 206 passed / 0 failed）落地。
+1. 先重跑 §1.3 三条验证命令，确认基线（尤其 **207 passed / 0 failed**）落地。
 2. 处理 §2.1 提交待办：先 `git status` / `git diff` 摘本线 hunk，与并行线协调后统一提交类型样式渲染消费（settings 三文件 + grid.rs + host.rs + workbench view.rs）。
 3. 知悉 §2.2 外线阻塞（settings 契约测试）与 §1.3 契约测试既有失败，不替并行线补。
 4. 按 §2.4 优先级推进功能遗留（建议先「列浏览器多选批量动作」「列序拖拽」两个高优先级项，开工前先按模块惯例说理解、列方案）。
@@ -185,12 +185,19 @@ cargo check -p rds-editor -p rds-workbench -p rds-workbench-shell  # 通过（wo
 
 ## 5. 常用锚点（行号随近期提交微移，以现场 grep 为准）
 
-- `panel.rs`：`render(&self, cx)` 主体（~522）；四行主体组装（~1309-1324）；左栏开关（~1199）/ 右栏开关 right_switch（~1238，状态栏右端三态）；`render_vertical_bar`（~1862，左缘竖条：网格/文本/记录/上一行/下一行）；`render_right_edge_bar`（~2234，右缘竖条，页签图标区）；`render_right_sidebar`（~2137，横 tab 只显激活页签）；`render_browser_tab`（~1986）/ `render_value_tab`（~2470）/ `render_stats_tab`（~2501）/ `render_group_tab`（~2552）/ `render_reference_tab`（~2612，backlog 空态）/ `render_exec_sql_tab`（~2617）；`render_sql_dialog`（~2425，SQL 预览弹窗浮层）/ `render_filter_expand_bar`（~2324，展开条：左=展开右=运行无边框）；`toggle_value_sidebar`（三态）/ `next_right_edge_state`（~2980）纯函数；`toggle_transpose`（~1494）；`sidebar_width_anim`（~2965）纯函数；`open_sql_dialog` / `close_sql_dialog`（~1572，事件路径，需 window）；`mod tests` 尾部 `rendered_ui_elements_survive`（~3260，渲染断言防回退，见 §2.10）。
+- `panel/`：`mod.rs`（门面 + pub 面 re-export：`GridPayload` / `ExportCtx` / `ResultSyncInput` / `ResultPanel` / `AnalysisItem`）；`render.rs` 主 `render` 组装；`sidebars.rs` `render_vertical_bar`（左缘竖条：网格/文本/记录/上一行/下一行）/ `render_right_edge_bar`（右缘竖条，页签图标区）/ `render_right_sidebar`（横 tab 只显激活页签）/ `render_browser_tab` / `render_filter_expand_bar`（展开条：左=展开右=运行无边框）+ `sidebar_width_anim` / `next_right_edge_state` 纯函数；`tabs.rs` `render_value_tab` / `render_stats_tab` / `render_group_tab` / `render_reference_tab`（backlog 空态）/ `render_exec_sql_tab` + `kv_row` / `fmt_stat` / `right_tab_from_index`；`dialog.rs` `render_sql_dialog`（SQL 预览弹窗浮层）；`events.rs` `toggle_value_sidebar`（三态）/ `toggle_transpose` / `open_sql_dialog` / `close_sql_dialog`（事件路径，需 window）+ `reorder_by` 纯函数；`lifecycle.rs` `new` / `sync`（投影同步）；`tests.rs` 尾部 `rendered_ui_elements_survive`（渲染断言防回退，见 §2.10）。
 - `ui.rs`：`RESULT_VERTICAL_BAR_WIDTH`（2.25）/ `RESULT_SIDEBAR_RIGHT_WIDTH`（20.0）/ `RESULT_STATUS_BAR_HEIGHT`（1.5）/ `RESULT_TOOLBAR_HEIGHT`（2.25）。
 - `ports.rs`：`ResultRequest` 全集（含 #7 / §2.9 新增变体 `RunFilterAsQuery` / `ToggleFilterExpand` / `OpenSqlDialog` / `CloseSqlDialog`；`ToggleSqlPreview` 已删）+ `ResultActionQueue`（`request` / `set_panel` / `push` / `drain`）。
-- `grid.rs`：`ResultGridDelegate`（TableDelegate 实现）/ `cell_style` / `format_cell_text` / `render_status_row`（三项新签名）/ `text_presentation` 指纹缓存。
-- `store.rs`：`ResultStore`（按文档分槽，多结果集 sets(document) + TabBar 标签；事实档 A2 未接线）。
+- `grid/`：`delegate.rs` `ResultGridDelegate`（TableDelegate 主体实现 + 钩子类型 + RESULT_GRID_CONTEXT 等常量）；`cell.rs` `render_td` / `header.rs` `render_th` / `menu.rs` `context_menu`（trait 方法不可分块 → 顶层自由函数 + `table_impl.rs` 薄转发）；`status.rs` `render_status_row`（三项新签名）/ `ResultToolbar` / `ResultStatus` / `ResultControls` / `ResultPane`；`text.rs` `format_cell_text` / `view_rows.rs` `text_presentation` 指纹缓存 / `stats.rs` 列统计 / `edit.rs` 行编辑 / `tests.rs`（全量测试迁入）。
+- `store/`：`store.rs` `ResultStore`（按文档分槽，多结果集 sets(document) + TabBar 标签；事实档 A2 未接线）+ `entry.rs` / `fact.rs`。
+- `export/`：`mod.rs` 门面 + `formats.rs` / `encode.rs` / `table_name.rs`（editor 侧 `pub use result_panel::export::*` 通配，全 pub 面保持）。
 
-## 6. 文件地图（crates/result_panel/src，15 文件）
+## 6. 文件地图（crates/result_panel/src，2026-10-29 目录拆分后）
 
-`analysis.rs`（分析请求）/ `changes.rs`（行级变更叠加）/ `column_browser.rs`（列浏览器 List 委托）/ `error_card.rs` / `export.rs` / `grid.rs`（网格委托 + 渲染）/ `lib.rs` / `panel.rs`（面板主实体）/ `ports.rs`（请求 + 队列）/ `rowset.rs` / `script_card.rs` / `sets.rs`（结果集标签条）/ `status.rs` / `store.rs` / `ui.rs`（尺寸常量）。
+顶层单文件：`lib.rs` / `ports.rs`（请求 + 队列）/ `rowset.rs` / `sets.rs`（结果集标签条）/ `status.rs` / `ui.rs`（尺寸常量）/ `analysis.rs` / `changes.rs` / `column_browser.rs`（列浏览器 List 委托）/ `error_card.rs` / `script_card.rs`。
+
+拆分目录（2026-10-29 一批完成，原巨型单文件按域切分；**trait impl 不可分块**处统一「顶层自由函数 + impl 薄转发」、跨文件私有方法 / struct 字段以 `pub(crate)` 暴露；`panel.rs` 无标准 `Render` trait impl（自定义 `render(&self, cx)`，host 手动调）故普通 impl 可切多块）：
+- `store/`（原 `store.rs`）：`mod.rs` + `entry.rs` + `fact.rs` + `store.rs`
+- `export/`（原 `export.rs`）：`mod.rs` + `formats.rs` + `encode.rs` + `table_name.rs`
+- `grid/`（原 `grid.rs`，6556 行）：`mod.rs` + `delegate.rs` + `view_rows.rs` + `edit.rs` + `text.rs` + `menu.rs` + `stats.rs` + `cell.rs` + `header.rs` + `table_impl.rs` + `status.rs` + `tests.rs`
+- `panel/`（原 `panel.rs`，3338 行）：`mod.rs` + `data.rs` + `lifecycle.rs` + `render.rs` + `events.rs` + `sidebars.rs` + `dialog.rs` + `tabs.rs` + `tests.rs`
