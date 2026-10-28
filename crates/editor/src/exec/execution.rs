@@ -25,17 +25,8 @@
 //! 忙态按连接计数（[`ExecQueue::is_busy_for`]），取消按连接（[`ExecQueue::cancel`]）。
 //! 事务 / 会话亲和（架构 §12 #2）属 1b：那需要 per-session 独占连接，不是这里加锁能解决的。
 
-use std::collections::{HashMap, VecDeque};
-use std::ops::Range;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex};
 
-use ::shared::FactFrame;
 
-use crate::channel::ExecChannel;
-use crate::export::RowKey;
-use crate::model::DocumentId;
 // 【下移】ResultPlacement / Pushdown 已随结果存储搬到 rds-result-panel（editor 经
 // `crate::store` 重导出）：执行层与结果存储共用同一份定义，不再各写一份。
 // `pub use` 保持 `crate::execution::ResultPlacement` 旧路径对调用方仍公开。

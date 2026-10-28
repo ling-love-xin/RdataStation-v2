@@ -6,12 +6,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 
-use crate::channel::ExecChannel;
 use crate::exec::notes::{
-    CommitNote, CommitReport, DuckDbExportRequest, ExecOutcome, ExportNote, SourceAction, SourceNote,
+    CommitNote, DuckDbExportRequest, ExecOutcome, ExportNote, SourceAction, SourceNote,
     SubmitError, TxNote,
 };
-use crate::exec::runner::{QueryData, QueryRunner};
+use crate::exec::runner::QueryRunner;
 use crate::exec::target::{ExecTarget, RunOptions, TxAction};
 use crate::export::RowKey;
 use crate::model::DocumentId;

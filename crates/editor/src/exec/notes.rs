@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use ::shared::FactFrame;
 
-use crate::channel::ExecChannel;
 use crate::exec::runner::QueryData;
 use crate::exec::target::{TxAction, TxSnapshot};
 use crate::export::RowKey;
