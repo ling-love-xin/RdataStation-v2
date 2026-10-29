@@ -1008,12 +1008,17 @@ fn bookmark_note_dialog_applies_a_label_and_persists(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 管理器浮层：列书签（行号 + 徽标 + 说明）+ 三操作；无书签给空态
+/// 管理器浮层 v4：搜索定位（右侧内嵌类型筛选）+ 三栏列表（位置 / 标签 / 操作图标）
+///
+/// 断言只验「层真渲染 + 控件真在」：类型/查询的过滤逻辑在 [`crate::bookmark::filtered`]
+/// 纯函数单测；双击跳转与编辑/删除回调在宿主方法（`jump_to_line` 等）另有覆盖，点击分发不在此赌。
 #[gpui_kit::test]
 fn bookmark_manager_lists_and_offers_actions(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (shared, id) = shared_with_document(r"D:\sql\mgr.sql", "select 1\nselect 2\nselect 3");
-    // 预置：一枚默认书签（行 1，label=行号）+ 一枚说明书签（行 3）
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-bookmark-mgr");
+    // 预置书签**必须在面板创建后**：`EditorHostPanel::new` 会从 sidecar 加载书签
+    // 并 `set_bookmarks` 覆盖（空 sidecar 覆盖为空），先预置会被冲掉
     shared.set_bookmarks(
         &id,
         vec![
@@ -1027,7 +1032,6 @@ fn bookmark_manager_lists_and_offers_actions(cx: &mut TestAppContext) {
             },
         ],
     );
-    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-bookmark-mgr");
     cx.update(|window, cx| window.draw(cx).clear(cx));
     let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
 
@@ -1039,29 +1043,39 @@ fn bookmark_manager_lists_and_offers_actions(cx: &mut TestAppContext) {
         cx.update(|window, cx| window.has_active_dialog(cx)),
         "管理器要弹出"
     );
-    eprintln!(
-        "DIAG line1={} jump3={} edit3={} delete1={} empty={}",
-        cx.debug_bounds("editor-dialog-editor-bookmark-line-1").is_some(),
-        cx.debug_bounds("editor-dialog-editor-bookmark-jump-3").is_some(),
-        cx.debug_bounds("editor-dialog-editor-bookmark-edit-3").is_some(),
-        cx.debug_bounds("editor-dialog-editor-bookmark-delete-1").is_some(),
-        cx.debug_bounds("editor-dialog-editor-bookmark-empty").is_some()
+    // 搜索定位框 + 内嵌类型筛选（全部 / 书签 / 折叠）
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-editor-bookmark-search"),
+        "搜索定位框要在"
     );
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-editor-bookmark-kind-all"),
+        "类型：全部"
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-editor-bookmark-kind-bookmark"),
+        "类型：书签"
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-editor-bookmark-kind-fold"),
+        "类型：折叠"
+    );
+    // 三栏列表：位置（行号）+ 标签 + 操作（编辑 / 删除图标）
     assert!(
         dialog_button_rendered(cx, "editor-dialog-editor-bookmark-line-1"),
         "行 1 书签在列表"
     );
     assert!(
-        dialog_button_rendered(cx, "editor-dialog-editor-bookmark-jump-3"),
-        "说明书签行 3 有跳转"
+        dialog_button_rendered(cx, "editor-dialog-editor-bookmark-line-3"),
+        "行 3 说明书签在列表"
     );
     assert!(
         dialog_button_rendered(cx, "editor-dialog-editor-bookmark-edit-3"),
-        "说明书签行 3 有编辑"
+        "说明书签行 3 有编辑图标"
     );
     assert!(
         dialog_button_rendered(cx, "editor-dialog-editor-bookmark-delete-1"),
-        "行 1 有删除"
+        "行 1 有删除图标"
     );
 }
 
