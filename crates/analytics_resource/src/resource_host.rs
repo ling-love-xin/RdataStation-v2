@@ -1,0 +1,1322 @@
+//! 资产库面板的宿主桥（M6）。
+//!
+//! `rds-analytics-resource` 自带面板视图（`resource_view::ResourcesPanel`）但不依赖 workbench：
+//! 工作台在这里把「重绘 / 只读判定 / 动作去向」注入为 [`ResourcesHost`]——与 `mock_host`
+//! 同一形态（crate 持有视图与状态，宿主只装配）。
+//!
+//! ## 动作去向（本批起：归档 / 取回 / 打开都是真实现）
+//!
+//! - **归档**：系统文件选择 → 归档确认对话框 → 入队后台任务（`services::resource_jobs`）。
+//!   目标相对路径与重名避让由 `PayloadStore::{rel_path_taken, free_rel_path}` 定
+//!   （搬本体与命名规则都是本模块的知识，宿主不自己拼 `resources/`）。
+//! - **打开（只读）**：本体以**编辑器只读**打开（`Shared::request_open_in_editor_read_only` →
+//!   编辑器 `persist::open_file_read_only`）；路径由 `PayloadStore::resolve` 解析（守卫在那一层）。
+//! - **取回**：取回对话框 → 入队后台任务 → 回执与"顺手打开"由侧栏轮询印做。
+//! - **撤销归档**：撤销栏的凭据原样交给工作线程（本体移回原位 + 删登记行）。
+//! - **移入回收站**：单选与多选都是真实现——一次提交整批给工作线程，本体进项目级
+//!   `ProjectTrash`、登记行软删（还原能恢复别名 / 标签 / 指纹，回收站 manifest 里没有这些）。
+//! - **回收站…**：取数（后台线程读条目 manifest）→ 回收站对话框（还原 / 永久删除 / 清空）。
+//!   对话框只列**本模块的**条目（`origin = "resources"`），别人的只给一句说明——
+//!   共用一处回收站不代表可以在对方的界面里动对方的东西。
+//! - 面板头「⋯」四项：**打开资源目录**（系统文件管理器开 `resources/`）、**刷新**（同一条取数路径）
+//!   与 **重建索引…**（扫描 → 索引修复对话框）、**回收站…** 都是真实现。
+//! - 索引修复：扫描（后台线程，逐个本体算 sha256）→ 对话框三分组 → 行内动作
+//!   （补登 / 删记录 / 接受当前内容 / 打开版本历史）；「从回收站还原」走
+//!   `restore_archive_by_rel_path`（那一组行只有登记记录，手上没有回收站条目 id）。
+//!
+//! 回执而不是空操作：面板上的按钮是既有入口，点了没反应比"明确说还没接入"更难排查。
+
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::{App, AppContext as _, Window};
+
+use crate::detail_view::ArchiveDetail;
+use crate::dialogs::archive::{ArchiveConflict, ArchiveDialogSeed, open_archive_dialog};
+use crate::dialogs::checkout::{CheckoutDialogSeed, open_checkout_dialog, suggest_work_copy_name};
+use crate::dialogs::group::{GroupNameEvent, GroupNameKind, open_group_name_dialog};
+use crate::dialogs::pick::{DraftCandidate, PickDialogSeed, open_draft_pick_dialog};
+use crate::dialogs::rename::{RenameField, RenameSeed, open_rename_dialog, rename_placeholder};
+use crate::filter::{SortField, SortOrder};
+use crate::model::{
+    ArchiveBinding, ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest, DeleteTarget,
+    KeepVersions, PayloadMode, TagTarget,
+};
+use crate::payload::{PayloadStore, RESOURCES_DIR_NAME};
+use crate::resource_view::{GroupOption, ResourcesHost};
+
+use crate::jobs as resource_jobs;
+
+/// 草稿箱条目 / 来源判定（P2-b 下沉后 analytics_resource 直接依赖 scratchpad；全路径引用）。
+
+
+/// 草稿扫描深度：与草稿箱自己的遍历上限同档（再深就不是"随手归档"的场景了）。
+const DRAFT_SCAN_DEPTH: u32 = 4;
+
+/// 资产库宿主的 workbench 能力面（P2-b 下沉引入，与 `ResourcesHost` 方向相反）：
+///
+/// `ResourcesHost`（面板 → 宿主回调，26 个带 `window/cx` 的动作请求）由本文件实现；
+/// 本 trait（宿主实现 → workbench 能力）把「写回执 / 项目根 / 只读判定 / 面板快照 /
+/// 编辑器只读打开 / 设置 / 系统文件对话框」从 `workbench::panels::Shared` 隔离出来——
+/// 下沉的装配逻辑只依赖这个 trait，不碰 Shared 具体类型（与 P2-a 的 `EditorHost` 同构）。
+///
+/// 实现侧（workbench `components/resource_host.rs`）转发 Shared 的对应能力；
+/// 测试侧可用只记录调用的替身（gpui-kit-dev「测试用测试桥替身」）。
+pub trait ResourceHostBackend: 'static {
+    /// 状态栏回执（写 `Shared::notice` 并请求宿主重绘）。
+    fn notice(&self, message: String, cx: &mut App);
+    /// 项目根（未打开项目时 `None`）。
+    fn project_root(&self) -> Option<PathBuf>;
+    /// 项目只读（只读时归档 / 取回 / 改标签都被拒）。
+    fn read_only(&self) -> bool;
+    /// 草稿箱存储 + 运行时（宿主侧读：M6 不认识草稿箱的内部结构）。
+    fn scratchpad_store(&self) -> Result<(scratchpad::ScratchpadStore, tokio::runtime::Runtime), String>;
+    /// 刷新资源面板（入队一次取数 + drain，下一帧列表更新）。
+    fn refresh_resources(&self, cx: &mut App);
+    /// 编辑器只读打开（打开动作由事件路径做——它才有窗口；成功后请求宿主重绘）。
+    fn request_open_in_editor_read_only(&self, path: PathBuf, cx: &mut App);
+    /// 洞察采样 SQL（结果集列 → 洞察面板的样本查询；宿主持有连接列表）。
+    fn insight_sample_sql(&self, conn_id: &str, parts: &[&str]) -> String;
+    /// 洞察面板打开一个取样来源（本体只读表 / 远端引用 / 分析表）。
+    fn open_insight_source_table(
+        &self,
+        source: insight::SampleSource,
+        name: String,
+        cx: &mut App,
+    );
+    /// 引用失效槽位读写（`reference_stale`：懒校验命中时置位，详情面板处置）。
+    fn set_reference_stale(&self, resource_id: &str, stale: bool);
+    fn is_reference_stale(&self, resource_id: &str) -> bool;
+    /// 面板快照（分组字典 / 组名 / 行名；与 `shared.resources_panel` 同一处取法，不另查库）。
+    fn snapshot_groups(&self, cx: &App) -> Vec<GroupOption>;
+    fn group_name(&self, folder_id: &str, cx: &App) -> Option<String>;
+    fn row_name(&self, resource_id: &str, cx: &App) -> Option<String>;
+    /// 一条存档的当前别名（详情面板头部；`None` = 没别名）。
+    fn row_alias(&self, resource_id: &str, cx: &App) -> Option<Option<String>>;
+    /// 设置：默认分组 / 历史内容保留策略 / 资源列表默认排序 / 分组折叠（事件路径读写，不查库）。
+    fn default_group(&self, root: &str, cx: &App) -> Option<String>;
+    fn keep_versions(&self, cx: &App) -> KeepVersions;
+    fn set_default_resource_sort(&self, key: &str, cx: &mut App);
+    fn set_collapsed_groups(&self, root: &str, collapsed_keys: &[String], cx: &mut App);
+    fn set_default_group(&self, root: &str, folder_id: Option<&str>, cx: &mut App);
+    /// 系统文件对话框（编辑器侧 `pick_open_path`；取消返回 `None`，不是错误）。
+    fn pick_path(&self) -> Option<PathBuf>;
+}
+
+/// 状态栏提示（自由函数版：对话框回调里没有 `self`）。
+fn say(backend: &Rc<dyn ResourceHostBackend>, message: impl Into<String>, cx: &mut App) {
+    backend.notice(message.into(), cx);
+}
+
+/// 归档种子（原型 §4.1）：来源标签 / 目标位置（含重名避让）/ 默认显示名 / 来源连接 / 冲突预探。
+///
+/// 返回种子与**已避让的目标相对路径**：提交时要用同一个值，两处各算一次就会不一致。
+/// 分组名单与预选由调用方给（名单来自面板快照的字典，预选来自默认分组设置）。
+fn archive_seed(
+    root: &Path,
+    source_label: String,
+    rel_path: &str,
+    display_name: &str,
+    source_connection: Option<String>,
+    kind: ArchiveKind,
+    groups: Vec<GroupOption>,
+    group_id: Option<String>,
+    initial_tags: Vec<String>,
+    source_abs_path: Option<String>,
+) -> (ArchiveDialogSeed, String) {
+    let resolved = PayloadStore::new(root.to_path_buf()).free_rel_path(rel_path);
+    let conflict = (resolved != rel_path).then(|| ArchiveConflict {
+        taken_rel_path: format!("{RESOURCES_DIR_NAME}/{rel_path}"),
+        resolved_rel_path: format!("{RESOURCES_DIR_NAME}/{resolved}"),
+    });
+    // 引用模式只对受管文件开放（§12.1.1 ①）：分析快照固定复制，不提供引用选项。
+    let allow_reference = kind == ArchiveKind::File;
+    let seed = ArchiveDialogSeed {
+        source_label,
+        rel_path: format!("{RESOURCES_DIR_NAME}/{resolved}"),
+        name: display_name.to_string(),
+        source_connection,
+        conflict,
+        groups,
+        group_id,
+        initial_tags,
+        allow_reference,
+        default_mode: PayloadMode::DEFAULT,
+        source_abs_path,
+    };
+    (seed, resolved)
+}
+
+/// 归档时按来源选**档位**（P4.5 的核心判定）：扩展名认得出来的数据文件
+/// （CSV / Parquet / Excel / JSON，口径在 `engine::duckdb::file_reader_function`）
+/// 走 `analysis` 档——归档后能洞察、能按配方复算；其余（`.sql` / `.md` …）仍是文件型。
+fn archive_kind_for(path: &std::path::Path) -> ArchiveKind {
+    match engine::duckdb::file_reader_function(&path.to_string_lossy()) {
+        Some(_) => ArchiveKind::Analysis,
+        None => ArchiveKind::File,
+    }
+}
+
+/// 提交一次归档（入队 + 立刻刷新 + 回执）：两条归档入口共用，
+/// 避免"一处记得刷新、另一处忘了"。
+///
+/// 保留策略在这里（主线程）读好随作业带入：工作线程上拿不到 GPUI 的 global 设置。
+fn submit_archive(
+    root: &Path,
+    read_only: bool,
+    request: ArchiveRequest,
+    backend: &Rc<dyn ResourceHostBackend>,
+    cx: &mut App,
+) {
+    let keep_versions = backend.keep_versions(cx);
+    // 探测标志跟着档位走：分析档才值得连一次 DuckDB（文件型的指纹是字节 sha256）。
+    let analysis_probe = request.kind == ArchiveKind::Analysis && request.analysis.is_none();
+    resource_jobs::enqueue_archive(
+        root.to_path_buf(),
+        read_only,
+        request,
+        keep_versions,
+        analysis_probe,
+    );
+    backend.refresh_resources(cx);
+    say(backend, "资产库：正在归档…", cx);
+}
+
+/// 把草稿树压平成可归档的候选（只收文件：目录只是组织方式）。
+fn flatten_drafts(
+    entries: &[scratchpad::ScratchpadEntry],
+    file_meta: &std::collections::HashMap<String, scratchpad::FileMeta>,
+    store: &scratchpad::ScratchpadStore,
+    out: &mut Vec<DraftCandidate>,
+) {
+    for entry in entries {
+        match entry.kind {
+            scratchpad::ScratchpadEntryKind::File => {
+                // `relative_path_of` 同时把内部/隐藏路径挡在门外（与草稿箱自身的 API 同一守卫）。
+                let Some(rel) = store.relative_path_of(&entry.path) else {
+                    continue;
+                };
+                let connection_id = file_meta
+                    .get(&rel)
+                    .and_then(|meta| meta.preferred_connection())
+                    .map(str::to_string);
+                out.push(DraftCandidate {
+                    abs_path: entry.path.clone(),
+                    rel_path: rel,
+                    display_name: entry
+                        .name
+                        .rsplit_once('.')
+                        .map(|(stem, _)| stem.to_string())
+                        .unwrap_or_else(|| entry.name.clone()),
+                    connection_id,
+                });
+            }
+            scratchpad::ScratchpadEntryKind::Folder => {
+                if let Some(children) = entry.children.as_ref() {
+                    flatten_drafts(children, file_meta, store, out);
+                }
+            }
+        }
+    }
+}
+
+/// 宿主桥：动作转发到 `ResourceHostBackend`（workbench 能力面；无自有状态）。
+struct ResourceHost {
+    backend: Rc<dyn ResourceHostBackend>,
+}
+
+impl ResourceHost {
+    /// 给一次明确回执（写入 `Shared::notice` 并请求宿主重绘）。
+    fn pending(&self, action: &str, detail: &str, cx: &mut App) {
+        self.backend.notice(format!("资产库：{action}{detail}"), cx);
+    }
+
+    /// 状态栏提示（动作结果与失败都走它）。
+    fn notice(&self, message: impl Into<String>, cx: &mut App) {
+        self.backend.notice(message.into(), cx);
+    }
+
+    /// 项目根（未打开项目时给回执并返回 `None`）。
+    fn require_project(&self, action: &str, cx: &mut App) -> Option<PathBuf> {
+        match self.backend.project_root() {
+            Some(root) => Some(root),
+            None => {
+                self.pending(action, "：还没有打开项目", cx);
+                None
+            }
+        }
+    }
+
+    fn read_only(&self) -> bool {
+        self.backend.read_only()
+    }
+
+    /// 草稿箱里的可归档文件（**宿主侧读**：M6 不认识草稿箱的内部结构）。
+    ///
+    /// 目录列表与配置读取是**元数据级**操作（单次 readdir + 一个小 JSON，K1c 口径），
+    /// 留在事件路径；来源连接取草稿 `file_meta` 的首选连接（显式绑定优先，其次最近执行过的那条）。
+    fn draft_candidates(&self, cx: &mut App) -> Option<Vec<DraftCandidate>> {
+        let (store, runtime) = match self.backend.scratchpad_store() {
+            Ok(pair) => pair,
+            Err(reason) => {
+                self.notice(format!("资产库：读不到草稿箱（{reason}）"), cx);
+                return None;
+            }
+        };
+        let entries = match runtime.block_on(store.list_local_entries(DRAFT_SCAN_DEPTH)) {
+            Ok(entries) => entries,
+            Err(error) => {
+                self.notice(format!("资产库：读草稿箱失败（{error}）"), cx);
+                return None;
+            }
+        };
+        // 配置读不到不算错：来源连接只是"能带就带"，不该阻断归档。
+        let file_meta = runtime
+            .block_on(store.load_config())
+            .map(|config| config.file_meta)
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        flatten_drafts(&entries, &file_meta, &store, &mut out);
+        out.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+        Some(out)
+    }
+
+    /// 分组显示名（从面板快照的分组字典取；取不到就 `None`——调用方会退回一句泛称）。
+    ///
+    /// 不给“直接查库”的选择：分组字典每次刷新都在快照里，而查库要开项目库（异步 + I/O），
+    /// 事件路径上不该出现。
+    /// 分组名单（面板快照里的字典）：归档对话框的「分组」下拉用它。
+    ///
+    /// 不另查库——面板的字典就是这一屏真实可见的分组（同一次取数产物）；快照还没到时
+    /// 给空名单（对话框只摆「未分组」）。
+    fn known_groups(&self, cx: &App) -> Vec<GroupOption> {
+        self.backend.snapshot_groups(cx)
+    }
+
+    /// 归档要预选的分组：设置里的默认分组，**且它还在字典里**。
+    ///
+    /// 两个都要：认不出的 id 不能当预选值（用户会以为“归档没进默认分组”，而实际是分组已删）。
+    /// 返回 `None` = 未分组——与对话框自己的兑底同一口径（它也会把悬空 id 显示成未分组）。
+    fn default_group_for_archive(&self, cx: &App) -> Option<String> {
+        let root = self.backend.project_root()?;
+        let id = self.backend.default_group(&root.to_string_lossy(), cx)?;
+        self.known_groups(cx)
+            .iter()
+            .any(|group| group.id == id)
+            .then_some(id)
+    }
+
+    fn group_name(&self, folder_id: &str, cx: &App) -> Option<String> {
+        self.backend.group_name(folder_id, cx)
+    }
+
+    /// 一条存档的当前**显示名**（重命名对话框的预填值）。
+    ///
+    /// 从面板快照取（与 [`group_name`](Self::group_name) 同一处取法）：预览与真实值同源，
+    /// 不为了一个名字再查一次库；取不到（行刚被刷掉）就让输入框空着，由用户自己填。
+    fn row_name(&self, resource_id: &str, cx: &App) -> Option<String> {
+        self.backend.row_name(resource_id, cx)
+    }
+
+    /// 一条存档的当前**别名**（别名对话框的预填值；`None` = 没别名）。
+    ///
+    /// 从**详情**取（头部展示的就是它）：与 `row_name` 同一口径（不为了一个字段再查库）。
+    fn row_alias(&self, resource_id: &str, cx: &App) -> Option<Option<String>> {
+        self.backend.row_alias(resource_id, cx)
+    }
+
+    /// 本体绝对路径（按归档模式分派；越界 / 点前缀守卫由 `PayloadStore` 把关）。
+    ///
+    /// - **copy**：`resources/` 相对路径 → `resolve`（需要项目根）；
+    /// - **reference**：源**绝对**路径 → `resolve_source`（不依赖项目根；源不存在 / 已移动
+    ///   由守卫报错，宿主回执说明快照失效）。
+    ///
+    /// 拿不到就**给回执**：旧行可能没登记路径，或项目已关闭——两种都要说清，不能静默。
+    fn payload_path(&self, detail: &ArchiveDetail, cx: &mut App) -> Option<PathBuf> {
+        match detail.payload_mode {
+            PayloadMode::Copy => {
+                let Some(root) = self.backend.project_root() else {
+                    self.pending("无法定位本体", "：还没有打开项目", cx);
+                    return None;
+                };
+                let Some(rel) = detail.payload_rel_path.as_deref() else {
+                    self.notice("资产库：这条存档没有登记本体路径（旧行）", cx);
+                    return None;
+                };
+                match PayloadStore::new(root).resolve(rel) {
+                    Ok(path) => Some(path),
+                    Err(error) => {
+                        self.notice(format!("资产库：无法定位本体（{error}）"), cx);
+                        None
+                    }
+                }
+            }
+            PayloadMode::Reference => {
+                let Some(source) = detail.source_path.as_deref() else {
+                    self.notice("资产库：引用型存档没有登记源路径（数据异常）", cx);
+                    return None;
+                };
+                // resolve_source 不读项目根（源在模块管辖目录之外）；空 root 只为满足构造签名。
+                match PayloadStore::new(PathBuf::new()).resolve_source(source) {
+                    Ok(path) => Some(path),
+                    Err(error) => {
+                        self.notice(format!("资产库：引用源不可用（{error}）"), cx);
+                        None
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl ResourcesHost for ResourceHost {
+    fn request_archive_from_drafts(&self, window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法归档", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能归档", cx);
+            return;
+        }
+        let Some(candidates) = self.draft_candidates(cx) else {
+            return;
+        };
+        if candidates.is_empty() {
+            self.notice("资产库：草稿箱里还没有可归档的文件", cx);
+            return;
+        }
+
+        let backend = self.backend.clone();
+        let read_only = self.read_only();
+        // 分组名单与默认分组都在事件路径上取一份（来自面板快照的字典 + 设置；都不查库）；
+        // 闭包里只能拿副本。
+        let known_groups = self.known_groups(cx);
+        let default_group = self.default_group_for_archive(cx);
+        // 多选路径的保留策略按设置批带入（闭包外取值：闭包是 `'static`，不能捕获 `self`）。
+        let keep_versions = self.backend.keep_versions(cx);
+        open_draft_pick_dialog(
+            window,
+            cx,
+            PickDialogSeed { candidates },
+            move |picked, window, cx| match picked.as_slice() {
+                // 选一个：展开完整的归档确认（与「从本地文件归档…」同一条路）——
+                // 能改显示名、能看到"目标被占则改名到哪"。
+                [draft] => {
+                    // 归档继承（规格 §7.4）：草稿条目标签预填进归档对话框，用户可改可删；
+                    // 读标签失败不阻断归档（继承是"能带就带"）。
+                    let inherited_tags = scratchpad::ScratchpadStore::new(root.clone())
+                        .tags_of_entry(&draft.rel_path)
+                        .map(|tags| tags.into_iter().map(|t| t.name).collect())
+                        .unwrap_or_default();
+                    let kind = archive_kind_for(&draft.abs_path);
+                    let source_abs = draft.abs_path.to_string_lossy().to_string();
+                    let (seed, resolved_rel) = archive_seed(
+                        &root,
+                        format!("草稿箱：{}", draft.rel_path),
+                        &draft.rel_path,
+                        &draft.display_name,
+                        draft.connection_id.clone(),
+                        kind,
+                        known_groups.clone(),
+                        default_group.clone(),
+                        inherited_tags,
+                        Some(source_abs),
+                    );
+                    let backend = backend.clone();
+                    let draft = draft.clone();
+                    // 本回调签名是 `Fn`（对话框可能被调用多次的历史原因）：内层 `move` 闭包
+                    // 只能拿副本，不能把外层捕获的 `root` 移走。
+                    let root = root.clone();
+                    open_archive_dialog(window, cx, seed, move |result, cx| {
+                        let request = ArchiveRequest {
+                            source_path: draft.abs_path.clone(),
+                            rel_path: resolved_rel.clone(),
+                            name: result.name,
+                            alias: result.alias,
+                            // 数据文件按分析档登记（P4.5）：探测由作业在工作线程上做。
+                            kind,
+                            payload_mode: result.payload_mode,
+                            analysis: None,
+                            binding: ArchiveBinding {
+                                // 归档凭证的"出处"：草稿相对路径（带模块前缀，与文档口径一致）
+                                promoted_from: Some(format!(
+                                    "{}/{}",
+                                    scratchpad::MODULE_DIR_NAME,
+                                    draft.rel_path
+                                )),
+                                source_connection_id: draft.connection_id.clone(),
+                                source_table: None,
+                            },
+                            tags: result.tags,
+                            group_id: None,
+                            keep_versions: result.keep_versions,
+                            existing_resource_id: None,
+                        };
+                        submit_archive(&root, read_only, request, &backend, cx);
+                    });
+                }
+                // 选多个：默认名 + 各自来源，逐个入队（列表里没有位置让用户逐个改名）。
+                many => {
+                    let payload = PayloadStore::new(root.clone());
+                    // 保留策略按设置批带入（多选路径没有逐个覆盖的输入框）。
+                    let mut renamed = 0usize;
+                    for draft in many {
+                        let resolved_rel = payload.free_rel_path(&draft.rel_path);
+                        if resolved_rel != draft.rel_path {
+                            renamed += 1;
+                        }
+                        // 归档继承（规格 §7.4）：多选没有标签输入框，草稿条目标签直接带入；
+                        // 读标签失败不阻断归档（继承是"能带就带"）。
+                        let inherited_tags = scratchpad::ScratchpadStore::new(root.clone())
+                            .tags_of_entry(&draft.rel_path)
+                            .map(|tags| tags.into_iter().map(|t| t.name).collect())
+                            .unwrap_or_default();
+                        let request = ArchiveRequest {
+                            source_path: draft.abs_path.clone(),
+                            rel_path: resolved_rel,
+                            name: draft.display_name.clone(),
+                            alias: None,
+                            // 数据文件按分析档登记（P4.5）：探测由作业在工作线程上做。
+                            kind: archive_kind_for(&draft.abs_path),
+                            payload_mode: PayloadMode::Copy,
+                            analysis: None,
+                            binding: ArchiveBinding {
+                                promoted_from: Some(format!(
+                                    "{}/{}",
+                                    scratchpad::MODULE_DIR_NAME,
+                                    draft.rel_path
+                                )),
+                                source_connection_id: draft.connection_id.clone(),
+                                source_table: None,
+                            },
+                            tags: inherited_tags,
+                            group_id: None,
+                            keep_versions: None,
+                            existing_resource_id: None,
+                        };
+                        // 探测标志跟着档位走（分析档才连一次 DuckDB）。
+                        let analysis_probe =
+                            request.kind == ArchiveKind::Analysis && request.analysis.is_none();
+                        resource_jobs::enqueue_archive(
+                            root.clone(),
+                            read_only,
+                            request,
+                            keep_versions,
+                            analysis_probe,
+                        );
+                    }
+                    let mut message = format!("资产库：已提交 {} 个归档…", many.len());
+                    if renamed > 0 {
+                        message.push_str(&format!("（{renamed} 个目标被占，已自动改名）"));
+                    }
+                    backend.refresh_resources(cx);
+                    say(&backend, message, cx);
+                }
+            },
+        );
+    }
+
+    fn request_archive_from_file(&self, window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法归档", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能归档", cx);
+            return;
+        }
+        // 来源：系统文件选择（事件路径上的模态框）。**取消不是错误**：不提示、不入队。
+        let Some(source) = self.backend.pick_path() else {
+            return;
+        };
+        let Some(file_name) = source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+        else {
+            self.notice("资产库：归档失败（文件名无法解析）", cx);
+            return;
+        };
+        let default_name = std::path::Path::new(&file_name)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or(&file_name)
+            .to_string();
+        // 目标相对路径：`rel_path` **相对 `resources/`**（`PayloadStore::resolve` 的口径），
+        // 这里只给文件名——本地文件没有草稿相对路径可保留。
+        let kind = archive_kind_for(&source);
+        let source_abs = source.to_string_lossy().to_string();
+        let (seed, resolved_rel) = archive_seed(
+            &root,
+            format!("本地文件：{}", source.display()),
+            &file_name,
+            &default_name,
+            // 本地文件没有"来源草稿的连接"可带出：**不猜**当前活动连接（那不一定是它的来路）。
+            None,
+            kind,
+            self.known_groups(cx),
+            self.default_group_for_archive(cx),
+            // 本地文件没有草稿标签可继承。
+            Vec::new(),
+            Some(source_abs),
+        );
+
+        let backend = self.backend.clone();
+        let read_only = self.read_only();
+        open_archive_dialog(window, cx, seed, move |result, cx| {
+            let request = ArchiveRequest {
+                source_path: source.clone(),
+                rel_path: resolved_rel.clone(),
+                name: result.name,
+                alias: result.alias,
+                // 同上：数据文件走分析档（探测在工作线程上做）。
+                kind,
+                payload_mode: result.payload_mode,
+                analysis: None,
+                binding: ArchiveBinding {
+                    promoted_from: None,
+                    source_connection_id: None,
+                    source_table: None,
+                },
+                tags: result.tags,
+                group_id: result.group_id,
+                keep_versions: result.keep_versions,
+                existing_resource_id: None,
+            };
+            submit_archive(&root, read_only, request, &backend, cx);
+        });
+    }
+
+    fn request_open(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
+        let Some(path) = self.payload_path(detail, cx) else {
+            return;
+        };
+        // reference 懒校验（§12.1.1 ②）：源在位（`payload_path` 已守卫存在性）但内容与登记
+        // 指纹不一致时**不打开**，置失效槽位交详情面板处置；旧行无指纹基准就不挡（与
+        // indexer 旧行口径一致）。校验只在主动打开时做，不进索引状态统计。
+        if detail.payload_mode == PayloadMode::Reference {
+            if let Some(expected) = detail.content_hash.as_deref() {
+                match PayloadStore::content_hash_sync(&path) {
+                    Ok(actual) if actual != expected => {
+                        self.backend.set_reference_stale(&detail.id, true);
+                        self.backend.refresh_resources(cx);
+                        self.notice(
+                            "资产库：源已变更，快照失效——可在详情面板「接受当前内容」或「从历史还原」",
+                            cx,
+                        );
+                        return;
+                    }
+                    Ok(_) => {
+                        self.backend.set_reference_stale(&detail.id, false);
+                    }
+                    Err(error) => {
+                        self.notice(format!("资产库：引用源校验失败（{error}）"), cx);
+                        return;
+                    }
+                }
+            }
+        }
+        // 分析表（数据文件）**不走编辑器文本**：双击/打开要看的是数据本身。
+        //
+        // 走洞察的取样入口（与右键「查看统计」同一个）：那边把本体当只读源表读出来
+        // （D58：取样 → 临时表），用户能直接看到这张表的形状与数据。
+        //
+        // 注：原型 P4.4 想要的是“编辑器结果表格（只读）”，那需要编辑器侧先开一个
+        // “以结果区打开数据文件”的 API（现在只有“打开文本 + 执行”），属 P4.4 余项；
+        // 在此之前“双击能看见数据”这件事由洞察入口承担，比摆一个点了没反应的按钮强。
+        if detail.kind == ArchiveKind::Analysis {
+            match insight::SampleSource::duckdb_file(&path, detail.name.clone()) {
+                Ok(source) => {
+                    let name = detail.name.clone();
+                    self.backend
+                        .open_insight_source_table(source, name.clone(), cx);
+                    self.notice(
+                        format!("资产库：已在洞察面板打开「{name}」（取样）——本体仍只读"),
+                        cx,
+                    );
+                }
+                Err(error) => self.notice(format!("资产库：{error}"), cx),
+            }
+            return;
+        }
+        // **编辑器只读**：改它要先去取回（本体不可写是模块硬约束 2）。
+        self.backend.request_open_in_editor_read_only(path, cx);
+    }
+
+    fn request_view_stats(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
+        // 面板只给「能取到数」的行摆入口（`can_view_stats`），这里仍按种类分流：
+        // 走得通的那类把**取样来源**交给洞察侧（D58），走不通的给回执而不是静默。
+        match detail.kind {
+            // 受管文件：本体交给 DuckDB 直接读（CSV / Parquet / Excel / JSON）。
+            ArchiveKind::File => {
+                let Some(path) = self.payload_path(detail, cx) else {
+                    return;
+                };
+                match insight::SampleSource::duckdb_file(&path, detail.name.clone()) {
+                    Ok(source) => self
+                        .backend
+                        .open_insight_source_table(source, detail.name.clone(), cx),
+                    // 面板已经按扩展名挡过一次：走到这里说明是可读格式但读不到
+                    // （扩展名对不上 / 路径刚被挪走），把真实原因说清。
+                    Err(error) => self.notice(format!("资产库：{error}"), cx),
+                }
+            }
+            // 远端引用：没有本体，按来源连接重新取样（连接不在或已删时报给洞察侧）。
+            ArchiveKind::TableRef => {
+                let (Some(conn_id), Some(table)) = (
+                    detail.source_connection_id.as_deref(),
+                    detail.source_table.as_deref(),
+                ) else {
+                    self.notice("资产库：这条引用没有来源连接或表名，无法取样", cx);
+                    return;
+                };
+                // 归档侧只存了一个 `schema.table` 字符串（见 `ArchiveBinding`），
+                // 所以按点拆段后交给共用助手加引号（与导航树「查看统计」同口径）。
+                let parts: Vec<&str> = table.split('.').collect();
+                let sql = self.backend.insight_sample_sql(conn_id, &parts);
+                let source =
+                    insight::SampleSource::new(conn_id.to_string(), sql, detail.name.clone());
+                self.backend
+                    .open_insight_source_table(source, detail.name.clone(), cx);
+            }
+            // 分析表：本体是项目内的 `analytics.duckdb`，要 ATTACH + 用重建定义取数
+            // （不是“读一个文件”那么简单）——随后续批次接（面板据此也不给入口）。
+            ArchiveKind::Analysis => {
+                self.notice("资产库：分析表型存档的洞察随 M8 后续批次接入", cx);
+            }
+        }
+    }
+
+    fn request_checkout(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法取回", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能取回", cx);
+            return;
+        }
+        // 目标目录 = 草稿箱模块目录（取回产出的是一份**草稿**；目录名取自 crate 常量，
+        // 不在宿主里再写一次字面量）。
+        let target_dir = root.join(scratchpad::MODULE_DIR_NAME);
+        let extension = detail
+            .payload_rel_path
+            .as_deref()
+            .and_then(|rel| std::path::Path::new(rel).extension())
+            .and_then(|ext| ext.to_str());
+        let seed = CheckoutDialogSeed {
+            resource_name: detail.name.clone(),
+            file_name: suggest_work_copy_name(&detail.name, extension),
+            target_dir_label: target_dir.to_string_lossy().to_string(),
+            version: detail.version,
+        };
+
+        let backend = self.backend.clone();
+        let resource_id = detail.id.clone();
+        let read_only = self.read_only();
+        open_checkout_dialog(window, cx, seed, move |result, cx| {
+            let request = CheckoutRequest {
+                resource_id: resource_id.clone(),
+                dest_path: target_dir.join(&result.file_name),
+            };
+            resource_jobs::enqueue_checkout(root.clone(), read_only, request, result.open_after);
+            backend.refresh_resources(cx);
+            backend.notice("资产库：正在取回…".to_string(), cx);
+        });
+    }
+
+    fn request_promote_to_global(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
+        use crate::global::{PromoteKind, PromoteRequest};
+        let Some(root) = self.require_project("无法升级到全局", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能升级到全局", cx);
+            return;
+        }
+        // File 档才有本体相对路径；分析表型存档的本体在项目 `analytics.duckdb`，
+        // 数据读取 / 重建路径未接（resource_host.rs::request_open 同注），升级随 M8 后续批次。
+        let Some(rel) = detail.payload_rel_path.as_deref() else {
+            self.notice("资产库：分析表型存档的升级随 M8 后续批次接入", cx);
+            return;
+        };
+        let abs = root.join("resources").join(rel);
+        if !abs.exists() {
+            self.notice(format!("资产库：本体文件不存在（{rel}），无法升级"), cx);
+            return;
+        }
+        // 形态判定：白名单扩展名 → 数据文件映射出表；其余（sql/py/md…）→ 脚本内容表。
+        let kind = if is_data_file_ext(&abs) {
+            PromoteKind::DataFile
+        } else {
+            PromoteKind::Script
+        };
+        resource_jobs::enqueue_promote(
+            root,
+            PromoteRequest {
+                name: detail.name.clone(),
+                kind,
+                source_abs_path: abs,
+                rel_path: Some(rel.to_string()),
+                content_hash: detail
+                    .content_hash
+                    .clone()
+                    .unwrap_or_default(),
+                file_size: None,
+            },
+            false,
+        );
+        self.backend.refresh_resources(cx);
+        self.notice("资产库：正在升级到全局…", cx);
+    }
+
+    fn request_distribute_from_global(&self, name: &str, _window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法从全局分发", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能从全局分发", cx);
+            return;
+        }
+        // 分发 = 跨项目唯一法定路径（全局 → 当前项目）；目标重名由工作线程拦下回执。
+        resource_jobs::enqueue_distribute(root, name.to_string(), None, false);
+        self.backend.refresh_resources(cx);
+        self.notice("资产库：正在从全局分发…", cx);
+    }
+
+    fn is_reference_stale(&self, resource_id: &str) -> bool {
+        self.backend.is_reference_stale(resource_id)
+    }
+
+    fn accept_reference_current(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法接受当前内容", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能接受当前内容", cx);
+            return;
+        }
+        let Some(source) = detail.source_path.as_deref() else {
+            self.notice("资产库：引用型存档没有登记源路径（数据异常）", cx);
+            return;
+        };
+        // 接受当前内容 = 以当前源绝对路径为基准再归档（reference 分支：旧源留版本副本，
+        // 只更新指纹 / 规模 / 版本，不覆盖本体；服务层 `archive_into_existing` 口径）。
+        // 标签 / 分组沿用现状：空 tags + None group_id 时服务层不改动既有归属。
+        let request = ArchiveRequest {
+            source_path: PathBuf::from(source),
+            rel_path: detail.payload_rel_path.clone().unwrap_or_default(),
+            name: detail.name.clone(),
+            alias: detail.alias.clone(),
+            kind: detail.kind,
+            payload_mode: PayloadMode::Reference,
+            analysis: None,
+            binding: ArchiveBinding {
+                promoted_from: None,
+                source_connection_id: None,
+                source_table: None,
+            },
+            tags: Vec::new(),
+            group_id: None,
+            keep_versions: None,
+            existing_resource_id: Some(detail.id.clone()),
+        };
+        let keep_versions = self.backend.keep_versions(cx);
+        resource_jobs::enqueue_archive(root, self.read_only(), request, keep_versions, false);
+        self.backend.refresh_resources(cx);
+        self.notice("资产库：正在接受当前内容并生成新版本…", cx);
+    }
+
+    fn request_version_history(&self, resource_id: &str, _window: &mut Window, cx: &mut App) {
+        // 取数在后台线程：版本行要读索引表 + 问 `.RSmeta` 下的副本清单，
+        // 回来之后由侧栏轮询开窗（开窗要 `Window`，轮询任务里没有）。
+        let Some(root) = self.require_project("无法打开版本历史", cx) else {
+            return;
+        };
+        resource_jobs::enqueue_versions(root, resource_id.to_string());
+        self.notice("资产库：正在读取版本历史…", cx);
+    }
+
+    fn request_delete(&self, targets: &[DeleteTarget], window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法移入回收站", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能移入回收站", cx);
+            return;
+        }
+        if targets.is_empty() {
+            return;
+        }
+
+        // 文案按归档粒度区分本体命运（§12.1.1 ③）：copy 搬副本进回收站；reference 本体
+        // 留原位、只删登记行。混合时分组说清各有几项。
+        let copy_count = targets.iter().filter(|t| t.mode == PayloadMode::Copy).count();
+        let reference_count = targets.len() - copy_count;
+        let description = match (copy_count, reference_count) {
+            (_, 0) => "将删除 resources/ 副本与登记记录，之后可从回收站还原。".to_string(),
+            (0, _) => "本体留在源位置不动，只删除登记记录，之后可从回收站还原登记行。".to_string(),
+            _ => format!(
+                "{copy_count} 项副本将删除 resources/ 副本与登记记录；{reference_count} 项引用本体留在源位置、只删除登记记录。之后均可从回收站还原。"
+            ),
+        };
+        let title = match targets.len() {
+            1 => "移入回收站？".to_string(),
+            count => format!("移入回收站（{count} 项）？"),
+        };
+
+        let ids: Vec<String> = targets.iter().map(|t| t.id.clone()).collect();
+        let backend = self.backend.clone();
+        let read_only = self.read_only();
+        // 回收站是**项目级**的（与草稿箱共用 `.RSmeta/trash`）：搬本体与软删登记行
+        // 都在服务层一次完成，宿主不自己拼回收站路径（不做两套回收站）。
+        window.open_alert_dialog(cx, move |alert, _window, _cx| {
+            let backend = backend.clone();
+            let root = root.clone();
+            let ids = ids.clone();
+            alert
+                .confirm()
+                .title(title.clone())
+                .description(description.clone())
+                .button_props(
+                    gpui_kit::component::dialog::DialogButtonProps::default()
+                        .ok_text("移入回收站")
+                        .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, _window, cx| {
+                    resource_jobs::enqueue_trash(root.clone(), read_only, ids.clone());
+                    backend.refresh_resources(cx);
+                    say(&backend, "资产库：正在移入回收站…", cx);
+                    true
+                })
+        });
+    }
+
+    fn request_reveal(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
+        let Some(path) = self.payload_path(detail, cx) else {
+            return;
+        };
+        // `opener::reveal` 会选中该文件（而不是只打开目录）；失败给回执而不是静默。
+        if let Err(error) = opener::reveal(&path) {
+            self.notice(format!("资产库：打开资源目录失败（{error}）"), cx);
+        }
+    }
+
+    fn request_copy_path(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
+        let Some(path) = self.payload_path(detail, cx) else {
+            return;
+        };
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+            path.to_string_lossy().to_string(),
+        ));
+        self.notice("资产库：已复制本体路径", cx);
+    }
+
+    fn request_undo_archive(&self, undo: &ArchiveUndo, _window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法撤销", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能撤销", cx);
+            return;
+        }
+        // 凭据原样交给工作线程（面板只持有它，不认识服务层）。
+        resource_jobs::enqueue_undo(root, self.read_only(), undo.clone());
+        self.backend.refresh_resources(cx);
+        self.notice("资产库：正在撤销…", cx);
+    }
+
+    fn request_index_repair(&self, _window: &mut Window, cx: &mut App) {
+        // 扫描要逐个本体算 sha256（“指纹不匹配”那一档的代价），所以走后台线程；
+        // 报告回来后再开对话框（开窗要 `Window`，轮询任务里没有）。
+        let Some(root) = self.require_project("无法检查索引", cx) else {
+            return;
+        };
+        resource_jobs::enqueue_index_scan(root);
+        self.notice("资产库：正在检查索引…", cx);
+    }
+
+    fn request_open_payload_dir(&self, _window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法打开资源目录", cx) else {
+            return;
+        };
+        let dir = PayloadStore::new(root).resources_dir();
+        // 目录由第一次归档创建：还没有存档时它不存在，**说清这一点**而不是报一个系统错误。
+        if !dir.exists() {
+            self.notice(
+                format!(
+                    "资产库：资源目录还不存在（{}）——归档第一个存档时会创建",
+                    dir.display()
+                ),
+                cx,
+            );
+            return;
+        }
+        if let Err(error) = opener::open(&dir) {
+            self.notice(format!("资产库：打开资源目录失败（{error}）"), cx);
+        }
+    }
+
+    fn request_create_group(&self, window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法新建分组", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能改分组", cx);
+            return;
+        }
+        let backend = self.backend.clone();
+        let read_only = self.read_only();
+        // 输入实体在开窗前建好（builder 是 `Fn`，每帧重建）。
+        let input = cx.new(|cx| {
+            gpui_kit::component::input::InputState::new(window, cx).placeholder("分组名")
+        });
+        open_group_name_dialog(
+            window,
+            cx,
+            GroupNameKind::Create,
+            input,
+            move |event, _window, cx| {
+                let GroupNameEvent::Create { name } = event else {
+                    return;
+                };
+                resource_jobs::enqueue_group_action(
+                    root.clone(),
+                    read_only,
+                    resource_jobs::GroupJobAction::Create { name: name.clone() },
+                );
+                backend.refresh_resources(cx);
+                say(&backend, format!("资产库：正在新建分组「{name}」…"), cx);
+            },
+        );
+    }
+
+    fn request_rename_group(&self, folder_id: &str, window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法重命名分组", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能改分组", cx);
+            return;
+        }
+        // 当前名字从面板快照取（分组字典就在里面）；取不到就空着让用户自己填。
+        let current = self.group_name(folder_id, cx).unwrap_or_default();
+        let backend = self.backend.clone();
+        let read_only = self.read_only();
+        let folder_id = folder_id.to_string();
+        let input = cx.new(|cx| {
+            gpui_kit::component::input::InputState::new(window, cx).placeholder("分组名")
+        });
+        input.update(cx, |input, cx| input.set_value(current, window, cx));
+        open_group_name_dialog(
+            window,
+            cx,
+            GroupNameKind::Rename {
+                id: folder_id.clone(),
+            },
+            input,
+            move |event, _window, cx| {
+                let GroupNameEvent::Rename { id, name } = event else {
+                    return;
+                };
+                resource_jobs::enqueue_group_action(
+                    root.clone(),
+                    read_only,
+                    resource_jobs::GroupJobAction::Rename {
+                        id,
+                        name: name.clone(),
+                    },
+                );
+                backend.refresh_resources(cx);
+                say(&backend, format!("资产库：正在重命名分组为「{name}」…"), cx);
+            },
+        );
+    }
+
+    fn request_rename(&self, resource_id: &str, window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法重命名", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能改显示名", cx);
+            return;
+        }
+        // 当前名字从面板快照取（与 `request_rename_group` 同一处取法）：取不到就让输入框空着。
+        let current = self.row_name(resource_id, cx).unwrap_or_default();
+        let backend = self.backend.clone();
+        let read_only = self.read_only();
+        let resource_id = resource_id.to_string();
+        let input = cx.new(|cx| {
+            gpui_kit::component::input::InputState::new(window, cx)
+                .placeholder(rename_placeholder(RenameField::DisplayName))
+        });
+        let prefilled = current.clone();
+        input.update(cx, |input, cx| input.set_value(prefilled, window, cx));
+        open_rename_dialog(
+            window,
+            cx,
+            RenameSeed {
+                id: resource_id.clone(),
+                name: current.clone(),
+                field: RenameField::DisplayName,
+            },
+            input,
+            move |event, _window, cx| {
+                resource_jobs::enqueue_rename(
+                    root.clone(),
+                    read_only,
+                    event.id.clone(),
+                    event.name.clone(),
+                );
+                backend.refresh_resources(cx);
+                say(
+                    &backend,
+                    format!("资产库：正在把「{current}」改名为「{}」…", event.name),
+                    cx,
+                );
+            },
+        );
+    }
+
+    fn request_edit_alias(&self, resource_id: &str, window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法编辑别名", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能改别名", cx);
+            return;
+        }
+        // 当前别名从**详情**取（头部就展示它）；取不到（面板还没收到这条详情）就当空的。
+        let current = self
+            .row_alias(resource_id, cx)
+            .unwrap_or_default()
+            .unwrap_or_default();
+        let backend = self.backend.clone();
+        let read_only = self.read_only();
+        let resource_id = resource_id.to_string();
+        let input = cx.new(|cx| {
+            gpui_kit::component::input::InputState::new(window, cx)
+                .placeholder(rename_placeholder(RenameField::Alias))
+        });
+        let prefilled = current.clone();
+        input.update(cx, |input, cx| input.set_value(prefilled, window, cx));
+        open_rename_dialog(
+            window,
+            cx,
+            RenameSeed {
+                id: resource_id.clone(),
+                name: current.clone(),
+                field: RenameField::Alias,
+            },
+            input,
+            move |event, _window, cx| {
+                resource_jobs::enqueue_set_alias(
+                    root.clone(),
+                    read_only,
+                    event.id.clone(),
+                    event.name.clone(),
+                );
+                backend.refresh_resources(cx);
+                say(&backend, "资产库：正在更新别名…", cx);
+            },
+        );
+    }
+
+    fn request_delete_group(&self, folder_id: &str, window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法删除分组", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能改分组", cx);
+            return;
+        }
+        let name = self
+            .group_name(folder_id, cx)
+            .unwrap_or_else(|| "该分组".to_string());
+        let backend = self.backend.clone();
+        let read_only = self.read_only();
+        let folder_id = folder_id.to_string();
+        window.open_alert_dialog(cx, move |alert, _window, _cx| {
+            let backend = backend.clone();
+            let folder_id = folder_id.clone();
+            // 外层是 `Fn`（弹框可能被重建）：`root` 要每帧各拿一份。
+            let root = root.clone();
+            alert
+                .confirm()
+                .title(format!("删除分组「{name}」？"))
+                .description("组里的存档不会被删，它们会回到「未分组」。")
+                .button_props(
+                    gpui_kit::component::dialog::DialogButtonProps::default()
+                        .ok_text("删除")
+                        .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, _window, cx| {
+                    resource_jobs::enqueue_group_action(
+                        root.clone(),
+                        read_only,
+                        resource_jobs::GroupJobAction::Delete {
+                            id: folder_id.clone(),
+                        },
+                    );
+                    backend.refresh_resources(cx);
+                    say(&backend, "资产库：正在删除分组…".to_string(), cx);
+                    true
+                })
+        });
+    }
+
+    fn request_move_to_group(
+        &self,
+        resource_ids: &[String],
+        folder_id: Option<&str>,
+        _window: &mut Window,
+        cx: &mut App,
+    ) {
+        let Some(root) = self.require_project("无法移动", cx) else {
+            return;
+        };
+        let scope = match resource_ids.len() {
+            0 => return,
+            1 => String::new(),
+            count => format!("{count} 条存档"),
+        };
+        let target = match folder_id {
+            Some(id) => self
+                .group_name(id, cx)
+                .unwrap_or_else(|| "该分组".to_string()),
+            None => "未分组".to_string(),
+        };
+        resource_jobs::enqueue_group_action(
+            root,
+            self.read_only(),
+            resource_jobs::GroupJobAction::Move {
+                resource_ids: resource_ids.to_vec(),
+                folder_id: folder_id.map(str::to_string),
+            },
+        );
+        self.backend.refresh_resources(cx);
+        self.notice(format!("资产库：正在把{scope}移到「{target}」…"), cx);
+    }
+
+    /// 记住列表排序：写回设置（`resources.default_sort`）。
+    ///
+    /// 只存**字段**不存方向：方向由 `SortField::default_order` 给（名称升序，时间 / 大小 / 版本降序）
+    /// ——同名字段两个方向存成两个 key 反而让设置页多出一堆只能二选一的行。
+    fn remember_sort(&self, field: SortField, _order: SortOrder, cx: &mut App) {
+        self.backend.set_default_resource_sort(field.key(), cx);
+    }
+    /// 记住分组折叠状态：按项目分桶写设置（`resources.collapsed_groups`）。
+    ///
+    /// 写的是**当前全集**（不是增量）：增量写入在“切项目 / 分组被删”这些场景下
+    /// 容易和旧值叠出幽灵记录。空集会把该项目的记录删掉，不留空壳。
+    fn remember_collapsed(&self, collapsed_keys: &[String], cx: &mut App) {
+        // 没有项目时没什么可记的（面板也在空态，不会有折叠动作）。
+        let Some(root) = self.backend.project_root() else {
+            return;
+        };
+        self.backend.set_collapsed_groups(&root.to_string_lossy(), collapsed_keys, cx);
+    }
+
+    fn remember_default_group(&self, folder_id: Option<&str>, cx: &mut App) {
+        // 与 `remember_collapsed` 同一口径：没有项目就没什么可记的。
+        let Some(root) = self.backend.project_root() else {
+            return;
+        };
+        self.backend
+            .set_default_group(&root.to_string_lossy(), folder_id, cx);
+    }
+
+    fn request_open_trash(&self, _window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法打开回收站", cx) else {
+            return;
+        };
+        // 取数在后台线程（读 `.RSmeta/trash` 里每个条目的 manifest）；
+        // 回来之后由侧栏轮询开窗（开窗要 `Window`，轮询任务里没有）。
+        resource_jobs::enqueue_trash_list(root);
+        self.notice("资产库：正在读取回收站…", cx);
+    }
+
+    fn request_edit_tags(&self, targets: &[TagTarget], _window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法编辑标签", cx) else {
+            return;
+        };
+        if targets.is_empty() {
+            return;
+        }
+        // 取数在后台线程（标签词典 + 这批目标各自已挂的）；回来之后由侧栏轮询开窗。
+        let count = targets.len();
+        resource_jobs::enqueue_tag_list(root, targets.to_vec());
+        self.notice(
+            if count > 1 {
+                format!("资产库：正在读取 {count} 项的标签…")
+            } else {
+                "资产库：正在读取标签…".to_string()
+            },
+            cx,
+        );
+    }
+
+    fn request_remove_tag(
+        &self,
+        detail: &ArchiveDetail,
+        tag_id: &str,
+        _window: &mut Window,
+        cx: &mut App,
+    ) {
+        let Some(root) = self.require_project("无法去标签", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能改标签", cx);
+            return;
+        }
+        // 作业在侧栏跑（回执与刷新同一条路）：去标签会改快照里的 chips 与筛选维，
+        // 所以入队后立刻要一次刷新。
+        resource_jobs::enqueue_tag_action(
+            root,
+            self.read_only(),
+            vec![TagTarget {
+                id: detail.id.clone(),
+                name: detail.name.clone(),
+            }],
+            resource_jobs::TagJobAction::RemoveOne {
+                tag_id: tag_id.to_string(),
+            },
+        );
+        self.backend.refresh_resources(cx);
+        self.notice(
+            format!("资产库：正在去掉「{}」的一个标签…", detail.name),
+            cx,
+        );
+    }
+
+    fn request_refresh(&self, _window: &mut Window, cx: &mut App) {
+        // 刷新不写回执：状态行的「加载中…」就是它的回执，再叠一条只是噪声。
+        if self.backend.project_root().is_none() {
+            self.pending("无法刷新", "：还没有打开项目", cx);
+            return;
+        }
+        self.backend.refresh_resources(cx);
+    }
+}
+
+/// 组装资产库面板宿主（workbench 在面板实体创建时调用一次）。
+///
+/// `backend` 是 workbench 实现的 [`ResourceHostBackend`]（转发 `Shared` 能力）；
+/// 本文件的 [`ResourceHost`] 实现 [`ResourcesHost`] 面板回调，动作经 backend 落回宿主。
+pub fn new_host(backend: Rc<dyn ResourceHostBackend>) -> Rc<dyn ResourcesHost> {
+    Rc::new(ResourceHost { backend })
+}
+
+/// 扩展名白名单判定（与 `analytics_resource::global::file_read_expr` 同口径）：
+/// 数据文件升级 = 映射出全局表；其余（sql/py/md 等） = 脚本内容表（方案 A）。
+fn is_data_file_ext(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+            .as_deref(),
+        Some("csv" | "tsv" | "txt" | "parquet" | "xlsx" | "xls" | "json" | "ndjson")
+    )
+}

@@ -11,7 +11,8 @@
 - `services/editor_*`（5253 行）与 `resource_host`/`resource_jobs`（3022 行）具备下沉条件（不再依赖 `Shared` 的特性字段）；
 - 编译收益：改编辑器/资源库宿主逻辑时不再触发 workbench 全量重编。
 
-**收益口径**（可验证）：workbench 单 crate 26,204 行 → P2-a 后约 20.9k（-20%）→ P2-b 后约 17.9k（-32%）。
+**收益口径**（可验证）：workbench 单 crate 26,204 行 → P2-a 后 21,316（-18.6%）→ P2-b 后 18,413
+（阶段 -13.6%，两阶段累计 **-29.7%**；蓝图预估 17.9k 差约 500 行 = 薄层 ~190 + 迁移保留注释/边界 ~300）。
 
 ## 2. Shared 现状（47 个字段，2026-10-29 实测）
 
@@ -167,16 +168,55 @@ editor crate，workbench 侧 18 个 `#[gpui_kit::test]` headless 全部保留且
 
 ## 6. P2-b：`resource_host` / `resource_jobs`（3022 行）下沉 analytics_resource
 
-- `components/resource_host.rs`（1273 行）：构造期建 `ResourcesPanel` 实体 + 宿主端口 + 轮询回填；
-- `services/resource_jobs.rs`（1749 行）：M6 后台任务（版本/索引/回收站/标签/冲突）；
-- 资源视图已在 analytics_resource（`ResourcesPanel`），宿主服务跟进下沉（与 P2-a 同一手法：`ResourceHost` trait 定义在 analytics_resource，workbench 实现注入）；
-- M6 对话框 flow 留在 Shared（§4），但 flow 里引用的 `crate::services::resource_jobs::*` 行类型需一并下沉（`VersionRows` / `IndexScanRows` / `TagRows` / `ConflictContext`）。
+- `components/resource_host.rs`（原 1332 行）：构造期建 `ResourcesPanel` 实体 + 宿主端口 + 轮询回填；
+- `services/resource_jobs.rs`（原 1749 行）：M6 后台任务（版本/索引/回收站/标签/冲突）；
+- 资源视图已在 analytics_resource（`ResourcesPanel`），宿主服务跟进下沉（与 P2-a 同一手法：`ResourceHostBackend` trait 定义在 analytics_resource，workbench 实现注入）；
+- M6 对话框 flow 留在 Shared（§4），但 flow 里引用的 `crate::services::resource_jobs::*` 行类型已随文件下沉（`VersionRows` / `IndexScanRows` / `TagRows` / `ConflictContext`）。
+
+### 6.1 实施记录（2026-10-29，已执行并提交）
+
+**双文件下沉 + 双向 trait 设计（与 P2-a 同构，宿主实现留在宿主 crate）**：
+
+1. **`resource_jobs`（零依赖 workbench，先行）**：`git mv` → `analytics_resource/src/jobs.rs`；
+   `analytics_resource::` → `crate::` 自引用替换（含 8 处非 use 位置残留）；依赖补齐
+   `similar`（文本 diff）/ `scratchpad`（MODULE_DIR_NAME / 草稿标签）；`workbench/src/services/mod.rs`
+   重导 `pub use analytics_resource::jobs as resource_jobs;`——`panels/resources.rs` / M6 对话框 flow
+   的 `crate::services::resource_jobs::*` 路径零改动。
+2. **`resource_host`（深度耦合 Shared 12+ 能力）**：`git mv` → `analytics_resource/src/resource_host.rs`；
+   新增 **`ResourceHostBackend: 'static`** trait（约 20 个方法，全部 `owned 返回值 + &App/&mut App` 只读参数），
+   `ResourceHost { backend: Rc<dyn ResourceHostBackend> }` 实现 `ResourcesHost`（面板回调）不变；
+   workbench 侧新建薄层 `components/resource_host.rs`：`WorkbenchResourceBackend`（转发 Shared 能力，
+   不复制任何业务逻辑）+ `build_host(shared)`（装配点 `panels/resources.rs:39` 签名零改动）。
+3. **依赖补齐（无环已核）**：analytics_resource +`similar`/`scratchpad`/`settings`/`insight`/`opener`；
+   settings / scratchpad / insight 均不依赖 analytics_resource，依赖方向单向 workbench → analytics_resource。
+4. **过程修复的真实问题（非缓存误报）**：
+   - ① 机械替换 `row_alias` 时残留孤儿代码块（`.get(resource_id)...`）导致 impl 提前闭合——已删；
+   - ② `use analytics_resource::global` 函数内残留 → `use crate::global`；
+   - ③ opener 依赖缺失 → Cargo.toml 补；
+   - ④ **E0521（关键）**：`request_archive_from_drafts` 的 `open_draft_pick_dialog` 回调是
+     `impl Fn + 'static`，多选分支里残留 `self.backend.keep_versions(cx)`（`self` 是 `&ResourceHost`，
+     借用仅限方法体）→ 逃逸。修复：取值移到闭包外（`let keep_versions = ...` 在 `move` 闭包前），
+     闭包内只用副本。**经验：把 `self.xxx` 调用搬进 `'static` 闭包是这类错误的唯一来源，下沉时先扫
+     `self\.` 在闭包体内的残留**；
+   - ⑤ settings 写方法（set_default_resource_sort / set_collapsed_groups / set_default_group）签名是
+     `&mut App`（读方法 keep_versions / default_group 是 `&App`）——backend trait 按此区分，编译前核
+      `settings/src/service/resources.rs` 签名，勿凭记忆。
+
+**验证结果（全部通过）**：
+- `cargo check -p rds-analytics-resource -p rds-workbench`：exit 0，无新 warning；
+- `cargo test -p rds-analytics-resource --lib`：**171 passed / 0 failed**（含 jobs.rs 随迁测试
+  `collision_name_keeps_extension_at_the_end`）；
+- `cargo test -p rds-workbench --lib`：**46 passed / 0 failed**（原 47，-1 为 jobs 测试随迁，预期减少）；
+- `cargo check -p rds-app`：exit 0（1 个既有 unused import 非本次引入）。
+
+**行数实测**：workbench 21,316 → **18,413**（-2,903 / **-13.6%**；两阶段累计 26,204 → 18,413，**-29.7%**）。
+蓝图预估 17.9k 差约 500 行：薄层新建（~190 行）+ 迁移中保留的注释与边界（~300 行），口径见 §1。
 
 ## 7. 实施顺序与验收
 
 ```
-（已执行：P2-a（editor_* 下沉，2026-10-29））
-→ P2-b（resource_* 下沉）→ 阶段 B（nav 域）→ 阶段 C（project 域）→ 阶段 D（scratchpad/insight）
+（已执行：P2-a（editor_* 下沉，2026-10-29）→ P2-b（resource_* 下沉，2026-10-29））
+→ 阶段 B（nav 域）→ 阶段 C（project 域）→ 阶段 D（scratchpad/insight）
 ```
 
 > 2026-10-29 修订：原阶段 A（零风险小字段）经实施前审视移除，见 §3。起点为 nav 域。

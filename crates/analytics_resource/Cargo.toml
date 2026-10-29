@@ -38,6 +38,16 @@ uuid.workspace = true
 duckdb.workspace = true
 # 双实例操作错误（Conflict / NotFound 语义化，供 UI 弹询问）
 thiserror.workspace = true
+# 资源对比 job（P2-b 下沉 `jobs.rs`：版本 diff 的 unified patch，workspace 级依赖）
+similar.workspace = true
+# 草稿来源判定（P2-b 下沉 `jobs.rs`：`MODULE_DIR_NAME` / `ORIGIN_SCRATCHPAD`）
+scratchpad.workspace = true
+# 默认分组 / 历史保留策略 / 默认排序（P2-b 下沉 `resource_host.rs`：事件路径读设置）
+settings.workspace = true
+# 洞察取样来源（P2-b 下沉 `resource_host.rs`：`SampleSource` 类型，打开数据文件/远端引用）
+insight.workspace = true
+# 打开资源目录 / 在文件管理器里显示本体（P2-b 下沉 `resource_host.rs`）
+opener.workspace = true
 
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）

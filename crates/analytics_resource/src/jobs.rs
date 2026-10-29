@@ -25,20 +25,20 @@ use std::sync::{Mutex, OnceLock};
 use chrono::{DateTime, Utc};
 use engine::persistence::project_db::ProjectDatabaseManager;
 
-use analytics_resource::analysis::AnalysisFacts;
-use analytics_resource::dialogs::index_repair::{RepairAction, RepairRow};
-use analytics_resource::dialogs::tag::{TagChoice, TagDialogSeed};
-use analytics_resource::dialogs::trash::{ForeignTrash, TrashAction, TrashDialogSeed, TrashRow};
-use analytics_resource::dialogs::version::{VersionAction, VersionDialogSeed};
-use analytics_resource::dialogs::version_diff::VersionDiffSeed;
-use analytics_resource::payload::PayloadStore;
-use analytics_resource::present::{
+use crate::analysis::AnalysisFacts;
+use crate::dialogs::index_repair::{RepairAction, RepairRow};
+use crate::dialogs::tag::{TagChoice, TagDialogSeed};
+use crate::dialogs::trash::{ForeignTrash, TrashAction, TrashDialogSeed, TrashRow};
+use crate::dialogs::version::{VersionAction, VersionDialogSeed};
+use crate::dialogs::version_diff::VersionDiffSeed;
+use crate::payload::PayloadStore;
+use crate::present::{
     ArchiveStatuses, PreviewMap, SnapshotInputs, build_repair_rows, build_snapshot,
     build_trash_snapshot, build_version_rows, entity_trash_row, reference_trash_rows,
 };
-use analytics_resource::preview::{self, Preview};
-use analytics_resource::resource_view::{ArchiveRow, GroupOption, ResourcesSnapshot};
-use analytics_resource::{
+use crate::preview::{self, Preview};
+use crate::resource_view::{ArchiveRow, GroupOption, ResourcesSnapshot};
+use crate::{
     AnalyticsResource, AnalyticsResourceStore, ArchiveKind, ArchiveRequest, ArchiveService,
     ArchiveStatus, ArchiveUndo, CheckoutRequest, IndexIssue, IndexRepair, KeepVersions, TagTarget,
 };
@@ -257,7 +257,7 @@ enum Job {
 /// 一次「升级到全局」任务（§13：项目 → 全局，表 + 版本信息进全局 DuckDB）。
 struct PromoteJob {
     project_root: PathBuf,
-    request: analytics_resource::global::PromoteRequest,
+    request: crate::global::PromoteRequest,
     /// true = 同名冲突经「覆盖」确认后重入队（旧表删、版本接续）。
     overwrite: bool,
 }
@@ -338,7 +338,7 @@ pub enum OpOutcome {
     Distributed {
         name: String,
         version: i32,
-        shape: analytics_resource::global::DistributeShape,
+        shape: crate::global::DistributeShape,
     },
     /// 失败：动作名 + 原因（原因原样来自服务层，已含可操作信息）。
     Failed {
@@ -360,7 +360,7 @@ pub enum OpOutcome {
 #[derive(Debug, Clone)]
 pub enum ConflictContext {
     /// 升级冲突：原始请求（改名 = 复制一份、替换 `name` 后重入队）。
-    Promote(analytics_resource::global::PromoteRequest),
+    Promote(crate::global::PromoteRequest),
     /// 分发冲突：全局资源名 + 本次目标名（None = 沿用全局名）。
     Distribute {
         global_name: String,
@@ -608,7 +608,7 @@ async fn run_set_alias(job: &SetAliasJob) -> OpOutcome {
 /// 形态判定：白名单扩展名（csv/tsv/txt/parquet/xlsx/xls/json/ndjson）→ 数据文件
 /// 映射出表；其余（sql/py/md 等）→ 脚本内容表（方案 A）。
 async fn run_promote(job: &PromoteJob) -> OpOutcome {
-    use analytics_resource::global::{GlobalInstanceStore, InstanceOpError};
+    use crate::global::{GlobalInstanceStore, InstanceOpError};
 
     let gstore = match GlobalInstanceStore::production().await {
         Ok(store) => store,
@@ -649,7 +649,7 @@ async fn run_promote(job: &PromoteJob) -> OpOutcome {
 /// 项目侧写连接：分发需要项目 DuckDB 写锁，按 M6 后台任务惯例在工作线程里
 /// `ProjectDatabaseManager::open`（动作完成后连接即释放，不与宿主主写连接长存并发）。
 async fn run_distribute(job: &DistributeJob) -> OpOutcome {
-    use analytics_resource::global::{DistributeShape, GlobalInstanceStore, InstanceOpError, ProjectDuckConn};
+    use crate::global::{DistributeShape, GlobalInstanceStore, InstanceOpError, ProjectDuckConn};
 
     let gstore = match GlobalInstanceStore::production().await {
         Ok(store) => store,
@@ -1384,7 +1384,7 @@ async fn load_tag_rows(job: &TagListJob) -> Result<TagRows, String> {
         seed: TagDialogSeed {
             resource_name,
             target_count: total,
-            options: analytics_resource::present::tag_options(&tags, &counts)
+            options: crate::present::tag_options(&tags, &counts)
                 .into_iter()
                 .map(|option| TagChoice {
                     id: option.id,
@@ -1455,7 +1455,7 @@ async fn run_tag_action(job: &TagActionJob) -> OpOutcome {
         }
         TagJobAction::CreateAndTag { name } => {
             let tag = match store
-                .create_tag(analytics_resource::models::CreateTagRequest {
+                .create_tag(crate::models::CreateTagRequest {
                     name: name.clone(),
                     scope: "project".to_string(),
                     color: None,
@@ -1545,7 +1545,7 @@ async fn run_group_action(job: &GroupActionJob) -> OpOutcome {
     match &job.action {
         GroupJobAction::Create { name } => {
             match store
-                .create_folder(analytics_resource::models::CreateFolderRequest {
+                .create_folder(crate::models::CreateFolderRequest {
                     name: name.clone(),
                     scope: "project".to_string(),
                     // 单层分组（架构 D8）：父分组恒为空。
@@ -1645,7 +1645,7 @@ async fn refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, String> {
             .await
             .map_err(|e| format!("读取标签失败：{e}"))?;
         let counts = store.tag_usage_counts().await.unwrap_or_default();
-        analytics_resource::present::tag_options(&tags, &counts)
+        crate::present::tag_options(&tags, &counts)
     };
     // 分组同理（一次查完）：按行的映射给分区渲染，字典给分组头与「移动到分组」菜单。
     let folders_by_resource = store
@@ -1714,7 +1714,7 @@ async fn refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, String> {
 /// 全局登记读失败 / 全局系统库未初始化（`get_global_db_manager` 为空）时返回空表：
 /// 全局列表是**附加视图**，不参与项目刷新成败。
 async fn load_global_rows() -> (Vec<ArchiveRow>, Vec<AnalyticsResource>) {
-    use analytics_resource::global::{GlobalInstanceStore, list_global_resources, to_global_rows};
+    use crate::global::{GlobalInstanceStore, list_global_resources, to_global_rows};
     let Ok(store) = GlobalInstanceStore::production().await else {
         return (Vec::new(), Vec::new());
     };
@@ -1804,7 +1804,7 @@ pub fn enqueue_refresh(project_root: PathBuf, read_only: bool) {    jobs().pendi
 /// `overwrite = true` 走覆盖式升级（冲突询问「覆盖」确认后重入队）。
 pub fn enqueue_promote(
     project_root: PathBuf,
-    request: analytics_resource::global::PromoteRequest,
+    request: crate::global::PromoteRequest,
     overwrite: bool,
 ) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);

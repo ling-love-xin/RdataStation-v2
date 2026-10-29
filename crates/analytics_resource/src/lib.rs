@@ -31,6 +31,7 @@ pub mod dnd;
 pub mod filter;
 pub mod helpers;
 pub mod indexer;
+pub mod jobs;
 pub mod model;
 pub mod models;
 pub mod payload;
@@ -43,6 +44,7 @@ pub mod ui;
 pub mod folder;
 pub mod global;
 pub mod resource;
+pub mod resource_host;
 pub mod tag;
 pub mod version;
 

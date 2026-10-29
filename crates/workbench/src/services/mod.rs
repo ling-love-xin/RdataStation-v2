@@ -43,7 +43,7 @@ pub mod nav_runtime;
 pub mod project_session;
 pub mod query_export;
 pub mod query_history;
-pub mod resource_jobs;
+pub use analytics_resource::jobs as resource_jobs;
 pub use editor::ports::result_service;
 pub mod scratchpad_meta;
 pub use connection_dialog::services::secret_integration;
