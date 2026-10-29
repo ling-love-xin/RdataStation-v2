@@ -196,3 +196,41 @@ panel/mod.rs `scratchpad_all` 硬编码 `MockExportFormat::Csv`，job.rs:46 注�
 
 `cargo test -p rds-mock --all-targets -j 2`（worktree 内；需手动建 `.rds/tmp`、从主仓复制 `third_party/duckdb/1.5.5/*`）。
 tests.rs 无「状态：○」「＋ 加列」「✕」「▾」文案断言（grep 实证），P0–P3 不破测试；仅 `status_chip_text` ◐ 断言原样保留。
+
+## 八、第三轮：字段管理增强（P0–P2，排除批量；commit 待定）
+
+用户拍板范围：P0–P2 建议清单（**排除多列批量编辑**——用户判定无真实场景，撤销）；
+用户提出的「数据类型统一设置管理（字段预设）」本轮**未实现、记录在册**（见 §8.3）。
+
+### 8.1 改动清单
+
+| 项 | 位置 | 改动 | 实证依据 |
+| --- | --- | --- | --- |
+| P0-1 | detail.rs `render_fields` 置信度徽标 | 手搓 div 文字 → `tag::Tag` outline（high=success / manual=info / low=secondary） | vendor `badge.rs` 实证：`Badge` 是**角标**（absolute 浮点 dot/计数/icon），不是行内文字标签 → 改用 `tag::Tag`（行内 chip，TagVariant 六色） |
+| P0-2 | detail.rs `render_fields` 参数摘要 | ellipsis 截断 div → `HoverCard` 悬停显示完整参数（生成器 + 摘要全文本）；样式走 `trigger_style`（flex_1） | vendor `hover_card.rs`：`trigger_style` 承载布局（注释 76-77）；content 是 `Fn`（闭包内克隆捕获值） |
+| P0-3 | detail.rs 列编辑对话框 | 「类型」行下加说明：改类型不自动换生成器，按新类型重推点「恢复智能默认」 | 消除「改类型 ≠ 换生成器」的语义困惑（生成器只读展示的既有取舍） |
+| P1-1 | panel/mod.rs + detail.rs | `move_column(id, up)`（越界 no-op）+ 字段卡片 ↑/↓ icon 按钮（首/末列 disabled，tooltip 说明列序=生成顺序） | IconName::ArrowUp/ArrowDown 在 gpui-kit-assets-0.8.1 default-icons.txt |
+| P1-2 | panel/mod.rs + detail.rs | `duplicate_column(id)`（深拷贝 + 新 id + 「副本」后缀，插原列后）+ 复制 icon 按钮 | IconName::Copy 在 default-icons.txt |
+| P2 | detail.rs 列编辑对话框 | 参数实时样例预览：`ColumnDraft.sample_preview` + `refresh_sample_preview`（`generate_cell` 同步生成 2 条，固定种子 `SAMPLE_PREVIEW_SEED`）；参数 Change 订阅里刷新（事件路径，render 零 I/O） | `generators::generate_cell(config, rng, row, locale)`（pub(super)=crate 内可见，同步单值）；参数已由 `patch_param` 实时写回 generator，预览直接读它 |
+
+### 8.2 撤销 / 有意不动
+
+- **多列批量编辑**：用户判定无真实场景，撤销（当时设想「导入真实表结构后批量调整」不成立——列配置是逐列精细调整的主场景）。
+- `form_line → form::{Form, Field}`：维持可缓（§7.3 同款理由：已 4 对话框共用统一，收益有限）。
+- 样例预览固定种子：`SAMPLE_PREVIEW_SEED = 20261030`，样例可复现；与最终生成随机种子无关，纯示意（界面无「与最终一致」承诺）。
+
+### 8.3 字段预设（Field Preset）——用户需求，**记录在册、未实现**
+
+用户提出「电话、地址、姓名这种数据类型需要统一设置的管理」。实证结论：现有三种粒度均不覆盖单字段打包预设：
+
+| 现有机制 | 粒度 | 覆盖 |
+| --- | --- | --- |
+| generator_catalog（143 项，含 phone_number/email/city/address 分类） | 生成器 | 只含生成逻辑，不含类型/空值率/唯一打包 |
+| schema_map::ColumnMapper::infer | 规则 | 列名+类型→生成器（代码内建，不可自定义，不推空值率/唯一） |
+| 场景模板 / MockUserTemplate | 整表 | 多列打包，无单字段粒度 |
+
+**方案（待用户拍板后实施）**：字段预设 = 列名 + ColumnDataType + GeneratorConfig + nullable_ratio + unique + confidence 一行打包。
+- 内建默认集：从 generator_catalog 打包（姓名/电话/邮箱/地址/城市/金额/日期/身份证…）；
+- 用户自定义：预设管理对话框（增删改 + 持久化，复用 persistence 的 MockUserTemplate 落盘模式）；
+- UI 入口二选一：列段「预设」下拉（从预设添加，分组：常用/内建/我的）或「＋ 加列」升级为对话框（预设列表 + 手动类型）。
+- 依赖：generator_catalog / persistence / ui（同现有模块，无新 crate）。

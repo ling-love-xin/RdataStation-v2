@@ -2373,6 +2373,49 @@ impl MockPanel {
         cx.notify();
     }
 
+    /// 调整列顺序（↑/↓）：列序 = 生成顺序与结果表列序，多列场景需要能改。
+    /// 目标位置越界（已在首/尾）时是 no-op，由调用方控制按钮显隐即可。
+    pub fn move_column(&mut self, id: u64, up: bool, cx: &mut Context<Self>) {
+        let index = match self.draft.columns.iter().position(|c| c.id == id) {
+            Some(index) => index,
+            None => return,
+        };
+        let target = if up {
+            // 首列不能再上移：no-op（不要 `index - 1` 下溢）
+            if index == 0 {
+                return;
+            }
+            index - 1
+        } else {
+            index + 1
+        };
+        if target >= self.draft.columns.len() {
+            return;
+        }
+        self.draft.columns.swap(index, target);
+        self.results.clear();
+        self.current = 0;
+        self.landed = None;
+        cx.notify();
+    }
+
+    /// 复制列（深拷贝配置，新 id，名字加「副本」后缀，插在原列后面）。
+    /// 用于快速造相似字段：复制后再微调参数，比重新加列 + 重配快。
+    pub fn duplicate_column(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(index) = self.draft.columns.iter().position(|c| c.id == id) else {
+            return;
+        };
+        let mut copy = self.draft.columns[index].clone();
+        copy.id = self.next_id;
+        self.next_id += 1;
+        copy.def.name = format!("{} 副本", copy.def.name);
+        self.draft.columns.insert(index + 1, copy);
+        self.results.clear();
+        self.current = 0;
+        self.landed = None;
+        cx.notify();
+    }
+
     /// 直接换生成器（取规格默认参数）——详情 tab 的生成器菜单。
     pub fn set_generator(&mut self, id: u64, name: &str, cx: &mut Context<Self>) {
         let Some(config) = generator_catalog::default_of(name) else {

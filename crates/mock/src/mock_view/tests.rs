@@ -943,6 +943,41 @@ fn panel_renders_empty_state_and_exposes_defaults(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn move_and_duplicate_columns_preserve_config(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("a".to_string(), ColumnDataType::Integer, cx);
+        panel.add_column("b".to_string(), ColumnDataType::Varchar { length: None }, cx);
+        panel.add_column("c".to_string(), ColumnDataType::Boolean, cx);
+        let ids: Vec<u64> = panel.draft().columns.iter().map(|c| c.id).collect();
+        assert_eq!(ids.len(), 3);
+
+        // 末列下移 / 首列上移：越界 no-op
+        panel.move_column(ids[2], false, cx);
+        assert_eq!(panel.draft().columns[2].def.name, "c");
+        panel.move_column(ids[0], true, cx);
+        assert_eq!(panel.draft().columns[0].def.name, "a");
+
+        // 上移：c 与 b 互换（列序即生成顺序）
+        panel.move_column(ids[2], true, cx);
+        assert_eq!(panel.draft().columns[1].def.name, "c");
+        assert_eq!(panel.draft().columns[2].def.name, "b");
+
+        // 复制：深拷贝配置 + 新 id + 「副本」后缀，插在原列后。
+        // 此时顺序 [a, c, b]（c 已上移）；复制 b 插在 b 后 → [a, c, b, b 副本]
+        panel.duplicate_column(ids[1], cx);
+        let cols = panel.draft().columns.clone();
+        assert_eq!(cols.len(), 4);
+        assert_eq!(cols[3].def.name, "b 副本");
+        assert_ne!(cols[3].id, cols[2].id);
+        assert_eq!(cols[3].def.data_type, cols[2].def.data_type);
+    });
+}
+
+#[gpui_kit::test]
 fn refresh_sources_loads_connections_and_tables(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let rec = recorder();
