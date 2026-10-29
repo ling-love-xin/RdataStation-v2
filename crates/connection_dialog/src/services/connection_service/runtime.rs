@@ -97,6 +97,13 @@ pub struct ProbeConfigInput<'a> {
 /// - 最近连接记录
 /// - 连接类型转换（全局↔项目）
 #[derive(Clone)]
+/// 连接服务：**运行期**建连 / 探针 / 断开 / 隧道释放。
+///
+/// 与 [`crate::services::data_source_service::DataSourceService`]（**数据期**：数据源
+/// 元数据 CRUD / 显式保存 / 分组）职责分离：
+/// - 本服务的落库只是**建连即存的副作用**（`skip_persistence` 可跳过；项目连接不落全局库，
+///   由 `DataSourceService::save` 写项目库），不是数据源的权威保存入口。
+/// - ID 一律使用 `engine::persistence::id_prefix` 体系（`G_` 全局 / `P_` 项目 / `GP_` 快照）。
 pub struct ConnectionService {
     manager: Arc<ConnectionManager>,
     /// 隧道守卫（协议链执行产物；断开时统一释放）。
@@ -185,23 +192,24 @@ impl ConnectionService {
         // 在这里派生（而不是等 URL 处理完）：下面所有建配置的分支（含重连回退）都要用它。
         let tls = tls_request_of(network_method.as_ref(), advanced_options.as_deref());
 
-        // 生成连接 ID：统一使用 URL 哈希，确保：
-        //   - 短且唯一（8位 hex）
-        //   - 文件系统安全（无 Windows 非法字符 : @ / \ 等）
-        //   - 全局/项目双链路一致
+        // 生成连接 ID：统一走 `engine::persistence::id_prefix` 识别体系（G_/P_/GP_），
+        // 保留 URL 哈希的确定性——同一 URL 复用同一连接（文件锁 / 连接池去重）。
+        // 旧 `global-…`/`project-…` 格式不被 `uses_project_storage` 识别：项目测试连接
+        // 的分析库 / secret 曾被当全局处理（ID 双轨，与 `DataSourceService::save` 的
+        // `G_conn_*`/`P_conn_*` 口径不一致）。P2 收敛后两处同源。
         let conn_id = conn_id.unwrap_or_else(|| {
+            use engine::persistence::id_prefix;
             use std::collections::hash_map::DefaultHasher;
             use std::hash::{Hash, Hasher};
 
-            let type_prefix = match connection_type {
-                ConnectionType::Global => "global",
-                ConnectionType::Project => "project",
-            };
-
             let mut hasher = DefaultHasher::new();
             url.hash(&mut hasher);
-            let hash = hasher.finish();
-            format!("{}-{}-{:x}", type_prefix, db_type, hash)
+            let hash = format!("{:x}", hasher.finish());
+            match connection_type {
+                // 确定性 ID：同一 URL 复用同一连接（文件锁 / 连接池去重）。
+                ConnectionType::Global => id_prefix::generate_gid("conn", &hash),
+                ConnectionType::Project => id_prefix::gen_project_id("conn", &hash),
+            }
         });
 
         // 连接显示名称：用户指定 > 自动生成（db_type@host 简洁格式）
@@ -504,7 +512,10 @@ impl ConnectionService {
         // NOTE: 元数据缓存不在连接时立即创建，改为懒加载。
         // 首次查询 schema / table / column 时通过 L2 cache write 路径自动创建。
 
-        // 对于全局连接，保存到全局 SQLite 数据库（skip_persistence 时跳过）
+        // 对于全局连接，保存到全局 SQLite 数据库（skip_persistence 时跳过）。
+        // 职责：**建连即存的副作用**（最近一次成功建连落库，供导航/历史复用）；
+        // 与 `DataSourceService::save` 的显式保存（同名检查 + G_/P_/GP_ 分侧落库）不同，
+        // 这里只覆盖全局侧、无同名预检，失败仅告警不阻断建连。
         if !skip_persistence.unwrap_or(false) && connection_type == ConnectionType::Global {
             // 从 URL 中解析 username 和 password
             let (url_username, url_password) = connection::url::extract_credentials_from_url(&url);
