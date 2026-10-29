@@ -10,9 +10,7 @@ use std::rc::Rc;
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::sheet::Sheet;
 use gpui_kit::component::{ActiveTheme, Sizable as _, WindowExt as _};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use tag::TagDefinitions;
 

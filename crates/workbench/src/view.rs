@@ -21,7 +21,7 @@ use gpui_kit::component::dock::{
 };
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::sidebar::{Sidebar, SidebarCollapsible, SidebarFooter, SidebarMenu, SidebarMenuItem};
+use gpui_kit::component::sidebar::{Sidebar, SidebarCollapsible, SidebarMenu, SidebarMenuItem};
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::tab::TabVariant;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Side, TitleBar};
@@ -2721,7 +2721,6 @@ impl WorkbenchView {
             move |app| {
                 let old_state = lock_shared.layout_locked.get();
                 let new_state = !old_state;
-                eprintln!("[DEBUG] 点击布局锁定开关：旧状态 = {}, 新状态 = {}", old_state, new_state);
                 lock_shared.layout_locked.set(new_state);
                 // 同步到设置页面
                 settings::SettingsService::set_layout_locked(new_state, app);

@@ -13,7 +13,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
 use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
-use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::{ActiveTheme, IconName, IndexPath, Size, Sizable};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;

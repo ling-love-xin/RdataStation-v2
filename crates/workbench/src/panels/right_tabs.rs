@@ -7,11 +7,10 @@
 use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
-use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
-use gpui_kit::component::IconName;
+use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::*;
 
 use crate::view::RightPanel;
