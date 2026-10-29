@@ -8218,6 +8218,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "rds-driver"
+version = "0.2.5"
+dependencies = [
+ "arrow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "dashmap",
+ "duckdb",
+ "futures",
+ "lru",
+ "mysql_async",
+ "native-tls",
+ "once_cell",
+ "percent-encoding",
+ "postgres-native-tls",
+ "rand 0.10.2",
+ "rds-connection",
+ "rds-paths",
+ "rds-shared",
+ "rds-store",
+ "rusqlite",
+ "russh",
+ "serde",
+ "serde_json",
+ "specta",
+ "sqlx",
+ "sqlx-mysql",
+ "sqlx-postgres",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-native-tls",
+ "tokio-postgres",
+ "tokio-socks",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "x509-parser",
+]
+
+[[package]]
 name = "rds-editor"
 version = "0.2.5"
 dependencies = [
@@ -8270,8 +8311,11 @@ dependencies = [
  "postgres-native-tls",
  "rand 0.10.2",
  "rds-connection",
+ "rds-driver",
  "rds-paths",
  "rds-shared",
+ "rds-sql",
+ "rds-store",
  "regex",
  "rusqlite",
  "russh",
@@ -8279,7 +8323,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "specta",
- "sqlglot-rust",
  "sqlx",
  "sqlx-mysql",
  "sqlx-postgres",
@@ -8510,6 +8553,39 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "rds-sql"
+version = "0.2.5"
+dependencies = [
+ "serde",
+ "sqlglot-rust",
+ "tracing",
+]
+
+[[package]]
+name = "rds-store"
+version = "0.2.5"
+dependencies = [
+ "chrono",
+ "duckdb",
+ "include_dir",
+ "once_cell",
+ "rand 0.10.2",
+ "rds-connection",
+ "rds-paths",
+ "rds-shared",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "specta",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
  "uuid",
 ]
 

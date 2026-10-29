@@ -1,0 +1,68 @@
+[package]
+name = "rds-driver"
+version.workspace = true
+edition.workspace = true
+description = "RdataStation v2 driver crate: 数据库连接抽象层（Database/Transaction/Stream trait + 注册发现 + 连接池 + native 实现 + JDBC/Wasm 桥）"
+
+[dependencies]
+# 依赖键命名为 shared，使 v1 迁移代码中的 `shared::` 引用直接生效
+shared.workspace = true
+# 运行时数据路径唯一解析点（测试构建隔离用 dev 依赖的 test-support）
+paths.workspace = true
+# 连接层（config / factory / SSL / SSH / Proxy / URL 处理）
+connection.workspace = true
+# 存储层：驱动声明同步与全局库管理器（declaration.rs）+ DuckDB 连接默认参数（native duckdb）
+rds-store.workspace = true
+
+# ===== 分析引擎 =====
+duckdb.workspace = true
+arrow.workspace = true
+
+# ===== Async 运行时 =====
+tokio.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+
+# ===== 数据库驱动（native 实现） =====
+# 与 engine 同策略：声明 sqlx-postgres / sqlx-mysql 而非 sqlx 的 sqlite feature，
+# 避免与 rusqlite 的 libsqlite3-sys `links = "sqlite3"` 冲突（详见 engine Cargo.toml 注记）。
+sqlx.workspace = true
+sqlx-postgres.workspace = true
+sqlx-mysql.workspace = true
+rusqlite.workspace = true
+mysql_async.workspace = true
+tokio-postgres.workspace = true
+postgres-native-tls.workspace = true
+
+# ===== 连接层（SSL / SSH / Proxy） =====
+native-tls.workspace = true
+tokio-native-tls.workspace = true
+russh.workspace = true
+tokio-socks.workspace = true
+base64.workspace = true
+x509-parser.workspace = true
+
+# ===== 序列化 =====
+serde.workspace = true
+serde_json.workspace = true
+specta.workspace = true
+
+# ===== 时间与项目 =====
+chrono.workspace = true
+uuid.workspace = true
+
+# ===== 日志追踪 =====
+tracing.workspace = true
+
+# ===== 工具库 =====
+dashmap.workspace = true
+once_cell.workspace = true
+lru.workspace = true
+rand.workspace = true
+percent-encoding.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）
+paths = { workspace = true, features = ["test-support"] }

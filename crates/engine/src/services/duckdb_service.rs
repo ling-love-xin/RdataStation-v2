@@ -29,7 +29,8 @@ impl DuckDbService {
 
     // 2026-09-19 删除 `accelerate_query`：它零调用，且依赖的 `dbi` 层整体已废弃
     // （2124 行里只有 `DuckDBEngine::file_reader_function` 是活的，现挂在
-    // `crate::duckdb::file_reader`）。加速档的实际实现是 `crate::duckdb::accel`，
+    // `crate::duckdb::probe::file_reader`，经 `duckdb/mod.rs` 的 `pub use probe::*` 传导到
+    // `crate::duckdb::file_reader_function`）。加速档的实际实现是 `crate::duckdb::accel`，
     // 它自己拼 `ATTACH … (READ_ONLY)`，不经过这里。
 
     pub fn create_duckdb_temp_table(

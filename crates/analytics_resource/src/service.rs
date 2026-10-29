@@ -995,14 +995,14 @@ mod tests {
     use tokio::fs;
 
     const MIGRATION_SQL: &str =
-        include_str!("../../engine/migrations/project_meta/007_analytics_resources.sql");
+        include_str!("../../store/migrations/project_meta/007_analytics_resources.sql");
     const ARCHIVE_MIGRATION_SQL: &str =
-        include_str!("../../engine/migrations/project_meta/020_analytics_resource_archive.sql");
+        include_str!("../../store/migrations/project_meta/020_analytics_resource_archive.sql");
     const PAYLOAD_MODE_MIGRATION_SQL: &str =
-        include_str!("../../engine/migrations/project_meta/023_analytics_resource_payload_mode.sql");
+        include_str!("../../store/migrations/project_meta/023_analytics_resource_payload_mode.sql");
     /// 关联表去 tag 外键（标签定义上移全局库，规格 §7.2；跨库无法 FK 约束）。
     const TAG_LINK_FK_MIGRATION_SQL: &str = include_str!(
-        "../../engine/migrations/project_meta/024_analytics_resource_tags_drop_tag_fk.sql"
+        "../../store/migrations/project_meta/024_analytics_resource_tags_drop_tag_fk.sql"
     );
 
     /// 测试服务：默认给「保留 n 份」（大多数用例只关心份数）。

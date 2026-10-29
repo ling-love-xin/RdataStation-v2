@@ -8,9 +8,12 @@
 //!   + 连接管理（`connection_manager`）
 //! - ✅ Round 5：元数据持久化（`persistence`，自 v1 `core/persistence`，不含 analytics_resource_store）
 //!   + 日志（`logging`）+ 迁移（`migration` + `migrations/` SQL 资源）
-//! - ⏳ 后续轮次：SQL 服务等按 Feature 迁入
+//! - ✅ Round 6：SQL 语言服务（`sql` + `script`）抽为 rds-sql；persistence/migration/logging
+//!   抽为 rds-store；驱动层抽为 rds-driver——本 crate 对六个子模块保留命名空间薄壳，
+//!   外部 `engine::…` 路径零改动（详见 `docs/architecture/layout/crate-slimming-engine.md`）
 //!
-//! 依赖方向：engine → rds-shared；Feature crates → engine；engine 不得依赖 Feature。
+//! 依赖方向：engine → rds-shared / rds-sql / rds-store / rds-driver / rds-paths / rds-connection；
+//! Feature crates → engine；engine 不得依赖 Feature。
 
 pub mod cache;
 pub mod connection_manager;

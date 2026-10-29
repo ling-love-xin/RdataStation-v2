@@ -18,6 +18,9 @@ members = [
     "crates/mock",
     "crates/insight",
     "crates/plugin",
+    "crates/sql",
+    "crates/store",
+    "crates/driver",
     "crates/paths",
     "crates/shared",
     "crates/settings",
@@ -66,6 +69,13 @@ workbench_shell = { path = "crates/workbench_shell", package = "rds-workbench-sh
 workbench = { path = "crates/workbench", package = "rds-workbench" }
 connection_dialog = { path = "crates/connection_dialog", package = "rds-connection-dialog" }
 plugin = { path = "crates/plugin", package = "rds-plugin" }
+# SQL 语言服务（sqlglot-rust 唯一接入点 + 脚本词法器），自 engine 抽取（2026-10-29）。
+# 依赖键用 `rds-sql`：engine 自有 `pub mod sql`，若键为 `sql` 会与模块同名遮蔽 extern crate。
+rds-sql = { path = "crates/sql", package = "rds-sql" }
+# 存储层（persistence/migration/logging 强耦合簇，engine 瘦身第二刀抽取）
+rds-store = { path = "crates/store", package = "rds-store" }
+# 驱动层（Database/Transaction/Stream trait + 注册发现 + 连接池 + native 实现，engine 瘦身第三刀抽取）
+rds-driver = { path = "crates/driver", package = "rds-driver" }
 # 结果集面板（DBeaver Data Editor 方向）：结果域视图 + 结果存储独立成 crate，
 # 依赖方向 result_panel → {engine, gpui-kit, workbench_shell}，editor 依赖它、它不反向依赖 editor
 result_panel = { path = "crates/result_panel", package = "rds-result-panel" }
@@ -232,7 +242,7 @@ flate2 = "1.1.10"
 tar = "0.4.46"
 zip = "0.6.6"
 # SQL 编辑器核心解析/转译：业务关键依赖，精确锁定
-# （接入点唯一，见 crates/engine/src/sql/；升大版本前先跑 SQL 回归）
+# （接入点唯一，见 crates/sql/；升大版本前先跑 SQL 回归）
 sqlglot-rust = "=0.10.33"
 
 # 系统文件对话框（打开 / 另存为）：编辑器与工作台共用，仅 workbench 直接依赖

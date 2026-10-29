@@ -129,7 +129,7 @@ mod tests {
     /// `crates/workbench/tests/ui_contract.rs` 对 `database/src/nav_view.rs` 的扫描。
     fn seed_type_ids() -> Vec<String> {
         const SEED: &str =
-            include_str!("../../engine/migrations/global/008_add_data_source_module.sql");
+            include_str!("../../store/migrations/global/008_add_data_source_module.sql");
         let start = SEED
             .find("INSERT OR IGNORE INTO data_source_types")
             .expect("种子语句不见了：迁移改了写法就同步这里");

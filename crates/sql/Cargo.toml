@@ -1,0 +1,10 @@
+[package]
+name = "rds-sql"
+version.workspace = true
+edition.workspace = true
+description = "RdataStation v2 SQL 语言服务 crate：sqlglot-rust 唯一接入点（解析/切分/高亮/格式化/转译/语义/参数绑定）+ 脚本词法器"
+
+[dependencies]
+sqlglot-rust.workspace = true
+serde.workspace = true
+tracing.workspace = true
