@@ -261,8 +261,32 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../../editor/src/view/host/session.rs"),
         ),
         (
-            "editor/view/host/toolbar.rs",
-            include_str!("../../editor/src/view/host/toolbar.rs"),
+            "editor/view/host/toolbar/mod.rs",
+            include_str!("../../editor/src/view/host/toolbar/mod.rs"),
+        ),
+        (
+            "editor/view/host/toolbar/render.rs",
+            include_str!("../../editor/src/view/host/toolbar/render.rs"),
+        ),
+        (
+            "editor/view/host/toolbar/render_buttons.rs",
+            include_str!("../../editor/src/view/host/toolbar/render_buttons.rs"),
+        ),
+        (
+            "editor/view/host/toolbar/icons.rs",
+            include_str!("../../editor/src/view/host/toolbar/icons.rs"),
+        ),
+        (
+            "editor/view/host/toolbar/actions.rs",
+            include_str!("../../editor/src/view/host/toolbar/actions.rs"),
+        ),
+        (
+            "editor/view/host/toolbar/toolbar_ops.rs",
+            include_str!("../../editor/src/view/host/toolbar/toolbar_ops.rs"),
+        ),
+        (
+            "editor/view/host/toolbar/comments.rs",
+            include_str!("../../editor/src/view/host/toolbar/comments.rs"),
         ),
         (
             "editor/view/host/env.rs",
@@ -551,8 +575,32 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../../editor/src/view/host/session.rs"),
         ),
         (
-            "editor/view/host/toolbar.rs",
-            include_str!("../../editor/src/view/host/toolbar.rs"),
+            "editor/view/host/toolbar/mod.rs",
+            include_str!("../../editor/src/view/host/toolbar/mod.rs"),
+        ),
+        (
+            "editor/view/host/toolbar/render.rs",
+            include_str!("../../editor/src/view/host/toolbar/render.rs"),
+        ),
+        (
+            "editor/view/host/toolbar/render_buttons.rs",
+            include_str!("../../editor/src/view/host/toolbar/render_buttons.rs"),
+        ),
+        (
+            "editor/view/host/toolbar/icons.rs",
+            include_str!("../../editor/src/view/host/toolbar/icons.rs"),
+        ),
+        (
+            "editor/view/host/toolbar/actions.rs",
+            include_str!("../../editor/src/view/host/toolbar/actions.rs"),
+        ),
+        (
+            "editor/view/host/toolbar/toolbar_ops.rs",
+            include_str!("../../editor/src/view/host/toolbar/toolbar_ops.rs"),
+        ),
+        (
+            "editor/view/host/toolbar/comments.rs",
+            include_str!("../../editor/src/view/host/toolbar/comments.rs"),
         ),
         (
             "editor/view/host/env.rs",
