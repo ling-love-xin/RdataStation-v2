@@ -18,11 +18,14 @@ use workbench_shell::model::ColumnAnnotation;
 use super::delegate::ResultGridDelegate;
 use super::menu::{ContextAction, ContextTarget, column_menu_items};
 use super::stats::{column_stats, stats_lines};
-/// 【P1】表头悬停的分块内容：第一行「列名 · 类型」，后续行字段元数据（来源 / 注释 / 可空 / 默认）
+/// 表头悬停的分块内容：第一行「列名 · 类型」，后续行字段元数据（来源 / 注释 / 可空 / 默认）。
 ///
-/// 返回 `(标题行, 元数据行列表)`。注释缺失 = 空列表（与今天的单行 tooltip 等效）。
+/// 返回 `(标题行, 元数据行列表)`。注释缺失 = 空列表（与单行 tooltip 等效）。
 /// 多行不拼 `\n` 字符串：tooltip 容器是 `whitespace_normal`，换行会被折叠成空格，
 /// 由调用方逐行 `child` 渲染成块。
+///
+/// 2026-10-30：已接线至 `render_th`（悬停 tooltip）并补测试锁定（`grid/tests.rs`
+/// `header_tooltip_lines_build_title_and_meta_blocks`），原【P1】标记移除。
 pub(crate) fn header_tooltip_lines(
     name: &str,
     label: Option<&str>,
@@ -362,8 +365,8 @@ pub(crate) fn render_th(
                         }),
                 ),
         );
-        // 【P1】悬停给全名 + 类型 + 字段元数据（来源 / 注释 / 可空 / 默认）：
-        // 有注释才追加分块行（没有 = 与今天的单行一致）；注释块里的类型是 NavCache 原始名，
+        // 悬停给全名 + 类型 + 字段元数据（来源 / 注释 / 可空 / 默认）：
+        // 有注释才追加分块行（没有 = 与单行一致）；注释块里的类型是 NavCache 原始名，
         // 与表头小标签（渲染层语义标签）并存不冲突。
         let annotation = delegate.column_annotations.get(col_ix - 1).cloned().flatten();
         let tip_name = name.clone();
