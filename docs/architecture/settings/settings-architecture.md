@@ -93,6 +93,8 @@ graph TD
 
 **crate 现状**（目录拆分后，域垂直切片）：`lib.rs`（薄骨架：mod 声明 + re-export + tests）/ `persistence.rs`（`config_dir` / `settings_path` / `load_settings` / `save_settings` / `last_save_error` / `connection_defaults` 进程级快照）/ `model/`（`mod.rs` 聚合 `Settings` + 跨域枚举 + 13 个按域 struct 文件）/ `registry/`（`mod.rs` 登记表 + `Slot` 分发表 + `presets` + 契约测试 + `entries/` 13 个按域登记文件）/ `service/`（`mod.rs` 骨架：`SettingsService` 的 `init/get/snapshot/apply_by_key` + `value_by_key` + 主题 helper + `install_*_sink` 出口 + 13 个按域 `apply_slot` / `impl SettingsService` 文件）/ `ui/`（`settings_page.rs` 独立窗口根（`TitleBar` + `Esc` 关窗）+ `fields.rs` 字段适配 + `skeleton.rs` 骨架 + `bridge.rs` 值桥）/ `commands.rs`（Action：`OpenSettings` / `CloseSettings` / `FocusSettingsSearch`）；**产品语义 token 已迁至 `workbench_shell::product_tokens`**（本 crate 重导，见 §13 K6）。
 
+**渲染层优化（2026-10-30，P1）**：① 分组卡 description（长节 / 矩阵组给一句自解释说明）；② 着色矩阵下拉加**语义色色块**预览（SVG 矩形 + `Icon::text_color` 注入 `theme.colors`，登记表零改动）；③ 禁用项 hover 原因提示（`disabled && !hint_inline` → HoverCard"该能力已预留"；登记表零改动，未来禁用项自动生效）；④ 侧栏导航显式 `sidebar_width(200px)`（拖宽 160–360 保留组件默认）。
+
 > 旧单列 `settings_view.rs` 与自持的 `ui.rs` **均已删除**：页面尺寸常量回归**壳层单点** `crates/workbench_shell/src/ui.rs`（依赖方向：`settings → workbench_shell`，而 shell 不依赖任何特性 crate）。窗口化后 `settings_page.rs` 不再引用 `SETTINGS_PAGE_WIDTH/HEIGHT`（初始尺寸由 `workbench::open_settings` 的 `WindowOptions` 承载，沿用 980×560）；常量保留（连接对话框宽度同档引用 + `ui_contract` 契约断言）。
 
 ## 4. 状态所有权与读写路径
