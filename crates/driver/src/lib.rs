@@ -1,5 +1,8 @@
 //! Driver 层 — 数据库驱动 trait 抽象 + 注册 + 连接管理
 //!
+//! 独立 crate（rds-driver，2026-10-29 engine 瘦身第三刀自 `engine::driver` 抽取）：
+//! engine 保留 `driver/mod.rs` 命名空间薄壳，外部 `engine::driver::*` 路径零改动。
+//!
 //! ═══════════ 架构边界 ═══════════
 //! Driver 层定位：数据库连接抽象层，在 services 之下、native 实现之上。
 //!

@@ -118,6 +118,12 @@ engine 预估从 61,489 行 → **约 14,800 行（−76%）**，剩余恰好是
 
 ## 6. 动工顺序与验收口径（每步全绿再进下一步）
 
+> **全部完成（2026-10-29）**。各步验收结果：rds-sql 194 passed；rds-store 149 passed；
+> rds-driver 97 passed + 22 ignored（真机探针基线）；rds-engine lib 218 passed + 集成测试
+> 全过；13 个依赖方逐仓 check 全绿；`cargo check --workspace` 全绿。
+> engine src 61,489 → **15,062 行（−75.5%）**，剩余恰好是定位原文
+> （duckdb 8,448→目录化后约 5,600 + cache/services/connection_manager/refs/csv 与六个命名空间薄壳）。
+
 | 步 | 内容 | 验收 |
 |---|---|---|
 | 0 | 开分支 `refactor/engine-slimming` | 分支存在，工作区他人改动未动 |
