@@ -43,33 +43,6 @@ impl std::fmt::Display for ConnectionType {
     }
 }
 
-impl ConnectionType {
-    pub fn parse_type(s: &str) -> Option<Self> {
-        match s {
-            "global" => Some(ConnectionType::Global),
-            "project" => Some(ConnectionType::Project),
-            _ => None,
-        }
-    }
-}
-
-/// 连接配置（旧版，用于兼容）
-#[derive(Debug, Clone)]
-pub struct ConnectionConfig {
-    pub db_type: String,
-    pub url: String,
-    pub name: Option<String>,
-    pub connection_type: Option<ConnectionType>,
-    pub project_id: Option<String>,
-    pub driver_id: Option<String>,
-    pub environment_id: Option<String>,
-    pub auth_config_id: Option<String>,
-    pub network_config_id: Option<String>,
-    pub driver_properties: Option<String>,
-    pub advanced_options: Option<String>,
-    pub description: Option<String>,
-}
-
 /// 连接信息
 #[derive(Debug, Clone)]
 pub struct ConnectionInfo {
@@ -103,12 +76,6 @@ pub struct ConnectionInfo {
 /// - 连接的复用
 /// - 活动连接的切换
 /// - 连接的关闭和清理
-/// - 空闲连接回收（idle timeout）
-///
-/// # 空闲回收策略
-///
-/// 默认空闲超时 30 分钟。超过此时间未被访问的连接将被自动关闭。
-/// 可通过 `set_idle_timeout()` 调整。
 pub struct ConnectionManager {
     /// 存储所有数据库连接
     connections: tokio::sync::RwLock<HashMap<ConnId, DynDatabase>>,
@@ -134,8 +101,6 @@ pub struct ConnectionManager {
     /// 语句必须走这里而不是重新取连接——P0.2c 实测：MySQL / PG 并发下会另开物理连接，
     /// 靠池的顺序巧合做会话亲和不可靠（架构 §12 #2）。
     transactions: tokio::sync::Mutex<HashMap<ConnId, ActiveTransaction>>,
-    /// 空闲超时时间（默认 30 分钟）
-    idle_timeout: tokio::sync::RwLock<Duration>,
     /// **按库另开**的连接（PG 的跨库浏览）：键 = (主连接 id, 库名)。
     ///
     /// 为什么不进 `connections`：那是**用户可见的连接表**（`get_all_connection_info` 喂连接面板
@@ -180,7 +145,6 @@ impl ConnectionManager {
             tunnels: connection::chain::TunnelRegistry::new(),
             cancel_tokens: tokio::sync::RwLock::new(HashMap::new()),
             transactions: tokio::sync::Mutex::new(HashMap::new()),
-            idle_timeout: tokio::sync::RwLock::new(Duration::from_secs(30 * 60)),
             scoped: tokio::sync::RwLock::new(HashMap::new()),
             current_catalog: tokio::sync::RwLock::new(HashMap::new()),
         }
@@ -847,22 +811,6 @@ impl ConnectionManager {
         self.reconnect_connection(conn_id).await
     }
 
-    /// 设置空闲超时时间
-    ///
-    /// # Arguments
-    ///
-    /// * `timeout` - 新的空闲超时时间
-    pub async fn set_idle_timeout(&self, timeout: Duration) {
-        let mut current = self.idle_timeout.write().await;
-        *current = timeout;
-    }
-
-    /// 获取当前空闲超时时间
-    pub async fn get_idle_timeout(&self) -> Duration {
-        let timeout = self.idle_timeout.read().await;
-        *timeout
-    }
-
     /// 隧道注册表（协议链执行产物；与连接管理器同生命周期）。
     ///
     /// 供 `ConnectionService` 取用：同一个管理器下的所有服务实例共用一张隧道表，
@@ -871,76 +819,6 @@ impl ConnectionManager {
         &self.tunnels
     }
 
-    /// 回收空闲连接
-    ///
-    /// 遍历所有连接，关闭超过 `idle_timeout` 未访问的连接。
-    /// 返回被回收的连接 ID 列表。
-    ///
-    /// # Returns
-    ///
-    /// 被关闭的连接 ID 列表
-    pub async fn reclaim_idle_connections(&self) -> Vec<ConnId> {
-        let idle_timeout = self.get_idle_timeout().await;
-        let now = Instant::now();
-
-        let access = self.last_access.read().await;
-        let idle_ids: Vec<ConnId> = access
-            .iter()
-            .filter(|(_, last)| now.duration_since(**last) > idle_timeout)
-            .map(|(id, _)| id.clone())
-            .collect();
-        drop(access);
-
-        for conn_id in &idle_ids {
-            info!(conn_id = %conn_id, "Reclaiming idle connection");
-            self.remove_connection(conn_id).await;
-        }
-
-        idle_ids
-    }
-
-    /// 启动后台空闲回收任务
-    ///
-    /// 每隔 `check_interval` 检查并回收空闲连接。
-    /// 返回一个用于停止任务的 handle。
-    ///
-    /// # Arguments
-    ///
-    /// * `check_interval` - 检查间隔（推荐 5 分钟）
-    ///
-    /// # Returns
-    ///
-    /// 返回一个 `CancellationToken`，调用 `cancel()` 可停止后台任务
-    pub fn start_idle_reclaimer(
-        self: Arc<Self>,
-        check_interval: Duration,
-    ) -> tokio_util::sync::CancellationToken {
-        let cancel = tokio_util::sync::CancellationToken::new();
-        let cancel_clone = cancel.clone();
-
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = tokio::time::sleep(check_interval) => {
-                        let reclaimed = self.reclaim_idle_connections().await;
-                        if !reclaimed.is_empty() {
-                            info!(
-                                count = reclaimed.len(),
-                                ids = ?reclaimed,
-                                "Background reclaimer closed idle connections"
-                            );
-                        }
-                    }
-                    _ = cancel_clone.cancelled() => {
-                        info!("Idle connection reclaimer stopped");
-                        break;
-                    }
-                }
-            }
-        });
-
-        cancel
-    }
     /// 移除指定连接的取消令牌（查询完成后清理）
     pub async fn remove_cancel_token(&self, conn_id: &ConnId) {
         let mut tokens = self.cancel_tokens.write().await;
@@ -966,30 +844,6 @@ pub static CONNECTION_MANAGER: OnceLock<Arc<ConnectionManager>> = OnceLock::new(
 /// 返回全局连接管理器的静态引用
 pub fn get_connection_manager() -> &'static Arc<ConnectionManager> {
     CONNECTION_MANAGER.get_or_init(|| Arc::new(ConnectionManager::new()))
-}
-
-/// 创建连接 ID
-///
-/// 根据数据库类型和 URL 生成唯一的连接 ID
-///
-/// # Arguments
-///
-/// * `db_type` - 数据库类型（如 "mysql", "postgres"）
-/// * `url` - 数据库连接 URL
-///
-/// # Returns
-///
-/// 返回生成的连接 ID
-pub fn create_connection_id(db_type: &str, url: &str) -> ConnId {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    db_type.hash(&mut hasher);
-    url.hash(&mut hasher);
-    let hash = hasher.finish();
-
-    format!("{}-{:x}", db_type, hash)
 }
 
 /// 从 DriverConnectionConfig 创建连接 ID
@@ -1025,17 +879,5 @@ mod tests {
     async fn test_connection_manager_new() {
         let manager = ConnectionManager::new();
         assert_eq!(manager.connection_count().await, 0);
-    }
-
-    #[tokio::test]
-    async fn test_create_connection_id() {
-        let id1 = create_connection_id("mysql", "mysql://localhost:3306/test");
-        let id2 = create_connection_id("mysql", "mysql://localhost:3306/test");
-        let id3 = create_connection_id("postgres", "postgres://localhost:5432/test");
-
-        // 相同的输入应该生成相同的 ID
-        assert_eq!(id1, id2);
-        // 不同的输入应该生成不同的 ID
-        assert_ne!(id1, id3);
     }
 }

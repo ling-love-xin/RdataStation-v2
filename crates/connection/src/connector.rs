@@ -886,84 +886,6 @@ mod base64 {
     }
 }
 
-/// SSL 证书过期信息
-#[derive(Debug, Clone)]
-pub struct SslCertInfo {
-    /// 证书文件路径
-    pub path: String,
-    /// 证书主题（CN）
-    pub subject: String,
-    /// 颁发者
-    pub issuer: String,
-    /// 生效时间
-    pub not_before: String,
-    /// 过期时间
-    pub not_after: String,
-    /// 距离过期天数（负数 = 已过期）
-    pub days_until_expiry: i64,
-    /// 是否已过期
-    pub is_expired: bool,
-}
-
-/// 检查 PEM/DER 格式 X.509 证书的过期状态
-///
-/// 读取证书文件，解析 not_before / not_after，计算距离过期的天数。
-/// 可同时用于 CA 证书和客户端证书的过期检测。
-pub fn check_cert_expiry(cert_path: &str) -> Result<SslCertInfo, CoreError> {
-    let pem_data = std::fs::read(cert_path).map_err(|e| {
-        CoreError::connection(ConnectionError::InvalidConfig {
-            conn_id: cert_path.to_string(),
-            reason: format!("无法读取证书文件: {}", e),
-        })
-    })?;
-
-    let der_storage: Vec<u8>;
-    #[allow(deprecated)]
-    let der_ref: &[u8] = if let Ok((_, pem)) = x509_parser::pem::pem_to_der(&pem_data) {
-        der_storage = pem.contents;
-        &der_storage
-    } else {
-        &pem_data
-    };
-
-    let (_, cert) = x509_parser::parse_x509_certificate(der_ref).map_err(|e| {
-        CoreError::connection(ConnectionError::InvalidConfig {
-            conn_id: cert_path.to_string(),
-            reason: format!("证书解析失败: {}", e),
-        })
-    })?;
-
-    let subject = cert.subject().to_string();
-    let issuer = cert.issuer().to_string();
-
-    let not_before = cert.validity().not_before.to_datetime();
-    let not_after = cert.validity().not_after.to_datetime();
-
-    let not_before_unix = not_before.unix_timestamp();
-    let not_after_unix = not_after.unix_timestamp();
-    let now_unix = chrono::Utc::now().timestamp();
-
-    let days_until_expiry = (not_after_unix - now_unix) / 86400;
-    let is_expired = days_until_expiry < 0;
-
-    let not_before_str = chrono::DateTime::from_timestamp(not_before_unix, 0)
-        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-        .unwrap_or_else(|| not_before.to_string());
-    let not_after_str = chrono::DateTime::from_timestamp(not_after_unix, 0)
-        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-        .unwrap_or_else(|| not_after.to_string());
-
-    Ok(SslCertInfo {
-        path: cert_path.to_string(),
-        subject,
-        issuer,
-        not_before: not_before_str,
-        not_after: not_after_str,
-        days_until_expiry,
-        is_expired,
-    })
-}
-
 /// 在 TcpStream 之上建立 TLS 加密层
 ///
 /// 用于 Proxy → SSL 嵌套：代理 CONNECT 成功后，对透传的 TCP 流进行 TLS 封装。
@@ -1284,12 +1206,6 @@ mod tests {
             "403 状态行必须报错，即便响应头含 200: {err}"
         );
         handle.abort();
-    }
-
-    #[test]
-    fn test_check_cert_expiry_missing_file_errors() {
-        let err = check_cert_expiry("C:/definitely/not/a/real/cert.pem").unwrap_err();
-        assert!(err.to_string().contains("无法读取证书文件"), "{err}");
     }
 
     #[tokio::test]
