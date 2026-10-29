@@ -1,0 +1,1411 @@
+use std::sync::Arc;
+
+use connection::config::{ChainHop, ConnectionMethod, SslConfig};
+use connection::connector::TunnelGuard;
+use connection::url_params::SslMode;
+use engine::connection_manager::{ConnectionInfo, ConnectionManager, ConnectionType};
+use engine::driver::registry::DriverConnectionConfig;
+use engine::driver::router::DataSourceRouter;
+use engine::driver::traits::DynDatabase;
+use engine::persistence::connection_store::{self, RecentConnectionInput};
+use engine::persistence::global_db::{GlobalConnectionSaveInput, GlobalDatabaseManager};
+use engine::driver::registry::DriverRegistry;
+use shared::error::{ConnectionError, CoreError};
+
+use super::network::resolve_network_method_with_project;
+
+/// 保存全局连接输入参数
+pub struct SaveGlobalConnectionInput<'a> {
+    pub conn_id: &'a str,
+    pub name: &'a str,
+    pub db_type: &'a str,
+    pub url: &'a str,
+    pub username: Option<&'a str>,
+    pub password: Option<&'a str>,
+    pub tags: Option<&'a str>,
+    pub server_version: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub driver_id: Option<&'a str>,
+    pub environment_id: Option<&'a str>,
+    pub auth_config_id: Option<&'a str>,
+    pub auth_method: Option<&'a str>,
+    pub network_config_id: Option<&'a str>,
+    pub options: Option<&'a str>,
+    pub driver_properties: Option<&'a str>,
+    pub advanced_options: Option<&'a str>,
+    pub use_duckdb_fed: Option<bool>,
+    pub metadata_path: Option<&'a str>,
+    pub schema_name: Option<&'a str>,
+    /// 是否保存凭据（P0-4，2026-10-24）：`false` 时密码不落库。
+    pub save_password: bool,
+}
+
+/// 连接请求 — 消除 connect_with_type 的 22 参数反模式
+/// 对应前端 ConnectDatabaseInput，增加已解析的 connection_type / network_method
+pub struct ConnectRequest {
+    pub conn_id: Option<String>,
+    pub db_type: String,
+    pub url: String,
+    pub name: Option<String>,
+    pub connection_type: ConnectionType,
+    pub project_path: Option<String>,
+    pub description: Option<String>,
+    pub driver_id: Option<String>,
+    pub environment_id: Option<String>,
+    pub auth_config_id: Option<String>,
+    pub auth_method: Option<String>,
+    pub network_config_id: Option<String>,
+    pub driver_properties: Option<String>,
+    pub advanced_options: Option<String>,
+    pub options: Option<String>,
+    pub tags: Option<String>,
+    pub metadata_path: Option<String>,
+    pub schema_name: Option<String>,
+    pub use_duckdb_fed: Option<bool>,
+    pub password: Option<String>,
+    pub skip_persistence: Option<bool>,
+    pub network_method: Option<ConnectionMethod>,
+}
+
+/// 测试连接的配置构建输入（`DataSourceSaveInput` 的建连相关字段子集）。
+///
+/// 不直接复用 `ConnectRequest`：测试连接不生成连接 ID、不落库、不写最近连接记录，
+/// 只关心「用什么参数建连」。
+pub struct ProbeConfigInput<'a> {
+    pub db_type: &'a str,
+    /// 已完成 UI 凭据合并的 URL（[`DataSourceService::test`](crate::services::data_source_service::DataSourceService::test) 负责）。
+    pub url: &'a str,
+    pub name: &'a str,
+    pub username: Option<&'a str>,
+    pub password: Option<&'a str>,
+    pub auth_config_id: Option<&'a str>,
+    pub auth_method: Option<&'a str>,
+    pub network_config_id: Option<&'a str>,
+    /// 项目根（含 `.RSmeta`）；用于解析 P_/GP_ 前缀的档案。
+    pub project_path: Option<&'a str>,
+    pub driver_properties: Option<&'a str>,
+    pub advanced_options: Option<&'a str>,
+}
+
+/// 连接服务
+///
+/// 负责数据库连接的生命周期管理，包括：
+/// - 创建新连接
+/// - 连接复用
+/// - 连接切换
+/// - 连接关闭
+/// - 最近连接记录
+/// - 连接类型转换（全局↔项目）
+#[derive(Clone)]
+pub struct ConnectionService {
+    manager: Arc<ConnectionManager>,
+    /// 隧道守卫（协议链执行产物；断开时统一释放）。
+    tunnels: connection::chain::TunnelRegistry,
+}
+
+impl ConnectionService {
+    /// 创建新的连接服务
+    ///
+    /// 隧道注册表**取自连接管理器**（而非本实例）：生产连接入口是短生命周期的（每次调用
+    /// `new` 一个服务），若守卫存在实例字段里，隧道会刚建好就随实例释放（审计 #20）。
+    /// 传独立管理器的测试仍天然隔离。
+    pub fn new(manager: Arc<ConnectionManager>) -> Self {
+        let tunnels = manager.tunnels().clone();
+        Self { manager, tunnels }
+    }
+
+    /// 创建或获取数据库连接（指定连接类型）
+    ///
+    /// # Arguments
+    ///
+    /// * `conn_id` - 连接唯一标识（可选，不提供则自动生成）
+    /// * `db_type` - 数据库类型 (mysql, postgres, sqlite, duckdb)
+    /// * `url` - 数据库连接 URL
+    /// * `name` - 连接名称（可选）
+    /// * `connection_type` - 连接类型（全局/项目）
+    /// * `project_path` - 项目路径（仅项目连接时需要）
+    /// * `description` - 连接描述（可选）
+    /// * `network_method` - 网络连接方式（可选，用于 SSH 隧道/SSL 加密/代理等）
+    /// * `driver_id` - 驱动 ID（可选，数据源模块字段）
+    /// * `environment_id` - 环境 ID（可选）
+    /// * `auth_config_id` - 认证配置 ID（可选）
+    /// * `network_config_id` - 网络配置 ID（可选）
+    /// * `driver_properties` - 驱动属性 JSON（可选）
+    /// * `advanced_options` - 高级选项 JSON（可选）
+    /// * `skip_persistence` - 跳过持久化到 SQLite（测试连接等场景，默认 false）
+    ///
+    /// # Returns
+    ///
+    /// 返回连接 ID 和数据库实例
+    pub async fn connect_with_type(
+        &self,
+        req: ConnectRequest,
+    ) -> Result<(String, DynDatabase), CoreError> {
+        let ConnectRequest {
+            conn_id,
+            db_type,
+            url,
+            name,
+            connection_type,
+            project_path,
+            description,
+            driver_id,
+            environment_id,
+            auth_config_id,
+            auth_method,
+            network_config_id,
+            driver_properties,
+            advanced_options,
+            options,
+            tags,
+            metadata_path,
+            schema_name,
+            use_duckdb_fed,
+            password,
+            skip_persistence,
+            network_method,
+        } = req;
+
+        // 参数校验
+        if url.is_empty() {
+            return Err(CoreError::connection(ConnectionError::InvalidConfig {
+                conn_id: "unknown".to_string(),
+                reason: "Database URL cannot be empty".to_string(),
+            }));
+        }
+
+        // 历史数据卫生：空字符串的 network_config_id（旧版 UI 保存空选项曾把
+        // Some("") 写进数据）不构成档案引用——统一在入口规范化为 None，后续
+        // 判定与隧道应用都按「无引用」处理。否则探针会把「引用的网络配置无法
+        // 解析（）」当成 ERROR（G_conn_SQLite_Example 实例）。
+        let network_config_id = network_config_id.filter(|s| !s.trim().is_empty());
+
+        // 结构化 TLS 请求（证书路径 / 校验意图）：URL 只能表达「要不要加密」，
+        // 证书与 verify 档由 native 驱动从这份请求落到 TLS 连接器。
+        // 在这里派生（而不是等 URL 处理完）：下面所有建配置的分支（含重连回退）都要用它。
+        let tls = tls_request_of(network_method.as_ref(), advanced_options.as_deref());
+
+        // 生成连接 ID：统一使用 URL 哈希，确保：
+        //   - 短且唯一（8位 hex）
+        //   - 文件系统安全（无 Windows 非法字符 : @ / \ 等）
+        //   - 全局/项目双链路一致
+        let conn_id = conn_id.unwrap_or_else(|| {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+
+            let type_prefix = match connection_type {
+                ConnectionType::Global => "global",
+                ConnectionType::Project => "project",
+            };
+
+            let mut hasher = DefaultHasher::new();
+            url.hash(&mut hasher);
+            let hash = hasher.finish();
+            format!("{}-{}-{:x}", type_prefix, db_type, hash)
+        });
+
+        // 连接显示名称：用户指定 > 自动生成（db_type@host 简洁格式）
+        let connection_name = name.unwrap_or_else(|| {
+            let host = url
+                .split('@')
+                .nth(1)
+                .and_then(|s| s.split('/').next())
+                .map(|s| s.split('?').next().unwrap_or(s))
+                .unwrap_or("localhost");
+            format!("{}@{}", db_type.to_uppercase(), host)
+        });
+
+        // 检查是否已有连接（基于 conn_id）
+        if let Some(db) = self.manager.get_connection(&conn_id).await {
+            tracing::info!(conn_id = %conn_id, "Connection already exists, reusing it");
+            return Ok((conn_id, db));
+        }
+
+        // 对于文件型数据库，额外检查是否有相同 URL 的连接（避免文件锁冲突）。
+        // 命中时**别名**复用同一物理连接：把同一 `Arc<dyn Database>` 再挂到请求的
+        // `conn_id` 下，使两个逻辑 id（`G_`/`P_`/`GP_`）都能查到。否则先连的那条会
+        // 抢占唯一注册，后连的按请求 id 加载恒报 `CONN_NOT_FOUND`。文件真正只打开一次；
+        // 断开只摘除该 id 的映射，最后一个引用释放时才真正关连接。
+        if url.starts_with("sqlite://") || url.starts_with("duckdb://") {
+            let all_connections = self.manager.get_all_connection_info().await;
+            for conn_info in all_connections {
+                if conn_info.url == url {
+                    tracing::info!(url = %url, conn_id = %conn_info.id, "Connection with URL already exists");
+                    if let Some(db) = self.manager.get_connection(&conn_info.id).await {
+                        if conn_info.id == conn_id {
+                            tracing::info!(conn_id = %conn_id, "Reusing existing connection");
+                            return Ok((conn_id, db));
+                        }
+                        tracing::info!(
+                            from = %conn_info.id,
+                            to = %conn_id,
+                            "Aliasing existing file connection under requested id"
+                        );
+                        let alias_info = ConnectionInfo {
+                            id: conn_id.clone(),
+                            name: connection_name.clone(),
+                            db_type: conn_info.db_type.clone(),
+                            url: conn_info.url.clone(),
+                            server_version: conn_info.server_version.clone(),
+                            connection_type,
+                            project_id: project_path.clone(),
+                            driver_id: driver_id.clone().or_else(|| conn_info.driver_id.clone()),
+                            environment_id: environment_id.clone(),
+                            auth_config_id: auth_config_id.clone(),
+                            auth_method: auth_method.clone(),
+                            network_config_id: network_config_id.clone(),
+                            driver_properties: driver_properties.clone(),
+                            advanced_options: advanced_options.clone(),
+                            description: description.clone(),
+                            use_duckdb_fed: conn_info.use_duckdb_fed,
+                            created_at: std::time::Instant::now(),
+                        };
+                        // 重连配置沿用权威连接（其 url_override 保留明文用于重连）。
+                        let alias_config = self
+                            .manager
+                            .get_connection_config(&conn_info.id)
+                            .await
+                            .unwrap_or_else(|| {
+                                engine::driver::registry::DriverConnectionConfig::new(
+                                    db_type.clone(),
+                                )
+                                .with_url_override(url.clone())
+                                .with_name(&connection_name)
+                                .with_tls(tls.clone())
+                            });
+                        match self
+                            .manager
+                            .add_connection(
+                                conn_id.clone(),
+                                Arc::clone(&db),
+                                alias_info,
+                                alias_config,
+                            )
+                            .await
+                        {
+                            Ok(()) => {
+                                // 门控注册（2026-10-03 规则）：加速开 + 有对应扩展才注册；
+                                // 目标分析库按作用域（G_→全局 / P_、GP_→项目）。
+                                crate::services::secret_integration::ensure_secret_registered_gated(
+                                    crate::services::secret_integration::analysis_db_for_scope(
+                                        &conn_id,
+                                        conn_info.project_id.as_deref(),
+                                    )
+                                    .as_deref(),
+                                    &conn_id,
+                                    &db_type,
+                                    &url,
+                                    conn_info.use_duckdb_fed,
+                                );
+                                return Ok((conn_id, db));
+                            }
+                            Err(e) => {
+                                // 别名注册失败不阻断：回退到权威 id（调用方仍能拿到可用连接）。
+                                tracing::warn!(
+                                    conn_id = %conn_id,
+                                    error = %e,
+                                    "文件型连接别名注册失败，回退权威 id"
+                                );
+                                return Ok((conn_info.id, db));
+                            }
+                        }
+                    }
+
+                    // 如果连接管理器中没有该连接（可能已被关闭），但连接信息仍存在
+                    // 需要先移除旧的连接信息，然后创建新连接
+                    tracing::info!(
+                        "旧连接 {} 已不存在于连接管理器中，准备移除旧信息并创建新连接",
+                        conn_info.id
+                    );
+                    self.manager.remove_connection(&conn_info.id).await;
+                    // 继续创建新连接
+                    break;
+                }
+            }
+        }
+
+        // 创建新连接
+        tracing::info!("Creating new connection with ID: {}", conn_id);
+
+        // 如果有 auth_config_id，从数据库中读取认证凭据并注入到 URL
+        // （规则与测试连接同源；档案缺失 / 注入失败直接报错，不静默回退直连）。
+        let url_with_auth = Self::inject_auth_config_credentials(
+            None,
+            &url,
+            auth_config_id.as_deref(),
+            auth_method.as_deref(),
+            connection_type,
+            project_path.as_deref(),
+        )
+        .await?;
+        if auth_config_id.is_some() {
+            tracing::info!(conn_id = %conn_id, auth_id = ?auth_config_id, "认证档案凭据已注入 URL");
+        }
+
+        // 引用了网络档案但入口没解析出连接方式（档案被删 / 类型未知 / 内容非法）：
+        // 拒绝静默直连（A2）——用户以为走隧道，实际会把数据库端暴露到公网链路上。
+        if network_config_id.is_some() && network_method.is_none() {
+            return Err(CoreError::from(format!(
+                "引用的网络配置无法解析（{}）：请在「网络」Tab 重新选择，或检查档案类型与内容",
+                network_config_id.as_deref().unwrap_or("")
+            )));
+        }
+
+        // 应用网络连接方式（SSH 隧道 / SSL / 代理；协议链执行在 connection::chain）
+        let (effective_url, tunnel_guards) = connection::chain::apply_network_method(
+            &url_with_auth,
+            &network_method,
+            &conn_id,
+            &db_type,
+        )
+        .await?;
+        // 「连接安全」表单里的 SSL 覆盖（`advanced_options.ssl`）：档案没有 SSL 跳时生效
+        // （档案优先），且必须在 `apply_lan_tls_default` 之前——后者只看 URL 里有没有 ssl 键。
+        let effective_url = Self::apply_inline_ssl_override(
+            &effective_url,
+            &db_type,
+            advanced_options.as_deref(),
+            network_method.as_ref(),
+        )?
+        .unwrap_or(effective_url);
+        // 未配置 SSL 档案 + LAN / 本机 + sqlx 驱动：显式关闭 TLS（规避默认 `prefer` 握手卡顿）。
+        let effective_url =
+            Self::apply_lan_tls_default(effective_url, &db_type, network_method.as_ref());
+
+        // 注册隧道守卫，确保隧道在连接生命周期内保持存活
+        if !tunnel_guards.is_empty() {
+            self.tunnels.insert(&conn_id, tunnel_guards).await;
+            tracing::info!(
+                conn_id = %conn_id,
+                count = self.tunnels.count(&conn_id).await,
+                "已注册隧道守卫"
+            );
+        }
+
+        tracing::info!(
+            conn_id = %conn_id,
+            effective_url_has_creds = effective_url.contains('@'),
+            "即将创建数据库连接（URL凭据={}）",
+            effective_url.contains('@')
+        );
+        // 建连超时可配（settings）+ 失败自动重试一次。
+        let defaults = settings::connection_defaults();
+        let timeout = std::time::Duration::from_millis(defaults.connect_timeout_ms.max(1_000));
+        let max_attempts: u32 = 2;
+        let mut attempt = 0u32;
+        let db = loop {
+            attempt += 1;
+            let created = tokio::time::timeout(
+                timeout,
+                self.create_database(&db_type, &effective_url, driver_properties.as_deref(), tls.clone()),
+            )
+            .await;
+            match created {
+                Ok(Ok(db)) => break db,
+                Ok(Err(e)) => {
+                    if attempt < max_attempts {
+                        tracing::warn!(
+                            conn_id = %conn_id,
+                            attempt,
+                            error = %e,
+                            "建连失败，重试一次"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        continue;
+                    }
+                    // 隧道已登记但连接未建立：不回收会泄漏本地端口与后台任务
+                    self.release_tunnels(&conn_id, "连接建立失败").await;
+                    return Err(e);
+                }
+                Err(_elapsed) => {
+                    if attempt < max_attempts {
+                        tracing::warn!(conn_id = %conn_id, attempt, "建连超时，重试一次");
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        continue;
+                    }
+                    self.release_tunnels(&conn_id, "建连超时").await;
+                    return Err(CoreError::connection(ConnectionError::Timeout {
+                        conn_id: conn_id.clone(),
+                        duration_ms: defaults.connect_timeout_ms,
+                    }));
+                }
+            }
+        };
+        let server_version = db.meta().server_version.clone();
+        let safe_url = connection::url::mask_password_in_url(&url_with_auth);
+
+        // 创建连接信息
+        let info = ConnectionInfo {
+            id: conn_id.clone(),
+            name: connection_name.clone(),
+            db_type: db_type.to_string(),
+            url: safe_url.clone(),
+            server_version: server_version.clone(),
+            connection_type,
+            project_id: project_path.clone(),
+            driver_id: driver_id.clone(),
+            environment_id: environment_id.clone(),
+            auth_config_id: auth_config_id.clone(),
+            auth_method: auth_method.clone(),
+            network_config_id: network_config_id.clone(),
+            driver_properties: driver_properties.clone(),
+            advanced_options: advanced_options.clone(),
+            description: description.clone(),
+            use_duckdb_fed: use_duckdb_fed.unwrap_or(false),
+            created_at: std::time::Instant::now(),
+        };
+
+        // 转换为 DriverConnectionConfig（用于重连）
+        let mut driver_config =
+            engine::driver::registry::DriverConnectionConfig::new(db_type.clone())
+                .with_url_override(url.clone())
+                .with_name(&connection_name)
+                .with_tls(tls.clone());
+
+        if let Some(ref opts_json) = advanced_options {
+            Self::apply_advanced_options(&mut driver_config, opts_json);
+        }
+        if let Some(ref props_json) = driver_properties {
+            Self::apply_driver_properties(&mut driver_config, props_json);
+        }
+
+        // 添加到连接管理器
+        if let Err(e) = self
+            .manager
+            .add_connection(conn_id.clone(), Arc::clone(&db), info, driver_config)
+            .await
+        {
+            // 同上：注册失败也要回收隧道
+            self.release_tunnels(&conn_id, "连接注册失败").await;
+            return Err(e);
+        }
+
+        // M3 本地加速：连接建立成功后注册 DuckDB Secret（联邦查询直连源库）。
+        // 门控规则（2026-10-03）：加速开 + 有对应 DuckDB 扩展才注册；目标分析库按作用域
+        // （全局侧 → 全局分析库，项目侧 P_/GP_ → 项目分析库）；失败仅告警，不影响连接本身。
+        crate::services::secret_integration::ensure_secret_registered_gated(
+            crate::services::secret_integration::analysis_db_for_scope(
+                &conn_id,
+                project_path.as_deref(),
+            )
+            .as_deref(),
+            &conn_id,
+            &db_type,
+            &url,
+            use_duckdb_fed.unwrap_or(false),
+        );
+
+        // 指纹接线（2026-10-02）：登记 conn_id → 身份指纹，使指向同一物理库的多条连接
+        // （改名 / 改密码 / 加参数）在**作用域域内**共享同一份 L2 元数据缓存（meta_{fp}.sqlite）。
+        // 域隔离：全局连接在全局域、项目连接在项目域，互不互通；GP_ 项目侧走项目域。
+        // 不可共享（内存库 / 地址空）→ 不登记，缓存路径回退 conn_id 分文件。
+        self.register_identity_fingerprint(&conn_id, &db_type, &url, schema_name.as_deref());
+
+        // NOTE: 元数据缓存不在连接时立即创建，改为懒加载。
+        // 首次查询 schema / table / column 时通过 L2 cache write 路径自动创建。
+
+        // 对于全局连接，保存到全局 SQLite 数据库（skip_persistence 时跳过）
+        if !skip_persistence.unwrap_or(false) && connection_type == ConnectionType::Global {
+            // 从 URL 中解析 username 和 password
+            let (url_username, url_password) = connection::url::extract_credentials_from_url(&url);
+            // 优先使用直接传入的 password，回退到 URL 解析
+            let effective_password = password.or(url_password);
+
+            // 标签：优先使用输入值，无输入时默认 ["global"]
+            let final_tags = tags.clone().or(Some("[\"global\"]".to_string()));
+            if let Err(e) = self
+                .save_global_connection_to_db(SaveGlobalConnectionInput {
+                    conn_id: &conn_id,
+                    name: &connection_name,
+                    db_type: &db_type,
+                    url: &safe_url,
+                    username: url_username.as_deref(),
+                    password: effective_password.as_deref(),
+                    tags: final_tags.as_deref(),
+                    server_version: server_version.as_deref(),
+                    description: description.as_deref(),
+                    driver_id: driver_id.as_deref(),
+                    environment_id: environment_id.as_deref(),
+                    auth_config_id: auth_config_id.as_deref(),
+                    auth_method: auth_method.as_deref(),
+                    network_config_id: network_config_id.as_deref(),
+                    options: options.as_deref(),
+                    driver_properties: driver_properties.as_deref(),
+                    advanced_options: advanced_options.as_deref(),
+                    use_duckdb_fed,
+                    metadata_path: metadata_path.as_deref(),
+                    schema_name: schema_name.as_deref(),
+                    // 连接时保存路径：凭据刚输入，默认保存（P0-4 开关只管对话框显式保存）。
+                    save_password: true,
+                })
+                .await
+            {
+                tracing::warn!("保存全局连接信息到 SQLite 失败: {}", e);
+            }
+        }
+
+        // 保存到最近连接记录（skip_persistence 时跳过）
+        if !skip_persistence.unwrap_or(false) {
+            if let Err(e) = connection_store::save_recent_connection(RecentConnectionInput {
+                name: &connection_name,
+                db_type: &db_type,
+                url: &safe_url,
+                conn_id: Some(&conn_id),
+                description: description.as_deref(),
+                driver_id: driver_id.as_deref(),
+                environment_id: environment_id.as_deref(),
+                auth_config_id: auth_config_id.as_deref(),
+                auth_method: auth_method.as_deref(),
+                network_config_id: network_config_id.as_deref(),
+                driver_properties: driver_properties.as_deref(),
+                advanced_options: advanced_options.as_deref(),
+            }) {
+                tracing::warn!("Failed to save connection history: {}", e);
+            }
+        }
+
+        Ok((conn_id, db))
+    }
+
+    /// 保存全局连接信息到全局 SQLite 数据库
+    async fn save_global_connection_to_db(
+        &self,
+        input: SaveGlobalConnectionInput<'_>,
+    ) -> Result<(), CoreError> {
+        use engine::migration::global_init;
+
+        let global_db = global_init::get_global_db_manager().ok_or_else(|| {
+            CoreError::common(shared::error::CommonError::General(
+                "Global database manager not initialized".to_string(),
+            ))
+        })?;
+
+        global_db
+            .save_global_connection(GlobalConnectionSaveInput {
+                conn_id: input.conn_id,
+                name: input.name,
+                db_type: input.db_type,
+                url: input.url,
+                username: input.username,
+                password: input.password,
+                tags: input.tags,
+                server_version: input.server_version,
+                description: input.description,
+                driver_id: input.driver_id,
+                environment_id: input.environment_id,
+                auth_config_id: input.auth_config_id,
+                auth_method: input.auth_method,
+                network_config_id: input.network_config_id,
+                options: input.options,
+                driver_properties: input.driver_properties,
+                advanced_options: input.advanced_options,
+                use_duckdb_fed: input.use_duckdb_fed,
+                metadata_path: input.metadata_path,
+                schema_name: input.schema_name,
+                save_password: input.save_password,
+            })
+            .await
+    }
+
+    /// 从数据库中加载认证配置数据
+    ///
+    /// 根据连接类型和认证配置 ID，从全局或项目数据库中读取认证配置，
+    /// 并返回解密后的 auth_data JSON。
+    ///
+    /// 查询优先级：全局 DB → 项目 DB（project_path 存在时，不依赖 connection_type，
+    /// 与 load_auth_data_from_db_for_network 行为一致，确保 test_connection（Global 类型）
+    /// 也能查询到项目级 P_/GP_ 认证配置）
+    ///
+    /// `global_db` 为 `None` 时回退进程全局单例（连接入口的既有行为）；
+    /// 持有库句柄的调用方（如 `DataSourceService`）可传入自己的库，测试可注入临时库。
+    async fn load_auth_data_from_db(
+        global_db: Option<&GlobalDatabaseManager>,
+        auth_id: &str,
+        connection_type: ConnectionType,
+        project_path: Option<&str>,
+    ) -> Result<Option<(String, String)>, CoreError> {
+        use engine::persistence::auth_store;
+
+        // 优先尝试从全局数据库读取；返回 (auth_type, 解密后的 auth_data)，
+        // 供调用方在连接未记录认证方法时回退到配置声明的方法。
+        let global: Option<&GlobalDatabaseManager> = match global_db {
+            Some(g) => Some(g),
+            None => engine::migration::get_global_db_manager(),
+        };
+        if let Some(gdb) = global {
+            if let Ok(Some(auth_config)) = gdb.get_auth_config(auth_id).await {
+                let auth_data = auth_store::decrypt_auth_data(&auth_config.auth_data)?;
+                return Ok(Some((auth_config.auth_type, auth_data)));
+            }
+        }
+
+        // 全局未找到，尝试从项目数据库读取（不依赖 connection_type，
+        // 确保 test_connection 等非 Project 类型也能查询到项目级认证配置）
+        let should_check_project =
+            connection_type == ConnectionType::Project || project_path.is_some();
+        if should_check_project {
+            if let Some(pp) = project_path {
+                let db_path = std::path::Path::new(pp).join(".RSmeta").join("project.db");
+                if db_path.exists() {
+                    let conn = rusqlite::Connection::open(&db_path)
+                        .map_err(|e| CoreError::from(format!("打开项目数据库失败: {}", e)))?;
+                    if let Some(auth_config) = auth_store::get_auth_config(&conn, auth_id)? {
+                        let auth_data = auth_store::decrypt_auth_data(&auth_config.auth_data)?;
+                        return Ok(Some((auth_config.auth_type, auth_data)));
+                    }
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// 按认证档案注入凭据到 URL（`connect` 与测试连接共用，保证同源）。
+    ///
+    /// 认证方法优先取连接记录上的 `auth_method`；缺失时回退到认证配置声明的
+    /// `auth_type`——否则「引用了档案但没选方法」的连接会静默跳过凭据注入。
+    ///
+    /// **严格模式（A2）**：档案不存在 / 读取失败 / 注入失败一律返回 `Err`，不再回退到
+    /// “无凭据直连”——静默降级会让用户以为在用专用账号 / 跳板机（安全风险），
+    /// 真实原因（档案被删 / 改名 / 数据损坏）却看不到。
+    async fn inject_auth_config_credentials(
+        global_db: Option<&GlobalDatabaseManager>,
+        url: &str,
+        auth_config_id: Option<&str>,
+        auth_method: Option<&str>,
+        connection_type: ConnectionType,
+        project_path: Option<&str>,
+    ) -> Result<String, CoreError> {
+        let Some(auth_id) = auth_config_id else {
+            return Ok(url.to_string());
+        };
+        // 空/空白 id 视为未引用认证：SQLite 等无认证连接常存空串而非 NULL，
+        // 否则 Some("") 会被当成「引用了 id 为空的配置」去查库，误报「认证配置不存在」。
+        if auth_id.trim().is_empty() {
+            return Ok(url.to_string());
+        }
+        let (config_auth_type, auth_data) =
+            Self::load_auth_data_from_db(global_db, auth_id, connection_type, project_path)
+                .await?
+                .ok_or_else(|| {
+                    CoreError::from(format!(
+                        "引用的认证配置不存在（{auth_id}）：请在「数据库认证」重新选择或新建"
+                    ))
+                })?;
+        let method = auth_method.unwrap_or(config_auth_type.as_str());
+        connection::url_params::inject_auth_into_url(url, method, &auth_data)
+            .map_err(|e| CoreError::from(format!("认证配置凭据注入失败（{auth_id}）：{e}")))
+    }
+
+    /// 解析 advanced_options JSON 并应用到 DriverConnectionConfig
+    ///
+    /// advanced_options 结构（来自 AdvancedTab emit）：
+    /// ```json
+    /// {
+    ///   "performance": { "poolSize": 10, "queryTimeout": 60, "connectTimeout": 30, ... },
+    ///   "connection": { "connectTimeout": 30, "queryTimeout": 0, ... },
+    ///   "encoding": "UTF-8"
+    /// }
+    /// ```
+    fn apply_advanced_options(
+        config: &mut engine::driver::registry::DriverConnectionConfig,
+        json: &str,
+    ) {
+        let Ok(root) = serde_json::from_str::<serde_json::Value>(json) else {
+            return;
+        };
+        let Some(obj) = root.as_object() else { return };
+
+        if let Some(perf) = obj.get("performance").and_then(|v| v.as_object()) {
+            if let Some(v) = perf.get("poolSize").and_then(|v| v.as_u64()) {
+                config.pool_size = Some(v as u32);
+            }
+            if let Some(v) = perf.get("queryTimeout").and_then(|v| v.as_u64()) {
+                if v > 0 {
+                    config.query_timeout = Some(v as u32);
+                }
+            }
+            if let Some(v) = perf.get("heartbeat").and_then(|v| v.as_u64()) {
+                config.heartbeat_interval = Some(v as u32);
+            }
+            if let Some(v) = perf.get("maxReconnect").and_then(|v| v.as_u64()) {
+                config.max_reconnect = Some(v as u32);
+            }
+        }
+
+        if let Some(conn) = obj.get("connection").and_then(|v| v.as_object()) {
+            if config.connect_timeout.is_none() {
+                if let Some(v) = conn.get("connectTimeout").and_then(|v| v.as_u64()) {
+                    config.connect_timeout = Some(v as u32);
+                }
+            }
+            if config.query_timeout.is_none() {
+                if let Some(v) = conn.get("queryTimeout").and_then(|v| v.as_u64()) {
+                    if v > 0 {
+                        config.query_timeout = Some(v as u32);
+                    }
+                }
+            }
+            if config.heartbeat_interval.is_none() {
+                if let Some(v) = conn.get("keepAlive").and_then(|v| v.as_u64()) {
+                    config.heartbeat_interval = Some(v as u32);
+                }
+            }
+            if config.max_reconnect.is_none() {
+                if let Some(v) = conn.get("maxReconnect").and_then(|v| v.as_u64()) {
+                    config.max_reconnect = Some(v as u32);
+                }
+            }
+        }
+
+        if let Some(enc) = obj.get("encoding").and_then(|v| v.as_str()) {
+            config.encoding = Some(enc.to_string());
+        }
+    }
+
+    /// 解析 driver_properties JSON 并应用到 DriverConnectionConfig
+    fn apply_driver_properties(
+        config: &mut engine::driver::registry::DriverConnectionConfig,
+        json: &str,
+    ) {
+        let Ok(root) = serde_json::from_str::<serde_json::Value>(json) else {
+            return;
+        };
+        let Some(obj) = root.as_object() else { return };
+        for (k, v) in obj {
+            if let Some(s) = v.as_str() {
+                config.driver_properties.insert(k.clone(), s.to_string());
+            } else {
+                config.driver_properties.insert(k.clone(), v.to_string());
+            }
+        }
+    }
+
+    /// 构建“测试连接”用的驱动配置（与 `connect` 同源）。
+    ///
+    /// 与 `connect` 共用同一套规则：
+    /// 1. 认证档案凭据按 `auth_method`（回退档案 `auth_type`）注入 URL；
+    /// 2. 网络档案解析为 `ConnectionMethod` 后**真实建立隧道**并改写 URL——
+    ///    测试连接必须验证「档案配好就能连」，不建隧道会给出与真实连接相反的结论；
+    /// 3. 驱动属性 / 高级选项照常应用；`username` / `password` 从最终 URL 回填
+    ///    （`url_override` 以外的字段路径也需要它们，如驱动校验与旧版 URL 构建）。
+    ///
+    /// 返回 `(配置, 隧道守卫, 说明)`：
+    /// - `隧道守卫` 必须在探测期间保持存活（drop 即关闭隧道），由调用方持有；
+    /// - `说明` 是 UI 可见的测试范围提示（档案已生效 / 隧道已建立）。
+    ///
+    /// **严格模式（A2）**：引用的认证 / 网络档案不存在、读不出或无法注入时**返回错误**，
+    /// 而不是回退到“直连 + 无凭据”——测试结果必须与真实连接的可能结果一致。
+    ///
+    /// `global_db` 为 `None` 时回退进程全局单例；`DataSourceService` 传入自身库，
+    /// 测试可注入临时库。
+    ///
+    /// 公开为测试接缝（集成测试在同一进程内注入临时库，断言档案 → 配置的完整链路），
+    /// 生产调用方只有 `DataSourceService::test`。
+    pub async fn build_probe_config(
+        global_db: Option<&GlobalDatabaseManager>,
+        input: ProbeConfigInput<'_>,
+    ) -> Result<(DriverConnectionConfig, Vec<TunnelGuard>, Vec<String>), CoreError> {
+        let mut notes: Vec<String> = Vec::new();
+
+        // —— 1) 认证档案凭据（与 connect 同序：auth_method 优先，回退档案 auth_type）
+        let connection_type = if input.project_path.is_some() {
+            ConnectionType::Project
+        } else {
+            ConnectionType::Global
+        };
+        let url = Self::inject_auth_config_credentials(
+            global_db,
+            input.url,
+            input.auth_config_id,
+            input.auth_method,
+            connection_type,
+            input.project_path,
+        )
+        .await?;
+        if input.auth_config_id.is_some() {
+            notes.push("已应用认证档案凭据".to_string());
+        }
+
+        // —— 2) 网络档案：隧道在本函数调用方的作用域内建立与释放
+        let mut effective_url = url;
+        let mut guards: Vec<TunnelGuard> = Vec::new();
+        let mut network_method: Option<ConnectionMethod> = None;
+        if let Some(net_id) = input.network_config_id {
+            match resolve_network_method_with_project(Some(net_id), input.project_path).await {
+                Ok(Some(method)) => {
+                    let probe_id = format!("probe-{}", input.name);
+                    match connection::chain::apply_network_method(
+                        &effective_url,
+                        &Some(method.clone()),
+                        &probe_id,
+                        input.db_type,
+                    )
+                    .await
+                    {
+                        Ok((rewritten, g)) => {
+                            if !g.is_empty() {
+                                notes.push("已建立网络档案隧道".to_string());
+                            }
+                            effective_url = rewritten;
+                            guards = g;
+                        }
+                        // 隧道建不起来 = 真实连接同样起不来：不拿未改写的地址探测
+                        Err(e) => {
+                            return Err(CoreError::from(format!("网络档案应用失败：{e}")));
+                        }
+                    }
+                    network_method = Some(method);
+                }
+                // 引用了档案但解析不出连接方式（已删 / 类型未知 / 内容非法）：
+                // 直接失败，不拿直连结果冒充“档案已生效”（A2 严格模式）
+                Ok(None) => {
+                    return Err(CoreError::from(format!(
+                        "引用的网络配置无法解析（{net_id}）：请检查档案类型与内容"
+                    )));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        // —— 2.5) TLS 请求（结构化，与 URL 注入同一派生点）+ 「连接安全」内联 SSL 覆盖
+        let tls = tls_request_of(network_method.as_ref(), input.advanced_options);
+        if let Some(with_ssl) = Self::apply_inline_ssl_override(
+            &effective_url,
+            input.db_type,
+            input.advanced_options,
+            network_method.as_ref(),
+        )? {
+            effective_url = with_ssl;
+            notes.push("已应用「连接安全」SSL 覆盖".to_string());
+        }
+
+        // —— 3) 驱动配置：URL 为准（url_override），字段凭据从最终 URL 回填
+        let mut config = DriverConnectionConfig::new(input.db_type)
+            .with_url_override(&effective_url)
+            .with_name(input.name)
+            .with_tls(tls);
+        let (url_user, url_pass) = connection::url::extract_credentials_from_url(&effective_url);
+        if let Some(user) = input.username.map(str::to_string).or(url_user) {
+            config = config.with_username(user);
+        }
+        if let Some(pass) = input.password.map(str::to_string).or(url_pass) {
+            config = config.with_password(pass);
+        }
+        if let Some(opts) = input.advanced_options {
+            Self::apply_advanced_options(&mut config, opts);
+        }
+        if let Some(props) = input.driver_properties {
+            Self::apply_driver_properties(&mut config, props);
+        }
+
+        Ok((config, guards, notes))
+    }
+
+    /// 把「连接安全」表单里的 SSL 覆盖（`advanced_options.ssl`）应用到 URL。
+    ///
+    /// 优先级：**网络档案 > 内联覆盖**——档案是显式选的连接方式（含 SSH / 代理 / 多跳链），
+    /// 内联覆盖只是表单兜底；两者同时存在且档案里已有 SSL 跳时，档案生效并记日志。
+    ///
+    /// 返回 `Ok(None)` = 没有可应用的内联覆盖（无字段 / 模式非法 / `disable` / 档案优先）。
+    /// 返回 `Ok(Some(url))` = 已注入。返回 `Err` = 该驱动做不到这个请求（**不静默降级**，
+    /// 典型：Official 驱动 + 要校验证书，见 `connection::url_params::append_ssl_params`）。
+    fn apply_inline_ssl_override(
+        url: &str,
+        driver: &str,
+        advanced_options: Option<&str>,
+        network_method: Option<&ConnectionMethod>,
+    ) -> Result<Option<String>, CoreError> {
+        let Some((mode, ssl)) = inline_ssl_override(advanced_options) else {
+            return Ok(None);
+        };
+        if method_has_ssl_hop(network_method) {
+            tracing::info!(
+                driver,
+                "网络档案已含 SSL 跳，跳过「连接安全」内联覆盖（档案优先）"
+            );
+            return Ok(None);
+        }
+        let out = connection::url_params::append_ssl_params(url, driver, mode, &ssl)?;
+        tracing::info!(
+            driver,
+            mode = mode.as_str(),
+            "已应用「连接安全」内联 SSL 覆盖"
+        );
+        Ok(Some(out))
+    }
+
+    /// 未配置 SSL 档案 + LAN / 本机 + sqlx 驱动（`mysql` / `postgres`）时，
+    /// 在 URL 上显式关闭 TLS——规避 sqlx 默认 `sslmode=prefer` 在这些目标上的握手卡顿。
+    ///
+    /// 仅在「无网络方式或 `Direct`」时生效；SSH / 代理 / SSL 档案一律不动。
+    fn apply_lan_tls_default(
+        mut url: String,
+        db_type: &str,
+        network_method: Option<&ConnectionMethod>,
+    ) -> String {
+        let is_sqlx = matches!(db_type, "mysql" | "postgres");
+        if !is_sqlx || !settings::connection_defaults().lan_disable_tls {
+            return url;
+        }
+        let direct = match network_method {
+            None | Some(ConnectionMethod::Direct) => true,
+            _ => false,
+        };
+        if !direct || !is_lan_url(&url) {
+            return url;
+        }
+        let (key, param) = if db_type == "postgres" {
+            ("sslmode=", "sslmode=disable")
+        } else {
+            ("ssl-mode=", "ssl-mode=DISABLED")
+        };
+        if url.to_ascii_lowercase().contains(key) {
+            return url;
+        }
+        url.push(if url.contains('?') { '&' } else { '?' });
+        url.push_str(param);
+        url
+    }
+
+    /// 根据数据库类型创建对应的数据库实例
+    /// 通过 DataSourceRouter 路由到 DriverRegistry 动态创建
+    ///
+    /// `tls` 是结构化 TLS 请求（证书路径 / 校验意图）：native 驱动需要它构造 TLS 连接器，
+    /// sqlx 驱动只读 URL 参数（由调用方先注入）。
+    async fn create_database(
+        &self,
+        db_type: &str,
+        url: &str,
+        driver_properties: Option<&str>,
+        tls: Option<connection::config::TlsRequest>,
+    ) -> Result<DynDatabase, CoreError> {
+        let mut config = DriverConnectionConfig::new(db_type)
+            .with_url_override(url)
+            .with_tls(tls);
+        if let Some(props_json) = driver_properties {
+            Self::apply_driver_properties(&mut config, props_json);
+        }
+        DataSourceRouter::route(config).await
+    }
+
+    /// 指纹接线：把 `conn_id → 身份指纹` 登记进进程内注册表。
+    ///
+    /// 供连接建立 / 保存路径调用；`MetadataCacheManager` 与 `NavCache` 建缓存路径时
+    /// 查注册表取指纹（`meta_{fp}.sqlite`），同一物理库的多条连接在作用域域内共享。
+    /// 不可共享（内存库 / 地址空 / 驱动族未知）时静默跳过 → 缓存回退 conn_id 分文件。
+    ///
+    /// `db_type` 用**驱动族 id**（`mysql` / `postgres` / `sqlite` / `duckdb`），
+    /// principal 优先取显式用户名（调用方在 `url` 已注入凭据时从 URL 提取）。
+    pub fn register_identity_fingerprint(
+        &self,
+        conn_id: &str,
+        db_type: &str,
+        url: &str,
+        schema_name: Option<&str>,
+    ) {
+        // principal：优先 URL 内凭据；无法提取时回落「匿名」（`-`，见 metadata_identity 归一）。
+        let principal = connection::url::extract_credentials_from_url(url).0;
+        // 驱动默认端口参与地址归一（`h/db` ≡ `h:3306/db`）；查不到默认端口时置 None。
+        let default_port = DriverRegistry::get(db_type)
+            .and_then(|f| f.descriptor().default_port);
+        let identity = engine::persistence::identity_from_url(
+            db_type,
+            url,
+            principal.as_deref(),
+            schema_name,
+            default_port,
+        );
+        if let Some(identity) = identity {
+            engine::persistence::register_identity(conn_id, &identity);
+            tracing::debug!(conn_id = %conn_id, "已登记元数据缓存身份指纹");
+        }
+    }
+
+    /// 回收某连接的隧道守卫（守卫 drop 即关闭本地端口与后台 accept 循环）。
+    async fn release_tunnels(&self, conn_id: &str, reason: &str) {
+        let guards = self.tunnels.take(conn_id).await;
+        if !guards.is_empty() {
+            tracing::info!(conn_id = %conn_id, count = guards.len(), reason, "清理隧道守卫");
+            drop(guards);
+        }
+    }
+
+    /// 关闭指定连接（**保留元数据缓存**）。
+    ///
+    /// 依据设计 `database-navigator-prototype-design.md` §5.2：断开只关闭运行时连接，
+    /// 不删除 L2 元数据缓存（支持离线浏览 / 重连秒开）；清理仅经显式「缓存管理」入口。
+    pub async fn close_connection(&self, conn_id: &str) -> Result<(), CoreError> {
+        // 清理隧道守卫（释放本地端口 + 取消后台任务）
+        self.release_tunnels(conn_id, "关闭连接").await;
+
+        // 断开回收 DuckDB Secret（2026-10-03 规则："加速关 / 断开 → 移除"）。
+        // 目标分析库按作用域（P_/GP_ 项目侧需要项目路径，从连接信息取）；
+        // 未注册过不算失败；重连时连接路径会按门控重新注册。
+        let project_id = self
+            .manager
+            .get_connection_info(&conn_id.to_string())
+            .await
+            .and_then(|info| info.project_id);
+        let _ = crate::services::secret_integration::remove_connection_secret_at(
+            crate::services::secret_integration::analysis_db_for_scope(
+                conn_id,
+                project_id.as_deref(),
+            )
+            .as_deref(),
+            conn_id,
+        );
+
+        // 从连接管理器中移除连接（缓存文件保留）
+        self.manager.remove_connection(&conn_id.to_string()).await;
+
+        Ok(())
+    }
+
+    }
+
+/// 从全局 DB 解析 network_config_id → ConnectionMethod
+///
+/// 只查询全局 network_configs 表（测试连接场景）
+/// 根据 config 中的 network_type 字段进行 JSON 反序列化
+/// URL 主机是否为 LAN / 本机（仅按 `localhost` 与 IP 字面量判定，不做 DNS 解析）。
+/// 解析「连接安全」表单的内联 SSL 覆盖（`advanced_options.ssl`）。
+///
+/// 结构（对话框 `collect` 写入）：`{"ssl": {"mode": "require", "ca": "…", "cert": "…", "key": "…"}}`，
+/// 模式词汇见 [`SslMode`]。`disable` / 模式缺失或非法 / 无 `ssl` 字段 → `None`（不注入）。
+/// **不造默认值**：证书路径为空就不追加（由 `append_ssl_params` 跳过）。
+fn inline_ssl_override(advanced_options: Option<&str>) -> Option<(SslMode, SslConfig)> {
+    let root: serde_json::Value = serde_json::from_str(advanced_options?).ok()?;
+    let ssl = root.get("ssl")?.as_object()?;
+    let mode = SslMode::parse(ssl.get("mode")?.as_str()?)?;
+    if mode == SslMode::Disable {
+        return None;
+    }
+    let path = |key: &str| {
+        ssl.get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    Some((
+        mode,
+        SslConfig {
+            verify_server_cert: mode.requires_verification(),
+            ca_cert_path: path("ca"),
+            client_cert_path: path("cert"),
+            client_key_path: path("key"),
+            ..Default::default()
+        },
+    ))
+}
+
+/// 网络方式里是否已含 SSL 跳（**任一** SSL 跳，含被代理嵌套层接管的那些）。
+///
+/// 用于「档案优先」判定：档案里表了 TLS 意图，内联覆盖就不应该再往同一 URL 里加参数。
+fn method_has_ssl_hop(method: Option<&ConnectionMethod>) -> bool {
+    match method {
+        Some(ConnectionMethod::Ssl(_)) => true,
+        Some(ConnectionMethod::Chain(hops)) => hops.iter().any(|h| matches!(h, ChainHop::Ssl(_))),
+        _ => false,
+    }
+}
+
+/// 派生结构化 TLS 请求（**唯一来源**）：网络档案的 SSL 跳优先，「连接安全」内联覆盖次之。
+///
+/// 与 URL 注入同一套规则（`append_ssl_params` 写 URL、`TlsRequest` 进驱动），
+/// 两边必须成对使用：native 驱动的证书与 verify 档只能走后者。
+fn tls_request_of(
+    network_method: Option<&ConnectionMethod>,
+    advanced_options: Option<&str>,
+) -> Option<connection::config::TlsRequest> {
+    if let Some(cfg) = profile_ssl_config(network_method) {
+        return Some(connection::config::TlsRequest::new(
+            SslMode::from_ssl_config(&cfg),
+            cfg,
+        ));
+    }
+    let (mode, ssl) = inline_ssl_override(advanced_options)?;
+    Some(connection::config::TlsRequest::new(mode, ssl))
+}
+
+/// 网络方式里**真正生效**的 SSL 配置（单跳 `Ssl`，或链里第一个未被代理接管的 SSL 跳）。
+///
+/// 「被代理接管」= 前一个 hop 是代理：那种写法下 TLS 由 Proxy→SSL 嵌套层建，
+/// 数据库驱动**不应**再在隧道里做一次 TLS（与 `url_params::inject_chain_ssl_params` 同一跳过规则）。
+fn profile_ssl_config(method: Option<&ConnectionMethod>) -> Option<SslConfig> {
+    match method {
+        Some(ConnectionMethod::Ssl(cfg)) => Some(cfg.clone()),
+        Some(ConnectionMethod::Chain(hops)) => {
+            hops.iter().enumerate().find_map(|(i, hop)| {
+                let preceded_by_proxy = i > 0
+                    && matches!(
+                        hops[i - 1],
+                        ChainHop::HttpProxy(_) | ChainHop::SocksProxy(_)
+                    );
+                match hop {
+                    ChainHop::Ssl(cfg) if !preceded_by_proxy => Some(cfg.clone()),
+                    _ => None,
+                }
+            })
+        }
+        _ => None,
+    }
+}
+
+fn is_lan_url(url: &str) -> bool {
+    let Some(rest) = url.split("://").nth(1) else {
+        return false;
+    };
+    // 去掉 userinfo：`user:pass@host:port/...` → `host:port/...`（密码可能含 `@`，取最后一个）。
+    let host_port = rest.rsplit('@').next().unwrap_or(rest);
+    let host = if let Some(inner) = host_port.strip_prefix('[') {
+        inner.split(']').next().unwrap_or("")
+    } else {
+        host_port.split([':', '/', '?']).next().unwrap_or("")
+    };
+    let host = host.trim();
+    if host.is_empty() {
+        return false;
+    }
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
+        Ok(std::net::IpAddr::V6(v6)) => v6.is_loopback(),
+        Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::network::parse_network_config_json;
+
+    /// 内联 SSL 覆盖的解析（纯函数）：只认 `advanced_options.ssl`，不造默认值。
+    #[test]
+    fn inline_ssl_override_reads_form_fields_only() {
+        // 未填 SSL / 空 JSON / 非法 JSON → 不注入
+        assert!(inline_ssl_override(None).is_none());
+        assert!(inline_ssl_override(Some("{}")).is_none());
+        assert!(inline_ssl_override(Some("not json")).is_none());
+        assert!(inline_ssl_override(Some(r#"{"ssl":{}}"#)).is_none());
+        // disable / 未知模式 → 不注入（不要 TLS 就不写 URL 参数）
+        assert!(inline_ssl_override(Some(r#"{"ssl":{"mode":"disable"}}"#)).is_none());
+        assert!(inline_ssl_override(Some(r#"{"ssl":{"mode":"maybe"}}"#)).is_none());
+
+        // require：不校验证书；未填的证书路径保持 None
+        let (mode, ssl) = inline_ssl_override(Some(r#"{"ssl":{"mode":"require"}}"#)).unwrap();
+        assert_eq!(mode, SslMode::Require);
+        assert!(!ssl.verify_server_cert);
+        assert!(ssl.ca_cert_path.is_none() && ssl.client_cert_path.is_none());
+
+        // verify-ca + 证书三件套（空白视为未填）
+        let json = r#"{"ssl":{"mode":"verify-ca","ca":" /ca.pem ","cert":"","key":"/key.pem"},
+                      "policy_overrides":["security"]}"#;
+        let (mode, ssl) = inline_ssl_override(Some(json)).unwrap();
+        assert_eq!(mode, SslMode::VerifyCa);
+        assert!(ssl.verify_server_cert);
+        assert_eq!(ssl.ca_cert_path.as_deref(), Some("/ca.pem"));
+        assert!(ssl.client_cert_path.is_none(), "空字符串不算证书路径");
+        assert_eq!(ssl.client_key_path.as_deref(), Some("/key.pem"));
+    }
+
+    /// TLS 请求派生（与 URL 注入同一套规则，两边必须成对）：
+    /// 档案 SSL 优先 → 内联覆盖次之；被代理接管的 SSL 跳**不给驱动**（那层 TLS 由嵌套层做）。
+    #[test]
+    fn tls_request_derivation_matches_url_injection_rules() {
+        // 档案 SSL 优先于内联覆盖；档案只有 verify 布尔（无 CA 路径）→ Require（既有映射）
+        let method = ConnectionMethod::Ssl(SslConfig {
+            verify_server_cert: true,
+            ..Default::default()
+        });
+        let got = tls_request_of(Some(&method), Some(r#"{"ssl":{"mode":"require"}}"#))
+            .expect("档案 SSL 应派生请求");
+        assert_eq!(
+            got.mode,
+            SslMode::Require,
+            "档案 verify=true 但没给 CA → REQUIRE（与 SslMode::from_ssl_config 同一口径）"
+        );
+
+        // 档案带 CA 路径 → VERIFY_CA（并且内联覆盖仍被档案压住）
+        let method_with_ca = ConnectionMethod::Ssl(SslConfig {
+            verify_server_cert: true,
+            ca_cert_path: Some("/profile-ca.pem".to_string()),
+            ..Default::default()
+        });
+        let got = tls_request_of(Some(&method_with_ca), Some(r#"{"ssl":{"mode":"require"}}"#))
+            .expect("档案 SSL 应派生请求");
+        assert_eq!(got.mode, SslMode::VerifyCa);
+        assert_eq!(got.ca_path(), Some("/profile-ca.pem"), "用的是档案的 CA");
+
+        // 无档案 SSL → 内联覆盖（含证书路径与 verify 意图）
+        let got = tls_request_of(
+            Some(&ConnectionMethod::Direct),
+            Some(r#"{"ssl":{"mode":"verify-full","ca":"/ca.pem"}}"#),
+        )
+        .expect("内联覆盖应派生请求");
+        assert_eq!(got.mode, SslMode::VerifyFull);
+        assert_eq!(got.ca_path(), Some("/ca.pem"));
+        assert!(got.verifies_chain() && got.verifies_hostname());
+
+        // 什么都没有 → 无请求（驱动保持历史默认）
+        assert!(tls_request_of(Some(&ConnectionMethod::Direct), None).is_none());
+
+        // 链里 SSL 紧跟代理：URL 侧跳过（`inject_chain_ssl_params`），驱动侧也不应做 TLS
+        let chain = ConnectionMethod::Chain(vec![
+            ChainHop::SocksProxy(connection::config::ProxyConfig {
+                host: "127.0.0.1".to_string(),
+                port: 1080,
+                auth: None,
+                no_proxy: Vec::new(),
+                timeout_secs: 10,
+            }),
+            ChainHop::Ssl(SslConfig {
+                verify_server_cert: true,
+                ..Default::default()
+            }),
+        ]);
+        assert!(
+            profile_ssl_config(Some(&chain)).is_none(),
+            "被代理接管的 SSL 跳不应交给驱动"
+        );
+        assert!(
+            method_has_ssl_hop(Some(&chain)),
+            "但「档案优先」判定仍然生效（内联覆盖不得往同一 URL 再叠参数）"
+        );
+    }
+
+    /// 档案优先：网络方式里已有 SSL 跳时，内联覆盖不重复注入。
+    #[test]
+    fn inline_ssl_yields_to_network_profile_ssl() {
+        let ssl_cfg = SslConfig {
+            verify_server_cert: false,
+            ..Default::default()
+        };
+        assert!(method_has_ssl_hop(Some(&ConnectionMethod::Ssl(ssl_cfg.clone()))));
+        assert!(method_has_ssl_hop(Some(&ConnectionMethod::Chain(vec![
+            ChainHop::Ssl(ssl_cfg)
+        ]))));
+        assert!(!method_has_ssl_hop(Some(&ConnectionMethod::Direct)));
+        assert!(!method_has_ssl_hop(None));
+    }
+
+    #[tokio::test]
+    async fn network_config_type_keys_are_normalized() {
+        // UI / 历史数据写入的是 `SSH` / `Proxy` 这类大写标签；解析必须大小写无关，
+        // 否则「档案存在但整条链静默不生效」（审计 #20）。
+        let proxy =
+            parse_network_config_json("Proxy", r#"{"host":"127.0.0.1","port":1080}"#, None, None)
+                .await
+                .expect("parse proxy");
+        assert!(matches!(proxy, Some(ConnectionMethod::HttpProxy(_))));
+
+        let socks =
+            parse_network_config_json("SOCKS5", r#"{"host":"127.0.0.1","port":1080}"#, None, None)
+                .await
+                .expect("parse socks");
+        assert!(matches!(socks, Some(ConnectionMethod::SocksProxy(_))));
+
+        // 未知类型：不 panic，返回 None（并告警）。
+        let unknown = parse_network_config_json("proxy_pwd", "{}", None, None)
+            .await
+            .expect("parse unknown");
+        assert!(unknown.is_none());
+    }
+
+    /// A2：引用了网络档案但入口未解析出连接方式（档案被删 / 类型未知）→ 拒绝静默直连。
+    ///
+    /// 不建隧道、不碰数据库：错误必须在进入 `apply_network_method` 之前就产生。
+    #[tokio::test]
+    async fn referenced_network_profile_without_method_is_rejected() {
+        let manager = Arc::new(ConnectionManager::new());
+        let service = ConnectionService::new(manager);
+        let req = ConnectRequest {
+            conn_id: None,
+            db_type: "mysql".into(),
+            url: "mysql://h:3306/db".into(),
+            name: Some("a2_guard".into()),
+            connection_type: ConnectionType::Global,
+            project_path: None,
+            description: None,
+            driver_id: None,
+            environment_id: None,
+            auth_config_id: None,
+            auth_method: None,
+            // 引用了档案，但 network_method 为 None（入口解析失败）
+            network_config_id: Some("G_net_missing".into()),
+            driver_properties: None,
+            advanced_options: None,
+            options: None,
+            tags: None,
+            metadata_path: None,
+            schema_name: None,
+            use_duckdb_fed: None,
+            password: None,
+            skip_persistence: Some(true),
+            network_method: None,
+        };
+        let err = service
+            .connect_with_type(req)
+            .await
+            .err()
+            .expect("引用了网络档案却没有连接方式时必须失败");
+        assert!(err.to_string().contains("网络配置无法解析"), "{err}");
+    }
+
+    #[test]
+    fn lan_host_detection_covers_private_and_loopback() {
+        assert!(is_lan_url("mysql://root:pw@192.168.3.138:3306/db"));
+        assert!(is_lan_url("postgres://u:p@10.0.0.5:5432/db"));
+        assert!(is_lan_url("postgres://u:p@172.16.0.9/db"));
+        assert!(is_lan_url("postgres://u:p@localhost:5432/db"));
+        assert!(is_lan_url("postgres://u:p@[::1]:5432/db"));
+        // 公网 / 域名 / 文件库路径不是 LAN。
+        assert!(!is_lan_url("mysql://u:p@8.8.8.8:3306/db"));
+        assert!(!is_lan_url("postgres://u:p@db.example.com:5432/db"));
+        assert!(!is_lan_url("sqlite://D:\\data\\x.db"));
+    }
+
+    #[test]
+    fn lan_tls_default_only_touches_sqlx_direct_lan() {
+        let apply = |url: &str, db: &str| {
+            ConnectionService::apply_lan_tls_default(url.to_string(), db, None)
+        };
+
+        // sqlx + LAN：追加关闭 TLS 参数。
+        assert_eq!(
+            apply("mysql://root:pw@192.168.3.138:3306/mysql", "mysql"),
+            "mysql://root:pw@192.168.3.138:3306/mysql?ssl-mode=DISABLED"
+        );
+        assert_eq!(
+            apply("postgres://u:p@10.0.0.5:5432/db", "postgres"),
+            "postgres://u:p@10.0.0.5:5432/db?sslmode=disable"
+        );
+        // 已带 `?param=` 时用 `&` 追加。
+        assert_eq!(
+            apply(
+                "postgres://u:p@10.0.0.5:5432/db?application_name=x",
+                "postgres"
+            ),
+            "postgres://u:p@10.0.0.5:5432/db?application_name=x&sslmode=disable"
+        );
+        // 原生驱动 / 公网 / 已有同名参数：不动。
+        assert_eq!(
+            apply("postgres://u:p@10.0.0.5:5432/db", "postgres_native"),
+            "postgres://u:p@10.0.0.5:5432/db"
+        );
+        assert_eq!(
+            apply("mysql://u:p@8.8.8.8:3306/db", "mysql"),
+            "mysql://u:p@8.8.8.8:3306/db"
+        );
+        assert_eq!(
+            apply(
+                "postgres://u:p@10.0.0.5:5432/db?sslmode=require",
+                "postgres"
+            ),
+            "postgres://u:p@10.0.0.5:5432/db?sslmode=require"
+        );
+    }
+}
