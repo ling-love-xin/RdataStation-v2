@@ -57,6 +57,28 @@ pub struct ResultPanel {
     pub color_bool: workbench_shell::result_style::ColorRolePref,
     #[serde(default)]
     pub color_blob: workbench_shell::result_style::ColorRolePref,
+    /// 【类型样式】按族背景色（默认全部无背景；语义角色浅底 + 自定义 hex）。
+    #[serde(default)]
+    pub bg_numeric: workbench_shell::result_style::BgColorPref,
+    #[serde(default)]
+    pub bg_text: workbench_shell::result_style::BgColorPref,
+    #[serde(default)]
+    pub bg_temporal: workbench_shell::result_style::BgColorPref,
+    #[serde(default)]
+    pub bg_bool: workbench_shell::result_style::BgColorPref,
+    #[serde(default)]
+    pub bg_blob: workbench_shell::result_style::BgColorPref,
+    /// 【类型样式】按族字体样式（默认全部跟随类型默认）。
+    #[serde(default)]
+    pub font_numeric: workbench_shell::result_style::FontStylePref,
+    #[serde(default)]
+    pub font_text: workbench_shell::result_style::FontStylePref,
+    #[serde(default)]
+    pub font_temporal: workbench_shell::result_style::FontStylePref,
+    #[serde(default)]
+    pub font_bool: workbench_shell::result_style::FontStylePref,
+    #[serde(default)]
+    pub font_blob: workbench_shell::result_style::FontStylePref,
 }
 
 impl Default for ResultPanel {
@@ -82,6 +104,16 @@ impl Default for ResultPanel {
             color_temporal: workbench_shell::result_style::ColorRolePref::Inherit,
             color_bool: workbench_shell::result_style::ColorRolePref::Inherit,
             color_blob: workbench_shell::result_style::ColorRolePref::Inherit,
+            bg_numeric: workbench_shell::result_style::BgColorPref::Inherit,
+            bg_text: workbench_shell::result_style::BgColorPref::Inherit,
+            bg_temporal: workbench_shell::result_style::BgColorPref::Inherit,
+            bg_bool: workbench_shell::result_style::BgColorPref::Inherit,
+            bg_blob: workbench_shell::result_style::BgColorPref::Inherit,
+            font_numeric: workbench_shell::result_style::FontStylePref::Inherit,
+            font_text: workbench_shell::result_style::FontStylePref::Inherit,
+            font_temporal: workbench_shell::result_style::FontStylePref::Inherit,
+            font_bool: workbench_shell::result_style::FontStylePref::Inherit,
+            font_blob: workbench_shell::result_style::FontStylePref::Inherit,
         }
     }
 }
@@ -90,7 +122,7 @@ impl ResultPanel {
     /// 【类型样式】导出为渲染消费用的聚合偏好。
     ///
     /// 消费方（editor host 构造同步 / workbench 设置变更推送）都从这里取，
-    /// 不必各自把 13 项字段再拼一遍；偏好与模型字段一一对应。
+    /// 不必各自把 23 项字段再拼一遍；偏好与模型字段一一对应。
     pub fn type_style(&self) -> workbench_shell::result_style::TypeStylePrefs {
         workbench_shell::result_style::TypeStylePrefs {
             number_format: self.number_format,
@@ -106,6 +138,16 @@ impl ResultPanel {
             color_temporal: self.color_temporal,
             color_bool: self.color_bool,
             color_blob: self.color_blob,
+            bg_numeric: self.bg_numeric.clone(),
+            bg_text: self.bg_text.clone(),
+            bg_temporal: self.bg_temporal.clone(),
+            bg_bool: self.bg_bool.clone(),
+            bg_blob: self.bg_blob.clone(),
+            font_numeric: self.font_numeric,
+            font_text: self.font_text,
+            font_temporal: self.font_temporal,
+            font_bool: self.font_bool,
+            font_blob: self.font_blob,
         }
     }
 }

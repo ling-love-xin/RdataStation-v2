@@ -256,6 +256,99 @@ impl ColorRolePref {
     }
 }
 
+/// 按族背景色偏好（语义角色浅色变体 + 自定义 hex；`inherit` = 无背景色）。
+///
+/// 渲染时语义角色 → `theme.colors.<role>.opacity(0.16)`（浅底，与脏格底色同透明度口径）；
+/// 自定义 hex → `Colorize::parse_hex` 解析（gpui-component 现成 API），非法值回退无背景。
+/// 落盘经 serde（unit 变体 = 字符串；`Custom` = `{"custom":"#rrggbb"}`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BgColorPref {
+    /// 无背景色（默认）。
+    #[default]
+    Inherit,
+    /// 信息蓝浅底。
+    Info,
+    /// 成功绿浅底。
+    Success,
+    /// 警告橙浅底。
+    Warning,
+    /// 危险红浅底。
+    Danger,
+    /// 主品牌浅底。
+    Primary,
+    /// 弱化灰浅底。
+    Muted,
+    /// 自定义 hex（`#rrggbb`；渲染用 `Colorize::parse_hex`，非法值回退无背景）。
+    Custom(String),
+}
+
+impl BgColorPref {
+    /// 设置页 / 日志用的落盘值文本（`Custom` 无固定落盘文本，归入 `custom` 档；
+    /// 具体色值由 serde 序列化承载，设置页自定义色交互走后续 ColorSelect）。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BgColorPref::Inherit => "inherit",
+            BgColorPref::Info => "info",
+            BgColorPref::Success => "success",
+            BgColorPref::Warning => "warning",
+            BgColorPref::Danger => "danger",
+            BgColorPref::Primary => "primary",
+            BgColorPref::Muted => "muted",
+            BgColorPref::Custom(_) => "custom",
+        }
+    }
+
+    /// 文本值 → 偏好；`custom` 文本无法还原 hex，保守回退无背景
+    /// （自定义色主路径是 serde 反序列化，不经过本函数）。
+    pub fn parse(text: &str) -> Self {
+        match text {
+            "info" => BgColorPref::Info,
+            "success" => BgColorPref::Success,
+            "warning" => BgColorPref::Warning,
+            "danger" => BgColorPref::Danger,
+            "primary" => BgColorPref::Primary,
+            "muted" => BgColorPref::Muted,
+            _ => BgColorPref::Inherit,
+        }
+    }
+}
+
+/// 按族字体样式覆盖（`inherit` = 跟随类型默认——NULL 灰斜体等硬编码语义保持）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FontStylePref {
+    /// 跟随类型默认（NULL 斜体 / 等宽等既有语义不变）。
+    #[default]
+    Inherit,
+    Bold,
+    Italic,
+    Underline,
+    LineThrough,
+}
+
+impl FontStylePref {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FontStylePref::Inherit => "inherit",
+            FontStylePref::Bold => "bold",
+            FontStylePref::Italic => "italic",
+            FontStylePref::Underline => "underline",
+            FontStylePref::LineThrough => "line_through",
+        }
+    }
+
+    pub fn parse(text: &str) -> Self {
+        match text {
+            "bold" => FontStylePref::Bold,
+            "italic" => FontStylePref::Italic,
+            "underline" => FontStylePref::Underline,
+            "line_through" => FontStylePref::LineThrough,
+            _ => FontStylePref::Inherit,
+        }
+    }
+}
+
 /// 结果集「类型样式」偏好的聚合（落盘在 `settings.json` 的 `result_panel` 节下）。
 ///
 /// 全局统一生效（用户拍板：先做全局，不做 per-结果集覆盖）；每个族两项
@@ -293,6 +386,28 @@ pub struct TypeStylePrefs {
     pub color_bool: ColorRolePref,
     #[serde(default)]
     pub color_blob: ColorRolePref,
+    /// 按族背景色（默认全部无背景）。
+    #[serde(default)]
+    pub bg_numeric: BgColorPref,
+    #[serde(default)]
+    pub bg_text: BgColorPref,
+    #[serde(default)]
+    pub bg_temporal: BgColorPref,
+    #[serde(default)]
+    pub bg_bool: BgColorPref,
+    #[serde(default)]
+    pub bg_blob: BgColorPref,
+    /// 按族字体样式（默认全部跟随类型默认）。
+    #[serde(default)]
+    pub font_numeric: FontStylePref,
+    #[serde(default)]
+    pub font_text: FontStylePref,
+    #[serde(default)]
+    pub font_temporal: FontStylePref,
+    #[serde(default)]
+    pub font_bool: FontStylePref,
+    #[serde(default)]
+    pub font_blob: FontStylePref,
 }
 
 impl TypeStylePrefs {
@@ -317,6 +432,28 @@ impl TypeStylePrefs {
             TypeFamily::Blob => self.color_blob,
         }
     }
+
+    /// 某族的背景色。
+    pub fn bg_for(&self, family: TypeFamily) -> &BgColorPref {
+        match family {
+            TypeFamily::Numeric => &self.bg_numeric,
+            TypeFamily::Text => &self.bg_text,
+            TypeFamily::Temporal => &self.bg_temporal,
+            TypeFamily::Boolean => &self.bg_bool,
+            TypeFamily::Blob => &self.bg_blob,
+        }
+    }
+
+    /// 某族的字体样式。
+    pub fn font_for(&self, family: TypeFamily) -> FontStylePref {
+        match family {
+            TypeFamily::Numeric => self.font_numeric,
+            TypeFamily::Text => self.font_text,
+            TypeFamily::Temporal => self.font_temporal,
+            TypeFamily::Boolean => self.font_bool,
+            TypeFamily::Blob => self.font_blob,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -335,6 +472,13 @@ mod tests {
         assert_eq!(AlignPref::parse("0"), AlignPref::Inherit);
         assert_eq!(ColorRolePref::parse("info"), ColorRolePref::Info);
         assert_eq!(ColorRolePref::parse("red"), ColorRolePref::Inherit);
+        assert_eq!(BgColorPref::parse("warning"), BgColorPref::Warning);
+        // custom 文本无法还原 hex，保守回退无背景（自定义色主路径是 serde）
+        assert_eq!(BgColorPref::parse("custom"), BgColorPref::Inherit);
+        assert_eq!(BgColorPref::parse("???"), BgColorPref::Inherit);
+        assert_eq!(FontStylePref::parse("bold"), FontStylePref::Bold);
+        assert_eq!(FontStylePref::parse("line_through"), FontStylePref::LineThrough);
+        assert_eq!(FontStylePref::parse("x"), FontStylePref::Inherit);
     }
 
     #[test]
@@ -346,6 +490,8 @@ mod tests {
         for family in TypeFamily::ALL {
             assert_eq!(prefs.align_for(family), AlignPref::Inherit);
             assert_eq!(prefs.color_for(family), ColorRolePref::Inherit);
+            assert_eq!(prefs.bg_for(family), &BgColorPref::Inherit);
+            assert_eq!(prefs.font_for(family), FontStylePref::Inherit);
         }
     }
 
@@ -355,10 +501,14 @@ mod tests {
             number_format: NumberFormatPref::Grouped,
             align_numeric: AlignPref::Right,
             color_temporal: ColorRolePref::Info,
+            bg_blob: BgColorPref::Custom("#ff0000".into()),
+            font_bool: FontStylePref::Bold,
             ..Default::default()
         };
         let json = serde_json::to_string(&prefs).unwrap();
         let back: TypeStylePrefs = serde_json::from_str(&json).unwrap();
         assert_eq!(back, prefs);
+        // 自定义背景色走 newtype 变体序列化（{"custom":"#ff0000"}），可往返
+        assert!(json.contains("\"bg_blob\":{\"custom\":\"#ff0000\"}"));
     }
 }

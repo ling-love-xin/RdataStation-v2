@@ -57,6 +57,15 @@ cargo check -p rds-editor -p rds-workbench -p rds-workbench-shell  # 通过（wo
 ### 2.1 提交待办（代码已就位、已验证，未提交——因与并行线同文件混合）
 
 > **2026-10-29 核对：本小节为历史性记录，相关代码已随后续提交全部入库**（settings 拆分 `b4791fa0`、result_panel 拆分 `4621c8fa`、并行线 editor 拆分 `727e79fe`），不再属于待办。保留小节作历史参考。
+>
+> **2026-10-30 更新：类型样式扩展（背景色 5 项 + 字体样式 5 项，13 → 23 项）已落地并提交**——
+> `result_style.rs` 新增 `BgColorPref`（6 语义角色浅底 + `Custom(String)` hex）与
+> `FontStylePref`（Bold/Italic/Underline/LineThrough）；settings model / registry
+> （Slot 10 变体 + key 映射 + kind_tags）/ entries（bg/font 两组 spec）/ service
+> （apply/get 各 10 分支 / 分派 match）全链路接线；`grid/cell.rs` render_td 铺底
+> （语义角色 `opacity(0.16)` / Custom 走 `Colorize::parse_hex`，优先级：类型背景 <
+> 本地行 < 脏格 / 冲突格）+ 字体五档挂载。验证：`cargo test -p rds-result-panel --lib`
+> = 213 passed、`-p rds-workbench-shell` = 13 passed、`-p rds-settings --lib` = 34 passed。
 
 **类型样式设置渲染消费**（`4373705c` 之后的消费侧，代码完成并通过编译测试）：
 
@@ -72,7 +81,7 @@ cargo check -p rds-editor -p rds-workbench -p rds-workbench-shell  # 通过（wo
 
 ### 2.2 外线阻塞（非本线，接手需知悉）
 
-- **settings `--lib` 契约测试编译失败（E0004 非穷尽匹配）**：并行线在 `registry.rs` 登记了 `navigator.show_chips` / `navigator.show_search` / `scratchpad.group_max_h` 三个 Slot，但 `lib.rs` 的 get/apply 分支未补齐。本线 13 项登记齐全，**不应替并行线补分支**；等并行线补完，settings 回归即全绿。
+- **settings `--lib` 契约测试编译失败（E0004 非穷尽匹配）**：并行线在 `registry.rs` 登记了 `navigator.show_chips` / `navigator.show_search` / `scratchpad.group_max_h` 三个 Slot，但 `lib.rs` 的 get/apply 分支未补齐。本线 13 项登记齐全，**不应替并行线补分支**；等并行线补完，settings 回归即全绿。**2026-10-30：已随并行线合入解除，`cargo test -p rds-settings --lib` = 34 passed（含 `every_model_leaf_is_registered` 契约测试），类型样式 23 项登记齐全。**
 
 ### 2.3 已知限制（有意为之，勿当缺口重做）
 

@@ -3,12 +3,14 @@
 
 use gpui_kit::*;
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Colorize;
 use gpui_kit::component::table::TableState;
 use gpui_kit::base::TreeItem;
 
 use std::borrow::Cow;
 
 use crate::store::ColumnKind;
+use workbench_shell::result_style::{BgColorPref, FontStylePref};
 use super::delegate::{CELL_DISPLAY_LIMIT, ResultGridDelegate};
 use super::status::format_integer_cell;
 use super::text::result_cell_tooltip;
@@ -19,7 +21,7 @@ use workbench_shell::result_style::{AlignPref, ColorRolePref, NumberFormatPref, 
 ///
 /// 为什么单独拿出来：`Unknown` 这一档必须是**今天的样式**，而“没带类型就一个像素不变”
 /// 这句话只有被断言过才算数——渲染函数里测不到（gpui 不暴露算出来的对齐与字体）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CellStyle {
     /// 文本对齐（数字右对齐：个位对齐才看得出一列的数量级差）
     pub(crate) align: TextAlign,
@@ -27,6 +29,10 @@ pub(crate) struct CellStyle {
     pub(crate) monospace: bool,
     /// 按族前景色角色（`Inherit` = 不染色，跟随普通前景；渲染时映射到主题语义色）
     pub(crate) color_role: ColorRolePref,
+    /// 按族背景色（`Inherit` = 无背景；渲染时语义角色 → 主题语义色浅底 / Custom → parse_hex）
+    pub(crate) bg: BgColorPref,
+    /// 按族字体样式（`Inherit` = 跟随类型默认；NULL 斜体等既有语义保持）
+    pub(crate) font_style: FontStylePref,
 }
 
 /// 列类型 → 类型族（与设置页的五族口径一致；未知类型按文本渲染）
@@ -62,6 +68,8 @@ pub(crate) fn cell_style(kind: ColumnKind, prefs: &TypeStylePrefs) -> CellStyle 
         align,
         monospace: kind.is_monospace(),
         color_role: prefs.color_for(type_family(kind)),
+        bg: prefs.bg_for(type_family(kind)).clone(),
+        font_style: prefs.font_for(type_family(kind)),
     }
 }
 
@@ -213,6 +221,18 @@ pub(crate) fn render_td(
             ColorRolePref::Muted => Some(theme.colors.muted_foreground),
             ColorRolePref::Inherit => None,
         };
+        // 【类型样式】按族背景色：语义角色 → 主题语义色浅底（0.16 透明度，与脏格同口径）；
+        // 自定义 hex → `Colorize::parse_hex`（gpui-component 现成 API），非法值回退无背景。
+        let bg_color = match &style.bg {
+            BgColorPref::Inherit => None,
+            BgColorPref::Info => Some(theme.colors.info.opacity(0.16)),
+            BgColorPref::Success => Some(theme.colors.success.opacity(0.16)),
+            BgColorPref::Warning => Some(theme.colors.warning.opacity(0.16)),
+            BgColorPref::Danger => Some(theme.colors.danger.opacity(0.16)),
+            BgColorPref::Primary => Some(theme.colors.primary.opacity(0.16)),
+            BgColorPref::Muted => Some(theme.colors.muted_foreground.opacity(0.16)),
+            BgColorPref::Custom(hex) => Colorize::parse_hex(hex.as_str()).ok(),
+        };
 
         // 行号槽永远是灰的（它不是数据）
         if ResultGridDelegate::is_row_number(col_ix) {
@@ -275,6 +295,16 @@ pub(crate) fn render_td(
             } else {
                 role_color.unwrap_or(foreground)
             })
+            // 【类型样式】按族背景色（先铺，本地行 / 脏格 / 冲突格底色后续覆盖其上）
+            .when_some(bg_color, |cell, bg| cell.bg(bg))
+            // 【类型样式】按族字体样式覆盖（inherit = 跟随类型默认；NULL 斜体等既有语义保持，
+            // 与 Bold/Italic/Underline/LineThrough 叠加时按用户显式样式优先呈现）
+            .when(style.font_style == FontStylePref::Bold, |cell| {
+                cell.font_weight(FontWeight::BOLD)
+            })
+            .when(style.font_style == FontStylePref::Italic, |cell| cell.italic())
+            .when(style.font_style == FontStylePref::Underline, |cell| cell.underline())
+            .when(style.font_style == FontStylePref::LineThrough, |cell| cell.line_through())
             // 【#28-B4】本地行底色（先铺，脏格 / 冲突格后续底色覆盖其上）
             .when_some(local_bg, |cell, bg| cell.bg(bg))
             // 【T2a-3】脏格（未提交变更）：浅警告底色，一眼看出哪些格子会被写回

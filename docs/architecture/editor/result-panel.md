@@ -925,7 +925,7 @@ panel.rs 删掉手搓过滤 / 行渲染 / 搜索框约 200 行。
 ②「位置」= 值在格内的对齐位置（与「对齐」合并为一项）；③ 全局统一生效
 （先不做 per-结果集覆盖）；④ 预设色板（主题语义 token 派生，零裸色值约束不变）。
 
-**13 项设置**（`settings.json` 的 `result_panel` 节；设置页「结果集面板」分组，全部即时生效）：
+**23 项设置**（`settings.json` 的 `result_panel` 节；设置页「结果集面板」分组，全部即时生效）：
 
 | 设置 | 枚举值 | 默认 | 渲染消费点 |
 | --- | --- | --- | --- |
@@ -934,6 +934,19 @@ panel.rs 删掉手搓过滤 / 行渲染 / 搜索框约 200 行。
 | `bool_display` | true_false / cn / digits | true_false | `grid.rs::format_cell_text`（布尔族） |
 | `align_numeric/text/temporal/bool/blob` | inherit / left / center / right | inherit | `grid.rs::cell_style`（对齐覆盖） |
 | `color_numeric/text/temporal/bool/blob` | inherit / info / success / warning / danger / primary / muted | inherit | `grid.rs::render_td`（角色 → `theme.colors.*`） |
+| `bg_numeric/text/temporal/bool/blob` | inherit / info / success / warning / danger / primary / muted | inherit | `grid.rs::render_td`（语义角色 → `theme.colors.*.opacity(0.16)`；`Custom` → `Colorize::parse_hex`） |
+| `font_numeric/text/temporal/bool/blob` | inherit / bold / italic / underline / line_through | inherit | `grid.rs::render_td`（→ `font_weight` / `italic` / `underline` / `line_through`） |
+
+**背景色与字体样式补充口径**（2026-10-30 落地）：
+
+- **背景色**：语义角色一律渲染为主题语义色 `opacity(0.16)` 浅底（与脏格 / 冲突格
+  底色同透明度口径，不引裸色值）；自定义 hex 走 `settings.json` 手写
+  `{"bg_numeric":{"custom":"#ff0000"}}`（serde 反序列化路径，渲染用 gpui-component
+  `Colorize::parse_hex`，非法值回退无背景）。设置页当前只出语义角色下拉，
+  交互式选色盘（`color_picker::ColorSelect`）属后续批次。
+- **字体样式**：`inherit` = 跟随类型默认（NULL 灰斜体、被删行删除线等既有语义保持），
+  显式五档与之叠加时按用户样式优先呈现；与 `monospace`（布尔 / 时间族等宽）互不冲突。
+- **背景色优先级**：类型背景 < 本地新增行底色 < 脏格 / 冲突格底色（后两者是更高语义）。
 
 **模型归属**（打破循环依赖的关键决策）：枚举与聚合 `TypeStylePrefs` 放
 **`crates/workbench_shell/src/result_style.rs`**（与 `product_tokens` 同例）——
@@ -955,12 +968,12 @@ panel.rs 删掉手搓过滤 / 行渲染 / 搜索框约 200 行。
 编辑 / 悬停 tooltip 仍用驱动原始值。NULL 判定仍按原文 `== "NULL"`，灰斜体渲染不变；
 被删行灰字优先级高于类型染色。JSON 美化与 BLOB 摘要先于 `format_cell_text` 处理。
 
-**验证**：`cargo test -p rds-workbench-shell` = 13 passed（含 3 个新增 parse/往返测试）；
-`cargo test -p rds-result-panel --lib` = **200 passed / 0 failed**（196 基线 + 4 个新增：
-按族对齐覆盖 / 颜色角色 / 显示文本纯函数 / 数字格式模式）；`cargo check -p rds-editor`
-与 `-p rds-workbench` 通过。settings `every_model_leaf_is_registered` 契约测试仍被
-**并行线** 3 个未登记字段（navigator.show_chips / show_search、scratchpad.group_max_h）阻塞，
-本线 13 项登记齐全，不替并行线登记。
+**验证**：`cargo test -p rds-workbench-shell` = 13 passed（含 3 个新增 parse/往返测试，
+新增 `BgColorPref` / `FontStylePref` 回退、23 项默认全继承、自定义背景 serde 往返）；
+`cargo test -p rds-result-panel --lib` = **213 passed / 0 failed**（`CellStyle` 含 `bg` /
+`font_style` 后保持）；`cargo test -p rds-settings --lib` = **34 passed / 0 failed**
+（`every_model_leaf_is_registered` 契约测试已过：23 项全登记，并行线阻塞已消除）；
+`cargo check -p rds-workbench-shell -p rds-settings -p rds-result-panel` 通过。
 
 ## 8. 协作纪律
 

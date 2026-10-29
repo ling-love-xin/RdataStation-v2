@@ -223,6 +223,116 @@ pub(crate) fn apply_slot(
                 }
                 persist(&cx.global::<Settings>().clone());
             }
+            Slot::ResultPanelBgNumeric => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.bg_numeric =
+                        workbench_shell::result_style::BgColorPref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelBgText => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.bg_text =
+                        workbench_shell::result_style::BgColorPref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelBgTemporal => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.bg_temporal =
+                        workbench_shell::result_style::BgColorPref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelBgBool => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.bg_bool =
+                        workbench_shell::result_style::BgColorPref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelBgBlob => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.bg_blob =
+                        workbench_shell::result_style::BgColorPref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelFontNumeric => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.font_numeric =
+                        workbench_shell::result_style::FontStylePref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelFontText => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.font_text =
+                        workbench_shell::result_style::FontStylePref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelFontTemporal => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.font_temporal =
+                        workbench_shell::result_style::FontStylePref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelFontBool => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.font_bool =
+                        workbench_shell::result_style::FontStylePref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
+            Slot::ResultPanelFontBlob => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.font_blob =
+                        workbench_shell::result_style::FontStylePref::parse(text);
+                }
+                persist(&cx.global::<Settings>().clone());
+            }
         _ => return false,
     }
     true

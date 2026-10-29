@@ -210,6 +210,36 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResultPanelColorBlob => {
             SettingValue::Text(settings.result_panel.color_blob.as_str().to_string())
         }
+        Slot::ResultPanelBgNumeric => {
+            SettingValue::Text(settings.result_panel.bg_numeric.as_str().to_string())
+        }
+        Slot::ResultPanelBgText => {
+            SettingValue::Text(settings.result_panel.bg_text.as_str().to_string())
+        }
+        Slot::ResultPanelBgTemporal => {
+            SettingValue::Text(settings.result_panel.bg_temporal.as_str().to_string())
+        }
+        Slot::ResultPanelBgBool => {
+            SettingValue::Text(settings.result_panel.bg_bool.as_str().to_string())
+        }
+        Slot::ResultPanelBgBlob => {
+            SettingValue::Text(settings.result_panel.bg_blob.as_str().to_string())
+        }
+        Slot::ResultPanelFontNumeric => {
+            SettingValue::Text(settings.result_panel.font_numeric.as_str().to_string())
+        }
+        Slot::ResultPanelFontText => {
+            SettingValue::Text(settings.result_panel.font_text.as_str().to_string())
+        }
+        Slot::ResultPanelFontTemporal => {
+            SettingValue::Text(settings.result_panel.font_temporal.as_str().to_string())
+        }
+        Slot::ResultPanelFontBool => {
+            SettingValue::Text(settings.result_panel.font_bool.as_str().to_string())
+        }
+        Slot::ResultPanelFontBlob => {
+            SettingValue::Text(settings.result_panel.font_blob.as_str().to_string())
+        }
         Slot::LayoutLocked => SettingValue::Bool(settings.layout.locked),
         Slot::LayoutLeftSidebarWidth => {
             SettingValue::Number(settings.layout.left_sidebar_width as f64)
@@ -281,7 +311,7 @@ impl SettingsService {
             Slot::StartupDefaultLeftPanel => startup::apply_slot(slot, value, window, cx),
             Slot::ScratchpadGroupMaxH | Slot::ScratchpadToolbar => scratchpad::apply_slot(slot, value, window, cx),
             Slot::InsightMemoryLimitMb | Slot::InsightFullScanConfirm | Slot::InsightWorkSetLimit | Slot::InsightStatusUsage => insight::apply_slot(slot, value, window, cx),
-            Slot::ResultPanelFactStorage | Slot::ResultPanelShowColumnComments | Slot::ResultPanelShowTypeBadge | Slot::ResultPanelLoopSelection | Slot::ResultPanelSelectOnModifierClick | Slot::ResultPanelPersistColumnWidths | Slot::ResultPanelNumberFormat | Slot::ResultPanelNullPlaceholder | Slot::ResultPanelBoolDisplay | Slot::ResultPanelAlignNumeric | Slot::ResultPanelAlignText | Slot::ResultPanelAlignTemporal | Slot::ResultPanelAlignBool | Slot::ResultPanelAlignBlob | Slot::ResultPanelColorNumeric | Slot::ResultPanelColorText | Slot::ResultPanelColorTemporal | Slot::ResultPanelColorBool | Slot::ResultPanelColorBlob => result_panel::apply_slot(slot, value, window, cx),
+            Slot::ResultPanelFactStorage | Slot::ResultPanelShowColumnComments | Slot::ResultPanelShowTypeBadge | Slot::ResultPanelLoopSelection | Slot::ResultPanelSelectOnModifierClick | Slot::ResultPanelPersistColumnWidths | Slot::ResultPanelNumberFormat | Slot::ResultPanelNullPlaceholder | Slot::ResultPanelBoolDisplay | Slot::ResultPanelAlignNumeric | Slot::ResultPanelAlignText | Slot::ResultPanelAlignTemporal | Slot::ResultPanelAlignBool | Slot::ResultPanelAlignBlob | Slot::ResultPanelColorNumeric | Slot::ResultPanelColorText | Slot::ResultPanelColorTemporal | Slot::ResultPanelColorBool | Slot::ResultPanelColorBlob | Slot::ResultPanelBgNumeric | Slot::ResultPanelBgText | Slot::ResultPanelBgTemporal | Slot::ResultPanelBgBool | Slot::ResultPanelBgBlob | Slot::ResultPanelFontNumeric | Slot::ResultPanelFontText | Slot::ResultPanelFontTemporal | Slot::ResultPanelFontBool | Slot::ResultPanelFontBlob => result_panel::apply_slot(slot, value, window, cx),
             Slot::LayoutLocked | Slot::LayoutLeftSidebarWidth | Slot::LayoutRightSidebarWidth => layout::apply_slot(slot, value, window, cx),
             Slot::NotificationSuccessAutohideSecs | Slot::NotificationWarningAutohideSecs | Slot::NotificationErrorAutohide | Slot::NotificationMergeWindowSecs => notifications::apply_slot(slot, value, window, cx),
         }

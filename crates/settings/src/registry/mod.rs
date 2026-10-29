@@ -212,6 +212,16 @@ pub enum Slot {
     ResultPanelColorTemporal,
     ResultPanelColorBool,
     ResultPanelColorBlob,
+    ResultPanelBgNumeric,
+    ResultPanelBgText,
+    ResultPanelBgTemporal,
+    ResultPanelBgBool,
+    ResultPanelBgBlob,
+    ResultPanelFontNumeric,
+    ResultPanelFontText,
+    ResultPanelFontTemporal,
+    ResultPanelFontBool,
+    ResultPanelFontBlob,
     /// 布局锁定（默认 false；render 时同步到 DockArea::set_locked）。
     LayoutLocked,
     /// 左侧侧边栏宽度（默认 250px；render 时同步到 DockArea::set_dock_size）。
@@ -297,6 +307,16 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "result_panel.color_temporal" => Slot::ResultPanelColorTemporal,
         "result_panel.color_bool" => Slot::ResultPanelColorBool,
         "result_panel.color_blob" => Slot::ResultPanelColorBlob,
+        "result_panel.bg_numeric" => Slot::ResultPanelBgNumeric,
+        "result_panel.bg_text" => Slot::ResultPanelBgText,
+        "result_panel.bg_temporal" => Slot::ResultPanelBgTemporal,
+        "result_panel.bg_bool" => Slot::ResultPanelBgBool,
+        "result_panel.bg_blob" => Slot::ResultPanelBgBlob,
+        "result_panel.font_numeric" => Slot::ResultPanelFontNumeric,
+        "result_panel.font_text" => Slot::ResultPanelFontText,
+        "result_panel.font_temporal" => Slot::ResultPanelFontTemporal,
+        "result_panel.font_bool" => Slot::ResultPanelFontBool,
+        "result_panel.font_blob" => Slot::ResultPanelFontBlob,
         "layout.locked" => Slot::LayoutLocked,
         "layout.left_sidebar_width" => Slot::LayoutLeftSidebarWidth,
         "layout.right_sidebar_width" => Slot::LayoutRightSidebarWidth,
@@ -362,7 +382,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::ResultPanelShowColumnComments => KindTag::Bool,
         Slot::ResultPanelShowTypeBadge | Slot::ResultPanelLoopSelection
         | Slot::ResultPanelSelectOnModifierClick | Slot::ResultPanelPersistColumnWidths => KindTag::Bool,
-        // 【类型样式】13 项全是枚举（设置页下拉）。
+        // 【类型样式】23 项全是枚举（设置页下拉）。
         Slot::ResultPanelNumberFormat
         | Slot::ResultPanelNullPlaceholder
         | Slot::ResultPanelBoolDisplay
@@ -375,7 +395,17 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         | Slot::ResultPanelColorText
         | Slot::ResultPanelColorTemporal
         | Slot::ResultPanelColorBool
-        | Slot::ResultPanelColorBlob => KindTag::Enum,
+        | Slot::ResultPanelColorBlob
+        | Slot::ResultPanelBgNumeric
+        | Slot::ResultPanelBgText
+        | Slot::ResultPanelBgTemporal
+        | Slot::ResultPanelBgBool
+        | Slot::ResultPanelBgBlob
+        | Slot::ResultPanelFontNumeric
+        | Slot::ResultPanelFontText
+        | Slot::ResultPanelFontTemporal
+        | Slot::ResultPanelFontBool
+        | Slot::ResultPanelFontBlob => KindTag::Enum,
         Slot::LayoutLocked => KindTag::Bool,
         Slot::LayoutLeftSidebarWidth | Slot::LayoutRightSidebarWidth => KindTag::Number,
         // 【通知】三个秒数（0 = 不自动消失 / 不合并）是数值，错误自动消失是布尔。
