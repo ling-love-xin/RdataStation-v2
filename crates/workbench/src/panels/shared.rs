@@ -262,8 +262,6 @@ pub struct Shared {
     pub right_mode_before_hidden: Rc<Cell<SidebarMode>>,
     /// Quick Open 弹层开关（Ctrl+P / 标题栏搜索条）。
     pub quick_open: Rc<Cell<bool>>,
-    /// 设置面板开关（活动栏底部 ⚙ / OpenSettings 命令）。
-    pub settings_open: Rc<Cell<bool>>,
     /// 布局锁定（防止意外拖拽调整面板大小/位置）。
     pub layout_locked: Rc<Cell<bool>>,
     /// 上次同步的左侧侧边栏宽度（用于检测设置页面的值是否发生变化）。
@@ -407,7 +405,6 @@ impl Shared {
             left_mode_before_hidden: Rc::new(Cell::new(SidebarMode::Expanded)),
             right_mode_before_hidden: Rc::new(Cell::new(SidebarMode::Expanded)),
             quick_open: Rc::new(Cell::new(false)),
-            settings_open: Rc::new(Cell::new(false)),
             layout_locked: Rc::new(Cell::new(false)),
             prev_left_sidebar_width: Rc::new(Cell::new(0.0)),
             prev_right_sidebar_width: Rc::new(Cell::new(0.0)),

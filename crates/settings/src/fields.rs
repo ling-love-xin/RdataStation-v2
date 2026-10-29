@@ -13,9 +13,10 @@ use std::rc::Rc;
 
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
 use gpui_kit::component::hover_card::HoverCard;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::setting::{RenderOptions, SettingField, SettingItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar, TabVariant};
@@ -219,6 +220,200 @@ pub fn layout_preview() -> SettingItem {
     })
     // 示意图不参与 reset-all。
     .on_reset(|_| false, |_, _| {})
+}
+
+// ===== 类型样式矩阵（结果集面板「对齐 / 着色」两组合并） =====
+
+/// 把结果集面板「对齐 / 着色」两个登记组（各 5 项、共 10 个碎行）合并成一个
+/// 表格元素：行 = 数据族（数字 / 文本 / 时间 / 布尔 / BLOB），列 = 对齐、着色，
+/// 每格一个紧凑下拉（`DropdownButton`）。解决「设置杂乱、无设计感」的根因——
+/// 10 个 label + 分段条的行列排布压成 1 个矩阵。
+///
+/// 登记表 / 模型 / 读写路径**不动**（10 个 `SettingSpec` 原样保留，`registry::spec`
+/// 仍是唯一权威）：这里是纯渲染层合并，写入仍走 `bridge::write_scalar`（唯一写入
+/// 路径），页面级 reset 覆盖全部 10 项。
+pub fn type_style_matrix(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> SettingItem {
+    const ROWS: [(&str, &str, &str); 5] = [
+        ("result_panel.align_numeric", "result_panel.color_numeric", "数字"),
+        ("result_panel.align_text", "result_panel.color_text", "文本"),
+        ("result_panel.align_temporal", "result_panel.color_temporal", "时间"),
+        ("result_panel.align_bool", "result_panel.color_bool", "布尔"),
+        ("result_panel.align_blob", "result_panel.color_blob", "BLOB"),
+    ];
+    const ALIGN_OPTIONS: [(&str, &str); 4] = [
+        ("inherit", "继承默认"),
+        ("left", "左对齐"),
+        ("center", "居中"),
+        ("right", "右对齐"),
+    ];
+    const COLOR_OPTIONS: [(&str, &str); 7] = [
+        ("inherit", "不染色"),
+        ("info", "信息蓝"),
+        ("success", "成功绿"),
+        ("warning", "警告橙"),
+        ("danger", "危险红"),
+        ("primary", "主品牌"),
+        ("muted", "弱化灰"),
+    ];
+    let notify_render = notify.clone();
+    let host_render = host.on_settings_changed.clone();
+    let notify_reset = notify.clone();
+    let host_reset = host.on_settings_changed.clone();
+
+    SettingItem::render(move |_options, _window, cx| {
+        let theme = cx.theme().clone();
+        // 表头：行标签列（留空）+ 对齐列 + 着色列。
+        let header = div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .border_b_1()
+            .border_color(theme.colors.border)
+            .text_xs()
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(theme.colors.muted_foreground)
+            .child(div().w(rems(4.)).flex_none())
+            .child(div().w(rems(9.)).flex_none().child("对齐"))
+            .child(div().w(rems(10.)).flex_none().child("着色"));
+        let mut body = div().v_flex();
+        for (align_key, color_key, name) in ROWS {
+            body = body.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_0p5()
+                    .child(
+                        div()
+                            .w(rems(4.))
+                            .flex_none()
+                            .text_xs()
+                            .text_color(theme.colors.foreground)
+                            .child(name),
+                    )
+                    .child(matrix_cell(
+                        align_key,
+                        &ALIGN_OPTIONS,
+                        cx,
+                        &notify_render,
+                        &host_render,
+                    ))
+                    .child(matrix_cell(
+                        color_key,
+                        &COLOR_OPTIONS,
+                        cx,
+                        &notify_render,
+                        &host_render,
+                    )),
+            );
+        }
+        div()
+            .v_flex()
+            .w_full()
+            .rounded_md()
+            .border_1()
+            .border_color(theme.colors.border)
+            .child(header)
+            .child(body)
+    })
+    .on_reset(
+        move |cx| {
+            ROWS.iter().any(|(align_key, color_key, _)| {
+                matrix_changed(align_key, cx) || matrix_changed(color_key, cx)
+            })
+        },
+        move |window, cx| {
+            for (align_key, color_key, _) in ROWS {
+                matrix_reset(align_key, Some(window), &notify_reset, &host_reset, cx);
+                matrix_reset(color_key, Some(window), &notify_reset, &host_reset, cx);
+            }
+        },
+    )
+    .keywords(
+        ROWS.iter().flat_map(|(align_key, color_key, _)| {
+            [
+                SharedString::from(*align_key),
+                SharedString::from(*color_key),
+                SharedString::from("对齐"),
+                SharedString::from("着色"),
+            ]
+        }),
+    )
+}
+
+/// 矩阵单元格：当前值 → 下拉按钮（左半区显示当前档位），选项点击 → 写设置。
+///
+/// 选项与写入值直接取自调用方传入的常量表（与登记表 `SettingSpec::kind` 的
+/// 枚举保持一致）；当前值经 `bridge` 从 Settings 聚合读，选项未命中时显示首项。
+fn matrix_cell(
+    key: &'static str,
+    options: &'static [(&'static str, &'static str)],
+    cx: &mut App,
+    notify: &Rc<dyn Fn(&mut App)>,
+    host_changed: &Rc<dyn Fn(&mut App)>,
+) -> AnyElement {
+    let text = bridge::current_value(cx, key)
+        .and_then(|v| v.as_text().map(|s| s.to_string()))
+        .unwrap_or_else(|| options[0].0.to_string());
+    let current_label = options
+        .iter()
+        .find(|(v, _)| *v == text)
+        .map(|(_, l)| *l)
+        .unwrap_or(options[0].1);
+    let notify = notify.clone();
+    let host_changed = host_changed.clone();
+    DropdownButton::new(ElementId::Name(SharedString::from(format!("{key}-dd"))))
+        .w(rems(9.))
+        .flex_none()
+        .button(
+            Button::new(ElementId::Name(SharedString::from(format!("{key}-btn"))))
+                .ghost()
+                .xsmall()
+                .label(current_label),
+        )
+        .menu_accessibility_label(current_label)
+        .dropdown_menu(move |mut menu, _window, _app| {
+            for (value, label) in options {
+                // 每个菜单项独立持有写路径闭包（Rc 循环内逐项 clone，不能共享 move）。
+                let notify = notify.clone();
+                let host_changed = host_changed.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(*label).on_click(move |_, window, app| {
+                        bridge::write_scalar(
+                            key,
+                            SettingValue::Text((*value).to_string()),
+                            Some(window),
+                            &notify,
+                            &host_changed,
+                            app,
+                        );
+                    }),
+                );
+            }
+            menu
+        })
+        .into_any_element()
+}
+
+/// 矩阵单格是否偏离默认值（默认值取自登记表，不另存一份）。
+fn matrix_changed(key: &'static str, cx: &App) -> bool {
+    let spec = crate::registry::spec(key).expect("矩阵 key 必须在登记表中");
+    bridge::is_changed(&SettingsService::get(cx), spec)
+}
+
+/// 矩阵单格恢复默认（与单行字段同一恢复路径）。
+fn matrix_reset(
+    key: &'static str,
+    window: Option<&mut Window>,
+    notify: &Rc<dyn Fn(&mut App)>,
+    host_changed: &Rc<dyn Fn(&mut App)>,
+    cx: &mut App,
+) {
+    let spec = crate::registry::spec(key).expect("矩阵 key 必须在登记表中");
+    bridge::reset_to_default(spec, window, notify, host_changed, cx);
 }
 
 // ===== 行内控件 =====

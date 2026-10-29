@@ -47,7 +47,7 @@ use crate::services::editor_lsp::{LspBlock, WorkbenchLsp};
 use crate::services::editor_completion::WorkbenchCompletion;
 use crate::ui;
 use mock::mock_view::{MockDetailView, MockPanel, focus_detail_tab, status_chip_text};
-use settings::commands::{CloseSettings, OpenSettings, ToggleThemeMode};
+use settings::commands::{OpenSettings, ToggleThemeMode};
 use settings::settings_page::{SettingsHost, SettingsPage};
 use settings::SettingsService;
 
@@ -85,7 +85,8 @@ pub struct WorkbenchView {
     /// 本次打开待生效的浮层档位（`Default` = Ctrl+P，`Goto` = Ctrl+Shift+O）。
     quick_open_mode_pending: Mode,
     /// 设置页实体（首次打开时懒创建）。
-    settings_page: Option<Entity<SettingsPage>>,
+    /// 设置页独立窗口句柄（`None` = 未打开；窗口关闭后 `update` 返回 Err，据此判活）。
+    settings_window: Option<AnyWindowHandle>,
     /// M1 项目管理输入实体（懒创建）。
     project_inputs: Option<project::ui::ProjectInputs>,
     /// M1 项目选择器面板（中央 tab 组常驻 tab；强持有防 GC，见 `project_picker.rs`）。
@@ -280,7 +281,7 @@ impl WorkbenchView {
             quick_open_palette: None,
             quick_open_open_pending: false,
             quick_open_mode_pending: Mode::Default,
-            settings_page: None,
+            settings_window: None,
             project_inputs: None,
             project_picker: None,
             project_host: Some(host),
@@ -2146,10 +2147,10 @@ impl WorkbenchView {
                 Button::new("left-settings")
                     .icon(Icon::new(IconName::Settings))
                     .ghost()
-                    .on_click(move |_, _, app| {
-                        settings_shared.settings_open.set(true);
+                    .on_click(move |_, window, app| {
+                        let entity = settings_entity.clone();
+                        entity.update(app, |this, cx| this.open_settings(window, cx));
                         settings_shared.quick_open.set(false);
-                        settings_entity.update(app, |_, cx| cx.notify());
                     }),
             );
 
@@ -2236,10 +2237,10 @@ impl WorkbenchView {
                 Button::new("right-settings")
                     .icon(Icon::new(IconName::Settings))
                     .ghost()
-                    .on_click(move |_, _, app| {
-                        settings_shared.settings_open.set(true);
+                    .on_click(move |_, window, app| {
+                        let entity = settings_entity.clone();
+                        entity.update(app, |this, cx| this.open_settings(window, cx));
                         settings_shared.quick_open.set(false);
-                        settings_entity.update(app, |_, cx| cx.notify());
                     }),
             );
 
@@ -2252,10 +2253,12 @@ impl WorkbenchView {
             .into_any_element()
     }
 
-    /// 设置页 overlay：居中渲染 `SettingsPage`（懒创建实体）。
+    /// 打开设置（独立 OS 窗口）：窗口自带标题栏与系统窗口控制（最小化 / 最大化 /
+    /// 关闭，`TitleBar::window_options()`）；存活检测经 `AnyWindowHandle::update`
+    /// （窗口关闭后返回 Err），已打开则不重复创建。
     ///
-    /// 页面自持两栏结构（分节与行由 `settings::registry` 驱动）；宿主只提供 overlay、
-    /// **宿主桥**（关闭 / 缓存管理，副作用在宿主侧）与互斥规则（与 Quick Open 不同时显示）。
+    /// 页面自持两栏结构（分节与行由 `settings::registry` 驱动）；宿主只提供
+    /// **宿主桥**（缓存管理 / 日志 / 类型简称映射，副作用在宿主侧）。
     /// T-1：把「标签栏最大宽度 / 样式」设置项装配到 DockSkin（启动一次 + 设置变更
     /// 经 `on_settings_changed` 重应用）。vendor `dock/tab_panel.rs` 渲染时从
     /// `SkinShared` 读取这两个值；未知样式字符串回退 `Tab`（设置页只给五档预设）。
@@ -2272,96 +2275,78 @@ impl WorkbenchView {
         skin.set_tab_bar_variant(variant, cx);
     }
 
-    fn render_settings_panel(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<Div> {
-        if !self.shared.settings_open.get() {
-            return None;
+    fn open_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        // 窗口存活检测：已打开则直接返回（用户自己切过去）。
+        if let Some(handle) = self.settings_window {
+            if handle.update(cx, |_, _, _| {}).is_ok() {
+                return;
+            }
+            self.settings_window = None;
         }
-        if self.settings_page.is_none() {
-            let entity = cx.entity();
-            let shared = self.shared.clone();
-            let on_close: std::rc::Rc<dyn Fn(&mut App)> = std::rc::Rc::new(move |app| {
-                shared.settings_open.set(false);
-                entity.update(app, |_, cx| cx.notify());
+        let shared_cache = self.shared.clone();
+        let on_open_cache: Rc<dyn Fn(&mut Window, &mut App)> =
+            Rc::new(move |window, app| {
+                crate::components::cache_dialog::open_cache_dialog(window, app, &shared_cache);
             });
-            let shared_cache = self.shared.clone();
-            let on_open_cache: std::rc::Rc<dyn Fn(&mut Window, &mut App)> =
-                std::rc::Rc::new(move |window, app| {
-                    crate::components::cache_dialog::open_cache_dialog(window, app, &shared_cache);
-                });
-            // 「打开日志目录」/「查看日志」：设置层不依赖 engine / opener，这两个副作用由宿主实现。
-            // 目录不存在（还没写过日志）就先建出来——"打开一个不存在的目录"是纯失败体验。
-            let on_open_log_dir: std::rc::Rc<dyn Fn(&mut Window, &mut App)> =
-                std::rc::Rc::new(move |_window, _app| {
-                    let dir = paths::log_dir();
-                    if let Err(e) = std::fs::create_dir_all(&dir) {
-                        eprintln!("[settings] 创建日志目录失败 {}: {e}", dir.display());
-                        return;
-                    }
-                    if let Err(e) = opener::open(&dir) {
-                        eprintln!("[settings] 打开日志目录失败 {}: {e}", dir.display());
-                    }
-                });
-            let on_open_log_view: std::rc::Rc<dyn Fn(&mut Window, &mut App)> =
-                std::rc::Rc::new(move |window, app| {
-                    crate::components::log_dialog::open_log_dialog(window, app);
-                });
-            let on_open_type_short_map: std::rc::Rc<dyn Fn(&mut Window, &mut App)> =
-                std::rc::Rc::new(move |window, app| {
-                    crate::components::type_short_map_dialog::open_type_short_map_dialog(window, app);
-                });
-            // T-1：设置落盘 → 重应用标签栏外观到 DockSkin（启动值在 `init_workspace`
-            // 已应用一次；这里是运行时路径）。皮肤句柄在装配期已存字段。
-            let dock_skin = self.dock_skin.clone();
-            // 洞察偏好（`insight.*` 四项）变更也在这里推送：内存上限走 engine 连接级
-            // 设置（即时生效），面板偏好（内存显示开关 / 工作集阈值）转发给面板实体。
-            // 与 sink（`install_insight_memory_limit_sink`）双写幂等，这里兜底启动与面板重建。
-            let shared_for_insight = self.shared.clone();
-            // 【类型样式】结果集偏好（13 项）变更 → 遍历编辑器宿主推 `apply_result_style`
-            // 即时生效（读当前 Settings 聚合，幂等；不随结果集 set_data 清掉）。
-            let hosts_for_style = self.editor_hosts.clone();
-            let on_settings_changed: std::rc::Rc<dyn Fn(&mut App)> =
-                std::rc::Rc::new(move |app| {
-                    if let Some(skin) = &dock_skin {
-                        Self::apply_tab_bar_settings(skin, app);
-                    }
-                    crate::components::insight_actions::apply_insight_prefs(
-                        &shared_for_insight,
-                        app,
-                    );
-                    for host in &hosts_for_style {
-                        host.update(app, |host, cx| host.apply_result_style(cx));
-                    }
-                });
-            let host = SettingsHost {
-                on_close,
-                on_open_cache,
-                on_open_log_dir,
-                on_open_log_view,
-                on_open_type_short_map,
-                on_settings_changed,
-            };
-            self.settings_page = Some(cx.new(|cx| SettingsPage::new(window, host, cx)));
-        }
-        let theme = cx.theme().clone();
-        let page = self
-            .settings_page
-            .clone()
-            .expect("settings page initialized");
-        Some(
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(theme.colors.overlay)
-                .occlude() // 防止鼠标穿透，遮挡下面的内容
-                .child(page),
-        )
+        // 「打开日志目录」/「查看日志」：设置层不依赖 engine / opener，这两个副作用由宿主实现。
+        // 目录不存在（还没写过日志）就先建出来——"打开一个不存在的目录"是纯失败体验。
+        let on_open_log_dir: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_window, _app| {
+            let dir = paths::log_dir();
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                eprintln!("[settings] 创建日志目录失败 {}: {e}", dir.display());
+                return;
+            }
+            if let Err(e) = opener::open(&dir) {
+                eprintln!("[settings] 打开日志目录失败 {}: {e}", dir.display());
+            }
+        });
+        let on_open_log_view: Rc<dyn Fn(&mut Window, &mut App)> =
+            Rc::new(move |window, app| crate::components::log_dialog::open_log_dialog(window, app));
+        let on_open_type_short_map: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |window, app| {
+            crate::components::type_short_map_dialog::open_type_short_map_dialog(window, app);
+        });
+        // T-1：设置落盘 → 重应用标签栏外观到 DockSkin（启动值在 `init_workspace`
+        // 已应用一次；这里是运行时路径）。皮肤句柄在装配期已存字段。
+        let dock_skin = self.dock_skin.clone();
+        // 洞察偏好（`insight.*` 四项）变更也在这里推送：内存上限走 engine 连接级
+        // 设置（即时生效），面板偏好（内存显示开关 / 工作集阈值）转发给面板实体。
+        // 与 sink（`install_insight_memory_limit_sink`）双写幂等，这里兜底启动与面板重建。
+        let shared_for_insight = self.shared.clone();
+        // 【类型样式】结果集偏好（13 项）变更 → 遍历编辑器宿主推 `apply_result_style`
+        // 即时生效（读当前 Settings 聚合，幂等；不随结果集 set_data 清掉）。
+        let hosts_for_style = self.editor_hosts.clone();
+        let on_settings_changed: Rc<dyn Fn(&mut App)> = Rc::new(move |app| {
+            if let Some(skin) = &dock_skin {
+                Self::apply_tab_bar_settings(skin, app);
+            }
+            crate::components::insight_actions::apply_insight_prefs(&shared_for_insight, app);
+            for host in &hosts_for_style {
+                host.update(app, |host, cx| host.apply_result_style(cx));
+            }
+        });
+        let host = SettingsHost {
+            on_open_cache,
+            on_open_log_dir,
+            on_open_log_view,
+            on_open_type_short_map,
+            on_settings_changed,
+        };
+        // 独立窗口：`TitleBar::window_options()` 提供原生标题栏（拖拽 + 系统窗口控制），
+        // 经 `cx.open_window` 挂到新窗口；窗口根由 `base::Root` 包一层（对话框层宿主）。
+        // 初始尺寸沿用原 overlay 的 980×560（两栏骨架内容匹配），并给最小尺寸防过度挤压。
+        let mut options = TitleBar::window_options();
+        options.window_bounds = Some(gpui::WindowBounds::Windowed(gpui::Bounds {
+            origin: gpui::Point::new(gpui::px(0.), gpui::px(0.)),
+            size: gpui::Size::new(gpui::px(980.), gpui::px(560.)),
+        }));
+        options.window_min_size = Some(gpui::Size::new(gpui::px(760.), gpui::px(520.)));
+        let handle = cx
+            .open_window(options, |window, cx| {
+                let view = cx.new(|cx| SettingsPage::new(window, host, cx));
+                cx.new(|cx| gpui_kit::base::Root::new(view, window, cx))
+            })
+            .expect("打开设置窗口");
+        self.settings_window = Some(handle.into());
     }
 
     // ===== Quick Open（统一检索 / 命令面板）宿主装配 =====
@@ -2377,8 +2362,6 @@ impl WorkbenchView {
         let open = !self.shared.quick_open.get();
         self.shared.quick_open.set(open);
         tracing::info!(open, mode = ?mode, "【探针】toggle_quick_open：Quick Open 浮层开关");
-        // 互斥：Quick Open 与设置页不同时显示（两个 overlay 会互相压住）。
-        self.shared.settings_open.set(false);
         if open {
             self.quick_open_open_pending = true;
             self.quick_open_mode_pending = mode;
@@ -2521,7 +2504,7 @@ impl WorkbenchView {
                 );
             }
             Action::OpenSettings => {
-                self.shared.settings_open.set(true);
+                self.open_settings(window, cx);
             }
             Action::HideSidebars => {
                 let s = &self.shared;
@@ -3199,7 +3182,6 @@ impl Render for WorkbenchView {
             None
         };
         let quick_open = self.render_quick_open(cx);
-        let settings_panel = self.render_settings_panel(window, cx);
         let scratchpad_info = self.render_scratchpad_file_info_popover(window, cx);
 
         // M1：项目选择器已是中央 tab 组常驻面板（`ProjectPickerPanel::visible` 随
@@ -3285,25 +3267,9 @@ impl Render for WorkbenchView {
             })
             .on_action({
                 let entity = cx.entity();
-                move |_: &OpenSettings, _window, cx| {
-                    entity.update(cx, |this, cx| {
-                        let open = this.shared.settings_open.get();
-                        tracing::info!(open = !open, "【探针】OpenSettings：打开/关闭设置页（Ctrl+,）");
-                        this.shared.settings_open.set(!open);
-                        // 互斥：设置页与 Quick Open 不同时显示
-                        this.shared.quick_open.set(false);
-                        cx.notify();
-                    });
-                }
-            })
-            // 设置页内按 `Esc` 关闭（键位绑在 `key_context("settings")` 上）。
-            .on_action({
-                let entity = cx.entity();
-                move |_: &CloseSettings, _window, cx| {
-                    entity.update(cx, |this, cx| {
-                        this.shared.settings_open.set(false);
-                        cx.notify();
-                    });
+                move |_: &OpenSettings, window, cx| {
+                    tracing::info!("【探针】OpenSettings：打开设置窗口（Ctrl+,）");
+                    entity.update(cx, |this, cx| this.open_settings(window, cx));
                 }
             })
             // 主题切换（`Ctrl+Shift+L`，绑在 workbench context）：显式模式两态切换；
@@ -3363,9 +3329,6 @@ impl Render for WorkbenchView {
 
         if let Some(qo) = quick_open {
             root = root.child(qo);
-        }
-        if let Some(sp) = settings_panel {
-            root = root.child(sp);
         }
         if let Some(info) = scratchpad_info {
             root = root.child(info);

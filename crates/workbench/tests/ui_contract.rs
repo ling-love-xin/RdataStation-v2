@@ -917,7 +917,6 @@ fn shared_fields_are_whitelisted() {
         "search_results_dismissed",
         "search_results_panel",
         "selected",
-        "settings_open",
         "tag_dialog",
         "trash_dialog",
         "version_dialog",

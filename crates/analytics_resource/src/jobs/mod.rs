@@ -159,6 +159,11 @@ pub enum OpOutcome {
     },
 }
 
+/// 冲突重试凭据（覆盖 / 改名重入队所需的原始上下文；随回执回事件路径）。
+///
+/// 拆分 jobs.rs 时曾丢失 `Clone`，workbench 两个调用点（resources.rs / panels.rs）
+/// 依赖它，编译回归；此处恢复拆分前契约。
+#[derive(Debug, Clone)]
 pub enum ConflictContext {
     /// 升级冲突：原始请求（改名 = 复制一份、替换 `name` 后重入队）。
     Promote(crate::global::PromoteRequest),

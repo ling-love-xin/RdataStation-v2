@@ -34,6 +34,19 @@ pub fn build(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> Settings {
         let page_groups = registry::page_groups(section);
         let mut groups: Vec<SettingGroup> = Vec::new();
         for (gid, glabel) in &page_groups {
+            // 结果集面板：把「对齐」「着色」两个登记组合并成一个「类型样式」矩阵
+            // （10 个碎行 → 1 个表格元素，行 = 数据族，列 = 对齐 / 着色）。
+            // 登记表不动（10 个 SettingSpec 原样保留），这里是纯渲染层合并；
+            // 「着色」组（color）随之跳过——矩阵已覆盖它的全部 5 项。
+            if section == "result_panel" && *gid == "align" {
+                let mut group = SettingGroup::new().title("对齐与着色");
+                group = group.item(fields::type_style_matrix(host, notify));
+                groups.push(group);
+                continue;
+            }
+            if section == "result_panel" && *gid == "color" {
+                continue;
+            }
             let mut group = SettingGroup::new();
             if let Some(label) = glabel {
                 group = group.title(*label);
