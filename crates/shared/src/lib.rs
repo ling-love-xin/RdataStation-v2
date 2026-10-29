@@ -19,6 +19,7 @@ pub mod error;
 pub mod fact;
 pub mod i18n;
 pub mod memory;
+pub mod meta;
 pub mod models;
 pub mod utils;
 

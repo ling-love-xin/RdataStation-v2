@@ -1919,11 +1919,11 @@ impl MetadataCacheOps {
         &mut self,
         database_name: &str,
         schema_name: &str,
-        detail: &crate::driver::NodeDetail,
+        detail: &shared::meta::NodeDetail,
     ) -> Result<i64, CoreError> {
         let table_name = &detail.node.name;
         let table_type = match detail.node.kind {
-            crate::driver::SchemaObjectKind::View => "VIEW",
+            shared::meta::SchemaObjectKind::View => "VIEW",
             _ => "TABLE",
         };
 
@@ -2057,7 +2057,7 @@ impl MetadataCacheOps {
     pub fn save_table_indexes(
         &mut self,
         table_id: i64,
-        indexes: Vec<crate::driver::IndexDetail>,
+        indexes: Vec<shared::meta::IndexDetail>,
     ) -> Result<(), CoreError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2155,7 +2155,7 @@ impl MetadataCacheOps {
     pub fn save_table_constraints(
         &mut self,
         table_id: i64,
-        constraints: Vec<crate::driver::ConstraintDetail>,
+        constraints: Vec<shared::meta::ConstraintDetail>,
     ) -> Result<(), CoreError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2259,7 +2259,7 @@ impl MetadataCacheOps {
         catalog: &str,
         schema: &str,
         table: &str,
-        indexes: Vec<crate::driver::IndexDetail>,
+        indexes: Vec<shared::meta::IndexDetail>,
     ) -> Result<(), CoreError> {
         let schema_id: i64 = self
             .conn
@@ -2301,7 +2301,7 @@ impl MetadataCacheOps {
         catalog: &str,
         schema: &str,
         table: &str,
-        constraints: Vec<crate::driver::ConstraintDetail>,
+        constraints: Vec<shared::meta::ConstraintDetail>,
     ) -> Result<(), CoreError> {
         let schema_id: i64 = self
             .conn
@@ -2342,7 +2342,7 @@ impl MetadataCacheOps {
         database_name: &str,
         schema_name: &str,
         table_name: &str,
-    ) -> Result<Option<crate::driver::NodeDetail>, CoreError> {
+    ) -> Result<Option<shared::meta::NodeDetail>, CoreError> {
         let table_row = self.conn.query_row(
             "SELECT t.id, t.table_type, t.table_comment, t.row_count_estimate \
              FROM tables t \
@@ -2372,9 +2372,9 @@ impl MetadataCacheOps {
         };
 
         let kind = if table_type == "VIEW" {
-            crate::driver::SchemaObjectKind::View
+            shared::meta::SchemaObjectKind::View
         } else {
-            crate::driver::SchemaObjectKind::Table
+            shared::meta::SchemaObjectKind::Table
         };
 
         let mut stmt = self.conn.prepare(
@@ -2388,7 +2388,7 @@ impl MetadataCacheOps {
             reason: e.to_string(),
         }))?;
 
-        let columns: Vec<crate::driver::ColumnDetail> = stmt
+        let columns: Vec<shared::meta::ColumnDetail> = stmt
             .query_map(rusqlite::params![table_id], |row| {
                 let extra_json: Option<String> = row.get(7)?;
                 let extra = if let Some(ref json_str) = extra_json {
@@ -2397,7 +2397,7 @@ impl MetadataCacheOps {
                     std::collections::HashMap::new()
                 };
 
-                Ok(crate::driver::ColumnDetail {
+                Ok(shared::meta::ColumnDetail {
                     name: row.get(0)?,
                     data_type: row.get(1)?,
                     nullable: row.get::<_, i32>(2)? != 0,
@@ -2434,8 +2434,8 @@ impl MetadataCacheOps {
 
         let index_count = self.load_index_count(table_id)?;
 
-        Ok(Some(crate::driver::NodeDetail {
-            node: crate::driver::NodeInfo::new(table_name.to_string(), kind)
+        Ok(Some(shared::meta::NodeDetail {
+            node: shared::meta::NodeInfo::new(table_name.to_string(), kind)
                 .with_comment(table_comment),
             columns,
             index_count: Some(index_count as u32),
