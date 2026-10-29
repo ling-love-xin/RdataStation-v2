@@ -217,7 +217,10 @@
 ```bash
 # 常规
 cargo check -p rds-workbench -j 2
-cargo test  -p rds-workbench --lib quick_open -j 2
+# P2-c（2026-10-29）后：quick_open 纯逻辑（model/commands）已下沉 rds-editor，
+# model 单测随迁到 editor——窗口级测试（palette/tests.rs）仍在 workbench：
+cargo test -p rds-editor --lib quick_open -j 2
+cargo test -p rds-workbench --lib quick_open -j 2
 cargo test  -p rds-workbench --test ui_contract -j 2
 
 # 环境异常：rustup shim（~/.cargo/bin/*.exe）损坏时报 “Permission denied”，
