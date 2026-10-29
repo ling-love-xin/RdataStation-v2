@@ -607,9 +607,9 @@ mod tests {
     #[test]
     fn test_validate_file_path_exists() {
         // 使用当前文件作为测试（file!() 为相对路径，cargo test 工作目录是 crate 根，
-        // 拼 CARGO_MANIFEST_DIR 得到绝对路径）
+        // 拼 CARGO_MANIFEST_DIR 得到绝对路径；目录化后本文件位于 duckdb/transfer/ 下）
         let current_file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src/duckdb/import_export.rs");
+            .join("src/duckdb/transfer/import_export.rs");
         let result = ImportExportManager::validate_file_path(&current_file.to_string_lossy());
         assert!(result.is_ok());
     }

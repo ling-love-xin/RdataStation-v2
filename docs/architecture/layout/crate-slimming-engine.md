@@ -89,6 +89,17 @@ engine 预估从 61,489 行 → **约 14,800 行（−76%）**，剩余恰好是
 
 > 前提：`row_to_arrow` 已随第三刀迁出。目录化只移动代码不重写控件/逻辑，
 > `duckdb/mod.rs` 的 `pub use` 全量保真，外部路径 `engine::duckdb::X` 零改动。
+>
+> **已实施（2026-10-29，提交 `9e8a45d8`）**：按下表建目录 + git mv + 各目录 `mod.rs`
+> 域内重导出 + 顶层通配传导。实测外部路径全部保真（jobs.rs 的 `engine::duckdb::probe_file`、
+> resource_host.rs 的 `engine::duckdb::file_reader_function`、persistence.rs 的
+> `engine::duckdb::analysis::*` 零改动）；`duckdb/mod.rs` 顶层 `pub use` 改通配
+> （`probe::*` / `transfer::*` / `temp_table::*` / `snapshot::*` / `extension::*` /
+> `search::*`），`FTSManager` 经 search 通配保真。
+> 踩坑两处：① `temp_table/analysis.rs` 与 `temp_table.rs` 的 `super::manager` 在移动后
+> 层级断链，改 `crate::duckdb::manager` 绝对路径；② `import_export.rs` 测试硬编码
+> `src/duckdb/import_export.rs` 自引用路径，随移动更新为 `src/duckdb/transfer/…`。
+> 另：`row_to_arrow.rs` / `value_text.rs` 两个死文件（内容已下沉 shared，仅剩薄壳）git rm。
 
 | 目录 | 责任（一句话） | 迁入文件 | 行数 |
 |---|---|---|---|

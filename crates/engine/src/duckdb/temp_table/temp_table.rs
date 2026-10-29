@@ -201,7 +201,8 @@ pub fn drop_temp_table(
             )))
         })?;
     // 登记表同步摘掉：留着会让「登记数」与库里的实际张数对不上
-    super::manager::DuckDBManager::temp_table_manager().unregister(name);
+    // （目录化后本文件位于 `duckdb/temp_table/` 下，`super` 指向 temp_table 目录；manager 用绝对路径）
+    crate::duckdb::manager::DuckDBManager::temp_table_manager().unregister(name);
     Ok(())
 }
 

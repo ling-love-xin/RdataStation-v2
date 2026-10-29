@@ -24,7 +24,9 @@ use duckdb::Connection;
 use serde_json::Value;
 use shared::error::{CommonError, CoreError};
 
-use super::manager::DuckDBManager;
+// 目录化后本文件位于 `duckdb/temp_table/` 下，`super` 指向 temp_table 目录；
+// manager 仍在 duckdb 根，改用 crate 绝对路径。
+use crate::duckdb::manager::DuckDBManager;
 use super::temp_table::TempTableSource;
 
 /// 分析用临时表的前缀（与 [`TempTableSource::Insight`] 的前缀**必须一致**）。
