@@ -452,6 +452,9 @@ impl NavView {
     ///
     /// D8：公开入口 = core 状态写入 + 一次 `cx.notify()`；合并窗口内由泵直接调
     /// `apply_connect_results_core`，末尾统一重绘，避免每条结果各触发一次布局测量。
+    ///
+    /// 仅测试使用（`nav_view/tests.rs` 断言结果回填）；生产泵直接调 core。
+    #[cfg(test)]
     pub(super) fn apply_connect_results(
         &mut self,
         results: Vec<nav_jobs::ConnectResult>,
@@ -627,18 +630,6 @@ impl NavView {
         }
         // 用户点红字重试：手点优先（S2-①）。
         self.ensure_nav_loaded(conn_id, key, path, false, JobPriority::User, cx);
-        cx.notify();
-    }
-
-    /// 回填索引搜索结果（过期批次直接丢弃：用户在等待期间已经把词改了）。
-    ///
-    /// D8：公开入口 = core 写入 + 一次 `cx.notify()`；合并窗口内泵直接调 core。
-    pub(super) fn apply_search_results(
-        &mut self,
-        results: Vec<nav_jobs::SearchResult>,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_search_results_core(results, cx);
         cx.notify();
     }
 
@@ -1158,18 +1149,6 @@ impl NavView {
         self.pump_reveal(cx);
     }
 
-    /// 回填「生成 SQL」结果：成功注入编辑区（打开一份绑定该连接的草稿），失败落提示。
-    ///
-    /// **不自动执行**：模板是给人改的（写语句更不该替用户跑）。
-    pub(super) fn apply_sql_results(
-        &mut self,
-        results: Vec<nav_jobs::SqlGenResult>,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_sql_results_core(results, cx);
-        cx.notify();
-    }
-
     fn apply_sql_results_core(
         &mut self,
         results: Vec<nav_jobs::SqlGenResult>,
@@ -1197,16 +1176,6 @@ impl NavView {
                 }
             }
         }
-    }
-
-    /// 回填「测试连接」结果（结果文案加连接名前缀，直接落面板提示）。
-    pub(super) fn apply_test_results(
-        &mut self,
-        results: Vec<nav_jobs::TestConnResult>,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_test_results_core(results, cx);
-        cx.notify();
     }
 
     fn apply_test_results_core(
@@ -1318,20 +1287,6 @@ impl NavView {
             &driver,
             seq,
         );
-    }
-
-    /// S3-④：回填行估计结果（主线程）。
-    ///
-    /// 过期批次（`seq` 小于当前值，被刷新 / 重展开顶掉）直接丢弃；有效批次按表名
-    /// 回填 `children` 里 Table 节点的 `row_estimate`，并从在途集合移除（「…」占位消失）。
-    /// 失败 / 超时 / 驱动不支持（空 `estimates`）同样移除在途集合——徽标消失即安静的失败。
-    pub(super) fn apply_row_estimate_results(
-        &mut self,
-        results: Vec<nav_jobs::RowEstimateResult>,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_row_estimate_results_core(results);
-        cx.notify();
     }
 
     /// 纯状态写入（无 host 副作用 / 无定位推进），core 不需要 `cx`；公开入口保留

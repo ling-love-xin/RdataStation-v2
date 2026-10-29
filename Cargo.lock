@@ -8213,7 +8213,6 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "specta",
  "tokio",
  "tracing",
 ]

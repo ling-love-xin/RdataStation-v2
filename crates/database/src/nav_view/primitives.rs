@@ -355,6 +355,7 @@ pub(super) fn more_row_label(loaded: usize, total: usize, filtering: bool, fetch
 /// D8 合并窗口内六类结果的回填顺序（与泵现状顺序一致）：
 /// load → sql → test → row_estimate → connect → search。
 /// core 拆分后合并窗口内按此顺序调用；单测断言顺序表，调乱顺序会被钉死。
+#[cfg(test)]
 pub(super) const PUMP_BATCH_ORDER: [&str; 6] = [
     "load",
     "sql",
@@ -1308,6 +1309,8 @@ pub(super) fn key_in_subtree(key: &str, root: &str, prefix: &str) -> bool {
 
 /// 刷新某节点子树：回收集合中落在该子树范围内的 key，保留其余部分。
 /// 供 `refresh_node` 清 `loading` 等 `HashSet` 簿记复用（与 children/attempted 同口径 retain）。
+/// 仅测试使用（`primitives.rs` 内单测断言 D9）。
+#[cfg(test)]
 pub(super) fn prune_subtree_keys(
     set: &HashSet<String>,
     root: &str,

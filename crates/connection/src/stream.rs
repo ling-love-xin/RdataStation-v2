@@ -78,29 +78,6 @@ impl AsyncWrite for ConnectionStream {
     }
 }
 
-/// 流包装器 trait
-///
-/// 用于在流上添加额外的功能（如日志、监控等）
-pub trait StreamWrapper: AsyncRead + AsyncWrite + Send + Unpin {
-    /// 获取流的元信息
-    fn stream_info(&self) -> StreamInfo;
-}
-
-/// 流信息
-#[derive(Debug, Clone)]
-pub struct StreamInfo {
-    /// 连接方式
-    pub method: String,
-    /// 本地地址
-    pub local_addr: String,
-    /// 远程地址
-    pub remote_addr: String,
-    /// 是否加密
-    pub is_encrypted: bool,
-    /// 连接建立时间
-    pub established_at: std::time::Instant,
-}
-
 impl ConnectionStream {
     /// 创建 TCP 连接流
     pub fn tcp(stream: tokio::net::TcpStream) -> Self {
@@ -174,19 +151,6 @@ impl ConnectionStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_stream_info() {
-        let info = StreamInfo {
-            method: "tcp".to_string(),
-            local_addr: "127.0.0.1:1234".to_string(),
-            remote_addr: "127.0.0.1:3306".to_string(),
-            is_encrypted: false,
-            established_at: std::time::Instant::now(),
-        };
-        assert_eq!(info.method, "tcp");
-        assert!(!info.is_encrypted);
-    }
 
     #[tokio::test]
     async fn test_stream_method_name_and_addressing() {

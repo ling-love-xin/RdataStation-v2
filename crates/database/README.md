@@ -1,10 +1,10 @@
 # rds-database
 
-数据源管理 / 数据库导航（M4）的**服务层** crate。它回答「连上后怎么浏览、怎么检索、怎么取元信息」——导航树、三级缓存、属性面板取数、表数据预览都在这里；树的 UI 渲染在 `rds-workbench` 的 `panels/nav.rs`，连接的新建 / 编辑 / 测试在 M3（`rds-connection` + workbench `connection_service`）。
+数据源管理 / 数据库导航（M4）的**服务层** crate。它回答「连上后怎么浏览、怎么检索、怎么取元信息」——导航树、三级缓存、属性面板取数、表数据预览都在这里；树的 UI 渲染已下沉本 crate（`nav_view/`，2026-10-23），连接的新建 / 编辑 / 测试在 M3（`rds-connection` + workbench `connection_service`）。
 
 - 分类：Feature crate（M4 数据源管理 / 导航）
-- 上游消费方：`rds-workbench`（导航面板、属性面板、Quick Open `ShowProperties`、拖拽落点）
-- 依赖：内部依赖 `engine`（驱动内省 / L2 持久化 / `ConnectionOrgStore`）、`shared`（`NavSource` 等模型）、`property`（`rds-property` 描述模型 / 数据容器）、`workbench_shell` + `gpui-kit`（UI 基础设施）；不依赖 `app`
+- 上游消费方：`rds-workbench`（导航面板、属性面板、Quick Open `ShowProperties`、拖拽落点）+ `rds-editor`（`cache::NavCache` 补全 / schema / 主键、`nav_jobs` 预热与搜索、`model` 属性请求）
+- 依赖：内部依赖 `engine`（驱动内省 / L2 持久化 / `ConnectionOrgStore`）、`shared`（`error` / `models::{QueryResult, Value}`；`NavSource` 等导航模型定义在本 crate `model.rs`）、`property`（`rds-property` 描述模型 / 数据容器）、`workbench_shell` + `gpui-kit`（UI 基础设施）；不依赖 `app`
 - 测试：crate 内 98 项单测 + `crates/workbench/tests/nav_property_real.rs` 真机全链路（SQLite / DuckDB，2026-10-03）
 
 ---
@@ -24,7 +24,7 @@
 **本 crate 不管（也不要管）：**
 - 不建连接——新建 / 编辑 / 测试 / 保存是 M3 职责；这里只消费 `ConnectionManager` 连接池
 - 不执行 SQL——编辑 / 执行 / 结果集是 `editor` 模块；导航只投递「打开查询」请求（双击表 = `SELECT * … LIMIT 200`）
-- 不渲染树 / 面板 UI——视图在 `rds-workbench` 的 `panels/nav.rs`（`editor.rs` 属性面板）；本 crate 只出状态与数据
+- 不装配宿主视图——Dock 面板实体 / 宿主编排在 `rds-workbench`（`view.rs` + `components/nav_host.rs`）；本 crate 的 `nav_view/` 提供导航面板渲染实体，属性面板渲染在 `rds-workbench` 的 `panels/property_panel.rs`
 - 不编辑元数据——改名 / 建索引 / 授权不在本模块
 - 不做权限 / 依赖内省——驱动能力未实现，属性面板对应页签灰置（`rds-property` 注册表 `Unsupported`）
 - 不含全文检索引擎——内容档走 Quick Open `#`（`scratchpad` 全文索引）；面板搜索框只有名称档
@@ -44,7 +44,7 @@ pub mod model;              // NavPath / NavNode / NavSource / PropertyRef / Pro
 pub mod nav_view;           // 视图状态（展开 / 选中 / 过滤 / 分页游标）与行交互载荷
 pub mod property_panel;     // load_properties（属性 + 数据同一次往返）+ provider 分派骨架
 pub mod property_providers; // 各驱动 provider 注册（pg/sqlite/duckdb/mysql）
-pub mod table_data;         // 数据预览分页核心：TableDataRequest / quote_ident / load_table_data
+pub mod table_data;         // 数据预览分页核心：TableDataRequest / load_table_data（引号转义走 `nav::dialect_of`）
 
 pub use model::{NavPath, NavSource};
 ```
@@ -60,13 +60,13 @@ pub use model::{NavPath, NavSource};
 
 ## 接线关系
 
-- **workbench → database**：`panels/nav.rs` 消费 `nav_view` 状态 + `navigator_service`（经 `nav_jobs` 入队）；`panels/property_panel.rs`（`PropertyHostPanel`）经 `Shared` 桥请求属性；Quick Open `ShowProperties` 构造 `PropertyRequest`（`data: None`，数据页懒加载）。
+- **workbench → database**：workbench 消费 `nav_view` 实体（`panels/left_tabs.rs` / `panels/mod.rs`）+ `navigator_service`（经 `nav_jobs` 入队）；`panels/property_panel.rs`（`PropertyHostPanel`）经 `Shared` 桥请求属性；Quick Open `ShowProperties` 构造 `PropertyRequest`（`data: None`，数据页懒加载）。
 - **database → property（rds-property）**：`load_properties` 是数据生产者（通用骨架取数 + provider 分派），provider（`property_providers/`）实现 `PropertyProvider` trait；渲染方（workbench）只消费 `ObjectProperties`，三方互不依赖视图。
 - **database → engine**：驱动内省走 `MetadataBrowser`；L2 缓存与分组 / 标签落库走 `engine::persistence`；`engine` 不回依赖本 crate。
 
 ## 测试
 
-- crate 内单测：`nav_view` 状态机 / 分页 / 失败重试、`property_ref_of` 映射、`table_data` 转义与分页探测、`property_panel` 骨架 / provider（含 PG roles/tablespaces 候选与编辑 SQL）。
+- crate 内单测：`nav_view` 状态机 / 分页 / 失败重试、`property_ref_of` 映射、`table_data` 单元格映射、`property_panel` 骨架 / provider（含 PG roles/tablespaces 候选与编辑 SQL）。
 - 真机全链路（`crates/workbench/tests/nav_property_real.rs`）：SQLite 3.53.2 / DuckDB v1.5.5 各跑同一参数化链路——测试连接 → 真实连接 → Catalog / 类别文件夹（带计数）/ 表 / 视图 / 列 → 属性面板 → 数据页（分页 / 排序 / NULL）→ 注册表灰置 → 二次加载 cache-aside。结果见 `docs/architecture/database/database-navigator-test-report-2026-10-03.md`。
 - 已知缺口：MySQL / PG 无端点（本环境）；大 schema（>500 对象）真机未做；GUI 像素级冒烟未做。
 

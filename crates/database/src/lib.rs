@@ -3,14 +3,14 @@
 //! 规范说明：本 crate 是 v2 骨架占位，按 GPUI-kit 编码规范组织：
 //! 同一业务能力的 model / service / view / command / dialog / workflow 放在一起。
 //! 迁移源与逐项映射见 `docs/migration/v1-to-v2-mapping.md`。
-#![allow(dead_code)]
 
 pub mod cache;
 pub mod metadata_service;
 
 pub mod commands;
-pub mod database_view;
 // ER 建模视图（原生 GPUI，不引入 webview）：模型 / 桥 / 布局已落地，渲染与面板后续切片。
+// 排期未启动，默认不编译（feature `er-view` 打开时接入），见 `database-er-model-view-design.md`。
+#[cfg(feature = "er-view")]
 pub mod er;
 pub mod model;
 pub mod nav;

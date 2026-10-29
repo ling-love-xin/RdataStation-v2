@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use connection::config::{ChainHop, ConnectionMethod, SslConfig};
@@ -7,8 +6,7 @@ use connection::url_params::SslMode;
 use engine::connection_manager::{ConnectionInfo, ConnectionManager, ConnectionType};
 use engine::driver::registry::DriverConnectionConfig;
 use engine::driver::router::DataSourceRouter;
-use engine::driver::traits::{DataSourceMeta, DynDatabase};
-use engine::persistence::MetadataCacheManager;
+use engine::driver::traits::DynDatabase;
 use engine::persistence::connection_store::{self, RecentConnectionInput};
 use engine::persistence::global_db::{GlobalConnectionSaveInput, GlobalDatabaseManager};
 use engine::driver::registry::DriverRegistry;
@@ -112,57 +110,6 @@ impl ConnectionService {
     pub fn new(manager: Arc<ConnectionManager>) -> Self {
         let tunnels = manager.tunnels().clone();
         Self { manager, tunnels }
-    }
-
-    /// 诊断：两个服务实例是否共用同一张隧道注册表（同一管理器 = 共用）。
-    pub fn shares_tunnels_with(&self, other: &ConnectionService) -> bool {
-        self.tunnels.shares_with(&other.tunnels)
-    }
-
-    /// 创建或获取数据库连接（默认全局连接）
-    ///
-    /// # Arguments
-    ///
-    /// * `conn_id` - 连接唯一标识（可选，不提供则自动生成）
-    /// * `db_type` - 数据库类型 (mysql, postgres, sqlite, duckdb)
-    /// * `url` - 数据库连接 URL
-    /// * `name` - 连接名称（可选）
-    ///
-    /// # Returns
-    ///
-    /// 返回连接 ID 和数据库实例
-    pub async fn connect(
-        &self,
-        conn_id: Option<String>,
-        db_type: &str,
-        url: &str,
-        name: Option<String>,
-    ) -> Result<(String, DynDatabase), CoreError> {
-        self.connect_with_type(ConnectRequest {
-            conn_id,
-            db_type: db_type.to_string(),
-            url: url.to_string(),
-            name,
-            connection_type: ConnectionType::Global,
-            project_path: None,
-            description: None,
-            driver_id: None,
-            environment_id: None,
-            auth_config_id: None,
-            auth_method: None,
-            network_config_id: None,
-            driver_properties: None,
-            advanced_options: None,
-            options: None,
-            tags: None,
-            metadata_path: None,
-            schema_name: None,
-            use_duckdb_fed: None,
-            password: None,
-            skip_persistence: None,
-            network_method: None,
-        })
-        .await
     }
 
     /// 创建或获取数据库连接（指定连接类型）
@@ -658,11 +605,6 @@ impl ConnectionService {
             .await
     }
 
-    /// 脱敏 URL 中的密码，替换为 ***
-    pub fn mask_password_in_url(url: &str) -> String {
-        connection::url::mask_password_in_url(url)
-    }
-
     /// 从数据库中加载认证配置数据
     ///
     /// 根据连接类型和认证配置 ID，从全局或项目数据库中读取认证配置，
@@ -1045,36 +987,6 @@ impl ConnectionService {
         DataSourceRouter::route(config).await
     }
 
-    /// 确保连接级元数据缓存已初始化（懒加载，幂等）
-    ///
-    /// 元数据缓存跟随连接信息：
-    /// - 全局连接：<RDS_HOME>/data/system/global_metadata/conn_{id}.sqlite
-    /// - 项目连接：{project_path}/meta/connection_metadata/conn_{id}.sqlite
-    ///
-    /// 如果缓存文件已存在则跳过，否则创建并执行迁移。
-    /// 调用时机：首次查询 schema / table / column 时。
-    pub fn ensure_metadata_cache(
-        conn_id: &str,
-        connection_type: engine::persistence::ConnectionType,
-        project_path: Option<&str>,
-    ) -> Result<(), CoreError> {
-        let cache_manager = MetadataCacheManager::new(conn_id, connection_type, project_path)?;
-
-        if cache_manager.exists() {
-            tracing::debug!(path = ?cache_manager.db_path(), "Metadata cache already exists, skipping init");
-            return Ok(());
-        }
-
-        let _conn = cache_manager.open()?;
-
-        tracing::debug!(
-            "Metadata cache lazily initialized ({:?}): {:?}",
-            connection_type,
-            cache_manager.db_path()
-        );
-        Ok(())
-    }
-
     /// 指纹接线：把 `conn_id → 身份指纹` 登记进进程内注册表。
     ///
     /// 供连接建立 / 保存路径调用；`MetadataCacheManager` 与 `NavCache` 建缓存路径时
@@ -1108,26 +1020,6 @@ impl ConnectionService {
         }
     }
 
-    /// 获取现有连接
-    pub async fn get_connection(&self, conn_id: &str) -> Option<DynDatabase> {
-        self.manager.get_connection(&conn_id.to_string()).await
-    }
-
-    /// 切换活动连接
-    pub async fn switch_connection(&self, conn_id: &str) -> Result<(), CoreError> {
-        self.manager.switch_connection(&conn_id.to_string()).await
-    }
-
-    /// 获取当前活动连接
-    pub async fn get_active_connection(&self) -> Option<DynDatabase> {
-        self.manager.get_active_connection().await.map(|(_, db)| db)
-    }
-
-    /// 获取当前活动连接 ID
-    pub async fn get_active_conn_id(&self) -> Option<String> {
-        self.manager.get_active_conn_id().await
-    }
-
     /// 回收某连接的隧道守卫（守卫 drop 即关闭本地端口与后台 accept 循环）。
     async fn release_tunnels(&self, conn_id: &str, reason: &str) {
         let guards = self.tunnels.take(conn_id).await;
@@ -1135,11 +1027,6 @@ impl ConnectionService {
             tracing::info!(conn_id = %conn_id, count = guards.len(), reason, "清理隧道守卫");
             drop(guards);
         }
-    }
-
-    /// 某连接当前登记的隧道数量（诊断 / 测试用）。
-    pub async fn tunnel_count(&self, conn_id: &str) -> usize {
-        self.tunnels.count(conn_id).await
     }
 
     /// 关闭指定连接（**保留元数据缓存**）。
@@ -1154,10 +1041,9 @@ impl ConnectionService {
         // 目标分析库按作用域（P_/GP_ 项目侧需要项目路径，从连接信息取）；
         // 未注册过不算失败；重连时连接路径会按门控重新注册。
         let project_id = self
-            .list_connections()
+            .manager
+            .get_connection_info(&conn_id.to_string())
             .await
-            .into_iter()
-            .find(|info| info.id == conn_id)
             .and_then(|info| info.project_id);
         let _ = crate::services::secret_integration::remove_connection_secret_at(
             crate::services::secret_integration::analysis_db_for_scope(
@@ -1174,328 +1060,7 @@ impl ConnectionService {
         Ok(())
     }
 
-    /// 关闭所有连接
-    pub async fn close_all_connections(&self) -> Result<(), CoreError> {
-        self.tunnels.clear().await;
-        self.manager.close_all_connections().await;
-        Ok(())
     }
-
-    /// 获取所有连接信息
-    pub async fn list_connections(&self) -> Vec<ConnectionInfo> {
-        self.manager.get_all_connection_info().await
-    }
-
-    /// 获取连接的数据源元数据
-    pub async fn get_connection_meta(&self, conn_id: &str) -> Option<DataSourceMeta> {
-        self.manager
-            .get_connection(&conn_id.to_string())
-            .await
-            .map(|db| db.meta())
-    }
-
-    /// 检查连接是否存在
-    pub async fn has_connection(&self, conn_id: &str) -> bool {
-        self.manager
-            .get_connection(&conn_id.to_string())
-            .await
-            .is_some()
-    }
-
-    /// 获取最近使用的连接列表
-    pub fn get_recent_connections(
-        &self,
-    ) -> Result<Vec<connection_store::ConnectionRecord>, CoreError> {
-        connection_store::get_recent_connections().map_err(|e| {
-            CoreError::storage(shared::error::StorageError::read(
-                "recent_connections",
-                e.to_string(),
-            ))
-        })
-    }
-
-    /// 删除最近连接记录
-    pub fn remove_recent_connection(&self, name: &str) -> Result<(), CoreError> {
-        connection_store::remove_recent_connection(name).map_err(|e| {
-            CoreError::storage(shared::error::StorageError::write(
-                "recent_connections",
-                e.to_string(),
-            ))
-        })
-    }
-
-    /// 获取连接信息
-    pub async fn get_connection_info(&self, conn_id: &str) -> Result<ConnectionInfo, CoreError> {
-        self.manager
-            .get_connection_info(&conn_id.to_string())
-            .await
-            .ok_or_else(|| CoreError::connection(ConnectionError::NotFound(conn_id.to_string())))
-    }
-
-    /// 执行 SQL 查询
-    pub async fn execute_sql(
-        &self,
-        conn_id: Option<String>,
-        sql: &str,
-    ) -> Result<shared::models::QueryResult, CoreError> {
-        let db = if let Some(id) = conn_id {
-            self.manager
-                .get_connection(&id)
-                .await
-                .ok_or_else(|| CoreError::connection(ConnectionError::NotFound(id.clone())))?
-        } else {
-            self.manager
-                .get_active_connection()
-                .await
-                .map(|(_, db)| db)
-                .ok_or_else(|| CoreError::connection(ConnectionError::NoActiveConnection))?
-        };
-
-        let result = db.query(sql).await?;
-        Ok(result)
-    }
-
-    /// 转换连接类型：全局 → 项目
-    ///
-    /// # Arguments
-    ///
-    /// * `conn_id` - 连接 ID
-    /// * `project_id` - 目标项目 ID
-    ///
-    /// # Returns
-    ///
-    /// 返回新的连接信息
-    pub async fn convert_to_project_connection(
-        &self,
-        conn_id: &str,
-        project_id: &str,
-    ) -> Result<ConnectionInfo, CoreError> {
-        use shared::error::CommonError;
-
-        let conn_id_string = conn_id.to_string();
-
-        // 获取原连接信息
-        let old_info = self
-            .manager
-            .get_connection_info(&conn_id_string)
-            .await
-            .ok_or_else(|| CoreError::connection(ConnectionError::NotFound(conn_id.to_string())))?;
-
-        // 验证原连接是全局连接
-        if old_info.connection_type != ConnectionType::Global {
-            return Err(CoreError::common(CommonError::General(format!(
-                "Connection {} is not a global connection",
-                conn_id
-            ))));
-        }
-
-        // 复制元数据文件到项目目录
-        let old_meta_path = self.get_global_metadata_path(conn_id);
-        let new_meta_path = self.get_project_metadata_path(conn_id, project_id);
-
-        if old_meta_path.exists() {
-            if let Some(parent) = new_meta_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    CoreError::common(CommonError::General(format!(
-                        "Failed to create project metadata directory: {}",
-                        e
-                    )))
-                })?;
-            }
-
-            std::fs::copy(&old_meta_path, &new_meta_path).map_err(|e| {
-                CoreError::common(CommonError::General(format!(
-                    "Failed to copy metadata file: {}",
-                    e
-                )))
-            })?;
-
-            tracing::info!(
-                "Copied metadata from {:?} to {:?}",
-                old_meta_path,
-                new_meta_path
-            );
-        }
-
-        // 更新连接信息
-        let new_info = ConnectionInfo {
-            id: old_info.id.clone(),
-            name: old_info.name.clone(),
-            db_type: old_info.db_type.clone(),
-            url: old_info.url.clone(),
-            server_version: old_info.server_version.clone(),
-            connection_type: ConnectionType::Project,
-            project_id: Some(project_id.to_string()),
-            driver_id: old_info.driver_id.clone(),
-            environment_id: old_info.environment_id.clone(),
-            auth_config_id: old_info.auth_config_id.clone(),
-            auth_method: old_info.auth_method.clone(),
-            network_config_id: old_info.network_config_id.clone(),
-            driver_properties: old_info.driver_properties.clone(),
-            advanced_options: old_info.advanced_options.clone(),
-            description: old_info.description.clone(),
-            // 作用域转换不改“能不能被 DuckDB 直连”这件事
-            use_duckdb_fed: old_info.use_duckdb_fed,
-            created_at: old_info.created_at,
-        };
-
-        // 更新连接管理器中的信息
-        self.manager
-            .update_connection_info(&conn_id_string, new_info.clone())
-            .await?;
-
-        tracing::info!("Connection {} converted from global to project", conn_id);
-        Ok(new_info)
-    }
-
-    /// 转换连接类型：项目 → 全局
-    ///
-    /// # Arguments
-    ///
-    /// * `conn_id` - 连接 ID
-    ///
-    /// # Returns
-    ///
-    /// 返回新的连接信息
-    pub async fn convert_to_global_connection(
-        &self,
-        conn_id: &str,
-    ) -> Result<ConnectionInfo, CoreError> {
-        use shared::error::CommonError;
-
-        let conn_id_string = conn_id.to_string();
-
-        // 获取原连接信息
-        let old_info = self
-            .manager
-            .get_connection_info(&conn_id_string)
-            .await
-            .ok_or_else(|| CoreError::connection(ConnectionError::NotFound(conn_id.to_string())))?;
-
-        // 验证原连接是项目连接
-        if old_info.connection_type != ConnectionType::Project {
-            return Err(CoreError::common(CommonError::General(format!(
-                "Connection {} is not a project connection",
-                conn_id
-            ))));
-        }
-
-        // 移动元数据文件到全局目录
-        let project_id = old_info.project_id.as_deref().ok_or_else(|| {
-            CoreError::common(CommonError::General("Project ID is missing".to_string()))
-        })?;
-
-        let old_meta_path = self.get_project_metadata_path(conn_id, project_id);
-        let new_meta_path = self.get_global_metadata_path(conn_id);
-
-        if old_meta_path.exists() {
-            if let Some(parent) = new_meta_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    CoreError::common(CommonError::General(format!(
-                        "Failed to create global metadata directory: {}",
-                        e
-                    )))
-                })?;
-            }
-
-            std::fs::copy(&old_meta_path, &new_meta_path).map_err(|e| {
-                CoreError::common(CommonError::General(format!(
-                    "Failed to copy metadata file: {}",
-                    e
-                )))
-            })?;
-
-            // 删除原项目元数据文件
-            let _ = std::fs::remove_file(&old_meta_path);
-
-            tracing::info!(
-                "Moved metadata from {:?} to {:?}",
-                old_meta_path,
-                new_meta_path
-            );
-        }
-
-        // 更新连接信息
-        let new_info = ConnectionInfo {
-            id: old_info.id.clone(),
-            name: old_info.name.clone(),
-            db_type: old_info.db_type.clone(),
-            url: old_info.url.clone(),
-            server_version: old_info.server_version.clone(),
-            connection_type: ConnectionType::Global,
-            project_id: None,
-            driver_id: old_info.driver_id.clone(),
-            environment_id: old_info.environment_id.clone(),
-            auth_config_id: old_info.auth_config_id.clone(),
-            auth_method: old_info.auth_method.clone(),
-            network_config_id: old_info.network_config_id.clone(),
-            driver_properties: old_info.driver_properties.clone(),
-            advanced_options: old_info.advanced_options.clone(),
-            description: old_info.description.clone(),
-            use_duckdb_fed: old_info.use_duckdb_fed,
-            created_at: old_info.created_at,
-        };
-
-        // 更新连接管理器中的信息
-        self.manager
-            .update_connection_info(&conn_id_string, new_info.clone())
-            .await?;
-
-        tracing::info!("Connection {} converted from project to global", conn_id);
-        Ok(new_info)
-    }
-
-    /// 获取全局连接的元数据路径
-    fn get_global_metadata_path(&self, conn_id: &str) -> PathBuf {
-        let cache_manager =
-            MetadataCacheManager::new(conn_id, engine::persistence::ConnectionType::Global, None);
-        cache_manager
-            .map(|m| m.db_path().clone())
-            .unwrap_or_else(|_| PathBuf::from(".").join(format!("conn_global_{}.sqlite", conn_id)))
-    }
-
-    /// 获取项目连接的元数据路径
-    fn get_project_metadata_path(&self, conn_id: &str, project_id: &str) -> PathBuf {
-        let cache_manager = MetadataCacheManager::new(
-            conn_id,
-            engine::persistence::ConnectionType::Project,
-            Some(project_id),
-        );
-        cache_manager
-            .map(|m| m.db_path().clone())
-            .unwrap_or_else(|_| {
-                PathBuf::from(project_id)
-                    .join(".RSmeta")
-                    .join("metadata")
-                    .join(format!("conn_project_{}.sqlite", conn_id))
-            })
-    }
-
-    /// 检测项目中是否存在全局连接
-    ///
-    /// # Arguments
-    ///
-    /// * `project_id` - 项目 ID
-    ///
-    /// # Returns
-    ///
-    /// 返回全局连接列表
-    pub async fn detect_global_connections_in_project(
-        &self,
-        project_id: &str,
-    ) -> Result<Vec<ConnectionInfo>, CoreError> {
-        let connections = self.manager.get_all_connection_info().await;
-        let global_connections: Vec<ConnectionInfo> = connections
-            .into_iter()
-            .filter(|info| {
-                info.connection_type == ConnectionType::Global
-                    && info.project_id.as_deref() == Some(project_id)
-            })
-            .collect();
-
-        Ok(global_connections)
-    }
-}
 
 /// 从全局 DB 解析 network_config_id → ConnectionMethod
 ///
@@ -1609,12 +1174,6 @@ fn is_lan_url(url: &str) -> bool {
         Ok(std::net::IpAddr::V6(v6)) => v6.is_loopback(),
         Err(_) => false,
     }
-}
-
-pub async fn resolve_network_method(
-    network_config_id: Option<&str>,
-) -> Result<Option<ConnectionMethod>, CoreError> {
-    resolve_network_method_with_project(network_config_id, None).await
 }
 
 /// 从全局 + 项目 DB 解析 network_config_id → ConnectionMethod
@@ -2053,21 +1612,6 @@ mod tests {
         assert!(!method_has_ssl_hop(None));
     }
 
-    #[test]
-    fn services_sharing_a_manager_share_tunnel_registry() {
-        let manager = Arc::new(ConnectionManager::new());
-        let a = ConnectionService::new(manager.clone());
-        let b = ConnectionService::new(manager.clone());
-        assert!(
-            a.shares_tunnels_with(&b),
-            "同一管理器下的服务实例必须共用隧道注册表（生产 = 全局单例）——\
-             否则隧道会随建立它的临时实例释放（审计 #20）"
-        );
-
-        let isolated = ConnectionService::new(Arc::new(ConnectionManager::new()));
-        assert!(!a.shares_tunnels_with(&isolated), "独立管理器保持测试隔离");
-    }
-
     #[tokio::test]
     async fn network_config_type_keys_are_normalized() {
         // UI / 历史数据写入的是 `SSH` / `Proxy` 这类大写标签；解析必须大小写无关，
@@ -2089,26 +1633,6 @@ mod tests {
             .await
             .expect("parse unknown");
         assert!(unknown.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_connect_empty_url() {
-        let manager = Arc::new(ConnectionManager::new());
-        let service = ConnectionService::new(manager);
-
-        let result = service.connect(None, "mysql", "", None).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_connect_invalid_db_type() {
-        let manager = Arc::new(ConnectionManager::new());
-        let service = ConnectionService::new(manager);
-
-        let result = service
-            .connect(None, "invalid", "mysql://localhost", None)
-            .await;
-        assert!(result.is_err());
     }
 
     /// A2：引用了网络档案但入口未解析出连接方式（档案被删 / 类型未知）→ 拒绝静默直连。

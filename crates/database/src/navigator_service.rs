@@ -22,6 +22,8 @@ pub const MAX_INLINE_COLUMNS: usize = 50;
 use engine::cache::{CacheManager, MetadataCache};
 use engine::connection_manager::ConnectionManager;
 use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind, SchemaObjects};
+// 索引计数类型仅测试使用（`indexed_folder_count` 参数；生产计数判定走 L2 缓存）。
+#[cfg(test)]
 use engine::persistence::SchemaObjectCounts;
 use shared::error::CoreError;
 
@@ -607,6 +609,7 @@ impl NavigatorService {
     /// 重建会覆盖两者）。而视图是**另一趟**才写进 L2 的（先展开表、以后再展开视图），
     /// 那一趟不重建索引——此时索引里 `view_count = 0`，照它判定就会把**视图文件夹整支隐藏**。
     /// 例程 / 序列 / 触发器根本不在索引里（不在缓存范围内），自然也不能信。
+    #[cfg(test)]
     fn indexed_folder_count(
         folder: NavFolder,
         counts: Option<&SchemaObjectCounts>,
@@ -615,22 +618,6 @@ impl NavigatorService {
             (NavFolder::Tables, Some(counts)) => Some(counts.table_count),
             _ => None,
         }
-    }
-
-    /// 索引里的对象计数（表 / 视图）；索引不可用或刷新模式返回 `None`。
-    fn indexed_counts(
-        &self,
-        conn_id: &str,
-        catalog: &str,
-        schema: &str,
-    ) -> Option<SchemaObjectCounts> {
-        // 刷新必须看实时结果：索引（与 L2）都是刷新前的旧值。
-        if self.fresh {
-            return None;
-        }
-        let cache = self.cache(conn_id)?;
-        let schema_id = cache.schema_id(catalog, schema)?;
-        cache.object_counts(schema_id)
     }
 
     /// 类别文件夹节点（DBeaver 分块模型：静态渲染，无计数——对象数在点击文件夹

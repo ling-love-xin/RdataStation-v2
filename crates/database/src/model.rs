@@ -398,13 +398,6 @@ pub struct ConnectionGroup {
     pub expanded: bool,
 }
 
-/// 连接标签（多值）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConnectionTag {
-    pub connection_id: String,
-    pub tag: String,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
