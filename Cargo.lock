@@ -8274,6 +8274,7 @@ dependencies = [
  "rds-paths",
  "rds-shared",
  "rds-sql",
+ "rds-store",
  "regex",
  "rusqlite",
  "russh",
@@ -8521,6 +8522,30 @@ dependencies = [
  "serde",
  "sqlglot-rust",
  "tracing",
+]
+
+[[package]]
+name = "rds-store"
+version = "0.2.5"
+dependencies = [
+ "chrono",
+ "duckdb",
+ "include_dir",
+ "once_cell",
+ "rand 0.10.2",
+ "rds-connection",
+ "rds-paths",
+ "rds-shared",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "specta",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

@@ -95,7 +95,7 @@ impl MetadataCacheManager {
         let dir = match connection_type {
             ConnectionType::Global => {
                 // 全局连接：存储到系统目录下的全局元数据目录
-                let system_dir = crate::migration::get_system_dir()?;
+                let system_dir = crate::persistence::get_system_dir()?;
                 system_dir.join("global_metadata")
             }
             ConnectionType::Project => {

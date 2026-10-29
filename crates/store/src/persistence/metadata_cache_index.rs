@@ -71,7 +71,7 @@ pub fn index_path() -> Result<PathBuf, CoreError> {
     if let Some(p) = index_path_override() {
         return Ok(p);
     }
-    Ok(crate::migration::get_system_dir()?.join("metadata_cache_index.sqlite"))
+    Ok(crate::persistence::get_system_dir()?.join("metadata_cache_index.sqlite"))
 }
 
 /// 打开（或创建）索引库；WAL + busy_timeout（与元数据缓存连接风格一致）。
@@ -291,7 +291,7 @@ pub fn list_orphan_cache_entries(
 ) -> Result<Vec<OrphanCacheEntry>, CoreError> {
     let dir = system_dir
         .map(|p| p.to_path_buf())
-        .unwrap_or(crate::migration::get_system_dir()?);
+        .unwrap_or(crate::persistence::get_system_dir()?);
     let meta_dir = dir.join("global_metadata");
     Ok(orphans()?
         .into_iter()
@@ -329,7 +329,7 @@ pub fn list_orphan_cache_entries(
 pub fn cleanup_orphan_meta_files(system_dir: Option<&Path>) -> Result<usize, CoreError> {
     let dir = system_dir
         .map(|p| p.to_path_buf())
-        .unwrap_or(crate::migration::get_system_dir()?);
+        .unwrap_or(crate::persistence::get_system_dir()?);
     let meta_dir = dir.join("global_metadata");
     let mut removed = 0usize;
     for e in orphans()? {

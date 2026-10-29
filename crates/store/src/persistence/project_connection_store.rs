@@ -3,9 +3,8 @@
 //! 负责在项目级别存储和管理数据库连接配置。
 //! 表结构与 global_connections 保持一致。
 
-use shared::error::{CoreError, StorageError};
+use shared::error::{CommonError, CoreError, StorageError};
 use crate::persistence::project_db::ProjectDatabaseManager;
-use crate::CommonError;
 
 /// 连接配置（支持 DuckDB 联邦分析）
 #[derive(Debug, Clone)]
@@ -556,7 +555,7 @@ impl ProjectConnectionStore {
     ///
     /// 在写入前会校验驱动是否在全局目录中存在且未被全局禁用。
     pub async fn enable_driver(&self, driver_id: &str) -> Result<(), CoreError> {
-        let global_db = crate::migration::get_global_db_manager()
+        let global_db = crate::persistence::get_global_db_manager()
             .ok_or_else(|| CoreError::from("Global database not initialized".to_string()))?;
 
         let driver = global_db

@@ -313,7 +313,7 @@ impl GlobalDuckdbConnection {
     /// # 参数
     /// * `db_path` - 数据库文件路径，如果为 ":memory:" 则使用内存数据库
     pub async fn new(db_path: PathBuf) -> Result<Self, CoreError> {
-        let conn = crate::DuckDBManager::open_file_with_retry(&db_path.to_string_lossy())?;
+        let conn = shared::duckdb_open::open_file_with_retry(&db_path.to_string_lossy())?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(Some(conn))),

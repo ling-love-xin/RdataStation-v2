@@ -80,12 +80,12 @@ impl ConnectionDraftStore {
             return Self::open_at(path.clone());
         }
         // 全局系统未初始化（单元/集成测试、启动降级）：不持久化，避免写入用户真实库。
-        if crate::migration::get_global_db_manager().is_none() {
+        if crate::persistence::get_global_db_manager().is_none() {
             return Err(CoreError::common(CommonError::General(
                 "global system not initialized".to_string(),
             )));
         }
-        let path = crate::migration::get_global_db_path()?;
+        let path = crate::persistence::get_global_db_path()?;
         Self::open_at(path)
     }
 

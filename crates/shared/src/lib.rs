@@ -15,6 +15,7 @@
 
 pub mod crypto;
 pub mod drag;
+pub mod duckdb_open;
 pub mod error;
 pub mod fact;
 pub mod i18n;

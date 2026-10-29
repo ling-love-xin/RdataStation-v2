@@ -1,0 +1,46 @@
+[package]
+name = "rds-store"
+version.workspace = true
+edition.workspace = true
+description = "RdataStation v2 store crate: 持久化（persistence）+ 迁移（migration）+ 日志（logging）强耦合簇（自 engine 抽取）"
+
+[dependencies]
+# 依赖键命名为 shared，使 v1 迁移代码中的 `shared::` 引用直接生效
+shared.workspace = true
+
+# ===== 存储引擎 =====
+duckdb.workspace = true
+rusqlite.workspace = true
+
+# ===== Async 运行时 =====
+tokio.workspace = true
+
+# ===== 序列化 =====
+serde.workspace = true
+serde_json.workspace = true
+specta.workspace = true
+
+# ===== 连接层（URL 明文密码掩码等）=====
+connection.workspace = true
+
+# ===== 运行时数据路径（数据根 / 日志目录解析）=====
+paths.workspace = true
+
+# ===== 时间与项目 =====
+chrono.workspace = true
+uuid.workspace = true
+
+# ===== 日志追踪 =====
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+
+# ===== 工具库 =====
+once_cell.workspace = true
+rand.workspace = true
+sha2.workspace = true
+include_dir.workspace = true
+
+[dev-dependencies]
+# 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）
+paths = { workspace = true, features = ["test-support"] }

@@ -157,16 +157,7 @@ impl DuckDBManager {
     /// - `Ok(Connection)`: 打开的连接
     /// - `Err(CoreError)`: 打开失败
     pub fn open_file_with_retry(path: &str) -> Result<Connection, CoreError> {
-        let path = PathBuf::from(path);
-        Self::ensure_parent_dir(&path)?;
-
-        Connection::open(&path).map_err(|e| {
-            CoreError::common(CommonError::General(format!(
-                "打开 DuckDB 文件失败 {}: {}",
-                path.display(),
-                e
-            )))
-        })
+        shared::duckdb_open::open_file_with_retry(path)
     }
 
     /// 确保连接已建立（兼容旧 API）。

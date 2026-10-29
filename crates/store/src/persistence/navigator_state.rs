@@ -98,7 +98,7 @@ impl NavigatorStateStore {
 
     /// 全局库（`{system}/global.db`）。
     pub fn open_global() -> Result<Self, CoreError> {
-        let path = crate::migration::get_global_db_path()?;
+        let path = crate::persistence::get_global_db_path()?;
         Self::open_at(path)
     }
 

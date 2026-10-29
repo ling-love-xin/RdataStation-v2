@@ -110,7 +110,7 @@ pub fn type_id_of(driver_id: &str) -> Option<String> {
 
 /// 只读打开全局库（不建库、不建目录）。
 fn open_global_ro() -> Result<rusqlite::Connection, Box<dyn std::error::Error>> {
-    let path = crate::migration::get_global_db_path()?;
+    let path = crate::persistence::get_global_db_path()?;
     let conn = rusqlite::Connection::open_with_flags(
         &path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
