@@ -74,11 +74,13 @@ impl EditorHostPanel {
         // 【书签】工具栏入口（三模式通用：模式指示器后固定位置，不随组移动）。
         // 打开书签管理器浮层（列表 + 跳转 / 编辑说明 / 删除）；书签是文档级标记，
         // 与执行通道等 SQL 专属控件分开——任何模式都该能看「这个文件标了什么」。
+        // 图标用 Pin（图钉 = 钉住代码行），与「函数手册」的 BookMarked（书）区分——
+        // 两者原来同为 BookMarked，视觉无法分辨。
         toolbar = toolbar.child(
             Button::new("editor-bookmarks")
                 .ghost()
                 .small()
-                .icon(IconName::BookMarked)
+                .icon(IconName::Pin)
                 .tooltip("书签")
                 .debug_selector(|| "editor-bookmarks".to_string())
                 .on_click({
