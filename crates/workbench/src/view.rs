@@ -2336,7 +2336,10 @@ impl WorkbenchView {
         // 定位交给平台默认（`window_bounds: None` → `display.default_bounds()`，通常居中）：
         // 显式 `Windowed(origin 0,0)` 会被级联偏移钉在屏幕左上角。仅给最小尺寸防过度挤压。
         let mut options = TitleBar::window_options();
-        options.window_min_size = Some(gpui::Size::new(gpui::px(760.), gpui::px(520.)));
+        options.window_min_size = Some(gpui::Size::new(
+            gpui::Pixels::from(workbench_shell::ui::SETTINGS_WINDOW_MIN_WIDTH),
+            gpui::Pixels::from(workbench_shell::ui::SETTINGS_WINDOW_MIN_HEIGHT),
+        ));
         let handle = cx
             .open_window(options, |window, cx| {
                 let view = cx.new(|cx| SettingsPage::new(window, host, cx));

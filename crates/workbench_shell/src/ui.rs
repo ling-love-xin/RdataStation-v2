@@ -358,6 +358,10 @@ pub const STATUS_LSP_OFFSET: Pixels = px(4.);
 pub const SETTINGS_PAGE_WIDTH: f32 = 61.25;
 /// 弹层高度（35rem = 560px；**固定高**——切节 / 加行都不跳高）
 pub const SETTINGS_PAGE_HEIGHT: f32 = 35.0;
+/// 设置**独立窗口**最小宽度（760px；**px 值**，窗口化后防过度挤压，见 `workbench::open_settings`）
+pub const SETTINGS_WINDOW_MIN_WIDTH: f32 = 760.0;
+/// 设置**独立窗口**最小高度（520px；**px 值**）
+pub const SETTINGS_WINDOW_MIN_HEIGHT: f32 = 520.0;
 /// 分节导航宽度（12.5rem = 200px；与连接对话框侧栏同宽）
 pub const SETTINGS_NAV_WIDTH: f32 = 12.5;
 /// 设置行标签列宽（15rem = 240px；再窄中长标签要换行）
