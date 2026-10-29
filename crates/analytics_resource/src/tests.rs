@@ -61,19 +61,25 @@ mod tests {
     #[tokio::test]
     async fn t001_create_and_get_resource() {
         let (store, dir) = create_test_store().await;
-        let req = CreateResourceRequest {
-            resource_type: "table".to_string(),
-            name: "test_table".to_string(),
-            config: serde_json::json!({"key": "value"}),
-            scope: "project".to_string(),
-            alias: None,
-            source_query: None,
-            column_count: None,
-            file_size: None,
-            row_count: None,
-            parent_resource_id: None,
-        };
-        let created = store.create_resource(req).await.expect("create resource");
+        let created = store
+            .insert_archive(NewArchiveInput {
+                resource_type: "table".to_string(),
+                name: "test_table".to_string(),
+                alias: None,
+                kind: ArchiveKind::Analysis,
+                content_hash: "aabbccdd00112233".to_string(),
+                definition_sql: None,
+                row_count: None,
+                column_count: None,
+                file_rel_path: "analysis/test_table.sql".to_string(),
+                payload_mode: crate::model::PayloadMode::Copy,
+                source_path: None,
+                file_size: None,
+                binding: ArchiveBinding::default(),
+                scope: "project".to_string(),
+            })
+            .await
+            .expect("create archive");
         assert_eq!(created.name, "test_table");
         assert_eq!(created.version, 1);
 
@@ -82,83 +88,6 @@ mod tests {
             .await
             .expect("get resource");
         assert_eq!(fetched.name, "test_table");
-        cleanup(dir);
-    }
-
-    #[tokio::test]
-    async fn t002_list_resources_filtered() {
-        let (store, dir) = create_test_store().await;
-        for i in 0..3 {
-            store
-                .create_resource(CreateResourceRequest {
-                    resource_type: if i == 0 { "table" } else { "view" }.to_string(),
-                    name: format!("res_{}", i),
-                    config: serde_json::json!({}),
-                    scope: "project".to_string(),
-                    alias: None,
-                    source_query: None,
-                    column_count: None,
-                    file_size: None,
-                    row_count: None,
-                    parent_resource_id: None,
-                })
-                .await
-                .expect("create");
-        }
-        let all = store
-            .list_resources(None, None, None)
-            .await
-            .expect("list all");
-        assert_eq!(all.len(), 3);
-
-        let tables = store
-            .list_resources(None, Some("table"), None)
-            .await
-            .expect("filter type");
-        assert_eq!(tables.len(), 1);
-        cleanup(dir);
-    }
-
-    #[tokio::test]
-    async fn t003_update_and_version() {
-        let (store, dir) = create_test_store().await;
-        let created = store
-            .create_resource(CreateResourceRequest {
-                resource_type: "table".to_string(),
-                name: "v1".to_string(),
-                config: serde_json::json!({}),
-                scope: "project".to_string(),
-                alias: None,
-                source_query: None,
-                column_count: None,
-                file_size: None,
-                row_count: None,
-                parent_resource_id: None,
-            })
-            .await
-            .expect("create");
-
-        let updated = store
-            .update_resource(
-                &created.id,
-                CreateResourceRequest {
-                    resource_type: "table".to_string(),
-                    name: "v2".to_string(),
-                    config: serde_json::json!({}),
-                    scope: "project".to_string(),
-                    alias: None,
-                    source_query: None,
-                    column_count: None,
-                    file_size: None,
-                    row_count: None,
-                    parent_resource_id: None,
-                },
-            )
-            .await
-            .expect("update");
-
-        assert_eq!(updated.name, "v2");
-        assert_eq!(updated.version, 2);
         cleanup(dir);
     }
 
@@ -194,20 +123,24 @@ mod tests {
     async fn t007_folder_resource_link() {
         let (store, dir) = create_test_store().await;
         let resource = store
-            .create_resource(CreateResourceRequest {
+            .insert_archive(NewArchiveInput {
                 resource_type: "table".to_string(),
                 name: "linked".to_string(),
-                config: serde_json::json!({}),
-                scope: "project".to_string(),
                 alias: None,
-                source_query: None,
-                column_count: None,
-                file_size: None,
+                kind: ArchiveKind::Analysis,
+                content_hash: "aabbccdd00112233".to_string(),
+                definition_sql: None,
                 row_count: None,
-                parent_resource_id: None,
+                column_count: None,
+                file_rel_path: "analysis/linked.sql".to_string(),
+                payload_mode: crate::model::PayloadMode::Copy,
+                source_path: None,
+                file_size: None,
+                binding: ArchiveBinding::default(),
+                scope: "project".to_string(),
             })
             .await
-            .expect("create resource");
+            .expect("create archive");
         let folder = store
             .create_folder(CreateFolderRequest {
                 name: "f1".to_string(),
@@ -224,23 +157,19 @@ mod tests {
             .await
             .expect("link");
 
-        let in_folder = store
-            .list_resources(None, None, Some(&folder.id))
-            .await
-            .expect("list in folder");
-        assert_eq!(in_folder.len(), 1);
-        assert_eq!(in_folder[0].id, resource.id);
+        let memberships = store.folders_by_resource().await.expect("memberships");
+        assert_eq!(memberships.get(&resource.id), Some(&folder.id));
 
         store
             .remove_resource_from_folder(&resource.id, &folder.id)
             .await
             .expect("unlink");
 
-        let empty = store
-            .list_resources(None, None, Some(&folder.id))
-            .await
-            .expect("list");
-        assert_eq!(empty.len(), 0);
+        let after = store.folders_by_resource().await.expect("memberships");
+        assert!(
+            !after.contains_key(&resource.id),
+            "移除后资源不应再属于任何分组"
+        );
         cleanup(dir);
     }
 
@@ -267,20 +196,24 @@ mod tests {
     async fn t009_tag_resource_bidirectional() {
         let (store, dir) = create_test_store().await;
         let resource = store
-            .create_resource(CreateResourceRequest {
+            .insert_archive(NewArchiveInput {
                 resource_type: "table".to_string(),
                 name: "tagged".to_string(),
-                config: serde_json::json!({}),
-                scope: "project".to_string(),
                 alias: None,
-                source_query: None,
-                column_count: None,
-                file_size: None,
+                kind: ArchiveKind::Analysis,
+                content_hash: "aabbccdd00112233".to_string(),
+                definition_sql: None,
                 row_count: None,
-                parent_resource_id: None,
+                column_count: None,
+                file_rel_path: "analysis/tagged.sql".to_string(),
+                payload_mode: crate::model::PayloadMode::Copy,
+                source_path: None,
+                file_size: None,
+                binding: ArchiveBinding::default(),
+                scope: "project".to_string(),
             })
             .await
-            .expect("create");
+            .expect("create archive");
         let tag = store
             .create_tag(CreateTagRequest {
                 name: "urgent".to_string(),
@@ -316,20 +249,24 @@ mod tests {
     async fn t017_tag_rename_and_delete_keep_names_and_links_clean() {
         let (store, dir) = create_test_store().await;
         let resource = store
-            .create_resource(CreateResourceRequest {
+            .insert_archive(NewArchiveInput {
                 resource_type: "table".to_string(),
                 name: "tagged".to_string(),
-                config: serde_json::json!({}),
-                scope: "project".to_string(),
                 alias: None,
-                source_query: None,
-                column_count: None,
-                file_size: None,
+                kind: ArchiveKind::Analysis,
+                content_hash: "aabbccdd00112233".to_string(),
+                definition_sql: None,
                 row_count: None,
-                parent_resource_id: None,
+                column_count: None,
+                file_rel_path: "analysis/tagged.sql".to_string(),
+                payload_mode: crate::model::PayloadMode::Copy,
+                source_path: None,
+                file_size: None,
+                binding: ArchiveBinding::default(),
+                scope: "project".to_string(),
             })
             .await
-            .expect("create");
+            .expect("create archive");
         let tag = store
             .create_tag(CreateTagRequest {
                 name: "重要".to_string(),
@@ -434,20 +371,24 @@ mod tests {
     async fn t018_single_level_folders_move_and_clear_links() {
         let (store, dir) = create_test_store().await;
         let resource = store
-            .create_resource(CreateResourceRequest {
+            .insert_archive(NewArchiveInput {
                 resource_type: "table".to_string(),
                 name: "grouped".to_string(),
-                config: serde_json::json!({}),
-                scope: "project".to_string(),
                 alias: None,
-                source_query: None,
-                column_count: None,
-                file_size: None,
+                kind: ArchiveKind::Analysis,
+                content_hash: "aabbccdd00112233".to_string(),
+                definition_sql: None,
                 row_count: None,
-                parent_resource_id: None,
+                column_count: None,
+                file_rel_path: "analysis/grouped.sql".to_string(),
+                payload_mode: crate::model::PayloadMode::Copy,
+                source_path: None,
+                file_size: None,
+                binding: ArchiveBinding::default(),
+                scope: "project".to_string(),
             })
             .await
-            .expect("create");
+            .expect("create archive");
         let folder = store
             .create_folder(CreateFolderRequest {
                 name: "月报".to_string(),
@@ -520,13 +461,9 @@ mod tests {
             .expect("move to second");
         let memberships = store.folders_by_resource().await.expect("memberships");
         assert_eq!(memberships.get(&resource.id), Some(&second.id));
-        assert_eq!(
-            store
-                .list_resources(None, None, Some(&second.id))
-                .await
-                .expect("by folder")
-                .len(),
-            1,
+        assert_ne!(
+            memberships.get(&resource.id),
+            Some(&folder.id),
             "旧分组的成员列表里也不该再有它"
         );
 
@@ -572,80 +509,46 @@ mod tests {
         cleanup(dir);
     }
 
-    #[tokio::test]
-    async fn t010_paginated_list() {
-        let (store, dir) = create_test_store().await;
-        for i in 0..5 {
-            store
-                .create_resource(CreateResourceRequest {
-                    resource_type: "table".to_string(),
-                    name: format!("p{}", i),
-                    config: serde_json::json!({}),
-                    scope: "project".to_string(),
-                    alias: None,
-                    source_query: None,
-                    column_count: None,
-                    file_size: None,
-                    row_count: None,
-                    parent_resource_id: None,
-                })
-                .await
-                .expect("create");
-        }
-
-        let page = store
-            .list_resources_paginated(None, None, None, None, 1, 2, None, None)
-            .await
-            .expect("paginated");
-        assert_eq!(page.items.len(), 2);
-        assert_eq!(page.total, 5);
-        assert_eq!(page.total_pages, 3);
-        cleanup(dir);
-    }
-
+    /// 版本历史（v2 快照语义）：`save_resource_version` 写写前快照、
+    /// `update_archive_content` 递增版本并指向该快照，历史里能看到 v1。
     #[tokio::test]
     async fn t011_version_history() {
         let (store, dir) = create_test_store().await;
         let created = store
-            .create_resource(CreateResourceRequest {
+            .insert_archive(NewArchiveInput {
                 resource_type: "table".to_string(),
                 name: "versioned".to_string(),
-                config: serde_json::json!({}),
-                scope: "project".to_string(),
                 alias: None,
-                source_query: None,
-                column_count: None,
-                file_size: None,
+                kind: ArchiveKind::Analysis,
+                content_hash: "aabbccdd00112233".to_string(),
+                definition_sql: None,
                 row_count: None,
-                parent_resource_id: None,
+                column_count: None,
+                file_rel_path: "analysis/versioned.sql".to_string(),
+                payload_mode: crate::model::PayloadMode::Copy,
+                source_path: None,
+                file_size: None,
+                binding: ArchiveBinding::default(),
+                scope: "project".to_string(),
             })
             .await
-            .expect("create");
+            .expect("create archive");
 
-        store
-            .update_resource(
-                &created.id,
-                CreateResourceRequest {
-                    resource_type: "table".to_string(),
-                    name: "versioned_v2".to_string(),
-                    config: serde_json::json!({}),
-                    scope: "project".to_string(),
-                    alias: None,
-                    source_query: None,
-                    column_count: None,
-                    file_size: None,
-                    row_count: None,
-                    parent_resource_id: None,
-                },
-            )
+        let snapshot = serde_json::to_string(&created).expect("snapshot json");
+        let snapshot_id = store
+            .save_resource_version(&created.id, created.version, &snapshot)
             .await
-            .expect("update");
+            .expect("save snapshot");
+        store
+            .update_archive_content(&created.id, "aabbccdd00112244", &snapshot_id, None, None)
+            .await
+            .expect("update content");
 
         let versions = store
             .get_resource_versions(&created.id)
             .await
             .expect("versions");
-        assert!(!versions.is_empty());
+        assert_eq!(versions.len(), 1, "只写了一条写前快照");
         assert_eq!(versions[0].version, 1);
         cleanup(dir);
     }
@@ -654,34 +557,35 @@ mod tests {
     async fn t012_concurrent_create() {
         let (store, dir) = create_test_store().await;
 
-        let make_req = |name: &str| CreateResourceRequest {
+        let make_input = |name: &str, hash: &str| NewArchiveInput {
             resource_type: "table".to_string(),
             name: name.to_string(),
-            config: serde_json::json!({}),
-            scope: "project".to_string(),
             alias: None,
-            source_query: None,
-            column_count: None,
-            file_size: None,
+            kind: ArchiveKind::Analysis,
+            content_hash: hash.to_string(),
+            definition_sql: None,
             row_count: None,
-            parent_resource_id: None,
+            column_count: None,
+            file_rel_path: format!("analysis/{name}.sql"),
+            payload_mode: crate::model::PayloadMode::Copy,
+            source_path: None,
+            file_size: None,
+            binding: ArchiveBinding::default(),
+            scope: "project".to_string(),
         };
 
         let (r1, r2, r3) = tokio::join!(
-            store.create_resource(make_req("concurrent_a")),
-            store.create_resource(make_req("concurrent_b")),
-            store.create_resource(make_req("concurrent_c")),
+            store.insert_archive(make_input("concurrent_a", "aaaaaaaa1111")),
+            store.insert_archive(make_input("concurrent_b", "bbbbbbbb2222")),
+            store.insert_archive(make_input("concurrent_c", "cccccccc3333")),
         );
 
         assert!(r1.is_ok(), "concurrent_a failed: {:?}", r1.err());
         assert!(r2.is_ok(), "concurrent_b failed: {:?}", r2.err());
         assert!(r3.is_ok(), "concurrent_c failed: {:?}", r3.err());
 
-        let all = store
-            .list_resources(None, None, None)
-            .await
-            .expect("list all");
-        assert_eq!(all.len(), 3);
+        let all = store.list_file_archives().await.expect("list all");
+        assert_eq!(all.len(), 3, "三个并发归档都应落库");
 
         drop(store);
         cleanup(dir);
@@ -695,108 +599,12 @@ mod tests {
         assert!(result.is_err(), "non-existent ID should return error");
 
         let result = store
-            .update_resource(
-                "nonexistent-id",
-                CreateResourceRequest {
-                    resource_type: "table".to_string(),
-                    name: "ghost".to_string(),
-                    config: serde_json::json!({}),
-                    scope: "project".to_string(),
-                    alias: None,
-                    source_query: None,
-                    column_count: None,
-                    file_size: None,
-                    row_count: None,
-                    parent_resource_id: None,
-                },
-            )
+            .update_archive_content("nonexistent-id", "aabbccdd00112233", "arv_x", None, None)
             .await;
         assert!(result.is_err(), "update non-existent should fail");
 
         drop(store);
         cleanup(dir);
-    }
-
-    #[tokio::test]
-    async fn t015_concurrent_update_same_resource() {
-        let (store, dir) = create_test_store().await;
-
-        let created = store
-            .create_resource(CreateResourceRequest {
-                resource_type: "table".to_string(),
-                name: "concurrent_target".to_string(),
-                config: serde_json::json!({"v": 0}),
-                scope: "project".to_string(),
-                alias: None,
-                source_query: None,
-                column_count: None,
-                file_size: None,
-                row_count: None,
-                parent_resource_id: None,
-            })
-            .await
-            .expect("create");
-
-        let store = std::sync::Arc::new(store);
-        let s1 = store.clone();
-        let s2 = store.clone();
-        let id1 = created.id.clone();
-        let id2 = created.id.clone();
-
-        let (r1, r2) = tokio::join!(
-            s1.update_resource(
-                &id1,
-                CreateResourceRequest {
-                    resource_type: "table".to_string(),
-                    name: "update_a".to_string(),
-                    config: serde_json::json!({"v": 1}),
-                    scope: "project".to_string(),
-                    alias: None,
-                    source_query: None,
-                    column_count: None,
-                    file_size: None,
-                    row_count: None,
-                    parent_resource_id: None,
-                },
-            ),
-            s2.update_resource(
-                &id2,
-                CreateResourceRequest {
-                    resource_type: "table".to_string(),
-                    name: "update_b".to_string(),
-                    config: serde_json::json!({"v": 2}),
-                    scope: "project".to_string(),
-                    alias: None,
-                    source_query: None,
-                    column_count: None,
-                    file_size: None,
-                    row_count: None,
-                    parent_resource_id: None,
-                },
-            ),
-        );
-
-        assert!(r1.is_ok(), "concurrent update A failed: {:?}", r1.err());
-        assert!(r2.is_ok(), "concurrent update B failed: {:?}", r2.err());
-
-        let versions = store
-            .get_resource_versions(&created.id)
-            .await
-            .expect("versions");
-
-        // 写前快照语义 + `UNIQUE(resource_id, version)`：两次更新各留下**一条写前快照**
-        // （v1、v2），当前版本（v3）只在资源行上、不进版本表。
-        // v1 原断言是 3 条（"original + 2 updates"），这在任何并发交错下都不可满足；
-        // 要守住的不变式是"两次更新都留下快照、版本号单调递增到 3（不丢版本）"。
-        assert_eq!(versions.len(), 2, "两次更新应留下两条写前快照");
-        assert_eq!(versions[0].version, 2, "版本表按版本号倒序");
-        assert_eq!(versions[1].version, 1);
-
-        let latest = store.get_resource_by_id(&created.id).await.expect("reload");
-        assert_eq!(latest.version, 3, "版本号必须单调递增到 3（无丢失）");
-
-        drop(store);
-        drop(dir);
     }
 
     /// 020 增量迁移：新列存在、旧行默认值正确、`CHECK` 生效。
@@ -808,21 +616,41 @@ mod tests {
         let (store, dir) = create_test_store().await;
 
         // 旧行（v1 时代写入、不带 kind）应靠默认值满足新约束。
-        let created = store
-            .create_resource(CreateResourceRequest {
-                resource_type: "file".to_string(),
-                name: "old_style_row".to_string(),
-                config: serde_json::json!({}),
-                scope: "project".to_string(),
-                alias: None,
-                source_query: None,
-                column_count: None,
-                file_size: None,
-                row_count: None,
-                parent_resource_id: None,
-            })
-            .await
-            .expect("create");
+        // v1 的通用创建入口已随 v1 CRUD 一起移除，这里用裸 SQL 直接造旧行
+        // （只写 v1 时代就存在的列，kind / content_hash 等 020 新列靠默认值补齐）。
+        let old_id = format!("ar_{}", uuid::Uuid::new_v4().simple());
+        let now = chrono::Utc::now().to_rfc3339();
+        {
+            let conn = store.pool.acquire().await.expect("acquire");
+            conn.inner()
+                .expect("inner")
+                .execute(
+                    r#"
+            INSERT INTO analytics_resources (
+                id, resource_type, name, alias, config, scope, row_count, column_count, file_size,
+                version, parent_version_id, parent_resource_id, source_query, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+                    rusqlite::params![
+                        &old_id,
+                        "file",
+                        "old_style_row",
+                        None::<String>,
+                        "{}",
+                        "project",
+                        None::<i64>,
+                        None::<i64>,
+                        None::<i64>,
+                        1,
+                        None::<String>,
+                        None::<String>,
+                        None::<String>,
+                        &now,
+                        &now,
+                    ],
+                )
+                .expect("insert old row");
+        }
 
         let conn = store.pool.acquire().await.expect("acquire 2");
         let inner = conn.inner().expect("inner 2");
@@ -853,7 +681,7 @@ mod tests {
         let (kind, readonly, hash): (String, i64, Option<String>) = inner
             .query_row(
                 "SELECT kind, readonly, content_hash FROM analytics_resources WHERE id = ?",
-                rusqlite::params![&created.id],
+                rusqlite::params![&old_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .expect("select defaults");
@@ -865,7 +693,7 @@ mod tests {
             inner
                 .execute(
                     "UPDATE analytics_resources SET kind = 'nope' WHERE id = ?",
-                    rusqlite::params![&created.id],
+                    rusqlite::params![&old_id],
                 )
                 .is_err(),
             "kind 的 CHECK 约束应拒绝非法值"
@@ -941,7 +769,7 @@ mod tests {
             "不得写版本快照（那是内容版本的口径）"
         );
 
-        // 已软删的行改不了名（与 `update_resource` 同一处守卫口径）。
+        // 已软删的行改不了名（与内容更新的守卫口径一致）。
         store
             .soft_delete_archive(&created.id)
             .await

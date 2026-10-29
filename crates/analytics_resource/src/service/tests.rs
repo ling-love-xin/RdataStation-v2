@@ -1040,7 +1040,7 @@
         assert!(
             service
                 .store()
-                .list_resources(None, None, None)
+                .list_file_archives()
                 .await
                 .expect("list")
                 .is_empty()
@@ -1109,7 +1109,7 @@
         assert_eq!(
             service
                 .store()
-                .list_resources(None, None, None)
+                .list_file_archives()
                 .await
                 .expect("list")
                 .len(),
