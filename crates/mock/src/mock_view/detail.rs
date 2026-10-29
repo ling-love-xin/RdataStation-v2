@@ -3,6 +3,12 @@
 // 继承父模块（mock_view）的全部 use 绑定
 use super::*;
 
+// 样例预览的固定种子：样例稳定可复现（与最终生成的随机种子无关，纯示意）
+use fake::rand::rngs::StdRng;
+use fake::rand::SeedableRng;
+
+const SAMPLE_PREVIEW_SEED: u64 = 20261030;
+
 /// 对话框里的一行参数（标量：单行输入；集合 / 加权：多行文本 + 格式提示）。
 enum ParamRowView {
     Scalar {
@@ -40,6 +46,8 @@ pub(crate) struct ColumnDraft {
     pub(crate) def: ColumnDef,
     pub(crate) confidence: String,
     sample_value: String,
+    /// 参数实时样例预览（按当前输入框值生成 2 条；固定种子，可复现）
+    sample_preview: String,
     pub(crate) params: Vec<ParamInput>,
     null_input: Entity<InputState>,
     type_label: String,
@@ -347,9 +355,12 @@ impl MockDetailView {
             params: Vec::new(),
             null_input,
             param_error: None,
+            sample_preview: String::new(),
         });
         // 参数输入行按当前生成器建立（生成器身份变化后由 `rebuild_params` 重建）
         self.rebuild_params(window, cx);
+        // 初始样例预览（按当前配置生成，事件路径，不在 render 里做）
+        self.refresh_sample_preview(cx);
 
         let view = cx.entity();
         let panel = self.panel.clone();
@@ -441,6 +452,14 @@ impl MockDetailView {
                             })
                     }),
             );
+            // 类型与生成器解耦的说明：改类型不自动换生成器（避免对话框内参数行与生成器
+            // 不一致）；想按新类型重推生成器 → 点下方「恢复智能默认」
+            body = body.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child("改类型不会自动换生成器；按新类型重推请点「恢复智能默认」。"),
+            );
             // 生成器（只读展示；切换在字段行的菜单里，避免对话框内参数行与生成器不一致）
             body = body.child(
                 div()
@@ -479,6 +498,28 @@ impl MockDetailView {
                         .child(message),
                 );
             }
+            // 参数实时样例预览（2 条示意值）：输入参数即改即看，固定种子可复现
+            body = body.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child("样例预览"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.foreground)
+                            .child(draft.sample_preview.clone()),
+                    ),
+            );
             body = body.child(form_line(theme, "空值率（%）", &null_state));
             body = body.child(
                 div()
@@ -602,6 +643,8 @@ impl MockDetailView {
                             }
                             let text = emitter.read(cx).value().to_string();
                             view.commit_complex_param(&key_for_closure, &text, cx);
+                            // 参数变化 → 样例预览同步刷新（commit 已写回生成器或记下解析错误）
+                            view.refresh_sample_preview(cx);
                         },
                     );
                     (ParamWidget::Complex(state), _sub)
@@ -619,15 +662,20 @@ impl MockDetailView {
                                 return;
                             }
                             let text = emitter.read(cx).value().to_string();
-                            let Some(draft) = view.draft.as_mut() else {
-                                return;
-                            };
-                            if let Some(patched) =
-                                patch_param(&draft.def.generator, &key_for_closure, &text, kind)
-                            {
-                                draft.def.generator = patched;
-                                draft.confidence = "manual".to_string();
-                                draft.sample_value.clear();
+                            let mut changed = false;
+                            if let Some(draft) = view.draft.as_mut() {
+                                if let Some(patched) =
+                                    patch_param(&draft.def.generator, &key_for_closure, &text, kind)
+                                {
+                                    draft.def.generator = patched;
+                                    draft.confidence = "manual".to_string();
+                                    draft.sample_value.clear();
+                                    changed = true;
+                                }
+                            }
+                            if changed {
+                                // 参数变化 → 样例预览同步刷新（事件路径，不在 render 做）
+                                view.refresh_sample_preview(cx);
                                 cx.notify();
                             }
                         },
@@ -665,6 +713,31 @@ impl MockDetailView {
         cx.notify();
     }
 
+    /// 按**当前输入框值**生成 2 条样例（参数实时预览）。
+    ///
+    /// 参数订阅里每次 Change 都会调它（见 `rebuild_params`）：生成器配置已由
+    /// `patch_param` 实时写回，所以这里直接读 `draft.def.generator` 即可。
+    /// 固定种子保证样例稳定可读（与最终生成的随机种子无关，纯示意）。
+    fn refresh_sample_preview(&mut self, cx: &mut Context<Self>) {
+        let Some(draft) = self.draft.as_mut() else {
+            return;
+        };
+        let locale = self.panel.read(cx).draft().options.locale.clone();
+        let mut rng = StdRng::seed_from_u64(SAMPLE_PREVIEW_SEED);
+        // 生成器对「空参数区间」（如 min==max）会由 fake crate 断言 panic：
+        // 预览是示意，不允许把异常带进事件路径，`catch_unwind` 兜底成占位文案
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        let samples: Vec<String> = (0..2)
+            .map(|row| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    crate::generators::generate_cell(&draft.def.generator, &mut rng, row, &locale)
+                }))
+                .unwrap_or_else(|_| "（参数区间为空，无法采样）".to_string())
+            })
+            .collect();
+        draft.sample_preview = samples.join("，");
+    }
+
     /// 字段清单（列 + 生成器 + 参数摘要 + 编辑 / 智能 / 删除）。
     /// 字段区：当前搜索词下要画的列（保序；空词 = 全部）。搜索词归面板（单一权威）。
     ///
@@ -693,7 +766,6 @@ impl MockDetailView {
         let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
         let border = cx.theme().colors.border;
-        let success = cx.theme().colors.success;
         let info = cx.theme().colors.info;
 
         // 先看「这张表有没有列」再套筛选：空表与「筛没了」是两句不同的话
@@ -721,18 +793,14 @@ impl MockDetailView {
         }
 
         let mut list = div().v_flex().gap_2().w_full();
-        for column in columns {
+        // enumerate 拿序号：首/末列禁用对应的 ↑/↓（列序 = 生成顺序）
+        for (index, column) in columns.iter().enumerate() {
             let spec = generator_catalog::spec_of(&column.def.generator);
             let summary = summarize_params(&column.def.generator);
             let badge = match column.confidence.as_str() {
                 "high" => "high",
                 "manual" => "manual",
                 _ => "low",
-            };
-            let badge_color = match badge {
-                "high" => success,
-                "manual" => info,
-                _ => muted,
             };
             let id = column.id;
             let label = spec.label;
@@ -750,7 +818,7 @@ impl MockDetailView {
             let detail = if summary.is_empty() {
                 column.sample_value.clone()
             } else {
-                summary
+                summary.clone()
             };
             // S1④：跨表引用徽标 + 常驻说明（挂在列上的关系，不是外键 DDL）
             let ref_badge = column.def.dependency.as_ref().map(|dep| {
@@ -795,13 +863,17 @@ impl MockDetailView {
                                     .text_color(muted)
                                     .child(column_type_label(&column.def.data_type)),
                             )
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_xs()
-                                    .text_color(badge_color)
-                                    .child(badge),
-                            )
+                            .child({
+                                // 置信度徽标 = 行内 chip（`tag::Tag` outline 形态，克制不抢列名）：
+                                // high=成功绿 / manual=提示蓝 / low=次级灰。
+                                // 不用 `badge::Badge`——它是角标（absolute 浮点），不是行内文字标签
+                                let tag = match badge {
+                                    "high" => Tag::success(),
+                                    "manual" => Tag::info(),
+                                    _ => Tag::secondary(),
+                                };
+                                tag.outline().small().child(badge)
+                            })
                             .child({
                                 // 引用徽标：挂关系的列一眼可见「引用谁」
                                 let mut badge_el = div().flex_none().text_xs();
@@ -877,15 +949,78 @@ impl MockDetailView {
                                     panel.update(app, |panel, cx| panel.remove_column(id, cx));
                                 })
                             })
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .text_ellipsis()
-                                    .child(format!("{unique}空值 {null_percent}% · {detail}")),
-                            ),
+                            .child({
+                                // 列排序：icon-only（↑/↓），首/末列禁用对应方向；列序即生成顺序
+                                let panel = panel.clone();
+                                Button::new(ElementId::Name(SharedString::from(format!(
+                                    "mock-moveup-{id}"
+                                ))))
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::ArrowUp)
+                                .tooltip("上移（调整生成顺序）")
+                                .disabled(index == 0)
+                                .on_click(move |_, _, app| {
+                                    panel.update(app, |panel, cx| panel.move_column(id, true, cx));
+                                })
+                            })
+                            .child({
+                                let panel = panel.clone();
+                                Button::new(ElementId::Name(SharedString::from(format!(
+                                    "mock-movedown-{id}"
+                                ))))
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::ArrowDown)
+                                .tooltip("下移（调整生成顺序）")
+                                .disabled(index + 1 == columns.len())
+                                .on_click(move |_, _, app| {
+                                    panel.update(app, |panel, cx| panel.move_column(id, false, cx));
+                                })
+                            })
+                            .child({
+                                let panel = panel.clone();
+                                Button::new(ElementId::Name(SharedString::from(format!(
+                                    "mock-copy-{id}"
+                                ))))
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Copy)
+                                .tooltip("复制列（快速造相似字段，复制后再微调参数）")
+                                .on_click(move |_, _, app| {
+                                    panel.update(app, |panel, cx| panel.duplicate_column(id, cx));
+                                })
+                            })
+                            .child({
+                                // 参数摘要一行 ellipsis 截断；悬停 `HoverCard` 看完整参数与生成器。
+                                // 触发容器样式走 `trigger_style`（组件负责布局该容器）
+                                let summary_text = format!("{unique}空值 {null_percent}% · {detail}");
+                                let full_text = if summary.is_empty() {
+                                    format!("生成器：{}", spec.label)
+                                } else {
+                                    format!("生成器：{}\n{}", spec.label, summary)
+                                };
+                                HoverCard::new(ElementId::Name(SharedString::from(format!(
+                                    "mock-hover-{id}"
+                                ))))
+                                .open_delay(std::time::Duration::from_millis(300))
+                                .trigger_style(StyleRefinement::default().flex_1().min_w_0())
+                                .trigger(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .text_ellipsis()
+                                        .child(summary_text),
+                                )
+                                .content(move |_, _, cx| {
+                                    // content 是 `Fn`（可多次调用）：每次克隆文本，不消耗捕获值
+                                    div()
+                                        .p_2()
+                                        .text_xs()
+                                        .text_color(cx.theme().colors.muted_foreground)
+                                        .child(full_text.clone())
+                                })
+                            }),
                     )
                     .child({
                         // S1④：引用列常驻说明（解释「为什么不读父表数据」）
