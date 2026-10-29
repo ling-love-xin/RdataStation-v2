@@ -427,8 +427,8 @@ pub struct ResourcesChanged {
 
 /// 新归档行：写入索引层的最小输入，字段与迁移 020 的新列一一对应。
 ///
-/// 刻意不扩 `CreateResourceRequest`：那是 v1 的通用创建入口（无 kind / 指纹概念），
-/// 混在一起会让两条语义互相污染。
+/// 归档语义独立成类型、不复用 v1 的通用资源创建入口（该入口已随 v1 CRUD 移除，
+/// 无 kind / 指纹概念）：混在一起会让两条语义互相污染。
 #[derive(Debug, Clone)]
 pub struct NewArchiveInput {
     /// 资源类型词表（待统一到 shared 枚举，见开发方案 P0.7）。

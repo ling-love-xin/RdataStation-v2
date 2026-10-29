@@ -82,19 +82,6 @@ pub struct ResourceVersion {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct CreateResourceRequest {
-    pub resource_type: String,
-    pub name: String,
-    pub alias: Option<String>,
-    pub config: Value,
-    pub scope: String,
-    pub row_count: Option<i32>,
-    pub column_count: Option<i32>,
-    pub file_size: Option<i32>,
-    pub parent_resource_id: Option<String>,
-    pub source_query: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct CreateFolderRequest {
@@ -113,11 +100,3 @@ pub struct CreateTagRequest {
     pub scope: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct ListResourcesOutput {
-    pub items: Vec<AnalyticsResource>,
-    pub total: i32,
-    pub page: i32,
-    pub page_size: i32,
-    pub total_pages: i32,
-}
