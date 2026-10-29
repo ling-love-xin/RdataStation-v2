@@ -297,11 +297,11 @@ mod tests {
     use tokio::fs;
 
     const MIGRATION_SQL: &str =
-        include_str!("../../engine/migrations/project_meta/007_analytics_resources.sql");
+        include_str!("../../store/migrations/project_meta/007_analytics_resources.sql");
     const ARCHIVE_MIGRATION_SQL: &str =
-        include_str!("../../engine/migrations/project_meta/020_analytics_resource_archive.sql");
+        include_str!("../../store/migrations/project_meta/020_analytics_resource_archive.sql");
     const PAYLOAD_MODE_MIGRATION_SQL: &str =
-        include_str!("../../engine/migrations/project_meta/023_analytics_resource_payload_mode.sql");
+        include_str!("../../store/migrations/project_meta/023_analytics_resource_payload_mode.sql");
 
     /// 建好临时项目 + 三段迁移 + 归档服务；修复器借用服务里的本体层与索引层。
     async fn test_env() -> (ArchiveService, PathBuf) {

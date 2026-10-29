@@ -222,6 +222,15 @@ pub async fn shutdown_global_system() -> Result<(), CoreError> {
     Ok(())
 }
 
+/// 获取全局系统数据库管理器实例（转发至 rds_store 注册表，保持路径不变）
+///
+/// 注册表（`OnceLock<GlobalDatabaseManager>`）已下沉 `rds_store::persistence`，
+/// 外部既有 `engine::migration::global_init::get_global_db_manager` 全路径调用
+/// 经本转发保持零改动。如果尚未初始化，将返回 None。
+pub fn get_global_db_manager() -> Option<&'static GlobalDatabaseManager> {
+    crate::persistence::get_global_db_manager()
+}
+
 #[cfg(test)]
 mod tests {
     // 注意：不通配导入（避免引入与 `#[tokio::test]` 同名的属性宏）。

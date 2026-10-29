@@ -1096,7 +1096,7 @@ fn duckdb_err(op: &str, reason: &str) -> CoreError {
 
 /// 全局迁移 026（与 engine 迁移同源，测试库建表用；生产由 engine 迁移执行）。
 pub(crate) const GLOBAL_MIGRATION_026_SQL: &str = include_str!(
-    "../../engine/migrations/global/026_analytics_resource_global.sql"
+    "../../store/migrations/global/026_analytics_resource_global.sql"
 );
 
 #[cfg(test)]
@@ -1108,13 +1108,13 @@ mod tests {
     use uuid::Uuid;
 
     const BASE_MIGRATION_SQL: &str =
-        include_str!("../../engine/migrations/project_meta/007_analytics_resources.sql");
+        include_str!("../../store/migrations/project_meta/007_analytics_resources.sql");
     const ARCHIVE_MIGRATION_SQL: &str =
-        include_str!("../../engine/migrations/project_meta/020_analytics_resource_archive.sql");
+        include_str!("../../store/migrations/project_meta/020_analytics_resource_archive.sql");
     const PAYLOAD_MODE_MIGRATION_SQL: &str =
-        include_str!("../../engine/migrations/project_meta/023_analytics_resource_payload_mode.sql");
+        include_str!("../../store/migrations/project_meta/023_analytics_resource_payload_mode.sql");
     const TAG_LINK_FK_MIGRATION_SQL: &str = include_str!(
-        "../../engine/migrations/project_meta/024_analytics_resource_tags_drop_tag_fk.sql"
+        "../../store/migrations/project_meta/024_analytics_resource_tags_drop_tag_fk.sql"
     );
 
     struct TestEnv {
