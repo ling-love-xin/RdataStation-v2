@@ -895,7 +895,14 @@ fn every_panel_module_is_registered_in_the_manifests() {
     for rel in [
         "database/nav_view.rs",
         "scratchpad/scratchpad_view.rs",
-        "mock/mock_view.rs",
+        "mock/mock_view/mod.rs",
+        "mock/mock_view/contract.rs",
+        "mock/mock_view/detail.rs",
+        "mock/mock_view/generator_search.rs",
+        "mock/mock_view/job.rs",
+        "mock/mock_view/pure.rs",
+        "mock/mock_view/panel/mod.rs",
+        "mock/mock_view/panel/render.rs",
     ] {
         let quoted = format!("\"{rel}\"");
         assert!(
