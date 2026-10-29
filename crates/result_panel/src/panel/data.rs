@@ -24,6 +24,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use gpui_kit::*;
+use gpui_kit::base::TreeState;
 use gpui_kit::component::list::ListState;
 use gpui_kit::component::input::{InputState, TextareaState};
 use gpui_kit::component::table::TableState;
@@ -183,6 +184,9 @@ pub struct ResultPanel {
     /// 动画 id 拼 epoch → with_animation 换 id 即重播（与 vendor sidebar 同机制）。
     pub(crate) left_sidebar_epoch: u64,
     pub(crate) right_sidebar_epoch: u64,
+    /// 【值查看器】JSON 展开树状态（`tree::Tree` 组件承载；选中格变化时事件路径
+    /// `rebuild_value_tree` 解析 + `set_items` 重建，render 只摆——JSON 解析不进 render）
+    pub(crate) json_tree: Entity<TreeState>,
     /// 【侧栏】最近选中格位置（**视图行**, 含行号槽列；宿主 `TableEvent::SelectCell`
     /// 事件写入，选行 / 清选置 `None`）。右栏值详情据此读网格取完整值 / 列名 / 类型。
     pub(crate) selection_pos: Option<(usize, usize)>,

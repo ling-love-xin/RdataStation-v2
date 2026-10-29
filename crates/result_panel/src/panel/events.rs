@@ -4,15 +4,17 @@
 use gpui_kit::*;
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::input::{InputState, TextareaState};
-use gpui_kit::component::table::TableState;
+use gpui_kit::component::table::{TableState, TableDelegate as _};
 
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 
 use crate::error_card::ErrorCard;
+use crate::grid::cell::{classify_value, json_tree_items, ViewerMode};
 use crate::grid::{ResultGridDelegate, ResultStatus, ResultToolbar};
 use crate::ports::{Presentation, ResultRequest, RightTab};
 use crate::script_card::ScriptCard;
 use crate::sets::ResultSetTab;
+use crate::store::ColumnKind;
 /// 【类型样式】全局偏好聚合（shell 层：settings 持久化与渲染消费共用）。
 use workbench_shell::result_style::TypeStylePrefs;
 use super::data::ResultPanel;
@@ -348,6 +350,30 @@ impl ResultPanel {
             }
         }
         cx.notify();
+    }
+
+    /// 【值查看器】选中格变化时重建 JSON 展开树（事件路径：解析 + `set_items`；
+    /// render 只摆 Tree，不解析 JSON——render 纯读红线）。
+    /// 非 JSON 值 → 清空树；清选 → 空。
+    pub fn rebuild_value_tree(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let items = match self.selection_pos {
+            Some((row, col)) => {
+                let grid = self.grid.read(cx);
+                let delegate = grid.delegate();
+                let value = delegate.cell_text(row, col, cx);
+                let kind = if col == 0 {
+                    ColumnKind::Unknown
+                } else {
+                    delegate.column_kind(col)
+                };
+                match classify_value(kind, &value) {
+                    ViewerMode::Json => json_tree_items(&value).unwrap_or_default(),
+                    _ => Vec::new(),
+                }
+            }
+            None => Vec::new(),
+        };
+        self.json_tree.update(cx, |state, cx| state.set_items(items, cx));
     }
 
     /// 【列浏览器】清单单击选中一列（数据列序）：写清单选中态 + 网格列选中高亮联动。

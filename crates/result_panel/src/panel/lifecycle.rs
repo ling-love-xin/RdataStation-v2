@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 
 use gpui_kit::*;
+use gpui_kit::base::TreeState;
 use gpui_kit::component::list::ListState;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::table::{TableEvent, TableState};
@@ -61,6 +62,10 @@ impl ResultPanel {
             cx,
         );
 
+        // 【值查看器】JSON 展开树状态（`tree::Tree` 组件承载）：选中格变化时事件路径
+        // `rebuild_value_tree` 解析 + `set_items` 重建；render 只摆 Tree，不解析 JSON
+        let json_tree = cx.new(|cx| TreeState::new(cx));
+
         // 【列浏览器】清单 List（kit 组件承载：搜索框 / 键盘导航 / 滚动条内置）：
         // delegate 只持投影，数据由 `sync` 灌入；占位网格句柄先借用，`set_grids`
         // 替换网格后 `sync` 会重灌（构造后到接线前不会渲染，见 grid 占位注释）
@@ -73,12 +78,20 @@ impl ResultPanel {
         let _grid_sub = cx.subscribe_in(
             &grid,
             window,
-            |this, _table, event: &TableEvent, _window, cx| {
+            |this, _table, event: &TableEvent, window, cx| {
                 match event {
+                    // 单击选格：值详情跟随点选（此前只接双击——「点击文字半天才出来」
+                    // 的根因之一）+ 重建 JSON 展开树（选中值是 JSON/数组时）
+                    TableEvent::SelectCell(row_ix, col_ix) => {
+                        this.set_selection_pos(Some((*row_ix, *col_ix)), window, cx);
+                        this.rebuild_value_tree(window, cx);
+                        cx.notify();
+                    }
                     // 双击单元格：进入编辑态（当前走行级叠加层）
                     TableEvent::DoubleClickedCell(row_ix, col_ix) => {
                         // 选中该单元格（delegate 坐标），让行级模型知道要编辑哪格
                         this.selection_pos = Some((*row_ix, *col_ix));
+                        this.rebuild_value_tree(window, cx);
                         cx.notify();
                     }
                     // 列序拖拽：记下新显示序（delegate 的 `display_order` 快照），
@@ -94,10 +107,11 @@ impl ResultPanel {
                         }
                         cx.notify();
                     }
-                    // 清除选择：清空选中格位置
+                    // 清除选择：清空选中格位置 + 清空 JSON 树
                     TableEvent::ClearSelection => {
                         this.selection_pos = None;
                         this.selected_col = None;
+                        this.rebuild_value_tree(window, cx);
                         cx.notify();
                     }
                     // 其他事件忽略（SelectRow / SelectColumn / SelectCell 已由
@@ -109,6 +123,7 @@ impl ResultPanel {
 
         Self {
             grid,
+            json_tree,
             compare_grid: None,
             queue,
             tabs: Vec::new(),

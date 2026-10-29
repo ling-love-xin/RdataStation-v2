@@ -4,6 +4,7 @@
 use gpui_kit::*;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::table::TableState;
+use gpui_kit::base::TreeItem;
 
 use std::borrow::Cow;
 
@@ -305,4 +306,155 @@ pub(crate) fn render_td(
             cell = cell.tooltip(move |window, cx| result_cell_tooltip(full.clone(), window, cx));
         }
         cell.child(SharedString::from(display)).into_any_element()
+    }
+
+    // ========== 值查看器内容分派（纯函数；事件路径重建树，render 只摆） ==========
+
+    /// 每节点最多展开子项数（大字段截断：数组 / 对象超限时追加「… 还有 N 项」占位）
+    pub(crate) const JSON_TREE_CHILD_LIMIT: usize = 500;
+    /// hex 转储每行字节数（offset · hex · ASCII 三栏）
+    const HEX_DUMP_BYTES_PER_LINE: usize = 16;
+
+    /// 值查看器内容模式（按列类型 + 值形态分派）
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) enum ViewerMode {
+        /// 普通文本：等宽滚动块
+        Text,
+        /// 可展开 JSON 树（`tree::Tree` 组件）
+        Json,
+        /// 十六进制转储（offset · hex · ASCII 三栏，分页）
+        Hex,
+        /// 图片预览（格式 + 字节数；解码走事件路径）
+        Image { format: &'static str, size: usize },
+    }
+
+    /// 值查看器分派（轻量判定；真正的 JSON 校验在事件路径 `json_tree_items`）：
+    /// - Binary：图片魔数命中 → Image，否则 → Hex
+    /// - 其余：值以 `{` / `[` 开头（trim 后）→ Json，否则 → Text
+    pub(crate) fn classify_value(kind: ColumnKind, text: &str) -> ViewerMode {
+        match kind {
+            ColumnKind::Binary => match detect_image_format(text) {
+                Some(format) => ViewerMode::Image {
+                    format,
+                    size: text.len() / 2,
+                },
+                None => ViewerMode::Hex,
+            },
+            _ => {
+                let t = text.trim_start();
+                if t.starts_with('{') || t.starts_with('[') {
+                    ViewerMode::Json
+                } else {
+                    ViewerMode::Text
+                }
+            }
+        }
+    }
+
+    /// 图片魔数检测（hex 文本前缀，大小写不敏感）：PNG / JPEG / GIF / WebP
+    pub(crate) fn detect_image_format(hex: &str) -> Option<&'static str> {
+        let h = hex.trim();
+        let has = |prefix: &str| {
+            h.get(..prefix.len())
+                .is_some_and(|s| s.eq_ignore_ascii_case(prefix))
+        };
+        if has("89504e47") {
+            Some("PNG")
+        } else if has("ffd8ff") {
+            Some("JPEG")
+        } else if has("47494638") {
+            Some("GIF")
+        } else if has("52494646")
+            && h.get(16..24).is_some_and(|s| s.eq_ignore_ascii_case("57454250"))
+        {
+            // WebP 容器：'RIFF'(0..8) + 4 字节大小(8..16) + 'WEBP'(16..24)
+            Some("WebP")
+        } else {
+            None
+        }
+    }
+
+    /// hex 文本 → 字节（偶数位才认；末尾不完整忽略）
+    pub(crate) fn hex_to_bytes(hex: &str) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(hex.len() / 2);
+        let mut iter = hex.bytes();
+        loop {
+            let Some(hi) = iter.next() else { break };
+            let Some(lo) = iter.next() else { break };
+            if let (Some(hi), Some(lo)) = ((hi as char).to_digit(16), (lo as char).to_digit(16)) {
+                bytes.push((hi * 16 + lo) as u8);
+            }
+            // 非法字节对：跳过（保持后续对齐，不静默吞掉整个串）
+        }
+        bytes
+    }
+
+    /// hex 转储分页：每行 `[offset] xx xx … |ascii`（16 字节一行，offset 8 位十六进制）
+    pub(crate) fn hex_lines(bytes: &[u8], offset: usize, limit: usize) -> Vec<String> {
+        (0..limit)
+            .filter_map(|i| {
+                let base = offset + i * HEX_DUMP_BYTES_PER_LINE;
+                if base >= bytes.len() {
+                    return None;
+                }
+                let end = (base + HEX_DUMP_BYTES_PER_LINE).min(bytes.len());
+                let chunk = &bytes[base..end];
+                let hex = chunk
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let ascii: String = chunk
+                    .iter()
+                    .map(|b| if b.is_ascii_graphic() || *b == b' ' { *b as char } else { '.' })
+                    .collect();
+                Some(format!("[{base:08x}] {hex:<48} |{ascii}"))
+            })
+            .collect()
+    }
+
+    /// JSON 文本 → 可展开树（嵌套 `TreeItem`；每节点子项上限 `JSON_TREE_CHILD_LIMIT`，
+    /// 超出追加「… 还有 N 项」占位；顶层预展开 2 层）。非法 JSON → `None`。
+    pub(crate) fn json_tree_items(text: &str) -> Option<Vec<TreeItem>> {
+        let value: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
+        fn build(value: &serde_json::Value, key: &str, path: &str, depth: usize) -> TreeItem {
+            match value {
+                serde_json::Value::Object(map) => {
+                    let mut item =
+                        TreeItem::new(path.to_string(), format!("{key} 对象（{} 项）", map.len()))
+                            .expanded(depth < 2);
+                    for (k, v) in map.iter().take(JSON_TREE_CHILD_LIMIT) {
+                        item = item.child(build(v, k, &format!("{path}.{k}"), depth + 1));
+                    }
+                    if map.len() > JSON_TREE_CHILD_LIMIT {
+                        item = item.child(TreeItem::new(
+                            format!("{path}.__trunc__"),
+                            format!("… 还有 {} 项", map.len() - JSON_TREE_CHILD_LIMIT),
+                        ));
+                    }
+                    item
+                }
+                serde_json::Value::Array(arr) => {
+                    let mut item = TreeItem::new(
+                        path.to_string(),
+                        format!("{key} 数组 [{}]", arr.len()),
+                    )
+                    .expanded(depth < 2);
+                    for (i, v) in arr.iter().take(JSON_TREE_CHILD_LIMIT).enumerate() {
+                        item = item.child(
+                            build(v, &i.to_string(), &format!("{path}[{i}]"), depth + 1),
+                        );
+                    }
+                    if arr.len() > JSON_TREE_CHILD_LIMIT {
+                        item = item.child(TreeItem::new(
+                            format!("{path}.__trunc__"),
+                            format!("… 还有 {} 项", arr.len() - JSON_TREE_CHILD_LIMIT),
+                        ));
+                    }
+                    item
+                }
+                _ => TreeItem::new(path.to_string(), format!("{key}: {value}")),
+            }
+        }
+        Some(vec![build(&value, "$", "$", 0)])
     }

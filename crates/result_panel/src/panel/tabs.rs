@@ -6,14 +6,18 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::list::ListItem;
 use gpui_kit::component::table::TableDelegate;
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::tree::tree;
 
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 
+use crate::grid::cell::{classify_value, hex_lines, hex_to_bytes, ViewerMode};
 use crate::ports::ResultRequest;
 #[cfg(test)]
 use crate::ports::RightTab;
+use crate::store::ColumnKind;
 use crate::ui;
 use super::data::ResultPanel;
 
@@ -84,7 +88,36 @@ impl ResultPanel {
                     .child(SharedString::from(title))
                     .child(SharedString::from(row_marker)),
             )
-            .child(
+            .child({
+                // 【值查看器分派】按列类型 + 值形态选内容形态：文本块 / JSON 树 / hex 转储 /
+                // 图片占位（纯 render 层；JSON 树状态由事件路径 `rebuild_value_tree` 重建）
+                let kind = if col == 0 {
+                    ColumnKind::Unknown
+                } else {
+                    delegate.column_kind(col)
+                };
+                self.render_value_body(kind, &value, cx)
+            })
+            .into_any_element()
+    }
+
+    /// 【值查看器】内容区按分派模式渲染（纯 render 层；JSON 树解析在事件路径）
+    fn render_value_body(&self, kind: ColumnKind, value: &str, cx: &App) -> AnyElement {
+        match classify_value(kind, value) {
+            ViewerMode::Text => div()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scrollbar()
+                .px_2()
+                .py_1()
+                .text_xs()
+                .whitespace_normal()
+                .child(SharedString::from(value))
+                .into_any_element(),
+            ViewerMode::Json => self.render_json_tree(cx),
+            ViewerMode::Hex => self.render_hex_dump(value, cx),
+            ViewerMode::Image { format, size } => {
+                let theme = cx.theme();
                 div()
                     .flex_1()
                     .min_h_0()
@@ -92,8 +125,76 @@ impl ResultPanel {
                     .px_2()
                     .py_1()
                     .text_xs()
-                    .whitespace_normal()
-                    .child(SharedString::from(value)),
+                    .text_color(theme.colors.muted_foreground)
+                    .child(SharedString::from(format!(
+                        "图片预览：{format} · {size} B（解码待接线）"
+                    )))
+                    .into_any_element()
+            }
+        }
+    }
+
+    /// 【值查看器】JSON 展开树（`tree::Tree` 组件；状态由事件路径重建，这里只摆）
+    fn render_json_tree(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let muted = theme.colors.muted_foreground;
+        let state = self.json_tree.clone();
+        tree(&state, move |_ix, entry, selected, _window, _app| {
+            // 行内结构：depth 缩进 + 展开箭头（folder 才画）+ 键值标签。
+            // 展开 / 收起由 Tree 组件自身处理（点击 folder 条目切换）。
+            let indent = rems(ui::JSON_TREE_INDENT_STEP * entry.depth() as f32);
+            let arrow = if entry.is_folder() {
+                if entry.is_expanded() { "▾" } else { "▸" }
+            } else {
+                ""
+            };
+            let item = entry.item();
+            ListItem::new(ElementId::Name(item.id.clone()))
+                .selected(selected)
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .pl(indent)
+                        .child(
+                            div()
+                                .w(rems(ui::JSON_TREE_ARROW_WIDTH))
+                                .flex_none()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(SharedString::from(arrow)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_xs()
+                                .child(SharedString::from(item.label.clone())),
+                        ),
+                )
+        })
+        .into_any_element()
+    }
+
+    /// 【值查看器】hex 转储（第一页 16 行 = 256 字节；render 成本有上界，翻页后续）
+    fn render_hex_dump(&self, hex_text: &str, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let bytes = hex_to_bytes(hex_text);
+        let lines = hex_lines(&bytes, 0, 16);
+        div()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scrollbar()
+            .px_2()
+            .py_1()
+            .font_family(theme.mono_font_family.clone())
+            .text_xs()
+            .children(
+                lines
+                    .into_iter()
+                    .map(|line| div().child(SharedString::from(line))),
             )
             .into_any_element()
     }

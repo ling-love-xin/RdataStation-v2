@@ -72,6 +72,12 @@ pub const RESULT_COLUMN_MIN_WIDTH: Pixels = px(64.);
 /// 悬停提示的宽度不一致会在并列对照时显形。
 pub const RESULT_TOOLTIP_MAX_WIDTH: f32 = 24.0;
 
+/// 值查看器 JSON 展开树：每层缩进（0.75rem = 12px）
+pub const JSON_TREE_INDENT_STEP: f32 = 0.75;
+
+/// 值查看器 JSON 展开树：箭头指示符宽度（0.8rem = 12.8px，folder 与非 folder 行对齐）
+pub const JSON_TREE_ARROW_WIDTH: f32 = 0.8;
+
 /// 结果网格列名行高（2rem = 32px）
 pub const RESULT_HEADER_HEIGHT: f32 = 2.0;
 

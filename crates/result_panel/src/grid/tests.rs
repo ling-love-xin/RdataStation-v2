@@ -15,6 +15,7 @@ use crate::grid::status::{FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION};
 use crate::grid::status::format_integer_cell;
 use crate::grid::cell::{
     blob_summary, cell_display_text, cell_style, clip_cell_display, pretty_json_display,
+    classify_value, detect_image_format, hex_lines, json_tree_items, ViewerMode,
 };
 use crate::grid::header::header_tooltip_lines;
 use crate::grid::stats::fmt_stat_num;
@@ -151,6 +152,137 @@ use std::sync::Arc;
         let (title, meta) = header_tooltip_lines("cnt", None, Some(&ann));
         assert_eq!(title, "cnt");
         assert_eq!(meta, vec!["注释：合计"]);
+    }
+
+    // ========== 值查看器分派（classify / 图片魔数 / hex 转储 / JSON 树） ==========
+
+    /// 值查看器分派：Binary → 图片魔数命中 Image / 否则 Hex；文本形态 `{` / `[` → Json
+    #[test]
+    fn classify_value_dispatches_by_kind_and_shape() {
+        // Binary：PNG 魔数 → Image（格式 + 字节数 = hex 长度 / 2）
+        assert_eq!(
+            classify_value(ColumnKind::Binary, "89504E470D0A1A0A"),
+            ViewerMode::Image {
+                format: "PNG",
+                size: 8,
+            },
+        );
+        // Binary：非图片 → Hex
+        assert_eq!(
+            classify_value(ColumnKind::Binary, "0102030405"),
+            ViewerMode::Hex,
+        );
+        // 空 Binary → Hex（无魔数）
+        assert_eq!(classify_value(ColumnKind::Binary, ""), ViewerMode::Hex);
+        // Json 列对象 / 数组 → Json
+        assert_eq!(
+            classify_value(ColumnKind::Json, "{\"a\":1}"),
+            ViewerMode::Json
+        );
+        assert_eq!(classify_value(ColumnKind::Json, "[1,2]"), ViewerMode::Json);
+        // Json 列标量 → Text（没有树可展）
+        assert_eq!(classify_value(ColumnKind::Json, "42"), ViewerMode::Text);
+        // 文本列存 JSON 也按值形态走（`{` 前缀）
+        assert_eq!(
+            classify_value(ColumnKind::Text, "{\"a\":1}"),
+            ViewerMode::Json,
+        );
+        // 数值 / 普通文本 → Text
+        assert_eq!(classify_value(ColumnKind::Integer, "42"), ViewerMode::Text);
+        assert_eq!(classify_value(ColumnKind::Text, "hello"), ViewerMode::Text);
+        // 行号槽 / 转置（Unknown）也按值形态走
+        assert_eq!(classify_value(ColumnKind::Unknown, "[1]"), ViewerMode::Json);
+    }
+
+    /// 图片魔数：PNG / JPEG / GIF / WebP（大小写不敏感），非魔数 → None
+    #[test]
+    fn detect_image_format_recognizes_magic_bytes() {
+        assert_eq!(detect_image_format("89504e470d0a1a0a"), Some("PNG"));
+        assert_eq!(detect_image_format("89504E47"), Some("PNG")); // 大写同样命中
+        assert_eq!(detect_image_format("ffd8ffe000104a46"), Some("JPEG"));
+        assert_eq!(detect_image_format("474946383961"), Some("GIF"));
+        assert_eq!(detect_image_format("524946460000000057454250"), Some("WebP"));
+        assert_eq!(detect_image_format("00000000"), None);
+        assert_eq!(detect_image_format(""), None);
+        // 非 hex 文本不误判
+        assert_eq!(detect_image_format("hello world"), None);
+    }
+
+    /// hex 转储：offset 行格式 / limit 截断 / ASCII 可读字符 / 越界空
+    #[test]
+    fn hex_lines_paginates_and_formats() {
+        let bytes = b"Hello, World!";
+        let lines = hex_lines(bytes, 0, 1);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].starts_with("[00000000] "));
+        assert!(lines[0].contains("48 65 6c 6c 6f")); // "Hello"
+        assert!(lines[0].ends_with("|Hello, World!")); // ASCII 栏可读
+        // limit 大于可用行 → 只给实际行数
+        assert_eq!(hex_lines(bytes, 0, 99).len(), 1);
+        // offset 越界 → 空
+        assert!(hex_lines(bytes, 999, 5).is_empty());
+        // 13 字节只有一页：offset 16 起越界
+        assert!(hex_lines(bytes, 16, 1).is_empty());
+        // 二进制不可读字节 → '.'
+        let bin = [0x00u8, 0x01, 0x41, 0xff];
+        let l = &hex_lines(&bin, 0, 1)[0];
+        assert!(l.contains("00 01 41 ff"));
+        assert!(l.ends_with("|..A."));
+    }
+
+    /// JSON → 嵌套树：对象 / 数组 / 标量标签、路径 id、预展开、截断占位
+    #[test]
+    fn json_tree_items_builds_nested_tree() {
+        let items =
+            json_tree_items(r#"{"user":{"name":"a","tags":["x","y"]},"n":1}"#).expect("合法 JSON 应建树");
+        assert_eq!(items.len(), 1);
+        let root = &items[0];
+        assert_eq!(root.id, "$");
+        assert!(root.label.contains("对象"));
+        assert!(root.is_folder());
+        assert!(root.is_expanded()); // 顶层预展开
+        // 两个直接子项：user 对象 + n 标量
+        assert_eq!(root.children.len(), 2);
+        let user = root
+            .children
+            .iter()
+            .find(|c| c.id == "$.user")
+            .expect("user 子项");
+        assert!(user.is_folder());
+        assert!(user.is_expanded()); // 深度 1 也预展开
+        assert_eq!(user.children.len(), 2);
+        let tags = user
+            .children
+            .iter()
+            .find(|c| c.id == "$.user.tags")
+            .expect("tags 子项");
+        assert!(tags.is_folder());
+        assert!(!tags.is_expanded()); // 深度 2 收起
+        assert_eq!(tags.children.len(), 2);
+        assert_eq!(tags.children[0].id, "$.user.tags[0]");
+        assert_eq!(tags.children[0].label, "0: \"x\"");
+        let n = root.children.iter().find(|c| c.id == "$.n").expect("n 子项");
+        assert!(!n.is_folder()); // 标量叶子
+        assert_eq!(n.label, "n: 1");
+    }
+
+    /// JSON 树：超大数组截断 + 非法 JSON → None
+    #[test]
+    fn json_tree_items_truncates_large_arrays_and_rejects_non_json() {
+        // 超过 JSON_TREE_CHILD_LIMIT 的数组 → 截断 + 「… 还有 N 项」占位
+        let big = format!(
+            "[{}]",
+            (0..700).map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+        );
+        let items = json_tree_items(&big).expect("大数组应建树");
+        let root = &items[0];
+        assert_eq!(root.children.len(), crate::grid::cell::JSON_TREE_CHILD_LIMIT + 1);
+        let last = root.children.last().expect("占位节点");
+        assert!(last.label.starts_with("… 还有 "));
+        // 非法 JSON → None
+        assert!(json_tree_items("not json").is_none());
+        assert!(json_tree_items("{broken").is_none());
+        assert!(json_tree_items("").is_none());
     }
 
     /// 【B14】右键菜单的项：按值筛选 / 复制（此值 · 此列 · 整行）/ 冻结（文案随冻结状态变）
