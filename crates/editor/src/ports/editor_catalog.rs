@@ -28,11 +28,11 @@
 
 use std::rc::Rc;
 
-use editor::shared::{EditorShared, ShowDocumentPort};
+use crate::host::EditorHost;
+use crate::shared::{EditorShared, ShowDocumentPort};
 use lsp_types::Uri;
 
 use super::editor_completion::WorkbenchCompletion;
-use crate::panels::Shared;
 
 /// 一拍：读活动文档绑定连接 → 有则推该连接目录快照；再按现存文档对齐残留。
 ///
@@ -54,7 +54,7 @@ pub fn pump(editor: &EditorShared, completion: &Rc<WorkbenchCompletion>) {
     // 残留清理：现存文档 id 之外的全清
     {
         let service = editor.service();
-        let alive: Vec<editor::model::DocumentId> = service
+        let alive: Vec<crate::model::DocumentId> = service
             .documents()
             .iter()
             .map(|doc| doc.id().clone())
@@ -72,13 +72,13 @@ pub fn pump(editor: &EditorShared, completion: &Rc<WorkbenchCompletion>) {
 /// 跳转上下文 = **当前活动文档绑定连接**（用户从该文档 Ctrl+Click，它就是活动
 /// 文档；URI 本身不携带连接）。未命中（scheme 不符 / 无活动文档 / 未绑连接）→
 /// 返回 `false` 让内核走默认（当前文档内移动光标，无副作用）。
-pub fn attach_jump(editor: &EditorShared, workbench: &Shared) {
+pub fn attach_jump(editor: &EditorShared, host: Rc<dyn EditorHost>) {
     // `ShowDocumentPort` 是 `Rc<dyn Fn + 'static>`：闭包只能捕获 `'static` 句柄，
-    // 不能捕获 `&` 引用——先 clone 成 Rc（`EditorShared` / `Shared` 都是 Rc 集合，
-    // clone = 复制句柄，与其它 attach_* 同款模式）。别名带 `_owned`：闭包 move 走
-    // 它们，外面用原参数 `&` 调 `attach`。
+    // 不能捕获 `&` 引用——先 clone 成 Rc（`EditorShared` / `Rc<dyn EditorHost>`
+    // 都是句柄，clone = 复制引用，与其它 attach_* 同款模式）。别名带 `_owned`：
+    // 闭包 move 走它们，外面用原参数 `&` 调 `attach`。
     let editor_owned = editor.clone();
-    let workbench_owned = workbench.clone();
+    let host_owned = host.clone();
     let port: ShowDocumentPort = Rc::new(move |params, _window, _cx| {
         // 只认 rds://navigator/<限定表名>；其他 scheme 不拦（内核默认处理）
         let Some(name) = parse_navigator(&params.uri) else {
@@ -104,7 +104,7 @@ pub fn attach_jump(editor: &EditorShared, workbench: &Shared) {
             _ => (String::new(), name),
         };
         let object = engine::ObjectRef::table(conn_id, "", schema, table);
-        workbench_owned.request_reveal(object);
+        host_owned.request_reveal(object);
         true
     });
     editor.attach_show_document(port);

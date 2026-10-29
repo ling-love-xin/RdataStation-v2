@@ -35,6 +35,7 @@ use crate::commands::{
     CloseProject, FocusNavSearch, HideSidebars, RestoreSidebars, SwitchProject, ToggleQuickGoto,
     ToggleQuickOpen,
 };
+use crate::components::editor_host::WorkbenchEditorHost;
 use crate::panels::{
     ArchivePanel, DatabaseNavPanel, EditorPanel, HistoryPanelTab, InsightPanelTab, MockPanelTab,
     PluginPanel, ProjectActionRequest, PropertyRequest, QueryRequest, ResourcePanelTab,
@@ -182,9 +183,6 @@ impl WorkbenchView {
     /// `spawn_lsp`：真机传 `true`（**接语言服务端口为例，按需启动，这里不 spawn**），
     /// 测试传 `false`（不接，保持「未注入 = 无语言服务」）。
     fn assemble(shared: Shared, spawn_lsp: bool, cx: &mut Context<Self>) -> Self {
-        // B1：编辑器的连接端口要用它（连接列表快照 + 项目根）——先 clone 出来，
-        // 因为下面构造 `editor_service` 时不能再借 `self`。
-        let editor_shared_for_conn = shared.clone();
         // B11：编辑器的共享状态**提前建好**——M1 项目桥（未保存草稿拦截）与连接端口都要它，
         // 而下面 `build_host` 就会用到；它是 `Rc` 句柄（不是 gpui 实体），clone 很便宜。
         let editor_service = editor::shared::EditorShared::new();
@@ -192,8 +190,13 @@ impl WorkbenchView {
             "",
             editor::model::EditorMode::Sql,
         ));
+        // P2-a：编辑器宿主端口（连接快照 / 项目根 / 项目锁 / 宿主命令转发给 Shared）——
+        // 已下沉 `editor::ports` 的端口实现（exec 等）只依赖这个 trait，不再碰 Shared 具体类型
+        let editor_host = Rc::new(WorkbenchEditorHost::new(shared.clone()));
+        // 联邦源清单是工作线程端口（`QueryRunner: Send + Sync`，不持 Shared）
+        let fed_source = crate::components::editor_host::federated_source();
         // A14：把执行端口接上（文档绑定/活动连接）。未接时执行动作会明确报“未接入执行”。
-        crate::services::editor_exec::attach(&editor_service);
+        crate::services::editor_exec::attach(&editor_service, fed_source);
         // 【2b】把执行环境端口接上（通用模式脚本执行；attach 时探测解释器并缓存，
         // 渲染路径零 I/O。未接时环境列表为空 → 运行按钮不亮）。
         crate::services::editor_env::attach(&editor_service);
@@ -210,31 +213,31 @@ impl WorkbenchView {
         // A9：把“另存为”的路径选择接上（系统文件对话框；未接时另存为会明确报未接入）
         crate::services::editor_files::attach(&editor_service);
         // B1：把连接端口接上（连接列表 + 自动建连；未接时选择器说“未接入连接列表”）
-        crate::services::editor_connections::attach(&editor_service, &editor_shared_for_conn);
+        crate::services::editor_connections::attach(&editor_service, editor_host.clone());
         // B13：把执行通道端口接上（源库 / 本地加速 / 联邦 的门控；未接时后两档都不可选并给原因）
-        crate::services::editor_channels::attach(&editor_service, &editor_shared_for_conn);
+        crate::services::editor_channels::attach(&editor_service, editor_host.clone());
         // T1.6：把源清单端口接上（联邦会话快照 → 「源清单 ▾」浮层；未接时浮层只有空态说明）
         crate::services::editor_sources::attach(&editor_service);
         // M8：把「洞察此列」端口接上（结果集列头右键 → 右 Dock 洞察面板；未接时不摆这一项）
-        crate::services::editor_insight::attach(&editor_service, &shared);
+        crate::services::editor_insight::attach(&editor_service, editor_host.clone());
         // 【B8 余项】把「打开历史面板」端口接上（工具栏「⟲ 历史」→ 右 Dock 历史面板）
-        crate::services::editor_history::attach(&editor_service, &shared);
+        crate::services::editor_history::attach(&editor_service, editor_host.clone());
         // 项目锁：把项目态端口接上（项目只读时，写源库对象的语句在提交前就被拒）
-        crate::services::editor_project::attach(&editor_service, &shared);
+        crate::services::editor_project::attach(&editor_service, editor_host.clone());
         // B9：把补全端口接上（连接级元数据缓存 → 候选目录；未接时只有关键字与函数）
-        let completion = crate::services::editor_completion::attach(&editor_service, &shared);
+        let completion = crate::services::editor_completion::attach(&editor_service, editor_host.clone());
         // #54 B：语义诊断目录快照注入（复用补全的 L1 目录；活动文档绑连变化 → 按文档推）。
         // completion 存入视图字段（泵每拍取用；见 `ensure_catalog_pump`）
         let editor_completion = Some(completion);
         // #54 C6/C7：跳转定义目标解析注入（`rds://navigator/<限定表名>` → 导航树定位，
         // 复用 Quick Open `⌥↵` 的 `request_reveal`；未接 = 内核默认文档内移动）
-        crate::services::editor_catalog::attach_jump(&editor_service, &shared);
+        crate::services::editor_catalog::attach_jump(&editor_service, editor_host.clone());
         // T2c-1：把库 / schema 端口接上（导航缓存 → 状态栏面包屑可切项；未接时退文本连接段）
-        crate::services::editor_schema::attach(&editor_service, &shared);
+        crate::services::editor_schema::attach(&editor_service, editor_host.clone());
         // #20：内核注册表端口（后台探测一次 + 内存快照；未接时执行源「内核」档菜单置灰）
         crate::services::editor_kernels::attach(&editor_service, cx);
         // B7 切片三：把表结构端口接上（导航缓存 → 导出 SQL Updates 的键列；未接时菜单不摆该档）
-        crate::services::editor_table_keys::attach(&editor_service, &shared);
+        crate::services::editor_table_keys::attach(&editor_service, editor_host.clone());
         // M1：排序偏好与首屏项目列表（无项目时）都在构造期完成，避免在 `render` 里做 I/O
         //（GPUI-kit 编码指南：副作用不得放在 render）。偏好走 `SettingsService`（唯一读路径），
         // 不直读 `settings.json`：`app` 已在开窗前 `SettingsService::init`（K1）。

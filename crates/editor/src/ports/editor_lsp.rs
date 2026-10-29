@@ -2,7 +2,7 @@
 //!
 //! ## 一句话
 //!
-//! editor 侧只声明端口契约（`editor::lsp::LspPort`：文档 → 会话 + 按 `uri` 认领事件 + `wants`），
+//! editor 侧只声明端口契约（`crate::lsp::LspPort`：文档 → 会话 + 按 `uri` 认领事件 + `wants`），
 //! **真正起 LSP server 的是宿主**。本模块就是那个宿主实现：按需探测 Python 环境、spawn
 //! `python -m jedi_language_server`（v1 候选），后台完成 `initialize` 握手（不阻塞主线程）。
 //!
@@ -48,9 +48,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
-use editor::lsp::{LspEvent, LspHandle, LspPort, LspSession};
-use editor::model::{DocumentId, EditorMode};
-use editor::shared::EditorShared;
+use crate::lsp::{LspEvent, LspHandle, LspPort, LspSession};
+use crate::model::{DocumentId, EditorMode};
+use crate::shared::EditorShared;
 
 use super::editor_env;
 
@@ -118,7 +118,7 @@ fn claim_events(uri: &str, events: VecDeque<LspEvent>) -> (Vec<LspEvent>, VecDeq
     (claimed, rest)
 }
 
-/// 工作台实现的 LSP 宿主端口（[`editor::lsp::LspPort`]）
+/// 工作台实现的 LSP 宿主端口（[`crate::lsp::LspPort`]）
 ///
 /// 一个常驻 server 服务多份文档；`service` 反查文档集合定语言并按需拉起服务，`drain_for` 按 `uri` 认领。
 pub struct WorkbenchLsp {
@@ -391,7 +391,7 @@ fn spawn_server() -> Result<(LspHandle, Receiver<LspEvent>), String> {
         .ok_or("无法获取子进程 stdout（spawn 后即被占用）")?;
     // `LspClient` 只拿 stdin / stdout；`child` 句柄 drop 不杀进程（Windows 语义），
     // server 进程靠 `shutdown` / 关闭写侧（EOF）自行退出——无孤儿由编辑器侧 `Drop` 兜底。
-    Ok(editor::lsp::LspClient::from_process(stdin, stdout))
+    Ok(crate::lsp::LspClient::from_process(stdin, stdout))
 }
 
 #[cfg(test)]
@@ -400,8 +400,8 @@ mod tests {
     use std::collections::VecDeque;
     use std::path::Path;
 
-    use editor::lsp::LspEvent;
-    use editor::model::{DocumentId, EditorMode};
+    use crate::lsp::LspEvent;
+    use crate::model::{DocumentId, EditorMode};
 
     use super::{claim_events, language_for, uri_for};
 
@@ -446,7 +446,7 @@ mod tests {
                 "uri": uri,
                 "diagnostics": [{ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } }, "message": "我的" }]
             })),
-            LspEvent::Notification(editor::lsp::LspNotification {
+            LspEvent::Notification(crate::lsp::LspNotification {
                 method: "window/logMessage".to_string(),
                 params: serde_json::json!({}),
             }),

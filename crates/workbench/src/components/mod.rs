@@ -20,4 +20,6 @@ pub mod nav_host;
 pub mod project_host;
 pub mod scratchpad_host;
 pub mod resource_host;
+/// 编辑器宿主端口实现（P2-a：`editor::host::EditorHost` 的 workbench 侧实现）
+pub mod editor_host;
 pub mod type_short_map_dialog;

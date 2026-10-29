@@ -14,8 +14,6 @@
     pub(crate) use std::time::{Duration, Instant};
 // ==== Step 6 拆分（2026-10-29）：按主题拆分为子模块 ====
 pub(crate) use runner::*;
-pub(crate) use queue::*;
-pub(crate) use tx::*;
 mod target;
 mod runner;
 mod queue;

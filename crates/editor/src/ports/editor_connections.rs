@@ -2,15 +2,15 @@
 //!
 //! ## 职责边界
 //!
-//! 编辑器只知道“有哪些连接可选、把某个连接连起来”这两件事（`editor::connection::ConnectionsPort`）；
+//! 编辑器只知道“有哪些连接可选、把某个连接连起来”这两件事（`crate::connection::ConnectionsPort`）；
 //! 连接从哪个目录加载、怎么建连、失败原因怎么表述，都是工作台的事——这里复用既有路径：
-//! - 列表：`Shared::connections`（导航面板维护的**内存快照**，渲染路径可安全读）
-//! - 建连：`services::nav_runtime::{is_connected, connect_entry}`（与导航展开时的隐式建连同一条）
+//! - 列表：宿主的内存快照（导航面板维护，渲染路径可安全读）
+//! - 建连：宿主转发到 `nav_runtime::{is_connected, connect_entry}`（与导航展开时的隐式建连同一条）
 //!
-//! ## 为什么列表要读 `Shared` 而不是再查一次库
+//! ## 为什么列表读快照而不是再查一次库
 //!
 //! 端口方法会被**渲染路径**调用（工具栏每帧画选择器）。查库 / 读文件都是 I/O，绝不能进 render；
-//! 而 `Shared::connections` 本来就是界面上看到的同一份列表——不存在第二份真值。
+//! 而宿主那份快照本来就是界面上看到的同一份列表——不存在第二份真值。
 //!
 //! ## 短码从哪来
 //!
@@ -19,21 +19,19 @@
 
 use std::rc::Rc;
 
-use editor::connection::{ConnectionOption, ConnectionsPort};
-use editor::shared::EditorShared;
-
-use crate::panels::Shared;
+use crate::connection::{ConnectionOption, ConnectionsPort};
+use crate::host::EditorHost;
+use crate::shared::EditorShared;
 
 /// 工作台实现：连接列表（内存快照）+ 自动建连
 struct WorkbenchConnections {
-    shared: Shared,
+    host: Rc<dyn EditorHost>,
 }
 
 impl ConnectionsPort for WorkbenchConnections {
     fn options(&self) -> Vec<ConnectionOption> {
-        self.shared
-            .connections
-            .borrow()
+        self.host
+            .connections()
             .iter()
             .map(|c| ConnectionOption {
                 id: c.id.clone(),
@@ -50,27 +48,20 @@ impl ConnectionsPort for WorkbenchConnections {
     }
 
     fn ensure_connected(&self, conn_id: &str) -> Result<(), String> {
-        if crate::services::nav_runtime::is_connected(conn_id) {
+        if self.host.is_connected(conn_id) {
             return Ok(());
         }
-        let root = self
-            .shared
-            .project_root()
-            .map(|path| path.to_string_lossy().to_string());
-        crate::services::nav_runtime::connect_entry(conn_id, root.as_deref())?;
+        self.host.connect_entry(conn_id)?;
 
         // 快照跟着真状态走：否则状态栏会刚刚“已绑定”却显示空心的运行态点
-        let mut connections = self.shared.connections.borrow_mut();
-        if let Some(item) = connections.iter_mut().find(|c| c.id == conn_id) {
-            item.connected = true;
-        }
+        self.host.set_connection_connected(conn_id, true);
         Ok(())
     }
 
     /// **事件路径专用**（连接菜单打开时调用，**禁止 render 路径调用**）：实时查连接管理器。
     ///
     /// 导航建连成功只回写导航快照（`submit_connect_outcome`），**不回写**
-    /// [`Shared::connections`] 的 `connected` 字段——所以“只列在线”不能看快照缓存，
+    /// 连接快照的 `connected` 字段——所以“只列在线”不能看快照缓存，
     /// 否则刚在导航里连上的连接在编辑器菜单里看不到（真机复现）。此处一次性批量查询
     /// 运行时的全部连接 id（`get_all_connection_ids` 只查内存表，无池副作用）。
     fn online_ids(&self) -> std::collections::HashSet<String> {
@@ -98,8 +89,6 @@ fn short_code(conn_id: &str) -> &'static str {
 }
 
 /// 把连接端口接到编辑器共享状态上（**启动装配调用一次**）
-pub fn attach(shared: &EditorShared, workbench: &Shared) {
-    shared.attach_connections(Rc::new(WorkbenchConnections {
-        shared: workbench.clone(),
-    }));
+pub fn attach(shared: &EditorShared, host: Rc<dyn EditorHost>) {
+    shared.attach_connections(Rc::new(WorkbenchConnections { host }));
 }

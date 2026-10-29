@@ -9,6 +9,10 @@ description = "SQL 编辑器：一个内核 + 三档能力（文本 / SQL / 分�
 [dependencies]
 gpui-kit.workspace = true
 engine.workspace = true
+# 导航缓存（P2-a 下沉 `editor_schema` / `editor_table_keys` / `editor_completion`）：
+# NavCache 是连接元数据的 L2 缓存（schema / 表 / 列），与 lib.rs 声明的
+# 「editor → database」依赖方向一致
+database.workspace = true
 # 跨 crate 拖放载荷（`shared::InsertFileDrag`：拖起方在草稿箱，落点在本 crate 的编辑器面板）；
 # 与 lib.rs 里「editor → engine / database / shared」的分层描述一致，且 shared 本就在传递依赖里。
 shared.workspace = true
@@ -42,6 +46,13 @@ result_panel.workspace = true
 settings.workspace = true
 # 文件元信息（Sidecar 快照）：书签持久化（`.filename.meta.json`），编辑器打开读 / 切换写回
 file_meta.workspace = true
+# 结果集分析 / 导出（P2-a 下沉 `result_service`）：`get_or_create_duckdb` 返回 `duckdb::Connection`
+# （`appender-arrow` 特性见根 Cargo.toml；与 workbench 同款，无新增编译）
+duckdb.workspace = true
+# 系统文件对话框（P2-a 下沉 `editor_files`）：打开 / 另存为 / 导出落盘路径
+rfd.workspace = true
+# 通用模式执行环境（P2-a 下沉 `editor_env`）：自定义环境 id 用 `Uuid::new_v4`
+uuid.workspace = true
 
 # 测试专用特性：`host.rs` 的 `commit_in_flight_for_test` 等测试辅助按
 # `#[cfg(any(test, feature = "test-support"))]` 门控（与 paths crate 同口径）；
@@ -54,3 +65,6 @@ test-support = []
 paths = { workspace = true, features = ["test-support"] }
 # 窗口级测试：headless 窗口需要 gpui 的 test-support（仅在测试构建启用）
 gpui-kit = { workspace = true, features = ["test-support"] }
+# 执行器测试（P2-a 下沉 `editor_exec`）：测试模块构造 Arrow `RecordBatch` 喂执行链
+# （`execute_duckdb_analysis_from_batches` 的入参），与 duckdb 的 arrow 同版本（58）
+arrow.workspace = true

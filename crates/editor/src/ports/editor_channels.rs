@@ -3,7 +3,7 @@
 //! ## 职责边界
 //!
 //! 编辑器只问一件事：“这个连接上「本地加速 / 联邦」现在能用吗？不能用是为什么？”
-//! （`editor::channel::ChannelsPort`）。**能不能用是工作台的事实**：它知道连接的
+//! （`crate::channel::ChannelsPort`）。**能不能用是工作台的事实**：它知道连接的
 //! `use_duckdb_fed` 开关、分析引擎（DuckDB）起没起来、外部源注册了几个。
 //!
 //! ## 为什么必须“如实”
@@ -37,15 +37,14 @@
 
 use std::rc::Rc;
 
-use editor::channel::{ChannelAvailability, ChannelAvailabilitySet, ChannelsPort};
-use editor::shared::EditorShared;
+use crate::channel::{ChannelAvailability, ChannelAvailabilitySet, ChannelsPort};
+use crate::host::EditorHost;
+use crate::shared::EditorShared;
 use workbench_shell::model::ConnectionItem;
-
-use crate::panels::Shared;
 
 /// 工作台实现：三档通道的可用性（读内存快照，不做 I/O）
 struct WorkbenchChannels {
-    shared: Shared,
+    host: Rc<dyn EditorHost>,
 }
 
 impl ChannelsPort for WorkbenchChannels {
@@ -58,12 +57,10 @@ impl ChannelsPort for WorkbenchChannels {
             };
         };
         let connection = self
-            .shared
-            .connections
-            .borrow()
-            .iter()
-            .find(|item| item.id == conn_id)
-            .cloned();
+            .host
+            .connections()
+            .into_iter()
+            .find(|item| item.id == conn_id);
         let Some(connection) = connection else {
             return ChannelAvailabilitySet::blocked("该连接已不在当前列表里");
         };
@@ -83,7 +80,7 @@ impl ChannelsPort for WorkbenchChannels {
         };
 
         ChannelAvailabilitySet {
-            federated: federated_availability(&self.shared.connections.borrow()),
+            federated: federated_availability(&self.host.connections()),
             accelerated,
         }
     }
@@ -143,20 +140,52 @@ fn federated_availability(connections: &[ConnectionItem]) -> ChannelAvailability
 }
 
 /// 把通道端口接到编辑器共享状态上（**启动装配调用一次**）
-pub fn attach(shared: &EditorShared, workbench: &Shared) {
-    shared.attach_channels(Rc::new(WorkbenchChannels {
-        shared: workbench.clone(),
-    }));
+pub fn attach(shared: &EditorShared, host: Rc<dyn EditorHost>) {
+    shared.attach_channels(Rc::new(WorkbenchChannels { host }));
 }
 
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
+    use std::path::PathBuf;
+
     use super::WorkbenchChannels;
-    use editor::channel::{ChannelsPort, ExecChannel};
+    use crate::channel::{ChannelsPort, ExecChannel};
+    use crate::host::EditorHost;
+    use gpui_kit::App;
     use workbench_shell::model::ConnectionItem;
 
-    use crate::panels::Shared;
+    /// 测试宿主：只提供连接快照（不接真实导航 / 项目）
+    struct StubHost {
+        connections: Vec<ConnectionItem>,
+    }
+
+    impl EditorHost for StubHost {
+        fn connections(&self) -> Vec<ConnectionItem> {
+            self.connections.clone()
+        }
+        fn project_root(&self) -> Option<PathBuf> {
+            None
+        }
+        fn project_read_only(&self) -> bool {
+            false
+        }
+        fn set_connection_connected(&self, _conn_id: &str, _connected: bool) {}
+        fn is_connected(&self, _conn_id: &str) -> bool {
+            false
+        }
+        fn connect_entry(&self, _conn_id: &str) -> Result<(), String> {
+            Err("测试宿主未接入".to_string())
+        }
+        fn open_history(&self, _cx: &mut App) {}
+        fn open_insight_source_column(
+            &self,
+            _request: crate::shared::InsightColumnRequest,
+            _cx: &mut App,
+        ) {
+        }
+        fn request_reveal(&self, _object: engine::ObjectRef) {}
+    }
 
     fn connection(id: &str, fed: bool) -> ConnectionItem {
         ConnectionItem {
@@ -177,7 +206,7 @@ mod tests {
 
     fn port(connections: Vec<ConnectionItem>) -> WorkbenchChannels {
         WorkbenchChannels {
-            shared: Shared::with_connections(connections, None),
+            host: std::rc::Rc::new(StubHost { connections }),
         }
     }
 

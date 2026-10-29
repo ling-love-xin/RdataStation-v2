@@ -2,7 +2,7 @@
 //!
 //! ## 职责边界
 //!
-//! 编辑器问一件事：“这个连接上的联邦源现在是什么样？”（`editor::sources::SourcesPort`）。
+//! 编辑器问一件事：“这个连接上的联邦源现在是什么样？”（`crate::sources::SourcesPort`）。
 //! 真值在引擎的联邦会话里（`federation::session::snapshot_for`）；这里只做**形状翻译**：
 //! 挂载状态、表数量、主源是哪个、回退说明——**纯内存读**，渲染路径可调（不做 I/O）。
 //!
@@ -12,8 +12,8 @@
 //! （`workbench::services::editor_exec` 的 `refresh_sources` / `set_federated_primary`），
 //! 与「重新挂载源库」同一条路——端口只管“看”。
 
-use editor::sources::{SourceRow, SourceState, SourcesPort, SourcesSnapshot};
-use editor::shared::EditorShared;
+use crate::sources::{SourceRow, SourceState, SourcesPort, SourcesSnapshot};
+use crate::shared::EditorShared;
 
 use engine::duckdb::federation::registry::{MountState, SessionSnapshot};
 use engine::duckdb::federation::session as fed_session;

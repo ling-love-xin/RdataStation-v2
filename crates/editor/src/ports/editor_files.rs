@@ -18,11 +18,11 @@
 
 use std::path::{Path, PathBuf};
 
-use editor::shared::EditorShared;
+use crate::shared::EditorShared;
 
 /// 「打开 / 另存为」的扩展名过滤
 ///
-/// 与 `editor::mode::mode_for_extension` 的三档判定对齐：SQL 脚本 / 分析笔记 / 文本与数据。
+/// 与 `crate::mode::mode_for_extension` 的三档判定对齐：SQL 脚本 / 分析笔记 / 文本与数据。
 /// 过滤只是**默认视图**，用户仍可切到“所有文件”（未知扩展名按文本模式打开，是安全的默认）。
 const FILTERS: &[(&str, &[&str])] = &[
     ("SQL 脚本", &["sql", "mysql", "pgsql", "psql", "ddl", "tsql"]),
@@ -38,7 +38,7 @@ pub fn attach(shared: &EditorShared) {
         },
     ));
     shared.attach_export_path_picker(std::rc::Rc::new(
-        |format: editor::export::ExportFormat, default_name: String| {
+        |format: crate::export::ExportFormat, default_name: String| {
             pick_export_path(format, &default_name)
         },
     ));
@@ -82,7 +82,7 @@ fn pick_save_path(current: Option<&Path>, default_name: &str) -> Option<PathBuf>
 ///
 /// 默认名由编辑器给（`orders.csv` / `result_1.json`……）：它才知道结果集来自哪张表。
 /// 过滤按格式来（导出只该看见自己那一种）——这与另存为不同：那里是开文档，认多种扩展。
-fn pick_export_path(format: editor::export::ExportFormat, default_name: &str) -> Option<PathBuf> {
+fn pick_export_path(format: crate::export::ExportFormat, default_name: &str) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new()
         .set_title(format!("导出结果（{}）", format.label()))
         .set_file_name(default_name)

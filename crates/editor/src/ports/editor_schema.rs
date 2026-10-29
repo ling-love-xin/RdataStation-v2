@@ -20,16 +20,15 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use editor::connection::{SchemaInfo, SchemasPort};
+use crate::connection::{SchemaInfo, SchemasPort};
+use crate::host::EditorHost;
 
 use database::cache::NavCache;
-
-use crate::panels::Shared;
 
 /// 工作台实现：库 / schema 清单（内存读；首次未命中时后台预载）
 pub struct WorkbenchSchemas {
     /// 项目根来源（NavCache 的打开参数：项目连接的缓存挂在项目根下）
-    shared: Shared,
+    host: Rc<dyn EditorHost>,
     /// 已载好的清单（按 conn_id）：渲染路径只读快照
     loaded: Arc<Mutex<HashMap<String, Vec<SchemaInfo>>>>,
     /// 正在载的 conn_id（去重：同一连接同时只载一次）
@@ -37,9 +36,9 @@ pub struct WorkbenchSchemas {
 }
 
 impl WorkbenchSchemas {
-    pub fn new(shared: Shared) -> Self {
+    pub fn new(host: Rc<dyn EditorHost>) -> Self {
         Self {
-            shared,
+            host,
             loaded: Arc::new(Mutex::new(HashMap::new())),
             loading: Arc::new(Mutex::new(HashSet::new())),
         }
@@ -67,7 +66,7 @@ impl WorkbenchSchemas {
             }
         }
         let project_root = self
-            .shared
+            .host
             .project_root()
             .map(|root| root.to_string_lossy().to_string());
         let loaded = self.loaded.clone();
@@ -110,15 +109,15 @@ fn load_schemas(conn_id: &str, project_root: Option<&str>) -> Vec<SchemaInfo> {
 }
 
 /// 把 schema 端口接到编辑器共享状态上（**启动装配调用一次**）
-pub fn attach(shared: &editor::shared::EditorShared, workbench: &Shared) {
-    shared.attach_schemas(Rc::new(WorkbenchSchemas::new(workbench.clone())));
+pub fn attach(shared: &crate::shared::EditorShared, host: Rc<dyn EditorHost>) {
+    shared.attach_schemas(Rc::new(WorkbenchSchemas::new(host)));
 }
 
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
     use super::load_schemas;
-    use editor::connection::SchemaInfo;
+    use crate::connection::SchemaInfo;
     use database::cache::NavCache;
 
     fn temp_root(tag: &str) -> std::path::PathBuf {

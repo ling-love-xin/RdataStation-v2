@@ -44,8 +44,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use editor::channel::ExecChannel;
-use editor::completion::{
+use crate::channel::ExecChannel;
+use crate::completion::{
     filter_catalog_by_schema, Candidate, CandidateKind, Catalog, ColumnAnnotation, CompletionPort,
     TemplateSnippet,
 };
@@ -54,7 +54,7 @@ use database::cache::NavCache;
 use engine::duckdb::federation::{registry::MountedSource, session as fed_session};
 use engine::sql::{ProjectionSource, SqlDialect};
 
-use crate::panels::Shared;
+use crate::host::EditorHost;
 
 /// 单条连接最多装多少表 / 视图（超了标记 `truncated`，不再往下装）
 const MAX_OBJECTS: usize = 3_000;
@@ -86,7 +86,8 @@ impl CacheEntryMeta {
 
 /// 工作台实现：候选目录（内存读；首次未命中时后台预载）
 pub struct WorkbenchCompletion {
-    shared: Shared,
+    /// 宿主：项目根 / 连接快照（P2-a 起不再依赖 `Shared` 具体类型）
+    host: Rc<dyn EditorHost>,
     /// 已载好的原始目录（按 conn_id）：**未做通道限定**，限定在返回时按通道拼
     loaded: Arc<Mutex<HashMap<String, Catalog>>>,
     /// 【T2a-2】已载好的主键映射（按 conn_id → `schema.表` → 主键列；与 `loaded` 同一次预载）
@@ -124,9 +125,9 @@ pub struct WorkbenchCompletion {
 }
 
 impl WorkbenchCompletion {
-    pub fn new(shared: Shared) -> Self {
+    pub fn new(host: Rc<dyn EditorHost>) -> Self {
         Self {
-            shared,
+            host,
             loaded: Arc::new(Mutex::new(HashMap::new())),
             keys: Arc::new(Mutex::new(HashMap::new())),
             loading: Arc::new(Mutex::new(HashSet::new())),
@@ -235,7 +236,7 @@ impl WorkbenchCompletion {
             }
         }
         let project_root = self
-            .shared
+            .host
             .project_root()
             .map(|root| root.to_string_lossy().to_string());
         let loaded = self.loaded.clone();
@@ -380,9 +381,8 @@ impl CompletionPort for WorkbenchCompletion {
         }
         // 方言从连接驱动 id 推（结果实际跑在 `conn_id` 上，不能用“当前选中连接”）
         let Some(dialect) = self
-            .shared
-            .connections
-            .borrow()
+            .host
+            .connections()
             .iter()
             .find(|item| item.id == conn_id)
             .and_then(|item| driver_to_dialect(&item.driver))
@@ -629,8 +629,8 @@ fn to_snippet(template: engine::persistence::sql_template_store::SqlTemplate) ->
 ///
 /// 返回 `Rc<WorkbenchCompletion>`：语义诊断目录快照注入（`editor_catalog`）复用
 /// 同一份 L1 目录（同一预载 / 同一条 TTL 防线），不另起一套读取。
-pub fn attach(shared: &editor::shared::EditorShared, workbench: &Shared) -> Rc<WorkbenchCompletion> {
-    let port = Rc::new(WorkbenchCompletion::new(workbench.clone()));
+pub fn attach(shared: &crate::shared::EditorShared, host: Rc<dyn EditorHost>) -> Rc<WorkbenchCompletion> {
+    let port = Rc::new(WorkbenchCompletion::new(host));
     // 模板预载一次（内存读给菜单用；读不到就空着）
     port.schedule_template_load();
     shared.attach_completion(port.clone());
@@ -645,14 +645,48 @@ mod tests {
         CacheEntryMeta, WorkbenchCompletion, COMPLETION_CACHE_TTL_SECS,
     };
     use std::collections::HashMap;
+    use std::rc::Rc;
     use database::cache::NavCache;
-    use editor::channel::ExecChannel;
-    use editor::completion::{CandidateKind, CompletionPort};
+    use crate::channel::ExecChannel;
+    use crate::completion::{CandidateKind, CompletionPort};
     use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind};
-    use project::ui::OpenProject;
+    use gpui_kit::App;
     use workbench_shell::model::ConnectionItem;
 
-    use crate::panels::Shared;
+    use crate::host::EditorHost;
+
+    /// 测试宿主：只提供连接快照 + 项目根（不接真实导航 / 项目模块）
+    struct StubHost {
+        connections: Vec<ConnectionItem>,
+        project_root: Option<std::path::PathBuf>,
+    }
+
+    impl EditorHost for StubHost {
+        fn connections(&self) -> Vec<ConnectionItem> {
+            self.connections.clone()
+        }
+        fn project_root(&self) -> Option<std::path::PathBuf> {
+            self.project_root.clone()
+        }
+        fn project_read_only(&self) -> bool {
+            false
+        }
+        fn set_connection_connected(&self, _conn_id: &str, _connected: bool) {}
+        fn is_connected(&self, _conn_id: &str) -> bool {
+            false
+        }
+        fn connect_entry(&self, _conn_id: &str) -> Result<(), String> {
+            Err("测试宿主未接入".to_string())
+        }
+        fn open_history(&self, _cx: &mut App) {}
+        fn open_insight_source_column(
+            &self,
+            _request: crate::shared::InsightColumnRequest,
+            _cx: &mut App,
+        ) {
+        }
+        fn request_reveal(&self, _object: engine::ObjectRef) {}
+    }
 
     fn temp_root(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("rds_completion_{tag}_{}", std::process::id()));
@@ -871,8 +905,8 @@ mod tests {
     fn column_annotations_resolve_single_table_select() {
         let root = temp_root("p1");
         seed("P1_annotations", &root);
-        let shared = Shared::with_connections(
-            vec![ConnectionItem {
+        let host = Rc::new(StubHost {
+            connections: vec![ConnectionItem {
                 id: "P1_annotations".into(),
                 name: "测试库".into(),
                 driver: "sqlite".into(),
@@ -886,11 +920,10 @@ mod tests {
                 created_at: String::new(),
                 updated_at: String::new(),
             }],
-            None,
-        );
-        // 项目根要指到 seed 的缓存目录：NavCache::open 缺项目根打不开缓存
-        *shared.project.borrow_mut() = Some(OpenProject::new(root.clone(), "P1"));
-        let port = WorkbenchCompletion::new(shared);
+            // 项目根要指到 seed 的缓存目录：NavCache::open 缺项目根打不开缓存
+            project_root: Some(root.clone()),
+        });
+        let port = WorkbenchCompletion::new(host);
 
         // 预载落笔前：第一次 `meta_map` 触发后台预载；轮询等到载好
         wait_until(|| port.meta_map("P1_annotations").is_some(), "载好列元数据");
@@ -962,8 +995,11 @@ mod tests {
     /// 端口：未绑定连接给空；未载过时先给空并安排预载（这一拍不阻塞）
     #[test]
     fn the_port_returns_empty_until_the_preload_lands() {
-        let shared = Shared::with_connections(Vec::new(), None);
-        let port = WorkbenchCompletion::new(shared);
+        let host = Rc::new(StubHost {
+            connections: Vec::new(),
+            project_root: None,
+        });
+        let port = WorkbenchCompletion::new(host);
 
         assert!(
             port.catalog(None, ExecChannel::Source, None).is_empty(),
@@ -986,10 +1022,12 @@ mod tests {
     #[test]
     fn an_empty_cache_submits_one_warm_introspection() {
         let root = temp_root("warm_submit");
-        let shared = Shared::with_connections(Vec::new(), None);
-        // 项目根就位（NavCache 能打开）但没有种子对象 → 走「空目录 → 投递内省」分支
-        *shared.project.borrow_mut() = Some(OpenProject::new(root.clone(), "t"));
-        let port = WorkbenchCompletion::new(shared);
+        let host = Rc::new(StubHost {
+            connections: Vec::new(),
+            // 项目根就位（NavCache 能打开）但没有种子对象 → 走「空目录 → 投递内省」分支
+            project_root: Some(root.clone()),
+        });
+        let port = WorkbenchCompletion::new(host);
 
         port.schedule_load("P_warm_710");
         wait_until(
@@ -1022,9 +1060,11 @@ mod tests {
     fn a_hit_cache_clears_the_warm_marker() {
         let root = temp_root("warm_hit");
         seed("P_warm_hit_710", &root);
-        let shared = Shared::with_connections(Vec::new(), None);
-        *shared.project.borrow_mut() = Some(OpenProject::new(root.clone(), "t"));
-        let port = WorkbenchCompletion::new(shared);
+        let host = Rc::new(StubHost {
+            connections: Vec::new(),
+            project_root: Some(root.clone()),
+        });
+        let port = WorkbenchCompletion::new(host);
 
         port.schedule_load("P_warm_hit_710");
         wait_until(
@@ -1074,9 +1114,11 @@ mod tests {
     fn an_expired_entry_reloads_with_a_new_generation() {
         let root = temp_root("ttl");
         seed("P_ttl_53", &root);
-        let shared = Shared::with_connections(Vec::new(), None);
-        *shared.project.borrow_mut() = Some(OpenProject::new(root.clone(), "t"));
-        let port = WorkbenchCompletion::new(shared);
+        let host = Rc::new(StubHost {
+            connections: Vec::new(),
+            project_root: Some(root.clone()),
+        });
+        let port = WorkbenchCompletion::new(host);
 
         // 首次命中：等预载落笔，记下第一代
         wait_until(|| port.raw("P_ttl_53").is_some(), "首次载好目录");

@@ -1,7 +1,7 @@
 //! 【2b】通用模式的执行环境（工作台实现）：系统解释器探测 + 脚本进程执行 + 管理环境
 //!
-//! 编辑器只表达意图（[`editor::env::EnvPort`] 回答「有哪些环境、装没装、能不能改」，
-//! [`editor::execution::QueryRunner::run_script`] 回答「怎么跑」），这里是工作台侧的
+//! 编辑器只表达意图（[`crate::env::EnvPort`] 回答「有哪些环境、装没装、能不能改」，
+//! [`crate::execution::QueryRunner::run_script`] 回答「怎么跑」），这里是工作台侧的
 //! 真实现：
 //!
 //! ## 探测（只发生在 attach 与增删改时）
@@ -28,8 +28,8 @@ use std::collections::HashMap;
 use std::process::Stdio;
 use std::rc::Rc;
 
-use editor::env::{EnvKind, EnvPort, Environment, ScriptOutcome};
-use editor::shared::EditorShared;
+use crate::env::{EnvKind, EnvPort, Environment, ScriptOutcome};
+use crate::shared::EditorShared;
 use engine::persistence::script_env_store::{ScriptEnvRow, ScriptEnvStore};
 use tokio::io::AsyncWriteExt as _;
 
@@ -480,7 +480,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use editor::env::EnvPort;
+    use crate::env::EnvPort;
     use engine::persistence::global_db::GlobalSqlitePool;
     use engine::persistence::script_env_store::ScriptEnvStore;
 
@@ -574,7 +574,7 @@ mod tests {
 
         // 新增：名字 / 类型 / 命令 / 参数；版本探测失败（命令不存在）→ None
         let created = port
-            .create("Py Venv", editor::env::EnvKind::Python, "no-such-interp-xyz", &["-u".to_string()])
+            .create("Py Venv", crate::env::EnvKind::Python, "no-such-interp-xyz", &["-u".to_string()])
             .expect("create should succeed");
         assert!(!created.id.is_empty(), "id 由宿主生成");
         assert!(created.id.starts_with("custom-"));
@@ -598,7 +598,7 @@ mod tests {
 
         // 改：换命令 + 参数 → 列表与 memo 都跟着变
         let updated = port
-            .update(&created.id, "Py Venv 3.13", editor::env::EnvKind::Python, "no-such-interp-abc", &["-u".to_string(), "--no-site".to_string()])
+            .update(&created.id, "Py Venv 3.13", crate::env::EnvKind::Python, "no-such-interp-abc", &["-u".to_string(), "--no-site".to_string()])
             .expect("update should succeed");
         assert_eq!(updated.name, "Py Venv 3.13");
         assert_eq!(updated.command, "no-such-interp-abc");
@@ -634,10 +634,10 @@ mod tests {
 
         // 空名 / 空命令如实拒绝（不写库）
         assert!(port
-            .create("  ", editor::env::EnvKind::Custom, "cmd", &[])
+            .create("  ", crate::env::EnvKind::Custom, "cmd", &[])
             .is_err());
         assert!(port
-            .create("name", editor::env::EnvKind::Custom, "  ", &[])
+            .create("name", crate::env::EnvKind::Custom, "  ", &[])
             .is_err());
 
         // 内置环境（python）不可改、不可删
@@ -648,12 +648,12 @@ mod tests {
             .expect("builtin python listed");
         assert!(py.readonly);
         assert!(port
-            .update("python", "改名", editor::env::EnvKind::Python, "py", &[])
+            .update("python", "改名", crate::env::EnvKind::Python, "py", &[])
             .is_err());
         assert!(port.delete("python").is_err());
 
         // 改 / 删不存在的环境也如实拒绝
-        assert!(port.update("env-404", "x", editor::env::EnvKind::Custom, "cmd", &[]).is_err());
+        assert!(port.update("env-404", "x", crate::env::EnvKind::Custom, "cmd", &[]).is_err());
         assert!(port.delete("env-404").is_err());
 
         // 清理 memo
@@ -670,7 +670,7 @@ mod tests {
         let port = SystemEnvPort::with_store(None);
         assert!(!port.list().is_empty(), "没有存储也有内置环境");
         assert!(port
-            .create("x", editor::env::EnvKind::Custom, "cmd", &[])
+            .create("x", crate::env::EnvKind::Custom, "cmd", &[])
             .is_err(), "没有存储 = 管理如实拒绝");
         assert!(port.delete("python").is_err(), "没有存储也拒绝内置删除");
     }

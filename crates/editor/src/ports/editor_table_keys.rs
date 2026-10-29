@@ -19,27 +19,26 @@
 
 use std::rc::Rc;
 
-use editor::export::TableKeysPort;
+use crate::export::TableKeysPort;
+use crate::host::EditorHost;
 
 use database::cache::NavCache;
 
-use crate::panels::Shared;
-
 /// 工作台实现：从导航缓存读表的主键列
 pub struct WorkbenchTableKeys {
-    shared: Shared,
+    host: Rc<dyn EditorHost>,
 }
 
 impl WorkbenchTableKeys {
-    pub fn new(shared: Shared) -> Self {
-        Self { shared }
+    pub fn new(host: Rc<dyn EditorHost>) -> Self {
+        Self { host }
     }
 }
 
 impl TableKeysPort for WorkbenchTableKeys {
     fn primary_key_columns(&self, conn_id: &str, table: &str) -> Option<Vec<String>> {
         let project_root = self
-            .shared
+            .host
             .project_root()
             .map(|root| root.to_string_lossy().to_string());
         primary_key_columns(conn_id, table, project_root.as_deref())
@@ -74,8 +73,8 @@ fn primary_key_columns(
 }
 
 /// 把表结构端口接到编辑器共享状态上（**启动装配调用一次**）
-pub fn attach(shared: &editor::shared::EditorShared, workbench: &Shared) {
-    shared.attach_table_keys(Rc::new(WorkbenchTableKeys::new(workbench.clone())));
+pub fn attach(shared: &crate::shared::EditorShared, host: Rc<dyn EditorHost>) {
+    shared.attach_table_keys(Rc::new(WorkbenchTableKeys::new(host)));
 }
 
 #[cfg(test)]

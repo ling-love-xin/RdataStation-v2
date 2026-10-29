@@ -8218,12 +8218,15 @@ name = "rds-editor"
 version = "0.2.5"
 dependencies = [
  "anyhow",
+ "arrow",
  "base64 0.22.1",
  "chrono",
+ "duckdb",
  "encoding_rs",
  "gpui-kit",
  "jupyter-protocol",
  "lsp-types",
+ "rds-database",
  "rds-engine",
  "rds-file-meta",
  "rds-kernel",
@@ -8232,10 +8235,12 @@ dependencies = [
  "rds-settings",
  "rds-shared",
  "rds-workbench-shell",
+ "rfd",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

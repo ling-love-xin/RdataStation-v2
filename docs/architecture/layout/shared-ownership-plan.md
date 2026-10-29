@@ -100,6 +100,13 @@
 
 ## 5. P2-a：`services/editor_*`（5253 行）下沉 editor
 
+> **实施状态（2026-10-29）**：✅ 已实施并提交。实施顺序按证据偏离蓝图 §7（P2-a 提前到第一阶段执行，
+> 理由见 §5.4 与 §7 修订）。workbench 26,204 行 → **21,316 行（-4,888 / -18.6%）**，editor 收到 16+1
+> 个端口文件（editor_* 16 个 + result_service）。`cargo check -p rds-editor -p rds-workbench` 通过
+> （workbench 0 warning）；`cargo test -p rds-workbench --lib` = **47 passed / 0 failed**（editor_* 测试
+> 随文件迁到 editor）；`cargo test -p rds-editor --lib` = **717 passed / 0 failed / 1 ignored**；
+> `cargo check -p rds-app` 通过。
+
 ### 5.1 现状（2026-10-29 实测）
 
 `editor_*` 16 个文件绝大多数是 **`attach` 函数**：把 workbench 侧端口实现注入 `editor::shared::EditorShared` 的 `attach_*` 槽（attach_channels / attach_completion / attach_connections / attach_schemas / attach_table_keys / attach_project / attach_runner / attach_session_store / attach_kernels / attach_sources / attach_save_path_picker / attach_export_path_picker / attach_jump / attach_history / attach_insight…）。
@@ -117,12 +124,46 @@
 4. 16 个文件整体迁入 editor crate（`editor::ports`），workbench `services/mod.rs` 重导保路径；
 5. 测试改造：`editor_completion` / `editor_schema` / `editor_table_keys` / `editor_project` 的测试用 `Shared::with_connections(...)` 构造 → 换 host stub（只记录调用，不接真实宿主，见 gpui-kit-dev「测试里的其他依赖用测试桥替身」）。
 
-### 5.3 前置：editor_exec 的 workbench services 依赖
+### 5.3 前置：editor_exec 的 workbench services 依赖（实施后修正）
 
-`editor_exec` 引用 `crate::services::{result_service, editor_env, data_source_service}` 与 `nav_runtime`：
-- `result_service`（145 行）：下沉 editor 或随 exec 一并迁入；
-- `editor_env`（624 行）：不依赖 Shared，可直接随迁；
-- `data_source_service` / `nav_runtime`：属 connection/导航域，经 `EditorHost` 端口暴露。
+蓝图初稿按早期探测量「`editor_exec` 引用 `crate::services::{result_service, editor_env, data_source_service}` 与 `nav_runtime`」，
+实施前重新实测（2026-10-29）修正：
+
+- `result_service`（178 行）：纯 facade，随 exec 一并迁入 `editor::ports::result_service`；
+- `editor_env`（677 行）：不依赖 Shared，随迁（`use super::` 同目录引用迁入后仍有效）；
+- `data_source_service`：**不走 `EditorHost`**。exec 的唯一跨线程需求是联邦源清单（`QueryRunner` bound 是
+  `Send + Sync`，而 UI 侧实现持 `Rc<RefCell>` 的 Shared 不能跨线程）——拆成独立 trait
+  `FederatedSourcePort`（`Send + Sync`），workbench 实现（`WorkbenchFederatedSource`）不持 Shared、
+  直接调全局 `DataSourceService`（与原 workbench 执行线程 `block_on(service.list())` 同一条路）；
+- **`nav_runtime`：0 处引用**（蓝图 §5.3 断言已过时，实施前实测无此依赖，无需处理）。
+
+### 5.4 实施记录（2026-10-29）
+
+**双 trait 设计（关键）**：`editor::host` 定义
+- `EditorHost`（UI 线程，持 `Rc<dyn EditorHost>`）：`connections()` / `project_root()` /
+  `project_read_only()` / `set_connection_connected()` / `is_connected()` / `connect_entry()` /
+  `open_history()` / `open_insight_source_column(InsightColumnRequest)` / `request_reveal()`；
+- `FederatedSourcePort`（`Send + Sync`，工作线程）：`list_federated_sources()` → 联邦源清单。
+
+**迁移步骤**：
+1. 16 个文件 `git mv` 到 `editor/src/ports/`（git 识别 rename 保历史）；内部 `editor::`→`crate::` 自引用替换；
+2. 9 个 Shared 依赖文件 host 化：`Workbench*` 持 `Rc<dyn EditorHost>`（不再碰 `workbench::panels::Shared`）；
+3. workbench `services/mod.rs` 全部 `pub use editor::ports::*` 重导——`view.rs` 的类型引用（L46-47
+   WorkbenchCompletion/LspBlock）、`view.rs:837`/`resource_host.rs:526` `pick_open_path`、`view.rs:910`
+   `catalog::pump` 均靠重导零改动；
+4. `view.rs` assemble()：`Rc::new(WorkbenchEditorHost::new(shared.clone()))` + `federated_source()`，
+   16 个 attach 调用改传 `editor_host.clone()`；
+5. 依赖补齐：editor Cargo.toml +`database`（schema/table_keys/completion 的 NavCache，lib.rs 分层本已声明）/
+   +`duckdb`（exec）/ +`rfd`（editor_files）/ +`uuid`（editor_env 自定义环境 id）/ dev +`arrow`（exec 测试构造 RecordBatch）；
+6. 测试改造（遵 gpui-kit-dev「测试用测试桥替身」）：completion/schema/table_keys/project/channels 测试从
+   `Shared::with_connections` 构造 → `StubHost`（实现 EditorHost 全方法，只记录调用）；exec 测试用
+   `NoopFederatedSource`（空端口），`runner_for_test()` 保持无参签名（workbench/tests 的
+   oracle_federation.rs:93 / federation_sources.rs:99 依赖它，零改动）。
+
+**验收**：见 §5 顶部实施状态。workbench lib 测试数从 110 → 47 是**预期减少**（editor_* 的测试随文件迁到
+editor crate，workbench 侧 18 个 `#[gpui_kit::test]` headless 全部保留且通过）。
+
+**编译时间实测**：`cargo check -p rds-editor -p rds-workbench` 增量 18.91s / 11.98s / 6.86s（三次采样）。
 
 ## 6. P2-b：`resource_host` / `resource_jobs`（3022 行）下沉 analytics_resource
 
@@ -134,11 +175,17 @@
 ## 7. 实施顺序与验收
 
 ```
-阶段 B（nav 域）→ 阶段 C（project 域）→ 阶段 D（scratchpad/insight）
-→ P2-a（editor_* 下沉）→ P2-b（resource_* 下沉）
+（已执行：P2-a（editor_* 下沉，2026-10-29））
+→ P2-b（resource_* 下沉）→ 阶段 B（nav 域）→ 阶段 C（project 域）→ 阶段 D（scratchpad/insight）
 ```
 
 > 2026-10-29 修订：原阶段 A（零风险小字段）经实施前审视移除，见 §3。起点为 nav 域。
+>
+> **2026-10-29 实施偏离（P2-a 提前到第一阶段）**：蓝图原顺序是 B→C→D→P2-a→P2-b，实际先落
+> P2-a。理由（按证据）：实测证明 P2-a 用 `EditorHost` trait 即可解耦，**不依赖先做阶段 B 的
+> Shared 收窄**（§5.3 修正后 exec 的唯一跨线程依赖走 `FederatedSourcePort`，其余全走 `EditorHost`）；
+> 把编译收益最大的两刀（P2-a -18.6%、P2-b 预计 -11%）先落，后续阶段 B/C/D 是特性 crate 内部的
+> 状态收窄（用户口径「其他 crate 可以单独开会后调整」），不再阻塞 workbench 主线的瘦身目标。
 
 每阶段验收口径：
 - `cargo check -p rds-workbench` 全绿（无新 warning）；

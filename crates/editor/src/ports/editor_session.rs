@@ -18,9 +18,9 @@
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use editor::model::EditorMode;
-use editor::session::{SavedSession, SessionStore};
-use editor::shared::EditorShared;
+use crate::model::EditorMode;
+use crate::session::{SavedSession, SessionStore};
+use crate::shared::EditorShared;
 use engine::persistence::workbench_context_store::EditorContext;
 
 /// 把会话存储接到编辑器上（**启动装配调用一次**；拿不到全局库时明确说一句）
@@ -93,7 +93,7 @@ impl WorkbenchSessionStore {
             path: Some(context.id),
             mode: EditorMode::from_key(&context.mode),
             // 认不出的通道码回源库档（`from_code` 的零值语义）：不假装记住了别的
-            channel: editor::channel::ExecChannel::from_code(&context.channel),
+            channel: crate::channel::ExecChannel::from_code(&context.channel),
             // 空串 = 没绑（跟随当前连接）；绑定的 id 原样回来（校验在恢复那一侧做）
             connection: (!context.connection_id.is_empty()).then_some(context.connection_id),
             content: context.content,
@@ -167,9 +167,9 @@ fn now_ms() -> u64 {
 mod tests {
     // 安全模式：**不通配导入**
     use super::WorkbenchSessionStore;
-    use editor::channel::ExecChannel;
-    use editor::model::EditorMode;
-    use editor::session::SavedSession;
+    use crate::channel::ExecChannel;
+    use crate::model::EditorMode;
+    use crate::session::SavedSession;
 
     fn session() -> SavedSession {
         SavedSession {

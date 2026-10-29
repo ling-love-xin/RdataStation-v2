@@ -2,7 +2,7 @@
 //!
 //! ## 一句话
 //!
-//! editor 侧 [`editor::kernel::KernelsPort`] 只消费「本机有哪些内核可用」的快照。
+//! editor 侧 [`crate::kernel::KernelsPort`] 只消费「本机有哪些内核可用」的快照。
 //! 这里是它的工作台实现：`attach` 时在**后台线程**跑一次 [`rds_kernel::detect_kernels`]
 //! （起子进程探测解释器 + ipykernel，几十到几百毫秒，不该阻塞 UI 线程），结果缓存进
 //! 内存；`list()` 是纯内存读（渲染路径可调）。
@@ -16,8 +16,8 @@
 
 use std::rc::Rc;
 
-use editor::kernel::KernelsPort;
-use editor::shared::EditorShared;
+use crate::kernel::KernelsPort;
+use crate::shared::EditorShared;
 
 /// 端口实现：只持有探测结果缓存（attach 后由后台任务写入）
 struct WorkbenchKernels {

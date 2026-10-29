@@ -24,11 +24,12 @@
 
 use std::sync::Arc;
 
-use editor::analysis::AnalysisRequest;
-use editor::channel::ExecChannel;
-use editor::execution::{DuckDbExportRequest, QueryData, QueryRunner};
-use editor::export::ExportFormat;
-use editor::shared::EditorShared;
+use crate::analysis::AnalysisRequest;
+use crate::channel::ExecChannel;
+use crate::execution::{DuckDbExportRequest, QueryData, QueryRunner};
+use crate::export::ExportFormat;
+use crate::host::{FederatedSourcePort, FederatedSourceRecord};
+use crate::shared::EditorShared;
 use engine::duckdb::accel;
 use engine::duckdb::federation::registry::{self as fed_registry, FederatedSource, MountState};
 use engine::duckdb::federation::session as fed_session;
@@ -52,10 +53,13 @@ struct EngineQueryRunner {
     /// 工作线程，让这些后台任务在任何调用路径下都能推进。
     runtime: tokio::runtime::Runtime,
     service: SqlService,
+    /// 联邦源清单端口（工作线程专用：`QueryRunner` 是 `Send + Sync`，
+    /// 端口实现不持 Shared，只调全局 DataSourceService）
+    fed: Arc<dyn FederatedSourcePort>,
 }
 
 impl EngineQueryRunner {
-    fn new() -> Option<Self> {
+    fn new(fed: Arc<dyn FederatedSourcePort>) -> Option<Self> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -66,6 +70,7 @@ impl EngineQueryRunner {
         Some(Self {
             runtime,
             service: SqlService::new(manager.clone()),
+            fed,
         })
     }
 
@@ -139,7 +144,7 @@ impl EngineQueryRunner {
     fn run_on_accel(&self, connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
         let source = self.accel_source(connection)?;
         let session = accel::ensure_session(&source)?;
-        let (to_run, segmented) = match window_sql(sql, editor::execution::SEGMENT_ROWS, 0) {
+        let (to_run, segmented) = match window_sql(sql, crate::execution::SEGMENT_ROWS, 0) {
             Some(wrapped) => (wrapped, true),
             None => (sql.to_string(), false),
         };
@@ -148,7 +153,7 @@ impl EngineQueryRunner {
         let elapsed_ms = started.elapsed().as_millis() as u64;
         record_accel_history(&source, sql, elapsed_ms, &outcome);
         // 【B8】历史面板据此重新加载（与源库档同一节拍）
-        editor::history::bump();
+        crate::history::bump();
         let result = match outcome {
             Ok(ok) => ok,
             Err(error) => {
@@ -167,7 +172,7 @@ impl EngineQueryRunner {
         let mut data = to_data(&result, elapsed_ms, false);
         data.has_more = segmented
             && !data.columns.is_empty()
-            && data.rows.len() == editor::execution::SEGMENT_ROWS;
+            && data.rows.len() == crate::execution::SEGMENT_ROWS;
         Ok(data)
     }
 
@@ -187,7 +192,7 @@ impl EngineQueryRunner {
         let outcome = session.run(&wrapped);
         let elapsed_ms = started.elapsed().as_millis() as u64;
         record_accel_history(&source, sql, elapsed_ms, &outcome);
-        editor::history::bump();
+        crate::history::bump();
         let result = outcome.map_err(|error| error.to_string())?;
         let mut data = to_data(&result, elapsed_ms, false);
         data.has_more = data.rows.len() == limit;
@@ -207,7 +212,7 @@ impl EngineQueryRunner {
         let outcome = session.run(&rewritten.sql);
         let elapsed_ms = started.elapsed().as_millis() as u64;
         record_accel_history(&source, &rewritten.sql, elapsed_ms, &outcome);
-        editor::history::bump();
+        crate::history::bump();
         let result = outcome.map_err(|error| error.to_string())?;
         let mut data = to_data(&result, elapsed_ms, false);
         data.notice = rewritten.dropped_limit.as_deref().map(notice);
@@ -242,27 +247,14 @@ impl EngineQueryRunner {
         let mut records: Vec<FedSourceRecord> = Vec::new();
         let mut notes: Vec<String> = Vec::new();
 
-        // ① 连接记录（不要求已连接）
-        if let Ok(service) = crate::services::data_source_service::DataSourceService::global() {
-            match self.runtime.block_on(service.list()) {
-                Ok(items) => {
-                    for item in items.into_iter().filter(|item| item.use_duckdb_fed) {
-                        match connection::url::build_connection_url(&item) {
-                            Ok(url) => records.push(FedSourceRecord {
-                                conn_id: item.id.clone(),
-                                name: item.name.clone(),
-                                db_type: item.db_type.clone(),
-                                url,
-                            }),
-                            Err(reason) => notes
-                                .push(format!("连接 {} 的连接串没能组装出来：{reason}", item.name)),
-                        }
-                    }
-                }
-                Err(error) => notes.push(format!("读连接记录失败：{error}")),
-            }
-        } else {
-            notes.push("连接库还没就绪，本次只用上了已建立的连接".to_string());
+        // ① 连接记录（不要求已连接）：宿主组装连接串（解密口令是宿主的事，编辑器不碰）
+        for item in self.fed.records() {
+            records.push(FedSourceRecord {
+                conn_id: item.conn_id,
+                name: item.name,
+                db_type: item.db_type,
+                url: item.url,
+            });
         }
 
         // ② 运行态连接（含项目作用域；记录里没有的补上）
@@ -290,7 +282,7 @@ impl EngineQueryRunner {
     fn run_on_federation(&self, connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
         let (plan, session) = self.federated_session(connection)?;
         // 与另两档同口径：查询只取**第一段**（套窗口），写语句原样交给引擎
-        let (to_run, segmented) = match window_sql(sql, editor::execution::SEGMENT_ROWS, 0) {
+        let (to_run, segmented) = match window_sql(sql, crate::execution::SEGMENT_ROWS, 0) {
             Some(wrapped) => (wrapped, true),
             None => (sql.to_string(), false),
         };
@@ -298,7 +290,7 @@ impl EngineQueryRunner {
         let outcome = session.run(&to_run);
         let elapsed_ms = started.elapsed().as_millis() as u64;
         record_federation_history(&plan, &session, sql, elapsed_ms, &outcome);
-        editor::history::bump();
+        crate::history::bump();
         let result = match outcome {
             Ok(ok) => ok,
             Err(error) => {
@@ -318,7 +310,7 @@ impl EngineQueryRunner {
         let mut data = to_data(&result, elapsed_ms, false);
         data.has_more = segmented
             && !data.columns.is_empty()
-            && data.rows.len() == editor::execution::SEGMENT_ROWS;
+            && data.rows.len() == crate::execution::SEGMENT_ROWS;
         data.notice = federation_notice(&plan, &session);
         Ok(data)
     }
@@ -338,7 +330,7 @@ impl EngineQueryRunner {
         let outcome = session.run(&wrapped);
         let elapsed_ms = started.elapsed().as_millis() as u64;
         record_federation_history(&plan, &session, sql, elapsed_ms, &outcome);
-        editor::history::bump();
+        crate::history::bump();
         let result =
             outcome.map_err(|error| explain_federation_error(&session, error.to_string()))?;
         let mut data = to_data(&result, elapsed_ms, false);
@@ -358,7 +350,7 @@ impl EngineQueryRunner {
         let outcome = session.run(&rewritten.sql);
         let elapsed_ms = started.elapsed().as_millis() as u64;
         record_federation_history(&plan, &session, &rewritten.sql, elapsed_ms, &outcome);
-        editor::history::bump();
+        crate::history::bump();
         let result =
             outcome.map_err(|error| explain_federation_error(&session, error.to_string()))?;
         let mut data = to_data(&result, elapsed_ms, false);
@@ -385,7 +377,7 @@ impl QueryRunner for EngineQueryRunner {
         schema: Option<&str>,
         channel: ExecChannel,
         sql: &str,
-        run_options: editor::execution::RunOptions,
+        run_options: crate::execution::RunOptions,
     ) -> Result<QueryData, String> {
         let sql_preview: String = sql.chars().take(80).collect();
         tracing::info!(
@@ -428,12 +420,12 @@ impl QueryRunner for EngineQueryRunner {
         let executed = self.runtime.block_on(self.service.execute_first_segment(
             connection.map(str::to_string),
             sql,
-            editor::execution::SEGMENT_ROWS,
+            crate::execution::SEGMENT_ROWS,
             options,
         ));
         // 【B8】不管成败，引擎都记了一条历史（含耗时 / 行数 / 失败原因）——
         // 摇一下版本号：右 Dock 的历史面板据此重新加载（面板不读盘，也不每帧问文件）
-        editor::history::bump();
+        crate::history::bump();
         match executed {
             Ok(executed) => {
                 let elapsed_ms = executed.elapsed_ms;
@@ -441,7 +433,7 @@ impl QueryRunner for EngineQueryRunner {
                 // 【B5b】首段拿满了就标“可能还有下一段”（写语句没有分段可言）：
                 // 拿不满 = 这一份结果就这么多，界面不摆「取下一段」。
                 data.has_more =
-                    !data.columns.is_empty() && data.rows.len() == editor::execution::SEGMENT_ROWS;
+                    !data.columns.is_empty() && data.rows.len() == crate::execution::SEGMENT_ROWS;
                 tracing::info!(
                     target = "rds_workbench::exec",
                     channel = ?channel,
@@ -526,7 +518,7 @@ impl QueryRunner for EngineQueryRunner {
             &rewritten.sql,
             options,
         ));
-        editor::history::bump();
+        crate::history::bump();
         let executed = executed.map_err(|error| error.to_string())?;
         let mut data = to_data(&executed.result, executed.elapsed_ms, executed.truncated);
         // 去掉过 LIMIT 要说出来（场景 34）：不说的话用户会以为“怎么多了这么多行”
@@ -572,7 +564,7 @@ impl QueryRunner for EngineQueryRunner {
             &rewritten.sql,
             options,
         ));
-        editor::history::bump();
+        crate::history::bump();
         let executed = executed.map_err(|error| error.to_string())?;
         let mut data = to_data(&executed.result, executed.elapsed_ms, executed.truncated);
         data.notice = rewritten
@@ -617,17 +609,17 @@ impl QueryRunner for EngineQueryRunner {
     }
 
     /// 事务状态：读引擎的**真值**（活动事务挂在连接管理器上，不是猜的）
-    fn transaction_snapshot(&self, connection: Option<&str>) -> editor::execution::TxSnapshot {
+    fn transaction_snapshot(&self, connection: Option<&str>) -> crate::execution::TxSnapshot {
         let status = self.runtime.block_on(
             self.service
                 .get_transaction_status(connection.map(str::to_string)),
         );
         match status {
-            Ok(status) => editor::execution::TxSnapshot {
+            Ok(status) => crate::execution::TxSnapshot {
                 in_transaction: status.is_in_transaction,
             },
             // 读不到就当作“不在事务里”：界面会因此少一个 TX 标记，不会凭空多一个
-            Err(_) => editor::execution::TxSnapshot::default(),
+            Err(_) => crate::execution::TxSnapshot::default(),
         }
     }
 
@@ -635,9 +627,9 @@ impl QueryRunner for EngineQueryRunner {
     fn transaction(
         &self,
         connection: Option<&str>,
-        action: editor::execution::TxAction,
+        action: crate::execution::TxAction,
     ) -> Result<(), String> {
-        use editor::execution::TxAction;
+        use crate::execution::TxAction;
         let conn = connection.map(str::to_string);
         let result = match action {
             TxAction::Begin => self.runtime.block_on(self.service.begin_transaction(conn)),
@@ -669,9 +661,9 @@ impl QueryRunner for EngineQueryRunner {
         schema: Option<&str>,
         channel: ExecChannel,
         _table: &str,
-        _key: &editor::export::RowKey,
+        _key: &crate::export::RowKey,
         updates: &str,
-    ) -> Result<editor::execution::CommitReport, String> {
+    ) -> Result<crate::execution::CommitReport, String> {
         // ① 通道闸：写回只走源库通道
         if channel != ExecChannel::Source {
             return Err(format!(
@@ -752,7 +744,7 @@ impl QueryRunner for EngineQueryRunner {
 
         let committed = affected.iter().filter(|&&n| n >= 1).count();
         // 冲突的行/列映射在编辑器侧组装（面板有生成时的行/列对应），这里只报数
-        Ok(editor::execution::CommitReport {
+        Ok(crate::execution::CommitReport {
             committed,
             skipped: 0,
             per_statement: affected,
@@ -848,7 +840,7 @@ impl QueryRunner for EngineQueryRunner {
                 if let Some(table) = frame.temp_table() {
                     // ① 表档常驻表复用：不重复建表，表名原样回挂（无需新信号）
                     source_fact_table = Some(table.to_string());
-                    crate::services::result_service::ResultService::execute_duckdb_analysis_from_batches(
+                    crate::ports::result_service::ResultService::execute_duckdb_analysis_from_batches(
                         Some(table),
                         &request.sql,
                         frame.batches(),
@@ -860,7 +852,7 @@ impl QueryRunner for EngineQueryRunner {
                     let tier = storage_choice(dual, request.pref, CurrentTier::InMemory);
                     source_fact_release = tier == FactTier::OnDuckDb;
                     let res =
-                        crate::services::result_service::ResultService::execute_duckdb_analysis_from_batches(
+                        crate::ports::result_service::ResultService::execute_duckdb_analysis_from_batches(
                             None,
                             &request.sql,
                             frame.batches(),
@@ -878,7 +870,7 @@ impl QueryRunner for EngineQueryRunner {
                     .iter()
                     .map(|row| row.iter().map(|cell| cell_json(cell)).collect())
                     .collect();
-                crate::services::result_service::ResultService::execute_duckdb_analysis(
+                crate::ports::result_service::ResultService::execute_duckdb_analysis(
                     "",
                     &request.sql,
                     Some(request.columns.clone()),
@@ -927,13 +919,13 @@ impl QueryRunner for EngineQueryRunner {
     /// 编辑器在工作线程上调用（可阻塞）：这里把 env_id 翻译成命令（`editor_env::resolve`），
     /// 再交给 `run_script_process`（stdin 写代码 + 并发收输出 + 超时杀进程树）。
     /// 环境未注册（T2b-3 管理环境落地前只有内置的 python / Rscript / rustc）如实拒绝。
-    fn run_script(&self, request: &editor::env::ScriptRequest) -> Result<editor::env::ScriptOutcome, String> {
-        let env = crate::services::editor_env::resolve(&request.env_id)?;
-        self.runtime.block_on(crate::services::editor_env::run_script_process(
+    fn run_script(&self, request: &crate::env::ScriptRequest) -> Result<crate::env::ScriptOutcome, String> {
+        let env = crate::ports::editor_env::resolve(&request.env_id)?;
+        self.runtime.block_on(crate::ports::editor_env::run_script_process(
             &env.command,
             &env.args,
             &request.code,
-            crate::services::editor_env::SCRIPT_TIMEOUT_MS,
+            crate::ports::editor_env::SCRIPT_TIMEOUT_MS,
         ))
     }
 
@@ -966,7 +958,7 @@ impl QueryRunner for EngineQueryRunner {
         let stats = match mode {
             FactExportMode::Batches => {
                 let frame = fact.expect("Batches 分支必有事实档");
-                crate::services::result_service::ResultService::export_batches_via_duckdb(
+                crate::ports::result_service::ResultService::export_batches_via_duckdb(
                     frame.batches(),
                     &request.path,
                     format,
@@ -975,7 +967,7 @@ impl QueryRunner for EngineQueryRunner {
             FactExportMode::ExistingTable => {
                 let frame = fact.expect("ExistingTable 分支必有事实档");
                 let table = frame.temp_table().expect("表档必有常驻表名");
-                crate::services::result_service::ResultService::export_existing_table_via_duckdb(
+                crate::ports::result_service::ResultService::export_existing_table_via_duckdb(
                     table,
                     frame.row_count(),
                     &request.path,
@@ -988,7 +980,7 @@ impl QueryRunner for EngineQueryRunner {
                     .iter()
                     .map(|row| row.iter().map(|cell| cell_json(cell)).collect())
                     .collect();
-                crate::services::result_service::ResultService::export_rows_via_duckdb(
+                crate::ports::result_service::ResultService::export_rows_via_duckdb(
                     &request.columns,
                     &rows,
                     &request.path,
@@ -1127,7 +1119,7 @@ fn record_accel_history(
             error_message: None,
             rows_returned: Some(result.total_rows() as u64),
             rows_affected: None,
-            channel: Some(editor::channel::ExecChannel::Accelerated.code().to_string()),
+            channel: Some(crate::channel::ExecChannel::Accelerated.code().to_string()),
             sources: None,
         },
         Err(error) => SqlHistoryEntry {
@@ -1138,7 +1130,7 @@ fn record_accel_history(
             error_message: Some(error.to_string()),
             rows_returned: None,
             rows_affected: None,
-            channel: Some(editor::channel::ExecChannel::Accelerated.code().to_string()),
+            channel: Some(crate::channel::ExecChannel::Accelerated.code().to_string()),
             sources: None,
         },
     };
@@ -1380,8 +1372,8 @@ fn explain_federation_error(session: &fed_session::FederatedSession, error: Stri
 ///
 /// 建 runtime 失败时明确说一句：编辑器会以"未接入执行"运行——执行动作会给出
 /// 可见的原因，而不是静默什么都不做。
-pub fn attach(shared: &EditorShared) {
-    match EngineQueryRunner::new() {
+pub fn attach(shared: &EditorShared, fed: Arc<dyn FederatedSourcePort>) {
+    match EngineQueryRunner::new(fed) {
         Some(runner) => shared.attach_runner(Arc::new(runner)),
         None => eprintln!("[editor] 执行器未能建立 tokio runtime，编辑器将以“未接入执行”运行"),
     }
@@ -1393,7 +1385,17 @@ pub fn attach(shared: &EditorShared) {
 /// 那是窗口层之下的真逻辑；走窗口跑一遍代价太大，而不验又等于放着不测。
 /// 返回 `None` = runtime 建不起来（与 [`attach`] 同口径）。
 pub fn runner_for_test() -> Option<Arc<dyn QueryRunner>> {
-    EngineQueryRunner::new().map(|runner| Arc::new(runner) as Arc<dyn QueryRunner>)
+    EngineQueryRunner::new(Arc::new(NoopFederatedSource))
+        .map(|runner| Arc::new(runner) as Arc<dyn QueryRunner>)
+}
+
+/// 测试用空端口：不接任何连接库（集成测试只验执行链，不验宿主接线）。
+struct NoopFederatedSource;
+
+impl FederatedSourcePort for NoopFederatedSource {
+    fn records(&self) -> Vec<FederatedSourceRecord> {
+        Vec::new()
+    }
 }
 
 /// 引擎结果 → 编辑器数据（列 + 字符串化行；不读 `rows` 字段）
@@ -1459,9 +1461,9 @@ fn cell_text(value: &Value) -> String {
 #[cfg(test)]
 mod analysis_tests {
     // 安全模式：**不通配导入**
-    use super::EngineQueryRunner;
-    use editor::analysis::AnalysisRequest;
-    use editor::execution::QueryRunner as _;
+    use super::{EngineQueryRunner, NoopFederatedSource};
+    use crate::analysis::AnalysisRequest;
+    use crate::execution::QueryRunner as _;
     use ::shared::{FactFrame, StoragePref};
     use std::sync::Arc;
 
@@ -1486,7 +1488,7 @@ mod analysis_tests {
     /// `NULL` 字面量当真 NULL（否则 `count(id)` 会把那一行也算上）。
     #[test]
     fn bridged_rows_run_on_the_in_memory_duckdb() {
-        let Some(runner) = EngineQueryRunner::new() else {
+        let Some(runner) = EngineQueryRunner::new(Arc::new(NoopFederatedSource)) else {
             eprintln!("⏭️ 建不出执行器 runtime，跳过本地分析探针");
             return;
         };
@@ -1517,7 +1519,7 @@ mod analysis_tests {
     /// batches、原槽位下标随回执透传，notice 不带降级档标注。
     #[test]
     fn in_memory_fact_ingests_batches_and_reports_table_handle() {
-        let Some(runner) = EngineQueryRunner::new() else {
+        let Some(runner) = EngineQueryRunner::new(Arc::new(NoopFederatedSource)) else {
             eprintln!("⏭️ 建不出执行器 runtime，跳过本地分析探针");
             return;
         };
@@ -1550,7 +1552,7 @@ mod analysis_tests {
     /// 【B4】强制表档偏好：分流目标 = OnDuckDb → 回执置释放信号，host 据此提升表档。
     #[test]
     fn table_pref_signals_release_back_to_the_host() {
-        let Some(runner) = EngineQueryRunner::new() else {
+        let Some(runner) = EngineQueryRunner::new(Arc::new(NoopFederatedSource)) else {
             return;
         };
         let request = AnalysisRequest {
@@ -1573,7 +1575,7 @@ mod analysis_tests {
     /// 分析 SQL 写错：如实报错（不静默出空网格）
     #[test]
     fn a_broken_analysis_sql_reports_the_reason() {
-        let Some(runner) = EngineQueryRunner::new() else {
+        let Some(runner) = EngineQueryRunner::new(Arc::new(NoopFederatedSource)) else {
             return;
         };
         let request = AnalysisRequest {
@@ -1593,10 +1595,10 @@ mod analysis_tests {
 #[cfg(test)]
 mod export_tests {
     // 安全模式：**不通配导入**
-    use super::EngineQueryRunner;
-    use editor::execution::{DuckDbExportRequest, QueryRunner as _};
-    use editor::export::ExportFormat;
-    use editor::model::DocumentId;
+    use super::{EngineQueryRunner, NoopFederatedSource};
+    use crate::execution::{DuckDbExportRequest, QueryRunner as _};
+    use crate::export::ExportFormat;
+    use crate::model::DocumentId;
     use ::shared::FactFrame;
     use std::sync::Arc;
 
@@ -1639,7 +1641,7 @@ mod export_tests {
     /// **不需要任何服务器**（Parquet 是 DuckDB 内核自带的），所以这条可以离线跑。
     #[test]
     fn parquet_export_writes_a_file_the_engine_reads_back() {
-        let Some(runner) = EngineQueryRunner::new() else {
+        let Some(runner) = EngineQueryRunner::new(Arc::new(NoopFederatedSource)) else {
             eprintln!("⏭️ 建不出执行器 runtime，跳过导出探针");
             return;
         };
@@ -1678,7 +1680,7 @@ mod export_tests {
     /// 文本三档不该走这条路（它们是编辑侧编码；叫错要**如实回绝**而不是写个空文件）
     #[test]
     fn a_text_format_is_refused_by_the_duckdb_port() {
-        let Some(runner) = EngineQueryRunner::new() else {
+        let Some(runner) = EngineQueryRunner::new(Arc::new(NoopFederatedSource)) else {
             return;
         };
         let path =
@@ -1693,7 +1695,7 @@ mod export_tests {
     /// 【D1】内存档事实帧走 batches 直灌导出：数字列保留 BIGINT，不挂降级口径。
     #[test]
     fn batches_fact_export_writes_parquet_with_native_type() {
-        let Some(runner) = EngineQueryRunner::new() else {
+        let Some(runner) = EngineQueryRunner::new(Arc::new(NoopFederatedSource)) else {
             eprintln!("⏭️ 建不出执行器 runtime，跳过导出探针");
             return;
         };
@@ -1736,7 +1738,7 @@ mod export_tests {
     /// 【D1】表档事实帧复用常驻表导出：不新建表、不 DROP，行数按帧缓存报出。
     #[test]
     fn existing_table_fact_export_reuses_the_resident_table() {
-        let Some(runner) = EngineQueryRunner::new() else {
+        let Some(runner) = EngineQueryRunner::new(Arc::new(NoopFederatedSource)) else {
             eprintln!("⏭️ 建不出执行器 runtime，跳过导出探针");
             return;
         };
@@ -1745,7 +1747,7 @@ mod export_tests {
         let mut frame = fact_frame();
         let batches = frame.batches().to_vec();
         // 先经分析设施把 batches 灌进常驻表，拿到真实表名（表档复用的前提）
-        let analysis = crate::services::result_service::ResultService::execute_duckdb_analysis_from_batches(
+        let analysis = crate::ports::result_service::ResultService::execute_duckdb_analysis_from_batches(
             None,
             "SELECT * FROM {table}",
             &batches,
