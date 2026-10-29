@@ -289,8 +289,44 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../../editor/src/view/host/exec.rs"),
         ),
         (
-            "editor/view/host/results.rs",
-            include_str!("../../editor/src/view/host/results.rs"),
+            "editor/view/host/results/mod.rs",
+            include_str!("../../editor/src/view/host/results/mod.rs"),
+        ),
+        (
+            "editor/view/host/results/tests.rs",
+            include_str!("../../editor/src/view/host/results/tests.rs"),
+        ),
+        (
+            "editor/view/host/results/grid.rs",
+            include_str!("../../editor/src/view/host/results/grid.rs"),
+        ),
+        (
+            "editor/view/host/results/dispatch.rs",
+            include_str!("../../editor/src/view/host/results/dispatch.rs"),
+        ),
+        (
+            "editor/view/host/results/errors.rs",
+            include_str!("../../editor/src/view/host/results/errors.rs"),
+        ),
+        (
+            "editor/view/host/results/copy.rs",
+            include_str!("../../editor/src/view/host/results/copy.rs"),
+        ),
+        (
+            "editor/view/host/results/filter.rs",
+            include_str!("../../editor/src/view/host/results/filter.rs"),
+        ),
+        (
+            "editor/view/host/results/sort.rs",
+            include_str!("../../editor/src/view/host/results/sort.rs"),
+        ),
+        (
+            "editor/view/host/results/analysis.rs",
+            include_str!("../../editor/src/view/host/results/analysis.rs"),
+        ),
+        (
+            "editor/view/host/results/export.rs",
+            include_str!("../../editor/src/view/host/results/export.rs"),
         ),
         // Step 5 拆分（2026-10-29）：host/mod.rs 尾部迁出 render/ops/panel_traits 三个子模块
         (
@@ -543,8 +579,44 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../../editor/src/view/host/exec.rs"),
         ),
         (
-            "editor/view/host/results.rs",
-            include_str!("../../editor/src/view/host/results.rs"),
+            "editor/view/host/results/mod.rs",
+            include_str!("../../editor/src/view/host/results/mod.rs"),
+        ),
+        (
+            "editor/view/host/results/tests.rs",
+            include_str!("../../editor/src/view/host/results/tests.rs"),
+        ),
+        (
+            "editor/view/host/results/grid.rs",
+            include_str!("../../editor/src/view/host/results/grid.rs"),
+        ),
+        (
+            "editor/view/host/results/dispatch.rs",
+            include_str!("../../editor/src/view/host/results/dispatch.rs"),
+        ),
+        (
+            "editor/view/host/results/errors.rs",
+            include_str!("../../editor/src/view/host/results/errors.rs"),
+        ),
+        (
+            "editor/view/host/results/copy.rs",
+            include_str!("../../editor/src/view/host/results/copy.rs"),
+        ),
+        (
+            "editor/view/host/results/filter.rs",
+            include_str!("../../editor/src/view/host/results/filter.rs"),
+        ),
+        (
+            "editor/view/host/results/sort.rs",
+            include_str!("../../editor/src/view/host/results/sort.rs"),
+        ),
+        (
+            "editor/view/host/results/analysis.rs",
+            include_str!("../../editor/src/view/host/results/analysis.rs"),
+        ),
+        (
+            "editor/view/host/results/export.rs",
+            include_str!("../../editor/src/view/host/results/export.rs"),
         ),
         // Step 5 拆分（2026-10-29）：host/mod.rs 尾部迁出 render/ops/panel_traits 三个子模块
         (
