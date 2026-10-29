@@ -434,10 +434,38 @@ fn view_layer_has_no_raw_size_literals() {
             "settings/settings_page.rs",
             include_str!("../../settings/src/settings_page.rs"),
         ),
-        // Mock 面板与详情 tab（M7；随能力同 crate，2026-09-20 纳入扫描）
+        // Mock 面板与详情 tab（M7；随能力同 crate，2026-09-20 纳入扫描；mock_view/ 已按职责拆分）
         (
-            "mock/mock_view.rs",
-            include_str!("../../mock/src/mock_view.rs"),
+            "mock/mock_view/mod.rs",
+            include_str!("../../mock/src/mock_view/mod.rs"),
+        ),
+        (
+            "mock/mock_view/contract.rs",
+            include_str!("../../mock/src/mock_view/contract.rs"),
+        ),
+        (
+            "mock/mock_view/detail.rs",
+            include_str!("../../mock/src/mock_view/detail.rs"),
+        ),
+        (
+            "mock/mock_view/generator_search.rs",
+            include_str!("../../mock/src/mock_view/generator_search.rs"),
+        ),
+        (
+            "mock/mock_view/job.rs",
+            include_str!("../../mock/src/mock_view/job.rs"),
+        ),
+        (
+            "mock/mock_view/pure.rs",
+            include_str!("../../mock/src/mock_view/pure.rs"),
+        ),
+        (
+            "mock/mock_view/panel/mod.rs",
+            include_str!("../../mock/src/mock_view/panel/mod.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render.rs",
+            include_str!("../../mock/src/mock_view/panel/render.rs"),
         ),
     ];
 
@@ -771,10 +799,38 @@ fn ui_sources_have_no_raw_color_literals() {
             "editor/view/fold.rs",
             include_str!("../../editor/src/view/fold.rs"),
         ),
-        // Mock 面板与详情 tab（M7；随能力同 crate，2026-09-20 纳入扫描）
+        // Mock 面板与详情 tab（M7；随能力同 crate，2026-09-20 纳入扫描；mock_view/ 已按职责拆分）
         (
-            "mock/mock_view.rs",
-            include_str!("../../mock/src/mock_view.rs"),
+            "mock/mock_view/mod.rs",
+            include_str!("../../mock/src/mock_view/mod.rs"),
+        ),
+        (
+            "mock/mock_view/contract.rs",
+            include_str!("../../mock/src/mock_view/contract.rs"),
+        ),
+        (
+            "mock/mock_view/detail.rs",
+            include_str!("../../mock/src/mock_view/detail.rs"),
+        ),
+        (
+            "mock/mock_view/generator_search.rs",
+            include_str!("../../mock/src/mock_view/generator_search.rs"),
+        ),
+        (
+            "mock/mock_view/job.rs",
+            include_str!("../../mock/src/mock_view/job.rs"),
+        ),
+        (
+            "mock/mock_view/pure.rs",
+            include_str!("../../mock/src/mock_view/pure.rs"),
+        ),
+        (
+            "mock/mock_view/panel/mod.rs",
+            include_str!("../../mock/src/mock_view/panel/mod.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render.rs",
+            include_str!("../../mock/src/mock_view/panel/render.rs"),
         ),
     ];
 
