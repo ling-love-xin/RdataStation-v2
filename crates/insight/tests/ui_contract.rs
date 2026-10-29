@@ -121,10 +121,43 @@ fn view_sources() -> Vec<(String, &'static str)> {
             include_str!("../src/rule_view.rs"),
         ),
         (
-            // 中间 EDA 工作页（工具栏 / 概览 / 列分布 / 关联 / 样本 / 对比 / 集合），
-            // 不在 view/ 目录下，必须显式登记，否则裸 px / 裸色守卫对它静默失效。
-            "workspace.rs".to_string(),
-            include_str!("../src/workspace.rs"),
+            // 中间 EDA 工作页（工具栏 / 概览 / 列分布 / 关联 / 样本 / 对比 / 集合）。
+            // 已由 workspace.rs 拆分为 workspace/ 目录（mod.rs + 8 个子模块），
+            // 不在 view/ 目录下，必须逐个显式登记，否则裸 px / 裸色守卫静默失效。
+            "workspace/mod.rs".to_string(),
+            include_str!("../src/workspace/mod.rs"),
+        ),
+        (
+            "workspace/compare.rs".to_string(),
+            include_str!("../src/workspace/compare.rs"),
+        ),
+        (
+            "workspace/eda.rs".to_string(),
+            include_str!("../src/workspace/eda.rs"),
+        ),
+        (
+            "workspace/helpers.rs".to_string(),
+            include_str!("../src/workspace/helpers.rs"),
+        ),
+        (
+            "workspace/markdown.rs".to_string(),
+            include_str!("../src/workspace/markdown.rs"),
+        ),
+        (
+            "workspace/overview.rs".to_string(),
+            include_str!("../src/workspace/overview.rs"),
+        ),
+        (
+            "workspace/rel.rs".to_string(),
+            include_str!("../src/workspace/rel.rs"),
+        ),
+        (
+            "workspace/sample.rs".to_string(),
+            include_str!("../src/workspace/sample.rs"),
+        ),
+        (
+            "workspace/toolbar.rs".to_string(),
+            include_str!("../src/workspace/toolbar.rs"),
         ),
     ];
 
