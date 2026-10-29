@@ -89,7 +89,7 @@ graph TD
 | 视图随 crate | 设置页是 `settings` 的视图（`settings_page.rs`，窗口根 + `TitleBar` 标题栏）；宿主 `workbench` 只做**窗口装配**（`open_settings`：`cx.open_window(TitleBar::window_options())` + 存活检测）与回调注入 |
 | **其他 Feature 不直接依赖 `settings`** | 现状：只有 `app` 与 `workbench` 依赖它（`Cargo.toml` 可查）。Feature 间不做横向依赖（`overview.md`），偏好由**宿主读设置后作为参数 / 宿主桥注入**（与 `MockHost`、`ProjectUiHost` 同例）。例：M6 的 `keepVersions` 由 workbench 读设置后传给 `analytics_resource` 的归档调用 |
 | 为什么缓存管理不在本 crate | 缓存对话框要 engine（`rusqlite` / 元数据缓存清理）→ 引入 engine 会把数据库依赖拖进视图 crate；继续由宿主的 `on_open_cache` 回调承接 |
-| 宿主桥 | `SettingsHost { on_open_cache, on_open_log_dir, on_open_log_view, on_open_type_short_map, on_settings_changed }`——宿主提供副作用，crate 只表达意图；窗口关闭由系统标题栏 ✕ / 页内 `Esc` 触发（`window.remove_window()`），宿主无需 `on_close` |
+| 宿主桥 | `SettingsHost { on_open_cache, on_open_log_dir, on_open_log_view, on_open_type_short_map, on_open_settings_json, on_settings_changed }`——宿主提供副作用，crate 只表达意图；窗口关闭由系统标题栏 ✕ / 页内 `Esc` 触发（`window.remove_window()`），宿主无需 `on_close`；`on_open_settings_json` 是「配置文件」入口（Q3，见 §3） |
 
 **crate 现状**（目录拆分后，域垂直切片）：`lib.rs`（薄骨架：mod 声明 + re-export + tests）/ `persistence.rs`（`config_dir` / `settings_path` / `load_settings` / `save_settings` / `last_save_error` / `connection_defaults` 进程级快照）/ `model/`（`mod.rs` 聚合 `Settings` + 跨域枚举 + 13 个按域 struct 文件）/ `registry/`（`mod.rs` 登记表 + `Slot` 分发表 + `presets` + 契约测试 + `entries/` 13 个按域登记文件）/ `service/`（`mod.rs` 骨架：`SettingsService` 的 `init/get/snapshot/apply_by_key` + `value_by_key` + 主题 helper + `install_*_sink` 出口 + 13 个按域 `apply_slot` / `impl SettingsService` 文件）/ `ui/`（`settings_page.rs` 独立窗口根（`TitleBar` + `Esc` 关窗）+ `fields.rs` 字段适配 + `skeleton.rs` 骨架 + `bridge.rs` 值桥）/ `commands.rs`（Action：`OpenSettings` / `CloseSettings` / `FocusSettingsSearch`）；**产品语义 token 已迁至 `workbench_shell::product_tokens`**（本 crate 重导，见 §13 K6）。
 
@@ -161,6 +161,10 @@ graph TD
 > **分组（gpui-kit demo 两级导航）**：`SettingSpec` 新增 `group`（节内子分组 id）与 `group_label`（显示名）。页面按 `registry::page_groups(section)`（登记顺序去重）生成分组卡片，侧栏据此渲染两级导航——对齐 gpui-kit demo：**多分组节**（外观=主题/标签栏、编辑器=编辑行为/新文档默认值、数据源导航=名称/过滤/行内信息、结果集面板=数据/选择与操作/对齐/着色）分组带标题；**单分组节**（资产库/连接/项目/日志/启动/草稿箱/洞察/布局/通知，`group_label = None`）渲染为无名分组，对齐 demo 的 General 页；动作行（「查看日志…」等）归入独立「操作」分组。**纯 Module 节**（如草稿箱，设置全在面板本地菜单/拖拽 handle）不进导航，避免空页面——`sections()` 只返回有上页内容的节。契约测试 `groups_are_contiguous_and_consistently_named` 保证同节分组连续、同名分组显示名一致、`page_groups` 顺序与登记一致、多分组节分组必有标题。
 
 > **说明呈现（`hint_inline`）**：`SettingSpec` 新增 `hint_inline: bool`——`true` = 行内常显小字（`SettingItem::description`）；`false` = 行内不留说明，改为**悬停控件时以 `HoverCard` 提示**（对齐 gpui-kit tooltip 交互惯例，默认 600ms 延迟），适合 label 本身自明的好理解参数，让设置页更清爽。当前 30 条好理解参数标 `false`（外观.locale/tab_bar_variant、编辑器的显示行号/代码折叠/自动换行/自动闭合括号/默认缩进族、导航的标签与行内信息族、结果集的循环选择/多选/列宽持久化、布局.locked 与侧栏宽度、通知的自动消失秒数等）；复杂项（含生效方式、规则、档位说明）保留行内 `true`。字段在 `fields.rs::value_item` 消费：`!hint_inline` 时不渲染 `.description()`，控件外包 `HoverCard::new(key).trigger(body).content(提示文案)`（`cx.theme()` 在 content 闭包可用）。
+
+> **渲染层优化（2026-10-30，P1）**：① 矩阵组「对齐与着色」与结果集「数据与显示」组各加一句 `SettingGroup::description`（分组自解释，减少"杂乱"感）；② 着色矩阵列下拉选项前加**语义色块**（`color_swatch`：SVG 圆角矩形 + `currentColor`，色映射与登记表着色枚举逐字一致；`inherit` 无色块）；③ 禁用项（`spec.disabled` 且非行内说明）悬停给"该能力已预留，尚未启用"（当前唯一禁用项 `editor.inline_completion` 走行内说明，此分支为未来项）；④ 侧栏导航显式 `sidebar_width(px(200.))`（窗口化后与两栏骨架观感一致，拖宽 160–360 由组件默认）。
+
+> **渲染层优化（2026-10-30，P3）**：① 分组**卡片化**——`Settings::with_group_variant(GroupBoxVariant::Outline)`：每个分组一个描边卡片（border + 圆角 + 内边距），长节不显杂乱；② 每节页面头部加一句**页面级 `SettingPage::description`**（13 节文案按登记表行 label 归纳，`skeleton.rs::page_description`）；③ 首页头部右侧加**「配置文件」按钮**（Q3 落地：`SettingPage::title_suffix` + 宿主桥 `on_open_settings_json`，宿主用 `opener::open(config/settings.json)`，文件不存在先建空 `{}`——鼓励直接手改 JSON 的场景）。
 
 ## 7. 准入与退役
 
