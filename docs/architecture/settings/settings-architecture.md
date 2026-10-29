@@ -15,7 +15,8 @@
 | D5 | 落在哪？ | 结构化 / 项目级 → SQLite；非结构化 + 跨项目 + 极小 → `settings.json`；**不新增 K-V 文件**（沿用 M4 §6.4 结论） | §2.2、§8 |
 | D6 | 默认值从哪来？ | 代码常量（`model.rs` 的 `Default`）；「恢复默认」= 写回默认并持久化 | §6、§7 |
 | D7 | 生效方式怎么表达？ | 三档：即时 / 下次操作 / 需重启；每项必须能判档，界面不得含糊 | 原型 §4.4 |
-| D8 | 视图归谁？ | **视图随 crate**（`settings`），宿主只提供 overlay 与宿主桥（与 `mock` / `project` 同例） | §3 |
+| D8 | 视图归谁？ | **视图随 crate**（`settings`），以**独立 OS 窗口**呈现（`TitleBar::window_options()`，对齐 Zed 官方设置窗口做法）；宿主只提供窗口装配与宿主桥（与 `mock` / `project` 同例） | §3 |
+| D13 | 同族碎行怎么排？ | **矩阵化**：同一语义族的多行设置（如结果集「对齐 / 着色」各 5 项）合并为一个表格元素（行 = 数据族，列 = 维度）；登记表 / 模型 / 读写路径**不动**，纯渲染层合并 | §3 |
 | D9 | 插件设置？ | **不做**：M9 等 beta3，落地前不设节、不画行 | §10 |
 | D10 | 现有无生产者的字段？ | 6 项本期**裁撤或接上消费方**，不允许"有行无消费" | §7.2 |
 | D11 | 配置坏了？ | 解析失败**不覆盖用户文件**：回退默认 + 上报；写盘失败必须能提示 | §9 |
@@ -28,7 +29,7 @@
 | 一句话定位 | 应用级偏好的**登记、持久化与呈现**：一处改、全局生效、重启还在 |
 | 负责 | 偏好登记表（§6）、`settings.json` 读写与兼容、设置页视图、`OpenSettings` 等命令、主题模式的应用与切换、把偏好注入消费方 |
 | 不负责 | 主题配色本身（资产 `rds-theme.json` + `product-tokens.json`，设置只存"选哪套模式"）、项目级状态（M1 项目设置）、结构化状态（导航展开/选中、知识库索引等 → SQLite）、会话态（展开/选中/草稿）、快捷键（各模块文档 + Quick Open） |
-| 核心载体 | 设置页弹层（`settings/src/settings_page.rs`）+ 模块内入口（`⋯` 菜单、分隔条拖拽、选择器按钮） |
+| 核心载体 | 设置页**独立窗口**（`settings/src/settings_page.rs`，`TitleBar` 系统标题栏）+ 模块内入口（`⋯` 菜单、分隔条拖拽、选择器按钮） |
 | 关键约束 | 准入五条（D3）；单一权威（D4）；render 期零 I/O（页面只在事件路径读写）；零裸色值 / 零裸 `px` |
 | 与项目设置的分工 | **应用级 = 我这个人怎么用这个软件**（跨项目）；**项目级 = 这个项目怎么被处理**（随项目物理隔离） |
 
@@ -85,14 +86,16 @@ graph TD
 
 | 结论 | 说明 |
 | --- | --- |
-| 视图随 crate | 设置页是 `settings` 的视图（`settings_page.rs`）；宿主 `workbench` 只做 overlay 挂载与回调注入 |
+| 视图随 crate | 设置页是 `settings` 的视图（`settings_page.rs`，窗口根 + `TitleBar` 标题栏）；宿主 `workbench` 只做**窗口装配**（`open_settings`：`cx.open_window(TitleBar::window_options())` + 存活检测）与回调注入 |
 | **其他 Feature 不直接依赖 `settings`** | 现状：只有 `app` 与 `workbench` 依赖它（`Cargo.toml` 可查）。Feature 间不做横向依赖（`overview.md`），偏好由**宿主读设置后作为参数 / 宿主桥注入**（与 `MockHost`、`ProjectUiHost` 同例）。例：M6 的 `keepVersions` 由 workbench 读设置后传给 `analytics_resource` 的归档调用 |
 | 为什么缓存管理不在本 crate | 缓存对话框要 engine（`rusqlite` / 元数据缓存清理）→ 引入 engine 会把数据库依赖拖进视图 crate；继续由宿主的 `on_open_cache` 回调承接 |
-| 宿主桥 | `SettingsHost { on_close, on_open_cache, (将来) on_restart }`——宿主提供副作用，crate 只表达意图 |
+| 宿主桥 | `SettingsHost { on_open_cache, on_open_log_dir, on_open_log_view, on_open_type_short_map, on_settings_changed }`——宿主提供副作用，crate 只表达意图；窗口关闭由系统标题栏 ✕ / 页内 `Esc` 触发（`window.remove_window()`），宿主无需 `on_close` |
 
-**crate 现状**（目录拆分后，域垂直切片）：`lib.rs`（薄骨架：mod 声明 + re-export + tests）/ `persistence.rs`（`config_dir` / `settings_path` / `load_settings` / `save_settings` / `last_save_error` / `connection_defaults` 进程级快照）/ `model/`（`mod.rs` 聚合 `Settings` + 跨域枚举 + 13 个按域 struct 文件）/ `registry/`（`mod.rs` 登记表 + `Slot` 分发表 + `presets` + 契约测试 + `entries/` 13 个按域登记文件）/ `service/`（`mod.rs` 骨架：`SettingsService` 的 `init/get/snapshot/apply_by_key` + `value_by_key` + 主题 helper + `install_*_sink` 出口 + 13 个按域 `apply_slot` / `impl SettingsService` 文件）/ `ui/`（`settings_page.rs` 两栏页面 + `fields.rs` 字段适配 + `skeleton.rs` 骨架 + `bridge.rs` 值桥）/ `commands.rs`（Action：`OpenSettings` / `CloseSettings` / `FocusSettingsSearch`）；**产品语义 token 已迁至 `workbench_shell::product_tokens`**（本 crate 重导，见 §13 K6）。
+**crate 现状**（目录拆分后，域垂直切片）：`lib.rs`（薄骨架：mod 声明 + re-export + tests）/ `persistence.rs`（`config_dir` / `settings_path` / `load_settings` / `save_settings` / `last_save_error` / `connection_defaults` 进程级快照）/ `model/`（`mod.rs` 聚合 `Settings` + 跨域枚举 + 13 个按域 struct 文件）/ `registry/`（`mod.rs` 登记表 + `Slot` 分发表 + `presets` + 契约测试 + `entries/` 13 个按域登记文件）/ `service/`（`mod.rs` 骨架：`SettingsService` 的 `init/get/snapshot/apply_by_key` + `value_by_key` + 主题 helper + `install_*_sink` 出口 + 13 个按域 `apply_slot` / `impl SettingsService` 文件）/ `ui/`（`settings_page.rs` 独立窗口根（`TitleBar` + `Esc` 关窗）+ `fields.rs` 字段适配 + `skeleton.rs` 骨架 + `bridge.rs` 值桥）/ `commands.rs`（Action：`OpenSettings` / `CloseSettings` / `FocusSettingsSearch`）；**产品语义 token 已迁至 `workbench_shell::product_tokens`**（本 crate 重导，见 §13 K6）。
 
-> 旧单列 `settings_view.rs` 与自持的 `ui.rs` **均已删除**：页面尺寸常量回归**壳层单点** `crates/workbench_shell/src/ui.rs`（依赖方向：`settings → workbench_shell`，而 shell 不依赖任何特性 crate）。
+**渲染层优化（2026-10-30，P1）**：① 分组卡 description（长节 / 矩阵组给一句自解释说明）；② 着色矩阵下拉加**语义色色块**预览（SVG 矩形 + `Icon::text_color` 注入 `theme.colors`，登记表零改动）；③ 禁用项 hover 原因提示（`disabled && !hint_inline` → HoverCard"该能力已预留"；登记表零改动，未来禁用项自动生效）；④ 侧栏导航显式 `sidebar_width(200px)`（拖宽 160–360 保留组件默认）。
+
+> 旧单列 `settings_view.rs` 与自持的 `ui.rs` **均已删除**：页面尺寸常量回归**壳层单点** `crates/workbench_shell/src/ui.rs`（依赖方向：`settings → workbench_shell`，而 shell 不依赖任何特性 crate）。窗口化后 `settings_page.rs` 不再引用 `SETTINGS_PAGE_WIDTH/HEIGHT`（初始尺寸由 `workbench::open_settings` 的 `WindowOptions` 承载，沿用 980×560）；常量保留（连接对话框宽度同档引用 + `ui_contract` 契约断言）。
 
 ## 4. 状态所有权与读写路径
 
@@ -231,7 +234,7 @@ graph TD
 | --- | --- | --- |
 | 纯函数 | 旧配置兼容（缺节 / 缺字段回退默认）、序列化往返、默认值表 | ✅ 2 项（`model/`），扩大覆盖到全部登记项 |
 | **登记表一致性（新增契约测试）** | 扫描 `model.rs` 字段 ↔ 登记表 ↔ 页面行：**不允许"有字段无消费方"或"有行无字段"**；槽位形态与登记形态一致；上页的数值行必须有预设档 | ✅ 已落地（共 **22 项**：registry 11 / 页面 4 / lib 3 / model 2 / product_tokens 1，全绿零告警） |
-| 视图窗口测试 | 切节、搜索过滤、恢复默认、禁用态带原因（按 `project/src/ui/tests.rs` 骨架，注意 `#[gpui_kit::test]` 与通配导入的坑） | 🟡 冒烟已补（渲染 + 默认节 + 程序性改词）；键盘输入路径无自动化覆盖，见 K10 |
+| 视图窗口测试 | 切节、搜索过滤、恢复默认、禁用态带原因（按 `project/src/ui/tests.rs` 骨架，注意 `#[gpui_kit::test]` 与通配导入的坑） | 🟡 冒烟已补（窗口根渲染 + 默认节 + 程序性改词；2026-10-30 窗口化后 TitleBar / `Esc` 关窗为人工验证——headless 下 `remove_window` 断言不可靠）；键盘输入路径无自动化覆盖，见 K10 |
 | 写入路径 | 每个 `set_*` 之后 global 与磁盘一致（临时目录隔离） | ⬜ 新增 |
 | 视图窗口测试 | 切节、搜索过滤、恢复默认、禁用态带原因（按 `project/src/ui/tests.rs` 骨架，注意 `#[gpui_kit::test]` 与通配导入的坑） | ⬜ 新增 |
 | 尺寸 / 颜色契约 | 把设置页视图加入 `ui_contract` 的**尺寸**扫描（颜色扫描已含） | ⬜ 待落地（K7） |
@@ -244,7 +247,7 @@ graph TD
 | 页面形态与行规格 | `docs/architecture/settings/settings-prototype-design.md` §3/§4 |
 | 页面实现 | `crates/settings/src/settings_page.rs`（新）；`settings_view.rs` 退役 |
 | 尺寸常量 | `crates/workbench_shell/src/ui.rs`（5 个 `SETTINGS_*`，原型 §7） |
-| 宿主 overlay 与互斥 | `crates/workbench/src/view.rs::render_settings_panel` |
+| 宿主窗口装配与互斥 | `crates/workbench/src/view.rs::open_settings`（`cx.open_window(TitleBar::window_options())` + 存活检测；原 overlay 版 `render_settings_panel` 与 `settings_open` 开关已随窗口化退役） |
 | 命令 | `crates/settings/src/commands.rs`（`OpenSettings` 已有；`ToggleThemeMode` 待接线或删除） |
 | 登记表落地 | 表格在本文 §6；实现侧以 `model/` 字段 + `service/` 方法为准，契约测试负责两者一致 |
 | 僵尸项裁撤 | `crates/settings/src/model/`（对应域文件删字段）+ `settings_view.rs`（同轮删字段与行） |
@@ -265,7 +268,7 @@ graph TD
 | K6 | ✅ | 原：`product_tokens` 住在 settings（主题设施暂住特性 crate） | **2026-09-16 已迁出**：落到 `crates/workbench_shell/src/product_tokens.rs`（壳层视图共用资产）。驱动原因不只是“主题设施归位”——导航视图下沉到 `database` 后也要取色，住 settings 会造出 `database → settings`。settings 侧保留重导，`app` / `panels/` 消费方零改动 |
 | K7 | ✅ | **尺寸契约扫描缺口**（已关闭，2026-09-16） | 颜色 + 尺寸扫描均含 `settings_page.rs`；8 个 `SETTINGS_*` 数值进契约 1 |
 | K8 | 🟡 | `ToggleThemeMode` 未接线 | Action 已定义，无键位、无 `on_action`；按"没实现就不宣传"应**接线或删除**（§14 Q2） |
-| K9 | ✅ | **页面宿主替换**（已关闭，2026-09-16） | 工作台渲染 `SettingsPage`（`SettingsHost` 注入关闭 / 缓存对话框），旧单列 `settings_view.rs` 已退役；页面同时缺 `↺` 的 hover 卡（无关紧要，见原型 §11 #9） |
+| K9 | ✅ | **页面宿主替换**（已关闭，2026-09-16；**2026-10-30 窗口化**） | 工作台渲染 `SettingsPage`（`SettingsHost` 注入缓存 / 日志副作用），旧单列 `settings_view.rs` 已退役；2026-10-30 起设置页从 overlay 面板升级为**独立 OS 窗口**（`TitleBar::window_options()`，对齐 Zed 设置窗口），`on_close` 回调与 `settings_open` 互斥开关随之退役；页面同时缺 `↺` 的 hover 卡（无关紧要，见原型 §11 #9） |
 | K10 | ⚪ | 键盘输入路径无自动化覆盖 | **实测**：headless 下合成的 `cx.emit` 不投递给 `subscribe_in` 订阅者，且 `InputState::set_value` 的值下一帧才可读——因此搜索框"真实输入 → Change → 订阅"只能人工验证（本仓另两个同款订阅同样只测程序性入口） |
 
 ## 14. 待确认（Q1–Q6）

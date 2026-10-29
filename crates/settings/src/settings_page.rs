@@ -18,9 +18,8 @@
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt;
-use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::status_bar::StatusBar;
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, TitleBar};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -33,8 +32,6 @@ use workbench_shell::ui;
 /// 页面**不**依赖 engine / 具体对话框（依赖只向下）：缓存对话框要 engine（rusqlite +
 /// 元数据缓存清理），引入它会把数据库依赖拖进视图 crate。
 pub struct SettingsHost {
-    /// 关闭设置页（宿主把 overlay 关掉并重绘）。
-    pub on_close: Rc<dyn Fn(&mut App)>,
     /// 打开「缓存管理」对话框（宿主实现）。
     pub on_open_cache: Rc<dyn Fn(&mut Window, &mut App)>,
     /// 打开日志目录（宿主实现；设置层不依赖 engine / opener，只负责回调）。
@@ -79,35 +76,25 @@ impl SettingsPage {
 
     // ===== 顶栏 / 底栏 =====
 
-    fn render_header(&self, cx: &Context<Self>) -> Div {
+    /// 窗口标题栏：`TitleBar` 自带窗口拖拽与右侧窗口控制按钮
+    /// （最小化 / 最大化 / 关闭，Windows 上由系统触发，无需自绘）。
+    fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        div()
-            .h_flex()
-            .w_full()
-            .h(rems(ui::PANEL_HEADER_HEIGHT))
-            .flex_none()
-            .pl_3()
-            .pr_2()
-            .gap_2()
-            .items_center()
+        TitleBar::new()
+            .h(rems(ui::TITLE_BAR_HEIGHT))
+            .pl_2p5()
+            .bg(theme.colors.title_bar)
             .child(
                 div()
                     .flex_1()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.colors.foreground)
+                    .child(Icon::new(IconName::Settings).size_4())
                     .child("设置"),
-            )
-            .child(Icon::new(IconName::Settings).size_4())
-            .child(
-                Button::new("settings-page-close")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::CircleX)
-                    .on_click({
-                        let on_close = self.host.on_close.clone();
-                        move |_, _window, app| on_close(app)
-                    }),
             )
     }
 
@@ -146,16 +133,12 @@ impl Render for SettingsPage {
         });
         // 骨架构造（纯函数）：节 → 页，行 → 分组项；值读写经闭包接 global。
         let skeleton = skeleton::build(&self.host, &self.notify);
+        // 独立窗口根视图：尺寸由窗口决定（`TitleBar::window_options()`），
+        // 背景铺满窗口；`Esc` 关闭窗口（等价 TitleBar 的 ✕）。
         div()
             .v_flex()
-            .w(rems(ui::SETTINGS_PAGE_WIDTH))
-            .h(rems(ui::SETTINGS_PAGE_HEIGHT))
-            .max_h_full()
-            .rounded_lg()
+            .size_full()
             .bg(theme.colors.popover)
-            .border_1()
-            .border_color(theme.colors.border)
-            .overflow_hidden()
             .child(self.render_header(cx))
             .child(
                 div()
@@ -175,6 +158,11 @@ impl Render for SettingsPage {
             .child(self.render_footer(cx))
             .key_context("settings")
             .track_focus(&self.focus_handle)
+            .on_key_down(|event, window, _cx| {
+                if event.keystroke.key == "escape" {
+                    window.remove_window();
+                }
+            })
             .id(ElementId::Name("settings-page".into()))
             .role(gpui::Role::Group)
             .debug_selector(|| "settings-page".to_string())
@@ -192,7 +180,6 @@ mod tests {
     /// 测试用宿主桥：全部回调为空操作（只记录调用，不接真实宿主）。
     fn dummy_host() -> SettingsHost {
         SettingsHost {
-            on_close: Rc::new(|_| {}),
             on_open_cache: Rc::new(|_, _| {}),
             on_open_log_dir: Rc::new(|_, _| {}),
             on_open_log_view: Rc::new(|_, _| {}),

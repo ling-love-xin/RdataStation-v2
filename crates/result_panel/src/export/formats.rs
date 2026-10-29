@@ -259,7 +259,7 @@ pub fn menu_items_for(
 #[cfg(test)]
 mod tests {
     // 安全模式：显式列举（避免与 gpui-kit 测试宏冲突）
-    use super::{ExportExtras, ExportFormat, ExportScope, RowKey, menu_items, menu_items_for};
+    use super::{ExportExtras, ExportFormat, ExportScope, RowKey};
     use crate::export::{default_file_name, encode};
     use crate::store::ResultEntry;
 

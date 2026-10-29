@@ -610,7 +610,7 @@ impl ResultEntry {
 #[cfg(test)]
 mod tests {
     // 安全模式：显式列举（避免与 gpui-kit 测试宏冲突）
-    use super::{ColumnKind, ColumnType, ResultEntry};
+    use super::{ColumnKind, ResultEntry};
     use workbench_shell::model::DocumentId;
 
     fn entry(document: &str, sql: &str, rows: usize) -> ResultEntry {

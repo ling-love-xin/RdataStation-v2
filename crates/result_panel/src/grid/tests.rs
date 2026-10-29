@@ -13,7 +13,9 @@ use crate::grid::{
 };
 use crate::grid::status::{FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION};
 use crate::grid::status::format_integer_cell;
-use crate::grid::cell::{blob_summary, cell_style, clip_cell_display, pretty_json_display};
+use crate::grid::cell::{
+    blob_summary, cell_display_text, cell_style, clip_cell_display, pretty_json_display,
+};
 use crate::grid::header::header_tooltip_lines;
 use crate::grid::stats::fmt_stat_num;
 use crate::grid::text::{cell_matches, find_in_cell, preview_of};
@@ -1587,6 +1589,34 @@ use std::sync::Arc;
         assert!(pretty_json_display("plain text").is_none());
         assert!(pretty_json_display("NULL").is_none());
         assert!(pretty_json_display("").is_none());
+    }
+
+    /// 【dbdelve 借鉴】超长值跳过 JSON 美化 / 类型格式化（解析成本有上界）：
+    /// 短值仍美化（可读性不变），超长值零拷贝借原文、由 clip 收尾——大 JSON /
+    /// 几何文档每帧渲染成本不再随值长线性涨。
+    #[test]
+    fn overlong_values_skip_pretty_and_clip_original() {
+        use std::borrow::Cow;
+
+        // 短 JSON 仍美化（行为不变）
+        assert_eq!(
+            cell_display_text(r#"{"a":1}"#, ColumnKind::Json, &TypeStylePrefs::default()).as_ref(),
+            "{\n  \"a\": 1\n}"
+        );
+        // 超长 JSON：不解析，原文零拷贝借出（无 pretty 缩进）
+        let big = format!("{{\"a\":\"{}\"}}", "x".repeat(CELL_DISPLAY_LIMIT + 10));
+        let shown = cell_display_text(&big, ColumnKind::Json, &TypeStylePrefs::default());
+        assert!(matches!(shown, Cow::Borrowed(_)), "超长值零拷贝借原文");
+        // 统一裁剪收尾：前 300 字符 + 省略号，省略号不占额度
+        let clipped = clip_cell_display(&shown, CELL_DISPLAY_LIMIT);
+        assert_eq!(clipped.chars().count(), CELL_DISPLAY_LIMIT + 1);
+        assert!(clipped.ends_with('…'));
+        // 非 JSON 超长文本同样跳过格式化（原文借出）
+        let long_text = "plain ".repeat(CELL_DISPLAY_LIMIT);
+        assert!(matches!(
+            cell_display_text(&long_text, ColumnKind::Text, &TypeStylePrefs::default()),
+            Cow::Borrowed(_)
+        ));
     }
 
     /// 【P2】整数单元格千分位：整数值三位一组加逗号、负数保留负号；小数 / 科学计数 /
