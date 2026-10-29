@@ -412,7 +412,8 @@ impl MockDetailView {
                         let view = view.clone();
                         Button::new("mock-col-type")
                             .ghost()
-                            .label(format!("{type_label} ▾"))
+                            .label(type_label.clone())
+                            .dropdown_caret(true)
                             .dropdown_menu(move |menu, _window, _cx| {
                                 let mut menu = menu;
                                 for candidate in COLUMN_TYPES {
@@ -823,7 +824,8 @@ impl MockDetailView {
                                 ))))
                                 .ghost()
                                 .xsmall()
-                                .label(format!("{label} ▾"))
+                                .label(label.clone())
+                                .dropdown_caret(true)
                                 .dropdown_menu(generator_menu(
                                     self.panel.clone(),
                                     id,
@@ -856,6 +858,7 @@ impl MockDetailView {
                                 .ghost()
                                 .xsmall()
                                 .label("智能")
+                                .tooltip("按列名与类型重跑智能映射（恢复推荐生成器与参数）")
                                 .on_click(move |_, _, app| {
                                     panel.update(app, |panel, cx| {
                                         panel.reset_column_mapping(id, cx)

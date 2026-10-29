@@ -30,7 +30,10 @@ impl MockPanel {
             let entity = cx.entity();
             Button::new("mock-locale")
                 .ghost()
-                .label(format!("{} ▾", locale_label(&locale)))
+                .label(locale_label(&locale))
+                // 组件自带下拉 caret（不再手拼「▾」字形）；`dropdown_caret` 与 `dropdown_menu`
+                // 是两个独立字段——开 caret 只画箭头，菜单照旧由 `dropdown_menu` 挂
+                .dropdown_caret(true)
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
                     for candidate in LOCALES {
@@ -292,7 +295,8 @@ impl MockPanel {
         Button::new(id)
             .secondary()
             .xsmall()
-            .label("场景模板 ▾")
+            .label("场景模板")
+            .dropdown_caret(true)
             .disabled(running)
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu;
@@ -325,7 +329,8 @@ impl MockPanel {
         Button::new("mock-preview-limit")
             .ghost()
             .xsmall()
-            .label(format!("行数 {current} ▾"))
+            .label(format!("行数 {current}"))
+            .dropdown_caret(true)
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu;
                 for choice in PREVIEW_LIMIT_CHOICES {
@@ -362,7 +367,9 @@ impl MockPanel {
             Button::new("mock-add-column")
                 .secondary()
                 .xsmall()
-                .label("＋ 加列")
+                // 「＋」走组件图标（与工具栏「新增 Mock 表」同一 `Plus`），不手拼字符
+                .icon(IconName::Plus)
+                .label("加列")
                 .on_click(move |_, _, app| {
                     entity.update(app, |panel, cx| {
                         let index = panel.draft.columns.len() + 1;
@@ -607,7 +614,8 @@ impl MockPanel {
                     ))))
                     .ghost()
                     .xsmall()
-                    .label("✕")
+                    .icon(IconName::Close)
+                    .tooltip("从本次生成移除这张表")
                     .disabled(running);
                     if !running {
                         button = button.on_click(move |_, _, app| {
@@ -659,7 +667,8 @@ impl MockPanel {
                         ))))
                         .ghost()
                         .xsmall()
-                        .label("✕")
+                        .icon(IconName::Close)
+                        .tooltip("删除这条关系")
                         .on_click(move |_, _, app| {
                             let child_table = child_table.clone();
                             let child_column = child_column.clone();
@@ -834,9 +843,20 @@ impl MockPanel {
         // 状态点分两套口径（生成的 / 落库的），一句话说清各是哪个
         .child(
             div()
+                .flex_wrap()
+                .gap_2()
                 .text_xs()
                 .text_color(muted)
-                .child("状态：○ 未生成 ◐ 生成中 ● 已生成 ✓ 已落库 ⚠ 引用的表没落库（多表时才有）"),
+                // 图例与清单行右端状态点同一套 `render_status_cell`（IconName 图标 + 语义色），
+                // 不另写旧字形（此前的 ○◐●✓⚠ 与 M3 图标化改造脱节）
+                .children([
+                    render_status_cell(None, "未生成", muted),
+                    render_status_cell(Some(IconName::RefreshCw), "生成中", primary),
+                    render_status_cell(Some(IconName::Check), "已生成", success),
+                    render_status_cell(Some(IconName::CircleCheck), "已落库", success),
+                    render_status_cell(Some(IconName::Info), "引用表未落库（多表）", warning),
+                    render_status_cell(Some(IconName::CircleX), "生成失败", danger),
+                ]),
         )
     }
 
@@ -1006,8 +1026,10 @@ impl MockPanel {
         let sinks_ready = self.sinks_ready();
         let persist = {
             let entity = cx.entity();
+            // 主出口（把结果写进项目分析库）：与其它三个出口区分层级——
+            // 其余都是「换个去向」，这个是「落到项目里」，视觉上给 primary
             Button::new("mock-persist")
-                .secondary()
+                .primary()
                 .label("持久化到项目分析库")
                 .w_full()
                 .disabled(running || !sinks_ready)
@@ -1020,8 +1042,9 @@ impl MockPanel {
             let tables = self.existing_tables.clone();
             Button::new("mock-append")
                 .secondary()
-                .label("追加到既有表 ▾")
+                .label("追加到既有表")
                 .w_full()
+                .dropdown_caret(true)
                 .disabled(running || !sinks_ready)
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
@@ -1048,8 +1071,9 @@ impl MockPanel {
             let entity = cx.entity();
             Button::new("mock-save-scratchpad")
                 .secondary()
-                .label("保存到草稿箱 ▾")
+                .label("保存到草稿箱")
                 .w_full()
+                .dropdown_caret(true)
                 .disabled(running || !sinks_ready)
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
@@ -1066,8 +1090,9 @@ impl MockPanel {
             let entity = cx.entity();
             Button::new("mock-export")
                 .secondary()
-                .label("另存为 ▾")
+                .label("另存为")
                 .w_full()
+                .dropdown_caret(true)
                 .disabled(running || !has_result)
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
@@ -1131,6 +1156,8 @@ impl MockPanel {
                     .text_color(muted)
                     .child("出口（作用于当前 tab 那张表；生成后可用）"),
             )
+            // 项目级出口（落库 / 追加 / 草稿箱）与文件级出口（另存为）分两组：
+            // 组件 `Separator` 分隔，不手搓 w_px 线条（容器层规范）
             .child(
                 div()
                     .v_flex()
@@ -1139,6 +1166,7 @@ impl MockPanel {
                     .child(persist)
                     .child(append)
                     .child(scratchpad)
+                    .child(Separator::horizontal())
                     .child(export),
             )
             // ④ 出口反馈就地给（成功 / 失败 / 落库目标 / 当前状态）
@@ -1174,8 +1202,8 @@ impl MockPanel {
     }
 
     /// 打开「导入源库结构」对话框。
-    /// 标题栏下方的工具栏（2026-10-18 对齐原型）：＋ 新增 Mock 表 / ⇄ 引用结构 /
-    /// ▦ 新增场景 / ⟳ 刷新。
+    /// 标题栏下方的工具栏（2026-10-18 对齐原型）：新增 Mock 表（`Plus`）/ 引用结构（`HardDrive`）/
+    /// 新增场景（`LayoutDashboard`）/ 刷新（`RefreshCw`）。
     ///
     /// 按钮语义全部是 `Button`（自带 hover / 焦点 / 键盘）；标题栏只留标题，
     /// 「＋」从标题栏工具栏迁到这里（原型同构：mock-toolbar 在面板头下方一行）。
@@ -1416,7 +1444,13 @@ impl MockPanel {
             return section.child(
                 Empty::new().header(
                     EmptyHeader::new()
-                        .media(EmptyMedia::new())
+                        // 模板空态给语义图标（`EmptyMedia` Icon 变体 = 圆角底框 + 图标），
+                        // 不再用空框默认位
+                        .media(
+                            EmptyMedia::new()
+                                .with_variant(EmptyMediaVariant::Icon)
+                                .child(Icon::new(IconName::Folder).size(px(20.))),
+                        )
                         .title(EmptyTitle::new().child("还没有保存的模板"))
                         .description(EmptyDescription::new().child("把当前列配置存下来，下次一键套用")),
                 ),
@@ -1562,7 +1596,12 @@ impl MockPanel {
                 section = section.child(
                     Empty::new().header(
                         EmptyHeader::new()
-                            .media(EmptyMedia::new())
+                            // 历史空态给语义图标（收件箱 = 记录的去处）
+                            .media(
+                                EmptyMedia::new()
+                                    .with_variant(EmptyMediaVariant::Icon)
+                                    .child(Icon::new(IconName::Inbox).size(px(20.))),
+                            )
                             .title(EmptyTitle::new().child("还没有生成记录"))
                             .description(EmptyDescription::new().child("跑一次生成后，记录会出现在这里")),
                     ),
@@ -1847,9 +1886,10 @@ impl MockPanel {
                     .map(|s| s.label.clone());
                 Button::new("mock-import-conn")
                     .ghost()
+                    .dropdown_caret(true)
                     .label(match current_label {
-                        Some(label) => format!("{label} ▾"),
-                        None => "选择连接 ▾".to_string(),
+                        Some(label) => label,
+                        None => "选择连接".to_string(),
                     })
                     .dropdown_menu(move |menu, _window, _cx| {
                         let mut menu = menu;

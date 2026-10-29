@@ -160,3 +160,39 @@ Button::new("mock-fold-toggle")
 - 本方案只动 `crates/mock/src/mock_view/`；全仓其余模块（nav chrome 等 M1-M3 反例）不在本次范围。
 - `render_target_rows` / `render_generate_row` 表单行有意不迁 `Toolbar`（理由见 §三）。
 - 实施需在 **main 的拆分目录结构**下进行（主工作区为 analytics 分支原版文件，勿直接改；可用独立 worktree）。
+
+## 七、第二轮收尾（P0–P3 一致性 + 中央 tab 设计调整，commit 待定）
+
+在 M1–M4 合入后的审计基础上（入口接线 0 假入口；唯一已知未接线扩展点 = 批量「全部存草稿箱」固定 CSV，
+panel/mod.rs `scratchpad_all` 硬编码 `MockExportFormat::Csv`，job.rs:46 注释承认"后续要支持 Parquet/Xlsx 再挂 dropdown"）。
+
+### 7.1 改动清单（panel/render.rs + detail.rs + mod.rs 导入）
+
+| 项 | 位置 | 改动 | 实证依据 |
+| --- | --- | --- | --- |
+| P0-1 | render.rs `render_table_list` 状态图例行 | 旧字形「○ 未生成 ◐ 生成中 ● 已生成 ✓ 已落库 ⚠」→ `render_status_cell` 图标化图例（Check/CircleCheck/Info/RefreshCw/CircleX + 语义色，`flex_wrap`） | M3 同款；图例行与清单行状态点同源 |
+| P1-1 | 9 处下拉按钮 | 去手拼「▾」字形 → `.dropdown_caret(true)`（locale / 场景模板 / 行数 / 类型 / 生成器 / 追加 / 草稿箱 / 另存为 / 导入连接） | vendor `button.rs:804-807`：`dropdown_caret` 渲染组件 `Caret`（has_content 时 `justify_between`，右置 opacity 0.75 箭头）；与 `dropdown_menu` 独立字段 |
+| P1-2 | render.rs 出口区 | 「持久化到项目分析库」改 `primary`（主出口）；项目级（落库/追加/草稿箱）与文件级（另存为）之间插 `Separator::horizontal()` | vendor `separator.rs:40`；`ButtonVariants::primary`（button.rs:52） |
+| P2-2 | 模板 / 历史空态 | `EmptyMedia::new().with_variant(EmptyMediaVariant::Icon).child(Icon::new(Folder/Inbox).size(px(20.)))` | vendor `empty.rs:184 with_variant`、`EmptyMediaVariant::Icon`（155）；IconName 全集实证含 Folder/Inbox |
+| P2-3 | 「＋ 加列」 | `.icon(IconName::Plus).label("加列")`（去「＋」字符，与工具栏统一） | IconName::Plus 已在工具栏使用 |
+| P2-4 | 场景表行 / 关系行「✕」 | `.icon(IconName::Close)` + tooltip（去「✕」字符） | IconName 全集含 Close（`icons/close.svg`） |
+| P3-1 | render.rs 工具栏 doc 注释 | 「＋ 新增 Mock 表 / ⇄ 引用结构 / ▦ 新增场景 / ⟳ 刷新」→ 图标名标注 | 注释与实现同步 |
+| C-1 | detail.rs 字段卡片「智能」按钮 | 加 `.tooltip("按列名与类型重跑智能映射…")` | 按钮语义说明（窄面板无法放长 label） |
+
+### 7.2 撤销项（实证后不做）
+
+- **`status_chip_text` 的「◐」前缀保留**：tests.rs:1119/1125 断言 `"◐ Mock 生成中 25%"`——状态栏 chip 前缀是测试锁定的既有契约，非手拼箭头，改动无增益。
+- **字段卡片 high/manual/low 徽标不图标化**：置信度不是「状态」；图标化会与清单行状态点（Check/CircleCheck…）混淆信息类型。保持语义色文字（已统一 text_xs + 语义色）。
+
+### 7.3 有意不动（设计判断，记录在案）
+
+- 字段卡片删除按钮保持 ghost 文字（一行 4 个操作按钮，danger 实色会喧宾夺主；危险确认语义在编辑对话框内）。
+- 生成按钮不加图标：IconName 0.8.1 全集（101 个，default-icons.txt）**无** Wand/Sparkles/Play 语义贴切的"生成"图标（Play 是播放语义，不硬凑）。
+- 场景空态卡片（detail.rs render 的「还没有列」引导卡）保持卡片形态：它是局部起手引导（按钮行 + 说明），`Empty` 适合整页空态，不迁移。
+- 引用徽标「↳ 引用 x.y」、关系子行「↳ …」是文本标注（非按钮），保持字符。
+- 列编辑对话框 `form_line` 不迁 `form::{Form, Field}`：form_line 已是 4 个对话框共用的统一函数，视觉一致；Form API 迁移收益有限、风险中等，留作后续项。
+
+### 7.4 测试
+
+`cargo test -p rds-mock --all-targets -j 2`（worktree 内；需手动建 `.rds/tmp`、从主仓复制 `third_party/duckdb/1.5.5/*`）。
+tests.rs 无「状态：○」「＋ 加列」「✕」「▾」文案断言（grep 实证），P0–P3 不破测试；仅 `status_chip_text` ◐ 断言原样保留。
