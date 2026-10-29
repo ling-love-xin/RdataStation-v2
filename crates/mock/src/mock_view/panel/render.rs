@@ -387,6 +387,7 @@ impl MockPanel {
         let success = cx.theme().colors.success;
         let warning = cx.theme().colors.warning;
         let primary = cx.theme().colors.primary;
+        let danger = cx.theme().colors.danger;
         // 选中 / 悬停走列表角色（与 M4 导航、M5 草稿箱同一口径）：`accent` 是主题强调色，
         // 拿它当选中底会让「当前表」与各種强调元素混作一谈
         let selected_bg = cx.theme().colors.list_active;
@@ -427,17 +428,27 @@ impl MockPanel {
                 }
                 let selected = index == current_index;
                 let name = info.table_name.clone();
-                let (glyph, status, color) = match self.table_status(&name) {
-                    TableStatus::Persisted => ("✓", "已落库".to_string(), success),
-                    TableStatus::NotPersisted => ("●", "已生成".to_string(), success),
-                    TableStatus::DanglingParent => ("⚠", "引用的表未落库".to_string(), warning),
+                let (icon, status, color) = match self.table_status(&name) {
+                    TableStatus::Persisted => {
+                        (Some(IconName::CircleCheck), "已落库".to_string(), success)
+                    }
+                    TableStatus::NotPersisted => {
+                        (Some(IconName::Check), "已生成".to_string(), success)
+                    }
+                    TableStatus::DanglingParent => {
+                        (Some(IconName::Info), "引用的表未落库".to_string(), warning)
+                    }
                     // 生成中的那一行把百分比说出口（D38 的 `◐ orders 40%`）：
                     // 集合任务不敢保证看到的是哪一张，但单表任务停在哪个百分位一眼就能读
-                    TableStatus::Generating => {
-                        ("◐", format!("生成中 {:.0}%", self.job_percent()), primary)
+                    TableStatus::Generating => (
+                        Some(IconName::RefreshCw),
+                        format!("生成中 {:.0}%", self.job_percent()),
+                        primary,
+                    ),
+                    TableStatus::Failed => {
+                        (Some(IconName::CircleX), "生成失败".to_string(), danger)
                     }
-                    TableStatus::Failed => ("⚠", "生成失败".to_string(), warning),
-                    TableStatus::Idle => ("○", "未生成".to_string(), muted),
+                    TableStatus::Idle => (None, "未生成".to_string(), muted),
                 };
                 let open = {
                     let entity = cx.entity();
@@ -512,7 +523,7 @@ impl MockPanel {
                             .text_color(muted)
                             .child(format!("{} 行", with_thousands(u64::from(info.row_count)))),
                     )
-                    .child(render_status_cell(glyph, &status, color));
+                    .child(render_status_cell(icon, &status, color));
                 // 选中行：`list_active` 底 + 左缘 2px 标识条（浮在行左缘，不挤动名称列）；
                 // 悬停只给未选中行——不得覆盖激活态（与导航树同一口径）
                 row = if selected {
@@ -630,7 +641,7 @@ impl MockPanel {
                                 "{} 行",
                                 with_thousands(u64::from(table.row_count))
                             )))
-                            .child(render_status_cell("○", "待生成", muted))
+                            .child(render_status_cell(None, "待生成", muted))
                             .child(edit)
                             .child(remove),
                     );
@@ -741,13 +752,21 @@ impl MockPanel {
         );
         let name = self.draft.table_name.clone();
         let rows = with_thousands(self.draft.options.rows as u64);
-        let (glyph, status, color) = match self.table_status(&name) {
-            TableStatus::Generating => ("◐", format!("生成中 {:.0}%", self.job_percent()), primary),
-            TableStatus::Persisted => ("✓", "已落库".to_string(), success),
-            TableStatus::NotPersisted => ("●", "已生成".to_string(), success),
-            TableStatus::DanglingParent => ("⚠", "引用的表未落库".to_string(), warning),
-            TableStatus::Failed => ("⚠", "生成失败".to_string(), warning),
-            TableStatus::Idle => ("○", "未生成".to_string(), muted),
+        let (icon, status, color) = match self.table_status(&name) {
+            TableStatus::Generating => (
+                Some(IconName::RefreshCw),
+                format!("生成中 {:.0}%", self.job_percent()),
+                primary,
+            ),
+            TableStatus::Persisted => {
+                (Some(IconName::CircleCheck), "已落库".to_string(), success)
+            }
+            TableStatus::NotPersisted => (Some(IconName::Check), "已生成".to_string(), success),
+            TableStatus::DanglingParent => {
+                (Some(IconName::Info), "引用的表未落库".to_string(), warning)
+            }
+            TableStatus::Failed => (Some(IconName::CircleX), "生成失败".to_string(), danger),
+            TableStatus::Idle => (None, "未生成".to_string(), muted),
         };
         let open = {
             let entity = cx.entity();
@@ -810,7 +829,7 @@ impl MockPanel {
                         .text_color(muted)
                         .child(format!("{rows} 行")),
                 )
-                .child(render_status_cell(glyph, &status, color)),
+                .child(render_status_cell(icon, &status, color)),
         )
         // 状态点分两套口径（生成的 / 落库的），一句话说清各是哪个
         .child(
@@ -1185,6 +1204,9 @@ impl MockPanel {
             Button::new("mock-toolbar-import")
                 .icon(IconName::HardDrive)
                 .ghost()
+                // 显式 `small`：`dropdown_menu` 返回 `DropdownMenuPopover`（无 Sizable，
+                // 进不了 Toolbar 的 size 托管槽），与 Toolbar 托管的按钮保持同档
+                .small()
                 .tooltip("引用数据库结构：选连接读表结构")
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
@@ -1253,27 +1275,28 @@ impl MockPanel {
             format!("{} 张结果", self.results.len())
         };
 
+        // 工具栏走 `toolbar::Toolbar`（roving 方向键焦点 + toolbar a11y 语义 + 统一 size 托管）；
+        // 外层只画高度 / 内距 / 底部分隔线（规范：背景边框高度外层自己画）。
         div()
-            .h_flex()
-            .items_center()
-            .gap_1()
             .w_full()
             .h(rems(ui::PANEL_HEADER_HEIGHT))
             .px(rems(ui::PANEL_PADDING))
             .border_b_1()
             .border_color(cx.theme().colors.border)
-            .child(new_table)
-            .child(import)
-            .child(new_scene)
-            .child(refresh)
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_xs()
-                    .text_color(muted)
-                    .text_ellipsis()
-                    .child(hint),
+                Toolbar::new("mock-toolbar")
+                    .children([new_table, new_scene, refresh])
+                    // import 是 `DropdownMenuPopover` 包装（无 Sizable），走非托管 content 槽
+                    .content(import)
+                    .content(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(muted)
+                            .text_ellipsis()
+                            .child(hint),
+                    ),
             )
     }
 
@@ -1288,17 +1311,22 @@ impl MockPanel {
             let entity = cx.entity();
             let label = if self.history_loaded {
                 format!(
-                    "{} 生成历史（{}）· 用户模板（{}）",
-                    if open { "▾" } else { "▸" },
+                    "生成历史（{}）· 用户模板（{}）",
                     self.history.len(),
                     self.templates.len()
                 )
             } else {
-                format!("{} 生成历史 · 用户模板", if open { "▾" } else { "▸" })
+                "生成历史 · 用户模板".to_string()
             };
+            // 展开 / 收起箭头走图标（`ChevronDown` / `ChevronRight`），不用字形字符
             Button::new("mock-fold-toggle")
                 .ghost()
                 .xsmall()
+                .icon(if open {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                })
                 .label(label)
                 .on_click(move |_, _, app| {
                     entity.update(app, |panel, cx| {
@@ -1384,11 +1412,14 @@ impl MockPanel {
             return section;
         }
         if self.history_loaded && self.templates.is_empty() {
+            // 空态走 `empty::Empty`（自带居中布局 + 虚线框 + 图标变体），不手搓居中文字块
             return section.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("还没有保存的模板：把当前列配置存下来，下次一键套用"),
+                Empty::new().header(
+                    EmptyHeader::new()
+                        .media(EmptyMedia::new())
+                        .title(EmptyTitle::new().child("还没有保存的模板"))
+                        .description(EmptyDescription::new().child("把当前列配置存下来，下次一键套用")),
+                ),
             );
         }
 
@@ -1516,15 +1547,25 @@ impl MockPanel {
             section = section.child(div().text_xs().text_color(danger).child(error));
         }
         if self.history_loading && !self.history_loaded {
-            return section.child(div().text_xs().text_color(muted).child("读取中…"));
+            // 不确定加载给一个 `Spinner`（小号转圈），文字保留便于弱网可读与测试断言
+            return section.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(Spinner::new().small())
+                    .child(div().text_xs().text_color(muted).child("读取中…")),
+            );
         }
         if self.history_loaded && self.history.is_empty() {
             if self.history_error.is_none() {
                 section = section.child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child("本项目还没有生成记录"),
+                    Empty::new().header(
+                        EmptyHeader::new()
+                            .media(EmptyMedia::new())
+                            .title(EmptyTitle::new().child("还没有生成记录"))
+                            .description(EmptyDescription::new().child("跑一次生成后，记录会出现在这里")),
+                    ),
                 );
             }
             return section;

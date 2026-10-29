@@ -1288,13 +1288,17 @@ impl Render for MockDetailView {
     }
 }
 
-/// 清单行右端的**状态点**：一个字符（不引图标资产）+ 一句话。
-pub(crate) fn render_status_cell(glyph: &str, text: &str, color: Hsla) -> Div {
+/// 清单行右端的**状态点**：`IconName` 图标（走图标组件，不再用 Unicode 字形）+ 语义色文字。
+pub(crate) fn render_status_cell(icon: Option<IconName>, text: &str, color: Hsla) -> Div {
     div()
         .flex_none()
         .text_xs()
         .text_color(color)
-        .child(format!("{glyph} {text}"))
+        .when_some(icon, |cell, icon| {
+            cell.child(Icon::new(icon).size(px(12.)).text_color(color))
+                .child(" ")
+        })
+        .child(SharedString::from(text))
 }
 
 /// 推给预览表的那一份快照：表名 + 列名 + 行 + 生效中的排序（`None` = 按生成顺序）。
