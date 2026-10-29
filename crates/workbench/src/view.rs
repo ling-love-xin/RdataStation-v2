@@ -2333,12 +2333,9 @@ impl WorkbenchView {
         };
         // 独立窗口：`TitleBar::window_options()` 提供原生标题栏（拖拽 + 系统窗口控制），
         // 经 `cx.open_window` 挂到新窗口；窗口根由 `base::Root` 包一层（对话框层宿主）。
-        // 初始尺寸沿用原 overlay 的 980×560（两栏骨架内容匹配），并给最小尺寸防过度挤压。
+        // 定位交给平台默认（`window_bounds: None` → `display.default_bounds()`，通常居中）：
+        // 显式 `Windowed(origin 0,0)` 会被级联偏移钉在屏幕左上角。仅给最小尺寸防过度挤压。
         let mut options = TitleBar::window_options();
-        options.window_bounds = Some(gpui::WindowBounds::Windowed(gpui::Bounds {
-            origin: gpui::Point::new(gpui::px(0.), gpui::px(0.)),
-            size: gpui::Size::new(gpui::px(980.), gpui::px(560.)),
-        }));
         options.window_min_size = Some(gpui::Size::new(gpui::px(760.), gpui::px(520.)));
         let handle = cx
             .open_window(options, |window, cx| {
