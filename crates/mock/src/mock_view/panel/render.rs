@@ -377,11 +377,53 @@ impl MockPanel {
                     });
                 })
         };
+        // 字段预设：常用字段（电话/地址/姓名等）一行打包，从分组菜单一键加列。
+        // 与「导入结构」（源库批量）「加列」（手工起手）三分入口；应用后是普通列可再编辑
+        let presets = {
+            let entity = cx.entity();
+            Button::new("mock-preset-column")
+                .secondary()
+                .xsmall()
+                .icon(IconName::Folder)
+                .label("预设")
+                .dropdown_caret(true)
+                .dropdown_menu(move |menu, _window, _cx| {
+                    let mut menu = menu;
+                    for category in PresetCategory::ALL {
+                        let items: Vec<FieldPreset> = builtin_presets()
+                            .into_iter()
+                            .filter(|p| p.category == category)
+                            .collect();
+                        if items.is_empty() {
+                            continue;
+                        }
+                        // 组标题：disabled 只读行，不参与点击
+                        menu = menu.item(PopupMenuItem::new(category.label()).disabled(true));
+                        for preset in items {
+                            let entity = entity.clone();
+                            let id = preset.id;
+                            menu = menu.item(
+                                PopupMenuItem::new(preset.label)
+                                    .on_click(move |_, _, app| {
+                                        let Some(preset) = preset_by_id(id) else {
+                                            return;
+                                        };
+                                        entity.update(app, |panel, cx| {
+                                            panel.add_preset_column(&preset, cx);
+                                        });
+                                    }),
+                            );
+                        }
+                    }
+                    menu
+                })
+        };
         div()
             .h_flex()
             .items_center()
             .gap_2()
             .child(import)
+            .child(presets)
             .child(add)
     }
 

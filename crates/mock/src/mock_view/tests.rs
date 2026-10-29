@@ -22,8 +22,9 @@ use super::{
     AppendTargetStatus, DetailTarget, HistoryReply, JobRowScope, MockColumnSpec, MockDetailView,
     MockDraft, MockGenInfo, MockHost, MockJobDone, MockJobKind, MockJobPhase, MockJobProgress,
     MockJobState, MockPanel, MockPreview, MockRunOptions, RelationPick, ScenarioRelation,
-    SchemaRequest, SchemaSource, TableStatus, focus_detail_tab, param_text, parse_percent_ratio,
-    parse_rows, parse_seed, patch_param, search_generators, summarize_params, validate_table_name,
+    SchemaRequest, SchemaSource, TableStatus, builtin_presets, focus_detail_tab, param_text,
+    parse_percent_ratio, parse_rows, parse_seed, patch_param, preset_by_id, search_generators,
+    summarize_params, validate_table_name,
 };
 use crate::commands::GenerateMock;
 use crate::generator_catalog::{self, ParamKind};
@@ -58,6 +59,22 @@ fn parse_seed_treats_blank_as_random() {
     assert_eq!(parse_seed("42"), Ok(Some(42)));
     assert!(parse_seed("abc").is_err());
     assert!(parse_seed("-1").is_err());
+}
+
+/// 字段预设：内建集 id 唯一、每个预设打包的生成器都在 catalog 里有规格（spec_of 不 panic）。
+#[test]
+fn builtin_presets_are_unique_and_renderable() {
+    let presets = builtin_presets();
+    assert!(!presets.is_empty());
+    let mut ids: Vec<&str> = presets.iter().map(|p| p.id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), presets.len(), "预设 id 必须全局唯一");
+    for preset in &presets {
+        let _spec = generator_catalog::spec_of(&preset.column.generator);
+        assert!(!preset.column.name.is_empty());
+        assert!(!preset.confidence.is_empty());
+    }
 }
 
 #[test]
@@ -987,6 +1004,36 @@ fn refresh_sources_loads_connections_and_tables(cx: &mut TestAppContext) {
     panel.update(cx, |panel, _cx| {
         assert_eq!(panel.sources().len(), 2);
         assert_eq!(panel.existing_tables(), ["orders".to_string()]);
+    });
+}
+
+/// 字段预设加列：列名冲突自动加序号（`name` → `name_2`）；配置（类型/生成器/置信度）来自预设。
+#[gpui_kit::test]
+fn preset_column_adds_with_deduplicated_names(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        // 先手工加一列占住 `name`，预设应用后应自动改名 `name_2`
+        panel.add_column("name".to_string(), ColumnDataType::Integer, cx);
+        let name_preset = preset_by_id("name").expect("内建「姓名」预设存在");
+        panel.add_preset_column(&name_preset, cx);
+        let cols = panel.draft().columns.clone();
+        assert_eq!(cols.len(), 2);
+        assert_eq!(cols[1].def.name, "name_2");
+        assert_eq!(cols[1].confidence, "high");
+        // 生成器 / 类型来自预设（不是手工加列的 Integer 默认）
+        assert!(matches!(cols[1].def.generator, GeneratorConfig::Name));
+        assert_eq!(
+            cols[1].def.data_type,
+            ColumnDataType::Varchar { length: Some(50) }
+        );
+        // 再应用一次：继续去重为 name_3，且不吞掉已有列
+        panel.add_preset_column(&name_preset, cx);
+        let cols = panel.draft().columns.clone();
+        assert_eq!(cols.len(), 3);
+        assert_eq!(cols[2].def.name, "name_3");
     });
 }
 

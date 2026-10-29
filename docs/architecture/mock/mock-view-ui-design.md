@@ -219,7 +219,7 @@ tests.rs 无「状态：○」「＋ 加列」「✕」「▾」文案断言（g
 - `form_line → form::{Form, Field}`：维持可缓（§7.3 同款理由：已 4 对话框共用统一，收益有限）。
 - 样例预览固定种子：`SAMPLE_PREVIEW_SEED = 20261030`，样例可复现；与最终生成随机种子无关，纯示意（界面无「与最终一致」承诺）。
 
-### 8.3 字段预设（Field Preset）——用户需求，**记录在册、未实现**
+### 8.3 字段预设（Field Preset）——已实现内建集 + 入口；用户自定义待后续
 
 用户提出「电话、地址、姓名这种数据类型需要统一设置的管理」。实证结论：现有三种粒度均不覆盖单字段打包预设：
 
@@ -229,8 +229,15 @@ tests.rs 无「状态：○」「＋ 加列」「✕」「▾」文案断言（g
 | schema_map::ColumnMapper::infer | 规则 | 列名+类型→生成器（代码内建，不可自定义，不推空值率/唯一） |
 | 场景模板 / MockUserTemplate | 整表 | 多列打包，无单字段粒度 |
 
-**方案（待用户拍板后实施）**：字段预设 = 列名 + ColumnDataType + GeneratorConfig + nullable_ratio + unique + confidence 一行打包。
-- 内建默认集：从 generator_catalog 打包（姓名/电话/邮箱/地址/城市/金额/日期/身份证…）；
-- 用户自定义：预设管理对话框（增删改 + 持久化，复用 persistence 的 MockUserTemplate 落盘模式）；
-- UI 入口二选一：列段「预设」下拉（从预设添加，分组：常用/内建/我的）或「＋ 加列」升级为对话框（预设列表 + 手动类型）。
-- 依赖：generator_catalog / persistence / ui（同现有模块，无新 crate）。
+**已实现（本轮）**：`mock_view/presets.rs` —— 字段预设 = 列名 + ColumnDataType + GeneratorConfig + nullable_ratio + unique + confidence 一行打包。
+- 内建集 12 项五分组（全部由 generator_catalog 已有生成器打包，不引入新生成器）：
+  - 常用：日期 `created_at`（Date/DateTime）、布尔 `is_active`（Boolean/ratio 50）；
+  - 人物：姓名 `name`（Varchar 50/Name/空 5%）、电话 `phone`（Varchar 30/PhoneNumber/空 10%）、邮箱 `email`（Varchar 100/Email/空 5%）、用户名 `username`（Varchar 50/Username/**唯一**）；
+  - 地址：城市 `city`、街道 `street`（Varchar 100/StreetName）、邮编 `zip`（Varchar 20/ZipCode）；
+  - 业务：公司 `company`（Varchar 100/CompanyName/空 5%）、金额 `price`（Decimal 10,2/RandomDecimal 1–100k）；
+  - 技术：UUID `id`（Uuid/UuidV4/**唯一**）。
+- 入口：列段按钮行「导入结构 | **预设** | 加列」三分——预设 = `Button` + `dropdown_caret` + 分组 `PopupMenu`（组标题 disabled 只读行 + 项 on_click）；点击经 `panel.add_preset_column(&FieldPreset, cx)` 加列。
+- `add_preset_column`：列名冲突自动加序号（`name` → `name_2`），应用后是普通列（confidence=high），照常走列编辑对话框微调。
+- 测试：`builtin_presets_are_unique_and_renderable`（id 唯一 + 生成器在 catalog 有规格）、`preset_column_adds_with_deduplicated_names`（重名去重 + 配置来自预设）。
+
+**未实现（记录在册）**：用户自定义预设管理（增删改 + 持久化，复用 persistence 的 MockUserTemplate 落盘模式；菜单分组增「我的」）。依赖已就绪（generator_catalog / persistence / ui，无新 crate），待后续轮次。

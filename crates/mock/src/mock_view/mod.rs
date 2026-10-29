@@ -99,7 +99,11 @@ mod detail;
 mod generator_search;
 mod job;
 mod panel;
+mod presets;
 mod pure;
+
+// 字段预设 re-export：panel / detail / tests 经 `super::` 顶层访问（与其余子模块同一惯例）
+pub use presets::{FieldPreset, PresetCategory, builtin_presets, preset_by_id};
 
 #[cfg(test)]
 mod tests;
