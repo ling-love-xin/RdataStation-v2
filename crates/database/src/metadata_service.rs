@@ -133,7 +133,7 @@ impl MetadataService {
     ///
     /// 与 `database_for` 同一套 catalog 展开逻辑：PostgreSQL 跨库会换到目标库的连接，
     /// SQLite / DuckDB 直接用主连接。调用方负责 SQL 生成（标识符引号转义见
-    /// [`crate::table_data::quote_ident`]）。
+    /// [`crate::nav::dialect_of`] 的 `quote_ident`）。
     pub async fn execute_query(
         &self,
         conn_id: &str,

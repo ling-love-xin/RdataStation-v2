@@ -87,13 +87,11 @@ pub(crate) enum NavRow {
     More {
         node: Box<NavNode>,
         depth: usize,
-        scope_key: String,
     },
     /// 「已定位到第 N 条」行（定位窗口的说明与回头路）。
     Jump {
         node: Box<NavNode>,
         depth: usize,
-        scope_key: String,
         position: usize,
     },
     /// 索引搜索命中行。
@@ -160,6 +158,10 @@ impl NavRow {
     }
 
     /// 元素 id（GPUI 要求同层唯一；分组容器名进 id 以免同一连接在多组里撞车）。
+    ///
+    /// 以下 5 个访问器（`element_id` / `conn_id` / `selectable` / `node` / `depth`）
+    /// 仅测试使用（`nav_view/tests.rs` 断言）；生产渲染直接用行载荷与字段。
+    #[cfg(test)]
     pub(crate) fn element_id(&self) -> String {
         match self {
             NavRow::GroupHeader { id, .. } => format!("nav-group-{id}"),
@@ -170,12 +172,8 @@ impl NavRow {
             NavRow::Tree {
                 node, scope_key, ..
             } => format!("nav-node-{scope_key}::{}", node.key),
-            NavRow::More {
-                node, scope_key, ..
-            } => format!("nav-more-{scope_key}::{}", node.key),
-            NavRow::Jump {
-                node, scope_key, ..
-            } => format!("nav-jumped-{scope_key}::{}", node.key),
+            NavRow::More { node, .. } => format!("nav-more-{}", node.key),
+            NavRow::Jump { node, .. } => format!("nav-jumped-{}", node.key),
             NavRow::SearchHit { hit, ix } => search_hit_row_id(*ix, hit),
             NavRow::Placeholder {
                 kind,
@@ -188,7 +186,8 @@ impl NavRow {
     /// 属于哪个连接（分组头没有归属，返回 `None`）。
     ///
     /// 面板头「刷新当前连接」、拖拽落点等要按行找连接；从行上直接取，
-    /// 不再让调用方去解析 key（那是第二份口径）。
+    /// 不再让调用方去解析 key（那是第二份口径）。仅测试使用。
+    #[cfg(test)]
     pub(crate) fn conn_id(&self) -> Option<&str> {
         match self {
             NavRow::GroupHeader { .. } => None,
@@ -204,12 +203,15 @@ impl NavRow {
     }
 
     /// 能不能被键盘漫游选中（分组头 / 占位行是容器标题或提示，不参与漫游；
-    /// 「更多」「定位」「搜索命中」可点可选中）。
+    /// 「更多」「定位」「搜索命中」可点可选中）。仅测试使用。
+    #[cfg(test)]
     pub(crate) fn selectable(&self) -> bool {
         !matches!(self, NavRow::GroupHeader { .. } | NavRow::Placeholder { .. })
     }
 
     /// 树行 / 「更多」/「定位」行携带的节点（连接 / 分组头 / 搜索命中 / 占位行为 `None`）。
+    /// 仅测试使用。
+    #[cfg(test)]
     pub(crate) fn node(&self) -> Option<&NavNode> {
         match self {
             NavRow::Tree { node, .. } | NavRow::More { node, .. } | NavRow::Jump { node, .. } => {
@@ -218,23 +220,4 @@ impl NavRow {
             _ => None,
         }
     }
-
-    /// 树行的层级（非树行为 0；缩进按它算）。
-    pub(crate) fn depth(&self) -> usize {
-        match self {
-            NavRow::Tree { depth, .. }
-            | NavRow::More { depth, .. }
-            | NavRow::Jump { depth, .. }
-            | NavRow::Placeholder { depth, .. } => *depth,
-            _ => 0,
-        }
-    }
-}
-
-/// 两行是否**同一行**（列表要判「选中锚点还在不在」）。
-///
-/// 按业务键比而不是按整行比：载荷里的 `ConnectionItem` 会随刷新（状态点、标签）
-/// 变，那不该被当成「换了一行」——否则每次刷新列表都会丢掉选中与滚动位置。
-pub(crate) fn same_row(a: &NavRow, b: &NavRow) -> bool {
-    a.key() == b.key()
 }

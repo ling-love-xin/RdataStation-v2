@@ -16,7 +16,7 @@ use crate::table_data::{self, TableDataRequest};
 use engine::driver::traits::SchemaObjectKind;
 use property::{
     ObjectOverview, ObjectProperties, PageId, PropertyKind, PropertyRow, PropertySection,
-    PropertyTable, PropertyTargetRef, PropertyValueKind, ProviderInput, ProviderStats,
+    PropertyTable, PropertyTargetRef, ProviderInput, ProviderStats,
     TableDataPage,
 };
 use shared::error::CoreError;
@@ -24,30 +24,6 @@ use shared::error::CoreError;
 /// 只读文本行（DBeaver 只读属性；id 取显示名）。
 fn row(label: &str, value: impl Into<String>) -> PropertyRow {
     PropertyRow::read_only(label, value)
-}
-
-/// 可编辑属性行（DBeaver `editable=true`——渲染编辑控件，提交走
-/// [`apply_property_edit`]，`id` 是提交映射 SQL 的键）。
-fn editable_row(
-    id: &str,
-    label: &str,
-    value: impl Into<String>,
-    kind: PropertyValueKind,
-    options: Vec<String>,
-) -> PropertyRow {
-    PropertyRow {
-        id: id.to_string(),
-        label: label.to_string(),
-        category: None,
-        value: value.into(),
-        editable: true,
-        value_kind: kind,
-        select_options: options,
-    }
-}
-
-fn opt(value: &Option<String>) -> String {
-    value.clone().unwrap_or_else(|| "-".to_string())
 }
 
 fn qualify(ref_: &PropertyRef) -> String {

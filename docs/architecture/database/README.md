@@ -45,7 +45,7 @@
 | 特点 | 含义 | 出处 |
 | --- | --- | --- |
 | **render 期零 I/O（核心纪律）** | 树加载 / 属性 / 预热 / 预取全部进**后台工作线程 + 结果队列**，主线程轮询回填；本地小读（分组 / 标签 / 展开态）走 `cx.defer_in` | 架构 §3.2 |
-| **依赖只向下** | 视图只依赖 `gpui-kit`；M4 领域与编排在 `crates/database`，GPUI 视图在 `crates/workbench`（不反向依赖） | 架构 §3.1 |
+| **依赖只向下** | 视图只依赖 `gpui-kit`；M4 领域与编排 + 导航面板视图（`nav_view/`，2026-10-23 下沉本 crate）都在 `crates/database`，不反向依赖 workbench（宿主编排在 workbench `components/nav_host.rs`） | 架构 §3.1 |
 | **层级差异只在服务层** | 类型差异落在驱动能力位 + `navigator_service`；`NavPath` / `NavNode` / 渲染层不为数据库类型分叉 | 架构 §4.2 |
 | **零裸色值、零裸 px** | 颜色一律主题 token（含产品语义角色 `search.match.background`）；结构尺寸走 `ui.rs` 常量，`px(` 会被契约测试拦下 | 架构 §3 |
 | **降级不静默** | L2 不可用时降级实时内省；节点级失败带**可读原因** + 重试入口，不静默吞错 | 架构 §7 |

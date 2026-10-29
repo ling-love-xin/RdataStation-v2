@@ -254,10 +254,8 @@ impl NavView {
             }
         }
 
-        let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
         let border = cx.theme().colors.border;
-        let sidebar_bg = cx.theme().colors.sidebar;
         let accent = cx.theme().colors.primary;
         let source_filter = self.nav.borrow().source_filter;
         // B6 staged：待提交条目数（面板头「提交 N」按钮预算；空集不渲染、不占槽位）。
@@ -1043,7 +1041,6 @@ impl NavView {
             .bg(cx.theme().colors.group_box);
         // D11 搜索选项条：匹配模式（前缀 / 包含）+ 搜注释开关 + 搜定义（置灰待内省采集）。
         // 仅在输入框存在时渲染；会话级开关不落库（与「仅已连接」同档）。
-        let mut search_options: Option<Div> = None;
         if let Some(input) = &self.nav_search {
             // 搜索框前导放大镜（原型 §2 的 `[🔍 …]`）：面板头部三行控件里
             // 只有这一行是输入框，给个形状信号比只靠 placeholder 更快认出。
@@ -1072,7 +1069,6 @@ impl NavView {
                     theme.colors.foreground,
                 )
             };
-            let entity_regex = cx.entity();
             let entity_cs = cx.entity();
             let entity_conn = cx.entity();
             let reg_trigger = Button::new("nav-search-regex")
@@ -1087,7 +1083,6 @@ impl NavView {
             let reg_popover = Popover::new("nav-search-regex-popover")
                 .trigger(reg_trigger)
                 .content({
-                    let entity_regex = entity_regex.clone();
                     let input_clone = input.clone();
                     move |_state, _window, cx| {
                         let theme = cx.theme();

@@ -613,7 +613,6 @@ impl NavView {
             rows.push(NavRow::Jump {
                 node: Box::new(node.clone()),
                 depth,
-                scope_key: scope_key.to_string(),
                 position,
             });
         }
@@ -644,7 +643,6 @@ impl NavView {
             rows.push(NavRow::More {
                 node: Box::new(node.clone()),
                 depth,
-                scope_key: scope_key.to_string(),
             });
         }
     }

@@ -26,7 +26,6 @@ tokio.workspace = true
 # ===== 序列化 =====
 serde.workspace = true
 serde_json.workspace = true
-specta.workspace = true
 
 # ===== 日志追踪 =====
 # 缓存刷新（prune_schema）失败必须留痕：历史上它把底层错误吞成「刷新了但旧行还在」。
@@ -35,6 +34,10 @@ tracing.workspace = true
 # ===== 搜索 =====
 # 搜索框「正则（`.*`）」开关：LIKE 中缀候选上做正则精筛（候选集为超集）。
 regex.workspace = true
+
+[features]
+# ER 建模视图（设计文档在、分期②未接）：默认关闭，排期启动时再打开（对应 lib.rs 的 `#[cfg(feature = "er-view")]`）。
+er-view = []
 
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）

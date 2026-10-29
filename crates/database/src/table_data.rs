@@ -32,14 +32,6 @@ pub struct TableDataRequest {
     pub order_by: Vec<(String, bool)>,
 }
 
-/// 引号转义标识符（fallback 双引号兜底；方言感知路径见 `load_table_data` 内 L3 方言 SPI）。
-///
-/// 仅保留为无方言上下文的兼容入口；表 / 列引号策略随族走 `nav::dialect_of`，
-/// MySQL 反引号等族差异不经过本函数。
-pub fn quote_ident(name: &str) -> String {
-    crate::nav::dialect_of("").quote_ident(name)
-}
-
 /// 单元格 → 展示文本：JSON `null` → `None`（渲染置灰），字符串取内部值，
 /// 其余按类型字符串化（精确数值保持原样——`Number` 不经浮点）。
 ///
@@ -151,14 +143,6 @@ pub async fn load_table_data(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// 兼容入口 fallback 双引号：列名 / 表名里的引号必须双写，且整个被引号包住（A15）。
-    /// 方言感知路径（MySQL 反引号等）由 L3 方言 SPI 覆盖，见 `nav/dialect/` 单测。
-    #[test]
-    fn quote_ident_doubles_embedded_quotes() {
-        assert_eq!(quote_ident("orders"), "\"orders\"");
-        assert_eq!(quote_ident("o\"rder\"s"), "\"o\"\"rder\"\"s\"");
-    }
 
     /// 单元格：JSON null → None，字符串取内部值（避免 JSON 序列化自带的引号），
     /// 数值按原文（Number 不走浮点）。
