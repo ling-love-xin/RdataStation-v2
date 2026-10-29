@@ -237,23 +237,54 @@ pub fn layout_preview() -> SettingItem {
     .on_reset(|_| false, |_, _| {})
 }
 
-// ===== 类型样式矩阵（结果集面板「对齐 / 着色」两组合并） =====
+// ===== 类型样式矩阵（结果集面板「对齐 / 着色 / 背景色 / 字体样式」四组合并） =====
 
-/// 把结果集面板「对齐 / 着色」两个登记组（各 5 项、共 10 个碎行）合并成一个
-/// 表格元素：行 = 数据族（数字 / 文本 / 时间 / 布尔 / BLOB），列 = 对齐、着色，
-/// 每格一个紧凑下拉（`DropdownButton`）。解决「设置杂乱、无设计感」的根因——
-/// 10 个 label + 分段条的行列排布压成 1 个矩阵。
+/// 把结果集面板「对齐」「着色」「背景色」「字体样式」四个登记组（各 5 项、
+/// 共 20 个碎行）合并成一个表格元素：行 = 数据族（数字 / 文本 / 时间 / 布尔 /
+/// BLOB），列 = 对齐、着色、背景、字体，每格一个紧凑下拉（`DropdownButton`）。
+/// 解决「设置杂乱、无设计感」的根因——20 个 label + 分段条的行列排布压成
+/// 1 个矩阵；也是对「类型设置分散」的收口：按数据族的样式设置只在一张表里。
 ///
-/// 登记表 / 模型 / 读写路径**不动**（10 个 `SettingSpec` 原样保留，`registry::spec`
-/// 仍是唯一权威）：这里是纯渲染层合并，写入仍走 `bridge::write_scalar`（唯一写入
-/// 路径），页面级 reset 覆盖全部 10 项。
+/// 登记表 / 模型 / 读写路径**不动**（20 个 `SettingSpec` 原样保留，
+/// `registry::spec` 仍是唯一权威）：这里是纯渲染层合并，写入仍走
+/// `bridge::write_scalar`（唯一写入路径），页面级 reset 覆盖全部 20 项。
 pub fn type_style_matrix(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> SettingItem {
-    const ROWS: [(&str, &str, &str); 5] = [
-        ("result_panel.align_numeric", "result_panel.color_numeric", "数字"),
-        ("result_panel.align_text", "result_panel.color_text", "文本"),
-        ("result_panel.align_temporal", "result_panel.color_temporal", "时间"),
-        ("result_panel.align_bool", "result_panel.color_bool", "布尔"),
-        ("result_panel.align_blob", "result_panel.color_blob", "BLOB"),
+    const ROWS: [(&str, &str, &str, &str, &str); 5] = [
+        (
+            "result_panel.align_numeric",
+            "result_panel.color_numeric",
+            "result_panel.bg_numeric",
+            "result_panel.font_numeric",
+            "数字",
+        ),
+        (
+            "result_panel.align_text",
+            "result_panel.color_text",
+            "result_panel.bg_text",
+            "result_panel.font_text",
+            "文本",
+        ),
+        (
+            "result_panel.align_temporal",
+            "result_panel.color_temporal",
+            "result_panel.bg_temporal",
+            "result_panel.font_temporal",
+            "时间",
+        ),
+        (
+            "result_panel.align_bool",
+            "result_panel.color_bool",
+            "result_panel.bg_bool",
+            "result_panel.font_bool",
+            "布尔",
+        ),
+        (
+            "result_panel.align_blob",
+            "result_panel.color_blob",
+            "result_panel.bg_blob",
+            "result_panel.font_blob",
+            "BLOB",
+        ),
     ];
     const ALIGN_OPTIONS: [(&str, &str); 4] = [
         ("inherit", "继承默认"),
@@ -270,6 +301,22 @@ pub fn type_style_matrix(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> 
         ("primary", "主品牌"),
         ("muted", "弱化灰"),
     ];
+    const BG_OPTIONS: [(&str, &str); 7] = [
+        ("inherit", "无背景"),
+        ("info", "信息蓝浅底"),
+        ("success", "成功绿浅底"),
+        ("warning", "警告橙浅底"),
+        ("danger", "危险红浅底"),
+        ("primary", "主品牌浅底"),
+        ("muted", "弱化灰浅底"),
+    ];
+    const FONT_OPTIONS: [(&str, &str); 5] = [
+        ("inherit", "继承默认"),
+        ("bold", "粗体"),
+        ("italic", "斜体"),
+        ("underline", "下划线"),
+        ("line_through", "删除线"),
+    ];
     let notify_render = notify.clone();
     let host_render = host.on_settings_changed.clone();
     let notify_reset = notify.clone();
@@ -277,7 +324,7 @@ pub fn type_style_matrix(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> 
 
     SettingItem::render(move |_options, _window, cx| {
         let theme = cx.theme().clone();
-        // 表头：行标签列（留空）+ 对齐列 + 着色列。
+        // 表头：行标签列（留空）+ 对齐 / 着色 / 背景 / 字体四列。
         let header = div()
             .h_flex()
             .items_center()
@@ -291,9 +338,11 @@ pub fn type_style_matrix(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> 
             .text_color(theme.colors.muted_foreground)
             .child(div().w(rems(4.)).flex_none())
             .child(div().w(rems(9.)).flex_none().child("对齐"))
-            .child(div().w(rems(10.)).flex_none().child("着色"));
+            .child(div().w(rems(10.)).flex_none().child("着色"))
+            .child(div().w(rems(10.)).flex_none().child("背景"))
+            .child(div().w(rems(9.)).flex_none().child("字体"));
         let mut body = div().v_flex();
-        for (align_key, color_key, name) in ROWS {
+        for (align_key, color_key, bg_key, font_key, name) in ROWS {
             body = body.child(
                 div()
                     .h_flex()
@@ -312,7 +361,7 @@ pub fn type_style_matrix(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> 
                     .child(matrix_cell(
                         align_key,
                         &ALIGN_OPTIONS,
-                        false,
+                        MatrixSwatch::None,
                         cx,
                         &notify_render,
                         &host_render,
@@ -320,7 +369,23 @@ pub fn type_style_matrix(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> 
                     .child(matrix_cell(
                         color_key,
                         &COLOR_OPTIONS,
-                        true,
+                        MatrixSwatch::Solid,
+                        cx,
+                        &notify_render,
+                        &host_render,
+                    ))
+                    .child(matrix_cell(
+                        bg_key,
+                        &BG_OPTIONS,
+                        MatrixSwatch::Light,
+                        cx,
+                        &notify_render,
+                        &host_render,
+                    ))
+                    .child(matrix_cell(
+                        font_key,
+                        &FONT_OPTIONS,
+                        MatrixSwatch::FontStyle,
                         cx,
                         &notify_render,
                         &host_render,
@@ -338,38 +403,56 @@ pub fn type_style_matrix(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> 
     })
     .on_reset(
         move |cx| {
-            ROWS.iter().any(|(align_key, color_key, _)| {
-                matrix_changed(align_key, cx) || matrix_changed(color_key, cx)
+            ROWS.iter().any(|(align_key, color_key, bg_key, font_key, _)| {
+                matrix_changed(align_key, cx)
+                    || matrix_changed(color_key, cx)
+                    || matrix_changed(bg_key, cx)
+                    || matrix_changed(font_key, cx)
             })
         },
         move |window, cx| {
-            for (align_key, color_key, _) in ROWS {
+            for (align_key, color_key, bg_key, font_key, _) in ROWS {
                 matrix_reset(align_key, Some(window), &notify_reset, &host_reset, cx);
                 matrix_reset(color_key, Some(window), &notify_reset, &host_reset, cx);
+                matrix_reset(bg_key, Some(window), &notify_reset, &host_reset, cx);
+                matrix_reset(font_key, Some(window), &notify_reset, &host_reset, cx);
             }
         },
     )
     .keywords(
-        ROWS.iter().flat_map(|(align_key, color_key, _)| {
+        ROWS.iter().flat_map(|(align_key, color_key, bg_key, font_key, _)| {
             [
                 SharedString::from(*align_key),
                 SharedString::from(*color_key),
+                SharedString::from(*bg_key),
+                SharedString::from(*font_key),
                 SharedString::from("对齐"),
                 SharedString::from("着色"),
+                SharedString::from("背景"),
+                SharedString::from("字体"),
             ]
         }),
     )
+}
+
+/// 矩阵单元格的选项预览形态：按列语义选择（对齐列无预览；着色列 = 原色块；
+/// 背景列 = 浅底色块；字体列 = 样式字例）。`inherit` 一律无色块。
+#[derive(Clone, Copy, PartialEq)]
+enum MatrixSwatch {
+    None,
+    Solid,
+    Light,
+    FontStyle,
 }
 
 /// 矩阵单元格：当前值 → 下拉按钮（左半区显示当前档位），选项点击 → 写设置。
 ///
 /// 选项与写入值直接取自调用方传入的常量表（与登记表 `SettingSpec::kind` 的
 /// 枚举保持一致）；当前值经 `bridge` 从 Settings 聚合读，选项未命中时显示首项。
-/// `with_swatch`：着色列给选项加语义色块预览（对齐列无色块）。
 fn matrix_cell(
     key: &'static str,
     options: &'static [(&'static str, &'static str)],
-    with_swatch: bool,
+    swatch: MatrixSwatch,
     cx: &mut App,
     notify: &Rc<dyn Fn(&mut App)>,
     host_changed: &Rc<dyn Fn(&mut App)>,
@@ -401,12 +484,8 @@ fn matrix_cell(
                 let notify = notify.clone();
                 let host_changed = host_changed.clone();
                 let mut item = PopupMenuItem::new(*label);
-                // 着色列：选项前加语义色块（`inherit` 无色块），把抽象中文名
-                // （"成功绿"等）变成可视色点；色映射与登记表着色枚举逐字一致。
-                if with_swatch {
-                    if let Some(swatch) = color_swatch(&theme, value) {
-                        item = item.icon(swatch);
-                    }
+                if let Some(icon) = matrix_swatch(&theme, value, swatch) {
+                    item = item.icon(icon);
                 }
                 menu = menu.item(
                     item.on_click(move |_, window, app| {
@@ -426,20 +505,73 @@ fn matrix_cell(
         .into_any_element()
 }
 
+/// 矩阵选项预览：`swatch` 决定形态（见 `MatrixSwatch`）；色映射与登记表
+/// 着色 / 背景枚举逐字一致。`inherit`（继承 / 不染色 / 无背景）无色块。
+fn matrix_swatch(
+    theme: &gpui_kit::component::Theme,
+    value: &str,
+    swatch: MatrixSwatch,
+) -> Option<Icon> {
+    match swatch {
+        MatrixSwatch::None => None,
+        MatrixSwatch::Solid => color_swatch(theme, value),
+        MatrixSwatch::Light => bg_swatch(theme, value),
+        MatrixSwatch::FontStyle => font_style_swatch(theme, value),
+    }
+}
+
 /// 着色选项的语义色块：SVG 圆角矩形 + `currentColor`，经 `Icon::text_color`
 /// 注入语义色（与 gpui-kit 图标渲染同一机制）。`inherit`（不染色）无色块。
 fn color_swatch(theme: &gpui_kit::component::Theme, color_key: &str) -> Option<Icon> {
     const SWATCH_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="4" fill="currentColor"/></svg>"#;
-    let color = match color_key {
-        "info" => theme.colors.info,
-        "success" => theme.colors.success,
-        "warning" => theme.colors.warning,
-        "danger" => theme.colors.danger,
-        "primary" => theme.colors.primary,
-        "muted" => theme.colors.muted_foreground,
+    let color = semantic_color(theme, color_key)?;
+    Some(Icon::default().data(SWATCH_SVG).text_color(color))
+}
+
+/// 背景选项的浅底色块：`currentColor` 半透明填充 + 浅色描边，
+/// 近似网格里的「语义角色浅底」观感。`inherit`（无背景）无色块。
+fn bg_swatch(theme: &gpui_kit::component::Theme, color_key: &str) -> Option<Icon> {
+    const SWATCH_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="4" fill="currentColor" opacity="0.3" stroke="currentColor" stroke-opacity="0.6"/></svg>"#;
+    let color = semantic_color(theme, color_key)?;
+    Some(Icon::default().data(SWATCH_SVG).text_color(color))
+}
+
+/// 字体选项的样式字例：SVG 文本按档位显示样式（粗体 / 斜体 / 下划线 /
+/// 删除线），继承默认无色块——选项文案本身已自明。
+fn font_style_swatch(theme: &gpui_kit::component::Theme, style: &str) -> Option<Icon> {
+    let (svg, color): (&'static [u8], gpui_kit::Hsla) = match style {
+        "bold" => (
+            br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><text x="12" y="17" font-size="13" font-weight="bold" text-anchor="middle" fill="currentColor">A</text></svg>"#,
+            theme.colors.foreground,
+        ),
+        "italic" => (
+            br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><text x="12" y="17" font-size="13" font-style="italic" text-anchor="middle" fill="currentColor">A</text></svg>"#,
+            theme.colors.foreground,
+        ),
+        "underline" => (
+            br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><text x="12" y="17" font-size="13" text-decoration="underline" text-anchor="middle" fill="currentColor">A</text></svg>"#,
+            theme.colors.foreground,
+        ),
+        "line_through" => (
+            br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><text x="12" y="17" font-size="13" text-decoration="line-through" text-anchor="middle" fill="currentColor">A</text></svg>"#,
+            theme.colors.foreground,
+        ),
         _ => return None,
     };
-    Some(Icon::default().data(SWATCH_SVG).text_color(color))
+    Some(Icon::default().data(svg).text_color(color))
+}
+
+/// 语义色映射（着色 / 背景共用；`inherit` 返回 None）。
+fn semantic_color(theme: &gpui_kit::component::Theme, color_key: &str) -> Option<gpui_kit::Hsla> {
+    match color_key {
+        "info" => Some(theme.colors.info),
+        "success" => Some(theme.colors.success),
+        "warning" => Some(theme.colors.warning),
+        "danger" => Some(theme.colors.danger),
+        "primary" => Some(theme.colors.primary),
+        "muted" => Some(theme.colors.muted_foreground),
+        _ => None,
+    }
 }
 
 /// 矩阵单格是否偏离默认值（默认值取自登记表，不另存一份）。
