@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 use gpui_kit::component::group_box::GroupBoxVariant;
 use gpui_kit::component::setting::{SelectIndex, SettingGroup, SettingPage, Settings};
+use gpui_kit::px;
 use gpui_kit::App;
 
 use crate::fields;
@@ -22,6 +23,9 @@ use crate::settings_page::SettingsHost;
 pub fn build(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> Settings {
     let mut settings = Settings::new("rds-settings")
         .with_group_variant(GroupBoxVariant::Normal)
+        // 侧栏导航显式 200px：窗口化后与两栏骨架观感一致；
+        // 拖宽范围 160–360px 由组件默认（h_resizable，用户可自行调）。
+        .sidebar_width(px(200.))
         .default_selected_index(SelectIndex {
             page_ix: 0,
             group_ix: None,
@@ -39,7 +43,9 @@ pub fn build(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> Settings {
             // 登记表不动（10 个 SettingSpec 原样保留），这里是纯渲染层合并；
             // 「着色」组（color）随之跳过——矩阵已覆盖它的全部 5 项。
             if section == "result_panel" && *gid == "align" {
-                let mut group = SettingGroup::new().title("对齐与着色");
+                let mut group = SettingGroup::new()
+                    .title("对齐与着色")
+                    .description("按数据族（数字 / 文本 / 时间 / 布尔 / BLOB）覆盖结果集网格的对齐与前景色");
                 group = group.item(fields::type_style_matrix(host, notify));
                 groups.push(group);
                 continue;
@@ -50,6 +56,12 @@ pub fn build(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> Settings {
             let mut group = SettingGroup::new();
             if let Some(label) = glabel {
                 group = group.title(*label);
+            }
+            // 长节分组给一句说明（分组自解释，减少"杂乱"感）。
+            if section == "result_panel" && *gid == "data" {
+                group = group.description(
+                    "列头与单元格的值呈现：注释 / 类型徽标 / 数字格式 / NULL / 布尔",
+                );
             }
             // 布局分节：顶部先放左右侧边栏占比预览示意图。
             if section == "layout" && *gid == page_groups[0].0 {

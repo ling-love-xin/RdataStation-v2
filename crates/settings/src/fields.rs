@@ -20,7 +20,7 @@ use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::setting::{RenderOptions, SettingField, SettingItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar, TabVariant};
-use gpui_kit::component::{ActiveTheme, IconName, Sizable as _, Size, Selectable as _};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, Size, Selectable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -74,7 +74,22 @@ pub fn value_item(
         };
         // 好理解的参数不占行内说明空间：行内只留 label + 控件，说明挪到
         // 悬停控件时的 HoverCard 提示（对齐 gpui-kit tooltip 交互惯例）。
-        if spec.hint_inline {
+        // 禁用态（`spec.disabled` = 能力已预留）优先给"为何置灰"的原因提示；
+        // 具体原因仍以行内 hint 为准（当前唯一禁用项 hint_inline=true 即走行内）。
+        if spec.disabled && !spec.hint_inline {
+            let key = spec.key;
+            HoverCard::new(ElementId::Name(SharedString::from(format!("{key}-disabled"))))
+                .trigger(body)
+                .content(move |_, _window, cx| {
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(cx.theme().colors.muted_foreground)
+                        .child("该能力已预留，尚未启用")
+                })
+                .into_any_element()
+        } else if spec.hint_inline {
             body.into_any_element()
         } else {
             let hint = spec.hint;
@@ -297,6 +312,7 @@ pub fn type_style_matrix(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> 
                     .child(matrix_cell(
                         align_key,
                         &ALIGN_OPTIONS,
+                        false,
                         cx,
                         &notify_render,
                         &host_render,
@@ -304,6 +320,7 @@ pub fn type_style_matrix(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> 
                     .child(matrix_cell(
                         color_key,
                         &COLOR_OPTIONS,
+                        true,
                         cx,
                         &notify_render,
                         &host_render,
@@ -348,9 +365,11 @@ pub fn type_style_matrix(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> 
 ///
 /// 选项与写入值直接取自调用方传入的常量表（与登记表 `SettingSpec::kind` 的
 /// 枚举保持一致）；当前值经 `bridge` 从 Settings 聚合读，选项未命中时显示首项。
+/// `with_swatch`：着色列给选项加语义色块预览（对齐列无色块）。
 fn matrix_cell(
     key: &'static str,
     options: &'static [(&'static str, &'static str)],
+    with_swatch: bool,
     cx: &mut App,
     notify: &Rc<dyn Fn(&mut App)>,
     host_changed: &Rc<dyn Fn(&mut App)>,
@@ -365,6 +384,7 @@ fn matrix_cell(
         .unwrap_or(options[0].1);
     let notify = notify.clone();
     let host_changed = host_changed.clone();
+    let theme = cx.theme().clone();
     DropdownButton::new(ElementId::Name(SharedString::from(format!("{key}-dd"))))
         .w(rems(9.))
         .flex_none()
@@ -380,8 +400,16 @@ fn matrix_cell(
                 // 每个菜单项独立持有写路径闭包（Rc 循环内逐项 clone，不能共享 move）。
                 let notify = notify.clone();
                 let host_changed = host_changed.clone();
+                let mut item = PopupMenuItem::new(*label);
+                // 着色列：选项前加语义色块（`inherit` 无色块），把抽象中文名
+                // （"成功绿"等）变成可视色点；色映射与登记表着色枚举逐字一致。
+                if with_swatch {
+                    if let Some(swatch) = color_swatch(&theme, value) {
+                        item = item.icon(swatch);
+                    }
+                }
                 menu = menu.item(
-                    PopupMenuItem::new(*label).on_click(move |_, window, app| {
+                    item.on_click(move |_, window, app| {
                         bridge::write_scalar(
                             key,
                             SettingValue::Text((*value).to_string()),
@@ -396,6 +424,22 @@ fn matrix_cell(
             menu
         })
         .into_any_element()
+}
+
+/// 着色选项的语义色块：SVG 圆角矩形 + `currentColor`，经 `Icon::text_color`
+/// 注入语义色（与 gpui-kit 图标渲染同一机制）。`inherit`（不染色）无色块。
+fn color_swatch(theme: &gpui_kit::component::Theme, color_key: &str) -> Option<Icon> {
+    const SWATCH_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="4" fill="currentColor"/></svg>"#;
+    let color = match color_key {
+        "info" => theme.colors.info,
+        "success" => theme.colors.success,
+        "warning" => theme.colors.warning,
+        "danger" => theme.colors.danger,
+        "primary" => theme.colors.primary,
+        "muted" => theme.colors.muted_foreground,
+        _ => return None,
+    };
+    Some(Icon::default().data(SWATCH_SVG).text_color(color))
 }
 
 /// 矩阵单格是否偏离默认值（默认值取自登记表，不另存一份）。
