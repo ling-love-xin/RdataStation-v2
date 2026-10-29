@@ -1096,7 +1096,6 @@ fn duckdb_err(op: &str, reason: &str) -> CoreError {
 
 /// 全局迁移 026（与 engine 迁移同源，测试库建表用；生产由 engine 迁移执行）。
 pub(crate) const GLOBAL_MIGRATION_026_SQL: &str = include_str!(
-pub(crate) const GLOBAL_MIGRATION_026_SQL: &str = include_str!(
     "../../../store/migrations/global/026_analytics_resource_global.sql"
 );
 
