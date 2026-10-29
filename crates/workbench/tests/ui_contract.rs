@@ -309,8 +309,36 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../../editor/src/view/host/editor_body.rs"),
         ),
         (
-            "editor/view/host/exec.rs",
-            include_str!("../../editor/src/view/host/exec.rs"),
+            "editor/view/host/exec/mod.rs",
+            include_str!("../../editor/src/view/host/exec/mod.rs"),
+        ),
+        (
+            "editor/view/host/exec/connection.rs",
+            include_str!("../../editor/src/view/host/exec/connection.rs"),
+        ),
+        (
+            "editor/view/host/exec/edit_cmds.rs",
+            include_str!("../../editor/src/view/host/exec/edit_cmds.rs"),
+        ),
+        (
+            "editor/view/host/exec/row_ops.rs",
+            include_str!("../../editor/src/view/host/exec/row_ops.rs"),
+        ),
+        (
+            "editor/view/host/exec/execute.rs",
+            include_str!("../../editor/src/view/host/exec/execute.rs"),
+        ),
+        (
+            "editor/view/host/exec/tx.rs",
+            include_str!("../../editor/src/view/host/exec/tx.rs"),
+        ),
+        (
+            "editor/view/host/exec/scan.rs",
+            include_str!("../../editor/src/view/host/exec/scan.rs"),
+        ),
+        (
+            "editor/view/host/exec/pump.rs",
+            include_str!("../../editor/src/view/host/exec/pump.rs"),
         ),
         (
             "editor/view/host/results/mod.rs",
@@ -623,8 +651,36 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../../editor/src/view/host/editor_body.rs"),
         ),
         (
-            "editor/view/host/exec.rs",
-            include_str!("../../editor/src/view/host/exec.rs"),
+            "editor/view/host/exec/mod.rs",
+            include_str!("../../editor/src/view/host/exec/mod.rs"),
+        ),
+        (
+            "editor/view/host/exec/connection.rs",
+            include_str!("../../editor/src/view/host/exec/connection.rs"),
+        ),
+        (
+            "editor/view/host/exec/edit_cmds.rs",
+            include_str!("../../editor/src/view/host/exec/edit_cmds.rs"),
+        ),
+        (
+            "editor/view/host/exec/row_ops.rs",
+            include_str!("../../editor/src/view/host/exec/row_ops.rs"),
+        ),
+        (
+            "editor/view/host/exec/execute.rs",
+            include_str!("../../editor/src/view/host/exec/execute.rs"),
+        ),
+        (
+            "editor/view/host/exec/tx.rs",
+            include_str!("../../editor/src/view/host/exec/tx.rs"),
+        ),
+        (
+            "editor/view/host/exec/scan.rs",
+            include_str!("../../editor/src/view/host/exec/scan.rs"),
+        ),
+        (
+            "editor/view/host/exec/pump.rs",
+            include_str!("../../editor/src/view/host/exec/pump.rs"),
         ),
         (
             "editor/view/host/results/mod.rs",
