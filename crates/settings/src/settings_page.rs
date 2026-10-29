@@ -40,6 +40,9 @@ pub struct SettingsHost {
     pub on_open_log_view: Rc<dyn Fn(&mut Window, &mut App)>,
     /// 打开「类型简称映射」对话框（宿主实现；维护数据库类型 → 简称表）。
     pub on_open_type_short_map: Rc<dyn Fn(&mut Window, &mut App)>,
+    /// 打开 `config/settings.json`（宿主实现；Q3：设置页头部「配置文件」入口，
+    /// 鼓励直接手改 JSON 的场景，设置层不依赖文件系统）。
+    pub on_open_settings_json: Rc<dyn Fn(&mut Window, &mut App)>,
     /// 任一设置项落盘后通知宿主（workbench 用它把新值装配到 DockSkin 等消费方；
     /// 设置项自身有副作用时走 setter，此回调只负责「外部消费方重应用」）。
     pub on_settings_changed: Rc<dyn Fn(&mut App)>,
@@ -184,6 +187,7 @@ mod tests {
             on_open_log_dir: Rc::new(|_, _| {}),
             on_open_log_view: Rc::new(|_, _| {}),
             on_open_type_short_map: Rc::new(|_, _| {}),
+            on_open_settings_json: Rc::new(|_, _| {}),
             on_settings_changed: Rc::new(|_| {}),
         }
     }

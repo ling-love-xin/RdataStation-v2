@@ -7,8 +7,10 @@
 
 use std::rc::Rc;
 
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::group_box::GroupBoxVariant;
 use gpui_kit::component::setting::{SelectIndex, SettingGroup, SettingPage, Settings};
+use gpui_kit::component::{IconName, Sizable as _};
 use gpui_kit::px;
 use gpui_kit::App;
 
@@ -22,7 +24,9 @@ use crate::settings_page::SettingsHost;
 /// 里构造并传入）。
 pub fn build(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> Settings {
     let mut settings = Settings::new("rds-settings")
-        .with_group_variant(GroupBoxVariant::Normal)
+        // 分组卡片化：每个分组一个描边卡片（border + 圆角 + 内边距），
+        // 与"无卡片平铺"相比分组边界更清楚，长节不显杂乱。
+        .with_group_variant(GroupBoxVariant::Outline)
         // 侧栏导航显式 200px：窗口化后与两栏骨架观感一致；
         // 拖宽范围 160–360px 由组件默认（h_resizable，用户可自行调）。
         .sidebar_width(px(200.))
@@ -31,7 +35,7 @@ pub fn build(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> Settings {
             group_ix: None,
         });
 
-    for (section, section_label) in registry::sections() {
+    for (ix, (section, section_label)) in registry::sections().into_iter().enumerate() {
         // 行按子分组归入带标题的分组卡片（对齐 gpui-kit demo 的两级导航）；
         // 单分组节（`group_label == None`，如布局 / 资产库）渲染为无名分组，
         // 对齐 demo 的 General 页。
@@ -79,9 +83,51 @@ pub fn build(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> Settings {
         if !actions.is_empty() {
             groups.push(SettingGroup::new().title("操作").items(actions));
         }
-        settings = settings.page(SettingPage::new(section_label).groups(groups));
+        let mut page = SettingPage::new(section_label).groups(groups);
+        // 页面级一句总览（登记表 label 归纳；分组 description 是组内细节）。
+        if let Some(desc) = page_description(section) {
+            page = page.description(desc);
+        }
+        // 首页头部右侧：打开配置文件入口（Q3）——鼓励直接手改 JSON 的场景；
+        // 副作用经宿主桥 `on_open_settings_json`（settings 层不依赖文件系统）。
+        if ix == 0 {
+            let on_open = host.on_open_settings_json.clone();
+            page = page.title_suffix(move |_window, _app| {
+                Button::new("settings-open-json")
+                    .ghost()
+                    .small()
+                    .icon(IconName::FileText)
+                    .label("配置文件")
+                    .tooltip("打开 settings.json（默认 JSON 编辑器）")
+                    .on_click({
+                        let on_open = on_open.clone();
+                        move |_, window, app| on_open(window, app)
+                    })
+            });
+        }
+        settings = settings.page(page);
     }
     settings
+}
+
+/// 页面级一句总览（从登记表行 label 归纳；缺省 None 不显示）。
+fn page_description(section: &str) -> Option<&'static str> {
+    match section {
+        "appearance" => Some("主题模式、界面字号、界面语言与标签栏外观"),
+        "connection" => Some("新建连接的默认行为（超时与传输安全）"),
+        "editor" => Some("编辑行为与代码折叠（缩进 / 换行 / 格式化）"),
+        "insight" => Some("分析引擎内存与统计确认"),
+        "layout" => Some("主窗口布局锁定与侧边栏宽度"),
+        "logging" => Some("日志级别与动作入口"),
+        "navigator" => Some("对象树显示（标签 / 徽标 / 筛选）与自动连接"),
+        "notifications" => Some("通知自动消失与同类合并"),
+        "projects" => Some("项目列表排序"),
+        "resources" => Some("资源库历史保留、排序与分组"),
+        "result_panel" => Some("结果集网格的值呈现（对齐 / 着色 / 数据与显示）"),
+        "scratchpad" => Some("便签工具栏与分区高度"),
+        "startup" => Some("启动时显示的模块"),
+        _ => None,
+    }
 }
 
 /// 动作行（非设置项，见 `fields::action_row`）：按节从宿主桥取回调。

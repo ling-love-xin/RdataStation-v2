@@ -2305,6 +2305,22 @@ impl WorkbenchView {
         let on_open_type_short_map: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |window, app| {
             crate::components::type_short_map_dialog::open_type_short_map_dialog(window, app);
         });
+        // 「打开配置文件」（设置页头部入口，Q3）：用系统默认 JSON 编辑器打开
+        // `config/settings.json`；文件不存在（还没写过设置）就先建一个空 `{}`，
+        // 否则"打开不存在的文件"是纯失败体验（与打开日志目录同一策略）。
+        let on_open_settings_json: Rc<dyn Fn(&mut Window, &mut App)> =
+            Rc::new(move |_window, _app| {
+                let path = paths::config_dir().join("settings.json");
+                if !path.exists() {
+                    if let Err(e) = std::fs::write(&path, "{}") {
+                        eprintln!("[settings] 创建 settings.json 失败 {}: {e}", path.display());
+                        return;
+                    }
+                }
+                if let Err(e) = opener::open(&path) {
+                    eprintln!("[settings] 打开 settings.json 失败 {}: {e}", path.display());
+                }
+            });
         // T-1：设置落盘 → 重应用标签栏外观到 DockSkin（启动值在 `init_workspace`
         // 已应用一次；这里是运行时路径）。皮肤句柄在装配期已存字段。
         let dock_skin = self.dock_skin.clone();
@@ -2329,6 +2345,7 @@ impl WorkbenchView {
             on_open_log_dir,
             on_open_log_view,
             on_open_type_short_map,
+            on_open_settings_json,
             on_settings_changed,
         };
         // 独立窗口：`TitleBar::window_options()` 提供原生标题栏（拖拽 + 系统窗口控制），
