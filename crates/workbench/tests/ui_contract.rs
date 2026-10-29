@@ -224,7 +224,7 @@ fn view_layer_has_no_raw_size_literals() {
         ),
         (
             "connection_dialog/helpers.rs",
-            include_str!("../../connection_dialog/src/components/connection_dialog/helpers.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/helpers/mod.rs"),
         ),
         (
             "connection_dialog/project_picker.rs",
@@ -589,7 +589,7 @@ fn ui_sources_have_no_raw_color_literals() {
         ),
         (
             "connection_dialog/helpers.rs",
-            include_str!("../../connection_dialog/src/components/connection_dialog/helpers.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/helpers/mod.rs"),
         ),
         (
             "connection_dialog/project_picker.rs",
