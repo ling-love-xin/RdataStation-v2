@@ -1,26 +1,26 @@
 //! Quick Open 的**纯逻辑**：查询解析（模式前缀）、行匹配与评分、命中区间、结果分组与上限。
 //!
 //! 不依赖 GPUI / `Shared`，输入输出都是纯数据，因此可直接单测
-//! （`cargo test -p rds-workbench --lib quick_open`）。
-//! 渲染与副作用在 `quick_open/delegate.rs` 与 `view.rs`（宿主 render / 事件路径）；
-//! 命令目录在 `quick_open/commands.rs`（本模块只消费它的 `command_rows()`）。
+//! （P2-c 下沉后：`cargo test -p rds-editor --lib quick_open`）。
+//! 渲染与副作用在 workbench（`quick_open/delegate.rs` 与 `view.rs`——宿主 render / 事件路径）；
+//! 命令目录在 [`crate::quick_open::commands`]（本模块只消费它的 `command_rows()`）。
 //!
 //! 规格：`docs/architecture/quick_open/quick-open-prototype-design.md`（§5 模式 / §6 元数据两档 / §8 匹配排序）。
 
-use editor::model::EditorMode;
+use crate::model::EditorMode;
 
-use crate::view::{LeftPanel, RightPanel};
+use workbench_shell::model::{LeftPanel, RightPanel};
 
 /// 命令目录转发：目录本体在 [`crate::quick_open::commands`]（那里有 id / keywords / 动作），
 /// 本模块只做「行 + 匹配」这一层（`filter_ranked` 要认识 `match_text`）。
-pub(crate) use crate::quick_open::commands::command_rows;
+use crate::quick_open::commands::command_rows;
 
 /// 元数据命中（跨连接索引搜索的一行；由 `database::nav_jobs::SearchHit` 映射而来）。
 ///
 /// 行里带上**可直接发给属性面板的请求**：执行侧就不需要再认识 `SearchHit`，
 /// 映射口径与导航搜索结果一致（`nav_view::nav_search_hit_property`）。
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct MetaObject {
+pub struct MetaObject {
     /// 统一引用（`engine::ObjectRef`）：行的**业务键**与跨屏定位都从它来。
     pub object: engine::ObjectRef,
     pub request: database::model::PropertyRequest,
@@ -33,7 +33,7 @@ pub(crate) struct MetaObject {
 
 /// 搜索模式：由输入的首字符决定（对齐 VSCode 的 Quick Open / Command Palette）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Mode {
+pub enum Mode {
     /// 默认：连接 + 命令（+ 元数据 / 文件，Phase 1 接入）。
     Default,
     /// `>`：仅命令。
@@ -48,13 +48,13 @@ pub(crate) enum Mode {
 }
 
 /// 名称档最小词长（本地源不受限；对齐导航搜索框的口径）。
-pub(crate) const MIN_NEEDLE_LEN: usize = 2;
+pub const MIN_NEEDLE_LEN: usize = 2;
 /// 内容档最小词长：trigram 分词器下不足 **3** 字（一个 trigram）必然无命中。
-pub(crate) const MIN_FULLTEXT_LEN: usize = 3;
+pub const MIN_FULLTEXT_LEN: usize = 3;
 
 /// 解析后的查询。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Query {
+pub struct Query {
     pub mode: Mode,
     /// 去掉前缀与首尾空白后的词（**保留大小写**：高亮要按原文定位）。
     pub needle: String,
@@ -62,7 +62,7 @@ pub(crate) struct Query {
 
 impl Query {
     /// 本档最小词长（内容档比名称档高：trigram ≥ 3）。
-    pub(crate) fn min_len(&self) -> usize {
+    pub fn min_len(&self) -> usize {
         match self.mode {
             Mode::FullText => MIN_FULLTEXT_LEN,
             _ => MIN_NEEDLE_LEN,
@@ -70,7 +70,7 @@ impl Query {
     }
 
     /// 词长是否够发一次搜索（命令档不发；本地源始终可搜）。
-    pub(crate) fn async_ready(&self) -> bool {
+    pub fn async_ready(&self) -> bool {
         if self.mode == Mode::Command {
             return false;
         }
@@ -79,7 +79,7 @@ impl Query {
 }
 
 /// 按首字符判定模式。只认**半角**符号（全角 `＞` / `＃` 当普通搜索词，避免输入法误触发）。
-pub(crate) fn parse(raw: &str) -> Query {
+pub fn parse(raw: &str) -> Query {
     let t = raw.trim_start();
     if let Some(rest) = t.strip_prefix('>') {
         Query {
@@ -101,7 +101,7 @@ pub(crate) fn parse(raw: &str) -> Query {
 
 /// 行类别（决定类型标签；图标集不在第一批扩，缺则用文本标签）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RowKind {
+pub enum RowKind {
     Table,
     View,
     Column,
@@ -116,7 +116,7 @@ pub(crate) enum RowKind {
 
 impl RowKind {
     /// 行首的类型短标签（类型双通道：文本 + 位置，不只靠颜色）。
-    pub(crate) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             RowKind::Table => "表",
             RowKind::View => "视图",
@@ -134,7 +134,7 @@ impl RowKind {
 
 /// 行被确认（↵ / 点击 / Ctrl+↵）时要执行的动作。
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Action {
+pub enum Action {
     /// 新建编辑器文档（查询 / 笔记 / 文件）。
     NewDocument(EditorMode),
     /// 打开属性面板并定位对象（元数据命中；请求已就绪，执行侧不再拼字段）。
@@ -162,7 +162,7 @@ pub(crate) enum Action {
 
 /// 一行结果。
 #[derive(Debug, Clone)]
-pub(crate) struct Row {
+pub struct Row {
     /// 业务键（选中跨重算跟随；**不用下标**）。
     pub key: String,
     pub kind: RowKind,
@@ -196,7 +196,7 @@ pub(crate) struct Row {
 ///
 /// 只带行要用到的四个字段：**不做 IO**（打开在动作执行侧，浮层不认识盘）。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FileObject {
+pub struct FileObject {
     /// 模块内相对路径（`/` 分隔）：行的业务键与**替换匹配面**（`drafts/notes` 这样搜也能中）。
     pub relative_path: String,
     /// 所在目录（根下为空串）：行右侧展示用。
@@ -209,7 +209,7 @@ pub(crate) struct FileObject {
 
 /// 一个分组（渲染为 `List` 的一个 section）。
 #[derive(Debug, Clone)]
-pub(crate) struct Group {
+pub struct Group {
     pub title: &'static str,
     /// 组头右侧的补充（如「搜索中…」；空则不显示）。
     pub note: String,
@@ -223,7 +223,7 @@ pub(crate) struct Group {
 /// 为什么用结构体而不是继续加参数：这里已有四路来源（元数据 / 文件 / 连接 / 命令），
 /// 都是 `&[..]` / `bool` / `&str`——位置参数迟早会被写反（换个位置编译器一声不吭）。
 #[derive(Default)]
-pub(crate) struct Sources<'a> {
+pub struct Sources<'a> {
     /// 连接（名称, 驱动）。
     pub connections: &'a [(String, String)],
     /// 元数据命中（名称档 / 内容档共用一份槽位，由 `mode` 决定怎么用）。
@@ -240,7 +240,7 @@ pub(crate) struct Sources<'a> {
 ///
 /// 元数据（跨连接名称档）由宿主从后台回填后以 `meta` 传入；本函数是纯函数，不做 I/O。
 /// 元数据是核心：搜索中也要出组头（否则「搜不到」与「还在搜」分不清）。
-pub(crate) fn build_groups(q: &Query, sources: &Sources<'_>) -> Vec<Group> {
+pub fn build_groups(q: &Query, sources: &Sources<'_>) -> Vec<Group> {
     let groups = match q.mode {
         Mode::Command => non_empty("命令", filter_ranked(command_rows(), &q.needle), "")
             .into_iter()
@@ -332,13 +332,13 @@ fn non_empty(title: &'static str, rows: Vec<Row>, note: &str) -> Option<Group> {
 fn cap_groups(mut groups: Vec<Group>, mode: Mode) -> Vec<Group> {
     let (budget_cap, per_group) = if mode == Mode::Goto {
         (
-            crate::ui::QUICK_OPEN_GOTO_MAX_ROWS,
-            crate::ui::QUICK_OPEN_GOTO_MAX_ROWS,
+            workbench_shell::ui::QUICK_OPEN_GOTO_MAX_ROWS,
+            workbench_shell::ui::QUICK_OPEN_GOTO_MAX_ROWS,
         )
     } else {
         (
-            crate::ui::QUICK_OPEN_MAX_ROWS,
-            crate::ui::QUICK_OPEN_MAX_ROWS_PER_GROUP,
+            workbench_shell::ui::QUICK_OPEN_MAX_ROWS,
+            workbench_shell::ui::QUICK_OPEN_MAX_ROWS_PER_GROUP,
         )
     };
     let mut budget = budget_cap;
@@ -471,7 +471,7 @@ fn fulltext_rows(meta: &[MetaObject], needle: &str) -> Vec<Row> {
 /// 把 FTS5 `snippet()` 的 `<mark>…</mark>` 标记切成「普通 / 命中」段（纯函数，可单测）。
 ///
 /// 不闭会的标记退化为普通文本（引擎不该产出这种，但别让 UI panic）。
-pub(crate) fn markup_segments(markup: &str) -> Vec<(String, bool)> {
+pub fn markup_segments(markup: &str) -> Vec<(String, bool)> {
     const OPEN: &str = "<mark>";
     const CLOSE: &str = "</mark>";
     let mut out = Vec::new();
@@ -517,7 +517,7 @@ fn meta_key(object: &engine::ObjectRef) -> String {
 /// 例程这三类曾经被白名单挡掉（当时以为“暂无定位能力”），但属性面板早已支持
 /// （`property_panel::load_properties` 有 Routine / Sequence / Trigger 三支），
 /// 而 `#` 全文档档的 FTS 索引**本就会写入例程**——挡住它们等于“搜到了却什么也不显示”。
-pub(crate) fn meta_object(hit: &database::nav_jobs::SearchHit) -> Option<MetaObject> {
+pub fn meta_object(hit: &database::nav_jobs::SearchHit) -> Option<MetaObject> {
     let object = engine::ObjectRef::from_index_hit(
         &hit.conn_id,
         &hit.object_type,
@@ -567,7 +567,7 @@ pub(crate) fn meta_object(hit: &database::nav_jobs::SearchHit) -> Option<MetaObj
 ///
 /// 为什么不让浮层直接拿着 `scratchpad::FlatFile`：`model` 是纯数据层（可单测、不认识宿主），
 /// 映射集中在这里，将来换文件源（如资产库存档）只需再写一个这样的函数。
-pub(crate) fn file_object(file: &scratchpad::FlatFile) -> FileObject {
+pub fn file_object(file: &scratchpad::FlatFile) -> FileObject {
     FileObject {
         relative_path: file.relative_path.clone(),
         folder: file.folder.clone(),
@@ -632,7 +632,7 @@ fn rank_row(row: &Row, needle: &str) -> Option<Rank> {
 
 /// 匹配档（越小越优先）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Tier {
+pub enum Tier {
     /// 完全相同。
     Exact,
     /// 名称前缀。
@@ -645,7 +645,7 @@ pub(crate) enum Tier {
 
 /// 一次命中的排序信息。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Rank {
+pub struct Rank {
     pub tier: Tier,
     /// 命中区间长度（同档内短者优先）。
     pub span_len: usize,
@@ -675,7 +675,7 @@ fn rank(title: &str, needle: &str) -> Option<Rank> {
 }
 
 /// 命中区间（字节范围；空词返回 `(0, 0)`）。
-pub(crate) fn match_span(title: &str, needle: &str) -> Option<(usize, usize)> {
+pub fn match_span(title: &str, needle: &str) -> Option<(usize, usize)> {
     if needle.is_empty() {
         return Some((0, 0));
     }

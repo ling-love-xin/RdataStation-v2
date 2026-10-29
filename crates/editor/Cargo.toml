@@ -53,6 +53,9 @@ duckdb.workspace = true
 rfd.workspace = true
 # 通用模式执行环境（P2-a 下沉 `editor_env`）：自定义环境 id 用 `Uuid::new_v4`
 uuid.workspace = true
+# Quick Open 纯逻辑（P2-c 下沉 `quick_open/model.rs`）：`FlatFile`（文件源行）来自 scratchpad；
+# scratchpad 不依赖 editor（依赖 shared/engine/tag/settings），方向合法无环
+scratchpad.workspace = true
 
 # 测试专用特性：`host.rs` 的 `commit_in_flight_for_test` 等测试辅助按
 # `#[cfg(any(test, feature = "test-support"))]` 门控（与 paths crate 同口径）；
@@ -68,3 +71,6 @@ gpui-kit = { workspace = true, features = ["test-support"] }
 # 执行器测试（P2-a 下沉 `editor_exec`）：测试模块构造 Arrow `RecordBatch` 喂执行链
 # （`execute_duckdb_analysis_from_batches` 的入参），与 duckdb 的 arrow 同版本（58）
 arrow.workspace = true
+# Quick Open 模型测试（P2-c 下沉 `quick_open/model.rs`）：构造属性面板请求用
+# `PropertyKind`；property 仅依赖 serde/serde_json，无反向依赖，方向合法无环
+property.workspace = true

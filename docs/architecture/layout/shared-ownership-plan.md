@@ -12,7 +12,7 @@
 - 编译收益：改编辑器/资源库宿主逻辑时不再触发 workbench 全量重编。
 
 **收益口径**（可验证）：workbench 单 crate 26,204 行 → P2-a 后 21,316（-18.6%）→ P2-b 后 18,413
-（阶段 -13.6%，两阶段累计 **-29.7%**；蓝图预估 17.9k 差约 500 行 = 薄层 ~190 + 迁移保留注释/边界 ~300）。
+（阶段 -13.6%，两阶段累计 -29.7%）→ P2-c 后 **17,049**（阶段 -7.4%，三阶段累计 **-34.9%**）。
 
 ## 2. Shared 现状（47 个字段，2026-10-29 实测）
 
@@ -67,16 +67,30 @@
 
 ### 阶段 B：nav 域（最大块，收益最高，3–5 小时）
 
-`connections`（26 处）+ `selected`（13 处）+ `nav_cache_epoch`（5 处）+ `reveal_request`（2 处）+ `query_request`（2 处）迁入 `database::nav_view`：
-
-1. `NavView` 自持 `connections: Vec<ConnectionItem>` / `selected: Option<usize>` / `cache_epoch: u64`（`NavViewState` 若已有则并入）；
-2. `NavHost` trait（`crates/database/src/nav_host.rs`）收窄：删 `connections()` / `selected_index()` 等**数据读取**方法，只留**命令**（open_* / edit / delete / 项目根等）；
-3. `WorkbenchNavHost`（`components/nav_host.rs`）不再读 Shared 的 nav 数据字段；
-4. 引用点改造：所有 `shared.connections` / `shared.selected` 的 39 处改为经 `NavView` 实体或 `NavHost` 命令访问；
-5. 数据写入方改造：`services/nav_runtime` 与 `db_navigator` 写完连接后改为 `nav_panel.update(...)` 回填，不再写 Shared；
-6. 验收：`cargo check` 全绿 + `crates/database` headless 测试（`nav_view/tests.rs` 2493 行）过。
-
-> **注意**：`insight_sample_sql`（`shared.rs` L781）读 `connections` 取驱动引号——此方法被多处使用，迁移时需改为接收 `driver: &str` 参数或经端口取，不能留死引用。
+> **2026-10-29 实施前实证修订（重要）**：本阶段的 `connections` / `selected` / `nav_cache_epoch`
+> 三字段经逐点引用面实测后**判定不迁移、保留 Shared（宿主级全局状态）**，理由（证据链）：
+>
+> 1. **`connections` 是跨模块全局连接清单**（写方 4 处：`panels/shared.rs:924` apply_saved_connections /
+>    `components/nav_host.rs:394` reload / `components/project_host.rs:228` 切项目 /
+>    `panels/editor.rs:406` 连接对话框确认；读方 6 处：`components/nav_host.rs:64`（NavView 渲染）/
+>    `components/editor_host.rs:34`（editor 端口）/ `components/mock_host.rs:121`（mock 刷新）/
+>    `components/cache_dialog.rs:80` / `panels/shared.rs:668`（selected_connection）/
+>    `panels/shared.rs:781`（insight_sample_sql 取驱动引号））——**不是 nav 视图私有数据**；
+> 2. **迁入 NavView 自持会引入面板生命周期竞态**：NavView 是左 dock 面板**可被用户关闭**（weak 句柄
+>    `shared.nav_panel` 变 `None`），此时写入方（连接保存 / 项目切换）若经 `nav_panel.update` 回填则
+>    数据丢失，用户重开导航面板时连接清单为空；editor / mock / cache 读取方同样依赖 NavView 装配——
+>    与蓝图 §3 阶段 A 修订对 `pending_temp_cleanup` / `scratchpad_file_info` 的判定逻辑同源
+>    （「面板未装配时丢数据」的宿主级状态）；
+> 3. **`nav_cache_epoch` 是跨模块失效信号**（写：mock/project/nav/view；读：`panels/editor.rs:101`
+>    分析库缓存同步）——本质事件总线，不是 nav 数据；
+> 4. **NavHost::connections() / selected_index() 保留**：它们是 NavView 渲染的合理读端口
+>    （MockHost 同构），删除即断 NavView 数据源。
+>
+> **结论**：nav 域 3 字段归**宿主级**（与 §2.1 同类），阶段 B 从执行计划中移除。
+> **替代收窄（可选，未做）**：字段私有化 + 方法化收敛（connections_snapshot() 等访问器），
+> 为将来独立「连接服务」留缝——收益小（不减少行数 / 编译单位），未列入主线。
+>
+> ~~`connections`（26 处）+ `selected`（13 处）+ `nav_cache_epoch`（5 处）+ `reveal_request`（2 处）+ `query_request`（2 处）迁入 `database::nav_view`：~~ **已修订，见上。**
 
 ### 阶段 C：project 域（3–4 小时）
 
@@ -215,8 +229,8 @@ editor crate，workbench 侧 18 个 `#[gpui_kit::test]` headless 全部保留且
 ## 7. 实施顺序与验收
 
 ```
-（已执行：P2-a（editor_* 下沉，2026-10-29）→ P2-b（resource_* 下沉，2026-10-29））
-→ 阶段 B（nav 域）→ 阶段 C（project 域）→ 阶段 D（scratchpad/insight）
+（已执行：P2-a（editor_* 下沉）→ P2-b（resource_* 下沉）→ P2-c（quick_open/model+commands 下沉），均 2026-10-29）
+→ 阶段 B（nav 域：**已实证移除，见 §3 修订**）→ 阶段 C（project 域）→ 阶段 D（scratchpad/insight）
 ```
 
 > 2026-10-29 修订：原阶段 A（零风险小字段）经实施前审视移除，见 §3。起点为 nav 域。
@@ -226,6 +240,23 @@ editor crate，workbench 侧 18 个 `#[gpui_kit::test]` headless 全部保留且
 > Shared 收窄**（§5.3 修正后 exec 的唯一跨线程依赖走 `FederatedSourcePort`，其余全走 `EditorHost`）；
 > 把编译收益最大的两刀（P2-a -18.6%、P2-b 预计 -11%）先落，后续阶段 B/C/D 是特性 crate 内部的
 > 状态收窄（用户口径「其他 crate 可以单独开会后调整」），不再阻塞 workbench 主线的瘦身目标。
+>
+> **2026-10-29 实施记录（P2-c：quick_open/model + commands 下沉 editor）**：阶段 B 经实证移除后，
+> 主线继续落在「特性 crate 文件下沉」——`quick_open/model.rs`（1221 行纯数据）+ `quick_open/commands.rs`
+> 下沉 `editor::quick_open`（git rename R 两文件）。要点：
+> - **依赖面闭合（无环）**：model/commands 依赖 `crate::model::EditorMode`（同 crate）/
+>   `workbench_shell::{model, ui}`（LeftPanel/RightPanel/QUICK_OPEN_* 常量）/ `database`（SearchHit/
+>   PropertyRequest）/ `engine`（ObjectRef）/ `scratchpad`（FlatFile，editor 补依赖，scratchpad 不反依赖
+>   editor）/ dev `property`（测试构造 PropertyKind，仅 serde 依赖）——editor 已覆盖全部；
+> - **重导保路径**：workbench `quick_open/mod.rs` 改 `pub(crate) use editor::quick_open::model;`，
+>   `view.rs`/`palette.rs`/`delegate.rs`/`tests.rs` 的 `crate::quick_open::model::*` 引用零改动；
+> - **可见性**：model 全部 `pub(crate)` → `pub`（纯逻辑公开接口，可单测）；commands 保持 `pub(crate)`
+>   （仅 editor 内 model 消费）；
+> - **验证**：`cargo check -p rds-editor -p rds-workbench` exit 0；`cargo test -p rds-editor --lib`
+>   731 passed（2 个 editor_completion 后台线程 3s 硬超时在 -j 2 并行下偶发，串行 12/12 通过，
+>   P2-a 遗留测试的并发脆弱性，非本次引入）；`cargo test -p rds-workbench --lib` **30 passed**
+>   （46-16，quick_open model 测试随迁）；`cargo check -p rds-app` exit 0；
+> - **行数**：workbench 18,413 → **17,049**（-7.4%；三阶段累计 26,204 → 17,049，**-34.9%**）。
 
 每阶段验收口径：
 - `cargo check -p rds-workbench` 全绿（无新 warning）；
@@ -241,5 +272,6 @@ editor crate，workbench 侧 18 个 `#[gpui_kit::test]` headless 全部保留且
 - 阶段 D：约 4–6 小时；
 - P2-a：约 6–10 小时（16 文件迁移 + EditorHost + 测试改造）；
 - P2-b：约 4–6 小时。
+- P2-c：约 1–2 小时（2 文件 git rename + editor 依赖补齐 + 重导 + 双 crate 验证，2026-10-29 实际）。
 - **合计约 22–35 小时的人类工作量**，且每一步要求编译验证（本项目 -j 2 限制下每次 check 约 2–4 分钟）。
 - 本计划文档落盘日期：2026-10-29；实施时若源码行号漂移，以 Grep 复核为准。

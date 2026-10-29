@@ -13,10 +13,10 @@
 //! - 将来做真登记（全局登记表 + 宿主端口）时，`id` / `keywords` / `label` 原样搬迁，
 //!   只需把本表换成从登记表读。
 
-use editor::model::EditorMode;
+use crate::model::EditorMode;
 
 use crate::quick_open::model::{Action, Row, RowKind};
-use crate::view::{LeftPanel, RightPanel};
+use workbench_shell::model::{LeftPanel, RightPanel};
 
 /// 一条命令的目录项。
 pub(crate) struct CommandSpec {

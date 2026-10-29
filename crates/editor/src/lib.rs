@@ -118,6 +118,9 @@ pub mod lsp;
 pub mod view;
 /// 宿主端口实现（P2-a：原 workbench `services/editor_*` 下沉至此）
 pub mod ports;
+/// Quick Open 纯逻辑（P2-c：原 workbench `quick_open/model.rs` + `commands.rs` 下沉；
+/// 渲染与宿主动作端口留在 workbench）
+pub mod quick_open;
 
 // ═══════════════════════════════════════════════════════════════════════
 // 兼容层：目录化后保持 `editor::xxx` 与 `crate::xxx` 旧路径可用。
