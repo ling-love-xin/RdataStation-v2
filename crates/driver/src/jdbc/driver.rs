@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use crate::driver::traits::{ColumnDetail, DataSourceMeta, Database, NodeInfo, Transaction};
+use crate::traits::{ColumnDetail, DataSourceMeta, Database, NodeInfo, Transaction};
 use shared::error::{CommonError, CoreError};
 use shared::models::QueryResult;
 

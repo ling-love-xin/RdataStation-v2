@@ -21,7 +21,7 @@
 //! 运行时的位仍然由**驱动自己**给出（`DataSourceMeta` 的各构造器）——驱动知道自己的实现细节；
 //! 本字典只负责「键 ⇄ 位」的对应关系，并用测试盯住两边不漂移（`capability::tests`）。
 
-use crate::driver::traits::DataSourceMeta;
+use crate::traits::DataSourceMeta;
 
 /// 运行时能力位（`DataSourceMeta` 的布尔位）。
 ///
@@ -354,7 +354,7 @@ mod tests {
     /// - 不得标已验收（没功能，谈不上验收）。
     #[test]
     fn not_built_keys_are_claimed_by_nobody() {
-        crate::driver::AutoDriverRegistrar::register_builtin_drivers();
+        crate::AutoDriverRegistrar::register_builtin_drivers();
         let not_built: Vec<&str> = CAPABILITY_DICTIONARY
             .iter()
             .filter(|s| s.stage == Stage::NotBuilt)
@@ -374,7 +374,7 @@ mod tests {
                 spec.key
             );
         }
-        for d in crate::driver::DriverRegistry::all_descriptors() {
+        for d in crate::DriverRegistry::all_descriptors() {
             for key in d.capability_keys() {
                 assert!(
                     !not_built.contains(&key.as_str()),
@@ -389,7 +389,7 @@ mod tests {
     /// 也会让能力矩阵把它们当驱动能力逐行对比（界面读成“该驱动不支持”）。
     #[test]
     fn app_level_keys_are_declared_by_no_driver() {
-        crate::driver::AutoDriverRegistrar::register_builtin_drivers();
+        crate::AutoDriverRegistrar::register_builtin_drivers();
         let app_keys: Vec<&str> = app_level_keys().iter().map(|s| s.key).collect();
         assert!(
             app_keys.contains(&"export")
@@ -397,7 +397,7 @@ mod tests {
                 && app_keys.contains(&"resource"),
             "三个应用级键应在字典里标成 Scope::App：{app_keys:?}"
         );
-        for d in crate::driver::DriverRegistry::all_descriptors() {
+        for d in crate::DriverRegistry::all_descriptors() {
             for key in d.capability_keys() {
                 assert!(
                     !app_keys.contains(&key.as_str()),
@@ -412,9 +412,9 @@ mod tests {
     /// （否则能力矩阵会漏行——声明的键在矩阵里找不到位置）。
     #[test]
     fn driver_keys_cover_every_declared_key() {
-        crate::driver::AutoDriverRegistrar::register_builtin_drivers();
+        crate::AutoDriverRegistrar::register_builtin_drivers();
         let scope_driver: Vec<&str> = driver_keys().iter().map(|s| s.key).collect();
-        for d in crate::driver::DriverRegistry::all_descriptors() {
+        for d in crate::DriverRegistry::all_descriptors() {
             for key in d.capability_keys() {
                 assert!(
                     scope_driver.contains(&key.as_str()),
@@ -509,8 +509,8 @@ mod tests {
     #[test]
     fn declared_capabilities_and_runtime_bits_agree() {
         // 注册表是进程级 OnceLock：测试自己先注册，不依赖别的测试跑过。
-        crate::driver::AutoDriverRegistrar::register_builtin_drivers();
-        let declarations = crate::driver::DriverRegistry::all_descriptors();
+        crate::AutoDriverRegistrar::register_builtin_drivers();
+        let declarations = crate::DriverRegistry::all_descriptors();
         assert!(
             declarations.len() >= 6,
             "内置驱动声明应至少 6 条，实得 {}（内置驱动发现器没注册？）",
@@ -566,7 +566,7 @@ mod tests {
     /// 网络型驱动三个都该有，文件型一个都不该有。
     #[test]
     fn network_keys_are_derived_from_the_booleans() {
-        use crate::driver::registry::{duckdb_driver, mysql_driver, sqlite_driver};
+        use crate::registry::{duckdb_driver, mysql_driver, sqlite_driver};
 
         let mysql = mysql_driver().capability_keys();
         for key in ["ssh_tunnel", "ssl_tls", "proxy"] {

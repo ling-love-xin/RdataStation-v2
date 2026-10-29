@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use sqlx::postgres::PgPool;
 
-use crate::driver::native::postgres::PostgresDatabase;
-use crate::driver::traits::{Database, DbPool, PoolStatus};
+use crate::native::postgres::PostgresDatabase;
+use crate::traits::{Database, DbPool, PoolStatus};
 use shared::error::{ConnectionError, CoreError};
 
 pub struct PostgresPoolWrapper {

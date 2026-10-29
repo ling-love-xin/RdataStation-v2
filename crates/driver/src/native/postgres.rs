@@ -7,13 +7,13 @@ use arrow::record_batch::RecordBatch;
 use sqlx::{Column, ConnectOptions as _, Pool, Postgres, Row, SqlSafeStr, Statement, TypeInfo as _};
 use std::sync::Arc;
 
-use crate::driver::traits::MetadataBrowser;
-use crate::driver::utils::{
+use crate::traits::MetadataBrowser;
+use crate::utils::{
     affected_rows_result, batch_to_string_rows, byte_offset_for_char,
     is_read_only_sql as shared_is_read_only_sql, pg_constraint_kind, pg_fk_action, returns_rows,
     split_csv, sqlx_value_is_null, PG_LIST_CONSTRAINTS_SQL, PG_LIST_INDEXES_SQL, SqlFlavor,
 };
-use crate::driver::{
+use crate::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, PoolStatus,
     SchemaObjectKind, Transaction,
 };
@@ -281,7 +281,7 @@ fn pg_conn_result<T>(
     }
 }
 
-/// 只读语句判定：口径表在 [`crate::driver::utils::is_read_only_sql`]（六个驱动共用一份）。
+/// 只读语句判定：口径表在 [`crate::utils::is_read_only_sql`]（六个驱动共用一份）。
 fn is_read_only_sql(sql: &str) -> bool {
     shared_is_read_only_sql(sql, SqlFlavor::PostgreSql)
 }
@@ -329,7 +329,7 @@ fn build_query_result(
 /// PgRow → ColumnDetail（列序契约 0..=12：name/type/nullable/ordinal/key/default/
 /// comment/ref_table/ref_column/fk_flag/identity/generation/collation）；行短于契约时
 /// 缺的单元格按空串处理（不 panic、不吞行）。`get_table_detail` 与 `list_columns_batch` 共用。
-fn pg_rows_to_columns(result: &[sqlx::postgres::PgRow]) -> Vec<crate::driver::ColumnDetail> {
+fn pg_rows_to_columns(result: &[sqlx::postgres::PgRow]) -> Vec<crate::ColumnDetail> {
     use sqlx::Row as _;
     result
         .iter()
@@ -337,7 +337,7 @@ fn pg_rows_to_columns(result: &[sqlx::postgres::PgRow]) -> Vec<crate::driver::Co
             let cell = |i: usize| r.get::<Option<String>, _>(i).unwrap_or_default();
             let ref_table = cell(7);
             let fk_flag = cell(9);
-            crate::driver::ColumnDetail {
+            crate::ColumnDetail {
                 name: cell(0),
                 data_type: cell(1),
                 nullable: cell(2) == "YES",
@@ -346,7 +346,7 @@ fn pg_rows_to_columns(result: &[sqlx::postgres::PgRow]) -> Vec<crate::driver::Co
                 default_value: (!cell(5).is_empty()).then(|| cell(5)),
                 comment: (!cell(6).is_empty()).then(|| cell(6)),
                 is_foreign_key: fk_flag == "1" || !ref_table.is_empty(),
-                references: (!ref_table.is_empty()).then(|| crate::driver::ForeignKeyRef {
+                references: (!ref_table.is_empty()).then(|| crate::ForeignKeyRef {
                     table: ref_table,
                     column: cell(8),
                 }),
@@ -627,7 +627,7 @@ impl Database for PostgresDatabase {
         &self,
         _catalog: &str,
         schema: Option<&str>,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         let schema_name = schema.unwrap_or("public");
         self.get_tables(_catalog, schema_name).await
     }
@@ -660,7 +660,7 @@ impl Database for PostgresDatabase {
             return Ok(vec![]);
         }
         let schema_name = schema.unwrap_or("public");
-        let sql = crate::driver::utils::PG_TABLE_DETAIL_SQL;
+        let sql = crate::utils::PG_TABLE_DETAIL_SQL;
         let mut guard = lock_pg_conn(&self.conn, &self.last_used, &self.connect_url).await?;
         let conn_ref = guard
             .as_mut()
@@ -699,7 +699,7 @@ impl Database for PostgresDatabase {
         &self,
         _catalog: &str,
         schema: Option<&str>,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         let schema_name = schema.unwrap_or("public");
         let sql = "SELECT p.proname FROM pg_catalog.pg_proc p \
                    JOIN pg_catalog.pg_namespace n ON p.pronamespace = n.oid \
@@ -718,7 +718,7 @@ impl Database for PostgresDatabase {
         &self,
         _catalog: &str,
         schema: Option<&str>,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         let schema_name = schema.unwrap_or("public");
         let sql = "SELECT p.proname FROM pg_catalog.pg_proc p \
                    JOIN pg_catalog.pg_namespace n ON p.pronamespace = n.oid \
@@ -734,7 +734,7 @@ impl Database for PostgresDatabase {
         &self,
         catalog: &str,
         schema: Option<&str>,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         self.get_sequences(catalog, schema.unwrap_or("public")).await
     }
 
@@ -742,7 +742,7 @@ impl Database for PostgresDatabase {
         &self,
         catalog: &str,
         schema: Option<&str>,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         self.get_triggers(catalog, schema.unwrap_or("public")).await
     }
 
@@ -753,7 +753,7 @@ impl Database for PostgresDatabase {
         &self,
         _catalog: &str,
         schema: &str,
-    ) -> Result<crate::driver::SchemaObjects, CoreError> {
+    ) -> Result<crate::SchemaObjects, CoreError> {
         use sqlx::Row as _;
         let t_conn = std::time::Instant::now();
         // **复用常驻连接 + 快速探活**（2026-10-08 顺滑度四阶段，DBeaver 常驻连接语义）：
@@ -779,7 +779,7 @@ impl Database for PostgresDatabase {
         // 1) 表 / 视图（PG_LIST_TABLES_SQL：relkind 'v'/'m' → VIEW，其余 → BASE TABLE）
         let t_sql = std::time::Instant::now();
         let rows = tokio::time::timeout(PG_QUERY_TIMEOUT, async {
-            sqlx::query(crate::driver::utils::PG_LIST_TABLES_SQL)
+            sqlx::query(crate::utils::PG_LIST_TABLES_SQL)
                 .bind(schema)
                 .fetch_all(&mut *conn)
                 .await
@@ -787,7 +787,7 @@ impl Database for PostgresDatabase {
         .await
         .map_err(|_| {
             CoreError::database(DatabaseError::Query {
-                sql: crate::driver::utils::PG_LIST_TABLES_SQL.to_string(),
+                sql: crate::utils::PG_LIST_TABLES_SQL.to_string(),
                 reason: format!("查询超时（{} 秒无响应）", PG_QUERY_TIMEOUT.as_secs()),
                 position: None,
                 location: None,
@@ -802,12 +802,12 @@ impl Database for PostgresDatabase {
             // S3-②：第 3/4 列 = 父表名 / 分区标记（子表折叠进父表，见 PG_LIST_TABLES_SQL）。
             let parent: Option<String> = r.get::<Option<String>, _>(2);
             let is_partition: bool = r.get::<Option<bool>, _>(3).unwrap_or(false);
-            let mut node = crate::driver::NodeInfo::new(
+            let mut node = crate::NodeInfo::new(
                 name,
                 if ty == "VIEW" {
-                    crate::driver::SchemaObjectKind::View
+                    crate::SchemaObjectKind::View
                 } else {
-                    crate::driver::SchemaObjectKind::Table
+                    crate::SchemaObjectKind::Table
                 },
             );
             if let Some(p) = parent.filter(|p| !p.is_empty()) {
@@ -835,7 +835,7 @@ impl Database for PostgresDatabase {
         .map_err(|e| query_error(schema, e))?;
         let procedures = rows
             .iter()
-            .map(|r| crate::driver::NodeInfo::new(r.get::<String, _>(0), crate::driver::SchemaObjectKind::Procedure))
+            .map(|r| crate::NodeInfo::new(r.get::<String, _>(0), crate::SchemaObjectKind::Procedure))
             .collect();
 
         // 3) 函数（prokind='f'）
@@ -854,7 +854,7 @@ impl Database for PostgresDatabase {
         .map_err(|e| query_error(schema, e))?;
         let functions = rows
             .iter()
-            .map(|r| crate::driver::NodeInfo::new(r.get::<String, _>(0), crate::driver::SchemaObjectKind::Function))
+            .map(|r| crate::NodeInfo::new(r.get::<String, _>(0), crate::SchemaObjectKind::Function))
             .collect();
 
         // 4) 序列
@@ -872,7 +872,7 @@ impl Database for PostgresDatabase {
         .map_err(|e| query_error(schema, e))?;
         let sequences = rows
             .iter()
-            .map(|r| crate::driver::NodeInfo::new(r.get::<String, _>(0), crate::driver::SchemaObjectKind::Sequence))
+            .map(|r| crate::NodeInfo::new(r.get::<String, _>(0), crate::SchemaObjectKind::Sequence))
             .collect();
 
         // 5) 触发器（名字 + 所属表）
@@ -892,12 +892,12 @@ impl Database for PostgresDatabase {
         let triggers = rows
             .iter()
             .map(|r| {
-                crate::driver::NodeInfo::new(r.get::<String, _>(0), crate::driver::SchemaObjectKind::Trigger)
+                crate::NodeInfo::new(r.get::<String, _>(0), crate::SchemaObjectKind::Trigger)
                     .with_parent(r.get::<String, _>(1))
             })
             .collect();
 
-        Ok(crate::driver::SchemaObjects {
+        Ok(crate::SchemaObjects {
             tables,
             procedures,
             functions,
@@ -1027,7 +1027,7 @@ impl Database for PostgresDatabase {
         Ok(None)
     }
 
-    fn as_metadata_browser(&self) -> Option<&dyn crate::driver::MetadataBrowser> {
+    fn as_metadata_browser(&self) -> Option<&dyn crate::MetadataBrowser> {
         Some(self)
     }
 }
@@ -1148,7 +1148,7 @@ async fn execute_writing_single(url: &str, sql: &str) -> Result<QueryResult, Cor
 fn query_error(sql: &str, error: sqlx::Error) -> CoreError {
     // 对象位置（表 / 列 / 约束）走**协议字段**：PG 服务端的 locale 是中文时，消息文本
     // 也是中文（真机实测 `字段 "nope" 不存在`），解析文本会当场失效 —— 字段与语言无关。
-    let location = crate::driver::error_location::postgres_from_sqlx(&error);
+    let location = crate::error_location::postgres_from_sqlx(&error);
     let mut mapped = DatabaseError::query(sql, error.to_string()).with_location(location);
     if let Some(db) = error.as_database_error()
         && let Some(pg) = db.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()
@@ -1177,7 +1177,7 @@ fn pg_batch_timeout() -> CoreError {
 /// `Vec<T>`），`inet` / `point` 走我们自己的 wire 解码（与 Official 驱动**共用一份**，
 /// 见 `native::pg_wire`）—— 那边 `postgres-types` 连解码器都没接。
 fn pg_cell_as_text_extra(row: &sqlx::postgres::PgRow, idx: usize) -> Option<String> {
-    use crate::driver::native::pg_wire;
+    use crate::native::pg_wire;
     use sqlx::Row as _;
 
     if let Ok(Some(v)) = row.try_get::<Option<Vec<i32>>, _>(idx) {
@@ -1379,17 +1379,17 @@ fn postgres_rows_to_arrow(
 }
 
 #[async_trait::async_trait]
-impl crate::driver::MetadataBrowser for PostgresDatabase {
+impl crate::MetadataBrowser for PostgresDatabase {
     /// 列出**服务器上所有可连接的库**。
     ///
     /// 别的库里的对象要另开一条连到那个库的连接才看得到 —— 跨库这件事由
     /// `ConnectionManager::get_scoped_connection` 承担（`catalog_is_connection_scoped`
     /// 为真时上层才会去要）。
-    async fn get_catalogs(&self) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
-        let result = self.query(crate::driver::utils::PG_LIST_CATALOGS_SQL).await?;
+    async fn get_catalogs(&self) -> Result<Vec<crate::NodeInfo>, CoreError> {
+        let result = self.query(crate::utils::PG_LIST_CATALOGS_SQL).await?;
         Ok(rows_to_node_info(
             &result,
-            crate::driver::SchemaObjectKind::Catalog,
+            crate::SchemaObjectKind::Catalog,
         ))
     }
 
@@ -1401,10 +1401,10 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
     /// 这条连接绑的库（上层只查一次，之后走缓存）。
     async fn current_catalog(&self) -> Option<String> {
         let result = self
-            .query(crate::driver::utils::PG_CURRENT_DATABASE_SQL)
+            .query(crate::utils::PG_CURRENT_DATABASE_SQL)
             .await
             .ok()?;
-        crate::driver::utils::batch_to_string_rows(&result)
+        crate::utils::batch_to_string_rows(&result)
             .into_iter()
             .next()
             .and_then(|row| row.into_iter().next())
@@ -1416,12 +1416,12 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
     async fn get_schemas(
         &self,
         _catalog: &str,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
-        let sql = crate::driver::utils::PG_LIST_SCHEMAS_SQL;
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
+        let sql = crate::utils::PG_LIST_SCHEMAS_SQL;
         let result = self.query(sql).await?;
         Ok(rows_to_node_info(
             &result,
-            crate::driver::SchemaObjectKind::Schema,
+            crate::SchemaObjectKind::Schema,
         ))
     }
 
@@ -1429,12 +1429,12 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
         &self,
         _catalog: &str,
         schema: &str,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
-        let sql = crate::driver::utils::PG_LIST_TABLES_SQL;
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
+        let sql = crate::utils::PG_LIST_TABLES_SQL;
         let result = self
             .query_with_params(sql, vec![Value::Text(schema.to_string())])
             .await?;
-        let mut nodes: Vec<crate::driver::NodeInfo> = Vec::new();
+        let mut nodes: Vec<crate::NodeInfo> = Vec::new();
         for row_idx in 0..result.total_rows() {
             if let Some(batch) = result.batches.first() {
                 if row_idx < batch.num_rows() {
@@ -1444,13 +1444,13 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
                     ) {
                         let table_type = type_arr.value(row_idx);
                         let kind = if table_type == "VIEW" {
-                            crate::driver::SchemaObjectKind::View
+                            crate::SchemaObjectKind::View
                         } else {
-                            crate::driver::SchemaObjectKind::Table
+                            crate::SchemaObjectKind::Table
                         };
                         // S3-②：第 3/4 列 = 父表名 / 分区标记（PG 子表折叠进父表）。
                         // arrow StringArray 对 NULL 的 `value()` 返回空串，无需判 is_null。
-                        let mut node = crate::driver::NodeInfo::new(
+                        let mut node = crate::NodeInfo::new(
                             name_arr.value(row_idx).to_string(),
                             kind,
                         );
@@ -1484,8 +1484,8 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
         _catalog: &str,
         schema: &str,
         table: &str,
-    ) -> Result<crate::driver::NodeDetail, CoreError> {
-        let sql = crate::driver::utils::PG_TABLE_DETAIL_SQL;
+    ) -> Result<crate::NodeDetail, CoreError> {
+        let sql = crate::utils::PG_TABLE_DETAIL_SQL;
         // SQL 走 pg_catalog：`$1` = schema、`$2` = 表名（catalog 不用，见 `get_schemas`）
         // **每次新建连接**（2026-10-08 列查询冻结根治，app_run70 铁证）：列查询走
         // scoped 会话连接（query_with_params → lock_pg_conn）在本环境跨任务复用必挂
@@ -1513,8 +1513,8 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
         // 中间层）；行短于契约时缺的单元格按空串处理（不 panic、不吞行）。
         let columns = pg_rows_to_columns(&result);
 
-        Ok(crate::driver::NodeDetail {
-            node: crate::driver::NodeInfo::new(table, crate::driver::SchemaObjectKind::Table),
+        Ok(crate::NodeDetail {
+            node: crate::NodeInfo::new(table, crate::SchemaObjectKind::Table),
             columns,
             index_count: None,
             row_count_estimate: None,
@@ -1526,7 +1526,7 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
         catalog: &str,
         schema: &str,
         table: &str,
-    ) -> Result<Vec<crate::driver::IndexDetail>, CoreError> {
+    ) -> Result<Vec<crate::IndexDetail>, CoreError> {
         self.list_indexes(catalog, Some(schema), table).await
     }
 
@@ -1535,7 +1535,7 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
         catalog: &str,
         schema: &str,
         table: &str,
-    ) -> Result<Vec<crate::driver::ConstraintDetail>, CoreError> {
+    ) -> Result<Vec<crate::ConstraintDetail>, CoreError> {
         self.list_constraints(catalog, Some(schema), table).await
     }
 
@@ -1546,7 +1546,7 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
         &self,
         _catalog: &str,
         schema: &str,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         let sql = "SELECT sequence_name FROM information_schema.sequences \
                    WHERE sequence_schema = $1 ORDER BY sequence_name";
         let result = self
@@ -1554,7 +1554,7 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
             .await?;
         Ok(names_to_nodes(
             &result,
-            crate::driver::SchemaObjectKind::Sequence,
+            crate::SchemaObjectKind::Sequence,
         ))
     }
 
@@ -1562,7 +1562,7 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
         &self,
         _catalog: &str,
         schema: &str,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         // 只取「名字 + 所属表」：触发事件（event_manipulation）当前没有展示位，不查。
         let sql = "SELECT trigger_name, event_object_table \
                    FROM information_schema.triggers \
@@ -1576,16 +1576,16 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
 
 fn rows_to_node_info(
     result: &QueryResult,
-    kind: crate::driver::SchemaObjectKind,
-) -> Vec<crate::driver::NodeInfo> {
-    let mut nodes: Vec<crate::driver::NodeInfo> = Vec::new();
+    kind: crate::SchemaObjectKind,
+) -> Vec<crate::NodeInfo> {
+    let mut nodes: Vec<crate::NodeInfo> = Vec::new();
     for row_idx in 0..result.total_rows() {
         if let Some(batch) = result.batches.first() {
             if row_idx < batch.num_rows() {
                 if let Some(arr) = batch.column(0).as_any().downcast_ref::<StringArray>() {
                     let name = arr.value(row_idx);
                     if !name.is_empty() {
-                        nodes.push(crate::driver::NodeInfo::new(name.to_string(), kind.clone()));
+                        nodes.push(crate::NodeInfo::new(name.to_string(), kind.clone()));
                     }
                 }
             }
@@ -1597,14 +1597,14 @@ fn rows_to_node_info(
 /// 单列名字结果集 → 对象列表（例程 / 序列）。
 fn names_to_nodes(
     result: &QueryResult,
-    kind: crate::driver::SchemaObjectKind,
-) -> Vec<crate::driver::NodeInfo> {
+    kind: crate::SchemaObjectKind,
+) -> Vec<crate::NodeInfo> {
     rows_to_node_info(result, kind)
 }
 
 /// 触发器结果集 → 对象列表（第 2 列是所属表，进 `parent_name`）。
-fn names_to_trigger_nodes(result: &QueryResult) -> Vec<crate::driver::NodeInfo> {
-    let mut nodes: Vec<crate::driver::NodeInfo> = Vec::new();
+fn names_to_trigger_nodes(result: &QueryResult) -> Vec<crate::NodeInfo> {
+    let mut nodes: Vec<crate::NodeInfo> = Vec::new();
     for row_idx in 0..result.total_rows() {
         let Some(batch) = result.batches.first() else {
             break;
@@ -1620,7 +1620,7 @@ fn names_to_trigger_nodes(result: &QueryResult) -> Vec<crate::driver::NodeInfo> 
             continue;
         }
         let mut node =
-            crate::driver::NodeInfo::new(name.to_string(), crate::driver::SchemaObjectKind::Trigger);
+            crate::NodeInfo::new(name.to_string(), crate::SchemaObjectKind::Trigger);
         if let Some(table_arr) = batch.column(1).as_any().downcast_ref::<StringArray>() {
             if !table_arr.is_null(row_idx) {
                 node = node.with_parent(table_arr.value(row_idx));
@@ -1634,7 +1634,7 @@ fn names_to_trigger_nodes(result: &QueryResult) -> Vec<crate::driver::NodeInfo> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::driver::Database;
+    use crate::Database;
 
     const PG_URL: &str = "postgresql://postgres:postgresql@localhost:5432/business_db";
 

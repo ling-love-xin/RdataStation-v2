@@ -20,6 +20,7 @@ members = [
     "crates/plugin",
     "crates/sql",
     "crates/store",
+    "crates/driver",
     "crates/paths",
     "crates/shared",
     "crates/settings",
@@ -73,6 +74,8 @@ plugin = { path = "crates/plugin", package = "rds-plugin" }
 rds-sql = { path = "crates/sql", package = "rds-sql" }
 # 存储层（persistence/migration/logging 强耦合簇，engine 瘦身第二刀抽取）
 rds-store = { path = "crates/store", package = "rds-store" }
+# 驱动层（Database/Transaction/Stream trait + 注册发现 + 连接池 + native 实现，engine 瘦身第三刀抽取）
+rds-driver = { path = "crates/driver", package = "rds-driver" }
 # 结果集面板（DBeaver Data Editor 方向）：结果域视图 + 结果存储独立成 crate，
 # 依赖方向 result_panel → {engine, gpui-kit, workbench_shell}，editor 依赖它、它不反向依赖 editor
 result_panel = { path = "crates/result_panel", package = "rds-result-panel" }

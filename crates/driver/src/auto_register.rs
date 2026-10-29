@@ -9,8 +9,8 @@
 //! 3. 在 loader.rs BuiltinDriverDiscovery::builtin_factories() 添加一行 → 唯一修改点
 //!    （auto_register.rs 和 manager.rs 自动同步，无需修改）
 
-use crate::driver::loader::BuiltinDriverDiscovery;
-use crate::driver::DriverRegistry;
+use crate::loader::BuiltinDriverDiscovery;
+use crate::DriverRegistry;
 
 /// 驱动自动注册器
 ///
@@ -51,7 +51,7 @@ impl AutoDriverRegistrar {
 #[macro_export]
 macro_rules! register_driver {
     ($factory:ty) => {
-        $crate::driver::DriverRegistry::register($factory);
+        $crate::DriverRegistry::register($factory);
     };
 }
 
@@ -60,7 +60,7 @@ macro_rules! register_driver {
 macro_rules! register_drivers {
     ($($factory:ty),+ $(,)?) => {
         $(
-            $crate::driver::DriverRegistry::register($factory);
+            $crate::DriverRegistry::register($factory);
         )+
     };
 }

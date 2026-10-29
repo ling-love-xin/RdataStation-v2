@@ -3,7 +3,7 @@ use tokio::sync::RwLock;
 
 use super::loader::BuiltinDriverDiscovery;
 use super::registry::DriverConnectionConfig;
-use crate::driver::{DriverDescriptor, DriverFactory, DynDatabase};
+use crate::{DriverDescriptor, DriverFactory, DynDatabase};
 use shared::error::{ConnectionError, CoreError};
 
 /// 驱动状态

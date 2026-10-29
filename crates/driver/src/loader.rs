@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::driver::DriverFactory;
+use crate::DriverFactory;
 use shared::error::CoreError;
 
 /// 驱动加载器
@@ -101,12 +101,12 @@ impl BuiltinDriverDiscovery {
     /// | duckdb          | duckdb-rs             |
     pub fn builtin_factories() -> Vec<Arc<dyn DriverFactory>> {
         vec![
-            Arc::new(crate::driver::factory::MySqlDriverFactory),
-            Arc::new(crate::driver::factory::MySqlNativeDriverFactory),
-            Arc::new(crate::driver::factory::PostgresDriverFactory),
-            Arc::new(crate::driver::factory::PostgresNativeDriverFactory),
-            Arc::new(crate::driver::factory::SqliteDriverFactory),
-            Arc::new(crate::driver::factory::DuckDbDriverFactory),
+            Arc::new(crate::factory::MySqlDriverFactory),
+            Arc::new(crate::factory::MySqlNativeDriverFactory),
+            Arc::new(crate::factory::PostgresDriverFactory),
+            Arc::new(crate::factory::PostgresNativeDriverFactory),
+            Arc::new(crate::factory::SqliteDriverFactory),
+            Arc::new(crate::factory::DuckDbDriverFactory),
         ]
     }
 

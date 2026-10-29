@@ -16,13 +16,13 @@ use std::time::Duration;
 
 use tokio::sync::Mutex;
 
-use crate::driver::traits::MetadataBrowser;
-use crate::driver::utils::{
+use crate::traits::MetadataBrowser;
+use crate::utils::{
     affected_rows_result, batch_to_string_rows, byte_offset_for_char,
     is_read_only_sql as shared_is_read_only_sql, pg_constraint_kind, pg_fk_action, returns_rows,
     split_csv, PG_LIST_CONSTRAINTS_SQL, PG_LIST_INDEXES_SQL, SqlFlavor,
 };
-use crate::driver::{
+use crate::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, NodeDetail, NodeInfo,
     PoolStatus, SchemaObjectKind, Transaction,
 };
@@ -195,7 +195,7 @@ fn tls_config_err(reason: String) -> CoreError {
 // SQL 工具函数
 // ============================================================================
 
-/// 只读语句判定：口径表在 [`crate::driver::utils::is_read_only_sql`]（六个驱动共用一份）。
+/// 只读语句判定：口径表在 [`crate::utils::is_read_only_sql`]（六个驱动共用一份）。
 fn is_read_only_sql(sql: &str) -> bool {
     shared_is_read_only_sql(sql, SqlFlavor::PostgreSql)
 }
@@ -246,7 +246,7 @@ fn query_error(sql: &str, error: tokio_postgres::Error) -> CoreError {
     }
 
     // 同 sqlx 那条：位置走协议字段，不解析文本（locale 无关）
-    let location = crate::driver::error_location::postgres_from_tokio(&error);
+    let location = crate::error_location::postgres_from_tokio(&error);
     let mut mapped = DatabaseError::query(sql, reason).with_location(location);
     if let Some(tokio_postgres::error::ErrorPosition::Original(position)) = db.position()
         && let Some(offset) = byte_offset_for_char(sql, *position as usize)
@@ -305,7 +305,7 @@ fn pg_native_cell_as_text(row: &tokio_postgres::Row, idx: usize) -> Option<Strin
     // PG 专有的那五类：`postgres-types` 对 `NUMERIC` / `INTERVAL` 压根没有 `FromSql`，
     // `inet` / `point` 有解码器但没接上，数组则从来没试过 —— 它们此前一律交 NULL
     // （真机实测：金额、时间间隔、网络地址、几何点、数组全是空白格）。
-    use crate::driver::native::pg_wire;
+    use crate::native::pg_wire;
     if let Ok(Some(v)) = row.try_get::<_, Option<pg_wire::PgNumeric>>(idx) {
         return Some(v.0);
     }
@@ -1098,7 +1098,7 @@ impl Drop for PostgresNativeTransaction {
 impl MetadataBrowser for PostgresNativeDatabase {
     /// 列出**服务器上所有可连接的库**（同 sqlx 驱动）。
     async fn get_catalogs(&self) -> Result<Vec<NodeInfo>, CoreError> {
-        let result = self.query(crate::driver::utils::PG_LIST_CATALOGS_SQL).await?;
+        let result = self.query(crate::utils::PG_LIST_CATALOGS_SQL).await?;
         Ok(rows_to_node_info(&result, SchemaObjectKind::Catalog))
     }
 
@@ -1110,10 +1110,10 @@ impl MetadataBrowser for PostgresNativeDatabase {
     /// 这条连接绑的库（上层只查一次，之后走缓存）。
     async fn current_catalog(&self) -> Option<String> {
         let result = self
-            .query(crate::driver::utils::PG_CURRENT_DATABASE_SQL)
+            .query(crate::utils::PG_CURRENT_DATABASE_SQL)
             .await
             .ok()?;
-        crate::driver::utils::batch_to_string_rows(&result)
+        crate::utils::batch_to_string_rows(&result)
             .into_iter()
             .next()
             .and_then(|row| row.into_iter().next())
@@ -1123,14 +1123,14 @@ impl MetadataBrowser for PostgresNativeDatabase {
     /// 一条连接只绑一个库，schema 内省只在当前库里做 —— 所以 `catalog` 参数**不用**
     /// （跨库浏览要靠「按库另开连接」，见 `get_catalogs` 的说明）。
     async fn get_schemas(&self, _catalog: &str) -> Result<Vec<NodeInfo>, CoreError> {
-        let sql = crate::driver::utils::PG_LIST_SCHEMAS_SQL;
+        let sql = crate::utils::PG_LIST_SCHEMAS_SQL;
         let result = self.query(sql).await?;
         Ok(rows_to_node_info(&result, SchemaObjectKind::Schema))
     }
 
     async fn get_tables(&self, _catalog: &str, schema: &str) -> Result<Vec<NodeInfo>, CoreError> {
         use arrow::array::StringArray;
-        let sql = crate::driver::utils::PG_LIST_TABLES_SQL;
+        let sql = crate::utils::PG_LIST_TABLES_SQL;
         let result = self
             .query_with_params(sql, vec![Value::Text(schema.to_string())])
             .await?;
@@ -1185,7 +1185,7 @@ impl MetadataBrowser for PostgresNativeDatabase {
         schema: &str,
         table: &str,
     ) -> Result<NodeDetail, CoreError> {
-        let sql = crate::driver::utils::PG_TABLE_DETAIL_SQL;
+        let sql = crate::utils::PG_TABLE_DETAIL_SQL;
         // SQL 走 pg_catalog：`$1` = schema、`$2` = 表名（catalog 不用，见 `get_schemas`）
         let result = self
             .query_with_params(
@@ -1196,7 +1196,7 @@ impl MetadataBrowser for PostgresNativeDatabase {
                 ],
             )
             .await?;
-        let columns = crate::driver::utils::columns_from_detail_rows(&result);
+        let columns = crate::utils::columns_from_detail_rows(&result);
 
         Ok(NodeDetail {
             node: NodeInfo::new(table, SchemaObjectKind::Table),
@@ -1251,7 +1251,7 @@ impl MetadataBrowser for PostgresNativeDatabase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::driver::Database;
+    use crate::Database;
 
     const PG_URL: &str = "postgresql://postgres:postgresql@localhost:5432/business_db";
 

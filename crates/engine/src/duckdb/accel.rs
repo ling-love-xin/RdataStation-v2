@@ -391,7 +391,7 @@ pub(crate) fn run_sql_on(
     if data.is_empty() {
         return Ok(QueryResult::with_batches(columns, vec![], Some(true)));
     }
-    let batch = crate::duckdb::row_to_arrow::duckdb_rows_to_arrow(&columns, &data)?;
+    let batch = shared::duckdb_rows::duckdb_rows_to_arrow(&columns, &data)?;
     Ok(QueryResult::with_batches(columns, vec![batch], Some(true)))
 }
 

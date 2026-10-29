@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::driver::native::sqlite::SqliteDatabase;
-use crate::driver::traits::{Database, DbPool, PoolStatus};
+use crate::native::sqlite::SqliteDatabase;
+use crate::traits::{Database, DbPool, PoolStatus};
 use shared::error::{ConnectionError, CoreError};
 
 const DEFAULT_POOL_SIZE: usize = 5;

@@ -3,11 +3,11 @@ use std::sync::Arc;
 use connection::config::ConnectionMethod;
 use connection::{ConnectionConfig, ConnectionFactory};
 use super::registry::DriverConnectionConfig;
-use crate::driver::native::{
+use crate::native::{
     duckdb::DuckDbDatabase, mysql::MySqlDatabase, mysql_native::MySqlNativeDatabase,
     postgres::PostgresDatabase, postgres_native::PostgresNativeDatabase, sqlite::SqliteDatabase,
 };
-use crate::driver::{DriverDescriptor, DriverFactory, DynDatabase};
+use crate::{DriverDescriptor, DriverFactory, DynDatabase};
 use shared::error::{ConnectionError, CoreError};
 
 /// MySQL 驱动工厂
@@ -18,7 +18,7 @@ pub struct MySqlDriverFactory;
 
 impl DriverFactory for MySqlDriverFactory {
     fn descriptor(&self) -> DriverDescriptor {
-        crate::driver::registry::mysql_driver()
+        crate::registry::mysql_driver()
     }
 
     fn create(
@@ -49,7 +49,7 @@ pub struct PostgresDriverFactory;
 
 impl DriverFactory for PostgresDriverFactory {
     fn descriptor(&self) -> DriverDescriptor {
-        crate::driver::registry::postgres_driver()
+        crate::registry::postgres_driver()
     }
 
     fn create(
@@ -167,7 +167,7 @@ pub struct SqliteDriverFactory;
 
 impl DriverFactory for SqliteDriverFactory {
     fn descriptor(&self) -> DriverDescriptor {
-        crate::driver::registry::sqlite_driver()
+        crate::registry::sqlite_driver()
     }
 
     fn create(
@@ -224,7 +224,7 @@ pub struct DuckDbDriverFactory;
 
 impl DriverFactory for DuckDbDriverFactory {
     fn descriptor(&self) -> DriverDescriptor {
-        crate::driver::registry::duckdb_driver()
+        crate::registry::duckdb_driver()
     }
 
     fn create(
@@ -292,7 +292,7 @@ pub(crate) fn mysql_native_url(config: &DriverConnectionConfig) -> Result<String
 
 impl DriverFactory for MySqlNativeDriverFactory {
     fn descriptor(&self) -> DriverDescriptor {
-        crate::driver::registry::mysql_native_driver()
+        crate::registry::mysql_native_driver()
     }
 
     fn create(
@@ -345,7 +345,7 @@ fn invalid_config(
 
 impl DriverFactory for PostgresNativeDriverFactory {
     fn descriptor(&self) -> DriverDescriptor {
-        crate::driver::registry::postgres_native_driver()
+        crate::registry::postgres_native_driver()
     }
 
     fn create(
@@ -383,8 +383,8 @@ mod tests {
             .with_url_override(format!("sqlite://{}", path.display()))
             .with_driver_property("journal_mode", "wal");
 
-        crate::driver::AutoDriverRegistrar::register_builtin_drivers();
-        let _db = crate::driver::DataSourceRouter::route(config)
+        crate::AutoDriverRegistrar::register_builtin_drivers();
+        let _db = crate::DataSourceRouter::route(config)
             .await
             .expect("路由建连");
 

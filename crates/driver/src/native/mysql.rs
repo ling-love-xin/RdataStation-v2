@@ -3,17 +3,17 @@ use sqlx::{Column, ConnectOptions as _, MySql, Pool, Row, SqlSafeStr, Statement,
 /// 单列名字结果集 → 对象列表（例程 / 序列等只在内省里露名字的类别）。
 fn names_to_nodes(
     result: &QueryResult,
-    kind: crate::driver::SchemaObjectKind,
-) -> Vec<crate::driver::NodeInfo> {
+    kind: crate::SchemaObjectKind,
+) -> Vec<crate::NodeInfo> {
     use arrow::array::StringArray;
-    let mut nodes: Vec<crate::driver::NodeInfo> = Vec::new();
+    let mut nodes: Vec<crate::NodeInfo> = Vec::new();
     for row_idx in 0..result.total_rows() {
         if let Some(batch) = result.batches.first() {
             if row_idx < batch.num_rows() {
                 if let Some(arr) = batch.column(0).as_any().downcast_ref::<StringArray>() {
                     let name = arr.value(row_idx);
                     if !name.is_empty() {
-                        nodes.push(crate::driver::NodeInfo::new(name.to_string(), kind.clone()));
+                        nodes.push(crate::NodeInfo::new(name.to_string(), kind.clone()));
                     }
                 }
             }
@@ -26,12 +26,12 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
-use crate::driver::traits::MetadataBrowser;
-use crate::driver::utils::{
+use crate::traits::MetadataBrowser;
+use crate::utils::{
     affected_rows_result, is_read_only_sql as shared_is_read_only_sql, returns_rows,
     sqlx_value_is_null, MY_LIST_CONSTRAINTS_SQL, SqlFlavor,
 };
-use crate::driver::{
+use crate::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, PoolStatus,
     SchemaObjectKind, Transaction,
 };
@@ -281,7 +281,7 @@ fn mysql_conn_result<T>(
     }
 }
 
-/// 只读语句判定：口径表在 [`crate::driver::utils::is_read_only_sql`]（六个驱动共用一份）。
+/// 只读语句判定：口径表在 [`crate::utils::is_read_only_sql`]（六个驱动共用一份）。
 fn is_read_only_sql(sql: &str) -> bool {
     shared_is_read_only_sql(sql, SqlFlavor::MySql)
 }
@@ -289,7 +289,7 @@ fn is_read_only_sql(sql: &str) -> bool {
 /// MySqlRow → ColumnDetail（列序契约 0..=12：name/type/nullable/ordinal/key/default/
 /// comment/ref_table/ref_column/fk_flag/identity/generation/collation）；行短于契约时
 /// 缺的单元格按空串处理。`get_table_detail` 与 `list_columns_batch` 共用。
-fn mysql_rows_to_columns(result: &[sqlx::mysql::MySqlRow]) -> Vec<crate::driver::ColumnDetail> {
+fn mysql_rows_to_columns(result: &[sqlx::mysql::MySqlRow]) -> Vec<crate::ColumnDetail> {
     use sqlx::Row as _;
     result
         .iter()
@@ -297,7 +297,7 @@ fn mysql_rows_to_columns(result: &[sqlx::mysql::MySqlRow]) -> Vec<crate::driver:
             let cell = |i: usize| r.get::<Option<String>, _>(i).unwrap_or_default();
             let ref_table = cell(7);
             let fk_flag = cell(9);
-            crate::driver::ColumnDetail {
+            crate::ColumnDetail {
                 name: cell(0),
                 data_type: cell(1),
                 nullable: cell(2) == "YES",
@@ -306,7 +306,7 @@ fn mysql_rows_to_columns(result: &[sqlx::mysql::MySqlRow]) -> Vec<crate::driver:
                 default_value: (!cell(5).is_empty()).then(|| cell(5)),
                 comment: (!cell(6).is_empty()).then(|| cell(6)),
                 is_foreign_key: fk_flag == "1" || !ref_table.is_empty(),
-                references: (!ref_table.is_empty()).then(|| crate::driver::ForeignKeyRef {
+                references: (!ref_table.is_empty()).then(|| crate::ForeignKeyRef {
                     table: ref_table,
                     column: cell(8),
                 }),
@@ -562,7 +562,7 @@ impl Database for MySqlDatabase {
         &self,
         catalog: &str,
         _schema: Option<&str>,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         // MySQL 的 database 即 schema（见 `has_schema_level`）。
         self.get_tables(catalog, catalog).await
     }
@@ -590,7 +590,7 @@ impl Database for MySqlDatabase {
             return Ok(vec![]);
         }
         let schema_name = schema.unwrap_or(catalog);
-        let sql = crate::driver::utils::MY_TABLE_DETAIL_SQL;
+        let sql = crate::utils::MY_TABLE_DETAIL_SQL;
         let mut guard = lock_mysql_conn(&self.conn, &self.last_used, &self.connect_url).await?;
         let conn_ref = guard
             .as_mut()
@@ -752,7 +752,7 @@ impl Database for MySqlDatabase {
         &self,
         catalog: &str,
         _schema: Option<&str>,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         let sql = "\
             SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES \
              WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'PROCEDURE' \
@@ -767,7 +767,7 @@ impl Database for MySqlDatabase {
         &self,
         catalog: &str,
         _schema: Option<&str>,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         let sql = "\
             SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES \
              WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'FUNCTION' \
@@ -794,7 +794,7 @@ impl Database for MySqlDatabase {
         let esc_name = name.replace('`', "``");
         let sql = format!("SHOW CREATE {} `{}`.`{}`", stmt_type, esc_catalog, esc_name,);
         let result = self.query(&sql).await?;
-        Ok(crate::driver::utils::create_statement(&result))
+        Ok(crate::utils::create_statement(&result))
     }
 
     /// 源版 DDL：`SHOW CREATE TABLE`（对视图也有效 —— 返回的列名是 `Create View`）。
@@ -804,17 +804,17 @@ impl Database for MySqlDatabase {
         _schema: Option<&str>,
         table: &str,
     ) -> Result<Option<String>, CoreError> {
-        use crate::driver::utils::quote_identifier;
+        use crate::utils::quote_identifier;
         let sql = format!(
             "SHOW CREATE TABLE {}.{}",
             quote_identifier(catalog, '`'),
             quote_identifier(table, '`')
         );
         let result = self.query(&sql).await?;
-        Ok(crate::driver::utils::create_statement(&result))
+        Ok(crate::utils::create_statement(&result))
     }
 
-    fn as_metadata_browser(&self) -> Option<&dyn crate::driver::MetadataBrowser> {
+    fn as_metadata_browser(&self) -> Option<&dyn crate::MetadataBrowser> {
         Some(self)
     }
 
@@ -825,7 +825,7 @@ impl Database for MySqlDatabase {
         &self,
         catalog: &str,
         schema: &str,
-    ) -> Result<crate::driver::SchemaObjects, CoreError> {
+    ) -> Result<crate::SchemaObjects, CoreError> {
         use sqlx::Row as _;
         // MySQL 的 schema 参数即 catalog（information_schema 按 ROUTINE_SCHEMA/TABLE_SCHEMA 过滤）。
         let _ = schema;
@@ -852,12 +852,12 @@ impl Database for MySqlDatabase {
         for r in &rows {
             let name: String = r.get(0);
             let ty: String = r.get(1);
-            tables.push(crate::driver::NodeInfo::new(
+            tables.push(crate::NodeInfo::new(
                 name,
                 if ty == "VIEW" {
-                    crate::driver::SchemaObjectKind::View
+                    crate::SchemaObjectKind::View
                 } else {
-                    crate::driver::SchemaObjectKind::Table
+                    crate::SchemaObjectKind::Table
                 },
             ));
         }
@@ -877,7 +877,7 @@ impl Database for MySqlDatabase {
         .map_err(|e| mysql_query_error(catalog, &e))?;
         let procedures = rows
             .iter()
-            .map(|r| crate::driver::NodeInfo::new(r.get::<String, _>(0), crate::driver::SchemaObjectKind::Procedure))
+            .map(|r| crate::NodeInfo::new(r.get::<String, _>(0), crate::SchemaObjectKind::Procedure))
             .collect();
 
         // 3) 函数（ROUTINES WHERE TYPE='FUNCTION'）
@@ -895,7 +895,7 @@ impl Database for MySqlDatabase {
         .map_err(|e| mysql_query_error(catalog, &e))?;
         let functions = rows
             .iter()
-            .map(|r| crate::driver::NodeInfo::new(r.get::<String, _>(0), crate::driver::SchemaObjectKind::Function))
+            .map(|r| crate::NodeInfo::new(r.get::<String, _>(0), crate::SchemaObjectKind::Function))
             .collect();
 
         // 4) 序列：MySQL 无独立序列对象 → 空
@@ -917,12 +917,12 @@ impl Database for MySqlDatabase {
         let triggers = rows
             .iter()
             .map(|r| {
-                crate::driver::NodeInfo::new(r.get::<String, _>(0), crate::driver::SchemaObjectKind::Trigger)
+                crate::NodeInfo::new(r.get::<String, _>(0), crate::SchemaObjectKind::Trigger)
                     .with_parent(r.get::<String, _>(1))
             })
             .collect();
 
-        Ok(crate::driver::SchemaObjects {
+        Ok(crate::SchemaObjects {
             tables,
             procedures,
             functions,
@@ -1079,11 +1079,11 @@ fn first_keywords(sql: &str, count: usize) -> String {
 /// mysql 错误 → 引擎错误；**带上数据库指认的对象**（表 / 列 / 约束）。
 ///
 /// MySQL 的协议层没有这些字段（那是 PG 才有的），所以从消息文本里认 ——
-/// 形态与样本见 `crate::driver::error_location::mysql`。拿不到就是 `None`，
+/// 形态与样本见 `crate::error_location::mysql`。拿不到就是 `None`，
 /// 界面不写一句空话。
 fn mysql_query_error(sql: &str, error: &sqlx::Error) -> CoreError {
     let message = error.to_string();
-    let location = crate::driver::error_location::mysql(&message);
+    let location = crate::error_location::mysql(&message);
     CoreError::database(DatabaseError::query(sql, message).with_location(location))
 }
 
@@ -1431,7 +1431,7 @@ fn mysql_rows_to_arrow(
 }
 
 #[async_trait::async_trait]
-impl crate::driver::MetadataBrowser for MySqlDatabase {
+impl crate::MetadataBrowser for MySqlDatabase {
     fn has_schema_level(&self) -> bool {
         false
     }
@@ -1442,7 +1442,7 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
         false
     }
 
-    async fn get_catalogs(&self) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    async fn get_catalogs(&self) -> Result<Vec<crate::NodeInfo>, CoreError> {
         let result = self
             .query("SELECT schema_name FROM information_schema.schemata ORDER BY schema_name")
             .await?;
@@ -1455,7 +1455,7 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
             "performance_schema",
             "sys",
         ];
-        let nodes: Vec<crate::driver::NodeInfo> = (0..result.total_rows())
+        let nodes: Vec<crate::NodeInfo> = (0..result.total_rows())
             .filter_map(|row_idx| {
                 result.batches.iter().find_map(|batch| {
                     if row_idx < batch.num_rows() {
@@ -1464,9 +1464,9 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
                             .as_any()
                             .downcast_ref::<StringArray>()
                             .map(|arr| {
-                                crate::driver::NodeInfo::new(
+                                crate::NodeInfo::new(
                                     arr.value(row_idx).to_string(),
-                                    crate::driver::SchemaObjectKind::Catalog,
+                                    crate::SchemaObjectKind::Catalog,
                                 )
                             })
                     } else {
@@ -1479,7 +1479,7 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
         Ok(nodes)
     }
 
-    async fn get_schemas(&self, _catalog: &str) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    async fn get_schemas(&self, _catalog: &str) -> Result<Vec<crate::NodeInfo>, CoreError> {
         // MySQL 的 database 即 schema，没有独立的 Schema 层级（`has_schema_level` 为 false）。
         // 返回空而非回退为 catalog 列表，避免导航树出现同名重复层。
         Ok(vec![])
@@ -1489,12 +1489,12 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
         &self,
         catalog: &str,
         _schema: &str,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         let sql = "SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = ? ORDER BY table_name";
         let result = self
             .query_with_params(sql, vec![Value::Text(catalog.to_string())])
             .await?;
-        let nodes: Vec<crate::driver::NodeInfo> = (0..result.total_rows())
+        let nodes: Vec<crate::NodeInfo> = (0..result.total_rows())
             .filter_map(|row_idx| {
                 result.batches.iter().find_map(|batch| {
                     if row_idx < batch.num_rows() {
@@ -1504,11 +1504,11 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
                         ) {
                             let table_type = type_arr.value(row_idx);
                             let kind = if table_type == "VIEW" {
-                                crate::driver::SchemaObjectKind::View
+                                crate::SchemaObjectKind::View
                             } else {
-                                crate::driver::SchemaObjectKind::Table
+                                crate::SchemaObjectKind::Table
                             };
-                            Some(crate::driver::NodeInfo::new(
+                            Some(crate::NodeInfo::new(
                                 name_arr.value(row_idx).to_string(),
                                 kind,
                             ))
@@ -1529,8 +1529,8 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
         catalog: &str,
         _schema: &str,
         table: &str,
-    ) -> Result<crate::driver::NodeDetail, CoreError> {
-        let sql = crate::driver::utils::MY_TABLE_DETAIL_SQL;
+    ) -> Result<crate::NodeDetail, CoreError> {
+        let sql = crate::utils::MY_TABLE_DETAIL_SQL;
         // **每次新建连接**（2026-10-08 列查询冻结根治，同 postgres.rs）：列查询走
         // scoped 会话连接在本环境跨任务复用必挂（列预取 5s 超时占住信号量）；单条
         // 列查询新建连接可接受且自带健康，连接随函数结束 drop。
@@ -1556,8 +1556,8 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
         // 处理（不 panic、不吞行）。
         let columns = mysql_rows_to_columns(&result);
 
-        Ok(crate::driver::NodeDetail {
-            node: crate::driver::NodeInfo::new(table, crate::driver::SchemaObjectKind::Table),
+        Ok(crate::NodeDetail {
+            node: crate::NodeInfo::new(table, crate::SchemaObjectKind::Table),
             columns,
             index_count: None,
             row_count_estimate: None,
@@ -1569,7 +1569,7 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
         catalog: &str,
         schema: &str,
         table: &str,
-    ) -> Result<Vec<crate::driver::IndexDetail>, CoreError> {
+    ) -> Result<Vec<crate::IndexDetail>, CoreError> {
         self.list_indexes(catalog, Some(schema), table).await
     }
 
@@ -1578,7 +1578,7 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
         catalog: &str,
         schema: &str,
         table: &str,
-    ) -> Result<Vec<crate::driver::ConstraintDetail>, CoreError> {
+    ) -> Result<Vec<crate::ConstraintDetail>, CoreError> {
         self.list_constraints(catalog, Some(schema), table).await
     }
 }
@@ -1636,7 +1636,7 @@ mod tests {
         assert_eq!(declared_numeric_rank("DOUBLE"), Some(3));
         assert_eq!(declared_numeric_rank("FLOAT"), Some(3));
     }
-    use crate::driver::Database;
+    use crate::Database;
 
     const MYSQL_URL: &str = "mysql://root:root@localhost:3306/";
 

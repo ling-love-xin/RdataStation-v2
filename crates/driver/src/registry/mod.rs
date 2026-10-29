@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock, RwLock};
 
-use crate::driver::traits::Database;
+use crate::traits::Database;
 use shared::error::CoreError;
 
 pub use config::DriverConnectionConfig;

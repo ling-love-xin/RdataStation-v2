@@ -750,8 +750,8 @@ mod tests {
     use super::*;
 
     fn builtin_drivers() -> Vec<String> {
-        crate::driver::AutoDriverRegistrar::register_builtin_drivers();
-        let mut ids = crate::driver::DriverRegistry::all_driver_ids();
+        crate::AutoDriverRegistrar::register_builtin_drivers();
+        let mut ids = crate::DriverRegistry::all_driver_ids();
         ids.sort();
         ids
     }

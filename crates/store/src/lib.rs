@@ -10,3 +10,5 @@
 pub mod persistence;
 pub mod migration;
 pub mod logging;
+
+pub mod duckdb_config;

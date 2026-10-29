@@ -37,8 +37,8 @@ use sqlglot_rust::{
     pushdown_predicates, transpile, transpile_statements,
 };
 
-// 集成测试是独立 crate：本包库目标名是 `rds_engine`（包名 `rds-engine`），不是其它 crate 里的依赖别名
-use rds_engine::{SqlDialect, SqlEngine};
+// 集成测试是独立 crate：本包库目标名是 `rds_sql`（包名 `rds-sql`），不是其它 crate 里的依赖别名
+use rds_sql::{SqlDialect, SqlEngine};
 
 // ═══════════════════════════════════════════════════════════════════════
 // 探针 SQL（结构化、贴近真实报表写法）

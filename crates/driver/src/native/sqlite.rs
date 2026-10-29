@@ -16,11 +16,11 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
-use crate::driver::utils::{
+use crate::utils::{
     affected_rows_result, is_read_only_sql as shared_is_read_only_sql, quote_identifier,
     returns_rows, SqlFlavor,
 };
-use crate::driver::{
+use crate::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, ForeignKeyRef, IndexDetail, Transaction,
 };
 use shared::error::{CoreError, DatabaseError};
@@ -29,7 +29,7 @@ use shared::models::{ArrowBatch, QueryResult, Value};
 /// 连接属性 → 开库动作（纯函数产物，可测）。
 ///
 /// 键与取值都**白名单校验**后才拼成常量 SQL：属性值来自用户输入，直接拼串就是注入口。
-/// 取值的允许集合就是 [`crate::driver::property_spec`] 里 sqlite 条目声明的键。
+/// 取值的允许集合就是 [`crate::property_spec`] 里 sqlite 条目声明的键。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SqlitePlan {
     /// 打开模式（`mode=ro|rw|rwc`）；`None` = rusqlite 默认（rwc）
@@ -409,7 +409,7 @@ fn pragma_err(key: &str, sql: &str, reason: String) -> CoreError {
     })
 }
 
-/// 只读语句判定：口径表在 [`crate::driver::utils::is_read_only_sql`]（六个驱动共用一份）。
+/// 只读语句判定：口径表在 [`crate::utils::is_read_only_sql`]（六个驱动共用一份）。
 fn is_read_only_sql(sql: &str) -> bool {
     shared_is_read_only_sql(sql, SqlFlavor::Sqlite)
 }
@@ -424,13 +424,13 @@ fn is_read_only_sql(sql: &str) -> bool {
 fn sqlite_error(sql: &str, error: rusqlite::Error) -> CoreError {
     // 对象位置（表 / 列 / 约束）从消息文本里认：SQLite 的协议层没有字段，
     // 但文案很固定（`UNIQUE constraint failed: t.c` / `no such table: t` …），
-    // 形态与样本见 `crate::driver::error_location::sqlite`。
+    // 形态与样本见 `crate::error_location::sqlite`。
     //
     // **SqlInputError 要拿 `msg` 去解析**，不能用 `Display`：那边会把
     // ` in {sql} at offset {n}` 拼在消息后面（真机踩到：列名被解析成
     // `nope in SELECT nope FROM t at offset 7`）。
     if let rusqlite::Error::SqlInputError { msg, offset, .. } = &error {
-        let location = crate::driver::error_location::sqlite(msg);
+        let location = crate::error_location::sqlite(msg);
         let mapped = DatabaseError::query(sql, msg.clone()).with_location(location);
         return CoreError::database(if *offset >= 0 {
             mapped.with_position(*offset as usize)
@@ -438,7 +438,7 @@ fn sqlite_error(sql: &str, error: rusqlite::Error) -> CoreError {
             mapped
         });
     }
-    let location = crate::driver::error_location::sqlite(&error.to_string());
+    let location = crate::error_location::sqlite(&error.to_string());
     CoreError::database(DatabaseError::query(sql, error.to_string()).with_location(location))
 }
 
@@ -698,7 +698,7 @@ impl Database for SqliteDatabase {
         &self,
         _catalog: &str,
         _schema: Option<&str>,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         let conn = self.conn.lock().map_err(|e| {
             CoreError::database(DatabaseError::Driver {
                 db_type: "sqlite".to_string(),
@@ -726,10 +726,10 @@ impl Database for SqliteDatabase {
             match row {
                 Ok((name, obj_type)) => {
                     let kind = match obj_type.as_str() {
-                        "view" => crate::driver::SchemaObjectKind::View,
-                        _ => crate::driver::SchemaObjectKind::Table,
+                        "view" => crate::SchemaObjectKind::View,
+                        _ => crate::SchemaObjectKind::Table,
                     };
-                    objects.push(crate::driver::NodeInfo::new(name, kind));
+                    objects.push(crate::NodeInfo::new(name, kind));
                 }
                 Err(e) => {
                     tracing::warn!("SQLite list_tables row error: {}", e);
@@ -1126,7 +1126,7 @@ impl Database for SqliteDatabase {
         Ok(out)
     }
 
-    fn as_metadata_browser(&self) -> Option<&dyn crate::driver::MetadataBrowser> {
+    fn as_metadata_browser(&self) -> Option<&dyn crate::MetadataBrowser> {
         Some(self)
     }
 
@@ -1158,7 +1158,7 @@ impl Database for SqliteDatabase {
 }
 
 #[async_trait::async_trait]
-impl crate::driver::MetadataBrowser for SqliteDatabase {
+impl crate::MetadataBrowser for SqliteDatabase {
     fn has_schema_level(&self) -> bool {
         // SQLite 为单库，database 内无独立 Schema 层。
         false
@@ -1174,17 +1174,17 @@ impl crate::driver::MetadataBrowser for SqliteDatabase {
         false
     }
 
-    async fn get_catalogs(&self) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
-        Ok(vec![crate::driver::NodeInfo::new(
+    async fn get_catalogs(&self) -> Result<Vec<crate::NodeInfo>, CoreError> {
+        Ok(vec![crate::NodeInfo::new(
             "main",
-            crate::driver::SchemaObjectKind::Catalog,
+            crate::SchemaObjectKind::Catalog,
         )])
     }
 
     async fn get_schemas(
         &self,
         _catalog: &str,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         Ok(vec![])
     }
 
@@ -1192,7 +1192,7 @@ impl crate::driver::MetadataBrowser for SqliteDatabase {
         &self,
         catalog: &str,
         _schema: &str,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         // 一次内省：本方法不再重写 SQL（2026-09-19 统一前这里是「调 list_tables 再加 icon」，
         // 而 icon 没有任何消费者）。
         self.list_tables(catalog, None).await
@@ -1203,10 +1203,10 @@ impl crate::driver::MetadataBrowser for SqliteDatabase {
         catalog: &str,
         _schema: &str,
         table: &str,
-    ) -> Result<crate::driver::NodeDetail, CoreError> {
+    ) -> Result<crate::NodeDetail, CoreError> {
         let columns = self.list_columns(catalog, None, table).await?;
-        Ok(crate::driver::NodeDetail {
-            node: crate::driver::NodeInfo::new(table, crate::driver::SchemaObjectKind::Table),
+        Ok(crate::NodeDetail {
+            node: crate::NodeInfo::new(table, crate::SchemaObjectKind::Table),
             columns,
             index_count: None,
             row_count_estimate: None,
@@ -1218,7 +1218,7 @@ impl crate::driver::MetadataBrowser for SqliteDatabase {
         catalog: &str,
         schema: &str,
         table: &str,
-    ) -> Result<Vec<crate::driver::IndexDetail>, CoreError> {
+    ) -> Result<Vec<crate::IndexDetail>, CoreError> {
         self.list_indexes(catalog, Some(schema), table).await
     }
 
@@ -1227,7 +1227,7 @@ impl crate::driver::MetadataBrowser for SqliteDatabase {
         catalog: &str,
         schema: &str,
         table: &str,
-    ) -> Result<Vec<crate::driver::ConstraintDetail>, CoreError> {
+    ) -> Result<Vec<crate::ConstraintDetail>, CoreError> {
         self.list_constraints(catalog, Some(schema), table).await
     }
 }

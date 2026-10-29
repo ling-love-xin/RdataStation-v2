@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::driver::native::duckdb::DuckDbDatabase;
-use crate::driver::traits::{Database, DbPool, PoolStatus};
+use crate::native::duckdb::DuckDbDatabase;
+use crate::traits::{Database, DbPool, PoolStatus};
 use shared::error::{ConnectionError, CoreError};
 
 /// DuckDB 用户连接池

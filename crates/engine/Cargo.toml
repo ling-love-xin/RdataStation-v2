@@ -16,6 +16,8 @@ connection.workspace = true
 rds-sql.workspace = true
 # 存储层（persistence/migration/logging 已迁出，本 crate 留命名空间薄壳）
 rds-store.workspace = true
+# 驱动层（driver 已迁出，本 crate 留命名空间薄壳）
+rds-driver.workspace = true
 
 # ===== 分析引擎 =====
 duckdb.workspace = true

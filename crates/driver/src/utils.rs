@@ -281,7 +281,7 @@ pub const DUCK_TABLE_DETAIL_SQL: &str = "\
 /// `is_read_only_sql` 四种口径的先例）。
 ///
 /// 行短于契约时缺的单元格按空串处理：不 panic、也不吞行。
-pub fn columns_from_detail_rows(result: &QueryResult) -> Vec<crate::driver::ColumnDetail> {
+pub fn columns_from_detail_rows(result: &QueryResult) -> Vec<crate::ColumnDetail> {
     batch_to_string_rows(result)
         .into_iter()
         .map(|r| {
@@ -290,7 +290,7 @@ pub fn columns_from_detail_rows(result: &QueryResult) -> Vec<crate::driver::Colu
             // 「有没有外键」与「引到哪」分开读：复合外键的目标本查询不猜（见各 SQL
             // 的说明），但那一列**属于外键**这件事要如实标出来。
             let fk_flag = cell(9);
-            crate::driver::ColumnDetail {
+            crate::ColumnDetail {
                 name: cell(0).to_string(),
                 data_type: cell(1).to_string(),
                 nullable: cell(2) == "YES",
@@ -299,7 +299,7 @@ pub fn columns_from_detail_rows(result: &QueryResult) -> Vec<crate::driver::Colu
                 default_value: (!cell(5).is_empty()).then(|| cell(5).to_string()),
                 comment: (!cell(6).is_empty()).then(|| cell(6).to_string()),
                 is_foreign_key: fk_flag == "1" || !ref_table.is_empty(),
-                references: (!ref_table.is_empty()).then(|| crate::driver::ForeignKeyRef {
+                references: (!ref_table.is_empty()).then(|| crate::ForeignKeyRef {
                     table: ref_table.to_string(),
                     column: cell(8).to_string(),
                 }),

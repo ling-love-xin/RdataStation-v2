@@ -48,7 +48,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
-use crate::driver::traits::{Database, DbPool, PoolStatus};
+use crate::traits::{Database, DbPool, PoolStatus};
 use shared::error::{ConnectionError, CoreError};
 
 /// 标准连接池用户可配置参数

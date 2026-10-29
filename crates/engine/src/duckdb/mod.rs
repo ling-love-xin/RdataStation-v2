@@ -34,10 +34,19 @@ mod temp_table;
 pub mod analysis;
 pub mod accel;
 pub mod federation;
-pub mod row_to_arrow;
-pub mod value_text;
 pub mod file_probe;
 pub mod file_reader;
+
+// 行→Arrow 转换已下沉 `shared::duckdb_rows`（engine 瘦身第三刀前置：driver 与 engine 两侧共用），
+// 此处保留命名空间薄壳，外部 `engine::duckdb::row_to_arrow::duckdb_rows_to_arrow` 路径零改动。
+pub mod row_to_arrow {
+    pub use shared::duckdb_rows::duckdb_rows_to_arrow;
+}
+// DuckDB 值渲染（时间戳/日期/时间/区间/BLOB/兜底文本）已下沉 `shared::duckdb_value_text`
+// （engine 瘦身第三刀前置），此处保留命名空间薄壳，外部 `engine::duckdb::value_text::*` 路径零改动。
+pub mod value_text {
+    pub use shared::duckdb_value_text::*;
+}
 
 // 导出所有核心类型
 pub use executor::{DuckDBExecutor, DuckDBResult};

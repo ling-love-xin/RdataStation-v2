@@ -14,21 +14,21 @@ use std::sync::Mutex;
 use arrow::array::StringArray;
 use duckdb::{AccessMode, Config, Connection};
 
-use crate::driver::traits::MetadataBrowser;
-use crate::driver::utils::{
+use crate::traits::MetadataBrowser;
+use crate::utils::{
     affected_rows_result, is_read_only_sql as shared_is_read_only_sql, returns_rows, SqlFlavor,
 };
-use crate::driver::{
+use crate::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, Transaction,
 };
 use shared::error::{CoreError, DatabaseError};
 use shared::models::{QueryResult, Value};
-use crate::duckdb::row_to_arrow::duckdb_rows_to_arrow;
+use shared::duckdb_rows::duckdb_rows_to_arrow;
 
 /// 连接属性 → 开库动作（纯函数产物，可测）。
 ///
 /// 键与取值都**白名单校验**后才拼成常量 SQL：属性值来自用户输入，直接拼串就是注入口。
-/// 允许的键就是 [`crate::driver::property_spec`] 里 duckdb 条目声明的那些。
+/// 允许的键就是 [`crate::property_spec`] 里 duckdb 条目声明的那些。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DuckDbPlan {
     /// 开库时定的模式（`access_mode`，运行期改不了）
@@ -273,7 +273,7 @@ impl DuckDbDatabase {
         })?;
         // 与其它 DuckDB 连接同一套纪律（扩展目录 / 内存闸 / 溢写口 / 不静默联网）：
         // 不配的话，用户 SQL 里的 `read_parquet` 会把扩展静默下到 `~/.duckdb`（C 盘）
-        crate::duckdb::DuckDBManager::configure_connection(&conn).map_err(|error| {
+        rds_store::duckdb_config::configure_connection(&conn).map_err(|error| {
             CoreError::database(DatabaseError::Driver {
                 db_type: "duckdb".to_string(),
                 operation: "configure".to_string(),
@@ -372,7 +372,7 @@ fn parse_duckdb_list(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// 只读语句判定：口径表在 [`crate::driver::utils::is_read_only_sql`]（六个驱动共用一份）。
+/// 只读语句判定：口径表在 [`crate::utils::is_read_only_sql`]（六个驱动共用一份）。
 fn is_read_only_sql(sql: &str) -> bool {
     shared_is_read_only_sql(sql, SqlFlavor::DuckDb)
 }
@@ -384,11 +384,11 @@ fn is_read_only_sql(sql: &str) -> bool {
 /// duckdb 错误 → 引擎错误；**带上数据库指认的对象**（表 / 列 / 约束）。
 ///
 /// DuckDB 的协议层没有这些字段（那是 PG 才有的），所以从消息文本里认 ——
-/// 形态与样本见 `crate::driver::error_location::duckdb`。拿不到就是 `None`，
+/// 形态与样本见 `crate::error_location::duckdb`。拿不到就是 `None`，
 /// 界面不写一句空话。
 fn duckdb_query_error(sql: &str, error: &duckdb::Error) -> CoreError {
     let message = error.to_string();
-    let location = crate::driver::error_location::duckdb(&message);
+    let location = crate::error_location::duckdb(&message);
     CoreError::database(DatabaseError::query(sql, message).with_location(location))
 }
 
@@ -745,7 +745,7 @@ impl Database for DuckDbDatabase {
         &self,
         _catalog: &str,
         _schema: Option<&str>,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         // 与浏览器同一份实现：单库场景下 catalog / schema 都是 `main`。
         self.get_tables("main", "main").await
     }
@@ -994,7 +994,7 @@ impl Database for DuckDbDatabase {
         Ok(out)
     }
 
-    fn as_metadata_browser(&self) -> Option<&dyn crate::driver::MetadataBrowser> {
+    fn as_metadata_browser(&self) -> Option<&dyn crate::MetadataBrowser> {
         Some(self)
     }
 
@@ -1019,7 +1019,7 @@ impl Database for DuckDbDatabase {
             .iter()
             .position(|c| c == "sql")
             .and_then(|idx| {
-                crate::driver::utils::batch_to_string_rows(&result)
+                crate::utils::batch_to_string_rows(&result)
                     .into_iter()
                     .next()
                     .and_then(|row| row.get(idx).cloned())
@@ -1164,7 +1164,7 @@ impl Transaction for DuckDbTransaction {
 
 
 #[async_trait::async_trait]
-impl crate::driver::MetadataBrowser for DuckDbDatabase {
+impl crate::MetadataBrowser for DuckDbDatabase {
     fn has_schema_level(&self) -> bool {
         // 当前内省按固定 `main` schema 取表，未按传入 schema 区分；
         // 单库场景下跳过 Schema 层，避免 `main → main` 重复层。
@@ -1181,17 +1181,17 @@ impl crate::driver::MetadataBrowser for DuckDbDatabase {
         false
     }
 
-    async fn get_catalogs(&self) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
-        Ok(vec![crate::driver::NodeInfo::new(
+    async fn get_catalogs(&self) -> Result<Vec<crate::NodeInfo>, CoreError> {
+        Ok(vec![crate::NodeInfo::new(
             "main",
-            crate::driver::SchemaObjectKind::Catalog,
+            crate::SchemaObjectKind::Catalog,
         )])
     }
 
     async fn get_schemas(
         &self,
         _catalog: &str,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         // DuckDB 不区分 catalog/schema 层级（见 `has_schema_level`）。
         Ok(vec![])
     }
@@ -1200,9 +1200,9 @@ impl crate::driver::MetadataBrowser for DuckDbDatabase {
         &self,
         _catalog: &str,
         _schema: &str,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
         let result = self.query("SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = 'main' ORDER BY table_name").await?;
-        let nodes: Vec<crate::driver::NodeInfo> = (0..result.total_rows())
+        let nodes: Vec<crate::NodeInfo> = (0..result.total_rows())
             .filter_map(|row_idx| {
                 result.batches.iter().find_map(|batch| {
                     if row_idx < batch.num_rows() {
@@ -1212,11 +1212,11 @@ impl crate::driver::MetadataBrowser for DuckDbDatabase {
                         ) {
                             let table_type = type_arr.value(row_idx);
                             let kind = if table_type == "VIEW" {
-                                crate::driver::SchemaObjectKind::View
+                                crate::SchemaObjectKind::View
                             } else {
-                                crate::driver::SchemaObjectKind::Table
+                                crate::SchemaObjectKind::Table
                             };
-                            Some(crate::driver::NodeInfo::new(
+                            Some(crate::NodeInfo::new(
                                 name_arr.value(row_idx).to_string(),
                                 kind,
                             ))
@@ -1237,18 +1237,18 @@ impl crate::driver::MetadataBrowser for DuckDbDatabase {
         _catalog: &str,
         _schema: &str,
         table: &str,
-    ) -> Result<crate::driver::NodeDetail, CoreError> {
+    ) -> Result<crate::NodeDetail, CoreError> {
         // 列序契约见 `utils::PG_TABLE_DETAIL_SQL` 的文档；表名走参数绑定（不拼串）。
         let result = self
             .query_with_params(
-                crate::driver::utils::DUCK_TABLE_DETAIL_SQL,
+                crate::utils::DUCK_TABLE_DETAIL_SQL,
                 vec![Value::Text(table.to_string())],
             )
             .await?;
-        let columns = crate::driver::utils::columns_from_detail_rows(&result);
+        let columns = crate::utils::columns_from_detail_rows(&result);
 
-        Ok(crate::driver::NodeDetail {
-            node: crate::driver::NodeInfo::new(table, crate::driver::SchemaObjectKind::Table),
+        Ok(crate::NodeDetail {
+            node: crate::NodeInfo::new(table, crate::SchemaObjectKind::Table),
             columns,
             index_count: None,
             row_count_estimate: None,
@@ -1260,7 +1260,7 @@ impl crate::driver::MetadataBrowser for DuckDbDatabase {
         catalog: &str,
         schema: &str,
         table: &str,
-    ) -> Result<Vec<crate::driver::IndexDetail>, CoreError> {
+    ) -> Result<Vec<crate::IndexDetail>, CoreError> {
         self.list_indexes(catalog, Some(schema), table).await
     }
 
@@ -1269,7 +1269,7 @@ impl crate::driver::MetadataBrowser for DuckDbDatabase {
         catalog: &str,
         schema: &str,
         table: &str,
-    ) -> Result<Vec<crate::driver::ConstraintDetail>, CoreError> {
+    ) -> Result<Vec<crate::ConstraintDetail>, CoreError> {
         self.list_constraints(catalog, Some(schema), table).await
     }
 }
@@ -1277,7 +1277,7 @@ impl crate::driver::MetadataBrowser for DuckDbDatabase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::driver::Database;
+    use crate::Database;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);

@@ -592,7 +592,7 @@ mod metadata_browser_capability_tests {
     //! 新驱动接入时只覆写「明确不支持」的类别；不覆写 = 全部支持（保底，不藏对象）。
 
     use super::*;
-    use crate::driver::NodeInfo;
+    use crate::NodeInfo;
 
     struct DummyBrowser;
 

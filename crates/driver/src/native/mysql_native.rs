@@ -13,15 +13,15 @@ use std::time::Duration;
 
 use tokio::sync::Mutex;
 
-use crate::driver::traits::MetadataBrowser;
-use crate::driver::utils::{
+use crate::traits::MetadataBrowser;
+use crate::utils::{
     affected_rows_result, is_read_only_sql as shared_is_read_only_sql, returns_rows, SqlFlavor,
 };
-use crate::driver::{
+use crate::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, NodeDetail, NodeInfo,
     PoolStatus, SchemaObjectKind, Transaction,
 };
-use crate::driver::utils::MY_LIST_CONSTRAINTS_SQL;
+use crate::utils::MY_LIST_CONSTRAINTS_SQL;
 use shared::error::{ConnectionError, CoreError, DatabaseError};
 use shared::models::{ArrowBatch, QueryResult, Value};
 
@@ -213,7 +213,7 @@ impl MySqlNativeDatabase {
 /// 销毁重建语义不同。
 const MYSQL_NATIVE_QUERY_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// 只读语句判定：口径表在 [`crate::driver::utils::is_read_only_sql`]（六个驱动共用一份）。
+/// 只读语句判定：口径表在 [`crate::utils::is_read_only_sql`]（六个驱动共用一份）。
 fn is_read_only_sql(sql: &str) -> bool {
     shared_is_read_only_sql(sql, SqlFlavor::MySql)
 }
@@ -225,11 +225,11 @@ fn is_read_only_sql(sql: &str) -> bool {
 /// mysql_async 错误 → 引擎错误；**带上数据库指认的对象**（表 / 列 / 约束）。
 ///
 /// MySQL 的协议层没有这些字段（那是 PG 才有的），所以从消息文本里认 ——
-/// 形态与样本见 `crate::driver::error_location::mysql`。拿不到就是 `None`，
+/// 形态与样本见 `crate::error_location::mysql`。拿不到就是 `None`，
 /// 界面不写一句空话。
 fn mysql_native_query_error(sql: &str, error: &mysql_async::Error) -> CoreError {
     let message = error.to_string();
-    let location = crate::driver::error_location::mysql(&message);
+    let location = crate::error_location::mysql(&message);
     CoreError::database(DatabaseError::query(sql, message).with_location(location))
 }
 
@@ -782,14 +782,14 @@ impl Database for MySqlNativeDatabase {
         _schema: Option<&str>,
         table: &str,
     ) -> Result<Option<String>, CoreError> {
-        use crate::driver::utils::quote_identifier;
+        use crate::utils::quote_identifier;
         let sql = format!(
             "SHOW CREATE TABLE {}.{}",
             quote_identifier(catalog, '`'),
             quote_identifier(table, '`')
         );
         let result = self.query(&sql).await?;
-        Ok(crate::driver::utils::create_statement(&result))
+        Ok(crate::utils::create_statement(&result))
     }
 
     fn as_metadata_browser(&self) -> Option<&dyn MetadataBrowser> {
@@ -867,7 +867,7 @@ impl Database for MySqlNativeDatabase {
         let esc_name = name.replace('`', "``");
         let sql = format!("SHOW CREATE {} `{}`.`{}`", stmt_type, esc_catalog, esc_name);
         let result = self.query(&sql).await?;
-        Ok(crate::driver::utils::create_statement(&result))
+        Ok(crate::utils::create_statement(&result))
     }
 }
 
@@ -1016,7 +1016,7 @@ impl MetadataBrowser for MySqlNativeDatabase {
         _schema: &str,
         table: &str,
     ) -> Result<NodeDetail, CoreError> {
-        let sql = crate::driver::utils::MY_TABLE_DETAIL_SQL;
+        let sql = crate::utils::MY_TABLE_DETAIL_SQL;
         let result = self
             .query_with_params(
                 sql,
@@ -1026,7 +1026,7 @@ impl MetadataBrowser for MySqlNativeDatabase {
                 ],
             )
             .await?;
-        let columns = crate::driver::utils::columns_from_detail_rows(&result);
+        let columns = crate::utils::columns_from_detail_rows(&result);
 
         Ok(NodeDetail {
             node: NodeInfo::new(table, SchemaObjectKind::Table),
@@ -1058,7 +1058,7 @@ impl MetadataBrowser for MySqlNativeDatabase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::driver::Database;
+    use crate::Database;
 
     const MYSQL_URL: &str = "mysql://root:root@localhost:3306/";
 

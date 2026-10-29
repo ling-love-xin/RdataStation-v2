@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use sqlx::mysql::MySqlPool;
 
-use crate::driver::native::mysql::MySqlDatabase;
-use crate::driver::traits::{Database, DbPool, PoolStatus};
+use crate::native::mysql::MySqlDatabase;
+use crate::traits::{Database, DbPool, PoolStatus};
 use shared::error::{ConnectionError, CoreError};
 
 /// MySQL 连接池

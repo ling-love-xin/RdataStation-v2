@@ -40,7 +40,7 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
 use shared::memory::MemoryPressure;
-use crate::driver::traits::{Database, DbPool, PoolStatus};
+use crate::traits::{Database, DbPool, PoolStatus};
 use shared::error::{ConnectionError, CoreError};
 
 /// 智能连接池配置

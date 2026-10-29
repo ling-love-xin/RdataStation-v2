@@ -35,9 +35,9 @@
 use rusqlite::{params, Connection};
 use serde_json::Value;
 
-use crate::driver::registry::{DriverDescriptor, DriverFieldType};
-use crate::driver::DriverRegistry;
-use crate::persistence::GlobalDatabaseManager;
+use crate::registry::{DriverDescriptor, DriverFieldType};
+use crate::DriverRegistry;
+use rds_store::persistence::GlobalDatabaseManager;
 use shared::error::{CoreError, StorageError};
 
 /// `drivers.version` 的声明值。
@@ -366,7 +366,7 @@ fn config_schema_json(d: &DriverDescriptor) -> String {
             m.insert("label".into(), Value::from(o.label.clone()));
             m.insert("type".into(), Value::from(option_type_str(&o.option_type)));
             m.insert("default".into(), Value::from(o.default_value.clone()));
-            if let crate::driver::registry::DriverOptionType::Select { options } = &o.option_type {
+            if let crate::registry::DriverOptionType::Select { options } = &o.option_type {
                 m.insert(
                     "values".into(),
                     Value::Array(options.iter().cloned().map(Value::from).collect()),
@@ -393,8 +393,8 @@ fn field_type_str(t: &DriverFieldType) -> &'static str {
     }
 }
 
-fn option_type_str(t: &crate::driver::registry::DriverOptionType) -> &'static str {
-    use crate::driver::registry::DriverOptionType as T;
+fn option_type_str(t: &crate::registry::DriverOptionType) -> &'static str {
+    use crate::registry::DriverOptionType as T;
     // 词汇与 `fields[].type` 同一套（历史前端 `mapOptionType` 认的就是这几个：
     // `text` / `password` / `number` / `select` / `checkbox`）——布尔写 `checkbox` 而不是 `bool`。
     match t {
@@ -473,7 +473,7 @@ mod tests {
     }
 
     fn declarations() -> Vec<DriverDeclaration> {
-        crate::driver::AutoDriverRegistrar::register_builtin_drivers();
+        crate::AutoDriverRegistrar::register_builtin_drivers();
         DriverDeclaration::all()
     }
 
@@ -661,12 +661,12 @@ mod tests {
 
     /// `driver_properties` 的键必须是**该客户端库真认**的参数名。
     ///
-    /// 清单的唯一来源是 [`crate::driver::property_spec`]（依据依赖源码，见那里的模块头）；
+    /// 清单的唯一来源是 [`crate::property_spec`]（依据依赖源码，见那里的模块头）；
     /// 本测试只盯住声明与清单不漂：sqlx 会静默忽略未知键、`mysql_async` 与 `tokio-postgres`
     /// 会直接报错——所以一个不认的键要么无声失效、要么弄坏连接，两种都不能出现在默认值里。
     #[test]
     fn declared_property_keys_are_accepted_by_the_client_library() {
-        use crate::driver::property_spec;
+        use crate::property_spec;
 
         for d in declarations() {
             let keys: serde_json::Map<String, Value> =
@@ -689,7 +689,7 @@ mod tests {
     /// `key/label/type/required/placeholder`，`options[]` 目前无消费者）。
     #[test]
     fn config_schema_carries_what_the_view_reads() {
-        use crate::driver::registry::{duckdb_driver, mysql_driver, sqlite_driver};
+        use crate::registry::{duckdb_driver, mysql_driver, sqlite_driver};
 
         let check = |d: &DriverDescriptor| {
             let json: Value =
