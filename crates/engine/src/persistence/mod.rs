@@ -51,7 +51,7 @@ pub use global_db::{
     GlobalDatabaseManager, GlobalDuckdbConnection, GlobalPooledConnection, GlobalSqlitePool,
 };
 pub use metadata_cache::{
-    ChunkResult, ConnectionType, FtsSearchResult, IndexEntry, IndexSearchHit, MetadataCacheManager,
+    ChunkResult, FtsSearchResult, IndexEntry, IndexSearchHit, MetadataCacheManager,
     MetadataCacheOps, NameMatchMode, SchemaObjectCounts, TriggerInfo,
 };
 pub use metadata_cache_pool::{MetadataCachePool, PooledMetadataConnection};

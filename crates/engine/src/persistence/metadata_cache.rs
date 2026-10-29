@@ -19,17 +19,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension};
 
 use shared::error::{CommonError, CoreError, StorageError};
+use crate::connection_manager::ConnectionType;
 use crate::migration::{MigrationManager, MigrationType};
 use crate::persistence::metadata_cache_pool::{MetadataCachePool, PooledMetadataConnection};
-
-/// 连接类型枚举
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ConnectionType {
-    /// 全局连接（不跟随项目）
-    Global,
-    /// 项目连接（跟随项目）
-    Project,
-}
 
 /// 元数据缓存管理器
 ///

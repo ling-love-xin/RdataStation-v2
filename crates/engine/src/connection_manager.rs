@@ -158,24 +158,14 @@ impl ConnectionManager {
     ///
     /// * `config` - 驱动连接配置（来自 driver/registry.rs）
     ///
+    /// 按驱动配置直接建连并登记进管理器（**测试 / 工具入口**，不落库、不走连接对话框）。
+    ///
+    /// 生产连接入口是 `ConnectionService::connect_with_type`（含持久化、网络链、指纹登记）；
+    /// 本方法仅用于需要绕开对话框层、按 `DriverConnectionConfig` 直连的集成测试与诊断工具。
+    ///
     /// # Returns
     ///
     /// 返回 (连接ID, 动态数据库实例) 元组
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let config = ConnectionConfig {
-    ///     driver: "mysql".to_string(),
-    ///     host: Some("localhost".to_string()),
-    ///     port: Some(3306),
-    ///     database: Some("test".to_string()),
-    ///     username: Some("root".to_string()),
-    ///     password: Some("password".to_string()),
-    ///     ..Default::default()
-    /// };
-    /// let (conn_id, db) = manager.create_connection_with_registry(config).await?;
-    /// ```ignore
     pub async fn create_connection_with_registry(
         &self,
         config: DriverConnectionConfig,

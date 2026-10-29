@@ -13,9 +13,10 @@
 //! 范围（C3 首版）：schema / 表 / 视图 / 列；存储过程、序列、触发器仍走实时内省。
 //! 缓存**永不自动删除**（设计 §5.2），清理只经「缓存管理」对话框。
 
+use engine::connection_manager::ConnectionType;
 use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind};
 use engine::persistence::{
-    ChunkResult, ConnectionType, FtsSearchResult, IndexEntry, IndexSearchHit, MetadataCacheManager,
+    ChunkResult, FtsSearchResult, IndexEntry, IndexSearchHit, MetadataCacheManager,
     MetadataCacheOps, MetadataCachePool, NameMatchMode, SchemaObjectCounts,
 };
 

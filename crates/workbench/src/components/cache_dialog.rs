@@ -15,8 +15,9 @@ use gpui_kit::component::separator::Separator;
 use gpui_kit::component::{ActiveTheme, Sizable as _, WindowExt as _};
 use gpui_kit::*;
 
+use engine::connection_manager::ConnectionType;
 use engine::persistence::{
-    CacheScope, ConnectionType, MetadataCacheManager, cleanup_orphan_meta_files,
+    CacheScope, MetadataCacheManager, cleanup_orphan_meta_files,
     list_orphan_cache_entries, prune_cache_index_orphans,
 };
 
