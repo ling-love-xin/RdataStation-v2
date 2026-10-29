@@ -117,8 +117,18 @@ fn view_sources() -> Vec<(String, &'static str)> {
             include_str!("../src/schema_view.rs"),
         ),
         (
-            "rule_view.rs".to_string(),
-            include_str!("../src/rule_view.rs"),
+            // 规则管理对话框已拆分为 rule_view/ 目录（mod.rs + data.rs + view.rs），
+            // 三个文件都在裸 px / 裸色守卫范围内，逐个登记。
+            "rule_view/mod.rs".to_string(),
+            include_str!("../src/rule_view/mod.rs"),
+        ),
+        (
+            "rule_view/data.rs".to_string(),
+            include_str!("../src/rule_view/data.rs"),
+        ),
+        (
+            "rule_view/view.rs".to_string(),
+            include_str!("../src/rule_view/view.rs"),
         ),
         (
             // 中间 EDA 工作页（工具栏 / 概览 / 列分布 / 关联 / 样本 / 对比 / 集合）。

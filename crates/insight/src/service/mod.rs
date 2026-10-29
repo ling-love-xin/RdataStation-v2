@@ -26,24 +26,24 @@ pub mod persistence;
 pub mod rule_trust;
 pub mod watcher;
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+pub(crate) use std::collections::HashMap;
+pub(crate) use std::path::{Path, PathBuf};
 
-use engine::persistence::ProjectDatabaseManager;
-use shared::error::{CommonError, CoreError};
+pub(crate) use engine::persistence::ProjectDatabaseManager;
+pub(crate) use shared::error::{CommonError, CoreError};
 
-use crate::model::types::{ColumnInsightFull, ColumnStats, QualityScore, TableQuality};
-use crate::model::{
+pub(crate) use crate::model::types::{ColumnInsightFull, ColumnStats, QualityScore, TableQuality};
+pub(crate) use crate::model::{
     ColumnProfileView, HISTORY_PAGE_SIZE, HistoryView, MultiColumnView, MultiResultView,
     MultiRuleView, QualityNote, TableProfileView,
 };
-use crate::rule::RuleScope;
-use crate::rule_types::RuleMeta;
-use crate::rule_view::{RuleDataInput, RulesData, build_rules_data};
-use crate::schema_view::SchemaReportView;
-use crate::service::indexer::{RuleIndexStore, SyncOutcome, rule_dir, sync_project_rules};
-use crate::service::rule_trust::RuleTrust;
-use crate::{ExecutionResult, with_rules};
+pub(crate) use crate::rule::RuleScope;
+pub(crate) use crate::rule_types::RuleMeta;
+pub(crate) use crate::rule_view::{RuleDataInput, RulesData, build_rules_data};
+pub(crate) use crate::schema_view::SchemaReportView;
+pub(crate) use crate::service::indexer::{RuleIndexStore, SyncOutcome, rule_dir, sync_project_rules};
+pub(crate) use crate::service::rule_trust::RuleTrust;
+pub(crate) use crate::{ExecutionResult, with_rules};
 
 pub use persistence::{
     batch_evaluate_columns, cleanup_old_insight_snapshots, get_column_insight_history,
@@ -105,342 +105,15 @@ impl InsightService {
         let full = Self::get_column_insight_full(project_root, temp_table, column_name)?;
         Ok(ColumnProfileView::from_domain(&full))
     }
+}
 
-    // ==================== 源取样（统一入口契约）====================
 
-    /// 源目标列画像：**取样（或全量）→ 分析临时表 → 画像**，返回（样本表名, 视图）。
-    ///
-    /// 「凡能喂给 DuckDB 的数据都能洞察」的落点：导航树 / 分析存档 / 草稿箱 /
-    /// 编辑器结果集都只需给出「连接 + 只读查询 + 标签」，其余在这里完成。
-    ///
-    /// 返回样本表名是必需的：面板保存快照 / 开多列 / 下钻要接着用**同一份样本**。
-    /// 阻塞（要跑源库查询 + DuckDB 分析），调用方负责放后台。
-    pub fn profile_source_column(
-        project_root: Option<&Path>,
-        source: &crate::model::SampleSource,
-        column_name: &str,
-        full: bool,
-    ) -> Result<(String, ColumnProfileView), CoreError> {
-        block_on(persistence::profile_source_column(
-            project_root,
-            source,
-            column_name,
-            full,
-        ))
-    }
+// ==================== InsightService 方法按职责域下沉（纯位移） ====================
+mod sampling;
+mod analyze;
+mod rules;
 
-    /// 源目标表探查：取样（或全量）→ 内省，返回（样本表名, 视图）。
-    pub fn profile_source_table(
-        source: &crate::model::SampleSource,
-        table_name: &str,
-        full: bool,
-    ) -> Result<(String, TableProfileView), CoreError> {
-        block_on(persistence::profile_source_table(source, table_name, full))
-    }
-
-    // ==================== 表探查（Phase 3.1） ====================
-
-    /// 表探查（Tab「表」）：临时表内省 → 视图模型。
-    ///
-    /// **不跑规则**：表探查只看元数据与行数；逐列规则统计是「评估全表」的事
-    /// （那一步很贵，必须由用户显式发起，进度也要可见）。
-    ///
-    /// `project_root` 目前不被使用（表探查不依赖规则集），保留形参是为了与
-    /// 列画像门面保持一致的调用口径——将来表级取样规则要分项目时不用改签名。
-    pub fn profile_table_view(
-        project_root: Option<&Path>,
-        temp_table: &str,
-        table_name: &str,
-    ) -> Result<TableProfileView, CoreError> {
-        let _ = project_root;
-        let profile = crate::insight_engine::get_temp_table_profile(temp_table)?;
-        let mut view = TableProfileView::from_profile(&profile, table_name);
-        // EDA 列统计摘要（缺失率 / 唯一率）：查询失败不阻塞画像——列清单仍可看，
-        // 只是概览卡 / 缺失矩阵少两列数字（保留 None，不编假值）。
-        let column_names: Vec<String> = profile
-            .columns
-            .iter()
-            .map(|c| c.column_name.clone())
-            .collect();
-        if let Ok(stats) =
-            crate::insight_engine::compute_table_column_summary(temp_table, &column_names)
-        {
-            view.fill_column_stats(&stats);
-        }
-        // EDA 样本（前 5 行）：同样失败不阻塞画像（样本区给空态即可）
-        if let Ok(sample) = crate::insight_engine::get_temp_table_sample(temp_table) {
-            view.sample = Some(sample);
-        }
-        Ok(view)
-    }
-
-    // ==================== 跨表关系排查（T19） ====================
-
-    /// 两张洞察临时表的同名列值重叠报告（右栏集合卡「关系」按钮的取数）。
-    ///
-    /// 阻塞（抢 DuckDB 全局锁），调用方负责放后台线程（`jobs` 事件路径）。
-    pub fn overlap_report(
-        table_a: &str,
-        table_b: &str,
-    ) -> Result<crate::model::OverlapView, CoreError> {
-        let duckdb = crate::insight_engine::get_or_create_duckdb()?;
-        let conn = duckdb.lock().map_err(|e| {
-            CoreError::common(CommonError::General(format!("DuckDB lock error: {e}")))
-        })?;
-        let rows = crate::insight_engine::compute_column_overlap(&conn, table_a, table_b)?;
-        Ok(crate::model::OverlapView {
-            table_a: table_a.to_string(),
-            table_b: table_b.to_string(),
-            rows,
-        })
-    }
-
-    // ==================== 归档快照（T20） ====================
-
-    /// 把一张洞察临时表的画像快照导出为 JSON 文件（归档到资产库的本体）。
-    ///
-    /// 快照 = 表探查元数据（列名 / 类型 / 可空 / 主键 / 行数）+ 生成时间戳：
-    /// 归档后它作为资产库 `File` 档的本体，版本链由资产库按内容指纹维护——
-    /// 同一张表两次归档生成两份不同内容（时间戳在指纹里）即两个版本。
-    ///
-    /// # 返回
-    /// `(文件绝对路径, 展示名)`；文件落在 `{项目}/.RSmeta/insight-archive/`，
-    /// 该目录在项目目录内（随项目备份），不入 resources/（那是资产库本体区，
-    /// 由资产库登记时复制，这里只负责「产生可归档的本体」）。
-    ///
-    /// 阻塞（抢 DuckDB 锁），调用方放后台线程。
-    pub fn export_table_snapshot(
-        project_root: &Path,
-        temp_table: &str,
-        table_name: &str,
-    ) -> Result<(PathBuf, String), CoreError> {
-        use chrono::Local;
-
-        let profile = crate::insight_engine::get_temp_table_profile(temp_table)?;
-        let json = serde_json::json!({
-            "kind": "insight_table_snapshot",
-            "table": table_name,
-            "generated_at": Local::now().to_rfc3339(),
-            "row_count": profile.row_count,
-            "column_count": profile.columns.len(),
-            "columns": profile.columns.iter().map(|c| {
-                serde_json::json!({
-                    "name": c.column_name,
-                    "type": c.data_type,
-                    "nullable": c.is_nullable,
-                    "primary_key": c.is_primary_key,
-                })
-            }).collect::<Vec<_>>(),
-        });
-
-        let dir = project_root.join(".RSmeta").join("insight-archive");
-        std::fs::create_dir_all(&dir).map_err(|e| {
-            CoreError::common(CommonError::General(format!("创建洞察归档目录失败: {e}")))
-        })?;
-        let stamp = Local::now().format("%Y%m%d%H%M%S");
-        let file_name = format!("{table_name}_{stamp}.json");
-        let path = dir.join(&file_name);
-        let bytes = serde_json::to_vec_pretty(&json)
-            .map_err(|e| CoreError::common(CommonError::General(format!("快照序列化失败: {e}"))))?;
-        std::fs::write(&path, bytes)
-            .map_err(|e| CoreError::common(CommonError::General(format!("快照写入失败: {e}"))))?;
-        Ok((path, table_name.to_string()))
-    }
-
-    // ==================== 多列分析（Phase 3.2 / 3.3） ====================
-
-    /// 「多列」Tab 的数据：**真实列元数据** + `category = multi` 的规则清单。
-    ///
-    /// 列清单与表探查同源（同一个 `get_temp_table_profile`）：v1 的 `availableColumns`
-    /// 恒空是「多列分析从未跑通」的根因，这里不再另存一份列清单。
-    pub fn multi_column_view(
-        project_root: Option<&Path>,
-        temp_table: &str,
-        table_name: &str,
-    ) -> Result<MultiColumnView, CoreError> {
-        let profile = crate::insight_engine::get_temp_table_profile(temp_table)?;
-        let rules = Self::list_multi_rules(project_root)?;
-        Ok(MultiColumnView::from_profile(&profile, table_name, rules))
-    }
-
-    /// `category = multi` 的规则 → 视图模型（不可解析的跳过：宁少不假）
-    pub fn list_multi_rules(project_root: Option<&Path>) -> Result<Vec<MultiRuleView>, CoreError> {
-        let raw = Self::list_insight_rules(project_root, Some("multi"))?;
-        Ok(raw
-            .iter()
-            .filter_map(MultiRuleView::from_rule_json)
-            .collect())
-    }
-
-    /// 跑一条多列规则：参数拼装 → 执行（已持连接）→ 结果与门控转视图模型。
-    ///
-    /// 阻塞（抢 DuckDB 全局锁与并发配额），调用方负责放后台。
-    pub fn run_multi_rule(
-        project_root: Option<&Path>,
-        temp_table: &str,
-        rule_id: &str,
-        columns: &[String],
-    ) -> Result<(MultiResultView, Vec<QualityNote>), CoreError> {
-        let parameters = {
-            let registry = crate::registry_for(project_root);
-            let guard = registry.read().map_err(|e| {
-                CoreError::common(CommonError::General(format!("规则注册表锁定失败：{}", e)))
-            })?;
-            let rule = guard.get(rule_id).ok_or_else(|| {
-                CoreError::common(CommonError::General(format!("规则 '{}' 不存在", rule_id)))
-            })?;
-            rule_params(&rule.query.parameters, temp_table, columns)?
-        };
-
-        let duckdb = crate::insight_engine::get_or_create_duckdb()?;
-        let conn = duckdb.lock().map_err(|e| {
-            CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
-        })?;
-        let result = with_rules(project_root, |registry| {
-            crate::insight_engine::execute_insight_rule(registry, rule_id, &conn, &parameters)
-        })?;
-
-        let view = MultiResultView::from_execution(&result);
-        let notes = crate::model::quality_notes(result.quality.as_ref());
-        Ok((view, notes))
-    }
-
-    // ==================== 结构洞察（Phase 4） ====================
-
-    /// Schema 健康报告 → 面板视图模型（Phase 4 的门面：补上唯一缺的命令等价物）。
-    ///
-    /// 分析器本身是异步的（要走源库内省），而服务门面是**同步**口径
-    /// （与 `profile_column_view` 一致）：这里用阻塞桥接上，调用方负责放后台。
-    ///
-    /// `database` 由调用方给出：表清单要按 `table_catalog` 过滤，
-    /// 否则同名表会跨库混在一起。
-    pub fn schema_report_view(
-        conn_id: String,
-        database: &str,
-        schema: &str,
-    ) -> Result<SchemaReportView, CoreError> {
-        let report = block_on(crate::schema_analyzer::SchemaAnalyzer::analyze(
-            conn_id, database, schema,
-        ))?;
-        Ok(SchemaReportView::from_report(&report))
-    }
-
-    // ==================== 快照历史（Phase 5.1 / 5.2） ====================
-
-    /// 保存当前列的一次快照（正文 + 元数据双写），返回刷新后的历史。
-    ///
-    /// **重取一次领域画像再存**：面板手里只有视图模型，而快照正文存的是领域结果
-    /// （`ColumnInsightFull`）——把视图模型反向拼回去是不可能的，也不应该。
-    ///
-    /// `entity_source` 记录「这份快照是哪来的」：源目标传来源描述（如
-    /// `analytics.orders`），临时表目标只能说临时表名（如实写，不编）。
-    pub fn save_column_snapshot(
-        project_root: Option<&Path>,
-        temp_table: &str,
-        column: &str,
-        source_label: Option<&str>,
-    ) -> Result<HistoryView, CoreError> {
-        let root = project_root.ok_or_else(no_project)?;
-        let full = Self::get_column_insight_full(Some(root), temp_table, column)?;
-        let stores = block_on(crate::store::ProjectInsightStores::open(root))?;
-        let entity_source = match source_label {
-            Some(label) => format!("{label} · {column}"),
-            None => format!("temp_table={temp_table}"),
-        };
-        block_on(stores.save_column_snapshot(
-            &full,
-            Some(&entity_source),
-            Some(full.stats.total_count as i32),
-            None,
-        ))?;
-        // 读回历史**复用同一个库句柄**：DuckDB 在同一个进程里对同一份文件只允许一个实例，
-        // 第二次 open 会报「文件已被占用」——那会表现成「快照写进去了，却提示保存失败」
-        // （实测到的就是这个：正文与元数据双双落库，但调用方收到 `open` 错误）。
-        read_history(&stores, column)
-    }
-
-    /// 读一列的历次快照 + 存储用量。
-    pub fn column_history_view(
-        project_root: Option<&Path>,
-        column: &str,
-    ) -> Result<HistoryView, CoreError> {
-        let root = project_root.ok_or_else(no_project)?;
-        let stores = block_on(crate::store::ProjectInsightStores::open(root))?;
-        read_history(&stores, column)
-    }
-
-    /// 对比某一版与**最新一版**（Phase 5.2）。
-    ///
-    /// 方向固定为「选中版本 → 最新版本」：这个 Tab 问的是「和上次比变了什么」，
-    /// 两个方向都能选只是多一个状态（还要多一套「谁是基准」的文案）。
-    ///
-    /// 返回值仍是**整份历史**（列表 + 对比）：对比面板与列表同属一个载荷，
-    /// 面板只管「有没有对比」——这样刷新列表时不会留下指向旧「当前」的对比（D43）。
-    pub fn compare_column_snapshots(
-        project_root: Option<&Path>,
-        column: &str,
-        baseline_version: &str,
-    ) -> Result<HistoryView, CoreError> {
-        let root = project_root.ok_or_else(no_project)?;
-        let stores = block_on(crate::store::ProjectInsightStores::open(root))?;
-        let entries = history_entries(&stores, column)?;
-
-        let baseline = entries
-            .iter()
-            .find(|entry| entry.version_id == baseline_version)
-            .ok_or_else(|| {
-                CoreError::common(CommonError::General(format!(
-                    "这一版已不在历史里（找不到 {}）",
-                    baseline_version.chars().take(8).collect::<String>()
-                )))
-            })?;
-        let latest = entries.first().ok_or_else(|| {
-            CoreError::common(CommonError::General("这一列还没有快照".to_string()))
-        })?;
-        if latest.version_id == baseline.version_id {
-            return Err(CoreError::common(CommonError::General(
-                "最新一版没有更新的版本可比".to_string(),
-            )));
-        }
-
-        // 两侧正文都读出来比：比的是**存下来的那份结论**，不是现在重算的
-        let diff = crate::model::VersionDiffView::between(
-            &baseline.parse_insight()?,
-            &baseline.created_at,
-            &latest.parse_insight()?,
-            &latest.created_at,
-        )
-        .with_baseline_version(&baseline.version_id);
-
-        Ok(history_view_of(&stores, column, entries).with_diff(diff))
-    }
-
-    /// 清理 `days` 天前的快照（Phase 5.3）：正文与元数据**成对删**，返回刷新后的历史。
-    ///
-    /// `days` 由调用方给（接缝传 `model::SNAPSHOT_RETENTION_DAYS`）：服务不持策略，
-    /// 但界面上写的天数与实际切档必须是同一个值（那个常量就是这层约定的落脚点）。
-    ///
-    /// 两侧条数都带回去：对不上是半写的信号（D16），不能只报一个数就说「清理完成」。
-    pub fn cleanup_old_snapshots(
-        project_root: Option<&Path>,
-        column: &str,
-        days: i64,
-    ) -> Result<HistoryView, CoreError> {
-        let root = project_root.ok_or_else(no_project)?;
-        let stores = block_on(crate::store::ProjectInsightStores::open(root))?;
-        let (body_removed, meta_removed) = block_on(cleanup_old_insight_snapshots(
-            days as i32,
-            &stores.storage,
-            &stores.meta,
-        ))?;
-        let outcome = crate::model::CleanupOutcome {
-            days,
-            body_removed: body_removed.max(0) as usize,
-            meta_removed,
-        };
-        // 读回列表同样**复用同一个库句柄**（D41：同进程对同一项目库不得重叠 open）
-        Ok(read_history(&stores, column)?.with_cleanup(outcome))
-    }
+impl InsightService {
 
     /// 错误 → 面板可展示的语义（文案 + 是否可重试）。
     ///
@@ -519,116 +192,6 @@ impl InsightService {
     }
 
     // ==================== 规则 ====================
-
-    /// 执行指定 id 的规则（含 QualityRule 质量门控）。调用方需已持有 DuckDB 锁。
-    pub fn execute_insight_rule(
-        project_root: Option<&Path>,
-        rule_id: &str,
-        conn: &duckdb::Connection,
-        params: &HashMap<String, String>,
-    ) -> Result<ExecutionResult, CoreError> {
-        with_rules(project_root, |registry| {
-            crate::insight_engine::execute_insight_rule(registry, rule_id, conn, params)
-        })
-    }
-
-    /// 列出规则（可按分类过滤）。返回项含 `scope` / `scope_path`，供界面按作用域分组。
-    pub fn list_insight_rules(
-        project_root: Option<&Path>,
-        category: Option<&str>,
-    ) -> Result<Vec<serde_json::Value>, CoreError> {
-        with_rules(project_root, |registry| {
-            crate::insight_engine::list_insight_rules(registry, category)
-        })
-    }
-
-    /// 列出适用于某列类型的规则。
-    pub fn list_rules_for_column(
-        project_root: Option<&Path>,
-        column_type: &str,
-    ) -> Result<Vec<serde_json::Value>, CoreError> {
-        with_rules(project_root, |registry| {
-            crate::insight_engine::list_rules_for_column(registry, column_type)
-        })
-    }
-
-    /// 重新加载规则（丢弃缓存并按三层重建），返回生效规则总数。
-    ///
-    /// 常规改动由目录监听（[`watcher`]）自动生效；本方法是兵底与排障入口。
-    pub fn reload_insight_rules(project_root: Option<&Path>) -> usize {
-        crate::reload_insight_rules(project_root)
-    }
-
-    // ==================== 规则管理（Phase 2.3 / 2.4） ====================
-
-    /// 规则管理对话框的数据：**先同步索引再读数**。
-    ///
-    /// 同步是必需的：索引刷新时机与「谁在看它」对齐（D23），打开对话框就是那个时机。
-    /// 同步顺带把启停集合推给装配侧、失效该项目注册表缓存——索引只有被消费才有意义。
-    ///
-    /// 阻塞（要开项目库 + 读写 SQLite），调用方负责放后台。
-    pub fn rules_data(project_root: Option<&Path>) -> Result<RulesData, CoreError> {
-        let stores = IndexStores::open(project_root)?;
-        stores.sync(project_root)?;
-        stores.snapshot(project_root)
-    }
-
-    /// 项目规则**信任门**：记录用户的一次决定，并返回刷新后的数据（Q1 ③ / D53）。
-    ///
-    /// 决定落在全局库（项目库在被信任前就是不可信输入，不能自己给自己发信任），
-    /// 随后推给装配侧的缓存并失效该项目注册表——**下次取数就能看见项目层已经装上**。
-    ///
-    /// 阻塞（开全局库 + 写库 + 重扫索引），调用方负责放后台。
-    pub fn decide_project_rules_trust(
-        project_root: Option<&Path>,
-        state: RuleTrust,
-    ) -> Result<RulesData, CoreError> {
-        let root = project_root.ok_or_else(no_project)?;
-        let manager = engine::migration::get_global_db_manager().ok_or_else(|| {
-            CoreError::common(CommonError::General(
-                "全局库不可用，无法保存规则信任状态".to_string(),
-            ))
-        })?;
-
-        block_on(rule_trust::write(&manager.sqlite_pool(), root, state))?;
-        crate::apply_project_rule_trust(root, state);
-
-        // 信任状态变了 → 重新装配 + 重新扫索引（上面已失效缓存，这里取到的就是新集合）
-        Self::rules_data(project_root)
-    }
-
-    /// 切换某条规则的启停，返回刷新后的数据。
-    ///
-    /// 写的是**规则所在层**的索引；内置规则没有自己的索引行，按**抑制记录**写到项目库
-    /// （没有项目时才落全局库）——这正是 `plan_index` 保留抑制记录的那条路径。
-    pub fn toggle_rule(
-        project_root: Option<&Path>,
-        scope: RuleScope,
-        rule_id: &str,
-        enabled: bool,
-    ) -> Result<RulesData, CoreError> {
-        let stores = IndexStores::open(project_root)?;
-        let target = stores.write_scope(scope);
-        let store = stores.store(target).ok_or_else(|| {
-            CoreError::common(CommonError::General(format!(
-                "{}层索引不可用，无法保存启停状态",
-                target.label()
-            )))
-        })?;
-        block_on(store.set_enabled(rule_id, enabled))?;
-        stores.sync(project_root)?;
-        stores.snapshot(project_root)
-    }
-
-    /// 新建规则（建目录 + 写模板），返回新文件路径供宿主打开。
-    ///
-    /// 目录在**首次写入时**创建（K7）：不在启动时预设空目录，也不假定用户已手工建好。
-    pub fn create_rule_file(
-        project_root: Option<&Path>,
-        scope: RuleScope,
-    ) -> Result<PathBuf, CoreError> {
-        indexer::create_rule_file(project_root, scope)
-    }
 }
 
 // ==================== 规则索引库（项目层 / 全局层） ====================
@@ -890,7 +453,6 @@ pub fn result_columns_and_rows(
 }
 
 // ==================== 测试 ====================
-
 #[cfg(test)]
 mod tests {
     use super::{InsightService, result_columns_and_rows, rule_params, strip_error_code};
