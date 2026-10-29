@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::driver::utils::escape_sql_string;
+use shared::utils::sql::escape_sql_string;
 use shared::error::{CoreError, StorageError};
 use crate::persistence::project_db::ProjectDatabaseManager;
 

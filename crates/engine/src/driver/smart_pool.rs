@@ -39,7 +39,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
-use crate::cache::MemoryPressure;
+use shared::memory::MemoryPressure;
 use crate::driver::traits::{Database, DbPool, PoolStatus};
 use shared::error::{ConnectionError, CoreError};
 

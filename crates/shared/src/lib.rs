@@ -18,6 +18,7 @@ pub mod drag;
 pub mod error;
 pub mod fact;
 pub mod i18n;
+pub mod memory;
 pub mod models;
 pub mod utils;
 

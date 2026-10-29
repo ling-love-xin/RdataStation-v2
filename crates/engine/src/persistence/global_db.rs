@@ -15,7 +15,7 @@ use duckdb::Connection as DuckConnection;
 use rusqlite::{Connection as SqliteConnection, OptionalExtension};
 use tokio::sync::{Mutex, Semaphore};
 
-use crate::driver::utils::quote_identifier;
+use shared::utils::sql::quote_identifier;
 use shared::error::{CommonError, CoreError, StorageError};
 use crate::migration::{MigrationManager, MigrationType};
 use crate::persistence::auth_store;
