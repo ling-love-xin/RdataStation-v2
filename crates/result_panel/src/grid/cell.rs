@@ -5,6 +5,8 @@ use gpui_kit::*;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::table::TableState;
 
+use std::borrow::Cow;
+
 use crate::store::ColumnKind;
 use super::delegate::{CELL_DISPLAY_LIMIT, ResultGridDelegate};
 use super::status::format_integer_cell;
@@ -100,15 +102,17 @@ pub fn format_cell_text(kind: ColumnKind, text: &str, prefs: &TypeStylePrefs) ->
 /// 单元格展示文本字符级裁剪：超过 `limit` 个字符时取前 `limit` 个字符并补省略号 `…`。
 ///
 /// 按 `char` 边界取前若干个，不会裁断中文 / emoji / 组合字符的多字节序列；省略号不占
-/// `limit` 额度（与 dbdelve `clip` 同口径：300 字符 + 一个尾巴符号）。未达上限原样返回，
-/// 不做换行展平或其它改写——换行由单元格样式自己处理。
+/// `limit` 额度（与 dbdelve `clip_to` 同口径：300 字符 + 一个尾巴符号，机制借鉴
+/// GPL-3.0 dbdelve，仅参考思路未复制代码）。未达上限原样返回。
+///
+/// **只遍历到第 `limit` 个字符**（`char_indices().nth(limit)`），不先 `chars().count()`
+/// 数全串——大值（JSONB / PostGIS 几何，可达数百万字符）每帧渲染成本因此有硬上界，
+/// 不随值长线性涨（dbdelve `clip` 同思路：每帧每可见格裁剪，扫描有界）。
 pub(crate) fn clip_cell_display(value: &str, limit: usize) -> String {
-    if value.chars().count() <= limit {
-        return value.to_string();
+    match value.char_indices().nth(limit) {
+        Some((end, _)) => format!("{}…", &value[..end]),
+        None => value.to_string(),
     }
-    let mut clipped: String = value.chars().take(limit).collect();
-    clipped.push('…');
-    clipped
 }
 
 /// 【P1-4】格内 JSON 美化展示：仅当文本以 `{` / `[` 开头且能解析成 JSON 时，
@@ -123,6 +127,27 @@ pub(crate) fn pretty_json_display(text: &str) -> Option<String> {
     }
     let value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
     serde_json::to_string_pretty(&value).ok()
+}
+
+/// 【dbdelve 借鉴】单元格展示串：短值先 JSON 美化 / 类型格式化（可读性），**超长值
+/// 跳过解析、零拷贝借原文**——`serde_json` 全串解析随值长线性涨，大 JSON / 几何文档
+/// 每帧重跑成本不可控；机制借鉴 GPL-3.0 dbdelve 的 `CLIP_SCAN_LIMIT` 思路（仅参考
+/// 思路未复制代码）。只探测到 `CELL_DISPLAY_LIMIT` 处即知长短，不遍历全串；调用方
+/// 随后统一 `clip_cell_display` 收尾（超长分支借出的是原文，裁剪 O(limit) 零拷贝）。
+pub(crate) fn cell_display_text<'a>(
+    text: &'a str,
+    kind: ColumnKind,
+    prefs: &TypeStylePrefs,
+) -> Cow<'a, str> {
+    let short = text.char_indices().nth(CELL_DISPLAY_LIMIT).is_none();
+    if short {
+        match pretty_json_display(text) {
+            Some(pretty) => Cow::Owned(pretty),
+            None => Cow::Owned(format_cell_text(kind, text, prefs)),
+        }
+    } else {
+        Cow::Borrowed(text)
+    }
 }
 
 /// 【P2】BLOB 单元格的摘要文案：`hex → BLOB · N B`
@@ -222,14 +247,12 @@ pub(crate) fn render_td(
         let display = if is_blob {
             blob_summary(&text).unwrap_or_else(|| text.clone())
         } else {
-            // 展示派生顺序：JSON 美化 → 类型样式格式化（NULL 占位 / 布尔映射 / 数字格式）
-            // → 原文；最后统一字符级裁剪。`text` 原文仍给悬停 tooltip / 右键菜单 /
-            // 复制 / 导出 / 编辑（下方 full = text.clone()）。
-            let shown = match pretty_json_display(&text) {
-                Some(pretty) => pretty,
-                None => format_cell_text(kind, &text, &delegate.type_style),
-            };
-            clip_cell_display(&shown, CELL_DISPLAY_LIMIT)
+            // 【dbdelve 借鉴】展示派生统一走 `cell_display_text`：短值 JSON 美化 →
+            // 类型格式化；超长值跳过解析零拷贝借原文（解析成本有上界），再统一裁剪。
+            clip_cell_display(
+                &cell_display_text(&text, kind, &delegate.type_style),
+                CELL_DISPLAY_LIMIT,
+            )
         };
         // 【B14】右键菜单要用“哪个单元格”：组件库只公开了 `right_clicked_row`，
         // 没有单元格访问器，所以在单元格自己身上记一笔（事件从最内层派发，不会丢）
