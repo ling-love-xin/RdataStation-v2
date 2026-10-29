@@ -16,7 +16,7 @@ use gpui_kit::component::input::{
 
 use crate::bookmark;
 use crate::commands::{
-    NextBookmark, PrevBookmark, ToggleBookmark,
+    AddBookmarkNote, NextBookmark, PrevBookmark, ToggleBookmark,
 };
 // 【下移】结果放置 / 下发原料定义已随结果存储搬到 rds-result-panel（经 crate::store 重导出）
 
@@ -176,13 +176,133 @@ impl EditorHostPanel {
             self.set_message(Some("没有书签".to_string()), cx);
             return;
         };
-        let target_0 = target_1.saturating_sub(1);
+        self.jump_to_line(target_1, window, cx);
+    }
+
+    /// 【书签】把光标移到指定行（1 起 → 内核 0 起；书签管理器「跳转」用）
+    pub(crate) fn jump_to_line(
+        &mut self,
+        line_1: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target_0 = line_1.saturating_sub(1);
         // `Position` 是 lsp-types 的 (line, character)，字段为 `u32`；行号在 u32 范围内
         let target_0 = u32::try_from(target_0).unwrap_or(0);
         self.editor.update(cx, |state, cx| {
             state.set_cursor_position(Position::new(target_0, 0), window, cx);
         });
         cx.notify();
+    }
+
+    /// 【书签】应用某行书签说明（事件路径：`set_label` + 重绘 + 落盘 sidecar）
+    ///
+    /// 右键「添加书签/说明…」与书签管理器「编辑」都汇到这里：有则改 label、
+    /// 无则插入一枚说明书签；空说明如实保存（用户显式输入，与默认行号可区分）。
+    pub(crate) fn apply_bookmark_label(
+        &mut self,
+        line: usize,
+        label: String,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut bookmarks = self.shared.bookmarks(&self.document);
+        if bookmark::set_label(&mut bookmarks, line, label) {
+            self.shared.set_bookmarks(&self.document, bookmarks);
+            self.refresh_bookmark_decorations(cx);
+            self.sync_bookmarks(cx);
+        }
+        cx.notify();
+    }
+
+    /// 【书签】删除某行书签（事件路径：`remove_line` + 重绘 + 落盘）
+    pub(crate) fn delete_bookmark(
+        &mut self,
+        line: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut bookmarks = self.shared.bookmarks(&self.document);
+        if bookmark::remove_line(&mut bookmarks, line) {
+            self.shared.set_bookmarks(&self.document, bookmarks);
+            self.refresh_bookmark_decorations(cx);
+            self.sync_bookmarks(cx);
+        }
+        cx.notify();
+    }
+
+    /// 【书签】右键「添加书签/说明…」：当前行弹说明输入框（预填现有说明或行号）
+    ///
+    /// 不依赖折叠能力（Analysis 模式也能标记）；折叠区域的说明经此落成书签，
+    /// 「只有写了说明才被记录」的口径由 [`Self::apply_bookmark_label`] 保证。
+    pub(crate) fn on_add_bookmark_note(
+        &mut self,
+        _: &AddBookmarkNote,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let line_1 = self.cursor_line_1(cx);
+        let initial = self
+            .shared
+            .bookmarks(&self.document)
+            .iter()
+            .find(|b| b.line == line_1)
+            .map(|b| b.label.clone())
+            .unwrap_or_else(|| line_1.to_string());
+        let entity = cx.entity();
+        crate::view::dialogs::open_bookmark_note_dialog(
+            window,
+            cx,
+            line_1,
+            initial,
+            move |label, window, cx| {
+                entity.update(cx, |panel, cx| {
+                    panel.apply_bookmark_label(line_1, label, window, cx);
+                });
+            },
+        );
+    }
+
+    /// 【书签】工具栏「书签」按钮：打开书签管理器浮层（列表 + 跳转 / 编辑 / 删除）
+    pub(crate) fn open_bookmark_manager(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let bookmarks = self.shared.bookmarks(&self.document);
+        let entity = cx.entity();
+        // 每个回调各持一份 entity（`move` 闭包在定义时即捕获，不能共享同一份）
+        let jump_entity = entity.clone();
+        let edit_entity = entity.clone();
+        let delete_entity = entity.clone();
+        crate::view::dialogs::open_bookmark_manager(
+            window,
+            cx,
+            bookmarks,
+            // 跳转：定位到书签行
+            move |line, window, cx| {
+                jump_entity.update(cx, |panel, cx| panel.jump_to_line(line, window, cx));
+            },
+            // 编辑：换输入框弹窗改说明（先关管理器浮层再开）
+            move |line, current, window, cx| {
+                let edit_entity = edit_entity.clone();
+                crate::view::dialogs::open_bookmark_note_dialog(
+                    window,
+                    cx,
+                    line,
+                    current,
+                    move |label, window, cx| {
+                        edit_entity.update(cx, |panel, cx| {
+                            panel.apply_bookmark_label(line, label, window, cx);
+                        });
+                    },
+                );
+            },
+            // 删除：移除该行书签
+            move |line, window, cx| {
+                delete_entity.update(cx, |panel, cx| panel.delete_bookmark(line, window, cx));
+            },
+        );
     }
 
     /// 【T2c-3 收尾】切换编辑内容模式（行编辑 / 列编辑）。只改面板态并重绘；

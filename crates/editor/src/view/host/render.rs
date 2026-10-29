@@ -116,7 +116,9 @@ impl Render for EditorHostPanel {
             // 【书签】`Ctrl+Shift+B` 切换 / `F8` 下一 / `Shift+F8` 上一（键位在 crates/app 注册）
             .on_action(cx.listener(Self::on_toggle_bookmark))
             .on_action(cx.listener(Self::on_next_bookmark))
-            .on_action(cx.listener(Self::on_prev_bookmark));
+            .on_action(cx.listener(Self::on_prev_bookmark))
+            // 【书签说明】右键「添加书签/说明…」（菜单项派发的动作；弹说明输入框）
+            .on_action(cx.listener(Self::on_add_bookmark_note));
         // 工具栏（②）：模式指示器在这里，模式不再是只能从状态栏读到的短标签
         let mode = self
             .with_document(|doc| doc.mode())

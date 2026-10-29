@@ -40,6 +40,7 @@ actions!(
         ToggleBookmark,
         NextBookmark,
         PrevBookmark,
+        AddBookmarkNote,
     ]
 );
 

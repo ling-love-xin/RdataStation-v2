@@ -26,6 +26,36 @@ pub fn toggle(bookmarks: &mut Vec<Bookmark>, line: usize) -> bool {
     }
 }
 
+/// 设置某行书签的说明（**有则改、无则插入**）；返回是否变化
+///
+/// 折叠说明书签的入口（用户给折叠区域写说明 → `label` 落成说明文字）；
+/// 与 [`toggle`] 的"默认说明 = 行号"互补：本函数让书签带上用户自己的话。
+pub fn set_label(
+    bookmarks: &mut Vec<Bookmark>,
+    line: usize,
+    label: impl Into<String>,
+) -> bool {
+    let label = label.into();
+    if let Some(existing) = bookmarks.iter_mut().find(|b| b.line == line) {
+        if existing.label == label {
+            return false;
+        }
+        existing.label = label;
+        true
+    } else {
+        bookmarks.push(Bookmark { line, label });
+        normalize(bookmarks);
+        true
+    }
+}
+
+/// 删除某行书签（无该行 = 无操作）；返回是否删除
+pub fn remove_line(bookmarks: &mut Vec<Bookmark>, line: usize) -> bool {
+    let before = bookmarks.len();
+    bookmarks.retain(|b| b.line != line);
+    bookmarks.len() != before
+}
+
 /// 按行号排序 + 去重（写回 sidecar 前的规整；跳转假设已排序）
 pub fn normalize(bookmarks: &mut Vec<Bookmark>) {
     bookmarks.sort_by_key(|b| b.line);
@@ -214,5 +244,47 @@ mod tests {
         let b = vec![bm(3), bm(1), bm(3), bm(2)];
         assert_eq!(lines(&b), vec![1, 2, 3]);
         assert!(lines(&[]).is_empty());
+    }
+
+    #[test]
+    fn set_label_edits_an_existing_bookmark() {
+        let mut b = vec![bm(3), bm(7)];
+        assert!(set_label(&mut b, 3, "折叠说明：CTE 迁移遗留"), "改 label 报真变");
+        assert_eq!(b[0].label, "折叠说明：CTE 迁移遗留");
+        assert_eq!(b[0].line, 3, "改说明不动行号");
+        assert_eq!(b.len(), 2);
+    }
+
+    #[test]
+    fn set_label_inserts_when_absent() {
+        let mut b = vec![bm(3)];
+        assert!(set_label(&mut b, 9, "说明"), "无该行 = 插入");
+        assert_eq!(b.len(), 2);
+        assert_eq!(b[1].label, "说明");
+        assert_eq!(lines(&b), vec![3, 9], "插入后保持升序");
+    }
+
+    #[test]
+    fn set_label_noop_when_label_unchanged() {
+        let mut b = vec![Bookmark { line: 3, label: "原样".to_string() }];
+        assert!(!set_label(&mut b, 3, "原样"), "同值 = 未变");
+        assert_eq!(b.len(), 1);
+    }
+
+    #[test]
+    fn set_label_empty_label_is_recorded_as_is() {
+        // 空说明是用户显式输入的（不是默认行号），如实保存——与「无说明书签」可区分
+        let mut b = vec![bm(3)];
+        assert!(set_label(&mut b, 3, ""), "空串也是用户说明");
+        assert_eq!(b[0].label, "");
+    }
+
+    #[test]
+    fn remove_line_deletes_only_that_line() {
+        let mut b = vec![bm(1), bm(3), bm(7)];
+        assert!(remove_line(&mut b, 3), "删除报真变");
+        assert_eq!(lines(&b), vec![1, 7]);
+        assert!(!remove_line(&mut b, 9), "无该行 = 无操作");
+        assert_eq!(b.len(), 2);
     }
 }

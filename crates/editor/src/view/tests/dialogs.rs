@@ -951,3 +951,136 @@ fn the_toolbar_only_offers_execution_in_sql_mode(cx: &mut TestAppContext) {
     assert!(!exec_present(cx), "分析模式的执行随单元落地（1c）");
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// 书签：说明输入框 + 管理器浮层（工具栏入口 → 弹层）
+// ══════════════════════════════════════════════════════════════════════
+
+/// 右键「添加书签/说明…」：当前行弹说明输入框；保存路径（apply_bookmark_label）
+/// 改 label 并落盘 sidecar——"写了说明才被记录"（无说明折叠不落盘）。
+#[gpui_kit::test]
+fn bookmark_note_dialog_applies_a_label_and_persists(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let dir = temp_dir("bookmark-note");
+    let path = dir.join("note.sql");
+    std::fs::write(&path, "select 1\nselect 2\nselect 3").expect("写盘");
+    let sidecar = dir.join(".note.sql.meta.json");
+
+    let shared = EditorShared::new();
+    let id = crate::persist::open_file(&shared, &path, EditorMode::Sql)
+        .expect("打开")
+        .id()
+        .clone();
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-bookmark-note");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
+
+    // 当前行（默认第 1 行）→ 说明输入框弹出（生产入口，带真实窗口）
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.on_add_bookmark_note(&crate::commands::AddBookmarkNote, window, cx);
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "说明输入框要弹出"
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-editor-bookmark-note-input"),
+        "输入框要在弹层里"
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-editor-bookmark-note-save"),
+        "保存按钮要在弹层里"
+    );
+
+    // 保存路径：apply_bookmark_label（输入框真实键入在 headless 难驱动，走同一提交回调）
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.apply_bookmark_label(1, "折叠说明：CTE 迁移遗留".to_string(), window, cx);
+        });
+    });
+    assert_eq!(shared.bookmarks(&id).len(), 1, "说明后内存应有一枚书签");
+    assert_eq!(shared.bookmarks(&id)[0].label, "折叠说明：CTE 迁移遗留");
+    assert!(sidecar.exists(), "说明要落盘 sidecar");
+    let meta = file_meta::read_meta(&path).expect("读回 meta");
+    assert_eq!(meta.bookmarks[0].label, "折叠说明：CTE 迁移遗留");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 管理器浮层：列书签（行号 + 徽标 + 说明）+ 三操作；无书签给空态
+#[gpui_kit::test]
+fn bookmark_manager_lists_and_offers_actions(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\mgr.sql", "select 1\nselect 2\nselect 3");
+    // 预置：一枚默认书签（行 1，label=行号）+ 一枚说明书签（行 3）
+    shared.set_bookmarks(
+        &id,
+        vec![
+            file_meta::Bookmark {
+                line: 1,
+                label: "1".to_string(),
+            },
+            file_meta::Bookmark {
+                line: 3,
+                label: "折叠说明：权限模板".to_string(),
+            },
+        ],
+    );
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-bookmark-mgr");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
+
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.open_bookmark_manager(window, cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "管理器要弹出"
+    );
+    eprintln!(
+        "DIAG line1={} jump3={} edit3={} delete1={} empty={}",
+        cx.debug_bounds("editor-dialog-editor-bookmark-line-1").is_some(),
+        cx.debug_bounds("editor-dialog-editor-bookmark-jump-3").is_some(),
+        cx.debug_bounds("editor-dialog-editor-bookmark-edit-3").is_some(),
+        cx.debug_bounds("editor-dialog-editor-bookmark-delete-1").is_some(),
+        cx.debug_bounds("editor-dialog-editor-bookmark-empty").is_some()
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-editor-bookmark-line-1"),
+        "行 1 书签在列表"
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-editor-bookmark-jump-3"),
+        "说明书签行 3 有跳转"
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-editor-bookmark-edit-3"),
+        "说明书签行 3 有编辑"
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-editor-bookmark-delete-1"),
+        "行 1 有删除"
+    );
+}
+
+/// 管理器空态：没书签时给引导文案，不是"加载失败"
+#[gpui_kit::test]
+fn bookmark_manager_shows_empty_state_when_no_bookmarks(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\empty.sql", "select 1");
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-bookmark-empty");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
+
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.open_bookmark_manager(window, cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-editor-bookmark-empty"),
+        "空态文案要在"
+    );
+}
+

@@ -22,6 +22,8 @@ use gpui_kit::component::input::{
 use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::*;
 
+use crate::commands::AddBookmarkNote;
+
 /// 菜单条目（渲染时逐条翻译成 `NativeMenuItem`；纯数据便于测试）
 ///
 /// 不派生任何比较 / 克隆 trait：`Box<dyn Action>` 既不是 `PartialEq` 也不是
@@ -80,6 +82,15 @@ pub fn menu_entries(
             disabled: false,
             action: Box::new(SelectAll),
         },
+        // 【书签说明】给当前行写一句书签说明（折叠说明书签的入口）：任何行都可用
+        // （不依赖折叠能力——Analysis 模式也能给行做标记）。与 Ctrl+Shift+B 的
+        // 「默认说明 = 行号」互补：这里允许用户写自己的话。
+        EditorMenuEntry::Separator,
+        EditorMenuEntry::Action {
+            label: "添加书签/说明…",
+            disabled: false,
+            action: Box::new(AddBookmarkNote),
+        },
     ];
     if has_definition || has_code_actions {
         entries.push(EditorMenuEntry::Separator);
@@ -133,7 +144,7 @@ mod tests {
 
     #[test]
     fn empty_editor_offers_edit_items_and_select_all() {
-        // 可编辑、无选区、无 provider：只有剪切 / 复制 / 粘贴 / 全选
+        // 可编辑、无选区、无 provider：剪切 / 复制 / 粘贴 / 全选 + 书签说明
         let entries = menu_entries(true, false, false, false);
         assert_eq!(
             shape(&entries),
@@ -143,6 +154,8 @@ mod tests {
                 ("粘贴", false), // 可编辑 → 粘贴可用
                 ("—", false),
                 ("全选", false),
+                ("—", false),
+                ("添加书签/说明…", false), // 书签说明常亮（不依赖编辑能力）
             ]
         );
     }
@@ -170,11 +183,14 @@ mod tests {
     fn providers_add_definition_and_code_action_sections() {
         let entries = menu_entries(true, false, true, true);
         let shape = shape(&entries);
-        // 剪切 / 复制（无选区置灰）/ 粘贴 / 分隔 / 全选 / 分隔 / 转到定义 / 代码操作
-        assert_eq!(shape.len(), 8, "{shape:?}");
+        // 剪切 / 复制（无选区置灰）/ 粘贴 / 分隔 / 全选 / 分隔 / 添加书签/说明 /
+        // 分隔 / 转到定义 / 代码操作
+        assert_eq!(shape.len(), 10, "{shape:?}");
         assert_eq!(shape[5], ("—", false));
-        assert_eq!(shape[6], ("转到定义", false));
-        assert_eq!(shape[7], ("代码操作…", false));
+        assert_eq!(shape[6], ("添加书签/说明…", false));
+        assert_eq!(shape[7], ("—", false));
+        assert_eq!(shape[8], ("转到定义", false));
+        assert_eq!(shape[9], ("代码操作…", false));
     }
 
     #[test]

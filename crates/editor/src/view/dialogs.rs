@@ -916,6 +916,186 @@ pub fn open_schema_picker(
     state
 }
 
+// ═══ 书签弹窗（书签说明输入 + 书签管理器列表）═══
+
+/// 【书签】给某行写书签说明（折叠说明书签的输入口）
+///
+/// 与 `open_bind_dialog` 同构：输入实体在**开窗前**建好并预填（有说明 = 改、
+/// 无 = 默认行号）；保存 → 回调宿主（`set_label` + 落盘 sidecar）。
+/// Esc / 点遮罩 / 取消 = 不改。
+pub fn open_bookmark_note_dialog(
+    window: &mut Window,
+    cx: &mut App,
+    line: usize,
+    initial: String,
+    on_submit: impl Fn(String, &mut Window, &mut App) + 'static,
+) {
+    use gpui_kit::component::input::{Input, InputState};
+
+    let input = cx.new(|cx| {
+        let mut state = InputState::new(window, cx);
+        state.set_value(initial, window, cx);
+        state
+    });
+    let on_submit = Rc::new(on_submit);
+
+    window.open_dialog(cx, move |dialog, _window, cx| {
+        let theme = cx.theme();
+        let muted = theme.colors.muted_foreground;
+
+        let body = div()
+            .v_flex()
+            .w_full()
+            .gap_2()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(format!("第 {line} 行 · 写一句为什么（折叠区域留说明会被记录）")),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "editor-dialog-editor-bookmark-note-input".to_string())
+                    .child(Input::new(&input)),
+            );
+
+        let save = Button::new("editor-bookmark-note-save")
+            .with_variant(ButtonVariant::Primary)
+            .small()
+            .label("保存")
+            .debug_selector(|| "editor-dialog-editor-bookmark-note-save".to_string())
+            .on_click({
+                let on_submit = on_submit.clone();
+                let input = input.clone();
+                move |_, window, cx| {
+                    let text = input.read(cx).value().to_string();
+                    window.close_dialog(cx);
+                    on_submit(text, window, cx);
+                }
+            });
+        let cancel = action_button("editor-bookmark-note-cancel", "取消", ButtonVariant::Ghost, {
+            move |_window, _cx| {}
+        });
+
+        dialog
+            .title(format!("书签说明 · 第 {line} 行"))
+            .child(body)
+            .footer(DialogFooter::new().child(cancel).child(save))
+    });
+}
+
+/// 【书签】书签管理器浮层：列出当前文档全部书签（行号 + 徽标 + 说明 + 操作）
+///
+/// 徽标判据：`label == 行号文本` = 普通书签（`Ctrl+Shift+B` 默认，无自定义说明）；
+/// 否则 = 说明书签（折叠区域写的说明在此列，label 即说明）。
+/// 操作：跳转（定位该行）/ 编辑（换输入框弹窗改说明）/ 删除——三个动作都会先关浮层
+/// （列表是快照，宿主在回调里改内存 + 落盘后重开即见新状态）。
+/// 空书签给空态文案（不是"加载失败"，就是没有）。
+pub fn open_bookmark_manager(
+    window: &mut Window,
+    cx: &mut App,
+    bookmarks: Vec<file_meta::Bookmark>,
+    on_jump: impl Fn(usize, &mut Window, &mut App) + 'static,
+    on_edit: impl Fn(usize, String, &mut Window, &mut App) + 'static,
+    on_delete: impl Fn(usize, &mut Window, &mut App) + 'static,
+) {
+    let on_jump = Rc::new(on_jump);
+    let on_edit = Rc::new(on_edit);
+    let on_delete = Rc::new(on_delete);
+
+    window.open_dialog(cx, move |dialog, _window, cx| {
+        let theme = cx.theme();
+        let muted = theme.colors.muted_foreground;
+        let border = theme.colors.border;
+
+        let mut list = bookmarks.clone();
+        crate::bookmark::normalize(&mut list);
+        let rows = list.iter().map(|b| {
+            let line = b.line;
+            let is_note = b.label != line.to_string();
+            let badge = if is_note { "✎ 说明" } else { "📌 书签" };
+            let badge_color = if is_note { muted } else { theme.colors.primary };
+            let label_text = b.label.clone();
+            let on_jump = on_jump.clone();
+            let on_edit = on_edit.clone();
+            let on_delete = on_delete.clone();
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .border_b_1()
+                .border_color(border)
+                .child(
+                    div()
+                        .w_10()
+                        .text_xs()
+                        .text_color(muted)
+                        .debug_selector(move || format!("editor-dialog-editor-bookmark-line-{line}").to_string())
+                        .child(line.to_string()),
+                )
+                .child(div().text_xs().text_color(badge_color).child(badge))
+                .child(div().flex_1().text_xs().child(label_text.clone()))
+                .child(
+                    Button::new(format!("editor-bookmark-jump-{line}"))
+                        .ghost()
+                        .small()
+                        .label("跳转")
+                        .debug_selector(move || format!("editor-dialog-editor-bookmark-jump-{line}").to_string())
+                        .on_click(move |_, window, cx| {
+                            window.close_dialog(cx);
+                            on_jump(line, window, cx);
+                        }),
+                )
+                .child(
+                    Button::new(format!("editor-bookmark-edit-{line}"))
+                        .ghost()
+                        .small()
+                        .label("编辑")
+                        .debug_selector(move || format!("editor-dialog-editor-bookmark-edit-{line}").to_string())
+                        .on_click(move |_, window, cx| {
+                            window.close_dialog(cx);
+                            on_edit(line, label_text.clone(), window, cx);
+                        }),
+                )
+                .child(
+                    Button::new(format!("editor-bookmark-delete-{line}"))
+                        .ghost()
+                        .small()
+                        .label("删除")
+                        .debug_selector(move || format!("editor-dialog-editor-bookmark-delete-{line}").to_string())
+                        .on_click(move |_, window, cx| {
+                            window.close_dialog(cx);
+                            on_delete(line, window, cx);
+                        }),
+                )
+        });
+
+        let body = if list.is_empty() {
+            div()
+                .w_full()
+                .text_xs()
+                .text_color(muted)
+                .py_4()
+                .flex()
+                .justify_center()
+                .debug_selector(|| "editor-dialog-editor-bookmark-empty".to_string())
+                .child("还没有书签 —— Ctrl+Shift+B 或右键「添加书签/说明…」")
+        } else {
+            div().v_flex().w_full().gap_0().children(rows)
+        };
+
+        let close = action_button("editor-bookmark-close", "关闭", ButtonVariant::Ghost, {
+            move |_window, _cx| {}
+        });
+        dialog
+            .title("书签")
+            .child(body)
+            .footer(DialogFooter::new().child(close))
+    });
+}
+
 // ═══ 连接 / 库 / Schema 选择器纯逻辑测试（headless 口径：不点对话框，驱动实体方法/纯函数）═══
 #[cfg(test)]
 mod picker_tests {

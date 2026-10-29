@@ -71,6 +71,26 @@ impl EditorHostPanel {
                     }),
             );
 
+        // 【书签】工具栏入口（三模式通用：模式指示器后固定位置，不随组移动）。
+        // 打开书签管理器浮层（列表 + 跳转 / 编辑说明 / 删除）；书签是文档级标记，
+        // 与执行通道等 SQL 专属控件分开——任何模式都该能看「这个文件标了什么」。
+        toolbar = toolbar.child(
+            Button::new("editor-bookmarks")
+                .ghost()
+                .small()
+                .icon(IconName::BookMarked)
+                .tooltip("书签")
+                .debug_selector(|| "editor-bookmarks".to_string())
+                .on_click({
+                    let toolbar_entity = toolbar_entity.clone();
+                    move |_, window, cx| {
+                        toolbar_entity.update(cx, |panel, cx| {
+                            panel.open_bookmark_manager(window, cx);
+                        });
+                    }
+                }),
+        );
+
         // 【核对】工具栏形态以能力表为唯一分叉（不再按 mode 硬编码）：Full = SQL 组列表 +
         // 执行位置 / 连接；Minimal = 环境 + 脚本运行；Notebook = 笔记级动作 1c 留白。
         match crate::model::Capabilities::for_mode(mode).toolbar {
