@@ -2364,6 +2364,34 @@ impl MockPanel {
         cx.notify();
     }
 
+    /// 从字段预设加列（列名冲突自动加序号：`name` → `name_2`）。
+    /// 应用后是普通列，照常走列编辑对话框微调，不锁定后续编辑。
+    pub fn add_preset_column(&mut self, preset: &FieldPreset, cx: &mut Context<Self>) {
+        let base = preset.column.name.clone();
+        let mut name = base.clone();
+        let mut n = 2u32;
+        while self.draft.columns.iter().any(|c| c.def.name == name) {
+            name = format!("{base}_{n}");
+            n += 1;
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        let spec = MockColumnSpec {
+            id,
+            def: ColumnDef {
+                name,
+                ..preset.column.clone()
+            },
+            confidence: preset.confidence.to_string(),
+            sample_value: String::new(),
+        };
+        self.draft.columns.push(spec);
+        self.results.clear();
+        self.current = 0;
+        self.landed = None;
+        cx.notify();
+    }
+
     /// 删列。
     pub fn remove_column(&mut self, id: u64, cx: &mut Context<Self>) {
         self.draft.columns.retain(|c| c.id != id);
