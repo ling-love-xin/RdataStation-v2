@@ -70,7 +70,8 @@ async fn failed_database_handshake_releases_tunnel() {
     let target_port = spawn_dummy_target().await;
     let proxy_port = spawn_http_proxy_that_drops_upstream().await;
 
-    let service = ConnectionService::new(Arc::new(ConnectionManager::new()));
+    let manager = Arc::new(ConnectionManager::new());
+    let service = ConnectionService::new(manager.clone());
     let conn_id = "G_it_tunnel_cleanup".to_string();
 
     let attempt = service.connect_with_type(ConnectRequest {
@@ -109,8 +110,9 @@ async fn failed_database_handshake_releases_tunnel() {
         .expect("连接尝试超时（代理应答后应立即失败）");
 
     assert!(result.is_err(), "上游断开时数据库握手应失败");
+    // 隧道注册表取自连接管理器（审计 #20），此处直接以 manager 为准。
     assert_eq!(
-        service.tunnel_count(&conn_id).await,
+        manager.tunnels().count(&conn_id).await,
         0,
         "连接失败后应回收隧道守卫（本地端口与后台任务不残留）"
     );
