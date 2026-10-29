@@ -1,7 +1,7 @@
 use super::*;
 use chrono::Utc;
 use serde_json::Value;
-use shared::error::{CommonError, CoreError, StorageError};
+use shared::error::{CoreError, StorageError};
 
 /// 归档资源表的固定列顺序：单行读取、列表、分页三处必须一致。
 ///
