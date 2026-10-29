@@ -5,7 +5,7 @@
 //! 不上色：裸词（编辑中的非法 JSON）、普通文本。词法失败不 panic：未闭合字符串
 //! 按「到行尾」收尾；字符串后的空白与 `:` 前瞻判定键，不消费前瞻字符。
 
-use crate::sql::{HighlightSpan, TokenClass};
+use crate::{HighlightSpan, TokenClass};
 
 /// 计算 JSON 的高亮区间（整篇扫描，按出现顺序、互不重叠）
 pub fn json_spans(text: &str) -> Vec<HighlightSpan> {

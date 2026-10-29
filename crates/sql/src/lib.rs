@@ -1,0 +1,62 @@
+//! SQL 语言服务 crate（rds-sql）
+//!
+//! 自 engine 抽取（2026-10-29，见 `docs/architecture/layout/crate-slimming-engine.md` 第一刀）：
+//! 本 crate 是 sqlglot-rust 在 RdataStation 中的唯一接入点。
+//! 所有对底层 SQL 解析、生成、构建、优化、方言转换能力的调用，
+//! 均通过本 crate 间接进行。业务模块不直接依赖 sqlglot-rust 的 API。
+//!
+//! # 子模块
+//!
+//! - `engine` — SqlEngine 结构体定义与公开方法
+//! - `parser` — SQL 解析与特征检测（parse_and_route）
+//! - `split` — 词法级语句切分（执行当前语句 / 批量执行 / 语句数的基础，不依赖解析器）
+//! - `highlight` — 词法高亮区间（tokenizer 驱动，视图层只负责上色）
+//! - `builder` — Expression Builder 封装（DDL/DML 生成）
+//! - `formatter` — SQL 格式化
+//! - `transpiler` — 方言转换
+//! - `explain` — 执行计划（EXPLAIN）的方言前缀
+//! - `rewrite` — 脚本级改写骨架（切分 → 逐条改写 → 原位回填，格式化与转译共用；
+//!   原 `sql::script`，因与脚本词法器模块 `script` 同名而改名）
+//! - `filter` — 下发源库的筛选改写（包一层子查询 + WHERE + ORDER BY 提到外层）
+//! - `bind` — 参数绑定（DBeaver 式 `:name` 扫描与字面替换）
+//! - `script` — 脚本语言词法高亮（Python / R / Rust / Markdown / JSON / Log，
+//!   自 engine `script` 模块随迁，产出与 SQL 同构的 `HighlightSpan`）
+
+mod bind;
+mod builder;
+mod engine;
+mod explain;
+mod filter;
+mod formatter;
+mod function_manual;
+mod functions;
+mod highlight;
+mod hover;
+mod jump;
+mod parser;
+mod refs;
+mod rewrite;
+mod semantic;
+mod split;
+mod transpiler;
+pub mod script;
+
+pub use builder::QualifiedTable;
+pub use bind::{param_names, substitute_params};
+pub use engine::{AlterOperation, ColumnDefInfo, DdlInfo, SqlDialect, SqlEngine, SqlStatementType};
+pub use explain::explain_sql;
+pub use formatter::{FormatOptions, FormatReport, KeywordCase};
+pub use filter::{Rewrite, rewrite_with_filter, rewrite_with_order};
+pub use functions::{
+    builtin_signatures, catalog_query, parameter_query, parse_catalog_rows, FunctionSignature,
+    ParamInfo,
+};
+pub use function_manual::{search_manual, ManualCategory, ManualEntry, MANUAL};
+pub use highlight::{context_kind_at, highlight_spans, ContextKind, HighlightSpan, TokenClass};
+pub use hover::{hover_at, HoverInfo, HoverKind};
+pub use jump::{jump_at, JumpKind, JumpTarget};
+pub use parser::ProjectionSource;
+pub use rewrite::ScriptRewrite;
+pub use semantic::{diagnose, CatalogTable, SemanticIssue};
+pub use split::{split_statements, SqlStatement};
+pub use transpiler::TranspileReport;

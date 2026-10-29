@@ -26,7 +26,7 @@
 use sqlglot_rust::{Dialect, transpile as sqlglot_transpile, transpile_with_comments};
 
 use super::engine::SqlDialect;
-use super::script::rewrite_statements;
+use super::rewrite::rewrite_statements;
 
 /// 转译的结果（给界面用：**翻了几条 / 哪几条没动**都要说得清）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,7 +98,7 @@ pub fn transpile(sql: &str, source: SqlDialect, target: SqlDialect) -> Result<St
 mod tests {
     // 安全模式：**不通配导入**
     use super::{transpile, transpile_with_report};
-    use crate::sql::{SqlDialect, split_statements};
+    use crate::{SqlDialect, split_statements};
 
     /// **硬约束回归（架构 §12 #19）**：脚本转译**一条都不能丢**
     #[test]

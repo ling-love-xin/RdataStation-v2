@@ -39,7 +39,7 @@ pub fn explain_sql(dialect: SqlDialect, sql: &str) -> Option<String> {
 mod tests {
     // 安全模式：**不通配导入**
     use super::explain_sql;
-    use crate::sql::SqlDialect;
+    use crate::SqlDialect;
 
     #[test]
     fn the_prefix_follows_the_dialect() {

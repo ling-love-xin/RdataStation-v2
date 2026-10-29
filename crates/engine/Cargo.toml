@@ -11,6 +11,9 @@ shared.workspace = true
 paths.workspace = true
 # 连接层已抽取为独立 crate（driver/factory 与 registry/config 引用它）
 connection.workspace = true
+# SQL 语言服务（解析/切分/高亮/格式化/转译/语义/脚本词法），自本 crate 抽取（2026-10-29）。
+# 键为 `rds-sql`（不是 `sql`）：本 crate 自有 `pub mod sql` 命名空间，避免同名遮蔽。
+rds-sql.workspace = true
 
 # ===== 分析引擎 =====
 duckdb.workspace = true
@@ -62,7 +65,6 @@ dashmap.workspace = true
 once_cell.workspace = true
 lru.workspace = true
 rand.workspace = true
-sqlglot-rust.workspace = true
 percent-encoding.workspace = true
 toml.workspace = true
 regex.workspace = true

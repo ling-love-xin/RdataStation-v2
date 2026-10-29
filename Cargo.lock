@@ -8273,6 +8273,7 @@ dependencies = [
  "rds-connection",
  "rds-paths",
  "rds-shared",
+ "rds-sql",
  "regex",
  "rusqlite",
  "russh",
@@ -8280,7 +8281,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "specta",
- "sqlglot-rust",
  "sqlx",
  "sqlx-mysql",
  "sqlx-postgres",
@@ -8512,6 +8512,15 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "rds-sql"
+version = "0.2.5"
+dependencies = [
+ "serde",
+ "sqlglot-rust",
+ "tracing",
 ]
 
 [[package]]

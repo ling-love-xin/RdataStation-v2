@@ -5,7 +5,7 @@
 //! 运算符与标点。标识符（变量/函数定义名/模块名）**不上色**（正文色，与 SQL 一致）。
 //! 词法失败不 panic：未闭合字符串按「到行尾」收尾，其余照常上色。
 
-use crate::sql::{HighlightSpan, TokenClass};
+use crate::{HighlightSpan, TokenClass};
 
 /// Python 关键字（Python 3，不含 True/False/None——它们是常量）
 const KEYWORDS: &[&str] = &[

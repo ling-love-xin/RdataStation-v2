@@ -5,7 +5,7 @@
 //! 函数调用启发式（标识符紧跟 `(`）。普通标识符不上色（正文色）。
 //! 注意 `#` 只在字符串**外**算注释——扫描按字符推进、字符串态优先。
 
-use crate::sql::{HighlightSpan, TokenClass};
+use crate::{HighlightSpan, TokenClass};
 
 /// R 关键字
 const KEYWORDS: &[&str] = &[

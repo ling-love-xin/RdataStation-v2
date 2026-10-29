@@ -1,57 +1,10 @@
-//! SQL 处理基础能力统一封装模块
+//! SQL 语言服务（重导出自 rds-sql）
 //!
-//! `core/sql/` 是 sqlglot-rust 在 RdataStation 中的唯一接入点。
-//! 所有对底层 SQL 解析、生成、构建、优化、方言转换能力的调用，
-//! 均通过此模块间接进行。业务模块不直接依赖 sqlglot-rust 的 API。
+//! 2026-10-29 起 SQL 处理能力独立为 `crates/sql`（rds-sql，见
+//! `docs/architecture/layout/crate-slimming-engine.md` 第一刀），本模块仅作
+//! 命名空间保真薄壳：外部 `engine::sql::*` 路径零改动。
 //!
-//! # 子模块
-//!
-//! - `engine` — SqlEngine 结构体定义与公开方法
-//! - `parser` — SQL 解析与特征检测（parse_and_route）
-//! - `split` — 词法级语句切分（执行当前语句 / 批量执行 / 语句数的基础，不依赖解析器）
-//! - `highlight` — 词法高亮区间（tokenizer 驱动，视图层只负责上色）
-//! - `builder` — Expression Builder 封装（DDL/DML 生成）
-//! - `formatter` — SQL 格式化
-//! - `transpiler` — 方言转换
-//! - `explain` — 执行计划（EXPLAIN）的方言前缀
-//! - `script` — 脚本级改写骸架（切分 → 逐条改写 → 原位回填，格式化与转译共用）
-//! - `filter` — 下发源库的筛选改写（包一层子查询 + WHERE + ORDER BY 提到外层）
-//! - `bind` — 参数绑定（DBeaver 式 `:name` 扫描与字面替换）
+//! 注意：`engine::sql::script` 随 `rds_sql::*` 一并可见（脚本词法器模块），
+//! 与 `engine::script`（同一模块的另一薄壳）指向相同代码。
 
-mod bind;
-mod builder;
-mod engine;
-mod explain;
-mod filter;
-mod formatter;
-mod function_manual;
-mod functions;
-mod highlight;
-mod hover;
-mod jump;
-mod parser;
-mod refs;
-mod script;
-mod semantic;
-mod split;
-mod transpiler;
-
-pub use builder::QualifiedTable;
-pub use bind::{param_names, substitute_params};
-pub use engine::{AlterOperation, ColumnDefInfo, DdlInfo, SqlDialect, SqlEngine, SqlStatementType};
-pub use explain::explain_sql;
-pub use formatter::{FormatOptions, FormatReport, KeywordCase};
-pub use filter::{Rewrite, rewrite_with_filter, rewrite_with_order};
-pub use functions::{
-    builtin_signatures, catalog_query, parameter_query, parse_catalog_rows, FunctionSignature,
-    ParamInfo,
-};
-pub use function_manual::{search_manual, ManualCategory, ManualEntry, MANUAL};
-pub use highlight::{context_kind_at, highlight_spans, ContextKind, HighlightSpan, TokenClass};
-pub use hover::{hover_at, HoverInfo, HoverKind};
-pub use jump::{jump_at, JumpKind, JumpTarget};
-pub use parser::ProjectionSource;
-pub use script::ScriptRewrite;
-pub use semantic::{diagnose, CatalogTable, SemanticIssue};
-pub use split::{split_statements, SqlStatement};
-pub use transpiler::TranspileReport;
+pub use rds_sql::*;

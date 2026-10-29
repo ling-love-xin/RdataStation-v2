@@ -11,7 +11,7 @@
 //!
 //! 正文消息不上色。词法失败不 panic：未闭合引号按「到行尾」收尾。
 
-use crate::sql::{HighlightSpan, TokenClass};
+use crate::{HighlightSpan, TokenClass};
 
 /// 级别 → 类别（级别词匹配用，词边界：前后都不是字母/数字/下划线）
 const LEVEL_CLASSES: &[(&str, TokenClass)] = &[

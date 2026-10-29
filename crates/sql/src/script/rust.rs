@@ -6,7 +6,7 @@
 //! function）、函数调用启发式、`#[…]` 属性（整体 tag）、运算符与标点。
 //! 不做上下文语义：泛型类型实参 `<T>` 里的 T、普通标识符不上色。
 
-use crate::sql::{HighlightSpan, TokenClass};
+use crate::{HighlightSpan, TokenClass};
 
 /// Rust 关键字（2018 版起常用集；true/false 是布尔字面量，走 `Boolean`）
 const KEYWORDS: &[&str] = &[

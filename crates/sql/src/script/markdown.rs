@@ -6,7 +6,7 @@
 //! 围栏内代码（留待后续按语言递归）、正文。
 //! 词法失败不 panic：未闭合行内代码按「到行尾」收尾。
 
-use crate::sql::{HighlightSpan, TokenClass};
+use crate::{HighlightSpan, TokenClass};
 
 /// 计算 Markdown 的高亮区间（按行扫描，围栏代码块内整段跳过）
 pub fn markdown_spans(text: &str) -> Vec<HighlightSpan> {

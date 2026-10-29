@@ -23,7 +23,7 @@ use sqlglot_rust::{Dialect, generate_pretty, parse_statements_with_comments};
 
 use super::engine::SqlDialect;
 use super::highlight::{TokenClass, highlight_spans};
-use super::script::rewrite_statements;
+use super::rewrite::rewrite_statements;
 
 /// 格式化选项（sqlglot pretty 输出固定，这些选项靠安全后处理实现）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
