@@ -5,7 +5,7 @@
 > **收口实测基线**（A6 去评级化后，2026-10-25 实测）：`rds-insight --lib` **244 passed** · `--test column_profile_e2e` **14 passed** · `--test ui_contract` **4 passed**；`cargo fmt -p rds-insight --check` exit 0；`cargo check -p rds-insight --all-targets` EXIT=0、零 error 零 warning。跨 crate 同批分 target 实测：`rds-settings --lib` **32 passed**（旧 31，新增 insight 设置测试）· `rds-engine --lib duckdb::manager::tests` **11 passed**（669 filtered，仅 manager 子集）· `rds-workbench --test ui_contract` **9 passed**。
 
 > **收口结果状态（2026-10-25 更新）**：
-> - **已落地并实测全绿**：A1（K22 `loading_note` 残留）、A2（`workspace.rs` 裸 px 改 rem + 契约清单补登）、A3（`set.rs` 挤行拆分）、B1-a（多列 Tab 空态引导）、B4-a（列选择弹层内搜索框）、B7-a（跳列建议行换 `Button` 键盘可达）、**A6 去评级化（方案 A，见下节）**。
+> - **已落地并实测全绿**：A1（K22 `loading_note` 残留）、A2（`workspace/mod.rs` 裸 px 改 rem + 契约清单补登）、A3（`set.rs` 挤行拆分）、B1-a（多列 Tab 空态引导）、B4-a（列选择弹层内搜索框）、B7-a（跳列建议行换 `Button` 键盘可达）、**A6 去评级化（方案 A，见下节）**。
 > - **本轮拍板口径**：B2 Kendall τ、B3 分组聚合透视、B5 解析级静态门、B4-b 虚拟列表、B4-b 均后置二期，已登记 dev-plan §10；C1/C3 归 M6 P4.1。
 > - **未闭环**：仅余 B6 K21 debug 右键闪退待真机复现定性（未复现前不改 vendor）。跨 crate 统一回归已完成：settings 32 / engine manager 11 / workbench ui_contract 9 全绿。A5 已实测：insight 零告警零错误，范围外 9 条历史告警只记录不改写（详见 A5 节）。
 
@@ -21,7 +21,7 @@
 
 ## 0. 现状一句话
 
-会话级 EDA 探索主线（L1 概览 / L2 列级 / L3 关系）、三源统一取样、集合管理、多表对比、关系排查、归档、资源治理四项设置、检查器四态、DuckDB-only 科研统计均已落地；事件链路 18 个 `InsightEvent` 在 `jobs.rs::handle_event` 全覆盖、宿主接缝无悬空事件。A6 收口后表 / 列画像只呈现事实与检查器命中，不再合成评级。A5 告警实测与跨 crate 统一回归（settings 32 / engine manager 11 / workbench 契约 9）已全绿；剩余仅 **B6 K21 待真机复现**。
+会话级 EDA 探索主线（L1 概览 / L2 列级 / L3 关系）、三源统一取样、集合管理、多表对比、关系排查、归档、资源治理四项设置、检查器四态、DuckDB-only 科研统计均已落地；事件链路 18 个 `InsightEvent` 在 `jobs/mod.rs::handle_event` 全覆盖、宿主接缝无悬空事件。A6 收口后表 / 列画像只呈现事实与检查器命中，不再合成评级。A5 告警实测与跨 crate 统一回归（settings 32 / engine manager 11 / workbench 契约 9）已全绿；剩余仅 **B6 K21 待真机复现**。
 
 ---
 
@@ -40,16 +40,16 @@
 - **优劣**：改动 1 行代码 + 1 个测试；无行为副作用（`loading_note` 本就是随目标生命周期的暂态文本）；不改事件协议。
 - **风险**：低。需先读 `tests.rs` 尾部现有目标切换用例，避免破坏既有断言。
 
-### A2 · 契约守卫漏登 `workspace.rs`，导致裸 `px(240.)` 绕过检查
+### A2 · 契约守卫漏登 `workspace/mod.rs`，导致裸 `px(240.)` 绕过检查
 
-> **收口状态**：✅ 已实施并实测——`ui.rs` 登记 `INSIGHT_WS_TITLE_MAX_WIDTH` 常量，`workspace.rs` 裸 `px(240.)` 改 `rems(...)`；`ui_contract.rs::view_sources()` 补登 `workspace.rs`；契约守卫 4 项全绿（原记录「9 项」为旧基线，现行 4 项）。
+> **收口状态**：✅ 已实施并实测——`ui.rs` 登记 `INSIGHT_WS_TITLE_MAX_WIDTH` 常量，`workspace/mod.rs` 裸 `px(240.)` 改 `rems(...)`；`ui_contract.rs::view_sources()` 补登 `workspace/mod.rs`；契约守卫 4 项全绿（原记录「9 项」为旧基线，现行 4 项）。
 
 - **问题实证**：
-  - `crates/insight/src/workspace.rs:3964` `.max_w(px(240.))`（中间工作页标题栏超长表名省略宽度，上下文 3953-3968 `title`）——全 crate 裸 `px` 仅此一处，裸色值 0 命中。
-  - 根因：`crates/insight/tests/ui_contract.rs::view_sources()`（101-136 行）只显式登记 `insight_view.rs` / `schema_view.rs` / `rule_view.rs` + `view/` 目录递归；**`workspace.rs`（4157 行，本 crate 最大视图文件）漏登**，尺寸 / 颜色契约对它静默失效。这正是该处裸 `px` 能进库的原因。
+  - `crates/insight/src/workspace/mod.rs:3964` `.max_w(px(240.))`（中间工作页标题栏超长表名省略宽度，上下文 3953-3968 `title`）——全 crate 裸 `px` 仅此一处，裸色值 0 命中。
+  - 根因：`crates/insight/tests/ui_contract.rs::view_sources()`（101-136 行）只显式登记 `insight_view.rs` / `schema_view.rs` / `rule_view/mod.rs` + `view/` 目录递归；**`workspace/mod.rs`（4157 行，本 crate 最大视图文件）漏登**，尺寸 / 颜色契约对它静默失效。这正是该处裸 `px` 能进库的原因。
 - **方案**（两步，缺一不可）：
   1. `crates/insight/src/ui.rs` 登记倍率常量：`INSIGHT_WS_TITLE_MAX_WIDTH: f32 = 15.0`（240px ÷ 16px 主题字号 = 15rem，注释写明换算与 VS Code 长标题省略口径）；`workspace.rs:3964` 改 `.max_w(rems(ui::INSIGHT_WS_TITLE_MAX_WIDTH))`。
-  2. `ui_contract.rs::view_sources()` 显式清单补 `workspace.rs` 一行 `include_str!("../src/workspace.rs")`；守卫测试 `every_view_module_is_registered_in_the_manifests` 会强制覆盖。
+  2. `ui_contract.rs::view_sources()` 显式清单补 `workspace/mod.rs` 一行 `include_str!("../src/workspace.rs")`；守卫测试 `every_view_module_is_registered_in_the_manifests` 会强制覆盖。
 - **实施步骤**：改 ui.rs → 改 workspace.rs → 补契约清单 → 跑 `cargo test -p rds-insight --test ui_contract`（现行基线 4 项）确认常量契约 + 裸 px / 裸色守卫对 workspace.rs 生效。
 - **优劣**：常量进 `ui.rs` 单一来源，与现有 `INSIGHT_WS_*` 系列同口径；补登记后后续 workspace.rs 新增违规写法会被守卫拦下，不再漏网。无 UI 视觉变化（15rem = 240px 等值换算）。
 - **风险**：低。注意 `max_w` 接受 `Pixels`，`rems()` 返回 `Pixels`，类型匹配。
@@ -85,7 +85,7 @@
   | `README.md:152-153` | showcase「五个 Tab」 | 六 Tab + 中间工作页 |
   | `insight-architecture.md:121,380,457` | 「16 条」 | 18 条 |
   | `insight-architecture.md:394` | 基线 218 项 + 集成 13 | 实测 lib 244 + e2e 14 |
-  | `insight-architecture.md:450` | 「五态 / 五 Tab」、片段清单缺 `overview.rs` / `set.rs` / `workspace.rs` | 六 Tab + 中间工作页，片段清单补全 |
+  | `insight-architecture.md:450` | 「五态 / 五 Tab」、片段清单缺 `overview.rs` / `set.rs` / `workspace/mod.rs` | 六 Tab + 中间工作页，片段清单补全 |
   | `insight-architecture.md:467` | K2「待删除确认」 | 重复目录已删（`e3684d67`），`crates/engine/insight-rules/` 实测不存在，仅余 `crates/insight/insight-rules/` |
   | `insight-architecture.md:486` | K21「机制已查明，未修」 | 状态与任务 #16「completed」矛盾，见 B6；本轮先按真机复核结论回写 |
   | `insight-architecture.md:487` | K22「待修」 | A1 修完后改 ✅ |
@@ -223,7 +223,7 @@
 
 ### B7 · 裸 `Div` 数据行点击：键盘可达性是否本轮补齐
 
-> **收口状态**：✅ 已拍板 **B7-a 并落地**——`workspace.rs` 值得关注跳列建议行换标准 `Button`，自带 `track_focus` / `tab_stop` / KeyUp 激活。**实证排除**：`view/history.rs:317` 版本对比行用的是标准 `ListItem`（自带 track_focus / tab_stop / 键盘 / a11y），不是欠账，不改。
+> **收口状态**：✅ 已拍板 **B7-a 并落地**——`workspace/mod.rs` 值得关注跳列建议行换标准 `Button`，自带 `track_focus` / `tab_stop` / KeyUp 激活。**实证排除**：`view/history.rs:317` 版本对比行用的是标准 `ListItem`（自带 track_focus / tab_stop / 键盘 / a11y），不是欠账，不改。
 
 - **现状**（规范要求：可点元素优先 `Button`；确需自绘必须 `track_focus` + `tab_stop(true)` + 稳定 `ElementId`，禁用下标键）：
   - `workspace.rs:1216` 值得关注跳列建议行（注释 1174 已登记「行级导航用 div.on_click，数据行非标准控件」）；
@@ -246,7 +246,7 @@
 | C1 | K6 表级 / Schema 报告快照 | 两表零写入者；`save_table_quality` / `save_schema_insight` 零调用者 | 二期，UI 与资产模型归 M6；diff 计算继续用洞察 `VersionDiffView::between`，存储归 `store`，将来连同一并搬（dev-plan §10 #4） |
 | C2 | §10 #3 结果集临时表定向回收 | `drop_temp_table(Query)` 零生产调用；结果集复用宿主 `tmp_q_` 临时表，生命周期归宿主 | 维持：洞察侧无可回收对象；将来结果集由洞察独立物化时再接定向回收 |
 | C3 | §10 #7 分析表型存档洞察（`kind = Analysis`） | `can_view_stats` 对该 kind 返回 false；本体层在 M6 P4.1 | 等 M6 P4.1 本体命名 / 存在性 / `definition_sql` 定后再接，工作量小 |
-| C4 | 超大文件重构单列 | A6 裁剪后实测行数（2026-10-25）：`model.rs` 2713 · `workspace.rs` 4042 · `rule_view.rs` 1545 · `insight_view/tests.rs` 1699 · `jobs.rs` 1449 · `insight_engine.rs` 1250 · `insight_view.rs` 1035 | 属独立重构任务（纯位移不改语义），按 §11 位移先例单独排期；本轮不拆，避免收口夹带结构性风险；排期前重新实测行数 |
+| C4 | 超大文件重构单列 | A6 裁剪后实测行数（2026-10-25）：`model.rs` 2713 · `workspace/mod.rs` 4042 · `rule_view/mod.rs` 1545 · `insight_view/tests.rs` 1699 · `jobs/mod.rs` 1449 · `insight_engine.rs` 1250 · `insight_view.rs` 1035 | 属独立重构任务（纯位移不改语义），按 §11 位移先例单独排期；本轮不拆，避免收口夹带结构性风险；排期前重新实测行数 |
 | C5 | K18 `RenderHint` 解析后无人消费 | `RuleFile.render` 仅入类型与校验，视图按数据形态渲染 | 定案保留（`deny_unknown_fields` 兼容原因）；将来做图表可视化时消费；明确不做则删字段 + 迁移 |
 | C6 | 列语义标签第三档 | 已拍板进下期规划 | 本轮只支持现有类型识别（数值 / 文本 / 时间 / 布尔 / 未识别） |
 
@@ -277,7 +277,7 @@
      - 规则对话框：`rule_view.rs:1655` 残留「四态」；现行 `RulesDialogState` = **三态**（Loading / Ready / Error，`rule_view.rs:391`），测试体覆盖 Loading→Error→Ready 三帧，对齐三态。
      - 列 Tab 期次提示：`insight_view/tests.rs:382`「其余四个 Tab」是旧五 Tab 计数，六 Tab 遍历 `PanelTab::ALL` 后为其余五个，对齐五个。
      - 保留未动：列画像「四区」（基础统计 / 分布 / 质量 / 样本，`model.rs:1669-1675`）与结构报告「四区」（`schema_view.rs:22`）是分区数，现行正确；`quality_scorer.rs` 四维权重属 A6 保留边界。
-   - **保留边界**：`quality_scorer.rs` 的 `Grade` / 五档文案 / 四维权重 / 阈值单测、`model/types.rs:125-161` 旧领域类型属 A6 保留边界（历史快照 JSON 只读兼容 + Schema 结构健康分独立域），生产画像链路不调用，**未删除**；`jobs.rs` / `model.rs` 中「不合成质量总分 / 等级」为现行正确声明，保留。
+   - **保留边界**：`quality_scorer.rs` 的 `Grade` / 五档文案 / 四维权重 / 阈值单测、`model/types.rs:125-161` 旧领域类型属 A6 保留边界（历史快照 JSON 只读兼容 + Schema 结构健康分独立域），生产画像链路不调用，**未删除**；`jobs/mod.rs` / `model.rs` 中「不合成质量总分 / 等级」为现行正确声明，保留。
    - **校验**：两轮 `cargo fmt -p rds-insight --check` 均 exit 0；两轮独立分离进程复跑三测全量均为 `--lib` **244 passed / 0 failed**、`--test column_profile_e2e` **14 passed / 0 failed**、`--test ui_contract` **4 passed / 0 failed**，doc-test 1 ignored（与基线一致、零回归）；第二轮增量编译 Finished 33.86s 零 error 零 warning。本轮改动仅限模块文档注释与计数说明，未触及运行时代码。
 
 ## 已拍板结论汇总（2026-10-25 收口）
@@ -290,3 +290,22 @@
 - **B6** K21 右键闪退：⏳ 先真机复现，复现后 B6-a 业务侧 blur 起步；未复现前不改 vendor。
 - **B7** 裸行键盘可达性：✅ 采纳 **B7-a**，跳列行换标准 Button；历史行经实证为标准 ListItem，不改。
 - **B8** DuckDB 社区扩展用于科研统计：⏸ **本期不引入，登记 §10 #17 预留**。EDA 核心画像（高频路径）继续纯 DuckDB 原生聚合，不依赖外部扩展；科研统计增强（正态检验 / ANOVA / Kendall τ / 效应量）归二期科研分析模式。前置条件：引擎版本 ABI 对齐、扩展 bundle 离线可用、加载失败降级不阻塞主流程。选型实测（stats_duck / duckfn_statrs / Rust 手写三选一）在二期启动时做。
+
+---
+
+## 结构瘦身拆分收口（2026-10-30，分支 refactor/insight-slimming）
+
+大文件按职责域拆子模块（**纯位移，不改定位、不违反既有 skill / 决策**），独立分支验证无误后合主。
+
+| 原文件 | 新结构 | 拆分依据 |
+| --- | --- | --- |
+| `workspace.rs`（3997 行） | `workspace/` = mod.rs + toolbar / overview / eda / rel / sample / compare / helpers / markdown（8 子模块） | 提交 `e291570a`；函数 85/85 |
+| `model.rs`（3225 行） | `model/` = mod.rs + sets / target / panel / columns / profile / multi / history / column_profile（8 子模块） | 提交 `2b317a98`；函数 140/140，内容守恒缺失 0 行 |
+| `jobs.rs`（1554 行） | `jobs/` = mod.rs（接缝 + 事件分发）+ profile / rules / table / history（请求职责域） | 提交 `4d5b0687`；函数 38/38 |
+| `rule_view.rs`（1781 行） | `rule_view/` = mod.rs（聚合）+ data（视图模型）+ view（对话框渲染） | 提交 `4d5b0687`；函数 70/70 |
+| `service/mod.rs`（1087 行） | InsightService 方法按职责域下沉 sampling / analyze / rules 子文件；use 区改 `pub(crate) use` 供子模块继承 | 提交 `4d5b0687`；函数 134/134 |
+
+- **保留边界**（未动）：`service/mod.rs` 旧质量包装门面、`service/persistence.rs` 空表兜底与历史快照批量评估、`store` 表/结构报告存取（D64 未来接入点）、`quality_scorer.rs` 全保留、18 条内置规则、检查器四态、ui_contract 契约。
+- **死代码重核结论**：早期候选（`InsightService` 质量门面 3 个 / persistence 4 个 / store 2 个）经全仓 grep 重核**全部落在 A6 保留边界 / D64 未来接入 / 公开 API 契约内**，均不可删；全仓零调用扫描仅剩测试属性宏注册的测试函数，**无真实死代码可删**。唯一清理：`model/sets.rs` 未使用的 `use super::*`（warning 清零，提交 `74620dc4`）。
+- **契约守卫**：`ui_contract.rs` 补登 `rule_view/` 三个文件（裸 px / 裸色守卫不静默失效）。
+- **验证**：`cargo test -p rds-insight -j 2`（共享 target）= **244 lib + 14 e2e + 4 ui_contract 全绿**，1 ignored 既存；rds-insight **零 warning**；与拆分基线完全一致、零回归。

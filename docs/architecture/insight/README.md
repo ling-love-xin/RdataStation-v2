@@ -66,21 +66,21 @@
 | 规则索引同步 / 目录监听 | `crates/insight/src/service/indexer.rs`、`service/watcher.rs`（现状：✅ 已实现；**解析失败的原文同时含语义校验**：`value_type` 白名单 + 门控字段存在，D48/D49） |
 | 列画像计算（统计 / 样本 / 直方图） | `crates/insight/src/insight_engine.rs`（现状：✅ 已迁移；内部接缝 `*_internal` 待提 `pub`） |
 | 检查器四态（事实命中） | `crates/insight/src/quality_scorer.rs`（`compute_column_checks`；Hit / Miss / NotApplicable / Excluded）。同文件保留旧加权评分与 `Grade` 仅供历史快照兼容读取与 Schema 健康分独立域使用，表 / 列画像 UI 不调用 |
-| 规则管理对话框（三层分组 / 启停 / 错误原文 / 新建） | `crates/insight/src/rule_view.rs`（现状：✅ Phase 2 / 2.3，入口为面板头 ⚙） |
+| 规则管理对话框（三层分组 / 启停 / 错误原文 / 新建） | `crates/insight/src/rule_view/mod.rs`（现状：✅ Phase 2 / 2.3，入口为面板头 ⚙） |
 | 异常值检测 | `crates/insight/src/insight_engine.rs`（`detect_extremes`；现状：✅ 已归位，自 `engine/services/duckdb_service.rs`） |
 | 表探查 | `crates/insight/src/insight_engine.rs`（`get_temp_table_profile`：DuckDB 临时表内省 `DESCRIBE`，面板走这条）（现状：✅ Phase 3 一批；源库内省的 `table_profile_service.rs` 已于 2026-09-18 **删除**——零调用且未在真机跑通，源库表先取样再探查，D58/D59） |
 | 结构洞察（外键推断 / 类型不一致 / 孤立表 / 冗余列 / 健康分） | `crates/insight/src/schema_analyzer.rs`（分析器；元数据走**驱动接口**，无方言 SQL，D62）+ `schema_view.rs`（视图模型与导出）（现状：✅ Phase 4 一批；导出与下钻已接（D60）；✅ **入口已接**（2026-09-18）：导航树「结构洞察」→ `SchemaRef`；✅ **取数改走驱动元数据**（D62）：SQLite 也因此可用；真机四库验证） |
 | 领域类型（16 个 `pub struct/enum`） | `crates/insight/src/model/types.rs`（现状：✅ 已归位） |
 | 快照存储（列 / 表 / Schema 三类 + 元数据） | `crates/insight/src/store/{mod.rs, body.rs, meta.rs}`（现状：✅ 已归位；**同一进程对同一项目库不得重叠 open**，见架构 D41；按天数清理已可用） |
 | 服务门面（画像 / 检查器 / 规则 / 快照编排） | `crates/insight/src/service/{mod.rs, persistence.rs}`（现状：✅ 已归位）；结果集半边留在 `crates/workbench/src/services/result_service.rs` |
-| 源取样通道（入口统一契约） | `crates/insight/src/model.rs`（`SampleSource::{new, on_duckdb, duckdb_file}` / `InsightTarget::{SourceColumn, SourceTable}`）、`service/persistence.rs`（`sample_source_to_analysis_table` 按 `conn_id` 分流：源库连接走引擎打型，`None` 走内存库 `CREATE TABLE … AS`） |
+| 源取样通道（入口统一契约） | `crates/insight/src/model/mod.rs`（`SampleSource::{new, on_duckdb, duckdb_file}` / `InsightTarget::{SourceColumn, SourceTable}`）、`service/persistence.rs`（`sample_source_to_analysis_table` 按 `conn_id` 分流：源库连接走引擎打型，`None` 走内存库 `CREATE TABLE … AS`） |
 | 文件类数据源的读取器口径 | `crates/engine/src/duckdb/file_reader.rs`（`file_reader_function`：CSV / Parquet / Excel / JSON，**唯一定义处**；2026-09-19 从已删的 `dbi` 层摘出）、`crates/engine/src/duckdb/analysis.rs`（`create_analysis_temp_table_as`） |
 | 入口接线（三个右键「查看统计」 + 结果集「洞察此列」） | 导航树 `crates/database/src/nav_view.rs`；分析存档 `crates/analytics_resource/src/resource_view.rs`（`can_view_stats` + `ResourcesHost::request_view_stats`）；草稿箱 `crates/scratchpad/src/{host,scratchpad_view}.rs`（`can_view_stats` / `view_stats` 走端口）；宿主实现 `workbench/src/components/{nav_host,resource_host,scratchpad_host}.rs` 与 `panels/shared.rs`（`insight_sample_sql` + `open_insight_source_*`）；**结果集**：`editor/src/shared.rs`（`InsightColumnPort`）+ `editor/src/view/results/grid.rs`（菜单项）+ `workbench/src/services/editor_insight.rs`（翻译成 `SampleSource`，**不物化**） |
 | 右栏面板（六 Tab） | `crates/insight/src/insight_view.rs`（**状态宿主**：目标 / 状态机 / 各 Tab 载荷 / 选择与折叠；Render 转发）+ `crates/insight/src/view/{mod,header,overview,column,table,multi,schema,history,set}.rs`（渲染片段，按 Tab 分）· `insight_view/tests.rs`（窗口级测试）（现状：✅ 六 Tab 全部落地——摘要 · 列画像 · 表探查 + 评估全表 · 多列分析 · Schema 报告 · 快照历史与版本对比；不显示假数据） |
-| 中间 EDA 工作页（D63–D66） | `crates/insight/src/workspace.rs`（`InsightWorkspacePanel`：工具栏[画像 / 对比切换、刷新] + 概览五卡 + 值得关注跳列 + 列分布 + 缺失矩阵 + 关联 + 样本 + 多表对比三态；持同一 `InsightView` 宿主）；装配与双栏单源在 `crates/workbench/src/view.rs` 与 `panels/shared.rs` |
-| 规则管理对话框 | `crates/insight/src/rule_view.rs`（现状：✅ Phase 2 二批） |
+| 中间 EDA 工作页（D63–D66） | `crates/insight/src/workspace/mod.rs`（`InsightWorkspacePanel`：工具栏[画像 / 对比切换、刷新] + 概览五卡 + 值得关注跳列 + 列分布 + 缺失矩阵 + 关联 + 样本 + 多表对比三态；持同一 `InsightView` 宿主）；装配与双栏单源在 `crates/workbench/src/view.rs` 与 `panels/shared.rs` |
+| 规则管理对话框 | `crates/insight/src/rule_view/mod.rs`（现状：✅ Phase 2 二批） |
 | Schema 报告与导出 | `crates/insight/src/schema_view.rs`（现状：✅ Phase 4 一批 + **导出落地**（D60）：面板「导出 ▾」→ JSON / Markdown → 宿主选路径写文件） |
-| 视图模型 | `crates/insight/src/model.rs`（现状：✅ 已落地 `PanelTab` / `InsightTarget` / `InsightPanelState` / `PanelData` / `ColumnProfileView` / `TableProfileView` / `MultiColumnView` / `HistoryView`；阈值与文案是纯函数） |
+| 视图模型 | `crates/insight/src/model/mod.rs`（现状：✅ 已落地 `PanelTab` / `InsightTarget` / `InsightPanelState` / `PanelData` / `ColumnProfileView` / `TableProfileView` / `MultiColumnView` / `HistoryView`；阈值与文案是纯函数） |
 | M8 尺寸常量 | `crates/insight/src/ui.rs`（现状：✅ M8 专用值在本文件；面板头 / 行高 / 内距等与外壳必须一致的值**重导出** `workbench_shell::ui`，不镜像） |
 | Action 与快捷键 | `crates/insight/src/commands.rs`（现状：✅ 动作已定义，键位待入口批次）+ `crates/app/src/main.rs` |
 | 右 Dock 装配（仅协议） | `crates/workbench/src/panels/`（`RightSidebarPanel`）、`view.rs`（`RightPanel::Insight`） |
