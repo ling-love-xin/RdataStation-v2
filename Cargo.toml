@@ -26,6 +26,7 @@ members = [
     "crates/settings",
     "crates/workbench_shell",
     "crates/result_panel", "crates/file-meta",
+    "crates/notification",
 ]
 # 默认构建只覆盖 app 依赖图；plugin 的 wasm 轨（extism → wasmtime）已由 `wasm` feature
 # 门控、**默认不编译**（见 crates/plugin/Cargo.toml），裸 `cargo build/check/run` 不碰 wasmtime。
@@ -78,6 +79,7 @@ rds-store = { path = "crates/store", package = "rds-store" }
 rds-driver = { path = "crates/driver", package = "rds-driver" }
 # 结果集面板（DBeaver Data Editor 方向）：结果域视图 + 结果存储独立成 crate，
 # 依赖方向 result_panel → {engine, gpui-kit, workbench_shell}，editor 依赖它、它不反向依赖 editor
+notification = { path = "crates/notification", package = "rds-notification" }
 result_panel = { path = "crates/result_panel", package = "rds-result-panel" }
 # 文件元信息（Sidecar 快照：书签 / 连接 / 视图），编辑器书签接入
 file_meta = { path = "crates/file-meta", package = "rds-file-meta" }

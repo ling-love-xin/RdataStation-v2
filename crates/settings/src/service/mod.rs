@@ -259,6 +259,21 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::NotificationMergeWindowSecs => {
             SettingValue::Number(settings.notifications.merge_window_secs as f64)
         }
+        Slot::NotificationErrorToSystem => {
+            SettingValue::Bool(settings.notifications.error_to_system)
+        }
+        Slot::NotificationWarningToSystem => {
+            SettingValue::Bool(settings.notifications.warning_to_system)
+        }
+        Slot::NotificationSuccessToSystem => {
+            SettingValue::Bool(settings.notifications.success_to_system)
+        }
+        Slot::NotificationInfoToSystem => {
+            SettingValue::Bool(settings.notifications.info_to_system)
+        }
+        Slot::NotificationDoNotDisturb => {
+            SettingValue::Bool(settings.notifications.do_not_disturb)
+        }
     })
 }
 
@@ -313,7 +328,7 @@ impl SettingsService {
             Slot::InsightMemoryLimitMb | Slot::InsightFullScanConfirm | Slot::InsightWorkSetLimit | Slot::InsightStatusUsage => insight::apply_slot(slot, value, window, cx),
             Slot::ResultPanelFactStorage | Slot::ResultPanelShowColumnComments | Slot::ResultPanelShowTypeBadge | Slot::ResultPanelLoopSelection | Slot::ResultPanelSelectOnModifierClick | Slot::ResultPanelPersistColumnWidths | Slot::ResultPanelNumberFormat | Slot::ResultPanelNullPlaceholder | Slot::ResultPanelBoolDisplay | Slot::ResultPanelAlignNumeric | Slot::ResultPanelAlignText | Slot::ResultPanelAlignTemporal | Slot::ResultPanelAlignBool | Slot::ResultPanelAlignBlob | Slot::ResultPanelColorNumeric | Slot::ResultPanelColorText | Slot::ResultPanelColorTemporal | Slot::ResultPanelColorBool | Slot::ResultPanelColorBlob | Slot::ResultPanelBgNumeric | Slot::ResultPanelBgText | Slot::ResultPanelBgTemporal | Slot::ResultPanelBgBool | Slot::ResultPanelBgBlob | Slot::ResultPanelFontNumeric | Slot::ResultPanelFontText | Slot::ResultPanelFontTemporal | Slot::ResultPanelFontBool | Slot::ResultPanelFontBlob => result_panel::apply_slot(slot, value, window, cx),
             Slot::LayoutLocked | Slot::LayoutLeftSidebarWidth | Slot::LayoutRightSidebarWidth => layout::apply_slot(slot, value, window, cx),
-            Slot::NotificationSuccessAutohideSecs | Slot::NotificationWarningAutohideSecs | Slot::NotificationErrorAutohide | Slot::NotificationMergeWindowSecs => notifications::apply_slot(slot, value, window, cx),
+            Slot::NotificationSuccessAutohideSecs | Slot::NotificationWarningAutohideSecs | Slot::NotificationErrorAutohide | Slot::NotificationMergeWindowSecs | Slot::NotificationErrorToSystem | Slot::NotificationWarningToSystem | Slot::NotificationSuccessToSystem | Slot::NotificationInfoToSystem | Slot::NotificationDoNotDisturb => notifications::apply_slot(slot, value, window, cx),
         }
     }
 }

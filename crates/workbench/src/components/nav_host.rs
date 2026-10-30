@@ -89,14 +89,13 @@ impl NavHost for WorkbenchNavHost {
     }
 
     fn notify(&self, kind: database::nav_host::HostNotify, title: String, message: Option<String>, cx: &mut App) {
-        use gpui_kit::component::notification::NotificationType;
         let kind = match kind {
-            database::nav_host::HostNotify::Info => NotificationType::Info,
-            database::nav_host::HostNotify::Success => NotificationType::Success,
-            database::nav_host::HostNotify::Warning => NotificationType::Warning,
-            database::nav_host::HostNotify::Error => NotificationType::Error,
+            database::nav_host::HostNotify::Info => notification::NotificationType::Info,
+            database::nav_host::HostNotify::Success => notification::NotificationType::Success,
+            database::nav_host::HostNotify::Warning => notification::NotificationType::Warning,
+            database::nav_host::HostNotify::Error => notification::NotificationType::Error,
         };
-        crate::notification::notify(kind, title, message, cx);
+        notification::notify(kind, title, message, cx);
     }
 
     fn notify_host(&self, cx: &mut App) {

@@ -232,6 +232,11 @@ pub enum Slot {
     NotificationWarningAutohideSecs,
     NotificationErrorAutohide,
     NotificationMergeWindowSecs,
+    NotificationErrorToSystem,
+    NotificationWarningToSystem,
+    NotificationSuccessToSystem,
+    NotificationInfoToSystem,
+    NotificationDoNotDisturb,
 }
 
 /// key → 槽位（登记项都必须有槽位；由契约测试保证）。
@@ -324,6 +329,11 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "notifications.warning_autohide_secs" => Slot::NotificationWarningAutohideSecs,
         "notifications.error_autohide" => Slot::NotificationErrorAutohide,
         "notifications.merge_window_secs" => Slot::NotificationMergeWindowSecs,
+        "notifications.error_to_system" => Slot::NotificationErrorToSystem,
+        "notifications.warning_to_system" => Slot::NotificationWarningToSystem,
+        "notifications.success_to_system" => Slot::NotificationSuccessToSystem,
+        "notifications.info_to_system" => Slot::NotificationInfoToSystem,
+        "notifications.do_not_disturb" => Slot::NotificationDoNotDisturb,
         _ => return None,
     })
 }
@@ -408,11 +418,17 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         | Slot::ResultPanelFontBlob => KindTag::Enum,
         Slot::LayoutLocked => KindTag::Bool,
         Slot::LayoutLeftSidebarWidth | Slot::LayoutRightSidebarWidth => KindTag::Number,
-        // 【通知】三个秒数（0 = 不自动消失 / 不合并）是数值，错误自动消失是布尔。
+        // 【通知】三个秒数（0 = 不自动消失 / 不合并）是数值，其余（自动消失、
+        // 推送到系统、勿扰）都是布尔。
         Slot::NotificationSuccessAutohideSecs
         | Slot::NotificationWarningAutohideSecs
         | Slot::NotificationMergeWindowSecs => KindTag::Number,
-        Slot::NotificationErrorAutohide => KindTag::Bool,
+        Slot::NotificationErrorAutohide
+        | Slot::NotificationErrorToSystem
+        | Slot::NotificationWarningToSystem
+        | Slot::NotificationSuccessToSystem
+        | Slot::NotificationInfoToSystem
+        | Slot::NotificationDoNotDisturb => KindTag::Bool,
         // 【2026-10-28】SQL 格式化：关键字大小写是枚举，缩进宽度是数值，保存时格式化是布尔。
         Slot::EditorFormatKeywordCase => KindTag::Enum,
         Slot::EditorFormatIndentWidth => KindTag::Number,

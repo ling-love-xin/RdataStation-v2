@@ -49,6 +49,36 @@ pub(crate) fn apply_slot(
                 }
                 SettingsService::set_notify_merge_window_secs(n as u32, cx);
             }
+            Slot::NotificationErrorToSystem => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                SettingsService::set_notify_error_to_system(on, cx);
+            }
+            Slot::NotificationWarningToSystem => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                SettingsService::set_notify_warning_to_system(on, cx);
+            }
+            Slot::NotificationSuccessToSystem => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                SettingsService::set_notify_success_to_system(on, cx);
+            }
+            Slot::NotificationInfoToSystem => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                SettingsService::set_notify_info_to_system(on, cx);
+            }
+            Slot::NotificationDoNotDisturb => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                SettingsService::set_notify_do_not_disturb(on, cx);
+            }
         _ => return false,
     }
     true
@@ -87,6 +117,51 @@ impl SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.notifications.merge_window_secs = secs.clamp(0, 3600);
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+    /// 设置并持久化错误通知是否推送到系统通知中心。
+    pub fn set_notify_error_to_system(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.notifications.error_to_system = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+    /// 设置并持久化警告通知是否推送到系统通知中心。
+    pub fn set_notify_warning_to_system(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.notifications.warning_to_system = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+    /// 设置并持久化成功通知是否推送到系统通知中心。
+    pub fn set_notify_success_to_system(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.notifications.success_to_system = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+    /// 设置并持久化普通信息通知是否推送到系统通知中心。
+    pub fn set_notify_info_to_system(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.notifications.info_to_system = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+    /// 设置并持久化勿扰模式（开启后通知只进历史，不弹出）。
+    pub fn set_notify_do_not_disturb(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.notifications.do_not_disturb = on;
         }
         persist(&cx.global::<Settings>().clone());
         cx.refresh_windows();

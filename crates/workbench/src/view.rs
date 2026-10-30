@@ -614,11 +614,9 @@ impl WorkbenchView {
                     }
                     editor::view::host::EditorHostEvent::ExecutionFailed(reason) => {
                         // 执行失败 → 弹全局错误通知（Error 类型，不自动消失）。
-                        // 显式 to_string：`impl Into<String>` 参数在闭包内无法自推断（E0283）。
-                        crate::notification::notify(
-                            gpui_kit::component::notification::NotificationType::Error,
-                            "SQL 执行失败".to_string(),
-                            Some(reason.as_str().to_string()),
+                        notification::notify_error(
+                            "SQL 执行失败",
+                            Some(reason.as_str()),
                             cx,
                         );
                         cx.notify();
@@ -2756,6 +2754,7 @@ impl WorkbenchView {
                     .children(mock_chip)
                     .child(div().child(format!("连接：{selected}")))
                     .child(lsp_item)
+                    .child(notification::notification_bell(cx))
                     .child(lock_toggle)
                     .child(right_toggle),
             )
@@ -3365,7 +3364,7 @@ impl Render for WorkbenchView {
         // 连接对话框与项目对话框不再需要手动渲染。
         // 全局通知系统（NotificationList）：懒初始化并挂载到渲染树。
         // 用 absolute 定位，不影响主布局。
-        let notification_list = crate::notification::ensure_notifications(window, cx);
+        let notification_list = notification::ensure_notifications(window, cx);
         root.child(div().absolute().size_full().child(notification_list))
     }
 }

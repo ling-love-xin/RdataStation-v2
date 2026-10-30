@@ -125,6 +125,8 @@ pub struct Notification {
     placement: Option<Anchor>,
     delivery: Option<NotificationDelivery>,
     autohide: bool,
+    /// [RDS Patch] 自定义自动消失时长（None = 用默认 5 秒）
+    timeout: Option<Duration>,
     action_builder: Option<Rc<dyn Fn(&mut Self, &mut Window, &mut Context<Self>) -> Button>>,
     content_builder: Option<Rc<dyn Fn(&mut Self, &mut Window, &mut Context<Self>) -> AnyElement>>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
@@ -185,6 +187,7 @@ impl Notification {
             placement: None,
             delivery: None,
             autohide: true,
+            timeout: None,
             action_builder: None,
             content_builder: None,
             on_click: None,
@@ -320,6 +323,15 @@ impl Notification {
     /// Set the auto hide of the notification, default is true.
     pub fn autohide(mut self, autohide: bool) -> Self {
         self.autohide = autohide;
+        self
+    }
+
+    /// [RDS Patch] Set the auto hide timeout of the notification.
+    ///
+    /// If not set, defaults to 5 seconds (the library default).
+    /// Only takes effect when `autohide` is true.
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
         self
     }
 
@@ -835,6 +847,7 @@ impl NotificationList {
 
         let id = notification.id.clone();
         let autohide = notification.autohide;
+        let timeout = notification.timeout;
         let window_id = window.window_handle().window_id();
 
         let notification = cx.new(|_| notification);
@@ -869,7 +882,8 @@ impl NotificationList {
             id,
             notification,
             ToastOptions {
-                timeout: autohide.then_some(Duration::from_secs(5)),
+                // [RDS Patch] 用通知自己的 timeout，没有就用默认 5 秒
+                timeout: autohide.then_some(timeout.unwrap_or(Duration::from_secs(5))),
             },
             cx.background_executor().now(),
         );
