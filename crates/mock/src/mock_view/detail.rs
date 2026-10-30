@@ -6,7 +6,6 @@ use super::*;
 // 样例预览的固定种子：样例稳定可复现（与最终生成的随机种子无关，纯示意）
 use fake::rand::rngs::StdRng;
 use fake::rand::SeedableRng;
-use gpui::px;
 use gpui_kit::component::resizable::{resizable_panel, v_resizable};
 use std::time::Duration;
 
@@ -50,7 +49,7 @@ pub(crate) struct ColumnDraft {
     pub(crate) confidence: String,
     sample_value: String,
     /// 参数实时样例预览（按当前输入框值生成 2 条；固定种子，可复现）
-    sample_preview: String,
+    pub(crate) sample_preview: String,
     pub(crate) params: Vec<ParamInput>,
     null_input: Entity<InputState>,
     type_label: String,
@@ -463,7 +462,9 @@ impl MockDetailView {
                     .text_color(theme.colors.muted_foreground)
                     .child("改类型不会自动换生成器；按新类型重推请点「恢复智能默认」。"),
             );
-            // 生成器（只读展示；切换在字段行的菜单里，避免对话框内参数行与生成器不一致）
+            // 生成器：列编辑与分组浏览同一面板（用户诉求）——点开生成器库对话框
+            // （`LibraryWriteback::ColumnDraft`，选中写回草稿），参数区 / 样例随写回重建；
+            // 不用退出列编辑去字段行换生成器（原「切换在字段行的菜单里」的菜单已退役）。
             body = body.child(
                 div()
                     .h_flex()
@@ -478,12 +479,29 @@ impl MockDetailView {
                             .text_color(theme.colors.muted_foreground)
                             .child("生成器"),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.colors.foreground)
-                            .child(generator_label),
-                    ),
+                    .child({
+                        let view = view.clone();
+                        let id = draft.id;
+                        Button::new("mock-col-generator")
+                            .ghost()
+                            .label(generator_label)
+                            .dropdown_caret(true)
+                            .tooltip("打开生成器库：按分组 / 数据类型浏览选择")
+                            .tooltip_show_delay(Duration::from_millis(500))
+                            .on_click(move |_, window, app| {
+                                let panel = view.read(app).panel.clone();
+                                panel.update(app, |p, cx| {
+                                    p.open_generator_library_with(
+                                        crate::mock_view::generator_library::LibraryWriteback::ColumnDraft {
+                                            detail: view.downgrade(),
+                                            column_id: id,
+                                        },
+                                        window,
+                                        cx,
+                                    );
+                                });
+                            })
+                    }),
             );
             for row in param_rows {
                 body = body.child(match row {
@@ -611,6 +629,30 @@ impl MockDetailView {
     }
 
     /// 按当前生成器重建参数输入行（保留同名参数的输入框与订阅）。
+    /// 列编辑对话框内选了生成器（库对话框写回草稿，`LibraryWriteback::ColumnDraft`）：
+    /// 写 draft 的生成器配置并重建参数区 / 样例预览。列还没应用，面板列不动——
+    /// 与应用按钮同口径（改动留在草稿，点「应用」才落地）。
+    pub(crate) fn apply_generator_config_to_draft(
+        &mut self,
+        column_id: u64,
+        config: GeneratorConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(draft) = self.draft.as_mut() else {
+            return;
+        };
+        if draft.id != column_id {
+            return;
+        }
+        draft.def.generator = config;
+        draft.confidence = "manual".to_string();
+        draft.param_error = None;
+        self.rebuild_params(window, cx);
+        self.refresh_sample_preview(cx);
+        cx.notify();
+    }
+
     fn rebuild_params(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(draft) = self.draft.as_mut() else {
             return;
@@ -1137,6 +1179,10 @@ impl Render for MockDetailView {
         let warning = cx.theme().colors.warning;
         let border = cx.theme().colors.border;
         let is_draft = matches!(self.target, DetailTarget::Draft);
+        // 本 tab 的稳定唯一键（`DetailTarget::key`）：tab 内所有会随 tab 挂树的元素
+        // id 都拼它，保证同一窗口内 id 唯一（a11y 树重复节点会 panic，见
+        // `multiple_detail_tabs_do_not_collide_a11y_ids`）。
+        let tab_key = self.target.key();
 
         // 一次读齐渲染要用的状态：读租约不能跨到 `cx` 的独占使用处，而下面的
         // `panel.update`（表头要懒创建输入、按钮要进面板）必须独占面板。
@@ -1244,7 +1290,7 @@ impl Render for MockDetailView {
             .child(head);
 
         let mut body = div()
-            .id("mock-detail")
+            .id(format!("mock-detail-{tab_key}"))
             .role(gpui::Role::Group)
             .v_flex()
             .size_full()
@@ -1355,9 +1401,12 @@ impl Render for MockDetailView {
         // 段 3：预览（标题行 + 排序提示 + 表格 / 空占位）。表格 `DataTable` 自带
         // 虚拟化与横向滚动，段内直接撑满——不再随整页滚。
         let mut preview_block = div().v_flex().gap_2().w_full().flex_1().min_h_0();
-        // 单表出口随表在此（生成 → 落地闭环）：作用于当前 tab 那张表，从右面板迁来
+        // 单表出口随表在此（生成 → 落地闭环）：作用于当前 tab 那张表，从右面板迁来。
+        // 按钮 id 拼 tab 键（`DetailTarget::key`）：多个详情 tab 并存时每个 tab 各一组
+        // 出口，id 必须唯一（否则 a11y 树重复节点 panic）。
         preview_block = preview_block.child(
-            self.panel.update(cx, |panel, cx| panel.render_sinks(window, cx)),
+            self.panel
+                .update(cx, |panel, cx| panel.render_sinks(&tab_key, window, cx)),
         );
         preview_block = preview_block.child(
             div()
@@ -1374,8 +1423,9 @@ impl Render for MockDetailView {
                         .child(preview_title),
                 )
                 .child(if generated.is_some() {
-                    self.panel
-                        .update(cx, |panel, cx| panel.render_preview_limit_menu(cx))
+                    self.panel.update(cx, |panel, cx| {
+                        panel.render_preview_limit_menu(&tab_key, cx)
+                    })
                 } else {
                     div().into_any_element()
                 }),
@@ -1433,11 +1483,13 @@ impl Render for MockDetailView {
         let font_size = cx.theme().font_size;
         let columns_h = self.panel.read(cx).detail_columns_rem * font_size;
         let split_panel = self.panel.clone();
-        let split = v_resizable("mock-detail-split")
+        // 分栏 id 拼 tab 键：多个详情 tab 并存时各自独立（a11y 节点 + resizable state
+        // 都按 id 区分；尺寸经 on_resize 回写面板字段，跨 tab 仍沿用）
+        let split = v_resizable(format!("mock-detail-split-{tab_key}"))
             .child(
                 resizable_panel()
-                    .size(px(100.))
-                    .size_range(px(100.)..px(220.))
+                    .size(ui::DETAIL_HEADER_HEIGHT)
+                    .size_range(ui::DETAIL_HEADER_HEIGHT..ui::DETAIL_HEADER_MAX_HEIGHT)
                     .child(
                         div()
                             .size_full()

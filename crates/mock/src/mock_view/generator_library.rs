@@ -97,10 +97,19 @@ pub(crate) enum LibraryMode {
     Create,
 }
 
+/// 生成器库对话框的写回目标：字段行打开写**面板列**（现状，含 `remember_generator` 与
+/// 结果清空）；列编辑对话框内打开写**列编辑草稿**（`MockDetailView::apply_generator_config_to_draft`，
+/// 参数区 / 样例预览随写回重建——列还没应用，面板列不动）。
+#[derive(Clone)]
+pub(crate) enum LibraryWriteback {
+    Panel { column_id: u64 },
+    ColumnDraft { detail: gpui::WeakEntity<MockDetailView>, column_id: u64 },
+}
+
 /// 生成器库对话框的状态（实体由 [`open_library`] 创建；builder 每帧从它读，写入走事件路径）。
 pub(crate) struct GeneratorLibraryState {
     pub(crate) panel: Entity<MockPanel>,
-    pub(crate) column_id: u64,
+    pub(crate) writeback: LibraryWriteback,
     pub(crate) mode: LibraryMode,
     pub(crate) view: LibraryView,
     /// 顶部搜索词（`search_input` 的 Change 订阅回填；浏览时过滤两组列表）
@@ -178,14 +187,14 @@ fn param_key(param: &DraftParam) -> &str {
 /// 订阅挂在状态实体上（`subscribe_in` 的订阅者 = 状态实体自身）。
 pub(crate) fn open_library(
     panel: Entity<MockPanel>,
-    id: u64,
+    writeback: LibraryWriteback,
     window: &mut Window,
     cx: &mut Context<MockPanel>,
 ) {
     let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("按名称 / 中文标签搜索"));
     let state = cx.new(|_cx| GeneratorLibraryState {
         panel: panel.clone(),
-        column_id: id,
+        writeback,
         mode: LibraryMode::Browse,
         view: LibraryView::Business,
         query: String::new(),
@@ -242,6 +251,53 @@ pub(crate) fn open_library(
 }
 
 // ---------- 浏览模式 ----------
+
+/// 统一写回：`picked` 是内建生成器名（`is_user=false`）或自定义生成器 id（`is_user=true`）。
+///
+/// - [`LibraryWriteback::Panel`]（字段行入口）：保持原行为——写面板列（`set_generator` /
+///   `apply_user_generator`，含 `remember_generator` 与结果清空）并关对话框；
+/// - [`LibraryWriteback::ColumnDraft`]（列编辑入口）：把生成器配置写回列编辑草稿
+///   （`MockDetailView::apply_generator_config_to_draft` 重建参数区与样例）并关对话框。
+fn apply_picked_generator(
+    app: &mut App,
+    window: &mut Window,
+    panel: &Entity<MockPanel>,
+    writeback: &LibraryWriteback,
+    picked: &str,
+    is_user: bool,
+) {
+    match writeback {
+        LibraryWriteback::Panel { column_id } => {
+            panel.update(app, |p, cx| {
+                if is_user {
+                    p.apply_user_generator(*column_id, picked, cx);
+                } else {
+                    p.set_generator(*column_id, picked, cx);
+                }
+                window.close_dialog(cx);
+            });
+        }
+        LibraryWriteback::ColumnDraft { detail, column_id } => {
+            // 内建取规格默认配置；自定义解包 base（与 `apply_user_generator` 同源）
+            let config = if is_user {
+                panel
+                    .read(app)
+                    .user_generators
+                    .iter()
+                    .find(|ug| ug.id == picked)
+                    .map(|ug| ug.base.clone())
+            } else {
+                generator_catalog::default_of(picked)
+            };
+            if let Some(config) = config {
+                let _ = detail.update(app, |v, cx| {
+                    v.apply_generator_config_to_draft(*column_id, config, window, cx);
+                    window.close_dialog(cx);
+                });
+            }
+        }
+    }
+}
 
 /// 顶部搜索 + TabBar 双视角 + 分组列表（业务视角：15 分类；技术视角：13 数据类）。
 fn render_browse(
@@ -435,7 +491,6 @@ fn render_recent(
     let mut chips = div().h_flex().gap_1().w_full().flex_wrap();
     for (name, label) in recent {
         let state_for_click = state.clone();
-        let picked = name;
         chips = chips.child(
             Button::new(format!("mock-lib-recent-{name}"))
                 .ghost()
@@ -446,11 +501,8 @@ fn render_recent(
                 .on_click(move |_event, window, app| {
                     let s = state_for_click.read(app);
                     let panel = s.panel.clone();
-                    let column_id = s.column_id;
-                    panel.update(app, |p, cx| {
-                        p.set_generator(column_id, &picked, cx);
-                        window.close_dialog(cx);
-                    });
+                    let writeback = s.writeback.clone();
+                    apply_picked_generator(app, window, &panel, &writeback, name, false);
                 }),
         );
     }
@@ -659,19 +711,9 @@ fn render_item_row(
                         .on_click(move |_event, window, app| {
                             let s = state_for_click.read(app);
                             let panel = s.panel.clone();
-                            let column_id = s.column_id;
+                            let writeback = s.writeback.clone();
                             let ug_id = spec_for_click.clone();
-                            if is_user {
-                                panel.update(app, |p, cx| {
-                                    p.apply_user_generator(column_id, &ug_id, cx);
-                                    window.close_dialog(cx);
-                                });
-                            } else {
-                                panel.update(app, |p, cx| {
-                                    p.set_generator(column_id, &ug_id, cx);
-                                    window.close_dialog(cx);
-                                });
-                            }
+                            apply_picked_generator(app, window, &panel, &writeback, &ug_id, is_user);
                         }),
                 ),
         )
@@ -1048,7 +1090,6 @@ fn submit_create(state: &Entity<GeneratorLibraryState>, window: &mut Window, cx:
         return;
     };
     let panel = state.read(cx).panel.clone();
-    let column_id = state.read(cx).column_id;
     let editing = state.read(cx).editing.clone();
     // 编辑 = 更新（改名去重 + 全量替换）；新建 = 新增。成功都「保存即应用」写回当前列。
     let saved = panel.update(cx, |p, cx| match &editing {
@@ -1057,8 +1098,10 @@ fn submit_create(state: &Entity<GeneratorLibraryState>, window: &mut Window, cx:
     });
     match saved {
         Ok(ug_id) => {
-            // 保存即应用（与「保存双向挂组」一致：创建/编辑完直接写回当前列）
-            panel.update(cx, |p, cx| p.apply_user_generator(column_id, &ug_id, cx));
+            // 保存即应用（与「保存双向挂组」一致：创建/编辑完直接写回当前列/草稿）
+            let panel = state.read(cx).panel.clone();
+            let writeback = state.read(cx).writeback.clone();
+            apply_picked_generator(cx, window, &panel, &writeback, &ug_id, true);
             state.update(cx, |s, cx| {
                 s.mode = LibraryMode::Browse;
                 s.create = None;

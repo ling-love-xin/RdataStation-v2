@@ -323,10 +323,10 @@ impl MockPanel {
     /// 为何是固定档而不是输入框：行数是**重查代价**的旋钮（`LIMIT N`），档位够用就不必解析输入、
     /// 也不必管非法值；同时把「预览多少行」放到看得见的地方（生成时只读 [`PREVIEW_ROWS`] 行，
     /// 想要更多是**重查**临时表，不是就地多显示几行）。
-    pub(crate) fn render_preview_limit_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_preview_limit_menu(&self, key: &str, cx: &mut Context<Self>) -> AnyElement {
         let entity = cx.entity();
         let current = self.preview_limit;
-        Button::new("mock-preview-limit")
+        Button::new(format!("mock-preview-limit-{key}"))
             .ghost()
             .xsmall()
             .label(format!("行数 {current}"))
@@ -1161,7 +1161,7 @@ impl MockPanel {
     /// 单表出口（落库 / 追加 / 草稿箱 / 另存为 + 就地反馈）：作用于「当前 tab 那张表」，
     /// 随表上移中央详情 tab（生成 → 落地闭环，2026-10-31）；右面板只留集合级出口。
     /// `window` 仅透传给「另存为」的系统保存对话框（下拉项闭包自取，无需本函数直接使用）。
-    pub(crate) fn render_sinks(&self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn render_sinks(&self, key: &str, _window: &mut Window, cx: &mut Context<Self>) -> Div {
         let muted = cx.theme().colors.muted_foreground;
         let success = cx.theme().colors.success;
         let danger = cx.theme().colors.danger;
@@ -1175,7 +1175,7 @@ impl MockPanel {
             let entity = cx.entity();
             // 主出口（把结果写进项目分析库）：与其它三个出口区分层级——
             // 其余都是「换个去向」，这个是「落到项目里」，视觉上给 primary
-            Button::new("mock-persist")
+            Button::new(format!("mock-persist-{key}"))
                 .primary()
                 .label("持久化到项目分析库")
                 .w_full()
@@ -1187,7 +1187,7 @@ impl MockPanel {
         let append = {
             let entity = cx.entity();
             let tables = self.existing_tables.clone();
-            Button::new("mock-append")
+            Button::new(format!("mock-append-{key}"))
                 .secondary()
                 .label("追加到既有表")
                 .w_full()
@@ -1216,7 +1216,7 @@ impl MockPanel {
         };
         let scratchpad = {
             let entity = cx.entity();
-            Button::new("mock-save-scratchpad")
+            Button::new(format!("mock-save-scratchpad-{key}"))
                 .secondary()
                 .label("保存到草稿箱")
                 .w_full()
@@ -1235,7 +1235,7 @@ impl MockPanel {
         };
         let export = {
             let entity = cx.entity();
-            Button::new("mock-export")
+            Button::new(format!("mock-export-{key}"))
                 .secondary()
                 .label("另存为")
                 .w_full()

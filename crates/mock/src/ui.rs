@@ -77,3 +77,8 @@ pub const PREVIEW_TOOLTIP_MAX_WIDTH: f32 = 24.0;
 pub const STATUS_ICON_SIZE: f32 = 0.75;
 /// 面板树 / 收件箱图标（1.25rem = 20px）
 pub const PANEL_ICON_SIZE: f32 = 1.25;
+
+/// 详情页三段分栏：基本信息段初始高度（100px；resizable_panel 的 size 只收 Pixels，故用 px 常量）
+pub const DETAIL_HEADER_HEIGHT: Pixels = px(100.);
+/// 基本信息段可拉最大高度（220px；看全进度 / 失败重试 / 来源说明）
+pub const DETAIL_HEADER_MAX_HEIGHT: Pixels = px(220.);

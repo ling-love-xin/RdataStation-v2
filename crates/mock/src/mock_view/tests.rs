@@ -905,6 +905,67 @@ impl Render for Harness {
     }
 }
 
+/// 双 tab 夹具：同一窗口里草稿 tab 与结果表 tab 并存（a11y 重复 id 回归用）。
+struct TwinHarness {
+    draft: Entity<MockDetailView>,
+    table: Entity<MockDetailView>,
+}
+
+impl Render for TwinHarness {
+    fn render(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut gpui_kit::Context<Self>,
+    ) -> impl IntoElement {
+        div().size_full().child(self.draft.clone()).child(self.table.clone())
+    }
+}
+
+/// 多个详情 tab 并存时，各自的出口按钮 / 分栏 id 必须唯一（拼 `DetailTarget::key`）。
+///
+/// 判别性用例：单表出口迁进中央 tab 后，若按钮 id 不拼 tab 键，草稿 + 结果表两个 tab
+/// 同时挂树 → gpui a11y 树出现重复节点并 panic（真机「点列操作页面关闭后闪退」的根因，
+/// a11y.rs `Duplicate a11y node id`）；`v_resizable` 的分栏 id 同理（还共享 keyed state，
+/// 会互相拖串尺寸）。修复后两帧渲染均不 panic，且两个 tab 的出口按钮各自就位。
+#[gpui_kit::test]
+fn multiple_detail_tabs_do_not_collide_a11y_ids(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let slot: Rc<
+        RefCell<
+            Option<(
+                Entity<MockPanel>,
+                Entity<MockDetailView>,
+                Entity<MockDetailView>,
+            )>,
+        >,
+    > = Rc::new(RefCell::new(None));
+    let slot_in = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let panel = cx.new(|cx| MockPanel::new(test_host(&rec), cx));
+        let draft = cx.new(|cx| MockDetailView::new(panel.clone(), DetailTarget::Draft, cx));
+        let table = cx.new(|cx| {
+            MockDetailView::new(
+                panel.clone(),
+                DetailTarget::Table("orders".to_string()),
+                cx,
+            )
+        });
+        *slot_in.borrow_mut() = Some((panel.clone(), draft.clone(), table.clone()));
+        let harness = cx.new(|_cx| TwinHarness { draft, table });
+        Root::new(harness, window, cx)
+    });
+    let (_panel, _draft, _table) = slot.borrow().clone().expect("views 已创建");
+
+    // 连续多帧：多 tab 并存渲染稳定（修复前若 a11y 树启用，重复 id 节点会 panic；
+    // headless 不建 a11y 树，这里兜住双 tab 同帧渲染不 panic 的结构回归。
+    // 可观察断言不可行：带 role 的根容器与 scroll 容器内元素 debug_bounds 都看不到，
+    // 见 detail.rs 根 div 与 `overflow_y_scrollbar` 的 id 重写）
+    for _ in 0..4 {
+        draw(cx);
+    }
+}
+
 /// 打开测试窗口（窗口根必须是 `Root`：`open_dialog` / `render_dialog_layer` 依赖它）。
 fn open_harness(
     cx: &mut TestAppContext,
@@ -5276,5 +5337,94 @@ fn generator_library_dialog_opens(cx: &mut TestAppContext) {
     cx.update(|window, cx| {
         assert!(window.has_active_dialog(cx), "生成器库对话框应打开");
         window.draw(cx).clear(cx);
+    });
+}
+
+/// 「列编辑与分组在同一面板」（用户诉求）：列编辑对话框内打开生成器库
+/// （`LibraryWriteback::ColumnDraft`，两对话框栈式叠加）；选中写回**草稿**
+/// （生成器配置 + 参数区重建 + 样例刷新），列未应用时面板列不动。
+#[gpui_kit::test]
+fn column_dialog_opens_library_and_writes_back_to_draft(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+
+    let id = panel.update(cx, |panel, cx| {
+        panel.add_column(
+            "phone".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
+        panel.draft().columns[0].id
+    });
+    draw(cx);
+    // 1) 打开列编辑对话框
+    cx.update(|window, cx| {
+        detail.update(cx, |view, cx| view.open_column_dialog(id, window, cx));
+        assert!(window.has_active_dialog(cx), "列编辑对话框应打开");
+        window.draw(cx).clear(cx);
+    });
+    let current = panel.read_with(cx, |panel, _cx| {
+        generator_catalog::spec_of(&panel.draft().columns[0].def.generator)
+            .name
+            .to_string()
+    });
+
+    // 2) 在列编辑对话框内打开生成器库（写回草稿）——两对话框栈式叠加
+    cx.update(|window, cx| {
+        let detail_entity = detail.clone();
+        panel.update(cx, |p, cx| {
+            p.open_generator_library_with(
+                super::generator_library::LibraryWriteback::ColumnDraft {
+                    detail: detail_entity.downgrade(),
+                    column_id: id,
+                },
+                window,
+                cx,
+            );
+        });
+        assert!(
+            window.has_active_dialog(cx),
+            "库对话框应打开（栈式叠加在列编辑之上）"
+        );
+        window.draw(cx).clear(cx);
+    });
+
+    // 3) 库对话框选中写回草稿：换一个与当前不同的内建生成器
+    let picked = generator_catalog::specs_in(generator_catalog::GeneratorCategory::Text)
+        .iter()
+        .map(|s| s.name.to_string())
+        .find(|name| *name != current)
+        .expect("Text 分类应不止一个生成器");
+    let config = generator_catalog::default_of(&picked).unwrap();
+    cx.update(|window, cx| {
+        detail.update(cx, |view, cx| {
+            view.apply_generator_config_to_draft(id, config, window, cx);
+        });
+    });
+    draw(cx);
+    panel.update(cx, |panel, _cx| {
+        let col = &panel.draft().columns[0];
+        assert_ne!(
+            generator_catalog::spec_of(&col.def.generator).name,
+            picked,
+            "列未应用时面板列生成器不应变动"
+        );
+    });
+    detail.update(cx, |view, _cx| {
+        let draft = view.draft.as_ref().unwrap();
+        assert_eq!(
+            generator_catalog::spec_of(&draft.def.generator).name,
+            picked,
+            "列编辑草稿的生成器应已更新"
+        );
+        let spec = generator_catalog::spec_of(&draft.def.generator);
+        assert_eq!(
+            draft.params.len(),
+            spec.params.len(),
+            "参数区应随新生成器重建"
+        );
+        assert!(!draft.sample_preview.is_empty(), "样例预览应已刷新");
+        assert_eq!(draft.confidence, "manual");
     });
 }

@@ -2649,9 +2649,24 @@ impl MockPanel {
         cx.notify();
     }
 
-    /// 打开「生成器库」对话框（双视角浏览 + 分组「＋」自定义精调层）。
+    /// 打开「生成器库」对话框（双视角浏览 + 分组「＋」自定义精调层），写回**面板列**。
     pub fn open_generator_library(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
-        crate::mock_view::generator_library::open_library(cx.entity(), id, window, cx);
+        self.open_generator_library_with(
+            crate::mock_view::generator_library::LibraryWriteback::Panel { column_id: id },
+            window,
+            cx,
+        );
+    }
+
+    /// 打开「生成器库」对话框，写回目标可指定：面板列（字段行入口）或列编辑草稿
+    /// （列编辑对话框内入口，选中后参数区 / 样例随写回重建）。
+    pub(crate) fn open_generator_library_with(
+        &mut self,
+        writeback: crate::mock_view::generator_library::LibraryWriteback,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        crate::mock_view::generator_library::open_library(cx.entity(), writeback, window, cx);
     }
 
     /// 按列名 + 类型重跑智能映射（「恢复智能默认」）。
