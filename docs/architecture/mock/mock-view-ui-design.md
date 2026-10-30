@@ -301,3 +301,29 @@ pub struct UserGenerator {
 - **SQLite 持久化**：自定义生成器跨会话落盘（store 迁移 010 + `persistence.rs` 读写 + 面板后台加载/保存）。
 - **字段预设「我的」分组**（§8.3 遗留）可与自定义生成器统一入口，待拍板。
 
+## 十、第五轮：主面板布局（三段可拖分栏 + 单表出口上移 + 说明行压缩）
+
+用户反馈「中央 tab 三段（基本信息 / 添加列 / 预览）要能拖动」+「右面板信息过密，能否把部分内容搬进主面板」（右面板 60f627ca 截图）。实证：中央 `MockDetailView::render` 整段单滚动不可拖；右面板 `render_actions` 里出口 4 按钮 + 三行常驻说明占掉半屏清单。经 4 条建议确认后实施（用户「按照你的建议继续」）。
+
+### 10.1 决策（2026-10-31）
+
+| 决策点 | 结论 | 依据 |
+| --- | --- | --- |
+| 三段可拖 | 中央 tab 改 `v_resizable("mock-detail-split")` 三段：基本信息（100px，可拉 100–220 看全进度/失败重试/来源说明）→ 列区（默认 15rem，拖后经 `on_resize` 回写面板字段 `detail_columns_rem`，跨 tab / 跨窗口沿用）→ 预览（吃掉剩余，表格自带虚拟化）。每段独立滚动 | `gpui-kit` 组件选型禁手搓；同构先例 = 编辑器结果区分栏（editor/view/host/render.rs） |
+| 单表出口上移 | 出口 4 按钮（持久化 / 追加 / 草稿箱 / 另存为）+ 就地反馈抽 `panel::render_sinks`，挂在中央预览段顶部（生成 → 落地闭环同处，「属于这张表随表走」）；右面板只留表清单 / 未落库行 / 批量草稿箱 / 场景动作 / 集合进度 | 右面板 280px 装集合级即可，密度减半 |
+| 说明行压缩 | 右面板「未打开项目 / 只读 / M7」三行常驻 → **单行状态条**（图标 + 短句，完整句进 HoverCard；只有当前生效的那条露面） | 280px 面板三行长说明 = 半屏清单 |
+| 右面板宽度 | 不动（280px 由**全局设置** `layout_right_sidebar_width` 控制，不是 mock 面板私有；用户要加宽需改设置层） | 实证：workbench view.rs 3120-3132 `set_dock_size` 随设置同步 |
+
+### 10.2 本轮改动清单
+
+- `detail.rs`：`MockDetailView::render` 重构——`head_block` / `columns_block` / `preview_block` 三块独立，`v_resizable` 三段装配（基本信息段 `.size(px(100.))` + `.size_range(px(100.)..px(220.))`，列区段 `.size(rem * font_size)`，预览段 flex 吃剩余）；`on_resize` 读 `state.sizes()[1]` 回写 `panel.detail_columns_rem`；预览段顶部接入 `render_sinks`；
+- `panel/mod.rs`：`MockPanel` 加 `detail_columns_rem: f32`（默认 15.0）；
+- `panel/render.rs`：`render_actions` 删出口区与三行说明，尾部改单行状态条（`HoverCard`「mock-sink-status-hint」）；新增 `pub(crate) fn render_sinks(window, cx)`（原出口代码原样迁入，无行为变化）；
+- 文档：本节。
+
+### 10.3 验证
+
+- rds-mock 271 全过零 warning（222/4/38/5/2）；预览密度测试在分栏下照常通过（判别性：DataTable 行距仍 26px）；
+- workbench 装配：`mock_panel_probe` 5 全过（含「点击草稿行 → 中央空态卡片」链路）；`mock_generator` 12 + `mock_jobs` 11 全过（出口服务层不受渲染迁移影响）；
+- 未验证：真机拖拽手感（headless 不量拖拽）。
+

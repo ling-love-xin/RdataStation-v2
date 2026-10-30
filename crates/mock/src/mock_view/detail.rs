@@ -6,6 +6,8 @@ use super::*;
 // 样例预览的固定种子：样例稳定可复现（与最终生成的随机种子无关，纯示意）
 use fake::rand::rngs::StdRng;
 use fake::rand::SeedableRng;
+use gpui::px;
+use gpui_kit::component::resizable::{resizable_panel, v_resizable};
 use std::time::Duration;
 
 const SAMPLE_PREVIEW_SEED: u64 = 20261030;
@@ -1230,6 +1232,17 @@ impl Render for MockDetailView {
             head
         };
 
+        // 段 1：基本信息（表头）。内容可能超出一屏（进度行 / 失败重试 / 来源说明），
+        // 进可拖分栏后有自己的滚动，不再把整页拖长。
+        let head_block = div()
+            .v_flex()
+            .gap_1()
+            .w_full()
+            .pb_2()
+            .border_b_1()
+            .border_color(border)
+            .child(head);
+
         let mut body = div()
             .id("mock-detail")
             .role(gpui::Role::Group)
@@ -1237,22 +1250,13 @@ impl Render for MockDetailView {
             .size_full()
             .min_h_0()
             .gap_2()
-            .p_3()
-            .child(
-            div()
-                .v_flex()
-                .gap_1()
-                .w_full()
-                .pb_2()
-                .border_b_1()
-                .border_color(border)
-                .child(head),
-        );
+            .p_3();
 
-        // ── 列 ──
-        if is_draft && draft_columns == 0 {
-            // 空态：三种起手方式都摆在这张 tab 上（右 Dock 只管表与出口）
-            let card = div()
+        // ── 列（段 2）──
+        // 三种态各自成块：空态卡片 / draft 标题行 + 字段列表 / 结果表只读列
+        let columns_block = if is_draft && draft_columns == 0 {
+            // 空态：三种起手方式都摆在这张 tab 上（右 Dock 只管表与集合出口）
+            div()
                 .v_flex()
                 .gap_2()
                 .w_full()
@@ -1279,11 +1283,13 @@ impl Render for MockDetailView {
                         })),
                 )
                 .child(div().text_xs().text_color(muted).child(
-                    "列定义、表名 / 行数、预览都在这张 tab 里改；右侧面板负责管理表（清单 / 出口 / 历史）。",
-                ));
-            body = body.child(card);
+                    "列定义、表名 / 行数、预览都在这张 tab 里改；右侧面板负责管理表（清单 / 批量出口 / 历史）。",
+                ))
         } else if is_draft {
-            body = body
+            div()
+                .v_flex()
+                .gap_2()
+                .w_full()
                 .child(
                     div()
                         .h_flex()
@@ -1306,17 +1312,20 @@ impl Render for MockDetailView {
                                 .update(cx, |panel, cx| panel.render_column_source_buttons(cx)),
                         ),
                 )
-                .child(self.render_fields(cx));
+                .child(self.render_fields(cx))
         } else {
-            body = body
+            div()
+                .v_flex()
+                .gap_2()
+                .w_full()
                 .child(
                     div()
                         .text_xs()
                         .text_color(muted)
                         .child(format!("列（{result_columns}）· 来自这次生成（只读）")),
                 )
-                .child(self.render_result_columns(generated.as_ref(), cx));
-        }
+                .child(self.render_result_columns(generated.as_ref(), cx))
+        };
 
         // ── 预览 ──
         // 标题行：口径说明（排序 / 行数）+ 右侧的「行数」菜单（重查代价随行数走，先说清）
@@ -1343,7 +1352,14 @@ impl Render for MockDetailView {
             }
             None => format!("预览（前 {PREVIEW_ROWS} 行）· 这一轮没有这张表的结果"),
         };
-        body = body.child(
+        // 段 3：预览（标题行 + 排序提示 + 表格 / 空占位）。表格 `DataTable` 自带
+        // 虚拟化与横向滚动，段内直接撑满——不再随整页滚。
+        let mut preview_block = div().v_flex().gap_2().w_full().flex_1().min_h_0();
+        // 单表出口随表在此（生成 → 落地闭环）：作用于当前 tab 那张表，从右面板迁来
+        preview_block = preview_block.child(
+            self.panel.update(cx, |panel, cx| panel.render_sinks(window, cx)),
+        );
+        preview_block = preview_block.child(
             div()
                 .h_flex()
                 .items_center()
@@ -1366,7 +1382,7 @@ impl Render for MockDetailView {
         );
         // 排序的入口提示：箭头与右键都能点，但两处都很轻，先说一句
         if preview_sort_label.is_some() {
-            body = body.child(div().text_xs().text_color(muted).child(
+            preview_block = preview_block.child(div().text_xs().text_color(muted).child(
                 "排序是重查临时表得来的（全局前 N 行）；点表头右端的箭头可换向 / 取消，右键同一套。",
             ));
         }
@@ -1378,8 +1394,9 @@ impl Render for MockDetailView {
                 // 横向滚动 / 虚拟化 / 键盘选择都是组件的，本处只给容器与一个几十行的 delegate。
                 self.ensure_preview_table(window, cx);
                 if let Some(table) = self.preview_table.clone() {
-                    body = body.child(
+                    preview_block = preview_block.child(
                         div()
+                            .size_full()
                             .flex_1()
                             .min_h_0()
                             .min_w_0()
@@ -1397,7 +1414,7 @@ impl Render for MockDetailView {
                 }
             }
             _ => {
-                body = body.child(
+                preview_block = preview_block.child(
                     div()
                         .flex_1()
                         .min_h(rems(ui::PREVIEW_MIN_HEIGHT))
@@ -1408,6 +1425,61 @@ impl Render for MockDetailView {
                 );
             }
         }
+
+        // 三段可拖分栏（`v_resizable`，仿编辑器结果区分栏先例）：基本信息 / 列区 / 预览。
+        // 每段独立滚动（列区字段多、预览表格虚拟化，各滚各的）；拖拽高度经 `on_resize`
+        // 回写面板字段（rem），跨 tab / 跨窗口沿用。初始大小：基本信息 100px（可拉到 220
+        // 看全进度 / 失败重试 / 来源说明），列区上次拖的高度（默认 15rem），预览吃掉剩余。
+        let font_size = cx.theme().font_size;
+        let columns_h = self.panel.read(cx).detail_columns_rem * font_size;
+        let split_panel = self.panel.clone();
+        let split = v_resizable("mock-detail-split")
+            .child(
+                resizable_panel()
+                    .size(px(100.))
+                    .size_range(px(100.)..px(220.))
+                    .child(
+                        div()
+                            .size_full()
+                            .min_h_0()
+                            .overflow_y_scrollbar()
+                            .child(head_block),
+                    ),
+            )
+            .child(
+                resizable_panel()
+                    .size(columns_h)
+                    .child(
+                        div()
+                            .size_full()
+                            .min_h_0()
+                            .overflow_y_scrollbar()
+                            .child(columns_block),
+                    ),
+            )
+            .child(
+                resizable_panel()
+                    .child(
+                        div()
+                            .size_full()
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .child(preview_block),
+                    ),
+            )
+            .on_resize(move |state, _window, app| {
+                // 拖到哪记到哪：三段的第 2 段是列区（`sizes()[1]`），换算回 rem 存面板字段
+                if let Some(h) = state.read(app).sizes().get(1).copied() {
+                    let ratio = h / font_size;
+                    split_panel.update(app, |panel, cx| {
+                        panel.detail_columns_rem = ratio;
+                        cx.notify();
+                    });
+                }
+            });
+
+        body = body.child(split);
 
         // 键位落点：`track_focus` 不能省（没有它这条 tab 不在 dispatch path 上，快捷键落不到动作）；
         // `key_context("mock-detail")` 与 `crates/app` 的键位注册（Ctrl+Enter = 生成）成对。
