@@ -505,18 +505,47 @@ pub(crate) const RECENT_GENERATORS: usize = 5;
 /// 详情 tab 的字段行专用（列编辑对话框里生成器是只读展示，见 D19）；
 /// 选中即写回**配置面板**（状态单一权威）。菜单自上而下（B7）：
 ///
-/// 1. **最近使用**（本会话点过的，最多 [`RECENT_GENERATORS`] 条）——常用的不必再翻分类；
-/// 2. 「搜索生成器…」——只记得名字时的第二条路径；
-/// 3. 15 类子菜单：当前生成器打勾，**智能映射推荐**的那项标「推荐」。
+/// 0. **生成器库…**——双视角浏览 + 分组「＋」自定义生成器（§9 第四轮）；
+/// 1. **自定义**（本会话自定义生成器，空则不显示）——点按解包 base 写回列；
+/// 2. **最近使用**（本会话点过的，最多 [`RECENT_GENERATORS`] 条）——常用的不必再翻分类；
+/// 3. 「搜索生成器…」——只记得名字时的第二条路径；
+/// 4. 15 类子菜单：当前生成器打勾，**智能映射推荐**的那项标「推荐」。
 pub(crate) fn generator_menu(
     panel: Entity<MockPanel>,
     id: u64,
     current: String,
     recent: Vec<String>,
     recommended: String,
+    user_generators: Vec<UserGenerator>,
 ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
     move |menu, window, cx| {
         let mut menu = menu;
+        // 0. 生成器库（双视角浏览 + 自定义入口；自定义管理的主路径）
+        let library = panel.clone();
+        menu = menu
+            .item(
+                PopupMenuItem::new("生成器库…").on_click(move |_, window, app| {
+                    library.update(app, |panel, cx| panel.open_generator_library(id, window, cx));
+                }),
+            )
+            .separator();
+        // 1. 自定义区（空则不显示）：项 = 自定义名 + 数据类徽标；点击解包 base 写回列
+        if !user_generators.is_empty() {
+            menu = menu.label("自定义");
+            for ug in user_generators.iter() {
+                let panel = panel.clone();
+                let ug_id = ug.id.clone();
+                let ug_label = format!("{} · {}", ug.name, column_type_label(&ug.data_type));
+                menu = menu.item(
+                    PopupMenuItem::new(ug_label).on_click(move |_, _, app| {
+                        panel.update(app, |panel, cx| {
+                            panel.apply_user_generator(id, &ug_id, cx)
+                        });
+                    }),
+                );
+            }
+            menu = menu.separator();
+        }
         if !recent.is_empty() {
             menu = menu.label("最近使用");
             for name in recent.iter() {

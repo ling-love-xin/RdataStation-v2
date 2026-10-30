@@ -27,7 +27,7 @@ use super::{
     summarize_params, validate_table_name,
 };
 use crate::commands::GenerateMock;
-use crate::generator_catalog::{self, ParamKind};
+use crate::generator_catalog::{self, GeneratorCategory, ParamKind};
 use crate::history;
 use crate::models::{
     ColumnDataType, ColumnDef, ColumnDependency, GeneratorConfig, Locale, MockExportFormat,
@@ -4935,6 +4935,210 @@ fn table_edit_rejections_keep_the_dialog_open(cx: &mut TestAppContext) {
     // 四次都没收起，且渲染不炸（错误行就地显示）
     cx.update(|window, cx| {
         assert!(window.has_active_dialog(cx), "校验没过不要收起对话框");
+        window.draw(cx).clear(cx);
+    });
+}
+
+// ==================== 自定义生成器（第四轮：双视角库 + 分组「＋」精调层） ====================
+
+/// 类型映射：编译期穷尽（无 `_ =>` 兜底），这里抽查各类代表。
+#[test]
+fn data_type_for_generator_spot_checks() {
+    use crate::generators::data_type_for_generator;
+    // 构造辅助（字段齐全的默认值，仅用于映射断言）
+    let date_cfg = || GeneratorConfig::Date {
+        min: "2024-01-01".into(),
+        max: "2024-12-31".into(),
+        workdays_only: false,
+        work_week: "1111100".into(),
+        skip_dates: vec![],
+        work_dates: vec![],
+    };
+    let datetime_cfg = || GeneratorConfig::DateTime {
+        min: "2024-01-01 00:00:00".into(),
+        max: "2024-12-31 23:59:59".into(),
+        workdays_only: false,
+        work_hours_only: false,
+        work_hour_start: "09:00".into(),
+        work_hour_end: "18:00".into(),
+        work_week: "1111100".into(),
+        skip_dates: vec![],
+        work_dates: vec![],
+    };
+    assert_eq!(
+        data_type_for_generator(&GeneratorConfig::AutoIncrement { start: 1, step: 1 }),
+        ColumnDataType::Integer
+    );
+    assert_eq!(data_type_for_generator(&GeneratorConfig::Duration), ColumnDataType::Integer);
+    assert_eq!(
+        data_type_for_generator(&GeneratorConfig::RandomFloat { min: 0.0, max: 1.0, precision: 2 }),
+        ColumnDataType::Double
+    );
+    assert_eq!(
+        data_type_for_generator(&GeneratorConfig::RandomDecimal { min: 0.0, max: 100.0, scale: 2 }),
+        ColumnDataType::Decimal {
+            precision: 18,
+            scale: 2,
+        }
+    );
+    assert_eq!(
+        data_type_for_generator(&GeneratorConfig::Boolean { ratio: 50 }),
+        ColumnDataType::Boolean
+    );
+    assert_eq!(data_type_for_generator(&date_cfg()), ColumnDataType::Date);
+    assert_eq!(data_type_for_generator(&datetime_cfg()), ColumnDataType::DateTime);
+    assert_eq!(data_type_for_generator(&GeneratorConfig::UuidV4), ColumnDataType::Uuid);
+    assert_eq!(
+        data_type_for_generator(&GeneratorConfig::Paragraph { count: 2 }),
+        ColumnDataType::Text
+    );
+    assert_eq!(
+        data_type_for_generator(&GeneratorConfig::Geohash { precision: 6 }),
+        ColumnDataType::Varchar { length: None }
+    );
+    assert_eq!(
+        data_type_for_generator(&GeneratorConfig::Url),
+        ColumnDataType::Varchar { length: None }
+    );
+}
+
+/// 新增去重（name → name_2）、空名拒绝、双向挂组（类型组永远挂 + 业务组可选）。
+#[gpui_kit::test]
+fn custom_generator_add_dedups_and_filters(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        assert_eq!(
+            panel.add_user_generator(
+                "  ",
+                ColumnDataType::Integer,
+                None,
+                GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+                cx
+            ),
+            Err("生成器名不能为空".to_string())
+        );
+        let id1 = panel
+            .add_user_generator(
+                "自增ID",
+                ColumnDataType::Integer,
+                None,
+                GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+                cx,
+            )
+            .unwrap();
+        let id2 = panel
+            .add_user_generator(
+                "自增ID",
+                ColumnDataType::Integer,
+                None,
+                GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+                cx,
+            )
+            .unwrap();
+        assert_eq!(id1, "自增ID");
+        assert_eq!(id2, "自增ID_2");
+        assert_eq!(panel.user_generators().len(), 2);
+        assert!(panel.user_generators().iter().any(|ug| ug.id == "自增ID"));
+        assert!(panel.user_generators().iter().any(|ug| ug.id == "自增ID_2"));
+
+        // 双向挂组：选了业务组 → 类型组 + 业务组都可见
+        panel
+            .add_user_generator(
+                "手机号",
+                ColumnDataType::Varchar { length: None },
+                Some(GeneratorCategory::Person),
+                GeneratorConfig::PhoneNumber,
+                cx,
+            )
+            .unwrap();
+        assert_eq!(
+            panel.user_generators_in_category(GeneratorCategory::Person).len(),
+            1
+        );
+        assert_eq!(
+            panel
+                .user_generators_in_type(&ColumnDataType::Varchar { length: None })
+                .len(),
+            1
+        );
+        // 没选业务组的：只挂类型组，不进业务分组
+        assert_eq!(
+            panel.user_generators_in_type(&ColumnDataType::Integer).len(),
+            2,
+            "类型组永远挂"
+        );
+        assert_eq!(
+            panel.user_generators_in_category(GeneratorCategory::Person).len(),
+            1,
+            "未选业务组的不进业务分组"
+        );
+        assert_eq!(panel.user_generators_in_category(GeneratorCategory::Numeric).len(), 0);
+    });
+}
+
+/// 应用自定义生成器：解包 base 写回列、confidence=manual、清样例与结果；未知 id no-op。
+#[gpui_kit::test]
+fn apply_user_generator_writes_base_and_clears(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+        let id = panel.draft().columns[0].id;
+        let ug_id = panel
+            .add_user_generator(
+                "客户编号",
+                ColumnDataType::Integer,
+                None,
+                GeneratorConfig::AutoIncrement { start: 100, step: 5 },
+                cx,
+            )
+            .unwrap();
+        panel.apply_user_generator(id, &ug_id, cx);
+        let column = &panel.draft().columns[0];
+        assert!(
+            matches!(
+                column.def.generator,
+                GeneratorConfig::AutoIncrement { start: 100, step: 5 }
+            ),
+            "base 配置应整包写回"
+        );
+        assert_eq!(column.confidence, "manual");
+        assert!(column.sample_value.is_empty());
+        assert!(panel.results.is_empty());
+
+        // 未知 id：no-op，不动已写回配置
+        panel.apply_user_generator(id, "不存在", cx);
+        assert!(
+            matches!(
+                panel.draft().columns[0].def.generator,
+                GeneratorConfig::AutoIncrement { start: 100, step: 5 }
+            )
+        );
+    });
+}
+
+/// 生成器库对话框打开（双视角浏览 + 分组「＋」入口；对话框层真渲染）。
+#[gpui_kit::test]
+fn generator_library_dialog_opens(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    draw(cx);
+    let id = panel.read_with(cx, |panel, _cx| panel.draft().columns[0].id);
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.open_generator_library(id, window, cx));
+    });
+    cx.update(|window, cx| {
+        assert!(window.has_active_dialog(cx), "生成器库对话框应打开");
         window.draw(cx).clear(cx);
     });
 }

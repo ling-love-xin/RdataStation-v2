@@ -2,7 +2,172 @@ use fake::rand::rngs::StdRng;
 use fake::RngExt;
 use fake::{Fake, Faker};
 
-use crate::models::{GeneratorConfig, Locale};
+use crate::models::{ColumnDataType, GeneratorConfig, Locale};
+
+/// 生成器 → 产出数据类（技术视角分组与数据类徽标共用）。
+///
+/// 与 [`generate_cell`] 同构：**穷尽 match、无 `_ =>` 兜底**，新增 `GeneratorConfig` 变体会
+/// 编译失败强制补齐此处归类。分组口径与 `generate_cell` 的输出形态一一对应：
+/// - 数值：整数 / 浮点 / 定点小数按变体区分；`Duration` 输出秒数（整数）；
+/// - 时间：`Time` 输出 `%H:%M:%S` 字符串（无独立 Time 列类型 → Varchar），日期系按粒度分
+///   `Date` / `DateTime`；
+/// - 文本：多行文本（句子组 / 段落 / Markdown）→ `Text`，其余单值串 → `Varchar`；
+/// - 约束类（ValueSet / Sequence / Weighted）输出字符串 → `Varchar`。
+pub(crate) fn data_type_for_generator(config: &GeneratorConfig) -> ColumnDataType {
+    match config {
+        // 整数类
+        GeneratorConfig::AutoIncrement { .. }
+        | GeneratorConfig::RandomInt { .. }
+        | GeneratorConfig::Poisson { .. }
+        | GeneratorConfig::Binomial { .. }
+        | GeneratorConfig::Duration => ColumnDataType::Integer,
+        // 浮点类
+        GeneratorConfig::RandomFloat { .. }
+        | GeneratorConfig::Normal { .. }
+        | GeneratorConfig::LogNormal { .. }
+        | GeneratorConfig::Exponential { .. }
+        | GeneratorConfig::Pareto { .. }
+        | GeneratorConfig::Beta { .. }
+        | GeneratorConfig::RandomWalk { .. }
+        | GeneratorConfig::TimeSeries { .. }
+        | GeneratorConfig::Latitude
+        | GeneratorConfig::Longitude => ColumnDataType::Double,
+        // 定点小数（默认精度标度 = 常见金额位）
+        GeneratorConfig::RandomDecimal { .. } => ColumnDataType::Decimal {
+            precision: 18,
+            scale: 2,
+        },
+        GeneratorConfig::Boolean { .. } => ColumnDataType::Boolean,
+        GeneratorConfig::Date { .. }
+        | GeneratorConfig::SequentialDate { .. }
+        | GeneratorConfig::SequentialDateWithGaps { .. } => ColumnDataType::Date,
+        GeneratorConfig::DateTime { .. }
+        | GeneratorConfig::DateTimeBefore { .. }
+        | GeneratorConfig::DateTimeAfter { .. }
+        | GeneratorConfig::DateTimeBetween { .. } => ColumnDataType::DateTime,
+        GeneratorConfig::UuidV1
+        | GeneratorConfig::UuidV3
+        | GeneratorConfig::UuidV4
+        | GeneratorConfig::UuidV5 => ColumnDataType::Uuid,
+        // 多行文本
+        GeneratorConfig::Sentences { .. }
+        | GeneratorConfig::Paragraph { .. }
+        | GeneratorConfig::Paragraphs { .. }
+        | GeneratorConfig::MarkdownItalicWord { .. }
+        | GeneratorConfig::MarkdownBoldWord { .. }
+        | GeneratorConfig::MarkdownLink { .. }
+        | GeneratorConfig::MarkdownBulletPoints { .. }
+        | GeneratorConfig::MarkdownListItems { .. }
+        | GeneratorConfig::MarkdownBlockQuoteSingle { .. }
+        | GeneratorConfig::MarkdownBlockQuoteMulti { .. }
+        | GeneratorConfig::MarkdownCode { .. } => ColumnDataType::Text,
+        // 其余全部为单值字符串
+        GeneratorConfig::Digit
+        | GeneratorConfig::NumberWithFormat { .. }
+        | GeneratorConfig::Constant { .. }
+        | GeneratorConfig::Word
+        | GeneratorConfig::Words { .. }
+        | GeneratorConfig::Sentence { .. }
+        | GeneratorConfig::Regex { .. }
+        | GeneratorConfig::Template { .. }
+        | GeneratorConfig::Name
+        | GeneratorConfig::NameWithTitle
+        | GeneratorConfig::FirstName
+        | GeneratorConfig::LastName
+        | GeneratorConfig::Title
+        | GeneratorConfig::Suffix
+        | GeneratorConfig::Email
+        | GeneratorConfig::SafeEmail
+        | GeneratorConfig::FreeEmailProvider
+        | GeneratorConfig::DomainSuffix
+        | GeneratorConfig::FreeEmail
+        | GeneratorConfig::PhoneNumber
+        | GeneratorConfig::CellNumber
+        | GeneratorConfig::Username
+        | GeneratorConfig::Password { .. }
+        | GeneratorConfig::Country
+        | GeneratorConfig::CountryCode
+        | GeneratorConfig::CountryName
+        | GeneratorConfig::City
+        | GeneratorConfig::CityPrefix
+        | GeneratorConfig::CitySuffix
+        | GeneratorConfig::StateName
+        | GeneratorConfig::StateAbbr
+        | GeneratorConfig::StreetName
+        | GeneratorConfig::StreetSuffix
+        | GeneratorConfig::ZipCode
+        | GeneratorConfig::PostCode
+        | GeneratorConfig::BuildingNumber
+        | GeneratorConfig::SecondaryAddress
+        | GeneratorConfig::SecondaryAddressType
+        | GeneratorConfig::Geohash { .. }
+        | GeneratorConfig::TimeZone
+        | GeneratorConfig::IpAddress
+        | GeneratorConfig::IPv4
+        | GeneratorConfig::IPv6
+        | GeneratorConfig::IP
+        | GeneratorConfig::MacAddress
+        | GeneratorConfig::Time
+        | GeneratorConfig::CompanyName
+        | GeneratorConfig::CompanySuffix
+        | GeneratorConfig::JobTitle
+        | GeneratorConfig::Profession
+        | GeneratorConfig::Industry
+        | GeneratorConfig::Seniority
+        | GeneratorConfig::Field
+        | GeneratorConfig::Position
+        | GeneratorConfig::Buzzword
+        | GeneratorConfig::BuzzwordMiddle
+        | GeneratorConfig::BuzzwordTail
+        | GeneratorConfig::CatchPhrase
+        | GeneratorConfig::BsVerb
+        | GeneratorConfig::BsAdj
+        | GeneratorConfig::BsNoun
+        | GeneratorConfig::Bs
+        | GeneratorConfig::CurrencyCode
+        | GeneratorConfig::CurrencyName
+        | GeneratorConfig::CurrencySymbol
+        | GeneratorConfig::Bic
+        | GeneratorConfig::Isin
+        | GeneratorConfig::CreditCardNumber
+        | GeneratorConfig::Url
+        | GeneratorConfig::UserAgent
+        | GeneratorConfig::MimeType
+        | GeneratorConfig::Semver
+        | GeneratorConfig::SemverStable
+        | GeneratorConfig::SemverUnstable
+        | GeneratorConfig::FilePath
+        | GeneratorConfig::FileName
+        | GeneratorConfig::FileExtension
+        | GeneratorConfig::DirPath
+        | GeneratorConfig::ImageUrl { .. }
+        | GeneratorConfig::ImageUrlWithSeed { .. }
+        | GeneratorConfig::ImageUrlGrayscale { .. }
+        | GeneratorConfig::ImageUrlBlur { .. }
+        | GeneratorConfig::ImageUrlCustom { .. }
+        | GeneratorConfig::HexColor
+        | GeneratorConfig::RgbColor
+        | GeneratorConfig::RgbaColor
+        | GeneratorConfig::HslColor
+        | GeneratorConfig::HslaColor
+        | GeneratorConfig::Color
+        | GeneratorConfig::FerroidULID
+        | GeneratorConfig::FerroidTwitterId
+        | GeneratorConfig::FerroidInstagramId
+        | GeneratorConfig::FerroidMastodonId
+        | GeneratorConfig::FerroidDiscordId
+        | GeneratorConfig::Isbn
+        | GeneratorConfig::Isbn10
+        | GeneratorConfig::Isbn13
+        | GeneratorConfig::RfcStatusCode
+        | GeneratorConfig::ValidStatusCode
+        | GeneratorConfig::LicencePlate
+        | GeneratorConfig::HealthInsuranceCode
+        | GeneratorConfig::ValueSet { .. }
+        | GeneratorConfig::Sequence { .. }
+        | GeneratorConfig::Weighted { .. } => ColumnDataType::Varchar { length: None },
+    }
+}
 
 /// A2：按语言偏好（[`Locale`]）把 faker 派发到 fake crate 的对应 locale 模块。
 ///

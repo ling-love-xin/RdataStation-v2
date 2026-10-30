@@ -82,7 +82,7 @@ use crate::generator_catalog::{self, GeneratorCategory, GeneratorSpec, ParamFiel
 use crate::history::{self, HistoryAction, RunRecord};
 use crate::models::{
     ColumnDataType, ColumnDef, ColumnDependency, GeneratorConfig, Locale, MockExportFormat,
-    ReferenceDomain, ScenarioTemplate, TemplateTable,
+    ReferenceDomain, ScenarioTemplate, TemplateTable, UserGenerator,
 };
 use crate::persistence::{
     MockGenerationDetail, MockGenerationTask, MockTemplateColumn, MockUserTemplate,
@@ -96,6 +96,7 @@ use ::shared::string::{tsv_cell, tsv_row};
 // ---- 子模块（原 mock_view.rs 按职责拆分） ----
 mod contract;
 mod detail;
+mod generator_library;
 mod generator_search;
 mod job;
 mod panel;
