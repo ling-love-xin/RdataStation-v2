@@ -255,12 +255,17 @@ pub fn compute_table_column_summary_on(
 /// 去重后行数，即「删掉这些行后不留重复整行」。空表 / 全唯一返回 0。
 /// 临时表行数受取样上限约束（`SOURCE_SAMPLE_LIMIT`），全表 `GROUP BY ALL` 代价可控；
 /// 失败按调用方口径降级（画像不因它失败，五卡显示「—」）。
+///
+/// SQL 陷阱（2026-10-31 真实连接实测锁定）：子查询必须 `SELECT *, COUNT(*)`——
+/// `GROUP BY ALL` 按 **select 列表里未聚合的列** 分组；只选 `COUNT(*)` 时没有
+/// 分组键，会把全表并成一组（冗余=总行数-1，数值虚高）。`*` 展开成全部列即
+/// 「整行分组」，且与列名无关（临时表列结构不定，不拼列名）。
 pub fn compute_dup_rows_on(
     conn: &duckdb::Connection,
     temp_table: &str,
 ) -> Result<u64, CoreError> {
     let sql = format!(
-        "SELECT COALESCE(SUM(n - 1), 0) FROM (SELECT COUNT(*) AS n FROM \"{}\" GROUP BY ALL)",
+        "SELECT COALESCE(SUM(n - 1), 0) FROM (SELECT *, COUNT(*) AS n FROM \"{}\" GROUP BY ALL)",
         temp_table.replace('"', "\"\"")
     );
     let dup: i64 = conn.query_row(&sql, [], |row| row.get(0)).map_err(|e| {
@@ -1476,6 +1481,41 @@ mod tests {
             rows.iter().all(|r| r.column == "id"),
             "无重叠的列不应出现：{rows:?}"
         );
+        Ok(())
+    }
+
+    /// 概览五卡「重复行」的**真实 DuckDB 连接实测**：锁定 `GROUP BY ALL` 语法
+    /// 与「整行重复」口径（2026-10-30 补测，此前该语法未实测）。
+    ///
+    /// 覆盖三类：整行复合重复（`SUM(组内行数-1)`）、全唯一（0）、空表
+    /// （`COALESCE` 兜底 0）。语法一旦在锁定 duckdb 版本不成立，此测试最先红。
+    #[test]
+    fn test_compute_dup_rows_on_real_duckdb() -> Result<(), CoreError> {
+        let conn = duckdb::Connection::open_in_memory().map_err(duckdb_err)?;
+        // (a,b) 复合键：('x',1)×3、('y',2)×2、其余整行唯一 → 冗余 = (3-1)+(2-1) = 3；
+        // 仅 a 相同不算重复（'z'/'w'/'v' a 各异，b 有 1 与 x 组同 b 也不并组）
+        conn.execute_batch(
+            "CREATE TABLE \"rs_dup\" (\"a\" VARCHAR, \"b\" INTEGER);
+             INSERT INTO \"rs_dup\" VALUES
+                 ('x',1),('x',1),('x',1),('y',2),('y',2),('z',1),('w',3),('v',4)",
+        )
+        .map_err(duckdb_err)?;
+        assert_eq!(
+            compute_dup_rows_on(&conn, "rs_dup")?,
+            3,
+            "整行重复应按组计冗余（GROUP BY ALL 整行分组）"
+        );
+        // 全唯一 → 0
+        conn.execute_batch(
+            "CREATE TABLE \"rs_unique\" (\"a\" VARCHAR);
+             INSERT INTO \"rs_unique\" VALUES ('a'),('b'),('c')",
+        )
+        .map_err(duckdb_err)?;
+        assert_eq!(compute_dup_rows_on(&conn, "rs_unique")?, 0, "全唯一不应有冗余");
+        // 空表 → COALESCE 兜底 0（SUM 为 NULL 不是报错）
+        conn.execute_batch("CREATE TABLE \"rs_empty\" (\"a\" VARCHAR)")
+            .map_err(duckdb_err)?;
+        assert_eq!(compute_dup_rows_on(&conn, "rs_empty")?, 0, "空表应返回 0 而非 NULL");
         Ok(())
     }
 }
