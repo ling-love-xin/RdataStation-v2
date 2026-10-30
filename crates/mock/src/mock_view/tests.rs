@@ -5122,6 +5122,142 @@ fn apply_user_generator_writes_base_and_clears(cx: &mut TestAppContext) {
     });
 }
 
+/// 编辑更新：改名（重名自动序号、排除自己）、改分组/参数、未知 id 报错。
+#[gpui_kit::test]
+fn update_user_generator_renames_and_dedups(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        let id_a = panel
+            .add_user_generator(
+                "订单号",
+                ColumnDataType::Integer,
+                None,
+                GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+                cx,
+            )
+            .unwrap();
+        let id_b = panel
+            .add_user_generator(
+                "客户号",
+                ColumnDataType::Integer,
+                None,
+                GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+                cx,
+            )
+            .unwrap();
+
+        // 重命名到既有名字 → 自动加序号（name_2），且不撞被占用的 id
+        let renamed = panel
+            .update_user_generator(
+                &id_a,
+                "客户号",
+                ColumnDataType::Integer,
+                Some(GeneratorCategory::Person),
+                GeneratorConfig::AutoIncrement { start: 10, step: 2 },
+                cx,
+            )
+            .unwrap();
+        assert_eq!(renamed, "客户号_2");
+        let ug = panel
+            .user_generators()
+            .iter()
+            .find(|ug| ug.id == "客户号_2")
+            .expect("改名后的项应存在");
+        assert_eq!(ug.name, "客户号_2");
+        assert_eq!(ug.category, Some(GeneratorCategory::Person));
+        assert!(
+            matches!(
+                ug.base,
+                GeneratorConfig::AutoIncrement { start: 10, step: 2 }
+            ),
+            "base 应整包替换"
+        );
+        // 原 id_b 未被动过
+        assert!(panel.user_generators().iter().any(|ug| ug.id == id_b));
+        assert_eq!(panel.user_generators().len(), 2);
+
+        // 空名拒绝
+        assert_eq!(
+            panel.update_user_generator(
+                &id_b,
+                "   ",
+                ColumnDataType::Integer,
+                None,
+                GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+                cx
+            ),
+            Err("生成器名不能为空".to_string())
+        );
+        // 未知 id 拒绝
+        assert_eq!(
+            panel.update_user_generator(
+                "不存在",
+                "任意",
+                ColumnDataType::Integer,
+                None,
+                GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+                cx
+            ),
+            Err("找不到该自定义生成器".to_string())
+        );
+    });
+}
+
+/// 删除：只移除目标；已应用该生成器的列不受影响（写回的是解包 base）。
+#[gpui_kit::test]
+fn delete_user_generator_removes_only_target(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        let id_a = panel
+            .add_user_generator(
+                "订单号",
+                ColumnDataType::Integer,
+                None,
+                GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+                cx,
+            )
+            .unwrap();
+        let id_b = panel
+            .add_user_generator(
+                "客户号",
+                ColumnDataType::Integer,
+                None,
+                GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+                cx,
+            )
+            .unwrap();
+        // 先应用 a，再删除 a：列配置（解包 base）不受影响
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+        let col_id = panel.draft().columns[0].id;
+        panel.apply_user_generator(col_id, &id_a, cx);
+        assert!(matches!(
+            panel.draft().columns[0].def.generator,
+            GeneratorConfig::AutoIncrement { start: 1, step: 1 }
+        ));
+
+        panel.delete_user_generator(&id_a, cx);
+        assert_eq!(panel.user_generators().len(), 1);
+        assert!(panel.user_generators().iter().all(|ug| ug.id != id_a));
+        assert!(panel.user_generators().iter().any(|ug| ug.id == id_b));
+        assert!(
+            matches!(
+                panel.draft().columns[0].def.generator,
+                GeneratorConfig::AutoIncrement { start: 1, step: 1 }
+            ),
+            "删除自定义项不应影响已应用的列（解耦）"
+        );
+        // 删不存在的：no-op
+        panel.delete_user_generator("不存在", cx);
+        assert_eq!(panel.user_generators().len(), 1);
+    });
+}
+
 /// 生成器库对话框打开（双视角浏览 + 分组「＋」入口；对话框层真渲染）。
 #[gpui_kit::test]
 fn generator_library_dialog_opens(cx: &mut TestAppContext) {
