@@ -8102,7 +8102,7 @@ dependencies = [
 
 [[package]]
 name = "rds-analytics-resource"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "chrono",
  "duckdb",
@@ -8131,7 +8131,7 @@ dependencies = [
 
 [[package]]
 name = "rds-app"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "gpui-kit",
  "rds-analytics-resource",
@@ -8150,7 +8150,7 @@ dependencies = [
 
 [[package]]
 name = "rds-connection"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8176,7 +8176,7 @@ dependencies = [
 
 [[package]]
 name = "rds-connection-dialog"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "chrono",
  "gpui-kit",
@@ -8197,7 +8197,7 @@ dependencies = [
 
 [[package]]
 name = "rds-content-search"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "gpui-kit",
@@ -8208,7 +8208,7 @@ dependencies = [
 
 [[package]]
 name = "rds-database"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "gpui-kit",
  "rds-engine",
@@ -8226,7 +8226,7 @@ dependencies = [
 
 [[package]]
 name = "rds-driver"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "arrow",
  "async-trait",
@@ -8267,7 +8267,7 @@ dependencies = [
 
 [[package]]
 name = "rds-editor"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "arrow",
@@ -8299,7 +8299,7 @@ dependencies = [
 
 [[package]]
 name = "rds-engine"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "arrow",
  "async-trait",
@@ -8348,7 +8348,7 @@ dependencies = [
 
 [[package]]
 name = "rds-file-meta"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "rds-paths",
  "serde",
@@ -8360,7 +8360,7 @@ dependencies = [
 
 [[package]]
 name = "rds-insight"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "arrow",
  "chrono",
@@ -8384,7 +8384,7 @@ dependencies = [
 
 [[package]]
 name = "rds-kernel"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "jupyter-protocol",
@@ -8398,7 +8398,7 @@ dependencies = [
 
 [[package]]
 name = "rds-mock"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "chrono",
  "duckdb",
@@ -8421,7 +8421,7 @@ dependencies = [
 
 [[package]]
 name = "rds-notification"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "chrono",
  "gpui-kit",
@@ -8435,14 +8435,14 @@ dependencies = [
 
 [[package]]
 name = "rds-paths"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "dirs 7.0.0",
 ]
 
 [[package]]
 name = "rds-plugin"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "arrow",
  "async-trait",
@@ -8468,7 +8468,7 @@ dependencies = [
 
 [[package]]
 name = "rds-project"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "chrono",
  "duckdb",
@@ -8488,7 +8488,7 @@ dependencies = [
 
 [[package]]
 name = "rds-property"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -8496,7 +8496,7 @@ dependencies = [
 
 [[package]]
 name = "rds-result-panel"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "arrow",
  "chrono",
@@ -8511,7 +8511,7 @@ dependencies = [
 
 [[package]]
 name = "rds-scratchpad"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "chrono",
  "gpui-kit",
@@ -8537,7 +8537,7 @@ dependencies = [
 
 [[package]]
 name = "rds-settings"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "gpui-kit",
  "rds-paths",
@@ -8549,7 +8549,7 @@ dependencies = [
 
 [[package]]
 name = "rds-shared"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "aes-gcm",
  "arrow",
@@ -8579,7 +8579,7 @@ dependencies = [
 
 [[package]]
 name = "rds-sql"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "serde",
  "sqlglot-rust",
@@ -8588,7 +8588,7 @@ dependencies = [
 
 [[package]]
 name = "rds-store"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "chrono",
  "duckdb",
@@ -8612,7 +8612,7 @@ dependencies = [
 
 [[package]]
 name = "rds-tag"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "chrono",
  "rds-engine",
@@ -8623,7 +8623,7 @@ dependencies = [
 
 [[package]]
 name = "rds-workbench"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "arrow",
  "chrono",
@@ -8664,7 +8664,7 @@ dependencies = [
 
 [[package]]
 name = "rds-workbench-shell"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "gpui-kit",
  "serde",
