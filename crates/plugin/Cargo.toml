@@ -36,7 +36,6 @@ extism = { workspace = true, optional = true }
 
 # ===== 其他 =====
 tracing.workspace = true
-thiserror.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 toml.workspace = true

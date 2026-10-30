@@ -61,7 +61,6 @@ once_cell.workspace = true
 lru.workspace = true
 rand.workspace = true
 percent-encoding.workspace = true
-thiserror.workspace = true
 
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）

@@ -8254,7 +8254,6 @@ dependencies = [
  "sqlx",
  "sqlx-mysql",
  "sqlx-postgres",
- "thiserror 2.0.20",
  "tokio",
  "tokio-native-tls",
  "tokio-postgres",
@@ -8421,7 +8420,7 @@ dependencies = [
 
 [[package]]
 name = "rds-notification"
-version = "0.2.6"
+version = "0.2.5"
 dependencies = [
  "chrono",
  "gpui-kit",
@@ -8457,7 +8456,6 @@ dependencies = [
  "serde_json",
  "specta",
  "tar",
- "thiserror 2.0.20",
  "tokio",
  "tokio-util",
  "toml 1.1.5+spec-1.1.0",
