@@ -126,7 +126,7 @@ pub(crate) use panel::{complex_form_line, form_line};
 pub(crate) use pure::{
     COLUMN_TYPES, FILE_FORMATS, LOCALES, PREVIEW_LIMIT_CHOICES, PREVIEW_ROWS, RECENT_GENERATORS,
     column_type_label, complex_param_hint, complex_param_text, default_generator_for,
-    generator_menu, locale_label, mock_file_name, new_column_spec, param_text, parse_complex_param,
+    locale_label, mock_file_name, new_column_spec, param_text, parse_complex_param,
     parse_percent_ratio, parse_rows, parse_seed, patch_param, patch_param_value, summarize_params,
     validate_table_name, with_thousands,
 };
