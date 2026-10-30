@@ -152,6 +152,11 @@ pub enum InsightEvent {
         file_stem: String,
         content: String,
     },
+    /// 请宿主打开「新建洞察」对话框（面板头 ＋ 按钮发出）。
+    ///
+    /// 来源选择（已连接库 / 草稿箱 / 资源分析 / 外部文件）与确认都在宿主侧
+    /// （要 Shared 的连接列表、scratchpad store、系统文件对话框），面板只发意图。
+    NewInsightRequested,
 }
 
 /// 列画像四区（顺序即渲染顺序）
@@ -238,11 +243,16 @@ pub struct InsightView {
     pub(crate) loading_note: Option<SharedString>,
     /// 已洞察表集合（中间工作页 `opened` 的快照，宿主经 [`Self::set_insight_set`] 推送）。
     ///
-    /// 集合是**会话级管理**（可对比 / 关系排查 / 归档），独立于当前目标的 Tab 下钻——
-    /// 当前目标高亮由条目上的 `is_current` 表达，不参与 Tab 载荷。
+    /// 集合是**会话级管理**（可对比 / 关系排查 / 归档），独立于当前目标的下钻——
+    /// 当前目标高亮由条目上的 `is_current` 表达，不参与载荷。
     pub(crate) insight_set: Vec<InsightSetEntry>,
-    /// 集合卡折叠态（用户偏好：切 Tab / 重算不清空）
-    pub(crate) insight_set_open: bool,
+    /// 集合多选模式（原型 it-head「多选」开关：开启后行首出现勾选框）。
+    ///
+    /// 多选与当前目标下钻互斥：开启多选时行不再表达 `is_current` 高亮，
+    /// 勾选 ≥2 张表后 it-actions 出现「质量对比」入口。
+    pub(crate) set_multi: bool,
+    /// 多选模式下勾选的行（按条目 `key` 记；质量对比 / 批量操作的对象）。
+    pub(crate) selected_tables: std::collections::HashSet<String>,
     /// 跨洞察表关系排查的结果（T19；`None` = 尚未排查过）
     pub(crate) overlap: Option<OverlapView>,
     /// 关系排查执行中（集合卡关系区给进度提示）
@@ -309,7 +319,8 @@ impl InsightView {
             open_schema_sections: [true; SchemaSection::ALL.len()],
             loading_note: None,
             insight_set: Vec::new(),
-            insight_set_open: true,
+            set_multi: false,
+            selected_tables: std::collections::HashSet::new(),
             overlap: None,
             overlap_running: false,
             overlap_notice: None,
@@ -356,9 +367,48 @@ impl InsightView {
         }
     }
 
-    /// 折叠 / 展开集合卡
-    pub fn toggle_insight_set(&mut self, cx: &mut Context<Self>) {
-        self.insight_set_open = !self.insight_set_open;
+    /// 集合多选模式开关（原型 it-head「多选」）。
+    ///
+    /// 关闭时清空勾选（勾选只在多选语境有意义，留着一批「上一轮选中的表」
+    /// 会让质量对比按钮误亮）。
+    pub fn toggle_multi_mode(&mut self, cx: &mut Context<Self>) {
+        self.set_multi = !self.set_multi;
+        if !self.set_multi {
+            self.selected_tables.clear();
+        }
+        cx.notify();
+    }
+
+    /// 多选模式（渲染 / 测试读）
+    pub fn multi_mode(&self) -> bool {
+        self.set_multi
+    }
+
+    /// 勾选 / 取消勾选集合中的一张表（按条目 key）。
+    pub fn toggle_table_selection(&mut self, key: &str, cx: &mut Context<Self>) {
+        if !self.selected_tables.remove(key) {
+            self.selected_tables.insert(key.to_string());
+        }
+        cx.notify();
+    }
+
+    /// 已勾选的表 key 集合（渲染 / 测试读）
+    pub fn selected_tables(&self) -> &std::collections::HashSet<String> {
+        &self.selected_tables
+    }
+
+    /// 多选质量对比：对每张勾选表逐个发「加入中间页对比候选并切对比形态」。
+    ///
+    /// 复用单表 `CompareRequested`（宿主内部累积候选，去重由中间页状态负责）——
+    /// 不新开批量事件，保证「对比」只有一条宿主链路。
+    pub fn request_quality_compare(&mut self, cx: &mut Context<Self>) {
+        let keys: Vec<String> = self.selected_tables.iter().cloned().collect();
+        if keys.is_empty() {
+            return;
+        }
+        for key in keys {
+            cx.emit(InsightEvent::CompareRequested { key });
+        }
         cx.notify();
     }
 
@@ -1222,6 +1272,9 @@ impl InsightView {
         }
     }
 
+    /// 按 Tab 下标切换（旧 TabBar 的 on_click 入口；UI 已移除 Tab 条，
+    /// 方法保留供 `tests.rs` 大量面板状态断言使用）
+    #[allow(dead_code)]
     pub(crate) fn set_tab_from_index(&mut self, ix: usize, cx: &mut Context<Self>) {
         if let Some(tab) = PanelTab::from_index(ix) {
             self.set_tab(tab, cx);
@@ -1258,7 +1311,7 @@ impl Render for InsightView {
         let rem = window.rem_size();
         let empty_icon = rem * ui::EMPTY_ICON_SIZE;
         let inline_icon = rem * ui::INSIGHT_INLINE_ICON_SIZE;
-        // 摘要 Tab 的评分环（68px 外框，对齐原型右栏 score-ring）
+        // 下钻区摘要的检查器命中环（68px 外框，对齐原型右栏 grade-ring）
         let overview_ring = rem * ui::INSIGHT_OVERVIEW_RING_SIZE;
 
         div()
@@ -1270,10 +1323,9 @@ impl Render for InsightView {
             .bg(theme.colors.background)
             .child(self.render_header(&entity, theme))
             .children(self.render_project_hint(theme))
-            .children(self.render_target_head(theme))
-            .child(self.render_tab_bar(&entity, theme))
-            // 滚动归面板自己（Dock 的 #tab-content 不产生滚动）：滚动条贴内容边缘，
-            // 内距放在滚动区的**内部**，避免出现滚动条与内距之间的空档。
+            // 右栏对齐 EDA 原型右侧面板（2026-10-30 重构）：不再有 Tab 条与目标头——
+            // body = 「已洞察表集合（it-list）」+「选中目标下钻（drillzone）」，
+            // 目标名与类型徽标由下钻区 dz-title 承担。
             .child(
                 div()
                     .id("insight-body")
@@ -1287,14 +1339,14 @@ impl Render for InsightView {
                             .w_full()
                             .gap_2()
                             .p(rems(ui::PANEL_PADDING))
-                            // 已洞察表集合：会话级管理，先于当前目标的 Tab 下钻
+                            // 洞察表集合：会话级管理，先于选中表的下钻可见
                             .child(self.render_insight_set(&entity, theme))
-                            .children(self.render_body(
+                            .children(self.render_drillzone(
                                 &entity,
                                 theme,
-                                empty_icon,
                                 inline_icon,
                                 overview_ring,
+                                empty_icon,
                             )),
                     ),
             )

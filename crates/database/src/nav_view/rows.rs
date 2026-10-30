@@ -2826,13 +2826,31 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         }
                         NavActionId::InsightPanel => {
                             let e = entity.clone();
+                            // 统一洞察入口（2026-10-30 去重）：表 / 视图 → 取样画像；
+                            // schema → 结构洞察；其余节点（连接 / 库 / 列…）→ 纯面板导航。
+                            let table = data_target.clone();
+                            let schema = insight_schema.clone();
                             Some(
                                 PopupMenuItem::new(d.label)
                                     .disabled(!entry.enabled)
                                     .on_click(move |_, _, app| {
-                                        e.update(app, |this, cx| {
-                                            this.host.open_right_panel(RightPanel::Insight, cx);
-                                        });
+                                        // Fn 闭包不能移动捕获变量：克隆后进入分支
+                                        if let Some(source) = table.clone() {
+                                            e.update(app, |this, cx| {
+                                                this.host.open_insight_table(source, cx);
+                                            });
+                                        } else if let Some(target) = schema.clone() {
+                                            e.update(app, |this, cx| {
+                                                this.host.open_insight_schema(target, cx);
+                                            });
+                                        } else {
+                                            e.update(app, |this, cx| {
+                                                this.host.open_right_panel(
+                                                    RightPanel::Insight,
+                                                    cx,
+                                                );
+                                            });
+                                        }
                                     }),
                             )
                         }
@@ -2893,24 +2911,6 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                                 .on_click(move |_, _, app| {
                                     let request = request.clone();
                                     e.update(app, |this, cx| this.host.open_mock_panel(Some(request), cx));
-                                })
-                        }),
-                        NavActionId::Stats => data_target.clone().map(|source| {
-                            let e = entity.clone();
-                            PopupMenuItem::new(d.label)
-                                .disabled(!entry.enabled)
-                                .on_click(move |_, _, app| {
-                                    let source = source.clone();
-                                    e.update(app, |this, cx| this.host.open_insight_table(source, cx));
-                                })
-                        }),
-                        NavActionId::InsightSchema => insight_schema.clone().map(|target| {
-                            let e = entity.clone();
-                            PopupMenuItem::new(d.label)
-                                .disabled(!entry.enabled)
-                                .on_click(move |_, _, app| {
-                                    let target = target.clone();
-                                    e.update(app, |this, cx| this.host.open_insight_schema(target, cx));
                                 })
                         }),
                         NavActionId::CopyName => {

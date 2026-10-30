@@ -18,6 +18,10 @@ impl InsightView {
     /// 表探查（Tab「表」，Phase 3.1）：列元数据表 + 行数 + 评估入口。
     ///
     /// 列名是下钻热点（点它切到该列的「列」Tab）——表→列是用户最常走的下一步。
+    ///
+    /// 2026-10-30 右栏对齐 EDA 原型后不再由右栏渲染（表画像卡由下钻区
+    /// `drill.rs` 承担）；保留供中间页 / 资产库复用，勿删。
+    #[allow(dead_code)]
     pub(in crate::view) fn render_table_profile(
         &self,
         profile: &TableProfileView,

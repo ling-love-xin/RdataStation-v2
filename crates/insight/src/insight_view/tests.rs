@@ -616,14 +616,20 @@ fn multi_tab_shows_sample_guide_without_request_when_no_sample_table(cx: &mut Te
         events.borrow()
     );
 
+    // 右栏多列目标下钻 = dz-title + 聚合占位（2026-10-30 对齐原型后不再有
+    // 「先取样」专门引导——聚合能力边界由 agg-placeholder 可见承担）
     let guide = cx.update(|window, _| {
         window.try_find(ElementId::Name(SharedString::from(
             "insight-multi-need-sample",
         )))
     });
-    assert!(guide.is_some(), "样本表缺失时应渲染专门取样引导空态");
+    assert!(guide.is_none(), "右栏不再渲染多列专门取样引导（聚合占位承担）");
+    let placeholder = cx.update(|window, _| {
+        window.try_find(ElementId::Name(SharedString::from("insight-agg-placeholder")))
+    });
+    assert!(placeholder.is_some(), "多列聚合占位应可见（能力边界）");
 
-    // 样本表就位后：专门引导消失（落到通用空态 / 骨架，不再是「先取样」提示）
+    // 样本表就位后：专门引导不再出现（占位在加载期被骨架替换是正常路径）
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
             view.set_source_sample("tmp_i_sample_1", cx);
@@ -1506,7 +1512,8 @@ fn history_compare_selects_a_version_and_can_be_dismissed(cx: &mut TestAppContex
     assert!(cx.debug_bounds("insight-version-diff").is_none());
     events.take();
 
-    // 出数：面板出现，且**选中位由载荷反推**（不靠视图自己记）
+    // 出数：载荷带 diff（右栏不再渲染历史对比面板——render_history 保留待中间页
+    // 复用；此处断言状态层：diff 在载荷里、选中位跟载荷走、不抢整页状态）
     let diff = VersionDiffView::between(
         &compare_insight(1000, 20),
         "2026-09-14 09:10",
@@ -1523,11 +1530,11 @@ fn history_compare_selects_a_version_and_can_be_dismissed(cx: &mut TestAppContex
         });
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    assert!(
-        cx.debug_bounds("insight-version-diff").is_some(),
-        "出数后对比面板应在"
-    );
     view.update(cx, |view, _| {
+        assert!(
+            view.data().as_history().is_some_and(|h| h.diff.is_some()),
+            "出数后载荷应带对比 diff"
+        );
         assert_eq!(
             view.compare_target(),
             Some("bbbbbbbb-2222"),
@@ -1536,13 +1543,9 @@ fn history_compare_selects_a_version_and_can_be_dismissed(cx: &mut TestAppContex
         assert_eq!(view.state(), &InsightPanelState::Data, "对比不抢整页状态");
     });
 
-    // ✕ 关掉：只改自身状态（不发事件），面板随之消失
+    // ✕ 关掉：只改自身状态（不发事件）
     cx.update(|_window, cx| view.update(cx, |view, cx| view.dismiss_diff(cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    assert!(
-        cx.debug_bounds("insight-version-diff").is_none(),
-        "关掉后不该再有对比面板"
-    );
     view.update(cx, |view, _| {
         assert!(view.compare_target().is_none());
         assert!(

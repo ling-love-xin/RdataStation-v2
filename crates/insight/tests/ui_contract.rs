@@ -23,7 +23,6 @@ fn ui_size_constants_match_design() {
     use rds_insight::ui::*;
 
     let cases: &[(f32, f32, &str)] = &[
-        (INSIGHT_TAB_HEIGHT, 28.0, "Tab 条高度"),
         (INSIGHT_HISTOGRAM_BAR_HEIGHT, 8.0, "直方图条高度"),
         (INSIGHT_RATIO_BAR_HEIGHT, 6.0, "单条占比条高度"),
         (INSIGHT_INLINE_ICON_SIZE, 14.0, "行内小图标"),
@@ -175,6 +174,7 @@ fn view_sources() -> Vec<(String, &'static str)> {
         let src: &'static str = match rel.as_str() {
             "view/mod.rs" => include_str!("../src/view/mod.rs"),
             "view/column.rs" => include_str!("../src/view/column.rs"),
+            "view/drill.rs" => include_str!("../src/view/drill.rs"),
             "view/header.rs" => include_str!("../src/view/header.rs"),
             "view/history.rs" => include_str!("../src/view/history.rs"),
             "view/multi.rs" => include_str!("../src/view/multi.rs"),

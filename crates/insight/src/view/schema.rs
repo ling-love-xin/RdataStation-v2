@@ -20,6 +20,10 @@ impl InsightView {
     ///
     /// 四个区**都渲染**（哪怕为空）：空区的意义是「检查过、没问题」，
     /// 直接隐藏会让人以为这项没做。
+    ///
+    /// 2026-10-30 右栏对齐 EDA 原型后不再由右栏渲染（schema 目标的摘要卡由
+    /// 下钻区 `drill.rs` 承担）；保留供中间页 / 资产库复用，勿删。
+    #[allow(dead_code)]
     pub(in crate::view) fn render_schema_report(
         &self,
         report: &SchemaReportView,

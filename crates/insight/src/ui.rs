@@ -56,6 +56,9 @@ pub const INSIGHT_WS_TITLE_MAX_WIDTH: f32 = 15.0;
 pub const INSIGHT_OVERVIEW_RING_SIZE: f32 = 4.25;
 /// 列多选 / 列对选择浮层宽度（13.5rem = 216px；Checkbox 行 + 中文列名不换行）
 pub const INSIGHT_PICKER_WIDTH: f32 = 13.5;
+/// EDA 列卡最小宽度（17rem = 272px；列卡网格换行阈值——容器宽于
+/// 2×17rem + gap 时双列，否则自动退单列，对齐原型 `.col-grid` 两列报告密度）
+pub const INSIGHT_WS_COL_CARD_MIN: f32 = 17.0;
 
 // ===== 与外壳共用的结构尺寸（重导出）=====
 //

@@ -28,14 +28,18 @@ use crate::services::resource_jobs;
 /// - 设置「全量统计前确认」开着 → 弹确认框（说明大表全量慢且占内存）；
 /// - 关着 → 不弹，直接 `confirm_full` 执行。
 ///
+/// 同时订阅「新建洞察」（面板头 ＋ 按钮）：对话框要 `Shared`（连接列表 /
+/// 草稿箱 / 分析库 / `open_insight_source_table` 出口），`shared` 由此传入。
 /// 行数预估不做：文案说明「大表全量会慢并占用内存」，避免再开 COUNT 通道。
 /// 返回的订阅**必须被装配方持有**（drop 即取消订阅）。
 pub fn attach_dialogs<H: 'static>(
     panel: &Entity<InsightView>,
+    shared: &Shared,
     window: &Window,
     cx: &mut Context<H>,
 ) -> Subscription {
     let panel_weak = panel.downgrade();
+    let shared_sub = shared.clone();
     cx.subscribe_in(
         panel,
         window,
@@ -66,6 +70,11 @@ pub fn attach_dialogs<H: 'static>(
                             true
                         })
                 });
+                return;
+            }
+            // 新建洞察：打开多来源选择对话框（宿主侧）
+            if let InsightEvent::NewInsightRequested = event {
+                open_new_insight(&shared_sub, window, cx);
             }
         },
     )
@@ -90,6 +99,12 @@ pub fn apply_insight_prefs(shared: &Shared, cx: &mut App) {
     panel.update(cx, |view, cx| {
         view.apply_insight_prefs(status_usage, work_set_limit, cx);
     });
+}
+
+/// 打开「新建洞察」对话框：来源选择（已连接库 / 草稿箱 / 资源分析 / 外部文件）
+/// 在宿主侧实现（`components::insight_new_dialog`），面板只发意图事件。
+fn open_new_insight(shared: &Shared, window: &mut Window, cx: &mut App) {
+    crate::components::insight_new_dialog::open_new_insight_dialog(shared, window, cx);
 }
 
 /// 订阅面板事件并落地两个宿主动作。

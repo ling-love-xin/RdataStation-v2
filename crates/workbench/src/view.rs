@@ -1057,7 +1057,7 @@ impl WorkbenchView {
         // 中间页先于右栏打开时设置也生效（apply_insight_prefs 幂等）。
         self._insight_ws_subs
             .push(crate::components::insight_actions::attach_dialogs(
-                &insight_view, window, cx,
+                &insight_view, &shared, window, cx,
             ));
         crate::components::insight_actions::apply_insight_prefs(&shared, cx);
         // D65 双栏单源：中间工作页目标变化（对比点行 / 后续工具栏切换）→ 右栏摘要联动。

@@ -25,6 +25,10 @@ use super::kind_badge;
 
 impl InsightView {
     /// 摘要 Tab 的载荷：表 / 列画像任一份已有就渲染对应摘要；都没有 → 空态。
+    ///
+    /// 2026-10-30 右栏对齐 EDA 原型后，本视图不再由右栏渲染（摘要并入下钻区
+    /// `drill.rs`）；保留供中间页 / 资产库复用，勿删。
+    #[allow(dead_code)]
     pub(crate) fn render_overview(
         &self,
         _entity: &Entity<Self>,
@@ -205,7 +209,8 @@ fn overview_table(
                         .child(Icon::new(IconName::Eye).size(inline_icon))
                         .child(
                             div()
-                                .text_sm()
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(colors.foreground)
                                 .child("检查器命中"),
                         )
@@ -335,7 +340,8 @@ fn overview_table(
                         .child(Icon::new(IconName::TriangleAlert).size(inline_icon))
                         .child(
                             div()
-                                .text_sm()
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(colors.foreground)
                                 .child("事实提示"),
                         ),
@@ -400,15 +406,18 @@ fn overview_column(
         )
 }
 
-/// 摘要卡容器（原型 .summary-card）：手搓但取色走主题 token，不用 GroupBox
-/// （outline 变体默认 p_4 在 280px 右栏太宽，content_style 覆盖 padding 类型复杂）
+/// 摘要卡容器（对齐产品「卡片语言」：`border + rounded_md + sidebar 底 + 标题头`，
+/// 与 property_panel 洞察总览 / 连接编辑器 / Mock 同规范，见 property-module-spec.md §17；
+/// 不用 GroupBox——outline 变体默认 p_4 在 280px 右栏太宽，content_style 覆盖 padding
+/// 类型复杂，手搓容器但取色全走主题 token）
 fn summary_card(theme: &Theme) -> Div {
     div()
         .v_flex()
         .w_full()
         .gap_1()
         .p_2()
-        .rounded_sm()
+        .rounded_md()
         .border_1()
         .border_color(theme.colors.border)
+        .bg(theme.colors.sidebar)
 }

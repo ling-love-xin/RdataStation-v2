@@ -22,6 +22,10 @@ impl InsightView {
     ///
     /// 选择顺序就是参数顺序（`col1` / `col2` …），所以选中的列带序号——
     /// 没有序号的话「哪列进 col1」全靠猜，而方向性规则（相关系数）是不对称的。
+    ///
+    /// 2026-10-30 右栏对齐 EDA 原型后不再由右栏渲染（多列聚合统计由下钻区
+    /// 占位卡标注「后续实现」）；保留供中间页 / 资产库复用，勿删。
+    #[allow(dead_code)]
     pub(in crate::view) fn render_multi_view(
         &self,
         view: &MultiColumnView,

@@ -168,6 +168,11 @@ pub fn handle_event(
         }
         // 归档要宿主侧（`ArchiveService` + 项目目录），由 `components::insight_actions` 落地
         InsightEvent::ArchiveRequested { .. } => {}
+        // 新建洞察对话框由宿主侧（`components::insight_actions` 订阅）打开——
+        // 来源选择要 Shared / 系统文件对话框，取数链不处理。
+        InsightEvent::NewInsightRequested => {
+            tracing::info!("新建洞察请求（宿主未接）");
+        }
     }
 }
 

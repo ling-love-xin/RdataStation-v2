@@ -23,6 +23,24 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-10-30 — 右栏洞察面板对齐 EDA 原型（拍板 ×2 + 布局重写）
+
+**背景**：用户指出「洞察右侧面板布局等也应该是同 EDA 原型的右侧面板，而不是现在的」——推翻此前「设置最右 + Tab 条」临时形态（该形态本身已是推翻「标题右对齐」后的产物）。连问两个关键决策均获拍板：① **完全对齐原型**——移除 6-Tab 条，右栏只保留「洞察表集合 `it-list` + 选中目标下钻 `drillzone`」；② **工具栏按原型**——规则管理 / 重算画像 / 全量统计 [spacer] ＋新建洞察最右（推翻「设置最右」惯例）；③ **下钻区按目标自适应**——表→表画像卡 / 列→列摘要卡 / schema→结构摘要卡 / 多列→聚合占位（非表目标不另走中间页）。
+
+**已完成并验证**（`rds-insight --lib` **244 项** · `column_profile_e2e` **14 项** · `ui_contract` **4 项** · 1 ignored · **零 warning**；`rds-workbench` lib check 通过）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 下钻区 | `render_drillzone(entity, theme, inline_icon, ring_px, empty_icon)` 按目标类型分派：Table / SourceTable→表画像卡（前 8 列 + 「…共 N 列」）+ `drill_table_summary`（命中环按原型 grade-ring：≥80% success / ≥50% warning / 否则 danger）；Column / SourceColumn→列摘要卡；Schema→结构摘要卡（健康分环 + 表数 / 列数 / 问题数）；MultiColumn→聚合占位 `insight-agg-placeholder`（多列聚合统计**后续实现**，原型同款占位）；无目标→空态、加载→skeleton、错误→error_block | **新增 `view/drill.rs`**（~560 行）+ `insight_view.rs` |
+| 集合区 | it-head（已洞察表 + 计数 + 多选 Switch `insight-set-multi`）/ it-list 行卡片（r1 多选框 `insight-set-sel-{key}` + 等宽表名 + 行数；r2 来源 Tag + 检查器命中 + 对比 / 关系 / 归档 `insight-set-{compare,relation,archive}-{key}`）/ it-actions 质量对比（勾选 ≥2 才显示 `insight-set-quality-compare`）/ it-note 文案 / 关系排查结果区保留 | `view/set.rs`（重写）+ `insight_view.rs`（`set_multi` / `selected_tables` / `toggle_multi_mode` / `toggle_table_selection` / `request_quality_compare`——对每张勾选 key 各发一次 `CompareRequested`，不新开批量事件） |
+| 工具栏 | ⚙ 规则管理 → ⟳ 重算 → ⧉ 全量统计（仅 SourceTable / SourceColumn 可点）→ content spacer → ＋新建洞察**最右**；删目标头 / data_kind | `view/header.rs`（重写） |
+| 旧 Tab 渲染 | `view/mod.rs` 删 `render_tab_bar` / `render_body`（Tab / TabBar / InsightPanelState import 清理）；`overview/table/multi/schema/history` 各 `render_*` 标 `#[allow(dead_code)]` 保留待中间页 / 资产库复用；`view/column.rs::render_column_profile` 被 `workspace/sample.rs` 复用不算 dead；`set_tab_from_index` / `empty_hint` / `tab_hint` 标 allow（tests.rs 断言依赖）；`insight_set_open` / `toggle_insight_set` 已删（集合不再折叠） | `view/mod.rs` / `insight_view.rs` |
+| 测试适配 | `multi_tab_shows_sample_guide_without_request...` 改断言聚合占位存在 + 样本就位后引导消失（不再有专门「先取样」引导）；`history_compare_selects_a_version...` 改断言载荷带 diff + compare_target 跟载荷走 + 不抢整页状态（对比面板渲染留待中间页复用） | `insight_view/tests.rs` |
+| 契约守卫 | `view_sources()` 补 `"view/drill.rs"` include_str 分支（未登记即 panic）；契约 1 删 `INSIGHT_TAB_HEIGHT 28.0` 案例（Tab 条没了）；`INSIGHT_OVERVIEW_RING_SIZE 68.0` 保留（drill 环用） | `tests/ui_contract.rs` |
+| 权威文档同步 | `insight-prototype-design.md` §2 布局 ASCII + 窄栏核算、§2.1 动作表 + 二次拍板注记、§4 关键帧重写、§3 各 Tab 标注「保留为能力规格」 | `docs/architecture/insight/insight-prototype-design.md` |
+
+**配套拍板记录**（另批，先于本批）：source_picker 复用内核**留 workbench 不抽 crate**（差异只在物化策略：洞察→SampleSource、联邦→ATTACH / 本地加速、二次分析→联邦+结果集直连；抽 crate 触发信号：第二个非 workbench 消费者 / editor 就地内嵌 / 依赖面倒挂 / 稳定+规模）；导航右键洞察菜单去重（`NavActionId::Stats/InsightSchema` 两变体 13→11，「查看洞察」升级为统一入口：表/视图→data_target→取样画像、schema→insight_schema→结构洞察、其余→纯面板；`NavOp` 能力位与 schema_analyzer 引擎能力保留，只收敛菜单）。
+
 ### 2026-10-25 — 收口批次：检查器四态 + 科研统计 + 四缺口 + 去评级化（A 类必修 + 拍板 B 类）
 
 **背景**：按 `insight-cleanup-2026-10.md` 清单一次性收口。定位再次校准为**会话级 EDA 探索**（YData-Profiling 式）：对当前这份数据出画像事实与检查器命中；审计、评级、长期快照归档归 M6 资产库；统计边界限定 DuckDB 原生可提供量。
@@ -185,9 +203,9 @@
 | --- | --- | --- |
 | **D59** 文件类数据源 | `SampleSource.conn_id` 改 `Option`：`None` = 跑在 **DuckDB 内存库**（文件与已 `ATTACH` 的表）；新增 `on_duckdb` / `duckdb_file`（扩展名 → 读取函数，**映射与 `load_file_source` 共用一处**；路径做单引号转义；认不出的格式直接报「这个格式还不能分析」而不是猜一个读取器） | `insight/src/model.rs` + `engine/src/duckdb/file_reader.rs`（原记 `engine/src/dbi/engine/duckdb_engine.rs`；`dbi` 层 2026-09-19 已删，那个函数摘到了 `file_reader.rs`） |
 | 取样分两条 | 源库连接 → 引擎 JSON 打型建表（原路，抽为 `sample_from_connection`）；DuckDB 侧 → `create_analysis_temp_table_as`（`CREATE TABLE … AS`，**数据不过 Rust**，类型由 DuckDB 定，失败收半成品） | `insight/src/service/persistence.rs` + `engine/src/duckdb/analysis.rs` |
-| 入口①导航树 | 表右键「查看统计」→ 按驱动加引号的限定名 → `open_insight_source_table`；引号与拼装收进 `Shared::insight_sample_sql`（**口径只一处**） | `workbench/src/components/nav_host.rs` + `panels/shared.rs` |
-| 入口②分析存档 | 行右键「查看统计」：受管文件走本体文件（`duckdb_file`）；远端引用按 `source_connection_id` + `schema.table` 重新取样；分析表型（本体在 `analytics.duckdb`，要 ATTACH + 重建定义）随后续批次。菜单项是否可用由 `can_view_stats` 定（按 kind + 可读扩展名） | `analytics_resource/src/resource_view.rs` + `workbench/src/components/resource_host.rs` |
-| 入口③草稿箱 | 文件右键「查看统计」：判定与落地都问宿主（`ScratchpadHost::can_view_stats` / `view_stats`）——草稿箱不依赖 `engine`，读取器口径不该在那边抄一份（默认实现 `false`，不接洞察的宿主不会摆出点了没反应的入口） | `scratchpad/src/{host,scratchpad_view}.rs` + `workbench/src/components/scratchpad_host.rs` |
+| 入口①导航树 | 表右键「查看洞察」（2026-10-30 菜单去重后为唯一洞察入口）→ 按驱动加引号的限定名 → `open_insight_source_table`；引号与拼装收进 `Shared::insight_sample_sql`（**口径只一处**） | `workbench/src/components/nav_host.rs` + `panels/shared.rs` |
+| 入口②分析存档 | 行右键「查看洞察」：受管文件走本体文件（`duckdb_file`）；远端引用按 `source_connection_id` + `schema.table` 重新取样；分析表型（本体在 `analytics.duckdb`，要 ATTACH + 重建定义）随后续批次。菜单项是否可用由 `can_view_stats` 定（按 kind + 可读扩展名） | `analytics_resource/src/resource_view.rs` + `workbench/src/components/resource_host.rs` |
+| 入口③草稿箱 | 文件右键「查看洞察」：判定与落地都问宿主（`ScratchpadHost::can_view_stats` / `view_stats`）——草稿箱不依赖 `engine`，读取器口径不该在那边抄一份（默认实现 `false`，不接洞察的宿主不会摆出点了没反应的入口） | `scratchpad/src/{host,scratchpad_view}.rs` + `workbench/src/components/scratchpad_host.rs` |
 | 暂不做 | 编辑器结果集列头「洞察此列」——用户明确说不急（真做时照 `FilterValueHook` 那样注入，**不需要执行期物化**：洞察侧会重跑取样） | — |
 
 ### 2026-09-17 — 入口统一：源取样通道（D58）
@@ -1112,7 +1130,8 @@ cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --tes
 
 > **结果**：`insight_view.rs` **4225 → 915 行**（只剩状态宿主）；片段在 `view/{mod,header,column,table,multi,schema,history}.rs`（288 / 160 / 338 / 285 / 343 / 213 / 368 行）；测试整块搬到 `insight_view/tests.rs`（1481 行，照 `mock_view/tests.rs` 先例，仍是宿主的子模块，所以状态入口**没有**为了测试放宽可见性）。
 > **现行口径（2026-10-25 复核）**：后续批次又补 `view/overview.rs`（摘要 Tab）、`view/set.rs`（集合 / 对比管理）与 `workspace.rs`（中间 EDA 工作页）；下方规格中提到的 `render_score_card` / `dimension_row` 评分卡函数已随去评级化撤除，`ScoreView` / `DimensionView` 已从视图模型移除——本段数字与函数名是 2026-09-18 位移当时的历史记录，仅作结构判据保留。
-> **实际可见性口径**（比下方规格多出的两条，已写进 `view/mod.rs` 台账）：片段入口（`render_header` / `render_tab_bar` / `render_body` / `render_score_card`）是 `pub(crate)`——宿主的 `impl Render` 要调；`InsightView` 的字段是 `pub(crate)`——片段与宿主不同模块，读字段必须如此（**对外 API 与引用面零改动**）。
+> **右栏对齐 EDA 原型（2026-10-30，§11 的下一次结构变动已发生）**：移除 6-Tab 条与目标头，右栏 = **集合 it-list + 选中目标下钻 drillzone**。`view/` 变化：**新增 `view/drill.rs`**（`render_drillzone`，按目标类型自适应：表→表画像卡前 8 列 / 列→列摘要卡 / schema→结构摘要卡 / 多列→聚合占位）；`view/mod.rs` **删除 `render_tab_bar` / `render_body`**，只留台账与 `pub(crate) mod drill;`；`view/header.rs` 工具栏按原型重排（⚙ 规则管理 → ⟳ 重算 → ⧉ 全量统计 [spacer] ＋新建洞察**最右**，推翻「设置最右」惯例）；`view/set.rs` 折叠卡改为 it-head/it-list/it-actions/it-note 卡片列表（多选 Switch / 行 Checkbox / 质量对比仅勾选 ≥2）；`view/overview.rs` / `table.rs` / `multi.rs` / `schema.rs` / `history.rs` 的 `render_*` 入口标 `#[allow(dead_code)]` **保留待中间页 / 资产库复用**（`view/column.rs::render_column_profile` 被 `workspace/sample.rs` 复用，不算 dead）。状态侧：`PanelTab` / `set_tab` / `ensure_data_for_tab` / `emit_request_for_tab` **全保留**（下钻区展示的正是各 Tab 载荷），`insight_view.rs` 新增集合多选字段与方法（`set_multi` / `selected_tables` / `toggle_multi_mode` / `request_quality_compare`，质量对比对每张勾选 key 各发一次 `CompareRequested`）。验证基线见 §0 2026-10-30 条（244 / 14 / 4 / 1 ignored，零 warning）。
+> **实际可见性口径**（2026-10-25 复核）：片段入口（`render_header` / `render_insight_set` / `render_drillzone` 等）是 `pub(crate)`——宿主的 `impl Render` 要调；`InsightView` 的字段是 `pub(crate)`——片段与宿主不同模块，读字段必须如此（**对外 API 与引用面零改动**）。`render_tab_bar` / `render_body` 已于 2026-10-30 删除，不再列入口。
 > **验证**（2026-09-18 当时基线）：`rds-insight --lib` **227** · `column_profile_e2e` **14** · `ui_contract` **7** · `cargo check --workspace --all-targets` 零告警 · `grep -rn "insight_view::" crates/` 的宿主引用零改动。现行基线见 §0 2026-10-25 条（244 / 14 / 4）。
 >
 > 下方为规格原文（保留作判据记录）。

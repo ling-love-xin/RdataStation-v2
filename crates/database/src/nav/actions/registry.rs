@@ -17,16 +17,13 @@ pub enum NavActionId {
     ViewData,
     /// 在 SQL 编辑器中打开（空查询壳，断连可用）。
     OpenSql,
-    /// 查看洞察——纯面板导航，断连可用。
+    /// 查看洞察——**统一洞察入口**（2026-10-30 用户拍板去重）：
+    /// 表 / 视图 → 取样画像；schema → 结构洞察；其余节点 → 纯面板导航。
     InsightPanel,
     /// 生成 SQL ▸——DML 模板子菜单（INSERT / UPDATE / DELETE）。
     GenDml,
     /// 生成 Mock 数据——读源库结构。
     MockData,
-    /// 查看统计——取样读源库。
-    Stats,
-    /// 结构洞察——源库 schema 级内省。
-    InsightSchema,
     /// 复制名称——本地剪贴板。
     CopyName,
     /// 复制限定名——本地剪贴板。
@@ -46,11 +43,11 @@ pub enum TargetKind {
     None,
     /// 属性面板请求（`PropertyRequest`，取自节点 `property`）。
     PropertyRef,
-    /// 表 / 视图可寻址靶（查看数据 / DML / Mock / 统计）。
+    /// 表 / 视图可寻址靶（查看数据 / DML / Mock / 洞察取样）。
     TableOnly,
     /// 限定名靶（复制限定名）。
     QualifiedName,
-    /// schema 级引用靶（结构洞察）。
+    /// schema 级引用靶（洞察分派到结构洞察）。
     SchemaTarget,
 }
 
@@ -59,7 +56,7 @@ pub enum TargetKind {
 pub enum ActionGroup {
     /// 查看 / 工作区入口：属性、查看数据、打开 SQL、查看洞察。
     Primary,
-    /// 生成 / 分析：生成 SQL、Mock、统计、结构洞察。
+    /// 生成 / 分析：生成 SQL、Mock 数据。
     Generate,
     /// 对象本地操作：复制名称、复制限定名、刷新。
     Object,
@@ -210,6 +207,8 @@ static ENTRIES: &[NavActionDescriptor] = &[
         group: ActionGroup::Primary,
         order: 3,
         applies: &[],
+        // 门控保持「连接级面板可用」；按节点分派取样 / 结构洞察在视图层按靶可用性执行
+        // （2026-10-30 去重：原「查看统计 / 结构洞察」两条已并入本入口）。
         op: Some(NavOp::InsightPanel),
         target: TargetKind::None,
         shortcut: None,
@@ -236,30 +235,6 @@ static ENTRIES: &[NavActionDescriptor] = &[
         applies: &[ObjectKind::Table, ObjectKind::View],
         op: Some(NavOp::MockData),
         target: TargetKind::TableOnly,
-        shortcut: None,
-        destructive: false,
-    },
-    NavActionDescriptor {
-        id: NavActionId::Stats,
-        slug: "nav.stats",
-        label: "查看统计",
-        group: ActionGroup::Generate,
-        order: 2,
-        applies: &[ObjectKind::Table, ObjectKind::View],
-        op: Some(NavOp::Stats),
-        target: TargetKind::TableOnly,
-        shortcut: None,
-        destructive: false,
-    },
-    NavActionDescriptor {
-        id: NavActionId::InsightSchema,
-        slug: "nav.insight-schema",
-        label: "结构洞察",
-        group: ActionGroup::Generate,
-        order: 3,
-        applies: &[ObjectKind::Table, ObjectKind::View, ObjectKind::Schema],
-        op: Some(NavOp::InsightSchema),
-        target: TargetKind::SchemaTarget,
         shortcut: None,
         destructive: false,
     },
@@ -350,7 +325,7 @@ mod tests {
     fn registry_covers_all_action_ids() {
         // 登记表覆盖 NavActionId 全部变体（新增变体漏登记会在编译期穷尽性之外被本测试钉住）。
         let all = registry().all();
-        assert_eq!(all.len(), 13);
+        assert_eq!(all.len(), 11);
         for id in [
             NavActionId::ShowProperties,
             NavActionId::ViewData,
@@ -358,8 +333,6 @@ mod tests {
             NavActionId::InsightPanel,
             NavActionId::GenDml,
             NavActionId::MockData,
-            NavActionId::Stats,
-            NavActionId::InsightSchema,
             NavActionId::CopyName,
             NavActionId::CopyQualified,
             NavActionId::RefreshProps,
@@ -381,8 +354,6 @@ mod tests {
             NavActionId::OpenSql,
             NavActionId::InsightPanel,
             NavActionId::MockData,
-            NavActionId::Stats,
-            NavActionId::InsightSchema,
             NavActionId::CopyName,
             NavActionId::CopyQualified,
             NavActionId::RefreshProps,
@@ -399,8 +370,6 @@ mod tests {
         for id in [
             NavActionId::ViewData,
             NavActionId::MockData,
-            NavActionId::Stats,
-            NavActionId::InsightSchema,
         ] {
             assert!(got.contains(&id), "视图应出现 {id:?}");
         }
@@ -442,7 +411,6 @@ mod tests {
             NavActionId::ShowProperties,
             NavActionId::OpenSql,
             NavActionId::InsightPanel,
-            NavActionId::InsightSchema,
             NavActionId::RefreshProps,
             NavActionId::CopyName,
         ] {
@@ -452,7 +420,6 @@ mod tests {
             NavActionId::ViewData,
             NavActionId::GenDml,
             NavActionId::MockData,
-            NavActionId::Stats,
             NavActionId::CopyQualified,
         ] {
             assert!(!got.contains(&id), "schema 不应出现 {id:?}");
@@ -470,7 +437,6 @@ mod tests {
                 NavActionId::ViewData,
                 NavActionId::GenDml,
                 NavActionId::MockData,
-                NavActionId::Stats,
             ] {
                 assert!(!got.contains(&id), "{kind:?} 不应出现 {id:?}");
             }
@@ -494,8 +460,6 @@ mod tests {
             NavActionId::ViewData,
             NavActionId::GenDml,
             NavActionId::MockData,
-            NavActionId::Stats,
-            NavActionId::InsightSchema,
             NavActionId::CopyQualified,
             NavActionId::RefreshProps,
         ] {
@@ -582,7 +546,6 @@ mod tests {
             NavActionId::CopyQualified,
             NavActionId::RefreshProps,
             NavActionId::ViewData,
-            NavActionId::Stats,
         ] {
             assert!(!got.contains(&id), "列节点不应出现 {id:?}");
         }
@@ -638,7 +601,7 @@ mod tests {
 
     #[test]
     fn destructive_flag_true_only_for_delete_and_empty() {
-        // B6：仅删除对象 / 清空表两条为破坏性；其余十一条均为 false（回源读 / 本地动作不进 staged 族）。
+        // B6：仅删除对象 / 清空表两条为破坏性；其余九条均为 false（回源读 / 本地动作不进 staged 族）。
         let all = registry().all();
         for d in all {
             match d.id {

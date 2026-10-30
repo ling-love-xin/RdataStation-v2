@@ -18,8 +18,6 @@ impl super::InsightWorkspacePanel {
         empty_icon: Pixels,
         ring_px: Pixels,
     ) -> Div {
-        let colors = theme.colors;
-
         if let InsightPanelState::Error { message, retryable } = self.view.read(cx).state() {
             // 错误态重试按钮挂在画像实体上（reload 走 view 的取数链）
             return error_block(message, *retryable, self.view.clone(), theme, inline_icon);
@@ -48,31 +46,30 @@ impl super::InsightWorkspacePanel {
         if let Some(profile) = self.view.read(cx).data().column.as_ref() {
             return self.render_column_overview(cx, profile, theme, inline_icon);
         }
-        // 无目标 / 无数据：入口引导
-        div()
-            .v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .child(
-                Icon::new(IconName::Eye)
-                    .with_size(Size::Size(empty_icon))
-                    .text_color(colors.muted_foreground),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(colors.foreground)
-                    .child("暂无洞察目标"),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(colors.muted_foreground)
-                    .text_center()
-                    .child("在结果列表头或导航树上右键表，选择「查看统计」"),
-            )
+        // 无目标 / 无数据：入口引导（标准 Empty 组件，与右栏空态同一套口径：
+        // 自带居中布局 + 虚线框 + 媒体 / 标题槽位，不手搓居中图标块）
+        use gpui_kit::component::empty::{
+            Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle,
+        };
+        div().size_full().child(
+            Empty::new()
+                .header(
+                    EmptyHeader::new()
+                        .media(
+                            EmptyMedia::new()
+                                .with_variant(gpui_kit::component::empty::EmptyMediaVariant::Icon)
+                                .child(
+                                    Icon::new(IconName::Eye)
+                                        .with_size(Size::Size(empty_icon))
+                                        .text_color(theme.colors.muted_foreground),
+                                ),
+                        )
+                        .title(EmptyTitle::new().child(SharedString::from("暂无洞察目标")))
+                        .description(EmptyDescription::new().child(SharedString::from(
+                            "在结果列表头或导航树上右键表，选择「查看洞察」",
+                        ))),
+                ),
+        )
     }
 
     /// 表画像 EDA 版式（对齐 `insight-eda-prototype.html` 中间页）：

@@ -90,7 +90,7 @@ impl RightSidebarPanel {
             crate::components::insight_actions::attach(&insight_panel, &shared, cx);
         // 全量统计确认弹窗（`subscribe_in` 需要窗口）+ 装配洞察偏好（设置 → 面板 + 引擎）。
         let _insight_dialog_sub =
-            crate::components::insight_actions::attach_dialogs(&insight_panel, window, cx);
+            crate::components::insight_actions::attach_dialogs(&insight_panel, &shared, window, cx);
         crate::components::insight_actions::apply_insight_prefs(&shared, cx);
         // 规则管理对话框（Phase 2.3）：同一套后台形态，同一个项目根提供者。
         // 取数 / 写库 / 新建 / 打开规则文件都在 insight crate 的接缝里。

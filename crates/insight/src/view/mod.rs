@@ -1,26 +1,21 @@
-//! 洞察面板的渲染片段（按 Tab 位移，规格见 `docs/architecture/insight/insight-dev-plan.md` §11）
+//! 洞察面板的渲染片段（规格见 `docs/architecture/insight/insight-dev-plan.md` §11）
 //!
-//! 状态宿主仍是 [`crate::insight_view::InsightView`]（它持 target / state / data / tab 与
-//! 六个 Tab 的载荷）；本目录只放**渲染与片段助手**：一组 Tab 一个文件，共用的助手在本文件。
+//! 状态宿主仍是 [`crate::insight_view::InsightView`]（它持 target / state / data 与
+//! 各视角的载荷）；本目录只放**渲染与片段助手**：一组视图一个文件，共用的助手在本文件。
 //!
 //! ```text
-//! 面板头（36px）  → header.rs（「洞察」 · ⚙ 规则管理 · ⟳ 重算）
+//! 面板头（36px）  → header.rs（dock-head「洞察」+ Toolbar：规则管理/重算画像/全量统计
+//!                   [spacer] ＋新建洞察最右——对齐 EDA 原型 right-toolbar）
 //! 无项目提示      → header.rs
-//! 目标头          → header.rs（目标名 + 类型徽标 + 空值率 / 行数）
-//! Tab 条（28px）  → mod.rs（摘要 │ 列 │ 表 │ 多列 │ 结构 │ 历史）
-//! 内容四态分派    → mod.rs（render_body：错误态整页接管，否则以载荷为准）
-//!   摘要          → overview.rs（首置：汇总当前目标画像事实与检查器命中，不触发取数）
-//!   列画像四区    → column.rs（事实卡 + zone_* / stat_row / distribution_* / quality_zone / sample_zone）
-//!   表探查        → table.rs（评估入口与进度 + 列名下钻热点）
-//!   多列分析      → multi.rs（列多选 + 规则单选 + 结果与提示）
-//!   结构报告      → schema.rs（健康条 + 四区 + 下钻热点 + 导出菜单）
-//!   快照历史      → history.rs（列表 + 对比面板 + 清理 + 存储用量）
-//! 会话集合管理卡  → set.rs（已洞察表入列 + 对比 / 关系排查 / 归档；body 顶部，不属任一 Tab）
+//! 洞察表集合      → set.rs（it-head「已洞察表 [计数]」+ 多选开关 → it-list 卡片行
+//!                   → it-actions 质量对比 → it-note；关系排查结果区）
+//! 选中目标下钻    → drill.rs（dz-title 目标名 + 摘要卡（grade-ring）/ 表画像卡 /
+//!                   多列聚合统计占位；按目标类型自适应：表/列/schema）
 //! ```
 //!
 //! 共用助手（本文件）：`kind_badge` · `ratio_bar` · `section_title` ·
 //! `muted_line` · `tab_hint` · `empty_state` · `skeleton` · `error_block`；
-//! `grade_color` 仅供结构报告（Schema 健康分独立域）使用，表 / 列画像不再取等级色。
+//! `grade_color` 仅供下钻区 schema 摘要（Schema 健康分独立域）使用。
 //!
 //! ## 为什么不做成独立 crate
 //!
@@ -30,14 +25,22 @@
 //!
 //! ## 可见性约定（位移时定的，不是随手写的）
 //!
-//! - **片段入口**（`render_header` / `render_tab_bar` / `render_body`）
+//! - **片段入口**（`render_header` / `render_insight_set` / `render_drillzone`）
 //!   对 crate 可见：宿主的 `impl Render` 在 `insight_view.rs` 里转发。
-//! - 只在本目录内用的片段是 `pub(in crate::view)`（如 `render_table_profile`）；Tab 内部的
+//! - 只在本目录内用的片段是 `pub(in crate::view)`；视图内部的
 //!   小片段与助手是**模块私有**，子模块用 `use super::…` 取用（父模块私有项对子模块可见）。
 //! - `InsightView` 的字段是 `pub(crate)`：片段与宿主不在同一个模块，读字段必须如此。
 //!   对外 API（`InsightView` 的 `pub` 方法与 [`crate::insight_view::InsightEvent`]）没有变化。
+//!
+//! ## 2026-10-30 右栏对齐 EDA 原型
+//!
+//! 右栏不再有 Tab 条与目标头：body = 「洞察表集合（it-list）」+「选中目标下钻
+//! （drillzone）」。旧 Tab 视角的渲染（`render_overview` / `render_table_profile` /
+//! `render_multi_view` / `render_schema_report` / `render_history`）保留在对应文件，
+//! 入口函数标 `#[allow(dead_code)]`——能力保留待中间页 / 资产库复用，不随 UI 移除。
 
 pub(crate) mod column;
+pub(crate) mod drill;
 pub(crate) mod header;
 pub(crate) mod history;
 pub(crate) mod multi;
@@ -51,127 +54,22 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::empty::{Empty, EmptyHeader, EmptyMedia, EmptyTitle};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::skeleton::Skeleton;
-use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::tag::Tag;
+use gpui_kit::component::ColorName;
 use gpui_kit::component::{Icon, IconName, Sizable as _, Size, Theme};
 use gpui_kit::*;
 
 use crate::insight_view::InsightView;
-use crate::model::{ColumnKind, InsightPanelState, PanelTab};
+use crate::model::{ColumnKind, PanelTab};
 use crate::quality_scorer::Grade;
-use crate::ui;
 
 impl InsightView {
-    pub(crate) fn render_tab_bar(&self, entity: &Entity<Self>, theme: &Theme) -> Div {
-        div()
-            .flex_none()
-            .h(rems(ui::INSIGHT_TAB_HEIGHT))
-            .border_b_1()
-            .border_color(theme.colors.border)
-            .child(
-                TabBar::new("insight-tabs")
-                    .underline()
-                    .with_size(Size::Small)
-                    .selected_index(self.tab.index())
-                    .children(PanelTab::ALL.iter().map(|t| Tab::new().label(t.label())))
-                    .on_click({
-                        let entity = entity.clone();
-                        move |ix, _window, app| {
-                            entity.update(app, |view, cx| view.set_tab_from_index(*ix, cx));
-                        }
-                    }),
-            )
-    }
+    /// 内容主体相关渲染已由下钻区（`drill.rs`）承担；旧 Tab 视角渲染保留在
+    /// 各自文件（入口函数标 `#[allow(dead_code)]`，能力保留待中间页复用）。
 
-    /// 内容主体。图标尺寸由 `render` 从 `rem_size()` 换算后传入（视图不写裸 px）。
-    ///
-    /// 渲染以**载荷**为准，状态只管两种例外：错误态整页接管；没载荷时才看
-    /// 加载中（骨架）还是空态（入口提示）。这样「切到另一个 Tab 时后台还在取数」
-    /// 不会把已取到的那个 Tab 的内容盖成骨架。
-    pub(crate) fn render_body(
-        &self,
-        entity: &Entity<Self>,
-        theme: &Theme,
-        empty_icon: Pixels,
-        inline_icon: Pixels,
-        overview_ring: Pixels,
-    ) -> Vec<AnyElement> {
-        if let InsightPanelState::Error { message, retryable } = &self.state {
-            return vec![
-                error_block(message, *retryable, entity.clone(), theme, inline_icon)
-                    .into_any_element(),
-            ];
-        }
-
-        let payload: Option<AnyElement> = match self.tab {
-            PanelTab::Overview => self
-                .render_overview(entity, theme, inline_icon, overview_ring)
-                .map(|el| el.into_any_element()),
-            PanelTab::Column => self.data.as_column().map(|profile| {
-                self.render_column_profile(profile, entity, theme, inline_icon)
-                    .into_any_element()
-            }),
-            PanelTab::Table => self.data.as_table().map(|profile| {
-                self.render_table_profile(profile, entity, theme, inline_icon)
-                    .into_any_element()
-            }),
-            PanelTab::MultiColumn => {
-                if let Some(view) = self.data.as_multi() {
-                    Some(
-                        self.render_multi_view(view, entity, theme, inline_icon)
-                            .into_any_element(),
-                    )
-                } else if self
-                    .target
-                    .as_ref()
-                    .map(|t| self.data.sample_table(t).is_some())
-                    .unwrap_or(false)
-                {
-                    // 样本表已解析、多列结果未出：落到 loading 骨架或通用空态；
-                    // 本分支不隐式自取一次样（与摘要「不触发取数」同口径）。
-                    None
-                } else {
-                    // 源目标尚未完成列画像 / 表探查取样，没有可分析的样本表：专门引导，
-                    // 不渲染假结果，也不在切 Tab 时静默发一次请求。
-                    Some(
-                        div()
-                            .id(ElementId::Name(SharedString::from(
-                                "insight-multi-need-sample",
-                            )))
-                            .test_support()
-                            .child(empty_state(
-                                IconName::Info,
-                                "请先在「列」或「表」完成一次取样画像，再回到多列分析",
-                                theme,
-                                empty_icon,
-                            ))
-                            .into_any_element(),
-                    )
-                }
-            }
-            PanelTab::Schema => self.data.as_schema().map(|report| {
-                self.render_schema_report(report, entity, theme, inline_icon)
-                    .into_any_element()
-            }),
-            PanelTab::History => self.data.as_history().map(|history| {
-                self.render_history(history, entity, theme, inline_icon)
-                    .into_any_element()
-            }),
-        };
-        if let Some(element) = payload {
-            return vec![element];
-        }
-        if self.state.is_loading() {
-            // 有阶段说明（源目标取样由 jobs 分阶段更新）→ 显示说明 + 不确定进度条；
-            // 无说明（临时表目标画像通常很快）→ 纯骨架
-            if let Some(note) = self.loading_note.as_deref() {
-                return vec![sample_loading(note, theme).into_any_element()];
-            }
-            return vec![skeleton(theme).into_any_element()];
-        }
-        vec![empty_state(IconName::Info, self.empty_hint(), theme, empty_icon).into_any_element()]
-    }
-
+    /// 空态引导文案（按 Tab 给）。右栏不再按 Tab 渲染空态（下钻区统一引导），
+    /// 方法保留供 `tests.rs` 断言使用。
+    #[allow(dead_code)]
     pub(crate) fn empty_hint(&self) -> &'static str {
         if self.target.is_none() {
             return "在结果表列头或导航树上右键，选择洞察";
@@ -188,13 +86,19 @@ impl InsightView {
 /// 类型徽标（色按类型族；文案取类型族名）。用 `Tag` 的 **outline** 变体：
 /// 透明底 + 语义色文字 + 同色描边，贴近原「色字无底」的克制视觉，同时拿到标准标签
 /// 的语义色 / 圆角 / 尺寸档位（Small = 10px 字，适配 280px 窄面板）。
-fn kind_badge(kind: ColumnKind) -> impl IntoElement {
+///
+/// 配色与 EDA 列卡类型徽标同一套（`Tag::color(ColorName)`，明暗主题自动 scale）：
+/// Numeric=绿 / Text=蓝 / DateTime=紫 / Boolean=青 / Unknown=灰——同一类型族
+/// 在中间工作页与右栏只此一种配色，保证产品统一。
+///
+/// `pub(crate)`：右栏下钻区（`drill.rs`）与旧 Tab 视图共用。
+pub(crate) fn kind_badge(kind: ColumnKind) -> impl IntoElement {
     let tag = match kind {
-        ColumnKind::Numeric => Tag::info(),
-        ColumnKind::Text => Tag::success(),
-        ColumnKind::DateTime => Tag::warning(),
-        ColumnKind::Boolean => Tag::primary(),
-        ColumnKind::Unknown => Tag::secondary(),
+        ColumnKind::Numeric => Tag::color(ColorName::Green),
+        ColumnKind::Text => Tag::color(ColorName::Blue),
+        ColumnKind::DateTime => Tag::color(ColorName::Violet),
+        ColumnKind::Boolean => Tag::color(ColorName::Teal),
+        ColumnKind::Unknown => Tag::color(ColorName::Gray),
     };
     tag.outline().small().flex_none().child(kind.label())
 }
@@ -234,7 +138,8 @@ fn section_title(text: &str, theme: &Theme) -> Div {
         .child(text.to_string())
 }
 
-/// 未落地 Tab 的提示（不显示假数据）
+/// 未落地 Tab 的提示（不显示假数据）。仅被 [`InsightView::empty_hint`] 使用。
+#[allow(dead_code)]
 fn tab_hint(tab: PanelTab) -> &'static str {
     match tab {
         PanelTab::Overview => "打开表或列的洞察后，摘要会自动汇总",
@@ -247,7 +152,9 @@ fn tab_hint(tab: PanelTab) -> &'static str {
 }
 
 /// 空态：居中图标 + 一句引导
-fn empty_state(icon: IconName, hint: &str, theme: &Theme, icon_px: Pixels) -> Div {
+///
+/// `pub(crate)`：右栏下钻区（`drill.rs`）无目标时复用同一版式。
+pub(crate) fn empty_state(icon: IconName, hint: &str, theme: &Theme, icon_px: Pixels) -> Div {
     // 用 gpui-kit Empty 组件：自带居中布局 + 虚线边框 + 媒体/标题槽位
     let empty = Empty::new()
         .header(
@@ -289,7 +196,9 @@ pub(crate) fn skeleton(theme: &Theme) -> Div {
 /// 但 CTAS 在库内完成、拿不到真百分比——所以给一句阶段说明 + `Progress::loading`
 /// 不确定进度条，而不是干骨架（用户会以为卡住）。`Progress::loading` 自带
 /// 滑动动效，属暂态指示，不必再包一层动画。
-fn sample_loading(note: &str, theme: &Theme) -> Div {
+///
+/// `pub(crate)`：右栏下钻区（`drill.rs`）加载态复用同一版式。
+pub(crate) fn sample_loading(note: &str, theme: &Theme) -> Div {
     div()
         .v_flex()
         .gap_2()
@@ -356,7 +265,8 @@ pub(crate) fn error_block(
     block
 }
 
-fn muted_line(text: &str, theme: &Theme) -> Div {
+/// 弱化说明行（右栏下钻区与旧 Tab 视图共用）
+pub(crate) fn muted_line(text: &str, theme: &Theme) -> Div {
     div()
         .text_xs()
         .text_color(theme.colors.muted_foreground)

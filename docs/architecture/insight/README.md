@@ -3,7 +3,7 @@
 > **一句话**：把数据变成**探索结论**——对当前这份数据「长什么样」出画像事实（库 / 表 / 列画像、分布、样本、多列关系、Schema 结构报告、检查器四态命中），并把「新增一种洞察」从改 Rust 降级为**加一个 TOML 规则文件**（内置 18 条，用户可扩展）。本模块是**会话级 EDA 探索**（YData-Profiling 式）：只回答「此刻这份数据是什么形态」，**不合成质量总分 / 等级评级**；审计、评级、长期快照归档归 M6 资产库。
 >
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节一律指向本目录内文档，**不复制设计**。
-> 状态：**Phase 0–5 完成 + 规则侧收口 + 临时表一致化（K16 收口）+ 规则安全边界（Q1 全落地）+ 快照收尾（Q4/Q5/K14 定案）+ 入口统一（D58 源取样通道）+ 四个入口全部接线（D59/D60）+ 结构洞察改走驱动元数据（D62，SQLite 可用）+ 面板视图按 Tab 位移（§11）+ 中间 EDA 工作页与多表对比（D63–D66）+ 检查器四态 + DuckDB-only 科研统计 + 去评级化收口（2026-10-25）**。规则 **18 条**（列 9 · 多列 6 · 表 3）；测试 **lib 244 项 + 集成 14 项 + 契约 4 项**全绿。下一步：**分析表型存档入口**（等 M6 Phase 4 本体层）与 §10 余项，见 `insight-dev-plan.md` §10。
+> 状态：**Phase 0–5 完成 + 规则侧收口 + 临时表一致化（K16 收口）+ 规则安全边界（Q1 全落地）+ 快照收尾（Q4/Q5/K14 定案）+ 入口统一（D58 源取样通道）+ 四个入口全部接线（D59/D60）+ 结构洞察改走驱动元数据（D62，SQLite 可用）+ 面板视图按 Tab 位移（§11）+ 中间 EDA 工作页与多表对比（D63–D66）+ 检查器四态 + DuckDB-only 科研统计 + 去评级化收口（2026-10-25）+ **右栏对齐 EDA 原型（2026-10-30：移除 6-Tab 条，右栏 = 洞察表集合 it-list + 选中目标下钻 drillzone；工具栏按原型重排——新建洞察最右；下钻区按目标类型自适应）**。规则 **18 条**（列 9 · 多列 6 · 表 3）；测试 **lib 244 项 + 集成 14 项 + 契约 4 项**全绿。下一步：**分析表型存档入口**（等 M6 Phase 4 本体层）与 §10 余项，见 `insight-dev-plan.md` §10。
 >
 > **边界**：本模块拥有**画像 / 检查器事实 / 规则 / 报告 / 快照历史 / 会话内集合与对比**。SQL 执行与结果集属 M5 编辑器；对象树与元数据内省属 M4；连接与运行态属 M3；Mock 属 M7；资源目录与审计评级归档属 M6。洞察**不自己取数**——数据来自 M5 建立的 DuckDB 临时表或 M3 的连接，只经服务/命令与它们协作。
 
@@ -17,7 +17,7 @@
 | **分析粒度随目标分派** | 列 / 表 / 多列 / Schema 共用**一个面板**，按目标类型分派渲染，**不做四套面板** | 原型 §3 |
 | **结论可追溯到算法** | 每个数字来自统计量 / 评分维度 / 规则之一；UI **不发明结论** | 原型 §1.1 |
 | **采样必须明示** | 表探查与批量评估基于 `LIMIT 500` 采样，UI 常驻「基于 N 行采样」 | 原型 §3.2、§4 |
-| **双形态并存** | 右 Dock 六 Tab 摘要面板（摘要 / 列 / 表 / 多列 / 结构 / 历史）+ 中央中间 EDA 工作页（工具栏 + 概览五卡 + 列分布 + 缺失矩阵 + 关联 + 样本 + 多表对比），同一 `InsightView` 画像宿主，双栏单源（D63–D66） | EDA 原型 §1 |
+| **双形态并存** | 右 Dock **集合 + 下钻**（对齐 EDA 原型：洞察表集合 `it-list` + 选中目标下钻 `drillzone`，2026-10-30 移除 6-Tab 条）+ 中央中间 EDA 工作页（工具栏 + 概览五卡 + 列分布 + 缺失矩阵 + 关联 + 样本 + 多表对比），同一 `InsightView` 画像宿主，双栏单源（D63–D66） | EDA 原型 §1 |
 | **凡 DuckDB 能分析的资源都能洞察** | 入口四个（导航树 / 分析存档 / 草稿箱 / 编辑器结果集），**含 CSV / Parquet / Excel / JSON 这类文件**（靠 DuckDB 扩展直接读）；数据怎么进 DuckDB 由来源定，分析能力只有一套（已接前三个） | 架构 D58/D59 |
 
 ### 分析与规则
@@ -40,7 +40,7 @@
 | **不自己取数** | 数据入口只有两种：**已有临时表**（结果集 / 分析表，直接分析）与**源取样** `SampleSource`（洞察侧自己包 `LIMIT 500` 落 `tmp_i_`，D58/D59）；不建连接、不执行用户 SQL、**不反拼装**数据（D42） | 原型 §1.1、架构 D58/D60 |
 | **快照双写** | 正文进项目 DuckDB（`insight_column_snapshots`），元数据 + 版本链进项目 SQLite（`insight_snapshots`） | 开发方案 §1.1 |
 | **零裸值** | 颜色取主题 token（缺失角色补 `product-tokens.json`），尺寸进 `ui.rs`（新增「洞察（M8）专用尺寸」节） | 原型 §6 / §7 |
-| **组件不手搓** | 折叠区 / 表格 / Tab 条 / 对话框 / 开关 / 菜单一律用 gpui-kit 组件 | 原型 §8 |
+| **组件不手搓** | 折叠区 / 表格 / 对话框 / 开关（集合多选） / 勾选框 / 菜单一律用 gpui-kit 组件；右栏集合与下钻用 `Switch` / `Checkbox` / `Tag`（类型徽标）/ `ProgressCircle`（命中环）/ `DescriptionList`（kv 行） | 原型 §8 |
 
 ### 工程与文档
 
@@ -75,8 +75,8 @@
 | 服务门面（画像 / 检查器 / 规则 / 快照编排） | `crates/insight/src/service/{mod.rs, persistence.rs}`（现状：✅ 已归位）；结果集半边留在 `crates/workbench/src/services/result_service.rs` |
 | 源取样通道（入口统一契约） | `crates/insight/src/model/mod.rs`（`SampleSource::{new, on_duckdb, duckdb_file}` / `InsightTarget::{SourceColumn, SourceTable}`）、`service/persistence.rs`（`sample_source_to_analysis_table` 按 `conn_id` 分流：源库连接走引擎打型，`None` 走内存库 `CREATE TABLE … AS`） |
 | 文件类数据源的读取器口径 | `crates/engine/src/duckdb/file_reader.rs`（`file_reader_function`：CSV / Parquet / Excel / JSON，**唯一定义处**；2026-09-19 从已删的 `dbi` 层摘出）、`crates/engine/src/duckdb/analysis.rs`（`create_analysis_temp_table_as`） |
-| 入口接线（三个右键「查看统计」 + 结果集「洞察此列」） | 导航树 `crates/database/src/nav_view.rs`；分析存档 `crates/analytics_resource/src/resource_view.rs`（`can_view_stats` + `ResourcesHost::request_view_stats`）；草稿箱 `crates/scratchpad/src/{host,scratchpad_view}.rs`（`can_view_stats` / `view_stats` 走端口）；宿主实现 `workbench/src/components/{nav_host,resource_host,scratchpad_host}.rs` 与 `panels/shared.rs`（`insight_sample_sql` + `open_insight_source_*`）；**结果集**：`editor/src/shared.rs`（`InsightColumnPort`）+ `editor/src/view/results/grid.rs`（菜单项）+ `workbench/src/services/editor_insight.rs`（翻译成 `SampleSource`，**不物化**） |
-| 右栏面板（六 Tab） | `crates/insight/src/insight_view.rs`（**状态宿主**：目标 / 状态机 / 各 Tab 载荷 / 选择与折叠；Render 转发）+ `crates/insight/src/view/{mod,header,overview,column,table,multi,schema,history,set}.rs`（渲染片段，按 Tab 分）· `insight_view/tests.rs`（窗口级测试）（现状：✅ 六 Tab 全部落地——摘要 · 列画像 · 表探查 + 评估全表 · 多列分析 · Schema 报告 · 快照历史与版本对比；不显示假数据） |
+| 入口接线（三个右键「查看洞察」 + 结果集「洞察此列」；2026-10-30 菜单去重后「查看洞察」为唯一洞察入口） | 导航树 `crates/database/src/nav_view.rs`；分析存档 `crates/analytics_resource/src/resource_view.rs`（`can_view_stats` + `ResourcesHost::request_view_stats`）；草稿箱 `crates/scratchpad/src/{host,scratchpad_view}.rs`（`can_view_stats` / `view_stats` 走端口）；宿主实现 `workbench/src/components/{nav_host,resource_host,scratchpad_host}.rs` 与 `panels/shared.rs`（`insight_sample_sql` + `open_insight_source_*`）；**结果集**：`editor/src/shared.rs`（`InsightColumnPort`）+ `editor/src/view/results/grid.rs`（菜单项）+ `workbench/src/services/editor_insight.rs`（翻译成 `SampleSource`，**不物化**） |
+| 右栏面板（集合 + 下钻，2026-10-30 对齐 EDA 原型） | `crates/insight/src/insight_view.rs`（**状态宿主**：目标 / 状态机 / 各载荷 / 集合多选 / 选择与折叠；Render 转发）+ `crates/insight/src/view/{mod,header,set,drill,column,table,multi,schema,history,overview}.rs`（渲染片段：header 工具栏 / set 集合列表 / drill 下钻区；`column` 被中间页复用，`table/multi/schema/history/overview` 旧 Tab 视角渲染保留待中间页 / 资产库复用，入口标 `#[allow(dead_code)]`）· `insight_view/tests.rs`（窗口级测试）（现状：✅ 集合 it-list + 下钻 drillzone 落地——多选质量对比 / 表画像前 8 列 / 列摘要 / 结构摘要 / 聚合占位；不显示假数据） |
 | 中间 EDA 工作页（D63–D66） | `crates/insight/src/workspace/mod.rs`（`InsightWorkspacePanel`：工具栏[画像 / 对比切换、刷新] + 概览五卡 + 值得关注跳列 + 列分布 + 缺失矩阵 + 关联 + 样本 + 多表对比三态；持同一 `InsightView` 宿主）；装配与双栏单源在 `crates/workbench/src/view.rs` 与 `panels/shared.rs` |
 | 规则管理对话框 | `crates/insight/src/rule_view/mod.rs`（现状：✅ Phase 2 二批） |
 | Schema 报告与导出 | `crates/insight/src/schema_view.rs`（现状：✅ Phase 4 一批 + **导出落地**（D60）：面板「导出 ▾」→ JSON / Markdown → 宿主选路径写文件） |
@@ -144,14 +144,14 @@ cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --tes
 
 | 文档 | 什么时候读它 |
 | --- | --- |
-| `insight-prototype-design.md` | **长什么样 / 怎么交互**：核心语义与规则作用域 / 右 Dock 面板布局 / 四种目标视图分派 / 状态与空态矩阵 / 规则管理对话框 / 主题映射与尺寸常量 / GPUI 落点 / **§10 与 V1 的逐项对照** |
+| `insight-prototype-design.md` | **长什么样 / 怎么交互**：核心语义与规则作用域 / 右 Dock 面板布局（集合 + 下钻，2026-10-30 对齐 EDA 原型）/ 四种目标视图分派 / 状态与空态矩阵 / 规则管理对话框 / 主题映射与尺寸常量 / GPUI 落点 / **§10 与 V1 的逐项对照** |
 | `insight-architecture.md` | **为什么这样设计 / 怎么运转**：概念模型与**九条不变式** / 分层与 crate 归属 / 状态所有权（单一写入者）/ 六条数据流 / **D1–D66 决策表** / 并发与资源 / 降级矩阵 / 测试策略 / 实现位置映射 / **§11 已知问题 K1–K22** / §12 待确认 Q1–Q7（**Q1 / Q3 / Q4 / Q5 / Q6 / Q7 已定案**） |
-| `insight-dev-plan.md` | **做什么、做到哪**：已确认决策 9 项 / **§0 进度记录** / 现状盘点 / **§2 五项实证缺陷** / 目标 crate 边界 / **§4 规则作用域与索引表设计** / Phase 0–5 任务 / 测试场景 T1–T14 / 风险 R1–R7 / 实现位置映射 / 验证命令 / **§10 未接与预留项（收口清单 · 权威）** / **§11 `insight_view.rs` 按 Tab 位移（已完成 2026-09-18）** |
+| `insight-dev-plan.md` | **做什么、做到哪**：已确认决策 9 项 / **§0 进度记录** / 现状盘点 / **§2 五项实证缺陷** / 目标 crate 边界 / **§4 规则作用域与索引表设计** / Phase 0–5 任务 / 测试场景 T1–T14 / 风险 R1–R7 / 实现位置映射 / 验证命令 / **§10 未接与预留项（收口清单 · 权威）** / **§11 `insight_view.rs` 按 Tab 位移（已完成 2026-09-18）+ 右栏对齐 EDA 原型（已完成 2026-10-30，见 §11 尾部注记）** |
 | `insight-extension-notes.md` | **实现手段与第三方扩展的调研记录**（讨论稿）：现状约束（外部编译库 / 单例 / 已有扩展机制）/ 边界（三层实现 · 扩展可换实现不可换语义 · 准入四件套）/ 候选扩展逐项评估（`dq` / `stats_duck` / `datasketches` / `stochastic` + 顺带发现）/ 可参考的扩展设计（GE / Deequ / dbt / Soda / gatekeeper …）/ **§6 可采取之处（不引扩展也能拿的 10 条）** / 探针口径 |
 | `insight-user-guide.md` | **怎么用**：入口 / 界面导览与怎么看数字 / 典型流程 / **§4 规则编写指南（对外契约：三层作用域 · 字段全表 · `value_type` 表 · 质量门控语义 · 可照抄示例 · 安全边界）** / **§4.8 内置规则 18 条一览** / FAQ 排查 / USIT 验收清单 |
-| `insight-eda-prototype.html` | **现行可交互基准原型**（六 Tab + 中间 EDA 工作页；2026-10-18 对齐版）。旧 `insight-prototype.html` / `insight-workspace-prototype.html` / `insight-prototype-design.md` 为早期废弃稿，**不再作对齐基准** |
-| `insight-showcase.md` | **一页看懂（可贴版）**：一句话 + 它替你做到的事 / 为什么不是一个统计面板（V1 七处逐条对照）/ 六 Tab · 一个目标模型 / 三个高光 / 四个剧本 / 五步旅程与分层架构（**mermaid 图**）/ 规则 TOML 与两道门 / 入口矩阵 / 事实与证据 / 边界 · 这些事它不做 / 文档地图 |
-| `insight-showcase.html` | **一页看懂（视觉版）**：首屏是工作台线框，右 Dock 洞察面板可**点着切六个 Tab**；吸顶导航滚动高亮 + KPI / 高光 / 剧本 / 流程 / 分层 / 表格排版。**宣传稿：数字以本目录其他文档为准**；自包含、明暗双主题、离线可开 |
+| `insight-eda-prototype.html` | **现行可交互基准原型**（右栏集合 + 下钻 + 中间 EDA 工作页；2026-10-18 对齐版，**2026-10-30 真机右栏已对齐其右侧面板**）。旧 `insight-prototype.html` / `insight-workspace-prototype.html` / `insight-prototype-design.md` 为早期废弃稿，**不再作对齐基准** |
+| `insight-showcase.md` | **一页看懂（可贴版）**：一句话 + 它替你做到的事 / 为什么不是一个统计面板（V1 七处逐条对照）/ 集合 + 下钻 · 一个目标模型 / 三个高光 / 四个剧本 / 五步旅程与分层架构（**mermaid 图**）/ 规则 TOML 与两道门 / 入口矩阵 / 事实与证据 / 边界 · 这些事它不做 / 文档地图 |
+| `insight-showcase.html` | **一页看懂（视觉版）**：首屏是工作台线框，右 Dock 洞察面板（集合 + 下钻，对齐 EDA 原型）；吸顶导航滚动高亮 + KPI / 高光 / 剧本 / 流程 / 分层 / 表格排版。**宣传稿：数字以本目录其他文档为准**；自包含、明暗双主题、离线可开 |
 | `../overview.md` | M8 定位与 crate 依赖方向（§九大模块与 crate 对应） |
 | `../connection/connection-dialog-architecture.md` | 作用域与快照（`G_`/`P_`/`GP_`）的既有范式参照 |
 | `../ui/ui-design-spec.md` | 三层约束（主题 token / 尺寸常量 / 组件规格） |
@@ -166,10 +166,10 @@ cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --tes
 | ✅ Phase 0 已落地 | 五项缺陷修复 · 内部接缝开放 · `RuleScope` + `registry_for` · 索引表与同步器 · **启停生效** · 快照链路闭合 · 占位文件接入 `lib.rs` · **目录监听热加载** · 四类文件边界归位（逐项见开发方案 §0） |
 | ✅ Phase 1 已落地 | 右 Dock 面板装配 · 列画像四区 · 入口命令 `open_insight_column`（`Ctrl+Shift+R`）· 后台取数 `insight::jobs::attach`（六批，逐项见开发方案 §0） |
 | ✅ Phase 2 已落地 | 规则管理对话框（三层分组 / 启停 / 校验错误行 / 新建规则）· K7 全局规则目录 · 表级评估全表 + 进度（逐项见开发方案 §0）。**注**：该期落地的列级加权评分卡 / 五档等级已于 2026-10-25 去评级化撤除（见架构 §11 与清理清单 `insight-cleanup-2026-10.md`），检查器四态事实命中保留 |
-| Phase 3（已完成） | 表探查视图 + 列名下钻 · 多列分析（真实列清单 + 规则执行 + 结果渲染）· ✅ 宿主侧入口（导航右键「查看统计」，D59 补齐） |
+| Phase 3（已完成） | 表探查视图 + 列名下钻 · 多列分析（真实列清单 + 规则执行 + 结果渲染）· ✅ 宿主侧入口（导航右键「查看统计」，D59 补齐；2026-10-30 更名「查看洞察」） |
 | Phase 4（已完成） | ✅ 门面 · 报告视图 · 导出函数 · 下钻事件 · ✅ **导出与下钻的宿主接线**（导出：面板算内容 + 宿主选路径写文件 + 状态栏回执；下钻：源取样通道，不建临时表。D60） |
 | Phase 5（已完成） | ✅ 快照历史（保存入口 · 版本列表 · 存储用量）· ✅ 版本对比（方向固定为「选中 → 最新」）· ✅ 存储清理（确认框 · 成对删 · 回执）· ✅ 保留天数定案固定 30 天（D56） |
-| 入口（D58/D59） | ✅ 源取样通道 · ✅ 导航树 / 分析存档 / 草稿箱三个右键「查看统计」· ✅ **文件类数据源**（CSV / Parquet / Excel / JSON，含 excel 扩展）· ✅ 编辑器结果集列头「洞察此列」（2026-09-18，不物化；未绑定连接按活动连接取样）· ✅ 结构洞察入口；⬜ 分析表型存档（本体是 `analytics.duckdb` 库文件，要 ATTACH + 重建定义） |
+| 入口（D58/D59） | ✅ 源取样通道 · ✅ 导航树 / 分析存档 / 草稿箱三个右键「查看洞察」（2026-10-30 菜单去重：原「查看统计 / 结构洞察」并入此入口）· ✅ **文件类数据源**（CSV / Parquet / Excel / JSON，含 excel 扩展）· ✅ 编辑器结果集列头「洞察此列」（2026-09-18，不物化；未绑定连接按活动连接取样）· ✅ 结构洞察入口（schema 目标走同一「查看洞察」）；⬜ 分析表型存档（本体是 `analytics.duckdb` 库文件，要 ATTACH + 重建定义） |
 | 待确认 | 规则安全边界若**再严一档**：`insight_rule_trust` 加规则集内容指纹（现绑定项目路径，见 D53 取舍）· 快照双写若要做故障注入测试（现只测补偿函数契约，见 D55） |
 | **收口清单（施工）** | **未接 / 预留项的逐项状态、接或删建议与量级 → 开发方案 §10**（唯一权威；含 K6 表级快照待接（二期，UI 归 M6）· K16 结果集定向回收待接（编辑器走不物化，留给将来物化场景）· 分析表型存档待接（等 M6 P4.1）；~~K2 重复目录~~ 已删（`e3684d67`）· ~~编辑器结果集入口~~ 已接（2026-09-18，§10 #6）· ~~结构洞察入口~~ 与 ~~`RenderHint`~~ 已于 2026-09-18 结案） |
 | **实现手段** | **三层边界与扩展准入 = D61**：规则 → 内置 SQL → 扩展；扩展可换实现不可换语义、产物不许成为长期格式；调研记录与**可采取之处（10 条）** → `insight-extension-notes.md` |

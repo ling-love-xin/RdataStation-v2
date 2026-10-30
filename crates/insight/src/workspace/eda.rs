@@ -1,6 +1,9 @@
 //! EDA 主域渲染：报告 Tab（列分布 / 缺失矩阵）与列卡各分区。
 
 use super::*;
+use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyTitle};
+use gpui_kit::component::tag::Tag;
+use gpui_kit::component::ColorName;
 
 impl super::InsightWorkspacePanel {
     /// 报告主 Tab（原型 .report-tabs）：列分布 / 缺失 / 关联性 / 样本。
@@ -67,7 +70,10 @@ impl super::InsightWorkspacePanel {
                     && (self.col_q.is_empty() || c.name.contains(&self.col_q))
             })
             .collect();
-        let mut cards = div().v_flex().w_full().gap_1();
+        // 列卡两列网格（原型 `.col-grid`）：`flex_wrap` + 每卡 `min_w + flex_1`——
+        // 容器宽于 2×min_w + gap 时双列平分，窄时自动退单列（对齐
+        // property_panel 指标卡同一套写法）
+        let mut cards = div().h_flex().items_stretch().w_full().gap_2().flex_wrap();
         for col in &selected {
             // 滚动锚点注册：复用同一 `ScrollAnchor` 实例（anchor_scroll 靠它持续
             // 更新 last_origin；每帧重建会让滚动位置永远停在原处）
@@ -79,21 +85,36 @@ impl super::InsightWorkspacePanel {
             let col_name = col.name.clone();
             cards = cards.child(
                 div()
-                    // anchor_scroll 在 `StatefulInteractiveElement` 上（0.8.0
-                    // gpui-fast div.rs:1557），元素必须带 id 才能挂锚点
-                    .id(SharedString::from(format!(
-                        "insight-ws-col-anchor-{col_name}"
-                    )))
-                    .anchor_scroll(anchor)
-                    .child(self.render_col_card(profile, col, entity, theme)),
+                    .min_w(rems(ui::INSIGHT_WS_COL_CARD_MIN))
+                    .flex_1()
+                    .child(
+                        div()
+                            // anchor_scroll 在 `StatefulInteractiveElement` 上（0.8.0
+                            // gpui-fast div.rs:1557），元素必须带 id 才能挂锚点
+                            .id(SharedString::from(format!(
+                                "insight-ws-col-anchor-{col_name}"
+                            )))
+                            .anchor_scroll(anchor)
+                            .child(self.render_col_card(profile, col, entity, theme)),
+                    ),
             );
         }
         if selected.is_empty() {
+            // 无匹配列：标准 Empty 组件（对齐 database 导航「没有匹配的数据源」
+            // 先例——筛选无结果用组件空态，不手搓居中文本）
             cards = cards.child(
-                div()
-                    .text_xs()
-                    .text_color(colors.muted_foreground)
-                    .child("没有符合筛选条件的列"),
+                div().w_full().child(
+                    Empty::new()
+                        .header(
+                            EmptyHeader::new()
+                                .title(EmptyTitle::new().child(SharedString::from(
+                                    "没有符合筛选条件的列",
+                                )))
+                                .description(EmptyDescription::new().child(SharedString::from(
+                                    "调整搜索词或类型筛选后重试",
+                                ))),
+                        ),
+                ),
             );
         }
         div()
@@ -125,25 +146,19 @@ impl super::InsightWorkspacePanel {
         let explore = col_explore_score(col, &checker);
         let open = self.col_open.borrow().contains(&col.name);
         let zone = ColZone::of_index(*self.col_detail_zone.borrow().get(&col.name).unwrap_or(&0));
-        // 探索价值徽标（原型 .cc-explore）：≥3 高亮「关注」，≥1 平淡显示，<1 不显示
+        // 探索价值徽标（原型 .cc-explore）：≥3 高亮「关注」，≥1 平淡显示，<1 不显示。
+        // 用 `tag::Tag`（`color(ColorName)` 明暗主题自动 scale，不造裸色）
         let explore_badge = if explore >= 3.0 {
             Some(
-                div()
-                    .flex_none()
-                    .text_xs()
-                    .px_1()
-                    .py_0p5()
-                    .rounded(theme.radius)
-                    .bg(colors.warning)
-                    .text_color(colors.warning_foreground)
+                Tag::color(ColorName::Amber)
+                    .xsmall()
                     .child(format!("关注 {explore:.1}")),
             )
         } else if explore >= 1.0 {
             Some(
-                div()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(colors.warning)
+                Tag::secondary()
+                    .outline()
+                    .xsmall()
                     .child(format!("探索 {explore:.1}")),
             )
         } else {
@@ -165,11 +180,17 @@ impl super::InsightWorkspacePanel {
                     .child(col.name.clone()),
             )
             .child(
-                div()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(colors.muted_foreground)
-                    .child(col.kind.label()),
+                // 类型徽标（原型 .kind-badge）：四族彩色胶囊，`Tag::color(ColorName)`
+                // 明暗主题自动 scale；未识别用 Gray 弱化
+                Tag::color(match col.kind {
+                    ColumnKind::Numeric => ColorName::Green,
+                    ColumnKind::Text => ColorName::Blue,
+                    ColumnKind::DateTime => ColorName::Violet,
+                    ColumnKind::Boolean => ColorName::Teal,
+                    ColumnKind::Unknown => ColorName::Gray,
+                })
+                .xsmall()
+                .child(col.kind.label()),
             )
             .child(
                 div()

@@ -27,6 +27,9 @@ impl InsightView {
     /// 列表**不另设内层滚动**：面板主体已经是滚动区（`#insight-body`），再来一层
     /// 就是嵌套滚动（滚轮到底后停住、外层接不上）。高度上限靠分页
     /// （[`HISTORY_PAGE_SIZE`]）而不是靠固定高度。
+    ///
+    /// 2026-10-30 右栏对齐 EDA 原型后不再由右栏渲染；保留供中间页 / 资产库复用，勿删。
+    #[allow(dead_code)]
     pub(in crate::view) fn render_history(
         &self,
         history: &HistoryView,

@@ -14,6 +14,9 @@ pub mod saved_view_dialog;
 pub mod visible_databases_dialog;
 pub mod object_mask_dialog;
 pub mod insight_actions;
+pub mod insight_new_dialog;
+/// 来源选择器通用内核（洞察 / 联邦 / 结果集二次分析共用；当前洞察首个实装）
+pub mod source_picker;
 pub mod log_dialog;
 pub mod mock_host;
 pub mod nav_host;
