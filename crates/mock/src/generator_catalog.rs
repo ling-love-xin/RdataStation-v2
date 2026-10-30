@@ -6,9 +6,11 @@
 //! 用途：面板展示（中文标签）、生成器选择器（分类浏览 + 搜索）、参数编辑表单。
 
 use crate::models::GeneratorConfig;
+use serde::{Deserialize, Serialize};
+use specta::Type;
 
 /// 生成器分类（面板分组用；顺序即展示顺序）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub enum GeneratorCategory {
     Numeric,
     Text,
@@ -85,7 +87,7 @@ pub enum ParamKind {
 }
 
 /// 一个可编辑参数。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParamField {
     /// 字段名（与 `GeneratorConfig` 变体字段同名；JSON 补丁按此键写回）
     pub key: &'static str,
@@ -96,7 +98,10 @@ pub struct ParamField {
 }
 
 /// 生成器规格。
-#[derive(Debug, Clone, Copy)]
+///
+/// `PartialEq` 是 `SearchableVec` 下拉项（`SearchableListItem::Value: PartialEq`）要求的；
+/// 本文件由脚本生成，脚本重跑会丢手加 derive（届时补回即可）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GeneratorSpec {
     /// 稳定标识（snake_case，与 v1 前端 `GeneratorType` 对齐）
     pub name: &'static str,

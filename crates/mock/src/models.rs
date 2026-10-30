@@ -2,6 +2,8 @@ use shared::models::QueryResult;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
+use crate::generator_catalog::GeneratorCategory;
+
 // ==================== 核心配置 ====================
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -525,6 +527,26 @@ pub enum Locale {
     ArSa,
     TrTr,
     FaIr,
+}
+
+// ==================== 自定义生成器 ====================
+
+/// 自定义生成器：已有生成器 + 参数 + 名称的**命名变体**（运行时由用户在分组「＋」精调层创建）。
+///
+/// 为什么不加进 [`GeneratorConfig`]：`spec_of` / `generate_cell` 是编译期穷尽 match（新增变体会
+/// 编译失败强制补规格），运行时创造新算法不成立。自定义生成器只打包**已有变体的参数组合**，
+/// 应用时把 `base` 解包写回列的 `def.generator`，生成链路零改动。
+///
+/// 双向挂组：`data_type` 是硬属性（技术视角必挂对应类型组）；`category` 可选（选了则业务视角
+/// 同挂对应分类组）。`id` 即去重后的名称（`name` → `name_2` → …，保证唯一）。
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct UserGenerator {
+    pub id: String,
+    pub name: String,
+    pub data_type: ColumnDataType,
+    pub category: Option<GeneratorCategory>,
+    pub base: GeneratorConfig,
 }
 
 // ==================== 生成结果 ====================

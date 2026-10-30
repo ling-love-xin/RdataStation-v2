@@ -896,7 +896,7 @@ impl MockDetailView {
                                 ))))
                                 .ghost()
                                 .xsmall()
-                                .label(label.clone())
+                                .label(label)
                                 .dropdown_caret(true)
                                 .dropdown_menu(generator_menu(
                                     self.panel.clone(),
@@ -904,6 +904,7 @@ impl MockDetailView {
                                     current_generator.clone(),
                                     recent_generators.clone(),
                                     recommended_generator.clone(),
+                                    self.panel.read(cx).user_generators().to_vec(),
                                 ))
                             })
                             .child({

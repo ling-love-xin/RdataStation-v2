@@ -241,3 +241,62 @@ tests.rs 无「状态：○」「＋ 加列」「✕」「▾」文案断言（g
 - 测试：`builtin_presets_are_unique_and_renderable`（id 唯一 + 生成器在 catalog 有规格）、`preset_column_adds_with_deduplicated_names`（重名去重 + 配置来自预设）。
 
 **未实现（记录在册）**：用户自定义预设管理（增删改 + 持久化，复用 persistence 的 MockUserTemplate 落盘模式；菜单分组增「我的」）。依赖已就绪（generator_catalog / persistence / ui，无新 crate），待后续轮次。
+
+## 九、第四轮：双视角生成器库 + 自定义生成器（commit 待定）
+
+用户质询「列编辑填充面板只有数字吗，参数也很少」→ 实证：类型 13 种全（`COLUMN_TYPES`），但 143 个生成器 spec 里 **103 个（72%）零参数**（fake 生成器本身零参调用）；参数控件只有 Scalar 文本输入 + Complex 多行文本，**Bool 参数 13 个全退化成文本框**（8 个日期系工作日/时段开关 + image_url_custom grayscale + sequence cycle）。
+用户随后给出双视角 + 自定义生成器构想，经原型确认后实施。
+
+### 9.1 用户确认的信息架构（两级，双视角）
+
+- **业务视角**：15 业务分类（`GeneratorCategory`）→ 生成器项（带**数据类徽标**）；
+- **技术视角**：13 数据类型（`ColumnDataType`）→ 兼容生成器项；
+- **一份生成器定义两个属性**：业务分类 + 产出数据类 → 两个视角各按自己的属性归组，**双向可见**；
+- **自定义入口 = 分组上的「＋」**（业务组/技术组都有）：从技术组「＋」进入 → 类型**锁定**、业务组可选；从业务组「＋」进入 → 业务组**锁定**、类型可选；生成器名必填、基础生成器必选、参数区按基础生成器重建；
+- **保存双向挂组**：永远挂数据类型组（类型是硬属性）+ 选了/锁定的业务组同时挂。
+
+### 9.2 数据模型决策（关键约束）
+
+**自定义生成器不是新的 `GeneratorConfig` 变体**——`spec_of` / `generate_cell` 是编译期穷尽 match（新增变体会编译失败强制补规格），运行时创造新算法不成立。自定义生成器 = **已有生成器 + 参数 + 名称的命名变体**：
+
+```rust
+pub struct UserGenerator {
+    pub id: String,              // = 去重后的名称（name→name_2）
+    pub name: String,            // 显示名（必填，重名自动加序号）
+    pub data_type: ColumnDataType, // 产出数据类（硬属性，技术组必挂）
+    pub category: Option<GeneratorCategory>, // 业务组（可选；选了双向挂）
+    pub base: GeneratorConfig,   // 基础生成器 + 参数（应用时解包写回列）
+}
+```
+
+**应用语义**：点自定义生成器 → `panel.apply_user_generator(id, ug_id)` 把 `base` 解包写回该列 `def.generator`（confidence=manual）——列模型不变，`generate_cell` 零改动。
+
+### 9.3 UI 决策
+
+| 决策点 | 结论 | 依据 |
+| --- | --- | --- |
+| 库对话框形态 | 新增「生成器库」对话框（`generator_library.rs`）：顶部搜索框 + `TabBar` 双视角（业务/技术）+ 分组行（`Button` 展开/收起 + 行尾「＋」`Button`，键盘可达）+ 展开的生成器项（选中写回列）；**精调层内嵌**（点「＋」切到创建表单，保存后回浏览） | 避免嵌套 `open_dialog`（gpui 对话框单实例）；分组行不手搓 div |
+| 精调层下拉 | `select::{Select, SelectState}` + `SearchableVec`（3 个下拉：类型/业务组/基础生成器） | **不用 `Button`+`dropdown_menu`**——vendor `dropdown_button.rs:207` 触发器 id 硬编码 `"popup"`，同帧只允许一个 DropdownButton；`Select` 是常驻 inline 下拉，多实例无冲突 |
+| Bool 参数 | 精调层参数区 Bool → `Switch::new(id).checked(..).on_click(..)`（13 个 Bool 参数不再退化成文本框） | 上轮质询的「全是数字框」观感来源之一；`switch.rs` API 实证 |
+| 参数区重建 | 基础生成器 `Select` 变化 → 按 `spec_of(base).params` 重建输入行（Int/Float→`Input`，Text→`Input`，Bool→`Switch`，Complex→`Textarea`） | 与列编辑 `rebuild_params` 同构 |
+| 生成器菜单接入 | `generator_menu` 顶部加「自定义」区（空则不显示）；项点击 `apply_user_generator` | 主路径（字段行菜单）直接可用；「搜索生成器…」对话框暂不含自定义（记录在册，List 是 `&'static GeneratorSpec`，自定义非静态） |
+| 数据类映射 | `generators.rs` 新增 `data_type_for_generator(&GeneratorConfig) -> ColumnDataType`（穷尽分组 match，编译强制补） | 与 `generate_cell` 同文件同构；技术视角分组与徽标共用 |
+| 持久化 | **会话级**：`MockPanel.user_generators: Vec<UserGenerator>`；SQLite 落盘（`store/migrations/project_meta/010_*.sql` + persistence 读写 + 面板后台加载）**记录在册** | store 迁移影响所有项目库 schema，属基础设施改动，宜单独轮；UI 全链路本轮交付 |
+
+### 9.4 本轮改动清单
+
+- `models.rs`：`UserGenerator` 结构 + `GeneratorCategory` 加 serde derive；
+- `generators.rs`：`data_type_for_generator`（生成器→数据类，穷尽 match）；
+- `mock_view/generator_library.rs`（新）：库对话框（双视角 + 分组「＋」 + 精调层内嵌 + 保存双向挂组 + 样例预览）；
+- `mock_view/panel/mod.rs`：`user_generators` 状态 + `add_user_generator`（去重命名）/`apply_user_generator`（解包 base）/`user_generators_in_category(category)` / `user_generators_in_type(data_type)` + `open_generator_library`；
+- `mock_view/pure.rs`：`generator_menu` 加「自定义」区（签名增 `user_generators` 参数）；
+- `mock_view/detail.rs`：`generator_menu` 调用点传自定义列表；
+- 测试：模型去重、数据类映射、菜单/库对话框接入。
+
+### 9.5 遗留（记录在册，待后续）
+
+- **SQLite 持久化**：自定义生成器跨会话落盘（store 迁移 010 + `persistence.rs` 读写 + 面板后台加载/保存）。
+- **自定义生成器管理**：删除 / 重命名 / 编辑（本轮只做创建 + 应用 + 会话复用）。
+- **「搜索生成器」对话框并入自定义项**（`GeneratorSearchDelegate` 的 hits 是 `&'static GeneratorSpec`，自定义非静态；可改为「固定顶部区」渲染）。
+- **字段预设「我的」分组**（§8.3 遗留）可与自定义生成器统一入口，待拍板。
+

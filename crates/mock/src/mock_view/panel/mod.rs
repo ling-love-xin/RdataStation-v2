@@ -95,6 +95,8 @@ pub struct MockPanel {
     template_name: Option<Entity<InputState>>,
     /// 本会话点过的生成器（目录名，最近在前；生成器菜单的「最近使用」，见 B7）
     recent_generators: Vec<String>,
+    /// 本会话的自定义生成器（分组「＋」精调层创建；SQLite 持久化记录在册，见文档 §9.5）
+    pub(crate) user_generators: Vec<UserGenerator>,
     /// 底部折叠段（生成历史 / 用户模板）是否展开（默认收起：面板天天用的是上面那份清单）
     pub(crate) fold_open: bool,
     /// 上次清空结果是不是切项目造成的（旧 tab 的文案据此区分「另一个项目」与「这一轮」）
@@ -323,6 +325,7 @@ impl MockPanel {
             history_error: None,
             template_name: None,
             recent_generators: Vec::new(),
+            user_generators: Vec::new(),
             fold_open: false,
             project_switched: false,
         }
@@ -2516,6 +2519,91 @@ impl MockPanel {
             self.landed = None;
         }
         cx.notify();
+    }
+
+    // ==================== 自定义生成器（分组「＋」精调层创建；会话级，持久化记录在册） ====================
+
+    /// 本会话全部自定义生成器（生成器菜单 / 库对话框共用）。
+    pub(crate) fn user_generators(&self) -> &[UserGenerator] {
+        &self.user_generators
+    }
+
+    /// 业务视角：该分类下的自定义生成器（没选业务组的只挂技术组，这里不列）。
+    pub(crate) fn user_generators_in_category(
+        &self,
+        category: GeneratorCategory,
+    ) -> Vec<&UserGenerator> {
+        self.user_generators
+            .iter()
+            .filter(|ug| ug.category == Some(category))
+            .collect()
+    }
+
+    /// 技术视角：该数据类下的自定义生成器（类型是硬属性，永远挂）。
+    pub(crate) fn user_generators_in_type(&self, data_type: &ColumnDataType) -> Vec<&UserGenerator> {
+        self.user_generators
+            .iter()
+            .filter(|ug| &ug.data_type == data_type)
+            .collect()
+    }
+
+    /// 新增自定义生成器（命名变体：已有生成器 + 参数 + 名称）。
+    ///
+    /// 名称必填；与既有自定义生成器（含内建生成器目录名？**不冲突**——菜单里自定义区与目录
+    /// 分开渲染，`id` 只在本会话自定义集合内去重）重名自动加序号（`name` → `name_2` → …，
+    /// 沿用 §8.3 字段预设的命名策略）。返回最终 id（去重后）。
+    pub(crate) fn add_user_generator(
+        &mut self,
+        name: &str,
+        data_type: ColumnDataType,
+        category: Option<GeneratorCategory>,
+        base: GeneratorConfig,
+        cx: &mut Context<Self>,
+    ) -> Result<String, String> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err("生成器名不能为空".to_string());
+        }
+        let mut id = trimmed.to_string();
+        let mut seq = 2;
+        while self.user_generators.iter().any(|ug| ug.id == id) {
+            id = format!("{trimmed}_{seq}");
+            seq += 1;
+        }
+        self.user_generators.push(UserGenerator {
+            id: id.clone(),
+            name: id.clone(),
+            data_type,
+            category,
+            base,
+        });
+        cx.notify();
+        Ok(id)
+    }
+
+    /// 应用自定义生成器：把 `base`（已有生成器 + 参数）解包写回列，confidence=manual。
+    ///
+    /// 与 `set_generator` 的区别：目录里没有自定义名（它不在 `generator_catalog`），
+    /// 不能经 `default_of(name)` 查——直接从 `user_generators` 取打包配置。
+    /// 生成链路零改动：写回后列配置就是普通列，`generate_cell` 照常跑。
+    pub fn apply_user_generator(&mut self, id: u64, ug_id: &str, cx: &mut Context<Self>) {
+        let Some(ug) = self.user_generators.iter().find(|ug| ug.id == ug_id).cloned() else {
+            return;
+        };
+        if let Some(column) = self.draft.columns.iter_mut().find(|c| c.id == id) {
+            column.def.generator = ug.base;
+            column.confidence = "manual".to_string();
+            column.sample_value.clear();
+            self.results.clear();
+            self.current = 0;
+            self.landed = None;
+        }
+        cx.notify();
+    }
+
+    /// 打开「生成器库」对话框（双视角浏览 + 分组「＋」自定义精调层）。
+    pub fn open_generator_library(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        crate::mock_view::generator_library::open_library(cx.entity(), id, window, cx);
     }
 
     /// 按列名 + 类型重跑智能映射（「恢复智能默认」）。
