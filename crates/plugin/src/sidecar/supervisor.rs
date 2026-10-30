@@ -1479,7 +1479,7 @@ entry = "main.js"
         let (host, peer) = tokio::io::duplex(1 << 20);
         let (host_r, host_w) = tokio::io::split(host);
         let (conn, events) = SidecarConn::spawn(host_r, host_w);
-        let (mut pr, mut pw) = tokio::io::split(peer);
+        let (pr, mut pw) = tokio::io::split(peer);
 
         // 事件泵（与真实路径同一条：spawn_instance 会把 conn 的事件接到这里）
         let (tx, mut rx) = mpsc::unbounded_channel::<InstanceEvent>();
@@ -1534,7 +1534,7 @@ entry = "main.js"
         let (host, peer) = tokio::io::duplex(1 << 20);
         let (host_r, host_w) = tokio::io::split(host);
         let (conn, events) = SidecarConn::spawn(host_r, host_w);
-        let (mut pr, mut pw) = tokio::io::split(peer);
+        let (pr, mut pw) = tokio::io::split(peer);
 
         // 事件泵（与真实路径同一条：spawn_instance 会把 conn 的事件接到这里）
         let (tx, mut rx) = mpsc::unbounded_channel::<InstanceEvent>();

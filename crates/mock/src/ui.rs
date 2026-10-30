@@ -70,3 +70,10 @@ pub const PREVIEW_TABLE_SIZE: ComponentSize = ComponentSize::XSmall;
 /// 悬停提示跟着鼠标走，比这更宽就会被窗口边缘截掉；超出的部分**折行**（长 JSON / 长文本
 /// 要能从头读到尾，截尾就失去看全的意义）。
 pub const PREVIEW_TOOLTIP_MAX_WIDTH: f32 = 24.0;
+
+// ===== 图标尺寸（视图层统一走 rem 常量，不写裸 `px(N.)`） =====
+
+/// 清单行右端状态点图标（0.75rem = 12px）
+pub const STATUS_ICON_SIZE: f32 = 0.75;
+/// 面板树 / 收件箱图标（1.25rem = 20px）
+pub const PANEL_ICON_SIZE: f32 = 1.25;

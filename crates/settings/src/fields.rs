@@ -539,26 +539,26 @@ fn bg_swatch(theme: &gpui_kit::component::Theme, color_key: &str) -> Option<Icon
 /// 字体选项的样式字例：SVG 文本按档位显示样式（粗体 / 斜体 / 下划线 /
 /// 删除线），继承默认无色块——选项文案本身已自明。
 fn font_style_swatch(theme: &gpui_kit::component::Theme, style: &str) -> Option<Icon> {
-    let (svg, color): (&'static [u8], gpui_kit::Hsla) = match style {
+    let (svg, color): (&'static str, gpui_kit::Hsla) = match style {
         "bold" => (
-            br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><text x="12" y="17" font-size="13" font-weight="bold" text-anchor="middle" fill="currentColor">A</text></svg>"#,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><text x="12" y="17" font-size="13" font-weight="bold" text-anchor="middle" fill="currentColor">A</text></svg>"#,
             theme.colors.foreground,
         ),
         "italic" => (
-            br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><text x="12" y="17" font-size="13" font-style="italic" text-anchor="middle" fill="currentColor">A</text></svg>"#,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><text x="12" y="17" font-size="13" font-style="italic" text-anchor="middle" fill="currentColor">A</text></svg>"#,
             theme.colors.foreground,
         ),
         "underline" => (
-            br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><text x="12" y="17" font-size="13" text-decoration="underline" text-anchor="middle" fill="currentColor">A</text></svg>"#,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><text x="12" y="17" font-size="13" text-decoration="underline" text-anchor="middle" fill="currentColor">A</text></svg>"#,
             theme.colors.foreground,
         ),
         "line_through" => (
-            br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><text x="12" y="17" font-size="13" text-decoration="line-through" text-anchor="middle" fill="currentColor">A</text></svg>"#,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><text x="12" y="17" font-size="13" text-decoration="line-through" text-anchor="middle" fill="currentColor">A</text></svg>"#,
             theme.colors.foreground,
         ),
         _ => return None,
     };
-    Some(Icon::default().data(svg).text_color(color))
+    Some(Icon::default().data(svg.as_bytes()).text_color(color))
 }
 
 /// 语义色映射（着色 / 背景共用；`inherit` 返回 None）。

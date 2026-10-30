@@ -17,7 +17,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::base::{Disableable as _, StyledExt};
@@ -49,7 +49,7 @@ struct TagRow {
 ///
 /// 返回 `(行, 空标签数, 错误)`。库打不开给一条可读错误（调用方在对话框内呈现），
 /// 不影响其他域继续采集。
-fn collect_rows(project_root: Option<&Path>) -> (Vec<TagRow>, usize, Option<String>) {
+fn collect_rows(project_root: Option<&std::path::Path>) -> (Vec<TagRow>, usize, Option<String>) {
     let mut rows = Vec::new();
     let mut err = None;
 
@@ -127,7 +127,7 @@ fn collect_rows(project_root: Option<&Path>) -> (Vec<TagRow>, usize, Option<Stri
 }
 
 /// 按行打开对应域的 `TagTable`（重命名 / 清理都按 `project` 标志选库）。
-fn open_table(project_root: Option<&Path>, project: bool) -> Result<tag::TagTable, CoreError> {
+fn open_table(project_root: Option<&std::path::Path>, project: bool) -> Result<tag::TagTable, CoreError> {
     match project {
         true => {
             let root = project_root.ok_or_else(|| {

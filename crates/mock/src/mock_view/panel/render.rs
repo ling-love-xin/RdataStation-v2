@@ -1532,7 +1532,7 @@ impl MockPanel {
                         .media(
                             EmptyMedia::new()
                                 .with_variant(EmptyMediaVariant::Icon)
-                                .child(Icon::new(IconName::Folder).size(px(20.))),
+                                .child(Icon::new(IconName::Folder).size(rems(ui::PANEL_ICON_SIZE))),
                         )
                         .title(EmptyTitle::new().child("还没有保存的模板"))
                         .description(EmptyDescription::new().child("把当前列配置存下来，下次一键套用")),
@@ -1683,7 +1683,7 @@ impl MockPanel {
                             .media(
                                 EmptyMedia::new()
                                     .with_variant(EmptyMediaVariant::Icon)
-                                    .child(Icon::new(IconName::Inbox).size(px(20.))),
+                                    .child(Icon::new(IconName::Inbox).size(rems(ui::PANEL_ICON_SIZE))),
                             )
                             .title(EmptyTitle::new().child("还没有生成记录"))
                             .description(EmptyDescription::new().child("跑一次生成后，记录会出现在这里")),

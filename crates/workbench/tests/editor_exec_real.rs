@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use editor::execution::{ExecTarget, ResultPlacement, RunOptions, TxAction, TxSnapshot, batch_target};
+use editor::host::{FederatedSourcePort, FederatedSourceRecord};
 use editor::model::{DocumentId, EditorMode};
 use editor::service::OpenRequest;
 use editor::shared::EditorShared;
@@ -45,6 +46,14 @@ struct Target {
     /// 刻意选**不物化大结果**的写法（聚合 / count）：被放弃的查询还会在后台跑完，
     /// 不能让它一下吃掉几 GB 内存。
     slow_sql: &'static str,
+}
+
+/// 测试用联邦源 stub：执行端口只依赖「源清单」，这里不接真实连接清单（空清单）。
+struct TestFederatedSource;
+impl FederatedSourcePort for TestFederatedSource {
+    fn records(&self) -> Vec<FederatedSourceRecord> {
+        Vec::new()
+    }
 }
 
 const TARGETS: [Target; 6] = [
@@ -356,7 +365,7 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
 
         // 走**生产路径**：`editor_exec::attach` 把引擎执行器接到编辑器上
         let shared = EditorShared::new();
-        rds_workbench::services::editor_exec::attach(&shared);
+        rds_workbench::services::editor_exec::attach(&shared, Arc::new(TestFederatedSource));
 
         let document = shared
             .open(OpenRequest::untitled("select 1 as n", EditorMode::Sql))
@@ -1138,7 +1147,7 @@ fn check_accelerated_channel(
     };
 
     let shared = EditorShared::new();
-    rds_workbench::services::editor_exec::attach(&shared);
+    rds_workbench::services::editor_exec::attach(&shared, Arc::new(TestFederatedSource));
     let document = shared
         .open(OpenRequest::untitled("select 1", EditorMode::Sql))
         .id()
@@ -1369,7 +1378,7 @@ fn real_python_script_runs_through_the_editor() {
     // 生产路径：环境端口 + 执行器都接到编辑器上
     let shared = EditorShared::new();
     rds_workbench::services::editor_env::attach(&shared);
-    rds_workbench::services::editor_exec::attach(&shared);
+    rds_workbench::services::editor_exec::attach(&shared, Arc::new(TestFederatedSource));
 
     // ① 环境端口已列出 python（探测过一次并缓存）
     let envs = shared.envs();

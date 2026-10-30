@@ -19,11 +19,8 @@ use analytics_resource::commands::{
 };
 use editor::commands::{
     CloseDocument, CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, FunctionManual,
-    NextBookmark, PrevBookmark,
-    SignatureHelp,
-    OpenDocument,
-    RedoResultEdit, SaveDocument, SaveDocumentAs, ToggleBookmark, ToggleComment, TriggerCompletion,
-    UndoResultEdit,
+    NextBookmark, PrevBookmark, OpenDocument, SaveDocument, SaveDocumentAs, SignatureHelp,
+    ToggleBookmark, ToggleComment, TriggerCompletion,
 };
 use gpui_kit::component::{Root, Theme, ThemeRegistry, TitleBar};
 use gpui_kit::*;

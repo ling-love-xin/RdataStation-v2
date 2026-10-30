@@ -8,9 +8,12 @@
 //! 调端口，断言右 Dock 展开 + 目标面板确实是历史。历史面板本体（`HistoryView` +
 //! 重放）在 B8 已装配，这里不再重测其内部。
 
-use gpui_kit::{AppContext as _, TestAppContext};
+use std::rc::Rc;
+
+use gpui_kit::TestAppContext;
 
 use editor::shared::EditorShared;
+use rds_workbench::components::editor_host::WorkbenchEditorHost;
 use rds_workbench::panels::Shared;
 use workbench_shell::model::{RightPanel, SidebarMode};
 
@@ -25,7 +28,10 @@ fn the_editor_history_port_opens_the_right_dock_history_panel(cx: &mut TestAppCo
         "新编辑器实例还没接宿主端口"
     );
 
-    rds_workbench::services::editor_history::attach(&editor_shared, &shared);
+    rds_workbench::services::editor_history::attach(
+        &editor_shared,
+        Rc::new(WorkbenchEditorHost::new(shared.clone())),
+    );
 
     let port = editor_shared
         .open_history_port()

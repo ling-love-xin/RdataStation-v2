@@ -202,14 +202,14 @@ mod tests {
     fn cells(columns: &[&str], rows: Vec<Vec<Value>>) -> Vec<Vec<Option<String>>> {
         let columns: Vec<String> = columns.iter().map(|c| c.to_string()).collect();
         let batch = duckdb_rows_to_arrow(&columns, &rows).expect("转换");
-        let materialized = shared::models::QueryResult::from_batches(columns, vec![batch]);
+        let materialized = crate::models::QueryResult::from_batches(columns, vec![batch]);
         materialized
             .rows
             .iter()
             .map(|row| {
                 row.iter()
                     .map(|value| match value {
-                        shared::models::Value::Null => None,
+                        crate::models::Value::Null => None,
                         other => Some(other.to_string()),
                     })
                     .collect()

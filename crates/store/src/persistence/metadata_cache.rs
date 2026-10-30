@@ -4696,7 +4696,7 @@ mod tests {
     /// S3-②：`save_table_with_parent` 落分区/继承父表两列，`list_tables_normalized` 读回。
     #[test]
     fn save_table_with_parent_roundtrips() -> Result<(), CoreError> {
-        let (mut ops, _db_path, dir) = fresh_ops("parent_col");
+        let (ops, _db_path, dir) = fresh_ops("parent_col");
 
         let schema_id = ops.save_schema("main", "public", None, None)?;
         ops.save_table_with_parent(schema_id, "orders", "TABLE", None, None, None, None, false)?;

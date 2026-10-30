@@ -30,9 +30,9 @@ pub mod accel;
 pub mod federation;
 mod probe;
 pub mod transfer;
-mod temp_table;
+pub mod temp_table;
 mod search;
-mod snapshot;
+pub mod snapshot;
 mod extension;
 
 // 行→Arrow 转换已下沉 `shared::duckdb_rows`（engine 瘦身第三刀前置：driver 与 engine 两侧共用），

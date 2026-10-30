@@ -203,7 +203,7 @@ mod tests {
     #[test]
     #[ignore = "需要 RDS_KERNEL_PYTHON 指向带 ipykernel 的解释器"]
     fn venv_python_is_first_and_ready_when_ipykernel_present() {
-        let venv = std::env::var_os("RDS_KERNEL_PYTHON")
+        let _venv = std::env::var_os("RDS_KERNEL_PYTHON")
             .map(std::path::PathBuf::from)
             .expect("跑法见 rds-kernel 集成测试：RDS_KERNEL_PYTHON 指向带 ipykernel 的解释器");
         let specs = detect_kernels();

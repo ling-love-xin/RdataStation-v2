@@ -11,7 +11,7 @@
 //! （宿主重绘重建对话框层），操作失败在对话框内给一条可读错误（不静默吞噬）。
 
 use std::cell::RefCell;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt;
@@ -39,7 +39,7 @@ struct GroupRow {
 /// 全量采集分组行（含成员数），项目域。
 ///
 /// 未打开项目（`root = None`）返回空集——调用方用对话框内错误行呈现「分组只存在于项目库」。
-fn collect_rows(root: Option<&Path>) -> Vec<GroupRow> {
+fn collect_rows(root: Option<&std::path::Path>) -> Vec<GroupRow> {
     let groups = nav_store::list_groups(root);
     groups
         .into_iter()
@@ -60,7 +60,7 @@ fn collect_rows(root: Option<&Path>) -> Vec<GroupRow> {
 /// `add_to_group` 底层是 `INSERT OR IGNORE`（幂等），成员已在目标组的天然去重；
 /// 顺序：先并入 + 移出，再修主组，最后删源组（避免删组后主组引用悬空）。
 fn merge_group(
-    root: Option<&Path>,
+    root: Option<&std::path::Path>,
     source: &str,
     target: Option<&str>,
 ) -> Result<(), String> {

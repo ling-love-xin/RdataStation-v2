@@ -16,6 +16,7 @@
 | `file-meta/README.md` | 文件元信息（`rds-file-meta`）**模块入口** | **先读这个**：一句话定位（每个文件一份快照式 sidecar 元信息）/ 依赖方向（基础元数据 crate，无应用依赖）/ 当前状态（P0 全绿 · 方案 A · 第③步迁移）/ 验证命令 |
 | `file-meta/file-meta-design.md` | 文件元信息**设计与实现** | 需求（快照 / `extra` 扩展）/ sidecar 位置策略（默认同目录 + `_at` 自定义目录）/ 数据结构与 API / 消费方（editor 书签 · scratchpad 连接迁移）/ 实现状态 |
 | `module-status.md` | 模块状态与测试基线（**实测版**） | **全仓唯一一份「刚跑过」的台账**：工作区 `85 目标 / 2005 通过 / 0 失败 / 51 忽略`（另有「项目自身套件 84 目标 / 2004 项」口径）· 逐包基线（lib + 集成）· 工作台 32 个集成目标明细 · 模块接通状态 · 零调用清单 · **复现命令（含 rustup shim `Permission denied` 的绕行）** · 本轮实测发现（本机诊断脚本入库事件 / 失败目标的环境归因 / **两次复跑的漂移修正表**）· 维护约定 |
+| `notification-crate-design.md` | 通知系统 crate 设计 | **把通知系统从 workbench 抽成独立 crate** · 核心类型（NotificationType / NotificationRecord / NotifyConfig）· 通知服务 API（推送 / 合并 / 历史 / 未读计数）· 设置桥接层 · 迁移路径（P0 骨架已完成，待接入）· 未来扩展方向（通知中心 UI / 操作按钮 / 分组 / 持久化 / 勿扰模式） |
 | `layout/layout-proposal.html` | 布局示意（v5） | 五段布局最终共识的可视化示意 |
 | `layout/layout-design.md` | 布局方案 | 五段结构 / 三模式交互 / Quick Open / 改动清单 / 实施步骤 |
 | `quick_open/quick-open-prototype-design.md` | Quick Open（统一检索 / 命令面板）**原型设计** | 定位（**核心 = 元数据搜索**）与三入口分工 / 面板解剖 / 模式与前缀（`>` `#` `@`）/ **元数据两档：名称（`metadata_index`，索引直出）与全文档（`metadata_fts`，trigram）** + 中文分词取舍（已实测定案）/ 行规格（面包屑 · 为什么命中标签 · 片段行）/ 匹配排序与上限（单字符门槛 · 异步不抢选中 · 跨档去重）/ 状态机与异步 / 空态矩阵（含转移入口 · 范围常显）/ 尺寸与主题 / GPUI 落点 / **与现状差异清单 15 条（P0–P2）** / 分期 / 测试点 / crate 归属判定 / 未决项 **Q1–Q11（Q11 已定案）** / **§18 优化建议清单（含已落地项的实测数字）** |

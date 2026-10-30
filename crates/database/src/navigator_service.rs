@@ -1908,7 +1908,7 @@ mod paging_tests {
     use std::sync::Arc;
 
     use engine::connection_manager::ConnectionManager;
-    use engine::connection_manager::ConnectionType;
+    use engine::persistence::ConnectionType;
     use engine::driver::traits::{NodeInfo, SchemaObjectKind};
     use engine::persistence::{MetadataCacheManager, MetadataCachePool};
 
@@ -2263,7 +2263,7 @@ mod cached_folder_tests {
 
     use engine::cache::CacheManager;
     use engine::connection_manager::ConnectionManager;
-    use engine::connection_manager::ConnectionType;
+    use engine::persistence::ConnectionType;
     use engine::driver::traits::{NodeInfo, SchemaObjectKind};
     use engine::persistence::{MetadataCacheManager, MetadataCachePool};
 

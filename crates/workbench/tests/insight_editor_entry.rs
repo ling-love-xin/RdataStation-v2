@@ -8,11 +8,24 @@
 //! 装了真 `InsightView` 弱句柄，调端口，断言右 Dock 展开 + 面板目标确实指向「源列 + 源取样」。
 //! **不物化结果集**：端口送出去的是「连接 + 那段 SQL + 标签」，取样由洞察侧重跑（带 LIMIT）。
 
+use std::rc::Rc;
+use std::sync::Arc;
+
 use gpui_kit::{AppContext as _, TestAppContext};
 
+use editor::host::{FederatedSourcePort, FederatedSourceRecord};
 use editor::shared::{EditorShared, InsightColumnRequest};
+use rds_workbench::components::editor_host::WorkbenchEditorHost;
 use rds_workbench::panels::Shared;
 use workbench_shell::model::{RightPanel, SidebarMode};
+
+/// 测试用联邦源 stub（空清单）：本用例只验洞察端口，不接真实连接清单。
+struct TestFederatedSource;
+impl FederatedSourcePort for TestFederatedSource {
+    fn records(&self) -> Vec<FederatedSourceRecord> {
+        Vec::new()
+    }
+}
 
 #[gpui_kit::test]
 fn the_editor_column_port_points_the_insight_panel_at_the_source(cx: &mut TestAppContext) {
@@ -24,7 +37,7 @@ fn the_editor_column_port_points_the_insight_panel_at_the_source(cx: &mut TestAp
         editor_shared.insight_column_port().is_none(),
         "新编辑器实例还没接宿主端口"
     );
-    rds_workbench::services::editor_insight::attach(&editor_shared, &shared);
+    rds_workbench::services::editor_insight::attach(&editor_shared, Rc::new(WorkbenchEditorHost::new(shared.clone())));
 
     // 面板实体：生产由 `RightSidebarPanel` 构造期登记弱句柄，这里补上
     let view = cx.update(|cx| cx.new(insight::InsightView::new));
@@ -138,8 +151,8 @@ fn the_editor_entry_re_samples_on_the_active_connection(cx: &mut TestAppContext)
     // 编辑器：不绑定连接 + 真执行器 + 洞察端口
     let shared = Shared::with_connections(Vec::new(), None);
     let editor_shared = EditorShared::new();
-    rds_workbench::services::editor_exec::attach(&editor_shared);
-    rds_workbench::services::editor_insight::attach(&editor_shared, &shared);
+    rds_workbench::services::editor_exec::attach(&editor_shared, Arc::new(TestFederatedSource));
+    rds_workbench::services::editor_insight::attach(&editor_shared, Rc::new(WorkbenchEditorHost::new(shared.clone())));
     let view = cx.update(|cx| cx.new(insight::InsightView::new));
     *shared.insight_panel.borrow_mut() = Some(view.downgrade());
 

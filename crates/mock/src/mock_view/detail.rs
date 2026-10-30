@@ -1434,7 +1434,7 @@ pub(crate) fn render_status_cell(icon: Option<IconName>, text: &str, color: Hsla
         .text_xs()
         .text_color(color)
         .when_some(icon, |cell, icon| {
-            cell.child(Icon::new(icon).size(px(12.)).text_color(color))
+            cell.child(Icon::new(icon).size(rems(ui::STATUS_ICON_SIZE)).text_color(color))
                 .child(" ")
         })
         .child(SharedString::from(text))

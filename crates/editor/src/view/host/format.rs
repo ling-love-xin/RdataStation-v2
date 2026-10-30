@@ -510,6 +510,8 @@ impl EditorHostPanel {
     }
 
     /// 【2c】显示空白字符（空格 `•` / 制表符 `→`）：文档状态 + 内核 `set_show_whitespaces` 双写
+    // 当前仅测试与「双栏自定义面板」接线消费（lib 非 test 编译会报 dead_code，保留实现待接）
+    #[allow(dead_code)]
     pub(crate) fn set_show_whitespaces(
         &mut self,
         show: bool,
@@ -552,6 +554,8 @@ impl EditorHostPanel {
     }
 
     /// 【2c】旧 bool 总开关：全开（所有类别） / 全关
+    // 同 `set_show_whitespaces`：生产接线未完成前保留（测试在用）
+    #[allow(dead_code)]
     pub(crate) fn set_show_invisible(&mut self, show: bool, cx: &mut Context<Self>) {
         self.set_invisible_categories(if show { crate::hidden::FULL_MASK } else { 0 }, cx);
     }
