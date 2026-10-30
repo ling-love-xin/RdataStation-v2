@@ -222,7 +222,18 @@ pub(crate) fn open_library(
             LibraryMode::Browse => None,
             LibraryMode::Create => Some(render_create_footer(&state, window, cx)),
         };
-        let dialog = dialog.title("生成器库").width(px(560.0)).child(body);
+        // 标题随模式动态：open_dialog 的 build 闭包每帧重建（vendor root.rs），重绘时重新求值
+        let title = match state.read(cx).mode {
+            LibraryMode::Browse => "生成器库",
+            LibraryMode::Create => {
+                if state.read(cx).editing.is_some() {
+                    "编辑自定义生成器"
+                } else {
+                    "新建自定义生成器"
+                }
+            }
+        };
+        let dialog = dialog.title(title).width(px(560.0)).child(body);
         match footer {
             Some(footer) => dialog.footer(footer),
             None => dialog,
@@ -235,7 +246,7 @@ pub(crate) fn open_library(
 /// 顶部搜索 + TabBar 双视角 + 分组列表（业务视角：15 分类；技术视角：13 数据类）。
 fn render_browse(
     state: &Entity<GeneratorLibraryState>,
-    _theme: &Theme,
+    theme: &Theme,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui_kit::AnyElement {
@@ -253,6 +264,10 @@ fn render_browse(
     let query = s.query.clone();
 
     let mut list = div().v_flex().gap_1().w_full();
+    // 最近使用（本会话点过的，菜单退役后这里就是快速路径）：非空才渲染，不受搜索词过滤
+    if let Some(recent) = render_recent(&state, theme, window, cx) {
+        list = list.child(recent);
+    }
     match view_index {
         0 => {
             for category in GeneratorCategory::ALL {
@@ -390,6 +405,69 @@ fn render_browse(
                 .child(list),
         )
         .into_any_element()
+}
+
+/// 最近使用（本会话点过的生成器，最多 [`RECENT_GENERATORS`] 条）：非空才渲染，
+/// 点击直接应用（静态 spec → `set_generator`）并关闭对话框——菜单退役后的快速路径。
+fn render_recent(
+    state: &Entity<GeneratorLibraryState>,
+    theme: &Theme,
+    _window: &mut Window,
+    cx: &mut App,
+) -> Option<gpui_kit::AnyElement> {
+    let recent: Vec<(&'static str, String)> = state
+        .read(cx)
+        .panel
+        .read(cx)
+        .recent_generators()
+        .iter()
+        .filter_map(|name| {
+            generator_catalog::all_specs()
+                .iter()
+                .copied()
+                .find(|spec| spec.name == name.as_str())
+                .map(|spec| (spec.name, spec.label.to_string()))
+        })
+        .collect();
+    if recent.is_empty() {
+        return None;
+    }
+    let mut chips = div().h_flex().gap_1().w_full().flex_wrap();
+    for (name, label) in recent {
+        let state_for_click = state.clone();
+        let picked = name;
+        chips = chips.child(
+            Button::new(format!("mock-lib-recent-{name}"))
+                .ghost()
+                .xsmall()
+                .label(label)
+                .tooltip("最近使用：点击直接应用")
+                .tooltip_show_delay(Duration::from_millis(500))
+                .on_click(move |_event, window, app| {
+                    let s = state_for_click.read(app);
+                    let panel = s.panel.clone();
+                    let column_id = s.column_id;
+                    panel.update(app, |p, cx| {
+                        p.set_generator(column_id, &picked, cx);
+                        window.close_dialog(cx);
+                    });
+                }),
+        );
+    }
+    Some(
+        div()
+            .v_flex()
+            .gap_1()
+            .w_full()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child("最近使用"),
+            )
+            .child(chips)
+            .into_any_element(),
+    )
 }
 
 /// 业务分组行：展开/收起按钮 + 行尾「＋」（键盘可达，`Button`）。
@@ -1187,6 +1265,8 @@ fn render_create(
     };
     // 参数区（按 base spec 重建；Int/Float/Text→Input、Bool→Switch、Complex→Textarea）
     let has_params = !draft.params.is_empty();
+    // 基础生成器是否已定（新建选完 / 编辑锁定）：已定但零参数（自增 / UUID）如实说明，别误导成「还没选」
+    let base_ready = draft.effective_config(cx).is_some();
     body = body.child(
         div()
             .v_flex()
@@ -1198,6 +1278,8 @@ fn render_create(
                     .text_color(theme.colors.muted_foreground)
                     .child(if has_params {
                         "参数（来自基础生成器）"
+                    } else if base_ready {
+                        "参数（该生成器没有参数）"
                     } else {
                         "参数（选择基础生成器后出现）"
                     }),

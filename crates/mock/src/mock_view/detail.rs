@@ -6,6 +6,7 @@ use super::*;
 // 样例预览的固定种子：样例稳定可复现（与最终生成的随机种子无关，纯示意）
 use fake::rand::rngs::StdRng;
 use fake::rand::SeedableRng;
+use std::time::Duration;
 
 const SAMPLE_PREVIEW_SEED: u64 = 20261030;
 
@@ -804,15 +805,6 @@ impl MockDetailView {
             };
             let id = column.id;
             let label = spec.label;
-            // 生成器菜单要的三样（B7）：当前是谁、最近用过哪些、智能映射推荐哪个
-            let (current_generator, recent_generators, recommended_generator) = {
-                let panel = self.panel.read(cx);
-                (
-                    spec.name.to_string(),
-                    panel.recent_generators().to_vec(),
-                    panel.recommended_generator(&column.def.name, &column.def.data_type),
-                )
-            };
             let unique = if column.def.unique { "唯一 · " } else { "" };
             let null_percent = (column.def.nullable_ratio * 100.0).round() as i64;
             let detail = if summary.is_empty() {
@@ -890,22 +882,20 @@ impl MockDetailView {
                             .gap_2()
                             .w_full()
                             .child({
-                                let id = id;
+                                let panel = panel.clone();
                                 Button::new(ElementId::Name(SharedString::from(format!(
                                     "mock-gen-{id}"
                                 ))))
                                 .ghost()
                                 .xsmall()
                                 .label(label)
-                                .dropdown_caret(true)
-                                .dropdown_menu(generator_menu(
-                                    self.panel.clone(),
-                                    id,
-                                    current_generator.clone(),
-                                    recent_generators.clone(),
-                                    recommended_generator.clone(),
-                                    self.panel.read(cx).user_generators().to_vec(),
-                                ))
+                                .tooltip("打开生成器库（业务分类 / 数据类型双视角选择）")
+                                .tooltip_show_delay(Duration::from_millis(500))
+                                .on_click(move |_, window, app| {
+                                    panel.update(app, |p, cx| {
+                                        p.open_generator_library(id, window, cx);
+                                    });
+                                })
                             })
                             .child({
                                 let entity = cx.entity();
