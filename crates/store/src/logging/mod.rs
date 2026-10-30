@@ -30,6 +30,7 @@
 pub mod config;
 pub mod record;
 pub mod redact;
+pub mod startup;
 pub mod subscriber;
 
 // 常用入口从 `logging` 直接可达（调用方不必知道它们住在 subscriber 里）
@@ -57,6 +58,9 @@ pub fn init_logging(
     log_store: Arc<LogStore>,
 ) -> Result<tokio::task::JoinHandle<()>, Box<dyn std::error::Error + Send + Sync>> {
     let rx = subscriber::init_tracing_with_db(config)?;
+    // 治理（2026-10-30）：订阅者已挂上——重放启动期缓冲（接线前 `startup::record`
+    // 的错误），让最早的失败也落文件 / 库，不再只能从 stderr 看。
+    startup::replay_pending();
     set_log_store(log_store.clone());
     let handle = subscriber::spawn_log_consumer(rx, log_store);
     Ok(handle)

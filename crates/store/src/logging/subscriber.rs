@@ -158,6 +158,10 @@ struct FileSink {
     /// 已达上限：只补一行说明，之后不再写文件
     truncated: AtomicBool,
     cap: u64,
+    /// 治理（2026-10-30）：首次截断时向库通道直接推一条 WARN（查看器读 `app_logs`
+    /// 能看到"文件通道已停写"）——不能在 MakeWriter 回调里发 `tracing` 宏，
+    /// 那会重入 fmt 层再取一次 writer，这里走 channel 绕开递归。
+    notify: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<LogRecord>>,
 }
 
 impl FileSink {
@@ -167,6 +171,7 @@ impl FileSink {
             written: AtomicU64::new(initial_bytes),
             truncated: AtomicBool::new(false),
             cap,
+            notify: std::sync::OnceLock::new(),
         }
     }
 }
@@ -230,6 +235,24 @@ impl<'s, W: Write> RedactingWriter<'s, W> {
                         sink.cap / (1024 * 1024)
                     );
                     self.inner.write_all(note.as_bytes())?;
+                    // 治理（2026-10-30）：同一事件直推库通道（不经 tracing 宏，
+                    // 避免在 MakeWriter 回调里重入 fmt 层），日志查看器可见"文件已停写"。
+                    if let Some(tx) = sink.notify.get() {
+                        let _ = tx.send(LogRecord {
+                            id: 0,
+                            timestamp: chrono::Utc::now().format(TIMESTAMP_FMT).to_string(),
+                            level: LogLevel::Warn,
+                            target: "rds_store::logging".to_string(),
+                            message: format!(
+                                "日志文件已达上限（{} MiB），本进程后续记录只写库与 stderr",
+                                sink.cap / (1024 * 1024)
+                            ),
+                            fields: None,
+                            file: None,
+                            line: None,
+                            session_id: get_session_id(),
+                        });
+                    }
                 }
                 return Ok(());
             }
@@ -309,6 +332,10 @@ pub fn init_tracing_with_db(
         .map_err(|_| "Reload handle already set")?;
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<LogRecord>();
+
+    // 治理（2026-10-30）：文件层持有库通道发送端——首次截断时直推一条 WARN
+    // （查看器读 `app_logs` 可见"文件通道已停写"，见 `FileSink.notify`）。
+    let _ = file_sink.notify.set(tx.clone());
 
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
@@ -454,6 +481,33 @@ static FLUSH_TX: std::sync::OnceLock<
     tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>,
 > = std::sync::OnceLock::new();
 
+/// "丢弃最旧 N 条"的提示后缀（dropped == 0 时为空串，避免日志行尾挂个空括号）。
+fn dropped_hint(dropped: usize) -> String {
+    if dropped > 0 {
+        format!("，丢弃最旧 {dropped} 条")
+    } else {
+        String::new()
+    }
+}
+
+/// 治理（2026-10-30）：一批写失败的记录放回重试队列——退避翻倍（上限 60s）、
+/// 超上限丢最旧。返回丢弃条数（调用方提示用）。
+fn requeue_pending(
+    pending: &mut std::collections::VecDeque<LogRecord>,
+    records: Vec<LogRecord>,
+    retry_secs: &mut u64,
+) -> usize {
+    *retry_secs = (*retry_secs * 2).min(60);
+    pending.extend(records);
+    const PENDING_CAP: usize = 5000;
+    let mut dropped = 0;
+    while pending.len() > PENDING_CAP {
+        pending.pop_front();
+        dropped += 1;
+    }
+    dropped
+}
+
 /// 启动数据库日志消费任务
 pub fn spawn_log_consumer(
     rx: tokio::sync::mpsc::UnboundedReceiver<LogRecord>,
@@ -467,8 +521,14 @@ pub fn spawn_log_consumer(
     tokio::spawn(async move {
         let mut rx = rx;
         let mut batch: Vec<LogRecord> = Vec::with_capacity(100);
+        // 治理（2026-10-30）：写库失败的批次不丢弃——进退避重试队列，
+        // 恢复后自动续写（上限 5000 条，超限丢最旧并提示）。
+        let mut pending: std::collections::VecDeque<LogRecord> = Default::default();
+        let mut retry_secs: u64 = 1;
         let mut fail_count: u64 = 0;
         loop {
+            // 有失败批次待重试 → 按退避节奏醒来；否则保持原 1 秒周期 flush
+            let wake_secs = if pending.is_empty() { 1 } else { retry_secs };
             tokio::select! {
                 record = rx.recv() => {
                     match record {
@@ -477,12 +537,24 @@ pub fn spawn_log_consumer(
                             if batch.len() >= 100 {
                                 if let Err(e) = write_batch_to_store(&log_store, std::mem::take(&mut batch)).await {
                                     fail_count += 1;
-                                    eprintln!("Log batch write failed (#{}): {}", fail_count, e);
+                                    let dropped = requeue_pending(&mut pending, std::mem::take(&mut batch), &mut retry_secs);
+                                    eprintln!("Log batch write failed (#{}): {}（批次入重试队列，{}s 后重试{}）", fail_count, e, retry_secs, dropped_hint(dropped));
+                                } else {
+                                    retry_secs = 1;
                                 }
                                 batch = Vec::with_capacity(100);
                             }
                         }
                         None => {
+                            // 收尾：pending 也尽力写完（新记录不再来）
+                            while !pending.is_empty() {
+                                let records: Vec<LogRecord> = pending.drain(..).collect();
+                                if let Err(e) = write_batch_to_store(&log_store, records).await {
+                                    fail_count += 1;
+                                    eprintln!("Final pending log write failed (#{}): {}", fail_count, e);
+                                    break;
+                                }
+                            }
                             if !batch.is_empty() {
                                 if let Err(e) = write_batch_to_store(&log_store, batch).await {
                                     fail_count += 1;
@@ -497,21 +569,49 @@ pub fn spawn_log_consumer(
                     }
                 }
                 Some(done) = flush_rx.recv() => {
-                    // 被请求立即落库（退出前）：写完再回信号，调用方 await 这个信号
+                    // 被请求立即落库（退出前）：pending 优先、其次 batch，写完再回信号
+                    while !pending.is_empty() {
+                        let records: Vec<LogRecord> = pending.drain(..).collect();
+                        match write_batch_to_store(&log_store, records.clone()).await {
+                            Ok(()) => retry_secs = 1,
+                            Err(e) => {
+                                fail_count += 1;
+                                let dropped = requeue_pending(&mut pending, records, &mut retry_secs);
+                                eprintln!("Flush pending log write failed (#{}): {}（{}s 后重试{}）", fail_count, e, retry_secs, dropped_hint(dropped));
+                                break;
+                            }
+                        }
+                    }
                     if !batch.is_empty() {
                         if let Err(e) = write_batch_to_store(&log_store, std::mem::take(&mut batch)).await {
                             fail_count += 1;
-                            eprintln!("Flush log batch write failed (#{}): {}", fail_count, e);
+                            let dropped = requeue_pending(&mut pending, std::mem::take(&mut batch), &mut retry_secs);
+                            eprintln!("Flush log batch write failed (#{}): {}（批次入重试队列，{}s 后重试{}）", fail_count, e, retry_secs, dropped_hint(dropped));
+                        } else {
+                            retry_secs = 1;
                         }
                         batch = Vec::with_capacity(100);
                     }
                     let _ = done.send(());
                 }
-                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
-                    if !batch.is_empty() {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(wake_secs)) => {
+                    if !pending.is_empty() {
+                        let records: Vec<LogRecord> = pending.drain(..).collect();
+                        match write_batch_to_store(&log_store, records.clone()).await {
+                            Ok(()) => retry_secs = 1,
+                            Err(e) => {
+                                fail_count += 1;
+                                let dropped = requeue_pending(&mut pending, records, &mut retry_secs);
+                                eprintln!("Periodic pending log write failed (#{}): {}（{}s 后重试{}）", fail_count, e, retry_secs, dropped_hint(dropped));
+                            }
+                        }
+                    } else if !batch.is_empty() {
                         if let Err(e) = write_batch_to_store(&log_store, std::mem::take(&mut batch)).await {
                             fail_count += 1;
-                            eprintln!("Periodic log batch write failed (#{}): {}", fail_count, e);
+                            let dropped = requeue_pending(&mut pending, std::mem::take(&mut batch), &mut retry_secs);
+                            eprintln!("Periodic log batch write failed (#{}): {}（批次入重试队列，{}s 后重试{}）", fail_count, e, retry_secs, dropped_hint(dropped));
+                        } else {
+                            retry_secs = 1;
                         }
                         batch = Vec::with_capacity(100);
                     }

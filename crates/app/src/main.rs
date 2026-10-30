@@ -55,20 +55,28 @@ fn main() {
     //    必须在任何线程 / 运行时启动前调用，所以放在 main 的第一条语句。
     if let Err(e) = paths::install_process_temp_dir() {
         eprintln!("[startup] 临时目录重定向失败，继续用系统临时目录: {e}");
+        // 治理（2026-10-30）：接线前的启动错误进缓冲，`init_logging` 成功后重放三层。
+        engine::logging::startup::record(tracing::Level::WARN, format!("临时目录重定向失败，继续用系统临时目录: {e}"));
     }
     if let Err(e) = paths::ensure_dirs() {
         eprintln!("[startup] 数据目录创建失败: {e}");
+        engine::logging::startup::record(tracing::Level::ERROR, format!("数据目录创建失败: {e}"));
     }
     // 0b. 旧布局（%APPDATA%/RdataStation、%LOCALAPPDATA%/RdataStation、~/.rdatastation）
     //     的数据一次性搬进数据根：只补不盖，一次过（含密钥库，否则存量连接密码解不开）。
     let migration = paths::migrate_legacy_layout();
     if !migration.is_empty() {
         eprintln!("[startup] {}", migration.summary());
+        engine::logging::startup::record(tracing::Level::INFO, migration.summary());
     }
     eprintln!(
         "[startup] 数据根 {}（来源：{}）",
         paths::home().display(),
         paths::home_origin().label()
+    );
+    engine::logging::startup::record(
+        tracing::Level::INFO,
+        format!("数据根 {}（来源：{}）", paths::home().display(), paths::home_origin().label()),
     );
 
     // Windows 主线程默认 1 MiB 栈，而 GPUI 的视图树构建 / 布局 / 事件派发在 debug
@@ -433,6 +441,9 @@ fn init_global_system() {
     if let Err(e) = &outcome {
         // 启动期一次性错误：stderr 供开发/诊断查看，UI 侧由工作台降级提示补充。
         eprintln!("[startup] 全局系统库初始化失败: {e}");
+        // 治理（2026-10-30）：接线前入缓冲，`init_logging` 成功后重放三层
+        //（接线后的补记只带结果摘要，这里带完整错误详情）。
+        engine::logging::startup::record(tracing::Level::ERROR, format!("全局系统库初始化失败: {e}"));
     }
 
     // 日志接线：库层要写全局库的 `app_logs` 表、并起一个异步消费者任务，
@@ -473,7 +484,12 @@ fn init_global_system() {
     let plugin_outcome = runtime.block_on(plugin::init_plugin_manager(paths::plugins_dir()));
     match &plugin_outcome {
         Ok(()) => tracing::info!("插件管理器已就绪（{}）", paths::plugins_dir().display()),
-        Err(e) => eprintln!("[startup] 插件管理器初始化失败: {e}"),
+        Err(e) => {
+            // 治理（2026-10-30）：此处已在日志接线之后——错误进三层（stderr 层也会打印，
+            // 保留 eprintln 仅为"接线失败"场景兜底，双写无碍）。
+            tracing::error!(error = %e, "插件管理器初始化失败");
+            eprintln!("[startup] 插件管理器初始化失败: {e}");
+        }
     }
 }
 
