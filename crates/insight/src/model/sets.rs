@@ -1,5 +1,7 @@
 //! 洞察模型 · 集合与面板标签（自 model.rs 拆分，纯位移）
 
+use crate::model::InsightTarget;
+
 // ==================== 面板骨架 ====================
 
 /// 已洞察表的来源种类（右栏「已洞察表」集合行的徽标）。
@@ -53,6 +55,9 @@ pub struct InsightSetEntry {
     /// 检查器命中计数（评估全表完成后才有；无评级语义）
     pub checker_hits: Option<usize>,
     pub checker_applicable: Option<usize>,
+    /// 还原目标：集合行点击「切换」时宿主据此重新打开该目标（2026-10-30 多标签
+    /// 与原型 it-row 点击语义的还原依据——entry 只存展示最小事实，目标本体在中间页）
+    pub target: InsightTarget,
     /// 是否中间页当前指向的目标（高亮用）
     pub is_current: bool,
 }

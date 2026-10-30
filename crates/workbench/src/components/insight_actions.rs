@@ -139,6 +139,27 @@ pub fn attach<H: 'static>(
             InsightEvent::ArchiveRequested { key } => {
                 archive_from_insight(&shared, &panel, key, cx);
             }
+            // 集合行「切换目标」（2026-10-30）：还原集合条目 → 双栏联动（右栏
+            // 摘要 + 中间页都指向该表，D65 双栏单源）
+            InsightEvent::ActivateTableRequested { key } => {
+                shared.request_insight_switch(key, cx);
+            }
+            // 集合行「版本」：版本时间线 = 资产库归档的版本链，打开右栏 Archive
+            // 面板定位（宿主侧；面板只报业务键）
+            InsightEvent::TableHistoryRequested { key } => {
+                shared.say(format!("洞察：已打开「{key}」的归档版本列表"), cx);
+                shared.open_right_panel(crate::view::RightPanel::Archive, cx);
+            }
+            // 列卡「在 SQL 编辑器中查看」：打开 SQL 文档（`run = false` 只看不执行），
+            // 与导航「生成 SQL」同一通道（`Shared::request_query` → 宿主 render 消费）
+            InsightEvent::OpenSqlRequested { sql, title } => {
+                shared.request_query(crate::panels::QueryRequest {
+                    conn_id: None,
+                    sql: sql.clone(),
+                    run: false,
+                });
+                shared.say(format!("洞察：已打开 SQL 到编辑器（{title}）"), cx);
+            }
             _ => {}
         },
     )
@@ -299,7 +320,7 @@ mod tests {
     // 与 `#[gpui_kit::test]` 展开出的裸 `#[test]` 自相残杀）。
     use gpui_kit::{AppContext as _, Subscription, TestAppContext};
 
-    use insight::{InsightTarget, InsightView};
+    use insight::{InsightEvent, InsightTarget, InsightView, SampleSource};
 
     use super::attach;
     use crate::panels::Shared;
@@ -380,6 +401,77 @@ mod tests {
                 assert_eq!(table_name, "order");
             }
             other => panic!("下钻该把目标换成源取样，实际是：{other:?}"),
+        });
+    }
+
+    /// 集合行「切换目标」（2026-10-30 多标签）：点集合条目 → 宿主还原目标 →
+    /// 右栏展开洞察 + 中间页队列拿到该目标（D65 双栏联动）。
+    #[gpui_kit::test]
+    fn set_row_switch_restores_target_and_queues_workspace(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let shared = Shared::new();
+        let (panel, _host) = cx.update(|cx| {
+            let panel = cx.new(InsightView::new);
+            *shared.insight_panel.borrow_mut() = Some(panel.downgrade());
+            let panel_for_host = panel.clone();
+            let shared_for_host = shared.clone();
+            let host = cx.new(move |cx| Harness {
+                _sub: attach(&panel_for_host, &shared_for_host, cx),
+            });
+            (panel, host)
+        });
+        let target = InsightTarget::SourceTable {
+            source: SampleSource::new(
+                "G_1",
+                "SELECT * FROM `mall`.`order_item`",
+                "mall.order_item",
+            ),
+            table_name: "order_item".into(),
+        };
+        // 集合里登记一张已进入洞察的表（entry 带还原目标）
+        cx.update(|cx| {
+            panel.update(cx, |view, cx| {
+                view.set_insight_set(
+                    vec![insight::model::InsightSetEntry {
+                        key: "k1".into(),
+                        label: "order_item".into(),
+                        kind: insight::model::InsightSetKind::SourceTable,
+                        source: "mall.order_item".into(),
+                        temp_table: Some("t_order_item".into()),
+                        row_count: Some(100),
+                        column_count: Some(12),
+                        checker_hits: None,
+                        checker_applicable: None,
+                        target: target.clone(),
+                        is_current: true,
+                    }],
+                    cx,
+                );
+            });
+        });
+        // 集合行点击 → 事件 → 宿主 request_insight_switch
+        cx.update(|cx| {
+            panel.update(cx, |_view, cx| {
+                cx.emit(InsightEvent::ActivateTableRequested { key: "k1".into() });
+            });
+        });
+        // 右栏摘要联动到切换目标（集合在右栏内，展开状态本就不变；不重设）
+        cx.update(|cx| {
+            assert_eq!(
+                panel.read(cx).target().map(|t| t.title()),
+                Some("order_item".into()),
+                "右栏摘要应联动到切换目标"
+            );
+        });
+        // 中间页：pending 队列拿到还原目标（宿主 render 消费后打开画像）
+        cx.update(|_| {
+            let queued = shared.pending_insight_target.borrow().clone();
+            match queued {
+                Some(InsightTarget::SourceTable { table_name, .. }) => {
+                    assert_eq!(table_name, "order_item", "中间页应拿到还原目标");
+                }
+                other => panic!("切换应把还原目标入队，实际：{other:?}"),
+            }
         });
     }
 }

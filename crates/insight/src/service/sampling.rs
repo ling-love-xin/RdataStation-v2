@@ -64,6 +64,10 @@ impl InsightService {
         {
             view.fill_column_stats(&stats);
         }
+        // 整行重复统计（概览五卡「重复行」）：失败不阻塞画像，卡位显示「—」
+        if let Ok(dup) = crate::insight_engine::compute_dup_rows(temp_table) {
+            view.dup_rows = Some(dup);
+        }
         // EDA 样本（前 5 行）：同样失败不阻塞画像（样本区给空态即可）
         if let Ok(sample) = crate::insight_engine::get_temp_table_sample(temp_table) {
             view.sample = Some(sample);

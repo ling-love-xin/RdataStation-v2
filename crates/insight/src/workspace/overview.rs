@@ -96,7 +96,7 @@ impl super::InsightWorkspacePanel {
             .gap_2()
             .p(rems(ui::PANEL_PADDING))
             .child(self.render_report_head(cx, profile, entity, theme))
-            .child(self.render_overview_cards(profile, theme))
+            .child(self.render_overview_cards(cx, profile, theme))
             .child(self.render_type_bar(profile, theme))
             .child(self.render_worth_section(profile, &entity, theme))
             .child(self.render_eda_tabs(cx, entity, theme))
@@ -193,32 +193,44 @@ impl super::InsightWorkspacePanel {
             })
     }
 
-    /// 概览五卡（原型 .overview-cards）：总行数 / 列数 / 缺失率 / 唯一率 / 值得关注。
+    /// 概览五卡（对齐原型 .overview-cards 口径，2026-10-30）：
+    /// 总行数 / 列数 / **缺失单元格** / **重复行** / **内存估算**。
     ///
-    /// 缺失率与唯一率是**有统计摘要的列**的均值（无摘要列不参与，避免 0 假装没缺失）；
-    /// 值得关注 = 缺失 > 20% 或（唯一率 > 0.9 且非主键）或类型未识别的列数。
-    pub(crate) fn render_overview_cards(&self, profile: &TableProfileView, theme: &Theme) -> Div {
+    /// - 缺失单元格 = Σ(列缺失率 × 行数)，只算**有列统计摘要**的列（无摘要列未知，
+    ///   不假装 0），副标题注明口径；
+    /// - 重复行 = 引擎 `GROUP BY ALL` 统计的可去重冗余行（`dup_rows`；未查为「—」）；
+    /// - 内存估算 = 分析引擎当前库占用（`view.memory` 后台轮询读数；未读数「—」）。
+    ///
+    /// 原「缺失率 / 唯一率 / 值得关注」三卡被原型口径替换；值得关注列仍在下方
+    /// `render_worth_section` 独立呈现（缺失 / 高基数 / 未识别 / 检查器未命中）。
+    pub(crate) fn render_overview_cards(
+        &self,
+        cx: &Context<Self>,
+        profile: &TableProfileView,
+        theme: &Theme,
+    ) -> Div {
         let columns = &profile.columns;
         let total = columns.len().max(1);
-        let with_stats = columns.iter().filter(|c| c.null_rate.is_some()).count();
-        let missing_avg = if with_stats > 0 {
-            columns.iter().filter_map(|c| c.null_rate).sum::<f64>() / with_stats as f64
-        } else {
-            0.0
-        };
-        let unique_avg = if with_stats > 0 {
-            columns.iter().filter_map(|c| c.unique_rate).sum::<f64>() / with_stats as f64
-        } else {
-            0.0
-        };
-        let worth = columns
+        // 缺失单元格：只折算了有 null_rate 的列（无统计列不编 0）
+        let missing_cells: u64 = columns
             .iter()
-            .filter(|c| {
-                c.null_rate.map(|n| n > 0.2).unwrap_or(false)
-                    || (!c.primary_key && c.unique_rate.map(|u| u > 0.9).unwrap_or(false))
-                    || c.kind == ColumnKind::Unknown
-            })
-            .count();
+            .filter_map(|c| c.null_rate)
+            .map(|rate| (profile.row_count as f64 * rate).round() as u64)
+            .sum();
+        let with_stats = columns.iter().filter(|c| c.null_rate.is_some()).count();
+        // 重复行：画像时引擎轻查询回填（None = 未查 / 失败，不编假值）
+        let dup_text = profile
+            .dup_rows
+            .map(fmt_rows)
+            .unwrap_or_else(|| "—".to_string());
+        // 内存估算：读引擎轮询读数（与分析库一致，MB 取整）
+        let memory_text = match self.view.read(cx).memory {
+            Some(stats) => stats
+                .database_bytes
+                .map(|b| format!("{} MB", b / (1024 * 1024)))
+                .unwrap_or_else(|| "—".to_string()),
+            None => "—".to_string(),
+        };
         div()
             .w_full()
             .flex()
@@ -238,21 +250,25 @@ impl super::InsightWorkspacePanel {
             ))
             .child(summary_card(
                 &theme,
-                "缺失率",
-                format!("{:.1}%", missing_avg * 100.0),
-                "有统计列的均值",
+                "缺失单元格",
+                fmt_rows(missing_cells),
+                if with_stats > 0 {
+                    format!("{with_stats} 列的折算")
+                } else {
+                    "尚未统计列缺失".to_string()
+                },
             ))
             .child(summary_card(
                 &theme,
-                "唯一率",
-                format!("{:.1}%", unique_avg * 100.0),
-                "有统计列的均值",
+                "重复行",
+                dup_text,
+                "整行去重可删的冗余行",
             ))
             .child(summary_card(
                 &theme,
-                "值得关注",
-                format!("{worth} / {total}"),
-                "缺失 / 高基数 / 未识别",
+                "内存估算",
+                memory_text,
+                "分析引擎当前占用",
             ))
     }
 

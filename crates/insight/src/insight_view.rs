@@ -157,6 +157,24 @@ pub enum InsightEvent {
     /// 来源选择（已连接库 / 草稿箱 / 资源分析 / 外部文件）与确认都在宿主侧
     /// （要 Shared 的连接列表、scratchpad store、系统文件对话框），面板只发意图。
     NewInsightRequested,
+    /// 请宿主把集合行所指目标**切为当前洞察对象**（2026-10-30 多标签 +
+    /// 原型 it-row 整行点击语义）。
+    ///
+    /// 与 `CompareRequested` 的区别：对比进对比形态、不改变右栏目标；
+    /// 切换 = 双栏联动（右栏摘要 + 中间页都指向该目标）。宿主经
+    /// `request_insight_switch` 从集合条目还原 `InsightTarget` 后打开。
+    ActivateTableRequested { key: String },
+    /// 请宿主打开某张已洞察表的**版本 / 归档时间线**（原型 it-row 四钮「版本」）。
+    ///
+    /// 语义：表级快照历史由资产库归档承接（`InsightTableReportStore` 落库后为
+    /// 表级版本线），宿主打开右栏归档面板定位该表即可；面板不自己持版本数据。
+    TableHistoryRequested { key: String },
+    /// 请宿主把一段 SQL 拿到中央 SQL 编辑器中查看（原型 col-card「在 SQL
+    /// 编辑器中查看」）。
+    ///
+    /// 只报文本与标题：打开 / 绑定连接 / 聚焦都由宿主 `open_query_document`
+    /// 完成（`run = false`：看语句，不执行）。
+    OpenSqlRequested { sql: String, title: String },
 }
 
 /// 列画像四区（顺序即渲染顺序）
@@ -513,6 +531,20 @@ impl InsightView {
         if self.emit_request_for_tab(self.tab, cx) {
             cx.notify();
         }
+    }
+
+    /// 清空当前目标（多标签关掉最后一个 tab 时用）：置空态、不发取数请求。
+    ///
+    /// 与 [`Self::set_target`] 的区别：没有新目标可指，只是把面板退回「无目标」
+    /// 初始态——右栏摘要版随之显示空态（原型 `archiveView` 之下的空工作台）。
+    pub fn clear_target(&mut self, cx: &mut Context<Self>) {
+        self.target = None;
+        self.data = PanelData::default();
+        self.scope = InsightScope::Sample;
+        self.compare_target = None;
+        self.loading_note = None;
+        self.state = InsightPanelState::Empty;
+        cx.notify();
     }
 
     /// 当前取样口径（中间页 scope 切换按钮读它；测试与宿主读）。
@@ -1111,15 +1143,6 @@ impl InsightView {
             message: message.into(),
             retryable,
         };
-        cx.notify();
-    }
-
-    /// 回到无目标空态（项目切换 / 目标失效且不可重试）
-    pub fn clear_target(&mut self, cx: &mut Context<Self>) {
-        self.target = None;
-        self.data = PanelData::default();
-        self.compare_target = None;
-        self.state = InsightPanelState::Empty;
         cx.notify();
     }
 

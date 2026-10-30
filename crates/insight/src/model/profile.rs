@@ -11,6 +11,9 @@ pub struct TableProfileView {
     /// 数据源标签（当前恒为「DuckDB 临时表」：面板只认临时表，见 D20）
     pub source_label: &'static str,
     pub row_count: u64,
+    /// 整行重复产生的冗余行数（`SUM(组内行数 - 1)`；画像时引擎 `GROUP BY ALL`
+    /// 轻查询回填；未查 / 失败为 `None`，不编假值）。概览五卡「重复行」口径 = 可去重行。
+    pub dup_rows: Option<u64>,
     pub columns: Vec<TableColumnView>,
     /// 表级质量：`None` = 还没「评估全表」（不是 0 分）
     pub quality: Option<TableQualityView>,
@@ -147,6 +150,7 @@ impl TableProfileView {
             table_name: table_name.to_string(),
             source_label: "DuckDB 临时表",
             row_count: profile.row_count.unwrap_or(0).max(0) as u64,
+            dup_rows: None,
             columns,
             quality: None,
             progress: None,

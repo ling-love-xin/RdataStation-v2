@@ -1,6 +1,9 @@
 //! EDA 主域渲染：报告 Tab（列分布 / 缺失矩阵）与列卡各分区。
 
 use super::*;
+// 完整 Lucide 图标目录在 `gpui_kit::assets::IconName`（component 版只是保留子集，
+// 没有 Braces）；别名避免与 `super::*` 带来的 component 版同名冲突
+use gpui_kit::assets::IconName as AssetsIconName;
 use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyTitle};
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::ColorName;
@@ -70,6 +73,15 @@ impl super::InsightWorkspacePanel {
                     && (self.col_q.is_empty() || c.name.contains(&self.col_q))
             })
             .collect();
+        // 列卡「在 SQL 编辑器中查看」需要真实临时表名（源目标取样后才有；
+        // 结果集 / 内存库目标自带的临时表总是可用）。无临时表时按钮不渲染。
+        let temp_table: Option<String> = self.view.read(cx).target().and_then(|target| {
+            self.view
+                .read(cx)
+                .data()
+                .sample_table(target)
+                .map(|t| t.to_string())
+        });
         // 列卡两列网格（原型 `.col-grid`）：`flex_wrap` + 每卡 `min_w + flex_1`——
         // 容器宽于 2×min_w + gap 时双列平分，窄时自动退单列（对齐
         // property_panel 指标卡同一套写法）
@@ -95,7 +107,13 @@ impl super::InsightWorkspacePanel {
                                 "insight-ws-col-anchor-{col_name}"
                             )))
                             .anchor_scroll(anchor)
-                            .child(self.render_col_card(profile, col, entity, theme)),
+                            .child(self.render_col_card(
+                                profile,
+                                col,
+                                entity,
+                                theme,
+                                temp_table.clone(),
+                            )),
                     ),
             );
         }
@@ -140,6 +158,7 @@ impl super::InsightWorkspacePanel {
         col: &TableColumnView,
         entity: &Entity<Self>,
         theme: &Theme,
+        temp_table: Option<String>,
     ) -> impl IntoElement {
         let colors = theme.colors;
         let checker = column_checkers(profile, col);
@@ -250,7 +269,7 @@ impl super::InsightWorkspacePanel {
                     });
                 })
             });
-        let body = self.render_col_card_body(col, &checker, zone, entity, theme);
+        let body = self.render_col_card_body(col, &checker, zone, entity, theme, temp_table);
         Collapsible::new()
             .motion_id(SharedString::from(format!(
                 "insight-ws-col-motion-{}",
@@ -273,6 +292,7 @@ impl super::InsightWorkspacePanel {
         zone: ColZone,
         entity: &Entity<Self>,
         theme: &Theme,
+        temp_table: Option<String>,
     ) -> Div {
         let rule_toggle = div().h_flex().w_full().items_center().gap_2().child(
             div().flex_1().min_w_0().child(
@@ -353,6 +373,46 @@ impl super::InsightWorkspacePanel {
             .child(tabs)
             .child(self.render_col_zone(col, checker, zone, theme))
             .child(self.render_checker_summary(col, checker, theme))
+            // 列卡「在 SQL 编辑器中查看」（2026-10-30 对齐原型 col-card 尾部）：
+            // 生成该列的探查 SQL（带引号转义），宿主 `open_query_document` 打开
+            // 不执行（`run = false`：看语句，不跑）。
+            .when_some(temp_table, |body, tmp| {
+                let entity = entity.clone();
+                let name = col.name.clone();
+                let quoted_col = col.name.replace('"', "\"\"");
+                let quoted_tbl = tmp.replace('"', "\"\"");
+                let sql = format!("SELECT \"{quoted_col}\" FROM \"{quoted_tbl}\" LIMIT 100");
+                let title = format!("{} · {}", tmp, col.name);
+                body.child(
+                    div()
+                        .h_flex()
+                        .w_full()
+                        .justify_end()
+                        .child(
+                            Button::new(SharedString::from(format!(
+                                "insight-ws-col-sql-{}",
+                                name
+                            )))
+                            .ghost()
+                            .xsmall()
+                            .icon(AssetsIconName::Braces)
+                            .label("在 SQL 编辑器中查看")
+                            .on_click(move |_, _, app| {
+                                // `Self`（工作页面板）只发 `PanelEvent`，洞察意图事件
+                                // 经 `insight_view()` 转发（与「＋ 新建」同一口径）；
+                                // `Context::emit` 是固有方法（先例：rule_view / insight_view）
+                                entity.update(app, |panel, cx| {
+                                    panel.insight_view().update(cx, |_view, cx| {
+                                        cx.emit(InsightEvent::OpenSqlRequested {
+                                            sql: sql.clone(),
+                                            title: title.clone(),
+                                        });
+                                    });
+                                });
+                            }),
+                        ),
+                )
+            })
     }
 
     /// 当前区的具体内容（对齐原型 `zoneBody`）。

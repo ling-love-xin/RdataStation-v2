@@ -168,6 +168,12 @@ pub fn handle_event(
         }
         // 归档要宿主侧（`ArchiveService` + 项目目录），由 `components::insight_actions` 落地
         InsightEvent::ArchiveRequested { .. } => {}
+        // 集合行「切换目标」/「版本」/ 列卡「在 SQL 编辑器中查看」：
+        // 都是宿主侧动作（`components::insight_actions` 订阅同一份事件落地：
+        // 双栏联动 / 右栏 Archive / SQL 文档），取数链不处理。
+        InsightEvent::ActivateTableRequested { .. } => {}
+        InsightEvent::TableHistoryRequested { .. } => {}
+        InsightEvent::OpenSqlRequested { .. } => {}
         // 新建洞察对话框由宿主侧（`components::insight_actions` 订阅）打开——
         // 来源选择要 Shared / 系统文件对话框，取数链不处理。
         InsightEvent::NewInsightRequested => {

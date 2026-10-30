@@ -249,6 +249,42 @@ pub fn compute_table_column_summary_on(
     Ok(result)
 }
 
+/// 整行重复产生的冗余行数：`SUM(组内行数 - 1)`（`GROUP BY ALL` 按全部列分组）。
+///
+/// 概览五卡「重复行」口径（2026-10-30 对齐 EDA 原型）：可去重行数 = 总行数 -
+/// 去重后行数，即「删掉这些行后不留重复整行」。空表 / 全唯一返回 0。
+/// 临时表行数受取样上限约束（`SOURCE_SAMPLE_LIMIT`），全表 `GROUP BY ALL` 代价可控；
+/// 失败按调用方口径降级（画像不因它失败，五卡显示「—」）。
+pub fn compute_dup_rows_on(
+    conn: &duckdb::Connection,
+    temp_table: &str,
+) -> Result<u64, CoreError> {
+    let sql = format!(
+        "SELECT COALESCE(SUM(n - 1), 0) FROM (SELECT COUNT(*) AS n FROM \"{}\" GROUP BY ALL)",
+        temp_table.replace('"', "\"\"")
+    );
+    let dup: i64 = conn.query_row(&sql, [], |row| row.get(0)).map_err(|e| {
+        CoreError::common(CommonError::General(format!(
+            "DuckDB dup rows query failed: {}",
+            e
+        )))
+    })?;
+    Ok(dup.max(0) as u64)
+}
+
+/// 带并发控制与全局连接的重复行统计入口（调用方拿不到连接时用）。
+pub fn compute_dup_rows(temp_table: &str) -> Result<u64, CoreError> {
+    let _permit = insight_semaphore().try_acquire().map_err(|_| {
+        CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string()))
+    })?;
+
+    let duckdb = get_or_create_duckdb()?;
+    let conn = duckdb.lock().map_err(|e| {
+        CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
+    })?;
+    compute_dup_rows_on(&conn, temp_table)
+}
+
 /// 带并发控制与全局连接的 EDA 列统计摘要入口（调用方拿不到连接时用）。
 pub fn compute_table_column_summary(
     temp_table: &str,

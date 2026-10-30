@@ -197,7 +197,9 @@ impl InsightView {
             } else {
                 colors.sidebar
             })
-            // r1：多选框（仅多选）+ 等宽名 + 行数（等宽 dim）
+            // r1：多选框（仅多选）+ 来源徽标（2026-10-30 移到名称前，对齐原型
+            // it-row 第一眼辨识）+ 名称（**可点击切换目标**，对齐原型整行点击；
+            // 走语义 Button，键盘可达）+ 行数（等宽 dim）
             .child(
                 div()
                     .w_full()
@@ -222,19 +224,23 @@ impl InsightView {
                             }),
                         )
                     })
-                    .child(
-                        div()
+                    .child(self.source_badge(entry.kind))
+                    .child({
+                        let entity = entity.clone();
+                        let key = entry.key.clone();
+                        Button::new(format!("insight-set-open-{}", entry.key))
+                            .ghost()
+                            .xsmall()
+                            .toggled(entry.is_current)
                             .min_w_0()
                             .flex_1()
-                            .text_xs()
-                            .text_color(if entry.is_current {
-                                colors.foreground
-                            } else {
-                                colors.muted_foreground
+                            .label(entry.label.clone())
+                            .on_click(move |_, _, app| {
+                                entity.update(app, |_view, cx| {
+                                    cx.emit(InsightEvent::ActivateTableRequested { key: key.clone() });
+                                });
                             })
-                            .text_ellipsis()
-                            .child(entry.label.clone()),
-                    )
+                    })
                     .when_some(entry.row_count, |row, rows| {
                         row.child(
                             div()
@@ -246,14 +252,13 @@ impl InsightView {
                         )
                     }),
             )
-            // r2：来源 + 检查器命中 + 对比 / 关系 / 归档
+            // r2：检查器命中 + 对比 / 关系 / 归档 / 版本
             .child(
                 div()
                     .w_full()
                     .h_flex()
                     .items_center()
                     .gap_1()
-                    .child(self.source_badge(entry.kind))
                     .when_some(
                         entry
                             .checker_applicable
@@ -300,6 +305,16 @@ impl InsightView {
                         entity,
                         entry.temp_table.is_none(),
                         InsightSetOp::Archive,
+                    ))
+                    // 版本（2026-10-30 对齐原型 it-row 四钮）：打开该表的归档 /
+                    // 版本时间线（宿主进右栏 Archive 面板），未取样也能看空时间线
+                    .child(self.row_op_button(
+                        entry,
+                        "版本",
+                        "insight-set-history",
+                        entity,
+                        false,
+                        InsightSetOp::History,
                     )),
             )
     }
@@ -341,6 +356,9 @@ impl InsightView {
                     }
                     InsightSetOp::Archive => {
                         cx.emit(InsightEvent::ArchiveRequested { key: key.clone() });
+                    }
+                    InsightSetOp::History => {
+                        cx.emit(InsightEvent::TableHistoryRequested { key: key.clone() });
                     }
                 });
             })
@@ -464,10 +482,11 @@ impl InsightView {
     }
 }
 
-/// 集合行操作类型（对比 / 关系 / 归档）——按钮回调按此分派事件
+/// 集合行操作类型（对比 / 关系 / 归档 / 版本）——按钮回调按此分派事件
 #[derive(Clone, Copy)]
 enum InsightSetOp {
     Compare,
     Relation,
     Archive,
+    History,
 }

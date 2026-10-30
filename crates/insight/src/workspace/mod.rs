@@ -24,6 +24,7 @@ use gpui_kit::base::{Disableable as _, StyledExt as _};
 // 因此中间页滚动容器用 gpui 基座滚动而非 `overflow_y_scrollbar`。
 use gpui::{Anchor, ScrollAnchor, ScrollHandle};
 use gpui_kit::assets::IconName as CatalogIcon;
+use gpui_kit::component::badge::Badge;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::collapsible::Collapsible;
@@ -40,7 +41,7 @@ use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, Size, 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::insight_view::InsightView;
+use crate::insight_view::{InsightEvent, InsightView};
 use crate::model::{
     ColumnCheckState, ColumnChecker, ColumnKind, InsightPanelState, InsightSetEntry,
     InsightSetKind, InsightTarget, MultiResultView, NULL_RATE_NOTE, TableColumnView,
@@ -180,8 +181,21 @@ impl OpenedTarget {
             column_count,
             checker_hits,
             checker_applicable,
+            // 集合行「切换目标」的还原依据（宿主经 `request_insight_switch` 使用）
+            target: self.target.clone(),
             is_current,
         })
+    }
+}
+
+/// 关掉 index 后应切到的相邻 tab：优先右侧原位，越界回退左侧；
+/// 最后一个也被关掉（`len_after == 0`）时返回 `None`（面板回空态）。
+/// 抽出为纯函数：close_opened 的状态机里这是唯一决策点，单测直测。
+fn next_index_after_close(len_after: usize, closed: usize) -> Option<usize> {
+    if len_after == 0 {
+        None
+    } else {
+        Some(closed.min(len_after - 1))
     }
 }
 
@@ -414,12 +428,84 @@ impl InsightWorkspacePanel {
             .collect()
     }
 
+    /// 顶部 tab 条（A 方案多标签，2026-10-30 落地；对齐原型 `.tab-strip`）：
+    /// 每个进入过洞察的目标一个 tab，dot = 当前目标实时状态（Loading 黄 /
+    /// 就绪绿 / 出错红；非当前 tab 是静态灰点表示「已打开过」），✕ 关闭该 tab，
+    /// 最右 ＋ 打开「新建洞察」（宿主对话框）。
+    ///
+    /// 点击回调只改状态（`activate_opened` / `close_opened` / 发事件），
+    /// 副作用留在事件路径——对齐 render 纯读约定。
+    fn render_tab_strip(
+        &mut self,
+        entity: &Entity<Self>,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let colors = theme.colors;
+        let current_key = self.view.read(cx).target().map(target_key);
+        let current_ix = self
+            .opened
+            .iter()
+            .position(|o| Some(o.key.clone()) == current_key);
+        let weak = entity.downgrade();
+        TabBar::new("insight-ws-tabs")
+            // `Tab::max_width` 是 `pub(super)`（只能 tab 模块内部用）——tab 条级
+            // `max_width` 才是公开 API（0.8.1 vendor tab_bar.rs:133）：每 tab 超宽
+            // 省略号截断。它只收 `Pixels`，ui 常量是 rem 倍率 → ×主题基准字号换算
+            .max_width(px(ui::INSIGHT_WS_TAB_MAX_WIDTH * 16.0))
+            .children(self.opened.iter().enumerate().map(|(ix, entry)| {
+                let key = entry.key.clone();
+                let is_current = current_ix == Some(ix);
+                let dot = if is_current {
+                    match self.view.read(cx).state() {
+                        InsightPanelState::Loading => Badge::new().dot().color(colors.warning),
+                        InsightPanelState::Error { .. } => Badge::new().dot().color(colors.danger),
+                        _ => Badge::new().dot().color(colors.success),
+                    }
+                } else {
+                    Badge::new().dot().color(colors.muted_foreground)
+                };
+                let w_close = weak.clone();
+                let w_activate = weak.clone();
+                Tab::new()
+                    .label(entry.target.title())
+                    .prefix(dot)
+                    .suffix(
+                        Button::new(format!("insight-ws-tab-close-{key}"))
+                            .ghost()
+                            .icon(IconName::Close)
+                            .on_click(move |_, _, app| {
+                                let _ =
+                                    w_close.update(app, |panel, cx| panel.close_opened(ix, cx));
+                            }),
+                    )
+                    .on_click(move |_, _, app| {
+                        let _ =
+                            w_activate.update(app, |panel, cx| panel.activate_opened(ix, cx));
+                    })
+            }))
+            .when_some(current_ix, |bar, ix| bar.selected_index(ix))
+            .suffix(
+                Button::new("insight-ws-tab-new")
+                    .ghost()
+                    .icon(IconName::Plus)
+                    .on_click(move |_, _, app| {
+                        let _ = weak.update(app, |panel, cx| {
+                            panel.insight_view().update(cx, |_view, cx| {
+                                cx.emit(InsightEvent::NewInsightRequested)
+                            })
+                        });
+                    }),
+            )
+    }
+
     /// 指向新目标：先把当前目标的画像摘要存档进 `opened`（对比聚合不重取数的前提），
     /// 再登记 / 去重，最后交 [`InsightView::set_target`]。
     ///
     /// 入口语义（D65）：「查看统计」在中间开 tab（本面板由宿主建一次），
-    /// 已有 tab 则复用——所以这里是**单 tab 随目标切换**；每表独立 tab 的
-    /// 多 tab 形态是负载兜底，见 `insight-architecture.md` D64。
+    /// **多 tab 形态（A 方案，2026-10-30 落地）**：每个进入过洞察的目标占一个
+    /// 顶部 tab（`opened` 即 tab 列表，新目标在前）；打开已有 tab 只切目标、
+    /// 不重登记（去重分支）。
     pub fn open_target(&mut self, target: InsightTarget, cx: &mut Context<Self>) {
         self.archive_summary(cx);
         let key = target_key(&target);
@@ -439,6 +525,46 @@ impl InsightWorkspacePanel {
         self.mode = WorkspaceMode::Insight;
         self.view.update(cx, |view, cx| view.set_target(target, cx));
         cx.notify();
+    }
+
+    /// 顶部 tab 切换（A 方案）：切到已登记的 `opened` 目标。
+    ///
+    /// 复用 `open_target` 的去重分支（已登记则只更新目标 + 切画像形态）；
+    /// 与新建入口的区别是这里**必然已登记**，不会新增 tab。
+    pub fn activate_opened(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(entry) = self.opened.get(index).cloned() else {
+            return;
+        };
+        self.open_target(entry.target, cx);
+    }
+
+    /// 顶部 tab 关闭（A 方案 ✕）：从 `opened` 移除该目标。
+    ///
+    /// 关的是**当前目标**时：先存档摘要，再切相邻目标（优先右侧原位，
+    /// 边界回退左侧）；关掉**最后一个** tab 时清空面板回无目标空态。
+    /// 对比候选是 `opened` 的子集语义（候选 = 已进入洞察的目标），
+    /// 关闭的 tab 同时离开候选池。
+    pub fn close_opened(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.opened.len() {
+            return;
+        }
+        let closing_key = self.opened[index].key.clone();
+        self.opened.remove(index);
+        let current_key = self.view.read(cx).target().map(target_key);
+        if current_key.as_deref() != Some(closing_key.as_str()) {
+            cx.notify();
+            return;
+        }
+        let next = match next_index_after_close(self.opened.len(), index) {
+            Some(ix) => ix,
+            None => {
+                self.view.update(cx, |view, cx| view.clear_target(cx));
+                cx.notify();
+                return;
+            }
+        };
+        let target = self.opened[next].target.clone();
+        self.open_target(target, cx);
     }
 
     /// 切换形态（画像 / 对比）。切到对比不打断取数：`view` 状态保留，切回即见。
@@ -535,6 +661,8 @@ impl Render for InsightWorkspacePanel {
             .v_flex()
             .size_full()
             .bg(theme.colors.background)
+            // A 方案多标签（2026-10-30）：顶部 tab 条在工具栏之上（对齐原型 tab-strip）
+            .child(self.render_tab_strip(&entity, &theme, cx))
             .child(self.render_toolbar(&entity, &theme, cx))
             .child(
                 div()
@@ -722,6 +850,7 @@ mod tests {
             quality: None,
             progress: None,
             sample: None,
+            dup_rows: None,
         }
     }
 
@@ -837,5 +966,62 @@ mod tests {
         assert!(md.contains("| c0 | INTEGER | 30 | — | 1/2 |"));
         // 转义：含 | 的表名不应串列
         assert_eq!(super::markdown::escape_md("a|b\nc"), "a｜b c");
+    }
+
+    #[test]
+    fn next_index_after_close_prefers_right_then_falls_back_left() {
+        // 关中间的 tab（移除后长度 2、被关 index 1）→ 右侧原位（原右邻顶替 1 位）
+        assert_eq!(super::next_index_after_close(2, 1), Some(1));
+        // 关最右的 tab（移除后长度 2、被关 index 2 越界）→ 回退左侧末位
+        assert_eq!(super::next_index_after_close(2, 2), Some(1));
+        // 关第一个 → 原位（新首）
+        assert_eq!(super::next_index_after_close(2, 0), Some(0));
+        // 最后一个也被关掉 → None（面板回无目标空态）
+        assert_eq!(super::next_index_after_close(0, 0), None);
+    }
+
+    #[gpui_kit::test]
+    fn close_tab_switches_adjacent_and_last_close_empties(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let panel = cx.new(InsightWorkspacePanel::new);
+        // 开三张表（最新在前：items, users, orders），激活最新的 items
+        for name in ["orders", "users", "items"] {
+            panel.update(cx, |p, cx| p.open_target(table_target(name), cx));
+        }
+        panel.update(cx, |p, cx| p.activate_opened(0, cx));
+        // 关当前（index 0）→ 应切到相邻（原位 = users）
+        panel.update(cx, |p, cx| p.close_opened(0, cx));
+        panel.update(cx, |p, cx| {
+            assert_eq!(p.opened().len(), 2);
+            assert_eq!(
+                p.insight_view().read(cx).target().map(|t| t.title()),
+                Some("users".into()),
+                "关掉当前 tab 应切到相邻目标"
+            );
+        });
+        // 继续关到只剩一个 → 关掉它 → 回无目标空态
+        panel.update(cx, |p, cx| p.close_opened(0, cx));
+        panel.update(cx, |p, cx| p.close_opened(0, cx));
+        panel.update(cx, |p, cx| {
+            assert!(p.opened().is_empty());
+            assert!(
+                p.insight_view().read(cx).target().is_none(),
+                "关掉最后一个 tab 面板应回空态"
+            );
+        });
+        // 关闭非当前 tab：只移除、不影响当前目标
+        for name in ["orders", "users"] {
+            panel.update(cx, |p, cx| p.open_target(table_target(name), cx));
+        }
+        panel.update(cx, |p, cx| p.activate_opened(0, cx)); // 当前 = users
+        panel.update(cx, |p, cx| p.close_opened(1, cx)); // 关 orders（非当前）
+        panel.update(cx, |p, cx| {
+            assert_eq!(p.opened().len(), 1);
+            assert_eq!(
+                p.insight_view().read(cx).target().map(|t| t.title()),
+                Some("users".into()),
+                "关非当前 tab 不应动当前目标"
+            );
+        });
     }
 }

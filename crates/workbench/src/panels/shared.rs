@@ -905,6 +905,31 @@ impl Shared {
         self.notify_host(cx);
     }
 
+    /// 右栏集合行「切换目标」（2026-10-30 多标签 / 原型 it-row 整行点击语义）：
+    /// 把集合条目还原成 `InsightTarget`，**右栏摘要 + 中间页都指向它**（D65 双栏联动）。
+    ///
+    /// 与 `request_insight_compare` 的区别：对比只切中间页 Compare 形态、不换目标；
+    /// 切换 = 换当前洞察对象（右栏下钻 + 中间页打开该表画像）。
+    pub fn request_insight_switch(&self, key: impl Into<String>, cx: &mut App) {
+        let key = key.into();
+        let panel = self.insight_panel.borrow().clone();
+        let Some(panel) = panel.and_then(|weak| weak.upgrade()) else {
+            return;
+        };
+        // 集合条目里存了还原目标（`InsightSetEntry.target`）——行点击只报业务键
+        let Some(target) = panel
+            .read(cx)
+            .insight_set()
+            .iter()
+            .find(|e| e.key == key)
+            .map(|e| e.target.clone())
+        else {
+            return;
+        };
+        self.set_right_insight_target(&target, cx);
+        self.queue_workspace_insight(target, cx);
+    }
+
     /// 打开 Mock 面板；`source` 给定时按**源库表**定向（导航右键「生成 Mock 数据」）。
     ///
     /// 定向动作（读源库结构 + 预填目标表名）在事件路径执行：面板实体随右栏面板
