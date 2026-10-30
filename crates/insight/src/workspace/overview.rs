@@ -103,22 +103,21 @@ impl super::InsightWorkspacePanel {
             .child(self.render_eda_body(window, cx, profile, entity, &theme, inline_icon, ring_px))
     }
 
-    /// 报告头（原型 .report-head）：kind 徽标 + scope 徽标 + 取样↔全量切换 + 生成报告。
+    /// 报告头（原型 .report-head）：kind 徽标 + scope 徽标（只读显示）。
+    ///
+    /// 取样↔全量**切换**已收敛到工具栏（2026-10-31 冗余收敛：report-head 不再
+    /// 承担按钮——列画像版式无 report-head，切换入口必须全局可用；scope 徽标
+    /// 保留口径显示，切换按钮见 `workspace/toolbar.rs` 的 scope_btn）。
     pub(crate) fn render_report_head(
         &self,
         cx: &Context<Self>,
         _profile: &TableProfileView,
-        entity: &Entity<Self>,
+        _entity: &Entity<Self>,
         theme: &Theme,
     ) -> Div {
         let colors = theme.colors;
         let scope = self.view.read(cx).scope();
         let is_full = scope == crate::insight_view::InsightScope::Full;
-        // 取样↔全量切换：源目标才有「取样」概念；结果集 / 临时表目标天然全量（按钮置灰）
-        let can_switch = matches!(
-            self.view.read(cx).target(),
-            Some(InsightTarget::SourceTable { .. }) | Some(InsightTarget::SourceColumn { .. })
-        );
         div()
             .h_flex()
             .w_full()
@@ -158,39 +157,6 @@ impl super::InsightWorkspacePanel {
                     .child(scope.label()),
             )
             .child(div().flex_1().min_w_0())
-            .when(can_switch, |this| {
-                let entity = entity.clone();
-                let go_full = !is_full;
-                this.child(
-                    Button::new("insight-ws-scope")
-                        .ghost()
-                        .xsmall()
-                        .icon(if go_full {
-                            CatalogIcon::Expand
-                        } else {
-                            CatalogIcon::Shrink
-                        })
-                        .label(if go_full {
-                            "全量统计"
-                        } else {
-                            "取样统计"
-                        })
-                        .tooltip(if go_full {
-                            "大表默认取样 500 行；全量需手动触发（可能较慢）"
-                        } else {
-                            "切回取样口径（500 行）"
-                        })
-                        .on_click(move |_, _, app| {
-                            entity.update(app, |panel, cx| {
-                                if go_full {
-                                    panel.view.update(cx, |view, cx| view.request_full(cx));
-                                } else {
-                                    panel.view.update(cx, |view, cx| view.request_sample(cx));
-                                }
-                            });
-                        }),
-                )
-            })
     }
 
     /// 概览五卡（对齐原型 .overview-cards 口径，2026-10-30）：
@@ -199,13 +165,15 @@ impl super::InsightWorkspacePanel {
     /// - 缺失单元格 = Σ(列缺失率 × 行数)，只算**有列统计摘要**的列（无摘要列未知，
     ///   不假装 0），副标题注明口径；
     /// - 重复行 = 引擎 `GROUP BY ALL` 统计的可去重冗余行（`dup_rows`；未查为「—」）；
-    /// - 内存估算 = 分析引擎当前库占用（`view.memory` 后台轮询读数；未读数「—」）。
+    /// - 内存估算 = **表级近似**（当前口径行数 × 列类型估算字节，文本列按 64B/值），
+    ///   对齐原型「取样集 ≈ 0.2 MB」语义；引擎总占用归工具栏「内存占用」读数
+    ///   （2026-10-31 修正，此前误用引擎级占用）。
     ///
     /// 原「缺失率 / 唯一率 / 值得关注」三卡被原型口径替换；值得关注列仍在下方
     /// `render_worth_section` 独立呈现（缺失 / 高基数 / 未识别 / 检查器未命中）。
     pub(crate) fn render_overview_cards(
         &self,
-        cx: &Context<Self>,
+        _cx: &Context<Self>,
         profile: &TableProfileView,
         theme: &Theme,
     ) -> Div {
@@ -223,14 +191,14 @@ impl super::InsightWorkspacePanel {
             .dup_rows
             .map(fmt_rows)
             .unwrap_or_else(|| "—".to_string());
-        // 内存估算：读引擎轮询读数（与分析库一致，MB 取整）
-        let memory_text = match self.view.read(cx).memory {
-            Some(stats) => stats
-                .database_bytes
-                .map(|b| format!("{} MB", b / (1024 * 1024)))
-                .unwrap_or_else(|| "—".to_string()),
-            None => "—".to_string(),
-        };
+        // 内存估算（对齐原型「取样集 ≈ 0.2 MB」的**表级**口径，2026-10-31 修正）：
+        // 当前口径行数 × Σ(列类型估算字节)——文本列按 64B/值 估算（画像无平均长度）。
+        // 不是分析引擎总占用（那是工具栏「内存占用」读数的语义，同 `memory` 字段已不再用）。
+        let mem_bytes: u64 = columns
+            .iter()
+            .map(|c| profile.row_count as u64 * Self::col_est_bytes(c.kind))
+            .sum();
+        let memory_text = fmt_bytes(mem_bytes);
         div()
             .w_full()
             .flex()
@@ -268,8 +236,18 @@ impl super::InsightWorkspacePanel {
                 &theme,
                 "内存估算",
                 memory_text,
-                "分析引擎当前占用",
+                format!("{} 行 × 列类型近似", fmt_rows(profile.row_count)),
             ))
+    }
+
+    /// 列类型每值估算字节（「内存估算」卡用）：Numeric / DateTime / Unknown 按 8B，
+    /// Boolean 按 1B，Text 按 64B/值（画像无平均长度，取常见 VARCHAR 量级并注明口径）。
+    fn col_est_bytes(kind: ColumnKind) -> u64 {
+        match kind {
+            ColumnKind::Numeric | ColumnKind::DateTime | ColumnKind::Unknown => 8,
+            ColumnKind::Boolean => 1,
+            ColumnKind::Text => 64,
+        }
     }
 
     /// 类型分布横向条（原型 .type-bar + 图例）：按类型族计数铺色条。
@@ -493,5 +471,19 @@ impl super::InsightWorkspacePanel {
                     anchor.scroll_to(window, app);
                 }
             })
+    }
+}
+
+/// 字节数人性化（「内存估算」卡用）：< 1 KiB → B；< 1 MiB → KB 取整；否则 MB 一位小数。
+fn fmt_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    let b = bytes as f64;
+    if b < KB {
+        format!("{bytes} B")
+    } else if b < MB {
+        format!("{:.0} KB", b / KB)
+    } else {
+        format!("{:.1} MB", b / MB)
     }
 }

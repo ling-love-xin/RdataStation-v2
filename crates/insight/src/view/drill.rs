@@ -26,8 +26,8 @@ use gpui_kit::*;
 use super::{empty_state, error_block, grade_color, kind_badge, muted_line, skeleton, sample_loading};
 use crate::insight_view::InsightView;
 use crate::model::{
-    ColumnCheckState, ColumnKind, ColumnProfileView, InsightPanelState, InsightTarget,
-    MultiColumnView, TableProfileView,
+    ColumnKind, ColumnProfileView, InsightPanelState, InsightTarget, MultiColumnView, PanelTab,
+    TableProfileView,
 };
 use crate::schema_view::SchemaReportView;
 use crate::ui;
@@ -106,7 +106,14 @@ impl InsightView {
                 }
             }
         }
-        out.push(agg_placeholder(theme).into_any_element());
+        // 聚合能力边界只在**多列语境**可见（原型 agg-placeholder 即多列选中语境，
+        // 见 insight-eda-prototype.html:527）：目标为多列、或停留在多列 Tab 时渲染；
+        // 表 / 列 / schema 目标的正常画像不渲染死区占位（2026-10-31 冗余收敛）。
+        let multi_context = matches!(target, InsightTarget::MultiColumn { .. })
+            || matches!(self.tab, PanelTab::MultiColumn);
+        if multi_context {
+            out.push(agg_placeholder(theme).into_any_element());
+        }
         out
     }
 
@@ -268,10 +275,13 @@ fn drill_table_summary(
         )
 }
 
-/// 表画像卡（原型 `#dzTable` `tbl-row`）：探索价值排序前 8 列 + 缺失率 + 评估摘要。
+/// 表画像卡（原型 `#dzTable` `tbl-row`）：探索价值排序前 8 列 + 缺失率 + 卡头计数。
 ///
 /// 缺失率按原型标色：>20% danger（需关注）/ >5% warning / 其余 muted；
 /// 前 8 列是窄面板可读上限，超出的以一行说明引向中间页完整清单。
+/// 「值得关注 N 列」只在卡头计数一次（2026-10-31 冗余收敛：卡底重复行
+/// 「值得关注 N 列 · 缺失率>20%」「检查器未命中 N 条」删除——命中事实
+/// 已由摘要卡命中环的 hint 承担，列级未命中清单归中间页值得关注区）。
 fn drill_table_columns(profile: &TableProfileView, theme: &Theme, inline_icon: Pixels) -> Div {
     let colors = theme.colors;
     let shown = profile.columns.iter().take(8);
@@ -280,15 +290,6 @@ fn drill_table_columns(profile: &TableProfileView, theme: &Theme, inline_icon: P
         .iter()
         .filter(|c| c.null_rate.map(|r| r > 0.2).unwrap_or(false))
         .count();
-    let quality = profile.quality.as_ref();
-    let miss_count = quality
-        .map(|q| {
-            q.checker
-                .iter()
-                .filter(|c| c.state == ColumnCheckState::Miss)
-                .count()
-        })
-        .unwrap_or(0);
 
     summary_card(theme)
         .child(
@@ -358,26 +359,6 @@ fn drill_table_columns(profile: &TableProfileView, theme: &Theme, inline_icon: P
                 theme,
             ))
         })
-        .child(
-            div()
-                .w_full()
-                .v_flex()
-                .gap_0p5()
-                .child(
-                    muted_line(
-                        &format!(
-                            "值得关注 {high_null} 列 · 缺失率 >20%",
-                        ),
-                        theme,
-                    ),
-                )
-                .when(miss_count > 0, |this| {
-                    this.child(muted_line(
-                        &format!("检查器未命中 {miss_count} 条规则"),
-                        theme,
-                    ))
-                }),
-        )
 }
 
 /// 列目标摘要卡（用户拍板：列 → 列摘要卡）：类型 + 总行数 / 空值数 / 空值率 / 样本。

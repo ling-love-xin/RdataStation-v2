@@ -8,6 +8,12 @@
 //! （2026-10-30 用户拍板按原型，推翻此前「设置最右」的临时布局）。
 //! 目标名 / 类型徽标 / 取样口径等不再由独立目标头承担：选中目标的信息并入
 //! 下钻区 `drill.rs` 的 dz-title 与摘要卡（右栏已无 Tab 条与目标头）。
+//!
+//! **双栏动作分工**（2026-10-31 冗余收敛，保留双入口并文档化）：右栏 = 常驻
+//! 控制台（⟳ 重算画像 / ⧉ 全量统计，对齐原型 tbRecalc/tbFull——右栏独立于
+//! 中央页可用，且列目标的全量入口在右栏）；中央 = 画像工作台（toolbar「刷新」
+//! 重算当前画像、scope 切换统一取样↔全量，见 `workspace/toolbar.rs`）。
+//! 两栏触发的是同一 `InsightView` 取数链，无状态分裂。
 
 use gpui_kit::base::{Disableable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};

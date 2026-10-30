@@ -1,11 +1,13 @@
-//! 中间工作页工具栏（刷新 / 取样 / 导出 + 目标切换 + 内存占用读数）。
+//! 中间工作页工具栏（刷新 / 取样↔全量 / 导出 + 目标切换 + 内存占用读数）。
 
 use super::*;
+use crate::insight_view::InsightScope;
 
 impl super::InsightWorkspacePanel {
-    /// 工具栏（D66 对齐原型）：刷新 / 取样 / 导出 + 分隔线 + 目标切换菜单 + 当前目标 chip。
+    /// 工具栏（D66 对齐原型）：刷新 / 取样↔全量切换 / 导出 + 分隔线 + 目标切换菜单 + 当前目标 chip。
     ///
-    /// - 刷新 = 重算当前画像；取样 = 重新取样并画像（源目标重走「取样 → 画像」两段）。
+    /// - 刷新 = 重算当前画像；取样↔全量切换 = 源表/源列目标的口径切换（2026-10-31
+    ///   冗余收敛：合并原「取样」独立按钮与 report-head scope 按钮，列画像版式也能切换）。
     /// - 导出报告尚无宿主写文件通道（列 / 结构导出各有事件，表画像导出未接）——
     ///   disabled + tooltip 标注，不做点了没反应的按钮。
     /// - 目标切换用语义 `Button::dropdown_menu`：方向键 / Escape / 焦点恢复由组件负责。
@@ -39,17 +41,40 @@ impl super::InsightWorkspacePanel {
                     entity.update(app, |panel, cx| panel.refresh(cx));
                 }
             });
-        let sample_btn = Button::new("insight-ws-sample")
+        // 取样↔全量切换（2026-10-31 冗余收敛：合并「独立取样按钮」与 report-head
+        // scope 切换为一处）。源表/源列目标可用——列画像版式无 report-head，
+        // 切换入口必须留在全局工具栏；结果集/CSV 目标天然全量，置灰。
+        let scope = self.view.read(cx).scope();
+        let is_full = scope == InsightScope::Full;
+        let can_switch = matches!(
+            self.view.read(cx).target(),
+            Some(InsightTarget::SourceTable { .. }) | Some(InsightTarget::SourceColumn { .. })
+        );
+        let scope_btn = Button::new("insight-ws-scope-toggle")
             .ghost()
-            .label("取样")
-            .tooltip("重新从源库取样并画像（源目标）")
+            .icon(if is_full {
+                CatalogIcon::Shrink
+            } else {
+                CatalogIcon::Expand
+            })
+            .label(if is_full { "取样统计" } else { "全量统计" })
+            .tooltip(if is_full {
+                "切回取样口径（500 行）"
+            } else {
+                "大表默认取样 500 行；全量需手动触发（可能较慢）"
+            })
+            .disabled(!can_switch)
             .on_click({
                 let entity = entity.clone();
                 move |_, _, app| {
-                    // 与 scope 按钮同口径：切回取样口径并重新画像。
-                    // 对临时表/结果集目标静默忽略（数据已是既定内容）。
                     entity.update(app, |panel, cx| {
-                        panel.view.update(cx, |view, cx| view.request_sample(cx));
+                        panel.view.update(cx, |view, cx| {
+                            if is_full {
+                                view.request_sample(cx);
+                            } else {
+                                view.request_full(cx);
+                            }
+                        });
                     });
                 }
             });
@@ -100,7 +125,7 @@ impl super::InsightWorkspacePanel {
             .child(
                 Toolbar::new("insight-ws-toolbar")
                     .xsmall()
-                    .children([refresh_btn, sample_btn, export_btn]),
+                    .children([refresh_btn, scope_btn, export_btn]),
             )
             .child(divider(theme))
             // 目标切换下拉：已进入洞察的目标 → 切换画像；末项 → 打开多表对比。
