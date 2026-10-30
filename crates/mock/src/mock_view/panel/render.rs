@@ -950,9 +950,6 @@ impl MockPanel {
     /// 右 Dock 的面板主体：表清单 + 集合动作 + 出口 + 出口反馈（D38）。
     fn render_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let muted = cx.theme().colors.muted_foreground;
-        let success = cx.theme().colors.success;
-        let danger = cx.theme().colors.danger;
-        let info = cx.theme().colors.info;
 
         let running = self.is_running();
         let generating = self.is_generating();
@@ -1097,15 +1094,82 @@ impl MockPanel {
         // 集合任务的进度与取消（单表任务的在中央表头，见 D38）
         let job_row = self.render_job_row(JobRowScope::Collection, cx);
 
-        // 出口：落库 + 追加 + 草稿箱 + 另存为（任务进行中全部禁用：一次只能跑一个）
-        //
-        // 不再有「查看详情」按钮：清单点一行就是入口（D38），少一个按钮就少一份要同步的文案。
-        // 没有结果时也禁用（出口是「把结果落地」，没结果就没什么可落）：点了报错不如直接不可点。
-        let has_result = self.has_result();
+        // 单表出口（落库 / 追加 / 草稿箱 / 另存为）已随表上移中央详情 tab（见 `render_sinks`）；
+        // 这里只保留集合级动作、进度与边界说明。
+        let read_only = self.host.read_only();
+
+        // 边界状态一行说清（未打开项目 / 只读 / 常驻 M7）：原来三行常驻压缩成一条，
+        // 只有当前生效的那条露面，完整句进 HoverCard（280px 面板里三行长说明 = 半屏清单）
+        let project_open = self.host.project_root().is_some();
+        let status_line = {
+            let (main, detail) = if !project_open {
+                (
+                    "未打开项目：落库 / 追加 / 草稿箱不可用",
+                    "未打开项目：落库 / 追加 / 草稿箱不可用（纯生成、预览与另存为不受影响）",
+                )
+            } else if read_only {
+                (
+                    "只读模式：不允许落库与写文件",
+                    "只读模式：不允许落库与写文件（仍可生成预览）",
+                )
+            } else {
+                (
+                    "数据只写入项目分析库与文件，不回传源库（M7）",
+                    "数据只写入项目分析库（{项目}/.RSmeta/analytics.duckdb）与文件，不回传源库（M7）",
+                )
+            };
+            HoverCard::new("mock-sink-status-hint")
+                .trigger(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .w_full()
+                        .child(
+                            Icon::new(IconName::Info)
+                                .size(rems(ui::STATUS_ICON_SIZE))
+                                .text_color(muted),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .text_color(muted)
+                                .text_ellipsis()
+                                .child(main),
+                        ),
+                )
+                .content(move |_, _, _cx| div().p_2().text_xs().max_w(px(260.)).child(detail))
+        };
+
+        div()
+            .v_flex()
+            .gap_2()
+            .w_full()
+            .p_2()
+            .child(table_list)
+            .child(pending_row)
+            .child(batch_row)
+            // ② 集合级动作与它的进度：单表任务的在中央表头（D38）
+            .child(scenario_actions)
+            .child(job_row)
+            // ③ 单表出口已随表上移中央 tab（生成 → 落地闭环，见 §9）；这里只留集合级与边界说明
+            .child(status_line)
+    }
+
+    /// 单表出口（落库 / 追加 / 草稿箱 / 另存为 + 就地反馈）：作用于「当前 tab 那张表」，
+    /// 随表上移中央详情 tab（生成 → 落地闭环，2026-10-31）；右面板只留集合级出口。
+    /// `window` 仅透传给「另存为」的系统保存对话框（下拉项闭包自取，无需本函数直接使用）。
+    pub(crate) fn render_sinks(&self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let muted = cx.theme().colors.muted_foreground;
+        let success = cx.theme().colors.success;
+        let danger = cx.theme().colors.danger;
+        let fg = cx.theme().colors.foreground;
+
+        let running = self.is_running();
         // 项目级出口（落库 / 追加 / 草稿箱）都要项目根：没打开项目时直接不可点，
         // 而不是点了才由任务层拒绝（「点了报错不如直接不可点」，与生成前禁用同一口径）。
-        // `project_root()` 只读内存里的会话，不是 I/O（`read_only()` 同理）。
-        let project_open = self.host.project_root().is_some();
         let sinks_ready = self.sinks_ready();
         let persist = {
             let entity = cx.entity();
@@ -1176,7 +1240,7 @@ impl MockPanel {
                 .label("另存为")
                 .w_full()
                 .dropdown_caret(true)
-                .disabled(running || !has_result)
+                .disabled(running || !self.has_result())
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
                     for (label, format) in FILE_FORMATS {
@@ -1213,26 +1277,14 @@ impl MockPanel {
                     menu
                 })
         };
-
-        // 当前结果表（出口作用于它）；多张时上面给一个「当前表」选择器
         let outcome = self.outcome.clone();
         let error = self.error.clone();
         let landed = self.landed.clone();
-        let read_only = self.host.read_only();
-        let fg = cx.theme().colors.foreground;
 
         div()
             .v_flex()
             .gap_2()
             .w_full()
-            .p_2()
-            .child(table_list)
-            .child(pending_row)
-            .child(batch_row)
-            // ② 集合级动作与它的进度：单表任务的在中央表头（D38）
-            .child(scenario_actions)
-            .child(job_row)
-            // ③ 出口：作用于当前 tab 那张表
             .child(
                 div()
                     .text_xs()
@@ -1252,7 +1304,7 @@ impl MockPanel {
                     .child(Separator::horizontal())
                     .child(export),
             )
-            // ④ 出口反馈就地给（成功 / 失败 / 落库目标 / 当前状态）
+            // 出口反馈就地给（成功 / 失败 / 落库目标 / 当前状态）
             .children(outcome.map(|text| div().text_xs().text_color(success).child(text)))
             .children(error.map(|err| div().text_xs().text_color(danger).child(err)))
             .children(landed.map(|table| {
@@ -1260,27 +1312,6 @@ impl MockPanel {
                     .text_xs()
                     .text_color(fg)
                     .child(format!("落库目标：{table}"))
-            }))
-            // 未打开项目 / 只读：这两个状态决定出口能不能用，各一句话说清（也是禁用按钮的理由）
-            .children((!project_open).then(|| {
-                div()
-                    .text_xs()
-                    .text_color(info)
-                    .child("未打开项目：落库 / 追加 / 草稿箱不可用（纯生成、预览与另存为不受影响）")
-            }))
-            .children(read_only.then(|| {
-                div()
-                    .text_xs()
-                    .text_color(info)
-                    .child("只读模式：不允许落库与写文件（仍可生成预览）")
-            }))
-            // 常驻的边界一句话（M7）。完整指引（要进全局分析库的两条路）不常驻：
-            // 它在**真正需要时**由被拒的出口给出（`services::mock_generator` 的未打开项目 / 只读原因），
-            // 而面板只有 280px 宽，天天摆着三行长说明就是天天占掉半屏清单
-            .child(div().text_xs().text_color(muted).child(if project_open {
-                "数据只写入项目分析库（{项目}/.RSmeta/analytics.duckdb）与文件，不回传源库（M7）"
-            } else {
-                "数据只写入项目分析库与文件，不回传源库（M7）"
             }))
     }
 

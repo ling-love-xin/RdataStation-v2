@@ -20,6 +20,8 @@ pub struct MockPanel {
     pub(crate) preview_cache: Option<PreviewCache>,
     /// 预览要显示多少行（面板上的「行数」档；生成时只取 [`PREVIEW_ROWS`] 行，要更多得重查）
     preview_limit: usize,
+    /// 中央详情 tab 三段分栏里**列区**的初始高度（rem；拖拽后由 `on_resize` 回写，跨 tab / 跨窗口沿用）
+    pub(crate) detail_columns_rem: f32,
     /// 字段区的列搜索框（懒创建：`InputState` 要 window；搜索词就存在它里，不另存一份）
     column_filter: Option<Entity<InputState>>,
     /// 搜索词变化时重画字段区的订阅（必须持有：丢了就自动退订）
@@ -286,6 +288,7 @@ impl MockPanel {
             results: Vec::new(),
             preview_cache: None,
             preview_limit: PREVIEW_ROWS,
+            detail_columns_rem: 15.0,
             column_filter: None,
             column_filter_sub: None,
             current: 0,
