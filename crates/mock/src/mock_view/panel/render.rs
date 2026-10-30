@@ -882,23 +882,64 @@ impl MockPanel {
                 )
                 .child(render_status_cell(icon, &status, color)),
         )
-        // 状态点分两套口径（生成的 / 落库的），一句话说清各是哪个
+        // 状态点分两套口径（生成的 / 落库的）：图例不常驻——280px 面板里 6 行解释
+        // 会把出口区挤出可视区（2026-10-30 布局调整）；收到单行「状态图例 ⓘ」，
+        // 悬停展开 6 项说明（与清单行右端状态点同一套 `render_status_cell`，不另写旧字形）
         .child(
             div()
-                .flex_wrap()
-                .gap_2()
+                .h_flex()
+                .items_center()
+                .gap_1()
                 .text_xs()
                 .text_color(muted)
-                // 图例与清单行右端状态点同一套 `render_status_cell`（IconName 图标 + 语义色），
-                // 不另写旧字形（此前的 ○◐●✓⚠ 与 M3 图标化改造脱节）
-                .children([
-                    render_status_cell(None, "未生成", muted),
-                    render_status_cell(Some(IconName::RefreshCw), "生成中", primary),
-                    render_status_cell(Some(IconName::Check), "已生成", success),
-                    render_status_cell(Some(IconName::CircleCheck), "已落库", success),
-                    render_status_cell(Some(IconName::Info), "引用表未落库（多表）", warning),
-                    render_status_cell(Some(IconName::CircleX), "生成失败", danger),
-                ]),
+                .child("状态图例")
+                .child(
+                    HoverCard::new("mock-status-legend")
+                        .trigger(
+                            Button::new("mock-status-legend-trigger")
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Info)
+                                .tooltip("悬停查看状态含义"),
+                        )
+                        .content(|_, _, cx| {
+                            let theme = cx.theme();
+                            div()
+                                .v_flex()
+                                .gap_1()
+                                .p_2()
+                                .child(render_status_cell(
+                                    None,
+                                    "未生成",
+                                    theme.colors.muted_foreground,
+                                ))
+                                .child(render_status_cell(
+                                    Some(IconName::RefreshCw),
+                                    "生成中",
+                                    theme.colors.primary,
+                                ))
+                                .child(render_status_cell(
+                                    Some(IconName::Check),
+                                    "已生成",
+                                    theme.colors.success,
+                                ))
+                                .child(render_status_cell(
+                                    Some(IconName::CircleCheck),
+                                    "已落库",
+                                    theme.colors.success,
+                                ))
+                                .child(render_status_cell(
+                                    Some(IconName::Info),
+                                    "引用表未落库（多表）",
+                                    theme.colors.warning,
+                                ))
+                                .child(render_status_cell(
+                                    Some(IconName::CircleX),
+                                    "生成失败",
+                                    theme.colors.danger,
+                                ))
+                        }),
+                ),
         )
     }
 
