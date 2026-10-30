@@ -52,9 +52,8 @@ pub fn write_back(shared: &Shared, editor: &EditorShared, cx: &mut App) {
     };
     for (relative, connection) in store.draft_targets(attempts) {
         if let Err(error) = runtime.block_on(store.update_file_meta(&relative, connection)) {
-            *shared.notice.borrow_mut() =
-                Some(format!("草稿元数据写入失败（{relative}）: {error}"));
-            shared.notify_host(cx);
+            // 治理（2026-10-30）：写失败进 error 日志（say_error 内含 notice + notify_host）。
+            shared.say_error(format!("草稿元数据写入失败（{relative}）: {error}"), cx);
         }
     }
 }

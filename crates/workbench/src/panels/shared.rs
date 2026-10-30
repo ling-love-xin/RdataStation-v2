@@ -678,8 +678,24 @@ impl Shared {
     ///
     /// 动作结果统一从这里说出口（资产库 / 草稿箱 / 洞察的宿主侧动作）——
     /// 各处各写一次 `notice + notify_host` 时，「写了提示但忘了重绘」是最常见的漏。
+    ///
+    /// 治理（2026-10-30）：回执统一记 info 日志——UI 可见结果必须可追溯，
+    /// 不再有「页面提示了、日志里查不到」的通道。
     pub fn say(&self, message: impl Into<String>, cx: &mut App) {
-        *self.notice.borrow_mut() = Some(message.into());
+        let message = message.into();
+        tracing::info!(notice = %message, "状态栏回执");
+        *self.notice.borrow_mut() = Some(message);
+        self.notify_host(cx);
+    }
+
+    /// 状态栏错误回执：写入 `notice`、请求宿主重绘，并记 error 级日志。
+    ///
+    /// 与 [`Self::say`] 的区别只在日志级别——错误类消息走这里，让错误
+    /// 在状态栏通道上同样可追溯（配合 say 的 info 回执，双通道齐备）。
+    pub fn say_error(&self, message: impl Into<String>, cx: &mut App) {
+        let message = message.into();
+        tracing::error!(notice = %message, "状态栏错误回执");
+        *self.notice.borrow_mut() = Some(message);
         self.notify_host(cx);
     }
 
@@ -931,7 +947,8 @@ impl ConnectionDialogHost for Shared {
     fn apply_saved_connections(&self, items: Vec<ConnectionItem>, notice: String, cx: &mut App) {
         *self.connections.borrow_mut() = items;
         self.refresh_mock_connections(cx);
-        *self.notice.borrow_mut() = Some(notice);
+        // 治理（2026-10-30）：连接清册提示统一走 say（写 notice + notify_host + info 日志）。
+        self.say(notice, cx);
     }
 }
 

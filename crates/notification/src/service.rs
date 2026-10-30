@@ -149,6 +149,15 @@ pub fn notify(
     let title = title.into();
     let msg = message.map(|m| m.into());
 
+    // 治理（2026-10-30）：UI 可见通知必须进日志——错误/警告按级别记录，
+    // 信息/成功只留 debug（避免成功通知刷屏）。此前通知自身不打日志，
+    // 造成「页面有报错但日志没有」。
+    match type_ {
+        NotificationType::Error => tracing::error!(title = %title, message = ?msg, "UI 错误通知"),
+        NotificationType::Warning => tracing::warn!(title = %title, message = ?msg, "UI 警告通知"),
+        _ => tracing::debug!(title = %title, message = ?msg, "UI 通知"),
+    }
+
     let config = read_notify_config(cx);
 
     // 先记录到历史（不管勿扰模式，都进历史）

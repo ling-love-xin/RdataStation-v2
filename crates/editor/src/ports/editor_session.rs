@@ -27,9 +27,14 @@ use engine::persistence::workbench_context_store::EditorContext;
 pub fn attach(shared: &EditorShared) {
     match WorkbenchSessionStore::open() {
         Some(store) => shared.attach_session_store(Rc::new(store)),
-        None => eprintln!(
-            "[editor] 会话存储未接入（全局库未就绪）：光标与模式不会跨重启保留"
-        ),
+        None => {
+            // 治理（2026-10-30）：启动装配边界双写——日志系统此时可能已就绪，
+            // tracing 承接；未就绪时 eprintln 兜底（原行为不变）。
+            tracing::warn!("会话存储未接入（全局库未就绪）：光标与模式不会跨重启保留");
+            eprintln!(
+                "[editor] 会话存储未接入（全局库未就绪）：光标与模式不会跨重启保留"
+            );
+        }
     }
 }
 

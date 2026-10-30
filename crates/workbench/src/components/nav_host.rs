@@ -83,9 +83,8 @@ impl NavHost for WorkbenchNavHost {
     }
 
     fn notice(&self, message: String, cx: &mut App) {
-        *self.shared.notice.borrow_mut() = Some(message);
-        // 状态栏由宿主渲染，子视图 notify 不会重绘它，故这里显式请求宿主重绘。
-        self.shared.notify_host(cx);
+        // 治理（2026-10-30）：导航状态栏回执统一走 say（写 notice + notify_host + info 日志）。
+        self.shared.say(message, cx);
     }
 
     fn notify(&self, kind: database::nav_host::HostNotify, title: String, message: Option<String>, cx: &mut App) {
@@ -398,7 +397,7 @@ impl NavHost for WorkbenchNavHost {
             self.shared.selected.set(Some(0));
         }
         if let Some(n) = notice {
-            *self.shared.notice.borrow_mut() = Some(n);
+            self.shared.say(n, cx);
         }
         // 连接清册换了：Mock 面板的「导入结构」候选来源随之失效（不刷的话菜单里
         // 会列着刚删掉的连接 / 缺刚建的连接）。只刷这一份，不碰要开分析库的既有表清单。

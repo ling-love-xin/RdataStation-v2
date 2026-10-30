@@ -220,8 +220,9 @@ impl EditorHostPanel {
             return;
         }
         if let Err(error) = self.shared.save_session(&session) {
-            // 事件路径上不弹窗：落到 stderr 由日志承接，不静默吞掉
-            eprintln!("[editor] 会话保存失败（{}）：{error}", session.id);
+            // 事件路径上不弹窗：落到日志承接，不静默吞掉
+            // 治理（2026-10-30）：tracing::error! 承接（此前 eprintln 只走 stderr）。
+            tracing::error!(session = %session.id, error = %error, "会话保存失败");
         }
     }
 

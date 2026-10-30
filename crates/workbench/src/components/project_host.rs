@@ -226,7 +226,10 @@ fn refresh_after_open(shared: &Shared, cx: &mut App) {
     let (conns, notice) =
         crate::services::workspace_loader::load_connections_for_scope(root.as_deref());
     *shared.connections.borrow_mut() = conns;
-    *shared.notice.borrow_mut() = notice;
+    if let Some(n) = notice {
+        // 治理（2026-10-30）：连接清册提示统一走 say（写 notice + notify_host + info 日志）。
+        shared.say(n, cx);
+    }
     let has = !shared.connections.borrow().is_empty();
     shared.selected.set(if has { Some(0) } else { None });
     shared.invalidate_nav_cache();

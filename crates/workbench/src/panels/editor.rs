@@ -405,11 +405,13 @@ impl Render for EditorPanel {
                                                     );
                                                 *shared.connections.borrow_mut() = items;
                                                 shared.selected.set(None);
-                                                *shared.notice.borrow_mut() =
-                                                    Some(format!("连接「{}」已删除", selected_name));
+                                                shared.say(
+                                                    format!("连接「{}」已删除", selected_name),
+                                                    app,
+                                                );
                                             }
                                             Err(e) => {
-                                                *shared.notice.borrow_mut() = Some(format!("删除失败: {}", e));
+                                                shared.say_error(format!("删除失败: {}", e), app);
                                             }
                                         }
                                         entity.update(app, |_, cx| cx.notify());

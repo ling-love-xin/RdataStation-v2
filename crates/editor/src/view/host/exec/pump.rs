@@ -397,7 +397,10 @@ impl EditorHostPanel {
             // 执行失败 → 宿主弹全局错误通知（Error 类型，不自动消失）。
             // 用循环内提前克隆的副本，避免变量已被 if let 移动（2026-10-28 修正：
             // 原第二处 if 把引用放到了本块之外 → E0425 作用域不可见）。
+            // 治理（2026-10-30）：事件落 error 日志——通知与日志双写，
+            // 页面看到「SQL 执行失败」时日志可查（executor 层已埋，此处补宿主事件级）。
             if let Some(reason) = exec_failure_notice {
+                tracing::error!(reason = %reason, "SQL 执行失败（宿主事件）");
                 cx.emit(EditorHostEvent::ExecutionFailed(reason));
             }
         }

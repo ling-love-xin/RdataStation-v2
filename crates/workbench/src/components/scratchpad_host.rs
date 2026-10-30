@@ -35,9 +35,8 @@ impl ScratchpadHost for WorkbenchScratchpadHost {
     }
 
     fn notice(&self, message: String, cx: &mut App) {
-        *self.shared.notice.borrow_mut() = Some(message);
-        // 状态栏由宿主渲染，子视图 notify 不会重绘它，故这里显式请求宿主重绘。
-        self.shared.notify_host(cx);
+        // 治理（2026-10-30）：草稿箱状态栏回执统一走 say（写 notice + notify_host + info 日志）。
+        self.shared.say(message, cx);
     }
 
     fn notify_host(&self, cx: &mut App) {

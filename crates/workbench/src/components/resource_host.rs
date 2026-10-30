@@ -27,8 +27,8 @@ struct WorkbenchResourceBackend {
 
 impl ResourceHostBackend for WorkbenchResourceBackend {
     fn notice(&self, message: String, cx: &mut App) {
-        *self.shared.notice.borrow_mut() = Some(message);
-        self.shared.notify_host(cx);
+        // 治理（2026-10-30）：资产库状态栏回执统一走 say（写 notice + notify_host + info 日志）。
+        self.shared.say(message, cx);
     }
 
     fn project_root(&self) -> Option<PathBuf> {

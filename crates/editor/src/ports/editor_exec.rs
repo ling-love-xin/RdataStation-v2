@@ -1375,7 +1375,12 @@ fn explain_federation_error(session: &fed_session::FederatedSession, error: Stri
 pub fn attach(shared: &EditorShared, fed: Arc<dyn FederatedSourcePort>) {
     match EngineQueryRunner::new(fed) {
         Some(runner) => shared.attach_runner(Arc::new(runner)),
-        None => eprintln!("[editor] 执行器未能建立 tokio runtime，编辑器将以“未接入执行”运行"),
+        None => {
+            // 治理（2026-10-30）：启动装配边界双写——日志系统此时可能已就绪，
+            // tracing 承接；未就绪时 eprintln 兜底（原行为不变）。
+            tracing::warn!("执行器未能建立 tokio runtime，编辑器将以“未接入执行”运行");
+            eprintln!("[editor] 执行器未能建立 tokio runtime，编辑器将以“未接入执行”运行");
+        }
     }
 }
 

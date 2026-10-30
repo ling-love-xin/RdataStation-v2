@@ -124,7 +124,8 @@ pub fn open_tag_assign_dialog(
                                 .collect();
                             let root_ref = root.as_deref();
                             if let Err(e) = database::nav_store::set_tags(&conn_id, root_ref, &final_tags) {
-                                eprintln!("保存标签失败：{e}");
+                                // 治理（2026-10-30）：标签保存失败进日志（此前只走 stderr，日志三层查不到）。
+                                tracing::error!(error = %e, "保存标签失败");
                             }
                             window.close_sheet(app);
                         }

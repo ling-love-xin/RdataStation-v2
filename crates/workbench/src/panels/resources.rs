@@ -202,31 +202,26 @@ impl SidebarPanel {
         cx: &mut Context<Self>,
     ) {
         let Some(root) = self.shared.project_root() else {
-            *self.shared.notice.borrow_mut() =
-                Some("资产库：还没有打开项目，无法继续".to_string());
-            self.shared.notify_host(cx);
+            self.shared.say_error("资产库：还没有打开项目，无法继续".to_string(), cx);
             return;
         };
         match context {
             ConflictContext::Promote(req) => match choice {
                 ConflictChoice::Overwrite => {
                     resource_jobs::enqueue_promote(root, req.clone(), true);
-                    *self.shared.notice.borrow_mut() =
-                        Some("资产库：正在覆盖升级到全局…".to_string());
+                    self.shared.say("资产库：正在覆盖升级到全局…".to_string(), cx);
                 }
                 ConflictChoice::Rename(name) => {
                     let mut req = req.clone();
                     req.name = name;
                     resource_jobs::enqueue_promote(root, req, false);
-                    *self.shared.notice.borrow_mut() =
-                        Some("资产库：正在升级到全局…".to_string());
+                    self.shared.say("资产库：正在升级到全局…".to_string(), cx);
                 }
             },
             ConflictContext::Distribute { global_name, target } => match choice {
                 ConflictChoice::Overwrite => {
                     resource_jobs::enqueue_distribute(root, global_name.clone(), target.clone(), true);
-                    *self.shared.notice.borrow_mut() =
-                        Some("资产库：正在覆盖分发到本项目…".to_string());
+                    self.shared.say("资产库：正在覆盖分发到本项目…".to_string(), cx);
                 }
                 ConflictChoice::Rename(name) => {
                     resource_jobs::enqueue_distribute(
@@ -235,8 +230,7 @@ impl SidebarPanel {
                         Some(name),
                         false,
                     );
-                    *self.shared.notice.borrow_mut() =
-                        Some("资产库：正在从全局分发…".to_string());
+                    self.shared.say("资产库：正在从全局分发…".to_string(), cx);
                 }
             },
         }
@@ -253,8 +247,8 @@ impl SidebarPanel {
                 session.state.set_note(Some(message.clone()));
             }
         }
-        *self.shared.notice.borrow_mut() = Some(format!("资产库：{message}"));
-        self.shared.notify_host(cx);
+        // 治理（2026-10-30）：回执统一走 say（写 notice + notify_host + info 日志）。
+        self.shared.say(format!("资产库：{message}"), cx);
         cx.notify();
     }
 
@@ -267,8 +261,8 @@ impl SidebarPanel {
                 session.state.set_note(Some(message.clone()));
             }
         }
-        *self.shared.notice.borrow_mut() = Some(format!("资产库：{message}"));
-        self.shared.notify_host(cx);
+        // 治理（2026-10-30）：回执统一走 say（写 notice + notify_host + info 日志）。
+        self.shared.say(format!("资产库：{message}"), cx);
         cx.notify();
     }
 
@@ -281,8 +275,8 @@ impl SidebarPanel {
                 session.state.set_note(Some(message.clone()));
             }
         }
-        *self.shared.notice.borrow_mut() = Some(format!("资产库：{message}"));
-        self.shared.notify_host(cx);
+        // 治理（2026-10-30）：回执统一走 say（写 notice + notify_host + info 日志）。
+        self.shared.say(format!("资产库：{message}"), cx);
         cx.notify();
     }
 
@@ -295,8 +289,8 @@ impl SidebarPanel {
                 session.state.set_note(Some(message.clone()));
             }
         }
-        *self.shared.notice.borrow_mut() = Some(format!("资产库：{message}"));
-        self.shared.notify_host(cx);
+        // 治理（2026-10-30）：回执统一走 say（写 notice + notify_host + info 日志）。
+        self.shared.say(format!("资产库：{message}"), cx);
         cx.notify();
     }
 
@@ -453,9 +447,8 @@ impl SidebarPanel {
             }
             Err(err) => {
                 // 对比失败不是"动作失败"，不该走版本动作回执；用面板通知条告知。
-                *self.shared.notice.borrow_mut() =
-                    Some(format!("资产库：无法对比版本：{err}"));
-                self.shared.notify_host(cx);
+                // 治理（2026-10-30）：错误级回执走 say_error（写 notice + notify_host + error 日志）。
+                self.shared.say_error(format!("资产库：无法对比版本：{err}"), cx);
                 cx.notify();
             }
         }
@@ -585,12 +578,14 @@ impl SidebarPanel {
         // 开三选对话框（覆盖 / 改名 / 取消；§13.3、§13.6）。
         if let resource_jobs::OpOutcome::Conflict { context, name } = &outcome {
             self.shared.conflict_dialog.borrow_mut().pending = Some(context.clone());
-            *self.shared.notice.borrow_mut() =
-                Some(format!("资产库：「{name}」同名冲突，请选择处理方式"));
-            self.shared.notify_host(cx);
+            self.shared.say(
+                format!("资产库：「{name}」同名冲突，请选择处理方式"),
+                cx,
+            );
             return;
         }
 
+        let is_failure = matches!(&outcome, resource_jobs::OpOutcome::Failed { .. });
         let message = match outcome {
             resource_jobs::OpOutcome::Archived {
                 resource_id,
@@ -678,8 +673,13 @@ impl SidebarPanel {
                 unreachable!("冲突回执已在前面转对话框处理")
             }
         };
-        *self.shared.notice.borrow_mut() = Some(message);
-        self.shared.notify_host(cx);
+        // 治理（2026-10-30）：动作结果按成败分级——失败走 error 级，其余 info。
+        // 统一入口都写 notice + notify_host + 日志，不再有「有结果无日志」。
+        if is_failure {
+            self.shared.say_error(message, cx);
+        } else {
+            self.shared.say(message, cx);
+        }
     }
 
     /// 转发渲染：视图（含滚动与空态）都在 crate 内，本面板不做二次包装。

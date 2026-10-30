@@ -197,8 +197,7 @@ pub fn open_cache_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
                                     let cid = e.conn_id.clone();
                                     move |_, _, app| {
                                         if let Err(e) = delete_cache(&shared, &cid) {
-                                            *shared.notice.borrow_mut() =
-                                                Some(format!("清理失败：{e}"));
+                                            shared.say_error(format!("清理失败：{e}"), app);
                                         }
                                         *entries.borrow_mut() = collect_entries(&shared);
                                         // 宿主重绘：对话框层由宿主 render 重建，才能看到新数值。
@@ -241,12 +240,10 @@ pub fn open_cache_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
                             move |_, _, app| {
                                 // 先删全局孤儿文件、再清索引行（顺序避免索引先清后文件无法归类）。
                                 if let Err(e) = cleanup_orphan_meta_files(None) {
-                                    *shared.notice.borrow_mut() =
-                                        Some(format!("孤儿文件清理失败：{e}"));
+                                    shared.say_error(format!("孤儿文件清理失败：{e}"), app);
                                 }
                                 if let Err(e) = prune_cache_index_orphans() {
-                                    *shared.notice.borrow_mut() =
-                                        Some(format!("孤儿索引清理失败：{e}"));
+                                    shared.say_error(format!("孤儿索引清理失败：{e}"), app);
                                 }
                                 *orphans.borrow_mut() = collect_orphans();
                                 shared.notify_host(app);
@@ -331,8 +328,10 @@ pub fn open_cache_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
                                         }
                                     }
                                     if failed > 0 {
-                                        *shared.notice.borrow_mut() =
-                                            Some(format!("{failed} 项缓存被占用，未能清理"));
+                                        shared.say_error(
+                                            format!("{failed} 项缓存被占用，未能清理"),
+                                            app,
+                                        );
                                     }
                                     *entries.borrow_mut() = collect_entries(&shared);
                                     shared.notify_host(app);

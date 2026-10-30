@@ -838,7 +838,7 @@ impl WorkbenchView {
         };
         tracing::info!(path = %path.display(), "【探针】open_file_via_dialog：系统文件对话框已选定路径（Ctrl+O）");
         if let Err(error) = self.open_in_editor(path, window, cx) {
-            *self.shared.notice.borrow_mut() = Some(format!("打开文件失败：{error}"));
+            self.shared.say_error(format!("打开文件失败：{error}"), cx);
         }
     }
 
@@ -3175,7 +3175,7 @@ impl Render for WorkbenchView {
                 window,
                 cx,
             ) {
-                *self.shared.notice.borrow_mut() = Some(format!("打开文件失败: {e}"));
+                self.shared.say_error(format!("打开文件失败: {e}"), cx);
             }
         }
         // B11：导航的「打开查询」请求（在 SQL 编辑器中打开 / 查看数据 / 生成 SQL / 拖拽）。

@@ -159,11 +159,11 @@ fn archive_from_insight(
     cx: &mut App,
 ) {
     let Some(root) = shared.project_root() else {
-        shared.say("洞察：归档需要先打开项目", cx);
+        shared.say_error("洞察：归档需要先打开项目", cx);
         return;
     };
     if shared.project_ui.borrow().read_only {
-        shared.say("洞察：项目为只读，不能归档", cx);
+        shared.say_error("洞察：项目为只读，不能归档", cx);
         return;
     }
     let Some((temp_table, label)) = panel
@@ -173,7 +173,7 @@ fn archive_from_insight(
         .find(|entry| entry.key == key)
         .and_then(|entry| entry.temp_table.clone().map(|t| (t, entry.label.clone())))
     else {
-        shared.say("洞察：该表尚未完成取样，无法归档", cx);
+        shared.say_error("洞察：该表尚未完成取样，无法归档", cx);
         return;
     };
 
@@ -187,7 +187,7 @@ fn archive_from_insight(
                 Err(error) => {
                     let message = InsightService::describe_error(&error).message;
                     let _ = cx.update(|cx| {
-                        shared2.say(format!("洞察：归档失败（{message}）"), cx);
+                        shared2.say_error(format!("洞察：归档失败（{message}）"), cx);
                     });
                     return;
                 }
@@ -269,7 +269,7 @@ fn export_report(
     };
     match std::fs::write(&path, content) {
         Ok(()) => shared.say(format!("洞察：已导出 Schema 报告 → {}", path.display()), cx),
-        Err(error) => shared.say(format!("洞察：导出失败（{error}）"), cx),
+        Err(error) => shared.say_error(format!("洞察：导出失败（{error}）"), cx),
     }
 }
 
@@ -289,7 +289,7 @@ fn export_markdown_report(shared: &Shared, file_stem: &str, content: &str, cx: &
     };
     match std::fs::write(&path, content) {
         Ok(()) => shared.say(format!("洞察：已导出报告 → {}", path.display()), cx),
-        Err(error) => shared.say(format!("洞察：导出失败（{error}）"), cx),
+        Err(error) => shared.say_error(format!("洞察：导出失败（{error}）"), cx),
     }
 }
 
