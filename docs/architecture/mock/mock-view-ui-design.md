@@ -288,15 +288,15 @@ pub struct UserGenerator {
 - `models.rs`：`UserGenerator` 结构 + `GeneratorCategory` 加 serde derive；
 - `generators.rs`：`data_type_for_generator`（生成器→数据类，穷尽 match）；
 - `mock_view/generator_library.rs`（新）：库对话框（双视角 + 分组「＋」 + 精调层内嵌 + 保存双向挂组 + 样例预览）；
-- `mock_view/panel/mod.rs`：`user_generators` 状态 + `add_user_generator`（去重命名）/`apply_user_generator`（解包 base）/`user_generators_in_category(category)` / `user_generators_in_type(data_type)` + `open_generator_library`；
+- `mock_view/panel/mod.rs`：`user_generators` 状态 + `add_user_generator`（去重命名）/`update_user_generator`（编辑：改名去重排除自己 + 全量替换）/`delete_user_generator`（会话级删除，已应用列解耦）/`apply_user_generator`（解包 base）/`user_generators_in_category(category)` / `user_generators_in_type(data_type)` + `open_generator_library`；
 - `mock_view/pure.rs`：`generator_menu` 加「自定义」区（签名增 `user_generators` 参数）；
 - `mock_view/detail.rs`：`generator_menu` 调用点传自定义列表；
-- 测试：模型去重、数据类映射、菜单/库对话框接入。
+- **自定义生成器管理**（2026-10-30）：库对话框自定义项行尾「编辑」「删除」——编辑复用精调层（类型/业务组/基础生成器锁定，参数以**保存过的配置**为基准预填，名字可改 = 重命名；保存走 `update_user_generator`）；删除为会话级移除（不确认，重建成本低）；
+- 测试：模型去重、数据类映射、菜单/库对话框接入、编辑改名去重、删除解耦。
 
 ### 9.5 遗留（记录在册，待后续）
 
 - **SQLite 持久化**：自定义生成器跨会话落盘（store 迁移 010 + `persistence.rs` 读写 + 面板后台加载/保存）。
-- **自定义生成器管理**：删除 / 重命名 / 编辑（本轮只做创建 + 应用 + 会话复用）。
 - **「搜索生成器」对话框并入自定义项**（`GeneratorSearchDelegate` 的 hits 是 `&'static GeneratorSpec`，自定义非静态；可改为「固定顶部区」渲染）。
 - **字段预设「我的」分组**（§8.3 遗留）可与自定义生成器统一入口，待拍板。
 

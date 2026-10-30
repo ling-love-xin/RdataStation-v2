@@ -2581,6 +2581,51 @@ impl MockPanel {
         Ok(id)
     }
 
+    /// 更新自定义生成器（编辑保存：改名 + 全量替换 base / 分组）。
+    ///
+    /// `id` 是编辑入口传入的旧 id；改名后重新去重（排除自己），返回最终 id。
+    pub(crate) fn update_user_generator(
+        &mut self,
+        id: &str,
+        name: &str,
+        data_type: ColumnDataType,
+        category: Option<GeneratorCategory>,
+        base: GeneratorConfig,
+        cx: &mut Context<Self>,
+    ) -> Result<String, String> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err("生成器名不能为空".to_string());
+        }
+        let mut new_id = trimmed.to_string();
+        let mut seq = 2;
+        while self
+            .user_generators
+            .iter()
+            .any(|ug| ug.id == new_id && ug.id != id)
+        {
+            new_id = format!("{trimmed}_{seq}");
+            seq += 1;
+        }
+        let Some(ug) = self.user_generators.iter_mut().find(|ug| ug.id == id) else {
+            return Err("找不到该自定义生成器".to_string());
+        };
+        ug.id = new_id.clone();
+        ug.name = new_id.clone();
+        ug.data_type = data_type;
+        ug.category = category;
+        ug.base = base;
+        cx.notify();
+        Ok(new_id)
+    }
+
+    /// 删除自定义生成器（会话级）。已应用该生成器的列不受影响——
+    /// 应用写回的是解包后的 base（普通列配置），与自定义项解耦。
+    pub(crate) fn delete_user_generator(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.user_generators.retain(|ug| ug.id != id);
+        cx.notify();
+    }
+
     /// 应用自定义生成器：把 `base`（已有生成器 + 参数）解包写回列，confidence=manual。
     ///
     /// 与 `set_generator` 的区别：目录里没有自定义名（它不在 `generator_catalog`），

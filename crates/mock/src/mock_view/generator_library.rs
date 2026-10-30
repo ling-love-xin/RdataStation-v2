@@ -113,6 +113,8 @@ pub(crate) struct GeneratorLibraryState {
     pub(crate) search_input: Entity<InputState>,
     /// 精调层草稿（`mode=Create` 时非空）
     pub(crate) create: Option<CreateDraft>,
+    /// 编辑中的自定义生成器 id（`Some` = 精调层是编辑而非新建；保存走 `update_user_generator`）
+    pub(crate) editing: Option<String>,
     _search_sub: Option<Subscription>,
 }
 
@@ -128,8 +130,16 @@ pub(crate) struct CreateDraft {
     /// 类型下拉（`locked_type` 非空时 `None`——类型锁定不可改）
     pub(crate) type_state: Option<Entity<SelectState<SearchableVec<ColumnDataType>>>>,
     /// 业务组下拉（`locked_category` 非空时 `None`）；含「（不分组）」项
-    pub(crate) category_state: Option<Entity<SelectState<SearchableVec<CategoryChoice>>>>,    /// 基础生成器下拉（技术组进入时按锁定类型过滤；项是 `&'static GeneratorSpec`）
+    pub(crate) category_state: Option<Entity<SelectState<SearchableVec<CategoryChoice>>>>,    /// 基础生成器下拉（技术组进入时按锁定类型过滤；项是 `&'static GeneratorSpec`；
+    /// 编辑模式 `locked_base` 非空时该字段是空壳不用——行渲染走只读文本）
     pub(crate) base_state: Entity<SelectState<SearchableVec<&'static GeneratorSpec>>>,
+    /// 编辑模式：被编辑项保存过的完整配置（`locked_base` 的默认配置 + 参数 patch）。
+    /// `Some` 时 `base_config()` 的兜底不生效，参数区 / 样例以它为基准（保住用户改过的参数值）；
+    /// 新建模式 `None`（从基础生成器默认配置开始）。
+    pub(crate) preset: Option<GeneratorConfig>,
+    /// 编辑模式锁定的基础生成器（编辑不改 base——换 base 等于换个生成器，删了重建更直接；
+    /// `Some` 时基础生成器行渲染为只读文本，也不建 `base_state` 的 Confirm 订阅）
+    pub(crate) locked_base: Option<&'static GeneratorSpec>,
     /// 参数输入行：按 `base` 当前选中的 spec 重建（身份变化由 `Confirm` 订阅驱动）
     pub(crate) params: Vec<DraftParam>,
     /// 样例预览（2 条示意值，固定种子；参数 Change 即刷新）
@@ -183,6 +193,7 @@ pub(crate) fn open_library(
         expanded_types: HashSet::new(),
         search_input: search_input.clone(),
         create: None,
+        editing: None,
         _search_sub: None,
     });
     // 搜索词订阅挂在状态实体上（实体已创建完；在 `cx.new` 构造闭包内订阅会推不出回调参数类型）
@@ -540,6 +551,7 @@ fn render_type_group_row(
 
 /// 生成器项行：名称 + 徽标（业务视角徽标 = 数据类；技术视角徽标 = 业务组）。
 /// 点击写回列（内建走 `set_generator`，自定义解包 base）并关对话框。
+/// 自定义项行尾另有「编辑」「删除」两个管理按钮（键盘可达，`Button`）。
 fn render_item_row(
     state: &Entity<GeneratorLibraryState>,
     label: &str,
@@ -551,7 +563,8 @@ fn render_item_row(
     let theme = cx.theme();
     let state_for_click = state.clone();
     let spec_name = label.to_string();
-    div()
+    let spec_for_click = spec_name.clone();
+    let mut row = div()
         .h_flex()
         .items_center()
         .gap_2()
@@ -569,7 +582,7 @@ fn render_item_row(
                             let s = state_for_click.read(app);
                             let panel = s.panel.clone();
                             let column_id = s.column_id;
-                            let ug_id = spec_name.clone();
+                            let ug_id = spec_for_click.clone();
                             if is_user {
                                 panel.update(app, |p, cx| {
                                     p.apply_user_generator(column_id, &ug_id, cx);
@@ -589,8 +602,63 @@ fn render_item_row(
                 .text_xs()
                 .text_color(theme.colors.muted_foreground)
                 .child(badge.to_string()),
-        )
-        .into_any_element()
+        );
+    // 自定义项：行尾「编辑」（打开精调层预填，含重命名）/「删除」（会话级移除）
+    if is_user {
+        let state_edit = state.clone();
+        let ug_id_edit = spec_name.clone();
+        row = row
+            .child(
+                Button::new(format!("lib-item-edit-{label}"))
+                    .ghost()
+                    .xsmall()
+                    .label("编辑")
+                    .tooltip("重命名 / 修改参数")
+                    .tooltip_show_delay(Duration::from_millis(500))
+                    .on_click(move |_event, window, app| {
+                        let s = state_edit.read(app);
+                        let panel = s.panel.clone();
+                        let Some(ug) = panel
+                            .read(app)
+                            .user_generators()
+                            .iter()
+                            .find(|ug| ug.id == ug_id_edit)
+                            .cloned()
+                        else {
+                            return;
+                        };
+                        state_edit.update(app, |s, cx| {
+                            s.editing = Some(ug.id.clone());
+                            s.mode = LibraryMode::Create;
+                            s.create = Some(new_edit_draft(panel.clone(), &ug, window, cx));
+                            s.rebuild_params(window, cx);
+                            s.refresh_preview(cx);
+                            cx.notify();
+                        });
+                    }),
+            )
+            .child(
+                {
+                    let state_del = state.clone();
+                    let ug_id_del = spec_name.clone();
+                    Button::new(format!("lib-item-delete-{label}"))
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Delete)
+                        .tooltip("删除此自定义生成器")
+                        .tooltip_show_delay(Duration::from_millis(500))
+                        .on_click(move |_event, _window, app| {
+                            let s = state_del.read(app);
+                            let panel = s.panel.clone();
+                            let ug_id = ug_id_del.clone();
+                            // 先删 panel 项，再刷新对话框列表（panel.notify 不驱动对话框实体重绘）
+                            panel.update(app, |p, cx| p.delete_user_generator(&ug_id, cx));
+                            state_del.update(app, |_, cx| cx.notify());
+                        })
+                },
+            );
+    }
+    row.into_any_element()
 }
 
 // ---------- 精调层（创建自定义生成器） ----------
@@ -641,6 +709,8 @@ fn new_create_draft(
         type_state,
         category_state,
         base_state,
+        preset: None,
+        locked_base: None,
         params: Vec::new(),
         preview: String::new(),
         error: None,
@@ -663,6 +733,26 @@ fn new_create_draft(
     draft
 }
 
+/// 编辑精调层草稿：复用创建草稿（类型 / 业务组锁定 = 被编辑项的值），再覆写为编辑态——
+/// 基础生成器锁定（编辑不改 base：换 base = 换个生成器，删了重建更直接）、参数区 / 样例以
+/// 被编辑项**保存过的配置**为基准（`preset`，用户改过的参数值在编辑重开时不丢）、名字预填。
+fn new_edit_draft(
+    panel: Entity<MockPanel>,
+    ug: &UserGenerator,
+    window: &mut Window,
+    cx: &mut Context<GeneratorLibraryState>,
+) -> CreateDraft {
+    let mut draft =
+        new_create_draft(panel.clone(), Some(ug.data_type.clone()), ug.category, window, cx);
+    // 名字预填（InputState::set_value 不发 Change 事件，无副作用）
+    draft
+        .name_input
+        .update(cx, |s, cx| s.set_value(ug.name.clone(), window, cx));
+    draft.locked_base = Some(generator_catalog::spec_of(&ug.base));
+    draft.preset = Some(ug.base.clone());
+    draft
+}
+
 impl CreateDraft {
     /// 当前选中基础生成器的默认配置（`default_of`）；未选中时 `None`。
     fn base_config(&self, cx: &App) -> Option<GeneratorConfig> {
@@ -673,9 +763,15 @@ impl CreateDraft {
             .and_then(|spec| generator_catalog::default_of(spec.name))
     }
 
-    /// 按「基础生成器默认配置 + 全部参数输入值」拼出最终配置（样例预览与保存共用）。
+    /// 基准配置：编辑模式 = 被编辑项保存的配置（`preset`，保住用户改过的参数值）；
+    /// 新建模式 = 基础生成器默认配置。参数区重建 / 校验 / 样例共用。
+    fn effective_config(&self, cx: &App) -> Option<GeneratorConfig> {
+        self.preset.clone().or_else(|| self.base_config(cx))
+    }
+
+    /// 按「基准配置 + 全部参数输入值」拼出最终配置（样例预览与保存共用）。
     fn patched_config(&self, cx: &App) -> Option<GeneratorConfig> {
-        let mut config = self.base_config(cx)?;
+        let mut config = self.effective_config(cx)?;
         for param in &self.params {
             match param {
                 DraftParam::Scalar { key, kind, state } => {
@@ -717,7 +813,7 @@ impl GeneratorLibraryState {
         };
         draft.params.clear();
         draft._subs.clear();
-        let Some(config) = draft.base_config(cx) else {
+        let Some(config) = draft.effective_config(cx) else {
             draft.preview.clear();
             cx.notify();
             return;
@@ -791,7 +887,7 @@ impl GeneratorLibraryState {
         let Some(draft) = self.create.as_mut() else {
             return;
         };
-        let Some(config) = draft.base_config(cx) else {
+        let Some(config) = draft.effective_config(cx) else {
             return;
         };
         draft.error = if patch_param(&config, key, text, kind).is_none() {
@@ -875,13 +971,20 @@ fn submit_create(state: &Entity<GeneratorLibraryState>, window: &mut Window, cx:
     };
     let panel = state.read(cx).panel.clone();
     let column_id = state.read(cx).column_id;
-    match panel.update(cx, |p, cx| p.add_user_generator(&name, data_type, category, config, cx)) {
+    let editing = state.read(cx).editing.clone();
+    // 编辑 = 更新（改名去重 + 全量替换）；新建 = 新增。成功都「保存即应用」写回当前列。
+    let saved = panel.update(cx, |p, cx| match &editing {
+        Some(id) => p.update_user_generator(id, &name, data_type, category, config, cx),
+        None => p.add_user_generator(&name, data_type, category, config, cx),
+    });
+    match saved {
         Ok(ug_id) => {
-            // 保存即应用（与「保存双向挂组」一致：创建完直接写回当前列）
+            // 保存即应用（与「保存双向挂组」一致：创建/编辑完直接写回当前列）
             panel.update(cx, |p, cx| p.apply_user_generator(column_id, &ug_id, cx));
             state.update(cx, |s, cx| {
                 s.mode = LibraryMode::Browse;
                 s.create = None;
+                s.editing = None;
                 cx.notify();
             });
             window.close_dialog(cx);
@@ -897,7 +1000,7 @@ fn submit_create(state: &Entity<GeneratorLibraryState>, window: &mut Window, cx:
     }
 }
 
-/// 精调层 footer：取消（回浏览）+ 保存并应用。
+/// 精调层 footer：取消（回浏览）+ 保存并应用（编辑模式文案「保存修改」）。
 fn render_create_footer(
     state: &Entity<GeneratorLibraryState>,
     _window: &mut Window,
@@ -905,6 +1008,7 @@ fn render_create_footer(
 ) -> gpui_kit::AnyElement {
     let state_for_cancel = state.clone();
     let state_for_save = state.clone();
+    let editing = state.read(_cx).editing.is_some();
     DialogFooter::new()
         .child(
             Button::new("lib-create-cancel")
@@ -914,13 +1018,14 @@ fn render_create_footer(
                     state_for_cancel.update(app, |s, cx| {
                         s.mode = LibraryMode::Browse;
                         s.create = None;
+                        s.editing = None;
                         cx.notify();
                     });
                 }),
         )
         .child(
             Button::new("lib-create-save")
-                .label("保存并应用")
+                .label(if editing { "保存修改" } else { "保存并应用" })
                 .on_click(move |_event, window, app| {
                     submit_create(&state_for_save, window, app);
                 }),
@@ -1046,16 +1151,40 @@ fn render_create(
             }
         }
     };
-    // 基础生成器
-    body = body.child(select_line(
-        &theme,
-        "基础生成器",
-        Select::new(&draft.base_state)
-            .menu_width(px(260.))
-            .menu_max_h(px(220.))
-            .placeholder("选择基础生成器…")
-            .accessibility_label("基础生成器"),
-    ));
+    // 基础生成器：编辑模式锁定为只读文本（换 base = 换生成器，删了重建更直接）；
+    // 新建模式走 Select（按锁定类型过滤）
+    body = match &draft.locked_base {
+        Some(spec) => body.child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .w_full()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child("基础生成器"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.foreground)
+                        .child(spec.label),
+                ),
+        ),
+        None => body.child(select_line(
+            &theme,
+            "基础生成器",
+            Select::new(&draft.base_state)
+                .menu_width(px(260.))
+                .menu_max_h(px(220.))
+                .placeholder("选择基础生成器…")
+                .accessibility_label("基础生成器"),
+        )),
+    };
     // 参数区（按 base spec 重建；Int/Float/Text→Input、Bool→Switch、Complex→Textarea）
     let has_params = !draft.params.is_empty();
     body = body.child(
@@ -1083,7 +1212,7 @@ fn render_create(
                             let key = param_key(param).to_string();
                             let label = {
                                 let fields = draft
-                                    .base_config(cx)
+                                    .effective_config(cx)
                                     .map(|config| {
                                         generator_catalog::spec_of(&config)
                                             .params
