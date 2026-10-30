@@ -775,6 +775,11 @@ impl Shared {
     /// 导航树与分析存档的「查看统计」共用（口径只此一处）：表名带点 / 空格 / 保留字时，
     /// 不加引号在各方言下都解析不过。空段自动略去，`orders` / `public.orders` /
     /// `catalog.schema.orders` 三种写法都覆盖。
+    ///
+    /// **相邻相同段去重**（对齐 `database::sql_gen::qualified_name` 的同名口径）：
+    /// 无独立 Schema 层的驱动（MySQL / SQLite / DuckDB）导航把 schema 传成 catalog，
+    /// 不去重会拼出 `\`db\`.\`db\`.\`t\``——MySQL 把首段当 catalog，直接 1064 语法错误
+    /// （2026-10-30 真机：PG 正常、MySQL 表洞察报 1064，根因即此）。
     pub fn insight_sample_sql(&self, conn_id: &str, parts: &[&str]) -> String {
         let driver = self
             .connections
@@ -788,9 +793,15 @@ impl Shared {
         } else {
             '"'
         };
+        let mut prev: Option<&str> = None;
         let qualified = parts
             .iter()
             .filter(|part| !part.is_empty())
+            .filter(|part| {
+                let dup = prev == Some(**part);
+                prev = Some(**part);
+                !dup
+            })
             .map(|part| engine::driver::utils::quote_identifier(part, quote))
             .collect::<Vec<_>>()
             .join(".");
@@ -1050,6 +1061,17 @@ mod tests {
         assert_eq!(
             shared.insight_sample_sql("G_1", &["mall", "order"]),
             "SELECT * FROM `mall`.`order`"
+        );
+        // 无独立 Schema 层的驱动导航把 schema 传成 catalog：相邻相同段去重，
+        // 不拼 `\`mall\`.\`mall\`.\`order\``（MySQL 首段当 catalog → 1064）。
+        assert_eq!(
+            shared.insight_sample_sql("G_1", &["mall", "mall", "order"]),
+            "SELECT * FROM `mall`.`order`"
+        );
+        // PG 有真 schema 层：不同段保留三段（PG 支持 catalog.schema.table）。
+        assert_eq!(
+            shared.insight_sample_sql("P_2", &["postgres", "public", "orders"]),
+            "SELECT * FROM \"postgres\".\"public\".\"orders\""
         );
         // 其余库双引号；空段略去（导航侧 catalog / schema 可能为空）。
         assert_eq!(
