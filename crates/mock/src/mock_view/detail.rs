@@ -120,6 +120,10 @@ pub struct MockDetailView {
     /// 预览表状态（组件库 `DataTable` 的 `TableState`）：懒创建（`TableState::new` 要 window），
     /// 数据由面板通知那一拍同步（见 [`MockDetailView::sync_preview_table`]）。
     pub(crate) preview_table: Option<Entity<TableState<PreviewTableDelegate>>>,
+    /// 列编辑对话框内的生成器库浏览区（同面板：分组/最近/搜索/精调内嵌在列编辑里）：
+    /// 打开列编辑时创建（写回草稿），关闭后随实体丢弃；`gen_browser_open` 控制展开/收起。
+    pub(crate) generator_browser: Option<Entity<crate::mock_view::generator_library::GeneratorLibraryState>>,
+    pub(crate) gen_browser_open: bool,
 }
 
 /// 把详情 tab 切到前台（窗口聚焦 + 在所在 Dock 组里选中自身）。
@@ -171,6 +175,8 @@ impl MockDetailView {
             focus_handle: cx.focus_handle(),
             group: None,
             preview_table: None,
+            generator_browser: None,
+            gen_browser_open: false,
         }
     }
 
@@ -363,11 +369,27 @@ impl MockDetailView {
         self.rebuild_params(window, cx);
         // 初始样例预览（按当前配置生成，事件路径，不在 render 里做）
         self.refresh_sample_preview(cx);
+        // 生成器库浏览区内嵌（同面板）：分组/最近/搜索/精调直接开在列编辑对话框里，
+        // 选中写回草稿（`LibraryWriteback::ColumnDraft`），点「应用」才落地
+        let view = cx.entity();
+        self.generator_browser = Some(
+            crate::mock_view::generator_library::create_library_state(
+                self.panel.clone(),
+                crate::mock_view::generator_library::LibraryWriteback::ColumnDraft {
+                    detail: view.downgrade(),
+                    column_id: id,
+                },
+                true,
+                window,
+                cx,
+            ),
+        );
+        self.gen_browser_open = true;
 
         let view = cx.entity();
         let panel = self.panel.clone();
-        window.open_dialog(cx, move |dialog, _window, cx| {
-            let theme = cx.theme();
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let theme = cx.theme().clone();
             let Some(draft) = view.read(cx).draft.as_ref() else {
                 return dialog.title("列编辑");
             };
@@ -401,11 +423,13 @@ impl MockDetailView {
                 .collect();
             let param_error = draft.param_error.clone();
             let generator_label = generator_catalog::spec_of(&draft.def.generator).label;
+            // 样例预览克隆成值：draft 借用要在内嵌生成器库渲染（需要 `&mut cx`）前结束
+            let sample_preview = draft.sample_preview.clone();
 
             let mut body = div()
                 .v_flex()
                 .gap_2()
-                .child(form_line(theme, "列名", &name_state));
+                .child(form_line(&theme, "列名", &name_state));
             // 类型下拉
             body = body.child(
                 div()
@@ -462,9 +486,10 @@ impl MockDetailView {
                     .text_color(theme.colors.muted_foreground)
                     .child("改类型不会自动换生成器；按新类型重推请点「恢复智能默认」。"),
             );
-            // 生成器：列编辑与分组浏览同一面板（用户诉求）——点开生成器库对话框
-            // （`LibraryWriteback::ColumnDraft`，选中写回草稿），参数区 / 样例随写回重建；
-            // 不用退出列编辑去字段行换生成器（原「切换在字段行的菜单里」的菜单已退役）。
+            // 生成器：与分组浏览**同一面板**（用户诉求）——行头展开/收起内嵌的生成器库
+            // （双视角分组 + 最近使用 + 搜索 + 自定义精调）；选中写回草稿（参数区 / 样例
+            // 即时重建），点「应用」才落地，无需退出列编辑去字段行换生成器。
+            let browser_open = view.read(cx).gen_browser_open;
             body = body.child(
                 div()
                     .h_flex()
@@ -481,33 +506,43 @@ impl MockDetailView {
                     )
                     .child({
                         let view = view.clone();
-                        let id = draft.id;
                         Button::new("mock-col-generator")
                             .ghost()
                             .label(generator_label)
                             .dropdown_caret(true)
-                            .tooltip("打开生成器库：按分组 / 数据类型浏览选择")
+                            .toggled(browser_open)
+                            .tooltip(if browser_open {
+                                "收起生成器库"
+                            } else {
+                                "展开生成器库：按分组 / 数据类型浏览选择"
+                            })
                             .tooltip_show_delay(Duration::from_millis(500))
-                            .on_click(move |_, window, app| {
-                                let panel = view.read(app).panel.clone();
-                                panel.update(app, |p, cx| {
-                                    p.open_generator_library_with(
-                                        crate::mock_view::generator_library::LibraryWriteback::ColumnDraft {
-                                            detail: view.downgrade(),
-                                            column_id: id,
-                                        },
-                                        window,
-                                        cx,
-                                    );
+                            .on_click(move |_, _window, app| {
+                                view.update(app, |v, cx| {
+                                    v.gen_browser_open = !v.gen_browser_open;
+                                    cx.notify();
                                 });
                             })
                     }),
             );
+            // 内嵌生成器库（与字段行入口同一渲染，`render_state` 无对话框壳）：
+            // 浏览模式含搜索 + 双视角 TabBar + 最近使用 + 分组列表；精调模式含表单 + footer
+            if browser_open {
+                let browser = view.read(cx).generator_browser.clone();
+                if let Some(browser) = browser {
+                    let (browser_body, browser_footer) =
+                        crate::mock_view::generator_library::render_state(&browser, window, cx);
+                    body = body.child(browser_body);
+                    if let Some(footer) = browser_footer {
+                        body = body.child(footer);
+                    }
+                }
+            }
             for row in param_rows {
                 body = body.child(match row {
-                    ParamRowView::Scalar { label, state } => form_line(theme, &label, &state),
+                    ParamRowView::Scalar { label, state } => form_line(&theme, &label, &state),
                     ParamRowView::Complex { label, hint, state } => {
-                        complex_form_line(theme, &label, hint, &state)
+                        complex_form_line(&theme, &label, hint, &state)
                     }
                 });
             }
@@ -538,10 +573,10 @@ impl MockDetailView {
                         div()
                             .text_xs()
                             .text_color(theme.colors.foreground)
-                            .child(draft.sample_preview.clone()),
+                            .child(sample_preview),
                     ),
             );
-            body = body.child(form_line(theme, "空值率（%）", &null_state));
+            body = body.child(form_line(&theme, "空值率（%）", &null_state));
             body = body.child(
                 div()
                     .h_flex()

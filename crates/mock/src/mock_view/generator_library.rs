@@ -110,6 +110,9 @@ pub(crate) enum LibraryWriteback {
 pub(crate) struct GeneratorLibraryState {
     pub(crate) panel: Entity<MockPanel>,
     pub(crate) writeback: LibraryWriteback,
+    /// 内嵌模式（列编辑对话框内联浏览区）：无对话框壳，选中/保存只写回草稿并留在宿主；
+    /// 字段行弹对话框模式（`open_library`）为 false，写回后关对话框。
+    pub(crate) embedded: bool,
     pub(crate) mode: LibraryMode,
     pub(crate) view: LibraryView,
     /// 顶部搜索词（`search_input` 的 Change 订阅回填；浏览时过滤两组列表）
@@ -183,18 +186,22 @@ fn param_key(param: &DraftParam) -> &str {
 
 // ---------- 打开入口（panel::open_generator_library 调用） ----------
 
-/// 打开生成器库对话框。`cx` 是面板的 Context；对话框状态实体、输入实体都在这里创建，
-/// 订阅挂在状态实体上（`subscribe_in` 的订阅者 = 状态实体自身）。
-pub(crate) fn open_library(
+/// 创建生成器库状态实体（浏览 + 搜索 + 精调层共用）。
+///
+/// `embedded=true` 供列编辑对话框内联（`detail.rs`）：无对话框壳，写回草稿后留在列编辑；
+/// `embedded=false` 供字段行入口弹对话框（[`open_library`]）。
+pub(crate) fn create_library_state(
     panel: Entity<MockPanel>,
     writeback: LibraryWriteback,
+    embedded: bool,
     window: &mut Window,
-    cx: &mut Context<MockPanel>,
-) {
+    cx: &mut App,
+) -> Entity<GeneratorLibraryState> {
     let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("按名称 / 中文标签搜索"));
     let state = cx.new(|_cx| GeneratorLibraryState {
         panel: panel.clone(),
         writeback,
+        embedded,
         mode: LibraryMode::Browse,
         view: LibraryView::Business,
         query: String::new(),
@@ -219,18 +226,41 @@ pub(crate) fn open_library(
         );
         s._search_sub = Some(_search_sub);
     });
+    state
+}
+
+/// 渲染库状态内容（浏览 / 精调），返回（主体, footer）。
+///
+/// 无对话框壳：`open_library` 把主体放进 `Dialog`，列编辑对话框把它内联进自身内容。
+pub(crate) fn render_state(
+    state: &Entity<GeneratorLibraryState>,
+    window: &mut Window,
+    cx: &mut App,
+) -> (gpui_kit::AnyElement, Option<gpui_kit::AnyElement>) {
+    // `cx.theme()` 借用 cx：先克隆出值，避免后续把 `cx` 可变借给渲染函数时冲突
+    let theme = cx.theme().clone();
+    let body = match state.read(cx).mode {
+        LibraryMode::Browse => render_browse(state, &theme, window, cx),
+        LibraryMode::Create => render_create(state, &theme, window, cx),
+    };
+    let footer = match state.read(cx).mode {
+        LibraryMode::Browse => None,
+        LibraryMode::Create => Some(render_create_footer(state, window, cx)),
+    };
+    (body, footer)
+}
+
+/// 打开生成器库对话框（字段行入口，写回面板列）。`cx` 是面板的 Context。
+pub(crate) fn open_library(
+    panel: Entity<MockPanel>,
+    writeback: LibraryWriteback,
+    window: &mut Window,
+    cx: &mut Context<MockPanel>,
+) {
+    let state = create_library_state(panel, writeback, false, window, cx);
 
     window.open_dialog(cx, move |dialog, window, cx| {
-        // `cx.theme()` 借用 cx：先克隆出值，避免后续把 `cx` 可变借给渲染函数时冲突
-        let theme = cx.theme().clone();
-        let body: gpui_kit::AnyElement = match state.read(cx).mode {
-            LibraryMode::Browse => render_browse(&state, &theme, window, cx),
-            LibraryMode::Create => render_create(&state, &theme, window, cx),
-        };
-        let footer: Option<gpui_kit::AnyElement> = match state.read(cx).mode {
-            LibraryMode::Browse => None,
-            LibraryMode::Create => Some(render_create_footer(&state, window, cx)),
-        };
+        let (body, footer) = render_state(&state, window, cx);
         // 标题随模式动态：open_dialog 的 build 闭包每帧重建（vendor root.rs），重绘时重新求值
         let title = match state.read(cx).mode {
             LibraryMode::Browse => "生成器库",
@@ -254,10 +284,11 @@ pub(crate) fn open_library(
 
 /// 统一写回：`picked` 是内建生成器名（`is_user=false`）或自定义生成器 id（`is_user=true`）。
 ///
-/// - [`LibraryWriteback::Panel`]（字段行入口）：保持原行为——写面板列（`set_generator` /
+/// - [`LibraryWriteback::Panel`]（字段行入口）：写面板列（`set_generator` /
 ///   `apply_user_generator`，含 `remember_generator` 与结果清空）并关对话框；
-/// - [`LibraryWriteback::ColumnDraft`]（列编辑入口）：把生成器配置写回列编辑草稿
-///   （`MockDetailView::apply_generator_config_to_draft` 重建参数区与样例）并关对话框。
+/// - [`LibraryWriteback::ColumnDraft`]（列编辑入口，内嵌模式）：把生成器配置写回列编辑草稿
+///   （`MockDetailView::apply_generator_config_to_draft` 重建参数区与样例），**不关对话框**
+///   ——留在列编辑里继续调参，点「应用」才落地。
 fn apply_picked_generator(
     app: &mut App,
     window: &mut Window,
@@ -290,9 +321,9 @@ fn apply_picked_generator(
                 generator_catalog::default_of(picked)
             };
             if let Some(config) = config {
+                // 内嵌模式：写回草稿但留在列编辑（点「应用」才落地），不关任何对话框
                 let _ = detail.update(app, |v, cx| {
                     v.apply_generator_config_to_draft(*column_id, config, window, cx);
-                    window.close_dialog(cx);
                 });
             }
         }
@@ -1101,6 +1132,7 @@ fn submit_create(state: &Entity<GeneratorLibraryState>, window: &mut Window, cx:
             // 保存即应用（与「保存双向挂组」一致：创建/编辑完直接写回当前列/草稿）
             let panel = state.read(cx).panel.clone();
             let writeback = state.read(cx).writeback.clone();
+            let embedded = state.read(cx).embedded;
             apply_picked_generator(cx, window, &panel, &writeback, &ug_id, true);
             state.update(cx, |s, cx| {
                 s.mode = LibraryMode::Browse;
@@ -1108,7 +1140,10 @@ fn submit_create(state: &Entity<GeneratorLibraryState>, window: &mut Window, cx:
                 s.editing = None;
                 cx.notify();
             });
-            window.close_dialog(cx);
+            // 内嵌模式（列编辑内联）：写回草稿后留在列编辑；弹对话框模式才关
+            if !embedded {
+                window.close_dialog(cx);
+            }
         }
         Err(reason) => {
             state.update(cx, |s, cx| {

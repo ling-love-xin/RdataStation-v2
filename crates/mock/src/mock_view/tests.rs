@@ -5370,27 +5370,30 @@ fn column_dialog_opens_library_and_writes_back_to_draft(cx: &mut TestAppContext)
             .to_string()
     });
 
-    // 2) 在列编辑对话框内打开生成器库（写回草稿）——两对话框栈式叠加
+    // 2) 生成器库浏览区内嵌在列编辑对话框里（同面板）：打开列编辑即建浏览区并默认展开，
+    //    渲染不 panic（含双视角 TabBar / 分组 / 最近使用 / 搜索），且**不再叠加第二层对话框**
     cx.update(|window, cx| {
-        let detail_entity = detail.clone();
-        panel.update(cx, |p, cx| {
-            p.open_generator_library_with(
-                super::generator_library::LibraryWriteback::ColumnDraft {
-                    detail: detail_entity.downgrade(),
-                    column_id: id,
-                },
-                window,
-                cx,
-            );
-        });
+        let view = detail.read(cx);
         assert!(
-            window.has_active_dialog(cx),
-            "库对话框应打开（栈式叠加在列编辑之上）"
+            view.generator_browser.is_some(),
+            "打开列编辑应创建内嵌生成器库浏览区"
         );
+        assert!(view.gen_browser_open, "浏览区应默认展开（同面板诉求）");
         window.draw(cx).clear(cx);
     });
+    // 2.5) 生成器行可收起/再展开浏览区（渲染不 panic，状态切换由 detail 字段承载）
+    detail.update(cx, |view, cx| {
+        view.gen_browser_open = false;
+        cx.notify();
+    });
+    draw(cx);
+    detail.update(cx, |view, cx| {
+        view.gen_browser_open = true;
+        cx.notify();
+    });
+    draw(cx);
 
-    // 3) 库对话框选中写回草稿：换一个与当前不同的内建生成器
+    // 3) 浏览区内选中写回草稿：换一个与当前不同的内建生成器
     let picked = generator_catalog::specs_in(generator_catalog::GeneratorCategory::Text)
         .iter()
         .map(|s| s.name.to_string())

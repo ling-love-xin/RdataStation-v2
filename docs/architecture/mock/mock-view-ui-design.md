@@ -283,7 +283,7 @@ pub struct UserGenerator {
 | **双视角为主入口**（2026-10-30） | 字段行「生成器」按钮**直接打开生成器库对话框**（原下拉菜单退役：15 类分类 = 技术视角全覆盖，自定义 = 对话框内，最近使用并入对话框顶部「最近使用」区，搜索 = 对话框顶部搜索框过滤）；对话框标题随模式动态（浏览=「生成器库」，新建/编辑=「新建/编辑自定义生成器」）；精调层已选基础生成器但零参数时如实提示「该生成器没有参数」 | 用户要求「配置时选择生成器就进入双视角」；`open_dialog` build 闭包每帧重建（vendor root.rs）→ 标题可随 state 动态 |
 | 数据类映射 | `generators.rs` 新增 `data_type_for_generator(&GeneratorConfig) -> ColumnDataType`（穷尽分组 match，编译强制补） | 与 `generate_cell` 同文件同构；技术视角分组与徽标共用 |
 | 持久化 | **会话级**：`MockPanel.user_generators: Vec<UserGenerator>`；SQLite 落盘（`store/migrations/project_meta/010_*.sql` + persistence 读写 + 面板后台加载）**记录在册** | store 迁移影响所有项目库 schema，属基础设施改动，宜单独轮；UI 全链路本轮交付 |
-| **列编辑内选生成器**（2026-10-31） | 列编辑对话框「生成器」行从只读展示改为 `Button`，点开生成器库对话框（`LibraryWriteback::ColumnDraft`，两对话框栈式叠加；选中写回**草稿**：`apply_generator_config_to_draft` 重建参数区 + 刷新样例预览，点「应用」才落地）；字段行入口（`LibraryWriteback::Panel`）行为不变 | 用户质询「列编辑和分组在一个面板上」：此前生成器行只读且注释指向**已退役**的字段行菜单（过期指路）；`window_ext.rs` 实证 `open_dialog` 栈式，两对话框可叠加；列编辑与分组浏览同一入口，无需退出列编辑去字段行换生成器 |
+| **列编辑内选生成器**（2026-10-31） | 列编辑对话框「生成器」行从只读展示改为可点：**生成器库浏览区内嵌进列编辑对话框**（同面板，无第二层对话框）——行头按钮展开/收起（默认展开），展开区 = 搜索 + 双视角 TabBar + 最近使用 + 分组列表（与字段行入口**同一渲染** `render_state`，无对话框壳）；选中 / 自定义精调保存写回**草稿**（`apply_generator_config_to_draft` 重建参数区 + 刷新样例预览，点「应用」才落地）；字段行入口（`LibraryWriteback::Panel`）保持弹对话框不变 | 用户验收后坚持「生成器库和列编辑还是分裂的」——上一版「列编辑内弹第二层库对话框」仍是两个面板；`generator_library.rs` 抽 `create_library_state`（`embedded` 标志）/`render_state`（无壳），列编辑直接内联；`ColumnDraft` 写回不关对话框（草稿未落地前留在列编辑） |
 
 ### 9.4 本轮改动清单
 
@@ -295,7 +295,7 @@ pub struct UserGenerator {
 - `mock_view/detail.rs`：`generator_menu` 调用点传自定义列表；
 - **自定义生成器管理**（2026-10-30）：库对话框自定义项行尾「编辑」「删除」——编辑复用精调层（类型/业务组/基础生成器锁定，参数以**保存过的配置**为基准预填，名字可改 = 重命名；保存走 `update_user_generator`）；删除为会话级移除（不确认，重建成本低）；
 - **双视角为主入口**（2026-10-30）：`detail.rs` 字段行生成器按钮直开库对话框；`pure.rs` 删除 `generator_menu`/`generator_menu_label`/`is_locale_sensitive`（菜单退役）；库对话框加「最近使用」区（`render_recent`，非空才渲染、不受搜索过滤）；标题随模式动态；精调层参数空态文案三态（未选 / 已选有参 / 已选零参）；
-- **列编辑内选生成器**（2026-10-31）：`detail.rs` 列编辑对话框生成器行改 `Button`（`mock-col-generator`），点开库对话框（写回草稿）；`generator_library.rs` 新增 `LibraryWriteback`（Panel / ColumnDraft 两写回目标）+ `apply_picked_generator` 统一写回；`MockDetailView::apply_generator_config_to_draft` 写回草稿（参数区 / 样例重建）；`panel::open_generator_library_with` 支持指定写回目标；过时注释（「切换在字段行的菜单里」）删除；测试 `column_dialog_opens_library_and_writes_back_to_draft`；
+- **列编辑内选生成器**（2026-10-31）：`detail.rs` 列编辑对话框生成器行改可点（`mock-col-generator` 展开/收起，默认展开），**生成器库浏览区内嵌进列编辑对话框**（同面板）；`generator_library.rs` 抽 `create_library_state`（新增 `embedded` 标志，`cx` 放宽为 `&mut App`）/`render_state`（无对话框壳的浏览+精调渲染，返回主体与 footer）/`open_library` 改为包壳入口；`LibraryWriteback::ColumnDraft` 写回草稿**不关对话框**（`apply_picked_generator` / `submit_create` 的 embedded 分支）；`MockDetailView` 增 `generator_browser` / `gen_browser_open` 字段，`open_column_dialog` 内建浏览区；测试 `column_dialog_opens_library_and_writes_back_to_draft` 改为内嵌断言（浏览区创建 + 默认展开 + 收起/再展开渲染 + 写回草稿）；
 - 测试：模型去重、数据类映射、菜单/库对话框接入、编辑改名去重、删除解耦。
 
 ### 9.5 遗留（记录在册，待后续）
