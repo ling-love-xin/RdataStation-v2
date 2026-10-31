@@ -5340,9 +5340,10 @@ fn generator_library_dialog_opens(cx: &mut TestAppContext) {
     });
 }
 
-/// 「列编辑与分组在同一面板」（用户诉求）：列编辑对话框内打开生成器库
-/// （`LibraryWriteback::ColumnDraft`，两对话框栈式叠加）；选中写回**草稿**
-/// （生成器配置 + 参数区重建 + 样例刷新），列未应用时面板列不动。
+/// 「选择生成器窗口」（用户诉求）：点击新增列 / 编辑列弹出一个窗口——最上搜索定位
+/// 输入框，框下左右分栏：左 = 生成器列表（业务 / 数据 双 Tab + 分组 + 最近 + 自定义管理），
+/// 右 = 本列参数区。左栏选中生成器写回**草稿**（生成器配置 + 参数区重建 + 样例刷新），
+/// 列未应用时面板列不动。
 #[gpui_kit::test]
 fn column_dialog_opens_library_and_writes_back_to_draft(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -5358,10 +5359,11 @@ fn column_dialog_opens_library_and_writes_back_to_draft(cx: &mut TestAppContext)
         panel.draft().columns[0].id
     });
     draw(cx);
-    // 1) 打开列编辑对话框
+    // 1) 点击新增列 → 弹出「选择生成器窗口」：顶部 = 列名 + 搜索定位框（同一行），
+    //    框下左右分栏（左 = 生成器列表；右 = 属性在上 / 参数在下）
     cx.update(|window, cx| {
         detail.update(cx, |view, cx| view.open_column_dialog(id, window, cx));
-        assert!(window.has_active_dialog(cx), "列编辑对话框应打开");
+        assert!(window.has_active_dialog(cx), "列编辑对话框应弹出");
         window.draw(cx).clear(cx);
     });
     let current = panel.read_with(cx, |panel, _cx| {
@@ -5370,30 +5372,24 @@ fn column_dialog_opens_library_and_writes_back_to_draft(cx: &mut TestAppContext)
             .to_string()
     });
 
-    // 2) 生成器库浏览区内嵌在列编辑对话框里（同面板）：打开列编辑即建浏览区并默认展开，
-    //    渲染不 panic（含双视角 TabBar / 分组 / 最近使用 / 搜索），且**不再叠加第二层对话框**
+    // 2) 左栏生成器库状态就绪（搜索框 + 业务/数据双 Tab 列表 + 分组 + 最近），
+    //    渲染不 panic——与字段行库对话框是**同一个窗口**，不再叠加第二层对话框
     cx.update(|window, cx| {
         let view = detail.read(cx);
         assert!(
             view.generator_browser.is_some(),
-            "打开列编辑应创建内嵌生成器库浏览区"
+            "打开列编辑应创建左栏生成器库状态"
         );
-        assert!(view.gen_browser_open, "浏览区应默认展开（同面板诉求）");
         window.draw(cx).clear(cx);
     });
-    // 2.5) 生成器行可收起/再展开浏览区（渲染不 panic，状态切换由 detail 字段承载）
-    detail.update(cx, |view, cx| {
-        view.gen_browser_open = false;
-        cx.notify();
-    });
     draw(cx);
-    detail.update(cx, |view, cx| {
-        view.gen_browser_open = true;
-        cx.notify();
-    });
-    draw(cx);
+    // 2.5) 对话框内容头几帧继续长高（第 5 帧才稳）：顶部行 / 左右分栏 / 属性区 /
+    //      参数区在多帧渲染下稳定（不 panic、不撞 a11y id）
+    for _ in 0..4 {
+        draw(cx);
+    }
 
-    // 3) 浏览区内选中写回草稿：换一个与当前不同的内建生成器
+    // 3) 左栏选中生成器写回草稿：换一个与当前不同的内建生成器
     let picked = generator_catalog::specs_in(generator_catalog::GeneratorCategory::Text)
         .iter()
         .map(|s| s.name.to_string())

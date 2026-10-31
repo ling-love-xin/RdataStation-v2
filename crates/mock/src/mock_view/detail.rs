@@ -120,10 +120,9 @@ pub struct MockDetailView {
     /// 预览表状态（组件库 `DataTable` 的 `TableState`）：懒创建（`TableState::new` 要 window），
     /// 数据由面板通知那一拍同步（见 [`MockDetailView::sync_preview_table`]）。
     pub(crate) preview_table: Option<Entity<TableState<PreviewTableDelegate>>>,
-    /// 列编辑对话框内的生成器库浏览区（同面板：分组/最近/搜索/精调内嵌在列编辑里）：
-    /// 打开列编辑时创建（写回草稿），关闭后随实体丢弃；`gen_browser_open` 控制展开/收起。
+    /// 列编辑对话框内的生成器库状态（「选择生成器窗口」左栏：搜索 + 业务/数据双 Tab +
+    /// 分组列表；选中写回草稿，点「应用」才落地）：打开列编辑时创建，关闭后随实体丢弃。
     pub(crate) generator_browser: Option<Entity<crate::mock_view::generator_library::GeneratorLibraryState>>,
-    pub(crate) gen_browser_open: bool,
 }
 
 /// 把详情 tab 切到前台（窗口聚焦 + 在所在 Dock 组里选中自身）。
@@ -176,7 +175,6 @@ impl MockDetailView {
             group: None,
             preview_table: None,
             generator_browser: None,
-            gen_browser_open: false,
         }
     }
 
@@ -384,7 +382,6 @@ impl MockDetailView {
                 cx,
             ),
         );
-        self.gen_browser_open = true;
 
         let view = cx.entity();
         let panel = self.panel.clone();
@@ -422,16 +419,39 @@ impl MockDetailView {
                 })
                 .collect();
             let param_error = draft.param_error.clone();
-            let generator_label = generator_catalog::spec_of(&draft.def.generator).label;
-            // 样例预览克隆成值：draft 借用要在内嵌生成器库渲染（需要 `&mut cx`）前结束
+            // 属性区只读展示（右栏「上属性」）：当前生成器名 + 其业务组（随左栏选中即时更新）
+            let generator_label =
+                generator_catalog::spec_of(&draft.def.generator).label.to_string();
+            let category_label = generator_catalog::spec_of(&draft.def.generator)
+                .category
+                .label()
+                .to_string();
+            // 样例预览克隆成值：draft 借用要在左右分栏渲染（需要 `&mut cx`）前结束
             let sample_preview = draft.sample_preview.clone();
+            // 左栏生成器库实体（顶部搜索 + 业务/数据双 Tab 列表；选中写回草稿，
+            // 见 `apply_picked_generator` 的 `ColumnDraft` 分支）
+            let browser = view.read(cx).generator_browser.clone();
 
-            let mut body = div()
-                .v_flex()
-                .gap_2()
-                .child(form_line(&theme, "列名", &name_state));
-            // 类型下拉
-            body = body.child(
+            // 右栏（用户定稿「上属性、下参数」）：属性区 = 生成器名 / 产出类型 / 业务组
+            //（生成器身份只读展示；产出类型可改——改类型不自动换生成器，需「恢复智能默认」重推）；
+            // 参数区 = 参数行 / 样例预览 / 空值率 / 唯一值 / 恢复智能默认。列名已移到窗口顶部。
+            let mut right = div().v_flex().gap_2().w_full();
+            // —— 属性 ——
+            right = right.child(
+                div()
+                    .w_full()
+                    .border_b_1()
+                    .border_color(theme.colors.border)
+                    .pb_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child("属性"),
+                    ),
+            );
+            // 生成器名（只读）：点左栏列表换生成器（选中即写回草稿，属性 / 参数随之重建）
+            right = right.child(
                 div()
                     .h_flex()
                     .items_center()
@@ -443,7 +463,31 @@ impl MockDetailView {
                             .min_w_0()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("类型"),
+                            .child("生成器名"),
+                    )
+                    .child(
+                        div()
+                            .id("mock-col-generator")
+                            .test_support()
+                            .text_xs()
+                            .text_color(theme.colors.foreground)
+                            .child(generator_label),
+                    ),
+            );
+            // 产出类型（可改，下拉）
+            right = right.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child("产出类型"),
                     )
                     .child({
                         let view = view.clone();
@@ -478,19 +522,8 @@ impl MockDetailView {
                             })
                     }),
             );
-            // 类型与生成器解耦的说明：改类型不自动换生成器（避免对话框内参数行与生成器
-            // 不一致）；想按新类型重推生成器 → 点下方「恢复智能默认」
-            body = body.child(
-                div()
-                    .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child("改类型不会自动换生成器；按新类型重推请点「恢复智能默认」。"),
-            );
-            // 生成器：与分组浏览**同一面板**（用户诉求）——行头展开/收起内嵌的生成器库
-            // （双视角分组 + 最近使用 + 搜索 + 自定义精调）；选中写回草稿（参数区 / 样例
-            // 即时重建），点「应用」才落地，无需退出列编辑去字段行换生成器。
-            let browser_open = view.read(cx).gen_browser_open;
-            body = body.child(
+            // 业务组（只读）：生成器所属业务分类（左栏业务视角的组名）
+            right = right.child(
                 div()
                     .h_flex()
                     .items_center()
@@ -502,44 +535,41 @@ impl MockDetailView {
                             .min_w_0()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("生成器"),
+                            .child("业务组"),
                     )
-                    .child({
-                        let view = view.clone();
-                        Button::new("mock-col-generator")
-                            .ghost()
-                            .label(generator_label)
-                            .dropdown_caret(true)
-                            .toggled(browser_open)
-                            .tooltip(if browser_open {
-                                "收起生成器库"
-                            } else {
-                                "展开生成器库：按分组 / 数据类型浏览选择"
-                            })
-                            .tooltip_show_delay(Duration::from_millis(500))
-                            .on_click(move |_, _window, app| {
-                                view.update(app, |v, cx| {
-                                    v.gen_browser_open = !v.gen_browser_open;
-                                    cx.notify();
-                                });
-                            })
-                    }),
+                    .child(
+                        div()
+                            .id("mock-col-category")
+                            .test_support()
+                            .text_xs()
+                            .text_color(theme.colors.foreground)
+                            .child(category_label),
+                    ),
             );
-            // 内嵌生成器库（与字段行入口同一渲染，`render_state` 无对话框壳）：
-            // 浏览模式含搜索 + 双视角 TabBar + 最近使用 + 分组列表；精调模式含表单 + footer
-            if browser_open {
-                let browser = view.read(cx).generator_browser.clone();
-                if let Some(browser) = browser {
-                    let (browser_body, browser_footer) =
-                        crate::mock_view::generator_library::render_state(&browser, window, cx);
-                    body = body.child(browser_body);
-                    if let Some(footer) = browser_footer {
-                        body = body.child(footer);
-                    }
-                }
-            }
+            // 类型与生成器解耦的说明：改类型不自动换生成器（避免参数行与生成器不一致）；
+            // 想按新类型重推生成器 → 点下方「恢复智能默认」
+            right = right.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child("改类型不会自动换生成器；按新类型重推请点「恢复智能默认」。"),
+            );
+            // —— 参数 ——
+            right = right.child(
+                div()
+                    .w_full()
+                    .border_b_1()
+                    .border_color(theme.colors.border)
+                    .pb_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child("参数"),
+                    ),
+            );
             for row in param_rows {
-                body = body.child(match row {
+                right = right.child(match row {
                     ParamRowView::Scalar { label, state } => form_line(&theme, &label, &state),
                     ParamRowView::Complex { label, hint, state } => {
                         complex_form_line(&theme, &label, hint, &state)
@@ -547,7 +577,7 @@ impl MockDetailView {
                 });
             }
             if let Some((_, message)) = param_error {
-                body = body.child(
+                right = right.child(
                     div()
                         .text_xs()
                         .text_color(theme.colors.danger)
@@ -555,7 +585,7 @@ impl MockDetailView {
                 );
             }
             // 参数实时样例预览（2 条示意值）：输入参数即改即看，固定种子可复现
-            body = body.child(
+            right = right.child(
                 div()
                     .h_flex()
                     .items_center()
@@ -576,8 +606,8 @@ impl MockDetailView {
                             .child(sample_preview),
                     ),
             );
-            body = body.child(form_line(&theme, "空值率（%）", &null_state));
-            body = body.child(
+            right = right.child(form_line(&theme, "空值率（%）", &null_state));
+            right = right.child(
                 div()
                     .h_flex()
                     .items_center()
@@ -606,7 +636,7 @@ impl MockDetailView {
                         )
                     }),
             );
-            body = body.child({
+            right = right.child({
                 let view = view.clone();
                 Button::new("mock-col-reset")
                     .secondary()
@@ -631,10 +661,99 @@ impl MockDetailView {
                     })
             });
 
+            // 窗口主体：「选择生成器窗口」——最上「列名 + 搜索定位框」同一行（用户定稿：顶部
+            // 只需要列名），框下左右分栏：左 = 生成器列表（业务 / 数据 双 Tab + 分组 + 最近 +
+            // 自定义管理），右 = 属性在上 / 参数在下。左栏选中生成器 → 写回草稿（属性 /
+            // 参数 / 样例即时重建），点「应用」才落地——与 V2 同口径。
+            let body = div()
+                .v_flex()
+                .gap_2()
+                .w_full()
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_3()
+                        .w_full()
+                        // 列名（定宽）：本列名字，与搜索定位框同排
+                        .child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .flex_none()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.colors.muted_foreground)
+                                        .child("列名"),
+                                )
+                                .child(
+                                    div()
+                                        .id("mock-col-name")
+                                        .test_support()
+                                        .w(px(200.))
+                                        .child(Input::new(&name_state)),
+                                ),                        )
+                        // 搜索定位框（跨剩余宽度，过滤左栏分组项）
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .when_some(browser.clone(), |col, b| {
+                                    col.child(
+                                        crate::mock_view::generator_library::render_search_box(
+                                            &b, window, cx,
+                                        ),
+                                    )
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .items_stretch()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        // 左栏：生成器双 Tab 列表（业务 / 数据）
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(px(280.))
+                                .h_full()
+                                .min_h_0()
+                                .overflow_y_scrollbar()
+                                .border_r_1()
+                                .border_color(theme.colors.border)
+                                .when_some(browser, |col, b| {
+                                    col.child(
+                                        crate::mock_view::generator_library::render_browse_pane(
+                                            &b, &theme, window, cx,
+                                        ),
+                                    )
+                                }),
+                        )
+                        // 右栏：本列参数区（超高时整栏滚动）
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .h_full()
+                                .min_h_0()
+                                .overflow_y_scrollbar()
+                                .child(right),
+                        ),
+                );
+
             let view_apply = view.clone();
             let view_cancel = view.clone();
             let panel_apply = panel.clone();
-            dialog.title("列编辑").child(body).footer(
+            dialog
+                .title("列编辑")
+                .width(px(840.0))
+                .child(body)
+                .footer(
                 DialogFooter::new()
                     .child(
                         Button::new("mock-col-cancel")

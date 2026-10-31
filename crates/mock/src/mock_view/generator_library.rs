@@ -197,7 +197,7 @@ pub(crate) fn create_library_state(
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<GeneratorLibraryState> {
-    let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("按名称 / 中文标签搜索"));
+    let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索定位生成器…"));
     let state = cx.new(|_cx| GeneratorLibraryState {
         panel: panel.clone(),
         writeback,
@@ -330,8 +330,25 @@ fn apply_picked_generator(
     }
 }
 
-/// 顶部搜索 + TabBar 双视角 + 分组列表（业务视角：15 分类；技术视角：13 数据类）。
-fn render_browse(
+/// 顶部搜索定位输入框（横跨对话框全宽；词过滤左栏分组项，见 [`render_browse_pane`]）。
+pub(crate) fn render_search_box(
+    state: &Entity<GeneratorLibraryState>,
+    _window: &mut Window,
+    cx: &mut App,
+) -> gpui_kit::AnyElement {
+    let search = state.read(cx).search_input.clone();
+    div()
+        .id("mock-lib-search")
+        .test_support()
+        .w_full()
+        .child(Input::new(&search))
+        .into_any_element()
+}
+
+/// TabBar 双视角 + 分组列表（业务视角：15 分类；技术视角：13 数据类）。无搜索框——
+/// 由调用方决定搜索框位置（列编辑对话框 = 置顶横跨全宽；字段行库对话框 = 内联，见
+/// [`render_browse`] 的组合）。列表超高时内部滚动（`flex_1().min_h_0()` 由外层给高度）。
+pub(crate) fn render_browse_pane(
     state: &Entity<GeneratorLibraryState>,
     theme: &Theme,
     window: &mut Window,
@@ -340,7 +357,6 @@ fn render_browse(
     // `state` 转 owned：按钮闭包捕获要 `'static`，参数引用只活到本函数返回
     let state = state.clone();
     let s = state.read(cx);
-    let search = s.search_input.clone();
     let view_index: usize = match s.view {
         LibraryView::Business => 0,
         LibraryView::Tech => 1,
@@ -426,8 +442,10 @@ fn render_browse(
                                 data_type_for_spec(spec) == data_type
                                     && (query.is_empty() || spec_matches(spec, &query))
                             })
+                            // 徽标 = 数据类（与所在组一致）：技术视角是「按类型看能用哪些生成方法」，
+                            // 不再标业务组名（避免整组看起来像业务组的翻版）
                             .map(|spec| {
-                                (spec.label.to_string(), spec.category.label().to_string(), false)
+                                (spec.label.to_string(), column_type_label(&data_type), false)
                             }),
                     );
                     items.extend(
@@ -438,13 +456,7 @@ fn render_browse(
                             .user_generators_in_type(&data_type)
                             .into_iter()
                             .map(|ug| {
-                                (
-                                    ug.name.clone(),
-                                    ug.category
-                                        .map(|c| c.label().to_string())
-                                        .unwrap_or_else(|| "（不分组）".to_string()),
-                                    true,
-                                )
+                                (ug.name.clone(), column_type_label(&ug.data_type), true)
                             }),
                     );
                     // 立即求值成 Vec（惰性迭代器会把闭包里的 &String 借到渲染期，生命周期不够）
@@ -463,10 +475,10 @@ fn render_browse(
 
     div()
         .v_flex()
-        .gap_3()
+        .gap_2()
         .w_full()
-        .h(px(420.))
-        .child(div().w_full().child(Input::new(&search)))
+        .flex_1()
+        .min_h_0()
         .child(
             TabBar::new("mock-lib-view")
                 .segmented()
@@ -491,6 +503,25 @@ fn render_browse(
                 .w_full()
                 .child(list),
         )
+        .into_any_element()
+}
+
+/// 浏览模式主体（搜索框置顶 + 列表区），供字段行库对话框与既有调用点使用。
+fn render_browse(
+    state: &Entity<GeneratorLibraryState>,
+    theme: &Theme,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui_kit::AnyElement {
+    let state = state.clone();
+    let search = state.read(cx).search_input.clone();
+    div()
+        .v_flex()
+        .gap_3()
+        .w_full()
+        .h(px(420.))
+        .child(div().w_full().child(Input::new(&search)))
+        .child(render_browse_pane(&state, theme, window, cx))
         .into_any_element()
 }
 
@@ -1229,7 +1260,7 @@ fn render_create(
     let name_state = draft.name_input.clone();
     let mut body = div().v_flex().gap_2().w_full().h(px(420.));
     body = body.child(form_line(&theme, "生成器名", &name_state));
-    // 类型行：锁定 → 只读文本；未锁定 → Select
+    // 类型行：锁定 → 只读文本；未锁定 → Select（用户定稿：字段名「产出类型」）
     body = match &draft.locked_type {
         Some(t) => body.child(
             div()
@@ -1243,7 +1274,7 @@ fn render_create(
                         .min_w_0()
                         .text_xs()
                         .text_color(theme.colors.muted_foreground)
-                        .child("数据类型"),
+                        .child("产出类型"),
                 )
                 .child(
                     div()
@@ -1256,12 +1287,12 @@ fn render_create(
             if let Some(type_state) = &draft.type_state {
                 body.child(select_line(
                     &theme,
-                    "数据类型",
+                    "产出类型",
                     Select::new(type_state)
                         .menu_width(px(260.))
                         .menu_max_h(px(220.))
-                        .placeholder("选择数据类型…")
-                        .accessibility_label("数据类型"),
+                        .placeholder("选择产出类型…")
+                        .accessibility_label("产出类型"),
                 ))
             } else {
                 body
