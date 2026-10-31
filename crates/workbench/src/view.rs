@@ -1520,7 +1520,8 @@ impl WorkbenchView {
             if mode == SidebarMode::Expanded {
                 if !area.has_dock(DockPlacement::Left) {
                     area.set_dock(DockPlacement::Left, layout, window, cx);
-                    // 起步宽度 240px（= 15rem 基准，随界面缩放；layout-design §2.3，用户拖拽可调）。
+                    // 起步宽度取 `ui::LEFT_DOCK_WIDTH`（18rem，基准字号下 288px，随界面缩放；
+                    // layout-design §2.3，用户拖拽可调）。数值以 ui.rs 常量为准，此处不再写死 px。
                     area.set_dock_size(
                         DockPlacement::Left,
                         cx.theme().font_size * ui::LEFT_DOCK_WIDTH,
@@ -3117,6 +3118,11 @@ impl Render for WorkbenchView {
         // }
         // 侧边栏宽度同步：设置值 → Dock。
         // 只在设置页面的值发生变化时，才同步侧边栏宽度到 Dock，避免覆盖用户拖动分割线后的大小。
+        //
+        // 单位口径统一（2026-11-01）：Settings 里的宽度是**基准字号下的 px**（用户看到的就是这个数），
+        // 应用时须按当前字号放大后再交给 Dock。过去这里直接写 `px(left_width)`，把上面
+        // `apply_left_mode` 刚写进去的 `font_size × ui::LEFT_DOCK_WIDTH` 结果覆盖掉——用户只要
+        // 配过宽度，字号缩放就在这一行被打断。缺基准值时用默认值兜底，避免除 0。
         let left_width = settings::SettingsService::layout_left_sidebar_width(cx) as f32;
         let right_width = settings::SettingsService::layout_right_sidebar_width(cx) as f32;
         let prev_left_width = self.shared.prev_left_sidebar_width.get();
@@ -3124,8 +3130,26 @@ impl Render for WorkbenchView {
         if left_width != prev_left_width || right_width != prev_right_width {
             if let Some(area) = self.area.clone() {
                 area.update(cx, |area, cx| {
-                    area.set_dock_size(DockPlacement::Left, px(left_width), window, cx);
-                    area.set_dock_size(DockPlacement::Right, px(right_width), window, cx);
+                    let font_size = cx.theme().font_size;
+                    // `font_size` 与 `px(BASE_FONT_SIZE)` 同为 `Pixels`：`Pixels / Pixels` 才是无单位比值
+                    // （`Pixels / f32` 会得到 `Pixels`，再乘 px 宽度就变成面积量纲，编译期即报错）。
+                    let scale: f32 = if ui::BASE_FONT_SIZE > 0.0 {
+                        font_size / px(ui::BASE_FONT_SIZE)
+                    } else {
+                        1.0
+                    };
+                    area.set_dock_size(
+                        DockPlacement::Left,
+                        px(left_width * scale),
+                        window,
+                        cx,
+                    );
+                    area.set_dock_size(
+                        DockPlacement::Right,
+                        px(right_width * scale),
+                        window,
+                        cx,
+                    );
                 });
             }
             self.shared.prev_left_sidebar_width.set(left_width);
