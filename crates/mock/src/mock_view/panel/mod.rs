@@ -22,8 +22,6 @@ pub struct MockPanel {
     preview_limit: usize,
     /// 中央详情 tab 三段分栏里**列区**的初始高度（rem；拖拽后由 `on_resize` 回写，跨 tab / 跨窗口沿用）
     pub(crate) detail_columns_rem: f32,
-    /// 主界面左栏常驻的生成器库（仅草稿 tab 渲染；`open_detail` 时懒创建——`InputState` 要 window）
-    library: Option<Entity<crate::mock_view::generator_library::GeneratorLibraryState>>,
     /// 字段区的列搜索框（懒创建：`InputState` 要 window；搜索词就存在它里，不另存一份）
     column_filter: Option<Entity<InputState>>,
     /// 搜索词变化时重画字段区的订阅（必须持有：丢了就自动退订）
@@ -291,7 +289,6 @@ impl MockPanel {
             preview_cache: None,
             preview_limit: PREVIEW_ROWS,
             detail_columns_rem: 15.0,
-            library: None,
             column_filter: None,
             column_filter_sub: None,
             current: 0,
@@ -668,37 +665,7 @@ impl MockPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // 主界面左栏常驻生成器库：打开详情时就绪（草稿 tab 渲染；写回草稿目标在
-        // `MockDetailView::open_column_editor` 里按当前编辑列更新）
-        self.ensure_library(window, cx);
         self.host.open_detail(target, window, cx);
-    }
-
-    /// 左栏常驻生成器库实体（未创建为 `None`；草稿 tab 渲染时读取）
-    pub(crate) fn library(&self) -> Option<Entity<crate::mock_view::generator_library::GeneratorLibraryState>> {
-        self.library.clone()
-    }
-
-    /// 确保左栏生成器库实体存在（惰性创建：`InputState::new` 要 window，构造时没有）。
-    /// `embedded=true` 无对话框壳；初始写回目标为空弱引用（未编辑列时点选生成器静默
-    /// 忽略，编辑列后由 `open_column_editor` 更新为当前草稿）。
-    pub(crate) fn ensure_library(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.library.is_some() {
-            return;
-        }
-        self.library = Some(
-            crate::mock_view::generator_library::create_library_state(
-                cx.entity(),
-                crate::mock_view::generator_library::LibraryWriteback::ColumnDraft {
-                    detail: None,
-                    column_id: 0,
-                },
-                true,
-                SharedString::from("draft-"),
-                window,
-                cx,
-            ),
-        );
     }
 
     /// 打开某张**结果表**的详情 tab（右 Dock 结果区点一行 / 「查看详情」走这条）。

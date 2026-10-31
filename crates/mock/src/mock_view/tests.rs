@@ -2743,18 +2743,11 @@ fn column_dialog_opens_with_params(cx: &mut TestAppContext) {
     draw(cx);
     let id = panel.read_with(cx, |panel, _cx| panel.draft().columns[0].id);
     cx.update(|window, cx| {
-        detail.update(cx, |view, cx| view.open_column_editor(id, window, cx));
+        detail.update(cx, |view, cx| view.open_column_dialog(id, window, cx));
     });
     cx.update(|window, cx| {
-        assert!(
-            !window.has_active_dialog(cx),
-            "列编辑内嵌主界面右栏，不应有对话框"
-        );
+        assert!(window.has_active_dialog(cx), "列编辑对话框应打开");
         window.draw(cx).clear(cx);
-    });
-    detail.update(cx, |view, _cx| {
-        assert!(view.draft.is_some(), "列编辑草稿应就绪");
-        assert_eq!(view.editing_column_id, Some(id), "列编辑目标应标记");
     });
 }
 
@@ -3325,7 +3318,7 @@ fn complex_param_edits_write_back_and_keep_last_valid(cx: &mut TestAppContext) {
     });
     draw(cx);
     cx.update(|window, cx| {
-        detail.update(cx, |view, cx| view.open_column_editor(id, window, cx));
+        detail.update(cx, |view, cx| view.open_column_dialog(id, window, cx));
     });
 
     // 参数行里的这一项应当是**多行控件**（不是单行 Input）
@@ -3404,17 +3397,14 @@ fn constraint_column_dialog_opens(cx: &mut TestAppContext) {
     });
     draw(cx);
     cx.update(|window, cx| {
-        detail.update(cx, |view, cx| view.open_column_editor(id, window, cx));
+        detail.update(cx, |view, cx| view.open_column_dialog(id, window, cx));
     });
     cx.update(|window, cx| {
-        assert!(
-            !window.has_active_dialog(cx),
-            "列编辑内嵌主界面右栏，不应有对话框"
-        );
+        assert!(window.has_active_dialog(cx), "列编辑对话框应打开");
         window.draw(cx).clear(cx);
     });
     detail.update(cx, |view, _cx| {
-        let draft = view.draft.as_ref().expect("列编辑草稿应已就绪");
+        let draft = view.draft.as_ref().expect("对话框应已打开");
         assert!(
             draft
                 .params
@@ -5350,12 +5340,11 @@ fn generator_library_dialog_opens(cx: &mut TestAppContext) {
     });
 }
 
-/// 主界面左右分栏（用户诉求「分组靠左、列编辑靠右，内嵌不影响布局」）：
-/// 列编辑不再弹对话框——打开详情即创建左栏常驻生成器库（`MockPanel::ensure_library`），
-/// 编辑列时右栏渲染列编辑表单（`editing_column_id` 标记）；左栏选生成器写回**草稿**
+/// 「列编辑与分组在同一面板」（用户诉求）：列编辑对话框内打开生成器库
+/// （`LibraryWriteback::ColumnDraft`，两对话框栈式叠加）；选中写回**草稿**
 /// （生成器配置 + 参数区重建 + 样例刷新），列未应用时面板列不动。
 #[gpui_kit::test]
-fn column_editor_embedded_in_main_panel_with_persistent_library(cx: &mut TestAppContext) {
+fn column_dialog_opens_library_and_writes_back_to_draft(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let rec = recorder();
     let (panel, detail, cx) = open_harness(cx, test_host(&rec));
@@ -5369,37 +5358,42 @@ fn column_editor_embedded_in_main_panel_with_persistent_library(cx: &mut TestApp
         panel.draft().columns[0].id
     });
     draw(cx);
-    // 0) 走生产入口打开详情（`open_detail_for`）：创建左栏常驻生成器库（宿主替身只记录，
-    //    不渲染）；这是「常驻」的落点——打开详情即在主界面左侧就绪，非临时弹层
+    // 1) 打开列编辑对话框
     cx.update(|window, cx| {
-        panel.update(cx, |panel, cx| {
-            panel.open_detail_for(DetailTarget::Draft, window, cx);
-        });
-    });
-    panel.update(cx, |panel, _cx| {
-        assert!(panel.library().is_some(), "打开详情应创建常驻生成器库");
-    });
-    // 1) 编辑列：主界面内嵌右栏，**不再弹对话框**
-    cx.update(|window, cx| {
-        detail.update(cx, |view, cx| view.open_column_editor(id, window, cx));
-        assert!(
-            !window.has_active_dialog(cx),
-            "列编辑内嵌主界面右栏，不应有对话框"
-        );
+        detail.update(cx, |view, cx| view.open_column_dialog(id, window, cx));
+        assert!(window.has_active_dialog(cx), "列编辑对话框应打开");
         window.draw(cx).clear(cx);
     });
-    detail.update(cx, |view, _cx| {
-        assert_eq!(view.editing_column_id, Some(id), "列编辑目标应标记");
-    });
-    // 渲染不 panic（左栏库 + 右栏列编辑表单同帧共存；含双视角 TabBar / 分组 / 搜索）
-    draw(cx);
     let current = panel.read_with(cx, |panel, _cx| {
         generator_catalog::spec_of(&panel.draft().columns[0].def.generator)
             .name
             .to_string()
     });
 
-    // 2) 左栏选生成器写回草稿：换一个与当前不同的内建生成器
+    // 2) 生成器库浏览区内嵌在列编辑对话框里（同面板）：打开列编辑即建浏览区并默认展开，
+    //    渲染不 panic（含双视角 TabBar / 分组 / 最近使用 / 搜索），且**不再叠加第二层对话框**
+    cx.update(|window, cx| {
+        let view = detail.read(cx);
+        assert!(
+            view.generator_browser.is_some(),
+            "打开列编辑应创建内嵌生成器库浏览区"
+        );
+        assert!(view.gen_browser_open, "浏览区应默认展开（同面板诉求）");
+        window.draw(cx).clear(cx);
+    });
+    // 2.5) 生成器行可收起/再展开浏览区（渲染不 panic，状态切换由 detail 字段承载）
+    detail.update(cx, |view, cx| {
+        view.gen_browser_open = false;
+        cx.notify();
+    });
+    draw(cx);
+    detail.update(cx, |view, cx| {
+        view.gen_browser_open = true;
+        cx.notify();
+    });
+    draw(cx);
+
+    // 3) 浏览区内选中写回草稿：换一个与当前不同的内建生成器
     let picked = generator_catalog::specs_in(generator_catalog::GeneratorCategory::Text)
         .iter()
         .map(|s| s.name.to_string())

@@ -112,16 +112,18 @@ pub struct MockDetailView {
     panel: Entity<MockPanel>,
     /// 这个 tab 管的是哪张表 / 草稿
     target: DetailTarget,
-    /// 列编辑的工作副本（右栏内嵌，主界面不弹窗）
+    /// 列编辑对话框的工作副本
     pub(crate) draft: Option<ColumnDraft>,
-    /// 正在编辑的列 id（`None` = 未在编辑列；`draft` 与之成对出现）
-    pub(crate) editing_column_id: Option<u64>,
     focus_handle: FocusHandle,
     /// 所在 Dock tab 组（`Panel::on_added_to` 注入；重复点「查看详情」时用于聚焦自身）
     pub(crate) group: Option<WeakEntity<TabGroup>>,
     /// 预览表状态（组件库 `DataTable` 的 `TableState`）：懒创建（`TableState::new` 要 window），
     /// 数据由面板通知那一拍同步（见 [`MockDetailView::sync_preview_table`]）。
     pub(crate) preview_table: Option<Entity<TableState<PreviewTableDelegate>>>,
+    /// 列编辑对话框内的生成器库浏览区（同面板：分组/最近/搜索/精调内嵌在列编辑里）：
+    /// 打开列编辑时创建（写回草稿），关闭后随实体丢弃；`gen_browser_open` 控制展开/收起。
+    pub(crate) generator_browser: Option<Entity<crate::mock_view::generator_library::GeneratorLibraryState>>,
+    pub(crate) gen_browser_open: bool,
 }
 
 /// 把详情 tab 切到前台（窗口聚焦 + 在所在 Dock 组里选中自身）。
@@ -170,10 +172,11 @@ impl MockDetailView {
             panel,
             target,
             draft: None,
-            editing_column_id: None,
             focus_handle: cx.focus_handle(),
             group: None,
             preview_table: None,
+            generator_browser: None,
+            gen_browser_open: false,
         }
     }
 
@@ -330,8 +333,8 @@ impl MockDetailView {
         })
     }
 
-    /// 打开「列编辑」（主界面内嵌右栏，不弹窗）：列名 / 类型 / 参数 / 空值率 / 唯一 / 恢复智能默认。
-    pub fn open_column_editor(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+    /// 打开「列编辑」对话框（列名 / 类型 / 参数 / 空值率 / 唯一 / 恢复智能默认）。
+    pub fn open_column_dialog(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(column) = self
             .panel
             .read(cx)
@@ -366,28 +369,298 @@ impl MockDetailView {
         self.rebuild_params(window, cx);
         // 初始样例预览（按当前配置生成，事件路径，不在 render 里做）
         self.refresh_sample_preview(cx);
-        self.editing_column_id = Some(id);
-        // 左栏常驻生成器库的写回目标指向当前编辑列（随编辑目标切换；实体在
-        // `MockPanel::ensure_library` 创建）。选中生成器 → 写回草稿（`ColumnDraft`），
-        // 点「应用」才落地——与对话框版同口径。
-        if let Some(library) = self.panel.read(cx).library() {
-            let detail = cx.entity().downgrade();
-            library.update(cx, |s, cx| {
-                s.writeback = crate::mock_view::generator_library::LibraryWriteback::ColumnDraft {
-                    detail: Some(detail),
+        // 生成器库浏览区内嵌（同面板）：分组/最近/搜索/精调直接开在列编辑对话框里，
+        // 选中写回草稿（`LibraryWriteback::ColumnDraft`），点「应用」才落地
+        let view = cx.entity();
+        self.generator_browser = Some(
+            crate::mock_view::generator_library::create_library_state(
+                self.panel.clone(),
+                crate::mock_view::generator_library::LibraryWriteback::ColumnDraft {
+                    detail: view.downgrade(),
                     column_id: id,
-                };
-                cx.notify();
-            });
-        }
-        cx.notify();
-    }
+                },
+                true,
+                window,
+                cx,
+            ),
+        );
+        self.gen_browser_open = true;
 
-    /// 关闭列编辑（取消 / 应用落地后）：丢弃工作副本，右栏回到三段分栏。
-    fn close_column_editor(&mut self, cx: &mut Context<Self>) {
-        self.draft = None;
-        self.editing_column_id = None;
-        cx.notify();
+        let view = cx.entity();
+        let panel = self.panel.clone();
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let theme = cx.theme().clone();
+            let Some(draft) = view.read(cx).draft.as_ref() else {
+                return dialog.title("列编辑");
+            };
+            let name_state = draft.name_input.clone();
+            let null_state = draft.null_input.clone();
+            let type_label = draft.type_label.clone();
+            let unique = draft.def.unique;
+            // 参数行：标量单行 / 集合多行，标签与提示都从目录派生（不手写清单）
+            let param_rows: Vec<ParamRowView> = draft
+                .params
+                .iter()
+                .map(|p| {
+                    let label = generator_catalog::spec_of(&draft.def.generator)
+                        .params
+                        .iter()
+                        .find(|f| f.key == p.key)
+                        .map(|f| f.label.to_string())
+                        .unwrap_or_else(|| p.key.clone());
+                    match &p.widget {
+                        ParamWidget::Scalar(state) => ParamRowView::Scalar {
+                            label,
+                            state: state.clone(),
+                        },
+                        ParamWidget::Complex(state) => ParamRowView::Complex {
+                            label,
+                            hint: complex_param_hint(&p.key),
+                            state: state.clone(),
+                        },
+                    }
+                })
+                .collect();
+            let param_error = draft.param_error.clone();
+            let generator_label = generator_catalog::spec_of(&draft.def.generator).label;
+            // 样例预览克隆成值：draft 借用要在内嵌生成器库渲染（需要 `&mut cx`）前结束
+            let sample_preview = draft.sample_preview.clone();
+
+            let mut body = div()
+                .v_flex()
+                .gap_2()
+                .child(form_line(&theme, "列名", &name_state));
+            // 类型下拉
+            body = body.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child("类型"),
+                    )
+                    .child({
+                        let view = view.clone();
+                        Button::new("mock-col-type")
+                            .ghost()
+                            .label(type_label.clone())
+                            .dropdown_caret(true)
+                            .dropdown_menu(move |menu, _window, _cx| {
+                                let mut menu = menu;
+                                for candidate in COLUMN_TYPES {
+                                    let label = column_type_label(&candidate);
+                                    let is_current = label == type_label;
+                                    let view = view.clone();
+                                    menu = menu.item(
+                                        PopupMenuItem::new(label).checked(is_current).on_click(
+                                            move |_, _, app| {
+                                                let chosen = candidate.clone();
+                                                view.update(app, |view, cx| {
+                                                    if let Some(draft) = view.draft.as_mut() {
+                                                        draft.type_label =
+                                                            column_type_label(&chosen);
+                                                        draft.def.data_type = chosen;
+                                                        draft.confidence = "manual".to_string();
+                                                    }
+                                                    cx.notify();
+                                                });
+                                            },
+                                        ),
+                                    );
+                                }
+                                menu
+                            })
+                    }),
+            );
+            // 类型与生成器解耦的说明：改类型不自动换生成器（避免对话框内参数行与生成器
+            // 不一致）；想按新类型重推生成器 → 点下方「恢复智能默认」
+            body = body.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child("改类型不会自动换生成器；按新类型重推请点「恢复智能默认」。"),
+            );
+            // 生成器：与分组浏览**同一面板**（用户诉求）——行头展开/收起内嵌的生成器库
+            // （双视角分组 + 最近使用 + 搜索 + 自定义精调）；选中写回草稿（参数区 / 样例
+            // 即时重建），点「应用」才落地，无需退出列编辑去字段行换生成器。
+            let browser_open = view.read(cx).gen_browser_open;
+            body = body.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child("生成器"),
+                    )
+                    .child({
+                        let view = view.clone();
+                        Button::new("mock-col-generator")
+                            .ghost()
+                            .label(generator_label)
+                            .dropdown_caret(true)
+                            .toggled(browser_open)
+                            .tooltip(if browser_open {
+                                "收起生成器库"
+                            } else {
+                                "展开生成器库：按分组 / 数据类型浏览选择"
+                            })
+                            .tooltip_show_delay(Duration::from_millis(500))
+                            .on_click(move |_, _window, app| {
+                                view.update(app, |v, cx| {
+                                    v.gen_browser_open = !v.gen_browser_open;
+                                    cx.notify();
+                                });
+                            })
+                    }),
+            );
+            // 内嵌生成器库（与字段行入口同一渲染，`render_state` 无对话框壳）：
+            // 浏览模式含搜索 + 双视角 TabBar + 最近使用 + 分组列表；精调模式含表单 + footer
+            if browser_open {
+                let browser = view.read(cx).generator_browser.clone();
+                if let Some(browser) = browser {
+                    let (browser_body, browser_footer) =
+                        crate::mock_view::generator_library::render_state(&browser, window, cx);
+                    body = body.child(browser_body);
+                    if let Some(footer) = browser_footer {
+                        body = body.child(footer);
+                    }
+                }
+            }
+            for row in param_rows {
+                body = body.child(match row {
+                    ParamRowView::Scalar { label, state } => form_line(&theme, &label, &state),
+                    ParamRowView::Complex { label, hint, state } => {
+                        complex_form_line(&theme, &label, hint, &state)
+                    }
+                });
+            }
+            if let Some((_, message)) = param_error {
+                body = body.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.danger)
+                        .child(message),
+                );
+            }
+            // 参数实时样例预览（2 条示意值）：输入参数即改即看，固定种子可复现
+            body = body.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child("样例预览"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.foreground)
+                            .child(sample_preview),
+                    ),
+            );
+            body = body.child(form_line(&theme, "空值率（%）", &null_state));
+            body = body.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child("唯一值"),
+                    )
+                    .child({
+                        let view = view.clone();
+                        Switch::new("mock-col-unique").checked(unique).on_click(
+                            move |checked, _window, app| {
+                                let checked = *checked;
+                                view.update(app, |view, cx| {
+                                    if let Some(draft) = view.draft.as_mut() {
+                                        draft.def.unique = checked;
+                                    }
+                                    cx.notify();
+                                });
+                            },
+                        )
+                    }),
+            );
+            body = body.child({
+                let view = view.clone();
+                Button::new("mock-col-reset")
+                    .secondary()
+                    .label("恢复智能默认")
+                    .on_click(move |_, window, app| {
+                        view.update(app, |view, cx| {
+                            if let Some(draft) = view.draft.as_mut() {
+                                let mapped =
+                                    ColumnMapper::infer(&draft.def.name, &draft.def.data_type);
+                                draft.def.generator = mapped.generator;
+                                draft.def.nullable_ratio = 0.0;
+                                draft.def.unique = false;
+                                draft.confidence = mapped.confidence;
+                                draft.sample_value = mapped.sample_value;
+                            }
+                            // 生成器身份可能变了：参数行按新生成器重建（事件路径，不能在 render 做）
+                            cx.defer_in(window, |view, window, cx| {
+                                view.rebuild_params(window, cx);
+                            });
+                            cx.notify();
+                        });
+                    })
+            });
+
+            let view_apply = view.clone();
+            let view_cancel = view.clone();
+            let panel_apply = panel.clone();
+            dialog.title("列编辑").child(body).footer(
+                DialogFooter::new()
+                    .child(
+                        Button::new("mock-col-cancel")
+                            .secondary()
+                            .label("取消")
+                            .on_click(move |_, window, app| {
+                                view_cancel.update(app, |view, _cx| view.draft = None);
+                                window.close_dialog(app);
+                            }),
+                    )
+                    .child(
+                        Button::new("mock-col-apply")
+                            .with_variant(ButtonVariant::Primary)
+                            .label("应用")
+                            .on_click(move |_, window, app| {
+                                let edited =
+                                    view_apply.update(app, |view, cx| view.collect_column_edit(cx));
+                                if let Some(edited) = edited {
+                                    panel_apply
+                                        .update(app, |panel, cx| panel.apply_column(edited, cx));
+                                }
+                                window.close_dialog(app);
+                            }),
+                    ),
+            )
+        });
     }
 
     /// 按当前生成器重建参数输入行（保留同名参数的输入框与订阅）。
@@ -714,7 +987,7 @@ impl MockDetailView {
                                 .on_click(
                                     move |_, window, app| {
                                         entity.update(app, |view, cx| {
-                                            view.open_column_editor(id, window, cx);
+                                            view.open_column_dialog(id, window, cx);
                                         });
                                     },
                                 )
@@ -1293,72 +1566,7 @@ impl Render for MockDetailView {
                 }
             });
 
-        // ── 主体布局 ──
-        // 草稿 tab：左栏常驻生成器库（分组 / 最近 / 搜索 / 自定义管理，方便直接调整已有
-        // 生成器细节），右栏三态——编辑列 → 列编辑表单；左栏「＋」/「编辑」→ 自定义精调
-        // 表单；平时 → 原三段可拖分栏。结果表 tab：只读事实，保持原三段分栏（无编辑入口）。
-        let content: gpui_kit::AnyElement = if is_draft {
-            let view = cx.entity();
-            let panel = self.panel.clone();
-            let library = self.panel.read(cx).library();
-            // 右栏三态（按优先级：列编辑 > 自定义精调 > 三段）
-            let right: gpui_kit::AnyElement = if self.draft.is_some() {
-                let draft = self.draft.as_ref().expect("上面判过 Some");
-                render_column_editor(&view, draft, &panel, cx)
-            } else if let Some(lib) = library.as_ref().filter(|lib| {
-                lib.read(cx).mode == crate::mock_view::generator_library::LibraryMode::Create
-            }) {
-                let (form_body, form_footer) =
-                    crate::mock_view::generator_library::render_state(lib, window, cx);
-                div()
-                    .v_flex()
-                    .gap_2()
-                    .w_full()
-                    .child(form_body)
-                    .when_some(form_footer, |col, footer| col.child(footer))
-                    .into_any_element()
-            } else {
-                split.into_any_element()
-            };
-            // 左栏：常驻生成器库（宽 300，右缘分隔线；浏览列表超高时整体滚动）
-            let theme_lib = cx.theme().clone();
-            div()
-                .h_flex()
-                .items_stretch()
-                .flex_1()
-                .min_h_0()
-                .size_full()
-                .child(
-                    div()
-                        .flex_none()
-                        .w(px(300.))
-                        .h_full()
-                        .min_h_0()
-                        .overflow_y_scrollbar()
-                        .border_r_1()
-                        .border_color(border)
-                        .when_some(library, |col, lib| {
-                            col.child(
-                                crate::mock_view::generator_library::render_browse(
-                                    &lib, &theme_lib, window, cx,
-                                ),
-                            )
-                        }),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .min_h_0()
-                        .overflow_y_scrollbar()
-                        .child(right),
-                )
-                .into_any_element()
-        } else {
-            split.into_any_element()
-        };
-        body = body.child(content);
+        body = body.child(split);
 
         // 键位落点：`track_focus` 不能省（没有它这条 tab 不在 dispatch path 上，快捷键落不到动作）；
         // `key_context("mock-detail")` 与 `crates/app` 的键位注册（Ctrl+Enter = 生成）成对。
@@ -1366,233 +1574,6 @@ impl Render for MockDetailView {
             .key_context("mock-detail")
             .on_action(cx.listener(Self::on_generate_key))
     }
-}
-
-/// 右栏列编辑表单（主界面内嵌，不弹对话框）：列名 / 类型 / 参数 / 样例 / 空值率 / 唯一 /
-/// 恢复智能默认 + 底部「取消 / 应用」。仅在草稿 tab 渲染（结果表 tab 无编辑入口），
-/// 元素 id 不拼 tab 键也不会与同窗口其他 tab 重复。
-fn render_column_editor(
-    view: &Entity<MockDetailView>,
-    draft: &ColumnDraft,
-    panel: &Entity<MockPanel>,
-    cx: &mut App,
-) -> gpui_kit::AnyElement {
-    let theme = cx.theme().clone();
-    let name_state = draft.name_input.clone();
-    let null_state = draft.null_input.clone();
-    let type_label = draft.type_label.clone();
-    let unique = draft.def.unique;
-    // 参数行：标量单行 / 集合多行，标签与提示都从目录派生（不手写清单）
-    let param_rows: Vec<ParamRowView> = draft
-        .params
-        .iter()
-        .map(|p| {
-            let label = generator_catalog::spec_of(&draft.def.generator)
-                .params
-                .iter()
-                .find(|f| f.key == p.key)
-                .map(|f| f.label.to_string())
-                .unwrap_or_else(|| p.key.clone());
-            match &p.widget {
-                ParamWidget::Scalar(state) => ParamRowView::Scalar {
-                    label,
-                    state: state.clone(),
-                },
-                ParamWidget::Complex(state) => ParamRowView::Complex {
-                    label,
-                    hint: complex_param_hint(&p.key),
-                    state: state.clone(),
-                },
-            }
-        })
-        .collect();
-    let param_error = draft.param_error.clone();
-    let sample_preview = draft.sample_preview.clone();
-
-    let mut body = div()
-        .v_flex()
-        .gap_2()
-        .w_full()
-        .child(form_line(&theme, "列名", &name_state));
-    // 类型下拉
-    body = body.child(
-        div()
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .w_full()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child("类型"),
-            )
-            .child({
-                let view = view.clone();
-                Button::new("mock-col-type")
-                    .ghost()
-                    .label(type_label.clone())
-                    .dropdown_caret(true)
-                    .dropdown_menu(move |menu, _window, _cx| {
-                        let mut menu = menu;
-                        for candidate in COLUMN_TYPES {
-                            let label = column_type_label(&candidate);
-                            let is_current = label == type_label;
-                            let view = view.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(label).checked(is_current).on_click(
-                                    move |_, _, app| {
-                                        let chosen = candidate.clone();
-                                        view.update(app, |view, cx| {
-                                            if let Some(draft) = view.draft.as_mut() {
-                                                draft.type_label = column_type_label(&chosen);
-                                                draft.def.data_type = chosen;
-                                                draft.confidence = "manual".to_string();
-                                            }
-                                            cx.notify();
-                                        });
-                                    },
-                                ),
-                            );
-                        }
-                        menu
-                    })
-            }),
-    );
-    // 类型与生成器解耦的说明：改类型不自动换生成器（避免参数行与生成器不一致）；
-    // 想按新类型重推生成器 → 点下方「恢复智能默认」
-    body = body.child(
-        div()
-            .text_xs()
-            .text_color(theme.colors.muted_foreground)
-            .child("改类型不会自动换生成器；按新类型重推请点「恢复智能默认」。"),
-    );
-    for row in param_rows {
-        body = body.child(match row {
-            ParamRowView::Scalar { label, state } => form_line(&theme, &label, &state),
-            ParamRowView::Complex { label, hint, state } => {
-                complex_form_line(&theme, &label, hint, &state)
-            }
-        });
-    }
-    if let Some((_, message)) = param_error {
-        body = body.child(
-            div()
-                .text_xs()
-                .text_color(theme.colors.danger)
-                .child(message),
-        );
-    }
-    // 参数实时样例预览（2 条示意值）：输入参数即改即看，固定种子可复现
-    body = body.child(
-        div()
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .w_full()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child("样例预览"),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.colors.foreground)
-                    .child(sample_preview),
-            ),
-    );
-    body = body.child(form_line(&theme, "空值率（%）", &null_state));
-    body = body.child(
-        div()
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .w_full()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child("唯一值"),
-            )
-            .child({
-                let view = view.clone();
-                Switch::new("mock-col-unique").checked(unique).on_click(
-                    move |checked, _window, app| {
-                        let checked = *checked;
-                        view.update(app, |view, cx| {
-                            if let Some(draft) = view.draft.as_mut() {
-                                draft.def.unique = checked;
-                            }
-                            cx.notify();
-                        });
-                    },
-                )
-            }),
-    );
-    body = body.child({
-        let view = view.clone();
-        Button::new("mock-col-reset")
-            .secondary()
-            .label("恢复智能默认")
-            .on_click(move |_, window, app| {
-                view.update(app, |view, cx| {
-                    if let Some(draft) = view.draft.as_mut() {
-                        let mapped = ColumnMapper::infer(&draft.def.name, &draft.def.data_type);
-                        draft.def.generator = mapped.generator;
-                        draft.def.nullable_ratio = 0.0;
-                        draft.def.unique = false;
-                        draft.confidence = mapped.confidence;
-                        draft.sample_value = mapped.sample_value;
-                    }
-                    // 生成器身份可能变了：参数行按新生成器重建（事件路径，不能在 render 做）
-                    cx.defer_in(window, |view, window, cx| {
-                        view.rebuild_params(window, cx);
-                    });
-                    cx.notify();
-                });
-            })
-    });
-    // 底部动作行：取消（丢弃草稿回三段）/ 应用（合成列规格写回面板）
-    let view_apply = view.clone();
-    let view_cancel = view.clone();
-    let panel_apply = panel.clone();
-    body = body.child(
-        div()
-            .h_flex()
-            .justify_end()
-            .items_center()
-            .gap_2()
-            .w_full()
-            .child(
-                Button::new("mock-col-cancel")
-                    .secondary()
-                    .label("取消")
-                    .on_click(move |_, _window, app| {
-                        view_cancel.update(app, |view, cx| view.close_column_editor(cx));
-                    }),
-            )
-            .child(
-                Button::new("mock-col-apply")
-                    .with_variant(ButtonVariant::Primary)
-                    .label("应用")
-                    .on_click(move |_, _window, app| {
-                        let edited = view_apply.update(app, |view, cx| view.collect_column_edit(cx));
-                        if let Some(edited) = edited {
-                            panel_apply.update(app, |panel, cx| panel.apply_column(edited, cx));
-                        }
-                        view_apply.update(app, |view, cx| view.close_column_editor(cx));
-                    }),
-            ),
-    );
-    body.into_any_element()
 }
 
 /// 清单行右端的**状态点**：`IconName` 图标（走图标组件，不再用 Unicode 字形）+ 语义色文字。
