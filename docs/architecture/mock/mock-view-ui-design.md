@@ -249,9 +249,9 @@ tests.rs 无「状态：○」「＋ 加列」「✕」「▾」文案断言（g
 
 ### 9.1 用户确认的信息架构（两级，双视角）
 
-- **业务视角**：15 业务分类（`GeneratorCategory`）→ 生成器项（带**数据类徽标**）；
-- **技术视角**：13 数据类型（`ColumnDataType`）→ 兼容生成器项；
-- **一份生成器定义两个属性**：业务分类 + 产出数据类 → 两个视角各按自己的属性归组，**双向可见**；
+- **业务视角**：15 业务分类（`GeneratorCategory`）→ 生成器项（带**数据类徽标**）；**全量内建**（方法级也按其业务分类可见）+ 挂业务组的自定义；
+- **技术视角**：13 数据类型（`ColumnDataType`）→ **只收方法级生成器**（`is_method_spec`：Numeric/Text/Markdown/DateTime/Constraint 整类 + Tech 的 UUID_V1/V3/V4/V5——「数据类型下展开的都是方法」）+ 自定义生成器（始终按产出类型全量挂）；**业务生成器（姓名/邮箱/地址/车牌等）只在业务视角可见**；
+- **一份生成器定义两个属性**：业务分类 + 产出数据类 → 业务视角按业务分类归组、技术视角按产出类型归组；技术视角的可见性由「方法级」边界决定（`is_method_spec` 纯函数，手加于 `generator_catalog.rs`，脚本 `tools/gen_mock_generator_catalog.py` 重跑后需手动保留）；
 - **自定义入口 = 分组上的「＋」**（业务组/技术组都有）：从技术组「＋」进入 → 类型**锁定**、业务组可选；从业务组「＋」进入 → 业务组**锁定**、类型可选；生成器名必填、基础生成器必选、参数区按基础生成器重建；
 - **保存双向挂组**：永远挂数据类型组（类型是硬属性）+ 选了/锁定的业务组同时挂。
 
@@ -285,6 +285,7 @@ pub struct UserGenerator {
 | 持久化 | **会话级**：`MockPanel.user_generators: Vec<UserGenerator>`；SQLite 落盘（`store/migrations/project_meta/010_*.sql` + persistence 读写 + 面板后台加载）**记录在册** | store 迁移影响所有项目库 schema，属基础设施改动，宜单独轮；UI 全链路本轮交付 |
 | **列编辑内选生成器**（2026-10-31，**已被弹窗方案取代**） | 列编辑对话框「生成器」行从只读展示改为可点：**生成器库浏览区内嵌进列编辑对话框**（同面板，无第二层对话框）——行头按钮展开/收起（默认展开），展开区 = 搜索 + 双视角 TabBar + 最近使用 + 分组列表（与字段行入口**同一渲染** `render_state`，无对话框壳）；选中 / 自定义精调保存写回**草稿**（`apply_generator_config_to_draft` 重建参数区 + 刷新样例预览，点「应用」才落地）；字段行入口（`LibraryWriteback::Panel`）保持弹对话框不变 | 用户验收后坚持「生成器库和列编辑还是分裂的」——上一版「列编辑内弹第二层库对话框」仍是两个面板；`generator_library.rs` 抽 `create_library_state`（`embedded` 标志）/`render_state`（无壳），列编辑直接内联；`ColumnDraft` 写回不关对话框（草稿未落地前留在列编辑） |
 | **列编辑弹窗 · 选择生成器窗口**（2026-10-31 定稿） | 点击新增列 / 编辑列 → 弹一个「选择生成器窗口」：**顶部 = 列名 + 搜索定位框**（同一行：列名定宽、搜索框跨剩余全宽过滤左栏）；框下左右分栏：左 = 生成器列表（业务 / 数据双 Tab + 分组 + 最近 + 自定义管理），右 = **属性在上 / 参数在下**（属性区 = 生成器名 / 产出类型 / 业务组；参数区 = 参数行 / 样例预览 / 空值率 / 唯一值 / 恢复智能默认）。左栏选中写回草稿，点「应用」才落地。**技术视角**（数据类型 Tab）项徽标 = **数据类**（不再标业务组名，避免整组看起来像业务组翻版——「int 下展开的是方法，varchar 下展开的却是业务组」的观感来源）；精调层字段「数据类型*」改名「**产出类型***」（类型 = 固定 13 种里**选择**，不存在「自定义数据类型」）。4a3b6cef 主界面内嵌分栏方案经用户真机验收被否决，由 4a430841 **Revert** 回 V2，弹窗方案在其上增量实施 | 用户 4 版原型验收后拍板（「点击新增列…弹出窗口…窗口就是选择生成器窗口…最上搜索定位输入框，框下分栏，左 = 生成器 业务/数据双 tab，右 = 参数区」+「顶部只需要列名，列名 + 搜索定位框」+「数据类型下展开的都是方法…右侧上面是属性下面是参数」+「可以带有（自定义角标）…记录在册…尽心实现」）；「产出类型」改名经用户确认（自定义数据类型澄清后不存在） |
+| **1-7 优化定稿**（2026-10-31，用户「我觉得你可以实现1-7」全量获准） | ① 技术视角只留方法：`generator_catalog.rs` 手加 `is_method_spec` / `methods_in_type`，技术 Tab 过滤 + 精调层基础候选收敛方法级（业务生成器仅业务视角可见）；② 产出类型不匹配警示：`data_type_for_generator` ≠ 所选类型 → 参数区顶部警告行「当前生成器产出 X，与所选 Y 不匹配——请更换生成器或点『恢复智能默认』」；③ 搜索框定位语义：`InputEvent::PressEnter` 订阅采纳当前视角第一个命中（`first_match_for` 纯函数，业务/技术视角各自按分类/类型序、内建前自定义后），搜索词非空即强展开分组，Esc 关窗由 `on_cancel` 拦截；④ 列名失焦智能重推：`InputEvent::Blur` → `ColumnMapper::infer` 推荐，属性区「建议改用 XX + mock-col-adopt 采纳」；用户主动选过生成器（`generator_edited`）后不再弹；⑤ 零参生成器参数区空态：「该生成器无需参数。」（样例/空值率/唯一仍可用）；⑥ 取消/ESC 草稿丢失防护：`ColumnDraft` 存 `original*` 快照 + `draft_is_dirty` 比对，dirty 时叠「放弃未应用的修改？」确认框，确认后连续两次 `close_dialog`；⑦ 「应用并新增下一列」：`mock-col-apply-next` → `apply_and_next`（应用 → 关框 → 新列名 `{name}_2` 去重 → 立即重开新列编辑） | 用户 7 项全量获准（含①架构调整）；`models.rs` `GeneratorConfig` 补 `PartialEq` 供推荐比对；Confirm 框用 `AlertDialog`（vendor 无 `.warning()` 变体，用 `.title/.description/.show_cancel/.ok_text/.cancel_text/.on_ok`） |
 
 ### 9.4 本轮改动清单
 
@@ -298,6 +299,7 @@ pub struct UserGenerator {
 - **双视角为主入口**（2026-10-30）：`detail.rs` 字段行生成器按钮直开库对话框；`pure.rs` 删除 `generator_menu`/`generator_menu_label`/`is_locale_sensitive`（菜单退役）；库对话框加「最近使用」区（`render_recent`，非空才渲染、不受搜索过滤）；标题随模式动态；精调层参数空态文案三态（未选 / 已选有参 / 已选零参）；
 - **列编辑内选生成器**（2026-10-31，已被弹窗方案取代）：`detail.rs` 列编辑对话框生成器行改可点（`mock-col-generator` 展开/收起，默认展开），**生成器库浏览区内嵌进列编辑对话框**（同面板）；`generator_library.rs` 抽 `create_library_state`（新增 `embedded` 标志，`cx` 放宽为 `&mut App`）/`render_state`（无对话框壳的浏览+精调渲染，返回主体与 footer）/`open_library` 改为包壳入口；`LibraryWriteback::ColumnDraft` 写回草稿**不关对话框**（`apply_picked_generator` / `submit_create` 的 embedded 分支）；`MockDetailView` 增 `generator_browser` / `gen_browser_open` 字段，`open_column_dialog` 内建浏览区；测试 `column_dialog_opens_library_and_writes_back_to_draft` 改为内嵌断言（浏览区创建 + 默认展开 + 收起/再展开渲染 + 写回草稿）；
 - **列编辑弹窗定稿实施**（2026-10-31）：`detail.rs` `open_column_dialog` 改「选择生成器窗口」——顶部「列名 + 搜索定位框」同一行（`mock-col-name` / `mock-lib-search`），框下左右分栏（左 `render_browse_pane` 280px + 右「属性 / 参数」两区：生成器名 / 产出类型 / 业务组 + 参数行 / 样例 / 空值率 / 唯一 / 恢复智能默认）；`generator_library.rs` 抽 `render_search_box` / `render_browse_pane`（列表无壳，高度由外层给；`render_browse` 搜索置顶 + 固定高保留给字段行库对话框）；技术视角项徽标 = **数据类**（原业务组名，消除「VARCHAR 组 = 业务组翻版」观感）；精调层「数据类型*」→「**产出类型***」（锁型只读行 / Select / a11y 三处）；搜索框 placeholder「搜索定位生成器…」；删除 `gen_browser_open`（内嵌方案遗留字段）；4a3b6cef 主界面内嵌分栏由 **4a430841 Revert**（用户真机验收否决，回到弹窗方案）；测试 `column_dialog_opens_library_and_writes_back_to_draft` 弹窗断言 + 多帧稳定；
+- **1-7 优化实施**（2026-10-31）：`generator_catalog.rs` 手加 `is_method_spec` / `methods_in_type`（文件头注记「脚本 `tools/gen_mock_generator_catalog.py` 重跑后需手动保留」）+ `models.rs` `GeneratorConfig` 补 `PartialEq`；`generator_library.rs` 搜索订阅加 `PressEnter` 采纳分支 + `first_match_for` 纯函数 + 分组展开改「搜索词非空即强展开」+ 技术 Tab `is_method_spec` 过滤 + 精调层基础候选收敛方法级；`detail.rs` `ColumnDraft` 加 `original`/`original_params`/`original_null`/`generator_edited`/`recommendation`（打开时快照，dirty 判定口径）、`draft_is_dirty`/`confirm_discard`（`AlertDialog` 叠层确认框，OK 里连续两次 `close_dialog` 先关确认框再关列编辑）、列名 `Blur` 订阅重推 + 属性区「建议改用 XX + mock-col-adopt 采纳」按钮、参数区 `mock-col-type-mismatch` 警示行 + `mock-col-params-empty` 零参空态、footer `mock-col-cancel`（dirty 弹确认框）/`mock-col-apply`/`mock-col-apply-next`（`apply_and_next`：应用 + `{name}_2` 去重新列 + 立即重开新列编辑）、dialog `on_cancel` 拦截 ESC；测试新增 6 例（方法级划分 / `first_match_for` 命中语义 / 类型不匹配警示行 / 零参空态 / dirty 判定 + 确认框叠层 / apply_and_next 连续新增）；
 - 测试：模型去重、数据类映射、菜单/库对话框接入、编辑改名去重、删除解耦。
 
 ### 9.5 遗留（记录在册，待后续）

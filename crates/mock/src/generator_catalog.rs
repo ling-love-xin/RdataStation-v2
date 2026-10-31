@@ -2,10 +2,12 @@
 //!
 //! 本文件由 `tools/gen_mock_generator_catalog.py` 生成，**不要手改**：
 //! 新增 / 删除 `GeneratorConfig` 变体后重跑脚本，`spec_of` 的穷尽 match 会强制补齐。
+//! 注意：`is_method_spec` / `methods_in_type`（方法级划分，2026-10-31 手加）是
+//! 脚本不生成的独立函数，重跑脚本后需手动保留。
 //!
 //! 用途：面板展示（中文标签）、生成器选择器（分类浏览 + 搜索）、参数编辑表单。
 
-use crate::models::GeneratorConfig;
+use crate::models::{ColumnDataType, GeneratorConfig};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -2174,6 +2176,36 @@ pub fn specs_in(category: GeneratorCategory) -> Vec<&'static GeneratorSpec> {
         .iter()
         .copied()
         .filter(|s| s.category == category)
+        .collect()
+}
+
+/// 方法级判定（技术视角「数据类型」Tab 只展示方法级生成器）。
+///
+/// 方法级 = 纯数据生成算法：数值 / 文本 / Markdown / 日期时间 / 约束 五类分类的全部
+/// 生成器，外加「网络与技术」中的 UUID 系列（原型第四版：INTEGER 组展开随机整数 / 自增 /
+/// 正态 / 泊松 / 随机漫步，VARCHAR 组展开随机字符串 / 模板 / 正则 / 单词等——都是方法）。
+/// 其余分类（个人信息 / 地址与网络标识 / 商业 / 金融 / 网络实体 / 图片 / 颜色 / Ferroid ID /
+/// 标准编码 / 汽车与行政）是**业务生成器**，只在业务视角可见——消除「varchar 下展开的
+/// 却是业务组」的观感（用户定稿：数据类型下展开的都是方法）。
+pub fn is_method_spec(spec: &GeneratorSpec) -> bool {
+    match spec.category {
+        GeneratorCategory::Numeric
+        | GeneratorCategory::Text
+        | GeneratorCategory::Markdown
+        | GeneratorCategory::DateTime
+        | GeneratorCategory::Constraint => true,
+        GeneratorCategory::Tech => matches!(spec.name, "uuid_v1" | "uuid_v3" | "uuid_v4" | "uuid_v5"),
+        _ => false,
+    }
+}
+
+/// 方法级规格（供「基础生成器」候选等按类型筛方法的场景复用）。
+pub fn methods_in_type(data_type: &ColumnDataType) -> Vec<&'static GeneratorSpec> {
+    all_specs()
+        .iter()
+        .copied()
+        .filter(|spec| is_method_spec(spec))
+        .filter(|spec| crate::generators::data_type_for_generator(&default_of(spec.name).expect("方法级规格必有默认配置")) == *data_type)
         .collect()
 }
 

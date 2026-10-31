@@ -87,7 +87,7 @@ impl ColumnDataType {
 
 // ==================== 生成器配置 ====================
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum GeneratorConfig {
     // 数值类

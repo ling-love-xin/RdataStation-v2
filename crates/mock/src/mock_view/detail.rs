@@ -46,6 +46,19 @@ pub(crate) struct ColumnDraft {
     /// 列名输入
     name_input: Entity<InputState>,
     pub(crate) def: ColumnDef,
+    /// 打开时的列快照（未应用修改判定：取消 / ESC 丢失防护用）
+    original: ColumnDef,
+    /// 打开时的参数序列化值（`param_text` / `complex_param_text` 口径，与输入框初值一致）
+    original_params: Vec<String>,
+    /// 打开时的空值率输入框初值（「50」）
+    original_null: String,
+    /// 用户是否主动设置过生成器身份（左栏选中 / 恢复智能默认 → true）：
+    /// true 后列名失焦不再弹「推荐生成器」提示（用户已有明确选择）
+    generator_edited: bool,
+    /// 列名失焦时 `ColumnMapper::infer` 给出的推荐生成器配置（None = 不显示提示行）
+    recommendation: Option<GeneratorConfig>,
+    /// 列名输入的订阅（失焦重推）
+    _name_sub: Option<Subscription>,
     pub(crate) confidence: String,
     sample_value: String,
     /// 参数实时样例预览（按当前输入框值生成 2 条；固定种子，可复现）
@@ -331,6 +344,111 @@ impl MockDetailView {
         })
     }
 
+    /// #7 应用并新增下一列：应用当前草稿 → 按当前列名 +2 去重新建列（沿用 §8.3 字段预设命名策略）
+    /// → 立即打开新列的列编辑对话框（连续录入）。旧对话框的关闭由按钮回调先执行
+    ///（`close_dialog` 需要 `&mut App`），本方法只做「应用 + 加列 + 重开对话框」。
+    pub(crate) fn apply_and_next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 先取当前列名与类型（collect 会 take 草稿，之后读不到）
+        let (base_name, base_type) = self
+            .draft
+            .as_ref()
+            .map(|d| {
+                (
+                    d.name_input.read(cx).value().trim().to_string(),
+                    d.def.data_type.clone(),
+                )
+            })
+            .unwrap_or((String::new(), ColumnDataType::Varchar { length: None }));
+        let edited = self.collect_column_edit(cx);
+        if let Some(edited) = edited {
+            let panel = self.panel.clone();
+            panel.update(cx, |panel, cx| panel.apply_column(edited, cx));
+        }
+        // 新列名去重（旧名 + `_n`，空列名给 `column_n`）；类型沿用当前列类型
+        let new_name = {
+            let panel = self.panel.read(cx);
+            let mut n = 2u32;
+            let mut candidate = if base_name.is_empty() {
+                "column_2".to_string()
+            } else {
+                format!("{base_name}_2")
+            };
+            while panel.draft().columns.iter().any(|c| c.def.name == candidate) {
+                n += 1;
+                candidate = if base_name.is_empty() {
+                    format!("column_{n}")
+                } else {
+                    format!("{base_name}_{n}")
+                };
+            }
+            candidate
+        };
+        let new_id = {
+            let panel = self.panel.clone();
+            panel.update(cx, |panel, cx| {
+                panel.add_column(new_name.clone(), base_type, cx);
+                panel.draft().columns.last().map(|c| c.id).unwrap_or_default()
+            })
+        };
+        self.open_column_dialog(new_id, window, cx);
+    }
+
+    /// 草稿是否有未应用修改（取消 / ESC 丢失防护判定）。
+    ///
+    /// 口径：列名 / 产出类型 / 生成器配置 / 空值率 / 唯一 / 任一参数输入框的值，
+    /// 任一项与打开时快照（`original*`）不同即 dirty。
+    pub(crate) fn draft_is_dirty(draft: &ColumnDraft, cx: &App) -> bool {
+        if draft.name_input.read(cx).value().to_string() != draft.original.name {
+            return true;
+        }
+        if draft.def.data_type != draft.original.data_type {
+            return true;
+        }
+        if draft.def.generator != draft.original.generator {
+            return true;
+        }
+        if draft.null_input.read(cx).value().to_string() != draft.original_null {
+            return true;
+        }
+        if draft.def.unique != draft.original.unique {
+            return true;
+        }
+        for (index, p) in draft.params.iter().enumerate() {
+            let current = match &p.widget {
+                ParamWidget::Scalar(state) => state.read(cx).value().to_string(),
+                ParamWidget::Complex(state) => state.read(cx).value().to_string(),
+            };
+            if current != draft.original_params.get(index).map(String::as_str).unwrap_or("") {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 弹出「放弃未应用的修改？」确认框（#6）：确认后清空草稿并关闭列编辑对话框。
+    ///
+    /// 取消按钮与 dialog `on_cancel`（ESC / 遮罩）共用。确认框叠在列编辑对话框之上
+    ///（vendor 对话框支持栈式多实例）；OK 里连续两次 `close_dialog`——先关确认框自身、
+    /// 再关列编辑对话框（`close_dialog_internal` 按「最后活跃」依次弹出）。
+    pub(crate) fn confirm_discard(view: &Entity<MockDetailView>, window: &mut Window, cx: &mut App) {
+        let view = view.clone();
+        window.open_alert_dialog(cx, move |alert, _window, _cx| {
+            let view_for_ok = view.clone();
+            alert
+                .title("放弃未应用的修改？")
+                .description("列编辑有未应用修改，取消后这些修改将丢失。")
+                .show_cancel(true)
+                .ok_text("放弃修改")
+                .cancel_text("继续编辑")
+                .on_ok(move |_, window, cx| {
+                    view_for_ok.update(cx, |view, _cx| view.draft = None);
+                    window.close_dialog(cx); // 关闭确认框自身
+                    window.close_dialog(cx); // 再关闭列编辑对话框
+                    true
+                })
+        });
+    }
+
     /// 打开「列编辑」对话框（列名 / 类型 / 参数 / 空值率 / 唯一 / 恢复智能默认）。
     pub fn open_column_dialog(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(column) = self
@@ -347,15 +465,31 @@ impl MockDetailView {
 
         let null_initial = format!("{}", (column.def.nullable_ratio * 100.0).round() as i64);
         let null_input = cx.new(|cx| InputState::new(window, cx).placeholder("0~100"));
-        null_input.update(cx, |s, cx| s.set_value(null_initial, window, cx));
+        null_input.update(cx, |s, cx| s.set_value(null_initial.clone(), window, cx));
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("列名"));
         name_input.update(cx, |s, cx| s.set_value(column.def.name.clone(), window, cx));
+        // 打开时参数序列化快照（dirty 判定：输入框值逐一与初值比较）
+        let original_params = generator_catalog::spec_of(&column.def.generator)
+            .params
+            .iter()
+            .copied()
+            .map(|field| match field.kind {
+                ParamKind::Complex => complex_param_text(&column.def.generator, field.key),
+                _ => param_text(&column.def.generator, field.key),
+            })
+            .collect::<Vec<String>>();
 
         self.draft = Some(ColumnDraft {
             id,
             name_input,
             type_label: column_type_label(&column.def.data_type),
             def: column.def.clone(),
+            original: column.def.clone(),
+            original_params,
+            original_null: null_initial,
+            generator_edited: false,
+            recommendation: None,
+            _name_sub: None,
             confidence: column.confidence.clone(),
             sample_value: column.sample_value.clone(),
             params: Vec::new(),
@@ -363,6 +497,36 @@ impl MockDetailView {
             param_error: None,
             sample_preview: String::new(),
         });
+        // 列名失焦 → 智能重推（#4）：若用户未主动选过生成器，且新推荐与当前生成器不同，
+        // 在属性区提示「建议改用 XX（可采纳）」，供一键重推
+        let name_sub = self.draft.as_ref().unwrap().name_input.clone();
+        let _name_sub = cx.subscribe_in(
+            &name_sub,
+            window,
+            move |view, emitter, ev: &InputEvent, _window, cx| {
+                if !matches!(ev, InputEvent::Blur) {
+                    return;
+                }
+                let name = emitter.read(cx).value().trim().to_string();
+                let Some(draft) = view.draft.as_mut() else {
+                    return;
+                };
+                draft.recommendation = if draft.generator_edited || name.is_empty() {
+                    None
+                } else {
+                    let mapped = ColumnMapper::infer(&name, &draft.def.data_type);
+                    if mapped.generator == draft.def.generator {
+                        None
+                    } else {
+                        Some(mapped.generator)
+                    }
+                };
+                cx.notify();
+            },
+        );
+        if let Some(draft) = self.draft.as_mut() {
+            draft._name_sub = Some(_name_sub);
+        }
         // 参数输入行按当前生成器建立（生成器身份变化后由 `rebuild_params` 重建）
         self.rebuild_params(window, cx);
         // 初始样例预览（按当前配置生成，事件路径，不在 render 里做）
@@ -432,6 +596,26 @@ impl MockDetailView {
             // 见 `apply_picked_generator` 的 `ColumnDraft` 分支）
             let browser = view.read(cx).generator_browser.clone();
 
+            // —— 1-7 优化：按当前草稿计算的提示态（纯读，不写状态）——
+            // #2 产出类型不匹配：生成器实际产出 ≠ 所选类型（改类型不自动换生成器）→ 参数区顶部警示
+            let actual_type = crate::generators::data_type_for_generator(&draft.def.generator);
+            let type_mismatch = actual_type != draft.def.data_type;
+            let actual_type_label = column_type_label(&actual_type);
+            // 产出类型下拉闭包会 move `type_label`，警示行这里先克隆一份
+            let type_label_for_warning = type_label.clone();
+            // #4 列名失焦推荐（失焦时 `_name_sub` 订阅回填）：采纳按钮 = 按当前名 + 类型重推
+            //（与「恢复智能默认」同口径），采纳后视为用户主动选定生成器，不再弹推荐
+            let recommendation = draft.recommendation.clone();
+            let recommendation_label = recommendation.as_ref().and_then(|cfg| {
+                generator_catalog::all_specs()
+                    .iter()
+                    .copied()
+                    .find(|s| generator_catalog::default_of(s.name) == Some(cfg.clone()))
+                    .map(|s| s.label.to_string())
+            });
+            // #5 零参生成器（如 UUID v4 / 布尔 / 时长）：参数区标题下显示空态文案
+            let zero_param = generator_catalog::spec_of(&draft.def.generator).params.is_empty();
+
             // 右栏（用户定稿「上属性、下参数」）：属性区 = 生成器名 / 产出类型 / 业务组
             //（生成器身份只读展示；产出类型可改——改类型不自动换生成器，需「恢复智能默认」重推）；
             // 参数区 = 参数行 / 样例预览 / 空值率 / 唯一值 / 恢复智能默认。列名已移到窗口顶部。
@@ -474,6 +658,51 @@ impl MockDetailView {
                             .child(generator_label),
                     ),
             );
+            // #4 列名失焦智能重推：有推荐且与当前生成器不同时，属性区提示 +「采纳」按钮
+            if let (Some(cfg), Some(label)) = (&recommendation, &recommendation_label) {
+                let view_adopt = view.clone();
+                let cfg_for_click = cfg.clone();
+                right = right.child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .w_full()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .text_color(theme.colors.warning)
+                                .child(format!("建议改用「{label}」")),
+                        )
+                        .child(
+                            Button::new("mock-col-adopt")
+                                .ghost()
+                                .xsmall()
+                                .label("采纳")
+                                .on_click(move |_, window, app| {
+                                    view_adopt.update(app, |view, cx| {
+                                        let Some(draft) = view.draft.as_mut() else { return };
+                                        draft.generator_edited = true;
+                                        draft.recommendation = None;
+                                        // 写回草稿：采纳推荐配置（列名已失焦重推，配置按当前名+类型）
+                                        let mapped = ColumnMapper::infer(
+                                            &draft.name_input.read(cx).value(),
+                                            &draft.def.data_type,
+                                        );
+                                        draft.def.generator = cfg_for_click.clone();
+                                        draft.confidence = mapped.confidence;
+                                        draft.sample_value = mapped.sample_value;
+                                        cx.defer_in(window, |view, window, cx| {
+                                            view.rebuild_params(window, cx);
+                                        });
+                                        cx.notify();
+                                    });
+                                }),
+                        ),
+                );
+            }
             // 产出类型（可改，下拉）
             right = right.child(
                 div()
@@ -568,6 +797,32 @@ impl MockDetailView {
                             .child("参数"),
                     ),
             );
+            // #2 产出类型不匹配警示：生成器实际产出与所选类型不一致时，参数区顶部提示
+            //（改类型不自动换生成器是设计，这里把「不一致」讲明，指向更换生成器或恢复默认）
+            if type_mismatch {
+                right = right.child(
+                    div()
+                        .id("mock-col-type-mismatch")
+                        .test_support()
+                        .w_full()
+                        .text_xs()
+                        .text_color(theme.colors.warning)
+                        .child(format!(
+                            "当前生成器产出 {actual_type_label}，与所选 {type_label_for_warning} 不匹配——请更换生成器或点「恢复智能默认」。"
+                        )),
+                );
+            }
+            // #5 零参生成器：参数区没有表单行时显示空态文案（样例/空值率/唯一仍可用）
+            if param_rows.is_empty() && zero_param {
+                right = right.child(
+                    div()
+                        .id("mock-col-params-empty")
+                        .test_support()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child("该生成器无需参数。"),
+                );
+            }
             for row in param_rows {
                 right = right.child(match row {
                     ParamRowView::Scalar { label, state } => form_line(&theme, &label, &state),
@@ -651,6 +906,9 @@ impl MockDetailView {
                                 draft.def.unique = false;
                                 draft.confidence = mapped.confidence;
                                 draft.sample_value = mapped.sample_value;
+                                // #4：恢复智能默认 = 用户主动选定生成器，不再弹推荐
+                                draft.generator_edited = true;
+                                draft.recommendation = None;
                             }
                             // 生成器身份可能变了：参数行按新生成器重建（事件路径，不能在 render 做）
                             cx.defer_in(window, |view, window, cx| {
@@ -748,11 +1006,28 @@ impl MockDetailView {
 
             let view_apply = view.clone();
             let view_cancel = view.clone();
+            let view_cancel_esc = view.clone();
+            let view_next = view.clone();
             let panel_apply = panel.clone();
             dialog
                 .title("列编辑")
                 .width(px(840.0))
                 .child(body)
+                // #6 ESC / 遮罩关闭拦截：有未应用修改 → 弹确认框并阻止本次关闭
+                .on_cancel(move |_event, window, app| {
+                    let dirty = view_cancel_esc
+                        .read(app)
+                        .draft
+                        .as_ref()
+                        .map(|d| Self::draft_is_dirty(d, app))
+                        .unwrap_or(false);
+                    if dirty {
+                        Self::confirm_discard(&view_cancel_esc, window, app);
+                        false
+                    } else {
+                        true
+                    }
+                })
                 .footer(
                 DialogFooter::new()
                     .child(
@@ -760,8 +1035,19 @@ impl MockDetailView {
                             .secondary()
                             .label("取消")
                             .on_click(move |_, window, app| {
-                                view_cancel.update(app, |view, _cx| view.draft = None);
-                                window.close_dialog(app);
+                                let dirty = view_cancel
+                                    .read(app)
+                                    .draft
+                                    .as_ref()
+                                    .map(|d| Self::draft_is_dirty(d, app))
+                                    .unwrap_or(false);
+                                if dirty {
+                                    // 有未应用修改：弹确认框，确认后才真正清草稿并关闭
+                                    Self::confirm_discard(&view_cancel, window, app);
+                                } else {
+                                    view_cancel.update(app, |view, _cx| view.draft = None);
+                                    window.close_dialog(app);
+                                }
                             }),
                     )
                     .child(
@@ -776,6 +1062,17 @@ impl MockDetailView {
                                         .update(app, |panel, cx| panel.apply_column(edited, cx));
                                 }
                                 window.close_dialog(app);
+                            }),
+                    )
+                    // #7 应用并新增下一列：应用当前草稿 → 关对话框 → 按当前列名 +2 去重新建列
+                    //（沿用 §8.3 字段预设命名策略）→ 立即打开新列的列编辑对话框（连续录入）
+                    .child(
+                        Button::new("mock-col-apply-next")
+                            .with_variant(ButtonVariant::Primary)
+                            .label("应用并新增下一列")
+                            .on_click(move |_, window, app| {
+                                window.close_dialog(app);
+                                view_next.update(app, |view, cx| view.apply_and_next(window, cx));
                             }),
                     ),
             )
@@ -801,6 +1098,9 @@ impl MockDetailView {
         }
         draft.def.generator = config;
         draft.confidence = "manual".to_string();
+        // #4：左栏选中 = 用户主动选定生成器，之后列名失焦不再弹推荐
+        draft.generator_edited = true;
+        draft.recommendation = None;
         draft.param_error = None;
         self.rebuild_params(window, cx);
         self.refresh_sample_preview(cx);

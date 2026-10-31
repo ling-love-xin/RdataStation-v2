@@ -217,16 +217,95 @@ pub(crate) fn create_library_state(
         let _search_sub = cx.subscribe_in(
             &search_input,
             window,
-            move |s, emitter, ev: &InputEvent, _window, cx| {
+            move |s, emitter, ev: &InputEvent, window, cx| {
                 if matches!(ev, InputEvent::Change) {
                     s.query = emitter.read(cx).value().to_string();
                     cx.notify();
+                } else if matches!(ev, InputEvent::PressEnter { .. }) {
+                    // 搜索定位：Enter 直接采纳当前视角下第一个命中项（写回草稿/面板，
+                    // 与点击列表项同一入口 `apply_picked_generator`；空搜索词不采纳）
+                    if s.query.trim().is_empty() {
+                        return;
+                    }
+                    let panel = s.panel.clone();
+                    let writeback = s.writeback.clone();
+                    let first = first_match_for(&s.view, &s.query, &panel.read(cx));
+                    if let Some((picked, is_user)) = first {
+                        apply_picked_generator(cx, window, &panel, &writeback, &picked, is_user);
+                    }
                 }
             },
         );
         s._search_sub = Some(_search_sub);
     });
     state
+}
+
+/// 当前视角 + 搜索词下「第一个命中」的生成器（搜索框 Enter 采纳用）。
+///
+/// 与列表渲染同一套顺序：业务视角按 `GeneratorCategory::ALL` 分类序、内建在前自定义在后；
+/// 技术视角按 `COLUMN_TYPES` 类型序，内建只算**方法级**（`is_method_spec`），自定义项始终参与。
+/// 空搜索词返回 `None`（没有「当前项」可采纳）。
+pub(crate) fn first_match_for(
+    view: &LibraryView,
+    query: &str,
+    panel: &MockPanel,
+) -> Option<(String, bool)> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return None;
+    }
+    let ug_matches = |ug: &UserGenerator| {
+        ug.name.to_lowercase().contains(&q)
+            || crate::mock_view::pure::column_type_label(&ug.data_type)
+                .to_lowercase()
+                .contains(&q)
+    };
+    let mut hit: Option<(String, bool)> = None;
+    match view {
+        LibraryView::Business => {
+            for category in GeneratorCategory::ALL {
+                if let Some(spec) = generator_catalog::specs_in(category)
+                    .into_iter()
+                    .find(|spec| spec_matches(spec, query))
+                {
+                    hit = Some((spec.name.to_string(), false));
+                    break;
+                }
+                if let Some(ug) = panel
+                    .user_generators_in_category(category)
+                    .into_iter()
+                    .find(|ug| ug_matches(ug))
+                {
+                    hit = Some((ug.id.clone(), true));
+                    break;
+                }
+            }
+        }
+        LibraryView::Tech => {
+            for data_type in COLUMN_TYPES {
+                if let Some(spec) = generator_catalog::all_specs()
+                    .iter()
+                    .copied()
+                    .filter(|spec| generator_catalog::is_method_spec(spec))
+                    .filter(|spec| data_type_for_spec(spec) == data_type)
+                    .find(|spec| spec_matches(spec, query))
+                {
+                    hit = Some((spec.name.to_string(), false));
+                    break;
+                }
+                if let Some(ug) = panel
+                    .user_generators_in_type(&data_type)
+                    .into_iter()
+                    .find(|ug| ug_matches(ug))
+                {
+                    hit = Some((ug.id.clone(), true));
+                    break;
+                }
+            }
+        }
+    }
+    hit
 }
 
 /// 渲染库状态内容（浏览 / 精调），返回（主体, footer）。
@@ -375,7 +454,7 @@ pub(crate) fn render_browse_pane(
         0 => {
             for category in GeneratorCategory::ALL {
                 let name = category.label();
-                let is_expanded = expanded.contains(name);
+                let is_expanded = !query.is_empty() || expanded.contains(name);
                 let mut row = render_group_row(&state, name, is_expanded, category, window, cx);
                 if is_expanded {
                     let mut items: Vec<(String, String, bool)> = Vec::new();
@@ -423,7 +502,7 @@ pub(crate) fn render_browse_pane(
         _ => {
             for data_type in COLUMN_TYPES {
                 let label = column_type_label(&data_type);
-                let is_expanded = expanded_types.contains(&label);
+                let is_expanded = !query.is_empty() || expanded_types.contains(&label);
                 let mut row = render_type_group_row(
                     &state,
                     &data_type,
@@ -438,6 +517,9 @@ pub(crate) fn render_browse_pane(
                         generator_catalog::all_specs()
                             .iter()
                             .copied()
+                            // 技术视角只留**方法级**生成器（#1：数据类型下展开的都是方法，
+                            // 业务生成器只在「业务分类」Tab 可见）；自定义项仍全量按类型挂
+                            .filter(|spec| generator_catalog::is_method_spec(spec))
                             .filter(|spec| {
                                 data_type_for_spec(spec) == data_type
                                     && (query.is_empty() || spec_matches(spec, &query))
@@ -867,10 +949,14 @@ fn new_create_draft(
         let delegate = SearchableVec::new(category_items);
         cx.new(|cx| SelectState::new(delegate, None, window, cx))
     });
-    // 基础生成器：技术组进入按锁定类型过滤；业务组进入全部
+    // 基础生成器：候选 = 类型兼容的**方法级**生成器（技术组进入按锁定类型过滤，业务组
+    // 进入不锁类型 = 全部方法）。业务生成器（姓名/地址等）不是「基础方法」，不进精调层
+    // 兜底列表——要微调业务生成器直接在库列表里选中即可，不必再包一层命名变体（#1 定稿：
+    // 技术视角只留方法，精调层基础候选与之一致）
     let base_items: Vec<&'static GeneratorSpec> = generator_catalog::all_specs()
         .iter()
         .copied()
+        .filter(|spec| generator_catalog::is_method_spec(spec))
         .filter(|spec| {
             locked_type
                 .as_ref()

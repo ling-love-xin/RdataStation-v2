@@ -13,6 +13,7 @@ use gpui_kit::component::IndexPath;
 use gpui_kit::component::dock::{DockArea, DockPlacement};
 use gpui_kit::component::list::{ListDelegate as _, ListState};
 use gpui_kit::component::{Root, WindowExt as _};
+use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
     App, AppContext as _, Entity, IntoElement, ParentElement, Render, Styled as _, TestAppContext,
     VisualTestContext, Window, div,
@@ -5426,4 +5427,249 @@ fn column_dialog_opens_library_and_writes_back_to_draft(cx: &mut TestAppContext)
         assert!(!draft.sample_preview.is_empty(), "样例预览应已刷新");
         assert_eq!(draft.confidence, "manual");
     });
+}
+
+// ==================== 1-7 优化（#42-#48） ====================
+
+#[test]
+fn method_level_partition_marks_methods_only() {
+    // #1 技术视角只留方法：Numeric/Text/Markdown/DateTime/Constraint 整类 + Tech 的 UUID 族
+    // 为方法级；Person/Address/Business/Finance/Image/Color/FerroidId/Code/Vehicle 为业务级
+    for cat in [
+        GeneratorCategory::Numeric,
+        GeneratorCategory::Text,
+        GeneratorCategory::Markdown,
+        GeneratorCategory::DateTime,
+        GeneratorCategory::Constraint,
+    ] {
+        for spec in generator_catalog::specs_in(cat) {
+            assert!(
+                generator_catalog::is_method_spec(spec),
+                "{:?} 分类下的 {} 应为方法级",
+                cat,
+                spec.name
+            );
+        }
+    }
+    for cat in [
+        GeneratorCategory::Person,
+        GeneratorCategory::Address,
+        GeneratorCategory::Business,
+        GeneratorCategory::Finance,
+        GeneratorCategory::Image,
+        GeneratorCategory::Color,
+        GeneratorCategory::FerroidId,
+        GeneratorCategory::Code,
+        GeneratorCategory::Vehicle,
+    ] {
+        for spec in generator_catalog::specs_in(cat) {
+            assert!(
+                !generator_catalog::is_method_spec(spec),
+                "{:?} 分类下的 {} 应为业务级",
+                cat,
+                spec.name
+            );
+        }
+    }
+    // Tech：UUID 族方法级，其余（URL / 图片 / 状态码等）业务级
+    let tech_uuid = ["uuid_v1", "uuid_v3", "uuid_v4", "uuid_v5"];
+    for spec in generator_catalog::specs_in(GeneratorCategory::Tech) {
+        let expect_method = tech_uuid.contains(&spec.name);
+        assert_eq!(
+            generator_catalog::is_method_spec(spec),
+            expect_method,
+            "Tech 分类 {} 的划分与 UUID 族边界不符",
+            spec.name
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn search_enter_picks_first_match_for_view(cx: &mut TestAppContext) {
+    // #3 搜索定位 Enter 采纳：`first_match_for` 纯函数（业务/技术视角各自命中语义）
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+    panel.update(cx, |panel, cx| {
+        panel.add_column(
+            "name".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
+    });
+    use super::generator_library::{first_match_for, LibraryView};
+    let hit = panel.read_with(cx, |panel, _cx| {
+        first_match_for(&LibraryView::Business, "随机", panel)
+    });
+    assert!(hit.is_some(), "业务视角搜索命中应给出第一个匹配生成器");
+    let none = panel.read_with(cx, |panel, _cx| {
+        first_match_for(&LibraryView::Business, "  ", panel)
+    });
+    assert!(none.is_none(), "空搜索词不应有可采纳项");
+    let tech = panel.read_with(cx, |panel, _cx| {
+        first_match_for(&LibraryView::Tech, "uuid", panel)
+    });
+    let (picked, _is_user) = tech.expect("技术视角搜索 UUID 应命中方法级生成器");
+    let spec = generator_catalog::spec_of(&generator_catalog::default_of(&picked).unwrap());
+    assert!(
+        generator_catalog::is_method_spec(spec),
+        "技术视角命中项必须是方法级生成器"
+    );
+}
+
+#[gpui_kit::test]
+fn column_dialog_shows_type_mismatch_warning(cx: &mut TestAppContext) {
+    // #2 产出类型不匹配警示：改类型不自动换生成器，参数区顶部出现警示行
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+    let id = panel.update(cx, |panel, cx| {
+        panel.add_column(
+            "age".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
+        panel.draft().columns[0].id
+    });
+    cx.update(|window, cx| {
+        detail.update(cx, |view, cx| view.open_column_dialog(id, window, cx));
+        window.draw(cx).clear(cx);
+    });
+    for _ in 0..4 {
+        draw(cx);
+    }
+    // 把草稿生成器换成产数值的方法（与所选 Varchar 不匹配）
+    let numeric_specs = generator_catalog::specs_in(GeneratorCategory::Numeric);
+    let int_spec = numeric_specs.first().unwrap();
+    let int_gen = generator_catalog::default_of(int_spec.name).unwrap();
+    cx.update(|window, cx| {
+        detail.update(cx, |view, cx| {
+            view.apply_generator_config_to_draft(id, int_gen, window, cx);
+        });
+        window.draw(cx).clear(cx);
+    });
+    draw(cx);
+    let found = cx.update(|window, _cx| window.try_find("mock-col-type-mismatch").is_some());
+    assert!(found, "产出类型与所选类型不匹配时应渲染警示行");
+}
+
+#[gpui_kit::test]
+fn column_dialog_zero_param_shows_empty_state(cx: &mut TestAppContext) {
+    // #5 零参生成器参数区空态：uuid_v4 无参数，显示「该生成器无需参数。」
+    //（Uuid 列默认生成器是随机句子（有参），这里显式换成 uuid_v4 再打开）
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+    let uuid_gen = generator_catalog::default_of("uuid_v4").unwrap();
+    let id = panel.update(cx, |panel, cx| {
+        panel.add_column("uuid_col".to_string(), ColumnDataType::Uuid, cx);
+        // Uuid 列默认生成器是随机句子（有参），这里用 apply_column 换成 uuid_v4（零参）
+        let spec = {
+            let col = &panel.draft().columns[0];
+            let mut def = col.def.clone();
+            def.generator = uuid_gen;
+            MockColumnSpec {
+                id: col.id,
+                def,
+                confidence: col.confidence.clone(),
+                sample_value: col.sample_value.clone(),
+            }
+        };
+        panel.apply_column(spec, cx);
+        panel.draft().columns[0].id
+    });
+    cx.update(|window, cx| {
+        detail.update(cx, |view, cx| view.open_column_dialog(id, window, cx));
+        window.draw(cx).clear(cx);
+    });
+    for _ in 0..4 {
+        draw(cx);
+    }
+    let found = cx.update(|window, _cx| window.try_find("mock-col-params-empty").is_some());
+    assert!(found, "零参生成器应显示「该生成器无需参数」空态");
+}
+
+#[gpui_kit::test]
+fn confirm_discard_guards_unsaved_edits(cx: &mut TestAppContext) {
+    // #6 草稿丢失防护：dirty 判定（快照口径）+ 确认框叠层（确认前草稿保留）
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+    let id = panel.update(cx, |panel, cx| {
+        panel.add_column(
+            "name".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
+        panel.draft().columns[0].id
+    });
+    cx.update(|window, cx| {
+        detail.update(cx, |view, cx| view.open_column_dialog(id, window, cx));
+        window.draw(cx).clear(cx);
+    });
+    // 刚打开：不 dirty
+    let clean = detail.read_with(cx, |view, cx| {
+        MockDetailView::draft_is_dirty(view.draft.as_ref().unwrap(), cx)
+    });
+    assert!(!clean, "刚打开的草稿不应视为有未应用修改");
+    // 改生成器：dirty
+    let text_specs = generator_catalog::specs_in(GeneratorCategory::Text);
+    let other = text_specs.first().unwrap();
+    let other_cfg = generator_catalog::default_of(other.name).unwrap();
+    cx.update(|window, cx| {
+        detail.update(cx, |view, cx| {
+            view.apply_generator_config_to_draft(id, other_cfg, window, cx);
+        });
+    });
+    let dirty = detail.read_with(cx, |view, cx| {
+        MockDetailView::draft_is_dirty(view.draft.as_ref().unwrap(), cx)
+    });
+    assert!(dirty, "改过生成器后应视为有未应用修改");
+    // 弹确认框：确认前草稿保留、确认框叠在列编辑对话框之上
+    cx.update(|window, cx| {
+        MockDetailView::confirm_discard(&detail, window, cx);
+        window.draw(cx).clear(cx);
+    });
+    draw(cx);
+    let kept = detail.read_with(cx, |view, _cx| view.draft.is_some());
+    assert!(kept, "确认前不应清空草稿");
+    let dialog_open = cx.update(|window, cx| window.has_active_dialog(cx));
+    assert!(dialog_open, "确认框应已叠在列编辑对话框之上");
+}
+
+#[gpui_kit::test]
+fn apply_and_next_creates_deduped_next_column(cx: &mut TestAppContext) {
+    // #7 应用并新增下一列：旧列落地 → 新列按旧名 +2 去重 → 立即重开新列编辑
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+    let id = panel.update(cx, |panel, cx| {
+        panel.add_column(
+            "name".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
+        panel.draft().columns[0].id
+    });
+    cx.update(|window, cx| {
+        detail.update(cx, |view, cx| view.open_column_dialog(id, window, cx));
+        window.draw(cx).clear(cx);
+    });
+    draw(cx);
+    cx.update(|window, cx| {
+        let w = &mut *window;
+        detail.update(cx, move |view, cx| view.apply_and_next(w, cx));
+        window.draw(cx).clear(cx);
+    });
+    draw(cx);
+    let (count, second) = panel.read_with(cx, |panel, _cx| {
+        (
+            panel.draft().columns.len(),
+            panel.draft().columns.get(1).map(|c| c.def.name.clone()),
+        )
+    });
+    assert_eq!(count, 2, "应用并新增应产生新列");
+    assert_eq!(second.as_deref(), Some("name_2"), "新列名应按旧名 +2 去重");
+    let reopened = cx.update(|window, cx| window.has_active_dialog(cx));
+    assert!(reopened, "新列的列编辑对话框应已打开");
 }
