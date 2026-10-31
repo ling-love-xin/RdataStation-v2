@@ -103,16 +103,23 @@ pub(crate) enum LibraryMode {
 #[derive(Clone)]
 pub(crate) enum LibraryWriteback {
     Panel { column_id: u64 },
-    ColumnDraft { detail: gpui::WeakEntity<MockDetailView>, column_id: u64 },
+    ColumnDraft {
+        /// 列编辑目标视图：`None` = 未在编辑列（左栏常驻库初始态，点选生成器静默忽略，
+        /// 进入列编辑后由 `MockDetailView::open_column_editor` 更新为当前草稿）
+        detail: Option<gpui::WeakEntity<MockDetailView>>,
+        column_id: u64,
+    },
 }
 
 /// 生成器库对话框的状态（实体由 [`open_library`] 创建；builder 每帧从它读，写入走事件路径）。
 pub(crate) struct GeneratorLibraryState {
     pub(crate) panel: Entity<MockPanel>,
     pub(crate) writeback: LibraryWriteback,
-    /// 内嵌模式（列编辑对话框内联浏览区）：无对话框壳，选中/保存只写回草稿并留在宿主；
+    /// 内嵌模式（主界面左栏常驻）：无对话框壳，选中/保存只写回草稿并留在宿主；
     /// 字段行弹对话框模式（`open_library`）为 false，写回后关对话框。
     pub(crate) embedded: bool,
+    /// 元素 id 前缀（内嵌左栏 = 草稿 tab 键，避免与字段行库对话框同窗口 a11y id 重复）
+    pub(crate) id_prefix: SharedString,
     pub(crate) mode: LibraryMode,
     pub(crate) view: LibraryView,
     /// 顶部搜索词（`search_input` 的 Change 订阅回填；浏览时过滤两组列表）
@@ -188,12 +195,15 @@ fn param_key(param: &DraftParam) -> &str {
 
 /// 创建生成器库状态实体（浏览 + 搜索 + 精调层共用）。
 ///
-/// `embedded=true` 供列编辑对话框内联（`detail.rs`）：无对话框壳，写回草稿后留在列编辑；
+/// `embedded=true` 供主界面左栏内嵌（`detail.rs`）：无对话框壳，写回草稿后留在面板；
 /// `embedded=false` 供字段行入口弹对话框（[`open_library`]）。
+/// `id_prefix` 内嵌左栏时拼 tab 键（草稿 tab 唯一，但须与字段行库对话框同窗口区分 a11y id），
+/// 对话框模式传空。
 pub(crate) fn create_library_state(
     panel: Entity<MockPanel>,
     writeback: LibraryWriteback,
     embedded: bool,
+    id_prefix: SharedString,
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<GeneratorLibraryState> {
@@ -202,6 +212,7 @@ pub(crate) fn create_library_state(
         panel: panel.clone(),
         writeback,
         embedded,
+        id_prefix,
         mode: LibraryMode::Browse,
         view: LibraryView::Business,
         query: String::new(),
@@ -257,7 +268,7 @@ pub(crate) fn open_library(
     window: &mut Window,
     cx: &mut Context<MockPanel>,
 ) {
-    let state = create_library_state(panel, writeback, false, window, cx);
+    let state = create_library_state(panel, writeback, false, SharedString::from(""), window, cx);
 
     window.open_dialog(cx, move |dialog, window, cx| {
         let (body, footer) = render_state(&state, window, cx);
@@ -321,17 +332,20 @@ fn apply_picked_generator(
                 generator_catalog::default_of(picked)
             };
             if let Some(config) = config {
-                // 内嵌模式：写回草稿但留在列编辑（点「应用」才落地），不关任何对话框
-                let _ = detail.update(app, |v, cx| {
-                    v.apply_generator_config_to_draft(*column_id, config, window, cx);
-                });
+                // 内嵌模式：写回草稿但留在列编辑（点「应用」才落地），不关任何对话框；
+                // `detail=None`（未在编辑列）时静默忽略——左栏常驻库的初始写回目标
+                if let Some(detail) = detail {
+                    let _ = detail.update(app, |v, cx| {
+                        v.apply_generator_config_to_draft(*column_id, config, window, cx);
+                    });
+                }
             }
         }
     }
 }
 
 /// 顶部搜索 + TabBar 双视角 + 分组列表（业务视角：15 分类；技术视角：13 数据类）。
-fn render_browse(
+pub(crate) fn render_browse(
     state: &Entity<GeneratorLibraryState>,
     theme: &Theme,
     window: &mut Window,
@@ -341,6 +355,7 @@ fn render_browse(
     let state = state.clone();
     let s = state.read(cx);
     let search = s.search_input.clone();
+    let id_prefix = s.id_prefix.clone();
     let view_index: usize = match s.view {
         LibraryView::Business => 0,
         LibraryView::Tech => 1,
@@ -465,10 +480,11 @@ fn render_browse(
         .v_flex()
         .gap_3()
         .w_full()
-        .h(px(420.))
+        .flex_1()
+        .min_h_0()
         .child(div().w_full().child(Input::new(&search)))
         .child(
-            TabBar::new("mock-lib-view")
+            TabBar::new(SharedString::from(format!("{id_prefix}mock-lib-view")))
                 .segmented()
                 .children([Tab::new().label("业务分类"), Tab::new().label("数据类型")])
                 .selected_index(view_index)
@@ -495,8 +511,8 @@ fn render_browse(
 }
 
 /// 最近使用（本会话点过的生成器，最多 [`RECENT_GENERATORS`] 条）：非空才渲染，
-/// 点击直接应用（静态 spec → `set_generator`）并关闭对话框——菜单退役后的快速路径。
-fn render_recent(
+/// 点击直接应用（静态 spec → `set_generator`）——菜单退役后的快速路径。
+pub(crate) fn render_recent(
     state: &Entity<GeneratorLibraryState>,
     theme: &Theme,
     _window: &mut Window,
@@ -520,10 +536,11 @@ fn render_recent(
         return None;
     }
     let mut chips = div().h_flex().gap_1().w_full().flex_wrap();
+    let prefix = state.read(cx).id_prefix.clone();
     for (name, label) in recent {
         let state_for_click = state.clone();
         chips = chips.child(
-            Button::new(format!("mock-lib-recent-{name}"))
+            Button::new(format!("{prefix}mock-lib-recent-{name}"))
                 .ghost()
                 .xsmall()
                 .label(label)
@@ -554,7 +571,7 @@ fn render_recent(
 }
 
 /// 业务分组行：展开/收起按钮 + 行尾「＋」（键盘可达，`Button`）。
-fn render_group_row(
+pub(crate) fn render_group_row(
     state: &Entity<GeneratorLibraryState>,
     name: &str,
     expanded: bool,
@@ -565,6 +582,7 @@ fn render_group_row(
     let state_for_toggle = state.clone();
     let name_for_toggle = name.to_string();
     let state_for_create = state.clone();
+    let prefix = state.read(cx).id_prefix.clone();
     let item_count = generator_catalog::all_specs()
         .iter()
         .filter(|spec| spec.category == category)
@@ -586,7 +604,7 @@ fn render_group_row(
                 .flex_1()
                 .min_w_0()
                 .child(
-                    Button::new(format!("lib-group-{name}"))
+                    Button::new(format!("{prefix}lib-group-{name}"))
                         .ghost()
                         .xsmall()
                         .icon(if expanded {
@@ -607,7 +625,7 @@ fn render_group_row(
                 ),
         )
         .child(
-            Button::new(format!("lib-group-plus-{name}"))
+            Button::new(format!("{prefix}lib-group-plus-{name}"))
                 .ghost()
                 .xsmall()
                 .icon(IconName::Plus)
@@ -632,7 +650,7 @@ fn render_group_row(
 }
 
 /// 技术分组行：同业务分组，但展开集走类型、入口锁定类型。
-fn render_type_group_row(
+pub(crate) fn render_type_group_row(
     state: &Entity<GeneratorLibraryState>,
     data_type: &ColumnDataType,
     label: &str,
@@ -644,6 +662,7 @@ fn render_type_group_row(
     let label_for_toggle = label.to_string();
     let state_for_create = state.clone();
     let data_type_for_create = data_type.clone();
+    let prefix = state.read(cx).id_prefix.clone();
     let item_count = generator_catalog::all_specs()
         .iter()
         .filter(|spec| data_type_for_spec(spec) == *data_type)
@@ -665,7 +684,7 @@ fn render_type_group_row(
                 .flex_1()
                 .min_w_0()
                 .child(
-                    Button::new(format!("lib-type-group-{label}"))
+                    Button::new(format!("{prefix}lib-type-group-{label}"))
                         .ghost()
                         .xsmall()
                         .icon(if expanded {
@@ -686,7 +705,7 @@ fn render_type_group_row(
                 ),
         )
         .child(
-            Button::new(format!("lib-type-group-plus-{label}"))
+            Button::new(format!("{prefix}lib-type-group-plus-{label}"))
                 .ghost()
                 .xsmall()
                 .icon(IconName::Plus)
@@ -711,9 +730,9 @@ fn render_type_group_row(
 }
 
 /// 生成器项行：名称 + 徽标（业务视角徽标 = 数据类；技术视角徽标 = 业务组）。
-/// 点击写回列（内建走 `set_generator`，自定义解包 base）并关对话框。
+/// 点击写回列（内建走 `set_generator`，自定义解包 base）。
 /// 自定义项行尾另有「编辑」「删除」两个管理按钮（键盘可达，`Button`）。
-fn render_item_row(
+pub(crate) fn render_item_row(
     state: &Entity<GeneratorLibraryState>,
     label: &str,
     badge: &str,
@@ -725,6 +744,7 @@ fn render_item_row(
     let state_for_click = state.clone();
     let spec_name = label.to_string();
     let spec_for_click = spec_name.clone();
+    let prefix = state.read(cx).id_prefix.clone();
     let mut row = div()
         .h_flex()
         .items_center()
@@ -735,7 +755,7 @@ fn render_item_row(
                 .flex_1()
                 .min_w_0()
                 .child(
-                    Button::new(format!("lib-item-{label}"))
+                    Button::new(format!("{prefix}lib-item-{label}"))
                         .ghost()
                         .xsmall()
                         .label(label)
@@ -760,7 +780,7 @@ fn render_item_row(
         let ug_id_edit = spec_name.clone();
         row = row
             .child(
-                Button::new(format!("lib-item-edit-{label}"))
+                Button::new(format!("{prefix}lib-item-edit-{label}"))
                     .ghost()
                     .xsmall()
                     .label("编辑")
@@ -792,7 +812,7 @@ fn render_item_row(
                 {
                     let state_del = state.clone();
                     let ug_id_del = spec_name.clone();
-                    Button::new(format!("lib-item-delete-{label}"))
+                    Button::new(format!("{prefix}lib-item-delete-{label}"))
                         .ghost()
                         .xsmall()
                         .icon(IconName::Delete)
@@ -1157,17 +1177,25 @@ fn submit_create(state: &Entity<GeneratorLibraryState>, window: &mut Window, cx:
 }
 
 /// 精调层 footer：取消（回浏览）+ 保存并应用（编辑模式文案「保存修改」）。
-fn render_create_footer(
+/// 字段行对话框与主界面内嵌右栏共用：普通右对齐按钮行（不依赖 DialogFooter，
+/// 内嵌时宿主不在对话框里）。
+pub(crate) fn render_create_footer(
     state: &Entity<GeneratorLibraryState>,
     _window: &mut Window,
     _cx: &mut App,
 ) -> gpui_kit::AnyElement {
     let state_for_cancel = state.clone();
     let state_for_save = state.clone();
+    let prefix = state.read(_cx).id_prefix.clone();
     let editing = state.read(_cx).editing.is_some();
-    DialogFooter::new()
+    div()
+        .h_flex()
+        .justify_end()
+        .items_center()
+        .gap_2()
+        .w_full()
         .child(
-            Button::new("lib-create-cancel")
+            Button::new(format!("{prefix}lib-create-cancel"))
                 .ghost()
                 .label("取消")
                 .on_click(move |_event, _window, app| {
@@ -1180,7 +1208,7 @@ fn render_create_footer(
                 }),
         )
         .child(
-            Button::new("lib-create-save")
+            Button::new(format!("{prefix}lib-create-save"))
                 .label(if editing { "保存修改" } else { "保存并应用" })
                 .on_click(move |_event, window, app| {
                     submit_create(&state_for_save, window, app);
@@ -1215,7 +1243,7 @@ fn select_line<D: SearchableListDelegate + 'static>(
 }
 
 /// 精调层表单：名称 + 类型（锁定/可选）+ 业务组（锁定/可选）+ 基础生成器 + 参数区 + 样例。
-fn render_create(
+pub(crate) fn render_create(
     state: &Entity<GeneratorLibraryState>,
     theme: &Theme,
     _window: &mut Window,
@@ -1226,8 +1254,9 @@ fn render_create(
         return div().into_any_element();
     };
     let theme = theme.clone();
+    let id_prefix = s.id_prefix.clone();
     let name_state = draft.name_input.clone();
-    let mut body = div().v_flex().gap_2().w_full().h(px(420.));
+    let mut body = div().v_flex().gap_2().w_full().flex_1().min_h_0();
     body = body.child(form_line(&theme, "生成器名", &name_state));
     // 类型行：锁定 → 只读文本；未锁定 → Select
     body = match &draft.locked_type {
@@ -1415,7 +1444,7 @@ fn render_create(
                                                 .child(label),
                                         )
                                         .child(
-                                            Switch::new(format!("lib-param-{key2}"))
+                                            Switch::new(format!("{id_prefix}lib-param-{key2}"))
                                                 .checked(value)
                                                 .on_click(move |checked, _window, app| {
                                                     let checked = *checked;
