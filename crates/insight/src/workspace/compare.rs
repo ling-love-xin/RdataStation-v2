@@ -107,100 +107,103 @@ impl super::InsightWorkspacePanel {
                                     .text_color(colors.muted_foreground)
                                     .child("候选 = 已进入洞察的目标；聚合会话内已完成的画像摘要，不重新取数（D64 阶段②）。"),
                             )
-                            .child(compare_table_header(theme))
-                            .children(self.opened.iter().map(|entry| {
-                                let key = entry.key.clone();
-                                let selected = self.compare_selected.contains(&key);
-                                // 状态徽标：当前目标且加载中 → 分析中；有摘要 → 已分析；其余 → 未分析
-                                let (label, color) = if Some(key.as_str()) == current_key.as_deref()
-                                    && current_loading
-                                {
-                                    ("分析中", colors.info)
-                                } else if entry.summary.is_some() {
-                                    ("已分析", colors.success)
-                                } else {
-                                    ("未分析", colors.muted_foreground)
-                                };
-                                compare_row(theme, SharedString::from(format!("insight-ws-cand-{key}")))
-                                    .child(
-                                        Checkbox::new(SharedString::from(format!(
-                                            "insight-ws-check-{key}"
-                                        )))
-                                        .checked(selected)
+                            .child(compare_table_scroll(
+                                ui::INSIGHT_WS_CANDIDATE_MIN_WIDTH,
+                                compare_table_header(theme),
+                                self.opened.iter().map(|entry| {
+                                    let key = entry.key.clone();
+                                    let selected = self.compare_selected.contains(&key);
+                                    // 状态徽标：当前目标且加载中 → 分析中；有摘要 → 已分析；其余 → 未分析
+                                    let (label, color) = if Some(key.as_str()) == current_key.as_deref()
+                                        && current_loading
+                                    {
+                                        ("分析中", colors.info)
+                                    } else if entry.summary.is_some() {
+                                        ("已分析", colors.success)
+                                    } else {
+                                        ("未分析", colors.muted_foreground)
+                                    };
+                                    compare_row(theme, SharedString::from(format!("insight-ws-cand-{key}")))
+                                        .child(
+                                            Checkbox::new(SharedString::from(format!(
+                                                "insight-ws-check-{key}"
+                                            )))
+                                            .checked(selected)
+                                            .on_click({
+                                                let entity = entity.clone();
+                                                let key = key.clone();
+                                                move |_, _, app| {
+                                                    entity.update(app, |panel, cx| {
+                                                        panel.toggle_candidate(&key, cx)
+                                                    });
+                                                }
+                                            }),
+                                        )
+                                        .child(
+                                                           div()
+                                            .flex_1()
+                                            // 「表」列不随容器无限压缩：给可读下限，窄窗由外层横向滚动兜住
+                                            .min_w(rems(ui::INSIGHT_WS_TABLE_COL_MIN_WIDTH))
+                                            .text_sm()
+                                                .text_color(colors.foreground)
+                                                .text_ellipsis()
+                                                .child(entry.target.title()),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(rems(ui::INSIGHT_WS_SOURCE_WIDTH))
+                                                .flex_none()
+                                                .text_xs()
+                                                .text_color(colors.muted_foreground)
+                                                .text_ellipsis()
+                                                .child(entry.target.detail().unwrap_or_default()),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(rems(ui::INSIGHT_WS_NUM_WIDTH))
+                                                .flex_none()
+                                                .text_xs()
+                                                .text_color(colors.muted_foreground)
+                                                .child(
+                                                    entry
+                                                        .summary
+                                                        .and_then(|s| s.row_count)
+                                                        .map(|n| fmt_rows(n))
+                                                        .unwrap_or_else(|| "—".into()),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(rems(ui::INSIGHT_WS_NUM_WIDTH))
+                                                .flex_none()
+                                                .text_xs()
+                                                .text_color(colors.muted_foreground)
+                                                .child(
+                                                    entry
+                                                        .summary
+                                                        .and_then(|s| s.column_count)
+                                                        .map(|n| n.to_string())
+                                                        .unwrap_or_else(|| "—".into()),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(rems(ui::INSIGHT_WS_STATUS_WIDTH))
+                                                .flex_none()
+                                                .text_xs()
+                                                .text_color(color)
+                                                .child(label),
+                                        )
                                         .on_click({
                                             let entity = entity.clone();
                                             let key = key.clone();
                                             move |_, _, app| {
                                                 entity.update(app, |panel, cx| {
-                                                    panel.toggle_candidate(&key, cx)
+                                                    panel.open_candidate(&key, cx)
                                                 });
                                             }
-                                        }),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .text_sm()
-                                            .text_color(colors.foreground)
-                                            .text_ellipsis()
-                                            .child(entry.target.title()),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(rems(ui::INSIGHT_WS_SOURCE_WIDTH))
-                                            .flex_none()
-                                            .text_xs()
-                                            .text_color(colors.muted_foreground)
-                                            .text_ellipsis()
-                                            .child(entry.target.detail().unwrap_or_default()),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(rems(ui::INSIGHT_WS_NUM_WIDTH))
-                                            .flex_none()
-                                            .text_xs()
-                                            .text_color(colors.muted_foreground)
-                                            .child(
-                                                entry
-                                                    .summary
-                                                    .and_then(|s| s.row_count)
-                                                    .map(|n| fmt_rows(n))
-                                                    .unwrap_or_else(|| "—".into()),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(rems(ui::INSIGHT_WS_NUM_WIDTH))
-                                            .flex_none()
-                                            .text_xs()
-                                            .text_color(colors.muted_foreground)
-                                            .child(
-                                                entry
-                                                    .summary
-                                                    .and_then(|s| s.column_count)
-                                                    .map(|n| n.to_string())
-                                                    .unwrap_or_else(|| "—".into()),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(rems(ui::INSIGHT_WS_STATUS_WIDTH))
-                                            .flex_none()
-                                            .text_xs()
-                                            .text_color(color)
-                                            .child(label),
-                                    )
-                                    .on_click({
-                                        let entity = entity.clone();
-                                        let key = key.clone();
-                                        move |_, _, app| {
-                                            entity.update(app, |panel, cx| {
-                                                panel.open_candidate(&key, cx)
-                                            });
-                                        }
-                                    })
-                            })),
+                                        })
+                            }))),
                     ),
             )
     }
@@ -296,6 +299,9 @@ impl super::InsightWorkspacePanel {
     /// 值得关注列数 + 点行重开画像。阈值（缺失率 `NULL_RATE_NOTE`、唯一率
     /// `CHECKER_UNIQUE_MAX`）由 `quality_scorer` 一处提供，不在视图里再写一份；
     /// 本表不呈现质量总分或等级。
+    ///
+    /// 八列合计的刚性宽远超中央 dock 在窄窗下的可用宽，故表体走
+    /// `compare_table_scroll`（内容低于最小可读宽时横向滚动，不再整列切掉）。
     pub(crate) fn render_compare_result(
         &self,
         _cx: &Context<Self>,
@@ -366,7 +372,8 @@ impl super::InsightWorkspacePanel {
                                     .text_color(colors.muted_foreground)
                                     .child("对比为列表式汇总：行数 / 列数 / 检查器命中 / 缺失率 / 唯一率 / 值得关注列数（无评级，评级在归档后的资产库）；点某行可在中间打开该表洞察工作页。"),
                             )
-                            .child(
+                            .child(compare_table_scroll(
+                                ui::INSIGHT_WS_RESULT_MIN_WIDTH,
                                 div()
                                     .h_flex()
                                     .w_full()
@@ -374,7 +381,12 @@ impl super::InsightWorkspacePanel {
                                     .px_1()
                                     .text_xs()
                                     .text_color(colors.muted_foreground)
-                                    .child(div().flex_1().child("表"))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w(rems(ui::INSIGHT_WS_TABLE_COL_MIN_WIDTH))
+                                            .child("表"),
+                                    )
                                     .child(
                                         div()
                                             .w(rems(ui::INSIGHT_WS_SOURCE_WIDTH))
@@ -417,54 +429,54 @@ impl super::InsightWorkspacePanel {
                                             .flex_none()
                                             .child("值得关注"),
                                     ),
-                            )
-                            .children(selected.into_iter().map(|entry| {
-                                let s = entry.summary;
-                                // 检查器命中：事实计数着色（全中=success / 全不中=danger / 未评估=muted）
-                                let (checker_text, checker_color) =
-                                    match (s.and_then(|s| s.checker_applicable), s.and_then(|s| s.checker_hits)) {
-                                        (Some(applicable), Some(hits)) if applicable > 0 => (
-                                            format!("{hits}/{applicable}"),
-                                            if hits == applicable {
-                                                colors.success
-                                            } else if hits == 0 {
-                                                colors.danger
-                                            } else {
-                                                colors.warning
-                                            },
-                                        ),
-                                        _ => ("—".into(), colors.muted_foreground),
-                                    };
-                                // 缺失率 / 唯一率：均值超经验阈值标 warning
-                                let miss_color = s
-                                    .and_then(|s| s.null_rate)
-                                    .map(|r| if r > NULL_RATE_NOTE { colors.warning } else { colors.muted_foreground })
-                                    .unwrap_or(colors.muted_foreground);
-                                let uniq_color = s
-                                    .and_then(|s| s.unique_rate)
-                                    .map(|r| if r > crate::quality_scorer::CHECKER_UNIQUE_MAX { colors.warning } else { colors.muted_foreground })
-                                    .unwrap_or(colors.muted_foreground);
-                                let attention_color = s
-                                    .and_then(|s| s.attention_columns)
-                                    .map(|n| if n > 0 { colors.danger } else { colors.muted_foreground })
-                                    .unwrap_or(colors.muted_foreground);
-                                div()
-                                    .id(SharedString::from(format!(
-                                        "insight-ws-res-{}",
-                                        entry.key
-                                    )))
-                                    .h(rems(ui::ROW_HEIGHT))
-                                    .w_full()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .px_1()
-                                    .text_sm()
-                                    .text_color(colors.foreground)
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
+                                selected.into_iter().map(|entry| {
+                                    let s = entry.summary;
+                                    // 检查器命中：事实计数着色（全中=success / 全不中=danger / 未评估=muted）
+                                    let (checker_text, checker_color) =
+                                        match (s.and_then(|s| s.checker_applicable), s.and_then(|s| s.checker_hits)) {
+                                            (Some(applicable), Some(hits)) if applicable > 0 => (
+                                                format!("{hits}/{applicable}"),
+                                                if hits == applicable {
+                                                    colors.success
+                                                } else if hits == 0 {
+                                                    colors.danger
+                                                } else {
+                                                    colors.warning
+                                                },
+                                            ),
+                                            _ => ("—".into(), colors.muted_foreground),
+                                        };
+                                    // 缺失率 / 唯一率：均值超经验阈值标 warning
+                                    let miss_color = s
+                                        .and_then(|s| s.null_rate)
+                                        .map(|r| if r > NULL_RATE_NOTE { colors.warning } else { colors.muted_foreground })
+                                        .unwrap_or(colors.muted_foreground);
+                                    let uniq_color = s
+                                        .and_then(|s| s.unique_rate)
+                                        .map(|r| if r > crate::quality_scorer::CHECKER_UNIQUE_MAX { colors.warning } else { colors.muted_foreground })
+                                        .unwrap_or(colors.muted_foreground);
+                                    let attention_color = s
+                                        .and_then(|s| s.attention_columns)
+                                        .map(|n| if n > 0 { colors.danger } else { colors.muted_foreground })
+                                        .unwrap_or(colors.muted_foreground);
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "insight-ws-res-{}",
+                                            entry.key
+                                        )))
+                                        .h(rems(ui::ROW_HEIGHT))
+                                        .w_full()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .px_1()
+                                        .text_sm()
+                                        .text_color(colors.foreground)
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                            // 「表」列不随容器无限压缩：给可读下限，窄窗由外层横向滚动兜住
+                                            .min_w(rems(ui::INSIGHT_WS_TABLE_COL_MIN_WIDTH))
                                             .text_ellipsis()
                                             .child(entry.target.title()),
                                     )
@@ -477,87 +489,113 @@ impl super::InsightWorkspacePanel {
                                             .text_ellipsis()
                                             .child(entry.target.detail().unwrap_or_default()),
                                     )
-                                    .child(
-                                        div()
-                                            .w(rems(ui::INSIGHT_WS_NUM_WIDTH))
-                                            .flex_none()
-                                            .text_xs()
-                                            .text_color(colors.muted_foreground)
-                                            .child(
-                                                s.and_then(|s| s.row_count)
-                                                    .map(|n| fmt_rows(n))
-                                                    .unwrap_or_else(|| "—".into()),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(rems(ui::INSIGHT_WS_NUM_WIDTH))
-                                            .flex_none()
-                                            .text_xs()
-                                            .text_color(colors.muted_foreground)
-                                            .child(
-                                                s.and_then(|s| s.column_count)
-                                                    .map(|n| n.to_string())
-                                                    .unwrap_or_else(|| "—".into()),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(rems(ui::INSIGHT_WS_FACT_WIDTH))
-                                            .flex_none()
-                                            .text_xs()
-                                            .text_color(checker_color)
-                                            .child(checker_text),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(rems(ui::INSIGHT_WS_FACT_WIDTH))
-                                            .flex_none()
-                                            .text_xs()
-                                            .text_color(miss_color)
-                                            .child(
-                                                s.and_then(|s| s.null_rate)
-                                                    .map(fmt_pct)
-                                                    .unwrap_or_else(|| "—".into()),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(rems(ui::INSIGHT_WS_FACT_WIDTH))
-                                            .flex_none()
-                                            .text_xs()
-                                            .text_color(uniq_color)
-                                            .child(
-                                                s.and_then(|s| s.unique_rate)
-                                                    .map(fmt_pct)
-                                                    .unwrap_or_else(|| "—".into()),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(rems(ui::INSIGHT_WS_NUM_WIDTH))
-                                            .flex_none()
-                                            .text_xs()
-                                            .text_color(attention_color)
-                                            .child(
-                                                s.and_then(|s| s.attention_columns)
-                                                    .map(|n| format!("{n} 列"))
-                                                    .unwrap_or_else(|| "—".into()),
-                                            ),
-                                    )
-                                    .on_click({
-                                        let entity = entity.clone();
-                                        let key = entry.key.clone();
-                                        move |_, _, app| {
-                                            entity.update(app, |panel, cx| {
-                                                panel.open_candidate(&key, cx)
-                                            });
-                                        }
-                                    })
-                            })),
+                                        .child(
+                                            div()
+                                                .w(rems(ui::INSIGHT_WS_NUM_WIDTH))
+                                                .flex_none()
+                                                .text_xs()
+                                                .text_color(colors.muted_foreground)
+                                                .child(
+                                                    s.and_then(|s| s.row_count)
+                                                        .map(|n| fmt_rows(n))
+                                                        .unwrap_or_else(|| "—".into()),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(rems(ui::INSIGHT_WS_NUM_WIDTH))
+                                                .flex_none()
+                                                .text_xs()
+                                                .text_color(colors.muted_foreground)
+                                                .child(
+                                                    s.and_then(|s| s.column_count)
+                                                        .map(|n| n.to_string())
+                                                        .unwrap_or_else(|| "—".into()),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(rems(ui::INSIGHT_WS_FACT_WIDTH))
+                                                .flex_none()
+                                                .text_xs()
+                                                .text_color(checker_color)
+                                                .child(checker_text),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(rems(ui::INSIGHT_WS_FACT_WIDTH))
+                                                .flex_none()
+                                                .text_xs()
+                                                .text_color(miss_color)
+                                                .child(
+                                                    s.and_then(|s| s.null_rate)
+                                                        .map(fmt_pct)
+                                                        .unwrap_or_else(|| "—".into()),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(rems(ui::INSIGHT_WS_FACT_WIDTH))
+                                                .flex_none()
+                                                .text_xs()
+                                                .text_color(uniq_color)
+                                                .child(
+                                                    s.and_then(|s| s.unique_rate)
+                                                        .map(fmt_pct)
+                                                        .unwrap_or_else(|| "—".into()),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(rems(ui::INSIGHT_WS_NUM_WIDTH))
+                                                .flex_none()
+                                                .text_xs()
+                                                .text_color(attention_color)
+                                                .child(
+                                                    s.and_then(|s| s.attention_columns)
+                                                        .map(|n| format!("{n} 列"))
+                                                        .unwrap_or_else(|| "—".into()),
+                                                ),
+                                        )
+                                        .on_click({
+                                            let entity = entity.clone();
+                                            let key = entry.key.clone();
+                                            move |_, _, app| {
+                                                entity.update(app, |panel, cx| {
+                                                    panel.open_candidate(&key, cx)
+                                                });
+                                            }
+                                        })
+                            }))),
                     ),
             )
     }
+}
+
+/// 对比表（表头 + 数据行）的横向滚动容器。
+///
+/// 中间工作页的可用宽随窗口宽与左右 dock 收放变化，而表体是**刚性列宽**的合计
+/// （各列 `w(rems(..))`，见 `ui::INSIGHT_WS_*_MIN_WIDTH` 的推导）。外层只有纵向
+/// 滚动时，窄窗下右侧列会被整列切掉且**够不到**——这里给 `min_w` 定「最小可读宽」：
+/// 容器够宽时 `w_full` 铺满不出滚动条，不够时才横向滚动。
+pub(crate) fn compare_table_scroll(
+    min_width: f32,
+    header: Div,
+    rows: impl IntoIterator<Item = impl IntoElement>,
+) -> impl IntoElement {
+    div()
+        .flex_none()
+        .w_full()
+        .overflow_x_scrollbar()
+        .child(
+            div()
+                .v_flex()
+                .w_full()
+                .min_w(rems(min_width))
+                .gap_0p5()
+                .child(header)
+                .children(rows),
+        )
 }
 
 /// 对比行原语：居中行 + 行高（列内容由调用方追加）。
@@ -587,8 +625,13 @@ pub(crate) fn compare_table_header(theme: &Theme) -> Div {
         .px_1()
         .text_xs()
         .text_color(colors.muted_foreground)
-        .child(div().w(rems(1.25)).flex_none())
-        .child(div().flex_1().child("表"))
+        .child(div().w(rems(ui::INSIGHT_WS_CHECKBOX_WIDTH)).flex_none())
+        .child(
+            div()
+                .flex_1()
+                .min_w(rems(ui::INSIGHT_WS_TABLE_COL_MIN_WIDTH))
+                .child("表"),
+        )
         .child(
             div()
                 .w(rems(ui::INSIGHT_WS_SOURCE_WIDTH))

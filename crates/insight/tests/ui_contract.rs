@@ -27,7 +27,8 @@ fn ui_size_constants_match_design() {
         (INSIGHT_RATIO_BAR_HEIGHT, 6.0, "单条占比条高度"),
         (INSIGHT_INLINE_ICON_SIZE, 14.0, "行内小图标"),
         (INSIGHT_SECTION_TITLE_FONT, 12.0, "分区标题字号"),
-        (INSIGHT_CARD_VALUE_FONT, 28.0, "概览五卡主数值基准字号"),
+        (INSIGHT_CARD_VALUE_FONT, 28.0, "概览五卡主数值基准字号（设计锚点）"),
+        (INSIGHT_CARD_VALUE_REM, 21.0, "概览五卡主数值实际渲染字号（= 基准 × 缩放）"),
         (INSIGHT_HEALTH_SCORE_FONT, 36.0, "Schema 健康分字号"),
         (INSIGHT_RULES_DIALOG_WIDTH, 640.0, "规则管理对话框宽度"),
         (INSIGHT_TABLE_INDEX_WIDTH, 20.0, "表探查序号列宽"),
@@ -37,12 +38,21 @@ fn ui_size_constants_match_design() {
         (INSIGHT_DIFF_LABEL_WIDTH, 64.0, "版本对比标签列宽"),
         (INSIGHT_WS_RING_SIZE, 88.0, "中间工作页检查器命中环直径"),
         (INSIGHT_WS_TITLE_MAX_WIDTH, 240.0, "中间工作页标题最大宽度"),
+        (INSIGHT_WS_TAB_MAX_WIDTH, 288.0, "顶部多标签单 tab 最大宽度"),
         (INSIGHT_OVERVIEW_RING_SIZE, 68.0, "右栏摘要检查器命中环直径"),
         (INSIGHT_PICKER_WIDTH, 216.0, "列选择浮层宽度"),
         (INSIGHT_WS_NUM_WIDTH, 72.0, "中间工作页数值列宽"),
         (INSIGHT_WS_FACT_WIDTH, 52.0, "中间工作页事实指标列宽"),
         (INSIGHT_WS_STATUS_WIDTH, 52.0, "中间工作页状态词列宽"),
         (INSIGHT_WS_SOURCE_WIDTH, 56.0, "中间工作页数据源列宽"),
+        (INSIGHT_WS_COL_CARD_MIN, 272.0, "EDA 列卡最小宽度"),
+        (INSIGHT_CARD_MIN_WIDTH, 176.0, "概览五卡最小宽度"),
+        (INSIGHT_SET_LIST_MAX_HEIGHT, 288.0, "右栏集合列表最大高度"),
+        (INSIGHT_WS_CHIP_MAX_WIDTH, 224.0, "工具栏目标 chip 最大宽度"),
+        (INSIGHT_WS_TABLE_COL_MIN_WIDTH, 96.0, "对比表「表」列最小宽度"),
+        (INSIGHT_WS_CHECKBOX_WIDTH, 20.0, "对比候选表勾选框占位列宽"),
+        (INSIGHT_WS_RESULT_MIN_WIDTH, 588.0, "对比结果表最小内容宽度"),
+        (INSIGHT_WS_CANDIDATE_MIN_WIDTH, 424.0, "对比候选表最小内容宽度"),
     ];
 
     for (ratio, expected_px, label) in cases {
@@ -52,6 +62,74 @@ fn ui_size_constants_match_design() {
             "{label} 常量 {ratio}rem 偏离设计值 {expected_px}px（见 ui.rs 注释）"
         );
     }
+}
+
+/// 契约 1b：概览卡数值字号锁的必须是**实际渲染值**，且视图不得自行再乘缩放。
+///
+/// 历史 bug：`ui.rs` 登记 28px（设计锚点），视图里写 `* 0.75` 画 21px——契约锁了一个
+/// 从未被画出来的数字，真正上屏的 21px 无人看守。`INSIGHT_CARD_VALUE_REM` 把这个
+/// 乘积收进 `ui.rs`，本守卫防止它退回视图。
+#[test]
+fn card_value_font_is_the_rendered_size() {
+    use rds_insight::ui::{
+        INSIGHT_CARD_VALUE_FONT, INSIGHT_CARD_VALUE_REM, INSIGHT_CARD_VALUE_SCALE,
+    };
+    assert_eq!(
+        INSIGHT_CARD_VALUE_REM,
+        INSIGHT_CARD_VALUE_FONT * INSIGHT_CARD_VALUE_SCALE,
+        "ui::INSIGHT_CARD_VALUE_REM 必须由「基准 × 缩放」推导，不得写死"
+    );
+    for (name, src) in view_sources() {
+        assert!(
+            !src.contains("INSIGHT_CARD_VALUE_FONT *"),
+            "{name} 仍在视图里自行缩放卡片数值字号；请直接用 ui::INSIGHT_CARD_VALUE_REM"
+        );
+    }
+}
+
+/// 契约 1c：`ui.rs` 的**每个** `pub const …: f32` 都必须在本文件现身。
+///
+/// 契约 1 / 1b 是手写清单，新常量漏登记就**静默失去守卫**（这是此前真实发生过的
+/// 漂移：`INSIGHT_WS_TAB_MAX_WIDTH` / `INSIGHT_WS_COL_CARD_MIN` 曾双双漏登记，
+/// 而后者是全模块唯一的响应式换行阈值）。故用 `ui.rs` 的源文本反查清单覆盖度。
+#[test]
+fn every_ui_size_constant_is_registered() {
+    let ui_src = include_str!("../src/ui.rs");
+    let this = include_str!("ui_contract.rs");
+    for name in public_f32_constants(ui_src) {
+        assert!(
+            this.contains(&name),
+            "ui.rs 的 f32 常量 {name} 未在本契约现身：\
+             尺寸类请往 `ui_size_constants_match_design` 加一行；\
+             非 px 换算量（如缩放系数）请在 1b 类守卫里按语义断言"
+        );
+    }
+}
+
+/// 契约 1d：`ui.rs` 的计数类常量（`usize`）同样不得无人看守。
+#[test]
+fn ui_count_constants_match_design() {
+    use rds_insight::ui::{INSIGHT_SAMPLE_MAX_CHARS, INSIGHT_SCHEMA_DRILLDOWN_LIMIT};
+    assert_eq!(
+        INSIGHT_SAMPLE_MAX_CHARS, 200,
+        "样本单元格最大字符数偏离设计值 200（见 ui.rs 注释）"
+    );
+    assert_eq!(
+        INSIGHT_SCHEMA_DRILLDOWN_LIMIT, 4,
+        "结构报告下钻热点数偏离设计值 4（见 ui.rs 注释）"
+    );
+}
+
+/// 抽出 `ui.rs` 里所有 `pub const <NAME>: f32` 的名字。
+fn public_f32_constants(src: &str) -> Vec<String> {
+    src.lines()
+        .filter(|line| line.starts_with("pub const ") && line.contains(": f32 = "))
+        .filter_map(|line| {
+            let rest = line.split("const ").nth(1)?;
+            let name = rest.split(':').next()?;
+            Some(name.trim().to_string())
+        })
+        .collect()
 }
 
 /// 契约 2a：视图层不得出现裸尺寸字面量。

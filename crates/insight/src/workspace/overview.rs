@@ -203,9 +203,13 @@ impl super::InsightWorkspacePanel {
             .map(|c| profile.row_count as u64 * Self::col_est_bytes(c.kind))
             .sum();
         let memory_text = fmt_bytes(mem_bytes);
+        // 五卡容器可换行：`flex_1` 单排五份在窄容器（左右 dock 全开时的中央工作页）
+        // 会压到每卡 <100px，21px 数值溢出卡边框。换行阈值由 `ui::INSIGHT_CARD_MIN_WIDTH`
+        // 统一登记（与 EDA 列卡网格同口径）。
         div()
             .w_full()
             .flex()
+            .flex_wrap()
             .items_stretch()
             .gap_2()
             .child(summary_card(
@@ -289,17 +293,32 @@ impl super::InsightWorkspacePanel {
             // 类型占比条：相对父宽（`w(relative(..))`），不引入绝对像素
             segs = segs.child(div().h_full().w(relative(w_ratio)).bg(bar_colors[ix]));
         }
-        let mut legend = div().h_flex().w_full().items_center().gap_3();
+        // 图例与色条同一套取舍：**跳过 0 项**（色条本就跳过，否则「有条无形」——
+        // 图例有该项的颜色块，条上却找不到对应段）；标签长于分配宽时省略。
+        let mut legend = div().h_flex().w_full().items_center().gap_3().flex_wrap();
         for (ix, (kind, count)) in counts.iter().enumerate() {
+            if *count == 0 {
+                continue;
+            }
             legend = legend.child(
                 div()
                     .h_flex()
                     .items_center()
                     .gap_1()
-                    .child(div().w_2().h_2().rounded_sm().bg(bar_colors[ix]))
+                    .min_w_0()
                     .child(
                         div()
+                            .w_2()
+                            .h_2()
+                            .flex_none()
+                            .rounded_sm()
+                            .bg(bar_colors[ix]),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
                             .text_xs()
+                            .text_ellipsis()
                             .text_color(colors.muted_foreground)
                             .child(format!("{} {}", kind.label(), count)),
                     ),

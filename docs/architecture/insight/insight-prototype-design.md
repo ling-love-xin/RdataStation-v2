@@ -445,7 +445,7 @@ xsmall ≈ 36px 各）+ 来源徽标 ≈ 34px，共约 142px，余量留给检�
 
 | 常量 | 值（rem） | 说明 |
 | --- | --- | --- |
-| `INSIGHT_TAB_HEIGHT` | 1.75（≈ 28px） | ~~Tab 条高~~（2026-10-30 Tab 条移除，常量仍登记保留兼容，已无消费者） |
+| ~~`INSIGHT_TAB_HEIGHT`~~ | — | **已删除**（2026-10-30 Tab 条移除后全仓零消费者；2026-11-01 布局修复时连同常量一起删，避免后来者当成现行口径接走） |
 | `INSIGHT_HISTOGRAM_BAR_HEIGHT` | 0.5（8px） | 直方图条高 |
 | `INSIGHT_DIM_BAR_HEIGHT` | 0.375（6px） | 四维进度条 / True 占比条高 |
 | `INSIGHT_SCORE_FONT` | 1.75（≈ 28px） | 质量总分字号（主题字号的倍数，随缩放） |
@@ -461,6 +461,14 @@ xsmall ≈ 36px 各）+ 来源徽标 ≈ 34px，共约 142px，余量留给检�
 复用既有常量：`PANEL_HEADER_HEIGHT`（面板头）、`ROW_HEIGHT`（统计行 / 列表行）、`TREE_INDENT`（折叠区缩进）、`CONTROL_HEIGHT_SM`（搜索框 / 工具栏控件）、`ICON_SIZE_SM`（折叠箭头 / 状态图标）、`HAIRLINE`、`TREE_ACTIVE_BAR`、`GAP_SM/MD/LG`、`PANEL_PADDING`、`SCRATCHPAD_EMPTY_ICON_SIZE`（空态大图标，2.25rem）。
 
 规则对话框复用 `DIALOG_*` 系列：`DIALOG_ROW_HEIGHT`（规则行）、`DIALOG_TAB_BODY_HEIGHT`（列表区固定高，超出内部滚动）、`DIALOG_FORM_LABEL_WIDTH`。
+
+> **本表只作设计稿口径存档**（部分常量名已被实现期重命名 / 删除）。现行权威清单是
+> `crates/insight/src/ui.rs`，并由 `crates/insight/tests/ui_contract.rs` 机器守卫：
+> 每个 `pub const …: f32` 都必须登记设计值并进契约用例，漏登记即测试失败。
+> 2026-11-01 布局修复新增一组响应式约束常量：`INSIGHT_CARD_MIN_WIDTH`（五卡换行阈值 176px）、
+> `INSIGHT_SET_LIST_MAX_HEIGHT`（右栏集合列表最大高 288px）、`INSIGHT_WS_CHIP_MAX_WIDTH`、
+> `INSIGHT_WS_TABLE_COL_MIN_WIDTH`、`INSIGHT_WS_RESULT_MIN_WIDTH` / `INSIGHT_WS_CANDIDATE_MIN_WIDTH`
+> （对比表最小内容宽，低于它横向滚动）。
 
 ## 8. GPUI 落点映射
 

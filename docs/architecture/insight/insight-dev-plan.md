@@ -23,6 +23,30 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-11-01 — 视图层布局修复（溢出 / 挤压 / 契约漂移）
+
+**背景**：静态核算暴露洞察视图层的一组**布局失效**——所有 UI 契约都管「尺寸从哪来」，没有一个管「值放不放得下」。可用宽口径：中央工作页 = 窗口宽 − activity 48 − 左 dock 288 − 右 dock 320（1280 窗口 ≈ 624px、1024 窗口 ≈ 368px）。真机未跑，以下均为常量推导 + flex 语义推演，**建议在 1024×768 + 左右 dock 全开 + 30 字符长列名的表上一次复现验证**。
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **261 项** · `ui_contract` **7 项**（原 4 项，新增 3 项）· lib / tests check 零 error 零 warning）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 对比表横向滚动 | 结果表刚性内容 492px（1280 尚能容，1024 只有 368px）塞进只有**纵向**滚动的容器 → 右侧四列整列不可达。抽 `compare_table_scroll(min_width, header, rows)`：候选表 424px / 结果表 588px 为最小可读宽，低于它才出横向滚动条（够宽时 `w_full` 铺满，视觉无变化） | `workspace/compare.rs` + `ui.rs` 的 `INSIGHT_WS_{CANDIDATE,RESULT}_MIN_WIDTH`（按列宽表达式推导，不写死 588） |
+| 概览五卡换行 | 五张卡单排 `flex_1`、无 wrap、无 min_w（对比 EDA 列卡网格两者都有）→ 窄容器压到 21px 数值溢出卡边框。加 `flex_wrap` + 每卡 `min_w(176px)`；`summary_card` 三行文案统一 `text_ellipsis`（此前只有副标题有） | `workspace/overview.rs` + `workspace/helpers.rs` + `ui::INSIGHT_CARD_MIN_WIDTH` |
+| 卡片数值字号 | 契约锁 28px（**从未被画出来**），真正渲染的 21px 来自视图里 `* 0.75` 魔数且无人看守。缩放登记为 `INSIGHT_CARD_VALUE_SCALE`，结果值收进 `INSIGHT_CARD_VALUE_REM`，视图只引用结果 | `ui.rs` + `helpers.rs` + 契约 1b |
+| 工具栏目标名 | 「表名」chip 错用**数据源列宽**（56px，连一个中文字都放不下）；下拉 label 完全无截断（`Button::label` 是纯文本槽，套不上 `max_w` + ellipsis）→ 文本层左侧省略 + tooltip 给全名；chip 整体限 224px | `workspace/toolbar.rs`（新增 `ellipsize_title`）+ `ui::{INSIGHT_WS_CHIP_MAX_WIDTH, INSIGHT_WS_TITLE_MAX_CHARS}` |
+| 集合列表高度 | 右栏 it-list 全量渲染、无高度上限（`insight.work_set_limit` 默认 30 ≈ 840–1200px），把下钻区整块推出首屏。加 `max_h(288px)` + 自身纵向滚动 | `view/set.rs` + `ui::INSIGHT_SET_LIST_MAX_HEIGHT` |
+| tab 宽硬编码 | `px(INSIGHT_WS_TAB_MAX_WIDTH * 16.0)` 是全仓唯一脱离主题字号处（`has_literal_px` 打不到、也不在契约 cases 里）→ 改由 render 入口 `window.rem_size()` 换算 | `workspace/mod.rs`（`render_tab_strip` 增 `tab_max_width: Pixels` 形参） |
+| 类型图例一致性 | 色条跳过 `count == 0` 段而图例照常渲染 0 项（「有条无形」）→ 两者同跳过；图例加 `flex_wrap` + ellipsis | `workspace/overview.rs` |
+| 死常量清理 | `INSIGHT_TAB_HEIGHT` 自 2026-10-30 移除 Tab 条后全仓零消费者（含注释里写的「17.5rem 面板宽」也早已不等于右 dock 320px）→ 连常量一起删，避免被当成现行口径接走 | `ui.rs` + `insight-prototype-design.md` §7 |
+| 契约补全 + 守卫 | 补 9 个漏登记常量（含全模块唯一的响应式换行阈值 `INSIGHT_WS_COL_CARD_MIN`）；新增**反查守卫**：`ui.rs` 每个 `pub const …: f32` 必须在本契约现身，漏登记不再是静默失效 | `tests/ui_contract.rs`（1b / 1c / 1d 三项） |
+
+**风险 / 未做**：
+- 以上**未经真机验证**，尤其 `flex_wrap` + `flex_1` + `min_w` 在 gpui 0.8.1 的换行行为（按 flexbox 假想主尺寸 ≥ min-width 推导）与嵌套滚动的滚动链传递。
+- `overflow_x_scrollbar()` 返回 `Scrollable<Div>`，`compare_table_scroll` 因此返回 `impl IntoElement`（不是 `Div`）。
+- 集合列表现在是**内层纵向滚动**（外层 body 也滚）；滚动链手感待真机确认，若不适可改为折叠 / 分页。
+- `quality_scorer` 的那套加权评分仍仅在 Schema 健康分上生效（见 2026-11-01 模块分析备忘），本次未动。
+
 ### 2026-10-30 — 右栏洞察面板对齐 EDA 原型（拍板 ×2 + 布局重写）
 
 **背景**：用户指出「洞察右侧面板布局等也应该是同 EDA 原型的右侧面板，而不是现在的」——推翻此前「设置最右 + Tab 条」临时形态（该形态本身已是推翻「标题右对齐」后的产物）。连问两个关键决策均获拍板：① **完全对齐原型**——移除 6-Tab 条，右栏只保留「洞察表集合 `it-list` + 选中目标下钻 `drillzone`」；② **工具栏按原型**——规则管理 / 重算画像 / 全量统计 [spacer] ＋新建洞察最右（推翻「设置最右」惯例）；③ **下钻区按目标自适应**——表→表画像卡 / 列→列摘要卡 / schema→结构摘要卡 / 多列→聚合占位（非表目标不另走中间页）。

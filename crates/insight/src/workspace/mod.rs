@@ -442,6 +442,7 @@ impl InsightWorkspacePanel {
         &mut self,
         entity: &Entity<Self>,
         theme: &Theme,
+        tab_max_width: Pixels,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let colors = theme.colors;
@@ -454,8 +455,9 @@ impl InsightWorkspacePanel {
         TabBar::new("insight-ws-tabs")
             // `Tab::max_width` 是 `pub(super)`（只能 tab 模块内部用）——tab 条级
             // `max_width` 才是公开 API（0.8.1 vendor tab_bar.rs:133）：每 tab 超宽
-            // 省略号截断。它只收 `Pixels`，ui 常量是 rem 倍率 → ×主题基准字号换算
-            .max_width(px(ui::INSIGHT_WS_TAB_MAX_WIDTH * 16.0))
+            // 省略号截断。它只收 `Pixels`，故用 render 入口处的主题基准字号换算
+            // （此前写死 `× 16.0`，用户调 UI 字号时这一处不跟着动）。
+            .max_width(tab_max_width)
             .children(self.opened.iter().enumerate().map(|(ix, entry)| {
                 let key = entry.key.clone();
                 let is_current = current_ix == Some(ix);
@@ -667,6 +669,8 @@ impl Render for InsightWorkspacePanel {
         let inline_icon = rem * ui::INSIGHT_INLINE_ICON_SIZE;
         let empty_icon = rem * ui::EMPTY_ICON_SIZE;
         let ring_px = rem * ui::INSIGHT_WS_RING_SIZE;
+        // tab 截断宽度同样按主题字号换算（不再写死 ×16）
+        let tab_max_width = rem * ui::INSIGHT_WS_TAB_MAX_WIDTH;
 
         div()
             .key_context("insight-workspace")
@@ -674,7 +678,7 @@ impl Render for InsightWorkspacePanel {
             .size_full()
             .bg(theme.colors.background)
             // A 方案多标签（2026-10-30）：顶部 tab 条在工具栏之上（对齐原型 tab-strip）
-            .child(self.render_tab_strip(&entity, &theme, cx))
+            .child(self.render_tab_strip(&entity, &theme, tab_max_width, cx))
             .child(self.render_toolbar(&entity, &theme, cx))
             .child(
                 div()

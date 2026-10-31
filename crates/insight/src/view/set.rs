@@ -19,6 +19,7 @@
 use gpui_kit::base::{Disableable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{Sizable as _, Theme};
@@ -80,11 +81,17 @@ impl InsightView {
                     ),
             )
             // it-list：卡片行
+            //
+            // **有高度上限 + 自身滚动**：集合是会话级管理入口，全量渲染 30 张卡
+            // ≈ 840–1200px，会把下钻区（用户点进洞察真正要看的东西）整块推出首屏。
+            // 阈值登记在 `ui::INSIGHT_SET_LIST_MAX_HEIGHT`，超过后列表自己滚。
             .child(
                 div()
                     .w_full()
                     .v_flex()
                     .gap_1()
+                    .max_h(rems(ui::INSIGHT_SET_LIST_MAX_HEIGHT))
+                    .overflow_y_scrollbar()
                     .when(self.insight_set.is_empty(), |this| {
                         this.child(
                             div()

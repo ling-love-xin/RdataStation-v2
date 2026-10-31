@@ -138,12 +138,19 @@ impl super::InsightWorkspacePanel {
                     // 常显下拉箭头：DropdownButton 的 caret 半块在 ghost 变体下
                     // hover 才显现，静止时只剩表名 label——用户看不出可下拉
                     .icon(IconName::ChevronDown)
+                    // 表名 label 无截断时会撑破 36px 单行工具栏（`Button::label` 是纯
+                    // 文本槽，套不上 `max_w` + `text_ellipsis`）→ 文本层按字符数左侧省略，
+                    // 全名交给 tooltip（VS Code 约束：长标题省略 + hover 提示全名）。
                     .label(
                         chip.as_ref()
-                            .map(|(_, title)| title.clone())
+                            .map(|(_, title)| ellipsize_title(title, ui::INSIGHT_WS_TITLE_MAX_CHARS))
                             .unwrap_or_else(|| "切换目标".into()),
                     )
-                    .tooltip("切换洞察目标")
+                    .tooltip(
+                        chip.as_ref()
+                            .map(|(_, title)| SharedString::from(title.clone()))
+                            .unwrap_or_else(|| SharedString::from("切换洞察目标")),
+                    )
                     .dropdown_menu(move |menu, _, _| {
                         let mut menu = menu;
                         for (key, title) in &candidates {
@@ -182,12 +189,15 @@ impl super::InsightWorkspacePanel {
                         .gap_1()
                         .px_1()
                         .h(rems(ui::ROW_HEIGHT * 0.8))
+                        .max_w(rems(ui::INSIGHT_WS_CHIP_MAX_WIDTH))
+                        .overflow_hidden()
                         .rounded_sm()
                         .border_1()
                         .border_color(colors.border)
                         .text_xs()
                         .child(
                             div()
+                                .min_w_0()
                                 .max_w(rems(ui::INSIGHT_WS_SOURCE_WIDTH))
                                 .text_ellipsis()
                                 .text_color(colors.muted_foreground)
@@ -196,7 +206,10 @@ impl super::InsightWorkspacePanel {
                         .child(div().text_color(colors.muted_foreground).child("·"))
                         .child(
                             div()
-                                .max_w(rems(ui::INSIGHT_WS_SOURCE_WIDTH))
+                                .min_w_0()
+                                // 表名吃 chip 的余量（此前错用「数据源列宽」56px，
+                                // 连一个中文字都放不下）；上限是标题宽度常量
+                                .max_w(rems(ui::INSIGHT_WS_TITLE_MAX_WIDTH))
                                 .text_ellipsis()
                                 .text_color(colors.foreground)
                                 .child(title),
@@ -240,4 +253,18 @@ impl super::InsightWorkspacePanel {
             .text_color(colors.muted_foreground)
             .child(text)
     }
+}
+
+/// 超长表名在**左侧**省略（`max_chars` 含省略号；保留尾部）。
+///
+/// 表名的区分信息常在尾部（`schema.table` 里是表名、`xxx_2026_report` 里是年份后缀），
+/// 故与 `Button::label` 不同——这里砍头不砍尾。
+fn ellipsize_title(title: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = title.chars().collect();
+    if chars.len() <= max_chars {
+        return title.to_string();
+    }
+    let keep = max_chars.saturating_sub(1);
+    let tail: String = chars[chars.len() - keep..].iter().collect();
+    format!("…{tail}")
 }
