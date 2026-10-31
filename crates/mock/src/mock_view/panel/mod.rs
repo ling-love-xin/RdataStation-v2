@@ -2467,6 +2467,32 @@ impl MockPanel {
         cx.notify();
     }
 
+    /// 字段行入口两栏模式「应用」：写整份生成器配置 + 列级开关（空值率 / 唯一值）到指定列。
+    ///
+    /// 与 [`set_generator`]（只取默认配置、不含列级开关）区分——两栏右栏允许在落地前调
+    /// 空值率 / 唯一值，这里一次写齐。`remember_generator` + `manual` 置信度 + 清空结果集同口径。
+    pub fn set_generator_config(
+        &mut self,
+        id: u64,
+        config: GeneratorConfig,
+        nullable_ratio: f64,
+        unique: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.remember_generator(generator_catalog::spec_of(&config).name);
+        if let Some(column) = self.draft.columns.iter_mut().find(|c| c.id == id) {
+            column.def.generator = config;
+            column.def.nullable_ratio = nullable_ratio;
+            column.def.unique = unique;
+            column.confidence = "manual".to_string();
+            column.sample_value.clear();
+            self.results.clear();
+            self.current = 0;
+            self.landed = None;
+        }
+        cx.notify();
+    }
+
     /// 本会话点过的生成器（最近在前；生成器菜单的「最近使用」，见 B7）。
     pub fn recent_generators(&self) -> &[String] {
         &self.recent_generators

@@ -30,7 +30,7 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use crate::mock_view::panel::MockPanel;
 use crate::mock_view::pure::{
     column_type_label, complex_param_hint, complex_param_text, param_text, patch_param,
-    patch_param_value, parse_complex_param,
+    patch_param_value, parse_complex_param, parse_percent_ratio,
 };
 
 /// 样例预览固定种子（与 `detail.rs::SAMPLE_PREVIEW_SEED` 同值同源：样例可复现，纯示意，
@@ -127,6 +127,9 @@ pub(crate) struct GeneratorLibraryState {
     pub(crate) create: Option<CreateDraft>,
     /// 编辑中的自定义生成器 id（`Some` = 精调层是编辑而非新建；保存走 `update_user_generator`）
     pub(crate) editing: Option<String>,
+    /// 字段行入口（`embedded=false`）两栏模式下的「选中态」：左栏点生成器 → 填充右栏检视草稿，
+    /// 点「应用」才写回列。列编辑内嵌模式（`embedded=true`）不走这条——它有自己的草稿与右栏。
+    pub(crate) selected: Option<InspectDraft>,
     _search_sub: Option<Subscription>,
 }
 
@@ -159,6 +162,20 @@ pub(crate) struct CreateDraft {
     pub(crate) error: Option<String>,
     /// 参数 / 基础生成器订阅（必须持有，丢了自动退订）
     pub(crate) _subs: Vec<Subscription>,
+}
+
+/// 字段行入口两栏模式的「选中态草稿」：左栏点生成器 → 填充它；右栏展示 属性 / 参数 /
+/// 样例，并允许调 空值率 / 唯一值，点「应用」才写回列。刻意不带完整 param 编辑——
+/// 逐生成器调参留在列编辑对话框（它本就是干这个的），这里只给最常用的两个列级开关。
+pub(crate) struct InspectDraft {
+    /// 当前选中的生成器配置（来自 `default_of`，应用前可被空值率 / 唯一值改写）
+    pub(crate) config: GeneratorConfig,
+    /// 样例预览（2 条示意值，固定种子）
+    pub(crate) preview: String,
+    /// 空值率（0~100，输入框；应用前解析）
+    pub(crate) null_input: Entity<InputState>,
+    /// 唯一值开关
+    pub(crate) unique: bool,
 }
 
 /// 精调层参数行（Bool 用 Switch，不再退化成文本框——质询的直接回应）。
@@ -210,6 +227,7 @@ pub(crate) fn create_library_state(
         search_input: search_input.clone(),
         create: None,
         editing: None,
+        selected: None,
         _search_sub: None,
     });
     // 搜索词订阅挂在状态实体上（实体已创建完；在 `cx.new` 构造闭包内订阅会推不出回调参数类型）
@@ -318,15 +336,121 @@ pub(crate) fn render_state(
 ) -> (gpui_kit::AnyElement, Option<gpui_kit::AnyElement>) {
     // `cx.theme()` 借用 cx：先克隆出值，避免后续把 `cx` 可变借给渲染函数时冲突
     let theme = cx.theme().clone();
-    let body = match state.read(cx).mode {
+    let embedded = state.read(cx).embedded;
+    let mode = state.read(cx).mode;
+    // 非内嵌（字段行入口）Browse：两栏（左列表 + 右检视面板），对齐原型「选择生成器窗口」；
+    // 内嵌（列编辑）Browse：单栏列表（右栏由 detail.rs 自带），保持旧行为。
+    let body = match mode {
+        LibraryMode::Browse if !embedded => render_browse_two_column(state, &theme, window, cx),
         LibraryMode::Browse => render_browse(state, &theme, window, cx),
         LibraryMode::Create => render_create(state, &theme, window, cx),
     };
-    let footer = match state.read(cx).mode {
+    let footer = match mode {
+        LibraryMode::Browse if !embedded => Some(render_inspect_footer(state, window, cx)),
         LibraryMode::Browse => None,
         LibraryMode::Create => Some(render_create_footer(state, window, cx)),
     };
     (body, footer)
+}
+
+/// 字段行入口两栏主体：顶部搜索框 + 左右分栏（左 = 生成器列表，右 = 检视面板）。
+fn render_browse_two_column(
+    state: &Entity<GeneratorLibraryState>,
+    theme: &Theme,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui_kit::AnyElement {
+    let state = state.clone();
+    let search = state.read(cx).search_input.clone();
+    div()
+        .v_flex()
+        .gap_2()
+        .w_full()
+        .child(div().w_full().child(Input::new(&search)))
+        .child(
+            div()
+                .h_flex()
+                .items_stretch()
+                .h(px(440.))
+                .w_full()
+                // 左栏：生成器双 Tab 列表（业务 / 数据）
+                .child(
+                    div()
+                        .flex_none()
+                        .w(ui::COLUMN_GENERATOR_LIST_WIDTH)
+                        .h_full()
+                        .min_h_0()
+                        .overflow_y_scrollbar()
+                        .border_r_1()
+                        .border_color(theme.colors.border)
+                        .child(render_browse_pane(&state, theme, window, cx)),
+                )
+                // 右栏：选中生成器的 属性 / 参数 / 样例 / 空值率 / 唯一值
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .min_h_0()
+                        .overflow_y_scrollbar()
+                        .child(render_inspector(&state, theme, window, cx)),
+                ),
+        )
+        .into_any_element()
+}
+
+/// 两栏 Browse 的页脚：应用（写回列）／取消（关对话框）。未选中生成器时应用禁用。
+fn render_inspect_footer(
+    state: &Entity<GeneratorLibraryState>,
+    _window: &mut Window,
+    cx: &mut App,
+) -> gpui_kit::AnyElement {
+    let has_selection = state.read(cx).selected.is_some();
+    let state_for_apply = state.clone();
+    let state_for_cancel = state.clone();
+    DialogFooter::new()
+        .child(
+            Button::new("mock-lib-inspect-cancel")
+                .secondary()
+                .label("取消")
+                .on_click(move |_, window, app| {
+                    state_for_cancel.read(app);
+                    window.close_dialog(app);
+                }),
+        )
+        .child(
+            Button::new("mock-lib-inspect-apply-footer")
+                .primary()
+                .label("应用")
+                .disabled(!has_selection)
+                .on_click(move |_, window, app| {
+                    let Some((config, null_text, unique)) = state_for_apply
+                        .read(app)
+                        .selected
+                        .as_ref()
+                        .map(|i| {
+                            (
+                                i.config.clone(),
+                                i.null_input.read(app).value().to_string(),
+                                i.unique,
+                            )
+                        })
+                    else {
+                        return;
+                    };
+                    let panel = state_for_apply.read(app).panel.clone();
+                    let column_id = match &state_for_apply.read(app).writeback {
+                        LibraryWriteback::Panel { column_id } => *column_id,
+                        LibraryWriteback::ColumnDraft { column_id, .. } => *column_id,
+                    };
+                    let ratio = parse_percent_ratio(&null_text).unwrap_or(0.0);
+                    panel.update(app, |p, cx| {
+                        p.set_generator_config(column_id, config, ratio, unique, cx);
+                    });
+                    window.close_dialog(app);
+                }),
+        )
+        .into_any_element()
 }
 
 /// 打开生成器库对话框（字段行入口，写回面板列）。`cx` 是面板的 Context。
@@ -351,7 +475,12 @@ pub(crate) fn open_library(
                 }
             }
         };
-        let dialog = dialog.title(title).width(px(560.0)).child(body);
+        // 两栏 Browse（字段行入口）用更宽尺寸容纳左列表 + 右检视面板；精调层（Create）沿用旧宽。
+        let width = match state.read(cx).mode {
+            LibraryMode::Browse => px(720.0),
+            LibraryMode::Create => px(560.0),
+        };
+        let dialog = dialog.title(title).width(width).child(body);
         match footer {
             Some(footer) => dialog.footer(footer),
             None => dialog,
@@ -407,6 +536,60 @@ fn apply_picked_generator(
             }
         }
     }
+}
+
+/// 字段行入口两栏模式：左栏点生成器 → 填充右栏「选中态」（`selected`），不直接写回。
+///
+/// 与 [`apply_picked_generator`] 的 `Panel` 分支区分：那里是单栏时期的「点即写回+关对话框」；
+/// 两栏后改为「点即选中、右栏检视、点应用才落地」，保留用户核对的余地与空值率 / 唯一值调节。
+/// 列编辑内嵌（`embedded=true`）不走这条——`ColumnDraft` 分支即时写回草稿即可。
+fn select_generator(
+    state: &Entity<GeneratorLibraryState>,
+    picked: &str,
+    is_user: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    // 内建取默认配置；自定义解包 base（与列编辑 `ColumnDraft` 分支同源）
+    let config = if is_user {
+        state
+            .read(cx)
+            .panel
+            .read(cx)
+            .user_generators
+            .iter()
+            .find(|ug| ug.id == picked)
+            .map(|ug| ug.base.clone())
+    } else {
+        generator_catalog::default_of(picked)
+    };
+    let Some(config) = config else {
+        return;
+    };
+    let null_input = cx.new(|cx| InputState::new(window, cx).placeholder("0~100"));
+    null_input.update(cx, |s, cx| s.set_value("0".to_string(), window, cx));
+    // 样例预览（固定种子，与 create 表单同口径；纯示意，与最终生成随机种子无关）
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let mut rng = fake::rand::rngs::StdRng::seed_from_u64(SAMPLE_PREVIEW_SEED);
+    let locale = crate::models::Locale::ZhCn;
+    let samples: Vec<String> = (0..2)
+        .map(|row| {
+            catch_unwind(AssertUnwindSafe(|| {
+                crate::generators::generate_cell(&config, &mut rng, row, &locale)
+            }))
+            .unwrap_or_else(|_| "（参数区间为空，无法采样）".to_string())
+        })
+        .collect();
+    let preview = samples.join("，");
+    state.update(cx, |s, cx| {
+        s.selected = Some(InspectDraft {
+            config,
+            preview,
+            null_input,
+            unique: false,
+        });
+        cx.notify();
+    });
 }
 
 /// 顶部搜索定位输入框（横跨对话框全宽；词过滤左栏分组项，见 [`render_browse_pane`]）。
@@ -607,6 +790,164 @@ fn render_browse(
         .into_any_element()
 }
 
+/// 右栏小标题（与列编辑对话框「属性 / 参数」同款分段标题）。
+fn inspector_section(theme: &Theme, label: &str) -> gpui_kit::AnyElement {
+    div()
+        .text_xs()
+        .text_color(theme.colors.muted_foreground)
+        .child(label.to_string())
+        .into_any_element()
+}
+
+/// 右栏「标签 + 值」只读行（属性 / 参数展示用）。
+fn inspector_row(theme: &Theme, label: &str, value: &str) -> gpui_kit::AnyElement {
+    div()
+        .h_flex()
+        .items_center()
+        .gap_2()
+        .w_full()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(label.to_string()),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.colors.foreground)
+                .child(value.to_string()),
+        )
+        .into_any_element()
+}
+
+/// 字段行入口两栏模式的右栏：展示选中生成器的 属性 / 参数 / 样例，并允许调 空值率 / 唯一值，
+/// 点「应用」写回列。未选中时给占位提示。列编辑内嵌模式不用它——`detail.rs` 自带右栏。
+fn render_inspector(
+    state: &Entity<GeneratorLibraryState>,
+    theme: &Theme,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui_kit::AnyElement {
+    let state = state.clone();
+    let s = state.read(cx);
+    let Some(inspect) = s.selected.as_ref() else {
+        return div()
+            .id("mock-lib-inspect-placeholder")
+            .v_flex()
+            .items_center()
+            .justify_center()
+            .w_full()
+            .h_full()
+            .text_sm()
+            .text_color(theme.colors.muted_foreground)
+            .child("从左侧选择生成器")
+            .into_any_element();
+    };
+    let spec = generator_catalog::spec_of(&inspect.config);
+    let generator_label = spec.label.to_string();
+    let type_label = column_type_label(&data_type_for_spec(spec));
+    let category_label = spec.category.label().to_string();
+    let params: Vec<(String, String)> = spec
+        .params
+        .iter()
+        .map(|f| {
+            let value = if f.kind == ParamKind::Complex {
+                complex_param_text(&inspect.config, f.key)
+            } else {
+                param_text(&inspect.config, f.key)
+            };
+            (f.label.to_string(), value)
+        })
+        .collect();
+    let preview = inspect.preview.clone();
+    let null_input = inspect.null_input.clone();
+    let unique = inspect.unique;
+    drop(s);
+
+    let mut right = div().v_flex().gap_2().w_full();
+    // —— 属性 ——
+    right = right.child(inspector_section(theme, "属性"));
+    right = right.child(inspector_row(theme, "生成器名", &generator_label));
+    right = right.child(inspector_row(theme, "产出类型", &type_label));
+    right = right.child(inspector_row(theme, "业务组", &category_label));
+    // —— 参数（只读展示默认取值；深层逐生成器调参留在列编辑对话框）——
+    right = right.child(inspector_section(theme, "参数"));
+    if params.is_empty() {
+        right = right.child(
+            div()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child("（该生成器无参数）"),
+        );
+    } else {
+        for (label, value) in &params {
+            right = right.child(inspector_row(theme, label, value));
+        }
+    }
+    // —— 样例预览 ——
+    right = right.child(inspector_section(theme, "样例预览"));
+    right = right.child(
+        div()
+            .text_sm()
+            .text_color(theme.colors.foreground)
+            .child(preview),
+    );
+    // —— 空值率 ——
+    right = right.child(
+        div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child("空值率（%）"),
+            )
+            .child(
+                div()
+                    .w(px(90.))
+                    .child(Input::new(&null_input)),
+            ),
+    );
+    // —— 唯一值 ——
+    right = right.child(
+        div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child("唯一值"),
+            )
+            .child({
+                let state = state.clone();
+                Switch::new("mock-lib-inspect-unique")
+                    .checked(unique)
+                    .on_click(move |checked, _window, app| {
+                        let checked = *checked;
+                        state.update(app, |s, _cx| {
+                            if let Some(inspect) = s.selected.as_mut() {
+                                inspect.unique = checked;
+                            }
+                        });
+                    })
+            }),
+    );
+    right.into_any_element()
+}
+
 /// 最近使用（本会话点过的生成器，最多 [`RECENT_GENERATORS`] 条）：非空才渲染，
 /// 点击直接应用（静态 spec → `set_generator`）并关闭对话框——菜单退役后的快速路径。
 fn render_recent(
@@ -643,10 +984,15 @@ fn render_recent(
                 .tooltip("最近使用：点击直接应用")
                 .tooltip_show_delay(Duration::from_millis(500))
                 .on_click(move |_event, window, app| {
-                    let s = state_for_click.read(app);
-                    let panel = s.panel.clone();
-                    let writeback = s.writeback.clone();
-                    apply_picked_generator(app, window, &panel, &writeback, name, false);
+                    let embedded = state_for_click.read(app).embedded;
+                    if embedded {
+                        let s = state_for_click.read(app);
+                        let panel = s.panel.clone();
+                        let writeback = s.writeback.clone();
+                        apply_picked_generator(app, window, &panel, &writeback, name, false);
+                    } else {
+                        select_generator(&state_for_click, name, false, window, app);
+                    }
                 }),
         );
     }
@@ -696,6 +1042,8 @@ fn render_group_row(
         .w_full()
         .child(
             div()
+                .h_flex()
+                .items_center()
                 .flex_1()
                 .min_w_0()
                 .child(
@@ -775,6 +1123,8 @@ fn render_type_group_row(
         .w_full()
         .child(
             div()
+                .h_flex()
+                .items_center()
                 .flex_1()
                 .min_w_0()
                 .child(
@@ -845,6 +1195,8 @@ fn render_item_row(
         .w_full()
         .child(
             div()
+                .h_flex()
+                .items_center()
                 .flex_1()
                 .min_w_0()
                 .child(
@@ -853,11 +1205,16 @@ fn render_item_row(
                         .xsmall()
                         .label(label)
                         .on_click(move |_event, window, app| {
-                            let s = state_for_click.read(app);
-                            let panel = s.panel.clone();
-                            let writeback = s.writeback.clone();
-                            let ug_id = spec_for_click.clone();
-                            apply_picked_generator(app, window, &panel, &writeback, &ug_id, is_user);
+                            let embedded = state_for_click.read(app).embedded;
+                            if embedded {
+                                let s = state_for_click.read(app);
+                                let panel = s.panel.clone();
+                                let writeback = s.writeback.clone();
+                                let ug_id = spec_for_click.clone();
+                                apply_picked_generator(app, window, &panel, &writeback, &ug_id, is_user);
+                            } else {
+                                select_generator(&state_for_click, &spec_for_click, is_user, window, app);
+                            }
                         }),
                 ),
         )

@@ -5346,6 +5346,48 @@ fn generator_library_dialog_opens(cx: &mut TestAppContext) {
 /// 右 = 本列参数区。左栏选中生成器写回**草稿**（生成器配置 + 参数区重建 + 样例刷新），
 /// 列未应用时面板列不动。
 #[gpui_kit::test]
+fn field_row_library_opens_two_column_with_inspector(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    let id = panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+        panel.draft().columns[0].id
+    });
+    draw(cx);
+    let before = panel.read_with(cx, |panel, _cx| {
+        generator_catalog::spec_of(&panel.draft().columns[0].def.generator)
+            .name
+            .to_string()
+    });
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.open_generator_library(id, window, cx));
+        assert!(window.has_active_dialog(cx), "生成器库对话框应打开");
+    });
+    // 多帧渲染：两栏布局 + 右栏占位「从左侧选择生成器」应稳定渲染、不 panic（若渲染路径
+    // 有 bug，draw 会直接 panic）；对话框应仍存活
+    for _ in 0..5 {
+        draw(cx);
+    }
+    cx.update(|window, cx| {
+        assert!(
+            window.has_active_dialog(cx),
+            "多帧渲染后生成器库对话框应仍存活（两栏渲染路径未 panic）"
+        );
+    });
+    // 仅打开/渲染不应写回列生成器
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(
+            generator_catalog::spec_of(&panel.draft().columns[0].def.generator)
+                .name,
+            before,
+            "打开生成器库对话框不应改动列生成器"
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn column_dialog_opens_library_and_writes_back_to_draft(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let rec = recorder();
