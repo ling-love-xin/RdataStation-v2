@@ -926,7 +926,9 @@ impl Shared {
         else {
             return;
         };
-        self.set_right_insight_target(&target, cx);
+        // 集合条目 = 本次会话已确认过的表（C3 只拦**新进入**洞察的源目标），
+        // 切换属会话内导航：`set_target_loaded` 直接取数，不再弹探查确认。
+        panel.update(cx, |panel, cx| panel.set_target_loaded(target.clone(), cx));
         self.queue_workspace_insight(target, cx);
     }
 

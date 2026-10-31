@@ -82,3 +82,12 @@ pub const PANEL_ICON_SIZE: f32 = 1.25;
 pub const DETAIL_HEADER_HEIGHT: Pixels = px(100.);
 /// 基本信息段可拉最大高度（220px；看全进度 / 失败重试 / 来源说明）
 pub const DETAIL_HEADER_MAX_HEIGHT: Pixels = px(220.);
+
+/// 列编辑对话框总宽（840px）
+pub const COLUMN_DIALOG_WIDTH: Pixels = px(840.);
+/// 列编辑对话框左栏生成器列表宽（280px）
+pub const COLUMN_GENERATOR_LIST_WIDTH: Pixels = px(280.);
+/// 列编辑对话框列名输入框宽（200px）
+pub const COLUMN_NAME_INPUT_WIDTH: Pixels = px(200.);
+/// 状态卡片 tooltip 内容最大宽度（260px）
+pub const STATUS_TOOLTIP_MAX_WIDTH: Pixels = px(260.);

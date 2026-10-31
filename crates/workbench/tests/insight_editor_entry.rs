@@ -15,6 +15,7 @@ use gpui_kit::{AppContext as _, TestAppContext};
 
 use editor::host::{FederatedSourcePort, FederatedSourceRecord};
 use editor::shared::{EditorShared, InsightColumnRequest};
+use insight::InsightPanelState;
 use rds_workbench::components::editor_host::WorkbenchEditorHost;
 use rds_workbench::panels::Shared;
 use workbench_shell::model::{RightPanel, SidebarMode};
@@ -66,17 +67,28 @@ fn the_editor_column_port_points_the_insight_panel_at_the_source(cx: &mut TestAp
     assert_eq!(shared.active_right.get(), RightPanel::Insight);
 
     cx.update(|cx| {
-        let target = view.read(cx).target().expect("面板应已被指向源列");
-        assert_eq!(target.title(), "amount", "目标标题是列名");
-        let source = target.source().expect("源列目标要带源取样信息");
+        // 源列目标进入洞察走 C3 探查确认（确认前不落 `target`）——联动正确性
+        // 看中间页队列：`open_insight_source_column` 已把完整目标递进队列。
+        assert_eq!(
+            view.read(cx).state(),
+            &InsightPanelState::ProbeConfirm,
+            "源列目标进入洞察应停在探查确认窗"
+        );
+        let queued = shared
+            .pending_insight_target
+            .borrow()
+            .clone()
+            .expect("中间页应已拿到源列目标");
+        assert_eq!(queued.title(), "amount", "目标标题是列名");
+        let source = queued.source().expect("源列目标要带源取样信息");
         assert_eq!(source.conn_id(), Some("G_1"), "取样走产生结果的那条连接");
         assert_eq!(source.sql, "SELECT id, amount FROM orders WHERE status = 1");
         assert_eq!(source.label, "结果 2", "来源标签给面板副标题 / 快照用");
         // 类型此刻还不知道（编辑器只有字符串化的行）——目标头不该编一个类型出来
         assert!(
-            !target.detail().unwrap_or_default().contains(" · "),
+            !queued.detail().unwrap_or_default().contains(" · "),
             "类型未知时目标头只显示来源：{:?}",
-            target.detail()
+            queued.detail()
         );
     });
 }

@@ -950,7 +950,7 @@ impl MockDetailView {
                                     div()
                                         .id("mock-col-name")
                                         .test_support()
-                                        .w(px(200.))
+                                        .w(ui::COLUMN_NAME_INPUT_WIDTH)
                                         .child(Input::new(&name_state)),
                                 ),                        )
                         // 搜索定位框（跨剩余宽度，过滤左栏分组项）
@@ -978,7 +978,7 @@ impl MockDetailView {
                         .child(
                             div()
                                 .flex_none()
-                                .w(px(280.))
+                                .w(ui::COLUMN_GENERATOR_LIST_WIDTH)
                                 .h_full()
                                 .min_h_0()
                                 .overflow_y_scrollbar()
@@ -1011,7 +1011,7 @@ impl MockDetailView {
             let panel_apply = panel.clone();
             dialog
                 .title("列编辑")
-                .width(px(840.0))
+                .width(ui::COLUMN_DIALOG_WIDTH)
                 .child(body)
                 // #6 ESC / 遮罩关闭拦截：有未应用修改 → 弹确认框并阻止本次关闭
                 .on_cancel(move |_event, window, app| {

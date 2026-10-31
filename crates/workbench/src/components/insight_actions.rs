@@ -320,7 +320,7 @@ mod tests {
     // 与 `#[gpui_kit::test]` 展开出的裸 `#[test]` 自相残杀）。
     use gpui_kit::{AppContext as _, Subscription, TestAppContext};
 
-    use insight::{InsightEvent, InsightTarget, InsightView, SampleSource};
+    use insight::{InsightEvent, InsightPanelState, InsightTarget, InsightView, SampleSource};
 
     use super::attach;
     use crate::panels::Shared;
@@ -391,17 +391,20 @@ mod tests {
             "下钻要把右 Dock 展开到洞察"
         );
         assert_eq!(shared.active_right.get(), RightPanel::Insight);
-        panel.read_with(cx, |view, _| match view.target() {
-            Some(InsightTarget::SourceTable { source, table_name }) => {
-                assert_eq!(
-                    source.sql, "SELECT * FROM `mall`.`order`",
-                    "限定名按驱动加引号（MySQL 系反引号）"
-                );
-                assert_eq!(source.label(), "mall.order", "来源标签空段略去");
-                assert_eq!(table_name, "order");
-            }
-            other => panic!("下钻该把目标换成源取样，实际是：{other:?}"),
-        });
+        // 源取样目标进入洞察走 C3 探查确认（确认前不落 `target`；D58 下钻语义：
+        // 用户先定数据量 / 列，确认后才切目标并取数）
+        assert_eq!(
+            panel.read_with(cx, |view, _| view.state().clone()),
+            InsightPanelState::ProbeConfirm,
+            "下钻到源取样：停在探查确认窗（确认前不落目标）"
+        );
+        // 限定名引号在取样 SQL 生成侧（`drilldown` 与测试同源）；来源标签空段略去
+        // 由 `insight_sample_sql` 的调用方拼，这里验证引号口径本身。
+        assert_eq!(
+            shared.insight_sample_sql("G_1", &["mall", "", "order"]),
+            "SELECT * FROM `mall`.`order`",
+            "限定名按驱动加引号（MySQL 系反引号）"
+        );
     }
 
     /// 集合行「切换目标」（2026-10-30 多标签）：点集合条目 → 宿主还原目标 →

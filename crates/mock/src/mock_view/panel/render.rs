@@ -1140,7 +1140,7 @@ impl MockPanel {
                                 .child(main),
                         ),
                 )
-                .content(move |_, _, _cx| div().p_2().text_xs().max_w(px(260.)).child(detail))
+                .content(move |_, _, _cx| div().p_2().text_xs().max_w(ui::STATUS_TOOLTIP_MAX_WIDTH).child(detail))
         };
 
         div()
