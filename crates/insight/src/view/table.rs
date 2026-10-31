@@ -7,11 +7,12 @@
 use gpui_kit::base::{Disableable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Icon, IconName, Sizable as _, Size, Theme};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::ratio_bar;
 use crate::insight_view::InsightView;
-use crate::model::{ColumnKind, InsightTarget, TableColumnView, TableProfileView};
+use crate::model::{ColumnKind, InsightTarget, TableColumnView, TableProfileView, fmt_num};
 use crate::ui;
 
 impl InsightView {
@@ -34,9 +35,24 @@ impl InsightView {
 
         let mut body = div().v_flex().w_full().gap_2();
 
-        // 评估入口（串行逐列；评估中禁用，避免重复排队撞并发上限）
+        // 评估入口（串行逐列；评估中禁用，避免重复排队撞并发上限）+
+        // C5 取消入口（评估中显示：停止派发、已完成列保留、未完成列灰态可补算）
         body = body.child(
-            div().h_flex().w_full().gap_2().child(div().flex_1()).child(
+            div().h_flex().w_full().gap_2().when(evaluating, |row| {
+                row.child(
+                    Button::new("insight-eval-cancel")
+                        .small()
+                        .ghost()
+                        .label("取消")
+                        .tooltip("停止评估：已完成列保留，未完成列灰态可补算")
+                        .on_click({
+                            let entity = entity.clone();
+                            move |_, _, app| {
+                                entity.update(app, |view, cx| view.cancel_table_evaluation(cx))
+                            }
+                        }),
+                )
+            }).child(div().flex_1()).child(
                 Button::new("insight-eval-table")
                     .small()
                     .icon(if evaluating {
@@ -58,6 +74,31 @@ impl InsightView {
                         }
                     }),
             ),
+        );
+
+        // 评估对象提示（建议② / 决策文档 Q1 语义）：评估全表 = 确认窗口生成的表；
+        // 取样是对评估全表的取样，不仅数据量还有字段
+        body = body.child(
+            div()
+                .h_flex()
+                .w_full()
+                .items_start()
+                .gap_1()
+                .child(
+                    Icon::new(IconName::Info)
+                        .with_size(Size::Size(inline_icon))
+                        .text_color(colors.muted_foreground),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(colors.muted_foreground)
+                        .child(format!(
+                            "评估全表 = 确认窗口生成的表（{} 行 × {} 列）；取样是对评估全表的取样，不仅数据量还有字段",
+                            fmt_num(profile.row_count as f64),
+                            profile.columns.len()
+                        )),
+                ),
         );
 
         // 进度行（进行中）：进度条 + 文字，让用户知道还在动

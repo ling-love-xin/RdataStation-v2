@@ -2,7 +2,9 @@
 
 use super::*;
 /// 一次画像请求：后台执行所需的全部输入（均为所有权数据，因此可跨线程）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// 只派生 `PartialEq` 不派生 `Eq`：探查配置的 `Percent(f64)` 没有 `Eq`（f64 语义）。
+#[derive(Debug, Clone, PartialEq)]
 pub enum ProfileRequest {
     Column {
         temp_table: String,
@@ -12,18 +14,18 @@ pub enum ProfileRequest {
         temp_table: String,
         table_name: String,
     },
-    /// 源目标：先取样成分析临时表，再走与临时表目标同一条路
+    /// 源目标：先按探查配置取样成分析临时表，再走与临时表目标同一条路
     SourceColumn {
         source: crate::model::SampleSource,
         column: String,
-        /// `true` = 全量导入（用户手动触发；默认 `false` = 取样 `SOURCE_SAMPLE_LIMIT` 行）
-        full: bool,
+        /// 探查配置（确认窗口产物）：数据量形态 / 采样方式 / 过滤 / 种子
+        config: crate::model::ProbeConfig,
     },
     SourceTable {
         source: crate::model::SampleSource,
         table_name: String,
-        /// `true` = 全量导入（用户手动触发；默认 `false` = 取样 `SOURCE_SAMPLE_LIMIT` 行）
-        full: bool,
+        /// 探查配置（确认窗口产物）：数据量形态 / 采样方式 / 过滤 / 种子
+        config: crate::model::ProbeConfig,
     },
 }
 
@@ -37,12 +39,12 @@ impl ProfileRequest {
         }
     }
 
-    /// 取样 / 全量标志（临时表目标恒为 `false`——临时表已是既定数据）。
-    pub fn full(&self) -> bool {
+    /// 探查配置（临时表目标为 `None`——临时表已是既定数据，配置不适用）。
+    pub fn config(&self) -> Option<&crate::model::ProbeConfig> {
         match self {
-            ProfileRequest::SourceColumn { full, .. }
-            | ProfileRequest::SourceTable { full, .. } => *full,
-            _ => false,
+            ProfileRequest::SourceColumn { config, .. }
+            | ProfileRequest::SourceTable { config, .. } => Some(config),
+            _ => None,
         }
     }
 
@@ -51,15 +53,23 @@ impl ProfileRequest {
     /// 列画像 / 表画像都走这里；多列（`MultiColumnRequested`）与结构
     /// （`SchemaReportRequested`）不经此路径，由各自事件分支处理。
     pub fn of(target: &InsightTarget) -> Option<Self> {
-        Self::of_scope(target, false)
+        Self::of_scope(target, crate::model::ProbeConfig::sample_default())
+    }
+
+    /// 带探查配置解析（确认窗口产物，C3）：`None` = 默认取样。
+    pub fn of_with_config(
+        target: &InsightTarget,
+        config: Option<crate::model::ProbeConfig>,
+    ) -> Option<Self> {
+        Self::of_scope(target, config.unwrap_or_default())
     }
 
     /// 全量口径的请求（源目标手动切换为全量时用；临时表目标仍是取样语义）。
     pub fn of_full(target: &InsightTarget) -> Option<Self> {
-        Self::of_scope(target, true)
+        Self::of_scope(target, crate::model::ProbeConfig::full())
     }
 
-    fn of_scope(target: &InsightTarget, full: bool) -> Option<Self> {
+    fn of_scope(target: &InsightTarget, config: crate::model::ProbeConfig) -> Option<Self> {
         match target {
             InsightTarget::Column {
                 temp_table, column, ..
@@ -77,12 +87,12 @@ impl ProfileRequest {
             InsightTarget::SourceColumn { source, column, .. } => Some(Self::SourceColumn {
                 source: source.clone(),
                 column: column.clone(),
-                full,
+                config,
             }),
             InsightTarget::SourceTable { source, table_name } => Some(Self::SourceTable {
                 source: source.clone(),
                 table_name: table_name.clone(),
-                full,
+                config,
             }),
             InsightTarget::MultiColumn { .. } | InsightTarget::Schema { .. } => None,
         }
@@ -107,8 +117,11 @@ pub fn request_profile(
     // 而不是让用户对着干骨架以为卡住了。
     if let Some(source) = request.source() {
         let source = source.clone();
-        // full 标志先取出（`request` 还要留给画像阶段用，不能 move 进取样闭包）
-        let full = request.full();
+        // 探查配置先取出（`request` 还要留给画像阶段用，不能 move 进取样闭包）
+        let config = request
+            .config()
+            .expect("源目标必有探查配置（ProfileRequest::config）")
+            .clone();
         let _ = weak.update(cx, |panel, cx| {
             panel.set_loading_note(
                 Some("正在取样并建分析临时表（大表可能需要一些时间）…".into()),
@@ -120,7 +133,7 @@ pub fn request_profile(
             // 非 Tokio 上下文会 panic（`there is no reactor running`）。包一层进程级单例
             // runtime 的 block_on，把整条取样 async 链放回 Tokio 上下文再 await。
             crate::service::block_on(
-                crate::service::persistence::sample_source_to_analysis_table(&source, full),
+                crate::service::persistence::sample_source_to_analysis_table(&source, &config),
             )
         });
         cx.spawn(async move |cx| {
@@ -226,4 +239,70 @@ enum ProfileOutcome {
         temp_table: String,
         view: TableProfileView,
     },
+}
+
+/// 探查确认窗口的列候选内省（C1）：后台轻量拿源查询列清单，回填面板。
+///
+/// 失败不阻塞确认——面板保持「全部列」默认；也不打扰用户（没有可展示的错误）。
+pub fn request_probe_columns(
+    view: &Entity<InsightView>,
+    source: crate::model::SampleSource,
+    cx: &mut App,
+) {
+    let weak = view.downgrade();
+    let task = cx.background_executor().spawn(async move {
+        crate::service::block_on(crate::service::persistence::probe_source_columns(&source))
+    });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = weak.update(cx, |panel, cx| match result {
+            Ok(columns) => panel.set_probe_columns(columns, cx),
+            Err(err) => {
+                tracing::debug!("探查确认窗口列候选内省失败（默认全部列）: {}", err);
+            }
+        });
+    })
+    .detach();
+}
+
+/// 取样档迷你统计（Q2 / C7）：对**当前评估全表**做查询级过滤现算，回填列卡迷你图。
+///
+/// 列清单（名称 + 类型族）在接缝后台现读——与评估同口径，不持过期列名；
+/// 现算失败不打断画像（迷你图缺席即可，保持 `None` 不编假值）。
+pub fn request_sample_mini_stats(
+    view: &Entity<InsightView>,
+    temp_table: String,
+    cx: &mut App,
+) {
+    let columns: Vec<(String, crate::model::ColumnKind)> = view
+        .read(cx)
+        .data()
+        .table
+        .as_ref()
+        .map(|profile| {
+            profile
+                .columns
+                .iter()
+                .map(|c| (c.name.clone(), c.kind))
+                .collect()
+        })
+        .unwrap_or_default();
+    if columns.is_empty() {
+        return;
+    }
+    let weak = view.downgrade();
+    let task = cx.background_executor().spawn(async move {
+        // 迷你统计是 DuckDB 同步查询（无 Tokio 链），直接同步调用即可
+        crate::insight_engine::compute_sample_mini_stats(&temp_table, &columns)
+    });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = weak.update(cx, |panel, cx| match result {
+            Ok(stats) => panel.set_sample_mini_stats(stats, cx),
+            Err(err) => {
+                tracing::debug!("取样档迷你统计现算失败（迷你图缺席）: {}", err);
+            }
+        });
+    })
+    .detach();
 }

@@ -4,9 +4,9 @@ use crate::store::{InsightMetaStore, InsightStorage};
 use crate::{insight_engine, quality_scorer, store};
 use shared::error::{CommonError, CoreError};
 
-/// 源取样的行数上限（与源表列画像的 `LIMIT 500` 同一口径）。
+/// 源取样的默认行数上限（`ProbeConfig::sample_default` 的 `RowCount` 基数）。
 ///
-/// 不放进 `SampleSource`：抽样多少行是**洞察的口径**，不该由每个入口各写一次。
+/// 保留为常量供既有调用方/测试引用；新代码一律走 `ProbeConfig`（确认窗口产物）。
 pub const SOURCE_SAMPLE_LIMIT: usize = 500;
 
 /// 源取样统一口径：入口给的只读查询 → `tmp_i_` 分析临时表（建表即登记）。
@@ -14,26 +14,45 @@ pub const SOURCE_SAMPLE_LIMIT: usize = 500;
 /// 这是「凡能喂给 DuckDB 的数据都能洞察」的落点：导航树表 / 分析存档 / 草稿箱 /
 /// 编辑器结果集都只提供「连接 + 一段只读查询 + 标签」，样本与后续分析在洞察这边完成。
 ///
-/// 外层**再包一层 `LIMIT`**：入口的查询可以不带限（源表全量查询），
-/// 也不能靠入口自觉——口径只在这里。
-/// `full = true` 时**不带 LIMIT**（大表全量：用户手动触发，见洞察 scope 切换）；
-/// 全量表同样建为 `tmp_i_` 临时表，后续分析链路完全一致。
+/// 取数口径只在**这里**（`ProbeConfig` 驱动，见
+/// `docs/architecture/insight/insight-probe-config-decision.md` §4/§7）：
+/// 数据量形态（全量 / 前 N 行 / 百分比）+ 采样方式 + 过滤 + 种子；
+/// 入口的查询可以不带限，也不能靠入口自觉。
+///
+/// 两条路径：
+/// - **源库连接**：数据过 Rust（引擎的执行结果是 JSON，要重新打型建表）。
+///   `Percent` 在这里退化为「`COUNT(*)` 估算行数 → `LIMIT N'`」近似比例取样
+///   （MySQL / PG 没有 `TABLESAMPLE reservoir`；差异在确认窗口 UI 说明）。
+/// - **DuckDB 内存库**：数据**不过 Rust**——`CREATE TABLE … AS` 直接在库里落，
+///   `Percent` 走 `USING SAMPLE reservoir`（均匀随机，可配 seed 复现）。
 pub async fn sample_source_to_analysis_table(
     source: &SampleSource,
-    full: bool,
+    config: &crate::model::ProbeConfig,
 ) -> Result<String, CoreError> {
-    let inner = source.sql.trim().trim_end_matches(';');
-    let sample_sql = if full {
-        format!("SELECT * FROM ({inner}) AS rds_sample")
-    } else {
-        format!("SELECT * FROM ({inner}) AS rds_sample LIMIT {SOURCE_SAMPLE_LIMIT}")
-    };
-
     match source.conn_id() {
-        // 源库连接：数据过 Rust（引擎的执行结果是 JSON，要重新打型建表）
-        Some(conn_id) => sample_from_connection(conn_id, &sample_sql, &source.label).await,
-        // DuckDB 内存库：**数据不过 Rust**——`CREATE TABLE … AS` 直接在库里落，
-        // 文件类（CSV / Parquet / Excel，靠扩展读）与已 `ATTACH` 的库表走这条
+        Some(conn_id) => {
+            // 源库路径：Full / RowCount / WHERE 直接拼进发给源库的 SQL；
+            // Percent → 先 COUNT 估算行数，再 LIMIT（源库无 reservoir 采样）。
+            let sql = match &config.amount {
+                crate::model::ProbeAmount::Percent(pct) => {
+                    let count = count_source_rows(conn_id, source).await?;
+                    let n = ((count as f64) * pct.clamp(0.0, 100.0) / 100.0).ceil() as u64;
+                    build_source_sample_sql(
+                        source,
+                        crate::model::ProbeAmount::RowCount(n.max(1) as u32),
+                        config.filter.as_deref(),
+                        config.column_subset(),
+                    )
+                }
+                _ => build_source_sample_sql(
+                    source,
+                    config.amount.clone(),
+                    config.filter.as_deref(),
+                    config.column_subset(),
+                ),
+            };
+            sample_from_connection(conn_id, &sql, &source.label).await
+        }
         None => {
             let duckdb = insight_engine::get_or_create_duckdb()?;
             let conn = duckdb.lock().map_err(|e| {
@@ -41,11 +60,177 @@ pub async fn sample_source_to_analysis_table(
             })?;
             engine::duckdb::analysis::create_analysis_temp_table_as(
                 &conn,
-                &sample_sql,
+                &build_duckdb_sample_sql(source, config),
                 "source_sample",
             )
         }
     }
+}
+
+/// 构造发给**源库连接**的取样 SQL（LIMIT / WHERE / 列投影由源库执行）。
+///
+/// `subset` = 确认窗口的列选择（C4：未选列不在 EDA 上存在——不投影就不进临时表）；
+/// `None` / 空 = 全部列（确认窗口「全部列」默认口径）。
+fn build_source_sample_sql(
+    source: &SampleSource,
+    amount: crate::model::ProbeAmount,
+    filter: Option<&str>,
+    subset: Option<&[String]>,
+) -> String {
+    let inner = source.sql.trim().trim_end_matches(';');
+    // WHERE 过滤包进内层：先过滤再取数（R1，根源减资源的延伸）
+    let inner = match filter {
+        Some(f) if !f.trim().is_empty() => {
+            format!("SELECT * FROM ({inner}) AS rds_where WHERE {f}")
+        }
+        _ => inner.to_string(),
+    };
+    let projection = column_projection(subset);
+    match amount {
+        crate::model::ProbeAmount::Full => format!("SELECT {projection} FROM ({inner}) AS rds_sample"),
+        crate::model::ProbeAmount::RowCount(n) => {
+            format!("SELECT {projection} FROM ({inner}) AS rds_sample LIMIT {n}")
+        }
+        // 源库路径的 Percent 在调用方已折算成 RowCount（此处不出现）
+        crate::model::ProbeAmount::Percent(_) => {
+            format!("SELECT {projection} FROM ({inner}) AS rds_sample")
+        }
+    }
+}
+
+/// 列投影片段（C4）：子集列转 `"a", "b"`（双引号内引号翻倍转义）；空 / None = `*`。
+fn column_projection(subset: Option<&[String]>) -> String {
+    match subset {
+        Some(cols) if !cols.is_empty() => cols
+            .iter()
+            .map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(", "),
+        _ => "*".to_string(),
+    }
+}
+
+/// 构造 DuckDB 内存库路径的取样 SQL：支持 LIMIT / reservoir 百分比 / WHERE / seed / 列投影。
+fn build_duckdb_sample_sql(source: &SampleSource, config: &crate::model::ProbeConfig) -> String {
+    let inner = source.sql.trim().trim_end_matches(';');
+    let inner = if config.has_filter() {
+        let f = config.filter.as_deref().unwrap_or_default();
+        format!("SELECT * FROM ({inner}) AS rds_where WHERE {f}")
+    } else {
+        inner.to_string()
+    };
+    let projection = column_projection(config.column_subset());
+    match &config.amount {
+        crate::model::ProbeAmount::Full => {
+            format!("SELECT {projection} FROM ({inner}) AS rds_sample")
+        }
+        crate::model::ProbeAmount::RowCount(n) => {
+            format!("SELECT {projection} FROM ({inner}) AS rds_sample LIMIT {n}")
+        }
+        crate::model::ProbeAmount::Percent(pct) => {
+            let pct = pct.clamp(0.0, 100.0);
+            match config.seed {
+                Some(seed) => format!(
+                    "SELECT {projection} FROM ({inner}) AS rds_sample USING SAMPLE reservoir({pct} PERCENT) (SEED {seed})"
+                ),
+                None => format!(
+                    "SELECT {projection} FROM ({inner}) AS rds_sample USING SAMPLE reservoir({pct} PERCENT)"
+                ),
+            }
+        }
+    }
+}
+
+/// 源查询的列清单轻量内省（确认窗口「列」块的候选，C1）。
+///
+/// **不取数据**：源库连接走 `SELECT * FROM (…) LIMIT 0`（只拿列结构）；
+/// DuckDB 内存库走 `DESCRIBE (…)`。失败不阻塞确认——列候选为空时默认「全部列」。
+pub async fn probe_source_columns(source: &SampleSource) -> Result<Vec<String>, CoreError> {
+    let inner = source.sql.trim().trim_end_matches(';');
+    match source.conn_id() {
+        Some(conn_id) => {
+            use engine::SqlService;
+            use engine::get_connection_manager;
+            use engine::services::sql_service::SqlExecuteOptions;
+
+            let service = SqlService::new(get_connection_manager().clone());
+            let opts = SqlExecuteOptions {
+                channel: None,
+                record_history: false,
+                use_transaction: false,
+                timeout_ms: Some(15_000),
+                use_cache: false,
+                schema: None,
+            };
+            let sql = format!("SELECT * FROM ({inner}) AS rds_cols LIMIT 0");
+            let result = service                .execute(Some(conn_id.to_string()), &sql, opts)
+                .await?;
+            // 源库 `LIMIT 0` 的列集合即列名（数据不过 Rust 打型，只读结构）
+            Ok(crate::service::result_columns_and_rows(&result.result).0)
+        }
+        None => {
+            let duckdb = insight_engine::get_or_create_duckdb()?;
+            let conn = duckdb.lock().map_err(|e| {
+                CoreError::common(CommonError::General(format!("DuckDB lock error: {e}")))
+            })?;
+            // DESCRIBE 子查询：列定义是 DuckDB 稳定契约，只取第 0 列（列名）
+            let sql = format!("DESCRIBE (SELECT * FROM ({inner}) AS rds_cols)");
+            let mut stmt = conn.prepare(&sql).map_err(|e| {
+                CoreError::common(CommonError::General(format!(
+                    "DuckDB describe prepare failed: {e}"
+                )))
+            })?;
+            let names: Vec<String> = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| {
+                    CoreError::common(CommonError::General(format!(
+                        "DuckDB describe query failed: {e}"
+                    )))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            if names.is_empty() {
+                return Err(CoreError::common(CommonError::General(
+                    "源查询没有可读的列结构".into(),
+                )));
+            }
+            Ok(names)
+        }
+    }
+}
+
+/// 源库连接的行数估算（`Percent` 模式的取数前奏）：`COUNT(*)` 一次轻量查询。
+async fn count_source_rows(conn_id: &str, source: &SampleSource) -> Result<u64, CoreError> {
+    use engine::SqlService;
+    use engine::get_connection_manager;
+    use engine::services::sql_service::SqlExecuteOptions;
+
+    let service = SqlService::new(get_connection_manager().clone());
+    let opts = SqlExecuteOptions {
+        channel: None,
+        record_history: false,
+        use_transaction: false,
+        timeout_ms: Some(15_000),
+        use_cache: false,
+        schema: None,
+    };
+    let inner = source.sql.trim().trim_end_matches(';');
+    let count_sql = format!("SELECT COUNT(*) FROM ({inner}) AS rds_count");
+    let result = service
+        .execute(Some(conn_id.to_string()), &count_sql, opts)
+        .await?;
+    let (_columns, rows) = crate::service::result_columns_and_rows(&result.result);
+    let first = rows
+        .first()
+        .and_then(|row| row.first())
+        .and_then(|v| v.as_i64().or_else(|| v.as_u64().map(|u| u as i64)));
+    first
+        .map(|n| n.max(0) as u64)
+        .ok_or_else(|| {
+            CoreError::common(CommonError::General(
+                "行数估算失败：COUNT 查询没有返回可读的数字".into(),
+            ))
+        })
 }
 
 /// 从一条**源库连接**取样本并落成分析临时表。
@@ -94,9 +279,9 @@ pub async fn profile_source_column(
     project_root: Option<&std::path::Path>,
     source: &SampleSource,
     column_name: &str,
-    full: bool,
+    config: &crate::model::ProbeConfig,
 ) -> Result<(String, ColumnProfileView), CoreError> {
-    let temp_table = sample_source_to_analysis_table(source, full).await?;
+    let temp_table = sample_source_to_analysis_table(source, config).await?;
 
     let duckdb = insight_engine::get_or_create_duckdb()?;
     let conn = duckdb
@@ -115,9 +300,9 @@ pub async fn profile_source_column(
 pub async fn profile_source_table(
     source: &SampleSource,
     table_name: &str,
-    full: bool,
+    config: &crate::model::ProbeConfig,
 ) -> Result<(String, TableProfileView), CoreError> {
-    let temp_table = sample_source_to_analysis_table(source, full).await?;
+    let temp_table = sample_source_to_analysis_table(source, config).await?;
     let profile = insight_engine::get_temp_table_profile(&temp_table)?;
     let mut view = TableProfileView::from_profile(&profile, table_name);
     // EDA 列统计摘要（缺失率 / 唯一率）：失败不阻塞画像（保留 None）
@@ -400,4 +585,103 @@ pub async fn batch_evaluate_columns(
             })
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{ProbeAmount, ProbeColumns, ProbeConfig, ProbeSampleMode};
+
+    fn config(
+        amount: ProbeAmount,
+        columns: ProbeColumns,
+        filter: Option<&str>,
+        seed: Option<u64>,
+    ) -> ProbeConfig {
+        ProbeConfig {
+            amount,
+            sample_mode: ProbeSampleMode::Head,
+            columns,
+            filter: filter.map(str::to_string),
+            seed,
+        }
+    }
+
+    fn duckdb_source(sql: &str) -> SampleSource {
+        SampleSource::on_duckdb(sql, "t_probe")
+    }
+
+    /// C4：未选列不进建表 SQL——列子集投影到 SELECT 列表（双引号内引号翻倍转义）。
+    #[test]
+    fn source_sample_sql_projects_selected_columns() {
+        let source = duckdb_source("SELECT * FROM orders");
+        let sql = build_source_sample_sql(
+            &source,
+            ProbeAmount::RowCount(10),
+            None,
+            Some(&["id".into(), "note".into()]),
+        );
+        assert!(
+            sql.starts_with("SELECT \"id\", \"note\" FROM (SELECT * FROM orders) AS rds_sample LIMIT 10"),
+            "子集列应投影进 SELECT：{sql}"
+        );
+
+        // 全列（默认口径）= SELECT *
+        let sql = build_source_sample_sql(&source, ProbeAmount::RowCount(10), None, None);
+        assert!(sql.starts_with("SELECT * FROM"), "无子集应保持 SELECT *：{sql}");
+    }
+
+    /// C4：WHERE 过滤包内层先过滤，再投影 + LIMIT（R1 的延伸）。
+    #[test]
+    fn source_sample_sql_keeps_where_inner_then_projects() {
+        let source = duckdb_source("SELECT * FROM orders");
+        let sql = build_source_sample_sql(
+            &source,
+            ProbeAmount::Full,
+            Some("status = 'ok'"),
+            Some(&["id".into(), "note".into()]),
+        );
+        assert!(
+            sql.starts_with("SELECT \"id\", \"note\" FROM (SELECT * FROM (SELECT * FROM orders) AS rds_where WHERE status = 'ok') AS rds_sample"),
+            "WHERE 应先过滤再投影：{sql}"
+        );
+    }
+
+    /// C4：DuckDB 百分比采样同样投影列（Percent + seed 组合）。
+    #[test]
+    fn duckdb_sample_sql_projects_columns_with_reservoir() {
+        let source = duckdb_source("SELECT * FROM orders");
+        let sql = build_duckdb_sample_sql(
+            &source,
+            &config(
+                ProbeAmount::Percent(10.0),
+                ProbeColumns::Subset(vec!["a b".into(), "q\"uote".into()]),
+                None,
+                Some(42),
+            ),
+        );
+        assert!(
+            sql.starts_with("SELECT \"a b\", \"q\"\"uote\" FROM (SELECT * FROM orders) AS rds_sample USING SAMPLE reservoir(10 PERCENT) (SEED 42)"),
+            "DuckDB 百分比采样应投影列 + seed：{sql}"
+        );
+    }
+
+    /// C4：DuckDB 全量档列子集投影（RowCount 路径的对应）。
+    #[test]
+    fn duckdb_sample_sql_projects_columns_for_limit() {
+        let source = duckdb_source("SELECT * FROM orders");
+        let sql = build_duckdb_sample_sql(
+            &source,
+            &config(
+                ProbeAmount::RowCount(5),
+                ProbeColumns::Subset(vec!["id".into()]),
+                None,
+                None,
+            ),
+        );
+        assert!(
+            sql.starts_with("SELECT \"id\" FROM (SELECT * FROM orders) AS rds_sample LIMIT 5"),
+            "DuckDB LIMIT 路径应投影列：{sql}"
+        );
+    }
 }

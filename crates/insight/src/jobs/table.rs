@@ -46,6 +46,18 @@ pub fn request_table_evaluation(
         let _ = weak.update(cx, |panel, cx| panel.set_table_profile(current.clone(), cx));
 
         for column in base.columns.iter() {
+            // C5 取消令牌：每列派发前检查；置位则停止派发，中断列由下面回填灰态。
+            // async 上下文用 update 闭包读面板（AsyncApp 不直接给 &App）
+            let cancelled = weak
+                .update(cx, |panel, _| {
+                    panel
+                        .eval_cancel
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                })
+                .unwrap_or(false);
+            if cancelled {
+                break;
+            }
             let table = temp_table.clone();
             let name = column.name.clone();
             let root = project_root.clone();
@@ -73,9 +85,65 @@ pub fn request_table_evaluation(
             let _ = weak.update(cx, |panel, cx| panel.set_table_profile(current.clone(), cx));
         }
 
+        // 中断（取消令牌置位）：未完成列灰态 + 保留已完成明细与进度；不 finish
+        //（quality 保持 None——评估未完成，表级事实摘要不应出现）
+        let cancelled = weak
+            .update(cx, |panel, _| {
+                panel
+                    .eval_cancel
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            })
+            .unwrap_or(false);
+        if cancelled {
+            let interrupted = current.mark_interrupted();
+            let _ = weak.update(cx, |panel, cx| panel.set_table_profile(interrupted, cx));
+            return;
+        }
+
         // 评估收尾：清进度、挂空事实摘要位，再由检查器聚合填充命中 / 适用计数
         let done = current.finish_evaluation().with_checker(column_checks);
         let _ = weak.update(cx, |panel, cx| panel.set_table_profile(done, cx));
+    })
+    .detach();
+}
+
+/// 补算单列明细（C5）：中断列灰态卡的「补算」入口。
+///
+/// 与评估全表同一条 `get_column_insight_full` 链路；单列回填后清除该列中断标记
+/// （`with_column_detail` 里置 false）。检查器聚合不重算（表级摘要缺席时无意义；
+/// 若表级摘要已存在，补算单列不改变聚合口径）。
+pub fn request_column_evaluation(
+    view: &Entity<InsightView>,
+    project_root: Option<PathBuf>,
+    temp_table: String,
+    column: String,
+    cx: &mut App,
+) {
+    let weak = view.downgrade();
+    let query_table = temp_table.clone();
+    let query_column = column.clone();
+    let task = cx.background_executor().spawn(async move {
+        InsightService::get_column_insight_full(
+            project_root.as_deref(),
+            &query_table,
+            &query_column,
+        )
+    });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = weak.update(cx, |panel, cx| match result {
+            Ok(full) => {
+                if let Some(profile) = &panel.data.table {
+                    let next = profile.with_column_detail(&column, &full);
+                    panel.data.table = Some(next);
+                }
+                cx.notify();
+            }
+            Err(err) => {
+                let info = InsightService::describe_error(&err);
+                panel.set_error(info.message, info.retryable, cx);
+            }
+        });
     })
     .detach();
 }

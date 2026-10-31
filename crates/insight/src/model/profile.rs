@@ -1,6 +1,7 @@
 //! 洞察模型 · 表探查视图模型（自 model.rs 拆分，纯位移）
 
 use super::*;
+use crate::model::types::TextFrequency;
 // ==================== 表探查视图模型（Phase 3.1） ====================
 
 /// 表探查（「表」Tab）：列元数据表 + 行数 + 表级质量（评估后才有）。
@@ -52,6 +53,27 @@ pub struct TableColumnView {
     pub histogram: Option<Vec<DistributionBin>>,
     /// 该列样本值（评估后从全量画像的样本列取前 5 条；未评估为空）。
     pub sample_values: Vec<String>,
+    /// 取样档迷你统计（C7：A 方案——迷你统计并入取样链路）。
+    ///
+    /// 取样档对**评估全表**（确认窗口生成的临时表）做查询级过滤现算（Q2：行 LIMIT +
+    /// 列投影，不建子表），逐列产出轻量分布供列卡折叠态迷你图。与评估产物
+    /// （`stats_detail` / `histogram`）互不覆盖：全量档读评估明细，取样档读本字段；
+    /// 取样档未算 / 查询失败 / 列无有效样本为 `None`（不编假值）。
+    pub mini_stats: Option<ColumnMiniStats>,
+    /// 评估中断标记（C5）：评估全表被取消 / 中断时，未完成列置 `true`——
+    /// 列卡灰态显示「未完成，可补算」，点补算单列续跑后清除。
+    pub interrupted: bool,
+}
+
+/// 取样档迷你统计（列卡折叠态迷你图的数据源，与 [`TableColumnView::mini_stats`] 配套）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ColumnMiniStats {
+    /// 数值列：8 柱等宽直方图（与评估直方图同族，label 仅展示、迷你图只读 count）
+    Numeric(Vec<DistributionBin>),
+    /// 文本 / 时间列：Top 3 值频次
+    Frequencies(Vec<TextFrequency>),
+    /// 布尔列：真值占比（0–1；无布尔样本时不渲染）
+    Boolean { true_ratio: f64 },
 }
 
 /// EDA 列统计摘要：引擎对临时表所有列一次查询得到的最小统计集。
@@ -144,6 +166,8 @@ impl TableProfileView {
                 stats_detail: None,
                 histogram: None,
                 sample_values: Vec::new(),
+                mini_stats: None,
+                interrupted: false,
             })
             .collect();
         Self {
@@ -196,6 +220,22 @@ impl TableProfileView {
                     other => other.to_string(),
                 })
                 .collect();
+            // 补算成功：清除中断标记（C5）
+            row.interrupted = false;
+        }
+        next
+    }
+
+    /// 评估中断（C5）：未完成（无列级明细）的列置中断标记，供视图灰态 + 补算。
+    ///
+    /// 已完成列不动（明细保留）；`progress` 保留中断时进度（视图据此维持
+    /// 「评估中」的取消按钮语境，补算走单列入口）。
+    pub fn mark_interrupted(&self) -> Self {
+        let mut next = self.clone();
+        for col in next.columns.iter_mut() {
+            if col.stats_detail.is_none() {
+                col.interrupted = true;
+            }
         }
         next
     }
@@ -236,5 +276,109 @@ impl TableProfileView {
             quality.checker_hits = hits;
         }
         next
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// C5：中断标记只落在未完成（无列级明细）列，已完成列不动。
+    #[test]
+    fn mark_interrupted_flags_only_pending_columns() {
+        let profile = TableProfileView {
+            table_name: "t".into(),
+            source_label: "DuckDB 临时表",
+            row_count: 3,
+            dup_rows: None,
+            columns: vec![
+                TableColumnView {
+                    index: 1,
+                    name: "done".into(),
+                    data_type: "INTEGER".into(),
+                    kind: ColumnKind::Numeric,
+                    nullable: false,
+                    primary_key: false,
+                    null_rate: None,
+                    unique_rate: None,
+                    stats_detail: Some(crate::model::types::ColumnStatsDetail::Unknown),
+                    histogram: None,
+                    sample_values: Vec::new(),
+                    mini_stats: None,
+                    interrupted: false,
+                },
+                TableColumnView {
+                    index: 2,
+                    name: "pending".into(),
+                    data_type: "VARCHAR".into(),
+                    kind: ColumnKind::Text,
+                    nullable: true,
+                    primary_key: false,
+                    null_rate: None,
+                    unique_rate: None,
+                    stats_detail: None,
+                    histogram: None,
+                    sample_values: Vec::new(),
+                    mini_stats: None,
+                    interrupted: false,
+                },
+            ],
+            quality: None,
+            progress: None,
+            sample: None,
+        };
+
+        let interrupted = profile.mark_interrupted();
+        let done = interrupted.columns.iter().find(|c| c.name == "done").unwrap();
+        let pending = interrupted.columns.iter().find(|c| c.name == "pending").unwrap();
+        assert!(!done.interrupted, "已完成列不得标中断");
+        assert!(pending.interrupted, "未完成列应标中断");
+    }
+
+    /// C5：补算成功（`with_column_detail`）清除该列中断标记。
+    #[test]
+    fn with_column_detail_clears_interrupted_flag() {
+        let mut profile = TableProfileView {
+            table_name: "t".into(),
+            source_label: "DuckDB 临时表",
+            row_count: 1,
+            dup_rows: None,
+            columns: vec![TableColumnView {
+                index: 1,
+                name: "c".into(),
+                data_type: "VARCHAR".into(),
+                kind: ColumnKind::Text,
+                nullable: true,
+                primary_key: false,
+                null_rate: None,
+                unique_rate: None,
+                stats_detail: None,
+                histogram: None,
+                sample_values: Vec::new(),
+                mini_stats: None,
+                interrupted: true,
+            }],
+            quality: None,
+            progress: None,
+            sample: None,
+        };
+        // 构造最小补算产物（stats_detail 仅需非空 + 空 sample）
+        let full = crate::model::types::ColumnInsightFull {
+            stats: crate::model::types::ColumnStats {
+                column_name: "c".into(),
+                data_type: "VARCHAR".into(),
+                total_count: 0,
+                null_count: 0,
+                null_rate: 0.0,
+                unique_count: None,
+                stats_detail: crate::model::types::ColumnStatsDetail::Unknown,
+            },
+            histogram: None,
+            sample: Vec::new(),
+        };
+        profile = profile.with_column_detail("c", &full);
+        let col = profile.columns.first().unwrap();
+        assert!(col.stats_detail.is_some(), "补算应回填列明细");
+        assert!(!col.interrupted, "补算成功应清除中断标记");
     }
 }

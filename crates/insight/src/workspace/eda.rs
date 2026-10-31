@@ -63,6 +63,9 @@ impl super::InsightWorkspacePanel {
         theme: &Theme,
     ) -> Div {
         let colors = theme.colors;
+        // 迷你图数据源按口径分流（Q2 / C7）：全量档读评估明细（stats_detail /
+        // histogram），取样档读查询级过滤现算的迷你统计（mini_stats）——两档互不覆盖
+        let is_full = self.view.read(cx).scope() == crate::insight_view::InsightScope::Full;
         let columns = &profile.columns;
         // 显式勾选为空 = 全选（避免与列集同步的簿记；200+ 列默认全看）
         let selected: Vec<&TableColumnView> = columns
@@ -113,6 +116,7 @@ impl super::InsightWorkspacePanel {
                                 entity,
                                 theme,
                                 temp_table.clone(),
+                                is_full,
                             )),
                     ),
             );
@@ -139,6 +143,41 @@ impl super::InsightWorkspacePanel {
             .v_flex()
             .w_full()
             .gap_2()
+            // C6 重新探查入口：走同一确认窗口（预填上次配置）；确认后重跑建表
+            // （数据量 / 列 / 过滤可改）→ 新表就绪一次性替换（R5），并级联重评估
+            .child(
+                div()
+                    .h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(colors.muted_foreground)
+                            .child("当前视图基于确认窗口生成的表；调整数据量 / 列 / 过滤请重新探查"),
+                    )
+                    .child({
+                        let entity = entity.clone();
+                        Button::new("insight-ws-reprobe")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::RotateCw)
+                            .label("重新探查")
+                            .tooltip("复用上次探查配置（可改数据量 / 列 / 过滤），确认后重新取数并级联重评估")
+                            .on_click(move |_, _, app| {
+                                entity.update(app, |panel, cx| {
+                                    panel.view.update(cx, |view, cx| {
+                                        if let Some(target) = view.target().cloned() {
+                                            view.open_probe_dialog(target, cx);
+                                        }
+                                    });
+                                });
+                            })
+                    }),
+            )
             .child(self.render_field_picker(window, cx, profile, entity, theme))
             .child(
                 div()
@@ -159,6 +198,7 @@ impl super::InsightWorkspacePanel {
         entity: &Entity<Self>,
         theme: &Theme,
         temp_table: Option<String>,
+        is_full: bool,
     ) -> impl IntoElement {
         let colors = theme.colors;
         let checker = column_checkers(profile, col);
@@ -236,6 +276,40 @@ impl super::InsightWorkspacePanel {
                     )),
             )
             .when_some(explore_badge, |this, badge| this.child(badge))
+            // C5 中断列：灰态徽标 + 补算入口（评估全表被取消后未完成列显示）
+            .when(col.interrupted, |this| {
+                this.child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(colors.warning)
+                        .child("未完成"),
+                )
+            })
+            .when(col.interrupted, |this| {
+                let entity = entity.clone();
+                let name = col.name.clone();
+                let table = temp_table.clone();
+                this.child(
+                    Button::new(SharedString::from(format!(
+                        "insight-ws-col-recalc-{name}"
+                    )))
+                    .ghost()
+                    .xsmall()
+                    .label("补算")
+                    .tooltip("对单列续跑明细统计（补算后清除中断标记）")
+                    .on_click(move |_, _, app| {
+                        entity.update(app, |panel, cx| {
+                            panel.view.update(cx, |view, cx| {
+                                // 防御：无临时表时补算无从发起（正常流程中断列必有临时表）
+                                if let Some(table) = &table {
+                                    view.request_column_evaluation(table.clone(), name.clone(), cx);
+                                }
+                            });
+                        });
+                    }),
+                )
+            })
             // 展开切换（语义 Button，键盘可达；原型为整行点击，等价交互）
             .child({
                 let entity = entity.clone();
@@ -275,7 +349,7 @@ impl super::InsightWorkspacePanel {
         let mini = if open {
             None
         } else {
-            self.render_col_mini_vis(col, theme)
+            self.render_col_mini_vis(col, theme, is_full)
         };
         let head_block = div()
             .v_flex()
@@ -298,8 +372,76 @@ impl super::InsightWorkspacePanel {
     /// 布局非控件，与 `dist_bars` 同一立场）；文本 / 时间 = Top 3 值条；布尔 = 真/假
     /// 双段条 + 图例。无分布数据（未评估全表 / 类型未识别 / 样本不足）返回 `None`——
     /// 卡片不显示图（原型无数据时 `miniVis` 返回空串）。
-    fn render_col_mini_vis(&self, col: &TableColumnView, theme: &Theme) -> Option<Div> {
+    ///
+    /// 数据源按口径分流（Q2 / C7）：`is_full` = 全量档读评估产物（`stats_detail` /
+    /// `histogram`）；取样档读查询级过滤现算的 `mini_stats`（不覆盖评估产物）。
+    fn render_col_mini_vis(
+        &self,
+        col: &TableColumnView,
+        theme: &Theme,
+        is_full: bool,
+    ) -> Option<Div> {
         let colors = theme.colors;
+        // 取样档：迷你统计（C7 并入取样链路，查询级过滤现算回填）
+        if !is_full {
+            return match col.mini_stats.as_ref()? {
+                crate::model::ColumnMiniStats::Numeric(bins) => {
+                    let max = bins.iter().map(|b| b.count).max().unwrap_or(0).max(1) as f32;
+                    let mut bars = div()
+                        .h_flex()
+                        .w_full()
+                        .items_end()
+                        .gap_1()
+                        // 迷你直方图总高 44px（对齐原型 .mini-bar 高度档）
+                        .h(rems(2.75));
+                    for bin in bins.iter().take(8) {
+                        // 柱高 = 最小可读 6px + 比例段
+                        let h = rems(0.375 + 2.375 * (bin.count as f32 / max));
+                        bars = bars.child(div().flex_1().rounded_sm().bg(colors.primary).h(h));
+                    }
+                    Some(bars)
+                }
+                crate::model::ColumnMiniStats::Frequencies(freqs) => {
+                    mini_freq_rows(&col.name, freqs, theme)
+                }
+                crate::model::ColumnMiniStats::Boolean { true_ratio } => {
+                    let t = true_ratio.clamp(0.0, 1.0);
+                    Some(
+                        div()
+                            .v_flex()
+                            .w_full()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .w_full()
+                                    .h(rems(0.375))
+                                    .rounded_sm()
+                                    .overflow_hidden()
+                                    // 真 / 假两段：中性色（primary / muted），不引入「真假=好坏」语义
+                                    .child(div().h_full().bg(colors.primary).flex_grow(t as f32))
+                                    .child(
+                                        div()
+                                            .h_full()
+                                            .bg(colors.muted_foreground)
+                                            .flex_grow((1.0 - t) as f32),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .text_xs()
+                                    .text_color(colors.muted_foreground)
+                                    .child(format!("真 {:.0}%", t * 100.0))
+                                    .child(format!("假 {:.0}%", (1.0 - t) * 100.0)),
+                            ),
+                    )
+                }
+            };
+        }
+        // 全量档：评估产物（评估全表逐列回填）
         match &col.stats_detail {
             Some(crate::model::types::ColumnStatsDetail::Numeric(_)) => {
                 let bins = col.histogram.as_ref()?;

@@ -30,6 +30,9 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme as _, WindowExt as _};
 use gpui_kit::*;
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+
 use crate::commands::InsightRefresh;
 use crate::model::{
     ColumnProfileView, HistoryView, InsightPanelState, InsightTarget, MultiColumnView,
@@ -55,7 +58,18 @@ pub enum InsightEvent {
     ///
     /// 带 payload 而不让宿主回读面板状态：宿主拿到事件就能直接开工，
     /// 不必再持面板实体（也避开了「读实体时它正在被更新」的租借冲突）。
-    ProfileRequested { target: InsightTarget },
+    ///
+    /// `config` = 探查配置（确认窗口产物，C3）：`Some` 用确认的配置取数建表，
+    /// `None` 走默认取样（前 500 行全列，`ProbeConfig::sample_default`）。
+    ProfileRequested {
+        target: InsightTarget,
+        config: Option<crate::model::ProbeConfig>,
+    },
+    /// 请宿主轻量内省源查询的列清单（探查确认窗口「列」块的候选；`LIMIT 0` /
+    /// `DESCRIBE`，不取数据）。失败时列候选为空，确认窗口默认「全部列」。
+    ProbeColumnsRequested {
+        source: crate::model::SampleSource,
+    },
     /// 请宿主以**全量**口径重新加载该源目标（大表手动全量：取样切换的
     /// 另一半——源目标取样后用户点「全量统计」触发；结果仍落成 `tmp_i_` 临时表，
     /// 后续分析链路与取样完全一致）。
@@ -66,7 +80,17 @@ pub enum InsightEvent {
     /// 弹窗要窗口（宿主侧），且宿主能读设置——「全量统计前确认」关闭时宿主
     /// **不弹窗**、直接调 [`InsightView::confirm_full`]。确认期间面板 scope 保持不变；
     /// 取消 = 宿主什么都不做（scope / 状态都不动）。
+    ///
+    /// 2026-10-31 Q2 定稿：**全量 = 评估确认窗口生成的表**（不再重取源全量建表），
+    /// `confirm_full` 由「重建全量表」改为「切全量口径 + 触发评估」；本事件保留为
+    /// 宿主确认链的前段（弹窗文案说明评估对象），`FullProfileRequested` 分支保留兼容。
     FullProfileConfirmRequested { target: InsightTarget },
+    /// 请宿主对**当前评估全表**做取样档查询级过滤现算（Q2 / C7）。
+    ///
+    /// 取样档不再重建取样表（旧行为会重取源）：对确认窗口生成的临时表做
+    /// 行 LIMIT + 列投影的轻量查询，逐列现算迷你统计回填（列卡折叠态迷你图）。
+    /// 只带 `temp_table`：列清单由接缝在后台现读（与评估同口径，不持过期列名）。
+    SampleInsightRequested { temp_table: String },
     /// 请宿主评估整表质量（逐列串行 + 进度回填）。
     ///
     /// 只带 `temp_table`：列清单由接缝在后台现读（元数据可能已变，
@@ -74,6 +98,14 @@ pub enum InsightEvent {
     TableEvaluateRequested {
         temp_table: String,
         table_name: String,
+    },
+    /// 请宿主补算**单列**明细（C5：中断列灰态卡的「补算」入口）。
+    ///
+    /// 评估全表被取消后，未完成列显示灰态 + 补算按钮；点补算对单列续跑
+    /// （同一 `get_column_insight_full` 链路），回填后清除中断标记。
+    ColumnEvaluateRequested {
+        temp_table: String,
+        column: String,
     },
     /// 请宿主加载多列分析的表单（真实列清单 + `category = multi` 的规则）
     MultiColumnRequested {
@@ -209,6 +241,141 @@ impl ColumnSection {
     }
 }
 
+/// 探查确认窗口的数据量模式（确认窗口「数据量」块，C1）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProbeAmountMode {
+    /// 全量（不带 LIMIT）
+    Full,
+    /// 前 N 行
+    RowCount,
+    /// 百分比
+    Percent,
+}
+
+/// 探查确认窗口的编辑状态（源目标进入洞察时打开，C3）。
+///
+/// 编辑值用**字符串**承载（行数 / 百分比 / 过滤 / 种子都是用户文本输入），
+/// 确认时才解析成 [`crate::model::ProbeConfig`]；解析失败给行内提示、不取数。
+/// 列候选来自源查询的轻量内省（`jobs::request_probe_columns` 后台回填）；
+/// 还没拿到时默认「全部列」（不阻塞确认）。
+#[derive(Debug, Clone)]
+pub(crate) struct ProbeDialogState {
+    /// 待确认的源目标（确认后才设为面板当前目标并发取数）
+    pub(crate) target: InsightTarget,
+    /// 数据量模式
+    pub(crate) amount_mode: ProbeAmountMode,
+    /// 行数编辑值（`amount_mode == RowCount` 时有效）
+    pub(crate) row_count: String,
+    /// 百分比编辑值（`amount_mode == Percent` 时有效）
+    pub(crate) percent: String,
+    /// 采样方式（R2：用户选择，UI 说明差异）
+    pub(crate) sample_mode: crate::model::ProbeSampleMode,
+    /// 列集合（未选列在 EDA 上不存在，C4）
+    pub(crate) columns: crate::model::ProbeColumns,
+    /// 候选列清单（轻量内省结果；空 = 还没拿到 / 拿失败）
+    pub(crate) column_candidates: Vec<String>,
+    /// 过滤条件文本（R1）
+    pub(crate) filter: String,
+    /// reservoir 采样种子文本（Percent + Reservoir 时生效）
+    pub(crate) seed: String,
+    /// 解析失败提示（确认时写，行内展示）
+    pub(crate) parse_notice: Option<String>,
+}
+
+impl ProbeDialogState {
+    /// 新建确认窗口编辑态：预填上次探查配置（会话级记忆，R8 / C6）。
+    pub(crate) fn new(target: InsightTarget, last: Option<&crate::model::ProbeConfig>) -> Self {
+        let (amount_mode, row_count, percent) = match last.map(|c| &c.amount) {
+            Some(crate::model::ProbeAmount::RowCount(n)) => {
+                (ProbeAmountMode::RowCount, n.to_string(), String::new())
+            }
+            Some(crate::model::ProbeAmount::Percent(p)) => {
+                (ProbeAmountMode::Percent, String::new(), p.to_string())
+            }
+            Some(crate::model::ProbeAmount::Full) | None => {
+                (ProbeAmountMode::RowCount, "500".into(), String::new())
+            }
+        };
+        Self {
+            target,
+            amount_mode,
+            row_count,
+            percent,
+            sample_mode: last
+                .map(|c| c.sample_mode)
+                .unwrap_or(crate::model::ProbeSampleMode::Head),
+            columns: last
+                .map(|c| c.columns.clone())
+                .unwrap_or(crate::model::ProbeColumns::All),
+            column_candidates: Vec::new(),
+            filter: last.and_then(|c| c.filter.clone()).unwrap_or_default(),
+            seed: last
+                .and_then(|c| c.seed.map(|s| s.to_string()))
+                .unwrap_or_default(),
+            parse_notice: None,
+        }
+    }
+
+    /// 当前编辑态 → 探查配置；解析失败返回 `None` 并写行内提示。
+    pub(crate) fn to_config(&mut self) -> Option<crate::model::ProbeConfig> {
+        let amount = match self.amount_mode {
+            ProbeAmountMode::Full => crate::model::ProbeAmount::Full,
+            ProbeAmountMode::RowCount => {
+                let n = self.row_count.trim().parse::<u32>().ok();
+                match n.filter(|n| *n > 0) {
+                    Some(n) => crate::model::ProbeAmount::RowCount(n),
+                    None => {
+                        self.parse_notice =
+                            Some("行数需为正整数（如 500）".into());
+                        return None;
+                    }
+                }
+            }
+            ProbeAmountMode::Percent => {
+                let p = self.percent.trim().parse::<f64>().ok();
+                match p.filter(|p| (0.0..=100.0).contains(p)) {
+                    Some(p) => crate::model::ProbeAmount::Percent(p),
+                    None => {
+                        self.parse_notice =
+                            Some("百分比需在 0–100 之间（如 5）".into());
+                        return None;
+                    }
+                }
+            }
+        };
+        let filter = {
+            let f = self.filter.trim();
+            if f.is_empty() {
+                None
+            } else {
+                Some(f.to_string())
+            }
+        };
+        let seed = {
+            let s = self.seed.trim();
+            if s.is_empty() {
+                None
+            } else {
+                match s.parse::<u64>() {
+                    Ok(v) => Some(v),
+                    Err(_) => {
+                        self.parse_notice = Some("种子需为非负整数（可留空）".into());
+                        return None;
+                    }
+                }
+            }
+        };
+        self.parse_notice = None;
+        Some(crate::model::ProbeConfig {
+            amount,
+            sample_mode: self.sample_mode,
+            columns: self.columns.clone(),
+            filter,
+            seed,
+        })
+    }
+}
+
 /// 洞察面板视图。
 pub struct InsightView {
     pub(crate) target: Option<InsightTarget>,
@@ -281,6 +448,14 @@ pub struct InsightView {
     ///
     /// 默认取样；源目标手动切全量后为 `Full`（临时表目标没有取样概念，恒 `Sample`）。
     pub(crate) scope: InsightScope,
+    /// 探查确认窗口（源目标进入洞察时打开，C3）：确认前不取数、取消幂等。
+    pub(crate) probe_dialog: Option<ProbeDialogState>,
+    /// 上次探查配置（会话级记忆，R8 / C6）：重取数 / 重新探查预填。
+    pub(crate) last_probe_config: Option<crate::model::ProbeConfig>,
+    /// 评估全表的取消令牌（C5）：jobs 逐列循环每列派发前检查；置位后停止派发、
+    /// 已完成列保留、未完成列灰态可补算。新评估（`request_table_evaluation`）
+    /// 重置为 false。
+    pub(crate) eval_cancel: Arc<AtomicBool>,
     /// 宿主推送的洞察偏好（对应设置页 `insight.*`；insight 不依赖 settings，
     /// 由宿主在装配与设置变更时转发）。`status_usage` 关闭时 `memory` 恒 `None`。
     pub(crate) status_usage: bool,
@@ -292,13 +467,19 @@ pub struct InsightView {
     pub(crate) memory_poll_running: bool,
 }
 
-/// 画像取样口径：大表默认取样（`SOURCE_SAMPLE_LIMIT`），全量需手动触发。
+/// 画像取样口径（2026-10-31 Q2 定稿语义）。
+///
+/// - 默认 `Sample`（取样档）：对**评估全表**做查询级过滤现算（行 LIMIT + 列投影，
+///   不建子表），迷你统计随取样回填（C7）。
+/// - `Full`（全量档）：评估**确认窗口生成的表**（确认窗口的行数/百分比已落到
+///   建表层；进入 EDA 自动评估，见 `set_table_profile`）。
+/// 临时表目标没有取样 / 全量概念，恒 `Sample`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InsightScope {
-    /// 取样（默认）：源表导入前 `LIMIT SOURCE_SAMPLE_LIMIT` 行
+    /// 取样（默认）：评估全表的查询级过滤
     #[default]
     Sample,
-    /// 全量：源表全部行导入（用户手动触发，大表会慢）
+    /// 全量：评估确认窗口生成的表
     Full,
 }
 
@@ -343,6 +524,9 @@ impl InsightView {
             overlap_running: false,
             overlap_notice: None,
             scope: InsightScope::Sample,
+            probe_dialog: None,
+            last_probe_config: None,
+            eval_cancel: Arc::new(AtomicBool::new(false)),
             // 初值与设置默认一致（宿主装配时会立刻用真实设置覆盖：`apply_insight_prefs`）
             status_usage: true,
             work_set_limit: 30,
@@ -519,6 +703,26 @@ impl InsightView {
     /// 折叠偏好不在此列：它们是用户口味，不随目标变。
     pub fn set_target(&mut self, target: InsightTarget, cx: &mut Context<Self>) {
         tracing::info!(target = %target.title(), "【探针】洞察面板目标切换");
+        // 源目标：进入洞察先弹**探查确认窗口**（C3）——数据量 / 列由用户定（C1），
+        // 确认前不取数、取消幂等（不建表不改状态）。临时表目标数据已既定，直接取数。
+        if target.source().is_some() {
+            self.open_probe_dialog(target, cx);
+            return;
+        }
+        self.apply_target_and_request(target, cx);
+    }
+
+    /// 已确认目标的直接取数路径（切 tab / 关 tab / 候选重开等会话内导航复用）。
+    ///
+    /// `opened` 里已登记的目标 = 本次会话确认过（C3 只拦新进入洞察的源目标），
+    /// 导航复用不再重复弹窗。
+    pub fn set_target_loaded(&mut self, target: InsightTarget, cx: &mut Context<Self>) {
+        tracing::info!(target = %target.title(), "【探针】洞察已确认目标直接取数（会话内导航）");
+        self.apply_target_and_request(target, cx);
+    }
+
+    /// 切目标 + 发当前 Tab 取数请求（确认窗口 / 已登记目标 / 临时表目标共用）。
+    fn apply_target_and_request(&mut self, target: InsightTarget, cx: &mut Context<Self>) {
         self.tab = target.default_tab();
         self.target = Some(target);
         self.data = PanelData::default();
@@ -531,6 +735,191 @@ impl InsightView {
         if self.emit_request_for_tab(self.tab, cx) {
             cx.notify();
         }
+    }
+
+    // ===== 探查确认窗口（C3：进入洞察确认后取数；C6：重取数/重探查复用） =====
+
+    /// 确认窗口只读访问（render 纯读路径用）。
+    pub(crate) fn probe_dialog(&self) -> Option<&ProbeDialogState> {
+        self.probe_dialog.as_ref()
+    }
+
+    /// 打开探查确认窗口（源目标进入洞察 / 重取数 / 重新探查共用）。
+    ///
+    /// 目标**先不落** `self.target`：取消时面板回到无目标空态（幂等）；
+    /// 确认后经 [`Self::confirm_probe_dialog`] 才真正切目标并带配置发取数请求。
+    /// 打开同时发起列候选的轻量内省（`ProbeColumnsRequested`，失败默认全部列）。
+    pub(crate) fn open_probe_dialog(&mut self, target: InsightTarget, cx: &mut Context<Self>) {
+        tracing::info!(target = %target.title(), "【探针】洞察打开探查确认窗口");
+        if let Some(source) = target.source() {
+            cx.emit(InsightEvent::ProbeColumnsRequested {
+                source: source.clone(),
+            });
+        }
+        self.probe_dialog = Some(ProbeDialogState::new(target, self.last_probe_config.as_ref()));
+        self.state = InsightPanelState::ProbeConfirm;
+        cx.notify();
+    }
+
+    /// 确认探查：编辑态 → 配置 → 切目标并发取数请求。
+    ///
+    /// 解析失败写行内提示并保留窗口（不取数）；成功则窗口关闭，
+    /// 配置记入会话级记忆（R8）供下次预填。
+    /// 已登记目标 + 已有画像时**保留旧载荷**（R5 不闪空）：重跑建表，新表就绪后
+    /// jobs 一次性替换；只更新取样口径与阶段条。新目标走 [`Self::apply_target_and_request`]
+    /// 清空旧载荷（跨目标不串数据）。
+    pub(crate) fn confirm_probe_dialog(&mut self, cx: &mut Context<Self>) {
+        let Some(mut dialog) = self.probe_dialog.take() else {
+            return;
+        };
+        let Some(config) = dialog.to_config() else {
+            // 解析失败：行内提示已写入，窗口保留
+            self.probe_dialog = Some(dialog);
+            cx.notify();
+            return;
+        };
+        let target = dialog.target.clone();
+        self.last_probe_config = Some(config.clone());
+        // 已登记目标 + 已有画像 = 重新探查（C6 / R5）：不重设目标、不清载荷
+        let re_probe = self
+            .target
+            .as_ref()
+            .map(|t| t == &target && self.data.table.is_some())
+            .unwrap_or(false);
+        if re_probe {
+            self.scope = InsightScope::Sample;
+            self.loading_note = Some("重新探查中…".into());
+            cx.emit(InsightEvent::ProfileRequested {
+                target,
+                config: Some(config),
+            });
+            cx.notify();
+            return;
+        }
+        // 新目标：切默认 Tab、清旧载荷、取样口径、清加载说明
+        self.apply_target_and_request(target.clone(), cx);
+        cx.emit(InsightEvent::ProfileRequested {
+            target,
+            config: Some(config),
+        });
+        cx.notify();
+    }
+
+    /// 取消探查：关闭窗口、清目标（幂等，不建表不改状态）。
+    pub(crate) fn cancel_probe_dialog(&mut self, cx: &mut Context<Self>) {
+        if self.probe_dialog.is_none() {
+            return;
+        }
+        tracing::info!("【探针】探查确认取消（幂等：不建表不改状态）");
+        self.probe_dialog = None;
+        self.target = None;
+        self.data = PanelData::default();
+        self.state = InsightPanelState::Empty;
+        cx.notify();
+    }
+
+    /// 回填确认窗口的列候选（`ProbeColumnsRequested` 的后台结果）。
+    ///
+    /// 候选只在确认窗口还开着时回填；用户已取消则丢弃（目标都没了，列清单无意义）。
+    pub(crate) fn set_probe_columns(&mut self, columns: Vec<String>, cx: &mut Context<Self>) {
+        let Some(dialog) = self.probe_dialog.as_mut() else {
+            return;
+        };
+        dialog.column_candidates = columns;
+        cx.notify();
+    }
+
+    /// 编辑：数据量模式（全量 / 行数 / 百分比）。
+    pub(crate) fn probe_set_amount_mode(&mut self, mode: ProbeAmountMode, cx: &mut Context<Self>) {
+        let Some(dialog) = self.probe_dialog.as_mut() else {
+            return;
+        };
+        dialog.amount_mode = mode;
+        dialog.parse_notice = None;
+        cx.notify();
+    }
+
+    /// 快捷预设：常用行数 / 常用百分比（确认窗口「数据量」块的快捷入口）。
+    pub(crate) fn probe_quick_amount(&mut self, mode: ProbeAmountMode, value: String, cx: &mut Context<Self>) {
+        let Some(dialog) = self.probe_dialog.as_mut() else {
+            return;
+        };
+        dialog.amount_mode = mode;
+        match mode {
+            ProbeAmountMode::Full => {}
+            ProbeAmountMode::RowCount => dialog.row_count = value,
+            ProbeAmountMode::Percent => dialog.percent = value,
+        }
+        dialog.parse_notice = None;
+        cx.notify();
+    }
+
+    /// 编辑：行数文本（RowCount 模式）。
+    pub(crate) fn probe_set_row_count(&mut self, value: &str, cx: &mut Context<Self>) {
+        let Some(dialog) = self.probe_dialog.as_mut() else {
+            return;
+        };
+        dialog.row_count = value.to_string();
+        dialog.parse_notice = None;
+        cx.notify();
+    }
+
+    /// 编辑：百分比文本（Percent 模式）。
+    pub(crate) fn probe_set_percent(&mut self, value: &str, cx: &mut Context<Self>) {
+        let Some(dialog) = self.probe_dialog.as_mut() else {
+            return;
+        };
+        dialog.percent = value.to_string();
+        dialog.parse_notice = None;
+        cx.notify();
+    }
+
+    /// 编辑：采样方式（Head 前 N 行 / Reservoir 随机均匀）。
+    pub(crate) fn probe_set_sample_mode(
+        &mut self,
+        mode: crate::model::ProbeSampleMode,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(dialog) = self.probe_dialog.as_mut() else {
+            return;
+        };
+        dialog.sample_mode = mode;
+        dialog.parse_notice = None;
+        cx.notify();
+    }
+
+    /// 编辑：列集合（未选列在 EDA 上不存在，C4）。
+    pub(crate) fn probe_set_columns(
+        &mut self,
+        columns: crate::model::ProbeColumns,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(dialog) = self.probe_dialog.as_mut() else {
+            return;
+        };
+        dialog.columns = columns;
+        dialog.parse_notice = None;
+        cx.notify();
+    }
+
+    /// 编辑：过滤条件（R1，包内层 SELECT）。
+    pub(crate) fn probe_set_filter(&mut self, value: &str, cx: &mut Context<Self>) {
+        let Some(dialog) = self.probe_dialog.as_mut() else {
+            return;
+        };
+        dialog.filter = value.to_string();
+        dialog.parse_notice = None;
+        cx.notify();
+    }
+
+    /// 编辑：reservoir 采样种子文本。
+    pub(crate) fn probe_set_seed(&mut self, value: &str, cx: &mut Context<Self>) {
+        let Some(dialog) = self.probe_dialog.as_mut() else {
+            return;
+        };
+        dialog.seed = value.to_string();
+        dialog.parse_notice = None;
+        cx.notify();
     }
 
     /// 清空当前目标（多标签关掉最后一个 tab 时用）：置空态、不发取数请求。
@@ -637,10 +1026,14 @@ impl InsightView {
         cx.notify();
     }
 
-    /// 宿主确认全量后调用：真正切到全量口径并请求画像。
+    /// 宿主确认全量后调用：切**全量口径**并评估确认窗口生成的表。
     ///
     /// 与 [`Self::request_full`] 是两段式的后半段（确认弹窗在宿主侧）；取消时宿主
     /// 不调本方法，scope / 状态保持原样。
+    ///
+    /// 2026-10-31 Q2 定稿：全量 = 评估确认窗口生成的表，**不再重取源全量建表**
+    /// （确认窗口的行数/百分比已落到建表层）；若该表尚未评估则触发评估全表，
+    /// 已评估只切口径（#23 自动评估已承接进入 EDA 的默认评估）。
     pub fn confirm_full(&mut self, cx: &mut Context<Self>) {
         let Some(target) = self.target.clone() else {
             return;
@@ -653,20 +1046,56 @@ impl InsightView {
         }
         tracing::info!(target = %target.title(), "【探针】洞察确认全量口径（confirm_full）");
         self.scope = InsightScope::Full;
-        self.state = InsightPanelState::Loading;
-        cx.emit(InsightEvent::FullProfileRequested { target });
-        cx.notify();
+        // 已有评估产物时只切口径（数据不动）；未评估（含探查刚回填）则续跑评估。
+        let evaluated = self
+            .data
+            .table
+            .as_ref()
+            .map(|t| t.quality.is_some())
+            .unwrap_or(false);
+        if !evaluated {
+            self.request_table_evaluation(cx);
+        } else {
+            cx.notify();
+        }
     }
 
-    /// 切换回**取样**口径并重新画像（全量视图下点「取样统计」）。
+    /// 切换回**取样档**（Q2 定稿）：对当前评估全表做查询级过滤现算。
+    ///
+    /// 旧行为是重新取样建表（重取源）；新语义取样 = 对**评估全表**（确认窗口
+    /// 生成的临时表）的行 LIMIT + 列投影轻量现算（不建子表、不重取源），迷你统计
+    /// 随查询回填（C7）。保持当前内容不闪空（R5）：现算毫秒级，不发 Loading。
     pub fn request_sample(&mut self, cx: &mut Context<Self>) {
         let Some(target) = self.target.clone() else {
             return;
         };
-        tracing::info!(target = %target.title(), "【探针】洞察切回取样口径（request_sample）");
+        let Some(temp_table) = self.data.sample_table(&target).map(str::to_string) else {
+            return;
+        };
+        tracing::info!(target = %target.title(), "【探针】洞察切回取样档（request_sample）");
         self.scope = InsightScope::Sample;
-        self.state = InsightPanelState::Loading;
-        cx.emit(InsightEvent::ProfileRequested { target });
+        cx.emit(InsightEvent::SampleInsightRequested { temp_table });
+        cx.notify();
+    }
+
+    /// 取样档迷你统计回填（Q3 / C7：迷你统计并入取样链路）。
+    ///
+    /// 只写 [`TableColumnView::mini_stats`]，**不覆盖评估产物**（stats_detail /
+    /// histogram / sample_values / quality）：全量档读评估明细、取样档读本字段，
+    /// 两档互不污染。按列名对位回填，未知列名忽略（接缝与面板共用同一份元数据，
+    /// 理论上不出现，防御不 panic）。
+    pub fn set_sample_mini_stats(
+        &mut self,
+        stats: Vec<(String, Option<crate::model::ColumnMiniStats>)>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(profile) = &mut self.data.table {
+            for (name, mini) in stats {
+                if let Some(col) = profile.columns.iter_mut().find(|c| c.name == name) {
+                    col.mini_stats = mini;
+                }
+            }
+        }
         cx.notify();
     }
 
@@ -988,8 +1417,18 @@ impl InsightView {
 
     /// 出数（表探查）
     pub fn set_table_profile(&mut self, profile: TableProfileView, cx: &mut Context<Self>) {
+        // Q1：进入 EDA 自动触发评估全表——探查回填（确认窗口生成表的元数据）完成后，
+        // 若列级明细尚未计算、不在评估中、且无表级事实摘要（区分「评估已完成」的注入/
+        // 复算回填），直接续跑逐列评估。
+        let auto_eval = !profile.columns.is_empty()
+            && profile.progress.is_none()
+            && profile.quality.is_none()
+            && profile.columns.iter().all(|c| c.stats_detail.is_none());
         self.data = std::mem::take(&mut self.data).with_table(profile);
         self.state = InsightPanelState::Data;
+        if auto_eval {
+            self.request_table_evaluation(cx);
+        }
         cx.notify();
     }
 
@@ -1105,6 +1544,7 @@ impl InsightView {
     /// 「评估全表」：发请求并进入评估中（按钮变灰、进度行出现）。
     ///
     /// 整表重算不把已有分数清空——列分数是逐列长出来的，清空会让面板闪一下空白。
+    /// 新评估重置取消令牌（C5）：上一轮中断的标记随本次全量重评估自然清除。
     pub fn request_table_evaluation(&mut self, cx: &mut Context<Self>) {
         let Some(target) = self.target.clone() else {
             return;
@@ -1119,6 +1559,7 @@ impl InsightView {
         let Some(temp_table) = self.data.sample_table(&target).map(str::to_string) else {
             return;
         };
+        self.eval_cancel.store(false, std::sync::atomic::Ordering::Relaxed);
         let table_name = target.table_name();
         if let Some(profile) = &self.data.table {
             let total = profile.columns.len();
@@ -1128,6 +1569,33 @@ impl InsightView {
         cx.emit(InsightEvent::TableEvaluateRequested {
             temp_table,
             table_name,
+        });
+        cx.notify();
+    }
+
+    /// 取消评估全表（C5）：置取消令牌，jobs 循环在下一列派发前停止。
+    ///
+    /// 已完成列明细保留；未完成列由 jobs 回填中断标记（灰态 + 可补算）。
+    /// 取消是协作式（不中断正在跑的那一列查询，等它回来再停）。
+    pub fn cancel_table_evaluation(&mut self, cx: &mut Context<Self>) {
+        self.eval_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        tracing::info!("【探针】取消评估全表（已完成列保留，未完成列灰态可补算）");
+        cx.notify();
+    }
+
+    /// 补算单列明细（C5：中断列灰态卡的「补算」入口）。
+    ///
+    /// 与评估全表同一条 `get_column_insight_full` 链路，只回填这一列；
+    /// 完成后清除该列的中断标记（`with_column_detail`）。
+    pub fn request_column_evaluation(
+        &mut self,
+        temp_table: String,
+        column: String,
+        cx: &mut Context<Self>,
+    ) {
+        cx.emit(InsightEvent::ColumnEvaluateRequested {
+            temp_table,
+            column,
         });
         cx.notify();
     }
@@ -1177,14 +1645,20 @@ impl InsightView {
             PanelTab::Overview => None,
             PanelTab::Column => match &target {
                 InsightTarget::Column { .. } | InsightTarget::SourceColumn { .. } => {
-                    Some(InsightEvent::ProfileRequested { target })
+                    Some(InsightEvent::ProfileRequested {
+                        target,
+                        config: None,
+                    })
                 }
                 _ => None,
             },
             PanelTab::Table => match &target {
                 // 已经有源目标 → 原样再发（取样在接缝里做）
                 InsightTarget::SourceTable { .. } => {
-                    Some(InsightEvent::ProfileRequested { target })
+                    Some(InsightEvent::ProfileRequested {
+                        target,
+                        config: None,
+                    })
                 }
                 // 源列目标看整表：同一个来源，换成表目标（取样口径一致）
                 InsightTarget::SourceColumn { source, .. } => {
@@ -1193,6 +1667,7 @@ impl InsightView {
                             source: source.clone(),
                             table_name: target.table_name(),
                         },
+                        config: None,
                     })
                 }
                 _ => Some(InsightEvent::ProfileRequested {
@@ -1200,6 +1675,7 @@ impl InsightView {
                         temp_table: target.temp_table().to_string(),
                         table_name: target.table_name(),
                     },
+                    config: None,
                 }),
             },
             PanelTab::MultiColumn => match self.data.sample_table(&target) {

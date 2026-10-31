@@ -469,7 +469,7 @@ fn source_loading_renders_sample_note_only_when_set(cx: &mut TestAppContext) {
     let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
 
     let source = crate::model::SampleSource::new("G_1", "SELECT 1", "shop.orders");
-    // 源表目标 → 落到「表」Tab 并进入加载态
+    // 源表目标 → 先弹探查确认窗口（C3），确认（默认配置）后才落到「表」Tab 并进入加载态
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
             view.set_target(
@@ -479,6 +479,7 @@ fn source_loading_renders_sample_note_only_when_set(cx: &mut TestAppContext) {
                 },
                 cx,
             );
+            view.confirm_probe_dialog(cx);
         });
         window.draw(cx).clear(cx);
     });
@@ -545,6 +546,7 @@ fn set_target_clears_previous_loading_note(cx: &mut TestAppContext) {
                 },
                 cx,
             );
+            view.confirm_probe_dialog(cx);
             view.set_loading_note(Some("正在取样并建分析临时表…".into()), cx);
         });
         window.draw(cx).clear(cx);
@@ -556,7 +558,7 @@ fn set_target_clears_previous_loading_note(cx: &mut TestAppContext) {
     });
     assert!(note.visible(), "前置：旧目标的阶段说明先渲染出来");
 
-    // 切到另一张源表目标：说明行必须随目标清空
+    // 切到另一张源表目标：确认（默认配置）后说明行必须随目标清空
     let second = crate::model::SampleSource::new("G_1", "SELECT 2", "shop.items");
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
@@ -567,6 +569,7 @@ fn set_target_clears_previous_loading_note(cx: &mut TestAppContext) {
                 },
                 cx,
             );
+            view.confirm_probe_dialog(cx);
         });
         window.draw(cx).clear(cx);
     });
@@ -602,6 +605,8 @@ fn multi_tab_shows_sample_guide_without_request_when_no_sample_table(cx: &mut Te
                 },
                 cx,
             );
+            // 源目标先弹确认窗口（C3）；确认后才落到目标（样本表缺失语义照旧）
+            view.confirm_probe_dialog(cx);
             view.set_tab(PanelTab::MultiColumn, cx);
         });
         window.draw(cx).clear(cx);
@@ -1769,6 +1774,9 @@ fn source_target(name: &str) -> InsightTarget {
 
 /// 全量统计是**两段式**：`request_full` 只发确认请求，不切 scope / 不发画像请求；
 /// 宿主确认后调 `confirm_full` 才真正切换（取消 = 什么都不做）。
+///
+/// 2026-10-31 Q2 定稿：`confirm_full` 由「重取源全量建表」改为「切全量口径 +
+/// 触发评估」——全量 = 评估确认窗口生成的表，不重取源；未评估才发评估请求。
 #[gpui_kit::test]
 fn request_full_waits_for_host_confirmation(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -1776,8 +1784,12 @@ fn request_full_waits_for_host_confirmation(cx: &mut TestAppContext) {
     let events = crate::test_support::event_sink(&view, cx);
 
     cx.update(|_window, cx| {
-        view.update(cx, |view, cx| view.set_target(source_target("orders"), cx));
-        view.update(cx, |view, cx| view.request_full(cx));
+        view.update(cx, |view, cx| {
+            view.set_target(source_target("orders"), cx);
+            // 源目标进入洞察先弹确认窗口（C3）：确认（默认配置）后再请求全量
+            view.confirm_probe_dialog(cx);
+            view.request_full(cx);
+        });
     });
     assert!(
         events
@@ -1799,21 +1811,21 @@ fn request_full_waits_for_host_confirmation(cx: &mut TestAppContext) {
         assert!(view.state().is_loading() || view.state() == &InsightPanelState::Empty);
     });
 
-    // 宿主确认后：切全量口径 + 发画像请求
+    // 宿主确认后：切全量口径；Q2 定稿下不再重取源全量建表（全量 = 评估确认窗口
+    // 生成的表，未评估时触发评估全表；测试环境无临时表 → 评估请求不发，只切口径）
     events.take();
     cx.update(|_window, cx| {
         view.update(cx, |view, cx| view.confirm_full(cx));
     });
     assert!(
-        events
+        !events
             .borrow()
             .iter()
             .any(|e| matches!(e, InsightEvent::FullProfileRequested { .. })),
-        "第二段：确认后才发画像请求"
+        "确认后不得重取源全量（Q2：全量 = 评估确认窗口生成的表）"
     );
     view.read_with(cx, |view, _| {
         assert_eq!(view.scope(), super::InsightScope::Full);
-        assert!(view.state().is_loading(), "切口径同时进加载态");
     });
 }
 
@@ -1869,4 +1881,65 @@ fn apply_insight_prefs_updates_fields(cx: &mut TestAppContext) {
         assert!(!view.status_usage);
         assert_eq!(view.work_set_limit, 0, "0 = 不提示");
     });
+}
+
+/// C6 / R5 重新探查：已登记目标 + 已有画像时确认走「不闪空」分支——
+/// 保留旧画像与阶段条说明、发重新取数请求（新表就绪后 jobs 一次性替换）。
+#[gpui_kit::test]
+fn reprobe_keeps_profile_until_table_rebuilt(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+    let events = crate::test_support::event_sink(&view, cx);
+
+    let target = InsightTarget::Table {
+        temp_table: "t_reprobe".into(),
+        table_name: "orders".into(),
+    };
+    cx.update(|_window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_target(target.clone(), cx);
+            view.data.table = Some(TableProfileView {
+                table_name: "orders".into(),
+                source_label: "DuckDB 临时表",
+                row_count: 3,
+                dup_rows: None,
+                columns: Vec::new(),
+                quality: None,
+                progress: None,
+                sample: None,
+            });
+        });
+    });
+    // 重新探查 = 复用确认窗口（预填上次配置）
+    cx.update(|_window, cx| {
+        view.update(cx, |view, cx| view.open_probe_dialog(target.clone(), cx));
+    });
+    view.read_with(cx, |view, _| {
+        assert!(
+            view.probe_dialog.is_some(),
+            "重新探查应打开确认窗口（C6）"
+        );
+    });
+    cx.update(|_window, cx| {
+        view.update(cx, |view, cx| view.confirm_probe_dialog(cx));
+    });
+    view.read_with(cx, |view, _| {
+        assert!(view.data.table.is_some(), "R5：确认后旧画像保留（不闪空）");
+        assert!(
+            view.loading_note.is_some(),
+            "重新探查中应显示阶段条说明"
+        );
+        assert!(view.target().is_some(), "目标保留");
+    });
+    assert!(
+        events.borrow().iter().any(|e| matches!(
+            e,
+            InsightEvent::ProfileRequested {
+                target: t,
+                config: Some(_)
+            } if t == &target
+        )),
+        "应发带上次配置的重新取数请求：{:?}",
+        events.borrow()
+    );
 }

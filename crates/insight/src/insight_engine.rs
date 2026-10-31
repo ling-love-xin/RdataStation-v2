@@ -12,12 +12,19 @@ use crate::model::types::{
     ColumnInsightFull, ColumnStats, ColumnStatsDetail, DateTimeStats, DistributionBin,
     ExtremeValue, NumericStats, TableColumnMeta, TableProfile, TextFrequency, TextStats,
 };
+use crate::model::{ColumnKind, ColumnMiniStats};
 
 /// Default number of sample rows pulled from a column for display
 pub const DEFAULT_SAMPLE_SIZE: usize = 5;
 
 /// Minimum rows required to generate a histogram
 pub const HISTOGRAM_MIN_ROWS: i64 = 10;
+
+/// 取样档查询级过滤的行数上限（Q2：取样 = 对评估全表的轻量现算，不建子表）。
+///
+/// 迷你统计随取样现算（C7），500 行 × 列数取回 Rust 侧聚合毫秒级完成；
+/// 行数选择入口留给后续 UI（决策文档 §11 记录），当前固定取样上限。
+pub const SAMPLE_MINI_LIMIT: u64 = 500;
 
 /// 洞察分析的并发上限，用于防止资源耗尽。
 ///
@@ -304,6 +311,200 @@ pub fn compute_table_column_summary(
         CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
     })?;
     compute_table_column_summary_on(&conn, temp_table, columns)
+}
+
+/// 取样档迷你统计（C7：A 方案——迷你统计并入取样链路）。
+///
+/// 对**评估全表**（确认窗口生成的临时表）做查询级过滤现算（Q2：行 LIMIT +
+/// 列投影，不建子表、不重取源），逐列产出轻量分布供列卡折叠态迷你图：
+/// 数值 = 8 柱等宽直方图、文本/时间 = Top 3 值频次、布尔 = 真值占比。
+///
+/// 列按 [`ColumnKind`] 投影并 `CAST` 成统一类型（DOUBLE / BOOLEAN / VARCHAR），
+/// 避免 DECIMAL、日期时间等类型在 Rust 侧转换的坑；空值由 `Option` 表达。
+/// 列无有效样本 / 类型未识别返回 `None`（视图不渲染迷你图，不编假值）。
+pub fn compute_sample_mini_stats_on(
+    conn: &duckdb::Connection,
+    temp_table: &str,
+    columns: &[(String, ColumnKind)],
+) -> Result<Vec<(String, Option<ColumnMiniStats>)>, CoreError> {
+    if columns.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut select_parts = Vec::with_capacity(columns.len());
+    for (name, kind) in columns {
+        // 双引号内的引号翻倍转义，防列名注入 / 含引号列名（与 column summary 同口径）
+        let quoted = name.replace('"', "\"\"");
+        let cast = match kind {
+            ColumnKind::Numeric => "AS DOUBLE",
+            ColumnKind::Boolean => "AS BOOLEAN",
+            ColumnKind::Text | ColumnKind::DateTime | ColumnKind::Unknown => "AS VARCHAR",
+        };
+        select_parts.push(format!("CAST(\"{quoted}\" {cast})"));
+    }
+    let sql = format!(
+        "SELECT {} FROM \"{}\" LIMIT {}",
+        select_parts.join(", "),
+        temp_table.replace('"', "\"\""),
+        SAMPLE_MINI_LIMIT
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| {
+        CoreError::common(CommonError::General(format!(
+            "DuckDB sample mini stats prepare failed: {}",
+            e
+        )))
+    })?;
+    let mut rows = stmt.query([]).map_err(|e| {
+        CoreError::common(CommonError::General(format!(
+            "DuckDB sample mini stats query failed: {}",
+            e
+        )))
+    })?;
+
+    let mut numerics: Vec<Vec<f64>> = columns.iter().map(|_| Vec::new()).collect();
+    let mut texts: Vec<Vec<String>> = columns.iter().map(|_| Vec::new()).collect();
+    let mut bools: Vec<(u32, u32)> = columns.iter().map(|_| (0, 0)).collect();
+    while let Some(row) = rows.next().map_err(|e| {
+        CoreError::common(CommonError::General(format!(
+            "DuckDB sample mini stats row failed: {}",
+            e
+        )))
+    })? {
+        for (ix, (_, kind)) in columns.iter().enumerate() {
+            match kind {
+                ColumnKind::Numeric => {
+                    if let Some(v) = row.get::<_, Option<f64>>(ix)? {
+                        numerics[ix].push(v);
+                    }
+                }
+                ColumnKind::Boolean => {
+                    if let Some(v) = row.get::<_, Option<bool>>(ix)? {
+                        if v {
+                            bools[ix].0 += 1;
+                        } else {
+                            bools[ix].1 += 1;
+                        }
+                    }
+                }
+                ColumnKind::Text | ColumnKind::DateTime | ColumnKind::Unknown => {
+                    if let Some(v) = row.get::<_, Option<String>>(ix)? {
+                        texts[ix].push(v);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::with_capacity(columns.len());
+    for (ix, (name, kind)) in columns.iter().enumerate() {
+        let mini = match kind {
+            ColumnKind::Numeric => {
+                let vals = &numerics[ix];
+                if vals.is_empty() {
+                    None
+                } else {
+                    Some(ColumnMiniStats::Numeric(sample_histogram_bins(vals)))
+                }
+            }
+            ColumnKind::Boolean => {
+                let (t, f) = bools[ix];
+                let total = t + f;
+                if total == 0 {
+                    None
+                } else {
+                    Some(ColumnMiniStats::Boolean {
+                        true_ratio: t as f64 / total as f64,
+                    })
+                }
+            }
+            ColumnKind::Text | ColumnKind::DateTime => {
+                let vals = &texts[ix];
+                if vals.is_empty() {
+                    None
+                } else {
+                    Some(ColumnMiniStats::Frequencies(sample_top_frequencies(vals, 3)))
+                }
+            }
+            // 类型未识别：不渲染分布（与评估侧口径一致——Unknown 无类型专属统计）
+            ColumnKind::Unknown => None,
+        };
+        out.push((name.clone(), mini));
+    }
+    Ok(out)
+}
+
+/// 等宽 8 柱直方图（取样档迷你图）：min/max 均分 8 档；全同值 / 不可比回退单柱。
+///
+/// 迷你图渲染只读 `count`（`label` 不进 UI），口径与评估直方图同族（等宽分箱）。
+fn sample_histogram_bins(values: &[f64]) -> Vec<DistributionBin> {
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    for &v in values {
+        min = min.min(v);
+        max = max.max(v);
+    }
+    let n = values.len() as f64;
+    if !min.is_finite() || !max.is_finite() || (max - min).abs() < f64::EPSILON {
+        return vec![DistributionBin {
+            label: format!("{min:.2}"),
+            count: values.len() as u32,
+            ratio: 1.0,
+        }];
+    }
+    let width = (max - min) / 8.0;
+    let mut counts = [0u32; 8];
+    for &v in values {
+        let mut ix = ((v - min) / width).floor() as usize;
+        if ix >= 8 {
+            ix = 7;
+        }
+        counts[ix] += 1;
+    }
+    (0..8)
+        .map(|ix| {
+            let lo = min + width * ix as f64;
+            let hi = if ix == 7 { max } else { lo + width };
+            DistributionBin {
+                label: format!("{lo:.2}~{hi:.2}"),
+                count: counts[ix],
+                ratio: counts[ix] as f64 / n,
+            }
+        })
+        .collect()
+}
+
+/// Top N 值频次（文本 / 时间列迷你图）：按频次降序，同频按字典序（稳定输出）。
+fn sample_top_frequencies(values: &[String], n: usize) -> Vec<TextFrequency> {
+    let mut counts: HashMap<&str, u32> = HashMap::new();
+    for v in values {
+        *counts.entry(v.as_str()).or_insert(0) += 1;
+    }
+    let total = values.len().max(1) as f64;
+    let mut top: Vec<_> = counts.into_iter().collect();
+    top.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    top.into_iter()
+        .take(n)
+        .map(|(v, c)| TextFrequency {
+            value: v.to_string(),
+            count: c,
+            ratio: c as f64 / total,
+        })
+        .collect()
+}
+
+/// 带并发控制与全局连接的取样档迷你统计入口（调用方拿不到连接时用）。
+pub fn compute_sample_mini_stats(
+    temp_table: &str,
+    columns: &[(String, ColumnKind)],
+) -> Result<Vec<(String, Option<ColumnMiniStats>)>, CoreError> {
+    let _permit = insight_semaphore().try_acquire().map_err(|_| {
+        CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string()))
+    })?;
+
+    let duckdb = get_or_create_duckdb()?;
+    let conn = duckdb.lock().map_err(|e| {
+        CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
+    })?;
+    compute_sample_mini_stats_on(&conn, temp_table, columns)
 }
 
 /// 临时表样本（EDA 样本区）：`SELECT * LIMIT 5` 的轻查询，文本化前 5 行。

@@ -274,6 +274,8 @@ pub struct InsightWorkspacePanel {
     col_search_subs: RefCell<Vec<Subscription>>,
     /// 列卡：展开态集合（点击列卡头切换；业务键列名）
     col_open: RefCell<HashSet<String>>,
+    /// 探查确认窗口的输入框订阅（行数 / 百分比 / 过滤 / 种子，同键只挂一次）
+    probe_input_subs: RefCell<Vec<Subscription>>,
     /// 列卡四区：只看规则属性（**按列**存；开启后该列展开体只显示检查器列表。
     /// 原型按单列理解——「开哪列管哪列」；空 = 全部未开启）
     col_rule_only: RefCell<HashMap<String, bool>>,
@@ -391,6 +393,7 @@ impl InsightWorkspacePanel {
             rel_rule: None,
             col_search_subs: RefCell::new(Vec::new()),
             col_open: RefCell::new(HashSet::new()),
+            probe_input_subs: RefCell::new(Vec::new()),
             col_rule_only: RefCell::new(HashMap::new()),
             col_detail_zone: RefCell::new(HashMap::new()),
             content_scroll: ScrollHandle::new(),
@@ -509,6 +512,7 @@ impl InsightWorkspacePanel {
     pub fn open_target(&mut self, target: InsightTarget, cx: &mut Context<Self>) {
         self.archive_summary(cx);
         let key = target_key(&target);
+        let already = self.opened.iter().any(|e| e.key == key);
         if let Some(entry) = self.opened.iter_mut().find(|e| e.key == key) {
             entry.target = target.clone();
         } else {
@@ -523,7 +527,15 @@ impl InsightWorkspacePanel {
         }
         // 回到画像形态：打开某个目标意味着要看它的画像（D66 对齐原型入口语义）
         self.mode = WorkspaceMode::Insight;
-        self.view.update(cx, |view, cx| view.set_target(target, cx));
+        // 已登记目标 = 本次会话确认过（切 tab / 关 tab / 候选重开）：直接取数；
+        // 新目标走探查确认窗口（C3：进入洞察先定数据量与列）
+        self.view.update(cx, |view, cx| {
+            if already {
+                view.set_target_loaded(target, cx);
+            } else {
+                view.set_target(target, cx);
+            }
+        });
         cx.notify();
     }
 
@@ -703,6 +715,7 @@ mod eda;
 mod helpers;
 mod markdown;
 mod overview;
+mod probe_dialog;
 mod rel;
 mod sample;
 mod toolbar;
@@ -826,6 +839,21 @@ mod tests {
         }
     }
 
+    /// 打开目标并确认探查（C3：新源目标先弹确认窗口；测试统一走「确认」驱动）。
+    ///
+    /// 已登记目标（切 tab / 关 tab）在 `open_target` 内直接取数、不弹窗，
+    /// 所以这里只对**首次打开**的目标调用。
+    fn open_confirm(
+        panel: &gpui_kit::Entity<InsightWorkspacePanel>,
+        target: InsightTarget,
+        cx: &mut TestAppContext,
+    ) {
+        panel.update(cx, |p, cx| p.open_target(target, cx));
+        panel.update(cx, |p, cx| {
+            p.insight_view().update(cx, |v, cx| v.confirm_probe_dialog(cx));
+        });
+    }
+
     /// 最小表画像（模拟 jobs 回填；quality 留空，摘要只验证行数 / 列数）
     fn profile(name: &str, rows: u64, cols: usize) -> TableProfileView {
         TableProfileView {
@@ -845,6 +873,8 @@ mod tests {
                     stats_detail: None,
                     histogram: None,
                     sample_values: Vec::new(),
+                    mini_stats: None,
+                    interrupted: false,
                 })
                 .collect(),
             quality: None,
@@ -881,13 +911,13 @@ mod tests {
         cx.update(gpui_kit::init);
         let panel = cx.new(InsightWorkspacePanel::new);
         // 开 A → 注入画像 → 切 B：A 的摘要应存档进 opened
-        panel.update(cx, |p, cx| p.open_target(table_target("orders"), cx));
+        open_confirm(&panel, table_target("orders"), cx);
         panel.update(cx, |p, cx| {
             p.insight_view().update(cx, |v, cx| {
                 v.set_table_profile(profile("orders", 1000, 8), cx)
             });
         });
-        panel.update(cx, |p, cx| p.open_target(table_target("users"), cx));
+        open_confirm(&panel, table_target("users"), cx);
         panel.update(cx, |p, _| {
             assert_eq!(p.opened().len(), 2, "两个不同表都应登记为对比候选");
             let orders = p
@@ -899,7 +929,7 @@ mod tests {
             assert_eq!(s.row_count, Some(1000));
             assert_eq!(s.column_count, Some(8));
         });
-        // 重复打开同一表 → 去重（不新增候选）
+        // 重复打开同一表 → 已登记（不弹窗、不新增候选）
         panel.update(cx, |p, cx| p.open_target(table_target("orders"), cx));
         panel.update(cx, |p, _| {
             assert_eq!(p.opened().len(), 2, "重复打开同表不应新增候选");
@@ -910,8 +940,8 @@ mod tests {
     fn compare_toggle_and_open_candidate(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         let panel = cx.new(InsightWorkspacePanel::new);
-        panel.update(cx, |p, cx| p.open_target(table_target("orders"), cx));
-        panel.update(cx, |p, cx| p.open_target(table_target("users"), cx));
+        open_confirm(&panel, table_target("orders"), cx);
+        open_confirm(&panel, table_target("users"), cx);
         let orders_key = target_key(&table_target("orders"));
         // 勾选 → 选中集变化；再点一次 → 取消
         panel.update(cx, |p, cx| p.toggle_candidate(&orders_key, cx));
@@ -986,7 +1016,7 @@ mod tests {
         let panel = cx.new(InsightWorkspacePanel::new);
         // 开三张表（最新在前：items, users, orders），激活最新的 items
         for name in ["orders", "users", "items"] {
-            panel.update(cx, |p, cx| p.open_target(table_target(name), cx));
+            open_confirm(&panel, table_target(name), cx);
         }
         panel.update(cx, |p, cx| p.activate_opened(0, cx));
         // 关当前（index 0）→ 应切到相邻（原位 = users）
@@ -1011,7 +1041,7 @@ mod tests {
         });
         // 关闭非当前 tab：只移除、不影响当前目标
         for name in ["orders", "users"] {
-            panel.update(cx, |p, cx| p.open_target(table_target(name), cx));
+            open_confirm(&panel, table_target(name), cx);
         }
         panel.update(cx, |p, cx| p.activate_opened(0, cx)); // 当前 = users
         panel.update(cx, |p, cx| p.close_opened(1, cx)); // 关 orders（非当前）
@@ -1023,5 +1053,47 @@ mod tests {
                 "关非当前 tab 不应动当前目标"
             );
         });
+    }
+
+    /// C3：源目标进入洞察先整页渲染探查确认窗口，确认后关闭并进入取样加载态。
+    #[gpui_kit::test]
+    fn source_target_renders_probe_dialog_until_confirmed(cx: &mut TestAppContext) {
+        use gpui_kit::test::TestWindowExt as _;
+        use gpui_kit::{ElementId, SharedString};
+        cx.update(gpui_kit::init);
+        let (panel, cx) = cx.add_window_view(|_window, cx| InsightWorkspacePanel::new(cx));
+
+        cx.update(|window, cx| {
+            panel.update(cx, |p, cx| p.open_target(table_target("orders"), cx));
+            window.draw(cx).clear(cx);
+        });
+        let confirm = cx.update(|window, _| {
+            window.try_find(ElementId::Name(SharedString::from(
+                "insight-probe-confirm",
+            )))
+        });
+        assert!(
+            confirm.is_some(),
+            "源目标进入洞察应先渲染探查确认窗口（含确认探查按钮）"
+        );
+        // 「探查全部」提示区入口也在（决策文档 §5 硬约束）
+        let all = cx.update(|window, _| {
+            window.try_find(ElementId::Name(SharedString::from("insight-probe-all")))
+        });
+        assert!(all.is_some(), "提示区必含「探查全部」入口");
+
+        cx.update(|window, cx| {
+            panel.update(cx, |p, cx| {
+                p.insight_view()
+                    .update(cx, |v, cx| v.confirm_probe_dialog(cx));
+            });
+            window.draw(cx).clear(cx);
+        });
+        let confirm = cx.update(|window, _| {
+            window.try_find(ElementId::Name(SharedString::from(
+                "insight-probe-confirm",
+            )))
+        });
+        assert!(confirm.is_none(), "确认探查后确认窗口应关闭并进入取数");
     }
 }

@@ -59,9 +59,9 @@ impl super::InsightWorkspacePanel {
             })
             .label(if is_full { "取样统计" } else { "全量统计" })
             .tooltip(if is_full {
-                "切回取样口径（500 行）"
+                "切取样档：对评估全表的查询级过滤现算（行 + 字段，不重建）"
             } else {
-                "大表默认取样 500 行；全量需手动触发（可能较慢）"
+                "全量 = 评估确认窗口生成的表（进入 EDA 自动评估全表）"
             })
             .disabled(!can_switch)
             .on_click({

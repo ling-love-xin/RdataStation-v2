@@ -18,6 +18,10 @@ impl super::InsightWorkspacePanel {
         empty_icon: Pixels,
         ring_px: Pixels,
     ) -> Div {
+        // 探查确认窗口优先（C3：源目标进入洞察先定数据量与列；确认前不渲染旧载荷）
+        if let Some(dialog) = self.view.read(cx).probe_dialog().cloned() {
+            return self.render_probe_dialog(window, cx, &dialog, theme);
+        }
         if let InsightPanelState::Error { message, retryable } = self.view.read(cx).state() {
             // 错误态重试按钮挂在画像实体上（reload 走 view 的取数链）
             return error_block(message, *retryable, self.view.clone(), theme, inline_icon);

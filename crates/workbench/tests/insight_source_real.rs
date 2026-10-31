@@ -150,7 +150,7 @@ fn source_sampling_reaches_a_column_profile_on_every_configured_database() {
             format!("SELECT * FROM {table}"),
             format!("probe.{table}"),
         );
-        let amount = InsightService::profile_source_column(None, &source, "amount", false);
+        let amount = InsightService::profile_source_column(None, &source, "amount", &insight::model::ProbeConfig::sample_default());
         match amount {
             Ok((temp_table, profile)) => {
                 eprintln!(
@@ -180,7 +180,7 @@ fn source_sampling_reaches_a_column_profile_on_every_configured_database() {
         }
 
         // 有 NULL 的列：空值率要真算出来（不是「零行」的假象）
-        match InsightService::profile_source_column(None, &source, "note", false) {
+        match InsightService::profile_source_column(None, &source, "note", &insight::model::ProbeConfig::sample_default()) {
             Ok((_, profile)) => {
                 if profile.total_count != 3 || profile.null_count != 1 {
                     failures.push(format!(
@@ -193,7 +193,7 @@ fn source_sampling_reaches_a_column_profile_on_every_configured_database() {
         }
 
         // 表探查：同一份样本上逐列内省
-        match InsightService::profile_source_table(&source, &table, false) {
+        match InsightService::profile_source_table(&source, &table, &insight::model::ProbeConfig::sample_default()) {
             Ok((_, view)) => {
                 eprintln!(
                     "✅ {}：表探查 {} 行 {} 列",
@@ -332,7 +332,7 @@ fn extension_provided_source_is_analyzable() {
         format!("oracle.{TABLE}"),
     );
 
-    let outcome = InsightService::profile_source_column(None, &source, "amount", false);
+    let outcome = InsightService::profile_source_column(None, &source, "amount", &insight::model::ProbeConfig::sample_default());
     // 凭据 / 网络问题要看得到原因，不要变成一个光秃秃的 panic
     let (temp_table, view) = match outcome {
         Ok(pair) => pair,
@@ -351,7 +351,7 @@ fn extension_provided_source_is_analyzable() {
     assert_eq!(view.kind, ColumnKind::Numeric, "NUMBER(10,2) 应判数值列");
 
     let (_, table_view) =
-        InsightService::profile_source_table(&source, TABLE, false).expect("Oracle 表探查");
+        InsightService::profile_source_table(&source, TABLE, &insight::model::ProbeConfig::sample_default()).expect("Oracle 表探查");
     assert_eq!(table_view.row_count, 3);
     assert_eq!(table_view.columns.len(), 3, "id / amount / note 三列");
 

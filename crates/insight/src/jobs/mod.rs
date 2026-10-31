@@ -70,8 +70,9 @@ pub fn handle_event(
     cx: &mut App,
 ) {
     match event {
-        InsightEvent::ProfileRequested { target } => {
-            let Some(request) = ProfileRequest::of(target) else {
+        InsightEvent::ProfileRequested { target, config } => {
+            // 探查配置由确认窗口（C3）携带；None = 默认取样
+            let Some(request) = ProfileRequest::of_with_config(target, config.clone()) else {
                 return;
             };
             request_profile(view, project_root, request, cx);
@@ -84,8 +85,17 @@ pub fn handle_event(
             request_profile(view, project_root, request, cx);
         }
         // 全量确认请求由宿主侧（`components::insight_actions`）弹窗后转
-        // `confirm_full` → `FullProfileRequested`；本取数链不直接处理。
+        // `confirm_full` →（Q2 定稿）切全量口径 + 触发评估；本取数链不直接处理。
         InsightEvent::FullProfileConfirmRequested { .. } => {}
+        // 取样档（Q2 / C7）：对当前评估全表做查询级过滤现算 + 迷你统计回填。
+        // 列清单（名称 + 类型族）在接缝后台现读——与评估同口径，不持过期列名。
+        InsightEvent::SampleInsightRequested { temp_table } => {
+            request_sample_mini_stats(view, temp_table.clone(), cx);
+        }
+        // 探查确认窗口「列」块的候选列：轻量内省源查询列结构（失败保持全部列）
+        InsightEvent::ProbeColumnsRequested { source } => {
+            request_probe_columns(view, source.clone(), cx);
+        }
         InsightEvent::TableEvaluateRequested {
             temp_table,
             table_name,
@@ -96,6 +106,10 @@ pub fn handle_event(
             table_name.clone(),
             cx,
         ),
+        InsightEvent::ColumnEvaluateRequested {
+            temp_table,
+            column,
+        } => request_column_evaluation(view, project_root, temp_table.clone(), column.clone(), cx),
         InsightEvent::MultiColumnRequested {
             temp_table,
             table_name,
@@ -288,7 +302,7 @@ mod tests {
             Some(ProfileRequest::SourceColumn {
                 source: source.clone(),
                 column: "amount".into(),
-                full: false,
+                config: crate::model::ProbeConfig::sample_default(),
             }),
             "源列目标要走「取样 + 画像」那条路"
         );
@@ -302,8 +316,29 @@ mod tests {
             Some(ProfileRequest::SourceTable {
                 source,
                 table_name: "orders".into(),
-                full: false,
+                config: crate::model::ProbeConfig::sample_default(),
             })
+        );
+    }
+
+    /// 全量口径：`of_full` 解析出不带 LIMIT 的探查配置（用户手动切换全量）。
+    #[test]
+    fn full_scope_maps_to_a_full_config() {
+        let source =
+            crate::model::SampleSource::new("G_1", "SELECT * FROM `shop`.`orders`", "shop.orders");
+        let table = InsightTarget::SourceTable {
+            source,
+            table_name: "orders".into(),
+        };
+        let request = ProfileRequest::of_full(&table).expect("源表目标应能解析");
+        let ProfileRequest::SourceTable { config, .. } = &request else {
+            panic!("应为源表请求");
+        };
+        assert!(config.is_full(), "of_full 应带全量配置");
+        assert_eq!(
+            request.config().expect("源目标必有配置"),
+            &crate::model::ProbeConfig::full(),
+            "of_full 的配置即全量"
         );
     }
 
@@ -339,7 +374,8 @@ mod tests {
             .expect("插数据");
     }
 
-    /// 表目标 → 后台内省 → 面板拿到列清单（走真实接线）
+    /// 表目标 → 后台内省 → 面板拿到列清单，**并自动续跑评估全表**（Q1：
+    /// 进入 EDA 即评估确认窗口生成表的全部信息）。
     #[gpui_kit::test]
     fn attach_turns_a_table_request_into_a_profile(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
@@ -381,14 +417,181 @@ mod tests {
             assert_eq!(table.row_count, 3);
             assert_eq!(table.columns.len(), 3);
             assert_eq!(table.columns[0].kind, crate::model::ColumnKind::Numeric);
-            // 探查阶段只回填缺失率 / 唯一率摘要（一次聚合查询）；列级明细（直方图 /
-            // 样本 / 分布）等用户点「评估全表」才逐列串行跑。
+            // Q1 自动评估：探查回填后无需用户点「评估全表」，逐列明细直接续算完成
             assert!(
-                table.columns.iter().all(|c| {
-                    c.stats_detail.is_none() && c.histogram.is_none() && c.sample_values.is_empty()
-                }),
-                "只是探查，不跑列级明细：直方图 / 样本 / 分布得等用户点「评估全表」"
+                table.columns.iter().all(|c| c.stats_detail.is_some()),
+                "探查后应自动进入评估全表并回填列级明细"
             );
+            assert!(
+                table.progress.is_none(),
+                "评估完成后进度行应清除（回到已评估稳态）"
+            );
+        });
+    }
+
+    /// 取样档迷你统计（Q2 / C7）：对评估全表查询级过滤现算，逐列回填 `mini_stats`
+    /// （数值直方图 / 文本 Top3 / 布尔占比），且**不覆盖评估产物**（stats_detail 保留）。
+    #[gpui_kit::test]
+    fn sample_insight_fills_mini_stats_without_touching_eval(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        seed_probe_table(
+            "t_insight_jobs_mini",
+            "id INTEGER, note VARCHAR, ok BOOLEAN",
+            "VALUES (1, 'a', true), (2, 'b', false), (3, 'c', true), (4, 'a', true), (5, 'b', NULL)",
+        );
+
+        let (host, panel, _sub) = cx.update(|cx| {
+            let host = cx.new(TestHost::new);
+            let panel = cx.new(InsightView::new);
+            let sub = host.update(cx, |_host, host_cx| attach(&panel, host_cx, || None));
+            (host, panel, sub)
+        });
+        let _host = host;
+
+        // 探查 + 自动评估（#23）：建表、回填 profile、列明细齐全
+        cx.update(|cx| {
+            panel.update(cx, |panel, cx| {
+                panel.set_target(
+                    InsightTarget::Table {
+                        temp_table: "t_insight_jobs_mini".into(),
+                        table_name: "orders".into(),
+                    },
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+
+        // 切取样档：对当前评估全表做查询级过滤现算
+        cx.update(|cx| {
+            panel.update(cx, |panel, cx| panel.request_sample(cx));
+        });
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            let table = panel
+                .read(cx)
+                .data()
+                .table
+                .as_ref()
+                .expect("取样档不应清空画像");
+            let id = table
+                .columns
+                .iter()
+                .find(|c| c.name == "id")
+                .expect("id 列应存在");
+            let id_mini = id.mini_stats.as_ref();
+            assert!(
+                matches!(
+                    id_mini,
+                    Some(crate::model::ColumnMiniStats::Numeric(bins))
+                        if bins.len() <= 8
+                ),
+                "数值列应有 ≤8 柱迷你直方图"
+            );
+            assert!(
+                id.stats_detail.is_some(),
+                "取样档不得覆盖评估产物（stats_detail 保留）"
+            );
+            let note = table
+                .columns
+                .iter()
+                .find(|c| c.name == "note")
+                .expect("note 列应存在");
+            assert!(
+                matches!(
+                    note.mini_stats.as_ref(),
+                    Some(crate::model::ColumnMiniStats::Frequencies(_))
+                ),
+                "文本列应有 Top 值频次迷你统计"
+            );
+            let ok = table
+                .columns
+                .iter()
+                .find(|c| c.name == "ok")
+                .expect("ok 列应存在");
+            assert!(
+                matches!(
+                    ok.mini_stats.as_ref(),
+                    Some(crate::model::ColumnMiniStats::Boolean { .. })
+                ),
+                "布尔列应有真值占比迷你统计"
+            );
+        });
+    }
+
+    /// C5 单列补算：中断列（灰态）走「补算」入口续跑单列明细，
+    /// 回填后清除该列中断标记；其它列不动。
+    #[gpui_kit::test]
+    fn column_evaluation_backfill_clears_interrupted_flag(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        seed_probe_table(
+            "t_insight_jobs_backfill",
+            "id INTEGER, note VARCHAR",
+            "VALUES (1, 'a'), (2, 'b')",
+        );
+
+        let (host, panel, _sub) = cx.update(|cx| {
+            let host = cx.new(TestHost::new);
+            let panel = cx.new(InsightView::new);
+            let sub = host.update(cx, |_host, host_cx| attach(&panel, host_cx, || None));
+            (host, panel, sub)
+        });
+        let _host = host;
+
+        // 探查 + 自动评估完成（全列明细齐全）
+        cx.update(|cx| {
+            panel.update(cx, |panel, cx| {
+                panel.set_target(
+                    InsightTarget::Table {
+                        temp_table: "t_insight_jobs_backfill".into(),
+                        table_name: "orders".into(),
+                    },
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+
+        // 模拟中断：把 note 列改回未完成 + 灰态（评估取消后 jobs 回填的形态）
+        cx.update(|cx| {
+            panel.update(cx, |panel, _| {
+                let mut profile = panel
+                    .data
+                    .table
+                    .clone()
+                    .expect("探查后应有画像");
+                if let Some(col) = profile.columns.iter_mut().find(|c| c.name == "note") {
+                    col.stats_detail = None;
+                    col.interrupted = true;
+                }
+                panel.data.table = Some(profile);
+            });
+        });
+
+        // 补算 note 列（灰态卡的「补算」入口 → ColumnEvaluateRequested）
+        cx.update(|cx| {
+            panel.update(cx, |panel, cx| {
+                panel.request_column_evaluation(
+                    "t_insight_jobs_backfill".into(),
+                    "note".into(),
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            let table = panel.read(cx).data().table.as_ref().expect("画像应保留");
+            let note = table
+                .columns
+                .iter()
+                .find(|c| c.name == "note")
+                .expect("note 列应存在");
+            assert!(note.stats_detail.is_some(), "补算应回填 note 列明细");
+            assert!(!note.interrupted, "补算成功应清除中断标记");
+            let id = table.columns.iter().find(|c| c.name == "id").unwrap();
+            assert!(!id.interrupted, "其它列不得被补算影响");
         });
     }
 

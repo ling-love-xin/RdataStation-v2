@@ -10,19 +10,22 @@ impl InsightService {
     /// 「凡能喂给 DuckDB 的数据都能洞察」的落点：导航树 / 分析存档 / 草稿箱 /
     /// 编辑器结果集都只需给出「连接 + 只读查询 + 标签」，其余在这里完成。
     ///
+    /// `config` 是确认窗口的探查配置（数据量形态 / 采样方式 / 过滤 / 种子），
+    /// 见 [`crate::model::ProbeConfig`]。
+    ///
     /// 返回样本表名是必需的：面板保存快照 / 开多列 / 下钻要接着用**同一份样本**。
     /// 阻塞（要跑源库查询 + DuckDB 分析），调用方负责放后台。
     pub fn profile_source_column(
         project_root: Option<&Path>,
         source: &crate::model::SampleSource,
         column_name: &str,
-        full: bool,
+        config: &crate::model::ProbeConfig,
     ) -> Result<(String, ColumnProfileView), CoreError> {
         block_on(persistence::profile_source_column(
             project_root,
             source,
             column_name,
-            full,
+            config,
         ))
     }
 
@@ -30,9 +33,9 @@ impl InsightService {
     pub fn profile_source_table(
         source: &crate::model::SampleSource,
         table_name: &str,
-        full: bool,
+        config: &crate::model::ProbeConfig,
     ) -> Result<(String, TableProfileView), CoreError> {
-        block_on(persistence::profile_source_table(source, table_name, full))
+        block_on(persistence::profile_source_table(source, table_name, config))
     }
 
     // ==================== 表探查（Phase 3.1） ====================

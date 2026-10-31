@@ -30,6 +30,7 @@ mod profile;
 mod multi;
 mod history;
 mod column_profile;
+mod probe;
 
 // 聚合 re-export：保持 `crate::model::*` 路径与 lib.rs 的 re-export 不变
 pub use sets::*;
@@ -40,6 +41,7 @@ pub use profile::*;
 pub use multi::*;
 pub use history::*;
 pub use column_profile::*;
+pub use probe::*;
 // ==================== 阈值（原型 §3.1） ====================
 
 /// 空值率超过此值：数值行转 warning 强调
