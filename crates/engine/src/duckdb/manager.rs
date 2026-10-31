@@ -118,6 +118,9 @@ impl DuckDBManager {
     ) -> Result<Arc<Mutex<duckdb::Connection>>, CoreError> {
         let path = path.as_ref();
         Self::ensure_parent_dir(path)?;
+        // 格式守门（2026-11-01）：DuckDB 内置 SQLite 存储后端，SQLite 格式的同名文件
+        // 照样能被 `Connection::open` 打开。这里先断格式，别把错格式的库接持久连接。
+        shared::duckdb_open::assert_native_format(path)?;
 
         let conn = Connection::open(path).map_err(|e| {
             CoreError::common(CommonError::General(format!(
@@ -346,6 +349,10 @@ impl DuckDBManager {
 
         // 确保父目录存在
         Self::ensure_parent_dir(path)?;
+
+        // 格式守门（2026-11-01）：见 `set_persistent` 的同名注释。
+        // `DuckDBManager::open` 是生产主路径（读连接池也由它派生），闸门放在这里即覆盖全部。
+        shared::duckdb_open::assert_native_format(path)?;
 
         // 创建唯一连接（Windows 平台限制：duckdb-rs bundled 同进程对同一
         // DuckDB 文件仅允许一个连接句柄，多连接在 Windows 报文件被占用；

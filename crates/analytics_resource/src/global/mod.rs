@@ -269,6 +269,15 @@ impl GlobalInstanceStore {
                     reason: e.to_string(),
                 })
             })?;
+        // 格式守门（2026-11-01）：DuckDB 能打开 SQLite 格式的同名文件（内置 SQLite 存储后端），
+        // 所以必须先断格式，不能只靠 open 成功与否判断。
+        shared::duckdb_open::assert_native_format(&duckdb_path).map_err(|e| {
+            CoreError::storage(StorageError::Persistence {
+                store: "analytics_duckdb_global".to_string(),
+                operation: "assert_native_format".to_string(),
+                reason: e.to_string(),
+            })
+        })?;
         let duckdb = duckdb::Connection::open(&duckdb_path).map_err(|e| {
             CoreError::storage(StorageError::Persistence {
                 store: "analytics_duckdb_global".to_string(),
@@ -837,6 +846,14 @@ impl GlobalInstanceStore {
         let mut guard = self.duckdb.lock().await;
         if guard.is_none() {
             let path = engine::migration::get_global_duckdb_path()?;
+            // 格式守门（2026-11-01）：同上——先看魔数再看能不能连。
+            shared::duckdb_open::assert_native_format(&path).map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "analytics_duckdb_global".to_string(),
+                    operation: "assert_native_format".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
             *guard = Some(duckdb::Connection::open(&path).map_err(|e| {
                 CoreError::storage(StorageError::Persistence {
                     store: "analytics_duckdb_global".to_string(),

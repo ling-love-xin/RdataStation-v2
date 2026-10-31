@@ -830,13 +830,9 @@ mod tests {
         // 格式断言：必须是 DuckDB **原生**格式。只断言「能被 duckdb::Connection 打开」
         // 是无效的——DuckDB 内置 SQLite 存储后端（`duckdb_databases().type = 'sqlite'`），
         // SQLite 格式的同名文件同样能打开，断言会假通过（该缺陷曾据此逃过整套测试）。
-        let head = std::fs::read(&analytics_path)
-            .map_err(|e| persistence::io_to_core_error(e, &analytics_path, "read header"))?;
-        assert!(
-            head.len() >= 12 && &head[8..12] == b"DUCK",
-            "analytics.duckdb 必须是 DuckDB 原生格式（魔数在偏移 8），实际头部: {:?}",
-            &head[..head.len().min(16)]
-        );
+        // 判定口径收敛到 `shared::duckdb_open::assert_native_format`（生产路径同一个函数）。
+        shared::duckdb_open::assert_native_format(&analytics_path)
+            .expect("analytics.duckdb 必须是 DuckDB 原生格式");
         let dconn = duckdb::Connection::open(&analytics_path).map_err(|e| {
             persistence::persistence_to_core_error("analytics.duckdb", "open", &e.to_string())
         })?;

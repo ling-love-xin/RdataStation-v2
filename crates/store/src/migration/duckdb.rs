@@ -186,10 +186,10 @@ mod tests {
         let applied = migrate_at_path(&path, MigrationType::ProjectAnalysis).expect("迁移失败");
         assert!(applied >= 1, "首次至少应用 1 条迁移，实际 {applied}");
 
-        let head = std::fs::read(&path).expect("读分析库");
-        assert!(head.len() >= 12, "文件过小：{} 字节", head.len());
-        // DuckDB 存储头：前 8 字节校验和，随后 4 字节魔数 "DUCK"。
-        assert_eq!(&head[8..12], b"DUCK", "分析库必须是 DuckDB 原生格式");
+        // 判定口径收敛到 `shared::duckdb_open::assert_native_format`：
+        // DuckDB 存储头是「前 8 字节校验和 + 偏移 8 处 4 字节魔数 DUCK」，
+        // 这里只负责调它，生产打开路径用的是同一个函数。
+        shared::duckdb_open::assert_native_format(&path).expect("分析库必须是 DuckDB 原生格式");
     }
 
     /// 存储后端自报 duckdb —— 与上面的魔数断言互为佐证。
