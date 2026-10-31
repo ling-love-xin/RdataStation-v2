@@ -13,9 +13,13 @@
 //! 别的工具写入），直接覆盖就是**静默丢数据**。因此记录读取时的 mtime，保存前比对，
 //! 由调用方决定是否让用户确认（A9 的三态分支）。
 
+use std::fs;
 use std::fmt;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+
+use uuid::Uuid;
 
 use crate::model::{DocumentId, EditorMode, ReadOnly};
 use crate::service::OpenOutcome;
@@ -78,17 +82,71 @@ pub fn write(path: &Path, content: &str) -> Result<(), PersistError> {
     write_with_format(path, content, crate::encoding::SaveFormat::default())
 }
 
-/// 写文件：换行先规范化，再按编码编码（[`crate::encoding::encode`] 的最后一步落盘）
+/// 写文件：换行先规范化，再按编码编码（[`crate::encoding::encode`] 的最后一步落盘），
+/// 然后**安全替换**目标文件（见 [`replace_file`]）。
+///
+/// 安全策略：新内容先完整写入「同目录临时文件」，成功后才替换目标；因此写入中途失败
+/// （磁盘满 / 权限不足 / 断电）**不会破坏原文件**——原内容直到新内容落盘成功才被替换。
 pub fn write_with_format(
     path: &Path,
     content: &str,
     format: crate::encoding::SaveFormat,
 ) -> Result<(), PersistError> {
     let bytes = crate::encoding::encode(content, format);
-    std::fs::write(path, bytes).map_err(|error| PersistError::Io {
+    // 确保父目录存在（另存为可能指向尚未创建的子目录）
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| to_io(parent, error))?;
+    }
+    // 临时文件放在目标同目录：保证与目标文件同一文件系统，`rename` 才是 O(1) 的替换。
+    let tmp = path.with_file_name(format!("{}.tmp-{}", base_name(path), Uuid::new_v4()));
+    {
+        let mut file = fs::File::create(&tmp).map_err(|error| to_io(path, error))?;
+        file.write_all(&bytes).map_err(|error| to_io(path, error))?;
+        // 把新内容刷到磁盘再替换：避免「rename 成功但数据还在页缓存、随即断电」丢新内容。
+        file.sync_all().map_err(|error| to_io(path, error))?;
+    }
+    replace_file(&tmp, path)
+}
+
+/// 取文件名基底（无扩展名语义要求，仅用于拼临时 / 备份文件名）
+fn base_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_string())
+}
+
+/// 把临时文件替换成目标文件，尽量保住原内容。
+///
+/// - Unix：`fs::rename` 是原子替换语义（覆盖已存在文件）。
+/// - Windows：std `fs::rename` **不能覆盖已存在文件**，故走「原文件 → `.bak` 兜底 →
+///   临时文件 → 目标」的备份式替换；任一步失败都把原内容还原回去，绝不静默丢数据。
+fn replace_file(tmp: &Path, target: &Path) -> Result<(), PersistError> {
+    match fs::rename(tmp, target) {
+        Ok(()) => Ok(()),
+        Err(_) if target.exists() => {
+            let bak = target.with_file_name(format!("{}.bak", base_name(target)));
+            // 先把原内容挪到 .bak 兜底
+            fs::rename(target, &bak).map_err(|error| to_io(target, error))?;
+            if let Err(rename_err) = fs::rename(tmp, target) {
+                // 替换失败：把 .bak 还原回目标，尽量保住原内容
+                let _ = fs::rename(&bak, target);
+                let _ = fs::remove_file(tmp);
+                return Err(to_io(target, rename_err));
+            }
+            // 替换成功：清掉临时备份（best-effort，留着也不影响正确性）
+            let _ = fs::remove_file(&bak);
+            Ok(())
+        }
+        Err(error) => Err(to_io(target, error)),
+    }
+}
+
+/// 统一把 `io::Error` 包成带路径的 [`PersistError::Io`]（路径用用户关心的目标文件）
+fn to_io(path: &Path, error: std::io::Error) -> PersistError {
+    PersistError::Io {
         path: path.to_path_buf(),
         message: error.to_string(),
-    })
+    }
 }
 
 /// 文件的修改时间（读不到返回 `None`：文件不存在 / 无权限）
