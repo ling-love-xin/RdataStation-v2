@@ -160,7 +160,7 @@ SQLite 保存 DuckDB 表/视图的注册信息（名称/来源/版本/血缘）�
 | 层 | 承载 | 设计时延 | 代码 | 现状［验］ |
 |---|---|---|---|---|
 | **L1** | 进程内内存元数据缓存 | <0.1ms | `engine::cache::{MetadataCache, CacheManager}` | ✅ **已接线**（2026-09-17）：读命中即返回、L2 命中与实时内省均回填、`fresh` 跳过并清空；**大 schema（>500 对象）有意不进 L1**（2026-09-18） |
-| **L2** | 每连接 SQLite（`conn_{id}.sqlite`） | <5ms | `engine::persistence::metadata_cache` + `database::cache::NavCache` | ✅ 活（schema/表/视图/列 4 类）；其余 ~72 方法零调用 |
+| **L2** | 每连接 SQLite（`conn_{id}.sqlite`） | <5ms | `engine::persistence::metadata_cache` + `database::cache::NavCache` | ✅ 活（schema/表/视图/列 4 类）；**另有落表未消费 5 类**（indexes / foreign_keys / routines / sequences / triggers，2026-11-01 复核）；其余 ~72 方法零调用 |
 | **L3** | **实时内省（不是缓存）** | 10~500ms | `database::MetadataService` → 驱动 `MetadataBrowser` | ✅ 活；L2 未命中时的事实源 |
 
 **读取时序［档］**：展开节点 → L1 → L2 → L3 → 成功后异步回写 L2 + L1 → 渲染。
@@ -297,14 +297,14 @@ NavView → nav_jobs（后台线程 + 独立 tokio 运行时）→ NavigatorServ
 | 模块 | 一句话 | 入口 / 端口 | 状态［验］ |
 |---|---|---|---|
 | **M1 project** | 一实例一项目；名册在全局库、本体在 `.RSmeta`；OS 字节锁排他 | `project::service::*` + `ProjectUiHost` | 主线活；`project.json` 非原子写、render 期查库仍在 |
-| **M2 engine** | 双引擎基础设施 + 统一数据访问层 | `SqlService` / `ConnectionManager` / `DuckDBManager` / `MetadataCacheManager` | 缓存读写面已通（L1 **9 组 key** / L2 **7 类对象**，2026-09-19 接线）；仍有零调用项，逐项见 `data-layer-wiring-matrix.md` §2.2 / §7 |
+| **M2 engine** | 双引擎基础设施 + 统一数据访问层 | `SqlService` / `ConnectionManager` / `DuckDBManager` / `MetadataCacheManager` | 缓存读写面已通（L1 **9 组 key** / L2 **落表 9 类对象、读路径只消费 4 类**，2026-09-19 接线，2026-11-01 复核）；仍有零调用项，逐项见 `data-layer-wiring-matrix.md` §2.2 / §7 |
 | **M3 connection** | 传输层：协议链 + URL + DuckDB Secret | `chain::apply_network_method` / `TunnelRegistry` / `SecretManager` | 编排在 workbench；SSH 主机密钥默认放行、Secret 无门控不清理 |
 | **M4 database** | 元数据导航 + 属性面板 | `MetadataService` / `NavigatorService` / `NavCache` | 最健康；`delete_schema` / `prune_schema` 已修 |
 | **M5 scratchpad** | 文件语义草稿区 + 项目级回收站（按来源只看自己的） | `ScratchpadStore` / `jobs` / `ScratchpadHost` | 活；`config.json` 非原子写、删除/改名不查编辑器脏状态；回收站类型已上提到 `engine::persistence::trash`（P0.8） |
-| **M6 analytics_resource** | 只读、有版本、带来源的正式存档 | `ArchiveService` / `PayloadStore` / `IndexRepair` / `ResourcesHost` | 闭环完整 + 104 单测；回收站（移入 / 还原 / 永久删除 / 清空 + 对话框）已落，共用 `engine::persistence::trash` |
+| **M6 analytics_resource** | 只读、有版本、带来源的正式存档 | `ArchiveService` / `PayloadStore` / `IndexRepair` / `ResourcesHost` | 闭环完整 + 104 单测（2026-11-01 复核：**168 条** = `#[test]` 106 + `#[tokio::test]` 62）；回收站（移入 / 还原 / 永久删除 / 清空 + 对话框）已落，共用 `engine::persistence::trash` |
 | **M7 mock** | 输入列定义 → 输出可信测试数据（不读真实数据） | `MockEngine` / `MockHost` | 生成/预览/落库活；策略层在 workbench（与 `mock/history.rs` 口径相反） |
 | **M8 insight** | DuckDB 为中心的画像 + TOML 规则引擎 | `InsightService` / `InsightView` | 面板路径按 D29 只用 DuckDB 临时表；源库侧 3 函数是登记在册欠账（已留痕） |
-| **M9 plugin** | WASM / Sidecar 宿主 | 无 | ❌ 整包无调用方；两个 0 字节模块；`SidecarClient` 判据反了 |
+| **M9 plugin** | WASM / Sidecar 宿主 | **有**调用方：`app` / `workbench` 均依赖（`plugin.workspace = true`），`crates/plugin/src` 35 文件 / 17,493 行 | 🟡 旧结论「整包无调用方」已于 2026-11-01 证伪；`SidecarClient` 判据写反的历史缺陷**已修**（载体已删）。待办：Arrow 兼容子集无守门、用户指南错误码表缺 `-32009` |
 | **editor** | 内核 + 三档能力（文本 ⊂ SQL ⊂ 分析） | `EditorShared` + `QueryRunner` | 执行/结果/历史/高亮活；补全未做；`execution` panic 后永久 busy |
 | **settings** | 偏好登记 + 原子持久化 + 设置页 | `SettingsService` / `registry::REGISTRY` | 活（10 项）；`effect` 字段无人消费、跨进程写无锁 |
 
@@ -314,7 +314,7 @@ NavView → nav_jobs（后台线程 + 独立 tokio 运行时）→ NavigatorServ
 
 - **错误**：`shared::error::CoreError` 六域（Common / Connection / Database / Query / Storage / Transaction）+ 工厂函数。缺口：写路径 `let _ =` 吞错。
 - **日志［档］**：一条 tracing 事件三出口（stderr / 按天文件 / `app_logs` 异步批量），三道闸 + 两出口脱敏（模式不跨行）；「日志装配必须在全局库之后」是硬约束。
-- **异步/线程**：tokio 全域；导航侧有进程级桥接运行时（`nav_runtime::bridge_runtime`），但 workbench 另有 **10 处 `Runtime::new()`**。
+- **异步/线程**：tokio 全域；导航侧有进程级桥接运行时（`nav_runtime::bridge_runtime`），但 workbench 另有 **10 处 `Runtime::new()`**（2026-11-01 复核：该数字吻合；**全仓产品代码共 41 处**，集中在 `connection_dialog` 20 处——本文原口径只覆盖 workbench，不代表全仓）。
 - **连接**：`ConnectionManager`（连接池 + 隧道注册表 + 空闲回收）；文件型库同 URL 多 id 走**别名**（同一 `Arc<dyn Database>`，文件只开一次）。
 - **DuckDB 单例**：内存闸 2GB、溢写口 `<RDS_HOME>/tmp`、`max_temp_directory_size` 10GB；临时表按来源前缀管理。
 - **依赖治理［档］**：版本唯一入口在根 `[workspace.dependencies]`；四件精确锁定（gpui-kit 家族 / specta / sqlglot-rust / arrow 跟随 duckdb）；DuckDB 动态链接 `third_party/duckdb/1.5.5`，**crate 版本与库版本必须成对升级**。
@@ -347,7 +347,7 @@ NavView → nav_jobs（后台线程 + 独立 tokio 运行时）→ NavigatorServ
 |---|---|---|---|
 | 驱动统一抽象 | 一站式接库 | ✅ 6 驱动全覆盖 | `native/*.rs` |
 | 元数据统一闸门 | 唯一入口 | ✅ 但双通道并存 | `metadata_service.rs` |
-| L2 元数据缓存 | 连接级落盘缓存 | ✅ 4 类对象 | `database/src/cache.rs:13` |
+| L2 元数据缓存 | 连接级落盘缓存 | ✅ **已消费** 4 类（schema/表/视图/列）；落表共 9 类，其余 5 类有写无读（2026-11-01 复核） | `database/src/cache.rs:13` |
 | L1 内存缓存 | 命中 <0.1ms | ✅ 已接线（读/回填/刷新清空） | `cache/metadata_cache.rs` + `navigator_service.rs` |
 | L2 连接复用 | 每缓存文件一个池 | ✅ 已接线（建池时迁移 + 预热） | `persistence/metadata_cache_pool.rs` |
 | 增量同步 / FTS / 分块索引 | 大库体验 | ⚠️ 分块索引**数据侧已通**（UI 待接）；FTS / 增量同步仍零调用（有意不补，等消费者） | `persistence/metadata_cache.rs` |

@@ -293,7 +293,7 @@ manifest、permission 四个子系统；驱动侧还有 `engine/src/driver/wasm/
 
 | 位置 | 理由 |
 | --- | --- |
-| `connection/src/known_hosts.rs:57`（`~/.ssh/known_hosts`） | 跨应用共用的用户资产；需要时用 `RDS_KNOWN_HOSTS` 覆盖 |
+| `connection/src/known_hosts.rs:92`（`~/.ssh/known_hosts`；文档原记 `:57`） | 跨应用共用的用户资产；需要时用 `RDS_KNOWN_HOSTS` 覆盖 —— ⚠️ 2026-11-01 复核：该环境变量**全仓零引用**，即这条覆盖尚未实现（文档承诺了代码里没有的能力） |
 | `crates/plugin/*`、`engine/src/driver/loader.rs:135`（插件目录 / wasm 缓存 / sidecar） | **三期 P3-a**，见 `../plugin/plugin-architecture.md` §6。`loader.rs:177` 的 `~/.rdatastation/jdbc-drivers` 同族（空实现） |
 | `<用户项目>/{project.db, analytics.duckdb}`（M1 项目会话） | 用户资产，留在用户工程目录 |
 
