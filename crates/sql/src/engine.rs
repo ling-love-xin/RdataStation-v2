@@ -175,8 +175,16 @@ impl SqlEngine {
     /// 参数：
     /// - `table`: 目标表名
     /// - `columns`: 列名列表
-    /// - `values`: 值矩阵，每行为一个 `Vec<String>`，`"NULL"` 字符串表示 NULL 值
-    pub fn build_insert(table: &str, columns: &[String], values: &[Vec<String>]) -> String {
+    /// - `values`: 值矩阵，每行为一个 `Vec<Option<&str>>`，`None` 表示 SQL NULL
+    ///
+    /// 为什么不用 `"NULL"` 字符串表示空值：那样会把「值恰好是 `NULL` 四个字母」的一格
+    /// 静默吞成空值。空值与否是**两个类型**（有值 / 无值），不是某个文本取值，见
+    /// [`builder::build_insert`]。
+    pub fn build_insert(
+        table: &str,
+        columns: &[String],
+        values: &[Vec<Option<&str>>],
+    ) -> String {
         builder::build_insert(table, columns, values)
     }
 

@@ -249,17 +249,19 @@ pub fn build_create_table_as_select(table: &str, source_table: &str) -> String {
     generate(&stmt, Dialect::DuckDb)
 }
 
-pub fn build_insert(table: &str, columns: &[String], values: &[Vec<String>]) -> String {
+/// 值矩阵里「这一格是 SQL NULL」的表示：`None`。
+///
+/// 以前用字符串 `"NULL"` 当哨兵，那意味着**生成出的字面量恰好是 `NULL` 四个字母时会被静默
+/// 吞成空值**（mock 的 `ValueSet` 让用户手填值，`Word` 之类也可能产出它）。值只有两种结局
+/// ——有值的文本与空值——所以用 `Option<&str>` 表示，让类型系统排除这种碰撞。
+pub fn build_insert(table: &str, columns: &[String], values: &[Vec<Option<&str>>]) -> String {
     let all_values: Vec<Vec<Expr>> = values
         .iter()
         .map(|row| {
             row.iter()
-                .map(|v| {
-                    if v == "NULL" {
-                        Expr::Null
-                    } else {
-                        Expr::StringLiteral(v.clone())
-                    }
+                .map(|v| match v {
+                    None => Expr::Null,
+                    Some(text) => Expr::StringLiteral((*text).to_string()),
                 })
                 .collect()
         })
@@ -386,7 +388,7 @@ mod tests {
             build_insert(
                 "users",
                 &["id".to_string(), "name".to_string()],
-                &[vec!["1".to_string(), "Alice".to_string()]]
+                &[vec![Some("1"), Some("Alice")]],
             ),
             "INSERT INTO \"users\" (id, name) VALUES ('1', 'Alice')"
         );
@@ -495,9 +497,21 @@ mod tests {
         let sql = build_insert(
             "users",
             &["id".to_string(), "name".to_string()],
-            &[vec!["1".to_string(), "Alice".to_string()]],
+            &[vec![Some("1"), Some("Alice")]],
         );
         assert!(sql.contains("INSERT"));
         assert!(sql.contains("users"));
+    }
+
+    /// 回归：字面量 `"NULL"` 必须当成普通文本写进 SQL，而不是被吞成空值
+    /// （历史实现用这个字符串当哨兵，`ValueSet` 让用户手填值时正好能撞上）。
+    #[test]
+    fn literal_null_text_is_not_swallowed_as_sql_null() {
+        let sql = build_insert(
+            "t",
+            &["c".to_string()],
+            &[vec![Some("NULL")], vec![None]],
+        );
+        assert_eq!(sql, "INSERT INTO \"t\" (c) VALUES ('NULL'), (NULL)");
     }
 }

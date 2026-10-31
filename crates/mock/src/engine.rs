@@ -138,6 +138,11 @@ impl MockEngine {
                     col.name
                 )));
             }
+            if col.unique {
+                if let Some(reason) = unique_capacity_problem(col, config.row_count) {
+                    return Err(MockError::InvalidColumn(reason));
+                }
+            }
         }
 
         let start = Instant::now();
@@ -194,13 +199,27 @@ impl MockEngine {
             let start_row = batch_idx * BATCH_SIZE as u32;
             let count = std::cmp::min(BATCH_SIZE as u32, config.row_count - start_row);
 
-            let mut all_values: Vec<Vec<String>> = Vec::with_capacity(count as usize);
+            // 每格要么有值（`Some`），要么是 SQL NULL（`None`）。
+            // 不用 `"NULL"` 字符串当哨兵：那样生成器恰好产出这四个字母时会被吞成空值。
+            let mut all_values: Vec<Vec<Option<String>>> = Vec::with_capacity(count as usize);
 
             for row_idx in 0..count {
                 let global_row = start_row + row_idx;
                 let mut row_vals = Vec::with_capacity(config.columns.len());
 
                 for (col_idx, col) in config.columns.iter().enumerate() {
+                    // 空值先定：这一格要写成 NULL 就**不参与**唯一性去重——
+                    // SQL 里多个 NULL 不违反唯一约束；若在取值之后才掷骰子，抽到的那个值
+                    // 会白白占掉一个唯一槽，让后面本可以取到它的行反而生成失败。
+                    let nullable_ratio = config.columns[col_idx].nullable_ratio;
+                    if nullable_ratio > 0.0 {
+                        let rand_val: f64 = (0.0..1.0).fake_with_rng(&mut rng);
+                        if rand_val < nullable_ratio {
+                            row_vals.push(None);
+                            continue;
+                        }
+                    }
+
                     // 跨表引用列：值从父表的主键域里取（域由父列的自增参数与行数算出，不读数据）
                     let domain = col
                         .dependency
@@ -241,21 +260,18 @@ impl MockEngine {
                         }
                     };
 
-                    let nullable_ratio = config.columns[col_idx].nullable_ratio;
-                    if nullable_ratio > 0.0 {
-                        let rand_val: f64 = (0.0..1.0).fake_with_rng(&mut rng);
-                        if rand_val < nullable_ratio {
-                            row_vals.push("NULL".to_string());
-                            continue;
-                        }
-                    }
-                    row_vals.push(value);
+                    row_vals.push(Some(value));
                 }
 
                 all_values.push(row_vals);
             }
 
-            let insert_sql = SqlEngine::build_insert(&table_name, &safe_col_names, &all_values);
+            // 借一层引用交给构造器：`build_insert` 只读取值，不需要所有权。
+            let batch_rows: Vec<Vec<Option<&str>>> = all_values
+                .iter()
+                .map(|row| row.iter().map(|v| v.as_deref()).collect())
+                .collect();
+            let insert_sql = SqlEngine::build_insert(&table_name, &safe_col_names, &batch_rows);
             conn.execute_batch(&insert_sql)?;
             on_progress(batch_idx as usize + 1, total_batches as usize);
         }
@@ -764,7 +780,57 @@ pub fn sanitize_identifier(name: &str) -> String {
 ///
 /// 后果不是「这一次任务失败」：panic 发生在**持有内存库连接锁**期间，锁会被毒化，
 /// 该进程之后每一次生成都报 `poisoned lock`，用户只能重启应用（实测）。
-/// 所以这里是「参数能不能采样」的**唯一闸门**，错误信息要能直接指导用户改哪个字段。
+/// 唯一列的**取值域够不够**：摸不到目标行数就**生成前**报错，不让它跑到半途才失败。
+///
+/// 背景：唯一性靠「抽到一个没出现过的值为止，最多重试 100 次」实现。值域小于行数时这条路
+/// 注定走不通，用户看到的是跑了一会儿（甚至几十万行之后）才弹「无法生成不重复的值」，
+/// 而真正的原因在一开始就摆在那里——不符合本模块一贯的「生成前把关」原则
+/// （见 [`generator_param_problem`]）。
+///
+/// 只判定**能算出有限值域**的生成器，其余取值域连续或极大，不在这里误伤
+/// （万一真撞上，保留运行时重试那条兜底路径）。
+fn unique_capacity_problem(col: &ColumnDef, row_count: u32) -> Option<String> {
+    let capacity: usize = match &col.generator {
+        GeneratorConfig::ValueSet { values } => values.len(),
+        GeneratorConfig::Sequence { values, .. } => values.len(),
+        GeneratorConfig::Weighted { choices } => choices.len(),
+        GeneratorConfig::Constant { .. } => 1,
+        // ratio 为 0 或满时恒取一侧，实际只有一个取值
+        GeneratorConfig::Boolean { ratio } => {
+            if *ratio == 0 || *ratio >= 100 {
+                1
+            } else {
+                2
+            }
+        }
+        GeneratorConfig::Digit => 10,
+        GeneratorConfig::RandomInt { min, max } => {
+            (i64::from(*max) - i64::from(*min) + 1).max(0) as usize
+        }
+        // 其余（含自增、浮点 / 小数、随机的各种文本）取值域足够大或连续
+        _ => return None,
+    };
+
+    // 空值不参与唯一约束（SQL 里多个 NULL 合法），按期望的非空行数算需求。
+    // nullable_ratio 接近 1 时需求趋近于 0——全空列的唯一性天然成立，不能误报。
+    let needed = if col.nullable_ratio >= 1.0 {
+        0usize
+    } else {
+        (f64::from(row_count) * (1.0 - col.nullable_ratio)).ceil() as usize
+    };
+
+    if capacity >= needed {
+        return None;
+    }
+
+    Some(format!(
+        "列 '{}' 勾了唯一，但它的生成器至多产出 {capacity} 个不同取值，不足 {needed} 行——\
+         请放宽生成器的取值域，或降低行数 / 取消唯一",
+        col.name
+    ))
+}
+
+/// 「参数能不能采样」的**唯一闸门**，错误信息要能直接指导用户改哪个字段。
 fn generator_param_problem(generator: &GeneratorConfig) -> Option<String> {
     match generator {
         // ===== 集合类：空集合 / 全零权重（生成期除零或空区间）=====
@@ -1566,6 +1632,77 @@ mod tests {
 
     /// 「不能采样」的参数必须在生成前被拦——它们原本会在工作线程里 panic，
     /// 而 panic 发生在持有内存库连接锁期间，会把整个进程的 mock 生成打坏（实测）。
+    #[test]
+    fn unique_column_with_narrow_domain_is_rejected_upfront() {
+        let col = |generator: GeneratorConfig, nullable_ratio: f64| ColumnDef {
+            name: "c".to_string(),
+            data_type: ColumnDataType::Varchar { length: None },
+            generator,
+            nullable_ratio,
+            unique: true,
+            dependency: None,
+        };
+
+        // 取值集合只有 3 项，却要 1000 行唯一值：必须在生成前就说清楚
+        let problem = unique_capacity_problem(
+            &col(
+                GeneratorConfig::ValueSet {
+                    values: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+                },
+                0.0,
+            ),
+            1000,
+        );
+        let text = problem.expect("值域不足应报错");
+        assert!(text.contains("至多产出 3 个不同取值"), "{text}");
+
+        // Boolean 恒取一侧时只有一个取值
+        assert!(
+            unique_capacity_problem(&col(GeneratorConfig::Boolean { ratio: 0 }, 0.0), 100).is_some()
+        );
+        // RandomInt 的域是 [min, max] 的整数个数
+        assert!(
+            unique_capacity_problem(
+                &col(GeneratorConfig::RandomInt { min: 1, max: 10 }, 0.0),
+                100
+            )
+            .is_some()
+        );
+        // 域正好够：不报
+        assert!(
+            unique_capacity_problem(
+                &col(GeneratorConfig::RandomInt { min: 1, max: 10 }, 0.0),
+                10
+            )
+            .is_none()
+        );
+        // 全空列的唯一性天然成立（多个 NULL 不违反唯一约束），不能误报
+        assert!(
+            unique_capacity_problem(
+                &col(
+                    GeneratorConfig::ValueSet {
+                        values: vec!["a".to_string()],
+                    },
+                    1.0,
+                ),
+                1000,
+            )
+            .is_none()
+        );
+        // 取值域连续 / 极大的生成器不在这里误伤
+        assert!(
+            unique_capacity_problem(&col(GeneratorConfig::RandomFloat { min: 0.0, max: 1.0, precision: 2 }, 0.0), 100_000)
+                .is_none()
+        );
+        assert!(
+            unique_capacity_problem(
+                &col(GeneratorConfig::AutoIncrement { start: 1, step: 1 }, 0.0),
+                100_000,
+            )
+            .is_none()
+        );
+    }
+
     #[test]
     fn generator_params_that_cannot_be_sampled_are_rejected() {
         // 反向区间：实测 `RandomInt { min: 10, max: 5 }` 直接 panic
