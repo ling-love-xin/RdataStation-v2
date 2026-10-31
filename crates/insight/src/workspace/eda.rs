@@ -270,15 +270,92 @@ impl super::InsightWorkspacePanel {
                 })
             });
         let body = self.render_col_card_body(col, &checker, zone, entity, theme, temp_table);
+        // 折叠态迷你分布图（原型 `cc-vis` miniVis，见 insight-eda-prototype.html:653/:758）：
+        // 折叠时显示在列名行下方，展开态隐藏（原型 open 时 cc-vis 为空，完整分布见「分布」区）
+        let mini = if open {
+            None
+        } else {
+            self.render_col_mini_vis(col, theme)
+        };
+        let head_block = div()
+            .v_flex()
+            .w_full()
+            .gap_2()
+            .child(header)
+            .when_some(mini, |this, m| this.child(m));
         Collapsible::new()
             .motion_id(SharedString::from(format!(
                 "insight-ws-col-motion-{}",
                 col.name
             )))
             .open(open)
-            .child(header)
+            .child(head_block)
             .content(body)
             .w_full()
+    }
+
+    /// 列卡折叠态迷你分布图（原型 `miniVis`）：数值列 = 8 柱迷你直方图（flex 柱状，
+    /// 布局非控件，与 `dist_bars` 同一立场）；文本 / 时间 = Top 3 值条；布尔 = 真/假
+    /// 双段条 + 图例。无分布数据（未评估全表 / 类型未识别 / 样本不足）返回 `None`——
+    /// 卡片不显示图（原型无数据时 `miniVis` 返回空串）。
+    fn render_col_mini_vis(&self, col: &TableColumnView, theme: &Theme) -> Option<Div> {
+        let colors = theme.colors;
+        match &col.stats_detail {
+            Some(crate::model::types::ColumnStatsDetail::Numeric(_)) => {
+                let bins = col.histogram.as_ref()?;
+                let max = bins.iter().map(|b| b.count).max().unwrap_or(0).max(1) as f32;
+                let mut bars = div()
+                    .h_flex()
+                    .w_full()
+                    .items_end()
+                    .gap_1()
+                    // 迷你直方图总高 44px（对齐原型 .mini-bar 高度档）
+                    .h(rems(2.75));
+                for bin in bins.iter().take(8) {
+                    // 柱高 = 最小可读 6px + 比例段
+                    let h = rems(0.375 + 2.375 * (bin.count as f32 / max));
+                    bars = bars.child(div().flex_1().rounded_sm().bg(colors.primary).h(h));
+                }
+                Some(bars)
+            }
+            Some(crate::model::types::ColumnStatsDetail::Text(t)) => {
+                mini_freq_rows(&col.name, &t.top_values, theme)
+            }
+            Some(crate::model::types::ColumnStatsDetail::DateTime(d)) => {
+                mini_freq_rows(&col.name, &d.monthly_distribution, theme)
+            }
+            Some(crate::model::types::ColumnStatsDetail::Boolean(b)) => {
+                let t = b.true_ratio.clamp(0.0, 1.0);
+                Some(
+                    div()
+                        .v_flex()
+                        .w_full()
+                        .gap_1()
+                        .child(
+                            div()
+                                .h_flex()
+                                .w_full()
+                                .h(rems(0.375))
+                                .rounded_sm()
+                                .overflow_hidden()
+                                // 真 / 假两段：中性色（primary / muted），不引入「真假=好坏」语义
+                                .child(div().h_full().bg(colors.primary).flex_grow(t as f32))
+                                .child(div().h_full().bg(colors.muted_foreground).flex_grow((1.0 - t) as f32)),
+                        )
+                        .child(
+                            div()
+                                .h_flex()
+                                .w_full()
+                                .gap_2()
+                                .text_xs()
+                                .text_color(colors.muted_foreground)
+                                .child(format!("真 {:.0}%", t * 100.0))
+                                .child(format!("假 {:.0}%", (1.0 - t) * 100.0)),
+                        ),
+                )
+            }
+            _ => None,
+        }
     }
 
     /// 列卡展开体：只看规则开关 + （四区 Tab + 区内容 + 检查器汇总）或检查器列表。
@@ -774,4 +851,44 @@ impl super::InsightWorkspacePanel {
         };
         panel_box(theme, "缺失矩阵", note, rows)
     }
+}
+
+/// 列卡折叠态 Top 值条（文本 / 月度共用，原型 freq-rows 的折叠简化版）：
+/// label + Progress 条，不带计数（卡片空间紧凑；完整计数见展开态「分布」区）。
+fn mini_freq_rows(
+    col_name: &str,
+    items: &[crate::model::types::TextFrequency],
+    theme: &Theme,
+) -> Option<Div> {
+    let colors = theme.colors;
+    let first = items.first()?;
+    let max = first.count.max(1);
+    let mut rows = div().v_flex().w_full().gap_1();
+    for f in items.iter().take(3) {
+        let key = SharedString::from(format!("insight-ws-mini-{col_name}-{}", f.value));
+        rows = rows.child(
+            div()
+                .h_flex()
+                .w_full()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_none()
+                        .max_w(rems(8.))
+                        .text_ellipsis()
+                        .text_xs()
+                        .text_color(colors.muted_foreground)
+                        .child(f.value.clone()),
+                )
+                .child(
+                    div().flex_1().min_w_0().child(
+                        Progress::new(key)
+                            .value((f.count as f64 / max as f64) as f32)
+                            .color(colors.primary),
+                    ),
+                ),
+        );
+    }
+    Some(rows)
 }
