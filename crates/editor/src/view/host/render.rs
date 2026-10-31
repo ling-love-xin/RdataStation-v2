@@ -464,6 +464,26 @@ pub(crate) fn render_editor_status_bar(
             })
             .into_any_element()
     };
+    // 空白字符开关（2c：把空格渲染成 `·`、制表符渲染成 `→`；点击切换当前文档）
+    let whitespace_ctrl = {
+        let show_ws = host.shared.document_show_whitespaces(&host.document);
+        let entity = panel_entity.clone();
+        Button::new("editor-whitespace")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-whitespace".to_string())
+            .label("␣")
+            .toggled(show_ws)
+            .tooltip("显示空白字符（空格 · / 制表符 →）")
+            .on_click(move |_, window, app| {
+                let entity = entity.clone();
+                let next = !show_ws;
+                entity.update(app, |panel, cx| {
+                    panel.set_show_whitespaces(next, window, cx);
+                });
+            })
+            .into_any_element()
+    };
     // 事务（提交 / 回滚；只有会通信 + 执行器支持事务 + 通道支持事务才摆）
     let tx_available = snapshot.connection.is_some()
         && host.shared.has_transactions()
@@ -512,6 +532,7 @@ pub(crate) fn render_editor_status_bar(
         encoding: Some(encoding_ctrl),
         eol: Some(eol_ctrl),
         invisible: Some(invisible_ctrl),
+        whitespace: Some(whitespace_ctrl),
         tx: tx_ctrl,
         channel: channel_ctrl,
         interrupt,

@@ -110,6 +110,9 @@ pub struct StatusControls {
     /// 【2026-10-27】不可见字符显示开关（toggle 按钮 + tooltip 说明支持哪些不可见字符；
     /// 零宽 / 全角空格 / 双向控制 / 控制字符——`hidden.rs` 收录范围）
     pub invisible: Option<AnyElement>,
+    /// 【2c】空白字符显示开关（toggle 按钮：把空格渲染成 `·`、制表符渲染成 `→`，
+    /// 与「不可见字符」是两条独立开关——前者只画可见空白，后者标注零宽等真正不可见符号）
+    pub whitespace: Option<AnyElement>,
     /// 【B4】事务区控件（自动提交开关 + 事务开启时的提交 / 回滚），挂在**左段**
     pub tx: Option<AnyElement>,
     /// 【B13】执行方式控件（源库 / 加速 / 联邦可切），挂在**左段**（方言之后、正文之前）
@@ -391,7 +394,8 @@ pub fn render(
         .children(controls.indent)
         .children(controls.eol)
         .children(controls.encoding)
-        .children(controls.invisible);
+        .children(controls.invisible)
+        .children(controls.whitespace);
     for (index, badge) in badges.iter().enumerate() {
         if index > 0 {
             right = right.child(

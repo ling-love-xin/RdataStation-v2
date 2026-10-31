@@ -509,9 +509,8 @@ impl EditorHostPanel {
         }
     }
 
-    /// 【2c】显示空白字符（空格 `•` / 制表符 `→`）：文档状态 + 内核 `set_show_whitespaces` 双写
-    // 当前仅测试与「双栏自定义面板」接线消费（lib 非 test 编译会报 dead_code，保留实现待接）
-    #[allow(dead_code)]
+    /// 【2c】显示空白字符（空格 `•` / 制表符 `→`）：文档状态 + 内核 `set_show_whitespaces` 双写。
+    /// 工具栏「␣」按钮（`view/host/render.rs`）点击切换当前文档。
     pub(crate) fn set_show_whitespaces(
         &mut self,
         show: bool,
