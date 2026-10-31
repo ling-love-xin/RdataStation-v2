@@ -513,6 +513,10 @@ pub struct ScratchpadView {
     /// 上次看到的「编辑器脏文档」（绝对路径）：脏点在树上是**外部状态**，
     /// 由轮询一拍一次地取回（不在 `render` 里去问宿主），有变化才重绘。
     dirty_seen: RefCell<Rc<HashSet<String>>>,
+    /// Content 模式「文件内容命中行数」的缓存：`scratchpad_row` 每行每帧都会问一次，
+    /// 键带文件指纹 + 查询参数（见 primitives 的 `scratchpad_content_hit_count_cached`）。
+    /// 单独一个 RefCell，不与 `scratchpad` 共用借用，规避 render 路径上的嵌套借用冲突。
+    content_hit_cache: RefCell<HashMap<ContentHitKey, usize>>,
 }
 impl ScratchpadView {
     /// 构造：注入宿主端口。
@@ -549,6 +553,7 @@ impl ScratchpadView {
             scratchpad_watch_poll: RefCell::new(None),
             active_search: None,
             dirty_seen: RefCell::new(Rc::new(HashSet::new())),
+            content_hit_cache: RefCell::new(HashMap::new()),
         }
     }
 

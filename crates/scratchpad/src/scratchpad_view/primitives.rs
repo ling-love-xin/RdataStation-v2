@@ -267,6 +267,78 @@ pub(super) fn scratchpad_content_hit_count(
         .count()
 }
 
+/// Content 模式内容命中数的缓存键。
+///
+/// 键里同时含**文件指纹**（mtime 纳秒 + 字节长度）与查询参数：
+/// 文件改了自动失效（键变了 → 重新读），换查询也不会串味。
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(super) struct ContentHitKey {
+    path: String,
+    mtime_nanos: u128,
+    len: u64,
+    needle: String,
+    regex: bool,
+    case_sensitive: bool,
+}
+
+/// 缓存容量上限。超出直接整表清空（简单可控：草稿箱是「几十个小文件」场景，
+/// 不做 LRU 是因为这里只求削掉单帧内的重复读，不追求命中率）。
+const CONTENT_HIT_CACHE_MAX: usize = 512;
+
+/// [`scratchpad_content_hit_count`] 的**带缓存**版本，供 render 路径调用。
+///
+/// 治理（2026-11-01）：`scratchpad_row` 在每次重绘都会对本行文件调用一次计数，
+/// 而 v_virtual_list 里可见行的 render 频率等于帧率——原先是「每行每帧读一次文件，
+/// 上限 256KB」，滚动 / hover / 输入时直接掉帧。缓存后同一 (文件指纹 + 查询) 只读一次。
+///
+/// 键带文件指纹，所以「文件内容变了但 mtime 精度不足」的极端情况才会读到旧值；
+/// 真要兜底时可在文件保存路径上显式清空该表。
+pub(super) fn scratchpad_content_hit_count_cached(
+    cache: &std::cell::RefCell<std::collections::HashMap<ContentHitKey, usize>>,
+    path: &std::path::Path,
+    needle: &str,
+    regex: bool,
+    case_sensitive: bool,
+) -> usize {
+    let mut key = ContentHitKey {
+        path: path.to_string_lossy().into_owned(),
+        mtime_nanos: 0,
+        len: 0,
+        needle: needle.to_string(),
+        regex,
+        case_sensitive,
+    };
+    let mut fingerprinted = false;
+    if let Ok(meta) = std::fs::metadata(path) {
+        key.len = meta.len();
+        key.mtime_nanos = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        fingerprinted = true;
+    }
+
+    if let Ok(map) = cache.try_borrow() {
+        if let Some(hit) = map.get(&key) {
+            return *hit;
+        }
+    }
+    // 拿不到借用（理论上不该发生：render 不禁嵌套借用）或缓存未命中 → 老实算一次。
+    let count = scratchpad_content_hit_count(path, needle, regex, case_sensitive);
+    // 未取到文件元信息时指纹恒为初值，这种键不可靠，不进缓存。
+    if fingerprinted {
+        if let Ok(mut map) = cache.try_borrow_mut() {
+            if map.len() >= CONTENT_HIT_CACHE_MAX {
+                map.clear();
+            }
+            map.insert(key, count);
+        }
+    }
+    count
+}
+
 /// 条目是否命中过滤（自身命中，或已加载子树命中）。
 ///
 /// `mode == Content` 时：文件名命中 **或** 文件内容命中（用户点名：输入即搜内容）。

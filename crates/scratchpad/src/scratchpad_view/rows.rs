@@ -253,14 +253,17 @@ impl ScratchpadView {
             // 命中数角标（用户点名 2026-10-10：过滤态树行显示命中数，对齐 VSCode 搜索面板
             // 左侧每文件命中数）：Content 模式 + 过滤非空 + 文件内容有命中行时才画
             // （文件名命中但内容零命中的文件不显示，避免误导性的「0」）。
-            // 口径与搜索任务一致（逐行 is_match，头部 256KB）；当前规模同步读，目录极大时
-            // 可在 ScratchpadView 层加内容命中缓存（按 query+mode+case+regex 键控）。
+            // 口径与搜索任务一致（逐行 is_match，头部 256KB）。
+            // 治理（2026-11-01）：原先这里每行每帧同步读一次文件（v_virtual_list 的可见行
+            // render 频率 = 帧率）→ 滚动 / 输入时掉帧。改为走 `ScratchpadView` 上的命中数缓存
+            // （键含文件指纹 + 查询参数，见 primitives 里的实现），同一组合只读一次。
             .when(
                 !ctx.filter.is_empty()
                     && ctx.mode == ScratchpadSearchMode::Content
                     && entry.kind == ScratchpadEntryKind::File,
                 move |this| {
-                    let count = scratchpad_content_hit_count(
+                    let count = scratchpad_content_hit_count_cached(
+                        &self.content_hit_cache,
                         &entry.path,
                         &ctx.filter,
                         ctx.regex,
