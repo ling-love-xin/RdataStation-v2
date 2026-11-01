@@ -198,6 +198,10 @@ fn click_draft_row_opens_central_empty_state(cx: &mut TestAppContext) {
 
 /// 场景 4：Mock 面板**工具栏**的「+」按钮（2026-10-18 起 ＋ 从标题栏迁到面板内工具栏）——
 /// 可见，且点击打开中央草稿 tab。
+///
+/// 2026-11-01 起「＋」新表**自带一列**（`new_draft_table` 加 `column_1` + Integer 默认生成器），
+/// 所以这里落点是**非空态**的列段（`mock-detail-scenario-columns`）；空态卡片
+/// （`mock-detail-scenario-empty`）只在一列都没有时才出现，见 `click_draft_row_opens_central_empty_state`。
 #[gpui_kit::test]
 fn title_suffix_plus_opens_draft_tab(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -237,10 +241,11 @@ fn title_suffix_plus_opens_draft_tab(cx: &mut TestAppContext) {
         "点「+」后 shared.mock_details 应有 draft tab"
     );
 
-    let card = snap(cx, "mock-detail-scenario-empty");
+    // 新表自带一列 → 渲染的是列段（非空态）的起手卡片
+    let card = snap(cx, "mock-detail-scenario-columns");
     assert!(
         card.visible(),
-        "中央空态起手卡片应渲染（mock-detail-scenario-empty）"
+        "中央列段应渲染（mock-detail-scenario-columns）"
     );
 }
 
