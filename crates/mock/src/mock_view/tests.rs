@@ -8,9 +8,11 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::dock::{DockArea, DockPlacement};
+use gpui_kit::component::input::InputState;
 use gpui_kit::component::list::{ListDelegate as _, ListState};
 use gpui_kit::component::{Root, WindowExt as _};
 use gpui_kit::test::TestWindowExt;
@@ -22,9 +24,10 @@ use gpui_kit::{
 use super::{
     AppendTargetStatus, DetailTarget, HistoryReply, JobRowScope, MockColumnSpec, MockDetailView,
     MockDraft, MockGenInfo, MockHost, MockJobDone, MockJobKind, MockJobPhase, MockJobProgress,
-    MockJobState, MockPanel, MockPreview, MockRunOptions, RelationPick, ScenarioRelation,
-    SchemaRequest, SchemaSource, TableStatus, builtin_presets, focus_detail_tab, param_text,
-    parse_percent_ratio, parse_rows, parse_seed, patch_param, preset_by_id, search_generators,
+    MockJobState, MockPanel, MockPreview, MockRunOptions, RelationPick, RowProgress,
+    ScenarioRelation, SchemaRequest, SchemaSource, TableStatus, builtin_presets, eta_from_unit_ms,
+    eta_text, eta_text_compact, focus_detail_tab, param_text, parse_percent_ratio, parse_rows,
+    parse_seed, patch_param, preset_by_id, row_progress_of, search_generators, smooth_unit_ms,
     summarize_params, validate_table_name,
 };
 use crate::commands::GenerateMock;
@@ -1275,6 +1278,102 @@ fn status_chip_text_follows_the_job_phase() {
     let text = super::status_chip_text(Some(progress)).expect("出口类也要给一句");
     assert!(text.starts_with("◐ Mock "), "{text}");
     assert!(!text.contains('%'), "出口类不给百分比：{text}");
+}
+
+/// ETA 文案分档（不一律转秒：300 秒读成「~5 分 0 秒」比「~300 秒」少一次心算）。
+#[test]
+fn eta_text_buckets_seconds_minutes_and_hours() {
+    // 不足 1 秒不报：说了等于没说
+    assert_eq!(eta_text(Duration::from_millis(800)), None);
+    assert_eq!(eta_text_compact(Duration::from_millis(800)), None);
+    assert_eq!(
+        eta_text(Duration::from_secs(12)).as_deref(),
+        Some("剩余 ~12 秒")
+    );
+    assert_eq!(
+        eta_text(Duration::from_secs(95)).as_deref(),
+        Some("剩余 ~1 分 35 秒")
+    );
+    assert_eq!(
+        eta_text(Duration::from_secs(3600 + 120)).as_deref(),
+        Some("剩余 ~1 时 02 分")
+    );
+    // 状态栏那一行还挤着连接名 / LSP / 三个开关：紧凑版
+    assert_eq!(
+        eta_text_compact(Duration::from_secs(12)).as_deref(),
+        Some("~12s")
+    );
+    assert_eq!(
+        eta_text_compact(Duration::from_secs(95)).as_deref(),
+        Some("~1m35s")
+    );
+}
+
+/// ETA 的采样：**没有样本就不报**（分母是 0，算出来是编的），采样后向均值收敛。
+#[test]
+fn eta_converges_from_the_first_unit_and_says_nothing_before_it() {
+    // 第一个单位还没完成：一个样本都没有
+    assert_eq!(smooth_unit_ms(None, Duration::from_millis(100), 0), None);
+
+    // 首样本 = 累计均值（第一个单位含建临时表的开销，偏大）
+    let first = smooth_unit_ms(None, Duration::from_millis(600), 1).expect("首样本");
+    assert!((first - 600.0).abs() < 0.01, "{first}");
+    // 每个单位 100ms：600 → 600×0.7 + 100×0.3 = 450（老样本占七成，不跟着瞬时抖动跳）
+    let second = smooth_unit_ms(Some(first), Duration::from_millis(200), 2).expect("第二样本");
+    assert!((second - 450.0).abs() < 0.01, "{second}");
+
+    let eta = eta_from_unit_ms(Some(second), 2, 10).expect("有样本应报");
+    assert_eq!(eta, Duration::from_millis(3600), "剩 8 单位 × 450ms");
+    // 走完了不报；不足 1 秒也不报（秒级以下的估计只有抖动）
+    assert_eq!(eta_from_unit_ms(Some(second), 10, 10), None);
+    assert_eq!(eta_from_unit_ms(Some(50.0), 1, 2), None);
+    assert_eq!(eta_from_unit_ms(None, 1, 10), None);
+}
+
+/// 清单行的进度形态：集合任务按「张」推进（满线 / 扫光 / 不画），单表任务只有目标那一行有。
+#[test]
+fn row_progress_counts_tables_for_collection_jobs_and_only_the_target_otherwise() {
+    // 集合任务：已过 2 张（满线）→ 第 3 张正在过（扫光）→ 后面还没轮到（不画）
+    let scenario = MockJobProgress {
+        phase: MockJobPhase::Generating,
+        batches_done: 2,
+        batches_total: 3,
+        rows_total: 0,
+    };
+    assert_eq!(
+        row_progress_of(true, scenario, 0, true),
+        Some(RowProgress::Done)
+    );
+    assert_eq!(
+        row_progress_of(true, scenario, 1, true),
+        Some(RowProgress::Done)
+    );
+    assert_eq!(
+        row_progress_of(true, scenario, 2, true),
+        Some(RowProgress::Active)
+    );
+    assert_eq!(row_progress_of(true, scenario, 3, true), None);
+
+    // 单表任务：目标行给百分比，别的不画（免得整列都在动）
+    let single = MockJobProgress {
+        phase: MockJobPhase::Generating,
+        batches_done: 3,
+        batches_total: 10,
+        rows_total: 1_000,
+    };
+    assert_eq!(
+        row_progress_of(false, single, 0, true),
+        Some(RowProgress::Determinate(30))
+    );
+    assert_eq!(row_progress_of(false, single, 0, false), None);
+
+    // 出口阶段（写库 / 写文件）拿不到中间进度：只说在动，不给百分比
+    let mut writing = single;
+    writing.phase = MockJobPhase::Writing;
+    assert_eq!(
+        row_progress_of(false, writing, 0, true),
+        Some(RowProgress::Active)
+    );
 }
 
 /// 预览右键「拿得走」的两件事靠两个纯助手：整行 TSV 与「哪一格」的回退规则。
@@ -2968,6 +3067,15 @@ fn job_progress_is_mirrored_while_running(cx: &mut TestAppContext) {
             panel.outcome()
         );
         assert!(panel.gen_info().is_none(), "未完成不应有结果");
+        // ETA 是**实测**出来的（每单位耗时）：测试里没有真实等待，样本耗时≈0 → 不报
+        assert_eq!(panel.job_eta(), None, "没有真实耗时就不编一个剩余时间");
+        // 状态栏快照：百分比 + 可取消一次拿全（生成类能取消）
+        let status = panel.job_status().expect("进行中应有快照");
+        assert!((status.percent() - 30.0).abs() < 0.01);
+        assert!(!status.indeterminate(), "生成阶段是定量的");
+        assert!(status.cancellable);
+        assert!(!status.cancel_requested);
+        assert_eq!(status.label(), "◐ Mock 生成中 30%");
     });
 }
 
@@ -3604,6 +3712,73 @@ fn replay_writes_the_recorded_configuration_into_the_draft(cx: &mut TestAppConte
     });
 }
 
+/// 表名打进输入框**当场**写回草稿——右 Dock 清单行与中央 tab 标题都读 `draft.table_name`，
+/// 不是读输入框。不订阅 Change 的话，从按下第一个键到点「生成」之前这两处显示的
+/// 是上一个名字，用户眼前同时存在两个表名。
+#[gpui_kit::test]
+fn typing_in_the_header_writes_back_to_the_draft(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+    // 渲染一帧：输入框是懒创建的（`InputState` 要 window），写回订阅也在这时挂上
+    draw(cx);
+
+    let table_input = panel
+        .read_with(cx, |panel, _cx| panel.table_input.clone())
+        .expect("渲染一帧后表名输入框应已创建");
+    let rows_input = panel
+        .read_with(cx, |panel, _cx| panel.rows_input.clone())
+        .expect("渲染一帧后行数输入框应已创建");
+    // 走 `insert`（模拟打字，会发 `InputEvent::Change`）；
+    // `set_value` 是程序化写入，内部 `emit_events = false`，测不出订阅
+    let type_in = |cx: &mut VisualTestContext, input: &Entity<InputState>, text: &str| {
+        cx.update(|window, cx| input.update(cx, |state, cx| state.insert(text, window, cx)));
+    };
+
+    let before = panel.read_with(cx, |panel, _cx| panel.draft().table_name.clone());
+    assert_eq!(before, "mock_data");
+    let rows_before = panel.read_with(cx, |panel, _cx| panel.draft().options.rows);
+
+    type_in(cx, &table_input, "_v2");
+    panel.read_with(cx, |panel, _cx| {
+        assert_eq!(
+            panel.draft().table_name,
+            "mock_data_v2",
+            "右 Dock 清单与 tab 标题读的是草稿：不点「生成」也要跟着走"
+        );
+    });
+
+    // 中间态非法值**不写回**：打到一半的空格不该污染草稿，更不该弹错误
+    // （错误留给「生成」那一刻的 `sync_inputs`）
+    type_in(cx, &table_input, " ");
+    panel.read_with(cx, |panel, _cx| {
+        assert_eq!(
+            panel.draft().table_name,
+            "mock_data_v2",
+            "非法输入保留上一个有效值"
+        );
+        assert!(panel.error.is_none(), "打字途中不报错");
+    });
+
+    // 行数同一条路径：右 Dock 草稿行的「N 行」读的是 `draft.options.rows`
+    type_in(cx, &rows_input, "0");
+    panel.read_with(cx, |panel, _cx| {
+        assert_eq!(
+            panel.draft().options.rows,
+            rows_before * 10,
+            "行数也当场写回"
+        );
+    });
+    type_in(cx, &rows_input, "x");
+    panel.read_with(cx, |panel, _cx| {
+        assert_eq!(
+            panel.draft().options.rows,
+            rows_before * 10,
+            "非数字保留上一个有效值"
+        );
+    });
+}
+
 // S5：场景历史重放 → 回到场景态，模板按 scene_id 重取并套用当时的 seed
 #[gpui_kit::test]
 fn replaying_a_scene_row_restores_the_template_and_seed(cx: &mut TestAppContext) {
@@ -4090,6 +4265,11 @@ fn scenario_job_reports_tables_as_its_unit(cx: &mut TestAppContext) {
                 .job_kind()
                 .is_some_and(|kind| { matches!(kind, MockJobKind::Scenario(_)) })
         );
+        // 清单行的进度线逐表推进（模板表序 = orders / items / users，已过 2 张）：
+        // 前两张满线、第三张扫光。换成「第 3 行显示 67%」就成了假读数
+        assert_eq!(panel.row_progress("orders", 0), Some(RowProgress::Done));
+        assert_eq!(panel.row_progress("items", 1), Some(RowProgress::Done));
+        assert_eq!(panel.row_progress("users", 2), Some(RowProgress::Active));
     });
 
     // 取消：场景任务含生成阶段，引擎逐表响应
@@ -5365,36 +5545,15 @@ fn delete_user_generator_removes_only_target(cx: &mut TestAppContext) {
     });
 }
 
-/// 生成器库对话框打开（双视角浏览 + 分组「＋」入口；对话框层真渲染）。
+/// 字段卡片的生成器入口 = 编辑入口：点它弹出的就是列编辑对话框。
+///
+/// 此前卡片上两个按钮开**两个**窗口（生成器库 720px 两栏 / 列编辑 840px 两栏），
+/// 内容还重叠——选生成器时也要调参数，分两家是让用户先猜该开哪一个。
 #[gpui_kit::test]
-fn generator_library_dialog_opens(cx: &mut TestAppContext) {
+fn field_card_generator_entry_opens_column_dialog(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let rec = recorder();
-    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
-
-    panel.update(cx, |panel, cx| {
-        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
-    });
-    draw(cx);
-    let id = panel.read_with(cx, |panel, _cx| panel.draft().columns[0].id);
-    cx.update(|window, cx| {
-        panel.update(cx, |panel, cx| panel.open_generator_library(id, window, cx));
-    });
-    cx.update(|window, cx| {
-        assert!(window.has_active_dialog(cx), "生成器库对话框应打开");
-        window.draw(cx).clear(cx);
-    });
-}
-
-/// 「选择生成器窗口」（用户诉求）：点击新增列 / 编辑列弹出一个窗口——最上搜索定位
-/// 输入框，框下左右分栏：左 = 生成器列表（业务 / 数据 双 Tab + 分组 + 最近 + 自定义管理），
-/// 右 = 本列参数区。左栏选中生成器写回**草稿**（生成器配置 + 参数区重建 + 样例刷新），
-/// 列未应用时面板列不动。
-#[gpui_kit::test]
-fn field_row_library_opens_two_column_with_inspector(cx: &mut TestAppContext) {
-    cx.update(gpui_kit::init);
-    let rec = recorder();
-    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
 
     let id = panel.update(cx, |panel, cx| {
         panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
@@ -5406,29 +5565,80 @@ fn field_row_library_opens_two_column_with_inspector(cx: &mut TestAppContext) {
             .name
             .to_string()
     });
+    // 卡片上的生成器按钮 → 列编辑对话框（顶部列名 + 搜索 / 左栏列表 / 右栏属性 + 参数）
     cx.update(|window, cx| {
-        panel.update(cx, |panel, cx| panel.open_generator_library(id, window, cx));
-        assert!(window.has_active_dialog(cx), "生成器库对话框应打开");
+        detail.update(cx, |view, cx| view.open_column_dialog(id, window, cx));
+        assert!(window.has_active_dialog(cx), "生成器入口应打开列编辑对话框");
+        window.draw(cx).clear(cx);
     });
-    // 多帧渲染：两栏布局 + 右栏占位「从左侧选择生成器」应稳定渲染、不 panic（若渲染路径
-    // 有 bug，draw 会直接 panic）；对话框应仍存活
+    // 多帧渲染：左栏（智能推荐 + 双 Tab 列表 + 分组）/ 右栏（属性 + 参数）稳定不 panic
     for _ in 0..5 {
         draw(cx);
     }
     cx.update(|window, cx| {
         assert!(
             window.has_active_dialog(cx),
-            "多帧渲染后生成器库对话框应仍存活（两栏渲染路径未 panic）"
+            "多帧渲染后列编辑对话框应仍存活"
         );
     });
-    // 仅打开/渲染不应写回列生成器
+    // 仅打开 / 渲染不应写回列生成器
     panel.update(cx, |panel, _cx| {
         assert_eq!(
             generator_catalog::spec_of(&panel.draft().columns[0].def.generator).name,
             before,
-            "打开生成器库对话框不应改动列生成器"
+            "打开列编辑对话框不应改动列生成器"
         );
     });
+}
+
+/// 打开列编辑对话框 → 那张列卡片被标成「正在编辑」（`self.draft` 持着列 id，
+/// 卡片据此挂左缘强调条）；关掉之后标识消失。
+///
+/// 为何钉这一条：对话框会盖住字段区，关掉后用户要能一眼看出刚才改的是哪一列——
+/// 列一多要往下滚，没有标识就得靠记名字去找。
+#[gpui_kit::test]
+fn the_edited_column_is_marked_as_current(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+
+    let (first_id, second_id) = panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+        panel.add_column("email".to_string(), ColumnDataType::Text, cx);
+        (panel.draft().columns[0].id, panel.draft().columns[1].id)
+    });
+    draw(cx);
+    assert!(
+        detail.read_with(cx, |view, _cx| view.draft.is_none()),
+        "没开对话框时没有「正在编辑」的列"
+    );
+
+    // 打开第二列的编辑对话框 → 标识落在第二列上（不是第一列）
+    cx.update(|window, cx| {
+        detail.update(cx, |view, cx| {
+            view.open_column_dialog(second_id, window, cx)
+        });
+        window.draw(cx).clear(cx);
+    });
+    detail.read_with(cx, |view, _cx| {
+        assert_eq!(
+            view.draft.as_ref().map(|draft| draft.column_id()),
+            Some(second_id),
+            "正在编辑的是被点开的那一列"
+        );
+        assert_ne!(
+            view.draft.as_ref().map(|draft| draft.column_id()),
+            Some(first_id),
+            "别的列不该被标成当前"
+        );
+    });
+
+    // 关掉（取消）→ 标识撤掉
+    cx.update(|window, cx| {
+        detail.update(cx, |view, _cx| view.draft = None);
+        window.draw(cx).clear(cx);
+    });
+    assert!(detail.read_with(cx, |view, _cx| view.draft.is_none()));
 }
 
 #[gpui_kit::test]

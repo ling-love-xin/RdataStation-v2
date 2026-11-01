@@ -173,6 +173,18 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 - 验证：`cargo check -p rds-mock --all-targets -j 2`；`cargo test -p rds-mock --lib --tests -j 2`（213 单元（111 视图 = 32 纯逻辑 + 79 窗口 + 102 其他）+ 41 引擎集成 + 5 持久化往返 + 4 历史/模板 + 2 清理）；
   `cargo test -p rds-workbench --test mock_generator --test mock_jobs --test mock_job_cancel -j 2`（装配 12 + 后台任务 11 + 取消 1）。
   测试带 `--lib --tests` 是因为本机 `rustdoc` 会被 `third_party/duckdb`「不受信任的装入点」挡住（os error 448），失败与代码无关。
+- **预览工具（独立窗口，肉眼验收 UI）**：`cargo run -p rds-mock --example mock_preview`。
+  它与上面的窗口测试是**互补的两件事**：窗口测试是 headless 的，只能断言「不 panic / 结构不回归」，
+  **看不到像素**；而本模块的 UI 问题恰恰集中在像素层（对齐 / 间距 / 高度塌陷 / 对话框比例）。
+  预览工具起一个真窗口（右侧 Mock 面板 + 中央详情 tab），走真数据与真主题，改一行看一行。
+  宿主实现在 `examples/mock_preview.rs` 的 `PreviewHost`（真生成走 `MockEngine`，不是假数据）。
+  支持范围：**生成 + 文件导出**；落库 / 追加 / 场景会给出可读拒绝（预览没有打开项目 →
+  没有分析库与草稿箱）——顺便也是错误态 UI 的验收入口。导出产物落 `.rds/tmp/mock-preview/`。
+  ⚠️ **必须走 `cargo run` 启动，不能直接双击 `target/debug/examples/mock_preview.exe`**：
+  duckdb 是动态链接（`duckdb.dll` 只有一份，在 `target/debug/`），而 example 产物落在
+  `target/debug/examples/`；Windows 的 DLL 搜索只从 exe 所在目录开始、**不往上找父目录**，
+  直接跑会报 `while loading shared libraries: duckdb.dll`（exit 127）且没有任何窗口。
+  `cargo run` 会把 dylib 目录注入 PATH，所以只有它能启动。
 - **命令约定**：全量编译/测试必须限制并发（`cargo check-all` / `cargo test-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）。
 - 生成器目录改动流程：改 `models.rs` 的 `GeneratorConfig` → 跑 `python tools/gen_mock_generator_catalog.py`
   → `rustfmt` 生成文件 → 补 `LABELS` / 默认值字典。

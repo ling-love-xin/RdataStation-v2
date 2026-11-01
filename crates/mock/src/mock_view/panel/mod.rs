@@ -3,6 +3,9 @@
 // 继承父模块（mock_view）的全部 use 绑定
 use super::*;
 
+// 任务计时（ETA）：墙钟只在视图侧读，见 `MockJobWatch::started_at`
+use std::time::{Duration, Instant};
+
 // 渲染子模块（impl MockPanel 的渲染方法与 Render trait）
 mod render;
 // 渲染行的共用表单助手（detail.rs / tests 也调用，经本层再导出到 mock_view）
@@ -26,6 +29,12 @@ pub struct MockPanel {
     column_filter: Option<Entity<InputState>>,
     /// 搜索词变化时重画字段区的订阅（必须持有：丢了就自动退订）
     column_filter_sub: Option<Subscription>,
+    /// 表头三个输入（表名 / 行数 / 种子）的写回订阅（同样必须持有）。
+    ///
+    /// 为何需要：右 Dock 清单、中央 tab 标题、tab 里的「本次 Mock 表（1）」**都读** `draft`，
+    /// 而输入框是另一份状态——不订阅 Change，打字过程中这两份就是两个值，
+    /// 只有点「生成」时 `sync_inputs` 才把它们对齐一次。
+    _input_subs: Vec<Subscription>,
     /// 当前选中的结果表下标（出口作用于它；越界视为 0）
     current: usize,
     /// 当前结果来自哪套场景模板（`None` = 单表生成；面板据此给一句来源说明）
@@ -61,7 +70,9 @@ pub struct MockPanel {
     pub(crate) table_input: Option<Entity<InputState>>,
     /// 待写入表名输入的值（事件路径置位，下一帧渲染时落地）
     table_pending: Option<String>,
-    rows_input: Option<Entity<InputState>>,
+    /// 行数输入（`pub(crate)`：与 `table_input` 同口径——两者都是「输入框是输入态、
+    /// 草稿是权威态」的双份，测试要能读到输入态验这条同步）
+    pub(crate) rows_input: Option<Entity<InputState>>,
     seed_input: Option<Entity<InputState>>,
     /// 场景生成用的种子输入（`None` = 场景态未开）；值与 `self.scenario.seed` 互相同步
     scenario_seed_input: Option<Entity<InputState>>,
@@ -103,9 +114,18 @@ pub struct MockPanel {
     pub(crate) fold_open: bool,
     /// 上次清空结果是不是切项目造成的（旧 tab 的文案据此区分「另一个项目」与「这一轮」）
     project_switched: bool,
+    /// 鼠标正指着场景清单里的哪一张表（行内操作是悬停才显形的，要重绘就得有状态）。
+    ///
+    /// 键盘那边不记：焦点由 `FocusHandle::is_focused` 当场查，再存一份就要维护
+    /// focus / blur 回调，还容易与 gpui 的焦点系统对不上。
+    hovered_scenario_table: Option<String>,
+    /// 鼠标正指着历史里的哪一条（同上）
+    hovered_history: Option<String>,
+    /// 鼠标正指着用户模板里的哪一个（同上）
+    hovered_template: Option<String>,
 }
 
-/// 进行中任务的视图侧状态（进度镜像 + 轮询泵句柄）。
+/// 进行中任务的视图侧状态（进度镜像 + 轮询泵句柄 + 计时）。
 struct MockJobWatch {
     /// 任务种类（收尾时据此分派结果）
     kind: MockJobKind,
@@ -113,8 +133,34 @@ struct MockJobWatch {
     progress: MockJobProgress,
     /// 已请求取消（按钮转「正在取消…」）
     cancel_requested: bool,
+    /// 任务提交时刻（ETA 的分母）。
+    ///
+    /// **记在视图侧而不是让宿主上报**：宿主那边的时间基准（轮询周期 / 线程调度）与
+    /// 视图侧看到的不一定同步，两处时间相减会算出负数。这里只信自己的墙钟。
+    started_at: Instant,
+    /// 平滑后的「每单位（批 / 张表）耗时」（毫秒）；`None` = 第一个单位还没完成
+    unit_ms: Option<f64>,
+    /// 上一次前进（或刚起步）的时刻：算出「已经卡了多久」
+    last_sample_at: Instant,
+    /// 上次唤醒 UI 用的 ETA 秒数（变了才唤醒，不然每 120ms 都要重排一次面板）
+    eta_shown: Option<u64>,
     /// 轮询泵（持句柄即存活；任务结束或面板销毁时自动停）
     _pump: Task<()>,
+}
+
+impl MockJobWatch {
+    /// 剩余时间：均速推算 + 已经卡住的时间。
+    ///
+    /// 只算均速那一项会让卡住的任务一直报它卡住前的那句（「剩 12 秒」卡了 30 秒还在说 12 秒），
+    /// 而 ETA 的意义正是「还要等多久」——卡住也要算进去。
+    fn eta(&self) -> Option<Duration> {
+        let base = eta_from_unit_ms(
+            self.unit_ms,
+            self.progress.batches_done,
+            self.progress.batches_total,
+        )?;
+        Some(base + self.last_sample_at.elapsed())
+    }
 }
 
 /// 交给后台执行器的一件事（读与写共用一条路径）。
@@ -291,6 +337,7 @@ impl MockPanel {
             detail_columns_rem: 15.0,
             column_filter: None,
             column_filter_sub: None,
+            _input_subs: Vec::new(),
             current: 0,
             scenario_source: None,
             landed: None,
@@ -331,6 +378,9 @@ impl MockPanel {
             user_generators: Vec::new(),
             fold_open: false,
             project_switched: false,
+            hovered_scenario_table: None,
+            hovered_history: None,
+            hovered_template: None,
         }
     }
 
@@ -426,6 +476,40 @@ impl MockPanel {
             .as_ref()
             .map(|job| job.progress.percent())
             .unwrap_or(0.0)
+    }
+
+    /// 进行中任务的剩余时间（ETA）；样本不足 / 不足 1 秒时为 `None`。
+    ///
+    /// 视图侧只做**读数**：采样在 `poll_job` 里做（那才有「每单位耗时」的样本），
+    /// 渲染期不碰时钟，也不让渲染结果依赖渲染那一刻的时间。
+    pub fn job_eta(&self) -> Option<Duration> {
+        self.job.as_ref()?.eta()
+    }
+
+    /// 任务快照（状态栏读它：文案 / 百分比 / ETA / 能不能取消一次拿全）。
+    pub fn job_status(&self) -> Option<MockJobStatus> {
+        let job = self.job.as_ref()?;
+        Some(MockJobStatus {
+            progress: job.progress,
+            eta: self.job_eta(),
+            cancellable: job.kind.generates(),
+            cancel_requested: job.cancel_requested,
+        })
+    }
+
+    /// 清单行的进度形态（右 Dock 表名那一行下缘那条线的数据来源）。
+    ///
+    /// `index` = 这一行在**集合**里的位置（集合任务按张推进；单表任务不看它）。
+    /// 判定本身是纯函数 [`row_progress_of`]，这里只负责把「是不是任务目标」算出来。
+    pub fn row_progress(&self, table: &str, index: usize) -> Option<RowProgress> {
+        let job = self.job.as_ref()?;
+        let is_target = self
+            .results
+            .first()
+            .map(|info| info.table_name.as_str())
+            .unwrap_or(self.draft.table_name.as_str())
+            == table;
+        row_progress_of(job.kind.by_table(), job.progress, index, is_target)
     }
 
     /// 已请求取消（按钮文案转「正在取消…」）
@@ -1100,6 +1184,15 @@ impl MockPanel {
             columns: Vec::new(),
             options: MockRunOptions::new(1000, None, self.draft.options.locale.clone()),
         };
+        // 新表自带一列：空表起手得先读一段「还没有列」的空态说明才知道能干嘛，
+        // 自带一列就能直接改参数 / 生成。命名与生成器都沿用「＋ 加列」的口径
+        // （`column_1` + 该类型的默认生成器），不另立特例——否则新表首列与后加的
+        // 列行为不一致，反而更费解。
+        self.add_column(
+            ui::DEFAULT_FIRST_COLUMN_NAME.to_string(),
+            ColumnDataType::Integer,
+            cx,
+        );
         // 新表从「未生成」开始：清掉上一张的生成反馈（error 留给失败现场，这里不误清）
         self.outcome = None;
         cx.notify();
@@ -1392,57 +1485,51 @@ impl MockPanel {
         let panel = cx.entity();
         window.open_dialog(cx, move |dialog, _window, cx| {
             let theme = cx.theme();
-            let muted = theme.colors.muted_foreground;
-            let danger = theme.colors.danger;
             // 校验没过时对话框不关：错误就地显示，改完能直接再点「应用」
             let error = panel.read(cx).error.clone();
-            let mut body =
-                div()
-                    .v_flex()
-                    .gap_2()
-                    .child(
-                        div().text_xs().text_color(muted).child(
-                            "只改这张表在本次生成里的配置；已生成的预览与已落地的表都不动。",
-                        ),
-                    )
-                    .child(form_line(theme, "表名", &name_input))
-                    .child(form_line(theme, "行数", &rows_input))
-                    .child(
-                        div().text_xs().text_color(muted).child(
-                            "引用它的表会自动跟着变：取值域由父表行数算出（改完下次生成生效）",
-                        ),
-                    );
+            // 说明 / 表单 / 收尾说明用分隔线断开：否则两段说明与两行表单是同一种灰，
+            // 读起来是一整块，分不出「哪句是限制、哪行是输入」
+            let mut body = div()
+                .v_flex()
+                .gap_2()
+                .child(hint_line(
+                    theme,
+                    "只改这张表在本次生成里的配置；已生成的预览与已落地的表都不动。",
+                ))
+                .child(form_line(theme, "表名", &name_input))
+                .child(form_line(theme, "行数", &rows_input))
+                .child(card_divider(theme))
+                .child(hint_line(
+                    theme,
+                    "引用它的表会自动跟着变：取值域由父表行数算出（改完下次生成生效）",
+                ));
             if let Some(error) = error {
-                body = body.child(div().text_xs().text_color(danger).child(error));
+                body = body.child(error_line(theme, error));
             }
             let cancel_panel = panel.clone();
             let ok_panel = panel.clone();
             dialog.title("编辑表").child(body).footer(
                 DialogFooter::new()
                     .child(
-                        Button::new("mock-table-cancel")
-                            .secondary()
-                            .label("取消")
-                            .on_click(move |_, window, app| {
+                        button("mock-table-cancel", "取消", ActionKind::Soft).on_click(
+                            move |_, window, app| {
                                 let _ = cancel_panel
                                     .update(app, |panel, _cx| panel.table_editing = None);
                                 window.close_dialog(app);
-                            }),
+                            },
+                        ),
                     )
-                    .child(
-                        Button::new("mock-table-ok")
-                            .with_variant(ButtonVariant::Primary)
-                            .label("应用")
-                            .on_click(move |_, window, app| {
-                                let applied = ok_panel.update(app, |panel, cx| {
-                                    panel.apply_table_edit(cx);
-                                    panel.table_editing.is_none()
-                                });
-                                if applied {
-                                    window.close_dialog(app);
-                                }
-                            }),
-                    ),
+                    .child(button("mock-table-ok", "应用", ActionKind::Main).on_click(
+                        move |_, window, app| {
+                            let applied = ok_panel.update(app, |panel, cx| {
+                                panel.apply_table_edit(cx);
+                                panel.table_editing.is_none()
+                            });
+                            if applied {
+                                window.close_dialog(app);
+                            }
+                        },
+                    )),
             )
         });
     }
@@ -1543,11 +1630,8 @@ impl MockPanel {
 
         window.open_dialog(cx, move |dialog, _window, cx| {
             let theme = cx.theme();
-            let muted = theme.colors.muted_foreground;
-            let warning = theme.colors.warning;
             let current = pick.borrow().clone();
-            let table_names: Vec<String> =
-                template.tables.iter().map(|t| t.name.clone()).collect();
+            let table_names: Vec<String> = template.tables.iter().map(|t| t.name.clone()).collect();
             let child_columns: Vec<String> = current
                 .child_table
                 .as_deref()
@@ -1577,41 +1661,34 @@ impl MockPanel {
                        on_pick: Rc<dyn Fn(String, &mut App)>| {
                 let pick_for_menu = on_pick.clone();
                 let text = match current {
-                    Some(value) => format!("{value} ▾"),
-                    None => format!("{placeholder} ▾"),
+                    Some(value) => value.clone(),
+                    None => placeholder.to_string(),
                 };
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .child(
-                        div()
-                            .w(rems(4.0))
-                            .flex_none()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(label),
-                    )
-                    .child(
-                        Button::new(id)
-                            .ghost()
-                            .label(text)
-                            .dropdown_menu(move |menu, _window, _cx| {
-                                let mut menu = menu;
-                                if items.is_empty() {
-                                    return menu.item(PopupMenuItem::new(empty_note).disabled(true));
-                                }
-                                for item in items.iter() {
-                                    let value = item.clone();
-                                    let pick_for_item = pick_for_menu.clone();
-                                    menu = menu.item(PopupMenuItem::new(item.clone()).on_click(
+                // 走 `kv` 原语：标签在左、控件贴右端，四个下拉的触发器右端对齐。
+                // 此前标签定宽 `rems(4.0)`、控件紧跟标签——「子列」与「父表」两个词长度不同，
+                // 但触发器起点一样，看起来像两列又对不齐。
+                kv(
+                    theme,
+                    label,
+                    dropdown_button(id, text)
+                        // caret 由 `dropdown_button` 统一挂（此前手拼「▾」字形，
+                        // 部分字体下会掉成豆腐块）
+                        .dropdown_menu(move |menu, _window, _cx| {
+                            let mut menu = menu;
+                            if items.is_empty() {
+                                return menu.item(PopupMenuItem::new(empty_note).disabled(true));
+                            }
+                            for item in items.iter() {
+                                let value = item.clone();
+                                let pick_for_item = pick_for_menu.clone();
+                                menu =
+                                    menu.item(PopupMenuItem::new(item.clone()).on_click(
                                         move |_, _, app| pick_for_item(value.clone(), app),
                                     ));
-                                }
-                                menu
-                            }),
-                    )
+                            }
+                            menu
+                        }),
+                )
             };
 
             // 每个下拉的点击：改工作选择，再请面板重绘（对话框由窗口重绘时重建）
@@ -1652,18 +1729,15 @@ impl MockPanel {
             let mut body = div()
                 .v_flex()
                 .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child("引用只在**本次多表生成**内成立：值取自父表主键的取值域（由自增参数与行数算出）。"),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child("不读已落地的数据，也不修改已生成的表 / 文件。"),
-                )
+                .child(hint_line(
+                    theme,
+                    "引用只在本次多表生成内成立：值取自父表主键的取值域（由自增参数与行数算出）。",
+                ))
+                .child(hint_line(
+                    theme,
+                    "不读已落地的数据，也不修改已生成的表 / 文件。",
+                ))
+                .child(card_divider(theme))
                 .child(row(
                     "mock-relation-child-table",
                     "子表",
@@ -1701,12 +1775,10 @@ impl MockPanel {
                     on_parent_column,
                 ));
             if current.parent_table.is_some() && parent_columns.is_empty() {
-                body = body.child(
-                    div()
-                        .text_xs()
-                        .text_color(warning)
-                        .child("这张表没有自增主键列——引用目标只能是自增列（域算得出才不用去读数据）"),
-                );
+                body = body.child(card_divider(theme)).child(warning_line(
+                    theme,
+                    "这张表没有自增主键列——引用目标只能是自增列（域算得出才不用去读数据）",
+                ));
             }
 
             let cancel_panel = panel.clone();
@@ -1714,22 +1786,19 @@ impl MockPanel {
             dialog.title("加表间关系").child(body).footer(
                 DialogFooter::new()
                     .child(
-                        Button::new("mock-relation-cancel")
-                            .secondary()
-                            .label("取消")
-                            .on_click(move |_, window, app| {
+                        button("mock-relation-cancel", "取消", ActionKind::Soft).on_click(
+                            move |_, window, app| {
                                 let _ = cancel_panel.update(app, |panel, cx| {
                                     *panel.relation_pick.borrow_mut() = RelationPick::default();
                                     cx.notify();
                                 });
                                 window.close_dialog(app);
-                            }),
+                            },
+                        ),
                     )
                     .child({
-                        let mut ok = Button::new("mock-relation-ok")
-                            .with_variant(ButtonVariant::Primary)
-                            .label("添加")
-                            .disabled(!ready);
+                        let mut ok =
+                            button("mock-relation-ok", "添加", ActionKind::Main).disabled(!ready);
                         if ready {
                             ok = ok.on_click(move |_, window, app| {
                                 let _ = ok_panel.update(app, |panel, cx| panel.add_relation(cx));
@@ -1898,9 +1967,6 @@ impl MockPanel {
         window.open_dialog(cx, move |dialog, _window, cx| {
             let theme = cx.theme();
             let fg = theme.colors.foreground;
-            let muted = theme.colors.muted_foreground;
-            let warning = theme.colors.warning;
-            let info = theme.colors.info;
             let current = pick.borrow().clone().unwrap_or(AppendPick {
                 table: table_clone.clone(),
                 status: None,
@@ -1915,40 +1981,31 @@ impl MockPanel {
                         (Some(pk), None) => format!("{pk}（空表）"),
                         (None, _) => "（未识别到自增主键列）".to_string(),
                     };
-                    body = body.child(
+                    body = body.child(kv(
+                        theme,
+                        "目标表现状",
                         div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child("目标表现状"),
-                            )
-                            .child(div().flex_1().text_xs().text_color(fg).child(format!(
+                            // 值用主色：这是这一行的信息主体，不是标签的注解
+                            .text_xs()
+                            .text_color(fg)
+                            .child(format!(
                                 "{} 行 · {pk_text}",
                                 with_thousands(status.row_count.max(0) as u64)
-                            ))),
-                    );
+                            )),
+                    ));
                     // 自增起点预告：本次生成的自增列会从 MAX + 1 接续
                     if let (Some(pk), Some(max)) = (&status.pk_column, status.max_pk) {
-                        body = body.child(
-                            div()
-                                .text_xs()
-                                .text_color(info)
-                                .child(format!("{pk} 从 {} 开始接续（MAX + 1）", max + 1)),
-                        );
+                        body = body.child(info_line(
+                            theme,
+                            format!("{pk} 从 {} 开始接续（MAX + 1）", max + 1),
+                        ));
                     }
                 }
                 None => {
-                    body = body.child(
-                        div()
-                            .text_xs()
-                            .text_color(warning)
-                            .child("读不到目标表现状：将按现有行数接续自增，唯一冲突会整批拒绝。"),
-                    );
+                    body = body.child(warning_line(
+                        theme,
+                        "读不到目标表现状：将按现有行数接续自增，唯一冲突会整批拒绝。",
+                    ));
                 }
             }
 
@@ -1961,26 +2018,24 @@ impl MockPanel {
                 .footer(
                     DialogFooter::new()
                         .child(
-                            Button::new("mock-append-cancel")
-                                .secondary()
-                                .label("取消")
-                                .on_click(move |_, window, app| {
+                            button("mock-append-cancel", "取消", ActionKind::Soft).on_click(
+                                move |_, window, app| {
                                     let _ = cancel_panel.update(app, |panel, _cx| {
                                         *panel.append_pick.borrow_mut() = None;
                                     });
                                     window.close_dialog(app);
-                                }),
+                                },
+                            ),
                         )
                         .child(
-                            Button::new("mock-append-ok")
-                                .with_variant(ButtonVariant::Primary)
-                                .label("确认追加")
-                                .on_click(move |_, window, app| {
+                            button("mock-append-ok", "确认追加", ActionKind::Main).on_click(
+                                move |_, window, app| {
                                     let _ = ok_panel.update(app, |panel, cx| {
                                         panel.append_table(table_for_ok.clone(), cx);
                                     });
                                     window.close_dialog(app);
-                                }),
+                                },
+                            ),
                         ),
                 )
         });
@@ -2033,6 +2088,10 @@ impl MockPanel {
             kind,
             progress,
             cancel_requested: false,
+            started_at: Instant::now(),
+            unit_ms: None,
+            last_sample_at: Instant::now(),
+            eta_shown: None,
             _pump: self.spawn_job_pump(cx),
         });
         cx.notify();
@@ -2081,7 +2140,24 @@ impl MockPanel {
                         self.host.cancel_job();
                     }
                     if job.progress != progress {
+                        // 每前进一个单位取一次「每单位耗时」样本（EMA 平滑）：
+                        // 首单位含建临时表的开销，逐次收敛；否则 ETA 每 120ms 抖一次
+                        if progress.batches_done > job.progress.batches_done {
+                            job.unit_ms = smooth_unit_ms(
+                                job.unit_ms,
+                                job.started_at.elapsed(),
+                                progress.batches_done,
+                            );
+                        }
                         job.progress = progress;
+                        job.last_sample_at = Instant::now();
+                        notify = true;
+                    }
+                    // ETA 是「还要等多久」，不是「上次算出来多少」：卡住时它每秒往上涨，
+                    // 秒数真的变了才唤醒（不然 120ms 一次唤醒，面板白重排 8 次）
+                    let eta_secs = job.eta().map(|eta| eta.as_secs());
+                    if eta_secs != job.eta_shown {
+                        job.eta_shown = eta_secs;
                         notify = true;
                     }
                 }
@@ -2688,26 +2764,6 @@ impl MockPanel {
         cx.notify();
     }
 
-    /// 打开「生成器库」对话框（双视角浏览 + 分组「＋」自定义精调层），写回**面板列**。
-    pub fn open_generator_library(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_generator_library_with(
-            crate::mock_view::generator_library::LibraryWriteback::Panel { column_id: id },
-            window,
-            cx,
-        );
-    }
-
-    /// 打开「生成器库」对话框，写回目标可指定：面板列（字段行入口）或列编辑草稿
-    /// （列编辑对话框内入口，选中后参数区 / 样例随写回重建）。
-    pub(crate) fn open_generator_library_with(
-        &mut self,
-        writeback: crate::mock_view::generator_library::LibraryWriteback,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        crate::mock_view::generator_library::open_library(cx.entity(), writeback, window, cx);
-    }
-
     /// 按列名 + 类型重跑智能映射（「恢复智能默认」）。
     pub fn reset_column_mapping(&mut self, id: u64, cx: &mut Context<Self>) {
         if let Some(slot) = self.draft.columns.iter_mut().find(|c| c.id == id) {
@@ -2871,20 +2927,63 @@ impl MockPanel {
             let initial = self.draft.table_name.clone();
             let state = cx.new(|cx| InputState::new(window, cx).placeholder("目标表名"));
             state.update(cx, |s, cx| s.set_value(initial, window, cx));
+            // 打字即写回草稿：右 Dock 的清单行与中央 tab 标题都读 `draft.table_name`
+            //（不是输入框）。不订阅的话，从按下第一个键到点「生成」之前，
+            // 用户眼前的表名与自己刚打的名字是两个值。
+            self._input_subs
+                .push(cx.subscribe(&state, |panel, emitter, ev: &InputEvent, cx| {
+                    if !matches!(ev, InputEvent::Change) {
+                        return;
+                    }
+                    // 软校验：打到一半的非法值（空串 / 含空格）**不写回、也不报错**——
+                    // 报错留给「生成」那一刻（`sync_inputs`），打字途中刷红字只会干扰输入
+                    if let Ok(name) = validate_table_name(&emitter.read(cx).value()) {
+                        if panel.draft.table_name != name {
+                            panel.draft.table_name = name;
+                            cx.notify();
+                        }
+                    }
+                }));
             self.table_input = Some(state);
         }
         if let (Some(pending), Some(input)) = (self.table_pending.take(), self.table_input.clone())
         {
+            // `set_value` 不发 Change 事件：这里的回填不会回头触发上面的写回（无回环）
             input.update(cx, |s, cx| s.set_value(pending, window, cx));
         }
         if self.rows_input.is_none() {
             let initial = self.draft.options.rows.to_string();
             let state = cx.new(|cx| InputState::new(window, cx).placeholder("行数"));
             state.update(cx, |s, cx| s.set_value(initial, window, cx));
+            // 同表名：右 Dock 草稿行的「N 行」读的是 `draft.options.rows`
+            self._input_subs
+                .push(cx.subscribe(&state, |panel, emitter, ev: &InputEvent, cx| {
+                    if !matches!(ev, InputEvent::Change) {
+                        return;
+                    }
+                    if let Ok(rows) = parse_rows(&emitter.read(cx).value()) {
+                        if panel.draft.options.rows != rows {
+                            panel.draft.options.rows = rows;
+                            cx.notify();
+                        }
+                    }
+                }));
             self.rows_input = Some(state);
         }
         if self.seed_input.is_none() {
             let state = cx.new(|cx| InputState::new(window, cx).placeholder("随机种子"));
+            self._input_subs
+                .push(cx.subscribe(&state, |panel, emitter, ev: &InputEvent, cx| {
+                    if !matches!(ev, InputEvent::Change) {
+                        return;
+                    }
+                    if let Ok(seed) = parse_seed(&emitter.read(cx).value()) {
+                        if panel.draft.options.seed != seed {
+                            panel.draft.options.seed = seed;
+                            cx.notify();
+                        }
+                    }
+                }));
             self.seed_input = Some(state);
         }
         // S5：场景种子输入（只在场态渲染；随模板载入预填）

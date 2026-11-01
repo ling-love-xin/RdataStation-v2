@@ -2,120 +2,128 @@
 use super::*;
 
 impl MockPanel {
-    /// 表头第一行：表名 / 行数 / 种子 / 语言（草稿可改）。
+    /// 表头参数行：表名 / 行数 / 种子 / 语言（草稿可改）。
+    ///
+    /// 四个参数**同一行**：它们同属「这张表怎么造」的一次性设定，表名独占一行会把表头撑到
+    /// 两行高。每个控件前都带短标签——没有标签时两个数字框加一个下拉根本分不清谁是谁
+    /// （标签沿用 `form_line` 的口径：不加冒号，靠位置关系读）。
     fn render_target_rows(&self, cx: &mut Context<Self>) -> Div {
+        let hint = text_hint(cx.theme());
+        // 标签是「这个框是什么」，比它标的那个值更弱一档——此前标签与值同色，
+        // 四个控件摆一排全靠位置猜谁是谁。
+        let label = |text: &'static str| div().flex_none().text_xs().text_color(hint).child(text);
+
         let mut row = div().h_flex().items_center().gap_2().w_full();
+        // 表名：唯一会变长的（表名可长），吃掉剩余宽度
         if let Some(input) = self.table_input.clone() {
-            row = row.child(div().flex_1().min_w_0().child(Input::new(&input)));
-        }
-        let mut nums = div().h_flex().items_center().gap_2().w_full();
-        if let Some(input) = self.rows_input.clone() {
-            nums = nums.child(
+            row = row.child(
                 div()
-                    .w(rems(ui::NUM_INPUT_WIDTH))
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .flex_1()
+                    .min_w_0()
+                    .child(label("表名"))
+                    .child(div().flex_1().min_w_0().child(Input::new(&input))),
+            );
+        }
+        // 行数 / 种子：定宽数字框（值与标签都短，不需要伸缩）
+        if let Some(input) = self.rows_input.clone() {
+            row = row.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
                     .flex_none()
-                    .child(Input::new(&input)),
+                    .child(label("行数"))
+                    .child(
+                        div()
+                            .w(rems(ui::NUM_INPUT_WIDTH))
+                            .flex_none()
+                            .child(Input::new(&input)),
+                    ),
             );
         }
         if let Some(input) = self.seed_input.clone() {
-            nums = nums.child(
+            row = row.child(
                 div()
-                    .w(rems(ui::NUM_INPUT_WIDTH))
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
                     .flex_none()
-                    .child(Input::new(&input)),
+                    .child(label("种子"))
+                    .child(
+                        div()
+                            .w(rems(ui::NUM_INPUT_WIDTH))
+                            .flex_none()
+                            .child(Input::new(&input)),
+                    ),
             );
         }
         let locale = self.draft.options.locale.clone();
-        nums = nums.child({
-            let entity = cx.entity();
-            Button::new("mock-locale")
-                .ghost()
-                .label(locale_label(&locale))
-                // 组件自带下拉 caret（不再手拼「▾」字形）；`dropdown_caret` 与 `dropdown_menu`
-                // 是两个独立字段——开 caret 只画箭头，菜单照旧由 `dropdown_menu` 挂
-                .dropdown_caret(true)
-                .dropdown_menu(move |menu, _window, _cx| {
-                    let mut menu = menu;
-                    for candidate in LOCALES {
-                        let chosen = candidate.clone();
-                        let is_current = chosen == locale;
-                        let entity = entity.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(locale_label(&chosen))
-                                .checked(is_current)
-                                .on_click(move |_, _, app| {
-                                    let chosen = chosen.clone();
-                                    entity.update(app, |panel, cx| {
-                                        panel.draft.options.locale = chosen;
-                                        cx.notify();
-                                    });
-                                }),
-                        );
-                    }
-                    menu
-                })
-        });
-        div().v_flex().gap_1().w_full().child(row).child(nums)
+        row = row.child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .flex_none()
+                .child(label("语言"))
+                .child({
+                    let entity = cx.entity();
+                    dropdown_button("mock-locale", locale_label(&locale))
+                        // caret 由原语开（见 `style::dropdown_button`）：菜单藏在 caret 后面
+                        // 才是「这里能展开」的信号，漏挂它就只是个看不出有菜单的按钮
+                        .dropdown_menu(move |menu, _window, _cx| {
+                            let mut menu = menu;
+                            for candidate in LOCALES {
+                                let chosen = candidate.clone();
+                                let is_current = chosen == locale;
+                                let entity = entity.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(locale_label(&chosen))
+                                        .checked(is_current)
+                                        .on_click(move |_, _, app| {
+                                            let chosen = chosen.clone();
+                                            entity.update(app, |panel, cx| {
+                                                panel.draft.options.locale = chosen;
+                                                cx.notify();
+                                            });
+                                        }),
+                                );
+                            }
+                            menu
+                        })
+                }),
+        );
+        row
     }
 
-    /// 表头第二行：单表生成（三态）+ 场景模板菜单；有结果时尾部带一行结果摘要。
+    /// 单表生成按钮（三态）：无结果 → 主按钮「生成」；有结果 → 收成小按钮「重新生成」
+    /// （避免"要不要重跑"的分歧）；进行中 → 禁用「生成中…」。
     ///
-    /// 三态是同一个动作的不同阶段：无结果 → 主按钮「生成」；有结果 → 收成小按钮「重新生成」
-    /// （避免“要不要重跑”的分歧）；进行中 → 禁用「生成中…」。
-    fn render_generate_row(&self, cx: &mut Context<Self>) -> Div {
-        let muted = cx.theme().colors.muted_foreground;
+    /// 它和四个出口同属「这张表的动作」，与它们排在同一条动作行里（生成 → 落地闭环），
+    /// 不再单独占一行（原 `render_generate_row`）——表头省下的一行给列区与预览。
+    fn render_generate_button(&self, cx: &mut Context<Self>) -> AnyElement {
         let running = self.is_running();
         let generating = self.is_generating();
         let has_result = self.has_result();
-
-        let generate = {
-            let entity = cx.entity();
-            let mut button = if has_result {
-                Button::new("mock-detail-generate")
-                    .secondary()
-                    .xsmall()
-                    .label("重新生成")
-            } else {
-                Button::new("mock-detail-generate")
-                    .primary()
-                    .label(if generating { "生成中…" } else { "生成" })
-            };
-            if !running {
-                button = button.on_click(move |_, _, app| {
-                    entity.update(app, |panel, cx| panel.run_generate(cx));
-                });
-            }
-            button
-        };
-
-        // 场景模板（内置 6 套多表）：同样是生成类任务，进行中一并禁用
-        let scenario = self.render_scenario_button("mock-detail-scenario", cx);
-
-        let summary = self.current_info().map(|info| {
-            format!(
-                "临时表 {} · {} 行 · {} ms",
-                info.temp_table_name,
-                with_thousands(u64::from(info.row_count)),
-                info.elapsed_ms
+        let entity = cx.entity();
+        // 生成过一次之后收成 Soft：这张表的主行动让位给四个出口（生成的目的就是落地）
+        let mut generate_btn = if has_result {
+            button("mock-detail-generate", "重新生成", ActionKind::Soft).xsmall()
+        } else {
+            button(
+                "mock-detail-generate",
+                if generating { "生成中…" } else { "生成" },
+                ActionKind::Main,
             )
-        });
-
-        div()
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .w_full()
-            .child(generate)
-            .child(scenario)
-            .children(summary.map(|text| {
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_xs()
-                    .text_color(muted)
-                    .text_ellipsis()
-                    .child(text)
-            }))
+        };
+        if !running {
+            generate_btn = generate_btn.on_click(move |_, _, app| {
+                entity.update(app, |panel, cx| panel.run_generate(cx));
+            });
+        }
+        generate_btn.into_any_element()
     }
 
     /// 这张表的**设计与生成状态**（画在中央 tab 的表头，决策 D38）。
@@ -124,12 +132,11 @@ impl MockPanel {
     /// 与重试从属于同一次生成——它们属于这张表，不属于「有哪些表」那份清单（那是右 Dock 的事）。
     pub(crate) fn render_design_head(
         &mut self,
+        key: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         self.ensure_inputs(window, cx);
-        let muted = cx.theme().colors.muted_foreground;
-        let danger = cx.theme().colors.danger;
         let running = self.is_running();
         let has_result = self.has_result();
 
@@ -141,12 +148,15 @@ impl MockPanel {
 
         if self.scenario.is_some() {
             // 场景态：单表生成让位给「生成 N 张表」（在右 Dock），这里只说明草稿的用途
-            head =
-                head.child(div().text_xs().text_color(muted).child(
-                    "这是草稿：把表名 / 行数 / 列调好，再去右侧「＋ 加表」把它加进本次生成",
-                ));
+            head = head.child(hint_line(
+                cx.theme(),
+                "这是草稿：把表名 / 行数 / 列调好，再去右侧「＋ 加表」把它加进本次生成",
+            ));
         } else {
-            head = head.child(self.render_generate_row(cx));
+            // 动作行（生成 + 四个出口）：它和「表名 / 行数 / 列」同属这张表的闭环，
+            // 从预览段上移到这里——原来画在预览上方，出口竖排又把预览挤下去，
+            // 每次落地都要往下找。上移后生成 → 落地的读法连成一条。
+            head = head.child(self.render_sinks(key, window, cx));
         }
 
         // 单表任务的进度与取消（集合任务的在右 Dock 场景清单下，见 D38）
@@ -157,16 +167,13 @@ impl MockPanel {
         if let Some(err) = self.error.clone().filter(|_| !has_result) {
             let retry = {
                 let entity = cx.entity();
-                let mut button = Button::new("mock-detail-retry")
-                    .secondary()
-                    .xsmall()
-                    .label("重试");
+                let mut btn = button("mock-detail-retry", "重试", ActionKind::Soft).xsmall();
                 if !running {
-                    button = button.on_click(move |_, _, app| {
+                    btn = btn.on_click(move |_, _, app| {
                         entity.update(app, |panel, cx| panel.run_generate(cx));
                     });
                 }
-                button
+                btn
             };
             head = head.child(
                 div()
@@ -175,18 +182,45 @@ impl MockPanel {
                     .gap_2()
                     .w_full()
                     .child(
-                        div()
+                        // 原语给色与字号，收缩 / 截断在这里补：右侧还要挂「重试」按钮
+                        error_line(cx.theme(), format!("生成失败：{err}"))
                             .flex_1()
                             .min_w_0()
-                            .text_xs()
-                            .text_color(danger)
-                            .text_ellipsis()
-                            .child(format!("生成失败：{err}")),
+                            .text_ellipsis(),
                     )
                     .child(retry),
             );
         }
         head
+    }
+
+    /// 清单行（表名那一行）**下缘 2px 的进度线**：进行中的那张表才画。
+    ///
+    /// 为什么不画在行内：清单行只有 ~24px 高，且同时承载选中底 / 悬停底 / 左缘标识条，
+    /// 行内再塞一条进度条会把表名挤没；压到下缘 2px 则不占行内布局、不与任何底色叠色，
+    /// 长表名截断也不影响读数。集合任务（场景 N 张表 / 批量落库）逐表推进是
+    /// 「哪些过了、正在过哪张」，用三态（满线 / 扫光 / 不画）说，比挤一个百分比准。
+    fn row_progress_overlay(
+        &self,
+        key: &str,
+        table: &str,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
+        let state = self.row_progress(table, index)?;
+        let color = match state {
+            // 已经过完了：换成功色，与「还在过」的强调色区分开
+            RowProgress::Done => cx.theme().colors.success,
+            _ => cx.theme().colors.primary,
+        };
+        Some(
+            div()
+                .absolute()
+                .bottom_0()
+                .left_0()
+                .right_0()
+                .child(row_progress_line(key, state, color, cx)),
+        )
     }
 
     /// 任务进行中的进度行：`Progress` 组件 + 阶段文案 + 取消按钮。
@@ -210,7 +244,6 @@ impl MockPanel {
         let cancel_requested = job.cancel_requested;
         let by_table_detail = job.kind.by_table();
 
-        let muted = cx.theme().colors.muted_foreground;
         let detail = match progress.phase {
             MockJobPhase::Generating if progress.batches_total == 0 => "准备中…".to_string(),
             MockJobPhase::Generating if by_table_detail => format!(
@@ -236,49 +269,53 @@ impl MockPanel {
                 with_thousands(progress.rows_total as u64)
             ),
         };
-        let cancel =
-            cancellable.then(|| {
-                let entity = cx.entity();
-                let mut button = Button::new("mock-cancel-job").secondary().xsmall().label(
-                    if cancel_requested {
-                        "正在取消…"
-                    } else {
-                        "取消"
-                    },
-                );
-                if !cancel_requested {
-                    button = button.on_click(move |_, _, app| {
-                        entity.update(app, |panel, cx| panel.cancel_job(cx));
-                    });
-                }
-                button
-            });
+        // 剩余时间与批次读数同一行：它们说的是同一件事的两头（走到哪了 / 还要多久），
+        // 分开两行会让人先读到一个、再去找另一个
+        let mut tail = String::new();
+        if let Some(text) = self.job_eta().and_then(eta_text) {
+            tail = format!(" · {text}");
+        }
+        let cancel = cancellable.then(|| {
+            let entity = cx.entity();
+            let label = if cancel_requested {
+                "正在取消…"
+            } else {
+                "取消"
+            };
+            let mut btn = button("mock-cancel-job", label, ActionKind::Soft).xsmall();
+            if !cancel_requested {
+                btn = btn.on_click(move |_, _, app| {
+                    entity.update(app, |panel, cx| panel.cancel_job(cx));
+                });
+            }
+            btn
+        });
 
         div()
             .v_flex()
             .gap_1()
             .w_full()
-            .child(
-                Progress::new("mock-job-progress")
-                    .w_full()
-                    .loading(!progress.phase.is_quantified())
-                    .value(progress.percent()),
-            )
+            .child(job_progress_bar(
+                // 两个作用域只会同时渲染一个（`job_row_scope`），但 id 仍分开：
+                // 切作用域时若共用 id，扫光的动画相位会被另一处接着用
+                match scope {
+                    JobRowScope::Single => "job-single",
+                    JobRowScope::Collection => "job-collection",
+                },
+                progress.percent(),
+                // 出口阶段（写库 / 写文件）拿不到中间进度 → 不定量滑动
+                !progress.phase.is_quantified(),
+                JobBarSize::Head,
+                None,
+                cx,
+            ))
             .child(
                 div()
                     .h_flex()
                     .items_center()
                     .gap_2()
                     .w_full()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(muted)
-                            .text_ellipsis()
-                            .child(detail),
-                    )
+                    .child(card_note(cx.theme(), format!("{detail}{tail}")))
                     .children(cancel),
             )
     }
@@ -292,10 +329,8 @@ impl MockPanel {
         let running = self.is_running();
         let templates = self.scenario_templates.clone();
         let entity = cx.entity();
-        Button::new(id)
-            .secondary()
+        button(id, "场景模板", ActionKind::Soft)
             .xsmall()
-            .label("场景模板")
             .dropdown_caret(true)
             .disabled(running)
             .dropdown_menu(move |menu, _window, _cx| {
@@ -330,36 +365,33 @@ impl MockPanel {
     ) -> AnyElement {
         let entity = cx.entity();
         let current = self.preview_limit;
-        Button::new(format!("mock-preview-limit-{key}"))
-            .ghost()
-            .xsmall()
-            .label(format!("行数 {current}"))
-            .dropdown_caret(true)
-            .dropdown_menu(move |menu, _window, _cx| {
-                let mut menu = menu;
-                for choice in PREVIEW_LIMIT_CHOICES {
-                    let entity = entity.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(format!("{choice} 行"))
-                            .checked(choice == current)
-                            .on_click(move |_, _, app| {
-                                entity.update(app, |panel, cx| panel.set_preview_limit(choice, cx));
-                            }),
-                    );
-                }
-                menu
-            })
-            .into_any_element()
+        dropdown_button(
+            format!("mock-preview-limit-{key}"),
+            format!("行数 {current}"),
+        )
+        .dropdown_menu(move |menu, _window, _cx| {
+            let mut menu = menu;
+            for choice in PREVIEW_LIMIT_CHOICES {
+                let entity = entity.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(format!("{choice} 行"))
+                        .checked(choice == current)
+                        .on_click(move |_, _, app| {
+                            entity.update(app, |panel, cx| panel.set_preview_limit(choice, cx));
+                        }),
+                );
+            }
+            menu
+        })
+        .into_any_element()
     }
 
     /// 列来源按钮（导入源库结构 / 手工加列）：它们属于「这张表的列」→ 画在中央 tab 的「列」段。
     pub(crate) fn render_column_source_buttons(&self, cx: &mut Context<Self>) -> Div {
         let import = {
             let entity = cx.entity();
-            Button::new("mock-import-schema")
-                .secondary()
+            button("mock-import-schema", "导入结构", ActionKind::Soft)
                 .xsmall()
-                .label("导入结构")
                 .on_click(move |_, window, app| {
                     entity.update(app, |panel, cx| {
                         panel.open_import_dialog(window, cx);
@@ -368,12 +400,10 @@ impl MockPanel {
         };
         let add = {
             let entity = cx.entity();
-            Button::new("mock-add-column")
-                .secondary()
+            // 列区的主行动；「＋」走组件图标（与工具栏「新增 Mock 表」同一 `Plus`），不手拼字符
+            button("mock-add-column", "加列", ActionKind::Main)
                 .xsmall()
-                // 「＋」走组件图标（与工具栏「新增 Mock 表」同一 `Plus`），不手拼字符
                 .icon(IconName::Plus)
-                .label("加列")
                 .on_click(move |_, _, app| {
                     entity.update(app, |panel, cx| {
                         let index = panel.draft.columns.len() + 1;
@@ -385,11 +415,9 @@ impl MockPanel {
         // 与「导入结构」（源库批量）「加列」（手工起手）三分入口；应用后是普通列可再编辑
         let presets = {
             let entity = cx.entity();
-            Button::new("mock-preset-column")
-                .secondary()
+            button("mock-preset-column", "预设", ActionKind::Soft)
                 .xsmall()
                 .icon(IconName::Folder)
-                .label("预设")
                 .dropdown_caret(true)
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
@@ -440,13 +468,12 @@ impl MockPanel {
         let warning = cx.theme().colors.warning;
         let primary = cx.theme().colors.primary;
         let danger = cx.theme().colors.danger;
-        // 选中 / 悬停走列表角色（与 M4 导航、M5 草稿箱同一口径）：`accent` 是主题强调色，
-        // 拿它当选中底会让「当前表」与各種强调元素混作一谈
-        let selected_bg = cx.theme().colors.list_active;
-        let selected_border = cx.theme().colors.list_active_border;
-        let hover = cx.theme().colors.list_hover;
         let running = self.is_running();
-        let radius = cx.theme().radius;
+        // 一次性取主题（clone）：循环里还要可变借用 `cx`（`cx.entity()` 等），
+        // 不能一路把 `cx.theme()` 的借用攥在手里。
+        // 选中 / 悬停的色与卡片形态都收在 `row_card*` 原语里（与 M4 导航同口径：
+        // 选中走 `list_active` 族，不当场挑 `accent`）
+        let theme = cx.theme().clone();
 
         let mut list = div().v_flex().gap_1().w_full();
 
@@ -470,12 +497,10 @@ impl MockPanel {
         if !self.results.is_empty() {
             let count = self.results.len();
             let current_index = self.current.min(count.saturating_sub(1));
-            list = list.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(format!("结果表（{count}）· 点一行切到它的 tab")),
-            );
+            list = list.child(section(
+                &theme,
+                format!("结果表（{count}）· 点一行切到它的 tab"),
+            ));
             for (index, info) in self.results.iter().enumerate() {
                 if !query.is_empty() && !info.table_name.to_lowercase().contains(&query) {
                     continue;
@@ -528,7 +553,8 @@ impl MockPanel {
                             "mock-result-open-{click_name}"
                         ))))
                         .role(gpui::Role::Button)
-                        .flex_1()
+                        // 不再 `flex_1`：名字取自然宽度，好让状态紧跟其后；
+                        // 长表名靠 `min_w_0` + `text_ellipsis` 收缩，状态那格永远留得住
                         .min_w_0()
                         .text_xs()
                         .font_weight(if selected {
@@ -560,37 +586,42 @@ impl MockPanel {
                             }
                         })
                 };
-                let mut row = div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .h(rems(ui::ROW_HEIGHT))
-                    .px_1()
-                    .rounded(radius)
-                    .relative()
-                    .child(open)
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(format!("{} 行", with_thousands(u64::from(info.row_count)))),
-                    )
-                    .child(render_status_cell(icon, &status, color));
-                // 选中行：`list_active` 底 + 左缘 2px 标识条（浮在行左缘，不挤动名称列）；
-                // 悬停只给未选中行——不得覆盖激活态（与导航树同一口径）
-                row = if selected {
-                    row.bg(selected_bg).child(tree::active_bar(selected_border))
+                // 清单卡片（v_flex）：上面一行是这张表的信息，下面挂它的关系与下缘进度线。
+                // 卡片化之前这是贴在面板上的几行字，只有选中才临时上色——平时行与行之间没有边界
+                let mut card = if selected {
+                    row_card_selected(&theme)
                 } else {
-                    row.hover(move |s| s.bg(hover))
+                    row_card_interactive(&theme)
                 };
-                list = list.child(row);
-
-                // 关系挂在**子表**行下：`↳ user_id → users.id · 1..1,000`
+                card =
+                    card.child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .w_full()
+                            // 表名 + 状态同处一栏：状态紧跟表名，一眼读出「这张表现在什么态」。
+                            // 行数仍在行尾——它是量纲，不是状态，不该夹在名字和状态中间。
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(open)
+                                    .child(render_status_cell(icon, &status, color)),
+                            )
+                            .child(div().flex_none().text_xs().text_color(muted).child(format!(
+                                "{} 行",
+                                with_thousands(u64::from(info.row_count))
+                            ))),
+                    );
+                // 关系挂在**这这张卡的卡内**（`pl_4` 仍表达从属）：卡片化之后清单的视觉
+                // 单位是「一张表 = 一张卡」，关系属于这张表，不该掉到卡片外面单独成行
                 for relation in self.outgoing_relations(&name).iter() {
                     let range = self.relation_range(relation);
-                    list = list.child(
+                    card = card.child(
                         div()
                             .h_flex()
                             .items_center()
@@ -598,7 +629,7 @@ impl MockPanel {
                             .w_full()
                             .pl_4()
                             .text_xs()
-                            .text_color(muted)
+                            .text_color(text_hint(&theme))
                             .child(div().flex_1().min_w_0().text_ellipsis().child(format!(
                                 "↳ {} → {}.{}",
                                 relation.child_column,
@@ -608,6 +639,13 @@ impl MockPanel {
                             .children(range.map(|range| div().flex_none().child(range))),
                     );
                 }
+                // 下缘 2px 进度线：这张表走到哪了（切走中央 tab 也还看得见）
+                if let Some(line) =
+                    self.row_progress_overlay(&format!("result-{name}"), &name, index, cx)
+                {
+                    card = card.child(line);
+                }
+                list = list.child(card);
             }
             return list;
         }
@@ -624,15 +662,11 @@ impl MockPanel {
                     template.name
                 )
             };
-            list = list.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .text_ellipsis()
-                    .child(heading),
-            );
+            list = list.child(section(&theme, heading));
             let relations = relations_of(&template);
-            for table in template.tables.iter() {
+            // `enumerate` 的序号是**集合里的真实位置**（搜索过滤只影响显示，不改它）：
+            // 逐表推进的进度线按它判断「这张过了没有」
+            for (index, table) in template.tables.iter().enumerate() {
                 if !query.is_empty() && !table.name.to_lowercase().contains(&query) {
                     continue;
                 }
@@ -640,86 +674,137 @@ impl MockPanel {
                 let edit = {
                     let entity = cx.entity();
                     let click_name = name.clone();
-                    let mut button = Button::new(ElementId::Name(SharedString::from(format!(
-                        "mock-scenario-table-edit-{click_name}"
-                    ))))
-                    .ghost()
+                    let mut btn = button(
+                        SharedString::from(format!("mock-scenario-table-edit-{click_name}")),
+                        "编辑",
+                        ActionKind::Quiet,
+                    )
                     .xsmall()
-                    .label("编辑")
                     .disabled(running);
                     if !running {
-                        button = button.on_click(move |_, window, app| {
+                        btn = btn.on_click(move |_, window, app| {
                             let name = click_name.clone();
                             entity.update(app, |panel, cx| {
                                 panel.open_table_dialog(&name, window, cx);
                             });
                         });
                     }
-                    button
+                    btn
                 };
                 let remove = {
                     let entity = cx.entity();
                     let click_name = name.clone();
-                    let mut button = Button::new(ElementId::Name(SharedString::from(format!(
-                        "mock-scenario-table-remove-{click_name}"
-                    ))))
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::Close)
-                    .tooltip("从本次生成移除这张表")
+                    let mut btn = icon_button(
+                        SharedString::from(format!("mock-scenario-table-remove-{click_name}")),
+                        IconName::Close,
+                        "从本次生成移除这张表",
+                    )
                     .disabled(running);
                     if !running {
-                        button = button.on_click(move |_, _, app| {
+                        btn = btn.on_click(move |_, _, app| {
                             let name = click_name.clone();
                             entity.update(app, |panel, cx| {
                                 panel.remove_scenario_table(&name, cx);
                             });
                         });
                     }
-                    button
+                    btn
                 };
-                list =
-                    list.child(
+                // 行焦点句柄：行内操作是悬停才显形的，键盘用户没有悬停，
+                // 焦点落到行上时也要显形。按业务键（表名）缓存句柄——每帧新建会丢焦点。
+                let row_handle = window
+                    .use_keyed_state(
+                        ElementId::Name(SharedString::from(format!("mock-scenario-row-{name}"))),
+                        cx,
+                        |_, cx| cx.focus_handle(),
+                    )
+                    .read(cx);
+                let row_focused = row_handle.is_focused(window);
+                let row_active =
+                    self.hovered_scenario_table.as_deref() == Some(name.as_str()) || row_focused;
+                let hover_border = theme.colors.ring;
+                // 清单卡片（v_flex）：卡片化之后清单的视觉单位是「一张表 = 一张卡」
+                let mut card = row_card(&theme)
+                    // 元素 id 是挂 hover 事件的前提（无 id 的元素收不到 hover）
+                    .id(ElementId::Name(SharedString::from(format!(
+                        "mock-scenario-row-{name}"
+                    ))))
+                    // 行可被 Tab 到（行内操作悬停才显形，键盘得先落到行上）
+                    .track_focus(&row_handle)
+                    .tab_stop(true)
+                    .on_hover({
+                        let entity = cx.entity();
+                        let hover_name = name.clone();
+                        move |&hovering, _, app| {
+                            entity.update(app, |panel, cx| {
+                                let next = hovering.then(|| hover_name.clone());
+                                if panel.hovered_scenario_table != next {
+                                    panel.hovered_scenario_table = next;
+                                    cx.notify();
+                                }
+                            });
+                        }
+                    });
+                // 卡内第一行：表名 + 状态 + 行数 + 行操作
+                card = card
+                    // 悬停 / 键盘聚焦：卡片描边转 ring。卡片底已经是卡片表面色，
+                    // 再拿 `list_hover` 换底等于没换（亮主题下它与卡片底同为 #f5f5f5）
+                    .when(row_active, move |c| c.border_color(hover_border))
+                    .child(
                         div()
                             .h_flex()
                             .items_center()
                             .gap_2()
                             .w_full()
-                            .h(rems(ui::ROW_HEIGHT))
-                            .px_1()
-                            .rounded(radius)
+                            // 表名 + 状态同栏（同上）：场景里的表还没生成，状态一律「待生成」
                             .child(
                                 div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_1()
                                     .flex_1()
                                     .min_w_0()
-                                    .text_xs()
-                                    .text_ellipsis()
-                                    .child(name.clone()),
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .text_xs()
+                                            .text_ellipsis()
+                                            .child(name.clone()),
+                                    )
+                                    .child(render_status_cell(None, "待生成", muted)),
                             )
                             .child(div().flex_none().text_xs().text_color(muted).child(format!(
                                 "{} 行",
                                 with_thousands(u64::from(table.row_count))
                             )))
-                            .child(render_status_cell(None, "待生成", muted))
-                            .child(edit)
-                            .child(remove),
+                            .child(if row_active {
+                                // 显形：鼠标在这行上 / 键盘焦点在这行上
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .flex_none()
+                                    .child(edit)
+                                    .child(remove)
+                            } else {
+                                // 不显形：占位容器保持宽度，行数那一格不会跟着按钮左右跳
+                                div().flex_none().w(rems(ui::ROW_OPS_WIDTH))
+                            }),
                     );
-
-                // 关系挂在**子表**行下（行尾 ✕ 删关系）
+                // 关系收进这张卡的卡内（`pl_4` 仍表达从属；行尾 ✕ 删关系）
                 for relation in relations.iter().filter(|r| r.child_table == name) {
                     let range = self.relation_range(relation);
                     let remove_relation = {
                         let entity = cx.entity();
                         let child_table = relation.child_table.clone();
                         let child_column = relation.child_column.clone();
-                        Button::new(ElementId::Name(SharedString::from(format!(
-                            "mock-relation-remove-{}-{}",
-                            child_table, child_column
-                        ))))
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::Close)
-                        .tooltip("删除这条关系")
+                        icon_button(
+                            SharedString::from(format!(
+                                "mock-relation-remove-{child_table}-{child_column}"
+                            )),
+                            IconName::Close,
+                            "删除这条关系",
+                        )
                         .on_click(move |_, _, app| {
                             let child_table = child_table.clone();
                             let child_column = child_column.clone();
@@ -728,7 +813,7 @@ impl MockPanel {
                             });
                         })
                     };
-                    list = list.child(
+                    card = card.child(
                         div()
                             .h_flex()
                             .items_center()
@@ -736,7 +821,7 @@ impl MockPanel {
                             .w_full()
                             .pl_4()
                             .text_xs()
-                            .text_color(muted)
+                            .text_color(text_hint(&theme))
                             .child(div().flex_1().min_w_0().text_ellipsis().child(format!(
                                 "↳ {} → {}.{}",
                                 relation.child_column,
@@ -747,40 +832,48 @@ impl MockPanel {
                             .child(remove_relation),
                     );
                 }
+                // 下缘 2px 进度线：场景生成是逐表推进的，这条线说「轮到 / 过了哪张」
+                if let Some(line) =
+                    self.row_progress_overlay(&format!("scenario-{name}"), &name, index, cx)
+                {
+                    card = card.child(line);
+                }
+                list = list.child(card);
             }
 
             // 自定义多表：把当前草稿加进来（导入结构 / 列编辑都在单表态里做完）
             let add_table = {
                 let entity = cx.entity();
-                let mut button = Button::new("mock-scenario-table-add")
-                    .secondary()
-                    .xsmall()
-                    .label("＋ 加表（当前草稿）")
-                    .disabled(running);
+                // 场景清单的主行动：把调好的草稿收进本次生成
+                let mut btn = button(
+                    "mock-scenario-table-add",
+                    "＋ 加表（当前草稿）",
+                    ActionKind::Main,
+                )
+                .xsmall()
+                .disabled(running);
                 if !running {
-                    button = button.on_click(move |_, _, app| {
+                    btn = btn.on_click(move |_, _, app| {
                         entity.update(app, |panel, cx| {
                             panel.add_draft_to_scenario(cx);
                         });
                     });
                 }
-                button
+                btn
             };
             let add_relation = {
                 let entity = cx.entity();
-                let mut button = Button::new("mock-add-relation")
-                    .secondary()
+                let mut btn = button("mock-add-relation", "＋ 加关系", ActionKind::Soft)
                     .xsmall()
-                    .label("＋ 加关系")
                     .disabled(running);
                 if !running {
-                    button = button.on_click(move |_, window, app| {
+                    btn = btn.on_click(move |_, window, app| {
                         entity.update(app, |panel, cx| {
                             panel.open_relation_dialog(window, cx);
                         });
                     });
                 }
-                button
+                btn
             };
             list = list
                 .child(
@@ -792,10 +885,12 @@ impl MockPanel {
                         .child(add_table)
                         .child(add_relation),
                 )
-                .child(div().text_xs().text_color(muted).child(
+                .child(hint_line(
+                    &theme,
                     "关系只在本次多表生成内成立（不读已落数据、不改已生成的表 / 文件）；行尾是取值域：父列自增参数 × 父表行数，改父表行数它跟着变。",
                 ))
-                .child(div().text_xs().text_color(muted).child(
+                .child(hint_line(
+                    &theme,
                     "加进来的表取草稿的表名 / 行数 / 列：先在中央那张草稿 tab 里调好，再加进本次生成。",
                 ));
             return list;
@@ -803,13 +898,7 @@ impl MockPanel {
 
         // ── 单表态：草稿（与它的结果）就这一行 ──
         // 标题行对齐原型清单头「本次 Mock 表（1）」（结果态走上面的「结果表（N）」分支）
-        list = list.child(
-            div()
-                .text_xs()
-                .text_color(muted)
-                .text_ellipsis()
-                .child("本次 Mock 表（1）"),
-        );
+        list = list.child(section(&theme, "本次 Mock 表（1）"));
         let name = self.draft.table_name.clone();
         let rows = with_thousands(self.draft.options.rows as u64);
         let (icon, status, color) = match self.table_status(&name) {
@@ -844,7 +933,7 @@ impl MockPanel {
                 // 自绘可点行：test_support 让 headless 测试可观察（与导航行同口径）；
                 // 无 test_support 的元素不进 observation 注册表，会被误判为「未渲染」
                 .test_support()
-                .flex_1()
+                // 不再 `flex_1`：名字取自然宽度，好让状态紧跟其后（长表名靠 ellipsis 收缩）
                 .min_w_0()
                 .text_xs()
                 .font_weight(FontWeight::MEDIUM)
@@ -866,88 +955,39 @@ impl MockPanel {
                     }
                 })
         };
-        list.child(
+        // 单表态只有这一行：它就是当前表 → 卡片走选中态（常驻，不挂 hover）
+        let mut card = row_card_selected(&theme).child(
             div()
                 .h_flex()
                 .items_center()
                 .gap_2()
                 .w_full()
-                .h(rems(ui::ROW_HEIGHT))
-                .px_1()
-                .rounded(radius)
-                .relative()
-                // 单表态只有这一行：它就是当前表，选中态常驻（不挂 hover）
-                .bg(selected_bg)
-                .child(tree::active_bar(selected_border))
-                .child(open)
+                // 表名 + 状态同栏（状态紧跟表名）：单表态只有这一行，状态更要贴着名字读
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .flex_1()
+                        .min_w_0()
+                        .child(open)
+                        .child(render_status_cell(icon, &status, color)),
+                )
                 .child(
                     div()
                         .flex_none()
                         .text_xs()
                         .text_color(muted)
                         .child(format!("{rows} 行")),
-                )
-                .child(render_status_cell(icon, &status, color)),
-        )
-        // 状态点分两套口径（生成的 / 落库的）：图例不常驻——280px 面板里 6 行解释
-        // 会把出口区挤出可视区（2026-10-30 布局调整）；收到单行「状态图例 ⓘ」，
-        // 悬停展开 6 项说明（与清单行右端状态点同一套 `render_status_cell`，不另写旧字形）
-        .child(
-            div()
-                .h_flex()
-                .items_center()
-                .gap_1()
-                .text_xs()
-                .text_color(muted)
-                .child("状态图例")
-                .child(
-                    HoverCard::new("mock-status-legend")
-                        .trigger(
-                            Button::new("mock-status-legend-trigger")
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Info)
-                                .tooltip("悬停查看状态含义"),
-                        )
-                        .content(|_, _, cx| {
-                            let theme = cx.theme();
-                            div()
-                                .v_flex()
-                                .gap_1()
-                                .p_2()
-                                .child(render_status_cell(
-                                    None,
-                                    "未生成",
-                                    theme.colors.muted_foreground,
-                                ))
-                                .child(render_status_cell(
-                                    Some(IconName::RefreshCw),
-                                    "生成中",
-                                    theme.colors.primary,
-                                ))
-                                .child(render_status_cell(
-                                    Some(IconName::Check),
-                                    "已生成",
-                                    theme.colors.success,
-                                ))
-                                .child(render_status_cell(
-                                    Some(IconName::CircleCheck),
-                                    "已落库",
-                                    theme.colors.success,
-                                ))
-                                .child(render_status_cell(
-                                    Some(IconName::Info),
-                                    "引用表未落库（多表）",
-                                    theme.colors.warning,
-                                ))
-                                .child(render_status_cell(
-                                    Some(IconName::CircleX),
-                                    "生成失败",
-                                    theme.colors.danger,
-                                ))
-                        }),
                 ),
-        )
+        );
+        // 下缘 2px 进度线（这张表就这一行：走到哪了直接看它）
+        if let Some(line) = self.row_progress_overlay("draft", &name, 0, cx) {
+            card = card.child(line);
+        }
+        list.child(card)
+        // 状态图例整行删掉：图例解释 6 种态，而实际态已经直接跟在表名旁（图标 + 文字），
+        // 再单独列一遍是拿说明挤占 280px 面板的清单空间。状态文字本身就说清了含义。
     }
 
     /// 这张表引用的父表里，还有没落库的吗（`⚠ 引用的表未落库` 的数据来源）。
@@ -967,16 +1007,15 @@ impl MockPanel {
             if let Some(template) = self.scenario.clone() {
                 let start = {
                     let entity = cx.entity();
-                    let mut button =
-                        Button::new("mock-scenario-generate")
-                            .primary()
-                            .label(if generating {
-                                "生成中…".to_string()
-                            } else {
-                                format!("生成 {} 张表", template.tables.len())
-                            });
+                    // 场景态的主行动：这一批就这一个填色按钮
+                    let label = if generating {
+                        "生成中…".to_string()
+                    } else {
+                        format!("生成 {} 张表", template.tables.len())
+                    };
+                    let mut btn = button("mock-scenario-generate", label, ActionKind::Main);
                     if !running {
-                        button = button.on_click(move |_, window, app| {
+                        btn = btn.on_click(move |_, window, app| {
                             entity.update(app, |panel, cx| {
                                 // 点生成 = 这一轮数据重新验收：先清掉上一轮残留的搜索过滤，
                                 // 免得新清单被旧关键词挡住（曾误判「只生成了一张表」）
@@ -987,7 +1026,7 @@ impl MockPanel {
                             });
                         });
                     }
-                    button
+                    btn
                 };
                 // S5：场景种子（留空 = 随机；填了 = 整组可复现，历史行标注 seed）
                 let seed_box = self
@@ -1002,16 +1041,14 @@ impl MockPanel {
                     .unwrap_or_else(|| div().flex_none());
                 let exit = {
                     let entity = cx.entity();
-                    let mut button = Button::new("mock-scenario-exit")
-                        .secondary()
-                        .label("退出场景")
+                    let mut btn = button("mock-scenario-exit", "退出场景", ActionKind::Soft)
                         .disabled(running);
                     if !running {
-                        button = button.on_click(move |_, _, app| {
+                        btn = btn.on_click(move |_, _, app| {
                             entity.update(app, |panel, cx| panel.close_scenario(cx));
                         });
                     }
-                    button
+                    btn
                 };
                 row = row
                     .child(div().flex_1().min_w_0().child(start))
@@ -1030,19 +1067,22 @@ impl MockPanel {
             if pending.is_empty() {
                 div()
             } else {
-                let button = {
+                // 出口区（批量）的主行动：与单表的「持久化」同口径
+                let persist_btn = {
                     let entity = cx.entity();
-                    let mut button = Button::new("mock-persist-related")
-                        .secondary()
-                        .xsmall()
-                        .label(format!("落库这 {} 张", pending.len()))
-                        .disabled(running);
+                    let mut btn = button(
+                        "mock-persist-related",
+                        format!("落库这 {} 张", pending.len()),
+                        ActionKind::Main,
+                    )
+                    .xsmall()
+                    .disabled(running);
                     if !running {
-                        button = button.on_click(move |_, _, app| {
+                        btn = btn.on_click(move |_, _, app| {
                             entity.update(app, |panel, cx| panel.persist_related(cx));
                         });
                     }
-                    button
+                    btn
                 };
                 div()
                     .h_flex()
@@ -1050,19 +1090,15 @@ impl MockPanel {
                     .gap_2()
                     .w_full()
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(cx.theme().colors.warning)
-                            .text_ellipsis()
-                            .child(format!(
-                                "还有 {} 张没落库：{}",
-                                pending.len(),
-                                pending.join("、")
-                            )),
+                        warning_line(
+                            cx.theme(),
+                            format!("还有 {} 张没落库：{}", pending.len(), pending.join("、")),
+                        )
+                        .flex_1()
+                        .min_w_0()
+                        .text_ellipsis(),
                     )
-                    .child(button)
+                    .child(persist_btn)
             }
         };
 
@@ -1074,11 +1110,13 @@ impl MockPanel {
             let has_root = self.host.project_root().is_some();
             if count > 1 && has_root && !running {
                 let entity = cx.entity();
-                let mut button = Button::new("mock-scratchpad-all")
-                    .secondary()
-                    .xsmall()
-                    .label(format!("全部存草稿箱（{} 张）", count));
-                button = button.on_click(move |_, _, app| {
+                let mut btn = button(
+                    "mock-scratchpad-all",
+                    format!("全部存草稿箱（{} 张）", count),
+                    ActionKind::Soft,
+                )
+                .xsmall();
+                btn = btn.on_click(move |_, _, app| {
                     entity.update(app, |panel, cx| panel.scratchpad_all(cx));
                 });
                 div()
@@ -1095,7 +1133,7 @@ impl MockPanel {
                             .text_ellipsis()
                             .child("场景结果一键导出（CSV）："),
                     )
-                    .child(button)
+                    .child(btn)
             } else {
                 div()
             }
@@ -1141,15 +1179,7 @@ impl MockPanel {
                                 .size(rems(ui::STATUS_ICON_SIZE))
                                 .text_color(muted),
                         )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_xs()
-                                .text_color(muted)
-                                .text_ellipsis()
-                                .child(main),
-                        ),
+                        .child(card_note(cx.theme(), main)),
                 )
                 .content(move |_, _, _cx| {
                     div()
@@ -1160,11 +1190,13 @@ impl MockPanel {
                 })
         };
 
+        // 不再自带 `p_2`：面板滚动容器已经给过一遍内距，这里再给就是 16px——
+        // 而工具栏是 8px（`PANEL_PADDING`），清单的左边缘比工具栏右错 8px，
+        // 一眼看上去就是没排过的草稿（工具栏有分隔线压着，错开格外显眼）
         div()
             .v_flex()
             .gap_2()
             .w_full()
-            .p_2()
             .child(table_list)
             .child(pending_row)
             .child(batch_row)
@@ -1184,9 +1216,6 @@ impl MockPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let muted = cx.theme().colors.muted_foreground;
-        let success = cx.theme().colors.success;
-        let danger = cx.theme().colors.danger;
         let fg = cx.theme().colors.foreground;
 
         let running = self.is_running();
@@ -1195,72 +1224,72 @@ impl MockPanel {
         let sinks_ready = self.sinks_ready();
         let persist = {
             let entity = cx.entity();
-            // 主出口（把结果写进项目分析库）：与其它三个出口区分层级——
-            // 其余都是「换个去向」，这个是「落到项目里」，视觉上给 primary
-            Button::new(format!("mock-persist-{key}"))
-                .primary()
-                .label("持久化到项目分析库")
-                .w_full()
-                .disabled(running || !sinks_ready)
-                .on_click(move |_, _, app| {
-                    entity.update(app, |panel, cx| panel.persist_table(cx));
-                })
+            // 出口区唯一的 Main：其余三个是「换个去向」，只有这个是「落到项目里」。
+            // 此前注释写着「视觉上给 primary」，代码挂的却是 `.secondary()`——
+            // 口头的层级不算数，画出来的才是（四个同形态时，用户只能读文字分辨）
+            button(
+                format!("mock-persist-{key}"),
+                "持久化到项目分析库",
+                ActionKind::Main,
+            )
+            .disabled(running || !sinks_ready)
+            .on_click(move |_, _, app| {
+                entity.update(app, |panel, cx| panel.persist_table(cx));
+            })
         };
         let append = {
             let entity = cx.entity();
             let tables = self.existing_tables.clone();
-            Button::new(format!("mock-append-{key}"))
-                .secondary()
-                .label("追加到既有表")
-                .w_full()
-                .dropdown_caret(true)
-                .disabled(running || !sinks_ready)
-                .dropdown_menu(move |menu, _window, _cx| {
-                    let mut menu = menu;
-                    if tables.is_empty() {
-                        return menu
-                            .item(PopupMenuItem::new("（项目分析库暂无表）").disabled(true));
-                    }
-                    for name in tables.iter() {
-                        let table = name.clone();
-                        let entity = entity.clone();
-                        menu = menu.item(PopupMenuItem::new(name.clone()).on_click(
-                            move |_, window, app| {
-                                let table = table.clone();
-                                entity.update(app, |panel, cx| {
-                                    panel.open_append_dialog(table, window, cx);
-                                });
-                            },
-                        ));
-                    }
-                    menu
-                })
+            button(
+                format!("mock-append-{key}"),
+                "追加到既有表",
+                ActionKind::Soft,
+            )
+            .dropdown_caret(true)
+            .disabled(running || !sinks_ready)
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                if tables.is_empty() {
+                    return menu.item(PopupMenuItem::new("（项目分析库暂无表）").disabled(true));
+                }
+                for name in tables.iter() {
+                    let table = name.clone();
+                    let entity = entity.clone();
+                    menu = menu.item(PopupMenuItem::new(name.clone()).on_click(
+                        move |_, window, app| {
+                            let table = table.clone();
+                            entity.update(app, |panel, cx| {
+                                panel.open_append_dialog(table, window, cx);
+                            });
+                        },
+                    ));
+                }
+                menu
+            })
         };
         let scratchpad = {
             let entity = cx.entity();
-            Button::new(format!("mock-save-scratchpad-{key}"))
-                .secondary()
-                .label("保存到草稿箱")
-                .w_full()
-                .dropdown_caret(true)
-                .disabled(running || !sinks_ready)
-                .dropdown_menu(move |menu, _window, _cx| {
-                    let mut menu = menu;
-                    for (label, format) in FILE_FORMATS {
-                        let entity = entity.clone();
-                        menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, app| {
-                            entity.update(app, |panel, cx| panel.save_scratchpad(&format, cx));
-                        }));
-                    }
-                    menu
-                })
+            button(
+                format!("mock-save-scratchpad-{key}"),
+                "保存到草稿箱",
+                ActionKind::Soft,
+            )
+            .dropdown_caret(true)
+            .disabled(running || !sinks_ready)
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                for (label, format) in FILE_FORMATS {
+                    let entity = entity.clone();
+                    menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, app| {
+                        entity.update(app, |panel, cx| panel.save_scratchpad(&format, cx));
+                    }));
+                }
+                menu
+            })
         };
         let export = {
             let entity = cx.entity();
-            Button::new(format!("mock-export-{key}"))
-                .secondary()
-                .label("另存为")
-                .w_full()
+            button(format!("mock-export-{key}"), "另存为", ActionKind::Soft)
                 .dropdown_caret(true)
                 .disabled(running || !self.has_result())
                 .dropdown_menu(move |menu, _window, _cx| {
@@ -1303,32 +1332,41 @@ impl MockPanel {
         let error = self.error.clone();
         let landed = self.landed.clone();
 
+        // 有结果时把「这次的代价」说出口（临时表 / 行数 / 耗时）：跟动作行同排右侧，
+        // 不再独占一行——它是这轮结果的注脚，不是新信息块。
+        let summary = self.current_info().map(|info| {
+            format!(
+                "临时表 {} · {} 行 · {} ms",
+                info.temp_table_name,
+                with_thousands(u64::from(info.row_count)),
+                info.elapsed_ms
+            )
+        });
+
         div()
             .v_flex()
-            .gap_2()
+            .gap_1()
             .w_full()
+            // 动作行：生成 + 四个出口横排（生成 → 落地，一条动作链走完）。
+            // 原来四个出口是 `w_full` 竖排，独占 4 行高度把预览往下挤；横排后
+            // 表头只多一行，且「生成在前、落地在后」的顺序本身就是这条链的读法。
+            // 竖向 `Separator` 撤掉：它把一条动作链切成两截，而按钮文案已各自说了去向。
             .child(
                 div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("出口（作用于当前 tab 那张表；生成后可用）"),
-            )
-            // 项目级出口（落库 / 追加 / 草稿箱）与文件级出口（另存为）分两组：
-            // 组件 `Separator` 分隔，不手搓 w_px 线条（容器层规范）
-            .child(
-                div()
-                    .v_flex()
-                    .gap_1()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
                     .w_full()
+                    .child(self.render_generate_button(cx))
                     .child(persist)
                     .child(append)
                     .child(scratchpad)
-                    .child(Separator::horizontal())
-                    .child(export),
+                    .child(export)
+                    .children(summary.map(|text| card_note(cx.theme(), text))),
             )
             // 出口反馈就地给（成功 / 失败 / 落库目标 / 当前状态）
-            .children(outcome.map(|text| div().text_xs().text_color(success).child(text)))
-            .children(error.map(|err| div().text_xs().text_color(danger).child(err)))
+            .children(outcome.map(|text| success_line(cx.theme(), text)))
+            .children(error.map(|err| error_line(cx.theme(), err)))
             .children(landed.map(|table| {
                 div()
                     .text_xs()
@@ -1347,17 +1385,17 @@ impl MockPanel {
     fn render_toolbar(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
         let running = self.is_running();
         let entity = cx.entity();
-        let muted = cx.theme().colors.muted_foreground;
 
         let new_table = {
             let entity = entity.clone();
-            Button::new("mock-toolbar-new-table")
-                .icon(IconName::Plus)
-                .ghost()
-                .tooltip("新增 Mock 表：开一个中央 tab 配字段与名称")
-                .on_click(move |_, window, app| {
-                    entity.update(app, |panel, cx| panel.new_draft_table(window, cx));
-                })
+            icon_button(
+                "mock-toolbar-new-table",
+                IconName::Plus,
+                "新增 Mock 表：开一个中央 tab 配字段与名称",
+            )
+            .on_click(move |_, window, app| {
+                entity.update(app, |panel, cx| panel.new_draft_table(window, cx));
+            })
         };
         // ⇄ 引用结构 = 原型 conn-pop：先弹连接列表选来源，再进对话框（库 / schema 按连接预填）。
         // 来源在 `open_import_dialog` 里填充，render 只读内存里的 `sources`（不触发 I/O）；
@@ -1365,64 +1403,67 @@ impl MockPanel {
         let import = {
             let entity = entity.clone();
             let sources = self.sources.clone();
-            Button::new("mock-toolbar-import")
-                .icon(IconName::HardDrive)
-                .ghost()
-                // 显式 `small`：`dropdown_menu` 返回 `DropdownMenuPopover`（无 Sizable，
-                // 进不了 Toolbar 的 size 托管槽），与 Toolbar 托管的按钮保持同档
-                .small()
-                .tooltip("引用数据库结构：选连接读表结构")
-                .dropdown_menu(move |menu, _window, _cx| {
-                    let mut menu = menu;
-                    if sources.is_empty() {
-                        let entity = entity.clone();
-                        menu = menu.item(PopupMenuItem::new("（暂无数据源）").disabled(true));
-                        return menu.item(PopupMenuItem::new("在对话框里选择连接…").on_click(
-                            move |_, window, app| {
-                                let entity = entity.clone();
-                                entity.update(app, |panel, cx| {
-                                    panel.open_import_dialog(window, cx);
-                                });
-                            },
-                        ));
-                    }
-                    for source in sources.iter() {
-                        let entity = entity.clone();
-                        let conn_id = source.conn_id.clone();
-                        menu = menu.item(PopupMenuItem::new(source.label.clone()).on_click(
-                            move |_, window, app| {
-                                let entity = entity.clone();
-                                let conn_id = conn_id.clone();
-                                entity.update(app, |panel, cx| {
-                                    panel.open_import_for(&conn_id, window, cx);
-                                });
-                            },
-                        ));
-                    }
-                    menu
-                })
+            icon_button(
+                "mock-toolbar-import",
+                IconName::HardDrive,
+                "引用数据库结构：选连接读表结构",
+            )
+            // 显式 `small`：`dropdown_menu` 返回 `DropdownMenuPopover`（无 Sizable，
+            // 进不了 Toolbar 的 size 托管槽），与 Toolbar 托管的按钮保持同档
+            .small()
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                if sources.is_empty() {
+                    let entity = entity.clone();
+                    menu = menu.item(PopupMenuItem::new("（暂无数据源）").disabled(true));
+                    return menu.item(PopupMenuItem::new("在对话框里选择连接…").on_click(
+                        move |_, window, app| {
+                            let entity = entity.clone();
+                            entity.update(app, |panel, cx| {
+                                panel.open_import_dialog(window, cx);
+                            });
+                        },
+                    ));
+                }
+                for source in sources.iter() {
+                    let entity = entity.clone();
+                    let conn_id = source.conn_id.clone();
+                    menu = menu.item(PopupMenuItem::new(source.label.clone()).on_click(
+                        move |_, window, app| {
+                            let entity = entity.clone();
+                            let conn_id = conn_id.clone();
+                            entity.update(app, |panel, cx| {
+                                panel.open_import_for(&conn_id, window, cx);
+                            });
+                        },
+                    ));
+                }
+                menu
+            })
         };
         let new_scene = {
             let entity = entity.clone();
-            Button::new("mock-toolbar-new-scene")
-                .icon(IconName::LayoutDashboard)
-                .ghost()
-                .tooltip("新增场景：从 0 张表开始的工作副本")
-                .disabled(running)
-                .on_click(move |_, _window, app| {
-                    entity.update(app, |panel, cx| panel.new_blank_scene(cx));
-                })
+            icon_button(
+                "mock-toolbar-new-scene",
+                IconName::LayoutDashboard,
+                "新增场景：从 0 张表开始的工作副本",
+            )
+            .disabled(running)
+            .on_click(move |_, _window, app| {
+                entity.update(app, |panel, cx| panel.new_blank_scene(cx));
+            })
         };
         let refresh = {
             let entity = entity.clone();
-            Button::new("mock-toolbar-refresh")
-                .icon(IconName::RefreshCw)
-                .ghost()
-                .tooltip("刷新：重读临时表与生成状态")
-                .disabled(self.results.is_empty())
-                .on_click(move |_, _, app| {
-                    entity.update(app, |panel, cx| panel.refresh_tables(cx));
-                })
+            icon_button(
+                "mock-toolbar-refresh",
+                IconName::RefreshCw,
+                "刷新：重读临时表与生成状态",
+            )
+            .disabled(self.results.is_empty())
+            .on_click(move |_, _, app| {
+                entity.update(app, |panel, cx| panel.refresh_tables(cx));
+            })
         };
         // 工具栏右侧的清单状态提示（对齐原型 mockToolHint：单表态「N 张草稿」；
         // 场景 / 结果态显示本批表数——比原型残留的「1 张草稿」更贴合当前清单）。
@@ -1448,15 +1489,7 @@ impl MockPanel {
                     .children([new_table, new_scene, refresh])
                     // import 是 `DropdownMenuPopover` 包装（无 Sizable），走非托管 content 槽
                     .content(import)
-                    .content(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(muted)
-                            .text_ellipsis()
-                            .child(hint),
-                    ),
+                    .content(card_note(cx.theme(), hint)),
             )
     }
 
@@ -1464,7 +1497,7 @@ impl MockPanel {
     ///
     /// 为何收起来：面板天天用的是上面那份「有哪些表」清单，历史与模板是偶尔翻一次的落盘记录；
     /// 展开状态存实体（不是每帧派生的），展开体走 `Collapsible`（不手搮揭示动画）。
-    fn render_folds(&mut self, cx: &mut Context<Self>) -> Div {
+    fn render_folds(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let border = cx.theme().colors.border;
         let open = self.fold_open;
         let toggle = {
@@ -1479,15 +1512,13 @@ impl MockPanel {
                 "生成历史 · 用户模板".to_string()
             };
             // 展开 / 收起箭头走图标（`ChevronDown` / `ChevronRight`），不用字形字符
-            Button::new("mock-fold-toggle")
-                .ghost()
+            button("mock-fold-toggle", label, ActionKind::Quiet)
                 .xsmall()
                 .icon(if open {
                     IconName::ChevronDown
                 } else {
                     IconName::ChevronRight
                 })
-                .label(label)
                 .on_click(move |_, _, app| {
                     entity.update(app, |panel, cx| {
                         panel.fold_open = !panel.fold_open;
@@ -1505,10 +1536,10 @@ impl MockPanel {
             .border_color(border)
             // 段序与折叠标题一致（「生成历史 · 用户模板」，见原型 §2 / 使用手册 §3）：
             // 展开后第一眼读到的就是标题先说的那一段
-            .child(self.render_history(cx))
+            .child(self.render_history(window, cx))
             // S5 起场景运行也记入历史（标注：scene_id + seed + 场景名，不落单表列行），
             // 所以这里没有「场景不进历史」的说明行——那条口径已随 S5 反转
-            .child(self.render_templates(cx));
+            .child(self.render_templates(window, cx));
 
         div()
             .v_flex()
@@ -1532,10 +1563,10 @@ impl MockPanel {
     ///
     /// 与历史段共用同一次后台读（`HistorySnapshot`）；「保存」走对话框问名字，
     /// 空配置与空名都在事件路径上拦住（不给静默失败）。
-    fn render_templates(&mut self, cx: &mut Context<Self>) -> Div {
-        let fg = cx.theme().colors.foreground;
-        let muted = cx.theme().colors.muted_foreground;
-        let border = cx.theme().colors.border;
+    fn render_templates(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        // 主题一次 clone：下面循环里还要可变借用 `cx`（`cx.entity()` / `use_keyed_state`）
+        let theme = cx.theme().clone();
+        let fg = theme.colors.foreground;
 
         let header = {
             let entity = cx.entity();
@@ -1544,20 +1575,13 @@ impl MockPanel {
                 .items_center()
                 .gap_2()
                 .w_full()
+                .child(div().flex_1().min_w_0().child(section(
+                    &theme,
+                    format!("用户模板（{}）", self.templates.len()),
+                )))
                 .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_xs()
-                        .text_color(muted)
-                        .text_ellipsis()
-                        .child(format!("用户模板（{}）", self.templates.len())),
-                )
-                .child(
-                    Button::new("mock-template-save")
-                        .ghost()
+                    button("mock-template-save", "保存为模板…", ActionKind::Quiet)
                         .xsmall()
-                        .label("保存为模板…")
                         .on_click(move |_, window, app| {
                             entity.update(app, |panel, cx| {
                                 panel.open_save_template_dialog(window, cx);
@@ -1602,12 +1626,12 @@ impl MockPanel {
             let apply = {
                 let entity = cx.entity();
                 let id = template.id.clone();
-                Button::new(ElementId::Name(SharedString::from(format!(
-                    "mock-template-apply-{id}"
-                ))))
-                .ghost()
+                button(
+                    SharedString::from(format!("mock-template-apply-{id}")),
+                    "应用",
+                    ActionKind::Quiet,
+                )
                 .xsmall()
-                .label("应用")
                 .on_click(move |_, _, app| {
                     let id = id.clone();
                     entity.update(app, |panel, cx| panel.apply_template(id, cx));
@@ -1616,31 +1640,54 @@ impl MockPanel {
             let delete = {
                 let entity = cx.entity();
                 let id = template.id.clone();
-                Button::new(ElementId::Name(SharedString::from(format!(
-                    "mock-template-delete-{id}"
-                ))))
-                .ghost()
-                .xsmall()
-                .label("删除")
+                danger_text_button(
+                    SharedString::from(format!("mock-template-delete-{id}")),
+                    "删除",
+                    cx.theme(),
+                )
                 .on_click(move |_, _, app| {
                     let id = id.clone();
                     entity.update(app, |panel, cx| panel.delete_template(id, cx));
                 })
             };
 
+            // 模板卡片：与历史卡片、列卡片同走 `card` 原语（表面色 + 内距 + 卡内分隔）。
+            // 操作是悬停 / 聚焦才显形的——一排卡片上每张都常驻两个按钮，
+            // 摆满一屏就是一屏灰按钮，那是草稿不是产品。
+            let card_handle = window
+                .use_keyed_state(
+                    ElementId::Name(SharedString::from(format!(
+                        "mock-template-card-{}",
+                        template.id
+                    ))),
+                    cx,
+                    |_, cx| cx.focus_handle(),
+                )
+                .read(cx);
+            let card_focused = card_handle.is_focused(window);
+            let active = self.hovered_template == Some(template.id.clone()) || card_focused;
             section = section.child(
-                div()
+                card_interactive(&theme)
                     .id(ElementId::Name(SharedString::from(format!(
                         "mock-template-{}",
                         template.id
                     ))))
-                    .v_flex()
-                    .gap_1()
-                    .w_full()
-                    .p_2()
-                    .border_1()
-                    .border_color(border)
-                    .rounded(cx.theme().radius)
+                    .track_focus(&card_handle)
+                    .tab_stop(true)
+                    .when(card_focused, |c| c.border_color(theme.colors.ring))
+                    .on_hover({
+                        let entity = cx.entity();
+                        let hover_id = template.id.clone();
+                        move |&hovering, _, app| {
+                            entity.update(app, |panel, cx| {
+                                let next = hovering.then(|| hover_id.clone());
+                                if panel.hovered_template != next {
+                                    panel.hovered_template = next;
+                                    cx.notify();
+                                }
+                            });
+                        }
+                    })
                     .child(
                         div()
                             .h_flex()
@@ -1652,17 +1699,28 @@ impl MockPanel {
                                     .flex_1()
                                     .min_w_0()
                                     .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
                                     .text_color(fg)
                                     .text_ellipsis()
                                     .child(template.name.clone()),
                             )
-                            .child(apply)
-                            .child(delete),
+                            .child(if active {
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .flex_none()
+                                    .child(apply)
+                                    .child(delete)
+                            } else {
+                                div().flex_none().w(rems(ui::ROW_OPS_WIDTH))
+                            }),
                     )
+                    .child(card_divider(&theme))
                     .child(
                         div()
                             .text_xs()
-                            .text_color(muted)
+                            .text_color(text_hint(&theme))
                             .text_ellipsis()
                             .child(meta),
                     ),
@@ -1676,10 +1734,11 @@ impl MockPanel {
     /// 列表与错误分开呈现：读失败时**保留旧列表**（能看到的旧数据比一片空白有用）。
     /// 行按 `created_at` 倒序（存储层已排），每行的 id 用任务 id——用得下标会在
     /// 「最新在前」的插入下把 hover 等按 id 记的状态串行。
-    fn render_history(&mut self, cx: &mut Context<Self>) -> Div {
-        let fg = cx.theme().colors.foreground;
+    fn render_history(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        // 主题一次 clone：下面循环里还要可变借用 `cx`（`cx.entity()` / `use_keyed_state`）
+        let theme = cx.theme().clone();
+        let fg = theme.colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
-        let border = cx.theme().colors.border;
         let danger = cx.theme().colors.danger;
         let success = cx.theme().colors.success;
 
@@ -1690,20 +1749,13 @@ impl MockPanel {
                 .items_center()
                 .gap_2()
                 .w_full()
+                .child(div().flex_1().min_w_0().child(section(
+                    &theme,
+                    format!("生成历史（最近 {} 次）", history::HISTORY_LIMIT),
+                )))
                 .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_xs()
-                        .text_color(muted)
-                        .text_ellipsis()
-                        .child(format!("生成历史（最近 {} 次）", history::HISTORY_LIMIT)),
-                )
-                .child(
-                    Button::new("mock-history-refresh")
-                        .ghost()
+                    button("mock-history-refresh", "刷新", ActionKind::Quiet)
                         .xsmall()
-                        .label("刷新")
                         .on_click(move |_, _, app| {
                             entity.update(app, |panel, cx| panel.refresh_history(cx));
                         }),
@@ -1712,7 +1764,7 @@ impl MockPanel {
 
         let mut section = div().v_flex().gap_1().w_full().child(header);
         if let Some(error) = self.history_error.clone() {
-            section = section.child(div().text_xs().text_color(danger).child(error));
+            section = section.child(error_line(&theme, error));
         }
         if self.history_loading && !self.history_loaded {
             // 不确定加载给一个 `Spinner`（小号转圈），文字保留便于弱网可读与测试断言
@@ -1785,12 +1837,12 @@ impl MockPanel {
             let replay = {
                 let entity = cx.entity();
                 let id = task.id.clone();
-                Button::new(ElementId::Name(SharedString::from(format!(
-                    "mock-history-replay-{id}"
-                ))))
-                .ghost()
+                button(
+                    SharedString::from(format!("mock-history-replay-{id}")),
+                    "重放",
+                    ActionKind::Quiet,
+                )
                 .xsmall()
-                .label("重放")
                 .on_click(move |_, _, app| {
                     let id = id.clone();
                     entity.update(app, |panel, cx| panel.replay_history(id, cx));
@@ -1799,31 +1851,50 @@ impl MockPanel {
             let delete = {
                 let entity = cx.entity();
                 let id = task.id.clone();
-                Button::new(ElementId::Name(SharedString::from(format!(
-                    "mock-history-delete-{id}"
-                ))))
-                .ghost()
-                .xsmall()
-                .label("删除")
+                danger_text_button(
+                    SharedString::from(format!("mock-history-delete-{id}")),
+                    "删除",
+                    cx.theme(),
+                )
                 .on_click(move |_, _, app| {
                     let id = id.clone();
                     entity.update(app, |panel, cx| panel.delete_history(id, cx));
                 })
             };
 
+            // 历史卡片：与模板卡片、列卡片同走 `card` 原语。
+            // 操作（重放 / 删除）悬停 / 聚焦才显形——同一模块里三种清单必须同一口径。
+            let card_handle = window
+                .use_keyed_state(
+                    ElementId::Name(SharedString::from(format!("mock-history-card-{}", task.id))),
+                    cx,
+                    |_, cx| cx.focus_handle(),
+                )
+                .read(cx);
+            let card_focused = card_handle.is_focused(window);
+            let active = self.hovered_history.as_deref() == Some(task.id.as_str()) || card_focused;
             section = section.child(
-                div()
+                card_interactive(&theme)
                     .id(ElementId::Name(SharedString::from(format!(
                         "mock-history-{}",
                         task.id
                     ))))
-                    .v_flex()
-                    .gap_1()
-                    .w_full()
-                    .p_2()
-                    .border_1()
-                    .border_color(border)
-                    .rounded(cx.theme().radius)
+                    .track_focus(&card_handle)
+                    .tab_stop(true)
+                    .when(card_focused, |c| c.border_color(theme.colors.ring))
+                    .on_hover({
+                        let entity = cx.entity();
+                        let hover_id = task.id.clone();
+                        move |&hovering, _, app| {
+                            entity.update(app, |panel, cx| {
+                                let next = hovering.then(|| hover_id.clone());
+                                if panel.hovered_history != next {
+                                    panel.hovered_history = next;
+                                    cx.notify();
+                                }
+                            });
+                        }
+                    })
                     .child(
                         div()
                             .h_flex()
@@ -1835,6 +1906,7 @@ impl MockPanel {
                                     .flex_1()
                                     .min_w_0()
                                     .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
                                     .text_color(fg)
                                     .text_ellipsis()
                                     .child(task.table_name.clone()),
@@ -1843,10 +1915,11 @@ impl MockPanel {
                                 div()
                                     .flex_none()
                                     .text_xs()
-                                    .text_color(muted)
+                                    .text_color(text_hint(&theme))
                                     .child(format!("{rows} 行")),
                             ),
                     )
+                    .child(card_divider(&theme))
                     .child(
                         div()
                             .h_flex()
@@ -1870,8 +1943,17 @@ impl MockPanel {
                                             .child(status_text),
                                     ),
                             )
-                            .child(replay)
-                            .child(delete),
+                            .child(if active {
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .flex_none()
+                                    .child(replay)
+                                    .child(delete)
+                            } else {
+                                div().flex_none().w(rems(ui::ROW_OPS_WIDTH))
+                            }),
                     ),
             );
         }
@@ -1904,37 +1986,32 @@ impl MockPanel {
             let body = div()
                 .v_flex()
                 .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.colors.muted_foreground)
-                        .child(format!(
-                            "存下当前配置：{rows} 行 · {columns} 列（含生成器与参数）。\
-                             目标表名不存——套用时按当时的输入走。"
-                        )),
-                )
+                .child(hint_line(
+                    theme,
+                    format!(
+                        "存下当前配置：{rows} 行 · {columns} 列（含生成器与参数）。目标表名不存——套用时按当时的输入走。"
+                    ),
+                ))
                 .child(form_line(theme, "模板名", &name));
             let panel_save = panel.clone();
             let input = name.clone();
             dialog.title("保存为模板").child(body).footer(
                 DialogFooter::new()
                     .child(
-                        Button::new("mock-template-dialog-cancel")
-                            .secondary()
-                            .label("取消")
-                            .on_click(move |_, window, app| {
+                        button("mock-template-dialog-cancel", "取消", ActionKind::Soft).on_click(
+                            move |_, window, app| {
                                 window.close_dialog(app);
-                            }),
+                            },
+                        ),
                     )
                     .child(
-                        Button::new("mock-template-dialog-ok")
-                            .with_variant(ButtonVariant::Primary)
-                            .label("保存")
-                            .on_click(move |_, window, app| {
+                        button("mock-template-dialog-ok", "保存", ActionKind::Main).on_click(
+                            move |_, window, app| {
                                 let value = input.read(app).value().to_string();
                                 panel_save.update(app, |panel, cx| panel.save_template(value, cx));
                                 window.close_dialog(app);
-                            }),
+                            },
+                        ),
                     ),
             )
         });
@@ -1992,23 +2069,12 @@ impl MockPanel {
         window.open_dialog(cx, move |dialog, _window, cx| {
             let theme = cx.theme();
             let current = selected.borrow().clone();
-            let mut body = div().v_flex().gap_2().child(
-                div()
-                    .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child("从源库读取表结构（列名 / 类型 / 可空 / 主键）并自动推断生成器；不读取数据本身。"),
-            );
-            // 连接：菜单选择（可见触发按钮）
-            let mut conn_row = div().h_flex().items_center().gap_2().w_full();
-            conn_row = conn_row.child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child("连接"),
-            );
-            conn_row = conn_row.child({
+            let mut body = div().v_flex().gap_2().child(hint_line(
+                theme,
+                "从源库读取表结构（列名 / 类型 / 可空 / 主键）并自动推断生成器；不读取数据本身。",
+            ));
+            // 连接：菜单选择（可见触发按钮）——走 `kv` 原语，与下面三行表单同起一条右端基线
+            let conn_row = kv(theme, "连接", {
                 let selected = selected.clone();
                 let catalog_input = catalog_input.clone();
                 let schema_input = schema_input.clone();
@@ -2017,43 +2083,36 @@ impl MockPanel {
                     .as_deref()
                     .and_then(|id| sources.iter().find(|s| s.conn_id == id))
                     .map(|s| s.label.clone());
-                Button::new("mock-import-conn")
-                    .ghost()
-                    .dropdown_caret(true)
-                    .label(match current_label {
+                dropdown_button(
+                    "mock-import-conn",
+                    match current_label {
                         Some(label) => label,
                         None => "选择连接".to_string(),
-                    })
-                    .dropdown_menu(move |menu, _window, _cx| {
-                        let mut menu = menu;
-                        if sources.is_empty() {
-                            return menu
-                                .item(PopupMenuItem::new("（暂无数据源）").disabled(true));
-                        }
-                        for candidate in sources.iter() {
-                            let source = candidate.clone();
-                            let selected = selected.clone();
-                            let catalog_input = catalog_input.clone();
-                            let schema_input = schema_input.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(candidate.label.clone()).on_click(
-                                    move |_, window, app| {
-                                        // 选中连接：记下 conn_id，并把连接记录的库 / schema 预填进输入框
-                                        *selected.borrow_mut() = Some(source.conn_id.clone());
-                                        let catalog = source.catalog.clone();
-                                        let schema = source.schema.clone();
-                                        catalog_input.update(app, |s, cx| {
-                                            s.set_value(catalog, window, cx)
-                                        });
-                                        schema_input.update(app, |s, cx| {
-                                            s.set_value(schema, window, cx)
-                                        });
-                                    },
-                                ),
-                            );
-                        }
-                        menu
-                    })
+                    },
+                )
+                .dropdown_menu(move |menu, _window, _cx| {
+                    let mut menu = menu;
+                    if sources.is_empty() {
+                        return menu.item(PopupMenuItem::new("（暂无数据源）").disabled(true));
+                    }
+                    for candidate in sources.iter() {
+                        let source = candidate.clone();
+                        let selected = selected.clone();
+                        let catalog_input = catalog_input.clone();
+                        let schema_input = schema_input.clone();
+                        menu = menu.item(PopupMenuItem::new(candidate.label.clone()).on_click(
+                            move |_, window, app| {
+                                // 选中连接：记下 conn_id，并把连接记录的库 / schema 预填进输入框
+                                *selected.borrow_mut() = Some(source.conn_id.clone());
+                                let catalog = source.catalog.clone();
+                                let schema = source.schema.clone();
+                                catalog_input.update(app, |s, cx| s.set_value(catalog, window, cx));
+                                schema_input.update(app, |s, cx| s.set_value(schema, window, cx));
+                            },
+                        ));
+                    }
+                    menu
+                })
             });
             body = body.child(conn_row);
             body = body
@@ -2066,53 +2125,46 @@ impl MockPanel {
             dialog.title("导入源库结构").child(body).footer(
                 DialogFooter::new()
                     .child(
-                        Button::new("mock-import-cancel")
-                            .secondary()
-                            .label("取消")
-                            .on_click(move |_, window, app| {
+                        button("mock-import-cancel", "取消", ActionKind::Soft).on_click(
+                            move |_, window, app| {
                                 window.close_dialog(app);
-                            }),
+                            },
+                        ),
                     )
-                    .child(
-                        Button::new("mock-import-ok")
-                            .with_variant(ButtonVariant::Primary)
-                            .label("导入")
-                            .on_click(move |_, window, app| {
-                                panel_ok.update(app, |panel, cx| {
-                                    let request = SchemaRequest {
-                                        conn_id: selected_ok
-                                            .borrow()
-                                            .clone()
-                                            .unwrap_or_default(),
-                                        catalog: panel
-                                            .import_catalog
-                                            .as_ref()
-                                            .map(|i| i.read(cx).value().to_string())
-                                            .unwrap_or_default(),
-                                        schema: panel
-                                            .import_schema
-                                            .as_ref()
-                                            .map(|i| i.read(cx).value().to_string())
-                                            .unwrap_or_default(),
-                                        table: panel
-                                            .import_table
-                                            .as_ref()
-                                            .map(|i| i.read(cx).value().to_string())
-                                            .unwrap_or_default(),
-                                    };
-                                    if request.conn_id.is_empty() {
-                                        panel.fail("请选择连接", cx);
-                                        return;
-                                    }
-                                    if request.table.trim().is_empty() {
-                                        panel.fail("请填写表名", cx);
-                                        return;
-                                    }
-                                    panel.preset_from_source(request, cx);
-                                });
-                                window.close_dialog(app);
-                            }),
-                    ),
+                    .child(button("mock-import-ok", "导入", ActionKind::Main).on_click(
+                        move |_, window, app| {
+                            panel_ok.update(app, |panel, cx| {
+                                let request = SchemaRequest {
+                                    conn_id: selected_ok.borrow().clone().unwrap_or_default(),
+                                    catalog: panel
+                                        .import_catalog
+                                        .as_ref()
+                                        .map(|i| i.read(cx).value().to_string())
+                                        .unwrap_or_default(),
+                                    schema: panel
+                                        .import_schema
+                                        .as_ref()
+                                        .map(|i| i.read(cx).value().to_string())
+                                        .unwrap_or_default(),
+                                    table: panel
+                                        .import_table
+                                        .as_ref()
+                                        .map(|i| i.read(cx).value().to_string())
+                                        .unwrap_or_default(),
+                                };
+                                if request.conn_id.is_empty() {
+                                    panel.fail("请选择连接", cx);
+                                    return;
+                                }
+                                if request.table.trim().is_empty() {
+                                    panel.fail("请填写表名", cx);
+                                    return;
+                                }
+                                panel.preset_from_source(request, cx);
+                            });
+                            window.close_dialog(app);
+                        },
+                    )),
             )
         });
     }
@@ -2124,25 +2176,16 @@ pub(crate) fn form_line(
     label: &str,
     input: &Entity<InputState>,
 ) -> Div {
-    div()
-        .h_flex()
-        .items_center()
-        .gap_2()
-        .w_full()
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_xs()
-                .text_color(theme.colors.muted_foreground)
-                .child(label.to_string()),
-        )
-        .child(
-            div()
-                .w(rems(ui::PARAM_INPUT_WIDTH))
-                .flex_none()
-                .child(Input::new(input)),
-        )
+    // 走 `kv`（标签-值行）这一支原语：它与卡片里的「生成器名 / 产出类型」是同一结构，
+    // 此前各写一份的后果是标签色分了两档（这里 muted_foreground、那里再淡一档）
+    kv(
+        theme,
+        label,
+        div()
+            .w(rems(ui::PARAM_INPUT_WIDTH))
+            .flex_none()
+            .child(Input::new(input)),
+    )
 }
 
 /// 复杂参数的一行：标签 + 多行文本（全宽）+ 格式提示。
@@ -2161,14 +2204,15 @@ pub(crate) fn complex_form_line(
         .child(
             div()
                 .text_xs()
-                .text_color(theme.colors.muted_foreground)
+                .text_color(text_hint(theme))
                 .child(label.to_string()),
         )
         .child(Textarea::new(state).h(rems(ui::COMPLEX_INPUT_HEIGHT)))
+        // 格式提示是「填错了才会回来读」的那一行：比标签还淡一档，不抢输入区的视线
         .child(
             div()
                 .text_xs()
-                .text_color(theme.colors.muted_foreground)
+                .text_color(text_hint(theme))
                 .child(hint.to_string()),
         )
 }
@@ -2194,11 +2238,12 @@ impl Render for MockPanel {
                             .v_flex()
                             .gap_2()
                             .w_full()
+                            .p_2()
                             // Dock 的面板头已经写着「Mock 生成」：面板内不再重复一个标题，
                             // 工具栏（＋⇄▦⟳）直接接在标题栏下面（D38 + 2026-10-18 对齐原型）
                             .child(self.render_toolbar(window, cx))
                             .child(actions)
-                            .child(self.render_folds(cx)),
+                            .child(self.render_folds(window, cx)),
                     ),
             )
     }

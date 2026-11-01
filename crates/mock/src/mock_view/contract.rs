@@ -110,6 +110,38 @@ pub struct MockPreview {
     pub rows: Vec<Vec<String>>,
 }
 
+/// 预览：Arrow 批次 → 字符串网格（视图层不依赖 Arrow）。
+///
+/// 放在契约层的原因：它是「引擎给的 [`QueryResult`] → 视图吃的 [`MockPreview`]」这唯一一道
+/// 转换，装配层（workbench 的 `services::mock_generator::flatten_preview`）曾各备一份私有副本。
+/// 视图层与工具层（预览工具）共用这一份，口径不会分叉。
+///
+/// `read_preview` 只填 `batches`（`rows` 为空），取值必须经 `QueryResult::from_batches`。
+///
+/// 空值一律落成字符串 `"NULL"`（视图只显示它，不参与 SQL 构造——与 `build_insert` 的
+/// `Option` 值是两回事，不要串用）。
+pub fn flatten_preview(preview: &::shared::models::QueryResult) -> MockPreview {
+    let rows = ::shared::models::QueryResult::from_batches(
+        preview.columns.clone(),
+        preview.batches.clone(),
+    )
+    .rows;
+    MockPreview {
+        columns: preview.columns.clone(),
+        rows: rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|value| match value {
+                        ::shared::models::Value::Null => "NULL".to_string(),
+                        other => other.to_string(),
+                    })
+                    .collect()
+            })
+            .collect(),
+    }
+}
+
 /// 生效中的排序：列名 + 方向。
 ///
 /// 它是一个**描述**（不含数据）：取样存在 [`PreviewCache`] 里（排序与多要几行共用一处缓存）。

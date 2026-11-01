@@ -1,0 +1,592 @@
+```html type="renderer"
+<html style="margin:0;padding:0;">
+<title>生成器筛选定位原型</title>
+<div style="width:100%;box-sizing:border-box;background:#141518;color:#e8e9ec;font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;font-size:14px;line-height:1.5;padding:18px 16px 26px;min-height:420px;">
+
+  <!-- 页头说明 -->
+  <div style="max-width:960px;margin:0 auto 12px;">
+    <div style="font-size:15px;font-weight:600;letter-spacing:.2px;">生成器库 · 筛选 / 搜索定位 — 交互原型</div>
+    <div style="font-size:12px;color:#9a9ba1;margin-top:2px;">复刻「列编辑 → 选择生成器窗口」。数据为真实目录子集（15 分类 / 方法级边界与实现一致）；参数区与样例为结构演示。交互：输入搜索词强展开并过滤、Enter 采纳首命中、Esc 语义、分组展开收起、双视角切换、最近使用、智能推荐。</div>
+  </div>
+
+  <!-- 对话框 -->
+  <div id="dlg" style="max-width:960px;margin:0 auto;background:#1e1f23;border:1px solid #3a3b40;border-radius:10px;overflow:hidden;box-shadow:0 10px 34px rgba(0,0,0,.5);">
+
+    <!-- 对话框标题 -->
+    <div style="padding:10px 14px;border-bottom:1px solid #2e2f33;font-size:13px;color:#c9cace;display:flex;align-items:center;gap:8px;">
+      <span style="font-weight:600;">列编辑</span>
+      <span style="color:#6e7076;">·</span>
+      <span style="color:#6e7076;">选择生成器窗口（顶部列名 + 搜索定位框，左库右参）</span>
+    </div>
+
+    <!-- 顶部行：列名 + 搜索定位框 -->
+    <div style="padding:12px 14px 10px;display:flex;align-items:center;gap:12px;">
+      <div style="display:flex;align-items:center;gap:8px;flex:none;">
+        <span style="font-size:12px;color:#9a9ba1;">列名</span>
+        <input id="colName" value="order_id" spellcheck="false"
+          style="width:150px;height:28px;padding:0 8px;background:#141518;border:1px solid #3a3b40;border-radius:5px;color:#e8e9ec;font-size:13px;box-sizing:border-box;font-family:inherit;outline:none;">
+      </div>
+      <input id="fq" placeholder="搜索定位生成器…" spellcheck="false" autocomplete="off"
+        style="flex:1;min-width:0;height:28px;padding:0 8px;background:#141518;border:1px solid #3a3b40;border-radius:5px;color:#e8e9ec;font-size:13px;box-sizing:border-box;font-family:inherit;outline:none;">
+      <span id="fqCount" style="flex:none;font-size:11.5px;color:#9a9ba1;font-variant-numeric:tabular-nums;">全部 60 项</span>
+    </div>
+    <div style="height:1px;background:#2e2f33;margin:0 14px 0;"></div>
+
+    <!-- 左右分栏 -->
+    <div style="display:flex;align-items:stretch;min-height:430px;">
+
+      <!-- 左栏：生成器库 -->
+      <div style="flex:none;width:312px;border-right:1px solid #2e2f33;padding:10px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px;">
+
+        <!-- 智能推荐 -->
+        <button id="btnSmart" style="height:30px;border:1px solid #3a3b40;background:#26272b;color:#c9cace;border-radius:5px;font-size:12px;cursor:pointer;font-family:inherit;">智能推荐</button>
+
+        <!-- TabBar 双视角 -->
+        <div style="display:flex;gap:2px;background:#141518;border:1px solid #3a3b40;border-radius:5px;padding:2px;">
+          <button class="tab" data-view="business" style="flex:1;height:26px;border:0;border-radius:4px;font-size:12px;cursor:pointer;font-family:inherit;color:#e8e9ec;background:#3b3d43;">业务分类</button>
+          <button class="tab" data-view="tech" style="flex:1;height:26px;border:0;border-radius:4px;font-size:12px;cursor:pointer;font-family:inherit;color:#9a9ba1;background:transparent;">数据类型</button>
+        </div>
+
+        <!-- 最近使用 -->
+        <div id="recentBox" style="display:none;flex-direction:column;gap:6px;">
+          <div style="font-size:11px;color:#6e7076;border-bottom:1px solid #2e2f33;padding-bottom:4px;">最近使用</div>
+          <div id="recentChips" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+        </div>
+
+        <!-- 分组列表 -->
+        <div id="groupList" style="flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px;"></div>
+      </div>
+
+      <!-- 右栏：本列参数 -->
+      <div style="flex:1;min-width:0;padding:10px 12px;box-sizing:border-box;overflow-y:auto;">
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div style="font-size:11px;color:#6e7076;border-bottom:1px solid #2e2f33;padding-bottom:4px;">本列 · 生成器（写回草稿，点「应用」落地）</div>
+          <div style="display:flex;flex-direction:column;gap:7px;background:#16171a;border:1px solid #2e2f33;border-radius:6px;padding:10px;">
+            <div style="display:flex;align-items:center;"><span style="width:88px;flex:none;font-size:12px;color:#9a9ba1;">生成器</span><span id="pGen" style="font-size:13px;color:#e8e9ec;font-weight:600;">随机整数</span></div>
+            <div style="display:flex;align-items:center;"><span style="width:88px;flex:none;font-size:12px;color:#9a9ba1;">产出类型</span><span id="pType" style="font-size:13px;color:#e8e9ec;">INTEGER</span></div>
+            <div style="display:flex;align-items:center;"><span style="width:88px;flex:none;font-size:12px;color:#9a9ba1;">业务组</span><span id="pCat" style="font-size:13px;color:#e8e9ec;">数值</span></div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:7px;background:#16171a;border:1px solid #2e2f33;border-radius:6px;padding:10px;">
+            <div style="font-size:11px;color:#9a9ba1;">参数（来自基础生成器）</div>
+            <div id="paramRows" style="display:flex;flex-direction:column;gap:7px;"></div>
+            <div style="display:flex;align-items:center;"><span style="width:88px;flex:none;font-size:12px;color:#9a9ba1;">样例预览</span><span id="pPreview" style="font-size:13px;color:#c9cace;font-family:Consolas,monospace;"></span></div>
+            <div style="display:flex;align-items:center;"><span style="width:88px;flex:none;font-size:12px;color:#9a9ba1;">空值率 / 唯一</span><span id="pMeta" style="font-size:12px;color:#9a9ba1;"></span></div>
+          </div>
+          <div style="font-size:11.5px;color:#6e7076;line-height:1.6;">采纳（点击项 / Enter / 最近使用 / 智能推荐）一律写回本列草稿，参数与样例即时重建；点「应用」才落地。Esc 关闭时有未应用修改会先弹确认（#6 丢失防护）。</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- footer -->
+    <div style="display:flex;justify-content:flex-end;gap:8px;padding:10px 14px;border-top:1px solid #2e2f33;">
+      <button id="btnCancel" style="height:30px;padding:0 14px;border:1px solid #3a3b40;background:#26272b;color:#c9cace;border-radius:5px;font-size:12px;cursor:pointer;font-family:inherit;">取消</button>
+      <button id="btnApplyNext" style="height:30px;padding:0 14px;border:1px solid #3a3b40;background:#26272b;color:#c9cace;border-radius:5px;font-size:12px;cursor:pointer;font-family:inherit;">应用并新增下一列</button>
+      <button id="btnApply" style="height:30px;padding:0 16px;border:1px solid #e8684a;background:#e8684a;color:#fff;border-radius:5px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;">应用</button>
+    </div>
+  </div>
+
+  <!-- 底部交互说明 -->
+  <div style="max-width:960px;margin:12px auto 0;display:flex;flex-wrap:wrap;gap:6px;font-size:11.5px;color:#6e7076;">
+    <span style="background:#1e1f23;border:1px solid #2e2f33;border-radius:4px;padding:3px 8px;">在搜索框输入词 → 全部命中分组强展开 + 首命中高亮</span>
+    <span style="background:#1e1f23;border:1px solid #2e2f33;border-radius:4px;padding:3px 8px;">Enter → 采纳当前视角第一个命中（写回草稿）</span>
+    <span style="background:#1e1f23;border:1px solid #2e2f33;border-radius:4px;padding:3px 8px;">Esc → 关闭语义（有未应用修改先确认）</span>
+    <span style="background:#1e1f23;border:1px solid #2e2f33;border-radius:4px;padding:3px 8px;">数据类型 Tab 只显示方法级生成器（#1）</span>
+  </div>
+
+  <div id="toast" style="position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#2b2c31;border:1px solid #45464c;border-radius:6px;padding:8px 16px;font-size:12px;color:#e8e9ec;z-index:99;opacity:0;transition:opacity .15s;pointer-events:none;max-width:560px;text-align:center;box-shadow:0 6px 22px rgba(0,0,0,.45);"></div>
+</div>
+<script>
+(function(){
+"use strict";
+try {
+  /* ============ 真实目录子集（与 generator_catalog.rs 一致） ============ */
+  var CATS = [
+    ["数值","Numeric"],["文本","Text"],["Markdown","Markdown"],["个人信息","Person"],
+    ["地址与网络标识","Address"],["日期时间","DateTime"],["商业","Business"],["金融","Finance"],
+    ["网络与技术","Tech"],["图片","Image"],["颜色","Color"],["Ferroid ID","FerroidId"],
+    ["标准编码","Code"],["汽车与行政","Vehicle"],["约束","Constraint"]
+  ];
+  var METHOD_CATS = {"数值":1,"文本":1,"Markdown":1,"日期时间":1,"约束":1};
+  // 方法级标记（与 is_method_spec 一致）：分类级方法 + Tech 的 uuid 族
+  var SPECS = {
+    "数值":[
+      ["auto_increment","自增序列","BIGINT",true,["起始值","步长"]],
+      ["random_int","随机整数","INTEGER",true,["最小值","最大值"]],
+      ["random_float","随机小数","FLOAT",true,["最小值","最大值","精度"]],
+      ["random_decimal","随机定点数","DECIMAL(18,2)",true,["最小值","最大值","小数位"]],
+      ["digit","单个数字","INTEGER",true,[]],
+      ["number_with_format","格式化数字","VARCHAR",true,["格式"]],
+      ["normal","正态分布","DOUBLE",true,["均值","标准差"]],
+      ["boolean","布尔值","BOOLEAN",true,["占比（%）"]],
+      ["constant","固定值","VARCHAR",true,["固定值"]],
+      ["time_series","时序数值（趋势+周期）","DOUBLE",true,["起始值","趋势","周期","周期振幅","噪声强度"]],
+      ["random_walk","随机游走","DOUBLE",true,["起始值","步长","波动率"]]
+    ],
+    "文本":[
+      ["words","随机词组","TEXT",true,["最小长度","最大长度"]],
+      ["sentence","随机句子","TEXT",true,["最小长度","最大长度"]],
+      ["paragraph","段落","TEXT",true,["数量"]],
+      ["regex","正则表达式","VARCHAR",true,["正则表达式"]],
+      ["template","模板字符串","VARCHAR",true,["模板"]],
+      ["word","随机单词","VARCHAR",true,[]]
+    ],
+    "Markdown":[
+      ["markdown_italic_word","Markdown 斜体词","TEXT",true,[]],
+      ["markdown_bold_word","Markdown 粗体词","TEXT",true,[]],
+      ["markdown_link","Markdown 链接","TEXT",true,[]],
+      ["markdown_bullet_points","Markdown 无序列表","TEXT",true,[]],
+      ["markdown_code","Markdown 代码块","TEXT",true,[]],
+      ["markdown_block_quote_multi","Markdown 多行引用","TEXT",true,[]]
+    ],
+    "个人信息":[
+      ["name","姓名","VARCHAR",false,[]],
+      ["name_with_title","带称谓姓名","VARCHAR",false,[]],
+      ["email","邮箱地址","VARCHAR",false,[]],
+      ["safe_email","安全邮箱","VARCHAR",false,[]],
+      ["phone_number","电话号码","VARCHAR",false,[]],
+      ["cell_number","手机号","VARCHAR",false,[]],
+      ["username","用户名","VARCHAR",false,[]],
+      ["password","密码","VARCHAR",false,["最小长度","最大长度"]]
+    ],
+    "地址与网络标识":[
+      ["country","国家","VARCHAR",false,[]],
+      ["city","城市","VARCHAR",false,[]],
+      ["state_name","省/州名","VARCHAR",false,[]],
+      ["zip_code","邮政编码","VARCHAR",false,[]],
+      ["street_name","街道名","VARCHAR",false,[]],
+      ["building_number","楼牌号","VARCHAR",false,[]],
+      ["latitude","纬度","DOUBLE",false,[]],
+      ["longitude","经度","DOUBLE",false,[]],
+      ["geohash","Geohash","VARCHAR",false,["精度"]],
+      ["time_zone","时区","VARCHAR",false,[]]
+    ],
+    "日期时间":[
+      ["date_time","日期时间（区间）","TIMESTAMP",true,["最小值","最大值","仅工作日"]],
+      ["date_time_before","某时间之前","TIMESTAMP",true,["早于"]],
+      ["date","日期（区间）","DATE",true,["最小值","最大值"]],
+      ["time","时间","TIME",true,[]],
+      ["duration","持续时间","INTEGER",true,[]],
+      ["sequential_date","顺序日期","DATE",true,["起始值","步长（秒）"]],
+      ["sequential_date_with_gaps","顺序日期（含缺口）","DATE",true,["起始值","步长（秒）","缺失概率"]]
+    ],
+    "商业":[
+      ["company_name","公司名","VARCHAR",false,[]],
+      ["job_title","职位","VARCHAR",false,[]],
+      ["profession","职业","VARCHAR",false,[]],
+      ["industry","行业","VARCHAR",false,[]],
+      ["seniority","职级","VARCHAR",false,[]],
+      ["position","岗位","VARCHAR",false,[]],
+      ["buzzword","行业术语","VARCHAR",false,[]],
+      ["catch_phrase","业务口号","TEXT",false,[]],
+      ["bs","套话短语","TEXT",false,[]]
+    ],
+    "金融":[
+      ["currency_code","货币代码","VARCHAR",false,[]],
+      ["currency_name","货币名称","VARCHAR",false,[]],
+      ["currency_symbol","货币符号","VARCHAR",false,[]],
+      ["bic","BIC 银行代码","VARCHAR",false,[]],
+      ["isin","ISIN 证券代码","VARCHAR",false,[]],
+      ["credit_card_number","信用卡号","VARCHAR",false,[]]
+    ],
+    "网络与技术":[
+      ["ip_address","IP 地址","VARCHAR",false,[]],
+      ["i_pv4","IPv4 地址","VARCHAR",false,[]],
+      ["i_pv6","IPv6 地址","VARCHAR",false,[]],
+      ["mac_address","MAC 地址","VARCHAR",false,[]],
+      ["url","URL","VARCHAR",false,[]],
+      ["user_agent","User-Agent","VARCHAR",false,[]],
+      ["mime_type","MIME 类型","VARCHAR",false,[]],
+      ["semver","语义化版本","VARCHAR",false,[]],
+      ["file_path","文件路径","VARCHAR",false,[]],
+      ["file_name","文件名","VARCHAR",false,[]],
+      ["uuid_v1","UUID v1","UUID",true,[]],
+      ["uuid_v4","UUID v4","UUID",true,[]]
+    ],
+    "图片":[
+      ["image_url","图片 URL","VARCHAR",false,["宽","高"]],
+      ["image_url_with_seed","图片 URL（固定种子）","VARCHAR",false,["宽","高","种子"]],
+      ["image_url_grayscale","图片 URL（灰度）","VARCHAR",false,["宽","高"]],
+      ["image_url_blur","图片 URL（模糊）","VARCHAR",false,["宽","高","模糊程度"]]
+    ],
+    "颜色":[
+      ["hex_color","HEX 颜色","VARCHAR",false,[]],
+      ["rgb_color","RGB 颜色","VARCHAR",false,[]],
+      ["rgba_color","RGBA 颜色","VARCHAR",false,[]],
+      ["hsl_color","HSL 颜色","VARCHAR",false,[]],
+      ["color","颜色名","VARCHAR",false,[]]
+    ],
+    "Ferroid ID":[
+      ["ferroid_u_l_i_d","ULID","VARCHAR",false,[]],
+      ["ferroid_twitter_id","Twitter ID","BIGINT",false,[]],
+      ["ferroid_instagram_id","Instagram ID","BIGINT",false,[]],
+      ["ferroid_discord_id","Discord ID","BIGINT",false,[]]
+    ],
+    "标准编码":[
+      ["isbn","ISBN","VARCHAR",false,[]],
+      ["isbn10","ISBN-10","VARCHAR",false,[]],
+      ["isbn13","ISBN-13","VARCHAR",false,[]],
+      ["rfc_status_code","RFC 状态码","INTEGER",false,[]],
+      ["valid_status_code","有效 HTTP 状态码","INTEGER",false,[]]
+    ],
+    "汽车与行政":[
+      ["licence_plate","车牌号","VARCHAR",false,[]],
+      ["health_insurance_code","医保编号","VARCHAR",false,[]]
+    ],
+    "约束":[
+      ["foreign_key","外键取值","VARCHAR",true,["取值集合"]],
+      ["sequence","序列取值","VARCHAR",true,["取值集合","循环"]],
+      ["weighted","加权取值","VARCHAR",true,["加权选项"]]
+    ]
+  };
+  // 自定义生成器（演示，命名变体 = 基础生成器 + 参数 patch + 名称）
+  var USER_GENS = {
+    "数值":[["会员等级（加权）","VARCHAR","基于 weighted 自定义",false]],
+    "个人信息":[["客户标签（模板）","TEXT","基于 template 自定义",false]]
+  };
+  // 样例（示意值，演示用）
+  var SAMPLES = {
+    "auto_increment":["1","2"],"random_int":["42","17"],"random_float":["3.14","0.618"],
+    "random_decimal":["128.50","99.99"],"digit":["7","3"],"number_with_format":["#008","#123"],
+    "normal":["0.21","-1.08"],"boolean":["true","false"],"constant":["fixed","fixed"],
+    "time_series":["102.4","103.1"],"random_walk":["100","96.2"],
+    "words":["hello world","快速 狐狸"],"sentence":["这是一句演示文本。","第二句演示。"],
+    "paragraph":["段落一……","段落二……"],"regex":["AB-1234","XY-9876"],"template":["ORD-2026-001","ORD-2026-002"],
+    "word":["alpha","beta"],
+    "markdown_italic_word":["*斜体*","*强调*"],"markdown_bold_word":["**粗体**","**重要**"],
+    "markdown_link":["[链接](https://x)","[文档](https://y)"],"markdown_bullet_points":["- a\n- b","- 1\n- 2"],
+    "markdown_code":["```rust\nfn main(){}```","```sql\nSELECT 1```"],"markdown_block_quote_multi":["> 第一行\n> 第二行","> quote"],
+    "name":["张伟","李娜"],"name_with_title":["张先生","李女士"],"email":["zhangwei@example.com","lina@example.com"],
+    "safe_email":["user1@example.org","user2@example.org"],"phone_number":["010-6688 1234","021-5566 7890"],
+    "cell_number":["138-0000-1234","159-1234-5678"],"username":["zhangwei_01","lina_88"],
+    "password":["p@ssW0rd!","Qw3rty!234"],
+    "country":["中国","美国"],"city":["郑州","上海"],"state_name":["河南省","上海市"],
+    "zip_code":["450000","200000"],"street_name":["经三路","南京东路"],"building_number":["12 号","88 号"],
+    "latitude":["34.7466","31.2304"],"longitude":["113.6253","121.4737"],"geohash":["wtm7kk","wtw3sj"],
+    "time_zone":["Asia/Shanghai","UTC"],
+    "date_time":["2026-03-12 08:30:00","2026-09-01 18:00:00"],"date_time_before":["2026-06-30 12:00:00","2026-12-31 23:59:59"],
+    "date":["2026-01-15","2026-11-02"],"time":["08:00:00","17:30:00"],"duration":["3600","86400"],
+    "sequential_date":["2026-01-01","2026-01-02"],"sequential_date_with_gaps":["2026-01-01","2026-01-03"],
+    "company_name":["星河科技","蓝海贸易"],"job_title":["产品经理","后端工程师"],"profession":["工程师","设计师"],
+    "industry":["互联网","制造"],"seniority":["高级","初级"],"position":["CTO","QA"],"buzzword":["赋能","闭环"],
+    "catch_phrase":["让数据说话。","连接一切。"],"bs":["推动生态协同","激活增长引擎"],
+    "currency_code":["CNY","USD"],"currency_name":["人民币","美元"],"currency_symbol":["¥","$"],
+    "bic":["BKCHCNBJ","BOFAUS3N"],"isin":["CN000A0","US0378331005"],"credit_card_number":["4111-1111-1111-1111","5500-0000-0000-0004"],
+    "ip_address":["192.168.1.10","10.0.0.8"],"i_pv4":["172.16.0.1","203.0.113.9"],"i_pv6":["2001:db8::1","fe80::1"],
+    "mac_address":["00:1B:44:11:3A:B7","3C:97:0E:44:55:66"],"url":["https://a.com/x","https://b.cn/y"],
+    "user_agent":["Mozilla/5.0 (Windows NT 10.0)","curl/8.4"],"mime_type":["application/json","text/plain"],
+    "semver":["1.4.2","2.0.0-alpha.1"],"file_path":["/var/data/1.csv","C:\\logs\\a.log"],
+    "file_name":["report_01.xlsx","backup.tar.gz"],"uuid_v1":["b6f7e2b0-...","c8a1d0f2-..."],
+    "uuid_v4":["8f14e45f-ceea-467a-9840-2c0b4f3a8d12","a3b9c1d2-e4f5-4a6b-8c7d-9e0f1a2b3c4d"],
+    "image_url":["https://img.x/a.png","https://img.x/b.jpg"],"image_url_with_seed":["https://img.x/s=1.png","https://img.x/s=2.png"],
+    "image_url_grayscale":["https://img.x/g.png","https://img.x/g2.png"],"image_url_blur":["https://img.x/b.png","https://img.x/b2.png"],
+    "hex_color":["#4A8BC9","#E8684A"],"rgb_color":["rgb(74,139,201)","rgb(232,104,74)"],
+    "rgba_color":["rgba(74,139,201,.8)","rgba(232,104,74,.5)"],"hsl_color":["hsl(210,53%,54%)","hsl(12,78%,60%)"],
+    "color":["珊瑚橙","云杉绿"],
+    "ferroid_u_l_i_d":["01FZ...","01GA..."],"ferroid_twitter_id":["1283710293712","9921003"],
+    "ferroid_instagram_id":["4027610301","8802114"],"ferroid_discord_id":["2500010203","9900102"],
+    "isbn":["978-7-111-00000-0","978-0-13-00000-0"],"isbn10":["0-13-000000-0","1-111-00000-0"],
+    "isbn13":["978-7-111-00000-0","978-0-321-00000-0"],"rfc_status_code":["200","404"],
+    "valid_status_code":["200","404"],
+    "licence_plate":["豫A·12345","沪B·67890"],"health_insurance_code":["11000012345678","31000098765432"],
+    "foreign_key":["1001","1002"],"sequence":["A1","A2"],"weighted":["高","中"],
+    "会员等级（加权）":["金卡","银卡"],"客户标签（模板）":["VIP-老客","新客-华东"]
+  };
+  var DEFAULT_META = {"random_int":["5%","≈ 2 万"],"name":["0%","高基数"],"uuid_v4":["0%","全唯一"],"email":["2%","高基数"]};
+
+  /* ============ 状态 ============ */
+  var state = {
+    view: "business",           // business | tech
+    query: "",
+    expanded: {},               // 业务视角展开组
+    expandedTypes: {},          // 数据视角展开组
+    recent: ["random_int", "name"],  // 会话级最近使用
+    selected: null,             // 采纳的生成器 {name,label,type,cat,user}
+    order: null                 // 当前视角的展示顺序（渲染时算）
+  };
+
+  /* ============ 纯函数 ============ */
+  function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+  function methodOf(name){
+    for (var c in SPECS){ var arr=SPECS[c]; for (var i=0;i<arr.length;i++){ if(arr[i][0]===name) return arr[i][3]; } }
+    return false;
+  }
+  function catOf(name){
+    for (var c in SPECS){ var arr=SPECS[c]; for (var i=0;i<arr.length;i++){ if(arr[i][0]===name) return c; } }
+    return "个人信息";
+  }
+  function findSpec(name){
+    for (var c in SPECS){ var arr=SPECS[c]; for (var i=0;i<arr.length;i++){ if(arr[i][0]===name) return {name:arr[i][0],label:arr[i][1],type:arr[i][2],cat:c,method:arr[i][3],user:false}; } }
+    for (var u in USER_GENS){ var arr=USER_GENS[u]; for (var j=0;j<arr.length;j++){ if(arr[j][0]===name) return {name:arr[j][0],label:arr[j][0],type:arr[j][1],cat:u,method:false,user:true}; } }
+    return null;
+  }
+  function specMatches(name, q){
+    var s = findSpec(name); if (!s) return false;
+    var label = s.user ? s.label : (s.label);
+    return name.toLowerCase().indexOf(q) >= 0 || label.toLowerCase().indexOf(q) >= 0 || s.cat.toLowerCase().indexOf(q) >= 0;
+  }
+  function ugMatches(name, q){
+    var s = findSpec(name); if (!s) return false;
+    return name.toLowerCase().indexOf(q) >= 0 || s.type.toLowerCase().indexOf(q) >= 0;
+  }
+  // 当前视角 + 词下第一个命中（与 first_match_for 同顺序）
+  function firstMatch(){
+    var q = state.query.trim().toLowerCase();
+    if (!q) return null;
+    var groups = state.view === "business" ? CATS.map(function(c){return c[0];}) : TYPES_ORDER;
+    for (var g=0; g<groups.length; g++){
+      var cat = groups[g];
+      var builtins = builtinIn(cat);
+      for (var i=0;i<builtins.length;i++){ if (specMatches(builtins[i], q)) return findSpec(builtins[i]); }
+      var users = userIn(cat);
+      for (var j=0;j<users.length;j++){ if (ugMatches(users[j], q)) return findSpec(users[j]); }
+    }
+    return null;
+  }
+  var TYPES_ORDER = ["INTEGER","BIGINT","FLOAT","DOUBLE","DECIMAL(18,2)","BOOLEAN","VARCHAR","TEXT","DATE","TIME","TIMESTAMP","UUID","BLOB"];
+  function typeLabel(t){
+    if (t === "INTEGER") return "整数"; if (t === "BIGINT") return "长整数"; if (t === "FLOAT") return "浮点";
+    if (t === "DOUBLE") return "双精度"; if (t.indexOf("DECIMAL") === 0) return "定点数"; if (t === "BOOLEAN") return "布尔";
+    if (t === "VARCHAR") return "变长文本"; if (t === "TEXT") return "长文本"; if (t === "DATE") return "日期";
+    if (t === "TIME") return "时间"; if (t === "TIMESTAMP") return "时间戳"; if (t === "UUID") return "UUID"; return "二进制";
+  }
+  // 某分组下的内建项（业务=全量；数据=只方法级）与自定义项
+  function builtinIn(cat){
+    var arr = SPECS[cat] || [];
+    if (state.view === "tech") return arr.filter(function(s){ return s[3]; }).map(function(s){ return s[0]; });
+    return arr.map(function(s){ return s[0]; });
+  }
+  function userIn(cat){
+    return (USER_GENS[cat] || []).map(function(s){ return s[0]; });
+  }
+  function groupsOrder(){
+    if (state.view === "business") return CATS.map(function(c){ return c[0]; });
+    // 数据视角：按类型分组的键
+    var keys = {};
+    for (var c in SPECS){ SPECS[c].forEach(function(s){ if (s[3]) keys[s[2]] = 1; }); }
+    for (var u in USER_GENS){ USER_GENS[u].forEach(function(s){ keys[s[1]] = 1; }); }
+    return TYPES_ORDER.filter(function(t){ return keys[t]; });
+  }
+  function itemsIn(cat){
+    // cat 可能是分类名（业务）或类型标签（数据）
+    if (state.view === "business"){
+      var out = builtinIn(cat).map(function(n){ var s=findSpec(n); return {name:n,label:s.label,badge:s.type,user:false}; });
+      return out.concat(userIn(cat).map(function(n){ var s=findSpec(n); return {name:n,label:n,badge:s.type,user:true}; }));
+    }
+    var out = [];
+    for (var c in SPECS){ SPECS[c].forEach(function(s){ if (s[3] && s[2] === cat && (state.query === "" || specMatches(s[0], state.query))) out.push({name:s[0],label:s[1],badge:typeLabel(s[2]),user:false}); }); }
+    (function(){ for (var u in USER_GENS){ USER_GENS[u].forEach(function(s){ if (s[1] === cat && (state.query === "" || ugMatches(s[0], state.query))) out.push({name:s[0],label:s[0],badge:typeLabel(s[1]),user:true}); }); } })();
+    return out;
+  }
+  function countAll(){
+    var n = 0;
+    for (var c in SPECS){ n += SPECS[c].filter(function(s){ return state.view !== "tech" || s[3]; }).length; }
+    for (var u in USER_GENS){ n += USER_GENS[u].length; }
+    return n;
+  }
+  function countMatched(){
+    var q = state.query.trim().toLowerCase();
+    if (!q) return countAll();
+    var n = 0;
+    for (var c in SPECS){ SPECS[c].forEach(function(s){ if (state.view !== "tech" || s[3]){ if (specMatches(s[0], q)) n++; } }); }
+    for (var u in USER_GENS){ USER_GENS[u].forEach(function(s){ if (ugMatches(s[0], q)) n++; }); }
+    return n;
+  }
+
+  /* ============ 渲染 ============ */
+  function toast(msg){
+    var t = document.getElementById("toast");
+    if (!t) return;
+    t.textContent = msg;
+    t.style.opacity = "1";
+    clearTimeout(t._h);
+    t._h = setTimeout(function(){ t.style.opacity = "0"; }, 1800);
+  }
+  function renderTabs(){
+    var tabs = document.querySelectorAll(".tab");
+    tabs.forEach(function(el){
+      var on = el.dataset.view === state.view;
+      el.style.background = on ? "#3b3d43" : "transparent";
+      el.style.color = on ? "#e8e9ec" : "#9a9ba1";
+      el.style.fontWeight = on ? "600" : "400";
+    });
+  }
+  function renderRecent(){
+    var box = document.getElementById("recentBox");
+    var chips = document.getElementById("recentChips");
+    if (!box || !chips) return;
+    if (!state.recent.length){ box.style.display = "none"; return; }
+    box.style.display = "flex";
+    chips.innerHTML = "";
+    state.recent.forEach(function(n){
+      var s = findSpec(n); if (!s) return;
+      var b = document.createElement("button");
+      b.style.cssText = "height:26px;padding:0 10px;border:1px solid #3a3b40;background:#26272b;color:#c9cace;border-radius:12px;font-size:11.5px;cursor:pointer;font-family:inherit;";
+      b.textContent = s.label;
+      b.onclick = function(){ adopt(s, "最近使用"); };
+      chips.appendChild(b);
+    });
+  }
+  function renderGroups(){
+    var list = document.getElementById("groupList");
+    if (!list) return;
+    var q = state.query.trim().toLowerCase();
+    var groups = groupsOrder();
+    var html = "";
+    var first = firstMatch();
+    var firstName = first ? first.name : "";
+    groups.forEach(function(cat){
+      var items = itemsIn(cat);
+      // 有搜索词：过滤（含分类名命中）+ 强展开
+      var shown;
+      if (q){
+        shown = items.filter(function(it){
+          return specMatches(it.name, q) || (state.view === "business" && cat.toLowerCase().indexOf(q) >= 0) || (state.view === "tech" && cat.toLowerCase().indexOf(q) >= 0);
+        });
+      } else {
+        shown = items;
+      }
+      var total = items.length;
+      var expanded = q ? true : (state.view === "business" ? !!state.expanded[cat] : !!state.expandedTypes[cat]);
+      var arrow = expanded ? "▾" : "▸";
+      html += '<div style="display:flex;flex-direction:column;gap:1px;">';
+      html += '<div class="grp" data-cat="' + esc(cat) + '" style="display:flex;align-items:center;gap:8px;height:34px;cursor:pointer;border-radius:4px;padding:0 6px;">';
+      html += '<span style="color:#8a8b91;font-size:12px;width:10px;text-align:center;">' + arrow + '</span>';
+      html += '<span style="flex:1;min-width:0;font-size:12.5px;color:#e8e9ec;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(cat) + '（' + total + '）</span>';
+      html += '<span data-plus="' + esc(cat) + '" title="在该分组新建生成器" style="flex:none;width:24px;height:24px;line-height:24px;text-align:center;border-radius:4px;color:#9a9ba1;font-size:14px;cursor:pointer;">＋</span>';
+      html += '</div>';
+      if (expanded){
+        if (!shown.length){
+          html += '<div style="padding:2px 6px 4px 24px;font-size:11.5px;color:#6e7076;">（无命中项）</div>';
+        } else {
+          shown.forEach(function(it){
+            var hl = it.name === firstName ? 'style="background:#3a241e;border:1px solid #e8684a;"' : '';
+            html += '<div class="itm" data-name="' + esc(it.name) + '" ' + hl + ' style="' + (it.name === firstName ? 'background:#3a241e;border:1px solid #e8684a;' : '') + 'display:flex;align-items:center;gap:8px;height:34px;border:1px solid transparent;border-radius:4px;padding:0 6px 0 24px;cursor:pointer;">';
+            html += '<span style="flex:1;min-width:0;font-size:12.5px;color:#e8e9ec;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(it.label) + '</span>';
+            html += '<span style="flex:none;font-size:10.5px;color:#9a9ba1;background:#2b2c31;border:1px solid #3a3b40;border-radius:3px;padding:1px 5px;">' + esc(it.badge) + '</span>';
+            if (it.user){
+              html += '<span style="flex:none;font-size:10px;color:#9cc3e8;background:#1d2b3a;border:1px solid #2e465e;border-radius:3px;padding:1px 5px;">自定义</span>';
+              html += '<span data-edit="' + esc(it.name) + '" style="flex:none;color:#9a9ba1;font-size:11px;cursor:pointer;padding:2px 4px;">编辑</span>';
+              html += '<span data-del="' + esc(it.name) + '" style="flex:none;color:#c96a5a;font-size:11px;cursor:pointer;padding:2px 4px;">删</span>';
+            }
+            html += '</div>';
+          });
+        }
+      }
+      html += '</div>';
+    });
+    list.innerHTML = html;
+    var cnt = document.getElementById("fqCount");
+    if (cnt) cnt.textContent = q ? "命中 " + countMatched() + " / " + countAll() + " 项" : "全部 " + countAll() + " 项";
+  }
+  function paramRowsHtml(name){
+    var s = findSpec(name); if (!s) return '<div style="font-size:12px;color:#6e7076;">（该生成器没有参数）</div>';
+    var ps = (SPECS[s.cat] || []).filter(function(x){ return x[0] === name; });
+    var keys = ps.length ? ps[0][4] : [];
+    if (!keys.length) return '<div style="font-size:12px;color:#6e7076;">（该生成器没有参数）</div>';
+    var html = "";
+    keys.forEach(function(k){
+      html += '<div style="display:flex;align-items:center;"><span style="width:88px;flex:none;font-size:12px;color:#9a9ba1;">' + esc(k) + '</span>';
+      html += '<input style="flex:1;min-width:0;height:26px;padding:0 8px;background:#141518;border:1px solid #3a3b40;border-radius:5px;color:#e8e9ec;font-size:12px;box-sizing:border-box;font-family:inherit;outline:none;" value="' + (k === "最小值" ? "1" : k === "最大值" ? "100" : k === "精度" ? "2" : "") + '"></div>';
+    });
+    return html;
+  }
+  function adopt(s, via){
+    state.selected = s;
+    var pGen = document.getElementById("pGen"), pType = document.getElementById("pType"),
+        pCat = document.getElementById("pCat"), pPreview = document.getElementById("pPreview"),
+        pMeta = document.getElementById("pMeta"), paramRows = document.getElementById("paramRows");
+    if (pGen) pGen.textContent = s.label;
+    if (pType) pType.textContent = s.type;
+    if (pCat) pCat.textContent = s.cat;
+    if (pPreview) pPreview.textContent = (SAMPLES[s.name] || ["（样例示意）"]).join("，");
+    if (pMeta) pMeta.textContent = DEFAULT_META[s.name] ? DEFAULT_META[s.name][0] + " · " + DEFAULT_META[s.name][1] : "— · —";
+    if (paramRows) paramRows.innerHTML = paramRowsHtml(s.name);
+    // 记录最近使用（会话级，去重，最多 6）
+    state.recent = [s.name].concat(state.recent.filter(function(n){ return n !== s.name; })).slice(0, 6);
+    renderRecent();
+    toast("已采纳「" + s.label + "」写回列草稿（" + via + "）；点「应用」落地");
+  }
+
+  /* ============ 事件绑定 ============ */
+  function bind(){
+    var fq = document.getElementById("fq");
+    var colName = document.getElementById("colName");
+    if (fq){
+      fq.addEventListener("input", function(){
+        state.query = fq.value;
+        renderGroups();
+      });
+      fq.addEventListener("keydown", function(e){
+        if (e.key === "Enter"){
+          var m = firstMatch();
+          if (m) adopt(m, "Enter 采纳");
+          else if (state.query.trim()) toast("无命中项，Enter 无操作");
+        } else if (e.key === "Escape"){
+          toast("Esc：关闭对话框；有未应用修改会先弹「放弃未应用的修改？」确认（#6）");
+        }
+      });
+    }
+    if (colName) colName.addEventListener("input", function(){ /* 智能推荐读取当前列名 */ });
+    document.querySelectorAll(".tab").forEach(function(el){
+      el.addEventListener("click", function(){
+        state.view = el.dataset.view;
+        renderTabs(); renderGroups();
+      });
+    });
+    document.getElementById("groupList").addEventListener("click", function(ev){
+      var t = ev.target;
+      var plus = t.getAttribute("data-plus");
+      if (plus){
+        toast("「＋」：打开自定义生成器精调层（" + (state.view === "business" ? "锁业务组「" + plus + "」，类型可自选" : "锁数据类型「" + plus + "」，业务组可自选") + "）");
+        return;
+      }
+      var edit = t.getAttribute("data-edit");
+      if (edit){ toast("编辑自定义生成器「" + edit + "」：精调层预填（基础生成器锁定，保留已保存参数）"); return; }
+      var del = t.getAttribute("data-del");
+      if (del){ toast("删除自定义生成器「" + del + "」（会话级移除）"); return; }
+      var itm = t.closest(".itm");
+      if (itm){
+        var s = findSpec(itm.getAttribute("data-name"));
+        if (s) adopt(s, "点击列表项");
+        return;
+      }
+      var grp = t.closest(".grp");
+      if (grp){
+        var cat = grp.getAttribute("data-cat");
+        if (state.view === "business"){ state.expanded[cat] = !state.expanded[cat]; }
+        else { state.expandedTypes[cat] = !state.expandedTypes[cat]; }
+        renderGroups();
+      }
+    });
+    document.getElementById("btnSmart").addEventListener("click", function(){
+      var cn = (colName && colName.value || "").trim() || "order_id";
+      var picked = cn.indexOf("id") >= 0 || cn.indexOf("_no") >= 0 ? "uuid_v4" : cn.indexOf("date") >= 0 ? "date_time" : cn.indexOf("name") >= 0 ? "name" : "random_int";
+      var s = findSpec(picked);
+      if (s) adopt(s, "智能推荐（按列名「" + cn + "」+ 类型重推）");
+    });
+    var btnApply = document.getElementById("btnApply");
+    if (btnApply) btnApply.addEventListener("click", function(){
+      toast("「应用」：草稿合成列规格并写入面板列（" + (state.selected ? state.selected.label : "未选生成器") + "）");
+    });
+    var btnNext = document.getElementById("btnNext") || document.getElementById("btnApplyNext");
+    if (btnNext) btnNext.addEventListener("click", function(){
+      toast("「应用并新增下一列」：应用当前列 → 按列名 +2 新建列并重开对话框（#7 连续录入）");
+    });
+    var btnCancel = document.getElementById("btnCancel");
+    if (btnCancel) btnCancel.addEventListener("click", function(){
+      toast("「取消」：有未应用修改时先弹「放弃未应用的修改？」确认（#6），确认后清草稿并关闭");
+    });
+  }
+
+  /* ============ 启动（初始静态可读：业务视角、数值组展开） ============ */
+  state.expanded["数值"] = true;
+  renderTabs(); renderRecent(); renderGroups(); bind();
+  adopt(findSpec("random_int"), "初始示例");
+} catch (e) {
+  var root = document.querySelector("#dlg");
+  if (root) root.insertAdjacentHTML("afterbegin", '<div style="padding:10px 14px;color:#c96a5a;font-size:12px;">交互脚本加载失败：' + esc(e && e.message ? e.message : String(e)) + '。页面结构仍可阅读。</div>');
+}
+})();
+</script>
+</html>
+```

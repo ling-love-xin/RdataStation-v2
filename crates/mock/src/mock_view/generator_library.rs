@@ -2,11 +2,11 @@
 //!
 //! # 结构与入口
 //!
-//! - 打开：字段行生成器菜单 →「生成器库…」→ `panel::open_generator_library` → [`open_library`]；
+//! - 打开：列编辑对话框的左栏（内嵌浏览区）；自定义生成器走 [`open_create_dialog`] 独立窗口；
 //! - 浏览：顶部搜索框 + `TabBar` 双视角（业务分类 / 数据类型）+ 分组行（`Button` 展开/收起 +
 //!   行尾「＋」`Button`，键盘可达）+ 展开的生成器项（内建在前、自定义在后，点击写回列并关对话框）；
-//! - 精调层**内嵌**（避免嵌套 `open_dialog`，gpui 对话框单实例）：点「＋」→ `mode=Create`，
-//!   保存成功后回 `Browse`。精调层三个下拉用 `select::{Select, SelectState}` + `SearchableVec`——
+//! - 精调层走**独立窗口**（`open_create_dialog`）：点「＋」开一个 560px 对话框，
+//!   保存成功后关窗口。精调层三个下拉用 `select::{Select, SelectState}` + `SearchableVec`——
 //!   **不用** `Button`+`dropdown_menu`：vendor `dropdown_button.rs:207` 触发器 id 硬编码 `"popup"`，
 //!   同帧只允许一个 DropdownButton，而这里一屏要三个下拉。
 //!
@@ -17,7 +17,6 @@
 //! 基础生成器的默认配置，产出 [`UserGenerator`]（硬属性 `data_type` + 可选 `category`，双向挂组）。
 
 use std::collections::HashSet;
-use std::time::Duration;
 
 use super::*;
 use fake::rand::SeedableRng as _;
@@ -32,7 +31,7 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use crate::mock_view::panel::MockPanel;
 use crate::mock_view::pure::{
     column_type_label, complex_param_hint, complex_param_text, param_text, parse_complex_param,
-    parse_percent_ratio, patch_param, patch_param_value,
+    patch_param, patch_param_value,
 };
 
 /// 样例预览固定种子（与 `detail.rs::SAMPLE_PREVIEW_SEED` 同值同源：样例可复现，纯示意，
@@ -99,26 +98,24 @@ pub(crate) enum LibraryMode {
     Create,
 }
 
-/// 生成器库对话框的写回目标：字段行打开写**面板列**（现状，含 `remember_generator` 与
-/// 结果清空）；列编辑对话框内打开写**列编辑草稿**（`MockDetailView::apply_generator_config_to_draft`，
-/// 参数区 / 样例预览随写回重建——列还没应用，面板列不动）。
+/// 生成器选择的写回目标：列编辑对话框里正在编辑的**那一列草稿**。
+///
+/// 此前还有 `Panel`（直接写面板列）——那是字段行那个独立「生成器库」窗口的写回目标。
+/// 入口合并进列编辑后，选生成器一律先落在草稿、由「应用」落地：两处口径统一，
+/// 也不再留下「点一下就把表改了，反悔只能再选回去」的差别。
 #[derive(Clone)]
-pub(crate) enum LibraryWriteback {
-    Panel {
-        column_id: u64,
-    },
-    ColumnDraft {
-        detail: gpui::WeakEntity<MockDetailView>,
-        column_id: u64,
-    },
+pub(crate) struct LibraryWriteback {
+    /// 列编辑视图（弱引用：选生成器的过程中这个 tab 可能已经被关掉）
+    pub(crate) detail: gpui::WeakEntity<MockDetailView>,
+    pub(crate) column_id: u64,
 }
 
-/// 生成器库对话框的状态（实体由 [`open_library`] 创建；builder 每帧从它读，写入走事件路径）。
+/// 生成器浏览 / 精调的状态（实体由 [`create_library_state`] 创建；builder 每帧从它读，写入走事件路径）。
 pub(crate) struct GeneratorLibraryState {
     pub(crate) panel: Entity<MockPanel>,
     pub(crate) writeback: LibraryWriteback,
-    /// 内嵌模式（列编辑对话框内联浏览区）：无对话框壳，选中/保存只写回草稿并留在宿主；
-    /// 字段行弹对话框模式（`open_library`）为 false，写回后关对话框。
+    /// 内嵌模式（列编辑对话框内联浏览区）：无对话框壳，选中即时写回草稿并留在宿主；
+    /// 独立的精调层窗口（自定义生成器）为 false。
     pub(crate) embedded: bool,
     pub(crate) mode: LibraryMode,
     pub(crate) view: LibraryView,
@@ -134,9 +131,6 @@ pub(crate) struct GeneratorLibraryState {
     pub(crate) create: Option<CreateDraft>,
     /// 编辑中的自定义生成器 id（`Some` = 精调层是编辑而非新建；保存走 `update_user_generator`）
     pub(crate) editing: Option<String>,
-    /// 字段行入口（`embedded=false`）两栏模式下的「选中态」：左栏点生成器 → 填充右栏检视草稿，
-    /// 点「应用」才写回列。列编辑内嵌模式（`embedded=true`）不走这条——它有自己的草稿与右栏。
-    pub(crate) selected: Option<InspectDraft>,
     _search_sub: Option<Subscription>,
 }
 
@@ -172,20 +166,6 @@ pub(crate) struct CreateDraft {
     pub(crate) _subs: Vec<Subscription>,
 }
 
-/// 字段行入口两栏模式的「选中态草稿」：左栏点生成器 → 填充它；右栏展示 属性 / 参数 /
-/// 样例，并允许调 空值率 / 唯一值，点「应用」才写回列。刻意不带完整 param 编辑——
-/// 逐生成器调参留在列编辑对话框（它本就是干这个的），这里只给最常用的两个列级开关。
-pub(crate) struct InspectDraft {
-    /// 当前选中的生成器配置（来自 `default_of`，应用前可被空值率 / 唯一值改写）
-    pub(crate) config: GeneratorConfig,
-    /// 样例预览（2 条示意值，固定种子）
-    pub(crate) preview: String,
-    /// 空值率（0~100，输入框；应用前解析）
-    pub(crate) null_input: Entity<InputState>,
-    /// 唯一值开关
-    pub(crate) unique: bool,
-}
-
 /// 精调层参数行（Bool 用 Switch，不再退化成文本框——质询的直接回应）。
 pub(crate) enum DraftParam {
     Scalar {
@@ -211,12 +191,14 @@ fn param_key(param: &DraftParam) -> &str {
     }
 }
 
-// ---------- 打开入口（panel::open_generator_library 调用） ----------
+// ---------- 打开入口 ----------
 
-/// 创建生成器库状态实体（浏览 + 搜索 + 精调层共用）。
+/// 创建生成器状态实体（浏览 + 搜索 + 精调层共用）。
 ///
 /// `embedded=true` 供列编辑对话框内联（`detail.rs`）：无对话框壳，写回草稿后留在列编辑；
-/// `embedded=false` 供字段行入口弹对话框（[`open_library`]）。
+/// `embedded=false` 只用于 [`open_create_dialog`] 的独立精调层窗口。
+///
+/// 列名输入框不在这里：内嵌时列编辑对话框自己有，独立窗口是建生成器（与被编辑的列无关）。
 pub(crate) fn create_library_state(
     panel: Entity<MockPanel>,
     writeback: LibraryWriteback,
@@ -237,7 +219,6 @@ pub(crate) fn create_library_state(
         search_input: search_input.clone(),
         create: None,
         editing: None,
-        selected: None,
         _search_sub: None,
     });
     // 搜索词订阅挂在状态实体上（实体已创建完；在 `cx.new` 构造闭包内订阅会推不出回调参数类型）
@@ -336,162 +317,68 @@ pub(crate) fn first_match_for(
     hit
 }
 
-/// 渲染库状态内容（浏览 / 精调），返回（主体, footer）。
+/// 精调层（自定义生成器）以什么姿态打开：新建（可锁一个维度）/ 编辑（两个维度都锁）。
+pub(crate) enum CreateSeed {
+    /// 新建：业务组「＋」→ 锁业务组、类型可自选；技术组「＋」→ 锁类型、业务组可自选
+    New {
+        locked_type: Option<ColumnDataType>,
+        locked_category: Option<GeneratorCategory>,
+    },
+    /// 编辑：被编辑项的 类型 / 业务组 / 基础生成器 全部锁定（换基础 = 换个生成器）
+    Edit { ug: UserGenerator },
+}
+
+/// 打开「自定义生成器」独立对话框（列编辑内嵌浏览区的分组「＋」/ 自定义项「编辑」）。
 ///
-/// 无对话框壳：`open_library` 把主体放进 `Dialog`，列编辑对话框把它内联进自身内容。
-pub(crate) fn render_state(
-    state: &Entity<GeneratorLibraryState>,
-    window: &mut Window,
-    cx: &mut App,
-) -> (gpui_kit::AnyElement, Option<gpui_kit::AnyElement>) {
-    // `cx.theme()` 借用 cx：先克隆出值，避免后续把 `cx` 可变借给渲染函数时冲突
-    let theme = cx.theme().clone();
-    let embedded = state.read(cx).embedded;
-    let mode = state.read(cx).mode;
-    // 非内嵌（字段行入口）Browse：两栏（左列表 + 右检视面板），对齐原型「选择生成器窗口」；
-    // 内嵌（列编辑）Browse：单栏列表（右栏由 detail.rs 自带），保持旧行为。
-    let body = match mode {
-        LibraryMode::Browse if !embedded => render_browse_two_column(state, &theme, window, cx),
-        LibraryMode::Browse => render_browse(state, &theme, window, cx),
-        LibraryMode::Create => render_create(state, &theme, window, cx),
-    };
-    let footer = match mode {
-        LibraryMode::Browse if !embedded => Some(render_inspect_footer(state, window, cx)),
-        LibraryMode::Browse => None,
-        LibraryMode::Create => Some(render_create_footer(state, window, cx)),
-    };
-    (body, footer)
-}
-
-/// 字段行入口两栏主体：顶部搜索框 + 左右分栏（左 = 生成器列表，右 = 检视面板）。
-fn render_browse_two_column(
-    state: &Entity<GeneratorLibraryState>,
-    theme: &Theme,
-    window: &mut Window,
-    cx: &mut App,
-) -> gpui_kit::AnyElement {
-    let state = state.clone();
-    let search = state.read(cx).search_input.clone();
-    div()
-        .v_flex()
-        .gap_2()
-        .w_full()
-        .child(div().w_full().child(Input::new(&search)))
-        .child(
-            div()
-                .h_flex()
-                .items_stretch()
-                .h(px(440.))
-                .w_full()
-                // 左栏：生成器双 Tab 列表（业务 / 数据）
-                .child(
-                    div()
-                        .flex_none()
-                        .w(ui::COLUMN_GENERATOR_LIST_WIDTH)
-                        .h_full()
-                        .min_h_0()
-                        .overflow_y_scrollbar()
-                        .border_r_1()
-                        .border_color(theme.colors.border)
-                        .child(render_browse_pane(&state, theme, window, cx)),
-                )
-                // 右栏：选中生成器的 属性 / 参数 / 样例 / 空值率 / 唯一值
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .min_h_0()
-                        .overflow_y_scrollbar()
-                        .child(render_inspector(&state, theme, window, cx)),
-                ),
-        )
-        .into_any_element()
-}
-
-/// 两栏 Browse 的页脚：应用（写回列）／取消（关对话框）。未选中生成器时应用禁用。
-fn render_inspect_footer(
-    state: &Entity<GeneratorLibraryState>,
-    _window: &mut Window,
-    cx: &mut App,
-) -> gpui_kit::AnyElement {
-    let has_selection = state.read(cx).selected.is_some();
-    let state_for_apply = state.clone();
-    let state_for_cancel = state.clone();
-    DialogFooter::new()
-        .child(
-            Button::new("mock-lib-inspect-cancel")
-                .secondary()
-                .label("取消")
-                .on_click(move |_, window, app| {
-                    state_for_cancel.read(app);
-                    window.close_dialog(app);
-                }),
-        )
-        .child(
-            Button::new("mock-lib-inspect-apply-footer")
-                .primary()
-                .label("应用")
-                .disabled(!has_selection)
-                .on_click(move |_, window, app| {
-                    let Some((config, null_text, unique)) =
-                        state_for_apply.read(app).selected.as_ref().map(|i| {
-                            (
-                                i.config.clone(),
-                                i.null_input.read(app).value().to_string(),
-                                i.unique,
-                            )
-                        })
-                    else {
-                        return;
-                    };
-                    let panel = state_for_apply.read(app).panel.clone();
-                    let column_id = match &state_for_apply.read(app).writeback {
-                        LibraryWriteback::Panel { column_id } => *column_id,
-                        LibraryWriteback::ColumnDraft { column_id, .. } => *column_id,
-                    };
-                    let ratio = parse_percent_ratio(&null_text).unwrap_or(0.0);
-                    panel.update(app, |p, cx| {
-                        p.set_generator_config(column_id, config, ratio, unique, cx);
-                    });
-                    window.close_dialog(app);
-                }),
-        )
-        .into_any_element()
-}
-
-/// 打开生成器库对话框（字段行入口，写回面板列）。`cx` 是面板的 Context。
-pub(crate) fn open_library(
+/// 为什么不在内嵌的那个 state 上切 `mode`：内嵌左栏只有 280px，精调层表单
+/// （名字 / 类型 / 业务组 / 基础生成器 / 参数 / 样例）塞进去会挤成上下两段，
+/// 而列编辑对话框本身是 840px 的两栏——在它里面再叠一层表单会把右栏挤掉。
+/// 单独开一个 560px 窗口：表单完整，列编辑那边也不用让位。
+pub(crate) fn open_create_dialog(
     panel: Entity<MockPanel>,
     writeback: LibraryWriteback,
+    seed: CreateSeed,
     window: &mut Window,
-    cx: &mut Context<MockPanel>,
+    cx: &mut App,
 ) {
     let state = create_library_state(panel, writeback, false, window, cx);
+    state.update(cx, |s, cx| {
+        s.mode = LibraryMode::Create;
+        match &seed {
+            CreateSeed::New {
+                locked_type,
+                locked_category,
+            } => {
+                s.create = Some(new_create_draft(
+                    s.panel.clone(),
+                    locked_type.clone(),
+                    *locked_category,
+                    window,
+                    cx,
+                ));
+            }
+            CreateSeed::Edit { ug } => {
+                s.editing = Some(ug.id.clone());
+                s.create = Some(new_edit_draft(s.panel.clone(), ug, window, cx));
+            }
+        }
+        s.rebuild_params(window, cx);
+        s.refresh_preview(cx);
+        cx.notify();
+    });
 
     window.open_dialog(cx, move |dialog, window, cx| {
-        let (body, footer) = render_state(&state, window, cx);
-        // 标题随模式动态：open_dialog 的 build 闭包每帧重建（vendor root.rs），重绘时重新求值
-        let title = match state.read(cx).mode {
-            LibraryMode::Browse => "生成器库",
-            LibraryMode::Create => {
-                if state.read(cx).editing.is_some() {
-                    "编辑自定义生成器"
-                } else {
-                    "新建自定义生成器"
-                }
-            }
-        };
-        // 两栏 Browse（字段行入口）用更宽尺寸容纳左列表 + 右检视面板；精调层（Create）沿用旧宽。
-        let width = match state.read(cx).mode {
-            LibraryMode::Browse => px(720.0),
-            LibraryMode::Create => px(560.0),
-        };
-        let dialog = dialog.title(title).width(width).child(body);
-        match footer {
-            Some(footer) => dialog.footer(footer),
-            None => dialog,
-        }
+        let theme = cx.theme().clone();
+        let editing = state.read(cx).editing.is_some();
+        dialog
+            .title(if editing {
+                "编辑自定义生成器"
+            } else {
+                "新建自定义生成器"
+            })
+            .width(ui::GENERATOR_DIALOG_WIDTH)
+            .child(render_create(&state, &theme, window, cx))
+            .footer(render_create_footer(&state, window, cx))
     });
 }
 
@@ -499,11 +386,8 @@ pub(crate) fn open_library(
 
 /// 统一写回：`picked` 是内建生成器名（`is_user=false`）或自定义生成器 id（`is_user=true`）。
 ///
-/// - [`LibraryWriteback::Panel`]（字段行入口）：写面板列（`set_generator` /
-///   `apply_user_generator`，含 `remember_generator` 与结果清空）并关对话框；
-/// - [`LibraryWriteback::ColumnDraft`]（列编辑入口，内嵌模式）：把生成器配置写回列编辑草稿
-///   （`MockDetailView::apply_generator_config_to_draft` 重建参数区与样例），**不关对话框**
-///   ——留在列编辑里继续调参，点「应用」才落地。
+/// 一律写回**列编辑草稿**（`MockDetailView::apply_generator_config_to_draft`，参数区 / 样例
+/// 预览随写回重建），**不关对话框**——留在列编辑里继续调参，点「应用」才落地。
 fn apply_picked_generator(
     app: &mut App,
     window: &mut Window,
@@ -512,57 +396,10 @@ fn apply_picked_generator(
     picked: &str,
     is_user: bool,
 ) {
-    match writeback {
-        LibraryWriteback::Panel { column_id } => {
-            panel.update(app, |p, cx| {
-                if is_user {
-                    p.apply_user_generator(*column_id, picked, cx);
-                } else {
-                    p.set_generator(*column_id, picked, cx);
-                }
-                window.close_dialog(cx);
-            });
-        }
-        LibraryWriteback::ColumnDraft { detail, column_id } => {
-            // 内建取规格默认配置；自定义解包 base（与 `apply_user_generator` 同源）
-            let config = if is_user {
-                panel
-                    .read(app)
-                    .user_generators
-                    .iter()
-                    .find(|ug| ug.id == picked)
-                    .map(|ug| ug.base.clone())
-            } else {
-                generator_catalog::default_of(picked)
-            };
-            if let Some(config) = config {
-                // 内嵌模式：写回草稿但留在列编辑（点「应用」才落地），不关任何对话框
-                let _ = detail.update(app, |v, cx| {
-                    v.apply_generator_config_to_draft(*column_id, config, window, cx);
-                });
-            }
-        }
-    }
-}
-
-/// 字段行入口两栏模式：左栏点生成器 → 填充右栏「选中态」（`selected`），不直接写回。
-///
-/// 与 [`apply_picked_generator`] 的 `Panel` 分支区分：那里是单栏时期的「点即写回+关对话框」；
-/// 两栏后改为「点即选中、右栏检视、点应用才落地」，保留用户核对的余地与空值率 / 唯一值调节。
-/// 列编辑内嵌（`embedded=true`）不走这条——`ColumnDraft` 分支即时写回草稿即可。
-fn select_generator(
-    state: &Entity<GeneratorLibraryState>,
-    picked: &str,
-    is_user: bool,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    // 内建取默认配置；自定义解包 base（与列编辑 `ColumnDraft` 分支同源）
+    // 内建取规格默认配置；自定义解包 base（与 `apply_user_generator` 同源）
     let config = if is_user {
-        state
-            .read(cx)
-            .panel
-            .read(cx)
+        panel
+            .read(app)
             .user_generators
             .iter()
             .find(|ug| ug.id == picked)
@@ -570,33 +407,11 @@ fn select_generator(
     } else {
         generator_catalog::default_of(picked)
     };
-    let Some(config) = config else {
-        return;
-    };
-    let null_input = cx.new(|cx| InputState::new(window, cx).placeholder("0~100"));
-    null_input.update(cx, |s, cx| s.set_value("0".to_string(), window, cx));
-    // 样例预览（固定种子，与 create 表单同口径；纯示意，与最终生成随机种子无关）
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-    let mut rng = fake::rand::rngs::StdRng::seed_from_u64(SAMPLE_PREVIEW_SEED);
-    let locale = crate::models::Locale::ZhCn;
-    let samples: Vec<String> = (0..2)
-        .map(|row| {
-            catch_unwind(AssertUnwindSafe(|| {
-                crate::generators::generate_cell(&config, &mut rng, row, &locale)
-            }))
-            .unwrap_or_else(|_| "（参数区间为空，无法采样）".to_string())
-        })
-        .collect();
-    let preview = samples.join("，");
-    state.update(cx, |s, cx| {
-        s.selected = Some(InspectDraft {
-            config,
-            preview,
-            null_input,
-            unique: false,
+    if let Some(config) = config {
+        let _ = writeback.detail.update(app, |v, cx| {
+            v.apply_generator_config_to_draft(writeback.column_id, config, window, cx);
         });
-        cx.notify();
-    });
+    }
 }
 
 /// 顶部搜索定位输入框（横跨对话框全宽；词过滤左栏分组项，见 [`render_browse_pane`]）。
@@ -611,6 +426,39 @@ pub(crate) fn render_search_box(
         .test_support()
         .w_full()
         .child(Input::new(&search))
+        .into_any_element()
+}
+
+/// 左栏顶部的「智能推荐」：按列名 + 类型重推这一列的生成器（与手选并列的一条捷径）。
+///
+/// 为什么放在这里而不是字段卡片上：它是「选哪个生成器」的一种解法，不是一个独立动作——
+/// 摆在卡片的操作按钮里，看着会像「对所有列批量智能」。
+/// 放在列表顶部而不是右栏底部：它作用的是「左栏正在选的东西」，跟着选择器走。
+fn render_smart_row(
+    state: &Entity<GeneratorLibraryState>,
+    _theme: &Theme,
+    _window: &mut Window,
+    cx: &mut App,
+) -> gpui_kit::AnyElement {
+    let writeback = state.read(cx).writeback.clone();
+    let Some(detail) = writeback.detail.upgrade() else {
+        return div().into_any_element();
+    };
+    let column_id = writeback.column_id;
+    div()
+        .id("mock-lib-smart")
+        .w_full()
+        .child(
+            button("mock-lib-smart", "智能推荐", ActionKind::Quiet)
+                .xsmall()
+                .tooltip("按列名与类型重推：回到推荐的生成器、参数与空值率")
+                .tooltip_show_delay(TOOLTIP_DELAY)
+                .on_click(move |_event, window, app| {
+                    let _ = detail.update(app, |view, cx| {
+                        view.smart_reset(column_id, window, cx);
+                    });
+                }),
+        )
         .into_any_element()
 }
 
@@ -645,7 +493,17 @@ pub(crate) fn render_browse_pane(
             for category in GeneratorCategory::ALL {
                 let name = category.label();
                 let is_expanded = !query.is_empty() || expanded.contains(name);
-                let mut row = render_group_row(&state, name, is_expanded, category, window, cx);
+                // 标题行与子项列表必须**垂直**包一层：`render_group_row` 的根是 `h_flex`，
+                // 直接 `.child()` 会把子项堆当成水平项塞进去——整行被撑到 N 行高，
+                // 标题又 `items_center` 垂直居中，结果正好压在第 N/2 个子项上（图文重叠）。
+                let mut group = div().v_flex().gap_1().w_full().child(render_group_row(
+                    &state,
+                    name,
+                    is_expanded,
+                    category,
+                    window,
+                    cx,
+                ));
                 if is_expanded {
                     let mut items: Vec<(String, String, bool)> = Vec::new();
                     items.extend(
@@ -678,7 +536,7 @@ pub(crate) fn render_browse_pane(
                             render_item_row(&state, &label, &badge, is_user, window, cx)
                         })
                         .collect();
-                    row = row.child(
+                    group = group.child(
                         div()
                             .v_flex()
                             .gap_1()
@@ -687,15 +545,22 @@ pub(crate) fn render_browse_pane(
                             .children(item_rows),
                     );
                 }
-                list = list.child(row);
+                list = list.child(group);
             }
         }
         _ => {
             for data_type in COLUMN_TYPES {
                 let label = column_type_label(&data_type);
                 let is_expanded = !query.is_empty() || expanded_types.contains(&label);
-                let mut row =
-                    render_type_group_row(&state, &data_type, &label, is_expanded, window, cx);
+                // 同上：标题行与子项列表垂直包一层，别让子项堆进标题行的 `h_flex`
+                let mut group = div().v_flex().gap_1().w_full().child(render_type_group_row(
+                    &state,
+                    &data_type,
+                    &label,
+                    is_expanded,
+                    window,
+                    cx,
+                ));
                 if is_expanded {
                     let mut items: Vec<(String, String, bool)> = Vec::new();
                     items.extend(
@@ -731,7 +596,7 @@ pub(crate) fn render_browse_pane(
                             render_item_row(&state, &label, &badge, is_user, window, cx)
                         })
                         .collect();
-                    row = row.child(
+                    group = group.child(
                         div()
                             .v_flex()
                             .gap_1()
@@ -740,7 +605,7 @@ pub(crate) fn render_browse_pane(
                             .children(item_rows),
                     );
                 }
-                list = list.child(row);
+                list = list.child(group);
             }
         }
     }
@@ -751,6 +616,7 @@ pub(crate) fn render_browse_pane(
         .w_full()
         .flex_1()
         .min_h_0()
+        .child(render_smart_row(&state, theme, window, cx))
         .child(
             TabBar::new("mock-lib-view")
                 .segmented()
@@ -776,179 +642,6 @@ pub(crate) fn render_browse_pane(
                 .child(list),
         )
         .into_any_element()
-}
-
-/// 浏览模式主体（搜索框置顶 + 列表区），供字段行库对话框与既有调用点使用。
-fn render_browse(
-    state: &Entity<GeneratorLibraryState>,
-    theme: &Theme,
-    window: &mut Window,
-    cx: &mut App,
-) -> gpui_kit::AnyElement {
-    let state = state.clone();
-    let search = state.read(cx).search_input.clone();
-    div()
-        .v_flex()
-        .gap_3()
-        .w_full()
-        .h(px(420.))
-        .child(div().w_full().child(Input::new(&search)))
-        .child(render_browse_pane(&state, theme, window, cx))
-        .into_any_element()
-}
-
-/// 右栏小标题（与列编辑对话框「属性 / 参数」同款分段标题）。
-fn inspector_section(theme: &Theme, label: &str) -> gpui_kit::AnyElement {
-    div()
-        .text_xs()
-        .text_color(theme.colors.muted_foreground)
-        .child(label.to_string())
-        .into_any_element()
-}
-
-/// 右栏「标签 + 值」只读行（属性 / 参数展示用）。
-fn inspector_row(theme: &Theme, label: &str, value: &str) -> gpui_kit::AnyElement {
-    div()
-        .h_flex()
-        .items_center()
-        .gap_2()
-        .w_full()
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_xs()
-                .text_color(theme.colors.muted_foreground)
-                .child(label.to_string()),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.colors.foreground)
-                .child(value.to_string()),
-        )
-        .into_any_element()
-}
-
-/// 字段行入口两栏模式的右栏：展示选中生成器的 属性 / 参数 / 样例，并允许调 空值率 / 唯一值，
-/// 点「应用」写回列。未选中时给占位提示。列编辑内嵌模式不用它——`detail.rs` 自带右栏。
-fn render_inspector(
-    state: &Entity<GeneratorLibraryState>,
-    theme: &Theme,
-    window: &mut Window,
-    cx: &mut App,
-) -> gpui_kit::AnyElement {
-    let state = state.clone();
-    let s = state.read(cx);
-    let Some(inspect) = s.selected.as_ref() else {
-        return div()
-            .id("mock-lib-inspect-placeholder")
-            .v_flex()
-            .items_center()
-            .justify_center()
-            .w_full()
-            .h_full()
-            .text_sm()
-            .text_color(theme.colors.muted_foreground)
-            .child("从左侧选择生成器")
-            .into_any_element();
-    };
-    let spec = generator_catalog::spec_of(&inspect.config);
-    let generator_label = spec.label.to_string();
-    let type_label = column_type_label(&data_type_for_spec(spec));
-    let category_label = spec.category.label().to_string();
-    let params: Vec<(String, String)> = spec
-        .params
-        .iter()
-        .map(|f| {
-            let value = if f.kind == ParamKind::Complex {
-                complex_param_text(&inspect.config, f.key)
-            } else {
-                param_text(&inspect.config, f.key)
-            };
-            (f.label.to_string(), value)
-        })
-        .collect();
-    let preview = inspect.preview.clone();
-    let null_input = inspect.null_input.clone();
-    let unique = inspect.unique;
-    drop(s);
-
-    let mut right = div().v_flex().gap_2().w_full();
-    // —— 属性 ——
-    right = right.child(inspector_section(theme, "属性"));
-    right = right.child(inspector_row(theme, "生成器名", &generator_label));
-    right = right.child(inspector_row(theme, "产出类型", &type_label));
-    right = right.child(inspector_row(theme, "业务组", &category_label));
-    // —— 参数（只读展示默认取值；深层逐生成器调参留在列编辑对话框）——
-    right = right.child(inspector_section(theme, "参数"));
-    if params.is_empty() {
-        right = right.child(
-            div()
-                .text_xs()
-                .text_color(theme.colors.muted_foreground)
-                .child("（该生成器无参数）"),
-        );
-    } else {
-        for (label, value) in &params {
-            right = right.child(inspector_row(theme, label, value));
-        }
-    }
-    // —— 样例预览 ——
-    right = right.child(inspector_section(theme, "样例预览"));
-    right = right.child(
-        div()
-            .text_sm()
-            .text_color(theme.colors.foreground)
-            .child(preview),
-    );
-    // —— 空值率 ——
-    right = right.child(
-        div()
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .w_full()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child("空值率（%）"),
-            )
-            .child(div().w(px(90.)).child(Input::new(&null_input))),
-    );
-    // —— 唯一值 ——
-    right = right.child(
-        div()
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .w_full()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child("唯一值"),
-            )
-            .child({
-                let state = state.clone();
-                Switch::new("mock-lib-inspect-unique")
-                    .checked(unique)
-                    .on_click(move |checked, _window, app| {
-                        let checked = *checked;
-                        state.update(app, |s, _cx| {
-                            if let Some(inspect) = s.selected.as_mut() {
-                                inspect.unique = checked;
-                            }
-                        });
-                    })
-            }),
-    );
-    right.into_any_element()
 }
 
 /// 最近使用（本会话点过的生成器，最多 [`RECENT_GENERATORS`] 条）：非空才渲染，
@@ -980,22 +673,16 @@ fn render_recent(
     for (name, label) in recent {
         let state_for_click = state.clone();
         chips = chips.child(
-            Button::new(format!("mock-lib-recent-{name}"))
-                .ghost()
+            button(format!("mock-lib-recent-{name}"), label, ActionKind::Quiet)
                 .xsmall()
-                .label(label)
                 .tooltip("最近使用：点击直接应用")
-                .tooltip_show_delay(Duration::from_millis(500))
+                .tooltip_show_delay(TOOLTIP_DELAY)
                 .on_click(move |_event, window, app| {
-                    let embedded = state_for_click.read(app).embedded;
-                    if embedded {
+                    let (panel, writeback) = {
                         let s = state_for_click.read(app);
-                        let panel = s.panel.clone();
-                        let writeback = s.writeback.clone();
-                        apply_picked_generator(app, window, &panel, &writeback, name, false);
-                    } else {
-                        select_generator(&state_for_click, name, false, window, app);
-                    }
+                        (s.panel.clone(), s.writeback.clone())
+                    };
+                    apply_picked_generator(app, window, &panel, &writeback, name, false);
                 }),
         );
     }
@@ -1004,12 +691,8 @@ fn render_recent(
             .v_flex()
             .gap_1()
             .w_full()
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child("最近使用"),
-            )
+            // 与清单 / 模板 / 历史三处段标题同一支原语（自带下缘线）
+            .child(section(&theme, "最近使用"))
             .child(chips)
             .into_any_element(),
     )
@@ -1045,48 +728,50 @@ fn render_group_row(
         .w_full()
         .child(
             div().h_flex().items_center().flex_1().min_w_0().child(
-                Button::new(format!("lib-group-{name}"))
-                    .ghost()
-                    .xsmall()
-                    .icon(if expanded {
-                        IconName::ChevronDown
-                    } else {
-                        IconName::ChevronRight
-                    })
-                    .label(format!("{name}（{item_count}）"))
-                    .toggled(expanded)
-                    .on_click(move |_event, _window, app| {
-                        state_for_toggle.update(app, |s, cx| {
-                            if !s.expanded.remove(&name_for_toggle) {
-                                s.expanded.insert(name_for_toggle.clone());
-                            }
-                            cx.notify();
-                        });
-                    }),
-            ),
-        )
-        .child(
-            Button::new(format!("lib-group-plus-{name}"))
-                .ghost()
+                button(
+                    format!("lib-group-{name}"),
+                    format!("{name}（{item_count}）"),
+                    ActionKind::Quiet,
+                )
                 .xsmall()
-                .icon(IconName::Plus)
-                .tooltip(format!("在“{name}”分组新建生成器"))
-                .tooltip_show_delay(Duration::from_millis(500))
-                .on_click(move |_event, window, app| {
-                    state_for_create.update(app, |s, cx| {
-                        s.mode = LibraryMode::Create;
-                        s.create = Some(new_create_draft(
-                            s.panel.clone(),
-                            None,
-                            Some(category),
-                            window,
-                            cx,
-                        ));
-                        s.rebuild_params(window, cx);
-                        s.refresh_preview(cx);
+                .icon(if expanded {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                })
+                .toggled(expanded)
+                .on_click(move |_event, _window, app| {
+                    state_for_toggle.update(app, |s, cx| {
+                        if !s.expanded.remove(&name_for_toggle) {
+                            s.expanded.insert(name_for_toggle.clone());
+                        }
                         cx.notify();
                     });
                 }),
+            ),
+        )
+        .child(
+            icon_button(
+                format!("lib-group-plus-{name}"),
+                IconName::Plus,
+                format!("在“{name}”分组新建生成器"),
+            )
+            .on_click(move |_event, window, app| {
+                let (panel, writeback) = {
+                    let s = state_for_create.read(app);
+                    (s.panel.clone(), s.writeback.clone())
+                };
+                open_create_dialog(
+                    panel,
+                    writeback,
+                    CreateSeed::New {
+                        locked_type: None,
+                        locked_category: Some(category),
+                    },
+                    window,
+                    app,
+                );
+            }),
         )
 }
 
@@ -1121,48 +806,50 @@ fn render_type_group_row(
         .w_full()
         .child(
             div().h_flex().items_center().flex_1().min_w_0().child(
-                Button::new(format!("lib-type-group-{label}"))
-                    .ghost()
-                    .xsmall()
-                    .icon(if expanded {
-                        IconName::ChevronDown
-                    } else {
-                        IconName::ChevronRight
-                    })
-                    .label(format!("{label}（{item_count}）"))
-                    .toggled(expanded)
-                    .on_click(move |_event, _window, app| {
-                        state_for_toggle.update(app, |s, cx| {
-                            if !s.expanded_types.remove(&label_for_toggle) {
-                                s.expanded_types.insert(label_for_toggle.clone());
-                            }
-                            cx.notify();
-                        });
-                    }),
-            ),
-        )
-        .child(
-            Button::new(format!("lib-type-group-plus-{label}"))
-                .ghost()
+                button(
+                    format!("lib-type-group-{label}"),
+                    format!("{label}（{item_count}）"),
+                    ActionKind::Quiet,
+                )
                 .xsmall()
-                .icon(IconName::Plus)
-                .tooltip(format!("在“{label}”数据类型下新建生成器"))
-                .tooltip_show_delay(Duration::from_millis(500))
-                .on_click(move |_event, window, app| {
-                    state_for_create.update(app, |s, cx| {
-                        s.mode = LibraryMode::Create;
-                        s.create = Some(new_create_draft(
-                            s.panel.clone(),
-                            Some(data_type_for_create.clone()),
-                            None,
-                            window,
-                            cx,
-                        ));
-                        s.rebuild_params(window, cx);
-                        s.refresh_preview(cx);
+                .icon(if expanded {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                })
+                .toggled(expanded)
+                .on_click(move |_event, _window, app| {
+                    state_for_toggle.update(app, |s, cx| {
+                        if !s.expanded_types.remove(&label_for_toggle) {
+                            s.expanded_types.insert(label_for_toggle.clone());
+                        }
                         cx.notify();
                     });
                 }),
+            ),
+        )
+        .child(
+            icon_button(
+                format!("lib-type-group-plus-{label}"),
+                IconName::Plus,
+                format!("在“{label}”数据类型下新建生成器"),
+            )
+            .on_click(move |_event, window, app| {
+                let (panel, writeback) = {
+                    let s = state_for_create.read(app);
+                    (s.panel.clone(), s.writeback.clone())
+                };
+                open_create_dialog(
+                    panel,
+                    writeback,
+                    CreateSeed::New {
+                        locked_type: Some(data_type_for_create.clone()),
+                        locked_category: None,
+                    },
+                    window,
+                    app,
+                );
+            }),
         )
 }
 
@@ -1188,29 +875,15 @@ fn render_item_row(
         .w_full()
         .child(
             div().h_flex().items_center().flex_1().min_w_0().child(
-                Button::new(format!("lib-item-{label}"))
-                    .ghost()
+                button(format!("lib-item-{label}"), label, ActionKind::Quiet)
                     .xsmall()
-                    .label(label)
                     .on_click(move |_event, window, app| {
-                        let embedded = state_for_click.read(app).embedded;
-                        if embedded {
+                        let (panel, writeback) = {
                             let s = state_for_click.read(app);
-                            let panel = s.panel.clone();
-                            let writeback = s.writeback.clone();
-                            let ug_id = spec_for_click.clone();
-                            apply_picked_generator(
-                                app, window, &panel, &writeback, &ug_id, is_user,
-                            );
-                        } else {
-                            select_generator(
-                                &state_for_click,
-                                &spec_for_click,
-                                is_user,
-                                window,
-                                app,
-                            );
-                        }
+                            (s.panel.clone(), s.writeback.clone())
+                        };
+                        let ug_id = spec_for_click.clone();
+                        apply_picked_generator(app, window, &panel, &writeback, &ug_id, is_user);
                     }),
             ),
         )
@@ -1226,51 +899,45 @@ fn render_item_row(
         let ug_id_edit = spec_name.clone();
         row = row
             .child(
-                Button::new(format!("lib-item-edit-{label}"))
-                    .ghost()
+                button(format!("lib-item-edit-{label}"), "编辑", ActionKind::Quiet)
                     .xsmall()
-                    .label("编辑")
                     .tooltip("重命名 / 修改参数")
-                    .tooltip_show_delay(Duration::from_millis(500))
+                    .tooltip_show_delay(TOOLTIP_DELAY)
                     .on_click(move |_event, window, app| {
-                        let s = state_edit.read(app);
-                        let panel = s.panel.clone();
-                        let Some(ug) = panel
-                            .read(app)
-                            .user_generators()
-                            .iter()
-                            .find(|ug| ug.id == ug_id_edit)
-                            .cloned()
-                        else {
+                        let (panel, writeback, ug) = {
+                            let s = state_edit.read(app);
+                            let ug = s
+                                .panel
+                                .read(app)
+                                .user_generators()
+                                .iter()
+                                .find(|ug| ug.id == ug_id_edit)
+                                .cloned();
+                            (s.panel.clone(), s.writeback.clone(), ug)
+                        };
+                        let Some(ug) = ug else {
                             return;
                         };
-                        state_edit.update(app, |s, cx| {
-                            s.editing = Some(ug.id.clone());
-                            s.mode = LibraryMode::Create;
-                            s.create = Some(new_edit_draft(panel.clone(), &ug, window, cx));
-                            s.rebuild_params(window, cx);
-                            s.refresh_preview(cx);
-                            cx.notify();
-                        });
+                        open_create_dialog(panel, writeback, CreateSeed::Edit { ug }, window, app);
                     }),
             )
             .child({
                 let state_del = state.clone();
                 let ug_id_del = spec_name.clone();
-                Button::new(format!("lib-item-delete-{label}"))
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::Delete)
-                    .tooltip("删除此自定义生成器")
-                    .tooltip_show_delay(Duration::from_millis(500))
-                    .on_click(move |_event, _window, app| {
-                        let s = state_del.read(app);
-                        let panel = s.panel.clone();
-                        let ug_id = ug_id_del.clone();
-                        // 先删 panel 项，再刷新对话框列表（panel.notify 不驱动对话框实体重绘）
-                        panel.update(app, |p, cx| p.delete_user_generator(&ug_id, cx));
-                        state_del.update(app, |_, cx| cx.notify());
-                    })
+                danger_icon_button(
+                    format!("lib-item-delete-{label}"),
+                    IconName::Delete,
+                    "删除此自定义生成器",
+                    theme,
+                )
+                .on_click(move |_event, _window, app| {
+                    let s = state_del.read(app);
+                    let panel = s.panel.clone();
+                    let ug_id = ug_id_del.clone();
+                    // 先删 panel 项，再刷新对话框列表（panel.notify 不驱动对话框实体重绘）
+                    panel.update(app, |p, cx| p.delete_user_generator(&ug_id, cx));
+                    state_del.update(app, |_, cx| cx.notify());
+                })
             });
     }
     row.into_any_element()
@@ -1640,28 +1307,31 @@ fn render_create_footer(
     let editing = state.read(_cx).editing.is_some();
     DialogFooter::new()
         .child(
-            Button::new("lib-create-cancel")
-                .ghost()
-                .label("取消")
-                .on_click(move |_event, _window, app| {
+            button("lib-create-cancel", "取消", ActionKind::Soft).on_click(
+                move |_event, _window, app| {
                     state_for_cancel.update(app, |s, cx| {
                         s.mode = LibraryMode::Browse;
                         s.create = None;
                         s.editing = None;
                         cx.notify();
                     });
-                }),
+                },
+            ),
         )
         .child(
-            Button::new("lib-create-save")
-                .label(if editing {
+            // 对话框的主行动：进来就是为了存下这一个生成器
+            button(
+                "lib-create-save",
+                if editing {
                     "保存修改"
                 } else {
                     "保存并应用"
-                })
-                .on_click(move |_event, window, app| {
-                    submit_create(&state_for_save, window, app);
-                }),
+                },
+                ActionKind::Main,
+            )
+            .on_click(move |_event, window, app| {
+                submit_create(&state_for_save, window, app);
+            }),
         )
         .into_any_element()
 }
@@ -1674,21 +1344,7 @@ fn select_line<D: SearchableListDelegate + 'static>(
     label: &str,
     select: Select<D>,
 ) -> gpui_kit::AnyElement {
-    div()
-        .h_flex()
-        .items_center()
-        .gap_2()
-        .w_full()
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_xs()
-                .text_color(theme.colors.muted_foreground)
-                .child(label.to_string()),
-        )
-        .child(div().flex_1().min_w_0().child(select))
-        .into_any_element()
+    kv(theme, label, div().flex_1().min_w_0().child(select)).into_any_element()
 }
 
 /// 精调层表单：名称 + 类型（锁定/可选）+ 业务组（锁定/可选）+ 基础生成器 + 参数区 + 样例。
@@ -1709,25 +1365,14 @@ fn render_create(
     // 类型行：锁定 → 只读文本；未锁定 → Select（用户定稿：字段名「产出类型」）
     body = match &draft.locked_type {
         Some(t) => body.child(
-            div()
-                .h_flex()
-                .items_center()
-                .gap_2()
-                .w_full()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_xs()
-                        .text_color(theme.colors.muted_foreground)
-                        .child("产出类型"),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.colors.foreground)
-                        .child(column_type_label(t)),
-                ),
+            div().h_flex().items_center().gap_2().w_full().child(kv(
+                &theme,
+                "产出类型",
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.foreground)
+                    .child(column_type_label(t)),
+            )),
         ),
         None => {
             if let Some(type_state) = &draft.type_state {
@@ -1748,25 +1393,14 @@ fn render_create(
     // 业务组行：锁定 → 只读文本；未锁定 → Select（含「（不分组）」）
     body = match &draft.locked_category {
         Some(c) => body.child(
-            div()
-                .h_flex()
-                .items_center()
-                .gap_2()
-                .w_full()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_xs()
-                        .text_color(theme.colors.muted_foreground)
-                        .child("业务组"),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.colors.foreground)
-                        .child(c.label()),
-                ),
+            div().h_flex().items_center().gap_2().w_full().child(kv(
+                &theme,
+                "业务组",
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.foreground)
+                    .child(c.label()),
+            )),
         ),
         None => {
             if let Some(category_state) = &draft.category_state {
@@ -1801,12 +1435,14 @@ fn render_create(
                         .text_color(theme.colors.muted_foreground)
                         .child("基础生成器"),
                 )
-                .child(
+                .child(kv(
+                    &theme,
+                    "基础生成器",
                     div()
                         .text_xs()
                         .text_color(theme.colors.foreground)
                         .child(spec.label),
-                ),
+                )),
         ),
         None => body.child(select_line(
             &theme,
@@ -1827,18 +1463,16 @@ fn render_create(
             .v_flex()
             .gap_2()
             .w_full()
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child(if has_params {
-                        "参数（来自基础生成器）"
-                    } else if base_ready {
-                        "参数（该生成器没有参数）"
-                    } else {
-                        "参数（选择基础生成器后出现）"
-                    }),
-            )
+            .child(section(
+                &theme,
+                if has_params {
+                    "参数（来自基础生成器）"
+                } else if base_ready {
+                    "参数（该生成器没有参数）"
+                } else {
+                    "参数（选择基础生成器后出现）"
+                },
+            ))
             .when(has_params, |el| {
                 el.child(
                     div()
@@ -1924,35 +1558,17 @@ fn render_create(
             }),
     );
     // 样例预览
-    body = body.child(
+    body = body.child(kv(
+        &theme,
+        "样例预览",
         div()
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .w_full()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child("样例预览"),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.colors.foreground)
-                    .child(draft.preview.clone()),
-            ),
-    );
+            .text_xs()
+            .text_color(theme.colors.foreground)
+            .child(draft.preview.clone()),
+    ));
     // 错误行
     if let Some(error) = &draft.error {
-        body = body.child(
-            div()
-                .text_xs()
-                .text_color(theme.colors.danger)
-                .child(error.clone()),
-        );
+        body = body.child(error_line(&theme, error.clone()));
     }
     body.into_any_element()
 }

@@ -7,7 +7,6 @@ use super::*;
 use fake::rand::SeedableRng;
 use fake::rand::rngs::StdRng;
 use gpui_kit::component::resizable::{resizable_panel, v_resizable};
-use std::time::Duration;
 
 const SAMPLE_PREVIEW_SEED: u64 = 20261030;
 
@@ -70,6 +69,16 @@ pub(crate) struct ColumnDraft {
     pub(crate) param_error: Option<(String, String)>,
 }
 
+impl ColumnDraft {
+    /// 正在编辑的列 id（列卡片据此挂「当前」标识条）。
+    ///
+    /// 走访问器而不是公开字段：`id` 是打开时钉住的，**不可改**（改了等于换一列在编辑，
+    /// 而对话框里所有输入都还指着原来那列）。
+    pub(crate) fn column_id(&self) -> u64 {
+        self.id
+    }
+}
+
 /// 中央详情 tab 的**身份**：一张结果表一个 tab，另有草稿 tab（列定义可编辑那张）。
 ///
 /// 为何用名字而不是下标做身份：tab 是长命的东西，而 `results` 每次生成都会重建
@@ -108,12 +117,9 @@ impl DetailTarget {
 /// 为何状态栏要有一块（与 D38「状态单点」不冲）：D38 管读数放哪（仍在它自己的中央表头 /
 /// 右 Dock 清单下），这里解决的是——面板被切走 / 中央 tab 被关掉时，任务还在跑却看不见。
 pub fn status_chip_text(progress: Option<MockJobProgress>) -> Option<String> {
-    let progress = progress?;
-    Some(if progress.phase.is_quantified() {
-        format!("◐ Mock 生成中 {:.0}%", progress.percent())
-    } else {
-        format!("◐ Mock {}", progress.phase.label())
-    })
+    // 文案本身归 `MockJobProgress::chip_text`：与中央表头 / 清单行的量纲同源，
+    // 这里只管「没任务就不画」
+    progress.map(MockJobProgress::chip_text)
 }
 
 /// Mock 详情（中央编辑区 tab）：字段清单（编辑走对话框）+ 预览表格。
@@ -137,6 +143,11 @@ pub struct MockDetailView {
     /// 分组列表；选中写回草稿，点「应用」才落地）：打开列编辑时创建，关闭后随实体丢弃。
     pub(crate) generator_browser:
         Option<Entity<crate::mock_view::generator_library::GeneratorLibraryState>>,
+    /// 鼠标正指着哪一张列卡片（卡片操作是悬停才显形的，要重绘就得有状态）。
+    ///
+    /// 键盘那边**不记状态**：焦点可由 `FocusHandle::is_focused` 当场查到，
+    /// 再存一份就要在 focus / blur 回调里维护，还容易与 gpui 的焦点系统对不上。
+    hovered_column: Option<u64>,
 }
 
 /// 把详情 tab 切到前台（窗口聚焦 + 在所在 Dock 组里选中自身）。
@@ -189,6 +200,7 @@ impl MockDetailView {
             group: None,
             preview_table: None,
             generator_browser: None,
+            hovered_column: None,
         }
     }
 
@@ -557,7 +569,7 @@ impl MockDetailView {
         let view = cx.entity();
         self.generator_browser = Some(crate::mock_view::generator_library::create_library_state(
             self.panel.clone(),
-            crate::mock_view::generator_library::LibraryWriteback::ColumnDraft {
+            crate::mock_view::generator_library::LibraryWriteback {
                 detail: view.downgrade(),
                 column_id: id,
             },
@@ -639,44 +651,19 @@ impl MockDetailView {
             //（生成器身份只读展示；产出类型可改——改类型不自动换生成器，需「恢复智能默认」重推）；
             // 参数区 = 参数行 / 样例预览 / 空值率 / 唯一值 / 恢复智能默认。列名已移到窗口顶部。
             let mut right = div().v_flex().gap_2().w_full();
-            // —— 属性 ——
-            right = right.child(
-                div()
-                    .w_full()
-                    .border_b_1()
-                    .border_color(theme.colors.border)
-                    .pb_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child("属性"),
-                    ),
-            );
+            // —— 属性 ——（分区标题与右 Dock 的三处段标题同一支原语：`section` 自带下缘线）
+            right = right.child(section(&theme, "属性"));
             // 生成器名（只读）：点左栏列表换生成器（选中即写回草稿，属性 / 参数随之重建）
-            right = right.child(
+            right = right.child(kv(
+                &theme,
+                "生成器名",
                 div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child("生成器名"),
-                    )
-                    .child(
-                        div()
-                            .id("mock-col-generator")
-                            .test_support()
-                            .text_xs()
-                            .text_color(theme.colors.foreground)
-                            .child(generator_label),
-                    ),
-            );
+                    .id("mock-col-generator")
+                    .test_support()
+                    .text_xs()
+                    .text_color(theme.colors.foreground)
+                    .child(generator_label),
+            ));
             // #4 列名失焦智能重推：有推荐且与当前生成器不同时，属性区提示 +「采纳」按钮
             if let (Some(cfg), Some(label)) = (&recommendation, &recommendation_label) {
                 let view_adopt = view.clone();
@@ -696,10 +683,8 @@ impl MockDetailView {
                                 .child(format!("建议改用「{label}」")),
                         )
                         .child(
-                            Button::new("mock-col-adopt")
-                                .ghost()
+                            button("mock-col-adopt", "采纳", ActionKind::Quiet)
                                 .xsmall()
-                                .label("采纳")
                                 .on_click(move |_, window, app| {
                                     view_adopt.update(app, |view, cx| {
                                         let Some(draft) = view.draft.as_mut() else { return };
@@ -739,10 +724,7 @@ impl MockDetailView {
                     )
                     .child({
                         let view = view.clone();
-                        Button::new("mock-col-type")
-                            .ghost()
-                            .label(type_label.clone())
-                            .dropdown_caret(true)
+                        dropdown_button("mock-col-type", type_label.clone())
                             .dropdown_menu(move |menu, _window, _cx| {
                                 let mut menu = menu;
                                 for candidate in COLUMN_TYPES {
@@ -771,75 +753,44 @@ impl MockDetailView {
                     }),
             );
             // 业务组（只读）：生成器所属业务分类（左栏业务视角的组名）
-            right = right.child(
+            right = right.child(kv(
+                &theme,
+                "业务组",
                 div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child("业务组"),
-                    )
-                    .child(
-                        div()
-                            .id("mock-col-category")
-                            .test_support()
-                            .text_xs()
-                            .text_color(theme.colors.foreground)
-                            .child(category_label),
-                    ),
-            );
-            // 类型与生成器解耦的说明：改类型不自动换生成器（避免参数行与生成器不一致）；
-            // 想按新类型重推生成器 → 点下方「恢复智能默认」
-            right = right.child(
-                div()
+                    .id("mock-col-category")
+                    .test_support()
                     .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child("改类型不会自动换生成器；按新类型重推请点「恢复智能默认」。"),
-            );
+                    .text_color(theme.colors.foreground)
+                    .child(category_label),
+            ));
+            // 类型与生成器解耦的说明：改类型不自动换生成器（避免参数行与生成器不一致）；
+            // 想按新类型重推生成器 → 点左栏顶部「智能推荐」
+            right = right.child(hint_line(
+                &theme,
+                "改类型不会自动换生成器；按新类型重推请点左栏顶部「智能推荐」。",
+            ));
             // —— 参数 ——
-            right = right.child(
-                div()
-                    .w_full()
-                    .border_b_1()
-                    .border_color(theme.colors.border)
-                    .pb_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child("参数"),
-                    ),
-            );
+            right = right.child(section(&theme, "参数"));
             // #2 产出类型不匹配警示：生成器实际产出与所选类型不一致时，参数区顶部提示
             //（改类型不自动换生成器是设计，这里把「不一致」讲明，指向更换生成器或恢复默认）
             if type_mismatch {
                 right = right.child(
-                    div()
-                        .id("mock-col-type-mismatch")
-                        .test_support()
-                        .w_full()
-                        .text_xs()
-                        .text_color(theme.colors.warning)
-                        .child(format!(
+                    warning_line(
+                        &theme,
+                        format!(
                             "当前生成器产出 {actual_type_label}，与所选 {type_label_for_warning} 不匹配——请更换生成器或点「恢复智能默认」。"
-                        )),
+                        ),
+                    )
+                    .id("mock-col-type-mismatch")
+                    .test_support(),
                 );
             }
             // #5 零参生成器：参数区没有表单行时显示空态文案（样例/空值率/唯一仍可用）
             if param_rows.is_empty() && zero_param {
                 right = right.child(
-                    div()
+                    hint_line(&theme, "该生成器无需参数。")
                         .id("mock-col-params-empty")
-                        .test_support()
-                        .text_xs()
-                        .text_color(theme.colors.muted_foreground)
-                        .child("该生成器无需参数。"),
+                        .test_support(),
                 );
             }
             for row in param_rows {
@@ -851,92 +802,34 @@ impl MockDetailView {
                 });
             }
             if let Some((_, message)) = param_error {
-                right = right.child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.colors.danger)
-                        .child(message),
-                );
+                right = right.child(error_line(&theme, message));
             }
             // 参数实时样例预览（2 条示意值）：输入参数即改即看，固定种子可复现
-            right = right.child(
+            right = right.child(kv(
+                &theme,
+                "样例预览",
                 div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child("样例预览"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.colors.foreground)
-                            .child(sample_preview),
-                    ),
-            );
+                    .text_xs()
+                    .text_color(theme.colors.foreground)
+                    .child(sample_preview),
+            ));
             right = right.child(form_line(&theme, "空值率（%）", &null_state));
-            right = right.child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child("唯一值"),
-                    )
-                    .child({
-                        let view = view.clone();
-                        Switch::new("mock-col-unique").checked(unique).on_click(
-                            move |checked, _window, app| {
-                                let checked = *checked;
-                                view.update(app, |view, cx| {
-                                    if let Some(draft) = view.draft.as_mut() {
-                                        draft.def.unique = checked;
-                                    }
-                                    cx.notify();
-                                });
-                            },
-                        )
-                    }),
-            );
-            right = right.child({
-                let view = view.clone();
-                Button::new("mock-col-reset")
-                    .secondary()
-                    .label("恢复智能默认")
-                    .on_click(move |_, window, app| {
+            right = right.child(kv(
+                &theme,
+                "唯一值",
+                Switch::new("mock-col-unique").checked(unique).on_click({
+                    let view = view.clone();
+                    move |checked, _window, app| {
+                        let checked = *checked;
                         view.update(app, |view, cx| {
                             if let Some(draft) = view.draft.as_mut() {
-                                let mapped =
-                                    ColumnMapper::infer(&draft.def.name, &draft.def.data_type);
-                                draft.def.generator = mapped.generator;
-                                draft.def.nullable_ratio = 0.0;
-                                draft.def.unique = false;
-                                draft.confidence = mapped.confidence;
-                                draft.sample_value = mapped.sample_value;
-                                // #4：恢复智能默认 = 用户主动选定生成器，不再弹推荐
-                                draft.generator_edited = true;
-                                draft.recommendation = None;
+                                draft.def.unique = checked;
                             }
-                            // 生成器身份可能变了：参数行按新生成器重建（事件路径，不能在 render 做）
-                            cx.defer_in(window, |view, window, cx| {
-                                view.rebuild_params(window, cx);
-                            });
                             cx.notify();
                         });
-                    })
-            });
+                    }
+                }),
+            ));
 
             // 窗口主体：「选择生成器窗口」——最上「列名 + 搜索定位框」同一行（用户定稿：顶部
             // 只需要列名），框下左右分栏：左 = 生成器列表（业务 / 数据 双 Tab + 分组 + 最近 +
@@ -962,7 +855,7 @@ impl MockDetailView {
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(theme.colors.muted_foreground)
+                                        .text_color(text_hint(&theme))
                                         .child("列名"),
                                 )
                                 .child(
@@ -986,6 +879,9 @@ impl MockDetailView {
                                 }),
                         ),
                 )
+                // 顶部行与主体之间一条更轻的线：上半是「这一列叫什么」，
+                // 下半是「它用什么造」，两块不是一回事
+                .child(card_divider(&theme))
                 .child(
                     div()
                         .h_flex()
@@ -1000,6 +896,7 @@ impl MockDetailView {
                                 .w(ui::COLUMN_GENERATOR_LIST_WIDTH)
                                 .h_full()
                                 .min_h_0()
+                                .p_2()
                                 .overflow_y_scrollbar()
                                 .border_r_1()
                                 .border_color(theme.colors.border)
@@ -1018,6 +915,7 @@ impl MockDetailView {
                                 .min_w_0()
                                 .h_full()
                                 .min_h_0()
+                                .p_2()
                                 .overflow_y_scrollbar()
                                 .child(right),
                         ),
@@ -1050,9 +948,7 @@ impl MockDetailView {
                 .footer(
                 DialogFooter::new()
                     .child(
-                        Button::new("mock-col-cancel")
-                            .secondary()
-                            .label("取消")
+                        button("mock-col-cancel", "取消", ActionKind::Soft)
                             .on_click(move |_, window, app| {
                                 let dirty = view_cancel
                                     .read(app)
@@ -1070,9 +966,7 @@ impl MockDetailView {
                             }),
                     )
                     .child(
-                        Button::new("mock-col-apply")
-                            .with_variant(ButtonVariant::Primary)
-                            .label("应用")
+                        button("mock-col-apply", "应用", ActionKind::Main)
                             .on_click(move |_, window, app| {
                                 let edited =
                                     view_apply.update(app, |view, cx| view.collect_column_edit(cx));
@@ -1086,9 +980,11 @@ impl MockDetailView {
                     // #7 应用并新增下一列：应用当前草稿 → 关对话框 → 按当前列名 +2 去重新建列
                     //（沿用 §8.3 字段预设命名策略）→ 立即打开新列的列编辑对话框（连续录入）
                     .child(
-                        Button::new("mock-col-apply-next")
-                            .with_variant(ButtonVariant::Primary)
-                            .label("应用并新增下一列")
+                        button(
+                            "mock-col-apply-next",
+                            "应用并新增下一列",
+                            ActionKind::Soft,
+                        )
                             .on_click(move |_, window, app| {
                                 window.close_dialog(app);
                                 view_next.update(app, |view, cx| view.apply_and_next(window, cx));
@@ -1096,6 +992,41 @@ impl MockDetailView {
                     ),
             )
         });
+    }
+
+    /// 按**当前列名**（输入框里的值）+ 类型重推这一列的生成器配置（左栏「智能推荐」）。
+    ///
+    /// 与右栏的「采纳推荐」（只换生成器、保留参数）不同：这里整套重来
+    /// （生成器 + 参数 + 空值率 + 唯一值都回到推荐值）——它是「让这一列回到推断结果」。
+    pub(crate) fn smart_reset(
+        &mut self,
+        column_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(draft) = self.draft.as_mut() else {
+            return;
+        };
+        if draft.id != column_id {
+            return;
+        }
+        // 按输入框当前值（用户可能刚改过列名还没应用），不按打开对话框时的快照
+        let name = draft.name_input.read(cx).value().to_string();
+        let mapped = ColumnMapper::infer(&name, &draft.def.data_type);
+        draft.def.generator = mapped.generator;
+        draft.def.nullable_ratio = 0.0;
+        draft.def.unique = false;
+        draft.confidence = mapped.confidence;
+        draft.sample_value = mapped.sample_value;
+        // 智能推荐 = 用户主动选定生成器，之后列名失焦不再弹推荐
+        draft.generator_edited = true;
+        draft.recommendation = None;
+        draft.param_error = None;
+        // 生成器身份可能变了：参数行按新生成器重建（事件路径，不能在 render 做）
+        cx.defer_in(window, |view, window, cx| {
+            view.rebuild_params(window, cx);
+        });
+        cx.notify();
     }
 
     /// 按当前生成器重建参数输入行（保留同名参数的输入框与订阅）。
@@ -1280,11 +1211,11 @@ impl MockDetailView {
             .collect()
     }
 
-    fn render_fields(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let fg = cx.theme().colors.foreground;
-        let muted = cx.theme().colors.muted_foreground;
-        let border = cx.theme().colors.border;
-        let info = cx.theme().colors.info;
+    fn render_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        // 卡片 / chip / 按钮的形态都从 `style` 原语取，这里只留卡片说明行的两色
+        let theme = cx.theme().clone();
+        let muted = theme.colors.muted_foreground;
+        let info = theme.colors.info;
 
         // 先看「这张表有没有列」再套筛选：空表与「筛没了」是两句不同的话
         let has_any = {
@@ -1310,16 +1241,16 @@ impl MockDetailView {
                 .into_any_element();
         }
 
+        // 正在编辑哪一列（列编辑对话框开着时才有）：那张卡给左缘强调条。
+        // 对话框会盖住卡片区，关掉之后要能一眼看出「刚才改的是这一列」——
+        // 尤其列多了要往下滚，没有这条标识就得靠记名字去找。
+        let editing_id = self.draft.as_ref().map(|draft| draft.column_id());
+
         let mut list = div().v_flex().gap_2().w_full();
-        // enumerate 拿序号：首/末列禁用对应的 ↑/↓（列序 = 生成顺序）
+        // enumerate 拿序号：首 / 末列禁用对应的 ↑/↓（列序 = 生成顺序）
         for (index, column) in columns.iter().enumerate() {
             let spec = generator_catalog::spec_of(&column.def.generator);
             let summary = summarize_params(&column.def.generator);
-            let badge = match column.confidence.as_str() {
-                "high" => "high",
-                "manual" => "manual",
-                _ => "low",
-            };
             let id = column.id;
             let label = spec.label;
             let unique = if column.def.unique { "唯一 · " } else { "" };
@@ -1340,211 +1271,191 @@ impl MockDetailView {
                     || "引用目标仅支持自增主键，按自增规律推算取值域，不读取父表已生成的数据。",
                 );
             let panel = self.panel.clone();
-            list = list.child(
-                div()
-                    .id(ElementId::Name(SharedString::from(format!(
-                        "mock-field-{id}"
-                    ))))
-                    .v_flex()
-                    .gap_1()
-                    .w_full()
-                    .p_2()
-                    .border_1()
-                    .border_color(border)
-                    .rounded(cx.theme().radius)
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .w_full()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(fg)
-                                    .text_ellipsis()
-                                    .child(column.def.name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child(column_type_label(&column.def.data_type)),
-                            )
-                            .child({
-                                // 置信度徽标 = 行内 chip（`tag::Tag` outline 形态，克制不抢列名）：
-                                // high=成功绿 / manual=提示蓝 / low=次级灰。
-                                // 不用 `badge::Badge`——它是角标（absolute 浮点），不是行内文字标签
-                                let tag = match badge {
-                                    "high" => Tag::success(),
-                                    "manual" => Tag::info(),
-                                    _ => Tag::secondary(),
-                                };
-                                tag.outline().small().child(badge)
-                            })
-                            .child({
-                                // 引用徽标：挂关系的列一眼可见「引用谁」
-                                let mut badge_el = div().flex_none().text_xs();
-                                if let Some(text) = &ref_badge {
-                                    badge_el = badge_el.text_color(info).child(text.clone());
-                                }
-                                badge_el
-                            }),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .w_full()
-                            .child({
-                                let panel = panel.clone();
-                                Button::new(ElementId::Name(SharedString::from(format!(
-                                    "mock-gen-{id}"
-                                ))))
-                                .ghost()
-                                .xsmall()
-                                .label(label)
-                                .tooltip("打开生成器库（业务分类 / 数据类型双视角选择）")
-                                .tooltip_show_delay(Duration::from_millis(500))
-                                .on_click(
-                                    move |_, window, app| {
-                                        panel.update(app, |p, cx| {
-                                            p.open_generator_library(id, window, cx);
-                                        });
-                                    },
-                                )
-                            })
-                            .child({
-                                let entity = cx.entity();
-                                Button::new(ElementId::Name(SharedString::from(format!(
-                                    "mock-edit-{id}"
-                                ))))
-                                .ghost()
-                                .xsmall()
-                                .label("编辑")
-                                .on_click(
-                                    move |_, window, app| {
-                                        entity.update(app, |view, cx| {
-                                            view.open_column_dialog(id, window, cx);
-                                        });
-                                    },
-                                )
-                            })
-                            .child({
-                                let panel = panel.clone();
-                                Button::new(ElementId::Name(SharedString::from(format!(
-                                    "mock-smart-{id}"
-                                ))))
-                                .ghost()
-                                .xsmall()
-                                .label("智能")
-                                .tooltip("按列名与类型重跑智能映射（恢复推荐生成器与参数）")
-                                .on_click(move |_, _, app| {
-                                    panel.update(app, |panel, cx| {
-                                        panel.reset_column_mapping(id, cx)
-                                    });
-                                })
-                            })
-                            .child({
-                                let panel = panel.clone();
-                                Button::new(ElementId::Name(SharedString::from(format!(
-                                    "mock-del-{id}"
-                                ))))
-                                .ghost()
-                                .xsmall()
-                                .label("删除")
-                                .on_click(move |_, _, app| {
-                                    panel.update(app, |panel, cx| panel.remove_column(id, cx));
-                                })
-                            })
-                            .child({
-                                // 列排序：icon-only（↑/↓），首/末列禁用对应方向；列序即生成顺序
-                                let panel = panel.clone();
-                                Button::new(ElementId::Name(SharedString::from(format!(
-                                    "mock-moveup-{id}"
-                                ))))
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::ArrowUp)
-                                .tooltip("上移（调整生成顺序）")
-                                .disabled(index == 0)
-                                .on_click(move |_, _, app| {
-                                    panel.update(app, |panel, cx| panel.move_column(id, true, cx));
-                                })
-                            })
-                            .child({
-                                let panel = panel.clone();
-                                Button::new(ElementId::Name(SharedString::from(format!(
-                                    "mock-movedown-{id}"
-                                ))))
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::ArrowDown)
-                                .tooltip("下移（调整生成顺序）")
-                                .disabled(index + 1 == columns.len())
-                                .on_click(move |_, _, app| {
-                                    panel.update(app, |panel, cx| panel.move_column(id, false, cx));
-                                })
-                            })
-                            .child({
-                                let panel = panel.clone();
-                                Button::new(ElementId::Name(SharedString::from(format!(
-                                    "mock-copy-{id}"
-                                ))))
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Copy)
-                                .tooltip("复制列（快速造相似字段，复制后再微调参数）")
-                                .on_click(move |_, _, app| {
-                                    panel.update(app, |panel, cx| panel.duplicate_column(id, cx));
-                                })
-                            })
-                            .child({
-                                // 参数摘要一行 ellipsis 截断；悬停 `HoverCard` 看完整参数与生成器。
-                                // 触发容器样式走 `trigger_style`（组件负责布局该容器）
-                                let summary_text =
-                                    format!("{unique}空值 {null_percent}% · {detail}");
-                                let full_text = if summary.is_empty() {
-                                    format!("生成器：{}", spec.label)
-                                } else {
-                                    format!("生成器：{}\n{}", spec.label, summary)
-                                };
-                                HoverCard::new(ElementId::Name(SharedString::from(format!(
-                                    "mock-hover-{id}"
-                                ))))
-                                .open_delay(std::time::Duration::from_millis(300))
-                                .trigger_style(StyleRefinement::default().flex_1().min_w_0())
-                                .trigger(
-                                    div()
-                                        .text_xs()
-                                        .text_color(muted)
-                                        .text_ellipsis()
-                                        .child(summary_text),
-                                )
-                                .content(move |_, _, cx| {
-                                    // content 是 `Fn`（可多次调用）：每次克隆文本，不消耗捕获值
-                                    div()
-                                        .p_2()
-                                        .text_xs()
-                                        .text_color(cx.theme().colors.muted_foreground)
-                                        .child(full_text.clone())
-                                })
-                            }),
-                    )
+            let entity = cx.entity();
+            let is_first = index == 0;
+            let is_last = index + 1 == columns.len();
+            // 卡片焦点句柄：卡片要能被 Tab 到（四个操作是悬停才显形的，键盘用户没有悬停，
+            // 焦点落在卡片上时也必须显形）。按业务键（列 id）缓存句柄——每帧新建会让
+            // 焦点在重绘时丢（`use_keyed_state` 是按元素 id 缓存的）。
+            let card_handle = window
+                .use_keyed_state(
+                    ElementId::Name(SharedString::from(format!("mock-field-card-{id}"))),
+                    cx,
+                    |_, cx| cx.focus_handle(),
+                )
+                .read(cx)
+                // 克隆成自有值：`read(cx)` 返回的引用会一路借住 `cx`，
+                // 而下面 `card_border` 的 `transition(..)` 要可变借用 `cx`
+                .clone();
+            let card_focused = card_handle.is_focused(window);
+            let active = self.hovered_column == Some(id) || card_focused;
+
+            // ── 头部行：列名 + 类型 chip + 置信度 chip + 引用徽标（左）｜ 操作图标（右） ──
+            // 左边四样是「这一列是什么」，跟着列名读；操作一律收进右端图标组——
+            // 混在身份信息里，「点哪个是操作」就变成猜谜。
+            let mut head = div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .w_full()
+                .child(card_title(column.def.name.clone()))
+                .child(data_type_tag(&theme, &column.def.data_type))
+                .child(confidence_tag(&theme, &column.confidence));
+            if let Some(text) = &ref_badge {
+                head = head.child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(info)
+                        .child(text.clone()),
+                );
+            }
+            // 显形条件：鼠标指着这张卡 / 键盘焦点在这张卡上（后者是给键盘用户留的路）
+            if active {
+                head = head
                     .child({
-                        // S1④：引用列常驻说明（解释「为什么不读父表数据」）
-                        let mut note = div().w_full().text_xs();
-                        if let Some(text) = &ref_note {
-                            note = note.text_color(muted).child(*text);
-                        }
-                        note
+                        let panel = panel.clone();
+                        icon_button(
+                            format!("mock-moveup-{id}"),
+                            IconName::ArrowUp,
+                            "上移（列序即生成顺序）",
+                        )
+                        .disabled(is_first)
+                        .on_click(move |_, _, app| {
+                            panel.update(app, |panel, cx| panel.move_column(id, true, cx));
+                        })
+                    })
+                    .child({
+                        let panel = panel.clone();
+                        icon_button(
+                            format!("mock-movedown-{id}"),
+                            IconName::ArrowDown,
+                            "下移（列序即生成顺序）",
+                        )
+                        .disabled(is_last)
+                        .on_click(move |_, _, app| {
+                            panel.update(app, |panel, cx| panel.move_column(id, false, cx));
+                        })
+                    })
+                    .child({
+                        let panel = panel.clone();
+                        icon_button(
+                            format!("mock-copy-{id}"),
+                            IconName::Copy,
+                            "复制列（快速造相似字段）",
+                        )
+                        .on_click(move |_, _, app| {
+                            panel.update(app, |panel, cx| panel.duplicate_column(id, cx));
+                        })
+                    })
+                    .child(
+                        danger_icon_button(
+                            format!("mock-del-{id}"),
+                            IconName::Delete,
+                            "删除列",
+                            &theme,
+                        )
+                        .on_click(move |_, _, app| {
+                            panel.update(app, |panel, cx| panel.remove_column(id, cx));
+                        }),
+                    );
+            } else {
+                head = head.child(div().flex_none().w(rems(ui::CARD_OPS_WIDTH)));
+            }
+
+            // ── 内容行：生成器入口 + 参数摘要 ──
+            // 生成器入口与编辑入口是同一个：此前卡片上两个按钮打开两个不同的对话框
+            // （生成器库 / 列编辑），内容还重叠——选生成器时也要调参数，分两家是白跑一趟。
+            // 卡片上一共只留这一个文字入口，「智能」与「编辑」都进了它打开的面板。
+            let summary_text = format!("{unique}空值 {null_percent}% · {detail}");
+            let full_text = if summary.is_empty() {
+                format!("生成器：{}", spec.label)
+            } else {
+                format!("生成器：{}\n{}", spec.label, summary)
+            };
+            let body = div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .w_full()
+                .child(
+                    button(
+                        SharedString::from(format!("mock-gen-{id}")),
+                        label,
+                        ActionKind::Quiet,
+                    )
+                    .xsmall()
+                    .dropdown_caret(true)
+                    .tooltip("打开列编辑：选生成器 + 调参数（同一处改完再应用）")
+                    .tooltip_show_delay(TOOLTIP_DELAY)
+                    .on_click(move |_, window, app| {
+                        entity.update(app, |view, cx| {
+                            view.open_column_dialog(id, window, cx);
+                        });
                     }),
+                )
+                .child(
+                    HoverCard::new(ElementId::Name(SharedString::from(format!(
+                        "mock-hover-{id}"
+                    ))))
+                    .open_delay(std::time::Duration::from_millis(300))
+                    .trigger_style(StyleRefinement::default().flex_1().min_w_0())
+                    .trigger(card_note(&theme, summary_text))
+                    .content(move |_, _, cx| {
+                        // content 是 `Fn`（可多次调用）：每次克隆文本，不消耗捕获值
+                        div()
+                            .p_2()
+                            .text_xs()
+                            .text_color(cx.theme().colors.muted_foreground)
+                            .child(full_text.clone())
+                    }),
+                );
+
+            // 描边色带过渡：悬停 / 聚焦 → `ring`，离开 → `border`（`card_border` 内部插值）。
+            // 走 `card`（不带 CSS `.hover()`）而不是 `card_interactive`：CSS hover 是即时切换，
+            // 插不了值。悬停状态视图已经自己记着（`hovered_column`）。
+            let border = card_border(
+                &theme,
+                active,
+                format!("mock-field-border-{id}"),
+                window,
+                cx,
             );
+            let mut card = card(&theme)
+                .id(ElementId::Name(SharedString::from(format!(
+                    "mock-field-{id}"
+                ))))
+                .border_color(border)
+                // 强调条是绝对定位的：卡片必须是定位上下文
+                .relative()
+                // 卡片本身可 Tab 到：四个操作是悬停才显形的，键盘用户得先落到卡片上
+                .track_focus(&card_handle)
+                .tab_stop(true)
+                .on_hover({
+                    let entity = cx.entity();
+                    move |&hovering, _, app| {
+                        entity.update(app, |view, cx| {
+                            let next = hovering.then_some(id);
+                            if view.hovered_column != next {
+                                view.hovered_column = next;
+                                cx.notify();
+                            }
+                        });
+                    }
+                })
+                .child(head)
+                // 身份区与内容区之间一条更轻的线：卡内分隔不该抢卡片边界的视觉重量
+                .child(card_divider(&theme))
+                .child(body);
+            // 「正在编辑这一列」：左缘 3px 强调条，浮在卡片左缘（不挤动卡内内容）
+            if editing_id == Some(id) {
+                card = card.child(current_bar(&theme));
+            }
+            // S1④：引用列常驻说明（解释「为什么不读父表数据」）
+            if let Some(text) = &ref_note {
+                card = card.child(div().w_full().text_xs().text_color(muted).child(*text));
+            }
+            list = list.child(card);
         }
 
         div()
@@ -1566,24 +1477,36 @@ impl MockDetailView {
         info: Option<&MockGenInfo>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let fg = cx.theme().colors.foreground;
-        let muted = cx.theme().colors.muted_foreground;
-        let border = cx.theme().colors.border;
-        let radius = cx.theme().radius;
+        // 卡片 / chip 的形态走 `style` 原语，这里只留卡片内文字的两色
+        let theme = cx.theme().clone();
+        let fg = theme.colors.foreground;
+        let muted = theme.colors.muted_foreground;
 
-        let mut block = div().v_flex().gap_1().w_full();
+        let mut block = div().v_flex().gap_2().w_full();
         let Some(info) = info else {
-            return block.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("这一轮没有这张表的列信息（重新生成后再看）。"),
-            );
+            return block.child(hint_line(
+                &theme,
+                "这一轮没有这张表的列信息（重新生成后再看）。",
+            ));
         };
-        block = block.child(div().text_xs().text_color(muted).child(format!(
-            "列（{}）· 只读：它们是这次生成的产物；要改列请回草稿 tab 改完重新生成",
-            info.columns.len()
-        )));
+        // 段标题与草稿 tab 的「列（N）」同款（`section`）：两边是同一类清单，
+        // 标题的字号 / 色 / 下边线必须一致，否则切 tab 时视觉要跳一次。
+        block = block.child(
+            div()
+                .v_flex()
+                .gap_1()
+                .w_full()
+                .child(section(
+                    &theme,
+                    format!("列（{}）· 只读", info.columns.len()),
+                ))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(text_hint(&theme))
+                        .child("它们是这次生成的产物；要改列请回草稿 tab 改完重新生成"),
+                ),
+        );
         for def in info.columns.iter() {
             let mut meta: Vec<String> = Vec::new();
             if def.unique {
@@ -1599,52 +1522,43 @@ impl MockDetailView {
                 .dependency
                 .as_ref()
                 .map(|dep| format!("引用 {}.{}", dep.ref_table, dep.ref_column));
+            let spec = generator_catalog::spec_of(&def.generator);
+            let summary = summarize_params(&def.generator);
+            let note = if meta.is_empty() {
+                summary.clone()
+            } else {
+                format!("{} · {}", meta.join(" · "), summary)
+            };
+            // 与草稿卡片同款的三段卡片（头部：名字 + 类型 chip + 引用；内容：生成器 + 参数摘要），
+            // 只读——不给操作图标：就地改会让「结果」与产出它的配置分叉。
+            let mut head = div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .w_full()
+                .child(card_title(def.name.clone()))
+                .child(data_type_tag(&theme, &def.data_type));
+            if let Some(text) = &reference {
+                head = head.child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(text.clone()),
+                );
+            }
+            let body = div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .w_full()
+                .child(div().flex_none().text_xs().text_color(fg).child(spec.label))
+                .child(card_note(&theme, note));
             block = block.child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .px_2()
-                    .py_1()
-                    .border_1()
-                    .border_color(border)
-                    .rounded(radius)
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(fg)
-                            .child(def.name.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(column_type_label(&def.data_type)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(muted)
-                            .text_ellipsis()
-                            .child(summarize_params(&def.generator)),
-                    )
-                    .children(
-                        reference
-                            .map(|text| div().flex_none().text_xs().text_color(muted).child(text)),
-                    )
-                    .children((!meta.is_empty()).then(|| {
-                        div()
-                            .flex_none()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(meta.join(" · "))
-                    })),
+                card(&theme)
+                    .child(head)
+                    .child(card_divider(&theme))
+                    .child(body),
             );
         }
         block
@@ -1653,10 +1567,10 @@ impl MockDetailView {
 
 impl Render for MockDetailView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let fg = cx.theme().colors.foreground;
-        let muted = cx.theme().colors.muted_foreground;
-        let warning = cx.theme().colors.warning;
-        let border = cx.theme().colors.border;
+        let theme = cx.theme().clone();
+        let fg = theme.colors.foreground;
+        let muted = theme.colors.muted_foreground;
+        let border = theme.colors.border;
         let is_draft = matches!(self.target, DetailTarget::Draft);
         // 本 tab 的稳定唯一键（`DetailTarget::key`）：tab 内所有会随 tab 挂树的元素
         // id 都拼它，保证同一窗口内 id 唯一（a11y 树重复节点会 panic，见
@@ -1720,8 +1634,10 @@ impl Render for MockDetailView {
         // 状态归面板（单一权威），画在中央——它属于这张表，不属于「有哪些表」那份清单。
         // 结果表 tab：只读事实 + 跨表后果；不给「生成」，免得像能只重跑这一张。
         let head = if is_draft {
-            self.panel
-                .update(cx, |panel, cx| panel.render_design_head(window, cx))
+            self.panel.update(cx, |panel, cx| {
+                // 传 tab 键：出口按钮 id 要按 tab 唯一（多个详情 tab 并存时每个 tab 各一组出口）
+                panel.render_design_head(&tab_key, window, cx)
+            })
         } else {
             let facts = match generated.as_ref() {
                 Some(info) => format!(
@@ -1747,12 +1663,15 @@ impl Render for MockDetailView {
                     .child(facts),
             );
             if let Some(source) = scenario_source.clone() {
-                head = head.child(div().text_xs().text_color(muted).child(format!(
-                    "来自场景模板「{source}」：列与预览都属于它自己；看别的表切 tab（或在右 Dock 结果表清单点一行）"
-                )));
+                head = head.child(hint_line(
+                    &theme,
+                    format!(
+                        "来自场景模板「{source}」：列与预览都属于它自己；看别的表切 tab（或在右 Dock 结果表清单点一行）"
+                    ),
+                ));
             }
             if let Some(note) = relation_note.clone() {
-                head = head.child(div().text_xs().text_color(warning).child(note));
+                head = head.child(warning_line(&theme, note));
             }
             head
         };
@@ -1781,20 +1700,12 @@ impl Render for MockDetailView {
         // 三种态各自成块：空态卡片 / draft 标题行 + 字段列表 / 结果表只读列
         let columns_block = if is_draft && draft_columns == 0 {
             // 空态：三种起手方式都摆在这张 tab 上（右 Dock 只管表与集合出口）
-            div()
-                .v_flex()
-                .gap_2()
-                .w_full()
-                .p_3()
-                .rounded(cx.theme().radius)
-                .border_1()
-                .border_color(border)
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child("还没有列：先把这张表造起来"),
-                )
+            card(&theme).child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("还没有列：先把这张表造起来"),
+            )
                 .child(
                     div()
                         .h_flex()
@@ -1807,7 +1718,8 @@ impl Render for MockDetailView {
                             panel.render_column_source_buttons(cx)
                         })),
                 )
-                .child(div().text_xs().text_color(muted).child(
+                .child(hint_line(
+                    &theme,
                     "列定义、表名 / 行数、预览都在这张 tab 里改；右侧面板负责管理表（清单 / 批量出口 / 历史）。",
                 ))
         } else if is_draft {
@@ -1815,19 +1727,33 @@ impl Render for MockDetailView {
                 .v_flex()
                 .gap_2()
                 .w_full()
+                // 段标题（与结果 tab 的「列（N）· 只读」同款）：计数与筛选态是「这份清单
+                // 现在有多少」，放在操作行之上单独成行——挤在操作行里会被按钮稀释。
+                .child(section(
+                    &theme,
+                    if draft_columns_shown == draft_columns {
+                        format!("列（{draft_columns}）")
+                    } else {
+                        format!("列（{draft_columns_shown} / {draft_columns}）· 已筛选")
+                    },
+                ))
                 .child(
                     div()
                         .h_flex()
                         .items_center()
                         .gap_2()
                         .w_full()
-                        .child(div().flex_1().min_w_0().text_xs().text_color(muted).child(
-                            if draft_columns_shown == draft_columns {
-                                format!("列（{draft_columns}）")
-                            } else {
-                                format!("列（{draft_columns_shown} / {draft_columns}）· 已筛选")
-                            },
-                        ))
+                        .child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .flex_1()
+                                .min_w_0()
+                                .child(self.panel.update(cx, |panel, cx| {
+                                    panel.render_scenario_button("mock-detail-scenario-columns", cx)
+                                })),
+                        )
                         .child(
                             self.panel
                                 .update(cx, |panel, cx| panel.render_column_filter(window, cx)),
@@ -1837,18 +1763,19 @@ impl Render for MockDetailView {
                                 .update(cx, |panel, cx| panel.render_column_source_buttons(cx)),
                         ),
                 )
-                .child(self.render_fields(cx))
+                .child(self.render_fields(window, cx))
         } else {
             div()
                 .v_flex()
                 .gap_2()
                 .w_full()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(format!("列（{result_columns}）· 来自这次生成（只读）")),
-                )
+                // 段标题走 `section`（与草稿 tab 的「列（N）」同一支原语）：此前草稿 tab
+                // 有标题 + 分隔线，结果 tab 只给一行弱化小字——同一个模块里两处
+                // 「列（N）」长得不一样，切成两个 tab 对照时会显形
+                .child(section(
+                    &theme,
+                    format!("列（{result_columns}）· 来自这次生成（只读）"),
+                ))
                 .child(self.render_result_columns(generated.as_ref(), cx))
         };
 
@@ -1880,13 +1807,7 @@ impl Render for MockDetailView {
         // 段 3：预览（标题行 + 排序提示 + 表格 / 空占位）。表格 `DataTable` 自带
         // 虚拟化与横向滚动，段内直接撑满——不再随整页滚。
         let mut preview_block = div().v_flex().gap_2().w_full().flex_1().min_h_0();
-        // 单表出口随表在此（生成 → 落地闭环）：作用于当前 tab 那张表，从右面板迁来。
-        // 按钮 id 拼 tab 键（`DetailTarget::key`）：多个详情 tab 并存时每个 tab 各一组
-        // 出口，id 必须唯一（否则 a11y 树重复节点 panic）。
-        preview_block = preview_block.child(
-            self.panel
-                .update(cx, |panel, cx| panel.render_sinks(&tab_key, window, cx)),
-        );
+        // 单表出口已上移到表头的动作行（与「生成」同排）：这里只留预览，段内空间全部给表格。
         preview_block = preview_block.child(
             div()
                 .h_flex()
@@ -1911,7 +1832,8 @@ impl Render for MockDetailView {
         );
         // 排序的入口提示：箭头与右键都能点，但两处都很轻，先说一句
         if preview_sort_label.is_some() {
-            preview_block = preview_block.child(div().text_xs().text_color(muted).child(
+            preview_block = preview_block.child(hint_line(
+                &theme,
                 "排序是重查临时表得来的（全局前 N 行）；点表头右端的箭头可换向 / 取消，右键同一套。",
             ));
         }
@@ -1973,6 +1895,9 @@ impl Render for MockDetailView {
                         div()
                             .size_full()
                             .min_h_0()
+                            // 段内内距：三段内容此前都贴着 tab 边缘与分隔条，
+                            // 与分栏条的线挤在一起，看着像没排版的草稿
+                            .p_2()
                             .overflow_y_scrollbar()
                             .child(head_block),
                     ),
@@ -1982,6 +1907,7 @@ impl Render for MockDetailView {
                     div()
                         .size_full()
                         .min_h_0()
+                        .p_2()
                         .overflow_y_scrollbar()
                         .child(columns_block),
                 ),
@@ -1991,6 +1917,7 @@ impl Render for MockDetailView {
                     div()
                         .size_full()
                         .min_h_0()
+                        .p_2()
                         .flex()
                         .flex_col()
                         .child(preview_block),
@@ -2017,9 +1944,16 @@ impl Render for MockDetailView {
     }
 }
 
-/// 清单行右端的**状态点**：`IconName` 图标（走图标组件，不再用 Unicode 字形）+ 语义色文字。
+/// 清单行里的**状态**：`IconName` 图标（走图标组件，不再用 Unicode 字形）+ 语义色文字。
+///
+/// 必须是 `h_flex`：根容器是块级 `div` 时图标、「 」、文字会各占一行垂直堆叠，
+/// 一个状态格撑成三行高（与 `Button` 被塞进块级 div 会居中是同一类容器陷阱）。
+/// 图标与文字的间距走 `gap_1`，不再靠插一个空格字符。
 pub(crate) fn render_status_cell(icon: Option<IconName>, text: &str, color: Hsla) -> Div {
     div()
+        .h_flex()
+        .items_center()
+        .gap_1()
         .flex_none()
         .text_xs()
         .text_color(color)
@@ -2029,7 +1963,6 @@ pub(crate) fn render_status_cell(icon: Option<IconName>, text: &str, color: Hsla
                     .size(rems(ui::STATUS_ICON_SIZE))
                     .text_color(color),
             )
-            .child(" ")
         })
         .child(SharedString::from(text))
 }

@@ -1,6 +1,8 @@
 // 继承父模块（mock_view）的全部 use 绑定
 use super::*;
 
+use std::time::Duration;
+
 /// 后台任务种类（决定任务干什么、收尾时怎么归置结果）。
 ///
 /// 分两组：**生成类**（`Generate` / `Scenario` / `AppendTo`）自己产出结果；
@@ -240,6 +242,18 @@ impl MockJobProgress {
         let per_batch = (self.rows_total as f64 / self.batches_total as f64).ceil() as u32;
         (self.batches_done as u32 * per_batch).min(self.rows_total)
     }
+
+    /// 状态栏 / 清单的短文案（`◐ Mock 生成中 40%`；出口类拿不到百分比 → 只给阶段名）。
+    ///
+    /// 文案与量纲都留在 mock crate（与 `MockJobPhase::label` 同源），宿主自己拼一份会在
+    /// 阶段改名时静默不一致。
+    pub fn chip_text(self) -> String {
+        if self.phase.is_quantified() {
+            format!("◐ Mock 生成中 {:.0}%", self.percent())
+        } else {
+            format!("◐ Mock {}", self.phase.label())
+        }
+    }
 }
 
 /// 后台任务状态。
@@ -249,4 +263,80 @@ pub enum MockJobState {
     Idle,
     /// 进行中（可取消）
     Running(MockJobProgress),
+}
+
+/// 清单行（右 Dock 表名那一行）的进度形态。
+///
+/// **为什么是三态而不是一律百分比**：集合任务（场景 N 张表 / 批量落库）报的是「张数」，
+/// 那是个清单级的量纲，压到某一行上就成了假读数（第 3 行显示 30% 是什么？）。
+/// 逐表推进的真相是「哪些过了、正在过哪张」，三态才说得准。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowProgress {
+    /// 定量：这张表自己的生成进度（单表任务；0~100 取整，行线不需要小数点后两位）
+    Determinate(u8),
+    /// 正在处理这张表，但量纲不到行（集合任务当前那张 / 出口阶段的写入与写出）
+    Active,
+    /// 已处理完（集合任务里排在当前之前的那些表）
+    Done,
+}
+
+/// 清单行的进度形态（**纯函数**，便于单测：不碰面板实体）。
+///
+/// - `by_table`（集合任务）：排在当前之前的 = 已过，当前这张 = 正在过，后面的 = 还没轮到；
+/// - 单表任务：只有**任务目标**那一行有进度（与 `table_status` 的判定同口径），
+///   生成阶段给百分比，出口阶段（写库 / 写文件）拿不到中间进度 → 只说在动。
+pub fn row_progress_of(
+    by_table: bool,
+    progress: MockJobProgress,
+    index: usize,
+    is_target: bool,
+) -> Option<RowProgress> {
+    if by_table {
+        return if index < progress.batches_done {
+            Some(RowProgress::Done)
+        } else if index == progress.batches_done {
+            Some(RowProgress::Active)
+        } else {
+            None
+        };
+    }
+    if !is_target {
+        return None;
+    }
+    Some(if progress.phase.is_quantified() {
+        RowProgress::Determinate(progress.percent().round().clamp(0.0, 100.0) as u8)
+    } else {
+        RowProgress::Active
+    })
+}
+
+/// 任务的对外快照（状态栏读它；视图内一律读面板自己的状态，不绕这一层）。
+///
+/// 为何单独有它：状态栏在宿主 crate，而它要的四个读数（文案 / 百分比 / ETA / 能不能取消）
+/// 分属 mock 的三个方法——让宿主各调一次既啰嗦又容易漏掉「出口类不可取消」这条口径。
+#[derive(Debug, Clone, Copy)]
+pub struct MockJobStatus {
+    /// 进度（文案 / 百分比 / 阶段都由它派生）
+    pub progress: MockJobProgress,
+    /// 剩余时间（`None` = 样本还不够，不报）
+    pub eta: Option<Duration>,
+    /// 能否取消（只有含生成阶段的任务能）
+    pub cancellable: bool,
+    /// 已请求取消
+    pub cancel_requested: bool,
+}
+
+impl MockJobStatus {
+    /// 状态栏文案（`◐ Mock 生成中 40%`）
+    pub fn label(&self) -> String {
+        self.progress.chip_text()
+    }
+    /// 百分比（出口类为 0；那时进度条走不定量形态）
+    pub fn percent(&self) -> f32 {
+        self.progress.percent()
+    }
+    /// 进度条是否走不定量形态（出口类拿不到中间进度）
+    pub fn indeterminate(&self) -> bool {
+        !self.progress.phase.is_quantified()
+    }
 }

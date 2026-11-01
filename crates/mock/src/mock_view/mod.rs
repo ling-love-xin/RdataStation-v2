@@ -51,7 +51,7 @@ use gpui_kit::component::IconName;
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::collapsible::Collapsible;
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
@@ -64,13 +64,11 @@ use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::separator::Separator;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::{
     Column, ColumnSort, DataTable, TableDelegate, TableEvent, TableState,
 };
-use gpui_kit::component::tag::Tag;
 use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -103,7 +101,9 @@ mod generator_search;
 mod job;
 mod panel;
 mod presets;
+mod progress;
 mod pure;
+mod style;
 
 // 字段预设 re-export：panel / detail / tests 经 `super::` 顶层访问（与其余子模块同一惯例）
 pub use presets::{FieldPreset, PresetCategory, builtin_presets, preset_by_id};
@@ -114,23 +114,36 @@ mod tests;
 // ---- 对外 re-export（workbench 等 crate 经 `mock::mock_view::*` 引用，保持原顶层 API） ----
 pub use contract::{
     AppendTargetStatus, MockColumnSpec, MockDraft, MockGenInfo, MockHost, MockPreview,
-    MockRunOptions, PreviewSort, SchemaRequest, SchemaSource,
+    MockRunOptions, PreviewSort, SchemaRequest, SchemaSource, flatten_preview,
 };
 pub use detail::{DetailTarget, MockDetailView, focus_detail_tab, status_chip_text};
-pub use job::{MockJobDone, MockJobKind, MockJobPhase, MockJobProgress, MockJobState};
+pub use job::{
+    MockJobDone, MockJobKind, MockJobPhase, MockJobProgress, MockJobState, MockJobStatus,
+    RowProgress, row_progress_of,
+};
 pub use panel::MockPanel;
+// 进度条原语（状态栏在宿主 crate，要用它画那一条迷你条）
+pub use progress::{JobBarSize, eta_text, eta_text_compact, job_progress_bar, row_progress_line};
 
 // ---- 内部共享 re-export（兄弟子模块用 `use super::*;` 继承；tests 用 `super::X` 路径引用） ----
 pub(crate) use contract::PreviewCache;
 pub(crate) use detail::render_status_cell;
 pub(crate) use generator_search::{GeneratorSearchDelegate, column_matches};
 pub(crate) use panel::{complex_form_line, form_line};
+// 样式原语（卡片 / 段标题 / chip / 按钮语义）：渲染侧只描述语义，形态在这一层
+pub(crate) use progress::{eta_from_unit_ms, smooth_unit_ms};
 pub(crate) use pure::{
     COLUMN_TYPES, FILE_FORMATS, LOCALES, PREVIEW_LIMIT_CHOICES, PREVIEW_ROWS, RECENT_GENERATORS,
     column_type_label, complex_param_hint, complex_param_text, default_generator_for, locale_label,
     mock_file_name, new_column_spec, param_text, parse_complex_param, parse_percent_ratio,
     parse_rows, parse_seed, patch_param, patch_param_value, summarize_params, validate_table_name,
     with_thousands,
+};
+pub(crate) use style::{
+    ActionKind, TOOLTIP_DELAY, button, card, card_border, card_divider, card_interactive,
+    card_note, card_title, confidence_tag, current_bar, danger_icon_button, danger_text_button,
+    data_type_tag, dropdown_button, error_line, hint_line, icon_button, info_line, kv, row_card,
+    row_card_interactive, row_card_selected, section, success_line, text_hint, warning_line,
 };
 
 // ---- 仅供测试引用的 re-export（`super::X` 路径只在 `#[cfg(test)]` 的 tests.rs 出现，

@@ -38,6 +38,20 @@ pub const PARAM_INPUT_WIDTH: f32 = 9.0;
 pub const FIELD_LIST_MAX_HEIGHT: f32 = 16.0;
 /// 字段区列搜索框宽度（9rem = 144px；与对话框内输入框同档）
 pub const COLUMN_FILTER_WIDTH: f32 = 9.0;
+/// 新草稿自带的那一列的列名（沿用「＋ 加列」的命名口径 `column_{index}`）
+pub const DEFAULT_FIRST_COLUMN_NAME: &str = "column_1";
+
+/// 列卡片右端操作区的固定宽度（7rem = 112px：四个小图标按钮 + 三个间距）
+///
+/// 操作是悬停 / 聚焦才显形的：显形时右侧若随之变宽，列名区（`flex_1`）会被压缩重排，
+/// 鼠标扫过一排卡片就是一排水波。占位容器在没显形时也占同样宽，卡片纹丝不动。
+pub const CARD_OPS_WIDTH: f32 = 7.0;
+
+/// 清单行右端操作区的固定宽度（5rem = 80px：「编辑」+ 图标删除 + 两个间距）
+///
+/// 与卡片同口径（[`CARD_OPS_WIDTH`]）：行内操作也是悬停才显形，没有占位容器时
+/// 行数那一格会跟着按钮的有无左右跳。
+pub const ROW_OPS_WIDTH: f32 = 5.0;
 /// 详情 tab 预览区最小高度（10rem = 160px）
 pub const PREVIEW_MIN_HEIGHT: f32 = 10.0;
 /// 集合类参数多行输入的高度（5rem = 80px ≈ 5 行）
@@ -85,9 +99,28 @@ pub const DETAIL_HEADER_MAX_HEIGHT: Pixels = px(220.);
 
 /// 列编辑对话框总宽（840px）
 pub const COLUMN_DIALOG_WIDTH: Pixels = px(840.);
+/// 自定义生成器（精调层）对话框总宽（560px：只装一个表单，不需要两栏）
+pub const GENERATOR_DIALOG_WIDTH: Pixels = px(560.);
 /// 列编辑对话框左栏生成器列表宽（280px）
 pub const COLUMN_GENERATOR_LIST_WIDTH: Pixels = px(280.);
 /// 列编辑对话框列名输入框宽（200px）
 pub const COLUMN_NAME_INPUT_WIDTH: Pixels = px(200.);
 /// 状态卡片 tooltip 内容最大宽度（260px）
 pub const STATUS_TOOLTIP_MAX_WIDTH: Pixels = px(260.);
+
+// ===== 进度条（中央表头 / 清单行 / 状态栏三处同一套原语） =====
+
+/// 清单行下缘进度线高度（2px：只留一条线，不占行内布局、不与选中底 / 悬停底叠色）
+pub const ROW_PROGRESS_LINE_HEIGHT: Pixels = px(2.);
+/// 状态栏迷你进度条宽度（64px：够读出走向，又不挤掉连接名 / LSP / 三个开关）
+pub const STATUS_BAR_BAR_WIDTH: Pixels = px(64.);
+
+// ===== 「当前编辑列」标识条 =====
+
+/// 标识条宽度（3px）。
+///
+/// 比导航树的 `TREE_ACTIVE_BAR`（2px）宽一档：树里同时选中多行是常态（列表密度高，
+/// 2px 足够），而这里**同时只可能有一列在编辑**——它是唯一焦点，可以更有存在感。
+pub const CURRENT_BAR_WIDTH: Pixels = px(3.);
+/// 标识条上下内缩（2px）：卡片有圆角，条贴满上下会露出直角。
+pub const CURRENT_BAR_INSET: Pixels = px(2.);
