@@ -46,7 +46,9 @@ use crate::quick_open::palette::{QuickOpenHost, QuickOpenPalette};
 use crate::services::editor_completion::WorkbenchCompletion;
 use crate::services::editor_lsp::{LspBlock, WorkbenchLsp};
 use crate::ui;
-use mock::mock_view::{MockDetailView, MockPanel, focus_detail_tab, status_chip_text};
+use mock::mock_view::{
+    JobBarSize, MockDetailView, MockPanel, eta_text_compact, focus_detail_tab, job_progress_bar,
+};
 use settings::SettingsService;
 use settings::commands::{OpenSettings, ToggleThemeMode};
 use settings::settings_page::{SettingsHost, SettingsPage};
@@ -2734,17 +2736,13 @@ fn mock_status_chip(panel: Entity<MockPanel>, cx: &mut App) -> Div {
         let theme = cx.theme();
         (theme.colors.primary_foreground, theme.colors.primary_active)
     };
-    let (text, cancellable, cancel_requested) = {
+    let (status, cancellable, cancel_requested) = {
         let view = panel.read(cx);
-        // 文案的口径归 mock crate（`status_chip_text`：没任务 / 拿不到进度就不画）
-        let Some(text) = status_chip_text(view.job_progress()) else {
+        // 文案 / 百分比 / ETA / 能不能取消一次拿全（口径都在 mock crate，宿主只摆位置）
+        let Some(status) = view.job_status() else {
             return div();
         };
-        (
-            text,
-            view.job_kind().is_some_and(|kind| kind.generates()),
-            view.cancel_requested(),
-        )
+        (status, status.cancellable, status.cancel_requested)
     };
 
     let mut chip = div()
@@ -2754,7 +2752,27 @@ fn mock_status_chip(panel: Entity<MockPanel>, cx: &mut App) -> Div {
         .px_1()
         .rounded_sm()
         .text_color(fg)
-        .child(div().child(text));
+        .child(div().child(status.label()))
+        // 迷你进度条：切走中央 tab / 整个 Mock 面板时，任务还在跑——
+        // 状态栏是唯一一直在那儿的地方，走到哪了在这里看
+        .child(
+            div()
+                .w(mock::ui::STATUS_BAR_BAR_WIDTH)
+                .flex_none()
+                .child(job_progress_bar(
+                    "status-bar",
+                    status.percent(),
+                    status.indeterminate(),
+                    JobBarSize::Mini,
+                    // 状态栏是品牌珊瑚底：条取配对前景色（组件默认的强调色在珊瑚底上读不清）
+                    Some(fg),
+                    cx,
+                )),
+        );
+    // 剩余时间：与百分比是同一件事的两头（走到哪了 / 还要多久）
+    if let Some(text) = status.eta.and_then(eta_text_compact) {
+        chip = chip.child(div().child(text));
+    }
     if cancellable {
         // 出口类任务不可取消（DuckDB / 文件系统内没有中断点），所以那一档只给文字
         let mut cancel = div()
