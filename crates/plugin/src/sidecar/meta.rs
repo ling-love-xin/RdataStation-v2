@@ -389,8 +389,16 @@ mod tests {
         }))
         .unwrap();
 
-        assert_eq!(objects.len(), 5, "认不出的类别也要解出来（丢了就没人知道驱动报了新东西）");
-        assert!(objects.iter().any(|o| o.kind == MetaObjectKind::Other("domain".into())));
+        assert_eq!(
+            objects.len(),
+            5,
+            "认不出的类别也要解出来（丢了就没人知道驱动报了新东西）"
+        );
+        assert!(
+            objects
+                .iter()
+                .any(|o| o.kind == MetaObjectKind::Other("domain".into()))
+        );
 
         let nodes: Vec<NodeInfo> = objects
             .into_iter()
@@ -445,7 +453,10 @@ mod tests {
         assert_eq!(detail.row_count, Some(12000));
         // 少写 type_raw 的列退化成 unknown：属性面板少一列类型，好过整张详情打不开
         assert_eq!(detail.columns[2].type_raw, "unknown");
-        assert!(detail.columns[2].nullable && !detail.columns[2].is_pk, "默认值取宽松那份");
+        assert!(
+            detail.columns[2].nullable && !detail.columns[2].is_pk,
+            "默认值取宽松那份"
+        );
 
         let column = detail.columns[1].clone().into_column_detail();
         assert_eq!(column.data_type, "numeric(38,10)", "用户看到的是原始类型名");
@@ -458,7 +469,12 @@ mod tests {
             Some("decimal(scale=10)")
         );
         assert_eq!(column.comment.as_deref(), Some("订单金额"));
-        assert!(detail.columns[0].clone().into_column_detail().is_primary_key);
+        assert!(
+            detail.columns[0]
+                .clone()
+                .into_column_detail()
+                .is_primary_key
+        );
 
         // 没有 object = 协议错：属性面板没法定类别
         assert!(matches!(
@@ -476,7 +492,10 @@ mod tests {
     #[test]
     fn routine_source_is_a_string_or_null() {
         let source = parse_routine_source(&json!("CREATE FUNCTION order_total()"));
-        assert_eq!(source.unwrap().as_deref(), Some("CREATE FUNCTION order_total()"));
+        assert_eq!(
+            source.unwrap().as_deref(),
+            Some("CREATE FUNCTION order_total()")
+        );
         assert_eq!(parse_routine_source(&Value::Null).unwrap(), None);
         // 包一层对象不是协议：形状只留一种
         assert!(matches!(

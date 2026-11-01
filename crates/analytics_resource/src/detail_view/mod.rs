@@ -11,7 +11,7 @@ use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::description_list::{DescriptionList, DescriptionText};
 use gpui_kit::component::hover_card::HoverCard;
 use gpui_kit::component::tag::Tag;
-use gpui_kit::component::{ActiveTheme, Icon, Size, Sizable as _};
+use gpui_kit::component::{ActiveTheme, Icon, Sizable as _, Size};
 use gpui_kit::*;
 
 use crate::model::{ArchiveKind, ArchiveStatus, DeleteTarget, PayloadMode, RowScope};
@@ -126,9 +126,7 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
             "归档方式",
             match detail.payload_mode {
                 PayloadMode::Copy => "复制存档（本体在 resources/ 下，只读）".to_string(),
-                PayloadMode::Reference => {
-                    "引用存档（本体留在源位置，快照指向源路径）".to_string()
-                }
+                PayloadMode::Reference => "引用存档（本体留在源位置，快照指向源路径）".to_string(),
             },
         ),
     ];
@@ -245,7 +243,10 @@ fn render_tag_section(detail: &ArchiveDetail, actions: Option<&DetailActions>, c
         chips = chips.child(div().text_xs().text_color(muted).child("（还没有标签）"));
     }
     for chip in &detail.tags {
-        let mut line = Tag::secondary().with_size(Size::Small).gap_1().child(chip.name.clone());
+        let mut line = Tag::secondary()
+            .with_size(Size::Small)
+            .gap_1()
+            .child(chip.name.clone());
         if let Some(actions) = actions {
             if !read_only {
                 // × = 去掉这个标签（不再要一次确认：重新打上只需两步）。
@@ -543,9 +544,9 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
                 .border_color(tone_color.warning)
                 .text_color(tone_color.warning)
                 .child(
-                    div().text_xs().child(
-                        "源已变更，快照失效：当前源文件与归档时的指纹不一致。",
-                    ),
+                    div()
+                        .text_xs()
+                        .child("源已变更，快照失效：当前源文件与归档时的指纹不一致。"),
                 )
                 .child(
                     div().h_flex().w_full().gap_2().child(
@@ -568,8 +569,11 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
                         .xsmall()
                         .label("从历史还原")
                         .on_click(move |_, window, cx| {
-                            host_for_history
-                                .request_version_history(&detail_for_history.id, window, cx)
+                            host_for_history.request_version_history(
+                                &detail_for_history.id,
+                                window,
+                                cx,
+                            )
                         }),
                 ),
         );
@@ -641,7 +645,12 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
                     )
                     .content(move |_, _window, cx| {
                         let fg = cx.theme().colors.foreground;
-                        div().px_2().py_1().text_xs().text_color(fg).child(value.clone())
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .text_color(fg)
+                            .child(value.clone())
                     })
                     .into_any_element();
                 kv_list = kv_list.item(label, DescriptionText::AnyElement(value_el), 1);
@@ -708,28 +717,22 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
                     .border_color(border)
                     .pt_2()
                     .child(
-                        div()
-                            .h_flex()
-                            .w_full()
-                            .gap_2()
-                            .child(
-                                Button::new("archive-detail-distribute")
-                                    .ghost()
-                                    .label("分发到本项目…")
-                                    .on_click(move |_, window, cx| {
-                                        host.request_distribute_from_global(
-                                            &detail_for_distribute.name,
-                                            window,
-                                            cx,
-                                        )
-                                    }),
-                            ),
-                    )
-                    .child(
-                        div().text_xs().text_color(muted).child(
-                            "全局实例只读：本体不可打开、取回或删除；需要内容时先分发到本项目。",
+                        div().h_flex().w_full().gap_2().child(
+                            Button::new("archive-detail-distribute")
+                                .ghost()
+                                .label("分发到本项目…")
+                                .on_click(move |_, window, cx| {
+                                    host.request_distribute_from_global(
+                                        &detail_for_distribute.name,
+                                        window,
+                                        cx,
+                                    )
+                                }),
                         ),
-                    ),
+                    )
+                    .child(div().text_xs().text_color(muted).child(
+                        "全局实例只读：本体不可打开、取回或删除；需要内容时先分发到本项目。",
+                    )),
             );
         } else {
             let missing = detail.status == ArchiveStatus::Missing;
@@ -797,7 +800,9 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
                                     .on_click({
                                         let host = host.clone();
                                         let detail = detail_for_checkout.clone();
-                                        move |_, window, cx| host.request_checkout(&detail, window, cx)
+                                        move |_, window, cx| {
+                                            host.request_checkout(&detail, window, cx)
+                                        }
                                     }),
                             ),
                     )

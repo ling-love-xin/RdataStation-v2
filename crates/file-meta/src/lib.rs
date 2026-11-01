@@ -418,11 +418,7 @@ mod tests {
         // 旧格式 / 缺字段：缺少的顶层字段按默认值补齐（为以后迁移兜底）
         let dir = tempfile::tempdir().unwrap();
         let meta_path = dir.path().join(".legacy.sql.meta.json");
-        fs::write(
-            &meta_path,
-            r#"{"bookmarks":[{"line":3,"label":"旧书签"}]}"#,
-        )
-        .unwrap();
+        fs::write(&meta_path, r#"{"bookmarks":[{"line":3,"label":"旧书签"}]}"#).unwrap();
 
         let file_path = dir.path().join("legacy.sql");
         fs::write(&file_path, "SELECT 1").unwrap();

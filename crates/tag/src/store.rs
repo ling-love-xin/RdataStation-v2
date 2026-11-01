@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, params};
 use shared::error::{CoreError, StorageError};
 
-use crate::model::{Tag, SCOPE_GLOBAL, SCOPE_PROJECT, normalize_name};
+use crate::model::{SCOPE_GLOBAL, SCOPE_PROJECT, Tag, normalize_name};
 
 /// 项目库文件名（与 `engine::persistence::connection_org_store` 的私有常量同值；
 /// `.RSmeta` 拼写多源收敛见开发方案 P0.3）。
@@ -19,7 +19,12 @@ const PROJECT_DB_NAME: &str = "project.db";
 /// 标签定义 CRUD（[`TagTable`] 实现；[`TagStore`] 在其上扩展关联与治理）。
 pub trait TagDefinitions {
     /// 新建标签（定义）。`scope` 由存储域派生，不入参数；同名（活跃）拒绝。
-    fn create_tag(&self, name: &str, color: Option<&str>, icon: Option<&str>) -> Result<Tag, CoreError>;
+    fn create_tag(
+        &self,
+        name: &str,
+        color: Option<&str>,
+        icon: Option<&str>,
+    ) -> Result<Tag, CoreError>;
     /// 全局重命名（只改定义，关联自动跟随）。同名（活跃）拒绝；改成现名幂等返回原行。
     fn rename_tag(&self, id: &str, name: &str) -> Result<Tag, CoreError>;
     /// 软删定义行（规格 §5 决策 D2：不清关联，读取侧过滤 `deleted_at`）。
@@ -142,7 +147,11 @@ impl TagTable {
     /// 表名来自固定常量、不拼接外部输入（无注入面）。
     pub fn reference_counts(&self) -> Result<HashMap<String, i64>, CoreError> {
         let mut counts: HashMap<String, i64> = HashMap::new();
-        for table in ["connection_tags", "scratchpad_tags", "analytics_resource_tags"] {
+        for table in [
+            "connection_tags",
+            "scratchpad_tags",
+            "analytics_resource_tags",
+        ] {
             let exists: bool = self
                 .conn
                 .query_row(
@@ -206,7 +215,12 @@ impl TagTable {
 }
 
 impl TagDefinitions for TagTable {
-    fn create_tag(&self, name: &str, color: Option<&str>, icon: Option<&str>) -> Result<Tag, CoreError> {
+    fn create_tag(
+        &self,
+        name: &str,
+        color: Option<&str>,
+        icon: Option<&str>,
+    ) -> Result<Tag, CoreError> {
         let Some(name) = normalize_name(name) else {
             return Err(self.err("create", "标签名不能为空"));
         };
@@ -339,7 +353,10 @@ impl TagDefinitions for TagTable {
             .prepare(&sql)
             .map_err(|e| self.err("prepare_tags_by_ids", e))?;
         let rows = stmt
-            .query_map(rusqlite::params_from_iter(ids.iter().map(String::as_str)), map_tag_row)
+            .query_map(
+                rusqlite::params_from_iter(ids.iter().map(String::as_str)),
+                map_tag_row,
+            )
             .map_err(|e| self.err("query_tags_by_ids", e))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| self.err("collect_tags_by_ids", e))
@@ -427,11 +444,7 @@ mod tests {
     fn isolated(f: impl FnOnce(&Path)) {
         static SEQ: AtomicUsize = AtomicUsize::new(0);
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "rds_tag_test_{}_{}",
-            std::process::id(),
-            seq
-        ));
+        let dir = std::env::temp_dir().join(format!("rds_tag_test_{}_{}", std::process::id(), seq));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mkdir");
         f(&dir);
@@ -459,7 +472,12 @@ mod tests {
             assert!(bare.color.is_none() && bare.icon.is_none());
 
             // 活跃列表按名称升序
-            let names: Vec<String> = store.list_tags().expect("list").into_iter().map(|t| t.name).collect();
+            let names: Vec<String> = store
+                .list_tags()
+                .expect("list")
+                .into_iter()
+                .map(|t| t.name)
+                .collect();
             assert_eq!(names, vec!["core".to_string(), "prod".to_string()]);
             assert!(store.list_deleted().expect("deleted").is_empty());
         });
@@ -501,12 +519,29 @@ mod tests {
 
             global.create_tag("prod", None, None).expect("global prod");
             // 同名不同域互不冲突
-            project.create_tag("prod", Some("danger"), None).expect("project prod");
+            project
+                .create_tag("prod", Some("danger"), None)
+                .expect("project prod");
 
             assert_eq!(global.list_tags().expect("g").len(), 1);
             assert_eq!(project.list_tags().expect("p").len(), 1);
-            assert_eq!(global.get_tag_by_name("prod").expect("g by name").unwrap().scope, SCOPE_GLOBAL);
-            assert_eq!(project.get_tag_by_name("prod").expect("p by name").unwrap().color.as_deref(), Some("danger"));
+            assert_eq!(
+                global
+                    .get_tag_by_name("prod")
+                    .expect("g by name")
+                    .unwrap()
+                    .scope,
+                SCOPE_GLOBAL
+            );
+            assert_eq!(
+                project
+                    .get_tag_by_name("prod")
+                    .expect("p by name")
+                    .unwrap()
+                    .color
+                    .as_deref(),
+                Some("danger")
+            );
         });
     }
 
@@ -515,7 +550,9 @@ mod tests {
         isolated(|dir| {
             let store = TagTable::open_at(dir.join("p.db"), SCOPE_GLOBAL).expect("open");
             store.create_tag("prod", None, None).expect("first");
-            let err = store.create_tag("prod", Some("danger"), None).expect_err("dup");
+            let err = store
+                .create_tag("prod", Some("danger"), None)
+                .expect_err("dup");
             let msg = format!("{err}");
             assert!(msg.contains("同名"), "报错应含中文可读提示：{msg}");
         });
@@ -533,7 +570,9 @@ mod tests {
     fn soft_delete_allows_recreate_same_name() {
         isolated(|dir| {
             let store = TagTable::open_at(dir.join("p.db"), SCOPE_GLOBAL).expect("open");
-            let first = store.create_tag("prod", Some("warning"), None).expect("first");
+            let first = store
+                .create_tag("prod", Some("warning"), None)
+                .expect("first");
             store.delete_tag(&first.id).expect("soft delete");
 
             // 软删后不再出现在活跃列表，出现在已删列表
@@ -541,10 +580,19 @@ mod tests {
             assert_eq!(store.list_deleted().expect("deleted").len(), 1);
 
             // 部分唯一索引生效：软删后可同名重建，新 id（D2：旧关联不会带回）
-            let second = store.create_tag("prod", Some("danger"), None).expect("recreate");
+            let second = store
+                .create_tag("prod", Some("danger"), None)
+                .expect("recreate");
             assert_ne!(second.id, first.id);
             assert_eq!(store.list_tags().expect("active").len(), 1);
-            assert_eq!(store.get_tag(&first.id).expect("old row").deleted_at.is_some(), true);
+            assert_eq!(
+                store
+                    .get_tag(&first.id)
+                    .expect("old row")
+                    .deleted_at
+                    .is_some(),
+                true
+            );
         });
     }
 

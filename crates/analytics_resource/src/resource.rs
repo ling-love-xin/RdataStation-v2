@@ -16,7 +16,6 @@ pub(crate) const RESOURCE_COLUMNS: &str = "\
     source_table, definition_sql, archived_at, \
     payload_mode, source_path";
 
-
 /// 给固定列名加上表别名前缀（`r.id, r.resource_type, …`）。
 ///
 /// JOIN 查询（如按标签反查资源）复用同一份列顺序，避免又抄一遍。
@@ -539,5 +538,4 @@ impl AnalyticsResourceStore {
     pub async fn remove_orphan_record(&self, id: &str) -> Result<(), CoreError> {
         self.hard_delete_row(id).await
     }
-
 }

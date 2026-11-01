@@ -101,7 +101,11 @@ pub enum ConnEvent {
     Notification { method: String, params: Value },
     /// 反向请求（插件 → 宿主，请求-响应）：`host.*` 面。宿主处理完用
     /// [`SidecarConn::reply`] / [`SidecarConn::reply_error`] 回帧。
-    InboundRequest { id: u64, method: String, params: Value },
+    InboundRequest {
+        id: u64,
+        method: String,
+        params: Value,
+    },
     /// 流数据（插件 → 宿主）：SSH shell 的 stdout / 端口转发收到的数据。
     /// 宿主向插件写流用 [`SidecarConn::write_stream`] / [`SidecarConn::write_eof`]。
     StreamData { channel_id: String, data: Vec<u8> },
@@ -325,11 +329,7 @@ impl SidecarConn {
     ///
     /// 通道 id 与 `x.ssh.shell` / `x.ssh.forward` 结果的 `channel_id` 对应；
     /// 连接已关（driver 任务退出）时返回 [`CallError::Closed`]。
-    pub async fn write_stream(
-        &self,
-        channel_id: &str,
-        data: &[u8],
-    ) -> Result<(), CallError> {
+    pub async fn write_stream(&self, channel_id: &str, data: &[u8]) -> Result<(), CallError> {
         let frame = Frame::stream(channel_id, data).map_err(|e| CallError::Frame {
             detail: e.to_string(),
         })?;
@@ -976,12 +976,9 @@ mod tests {
             "jsonrpc": "2.0", "id": 9, "method": "host.log",
             "params": { "level": "info", "message": "来自扩展" }
         });
-        write_frame(
-            &mut pw,
-            &Frame::json(serde_json::to_vec(&req).unwrap()),
-        )
-        .await
-        .unwrap();
+        write_frame(&mut pw, &Frame::json(serde_json::to_vec(&req).unwrap()))
+            .await
+            .unwrap();
 
         let ev = events.recv().await.expect("应有 InboundRequest 事件");
         match ev {
@@ -1026,7 +1023,10 @@ mod tests {
         .unwrap();
 
         let ev = events.recv().await.expect("应有 InboundRequest 事件");
-        assert!(matches!(ev, ConnEvent::InboundRequest { id: 4, .. }), "{ev:?}");
+        assert!(
+            matches!(ev, ConnEvent::InboundRequest { id: 4, .. }),
+            "{ev:?}"
+        );
 
         conn.reply_error(4, -32602, "参数不合法").await.unwrap();
 
@@ -1047,9 +1047,12 @@ mod tests {
         let (_pr, mut pw) = tokio::io::split(peer);
 
         // 对端（SSH 插件）上行一段 stdout
-        write_frame(&mut pw, &Frame::stream("ch-1", b"hello from shell").unwrap())
-            .await
-            .unwrap();
+        write_frame(
+            &mut pw,
+            &Frame::stream("ch-1", b"hello from shell").unwrap(),
+        )
+        .await
+        .unwrap();
         write_frame(&mut pw, &Frame::stream_eof("ch-1").unwrap())
             .await
             .unwrap();

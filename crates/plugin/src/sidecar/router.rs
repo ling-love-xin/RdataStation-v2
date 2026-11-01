@@ -118,7 +118,11 @@ pub enum RouterEvent {
     ///
     /// 判据是 JSON-RPC 语义：**带 `id` 且带 `method` 的帧是请求**（响应帧只有
     /// `result` / `error`，没有 `method`）。即使 id 撞上宿主的在飞集合也不误判。
-    InboundRequest { id: u64, method: String, params: Value },
+    InboundRequest {
+        id: u64,
+        method: String,
+        params: Value,
+    },
     /// 流数据（插件 → 宿主 方向；`KIND_STREAM` 帧）：SSH shell 的 stdout、
     /// 端口转发收到的数据等持续字节流分片。
     StreamData { channel_id: String, data: Vec<u8> },

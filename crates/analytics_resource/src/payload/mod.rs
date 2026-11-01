@@ -352,7 +352,11 @@ impl PayloadStore {
     /// 与 [`copy_out`](Self::copy_out) 同一语义（复制、目标可写），只换源。
     pub async fn copy_out_source(&self, source: &Path, dest: &Path) -> Result<(), CoreError> {
         if !source.is_file() {
-            return Err(io_err(source, "copy_out_source", "源文件已不在（reference 快照失效）"));
+            return Err(io_err(
+                source,
+                "copy_out_source",
+                "源文件已不在（reference 快照失效）",
+            ));
         }
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)
@@ -508,7 +512,9 @@ impl PayloadStore {
         let mut hasher = Sha256::new();
         let mut buf = vec![0u8; HASH_CHUNK];
         loop {
-            let read = file.read(&mut buf).map_err(|e| io_err(path, "hash_read", e))?;
+            let read = file
+                .read(&mut buf)
+                .map_err(|e| io_err(path, "hash_read", e))?;
             if read == 0 {
                 break;
             }
@@ -528,7 +534,8 @@ impl PayloadStore {
         rel: &str,
     ) -> Result<Option<PathBuf>, CoreError> {
         let source = self.resolve(rel)?;
-        self.store_version_copy_from(resource_id, version, &source).await
+        self.store_version_copy_from(resource_id, version, &source)
+            .await
     }
 
     /// 同上，但源是 **reference 模式的绝对路径**（本体在源位置，不经 `resources/` 守卫）。
@@ -548,7 +555,9 @@ impl PayloadStore {
             .file_name()
             .ok_or_else(|| io_err(source, "version_copy", "本体没有文件名"))?;
 
-        let dir = self.version_copy_dir(resource_id)?.join(version.to_string());
+        let dir = self
+            .version_copy_dir(resource_id)?
+            .join(version.to_string());
         fs::create_dir_all(&dir)
             .await
             .map_err(|e| io_err(&dir, "version_copy_dir", e))?;
@@ -598,7 +607,9 @@ impl PayloadStore {
         resource_id: &str,
         version: i32,
     ) -> Result<Option<PathBuf>, CoreError> {
-        let dir = self.version_copy_dir(resource_id)?.join(version.to_string());
+        let dir = self
+            .version_copy_dir(resource_id)?
+            .join(version.to_string());
         if !dir.is_dir() {
             return Ok(None);
         }
@@ -621,7 +632,9 @@ impl PayloadStore {
         resource_id: &str,
         version: i32,
     ) -> Result<bool, CoreError> {
-        let dir = self.version_copy_dir(resource_id)?.join(version.to_string());
+        let dir = self
+            .version_copy_dir(resource_id)?
+            .join(version.to_string());
         if !dir.is_dir() {
             return Ok(false);
         }

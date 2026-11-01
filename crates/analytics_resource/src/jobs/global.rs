@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 
 use engine::persistence::project_db::ProjectDatabaseManager;
 
-use super::{jobs, ConflictContext, Job, OpOutcome, SQLITE_POOL_SIZE};
+use super::{ConflictContext, Job, OpOutcome, SQLITE_POOL_SIZE, jobs};
 
 /// 一次「升级到全局」任务（§13：项目 → 全局，表 + 版本信息进全局 DuckDB）。
 pub(crate) struct PromoteJob {
@@ -113,20 +113,26 @@ pub(crate) async fn run_distribute(job: &DistributeJob) -> OpOutcome {
     };
     let project = ProjectDuckConn(duck_conn, manager.sqlite_pool());
     let result = match job.overwrite {
-        true => gstore.distribute_overwrite(
-            &project,
-            &job.project_root,
-            &job.name,
-            job.target.as_deref(),
-        )
-        .await,
-        false => gstore.distribute(
-            &project,
-            &job.project_root,
-            &job.name,
-            job.target.as_deref(),
-        )
-        .await,
+        true => {
+            gstore
+                .distribute_overwrite(
+                    &project,
+                    &job.project_root,
+                    &job.name,
+                    job.target.as_deref(),
+                )
+                .await
+        }
+        false => {
+            gstore
+                .distribute(
+                    &project,
+                    &job.project_root,
+                    &job.name,
+                    job.target.as_deref(),
+                )
+                .await
+        }
     };
     match result {
         Ok(outcome) => OpOutcome::Distributed {
@@ -182,12 +188,10 @@ pub fn enqueue_distribute(
     overwrite: bool,
 ) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
-    let _ = jobs()
-        .tx
-        .send(Job::Distribute(DistributeJob {
-            project_root,
-            name,
-            target,
-            overwrite,
-        }));
+    let _ = jobs().tx.send(Job::Distribute(DistributeJob {
+        project_root,
+        name,
+        target,
+        overwrite,
+    }));
 }

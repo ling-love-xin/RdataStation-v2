@@ -1,7 +1,7 @@
 use super::*;
-use shared::error::{CoreError, StorageError};
 use chrono::Utc;
 use serde_json::Value;
+use shared::error::{CoreError, StorageError};
 
 impl AnalyticsResourceStore {
     // ==================== 版本历史 ====================
@@ -77,11 +77,14 @@ impl AnalyticsResourceStore {
             VALUES (?, ?, ?, ?, ?)
             "#,
             rusqlite::params![&id, resource_id, version, snapshot, Utc::now().to_rfc3339()],
-        ).map_err(|e| CoreError::storage(StorageError::Persistence {
-            store: "analytics_resource_versions".to_string(),
-            operation: "insert".to_string(),
-            reason: e.to_string(),
-        }))?;
+        )
+        .map_err(|e| {
+            CoreError::storage(StorageError::Persistence {
+                store: "analytics_resource_versions".to_string(),
+                operation: "insert".to_string(),
+                reason: e.to_string(),
+            })
+        })?;
 
         Ok(id)
     }

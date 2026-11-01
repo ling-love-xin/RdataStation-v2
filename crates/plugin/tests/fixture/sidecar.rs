@@ -304,7 +304,10 @@ fn handle(fixture: &Fixture, payload: &[u8]) -> Option<Vec<OutFrame>> {
 
         // 一次给全、含 kind：宿主按 kind 分流到五个文件夹（口径见 meta.rs 模块文档）
         "meta.objects" => {
-            let schema = params.get("schema").and_then(Value::as_str).unwrap_or("public");
+            let schema = params
+                .get("schema")
+                .and_then(Value::as_str)
+                .unwrap_or("public");
             let mut objects = meta_objects(schema);
             // 没声明的能力：**不报**那一类（驱动「看不到」与「没有」是同一件事）
             for (key, kinds) in [
@@ -317,12 +320,21 @@ fn handle(fixture: &Fixture, payload: &[u8]) -> Option<Vec<OutFrame>> {
                     objects.retain(|o| !kinds.contains(&o["kind"].as_str().unwrap_or_default()));
                 }
             }
-            Some(vec![OutFrame::json(reply(id, json!({ "objects": objects })))])
+            Some(vec![OutFrame::json(reply(
+                id,
+                json!({ "objects": objects }),
+            ))])
         }
 
         "meta.object_detail" => {
-            let schema = params.get("schema").and_then(Value::as_str).unwrap_or("public");
-            let object = params.get("object").and_then(Value::as_str).unwrap_or_default();
+            let schema = params
+                .get("schema")
+                .and_then(Value::as_str)
+                .unwrap_or("public");
+            let object = params
+                .get("object")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             match (meta_object(schema, object), meta_columns(object)) {
                 (Some(object), Some(columns)) => Some(vec![OutFrame::json(reply(
                     id,
@@ -353,7 +365,9 @@ fn handle(fixture: &Fixture, payload: &[u8]) -> Option<Vec<OutFrame>> {
                 match params.get("name").and_then(Value::as_str) {
                     Some("order_total") => Some(vec![OutFrame::json(reply(
                         id,
-                        json!("CREATE FUNCTION order_total(orders.id) RETURNS numeric AS 'SELECT …'"),
+                        json!(
+                            "CREATE FUNCTION order_total(orders.id) RETURNS numeric AS 'SELECT …'"
+                        ),
                     ))]),
                     _ => Some(vec![OutFrame::json(reply(id, Value::Null))]),
                 }
@@ -758,7 +772,15 @@ fn meta_columns(object: &str) -> Option<Vec<Value>> {
         ],
         "recent_orders" | "mv_daily" => &[
             ("id", "bigint", "BIGINT", false, true, None, None),
-            ("amount", "numeric(38,10)", "DECIMAL", true, false, None, None),
+            (
+                "amount",
+                "numeric(38,10)",
+                "DECIMAL",
+                true,
+                false,
+                None,
+                None,
+            ),
         ],
         "deals" => &[
             ("id", "bigint", "BIGINT", false, true, None, None),

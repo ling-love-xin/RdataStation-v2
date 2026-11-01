@@ -48,13 +48,7 @@ pub const SSH_FORWARD: &str = "x.ssh.forward";
 pub const SSH_CLOSE: &str = "x.ssh.close";
 
 /// 全部已定义的正向 SSH 方法（协议面；引擎实现与否以插件侧为准）。
-pub const ALL_SSH_METHODS: &[&str] = &[
-    SSH_CONNECT,
-    SSH_EXEC,
-    SSH_SHELL,
-    SSH_FORWARD,
-    SSH_CLOSE,
-];
+pub const ALL_SSH_METHODS: &[&str] = &[SSH_CONNECT, SSH_EXEC, SSH_SHELL, SSH_FORWARD, SSH_CLOSE];
 
 /// 判断一个 method 是否属于正向 SSH 面（`x.ssh.` 前缀）。
 pub fn is_ssh_method(method: &str) -> bool {
@@ -293,20 +287,17 @@ mod tests {
             serde_json::from_str(r#"{"session_ref":"s1","command":"uptime"}"#).unwrap();
         assert!(p.timeout_secs.is_none());
 
-        let result: SshExecResult = serde_json::from_str(
-            r#"{"exit_code":0,"stdout":" 1 user","stderr":""}"#,
-        )
-        .unwrap();
+        let result: SshExecResult =
+            serde_json::from_str(r#"{"exit_code":0,"stdout":" 1 user","stderr":""}"#).unwrap();
         assert_eq!(result.exit_code, 0);
-        let round: SshExecResult = serde_json::from_str(&serde_json::to_string(&result).unwrap())
-            .unwrap();
+        let round: SshExecResult =
+            serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
         assert_eq!(round.stdout, " 1 user");
     }
 
     #[test]
     fn shell_defaults_and_round_trip() {
-        let p: SshShellParams =
-            serde_json::from_str(r#"{"session_ref":"s1"}"#).unwrap();
+        let p: SshShellParams = serde_json::from_str(r#"{"session_ref":"s1"}"#).unwrap();
         assert_eq!(p.term, "xterm");
         assert_eq!(p.cols, 80);
         assert_eq!(p.rows, 24);

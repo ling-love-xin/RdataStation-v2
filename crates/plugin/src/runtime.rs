@@ -71,9 +71,7 @@ fn global_config() -> &'static Mutex<RuntimeConfig> {
 
 /// 覆盖全局配置（设置页保存 java/python 路径时调用；`None` = 清除显式指定，回到自动查找）。
 pub fn set_runtime_config(config: RuntimeConfig) {
-    let mut guard = global_config()
-        .lock()
-        .expect("runtime 全局配置锁不应中毒");
+    let mut guard = global_config().lock().expect("runtime 全局配置锁不应中毒");
     *guard = config;
 }
 
@@ -130,10 +128,10 @@ impl RuntimeResolver {
                     note: format!("使用用户指定的 java：{}", p.display()),
                 });
             }
-            return Err(self.not_found_error("java", &format!(
-                "用户指定的 java 路径不存在：{}",
-                p.display()
-            )));
+            return Err(self.not_found_error(
+                "java",
+                &format!("用户指定的 java 路径不存在：{}", p.display()),
+            ));
         }
 
         // ② JAVA_HOME\bin\java[.exe]（Java 的常规环境变量）
@@ -172,13 +170,16 @@ impl RuntimeResolver {
             });
         }
 
-        Err(self.not_found_error("java", &format!(
-            "系统与 third_party 都没有 java。请任选其一：\n  \
+        Err(self.not_found_error(
+            "java",
+            &format!(
+                "系统与 third_party 都没有 java。请任选其一：\n  \
              - 安装 JDK（JAVA_HOME 或 PATH 指向它）；\n  \
              - 在设置页显式指定 java.exe 路径；\n  \
              - 把 JRE 放到 {}（检测到即自动使用）",
-            tp.display()
-        )))
+                tp.display()
+            ),
+        ))
     }
 
     fn resolve_python(&self) -> Result<ResolvedRuntime, CoreError> {
@@ -191,10 +192,10 @@ impl RuntimeResolver {
                     note: format!("使用用户指定的 python：{}", p.display()),
                 });
             }
-            return Err(self.not_found_error("python", &format!(
-                "用户指定的 python 路径不存在：{}",
-                p.display()
-            )));
+            return Err(self.not_found_error(
+                "python",
+                &format!("用户指定的 python 路径不存在：{}", p.display()),
+            ));
         }
 
         // ② PATH 里的 python3（其次 python）
@@ -224,13 +225,16 @@ impl RuntimeResolver {
             }
         }
 
-        Err(self.not_found_error("python", &format!(
-            "系统与 third_party 都没有 python。请任选其一：\n  \
+        Err(self.not_found_error(
+            "python",
+            &format!(
+                "系统与 third_party 都没有 python。请任选其一：\n  \
              - 安装 Python（PATH 指向它）；\n  \
              - 在设置页显式指定 python.exe 路径；\n  \
              - 把 Python 放到 {}（检测到即自动使用）",
-            tp.display()
-        )))
+                tp.display()
+            ),
+        ))
     }
 
     fn third_party_root(&self) -> PathBuf {
@@ -287,7 +291,10 @@ mod tests {
             ..Default::default()
         });
         let resolver = RuntimeResolver::global();
-        let err = resolver.resolve(BackendRuntime::Java).unwrap_err().to_string();
+        let err = resolver
+            .resolve(BackendRuntime::Java)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("用户指定的 java 路径不存在"), "{err}");
 
         // 清理全局配置，避免污染其它测试
@@ -300,7 +307,9 @@ mod tests {
         let resolver = RuntimeResolver::new(RuntimeConfig::default());
         // 本机 JAVA_HOME 未设，PATH 有 java（真实环境验证 PATH 发现路径）
         if env::var("JAVA_HOME").is_err() {
-            let resolved = resolver.resolve(BackendRuntime::Java).expect("本机应有 java");
+            let resolved = resolver
+                .resolve(BackendRuntime::Java)
+                .expect("本机应有 java");
             assert_eq!(resolved.source, RuntimeSource::EnvPath);
             assert!(
                 resolved.interpreter.to_string_lossy().contains("java"),

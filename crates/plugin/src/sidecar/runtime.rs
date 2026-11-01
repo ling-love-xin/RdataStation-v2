@@ -200,7 +200,9 @@ mod tests {
 
         let allowed: Vec<String> = vec![];
         let mut handler = HostApiHandler::new(DefaultHostProvider::new("com.example.ext"), allowed);
-        let err = handler.handle("host.log", json!({"level": "info", "message": "hi"})).unwrap_err();
+        let err = handler
+            .handle("host.log", json!({"level": "info", "message": "hi"}))
+            .unwrap_err();
         let (code, message) = err.to_rpc_error();
         assert_eq!(code, -32001);
 
@@ -231,7 +233,10 @@ mod tests {
 
         // logs.write 放行 → provider.log 成功 → 回帧 result: null
         let out = handler
-            .handle("host.log", json!({"level": "info", "message": "hi", "fields": {}}))
+            .handle(
+                "host.log",
+                json!({"level": "info", "message": "hi", "fields": {}}),
+            )
             .unwrap();
         assert_eq!(out, serde_json::Value::Null);
         conn.reply(8, out).await.unwrap();

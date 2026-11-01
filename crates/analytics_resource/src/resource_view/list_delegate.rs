@@ -393,8 +393,7 @@ impl ListDelegate for ArchiveListDelegate {
         // 全局行（§13）：本体在全局 DuckDB / 全局登记，项目侧动作（取回 / 改名 / 删除 /
         // 打标 / 分组 / 拖拽 / 版本历史）一律不可用——只有「分发到本项目」。
         // 取回要往草稿箱写一份工作副本：本体异常的存档（缺失 / 内容已变）与只读项目都不给走。
-        let can_checkout =
-            !is_global && row.status == ArchiveStatus::Normal && !self.read_only;
+        let can_checkout = !is_global && row.status == ArchiveStatus::Normal && !self.read_only;
         // 只读项目连标签也不给改（菜单项的置灰判据在闭包内用，故先拷一份）。
         let read_only = self.read_only;
         // 拖到分组头 = 移动（原型 §3.2）：载荷带**一批** id（多选时是整选集）。
@@ -530,7 +529,10 @@ impl ListDelegate for ArchiveListDelegate {
                                     let detail = open_detail.clone();
                                     move |_, window, cx| {
                                         if let Some(detail) = detail.as_ref() {
-                                            tracing::info!(?detail, "【探针】资源行菜单「打开（只读）」触发");
+                                            tracing::info!(
+                                                ?detail,
+                                                "【探针】资源行菜单「打开（只读）」触发"
+                                            );
                                             host.request_open(detail, window, cx);
                                         }
                                     }
@@ -661,52 +663,57 @@ impl ListDelegate for ArchiveListDelegate {
                         if !is_global {
                             let move_ids: Vec<String> = selection_ids.clone();
                             menu = menu.submenu("移动到分组", _window, _cx, {
-                            let host = host.clone();
-                            let move_ids = move_ids.clone();
-                            let groups = groups_for_menu.clone();
-                            let current = row.folder_id.clone();
-                            move |menu, _window, _cx| {
-                                let mut menu = menu;
-                                // 「未分组」：当前已在未分组时置灰（点了也是白点）。
-                                menu = menu.item(
-                                    PopupMenuItem::new("未分组")
-                                        .checked(current.is_none())
-                                        .disabled(current.is_none())
-                                        .on_click({
-                                            let host = host.clone();
-                                            let ids = move_ids.clone();
-                                            move |_, window, cx| {
-                                                host.request_move_to_group(&ids, None, window, cx)
-                                            }
-                                        }),
-                                );
-                                for group in &groups {
-                                    let is_current = current.as_deref() == Some(group.id.as_str());
+                                let host = host.clone();
+                                let move_ids = move_ids.clone();
+                                let groups = groups_for_menu.clone();
+                                let current = row.folder_id.clone();
+                                move |menu, _window, _cx| {
+                                    let mut menu = menu;
+                                    // 「未分组」：当前已在未分组时置灰（点了也是白点）。
                                     menu = menu.item(
-                                        PopupMenuItem::new(group.name.clone())
-                                            .checked(is_current)
-                                            .disabled(is_current)
+                                        PopupMenuItem::new("未分组")
+                                            .checked(current.is_none())
+                                            .disabled(current.is_none())
                                             .on_click({
                                                 let host = host.clone();
                                                 let ids = move_ids.clone();
-                                                let folder_id = group.id.clone();
                                                 move |_, window, cx| {
                                                     host.request_move_to_group(
-                                                        &ids,
-                                                        Some(&folder_id),
-                                                        window,
-                                                        cx,
+                                                        &ids, None, window, cx,
                                                     )
                                                 }
                                             }),
                                     );
+                                    for group in &groups {
+                                        let is_current =
+                                            current.as_deref() == Some(group.id.as_str());
+                                        menu = menu.item(
+                                            PopupMenuItem::new(group.name.clone())
+                                                .checked(is_current)
+                                                .disabled(is_current)
+                                                .on_click({
+                                                    let host = host.clone();
+                                                    let ids = move_ids.clone();
+                                                    let folder_id = group.id.clone();
+                                                    move |_, window, cx| {
+                                                        host.request_move_to_group(
+                                                            &ids,
+                                                            Some(&folder_id),
+                                                            window,
+                                                            cx,
+                                                        )
+                                                    }
+                                                }),
+                                        );
+                                    }
+                                    menu.separator()
+                                        .item(PopupMenuItem::new("新建分组…").on_click({
+                                            let host = host.clone();
+                                            move |_, window, cx| {
+                                                host.request_create_group(window, cx)
+                                            }
+                                        }))
                                 }
-                                menu.separator()
-                                    .item(PopupMenuItem::new("新建分组…").on_click({
-                                        let host = host.clone();
-                                        move |_, window, cx| host.request_create_group(window, cx)
-                                    }))
-                            }
                             });
                         }
                         // 删除是**唯一**多选可用的破坏性项（原型 §3.2）：多选时带上数量。
@@ -717,19 +724,22 @@ impl ListDelegate for ArchiveListDelegate {
                         } else {
                             "移入回收站".to_string()
                         };
-                        menu.separator()
-                            .item(PopupMenuItem::new(delete_label).disabled(is_global).on_click({
-                                let host = host.clone();
-                                let targets = delete_targets.clone();
-                                move |_, window, cx| {
-                                    tracing::info!(
-                                        count = targets.len(),
-                                        ids = ?targets,
-                                        "【探针】资源行菜单「移入回收站」触发"
-                                    );
-                                    host.request_delete(&targets, window, cx)
-                                }
-                            }))
+                        menu.separator().item(
+                            PopupMenuItem::new(delete_label)
+                                .disabled(is_global)
+                                .on_click({
+                                    let host = host.clone();
+                                    let targets = delete_targets.clone();
+                                    move |_, window, cx| {
+                                        tracing::info!(
+                                            count = targets.len(),
+                                            ids = ?targets,
+                                            "【探针】资源行菜单「移入回收站」触发"
+                                        );
+                                        host.request_delete(&targets, window, cx)
+                                    }
+                                }),
+                        )
                     }),
             ),
         )
@@ -794,4 +804,3 @@ impl ListDelegate for ArchiveListDelegate {
         self.host.request_open(&detail, window, cx);
     }
 }
-

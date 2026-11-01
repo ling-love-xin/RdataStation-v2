@@ -22,7 +22,9 @@ use gpui_kit::*;
 use crate::commands;
 use crate::filter::{self, SortField};
 use crate::model::{ArchiveKind, ArchiveUndo, DeleteTarget, PayloadMode};
-use crate::resource_view::{HeaderMenuAction, InstanceFilter, ResourcesPanel, dispatch_header_action};
+use crate::resource_view::{
+    HeaderMenuAction, InstanceFilter, ResourcesPanel, dispatch_header_action,
+};
 use crate::ui;
 
 impl ResourcesPanel {
@@ -177,7 +179,8 @@ impl ResourcesPanel {
                             PopupMenuItem::new(candidate.label())
                                 .checked(is_current)
                                 .on_click(move |_, _, app| {
-                                    target.update(app, |panel, cx| panel.set_instance(candidate, cx));
+                                    target
+                                        .update(app, |panel, cx| panel.set_instance(candidate, cx));
                                 }),
                         );
                     }

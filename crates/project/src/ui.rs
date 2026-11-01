@@ -19,7 +19,9 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::DialogFooter;
-use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle};
+use gpui_kit::component::empty::{
+    Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
+};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -31,7 +33,9 @@ use gpui_kit::*;
 // 结构尺寸与树/列表行原语：统一走 workbench_shell（shell 不依赖特性 crate，方向安全）
 use workbench_shell::{tree, ui};
 
-use crate::service::{self as project_service, OpenOutcome, ProjectSummary, ProjectVersionRow, TargetDirState};
+use crate::service::{
+    self as project_service, OpenOutcome, ProjectSummary, ProjectVersionRow, TargetDirState,
+};
 
 /// 选择器视图 Tab。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2423,17 +2427,16 @@ fn empty_state(tab: PickerTab, loaded: bool) -> impl IntoElement {
         PickerTab::All => ("还没有项目", "新建一个项目开始使用。"),
         PickerTab::Removed => ("没有已移除的项目", "被移出名册的项目会出现在这里，可恢复。"),
     };
-    Empty::new()
-        .header(
-            EmptyHeader::new()
-                .media(
-                    EmptyMedia::new()
-                        .with_variant(EmptyMediaVariant::Icon)
-                        .child(Icon::new(IconName::Inbox)),
-                )
-                .title(EmptyTitle::new().child(if loaded { title } else { "加载中…" }))
-                .description(EmptyDescription::new().child(desc)),
-        )
+    Empty::new().header(
+        EmptyHeader::new()
+            .media(
+                EmptyMedia::new()
+                    .with_variant(EmptyMediaVariant::Icon)
+                    .child(Icon::new(IconName::Inbox)),
+            )
+            .title(EmptyTitle::new().child(if loaded { title } else { "加载中…" }))
+            .description(EmptyDescription::new().child(desc)),
+    )
 }
 
 fn error_line(message: &str, theme: &gpui_kit::component::Theme) -> Div {
@@ -2904,7 +2907,11 @@ fn meta_tree_row(row: &MetaTreeRow, theme: &gpui_kit::component::Theme) -> Div {
         .items_center()
         .gap_2()
         // 缩进走树/列表共用原语（0.5rem + 0.875rem × depth），不再各写各的倍率
-        .pl(rems(tree::indent_rem(ui::TREE_BASE_PADDING, ui::TREE_INDENT, row.depth)))
+        .pl(rems(tree::indent_rem(
+            ui::TREE_BASE_PADDING,
+            ui::TREE_INDENT,
+            row.depth,
+        )))
         .child(
             Icon::new(if row.is_dir {
                 IconName::FolderOpen
@@ -3062,7 +3069,11 @@ fn versions_view(snapshot: &SettingsSnapshot, theme: &gpui_kit::component::Theme
                             .text_color(theme.colors.muted_foreground)
                             .child(v.created_at.clone()),
                     )
-                    .child(div().text_color(theme.colors.foreground).child(v.message.clone())),
+                    .child(
+                        div()
+                            .text_color(theme.colors.foreground)
+                            .child(v.message.clone()),
+                    ),
             );
         }
     }

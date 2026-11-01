@@ -16,9 +16,8 @@ use shared::error::{CoreError, StorageError};
 
 use crate::model::{
     ArchiveKind, ArchiveOutcome, ArchiveRequest, ArchiveUndo, ChangeReason, CheckoutOutcome,
-    CheckoutRequest, KeepVersions, NewArchiveInput, ORIGIN_RESOURCES, PayloadMode, ResourcesChanged,
-    TRASH_ID_REF_PREFIX,
-    TrashArchiveEntry,
+    CheckoutRequest, KeepVersions, NewArchiveInput, ORIGIN_RESOURCES, PayloadMode,
+    ResourcesChanged, TRASH_ID_REF_PREFIX, TrashArchiveEntry,
 };
 use crate::payload::PayloadStore;
 use crate::{AnalyticsResource, AnalyticsResourceStore};
@@ -256,10 +255,7 @@ impl ArchiveService {
         // copy 模式：`resources/` 相对路径（搬运前定好，失败即中止）。
         let registered_rel = match mode {
             PayloadMode::Copy => req.rel_path.clone(),
-            PayloadMode::Reference => req
-                .source_path
-                .to_string_lossy()
-                .replace('\\', "/"),
+            PayloadMode::Reference => req.source_path.to_string_lossy().replace('\\', "/"),
         };
 
         if mode == PayloadMode::Copy {
@@ -380,7 +376,11 @@ impl ArchiveService {
             }
         };
         if copy_result.is_none() {
-            tracing::warn!(resource_id, version = current.version, "再归档时旧内容副本未落（本体缺失？）");
+            tracing::warn!(
+                resource_id,
+                version = current.version,
+                "再归档时旧内容副本未落（本体缺失？）"
+            );
         }
 
         let snapshot = serde_json::to_string(&current).map_err(|e| {
@@ -452,7 +452,9 @@ impl ArchiveService {
             // reference：从源绝对路径复制（本体在源位置，M6 不动它）。
             PayloadMode::Reference => {
                 let source = self.payload_path_for(&resource)?;
-                self.payload.copy_out_source(&source, &req.dest_path).await?;
+                self.payload
+                    .copy_out_source(&source, &req.dest_path)
+                    .await?;
             }
         }
         self.emit(ChangeReason::CheckedOut, Some(resource.id.clone()));
@@ -893,9 +895,7 @@ impl ArchiveService {
     ///
     /// copy 软删行都有实体 `ProjectTrash` 条目，回收站清单由实体条目承载；reference 没有
     /// 本体可搬，回收站清单要把这些软删登记行一并列出。
-    pub async fn deleted_reference_archives(
-        &self,
-    ) -> Result<Vec<AnalyticsResource>, CoreError> {
+    pub async fn deleted_reference_archives(&self) -> Result<Vec<AnalyticsResource>, CoreError> {
         Ok(self
             .store
             .list_deleted_archives()

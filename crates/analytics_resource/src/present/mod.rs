@@ -16,7 +16,9 @@ use crate::detail_view::{ArchiveDetail, ArchiveTagChip};
 use crate::dialogs::index_repair::{RepairGroup, RepairRow};
 use crate::dialogs::trash::TrashRow;
 use crate::dialogs::version::VersionRow;
-use crate::model::{ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES, PayloadMode, RowScope, TRASH_ID_REF_PREFIX};
+use crate::model::{
+    ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES, PayloadMode, RowScope, TRASH_ID_REF_PREFIX,
+};
 use crate::payload::RESOURCES_DIR_NAME;
 use crate::preview::Preview;
 use crate::resource_view::{ArchiveCounts, ArchiveRow, GroupOption, ResourcesSnapshot, TagOption};

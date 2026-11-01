@@ -72,10 +72,7 @@ async fn all_five_folders_come_from_the_same_introspection() {
         vec!["main".to_string()]
     );
     assert_eq!(
-        database
-            .list_schemas("main")
-            .await
-            .expect("schema 清单"),
+        database.list_schemas("main").await.expect("schema 清单"),
         vec!["public".to_string(), "sales".to_string()]
     );
 
@@ -84,7 +81,10 @@ async fn all_five_folders_come_from_the_same_introspection() {
         .list_tables("main", Some("public"))
         .await
         .expect("表与视图");
-    assert_eq!(names(tables.clone()), vec!["orders", "customers", "recent_orders", "mv_daily"]);
+    assert_eq!(
+        names(tables.clone()),
+        vec!["orders", "customers", "recent_orders", "mv_daily"]
+    );
 
     assert_eq!(
         names(
@@ -142,7 +142,11 @@ async fn tables_and_views_split_by_kind() {
     let (views, tables): (Vec<_>, Vec<_>) = objects
         .into_iter()
         .partition(|o| o.kind == SchemaObjectKind::View);
-    assert_eq!(names(views), vec!["recent_orders", "mv_daily"], "物化视图也进视图文件夹");
+    assert_eq!(
+        names(views),
+        vec!["recent_orders", "mv_daily"],
+        "物化视图也进视图文件夹"
+    );
     assert_eq!(names(tables), vec!["orders", "customers"]);
 
     // 另一个 schema 只有一张表（别把两个 schema 的结果混起来）
@@ -230,7 +234,10 @@ async fn routine_source_only_answers_for_routines() {
         .await
         .expect("例程源码")
         .expect("靶子有这个函数");
-    assert!(source.starts_with("CREATE FUNCTION order_total"), "{source}");
+    assert!(
+        source.starts_with("CREATE FUNCTION order_total"),
+        "{source}"
+    );
 
     // 表 / 视图没有源码：返回 None，且不去问对端
     let none = database
@@ -290,10 +297,7 @@ async fn a_dead_session_is_a_connection_error_not_empty_metadata() {
 async fn metadata_calls_and_queries_share_the_session() {
     let (_supervisor, _session, database) = database_for("test.dbmeta.share").await;
 
-    database
-        .list_catalogs()
-        .await
-        .expect("元数据调用");
+    database.list_catalogs().await.expect("元数据调用");
     let token = CancellationToken::new();
     let result = database
         .query_with_cancel("select rows=1", token)

@@ -11,7 +11,7 @@ use engine::persistence::project_db::ProjectDatabaseManager;
 use crate::dialogs::tag::{TagChoice, TagDialogSeed};
 use crate::{AnalyticsResourceStore, TagTarget};
 
-use super::{jobs, Job, OpOutcome, SQLITE_POOL_SIZE};
+use super::{Job, OpOutcome, SQLITE_POOL_SIZE, jobs};
 
 /// 一次标签取数任务（全部标签 + 这批目标各自已挂的）。
 pub(crate) struct TagListJob {
@@ -402,7 +402,6 @@ pub fn enqueue_group_action(project_root: PathBuf, read_only: bool, action: Grou
         action,
     }));
 }
-
 
 /// 动作后重取标签取数（worker 里 TagAction 分支用；构造在域内，字段不外露）。
 pub(crate) async fn reload_tag_rows_after(

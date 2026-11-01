@@ -21,11 +21,11 @@ use gpui_kit::component::{ActiveTheme, Sizable as _, Theme, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_kit::component::radio::Radio;
 use crate::model::{KeepVersions, PayloadMode};
 use crate::resource_view::GroupOption;
 use crate::ui;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::radio::Radio;
 
 /// 「保留历史内容」输入的上限。
 ///
@@ -185,10 +185,7 @@ pub fn build_inputs(
 }
 
 /// 校验 + 取值；`None` = 不通过（对话框保持打开，内联提示已由渲染期给出）。
-pub fn submit_archive(
-    inputs: &ArchiveDialogInputs,
-    cx: &App,
-) -> Option<ArchiveDialogResult> {
+pub fn submit_archive(inputs: &ArchiveDialogInputs, cx: &App) -> Option<ArchiveDialogResult> {
     let name = inputs.name.read(cx).value().trim().to_string();
     if name_hint(&name).is_some() {
         return None;
@@ -317,11 +314,10 @@ pub fn open_archive_dialog_with(
                     ))
             })
             .when(!seed.allow_reference, |this| {
-                this.child(field_label(theme, "归档方式"))
-                    .child(hint_line(
-                        "分析快照固定为复制存档",
-                        theme.colors.muted_foreground,
-                    ))
+                this.child(field_label(theme, "归档方式")).child(hint_line(
+                    "分析快照固定为复制存档",
+                    theme.colors.muted_foreground,
+                ))
             })
             .child(field_label(theme, "标签"))
             .child(Input::new(&tags))
@@ -430,13 +426,7 @@ fn readonly_block(
                         .text_color(theme.colors.muted_foreground)
                         .child(label),
                 )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_ellipsis()
-                        .child(value),
-                ),
+                .child(div().flex_1().min_w_0().text_ellipsis().child(value)),
         );
     }
     out
@@ -447,10 +437,7 @@ fn readonly_block(
 /// 为什么选择结果住在 `Rc<RefCell<_>>` 而不是实体：下拉菜单不是输入框，没有现成的实体可挂；
 /// 而开窗 builder 是 `Fn`（每帧重建），状态不能放在闭包里——选项点击后调 `window.refresh()`
 /// 让对话框重画一帧，按钮文案就跟着变。
-fn group_picker(
-    group_id: &Rc<std::cell::RefCell<Option<String>>>,
-    groups: &[GroupOption],
-) -> Div {
+fn group_picker(group_id: &Rc<std::cell::RefCell<Option<String>>>, groups: &[GroupOption]) -> Div {
     let current = group_id.borrow().clone();
     // 名单里找不到的 id（分组刚被别处删了）按“未分组”显示：不把悬空 id 当选项摆出来。
     let label = current
@@ -470,14 +457,12 @@ fn group_picker(
             move |menu, _window, _cx| {
                 let mut menu = menu.item(PopupMenuItem::label("分组"));
                 let target_none = target.clone();
-                menu = menu.item(
-                    PopupMenuItem::new("未分组")
-                        .checked(is_none)
-                        .on_click(move |_, window, _cx| {
-                            *target_none.borrow_mut() = None;
-                            window.refresh();
-                        }),
-                );
+                menu = menu.item(PopupMenuItem::new("未分组").checked(is_none).on_click(
+                    move |_, window, _cx| {
+                        *target_none.borrow_mut() = None;
+                        window.refresh();
+                    },
+                ));
                 for group in &items {
                     let id = group.id.clone();
                     let checked = current.as_deref() == Some(id.as_str());

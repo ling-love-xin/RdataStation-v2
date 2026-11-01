@@ -82,7 +82,6 @@ pub struct ResourceVersion {
     pub created_at: DateTime<Utc>,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct CreateFolderRequest {
     pub name: String,
@@ -99,4 +98,3 @@ pub struct CreateTagRequest {
     pub icon: Option<String>,
     pub scope: String,
 }
-

@@ -71,41 +71,41 @@ pub fn open_version_diff_dialog(
             .items_center()
             .justify_between()
             .gap_2()
+            .child(div().text_xs().text_color(muted).child(format!(
+                "v{old_version} → v{current_version} 的差异（只读）"
+            )))
             .child(
                 div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(format!("v{old_version} → v{current_version} 的差异（只读）")),
-            )
-            .child(
-                div().h_flex().gap_1().child(
-                    Button::new("diff-mode-unified")
-                        .ghost()
-                        .small()
-                        .toggled(is_unified)
-                        .debug_selector(|| "diff-mode-unified".to_string())
-                        .label("统一")
-                        .on_click(move |_, window, cx| {
-                            state_for_unified.update(cx, |state, cx| {
-                                state.set_mode(DiffMode::Unified, cx);
-                            });
-                            window.refresh();
-                        }),
-                )
-                .child(
-                    Button::new("diff-mode-split")
-                        .ghost()
-                        .small()
-                        .toggled(!is_unified)
-                        .debug_selector(|| "diff-mode-split".to_string())
-                        .label("并排")
-                        .on_click(move |_, window, cx| {
-                            state_for_split.update(cx, |state, cx| {
-                                state.set_mode(DiffMode::Split, cx);
-                            });
-                            window.refresh();
-                        }),
-                ),
+                    .h_flex()
+                    .gap_1()
+                    .child(
+                        Button::new("diff-mode-unified")
+                            .ghost()
+                            .small()
+                            .toggled(is_unified)
+                            .debug_selector(|| "diff-mode-unified".to_string())
+                            .label("统一")
+                            .on_click(move |_, window, cx| {
+                                state_for_unified.update(cx, |state, cx| {
+                                    state.set_mode(DiffMode::Unified, cx);
+                                });
+                                window.refresh();
+                            }),
+                    )
+                    .child(
+                        Button::new("diff-mode-split")
+                            .ghost()
+                            .small()
+                            .toggled(!is_unified)
+                            .debug_selector(|| "diff-mode-split".to_string())
+                            .label("并排")
+                            .on_click(move |_, window, cx| {
+                                state_for_split.update(cx, |state, cx| {
+                                    state.set_mode(DiffMode::Split, cx);
+                                });
+                                window.refresh();
+                            }),
+                    ),
             );
 
         let body = div()

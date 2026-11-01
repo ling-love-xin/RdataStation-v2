@@ -193,11 +193,7 @@ impl Frame {
         Self::stream_with_flags(channel_id, STREAM_FLAG_EOF, &[])
     }
 
-    fn stream_with_flags(
-        channel_id: &str,
-        flags: u8,
-        data: &[u8],
-    ) -> Result<Self, ProtocolError> {
+    fn stream_with_flags(channel_id: &str, flags: u8, data: &[u8]) -> Result<Self, ProtocolError> {
         let id_len = channel_id.len();
         if id_len > u16::MAX as usize {
             return Err(ProtocolError::ChannelIdTooLong {

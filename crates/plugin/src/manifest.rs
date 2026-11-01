@@ -651,7 +651,9 @@ impl PluginManifest {
         // 硬约束（plugin/README.md §5 #4）：`engines.rds` 必填（serde 保证非空字段）且**不可 `*`**。
         // `*` 等于放弃版本闸，任何引擎版本都能装上 —— 与「不满足当场拒绝并报出两个版本号」的口径相反。
         if required.trim() == "*" {
-            return Err(manifest_error("engines.rds 不允许 \"*\"，必须声明具体版本范围"));
+            return Err(manifest_error(
+                "engines.rds 不允许 \"*\"，必须声明具体版本范围",
+            ));
         }
 
         let current_major: u32 = current_version
@@ -1276,7 +1278,9 @@ interpreter_args = ["-jar"]
 "#,
         )
         .unwrap();
-        manifest.validate().expect("runtime 声明 + 无 interpreter 应当通过校验");
+        manifest
+            .validate()
+            .expect("runtime 声明 + 无 interpreter 应当通过校验");
 
         // 反例：无 runtime 也无 interpreter → 拒绝
         let bad: PluginManifest = toml::from_str(
@@ -1611,11 +1615,14 @@ executable = "bin/agent"
         manifest.validate().expect("合法的 api / methods 应当通过");
 
         assert_eq!(manifest.api.as_deref(), Some("redis"));
-        assert_eq!(manifest.methods, vec![
-            "session.ping".to_string(),
-            "query.execute".to_string(),
-            "x.redis.command".to_string(),
-        ]);
+        assert_eq!(
+            manifest.methods,
+            vec![
+                "session.ping".to_string(),
+                "query.execute".to_string(),
+                "x.redis.command".to_string(),
+            ]
+        );
     }
 
     /// 拼错的方法名必须在**安装期**被拒 —— 否则就是对一个它不会履行的能力做承诺。
@@ -1642,7 +1649,10 @@ executable = "bin/agent"
             ))
             .unwrap();
             let err = manifest.validate().unwrap_err().to_string();
-            assert!(err.contains("不是协议已知 method"), "{bad:?} 应当被拒：{err}");
+            assert!(
+                err.contains("不是协议已知 method"),
+                "{bad:?} 应当被拒：{err}"
+            );
         }
     }
 
@@ -1715,8 +1725,14 @@ interpreter_args = ["-jar"]
 "#,
         )
         .unwrap();
-        let command = backend.command(Path::new("plugins/com.example.oracle")).unwrap();
-        assert_eq!(command.program, PathBuf::from("java"), "runtime 名占位 program");
+        let command = backend
+            .command(Path::new("plugins/com.example.oracle"))
+            .unwrap();
+        assert_eq!(
+            command.program,
+            PathBuf::from("java"),
+            "runtime 名占位 program"
+        );
         assert_eq!(command.args[0], "-jar", "interpreter_args 在脚本路径之前");
         assert!(
             command.args[1].ends_with("lib/rds-jdbc-shell.jar"),
@@ -1732,7 +1748,10 @@ executable = "bin/agent.py"
 "#,
         )
         .unwrap();
-        let err = legacy.command(Path::new("plugins/com.example.py")).unwrap_err().to_string();
+        let err = legacy
+            .command(Path::new("plugins/com.example.py"))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("interpreter is required"), "{err}");
     }
 

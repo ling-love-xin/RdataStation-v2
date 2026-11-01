@@ -1,6 +1,6 @@
 use super::*;
-use shared::error::{CoreError, StorageError};
 use chrono::Utc;
+use shared::error::{CoreError, StorageError};
 use std::sync::atomic::Ordering;
 // `TagTable` 的定义方法是 `TagDefinitions` trait 提供的（本地 `mod tag` 遮蔽外部 crate，
 // 故用 `::tag::` 绝对路径 + 显式导入 trait）。
@@ -222,12 +222,12 @@ impl AnalyticsResourceStore {
 
         let mut stmt = conn
             .inner()?
-            .prepare(
-                "SELECT tag_id FROM analytics_resource_tags WHERE resource_id = ?1",
-            )
+            .prepare("SELECT tag_id FROM analytics_resource_tags WHERE resource_id = ?1")
             .map_err(|e| tag_err("select", e))?;
         let ids = stmt
-            .query_map(rusqlite::params![resource_id], |row| row.get::<_, String>(0))
+            .query_map(rusqlite::params![resource_id], |row| {
+                row.get::<_, String>(0)
+            })
             .map_err(|e| tag_err("select", e))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| tag_err("select", e))?;
@@ -253,9 +253,16 @@ impl AnalyticsResourceStore {
              WHERE rt.tag_id = ? AND r.deleted_at IS NULL ORDER BY r.created_at DESC",
             crate::resource::qualified_resource_columns("r")
         );
-        let mut stmt = conn
-            .inner()?
-            .prepare(&sql)
+        let mut stmt = conn.inner()?.prepare(&sql).map_err(|e| {
+            CoreError::storage(StorageError::Persistence {
+                store: "analytics_resource_tags".to_string(),
+                operation: "select".to_string(),
+                reason: e.to_string(),
+            })
+        })?;
+
+        let resources = stmt
+            .query_map(rusqlite::params![tag_id], crate::resource::map_resource_row)
             .map_err(|e| {
                 CoreError::storage(StorageError::Persistence {
                     store: "analytics_resource_tags".to_string(),
@@ -263,14 +270,6 @@ impl AnalyticsResourceStore {
                     reason: e.to_string(),
                 })
             })?;
-
-        let resources = stmt
-            .query_map(rusqlite::params![tag_id], crate::resource::map_resource_row)
-            .map_err(|e| CoreError::storage(StorageError::Persistence {
-                store: "analytics_resource_tags".to_string(),
-                operation: "select".to_string(),
-                reason: e.to_string(),
-            }))?;
 
         resources.collect::<Result<Vec<_>, _>>().map_err(|e| {
             CoreError::storage(StorageError::Persistence {
@@ -366,7 +365,9 @@ impl AnalyticsResourceStore {
             .map_err(|e| tag_err("select", e))?;
 
         let rows = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
             .map_err(|e| tag_err("select", e))?;
 
         let mut counts = std::collections::HashMap::new();

@@ -5,10 +5,10 @@
 //! 视图模型由调用方从后端 [`crate::SearchResult`] 组装（见 `search_match_to_view` 模式）。
 
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::*;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{Icon, Sizable as _, Theme};
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::{Icon, Sizable as _, Theme};
+use gpui_kit::*;
 use workbench_shell::ui::ICON_SIZE_SM;
 
 /// 搜索命中项（视图模型）。
@@ -109,9 +109,7 @@ pub fn render_search_pane(
     match_bg: Hsla,
     type_icon: impl Fn(&str) -> String,
     // 点命中标题 → 打开该文件并跳到命中行。
-    on_open_hit: std::rc::Rc<
-        dyn Fn(SearchHitTarget, &mut Window, &mut App),
-    >,
+    on_open_hit: std::rc::Rc<dyn Fn(SearchHitTarget, &mut Window, &mut App)>,
     on_clear: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Div {
     let fg = theme.colors.foreground;
@@ -130,11 +128,12 @@ pub fn render_search_pane(
 
     let open_in_editor = {
         // 在 render 时克隆首个命中（`search` 是借用参数，闭包不能捕获引用 —— E0521）。
-        let first_target: Option<SearchHitTarget> = search.hits.first().map(|hit| SearchHitTarget {
-            file: hit.file.clone(),
-            line: hit.line as u32,
-            span: hit.spans.first().copied(),
-        });
+        let first_target: Option<SearchHitTarget> =
+            search.hits.first().map(|hit| SearchHitTarget {
+                file: hit.file.clone(),
+                line: hit.line as u32,
+                span: hit.spans.first().copied(),
+            });
         let on_open = on_open_hit.clone();
         move |_: &ClickEvent, window: &mut Window, app: &mut App| {
             if let Some(target) = first_target.clone() {
@@ -162,12 +161,7 @@ pub fn render_search_pane(
                 .items_center()
                 .gap_2()
                 .w_full()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(stats),
-                )
+                .child(div().text_xs().text_color(muted).child(stats))
                 .child(div().flex_1())
                 .child(
                     Button::new("sp-search-open")
@@ -230,9 +224,7 @@ pub fn render_search_pane(
                 .gap_1()
                 .cursor_pointer()
                 .hover(move |s| s.text_color(primary))
-                .on_click(move |_, window, app| {
-                    open_first(first_target.clone(), window, app)
-                })
+                .on_click(move |_, window, app| open_first(first_target.clone(), window, app))
                 .child(
                     Icon::empty()
                         .path(icon_path)
@@ -288,9 +280,7 @@ pub fn render_search_pane(
                         .text_color(muted)
                         .child(line_num),
                 )
-                .child(
-                    div().flex_none().text_xs().text_color(muted).child(":"),
-                )
+                .child(div().flex_none().text_xs().text_color(muted).child(":"))
                 .child(hit_line(&hit.content, &hit.spans, match_bg, fg));
             hits_block = hits_block.child(line_row);
         }

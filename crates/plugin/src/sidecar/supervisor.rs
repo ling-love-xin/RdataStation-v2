@@ -1147,11 +1147,7 @@ fn spawn_event_pump(
                     method,
                     params,
                 },
-                ConnEvent::InboundRequest {
-                    id,
-                    method,
-                    params,
-                } => InstanceEvent::InboundRequest {
+                ConnEvent::InboundRequest { id, method, params } => InstanceEvent::InboundRequest {
                     plugin_id: plugin_id.clone(),
                     index,
                     generation,
@@ -1159,10 +1155,7 @@ fn spawn_event_pump(
                     method,
                     params,
                 },
-                ConnEvent::StreamData {
-                    channel_id,
-                    data,
-                } => InstanceEvent::StreamData {
+                ConnEvent::StreamData { channel_id, data } => InstanceEvent::StreamData {
                     plugin_id: plugin_id.clone(),
                     index,
                     generation,
@@ -1274,7 +1267,10 @@ driver_jars = ["{}"]
         let deployment = Deployment::from_manifest(&ok, Path::new("."))
             .expect("解析应当成功")
             .expect("script 形态应当有部署信息");
-        assert_eq!(deployment.env, vec![("RDS_DRIVER_JARS".to_string(), existing.to_string())]);
+        assert_eq!(
+            deployment.env,
+            vec![("RDS_DRIVER_JARS".to_string(), existing.to_string())]
+        );
 
         // 反例：路径不存在 → 部署期报错（清单解析期只查绝对路径，这里查真身）
         let bad: PluginManifest = toml::from_str(&format!(
@@ -1529,7 +1525,7 @@ entry = "main.js"
     /// SSH shell stdout / 端口转发数据的宿主侧入口就靠这一条。
     #[tokio::test]
     async fn event_pump_forwards_stream_events_with_instance_context() {
-        use crate::sidecar::proto::{write_frame, Frame};
+        use crate::sidecar::proto::{Frame, write_frame};
 
         let (host, peer) = tokio::io::duplex(1 << 20);
         let (host_r, host_w) = tokio::io::split(host);

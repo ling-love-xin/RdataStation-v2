@@ -338,7 +338,11 @@ async fn answers_the_metadata_methods() {
         .await
         .expect("meta.objects");
     let nav_able = objects.iter().filter(|o| o.nav_kind().is_some()).count();
-    println!("  对象 {} 个（其中 {} 个摆得进导航）", objects.len(), nav_able);
+    println!(
+        "  对象 {} 个（其中 {} 个摆得进导航）",
+        objects.len(),
+        nav_able
+    );
     let unmappable: Vec<&str> = objects
         .iter()
         .filter(|o| matches!(o.kind, MetaObjectKind::Other(_)))
@@ -379,9 +383,10 @@ async fn answers_the_metadata_methods() {
     );
 
     // ⑤ 例程源码：有例程就问一句 —— `null` 是合法答案，报错不是
-    if let Some(routine) = objects.iter().find(|o| {
-        matches!(o.kind, MetaObjectKind::Procedure | MetaObjectKind::Function)
-    }) {
+    if let Some(routine) = objects
+        .iter()
+        .find(|o| matches!(o.kind, MetaObjectKind::Procedure | MetaObjectKind::Function))
+    {
         let source = driver
             .meta_routine_source(&catalog, &schema, &routine.name)
             .await

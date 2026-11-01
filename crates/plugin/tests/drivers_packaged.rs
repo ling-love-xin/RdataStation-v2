@@ -85,7 +85,10 @@ async fn oracle_package_deploys_registers_and_queries_against_h2() {
         "program 应为解析出的 java：{}",
         deployment.command.program.display()
     );
-    assert_eq!(deployment.command.args[0], "-jar", "interpreter_args 应保留");
+    assert_eq!(
+        deployment.command.args[0], "-jar",
+        "interpreter_args 应保留"
+    );
     assert!(
         deployment.command.args[1].ends_with("rds-jdbc-shell.jar"),
         "{}",
@@ -140,7 +143,9 @@ async fn oracle_package_deploys_registers_and_queries_against_h2() {
 #[tokio::test]
 async fn postgres_py_package_deploys_and_registers() {
     let Some((plugin_dir, manifest)) = installed_manifest("rds.driver.postgres-py") else {
-        eprintln!("postgres-py 插件包未安装（先跑 tools\\plugin-drivers\\install.ps1），跳过本用例");
+        eprintln!(
+            "postgres-py 插件包未安装（先跑 tools\\plugin-drivers\\install.ps1），跳过本用例"
+        );
         return;
     };
 
@@ -246,8 +251,7 @@ default_port = 1521
     );
     std::fs::write(plugin_dir.join("plugin.toml"), manifest_text).expect("写清单");
 
-    let manifest = ManifestParser::parse(&plugin_dir.join("plugin.toml"))
-        .expect("清单应当可解析");
+    let manifest = ManifestParser::parse(&plugin_dir.join("plugin.toml")).expect("清单应当可解析");
     let deployment = Deployment::from_manifest(&manifest, &plugin_dir)
         .expect("部署应当成功")
         .expect("应当有子进程形态");

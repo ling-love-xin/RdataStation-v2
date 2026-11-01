@@ -14,11 +14,10 @@ use std::rc::Rc;
 
 use gpui_kit::component::{Root, WindowExt as _};
 use gpui_kit::{
-    AppContext as _, Context, IntoElement, Render, Styled as _, TestAppContext,
-    VisualTestContext, Window, div,
+    AppContext as _, Context, IntoElement, Render, Styled as _, TestAppContext, VisualTestContext,
+    Window, div,
 };
 
-use rds_analytics_resource::{KeepVersions, PayloadMode};
 use rds_analytics_resource::dialogs::archive::{
     ArchiveConflict, ArchiveDialogResult, ArchiveDialogSeed, build_inputs,
     open_archive_dialog_with, submit_archive,
@@ -47,6 +46,7 @@ use rds_analytics_resource::dialogs::version::{
     VersionDialogSeed, VersionDialogState, VersionRow, open_version_dialog_with,
 };
 use rds_analytics_resource::resource_view::GroupOption;
+use rds_analytics_resource::{KeepVersions, PayloadMode};
 
 /// 窗口根：组件库的 `Root`（`open_dialog` 依赖它；0.7.1 起 dialog 层由 Root 自动挂载）。
 struct DialogHarness;
@@ -214,7 +214,11 @@ fn archive_dialog_opens_renders_and_validates(cx: &mut TestAppContext) {
     assert_eq!(prefilled.name, "月报");
     assert!(prefilled.tags.is_empty());
     assert_eq!(prefilled.keep_versions, None, "留空 = 跟随设置默认");
-    assert_eq!(prefilled.payload_mode, PayloadMode::Copy, "归档方式默认复制");
+    assert_eq!(
+        prefilled.payload_mode,
+        PayloadMode::Copy,
+        "归档方式默认复制"
+    );
 
     // 清空显示名：不通过（对话框的按钮回调走的就是这个函数），宿主也收不到回调。
     cx.update(|window, cx| {
@@ -260,7 +264,11 @@ fn archive_dialog_opens_renders_and_validates(cx: &mut TestAppContext) {
         "选中的分组 id"
     );
     assert_eq!(result.keep_versions, Some(KeepVersions::Keep(3)));
-    assert_eq!(result.payload_mode, PayloadMode::Reference, "选中的引用模式带回结果");
+    assert_eq!(
+        result.payload_mode,
+        PayloadMode::Reference,
+        "选中的引用模式带回结果"
+    );
 
     // 别名留空 = 不设（空串入库会让详情面板多一个空行）。
     cx.update(|window, cx| {

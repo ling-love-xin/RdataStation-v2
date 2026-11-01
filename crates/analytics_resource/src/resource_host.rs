@@ -50,7 +50,6 @@ use crate::jobs as resource_jobs;
 
 /// 草稿箱条目 / 来源判定（P2-b 下沉后 analytics_resource 直接依赖 scratchpad；全路径引用）。
 
-
 /// 草稿扫描深度：与草稿箱自己的遍历上限同档（再深就不是"随手归档"的场景了）。
 const DRAFT_SCAN_DEPTH: u32 = 4;
 
@@ -71,7 +70,9 @@ pub trait ResourceHostBackend: 'static {
     /// 项目只读（只读时归档 / 取回 / 改标签都被拒）。
     fn read_only(&self) -> bool;
     /// 草稿箱存储 + 运行时（宿主侧读：M6 不认识草稿箱的内部结构）。
-    fn scratchpad_store(&self) -> Result<(scratchpad::ScratchpadStore, tokio::runtime::Runtime), String>;
+    fn scratchpad_store(
+        &self,
+    ) -> Result<(scratchpad::ScratchpadStore, tokio::runtime::Runtime), String>;
     /// 刷新资源面板（入队一次取数 + drain，下一帧列表更新）。
     fn refresh_resources(&self, cx: &mut App);
     /// 编辑器只读打开（打开动作由事件路径做——它才有窗口；成功后请求宿主重绘）。
@@ -79,12 +80,7 @@ pub trait ResourceHostBackend: 'static {
     /// 洞察采样 SQL（结果集列 → 洞察面板的样本查询；宿主持有连接列表）。
     fn insight_sample_sql(&self, conn_id: &str, parts: &[&str]) -> String;
     /// 洞察面板打开一个取样来源（本体只读表 / 远端引用 / 分析表）。
-    fn open_insight_source_table(
-        &self,
-        source: insight::SampleSource,
-        name: String,
-        cx: &mut App,
-    );
+    fn open_insight_source_table(&self, source: insight::SampleSource, name: String, cx: &mut App);
     /// 引用失效槽位读写（`reference_stale`：懒校验命中时置位，详情面板处置）。
     fn set_reference_stale(&self, resource_id: &str, stale: bool);
     fn is_reference_stale(&self, resource_id: &str) -> bool;
@@ -653,9 +649,10 @@ impl ResourcesHost for ResourceHost {
                     return;
                 };
                 match insight::SampleSource::duckdb_file(&path, detail.name.clone()) {
-                    Ok(source) => self
-                        .backend
-                        .open_insight_source_table(source, detail.name.clone(), cx),
+                    Ok(source) => {
+                        self.backend
+                            .open_insight_source_table(source, detail.name.clone(), cx)
+                    }
                     // 面板已经按扩展名挡过一次：走到这里说明是可读格式但读不到
                     // （扩展名对不上 / 路径刚被挪走），把真实原因说清。
                     Err(error) => self.notice(format!("资产库：{error}"), cx),
@@ -724,7 +721,12 @@ impl ResourcesHost for ResourceHost {
         });
     }
 
-    fn request_promote_to_global(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
+    fn request_promote_to_global(
+        &self,
+        detail: &ArchiveDetail,
+        _window: &mut Window,
+        cx: &mut App,
+    ) {
         use crate::global::{PromoteKind, PromoteRequest};
         let Some(root) = self.require_project("无法升级到全局", cx) else {
             return;
@@ -757,10 +759,7 @@ impl ResourcesHost for ResourceHost {
                 kind,
                 source_abs_path: abs,
                 rel_path: Some(rel.to_string()),
-                content_hash: detail
-                    .content_hash
-                    .clone()
-                    .unwrap_or_default(),
+                content_hash: detail.content_hash.clone().unwrap_or_default(),
                 file_size: None,
             },
             false,
@@ -850,7 +849,10 @@ impl ResourcesHost for ResourceHost {
 
         // 文案按归档粒度区分本体命运（§12.1.1 ③）：copy 搬副本进回收站；reference 本体
         // 留原位、只删登记行。混合时分组说清各有几项。
-        let copy_count = targets.iter().filter(|t| t.mode == PayloadMode::Copy).count();
+        let copy_count = targets
+            .iter()
+            .filter(|t| t.mode == PayloadMode::Copy)
+            .count();
         let reference_count = targets.len() - copy_count;
         let description = match (copy_count, reference_count) {
             (_, 0) => "将删除 resources/ 副本与登记记录，之后可从回收站还原。".to_string(),
@@ -1215,7 +1217,8 @@ impl ResourcesHost for ResourceHost {
         let Some(root) = self.backend.project_root() else {
             return;
         };
-        self.backend.set_collapsed_groups(&root.to_string_lossy(), collapsed_keys, cx);
+        self.backend
+            .set_collapsed_groups(&root.to_string_lossy(), collapsed_keys, cx);
     }
 
     fn remember_default_group(&self, folder_id: Option<&str>, cx: &mut App) {

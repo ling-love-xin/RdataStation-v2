@@ -290,7 +290,11 @@ fn field_label(theme: &Theme, text: &str) -> Div {
 
 /// 一行提示（校验用 `danger`，说明用 `muted`）。
 fn hint_line(text: &str, color: gpui_kit::Hsla) -> Div {
-    div().w_full().text_xs().text_color(color).child(text.to_string())
+    div()
+        .w_full()
+        .text_xs()
+        .text_color(color)
+        .child(text.to_string())
 }
 
 #[cfg(test)]
@@ -312,7 +316,10 @@ mod tests {
             suggest_work_copy_name("无扩展名", None),
             "无扩展名（工作副本）"
         );
-        assert_eq!(suggest_work_copy_name("空扩展", Some("")), "空扩展（工作副本）");
+        assert_eq!(
+            suggest_work_copy_name("空扩展", Some("")),
+            "空扩展（工作副本）"
+        );
     }
 
     #[test]

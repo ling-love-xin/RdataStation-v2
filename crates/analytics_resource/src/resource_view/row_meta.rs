@@ -410,4 +410,3 @@ fn sort_multi_by_order(multi: &mut Vec<String>, order: &[String]) {
             .unwrap_or(usize::MAX)
     });
 }
-

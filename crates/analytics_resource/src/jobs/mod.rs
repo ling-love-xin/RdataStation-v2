@@ -17,7 +17,6 @@
 //! 删掉——那会让"内容已变"静默失效。未登记的本体（`UntrackedFile`）不进行模型（它不是存档），
 //! 由索引修复对话框呈现（本模块只把带 id 的两类差异折进行状态）。
 
-
 mod archive;
 mod global;
 mod index;
@@ -44,22 +43,22 @@ use crate::{
 };
 
 use archive::{
-    reload_trash_after, run_archive, run_checkout, run_trash, run_undo, ArchiveJob, CheckoutJob,
-    TrashActionJob, TrashJob, TrashListJob, UndoJob, load_trash, run_trash_action,
+    ArchiveJob, CheckoutJob, TrashActionJob, TrashJob, TrashListJob, UndoJob, load_trash,
+    reload_trash_after, run_archive, run_checkout, run_trash, run_trash_action, run_undo,
 };
-use global::{run_distribute, run_promote, DistributeJob, PromoteJob};
+use global::{DistributeJob, PromoteJob, run_distribute, run_promote};
 use index::{
-    load_index_report, reload_index_scan_after, run_repair_action, IndexRepairActionJob,
-    IndexScanJob,
+    IndexRepairActionJob, IndexScanJob, load_index_report, reload_index_scan_after,
+    run_repair_action,
 };
-use rename::{run_rename, run_set_alias, RenameJob, SetAliasJob};
+use rename::{RenameJob, SetAliasJob, run_rename, run_set_alias};
 use tag::{
-    load_tag_rows, reload_tag_rows_after, run_group_action, run_tag_action, GroupActionJob,
-    TagActionJob, TagListJob,
+    GroupActionJob, TagActionJob, TagListJob, load_tag_rows, reload_tag_rows_after,
+    run_group_action, run_tag_action,
 };
 use version::{
-    load_version_diff, load_versions, reload_versions_after, run_version_action, VersionActionJob,
-    VersionDiffJob, VersionsJob,
+    VersionActionJob, VersionDiffJob, VersionsJob, load_version_diff, load_versions,
+    reload_versions_after, run_version_action,
 };
 
 /// 对外（面板 / 宿主）直接引用的行模型类型：由领域文件定义、这里 re-export。
@@ -133,10 +132,7 @@ pub enum OpOutcome {
     /// 分组动作完成（建 / 改名 / 删 / 移动，`note` 已是一句有信息量的话）。
     GroupDone { note: String },
     /// 已升级到全局：显示名 / 版本（§13，表 + 版本信息进全局 DuckDB）。
-    Promoted {
-        name: String,
-        version: i32,
-    },
+    Promoted { name: String, version: i32 },
     /// 已从全局分发到当前项目：显示名 / 版本 / 形态（表 or 文件）。
     Distributed {
         name: String,
@@ -556,7 +552,8 @@ pub(crate) fn free_dest(dest: &Path) -> PathBuf {
 }
 
 /// 提交一次刷新（**事件路径**调用：激活面板 / 打开或切换项目 / 归档等变更之后）。
-pub fn enqueue_refresh(project_root: PathBuf, read_only: bool) {    jobs().pending.fetch_add(1, Ordering::SeqCst);
+pub fn enqueue_refresh(project_root: PathBuf, read_only: bool) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
     let _ = jobs().tx.send(Job::Refresh(RefreshJob {
         project_root,
         read_only,
@@ -617,7 +614,6 @@ mod tests {
     }
 }
 
-
 pub use archive::{
     enqueue_archive, enqueue_checkout, enqueue_trash, enqueue_trash_action, enqueue_trash_list,
     enqueue_undo,
@@ -627,8 +623,6 @@ pub use index::enqueue_index_repair_action;
 pub use index::enqueue_index_scan;
 pub use rename::{enqueue_rename, enqueue_set_alias};
 pub use tag::{
-    enqueue_group_action, enqueue_tag_action, enqueue_tag_list, GroupJobAction, TagJobAction,
+    GroupJobAction, TagJobAction, enqueue_group_action, enqueue_tag_action, enqueue_tag_list,
 };
-pub use version::{
-    enqueue_version_action, enqueue_version_diff, enqueue_versions,
-};
+pub use version::{enqueue_version_action, enqueue_version_diff, enqueue_versions};

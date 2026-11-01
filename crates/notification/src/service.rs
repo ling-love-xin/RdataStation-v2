@@ -5,7 +5,9 @@
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use gpui_kit::component::notification::{Notification, NotificationList, NotificationType as GpuiNotificationType};
+use gpui_kit::component::notification::{
+    Notification, NotificationList, NotificationType as GpuiNotificationType,
+};
 use gpui_kit::{App, AppContext as _, Entity, SharedString, Window};
 
 use crate::core::{NotificationRecord, NotificationType};
@@ -172,7 +174,10 @@ pub fn notify(
 
     // === 检查是否有 NotificationList ===
     let Some(NotificationHandle(list)) = cx.try_global::<NotificationHandle>().cloned() else {
-        tracing::warn!("NotificationList not initialized, dropping notification: {}", title);
+        tracing::warn!(
+            "NotificationList not initialized, dropping notification: {}",
+            title
+        );
         return;
     };
 
@@ -229,9 +234,15 @@ pub fn notify(
     let gpui_type = type_.to_gpui_type();
     let mut notification = match gpui_type {
         GpuiNotificationType::Info => Notification::info(SharedString::from(final_title.as_str())),
-        GpuiNotificationType::Success => Notification::success(SharedString::from(final_title.as_str())),
-        GpuiNotificationType::Warning => Notification::warning(SharedString::from(final_title.as_str())),
-        GpuiNotificationType::Error => Notification::error(SharedString::from(final_title.as_str())),
+        GpuiNotificationType::Success => {
+            Notification::success(SharedString::from(final_title.as_str()))
+        }
+        GpuiNotificationType::Warning => {
+            Notification::warning(SharedString::from(final_title.as_str()))
+        }
+        GpuiNotificationType::Error => {
+            Notification::error(SharedString::from(final_title.as_str()))
+        }
     };
 
     if let Some(ref msg) = final_message {
@@ -245,7 +256,9 @@ pub fn notify(
             if secs == 0 {
                 notification = notification.autohide(false);
             } else {
-                notification = notification.autohide(true).timeout(Duration::from_secs(secs as u64));
+                notification = notification
+                    .autohide(true)
+                    .timeout(Duration::from_secs(secs as u64));
             }
         }
         NotificationType::Warning => {
@@ -253,13 +266,16 @@ pub fn notify(
             if secs == 0 {
                 notification = notification.autohide(false);
             } else {
-                notification = notification.autohide(true).timeout(Duration::from_secs(secs as u64));
+                notification = notification
+                    .autohide(true)
+                    .timeout(Duration::from_secs(secs as u64));
             }
         }
         NotificationType::Error => {
             notification = notification.autohide(config.error_autohide);
             if config.error_autohide {
-                notification = notification.timeout(Duration::from_secs(config.warning_autohide_secs as u64));
+                notification =
+                    notification.timeout(Duration::from_secs(config.warning_autohide_secs as u64));
             }
         }
     }

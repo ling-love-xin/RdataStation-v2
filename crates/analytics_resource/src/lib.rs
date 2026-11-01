@@ -23,8 +23,8 @@ use chrono::{DateTime, Utc};
 use engine::persistence::project_db::{ProjectSqlitePool, SqlitePoolConnection};
 use shared::error::CoreError;
 
-pub mod commands;
 pub mod analysis;
+pub mod commands;
 pub mod detail_view;
 pub mod dialogs;
 pub mod dnd;
@@ -116,7 +116,10 @@ impl AnalyticsResourceStore {
     /// 测试构造：全局标签库注入**本测试独立**路径（避免共享进程级隔离根导致的
     /// 跨测试同名标签冲突；`open_at` 语义见 `rds-tag`）。
     #[cfg(test)]
-    pub(crate) fn new_for_test(pool: Arc<ProjectSqlitePool>, global_db: std::path::PathBuf) -> Self {
+    pub(crate) fn new_for_test(
+        pool: Arc<ProjectSqlitePool>,
+        global_db: std::path::PathBuf,
+    ) -> Self {
         let tags = ::tag::TagTable::open_at(global_db, ::tag::SCOPE_GLOBAL)
             .expect("测试全局标签库打开失败");
         Self {

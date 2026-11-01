@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use shared::error::{CommonError, CoreError};
 use engine::get_connection_manager;
+use shared::error::{CommonError, CoreError};
 use shared::models::QueryResult;
 
 pub struct PluginBridge {
@@ -142,9 +142,7 @@ impl PluginBridge {
                         "metadata(kind=\"columns\") 必须提供 table 参数".to_string(),
                     ))
                 })?;
-                let result = conn
-                    .list_columns(catalog, Some(schema), table_name)
-                    .await?;
+                let result = conn.list_columns(catalog, Some(schema), table_name).await?;
                 serde_json::to_value(result).map_err(|e| {
                     CoreError::common(CommonError::general(format!(
                         "Failed to serialize columns: {}",

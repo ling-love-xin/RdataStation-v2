@@ -3,11 +3,11 @@
 //! 状态栏铃铛图标 + 点击弹出历史面板。
 
 use gpui_kit::base::StyledExt;
-use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::Sizable as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -109,17 +109,27 @@ fn render_notification_center(_window: &mut Window, cx: &mut App) -> Div {
                                 .rounded_sm()
                                 .when(!r.read, |el| el.bg(type_color.opacity(0.1)))
                                 .child(div().w(px(4.)).h_full().bg(type_color))
+                                .child(
+                                    div()
+                                        .v_flex()
+                                        .gap_0p5()
+                                        .flex_1()
+                                        .child(text!(&r.title))
+                                        .when_some(r.message.as_ref(), |el, msg| {
+                                            el.child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(theme.colors.muted_foreground)
+                                                    .child(text!(msg)),
+                                            )
+                                        })
                                         .child(
                                             div()
-                                                .v_flex()
-                                                .gap_0p5()
-                                                .flex_1()
-                                                .child(text!(&r.title))
-                                                .when_some(r.message.as_ref(), |el, msg| {
-                                                    el.child(div().text_sm().text_color(theme.colors.muted_foreground).child(text!(msg)))
-                                                })
-                                                .child(div().text_xs().text_color(theme.colors.muted_foreground).child(text!(&r.timestamp))),
-                                        )
+                                                .text_xs()
+                                                .text_color(theme.colors.muted_foreground)
+                                                .child(text!(&r.timestamp)),
+                                        ),
+                                )
                         })
                         .collect()
                 }),

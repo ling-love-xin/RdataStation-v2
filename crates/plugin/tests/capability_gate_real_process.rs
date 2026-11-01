@@ -94,7 +94,11 @@ async fn a_driver_that_cannot_cancel_says_so_instead_of_pretending() {
     let fire = cancel_after(&token, 50);
 
     let started = Instant::now();
-    let Err(error) = app.database.query_with_cancel("select hold_ms=300", token).await else {
+    let Err(error) = app
+        .database
+        .query_with_cancel("select hold_ms=300", token)
+        .await
+    else {
         panic!("没声明 cancel 的驱动不该把「中断」当成功");
     };
     let reason = not_supported(error, "不能中断");
@@ -167,7 +171,11 @@ async fn the_schema_layer_follows_the_declaration() {
         .expect("sidecar 驱动要给浏览器面");
     assert!(browser.has_schema_level(), "靶子声明了 schemas");
     assert_eq!(
-        browser.get_schemas("main").await.expect("schema 清单").len(),
+        browser
+            .get_schemas("main")
+            .await
+            .expect("schema 清单")
+            .len(),
         2
     );
 
@@ -176,7 +184,10 @@ async fn the_schema_layer_follows_the_declaration() {
         .database
         .as_metadata_browser()
         .expect("浏览器面与能力无关");
-    assert!(!browser.has_schema_level(), "没声明 schemas 就没有独立 schema 层");
+    assert!(
+        !browser.has_schema_level(),
+        "没声明 schemas 就没有独立 schema 层"
+    );
     assert!(
         browser
             .get_schemas("main")
@@ -258,7 +269,10 @@ async fn the_browser_face_and_the_database_face_agree() {
             .len(),
         1
     );
-    let triggers = browser.get_triggers("main", "public").await.expect("触发器");
+    let triggers = browser
+        .get_triggers("main", "public")
+        .await
+        .expect("触发器");
     assert_eq!(triggers.len(), 1);
     assert_eq!(triggers[0].parent_name.as_deref(), Some("orders"));
 

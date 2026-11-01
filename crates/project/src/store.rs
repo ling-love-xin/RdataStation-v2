@@ -165,10 +165,7 @@ impl ProjectStore {
             info.path = ProjectPath::local(path.to_path_buf());
         }
 
-        Ok(Self {
-            info,
-            config: None,
-        })
+        Ok(Self { info, config: None })
     }
 
     /// 迁移旧目录结构到新结构
@@ -667,7 +664,6 @@ impl ProjectStore {
     // 三期预留；届时由三期实现真正的连接/查询持久化读取。见
     // `docs/architecture/project/project-wiring-matrix.md`。
 }
-
 
 // ========== 项目打开自检 ==========
 

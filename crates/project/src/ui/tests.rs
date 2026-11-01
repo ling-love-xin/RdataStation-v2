@@ -26,14 +26,14 @@ use super::{
     ConnectionOption, OpenProject, PendingAction, PickerTab, ProjectEditorBridge, ProjectInputs,
     ProjectMenuEntry, ProjectSort, ProjectUiHost, ProjectUiNotifier, ProjectUiState,
     SettingsSnapshot, StatusFilter, advance_pending, build_project_menu, card_description,
-    card_menu_entries, confirm_delete, create_version_action, default_connection_label,
+    card_menu_entries, confirm_delete, create_version_action, default_connection_label, do_close,
     load_settings_snapshot, meta_tree_rows, more_menu, open_create_dialog, open_delete_dialog,
     open_folder_dialog, open_lock_busy_dialog, parse_search, pick_directory, prepare_unsaved,
     project_card, project_menu_entries, render_picker, render_settings, request_close,
     request_create_project, request_open, request_open_folder, save_project_info,
     set_default_connection, set_sort, set_status_filter, set_tab, snapshot_description,
     sort_menu_entries, status_filter_menu_entries, submit_create, submit_open_folder,
-    toggle_archive, visible_items, do_close,
+    toggle_archive, visible_items,
 };
 use crate::service::ProjectSummary;
 
@@ -121,9 +121,7 @@ impl Render for Harness {
                     build_project_menu(menu, &menu_host, &menu_inputs)
                 }),
         );
-        div()
-            .size_full()
-            .child(body)
+        div().size_full().child(body)
     }
 }
 
@@ -288,7 +286,11 @@ fn do_close_clears_session_and_triggers_on_closed(cx: &mut TestAppContext) {
     cx.update(|_, cx| do_close(&host, cx));
 
     assert!(host.current().is_none(), "关闭后会话应清空");
-    assert_eq!(rec.closed.get(), 1, "关闭应触发宿主 on_closed 回调（连接列表刷新）");
+    assert_eq!(
+        rec.closed.get(),
+        1,
+        "关闭应触发宿主 on_closed 回调（连接列表刷新）"
+    );
 }
 
 #[gpui_kit::test]
@@ -1167,9 +1169,14 @@ fn picker_controls_receive_focus_and_actions_change_state(cx: &mut TestAppContex
 fn status_filter_menu_specs_order_and_check() {
     let all = status_filter_menu_entries(StatusFilter::All);
     let keys: Vec<StatusFilter> = all.iter().map(|s| s.filter).collect();
-    assert_eq!(keys, StatusFilter::ALL.to_vec(), "菜单项 = 全部状态、顺序稳定");
+    assert_eq!(
+        keys,
+        StatusFilter::ALL.to_vec(),
+        "菜单项 = 全部状态、顺序稳定"
+    );
     assert!(
-        all.iter().all(|s| s.checked == (s.filter == StatusFilter::All)),
+        all.iter()
+            .all(|s| s.checked == (s.filter == StatusFilter::All)),
         "仅当前项勾选"
     );
     let archived = status_filter_menu_entries(StatusFilter::Archived);
@@ -1187,9 +1194,14 @@ fn status_filter_menu_specs_order_and_check() {
 fn sort_menu_specs_order_and_check() {
     let all = sort_menu_entries(ProjectSort::LastOpened);
     let keys: Vec<ProjectSort> = all.iter().map(|s| s.sort).collect();
-    assert_eq!(keys, ProjectSort::ALL.to_vec(), "菜单项 = 全部排序、顺序稳定");
+    assert_eq!(
+        keys,
+        ProjectSort::ALL.to_vec(),
+        "菜单项 = 全部排序、顺序稳定"
+    );
     assert!(
-        all.iter().all(|s| s.checked == (s.sort == ProjectSort::LastOpened)),
+        all.iter()
+            .all(|s| s.checked == (s.sort == ProjectSort::LastOpened)),
         "仅当前项勾选"
     );
 }

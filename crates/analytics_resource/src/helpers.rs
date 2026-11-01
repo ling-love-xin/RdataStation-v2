@@ -9,9 +9,10 @@ pub fn parse_datetime(s: String) -> Result<DateTime<Utc>, CoreError> {
             NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")
                 .map(|ndt| ndt.and_utc())
                 .map_err(|_| {
-                    shared::error::CoreError::common(shared::error::CommonError::General(
-                        format!("Invalid datetime format: {}", s),
-                    ))
+                    shared::error::CoreError::common(shared::error::CommonError::General(format!(
+                        "Invalid datetime format: {}",
+                        s
+                    )))
                 })
         })
 }

@@ -92,8 +92,12 @@ impl ConflictKind {
     /// 覆盖提示（旧内容会被怎么处理，两条链路口径不同）。
     fn overwrite_note(&self) -> &'static str {
         match self {
-            ConflictKind::Promote => "覆盖将删除全局旧表并软删旧登记，新内容接续版本链；旧表内容不可恢复。",
-            ConflictKind::Distribute => "覆盖将删除项目旧表 / 旧文件并软删旧登记，新内容接续项目版本链；旧本体不可恢复。",
+            ConflictKind::Promote => {
+                "覆盖将删除全局旧表并软删旧登记，新内容接续版本链；旧表内容不可恢复。"
+            }
+            ConflictKind::Distribute => {
+                "覆盖将删除项目旧表 / 旧文件并软删旧登记，新内容接续项目版本链；旧本体不可恢复。"
+            }
         }
     }
 }
@@ -272,7 +276,10 @@ mod tests {
             ConflictRenameGate::Blocked("显示名不能为空")
         );
         assert_eq!(conflict_gate("月报", "月报"), ConflictRenameGate::Unchanged);
-        assert_eq!(conflict_gate("月报", "  月报 "), ConflictRenameGate::Unchanged);
+        assert_eq!(
+            conflict_gate("月报", "  月报 "),
+            ConflictRenameGate::Unchanged
+        );
         assert_eq!(conflict_gate("月报", "季度月报"), ConflictRenameGate::Ready);
     }
 }

@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rds_plugin::events::{get_event_manager, PluginEvent};
+use rds_plugin::events::{PluginEvent, get_event_manager};
 use rds_plugin::manager::{PluginDiff, PluginManager};
 
 /// 一次性临时安装目录（Drop 时清掉，不留 .rds/tmp 外的过程产物）
@@ -19,10 +19,8 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(tag: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "rds-plugin-lifecycle-{tag}-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("rds-plugin-lifecycle-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
@@ -78,10 +76,7 @@ where
             Ok(_) => {}
             Err(_) => {}
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "等待插件事件超时"
-        );
+        assert!(std::time::Instant::now() < deadline, "等待插件事件超时");
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }
@@ -94,7 +89,10 @@ async fn hot_plug_adds_removes_and_marks_reload() {
     manager.init().await.unwrap();
 
     // 空目录：diff 为空
-    assert_eq!(manager.scan_and_diff_plugins().await.unwrap(), PluginDiff::default());
+    assert_eq!(
+        manager.scan_and_diff_plugins().await.unwrap(),
+        PluginDiff::default()
+    );
 
     // 目录出现 = 插件出现：自动加载并激活（frontend 激活只记状态）
     write_plugin(&dir.0, "com.example.hot", "v1");
@@ -132,14 +130,12 @@ async fn uninstall_removes_dir_and_index_and_emits() {
     let mut rx = get_event_manager().subscribe();
     manager.uninstall_plugin("com.example.bye").await.unwrap();
 
-    assert!(
-        !dir.0.join("com.example.bye").exists(),
-        "插件目录要删掉"
-    );
+    assert!(!dir.0.join("com.example.bye").exists(), "插件目录要删掉");
     assert!(manager.get_loaded_plugin("com.example.bye").is_none());
-    let event = recv_matching(&mut rx, |e| {
-        matches!(e, PluginEvent::PluginUninstalled { plugin_id } if plugin_id == "com.example.bye")
-    });
+    let event = recv_matching(
+        &mut rx,
+        |e| matches!(e, PluginEvent::PluginUninstalled { plugin_id } if plugin_id == "com.example.bye"),
+    );
     assert!(matches!(event, PluginEvent::PluginUninstalled { .. }));
 
     // 卸载后重复卸载：目录已不存在也幂等成功（VS Code 卸载已卸载扩展同样无操作）
@@ -170,16 +166,18 @@ async fn disable_then_enable_roundtrips() {
     // 先订阅后动作（broadcast 不重放旧消息）
     let mut rx = get_event_manager().subscribe();
     manager.disable_plugin("com.example.toggle").await.unwrap();
-    let event = recv_matching(&mut rx, |e| {
-        matches!(e, PluginEvent::PluginDisabled { plugin_id } if plugin_id == "com.example.toggle")
-    });
+    let event = recv_matching(
+        &mut rx,
+        |e| matches!(e, PluginEvent::PluginDisabled { plugin_id } if plugin_id == "com.example.toggle"),
+    );
     assert!(matches!(event, PluginEvent::PluginDisabled { .. }));
 
     let mut rx = get_event_manager().subscribe();
     manager.enable_plugin("com.example.toggle").await.unwrap();
-    let event = recv_matching(&mut rx, |e| {
-        matches!(e, PluginEvent::PluginEnabled { plugin_id } if plugin_id == "com.example.toggle")
-    });
+    let event = recv_matching(
+        &mut rx,
+        |e| matches!(e, PluginEvent::PluginEnabled { plugin_id } if plugin_id == "com.example.toggle"),
+    );
     assert!(matches!(event, PluginEvent::PluginEnabled { .. }));
 }
 

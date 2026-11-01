@@ -49,7 +49,9 @@ fn create_named(name: &str, path: &Path) -> ProjectSummary {
 
 /// 探测锁是否被持有（占用中返回 Some）。
 fn lock_busy(root: &Path) -> bool {
-    ProjectLock::probe(root).map(|o| o.is_some()).unwrap_or(false)
+    ProjectLock::probe(root)
+        .map(|o| o.is_some())
+        .unwrap_or(false)
 }
 
 /// 1) 打开/关闭/只读：锁的获取与释放、只读不取锁、最近列表与可用性。
@@ -71,7 +73,12 @@ fn open_close_and_read_only_lock_lifecycle() {
     // open 写入 last_opened_at → 应进入最近列表，可用性为真。
     let recent = service::list_recent(10).expect("list_recent");
     assert!(recent.iter().any(|p| p.id == s.id), "打开后应进入最近列表");
-    assert!(recent.iter().find(|p| p.id == s.id).is_some_and(|p| p.path_exists));
+    assert!(
+        recent
+            .iter()
+            .find(|p| p.id == s.id)
+            .is_some_and(|p| p.path_exists)
+    );
     assert!(service::has_recent_available(), "有可用项目");
 
     // 关闭 → 释放锁。
@@ -111,7 +118,10 @@ fn archive_roundtrip_and_update_meta() {
     // 归档 → 名册状态 Archived。
     service::set_archived(&s.id, &s.path, true).expect("归档");
     let all = service::list_all().expect("list_all");
-    let rec = all.into_iter().find(|p| p.id == s.id).expect("归档后仍在名册");
+    let rec = all
+        .into_iter()
+        .find(|p| p.id == s.id)
+        .expect("归档后仍在名册");
     assert_eq!(rec.status, "archived");
 
     // 取消归档 → 回 Active。
@@ -134,7 +144,10 @@ fn archive_roundtrip_and_update_meta() {
     assert_eq!(rec.description.as_deref(), Some("新描述"));
     let json = std::fs::read_to_string(s.path.join(".RSmeta").join("project.json"))
         .expect("读 project.json");
-    assert!(json.contains("改名后"), "project.json 应同步新名，实际: {json}");
+    assert!(
+        json.contains("改名后"),
+        "project.json 应同步新名，实际: {json}"
+    );
 
     // 非法名（空）→ Err。
     assert!(service::update_meta(&s.id, &s.path, "", None).is_err());
@@ -147,10 +160,18 @@ fn soft_remove_forget_delete_disk() {
     let a_root = project_path("proj-softa");
     let a = create_named("遗忘项目", &a_root);
     service::soft_remove(&a.id).expect("soft_remove");
-    assert!(service::list_removed().expect("removed").iter().any(|p| p.id == a.id));
+    assert!(
+        service::list_removed()
+            .expect("removed")
+            .iter()
+            .any(|p| p.id == a.id)
+    );
     service::forget(&a.id).expect("forget");
     assert!(
-        !service::list_removed().expect("removed2").iter().any(|p| p.id == a.id),
+        !service::list_removed()
+            .expect("removed2")
+            .iter()
+            .any(|p| p.id == a.id),
         "forget 应清出名册"
     );
     assert!(a.path.exists(), "forget 不应动磁盘");
@@ -163,7 +184,10 @@ fn soft_remove_forget_delete_disk() {
     assert!(!b_root.join(".RSmeta").exists(), ".RSmeta 应被删除");
     assert!(b_root.join("用户文件.txt").exists(), "用户文件应保留");
     assert!(
-        !service::list_all().expect("all").iter().any(|p| p.id == b.id),
+        !service::list_all()
+            .expect("all")
+            .iter()
+            .any(|p| p.id == b.id),
         "delete_disk 应清出名册"
     );
 }
@@ -177,11 +201,7 @@ fn relocate_points_to_new_root() {
     // 模拟用户把项目文件夹移到新目录（.RSmeta 随之移动）。
     let new_root = project_path("proj-reloc2");
     std::fs::create_dir_all(&new_root).expect("mkdir new");
-    std::fs::rename(
-        old_root.join(".RSmeta"),
-        new_root.join(".RSmeta"),
-    )
-    .expect("move .RSmeta");
+    std::fs::rename(old_root.join(".RSmeta"), new_root.join(".RSmeta")).expect("move .RSmeta");
 
     service::relocate(&s.id, &new_root).expect("relocate");
 
@@ -199,12 +219,18 @@ fn relocate_points_to_new_root() {
     // project.json 同步。
     let json = std::fs::read_to_string(new_root.join(".RSmeta").join("project.json"))
         .expect("读新 project.json");
-    assert!(json.contains("proj-reloc2"), "project.json 应指向新目录，实际: {json}");
+    assert!(
+        json.contains("proj-reloc2"),
+        "project.json 应指向新目录，实际: {json}"
+    );
 
     // relocate 到非项目目录 → Err。
     let plain = project_path("proj-reloc-plain");
     std::fs::create_dir_all(&plain).expect("mkdir plain");
-    assert!(service::relocate(&s.id, &plain).is_err(), "非项目目录不能作为迁移目标");
+    assert!(
+        service::relocate(&s.id, &plain).is_err(),
+        "非项目目录不能作为迁移目标"
+    );
 }
 
 /// 5) 版本快照：空表 → 空消息拦截 → 写入 → 倒序读取。
@@ -217,16 +243,26 @@ fn version_snapshot_lifecycle() {
     assert!(service::list_versions(&s.path).expect("空列表").is_empty());
 
     // 空消息被拦截。
-    assert!(service::create_version(&s.path, "   ").is_err(), "空版本说明应报错");
+    assert!(
+        service::create_version(&s.path, "   ").is_err(),
+        "空版本说明应报错"
+    );
 
     service::create_version(&s.path, "v1 快照").expect("v1");
     service::create_version(&s.path, "v2 快照").expect("v2");
 
     let versions = service::list_versions(&s.path).expect("版本列表");
     assert_eq!(versions.len(), 2, "应写入 2 条版本");
-    assert_eq!(versions[0].message, "v2 快照", "新的在前（ORDER BY created_at DESC）");
+    assert_eq!(
+        versions[0].message, "v2 快照",
+        "新的在前（ORDER BY created_at DESC）"
+    );
     assert_eq!(versions[1].message, "v1 快照");
-    assert!(versions.iter().all(|v| !v.id.is_empty() && !v.created_at.is_empty()));
+    assert!(
+        versions
+            .iter()
+            .all(|v| !v.id.is_empty() && !v.created_at.is_empty())
+    );
 
     // 非项目目录 → 明确报错（project.db 缺失）。
     let plain = project_path("proj-ver-plain");

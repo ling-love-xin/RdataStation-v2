@@ -13,7 +13,7 @@ use crate::payload::PayloadStore;
 use crate::present::build_repair_rows;
 use crate::{AnalyticsResourceStore, ArchiveKind, IndexRepair};
 
-use super::{jobs, open_service, Job, OpOutcome, SQLITE_POOL_SIZE};
+use super::{Job, OpOutcome, SQLITE_POOL_SIZE, jobs, open_service};
 
 /// 一次索引扫描任务（扫描不改任何状态，所以不带只读标志）。
 pub(crate) struct IndexScanJob {
@@ -142,7 +142,6 @@ pub fn enqueue_index_repair_action(project_root: PathBuf, read_only: bool, actio
         action,
     }));
 }
-
 
 /// 动作后重扫索引（worker 里 IndexRepairAction 分支用；构造在域内，字段不外露）。
 pub(crate) async fn reload_index_scan_after(

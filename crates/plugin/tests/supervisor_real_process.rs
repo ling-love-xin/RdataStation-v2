@@ -436,7 +436,9 @@ async fn shutdown_plugin_reaps_only_that_plugins_instances() {
         .unwrap();
     assert_eq!(supervisor.live_instances(), 2);
 
-    supervisor.shutdown_plugin(id_a, now, Duration::from_secs(10)).await;
+    supervisor
+        .shutdown_plugin(id_a, now, Duration::from_secs(10))
+        .await;
 
     let events = collect_events(&mut supervisor);
     assert!(

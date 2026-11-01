@@ -54,7 +54,9 @@ pub fn open_group_name_dialog(
             "创建",
             "分组是单层的：没有子分组，也不影响存档本体",
         ),
-        GroupNameKind::Rename { .. } => ("重命名分组", "分组名", "保存", "只改显示名：组里的存档不动"),
+        GroupNameKind::Rename { .. } => {
+            ("重命名分组", "分组名", "保存", "只改显示名：组里的存档不动")
+        }
     };
 
     window.open_dialog(cx, move |dialog, _window, cx| {
@@ -85,7 +87,11 @@ pub fn open_group_name_dialog(
         };
         let submit_for_ok = submit.clone();
 
-        let mut body = div().v_flex().w_full().gap_2().child(Input::new(&name_input));
+        let mut body = div()
+            .v_flex()
+            .w_full()
+            .gap_2()
+            .child(Input::new(&name_input));
         body = body.child(
             div()
                 .w_full()
@@ -144,7 +150,12 @@ mod tests {
     /// 两种形态的标题 / 占位符不同，而提交事件由 kind 决定（重命名要带 id）。
     #[test]
     fn kind_decides_the_shape_of_the_event() {
-        assert_ne!(GroupNameKind::Create, GroupNameKind::Rename { id: "af_1".to_string() });
+        assert_ne!(
+            GroupNameKind::Create,
+            GroupNameKind::Rename {
+                id: "af_1".to_string()
+            }
+        );
         let create = GroupNameKind::Create;
         let rename = GroupNameKind::Rename {
             id: "af_1".to_string(),

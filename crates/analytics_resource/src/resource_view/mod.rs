@@ -22,7 +22,6 @@
 //! （`Ctrl+F` 聚焦 / `Esc` 清空 / 行漫游在 Action 批）、行内 hover 动作（原型 §2.3 的 hover 版，
 //! 随详情面板批）、批量多选。
 
-
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -199,7 +198,6 @@ pub trait ResourcesHost: 'static {
     fn accept_reference_current(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
 }
 
-
 /// 面板头「⋯」菜单的动作（原型 §2.1 四项；顺序即菜单顺序）。
 ///
 /// 单独成枚举而不是散在渲染闭包里：菜单项文案、顺序与去向可以被单测钉住
@@ -253,7 +251,6 @@ pub fn dispatch_header_action(
         HeaderMenuAction::Refresh => host.request_refresh(window, cx),
     }
 }
-
 
 // ==================== 面板 ====================
 
@@ -446,12 +443,8 @@ impl ResourcesPanel {
                 merged
             }
         };
-        self.view_rows = filter::apply_view(
-            &source,
-            &self.filter,
-            self.sort_field,
-            self.sort_order,
-        );
+        self.view_rows =
+            filter::apply_view(&source, &self.filter, self.sort_field, self.sort_order);
         // 全局行可被选中但不给详情（详情映射只有项目行）；选中清理按 view_rows 走。
         if let Some(selected) = self.selected.as_deref() {
             if !self.view_rows.iter().any(|row| row.id == selected) {
@@ -864,7 +857,6 @@ impl ComponentPanel for ResourcesPanel {
         div().text_sm().child("资产库")
     }
 }
-
 
 #[cfg(test)]
 mod tests;

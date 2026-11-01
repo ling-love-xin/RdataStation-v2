@@ -98,7 +98,10 @@ impl IndexScanReport {
     }
 
     fn pick(&self, predicate: impl Fn(&IndexIssue) -> bool) -> Vec<&IndexIssue> {
-        self.issues.iter().filter(|issue| predicate(issue)).collect()
+        self.issues
+            .iter()
+            .filter(|issue| predicate(issue))
+            .collect()
     }
 }
 
@@ -305,7 +308,8 @@ mod tests {
 
     /// 建好临时项目 + 三段迁移 + 归档服务；修复器借用服务里的本体层与索引层。
     async fn test_env() -> (ArchiveService, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("rds_indexer_{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("rds_indexer_{}", uuid::Uuid::new_v4().simple()));
         fs::create_dir_all(&dir).await.expect("create temp project");
         let pool = Arc::new(
             ProjectSqlitePool::new(dir.join("project.db"), 2)
@@ -389,7 +393,10 @@ mod tests {
 
         let report = repair.scan().await.expect("scan");
         assert_eq!(report.missing_payloads().len(), 1);
-        assert_eq!(report.missing_payloads()[0].resource_id(), Some(id.as_str()));
+        assert_eq!(
+            report.missing_payloads()[0].resource_id(),
+            Some(id.as_str())
+        );
         assert!(report.untracked_files().is_empty());
 
         let _ = fs::remove_dir_all(&dir).await;
@@ -407,7 +414,9 @@ mod tests {
             .set_readonly(&payload, false)
             .await
             .expect("clear readonly");
-        fs::write(&payload, b"select 2;").await.expect("edit payload");
+        fs::write(&payload, b"select 2;")
+            .await
+            .expect("edit payload");
 
         let report = repair.scan().await.expect("scan");
         assert_eq!(report.content_changes().len(), 1);
@@ -423,7 +432,11 @@ mod tests {
         let (service, dir) = test_env().await;
         let repair = IndexRepair::new(service.payload(), service.store());
 
-        let stray = service.payload().resources_dir().join("reports").join("dau.sql");
+        let stray = service
+            .payload()
+            .resources_dir()
+            .join("reports")
+            .join("dau.sql");
         fs::create_dir_all(stray.parent().expect("parent"))
             .await
             .expect("mkdir");
@@ -437,19 +450,28 @@ mod tests {
         assert_eq!(adopted.name, "dau", "默认取文件名（去扩展名）");
         assert_eq!(adopted.file_rel_path.as_deref(), Some("reports/dau.sql"));
         assert!(adopted.content_hash.is_some(), "补登应现算指纹");
-        assert_eq!(adopted.file_size, Some(9), "补登也登记体积（否则「大小」一列永远是空的）");
+        assert_eq!(
+            adopted.file_size,
+            Some(9),
+            "补登也登记体积（否则「大小」一列永远是空的）"
+        );
         assert_eq!(adopted.kind, "file");
         assert_eq!(
             ArchiveKind::from_db_str(&adopted.kind).strength(),
             ReproductionStrength::Strong
         );
-        assert!(repair.scan().await.expect("scan").is_clean(), "补登后应无差异");
+        assert!(
+            repair.scan().await.expect("scan").is_clean(),
+            "补登后应无差异"
+        );
 
         // 重复补登应被拒（同一本体只能一个存档占用）。
-        assert!(repair
-            .adopt_file("reports/dau.sql", None, ArchiveKind::File)
-            .await
-            .is_err());
+        assert!(
+            repair
+                .adopt_file("reports/dau.sql", None, ArchiveKind::File)
+                .await
+                .is_err()
+        );
 
         let _ = fs::remove_dir_all(&dir).await;
     }
@@ -466,8 +488,14 @@ mod tests {
             .set_readonly(&payload, false)
             .await
             .expect("clear readonly");
-        fs::write(&payload, b"select 42;").await.expect("edit payload");
-        let actual = service.payload().content_hash(&payload).await.expect("hash");
+        fs::write(&payload, b"select 42;")
+            .await
+            .expect("edit payload");
+        let actual = service
+            .payload()
+            .content_hash(&payload)
+            .await
+            .expect("hash");
 
         let accepted = repair.accept_current_content(&id).await.expect("accept");
 
@@ -487,7 +515,11 @@ mod tests {
             "修复后不应再报内容已变"
         );
 
-        let versions = service.store().get_resource_versions(&id).await.expect("versions");
+        let versions = service
+            .store()
+            .get_resource_versions(&id)
+            .await
+            .expect("versions");
         assert_eq!(versions.len(), 1, "写前快照保留旧指纹");
         assert_eq!(versions[0].version, 1);
 
@@ -503,7 +535,10 @@ mod tests {
         fs::remove_file(service.payload().resources_dir().join("orphan.sql"))
             .await
             .expect("delete payload");
-        assert_eq!(repair.scan().await.expect("scan").missing_payloads().len(), 1);
+        assert_eq!(
+            repair.scan().await.expect("scan").missing_payloads().len(),
+            1
+        );
 
         repair.remove_orphan_record(&id).await.expect("remove");
 

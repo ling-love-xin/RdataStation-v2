@@ -55,7 +55,9 @@ impl RepairGroup {
         match self {
             Self::Untracked => "本体在 resources/ 里但登记表不认识它；补登后就是一个正常存档",
             Self::Missing => "本体不在了：从回收站还原（若当初进了回收站），或删掉记录",
-            Self::Changed => "本体被绕过只读改过：接受当前内容（生成新版本），或到版本历史里挑一版还原",
+            Self::Changed => {
+                "本体被绕过只读改过：接受当前内容（生成新版本），或到版本历史里挑一版还原"
+            }
         }
     }
 }
@@ -192,35 +194,31 @@ pub fn open_index_repair_dialog_with(
         let read_only = state.read_only();
         let note = state.note();
 
-        let mut body = div()
-            .v_flex()
-            .w_full()
-            .gap_2()
-            .child(
-                div()
-                    .h_flex()
-                    .w_full()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .child(
+        let mut body = div().v_flex().w_full().gap_2().child(
+            div()
+                .h_flex()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_xs()
+                        .text_ellipsis()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(format!("共 {} 项需要处理", rows.len())),
+                )
+                .when_some(note, |bar, note| {
+                    bar.child(
                         div()
-                            .min_w_0()
+                            .flex_none()
                             .text_xs()
-                            .text_ellipsis()
-                            .text_color(theme.colors.muted_foreground)
-                            .child(format!("共 {} 项需要处理", rows.len())),
+                            .text_color(theme.colors.warning)
+                            .child(note),
                     )
-                    .when_some(note, |bar, note| {
-                        bar.child(
-                            div()
-                                .flex_none()
-                                .text_xs()
-                                .text_color(theme.colors.warning)
-                                .child(note),
-                        )
-                    }),
-            );
+                }),
+        );
 
         if rows.is_empty() {
             // 干净 = 好消息，用 success 而不是警告色：对话框开着时用户可能刚修完最后一项。
@@ -394,7 +392,13 @@ fn repair_line(
                 move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                     state.set_busy(true);
                     state.set_note(Some("正在补登…".to_string()));
-                    on_action(RepairAction::Adopt { rel_path: rel_path.clone() }, window, cx);
+                    on_action(
+                        RepairAction::Adopt {
+                            rel_path: rel_path.clone(),
+                        },
+                        window,
+                        cx,
+                    );
                 }
             };
             line = line.child(
@@ -551,7 +555,10 @@ mod tests {
     #[test]
     fn groups_follow_the_prototype_order() {
         let titles: Vec<&str> = RepairGroup::ALL.iter().map(|group| group.title()).collect();
-        assert_eq!(titles, vec!["有文件、无记录", "有记录、无本体", "指纹不匹配"]);
+        assert_eq!(
+            titles,
+            vec!["有文件、无记录", "有记录、无本体", "指纹不匹配"]
+        );
         for group in RepairGroup::ALL {
             assert!(!group.hint().is_empty(), "每组都要有一句说明");
         }

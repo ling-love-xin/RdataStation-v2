@@ -14,7 +14,7 @@ use crate::payload::PayloadStore;
 use crate::present::{build_trash_snapshot, entity_trash_row, reference_trash_rows};
 use crate::{ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest, KeepVersions};
 
-use super::{free_dest, jobs, open_service, Job, OpOutcome};
+use super::{Job, OpOutcome, free_dest, jobs, open_service};
 
 /// 一次归档任务。
 pub(crate) struct ArchiveJob {
@@ -232,16 +232,17 @@ pub(crate) async fn load_trash(job: &TrashListJob) -> Result<TrashDialogSeed, St
     let snapshot = build_trash_snapshot(&entries);
 
     // 项目库读不到时不弄砸实体清单：第二来源缺失只表现为 reference 条目不显示。
-    let reference: Vec<(DateTime<Utc>, TrashRow)> = match open_service(job.project_root.clone(), None).await {
-        Ok(service) => match service.deleted_reference_archives().await {
-            Ok(rows) => reference_trash_rows(&rows),
-            Err(error) => {
-                tracing::warn!(error = %error, "读取软删 reference 回收站条目失败");
-                Vec::new()
-            }
-        },
-        Err(_) => Vec::new(),
-    };
+    let reference: Vec<(DateTime<Utc>, TrashRow)> =
+        match open_service(job.project_root.clone(), None).await {
+            Ok(service) => match service.deleted_reference_archives().await {
+                Ok(rows) => reference_trash_rows(&rows),
+                Err(error) => {
+                    tracing::warn!(error = %error, "读取软删 reference 回收站条目失败");
+                    Vec::new()
+                }
+            },
+            Err(_) => Vec::new(),
+        };
 
     let entity: Vec<(DateTime<Utc>, TrashRow)> =
         entries.iter().filter_map(entity_trash_row).collect();
@@ -407,7 +408,6 @@ pub fn enqueue_trash_action(project_root: PathBuf, read_only: bool, action: Tras
         action,
     }));
 }
-
 
 /// 动作后重取回收站清单（worker 里 TrashAction 分支用；构造在域内，字段不外露）。
 pub(crate) async fn reload_trash_after(project_root: PathBuf) -> Result<TrashDialogSeed, String> {

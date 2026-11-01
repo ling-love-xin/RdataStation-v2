@@ -118,7 +118,10 @@ impl PluginInstaller {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("plugin");
-        let dest = paths::temp_dir().join(format!("rds-plugin-extract-{name}-{}", uuid::Uuid::new_v4()));
+        let dest = paths::temp_dir().join(format!(
+            "rds-plugin-extract-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&dest).map_err(|e| {
             CoreError::common(CommonError::General(format!(
                 "Failed to create temp extract dir: {}",
@@ -131,10 +134,7 @@ impl PluginInstaller {
     /// 解压 ZIP 包（zip 0.6；`enclosed_name()` 拒绝路径穿越 —— 压缩包条目可能带 `../`）
     fn extract_zip(&self, zip_path: &Path) -> Result<PathBuf, CoreError> {
         let file = std::fs::File::open(zip_path).map_err(|e| {
-            CoreError::common(CommonError::general(format!(
-                "Failed to open zip: {}",
-                e
-            )))
+            CoreError::common(CommonError::general(format!("Failed to open zip: {}", e)))
         })?;
         let mut archive = zip::ZipArchive::new(file).map_err(|e| {
             CoreError::common(CommonError::general(format!(
@@ -164,10 +164,7 @@ impl PluginInstaller {
 
             if entry.is_dir() {
                 std::fs::create_dir_all(&out_path).map_err(|e| {
-                    CoreError::common(CommonError::general(format!(
-                        "Failed to create dir: {}",
-                        e
-                    )))
+                    CoreError::common(CommonError::general(format!("Failed to create dir: {}", e)))
                 })?;
             } else {
                 if let Some(parent) = out_path.parent() {
@@ -280,8 +277,7 @@ impl PluginInstaller {
             || matches!(
                 manifest.backend.as_ref().map(|b| &b.kind),
                 Some(BackendKind::Wasm)
-            )
-        {
+            ) {
             "wasm".to_string()
         } else if let Some(backend) = &manifest.backend {
             // sidecar / script 都是子进程形态（进进程池）

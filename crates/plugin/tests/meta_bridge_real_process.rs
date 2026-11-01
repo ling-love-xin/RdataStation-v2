@@ -63,7 +63,10 @@ async fn the_tree_has_all_three_levels() {
     let driver = SessionDriver::new(supervisor.session_conn(&session_id).unwrap(), &session_id);
 
     assert_eq!(
-        driver.meta_catalogs().await.expect("catalog 清单应当拿得到"),
+        driver
+            .meta_catalogs()
+            .await
+            .expect("catalog 清单应当拿得到"),
         vec!["main".to_string()]
     );
 
@@ -75,7 +78,10 @@ async fn the_tree_has_all_three_levels() {
     assert_eq!(schemas[0].comment.as_deref(), Some("默认 schema"));
     assert_eq!(schemas[1].comment, None);
 
-    let objects = driver.meta_objects("main", "public").await.expect("对象清单");
+    let objects = driver
+        .meta_objects("main", "public")
+        .await
+        .expect("对象清单");
     assert_eq!(
         objects.len(),
         9,
@@ -86,7 +92,11 @@ async fn the_tree_has_all_three_levels() {
         .into_iter()
         .filter_map(|o| o.into_node_info())
         .collect();
-    assert_eq!(nodes.len(), 8, "domain 摆不进五个文件夹，应当被跳过而不是画成表");
+    assert_eq!(
+        nodes.len(),
+        8,
+        "domain 摆不进五个文件夹，应当被跳过而不是画成表"
+    );
     assert!(
         nodes.iter().all(|n| n.name != "order_state"),
         "认不出的类别不进树"
@@ -103,7 +113,10 @@ async fn one_introspection_serves_all_five_folders() {
     let (supervisor, session_id) = session_for("test.meta.folders").await;
     let driver = SessionDriver::new(supervisor.session_conn(&session_id).unwrap(), &session_id);
 
-    let objects = driver.meta_objects("main", "public").await.expect("对象清单");
+    let objects = driver
+        .meta_objects("main", "public")
+        .await
+        .expect("对象清单");
     let names = |kind: &MetaObjectKind| -> Vec<String> {
         objects
             .iter()
@@ -158,7 +171,10 @@ async fn object_detail_carries_columns_and_canonical_types() {
     assert_eq!(detail.row_count, Some(12000));
 
     let names: Vec<&str> = detail.columns.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(names, vec!["id", "customer_id", "amount", "created_at", "note"]);
+    assert_eq!(
+        names,
+        vec!["id", "customer_id", "amount", "created_at", "note"]
+    );
 
     let id = detail.columns[0].clone().into_column_detail();
     assert!(id.is_primary_key && !id.nullable);
@@ -209,7 +225,10 @@ async fn routine_source_is_a_string_or_none() {
         .await
         .expect("例程源码应当拿得到")
         .expect("靶子有这个函数");
-    assert!(source.starts_with("CREATE FUNCTION order_total"), "{source}");
+    assert!(
+        source.starts_with("CREATE FUNCTION order_total"),
+        "{source}"
+    );
 
     // 表不是例程：`null`，不是错误
     let none = driver
@@ -222,11 +241,8 @@ async fn routine_source_is_a_string_or_none() {
 /// 没声明能力时：方法如实回 `-32006`（UI 据此置灰并说明），对象类别也**不报**。
 #[tokio::test]
 async fn a_denied_capability_is_reported_as_such() {
-    let (supervisor, session_id) = session_for_with(
-        "test.meta.gate",
-        &["--cap-na=schemas", "--cap-na=routines"],
-    )
-    .await;
+    let (supervisor, session_id) =
+        session_for_with("test.meta.gate", &["--cap-na=schemas", "--cap-na=routines"]).await;
     let driver = SessionDriver::new(supervisor.session_conn(&session_id).unwrap(), &session_id);
 
     let descriptor = driver.describe("fixture").await.expect("描述应当成功");
@@ -247,12 +263,14 @@ async fn a_denied_capability_is_reported_as_such() {
     assert!(denied.is_capability_denied(), "{denied:?}");
 
     // 对象清单照常：但例程那两类不报（「看不到」与「没有」在驱动侧是同一件事）
-    let objects = driver.meta_objects("main", "public").await.expect("对象清单");
+    let objects = driver
+        .meta_objects("main", "public")
+        .await
+        .expect("对象清单");
     assert!(
-        objects.iter().all(|o| !matches!(
-            o.kind,
-            MetaObjectKind::Procedure | MetaObjectKind::Function
-        )),
+        objects
+            .iter()
+            .all(|o| !matches!(o.kind, MetaObjectKind::Procedure | MetaObjectKind::Function)),
         "没声明 routines 就不该报例程：{objects:?}"
     );
     assert!(

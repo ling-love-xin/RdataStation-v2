@@ -9,7 +9,7 @@ use engine::persistence::project_db::ProjectDatabaseManager;
 
 use crate::AnalyticsResourceStore;
 
-use super::{jobs, Job, OpOutcome, SQLITE_POOL_SIZE};
+use super::{Job, OpOutcome, SQLITE_POOL_SIZE, jobs};
 
 /// 改显示名（不需要对话框取数：目标与当前名字都在事件路径上拿到）。
 pub(crate) struct RenameJob {

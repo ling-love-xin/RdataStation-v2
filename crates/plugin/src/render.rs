@@ -263,7 +263,10 @@ mod tests {
             wasm_plugin("render-a", vec!["mermaid".into()]),
             wasm_plugin("render-b", vec!["dot".into(), "mermaid".into()]),
         ];
-        assert_eq!(renderer_for(&plugins, "mermaid").as_deref(), Some("render-a"));
+        assert_eq!(
+            renderer_for(&plugins, "mermaid").as_deref(),
+            Some("render-a")
+        );
         assert_eq!(renderer_for(&plugins, "dot").as_deref(), Some("render-b"));
     }
 
@@ -279,14 +282,22 @@ mod tests {
             wasm_plugin("mermaid-only", vec!["mermaid".into()]),
             wasm_plugin("any", vec![]),
         ];
-        assert_eq!(renderer_for(&plugins, "mermaid").as_deref(), Some("mermaid-only"));
+        assert_eq!(
+            renderer_for(&plugins, "mermaid").as_deref(),
+            Some("mermaid-only")
+        );
     }
 
     #[test]
     fn renderer_for_skips_non_wasm_and_non_declared() {
         // no-declare 手工构造为「无 render_document」
         let mut p = wasm_plugin("no-declare", vec![]);
-        p.manifest.capabilities.wasm.as_mut().unwrap().render_document = None;
+        p.manifest
+            .capabilities
+            .wasm
+            .as_mut()
+            .unwrap()
+            .render_document = None;
         let plugins = vec![sidecar_plugin("driver-a"), p];
         assert_eq!(renderer_for(&plugins, "mermaid"), None);
         assert_eq!(renderer_for(&[], "mermaid"), None);

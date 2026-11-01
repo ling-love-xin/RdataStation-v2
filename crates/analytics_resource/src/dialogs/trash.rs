@@ -421,9 +421,7 @@ fn trash_line(
         PayloadMode::Reference => {
             "本体留在源位置不受影响；登记记录与版本元数据将彻底删除，不可恢复。".to_string()
         }
-        PayloadMode::Copy => {
-            "本体将从回收站里彻底删除，不可恢复；登记记录一并删除。".to_string()
-        }
+        PayloadMode::Copy => "本体将从回收站里彻底删除，不可恢复；登记记录一并删除。".to_string(),
     };
     let purge = {
         let state = state.clone();

@@ -2,11 +2,11 @@
 //!
 //! 处理插件之间的依赖关系，支持循环依赖检测和版本兼容性检查
 
-use shared::error::{CoreError, PluginError};
+use crate::manifest::{PluginDependency, PluginManifest};
 use engine::persistence::global_db::GlobalDatabaseManager;
 use engine::persistence::plugin_store::Plugin;
-use crate::manifest::{PluginDependency, PluginManifest};
 use serde::{Deserialize, Serialize};
+use shared::error::{CoreError, PluginError};
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
@@ -97,11 +97,9 @@ impl DependencyManager {
                 // 检查循环依赖（2026-10-15：循环依赖此前误报 dependency_missing ——
                 // PluginError 没有 Cyclic 变体，这里用通用错误如实说明）
                 if recursion_stack.contains(&dep.id) {
-                    return Err(CoreError::common(
-                        shared::error::CommonError::General(
-                            format!("检测到循环依赖: {}", dep.id),
-                        ),
-                    ));
+                    return Err(CoreError::common(shared::error::CommonError::General(
+                        format!("检测到循环依赖: {}", dep.id),
+                    )));
                 }
 
                 if visited.contains(&dep.id) {
@@ -126,8 +124,7 @@ impl DependencyManager {
                     // 检查是否有其他版本的插件
                     let all_plugins = self.db_manager.get_all_plugins().await?;
                     let compatible = all_plugins.iter().find(|p| {
-                        p.code == dep.id
-                            && Self::is_version_compatible(&p.version, &dep.version)
+                        p.code == dep.id && Self::is_version_compatible(&p.version, &dep.version)
                     });
 
                     if let Some(plugin) = compatible {

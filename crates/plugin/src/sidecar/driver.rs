@@ -35,8 +35,8 @@ use serde_json::{Value, json};
 
 use super::conn::{CallError, SidecarConn};
 use super::meta::{
-    MetaObject, MetaObjectDetail, MetaObjectKind, MetaSchema, parse_catalogs,
-    parse_object_detail, parse_objects, parse_routine_source, parse_schemas,
+    MetaObject, MetaObjectDetail, MetaObjectKind, MetaSchema, parse_catalogs, parse_object_detail,
+    parse_objects, parse_routine_source, parse_schemas,
 };
 use super::method;
 use super::proto::RpcErrorCode;
@@ -337,7 +337,10 @@ impl<'a> SessionDriver<'a> {
     /// 元数据：catalog 清单（§4.2.2 `meta.catalogs`）。
     pub async fn meta_catalogs(&self) -> Result<Vec<String>, DriverError> {
         let result = self
-            .call_meta(method::META_CATALOGS, json!({ "session_id": self.session_id }))
+            .call_meta(
+                method::META_CATALOGS,
+                json!({ "session_id": self.session_id }),
+            )
             .await?;
         parse_catalogs(&result)
     }
@@ -1830,9 +1833,8 @@ mod database_tests {
             object("trg", MetaObjectKind::Trigger),
             object("order_state", MetaObjectKind::Other("domain".into())),
         ];
-        let names = |nodes: Vec<NodeInfo>| -> Vec<String> {
-            nodes.into_iter().map(|n| n.name).collect()
-        };
+        let names =
+            |nodes: Vec<NodeInfo>| -> Vec<String> { nodes.into_iter().map(|n| n.name).collect() };
 
         // 表与视图是**一次调用**的结果，导航自己按 kind 分成两个文件夹
         assert_eq!(
@@ -1864,7 +1866,11 @@ mod database_tests {
     async fn schema_falls_back_to_the_drivers_default() {
         let mut db = SidecarDatabase::new(&Arc::new(dummy_conn()), "s1", "fixture", descriptor());
         assert_eq!(db.wire_schema(Some("sales")), "sales");
-        assert_eq!(db.wire_schema(None), "public", "descriptor 给了 default_schema");
+        assert_eq!(
+            db.wire_schema(None),
+            "public",
+            "descriptor 给了 default_schema"
+        );
         assert_eq!(db.wire_schema(Some("")), "public", "空串按没给算");
 
         // 驱动自己没说默认 schema：传空串，别替它猜一个

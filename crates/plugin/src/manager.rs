@@ -31,9 +31,9 @@ use shared::error::{CommonError, CoreError, PluginError};
 use super::manifest::{ManifestParser, PluginManifest};
 use crate::sidecar::factory::register_sidecar_drivers;
 use crate::sidecar::supervisor::SidecarSupervisor;
-use crate::wasm::{PluginMetadata, PluginState, PluginType};
 #[cfg(feature = "wasm")]
 use crate::wasm::ExtismPluginManager;
+use crate::wasm::{PluginMetadata, PluginState, PluginType};
 
 /// 插件形态（三轨）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -202,7 +202,10 @@ impl PluginManager {
     pub fn scan_plugins(&self) -> Result<Vec<PluginInfo>, CoreError> {
         let mut discovered_plugins = Vec::new();
 
-        let dirs = self.plugin_dirs.read().map_err(|_| lock_err("plugin_dirs"))?;
+        let dirs = self
+            .plugin_dirs
+            .read()
+            .map_err(|_| lock_err("plugin_dirs"))?;
 
         for dir in dirs.iter() {
             if !dir.exists() {
@@ -275,8 +278,9 @@ impl PluginManager {
                     #[cfg(not(feature = "wasm"))]
                     return Err(wasm_not_compiled(&manifest.plugin.id));
                 }
-                crate::manifest::BackendKind::Sidecar
-                | crate::manifest::BackendKind::Script => return Ok(PluginKind::Sidecar),
+                crate::manifest::BackendKind::Sidecar | crate::manifest::BackendKind::Script => {
+                    return Ok(PluginKind::Sidecar);
+                }
             }
         }
         if manifest.capabilities.wasm.is_some() {
@@ -393,7 +397,10 @@ impl PluginManager {
     pub async fn activate_plugin(&self, id: &str) -> Result<(), CoreError> {
         // 状态机：先置 Activating，结果回填 Active / ActivationFailed
         {
-            let mut map = self.loaded_plugins.write().map_err(|_| lock_err("loaded_plugins"))?;
+            let mut map = self
+                .loaded_plugins
+                .write()
+                .map_err(|_| lock_err("loaded_plugins"))?;
             if let Some(p) = map.get_mut(id) {
                 p.status = LoadStatus::Activating;
             }
@@ -414,7 +421,10 @@ impl PluginManager {
             PluginKind::Frontend => Ok(()),
         };
 
-        let mut map = self.loaded_plugins.write().map_err(|_| lock_err("loaded_plugins"))?;
+        let mut map = self
+            .loaded_plugins
+            .write()
+            .map_err(|_| lock_err("loaded_plugins"))?;
         match &result {
             Ok(()) => {
                 if let Some(p) = map.get_mut(id) {
@@ -503,8 +513,12 @@ impl PluginManager {
             .cloned()
             .ok_or_else(|| not_found(id))?;
 
-        register_sidecar_drivers(Arc::clone(&self.sidecar), &loaded.manifest, &loaded.install_path)
-            .await?;
+        register_sidecar_drivers(
+            Arc::clone(&self.sidecar),
+            &loaded.manifest,
+            &loaded.install_path,
+        )
+        .await?;
         Ok(())
     }
 
@@ -551,7 +565,10 @@ impl PluginManager {
             PluginKind::Frontend => {}
         }
 
-        let mut map = self.loaded_plugins.write().map_err(|_| lock_err("loaded_plugins"))?;
+        let mut map = self
+            .loaded_plugins
+            .write()
+            .map_err(|_| lock_err("loaded_plugins"))?;
         if let Some(p) = map.get_mut(id) {
             p.status = LoadStatus::Loaded;
         }
@@ -876,10 +893,12 @@ impl PluginManager {
             let wasm_plugins: Vec<_> = self
                 .wasm_manager
                 .list_plugins()
-                .map_err(|e| CoreError::common(CommonError::Internal(format!(
-                    "Failed to list plugins: {}",
-                    e
-                ))))?
+                .map_err(|e| {
+                    CoreError::common(CommonError::Internal(format!(
+                        "Failed to list plugins: {}",
+                        e
+                    )))
+                })?
                 .into_iter()
                 .map(|(meta, state)| PluginInfo {
                     id: meta.id.clone(),
@@ -894,8 +913,14 @@ impl PluginManager {
         }
 
         // sidecar / frontend：形态索引里有、但不在 wasm 运行时里的
-        let index = self.plugin_index.read().map_err(|_| lock_err("plugin_index"))?;
-        let loaded = self.loaded_plugins.read().map_err(|_| lock_err("loaded_plugins"))?;
+        let index = self
+            .plugin_index
+            .read()
+            .map_err(|_| lock_err("plugin_index"))?;
+        let loaded = self
+            .loaded_plugins
+            .read()
+            .map_err(|_| lock_err("loaded_plugins"))?;
         for (id, kind) in index.iter() {
             #[cfg(feature = "wasm")]
             if matches!(kind, PluginKind::Wasm) {
@@ -985,13 +1010,11 @@ pub fn get_plugin_manager() -> Option<&'static Arc<PluginManager>> {
 /// runtime（宿主退出即停），无需句柄。
 pub async fn init_plugin_manager(install_dir: PathBuf) -> Result<(), CoreError> {
     // 让 UI 事件回调能跨线程 block_on 管理操作（enable/disable/uninstall 依赖 tokio）
-    set_runtime_handle(
-        tokio::runtime::Handle::try_current().map_err(|_| {
-            CoreError::common(shared::error::CommonError::General(
-                "插件管理器初始化必须在 tokio runtime 上下文内".to_string(),
-            ))
-        })?,
-    );
+    set_runtime_handle(tokio::runtime::Handle::try_current().map_err(|_| {
+        CoreError::common(shared::error::CommonError::General(
+            "插件管理器初始化必须在 tokio runtime 上下文内".to_string(),
+        ))
+    })?);
 
     let manager = Arc::new(PluginManager::new(install_dir));
     manager.init().await?;
@@ -1002,11 +1025,8 @@ pub async fn init_plugin_manager(install_dir: PathBuf) -> Result<(), CoreError> 
         ))
     })?;
 
-    crate::sidecar::runtime::PluginRuntimeLoop::new(
-        manager,
-        crate::sidecar::runtime::RUNTIME_TICK,
-    )
-    .spawn(); // 句柄 drop 即 detach（任务生命周期随 tokio runtime，宿主退出即停）
+    crate::sidecar::runtime::PluginRuntimeLoop::new(manager, crate::sidecar::runtime::RUNTIME_TICK)
+        .spawn(); // 句柄 drop 即 detach（任务生命周期随 tokio runtime，宿主退出即停）
 
     Ok(())
 }

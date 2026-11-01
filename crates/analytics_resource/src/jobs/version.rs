@@ -13,7 +13,7 @@ use crate::dialogs::version_diff::VersionDiffSeed;
 use crate::present::build_version_rows;
 use crate::{AnalyticsResource, ArchiveService, KeepVersions};
 
-use super::{free_dest, jobs, open_service, Job, OpOutcome};
+use super::{Job, OpOutcome, free_dest, jobs, open_service};
 
 /// diff 对比的单侧文本大小上限（字节）：超过就不给对比，避免取数线程白算一个大文件。
 const DIFF_MAX_TEXT_BYTES: usize = 512 * 1024;
@@ -126,10 +126,7 @@ pub(crate) async fn load_version_diff(job: &VersionDiffJob) -> Result<VersionDif
     let patch = TextDiff::from_lines(&old_text, &new_text)
         .unified_diff()
         .context_radius(3)
-        .header(
-            &format!("a/{name}@{old_v}"),
-            &format!("b/{name}@{new_v}"),
-        )
+        .header(&format!("a/{name}@{old_v}"), &format!("b/{name}@{new_v}"))
         .to_string();
     Ok(VersionDiffRows {
         resource_id: job.resource_id.clone(),
@@ -308,7 +305,6 @@ pub fn enqueue_version_diff(project_root: PathBuf, resource_id: String, old_vers
         old_version,
     }));
 }
-
 
 /// 动作后重取版本历史行（worker 里 VersionAction 分支用；构造在域内，字段不外露）。
 pub(crate) async fn reload_versions_after(

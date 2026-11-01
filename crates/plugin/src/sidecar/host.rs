@@ -417,7 +417,10 @@ pub trait HostApiProvider {
         })
     }
 
-    fn resolve_secret(&mut self, params: &ResolveSecretParams) -> Result<ResolveSecretResult, HostApiError> {
+    fn resolve_secret(
+        &mut self,
+        params: &ResolveSecretParams,
+    ) -> Result<ResolveSecretResult, HostApiError> {
         let _ = params;
         Err(HostApiError::Unsupported {
             method: HOST_SECRET_RESOLVE.into(),
@@ -536,7 +539,7 @@ impl<P: HostApiProvider> HostApiHandler<P> {
             _ => {
                 return Err(HostApiError::MethodNotFound {
                     method: method.to_string(),
-                })
+                });
             }
         };
         Ok(out)
@@ -631,7 +634,10 @@ mod tests {
             );
         }
         assert_eq!(permission_for("host.notify"), Some("notifications.show"));
-        assert_eq!(permission_for("host.ssh.open_tunnel"), Some("host.ssh_tunnel"));
+        assert_eq!(
+            permission_for("host.ssh.open_tunnel"),
+            Some("host.ssh_tunnel")
+        );
         assert_eq!(permission_for("driver.describe"), None);
     }
 
@@ -710,7 +716,10 @@ mod tests {
     fn handler_dispatch_calls_provider_with_permission() {
         let mut h = HostApiHandler::new(
             MockProvider::new(),
-            ["notifications.show".to_string(), "host.ssh_tunnel".to_string()],
+            [
+                "notifications.show".to_string(),
+                "host.ssh_tunnel".to_string(),
+            ],
         );
         let out = h
             .handle(
@@ -749,32 +758,30 @@ mod tests {
     fn handler_rejects_unknown_method() {
         let mut h = HostApiHandler::new(MockProvider::new(), Vec::<String>::new());
         let err = h.handle("host.frobnicate", json!({})).unwrap_err();
-        assert!(matches!(err, HostApiError::MethodNotFound { .. }), "{err:?}");
+        assert!(
+            matches!(err, HostApiError::MethodNotFound { .. }),
+            "{err:?}"
+        );
 
         // 正向协议的方法不属于 host 面，同样拒绝
         let err = h.handle("driver.describe", json!({})).unwrap_err();
-        assert!(matches!(err, HostApiError::MethodNotFound { .. }), "{err:?}");
+        assert!(
+            matches!(err, HostApiError::MethodNotFound { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
     fn handler_rejects_bad_params() {
-        let mut h = HostApiHandler::new(
-            MockProvider::new(),
-            ["notifications.show".to_string()],
-        );
-        let err = h
-            .handle(HOST_NOTIFY, json!({"level": "info"}))
-            .unwrap_err();
+        let mut h = HostApiHandler::new(MockProvider::new(), ["notifications.show".to_string()]);
+        let err = h.handle(HOST_NOTIFY, json!({"level": "info"})).unwrap_err();
         assert!(matches!(err, HostApiError::InvalidParams { .. }), "{err:?}");
     }
 
     #[test]
     fn handler_defaults_to_unsupported_for_unimplemented_methods() {
         // MockProvider 没实现 request_credential → trait 默认返回 Unsupported
-        let mut h = HostApiHandler::new(
-            MockProvider::new(),
-            ["secrets.read".to_string()],
-        );
+        let mut h = HostApiHandler::new(MockProvider::new(), ["secrets.read".to_string()]);
         let err = h
             .handle(HOST_REQUEST_CREDENTIAL, json!({"kind": "password"}))
             .unwrap_err();
@@ -822,12 +829,7 @@ mod tests {
                 },
                 -32003,
             ),
-            (
-                HostApiError::Internal {
-                    detail: "i".into(),
-                },
-                -32603,
-            ),
+            (HostApiError::Internal { detail: "i".into() }, -32603),
         ];
         for (err, code) in cases {
             assert_eq!(err.to_rpc_error().0, code, "{err:?}");

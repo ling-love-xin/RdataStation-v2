@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::sidecar::host::{
-    HostApiProvider, HostApiError, LogLevel, LogParams, StorageGetParams, StorageGetResult,
+    HostApiError, HostApiProvider, LogLevel, LogParams, StorageGetParams, StorageGetResult,
     StorageSetParams,
 };
 
@@ -47,8 +47,10 @@ impl DefaultHostProvider {
 
 impl HostApiProvider for DefaultHostProvider {
     fn storage_get(&mut self, params: &StorageGetParams) -> Result<StorageGetResult, HostApiError> {
-        self.store
-            .get(&params.key, params.namespace.as_deref().unwrap_or(&self.plugin_id))
+        self.store.get(
+            &params.key,
+            params.namespace.as_deref().unwrap_or(&self.plugin_id),
+        )
     }
 
     fn storage_set(&mut self, params: &StorageSetParams) -> Result<(), HostApiError> {
@@ -66,11 +68,17 @@ impl HostApiProvider for DefaultHostProvider {
         // 运行时 module 只能走字段。
         let module = params.module.as_deref().unwrap_or("plugin");
         match params.level {
-            LogLevel::Trace => tracing::trace!(module, fields = %params.fields, "{}", params.message),
-            LogLevel::Debug => tracing::debug!(module, fields = %params.fields, "{}", params.message),
+            LogLevel::Trace => {
+                tracing::trace!(module, fields = %params.fields, "{}", params.message)
+            }
+            LogLevel::Debug => {
+                tracing::debug!(module, fields = %params.fields, "{}", params.message)
+            }
             LogLevel::Info => tracing::info!(module, fields = %params.fields, "{}", params.message),
             LogLevel::Warn => tracing::warn!(module, fields = %params.fields, "{}", params.message),
-            LogLevel::Error => tracing::error!(module, fields = %params.fields, "{}", params.message),
+            LogLevel::Error => {
+                tracing::error!(module, fields = %params.fields, "{}", params.message)
+            }
         }
         Ok(())
     }
@@ -212,7 +220,9 @@ mod tests {
         let store = store_in(&dir);
 
         let value = serde_json::json!({"a": [1, 2, 3], "ok": true, "s": "文本"});
-        store.set("conn.1", &value, "com.example.ext", None).unwrap();
+        store
+            .set("conn.1", &value, "com.example.ext", None)
+            .unwrap();
         let got = store.get("conn.1", "com.example.ext").unwrap();
         assert_eq!(got.value, Some(value));
 
@@ -247,9 +257,18 @@ mod tests {
             .unwrap()
             .as_secs();
         // 未过期：now 在 expires_at 之前
-        assert_eq!(store.get_at("short", "ns", now).unwrap().value, Some(json!("v")));
+        assert_eq!(
+            store.get_at("short", "ns", now).unwrap().value,
+            Some(json!("v"))
+        );
         // 已过期：返回 None 且文件被清掉
-        assert!(store.get_at("short", "ns", now + 61).unwrap().value.is_none());
+        assert!(
+            store
+                .get_at("short", "ns", now + 61)
+                .unwrap()
+                .value
+                .is_none()
+        );
         assert!(!store.base.join("ns").join("short.json").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -317,14 +336,15 @@ mod tests {
             (LogLevel::Warn, "w"),
             (LogLevel::Error, "e"),
         ] {
-            assert!(p
-                .log(&LogParams {
+            assert!(
+                p.log(&LogParams {
                     level,
                     message: message.into(),
                     module: Some("m".into()),
                     fields: json!({"f": 1}),
                 })
-                .is_ok());
+                .is_ok()
+            );
         }
     }
 

@@ -26,7 +26,9 @@ use rds_analytics_resource::detail_view::{
 };
 use rds_analytics_resource::dnd::GroupDrop;
 use rds_analytics_resource::filter::{SortField, SortOrder};
-use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus, ArchiveUndo, DeleteTarget, PayloadMode, RowScope, TagTarget};
+use rds_analytics_resource::model::{
+    ArchiveKind, ArchiveStatus, ArchiveUndo, DeleteTarget, PayloadMode, RowScope, TagTarget,
+};
 use rds_analytics_resource::preview::Preview;
 use rds_analytics_resource::resource_view::{
     ArchiveCounts, ArchiveRow, GroupOption, HeaderMenuAction, ResourcesHost, ResourcesPanel,
@@ -157,20 +159,28 @@ impl ResourcesHost for RecordingHost {
     fn request_refresh(&self, _window: &mut Window, _cx: &mut App) {
         self.calls.borrow_mut().push("refresh".to_string());
     }
-    fn request_promote_to_global(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
+    fn request_promote_to_global(
+        &self,
+        detail: &ArchiveDetail,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) {
         self.calls
             .borrow_mut()
             .push(format!("promote:{}", detail.id));
     }
     fn request_distribute_from_global(&self, name: &str, _window: &mut Window, _cx: &mut App) {
-        self.calls
-            .borrow_mut()
-            .push(format!("distribute:{name}"));
+        self.calls.borrow_mut().push(format!("distribute:{name}"));
     }
     fn is_reference_stale(&self, _resource_id: &str) -> bool {
         false
     }
-    fn accept_reference_current(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
+    fn accept_reference_current(
+        &self,
+        detail: &ArchiveDetail,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) {
         self.calls
             .borrow_mut()
             .push(format!("accept-reference:{}", detail.id));

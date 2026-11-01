@@ -136,9 +136,7 @@ fn manager() -> Result<&'static GlobalDatabaseManager, String> {
 /// 与 `engine::persistence::GlobalDatabaseManager::acquire_sync` 同一口径。
 fn runtime() -> Result<&'static tokio::runtime::Handle, String> {
     if tokio::runtime::Handle::try_current().is_ok() {
-        return Err(
-            "已在 tokio 运行时上下文内调用同步项目服务：请改用异步 API".to_string()
-        );
+        return Err("已在 tokio 运行时上下文内调用同步项目服务：请改用异步 API".to_string());
     }
     static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
     // 手动「取-设-取」：`OnceLock::get_or_try_init` 仍是 unstable（once_cell_try）。
@@ -151,9 +149,7 @@ fn runtime() -> Result<&'static tokio::runtime::Handle, String> {
             .map_err(|e| format!("初始化项目服务运行时失败: {e}"))?;
         let _ = RUNTIME.set(built);
     }
-    let rt = RUNTIME
-        .get()
-        .expect("runtime 初始化后必然可读");
+    let rt = RUNTIME.get().expect("runtime 初始化后必然可读");
     Ok(rt.handle())
 }
 

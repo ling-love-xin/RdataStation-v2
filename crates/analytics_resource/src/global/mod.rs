@@ -1,5 +1,5 @@
 use super::*;
-use crate::resource::{map_resource_row, RESOURCE_COLUMNS};
+use crate::resource::{RESOURCE_COLUMNS, map_resource_row};
 use chrono::Utc;
 use rusqlite::OptionalExtension;
 use shared::error::{CommonError, CoreError, StorageError};
@@ -170,14 +170,16 @@ async fn project_name_taken(
     // 2. DuckDB 表存在（分析表档；标识符规范化为小写，与 `table_exists` 同口径）。
     let mut guard = project.0.lock().await;
     let Some(duck) = guard.as_mut() else {
-        return Err(InstanceOpError::Core(CoreError::common(CommonError::General(
-            "项目 DuckDB 连接已关闭".to_string(),
-        ))));
+        return Err(InstanceOpError::Core(CoreError::common(
+            CommonError::General("项目 DuckDB 连接已关闭".to_string()),
+        )));
     };
     let table_exists = duck
         .prepare("SELECT count(*) FROM information_schema.tables WHERE table_name = ?1")
         .map_err(|e| duckdb_err("prepare_project_table_exists", &e.to_string()))?
-        .query_row(duckdb::params![name.to_lowercase()], |row| row.get::<_, i64>(0))
+        .query_row(duckdb::params![name.to_lowercase()], |row| {
+            row.get::<_, i64>(0)
+        })
         .map_err(|e| duckdb_err("query_project_table_exists", &e.to_string()))?
         > 0;
     drop(guard);
@@ -195,7 +197,8 @@ async fn project_name_taken(
 }
 
 /// 项目 DuckDB 表行数 / 列数统计（分发建表后）。
-async fn project_table_stats(    project: &ProjectDuckConn,
+async fn project_table_stats(
+    project: &ProjectDuckConn,
     name: &str,
 ) -> Result<(Option<i32>, Option<i32>), CoreError> {
     let mut guard = project.0.lock().await;
@@ -410,7 +413,10 @@ impl GlobalInstanceStore {
     ///
     /// 覆盖语义（§13.2 冲突询问「覆盖」分支）：旧表删除、登记行软删，新升级
     /// 成为新版本（版本号接续旧链）。
-    pub async fn promote_overwrite(&self, req: &PromoteRequest) -> Result<PromoteOutcome, InstanceOpError> {
+    pub async fn promote_overwrite(
+        &self,
+        req: &PromoteRequest,
+    ) -> Result<PromoteOutcome, InstanceOpError> {
         tracing::info!(name = %req.name, "【探针】升级到全局 promote_overwrite 进入（覆盖）");
         self.drop_global_table(&req.name).await?;
         self.with_sqlite(|conn| {
@@ -451,48 +457,53 @@ impl GlobalInstanceStore {
         let target_name = target.unwrap_or(name).to_string();
 
         // ---- 读全局登记行（最新版本）----
-        let global_row = self
-            .with_sqlite(|conn| {
-                let row = conn
-                    .query_row(
-                        r#"
+        let global_row = self.with_sqlite(|conn| {
+            let row = conn
+                .query_row(
+                    r#"
                     SELECT id, version, kind, content_hash, file_rel_path, definition_sql,
                            row_count, column_count, file_size
                     FROM analytics_resources
                     WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL
                     ORDER BY version DESC LIMIT 1
                     "#,
-                        rusqlite::params![name],
-                        |row| {
-                            Ok((
-                                row.get::<_, String>(0)?,
-                                row.get::<_, i32>(1)?,
-                                row.get::<_, String>(2)?,
-                                row.get::<_, Option<String>>(3)?,
-                                row.get::<_, Option<String>>(4)?,
-                                row.get::<_, Option<String>>(5)?,
-                                row.get::<_, Option<i32>>(6)?,
-                                row.get::<_, Option<i32>>(7)?,
-                                row.get::<_, Option<i64>>(8)?,
-                            ))
-                        },
-                    )
-                    .optional()
-                    .map_err(sqlite_err("read_global_row"))?;
-                Ok(row)
-            })?;
-        let (global_id, global_version, _kind, global_hash, rel_path, definition_sql,
-             _global_rows, _global_cols, global_size) =
-            global_row.ok_or_else(|| InstanceOpError::NotFound {
-                name: name.to_string(),
-            })?;
+                    rusqlite::params![name],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i32>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                            row.get::<_, Option<String>>(4)?,
+                            row.get::<_, Option<String>>(5)?,
+                            row.get::<_, Option<i32>>(6)?,
+                            row.get::<_, Option<i32>>(7)?,
+                            row.get::<_, Option<i64>>(8)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(sqlite_err("read_global_row"))?;
+            Ok(row)
+        })?;
+        let (
+            global_id,
+            global_version,
+            _kind,
+            global_hash,
+            rel_path,
+            definition_sql,
+            _global_rows,
+            _global_cols,
+            global_size,
+        ) = global_row.ok_or_else(|| InstanceOpError::NotFound {
+            name: name.to_string(),
+        })?;
 
         // ---- 项目侧重名双保险探测（SQLite 未删登记 + DuckDB 表 + resources 文件）----
         // 与升级侧 `promote` 同口径：登记层与本体层任一命中都按冲突走询问，不静默覆盖。
         if project_name_taken(project, project_root, &target_name, rel_path.as_deref()).await? {
-            return Err(InstanceOpError::Conflict {
-                name: target_name,
-            });
+            return Err(InstanceOpError::Conflict { name: target_name });
         }
 
         // ---- 形态判定 + 落项目 ----
@@ -640,7 +651,8 @@ impl GlobalInstanceStore {
                 )
                 .map_err(sqlite_err("soft_delete_project"))?;
         }
-        self.distribute(project, project_root, name, Some(&target_name)).await
+        self.distribute(project, project_root, name, Some(&target_name))
+            .await
     }
 
     // ==================== 分发内部 ====================
@@ -649,7 +661,10 @@ impl GlobalInstanceStore {
     async fn read_script_content(&self, name: &str) -> Result<String, CoreError> {
         self.with_duckdb(|conn| {
             let mut stmt = conn
-                .prepare(&format!("SELECT \"content\" FROM {} LIMIT 1;", quote_ident(name)))
+                .prepare(&format!(
+                    "SELECT \"content\" FROM {} LIMIT 1;",
+                    quote_ident(name)
+                ))
                 .map_err(|e| duckdb_err("prepare_read_script", &e.to_string()))?;
             stmt.query_row([], |row| row.get::<_, String>(0))
                 .map_err(|e| duckdb_err("read_script_content", &e.to_string()))
@@ -820,7 +835,10 @@ impl GlobalInstanceStore {
     // ==================== 内部 ====================
 
     /// 全局 SQLite 操作（懒加载打开全局库；同步段完成即放锁）。
-    fn with_sqlite<T>(&self, f: impl FnOnce(&rusqlite::Connection) -> Result<T, CoreError>) -> Result<T, CoreError> {
+    fn with_sqlite<T>(
+        &self,
+        f: impl FnOnce(&rusqlite::Connection) -> Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
         let mut guard = self.sqlite.lock().map_err(|_| {
             CoreError::storage(StorageError::Persistence {
                 store: "analytics_resources_global".to_string(),
@@ -842,7 +860,10 @@ impl GlobalInstanceStore {
     }
 
     /// 全局 DuckDB 操作（懒加载仅测试路径；生产连接由 `production()` 注入）。
-    async fn with_duckdb<T>(&self, f: impl FnOnce(&mut duckdb::Connection) -> Result<T, CoreError>) -> Result<T, CoreError> {
+    async fn with_duckdb<T>(
+        &self,
+        f: impl FnOnce(&mut duckdb::Connection) -> Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
         let mut guard = self.duckdb.lock().await;
         if guard.is_none() {
             let path = engine::migration::get_global_duckdb_path()?;
@@ -904,7 +925,10 @@ impl GlobalInstanceStore {
                 .query_map([], |_| Ok(()))
                 .map_err(|e| duckdb_err("query_describe", &e.to_string()))?
                 .count();
-            Ok((Some(rows.clamp(0, i32::MAX as i64) as i32), Some(columns as i32)))
+            Ok((
+                Some(rows.clamp(0, i32::MAX as i64) as i32),
+                Some(columns as i32),
+            ))
         })
         .await
     }
@@ -1013,7 +1037,9 @@ impl GlobalInstanceStore {
 ///
 /// 展示层（资源列表「全局实例」维度）与宿主「升级到全局」后的确认都用它。
 /// 列序与 [`RESOURCE_COLUMNS`] 严格一致，复用 [`map_resource_row`]。
-pub fn list_global_resources(store: &GlobalInstanceStore) -> Result<Vec<AnalyticsResource>, CoreError> {
+pub fn list_global_resources(
+    store: &GlobalInstanceStore,
+) -> Result<Vec<AnalyticsResource>, CoreError> {
     store.with_sqlite(|conn| {
         let mut stmt = conn
             .prepare(&format!(
@@ -1026,7 +1052,8 @@ pub fn list_global_resources(store: &GlobalInstanceStore) -> Result<Vec<Analytic
         let rows = stmt
             .query_map([], |row| map_resource_row(row))
             .map_err(sqlite_err("list_global_rows"))?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(sqlite_err("list_global_collect"))
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_err("list_global_collect"))
     })
 }
 
@@ -1048,7 +1075,10 @@ pub fn to_global_rows(
                 if let Some(size) = resource.file_size {
                     parts.push(crate::present::format_size(Some(size)));
                 }
-                parts.push(crate::present::format_relative_time(now, resource.updated_at));
+                parts.push(crate::present::format_relative_time(
+                    now,
+                    resource.updated_at,
+                ));
                 parts.join(" · ")
             };
             crate::resource_view::ArchiveRow {
@@ -1112,9 +1142,8 @@ fn duckdb_err(op: &str, reason: &str) -> CoreError {
 }
 
 /// 全局迁移 026（与 engine 迁移同源，测试库建表用；生产由 engine 迁移执行）。
-pub(crate) const GLOBAL_MIGRATION_026_SQL: &str = include_str!(
-    "../../../store/migrations/global/026_analytics_resource_global.sql"
-);
+pub(crate) const GLOBAL_MIGRATION_026_SQL: &str =
+    include_str!("../../../store/migrations/global/026_analytics_resource_global.sql");
 
 #[cfg(test)]
 mod tests;

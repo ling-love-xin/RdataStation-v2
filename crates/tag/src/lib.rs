@@ -7,5 +7,5 @@
 pub mod model;
 pub mod store;
 
-pub use model::{Tag, SCOPE_GLOBAL, SCOPE_PROJECT, normalize_name, parse_key_value};
+pub use model::{SCOPE_GLOBAL, SCOPE_PROJECT, Tag, normalize_name, parse_key_value};
 pub use store::{TagDefinitions, TagStore, TagTable};

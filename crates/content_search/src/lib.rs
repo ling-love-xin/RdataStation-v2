@@ -374,7 +374,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rds-search-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sub")).unwrap();
-        std::fs::write(dir.join("a.log"), "hello world\nCompiling foo\nnothing here\n").unwrap();
+        std::fs::write(
+            dir.join("a.log"),
+            "hello world\nCompiling foo\nnothing here\n",
+        )
+        .unwrap();
         std::fs::write(dir.join("sub/b.txt"), "Compiling bar\n").unwrap();
         std::fs::write(dir.join(".hidden"), "Compiling hidden\n").unwrap();
 
@@ -442,7 +446,11 @@ mod tests {
             .unwrap();
         assert_eq!(res.matches.len(), 1, "全字匹配只命中整词");
         assert_eq!(res.matches[0].line_content, "id = 1");
-        assert_eq!(res.matches[0].match_spans, vec![(0, 2)], "span 仍是字节区间");
+        assert_eq!(
+            res.matches[0].match_spans,
+            vec![(0, 2)],
+            "span 仍是字节区间"
+        );
 
         // 非全字：三行都命中。
         let res = search_directory(&dir, "id", false, false, false, 0, None, None)
@@ -469,9 +477,18 @@ mod tests {
         std::fs::write(dir.join("sub/c.log"), "Compiling c\n").unwrap();
 
         // include=*.log：只搜 log，不搜 sql
-        let res = search_directory(&dir, "Compiling", false, false, false, 0, Some("*.log"), None)
-            .await
-            .unwrap();
+        let res = search_directory(
+            &dir,
+            "Compiling",
+            false,
+            false,
+            false,
+            0,
+            Some("*.log"),
+            None,
+        )
+        .await
+        .unwrap();
         let files: Vec<String> = res
             .matches
             .iter()
@@ -481,9 +498,18 @@ mod tests {
         assert!(files.iter().all(|f| f.ends_with(".log")));
 
         // exclude=*.sql：排除 sql（与 include 独立生效）
-        let res = search_directory(&dir, "Compiling", false, false, false, 0, None, Some("*.sql"))
-            .await
-            .unwrap();
+        let res = search_directory(
+            &dir,
+            "Compiling",
+            false,
+            false,
+            false,
+            0,
+            None,
+            Some("*.sql"),
+        )
+        .await
+        .unwrap();
         let files: Vec<String> = res
             .matches
             .iter()
@@ -493,9 +519,18 @@ mod tests {
 
         // include=test-*：前缀匹配
         std::fs::write(dir.join("test-run2.log"), "Compiling t\n").unwrap();
-        let res = search_directory(&dir, "Compiling", false, false, false, 0, Some("test-*"), None)
-            .await
-            .unwrap();
+        let res = search_directory(
+            &dir,
+            "Compiling",
+            false,
+            false,
+            false,
+            0,
+            Some("test-*"),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(res.matches.len(), 1);
         assert_eq!(res.matches[0].file, "test-run2.log");
 

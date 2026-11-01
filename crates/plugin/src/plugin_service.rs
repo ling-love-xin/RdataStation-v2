@@ -4,14 +4,14 @@
 //! 与 DriverService 风格一致，通过 GlobalDatabaseManager 处理全局存储，
 //! 通过 ProjectDatabaseManager 处理项目级存储。
 
-use shared::error::{CoreError, PluginError};
+use crate::events::*;
+use crate::manager::get_plugin_manager;
 use engine::persistence::global_db::GlobalDatabaseManager;
 use engine::persistence::plugin_store::{
     Plugin, PluginGlobalConfig, ProjectPluginConfig, ProjectUsedPlugin,
 };
 use engine::persistence::project_connection_store::ProjectConnectionStore;
-use crate::events::*;
-use crate::manager::get_plugin_manager;
+use shared::error::{CoreError, PluginError};
 use specta::Type;
 
 /// 安装插件输入参数
