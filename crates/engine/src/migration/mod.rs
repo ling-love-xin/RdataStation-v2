@@ -12,8 +12,8 @@ pub mod global_init;
 // 全局数据库路径助手 / 管理器注册表：自 global_init 下沉 rds_store::persistence，
 // 此处重导出保持 `engine::migration::get_*` 路径不变。
 pub use rds_store::persistence::{
-    get_global_data_dir, get_global_db_path, get_global_duckdb_path, get_global_metadata_dir,
-    get_global_db_manager, get_secrets_dir, get_system_dir, install_global_db_manager,
+    get_global_data_dir, get_global_db_manager, get_global_db_path, get_global_duckdb_path,
+    get_global_metadata_dir, get_secrets_dir, get_system_dir, install_global_db_manager,
 };
 
 pub use global_init::{initialize_global_system, shutdown_global_system};

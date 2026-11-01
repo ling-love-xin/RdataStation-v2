@@ -367,10 +367,7 @@ mod tests {
         let entries = registry().entries_for(Some(ObjectKind::View), true, &OpSet::EMPTY);
         let got = ids(&entries);
         assert!(!got.contains(&NavActionId::GenDml), "视图不生成 DML 模板");
-        for id in [
-            NavActionId::ViewData,
-            NavActionId::MockData,
-        ] {
+        for id in [NavActionId::ViewData, NavActionId::MockData] {
             assert!(got.contains(&id), "视图应出现 {id:?}");
         }
     }
@@ -387,9 +384,16 @@ mod tests {
         assert!(view.contains(&NavActionId::DeleteObject), "视图应出现删除");
         assert!(!view.contains(&NavActionId::EmptyTable), "视图不出现清空");
         // 序列：仅删除，无清空。
-        let sequence = ids(&registry().entries_for(Some(ObjectKind::Sequence), true, &OpSet::EMPTY));
-        assert!(sequence.contains(&NavActionId::DeleteObject), "序列应出现删除");
-        assert!(!sequence.contains(&NavActionId::EmptyTable), "序列不出现清空");
+        let sequence =
+            ids(&registry().entries_for(Some(ObjectKind::Sequence), true, &OpSet::EMPTY));
+        assert!(
+            sequence.contains(&NavActionId::DeleteObject),
+            "序列应出现删除"
+        );
+        assert!(
+            !sequence.contains(&NavActionId::EmptyTable),
+            "序列不出现清空"
+        );
         // 例程 / 触发器 / 模式 / 列：两条都不出现。
         for kind in [
             ObjectKind::Routine,
@@ -398,8 +402,14 @@ mod tests {
             ObjectKind::Column,
         ] {
             let got = ids(&registry().entries_for(Some(kind), true, &OpSet::EMPTY));
-            assert!(!got.contains(&NavActionId::DeleteObject), "{kind:?} 不应出现删除");
-            assert!(!got.contains(&NavActionId::EmptyTable), "{kind:?} 不应出现清空");
+            assert!(
+                !got.contains(&NavActionId::DeleteObject),
+                "{kind:?} 不应出现删除"
+            );
+            assert!(
+                !got.contains(&NavActionId::EmptyTable),
+                "{kind:?} 不应出现清空"
+            );
         }
     }
 
@@ -428,10 +438,17 @@ mod tests {
 
     #[test]
     fn routine_keeps_copy_qualified_only_on_source() {
-        for kind in [ObjectKind::Routine, ObjectKind::Sequence, ObjectKind::Trigger] {
+        for kind in [
+            ObjectKind::Routine,
+            ObjectKind::Sequence,
+            ObjectKind::Trigger,
+        ] {
             let entries = registry().entries_for(Some(kind), true, &OpSet::EMPTY);
             let got = ids(&entries);
-            assert!(got.contains(&NavActionId::CopyQualified), "{kind:?} 可复制限定名");
+            assert!(
+                got.contains(&NavActionId::CopyQualified),
+                "{kind:?} 可复制限定名"
+            );
             assert!(got.contains(&NavActionId::CopyName));
             for id in [
                 NavActionId::ViewData,
@@ -478,9 +495,17 @@ mod tests {
                 | NavActionId::InsightPanel
                 | NavActionId::CopyName
                 | NavActionId::CopyQualified => {
-                    assert!(entry.enabled, "本地动作断连应可用 {:?}", entry.descriptor.id);
+                    assert!(
+                        entry.enabled,
+                        "本地动作断连应可用 {:?}",
+                        entry.descriptor.id
+                    );
                 }
-                _ => assert!(!entry.enabled, "回源动作断连应置灰 {:?}", entry.descriptor.id),
+                _ => assert!(
+                    !entry.enabled,
+                    "回源动作断连应置灰 {:?}",
+                    entry.descriptor.id
+                ),
             }
         }
     }
@@ -490,8 +515,10 @@ mod tests {
         // B6：删除 / 清空属回源破坏性动作，断连一律置灰（不依赖 `_` 兜底，显式钉死）。
         let table_ops = family_ops("postgresql", Some(ObjectKind::Table));
         let entries = registry().entries_for(Some(ObjectKind::Table), false, &table_ops);
-        let by_id: std::collections::HashMap<_, _> =
-            entries.iter().map(|e| (e.descriptor.id, e.enabled)).collect();
+        let by_id: std::collections::HashMap<_, _> = entries
+            .iter()
+            .map(|e| (e.descriptor.id, e.enabled))
+            .collect();
         assert!(!by_id[&NavActionId::DeleteObject], "断连删除应置灰");
         assert!(!by_id[&NavActionId::EmptyTable], "断连清空应置灰");
     }
@@ -524,7 +551,11 @@ mod tests {
         let ops = family_ops("postgresql", Some(ObjectKind::Table));
         let entries = registry().entries_for(Some(ObjectKind::Table), true, &ops);
         for entry in &entries {
-            assert!(entry.enabled, "连接 + 能力集覆盖应可用 {:?}", entry.descriptor.id);
+            assert!(
+                entry.enabled,
+                "连接 + 能力集覆盖应可用 {:?}",
+                entry.descriptor.id
+            );
         }
     }
 
@@ -557,8 +588,10 @@ mod tests {
         // （视图条目本身不含 GenDml，由 `view_does_not_apply_dml_template` 钉类型白名单。）
         let ops = family_ops("postgresql", Some(ObjectKind::View));
         let entries = registry().entries_for(Some(ObjectKind::Table), true, &ops);
-        let by_id: std::collections::HashMap<_, _> =
-            entries.iter().map(|e| (e.descriptor.id, e.enabled)).collect();
+        let by_id: std::collections::HashMap<_, _> = entries
+            .iter()
+            .map(|e| (e.descriptor.id, e.enabled))
+            .collect();
         assert!(by_id[&NavActionId::ViewData]);
         assert!(!by_id[&NavActionId::GenDml]);
     }
@@ -569,7 +602,12 @@ mod tests {
         let groups: Vec<ActionGroup> = entries.iter().map(|e| e.descriptor.group).collect();
         // 分组非递减：Primary → Generate → Object → Manage。
         for pair in groups.windows(2) {
-            assert!(pair[0] <= pair[1], "分组顺序错乱：{:?} → {:?}", pair[0], pair[1]);
+            assert!(
+                pair[0] <= pair[1],
+                "分组顺序错乱：{:?} → {:?}",
+                pair[0],
+                pair[1]
+            );
         }
         // 组内 order 递增。
         for group in [
@@ -592,7 +630,10 @@ mod tests {
     #[test]
     fn only_properties_carries_shortcut_metadata() {
         let all = registry().all();
-        let props = all.iter().find(|d| d.id == NavActionId::ShowProperties).unwrap();
+        let props = all
+            .iter()
+            .find(|d| d.id == NavActionId::ShowProperties)
+            .unwrap();
         assert_eq!(props.shortcut, Some("NavOpenProperties"));
         for d in all.iter().filter(|d| d.id != NavActionId::ShowProperties) {
             assert!(d.shortcut.is_none(), "{:?} 不应登记快捷键", d.id);

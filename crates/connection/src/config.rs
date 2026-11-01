@@ -433,7 +433,10 @@ mod tests {
             ConnectionConfig::socks_proxy("h", 1, proxy_config()).method_name(),
             "socks_proxy"
         );
-        assert_eq!(ConnectionConfig::chain("h", 1, vec![]).method_name(), "chain");
+        assert_eq!(
+            ConnectionConfig::chain("h", 1, vec![]).method_name(),
+            "chain"
+        );
     }
 
     #[test]
@@ -473,7 +476,10 @@ mod tests {
         assert_eq!(ChainHop::Ssh(ssh_config()).hop_name(), "ssh");
         assert_eq!(ChainHop::Ssl(SslConfig::default()).hop_name(), "ssl");
         assert_eq!(ChainHop::HttpProxy(proxy_config()).hop_name(), "http_proxy");
-        assert_eq!(ChainHop::SocksProxy(proxy_config()).hop_name(), "socks_proxy");
+        assert_eq!(
+            ChainHop::SocksProxy(proxy_config()).hop_name(),
+            "socks_proxy"
+        );
     }
 
     #[test]
@@ -541,7 +547,10 @@ mod tests {
         let cfg = ConnectionConfig::chain(
             "h",
             5432,
-            vec![ChainHop::Ssh(ssh_config()), ChainHop::HttpProxy(proxy_config())],
+            vec![
+                ChainHop::Ssh(ssh_config()),
+                ChainHop::HttpProxy(proxy_config()),
+            ],
         );
         let json = serde_json::to_string(&cfg).unwrap();
         let back: ConnectionConfig = serde_json::from_str(&json).unwrap();

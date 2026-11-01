@@ -259,28 +259,61 @@ mod tests {
     fn registry_resolves_provider_by_db_type_and_kind() {
         struct PgConn;
         impl PropertyProvider for PgConn {
-            fn db_type(&self) -> &'static str { "postgresql" }
-            fn kind(&self) -> PropertyKind { PropertyKind::Connection }
-            fn property_defs(&self, _i: &ProviderInput) -> Vec<PropertyRow> { vec![] }
+            fn db_type(&self) -> &'static str {
+                "postgresql"
+            }
+            fn kind(&self) -> PropertyKind {
+                PropertyKind::Connection
+            }
+            fn property_defs(&self, _i: &ProviderInput) -> Vec<PropertyRow> {
+                vec![]
+            }
             fn overview(&self, _i: &ProviderInput) -> ObjectOverview {
                 ObjectOverview {
-                    title: String::new(), subtitle: String::new(),
-                    status: OverviewStatus::Connected, status_text: String::new(),
-                    cards: vec![], kv: vec![], note: String::new(), meta: vec![],
+                    title: String::new(),
+                    subtitle: String::new(),
+                    status: OverviewStatus::Connected,
+                    status_text: String::new(),
+                    cards: vec![],
+                    kv: vec![],
+                    note: String::new(),
+                    meta: vec![],
                 }
             }
-            fn categories(&self, _i: &ProviderInput) -> Vec<PropertySection> { vec![] }
-            fn apply_edit_sql(&self, _i: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
+            fn categories(&self, _i: &ProviderInput) -> Vec<PropertySection> {
+                vec![]
+            }
+            fn apply_edit_sql(
+                &self,
+                _i: &ProviderInput,
+                _id: &str,
+                _v: &str,
+            ) -> Result<String, String> {
                 Err("unsupported".to_string())
             }
         }
 
         let mut reg = ProviderRegistry::default();
         reg.register(Box::new(PgConn));
-        assert!(reg.provider("postgresql", PropertyKind::Connection).is_some());
-        assert!(reg.provider("postgres", PropertyKind::Connection).is_some(), "族别名 postgres 应命中");
-        assert!(reg.provider("PG", PropertyKind::Connection).is_some(), "大小写不敏感");
-        assert!(reg.provider("postgresql", PropertyKind::Table).is_none(), "类型不匹配");
-        assert!(reg.provider("sqlite", PropertyKind::Connection).is_none(), "数据库类型不匹配");
+        assert!(
+            reg.provider("postgresql", PropertyKind::Connection)
+                .is_some()
+        );
+        assert!(
+            reg.provider("postgres", PropertyKind::Connection).is_some(),
+            "族别名 postgres 应命中"
+        );
+        assert!(
+            reg.provider("PG", PropertyKind::Connection).is_some(),
+            "大小写不敏感"
+        );
+        assert!(
+            reg.provider("postgresql", PropertyKind::Table).is_none(),
+            "类型不匹配"
+        );
+        assert!(
+            reg.provider("sqlite", PropertyKind::Connection).is_none(),
+            "数据库类型不匹配"
+        );
     }
 }

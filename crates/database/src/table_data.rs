@@ -59,7 +59,11 @@ pub async fn load_table_data(
     req: &TableDataRequest,
 ) -> Result<TableDataPage, CoreError> {
     let dialect = crate::nav::dialect_of(driver);
-    let limit = if req.limit == 0 { DEFAULT_PAGE_LIMIT } else { req.limit };
+    let limit = if req.limit == 0 {
+        DEFAULT_PAGE_LIMIT
+    } else {
+        req.limit
+    };
 
     // 1) 列定义 + 主键（排序补齐用）。列是数据网格的骨架，取不到直接报错（不给空表）。
     let columns = metadata

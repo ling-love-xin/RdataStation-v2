@@ -32,8 +32,8 @@
 //!   cargo test -p rds-engine --test mysql_rsa_auth_probe -- --nocapture --test-threads=1
 //! ```
 
-use rds_engine::driver::native::mysql::MySqlDatabase;
 use rds_engine::driver::Database;
+use rds_engine::driver::native::mysql::MySqlDatabase;
 
 /// 取环境变量里的端点；未设则跳过。
 fn endpoint() -> Option<String> {

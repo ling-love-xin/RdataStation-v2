@@ -71,7 +71,9 @@ pub struct RowEstimateResult {
 /// `Float` / `Text` 三型兼容（`reltuples` / `TABLE_ROWS` / `DATA_LENGTH` /
 /// `pg_total_relation_size` 口径各异，联邦回传也可能给文本）；`NULL` / 非数值解析失败
 /// → `None`（徽标安静消失，不显 0）。行估计与表大小共用本解析口径。
-pub(super) fn parse_name_value_pairs(rows: Vec<Vec<shared::models::Value>>) -> Vec<(String, Option<u64>)> {
+pub(super) fn parse_name_value_pairs(
+    rows: Vec<Vec<shared::models::Value>>,
+) -> Vec<(String, Option<u64>)> {
     rows.into_iter()
         .filter_map(|row| {
             let name = match row.first() {

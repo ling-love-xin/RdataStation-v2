@@ -64,7 +64,7 @@ const KERNEL_CANDIDATES: &[(&str, &str, KernelLanguage, &[&str], &'static str)] 
         "python-venv",
         "Python (venv)",
         KernelLanguage::Python,
-        &[] /* env 指定，动态填 */,
+        &[], /* env 指定，动态填 */
         "venv 解释器不可用",
     ),
     (
@@ -105,7 +105,8 @@ fn command_available(command: &str) -> bool {
 ///
 /// 输出是 `True` / `False` 单行；命令不可达 / 输出异常一律视为未装（如实降级）。
 fn has_ipykernel(command: &str) -> bool {
-    let probe = r#"import importlib.util,sys; print(importlib.util.find_spec("ipykernel") is not None)"#;
+    let probe =
+        r#"import importlib.util,sys; print(importlib.util.find_spec("ipykernel") is not None)"#;
     std::process::Command::new(command)
         .arg("-c")
         .arg(probe)

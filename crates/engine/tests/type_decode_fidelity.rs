@@ -117,14 +117,26 @@ fn assert_pg_extras(batch: &RecordBatch) {
         Some("1 day 02:03:04"),
         "interval 应按 PG 的写法出文本"
     );
-    assert_eq!(cell(batch, "arr").as_deref(), Some("{1,2,3}"), "int4[] 数组字面量");
-    assert_eq!(cell(batch, "tarr").as_deref(), Some("{a,b}"), "text[] 数组字面量");
+    assert_eq!(
+        cell(batch, "arr").as_deref(),
+        Some("{1,2,3}"),
+        "int4[] 数组字面量"
+    );
+    assert_eq!(
+        cell(batch, "tarr").as_deref(),
+        Some("{a,b}"),
+        "text[] 数组字面量"
+    );
     assert_eq!(
         cell(batch, "ip").as_deref(),
         Some("192.168.3.138"),
         "inet 满位网段不打 /32（与 inet_out 一致）"
     );
-    assert_eq!(cell(batch, "pt").as_deref(), Some("(1.5,-2.25)"), "point 写法");
+    assert_eq!(
+        cell(batch, "pt").as_deref(),
+        Some("(1.5,-2.25)"),
+        "point 写法"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

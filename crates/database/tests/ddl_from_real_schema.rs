@@ -257,7 +257,9 @@ async fn composed_ddl_from_a_real_mysql_schema() {
 
     // MySQL 的连接串里库名是 `mysql`（系统库）—— 表名带 rds_ 前缀，跑完即删
     let _ = db.query(&format!("DROP TABLE IF EXISTS {table}")).await;
-    let _ = db.query(&format!("DROP TABLE IF EXISTS {table}_parent")).await;
+    let _ = db
+        .query(&format!("DROP TABLE IF EXISTS {table}_parent"))
+        .await;
     db.query(&format!(
         "CREATE TABLE {table}_parent (id INT PRIMARY KEY) ENGINE=InnoDB"
     ))
@@ -291,7 +293,8 @@ async fn composed_ddl_from_a_real_mysql_schema() {
         .expect("索引内省");
 
     assert_column_detail_refs(&cols, &format!("{table}_parent"));
-    let ddl = rds_database::sql_gen::create_table_ddl(&format!("mysql.{table}"), &cols, &cons, &idx);
+    let ddl =
+        rds_database::sql_gen::create_table_ddl(&format!("mysql.{table}"), &cols, &cons, &idx);
     println!("\n----- 合成 DDL（MySQL）-----\n{ddl}\n--------------------\n");
 
     assert!(ddl.contains("PRIMARY KEY (id)"), "主键丢了：{ddl}");
@@ -299,13 +302,17 @@ async fn composed_ddl_from_a_real_mysql_schema() {
     assert!(ddl.contains("DEFAULT"), "默认值丢了：{ddl}");
     assert!(ddl.contains("UNIQUE (tag)"), "唯一约束丢了：{ddl}");
     assert!(
-        ddl.contains(&format!("FOREIGN KEY (parent_id) REFERENCES {table}_parent (id)")),
+        ddl.contains(&format!(
+            "FOREIGN KEY (parent_id) REFERENCES {table}_parent (id)"
+        )),
         "外键丢了：{ddl}"
     );
     assert!(ddl.contains("ON DELETE CASCADE"), "外键规则丢了：{ddl}");
 
     let _ = db.query(&format!("DROP TABLE IF EXISTS {table}")).await;
-    let _ = db.query(&format!("DROP TABLE IF EXISTS {table}_parent")).await;
+    let _ = db
+        .query(&format!("DROP TABLE IF EXISTS {table}_parent"))
+        .await;
 }
 
 /// DuckDB 那一份：约束在 `duckdb_constraints()` 里（不是 information_schema）。
@@ -321,10 +328,14 @@ async fn composed_ddl_from_a_real_duckdb_schema() {
     let db = manager.get_connection(&key).await.expect("取连接");
 
     let _ = db.query(&format!("DROP TABLE IF EXISTS {table}")).await;
-    let _ = db.query(&format!("DROP TABLE IF EXISTS {table}_parent")).await;
-    db.query(&format!("CREATE TABLE {table}_parent (id INTEGER PRIMARY KEY)"))
-        .await
-        .expect("建父表");
+    let _ = db
+        .query(&format!("DROP TABLE IF EXISTS {table}_parent"))
+        .await;
+    db.query(&format!(
+        "CREATE TABLE {table}_parent (id INTEGER PRIMARY KEY)"
+    ))
+    .await
+    .expect("建父表");
     db.query(&format!(
         "CREATE TABLE {table} (\
              id INTEGER PRIMARY KEY, \
@@ -358,7 +369,9 @@ async fn composed_ddl_from_a_real_duckdb_schema() {
     assert!(ddl.contains("DEFAULT"), "默认值丢了：{ddl}");
 
     let _ = db.query(&format!("DROP TABLE IF EXISTS {table}")).await;
-    let _ = db.query(&format!("DROP TABLE IF EXISTS {table}_parent")).await;
+    let _ = db
+        .query(&format!("DROP TABLE IF EXISTS {table}_parent"))
+        .await;
 }
 
 /// Official PostgreSQL：与 sqlx 那份**共用同一份 SQL**，这里验的是"两个驱动都真的接上了"。
@@ -399,7 +412,8 @@ async fn composed_ddl_from_a_real_official_postgres_schema() {
         .expect("索引内省");
 
     assert_column_detail_refs(&cols, &table);
-    let ddl = rds_database::sql_gen::create_table_ddl(&format!("public.{table}"), &cols, &cons, &idx);
+    let ddl =
+        rds_database::sql_gen::create_table_ddl(&format!("public.{table}"), &cols, &cons, &idx);
     println!("\n----- 合成 DDL（PG Official）-----\n{ddl}\n--------------------\n");
 
     assert!(ddl.contains("PRIMARY KEY (id)"), "主键丢了：{ddl}");
@@ -451,7 +465,8 @@ async fn composed_ddl_from_a_real_official_mysql_schema() {
         .expect("索引内省");
 
     assert_column_detail_refs(&cols, &table);
-    let ddl = rds_database::sql_gen::create_table_ddl(&format!("mysql.{table}"), &cols, &cons, &idx);
+    let ddl =
+        rds_database::sql_gen::create_table_ddl(&format!("mysql.{table}"), &cols, &cons, &idx);
     println!("\n----- 合成 DDL（MySQL Official）-----\n{ddl}\n--------------------\n");
 
     assert!(ddl.contains("PRIMARY KEY (id)"), "主键丢了：{ddl}");

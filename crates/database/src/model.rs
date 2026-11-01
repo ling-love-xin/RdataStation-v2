@@ -265,7 +265,10 @@ impl NavNode {
         if segments.is_empty() {
             connection_id.to_string()
         } else {
-            let escaped = segments.iter().map(|s| escape_segment(s)).collect::<Vec<_>>();
+            let escaped = segments
+                .iter()
+                .map(|s| escape_segment(s))
+                .collect::<Vec<_>>();
             format!("{}/{}", connection_id, escaped.join("/"))
         }
     }
@@ -440,15 +443,9 @@ mod tests {
     #[test]
     fn child_key_escapes_slash_and_percent() {
         // 对象名含 `/`（SQLite / PG 合法标识符）：转义后不与层分隔符混淆
-        assert_eq!(
-            NavNode::child_key("G_a", &["db", "a/b"]),
-            "G_a/db/a%2Fb"
-        );
+        assert_eq!(NavNode::child_key("G_a", &["db", "a/b"]), "G_a/db/a%2Fb");
         // `%` 先转义，避免与已转义的分隔符二次冲突
-        assert_eq!(
-            NavNode::child_key("G_a", &["db", "50%"]),
-            "G_a/db/50%25"
-        );
+        assert_eq!(NavNode::child_key("G_a", &["db", "50%"]), "G_a/db/50%25");
         assert_eq!(
             NavNode::child_key("G_a", &["db", "a/b%c"]),
             "G_a/db/a%2Fb%25c"

@@ -147,7 +147,6 @@ impl Connector for DirectConnector {
     }
 }
 
-
 mod base64 {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
 
@@ -158,8 +157,8 @@ mod base64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::tls::map_tls_version;
+    use super::*;
     use crate::config::{ProxyConfig, SshAuth, SshConfig, SslConfig, TlsVersion};
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -227,7 +226,10 @@ mod tests {
         assert!(direct.supports(&direct_m) && !direct.supports(&ssl_m));
         assert!(ssl.supports(&ssl_m) && !ssl.supports(&direct_m));
         // 占位器语义：supports(Ssh) 为 true（工厂能命中），真正报错在 connect
-        assert!(ssh.supports(&ssh_m), "SshTunnelConnector::supports(Ssh) 应为 true（占位）");
+        assert!(
+            ssh.supports(&ssh_m),
+            "SshTunnelConnector::supports(Ssh) 应为 true（占位）"
+        );
         assert!(http.supports(&http_m) && !http.supports(&socks_m));
         assert!(socks.supports(&socks_m) && !socks.supports(&http_m));
 
@@ -261,7 +263,10 @@ mod tests {
             Err(e) => e,
             Ok(_) => panic!("SslConnector 不应接受直连配置"),
         };
-        assert!(err.to_string().contains("Expected SSL connection method"), "{err}");
+        assert!(
+            err.to_string().contains("Expected SSL connection method"),
+            "{err}"
+        );
 
         let err = match HttpProxyConnector.connect(&direct_cfg).await {
             Err(e) => e,
@@ -372,10 +377,8 @@ mod tests {
     async fn test_http_proxy_403_with_200_in_headers_still_errors() {
         // 回归：成功判据改为解析状态行（此前 `contains("200")` 会把
         // 拒绝响应里恰好含 "200" 的头部/正文误判为成功）
-        let (port, _head_rx, handle) = spawn_proxy_responder(
-            b"HTTP/1.1 403 Forbidden\r\nContent-Length: 200\r\n\r\n",
-        )
-        .await;
+        let (port, _head_rx, handle) =
+            spawn_proxy_responder(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 200\r\n\r\n").await;
 
         let cfg = ConnectionConfig::direct("db.example", 3306);
         let proxy = ProxyConfig {

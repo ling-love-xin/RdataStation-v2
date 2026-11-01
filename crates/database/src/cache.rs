@@ -143,10 +143,7 @@ impl NavCache {
             .iter()
             .map(|(n, e)| (n.clone(), e.map(|v| v as i64)))
             .collect();
-        if let Err(e) = self
-            .ops
-            .update_table_row_estimates(catalog, schema, &l2)
-        {
+        if let Err(e) = self.ops.update_table_row_estimates(catalog, schema, &l2) {
             tracing::warn!(
                 catalog,
                 schema,
@@ -213,7 +210,10 @@ impl NavCache {
         };
         let mut names = vec![];
         for t in ["table", "view"] {
-            if let Ok(chunk) = self.ops.get_objects_chunk(&self.conn_id, Some(sid), t, 0, 100_000) {
+            if let Ok(chunk) = self
+                .ops
+                .get_objects_chunk(&self.conn_id, Some(sid), t, 0, 100_000)
+            {
                 for e in chunk.items {
                     names.push(e.object_name);
                 }
@@ -305,13 +305,16 @@ impl NavCache {
         let out: Vec<(String, Option<String>, Option<String>, bool)> = rows
             .into_iter()
             .filter(|t| (t.table_type == TABLE_TYPE_VIEW) == want_view)
-            .map(|t| (t.table_name, t.table_comment, t.parent_table, t.is_partition))
+            .map(|t| {
+                (
+                    t.table_name,
+                    t.table_comment,
+                    t.parent_table,
+                    t.is_partition,
+                )
+            })
             .collect();
-        if out.is_empty() {
-            None
-        } else {
-            Some(out)
-        }
+        if out.is_empty() { None } else { Some(out) }
     }
 
     /// 该 schema 在 `metadata_index` 里的计数（分块读的前置判断）。
@@ -764,7 +767,10 @@ mod tests {
 
         let hits = cache.search_index("order", 50, NameMatchMode::Contains);
         let names: Vec<&str> = hits.iter().map(|h| h.object_name.as_str()).collect();
-        assert!(names.contains(&"order_items"), "表应命中（得到：{names:?}）");
+        assert!(
+            names.contains(&"order_items"),
+            "表应命中（得到：{names:?}）"
+        );
         assert!(names.contains(&"order_id"), "列也应命中（得到：{names:?}）");
 
         let table = hits
@@ -780,9 +786,11 @@ mod tests {
         assert_eq!(column.parent_name.as_deref(), Some("order_items"));
 
         // 无命中即空表（调用方据此显示“无命中”，不报错）
-        assert!(cache
-            .search_index("zzz_不存在", 50, NameMatchMode::Contains)
-            .is_empty());
+        assert!(
+            cache
+                .search_index("zzz_不存在", 50, NameMatchMode::Contains)
+                .is_empty()
+        );
 
         drop(cache);
         let _ = std::fs::remove_dir_all(&root);
@@ -807,7 +815,12 @@ mod tests {
         );
         assert_eq!(
             cache.objects(sid, false),
-            Some(vec![("t1".to_string(), Some("表注释".to_string()), None, false)])
+            Some(vec![(
+                "t1".to_string(),
+                Some("表注释".to_string()),
+                None,
+                false
+            )])
         );
         // 视图维度为空 → 视为未命中（由调用方回落实时内省）。
         assert!(cache.objects(sid, true).is_none());
@@ -850,13 +863,22 @@ mod tests {
                 NodeInfo::new("orders_2024", SchemaObjectKind::Table)
                     .with_parent("orders")
                     .with_partition(),
-                NodeInfo::new("orders_archive", SchemaObjectKind::Table)
-                    .with_parent("orders"),
+                NodeInfo::new("orders_archive", SchemaObjectKind::Table).with_parent("orders"),
             ],
         );
         let got = cache.objects(sid, false).expect("应命中");
-        assert!(got.contains(&("orders_2024".to_string(), None, Some("orders".to_string()), true)));
-        assert!(got.contains(&("orders_archive".to_string(), None, Some("orders".to_string()), false)));
+        assert!(got.contains(&(
+            "orders_2024".to_string(),
+            None,
+            Some("orders".to_string()),
+            true
+        )));
+        assert!(got.contains(&(
+            "orders_archive".to_string(),
+            None,
+            Some("orders".to_string()),
+            false
+        )));
 
         let _ = std::fs::remove_dir_all(&root);
     }

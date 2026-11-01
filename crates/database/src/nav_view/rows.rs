@@ -7,8 +7,8 @@
 //! 「已定位」/ 搜索命中）与它们的高度估算，是全文件最大的一块；与面板外壳（`chrome.rs`）
 //! 分开后，改行样式不必跨过整个面板的脚手架。
 
-use super::*;
 use super::StagedOp;
+use super::*;
 use crate::nav::action_registry;
 use crate::nav::actions::{ActionGroup, NavActionId};
 use crate::nav::capability::{NavOp, family_ops, nav_node_object_kind};
@@ -370,12 +370,16 @@ impl NavView {
             .map(|c| (c.id.clone(), ranked.get(c.id.as_str()).copied()))
             .collect();
         let recent = self.nav.borrow().recent.clone();
-        let ungrouped: Vec<&ConnectionItem> = nav_order_members(&stored, |id| {
-            by_id
-                .get(id)
-                .map(|c| c.name.clone())
-                .unwrap_or_else(|| id.to_string())
-        }, &recent)
+        let ungrouped: Vec<&ConnectionItem> = nav_order_members(
+            &stored,
+            |id| {
+                by_id
+                    .get(id)
+                    .map(|c| c.name.clone())
+                    .unwrap_or_else(|| id.to_string())
+            },
+            &recent,
+        )
         .iter()
         .filter_map(|id| by_id.get(id.as_str()).copied())
         .collect();
@@ -623,11 +627,7 @@ impl NavView {
         // 本地筛选下容器自身可见、子层无一匹配：摆一条容器级空态占位。
         // 索引搜索空命中属整面板语义，由 `collect_nav_rows` 顶层统一判定，容器内不重复摆。
         let loading = self.nav.borrow().loading.contains(&node.key);
-        if !pending_more
-            && !search_active
-            && !filter.is_empty()
-            && !loading
-            && rows.len() == before
+        if !pending_more && !search_active && !filter.is_empty() && !loading && rows.len() == before
         {
             rows.push(NavRow::Placeholder {
                 kind: PlaceholderKind::FilterEmpty,
@@ -762,11 +762,7 @@ impl NavView {
             // 重复数字，对齐原型只保留点 + 胶囊；状态细节（全连 / 部分 / 失败 / 加载中）由
             // 点色承载（ok / off / err / info 呼吸），hover 卡补充人话。
             .child({
-            let mut health = div()
-                .h_flex()
-                .items_center()
-                .gap_0p5()
-                .flex_none();
+                let mut health = div().h_flex().items_center().gap_0p5().flex_none();
                 let dot = div()
                     .w(rems(0.375))
                     .h(rems(0.375))
@@ -785,18 +781,16 @@ impl NavView {
                 } else {
                     dot.into_any_element()
                 };
-                health = health
-                    .child(dot)
-                    .child(
-                        div()
-                            .flex_none()
-                            .px_1()
-                            .rounded_sm()
-                            .bg(muted.alpha(0.14))
-                            .text_xs()
-                            .text_color(muted)
-                            .child(count.to_string()),
-                    );
+                health = health.child(dot).child(
+                    div()
+                        .flex_none()
+                        .px_1()
+                        .rounded_sm()
+                        .bg(muted.alpha(0.14))
+                        .text_xs()
+                        .text_color(muted)
+                        .child(count.to_string()),
+                );
                 health
             })
             // 「连接组内所有数据库」：批量把该组里未连接的连接逐条后台建连。
@@ -821,7 +815,10 @@ impl NavView {
                                     if ungrouped_for_connect {
                                         view.ungrouped_order.clone()
                                     } else {
-                                        view.group_order.get(&gid_for_connect).cloned().unwrap_or_default()
+                                        view.group_order
+                                            .get(&gid_for_connect)
+                                            .cloned()
+                                            .unwrap_or_default()
                                     }
                                 };
                                 let conns = this.host.connections();
@@ -851,11 +848,7 @@ impl NavView {
                 Button::new(format!("nav-group-disconnectall-{group_id}"))
                     .ghost()
                     .xsmall()
-                    .icon(
-                        Icon::empty()
-                            .path("icons/unplug.svg")
-                            .text_color(muted),
-                    )
+                    .icon(Icon::empty().path("icons/unplug.svg").text_color(muted))
                     .on_click({
                         let entity = entity.clone();
                         // 闭包 move 自己的拷贝，不动原 `gid`（后面拖排序还要用它）。
@@ -890,8 +883,7 @@ impl NavView {
                                     }
                                 }
                                 if pending == 0 {
-                                    this.host
-                                        .notice("该分组没有已连接的连接".to_string(), cx);
+                                    this.host.notice("该分组没有已连接的连接".to_string(), cx);
                                 }
                             });
                         }
@@ -1270,7 +1262,10 @@ impl NavView {
         let (children_nonempty, loading_here) = {
             let view = self.nav.borrow();
             (
-                view.children.get(&conn.id).map(|c| !c.is_empty()).unwrap_or(false),
+                view.children
+                    .get(&conn.id)
+                    .map(|c| !c.is_empty())
+                    .unwrap_or(false),
                 view.loading.contains(&conn.id),
             )
         };
@@ -1351,40 +1346,37 @@ impl NavView {
         // 双通道徽标：颜色 = 状态（能不能用），形状 = 类型（是什么库，内叠 2 字母）。
         // 状态点（连接/断开）用标准 Badge::dot() 叠加在类型徽标右上角——
         // Badge 自带 relative 容器 + absolute 圆点（6px），与全应用角标视觉统一。
-        let badge = Badge::new()
-            .dot()
-            .color(badge_color)
-            .child(
-                div()
-                    .w(rems(ui::NAV_BADGE_SIZE))
-                    .h(rems(ui::NAV_BADGE_SIZE))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                Icon::empty()
-                                    .path(badge_path)
-                                    .size(rems(ui::NAV_BADGE_SIZE))
-                                    .text_color(badge_color),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .relative()
-                            .text_size(rems(0.4))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(badge_color)
-                            .child(badge_letters),
-                    ),
-            );
+        let badge = Badge::new().dot().color(badge_color).child(
+            div()
+                .w(rems(ui::NAV_BADGE_SIZE))
+                .h(rems(ui::NAV_BADGE_SIZE))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            Icon::empty()
+                                .path(badge_path)
+                                .size(rems(ui::NAV_BADGE_SIZE))
+                                .text_color(badge_color),
+                        ),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .text_size(rems(0.4))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(badge_color)
+                        .child(badge_letters),
+                ),
+        );
 
         // 「连接中」才呼吸（原型设计 §2.3：`info` + 脉冲）。
         //
@@ -1579,8 +1571,7 @@ impl NavView {
                                     // 预填标签在**事件路径**读一次库并缓存：
                                     // render 只读快照（`tag_editor_tags`），render 零 I/O。
                                     let root = this.host.project_root();
-                                    let tags =
-                                        crate::nav_store::list_tags(&cid, root.as_deref());
+                                    let tags = crate::nav_store::list_tags(&cid, root.as_deref());
                                     view.tag_editor_tags = Some((cid.clone(), tags));
                                 }
                                 cx.notify();
@@ -2309,7 +2300,11 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 .get(&node.key)
                 .map(|total| *total > children.len())
                 .unwrap_or(false);
-            (!children.is_empty(), pending_more, view.loading.contains(&node.key))
+            (
+                !children.is_empty(),
+                pending_more,
+                view.loading.contains(&node.key),
+            )
         };
         let tree_open = expanded && (children_nonempty || pending_more || loading_here);
         let kind_icon = nav_kind_icon(&node.kind, tree_open);
@@ -2371,23 +2366,19 @@ this.host.open_right_panel(RightPanel::Insight, cx);
 
         // D12 对象注释副标：档案 `show_description` 开启 + 描述类对象（表 / 视图 / 例程 /
         // 序列 / 触发器；列不显）才挂；斜体弱色同行截断，属性面板看全量；门控判定走纯函数。
-        let comment_subline: Option<Div> = comment_subline_text(
-            &inline,
-            &node.kind,
-            node.comment.as_deref(),
-        )
-        .map(|comment| {
-            div()
-                .flex_none()
-                .min_w_0()
-                .max_w(rems(ui::NAV_COMMENT_SUBLINE_W))
-                .overflow_hidden()
-                .text_ellipsis()
-                .text_xs()
-                .italic()
-                .text_color(muted)
-                .child(comment)
-        });
+        let comment_subline: Option<Div> =
+            comment_subline_text(&inline, &node.kind, node.comment.as_deref()).map(|comment| {
+                div()
+                    .flex_none()
+                    .min_w_0()
+                    .max_w(rems(ui::NAV_COMMENT_SUBLINE_W))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .text_xs()
+                    .italic()
+                    .text_color(muted)
+                    .child(comment)
+            });
 
         // 拖拽载荷：仅表 / 视图（原型 §6.1「拖拽表到编辑器」）。
         let drag_payload = match &node.kind {
@@ -2499,29 +2490,29 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         let fg = cx.theme().colors.foreground;
                         let muted = cx.theme().colors.muted_foreground;
                         let mut body = div().v_flex().gap(gpui_kit::rems(0.125)).text_xs();
-                        body = body.child(
-                            div()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(fg)
-                                .child(if is_view {
+                        body =
+                            body.child(div().font_weight(FontWeight::MEDIUM).text_color(fg).child(
+                                if is_view {
                                     format!("视图：{n_name}")
                                 } else {
                                     format!("表：{n_name}")
-                                }),
-                        );
+                                },
+                            ));
                         if let Some(est) = row_estimate {
-                            body = body.child(
-                                div().text_color(muted).child(format!("约 {est} 行")),
-                            );
+                            body =
+                                body.child(div().text_color(muted).child(format!("约 {est} 行")));
                         }
                         if let Some(c) = n_comment.as_deref() {
                             if !c.is_empty() {
-                                body = body.child(
-                                    div().text_color(muted).child(format!("注释：{c}")),
-                                );
+                                body =
+                                    body.child(div().text_color(muted).child(format!("注释：{c}")));
                             }
                         }
-                        body.child(div().text_color(muted).child(format!("连接：{n_conn_label2}")))
+                        body.child(
+                            div()
+                                .text_color(muted)
+                                .child(format!("连接：{n_conn_label2}")),
+                        )
                     })
                     .into_any_element()
             } else {
@@ -2582,18 +2573,16 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     None => {
                         let in_flight = {
                             let view = self.nav.borrow();
-                            let schema = node
-                                .expand_path
-                                .as_ref()
-                                .and_then(|p| match p {
-                                    NavPath::Table { schema, .. } => Some(schema.as_str()),
-                                    _ => None,
-                                });
-                            schema.map(|s| {
-                                view.estimated_schemas
-                                    .contains(&(node.connection_id.clone(), s.to_string()))
-                            })
-                            .unwrap_or(false)
+                            let schema = node.expand_path.as_ref().and_then(|p| match p {
+                                NavPath::Table { schema, .. } => Some(schema.as_str()),
+                                _ => None,
+                            });
+                            schema
+                                .map(|s| {
+                                    view.estimated_schemas
+                                        .contains(&(node.connection_id.clone(), s.to_string()))
+                                })
+                                .unwrap_or(false)
                         };
                         if in_flight {
                             badges.push("…".to_string());
@@ -2625,13 +2614,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             self.nav.borrow().child_total.get(&node.key).copied(),
             node.children.len(),
         ) {
-            row = row.child(
-                div()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(label),
-            );
+            row = row.child(div().flex_none().text_xs().text_color(muted).child(label));
         }
         if let Some(payload) = drag_payload {
             // 幽灵用同一个类别图标（`&'static str` 是 `Copy`，可直接进闭包）。
@@ -2683,435 +2666,450 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         // 右键菜单（对象节点）：查看数据 / 属性 / 复制 / 刷新。
         // S4-① 右键先选中（同连接行）：`context_menu` 会 stop 传播，须先注册右键按下。
         block = block.child(
-            row.on_mouse_down(
-                MouseButton::Right,
-                {
-                    let entity = cx.entity();
-                    let key = node.key.clone();
-                    move |_event, _window, app| {
-                        entity.update(app, |this, cx| {
-                            if this.nav.borrow().selected_key.as_deref() != Some(key.as_str()) {
-                                this.set_nav_selected(Some(key.clone()), cx);
-                                cx.notify();
-                            }
-                        });
-                    }
-                },
-            )
-            .context_menu({
-            let entity = cx.entity();
-            let host = self.host.clone();
-            let conn_id = node.connection_id.clone();
-            let nkey = node.key.clone();
-            let dname = node.name.clone();
-            let menu_path = node.expand_path.clone();
-            let menu_prop = node.property.clone();
-            let qualified = node
-                .property
-                .as_ref()
-                .map(|p| nav_qualified_name(p, &m_driver));
-            let conn_label = m_conn_label.clone();
-            let driver = m_driver.clone();
-            // S4-N4 连接态：闭包外算好供 'static 闭包捕获。
-            let obj_connected =
-                self.nav.borrow().connected.contains(&node.connection_id);
-            // B6：是否已在待提交清单（命中后菜单项切换为「从待提交移除」，单项撤销不弹确认）。
-            let staged_hit = self.nav.borrow().staged_lookup(&nkey).is_some();
-            // B2：族 × 类型静态操作集；B4：动作类型白名单 + 门控 + 分组排序全部由 L4
-            // 动作注册表 `entries_for` 产出，视图层不再写类型 `if` 与散落门控判定。
-            let kind = nav_node_object_kind(&node.kind);
-            let obj_ops = family_ops(&driver, kind);
-            // 表 / 视图的「生成 SQL」需要列：由后台任务取（命中 L2 不发查询）。
-            let dml_target = match &menu_path {
-                Some(NavPath::Table {
-                    catalog,
-                    schema,
-                    table,
-                }) if matches!(&node.kind, NavNodeKind::Table { .. } | NavNodeKind::View) => {
-                    Some((catalog.clone(), schema.clone(), table.clone()))
+            row.on_mouse_down(MouseButton::Right, {
+                let entity = cx.entity();
+                let key = node.key.clone();
+                move |_event, _window, app| {
+                    entity.update(app, |this, cx| {
+                        if this.nav.borrow().selected_key.as_deref() != Some(key.as_str()) {
+                            this.set_nav_selected(Some(key.clone()), cx);
+                            cx.notify();
+                        }
+                    });
                 }
-                _ => None,
-            };
-            let dml_root = if dml_target.is_some() {
-                self.host
-                    .project_root()
-                    .map(|p| p.to_string_lossy().to_string())
-            } else {
-                None
-            };
-            // 结构洞察的靶要在闭包**外**算好（`node` 的借用活不过 `'static` 闭包）
-            let insight_schema = insight_schema_target(&node.kind, menu_path.as_ref(), &conn_id);
-            // Mock / 洞察表入口的引用靶同理；**kind 按节点类型给**：视图不能标成表
-            // ——引用是跨屏身份，标错会传染到属性面板 / 洞察 / 将来的“在树中定位”。
-            let data_target = dml_target.clone().and_then(|(catalog, schema, name)| {
-                nav_data_target(&node.kind, &conn_id, catalog, schema, name)
-            });
-            // L4 注册表装配结果：类型白名单过滤 → 门控 → 分组分段 + 组内排序。
-            // 靶可用性（property / qualified / 路径靶是否 `Some`）属视图运行时判定，
-            // 在下方闭包 match 臂内保留现状 `if let Some` 口径。
-            let entries = action_registry().entries_for(kind, obj_connected, &obj_ops);
-            move |menu, window, cx| {
-                let mut menu = menu;
-                // 注册表序列已按 Primary → Generate → Object 分组排序；prev_group 记录上一个
-                // 实际渲染的分组，被靶条件跳过的组不更新它，避免组间残留分隔线。
-                let mut prev_group: Option<ActionGroup> = None;
-                for entry in &entries {
-                    let d = entry.descriptor;
-                    // 靶可用性判定保留在视图层：注册表只声明类型白名单，property / qualified /
-                    // 路径靶是否 `Some` 由运行时节点身份决定。各臂 on_click 处理器与现状逐条等价。
-                    let item: Option<PopupMenuItem> = match d.id {
-                        NavActionId::ShowProperties => menu_prop.clone().map(|prop0| {
-                            let e = entity.clone();
-                            let label0 = conn_label.clone();
-                            let drv0 = driver.clone();
-                            PopupMenuItem::new(d.label)
-                                .disabled(!entry.enabled)
-                                .on_click(move |_, window, app| {
-                                    let prop = prop0.clone();
-                                    let label = label0.clone();
-                                    let drv = drv0.clone();
-                                    e.update(app, |this, cx| {
-                                        this.host.show_properties(
-                                            PropertyRequest {
-                                                property: prop.clone(),
-                                                conn_label: label.clone(),
-                                                driver: drv.clone(),
-                                                type_id: None,
-                                                data: None,
-                                            },
-                                            window,
-                                            cx,
-                                        );
-                                        cx.notify();
-                                    });
-                                })
-                        }),
-                        NavActionId::ViewData => qualified.clone().map(|q| {
-                            let sql = format!("SELECT * FROM {q} LIMIT 200;");
-                            let host_sql = host.clone();
-                            let cid_view = conn_id.clone();
-                            PopupMenuItem::new(d.label)
-                                .disabled(!entry.enabled)
-                                .on_click(move |_, _, app| {
-                                    // B11：打开一份绑定该连接的查询并**自动执行**
-                                    // （M4 遗留的“查看数据不自动执行”在此关闭）
-                                    host_sql.open_query(
-                                        QueryRequest {
-                                            conn_id: Some(cid_view.clone()),
-                                            sql: sql.clone(),
-                                            run: true,
-                                        },
-                                        app,
-                                    );
-                                })
-                        }),
-                        NavActionId::OpenSql => {
-                            let host = host.clone();
-                            let cid = conn_id.clone();
-                            Some(
+            })
+            .context_menu({
+                let entity = cx.entity();
+                let host = self.host.clone();
+                let conn_id = node.connection_id.clone();
+                let nkey = node.key.clone();
+                let dname = node.name.clone();
+                let menu_path = node.expand_path.clone();
+                let menu_prop = node.property.clone();
+                let qualified = node
+                    .property
+                    .as_ref()
+                    .map(|p| nav_qualified_name(p, &m_driver));
+                let conn_label = m_conn_label.clone();
+                let driver = m_driver.clone();
+                // S4-N4 连接态：闭包外算好供 'static 闭包捕获。
+                let obj_connected = self.nav.borrow().connected.contains(&node.connection_id);
+                // B6：是否已在待提交清单（命中后菜单项切换为「从待提交移除」，单项撤销不弹确认）。
+                let staged_hit = self.nav.borrow().staged_lookup(&nkey).is_some();
+                // B2：族 × 类型静态操作集；B4：动作类型白名单 + 门控 + 分组排序全部由 L4
+                // 动作注册表 `entries_for` 产出，视图层不再写类型 `if` 与散落门控判定。
+                let kind = nav_node_object_kind(&node.kind);
+                let obj_ops = family_ops(&driver, kind);
+                // 表 / 视图的「生成 SQL」需要列：由后台任务取（命中 L2 不发查询）。
+                let dml_target = match &menu_path {
+                    Some(NavPath::Table {
+                        catalog,
+                        schema,
+                        table,
+                    }) if matches!(&node.kind, NavNodeKind::Table { .. } | NavNodeKind::View) => {
+                        Some((catalog.clone(), schema.clone(), table.clone()))
+                    }
+                    _ => None,
+                };
+                let dml_root = if dml_target.is_some() {
+                    self.host
+                        .project_root()
+                        .map(|p| p.to_string_lossy().to_string())
+                } else {
+                    None
+                };
+                // 结构洞察的靶要在闭包**外**算好（`node` 的借用活不过 `'static` 闭包）
+                let insight_schema =
+                    insight_schema_target(&node.kind, menu_path.as_ref(), &conn_id);
+                // Mock / 洞察表入口的引用靶同理；**kind 按节点类型给**：视图不能标成表
+                // ——引用是跨屏身份，标错会传染到属性面板 / 洞察 / 将来的“在树中定位”。
+                let data_target = dml_target.clone().and_then(|(catalog, schema, name)| {
+                    nav_data_target(&node.kind, &conn_id, catalog, schema, name)
+                });
+                // L4 注册表装配结果：类型白名单过滤 → 门控 → 分组分段 + 组内排序。
+                // 靶可用性（property / qualified / 路径靶是否 `Some`）属视图运行时判定，
+                // 在下方闭包 match 臂内保留现状 `if let Some` 口径。
+                let entries = action_registry().entries_for(kind, obj_connected, &obj_ops);
+                move |menu, window, cx| {
+                    let mut menu = menu;
+                    // 注册表序列已按 Primary → Generate → Object 分组排序；prev_group 记录上一个
+                    // 实际渲染的分组，被靶条件跳过的组不更新它，避免组间残留分隔线。
+                    let mut prev_group: Option<ActionGroup> = None;
+                    for entry in &entries {
+                        let d = entry.descriptor;
+                        // 靶可用性判定保留在视图层：注册表只声明类型白名单，property / qualified /
+                        // 路径靶是否 `Some` 由运行时节点身份决定。各臂 on_click 处理器与现状逐条等价。
+                        let item: Option<PopupMenuItem> = match d.id {
+                            NavActionId::ShowProperties => menu_prop.clone().map(|prop0| {
+                                let e = entity.clone();
+                                let label0 = conn_label.clone();
+                                let drv0 = driver.clone();
+                                PopupMenuItem::new(d.label)
+                                    .disabled(!entry.enabled)
+                                    .on_click(move |_, window, app| {
+                                        let prop = prop0.clone();
+                                        let label = label0.clone();
+                                        let drv = drv0.clone();
+                                        e.update(app, |this, cx| {
+                                            this.host.show_properties(
+                                                PropertyRequest {
+                                                    property: prop.clone(),
+                                                    conn_label: label.clone(),
+                                                    driver: drv.clone(),
+                                                    type_id: None,
+                                                    data: None,
+                                                },
+                                                window,
+                                                cx,
+                                            );
+                                            cx.notify();
+                                        });
+                                    })
+                            }),
+                            NavActionId::ViewData => qualified.clone().map(|q| {
+                                let sql = format!("SELECT * FROM {q} LIMIT 200;");
+                                let host_sql = host.clone();
+                                let cid_view = conn_id.clone();
                                 PopupMenuItem::new(d.label)
                                     .disabled(!entry.enabled)
                                     .on_click(move |_, _, app| {
-                                        // B11：只入队，宿主开文档并聚焦
-                                        host.open_query(
+                                        // B11：打开一份绑定该连接的查询并**自动执行**
+                                        // （M4 遗留的“查看数据不自动执行”在此关闭）
+                                        host_sql.open_query(
                                             QueryRequest {
-                                                conn_id: Some(cid.clone()),
-                                                sql: String::new(),
-                                                run: false,
+                                                conn_id: Some(cid_view.clone()),
+                                                sql: sql.clone(),
+                                                run: true,
                                             },
                                             app,
                                         );
-                                    }),
-                            )
-                        }
-                        NavActionId::InsightPanel => {
-                            let e = entity.clone();
-                            // 统一洞察入口（2026-10-30 去重）：表 / 视图 → 取样画像；
-                            // schema → 结构洞察；其余节点（连接 / 库 / 列…）→ 纯面板导航。
-                            let table = data_target.clone();
-                            let schema = insight_schema.clone();
-                            Some(
-                                PopupMenuItem::new(d.label)
-                                    .disabled(!entry.enabled)
-                                    .on_click(move |_, _, app| {
-                                        // Fn 闭包不能移动捕获变量：克隆后进入分支
-                                        if let Some(source) = table.clone() {
-                                            e.update(app, |this, cx| {
-                                                this.host.open_insight_table(source, cx);
-                                            });
-                                        } else if let Some(target) = schema.clone() {
-                                            e.update(app, |this, cx| {
-                                                this.host.open_insight_schema(target, cx);
-                                            });
-                                        } else {
-                                            e.update(app, |this, cx| {
-                                                this.host.open_right_panel(
-                                                    RightPanel::Insight,
-                                                    cx,
-                                                );
-                                            });
-                                        }
-                                    }),
-                            )
-                        }
-                        NavActionId::GenDml => match dml_target.clone() {
-                            Some((catalog, schema, table)) => {
-                                let q = crate::sql_gen::sql_qualified_name(
-                                    &driver,
-                                    Some(catalog.as_str()),
-                                    Some(schema.as_str()),
-                                    &table,
-                                );
-                                let e = entity.clone();
-                                let key = nkey.clone();
+                                    })
+                            }),
+                            NavActionId::OpenSql => {
+                                let host = host.clone();
                                 let cid = conn_id.clone();
-                                let root = dml_root.clone();
-                                // 「生成 SQL ▸」：由列信息生成 INSERT / UPDATE / DELETE 模板
-                                // （只注入不执行）；submenu 入口断连置灰由注册表门控给出。
-                                let sub_entity = PopupMenu::build(window, cx, move |m, _w, _c| {
-                                    let mut m = m;
-                                    for kind in [DmlKind::Insert, DmlKind::Update, DmlKind::Delete] {
-                                        let e = e.clone();
-                                        let key = key.clone();
-                                        let cid = cid.clone();
-                                        let root = root.clone();
-                                        let catalog = catalog.clone();
-                                        let schema = schema.clone();
-                                        let table = table.clone();
-                                        let q = q.clone();
-                                        m = m.item(PopupMenuItem::new(kind.label()).on_click(
-                                            move |_, _, app| {
-                                                nav_jobs::enqueue_generate_dml(
-                                                    &key,
-                                                    &cid,
-                                                    root.as_deref(),
-                                                    &catalog,
-                                                    &schema,
-                                                    &table,
-                                                    &q,
-                                                    kind,
-                                                );
-                                                e.update(app, |this, cx| this.ensure_nav_pump(cx));
-                                            },
-                                        ));
-                                    }
-                                    m
-                                });
                                 Some(
-                                    PopupMenuItem::submenu(d.label, sub_entity)
-                                        .disabled(!entry.enabled),
+                                    PopupMenuItem::new(d.label)
+                                        .disabled(!entry.enabled)
+                                        .on_click(move |_, _, app| {
+                                            // B11：只入队，宿主开文档并聚焦
+                                            host.open_query(
+                                                QueryRequest {
+                                                    conn_id: Some(cid.clone()),
+                                                    sql: String::new(),
+                                                    run: false,
+                                                },
+                                                app,
+                                            );
+                                        }),
                                 )
                             }
-                            None => None,
-                        },
-                        NavActionId::MockData => data_target.clone().map(|request| {
-                            let e = entity.clone();
-                            PopupMenuItem::new(d.label)
-                                .disabled(!entry.enabled)
-                                .on_click(move |_, _, app| {
-                                    let request = request.clone();
-                                    e.update(app, |this, cx| this.host.open_mock_panel(Some(request), cx));
-                                })
-                        }),
-                        NavActionId::CopyName => {
-                            let e = entity.clone();
-                            let host_copy = host.clone();
-                            let name_copy = dname.clone();
-                            Some(
+                            NavActionId::InsightPanel => {
+                                let e = entity.clone();
+                                // 统一洞察入口（2026-10-30 去重）：表 / 视图 → 取样画像；
+                                // schema → 结构洞察；其余节点（连接 / 库 / 列…）→ 纯面板导航。
+                                let table = data_target.clone();
+                                let schema = insight_schema.clone();
+                                Some(
+                                    PopupMenuItem::new(d.label)
+                                        .disabled(!entry.enabled)
+                                        .on_click(move |_, _, app| {
+                                            // Fn 闭包不能移动捕获变量：克隆后进入分支
+                                            if let Some(source) = table.clone() {
+                                                e.update(app, |this, cx| {
+                                                    this.host.open_insight_table(source, cx);
+                                                });
+                                            } else if let Some(target) = schema.clone() {
+                                                e.update(app, |this, cx| {
+                                                    this.host.open_insight_schema(target, cx);
+                                                });
+                                            } else {
+                                                e.update(app, |this, cx| {
+                                                    this.host
+                                                        .open_right_panel(RightPanel::Insight, cx);
+                                                });
+                                            }
+                                        }),
+                                )
+                            }
+                            NavActionId::GenDml => match dml_target.clone() {
+                                Some((catalog, schema, table)) => {
+                                    let q = crate::sql_gen::sql_qualified_name(
+                                        &driver,
+                                        Some(catalog.as_str()),
+                                        Some(schema.as_str()),
+                                        &table,
+                                    );
+                                    let e = entity.clone();
+                                    let key = nkey.clone();
+                                    let cid = conn_id.clone();
+                                    let root = dml_root.clone();
+                                    // 「生成 SQL ▸」：由列信息生成 INSERT / UPDATE / DELETE 模板
+                                    // （只注入不执行）；submenu 入口断连置灰由注册表门控给出。
+                                    let sub_entity =
+                                        PopupMenu::build(window, cx, move |m, _w, _c| {
+                                            let mut m = m;
+                                            for kind in
+                                                [DmlKind::Insert, DmlKind::Update, DmlKind::Delete]
+                                            {
+                                                let e = e.clone();
+                                                let key = key.clone();
+                                                let cid = cid.clone();
+                                                let root = root.clone();
+                                                let catalog = catalog.clone();
+                                                let schema = schema.clone();
+                                                let table = table.clone();
+                                                let q = q.clone();
+                                                m = m.item(
+                                                    PopupMenuItem::new(kind.label()).on_click(
+                                                        move |_, _, app| {
+                                                            nav_jobs::enqueue_generate_dml(
+                                                                &key,
+                                                                &cid,
+                                                                root.as_deref(),
+                                                                &catalog,
+                                                                &schema,
+                                                                &table,
+                                                                &q,
+                                                                kind,
+                                                            );
+                                                            e.update(app, |this, cx| {
+                                                                this.ensure_nav_pump(cx)
+                                                            });
+                                                        },
+                                                    ),
+                                                );
+                                            }
+                                            m
+                                        });
+                                    Some(
+                                        PopupMenuItem::submenu(d.label, sub_entity)
+                                            .disabled(!entry.enabled),
+                                    )
+                                }
+                                None => None,
+                            },
+                            NavActionId::MockData => data_target.clone().map(|request| {
+                                let e = entity.clone();
                                 PopupMenuItem::new(d.label)
                                     .disabled(!entry.enabled)
                                     .on_click(move |_, _, app| {
-                                        let name = name_copy.clone();
-                                        app.write_to_clipboard(ClipboardItem::new_string(name.clone()));
-                                        host_copy.notice(format!("已复制：{name}"), app);
+                                        let request = request.clone();
+                                        e.update(app, |this, cx| {
+                                            this.host.open_mock_panel(Some(request), cx)
+                                        });
+                                    })
+                            }),
+                            NavActionId::CopyName => {
+                                let e = entity.clone();
+                                let host_copy = host.clone();
+                                let name_copy = dname.clone();
+                                Some(
+                                    PopupMenuItem::new(d.label)
+                                        .disabled(!entry.enabled)
+                                        .on_click(move |_, _, app| {
+                                            let name = name_copy.clone();
+                                            app.write_to_clipboard(ClipboardItem::new_string(
+                                                name.clone(),
+                                            ));
+                                            host_copy.notice(format!("已复制：{name}"), app);
+                                            e.update(app, |_, cx| cx.notify());
+                                        }),
+                                )
+                            }
+                            NavActionId::CopyQualified => qualified.clone().map(|q| {
+                                let e = entity.clone();
+                                let host_copy = host.clone();
+                                PopupMenuItem::new(d.label)
+                                    .disabled(!entry.enabled)
+                                    .on_click(move |_, _, app| {
+                                        let q = q.clone();
+                                        app.write_to_clipboard(ClipboardItem::new_string(
+                                            q.clone(),
+                                        ));
+                                        host_copy.notice(format!("已复制：{q}"), app);
                                         e.update(app, |_, cx| cx.notify());
-                                    }),
-                            )
-                        }
-                        NavActionId::CopyQualified => qualified.clone().map(|q| {
-                            let e = entity.clone();
-                            let host_copy = host.clone();
-                            PopupMenuItem::new(d.label)
-                                .disabled(!entry.enabled)
-                                .on_click(move |_, _, app| {
-                                    let q = q.clone();
-                                    app.write_to_clipboard(ClipboardItem::new_string(q.clone()));
-                                    host_copy.notice(format!("已复制：{q}"), app);
-                                    e.update(app, |_, cx| cx.notify());
-                                })
-                        }),
-                        NavActionId::RefreshProps => menu_path.clone().map(|p| {
-                            let e = entity.clone();
-                            let cid = conn_id.clone();
-                            let key = nkey.clone();
-                            PopupMenuItem::new(d.label)
-                                .disabled(!entry.enabled)
-                                .on_click(move |_, _, app| {
-                                    let cid = cid.clone();
-                                    let key = key.clone();
-                                    let p = p.clone();
-                                    e.update(app, |this, cx| {
-                                        this.refresh_node(&cid, &key, Some(p.clone()), cx);
-                                    });
-                                })
-                        }),
-                        // B6 staged：删除对象（表 / 视图 / 序列）。已入队 → 单项移除；
-                        // 未入队 → 单项确认对话框，OK 后入队（不立即执行 DDL）。
-                        // 臂体用 `and_then`/`?` 求值为 `Option<PopupMenuItem>`；`return` 只在
-                        // 本闭包内返回，不外层越层到菜单构造闭包。
-                        NavActionId::DeleteObject => kind.and_then(|kind| {
-                            staged_menu_label(NavOp::Drop, kind, staged_hit).and_then(|label| {
-                                if staged_hit {
+                                    })
+                            }),
+                            NavActionId::RefreshProps => menu_path.clone().map(|p| {
+                                let e = entity.clone();
+                                let cid = conn_id.clone();
+                                let key = nkey.clone();
+                                PopupMenuItem::new(d.label)
+                                    .disabled(!entry.enabled)
+                                    .on_click(move |_, _, app| {
+                                        let cid = cid.clone();
+                                        let key = key.clone();
+                                        let p = p.clone();
+                                        e.update(app, |this, cx| {
+                                            this.refresh_node(&cid, &key, Some(p.clone()), cx);
+                                        });
+                                    })
+                            }),
+                            // B6 staged：删除对象（表 / 视图 / 序列）。已入队 → 单项移除；
+                            // 未入队 → 单项确认对话框，OK 后入队（不立即执行 DDL）。
+                            // 臂体用 `and_then`/`?` 求值为 `Option<PopupMenuItem>`；`return` 只在
+                            // 本闭包内返回，不外层越层到菜单构造闭包。
+                            NavActionId::DeleteObject => kind.and_then(|kind| {
+                                staged_menu_label(NavOp::Drop, kind, staged_hit).and_then(|label| {
+                                    if staged_hit {
+                                        let entity = entity.clone();
+                                        let key = nkey.clone();
+                                        return Some(
+                                            PopupMenuItem::new(label)
+                                                .disabled(!entry.enabled)
+                                                .on_click(move |_, _, app| {
+                                                    entity.update(app, |this, cx| {
+                                                        this.dismiss_staged_entry(&key, cx)
+                                                    });
+                                                }),
+                                        );
+                                    }
+                                    let prop = menu_prop.clone()?;
+                                    let qualified = qualified.clone()?;
+                                    let (title, description, ok_text) =
+                                        staged_dialog_copy(NavOp::Drop, kind, &qualified)?;
                                     let entity = entity.clone();
-                                    let key = nkey.clone();
-                                    return Some(
+                                    let staged = StagedOp {
+                                        key: nkey.clone(),
+                                        conn_id: conn_id.clone(),
+                                        driver: driver.clone(),
+                                        catalog: prop.catalog.clone(),
+                                        schema: prop.schema.clone(),
+                                        parent: prop.parent.clone(),
+                                        object_name: prop.name.clone(),
+                                        object_kind: kind,
+                                        op: NavOp::Drop,
+                                        error: None,
+                                    };
+                                    Some(
                                         PopupMenuItem::new(label)
                                             .disabled(!entry.enabled)
-                                            .on_click(move |_, _, app| {
-                                                entity.update(app, |this, cx| {
-                                                    this.dismiss_staged_entry(&key, cx)
-                                                });
+                                            .on_click(move |_, window, app| {
+                                                let entity = entity.clone();
+                                                let staged = staged.clone();
+                                                // `on_click` 是 `Fn`（可多次触发），`description` 为 `String`
+                                                // 不可被内层 builder 闭包 move；先复制一份再移入。
+                                                let description = description.clone();
+                                                window.open_alert_dialog(
+                                                    app,
+                                                    move |alert, _window, _cx| {
+                                                        let entity = entity.clone();
+                                                        let staged = staged.clone();
+                                                        alert
+                                                            .confirm()
+                                                            .title(title)
+                                                            .description(description.clone())
+                                                            .button_props(
+                                                                DialogButtonProps::default()
+                                                                    .ok_text(ok_text)
+                                                                    .ok_variant(
+                                                                        ButtonVariant::Danger,
+                                                                    )
+                                                                    .show_cancel(true),
+                                                            )
+                                                            .on_ok(move |_, _, app| {
+                                                                let staged = staged.clone();
+                                                                entity.update(app, |this, cx| {
+                                                                    this.apply_staged_enqueue(
+                                                                        staged, cx,
+                                                                    )
+                                                                });
+                                                                true
+                                                            })
+                                                    },
+                                                );
                                             }),
-                                    );
-                                }
-                                let prop = menu_prop.clone()?;
-                                let qualified = qualified.clone()?;
-                                let (title, description, ok_text) =
-                                    staged_dialog_copy(NavOp::Drop, kind, &qualified)?;
-                                let entity = entity.clone();
-                                let staged = StagedOp {
-                                    key: nkey.clone(),
-                                    conn_id: conn_id.clone(),
-                                    driver: driver.clone(),
-                                    catalog: prop.catalog.clone(),
-                                    schema: prop.schema.clone(),
-                                    parent: prop.parent.clone(),
-                                    object_name: prop.name.clone(),
-                                    object_kind: kind,
-                                    op: NavOp::Drop,
-                                    error: None,
-                                };
-                                Some(
-                                    PopupMenuItem::new(label)
-                                        .disabled(!entry.enabled)
-                                        .on_click(move |_, window, app| {
+                                    )
+                                })
+                            }),
+                            // B6 staged：清空表（仅 Table；类型白名单由注册表 applies 过滤）。
+                            NavActionId::EmptyTable => kind.and_then(|kind| {
+                                staged_menu_label(NavOp::Truncate, kind, staged_hit).and_then(
+                                    |label| {
+                                        if staged_hit {
                                             let entity = entity.clone();
-                                            let staged = staged.clone();
-                                            // `on_click` 是 `Fn`（可多次触发），`description` 为 `String`
-                                            // 不可被内层 builder 闭包 move；先复制一份再移入。
-                                            let description = description.clone();
-                                            window.open_alert_dialog(
-                                                app,
-                                                move |alert, _window, _cx| {
+                                            let key = nkey.clone();
+                                            return Some(
+                                                PopupMenuItem::new(label)
+                                                    .disabled(!entry.enabled)
+                                                    .on_click(move |_, _, app| {
+                                                        entity.update(app, |this, cx| {
+                                                            this.dismiss_staged_entry(&key, cx)
+                                                        });
+                                                    }),
+                                            );
+                                        }
+                                        let prop = menu_prop.clone()?;
+                                        let qualified = qualified.clone()?;
+                                        let (title, description, ok_text) =
+                                            staged_dialog_copy(NavOp::Truncate, kind, &qualified)?;
+                                        let entity = entity.clone();
+                                        let staged = StagedOp {
+                                            key: nkey.clone(),
+                                            conn_id: conn_id.clone(),
+                                            driver: driver.clone(),
+                                            catalog: prop.catalog.clone(),
+                                            schema: prop.schema.clone(),
+                                            parent: prop.parent.clone(),
+                                            object_name: prop.name.clone(),
+                                            object_kind: kind,
+                                            op: NavOp::Truncate,
+                                            error: None,
+                                        };
+                                        Some(
+                                            PopupMenuItem::new(label)
+                                                .disabled(!entry.enabled)
+                                                .on_click(move |_, window, app| {
                                                     let entity = entity.clone();
                                                     let staged = staged.clone();
-                                                    alert
-                                                        .confirm()
-                                                        .title(title)
-                                                        .description(description.clone())
-                                                        .button_props(
-                                                            DialogButtonProps::default()
-                                                                .ok_text(ok_text)
-                                                                .ok_variant(ButtonVariant::Danger)
-                                                                .show_cancel(true),
-                                                        )
-                                                        .on_ok(move |_, _, app| {
+                                                    let description = description.clone();
+                                                    window.open_alert_dialog(
+                                                        app,
+                                                        move |alert, _window, _cx| {
+                                                            let entity = entity.clone();
                                                             let staged = staged.clone();
-                                                            entity.update(app, |this, cx| {
+                                                            alert
+                                                                .confirm()
+                                                                .title(title)
+                                                                .description(description.clone())
+                                                                .button_props(
+                                                                    DialogButtonProps::default()
+                                                                        .ok_text(ok_text)
+                                                                        .ok_variant(
+                                                                            ButtonVariant::Danger,
+                                                                        )
+                                                                        .show_cancel(true),
+                                                                )
+                                                                .on_ok(move |_, _, app| {
+                                                                    let staged = staged.clone();
+                                                                    entity.update(app, |this, cx| {
                                                                 this.apply_staged_enqueue(
                                                                     staged, cx,
                                                                 )
                                                             });
-                                                            true
-                                                        })
-                                                },
-                                            );
-                                        }),
+                                                                    true
+                                                                })
+                                                        },
+                                                    );
+                                                }),
+                                        )
+                                    },
                                 )
-                            })
-                        }),
-                        // B6 staged：清空表（仅 Table；类型白名单由注册表 applies 过滤）。
-                        NavActionId::EmptyTable => kind.and_then(|kind| {
-                            staged_menu_label(NavOp::Truncate, kind, staged_hit).and_then(|label| {
-                                if staged_hit {
-                                    let entity = entity.clone();
-                                    let key = nkey.clone();
-                                    return Some(
-                                        PopupMenuItem::new(label)
-                                            .disabled(!entry.enabled)
-                                            .on_click(move |_, _, app| {
-                                                entity.update(app, |this, cx| {
-                                                    this.dismiss_staged_entry(&key, cx)
-                                                });
-                                            }),
-                                    );
-                                }
-                                let prop = menu_prop.clone()?;
-                                let qualified = qualified.clone()?;
-                                let (title, description, ok_text) =
-                                    staged_dialog_copy(NavOp::Truncate, kind, &qualified)?;
-                                let entity = entity.clone();
-                                let staged = StagedOp {
-                                    key: nkey.clone(),
-                                    conn_id: conn_id.clone(),
-                                    driver: driver.clone(),
-                                    catalog: prop.catalog.clone(),
-                                    schema: prop.schema.clone(),
-                                    parent: prop.parent.clone(),
-                                    object_name: prop.name.clone(),
-                                    object_kind: kind,
-                                    op: NavOp::Truncate,
-                                    error: None,
-                                };
-                                Some(
-                                    PopupMenuItem::new(label)
-                                        .disabled(!entry.enabled)
-                                        .on_click(move |_, window, app| {
-                                            let entity = entity.clone();
-                                            let staged = staged.clone();
-                                            let description = description.clone();
-                                            window.open_alert_dialog(
-                                                app,
-                                                move |alert, _window, _cx| {
-                                                    let entity = entity.clone();
-                                                    let staged = staged.clone();
-                                                    alert
-                                                        .confirm()
-                                                        .title(title)
-                                                        .description(description.clone())
-                                                        .button_props(
-                                                            DialogButtonProps::default()
-                                                                .ok_text(ok_text)
-                                                                .ok_variant(ButtonVariant::Danger)
-                                                                .show_cancel(true),
-                                                        )
-                                                        .on_ok(move |_, _, app| {
-                                                            let staged = staged.clone();
-                                                            entity.update(app, |this, cx| {
-                                                                this.apply_staged_enqueue(
-                                                                    staged, cx,
-                                                                )
-                                                            });
-                                                            true
-                                                        })
-                                                },
-                                            );
-                                        }),
-                                )
-                            })
-                        })
-                    };
-                    if let Some(item) = item {
-                        if prev_group.is_some() && prev_group != Some(d.group) {
-                            menu = menu.separator();
+                            }),
+                        };
+                        if let Some(item) = item {
+                            if prev_group.is_some() && prev_group != Some(d.group) {
+                                menu = menu.separator();
+                            }
+                            menu = menu.item(item);
+                            prev_group = Some(d.group);
                         }
-                        menu = menu.item(item);
-                        prev_group = Some(d.group);
                     }
+                    menu
                 }
-                menu
-            }
-        }));
+            }),
+        );
 
         let indent_px = indent + ui::TREE_INDENT;
         if self.nav.borrow().loading.contains(&node.key) {
@@ -3138,7 +3136,9 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         };
                         let conn_id = retry_conn.clone();
                         let key = retry_key.clone();
-                        e.update(app, |this, cx| this.retry_nav_node(&conn_id, &key, path, cx));
+                        e.update(app, |this, cx| {
+                            this.retry_nav_node(&conn_id, &key, path, cx)
+                        });
                     }),
             );
         }
@@ -3436,7 +3436,13 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     .text_xs()
                     .text_color(fg)
                     .text_ellipsis()
-                    .child(nav_name_highlight(&hit.object_name, &filter, match_bg, fg, false)),
+                    .child(nav_name_highlight(
+                        &hit.object_name,
+                        &filter,
+                        match_bg,
+                        fg,
+                        false,
+                    )),
             )
             // 类别 / 归属元信息：可缩可截（旧写法 `flex_shrink_0` 无上限，会把名称挤没）。
             // 注释 / 定义命中在类别前加一枚 why 徽标；名称命中不加（默认通道，不冗余标注）。
@@ -3451,10 +3457,9 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     .text_ellipsis();
                 if let Some((label, role)) = badge {
                     let (role_color, role_bg) = match role {
-                        NavHitBadgeRole::Comment => (
-                            cx.theme().colors.info,
-                            cx.theme().colors.info.alpha(0.14),
-                        ),
+                        NavHitBadgeRole::Comment => {
+                            (cx.theme().colors.info, cx.theme().colors.info.alpha(0.14))
+                        }
                         NavHitBadgeRole::Definition => (
                             cx.theme().colors.warning,
                             cx.theme().colors.warning.alpha(0.14),

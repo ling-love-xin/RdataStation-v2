@@ -27,14 +27,8 @@ impl DialectSpi for PostgresqlDialect {
             _ => self.quote_ident(n),
         };
         match kind {
-            ObjectKind::Table => Ok(format!(
-                "ALTER TABLE {} RENAME TO {new_ident}",
-                qual(old)
-            )),
-            ObjectKind::View => Ok(format!(
-                "ALTER VIEW {} RENAME TO {new_ident}",
-                qual(old)
-            )),
+            ObjectKind::Table => Ok(format!("ALTER TABLE {} RENAME TO {new_ident}", qual(old))),
+            ObjectKind::View => Ok(format!("ALTER VIEW {} RENAME TO {new_ident}", qual(old))),
             ObjectKind::Sequence => Ok(format!(
                 "ALTER SEQUENCE {} RENAME TO {new_ident}",
                 qual(old)
@@ -94,7 +88,9 @@ impl DialectSpi for PostgresqlDialect {
 
     fn truncate_table_sql(&self, schema: Option<&str>, name: &str) -> Result<String, CoreError> {
         let qual = match schema {
-            Some(s) if !s.is_empty() => format!("{}.{}", self.quote_ident(s), self.quote_ident(name)),
+            Some(s) if !s.is_empty() => {
+                format!("{}.{}", self.quote_ident(s), self.quote_ident(name))
+            }
             _ => self.quote_ident(name),
         };
         Ok(format!("TRUNCATE TABLE {qual}"))
@@ -135,18 +131,36 @@ mod tests {
     fn rename_table_view_sequence_with_schema_prefix() {
         let d = PostgresqlDialect;
         assert_eq!(
-            d.rename_sql(ObjectKind::Table, Some("public"), "t_user", None, "t_account")
-                .unwrap(),
+            d.rename_sql(
+                ObjectKind::Table,
+                Some("public"),
+                "t_user",
+                None,
+                "t_account"
+            )
+            .unwrap(),
             "ALTER TABLE \"public\".\"t_user\" RENAME TO \"t_account\""
         );
         assert_eq!(
-            d.rename_sql(ObjectKind::View, Some("public"), "v_active", None, "v_enabled")
-                .unwrap(),
+            d.rename_sql(
+                ObjectKind::View,
+                Some("public"),
+                "v_active",
+                None,
+                "v_enabled"
+            )
+            .unwrap(),
             "ALTER VIEW \"public\".\"v_active\" RENAME TO \"v_enabled\""
         );
         assert_eq!(
-            d.rename_sql(ObjectKind::Sequence, Some("public"), "seq_id", None, "seq_uid")
-                .unwrap(),
+            d.rename_sql(
+                ObjectKind::Sequence,
+                Some("public"),
+                "seq_id",
+                None,
+                "seq_uid"
+            )
+            .unwrap(),
             "ALTER SEQUENCE \"public\".\"seq_id\" RENAME TO \"seq_uid\""
         );
     }
@@ -168,7 +182,13 @@ mod tests {
             "ALTER TRIGGER \"trg_audit\" ON \"public\".\"t_user\" RENAME TO \"trg_audit_v2\""
         );
         let err = d
-            .rename_sql(ObjectKind::Trigger, Some("public"), "trg_audit", None, "trg_audit_v2")
+            .rename_sql(
+                ObjectKind::Trigger,
+                Some("public"),
+                "trg_audit",
+                None,
+                "trg_audit_v2",
+            )
             .expect_err("缺父表应拒绝");
         assert!(err.to_string().contains("父表"), "{err}");
     }
@@ -180,14 +200,23 @@ mod tests {
             .rename_sql(ObjectKind::Routine, Some("public"), "sp_do", None, "sp_run")
             .expect_err("例程需签名，应拒绝");
         assert!(err.to_string().contains("暂不支持"), "{err}");
-        assert!(d.rename_sql(ObjectKind::Schema, Some("public"), "s", None, "s2").is_err());
+        assert!(
+            d.rename_sql(ObjectKind::Schema, Some("public"), "s", None, "s2")
+                .is_err()
+        );
     }
 
     #[test]
     fn rename_escapes_embedded_quotes() {
         let d = PostgresqlDialect;
         let sql = d
-            .rename_sql(ObjectKind::Table, Some("public"), "we\"ird", None, "new\"name")
+            .rename_sql(
+                ObjectKind::Table,
+                Some("public"),
+                "we\"ird",
+                None,
+                "new\"name",
+            )
             .unwrap();
         assert_eq!(
             sql,
@@ -273,9 +302,7 @@ mod tests {
             .drop_sql(ObjectKind::Table, Some("public"), "we\"ird", None)
             .unwrap();
         assert_eq!(drop, "DROP TABLE \"public\".\"we\"\"ird\"");
-        let trunc = d
-            .truncate_table_sql(Some("public"), "we\"ird")
-            .unwrap();
+        let trunc = d.truncate_table_sql(Some("public"), "we\"ird").unwrap();
         assert_eq!(trunc, "TRUNCATE TABLE \"public\".\"we\"\"ird\"");
     }
 }

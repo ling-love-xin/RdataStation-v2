@@ -4,11 +4,11 @@
 //! 只移动文件不重写逻辑；`pub mod temp_table` / `pub mod analysis` 经
 //! `duckdb/mod.rs` 传导，外部 `engine::duckdb::analysis::*` 路径零改动。
 
-pub mod temp_table;
 pub mod analysis;
+pub mod temp_table;
 
-pub use temp_table::*;
 pub use analysis::*;
+pub use temp_table::*;
 
 // 标识符加引号的**唯一规则**在临时表模块（B7 切片二的导出 COPY 也要用）；
 // 原 `duckdb/mod.rs` 以 `pub(crate)` 导出，目录内保持同一可见性（不能经 `pub use …::*` 提升）。

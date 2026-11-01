@@ -448,9 +448,8 @@ impl NavView {
         let host = self.host.clone();
         let weak = cx.entity().downgrade();
         let executor = cx.background_executor().clone();
-        let metadata = crate::metadata_service::MetadataService::new(
-            engine::get_connection_manager().clone(),
-        );
+        let metadata =
+            crate::metadata_service::MetadataService::new(engine::get_connection_manager().clone());
         let _ = cx.spawn(async move |_this, cx| {
             // 执行用的副本（`conn_id` 外层还要用：回 UI 线程刷新）。
             let exec_conn = conn_id.clone();
@@ -462,15 +461,13 @@ impl NavView {
                         .map(|_| ())
                 })
                 .await;
-            let _ = weak.update(cx, |view, cx| {
-                match result {
-                    Ok(()) => {
-                        host.notice(format!("已重命名为“{new_name}”"), cx);
-                        view.refresh_connection_after_filter(&conn_id, cx);
-                    }
-                    Err(e) => {
-                        host.notice(format!("重命名失败: {e}"), cx);
-                    }
+            let _ = weak.update(cx, |view, cx| match result {
+                Ok(()) => {
+                    host.notice(format!("已重命名为“{new_name}”"), cx);
+                    view.refresh_connection_after_filter(&conn_id, cx);
+                }
+                Err(e) => {
+                    host.notice(format!("重命名失败: {e}"), cx);
                 }
             });
         });

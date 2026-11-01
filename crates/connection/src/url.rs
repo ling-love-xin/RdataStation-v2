@@ -4,7 +4,7 @@
 //! 只依赖 `shared`（加密）与本 crate 的 `model::DataSource`，不依赖 engine，
 //! 因此可被传输层与 UI 层同时复用。
 
-use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
 use crate::model::DataSource;
 
@@ -119,7 +119,12 @@ mod tests {
     use super::*;
     use crate::model::{ConnectionScope, DataSource};
 
-    fn ds(db_type: &str, host: Option<&str>, port: Option<u16>, database: Option<&str>) -> DataSource {
+    fn ds(
+        db_type: &str,
+        host: Option<&str>,
+        port: Option<u16>,
+        database: Option<&str>,
+    ) -> DataSource {
         DataSource {
             id: "G_conn_demo".to_string(),
             name: "demo".to_string(),
@@ -154,10 +159,14 @@ mod tests {
     fn test_build_url_network_with_encoded_credentials() {
         let mut d = ds("postgres", Some("10.0.0.9"), Some(5433), Some("warehouse"));
         d.username = Some("alice@corp".to_string());
-        d.password_encrypted = Some(shared::crypto::encrypt_password("p@ss:w/rd%").expect("encrypt"));
+        d.password_encrypted =
+            Some(shared::crypto::encrypt_password("p@ss:w/rd%").expect("encrypt"));
 
         let url = build_connection_url(&d).expect("build");
-        assert_eq!(url, "postgres://alice%40corp:p%40ss%3Aw%2Frd%25@10.0.0.9:5433/warehouse");
+        assert_eq!(
+            url,
+            "postgres://alice%40corp:p%40ss%3Aw%2Frd%25@10.0.0.9:5433/warehouse"
+        );
         // 脱敏保留用户名，隐藏密码。
         assert_eq!(
             mask_password_in_url(&url),
@@ -238,12 +247,18 @@ mod tests {
         // host 缺省 → 127.0.0.1；无用户名 → 凭据整段省略（密码不单独出现在 URL）
         let mut d = ds("postgres", None, Some(5432), Some("db"));
         d.password_encrypted = Some(shared::crypto::encrypt_password("pw").expect("encrypt"));
-        assert_eq!(build_connection_url(&d).expect("build"), "postgres://127.0.0.1:5432/db");
+        assert_eq!(
+            build_connection_url(&d).expect("build"),
+            "postgres://127.0.0.1:5432/db"
+        );
 
         // 有用户名无密码 → 仅用户名
         let mut d2 = ds("mysql", None, None, None);
         d2.username = Some("root".to_string());
-        assert_eq!(build_connection_url(&d2).expect("build"), "mysql://root@127.0.0.1/");
+        assert_eq!(
+            build_connection_url(&d2).expect("build"),
+            "mysql://root@127.0.0.1/"
+        );
     }
 
     #[test]
@@ -259,7 +274,10 @@ mod tests {
         // userinfo 已百分号编码时按原样取出（解码由下游驱动负责）
         assert_eq!(
             extract_credentials_from_url("mysql://alice%40corp:p%40ss%3Aw%2Frd@h:3306/db"),
-            (Some("alice%40corp".to_string()), Some("p%40ss%3Aw%2Frd".to_string()))
+            (
+                Some("alice%40corp".to_string()),
+                Some("p%40ss%3Aw%2Frd".to_string())
+            )
         );
     }
 

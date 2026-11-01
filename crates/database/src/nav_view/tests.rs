@@ -7,20 +7,18 @@
 // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
 use super::nav_type_badge;
 use super::{
-    NavBadgeStatus, NavViewState, RevealTarget, StagedOp, EnqueueOutcome, insight_schema_target,
+    EnqueueOutcome, NavBadgeStatus, NavViewState, RevealTarget, StagedOp, insight_schema_target,
     key_in_subtree, nav_badge_pulses, nav_data_target, nav_forget_attempt, nav_kind_icon,
     nav_load_is_retry, nav_merge_page, nav_object_type_label, nav_order_members, nav_relative_time,
-    nav_reorder, nav_scope_tooltip, nav_search_hit_property, nav_search_hit_ref, nav_search_query_ready,
-    nav_selection_is_persistable, nav_step, nav_type_label, nav_type_short_label, parse_nav_search,
-    search_hit_row_id, search_hit_row_key,
+    nav_reorder, nav_scope_tooltip, nav_search_hit_property, nav_search_hit_ref,
+    nav_search_query_ready, nav_selection_is_persistable, nav_step, nav_type_label,
+    nav_type_short_label, parse_nav_search, search_hit_row_id, search_hit_row_key,
 };
 use crate::commands::NavClearSearch;
-use crate::model::{
-    NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef,
-};
+use crate::model::{NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef};
 use crate::nav::capability::NavOp;
-use property::PropertyKind;
 use crate::nav_rows::{NavRow, PlaceholderKind};
+use property::PropertyKind;
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime};
 // 窗口级验收要用的两个 trait（显式导入，不通配：`use gpui_kit::*` 会把 `test` 宏带进来）。
@@ -143,7 +141,8 @@ mod stub_host {
         fn set_nav_filters(&self, _filters: NavFilters, _cx: &mut App) {}
         fn is_connected(&self, conn_id: &str) -> bool {
             self.connected.borrow().contains(conn_id)
-        }        fn connect(&self, _conn_id: &str) -> Result<(), String> {
+        }
+        fn connect(&self, _conn_id: &str) -> Result<(), String> {
             Ok(())
         }
         fn disconnect(&self, _conn_id: &str) -> Result<(), String> {
@@ -193,7 +192,13 @@ mod stub_host {
         fn all_tag_names(&self) -> Vec<String> {
             Vec::new()
         }
-        fn open_visible_databases_dialog(&self, _conn_id: &str, _window: &mut Window, _cx: &mut App) {}
+        fn open_visible_databases_dialog(
+            &self,
+            _conn_id: &str,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) {
+        }
         fn saved_views(&self, _cx: &App) -> Vec<SavedViewMeta> {
             Vec::new()
         }
@@ -208,10 +213,19 @@ mod stub_host {
         fn delete_saved_view(&self, _name: &str, _cx: &mut App) -> Result<(), String> {
             Ok(())
         }
-        fn open_saved_view_dialog(&self, _filters: NavFilters, _window: &mut Window, _cx: &mut App) {
+        fn open_saved_view_dialog(
+            &self,
+            _filters: NavFilters,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) {
         }
         fn open_manage_views_dialog(&self, _window: &mut Window, _cx: &mut App) {}
-        fn visible_databases(&self, _conn_id: &str, _cx: &App) -> Option<std::collections::BTreeSet<String>> {
+        fn visible_databases(
+            &self,
+            _conn_id: &str,
+            _cx: &App,
+        ) -> Option<std::collections::BTreeSet<String>> {
             // 测试替身：默认模式（None）——不干扰现有用例的树加载。
             None
         }
@@ -470,10 +484,7 @@ fn connect_success_skips_collapsed_root(cx: &mut gpui_kit::TestAppContext) {
         (s.connected.contains(conn), s.attempted.contains(conn))
     });
     assert!(connected, "连接应标记为已连接");
-    assert!(
-        !attempted,
-        "未展开的连接根不自动重载"
-    );
+    assert!(!attempted, "未展开的连接根不自动重载");
 }
 
 /// D9（#64）：`refresh_node` 刷新 catalog 子树——expanded 逐层保留（diff-merge 口径），
@@ -513,7 +524,10 @@ fn refresh_node_keeps_expanded_and_clears_subtree_bookkeeping(cx: &mut gpui_kit:
     });
     let (expanded, jumped, loading, selected_key) = snapshot;
     for key in [conn, &catalog_key, &schema_key, &folder_key] {
-        assert!(expanded.contains(&key.to_string()), "expanded 应保留子树展开态：{key}");
+        assert!(
+            expanded.contains(&key.to_string()),
+            "expanded 应保留子树展开态：{key}"
+        );
     }
     assert!(jumped.is_empty(), "子树内定位窗应随刷新清空");
     // 子树内在途标记应清空；子树外（连接根）由 render 恢复机制重新入队，属正常在途。
@@ -536,10 +550,7 @@ fn refresh_node_keeps_selection_outside_subtree(cx: &mut gpui_kit::TestAppContex
     let (view, cx) = open_nav_view(cx, conn);
     let catalog_key = NavNode::child_key(conn, &["shop"]);
     cx.update(|_window, cx| {
-        view.read(cx)
-            .nav
-            .borrow_mut()
-            .selected_key = Some(conn.to_string());
+        view.read(cx).nav.borrow_mut().selected_key = Some(conn.to_string());
     });
     cx.update(|_window, cx| {
         view.update(cx, |v, cx| {
@@ -1444,7 +1455,11 @@ fn staged_drop_blocks_later_truncate() {
     let mut state = NavViewState::default();
     state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Drop));
     let outcome = state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Truncate));
-    assert_eq!(outcome, EnqueueOutcome::Ignored, "drop 已含清空，再入 truncate 忽略");
+    assert_eq!(
+        outcome,
+        EnqueueOutcome::Ignored,
+        "drop 已含清空，再入 truncate 忽略"
+    );
     assert_eq!(state.staged_count(), 1);
     assert_eq!(
         state.staged_lookup("G_1/shop/public/orders").unwrap().op,
@@ -1458,7 +1473,11 @@ fn staged_truncate_then_drop_replaces_entry() {
     let first = state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Truncate));
     let second = state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Drop));
     assert_eq!(first, EnqueueOutcome::Added);
-    assert_eq!(second, EnqueueOutcome::Replaced, "同对象最终状态以 Drop 为准");
+    assert_eq!(
+        second,
+        EnqueueOutcome::Replaced,
+        "同对象最终状态以 Drop 为准"
+    );
     assert_eq!(state.staged_count(), 1, "原位替换不得追加");
     assert_eq!(
         state.staged_lookup("G_1/shop/public/orders").unwrap().op,
@@ -1540,7 +1559,9 @@ fn staged_mark_failed_attaches_error_and_unknown_key_is_noop() {
     let mut state = NavViewState::default();
     state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Drop));
     state.mark_staged_failed("G_1/shop/public/orders", "连接已断开".to_string());
-    let entry = state.staged_lookup("G_1/shop/public/orders").expect("条目应保留");
+    let entry = state
+        .staged_lookup("G_1/shop/public/orders")
+        .expect("条目应保留");
     assert_eq!(entry.error.as_deref(), Some("连接已断开"));
     // 未命中 key（执行间隙被单项移除 / 撤销）静默不动，不 panic。
     state.mark_staged_failed("G_1/shop/public/missing", "x".to_string());
@@ -1555,8 +1576,13 @@ fn staged_success_dismiss_and_failure_mark_coexist_in_commit_writeback() {
     // 模拟提交回写编排：成功条目移除，失败条目保留并附错，两条互不干扰。
     state.dismiss_staged("G_1/shop/public/orders");
     state.mark_staged_failed("G_1/shop/public/items", "关系不存在".to_string());
-    assert!(state.staged_lookup("G_1/shop/public/orders").is_none(), "成功应移除");
-    let kept = state.staged_lookup("G_1/shop/public/items").expect("失败应保留");
+    assert!(
+        state.staged_lookup("G_1/shop/public/orders").is_none(),
+        "成功应移除"
+    );
+    let kept = state
+        .staged_lookup("G_1/shop/public/items")
+        .expect("失败应保留");
     assert_eq!(kept.error.as_deref(), Some("关系不存在"));
     assert_eq!(state.staged_count(), 1);
 }
@@ -1599,7 +1625,9 @@ fn staged_dismiss_entry_via_view_method_removes_only_target(cx: &mut gpui_kit::T
         });
     });
     cx.update(|_window, cx| {
-        view.update(cx, |v, cx| v.dismiss_staged_entry("G_1/shop/public/orders", cx));
+        view.update(cx, |v, cx| {
+            v.dismiss_staged_entry("G_1/shop/public/orders", cx)
+        });
     });
     let (count, gone, kept) = cx.update(|_window, cx| {
         let s = view.read(cx).nav.borrow();
@@ -1663,9 +1691,7 @@ fn staged_prepare_commit_candidate_copy_matches_count(cx: &mut gpui_kit::TestApp
     let conn = "G_1";
     let (view, cx) = open_nav_view(cx, conn);
     // 空集：不开窗。
-    let empty = cx.update(|_window, cx| {
-        view.update(cx, |v, cx| v.prepare_commit_staged(cx))
-    });
+    let empty = cx.update(|_window, cx| view.update(cx, |v, cx| v.prepare_commit_staged(cx)));
     assert!(empty.is_none(), "空集不得产出汇总候选");
 
     cx.update(|_window, cx| {
@@ -2567,7 +2593,11 @@ fn prefix_match_wraps_around_and_skips_nameless_rows() {
 
 #[test]
 fn prefix_match_respects_start_after_selected_row() {
-    let order = order_with_names(&[("a", Some("Apple")), ("b", Some("Apricot")), ("c", Some("Acer"))]);
+    let order = order_with_names(&[
+        ("a", Some("Apple")),
+        ("b", Some("Apricot")),
+        ("c", Some("Acer")),
+    ]);
     // 选中 a（start=1）：下一个「ap」前缀是 Apricot；不会回跳到 Apple（start 已越过它）。
     assert_eq!(super::nav_match_prefix(&order, "ap", 1), Some(1));
     // 选中 b（start=2）：ap 无后续匹配 → 环绕到 a（Apple）。
@@ -2617,7 +2647,9 @@ fn conn_menu_gates_only_refresh_on_disconnect() {
 
 /// 顶层本地筛选无匹配：摆一条 FilterEmpty 占位；占位行不可选、不进键盘漫游。
 #[gpui_kit::test]
-fn placeholder_filter_empty_at_root_is_not_selectable_and_skipped_by_roaming(cx: &mut gpui_kit::TestAppContext) {
+fn placeholder_filter_empty_at_root_is_not_selectable_and_skipped_by_roaming(
+    cx: &mut gpui_kit::TestAppContext,
+) {
     let conn = "G_1";
     let (view, cx) = open_nav_view(cx, conn);
     cx.update(|_window, cx| {
@@ -2633,7 +2665,12 @@ fn placeholder_filter_empty_at_root_is_not_selectable_and_skipped_by_roaming(cx:
     // 索引搜索 2 字门槛，`search_query` 保持 None）。
     cx.update(|window, cx| set_search_text(&view, "z", window, cx));
     let rows = assert_collect_matches_render(&view, cx, "顶层筛选空态");
-    assert_eq!(rows.len(), 1, "连接壳被滤掉后只剩一条占位行，实际：{:?}", all_keys(&rows));
+    assert_eq!(
+        rows.len(),
+        1,
+        "连接壳被滤掉后只剩一条占位行，实际：{:?}",
+        all_keys(&rows)
+    );
     let NavRow::Placeholder {
         kind,
         depth,
@@ -2650,16 +2687,15 @@ fn placeholder_filter_empty_at_root_is_not_selectable_and_skipped_by_roaming(cx:
     assert!(!rows[0].selectable(), "占位行不可选中");
     assert!(rows[0].node().is_none());
     assert!(rows[0].conn_id().is_none());
-    assert!(
-        roam_keys(&rows).is_empty(),
-        "占位行不进键盘漫游序列"
-    );
+    assert!(roam_keys(&rows).is_empty(), "占位行不进键盘漫游序列");
 }
 
 /// 顶层索引搜索完成且无命中：连接壳仍可见，但对象行无 → SearchEmpty 占位排在连接行之后；
 /// 占位行不进漫游，消息带上原词。
 #[gpui_kit::test]
-fn placeholder_search_empty_lands_after_connection_shell_and_carries_query(cx: &mut gpui_kit::TestAppContext) {
+fn placeholder_search_empty_lands_after_connection_shell_and_carries_query(
+    cx: &mut gpui_kit::TestAppContext,
+) {
     let conn = "G_1";
     let (view, cx) = open_nav_view(cx, conn);
     cx.update(|_window, cx| {
@@ -2794,13 +2830,8 @@ fn search_signature_flips_on_mode_and_corpus_flags(cx: &mut gpui_kit::TestAppCon
     // 预置一条已有命中；词与标志都不变 → 不判变更，命中保留、签名不换。
     cx.update(|_window, cx| {
         view.update(cx, |view, _cx| {
-            view.nav.borrow_mut().search_hits = vec![hit(
-                "table",
-                "orders",
-                None,
-                Some("public"),
-                Some("shop"),
-            )];
+            view.nav.borrow_mut().search_hits =
+                vec![hit("table", "orders", None, Some("public"), Some("shop"))];
         });
         view.update(cx, |view, cx| view.nav_schedule_index_search("ord", cx));
     });

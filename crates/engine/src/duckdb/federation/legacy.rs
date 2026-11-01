@@ -11,7 +11,7 @@
 //! 保留原因：它还有调用方与测试（`generate_attach_global_sql` / 物化语句生成等），
 //! 按仓库习惯**标“已被取代”而不静默删**；等 `session.rs` 覆盖完四类源与物化路径后一并退役。
 
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use std::collections::HashMap;
 use std::sync::Mutex;
 

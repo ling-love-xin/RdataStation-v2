@@ -110,9 +110,9 @@ pub fn nav_node_object_kind(kind: &NavNodeKind) -> Option<ObjectKind> {
         NavNodeKind::Column { .. } => Some(ObjectKind::Column),
         NavNodeKind::Catalog => Some(ObjectKind::Catalog),
         NavNodeKind::Schema => Some(ObjectKind::Schema),
-        NavNodeKind::Connection { .. }
-        | NavNodeKind::Folder(_)
-        | NavNodeKind::ColumnOverflow => None,
+        NavNodeKind::Connection { .. } | NavNodeKind::Folder(_) | NavNodeKind::ColumnOverflow => {
+            None
+        }
     }
 }
 
@@ -200,7 +200,10 @@ pub fn family_ops(family_id: &str, kind: Option<ObjectKind>) -> OpSet {
         ops = ops.add(NavOp::GenDml);
     }
 
-    if matches!(kind, ObjectKind::Table | ObjectKind::View | ObjectKind::Schema) {
+    if matches!(
+        kind,
+        ObjectKind::Table | ObjectKind::View | ObjectKind::Schema
+    ) {
         ops = ops.add(NavOp::RefreshProps).add(NavOp::InsightSchema);
     }
 
@@ -228,9 +231,7 @@ mod tests {
 
     #[test]
     fn opset_subset() {
-        let parent = OpSet::EMPTY
-            .add(NavOp::CopyName)
-            .add(NavOp::CopyQualified);
+        let parent = OpSet::EMPTY.add(NavOp::CopyName).add(NavOp::CopyQualified);
         let child = OpSet::EMPTY.add(NavOp::CopyName);
         assert!(parent.contains(child));
         assert!(!child.contains(parent));
@@ -266,7 +267,10 @@ mod tests {
     #[test]
     fn node_kind_maps_to_addressable_objects_only() {
         let cases = [
-            (NavNodeKind::Table { row_estimate: None }, Some(ObjectKind::Table)),
+            (
+                NavNodeKind::Table { row_estimate: None },
+                Some(ObjectKind::Table),
+            ),
             (NavNodeKind::View, Some(ObjectKind::View)),
             (
                 NavNodeKind::Routine {
@@ -324,7 +328,12 @@ mod tests {
     #[test]
     fn view_opset_covers_data_and_analysis_but_not_dml() {
         let ops = family_ops("postgresql", Some(ObjectKind::View));
-        for op in [NavOp::ViewData, NavOp::MockData, NavOp::Stats, NavOp::InsightSchema] {
+        for op in [
+            NavOp::ViewData,
+            NavOp::MockData,
+            NavOp::Stats,
+            NavOp::InsightSchema,
+        ] {
             assert!(ops.has(op), "视图应声明 {op:?}");
         }
         assert!(!ops.has(NavOp::GenDml), "视图不生成 DML 模板");
@@ -332,11 +341,20 @@ mod tests {
 
     #[test]
     fn routine_sequence_trigger_keep_copy_only_on_source() {
-        for kind in [ObjectKind::Routine, ObjectKind::Sequence, ObjectKind::Trigger] {
+        for kind in [
+            ObjectKind::Routine,
+            ObjectKind::Sequence,
+            ObjectKind::Trigger,
+        ] {
             let ops = family_ops("postgresql", Some(kind));
             assert!(ops.has(NavOp::CopyQualified), "{kind:?} 应可复制限定名");
             assert!(ops.has(NavOp::CopyName));
-            for op in [NavOp::ViewData, NavOp::GenDml, NavOp::MockData, NavOp::Stats] {
+            for op in [
+                NavOp::ViewData,
+                NavOp::GenDml,
+                NavOp::MockData,
+                NavOp::Stats,
+            ] {
                 assert!(!ops.has(op), "{kind:?} 不应声明 {op:?}");
             }
         }
@@ -385,7 +403,11 @@ mod tests {
             (PropertyKind::Trigger, ObjectKind::Trigger),
         ];
         for (pk, ok) in cases {
-            assert_eq!(property_kind_to_object_kind(pk), Some(ok), "{pk:?} 应映射到 {ok:?}");
+            assert_eq!(
+                property_kind_to_object_kind(pk),
+                Some(ok),
+                "{pk:?} 应映射到 {ok:?}"
+            );
         }
         assert_eq!(property_kind_to_object_kind(PropertyKind::Connection), None);
     }
@@ -395,7 +417,12 @@ mod tests {
         let ops = family_ops("postgresql", Some(ObjectKind::Schema));
         assert!(ops.has(NavOp::InsightSchema));
         assert!(ops.has(NavOp::RefreshProps));
-        for op in [NavOp::ViewData, NavOp::GenDml, NavOp::MockData, NavOp::Stats] {
+        for op in [
+            NavOp::ViewData,
+            NavOp::GenDml,
+            NavOp::MockData,
+            NavOp::Stats,
+        ] {
             assert!(!ops.has(op));
         }
     }

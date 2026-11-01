@@ -103,11 +103,8 @@ impl SecretManager {
         if let Some(dir) = secret_dir {
             std::fs::create_dir_all(dir)
                 .map_err(|e| SecretError::Invalid(format!("创建 Secret 目录失败: {e}")))?;
-            conn.execute_batch(&format!(
-                "SET secret_directory = '{}'",
-                escape_path(dir)
-            ))
-            .map_err(|e| SecretError::Sql(e.to_string()))?;
+            conn.execute_batch(&format!("SET secret_directory = '{}'", escape_path(dir)))
+                .map_err(|e| SecretError::Sql(e.to_string()))?;
         }
         Ok(Self { conn })
     }
@@ -152,9 +149,9 @@ impl SecretManager {
 
     /// 列出全部已注册 Secret（读 `duckdb_secrets()`）
     pub fn list(&self) -> SecretResult<Vec<SecretInfo>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT name, type, storage FROM duckdb_secrets() ORDER BY name",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name, type, storage FROM duckdb_secrets() ORDER BY name")?;
         let rows = stmt.query_map([], |row| {
             Ok(SecretInfo {
                 name: row.get(0)?,
@@ -231,11 +228,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rds_secret_{}_{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
-        let mgr = SecretManager::open_with_dir(
-            dir.join("store.duckdb"),
-            Some(&dir.join("secrets")),
-        )
-        .expect("open isolated secret store");
+        let mgr =
+            SecretManager::open_with_dir(dir.join("store.duckdb"), Some(&dir.join("secrets")))
+                .expect("open isolated secret store");
         (mgr, dir)
     }
 
@@ -353,7 +348,11 @@ mod tests {
         // SQL 转义：单引号加倍（防注入）
         assert_eq!(escape_sql("o'connor"), "o''connor");
         assert_eq!(escape_sql("plain"), "plain");
-        assert_eq!(escape_sql("a;b"), "a;b", "分号无需转义（DuckDB Secret 值非拼接 SQL）");
+        assert_eq!(
+            escape_sql("a;b"),
+            "a;b",
+            "分号无需转义（DuckDB Secret 值非拼接 SQL）"
+        );
 
         // 路径转义：反斜杠 → 正斜杠；单引号加倍（Windows 路径进 SQL 字面量）
         assert_eq!(

@@ -44,7 +44,9 @@ async fn bridge(left: TcpStream, right: TcpStream) {
 
 /// 本地回环 echo 服务（模拟数据库服务器）：收到什么回什么。
 async fn spawn_echo_server() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定 echo 服务");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("绑定 echo 服务");
     let port = listener.local_addr().expect("读取 echo 服务端口").port();
     tokio::spawn(async move {
         loop {
@@ -71,7 +73,9 @@ async fn spawn_echo_server() -> u16 {
 
 /// 最小 SOCKS5 服务端：仅支持无认证 + CONNECT（RFC1928），转发到请求目标。
 async fn spawn_socks5_proxy() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定 SOCKS5 代理");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("绑定 SOCKS5 代理");
     let port = listener.local_addr().expect("读取 SOCKS5 代理端口").port();
     tokio::spawn(async move {
         loop {
@@ -141,7 +145,9 @@ async fn socks5_handle(mut client: TcpStream) -> std::io::Result<()> {
 
 /// 最小 HTTP 代理服务端：仅支持 CONNECT 方法，转发到请求目标。
 async fn spawn_http_connect_proxy() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定 HTTP 代理");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("绑定 HTTP 代理");
     let port = listener.local_addr().expect("读取 HTTP 代理端口").port();
     tokio::spawn(async move {
         loop {
@@ -234,9 +240,16 @@ async fn socks_proxy_tunnel_relays_payload_and_closes_on_drop() {
     assert_ne!(local_port, echo_port, "本地转发端口不应等于目标端口");
 
     let payload = b"rds-socks-roundtrip";
-    assert_eq!(roundtrip(local_port, payload).await, payload, "数据应经代理隧道往返");
+    assert_eq!(
+        roundtrip(local_port, payload).await,
+        payload,
+        "数据应经代理隧道往返"
+    );
     // 凭据与库名应在改写后保留
-    assert!(effective_url.contains("user:secret@"), "改写后 URL 应保留凭据");
+    assert!(
+        effective_url.contains("user:secret@"),
+        "改写后 URL 应保留凭据"
+    );
 
     drop(guards);
     assert_port_closed(local_port).await;
@@ -261,7 +274,11 @@ async fn http_connect_proxy_tunnel_relays_payload() {
     let (_, local_port) = parse_host_port_from_url(&effective_url).expect("解析改写后 URL");
 
     let payload = b"rds-http-roundtrip";
-    assert_eq!(roundtrip(local_port, payload).await, payload, "数据应经 HTTP 代理隧道往返");
+    assert_eq!(
+        roundtrip(local_port, payload).await,
+        payload,
+        "数据应经 HTTP 代理隧道往返"
+    );
 }
 
 #[tokio::test]
@@ -288,7 +305,11 @@ async fn two_hop_proxy_chain_relays_payload() {
     let (_, local_port) = parse_host_port_from_url(&effective_url).expect("解析改写后 URL");
 
     let payload = b"rds-chain-roundtrip";
-    assert_eq!(roundtrip(local_port, payload).await, payload, "数据应经两跳代理链往返");
+    assert_eq!(
+        roundtrip(local_port, payload).await,
+        payload,
+        "数据应经两跳代理链往返"
+    );
 }
 
 #[tokio::test]
@@ -318,7 +339,10 @@ async fn spawn_http_connect_proxy_auth(expected_basic: String) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("绑定认证 HTTP 代理");
-    let port = listener.local_addr().expect("读取认证 HTTP 代理端口").port();
+    let port = listener
+        .local_addr()
+        .expect("读取认证 HTTP 代理端口")
+        .port();
     tokio::spawn(async move {
         loop {
             let Ok((client, _)) = listener.accept().await else {
@@ -333,7 +357,10 @@ async fn spawn_http_connect_proxy_auth(expected_basic: String) -> u16 {
     port
 }
 
-async fn http_connect_handle_auth(mut client: TcpStream, expected_basic: &str) -> std::io::Result<()> {
+async fn http_connect_handle_auth(
+    mut client: TcpStream,
+    expected_basic: &str,
+) -> std::io::Result<()> {
     let mut head = Vec::new();
     let mut chunk = [0u8; 512];
     loop {
@@ -400,7 +427,11 @@ async fn http_proxy_auth_roundtrip_relays_payload() {
     let (_, local_port) = parse_host_port_from_url(&effective_url).expect("解析改写后 URL");
 
     let payload = b"rds-http-auth-roundtrip";
-    assert_eq!(roundtrip(local_port, payload).await, payload, "带认证时应完整往返");
+    assert_eq!(
+        roundtrip(local_port, payload).await,
+        payload,
+        "带认证时应完整往返"
+    );
 }
 
 #[tokio::test]

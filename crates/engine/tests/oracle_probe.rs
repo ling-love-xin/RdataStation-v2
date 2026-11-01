@@ -130,12 +130,7 @@ fn scalar(conn: &duckdb::Connection, sql: &str) -> Result<String, String> {
 fn explain_text(conn: &duckdb::Connection, sql: &str) -> Result<String, String> {
     Ok(rows_of(conn, sql)?
         .iter()
-        .map(|row| {
-            row.iter()
-                .map(value_text)
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
+        .map(|row| row.iter().map(value_text).collect::<Vec<_>>().join(" "))
         .collect::<Vec<_>>()
         .join(" "))
 }
@@ -176,7 +171,11 @@ fn probe_oracle_as_a_federation_source() {
         )
         .map(|_| "ok".to_string()),
     ));
-    for (id, name, amount) in [(1, "alpha", "10.5"), (2, "beta", "20.25"), (3, "gamma", "30.75")] {
+    for (id, name, amount) in [
+        (1, "alpha", "10.5"),
+        (2, "beta", "20.25"),
+        (3, "gamma", "30.75"),
+    ] {
         steps.push((
             "插行",
             conn.execute_batch(&format!(
@@ -258,10 +257,16 @@ fn probe_oracle_as_a_federation_source() {
              FROM duckdb_columns() WHERE database_name = 'ora'",
         )?;
         // 从目录里真读一次（限定名 / 不带 schema 两种写法都试）
-        let qualified = scalar(&conn, &format!("SELECT count(*) FROM ora.DEVUSER.{PROBE_TABLE}"));
+        let qualified = scalar(
+            &conn,
+            &format!("SELECT count(*) FROM ora.DEVUSER.{PROBE_TABLE}"),
+        );
         let two_part = scalar(&conn, &format!("SELECT count(*) FROM ora.{PROBE_TABLE}"));
         // 目录上带过滤（看会不会下推到 Oracle）
-        let plan = explain_text(&conn, &format!("EXPLAIN SELECT * FROM ora.{PROBE_TABLE} WHERE ID = '2'"));
+        let plan = explain_text(
+            &conn,
+            &format!("EXPLAIN SELECT * FROM ora.{PROBE_TABLE} WHERE ID = '2'"),
+        );
         let _ = conn.execute_batch("DETACH ora");
         Ok(format!(
             "schema=[{schemas}] 表=[{tables}] 列=[{columns}]\n    \
@@ -331,7 +336,9 @@ fn probe_oracle_as_a_federation_source() {
     match &scan_parallel {
         Ok(count) => {
             assert_eq!(count, "3", "并行扫描要能扫到三行");
-            eprintln!("✅ 台账：oracle_scan_parallel 可用（该账号有 DBMS_FLASHBACK + FLASHBACK 权限）");
+            eprintln!(
+                "✅ 台账：oracle_scan_parallel 可用（该账号有 DBMS_FLASHBACK + FLASHBACK 权限）"
+            );
         }
         Err(reason) => {
             // 这台实例的 devuser 没有那两个权限：如实记下，不当失败
@@ -346,7 +353,10 @@ fn probe_oracle_as_a_federation_source() {
     }
     assert_eq!(by_tag("谓词写进 Oracle SQL"), "2", "≥2 的行有两行");
     let plan = by_tag("EXPLAIN 表函数计划");
-    assert!(plan.contains("ORACLE_QUERY"), "计划里该有 ORACLE_QUERY：{plan}");
+    assert!(
+        plan.contains("ORACLE_QUERY"),
+        "计划里该有 ORACLE_QUERY：{plan}"
+    );
     assert!(
         plan.contains("FILTER"),
         "表函数路径的过滤留在 DuckDB 侧（未下推）——这就是“要快得自己把谓词写进 Oracle SQL”的依据：{plan}"

@@ -4,8 +4,8 @@
 //! 行高计算、以及**每一种行的渲染**（含搜索结果行）都在 `rows.rs`；
 //! 本模块只留结果区的**标题行**（“搜索中 / 无命中 / 共几条”）。
 
-use super::*;
 use super::PreparedStaged;
+use super::*;
 use crate::nav::capability::NavOp;
 use crate::nav::family_profile;
 use gpui_kit::component::separator::Separator;
@@ -986,17 +986,26 @@ impl NavView {
                     menu = menu.separator();
                     let e_mode = entity.clone();
                     menu = menu.item(
-                        PopupMenuItem::new(if matches!(entity.read(cx).nav.borrow().search_name_mode, nav_jobs::NameMatchMode::StartsWith) {
-                            "○ 前缀匹配"
-                        } else {
-                            "○ 包含匹配"
-                        })
+                        PopupMenuItem::new(
+                            if matches!(
+                                entity.read(cx).nav.borrow().search_name_mode,
+                                nav_jobs::NameMatchMode::StartsWith
+                            ) {
+                                "○ 前缀匹配"
+                            } else {
+                                "○ 包含匹配"
+                            },
+                        )
                         .on_click(move |_, _, app| {
                             e_mode.update(app, |this, cx| {
                                 let current = this.nav.borrow().search_name_mode;
                                 this.nav.borrow_mut().search_name_mode = match current {
-                                    nav_jobs::NameMatchMode::StartsWith => nav_jobs::NameMatchMode::Contains,
-                                    nav_jobs::NameMatchMode::Contains => nav_jobs::NameMatchMode::StartsWith,
+                                    nav_jobs::NameMatchMode::StartsWith => {
+                                        nav_jobs::NameMatchMode::Contains
+                                    }
+                                    nav_jobs::NameMatchMode::Contains => {
+                                        nav_jobs::NameMatchMode::StartsWith
+                                    }
                                 };
                                 this.rerun_nav_search(cx);
                             });
@@ -1020,12 +1029,11 @@ impl NavView {
                     // B-1 全局对象名过滤器入口（面板偏好，跨项目；空规则 = 不启用）。
                     let host_global = host_mask.clone();
                     menu = menu.separator();
-                    menu.item(
-                        PopupMenuItem::new("对象名过滤器（全局）…")
-                            .on_click(move |_, window, app| {
-                                host_global.open_object_mask_dialog(None, window, app);
-                            }),
-                    )
+                    menu.item(PopupMenuItem::new("对象名过滤器（全局）…").on_click(
+                        move |_, window, app| {
+                            host_global.open_object_mask_dialog(None, window, app);
+                        },
+                    ))
                 }
             });
 
@@ -1050,7 +1058,14 @@ impl NavView {
             // 无边框风格，明暗主题下都靠 hover/focus 边框显形。
             // 点击只翻状态 + 重排索引搜索（词没变但签名变了 → `nav_schedule_index_search` 会重搜）；
             // 开关随面板状态持久化（重启后保持）。
-            let (regex, case_sensitive, connected_only, name_mode, include_comments, include_definitions) = {
+            let (
+                regex,
+                case_sensitive,
+                connected_only,
+                name_mode,
+                include_comments,
+                include_definitions,
+            ) = {
                 let v = self.nav.borrow();
                 (
                     v.search_regex,
@@ -1088,28 +1103,21 @@ impl NavView {
                         let theme = cx.theme();
                         let fg = theme.colors.foreground;
                         let muted = theme.colors.muted_foreground;
-                        let mut body = div()
-                            .v_flex()
-                            .gap_1()
-                            .min_w(rems(16.))
-                            .p_2()
-                            .text_xs();
+                        let mut body = div().v_flex().gap_1().min_w(rems(16.)).p_2().text_xs();
                         // 正则开关
                         body = body.child(
                             div()
                                 .h_flex()
                                 .items_center()
                                 .gap_2()
-                                .child(
-                                    div()
-                                        .text_color(if regex { fg } else { muted })
-                                        .child(if regex { "☑ 正则模式" } else { "☐ 正则模式" }),
-                                )
-                                .child(
-                                    div()
-                                        .text_color(muted)
-                                        .child("开启后搜索词按正则解析"),
-                                ),
+                                .child(div().text_color(if regex { fg } else { muted }).child(
+                                    if regex {
+                                        "☑ 正则模式"
+                                    } else {
+                                        "☐ 正则模式"
+                                    },
+                                ))
+                                .child(div().text_color(muted).child("开启后搜索词按正则解析")),
                         );
                         body = body.child(div().h_px().w_full().bg(border));
                         // 常用样例
@@ -1129,26 +1137,28 @@ impl NavView {
                             let desc = desc.to_string();
                             let input = input_clone.clone();
                             body = body.child(
-                                Button::new(ElementId::Name(SharedString::from(format!("regex-sample-{pattern}"))))
-                                    .ghost()
-                                    .xsmall()
-                                    .h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .font_family("monospace")
-                                            .text_color(fg)
-                                            .child(pattern.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_color(muted)
-                                            .child(desc),
-                                    )
-                                    .on_click(move |_, window, app| {
-                                        input.update(app, |s, cx| s.set_value(pattern.clone(), window, cx));
-                                    }),
+                                Button::new(ElementId::Name(SharedString::from(format!(
+                                    "regex-sample-{pattern}"
+                                ))))
+                                .ghost()
+                                .xsmall()
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .font_family("monospace")
+                                        .text_color(fg)
+                                        .child(pattern.clone()),
+                                )
+                                .child(div().text_color(muted).child(desc))
+                                .on_click(
+                                    move |_, window, app| {
+                                        input.update(app, |s, cx| {
+                                            s.set_value(pattern.clone(), window, cx)
+                                        });
+                                    },
+                                ),
                             );
                         }
                         body = body.child(div().h_px().w_full().bg(border));
@@ -1226,11 +1236,16 @@ impl NavView {
                 .selected(prefix_active)
                 .toggled(prefix_active)
                 .label("前缀")
-                .bg(if prefix_active { selected_bg } else { transparent_black() })
+                .bg(if prefix_active {
+                    selected_bg
+                } else {
+                    transparent_black()
+                })
                 .text_color(if prefix_active { fg } else { muted })
                 .on_click(move |_, _, app| {
                     entity_prefix.update(app, |this, cx| {
-                        this.nav.borrow_mut().search_name_mode = nav_jobs::NameMatchMode::StartsWith;
+                        this.nav.borrow_mut().search_name_mode =
+                            nav_jobs::NameMatchMode::StartsWith;
                         this.rerun_nav_search(cx);
                         cx.notify();
                     });
@@ -1244,7 +1259,11 @@ impl NavView {
                 .selected(contains_active)
                 .toggled(contains_active)
                 .label("包含")
-                .bg(if contains_active { selected_bg } else { transparent_black() })
+                .bg(if contains_active {
+                    selected_bg
+                } else {
+                    transparent_black()
+                })
                 .text_color(if contains_active { fg } else { muted })
                 .on_click(move |_, _, app| {
                     entity_contains.update(app, |this, cx| {
@@ -1264,7 +1283,11 @@ impl NavView {
                 .selected(include_comments)
                 .toggled(include_comments)
                 .label("注释")
-                .bg(if include_comments { selected_bg } else { transparent_black() })
+                .bg(if include_comments {
+                    selected_bg
+                } else {
+                    transparent_black()
+                })
                 .text_color(if include_comments { fg } else { muted })
                 .on_click(move |_, _, app| {
                     entity_comments.update(app, |this, cx| {
@@ -1292,25 +1315,22 @@ impl NavView {
             let _ = (prefix_btn, contains_btn, comments_btn, definition_btn);
 
             search_row = search_row.child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        Input::new(input)
-                            .bordered(false)
-                            .focus_bordered(true)
-                            .w_full()
-                            .prefix(search_icon)
-                            .suffix(
-                                div()
-                                    .h_flex()
-                                    .items_center()
-                                    .gap_0p5()
-                                    .child(case_btn)
-                                    .child(reg_popover)
-                                    .child(conn_btn),
-                            ),
-                    ),
+                div().flex_1().min_w_0().child(
+                    Input::new(input)
+                        .bordered(false)
+                        .focus_bordered(true)
+                        .w_full()
+                        .prefix(search_icon)
+                        .suffix(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_0p5()
+                                .child(case_btn)
+                                .child(reg_popover)
+                                .child(conn_btn),
+                        ),
+                ),
             );
         }
         search_row = search_row.child(facet_button);
@@ -1425,7 +1445,9 @@ impl NavView {
                             this.host.edit_connection(&item.conn_id, window, cx);
                         }
                         _ => {
-                            let Some(prop) = &item.property else { return; };
+                            let Some(prop) = &item.property else {
+                                return;
+                            };
                             // M6：属性类别 → 文件夹，查表自 L1 族档案；不可重命名类别直接关闭。
                             let Some(folder) = family_profile::property_kind_to_folder(prop.kind)
                             else {
@@ -1489,9 +1511,8 @@ impl NavView {
                             )
                             .on_ok(move |_, _, app| {
                                 let staged = prepared.staged.clone();
-                                entity.update(app, |this, cx| {
-                                    this.apply_staged_enqueue(staged, cx)
-                                });
+                                entity
+                                    .update(app, |this, cx| this.apply_staged_enqueue(staged, cx));
                                 true
                             })
                     });
@@ -1962,7 +1983,9 @@ impl NavView {
     ///
     /// 原型空态三要素：居中大图标块 + 标题 + 说明 + 主按钮（居中布局，非左上角文本）。
     pub(super) fn render_nav_empty_state(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        use gpui_kit::component::empty::{Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle};
+        use gpui_kit::component::empty::{
+            Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle,
+        };
         let muted = cx.theme().colors.muted_foreground;
         // 图标走 EmptyMedia::Icon 变体（2rem 圆角 muted 底 + 居中图标），
         // 与 analytics_resource / insight / project 空态统一。
@@ -1974,15 +1997,12 @@ impl NavView {
                         .media(
                             EmptyMedia::new()
                                 .with_variant(gpui_kit::component::empty::EmptyMediaVariant::Icon)
-                                .child(
-                                    Icon::empty()
-                                        .path("icons/database.svg")
-                                        .text_color(muted),
-                                ),
+                                .child(Icon::empty().path("icons/database.svg").text_color(muted)),
                         )
                         .title(EmptyTitle::new().child("还没有数据源"))
                         .description(
-                            EmptyDescription::new().child("当前项目与全局库均无连接。点击下方「新建连接」开始。"),
+                            EmptyDescription::new()
+                                .child("当前项目与全局库均无连接。点击下方「新建连接」开始。"),
                         ),
                 )
                 .content(
@@ -2014,11 +2034,7 @@ impl NavView {
                     .media(
                         EmptyMedia::new()
                             .with_variant(gpui_kit::component::empty::EmptyMediaVariant::Icon)
-                            .child(
-                                Icon::empty()
-                                    .path("icons/search.svg")
-                                    .text_color(muted),
-                            ),
+                            .child(Icon::empty().path("icons/search.svg").text_color(muted)),
                     )
                     .title(EmptyTitle::new().child("没有匹配的数据源"))
                     .description(EmptyDescription::new().child(description)),

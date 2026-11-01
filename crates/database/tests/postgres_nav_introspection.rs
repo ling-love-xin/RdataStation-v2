@@ -122,7 +122,11 @@ async fn nav_introspection_cases(driver: &str) {
         .unwrap_or_else(|e| panic!("同名表（后建的那个）应能内省出来，实际报错：{e}"));
     assert_eq!(a.len(), 1, "先建的 dup 只有 1 列：{a:?}");
     assert_eq!(b.len(), 2, "后建的 dup 有 2 列（曾经这里是报错）：{b:?}");
-    println!("✓ 同名表可内省：{schema_a}.{dup}={} 列，{schema_b}.{dup}={} 列", a.len(), b.len());
+    println!(
+        "✓ 同名表可内省：{schema_a}.{dup}={} 列，{schema_b}.{dup}={} 列",
+        a.len(),
+        b.len()
+    );
 
     // ---- 2) schema 清单里不许有 pg_ 前缀的系统噪音
     let schemas = svc
@@ -174,7 +178,10 @@ async fn nav_introspection_cases(driver: &str) {
         (1, 2),
         "序号是 1 基且连续"
     );
-    println!("✓ 列详情：{} | {}", detail[0].data_type, detail[1].data_type);
+    println!(
+        "✓ 列详情：{} | {}",
+        detail[0].data_type, detail[1].data_type
+    );
 
     // 清场
     for sql in [

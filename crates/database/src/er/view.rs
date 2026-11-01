@@ -16,7 +16,7 @@ use gpui_kit::*;
 
 use workbench_shell::ui;
 
-use crate::er::edge::{edge_paths, ErPoint};
+use crate::er::edge::{ErPoint, edge_paths};
 use crate::er::layout::{ErRect, LaidOutDiagram, LayoutMetrics};
 use crate::er::model::{ErDiagram, ErEntity};
 
@@ -82,7 +82,9 @@ pub fn render_er_diagram(
         .h(px(layout.bounds.height))
         .child(lines);
     for (b, entity) in layout.boxes.iter().zip(diagram.entities.iter()) {
-        content = content.child(render_card(entity, &b.rect, metrics, card_bg, head_bg, border, fg, muted, pk_color, fk_color));
+        content = content.child(render_card(
+            entity, &b.rect, metrics, card_bg, head_bg, border, fg, muted, pk_color, fk_color,
+        ));
     }
 
     div()
@@ -127,7 +129,13 @@ fn render_card(
     let mut rows = div().v_flex().w_full();
     for c in &entity.columns {
         let mut left = div().flex().items_center().gap_1().min_w_0();
-        left = left.child(div().text_xs().text_color(fg).truncate().child(c.name.clone()));
+        left = left.child(
+            div()
+                .text_xs()
+                .text_color(fg)
+                .truncate()
+                .child(c.name.clone()),
+        );
         // 主键 / 外键标记：极小文字 chip（面板级绘制，不引组件库标记件）。
         if c.is_primary_key {
             left = left.child(div().text_xs().text_color(pk_color).child("PK"));

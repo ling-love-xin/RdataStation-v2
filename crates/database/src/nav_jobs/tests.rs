@@ -1,12 +1,12 @@
 //! `nav_jobs` 单测：队列调度 / 信号量限流 / 搜索命中映射 / 结果回填。
 use super::*;
+use crate::model::NavPath;
+use engine::ObjectKind;
+use engine::persistence::FtsSearchResult;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use crate::model::NavPath;
-use engine::persistence::FtsSearchResult;
-use engine::ObjectKind;
 /// 测试用 `Shared`：不起 worker（不发 job），只验「分发 / 取走」两件事。
 fn test_shared() -> Shared {
     let (tx, _rx) = mpsc::channel::<QueuedJob>();
@@ -62,7 +62,10 @@ fn stale_guard_drops_removed_disconnected_or_reconfigured_connections() {
     use super::nav_result_is_stale;
     // 正常：存在 + 已连 + 指纹一致（或双方都无指纹）→ 不丢弃
     assert!(!nav_result_is_stale(true, true, Some("fp-a"), Some("fp-a")));
-    assert!(!nav_result_is_stale(true, true, None, None), "无指纹跳过比对");
+    assert!(
+        !nav_result_is_stale(true, true, None, None),
+        "无指纹跳过比对"
+    );
     // 连接被删 / 断开：与指纹无关，直接过期
     assert!(nav_result_is_stale(false, true, None, None), "删除 → 丢弃");
     assert!(nav_result_is_stale(true, false, None, None), "断开 → 丢弃");
@@ -106,8 +109,16 @@ fn queued_job_orders_priority_then_fifo() {
     heap.push(queued(JobPriority::Background, 2));
     heap.push(queued(JobPriority::User, 9));
     heap.push(queued(JobPriority::Background, 1));
-    assert_eq!(heap.pop().unwrap().seq, 9, "User(seq=9) 插到 Background 前面");
-    assert_eq!(heap.pop().unwrap().seq, 1, "Background 内部 seq=1 先于 seq=2");
+    assert_eq!(
+        heap.pop().unwrap().seq,
+        9,
+        "User(seq=9) 插到 Background 前面"
+    );
+    assert_eq!(
+        heap.pop().unwrap().seq,
+        1,
+        "Background 内部 seq=1 先于 seq=2"
+    );
     assert_eq!(heap.pop().unwrap().seq, 2);
 }
 
@@ -151,11 +162,7 @@ fn search_results_are_partitioned_by_consumer() {
             .take_search_results(SearchConsumer::Navigator)
             .is_empty()
     );
-    assert!(
-        shared
-            .take_search_results(SearchConsumer::Panel)
-            .is_empty()
-    );
+    assert!(shared.take_search_results(SearchConsumer::Panel).is_empty());
 }
 
 /// 内容档映射：空串转 `None`、catalog 缺位、snippet 带上。
@@ -306,14 +313,8 @@ fn consumer_slots_are_distinct() {
         SearchConsumer::Navigator.ix(),
         SearchConsumer::QuickOpen.ix()
     );
-    assert_ne!(
-        SearchConsumer::Navigator.ix(),
-        SearchConsumer::Panel.ix()
-    );
-    assert_ne!(
-        SearchConsumer::QuickOpen.ix(),
-        SearchConsumer::Panel.ix()
-    );
+    assert_ne!(SearchConsumer::Navigator.ix(), SearchConsumer::Panel.ix());
+    assert_ne!(SearchConsumer::QuickOpen.ix(), SearchConsumer::Panel.ix());
     assert!(SearchConsumer::Navigator.ix() < SearchConsumer::COUNT);
     assert!(SearchConsumer::QuickOpen.ix() < SearchConsumer::COUNT);
     assert!(SearchConsumer::Panel.ix() < SearchConsumer::COUNT);
@@ -329,7 +330,8 @@ fn search_temp_root(tag: &str) -> std::path::PathBuf {
 /// 播种一个连接缓存：schema + 一张表 + 一列，重建索引（此后 `search_index` 可命中）。
 fn seed_cache(conn_id: &str, root: &std::path::Path, table: &str) {
     use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind};
-    let mut cache = crate::cache::NavCache::open(conn_id, Some(&root.to_string_lossy())).expect("打开缓存");
+    let mut cache =
+        crate::cache::NavCache::open(conn_id, Some(&root.to_string_lossy())).expect("打开缓存");
     cache.put_schemas("main", &["public".to_string()]);
     cache.mark_schema_complete("main", "public");
     let sid = cache.schema_id("main", "public").expect("schema_id");
@@ -368,7 +370,10 @@ fn target(conn_id: &str) -> SearchTarget {
 #[test]
 fn split_two_segment_only_on_single_dot() {
     use super::nav_split_two_segment;
-    assert_eq!(nav_split_two_segment("public.orders"), (Some("public"), Some("orders")));
+    assert_eq!(
+        nav_split_two_segment("public.orders"),
+        (Some("public"), Some("orders"))
+    );
     assert_eq!(nav_split_two_segment("orders"), (None, None));
     assert_eq!(nav_split_two_segment("a.b.c"), (None, None));
     assert_eq!(nav_split_two_segment("a."), (None, None));
@@ -440,7 +445,11 @@ fn search_targets_keeps_target_order_and_skips_missing_cache() {
     // 只播前两个连接的缓存；第三个不建（模拟从未内省过的连接）。
     seed_cache("P_chunk_a", &root, "orders_a");
     seed_cache("P_chunk_b", &root, "orders_b");
-    let targets = [target("P_chunk_a"), target("P_chunk_b"), target("P_chunk_c")];
+    let targets = [
+        target("P_chunk_a"),
+        target("P_chunk_b"),
+        target("P_chunk_c"),
+    ];
 
     let (searched, hits) = search_targets(
         SearchKind::Name,
@@ -480,11 +489,7 @@ fn search_targets_applies_case_and_regex_flags() {
     seed_cache("P_f_a", &root, "Orders");
     seed_cache("P_f_b", &root, "orders");
     seed_cache("P_f_c", &root, "orders[");
-    let targets = [
-        target("P_f_a"),
-        target("P_f_b"),
-        target("P_f_c"),
-    ];
+    let targets = [target("P_f_a"), target("P_f_b"), target("P_f_c")];
     let names = |hits: &[SearchHit]| -> std::collections::BTreeSet<String> {
         hits.iter()
             .map(|h| h.object_name.clone())
@@ -492,18 +497,17 @@ fn search_targets_applies_case_and_regex_flags() {
     };
 
     // 默认（LIKE 不敏感）：三种大小写/字形都命中（列 order_id 不含 "orders" 字面，不中）。
-    let (_, hits) =
-        search_targets(
-            SearchKind::Name,
-            "orders",
-            false,
-            false,
-            NameMatchMode::Contains,
-            false,
-            false,
-            Some(&root_s),
-            &targets,
-        );
+    let (_, hits) = search_targets(
+        SearchKind::Name,
+        "orders",
+        false,
+        false,
+        NameMatchMode::Contains,
+        false,
+        false,
+        Some(&root_s),
+        &targets,
+    );
     assert_eq!(
         names(&hits),
         ["Orders", "orders", "orders["]
@@ -514,38 +518,39 @@ fn search_targets_applies_case_and_regex_flags() {
     );
 
     // `Aa`：只留精确小写（`contains` 是中缀，`orders[` 含 `orders` 也在列）。
-    let (_, hits) =
-        search_targets(
-            SearchKind::Name,
-            "orders",
-            true,
-            false,
-            NameMatchMode::Contains,
-            false,
-            false,
-            Some(&root_s),
-            &targets,
-        );
+    let (_, hits) = search_targets(
+        SearchKind::Name,
+        "orders",
+        true,
+        false,
+        NameMatchMode::Contains,
+        false,
+        false,
+        Some(&root_s),
+        &targets,
+    );
     assert_eq!(
         names(&hits),
-        ["orders", "orders["].into_iter().map(String::from).collect(),
+        ["orders", "orders["]
+            .into_iter()
+            .map(String::from)
+            .collect(),
         "区分大小写只留小写"
     );
 
     // 正则（忽略大小写）：pattern = "(?i)orders"，`(?i)` 生效——`Orders` 保留
     //（若没 (?i) 会被正则大小写敏感排除）；中缀无锚定，`orders[` 也在。
-    let (_, hits) =
-        search_targets(
-            SearchKind::Name,
-            "orders",
-            false,
-            true,
-            NameMatchMode::Contains,
-            false,
-            false,
-            Some(&root_s),
-            &targets,
-        );
+    let (_, hits) = search_targets(
+        SearchKind::Name,
+        "orders",
+        false,
+        true,
+        NameMatchMode::Contains,
+        false,
+        false,
+        Some(&root_s),
+        &targets,
+    );
     assert_eq!(
         names(&hits),
         ["Orders", "orders", "orders["]
@@ -557,37 +562,38 @@ fn search_targets_applies_case_and_regex_flags() {
 
     // 正则 + 大小写：pattern = "orders"（无 (?i)）→ `Orders` 被正则敏感排除，
     // `orders[` 仍中（无锚定）。
-    let (_, hits) =
-        search_targets(
-            SearchKind::Name,
-            "orders",
-            true,
-            true,
-            NameMatchMode::Contains,
-            false,
-            false,
-            Some(&root_s),
-            &targets,
-        );
+    let (_, hits) = search_targets(
+        SearchKind::Name,
+        "orders",
+        true,
+        true,
+        NameMatchMode::Contains,
+        false,
+        false,
+        Some(&root_s),
+        &targets,
+    );
     assert_eq!(
         names(&hits),
-        ["orders", "orders["].into_iter().map(String::from).collect(),
+        ["orders", "orders["]
+            .into_iter()
+            .map(String::from)
+            .collect(),
         "正则 + 大小写：排除 Orders"
     );
 
     // 非法正则：退化为不筛（候选 `orders[` 保留，不 panic）。
-    let (_, hits) =
-        search_targets(
-            SearchKind::Name,
-            "orders[",
-            false,
-            true,
-            NameMatchMode::Contains,
-            false,
-            false,
-            Some(&root_s),
-            &targets,
-        );
+    let (_, hits) = search_targets(
+        SearchKind::Name,
+        "orders[",
+        false,
+        true,
+        NameMatchMode::Contains,
+        false,
+        false,
+        Some(&root_s),
+        &targets,
+    );
     assert_eq!(
         names(&hits),
         ["orders["].into_iter().map(String::from).collect(),
@@ -602,7 +608,9 @@ fn search_targets_applies_case_and_regex_flags() {
 fn parallel_search_merges_in_order_and_truncates_globally() {
     let root = search_temp_root("parallel");
     let root_s = root.to_string_lossy().to_string();
-    let conn_ids = ["P_par_0", "P_par_1", "P_par_2", "P_par_3", "P_par_4", "P_par_5"];
+    let conn_ids = [
+        "P_par_0", "P_par_1", "P_par_2", "P_par_3", "P_par_4", "P_par_5",
+    ];
     for (i, conn_id) in conn_ids.iter().enumerate() {
         seed_cache(conn_id, &root, &format!("orders_{i}"));
     }
@@ -647,7 +655,10 @@ fn parallel_search_merges_in_order_and_truncates_globally() {
     assert_eq!(table_names, expected, "并行只提速不重排结果");
     // 同一连接内：表命中的所属连接正确
     assert!(
-        batch.hits.iter().all(|h| h.object_name == "order_id" || h.conn_id.starts_with("P_par_")),
+        batch
+            .hits
+            .iter()
+            .all(|h| h.object_name == "order_id" || h.conn_id.starts_with("P_par_")),
         "命中所属连接应与 target 一致"
     );
     assert!(
@@ -681,10 +692,7 @@ fn per_conn_semaphore_capacity_one_blocks_second_acquire_until_release() {
     drop_conn_sem("sem_cap");
     let sem = per_conn_semaphore("sem_cap");
 
-    let first = sem
-        .clone()
-        .try_acquire_owned()
-        .expect("首次取锁应当成功");
+    let first = sem.clone().try_acquire_owned().expect("首次取锁应当成功");
     let second = sem.clone().try_acquire_owned();
     assert!(
         second.is_err(),
@@ -730,9 +738,15 @@ fn fts_type_maps_to_object_kind_and_unknown_yields_none() {
     assert_eq!(fts_type_to_object_kind("table"), Some(ObjectKind::Table));
     assert_eq!(fts_type_to_object_kind("view"), Some(ObjectKind::View));
     assert_eq!(fts_type_to_object_kind("column"), Some(ObjectKind::Column));
-    assert_eq!(fts_type_to_object_kind("routine"), Some(ObjectKind::Routine));
+    assert_eq!(
+        fts_type_to_object_kind("routine"),
+        Some(ObjectKind::Routine)
+    );
     assert_eq!(fts_type_to_object_kind("schema"), Some(ObjectKind::Schema));
-    assert_eq!(fts_type_to_object_kind("catalog"), Some(ObjectKind::Catalog));
+    assert_eq!(
+        fts_type_to_object_kind("catalog"),
+        Some(ObjectKind::Catalog)
+    );
     assert_eq!(fts_type_to_object_kind("index"), None);
     assert_eq!(fts_type_to_object_kind(""), None);
 }
@@ -801,16 +815,14 @@ fn comments_candidates_merged_filtered_and_deduped() {
         .get("channel_code")
         .expect("名称候选 channel_code 应命中");
     assert_eq!(code.hit_source, HitSource::Name, "名称先入，来源 = Name");
-    let region = by_name
-        .get("region")
-        .expect("注释候选 region 应并入");
-    assert_eq!(region.hit_source, HitSource::Comment, "注释命中来源 = Comment");
-    assert!(region.snippet.is_some(), "注释候选带 snippet 副行");
+    let region = by_name.get("region").expect("注释候选 region 应并入");
     assert_eq!(
-        by_name.len(),
-        2,
-        "channel_code 去重后只剩两条：{by_name:?}"
+        region.hit_source,
+        HitSource::Comment,
+        "注释命中来源 = Comment"
     );
+    assert!(region.snippet.is_some(), "注释候选带 snippet 副行");
+    assert_eq!(by_name.len(), 2, "channel_code 去重后只剩两条：{by_name:?}");
 
     // 注释开关关闭：不并入 region，名称档只出 channel_code。
     let (_, hits) = search_targets(

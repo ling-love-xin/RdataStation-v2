@@ -200,7 +200,12 @@ pub trait NavHost: 'static {
     fn saved_views(&self, cx: &App) -> Vec<SavedViewMeta>;
 
     /// 保存一个命名视图（同名拦截：已存在 → `Err`，由调用方提示改名）。
-    fn save_saved_view(&self, name: String, filters: NavFilters, cx: &mut App) -> Result<(), String>;
+    fn save_saved_view(
+        &self,
+        name: String,
+        filters: NavFilters,
+        cx: &mut App,
+    ) -> Result<(), String>;
 
     /// 删除一个命名视图（不存在 → `Err`）。
     fn delete_saved_view(&self, name: &str, cx: &mut App) -> Result<(), String>;
@@ -214,15 +219,14 @@ pub trait NavHost: 'static {
     /// 某连接的可见库白名单（S3-①）：`None` = 默认模式（树隐藏系统库 / 系统 schema）；
     /// `Some(集合)` = 白名单模式（原样展示集合里的库，含系统对象）。
     /// 集合可同时含 catalog 名与 schema 名（层级不同但同表存储，按名匹配各自层）。
-    fn visible_databases(&self, conn_id: &str, cx: &App) -> Option<std::collections::BTreeSet<String>>;
-
-    /// 保存可见库白名单（`None` = 回到默认模式）。保存后调用方负责刷新树。
-    fn set_visible_databases(
+    fn visible_databases(
         &self,
         conn_id: &str,
-        visible: Option<Vec<String>>,
-        cx: &mut App,
-    );
+        cx: &App,
+    ) -> Option<std::collections::BTreeSet<String>>;
+
+    /// 保存可见库白名单（`None` = 回到默认模式）。保存后调用方负责刷新树。
+    fn set_visible_databases(&self, conn_id: &str, visible: Option<Vec<String>>, cx: &mut App);
 
     /// S3-④ 行估计徽标开关（默认开）：关闭后不排估计任务、行尾不显示「≈ N」。
     fn row_estimate(&self, cx: &App) -> bool;

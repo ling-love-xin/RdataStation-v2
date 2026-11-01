@@ -65,9 +65,14 @@ async fn probe<D: Database>(db: &D, label: &str) {
     let conn = DuckDbService::get_or_create_duckdb().expect("内存 DuckDB");
     let guard = conn.lock().expect("锁 DuckDB");
     let count: i64 = guard
-        .query_row(&format!("SELECT count(*) FROM \"{table}\""), [], |r| r.get(0))
+        .query_row(&format!("SELECT count(*) FROM \"{table}\""), [], |r| {
+            r.get(0)
+        })
         .unwrap_or_else(|e| panic!("{label}: 查临时表失败：{e}"));
-    assert_eq!(count, 3, "{label}: 临时表里应当正好三行（空表正是这条回归的症状）");
+    assert_eq!(
+        count, 3,
+        "{label}: 临时表里应当正好三行（空表正是这条回归的症状）"
+    );
 
     // 收尾：临时表按来源定向回收（建表方的责任）。
     drop(guard);

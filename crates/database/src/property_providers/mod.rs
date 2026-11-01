@@ -79,10 +79,7 @@ pub(crate) fn qualified_name(t: &PropertyTargetRef) -> String {
 ///
 /// 认证 / 网络 / 环境自 2026-10-25（P0-3 深化）起由 [`connection_meta_sections`]
 /// 独立分节承载（方法 / 引用名 / 策略覆盖），不再混入常规行。
-pub(crate) fn connection_base_rows(
-    input: &ProviderInput,
-    driver_label: &str,
-) -> Vec<PropertyRow> {
+pub(crate) fn connection_base_rows(input: &ProviderInput, driver_label: &str) -> Vec<PropertyRow> {
     let mut rows = vec![row("名称", input.conn_label)];
     if let Some(t) = input.db_type {
         if !t.is_empty() {
@@ -115,7 +112,10 @@ pub(crate) fn connection_base_rows(
 }
 
 /// 基础连接洞察（状态 + 驱动 / 作用域 chips；各驱动通用）。
-pub(crate) fn connection_base_overview(input: &ProviderInput, driver_label: &str) -> ObjectOverview {
+pub(crate) fn connection_base_overview(
+    input: &ProviderInput,
+    driver_label: &str,
+) -> ObjectOverview {
     // 状态：调用方 counts 带 `connected` 则按值，否则按「已加载」乐观展示；
     // 失败路径（error）由渲染层展示，不进 overview。
     let (status, status_text) = match input.count("connected") {
@@ -152,11 +152,14 @@ pub(crate) fn connection_categories(
     caps: &DriverCapabilities,
     input: &ProviderInput,
 ) -> Vec<PropertySection> {
-    let mut v = section_list(&caps.connection, &[
-        ("存储", PageId::Storage),
-        ("权限", PageId::Privileges),
-        ("事件触发器", PageId::EventTrigger),
-    ]);
+    let mut v = section_list(
+        &caps.connection,
+        &[
+            ("存储", PageId::Storage),
+            ("权限", PageId::Privileges),
+            ("事件触发器", PageId::EventTrigger),
+        ],
+    );
     v.extend(connection_meta_sections(input));
     v
 }
@@ -177,7 +180,10 @@ pub(crate) fn connection_meta_sections(input: &ProviderInput) -> Vec<PropertySec
         }
         if let Some(r) = input.count("auth_ref") {
             if !r.is_empty() {
-                rows.push(vec!["引用档案".into(), input.count("auth_name").unwrap_or(r).to_string()]);
+                rows.push(vec![
+                    "引用档案".into(),
+                    input.count("auth_name").unwrap_or(r).to_string(),
+                ]);
             }
         }
         v.push(PropertySection {
@@ -254,50 +260,80 @@ pub(crate) fn connection_meta_sections(input: &ProviderInput) -> Vec<PropertySec
 /// （caps 注释说明未来接入点），不进 `sections`；渲染层不再有灰置分支。
 pub(crate) fn table_categories(caps: &DriverCapabilities) -> Vec<PropertySection> {
     let mut v = vec![
-        PropertySection { id: PageId::Columns, label: "列".into(), table: empty_table() },
-        PropertySection { id: PageId::Indexes, label: "索引".into(), table: empty_table() },
-        PropertySection { id: PageId::Constraints, label: "约束".into(), table: empty_table() },
-        PropertySection { id: PageId::Ddl, label: "DDL".into(), table: empty_table() },
-        PropertySection { id: PageId::Data, label: "数据".into(), table: empty_table() },
+        PropertySection {
+            id: PageId::Columns,
+            label: "列".into(),
+            table: empty_table(),
+        },
+        PropertySection {
+            id: PageId::Indexes,
+            label: "索引".into(),
+            table: empty_table(),
+        },
+        PropertySection {
+            id: PageId::Constraints,
+            label: "约束".into(),
+            table: empty_table(),
+        },
+        PropertySection {
+            id: PageId::Ddl,
+            label: "DDL".into(),
+            table: empty_table(),
+        },
+        PropertySection {
+            id: PageId::Data,
+            label: "数据".into(),
+            table: empty_table(),
+        },
     ];
-    v.extend(section_list(&caps.table, &[
-        ("触发器", PageId::Trigger),
-        ("权限", PageId::Privileges),
-        ("依赖", PageId::Dependencies),
-        ("规则", PageId::Routines),
-        ("分区", PageId::Partitions),
-    ]));
+    v.extend(section_list(
+        &caps.table,
+        &[
+            ("触发器", PageId::Trigger),
+            ("权限", PageId::Privileges),
+            ("依赖", PageId::Dependencies),
+            ("规则", PageId::Routines),
+            ("分区", PageId::Partitions),
+        ],
+    ));
     v
 }
 
 /// 视图级类别：可用核心（列 / DDL / 数据）+ 按能力位声明的已实现类别。
 pub(crate) fn view_categories(caps: &DriverCapabilities) -> Vec<PropertySection> {
     let mut v = vec![
-        PropertySection { id: PageId::Columns, label: "列".into(), table: empty_table() },
-        PropertySection { id: PageId::Ddl, label: "DDL".into(), table: empty_table() },
-        PropertySection { id: PageId::Data, label: "数据".into(), table: empty_table() },
+        PropertySection {
+            id: PageId::Columns,
+            label: "列".into(),
+            table: empty_table(),
+        },
+        PropertySection {
+            id: PageId::Ddl,
+            label: "DDL".into(),
+            table: empty_table(),
+        },
+        PropertySection {
+            id: PageId::Data,
+            label: "数据".into(),
+            table: empty_table(),
+        },
     ];
-    v.extend(section_list(&caps.view, &[
-        ("权限", PageId::Privileges),
-    ]));
+    v.extend(section_list(&caps.view, &[("权限", PageId::Privileges)]));
     v
 }
 
 /// Schema 级类别：仅按能力位声明的已实现类别（内容批次未接入前，
 /// Schema 的表 / 视图 / 例程等子项类别不声明，见 pg.rs 的说明）。
 pub(crate) fn schema_categories(caps: &DriverCapabilities) -> Vec<PropertySection> {
-    section_list(&caps.schema, &[
-        ("权限", PageId::Privileges),
-        ("依赖", PageId::Dependencies),
-    ])
+    section_list(
+        &caps.schema,
+        &[("权限", PageId::Privileges), ("依赖", PageId::Dependencies)],
+    )
 }
 
 /// 按能力位生成一组类别：`Some(true)` = 已实现（产出分区）；`Some(false)` = 未实现
 /// **不产出**（接线位，仅 caps 注释承载）；`None` = 该驱动不声明此类别。
-fn section_list(
-    caps: &CapSet,
-    decls: &[(&'static str, PageId)],
-) -> Vec<PropertySection> {
+fn section_list(caps: &CapSet, decls: &[(&'static str, PageId)]) -> Vec<PropertySection> {
     let mut v = Vec::new();
     for (label, id) in decls {
         if caps.get(*id) == Some(true) {
@@ -463,7 +499,10 @@ mod tests {
         assert_eq!(caps.table.get(PageId::Routines), Some(false));
         // 驱动差异仍体现在声明集：mysql 表级不声明触发器；sqlite 声明触发器但未实现。
         assert_eq!(DriverCapabilities::mysql().table.get(PageId::Trigger), None);
-        assert_eq!(DriverCapabilities::sqlite().table.get(PageId::Trigger), Some(false));
+        assert_eq!(
+            DriverCapabilities::sqlite().table.get(PageId::Trigger),
+            Some(false)
+        );
         // 已实现声明（Some(true)）才产出——当前无任何 Some(true)，断言总数为核心数。
         assert_eq!(ids.len(), 5, "pg 表级只有 5 个可用核心: {ids:?}");
     }
@@ -479,7 +518,10 @@ mod tests {
         assert_eq!(caps.connection.get(PageId::Storage), Some(false));
         assert_eq!(caps.connection.get(PageId::EventTrigger), Some(false));
         // sqlite 无「存储」声明；事件触发器声明未实现 → 隐藏。
-        assert_eq!(DriverCapabilities::sqlite().connection.get(PageId::Storage), None);
+        assert_eq!(
+            DriverCapabilities::sqlite().connection.get(PageId::Storage),
+            None
+        );
         assert!(connection_categories(&DriverCapabilities::sqlite(), &empty).is_empty());
     }
 
@@ -503,7 +545,10 @@ mod tests {
         let input = meta_input(&target, counts);
         let sections = connection_meta_sections(&input);
         let ids: Vec<PageId> = sections.iter().map(|s| s.id).collect();
-        assert_eq!(ids, vec![PageId::Auth, PageId::Network, PageId::Environment]);
+        assert_eq!(
+            ids,
+            vec![PageId::Auth, PageId::Network, PageId::Environment]
+        );
         // 认证分节：方法 + 引用档案名（非裸 ID）。
         let auth = &sections[0];
         assert_eq!(auth.label, "认证");
@@ -512,12 +557,28 @@ mod tests {
         assert!(auth_rows.contains(&vec!["引用档案".into(), "生产库凭据".into()]));
         // 网络分节：档案名 + 类型。
         let net = &sections[1];
-        assert!(net.table.rows.contains(&vec!["网络档案".into(), "跳板隧道".into()]));
-        assert!(net.table.rows.contains(&vec!["网络类型".into(), "ssh".into()]));
+        assert!(
+            net.table
+                .rows
+                .contains(&vec!["网络档案".into(), "跳板隧道".into()])
+        );
+        assert!(
+            net.table
+                .rows
+                .contains(&vec!["网络类型".into(), "ssh".into()])
+        );
         // 环境分节：名称 + 策略覆盖。
         let env = &sections[2];
-        assert!(env.table.rows.contains(&vec!["环境名称".into(), "prod".into()]));
-        assert!(env.table.rows.contains(&vec!["策略覆盖".into(), "只读模式, 阻断DML".into()]));
+        assert!(
+            env.table
+                .rows
+                .contains(&vec!["环境名称".into(), "prod".into()])
+        );
+        assert!(
+            env.table
+                .rows
+                .contains(&vec!["策略覆盖".into(), "只读模式, 阻断DML".into()])
+        );
 
         // 有引用但名称缺失：回落引用 ID（不显示空行）。
         let counts = &[
@@ -528,9 +589,24 @@ mod tests {
         ];
         let input = meta_input(&target, counts);
         let sections = connection_meta_sections(&input);
-        assert!(sections[0].table.rows.contains(&vec!["引用档案".into(), "auth-1".into()]));
-        assert!(sections[1].table.rows.contains(&vec!["网络档案".into(), "net-1".into()]));
-        assert!(sections[2].table.rows.contains(&vec!["环境名称".into(), "env-1".into()]));
+        assert!(
+            sections[0]
+                .table
+                .rows
+                .contains(&vec!["引用档案".into(), "auth-1".into()])
+        );
+        assert!(
+            sections[1]
+                .table
+                .rows
+                .contains(&vec!["网络档案".into(), "net-1".into()])
+        );
+        assert!(
+            sections[2]
+                .table
+                .rows
+                .contains(&vec!["环境名称".into(), "env-1".into()])
+        );
 
         // 无引用：不产出任何分节。
         let counts = &[("url", "postgres://h/db".into())];

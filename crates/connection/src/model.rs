@@ -142,7 +142,11 @@ impl DataSource {
 
 impl DataSourceSaveInput {
     /// 快速构造（对话框默认路径）
-    pub fn new(name: impl Into<String>, db_type: impl Into<String>, url: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        db_type: impl Into<String>,
+        url: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             db_type: db_type.into(),
@@ -279,13 +283,18 @@ mod tests {
         let back = NavigatorSettings::from_advanced_options(Some(&raw));
         assert!(back.show_system_objects);
         // 默认全 false 序列化也产出 navigator 键（关=现状，与显式写 true 可区分）。
-        let off = NavigatorSettings::default().apply_to_advanced_options(None).unwrap();
+        let off = NavigatorSettings::default()
+            .apply_to_advanced_options(None)
+            .unwrap();
         assert!(!NavigatorSettings::from_advanced_options(Some(&off)).show_system_objects);
     }
 
     #[test]
     fn navigator_settings_missing_or_bad_json_falls_back() {
-        assert_eq!(NavigatorSettings::from_advanced_options(None), Default::default());
+        assert_eq!(
+            NavigatorSettings::from_advanced_options(None),
+            Default::default()
+        );
         assert_eq!(
             NavigatorSettings::from_advanced_options(Some("not-json")),
             Default::default()
@@ -470,7 +479,8 @@ mod tests {
             removed_secret: true,
             message: "已删除".to_string(),
         };
-        let back: DeleteResult = serde_json::from_str(&serde_json::to_string(&del).unwrap()).unwrap();
+        let back: DeleteResult =
+            serde_json::from_str(&serde_json::to_string(&del).unwrap()).unwrap();
         assert_eq!(back.conn_id, "G_1");
         assert!(back.removed_secret);
 

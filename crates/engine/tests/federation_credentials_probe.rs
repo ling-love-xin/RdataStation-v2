@@ -54,10 +54,7 @@ fn parse_url(url: &str) -> Parts {
 /// 把原 URL 的库名换成探针库
 fn probe_url(url: &str) -> String {
     let parts = parse_url(url);
-    url.replace(
-        &format!("/{}", parts.database),
-        &format!("/{PROBE_DB}"),
-    )
+    url.replace(&format!("/{}", parts.database), &format!("/{PROBE_DB}"))
 }
 
 /// 建探针库 + 一张表（连原 URL；探针库还不存在，不能拿它建连）
@@ -125,8 +122,10 @@ fn secret_connection(secret_dir: &Path, secret_sql: Option<&str>) -> duckdb::Con
 
 /// 直接 ATTACH（不走我们的会话），返回能否读到探针表
 fn attach_and_count(conn: &duckdb::Connection, url: &str) -> Result<usize, String> {
-    conn.execute_batch(&format!("ATTACH '{url}' AS probe_src (TYPE mysql, READ_ONLY)"))
-        .map_err(|error| first_line(&error.to_string()))?;
+    conn.execute_batch(&format!(
+        "ATTACH '{url}' AS probe_src (TYPE mysql, READ_ONLY)"
+    ))
+    .map_err(|error| first_line(&error.to_string()))?;
     let count: i64 = conn
         .query_row(
             &format!("SELECT count(*) FROM probe_src.{PROBE_DB}.orders"),
@@ -149,7 +148,10 @@ fn probe_network_source_credentials() {
     let parts = parse_url(&source_url);
 
     let masked = connection::url::mask_password_in_url(&source_url);
-    eprintln!("· 运行时串（含凭据）：mysql://{}:{}@{}:{}/{}", parts.user, "***", parts.host, parts.port, parts.database);
+    eprintln!(
+        "· 运行时串（含凭据）：mysql://{}:{}@{}:{}/{}",
+        parts.user, "***", parts.host, parts.port, parts.database
+    );
     eprintln!("· 脱敏串            ：{masked}");
 
     // 1. 运行时串（出厂的路径）：挂得上、查得动
@@ -173,7 +175,11 @@ fn probe_network_source_credentials() {
         parts.host, parts.port, parts.user, parts.password, parts.database
     );
     for (tag, secret_sql, url) in [
-        ("会话级 Secret + `ATTACH ''`", Some(session_secret.as_str()), String::new()),
+        (
+            "会话级 Secret + `ATTACH ''`",
+            Some(session_secret.as_str()),
+            String::new(),
+        ),
         (
             "会话级 Secret + 无凭据 URL",
             Some(session_secret.as_str()),
@@ -215,7 +221,8 @@ fn probe_network_source_credentials() {
         "抹掉之后要留痕（看得出是脱敏的）：{error}"
     );
     assert!(
-        error.to_lowercase().contains("unknown database") || error.to_lowercase().contains("access denied"),
+        error.to_lowercase().contains("unknown database")
+            || error.to_lowercase().contains("access denied"),
         "原因要留着（只是把口令抹掉）：{error}"
     );
     eprintln!("✅ 失败原因脱敏：{error}");

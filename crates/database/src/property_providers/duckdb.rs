@@ -4,8 +4,8 @@
 
 use super::{connection_base_overview, connection_base_rows, row, stats_cards};
 use property::{
-    ObjectOverview, OverviewStatus, PropertySection, PropertyKind, PropertyProvider,
-    PropertyRow, ProviderInput, ProviderRegistry,
+    ObjectOverview, OverviewStatus, PropertyKind, PropertyProvider, PropertyRow, PropertySection,
+    ProviderInput, ProviderRegistry,
 };
 /// 注册 DuckDB provider。
 pub fn register_all(registry: &mut ProviderRegistry) {
@@ -18,8 +18,12 @@ pub fn register_all(registry: &mut ProviderRegistry) {
 pub struct DuckDbConnectionProvider;
 
 impl PropertyProvider for DuckDbConnectionProvider {
-    fn db_type(&self) -> &'static str { "duckdb" }
-    fn kind(&self) -> PropertyKind { PropertyKind::Connection }
+    fn db_type(&self) -> &'static str {
+        "duckdb"
+    }
+    fn kind(&self) -> PropertyKind {
+        PropertyKind::Connection
+    }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         connection_base_rows(input, "DuckDB")
@@ -40,7 +44,12 @@ impl PropertyProvider for DuckDbConnectionProvider {
         super::connection_categories(&super::DriverCapabilities::duckdb(), input)
     }
 
-    fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
+    fn apply_edit_sql(
+        &self,
+        _input: &ProviderInput,
+        _id: &str,
+        _v: &str,
+    ) -> Result<String, String> {
         Err("DuckDB 连接属性编辑待扩展".to_string())
     }
 }
@@ -49,8 +58,12 @@ impl PropertyProvider for DuckDbConnectionProvider {
 pub struct DuckDbTableProvider;
 
 impl PropertyProvider for DuckDbTableProvider {
-    fn db_type(&self) -> &'static str { "duckdb" }
-    fn kind(&self) -> PropertyKind { PropertyKind::Table }
+    fn db_type(&self) -> &'static str {
+        "duckdb"
+    }
+    fn kind(&self) -> PropertyKind {
+        PropertyKind::Table
+    }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         vec![
@@ -85,7 +98,12 @@ impl PropertyProvider for DuckDbTableProvider {
         super::table_categories(&super::DriverCapabilities::duckdb())
     }
 
-    fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
+    fn apply_edit_sql(
+        &self,
+        _input: &ProviderInput,
+        _id: &str,
+        _v: &str,
+    ) -> Result<String, String> {
         Err("DuckDB 表属性编辑待扩展".to_string())
     }
 }
@@ -94,8 +112,12 @@ impl PropertyProvider for DuckDbTableProvider {
 pub struct DuckDbViewProvider;
 
 impl PropertyProvider for DuckDbViewProvider {
-    fn db_type(&self) -> &'static str { "duckdb" }
-    fn kind(&self) -> PropertyKind { PropertyKind::View }
+    fn db_type(&self) -> &'static str {
+        "duckdb"
+    }
+    fn kind(&self) -> PropertyKind {
+        PropertyKind::View
+    }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         vec![
@@ -130,7 +152,12 @@ impl PropertyProvider for DuckDbViewProvider {
         super::view_categories(&super::DriverCapabilities::duckdb())
     }
 
-    fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
+    fn apply_edit_sql(
+        &self,
+        _input: &ProviderInput,
+        _id: &str,
+        _v: &str,
+    ) -> Result<String, String> {
         Err("DuckDB 视图属性编辑待扩展".to_string())
     }
 }

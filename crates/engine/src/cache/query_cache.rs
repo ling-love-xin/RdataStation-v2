@@ -315,11 +315,11 @@ pub fn get_query_cache() -> &'static Arc<QueryCache> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shared::error::CoreError;
-    use shared::models::QueryResult;
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use shared::error::CoreError;
+    use shared::models::QueryResult;
     use std::sync::Arc;
 
     fn make_single_row_batch() -> (Vec<String>, RecordBatch) {

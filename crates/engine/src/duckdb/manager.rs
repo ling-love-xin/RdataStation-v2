@@ -220,11 +220,13 @@ impl DuckDBManager {
         let guard = conn.lock().map_err(|e| {
             CoreError::common(CommonError::General(format!("DuckDB lock error: {e}")))
         })?;
-        guard.execute_batch(&format!("SET memory_limit = '{mb}MB'")).map_err(|e| {
-            CoreError::common(CommonError::General(format!(
-                "调整分析引擎内存上限失败（{mb}MB）: {e}"
-            )))
-        })?;
+        guard
+            .execute_batch(&format!("SET memory_limit = '{mb}MB'"))
+            .map_err(|e| {
+                CoreError::common(CommonError::General(format!(
+                    "调整分析引擎内存上限失败（{mb}MB）: {e}"
+                )))
+            })?;
         // 记录精确字节（见 [`LAST_MEMORY_LIMIT_BYTES`] 的说明：读数要回退解析才会用到它）
         LAST_MEMORY_LIMIT_BYTES.store(mb.saturating_mul(1024 * 1024), Ordering::Relaxed);
         Ok(())
@@ -243,11 +245,9 @@ impl DuckDBManager {
         // DuckDB 的读数（`1.8 GiB` 这类近似值，见 [`LAST_MEMORY_LIMIT_BYTES`]）。
         let limit_bytes = match LAST_MEMORY_LIMIT_BYTES.load(Ordering::Relaxed) {
             0 => guard
-                .query_row(
-                    "SELECT current_setting('memory_limit')",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
+                .query_row("SELECT current_setting('memory_limit')", [], |row| {
+                    row.get::<_, String>(0)
+                })
                 .map_err(|e| {
                     CoreError::common(CommonError::General(format!(
                         "读取分析引擎内存上限失败: {e}"
@@ -699,22 +699,22 @@ mod tests {
 
     #[test]
     fn test_configure_connection_applies_memory_and_temp_settings() -> Result<(), CoreError> {
-        let conn = Connection::open_in_memory().map_err(|e| {
-            CoreError::common(CommonError::General(format!("打开内存库失败: {e}")))
-        })?;
+        let conn = Connection::open_in_memory()
+            .map_err(|e| CoreError::common(CommonError::General(format!("打开内存库失败: {e}"))))?;
         DuckDBManager::configure_connection(&conn)?;
 
         let setting = |name: &str| -> Result<String, CoreError> {
             conn.query_row(&format!("SELECT current_setting('{name}')"), [], |row| {
                 row.get::<_, String>(0)
             })
-            .map_err(|e| {
-                CoreError::common(CommonError::General(format!("读 {name} 失败: {e}")))
-            })
+            .map_err(|e| CoreError::common(CommonError::General(format!("读 {name} 失败: {e}"))))
         };
 
         // 内存闸真的设上了（DuckDB 会把它回显成 "1.9 GiB" 这类形式，故只断言非空）
-        assert!(!setting("memory_limit")?.is_empty(), "memory_limit 应已设置");
+        assert!(
+            !setting("memory_limit")?.is_empty(),
+            "memory_limit 应已设置"
+        );
         // 溢写口钉在数据根的 tmp/（路径比较忽略末尾分隔符）
         assert_eq!(
             PathBuf::from(setting("temp_directory")?),
@@ -750,9 +750,7 @@ mod tests {
             conn.query_row(&format!("SELECT current_setting('{name}')"), [], |row| {
                 row.get::<_, bool>(0)
             })
-            .map_err(|e| {
-                CoreError::common(CommonError::General(format!("读 {name} 失败: {e}")))
-            })
+            .map_err(|e| CoreError::common(CommonError::General(format!("读 {name} 失败: {e}"))))
         };
         assert!(!bool_setting("autoinstall_known_extensions")?);
         assert!(bool_setting("autoload_known_extensions")?);
@@ -784,10 +782,12 @@ mod tests {
 
         let result = DuckDBManager::ensure_parent_dir(&nested_path);
         assert!(result.is_ok());
-        assert!(nested_path
-            .parent()
-            .ok_or_else(|| CoreError::common(CommonError::General("路径无父目录".to_string())))?
-            .exists());
+        assert!(
+            nested_path
+                .parent()
+                .ok_or_else(|| CoreError::common(CommonError::General("路径无父目录".to_string())))?
+                .exists()
+        );
 
         // 清理
         let _ = fs::remove_dir_all(temp_dir.join("test_duckdb_dir"));

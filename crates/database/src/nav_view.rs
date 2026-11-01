@@ -48,7 +48,9 @@ use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::hover_card::HoverCard;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Selectable as _, Sizable as _, WindowExt as _};
+use gpui_kit::component::{
+    ActiveTheme, Icon, IconName, Selectable as _, Sizable as _, WindowExt as _,
+};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -66,11 +68,11 @@ use crate::model::{
 use crate::nav::actions::NavActionId;
 use crate::nav::capability::NavOp;
 use crate::nav::family_profile;
-use property::PropertyKind;
 use crate::nav_host::{HostNotify, NavFilters, NavHost, ObjectMaskRule};
 use crate::nav_rows::{NavRow, PlaceholderKind, search_hit_row_id, search_hit_row_key};
 use crate::sql_gen::DmlKind;
 use engine::persistence::driver_catalog::DriverMeta;
+use property::PropertyKind;
 
 use crate::nav_jobs;
 
@@ -501,7 +503,10 @@ impl NavViewState {
     /// - 已入 Truncate 再入 Drop → `Replaced`（同对象只保留最终状态 Drop，原位替换、顺序不挪）。
     pub(super) fn enqueue_staged(&mut self, op: StagedOp) -> EnqueueOutcome {
         tracing::info!(key = %op.key, op = ?op.op, "【探针】enqueue_staged 待变更入队（删除/清空）");
-        let Some(index) = self.staged_ops.iter().position(|existing| existing.key == op.key)
+        let Some(index) = self
+            .staged_ops
+            .iter()
+            .position(|existing| existing.key == op.key)
         else {
             self.staged_ops.push(op);
             return EnqueueOutcome::Added;
@@ -554,7 +559,10 @@ impl NavViewState {
             if !buckets.contains_key(&entry.conn_id) {
                 order.push(entry.conn_id.clone());
             }
-            buckets.entry(entry.conn_id.clone()).or_default().push(entry);
+            buckets
+                .entry(entry.conn_id.clone())
+                .or_default()
+                .push(entry);
         }
         order
             .into_iter()
@@ -846,9 +854,7 @@ impl Focusable for NavView {
 
 impl Render for NavView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .child(self.render_nav(window, cx))
+        div().size_full().child(self.render_nav(window, cx))
     }
 }
 
@@ -916,7 +922,9 @@ impl NavView {
         let idx = current.and_then(|k| order.iter().position(|i| i.key == k));
         let next = match idx {
             None => 0,
-            Some(i) => (i as isize + delta * NAV_PAGE_STEP).clamp(0, order.len() as isize - 1) as usize,
+            Some(i) => {
+                (i as isize + delta * NAV_PAGE_STEP).clamp(0, order.len() as isize - 1) as usize
+            }
         };
         let key = order[next].key.clone();
         drop(order);

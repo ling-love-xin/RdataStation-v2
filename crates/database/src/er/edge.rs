@@ -13,7 +13,7 @@
 //! 反过来（环导致的逆序）则从子表右边出、进父表左边。自引用单独走一个小回环，不参与上述规则。
 
 use crate::er::layout::{ErRect, LaidOutDiagram, LayoutMetrics};
-use crate::er::model::{ErDiagram, EntityKey, ErEntity};
+use crate::er::model::{EntityKey, ErDiagram, ErEntity};
 
 /// 平面点（逻辑像素）。
 ///
@@ -37,10 +37,9 @@ pub struct ErEdge {
 pub fn edge_paths(diagram: &ErDiagram, layout: &LaidOutDiagram, m: &LayoutMetrics) -> Vec<ErEdge> {
     let mut out = Vec::with_capacity(diagram.relations.len());
     for (ix, rel) in diagram.relations.iter().enumerate() {
-        let (Some(from_rect), Some(to_rect)) = (
-            layout.position_of(&rel.from),
-            layout.position_of(&rel.to),
-        ) else {
+        let (Some(from_rect), Some(to_rect)) =
+            (layout.position_of(&rel.from), layout.position_of(&rel.to))
+        else {
             // 端点不在布局里（理论上不会；`build_diagram` 已保证端点自洽）→ 跳过而非画歪线。
             continue;
         };
@@ -57,7 +56,10 @@ pub fn edge_paths(diagram: &ErDiagram, layout: &LaidOutDiagram, m: &LayoutMetric
             // 逆序（环）：子表在父表左侧 → 右出左进。
             orthogonal(&from_rect, fy, &to_rect, ty, /* from_left */ false)
         };
-        out.push(ErEdge { points, relation: ix });
+        out.push(ErEdge {
+            points,
+            relation: ix,
+        });
     }
     out
 }
@@ -96,7 +98,11 @@ fn row_center_y(rect: &ErRect, m: &LayoutMetrics, row: usize, rows_total: usize)
 /// 两卡片之间的正交折线（`from_left` 决定从子表哪条竖边出）。
 fn orthogonal(from: &ErRect, fy: f32, to: &ErRect, ty: f32, from_left: bool) -> Vec<ErPoint> {
     let start = ErPoint {
-        x: if from_left { from.x } else { from.x + from.width },
+        x: if from_left {
+            from.x
+        } else {
+            from.x + from.width
+        },
         y: fy,
     };
     let end = ErPoint {
@@ -136,7 +142,7 @@ mod tests {
 
     use super::*;
     use crate::er::layout::layered_layout;
-    use crate::er::model::{build_diagram, TableInput};
+    use crate::er::model::{TableInput, build_diagram};
 
     fn col(name: &str) -> ColumnDetail {
         ColumnDetail {
@@ -196,8 +202,18 @@ mod tests {
     fn same_row_relations_draw_a_straight_line() {
         // 直接验几何函数：两端等高时不引入竖直段（两个顶点）。
         // （不能靠布局凑「同行等高」：每层各自垂直居中，不同卡片的同行未必同 y。）
-        let from = ErRect { x: 300.0, y: 100.0, width: 220.0, height: 100.0 };
-        let to = ErRect { x: 24.0, y: 100.0, width: 220.0, height: 100.0 };
+        let from = ErRect {
+            x: 300.0,
+            y: 100.0,
+            width: 220.0,
+            height: 100.0,
+        };
+        let to = ErRect {
+            x: 24.0,
+            y: 100.0,
+            width: 220.0,
+            height: 100.0,
+        };
         let p = orthogonal(&from, 140.0, &to, 140.0, true);
         assert_eq!(p.len(), 2, "等高应为直线（两个端点）");
         assert_eq!(p[0], ErPoint { x: 300.0, y: 140.0 }, "子表左边缘出线");
@@ -206,11 +222,24 @@ mod tests {
 
     #[test]
     fn orthogonal_row_mismatch_adds_a_vertical_segment() {
-        let from = ErRect { x: 300.0, y: 100.0, width: 220.0, height: 100.0 };
-        let to = ErRect { x: 24.0, y: 100.0, width: 220.0, height: 100.0 };
+        let from = ErRect {
+            x: 300.0,
+            y: 100.0,
+            width: 220.0,
+            height: 100.0,
+        };
+        let to = ErRect {
+            x: 24.0,
+            y: 100.0,
+            width: 220.0,
+            height: 100.0,
+        };
         let p = orthogonal(&from, 140.0, &to, 170.0, true);
         assert_eq!(p.len(), 4, "不同高应为三段折线（四个顶点）");
-        assert!((p[1].x - p[2].x).abs() < f32::EPSILON, "中间两点同 x（竖直段）");
+        assert!(
+            (p[1].x - p[2].x).abs() < f32::EPSILON,
+            "中间两点同 x（竖直段）"
+        );
         assert!((p[0].y - p[1].y).abs() < f32::EPSILON);
         assert!((p[2].y - p[3].y).abs() < f32::EPSILON);
     }
@@ -270,7 +299,10 @@ mod tests {
         let edges = edge_paths(&d, &l, &m);
         let end = edges[0].points.last().copied().expect("终点");
         let center = users.y + users.height / 2.0;
-        assert!((end.y - center).abs() < 0.01, "解析不到列时应退化为卡片中缝");
+        assert!(
+            (end.y - center).abs() < 0.01,
+            "解析不到列时应退化为卡片中缝"
+        );
     }
 
     #[test]

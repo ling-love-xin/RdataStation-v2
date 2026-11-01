@@ -88,7 +88,9 @@ pub(super) fn nav_scope_tooltip(source: NavSource) -> String {
     match source {
         NavSource::Project => "归属域：项目连接（仅本项目可见）".to_string(),
         NavSource::Global => "归属域：全局连接（所有项目可见）".to_string(),
-        NavSource::Shared => "归属域：项目 + 全局区域（共享连接同时出现在「项目」与「全局」两处）".to_string(),
+        NavSource::Shared => {
+            "归属域：项目 + 全局区域（共享连接同时出现在「项目」与「全局」两处）".to_string()
+        }
     }
 }
 
@@ -340,7 +342,12 @@ pub(super) fn folder_count_label(
 /// - `filtering`：本地筛选词非空且分页未拉完 → 追加「筛选仅覆盖已加载」，避免用户误以为
 ///   “搜不到 = 库里没有”；
 /// - 常规：`可见 {loaded} / 共 {total}`。
-pub(super) fn more_row_label(loaded: usize, total: usize, filtering: bool, fetching: bool) -> String {
+pub(super) fn more_row_label(
+    loaded: usize,
+    total: usize,
+    filtering: bool,
+    fetching: bool,
+) -> String {
     if fetching {
         return "加载中…".to_string();
     }
@@ -356,14 +363,8 @@ pub(super) fn more_row_label(loaded: usize, total: usize, filtering: bool, fetch
 /// load → sql → test → row_estimate → connect → search。
 /// core 拆分后合并窗口内按此顺序调用；单测断言顺序表，调乱顺序会被钉死。
 #[cfg(test)]
-pub(super) const PUMP_BATCH_ORDER: [&str; 6] = [
-    "load",
-    "sql",
-    "test",
-    "row_estimate",
-    "connect",
-    "search",
-];
+pub(super) const PUMP_BATCH_ORDER: [&str; 6] =
+    ["load", "sql", "test", "row_estimate", "connect", "search"];
 
 /// D8 合并窗口判定：本轮六类结果任一非空即需要一次状态写入 + 重绘；
 /// 全空则跳过本轮 `weak.update`，直接进入 idle 判定。
@@ -640,8 +641,7 @@ pub(super) fn nav_order_members(
     }
     ordered.sort_by_key(|(o, _)| *o);
     // 未排段分区：最近使用过的（保持 `recent` 的新→旧顺序）与非最近（按名称）。
-    let recent_set: std::collections::HashSet<&str> =
-        recent.iter().map(|s| s.as_str()).collect();
+    let recent_set: std::collections::HashSet<&str> = recent.iter().map(|s| s.as_str()).collect();
     let recent_used: Vec<String> = recent
         .iter()
         .filter(|id| unset.iter().any(|u| u == *id))
@@ -958,7 +958,10 @@ pub(super) fn mask_passes(compiled: &CompiledMask, name: &str) -> bool {
     let excluded = if compiled.use_regex {
         compiled.exclude_re.iter().any(|r| r.is_match(name))
     } else {
-        compiled.exclude_glob.iter().any(|p| nav_glob_match(p, name))
+        compiled
+            .exclude_glob
+            .iter()
+            .any(|p| nav_glob_match(p, name))
     };
     if excluded {
         return false;
@@ -969,7 +972,10 @@ pub(super) fn mask_passes(compiled: &CompiledMask, name: &str) -> bool {
     if compiled.use_regex {
         compiled.include_re.iter().any(|r| r.is_match(name))
     } else {
-        compiled.include_glob.iter().any(|p| nav_glob_match(p, name))
+        compiled
+            .include_glob
+            .iter()
+            .any(|p| nav_glob_match(p, name))
     }
 }
 
@@ -1061,7 +1067,11 @@ pub(super) fn nav_name_highlight(
 /// - 已在待提交清单（`staged_hit`）→ 「从待提交移除」（单项撤销，不弹确认）；
 /// - 未入队：按动作 × 对象类别给「删除表…/删除视图…/删除序列…/清空表…」；
 /// - 动作与类别不匹配（如 Truncate 挂到视图 / 序列）→ `None`，菜单不渲染该项。
-pub(super) fn staged_menu_label(op: NavOp, kind: ObjectKind, staged_hit: bool) -> Option<&'static str> {
+pub(super) fn staged_menu_label(
+    op: NavOp,
+    kind: ObjectKind,
+    staged_hit: bool,
+) -> Option<&'static str> {
     if staged_hit {
         return Some("从待提交移除");
     }
@@ -1162,13 +1172,7 @@ pub(super) fn staged_commit_rows(plan: &[StagedOp], muted: Hsla) -> Vec<AnyEleme
                     .gap_2()
                     .text_xs()
                     .items_start()
-                    .child(
-                        div()
-                            .w_12()
-                            .flex_none()
-                            .text_color(muted)
-                            .child(label),
-                    )
+                    .child(div().w_12().flex_none().text_color(muted).child(label))
                     .child(
                         div()
                             .min_w_0()
@@ -1340,14 +1344,16 @@ pub(super) fn prune_expanded(
         .filter(|k| existing_keys.contains(k.as_str()) || root_keys.contains(k.as_str()))
         .cloned()
         .collect()
-    }
+}
 
 /// 加载失败是否为「连接类」错误（可自动重试一次）。
 ///
 /// 背景（app_run57/58 铁证）：池连接被网络层静默丢弃后，`test_before_acquire`
 /// 验证/查询挂在 TCP 半开上超时——这类失败重入队后 sqlx 已把死连接回收并新建，
 /// 第二次秒过；权限/对象不存在等业务失败重试无意义，交给红字 + 用户重试。
-pub(super) fn nav_error_is_connection(result: &Result<crate::navigator_service::NavPage, String>) -> bool {
+pub(super) fn nav_error_is_connection(
+    result: &Result<crate::navigator_service::NavPage, String>,
+) -> bool {
     let Err(err) = result else {
         return false;
     };
@@ -1457,26 +1463,30 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use super::{
-        batches_present, compile_mask, comment_subline_text, folder_count_label, format_data_length,
-        format_row_estimate, host_subline_text, key_in_subtree, mask_passes, more_row_label,
-        nav_glob_match, nav_highlight_segments, nav_hit_source_badge, nav_mask_passes, nav_node_matches,
+        NavHitBadgeRole, PUMP_BATCH_ORDER, StagedOp, batches_present, comment_subline_text,
+        compile_mask, folder_count_label, format_data_length, format_row_estimate,
+        host_subline_text, key_in_subtree, mask_passes, more_row_label, nav_glob_match,
+        nav_highlight_segments, nav_hit_source_badge, nav_mask_passes, nav_node_matches,
         nav_object_masked, nav_snippet_segments, nav_tag_palette_index, placeholder_decision,
         placeholder_message, prune_expanded, prune_subtree_keys, selected_key_in_subtree,
-        staged_action_label, staged_commit_summary, staged_dialog_copy, staged_menu_label,
-        staged_qualified_name, size_badge_text, NavHitBadgeRole, PUMP_BATCH_ORDER, StagedOp,
+        size_badge_text, staged_action_label, staged_commit_summary, staged_dialog_copy,
+        staged_menu_label, staged_qualified_name,
     };
     use crate::model::{NavFolder, NavNode, NavNodeKind, NavPath, ObjectKind};
     use crate::nav::capability::NavOp;
     use crate::nav::family_profile::InlineStatsProfile;
     use crate::nav_host::ObjectMaskRule;
+    use crate::nav_jobs;
     use crate::nav_rows::PlaceholderKind;
     use crate::navigator_service::NavPage;
-    use crate::nav_jobs;
 
     /// 同名同档（跨调用稳定）；不同名分布在不同档（至少不完全扎堆）。
     #[test]
     fn tag_palette_is_stable_and_spread() {
-        assert_eq!(nav_tag_palette_index("报表", 8), nav_tag_palette_index("报表", 8));
+        assert_eq!(
+            nav_tag_palette_index("报表", 8),
+            nav_tag_palette_index("报表", 8)
+        );
         let names = ["报表", "核心", "待整理", "月报", "prod", "archive"];
         let mut seen = std::collections::HashSet::new();
         for n in names {
@@ -1491,10 +1501,7 @@ mod tests {
         let segs = nav_highlight_segments("order_items", "order");
         assert_eq!(
             segs,
-            vec![
-                ("order".to_string(), true),
-                ("_items".to_string(), false),
-            ]
+            vec![("order".to_string(), true), ("_items".to_string(), false),]
         );
     }
 
@@ -1525,10 +1532,7 @@ mod tests {
         let segs = nav_highlight_segments("ORDER_ITEMS", "order");
         assert_eq!(
             segs,
-            vec![
-                ("ORDER".to_string(), true),
-                ("_ITEMS".to_string(), false),
-            ]
+            vec![("ORDER".to_string(), true), ("_ITEMS".to_string(), false),]
         );
     }
 
@@ -1570,13 +1574,7 @@ mod tests {
     #[test]
     fn node_matches_self_or_any_loaded_child() {
         let mut children: HashMap<String, Vec<NavNode>> = HashMap::new();
-        let schema = NavNode::new(
-            "conn::sales",
-            "sales",
-            "conn",
-            NavNodeKind::Schema,
-            true,
-        );
+        let schema = NavNode::new("conn::sales", "sales", "conn", NavNodeKind::Schema, true);
         let table = NavNode::new(
             "conn::sales::orders",
             "orders",
@@ -1640,7 +1638,10 @@ mod tests {
     #[test]
     fn host_subline_gated_by_profile_and_host_presence() {
         let on = inline_all_on();
-        let off = InlineStatsProfile { show_host_name: false, ..on };
+        let off = InlineStatsProfile {
+            show_host_name: false,
+            ..on
+        };
 
         // 档案关闭：即便有 host 也不显。
         assert_eq!(host_subline_text(&off, Some("db.local"), Some(5432)), None);
@@ -1653,7 +1654,10 @@ mod tests {
             Some("db.local:5432")
         );
         // port 缺失：只显 host；host 两侧空白被修剪。
-        assert_eq!(host_subline_text(&on, Some("db.local"), None).as_deref(), Some("db.local"));
+        assert_eq!(
+            host_subline_text(&on, Some("db.local"), None).as_deref(),
+            Some("db.local")
+        );
         assert_eq!(
             host_subline_text(&on, Some("  db.local  "), None).as_deref(),
             Some("db.local")
@@ -1663,16 +1667,24 @@ mod tests {
     #[test]
     fn comment_subline_gated_by_profile_kind_and_comment() {
         let on = inline_all_on();
-        let off = InlineStatsProfile { show_description: false, ..on };
+        let off = InlineStatsProfile {
+            show_description: false,
+            ..on
+        };
 
         // 档案关闭：描述类对象也不显。
-        assert_eq!(comment_subline_text(&off, &NavNodeKind::View, Some("备注")), None);
+        assert_eq!(
+            comment_subline_text(&off, &NavNodeKind::View, Some("备注")),
+            None
+        );
 
         // 描述类白名单：表 / 视图 / 例程 / 序列 / 触发器显。
         let visible = [
             NavNodeKind::Table { row_estimate: None },
             NavNodeKind::View,
-            NavNodeKind::Routine { routine_type: "function".into() },
+            NavNodeKind::Routine {
+                routine_type: "function".into(),
+            },
             NavNodeKind::Sequence,
             NavNodeKind::Trigger,
         ];
@@ -1697,7 +1709,11 @@ mod tests {
             NavNodeKind::Catalog,
         ];
         for kind in &hidden {
-            assert_eq!(comment_subline_text(&on, kind, Some("备注")), None, "{kind:?}");
+            assert_eq!(
+                comment_subline_text(&on, kind, Some("备注")),
+                None,
+                "{kind:?}"
+            );
         }
 
         // 注释缺失 / 空白串：不显。
@@ -1709,20 +1725,29 @@ mod tests {
     #[test]
     fn size_badge_gated_by_profile_and_presence() {
         let on = inline_all_on();
-        let off = InlineStatsProfile { show_size: false, ..on };
+        let off = InlineStatsProfile {
+            show_size: false,
+            ..on
+        };
 
         // 档案关闭：即便有大小也不显。
         assert_eq!(size_badge_text(&off, Some(1_048_576)), None);
         // 未回填：安静消失（在途「…」由行估计槽统一承担，本函数不重复占位）。
         assert_eq!(size_badge_text(&on, None), None);
         // 已回填：走二进制档位格式化。
-        assert_eq!(size_badge_text(&on, Some(1_048_576)).as_deref(), Some("1.0 MB"));
+        assert_eq!(
+            size_badge_text(&on, Some(1_048_576)).as_deref(),
+            Some("1.0 MB")
+        );
     }
 
     #[test]
     fn folder_count_label_gated_by_profile_kind_and_zero() {
         let on = inline_all_on();
-        let off = InlineStatsProfile { show_child_count: false, ..on };
+        let off = InlineStatsProfile {
+            show_child_count: false,
+            ..on
+        };
 
         // 档案关闭：不显。
         assert_eq!(
@@ -1730,11 +1755,13 @@ mod tests {
             None
         );
         // 非文件夹：不显。
-        assert_eq!(folder_count_label(&on, &NavNodeKind::View, Some(7), 3), None);
+        assert_eq!(
+            folder_count_label(&on, &NavNodeKind::View, Some(7), 3),
+            None
+        );
         // 候选总数优先于已加载数。
         assert_eq!(
-            folder_count_label(&on, &NavNodeKind::Folder(NavFolder::Tables), Some(7), 3)
-                .as_deref(),
+            folder_count_label(&on, &NavNodeKind::Folder(NavFolder::Tables), Some(7), 3).as_deref(),
             Some("7")
         );
         // 缺省回退已加载子节点数。
@@ -1882,11 +1909,23 @@ mod tests {
             ..Default::default()
         };
         // 两层都过 → 显示。
-        assert!(!nav_object_masked(Some(&per_conn), Some(&global), "orders_2024"));
+        assert!(!nav_object_masked(
+            Some(&per_conn),
+            Some(&global),
+            "orders_2024"
+        ));
         // 全局 exclude 命中 → 隐藏（即使 per-conn include 命中）。
-        assert!(nav_object_masked(Some(&per_conn), Some(&global), "orders_archive"));
+        assert!(nav_object_masked(
+            Some(&per_conn),
+            Some(&global),
+            "orders_archive"
+        ));
         // per-conn 不命中 → 隐藏。
-        assert!(nav_object_masked(Some(&per_conn), Some(&global), "customers"));
+        assert!(nav_object_masked(
+            Some(&per_conn),
+            Some(&global),
+            "customers"
+        ));
         // 空 per-conn（不启用）→ 只看全局。
         assert!(!nav_object_masked(None, Some(&global), "orders"));
         // 两层都空 → 显示。
@@ -2035,10 +2074,7 @@ mod tests {
                 "connect",
                 batches_present(&[], &[], &[], &[], &connect, &[]),
             ),
-            (
-                "search",
-                batches_present(&[], &[], &[], &[], &[], &search),
-            ),
+            ("search", batches_present(&[], &[], &[], &[], &[], &search)),
         ];
         for (name, present) in cases {
             assert!(present, "类别 {name} 非空应触发合并提交");
@@ -2080,7 +2116,12 @@ mod tests {
         .into_iter()
         .collect();
         let kept = prune_subtree_keys(&set, "C_1/shop", "C_1/shop/");
-        assert_eq!(kept, ["C_1/other".to_string(), "C_2".to_string()].into_iter().collect());
+        assert_eq!(
+            kept,
+            ["C_1/other".to_string(), "C_2".to_string()]
+                .into_iter()
+                .collect()
+        );
     }
 
     /// D9：选中锚点落子树内命中清空；子树外保持；None 不命中。
@@ -2089,7 +2130,11 @@ mod tests {
         let root = "C_1/shop";
         let prefix = "C_1/shop/";
         assert!(selected_key_in_subtree(Some("C_1/shop"), root, prefix));
-        assert!(selected_key_in_subtree(Some("C_1/shop/public/orders"), root, prefix));
+        assert!(selected_key_in_subtree(
+            Some("C_1/shop/public/orders"),
+            root,
+            prefix
+        ));
         assert!(!selected_key_in_subtree(Some("C_1/other"), root, prefix));
         assert!(!selected_key_in_subtree(None, root, prefix));
     }
@@ -2099,12 +2144,12 @@ mod tests {
     #[test]
     fn prune_expanded_keeps_existing_and_roots_drops_orphans() {
         let expanded: HashSet<String> = [
-            "C_1".to_string(),                 // 连接根：root 白名单保留
-            "C_1/shop".to_string(),            // 现存容器：保留
-            "C_1/shop/public".to_string(),      // 现存容器：保留
-            "C_1/shop/public/orders".to_string(), // 现存节点：保留
+            "C_1".to_string(),                     // 连接根：root 白名单保留
+            "C_1/shop".to_string(),                // 现存容器：保留
+            "C_1/shop/public".to_string(),         // 现存容器：保留
+            "C_1/shop/public/orders".to_string(),  // 现存节点：保留
             "C_1/shop/public/deleted".to_string(), // 已删节点：剔除
-            "C_2".to_string(),                 // 另一连接根：root 白名单保留
+            "C_2".to_string(),                     // 另一连接根：root 白名单保留
         ]
         .into_iter()
         .collect();
@@ -2158,10 +2203,22 @@ mod tests {
             );
         }
         // 未入队：动作 × 类别细分文案。
-        assert_eq!(staged_menu_label(NavOp::Drop, ObjectKind::Table, false), Some("删除表…"));
-        assert_eq!(staged_menu_label(NavOp::Drop, ObjectKind::View, false), Some("删除视图…"));
-        assert_eq!(staged_menu_label(NavOp::Drop, ObjectKind::Sequence, false), Some("删除序列…"));
-        assert_eq!(staged_menu_label(NavOp::Truncate, ObjectKind::Table, false), Some("清空表…"));
+        assert_eq!(
+            staged_menu_label(NavOp::Drop, ObjectKind::Table, false),
+            Some("删除表…")
+        );
+        assert_eq!(
+            staged_menu_label(NavOp::Drop, ObjectKind::View, false),
+            Some("删除视图…")
+        );
+        assert_eq!(
+            staged_menu_label(NavOp::Drop, ObjectKind::Sequence, false),
+            Some("删除序列…")
+        );
+        assert_eq!(
+            staged_menu_label(NavOp::Truncate, ObjectKind::Table, false),
+            Some("清空表…")
+        );
         // 不适用：Truncate 只挂表；其余类别不产生破坏性菜单项。
         for (op, kind) in [
             (NavOp::Truncate, ObjectKind::View),

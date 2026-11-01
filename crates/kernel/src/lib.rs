@@ -17,5 +17,5 @@ pub mod connection;
 pub mod registry;
 pub mod session;
 
-pub use registry::{detect_kernels, KernelLanguage, KernelSpec};
+pub use registry::{KernelLanguage, KernelSpec, detect_kernels};
 pub use session::{KernelEvent, KernelSession, KernelStatus};

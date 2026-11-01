@@ -34,10 +34,9 @@ impl DialectSpi for MysqlDialect {
         match kind {
             // MySQL 表与视图都走 `RENAME TABLE`：8.0 起 `ALTER TABLE … RENAME` 亦可，
             // 但 `RENAME TABLE` 对视图同样有效，两态一语句（沿用现状口径）。
-            ObjectKind::Table | ObjectKind::View => Ok(format!(
-                "RENAME TABLE {} TO {new_ident}",
-                qual(old)
-            )),
+            ObjectKind::Table | ObjectKind::View => {
+                Ok(format!("RENAME TABLE {} TO {new_ident}", qual(old)))
+            }
             ObjectKind::Sequence => Err(unsupported_err(
                 self.family(),
                 "rename_sql",
@@ -91,7 +90,9 @@ impl DialectSpi for MysqlDialect {
 
     fn truncate_table_sql(&self, schema: Option<&str>, name: &str) -> Result<String, CoreError> {
         let qual = match schema {
-            Some(s) if !s.is_empty() => format!("{}.{}", self.quote_ident(s), self.quote_ident(name)),
+            Some(s) if !s.is_empty() => {
+                format!("{}.{}", self.quote_ident(s), self.quote_ident(name))
+            }
             _ => self.quote_ident(name),
         };
         Ok(format!("TRUNCATE TABLE {qual}"))

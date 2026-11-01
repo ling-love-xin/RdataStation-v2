@@ -9,9 +9,9 @@ use russh::keys::agent::AgentIdentity;
 use russh::keys::{PrivateKeyWithHashAlg, PublicKeyBase64};
 
 use crate::config::{ConnectionConfig, ConnectionMethod, SshAuth, SshConfig};
+use crate::connector::Connector;
 use crate::connector::TunnelGuard;
 use crate::stream::ConnectionStream;
-use crate::connector::Connector;
 use shared::error::{ConnectionError, CoreError};
 
 pub struct SshTunnelConnector;
@@ -98,10 +98,7 @@ impl russh::client::Handler for SshClientHandler {
 
                 // TOFU：首连自动信任并写入 known_hosts（落盘后二次连接同指纹匹配、异指纹拒绝）
                 if self.host_key_check.should_append_unknown() {
-                    if let Err(e) = self
-                        .known_hosts
-                        .append(&self.host, self.port, &public_key)
-                    {
+                    if let Err(e) = self.known_hosts.append(&self.host, self.port, &public_key) {
                         // 落盘失败不阻断连接（下次仍会提示/校验），仅记录
                         tracing::warn!(
                             target: "ssh_tunnel",
@@ -441,4 +438,3 @@ async fn connect_ssh_agent(_ssh_addr: &str) -> Result<(), CoreError> {
         "SSH Agent 认证在当前平台暂未支持，请使用密码或私钥认证".to_string(),
     )))
 }
-

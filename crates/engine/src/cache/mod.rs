@@ -11,11 +11,11 @@ pub mod query_cache;
 
 pub use cache_manager::{CacheConfig, CacheLevel, CacheManager, CacheManagerStats};
 pub use lru_cache::{LruCache, MemoryEstimate, MemoryPressure};
-pub use memory_guard::{get_memory_guard, init_memory_guard, MemoryGuard, MemoryGuardConfig};
+pub use memory_guard::{MemoryGuard, MemoryGuardConfig, get_memory_guard, init_memory_guard};
 pub use metadata_cache::{
     MetadataCache, MetadataCacheConfig, MetadataCacheKey, MetadataCacheValue,
 };
-pub use query_cache::{get_query_cache, QueryCache, QueryCacheConfig, QueryCacheStats};
+pub use query_cache::{QueryCache, QueryCacheConfig, QueryCacheStats, get_query_cache};
 
 use std::hash::Hash;
 use std::time::{Duration, Instant};

@@ -88,7 +88,12 @@ pub fn layered_layout(diagram: &ErDiagram, m: &LayoutMetrics) -> LaidOutDiagram 
     if n == 0 {
         return LaidOutDiagram {
             boxes: Vec::new(),
-            bounds: ErRect { x: 0.0, y: 0.0, width: m.padding * 2.0, height: m.padding * 2.0 },
+            bounds: ErRect {
+                x: 0.0,
+                y: 0.0,
+                width: m.padding * 2.0,
+                height: m.padding * 2.0,
+            },
         };
     }
 
@@ -171,7 +176,12 @@ pub fn layered_layout(diagram: &ErDiagram, m: &LayoutMetrics) -> LaidOutDiagram 
             slots[i] = Some(EntityBox {
                 key: diagram.entities[i].key.clone(),
                 layer: l as u32,
-                rect: ErRect { x, y, width: m.card_width, height: heights[i] },
+                rect: ErRect {
+                    x,
+                    y,
+                    width: m.card_width,
+                    height: heights[i],
+                },
             });
             y += heights[i] + m.v_gap;
         }
@@ -185,7 +195,12 @@ pub fn layered_layout(diagram: &ErDiagram, m: &LayoutMetrics) -> LaidOutDiagram 
 
     LaidOutDiagram {
         boxes,
-        bounds: ErRect { x: 0.0, y: 0.0, width, height },
+        bounds: ErRect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        },
     }
 }
 
@@ -226,7 +241,7 @@ mod tests {
     use engine::driver::traits::{ColumnDetail, ConstraintDetail, SchemaObjectKind};
 
     use super::*;
-    use crate::er::model::{build_diagram, TableInput};
+    use crate::er::model::{TableInput, build_diagram};
 
     fn col(name: &str) -> ColumnDetail {
         ColumnDetail {
@@ -274,15 +289,24 @@ mod tests {
     }
 
     fn layer_of(l: &LaidOutDiagram, name: &str) -> u32 {
-        l.boxes.iter().find(|b| b.key.display_name() == name).expect("实体在手").layer
+        l.boxes
+            .iter()
+            .find(|b| b.key.display_name() == name)
+            .expect("实体在手")
+            .layer
     }
 
     #[test]
     fn referenced_entity_is_left_of_referrer() {
-        let d = diagram_of(&[table("orders", &[("user_id", "users")]), table("users", &[])]);
+        let d = diagram_of(&[
+            table("orders", &[("user_id", "users")]),
+            table("users", &[]),
+        ]);
         let l = layered_layout(&d, &LayoutMetrics::default());
         let users = l.position_of(&EntityKey::new("s", "users")).expect("users");
-        let orders = l.position_of(&EntityKey::new("s", "orders")).expect("orders");
+        let orders = l
+            .position_of(&EntityKey::new("s", "orders"))
+            .expect("orders");
         assert!(users.x < orders.x, "被引用者应排在左");
         assert_eq!(layer_of(&l, "users"), 0);
         assert_eq!(layer_of(&l, "orders"), 1);
@@ -299,7 +323,11 @@ mod tests {
     #[test]
     fn longest_path_layering_puts_chain_in_order() {
         // c → b → a：a 最左、c 最右
-        let d = diagram_of(&[table("c", &[("b_id", "b")]), table("b", &[("a_id", "a")]), table("a", &[])]);
+        let d = diagram_of(&[
+            table("c", &[("b_id", "b")]),
+            table("b", &[("a_id", "a")]),
+            table("a", &[]),
+        ]);
         let l = layered_layout(&d, &LayoutMetrics::default());
         assert_eq!(layer_of(&l, "a"), 0);
         assert_eq!(layer_of(&l, "b"), 1);
@@ -317,7 +345,10 @@ mod tests {
 
     #[test]
     fn boxes_are_entity_ordered_and_within_bounds() {
-        let d = diagram_of(&[table("orders", &[("user_id", "users")]), table("users", &[])]);
+        let d = diagram_of(&[
+            table("orders", &[("user_id", "users")]),
+            table("users", &[]),
+        ]);
         let l = layered_layout(&d, &LayoutMetrics::default());
         assert_eq!(l.boxes.len(), d.entities.len());
         for (b, e) in l.boxes.iter().zip(&d.entities) {
@@ -330,7 +361,11 @@ mod tests {
 
     #[test]
     fn layer_x_is_monotonic_and_non_overlapping() {
-        let d = diagram_of(&[table("c", &[("b_id", "b")]), table("b", &[("a_id", "a")]), table("a", &[])]);
+        let d = diagram_of(&[
+            table("c", &[("b_id", "b")]),
+            table("b", &[("a_id", "a")]),
+            table("a", &[]),
+        ]);
         let m = LayoutMetrics::default();
         let l = layered_layout(&d, &m);
         let mut xs: Vec<f32> = l.boxes.iter().map(|b| b.rect.x).collect();
@@ -343,7 +378,10 @@ mod tests {
 
     #[test]
     fn layout_is_deterministic() {
-        let d = diagram_of(&[table("orders", &[("user_id", "users")]), table("users", &[])]);
+        let d = diagram_of(&[
+            table("orders", &[("user_id", "users")]),
+            table("users", &[]),
+        ]);
         let m = LayoutMetrics::default();
         assert_eq!(layered_layout(&d, &m), layered_layout(&d, &m));
     }

@@ -152,7 +152,9 @@ pub fn property_kind_to_folder(kind: PropertyKind) -> Option<NavFolder> {
         PropertyKind::Routine => Some(NavFolder::Routines),
         PropertyKind::Sequence => Some(NavFolder::Sequences),
         PropertyKind::Trigger => Some(NavFolder::Triggers),
-        PropertyKind::Connection | PropertyKind::Catalog | PropertyKind::Schema
+        PropertyKind::Connection
+        | PropertyKind::Catalog
+        | PropertyKind::Schema
         | PropertyKind::Column => None,
     }
 }
@@ -311,7 +313,12 @@ const FOLDER_TRIGGERS: FolderProfile = FolderProfile {
 // ---- D11 注释 / 定义搜索范围静态集合（口径见 `SearchScopeProfile` 文档） ----
 
 const PG_SEARCH: SearchScopeProfile = SearchScopeProfile {
-    comments: &[ObjectKind::Table, ObjectKind::View, ObjectKind::Column, ObjectKind::Routine],
+    comments: &[
+        ObjectKind::Table,
+        ObjectKind::View,
+        ObjectKind::Column,
+        ObjectKind::Routine,
+    ],
     definitions: &[ObjectKind::Routine, ObjectKind::View],
 };
 const MYSQL_SEARCH: SearchScopeProfile = SearchScopeProfile {
@@ -407,7 +414,12 @@ static MYSQL: DbFamilyProfile = DbFamilyProfile {
         TYPE_ROUTINE,
         TYPE_TRIGGER,
     ],
-    folders: &[FOLDER_TABLES, FOLDER_VIEWS, FOLDER_ROUTINES, FOLDER_TRIGGERS],
+    folders: &[
+        FOLDER_TABLES,
+        FOLDER_VIEWS,
+        FOLDER_ROUTINES,
+        FOLDER_TRIGGERS,
+    ],
     search: MYSQL_SEARCH,
     inline: MYSQL_INLINE,
 };
@@ -489,9 +501,7 @@ impl FamilyRegistry {
         let key = Self::normalize(type_id);
         self.families
             .iter()
-            .find(|profile| {
-                profile.family == key || profile.aliases.contains(&key.as_str())
-            })
+            .find(|profile| profile.family == key || profile.aliases.contains(&key.as_str()))
             .copied()
             .unwrap_or(&FALLBACK)
     }
@@ -587,7 +597,10 @@ mod tests {
             ObjectKind::Sequence,
             ObjectKind::Trigger,
         ] {
-            assert!(reg.profile_of("postgresql", kind).is_some(), "PG 应声明 {kind:?}");
+            assert!(
+                reg.profile_of("postgresql", kind).is_some(),
+                "PG 应声明 {kind:?}"
+            );
         }
         // MySQL 档案不声明序列（内省能力位归 B2，此处仅档案事实）。
         assert!(reg.profile_of("mysql", ObjectKind::Sequence).is_none());
@@ -605,7 +618,11 @@ mod tests {
             (NavFolder::Triggers, ObjectKind::Trigger),
         ];
         for (folder, kind) in cases {
-            assert_eq!(folder_to_object_kind(folder), kind, "{folder:?} 应映射到 {kind:?}");
+            assert_eq!(
+                folder_to_object_kind(folder),
+                kind,
+                "{folder:?} 应映射到 {kind:?}"
+            );
             // 与正向映射闭环：叶子类别经 folder 再回 kind 一致（Column 归并 Tables 的特例除外）。
             assert_eq!(object_kind_to_folder(kind), Some(folder));
         }
@@ -756,11 +773,7 @@ mod tests {
             Some("icons/list-ordered.svg")
         );
         assert_eq!(object_kind_icon(ObjectKind::Trigger), Some("icons/zap.svg"));
-        for kind in [
-            ObjectKind::Catalog,
-            ObjectKind::Schema,
-            ObjectKind::Column,
-        ] {
+        for kind in [ObjectKind::Catalog, ObjectKind::Schema, ObjectKind::Column] {
             assert_eq!(object_kind_icon(kind), None);
         }
     }
@@ -774,7 +787,12 @@ mod tests {
 
         // PostgreSQL：注释覆盖表 / 视图 / 列 / 例程；定义覆盖例程 / 视图。
         let pg = reg.family_search_scope("postgresql");
-        for kind in [ObjectKind::Table, ObjectKind::View, ObjectKind::Column, ObjectKind::Routine] {
+        for kind in [
+            ObjectKind::Table,
+            ObjectKind::View,
+            ObjectKind::Column,
+            ObjectKind::Routine,
+        ] {
             assert!(contains(pg.comments, kind), "PG 注释应覆盖 {kind:?}");
         }
         for kind in [ObjectKind::Routine, ObjectKind::View] {

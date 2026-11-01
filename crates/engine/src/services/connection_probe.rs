@@ -49,15 +49,12 @@ pub async fn test_connection(config: DriverConnectionConfig) -> Result<TestResul
         Some(v) => Some(v),
         None => {
             if let Some(sql) = probe_sql(&config.driver) {
-                db.query(sql)
-                    .await
-                    .ok()
-                    .and_then(|r| {
-                        r.rows
-                            .first()
-                            .and_then(|row| row.first())
-                            .map(|v| v.to_string())
-                    })
+                db.query(sql).await.ok().and_then(|r| {
+                    r.rows
+                        .first()
+                        .and_then(|row| row.first())
+                        .map(|v| v.to_string())
+                })
             } else {
                 None
             }

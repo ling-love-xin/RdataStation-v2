@@ -4,7 +4,10 @@
 //! 编辑：列级 RENAME / COMMENT / DEFAULT / NULLABLE（`sql_gen::alter_column_sql`）；
 //! 类别树：驱动能力掩码（列/索引/约束/DDL/数据可用；权限/依赖/触发器/规则/策略/Statistics 先绘制置灰）。
 
-use super::{connection_base_overview, connection_base_rows, editable_row, empty_table, qualified_name, row, stats_cards};
+use super::{
+    connection_base_overview, connection_base_rows, editable_row, empty_table, qualified_name, row,
+    stats_cards,
+};
 use engine::driver::traits::ColumnDetail;
 use property::{
     ExtraQuery, ObjectOverview, OverviewStatus, PageId, PropertyKind, PropertyProvider,
@@ -52,8 +55,12 @@ pub fn register_all(registry: &mut ProviderRegistry) {
 pub struct PgConnectionProvider;
 
 impl PropertyProvider for PgConnectionProvider {
-    fn db_type(&self) -> &'static str { "postgresql" }
-    fn kind(&self) -> PropertyKind { PropertyKind::Connection }
+    fn db_type(&self) -> &'static str {
+        "postgresql"
+    }
+    fn kind(&self) -> PropertyKind {
+        PropertyKind::Connection
+    }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         let mut rows = connection_base_rows(input, "PostgreSQL");
@@ -74,13 +81,28 @@ impl PropertyProvider for PgConnectionProvider {
         // 连接级统计（schemas / tables / views）由调用方内省填充；未提供则不显示。
         let mut cards = Vec::new();
         if let Some(v) = input.count("schemas") {
-            cards.push(property::OverviewCard { label: "Schema".into(), value: v.into(), unit: String::new(), delta: None });
+            cards.push(property::OverviewCard {
+                label: "Schema".into(),
+                value: v.into(),
+                unit: String::new(),
+                delta: None,
+            });
         }
         if let Some(v) = input.count("tables") {
-            cards.push(property::OverviewCard { label: "表".into(), value: v.into(), unit: String::new(), delta: None });
+            cards.push(property::OverviewCard {
+                label: "表".into(),
+                value: v.into(),
+                unit: String::new(),
+                delta: None,
+            });
         }
         if let Some(v) = input.count("views") {
-            cards.push(property::OverviewCard { label: "视图".into(), value: v.into(), unit: String::new(), delta: None });
+            cards.push(property::OverviewCard {
+                label: "视图".into(),
+                value: v.into(),
+                unit: String::new(),
+                delta: None,
+            });
         }
         ov.cards = cards;
         if let Some(v) = input.count("server_version") {
@@ -95,7 +117,12 @@ impl PropertyProvider for PgConnectionProvider {
         super::connection_categories(&super::DriverCapabilities::pg(), input)
     }
 
-    fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
+    fn apply_edit_sql(
+        &self,
+        _input: &ProviderInput,
+        _id: &str,
+        _v: &str,
+    ) -> Result<String, String> {
         Err("连接级属性编辑待 settings 接入".to_string())
     }
 }
@@ -106,35 +133,62 @@ impl PropertyProvider for PgConnectionProvider {
 pub struct PgSchemaProvider;
 
 impl PropertyProvider for PgSchemaProvider {
-    fn db_type(&self) -> &'static str { "postgresql" }
-    fn kind(&self) -> PropertyKind { PropertyKind::Schema }
+    fn db_type(&self) -> &'static str {
+        "postgresql"
+    }
+    fn kind(&self) -> PropertyKind {
+        PropertyKind::Schema
+    }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         vec![
             row("名称", &input.target.name),
             row("命名空间 ID", input.count("oid").unwrap_or("-")),
-            editable_row("Schema.owner", "所有者", input.count("owner").unwrap_or("-"),
+            editable_row(
+                "Schema.owner",
+                "所有者",
+                input.count("owner").unwrap_or("-"),
                 property::PropertyValueKind::Select,
-                input.candidates("roles").map(|v| v.to_vec()).unwrap_or_else(roles_fallback)),
-            editable_row("Schema.description", "描述", input.count("description").unwrap_or("-"),
-                property::PropertyValueKind::LongText, Vec::new()),
+                input
+                    .candidates("roles")
+                    .map(|v| v.to_vec())
+                    .unwrap_or_else(roles_fallback),
+            ),
+            editable_row(
+                "Schema.description",
+                "描述",
+                input.count("description").unwrap_or("-"),
+                property::PropertyValueKind::LongText,
+                Vec::new(),
+            ),
             row("限定名", qualified_name(input.target)),
         ]
     }
 
     /// Schema 级懒加载：角色候选（`pg_roles` 多行 → Select 候选）。
     fn extra_queries(&self, _input: &ProviderInput) -> Vec<ExtraQuery> {
-        vec![ExtraQuery { key: "roles", sql: ROLES_SQL.to_string() }]
+        vec![ExtraQuery {
+            key: "roles",
+            sql: ROLES_SQL.to_string(),
+        }]
     }
 
     fn overview(&self, input: &ProviderInput) -> ObjectOverview {
         let mut cards = Vec::new();
         for (key, label) in [
-            ("tables", "表"), ("views", "视图"), ("matviews", "物化视图"),
-            ("routines", "函数"), ("sequences", "序列"),
+            ("tables", "表"),
+            ("views", "视图"),
+            ("matviews", "物化视图"),
+            ("routines", "函数"),
+            ("sequences", "序列"),
         ] {
             if let Some(v) = input.count(key) {
-                cards.push(property::OverviewCard { label: label.into(), value: v.into(), unit: String::new(), delta: None });
+                cards.push(property::OverviewCard {
+                    label: label.into(),
+                    value: v.into(),
+                    unit: String::new(),
+                    delta: None,
+                });
             }
         }
         ObjectOverview {
@@ -164,7 +218,12 @@ impl PropertyProvider for PgSchemaProvider {
         super::schema_categories(&super::DriverCapabilities::pg())
     }
 
-    fn apply_edit_sql(&self, input: &ProviderInput, row_id: &str, value: &str) -> Result<String, String> {
+    fn apply_edit_sql(
+        &self,
+        input: &ProviderInput,
+        row_id: &str,
+        value: &str,
+    ) -> Result<String, String> {
         match row_id {
             "Schema.owner" => Ok(format!(
                 "ALTER SCHEMA {} OWNER TO {}",
@@ -187,23 +246,51 @@ impl PropertyProvider for PgSchemaProvider {
 pub struct PgTableProvider;
 
 impl PropertyProvider for PgTableProvider {
-    fn db_type(&self) -> &'static str { "postgresql" }
-    fn kind(&self) -> PropertyKind { PropertyKind::Table }
+    fn db_type(&self) -> &'static str {
+        "postgresql"
+    }
+    fn kind(&self) -> PropertyKind {
+        PropertyKind::Table
+    }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         vec![
             row("名称", &input.target.name),
-            editable_row("Table.description", "描述", input.count("description").unwrap_or("-"),
-                property::PropertyValueKind::LongText, Vec::new()),
-            editable_row("Table.tablespace", "表空间", input.count("tablespace").unwrap_or("pg_default"),
+            editable_row(
+                "Table.description",
+                "描述",
+                input.count("description").unwrap_or("-"),
+                property::PropertyValueKind::LongText,
+                Vec::new(),
+            ),
+            editable_row(
+                "Table.tablespace",
+                "表空间",
+                input.count("tablespace").unwrap_or("pg_default"),
                 property::PropertyValueKind::Select,
-                input.candidates("tablespaces").map(|v| v.to_vec()).unwrap_or_else(tablespaces_fallback)),
+                input
+                    .candidates("tablespaces")
+                    .map(|v| v.to_vec())
+                    .unwrap_or_else(tablespaces_fallback),
+            ),
             row("对象 ID", input.count("oid").unwrap_or("-")),
-            editable_row("Table.owner", "所有者", input.count("owner").unwrap_or("-"),
+            editable_row(
+                "Table.owner",
+                "所有者",
+                input.count("owner").unwrap_or("-"),
                 property::PropertyValueKind::Select,
-                input.candidates("roles").map(|v| v.to_vec()).unwrap_or_else(roles_fallback)),
-            editable_row("Table.row_level_security", "行级安全", input.count("rls").unwrap_or("false"),
-                property::PropertyValueKind::Boolean, vec!["true".to_string(), "false".to_string()]),
+                input
+                    .candidates("roles")
+                    .map(|v| v.to_vec())
+                    .unwrap_or_else(roles_fallback),
+            ),
+            editable_row(
+                "Table.row_level_security",
+                "行级安全",
+                input.count("rls").unwrap_or("false"),
+                property::PropertyValueKind::Boolean,
+                vec!["true".to_string(), "false".to_string()],
+            ),
             row("分区", input.count("partitioned").unwrap_or("否")),
             // 分区依据 / 额外选项：无直接 ALTER 语法（分区重建 / reloptions 集合变更），
             // 保持只读展示，避免「可点但提交报错」（2026-10-15 修正）。
@@ -231,10 +318,20 @@ impl PropertyProvider for PgTableProvider {
             ],
         };
         if let Some(v) = input.count("row_estimate") {
-            ov.cards.push(property::OverviewCard { label: "行估计".into(), value: v.into(), unit: String::new(), delta: Some("reltuples".into()) });
+            ov.cards.push(property::OverviewCard {
+                label: "行估计".into(),
+                value: v.into(),
+                unit: String::new(),
+                delta: Some("reltuples".into()),
+            });
         }
         if let Some(v) = input.count("size") {
-            ov.cards.push(property::OverviewCard { label: "表大小".into(), value: v.into(), unit: String::new(), delta: Some("pg_total_relation_size".into()) });
+            ov.cards.push(property::OverviewCard {
+                label: "表大小".into(),
+                value: v.into(),
+                unit: String::new(),
+                delta: Some("pg_total_relation_size".into()),
+            });
         }
         ov
     }
@@ -251,14 +348,22 @@ impl PropertyProvider for PgTableProvider {
             // 假值会让用户基于错误的开关状态提交 ALTER。
             property::ExtraQuery {
                 key: "rls",
-                sql: format!("SELECT relrowsecurity::text FROM pg_class WHERE oid = '{q}'::regclass"),
+                sql: format!(
+                    "SELECT relrowsecurity::text FROM pg_class WHERE oid = '{q}'::regclass"
+                ),
             },
             property::ExtraQuery {
                 key: "size",
                 sql: format!("SELECT pg_size_pretty(pg_total_relation_size('{q}'))"),
             },
-            ExtraQuery { key: "roles", sql: ROLES_SQL.to_string() },
-            ExtraQuery { key: "tablespaces", sql: TABLESPACES_SQL.to_string() },
+            ExtraQuery {
+                key: "roles",
+                sql: ROLES_SQL.to_string(),
+            },
+            ExtraQuery {
+                key: "tablespaces",
+                sql: TABLESPACES_SQL.to_string(),
+            },
         ]
     }
 
@@ -269,7 +374,12 @@ impl PropertyProvider for PgTableProvider {
         super::table_categories(&super::DriverCapabilities::pg())
     }
 
-    fn apply_edit_sql(&self, input: &ProviderInput, row_id: &str, value: &str) -> Result<String, String> {
+    fn apply_edit_sql(
+        &self,
+        input: &ProviderInput,
+        row_id: &str,
+        value: &str,
+    ) -> Result<String, String> {
         let q = qualified_name(input.target);
         match row_id {
             "Table.tablespace" => Ok(format!("ALTER TABLE {q} SET TABLESPACE {}", ident(value))),
@@ -293,25 +403,44 @@ impl PropertyProvider for PgTableProvider {
 pub struct PgViewProvider;
 
 impl PropertyProvider for PgViewProvider {
-    fn db_type(&self) -> &'static str { "postgresql" }
-    fn kind(&self) -> PropertyKind { PropertyKind::View }
+    fn db_type(&self) -> &'static str {
+        "postgresql"
+    }
+    fn kind(&self) -> PropertyKind {
+        PropertyKind::View
+    }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         vec![
             row("名称", &input.target.name),
             row("对象 ID", input.count("oid").unwrap_or("-")),
-            editable_row("View.owner", "所有者", input.count("owner").unwrap_or("-"),
+            editable_row(
+                "View.owner",
+                "所有者",
+                input.count("owner").unwrap_or("-"),
                 property::PropertyValueKind::Select,
-                input.candidates("roles").map(|v| v.to_vec()).unwrap_or_else(roles_fallback)),
-            editable_row("View.description", "描述", input.count("description").unwrap_or("-"),
-                property::PropertyValueKind::LongText, Vec::new()),
+                input
+                    .candidates("roles")
+                    .map(|v| v.to_vec())
+                    .unwrap_or_else(roles_fallback),
+            ),
+            editable_row(
+                "View.description",
+                "描述",
+                input.count("description").unwrap_or("-"),
+                property::PropertyValueKind::LongText,
+                Vec::new(),
+            ),
             row("限定名", qualified_name(input.target)),
         ]
     }
 
     /// 视图级懒加载：角色候选（`pg_roles` 多行 → Select 候选）。
     fn extra_queries(&self, _input: &ProviderInput) -> Vec<ExtraQuery> {
-        vec![ExtraQuery { key: "roles", sql: ROLES_SQL.to_string() }]
+        vec![ExtraQuery {
+            key: "roles",
+            sql: ROLES_SQL.to_string(),
+        }]
     }
 
     fn overview(&self, input: &ProviderInput) -> ObjectOverview {
@@ -337,7 +466,12 @@ impl PropertyProvider for PgViewProvider {
         super::view_categories(&super::DriverCapabilities::pg())
     }
 
-    fn apply_edit_sql(&self, input: &ProviderInput, row_id: &str, value: &str) -> Result<String, String> {
+    fn apply_edit_sql(
+        &self,
+        input: &ProviderInput,
+        row_id: &str,
+        value: &str,
+    ) -> Result<String, String> {
         match row_id {
             "View.owner" => Ok(format!(
                 "ALTER VIEW {} OWNER TO {}",
@@ -360,8 +494,12 @@ impl PropertyProvider for PgViewProvider {
 pub struct PgColumnProvider;
 
 impl PropertyProvider for PgColumnProvider {
-    fn db_type(&self) -> &'static str { "postgresql" }
-    fn kind(&self) -> PropertyKind { PropertyKind::Column }
+    fn db_type(&self) -> &'static str {
+        "postgresql"
+    }
+    fn kind(&self) -> PropertyKind {
+        PropertyKind::Column
+    }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         // 列明细由通用骨架经 `ProviderInput::detail` 传入（`engine::driver::traits::ColumnDetail`）。
@@ -376,8 +514,13 @@ impl PropertyProvider for PgColumnProvider {
             row("名称", col.name.clone()),
             row("所属表", input.target.parent.clone().unwrap_or_default()),
             row("类型", col.data_type.clone()),
-            editable_row("Column.nullable", "可空", if col.nullable { "true" } else { "false" },
-                property::PropertyValueKind::Boolean, vec!["true".to_string(), "false".to_string()]),
+            editable_row(
+                "Column.nullable",
+                "可空",
+                if col.nullable { "true" } else { "false" },
+                property::PropertyValueKind::Boolean,
+                vec!["true".to_string(), "false".to_string()],
+            ),
             row("主键", if col.is_primary_key { "是" } else { "否" }),
             row("外键", if col.is_foreign_key { "是" } else { "否" }),
         ];
@@ -387,12 +530,20 @@ impl PropertyProvider for PgColumnProvider {
         if let Some(r) = &col.references {
             rows.push(row("引用", format!("{}.{}", r.table, r.column)));
         }
-        rows.push(editable_row("Column.default_value", "默认值",
+        rows.push(editable_row(
+            "Column.default_value",
+            "默认值",
             col.default_value.clone().unwrap_or_else(|| "-".to_string()),
-            property::PropertyValueKind::Text, Vec::new()));
-        rows.push(editable_row("Column.comment", "注释",
+            property::PropertyValueKind::Text,
+            Vec::new(),
+        ));
+        rows.push(editable_row(
+            "Column.comment",
+            "注释",
             col.comment.clone().unwrap_or_else(|| "-".to_string()),
-            property::PropertyValueKind::LongText, Vec::new()));
+            property::PropertyValueKind::LongText,
+            Vec::new(),
+        ));
         rows
     }
 
@@ -408,7 +559,10 @@ impl PropertyProvider for PgColumnProvider {
             status_text: type_text,
             cards: vec![],
             kv: vec![
-                ("所属表".to_string(), input.target.parent.clone().unwrap_or_default()),
+                (
+                    "所属表".to_string(),
+                    input.target.parent.clone().unwrap_or_default(),
+                ),
                 ("作用域".to_string(), input.target.source.clone()),
             ],
             note: String::new(),
@@ -424,7 +578,12 @@ impl PropertyProvider for PgColumnProvider {
         Vec::new()
     }
 
-    fn apply_edit_sql(&self, input: &ProviderInput, row_id: &str, value: &str) -> Result<String, String> {
+    fn apply_edit_sql(
+        &self,
+        input: &ProviderInput,
+        row_id: &str,
+        value: &str,
+    ) -> Result<String, String> {
         // 复用现有列级编辑（RENAME / COMMENT / DEFAULT / NULLABLE）。
         let schema = input.target.schema.clone().unwrap_or_default();
         let table = input.target.parent.clone().unwrap_or_default();
@@ -446,8 +605,12 @@ impl PropertyProvider for PgColumnProvider {
 pub struct PgRoutineProvider;
 
 impl PropertyProvider for PgRoutineProvider {
-    fn db_type(&self) -> &'static str { "postgresql" }
-    fn kind(&self) -> PropertyKind { PropertyKind::Routine }
+    fn db_type(&self) -> &'static str {
+        "postgresql"
+    }
+    fn kind(&self) -> PropertyKind {
+        PropertyKind::Routine
+    }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         vec![
@@ -472,10 +635,19 @@ impl PropertyProvider for PgRoutineProvider {
     }
 
     fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
-        vec![PropertySection { id: PageId::Source, label: "源码".into(), table: empty_table() }]
+        vec![PropertySection {
+            id: PageId::Source,
+            label: "源码".into(),
+            table: empty_table(),
+        }]
     }
 
-    fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
+    fn apply_edit_sql(
+        &self,
+        _input: &ProviderInput,
+        _id: &str,
+        _v: &str,
+    ) -> Result<String, String> {
         Err("例程序属性编辑待扩展".to_string())
     }
 }
@@ -484,8 +656,12 @@ impl PropertyProvider for PgRoutineProvider {
 pub struct PgSequenceProvider;
 
 impl PropertyProvider for PgSequenceProvider {
-    fn db_type(&self) -> &'static str { "postgresql" }
-    fn kind(&self) -> PropertyKind { PropertyKind::Sequence }
+    fn db_type(&self) -> &'static str {
+        "postgresql"
+    }
+    fn kind(&self) -> PropertyKind {
+        PropertyKind::Sequence
+    }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         vec![
@@ -514,7 +690,12 @@ impl PropertyProvider for PgSequenceProvider {
         Vec::new()
     }
 
-    fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
+    fn apply_edit_sql(
+        &self,
+        _input: &ProviderInput,
+        _id: &str,
+        _v: &str,
+    ) -> Result<String, String> {
         Err("序列属性编辑待扩展".to_string())
     }
 }
@@ -523,8 +704,12 @@ impl PropertyProvider for PgSequenceProvider {
 pub struct PgTriggerProvider;
 
 impl PropertyProvider for PgTriggerProvider {
-    fn db_type(&self) -> &'static str { "postgresql" }
-    fn kind(&self) -> PropertyKind { PropertyKind::Trigger }
+    fn db_type(&self) -> &'static str {
+        "postgresql"
+    }
+    fn kind(&self) -> PropertyKind {
+        PropertyKind::Trigger
+    }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         let mut rows = vec![
@@ -556,7 +741,12 @@ impl PropertyProvider for PgTriggerProvider {
         vec![]
     }
 
-    fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
+    fn apply_edit_sql(
+        &self,
+        _input: &ProviderInput,
+        _id: &str,
+        _v: &str,
+    ) -> Result<String, String> {
         Err("触发器属性编辑待扩展".to_string())
     }
 }
@@ -588,7 +778,11 @@ mod tests {
             conn_label: "PG 连接",
             type_id: Some("postgresql"),
             db_type: Some("postgres"),
-            stats: ProviderStats { column_count: 3, index_count: 1, constraint_count: 1 },
+            stats: ProviderStats {
+                column_count: 3,
+                index_count: 1,
+                constraint_count: 1,
+            },
             counts,
             candidates: &[],
             detail,
@@ -610,7 +804,15 @@ mod tests {
         ];
         let rows = PgConnectionProvider.property_defs(&input(&t, &counts, None));
         let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
-        for want in ["名称", "驱动", "连接串", "描述", "数据库管理员", "连接限制", "允许连接"] {
+        for want in [
+            "名称",
+            "驱动",
+            "连接串",
+            "描述",
+            "数据库管理员",
+            "连接限制",
+            "允许连接",
+        ] {
             assert!(labels.contains(&want), "缺 {want}: {labels:?}");
         }
         // P0-3 深化（2026-10-25）：认证 / 网络 / 环境不再混入常规行，改 `categories` 分节承载。
@@ -618,7 +820,11 @@ mod tests {
             assert!(!labels.contains(&gone), "{gone} 应移出常规行: {labels:?}");
         }
         // 基础行接真值。
-        let val = |label: &str| rows.iter().find(|r| r.label == label).map(|r| r.value.as_str());
+        let val = |label: &str| {
+            rows.iter()
+                .find(|r| r.label == label)
+                .map(|r| r.value.as_str())
+        };
         assert_eq!(val("连接串"), Some("postgres://localhost:5432/mydb"));
         assert_eq!(val("描述"), Some("开发库"));
         // settings 接入前：配置行只读占位（值标注「待接入」）
@@ -630,19 +836,42 @@ mod tests {
         for want in ["数据库管理员", "连接限制", "允许连接"] {
             assert!(pending.contains(&want), "缺待接入行 {want}: {pending:?}");
         }
-        let editable: Vec<&str> = rows.iter().filter(|r| r.editable).map(|r| r.id.as_str()).collect();
-        assert!(!editable.contains(&"Database.description"), "连接描述应只读：{editable:?}");
-        assert!(!editable.contains(&"Database.allow_connections"), "允许连接应只读：{editable:?}");
+        let editable: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.editable)
+            .map(|r| r.id.as_str())
+            .collect();
+        assert!(
+            !editable.contains(&"Database.description"),
+            "连接描述应只读：{editable:?}"
+        );
+        assert!(
+            !editable.contains(&"Database.allow_connections"),
+            "允许连接应只读：{editable:?}"
+        );
 
         // 分节承载认证/网络/环境（无解析名称 → 回落引用 ID）。
         let cats = PgConnectionProvider.categories(&input(&t, &counts, None));
         let ids: Vec<PageId> = cats.iter().map(|c| c.id).collect();
-        assert_eq!(ids, vec![PageId::Auth, PageId::Network, PageId::Environment]);
+        assert_eq!(
+            ids,
+            vec![PageId::Auth, PageId::Network, PageId::Environment]
+        );
         let auth = &cats[0].table.rows;
         assert!(auth.contains(&vec!["认证方法".into(), "password".into()]));
         assert!(auth.contains(&vec!["引用档案".into(), "auth-1".into()]));
-        assert!(cats[1].table.rows.contains(&vec!["网络档案".into(), "net-1".into()]));
-        assert!(cats[2].table.rows.contains(&vec!["环境名称".into(), "env-1".into()]));
+        assert!(
+            cats[1]
+                .table
+                .rows
+                .contains(&vec!["网络档案".into(), "net-1".into()])
+        );
+        assert!(
+            cats[2]
+                .table
+                .rows
+                .contains(&vec!["环境名称".into(), "env-1".into()])
+        );
     }
 
     /// 列 provider：detail 命中时渲染完整 DBeaver 行；未命中给提示。
@@ -664,8 +893,8 @@ mod tests {
             extra: Default::default(),
         };
         let t = target(PropertyKind::Column, Some("t"));
-        let rows = PgColumnProvider
-            .property_defs(&input(&t, &[], Some(&col as &dyn std::any::Any)));
+        let rows =
+            PgColumnProvider.property_defs(&input(&t, &[], Some(&col as &dyn std::any::Any)));
         let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
         for want in ["名称", "类型", "可空", "主键", "默认值", "注释"] {
             assert!(labels.contains(&want), "缺 {want}: {labels:?}");
@@ -684,9 +913,18 @@ mod tests {
         let cats = PgTableProvider.categories(&input(&t, &[], None));
         assert!(cats.iter().any(|c| c.id == PageId::Columns));
         assert!(cats.iter().any(|c| c.id == PageId::Data));
-        assert!(!cats.iter().any(|c| c.id == PageId::Privileges), "权限未实现应隐藏");
-        assert!(!cats.iter().any(|c| c.id == PageId::Partitions), "分区未实现应隐藏");
-        assert!(!cats.iter().any(|c| c.id == PageId::Trigger), "触发器未实现应隐藏");
+        assert!(
+            !cats.iter().any(|c| c.id == PageId::Privileges),
+            "权限未实现应隐藏"
+        );
+        assert!(
+            !cats.iter().any(|c| c.id == PageId::Partitions),
+            "分区未实现应隐藏"
+        );
+        assert!(
+            !cats.iter().any(|c| c.id == PageId::Trigger),
+            "触发器未实现应隐藏"
+        );
     }
 
     /// 洞察卡：stats 非零才显示（列/索引/约束）；counts 命中补充（行估计）。
@@ -705,9 +943,15 @@ mod tests {
     #[test]
     fn column_edit_sql_generates_alter() {
         let col = ColumnDetail {
-            name: "c".to_string(), data_type: "INTEGER".to_string(), nullable: true,
-            is_primary_key: false, is_foreign_key: false, references: None,
-            ordinal: 1, default_value: None, comment: None,
+            name: "c".to_string(),
+            data_type: "INTEGER".to_string(),
+            nullable: true,
+            is_primary_key: false,
+            is_foreign_key: false,
+            references: None,
+            ordinal: 1,
+            default_value: None,
+            comment: None,
             is_identity: false,
             identity_generation: None,
             collation: None,
@@ -723,8 +967,7 @@ mod tests {
     #[test]
     fn schema_owner_select_uses_role_candidates() {
         let t = target(PropertyKind::Schema, None);
-        let roles: &[(&str, String)] =
-            &[("roles", "postgres|rds_user".into())];
+        let roles: &[(&str, String)] = &[("roles", "postgres|rds_user".into())];
         // candidates 是独立字段，这里模拟骨架收集后的多行候选。
         let candidates: &[(&str, Vec<String>)] =
             &[("roles", vec!["postgres".into(), "rds_user".into()])];
@@ -739,7 +982,10 @@ mod tests {
             detail: None,
         };
         let rows = PgSchemaProvider.property_defs(&with_candidates);
-        let owner = rows.iter().find(|r| r.id == "Schema.owner").expect("owner 行");
+        let owner = rows
+            .iter()
+            .find(|r| r.id == "Schema.owner")
+            .expect("owner 行");
         assert_eq!(owner.select_options, vec!["postgres", "rds_user"]);
         assert!(owner.editable);
         // 候选缺失 → 回退最小集（不空下拉）。
@@ -777,7 +1023,10 @@ mod tests {
             type_id: Some("postgresql"),
             db_type: Some("postgres"),
             stats: ProviderStats::default(),
-            counts: &[("tablespace", "pg_default".into()), ("owner", "postgres".into())],
+            counts: &[
+                ("tablespace", "pg_default".into()),
+                ("owner", "postgres".into()),
+            ],
             candidates,
             detail: None,
         };
@@ -822,7 +1071,10 @@ mod tests {
         let rel = rows.iter().find(|r| r.label == "额外选项").unwrap();
         assert!(!part.editable, "分区依据应只读（无直接 ALTER 语法）");
         assert!(!rel.editable, "额外选项应只读（reloptions 集合变更未接）");
-        assert!(rows.iter().all(|r| r.id != "Table.partition_by" && r.id != "Table.reloptions"));
+        assert!(
+            rows.iter()
+                .all(|r| r.id != "Table.partition_by" && r.id != "Table.reloptions")
+        );
     }
 
     /// 视图描述编辑 SQL（COMMENT ON VIEW）。
@@ -844,7 +1096,10 @@ mod tests {
         let cats = PgSchemaProvider.categories(&input(&t, &[], None));
         let ids: Vec<PageId> = cats.iter().map(|c| c.id).collect();
         assert!(!ids.contains(&PageId::Columns), "表类别不得复用 Columns id");
-        assert!(!ids.contains(&PageId::Constraints), "视图类别不得复用 Constraints id");
+        assert!(
+            !ids.contains(&PageId::Constraints),
+            "视图类别不得复用 Constraints id"
+        );
         assert!(!ids.contains(&PageId::Indexes));
         assert!(!ids.contains(&PageId::Ddl));
         assert!(!ids.contains(&PageId::Source));

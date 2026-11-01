@@ -3,10 +3,10 @@
 use async_trait::async_trait;
 use tokio::net::TcpStream;
 
-use crate::connector::base64;
 use crate::config::{ConnectionConfig, ConnectionMethod, ProxyConfig};
-use crate::stream::ConnectionStream;
 use crate::connector::Connector;
+use crate::connector::base64;
+use crate::stream::ConnectionStream;
 use shared::error::{ConnectionError, CoreError};
 
 pub struct HttpProxyConnector;
@@ -164,4 +164,4 @@ pub async fn establish_socks_proxy(
     };
 
     Ok(stream)
-}
+}

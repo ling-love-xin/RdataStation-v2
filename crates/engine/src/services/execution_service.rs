@@ -1,10 +1,10 @@
-use shared::error::{CommonError, CoreError};
+use crate::DuckDBManager;
+use crate::SqlService;
 use crate::get_connection_manager;
 use crate::services::duckdb_service;
 use crate::services::result_types::ResultSet;
 use crate::services::sql_service::SqlExecuteOptions;
-use crate::SqlService;
-use crate::DuckDBManager;
+use shared::error::{CommonError, CoreError};
 
 pub async fn re_execute_with_filter(
     conn_id: String,
@@ -211,14 +211,13 @@ pub fn export_rows_via_duckdb(
         ensure_excel_extension(&conn)?;
     }
 
-    let table = duckdb_service::DuckDbService::create_temp_table_internal(&mut conn, columns, rows)?;
+    let table =
+        duckdb_service::DuckDbService::create_temp_table_internal(&mut conn, columns, rows)?;
     let outcome = copy_table_to_file(&conn, &table, path, format);
     // 表是纯中间产物：成败都要收（收不掉只记日志，不盖主流程的错）
-    if let Err(error) = crate::duckdb::drop_temp_table(
-        &conn,
-        crate::duckdb::TempTableSource::Query,
-        &table,
-    ) {
+    if let Err(error) =
+        crate::duckdb::drop_temp_table(&conn, crate::duckdb::TempTableSource::Query, &table)
+    {
         tracing::warn!("[export] 收掉临时表 {table} 失败: {error}");
     }
     outcome?;
@@ -252,11 +251,9 @@ pub fn export_batches_via_duckdb(
     let row_count = batches.iter().map(|batch| batch.num_rows()).sum();
     let outcome = copy_table_to_file(&conn, &table, path, format);
     // 临时表成败都收（与 internal 路径同一承诺）；收不掉只记日志，不盖主流程的错
-    if let Err(error) = crate::duckdb::drop_temp_table(
-        &conn,
-        crate::duckdb::TempTableSource::Query,
-        &table,
-    ) {
+    if let Err(error) =
+        crate::duckdb::drop_temp_table(&conn, crate::duckdb::TempTableSource::Query, &table)
+    {
         tracing::warn!("[export] 收掉直灌临时表 {table} 失败: {error}");
     }
     outcome?;
@@ -308,7 +305,10 @@ fn copy_table_to_file(
 ) -> Result<(), CoreError> {
     // 路径按 SQL 字面量转义：单引号双写；反斜杠在 DuckDB 字面量里不是转义符，但统一给正斜杠
     // （Windows 上 DuckDB 两种都认，正斜杠少一层“这里到底要不要再转义”的怀疑）
-    let file = path.to_string_lossy().replace('\\', "/").replace('\'', "''");
+    let file = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .replace('\'', "''");
     let options = match format {
         DuckDbExportFormat::Parquet => "FORMAT parquet".to_string(),
         DuckDbExportFormat::Xlsx => "FORMAT xlsx, HEADER true".to_string(),
@@ -471,13 +471,8 @@ mod export_tests {
                 .expect("常驻表应当建出来")
         };
 
-        let stats = export_existing_table_via_duckdb(
-            &table,
-            3,
-            &path,
-            DuckDbExportFormat::Parquet,
-        )
-        .expect("常驻表复用导出应当成功");
+        let stats = export_existing_table_via_duckdb(&table, 3, &path, DuckDbExportFormat::Parquet)
+            .expect("常驻表复用导出应当成功");
         assert_eq!(stats.rows, 3);
 
         // 导出后常驻表仍在（本路径不回收表，归事实档生命周期管）
@@ -502,18 +497,14 @@ mod analysis_batches_tests {
     use super::execute_duckdb_analysis_from_batches;
 
     use arrow::array::{ArrayRef, Int64Array, RecordBatch};
-    use arrow::datatypes::{Field, Schema, DataType};
+    use arrow::datatypes::{DataType, Field, Schema};
     use shared::models::ArrowBatch;
     use std::sync::Arc;
 
     /// 单列 Int64、两行的事实档批（类型来自 schema，不猜型）。
     fn id_batch() -> ArrowBatch {
         let array: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 2]));
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "id",
-            DataType::Int64,
-            false,
-        )]));
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
         RecordBatch::try_new(schema, vec![array]).expect("批能建出来")
     }
 

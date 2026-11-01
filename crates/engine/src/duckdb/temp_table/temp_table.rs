@@ -138,11 +138,7 @@ impl TempTableStats {
 /// 前缀由 [`TempTableSource::prefixes`] 决定：TTL / 上限 / 按来源清理全靠它识别，
 /// 自己拼一个别的名字（历史上的 `rs_<uuid>`）等于把那些机制全关掉。
 pub fn generate_unique_name(source: TempTableSource, description: &str) -> String {
-    let prefix = source
-        .prefixes()
-        .first()
-        .copied()
-        .unwrap_or("tmp_x_");
+    let prefix = source.prefixes().first().copied().unwrap_or("tmp_x_");
     let desc = sanitize_description(description);
     let stamp = chrono::Local::now().format("%Y%m%d%H%M%S");
     let uniq = uuid::Uuid::new_v4().simple().to_string();
@@ -196,9 +192,7 @@ pub fn drop_temp_table(
 
     conn.execute_batch(&format!("DROP TABLE IF EXISTS {}", quote_ident(name)))
         .map_err(|e| {
-            CoreError::common(CommonError::General(format!(
-                "删除临时表 {name} 失败: {e}"
-            )))
+            CoreError::common(CommonError::General(format!("删除临时表 {name} 失败: {e}")))
         })?;
     // 登记表同步摘掉：留着会让「登记数」与库里的实际张数对不上
     // （目录化后本文件位于 `duckdb/temp_table/` 下，`super` 指向 temp_table 目录；manager 用绝对路径）
@@ -452,9 +446,7 @@ impl TempTableManager {
             let expired: Vec<_> = insight_tables
                 .iter()
                 // 保护名单（洞察表集合 = 会话工作集）不参与 TTL：用户可能正在探索它
-                .filter(|(name, time)| {
-                    !self.is_protected(name) && now.duration_since(*time) >= ttl
-                })
+                .filter(|(name, time)| !self.is_protected(name) && now.duration_since(*time) >= ttl)
                 .map(|(name, _)| name.clone())
                 .collect();
 
@@ -587,8 +579,7 @@ impl TempTableManager {
         {
             let registry = self.registry.read().unwrap_or_else(|e| e.into_inner());
             for name in registry.keys() {
-                if prefixes.iter().any(|prefix| name.starts_with(prefix))
-                    && !targets.contains(name)
+                if prefixes.iter().any(|prefix| name.starts_with(prefix)) && !targets.contains(name)
                 {
                     targets.push(name.clone());
                 }
@@ -868,7 +859,9 @@ mod tests {
         // 两张过期表，其中一张受保护
         {
             let mut registry = manager.registry.write().unwrap();
-            let expired = Instant::now().checked_sub(Duration::from_secs(3600)).unwrap();
+            let expired = Instant::now()
+                .checked_sub(Duration::from_secs(3600))
+                .unwrap();
             registry.insert("tmp_i_protected_20260512140000".to_string(), expired);
             registry.insert("tmp_i_expired_20260512140001".to_string(), expired);
         }
@@ -925,7 +918,9 @@ mod tests {
         .expect("建表");
         {
             let mut registry = manager.registry.write().unwrap();
-            let expired = Instant::now().checked_sub(Duration::from_secs(3600)).unwrap();
+            let expired = Instant::now()
+                .checked_sub(Duration::from_secs(3600))
+                .unwrap();
             registry.insert("tmp_i_p1".to_string(), expired);
             registry.insert("tmp_i_p2".to_string(), expired);
         }
@@ -934,8 +929,8 @@ mod tests {
         let dropped = manager.perform_lazy_cleanup(&conn);
         assert_eq!(dropped, vec!["tmp_i_p2".to_string()]);
         // 被保护的表仍可查（库里还在）
-        let remaining = TempTableManager::list_by_source(&conn, TempTableSource::Insight)
-            .expect("列出");
+        let remaining =
+            TempTableManager::list_by_source(&conn, TempTableSource::Insight).expect("列出");
         assert_eq!(remaining, vec!["tmp_i_p1".to_string()]);
     }
 

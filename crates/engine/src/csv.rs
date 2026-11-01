@@ -166,10 +166,7 @@ mod tests {
 
     #[test]
     fn empty_fields_and_trailing_comma() {
-        assert_eq!(
-            parse("a,,c\n,"),
-            rows(&[&["a", "", "c"], &["", ""]])
-        );
+        assert_eq!(parse("a,,c\n,"), rows(&[&["a", "", "c"], &["", ""]]));
     }
 
     #[test]

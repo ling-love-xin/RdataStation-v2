@@ -50,8 +50,7 @@ pub use driver::router::DataSourceRouter;
 
 // 重新导出连接管理层
 pub use connection_manager::{
-    ConnId, ConnectionInfo, ConnectionManager, ConnectionType,
-    get_connection_manager,
+    ConnId, ConnectionInfo, ConnectionManager, ConnectionType, get_connection_manager,
 };
 
 // 重新导出缓存层

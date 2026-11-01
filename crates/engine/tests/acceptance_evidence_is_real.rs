@@ -77,15 +77,26 @@ fn strip_parenthetical(evidence: &str) -> String {
 fn every_cited_acceptance_case_exists() {
     let root = workspace_root();
     let crates_dir = root.join("crates");
-    assert!(crates_dir.is_dir(), "找不到 crates 目录：{}", crates_dir.display());
+    assert!(
+        crates_dir.is_dir(),
+        "找不到 crates 目录：{}",
+        crates_dir.display()
+    );
 
     // 1) 存在的名字：测试目标文件名 + 所有函数名
     let mut known: BTreeSet<String> = BTreeSet::new();
     let mut files = Vec::new();
     rust_files(&crates_dir, &mut files);
-    assert!(files.len() > 100, "扫到的源文件太少（{}）——路径解析错了吧？", files.len());
+    assert!(
+        files.len() > 100,
+        "扫到的源文件太少（{}）——路径解析错了吧？",
+        files.len()
+    );
     for f in &files {
-        if f.parent().and_then(|p| p.file_name()).is_some_and(|d| d == "tests") {
+        if f.parent()
+            .and_then(|p| p.file_name())
+            .is_some_and(|d| d == "tests")
+        {
             if let Some(stem) = f.file_stem().and_then(|s| s.to_str()) {
                 known.insert(stem.to_string());
             }
@@ -130,7 +141,10 @@ fn every_cited_acceptance_case_exists() {
             checked += 1;
         }
     }
-    assert!(checked >= 6, "已验收的键应有若干（实得 {checked} 条名字）——字典是不是被清空了？");
+    assert!(
+        checked >= 6,
+        "已验收的键应有若干（实得 {checked} 条名字）——字典是不是被清空了？"
+    );
     eprintln!("✅ 验收证据全部指向存在的用例（{checked} 条名字）");
 }
 

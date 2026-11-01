@@ -4,7 +4,7 @@
 //! host:port 改写与解析、`no_proxy` 匹配、协议链 SSL 参数提取。
 //! 供 workbench 连接服务与传输层共用。
 
-use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use shared::error::{ConnectionError, CoreError};
 
 /// userinfo 段需转义的字符集：从 `NON_ALPHANUMERIC` 去掉 RFC 3986 的
@@ -292,13 +292,12 @@ pub fn rewrite_url_authority(
         None => (hostport, ""),
     };
     // 端口必须是纯数字；否则整个 hostport 当作主机（如 IPv6 字面量 / 异常输入），不丢信息。
-    let (current_host, current_port) = if !port_part.is_empty()
-        && port_part.chars().all(|c| c.is_ascii_digit())
-    {
-        (host_part, port_part)
-    } else {
-        (hostport, "")
-    };
+    let (current_host, current_port) =
+        if !port_part.is_empty() && port_part.chars().all(|c| c.is_ascii_digit()) {
+            (host_part, port_part)
+        } else {
+            (hostport, "")
+        };
     let new_host = match host {
         Some(h) if !h.trim().is_empty() => h.trim(),
         _ => current_host,
@@ -520,8 +519,16 @@ pub fn append_ssl_params(
             };
             push_param(&mut params, "ssl-mode", literal);
             push_path(&mut params, "ssl-ca", ssl_config.ca_cert_path.as_deref());
-            push_path(&mut params, "ssl-cert", ssl_config.client_cert_path.as_deref());
-            push_path(&mut params, "ssl-key", ssl_config.client_key_path.as_deref());
+            push_path(
+                &mut params,
+                "ssl-cert",
+                ssl_config.client_cert_path.as_deref(),
+            );
+            push_path(
+                &mut params,
+                "ssl-key",
+                ssl_config.client_key_path.as_deref(),
+            );
         }
         "postgres" | "postgresql" | "pgsql" => {
             let literal = match mode {
@@ -532,8 +539,16 @@ pub fn append_ssl_params(
                 SslMode::VerifyFull => "verify-full",
             };
             push_param(&mut params, "sslmode", literal);
-            push_path(&mut params, "sslrootcert", ssl_config.ca_cert_path.as_deref());
-            push_path(&mut params, "sslcert", ssl_config.client_cert_path.as_deref());
+            push_path(
+                &mut params,
+                "sslrootcert",
+                ssl_config.ca_cert_path.as_deref(),
+            );
+            push_path(
+                &mut params,
+                "sslcert",
+                ssl_config.client_cert_path.as_deref(),
+            );
             push_path(&mut params, "sslkey", ssl_config.client_key_path.as_deref());
         }
         "mysql_native" => {
@@ -553,7 +568,11 @@ pub fn append_ssl_params(
                     push_param(
                         &mut params,
                         "verify_identity",
-                        if mode == SslMode::VerifyFull { "true" } else { "false" },
+                        if mode == SslMode::VerifyFull {
+                            "true"
+                        } else {
+                            "false"
+                        },
                     );
                 }
             }
@@ -755,7 +774,12 @@ mod tests {
     fn rewrite_url_authority_is_scheme_agnostic_and_keeps_credentials() {
         // 改主机 + 端口：凭据与路径保持
         assert_eq!(
-            rewrite_url_authority("postgres://u:p@db:5432/warehouse", Some("127.0.0.1"), Some(6543), None),
+            rewrite_url_authority(
+                "postgres://u:p@db:5432/warehouse",
+                Some("127.0.0.1"),
+                Some(6543),
+                None
+            ),
             "postgres://u:p@127.0.0.1:6543/warehouse"
         );
         // 改数据库：主机 / 凭据保持，只换路径
@@ -770,7 +794,12 @@ mod tests {
         );
         // 保留查询串
         assert_eq!(
-            rewrite_url_authority("mysql://h:3306/old?ssl-mode=REQUIRED", None, None, Some("d2")),
+            rewrite_url_authority(
+                "mysql://h:3306/old?ssl-mode=REQUIRED",
+                None,
+                None,
+                Some("d2")
+            ),
             "mysql://h:3306/d2?ssl-mode=REQUIRED"
         );
         // 未提供主机且端口为 None：端口保持原值（不默默丢掉）
@@ -784,13 +813,16 @@ mod tests {
             "mysql://h:3307/db"
         );
         // 文件型裸路径原样返回（不参与字段重建）
-        assert_eq!(rewrite_url_authority("C:/data/a.db", Some("h"), Some(1), None), "C:/data/a.db");
+        assert_eq!(
+            rewrite_url_authority("C:/data/a.db", Some("h"), Some(1), None),
+            "C:/data/a.db"
+        );
     }
 
     #[test]
     fn rewrite_host_port_keeps_credentials_and_path() {
-        let url = rewrite_url_host_port("postgres://u:p@db:5432/warehouse", "127.0.0.1", 45678)
-            .unwrap();
+        let url =
+            rewrite_url_host_port("postgres://u:p@db:5432/warehouse", "127.0.0.1", 45678).unwrap();
         assert_eq!(url, "postgres://u:p@127.0.0.1:45678/warehouse");
 
         // 文件库原样返回；不支持协议报错
@@ -865,8 +897,13 @@ mod tests {
             "mysql://h/db"
         );
         assert_eq!(
-            append_ssl_params("mysql://h/db", "mysql_native", SslMode::VerifyFull, &no_cert)
-                .unwrap(),
+            append_ssl_params(
+                "mysql://h/db",
+                "mysql_native",
+                SslMode::VerifyFull,
+                &no_cert
+            )
+            .unwrap(),
             "mysql://h/db?require_ssl=true&verify_ca=true&verify_identity=true"
         );
 
@@ -928,8 +965,12 @@ mod tests {
         }
 
         // sqlx 驱动相反：证书就在 URL 上（这是 sqlx 的唯一通道）
-        let out = append_ssl_params("mysql://h/db", "mysql", SslMode::VerifyCa, &with_certs).unwrap();
-        assert!(out.contains("ssl-ca=/ca") && out.contains("ssl-cert=/cert"), "{out}");
+        let out =
+            append_ssl_params("mysql://h/db", "mysql", SslMode::VerifyCa, &with_certs).unwrap();
+        assert!(
+            out.contains("ssl-ca=/ca") && out.contains("ssl-cert=/cert"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -955,7 +996,10 @@ mod tests {
             "postgres://u:p@h:5432/db"
         );
         // 已是目标 scheme：幂等
-        assert_eq!(normalize_url_scheme("mysql://h/db", "mysql"), "mysql://h/db");
+        assert_eq!(
+            normalize_url_scheme("mysql://h/db", "mysql"),
+            "mysql://h/db"
+        );
         // 没有 scheme：原样返回，不猜
         assert_eq!(normalize_url_scheme("h:3306/db", "mysql"), "h:3306/db");
     }
@@ -997,8 +1041,12 @@ mod tests {
     #[test]
     fn rewrite_host_port_keeps_query() {
         assert_eq!(
-            rewrite_url_host_port("mysql://u:p@h:3306/db?ssl-mode=REQUIRED", "127.0.0.1", 45678)
-                .unwrap(),
+            rewrite_url_host_port(
+                "mysql://u:p@h:3306/db?ssl-mode=REQUIRED",
+                "127.0.0.1",
+                45678
+            )
+            .unwrap(),
             "mysql://u:p@127.0.0.1:45678/db?ssl-mode=REQUIRED"
         );
     }
@@ -1065,7 +1113,10 @@ mod tests {
         assert_eq!(SslMode::from_ssl_config(&verify_no_ca), SslMode::Require);
 
         let no_verify_with_ca = ssl(false, Some("/ca"), None, None);
-        assert_eq!(SslMode::from_ssl_config(&no_verify_with_ca), SslMode::Require);
+        assert_eq!(
+            SslMode::from_ssl_config(&no_verify_with_ca),
+            SslMode::Require
+        );
 
         let none = ssl(false, None, None, None);
         assert_eq!(SslMode::from_ssl_config(&none), SslMode::Require);

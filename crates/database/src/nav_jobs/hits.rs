@@ -3,9 +3,9 @@
 
 use crate::model::ObjectRef;
 use crate::nav::family_profile::family_search_scope;
+use engine::ObjectKind;
 use engine::persistence::FtsSearchResult;
 pub use engine::persistence::NameMatchMode;
-use engine::ObjectKind;
 
 pub const SEARCH_LIMIT_PER_CONN: usize = 50;
 
@@ -213,8 +213,7 @@ pub(crate) fn search_targets(
                 // 归属段精筛：schema 或 catalog 任一精确命中即可（MySQL `库.表`）。
                 if let Some(schema) = segment_schema {
                     hits.retain(|h| {
-                        h.schema.as_deref() == Some(schema)
-                            || h.catalog.as_deref() == Some(schema)
+                        h.schema.as_deref() == Some(schema) || h.catalog.as_deref() == Some(schema)
                     });
                 }
                 // 「Aa」区分大小写：`contains` 精筛（Rust 字符串比较区分大小写）。
@@ -246,18 +245,22 @@ pub(crate) fn search_targets(
                     // 去重键用业务身份四元组（类别 / 父对象 / 名字 / schema），不拼 catalog：
                     // 名称索引行带 `catalog_name`、FTS 行 catalog 恒 `None`，`key()` 会把同一
                     // 对象因 catalog 填充差异判成两个身份；去重只认四元组即可识别重复。
-                    let known: std::collections::BTreeSet<(String, Option<String>, String, Option<String>)> =
-                        hits
-                            .iter()
-                            .map(|h| {
-                                (
-                                    h.object_type.clone(),
-                                    h.parent_name.clone(),
-                                    h.object_name.clone(),
-                                    h.schema.clone(),
-                                )
-                            })
-                            .collect();
+                    let known: std::collections::BTreeSet<(
+                        String,
+                        Option<String>,
+                        String,
+                        Option<String>,
+                    )> = hits
+                        .iter()
+                        .map(|h| {
+                            (
+                                h.object_type.clone(),
+                                h.parent_name.clone(),
+                                h.object_name.clone(),
+                                h.schema.clone(),
+                            )
+                        })
+                        .collect();
                     for fts in cache.search_fts(needle, SEARCH_LIMIT_PER_CONN) {
                         let Some(fts_kind) = fts_type_to_object_kind(&fts.search_type) else {
                             continue;
@@ -336,4 +339,3 @@ pub(crate) fn fts_hit_to_search_hit(
         hit_source: source,
     }
 }
-

@@ -211,8 +211,7 @@ impl<'a> DuckDBExecutor<'a> {
                     rows_affected: None,
                 })
             } else {
-                let batch =
-                    shared::duckdb_rows::duckdb_rows_to_arrow(&columns, &row_data)?;
+                let batch = shared::duckdb_rows::duckdb_rows_to_arrow(&columns, &row_data)?;
                 Ok(DuckDBResult {
                     columns,
                     batches: vec![batch],
@@ -283,8 +282,7 @@ impl<'a> DuckDBExecutor<'a> {
                     rows_affected: None,
                 })
             } else {
-                let batch =
-                    shared::duckdb_rows::duckdb_rows_to_arrow(&columns, &row_data)?;
+                let batch = shared::duckdb_rows::duckdb_rows_to_arrow(&columns, &row_data)?;
                 Ok(DuckDBResult {
                     columns,
                     batches: vec![batch],

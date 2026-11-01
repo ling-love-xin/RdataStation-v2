@@ -218,7 +218,10 @@ pub fn build_diagram(inputs: &[TableInput]) -> ErDiagram {
         }
     }
 
-    ErDiagram { entities, relations }
+    ErDiagram {
+        entities,
+        relations,
+    }
 }
 
 /// `ColumnDetail` → `ErColumn`，按 `ordinal` 排序（全 0 时保持输入顺序）。
@@ -276,7 +279,12 @@ mod tests {
         }
     }
 
-    fn fk_constraint(name: &str, cols: &[&str], target: &str, target_cols: &[&str]) -> ConstraintDetail {
+    fn fk_constraint(
+        name: &str,
+        cols: &[&str],
+        target: &str,
+        target_cols: &[&str],
+    ) -> ConstraintDetail {
         ConstraintDetail {
             name: name.to_string(),
             table_name: String::new(),
@@ -289,7 +297,12 @@ mod tests {
         }
     }
 
-    fn table(schema: &str, name: &str, columns: Vec<ColumnDetail>, constraints: Vec<ConstraintDetail>) -> TableInput {
+    fn table(
+        schema: &str,
+        name: &str,
+        columns: Vec<ColumnDetail>,
+        constraints: Vec<ConstraintDetail>,
+    ) -> TableInput {
         TableInput {
             schema: schema.to_string(),
             name: name.to_string(),
@@ -319,14 +332,22 @@ mod tests {
         let mut b = col("first");
         b.ordinal = 1;
         let d = build_diagram(&[table("s", "t", vec![a, b], vec![])]);
-        let names: Vec<_> = d.entities[0].columns.iter().map(|c| c.name.as_str()).collect();
+        let names: Vec<_> = d.entities[0]
+            .columns
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
         assert_eq!(names, ["first", "late"]);
     }
 
     #[test]
     fn columns_keep_input_order_when_ordinal_absent() {
         let d = build_diagram(&[table("s", "t", vec![col("beta"), col("alpha")], vec![])]);
-        let names: Vec<_> = d.entities[0].columns.iter().map(|c| c.name.as_str()).collect();
+        let names: Vec<_> = d.entities[0]
+            .columns
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
         assert_eq!(names, ["beta", "alpha"]);
     }
 
@@ -342,7 +363,12 @@ mod tests {
                 "public",
                 "orders",
                 vec![id, uid],
-                vec![fk_constraint("fk_orders_user", &["user_id"], "users", &["id"])],
+                vec![fk_constraint(
+                    "fk_orders_user",
+                    &["user_id"],
+                    "users",
+                    &["id"],
+                )],
             ),
         ]);
         assert_eq!(d.relations.len(), 1);
@@ -387,7 +413,12 @@ mod tests {
                 "public",
                 "orders",
                 vec![uid],
-                vec![fk_constraint("fk_orders_user", &["user_id"], "users", &["id"])],
+                vec![fk_constraint(
+                    "fk_orders_user",
+                    &["user_id"],
+                    "users",
+                    &["id"],
+                )],
             ),
         ]);
         assert_eq!(d.relations.len(), 1);
@@ -399,13 +430,24 @@ mod tests {
         // 复合外键：约束出一条；参与列上的 references 不再各出一条
         let mut a = col("a");
         a.is_foreign_key = true;
-        a.references = Some(ForeignKeyRef { table: "p".to_string(), column: "a".to_string() });
+        a.references = Some(ForeignKeyRef {
+            table: "p".to_string(),
+            column: "a".to_string(),
+        });
         let mut b = col("b");
         b.is_foreign_key = true;
-        b.references = Some(ForeignKeyRef { table: "p".to_string(), column: "b".to_string() });
+        b.references = Some(ForeignKeyRef {
+            table: "p".to_string(),
+            column: "b".to_string(),
+        });
         let d = build_diagram(&[
             table("s", "p", vec![col("a"), col("b")], vec![]),
-            table("s", "c", vec![a, b], vec![fk_constraint("fk_c_p", &["a", "b"], "p", &["a", "b"])]),
+            table(
+                "s",
+                "c",
+                vec![a, b],
+                vec![fk_constraint("fk_c_p", &["a", "b"], "p", &["a", "b"])],
+            ),
         ]);
         assert_eq!(d.relations.len(), 1);
         assert_eq!(d.relations[0].from_columns, vec!["a", "b"]);

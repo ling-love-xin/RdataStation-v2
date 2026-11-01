@@ -27,8 +27,8 @@
 
 use std::sync::Arc;
 
-use rds_engine::duckdb::accel::{self, AccelKind, AccelSource};
 use mysql_async::prelude::*;
+use rds_engine::duckdb::accel::{self, AccelKind, AccelSource};
 
 fn probe_db_name() -> String {
     "rds_accel_probe".to_string()
@@ -42,19 +42,21 @@ fn mysql_setup(url: &str, rows: i64) -> String {
         let pool = mysql_async::Pool::new(url);
         {
             let mut conn = pool.get_conn().await.expect("连 MySQL");
-                conn.query_drop("CREATE DATABASE IF NOT EXISTS rds_accel_probe")
+            conn.query_drop("CREATE DATABASE IF NOT EXISTS rds_accel_probe")
                 .await
                 .expect("建探测库");
-                conn.query_drop("DROP TABLE IF EXISTS rds_accel_probe.orders")
+            conn.query_drop("DROP TABLE IF EXISTS rds_accel_probe.orders")
                 .await
                 .expect("清旧表");
-                conn.query_drop("CREATE TABLE rds_accel_probe.orders AS SELECT 1 AS id")
+            conn.query_drop("CREATE TABLE rds_accel_probe.orders AS SELECT 1 AS id")
                 .await
                 .expect("建表");
-                for index in 2..=rows {
-                conn.query_drop(format!("INSERT INTO rds_accel_probe.orders VALUES ({index})"))
-                    .await
-                    .expect("插行");
+            for index in 2..=rows {
+                conn.query_drop(format!(
+                    "INSERT INTO rds_accel_probe.orders VALUES ({index})"
+                ))
+                .await
+                .expect("插行");
             }
         }
         // 连接必须先归还：`disconnect()` 要等所有连接回池，握着 conn 调它会一直等下去
@@ -188,7 +190,9 @@ fn probe_postgres_source_attach() {
         .run("SELECT count(*) FROM information_schema.tables WHERE table_catalog = 'rds_src'")
         .expect("查源库表清单");
     println!("✅ 源库可见表数：{:?}", names.to_rows()[0][0].to_string());
-    let refused = session.run("CREATE TABLE t_probe (id INT)").expect_err("写源库必须被拒");
+    let refused = session
+        .run("CREATE TABLE t_probe (id INT)")
+        .expect_err("写源库必须被拒");
     println!("✅ 写拒绝：{refused}");
     accel::drop_session("C_pg_probe");
 }
@@ -215,7 +219,9 @@ fn probe_sqlite_file_source_attach() {
         tables != "0" && !tables.starts_with("ERR"),
         "文件源里应当有表：{tables}"
     );
-    let refused = session.run("CREATE TABLE t_probe (id INT)").expect_err("写文件源也要被拒");
+    let refused = session
+        .run("CREATE TABLE t_probe (id INT)")
+        .expect_err("写文件源也要被拒");
     assert!(refused.to_string().contains("read-only"), "{refused}");
     println!("✅ 写拒绝：{refused}");
     accel::drop_session("C_lite_probe");

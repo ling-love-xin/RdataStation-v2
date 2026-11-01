@@ -202,7 +202,14 @@ impl NavView {
         // 搜索签名 =（词, 正则, 大小写, 仅已连接, 匹配模式, 搜注释, 搜定义）：
         // 词没变但开关变了也要重搜（`Aa` / `.*` / 「已连接」/ 模式 / 注释 toggle 切换时
         // query 相同，旧 `search_query` 判断会误判“没变”）。
-        let (regex, case_sensitive, connected_only, name_mode, include_comments, include_definitions) = {
+        let (
+            regex,
+            case_sensitive,
+            connected_only,
+            name_mode,
+            include_comments,
+            include_definitions,
+        ) = {
             let view = self.nav.borrow();
             (
                 view.search_regex,
@@ -263,7 +270,15 @@ impl NavView {
     /// 为什么排程时不把 targets 组装好带进闭包：防抖窗口内用户可能又改了 chips /
     /// 连接列表（排程时拍下的快照会过期），到期时现取才是用户看到的当前筛选。
     fn nav_run_index_search(&self, cx: &mut Context<Self>) {
-        let (query, case_sensitive, regex, connected_only, name_mode, include_comments, include_definitions) = {
+        let (
+            query,
+            case_sensitive,
+            regex,
+            connected_only,
+            name_mode,
+            include_comments,
+            include_definitions,
+        ) = {
             let view = self.nav.borrow();
             (
                 view.search_query.clone().unwrap_or_default(),
@@ -355,7 +370,8 @@ impl NavView {
         let do_load = {
             let mut view = self.nav.borrow_mut();
             if view.expanded.contains(key) {
-                let loaded_or_loading = view.children.contains_key(key) || view.loading.contains(key);
+                let loaded_or_loading =
+                    view.children.contains_key(key) || view.loading.contains(key);
                 if loaded_or_loading {
                     // 收起 = 取消本次加载意图：清 loading/attempted 防残留与幂等挡死。
                     // 残留场景（真机复现）：加载中收起该节点，loading 不消失；再展开时
@@ -910,8 +926,7 @@ impl NavView {
                 let test = nav_jobs::drain_test_results();
                 let row_estimates = nav_jobs::drain_row_estimates();
                 let connect = nav_jobs::drain_connect_results();
-                let search =
-                    nav_jobs::drain_search_results(nav_jobs::SearchConsumer::Navigator);
+                let search = nav_jobs::drain_search_results(nav_jobs::SearchConsumer::Navigator);
                 if batches_present(&load, &sql, &test, &row_estimates, &connect, &search) {
                     let alive = weak
                         .update(cx, |this, cx| {
@@ -1044,7 +1059,14 @@ impl NavView {
                     "导航加载连接类失败（自动重试一次）"
                 );
                 // 加载结果的后续链（连接层成功后继续展开下层）：后台路径（S2-①）。
-                self.ensure_nav_loaded(&conn_id, &key, r.path.clone(), false, JobPriority::Background, cx);
+                self.ensure_nav_loaded(
+                    &conn_id,
+                    &key,
+                    r.path.clone(),
+                    false,
+                    JobPriority::Background,
+                    cx,
+                );
                 continue;
             }
             {
@@ -1244,11 +1266,7 @@ impl NavView {
         // 表数阈值：< ROW_ESTIMATE_MIN_TABLES 不排（小 schema 不值得一次目录查询）。
         {
             let view = self.nav.borrow();
-            let count = view
-                .children
-                .get(key)
-                .map(|kids| kids.len())
-                .unwrap_or(0);
+            let count = view.children.get(key).map(|kids| kids.len()).unwrap_or(0);
             if count < nav_jobs::ROW_ESTIMATE_MIN_TABLES {
                 return;
             }
@@ -1262,7 +1280,10 @@ impl NavView {
             .find(|c| c.id == conn_id)
             .map(|c| c.driver.clone())
             .unwrap_or_default();
-        if crate::nav::dialect_of(&driver).row_estimate_sql(schema).is_none() {
+        if crate::nav::dialect_of(&driver)
+            .row_estimate_sql(schema)
+            .is_none()
+        {
             return;
         }
         let seq;
@@ -1291,10 +1312,7 @@ impl NavView {
 
     /// 纯状态写入（无 host 副作用 / 无定位推进），core 不需要 `cx`；公开入口保留
     /// `cx` 契约并在末尾统一 `notify()`。
-    fn apply_row_estimate_results_core(
-        &mut self,
-        results: Vec<nav_jobs::RowEstimateResult>,
-    ) {
+    fn apply_row_estimate_results_core(&mut self, results: Vec<nav_jobs::RowEstimateResult>) {
         for r in results {
             // 序号守卫（仿 search_seq）：只有「当前在途」的最新批次可写回。
             {
@@ -1323,7 +1341,8 @@ impl NavView {
                 if let Some(nodes) = view.children.get_mut(&parent_key) {
                     for node in nodes.iter_mut() {
                         if let NavNodeKind::Table { row_estimate } = &mut node.kind {
-                            if let Some((_, est)) = r.estimates.iter().find(|(n, _)| n == &node.name)
+                            if let Some((_, est)) =
+                                r.estimates.iter().find(|(n, _)| n == &node.name)
                             {
                                 *row_estimate = *est;
                             }
@@ -1624,13 +1643,17 @@ impl NavView {
             .map(|c| (c.id.clone(), ranked.get(c.id.as_str()).copied()))
             .collect();
         let recent = view.recent.clone();
-        nav_order_members(&stored, |id| {
-            conns
-                .iter()
-                .find(|c| c.id == id)
-                .map(|c| c.name.clone())
-                .unwrap_or_else(|| id.to_string())
-        }, &recent)
+        nav_order_members(
+            &stored,
+            |id| {
+                conns
+                    .iter()
+                    .find(|c| c.id == id)
+                    .map(|c| c.name.clone())
+                    .unwrap_or_else(|| id.to_string())
+            },
+            &recent,
+        )
     }
 
     /// 拖拽落点动作：把连接移到 `scope_id` 容器的指定位置。
@@ -1815,9 +1838,11 @@ impl NavView {
         let recent = self.host.recent_connection_ids();
         for group in &groups {
             let stored = crate::nav_store::list_group_members_detailed(root.as_deref(), &group.id);
-            let ids = nav_order_members(&stored, |id| {
-                names.get(id).cloned().unwrap_or_else(|| id.to_string())
-            }, &recent);
+            let ids = nav_order_members(
+                &stored,
+                |id| names.get(id).cloned().unwrap_or_else(|| id.to_string()),
+                &recent,
+            );
             for cid in &ids {
                 membership
                     .entry(cid.clone())
@@ -1957,14 +1982,20 @@ impl NavView {
                     // 断开 = 树收起来（缓存保留，重连后按需重载）。清掉该连接的
                     // 展开态 / 子节点 / 错误痕 / 预取标记——树收起，不留下半截子树。
                     let prefix = format!("{conn_id}/");
-                    view.expanded.retain(|k| k != conn_id && !k.starts_with(&prefix));
+                    view.expanded
+                        .retain(|k| k != conn_id && !k.starts_with(&prefix));
                     // HashMap 的 retain 闭包是 (key, value) 两参。
-                    view.children.retain(|k, _| k != conn_id && !k.starts_with(&prefix));
-                    view.errors.retain(|k, _| k != conn_id && !k.starts_with(&prefix));
-                    view.child_total.retain(|k, _| k != conn_id && !k.starts_with(&prefix));
+                    view.children
+                        .retain(|k, _| k != conn_id && !k.starts_with(&prefix));
+                    view.errors
+                        .retain(|k, _| k != conn_id && !k.starts_with(&prefix));
+                    view.child_total
+                        .retain(|k, _| k != conn_id && !k.starts_with(&prefix));
                     // loading / prefetched 是 HashSet，retain 闭包只收一个参数。
-                    view.loading.retain(|k| k != conn_id && !k.starts_with(&prefix));
-                    view.prefetched.retain(|k| k != conn_id && !k.starts_with(&prefix));
+                    view.loading
+                        .retain(|k| k != conn_id && !k.starts_with(&prefix));
+                    view.prefetched
+                        .retain(|k| k != conn_id && !k.starts_with(&prefix));
                 }
             }
             Err(e) => self.host.notice(format!("连接操作失败: {e}"), cx),
@@ -2061,7 +2092,10 @@ impl NavView {
                 .map(|c| c.id.clone())
                 .collect()
         };
-        tracing::info!(root_count = roots.len(), "【探针】refresh_all 刷新全部已展开连接");
+        tracing::info!(
+            root_count = roots.len(),
+            "【探针】refresh_all 刷新全部已展开连接"
+        );
         {
             let mut view = self.nav.borrow_mut();
             view.children.clear();
@@ -2076,7 +2110,14 @@ impl NavView {
         }
         for cid in roots {
             // 刷新全部：后台路径（S2-①）。
-            self.ensure_nav_loaded(&cid, &cid, NavPath::Connection, true, JobPriority::Background, cx);
+            self.ensure_nav_loaded(
+                &cid,
+                &cid,
+                NavPath::Connection,
+                true,
+                JobPriority::Background,
+                cx,
+            );
         }
         self.host.notice("已刷新全部元数据".to_string(), cx);
         cx.notify();
@@ -2101,9 +2142,9 @@ impl NavView {
         let outcome = self.nav.borrow_mut().enqueue_staged(staged);
         match outcome {
             EnqueueOutcome::Added => self.host.notice("已加入待提交清单".to_string(), cx),
-            EnqueueOutcome::Replaced => {
-                self.host.notice("已更新为待删除（替换原清空项）".to_string(), cx)
-            }
+            EnqueueOutcome::Replaced => self
+                .host
+                .notice("已更新为待删除（替换原清空项）".to_string(), cx),
             EnqueueOutcome::Ignored => self.host.notice("该对象已在待提交清单".to_string(), cx),
         }
         cx.notify();
@@ -2168,8 +2209,7 @@ impl NavView {
             .map(|c| c.driver.clone())
             .unwrap_or_default();
         let qualified = nav_qualified_name(&prop, &driver);
-        let Some((title, description, ok_text)) = staged_dialog_copy(op, kind, &qualified)
-        else {
+        let Some((title, description, ok_text)) = staged_dialog_copy(op, kind, &qualified) else {
             self.host.notice("当前对象类型不支持该操作".to_string(), cx);
             return None;
         };
@@ -2196,7 +2236,10 @@ impl NavView {
     /// `Ctrl+S` 路径的 Context 内校验段：拍快照 → 空集提示返回 `None`；否则组装汇总对话框
     /// 候选。返回 `None` 时由动作处理器在 App 作用域决定是否开窗（同 B6-4 两阶段口径：
     /// Context 回调拿不到 `&mut App`）。
-    pub(super) fn prepare_commit_staged(&mut self, cx: &mut Context<Self>) -> Option<PreparedCommit> {
+    pub(super) fn prepare_commit_staged(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<PreparedCommit> {
         let plan = self.nav.borrow().commit_plan();
         if plan.is_empty() {
             self.host.notice("待提交清单为空".to_string(), cx);
@@ -2266,14 +2309,16 @@ impl NavView {
                     let mgr = manager.clone();
                     let conn_id_for_query = conn_id.clone();
                     let result = match sql {
-                        Ok(sql) => executor
-                            .spawn(async move {
-                                crate::metadata_service::MetadataService::new(mgr)
-                                    .execute_query(&conn_id_for_query, &catalog, &sql)
-                                    .await
-                                    .map(|_| ())
-                            })
-                            .await,
+                        Ok(sql) => {
+                            executor
+                                .spawn(async move {
+                                    crate::metadata_service::MetadataService::new(mgr)
+                                        .execute_query(&conn_id_for_query, &catalog, &sql)
+                                        .await
+                                        .map(|_| ())
+                                })
+                                .await
+                        }
                         Err(e) => Err(e),
                     };
                     match result {

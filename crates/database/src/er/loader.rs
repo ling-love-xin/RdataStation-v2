@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use engine::driver::traits::ColumnDetail;
 
-use crate::er::model::{build_diagram, ErDiagram, TableInput};
+use crate::er::model::{ErDiagram, TableInput, build_diagram};
 use crate::metadata_service::MetadataService;
 
 /// 单张 ER 图最多纳入的表 / 视图数量。
@@ -26,11 +26,7 @@ pub const MAX_TABLES: usize = 120;
 /// 取一个 schema 的表 / 视图 / 外键，组装成只读 ER 图。
 ///
 /// 返回的 `Err` 一律是**可直接显示**的中文文案（后台任务把它原样回填给面板）。
-pub async fn load_diagram(
-    conn_id: &str,
-    catalog: &str,
-    schema: &str,
-) -> Result<ErDiagram, String> {
+pub async fn load_diagram(conn_id: &str, catalog: &str, schema: &str) -> Result<ErDiagram, String> {
     let svc = MetadataService::new(engine::get_connection_manager().clone());
 
     let tables = svc

@@ -4,8 +4,8 @@
 
 use super::{connection_base_overview, connection_base_rows, editable_row, row, stats_cards};
 use property::{
-    ObjectOverview, OverviewStatus, PropertySection, PropertyKind, PropertyProvider,
-    PropertyRow, ProviderInput, ProviderRegistry,
+    ObjectOverview, OverviewStatus, PropertyKind, PropertyProvider, PropertyRow, PropertySection,
+    ProviderInput, ProviderRegistry,
 };
 
 /// 注册 MySQL provider。
@@ -18,15 +18,27 @@ pub fn register_all(registry: &mut ProviderRegistry) {
 pub struct MysqlConnectionProvider;
 
 impl PropertyProvider for MysqlConnectionProvider {
-    fn db_type(&self) -> &'static str { "mysql" }
-    fn kind(&self) -> PropertyKind { PropertyKind::Connection }
+    fn db_type(&self) -> &'static str {
+        "mysql"
+    }
+    fn kind(&self) -> PropertyKind {
+        PropertyKind::Connection
+    }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         let mut rows = connection_base_rows(input, "MySQL");
         rows.push(row("字符集", input.count("charset").unwrap_or("utf8mb4")));
-        rows.push(row("校对规则", input.count("collation").unwrap_or("utf8mb4_0900_ai_ci")));
-        rows.push(editable_row("Mysql.sql_mode", "SQL 模式", "-",
-            property::PropertyValueKind::Text, Vec::new()));
+        rows.push(row(
+            "校对规则",
+            input.count("collation").unwrap_or("utf8mb4_0900_ai_ci"),
+        ));
+        rows.push(editable_row(
+            "Mysql.sql_mode",
+            "SQL 模式",
+            "-",
+            property::PropertyValueKind::Text,
+            Vec::new(),
+        ));
         rows
     }
 
@@ -42,7 +54,12 @@ impl PropertyProvider for MysqlConnectionProvider {
         super::connection_categories(&super::DriverCapabilities::mysql(), input)
     }
 
-    fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
+    fn apply_edit_sql(
+        &self,
+        _input: &ProviderInput,
+        _id: &str,
+        _v: &str,
+    ) -> Result<String, String> {
         Err("MySQL 连接属性编辑待扩展".to_string())
     }
 }
@@ -51,8 +68,12 @@ impl PropertyProvider for MysqlConnectionProvider {
 pub struct MysqlTableProvider;
 
 impl PropertyProvider for MysqlTableProvider {
-    fn db_type(&self) -> &'static str { "mysql" }
-    fn kind(&self) -> PropertyKind { PropertyKind::Table }
+    fn db_type(&self) -> &'static str {
+        "mysql"
+    }
+    fn kind(&self) -> PropertyKind {
+        PropertyKind::Table
+    }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         vec![
@@ -88,7 +109,12 @@ impl PropertyProvider for MysqlTableProvider {
         super::table_categories(&super::DriverCapabilities::mysql())
     }
 
-    fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
+    fn apply_edit_sql(
+        &self,
+        _input: &ProviderInput,
+        _id: &str,
+        _v: &str,
+    ) -> Result<String, String> {
         Err("MySQL 表属性编辑待扩展".to_string())
     }
 }

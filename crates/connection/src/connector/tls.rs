@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use tokio::net::TcpStream;
 
 use crate::config::{ConnectionConfig, ConnectionMethod, SslConfig};
-use crate::stream::ConnectionStream;
 use crate::connector::Connector;
+use crate::stream::ConnectionStream;
 use shared::error::{ConnectionError, CoreError};
 
 pub struct SslConnector;
@@ -83,9 +83,7 @@ async fn establish_tls(
     }
 
     // 加载客户端证书和私钥（mTLS 双向认证）
-    if let (Some(cert_path), Some(key_path)) =
-        (&config.client_cert_path, &config.client_key_path)
-    {
+    if let (Some(cert_path), Some(key_path)) = (&config.client_cert_path, &config.client_key_path) {
         let cert_pem = std::fs::read(cert_path).map_err(|e| {
             CoreError::connection(ConnectionError::Tls {
                 conn_id: domain.to_string(),
@@ -151,7 +149,6 @@ pub(crate) fn map_tls_version(version: crate::config::TlsVersion) -> native_tls:
         TlsVersion::Tls1_3 => native_tls::Protocol::Tlsv13,
     }
 }
-
 
 /// 在 TcpStream 之上建立 TLS 加密层
 pub async fn wrap_tls_stream(
@@ -233,4 +230,4 @@ pub async fn wrap_tls_stream(
     );
 
     Ok(tls_stream)
-}
+}

@@ -4,8 +4,8 @@
 
 use super::{connection_base_overview, connection_base_rows, editable_row, row, stats_cards};
 use property::{
-    ObjectOverview, OverviewStatus, PropertySection, PropertyKind, PropertyProvider,
-    PropertyRow, ProviderInput, ProviderRegistry,
+    ObjectOverview, OverviewStatus, PropertyKind, PropertyProvider, PropertyRow, PropertySection,
+    ProviderInput, ProviderRegistry,
 };
 
 /// 注册 SQLite provider。
@@ -19,13 +19,22 @@ pub fn register_all(registry: &mut ProviderRegistry) {
 pub struct SqliteConnectionProvider;
 
 impl PropertyProvider for SqliteConnectionProvider {
-    fn db_type(&self) -> &'static str { "sqlite" }
-    fn kind(&self) -> PropertyKind { PropertyKind::Connection }
+    fn db_type(&self) -> &'static str {
+        "sqlite"
+    }
+    fn kind(&self) -> PropertyKind {
+        PropertyKind::Connection
+    }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         let mut rows = connection_base_rows(input, "SQLite");
-        rows.push(editable_row("Sqlite.read_only", "只读", "false",
-            property::PropertyValueKind::Boolean, vec!["true".to_string(), "false".to_string()]));
+        rows.push(editable_row(
+            "Sqlite.read_only",
+            "只读",
+            "false",
+            property::PropertyValueKind::Boolean,
+            vec!["true".to_string(), "false".to_string()],
+        ));
         rows
     }
 
@@ -41,7 +50,12 @@ impl PropertyProvider for SqliteConnectionProvider {
         super::connection_categories(&super::DriverCapabilities::sqlite(), input)
     }
 
-    fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
+    fn apply_edit_sql(
+        &self,
+        _input: &ProviderInput,
+        _id: &str,
+        _v: &str,
+    ) -> Result<String, String> {
         Err("SQLite 连接属性编辑待扩展".to_string())
     }
 }
@@ -50,8 +64,12 @@ impl PropertyProvider for SqliteConnectionProvider {
 pub struct SqliteTableProvider;
 
 impl PropertyProvider for SqliteTableProvider {
-    fn db_type(&self) -> &'static str { "sqlite" }
-    fn kind(&self) -> PropertyKind { PropertyKind::Table }
+    fn db_type(&self) -> &'static str {
+        "sqlite"
+    }
+    fn kind(&self) -> PropertyKind {
+        PropertyKind::Table
+    }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         vec![
@@ -87,7 +105,12 @@ impl PropertyProvider for SqliteTableProvider {
         super::table_categories(&super::DriverCapabilities::sqlite())
     }
 
-    fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
+    fn apply_edit_sql(
+        &self,
+        _input: &ProviderInput,
+        _id: &str,
+        _v: &str,
+    ) -> Result<String, String> {
         Err("SQLite 表属性编辑待扩展".to_string())
     }
 }
@@ -96,8 +119,12 @@ impl PropertyProvider for SqliteTableProvider {
 pub struct SqliteViewProvider;
 
 impl PropertyProvider for SqliteViewProvider {
-    fn db_type(&self) -> &'static str { "sqlite" }
-    fn kind(&self) -> PropertyKind { PropertyKind::View }
+    fn db_type(&self) -> &'static str {
+        "sqlite"
+    }
+    fn kind(&self) -> PropertyKind {
+        PropertyKind::View
+    }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         vec![
@@ -132,7 +159,12 @@ impl PropertyProvider for SqliteViewProvider {
         super::view_categories(&super::DriverCapabilities::sqlite())
     }
 
-    fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
+    fn apply_edit_sql(
+        &self,
+        _input: &ProviderInput,
+        _id: &str,
+        _v: &str,
+    ) -> Result<String, String> {
         Err("SQLite 视图属性编辑待扩展".to_string())
     }
 }

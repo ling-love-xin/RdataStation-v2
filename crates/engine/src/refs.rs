@@ -246,7 +246,14 @@ impl ObjectRef {
         table: impl Into<String>,
         trigger: impl Into<String>,
     ) -> Self {
-        Self::new(conn_id, ObjectKind::Trigger, catalog, schema, table, trigger)
+        Self::new(
+            conn_id,
+            ObjectKind::Trigger,
+            catalog,
+            schema,
+            table,
+            trigger,
+        )
     }
 
     /// 从一次索引搜索命中还原引用（未知类别返回 `None`）。
@@ -411,7 +418,11 @@ mod tests {
         // 视图与表的区别只在 `kind`（同一个限定名下两者可能共存，键也各归各的）
         let v = ObjectRef::view("P_1", "shop", "public", "orders");
         assert_eq!(v.kind, ObjectKind::View);
-        assert_eq!(v.key(), t.key(), "限定名相同的表与视图 key 相同——区分靠 kind");
+        assert_eq!(
+            v.key(),
+            t.key(),
+            "限定名相同的表与视图 key 相同——区分靠 kind"
+        );
 
         // 其余可寻址对象：例程 / 序列 / 触发器
         let r = ObjectRef::routine("P_1", "shop", "public", "fn_total");
@@ -421,10 +432,7 @@ mod tests {
         assert_eq!(seq.kind, ObjectKind::Sequence);
         let trg = ObjectRef::trigger("P_1", "shop", "public", "orders", "trg_audit");
         assert_eq!(trg.kind, ObjectKind::Trigger);
-        assert_eq!(
-            trg.parent, "orders",
-            "触发器带所属表（部分驱动定位需要）"
-        );
+        assert_eq!(trg.parent, "orders", "触发器带所属表（部分驱动定位需要）");
         assert_eq!(trg.key(), "P_1/shop/public/orders/trg_audit");
     }
 

@@ -68,11 +68,7 @@ pub fn sql_qualified_name(
     name: &str,
 ) -> String {
     let scoped = crate::nav::family_profile::family_catalog_is_connection_scoped(driver);
-    qualified_name(
-        if scoped { None } else { catalog },
-        schema,
-        name,
-    )
+    qualified_name(if scoped { None } else { catalog }, schema, name)
 }
 
 /// 主键列的 `WHERE` 条件；无主键时退化为恒假（避免生成会误伤全表的语句）。
@@ -326,13 +322,11 @@ pub fn alter_column_sql(
         && !driver.eq_ignore_ascii_case("postgres")
         && !driver.eq_ignore_ascii_case("pg")
     {
-        return Err(CoreError::database(
-            shared::error::DatabaseError::Driver {
-                db_type: driver.to_string(),
-                operation: "alter_column_sql".to_string(),
-                source: "该驱动暂不支持属性编辑（仅 PostgreSQL 支持列级编辑）".to_string(),
-            },
-        ));
+        return Err(CoreError::database(shared::error::DatabaseError::Driver {
+            db_type: driver.to_string(),
+            operation: "alter_column_sql".to_string(),
+            source: "该驱动暂不支持属性编辑（仅 PostgreSQL 支持列级编辑）".to_string(),
+        }));
     }
     let mut parts: Vec<&str> = Vec::new();
     if let Some(s) = schema {
@@ -371,13 +365,11 @@ pub fn alter_column_sql(
             }
         }
         _ => {
-            return Err(CoreError::database(
-                shared::error::DatabaseError::Driver {
-                    db_type: driver.to_string(),
-                    operation: "alter_column_sql".to_string(),
-                    source: format!("暂不支持编辑该属性：{property_id}"),
-                },
-            ))
+            return Err(CoreError::database(shared::error::DatabaseError::Driver {
+                db_type: driver.to_string(),
+                operation: "alter_column_sql".to_string(),
+                source: format!("暂不支持编辑该属性：{property_id}"),
+            }));
         }
     };
     Ok(sql)
@@ -486,10 +478,7 @@ mod tests {
             sql_qualified_name("postgres", Some("db"), Some("sch"), "t"),
             "sch.t"
         );
-        assert_eq!(
-            sql_qualified_name("PG", Some("db"), None, "t"),
-            "t"
-        );
+        assert_eq!(sql_qualified_name("PG", Some("db"), None, "t"), "t");
         // MySQL（库即 schema，非连接作用域）：保留 catalog 段。
         assert_eq!(
             sql_qualified_name("mysql", Some("db"), Some("sch"), "t"),
@@ -810,45 +799,41 @@ mod tests {
             "nick",
         )
         .unwrap();
-        assert_eq!(sql, "ALTER TABLE public.t_user RENAME COLUMN \"name\" TO \"nick\"");
+        assert_eq!(
+            sql,
+            "ALTER TABLE public.t_user RENAME COLUMN \"name\" TO \"nick\""
+        );
     }
 
     /// PG 列注释：单引号转义；schema 可空（无独立 schema 层的驱动传 None 也在 PG 侧成立）。
     #[test]
     fn alter_comment_escapes_quotes() {
-        let sql = super::alter_column_sql(
-            "postgres",
-            None,
-            "t",
-            "c",
-            "Column.comment",
-            "it's ok",
-        )
-        .unwrap();
+        let sql = super::alter_column_sql("postgres", None, "t", "c", "Column.comment", "it's ok")
+            .unwrap();
         assert_eq!(sql, "COMMENT ON COLUMN t.\"c\" IS 'it''s ok'");
     }
 
     /// PG 默认值：空串 = DROP DEFAULT。
     #[test]
     fn alter_default_empty_means_drop() {
-        let sql =
-            super::alter_column_sql("postgresql", Some("s"), "t", "c", "Column.default_value", "")
-                .unwrap();
+        let sql = super::alter_column_sql(
+            "postgresql",
+            Some("s"),
+            "t",
+            "c",
+            "Column.default_value",
+            "",
+        )
+        .unwrap();
         assert_eq!(sql, "ALTER TABLE s.t ALTER COLUMN \"c\" DROP DEFAULT");
     }
 
     /// PG 可空：`true` = DROP NOT NULL，其余 = SET NOT NULL。
     #[test]
     fn alter_nullable_toggles() {
-        let drop_sql = super::alter_column_sql(
-            "postgresql",
-            Some("s"),
-            "t",
-            "c",
-            "Column.nullable",
-            "true",
-        )
-        .unwrap();
+        let drop_sql =
+            super::alter_column_sql("postgresql", Some("s"), "t", "c", "Column.nullable", "true")
+                .unwrap();
         assert!(drop_sql.contains("DROP NOT NULL"), "{drop_sql}");
         let set_sql = super::alter_column_sql(
             "postgresql",
@@ -967,11 +952,28 @@ mod tests {
             "seq_uid",
         )
         .unwrap();
-        assert_eq!(pg, "ALTER SEQUENCE \"public\".\"seq_id\" RENAME TO \"seq_uid\"");
-        let ok = super::rename_object_sql("duckdb", NavFolder::Sequences, None, "seq_id", None, "seq_uid");
+        assert_eq!(
+            pg,
+            "ALTER SEQUENCE \"public\".\"seq_id\" RENAME TO \"seq_uid\""
+        );
+        let ok = super::rename_object_sql(
+            "duckdb",
+            NavFolder::Sequences,
+            None,
+            "seq_id",
+            None,
+            "seq_uid",
+        );
         assert!(ok.is_ok(), "{ok:?}");
-        let err = super::rename_object_sql("sqlite", NavFolder::Sequences, None, "seq_id", None, "seq_uid")
-            .expect_err("SQLite 无序列概念，应拒绝");
+        let err = super::rename_object_sql(
+            "sqlite",
+            NavFolder::Sequences,
+            None,
+            "seq_id",
+            None,
+            "seq_uid",
+        )
+        .expect_err("SQLite 无序列概念，应拒绝");
         assert!(err.to_string().contains("序列重命名"), "{err}");
     }
 
@@ -1000,8 +1002,15 @@ mod tests {
         )
         .expect_err("缺父表应拒绝");
         assert!(no_parent.to_string().contains("父表"), "{no_parent}");
-        let err = super::rename_object_sql("duckdb", NavFolder::Triggers, None, "trg_audit", Some("t_user"), "trg_audit_v2")
-            .expect_err("DuckDB 无触发器，应拒绝");
+        let err = super::rename_object_sql(
+            "duckdb",
+            NavFolder::Triggers,
+            None,
+            "trg_audit",
+            Some("t_user"),
+            "trg_audit_v2",
+        )
+        .expect_err("DuckDB 无触发器，应拒绝");
         assert!(err.to_string().contains("触发器重命名"), "{err}");
     }
 
@@ -1126,8 +1135,10 @@ mod tests {
                 .unwrap(),
             "DROP VIEW `biz`.`v_active`"
         );
-        assert!(super::drop_object_sql("mysql", ObjectKind::Sequence, Some("biz"), "seq", None)
-            .is_err());
+        assert!(
+            super::drop_object_sql("mysql", ObjectKind::Sequence, Some("biz"), "seq", None)
+                .is_err()
+        );
         assert_eq!(
             super::truncate_table_sql("mysql", Some("biz"), "t_user").unwrap(),
             "TRUNCATE TABLE `biz`.`t_user`"
@@ -1142,8 +1153,7 @@ mod tests {
                 .unwrap(),
             "DROP TABLE \"t_user\""
         );
-        assert!(super::drop_object_sql("sqlite", ObjectKind::Sequence, None, "seq", None)
-            .is_err());
+        assert!(super::drop_object_sql("sqlite", ObjectKind::Sequence, None, "seq", None).is_err());
         assert_eq!(
             super::truncate_table_sql("sqlite", Some("main"), "t_user").unwrap(),
             "DELETE FROM \"t_user\""
@@ -1154,8 +1164,7 @@ mod tests {
     #[test]
     fn drop_and_truncate_duckdb_matrix() {
         assert_eq!(
-            super::drop_object_sql("duckdb", ObjectKind::Sequence, None, "seq_id", None)
-                .unwrap(),
+            super::drop_object_sql("duckdb", ObjectKind::Sequence, None, "seq_id", None).unwrap(),
             "DROP SEQUENCE \"seq_id\""
         );
         assert_eq!(

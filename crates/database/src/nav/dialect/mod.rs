@@ -57,8 +57,7 @@ pub trait DialectSpi: Send + Sync {
     /// 只拼 `schema.name`。MySQL（库即 schema）等族不受影响，保留 catalog。
     fn qualified_sql(&self, catalog: &str, schema: &str, name: &str) -> String {
         let mut parts: Vec<String> = Vec::new();
-        let scoped =
-            crate::nav::family_profile::family_catalog_is_connection_scoped(self.family());
+        let scoped = crate::nav::family_profile::family_catalog_is_connection_scoped(self.family());
         if !scoped && !catalog.is_empty() {
             parts.push(self.quote_ident(catalog));
         }
@@ -252,15 +251,17 @@ mod tests {
         let dialect = dialect_of("redis");
         assert_eq!(dialect.quote_ident("orders"), "\"orders\"");
         assert_eq!(dialect.qualified_sql("", "", "orders"), "\"orders\"");
-        assert!(dialect
-            .rename_sql(ObjectKind::Table, None, "t", None, "t2")
-            .is_err());
-        assert!(dialect
-            .drop_sql(ObjectKind::Table, None, "t", None)
-            .is_err());
-        assert!(dialect
-            .truncate_table_sql(None, "t")
-            .is_err());
+        assert!(
+            dialect
+                .rename_sql(ObjectKind::Table, None, "t", None, "t2")
+                .is_err()
+        );
+        assert!(
+            dialect
+                .drop_sql(ObjectKind::Table, None, "t", None)
+                .is_err()
+        );
+        assert!(dialect.truncate_table_sql(None, "t").is_err());
         assert!(dialect.row_estimate_sql("main").is_none());
         assert!(dialect.table_size_sql("main").is_none());
     }
@@ -280,12 +281,21 @@ mod tests {
             "\"main\".\"orders\""
         );
         assert_eq!(sqlite.qualified_sql("", "", "orders"), "\"orders\"");
-        assert_eq!(sqlite.qualified_sql("", "main", "orders"), "\"main\".\"orders\"");
+        assert_eq!(
+            sqlite.qualified_sql("", "main", "orders"),
+            "\"main\".\"orders\""
+        );
 
         // PostgreSQL（catalog=连接 database，连接作用域）：跳过 catalog，只到 schema.name。
         let pg = dialect_of("postgresql");
-        assert_eq!(pg.qualified_sql("cat", "sch", "orders"), "\"sch\".\"orders\"");
+        assert_eq!(
+            pg.qualified_sql("cat", "sch", "orders"),
+            "\"sch\".\"orders\""
+        );
         assert_eq!(pg.qualified_sql("", "", "orders"), "\"orders\"");
-        assert_eq!(pg.qualified_sql("", "main", "orders"), "\"main\".\"orders\"");
+        assert_eq!(
+            pg.qualified_sql("", "main", "orders"),
+            "\"main\".\"orders\""
+        );
     }
 }

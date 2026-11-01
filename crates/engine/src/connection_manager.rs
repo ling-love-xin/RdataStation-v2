@@ -7,9 +7,9 @@ use tracing::{info, warn};
 use specta::Type;
 
 use crate::cache::CacheManager;
+use crate::driver::DriverRegistry;
 use crate::driver::registry::DriverConnectionConfig;
 use crate::driver::traits::{DynDatabase, Transaction};
-use crate::driver::DriverRegistry;
 use shared::error::{ConnectionError, CoreError, DatabaseError, TransactionState};
 use shared::models::QueryResult;
 
@@ -385,14 +385,14 @@ impl ConnectionManager {
 
         // URL 形态：只换 path 段；没有 url_override 时才退回「改 database 字段重建」
         let url = match config.url_override.as_deref() {
-            Some(url) => crate::driver::utils::with_database_in_url(url, database).ok_or_else(
-                || {
+            Some(url) => {
+                crate::driver::utils::with_database_in_url(url, database).ok_or_else(|| {
                     CoreError::connection(ConnectionError::InvalidConfig {
                         conn_id: conn_id.clone(),
                         reason: format!("这条连接串不支持换库名（不是 URL 形式）：{url}"),
                     })
-                },
-            )?,
+                })?
+            }
             None => {
                 let mut rebuilt = config.clone();
                 rebuilt.database = Some(database.to_string());
@@ -409,11 +409,12 @@ impl ConnectionManager {
             database
         ));
 
-        let factory = crate::driver::DriverRegistry::get(&scoped_config.driver).ok_or_else(|| {
-            CoreError::database(DatabaseError::DriverNotFound {
-                db_type: scoped_config.driver.clone(),
-            })
-        })?;
+        let factory =
+            crate::driver::DriverRegistry::get(&scoped_config.driver).ok_or_else(|| {
+                CoreError::database(DatabaseError::DriverNotFound {
+                    db_type: scoped_config.driver.clone(),
+                })
+            })?;
         let db: DynDatabase = factory.create(scoped_config).await?;
         self.scoped.write().await.insert(key, db.clone());
         tracing::info!(conn_id = %conn_id, database = %database, "跨库浏览：已另开一条连到该库的连接");
@@ -634,7 +635,11 @@ impl ConnectionManager {
         let elapsed = active.elapsed();
         active.tx.commit().await.map_err(|error| {
             // 提交失败就不再把它当成“还开着”：如实报错，比留一个说不清状态的句柄强
-            transaction_error("commit", TransactionState::Failed(error.to_string()), &error.to_string())
+            transaction_error(
+                "commit",
+                TransactionState::Failed(error.to_string()),
+                &error.to_string(),
+            )
         })?;
         Ok(elapsed)
     }

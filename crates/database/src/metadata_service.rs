@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
+use engine::connection_manager::ConnectionManager;
 use engine::driver::traits::{
     ColumnDetail, ConstraintDetail, DynDatabase, IndexDetail, NodeInfo, SchemaObjectKind,
     SchemaObjects,
 };
 use shared::error::{ConnectionError, CoreError};
-use engine::connection_manager::ConnectionManager;
 
 pub struct MetadataService {
     manager: Arc<ConnectionManager>,
@@ -272,7 +272,8 @@ impl MetadataService {
                 return Ok(nodes);
             }
             // 同上：回退 `Database::list_triggers`（PostgreSQL 有真实实现，曾被遮蔽）。
-        }        db.list_triggers(catalog, Some(schema)).await
+        }
+        db.list_triggers(catalog, Some(schema)).await
     }
 
     /// **一次建连批量内省**（DBeaver 会话语义，2026-10-08 根治 prepared 复用挂起）：

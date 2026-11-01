@@ -50,12 +50,10 @@ fn probe(conn: &Connection, name: &str, from_community: bool) {
         format!("INSTALL {name}")
     };
     match conn.execute_batch(&install) {
-        Ok(()) => {
-            match conn.execute_batch(&format!("LOAD {name}")) {
-                Ok(()) => println!("✅ {name}（{source}）：INSTALL + LOAD 都成功"),
-                Err(error) => println!("🟡 {name}（{source}）：装上了但 LOAD 失败 —— {error}"),
-            }
-        }
+        Ok(()) => match conn.execute_batch(&format!("LOAD {name}")) {
+            Ok(()) => println!("✅ {name}（{source}）：INSTALL + LOAD 都成功"),
+            Err(error) => println!("🟡 {name}（{source}）：装上了但 LOAD 失败 —— {error}"),
+        },
         Err(error) => {
             let text = error.to_string();
             let first_line = text.lines().next().unwrap_or("").to_string();
@@ -87,10 +85,7 @@ fn probe_duckdb_extensions() {
     conn.execute_batch(&format!("SET extension_directory = '{dir_sql}'"))
         .expect("设置扩展目录");
     println!("已把本会话的扩展目录设为：{}", dir.display());
-    println!(
-        "设置后生效值：{}",
-        setting(&conn, "extension_directory")
-    );
+    println!("设置后生效值：{}", setting(&conn, "extension_directory"));
 
     println!("\n──── 官方扩展（联邦直连的主力）────");
     for name in ["mysql", "postgres", "sqlite", "parquet", "json", "httpfs"] {
@@ -98,7 +93,13 @@ fn probe_duckdb_extensions() {
     }
 
     println!("\n──── 社区扩展（Oracle / SQL Server / 通用 ADBC 桥）────");
-    for name in ["mssql", "oracle_scanner", "adbc", "adbc_scanner", "firebird"] {
+    for name in [
+        "mssql",
+        "oracle_scanner",
+        "adbc",
+        "adbc_scanner",
+        "firebird",
+    ] {
         probe(&conn, name, true);
     }
 

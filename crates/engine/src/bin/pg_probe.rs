@@ -27,9 +27,17 @@ async fn job(shared: &SharedConn, label: &str) {
     }
     let tp = std::time::Instant::now();
     let ping_ok = tokio::time::timeout(Duration::from_secs(3), async {
-        sqlx::query("SELECT 1").fetch_all(guard.as_mut().unwrap()).await
-    }).await.map(|r| r.is_ok()).unwrap_or(false);
-    println!("[{label}] ping: {}ms ok={ping_ok}", tp.elapsed().as_millis());
+        sqlx::query("SELECT 1")
+            .fetch_all(guard.as_mut().unwrap())
+            .await
+    })
+    .await
+    .map(|r| r.is_ok())
+    .unwrap_or(false);
+    println!(
+        "[{label}] ping: {}ms ok={ping_ok}",
+        tp.elapsed().as_millis()
+    );
     if !ping_ok {
         return;
     }
@@ -39,7 +47,11 @@ async fn job(shared: &SharedConn, label: &str) {
             .bind("biz_421").fetch_all(guard.as_mut().unwrap()).await
     }).await;
     match r {
-        Ok(Ok(rows)) => println!("[{label}] SQL: {}ms rows={}", ts.elapsed().as_millis(), rows.len()),
+        Ok(Ok(rows)) => println!(
+            "[{label}] SQL: {}ms rows={}",
+            ts.elapsed().as_millis(),
+            rows.len()
+        ),
         Ok(Err(e)) => println!("[{label}] SQL 失败: {e}"),
         Err(_) => println!("[{label}] SQL 超时(5s)"),
     }
@@ -51,7 +63,13 @@ fn main() {
     let shared: SharedConn = Arc::new(tokio::sync::Mutex::new(None));
     // 5 个独立 Runtime（模拟 app 多个 worker 线程各建一个 Runtime）
     let runtimes: Vec<tokio::runtime::Runtime> = (0..5)
-        .map(|_| tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap())
+        .map(|_| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .unwrap()
+        })
         .collect();
 
     for (i, rt) in runtimes.iter().enumerate() {

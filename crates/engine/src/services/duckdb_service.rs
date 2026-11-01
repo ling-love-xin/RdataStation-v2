@@ -58,10 +58,8 @@ impl DuckDbService {
         columns: &[String],
         rows: &[Vec<serde_json::Value>],
     ) -> Result<String, CoreError> {
-        let table_name = crate::duckdb::generate_unique_name(
-            crate::duckdb::TempTableSource::Query,
-            "result",
-        );
+        let table_name =
+            crate::duckdb::generate_unique_name(crate::duckdb::TempTableSource::Query, "result");
         let col_defs: Vec<String> = columns
             .iter()
             .enumerate()
@@ -162,10 +160,8 @@ impl DuckDbService {
             .collect::<Result<Vec<_>, CoreError>>()?;
 
         // 命名口径与逐行那条路一致：前缀是 TTL / 上限 / 按来源清理 / 关项目清场唯一的识别依据
-        let table_name = crate::duckdb::generate_unique_name(
-            crate::duckdb::TempTableSource::Query,
-            "result",
-        );
+        let table_name =
+            crate::duckdb::generate_unique_name(crate::duckdb::TempTableSource::Query, "result");
 
         conn.execute_batch(&format!(
             "CREATE TABLE {} ({})",
@@ -250,7 +246,11 @@ pub fn rows_as_json(result: &shared::models::QueryResult) -> Vec<Vec<serde_json:
     result
         .to_rows()
         .into_iter()
-        .map(|row| row.into_iter().map(shared::models::Value::to_json).collect())
+        .map(|row| {
+            row.into_iter()
+                .map(shared::models::Value::to_json)
+                .collect()
+        })
         .collect()
 }
 
@@ -478,9 +478,8 @@ fn decode_dictionary_columns(batch: &ArrowBatch) -> Result<ArrowBatch, CoreError
         if let DataType::Dictionary(_, value_type) = field.data_type() {
             decoded_any = true;
             let value_type = value_type.as_ref().clone();
-            let decoded = arrow::compute::cast(column, &value_type).map_err(|e| {
-                general_error(format!("列 {} 的词典编码解不开: {e}", field.name()))
-            })?;
+            let decoded = arrow::compute::cast(column, &value_type)
+                .map_err(|e| general_error(format!("列 {} 的词典编码解不开: {e}", field.name())))?;
             fields.push(Field::new(field.name(), value_type, field.is_nullable()));
             columns.push(decoded);
         } else {
@@ -505,8 +504,8 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use shared::models::ArrowBatch;
 
-    use crate::duckdb::{drop_temp_table, TempTableSource};
     use crate::DuckDBManager;
+    use crate::duckdb::{TempTableSource, drop_temp_table};
     use serde_json::json;
 
     /// 一份类型齐全的批：整数 / 高精度小数 / 带时区时间 / 长文本 / 二进制 / 布尔 / 可空。
@@ -569,8 +568,8 @@ mod tests {
     fn arrow_batches_land_with_their_own_types() {
         let mut conn = duckdb::Connection::open_in_memory().expect("内存连接");
         let batch = typed_batch();
-        let table = DuckDbService::create_temp_table_from_batches(&mut conn, &[batch])
-            .expect("直灌建表");
+        let table =
+            DuckDbService::create_temp_table_from_batches(&mut conn, &[batch]).expect("直灌建表");
 
         assert!(
             table.starts_with("tmp_q_"),
@@ -583,17 +582,29 @@ mod tests {
         );
 
         // 类型保真：这几条正是「逐行 INSERT + 猜类型」那条路做不到的
-        let ty = |col: &str| scalar_text(&conn, &format!("SELECT typeof({col}) FROM {table} LIMIT 1"));
+        let ty =
+            |col: &str| scalar_text(&conn, &format!("SELECT typeof({col}) FROM {table} LIMIT 1"));
         assert_eq!(ty("id"), "BIGINT");
         assert_eq!(ty("amount"), "DECIMAL(38,10)");
-        assert!(ty("created_at").contains("TIMESTAMP"), "{}", ty("created_at"));
-        assert!(ty("created_at").contains("WITH TIME ZONE"), "{}", ty("created_at"));
+        assert!(
+            ty("created_at").contains("TIMESTAMP"),
+            "{}",
+            ty("created_at")
+        );
+        assert!(
+            ty("created_at").contains("WITH TIME ZONE"),
+            "{}",
+            ty("created_at")
+        );
         assert_eq!(ty("note"), "VARCHAR");
         assert_eq!(ty("payload"), "BLOB");
         assert_eq!(ty("flag"), "BOOLEAN");
 
         // 值也对：高精度小数没被压成 f64，时间没被字符串化
-        assert_eq!(scalar_i64(&conn, &format!("SELECT count(*) FROM {table}")), 2);
+        assert_eq!(
+            scalar_i64(&conn, &format!("SELECT count(*) FROM {table}")),
+            2
+        );
         assert_eq!(
             scalar_text(
                 &conn,
@@ -628,10 +639,16 @@ mod tests {
         )
         .expect("多批直灌");
 
-        assert_eq!(scalar_i64(&conn, &format!("SELECT count(*) FROM {table}")), 2);
+        assert_eq!(
+            scalar_i64(&conn, &format!("SELECT count(*) FROM {table}")),
+            2
+        );
         // 空批在前时，建表用的是它的 schema（列照样齐）
         assert_eq!(
-            scalar_text(&conn, &format!("SELECT typeof(amount) FROM {table} LIMIT 1")),
+            scalar_text(
+                &conn,
+                &format!("SELECT typeof(amount) FROM {table} LIMIT 1")
+            ),
             "DECIMAL(38,10)"
         );
         drop_temp_table(&conn, TempTableSource::Query, &table).expect("删表");
@@ -660,7 +677,10 @@ mod tests {
             "VARCHAR",
             "词典编码解成值类型后落成文本列"
         );
-        assert_eq!(scalar_i64(&conn, &format!("SELECT count(*) FROM {table}")), 3);
+        assert_eq!(
+            scalar_i64(&conn, &format!("SELECT count(*) FROM {table}")),
+            3
+        );
         assert_eq!(
             scalar_text(
                 &conn,
@@ -679,8 +699,9 @@ mod tests {
         // 形状不一致（列数不同）
         let batch = typed_batch();
         let narrow = batch.slice(0, 1).project(&[0]).expect("只留一列");
-        let err = DuckDbService::create_temp_table_from_batches(&mut conn, &[batch.clone(), narrow])
-            .expect_err("形状不一致要报错");
+        let err =
+            DuckDbService::create_temp_table_from_batches(&mut conn, &[batch.clone(), narrow])
+                .expect_err("形状不一致要报错");
         assert!(format!("{err:?}").contains("形状"), "{err:?}");
 
         // 嵌套类型（协议里这类是 JSON 字符串，真来了也先说明白）

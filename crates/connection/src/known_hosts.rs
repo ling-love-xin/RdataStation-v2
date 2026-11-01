@@ -267,9 +267,10 @@ impl KnownHosts {
         let key_b64 = parts.next().unwrap_or(key_openssh.as_str()).to_string();
 
         // 幂等：同 host + 同 key 已有 → 跳过
-        let already = self.find_candidates(&normalized, port).iter().any(|e| {
-            e.public_key.public_key_bytes() == server_key.public_key_bytes()
-        });
+        let already = self
+            .find_candidates(&normalized, port)
+            .iter()
+            .any(|e| e.public_key.public_key_bytes() == server_key.public_key_bytes());
         if already {
             return Ok(());
         }
@@ -537,8 +538,14 @@ mod tests {
         assert!(hosts.verify("host-a", 22, &test_key));
         assert!(hosts.verify("host-c", 22, &test_key));
         // 修复回归：查询侧与写入侧一样做小写归一化（此前混合大小写主机名查不到）
-        assert!(hosts.verify("HOST-A", 22, &test_key), "主机名查询应大小写不敏感");
-        assert!(hosts.verify("HOST-B", 22, &test_key), "主机名查询应大小写不敏感");
+        assert!(
+            hosts.verify("HOST-A", 22, &test_key),
+            "主机名查询应大小写不敏感"
+        );
+        assert!(
+            hosts.verify("HOST-B", 22, &test_key),
+            "主机名查询应大小写不敏感"
+        );
         assert!(!hosts.verify("host-d", 22, &test_key));
         Ok(())
     }
@@ -553,8 +560,14 @@ mod tests {
         let mut hosts = KnownHosts::new(false);
         hosts.parse(&content);
 
-        assert!(hosts.verify("db.example.com", 22, &test_key), "小写查询应命中");
-        assert!(hosts.verify("DB.EXAMPLE.COM", 22, &test_key), "大写查询应命中（修复回归）");
+        assert!(
+            hosts.verify("db.example.com", 22, &test_key),
+            "小写查询应命中"
+        );
+        assert!(
+            hosts.verify("DB.EXAMPLE.COM", 22, &test_key),
+            "大写查询应命中（修复回归）"
+        );
         Ok(())
     }
 
@@ -564,7 +577,10 @@ mod tests {
         let hosts = KnownHosts::load(&path, false).expect("缺失文件应返回空表而非错误");
         assert!(hosts.loaded());
         let key = create_test_key().expect("key");
-        assert!(!hosts.verify("example.com", 22, &key), "空表 + deny → false");
+        assert!(
+            !hosts.verify("example.com", 22, &key),
+            "空表 + deny → false"
+        );
     }
 
     // ===== #37 TOFU：三态校验 / 落盘 / 策略矩阵 =====
@@ -577,7 +593,10 @@ mod tests {
         let mut hosts = KnownHosts::new(false);
         hosts.parse(&content);
 
-        assert_eq!(hosts.verify_outcome("example.com", 22, &key), HostKeyOutcome::Matched);
+        assert_eq!(
+            hosts.verify_outcome("example.com", 22, &key),
+            HostKeyOutcome::Matched
+        );
         assert_eq!(
             hosts.verify_outcome("example.com", 22, &other),
             HostKeyOutcome::Mismatched
@@ -611,9 +630,15 @@ mod tests {
 
         // 首连：空表 → Unknown → append 落盘
         let mut hosts = KnownHosts::load(&path, true).expect("load");
-        assert_eq!(hosts.verify_outcome("example.com", 22, &key), HostKeyOutcome::Unknown);
+        assert_eq!(
+            hosts.verify_outcome("example.com", 22, &key),
+            HostKeyOutcome::Unknown
+        );
         hosts.append("example.com", 22, &key).expect("append");
-        assert_eq!(hosts.verify_outcome("example.com", 22, &key), HostKeyOutcome::Matched);
+        assert_eq!(
+            hosts.verify_outcome("example.com", 22, &key),
+            HostKeyOutcome::Matched
+        );
 
         // 重新加载同一文件（新实例）→ 仍 Matched（落盘生效）
         let reloaded = KnownHosts::load(&path, true).expect("reload");

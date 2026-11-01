@@ -457,7 +457,6 @@ mod tests {
         Ok(())
     }
 
-    
     #[test]
     fn test_estimate_backup_time() -> Result<(), CoreError> {
         let (db_path, db_dir) = setup_test_db()?;

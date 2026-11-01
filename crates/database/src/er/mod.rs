@@ -19,10 +19,10 @@ pub mod loader;
 pub mod model;
 pub mod view;
 
-pub use edge::{edge_paths, ErEdge, ErPoint};
-pub use layout::{layered_layout, EntityBox, ErRect, LaidOutDiagram, LayoutMetrics};
-pub use loader::{load_diagram, MAX_TABLES};
+pub use edge::{ErEdge, ErPoint, edge_paths};
+pub use layout::{EntityBox, ErRect, LaidOutDiagram, LayoutMetrics, layered_layout};
+pub use loader::{MAX_TABLES, load_diagram};
 pub use model::{
-    build_diagram, EntityKey, ErColumn, ErColumnRef, ErDiagram, ErEntity, ErRelation, TableInput,
+    EntityKey, ErColumn, ErColumnRef, ErDiagram, ErEntity, ErRelation, TableInput, build_diagram,
 };
 pub use view::{metrics_for_theme, render_er_diagram};

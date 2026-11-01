@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 use shared::error::{ConnectionError, CoreError};
 
-use crate::config::{ChainHop, ConnectionConfig, ConnectionMethod, ProxyConfig, SslConfig, SshConfig};
+use crate::config::{
+    ChainHop, ConnectionConfig, ConnectionMethod, ProxyConfig, SshConfig, SslConfig,
+};
 use crate::connector::{self, TunnelGuard};
 use crate::url_params;
 
@@ -34,7 +36,11 @@ impl TunnelRegistry {
     pub async fn insert(&self, conn_id: &str, guards: Vec<TunnelGuard>) {
         let mut map = self.tunnels.lock().await;
         if let Some(old) = map.insert(conn_id.to_string(), guards) {
-            tracing::warn!(conn_id, count = old.len(), "替换既有隧道守卫（旧隧道将关闭）");
+            tracing::warn!(
+                conn_id,
+                count = old.len(),
+                "替换既有隧道守卫（旧隧道将关闭）"
+            );
             drop(old);
         }
     }
@@ -190,7 +196,9 @@ pub async fn process_chain(
                 let (target_host, target_port) = if let Some(next) = next_hop {
                     match next {
                         ChainHop::Ssh(s) => (s.host.clone(), s.port),
-                        ChainHop::HttpProxy(p) | ChainHop::SocksProxy(p) => (p.host.clone(), p.port),
+                        ChainHop::HttpProxy(p) | ChainHop::SocksProxy(p) => {
+                            (p.host.clone(), p.port)
+                        }
                         ChainHop::Ssl(_) => (final_db_host.clone(), final_db_port),
                     }
                 } else {
@@ -468,14 +476,10 @@ mod tests {
 
     #[tokio::test]
     async fn apply_direct_keeps_url() {
-        let (url, guards) = apply_network_method(
-            "postgres://u:p@h:5432/db",
-            &None,
-            "G_conn_a",
-            "postgres",
-        )
-        .await
-        .expect("direct");
+        let (url, guards) =
+            apply_network_method("postgres://u:p@h:5432/db", &None, "G_conn_a", "postgres")
+                .await
+                .expect("direct");
         assert_eq!(url, "postgres://u:p@h:5432/db");
         assert!(guards.is_empty());
 
@@ -507,7 +511,10 @@ mod tests {
         )
         .await
         .expect("ssl");
-        assert_eq!(url, "postgres://h:5432/db?sslmode=verify-ca&sslrootcert=/ca.pem");
+        assert_eq!(
+            url,
+            "postgres://h:5432/db?sslmode=verify-ca&sslrootcert=/ca.pem"
+        );
         assert!(guards.is_empty(), "SSL 跳不产生隧道守卫");
     }
 
@@ -545,14 +552,10 @@ mod tests {
             ca_cert_path: Some("/ca.pem".to_string()),
             ..Default::default()
         });
-        let (url, guards) = apply_network_method(
-            "mysql://h:3306/db",
-            &Some(method),
-            "G_conn_a",
-            "mysql",
-        )
-        .await
-        .expect("ssl");
+        let (url, guards) =
+            apply_network_method("mysql://h:3306/db", &Some(method), "G_conn_a", "mysql")
+                .await
+                .expect("ssl");
         assert_eq!(url, "mysql://h:3306/db?ssl-mode=VERIFY_CA&ssl-ca=/ca.pem");
         assert!(guards.is_empty(), "SSL 跳不产生隧道守卫");
     }

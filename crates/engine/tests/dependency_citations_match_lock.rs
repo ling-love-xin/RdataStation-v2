@@ -79,7 +79,8 @@ fn citations_in(line: &str) -> Vec<(String, String)> {
                 .take_while(|c| c.is_ascii_digit() || *c == '.')
                 .collect();
             // 版本至少 x.y 才算引用（避免把 `mysql_async-` 后面接的普通词当版本）
-            if version.matches('.').count() >= 1 && version.starts_with(|c: char| c.is_ascii_digit())
+            if version.matches('.').count() >= 1
+                && version.starts_with(|c: char| c.is_ascii_digit())
             {
                 out.push((crate_name.to_string(), version));
             }
@@ -98,7 +99,11 @@ fn cited_dependency_versions_match_the_lockfile() {
 
     let mut files = Vec::new();
     rust_files(&root.join("crates"), &mut files);
-    assert!(files.len() > 100, "扫到的源文件太少（{}）——路径解析错了吧？", files.len());
+    assert!(
+        files.len() > 100,
+        "扫到的源文件太少（{}）——路径解析错了吧？",
+        files.len()
+    );
 
     let mut checked = 0usize;
     let mut mismatches: Vec<String> = Vec::new();

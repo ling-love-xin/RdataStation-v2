@@ -26,8 +26,8 @@ use shared::error::{CommonError, CoreError};
 
 // 目录化后本文件位于 `duckdb/temp_table/` 下，`super` 指向 temp_table 目录；
 // manager 仍在 duckdb 根，改用 crate 绝对路径。
-use crate::duckdb::manager::DuckDBManager;
 use super::temp_table::TempTableSource;
+use crate::duckdb::manager::DuckDBManager;
 
 /// 分析用临时表的前缀（与 [`TempTableSource::Insight`] 的前缀**必须一致**）。
 ///
@@ -200,10 +200,8 @@ pub fn cleanup_analysis_temp_tables(conn: &Connection) -> Result<Vec<String>, Co
 
 /// 分析临时表在库里的名字（诊断 / 测试用；**权威来源是库本身**，不是登记表）。
 pub fn analysis_temp_tables(conn: &Connection) -> Result<Vec<String>, CoreError> {
-    let mut names: Vec<String> = super::temp_table::TempTableManager::list_by_source(
-        conn,
-        TempTableSource::Insight,
-    )?;
+    let mut names: Vec<String> =
+        super::temp_table::TempTableManager::list_by_source(conn, TempTableSource::Insight)?;
     names.sort();
     Ok(names)
 }
@@ -240,19 +238,20 @@ fn insert_rows(
         quote_ident(table),
         placeholders.join(", ")
     );
-    let mut stmt = conn.prepare(&insert_sql).map_err(|e| {
-        CoreError::common(CommonError::General(format!("准备插入失败: {e}")))
-    })?;
+    let mut stmt = conn
+        .prepare(&insert_sql)
+        .map_err(|e| CoreError::common(CommonError::General(format!("准备插入失败: {e}"))))?;
     for row in rows {
         let params: Vec<duckdb::types::Value> = row
             .iter()
             .map(crate::services::duckdb_service::json_to_duckdb_value)
             .collect();
-        let params_refs: Vec<&dyn duckdb::types::ToSql> =
-            params.iter().map(|p| p as &dyn duckdb::types::ToSql).collect();
-        stmt.execute(&params_refs[..]).map_err(|e| {
-            CoreError::common(CommonError::General(format!("插入行失败: {e}")))
-        })?;
+        let params_refs: Vec<&dyn duckdb::types::ToSql> = params
+            .iter()
+            .map(|p| p as &dyn duckdb::types::ToSql)
+            .collect();
+        stmt.execute(&params_refs[..])
+            .map_err(|e| CoreError::common(CommonError::General(format!("插入行失败: {e}"))))?;
     }
     Ok(())
 }
@@ -295,9 +294,7 @@ mod tests {
         );
         assert!(table_exists(&conn, &table));
         assert!(
-            analysis_temp_tables(&conn)
-                .expect("查库")
-                .contains(&table),
+            analysis_temp_tables(&conn).expect("查库").contains(&table),
             "按来源查库应当能看见它（这正是按前缀清理的依据）"
         );
 
@@ -325,16 +322,15 @@ mod tests {
     /// 所以这里断言生成出来的**名字**，而不是那个已经不是本模块内部的函数。
     #[test]
     fn description_is_sanitized() {
-        let name = super::super::temp_table::generate_unique_name(
-            TempTableSource::Insight,
-            "a b-c",
+        let name =
+            super::super::temp_table::generate_unique_name(TempTableSource::Insight, "a b-c");
+        assert!(
+            name.starts_with("tmp_i_a_b_c_"),
+            "清洗后应只留下划线：{name}"
         );
-        assert!(name.starts_with("tmp_i_a_b_c_"), "清洗后应只留下划线：{name}");
 
-        let fallback = super::super::temp_table::generate_unique_name(
-            TempTableSource::Insight,
-            "列画像 样本",
-        );
+        let fallback =
+            super::super::temp_table::generate_unique_name(TempTableSource::Insight, "列画像 样本");
         assert!(
             fallback.starts_with("tmp_i_tmp_"),
             "全是非 ASCII 时给个兜底，不留空片段：{fallback}"
@@ -362,7 +358,9 @@ mod tests {
             "建完应当被登记"
         );
         let n: i64 = conn
-            .query_row(&format!("SELECT COUNT(*) FROM \"{table}\""), [], |r| r.get(0))
+            .query_row(&format!("SELECT COUNT(*) FROM \"{table}\""), [], |r| {
+                r.get(0)
+            })
             .expect("计数");
         assert_eq!(n, 1, "数据应当真的落进去了");
 

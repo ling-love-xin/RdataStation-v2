@@ -138,7 +138,9 @@ pub fn oracle_secret_from_url(alias: &str, url: &str) -> Result<SourceSecret, St
     let rest = trimmed
         .split_once("://")
         .map(|(_, rest)| rest)
-        .ok_or_else(|| format!("Oracle 连接串形状不对（要 `oracle://user:pass@host:port/服务名`）：{trimmed}"))?;
+        .ok_or_else(|| {
+            format!("Oracle 连接串形状不对（要 `oracle://user:pass@host:port/服务名`）：{trimmed}")
+        })?;
     let (cred, host_part) = rest
         .split_once('@')
         .ok_or_else(|| "Oracle 连接串缺少凭据（要 `user:pass@host`）".to_string())?;
@@ -371,7 +373,9 @@ pub fn validate_alias(alias: &str) -> Result<(), String> {
         return Err(format!("别名只能用字母 / 数字 / 下划线（{alias}）"));
     }
     if is_reserved(trimmed) {
-        return Err(format!("别名 {alias} 是 SQL 关键字或 DuckDB 保留名，换一个"));
+        return Err(format!(
+            "别名 {alias} 是 SQL 关键字或 DuckDB 保留名，换一个"
+        ));
     }
     Ok(())
 }
@@ -415,14 +419,19 @@ pub struct SessionSnapshot {
 impl SessionSnapshot {
     /// 可用的源数（门控与文案都用它，别各自 `filter` 一遍）
     pub fn ready_count(&self) -> usize {
-        self.sources.iter().filter(|source| source.is_ready()).count()
+        self.sources
+            .iter()
+            .filter(|source| source.is_ready())
+            .count()
     }
 }
 
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{FederatedSource, oracle_secret_from_url, sanitize_alias, unique_alias, validate_alias};
+    use super::{
+        FederatedSource, oracle_secret_from_url, sanitize_alias, unique_alias, validate_alias,
+    };
 
     #[test]
     fn sanitize_turns_display_names_into_usable_aliases() {
@@ -454,7 +463,9 @@ mod tests {
         assert!(validate_alias("1orders").is_err());
         assert!(validate_alias("orders-db").is_err(), "横线要拼不出来就拒");
         assert!(validate_alias(" orders").is_err(), "首尾空白直接拒");
-        for reserved in ["memory", "system", "rds_src", "Memory", "left", "order", "table"] {
+        for reserved in [
+            "memory", "system", "rds_src", "Memory", "left", "order", "table",
+        ] {
             assert!(validate_alias(reserved).is_err(), "{reserved} 是保留名");
         }
     }
@@ -485,7 +496,11 @@ mod tests {
         )
         .expect("网络源");
         assert_eq!(source.connection_string, "mysql://root:pw@h:3306/db");
-        assert!(source.attach_sql().contains("TYPE mysql"), "{}", source.attach_sql());
+        assert!(
+            source.attach_sql().contains("TYPE mysql"),
+            "{}",
+            source.attach_sql()
+        );
         assert!(source.attach_sql().contains("READ_ONLY"));
 
         let pg = FederatedSource::new(
@@ -518,7 +533,13 @@ mod tests {
         );
         let secret = source.secret.as_ref().expect("该有 Secret");
         assert_eq!(secret.name, "rds_ora");
-        assert!(secret.create_sql.contains("CREATE OR REPLACE SECRET rds_ora"), "{}", secret.create_sql);
+        assert!(
+            secret
+                .create_sql
+                .contains("CREATE OR REPLACE SECRET rds_ora"),
+            "{}",
+            secret.create_sql
+        );
         assert!(secret.create_sql.contains("TYPE ORACLE"));
         assert!(secret.create_sql.contains("HOST '192.168.3.138'"));
         assert!(secret.create_sql.contains("PORT 1521"));
@@ -545,13 +566,25 @@ mod tests {
     fn oracle_secret_parsing_refuses_incomplete_urls() {
         // 没写端口 → 1521（Oracle 的默认监听口）
         let default_port = oracle_secret_from_url("o", "oracle://u:p@h/XEPDB1").expect("默认端口");
-        assert!(default_port.create_sql.contains("PORT 1521"), "{}", default_port.create_sql);
+        assert!(
+            default_port.create_sql.contains("PORT 1521"),
+            "{}",
+            default_port.create_sql
+        );
 
         // 百分号编码的凭据要解回原样（与 URL 组装侧对称）
-        let encoded =
-            oracle_secret_from_url("o", "oracle://de%76user:p%40ss@h:1521/XEPDB1").expect("编码凭据");
-        assert!(encoded.create_sql.contains("USER 'devuser'"), "{}", encoded.create_sql);
-        assert!(encoded.create_sql.contains("PASSWORD 'p@ss'"), "{}", encoded.create_sql);
+        let encoded = oracle_secret_from_url("o", "oracle://de%76user:p%40ss@h:1521/XEPDB1")
+            .expect("编码凭据");
+        assert!(
+            encoded.create_sql.contains("USER 'devuser'"),
+            "{}",
+            encoded.create_sql
+        );
+        assert!(
+            encoded.create_sql.contains("PASSWORD 'p@ss'"),
+            "{}",
+            encoded.create_sql
+        );
 
         // 缺件要如实说（猜服务名会得到 ORA-01017，真机踩过）
         let no_service = oracle_secret_from_url("o", "oracle://u:p@h:1521").unwrap_err();

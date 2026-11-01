@@ -362,15 +362,18 @@ pub(crate) fn run_sql_on(
     running: &std::sync::atomic::AtomicBool,
     sql: &str,
 ) -> Result<QueryResult, CoreError> {
-    running
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    running.store(true, std::sync::atomic::Ordering::SeqCst);
     let _guard = RunningGuard(running);
     if !crate::driver::utils::returns_rows(sql) {
-        let affected = conn.execute(sql, []).map_err(|error| query_error(sql, &error))?;
+        let affected = conn
+            .execute(sql, [])
+            .map_err(|error| query_error(sql, &error))?;
         return Ok(crate::driver::utils::affected_rows_result(affected as u64));
     }
 
-    let mut stmt = conn.prepare(sql).map_err(|error| query_error(sql, &error))?;
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|error| query_error(sql, &error))?;
     let mut rows = stmt.query([]).map_err(|error| query_error(sql, &error))?;
     let mut data: Vec<Vec<duckdb::types::Value>> = Vec::new();
     while let Some(row) = rows.next().map_err(|error| query_error(sql, &error))? {
@@ -385,7 +388,11 @@ pub(crate) fn run_sql_on(
     }
     // duckdb-rs：列元数据要等语句真的跑过之后才可读
     let columns: Vec<String> = (0..stmt.column_count())
-        .map(|index| stmt.column_name(index).map_or("unknown", |name| name).to_string())
+        .map(|index| {
+            stmt.column_name(index)
+                .map_or("unknown", |name| name)
+                .to_string()
+        })
         .collect();
 
     if data.is_empty() {
@@ -401,7 +408,8 @@ impl AccelSession {
     /// 错误文本先脱敏再往外走：驱动报错里可能带着建连参数（见 [`scrub_credentials`]）。
     pub fn run(&self, sql: &str) -> Result<QueryResult, CoreError> {
         let conn = self.lock()?;
-        run_sql_on(&conn, &self.running, sql).map_err(|error| scrub_error(&self.connection_string, error))
+        run_sql_on(&conn, &self.running, sql)
+            .map_err(|error| scrub_error(&self.connection_string, error))
     }
 
     /// 重新挂载：源库侧**新建的表**要这样才看得见（数据本来就是实时的）
@@ -410,7 +418,9 @@ impl AccelSession {
     pub fn refresh(&self) -> Result<(), CoreError> {
         let conn = self.lock()?;
         conn.execute_batch(&format!("USE memory; DETACH {SOURCE_ALIAS}"))
-            .map_err(|error| scrub_error(&self.connection_string, attach_error("DETACH", &error)))?;
+            .map_err(|error| {
+                scrub_error(&self.connection_string, attach_error("DETACH", &error))
+            })?;
         let attach = self.source_attach.clone();
         run_attach_steps(&conn, &attach)
             .map_err(|error| scrub_error(&self.connection_string, error))
@@ -498,9 +508,8 @@ pub fn ensure_session(source: &AccelSource) -> Result<Arc<AccelSession>, String>
         return Ok(session);
     }
 
-    let conn = Connection::open_in_memory().map_err(|error| {
-        format!("开本地分析连接失败：{error}")
-    })?;
+    let conn =
+        Connection::open_in_memory().map_err(|error| format!("开本地分析连接失败：{error}"))?;
     // 统一配置（扩展目录 / 内存闸 / 溢写口 / 不静默联网）——别再在这里自己拼 SET：
     // 会话是个长期存活的连接，绕开 `configure_connection` 就会漏掉其中某几项（审计抓到过）
     super::manager::DuckDBManager::configure_connection(&conn)
@@ -658,14 +667,23 @@ mod tests {
 
     #[test]
     fn db_types_map_to_kinds_and_unknown_ones_say_so() {
-        assert_eq!(AccelKind::from_db_type("mysql_native").unwrap(), AccelKind::MySql);
+        assert_eq!(
+            AccelKind::from_db_type("mysql_native").unwrap(),
+            AccelKind::MySql
+        );
         assert_eq!(AccelKind::from_db_type("MySQL").unwrap(), AccelKind::MySql);
         assert_eq!(
             AccelKind::from_db_type("postgres_native").unwrap(),
             AccelKind::PostgreSql
         );
-        assert_eq!(AccelKind::from_db_type("sqlite").unwrap(), AccelKind::Sqlite);
-        assert_eq!(AccelKind::from_db_type("duckdb").unwrap(), AccelKind::DuckDb);
+        assert_eq!(
+            AccelKind::from_db_type("sqlite").unwrap(),
+            AccelKind::Sqlite
+        );
+        assert_eq!(
+            AccelKind::from_db_type("duckdb").unwrap(),
+            AccelKind::DuckDb
+        );
         // 认不出就不猜（猜错会把语句发到别的库上）
         let error = AccelKind::from_db_type("clickhouse").expect_err("应当拒绝");
         assert!(error.contains("clickhouse"), "{error}");
@@ -673,9 +691,15 @@ mod tests {
 
     #[test]
     fn file_urls_become_bare_paths() {
-        assert_eq!(normalize_file_path("D:\\data\\a.db").unwrap(), "D:\\data\\a.db");
+        assert_eq!(
+            normalize_file_path("D:\\data\\a.db").unwrap(),
+            "D:\\data\\a.db"
+        );
         assert_eq!(normalize_file_path("sqlite:///C:/x.db").unwrap(), "C:/x.db");
-        assert_eq!(normalize_file_path("duckdb://D:/y.duckdb").unwrap(), "D:/y.duckdb");
+        assert_eq!(
+            normalize_file_path("duckdb://D:/y.duckdb").unwrap(),
+            "D:/y.duckdb"
+        );
         assert!(normalize_file_path("   ").is_err());
     }
 
@@ -717,7 +741,9 @@ mod tests {
         };
 
         let session = ensure_session(&source).expect("建会话");
-        let result = session.run("SELECT count(*) AS n FROM orders").expect("查源表");
+        let result = session
+            .run("SELECT count(*) AS n FROM orders")
+            .expect("查源表");
         let rows = result.to_rows();
         assert_eq!(rows.len(), 1, "源文件里的表要能直接查到");
         assert_eq!(rows[0][0].to_string(), "3");
@@ -725,7 +751,10 @@ mod tests {
 
         // 同一源第二次取 = 复用会话（不会撞 “Unique file handle conflict”）
         let again = ensure_session(&source).expect("复用会话");
-        assert!(Arc::ptr_eq(&session, &again), "同一 conn_id 应当复用同一条会话");
+        assert!(
+            Arc::ptr_eq(&session, &again),
+            "同一 conn_id 应当复用同一条会话"
+        );
         assert!(drop_session("C_session"), "会话被放掉");
         assert!(!drop_session("C_session"), "再放一次就没有了");
         let _ = std::fs::remove_dir_all(dir);
@@ -776,7 +805,11 @@ mod tests {
         };
         let session = ensure_session(&source).expect("建会话");
         assert_eq!(
-            session.run("SELECT count(*) FROM orders").unwrap().to_rows()[0][0].to_string(),
+            session
+                .run("SELECT count(*) FROM orders")
+                .unwrap()
+                .to_rows()[0][0]
+                .to_string(),
             "2"
         );
 
@@ -869,7 +902,10 @@ mod tests {
         assert!(AccelKind::has_federable_extension("mysql"));
         assert!(AccelKind::has_federable_extension("postgres"));
         assert!(AccelKind::has_federable_extension("sqlite"));
-        assert!(AccelKind::has_federable_extension("postgres_native"), "驱动 id 也应归一");
+        assert!(
+            AccelKind::has_federable_extension("postgres_native"),
+            "驱动 id 也应归一"
+        );
         // duckdb 文件源：内核自带能力、无扩展 → 不注册（默认不注册）
         assert!(!AccelKind::has_federable_extension("duckdb"));
         // 未知 / 无法联邦 → 不注册（不猜）
@@ -915,7 +951,11 @@ mod tests {
         )
         .expect("组装源");
         assert_eq!(source.connection_string, "mysql://root:pw@h:3306/db");
-        assert!(source.attach_sql().contains("TYPE mysql"), "{}", source.attach_sql());
+        assert!(
+            source.attach_sql().contains("TYPE mysql"),
+            "{}",
+            source.attach_sql()
+        );
 
         let pg = AccelSource::new(
             "C_pg",
@@ -924,8 +964,7 @@ mod tests {
         )
         .expect("组装源");
         assert_eq!(
-            pg.connection_string,
-            "postgres://u:p@h:5432/db?sslmode=require",
+            pg.connection_string, "postgres://u:p@h:5432/db?sslmode=require",
             "查询串要原样留着"
         );
 
@@ -934,6 +973,9 @@ mod tests {
         assert_eq!(same.connection_string, "mysql://root:pw@h:3306/db");
 
         // 没有 scheme 的写法：原样留着（让 DuckDB 自己报错，不猜）
-        assert_eq!(super::normalize_scheme(AccelKind::MySql, "h:3306/db"), "h:3306/db");
+        assert_eq!(
+            super::normalize_scheme(AccelKind::MySql, "h:3306/db"),
+            "h:3306/db"
+        );
     }
 }

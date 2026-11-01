@@ -14,10 +14,10 @@
 //! 2. UI 显示"全局已更新"提示，用户点击同步按钮触发 sync_snapshot()
 //! 3. 项目迁移到另一台机器时，GP_ 快照随项目走，不依赖全局配置
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
-use shared::error::{CoreError, StorageError};
 use crate::persistence::id_prefix;
+use shared::error::{CoreError, StorageError};
 
 fn storage_err(op: &str, reason: String) -> CoreError {
     CoreError::storage(StorageError::Persistence {

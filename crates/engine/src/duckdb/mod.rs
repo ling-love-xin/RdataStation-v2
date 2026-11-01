@@ -22,18 +22,18 @@
 //! 约 570 行）——实测零调用，只有它自己的测试在用；扩展的安装与状态实际由 `accel.rs`
 //! （加速档 / 联邦）承担。台账见 `docs/architecture/data-layer-wiring-matrix.md` §5.3。
 
+pub mod accel;
 mod executor;
 mod explain;
+mod extension;
+pub mod federation;
 mod manager;
 mod metrics;
-pub mod accel;
-pub mod federation;
 mod probe;
-pub mod transfer;
-pub mod temp_table;
 mod search;
 pub mod snapshot;
-mod extension;
+pub mod temp_table;
+pub mod transfer;
 
 // 行→Arrow 转换已下沉 `shared::duckdb_rows`（engine 瘦身第三刀前置：driver 与 engine 两侧共用），
 // 此处保留命名空间薄壳，外部 `engine::duckdb::row_to_arrow::duckdb_rows_to_arrow` 路径零改动。
@@ -56,11 +56,11 @@ pub use metrics::{DuckDBMetrics, MetricsSnapshot};
 // 责任域目录：各目录 `mod.rs` 已做域内 `pub use`，这里通配传导到 duckdb 根。
 // 保真点：`probe::*` 同时带出 `file_probe` / `file_reader` 模块与顶层函数；
 // `temp_table::*` 带出 `temp_table` / `analysis` 模块（外部 `engine::duckdb::analysis::*` 路径）。
-pub use probe::*;
-pub use transfer::*;
-pub use temp_table::*;
-pub use snapshot::*;
 pub use extension::*;
+pub use probe::*;
+pub use snapshot::*;
+pub use temp_table::*;
+pub use transfer::*;
 // 全文检索（fts）：原 `pub use fts::FTSManager` 导出到 duckdb 根，目录化后经 search 通配保真
 pub use search::*;
 // 标识符加引号的**唯一规则**在临时表模块（B7 切片二的导出 COPY 也要用）；

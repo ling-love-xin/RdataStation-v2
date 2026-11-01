@@ -84,10 +84,7 @@ pub(crate) enum NavRow {
         scope_key: String,
     },
     /// 「加载更多」行（大 schema 分页）。
-    More {
-        node: Box<NavNode>,
-        depth: usize,
-    },
+    More { node: Box<NavNode>, depth: usize },
     /// 「已定位到第 N 条」行（定位窗口的说明与回头路）。
     Jump {
         node: Box<NavNode>,
@@ -176,9 +173,7 @@ impl NavRow {
             NavRow::Jump { node, .. } => format!("nav-jumped-{}", node.key),
             NavRow::SearchHit { hit, ix } => search_hit_row_id(*ix, hit),
             NavRow::Placeholder {
-                kind,
-                scope_key,
-                ..
+                kind, scope_key, ..
             } => format!("nav-placeholder-{scope_key}::{}", kind.slug()),
         }
     }
@@ -206,7 +201,10 @@ impl NavRow {
     /// 「更多」「定位」「搜索命中」可点可选中）。仅测试使用。
     #[cfg(test)]
     pub(crate) fn selectable(&self) -> bool {
-        !matches!(self, NavRow::GroupHeader { .. } | NavRow::Placeholder { .. })
+        !matches!(
+            self,
+            NavRow::GroupHeader { .. } | NavRow::Placeholder { .. }
+        )
     }
 
     /// 树行 / 「更多」/「定位」行携带的节点（连接 / 分组头 / 搜索命中 / 占位行为 `None`）。

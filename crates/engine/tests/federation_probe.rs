@@ -59,7 +59,8 @@ fn probe_federation_across_mysql_and_sqlite() {
     };
 
     // 第三个源指向不存在的文件：验证“坏源不阻断”（duckdb 文件源不需要任何扩展）
-    let ghost_path = std::env::temp_dir().join(format!("rds_fed_ghost_{}.duckdb", std::process::id()));
+    let ghost_path =
+        std::env::temp_dir().join(format!("rds_fed_ghost_{}.duckdb", std::process::id()));
     let sources = vec![
         FederatedSource::new("mysql", "mysql_src", "mysql_native", &mysql_url)
             .expect("组装 MySQL 源"),
@@ -127,7 +128,10 @@ fn probe_federation_across_mysql_and_sqlite() {
         "CREATE TABLE mysql_src.{mysql_schema}.rds_probe_should_fail (n INTEGER)"
     ));
     let error = write_attempt.expect_err("写源库必须被拒");
-    eprintln!("✅ 写源库被拒：{}", error.to_string().lines().next().unwrap_or(""));
+    eprintln!(
+        "✅ 写源库被拒：{}",
+        error.to_string().lines().next().unwrap_or("")
+    );
     session
         .run("CREATE TEMP TABLE rds_probe_scratch AS SELECT 1 AS n")
         .expect("本地临时表该允许");

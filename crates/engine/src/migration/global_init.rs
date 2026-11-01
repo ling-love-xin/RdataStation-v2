@@ -1,4 +1,6 @@
-﻿/**
+use crate::migration::{MigrationManager, MigrationType};
+use crate::persistence::{GlobalDatabaseManager, get_global_db_path, get_global_duckdb_path};
+/**
  * 全局系统初始化模块
  *
  * 负责应用启动时的全局初始化：
@@ -8,8 +10,6 @@
  * - 初始化全局配置
  */
 use shared::error::CoreError;
-use crate::migration::{MigrationManager, MigrationType};
-use crate::persistence::{get_global_db_path, get_global_duckdb_path, GlobalDatabaseManager};
 
 /// 初始化全局系统数据库管理器
 ///
@@ -93,7 +93,10 @@ pub async fn sync_startup_state(manager: &GlobalDatabaseManager) -> StartupSyncR
         tracing::info!(count = migrated, "网络档案明文凭据已加密（一次性迁移）");
     }
     if tags_migrated > 0 {
-        tracing::info!(count = tags_migrated, "连接标签已回填到权威表（一次性迁移）");
+        tracing::info!(
+            count = tags_migrated,
+            "连接标签已回填到权威表（一次性迁移）"
+        );
     }
 
     // ③ 数据库族目录 upsert（代码是权威，见 `driver/declaration.rs`）。
@@ -127,7 +130,10 @@ pub async fn sync_startup_state(manager: &GlobalDatabaseManager) -> StartupSyncR
                     "部分驱动声明未落库（缺数据库族？）——这些驱动在界面/连接链路上会缺行"
                 );
             }
-            tracing::info!(count = sync.written, "驱动声明已同步到 drivers 表（代码是权威）");
+            tracing::info!(
+                count = sync.written,
+                "驱动声明已同步到 drivers 表（代码是权威）"
+            );
             report.drivers = Some(sync);
         }
         Err(e) => {
@@ -239,7 +245,8 @@ mod tests {
     use rusqlite::Connection;
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("rds_startup_mig_{}_{}", tag, std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("rds_startup_mig_{}_{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
@@ -253,7 +260,8 @@ mod tests {
     fn legacy_project_root(base: &std::path::Path, conn_id: &str) -> std::path::PathBuf {
         let root = base.join("proj");
         std::fs::create_dir_all(root.join(".RSmeta")).expect("mkdir .RSmeta");
-        let conn = Connection::open(root.join(".RSmeta").join("project.db")).expect("open project db");
+        let conn =
+            Connection::open(root.join(".RSmeta").join("project.db")).expect("open project db");
         conn.execute_batch(
             "CREATE TABLE connections (id TEXT PRIMARY KEY, name TEXT, tags TEXT);\n             CREATE TABLE connection_tags (connection_id TEXT NOT NULL, tag TEXT NOT NULL,\n                 PRIMARY KEY (connection_id, tag));",
         )
@@ -271,13 +279,10 @@ mod tests {
     #[tokio::test]
     async fn startup_migration_backfills_tags_for_global_and_project() {
         let base = temp_dir("tags");
-        let manager = GlobalDatabaseManager::new(
-            base.join("global.db"),
-            base.join("analytics.duckdb"),
-            2,
-        )
-        .await
-        .expect("init manager");
+        let manager =
+            GlobalDatabaseManager::new(base.join("global.db"), base.join("analytics.duckdb"), 2)
+                .await
+                .expect("init manager");
 
         // 全局侧：一条带行内 JSON 标签、权威表无记录的连接。
         {
@@ -293,14 +298,7 @@ mod tests {
         // 项目侧：登记到名册（迁移只遍历名册，未登记的项目不会被扫到）。
         let root = legacy_project_root(&base, "P_legacy");
         manager
-            .save_project_info_smart(
-                "p1",
-                "Proj",
-                None,
-                &root.to_string_lossy(),
-                "active",
-                None,
-            )
+            .save_project_info_smart("p1", "Proj", None, &root.to_string_lossy(), "active", None)
             .await
             .expect("register project");
 
@@ -323,13 +321,10 @@ mod tests {
     async fn startup_sync_writes_driver_declarations_and_is_idempotent() {
         crate::driver::AutoDriverRegistrar::auto_register();
         let base = temp_dir("drivers");
-        let manager = GlobalDatabaseManager::new(
-            base.join("global.db"),
-            base.join("analytics.duckdb"),
-            2,
-        )
-        .await
-        .expect("init manager");
+        let manager =
+            GlobalDatabaseManager::new(base.join("global.db"), base.join("analytics.duckdb"), 2)
+                .await
+                .expect("init manager");
 
         let first = sync_startup_state(&manager).await;
         let sync = first.drivers.expect("驱动声明同步应成功");

@@ -29,9 +29,7 @@ use shared::error::CoreError;
 
 use crate::cache::NavCache;
 use crate::metadata_service::MetadataService;
-use crate::model::{
-    NavFolder, NavNode, NavNodeKind, NavPath, NavSource, PropertyRef,
-};
+use crate::model::{NavFolder, NavNode, NavNodeKind, NavPath, NavSource, PropertyRef};
 use crate::nav::family_profile::{self, NodeShape};
 use property::PropertyKind;
 
@@ -163,7 +161,10 @@ impl NavigatorService {
 
     /// L1 句柄（进程级单例；取不到时降级为不缓存，不影响主流程）。
     fn l1() -> Option<Arc<std::sync::Mutex<MetadataCache>>> {
-        CacheManager::instance().lock().ok().map(|m| m.metadata_cache())
+        CacheManager::instance()
+            .lock()
+            .ok()
+            .map(|m| m.metadata_cache())
     }
 
     /// 读 L1。`fresh`（刷新）模式一律跳过：刷新以实时内省为准。
@@ -215,7 +216,8 @@ impl NavigatorService {
                 // 层级按数据库类型动态决定：无独立 Schema 层的驱动（MySQL / SQLite /
                 // DuckDB）让 Catalog 直接承载类别文件夹，避免出现同名重复的 Schema 层。
                 if self.metadata.has_schema_level(conn_id).await? {
-                    self.load_schemas(conn_id, catalog, visible, show_system).await
+                    self.load_schemas(conn_id, catalog, visible, show_system)
+                        .await
                 } else {
                     self.load_folders(conn_id, catalog, catalog).await
                 }
@@ -259,7 +261,9 @@ impl NavigatorService {
                     .await
             }
             _ => {
-                let nodes = self.load_children(conn_id, path, visible, show_system).await?;
+                let nodes = self
+                    .load_children(conn_id, path, visible, show_system)
+                    .await?;
                 let total = nodes.len();
                 Ok(NavPage {
                     nodes,
@@ -466,8 +470,7 @@ impl NavigatorService {
         let names = names
             .into_iter()
             .filter(|name| {
-                let in_visible_catalog =
-                    visible.is_some_and(|set| set.contains(catalog));
+                let in_visible_catalog = visible.is_some_and(|set| set.contains(catalog));
                 in_visible_catalog
                     || nav_keep_object(name, visible, show_system, nav_is_system_schema)
             })
@@ -660,7 +663,9 @@ impl NavigatorService {
         let objects = self
             .collect_objects(conn_id, catalog, schema, folder, &mut batch)
             .await?;
-        Ok(Self::object_nodes(conn_id, catalog, schema, folder, objects))
+        Ok(Self::object_nodes(
+            conn_id, catalog, schema, folder, objects,
+        ))
     }
 
     /// 对象 → 导航节点（分页路径与全量路径共用，保证同一个对象在两路上长得一样）。
@@ -847,14 +852,16 @@ impl NavigatorService {
                 name: table.to_string(),
                 kind: PropertyKind::Table,
             };
-            return vec![NavNode::new(
-                key,
-                format!("在属性面板查看列（{} 列）", columns.len()),
-                conn_id,
-                NavNodeKind::ColumnOverflow,
-                false,
-            )
-            .with_property(prop)];
+            return vec![
+                NavNode::new(
+                    key,
+                    format!("在属性面板查看列（{} 列）", columns.len()),
+                    conn_id,
+                    NavNodeKind::ColumnOverflow,
+                    false,
+                )
+                .with_property(prop),
+            ];
         }
         columns
             .into_iter()
@@ -922,7 +929,9 @@ impl NavigatorService {
                 .await
                 .unwrap_or(true),
         };
-        self.object_caps.borrow_mut().insert(conn_id.to_string(), caps);
+        self.object_caps
+            .borrow_mut()
+            .insert(conn_id.to_string(), caps);
         caps
     }
 
@@ -1119,7 +1128,9 @@ impl NavigatorService {
             }
             NavFolder::Sequences => {
                 tracing::info!(conn_id = %conn_id, catalog = %catalog, schema = %schema, "collect_objects 类别进入 sequences");
-                if let Some(objs) = self.l1_read(|c| c.get_sequences(conn_id, catalog, Some(schema))) {
+                if let Some(objs) =
+                    self.l1_read(|c| c.get_sequences(conn_id, catalog, Some(schema)))
+                {
                     return Ok(objs);
                 }
                 let cache = self.cache(conn_id);
@@ -1154,7 +1165,8 @@ impl NavigatorService {
             }
             NavFolder::Triggers => {
                 tracing::info!(conn_id = %conn_id, catalog = %catalog, schema = %schema, "collect_objects 类别进入 triggers");
-                if let Some(objs) = self.l1_read(|c| c.get_triggers(conn_id, catalog, Some(schema))) {
+                if let Some(objs) = self.l1_read(|c| c.get_triggers(conn_id, catalog, Some(schema)))
+                {
                     return Ok(objs);
                 }
                 let cache = self.cache(conn_id);
@@ -1252,7 +1264,8 @@ impl NavigatorService {
             if table_count <= CHUNK_THRESHOLD {
                 let (t, v) = (tables_half.clone(), views_half.clone());
                 let (s, g) = (objects.sequences.clone(), objects.triggers.clone());
-                let (cid, cat, sch) = (conn_id.to_string(), catalog.to_string(), schema.to_string());
+                let (cid, cat, sch) =
+                    (conn_id.to_string(), catalog.to_string(), schema.to_string());
                 let (cid_c, cat_c, sch_c) = (cid.clone(), cat.clone(), sch.clone());
                 let routines_l1 = routines_all.clone();
                 self.l1_write(move |l1| {
@@ -1324,7 +1337,14 @@ impl NavigatorService {
                     });
                     warmed += 1;
                 }
-                tracing::info!(conn_id, catalog, schema, warmed, targets = column_targets.len(), "后台预热表列完成（点表 0ms）");
+                tracing::info!(
+                    conn_id,
+                    catalog,
+                    schema,
+                    warmed,
+                    targets = column_targets.len(),
+                    "后台预热表列完成（点表 0ms）"
+                );
             }
         }
         tracing::info!(
@@ -1574,8 +1594,7 @@ mod object_node_tests {
                 NodeInfo::new("orders_2025", SchemaObjectKind::Table)
                     .with_parent("orders")
                     .with_partition(),
-                NodeInfo::new("orders_archive", SchemaObjectKind::Table)
-                    .with_parent("orders"),
+                NodeInfo::new("orders_archive", SchemaObjectKind::Table).with_parent("orders"),
                 NodeInfo::new("line_items", SchemaObjectKind::Table),
                 NodeInfo::new("line_items_2024", SchemaObjectKind::Table)
                     .with_parent("line_items")
@@ -1584,10 +1603,16 @@ mod object_node_tests {
         );
 
         assert_eq!(nodes.len(), 2, "子表不单独列出，只留下父表");
-        let orders = nodes.iter().find(|n| n.name == "orders").expect("父表 orders 存在");
+        let orders = nodes
+            .iter()
+            .find(|n| n.name == "orders")
+            .expect("父表 orders 存在");
         assert_eq!(orders.child_partitions, 2);
         assert_eq!(orders.child_inherited, 1);
-        let line_items = nodes.iter().find(|n| n.name == "line_items").expect("父表 line_items 存在");
+        let line_items = nodes
+            .iter()
+            .find(|n| n.name == "line_items")
+            .expect("父表 line_items 存在");
         assert_eq!(line_items.child_partitions, 1);
         assert_eq!(line_items.child_inherited, 0, "继承子表计数归零不缺失");
     }
@@ -1657,8 +1682,7 @@ mod warm_completion_tests {
     #[test]
     fn warm_completion_metadata_fails_fast_without_a_live_connection() {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-        let svc =
-            NavigatorService::with_context(Arc::new(ConnectionManager::new()), None, false);
+        let svc = NavigatorService::with_context(Arc::new(ConnectionManager::new()), None, false);
         let result = rt.block_on(svc.warm_completion_metadata("P_no_such_conn_710"));
         assert!(
             result.is_err(),
@@ -1737,10 +1761,11 @@ mod l1_tests {
         assert_eq!(nodes[0].name, "main");
 
         // 反证：同一服务下，没有 L1 条目的连接必须失败（否则上面的断言无意义）
-        assert!(svc
-            .load_children("P_l1_test_no_such_conn", &NavPath::Connection, None, false)
-            .await
-            .is_err());
+        assert!(
+            svc.load_children("P_l1_test_no_such_conn", &NavPath::Connection, None, false)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -1819,7 +1844,9 @@ mod l1_tests {
         }
 
         let svc = offline_service(true);
-        let _ = svc.load_children(conn_id, &NavPath::Connection, None, false).await;
+        let _ = svc
+            .load_children(conn_id, &NavPath::Connection, None, false)
+            .await;
 
         let cache = l1();
         let mut guard = cache.lock().expect("锁 L1");
@@ -1894,7 +1921,10 @@ mod l1_tests {
         let err = offline_service(false)
             .load_objects(conn_id, "main", "public", NavFolder::Tables)
             .await;
-        assert!(err.is_err(), "对象加载失败仍是失败（否则用户会以为这个 schema 下什么都没有）");
+        assert!(
+            err.is_err(),
+            "对象加载失败仍是失败（否则用户会以为这个 schema 下什么都没有）"
+        );
     }
 }
 
@@ -1908,8 +1938,8 @@ mod paging_tests {
     use std::sync::Arc;
 
     use engine::connection_manager::ConnectionManager;
-    use engine::persistence::ConnectionType;
     use engine::driver::traits::{NodeInfo, SchemaObjectKind};
+    use engine::persistence::ConnectionType;
     use engine::persistence::{MetadataCacheManager, MetadataCachePool};
 
     use super::*;
@@ -2127,11 +2157,25 @@ mod paging_tests {
         let svc = service(&root_s, false);
 
         let first = svc
-            .load_children_page(conn_id, &folder("public", NavFolder::Tables), 0, PAGE, None, false)
+            .load_children_page(
+                conn_id,
+                &folder("public", NavFolder::Tables),
+                0,
+                PAGE,
+                None,
+                false,
+            )
             .await
             .expect("首屏");
         let second = svc
-            .load_children_page(conn_id, &folder("public", NavFolder::Tables), PAGE, PAGE, None, false)
+            .load_children_page(
+                conn_id,
+                &folder("public", NavFolder::Tables),
+                PAGE,
+                PAGE,
+                None,
+                false,
+            )
             .await
             .expect("第二页");
         assert_eq!(second.nodes.len(), PAGE);
@@ -2145,7 +2189,14 @@ mod paging_tests {
         );
 
         let last = svc
-            .load_children_page(conn_id, &folder("public", NavFolder::Tables), 2 * PAGE, PAGE, None, false)
+            .load_children_page(
+                conn_id,
+                &folder("public", NavFolder::Tables),
+                2 * PAGE,
+                PAGE,
+                None,
+                false,
+            )
             .await
             .expect("末页");
         assert_eq!(last.nodes.len(), BIG - 2 * PAGE);
@@ -2163,7 +2214,14 @@ mod paging_tests {
         seed(conn_id, &root_s, "public", BIG, true, true);
 
         let page = service(&root_s, false)
-            .load_children_page(conn_id, &folder("public", NavFolder::Views), 0, PAGE, None, false)
+            .load_children_page(
+                conn_id,
+                &folder("public", NavFolder::Views),
+                0,
+                PAGE,
+                None,
+                false,
+            )
             .await
             .expect("视图文件夹应能从索引分页");
         assert_eq!(page.nodes.len(), PAGE);
@@ -2188,7 +2246,14 @@ mod paging_tests {
         seed(conn_id, &root_s, "public", 3, false, true);
 
         let page = service(&root_s, false)
-            .load_children_page(conn_id, &folder("public", NavFolder::Tables), 0, PAGE, None, false)
+            .load_children_page(
+                conn_id,
+                &folder("public", NavFolder::Tables),
+                0,
+                PAGE,
+                None,
+                false,
+            )
             .await
             .expect("小 schema 应从 L2 全量返回");
         assert_eq!(page.nodes.len(), 3);
@@ -2209,7 +2274,14 @@ mod paging_tests {
 
         assert!(
             service(&root_s, true)
-                .load_children_page(conn_id, &folder("public", NavFolder::Tables), 0, PAGE, None, false)
+                .load_children_page(
+                    conn_id,
+                    &folder("public", NavFolder::Tables),
+                    0,
+                    PAGE,
+                    None,
+                    false
+                )
                 .await
                 .is_err(),
             "刷新模式必须以实时内省为准，不得直接返回索引里的旧列表"
@@ -2230,7 +2302,14 @@ mod paging_tests {
 
         let svc = service(&root_s, false);
         let page = svc
-            .load_children_page(conn_id, &folder("public", NavFolder::Tables), 0, PAGE, None, false)
+            .load_children_page(
+                conn_id,
+                &folder("public", NavFolder::Tables),
+                0,
+                PAGE,
+                None,
+                false,
+            )
             .await
             .expect("索引缺失时应回退 L2 全量（仍不应回源库）");
         assert_eq!(page.total, BIG);
@@ -2242,9 +2321,7 @@ mod paging_tests {
             .metadata_cache();
         let mut guard = l1.lock().expect("锁 L1");
         assert!(
-            guard
-                .get_tables(conn_id, "main", Some("public"))
-                .is_none(),
+            guard.get_tables(conn_id, "main", Some("public")).is_none(),
             "大 schema 不得驻留 L1（万级对象会一直占着内存）"
         );
 
@@ -2263,8 +2340,8 @@ mod cached_folder_tests {
 
     use engine::cache::CacheManager;
     use engine::connection_manager::ConnectionManager;
-    use engine::persistence::ConnectionType;
     use engine::driver::traits::{NodeInfo, SchemaObjectKind};
+    use engine::persistence::ConnectionType;
     use engine::persistence::{MetadataCacheManager, MetadataCachePool};
 
     use super::*;
@@ -2359,12 +2436,20 @@ mod cached_folder_tests {
             let cache = NavCache::open(conn_id, Some(&root_s)).expect("打开缓存");
             cache.put_schemas("main", &["public".to_string()]);
             let sid = cache.schema_id("main", "public").expect("schema_id");
-            cache.put_sequences(sid, &[NodeInfo::new("order_seq", SchemaObjectKind::Sequence)]);
+            cache.put_sequences(
+                sid,
+                &[NodeInfo::new("order_seq", SchemaObjectKind::Sequence)],
+            );
         }
 
         let svc = service(conn_id, &root_s, false);
         let nodes = svc
-            .load_children(conn_id, &folder("public", NavFolder::Sequences), None, false)
+            .load_children(
+                conn_id,
+                &folder("public", NavFolder::Sequences),
+                None,
+                false,
+            )
             .await
             .expect("序列文件夹应从 L2 命中");
 
@@ -2419,14 +2504,22 @@ mod cached_folder_tests {
             let cache = NavCache::open(conn_id, Some(&root_s)).expect("打开缓存");
             cache.put_schemas("main", &["public".to_string()]);
             let sid = cache.schema_id("main", "public").expect("schema_id");
-            cache.put_sequences(sid, &[NodeInfo::new("order_seq", SchemaObjectKind::Sequence)]);
+            cache.put_sequences(
+                sid,
+                &[NodeInfo::new("order_seq", SchemaObjectKind::Sequence)],
+            );
         }
 
         let svc = service(conn_id, &root_s, true);
         assert!(
-            svc.load_children(conn_id, &folder("public", NavFolder::Sequences), None, false)
-                .await
-                .is_err(),
+            svc.load_children(
+                conn_id,
+                &folder("public", NavFolder::Sequences),
+                None,
+                false
+            )
+            .await
+            .is_err(),
             "刷新模式应走实时内省（空连接管理器下必然失败）"
         );
 
@@ -2444,7 +2537,14 @@ mod system_catalog_filter_tests {
 
     #[test]
     fn system_catalogs_are_detected_case_insensitively() {
-        for sys in ["information_schema", "mysql", "performance_schema", "sys", "admin", "local"] {
+        for sys in [
+            "information_schema",
+            "mysql",
+            "performance_schema",
+            "sys",
+            "admin",
+            "local",
+        ] {
             assert!(nav_is_system_catalog(sys), "小写命中: {sys}");
             assert!(
                 nav_is_system_catalog(&sys.to_ascii_uppercase()),
@@ -2463,7 +2563,10 @@ mod system_catalog_filter_tests {
             assert!(nav_is_system_schema(sys), "命中: {sys}");
         }
         assert!(nav_is_system_schema("pg_temp_1"), "PG 临时 schema 前缀");
-        assert!(nav_is_system_schema("pg_toast_temp_1234"), "PG toast 临时前缀");
+        assert!(
+            nav_is_system_schema("pg_toast_temp_1234"),
+            "PG toast 临时前缀"
+        );
         assert!(!nav_is_system_schema("public"));
         assert!(!nav_is_system_schema("main"));
         assert!(!nav_is_system_schema("app_public"));
@@ -2473,9 +2576,24 @@ mod system_catalog_filter_tests {
     fn keep_object_default_mode_hides_system_objects() {
         let none = None;
         // 默认模式（未设置白名单）：系统对象隐藏、用户对象保留。
-        assert!(!nav_keep_object("mysql", none, false, nav_is_system_catalog));
-        assert!(nav_keep_object("postgres", none, false, nav_is_system_catalog));
-        assert!(!nav_keep_object("pg_catalog", none, false, nav_is_system_schema));
+        assert!(!nav_keep_object(
+            "mysql",
+            none,
+            false,
+            nav_is_system_catalog
+        ));
+        assert!(nav_keep_object(
+            "postgres",
+            none,
+            false,
+            nav_is_system_catalog
+        ));
+        assert!(!nav_keep_object(
+            "pg_catalog",
+            none,
+            false,
+            nav_is_system_schema
+        ));
         assert!(nav_keep_object("public", none, false, nav_is_system_schema));
     }
 
@@ -2484,12 +2602,32 @@ mod system_catalog_filter_tests {
         let set = BTreeSet::from(["mysql".to_string(), "analytics".to_string()]);
         let visible = Some(&set);
         // 白名单模式：原样展示集合里的名字（含系统对象）。
-        assert!(nav_keep_object("mysql", visible, false, nav_is_system_catalog));
-        assert!(nav_keep_object("analytics", visible, false, nav_is_system_catalog));
-        assert!(!nav_keep_object("postgres", visible, false, nav_is_system_catalog));
+        assert!(nav_keep_object(
+            "mysql",
+            visible,
+            false,
+            nav_is_system_catalog
+        ));
+        assert!(nav_keep_object(
+            "analytics",
+            visible,
+            false,
+            nav_is_system_catalog
+        ));
+        assert!(!nav_keep_object(
+            "postgres",
+            visible,
+            false,
+            nav_is_system_catalog
+        ));
         // 空集合 = 显式全隐藏（弹框里全部取消勾选）。
         let empty = BTreeSet::new();
-        assert!(!nav_keep_object("analytics", Some(&empty), false, nav_is_system_catalog));
+        assert!(!nav_keep_object(
+            "analytics",
+            Some(&empty),
+            false,
+            nav_is_system_catalog
+        ));
     }
 
     // P1 导航设置（2026-10-25）：show_system 只影响默认模式，与白名单模式正交。
@@ -2498,16 +2636,46 @@ mod system_catalog_filter_tests {
         let none = None;
         // 开 × 默认：系统对象不再隐藏；用户对象照旧保留。
         assert!(nav_keep_object("mysql", none, true, nav_is_system_catalog));
-        assert!(nav_keep_object("postgres", none, true, nav_is_system_catalog));
-        assert!(nav_keep_object("pg_catalog", none, true, nav_is_system_schema));
+        assert!(nav_keep_object(
+            "postgres",
+            none,
+            true,
+            nav_is_system_catalog
+        ));
+        assert!(nav_keep_object(
+            "pg_catalog",
+            none,
+            true,
+            nav_is_system_schema
+        ));
         assert!(nav_keep_object("public", none, true, nav_is_system_schema));
         // 开 × 白名单：仍只展示集合里的名字（开关不改变白名单口径）。
         let set = BTreeSet::from(["analytics".to_string()]);
         let visible = Some(&set);
-        assert!(!nav_keep_object("mysql", visible, true, nav_is_system_catalog));
-        assert!(nav_keep_object("analytics", visible, true, nav_is_system_catalog));
+        assert!(!nav_keep_object(
+            "mysql",
+            visible,
+            true,
+            nav_is_system_catalog
+        ));
+        assert!(nav_keep_object(
+            "analytics",
+            visible,
+            true,
+            nav_is_system_catalog
+        ));
         // 关 × 默认 / 关 × 白名单：见上两条用例（此处补断言完整性）。
-        assert!(!nav_keep_object("pg_catalog", none, false, nav_is_system_schema));
-        assert!(!nav_keep_object("mysql", visible, false, nav_is_system_catalog));
+        assert!(!nav_keep_object(
+            "pg_catalog",
+            none,
+            false,
+            nav_is_system_schema
+        ));
+        assert!(!nav_keep_object(
+            "mysql",
+            visible,
+            false,
+            nav_is_system_catalog
+        ));
     }
 }

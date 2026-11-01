@@ -26,7 +26,7 @@ use jupyter_protocol::{ConnectionInfo, ExecutionState, Media, Transport};
 use jupyter_zmq_client::{
     ClientControlConnection, ClientIoPubConnection, ClientShellConnection,
     create_client_control_connection, create_client_iopub_connection,
-    create_client_shell_connection_with_identity, peer_identity_for_session, peek_ports,
+    create_client_shell_connection_with_identity, peek_ports, peer_identity_for_session,
     wait_for_iopub_welcome,
 };
 use tokio::sync::mpsc;
@@ -70,7 +70,11 @@ pub enum KernelEvent {
         execution_count: Option<i64>,
     },
     /// 执行错误（traceback 逐行文本）
-    Error { ename: String, evalue: String, traceback: Vec<String> },
+    Error {
+        ename: String,
+        evalue: String,
+        traceback: Vec<String>,
+    },
     /// 通道层失败（连接断开 / 协议错 / 内核崩溃）；此后会话不可用
     Failed(String),
 }
@@ -177,7 +181,8 @@ struct LaunchParts {
 async fn run_kernel_launch(
     python: &Path,
     ready: tokio::sync::oneshot::Sender<Result<LaunchParts>>,
-) -> Result<()> {    let session_id = new_session_id();
+) -> Result<()> {
+    let session_id = new_session_id();
     let launched = async {
         // 1. 挑 5 个空闲端口（顺序 = shell / iopub / stdin / control / hb，与 connection file 字段对应）
         let ports = peek_ports(std::net::IpAddr::from([127, 0, 0, 1]), 5)
@@ -217,13 +222,10 @@ async fn run_kernel_launch(
             .await
             .context("连接 iopub 失败")?;
         let shell_identity = peer_identity_for_session(&session_id)?;
-        let shell = create_client_shell_connection_with_identity(
-            &info,
-            &session_id,
-            shell_identity,
-        )
-        .await
-        .context("连接 shell 失败")?;
+        let shell =
+            create_client_shell_connection_with_identity(&info, &session_id, shell_identity)
+                .await
+                .context("连接 shell 失败")?;
         let control = create_client_control_connection(&info, &session_id)
             .await
             .context("连接 control 失败")?;
@@ -417,7 +419,11 @@ fn new_key_hex() -> String {
 
 /// 写 connection file（JSON；内核进程启动参数指向它）
 fn write_connection_file(info: &ConnectionInfo) -> Result<PathBuf> {
-    let path = std::env::temp_dir().join(format!("rds-kernel-{}-{}.json", std::process::id(), new_key_hex()));
+    let path = std::env::temp_dir().join(format!(
+        "rds-kernel-{}-{}.json",
+        std::process::id(),
+        new_key_hex()
+    ));
     let json = serde_json::to_vec_pretty(info).context("序列化 connection file 失败")?;
     std::fs::write(&path, json).context("写 connection file 失败")?;
     Ok(path)
@@ -467,8 +473,7 @@ mod tests {
     #[test]
     #[ignore = "需要本机安装 ipykernel（RDS_KERNEL_PYTHON 指向对应解释器）"]
     fn launches_python_kernel_and_executes_code() {
-        let python =
-            std::env::var("RDS_KERNEL_PYTHON").unwrap_or_else(|_| "python".to_string());
+        let python = std::env::var("RDS_KERNEL_PYTHON").unwrap_or_else(|_| "python".to_string());
         let mut session = KernelSession::spawn(Path::new(&python))
             .unwrap_or_else(|e| panic!("启动内核失败（python={python}）：{e:#}"));
         let mut events = session.take_events();
@@ -511,8 +516,7 @@ mod tests {
     #[test]
     #[ignore = "需要本机安装 ipykernel（RDS_KERNEL_PYTHON 指向对应解释器）"]
     fn kernel_delivers_rich_display_error_and_reply() {
-        let python =
-            std::env::var("RDS_KERNEL_PYTHON").unwrap_or_else(|_| "python".to_string());
+        let python = std::env::var("RDS_KERNEL_PYTHON").unwrap_or_else(|_| "python".to_string());
         let mut session = KernelSession::spawn(Path::new(&python))
             .unwrap_or_else(|e| panic!("启动内核失败（python={python}）：{e:#}"));
         let mut events = session.take_events();

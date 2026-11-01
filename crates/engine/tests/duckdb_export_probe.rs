@@ -26,9 +26,7 @@
 use serde_json::{Value, json};
 
 use rds_engine::services::duckdb_service::DuckDbService;
-use rds_engine::services::execution_service::{
-    DuckDbExportFormat, export_rows_via_duckdb,
-};
+use rds_engine::services::execution_service::{DuckDbExportFormat, export_rows_via_duckdb};
 
 /// 探测用的三行（含一个 NULL）：数字 / 文本 / 空
 fn probe_rows() -> (Vec<String>, Vec<Vec<Value>>) {
@@ -60,7 +58,10 @@ fn parquet_export_lands_and_reads_back() {
         .expect("Parquet 导出（内核自带，不需要扩展）");
     let size = std::fs::metadata(&path).expect("文件应当写出来").len();
     assert!(size > 0, "Parquet 文件不该是空的");
-    println!("✅ Parquet：{} 行 / {size} 字节 / {} ms", stats.rows, stats.elapsed_ms);
+    println!(
+        "✅ Parquet：{} 行 / {size} 字节 / {} ms",
+        stats.rows, stats.elapsed_ms
+    );
 
     let duckdb = DuckDbService::get_or_create_duckdb().expect("内存库");
     let mut conn = duckdb.lock().expect("锁");
@@ -86,11 +87,9 @@ fn excel_extension_state_is_visible() {
     let duckdb = DuckDbService::get_or_create_duckdb().expect("内存库");
     let mut conn = duckdb.lock().expect("锁");
 
-    let (_, dir) = DuckDbService::query_duckdb(
-        &mut conn,
-        "SELECT current_setting('extension_directory')",
-    )
-    .expect("扩展目录");
+    let (_, dir) =
+        DuckDbService::query_duckdb(&mut conn, "SELECT current_setting('extension_directory')")
+            .expect("扩展目录");
     println!("扩展目录：{dir:?}");
 
     let _ = conn.execute_batch("LOAD excel");
@@ -136,7 +135,10 @@ fn xlsx_export_lands_and_reads_back() {
     };
     let size = std::fs::metadata(&path).expect("文件应当写出来").len();
     assert!(size > 0, "XLSX 文件不该是空的");
-    println!("✅ XLSX：{} 行 / {size} 字节 / {} ms", stats.rows, stats.elapsed_ms);
+    println!(
+        "✅ XLSX：{} 行 / {size} 字节 / {} ms",
+        stats.rows, stats.elapsed_ms
+    );
 
     // 读回来（同一个扩展负责读）：`header = true` 才会把第一行当列名
     // （不传的话列名是 `A1` / `A2` 这种单元格坐标——探针第一版就摔在这里）
@@ -149,7 +151,11 @@ fn xlsx_export_lands_and_reads_back() {
     )
     .expect("读回 XLSX");
     println!("✅ XLSX 读回：列 = {cols:?}，行 = {got:?}");
-    assert_eq!(cols, vec!["id".to_string(), "name".to_string()], "导出要带表头");
+    assert_eq!(
+        cols,
+        vec!["id".to_string(), "name".to_string()],
+        "导出要带表头"
+    );
     assert_eq!(got.len(), 3, "三行都要在");
     // 数字在 xlsx 里是双精度（表格软件的存储就是 double），所以按数值比而不是按字面
     assert_eq!(got[0][0].as_f64(), Some(1.0));

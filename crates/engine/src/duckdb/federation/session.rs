@@ -131,7 +131,9 @@ impl FederatedSession {
     /// 错误文本先脱敏：源连接串是带凭据的，驱动报错可能把它回显出来。
     pub fn run(&self, sql: &str) -> Result<QueryResult, CoreError> {
         if let Some(reason) = self.l2_write_refusal(sql) {
-            return Err(CoreError::common(shared::error::CommonError::General(reason)));
+            return Err(CoreError::common(shared::error::CommonError::General(
+                reason,
+            )));
         }
         let conn = self.lock()?;
         run_sql_on(&conn, &self.running, sql).map_err(|error| self.scrub_error(error))
@@ -189,7 +191,12 @@ impl FederatedSession {
             .unwrap_or(false);
 
         conn.execute_batch(&format!("USE memory; DETACH {alias}"))
-            .map_err(|error| scrub_error(&source.connection_string, format!("卸载 {alias} 失败：{error}")))?;
+            .map_err(|error| {
+                scrub_error(
+                    &source.connection_string,
+                    format!("卸载 {alias} 失败：{error}"),
+                )
+            })?;
         // 重挂走与 `open` 同一条实现：L2 的 Secret 在这里重建（口令可能有变）
         let state = attach_source(&conn, &source);
 
@@ -334,7 +341,8 @@ fn mentions_alias(sql: &str, alias: &str) -> bool {
 
 /// 开一条按产品纪律配置好的内存连接（扩展目录 / 内存闸 / 溢写口 / 不静默联网）
 fn open_configured() -> Result<Connection, String> {
-    let conn = Connection::open_in_memory().map_err(|error| format!("开联邦分析连接失败：{error}"))?;
+    let conn =
+        Connection::open_in_memory().map_err(|error| format!("开联邦分析连接失败：{error}"))?;
     DuckDBManager::configure_connection(&conn)
         .map_err(|error| format!("配置联邦分析连接失败：{error}"))?;
     Ok(conn)
@@ -552,7 +560,11 @@ pub fn ensure_session(
 
 /// 已建立的会话（**不做 I/O**；没有就是 `None`）
 pub fn session_for(owner: &str) -> Option<Arc<FederatedSession>> {
-    SESSIONS.lock().ok()?.get(owner).map(|cached| cached.session.clone())
+    SESSIONS
+        .lock()
+        .ok()?
+        .get(owner)
+        .map(|cached| cached.session.clone())
 }
 
 /// 会话快照（**渲染路径可调**：纯内存；没有会话就是 `None`）
@@ -584,14 +596,15 @@ pub fn cancel(owner: &str) -> Option<Result<bool, String>> {
 
 /// 切换主源（没有会话就是错误：**不替用户建一条**，那是执行路径的事）
 pub fn set_primary(owner: &str, alias: &str) -> Result<(), String> {
-    let session = session_for(owner).ok_or_else(|| "还没有联邦会话：先执行一次再切换主源".to_string())?;
+    let session =
+        session_for(owner).ok_or_else(|| "还没有联邦会话：先执行一次再切换主源".to_string())?;
     session.set_primary(alias)
 }
 
 /// 按源重挂（表清单刷新；没有会话就是错误，理由同上）
 pub fn refresh_source(owner: &str, alias: &str) -> Result<(), String> {
-    let session = session_for(owner)
-        .ok_or_else(|| "还没有联邦会话：先执行一次再刷新源".to_string())?;
+    let session =
+        session_for(owner).ok_or_else(|| "还没有联邦会话：先执行一次再刷新源".to_string())?;
     session.refresh(alias)
 }
 
@@ -599,8 +612,8 @@ pub fn refresh_source(owner: &str, alias: &str) -> Result<(), String> {
 ///
 /// 返回**逐源结果**：失败的源如实带原因（不吞、不合并成一句“部分失败”）。
 pub fn refresh_all(owner: &str) -> Result<Vec<(String, Result<(), String>)>, String> {
-    let session = session_for(owner)
-        .ok_or_else(|| "还没有联邦会话：先执行一次再刷新源".to_string())?;
+    let session =
+        session_for(owner).ok_or_else(|| "还没有联邦会话：先执行一次再刷新源".to_string())?;
     let aliases: Vec<String> = session
         .snapshot()
         .sources
@@ -679,7 +692,9 @@ mod tests {
         assert!(snapshot.primary_note.is_none());
 
         // 未限定名走主源
-        let result = session.run("SELECT count(*) AS n FROM items").expect("主源可查");
+        let result = session
+            .run("SELECT count(*) AS n FROM items")
+            .expect("主源可查");
         assert_eq!(result.to_rows()[0][0].to_string(), "3");
 
         // 跨源 join 用限定名
@@ -711,7 +726,11 @@ mod tests {
         assert_eq!(snapshot.ready_count(), 1, "{snapshot:?}");
         assert_eq!(snapshot.primary.as_deref(), Some("good"), "回退到可用源");
         assert!(
-            snapshot.primary_note.as_deref().unwrap_or("").contains("missing"),
+            snapshot
+                .primary_note
+                .as_deref()
+                .unwrap_or("")
+                .contains("missing"),
             "回退要说出来：{:?}",
             snapshot.primary_note
         );
@@ -723,7 +742,9 @@ mod tests {
             .expect("失败源不该消失");
         assert!(matches!(failed.state, MountState::Failed(_)), "{failed:?}");
 
-        let result = session.run("SELECT count(*) AS n FROM items").expect("可用源照查");
+        let result = session
+            .run("SELECT count(*) AS n FROM items")
+            .expect("可用源照查");
         assert_eq!(result.to_rows()[0][0].to_string(), "2");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -750,8 +771,8 @@ mod tests {
         let dir = workdir("refresh");
         let first = file_source(&dir, "first", "first", 1);
         let second = file_source(&dir, "second", "second", 2);
-        let session =
-            FederatedSession::open(&[first.clone(), second.clone()], Some("first")).expect("建会话");
+        let session = FederatedSession::open(&[first.clone(), second.clone()], Some("first"))
+            .expect("建会话");
 
         // 重挂：状态仍是可用、表数正确，主源没丢
         session.refresh("first").expect("重挂");
@@ -763,7 +784,9 @@ mod tests {
             .expect("源还在");
         assert!(entry.is_ready(), "重挂后该是可用的：{entry:?}");
         assert_eq!(snapshot.primary.as_deref(), Some("first"));
-        let result = session.run("SELECT count(*) AS n FROM items").expect("主源照常");
+        let result = session
+            .run("SELECT count(*) AS n FROM items")
+            .expect("主源照常");
         assert_eq!(result.to_rows()[0][0].to_string(), "1");
 
         // 切主源：未限定名解析到 second（items 行数从 1 变 2）
@@ -823,7 +846,10 @@ mod tests {
             } else {
                 Some("ora")
             };
-            assert!(write_refusal(&mounted, primary, sql).is_some(), "该拒：{sql}");
+            assert!(
+                write_refusal(&mounted, primary, sql).is_some(),
+                "该拒：{sql}"
+            );
         }
 
         // 放行的一侧：别名长得像但不是一个名字、写 L1（由 READ_ONLY 拦）、本地对象、读语句
@@ -835,7 +861,10 @@ mod tests {
             (Some("wh"), "SELECT * FROM ora.T"),
             (Some("ora"), "WITH x AS (SELECT 1 AS n) SELECT n FROM x"),
         ] {
-            assert!(write_refusal(&mounted, primary, sql).is_none(), "不该拦：{sql}");
+            assert!(
+                write_refusal(&mounted, primary, sql).is_none(),
+                "不该拦：{sql}"
+            );
         }
     }
 
@@ -855,8 +884,16 @@ mod tests {
         let beta = file_source(&dir, "beta", "beta", 1);
 
         let one = super::source_fingerprint(&[alpha.clone()]);
-        assert_eq!(one, super::source_fingerprint(&[alpha.clone()]), "同样输入同指纹");
-        assert_ne!(one, super::source_fingerprint(&[alpha, beta]), "多一个源就要换指纹");
+        assert_eq!(
+            one,
+            super::source_fingerprint(&[alpha.clone()]),
+            "同样输入同指纹"
+        );
+        assert_ne!(
+            one,
+            super::source_fingerprint(&[alpha, beta]),
+            "多一个源就要换指纹"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -869,22 +906,24 @@ mod tests {
         let gamma = file_source(&dir, "gamma", "gamma", 3);
         let owner = "C_fed_cache";
 
-        let first =
-            super::ensure_session(owner, &[alpha.clone(), beta.clone()], Some("alpha"))
-                .expect("建会话");
-        let count = first.run("SELECT count(*) AS n FROM items").expect("查主源");
+        let first = super::ensure_session(owner, &[alpha.clone(), beta.clone()], Some("alpha"))
+            .expect("建会话");
+        let count = first
+            .run("SELECT count(*) AS n FROM items")
+            .expect("查主源");
         assert_eq!(count.to_rows()[0][0].to_string(), "1", "主源是 alpha");
 
         // 源集合没变：复用同一条会话，**换主源只是在会话上切 `USE`**
         first
             .run("CREATE TEMP TABLE scratch AS SELECT 7 AS n")
             .expect("建本地临时表");
-        let switched =
-            super::ensure_session(owner, &[alpha.clone(), beta.clone()], Some("beta"))
-                .expect("复用会话");
+        let switched = super::ensure_session(owner, &[alpha.clone(), beta.clone()], Some("beta"))
+            .expect("复用会话");
         assert!(Arc::ptr_eq(&first, &switched), "换主源不该重建会话");
         assert_eq!(switched.snapshot().primary.as_deref(), Some("beta"));
-        let count = switched.run("SELECT count(*) AS n FROM items").expect("查新主源");
+        let count = switched
+            .run("SELECT count(*) AS n FROM items")
+            .expect("查新主源");
         assert_eq!(count.to_rows()[0][0].to_string(), "2", "未限定名跟主源走");
         let scratch = switched
             .run("SELECT count(*) AS n FROM scratch")
@@ -897,7 +936,9 @@ mod tests {
         let snapshot = rebuilt.snapshot();
         assert_eq!(snapshot.sources.len(), 1, "{snapshot:?}");
         assert_eq!(snapshot.primary.as_deref(), Some("gamma"));
-        let count = rebuilt.run("SELECT count(*) AS n FROM items").expect("查新源");
+        let count = rebuilt
+            .run("SELECT count(*) AS n FROM items")
+            .expect("查新源");
         assert_eq!(count.to_rows()[0][0].to_string(), "3");
 
         // 会话查询 / 注销（界面与中断路径用这两个）

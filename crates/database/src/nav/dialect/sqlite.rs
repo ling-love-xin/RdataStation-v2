@@ -143,7 +143,8 @@ mod tests {
             "DROP TABLE \"t_user\""
         );
         assert_eq!(
-            d.drop_sql(ObjectKind::View, None, "v_active", None).unwrap(),
+            d.drop_sql(ObjectKind::View, None, "v_active", None)
+                .unwrap(),
             "DROP VIEW \"v_active\""
         );
     }

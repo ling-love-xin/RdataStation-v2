@@ -367,9 +367,11 @@ mod tests {
 
         manager.create_plugin_connection("test-plugin", PluginPermissionLevel::ReadOnly)?;
 
-        assert!(manager
-            .create_plugin_connection("test-plugin", PluginPermissionLevel::ReadWrite)
-            .is_err());
+        assert!(
+            manager
+                .create_plugin_connection("test-plugin", PluginPermissionLevel::ReadWrite)
+                .is_err()
+        );
         Ok(())
     }
 
@@ -380,19 +382,25 @@ mod tests {
         manager.create_plugin_connection("readonly-plugin", PluginPermissionLevel::ReadOnly)?;
 
         // 允许 SELECT
-        assert!(manager
-            .validate_plugin_sql("readonly-plugin", "SELECT * FROM users")
-            .is_ok());
+        assert!(
+            manager
+                .validate_plugin_sql("readonly-plugin", "SELECT * FROM users")
+                .is_ok()
+        );
 
         // 禁止 INSERT
-        assert!(manager
-            .validate_plugin_sql("readonly-plugin", "INSERT INTO users VALUES (1)")
-            .is_err());
+        assert!(
+            manager
+                .validate_plugin_sql("readonly-plugin", "INSERT INTO users VALUES (1)")
+                .is_err()
+        );
 
         // 禁止 ATTACH
-        assert!(manager
-            .validate_plugin_sql("readonly-plugin", "ATTACH 'db.duckdb'")
-            .is_err());
+        assert!(
+            manager
+                .validate_plugin_sql("readonly-plugin", "ATTACH 'db.duckdb'")
+                .is_err()
+        );
         Ok(())
     }
 
@@ -403,14 +411,18 @@ mod tests {
         manager.create_plugin_connection("rw-plugin", PluginPermissionLevel::ReadWrite)?;
 
         // 允许 INSERT
-        assert!(manager
-            .validate_plugin_sql("rw-plugin", "INSERT INTO users VALUES (1)")
-            .is_ok());
+        assert!(
+            manager
+                .validate_plugin_sql("rw-plugin", "INSERT INTO users VALUES (1)")
+                .is_ok()
+        );
 
         // 禁止 ATTACH
-        assert!(manager
-            .validate_plugin_sql("rw-plugin", "ATTACH 'db.duckdb'")
-            .is_err());
+        assert!(
+            manager
+                .validate_plugin_sql("rw-plugin", "ATTACH 'db.duckdb'")
+                .is_err()
+        );
         Ok(())
     }
 
@@ -421,9 +433,11 @@ mod tests {
         manager.create_plugin_connection("admin-plugin", PluginPermissionLevel::Admin)?;
 
         // 允许 ATTACH
-        assert!(manager
-            .validate_plugin_sql("admin-plugin", "ATTACH 'db.duckdb' AS db")
-            .is_ok());
+        assert!(
+            manager
+                .validate_plugin_sql("admin-plugin", "ATTACH 'db.duckdb' AS db")
+                .is_ok()
+        );
         Ok(())
     }
 
@@ -433,16 +447,20 @@ mod tests {
 
         manager.create_plugin_connection("rw-plugin", PluginPermissionLevel::ReadWrite)?;
 
-        assert!(manager
-            .attach_plugin_temp_table("rw-plugin", "tmp_p_test_20260512143040")
-            .is_ok());
+        assert!(
+            manager
+                .attach_plugin_temp_table("rw-plugin", "tmp_p_test_20260512143040")
+                .is_ok()
+        );
 
         // 只读插件禁止创建临时表
         manager.create_plugin_connection("ro-plugin", PluginPermissionLevel::ReadOnly)?;
 
-        assert!(manager
-            .attach_plugin_temp_table("ro-plugin", "tmp_p_test2_20260512143040")
-            .is_err());
+        assert!(
+            manager
+                .attach_plugin_temp_table("ro-plugin", "tmp_p_test2_20260512143040")
+                .is_err()
+        );
         Ok(())
     }
 

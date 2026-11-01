@@ -13,13 +13,12 @@ use crate::sql_gen::DmlKind;
 use engine::persistence::NameMatchMode;
 
 use super::hits::{
-    search_targets, SearchConsumer, SearchKind,
-    SearchResult, SearchTarget, SEARCH_MAX_HITS, SEARCH_PARALLEL,
+    SEARCH_MAX_HITS, SEARCH_PARALLEL, SearchConsumer, SearchKind, SearchResult, SearchTarget,
+    search_targets,
 };
 use super::model::{
-    ColumnTarget, ConnectResult, LoadResult, PropsResult, RowEstimateResult, SqlGenResult,
-    TestConnResult, JOB_TIMEOUT, PAGE_SIZE,
-    parse_name_value_pairs, timeout_error,
+    ColumnTarget, ConnectResult, JOB_TIMEOUT, LoadResult, PAGE_SIZE, PropsResult,
+    RowEstimateResult, SqlGenResult, TestConnResult, parse_name_value_pairs, timeout_error,
 };
 
 /// 每连接元数据任务并发上限 = 1：同连接内省 / 属性 / 取列严格串行（驱动单连接 Mutex
@@ -102,7 +101,10 @@ pub(super) fn acquire_meta_permit(
 ) {
     let per_conn = per_conn_semaphore(conn_id);
     rt.block_on(async move {
-        let per = per_conn.acquire_owned().await.expect("per-conn 信号量不会关闭");
+        let per = per_conn
+            .acquire_owned()
+            .await
+            .expect("per-conn 信号量不会关闭");
         let global = global_load_semaphore()
             .acquire_owned()
             .await
@@ -992,8 +994,11 @@ pub(super) fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             let estimates = match est_sql {
                 Some(sql) => {
                     let outcome = rt.block_on(async {
-                        tokio::time::timeout(JOB_TIMEOUT, svc.execute_query(&conn_id, &catalog, &sql))
-                            .await
+                        tokio::time::timeout(
+                            JOB_TIMEOUT,
+                            svc.execute_query(&conn_id, &catalog, &sql),
+                        )
+                        .await
                     });
                     match outcome {
                         Ok(Ok(result)) => parse_name_value_pairs(result.rows),
@@ -1006,8 +1011,11 @@ pub(super) fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             let sizes = match size_sql {
                 Some(sql) => {
                     let outcome = rt.block_on(async {
-                        tokio::time::timeout(JOB_TIMEOUT, svc.execute_query(&conn_id, &catalog, &sql))
-                            .await
+                        tokio::time::timeout(
+                            JOB_TIMEOUT,
+                            svc.execute_query(&conn_id, &catalog, &sql),
+                        )
+                        .await
                     });
                     match outcome {
                         Ok(Ok(result)) => parse_name_value_pairs(result.rows),
@@ -1179,9 +1187,7 @@ pub(super) fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                             hits.extend(h);
                         }
                         Err(_) => {
-                            tracing::error!(
-                                "并行索引搜索块执行失败（该块无结果，本次搜索继续）"
-                            );
+                            tracing::error!("并行索引搜索块执行失败（该块无结果，本次搜索继续）");
                         }
                     }
                 }
@@ -1507,7 +1513,9 @@ pub fn enqueue_row_estimate(
     if dialect.row_estimate_sql(schema).is_none() && dialect.table_size_sql(schema).is_none() {
         return;
     }
-    shared().pending_row_estimates.fetch_add(1, Ordering::SeqCst);
+    shared()
+        .pending_row_estimates
+        .fetch_add(1, Ordering::SeqCst);
     submit(
         Job::RowEstimate {
             conn_id: conn_id.to_string(),
@@ -1520,7 +1528,7 @@ pub fn enqueue_row_estimate(
         JobPriority::Background,
     );
 }
-    /// 某消费方是否仍有未完成的索引搜索。
+/// 某消费方是否仍有未完成的索引搜索。
 pub fn has_pending_search(consumer: SearchConsumer) -> bool {
     shared().pending_search[consumer.ix()].load(Ordering::SeqCst) > 0
 }

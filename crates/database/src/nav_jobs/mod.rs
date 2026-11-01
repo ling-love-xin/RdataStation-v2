@@ -27,28 +27,28 @@
 
 mod hits;
 mod model;
-mod worker;
 #[cfg(test)]
 mod tests;
+mod worker;
 
 pub use hits::{
-    HitSource, NameMatchMode, SearchConsumer, SearchHit, SearchKind, SearchResult, SearchTarget,
-    SEARCH_LIMIT_PER_CONN, SEARCH_MAX_HITS, SEARCH_PARALLEL,
+    HitSource, NameMatchMode, SEARCH_LIMIT_PER_CONN, SEARCH_MAX_HITS, SEARCH_PARALLEL,
+    SearchConsumer, SearchHit, SearchKind, SearchResult, SearchTarget,
 };
 pub use model::{
-    ColumnTarget, ConnectResult, LoadResult, PropsResult, RowEstimateResult, SqlGenResult,
-    TestConnResult, JOB_TIMEOUT, PAGE_SIZE, PREFETCH_BATCH, ROW_ESTIMATE_MIN_TABLES,
+    ColumnTarget, ConnectResult, JOB_TIMEOUT, LoadResult, PAGE_SIZE, PREFETCH_BATCH, PropsResult,
+    ROW_ESTIMATE_MIN_TABLES, RowEstimateResult, SqlGenResult, TestConnResult,
 };
 pub use worker::{
-    cancel_warm, connect_pending_dec, connect_pending_inc, drain_connect_results, drain_load_results,
-    drain_props_results, drain_row_estimates, drain_search_results, drain_sql_results,
-    drain_test_results, drop_conn_sem, enqueue_generate_dml, enqueue_load, enqueue_load_page,
-    enqueue_locate_page, enqueue_properties, enqueue_row_estimate, enqueue_search,
-    enqueue_test_connection, enqueue_warm_completion, has_pending_connect, has_pending_loads,
-    has_pending_props, has_pending_row_estimates, has_pending_search, has_pending_sql,
-    has_pending_test, JobPriority, nav_result_is_stale, picker_catalog_schemas, prefetch_columns,
-    push_search_results_for_test, submit_connect_outcome, warm_active, warm_after_connect,
-    warm_progress,
+    JobPriority, cancel_warm, connect_pending_dec, connect_pending_inc, drain_connect_results,
+    drain_load_results, drain_props_results, drain_row_estimates, drain_search_results,
+    drain_sql_results, drain_test_results, drop_conn_sem, enqueue_generate_dml, enqueue_load,
+    enqueue_load_page, enqueue_locate_page, enqueue_properties, enqueue_row_estimate,
+    enqueue_search, enqueue_test_connection, enqueue_warm_completion, has_pending_connect,
+    has_pending_loads, has_pending_props, has_pending_row_estimates, has_pending_search,
+    has_pending_sql, has_pending_test, nav_result_is_stale, picker_catalog_schemas,
+    prefetch_columns, push_search_results_for_test, submit_connect_outcome, warm_active,
+    warm_after_connect, warm_progress,
 };
 
 // 泵间隔常量供 nav_view 回填泵使用（对外不可见）。
@@ -56,6 +56,8 @@ pub(crate) use worker::NAV_PUMP_INTERVAL_MS;
 
 // 调度 / 搜索内部项仅供 tests 引用（对外不可见）。
 #[cfg(test)]
-pub(crate) use hits::{fts_hit_to_search_hit, fts_type_to_object_kind, nav_split_two_segment, search_targets};
+pub(crate) use hits::{
+    fts_hit_to_search_hit, fts_type_to_object_kind, nav_split_two_segment, search_targets,
+};
 #[cfg(test)]
-pub(crate) use worker::{lock, per_conn_semaphore, shared, submit, Job, QueuedJob, Shared};
+pub(crate) use worker::{Job, QueuedJob, Shared, lock, per_conn_semaphore, shared, submit};

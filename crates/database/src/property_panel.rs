@@ -16,8 +16,7 @@ use crate::table_data::{self, TableDataRequest};
 use engine::driver::traits::SchemaObjectKind;
 use property::{
     ObjectOverview, ObjectProperties, PageId, PropertyKind, PropertyRow, PropertySection,
-    PropertyTable, PropertyTargetRef, ProviderInput, ProviderStats,
-    TableDataPage,
+    PropertyTable, PropertyTargetRef, ProviderInput, ProviderStats, TableDataPage,
 };
 use shared::error::CoreError;
 
@@ -197,19 +196,14 @@ pub async fn load_properties(
         index_count: indexes.len(),
         constraint_count: constraints.len(),
     };
-    let provider =
-        global_registry().provider(type_id.unwrap_or(driver), ref_.kind);
+    let provider = global_registry().provider(type_id.unwrap_or(driver), ref_.kind);
 
     // 调用方统计（洞察指标）：连接元信息（在线状态 / 服务端版本 / URL / 描述 /
     // 认证·环境·网络引用） + provider 声明的懒加载查询（行估计 / 表大小等）。
     // 连接对象 provider 从 `counts` 组装常规 + 引用行（引用显示来源 ID 且只读，
     // 2026-10-24 连接对象属性组装 P0-3）；`version` 供 duckdb/mysql 连接行读。
     let mut counts: Vec<(&str, String)> = Vec::new();
-    if let Some(info) = metadata
-        .manager()
-        .get_connection_info(&ref_.conn_id)
-        .await
-    {
+    if let Some(info) = metadata.manager().get_connection_info(&ref_.conn_id).await {
         counts.push(("connected", "true".to_string()));
         if let Some(v) = info.server_version {
             counts.push(("server_version", v.clone()));
@@ -246,7 +240,10 @@ pub async fn load_properties(
         if let Some(global) = engine::migration::global_init::get_global_db_manager() {
             if let Some(id) = info.auth_config_id.as_deref() {
                 if let Ok(Some(a)) = global.get_auth_config(id).await {
-                    counts.push(("auth_name", a.name.clone().unwrap_or_else(|| id.to_string())));
+                    counts.push((
+                        "auth_name",
+                        a.name.clone().unwrap_or_else(|| id.to_string()),
+                    ));
                     if !a.auth_type.is_empty() {
                         counts.push(("auth_type", a.auth_type.clone()));
                     }
@@ -254,7 +251,10 @@ pub async fn load_properties(
             }
             if let Some(id) = info.network_config_id.as_deref() {
                 if let Ok(Some(n)) = global.get_network_config(id).await {
-                    counts.push(("network_name", n.name.clone().unwrap_or_else(|| id.to_string())));
+                    counts.push((
+                        "network_name",
+                        n.name.clone().unwrap_or_else(|| id.to_string()),
+                    ));
                     if !n.network_type.is_empty() {
                         counts.push(("network_type", n.network_type.clone()));
                     }
@@ -298,7 +298,11 @@ pub async fn load_properties(
         // 补充查询结果按行数分流：单行 → 洞察 counts；多行 → Select 候选（首列全量）。
         for q in p.extra_queries(&pre_input) {
             if let Ok(res) = metadata
-                .execute_query(&ref_.conn_id, ref_.catalog.as_deref().unwrap_or("main"), &q.sql)
+                .execute_query(
+                    &ref_.conn_id,
+                    ref_.catalog.as_deref().unwrap_or("main"),
+                    &q.sql,
+                )
                 .await
             {
                 if res.rows.is_empty() {
@@ -328,9 +332,7 @@ pub async fn load_properties(
                 stats,
                 counts: &counts,
                 candidates: &candidates,
-                detail: column_detail
-                    .as_ref()
-                    .map(|c| c as &dyn std::any::Any),
+                detail: column_detail.as_ref().map(|c| c as &dyn std::any::Any),
             };
             (
                 p.property_defs(&input),
@@ -340,7 +342,18 @@ pub async fn load_properties(
         }
         // 未注册 provider：通用展示（fallback，保留旧行为）。
         None => (
-            fallback_properties(ref_, conn_label, driver, db_type, &source, &columns, &indexes, &constraints, &routine_source, &ddl_text),
+            fallback_properties(
+                ref_,
+                conn_label,
+                driver,
+                db_type,
+                &source,
+                &columns,
+                &indexes,
+                &constraints,
+                &routine_source,
+                &ddl_text,
+            ),
             fallback_overview(ref_, &title, &object_type, &source, &stats),
             fallback_categories(),
         ),
@@ -420,12 +433,8 @@ fn sections_of(
                 })
             } else if kind == PropertyKind::Table {
                 // 取不到源（PostgreSQL 无 SHOW CREATE 等价物）→ 目录信息合成。
-                let composed = crate::sql_gen::create_table_ddl(
-                    qualified,
-                    columns,
-                    constraints,
-                    indexes,
-                );
+                let composed =
+                    crate::sql_gen::create_table_ddl(qualified, columns, constraints, indexes);
                 Some(PropertySection {
                     id: PageId::Ddl,
                     label: "DDL（合成）".to_string(),
@@ -484,7 +493,14 @@ fn fallback_properties(
         }
         PropertyKind::Table | PropertyKind::View => {
             properties.push(row("限定名", qualify(ref_)));
-            properties.push(row("类型", if ref_.kind == PropertyKind::Table { "表" } else { "视图" }));
+            properties.push(row(
+                "类型",
+                if ref_.kind == PropertyKind::Table {
+                    "表"
+                } else {
+                    "视图"
+                },
+            ));
             properties.push(row("列数", columns.len().to_string()));
             properties.push(row("归属域", source));
         }
@@ -520,7 +536,12 @@ fn fallback_overview(
 ) -> ObjectOverview {
     let mut cards = Vec::new();
     if stats.column_count > 0 {
-        cards.push(property::OverviewCard { label: "列".into(), value: stats.column_count.to_string(), unit: String::new(), delta: None });
+        cards.push(property::OverviewCard {
+            label: "列".into(),
+            value: stats.column_count.to_string(),
+            unit: String::new(),
+            delta: None,
+        });
     }
     ObjectOverview {
         title: title.to_string(),
@@ -539,7 +560,10 @@ fn fallback_categories() -> Vec<PropertySection> {
     vec![PropertySection {
         id: PageId::General,
         label: "通用".to_string(),
-        table: PropertyTable { headers: Vec::new(), rows: Vec::new() },
+        table: PropertyTable {
+            headers: Vec::new(),
+            rows: Vec::new(),
+        },
     }]
 }
 
@@ -585,17 +609,16 @@ pub async fn apply_property_edit(
                 stats: ProviderStats::default(),
                 counts: &[],
                 candidates: &[],
-                detail: column_detail
-                    .as_ref()
-                    .map(|c| c as &dyn std::any::Any),
+                detail: column_detail.as_ref().map(|c| c as &dyn std::any::Any),
             };
-            p.apply_edit_sql(&input, property_id, value).map_err(|msg| {
-                CoreError::database(shared::error::DatabaseError::Driver {
-                    db_type: driver.to_string(),
-                    operation: "apply_property_edit".to_string(),
-                    source: msg,
-                })
-            })?
+            p.apply_edit_sql(&input, property_id, value)
+                .map_err(|msg| {
+                    CoreError::database(shared::error::DatabaseError::Driver {
+                        db_type: driver.to_string(),
+                        operation: "apply_property_edit".to_string(),
+                        source: msg,
+                    })
+                })?
         }
         None => {
             // fallback：仅 PG 列级编辑（provider 未注册的驱动同样报不支持）。
@@ -609,7 +632,9 @@ pub async fn apply_property_edit(
             )?
         }
     };
-    metadata.execute_query(&ref_.conn_id, &catalog, &sql).await?;
+    metadata
+        .execute_query(&ref_.conn_id, &catalog, &sql)
+        .await?;
     Ok(sql)
 }
 
@@ -765,8 +790,16 @@ mod tests {
             source: NavSource::Global,
         };
         let rows = super::fallback_properties(
-            &r, "C1", "oracle", Some("Oracle"), "全局 (G)",
-            &[], &[], &[], &None, &None,
+            &r,
+            "C1",
+            "oracle",
+            Some("Oracle"),
+            "全局 (G)",
+            &[],
+            &[],
+            &[],
+            &None,
+            &None,
         );
         let labels: Vec<&str> = rows.iter().map(|x| x.label.as_str()).collect();
         assert!(labels.contains(&"名称"));
@@ -780,7 +813,11 @@ mod tests {
             PropertyKind::Table,
             PageId::Ddl,
             "public.t",
-            &[], &[], &[], &None, &None,
+            &[],
+            &[],
+            &[],
+            &None,
+            &None,
             &crate::property_providers::DriverCapabilities::default(),
         );
         assert!(s.is_some(), "PG 表无源版时合成 DDL");
@@ -807,16 +844,32 @@ mod tests {
             collation: Some("default".to_string()),
             extra: Default::default(),
         };
-        let pg = super::columns_table(&[col.clone()], &crate::property_providers::DriverCapabilities::pg());
-        assert_eq!(pg.headers.len(), 10, "pg 10 列（含 标识/排序规则）: {:#?}", pg.headers);
+        let pg = super::columns_table(
+            &[col.clone()],
+            &crate::property_providers::DriverCapabilities::pg(),
+        );
+        assert_eq!(
+            pg.headers.len(),
+            10,
+            "pg 10 列（含 标识/排序规则）: {:#?}",
+            pg.headers
+        );
         assert!(pg.headers.contains(&"标识".to_string()));
         assert!(pg.headers.contains(&"排序规则".to_string()));
         let pg_row = &pg.rows[0];
         assert_eq!(pg_row[3], "BY DEFAULT", "标识列展示生成方式");
         assert_eq!(pg_row[4], "default", "排序规则列展示 collation");
 
-        let sq = super::columns_table(&[col], &crate::property_providers::DriverCapabilities::sqlite());
-        assert_eq!(sq.headers.len(), 8, "sqlite 8 列（无 标识/排序规则）: {:#?}", sq.headers);
+        let sq = super::columns_table(
+            &[col],
+            &crate::property_providers::DriverCapabilities::sqlite(),
+        );
+        assert_eq!(
+            sq.headers.len(),
+            8,
+            "sqlite 8 列（无 标识/排序规则）: {:#?}",
+            sq.headers
+        );
         assert!(!sq.headers.contains(&"标识".to_string()));
         assert_eq!(sq.rows[0].len(), 8);
     }
