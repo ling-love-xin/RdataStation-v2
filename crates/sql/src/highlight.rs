@@ -458,14 +458,14 @@ mod tests {
         use ContextKind::{Code, Comment, String as S};
         // "SELECT 'abc' -- 注释\nAND 1"
         let sql = "SELECT 'abc' -- 注释\nAND 1";
-        assert_eq!(context_kind_at(sql, 0), Code);   // SELECT 关键字区
-        assert_eq!(context_kind_at(sql, 8), S);      // 字符串内 'a'
-        assert_eq!(context_kind_at(sql, 11), S);     // 闭合引号字符上
-        assert_eq!(context_kind_at(sql, 12), Code);  // 字符串闭合后
+        assert_eq!(context_kind_at(sql, 0), Code); // SELECT 关键字区
+        assert_eq!(context_kind_at(sql, 8), S); // 字符串内 'a'
+        assert_eq!(context_kind_at(sql, 11), S); // 闭合引号字符上
+        assert_eq!(context_kind_at(sql, 12), Code); // 字符串闭合后
         assert_eq!(context_kind_at(sql, 16), Comment); // 行注释内（中文按 3 字节，注=16..19）
         assert_eq!(context_kind_at(sql, 19), Comment); // 行注释内（释=19..22）
         assert_eq!(context_kind_at(sql, 22), Comment); // 行注释末尾（\n 前，未换行仍算注释）
-        assert_eq!(context_kind_at(sql, 23), Code);    // 换行后代码（AND）
+        assert_eq!(context_kind_at(sql, 23), Code); // 换行后代码（AND）
         // 块注释：闭合前 Comment、闭合后 Code
         let sql2 = "SELECT /* x */ 1";
         assert_eq!(context_kind_at(sql2, 9), Comment);

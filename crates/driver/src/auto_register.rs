@@ -9,8 +9,8 @@
 //! 3. 在 loader.rs BuiltinDriverDiscovery::builtin_factories() 添加一行 → 唯一修改点
 //!    （auto_register.rs 和 manager.rs 自动同步，无需修改）
 
-use crate::loader::BuiltinDriverDiscovery;
 use crate::DriverRegistry;
+use crate::loader::BuiltinDriverDiscovery;
 
 /// 驱动自动注册器
 ///

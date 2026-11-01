@@ -91,9 +91,7 @@ pub fn register_identity(conn_id: &str, identity: &ConnectionIdentity) {
             conn_id,
             identity.canonical_string().unwrap_or_default().as_str(),
         ) {
-            tracing::warn!(
-                "[cache-index] 指纹索引登记失败（不影响缓存路径）: {e}"
-            );
+            tracing::warn!("[cache-index] 指纹索引登记失败（不影响缓存路径）: {e}");
         }
     }
 }
@@ -191,7 +189,9 @@ mod tests {
     fn unshareable_identity_is_not_registered() {
         let mem = ConnectionIdentity::new(
             "sqlite",
-            CacheAuthority::File { path: ":memory:".to_string() },
+            CacheAuthority::File {
+                path: ":memory:".to_string(),
+            },
             None,
         );
         assert!(mem.fingerprint().is_none());

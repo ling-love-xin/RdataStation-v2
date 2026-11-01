@@ -22,9 +22,9 @@
 
 use sqlglot_rust::ast::{DataType, Statement};
 use sqlglot_rust::optimizer::qualify_columns::qualify_columns;
+use sqlglot_rust::parse;
 use sqlglot_rust::schema::MappingSchema;
 use sqlglot_rust::tokens::TokenType;
-use sqlglot_rust::parse;
 
 use super::engine::SqlDialect;
 use super::refs::{
@@ -64,7 +64,9 @@ pub fn jump_at(
         return None;
     }
     let spans = token_byte_spans(sql, &tokens);
-    let idx = spans.iter().position(|(s, e)| byte_pos >= *s && byte_pos < *e)?;
+    let idx = spans
+        .iter()
+        .position(|(s, e)| byte_pos >= *s && byte_pos < *e)?;
     if tokens[idx].token_type != TokenType::Identifier {
         return None;
     }
@@ -177,7 +179,10 @@ mod tests {
     }
 
     fn pos_of(sql: &str, word: &str, nth: usize) -> usize {
-        sql.match_indices(word).nth(nth).map(|(i, _)| i).expect("词存在")
+        sql.match_indices(word)
+            .nth(nth)
+            .map(|(i, _)| i)
+            .expect("词存在")
     }
 
     fn span_text<'a>(sql: &'a str, t: &JumpTarget) -> &'a str {
@@ -187,8 +192,13 @@ mod tests {
     #[test]
     fn bare_table_jumps_to_catalog_qualified_name() {
         let sql = "SELECT * FROM customers";
-        let t = jump_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "customers", 0))
-            .expect("有目标");
+        let t = jump_at(
+            sql,
+            SqlDialect::Ansi,
+            &tables(),
+            pos_of(sql, "customers", 0),
+        )
+        .expect("有目标");
         assert_eq!(t.kind, JumpKind::Table);
         assert_eq!(t.table, "public.customers", "目标取目录真实限定名");
         assert_eq!(span_text(sql, &t), "customers");
@@ -197,8 +207,8 @@ mod tests {
     #[test]
     fn qualified_table_jump_resolves() {
         let sql = "SELECT * FROM public.orders";
-        let t = jump_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "orders", 0))
-            .expect("有目标");
+        let t =
+            jump_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "orders", 0)).expect("有目标");
         assert_eq!(t.kind, JumpKind::Table);
         assert_eq!(t.table, "orders");
     }
@@ -206,8 +216,7 @@ mod tests {
     #[test]
     fn column_jump_carries_owning_table() {
         let sql = "SELECT total FROM orders";
-        let t = jump_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "total", 0))
-            .expect("有目标");
+        let t = jump_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "total", 0)).expect("有目标");
         assert_eq!(t.kind, JumpKind::Column);
         assert_eq!(t.column.as_deref(), Some("total"));
         assert_eq!(t.table, "orders", "qualify 归位后的所属表");
@@ -217,8 +226,7 @@ mod tests {
     fn alias_qualified_column_jump_keeps_qualifier() {
         // 别名场景：o.total → 所属表展示别名 o（qualify 保留限定符）
         let sql = "SELECT o.total FROM orders o";
-        let t = jump_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "total", 0))
-            .expect("有目标");
+        let t = jump_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "total", 0)).expect("有目标");
         assert_eq!(t.kind, JumpKind::Column);
         assert_eq!(t.table, "o");
     }
@@ -227,10 +235,17 @@ mod tests {
     fn no_catalog_table_jump_still_works() {
         // 未连接时表引用仍可跳（目标 = 引用限定名）；裸列跳转退化
         let sql = "SELECT * FROM customers";
-        let t = jump_at(sql, SqlDialect::Ansi, &[], pos_of(sql, "customers", 0))
-            .expect("表可跳");
+        let t = jump_at(sql, SqlDialect::Ansi, &[], pos_of(sql, "customers", 0)).expect("表可跳");
         assert_eq!(t.table, "customers");
-        assert!(jump_at("SELECT total FROM orders", SqlDialect::Ansi, &[], pos_of("SELECT total FROM orders", "total", 0)).is_none());
+        assert!(
+            jump_at(
+                "SELECT total FROM orders",
+                SqlDialect::Ansi,
+                &[],
+                pos_of("SELECT total FROM orders", "total", 0)
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -244,14 +259,22 @@ mod tests {
     #[test]
     fn multibyte_prefix_does_not_shift_target() {
         let sql = "SELECT id -- 中文注释\nFROM orders";
-        let t = jump_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "orders", 0))
-            .expect("有目标");
+        let t =
+            jump_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "orders", 0)).expect("有目标");
         assert_eq!(span_text(sql, &t), "orders");
     }
 
     #[test]
     fn non_select_and_parse_error_produce_nothing() {
-        assert!(jump_at("INSERT INTO orders VALUES (1)", SqlDialect::Ansi, &tables(), 2).is_none());
+        assert!(
+            jump_at(
+                "INSERT INTO orders VALUES (1)",
+                SqlDialect::Ansi,
+                &tables(),
+                2
+            )
+            .is_none()
+        );
         assert!(jump_at("SELECT FROM", SqlDialect::Ansi, &tables(), 3).is_none());
     }
 
@@ -259,8 +282,8 @@ mod tests {
     fn table_precedence_over_same_named_column() {
         // 表 > 列（FROM 处 orders 是表引用，即使表达式里也有列名 orders）
         let sql = "SELECT orders FROM orders";
-        let t = jump_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "orders", 1))
-            .expect("有目标");
+        let t =
+            jump_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "orders", 1)).expect("有目标");
         assert_eq!(t.kind, JumpKind::Table);
     }
 }

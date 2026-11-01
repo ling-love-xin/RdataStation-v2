@@ -10,16 +10,16 @@ use crate::{HighlightSpan, TokenClass};
 
 /// Rust 关键字（2018 版起常用集；true/false 是布尔字面量，走 `Boolean`）
 const KEYWORDS: &[&str] = &[
-    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
-    "extern", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut",
-    "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait", "type",
-    "unsafe", "use", "where", "while", "try",
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
+    "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
+    "return", "self", "Self", "static", "struct", "super", "trait", "type", "unsafe", "use",
+    "where", "while", "try",
 ];
 
 /// 数字类型后缀（并入数字整体上色）
 const NUMBER_SUFFIXES: &[&str] = &[
-    "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
-    "f32", "f64",
+    "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "f32",
+    "f64",
 ];
 
 /// 计算 Rust 的高亮区间（整篇扫描，按出现顺序、互不重叠）
@@ -84,7 +84,8 @@ pub fn rust_spans(text: &str) -> Vec<HighlightSpan> {
                 } else if KEYWORDS.contains(&word) {
                     spans.push(span(start, end, TokenClass::Keyword));
                     i = end;
-                } else if is_byte_or_raw_prefix(word) && end < bytes.len()
+                } else if is_byte_or_raw_prefix(word)
+                    && end < bytes.len()
                     && (bytes[end] == b'"' || bytes[end] == b'#' || bytes[end] == b'\'')
                 {
                     // 字节串 b"…" / raw r#"…"# / br#"…"# / 字节 char b'…'
@@ -108,10 +109,9 @@ pub fn rust_spans(text: &str) -> Vec<HighlightSpan> {
                 }
             }
             // 属性整体：`#[…]` / `#![…]` → tag（内部不再细分）
-            b'#'
-                if i + 1 < bytes.len()
-                    && (bytes[i + 1] == b'['
-                        || (bytes[i + 1] == b'!' && i + 2 < bytes.len() && bytes[i + 2] == b'[')) =>
+            b'#' if i + 1 < bytes.len()
+                && (bytes[i + 1] == b'['
+                    || (bytes[i + 1] == b'!' && i + 2 < bytes.len() && bytes[i + 2] == b'[')) =>
             {
                 let start = i;
                 let close = find_attribute_end(text, i);
@@ -125,7 +125,11 @@ pub fn rust_spans(text: &str) -> Vec<HighlightSpan> {
             // `.`：`..` / `..=` 是运算符（范围/排他范围），单个 `.` 是路径标点
             b'.' => {
                 if i + 1 < bytes.len() && bytes[i + 1] == b'.' {
-                    let len = if i + 2 < bytes.len() && bytes[i + 2] == b'=' { 3 } else { 2 };
+                    let len = if i + 2 < bytes.len() && bytes[i + 2] == b'=' {
+                        3
+                    } else {
+                        2
+                    };
                     spans.push(span(i, i + len, TokenClass::Operator));
                     i += len;
                 } else {
@@ -170,9 +174,7 @@ fn read_string(text: &str, quote: usize) -> usize {
     while i < bytes.len() {
         if hashes > 0 {
             // raw 闭合：`"` 后跟同样数量的 `#`
-            if bytes[i] == b'"'
-                && bytes[i + 1..].iter().take(hashes).all(|&b| b == b'#')
-            {
+            if bytes[i] == b'"' && bytes[i + 1..].iter().take(hashes).all(|&b| b == b'#') {
                 return i + 1 + hashes;
             }
             i += 1;
@@ -267,7 +269,8 @@ fn read_number(text: &str, start: usize) -> usize {
             }
             b'b' | b'B' => {
                 i += 2;
-                while i < bytes.len() && (bytes[i] == b'0' || bytes[i] == b'1' || bytes[i] == b'_') {
+                while i < bytes.len() && (bytes[i] == b'0' || bytes[i] == b'1' || bytes[i] == b'_')
+                {
                     i += 1;
                 }
                 return number_with_suffix(text, i);
@@ -342,11 +345,7 @@ fn find_attribute_end(text: &str, hash: usize) -> usize {
     while i < bytes.len() && bytes[i] != b']' {
         i += 1;
     }
-    if i < bytes.len() {
-        i + 1
-    } else {
-        bytes.len()
-    }
+    if i < bytes.len() { i + 1 } else { bytes.len() }
 }
 
 /// 读标识符（字母/`_` 开头，后随字母/数字/`_`）
@@ -363,8 +362,8 @@ fn read_ident(text: &str, start: usize) -> (usize, usize) {
 fn operator_len(text: &str, i: usize) -> Option<usize> {
     let bytes = text.as_bytes();
     const TWO: &[&[u8]] = &[
-        b"<<=", b">>=", b"..=", b"->", b"=>", b"==", b"!=", b"<=", b">=", b"&&", b"||",
-        b"<<", b">>", b"+=", b"-=", b"*=", b"/=", b"%=", b"&=", b"|=", b"^=", b"..",
+        b"<<=", b">>=", b"..=", b"->", b"=>", b"==", b"!=", b"<=", b">=", b"&&", b"||", b"<<",
+        b">>", b"+=", b"-=", b"*=", b"/=", b"%=", b"&=", b"|=", b"^=", b"..",
     ];
     let rest = &bytes[i..];
     for op in TWO {
@@ -402,7 +401,10 @@ mod tests {
         assert!(got.contains(&("let".into(), TokenClass::Keyword)));
         assert!(got.contains(&("fn".into(), TokenClass::Keyword)));
         assert!(got.contains(&("true".into(), TokenClass::Boolean)));
-        assert!(got.contains(&("main".into(), TokenClass::Function)), "{got:?}");
+        assert!(
+            got.contains(&("main".into(), TokenClass::Function)),
+            "{got:?}"
+        );
     }
 
     #[test]
@@ -417,18 +419,25 @@ mod tests {
         // 外层用 r## 避免与内层 r#"…"# 的闭合符冲突
         let got = classes(r##"let a = r#"raw "x"#;"##);
         assert!(
-            got.iter().any(|(t, c)| *c == TokenClass::String && t.contains("raw \"x\"")),
+            got.iter()
+                .any(|(t, c)| *c == TokenClass::String && t.contains("raw \"x\"")),
             "raw 串应整体上色：{got:?}"
         );
         let got = classes(r##"let b = br#"bytes"#;"##);
-        assert!(got.iter().any(|(t, c)| *c == TokenClass::String && t == "br#\"bytes\"#"));
+        assert!(
+            got.iter()
+                .any(|(t, c)| *c == TokenClass::String && t == "br#\"bytes\"#")
+        );
     }
 
     #[test]
     fn char_vs_lifetime() {
         let got = classes("let c = 'a'; let r: &'static str = &'a x;");
         assert!(got.contains(&("'a'".into(), TokenClass::String)), "{got:?}");
-        assert!(got.contains(&("'static".into(), TokenClass::Type)), "{got:?}");
+        assert!(
+            got.contains(&("'static".into(), TokenClass::Type)),
+            "{got:?}"
+        );
         assert!(got.contains(&("'a".into(), TokenClass::Type)), "{got:?}");
     }
 
@@ -446,8 +455,14 @@ mod tests {
     #[test]
     fn macros_and_attributes() {
         let got = classes("#[derive(Clone)]\nprintln!(\"hi\");");
-        assert!(got.contains(&("#[derive(Clone)]".into(), TokenClass::Tag)), "{got:?}");
-        assert!(got.contains(&("println".into(), TokenClass::Function)), "{got:?}");
+        assert!(
+            got.contains(&("#[derive(Clone)]".into(), TokenClass::Tag)),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("println".into(), TokenClass::Function)),
+            "{got:?}"
+        );
         assert!(got.contains(&("!".into(), TokenClass::Operator)));
     }
 
@@ -455,7 +470,10 @@ mod tests {
     fn operators_and_arrows() {
         let got = classes("let x = a => b; c..d");
         assert!(got.contains(&("=>".into(), TokenClass::Operator)));
-        assert!(got.contains(&("..".into(), TokenClass::Operator)), "{got:?}");
+        assert!(
+            got.contains(&("..".into(), TokenClass::Operator)),
+            "{got:?}"
+        );
     }
 
     #[test]

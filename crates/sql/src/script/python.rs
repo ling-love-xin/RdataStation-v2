@@ -9,10 +9,9 @@ use crate::{HighlightSpan, TokenClass};
 
 /// Python 关键字（Python 3，不含 True/False/None——它们是常量）
 const KEYWORDS: &[&str] = &[
-    "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del",
-    "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in",
-    "is", "lambda", "match", "nonlocal", "not", "or", "pass", "raise", "return", "try",
-    "while", "with", "yield",
+    "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif",
+    "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda",
+    "match", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield",
 ];
 
 /// Python 内置常量
@@ -61,7 +60,8 @@ pub fn python_spans(text: &str) -> Vec<HighlightSpan> {
                 } else if CONSTANTS.contains(&word) {
                     spans.push(span(start, end, TokenClass::Constant));
                     i = end;
-                } else if is_string_prefix(word) && end < bytes.len()
+                } else if is_string_prefix(word)
+                    && end < bytes.len()
                     && (bytes[end] == b'\'' || bytes[end] == b'"')
                 {
                     // 字符串前缀 + 引号：前缀并入字符串整体上色
@@ -131,7 +131,8 @@ fn is_string_prefix(word: &str) -> bool {
 fn read_string(text: &str, quote: usize) -> usize {
     let bytes = text.as_bytes();
     // 三引号：连续三个同种引号（可跨行）
-    let triple = bytes.len() >= quote + 3 && bytes[quote + 1] == bytes[quote]
+    let triple = bytes.len() >= quote + 3
+        && bytes[quote + 1] == bytes[quote]
         && bytes[quote + 2] == bytes[quote];
     let mut i = quote;
     if triple {
@@ -189,7 +190,8 @@ fn read_number(text: &str, start: usize) -> (usize, usize) {
         } else if b == b'.' && !saw_dot && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
             saw_dot = true;
             i += 1;
-        } else if (b == b'e' || b == b'E') && i + 1 < bytes.len()
+        } else if (b == b'e' || b == b'E')
+            && i + 1 < bytes.len()
             && (bytes[i + 1].is_ascii_digit()
                 || ((bytes[i + 1] == b'+' || bytes[i + 1] == b'-')
                     && i + 2 < bytes.len()
@@ -231,8 +233,8 @@ fn read_ident(text: &str, start: usize) -> (usize, usize) {
 fn operator_len(text: &str, i: usize) -> Option<usize> {
     let bytes = text.as_bytes();
     const TWO: &[&[u8]] = &[
-        b"**=", b"//=", b"<<=", b">>=", b"**", b"//", b"<<", b">>", b"<=", b">=", b"==",
-        b"!=", b"+=", b"-=", b"*=", b"/=", b"%=", b"@=", b"&=", b"|=", b"^=", b"->", b":=",
+        b"**=", b"//=", b"<<=", b">>=", b"**", b"//", b"<<", b">>", b"<=", b">=", b"==", b"!=",
+        b"+=", b"-=", b"*=", b"/=", b"%=", b"@=", b"&=", b"|=", b"^=", b"->", b":=",
     ];
     let rest = &bytes[i..];
     for op in TWO {
@@ -256,7 +258,7 @@ fn char_len(text: &str, i: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{python_spans, TokenClass};
+    use super::{TokenClass, python_spans};
 
     fn classes(text: &str) -> Vec<(String, TokenClass)> {
         python_spans(text)
@@ -277,9 +279,13 @@ mod tests {
     #[test]
     fn strings_with_prefix_and_triple_quote() {
         let got = classes("x = f'v={v}'\n\ny = '''多行\n字符串'''");
-        assert!(got.contains(&("f'v={v}'".into(), TokenClass::String)), "{got:?}");
         assert!(
-            got.iter().any(|(t, c)| *c == TokenClass::String && t.contains('\n')),
+            got.contains(&("f'v={v}'".into(), TokenClass::String)),
+            "{got:?}"
+        );
+        assert!(
+            got.iter()
+                .any(|(t, c)| *c == TokenClass::String && t.contains('\n')),
             "三引号跨行应整体上色：{got:?}"
         );
     }
@@ -308,8 +314,14 @@ mod tests {
             .into_iter()
             .filter(|(_, c)| *c != TokenClass::Function)
             .collect::<Vec<_>>();
-        assert!(got.contains(&("<=".into(), TokenClass::Operator)), "{got:?}");
-        assert!(got.contains(&("//".into(), TokenClass::Operator)), "{got:?}");
+        assert!(
+            got.contains(&("<=".into(), TokenClass::Operator)),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("//".into(), TokenClass::Operator)),
+            "{got:?}"
+        );
         assert!(got.contains(&("(".into(), TokenClass::Punctuation)));
         assert!(got.contains(&(",".into(), TokenClass::Punctuation)));
     }

@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -120,8 +120,7 @@ impl ScriptEnvStore {
             let items = stmt
                 .query_map([], |row| {
                     let args_json: String = row.get(4)?;
-                    let args: Vec<String> =
-                        serde_json::from_str(&args_json).unwrap_or_default();
+                    let args: Vec<String> = serde_json::from_str(&args_json).unwrap_or_default();
                     Ok(ScriptEnvRow {
                         id: row.get(0)?,
                         name: row.get(1)?,
@@ -168,11 +167,8 @@ impl ScriptEnvStore {
     /// 删除一条环境配置（不存在 = Ok，删除本就幂等）
     pub fn delete(&self, id: &str) -> Result<(), CoreError> {
         self.with_connection(|conn| {
-            conn.execute(
-                "DELETE FROM script_environments WHERE id = ?1",
-                params![id],
-            )
-            .map_err(|e| storage_err("delete", e.to_string()))?;
+            conn.execute("DELETE FROM script_environments WHERE id = ?1", params![id])
+                .map_err(|e| storage_err("delete", e.to_string()))?;
             Ok(())
         })
     }
@@ -188,10 +184,7 @@ mod tests {
     use crate::persistence::global_db::GlobalSqlitePool;
 
     fn temp_db(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "rds_script_env_{tag}_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("rds_script_env_{tag}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir.join("global.db")
@@ -202,7 +195,11 @@ mod tests {
     fn open_store(db: &PathBuf) -> super::ScriptEnvStore {
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
         let pool = runtime.block_on(async {
-            Arc::new(GlobalSqlitePool::new(db.clone(), 1).await.expect("create pool"))
+            Arc::new(
+                GlobalSqlitePool::new(db.clone(), 1)
+                    .await
+                    .expect("create pool"),
+            )
         });
         drop(runtime);
         super::ScriptEnvStore::new(pool).expect("open store")

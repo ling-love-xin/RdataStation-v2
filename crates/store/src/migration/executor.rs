@@ -1,4 +1,3 @@
-use shared::error::{CommonError, CoreError};
 use crate::migration::schema::SchemaTracker;
 /**
  * 迁移执行器模块
@@ -6,6 +5,7 @@ use crate::migration::schema::SchemaTracker;
  * 负责执行单个迁移脚本，事务包裹确保原子性
  */
 use rusqlite::Connection;
+use shared::error::{CommonError, CoreError};
 
 /// 单个迁移脚本
 #[derive(Debug, Clone)]

@@ -36,27 +36,27 @@ mod jump;
 mod parser;
 mod refs;
 mod rewrite;
+pub mod script;
 mod semantic;
 mod split;
 mod transpiler;
-pub mod script;
 
-pub use builder::QualifiedTable;
 pub use bind::{param_names, substitute_params};
+pub use builder::QualifiedTable;
 pub use engine::{AlterOperation, ColumnDefInfo, DdlInfo, SqlDialect, SqlEngine, SqlStatementType};
 pub use explain::explain_sql;
-pub use formatter::{FormatOptions, FormatReport, KeywordCase};
 pub use filter::{Rewrite, rewrite_with_filter, rewrite_with_order};
+pub use formatter::{FormatOptions, FormatReport, KeywordCase};
+pub use function_manual::{MANUAL, ManualCategory, ManualEntry, search_manual};
 pub use functions::{
-    builtin_signatures, catalog_query, parameter_query, parse_catalog_rows, FunctionSignature,
-    ParamInfo,
+    FunctionSignature, ParamInfo, builtin_signatures, catalog_query, parameter_query,
+    parse_catalog_rows,
 };
-pub use function_manual::{search_manual, ManualCategory, ManualEntry, MANUAL};
-pub use highlight::{context_kind_at, highlight_spans, ContextKind, HighlightSpan, TokenClass};
-pub use hover::{hover_at, HoverInfo, HoverKind};
-pub use jump::{jump_at, JumpKind, JumpTarget};
+pub use highlight::{ContextKind, HighlightSpan, TokenClass, context_kind_at, highlight_spans};
+pub use hover::{HoverInfo, HoverKind, hover_at};
+pub use jump::{JumpKind, JumpTarget, jump_at};
 pub use parser::ProjectionSource;
 pub use rewrite::ScriptRewrite;
-pub use semantic::{diagnose, CatalogTable, SemanticIssue};
-pub use split::{split_statements, SqlStatement};
+pub use semantic::{CatalogTable, SemanticIssue, diagnose};
+pub use split::{SqlStatement, split_statements};
 pub use transpiler::TranspileReport;

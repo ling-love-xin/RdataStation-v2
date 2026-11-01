@@ -162,8 +162,9 @@ fn apply_options(text: &str, options: FormatOptions) -> String {
             offset += line.len();
             let stripped = line.trim_start_matches(' ');
             let indent_bytes = line.len() - stripped.len();
-            let in_protected =
-                protected.iter().any(|r| r.start <= line_start && line_start < r.end);
+            let in_protected = protected
+                .iter()
+                .any(|r| r.start <= line_start && line_start < r.end);
             if indent_bytes >= 2 && indent_bytes % 2 == 0 && !in_protected {
                 out2.push_str(&" ".repeat(indent_bytes / 2 * width));
                 out2.push_str(stripped);
@@ -312,7 +313,11 @@ mod tests {
         );
         assert!(report.text.contains("SELECT\n  1"), "{}", report.text);
 
-        let clean = format_with_report("select 1;\nselect 3;", SqlDialect::Ansi, FormatOptions::default());
+        let clean = format_with_report(
+            "select 1;\nselect 3;",
+            SqlDialect::Ansi,
+            FormatOptions::default(),
+        );
         assert_eq!(clean.kept_verbatim, 0);
         assert!(
             parse_many(&clean.text, Dialect::Ansi).is_ok(),
@@ -408,13 +413,22 @@ mod tests {
                 indent_width: 4,
             },
         );
-        assert!(report.text.contains("select (\nselect 2"), "{}", report.text);
+        assert!(
+            report.text.contains("select (\nselect 2"),
+            "{}",
+            report.text
+        );
     }
 
     /// 【B10】语句之间的空白规整成 `;` + 两个换行（读感），注释一字不动
     #[test]
     fn gaps_are_normalized_but_comments_are_left_alone() {
-        let out = format_with_report("select 1; select 2;", SqlDialect::Ansi, FormatOptions::default()).text;
+        let out = format_with_report(
+            "select 1; select 2;",
+            SqlDialect::Ansi,
+            FormatOptions::default(),
+        )
+        .text;
         assert!(out.contains(";\n\nSELECT"), "语句之间要拉开：{out:?}");
 
         let commented = "select 1; -- 这句得留着\nselect 2;";
@@ -422,7 +436,12 @@ mod tests {
         assert!(out.contains("-- 这句得留着"), "注释不能被格式化吃掉：{out}");
 
         // 幂等：格式化过的文本再格式化一遍不再变
-        let once = format_with_report("select 1; select 2;", SqlDialect::Ansi, FormatOptions::default()).text;
+        let once = format_with_report(
+            "select 1; select 2;",
+            SqlDialect::Ansi,
+            FormatOptions::default(),
+        )
+        .text;
         let twice = format_with_report(&once, SqlDialect::Ansi, FormatOptions::default()).text;
         assert_eq!(once, twice, "格式化应当是幂等的");
     }

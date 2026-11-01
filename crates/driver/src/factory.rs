@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use connection::config::ConnectionMethod;
-use connection::{ConnectionConfig, ConnectionFactory};
 use super::registry::DriverConnectionConfig;
 use crate::native::{
     duckdb::DuckDbDatabase, mysql::MySqlDatabase, mysql_native::MySqlNativeDatabase,
     postgres::PostgresDatabase, postgres_native::PostgresNativeDatabase, sqlite::SqliteDatabase,
 };
 use crate::{DriverDescriptor, DriverFactory, DynDatabase};
+use connection::config::ConnectionMethod;
+use connection::{ConnectionConfig, ConnectionFactory};
 use shared::error::{ConnectionError, CoreError};
 
 /// MySQL 驱动工厂
@@ -188,12 +188,13 @@ impl DriverFactory for SqliteDriverFactory {
             }
 
             // 创建 SQLite 数据库连接（连接属性由驱动侧落实：PRAGMA / 打开标志）
-            let db = SqliteDatabase::new_with_properties(&path, &config.driver_properties).map_err(|e| {
-                CoreError::connection(ConnectionError::InvalidConfig {
-                    conn_id: config.name.clone().unwrap_or_else(|| "sqlite".to_string()),
-                    reason: e.to_string(),
-                })
-            })?;
+            let db = SqliteDatabase::new_with_properties(&path, &config.driver_properties)
+                .map_err(|e| {
+                    CoreError::connection(ConnectionError::InvalidConfig {
+                        conn_id: config.name.clone().unwrap_or_else(|| "sqlite".to_string()),
+                        reason: e.to_string(),
+                    })
+                })?;
 
             let db: DynDatabase = Arc::new(db);
             Ok(db)
@@ -243,15 +244,21 @@ impl DriverFactory for DuckDbDriverFactory {
             let trimmed = raw.trim();
             let without_scheme = trimmed.strip_prefix("duckdb://").unwrap_or(trimmed);
             let path = without_scheme.split('?').next().unwrap_or(without_scheme);
-            let path = if path.trim().is_empty() { ":memory:" } else { path };
+            let path = if path.trim().is_empty() {
+                ":memory:"
+            } else {
+                path
+            };
 
             // 创建 DuckDB 数据库连接（连接属性由驱动侧落实：开库配置 + SET）
-            let db = DuckDbDatabase::new_with_properties(path, &config.driver_properties).map_err(|e| {
-                CoreError::connection(ConnectionError::InvalidConfig {
-                    conn_id: config.name.clone().unwrap_or_else(|| "duckdb".to_string()),
-                    reason: e.to_string(),
-                })
-            })?;
+            let db = DuckDbDatabase::new_with_properties(path, &config.driver_properties).map_err(
+                |e| {
+                    CoreError::connection(ConnectionError::InvalidConfig {
+                        conn_id: config.name.clone().unwrap_or_else(|| "duckdb".to_string()),
+                        reason: e.to_string(),
+                    })
+                },
+            )?;
 
             let db: DynDatabase = Arc::new(db);
             Ok(db)
@@ -325,15 +332,13 @@ pub(crate) fn postgres_native_url(config: &DriverConnectionConfig) -> Result<Str
     let raw = config
         .to_url()
         .map_err(|e| invalid_config(config, "postgres_native", e.to_string()))?;
-    Ok(connection::url_params::normalize_url_scheme(&raw, "postgres"))
+    Ok(connection::url_params::normalize_url_scheme(
+        &raw, "postgres",
+    ))
 }
 
 /// 统一的「驱动配置不合法」错误（`conn_id` 取显示名，无名字时回退驱动 id）。
-fn invalid_config(
-    config: &DriverConnectionConfig,
-    fallback_id: &str,
-    reason: String,
-) -> CoreError {
+fn invalid_config(config: &DriverConnectionConfig, fallback_id: &str, reason: String) -> CoreError {
     CoreError::connection(ConnectionError::InvalidConfig {
         conn_id: config
             .name

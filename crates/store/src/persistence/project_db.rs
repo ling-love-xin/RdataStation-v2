@@ -14,9 +14,9 @@ use duckdb::Connection as DuckConnection;
 use rusqlite::Connection as SqliteConnection;
 use tokio::sync::Mutex;
 
-use shared::error::{CommonError, CoreError, DatabaseError, StorageError};
 use crate::migration::{MigrationManager, MigrationType};
 use crate::persistence::{auth_store, env_store, network_store};
+use shared::error::{CommonError, CoreError, DatabaseError, StorageError};
 
 /// 项目 SQLite 连接池
 ///
@@ -518,14 +518,11 @@ impl ProjectDatabaseManager {
     /// 二次 open 会因文件锁冲突失败（Windows 报 "unable to open database file"）。
     async fn init_duckdb_tables(&self) -> Result<(), CoreError> {
         // 仅读写路径（open）持有 duckdb_conn；open_inner 只在 Some 时调用本方法。
-        let duckdb = self
-            .duckdb_conn
-            .as_ref()
-            .ok_or_else(|| {
-                CoreError::common(CommonError::General(
-                    "DuckDB connection is not opened (read-only path)".to_string(),
-                ))
-            })?;
+        let duckdb = self.duckdb_conn.as_ref().ok_or_else(|| {
+            CoreError::common(CommonError::General(
+                "DuckDB connection is not opened (read-only path)".to_string(),
+            ))
+        })?;
         let conn_arc = duckdb.acquire().await?;
         let guard = conn_arc.lock().await;
         let conn = guard.as_ref().ok_or_else(|| {
@@ -1051,10 +1048,9 @@ mod tests {
         );
 
         // 读路径应能读到 SQLite 连接列表（与主写连接共存）。
-        let store =
-            crate::persistence::project_connection_store::ProjectConnectionStore::new(Arc::new(
-                reader,
-            ));
+        let store = crate::persistence::project_connection_store::ProjectConnectionStore::new(
+            Arc::new(reader),
+        );
         let conns = store
             .get_all_connections()
             .await

@@ -1,4 +1,4 @@
-use sqlglot_rust::{parse, Dialect};
+use sqlglot_rust::{Dialect, parse};
 
 use super::engine::{SqlDialect, SqlStatementType};
 
@@ -39,7 +39,10 @@ pub fn validate(sql: &str, dialect: SqlDialect) -> Result<(), String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectionSource {
     /// 实体列引用：`[schema.]table.column`（单表 FROM 时裸列名已归位到表）
-    Column { table: Option<String>, column: String },
+    Column {
+        table: Option<String>,
+        column: String,
+    },
     /// `SELECT *` / `table.*`：来源列需按表列集展开（table 为限定表名，可能为 None）
     Star { table: Option<String> },
     /// 复杂表达式 / 字面量 / 函数：无来源列，注释如实无
@@ -82,9 +85,7 @@ pub fn projection_sources(sql: &str, dialect: SqlDialect) -> Result<Vec<Projecti
                 sqlglot_rust::ast::Expr::Column { table, name, .. } => {
                     ProjectionSource::Column {
                         // 单表 FROM：限定符是别名也一样归位到真实表（NavCache 只认真实名）
-                        table: from_table
-                            .clone()
-                            .or_else(|| table.clone()),
+                        table: from_table.clone().or_else(|| table.clone()),
                         column: name.clone(),
                     }
                 }

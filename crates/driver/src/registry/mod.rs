@@ -18,9 +18,9 @@ use shared::error::CoreError;
 
 pub use config::DriverConnectionConfig;
 pub use descriptors::{
+    DriverDescriptor, DriverField, DriverFieldType, DriverKind, DriverOption, DriverOptionType,
     duckdb_driver, get_all_drivers, get_driver, mysql_driver, mysql_native_driver, postgres_driver,
-    postgres_native_driver, sqlite_driver, DriverDescriptor, DriverField, DriverFieldType,
-    DriverKind, DriverOption, DriverOptionType,
+    postgres_native_driver, sqlite_driver,
 };
 
 /// 动态数据库类型

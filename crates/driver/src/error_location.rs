@@ -514,16 +514,19 @@ mod tests {
                 "table rds_err_probe_sq has no column named nope",
                 loc(None, Some("rds_err_probe_sq"), Some("nope"), None),
             ),
-            (
-                "no such column: nope",
-                loc(None, None, Some("nope"), None),
-            ),
+            ("no such column: nope", loc(None, None, Some("nope"), None)),
             (
                 "no such table: rds_no_such_table_xyz",
                 loc(None, Some("rds_no_such_table_xyz"), None, None),
             ),
-            ("duplicate column name: c2", loc(None, None, Some("c2"), None)),
-            ("ambiguous column name: id", loc(None, None, Some("id"), None)),
+            (
+                "duplicate column name: c2",
+                loc(None, None, Some("c2"), None),
+            ),
+            (
+                "ambiguous column name: id",
+                loc(None, None, Some("id"), None),
+            ),
             // 没命名的 CHECK：SQLite 打的是**表达式**，不当约束名
             (
                 "CHECK constraint failed: code IS NULL OR code <> 'bad'",

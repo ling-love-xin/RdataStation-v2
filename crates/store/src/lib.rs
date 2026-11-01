@@ -7,8 +7,8 @@
 //!
 //! 依赖方向：rds-store → rds-shared；engine → rds-store；rds-store 不得依赖 engine。
 
-pub mod persistence;
-pub mod migration;
 pub mod logging;
+pub mod migration;
+pub mod persistence;
 
 pub mod duckdb_config;

@@ -9,9 +9,9 @@ use crate::{HighlightSpan, TokenClass};
 
 /// R 关键字
 const KEYWORDS: &[&str] = &[
-    "if", "else", "for", "while", "repeat", "break", "next", "function", "return", "in",
-    "switch", "try", "tryCatch", "finally", "stop", "warning", "message", "require",
-    "library", "source", "attach", "detach", "install", "packages",
+    "if", "else", "for", "while", "repeat", "break", "next", "function", "return", "in", "switch",
+    "try", "tryCatch", "finally", "stop", "warning", "message", "require", "library", "source",
+    "attach", "detach", "install", "packages",
 ];
 
 /// R 内置常量（语义常量，映射主题 `constant`）
@@ -198,8 +198,15 @@ mod tests {
         assert!(got.contains(&("TRUE".into(), TokenClass::Constant)));
         assert!(got.contains(&("FALSE".into(), TokenClass::Constant)));
         // 函数启发式：标识符紧跟 `(`（`mean(x)`），`f <- …` 的 f 不上色
-        assert!(got.contains(&("mean".into(), TokenClass::Function)), "{got:?}");
-        assert!(!got.iter().any(|(t, c)| t == "f" && *c == TokenClass::Function), "{got:?}");
+        assert!(
+            got.contains(&("mean".into(), TokenClass::Function)),
+            "{got:?}"
+        );
+        assert!(
+            !got.iter()
+                .any(|(t, c)| t == "f" && *c == TokenClass::Function),
+            "{got:?}"
+        );
         assert!(got.contains(&("<-".into(), TokenClass::Operator)));
     }
 
@@ -208,7 +215,8 @@ mod tests {
         let got = classes("# 注释\nx <- \"a # b\"");
         assert_eq!(got[0], ("# 注释".into(), TokenClass::Comment));
         assert!(
-            got.iter().any(|(t, c)| *c == TokenClass::String && t == "\"a # b\""),
+            got.iter()
+                .any(|(t, c)| *c == TokenClass::String && t == "\"a # b\""),
             "字符串内的 # 不应算注释：{got:?}"
         );
     }
@@ -216,7 +224,10 @@ mod tests {
     #[test]
     fn percent_operators_and_assignments() {
         let got = classes("x %in% y\nz <<- 1\na -> b");
-        assert!(got.contains(&("%in%".into(), TokenClass::Operator)), "{got:?}");
+        assert!(
+            got.contains(&("%in%".into(), TokenClass::Operator)),
+            "{got:?}"
+        );
         assert!(got.contains(&("<<-".into(), TokenClass::Operator)));
         assert!(got.contains(&("->".into(), TokenClass::Operator)));
     }

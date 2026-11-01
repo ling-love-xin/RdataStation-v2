@@ -114,11 +114,7 @@ pub fn parse_catalog_rows(
     headers: &[String],
     rows: &[Vec<String>],
 ) -> Vec<FunctionSignature> {
-    let idx = |name: &str| {
-        headers
-            .iter()
-            .position(|h| h.eq_ignore_ascii_case(name))
-    };
+    let idx = |name: &str| headers.iter().position(|h| h.eq_ignore_ascii_case(name));
     rows.iter()
         .filter_map(|row| {
             let name = idx("name")
@@ -294,8 +290,16 @@ mod tests {
         let count = sigs.iter().find(|s| s.name == "COUNT").expect("有 COUNT");
         assert_eq!(count.params.len(), 1);
         assert_eq!(count.return_type.as_deref(), Some("bigint"));
-        let coalesce = sigs.iter().find(|s| s.name == "COALESCE").expect("有 COALESCE");
-        assert!(coalesce.params.iter().any(|p| p.name.as_deref() == Some("...")));
+        let coalesce = sigs
+            .iter()
+            .find(|s| s.name == "COALESCE")
+            .expect("有 COALESCE");
+        assert!(
+            coalesce
+                .params
+                .iter()
+                .any(|p| p.name.as_deref() == Some("..."))
+        );
     }
 
     #[test]
@@ -334,7 +338,11 @@ mod tests {
         assert_eq!(sigs.len(), 2);
         assert_eq!(sigs[0].params.len(), 1, "abs 1 个参数");
         assert_eq!(sigs[0].params[0].name.as_deref(), Some("arg1"));
-        assert_eq!(sigs[1].params[0].name.as_deref(), Some("args"), "变参给 args");
+        assert_eq!(
+            sigs[1].params[0].name.as_deref(),
+            Some("args"),
+            "变参给 args"
+        );
     }
 
     #[test]

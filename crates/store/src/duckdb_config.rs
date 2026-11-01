@@ -89,9 +89,9 @@ pub fn configure_connection(conn: &Connection) -> Result<(), CoreError> {
     // 而错误信息只说认证失败，看不出是目录没对上。
     match crate::persistence::get_secrets_dir() {
         Ok(dir) => settings.push(format!("SET secret_directory = '{}'", dir.display())),
-        Err(e) => tracing::warn!(
-            "[duckdb] Secret 目录不可用（{e}）：本地加速 / 联邦的网络源可能认证失败"
-        ),
+        Err(e) => {
+            tracing::warn!("[duckdb] Secret 目录不可用（{e}）：本地加速 / 联邦的网络源可能认证失败")
+        }
     }
 
     // 临时目录：建不出来就跳过溢写设置（退回 DuckDB 默认），不挡启动
@@ -192,7 +192,10 @@ mod tests {
         // 合法：数字 + 可选单位（大小写 / 空格不敏感）
         assert_eq!(parse_size_setting("2GB").as_deref(), Some("2GB"));
         assert_eq!(parse_size_setting(" 512 mb ").as_deref(), Some("512MB"));
-        assert_eq!(parse_size_setting("1073741824").as_deref(), Some("1073741824"));
+        assert_eq!(
+            parse_size_setting("1073741824").as_deref(),
+            Some("1073741824")
+        );
         assert_eq!(parse_size_setting("1.5gb").as_deref(), Some("1.5GB"));
 
         // 不合法：空 / 纯单位 / 负号 / 未知单位 / 带 SQL 尾巴——后者是白名单真正要挡的

@@ -40,11 +40,7 @@ pub struct TranspileReport {
 }
 
 /// 脚本级方言转译（**先切分再逐条转译**，脚本一条都不丢）
-pub fn transpile_with_report(
-    sql: &str,
-    source: SqlDialect,
-    target: SqlDialect,
-) -> TranspileReport {
+pub fn transpile_with_report(sql: &str, source: SqlDialect, target: SqlDialect) -> TranspileReport {
     let src = to_inner_dialect(source);
     let tgt = to_inner_dialect(target);
     let rewritten = rewrite_statements(sql, |body| transpile_single(body, src, tgt));
@@ -115,7 +111,11 @@ mod tests {
             report.text
         );
         for needle in ["1", "2", "3"] {
-            assert!(report.text.contains(needle), "{needle} 丢了：{}", report.text);
+            assert!(
+                report.text.contains(needle),
+                "{needle} 丢了：{}",
+                report.text
+            );
         }
     }
 
@@ -124,12 +124,13 @@ mod tests {
     /// 若哪天它又「宽恕」脚本了，这段注释与架构 §12 #19 都该再更新。
     #[test]
     fn the_single_statement_api_rejects_a_script() {
-        let error = transpile("SELECT 1; SELECT 2;", SqlDialect::Ansi, SqlDialect::Postgres)
-            .expect_err("单条接口对脚本必须报错（不再静默截断）");
-        assert!(
-            error.contains("Unexpected token"),
-            "报错要可读：{error}"
-        );
+        let error = transpile(
+            "SELECT 1; SELECT 2;",
+            SqlDialect::Ansi,
+            SqlDialect::Postgres,
+        )
+        .expect_err("单条接口对脚本必须报错（不再静默截断）");
+        assert!(error.contains("Unexpected token"), "报错要可读：{error}");
     }
 
     /// 真的翻了东西：MySQL 的反引号标识符在 PostgreSQL 下换成双引号

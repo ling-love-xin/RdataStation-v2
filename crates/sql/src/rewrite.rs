@@ -117,9 +117,7 @@ mod tests {
 
     #[test]
     fn every_statement_gets_rewritten_in_place() {
-        let out = rewrite_statements("select 1;\nselect 2;", |body| {
-            Some(body.to_uppercase())
-        });
+        let out = rewrite_statements("select 1;\nselect 2;", |body| Some(body.to_uppercase()));
         assert_eq!(out.rewritten, 2);
         assert_eq!(out.kept_verbatim, 0);
         assert!(out.text.contains("SELECT 1"), "{:?}", out.text);

@@ -23,9 +23,9 @@
 
 use sqlglot_rust::ast::{DataType, Expr, SelectItem, Statement, TableRef};
 use sqlglot_rust::optimizer::qualify_columns::qualify_columns;
+use sqlglot_rust::parse;
 use sqlglot_rust::schema::MappingSchema;
 use sqlglot_rust::tokens::TokenType;
-use sqlglot_rust::parse;
 
 use super::engine::SqlDialect;
 use super::function_manual::search_manual;
@@ -83,7 +83,9 @@ pub fn hover_at(
     }
     // 字符下标 → 字节区间（与 semantic::locate 同款换算）
     let spans = token_byte_spans(sql, &tokens);
-    let idx = spans.iter().position(|(s, e)| byte_pos >= *s && byte_pos < *e)?;
+    let idx = spans
+        .iter()
+        .position(|(s, e)| byte_pos >= *s && byte_pos < *e)?;
     if tokens[idx].token_type != TokenType::Identifier {
         return None;
     }
@@ -145,7 +147,9 @@ pub fn hover_at(
         return Some(HoverInfo::new(
             HoverKind::Function,
             tokens[idx].value.clone(),
-            vec![format!("函数「{word}」——内置签名表未收录，以当前连接的系统表为准")],
+            vec![format!(
+                "函数「{word}」——内置签名表未收录，以当前连接的系统表为准"
+            )],
             start,
             end,
         ));
@@ -159,9 +163,7 @@ pub fn hover_at(
 /// 未收录但 AST 确认是函数的兜底说明由调用方（`is_function_call`）负责。
 fn function_hover(word: &str) -> Option<Vec<String>> {
     let sigs = builtin_signatures();
-    let sig = sigs
-        .iter()
-        .find(|s| s.name.eq_ignore_ascii_case(word));
+    let sig = sigs.iter().find(|s| s.name.eq_ignore_ascii_case(word));
     let manual = search_manual(word)
         .iter()
         .find(|e| e.name.eq_ignore_ascii_case(word))
@@ -231,7 +233,11 @@ fn is_function_call(select: &sqlglot_rust::ast::SelectStatement, word: &str) -> 
 }
 
 /// 表 hover：限定名 + 列列表（目录里查得到才给列）
-fn table_hover(word: &str, select: &sqlglot_rust::ast::SelectStatement, tables: &[CatalogTable]) -> Option<Vec<String>> {
+fn table_hover(
+    word: &str,
+    select: &sqlglot_rust::ast::SelectStatement,
+    tables: &[CatalogTable],
+) -> Option<Vec<String>> {
     let mut sources: Vec<&TableRef> = Vec::new();
     if let Some(from) = &select.from {
         collect_table_refs(&from.source, &mut sources);
@@ -245,7 +251,9 @@ fn table_hover(word: &str, select: &sqlglot_rust::ast::SelectStatement, tables: 
     })?;
     let qualified = qualify_table_name(referenced);
     // 展示名优先取目录里的真实限定名（原文可能只写裸名 customers）
-    let catalog_match = tables.iter().find(|t| same_table(t.qualified_name, &qualified));
+    let catalog_match = tables
+        .iter()
+        .find(|t| same_table(t.qualified_name, &qualified));
     let display_name = catalog_match
         .map(|t| t.qualified_name.to_string())
         .unwrap_or_else(|| qualified.clone());
@@ -304,7 +312,10 @@ mod tests {
 
     /// 字节位置辅助：SQL 原文里第 n 个 `word` 出现处（测试用它模拟悬停点）
     fn pos_of(sql: &str, word: &str, nth: usize) -> usize {
-        sql.match_indices(word).nth(nth).map(|(i, _)| i).expect("词存在")
+        sql.match_indices(word)
+            .nth(nth)
+            .map(|(i, _)| i)
+            .expect("词存在")
     }
 
     fn span_text<'a>(sql: &'a str, h: &HoverInfo) -> &'a str {
@@ -314,8 +325,8 @@ mod tests {
     #[test]
     fn function_hover_shows_signature_and_chinese() {
         let sql = "SELECT UPPER(name) FROM customers";
-        let h = hover_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "UPPER", 0))
-            .expect("有 hover");
+        let h =
+            hover_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "UPPER", 0)).expect("有 hover");
         assert_eq!(h.kind, HoverKind::Function);
         assert_eq!(span_text(sql, &h), "UPPER");
         assert!(h.lines.iter().any(|l| l.contains("UPPER")), "{:?}", h.lines);
@@ -326,36 +337,54 @@ mod tests {
     #[test]
     fn table_hover_lists_columns_from_catalog() {
         let sql = "SELECT * FROM orders";
-        let h = hover_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "orders", 0))
-            .expect("有 hover");
+        let h =
+            hover_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "orders", 0)).expect("有 hover");
         assert_eq!(h.kind, HoverKind::Table);
-        assert!(h.lines.iter().any(|l| l.contains("id") && l.contains("total")), "{:?}", h.lines);
+        assert!(
+            h.lines
+                .iter()
+                .any(|l| l.contains("id") && l.contains("total")),
+            "{:?}",
+            h.lines
+        );
     }
 
     #[test]
     fn schema_qualified_table_hover_resolves_by_last_segment() {
         let sql = "SELECT * FROM customers";
-        let h = hover_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "customers", 0))
-            .expect("有 hover");
+        let h = hover_at(
+            sql,
+            SqlDialect::Ansi,
+            &tables(),
+            pos_of(sql, "customers", 0),
+        )
+        .expect("有 hover");
         assert_eq!(h.kind, HoverKind::Table);
-        assert!(h.lines.iter().any(|l| l.contains("public.customers")), "{:?}", h.lines);
+        assert!(
+            h.lines.iter().any(|l| l.contains("public.customers")),
+            "{:?}",
+            h.lines
+        );
     }
 
     #[test]
     fn column_hover_shows_owning_table() {
         let sql = "SELECT total FROM orders";
-        let h = hover_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "total", 0))
-            .expect("有 hover");
+        let h =
+            hover_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "total", 0)).expect("有 hover");
         assert_eq!(h.kind, HoverKind::Column);
-        assert!(h.lines.iter().any(|l| l.contains("orders")), "{:?}", h.lines);
+        assert!(
+            h.lines.iter().any(|l| l.contains("orders")),
+            "{:?}",
+            h.lines
+        );
     }
 
     #[test]
     fn function_hover_works_without_catalog() {
         // 未连接也能 hover 函数（内置签名 + 中文手册不依赖目录）
         let sql = "SELECT TRIM(name) FROM x";
-        let h = hover_at(sql, SqlDialect::Ansi, &[], pos_of(sql, "TRIM", 0))
-            .expect("有 hover");
+        let h = hover_at(sql, SqlDialect::Ansi, &[], pos_of(sql, "TRIM", 0)).expect("有 hover");
         assert_eq!(h.kind, HoverKind::Function);
         assert!(h.lines.iter().any(|l| l.contains("去")), "{:?}", h.lines);
     }
@@ -372,8 +401,8 @@ mod tests {
     fn multibyte_prefix_does_not_shift_positions() {
         // 多字节注释在目标词之前：字符下标 → 字节偏移换算不能跑偏
         let sql = "SELECT id -- 中文注释\nFROM orders";
-        let h = hover_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "orders", 0))
-            .expect("有 hover");
+        let h =
+            hover_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "orders", 0)).expect("有 hover");
         assert_eq!(h.kind, HoverKind::Table);
         assert_eq!(span_text(sql, &h), "orders");
     }
@@ -382,14 +411,22 @@ mod tests {
     fn function_precedence_over_same_named_column() {
         // 同名时函数优先（口径固定：函数调用结构最明确）
         let sql = "SELECT count(*) FROM orders";
-        let h = hover_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "count", 0))
-            .expect("有 hover");
+        let h =
+            hover_at(sql, SqlDialect::Ansi, &tables(), pos_of(sql, "count", 0)).expect("有 hover");
         assert_eq!(h.kind, HoverKind::Function);
     }
 
     #[test]
     fn non_select_and_parse_error_produce_nothing() {
-        assert!(hover_at("INSERT INTO orders VALUES (1)", SqlDialect::Ansi, &tables(), 2).is_none());
+        assert!(
+            hover_at(
+                "INSERT INTO orders VALUES (1)",
+                SqlDialect::Ansi,
+                &tables(),
+                2
+            )
+            .is_none()
+        );
         assert!(hover_at("SELECT FROM", SqlDialect::Ansi, &tables(), 3).is_none());
     }
 

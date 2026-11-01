@@ -1301,7 +1301,10 @@ mod sql_history_entry_tests {
         // 写盘 → 重读：通道不能只活在内存里
         let mut reloaded = HistoryStore::new(path.clone());
         reloaded.load().expect("load");
-        assert_eq!(reloaded.get_records(None)[0].channel.as_deref(), Some("accelerated"));
+        assert_eq!(
+            reloaded.get_records(None)[0].channel.as_deref(),
+            Some("accelerated")
+        );
 
         // 老记录（没有 channel 字段）读回来是 `None`，不是解析失败
         let legacy = r#"[{

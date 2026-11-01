@@ -176,7 +176,9 @@ pub fn identity_from_url(
     default_port: Option<u16>,
 ) -> Option<ConnectionIdentity> {
     let authority = match type_id.trim().to_ascii_lowercase().as_str() {
-        "sqlite" | "duckdb" => CacheAuthority::File { path: url.to_string() },
+        "sqlite" | "duckdb" => CacheAuthority::File {
+            path: url.to_string(),
+        },
         _ => {
             let (host, port, database) = parse_net_url(url);
             let host = host?;
@@ -206,7 +208,14 @@ fn parse_net_url(url: &str) -> (Option<String>, Option<u16>, Option<String>) {
         Some(i) => (
             &rest[..i],
             // 查询串 / 片段只影响“怎么连”（`?sslmode=require` 等），不改变“是哪个库”
-            Some(rest[i + 1..].split(['?', '#']).next().unwrap_or("").trim_end_matches('/').to_string()),
+            Some(
+                rest[i + 1..]
+                    .split(['?', '#'])
+                    .next()
+                    .unwrap_or("")
+                    .trim_end_matches('/')
+                    .to_string(),
+            ),
         ),
         None => (rest, None),
     };
@@ -378,28 +387,89 @@ mod tests {
 
     #[test]
     fn default_port_filled_yields_same_identity() {
-        let with_port = network("mysql", "db.internal", Some(3306), None, "orders", "-", "app");
-        let implicit = network("mysql", "db.internal", None, Some(3306), "orders", "-", "app");
+        let with_port = network(
+            "mysql",
+            "db.internal",
+            Some(3306),
+            None,
+            "orders",
+            "-",
+            "app",
+        );
+        let implicit = network(
+            "mysql",
+            "db.internal",
+            None,
+            Some(3306),
+            "orders",
+            "-",
+            "app",
+        );
         assert_eq!(with_port.canonical_string(), implicit.canonical_string());
         assert_eq!(with_port.fingerprint(), implicit.fingerprint());
     }
 
     #[test]
     fn host_is_case_folded_but_database_is_not() {
-        let upper = network("mysql", "DB.Internal", Some(3306), None, "Orders", "PUBLIC", "app");
-        let lower = network("mysql", "db.internal", Some(3306), None, "Orders", "PUBLIC", "app");
+        let upper = network(
+            "mysql",
+            "DB.Internal",
+            Some(3306),
+            None,
+            "Orders",
+            "PUBLIC",
+            "app",
+        );
+        let lower = network(
+            "mysql",
+            "db.internal",
+            Some(3306),
+            None,
+            "Orders",
+            "PUBLIC",
+            "app",
+        );
         assert_eq!(upper.fingerprint(), lower.fingerprint());
 
-        let other_case_db = network("mysql", "db.internal", Some(3306), None, "orders", "PUBLIC", "app");
+        let other_case_db = network(
+            "mysql",
+            "db.internal",
+            Some(3306),
+            None,
+            "orders",
+            "PUBLIC",
+            "app",
+        );
         assert_ne!(upper.fingerprint(), other_case_db.fingerprint());
     }
 
     #[test]
     fn ipv6_brackets_are_normalized() {
-        let bracketed = network("postgres", "[2001:DB8::1]", Some(5432), None, "app", "-", "svc");
-        let bare = network("postgres", "2001:db8::1", Some(5432), None, "app", "-", "svc");
+        let bracketed = network(
+            "postgres",
+            "[2001:DB8::1]",
+            Some(5432),
+            None,
+            "app",
+            "-",
+            "svc",
+        );
+        let bare = network(
+            "postgres",
+            "2001:db8::1",
+            Some(5432),
+            None,
+            "app",
+            "-",
+            "svc",
+        );
         assert_eq!(bracketed.fingerprint(), bare.fingerprint());
-        assert!(bracketed.canonical_string().unwrap().contains("[2001:db8::1]"));
+        assert!(
+            bracketed
+                .canonical_string()
+                .unwrap()
+                .contains("[2001:db8::1]")
+        );
     }
 
     #[test]
@@ -457,7 +527,9 @@ mod tests {
 
         let empty_path = ConnectionIdentity::new(
             "sqlite",
-            CacheAuthority::File { path: "   ".to_string() },
+            CacheAuthority::File {
+                path: "   ".to_string(),
+            },
             None,
         );
         assert_eq!(empty_path.fingerprint(), None);
@@ -465,8 +537,19 @@ mod tests {
 
     #[test]
     fn ephemeral_databases_are_never_shared() {
-        for path in [":memory:", "file::memory:", "sqlite::memory:?cache=shared", " file::memory: "] {
-            let identity = ConnectionIdentity::new("sqlite", CacheAuthority::File { path: path.to_string() }, None);
+        for path in [
+            ":memory:",
+            "file::memory:",
+            "sqlite::memory:?cache=shared",
+            " file::memory: ",
+        ] {
+            let identity = ConnectionIdentity::new(
+                "sqlite",
+                CacheAuthority::File {
+                    path: path.to_string(),
+                },
+                None,
+            );
             assert!(is_ephemeral_path(path), "应判定为内存库：{path}");
             assert_eq!(identity.fingerprint(), None, "内存库不应共享缓存：{path}");
         }
@@ -484,8 +567,20 @@ mod tests {
         assert_eq!(from_uri, from_plain);
         assert_eq!(from_uri, from_triple);
 
-        let identity_uri = ConnectionIdentity::new("sqlite", CacheAuthority::File { path: "file:///C:/Data/Orders.DB".to_string() }, None);
-        let identity_plain = ConnectionIdentity::new("sqlite", CacheAuthority::File { path: r"C:\Data\orders.db".to_string() }, None);
+        let identity_uri = ConnectionIdentity::new(
+            "sqlite",
+            CacheAuthority::File {
+                path: "file:///C:/Data/Orders.DB".to_string(),
+            },
+            None,
+        );
+        let identity_plain = ConnectionIdentity::new(
+            "sqlite",
+            CacheAuthority::File {
+                path: r"C:\Data\orders.db".to_string(),
+            },
+            None,
+        );
         if cfg!(windows) {
             assert_eq!(identity_uri.fingerprint(), identity_plain.fingerprint());
         }
@@ -493,46 +588,79 @@ mod tests {
 
     #[test]
     fn case_folding_is_platform_specific() {
-        assert_eq!(normalize_file_path_with("C:/Data/Orders.db", true), "c:/data/orders.db");
-        assert_eq!(normalize_file_path_with("C:/Data/Orders.db", false), "C:/Data/Orders.db");
+        assert_eq!(
+            normalize_file_path_with("C:/Data/Orders.db", true),
+            "c:/data/orders.db"
+        );
+        assert_eq!(
+            normalize_file_path_with("C:/Data/Orders.db", false),
+            "C:/Data/Orders.db"
+        );
     }
 
     #[test]
     fn file_query_string_and_fragment_are_dropped() {
         let with_query = ConnectionIdentity::new(
             "sqlite",
-            CacheAuthority::File { path: "file:///tmp/app.db?mode=ro&immutable=1".to_string() },
+            CacheAuthority::File {
+                path: "file:///tmp/app.db?mode=ro&immutable=1".to_string(),
+            },
             Some("svc"),
         );
         let plain = ConnectionIdentity::new(
             "sqlite",
-            CacheAuthority::File { path: "/tmp/app.db".to_string() },
+            CacheAuthority::File {
+                path: "/tmp/app.db".to_string(),
+            },
             Some("svc"),
         );
         assert_eq!(with_query.fingerprint(), plain.fingerprint());
-        assert_eq!(normalize_file_path_with("file:///tmp/app.db?mode=ro", false), "/tmp/app.db");
-        assert_eq!(normalize_file_path_with("/tmp/app.db#frag", false), "/tmp/app.db");
+        assert_eq!(
+            normalize_file_path_with("file:///tmp/app.db?mode=ro", false),
+            "/tmp/app.db"
+        );
+        assert_eq!(
+            normalize_file_path_with("/tmp/app.db#frag", false),
+            "/tmp/app.db"
+        );
     }
 
     #[test]
     fn unc_path_keeps_leading_double_slash() {
-        assert_eq!(normalize_file_path_with(r"\\server\share\app.db", false), "//server/share/app.db");
+        assert_eq!(
+            normalize_file_path_with(r"\\server\share\app.db", false),
+            "//server/share/app.db"
+        );
     }
 
     #[test]
     fn fingerprint_shape_and_cache_file_name() {
-        let identity = network("mysql", "db.internal", Some(3306), None, "orders", "-", "app_ro");
+        let identity = network(
+            "mysql",
+            "db.internal",
+            Some(3306),
+            None,
+            "orders",
+            "-",
+            "app_ro",
+        );
         let fingerprint = identity.fingerprint().unwrap();
         assert_eq!(fingerprint.len(), FINGERPRINT_LEN);
         assert!(fingerprint.chars().all(|c| c.is_ascii_hexdigit()));
 
         let canonical = identity.canonical_string().unwrap();
-        assert_eq!(canonical, "v1|mysql|net:db.internal:3306/orders/-|user:app_ro");
+        assert_eq!(
+            canonical,
+            "v1|mysql|net:db.internal:3306/orders/-|user:app_ro"
+        );
         assert_eq!(
             identity.cache_file_name(),
             Some(cache_file_name(&fingerprint))
         );
-        assert_eq!(cache_file_name("0123456789abcdef"), "meta_0123456789abcdef.sqlite");
+        assert_eq!(
+            cache_file_name("0123456789abcdef"),
+            "meta_0123456789abcdef.sqlite"
+        );
     }
 
     // ==================== 接线桥：identity_from_url ====================
@@ -553,7 +681,14 @@ mod tests {
         );
 
         // 无端口（回落 default_port）与显式默认端口必须同身份
-        let implicit = identity_from_url("mysql", "mysql://root:pw@db.internal/orders", Some("root"), None, Some(3306)).unwrap();
+        let implicit = identity_from_url(
+            "mysql",
+            "mysql://root:pw@db.internal/orders",
+            Some("root"),
+            None,
+            Some(3306),
+        )
+        .unwrap();
         assert_eq!(implicit.fingerprint(), identity.fingerprint());
 
         // 查询串 / 凭据不影响身份
@@ -570,12 +705,19 @@ mod tests {
 
     #[test]
     fn url_bridge_file_uses_raw_path_and_normalizes() {
-        let via_uri = identity_from_url("sqlite", "file:///C:/Data/Orders.DB", None, None, None).unwrap();
-        let via_plain = identity_from_url("sqlite", r"C:\Data\orders.db", None, None, None).unwrap();
+        let via_uri =
+            identity_from_url("sqlite", "file:///C:/Data/Orders.DB", None, None, None).unwrap();
+        let via_plain =
+            identity_from_url("sqlite", r"C:\Data\orders.db", None, None, None).unwrap();
         if cfg!(windows) {
             assert_eq!(via_uri.fingerprint(), via_plain.fingerprint());
         }
-        assert!(via_plain.canonical_string().unwrap().starts_with("v1|sqlite|file:"));
+        assert!(
+            via_plain
+                .canonical_string()
+                .unwrap()
+                .starts_with("v1|sqlite|file:")
+        );
     }
 
     #[test]
@@ -599,12 +741,38 @@ mod tests {
 
     #[test]
     fn url_bridge_principal_and_schema_join_identity() {
-        let base = identity_from_url("postgres", "postgres://u:p@db:5432/app", Some("app_ro"), None, Some(5432)).unwrap();
-        let other_user = identity_from_url("postgres", "postgres://u:p@db:5432/app", Some("app_rw"), None, Some(5432)).unwrap();
+        let base = identity_from_url(
+            "postgres",
+            "postgres://u:p@db:5432/app",
+            Some("app_ro"),
+            None,
+            Some(5432),
+        )
+        .unwrap();
+        let other_user = identity_from_url(
+            "postgres",
+            "postgres://u:p@db:5432/app",
+            Some("app_rw"),
+            None,
+            Some(5432),
+        )
+        .unwrap();
         assert_ne!(base.fingerprint(), other_user.fingerprint());
 
-        let with_schema = identity_from_url("postgres", "postgres://u:p@db:5432/app", Some("app_ro"), Some("sales"), Some(5432)).unwrap();
+        let with_schema = identity_from_url(
+            "postgres",
+            "postgres://u:p@db:5432/app",
+            Some("app_ro"),
+            Some("sales"),
+            Some(5432),
+        )
+        .unwrap();
         assert_ne!(base.fingerprint(), with_schema.fingerprint());
-        assert!(with_schema.canonical_string().unwrap().ends_with("/sales|user:app_ro"));
+        assert!(
+            with_schema
+                .canonical_string()
+                .unwrap()
+                .ends_with("/sales|user:app_ro")
+        );
     }
 }

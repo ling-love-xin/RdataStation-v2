@@ -398,10 +398,8 @@ mod tests {
     use super::*;
 
     fn temp_project(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "rds_trash_{tag}_{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("rds_trash_{tag}_{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).expect("create temp project");
         dir
     }
@@ -424,7 +422,13 @@ mod tests {
         assert_eq!(entry.manifest.origin, "scratchpad");
         assert_eq!(entry.manifest.kind, TrashKind::File);
         assert_eq!(entry.manifest.size, 9);
-        assert!(trash.dir().join(&entry.manifest.id).join("payload").is_file());
+        assert!(
+            trash
+                .dir()
+                .join(&entry.manifest.id)
+                .join("payload")
+                .is_file()
+        );
 
         // 清单往返：list / get 都能读回同一条（manifest 自包含）。
         let listed = trash.list().await.expect("list");
@@ -442,7 +446,10 @@ mod tests {
         assert!(!restored.renamed);
         assert_eq!(restored.kind, TrashKind::File);
         assert_eq!(std::fs::read(&source).expect("read"), b"select 1;");
-        assert!(trash.list().await.expect("list").is_empty(), "还原后条目消失");
+        assert!(
+            trash.list().await.expect("list").is_empty(),
+            "还原后条目消失"
+        );
 
         // purge：真删目录，不留残骸。
         let again = module_root.join("again.sql");
@@ -479,7 +486,11 @@ mod tests {
             .expect("restore");
         assert!(restored.renamed, "同名被占 → 必须报告改名");
         assert_eq!(restored.name, "taken_1.sql");
-        assert_eq!(std::fs::read(&source).expect("read"), b"new", "原文件不被覆盖");
+        assert_eq!(
+            std::fs::read(&source).expect("read"),
+            b"new",
+            "原文件不被覆盖"
+        );
         assert_eq!(
             std::fs::read(module_root.join("taken_1.sql")).expect("read"),
             b"old"
@@ -509,7 +520,10 @@ mod tests {
             .await
             .expect("restore folder");
         assert_eq!(restored.kind, TrashKind::Folder);
-        assert!(module_root.join("reports").join("a.sql").is_file(), "目录内容一起回来");
+        assert!(
+            module_root.join("reports").join("a.sql").is_file(),
+            "目录内容一起回来"
+        );
 
         // 清空：目录被清掉后立刻重建（下次能用）。
         let another = module_root.join("b.sql");
@@ -545,7 +559,10 @@ mod tests {
             .await
             .expect("move payload");
 
-        assert_eq!(trash.empty_origin("resources").await.expect("empty origin"), 1);
+        assert_eq!(
+            trash.empty_origin("resources").await.expect("empty origin"),
+            1
+        );
         let left = trash.list().await.expect("list");
         assert_eq!(left.len(), 1, "别的模块的条目必须原样留着");
         assert_eq!(left[0].manifest.origin, "scratchpad");

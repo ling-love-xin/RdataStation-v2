@@ -151,8 +151,14 @@ mod tests {
     #[test]
     fn keys_vs_values() {
         let got = classes(r#"{"name": "RDS", "count": 3}"#);
-        assert!(got.contains(&("\"name\"".into(), TokenClass::Property)), "{got:?}");
-        assert!(got.contains(&("\"RDS\"".into(), TokenClass::String)), "{got:?}");
+        assert!(
+            got.contains(&("\"name\"".into(), TokenClass::Property)),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("\"RDS\"".into(), TokenClass::String)),
+            "{got:?}"
+        );
         assert!(got.contains(&("\"count\"".into(), TokenClass::Property)));
         assert!(got.contains(&("3".into(), TokenClass::Number)));
         assert!(got.contains(&(":".into(), TokenClass::Punctuation)));
@@ -161,7 +167,10 @@ mod tests {
     #[test]
     fn bool_null_and_numbers() {
         let got = classes(r#"{"a": true, "b": null, "c": -1.5e2}"#);
-        assert!(got.contains(&("true".into(), TokenClass::Boolean)), "{got:?}");
+        assert!(
+            got.contains(&("true".into(), TokenClass::Boolean)),
+            "{got:?}"
+        );
         assert!(got.contains(&("null".into(), TokenClass::Constant)));
         assert!(got.contains(&("-1.5e2".into(), TokenClass::Number)));
     }
@@ -169,7 +178,11 @@ mod tests {
     #[test]
     fn escaped_strings_are_single_token() {
         let got = classes(r#""a\"b""#);
-        assert!(got.iter().any(|(t, c)| *c == TokenClass::String && t == r#""a\"b""#), "{got:?}");
+        assert!(
+            got.iter()
+                .any(|(t, c)| *c == TokenClass::String && t == r#""a\"b""#),
+            "{got:?}"
+        );
     }
 
     #[test]

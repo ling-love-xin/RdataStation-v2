@@ -159,10 +159,16 @@ pub fn interval_parts_to_text(months: i32, days: i32, micros: i64) -> String {
         ));
     }
     if mons != 0 {
-        parts.push(format!("{mons} mon{}", if mons.abs() == 1 { "" } else { "s" }));
+        parts.push(format!(
+            "{mons} mon{}",
+            if mons.abs() == 1 { "" } else { "s" }
+        ));
     }
     if days != 0 {
-        parts.push(format!("{days} day{}", if days.abs() == 1 { "" } else { "s" }));
+        parts.push(format!(
+            "{days} day{}",
+            if days.abs() == 1 { "" } else { "s" }
+        ));
     }
 
     let negative = micros < 0;
@@ -463,7 +469,10 @@ mod tests {
     #[test]
     fn interval_parts_and_array_literal_are_shared() {
         // sqlx 侧（PgInterval）与 wire 侧共用同一份格式化
-        assert_eq!(interval_parts_to_text(1, 2, 7_380_000_000), "1 mon 2 days 02:03:00");
+        assert_eq!(
+            interval_parts_to_text(1, 2, 7_380_000_000),
+            "1 mon 2 days 02:03:00"
+        );
         assert_eq!(interval_parts_to_text(0, 0, 0), "00:00:00");
 
         assert_eq!(array_literal(["1".to_string(), "2".to_string()]), "{1,2}");

@@ -14,8 +14,8 @@ use crate::logging::redact::redact_sensitive;
 use std::fmt;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tracing::Subscriber;
 use tracing_appender::rolling::{RollingFileAppender, RollingWriter};
 use tracing_subscriber::filter::EnvFilter;
@@ -256,7 +256,8 @@ impl<'s, W: Write> RedactingWriter<'s, W> {
                 }
                 return Ok(());
             }
-            sink.written.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+            sink.written
+                .fetch_add(bytes.len() as u64, Ordering::Relaxed);
         }
 
         self.inner.write_all(bytes)
@@ -662,7 +663,10 @@ mod tests {
         let text = String::from_utf8_lossy(&sink).to_string();
         assert!(!text.contains("s3cret"), "{text}");
         assert!(!text.contains("hunter2"), "{text}");
-        assert!(text.contains("mysql://root:***@localhost:3306/db"), "{text}");
+        assert!(
+            text.contains("mysql://root:***@localhost:3306/db"),
+            "{text}"
+        );
         assert!(text.contains("password=***"), "{text}");
     }
 

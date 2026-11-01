@@ -181,7 +181,10 @@ fn top_level_clauses(sql: &str) -> TopLevelClauses {
     for token in &tokens {
         if matches!(
             token.token_type,
-            TokenType::Whitespace | TokenType::Eof | TokenType::LineComment | TokenType::BlockComment
+            TokenType::Whitespace
+                | TokenType::Eof
+                | TokenType::LineComment
+                | TokenType::BlockComment
         ) {
             continue;
         }
@@ -267,8 +270,8 @@ mod tests {
 
     #[test]
     fn a_plain_query_gets_a_wrapped_where() {
-        let rewritten = rewrite_with_filter("SELECT * FROM orders", &columns(), "ab", "TEXT")
-            .expect("能改写");
+        let rewritten =
+            rewrite_with_filter("SELECT * FROM orders", &columns(), "ab", "TEXT").expect("能改写");
         assert_eq!(
             rewritten.sql,
             "SELECT * FROM (\nSELECT * FROM orders\n) AS rds_filtered\n\
@@ -280,11 +283,17 @@ mod tests {
     #[test]
     fn order_by_moves_outside_the_subquery() {
         // 子查询里的 ORDER BY 在外层不保证顺序：要搬到外面（场景 34）
-        let rewritten =
-            rewrite_with_filter("SELECT * FROM t ORDER BY created_at DESC", &columns(), "x", "TEXT")
-                .expect("能改写");
+        let rewritten = rewrite_with_filter(
+            "SELECT * FROM t ORDER BY created_at DESC",
+            &columns(),
+            "x",
+            "TEXT",
+        )
+        .expect("能改写");
         assert!(
-            rewritten.sql.starts_with("SELECT * FROM (\nSELECT * FROM t\n) AS rds_filtered"),
+            rewritten
+                .sql
+                .starts_with("SELECT * FROM (\nSELECT * FROM t\n) AS rds_filtered"),
             "{}",
             rewritten.sql
         );
@@ -311,7 +320,10 @@ mod tests {
             "去掉 LIMIT 才叫下发：{}",
             rewritten.sql
         );
-        assert_eq!(rewritten.dropped_limit.as_deref(), Some("LIMIT 10 OFFSET 5"));
+        assert_eq!(
+            rewritten.dropped_limit.as_deref(),
+            Some("LIMIT 10 OFFSET 5")
+        );
     }
 
     #[test]
@@ -371,12 +383,8 @@ mod tests {
     #[test]
     fn ordering_replaces_the_original_order_by() {
         // 用户点的那一列才是他要的顺序：原 ORDER BY 不留
-        let rewritten = rewrite_with_order(
-            "SELECT n, tag FROM t ORDER BY n LIMIT 5",
-            "tag",
-            true,
-        )
-        .expect("能改写");
+        let rewritten = rewrite_with_order("SELECT n, tag FROM t ORDER BY n LIMIT 5", "tag", true)
+            .expect("能改写");
         assert!(
             rewritten.sql.contains("ORDER BY tag DESC"),
             "按点的列降序：{}",

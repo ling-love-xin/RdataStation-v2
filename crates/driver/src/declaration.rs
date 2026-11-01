@@ -32,11 +32,11 @@
 //! 声明与表的漂移由三处测试盯住：本模块的 upsert 幂等/不越权测试、
 //! `capability::tests::declared_capabilities_and_runtime_bits_agree`（键 ↔ 运行时位）。
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde_json::Value;
 
-use crate::registry::{DriverDescriptor, DriverFieldType};
 use crate::DriverRegistry;
+use crate::registry::{DriverDescriptor, DriverFieldType};
 use rds_store::persistence::GlobalDatabaseManager;
 use shared::error::{CoreError, StorageError};
 
@@ -587,7 +587,11 @@ mod tests {
 
         let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).expect("count") };
         let rows_after_first = count("SELECT COUNT(*) FROM data_source_types");
-        assert_eq!(rows_after_first, BUILTIN_DATA_SOURCE_TYPES.len() as i64, "行数 = 声明条数");
+        assert_eq!(
+            rows_after_first,
+            BUILTIN_DATA_SOURCE_TYPES.len() as i64,
+            "行数 = 声明条数"
+        );
 
         // 预置：用户禁用了 mariadb（不该被后续同步重新打开）。
         conn.execute(
@@ -606,7 +610,11 @@ mod tests {
         );
 
         let enabled: i64 = conn
-            .query_row("SELECT enabled FROM data_source_types WHERE id = 'mariadb'", [], |r| r.get(0))
+            .query_row(
+                "SELECT enabled FROM data_source_types WHERE id = 'mariadb'",
+                [],
+                |r| r.get(0),
+            )
             .expect("read back");
         assert_eq!(enabled, 0, "用户禁用的族不得被启动同步打开");
 
@@ -669,8 +677,8 @@ mod tests {
         use crate::property_spec;
 
         for d in declarations() {
-            let keys: serde_json::Map<String, Value> =
-                serde_json::from_str(&d.driver_properties).expect("driver_properties 应是 JSON 对象");
+            let keys: serde_json::Map<String, Value> = serde_json::from_str(&d.driver_properties)
+                .expect("driver_properties 应是 JSON 对象");
             for key in keys.keys() {
                 assert!(
                     property_spec::accepts(&d.id, key),
@@ -703,7 +711,10 @@ mod tests {
                 for k in ["key", "label", "type", "required"] {
                     assert!(f.get(k).is_some(), "{} 的字段缺 {k}：{f}", d.id);
                 }
-                let kind = f.get("type").and_then(|v| v.as_str()).expect("type 是字符串");
+                let kind = f
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .expect("type 是字符串");
                 assert!(
                     ["text", "password", "number", "file", "select"].contains(&kind),
                     "{} 的字段类型 {} 不是视图认识的形态",
@@ -719,9 +730,10 @@ mod tests {
         check(&duckdb_driver());
 
         // 有下拉选项的驱动：`options[].values` 要带上，否则选项就丢了
-        let json: Value =
-            serde_json::from_str(&config_schema_json(&mysql_driver())).expect("json");
-        let values = json["options"][0]["values"].as_array().expect("select 的 values");
+        let json: Value = serde_json::from_str(&config_schema_json(&mysql_driver())).expect("json");
+        let values = json["options"][0]["values"]
+            .as_array()
+            .expect("select 的 values");
         assert!(values.iter().any(|v| v == "VERIFY_IDENTITY"), "{json}");
     }
 }

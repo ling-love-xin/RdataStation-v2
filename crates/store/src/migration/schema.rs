@@ -1,10 +1,10 @@
-use shared::error::{CommonError, CoreError};
 /**
  * 迁移版本追踪模块
  *
  * 负责记录和管理已应用的迁移版本
  */
 use rusqlite::Connection;
+use shared::error::{CommonError, CoreError};
 
 /// 迁移版本记录
 #[derive(Debug, Clone)]

@@ -17,11 +17,12 @@ use arrow::record_batch::RecordBatch;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 use crate::utils::{
-    affected_rows_result, is_read_only_sql as shared_is_read_only_sql, quote_identifier,
-    returns_rows, SqlFlavor,
+    SqlFlavor, affected_rows_result, is_read_only_sql as shared_is_read_only_sql, quote_identifier,
+    returns_rows,
 };
 use crate::{
-    ColumnDetail, ConstraintDetail, DataSourceMeta, Database, ForeignKeyRef, IndexDetail, Transaction,
+    ColumnDetail, ConstraintDetail, DataSourceMeta, Database, ForeignKeyRef, IndexDetail,
+    Transaction,
 };
 use shared::error::{CoreError, DatabaseError};
 use shared::models::{ArrowBatch, QueryResult, Value};
@@ -105,7 +106,7 @@ pub(crate) fn plan_connection(
                             key,
                             value,
                             "只支持 delete / truncate / persist / memory / wal / off",
-                        ))
+                        ));
                     }
                 };
                 plan.pragmas.push(PlannedPragma {
@@ -124,7 +125,13 @@ pub(crate) fn plan_connection(
                     "normal" | "1" => 1,
                     "full" | "2" => 2,
                     "extra" | "3" => 3,
-                    _ => return Err(attr_err(key, value, "只支持 off / normal / full / extra（或 0-3）")),
+                    _ => {
+                        return Err(attr_err(
+                            key,
+                            value,
+                            "只支持 off / normal / full / extra（或 0-3）",
+                        ));
+                    }
                 };
                 plan.pragmas.push(pragma_with_readback(
                     raw_key,
@@ -138,7 +145,13 @@ pub(crate) fn plan_connection(
                     "default" | "0" => 0,
                     "file" | "1" => 1,
                     "memory" | "2" => 2,
-                    _ => return Err(attr_err(key, value, "只支持 default / file / memory（或 0-2）")),
+                    _ => {
+                        return Err(attr_err(
+                            key,
+                            value,
+                            "只支持 default / file / memory（或 0-2）",
+                        ));
+                    }
                 };
                 plan.pragmas.push(pragma_with_readback(
                     raw_key,
@@ -156,7 +169,10 @@ pub(crate) fn plan_connection(
                 plan.pragmas.push(PlannedPragma {
                     key: raw_key.clone(),
                     applied_as: "foreign_keys",
-                    sql: format!("PRAGMA foreign_keys = {}", if on == 1 { "ON" } else { "OFF" }),
+                    sql: format!(
+                        "PRAGMA foreign_keys = {}",
+                        if on == 1 { "ON" } else { "OFF" }
+                    ),
                     verify: Some(("PRAGMA foreign_keys".to_string(), on)),
                     expect_text: None,
                 });
@@ -366,14 +382,14 @@ fn apply_pragmas(conn: &Connection, plan: &SqlitePlan) -> Result<(), CoreError> 
                         &p.key,
                         &p.sql,
                         format!("引擎实际落下的值是 `{got}`（期望 `{want}`）——该库不支持这个取值"),
-                    ))
+                    ));
                 }
                 other => {
                     return Err(pragma_err(
                         &p.key,
                         &p.sql,
                         format!("没有拿到预期回值（{other:?}）"),
-                    ))
+                    ));
                 }
             }
         }
@@ -386,7 +402,7 @@ fn apply_pragmas(conn: &Connection, plan: &SqlitePlan) -> Result<(), CoreError> 
                         &p.key,
                         &p.sql,
                         format!("读回值是 {got}（期望 {want}）——未生效"),
-                    ))
+                    ));
                 }
                 Err(e) => return Err(pragma_err(&p.key, &p.sql, e.to_string())),
             }
@@ -563,7 +579,11 @@ impl Database for SqliteDatabase {
                 ));
             };
 
-            Ok(QueryResult::with_batches(columns, vec![batch], Some(is_read_only)))
+            Ok(QueryResult::with_batches(
+                columns,
+                vec![batch],
+                Some(is_read_only),
+            ))
         })
         .await
         .map_err(|e| {
@@ -989,11 +1009,17 @@ impl Database for SqliteDatabase {
         {
             let mut stmt = conn
                 .prepare(&format!("PRAGMA table_info({quoted})"))
-                .map_err(|e| CoreError::database(DatabaseError::query("constraints_pk", e.to_string())))?;
+                .map_err(|e| {
+                    CoreError::database(DatabaseError::query("constraints_pk", e.to_string()))
+                })?;
             // 列: cid, name, type, notnull, dflt_value, pk
             let rows = stmt
-                .query_map([], |row| Ok((row.get::<_, i64>(5)?, row.get::<_, String>(1)?)))
-                .map_err(|e| CoreError::database(DatabaseError::query("constraints_pk_q", e.to_string())))?;
+                .query_map([], |row| {
+                    Ok((row.get::<_, i64>(5)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| {
+                    CoreError::database(DatabaseError::query("constraints_pk_q", e.to_string()))
+                })?;
             let mut pk: Vec<(i64, String)> = Vec::new();
             for r in rows {
                 let (order, name) = r.map_err(|e| {
@@ -1022,7 +1048,9 @@ impl Database for SqliteDatabase {
         {
             let mut stmt = conn
                 .prepare(&format!("PRAGMA foreign_key_list({quoted})"))
-                .map_err(|e| CoreError::database(DatabaseError::query("constraints_fk", e.to_string())))?;
+                .map_err(|e| {
+                    CoreError::database(DatabaseError::query("constraints_fk", e.to_string()))
+                })?;
             // 列: id, seq, table, from, to, on_update, on_delete, match
             let rows = stmt
                 .query_map([], |row| {
@@ -1036,7 +1064,9 @@ impl Database for SqliteDatabase {
                         row.get::<_, String>(6)?,
                     ))
                 })
-                .map_err(|e| CoreError::database(DatabaseError::query("constraints_fk_q", e.to_string())))?;
+                .map_err(|e| {
+                    CoreError::database(DatabaseError::query("constraints_fk_q", e.to_string()))
+                })?;
 
             // id → (引用表, 更新规则, 删除规则, [(seq, 本表列, 引用列)])
             let mut by_id: std::collections::BTreeMap<
@@ -1044,9 +1074,13 @@ impl Database for SqliteDatabase {
                 (String, String, String, Vec<(i64, String, Option<String>)>),
             > = std::collections::BTreeMap::new();
             for r in rows {
-                let (id, seq, ref_table, from_col, to_col, on_update, on_delete) = r.map_err(|e| {
-                    CoreError::database(DatabaseError::query("constraints_fk_row", e.to_string()))
-                })?;
+                let (id, seq, ref_table, from_col, to_col, on_update, on_delete) =
+                    r.map_err(|e| {
+                        CoreError::database(DatabaseError::query(
+                            "constraints_fk_row",
+                            e.to_string(),
+                        ))
+                    })?;
                 by_id
                     .entry(id)
                     .or_insert((ref_table, on_update, on_delete, Vec::new()))
@@ -1074,7 +1108,9 @@ impl Database for SqliteDatabase {
         {
             let mut stmt = conn
                 .prepare(&format!("PRAGMA index_list({quoted})"))
-                .map_err(|e| CoreError::database(DatabaseError::query("constraints_uq", e.to_string())))?;
+                .map_err(|e| {
+                    CoreError::database(DatabaseError::query("constraints_uq", e.to_string()))
+                })?;
             // 列: seq, name, unique, origin, partial
             let rows = stmt
                 .query_map([], |row| {
@@ -1084,7 +1120,9 @@ impl Database for SqliteDatabase {
                         row.get::<_, String>(3)?,
                     ))
                 })
-                .map_err(|e| CoreError::database(DatabaseError::query("constraints_uq_q", e.to_string())))?;
+                .map_err(|e| {
+                    CoreError::database(DatabaseError::query("constraints_uq_q", e.to_string()))
+                })?;
             let uniques: Vec<String> = rows
                 .filter_map(|r| r.ok())
                 .filter(|(_, unique, origin)| *unique != 0 && origin == "u")
@@ -1098,13 +1136,19 @@ impl Database for SqliteDatabase {
                         quote_identifier(&index_name, '"')
                     ))
                     .map_err(|e| {
-                        CoreError::database(DatabaseError::query("constraints_uq_info", e.to_string()))
+                        CoreError::database(DatabaseError::query(
+                            "constraints_uq_info",
+                            e.to_string(),
+                        ))
                     })?;
                 // 列: seqno, cid, name
                 let cols: Vec<String> = info
                     .query_map([], |row| row.get::<_, String>(2))
                     .map_err(|e| {
-                        CoreError::database(DatabaseError::query("constraints_uq_info_q", e.to_string()))
+                        CoreError::database(DatabaseError::query(
+                            "constraints_uq_info_q",
+                            e.to_string(),
+                        ))
                     })?
                     .filter_map(|r| r.ok())
                     .collect();
@@ -1152,7 +1196,9 @@ impl Database for SqliteDatabase {
                 |row| row.get::<_, Option<String>>(0),
             )
             .optional()
-            .map_err(|e| CoreError::database(DatabaseError::query("get_table_ddl", e.to_string())))?;
+            .map_err(|e| {
+                CoreError::database(DatabaseError::query("get_table_ddl", e.to_string()))
+            })?;
         Ok(found.flatten().filter(|s| !s.trim().is_empty()))
     }
 }
@@ -1181,10 +1227,7 @@ impl crate::MetadataBrowser for SqliteDatabase {
         )])
     }
 
-    async fn get_schemas(
-        &self,
-        _catalog: &str,
-    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
+    async fn get_schemas(&self, _catalog: &str) -> Result<Vec<crate::NodeInfo>, CoreError> {
         Ok(vec![])
     }
 
@@ -1262,9 +1305,7 @@ impl Transaction for SqliteTransaction {
             return execute_writing(&conn, sql, &[]);
         }
 
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| sqlite_error(sql, e))?;
+        let mut stmt = conn.prepare(sql).map_err(|e| sqlite_error(sql, e))?;
 
         let columns: Vec<String> = stmt
             .column_names()
@@ -1272,9 +1313,7 @@ impl Transaction for SqliteTransaction {
             .map(|name| name.to_string())
             .collect();
 
-        let mut rows = stmt
-            .query([])
-            .map_err(|e| sqlite_error(sql, e))?;
+        let mut rows = stmt.query([]).map_err(|e| sqlite_error(sql, e))?;
 
         let mut row_data: Vec<Vec<rusqlite::types::Value>> = Vec::new();
         while let Ok(Some(row)) = rows.next() {
@@ -1492,7 +1531,12 @@ mod tests {
         let applied: Vec<&str> = plan.pragmas.iter().map(|p| p.applied_as).collect();
         assert_eq!(
             applied,
-            vec!["busy_timeout", "foreign_keys", "journal_mode", "synchronous"],
+            vec![
+                "busy_timeout",
+                "foreign_keys",
+                "journal_mode",
+                "synchronous"
+            ],
             "按 key 排序、且别名归到规范名"
         );
         assert_eq!(plan.unknown, vec!["魔改键".to_string()]);
@@ -1501,7 +1545,10 @@ mod tests {
         let err = plan_connection(&props(&[("journal_mode", "write")]))
             .expect_err("write 不是合法日志模式")
             .to_string();
-        assert!(err.contains("journal_mode") && err.contains("write"), "{err}");
+        assert!(
+            err.contains("journal_mode") && err.contains("write"),
+            "{err}"
+        );
         let err = plan_connection(&props(&[("busy_timeout", "3s")]))
             .expect_err("毫秒数不能带单位")
             .to_string();
@@ -1570,14 +1617,18 @@ mod tests {
     /// `mode=rw` 不建新文件：库不存在时开库必失败（证明打开标志真的生效了）。
     #[tokio::test]
     async fn open_mode_is_applied() {
-        let dir = std::env::temp_dir().join(format!("rdata_test_sqlite_mode_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("rdata_test_sqlite_mode_{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let path = dir.join("missing.db");
         let _ = std::fs::remove_file(&path);
 
         // rwc（默认）会建文件
-        SqliteDatabase::new_with_properties(&format!("sqlite://{}", path.display()), &props(&[("mode", "rwc")]))
-            .expect("rwc 应能建库");
+        SqliteDatabase::new_with_properties(
+            &format!("sqlite://{}", path.display()),
+            &props(&[("mode", "rwc")]),
+        )
+        .expect("rwc 应能建库");
         assert!(path.exists());
 
         // rw 不会建（文件已存在 → 能开；删掉后 → 必须失败）
@@ -1673,7 +1724,8 @@ mod tests {
         let db = SqliteDatabase::new(&path)?;
         db.query("CREATE TABLE t(id INTEGER, name TEXT, price REAL, data BLOB)")
             .await?;
-        db.query("INSERT INTO t VALUES (1, 'a', 1.5, x'0A')").await?;
+        db.query("INSERT INTO t VALUES (1, 'a', 1.5, x'0A')")
+            .await?;
         let result = db.query("SELECT * FROM t").await?;
         assert_eq!(
             result.column_types,
@@ -1697,10 +1749,7 @@ mod tests {
         let db = SqliteDatabase::new(&path)?;
         db.query("CREATE TABLE t(id INTEGER, name TEXT)").await?;
         let result = db.query("SELECT * FROM t").await?;
-        assert_eq!(
-            result.columns,
-            vec!["id".to_string(), "name".to_string()]
-        );
+        assert_eq!(result.columns, vec!["id".to_string(), "name".to_string()]);
         assert!(result.column_types.is_empty(), "空结果无 schema → 无类型档");
         assert!(result.is_empty());
         Ok(())

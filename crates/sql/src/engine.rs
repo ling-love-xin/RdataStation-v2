@@ -180,11 +180,7 @@ impl SqlEngine {
     /// 为什么不用 `"NULL"` 字符串表示空值：那样会把「值恰好是 `NULL` 四个字母」的一格
     /// 静默吞成空值。空值与否是**两个类型**（有值 / 无值），不是某个文本取值，见
     /// [`builder::build_insert`]。
-    pub fn build_insert(
-        table: &str,
-        columns: &[String],
-        values: &[Vec<Option<&str>>],
-    ) -> String {
+    pub fn build_insert(table: &str, columns: &[String], values: &[Vec<Option<&str>>]) -> String {
         builder::build_insert(table, columns, values)
     }
 

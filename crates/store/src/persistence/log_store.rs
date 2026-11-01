@@ -4,12 +4,12 @@
 //! 遵循 persistence 层设计模式，与 global_db.rs 保持一致。
 
 use crate::logging::record::{
-    LogLevel, LogLevelCounts, LogPage, LogQuery, LogRecord, LogStats, TargetStat, TIMESTAMP_FMT,
+    LogLevel, LogLevelCounts, LogPage, LogQuery, LogRecord, LogStats, TIMESTAMP_FMT, TargetStat,
 };
 use crate::persistence::GlobalSqlitePool;
 use shared::error::{CoreError, StorageError};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const DEFAULT_MAX_RECORDS: usize = 100_000;
 const DEFAULT_RETENTION_DAYS: u32 = 7;

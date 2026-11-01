@@ -55,10 +55,7 @@ impl MetadataCachePool {
     ///
     /// 创建时**一次性**跑迁移（`MetadataCacheManager::ensure_schema`）并预热 `warm` 个连接；
     /// 之后所有取用都不再校验表结构 —— 这是把固定开销挪出热路径的关键。
-    pub fn get_or_create(
-        db_path: PathBuf,
-        warm: usize,
-    ) -> Result<Arc<Self>, CoreError> {
+    pub fn get_or_create(db_path: PathBuf, warm: usize) -> Result<Arc<Self>, CoreError> {
         let mut reg = registry().lock().map_err(|_| {
             CoreError::common(CommonError::General(
                 "metadata cache pool registry poisoned".to_string(),

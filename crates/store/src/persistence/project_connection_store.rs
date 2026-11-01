@@ -3,8 +3,8 @@
 //! 负责在项目级别存储和管理数据库连接配置。
 //! 表结构与 global_connections 保持一致。
 
-use shared::error::{CommonError, CoreError, StorageError};
 use crate::persistence::project_db::ProjectDatabaseManager;
+use shared::error::{CommonError, CoreError, StorageError};
 
 /// 连接配置（支持 DuckDB 联邦分析）
 #[derive(Debug, Clone)]
@@ -690,11 +690,7 @@ impl ProjectConnectionStore {
     /// 从项目移除插件
     pub async fn project_remove_plugin(&self, code: &str, version: &str) -> Result<(), CoreError> {
         let conn = self.db_manager.sqlite_pool().acquire().await?;
-        crate::persistence::plugin_store::project_remove_plugin(
-            conn.inner()?,
-            code,
-            version,
-        )?;
+        crate::persistence::plugin_store::project_remove_plugin(conn.inner()?, code, version)?;
         Ok(())
     }
 

@@ -37,7 +37,9 @@ fn redact_url_password(s: &str) -> String {
             // 权限段止于路径 / 参数 / 空白 / 引号：不能在整个剩余串里找 `@`，
             // 否则 `mysql://host/db?u=a@b` 这种会把查询串里的 `@` 当权限段
             let end = rest
-                .find(|c: char| matches!(c, '/' | '?' | '#' | ' ' | '\t' | '\n' | '\r' | '"' | '\''))
+                .find(|c: char| {
+                    matches!(c, '/' | '?' | '#' | ' ' | '\t' | '\n' | '\r' | '"' | '\'')
+                })
                 .unwrap_or(rest.len());
             let authority = &rest[..end];
             match authority.rfind('@') {

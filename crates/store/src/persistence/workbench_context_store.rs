@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::persistence::global_db::GlobalSqlitePool;
 use shared::error::{CoreError, StorageError};
@@ -201,12 +201,37 @@ impl WorkbenchContextStore {
                 "TEXT NOT NULL DEFAULT 'source'",
             )?;
             // 【T2c-6】老库也要能存工具栏布局 / schema / 缩进（空串 = 未存过 → 恢复用默认）
-            ensure_column(conn, "editor_contexts", "toolbar", "TEXT NOT NULL DEFAULT ''")?;
-            ensure_column(conn, "editor_contexts", "schema", "TEXT NOT NULL DEFAULT ''")?;
-            ensure_column(conn, "editor_contexts", "tab_size", "INTEGER NOT NULL DEFAULT 2")?;
-            ensure_column(conn, "editor_contexts", "hard_tabs", "INTEGER NOT NULL DEFAULT 0")?;
+            ensure_column(
+                conn,
+                "editor_contexts",
+                "toolbar",
+                "TEXT NOT NULL DEFAULT ''",
+            )?;
+            ensure_column(
+                conn,
+                "editor_contexts",
+                "schema",
+                "TEXT NOT NULL DEFAULT ''",
+            )?;
+            ensure_column(
+                conn,
+                "editor_contexts",
+                "tab_size",
+                "INTEGER NOT NULL DEFAULT 2",
+            )?;
+            ensure_column(
+                conn,
+                "editor_contexts",
+                "hard_tabs",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
             // 【遗留 #5】老库也要能存结果区分栏高度（默认 18rem 与 editor 默认一致）
-            ensure_column(conn, "editor_contexts", "result_height", "REAL NOT NULL DEFAULT 18")?;
+            ensure_column(
+                conn,
+                "editor_contexts",
+                "result_height",
+                "REAL NOT NULL DEFAULT 18",
+            )?;
             // 【结果集 #296】老库也要能存结果集列序（空串 = 默认序）
             ensure_column(
                 conn,
@@ -511,20 +536,24 @@ fn ensure_column(
     definition: &str,
 ) -> Result<(), CoreError> {
     let present = {
-        let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})")).map_err(|e| {
-            CoreError::storage(StorageError::Persistence {
-                store: "sqlite".to_string(),
-                operation: format!("pragma_{table}"),
-                reason: e.to_string(),
-            })
-        })?;
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: format!("pragma_{table}"),
+                    reason: e.to_string(),
+                })
+            })?;
         let names = stmt
             .query_map([], |row| row.get::<_, String>(1))
-            .map_err(|e| CoreError::storage(StorageError::Persistence {
-                store: "sqlite".to_string(),
-                operation: format!("pragma_{table}_rows"),
-                reason: e.to_string(),
-            }))?;
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: format!("pragma_{table}_rows"),
+                    reason: e.to_string(),
+                })
+            })?;
         names.filter_map(Result::ok).any(|name| name == column)
     };
 
@@ -554,10 +583,7 @@ mod tests {
     use crate::persistence::global_db::GlobalSqlitePool;
 
     fn temp_db(tag: &str) -> (PathBuf, PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "rds_wb_context_{tag}_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("rds_wb_context_{tag}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         let db = dir.join("global.db");
@@ -633,7 +659,9 @@ mod tests {
         let (dir, db) = temp_db("roundtrip");
         let store = open_store(&db);
 
-        store.save_editor_context(&context("doc.sql", "analysis")).expect("save");
+        store
+            .save_editor_context(&context("doc.sql", "analysis"))
+            .expect("save");
         let loaded = store
             .load_editor_context("doc.sql")
             .expect("load")
@@ -653,12 +681,17 @@ mod tests {
         let (dir, db) = temp_db("replace");
         let store = open_store(&db);
 
-        store.save_editor_context(&context("doc.sql", "sql")).expect("save");
+        store
+            .save_editor_context(&context("doc.sql", "sql"))
+            .expect("save");
         let mut updated = context("doc.sql", "text");
         updated.content = "select 2;".to_string();
         store.save_editor_context(&updated).expect("save again");
 
-        let loaded = store.load_editor_context("doc.sql").expect("load").expect("存在");
+        let loaded = store
+            .load_editor_context("doc.sql")
+            .expect("load")
+            .expect("存在");
         assert_eq!(loaded.mode, "text");
         assert_eq!(loaded.content, "select 2;");
         assert_eq!(store.load_editor_context("nope.sql").expect("load"), None);
@@ -689,7 +722,10 @@ mod tests {
             vec!["b.sql", "a.sql", "c.sql"],
             "倒序按 updated_at_ms，与保存顺序无关"
         );
-        assert!(all.iter().all(|c| c.channel == "source"), "行映射复用同一条列路径");
+        assert!(
+            all.iter().all(|c| c.channel == "source"),
+            "行映射复用同一条列路径"
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -806,10 +842,16 @@ mod tests {
             .expect("load")
             .expect("老行还在");
         assert_eq!(loaded.mode, "sql", "补列后旧行取默认模式");
-        assert_eq!(loaded.channel, "source", "通道列同样补默认档：认不出就是源库");
+        assert_eq!(
+            loaded.channel, "source",
+            "通道列同样补默认档：认不出就是源库"
+        );
         assert_eq!(loaded.content, "select 9;");
         // 【T2c-6】老库补列后默认值：空布局串 / 空 schema / 缩进 2 / 空格缩进
-        assert_eq!(loaded.toolbar, "", "旧行没有工具栏布局 → 空串（恢复用默认布局）");
+        assert_eq!(
+            loaded.toolbar, "",
+            "旧行没有工具栏布局 → 空串（恢复用默认布局）"
+        );
         assert_eq!(loaded.schema, "", "旧行没有 schema 绑定 → 空串（连接默认）");
         assert_eq!(loaded.tab_size, 2, "旧行缩进宽度补默认 2");
         assert!(!loaded.hard_tabs, "旧行缩进方式补默认空格");
@@ -817,7 +859,10 @@ mod tests {
         // 再开一次也不该报错（幂等：列已存在）
         let store_again = open_store(&db);
         assert!(
-            store_again.load_editor_context("legacy.sql").expect("load").is_some(),
+            store_again
+                .load_editor_context("legacy.sql")
+                .expect("load")
+                .is_some(),
             "重复打开不会因补列冲突而失败"
         );
 

@@ -10,9 +10,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use shared::utils::sql::escape_sql_string;
-use shared::error::{CoreError, StorageError};
 use crate::persistence::project_db::ProjectDatabaseManager;
+use shared::error::{CoreError, StorageError};
+use shared::utils::sql::escape_sql_string;
 
 /// 连接信息
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

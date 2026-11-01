@@ -253,7 +253,10 @@ pub fn list() -> Result<Vec<CacheIndexEntry>, CoreError> {
 
 /// 孤儿条目：引用列表为空的指纹（连接已删除 / 释放但缓存文件未清）。
 pub fn orphans() -> Result<Vec<CacheIndexEntry>, CoreError> {
-    Ok(list()?.into_iter().filter(|e| e.ref_conn_ids.is_empty()).collect())
+    Ok(list()?
+        .into_iter()
+        .filter(|e| e.ref_conn_ids.is_empty())
+        .collect())
 }
 
 /// 清理孤儿索引行（**不删除缓存文件**——文件清理由缓存管理轮决定）。
@@ -261,7 +264,10 @@ pub fn orphans() -> Result<Vec<CacheIndexEntry>, CoreError> {
 pub fn prune_orphans() -> Result<usize, CoreError> {
     let conn = open()?;
     let n = conn
-        .execute("DELETE FROM metadata_cache_index WHERE ref_conn_ids = ''", [])
+        .execute(
+            "DELETE FROM metadata_cache_index WHERE ref_conn_ids = ''",
+            [],
+        )
         .map_err(|e| io_err(e))?;
     Ok(n)
 }
@@ -386,8 +392,18 @@ mod tests {
     fn record_release_roundtrip() {
         isolated(|| {
             let fp = "fp_idx_a";
-            record(fp, "G_conn_idx_1", "v1|mysql|net:db.internal/orders|user:app").unwrap();
-            record(fp, "G_conn_idx_2", "v1|mysql|net:db.internal/orders|user:app").unwrap();
+            record(
+                fp,
+                "G_conn_idx_1",
+                "v1|mysql|net:db.internal/orders|user:app",
+            )
+            .unwrap();
+            record(
+                fp,
+                "G_conn_idx_2",
+                "v1|mysql|net:db.internal/orders|user:app",
+            )
+            .unwrap();
 
             let all = list().unwrap();
             let e = by_fp(fp, &all).expect("同指纹应聚合一行为一条");
@@ -396,7 +412,12 @@ mod tests {
             assert!(e.description.contains("db.internal"));
 
             // 幂等：同 conn_id 重复登记不叠加
-            record(fp, "G_conn_idx_1", "v1|mysql|net:db.internal/orders|user:app").unwrap();
+            record(
+                fp,
+                "G_conn_idx_1",
+                "v1|mysql|net:db.internal/orders|user:app",
+            )
+            .unwrap();
             let all = list().unwrap();
             assert_eq!(by_fp(fp, &all).unwrap().ref_conn_ids.len(), 2);
 
@@ -474,11 +495,17 @@ mod tests {
 
             // 展示条目：全局孤儿带路径与大小，项目孤儿无路径。
             let entries = list_orphan_cache_entries(Some(&sys)).unwrap();
-            let g = entries.iter().find(|e| e.fingerprint == "fp_orph_g").unwrap();
+            let g = entries
+                .iter()
+                .find(|e| e.fingerprint == "fp_orph_g")
+                .unwrap();
             assert_eq!(g.scope, CacheScope::Global);
             assert_eq!(g.file_size, 1);
             assert!(g.file_path.is_some());
-            let p = entries.iter().find(|e| e.fingerprint == "fp_orph_p").unwrap();
+            let p = entries
+                .iter()
+                .find(|e| e.fingerprint == "fp_orph_p")
+                .unwrap();
             assert_eq!(p.scope, CacheScope::Project);
             assert!(p.file_path.is_none());
 

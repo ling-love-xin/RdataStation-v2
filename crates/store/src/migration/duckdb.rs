@@ -170,8 +170,7 @@ mod tests {
 
     /// 独立的临时库路径（每次用前清空同名目录）。
     fn temp_db_path(tag: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("rds_duckdb_mig_{}_{tag}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rds_duckdb_mig_{}_{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir.join("analytics.duckdb")
     }

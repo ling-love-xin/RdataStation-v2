@@ -14,14 +14,14 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 use crate::traits::MetadataBrowser;
+use crate::utils::MY_LIST_CONSTRAINTS_SQL;
 use crate::utils::{
-    affected_rows_result, is_read_only_sql as shared_is_read_only_sql, returns_rows, SqlFlavor,
+    SqlFlavor, affected_rows_result, is_read_only_sql as shared_is_read_only_sql, returns_rows,
 };
 use crate::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, NodeDetail, NodeInfo,
     PoolStatus, SchemaObjectKind, Transaction,
 };
-use crate::utils::MY_LIST_CONSTRAINTS_SQL;
 use shared::error::{ConnectionError, CoreError, DatabaseError};
 use shared::models::{ArrowBatch, QueryResult, Value};
 
@@ -63,7 +63,7 @@ pub(crate) fn mysql_async_ssl_opts(
                 "客户端证书 `{cert}` 不是 PKCS#12 存档（.p12 / .pfx）：\
                  mysql_async 的 native-tls 后端只接受 PKCS#12 客户端身份。\
                  请改用「MySQL (sqlx)」驱动（它直接接受 PEM 证书 + 私钥）"
-            )))
+            )));
         }
         (Some(_), Some(_)) => {
             return Err(tls_unsupported(
@@ -71,12 +71,12 @@ pub(crate) fn mysql_async_ssl_opts(
                  （只接受 PKCS#12 存档）：请改用「MySQL (sqlx)」驱动，\
                  或把证书导出为 .p12/.pfx 后只填「客户端证书」一栏"
                     .to_string(),
-            ))
+            ));
         }
         (None, Some(_)) => {
             return Err(tls_unsupported(
                 "填了客户端私钥但没有客户端证书：两者需成对（或只给 PKCS#12 存档）".to_string(),
-            ))
+            ));
         }
     }
 
@@ -499,25 +499,22 @@ impl Database for MySqlNativeDatabase {
 
         // 查询级 15s 超时：包「发查询 + 拉完全部行」整段；取连接等待与写语句在超时外，
         // 对齐 `mysql.rs:333-344` 口径。超时后 conn 局部 drop，由池 recycler 自动清理脏连接。
-        let (columns, rows) = tokio::time::timeout(
-            MYSQL_NATIVE_QUERY_TIMEOUT,
-            async {
-                let mut result = conn
-                    .query_iter(sql)
-                    .await
-                    .map_err(|e| mysql_native_query_error(sql, &e))?;
-                let columns: Vec<String> = result
-                    .columns_ref()
-                    .iter()
-                    .map(|c| c.name_str().to_string())
-                    .collect();
-                let rows: Vec<mysql_async::Row> = result
-                    .collect()
-                    .await
-                    .map_err(|e| mysql_native_query_error(sql, &e))?;
-                Ok::<(Vec<String>, Vec<mysql_async::Row>), CoreError>((columns, rows))
-            },
-        )
+        let (columns, rows) = tokio::time::timeout(MYSQL_NATIVE_QUERY_TIMEOUT, async {
+            let mut result = conn
+                .query_iter(sql)
+                .await
+                .map_err(|e| mysql_native_query_error(sql, &e))?;
+            let columns: Vec<String> = result
+                .columns_ref()
+                .iter()
+                .map(|c| c.name_str().to_string())
+                .collect();
+            let rows: Vec<mysql_async::Row> = result
+                .collect()
+                .await
+                .map_err(|e| mysql_native_query_error(sql, &e))?;
+            Ok::<(Vec<String>, Vec<mysql_async::Row>), CoreError>((columns, rows))
+        })
         .await
         .map_err(|_| mysql_native_timeout_error(sql))??;
 
@@ -564,25 +561,22 @@ impl Database for MySqlNativeDatabase {
         let params_ref: Vec<&mysql_async::Value> = mysql_params.iter().collect();
 
         // 查询级 15s 超时：包「发查询 + 拉完全部行」整段，口径同 `query`。
-        let (columns, rows) = tokio::time::timeout(
-            MYSQL_NATIVE_QUERY_TIMEOUT,
-            async {
-                let mut result = conn
-                    .exec_iter(sql, params_ref)
-                    .await
-                    .map_err(|e| mysql_native_query_error(sql, &e))?;
-                let columns: Vec<String> = result
-                    .columns_ref()
-                    .iter()
-                    .map(|c| c.name_str().to_string())
-                    .collect();
-                let rows: Vec<mysql_async::Row> = result
-                    .collect()
-                    .await
-                    .map_err(|e| mysql_native_query_error(sql, &e))?;
-                Ok::<(Vec<String>, Vec<mysql_async::Row>), CoreError>((columns, rows))
-            },
-        )
+        let (columns, rows) = tokio::time::timeout(MYSQL_NATIVE_QUERY_TIMEOUT, async {
+            let mut result = conn
+                .exec_iter(sql, params_ref)
+                .await
+                .map_err(|e| mysql_native_query_error(sql, &e))?;
+            let columns: Vec<String> = result
+                .columns_ref()
+                .iter()
+                .map(|c| c.name_str().to_string())
+                .collect();
+            let rows: Vec<mysql_async::Row> = result
+                .collect()
+                .await
+                .map_err(|e| mysql_native_query_error(sql, &e))?;
+            Ok::<(Vec<String>, Vec<mysql_async::Row>), CoreError>((columns, rows))
+        })
         .await
         .map_err(|_| mysql_native_timeout_error(sql))??;
 
@@ -739,7 +733,15 @@ impl Database for MySqlNativeDatabase {
                 .column_by_name(name)
                 .and_then(|c| c.as_any().downcast_ref::<arrow::array::StringArray>())
         };
-        let (Some(cname), Some(ctype), Some(cols), Some(ref_table), Some(ref_cols), Some(upd), Some(del)) = (
+        let (
+            Some(cname),
+            Some(ctype),
+            Some(cols),
+            Some(ref_table),
+            Some(ref_cols),
+            Some(upd),
+            Some(del),
+        ) = (
             col("cname"),
             col("ctype"),
             col("cols"),
@@ -747,7 +749,8 @@ impl Database for MySqlNativeDatabase {
             col("ref_cols"),
             col("upd"),
             col("del"),
-        ) else {
+        )
+        else {
             return Ok(out);
         };
 
@@ -999,10 +1002,7 @@ impl MetadataBrowser for MySqlNativeDatabase {
                         } else {
                             SchemaObjectKind::Table
                         };
-                        nodes.push(NodeInfo::new(
-                            name_arr.value(row_idx).to_string(),
-                            kind,
-                        ));
+                        nodes.push(NodeInfo::new(name_arr.value(row_idx).to_string(), kind));
                     }
                 }
             }

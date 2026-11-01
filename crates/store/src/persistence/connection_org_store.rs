@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use shared::error::{CoreError, StorageError};
 
 /// 项目元数据目录名：与 `project::store::RS_META_DIR_NAME` 保持一致（历史误写为 `.RSMETA`，
@@ -216,10 +216,7 @@ impl ConnectionOrgStore {
         };
         if !has {
             self.conn
-                .execute(
-                    "ALTER TABLE connection_tags ADD COLUMN tag_id TEXT",
-                    [],
-                )
+                .execute("ALTER TABLE connection_tags ADD COLUMN tag_id TEXT", [])
                 .map_err(|e| self.err("alter_connection_tags_tag_id", e))?;
         }
         Ok(())
@@ -499,8 +496,7 @@ impl ConnectionOrgStore {
             )
             .map_err(|e| self.err("group_order", e))?;
         }
-        tx.commit()
-            .map_err(|e| self.err("commit_group_order", e))?;
+        tx.commit().map_err(|e| self.err("commit_group_order", e))?;
         Ok(())
     }
 
@@ -886,9 +882,8 @@ fn backfill_tags_inner(conn: &Connection, source_table: &str) -> Result<usize, C
     // 先收集待迁移集合（连接 ID → 规范化标签），避免边查边写。
     let mut pending: Vec<(String, Vec<String>)> = Vec::new();
     {
-        let sql = format!(
-            "SELECT id, tags FROM {source_table} WHERE tags IS NOT NULL AND tags <> ''"
-        );
+        let sql =
+            format!("SELECT id, tags FROM {source_table} WHERE tags IS NOT NULL AND tags <> ''");
         let mut stmt = conn
             .prepare(&sql)
             .map_err(|e| store_err("select_connection_tags_json", e))?;
@@ -985,12 +980,21 @@ mod tests {
         let dir = temp_dir("tags");
         let store = ConnectionOrgStore::open_at(dir.join("p.db"), true).expect("open");
         store
-            .set_tags("P_a", &["prod".into(), "core".into(), "".into(), "prod".into()])
+            .set_tags(
+                "P_a",
+                &["prod".into(), "core".into(), "".into(), "prod".into()],
+            )
             .expect("set");
-        assert_eq!(store.list_tags("P_a"), vec!["core".to_string(), "prod".to_string()]);
+        assert_eq!(
+            store.list_tags("P_a"),
+            vec!["core".to_string(), "prod".to_string()]
+        );
         store.set_tags("P_b", &["prod".into()]).expect("set b");
 
-        assert_eq!(store.list_connections_by_tag("prod"), vec!["P_a".to_string(), "P_b".to_string()]);
+        assert_eq!(
+            store.list_connections_by_tag("prod"),
+            vec!["P_a".to_string(), "P_b".to_string()]
+        );
         assert_eq!(
             store.list_all_tags(),
             vec![("prod".to_string(), 2), ("core".to_string(), 1)]
@@ -1007,7 +1011,10 @@ mod tests {
 
         // 覆盖式：清空后旧标签不再命中
         store.set_tags("P_b", &[]).expect("clear");
-        assert_eq!(store.list_connections_by_tag("prod"), vec!["P_a".to_string()]);
+        assert_eq!(
+            store.list_connections_by_tag("prod"),
+            vec!["P_a".to_string()]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1048,7 +1055,8 @@ mod tests {
         let rows: Vec<(String, NavTagRow)> = store.list_tag_rows();
         assert_eq!(rows.len(), 3, "三个关联各归并出一条定义");
         assert!(
-            rows.iter().all(|(_, r)| r.name != "core" || r.color.is_none()),
+            rows.iter()
+                .all(|(_, r)| r.name != "core" || r.color.is_none()),
             "导航旧标签无颜色/图标，归并定义留空"
         );
 
@@ -1100,7 +1108,10 @@ mod tests {
         store
             .set_connection_groups("P_a", &["g2".into()])
             .expect("set one");
-        assert_eq!(store.list_groups_for_connection("P_a"), vec!["g2".to_string()]);
+        assert_eq!(
+            store.list_groups_for_connection("P_a"),
+            vec!["g2".to_string()]
+        );
 
         store.set_connection_groups("P_a", &[]).expect("clear");
         assert!(store.list_groups_for_connection("P_a").is_empty());
@@ -1237,7 +1248,9 @@ mod tests {
     fn groups_many_to_many_and_cleanup() {
         let dir = temp_dir("groups");
         let store = ConnectionOrgStore::open_at(dir.join("p.db"), true).expect("open");
-        store.create_group("g1", "alpha", Some("关键业务")).expect("g1");
+        store
+            .create_group("g1", "alpha", Some("关键业务"))
+            .expect("g1");
         store.create_group("g2", "beta", None).expect("g2");
 
         store.add_member("g1", "P_a").expect("add");
@@ -1246,8 +1259,14 @@ mod tests {
         // 幂等：重复加入不报错、不产生重复
         store.add_member("g1", "P_a").expect("add again");
 
-        assert_eq!(store.list_group_members("g1"), vec!["P_a".to_string(), "P_b".to_string()]);
-        assert_eq!(store.list_groups_for_connection("P_a"), vec!["g1".to_string(), "g2".to_string()]);
+        assert_eq!(
+            store.list_group_members("g1"),
+            vec!["P_a".to_string(), "P_b".to_string()]
+        );
+        assert_eq!(
+            store.list_groups_for_connection("P_a"),
+            vec!["g1".to_string(), "g2".to_string()]
+        );
         assert_eq!(store.list_groups().len(), 2);
 
         // 删除连接 → 关系清理，分组仍在
@@ -1274,7 +1293,11 @@ mod tests {
         store.create_group("g3", "gamma", None).expect("g3");
         // 新建分组同 sort_order（缺省 0）→ 回退到名称升序：alpha / beta / gamma。
         assert_eq!(
-            store.list_groups().iter().map(|g| g.id.clone()).collect::<Vec<_>>(),
+            store
+                .list_groups()
+                .iter()
+                .map(|g| g.id.clone())
+                .collect::<Vec<_>>(),
             vec!["g1".to_string(), "g2".to_string(), "g3".to_string()]
         );
 
@@ -1290,7 +1313,11 @@ mod tests {
             vec!["g2".to_string(), "g3".to_string(), "g1".to_string()]
         );
         // 重排不改正文：名称与描述原样保留。
-        let g1 = store.list_groups().into_iter().find(|g| g.id == "g1").expect("g1");
+        let g1 = store
+            .list_groups()
+            .into_iter()
+            .find(|g| g.id == "g1")
+            .expect("g1");
         assert_eq!(g1.name, "alpha");
         assert_eq!(g1.description.as_deref(), Some("第一组"));
         assert_eq!(g1.sort_order, 2);
@@ -1321,10 +1348,8 @@ mod tests {
         std::fs::create_dir_all(dir.join(RS_META_DIR_NAME)).expect("mkdir .RSmeta");
         let db = dir.join(RS_META_DIR_NAME).join(PROJECT_DB_NAME);
         let conn = Connection::open(&db).expect("open raw");
-        conn.execute_batch(
-            "CREATE TABLE connections (id TEXT PRIMARY KEY, name TEXT, tags TEXT);",
-        )
-        .expect("create connections");
+        conn.execute_batch("CREATE TABLE connections (id TEXT PRIMARY KEY, name TEXT, tags TEXT);")
+            .expect("create connections");
         for (id, tags) in rows {
             conn.execute(
                 "INSERT INTO connections (id, name, tags) VALUES (?1, ?1, ?2)",
@@ -1342,9 +1367,9 @@ mod tests {
             &dir,
             &[
                 ("P_a", r#"["prod", "core ", "", "prod"]"#), // 去空 / 去重
-                ("P_b", ""),                                       // 空 JSON → 跳过
-                ("P_c", "not-json"),                              // 非数组 → 跳过
-                ("P_keep", r#"["old"]"#),                        // 权威表已有记录 → 不覆盖
+                ("P_b", ""),                                 // 空 JSON → 跳过
+                ("P_c", "not-json"),                         // 非数组 → 跳过
+                ("P_keep", r#"["old"]"#),                    // 权威表已有记录 → 不覆盖
             ],
         );
         // 预先给 P_keep 写权威表记录（模拟“新写入路径已生效 / 用户改过”）。
@@ -1365,7 +1390,10 @@ mod tests {
         // 首次：只迁移「表里无记录且 JSON 非空」的 P_a。
         assert_eq!(backfill_project_connection_tags(&dir).expect("backfill"), 1);
         let store = ConnectionOrgStore::open_at(db.clone(), true).expect("open store");
-        assert_eq!(store.list_tags("P_a"), vec!["core".to_string(), "prod".to_string()]);
+        assert_eq!(
+            store.list_tags("P_a"),
+            vec!["core".to_string(), "prod".to_string()]
+        );
         assert!(store.list_tags("P_b").is_empty(), "空 JSON 不应写入");
         assert!(store.list_tags("P_c").is_empty(), "非数组 JSON 不应写入");
         assert_eq!(
@@ -1375,8 +1403,14 @@ mod tests {
         );
 
         // 幂等：再跑一次不再写入（也没有重复行）。
-        assert_eq!(backfill_project_connection_tags(&dir).expect("backfill again"), 0);
-        assert_eq!(store.list_tags("P_a"), vec!["core".to_string(), "prod".to_string()]);
+        assert_eq!(
+            backfill_project_connection_tags(&dir).expect("backfill again"),
+            0
+        );
+        assert_eq!(
+            store.list_tags("P_a"),
+            vec!["core".to_string(), "prod".to_string()]
+        );
         drop(store);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1387,13 +1421,19 @@ mod tests {
         let dir = temp_dir("tag_backfill_skip");
         // 1) 项目库文件不存在 → 0，且不建目录。
         let missing = dir.join("no_such_project");
-        assert_eq!(backfill_project_connection_tags(&missing).expect("missing"), 0);
+        assert_eq!(
+            backfill_project_connection_tags(&missing).expect("missing"),
+            0
+        );
         assert!(!missing.exists(), "不得为迁移创建目录");
 
         // 2) 有连接表、没有权威表 → 0，且**不得**凭空创建 connection_tags。
         let legacy = dir.join("legacy");
         let db = legacy_project_db(&legacy, &[("P_a", r#"["prod"]"#)]);
-        assert_eq!(backfill_project_connection_tags(&legacy).expect("legacy"), 0);
+        assert_eq!(
+            backfill_project_connection_tags(&legacy).expect("legacy"),
+            0
+        );
         {
             let conn = Connection::open(&db).expect("reopen");
             let has: Option<i64> = conn
@@ -1422,7 +1462,10 @@ mod tests {
         )
         .expect("seed global");
         assert_eq!(backfill_all_connection_tags(&conn).expect("global"), 1);
-        assert_eq!(backfill_all_connection_tags(&conn).expect("global again"), 0);
+        assert_eq!(
+            backfill_all_connection_tags(&conn).expect("global again"),
+            0
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

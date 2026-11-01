@@ -15,8 +15,6 @@ use duckdb::Connection as DuckConnection;
 use rusqlite::{Connection as SqliteConnection, OptionalExtension};
 use tokio::sync::{Mutex, Semaphore};
 
-use shared::utils::sql::quote_identifier;
-use shared::error::{CommonError, CoreError, StorageError};
 use crate::migration::{MigrationManager, MigrationType};
 use crate::persistence::auth_store;
 use crate::persistence::driver_store::{self, DataSourceType, Driver, DriverFile};
@@ -26,6 +24,8 @@ use crate::persistence::plugin_store;
 use crate::persistence::script_env_store::ScriptEnvStore;
 use crate::persistence::sql_template_store::SqlTemplateStore;
 use crate::persistence::workbench_context_store::WorkbenchContextStore;
+use shared::error::{CommonError, CoreError, StorageError};
+use shared::utils::sql::quote_identifier;
 
 /// 全局连接信息结构体
 #[derive(Debug, Clone)]
@@ -1141,42 +1141,33 @@ impl GlobalDatabaseManager {
     /// 019 迁移后新增 `is_pinned` / `removed_at`；所有 SELECT 列序保持一致
     /// （… `last_opened_at, is_pinned, removed_at`），供 `row_to_project_record` 统一定位。
     #[allow(dead_code)]
-    const PROJECT_SELECT_COLUMNS: &'static str =
-        "id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at";
+    const PROJECT_SELECT_COLUMNS: &'static str = "id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at";
 
     const PROJECT_CHECK_ID_EXISTS: &'static str = "SELECT COUNT(*) FROM project_info WHERE id = ?1";
 
     const PROJECT_CHECK_PATH_EXISTS: &'static str =
         "SELECT COUNT(*) FROM project_info WHERE path = ?1";
 
-    const PROJECT_UPDATE_BY_ID: &'static str =
-        "UPDATE project_info SET name = ?2, description = ?3, path = ?4, status = ?5, updated_at = CURRENT_TIMESTAMP, last_opened_at = ?6 WHERE id = ?1";
+    const PROJECT_UPDATE_BY_ID: &'static str = "UPDATE project_info SET name = ?2, description = ?3, path = ?4, status = ?5, updated_at = CURRENT_TIMESTAMP, last_opened_at = ?6 WHERE id = ?1";
 
-    const PROJECT_UPDATE_BY_PATH: &'static str =
-        "UPDATE project_info SET id = ?1, name = ?2, description = ?3, status = ?5, updated_at = CURRENT_TIMESTAMP, last_opened_at = ?6 WHERE path = ?4";
+    const PROJECT_UPDATE_BY_PATH: &'static str = "UPDATE project_info SET id = ?1, name = ?2, description = ?3, status = ?5, updated_at = CURRENT_TIMESTAMP, last_opened_at = ?6 WHERE path = ?4";
 
-    const PROJECT_INSERT: &'static str =
-        "INSERT INTO project_info (id, name, description, path, status, updated_at, last_opened_at) VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP, ?6)";
+    const PROJECT_INSERT: &'static str = "INSERT INTO project_info (id, name, description, path, status, updated_at, last_opened_at) VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP, ?6)";
 
     const PROJECT_DELETE: &'static str = "DELETE FROM project_info WHERE id = ?1";
 
-    const PROJECT_UPDATE_INFO: &'static str =
-        "UPDATE project_info SET name = ?2, description = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?1";
+    const PROJECT_UPDATE_INFO: &'static str = "UPDATE project_info SET name = ?2, description = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?1";
 
     /// 保存（upsert）：只更新基础列，保留 `is_pinned`/`pinned_at`/`removed_at`，
     /// 避免 `INSERT OR REPLACE` 整行替换导致固定 / 软删状态丢失。
-    const PROJECT_INSERT_OR_REPLACE: &'static str =
-        "INSERT INTO project_info (id, name, description, path, status, updated_at, last_opened_at) VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP, ?6) ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description, path = excluded.path, status = excluded.status, updated_at = CURRENT_TIMESTAMP, last_opened_at = excluded.last_opened_at";
+    const PROJECT_INSERT_OR_REPLACE: &'static str = "INSERT INTO project_info (id, name, description, path, status, updated_at, last_opened_at) VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP, ?6) ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description, path = excluded.path, status = excluded.status, updated_at = CURRENT_TIMESTAMP, last_opened_at = excluded.last_opened_at";
 
-    const PROJECT_SELECT_ALL: &'static str =
-        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE removed_at IS NULL ORDER BY is_pinned DESC, last_opened_at DESC";
+    const PROJECT_SELECT_ALL: &'static str = "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE removed_at IS NULL ORDER BY is_pinned DESC, last_opened_at DESC";
 
-    const PROJECT_SELECT_REMOVED: &'static str =
-        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE removed_at IS NOT NULL ORDER BY removed_at DESC";
+    const PROJECT_SELECT_REMOVED: &'static str = "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE removed_at IS NOT NULL ORDER BY removed_at DESC";
 
     /// 固定 / 取消固定（`pinned_at` 仅在固定时记录）。
-    const PROJECT_SET_PINNED: &'static str =
-        "UPDATE project_info SET is_pinned = ?2, pinned_at = CASE WHEN ?2 = 1 THEN CURRENT_TIMESTAMP ELSE NULL END, updated_at = CURRENT_TIMESTAMP WHERE id = ?1";
+    const PROJECT_SET_PINNED: &'static str = "UPDATE project_info SET is_pinned = ?2, pinned_at = CASE WHEN ?2 = 1 THEN CURRENT_TIMESTAMP ELSE NULL END, updated_at = CURRENT_TIMESTAMP WHERE id = ?1";
 
     /// 软删：移出名册（磁盘保留），写入可恢复标记。
     const PROJECT_SOFT_DELETE: &'static str =
@@ -1192,23 +1183,17 @@ impl GlobalDatabaseManager {
     const PROJECT_OPEN_UPDATE: &'static str =
         "UPDATE project_info SET last_opened_at = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2";
 
-    const PROJECT_OPEN_QUERY: &'static str =
-        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE id = ?1";
+    const PROJECT_OPEN_QUERY: &'static str = "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE id = ?1";
 
-    const PROJECT_OPEN_BY_PATH_UPDATE: &'static str =
-        "UPDATE project_info SET last_opened_at = ?1, updated_at = CURRENT_TIMESTAMP WHERE path = ?2";
+    const PROJECT_OPEN_BY_PATH_UPDATE: &'static str = "UPDATE project_info SET last_opened_at = ?1, updated_at = CURRENT_TIMESTAMP WHERE path = ?2";
 
-    const PROJECT_OPEN_BY_PATH_QUERY: &'static str =
-        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE path = ?1";
+    const PROJECT_OPEN_BY_PATH_QUERY: &'static str = "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE path = ?1";
 
-    const PROJECT_GET_RECENT: &'static str =
-        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE removed_at IS NULL AND last_opened_at IS NOT NULL AND last_opened_at != '' ORDER BY is_pinned DESC, last_opened_at DESC LIMIT ?1";
+    const PROJECT_GET_RECENT: &'static str = "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE removed_at IS NULL AND last_opened_at IS NOT NULL AND last_opened_at != '' ORDER BY is_pinned DESC, last_opened_at DESC LIMIT ?1";
 
-    const PROJECT_GET_BY_ID: &'static str =
-        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE id = ?1";
+    const PROJECT_GET_BY_ID: &'static str = "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE id = ?1";
 
-    const PROJECT_GET_BY_PATH: &'static str =
-        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE path = ?1";
+    const PROJECT_GET_BY_PATH: &'static str = "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE path = ?1";
 
     /// 辅助函数：将数据库行转换为 ProjectInfoRecord
     fn row_to_project_record(
@@ -1495,12 +1480,12 @@ impl GlobalDatabaseManager {
         let conn = self.sqlite_pool.acquire().await?;
 
         let projects = {
-            let mut stmt =
-                conn.inner()?
-                    .prepare(Self::PROJECT_SELECT_REMOVED)
-                    .map_err(|e| {
-                        Self::sqlite_persistence_error("list_removed_projects", e.to_string())
-                    })?;
+            let mut stmt = conn
+                .inner()?
+                .prepare(Self::PROJECT_SELECT_REMOVED)
+                .map_err(|e| {
+                    Self::sqlite_persistence_error("list_removed_projects", e.to_string())
+                })?;
 
             let rows = stmt
                 .query_map([], Self::row_to_project_record)

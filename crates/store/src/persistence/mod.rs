@@ -29,9 +29,9 @@ pub mod history_store;
 pub mod id_prefix;
 pub mod log_store;
 pub mod metadata_cache;
+pub mod metadata_cache_index;
 pub mod metadata_cache_pool;
 pub mod metadata_identity;
-pub mod metadata_cache_index;
 pub mod metadata_identity_registry;
 pub mod navigator_state;
 pub mod network_store;
@@ -65,6 +65,12 @@ pub use metadata_cache::{
     ChunkResult, ConnectionType, FtsSearchResult, IndexEntry, IndexSearchHit, MetadataCacheManager,
     MetadataCacheOps, NameMatchMode, SchemaObjectCounts, TriggerInfo,
 };
+pub use metadata_cache_index::{
+    CacheIndexEntry, CacheScope, OrphanCacheEntry, cleanup_orphan_meta_files, index_path,
+    list as list_cache_index, list_orphan_cache_entries, orphans as orphans_cache_index,
+    prune_orphans as prune_cache_index_orphans, record as record_cache_index,
+    release as release_cache_index,
+};
 pub use metadata_cache_pool::{MetadataCachePool, PooledMetadataConnection};
 pub use metadata_identity::{
     ConnectionIdentity, NetworkAuthority, cache_file_name, identity_from_url,
@@ -72,12 +78,6 @@ pub use metadata_identity::{
 pub use metadata_identity_registry::{
     identity_canonical, identity_fingerprint, register_identity, registered_identity_count,
     unregister_identity,
-};
-pub use metadata_cache_index::{
-    CacheIndexEntry, CacheScope, OrphanCacheEntry, cleanup_orphan_meta_files, index_path,
-    list as list_cache_index, list_orphan_cache_entries, orphans as orphans_cache_index,
-    prune_orphans as prune_cache_index_orphans, record as record_cache_index,
-    release as release_cache_index,
 };
 pub use navigator_state::{NavState, NavigatorStateStore, PANEL_STATE_CONN_ID};
 pub use project_db::{ProjectDatabaseManager, ProjectDuckdbConnection, ProjectSqlitePool};

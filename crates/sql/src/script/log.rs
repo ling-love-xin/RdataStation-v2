@@ -97,8 +97,7 @@ fn span(start: usize, end: usize, class: TokenClass) -> HighlightSpan {
 
 /// 时间戳可含字符：数字 / `:` `.` `-` `T` `Z` `+` 与空格
 fn is_timestamp_char(b: u8) -> bool {
-    b.is_ascii_digit()
-        || matches!(b, b':' | b'.' | b'-' | b'T' | b'Z' | b'+' | b' ' | b'/')
+    b.is_ascii_digit() || matches!(b, b':' | b'.' | b'-' | b'T' | b'Z' | b'+' | b' ' | b'/')
 }
 
 /// 粗判「像时间戳」：含至少一个数字与一个冒号/横线（避免把纯数字误吞）
@@ -160,8 +159,13 @@ mod tests {
 
     #[test]
     fn levels_are_coloured_by_severity() {
-        let got = classes("2026-10-15 18:00:00 ERROR boom\n18:00:01 WARN warn!\n18:00:02 INFO ok\ndebug trace");
-        assert!(got.contains(&("ERROR".into(), TokenClass::Constant)), "{got:?}");
+        let got = classes(
+            "2026-10-15 18:00:00 ERROR boom\n18:00:01 WARN warn!\n18:00:02 INFO ok\ndebug trace",
+        );
+        assert!(
+            got.contains(&("ERROR".into(), TokenClass::Constant)),
+            "{got:?}"
+        );
         assert!(got.contains(&("WARN".into(), TokenClass::Keyword)));
         assert!(got.contains(&("INFO".into(), TokenClass::Function)));
         assert!(got.contains(&("debug".into(), TokenClass::Comment)));
@@ -172,7 +176,8 @@ mod tests {
     fn timestamps_are_numbers() {
         let got = classes("2026-10-15T18:00:00.123Z [svc] start");
         assert!(
-            got.iter().any(|(t, c)| *c == TokenClass::Number && t.starts_with("2026")),
+            got.iter()
+                .any(|(t, c)| *c == TokenClass::Number && t.starts_with("2026")),
             "{got:?}"
         );
         assert!(got.contains(&("[".into(), TokenClass::Punctuation)));
@@ -182,7 +187,10 @@ mod tests {
     #[test]
     fn key_value_pairs() {
         let got = classes("level=INFO time=\"12:00\" retries=3");
-        assert!(got.contains(&("level".into(), TokenClass::Variable)), "{got:?}");
+        assert!(
+            got.contains(&("level".into(), TokenClass::Variable)),
+            "{got:?}"
+        );
         assert!(got.contains(&("time".into(), TokenClass::Variable)));
         assert!(got.contains(&("retries".into(), TokenClass::Variable)));
         assert!(got.contains(&("\"12:00\"".into(), TokenClass::String)));
@@ -192,8 +200,14 @@ mod tests {
     #[test]
     fn level_is_not_a_substring() {
         let got = classes("information processor");
-        assert!(!got.iter().any(|(t, _)| t == "processor"), "不应把 processor 当级别");
-        assert!(!got.iter().any(|(t, c)| *c == TokenClass::Constant && t == "information"));
+        assert!(
+            !got.iter().any(|(t, _)| t == "processor"),
+            "不应把 processor 当级别"
+        );
+        assert!(
+            !got.iter()
+                .any(|(t, c)| *c == TokenClass::Constant && t == "information")
+        );
     }
 
     #[test]

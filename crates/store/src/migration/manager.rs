@@ -1,4 +1,4 @@
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
 use rusqlite::Connection;
 /**
  * 迁移管理器模块
@@ -11,9 +11,9 @@ use rusqlite::Connection;
  */
 use std::path::Path;
 
-use shared::error::{CommonError, CoreError};
 use crate::migration::executor::{Migration, MigrationExecutor};
 use crate::migration::schema::SchemaTracker;
+use shared::error::{CommonError, CoreError};
 
 /// 编译时嵌入 migrations 目录
 pub const MIGRATIONS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/migrations");

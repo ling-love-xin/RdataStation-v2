@@ -18,9 +18,9 @@ use tokio::sync::Mutex;
 
 use crate::traits::MetadataBrowser;
 use crate::utils::{
-    affected_rows_result, batch_to_string_rows, byte_offset_for_char,
-    is_read_only_sql as shared_is_read_only_sql, pg_constraint_kind, pg_fk_action, returns_rows,
-    split_csv, PG_LIST_CONSTRAINTS_SQL, PG_LIST_INDEXES_SQL, SqlFlavor,
+    PG_LIST_CONSTRAINTS_SQL, PG_LIST_INDEXES_SQL, SqlFlavor, affected_rows_result,
+    batch_to_string_rows, byte_offset_for_char, is_read_only_sql as shared_is_read_only_sql,
+    pg_constraint_kind, pg_fk_action, returns_rows, split_csv,
 };
 use crate::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, NodeDetail, NodeInfo,
@@ -120,9 +120,7 @@ impl PostgresNativeDatabase {
 ///
 /// 无请求时保持历史行为（不校验，接受自签）；`verify-ca` / `verify-full` 才开校验，
 /// 两者都是「用户显式要验证书」的意图，不允许静默降级。
-pub(crate) fn pg_tls_policy(
-    req: Option<&connection::config::TlsRequest>,
-) -> (bool, bool) {
+pub(crate) fn pg_tls_policy(req: Option<&connection::config::TlsRequest>) -> (bool, bool) {
     match req {
         None => (false, false),
         Some(r) => (r.verifies_chain(), r.verifies_hostname()),
@@ -158,8 +156,8 @@ pub(crate) fn pg_tls_connector(
                     .map_err(|e| tls_config_err(format!("读取客户端证书失败（{cert}）：{e}")))?;
                 let key_pem = std::fs::read(key)
                     .map_err(|e| tls_config_err(format!("读取客户端私钥失败（{key}）：{e}")))?;
-                let identity = native_tls::Identity::from_pkcs8(&cert_pem, &key_pem)
-                    .map_err(|e| {
+                let identity =
+                    native_tls::Identity::from_pkcs8(&cert_pem, &key_pem).map_err(|e| {
                         tls_config_err(format!(
                             "客户端证书与私钥无法组成 PKCS#8 身份（{cert} + {key}）：{e}"
                         ))
@@ -169,12 +167,12 @@ pub(crate) fn pg_tls_connector(
             (Some(cert), None) => {
                 return Err(tls_config_err(format!(
                     "客户端证书 {cert} 缺少对应私钥：两件套需成对填写"
-                )))
+                )));
             }
             (None, Some(key)) => {
                 return Err(tls_config_err(format!(
                     "客户端私钥 {key} 缺少对应证书：两件套需成对填写"
-                )))
+                )));
             }
         }
     }
@@ -512,10 +510,7 @@ async fn describe_columns_pg_native(
     client: &tokio_postgres::Client,
     sql: &str,
 ) -> Result<Vec<String>, CoreError> {
-    let statement = client
-        .prepare(sql)
-        .await
-        .map_err(|e| query_error(sql, e))?;
+    let statement = client.prepare(sql).await.map_err(|e| query_error(sql, e))?;
     Ok(statement
         .columns()
         .iter()
@@ -942,8 +937,7 @@ impl Database for PostgresNativeDatabase {
         catalog: &str,
         schema: Option<&str>,
     ) -> Result<Vec<NodeInfo>, CoreError> {
-        self.get_triggers(catalog, schema.unwrap_or("public"))
-            .await
+        self.get_triggers(catalog, schema.unwrap_or("public")).await
     }
 
     async fn get_routine_source(
@@ -1150,10 +1144,7 @@ impl MetadataBrowser for PostgresNativeDatabase {
                         };
                         // S3-②：第 3/4 列 = 父表名 / 分区标记（PG 子表折叠进父表）。
                         // arrow StringArray 对 NULL 的 `value()` 返回空串，无需判 is_null。
-                        let mut node = NodeInfo::new(
-                            name_arr.value(row_idx).to_string(),
-                            kind,
-                        );
+                        let mut node = NodeInfo::new(name_arr.value(row_idx).to_string(), kind);
                         if let Some(parent_arr) =
                             batch.column(2).as_any().downcast_ref::<StringArray>()
                         {
@@ -1163,8 +1154,8 @@ impl MetadataBrowser for PostgresNativeDatabase {
                                 if let Some(part_arr) = batch
                                     .column(3)
                                     .as_any()
-                                    .downcast_ref::<arrow::array::BooleanArray>()
-                                {
+                                    .downcast_ref::<arrow::array::BooleanArray>(
+                                ) {
                                     if part_arr.value(row_idx) {
                                         node = node.with_partition();
                                     }
@@ -1227,7 +1218,11 @@ impl MetadataBrowser for PostgresNativeDatabase {
     /// 序列与触发器在 PostgreSQL 走**浏览器层**（而不是 `Database::list_*` 回退）：
     /// 回退路径要先让 `get_sequences` 返回空才算数，而 trait 默认实现就是空——
     /// 那是“未支持”与“真的没有”分辨不清的写法。这里直接给真实实现。
-    async fn get_sequences(&self, _catalog: &str, schema: &str) -> Result<Vec<NodeInfo>, CoreError> {
+    async fn get_sequences(
+        &self,
+        _catalog: &str,
+        schema: &str,
+    ) -> Result<Vec<NodeInfo>, CoreError> {
         let sql = "SELECT sequence_name FROM information_schema.sequences \
                    WHERE sequence_schema = $1 ORDER BY sequence_name";
         let result = self
@@ -1271,7 +1266,11 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(pg_tls_policy(Some(&require)), (false, false), "require 只管加密");
+        assert_eq!(
+            pg_tls_policy(Some(&require)),
+            (false, false),
+            "require 只管加密"
+        );
 
         let ca = TlsRequest::new(
             SslMode::VerifyCa,
@@ -1343,10 +1342,7 @@ mod tests {
         )
         .expect("构造批次");
         let result = QueryResult {
-            columns: vec![
-                "trigger_name".to_string(),
-                "event_object_table".to_string(),
-            ],
+            columns: vec!["trigger_name".to_string(), "event_object_table".to_string()],
             batches: vec![batch],
             ..Default::default()
         };

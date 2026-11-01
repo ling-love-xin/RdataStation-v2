@@ -254,7 +254,10 @@ mod tests {
     #[test]
     fn inline_code_and_link_url() {
         let got = classes("用 `code` 与 [说明](https://example.com) 测试");
-        assert!(got.contains(&("`code`".into(), TokenClass::String)), "{got:?}");
+        assert!(
+            got.contains(&("`code`".into(), TokenClass::String)),
+            "{got:?}"
+        );
         assert!(
             got.contains(&("https://example.com".into(), TokenClass::String)),
             "{got:?}"

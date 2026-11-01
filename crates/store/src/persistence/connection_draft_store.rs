@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use shared::error::{CommonError, CoreError, StorageError};
 
 /// 进程级库路径覆盖（测试注入临时库；只能设置一次）。
@@ -265,11 +265,8 @@ mod tests {
     use super::*;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "rds_draft_store_{}_{}",
-            tag,
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("rds_draft_store_{}_{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir

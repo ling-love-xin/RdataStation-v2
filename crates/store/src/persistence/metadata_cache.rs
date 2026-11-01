@@ -18,9 +18,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension};
 
-use shared::error::{CommonError, CoreError, StorageError};
 use crate::migration::{MigrationManager, MigrationType};
 use crate::persistence::metadata_cache_pool::{MetadataCachePool, PooledMetadataConnection};
+use shared::error::{CommonError, CoreError, StorageError};
 
 /// 连接类型枚举
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -470,16 +470,19 @@ impl MetadataCacheOps {
             })
     }
 
-
     /// 获取 Schema 列表
     pub fn list_schemas(&self, catalog_name: Option<&str>) -> Result<Vec<SchemaInfo>, CoreError> {
         let query = match catalog_name {
-            Some(_) => "SELECT id, catalog_name, schema_name, owner, comment, last_sync, \
+            Some(_) => {
+                "SELECT id, catalog_name, schema_name, owner, comment, last_sync, \
                         default_character_set_name, default_collation_name, introspect_level, is_loaded \
-                        FROM schemata WHERE catalog_name = ?1 ORDER BY schema_name",
-            None => "SELECT id, catalog_name, schema_name, owner, comment, last_sync, \
+                        FROM schemata WHERE catalog_name = ?1 ORDER BY schema_name"
+            }
+            None => {
+                "SELECT id, catalog_name, schema_name, owner, comment, last_sync, \
                      default_character_set_name, default_collation_name, introspect_level, is_loaded \
-                     FROM schemata ORDER BY schema_name",
+                     FROM schemata ORDER BY schema_name"
+            }
         };
 
         let mut stmt = self.conn.prepare(query).map_err(|e| {
@@ -575,7 +578,6 @@ impl MetadataCacheOps {
 
         Ok(self.conn.last_insert_rowid())
     }
-
 
     /// 保存表元数据并携带分区/继承父表信息（S3-②）。
     ///
@@ -996,7 +998,6 @@ impl MetadataCacheOps {
 
         Ok(self.conn.last_insert_rowid())
     }
-
 
     /// 获取列列表（规范化）
     pub fn list_columns_normalized(
@@ -2367,7 +2368,7 @@ impl MetadataCacheOps {
                     store: "sqlite".to_string(),
                     operation: "load_node_detail_table".to_string(),
                     reason: e.to_string(),
-                }))
+                }));
             }
         };
 
@@ -3875,20 +3876,22 @@ impl MetadataCacheOps {
         match mode {
             NameMatchMode::StartsWith => {
                 for category in Self::SEARCH_INDEX_CATEGORY_PREDICATES {
-                    let sql = Self::search_index_category_sql(Self::SQL_SEARCH_INDEX_PREFIX_TEMPLATE, category);
-                    hits.extend(self.query_index_hits(
-                        &sql,
-                        &[&connection_id, &needle, &upper, &limit],
-                    )?);
+                    let sql = Self::search_index_category_sql(
+                        Self::SQL_SEARCH_INDEX_PREFIX_TEMPLATE,
+                        category,
+                    );
+                    hits.extend(
+                        self.query_index_hits(&sql, &[&connection_id, &needle, &upper, &limit])?,
+                    );
                 }
             }
             NameMatchMode::Contains => {
                 for category in Self::SEARCH_INDEX_CATEGORY_PREDICATES {
-                    let sql = Self::search_index_category_sql(Self::SQL_SEARCH_INDEX_CONTAINS_TEMPLATE, category);
-                    hits.extend(self.query_index_hits(
-                        &sql,
-                        &[&connection_id, &contains, &limit],
-                    )?);
+                    let sql = Self::search_index_category_sql(
+                        Self::SQL_SEARCH_INDEX_CONTAINS_TEMPLATE,
+                        category,
+                    );
+                    hits.extend(self.query_index_hits(&sql, &[&connection_id, &contains, &limit])?);
                 }
             }
         }
@@ -4274,7 +4277,10 @@ impl TableDetailInfo {
             color_label: row.get(15)?,
             user_comment: row.get(16)?,
             parent_table: row.get(17)?,
-            is_partition: row.get::<_, Option<i32>>(18)?.map(|v| v != 0).unwrap_or(false),
+            is_partition: row
+                .get::<_, Option<i32>>(18)?
+                .map(|v| v != 0)
+                .unwrap_or(false),
         })
     }
 }
@@ -4520,10 +4526,12 @@ mod tests {
         let conn_id = "test_mysql_001";
 
         let manager = MetadataCacheManager::new(conn_id, ConnectionType::Global, None).unwrap();
-        assert!(manager
-            .db_path()
-            .to_string_lossy()
-            .contains("global_metadata"));
+        assert!(
+            manager
+                .db_path()
+                .to_string_lossy()
+                .contains("global_metadata")
+        );
         assert!(manager.db_path().to_string_lossy().contains(conn_id));
     }
 
@@ -4537,10 +4545,12 @@ mod tests {
 
         let manager =
             MetadataCacheManager::new(conn_id, ConnectionType::Project, Some(&project_path))?;
-        assert!(manager
-            .db_path()
-            .to_string_lossy()
-            .contains("meta/connection_metadata"));
+        assert!(
+            manager
+                .db_path()
+                .to_string_lossy()
+                .contains("meta/connection_metadata")
+        );
         assert!(manager.db_path().to_string_lossy().contains(conn_id));
         Ok(())
     }
@@ -4553,12 +4563,25 @@ mod tests {
 
         let conn_id = "G_conn_fp_wire_001";
         // 先保证未登记（回退路径含 conn_id）
-        let fallback =
-            MetadataCacheManager::new(conn_id, ConnectionType::Global, None).unwrap();
-        assert!(fallback.db_path().file_name().unwrap().to_string_lossy().starts_with("conn_"));
+        let fallback = MetadataCacheManager::new(conn_id, ConnectionType::Global, None).unwrap();
+        assert!(
+            fallback
+                .db_path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("conn_")
+        );
 
         // 登记身份后 → meta_{fp}.sqlite
-        let identity = identity_from_url("mysql", "mysql://root:pw@db.internal:3306/orders", Some("root"), None, Some(3306)).expect("可共享");
+        let identity = identity_from_url(
+            "mysql",
+            "mysql://root:pw@db.internal:3306/orders",
+            Some("root"),
+            None,
+            Some(3306),
+        )
+        .expect("可共享");
         let fp = identity.fingerprint().unwrap();
         register_identity(conn_id, &identity);
 
@@ -4569,16 +4592,31 @@ mod tests {
         );
 
         // 指向同一物理库的另一条连接（不同名称）共享同一文件
-        let alias = identity_from_url("mysql", "mysql://root:pw@db.internal/orders?sslmode=require", Some("root"), None, Some(3306)).expect("可共享");
+        let alias = identity_from_url(
+            "mysql",
+            "mysql://root:pw@db.internal/orders?sslmode=require",
+            Some("root"),
+            None,
+            Some(3306),
+        )
+        .expect("可共享");
         register_identity("G_conn_fp_wire_002", &alias);
-        let alias_mgr = MetadataCacheManager::new("G_conn_fp_wire_002", ConnectionType::Global, None).unwrap();
+        let alias_mgr =
+            MetadataCacheManager::new("G_conn_fp_wire_002", ConnectionType::Global, None).unwrap();
         assert_eq!(alias_mgr.db_path(), manager.db_path());
 
         // 注销后回退 conn_id 分文件
         unregister_identity(conn_id);
         unregister_identity("G_conn_fp_wire_002");
         let after = MetadataCacheManager::new(conn_id, ConnectionType::Global, None).unwrap();
-        assert!(after.db_path().file_name().unwrap().to_string_lossy().starts_with("conn_"));
+        assert!(
+            after
+                .db_path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("conn_")
+        );
     }
 
     /// 观察项 2：并发兜底——`open()` 必须设置 busy_timeout（WAL 下写锁竞争等待）。
@@ -4586,7 +4624,9 @@ mod tests {
     fn open_sets_busy_timeout() -> Result<(), CoreError> {
         let manager = MetadataCacheManager::new("G_conn_bt_001", ConnectionType::Global, None)?;
         let conn = manager.open()?;
-        let bt: i64 = conn.query_row("PRAGMA busy_timeout", [], |r| r.get(0)).unwrap();
+        let bt: i64 = conn
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
         assert!(bt >= 5000, "busy_timeout 应 ≥5s，实际 {bt}ms");
         std::fs::remove_file(manager.db_path()).ok();
         Ok(())
@@ -4600,13 +4640,25 @@ mod tests {
         use crate::persistence::{register_identity, unregister_identity};
 
         let conn_id = "G_conn_leg_001";
-        let identity =
-            identity_from_url("mysql", "mysql://root:pw@db.internal:3306/orders", Some("root"), None, Some(3306)).expect("可共享");
+        let identity = identity_from_url(
+            "mysql",
+            "mysql://root:pw@db.internal:3306/orders",
+            Some("root"),
+            None,
+            Some(3306),
+        )
+        .expect("可共享");
         register_identity(conn_id, &identity);
 
         let manager = MetadataCacheManager::new(conn_id, ConnectionType::Global, None)?;
         let fp_path = manager.db_path().clone();
-        assert!(fp_path.file_name().unwrap().to_string_lossy().starts_with("meta_"));
+        assert!(
+            fp_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("meta_")
+        );
         // 确保指纹路径尚不存在
         std::fs::remove_file(&fp_path).ok();
         let _ = std::fs::remove_file(format!("{}-wal", fp_path.display()));
@@ -4616,7 +4668,10 @@ mod tests {
         let legacy = manager.legacy_cache_path();
         {
             let conn = rusqlite::Connection::open(&legacy).unwrap();
-            conn.execute_batch("CREATE TABLE marker (v TEXT); INSERT INTO marker VALUES ('legacy-data');").unwrap();
+            conn.execute_batch(
+                "CREATE TABLE marker (v TEXT); INSERT INTO marker VALUES ('legacy-data');",
+            )
+            .unwrap();
         }
         assert!(legacy.exists(), "前置：旧缓存文件应存在");
 
@@ -4648,7 +4703,8 @@ mod tests {
         use crate::persistence::metadata_identity::identity_from_url;
         use crate::persistence::{register_identity, unregister_identity};
 
-        let identity = identity_from_url("sqlite", r"D:\data\orders.db", None, None, None).expect("可共享");
+        let identity =
+            identity_from_url("sqlite", r"D:\data\orders.db", None, None, None).expect("可共享");
         let global_conn = "G_conn_fp_dom_001";
         let project_conn = "P_conn_fp_dom_001";
         register_identity(global_conn, &identity);
@@ -4669,8 +4725,18 @@ mod tests {
             project_mgr.db_path().file_name()
         );
         assert_ne!(global_mgr.db_path(), project_mgr.db_path());
-        assert!(global_mgr.db_path().to_string_lossy().contains("global_metadata"));
-        assert!(project_mgr.db_path().to_string_lossy().contains("meta/connection_metadata"));
+        assert!(
+            global_mgr
+                .db_path()
+                .to_string_lossy()
+                .contains("global_metadata")
+        );
+        assert!(
+            project_mgr
+                .db_path()
+                .to_string_lossy()
+                .contains("meta/connection_metadata")
+        );
 
         unregister_identity(global_conn);
         unregister_identity(project_conn);
@@ -4760,9 +4826,9 @@ mod tests {
         ops.save_view(view_id, "SELECT 1", None, None)?;
 
         // 前置：视图定义确实落库（`table_id` 是 NOT NULL，历史实现漏写该列）
-        let views: i64 = ops
-            .get_connection()
-            .query_row("SELECT COUNT(*) FROM view_definitions", [], |r| r.get(0))?;
+        let views: i64 =
+            ops.get_connection()
+                .query_row("SELECT COUNT(*) FROM view_definitions", [], |r| r.get(0))?;
         assert_eq!(views, 1, "save_view 应写入 view_definitions");
 
         let deleted = ops.delete_schema(schema_id)?;
@@ -4771,7 +4837,10 @@ mod tests {
             ops.list_tables_normalized(schema_id, None)?.is_empty(),
             "表/视图应被清空"
         );
-        assert!(ops.get_schema_id("main", "public")?.is_none(), "schema 行应删除");
+        assert!(
+            ops.get_schema_id("main", "public")?.is_none(),
+            "schema 行应删除"
+        );
 
         // 级联：子表不得留孤儿行（依赖 PRAGMA foreign_keys=ON + ON DELETE CASCADE）
         drop(ops);
@@ -4855,7 +4924,10 @@ mod tests {
             "前缀命中应整体排在子串命中之前（得到：{names:?}）"
         );
         for want in ["order_items", "customer_orders", "order_view", "order_id"] {
-            assert!(names.contains(&want), "命中不得漏 {want}（得到：{names:?}）");
+            assert!(
+                names.contains(&want),
+                "命中不得漏 {want}（得到：{names:?}）"
+            );
         }
         // 表在前、列在后（类别权重）
         assert!(
@@ -4863,20 +4935,29 @@ mod tests {
             "表应排在列之前（得到：{names:?}）"
         );
         // 命中行带定位信息：表 → schema / catalog
-        let table_hit = hits.iter().find(|h| h.object_name == "orders").expect("表命中");
+        let table_hit = hits
+            .iter()
+            .find(|h| h.object_name == "orders")
+            .expect("表命中");
         assert_eq!(table_hit.object_type, "table");
         assert_eq!(table_hit.schema_name.as_deref(), Some("public"));
         assert_eq!(table_hit.catalog_name.as_deref(), Some("main"));
         assert_eq!(table_hit.parent_name, None);
         // 列命中带所属表
-        let col_hit = hits.iter().find(|h| h.object_name == "order_id").expect("列命中");
+        let col_hit = hits
+            .iter()
+            .find(|h| h.object_name == "order_id")
+            .expect("列命中");
         assert_eq!(col_hit.object_type, "column");
         assert_eq!(col_hit.parent_name.as_deref(), Some("orders"));
 
         // 通配符按字面量：`a%b` 不得匹配 `aXXXb`（而真表名 a%b 必须命中）
         let literal = ops.search_index(conn_id, "a%b", 50, NameMatchMode::Contains)?;
         assert_eq!(
-            literal.iter().map(|h| h.object_name.as_str()).collect::<Vec<_>>(),
+            literal
+                .iter()
+                .map(|h| h.object_name.as_str())
+                .collect::<Vec<_>>(),
             vec!["a%b"],
             "% 应被转义为字面量"
         );
@@ -4884,11 +4965,21 @@ mod tests {
         assert!(underscore.is_empty(), "`_` 是单字符通配符，必须转义");
 
         // 大小写不敏感 + 空词不搜
-        assert!(!ops.search_index(conn_id, "ORDERS", 50, NameMatchMode::Contains)?.is_empty());
-        assert!(ops.search_index(conn_id, "   ", 50, NameMatchMode::Contains)?.is_empty());
+        assert!(
+            !ops.search_index(conn_id, "ORDERS", 50, NameMatchMode::Contains)?
+                .is_empty()
+        );
+        assert!(
+            ops.search_index(conn_id, "   ", 50, NameMatchMode::Contains)?
+                .is_empty()
+        );
 
         // limit 是硬上限
-        assert_eq!(ops.search_index(conn_id, "order", 2, NameMatchMode::Contains)?.len(), 2);
+        assert_eq!(
+            ops.search_index(conn_id, "order", 2, NameMatchMode::Contains)?
+                .len(),
+            2
+        );
 
         // —— 前缀档：只命中以 `order` 开头的对象；中缀 `customer_orders` 不进榜 ——
         let prefix = ops.search_index(conn_id, "order", 50, NameMatchMode::StartsWith)?;
@@ -4903,7 +4994,10 @@ mod tests {
             "前缀档不得命中仅中缀包含的对象（得到：{prefix_names:?}）"
         );
         for want in ["order", "orders", "order_items", "order_view", "order_id"] {
-            assert!(prefix_names.contains(&want), "前缀档漏命中 {want}（得到：{prefix_names:?}）");
+            assert!(
+                prefix_names.contains(&want),
+                "前缀档漏命中 {want}（得到：{prefix_names:?}）"
+            );
         }
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -4928,10 +5022,8 @@ mod tests {
         let contains = format!("%{escaped}%");
         let prefix = format!("{escaped}%");
 
-        let mut stmt = ops
-            .get_connection()
-            .prepare(
-                "SELECT mi.object_type, mi.object_name, mi.parent_name,
+        let mut stmt = ops.get_connection().prepare(
+            "SELECT mi.object_type, mi.object_name, mi.parent_name,
                         s.catalog_name, s.schema_name, mi.row_count_estimate
                  FROM metadata_index mi
                  LEFT JOIN schemata s ON s.id = mi.schema_id
@@ -4945,7 +5037,7 @@ mod tests {
                         WHEN 'column' THEN 3 ELSE 4 END,
                    mi.object_name, mi.id
                  LIMIT ?5",
-            )?;
+        )?;
         let rows = stmt.query_map(
             rusqlite::params![connection_id, contains, needle, prefix, limit],
             |row| {
@@ -4995,9 +5087,15 @@ mod tests {
         }
         // 两列同名同长跨表：排序键上完全同分
         let orders = ops.get_table_id(public, "orders")?.expect("orders 表");
-        ops.save_column(orders, "order_id", "INTEGER", 0, false, true, false, None, None)?;
-        let items = ops.get_table_id(public, "order_items")?.expect("order_items 表");
-        ops.save_column(items, "order_id", "INTEGER", 0, false, true, false, None, None)?;
+        ops.save_column(
+            orders, "order_id", "INTEGER", 0, false, true, false, None, None,
+        )?;
+        let items = ops
+            .get_table_id(public, "order_items")?
+            .expect("order_items 表");
+        ops.save_column(
+            items, "order_id", "INTEGER", 0, false, true, false, None, None,
+        )?;
         // 与表同名但不同类别（视图在另一个 schema，绕过 UNIQUE(schema_id, table_name)）
         let view = ops.save_table(archive, "orders", "VIEW", None, None, None)?;
         ops.save_view(view, "SELECT 1", None, None)?;
@@ -5027,9 +5125,15 @@ mod tests {
         }
 
         // 包含档两条边界：前缀装满 → 早退不影响；零前缀（`reorder`）→ 中缀段独立兜底命中
-        assert_eq!(ops.search_index(conn_id, "order", 2, NameMatchMode::Contains)?.len(), 2, "包含档应填满 limit");
         assert_eq!(
-            ops.search_index(conn_id, "reorder", 5, NameMatchMode::Contains)?.len(),
+            ops.search_index(conn_id, "order", 2, NameMatchMode::Contains)?
+                .len(),
+            2,
+            "包含档应填满 limit"
+        );
+        assert_eq!(
+            ops.search_index(conn_id, "reorder", 5, NameMatchMode::Contains)?
+                .len(),
             1,
             "无前缀命中时包含档仍应靠中缀段兜底"
         );
@@ -5046,8 +5150,14 @@ mod tests {
                 .position(|x| x == n)
                 .unwrap_or_else(|| panic!("结果里应有 {n}（得到：{names:?}）"))
         };
-        assert!(pos("orders_archive") < pos("reorder_point"), "前缀应在前：{names:?}");
-        assert!(pos("order_id") < pos("reorder_point"), "前缀应在前：{names:?}");
+        assert!(
+            pos("orders_archive") < pos("reorder_point"),
+            "前缀应在前：{names:?}"
+        );
+        assert!(
+            pos("order_id") < pos("reorder_point"),
+            "前缀应在前：{names:?}"
+        );
 
         // 前缀档：只返回以词开头的对象，中缀 `reorder_point` 不进榜
         let prefix_names: Vec<String> = ops
@@ -5059,11 +5169,20 @@ mod tests {
             !prefix_names.iter().any(|n| n == "reorder_point"),
             "前缀档不得命中仅中缀包含的对象：{prefix_names:?}"
         );
-        assert!(prefix_names.iter().any(|n| n == "order_items"), "前缀档漏命中前缀对象：{prefix_names:?}");
+        assert!(
+            prefix_names.iter().any(|n| n == "order_items"),
+            "前缀档漏命中前缀对象：{prefix_names:?}"
+        );
 
         // limit 非正数按空结果（而不是 SQLite 的「-1 = 不限」）
-        assert!(ops.search_index(conn_id, "order", 0, NameMatchMode::Contains)?.is_empty());
-        assert!(ops.search_index(conn_id, "order", -1, NameMatchMode::Contains)?.is_empty());
+        assert!(
+            ops.search_index(conn_id, "order", 0, NameMatchMode::Contains)?
+                .is_empty()
+        );
+        assert!(
+            ops.search_index(conn_id, "order", -1, NameMatchMode::Contains)?
+                .is_empty()
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
@@ -5084,34 +5203,35 @@ mod tests {
         let category = MetadataCacheOps::SEARCH_INDEX_CATEGORY_PREDICATES[0];
         let upper = format!("ord{}", char::MAX);
 
-        let check = |stage: &str, sql: String, params: &[&dyn rusqlite::ToSql]| -> Result<(), CoreError> {
-            let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
-            let rows = stmt.query_map(params, |row| row.get::<_, String>(3))?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row?);
-            }
-            let plan = out.join("\n");
-            println!("[计划] {stage}: {plan}");
+        let check =
+            |stage: &str, sql: String, params: &[&dyn rusqlite::ToSql]| -> Result<(), CoreError> {
+                let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+                let rows = stmt.query_map(params, |row| row.get::<_, String>(3))?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row?);
+                }
+                let plan = out.join("\n");
+                println!("[计划] {stage}: {plan}");
 
-            assert!(
-                plan.contains("idx_metadata_index_conn_type_object_lower"),
-                "{stage}应走复合表达式索引（迁移 013）。实际计划：\n{plan}"
-            );
-            assert!(
-                plan.contains("SEARCH"),
-                "{stage}应用索引定位（SEARCH）而非全表扫（SCAN）。实际计划：\n{plan}"
-            );
-            assert!(
-                plan.contains("connection_id=?") && plan.contains("object_type=?"),
-                "{stage}的等值条件必须参与索引定位。实际计划：\n{plan}"
-            );
-            assert!(
-                !plan.contains("TEMP B-TREE"),
-                "{stage}的输出序应即索引序（不允许再排序）。实际计划：\n{plan}"
-            );
-            Ok(())
-        };
+                assert!(
+                    plan.contains("idx_metadata_index_conn_type_object_lower"),
+                    "{stage}应走复合表达式索引（迁移 013）。实际计划：\n{plan}"
+                );
+                assert!(
+                    plan.contains("SEARCH"),
+                    "{stage}应用索引定位（SEARCH）而非全表扫（SCAN）。实际计划：\n{plan}"
+                );
+                assert!(
+                    plan.contains("connection_id=?") && plan.contains("object_type=?"),
+                    "{stage}的等值条件必须参与索引定位。实际计划：\n{plan}"
+                );
+                assert!(
+                    !plan.contains("TEMP B-TREE"),
+                    "{stage}的输出序应即索引序（不允许再排序）。实际计划：\n{plan}"
+                );
+                Ok(())
+            };
 
         check(
             "前缀段",
@@ -5178,8 +5298,20 @@ mod tests {
             .map(|i| index_entry(conn_id, sid, "table", &format!("win_{i:05}"), None))
             .collect();
         entries.push(index_entry(conn_id, sid, "table", "win_zz", None));
-        entries.push(index_entry(conn_id, sid, "column", "win_0000", Some("win_00000")));
-        entries.push(index_entry(conn_id, sid, "column", "win", Some("win_00001")));
+        entries.push(index_entry(
+            conn_id,
+            sid,
+            "column",
+            "win_0000",
+            Some("win_00000"),
+        ));
+        entries.push(index_entry(
+            conn_id,
+            sid,
+            "column",
+            "win",
+            Some("win_00001"),
+        ));
         ops.save_index_entries_batch(entries)?;
 
         // ① 精确：限足不截断时，名序靠后的 `win_zz` 与列 `win_0000` 都在（旧窗口会把它们挡在外面）
@@ -5303,11 +5435,7 @@ mod tests {
 
         // 分页读出来的次序就是位次的口径，逐条对齐
         let chunk = ops.get_objects_chunk(conn_id, Some(schema_id), "table", 0, 10)?;
-        let names: Vec<&str> = chunk
-            .items
-            .iter()
-            .map(|e| e.object_name.as_str())
-            .collect();
+        let names: Vec<&str> = chunk.items.iter().map(|e| e.object_name.as_str()).collect();
         assert_eq!(names, vec!["alpha", "beta", "gamma"], "同权重时按名字升序");
         for (i, name) in names.iter().enumerate() {
             assert_eq!(
@@ -5385,7 +5513,14 @@ mod tests {
             None,
             Some("下单渠道"),
         )?;
-        ops.save_table(other, "keep_me", "TABLE", Some("另一个 schema 的表"), None, None)?;
+        ops.save_table(
+            other,
+            "keep_me",
+            "TABLE",
+            Some("另一个 schema 的表"),
+            None,
+            None,
+        )?;
 
         let fts_count = |ops: &MetadataCacheOps, schema: &str| -> Result<i64, CoreError> {
             ops.conn
@@ -5400,7 +5535,11 @@ mod tests {
         ops.rebuild_schema_index("P_conn", "main", "public")?;
         let before = fts_count(&ops, "public")?;
         assert_eq!(before, 4, "schema / 表 / 视图 / 列 各一行");
-        assert_eq!(fts_count(&ops, "other")?, 0, "只重建 public，不得顺手写 other");
+        assert_eq!(
+            fts_count(&ops, "other")?,
+            0,
+            "只重建 public，不得顺手写 other"
+        );
 
         // 幂等：先删后插，重复重建不得翻倍
         ops.rebuild_schema_index("P_conn", "main", "public")?;
@@ -5588,12 +5727,14 @@ mod tests {
             let t = Instant::now();
             let n = conn
                 .prepare(&table_sql)?
-                .query_map(
-                    rusqlite::params![conn_id, "table_", upper, 50i64],
-                    |r| r.get::<_, String>(0),
-                )?
+                .query_map(rusqlite::params![conn_id, "table_", upper, 50i64], |r| {
+                    r.get::<_, String>(0)
+                })?
                 .count();
-            println!("[分解] 前缀档·表档一段索引扫（取到 {n} 条，8 万命中下）: {:?}", t.elapsed());
+            println!(
+                "[分解] 前缀档·表档一段索引扫（取到 {n} 条，8 万命中下）: {:?}",
+                t.elapsed()
+            );
 
             let t = Instant::now();
             let n: i64 = conn.query_row(
@@ -5611,12 +5752,14 @@ mod tests {
             );
             let n = conn
                 .prepare(&contains_sql)?
-                .query_map(
-                    rusqlite::params![conn_id, "%table_%", 50i64],
-                    |r| r.get::<_, String>(0),
-                )?
+                .query_map(rusqlite::params![conn_id, "%table_%", 50i64], |r| {
+                    r.get::<_, String>(0)
+                })?
                 .count();
-            println!("[分解] 包含档·表档索引名序走（取到 {n} 条，同 8 万命中）: {:?}", t.elapsed());
+            println!(
+                "[分解] 包含档·表档索引名序走（取到 {n} 条，同 8 万命中）: {:?}",
+                t.elapsed()
+            );
         }
 
         let _ = std::fs::remove_dir_all(&dir);

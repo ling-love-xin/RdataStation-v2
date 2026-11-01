@@ -4,14 +4,16 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use sqlx::{Column, ConnectOptions as _, Pool, Postgres, Row, SqlSafeStr, Statement, TypeInfo as _};
+use sqlx::{
+    Column, ConnectOptions as _, Pool, Postgres, Row, SqlSafeStr, Statement, TypeInfo as _,
+};
 use std::sync::Arc;
 
 use crate::traits::MetadataBrowser;
 use crate::utils::{
-    affected_rows_result, batch_to_string_rows, byte_offset_for_char,
-    is_read_only_sql as shared_is_read_only_sql, pg_constraint_kind, pg_fk_action, returns_rows,
-    split_csv, sqlx_value_is_null, PG_LIST_CONSTRAINTS_SQL, PG_LIST_INDEXES_SQL, SqlFlavor,
+    PG_LIST_CONSTRAINTS_SQL, PG_LIST_INDEXES_SQL, SqlFlavor, affected_rows_result,
+    batch_to_string_rows, byte_offset_for_char, is_read_only_sql as shared_is_read_only_sql,
+    pg_constraint_kind, pg_fk_action, returns_rows, split_csv, sqlx_value_is_null,
 };
 use crate::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, PoolStatus,
@@ -211,17 +213,13 @@ async fn lock_pg_conn<'a>(
                 source: "连接已断开，且没有可重建的 URL（from_pool 路径）".to_string(),
             }));
         }
-        *guard = Some(
-            connect_pg_single(connect_url)
-                .await
-                .map_err(|e| {
-                    CoreError::database(DatabaseError::Driver {
-                        db_type: "postgres".to_string(),
-                        operation: "reconnect".to_string(),
-                        source: e.to_string(),
-                    })
-                })?,
-        );
+        *guard = Some(connect_pg_single(connect_url).await.map_err(|e| {
+            CoreError::database(DatabaseError::Driver {
+                db_type: "postgres".to_string(),
+                operation: "reconnect".to_string(),
+                source: e.to_string(),
+            })
+        })?);
     }
     // **复用前快速探活**（2026-10-08 顺滑度四阶段，对齐 DBeaver 常驻连接语义）：
     // 本环境（192.168.3.138 链路）对旧连接有**概率性冻结**（app_run62/64/70 铁证：
@@ -233,30 +231,24 @@ async fn lock_pg_conn<'a>(
     // 常驻成本）。误杀健康连接的概率极低（内网 SELECT 1 稳定 <10ms）；误杀也只付
     // 一次重建，可接受。
     let ping_ok = match guard.as_mut() {
-        Some(conn_ref) => {
-            tokio::time::timeout(PG_PING_FAST_TIMEOUT, async {
-                sqlx::query("SELECT 1").fetch_all(conn_ref).await
-            })
-            .await
-            .map(|r| r.is_ok())
-            .unwrap_or(false)
-        }
+        Some(conn_ref) => tokio::time::timeout(PG_PING_FAST_TIMEOUT, async {
+            sqlx::query("SELECT 1").fetch_all(conn_ref).await
+        })
+        .await
+        .map(|r| r.is_ok())
+        .unwrap_or(false),
         None => false,
     };
     if !ping_ok {
         tracing::info!("会话连接快速探活失败，弃旧建新（网络层冻结窗口）");
         *guard = None;
-        *guard = Some(
-            connect_pg_single(connect_url)
-                .await
-                .map_err(|e| {
-                    CoreError::database(DatabaseError::Driver {
-                        db_type: "postgres".to_string(),
-                        operation: "reconnect".to_string(),
-                        source: e.to_string(),
-                    })
-                })?,
-        );
+        *guard = Some(connect_pg_single(connect_url).await.map_err(|e| {
+            CoreError::database(DatabaseError::Driver {
+                db_type: "postgres".to_string(),
+                operation: "reconnect".to_string(),
+                source: e.to_string(),
+            })
+        })?);
     }
     // 刷新"最后使用时间"（拿锁即视为使用）。
     *last_used.lock().unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
@@ -378,14 +370,19 @@ impl Database for PostgresDatabase {
             let conn = guard.as_mut().expect("lock_pg_conn 保证 Some");
             // 查询级超时（15s 无响应 → 销毁连接 → 报明确错误；下次懒重建）。
             tokio::time::timeout(PG_QUERY_TIMEOUT, async {
-                sqlx::query(sqlx::AssertSqlSafe(sql)).fetch_all(&mut *conn).await
+                sqlx::query(sqlx::AssertSqlSafe(sql))
+                    .fetch_all(&mut *conn)
+                    .await
             })
             .await
             .map_err(|_| {
                 *guard = None;
                 CoreError::database(DatabaseError::Query {
                     sql: sql.to_string(),
-                    reason: format!("查询超时（{} 秒无响应），连接已重建，请重试", PG_QUERY_TIMEOUT.as_secs()),
+                    reason: format!(
+                        "查询超时（{} 秒无响应），连接已重建，请重试",
+                        PG_QUERY_TIMEOUT.as_secs()
+                    ),
                     position: None,
                     location: None,
                 })
@@ -400,11 +397,7 @@ impl Database for PostgresDatabase {
             // 0 行也要给列名（空表/无匹配行的 SELECT 仍有结果集结构，洞察空表取样靠它）
             let conn = guard.as_mut().expect("lock_pg_conn 保证 Some");
             let columns = describe_columns_pg(conn, sql).await?;
-            return Ok(QueryResult::with_batches(
-                columns,
-                vec![],
-                Some(read_only),
-            ));
+            return Ok(QueryResult::with_batches(columns, vec![], Some(read_only)));
         }
 
         let columns: Vec<String> = rows[0]
@@ -450,7 +443,10 @@ impl Database for PostgresDatabase {
                 *guard = None;
                 CoreError::database(DatabaseError::Query {
                     sql: sql.to_string(),
-                    reason: format!("查询超时（{} 秒无响应），连接已重建，请重试", PG_QUERY_TIMEOUT.as_secs()),
+                    reason: format!(
+                        "查询超时（{} 秒无响应），连接已重建，请重试",
+                        PG_QUERY_TIMEOUT.as_secs()
+                    ),
                     position: None,
                     location: None,
                 })
@@ -470,11 +466,7 @@ impl Database for PostgresDatabase {
             // 0 行也要给列名（空表/无匹配行的 SELECT 仍有结果集结构，洞察空表取样靠它）
             let conn = guard.as_mut().expect("lock_pg_conn 保证 Some");
             let columns = describe_columns_pg(conn, sql).await?;
-            return Ok(QueryResult::with_batches(
-                columns,
-                vec![],
-                Some(read_only),
-            ));
+            return Ok(QueryResult::with_batches(columns, vec![], Some(read_only)));
         }
 
         let columns: Vec<String> = rows[0]
@@ -662,13 +654,13 @@ impl Database for PostgresDatabase {
         let schema_name = schema.unwrap_or("public");
         let sql = crate::utils::PG_TABLE_DETAIL_SQL;
         let mut guard = lock_pg_conn(&self.conn, &self.last_used, &self.connect_url).await?;
-        let conn_ref = guard
-            .as_mut()
-            .ok_or_else(|| CoreError::database(DatabaseError::Driver {
+        let conn_ref = guard.as_mut().ok_or_else(|| {
+            CoreError::database(DatabaseError::Driver {
                 db_type: "postgres".to_string(),
                 operation: "list_columns_batch".to_string(),
                 source: "连接为 None 且无法重建".to_string(),
-            }))?;
+            })
+        })?;
         let mut out = Vec::with_capacity(tables.len());
         for t in tables {
             let result = tokio::time::timeout(PG_QUERY_TIMEOUT, async {
@@ -708,10 +700,7 @@ impl Database for PostgresDatabase {
         let result = self
             .query_with_params(sql, vec![Value::Text(schema_name.to_string())])
             .await?;
-         Ok(names_to_nodes(
-            &result,
-            SchemaObjectKind::Procedure,
-        ))
+        Ok(names_to_nodes(&result, SchemaObjectKind::Procedure))
     }
 
     async fn list_functions(
@@ -735,7 +724,8 @@ impl Database for PostgresDatabase {
         catalog: &str,
         schema: Option<&str>,
     ) -> Result<Vec<crate::NodeInfo>, CoreError> {
-        self.get_sequences(catalog, schema.unwrap_or("public")).await
+        self.get_sequences(catalog, schema.unwrap_or("public"))
+            .await
     }
 
     async fn list_triggers(
@@ -835,7 +825,9 @@ impl Database for PostgresDatabase {
         .map_err(|e| query_error(schema, e))?;
         let procedures = rows
             .iter()
-            .map(|r| crate::NodeInfo::new(r.get::<String, _>(0), crate::SchemaObjectKind::Procedure))
+            .map(|r| {
+                crate::NodeInfo::new(r.get::<String, _>(0), crate::SchemaObjectKind::Procedure)
+            })
             .collect();
 
         // 3) 函数（prokind='f'）
@@ -1119,7 +1111,9 @@ async fn execute_writing(
     let mut guard = lock_pg_conn(conn, last_used, connect_url).await?;
     let exec_result = {
         let conn = guard.as_mut().expect("lock_pg_conn 保证 Some");
-        sqlx::query(sqlx::AssertSqlSafe(sql)).execute(&mut *conn).await
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .execute(&mut *conn)
+            .await
     };
     let result = pg_conn_result(&mut guard, sql, exec_result)?;
     Ok(affected_rows_result(result.rows_affected()))
@@ -1197,7 +1191,11 @@ fn pg_cell_as_text_extra(row: &sqlx::postgres::PgRow, idx: usize) -> Option<Stri
     }
     if let Ok(Some(v)) = row.try_get::<Option<sqlx::postgres::types::PgInterval>, _>(idx) {
         // `PgInterval` 的三个字段与 wire 那三个一模一样，格式化写一份
-        return Some(pg_wire::interval_parts_to_text(v.months, v.days, v.microseconds));
+        return Some(pg_wire::interval_parts_to_text(
+            v.months,
+            v.days,
+            v.microseconds,
+        ));
     }
     if let Ok(Some(v)) = row.try_get::<Option<pg_wire::PgInet>, _>(idx) {
         return Some(v.0);
@@ -1387,10 +1385,7 @@ impl crate::MetadataBrowser for PostgresDatabase {
     /// 为真时上层才会去要）。
     async fn get_catalogs(&self) -> Result<Vec<crate::NodeInfo>, CoreError> {
         let result = self.query(crate::utils::PG_LIST_CATALOGS_SQL).await?;
-        Ok(rows_to_node_info(
-            &result,
-            crate::SchemaObjectKind::Catalog,
-        ))
+        Ok(rows_to_node_info(&result, crate::SchemaObjectKind::Catalog))
     }
 
     /// PG 一条连接只绑一个库：展开别的库要另开连接。
@@ -1413,16 +1408,10 @@ impl crate::MetadataBrowser for PostgresDatabase {
 
     /// 一条连接只绑一个库，schema 内省只在当前库里做 —— 所以 `catalog` 参数**不用**
     /// （跨库浏览要靠「按库另开连接」，见 `get_catalogs` 的说明）。
-    async fn get_schemas(
-        &self,
-        _catalog: &str,
-    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
+    async fn get_schemas(&self, _catalog: &str) -> Result<Vec<crate::NodeInfo>, CoreError> {
         let sql = crate::utils::PG_LIST_SCHEMAS_SQL;
         let result = self.query(sql).await?;
-        Ok(rows_to_node_info(
-            &result,
-            crate::SchemaObjectKind::Schema,
-        ))
+        Ok(rows_to_node_info(&result, crate::SchemaObjectKind::Schema))
     }
 
     async fn get_tables(
@@ -1450,10 +1439,8 @@ impl crate::MetadataBrowser for PostgresDatabase {
                         };
                         // S3-②：第 3/4 列 = 父表名 / 分区标记（PG 子表折叠进父表）。
                         // arrow StringArray 对 NULL 的 `value()` 返回空串，无需判 is_null。
-                        let mut node = crate::NodeInfo::new(
-                            name_arr.value(row_idx).to_string(),
-                            kind,
-                        );
+                        let mut node =
+                            crate::NodeInfo::new(name_arr.value(row_idx).to_string(), kind);
                         if let Some(parent_arr) =
                             batch.column(2).as_any().downcast_ref::<StringArray>()
                         {
@@ -1463,8 +1450,8 @@ impl crate::MetadataBrowser for PostgresDatabase {
                                 if let Some(part_arr) = batch
                                     .column(3)
                                     .as_any()
-                                    .downcast_ref::<arrow::array::BooleanArray>()
-                                {
+                                    .downcast_ref::<arrow::array::BooleanArray>(
+                                ) {
                                     if part_arr.value(row_idx) {
                                         node = node.with_partition();
                                     }
@@ -1495,7 +1482,11 @@ impl crate::MetadataBrowser for PostgresDatabase {
             .await
             .map_err(|e| query_error(schema, e))?;
         let result = tokio::time::timeout(PG_QUERY_TIMEOUT, async {
-            sqlx::query(sql).bind(schema).bind(table).fetch_all(&mut conn).await
+            sqlx::query(sql)
+                .bind(schema)
+                .bind(table)
+                .fetch_all(&mut conn)
+                .await
         })
         .await
         .map_err(|_| {
@@ -1552,10 +1543,7 @@ impl crate::MetadataBrowser for PostgresDatabase {
         let result = self
             .query_with_params(sql, vec![Value::Text(schema.to_string())])
             .await?;
-        Ok(names_to_nodes(
-            &result,
-            crate::SchemaObjectKind::Sequence,
-        ))
+        Ok(names_to_nodes(&result, crate::SchemaObjectKind::Sequence))
     }
 
     async fn get_triggers(
@@ -1574,10 +1562,7 @@ impl crate::MetadataBrowser for PostgresDatabase {
     }
 }
 
-fn rows_to_node_info(
-    result: &QueryResult,
-    kind: crate::SchemaObjectKind,
-) -> Vec<crate::NodeInfo> {
+fn rows_to_node_info(result: &QueryResult, kind: crate::SchemaObjectKind) -> Vec<crate::NodeInfo> {
     let mut nodes: Vec<crate::NodeInfo> = Vec::new();
     for row_idx in 0..result.total_rows() {
         if let Some(batch) = result.batches.first() {
@@ -1595,10 +1580,7 @@ fn rows_to_node_info(
 }
 
 /// 单列名字结果集 → 对象列表（例程 / 序列）。
-fn names_to_nodes(
-    result: &QueryResult,
-    kind: crate::SchemaObjectKind,
-) -> Vec<crate::NodeInfo> {
+fn names_to_nodes(result: &QueryResult, kind: crate::SchemaObjectKind) -> Vec<crate::NodeInfo> {
     rows_to_node_info(result, kind)
 }
 
@@ -1619,8 +1601,7 @@ fn names_to_trigger_nodes(result: &QueryResult) -> Vec<crate::NodeInfo> {
         if name.is_empty() {
             continue;
         }
-        let mut node =
-            crate::NodeInfo::new(name.to_string(), crate::SchemaObjectKind::Trigger);
+        let mut node = crate::NodeInfo::new(name.to_string(), crate::SchemaObjectKind::Trigger);
         if let Some(table_arr) = batch.column(1).as_any().downcast_ref::<StringArray>() {
             if !table_arr.is_null(row_idx) {
                 node = node.with_parent(table_arr.value(row_idx));
@@ -1657,10 +1638,7 @@ mod tests {
         )
         .expect("构造批次");
         let result = QueryResult {
-            columns: vec![
-                "trigger_name".to_string(),
-                "event_object_table".to_string(),
-            ],
+            columns: vec!["trigger_name".to_string(), "event_object_table".to_string()],
             batches: vec![batch],
             ..Default::default()
         };

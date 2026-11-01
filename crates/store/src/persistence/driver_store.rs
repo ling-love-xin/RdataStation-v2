@@ -4,7 +4,7 @@
 //! 启动时由 `driver/declaration.rs::sync_driver_declarations` 幂等 upsert；本模块只负责读写表，
 //! 不在这里定义能力 / 属性（改声明请改 descriptors，改列归属请看 declaration 头注）。
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 

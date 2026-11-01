@@ -507,11 +507,7 @@ mod tests {
     /// （历史实现用这个字符串当哨兵，`ValueSet` 让用户手填值时正好能撞上）。
     #[test]
     fn literal_null_text_is_not_swallowed_as_sql_null() {
-        let sql = build_insert(
-            "t",
-            &["c".to_string()],
-            &[vec![Some("NULL")], vec![None]],
-        );
+        let sql = build_insert("t", &["c".to_string()], &[vec![Some("NULL")], vec![None]]);
         assert_eq!(sql, "INSERT INTO \"t\" (c) VALUES ('NULL'), (NULL)");
     }
 }

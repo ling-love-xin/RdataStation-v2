@@ -39,9 +39,9 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
-use shared::memory::MemoryPressure;
 use crate::traits::{Database, DbPool, PoolStatus};
 use shared::error::{ConnectionError, CoreError};
+use shared::memory::MemoryPressure;
 
 /// 智能连接池配置
 #[derive(Debug, Clone)]

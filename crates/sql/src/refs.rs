@@ -11,9 +11,9 @@
 //!   闭包里借不出外部生命周期引用，收集时 clone 值。
 //! - **同表判定**：目录 `public.orders` 与引用裸名 `orders` 末段相同即认。
 
+use sqlglot_rust::Dialect;
 use sqlglot_rust::ast::{Expr, SelectItem, SelectStatement, TableRef, TableSource};
 use sqlglot_rust::tokens::{Token, TokenType, Tokenizer};
-use sqlglot_rust::Dialect;
 
 use super::engine::SqlDialect;
 
@@ -51,8 +51,7 @@ pub fn locate(sql: &str, tokens: &[Token], name: &str) -> Option<(usize, usize)>
         .iter()
         .zip(spans)
         .find(|(token, _)| {
-            token.token_type == TokenType::Identifier
-                && token.value.to_lowercase() == needle
+            token.token_type == TokenType::Identifier && token.value.to_lowercase() == needle
         })
         .map(|(_, span)| span)
 }
@@ -94,10 +93,7 @@ pub fn same_table(catalog: &str, referenced: &str) -> bool {
 ///
 /// 返回 owned（列名, 限定表名）——`Expr::walk` visitor 是 HRTB（for<'a>），
 /// 从闭包参数里借不出与外部生命周期匹配的引用，收集时 clone 值。
-pub fn collect_column_refs(
-    select: &SelectStatement,
-    out: &mut Vec<(String, Option<String>)>,
-) {
+pub fn collect_column_refs(select: &SelectStatement, out: &mut Vec<(String, Option<String>)>) {
     let mut exprs: Vec<&Expr> = Vec::new();
     for item in &select.columns {
         if let SelectItem::Expr { expr, .. } = item {

@@ -933,7 +933,10 @@ mod tests {
     #[test]
     fn unknown_driver_and_blank_key_are_unclassified() {
         assert_eq!(verdict("mysql", "   "), Verdict::Unclassified);
-        assert_eq!(verdict("some_plugin_driver", "charset"), Verdict::Unclassified);
+        assert_eq!(
+            verdict("some_plugin_driver", "charset"),
+            Verdict::Unclassified
+        );
         assert!(!accepts("some_plugin_driver", "charset"));
         assert!(accepts("mysql", "charset"));
     }

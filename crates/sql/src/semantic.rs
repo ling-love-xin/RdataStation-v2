@@ -29,11 +29,13 @@
 
 use sqlglot_rust::ast::{DataType, Expr, SelectItem, Statement, TableRef};
 use sqlglot_rust::optimizer::qualify_columns::qualify_columns;
-use sqlglot_rust::schema::MappingSchema;
 use sqlglot_rust::parse;
+use sqlglot_rust::schema::MappingSchema;
 
 use super::engine::SqlDialect;
-use super::refs::{collect_table_refs, locate, qualify_table_name, same_table, to_inner_dialect, tokenize};
+use super::refs::{
+    collect_table_refs, locate, qualify_table_name, same_table, to_inner_dialect, tokenize,
+};
 
 /// 一条语义诊断（**字节区间**，行列为派生，与 `editor::Diagnostic` 同构）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,7 +118,9 @@ pub fn diagnose(sql: &str, dialect: SqlDialect, tables: &[CatalogTable]) -> Vec<
         if cte_names.contains(&qualified.as_str()) {
             continue;
         }
-        let known = tables.iter().any(|t| same_table(t.qualified_name, &qualified));
+        let known = tables
+            .iter()
+            .any(|t| same_table(t.qualified_name, &qualified));
         if !known && !seen_tables.contains(&qualified) {
             seen_tables.push(qualified.clone());
             if let Some((start, end)) = locate(sql, &tokens, &qualified) {
@@ -156,7 +160,12 @@ pub fn diagnose(sql: &str, dialect: SqlDialect, tables: &[CatalogTable]) -> Vec<
                     None => format!("列「{name}」在任一来源表里都找不到"),
                     Some(table) => format!("列「{name}」在表 {table} 中不存在"),
                 };
-                issues.push(SemanticIssue::new("unqualified_column", message, start, end));
+                issues.push(SemanticIssue::new(
+                    "unqualified_column",
+                    message,
+                    start,
+                    end,
+                ));
             }
         }
     }
@@ -239,7 +248,9 @@ fn walk_expr(
 ) {
     match expr {
         // 裸列 qualify 后仍是 None = 任一来源都解析不到（真错）
-        Expr::Column { table: None, name, .. } => {
+        Expr::Column {
+            table: None, name, ..
+        } => {
             out.push((name.clone(), None));
         }
         // 限定列：qualify 原样保留限定符（0.10.33 transform 只处理裸列）——
@@ -255,7 +266,10 @@ fn walk_expr(
                 .map(|(_, real)| real.clone())
                 .unwrap_or_else(|| table.clone());
             // 来源表在目录里才判列存在性（不在目录：unknown_table 已报，不重复）
-            if tables.iter().any(|t| same_table(t.qualified_name, &resolved)) {
+            if tables
+                .iter()
+                .any(|t| same_table(t.qualified_name, &resolved))
+            {
                 let has_column = tables.iter().any(|t| {
                     same_table(t.qualified_name, &resolved)
                         && t.columns.iter().any(|c| c.eq_ignore_ascii_case(name))
@@ -327,7 +341,6 @@ fn walk_expr(
 }
 
 // ---------- token 层定位（原语在 refs：tokenize / locate / to_inner_dialect） ----------
-
 
 #[cfg(test)]
 mod tests {
@@ -404,7 +417,11 @@ mod tests {
     fn schema_qualified_table_is_known_by_last_segment() {
         let sql = "SELECT name FROM customers";
         let issues = diagnose(sql, SqlDialect::Ansi, &tables());
-        assert_eq!(issues, Vec::new(), "目录里是 public.customers，引用裸名 customers 也认");
+        assert_eq!(
+            issues,
+            Vec::new(),
+            "目录里是 public.customers，引用裸名 customers 也认"
+        );
     }
 
     #[test]
@@ -419,7 +436,10 @@ mod tests {
         // WHERE 的未知列、ORDER BY 的未知列都要报；函数参数里的列也遍历
         let sql = "SELECT count(*) FROM orders WHERE nope = 1 ORDER BY also_missing";
         let issues = diagnose(sql, SqlDialect::Ansi, &tables());
-        assert_eq!(codes(&issues), vec!["unqualified_column", "unqualified_column"]);
+        assert_eq!(
+            codes(&issues),
+            vec!["unqualified_column", "unqualified_column"]
+        );
     }
 
     #[test]
@@ -436,8 +456,7 @@ mod tests {
 
     #[test]
     fn case_expression_columns_are_checked() {
-        let sql =
-            "SELECT CASE WHEN status = 'x' THEN nope ELSE id END FROM orders";
+        let sql = "SELECT CASE WHEN status = 'x' THEN nope ELSE id END FROM orders";
         let issues = diagnose(sql, SqlDialect::Ansi, &tables());
         assert_eq!(codes(&issues), vec!["unqualified_column"]);
     }

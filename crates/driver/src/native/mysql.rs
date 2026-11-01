@@ -1,10 +1,7 @@
 use sqlx::{Column, ConnectOptions as _, MySql, Pool, Row, SqlSafeStr, Statement, TypeInfo as _};
 
 /// 单列名字结果集 → 对象列表（例程 / 序列等只在内省里露名字的类别）。
-fn names_to_nodes(
-    result: &QueryResult,
-    kind: crate::SchemaObjectKind,
-) -> Vec<crate::NodeInfo> {
+fn names_to_nodes(result: &QueryResult, kind: crate::SchemaObjectKind) -> Vec<crate::NodeInfo> {
     use arrow::array::StringArray;
     let mut nodes: Vec<crate::NodeInfo> = Vec::new();
     for row_idx in 0..result.total_rows() {
@@ -28,8 +25,8 @@ use std::sync::Arc;
 
 use crate::traits::MetadataBrowser;
 use crate::utils::{
-    affected_rows_result, is_read_only_sql as shared_is_read_only_sql, returns_rows,
-    sqlx_value_is_null, MY_LIST_CONSTRAINTS_SQL, SqlFlavor,
+    MY_LIST_CONSTRAINTS_SQL, SqlFlavor, affected_rows_result,
+    is_read_only_sql as shared_is_read_only_sql, returns_rows, sqlx_value_is_null,
 };
 use crate::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, PoolStatus,
@@ -217,46 +214,36 @@ async fn lock_mysql_conn<'a>(
                 source: "连接已断开，且没有可重建的 URL（from_pool 路径）".to_string(),
             }));
         }
-        *guard = Some(
-            connect_mysql_single(connect_url)
-                .await
-                .map_err(|e| {
-                    CoreError::database(DatabaseError::Driver {
-                        db_type: "mysql".to_string(),
-                        operation: "reconnect".to_string(),
-                        source: e.to_string(),
-                    })
-                })?,
-        );
+        *guard = Some(connect_mysql_single(connect_url).await.map_err(|e| {
+            CoreError::database(DatabaseError::Driver {
+                db_type: "mysql".to_string(),
+                operation: "reconnect".to_string(),
+                source: e.to_string(),
+            })
+        })?);
     }
     // **复用前快速探活**（2026-10-08 顺滑度四阶段，同 postgres.rs）：`SELECT 1` 用
     // 100ms 超时——健康连接 <10ms 返回（复用，0ms 建连）；被冻结连接 100ms 即弃 +
     // 300ms 重建（最坏 ~400ms）。误杀健康连接概率极低（内网 SELECT 1 稳定 <10ms）。
     let ping_ok = match guard.as_mut() {
-        Some(conn_ref) => {
-            tokio::time::timeout(MYSQL_PING_FAST_TIMEOUT, async {
-                sqlx::query("SELECT 1").fetch_all(conn_ref).await
-            })
-            .await
-            .map(|r| r.is_ok())
-            .unwrap_or(false)
-        }
+        Some(conn_ref) => tokio::time::timeout(MYSQL_PING_FAST_TIMEOUT, async {
+            sqlx::query("SELECT 1").fetch_all(conn_ref).await
+        })
+        .await
+        .map(|r| r.is_ok())
+        .unwrap_or(false),
         None => false,
     };
     if !ping_ok {
         tracing::info!("会话连接快速探活失败，弃旧建新（网络层冻结窗口）");
         *guard = None;
-        *guard = Some(
-            connect_mysql_single(connect_url)
-                .await
-                .map_err(|e| {
-                    CoreError::database(DatabaseError::Driver {
-                        db_type: "mysql".to_string(),
-                        operation: "reconnect".to_string(),
-                        source: e.to_string(),
-                    })
-                })?,
-        );
+        *guard = Some(connect_mysql_single(connect_url).await.map_err(|e| {
+            CoreError::database(DatabaseError::Driver {
+                db_type: "mysql".to_string(),
+                operation: "reconnect".to_string(),
+                source: e.to_string(),
+            })
+        })?);
     }
     // 刷新"最后使用时间"（拿锁即视为使用）。
     *last_used.lock().unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
@@ -325,7 +312,8 @@ impl Database for MySqlDatabase {
     async fn query(&self, sql: &str) -> Result<QueryResult, CoreError> {
         // 事务控制 / 会话类语句必须走文本协议（prepared 协议下 MySQL 报 1295）
         if needs_text_protocol(sql) {
-            return execute_via_text_protocol(&self.conn, &self.last_used, &self.connect_url, sql).await;
+            return execute_via_text_protocol(&self.conn, &self.last_used, &self.connect_url, sql)
+                .await;
         }
 
         let is_read_only = is_read_only_sql(sql);
@@ -342,14 +330,19 @@ impl Database for MySqlDatabase {
             let conn = guard.as_mut().expect("lock_mysql_conn 保证 Some");
             // 查询级超时（15s 无响应 → 销毁连接 → 报明确错误；下次懒重建）。
             tokio::time::timeout(MYSQL_QUERY_TIMEOUT, async {
-                sqlx::query(sqlx::AssertSqlSafe(sql)).fetch_all(&mut *conn).await
+                sqlx::query(sqlx::AssertSqlSafe(sql))
+                    .fetch_all(&mut *conn)
+                    .await
             })
             .await
             .map_err(|_| {
                 *guard = None;
                 CoreError::database(DatabaseError::Query {
                     sql: sql.to_string(),
-                    reason: format!("查询超时（{} 秒无响应），连接已重建，请重试", MYSQL_QUERY_TIMEOUT.as_secs()),
+                    reason: format!(
+                        "查询超时（{} 秒无响应），连接已重建，请重试",
+                        MYSQL_QUERY_TIMEOUT.as_secs()
+                    ),
                     position: None,
                     location: None,
                 })
@@ -406,7 +399,10 @@ impl Database for MySqlDatabase {
                 *guard = None;
                 CoreError::database(DatabaseError::Query {
                     sql: sql.to_string(),
-                    reason: format!("查询超时（{} 秒无响应），连接已重建，请重试", MYSQL_QUERY_TIMEOUT.as_secs()),
+                    reason: format!(
+                        "查询超时（{} 秒无响应），连接已重建，请重试",
+                        MYSQL_QUERY_TIMEOUT.as_secs()
+                    ),
                     position: None,
                     location: None,
                 })
@@ -592,13 +588,13 @@ impl Database for MySqlDatabase {
         let schema_name = schema.unwrap_or(catalog);
         let sql = crate::utils::MY_TABLE_DETAIL_SQL;
         let mut guard = lock_mysql_conn(&self.conn, &self.last_used, &self.connect_url).await?;
-        let conn_ref = guard
-            .as_mut()
-            .ok_or_else(|| CoreError::database(DatabaseError::Driver {
+        let conn_ref = guard.as_mut().ok_or_else(|| {
+            CoreError::database(DatabaseError::Driver {
                 db_type: "mysql".to_string(),
                 operation: "list_columns_batch".to_string(),
                 source: "连接为 None 且无法重建".to_string(),
-            }))?;
+            })
+        })?;
         let mut out = Vec::with_capacity(tables.len());
         for t in tables {
             let result = tokio::time::timeout(MYSQL_QUERY_TIMEOUT, async {
@@ -612,7 +608,10 @@ impl Database for MySqlDatabase {
             .map_err(|_| {
                 CoreError::database(DatabaseError::Query {
                     sql: sql.to_string(),
-                    reason: format!("批量列查询超时（{} 秒无响应）", MYSQL_QUERY_TIMEOUT.as_secs()),
+                    reason: format!(
+                        "批量列查询超时（{} 秒无响应）",
+                        MYSQL_QUERY_TIMEOUT.as_secs()
+                    ),
                     position: None,
                     location: None,
                 })
@@ -710,7 +709,15 @@ impl Database for MySqlDatabase {
                 .column_by_name(name)
                 .and_then(|c| c.as_any().downcast_ref::<arrow::array::StringArray>())
         };
-        let (Some(cname), Some(ctype), Some(cols), Some(ref_table), Some(ref_cols), Some(upd), Some(del)) = (
+        let (
+            Some(cname),
+            Some(ctype),
+            Some(cols),
+            Some(ref_table),
+            Some(ref_cols),
+            Some(upd),
+            Some(del),
+        ) = (
             col("cname"),
             col("ctype"),
             col("cols"),
@@ -718,7 +725,8 @@ impl Database for MySqlDatabase {
             col("ref_cols"),
             col("upd"),
             col("del"),
-        ) else {
+        )
+        else {
             return Ok(out);
         };
 
@@ -877,7 +885,9 @@ impl Database for MySqlDatabase {
         .map_err(|e| mysql_query_error(catalog, &e))?;
         let procedures = rows
             .iter()
-            .map(|r| crate::NodeInfo::new(r.get::<String, _>(0), crate::SchemaObjectKind::Procedure))
+            .map(|r| {
+                crate::NodeInfo::new(r.get::<String, _>(0), crate::SchemaObjectKind::Procedure)
+            })
             .collect();
 
         // 3) 函数（ROUTINES WHERE TYPE='FUNCTION'）
@@ -1108,7 +1118,9 @@ async fn execute_writing(
     let mut guard = lock_mysql_conn(conn, last_used, connect_url).await?;
     let exec_result = {
         let conn = guard.as_mut().expect("lock_mysql_conn 保证 Some");
-        sqlx::query(sqlx::AssertSqlSafe(sql)).execute(&mut *conn).await
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .execute(&mut *conn)
+            .await
     };
     let result = mysql_conn_result(&mut guard, sql, exec_result)?;
     Ok(affected_rows_result(result.rows_affected()))
@@ -1139,7 +1151,9 @@ async fn execute_via_text_protocol(
     let mut guard = lock_mysql_conn(conn, last_used, connect_url).await?;
     let exec_result = {
         let conn = guard.as_mut().expect("lock_mysql_conn 保证 Some");
-        sqlx::raw_sql(sqlx::AssertSqlSafe(sql)).execute(&mut *conn).await
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+            .execute(&mut *conn)
+            .await
     };
     let result = mysql_conn_result(&mut guard, sql, exec_result)?;
 
@@ -1449,12 +1463,8 @@ impl crate::MetadataBrowser for MySqlDatabase {
         // 系统库过滤（#14）：MySQL 侧此前未过滤，information_schema / mysql /
         // performance_schema / sys 全列出（真机实证 5 库全显）。与 PG 侧
         // `PG_LIST_SCHEMAS_SQL` 的系统对象过滤保持一致，只留业务库。
-        const SYSTEM_SCHEMAS: [&str; 4] = [
-            "information_schema",
-            "mysql",
-            "performance_schema",
-            "sys",
-        ];
+        const SYSTEM_SCHEMAS: [&str; 4] =
+            ["information_schema", "mysql", "performance_schema", "sys"];
         let nodes: Vec<crate::NodeInfo> = (0..result.total_rows())
             .filter_map(|row_idx| {
                 result.batches.iter().find_map(|batch| {
@@ -1538,7 +1548,11 @@ impl crate::MetadataBrowser for MySqlDatabase {
             .await
             .map_err(|e| mysql_query_error(catalog, &e))?;
         let result = tokio::time::timeout(MYSQL_QUERY_TIMEOUT, async {
-            sqlx::query(sql).bind(catalog).bind(table).fetch_all(&mut conn).await
+            sqlx::query(sql)
+                .bind(catalog)
+                .bind(table)
+                .fetch_all(&mut conn)
+                .await
         })
         .await
         .map_err(|_| {

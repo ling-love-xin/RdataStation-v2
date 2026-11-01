@@ -16,14 +16,12 @@ use duckdb::{AccessMode, Config, Connection};
 
 use crate::traits::MetadataBrowser;
 use crate::utils::{
-    affected_rows_result, is_read_only_sql as shared_is_read_only_sql, returns_rows, SqlFlavor,
+    SqlFlavor, affected_rows_result, is_read_only_sql as shared_is_read_only_sql, returns_rows,
 };
-use crate::{
-    ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, Transaction,
-};
+use crate::{ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, Transaction};
+use shared::duckdb_rows::duckdb_rows_to_arrow;
 use shared::error::{CoreError, DatabaseError};
 use shared::models::{QueryResult, Value};
-use shared::duckdb_rows::duckdb_rows_to_arrow;
 
 /// 连接属性 → 开库动作（纯函数产物，可测）。
 ///
@@ -82,15 +80,15 @@ pub(crate) fn plan_connection(
                             key,
                             value,
                             "只支持 automatic / read_only / read_write",
-                        ))
+                        ));
                     }
                 };
                 plan.access_mode = Some(mode);
             }
             "threads" => {
-                let n: i64 = value.parse().map_err(|_| {
-                    attr_err(key, value, "应是线程数（正整数）")
-                })?;
+                let n: i64 = value
+                    .parse()
+                    .map_err(|_| attr_err(key, value, "应是线程数（正整数）"))?;
                 if n < 1 {
                     return Err(attr_err(key, value, "至少为 1"));
                 }
@@ -159,14 +157,9 @@ fn size_literal(value: &str) -> Result<String, &'static str> {
     if v.is_empty() {
         return Err("不能为空");
     }
-    let (num, unit) = v.split_at(
-        v.find(|c: char| c.is_ascii_alphabetic())
-            .unwrap_or(v.len()),
-    );
+    let (num, unit) = v.split_at(v.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(v.len()));
     let ok_num = !num.is_empty()
-        && num
-            .chars()
-            .all(|c| c.is_ascii_digit() || c == '.')
+        && num.chars().all(|c| c.is_ascii_digit() || c == '.')
         && num.chars().any(|c| c.is_ascii_digit());
     let ok_unit = matches!(
         unit.to_ascii_uppercase().as_str(),
@@ -257,9 +250,9 @@ impl DuckDbDatabase {
         let conn = match open_mode {
             Some(mode) => {
                 let described = mode.to_string();
-                let config = Config::default().access_mode(mode).map_err(|e| {
-                    attr_err("access_mode", &described, &e.to_string())
-                })?;
+                let config = Config::default()
+                    .access_mode(mode)
+                    .map_err(|e| attr_err("access_mode", &described, &e.to_string()))?;
                 Connection::open_with_flags(path, config)
             }
             None => Connection::open(path),
@@ -393,12 +386,8 @@ fn duckdb_query_error(sql: &str, error: &duckdb::Error) -> CoreError {
 }
 
 fn execute_writing(conn: &Connection, sql: &str) -> Result<QueryResult, CoreError> {
-    let mut stmt = conn
-        .prepare(sql)
-        .map_err(|e| duckdb_query_error(sql, &e))?;
-    let affected = stmt
-        .execute([])
-        .map_err(|e| duckdb_query_error(sql, &e))?;
+    let mut stmt = conn.prepare(sql).map_err(|e| duckdb_query_error(sql, &e))?;
+    let affected = stmt.execute([]).map_err(|e| duckdb_query_error(sql, &e))?;
     Ok(affected_rows_result(affected as u64))
 }
 
@@ -426,21 +415,22 @@ impl Database for DuckDbDatabase {
                 return execute_writing(&conn, &sql_owned);
             }
 
-            let mut stmt = conn.prepare(&sql_owned).map_err(|e| {
-                duckdb_query_error(&sql_owned, &e)
-            })?;
+            let mut stmt = conn
+                .prepare(&sql_owned)
+                .map_err(|e| duckdb_query_error(&sql_owned, &e))?;
 
             let row_data: Vec<Vec<duckdb::types::Value>>;
 
             {
-                let mut rows = stmt.query([]).map_err(|e| {
-                    duckdb_query_error(&sql_owned, &e)
-                })?;
+                let mut rows = stmt
+                    .query([])
+                    .map_err(|e| duckdb_query_error(&sql_owned, &e))?;
 
                 let mut data: Vec<Vec<duckdb::types::Value>> = Vec::new();
-                while let Some(row) = rows.next().map_err(|e| {
-                    duckdb_query_error(&sql_owned, &e)
-                })? {
+                while let Some(row) = rows
+                    .next()
+                    .map_err(|e| duckdb_query_error(&sql_owned, &e))?
+                {
                     let mut values: Vec<duckdb::types::Value> = Vec::new();
                     for i in 0.. {
                         match row.get::<usize, duckdb::types::Value>(i) {
@@ -483,7 +473,11 @@ impl Database for DuckDbDatabase {
                 ));
             };
 
-            Ok(QueryResult::with_batches(columns, vec![batch], Some(is_read_only)))
+            Ok(QueryResult::with_batches(
+                columns,
+                vec![batch],
+                Some(is_read_only),
+            ))
         })
         .await
         .map_err(|e| {
@@ -512,9 +506,9 @@ impl Database for DuckDbDatabase {
                 })
             })?;
 
-            let mut stmt = conn.prepare(&sql_owned).map_err(|e| {
-                duckdb_query_error(&sql_owned, &e)
-            })?;
+            let mut stmt = conn
+                .prepare(&sql_owned)
+                .map_err(|e| duckdb_query_error(&sql_owned, &e))?;
 
             let duckdb_params: Vec<duckdb::types::Value> = params
                 .iter()
@@ -543,14 +537,15 @@ impl Database for DuckDbDatabase {
 
             let row_data: Vec<Vec<duckdb::types::Value>>;
             {
-                let mut rows = stmt.query(params_slice.as_slice()).map_err(|e| {
-                    duckdb_query_error(&sql_owned, &e)
-                })?;
+                let mut rows = stmt
+                    .query(params_slice.as_slice())
+                    .map_err(|e| duckdb_query_error(&sql_owned, &e))?;
 
                 let mut data: Vec<Vec<duckdb::types::Value>> = Vec::new();
-                while let Some(row) = rows.next().map_err(|e| {
-                    duckdb_query_error(&sql_owned, &e)
-                })? {
+                while let Some(row) = rows
+                    .next()
+                    .map_err(|e| duckdb_query_error(&sql_owned, &e))?
+                {
                     let mut values: Vec<duckdb::types::Value> = Vec::new();
                     // 行自己知道有几列（与执行前无关）
                     for i in 0..row.as_ref().column_count() {
@@ -594,7 +589,11 @@ impl Database for DuckDbDatabase {
                 ));
             };
 
-            Ok(QueryResult::with_batches(columns, vec![batch], Some(is_read_only)))
+            Ok(QueryResult::with_batches(
+                columns,
+                vec![batch],
+                Some(is_read_only),
+            ))
         })
         .await
         .map_err(|e| {
@@ -1062,16 +1061,12 @@ impl Transaction for DuckDbTransaction {
             return execute_writing(&conn, sql);
         }
 
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| duckdb_query_error(sql, &e))?;
+        let mut stmt = conn.prepare(sql).map_err(|e| duckdb_query_error(sql, &e))?;
 
         let row_data: Vec<Vec<duckdb::types::Value>>;
 
         {
-            let mut rows = stmt
-                .query([])
-                .map_err(|e| duckdb_query_error(sql, &e))?;
+            let mut rows = stmt.query([]).map_err(|e| duckdb_query_error(sql, &e))?;
 
             let mut data: Vec<Vec<duckdb::types::Value>> = Vec::new();
             while let Ok(Some(row)) = rows.next() {
@@ -1116,7 +1111,11 @@ impl Transaction for DuckDbTransaction {
             ));
         };
 
-        Ok(QueryResult::with_batches(columns, vec![batch], Some(is_read_only)))
+        Ok(QueryResult::with_batches(
+            columns,
+            vec![batch],
+            Some(is_read_only),
+        ))
     }
 
     async fn commit(&mut self) -> Result<(), CoreError> {
@@ -1161,8 +1160,6 @@ impl Transaction for DuckDbTransaction {
     }
 }
 
-
-
 #[async_trait::async_trait]
 impl crate::MetadataBrowser for DuckDbDatabase {
     fn has_schema_level(&self) -> bool {
@@ -1188,10 +1185,7 @@ impl crate::MetadataBrowser for DuckDbDatabase {
         )])
     }
 
-    async fn get_schemas(
-        &self,
-        _catalog: &str,
-    ) -> Result<Vec<crate::NodeInfo>, CoreError> {
+    async fn get_schemas(&self, _catalog: &str) -> Result<Vec<crate::NodeInfo>, CoreError> {
         // DuckDB 不区分 catalog/schema 层级（见 `has_schema_level`）。
         Ok(vec![])
     }

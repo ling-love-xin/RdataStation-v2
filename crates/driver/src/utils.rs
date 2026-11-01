@@ -1,6 +1,6 @@
-use shared::models::QueryResult;
 use super::registry::DriverConnectionConfig;
 use shared::error::{ConnectionError, CoreError};
+use shared::models::QueryResult;
 
 /// 把一个**非文本族**的单元格解成展示文本：`numeric` / 时间 / UUID / JSON。
 ///
@@ -37,7 +37,9 @@ macro_rules! sqlx_cell_as_text {
             Some(v)
         } else if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::BigDecimal>, _>(idx) {
             Some(v.to_string())
-        } else if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx) {
+        } else if let Ok(Some(v)) =
+            row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx)
+        {
             Some(v.format("%Y-%m-%d %H:%M:%S%.f").to_string())
         } else if let Ok(Some(v)) =
             row.try_get::<Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>>, _>(idx)
@@ -49,7 +51,9 @@ macro_rules! sqlx_cell_as_text {
             Some(v.format("%H:%M:%S%.f").to_string())
         } else if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::Uuid>, _>(idx) {
             Some(v.to_string())
-        } else if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::Json<serde_json::Value>>, _>(idx) {
+        } else if let Ok(Some(v)) =
+            row.try_get::<Option<sqlx::types::Json<serde_json::Value>>, _>(idx)
+        {
             Some(v.0.to_string())
         } else if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(idx) {
             Some(String::from_utf8_lossy(&v).into_owned())
@@ -789,9 +793,7 @@ fn has_returning_clause(sql: &str) -> bool {
             }
             c if c.is_ascii_alphabetic() || c == b'_' => {
                 let start = i;
-                while i < bytes.len()
-                    && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
-                {
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                     i += 1;
                 }
                 if bytes[start..i].eq_ignore_ascii_case(b"returning") {
@@ -816,8 +818,16 @@ fn has_returning_clause(sql: &str) -> bool {
 /// 两边都要顾及时驱动给不出「两者兼得」的结果：**保行**，用户至少看得见数据。
 pub fn returns_rows(sql: &str) -> bool {
     const ROW_KEYWORDS: [&str; 10] = [
-        "select", "with", "values", "table", "show", "describe", "desc", "explain",
-        "pragma", "summarize",
+        "select",
+        "with",
+        "values",
+        "table",
+        "show",
+        "describe",
+        "desc",
+        "explain",
+        "pragma",
+        "summarize",
     ];
     ROW_KEYWORDS.contains(&first_keyword(sql).as_str()) || has_returning_clause(sql)
 }
@@ -1061,8 +1071,12 @@ mod tests {
     fn returning_inside_identifiers_is_not_a_clause() {
         assert!(!returns_rows("INSERT INTO returning_log (a) VALUES (1)"));
         assert!(!returns_rows("INSERT INTO t (a) VALUES ('returning')"));
-        assert!(!returns_rows("INSERT INTO t (a) VALUES ('it''s returning')"));
-        assert!(!returns_rows("INSERT INTO t (a) VALUES ('后 RETURNING 前')"));
+        assert!(!returns_rows(
+            "INSERT INTO t (a) VALUES ('it''s returning')"
+        ));
+        assert!(!returns_rows(
+            "INSERT INTO t (a) VALUES ('后 RETURNING 前')"
+        ));
         assert!(!returns_rows("-- returning\nDELETE FROM t"));
         assert!(!returns_rows("/* returning */ DELETE FROM t"));
         assert!(returns_rows("INSERT INTO t (a) VALUES ('x') RETURNING id"));
@@ -1153,12 +1167,11 @@ mod url_database_tests {
             "写进去时的编码要能读回来"
         );
     }
-
 }
 
 #[cfg(test)]
 mod read_only_tests {
-    use super::{is_read_only_sql, SqlFlavor};
+    use super::{SqlFlavor, is_read_only_sql};
 
     /// 只读口径：四种方言并排钉住。
     ///
@@ -1177,7 +1190,10 @@ mod read_only_tests {
         // 四家都算只读：查询本身与 `EXPLAIN`。
         for flavor in ALL {
             assert!(is_read_only_sql("SELECT 1", flavor), "{flavor:?} 认 SELECT");
-            assert!(is_read_only_sql("  explain select 1", flavor), "{flavor:?} 认 EXPLAIN");
+            assert!(
+                is_read_only_sql("  explain select 1", flavor),
+                "{flavor:?} 认 EXPLAIN"
+            );
             assert!(
                 !is_read_only_sql("INSERT INTO t VALUES (1)", flavor),
                 "{flavor:?} 不该把 INSERT 当只读"
@@ -1187,15 +1203,30 @@ mod read_only_tests {
         assert!(is_read_only_sql("SHOW TABLES", SqlFlavor::MySql));
         assert!(is_read_only_sql("DESCRIBE t", SqlFlavor::PostgreSql));
         assert!(!is_read_only_sql("SHOW TABLES", SqlFlavor::Sqlite));
-        assert!(!is_read_only_sql("SET search_path TO public", SqlFlavor::Sqlite));
-        assert!(is_read_only_sql("SET search_path TO public", SqlFlavor::PostgreSql));
+        assert!(!is_read_only_sql(
+            "SET search_path TO public",
+            SqlFlavor::Sqlite
+        ));
+        assert!(is_read_only_sql(
+            "SET search_path TO public",
+            SqlFlavor::PostgreSql
+        ));
         assert!(is_read_only_sql("SET @x = 1", SqlFlavor::MySql));
         assert!(is_read_only_sql("PRAGMA table_info(t)", SqlFlavor::Sqlite));
         assert!(is_read_only_sql("PRAGMA table_info(t)", SqlFlavor::DuckDb));
-        assert!(!is_read_only_sql("PRAGMA table_info(t)", SqlFlavor::PostgreSql));
+        assert!(!is_read_only_sql(
+            "PRAGMA table_info(t)",
+            SqlFlavor::PostgreSql
+        ));
         // 前置注释要跳过（与 `returns_rows` 同一口径；老写法在这里会判成写语句）。
-        assert!(is_read_only_sql("-- 找个人\nSELECT 1", SqlFlavor::PostgreSql));
-        assert!(is_read_only_sql("/* 注释 */ set search_path to public", SqlFlavor::MySql));
+        assert!(is_read_only_sql(
+            "-- 找个人\nSELECT 1",
+            SqlFlavor::PostgreSql
+        ));
+        assert!(is_read_only_sql(
+            "/* 注释 */ set search_path to public",
+            SqlFlavor::MySql
+        ));
         // 只有注释：认不出语句，按「不是只读」算（交给 `returns_rows` 与驱动自己报错）。
         assert!(!is_read_only_sql("-- 半句话", SqlFlavor::PostgreSql));
     }
@@ -1208,7 +1239,10 @@ mod schema_context_tests {
     /// 【T2c-1】方言归类：驱动 id 前缀 → 方言族；不认识的驱动不硬猜。
     #[test]
     fn flavor_from_db_type_classifies_known_drivers() {
-        assert_eq!(flavor_from_db_type("postgres_native"), Some(SqlFlavor::PostgreSql));
+        assert_eq!(
+            flavor_from_db_type("postgres_native"),
+            Some(SqlFlavor::PostgreSql)
+        );
         assert_eq!(flavor_from_db_type("postgres"), Some(SqlFlavor::PostgreSql));
         assert_eq!(flavor_from_db_type("mysql_native"), Some(SqlFlavor::MySql));
         assert_eq!(flavor_from_db_type("mysql"), Some(SqlFlavor::MySql));
@@ -1280,13 +1314,21 @@ mod columns_detail_tests {
         let values = [
             // name/type/nullable/ordinal/key/default/comment/ref_table/ref_col/fk/identity/generation/collation
             vec![
-                "id", "bigint", "NO", "1", "PRI", "", "", "", "", "1",
-                "1", "BY DEFAULT", "default",
+                "id",
+                "bigint",
+                "NO",
+                "1",
+                "PRI",
+                "",
+                "",
+                "",
+                "",
+                "1",
+                "1",
+                "BY DEFAULT",
+                "default",
             ],
-            vec![
-                "c", "text", "YES", "2", "", "", "", "", "", "",
-                "", "", "C",
-            ],
+            vec!["c", "text", "YES", "2", "", "", "", "", "", "", "", "", "C"],
         ];
         let schema = std::sync::Arc::new(Schema::new(
             (0..13)
@@ -1324,8 +1366,19 @@ mod columns_detail_tests {
         use shared::models::ArrowBatch;
 
         let values = [vec![
-            "id", "int", "NO", "1", "PRI", "", "", "", "", "1",
-            "1", "AUTO_INCREMENT", "utf8mb4_0900_ai_ci",
+            "id",
+            "int",
+            "NO",
+            "1",
+            "PRI",
+            "",
+            "",
+            "",
+            "",
+            "1",
+            "1",
+            "AUTO_INCREMENT",
+            "utf8mb4_0900_ai_ci",
         ]];
         let schema = std::sync::Arc::new(Schema::new(
             (0..13)
@@ -1347,7 +1400,10 @@ mod columns_detail_tests {
 
         let cols = columns_from_detail_rows(&qr);
         assert!(cols[0].is_identity);
-        assert_eq!(cols[0].identity_generation.as_deref(), Some("AUTO_INCREMENT"));
+        assert_eq!(
+            cols[0].identity_generation.as_deref(),
+            Some("AUTO_INCREMENT")
+        );
         assert_eq!(cols[0].collation.as_deref(), Some("utf8mb4_0900_ai_ci"));
     }
 
@@ -1358,11 +1414,7 @@ mod columns_detail_tests {
         use arrow::datatypes::{DataType, Field, Schema};
         use shared::models::ArrowBatch;
 
-        let schema = std::sync::Arc::new(Schema::new(vec![Field::new(
-            "c0",
-            DataType::Utf8,
-            true,
-        )]));
+        let schema = std::sync::Arc::new(Schema::new(vec![Field::new("c0", DataType::Utf8, true)]));
         let arrays: Vec<std::sync::Arc<dyn arrow::array::Array>> =
             vec![std::sync::Arc::new(StringArray::from(vec!["id"]))];
         let qr = shared::models::QueryResult {

@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -190,10 +190,12 @@ pub fn get_network_config(conn: &Connection, id: &str) -> Result<Option<NetworkC
     })
     .optional()
     .map_err(|e| storage_err("get_network_config", e.to_string()))
-    .map(|found| found.map(|mut nc| {
-        nc.config = decrypt_network_config(&nc.config).unwrap_or(nc.config);
-        nc
-    }))
+    .map(|found| {
+        found.map(|mut nc| {
+            nc.config = decrypt_network_config(&nc.config).unwrap_or(nc.config);
+            nc
+        })
+    })
 }
 
 /// 更新网络配置，若配置不存在则返回错误
@@ -356,10 +358,12 @@ pub fn get_global_network_config(
     })
     .optional()
     .map_err(|e| storage_err("get_global_network_config", e.to_string()))
-    .map(|found| found.map(|mut nc| {
-        nc.config = decrypt_network_config(&nc.config).unwrap_or(nc.config);
-        nc
-    }))
+    .map(|found| {
+        found.map(|mut nc| {
+            nc.config = decrypt_network_config(&nc.config).unwrap_or(nc.config);
+            nc
+        })
+    })
 }
 
 // ===== 敏感字段加密（§14 #34：网络档案 config 内的密码不再明文入库）=====
@@ -539,7 +543,8 @@ mod tests {
         assert_eq!(parsed["host"], "jump", "非敏感字段不变");
 
         // 代理：嵌套 `auth.password`
-        let proxy = r#"{"host":"127.0.0.1","port":1080,"auth":{"username":"u","password":"secret"}}"#;
+        let proxy =
+            r#"{"host":"127.0.0.1","port":1080,"auth":{"username":"u","password":"secret"}}"#;
         let enc = encrypt_network_config(proxy).expect("encrypt proxy");
         assert!(!enc.contains("secret"), "{enc}");
         let dec = decrypt_network_config(&enc).expect("decrypt proxy");
@@ -553,7 +558,9 @@ mod tests {
         // "p1" 这样的短明文（约 1~2% 概率），整串 contains 会变成随机失败的假阳性。
         let fields: serde_json::Value = serde_json::from_str(&enc).expect("json");
         let ssh_password = fields[0]["password"].as_str().expect("ssh password");
-        let proxy_password = fields[1]["auth"]["password"].as_str().expect("proxy password");
+        let proxy_password = fields[1]["auth"]["password"]
+            .as_str()
+            .expect("proxy password");
         assert!(
             ssh_password.starts_with("AES:") && ssh_password != "p1",
             "SSH 密码不得以明文留下：{ssh_password}"
@@ -606,7 +613,9 @@ mod tests {
         assert!(raw.contains("AES:"));
 
         // 读路径自动解密（连接解析与管理器回填都走它）
-        let got = get_network_config(&conn, &nc.id).expect("get").expect("exists");
+        let got = get_network_config(&conn, &nc.id)
+            .expect("get")
+            .expect("exists");
         let parsed: serde_json::Value = serde_json::from_str(&got.config).expect("json");
         assert_eq!(parsed["password"], "plain");
 
@@ -645,10 +654,16 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("read raw");
-        assert!(!raw.contains("legacy-plain") && raw.contains("AES:"), "{raw}");
+        assert!(
+            !raw.contains("legacy-plain") && raw.contains("AES:"),
+            "{raw}"
+        );
 
         // 幂等：再跑一次无改动
-        assert_eq!(reencrypt_all_network_configs(&conn).expect("migrate again"), 0);
+        assert_eq!(
+            reencrypt_all_network_configs(&conn).expect("migrate again"),
+            0
+        );
     }
 
     #[test]
@@ -657,7 +672,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
 
         // 1) 项目 / 库文件都不存在 → 0，且**不创建任何东西**（读路径无副作用）
-        assert_eq!(reencrypt_project_network_configs(&base).expect("missing db"), 0);
+        assert_eq!(
+            reencrypt_project_network_configs(&base).expect("missing db"),
+            0
+        );
         assert!(!base.exists(), "迁移不得创建项目目录");
 
         // 2) 有库但没有 network_configs 表 → 0，且不建表
@@ -669,7 +687,10 @@ mod tests {
             conn.execute_batch("CREATE TABLE connections (id TEXT PRIMARY KEY)")
                 .expect("create connections");
         }
-        assert_eq!(reencrypt_project_network_configs(&base).expect("no table"), 0);
+        assert_eq!(
+            reencrypt_project_network_configs(&base).expect("no table"),
+            0
+        );
         {
             let conn = Connection::open(&db_path).expect("reopen");
             let has: Option<i64> = conn
@@ -693,7 +714,10 @@ mod tests {
             )
             .expect("seed plaintext");
         }
-        assert_eq!(reencrypt_project_network_configs(&base).expect("migrate"), 1);
+        assert_eq!(
+            reencrypt_project_network_configs(&base).expect("migrate"),
+            1
+        );
         assert_eq!(
             reencrypt_project_network_configs(&base).expect("migrate again"),
             0,
