@@ -165,7 +165,10 @@ pub enum Output {
     Table(ResultEntry),
     /// 轻量表格（HTML 表格解析产物：pandas DataFrame 默认 `text/html`；
     /// 比 `ResultEntry` 少所有结果区字段，纯列 + 行）
-    TableData { columns: Vec<String>, rows: Vec<Vec<String>> },
+    TableData {
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
     /// 文本输出（脚本 stdout / `text/plain`；卡片渲染）
     Text(String),
     /// Markdown 输出（`text/markdown`；`TextView::markdown` 渲染）
@@ -385,7 +388,9 @@ impl NotebookState {
 
     /// 是否有单元在跑（防并发提交）
     pub fn has_running(&self) -> bool {
-        self.cells.iter().any(|cell| cell.state == CellState::Running)
+        self.cells
+            .iter()
+            .any(|cell| cell.state == CellState::Running)
     }
 }
 
@@ -401,7 +406,10 @@ impl NotebookFile {
 
     /// 还原成内存形状：单元按 id / kind / body 原样回来，输出清空（如实）
     pub fn into_state(self) -> (Session, Vec<Cell>) {
-        (self.session, self.cells.into_iter().map(CellFile::into_cell).collect())
+        (
+            self.session,
+            self.cells.into_iter().map(CellFile::into_cell).collect(),
+        )
     }
 
     /// 序列化为 JSON 文本（落盘）
@@ -411,8 +419,8 @@ impl NotebookFile {
 
     /// 从 JSON 文本还原；当前版本直读，v1 兼容迁移，其余版本如实拒绝
     pub fn from_json(text: &str) -> Result<Self, String> {
-        let value: serde_json::Value = serde_json::from_str(text)
-            .map_err(|e| format!("解析 .rdsnote 失败：{e}"))?;
+        let value: serde_json::Value =
+            serde_json::from_str(text).map_err(|e| format!("解析 .rdsnote 失败：{e}"))?;
         let version = value
             .get("version")
             .and_then(|v| v.as_u64())
@@ -462,8 +470,8 @@ struct V1Notebook {
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        Cell, CellFile, CellLanguage, CellState, ExecutionSource, NotebookFile, NotebookState,
-        NOTEBOOK_VERSION, Output,
+        Cell, CellFile, CellLanguage, CellState, ExecutionSource, NOTEBOOK_VERSION, NotebookFile,
+        NotebookState, Output,
     };
     use crate::session::Session;
 
@@ -524,15 +532,25 @@ mod tests {
         assert_eq!(CellLanguage::from_key("sql"), CellLanguage::Sql);
         assert_eq!(CellLanguage::from_key("python"), CellLanguage::Python);
         assert_eq!(CellLanguage::from_key("markdown"), CellLanguage::Markdown);
-        assert_eq!(CellLanguage::from_key("wat"), CellLanguage::Markdown, "认不出的值回 Markdown");
+        assert_eq!(
+            CellLanguage::from_key("wat"),
+            CellLanguage::Markdown,
+            "认不出的值回 Markdown"
+        );
 
         // 可执行性 + 运行目标
         assert!(CellLanguage::Sql.is_executable());
         assert!(CellLanguage::Python.is_executable());
         assert!(!CellLanguage::Markdown.is_executable());
         assert!(CellLanguage::Markdown.is_markdown());
-        assert_eq!(CellLanguage::Sql.runs_on(), Some(super::ExecutionTarget::Connection));
-        assert_eq!(CellLanguage::Python.runs_on(), Some(super::ExecutionTarget::Kernel));
+        assert_eq!(
+            CellLanguage::Sql.runs_on(),
+            Some(super::ExecutionTarget::Connection)
+        );
+        assert_eq!(
+            CellLanguage::Python.runs_on(),
+            Some(super::ExecutionTarget::Kernel)
+        );
         assert_eq!(CellLanguage::Markdown.runs_on(), None);
 
         // 执行源 serde 形状（tagged：{"kind":"connection","id":...}）
@@ -572,7 +590,10 @@ mod tests {
         assert_eq!(cells_back.len(), 2);
         assert_eq!(cells_back[0].id, "c1");
         assert_eq!(cells_back[0].language, CellLanguage::Sql);
-        assert_eq!(cells_back[0].execution_source, Some(ExecutionSource::Connection("P_orders".to_string())));
+        assert_eq!(
+            cells_back[0].execution_source,
+            Some(ExecutionSource::Connection("P_orders".to_string()))
+        );
         assert_eq!(cells_back[0].body, "select 1;");
         assert_eq!(cells_back[0].state, CellState::Idle, "状态不跟随文件");
         assert!(cells_back[0].outputs.is_empty(), "输出不跟随文件");
@@ -601,9 +622,20 @@ mod tests {
         let file = NotebookFile::from_json(json).expect("v1 要能读");
         assert_eq!(file.version, NOTEBOOK_VERSION, "读 v1 后落在当前版本");
         let (_session, cells) = file.into_state();
-        assert_eq!(cells[0].language, CellLanguage::Sql, "v1 sql → language sql");
-        assert_eq!(cells[1].language, CellLanguage::Markdown, "v1 text → language markdown");
-        assert_eq!(cells[0].execution_source, None, "v1 没有执行源 → 默认（会话）");
+        assert_eq!(
+            cells[0].language,
+            CellLanguage::Sql,
+            "v1 sql → language sql"
+        );
+        assert_eq!(
+            cells[1].language,
+            CellLanguage::Markdown,
+            "v1 text → language markdown"
+        );
+        assert_eq!(
+            cells[0].execution_source, None,
+            "v1 没有执行源 → 默认（会话）"
+        );
         assert_eq!(cells[0].body, "select 1;");
     }
 
@@ -611,7 +643,10 @@ mod tests {
     #[test]
     fn broken_json_is_rejected() {
         assert!(NotebookFile::from_json("not json at all").is_err());
-        assert!(NotebookFile::from_json(r#"{"cells": []}"#).is_err(), "缺版本字段要报错");
+        assert!(
+            NotebookFile::from_json(r#"{"cells": []}"#).is_err(),
+            "缺版本字段要报错"
+        );
     }
 
     /// CellFile 的转换是纯函数：落盘形状 = 内存形状的投影
@@ -644,7 +679,10 @@ mod tests {
 
         notebook.switch_session(Session::new("s2", Some("P_orders".to_string()), None));
         assert_eq!(notebook.session.id, "s2");
-        assert_eq!(notebook.session.default_connection.as_deref(), Some("P_orders"));
+        assert_eq!(
+            notebook.session.default_connection.as_deref(),
+            Some("P_orders")
+        );
         assert_eq!(notebook.stale_count(), 2, "有输出的两个单元都 stale");
         assert_eq!(notebook.cells[0].state, CellState::Stale);
         assert_eq!(notebook.cells[1].state, CellState::Stale);
@@ -674,7 +712,10 @@ mod tests {
         cell.mark_running();
         cell.mark_done(Output::Text("hi\n".to_string()));
         cell.mark_done(Output::Markdown("**bold**".to_string()));
-        cell.mark_done(Output::Image { bytes: vec![1, 2, 3], mime: "image/png".to_string() });
+        cell.mark_done(Output::Image {
+            bytes: vec![1, 2, 3],
+            mime: "image/png".to_string(),
+        });
         assert_eq!(cell.outputs.len(), 3);
         assert!(matches!(cell.outputs[0], Output::Text(_)));
         assert!(matches!(cell.outputs[1], Output::Markdown(_)));

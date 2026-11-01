@@ -1,18 +1,12 @@
 //! （由 view/tests.rs 拆分，2026-10-29）
 //! 注意：不用 `use super::*` 通配（gpui `test` 宏递归），依赖显式列举。
 
-
-use gpui_kit::{
-    TestAppContext, VisualTestContext,
-};
+use gpui_kit::{TestAppContext, VisualTestContext};
 
 use crate::model::EditorMode;
 
-use super::{
-    open_panel,
-    shared_with_document, shared_with_env, wait_for_all_pending,
-};
 use super::fake_envs;
+use super::{open_panel, shared_with_document, shared_with_env, wait_for_all_pending};
 
 // ===== 2b：通用模式窗口级测试 =====
 //
@@ -53,7 +47,9 @@ fn general_mode_toolbar_offers_env_picker_and_run_but_disabled_without_a_port(
     });
     let message = cx.update(|_window, cx| panel.read(cx).message.clone());
     assert!(
-        message.as_deref().is_some_and(|m| m.contains("未选中执行环境")),
+        message
+            .as_deref()
+            .is_some_and(|m| m.contains("未选中执行环境")),
         "无端口时应报未选环境：{message:?}"
     );
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -61,9 +57,7 @@ fn general_mode_toolbar_offers_env_picker_and_run_but_disabled_without_a_port(
 
 /// 选已装环境 → 运行按钮亮 → `run_script` 真提交 → 结论变成功卡片（独立通道，不走网格）
 #[gpui_kit::test]
-fn selecting_an_installed_env_runs_the_script_and_shows_a_success_card(
-    cx: &mut TestAppContext,
-) {
+fn selecting_an_installed_env_runs_the_script_and_shows_a_success_card(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let installed = std::collections::HashMap::from([("py".to_string(), true)]);
     let (shared, id, seen) = shared_with_env(
@@ -152,7 +146,8 @@ fn an_uninstalled_env_refuses_to_run_with_a_reason(cx: &mut TestAppContext) {
         "未装环境应报未安装：{message:?}"
     );
     assert!(
-        cx.update(|_window, cx| panel.read(cx).script_card_for_test(cx)).is_none(),
+        cx.update(|_window, cx| panel.read(cx).script_card_for_test(cx))
+            .is_none(),
         "未装环境不得产出卡片"
     );
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -160,9 +155,7 @@ fn an_uninstalled_env_refuses_to_run_with_a_reason(cx: &mut TestAppContext) {
 
 /// 执行器报错（spawn 失败等）：结论是失败卡片，带原因
 #[gpui_kit::test]
-fn a_failed_script_execution_shows_an_error_card_with_the_reason(
-    cx: &mut TestAppContext,
-) {
+fn a_failed_script_execution_shows_an_error_card_with_the_reason(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let installed = std::collections::HashMap::from([("py".to_string(), true)]);
     let (shared, id, _seen) = shared_with_env(
@@ -183,10 +176,7 @@ fn a_failed_script_execution_shows_an_error_card_with_the_reason(
     let card = card.expect("失败也要有卡片（带原因）");
     match card.result {
         Ok(_) => panic!("应当失败，却拿到了成功输出"),
-        Err(reason) => assert!(
-            reason.contains("spawn 失败"),
-            "卡片带失败原因：{reason}"
-        ),
+        Err(reason) => assert!(reason.contains("spawn 失败"), "卡片带失败原因：{reason}"),
     }
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
@@ -223,8 +213,8 @@ fn status_bar_shows_the_env_segment_in_general_mode(cx: &mut TestAppContext) {
 
     // 状态栏文案由 `labels()` 纯函数计算：通用模式 → 模式名在右段微标（原型 §2.5），
     // body 含环境段。这里直接断言纯函数（窗口级把 env 输入喂对，纯函数保证渲染一致）。
-    let text = crate::view::widgets::status_bar::labels(
-        &crate::view::widgets::status_bar::StatusInputs {
+    let text =
+        crate::view::widgets::status_bar::labels(&crate::view::widgets::status_bar::StatusInputs {
             mode: EditorMode::General,
             dirty: false,
             read_only: crate::model::ReadOnly::none(),
@@ -252,8 +242,7 @@ fn status_bar_shows_the_env_segment_in_general_mode(cx: &mut TestAppContext) {
             session: None,
             kernel: None,
             units: None,
-        },
-    );
+        });
     assert!(
         text.right.iter().any(|b| b.contains("通用"))
             && text.body.contains("环境 Python 3.12")
@@ -296,8 +285,8 @@ fn status_bar_shows_the_script_file_type_segment_in_general_mode(cx: &mut TestAp
 
     // 状态栏文案由 `labels()` 纯函数计算：通用模式 → 模式名在右段微标，
     // body 含文件类型段。这里直接断言纯函数（窗口级把 file_type 输入喂对，纯函数保证渲染一致）。
-    let text = crate::view::widgets::status_bar::labels(
-        &crate::view::widgets::status_bar::StatusInputs {
+    let text =
+        crate::view::widgets::status_bar::labels(&crate::view::widgets::status_bar::StatusInputs {
             mode: EditorMode::General,
             dirty: false,
             read_only: crate::model::ReadOnly::none(),
@@ -325,8 +314,7 @@ fn status_bar_shows_the_script_file_type_segment_in_general_mode(cx: &mut TestAp
             session: None,
             kernel: None,
             units: None,
-        },
-    );
+        });
     assert!(
         text.right.iter().any(|b| b.contains("通用")) && text.body.contains("类型 Python"),
         "模式名在右段微标、脚本文件类型段在左段正文：body={} right={:?}",
@@ -335,8 +323,8 @@ fn status_bar_shows_the_script_file_type_segment_in_general_mode(cx: &mut TestAp
     );
 
     // 未命名 / 未知扩展名（无路径）→ file_type 输入为 None → body 不含「类型」
-    let untitled = crate::view::widgets::status_bar::labels(
-        &crate::view::widgets::status_bar::StatusInputs {
+    let untitled =
+        crate::view::widgets::status_bar::labels(&crate::view::widgets::status_bar::StatusInputs {
             mode: EditorMode::General,
             dirty: false,
             read_only: crate::model::ReadOnly::none(),
@@ -364,8 +352,7 @@ fn status_bar_shows_the_script_file_type_segment_in_general_mode(cx: &mut TestAp
             session: None,
             kernel: None,
             units: None,
-        },
-    );
+        });
     assert!(
         !untitled.body.contains("类型"),
         "无路径/未知扩展名时如实不摆文件类型段：{}",
@@ -373,4 +360,3 @@ fn status_bar_shows_the_script_file_type_segment_in_general_mode(cx: &mut TestAp
     );
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
-

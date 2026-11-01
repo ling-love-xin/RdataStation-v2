@@ -3,8 +3,6 @@
 //! 自 view/host/exec.rs 拆分（2026-10-29 Step 10）：按能力域切分 `impl EditorHostPanel`。
 //! 跨域互调经 `pub(crate)` 方法；本文件不得出现新的逻辑。
 
-
-
 use super::*;
 
 impl EditorHostPanel {
@@ -51,5 +49,4 @@ impl EditorHostPanel {
             })
             .unwrap_or(engine::sql::SqlDialect::Ansi)
     }
-
 }

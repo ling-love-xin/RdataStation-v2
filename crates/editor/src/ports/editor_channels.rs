@@ -125,10 +125,7 @@ fn federated_availability(connections: &[ConnectionItem]) -> ChannelAvailability
         reasons.push(format!("现在只有 {name} 一个可用作联邦源的连接"));
     }
     if !unsupported.is_empty() {
-        reasons.push(format!(
-            "{} 的驱动还不能做联邦源",
-            unsupported.join("、")
-        ));
+        reasons.push(format!("{} 的驱动还不能做联邦源", unsupported.join("、")));
     }
     if reasons.is_empty() {
         reasons.push("还没有可用作联邦源的连接".to_string());
@@ -258,8 +255,8 @@ mod tests {
         );
 
         // 只有一个开了开关 → 挡着，并点名是哪一个
-        let availability = port(vec![connection("P_a", true), connection("P_b", false)])
-            .availability(Some("P_a"));
+        let availability =
+            port(vec![connection("P_a", true), connection("P_b", false)]).availability(Some("P_a"));
         let gate = availability.for_channel(ExecChannel::Federated);
         assert!(!gate.available);
         let reason = gate.reason.unwrap_or_default();
@@ -282,7 +279,8 @@ mod tests {
         clickhouse.name = "归档库".to_string();
         clickhouse.driver = "clickhouse".to_string();
 
-        let availability = port(vec![connection("P_a", true), clickhouse]).availability(Some("P_a"));
+        let availability =
+            port(vec![connection("P_a", true), clickhouse]).availability(Some("P_a"));
         let gate = availability.for_channel(ExecChannel::Federated);
         assert!(!gate.available, "只有 L1 那一个能挂，联邦还差一个");
         let reason = gate.reason.unwrap_or_default();

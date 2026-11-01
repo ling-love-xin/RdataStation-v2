@@ -234,7 +234,10 @@ fn run(job: &Job) -> ScanReport {
     let statements = engine::sql::split_statements(&job.text).len();
     let folds = if job.scope.folds {
         // 后台扫描暂时用默认关键字，后续再传设置
-        let open: Vec<String> = "CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT".split(',').map(|s| s.to_string()).collect();
+        let open: Vec<String> = "CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT"
+            .split(',')
+            .map(|s| s.to_string())
+            .collect();
         let close: Vec<String> = "END".split(',').map(|s| s.to_string()).collect();
         fold::spans(&job.text, true, &open, &close)
     } else {

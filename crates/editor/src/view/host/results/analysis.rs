@@ -80,5 +80,4 @@ impl EditorHostPanel {
             cx,
         );
     }
-
 }

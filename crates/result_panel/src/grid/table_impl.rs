@@ -5,15 +5,15 @@
 //! `render_td` / `context_menu` 的实际逻辑在 [`header`] / [`cell`] / [`menu`] 的
 //! **顶层自由函数**中，这里只做薄转发（2026-10-29 拆分）。
 
-use gpui_kit::*;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, ColumnSort, TableDelegate, TableState};
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
-use crate::ui;
 use super::delegate::ResultGridDelegate;
+use crate::ui;
 impl TableDelegate for ResultGridDelegate {
     /// 表头单元格（转发到 [`crate::grid::header::render_th`]）
     fn render_th(

@@ -17,7 +17,6 @@ use crate::sources::SourcesHandle;
 use super::*;
 
 impl EditorShared {
-
     /// 确保某个连接已建连（事件路径调用：可能真的去建连）
     pub fn ensure_connected(&self, conn_id: &str) -> Result<(), String> {
         let guard = self.connections.borrow();
@@ -148,8 +147,7 @@ impl EditorShared {
     /// 服务"。面板据此在服务未起 / 被停 / 崩溃时保持轮询，重启后自动重连。
     pub fn lsp_wants(&self, document: &DocumentId) -> bool {
         let port = self.lsp.borrow();
-        port.as_ref()
-            .is_some_and(|port| port.wants(document))
+        port.as_ref().is_some_and(|port| port.wants(document))
     }
 
     /// 是否接了补全端口（未接 = 只给关键字与函数）
@@ -241,10 +239,16 @@ impl EditorShared {
     ///
     /// `None` = 该文档不参与语义诊断（未绑定连接 / 目录未载好——如实降级，
     /// 宁缺毋滥）。同一文档重复推同目录是零成本覆盖（`HashMap` insert）。
-    pub fn set_catalog_snapshot(&self, doc: &crate::model::DocumentId, catalog: Option<Arc<Catalog>>) {
+    pub fn set_catalog_snapshot(
+        &self,
+        doc: &crate::model::DocumentId,
+        catalog: Option<Arc<Catalog>>,
+    ) {
         match catalog {
             Some(catalog) => {
-                self.catalog_snapshots.borrow_mut().insert(doc.clone(), catalog);
+                self.catalog_snapshots
+                    .borrow_mut()
+                    .insert(doc.clone(), catalog);
             }
             None => {
                 self.catalog_snapshots.borrow_mut().remove(doc);

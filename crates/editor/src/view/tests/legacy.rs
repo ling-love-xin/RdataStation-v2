@@ -1,20 +1,14 @@
 //! （由 view/tests.rs 拆分，2026-10-29）
 //! 注意：不用 `use super::*` 通配（gpui `test` 宏递归），依赖显式列举。
 
-
+use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{
-    TestAppContext,
-};
 
 use crate::model::EditorMode;
 use crate::service::OpenRequest;
 use crate::shared::EditorShared;
 
-use super::{
-    open_panel,
-    shared_with_document,
-};
+use super::{open_panel, shared_with_document};
 
 // ===== 【遗留 #10】单元内联编辑 =====
 
@@ -44,8 +38,14 @@ fn opening_an_analysis_document_builds_a_cell_editor_per_cell(cx: &mut TestAppCo
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_cell_editors(window, cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    let mut ids = cx
-        .update(|_window, cx| panel.read(cx).cell_editors.keys().cloned().collect::<Vec<_>>());
+    let mut ids = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .cell_editors
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+    });
     ids.sort();
     assert_eq!(
         ids,
@@ -54,8 +54,7 @@ fn opening_an_analysis_document_builds_a_cell_editor_per_cell(cx: &mut TestAppCo
     );
 
     // 渲染层：单元源以内核呈现（带业务键 id 的包装元素在树里，可被 headless 观察）
-    let rendered = cx
-        .update(|window, _cx| window.try_find("editor-nb-cell-source-c1").is_some());
+    let rendered = cx.update(|window, _cx| window.try_find("editor-nb-cell-source-c1").is_some());
     assert!(rendered, "单元源在渲染树里是内核编辑器（不是纯文本回退）");
 }
 
@@ -82,8 +81,14 @@ fn cell_editors_follow_add_duplicate_and_delete(cx: &mut TestAppContext) {
             panel.notebook_add_cell(&id, crate::cell::CellLanguage::Markdown, window, cx)
         });
     });
-    let keys = cx
-        .update(|_window, cx| panel.read(cx).cell_editors.keys().cloned().collect::<Vec<_>>());
+    let keys = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .cell_editors
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+    });
     assert!(keys.len() == 3, "新增后三个单元都有编辑器：{keys:?}");
 
     // 复制 c1 → 副本 c1-copy 有独立编辑器
@@ -92,8 +97,14 @@ fn cell_editors_follow_add_duplicate_and_delete(cx: &mut TestAppContext) {
             panel.notebook_duplicate_cell(&id, "c1", window, cx)
         });
     });
-    let keys = cx
-        .update(|_window, cx| panel.read(cx).cell_editors.keys().cloned().collect::<Vec<_>>());
+    let keys = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .cell_editors
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+    });
     assert!(
         keys.contains(&"c1-copy".to_string()),
         "副本要有自己的编辑器：{keys:?}"
@@ -105,8 +116,14 @@ fn cell_editors_follow_add_duplicate_and_delete(cx: &mut TestAppContext) {
             panel.notebook_delete_cell(&id, "c1-copy", window, cx)
         });
     });
-    let keys = cx
-        .update(|_window, cx| panel.read(cx).cell_editors.keys().cloned().collect::<Vec<_>>());
+    let keys = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .cell_editors
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+    });
     assert!(
         !keys.contains(&"c1-copy".to_string()),
         "删除后编辑器要移除（订阅句柄一并释放）：{keys:?}"

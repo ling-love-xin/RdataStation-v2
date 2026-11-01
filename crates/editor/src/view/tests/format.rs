@@ -3,21 +3,18 @@
 
 use std::rc::Rc;
 
-use gpui_kit::{
-    Focusable as _, TestAppContext, VisualTestContext,
-};
+use gpui_kit::{Focusable as _, TestAppContext, VisualTestContext};
 
 use crate::execution::{self};
 use crate::model::EditorMode;
 use crate::service::OpenRequest;
 use crate::shared::EditorShared;
 
-use super::{
-    bind_editor_keys, open_panel, result_tabs, run_statement,
-    shared_with_document, shared_with_runner, wait_for_all_pending,
-    wait_for_result,
-};
 use super::dialogs::{FakeConnections, option};
+use super::{
+    bind_editor_keys, open_panel, result_tabs, run_statement, shared_with_document,
+    shared_with_runner, wait_for_all_pending, wait_for_result,
+};
 
 // ===== B10：格式化（`Ctrl+Shift+F` / 工具栏「⇤ 格式化」）=====
 //
@@ -229,7 +226,10 @@ fn the_toolbar_offers_the_analysis_group_only_in_sql_mode(cx: &mut TestAppContex
             || cx.debug_bounds("editor-translate").is_some()
             || cx.debug_bounds("editor-template").is_some()
     };
-    assert!(analysis_present(cx), "SQL 模式应当有分析组（执行计划/方言转换/模板）");
+    assert!(
+        analysis_present(cx),
+        "SQL 模式应当有分析组（执行计划/方言转换/模板）"
+    );
 
     shared.update(|service| service.set_mode(&id, EditorMode::General));
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
@@ -462,4 +462,3 @@ fn explain_in_text_mode_is_refused(cx: &mut TestAppContext) {
         .expect("拒绝要留原因");
     assert!(message.contains("文本模式"), "{message}");
 }
-

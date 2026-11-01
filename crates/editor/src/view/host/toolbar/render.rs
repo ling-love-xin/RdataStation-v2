@@ -4,15 +4,14 @@
 //! 跨域互调经 `pub(crate)` 方法；字段在 mod.rs 统一 `pub(crate)`。
 
 use super::super::*;
-use gpui_kit::assets::IconName;
-use gpui_kit::component::toolbar::Toolbar;
 use crate::channel::ExecChannel;
 use crate::execution::ExecMenuKind;
 use crate::model::EditorMode;
 use crate::ui;
+use gpui_kit::assets::IconName;
+use gpui_kit::component::toolbar::Toolbar;
 
 impl EditorHostPanel {
-
     /// 工具栏（原型 §2.2 + T2c-5 分组自定义）：按其分层只放**今天真有动作**的控件
     ///
     /// - 最左：**模式指示器**（文本 / SQL / 分析，点击切换）——固定项，不参与
@@ -25,7 +24,12 @@ impl EditorHostPanel {
     ///   （右对齐语义稳定；T2c-6 随会话持久化时再放开）。
     /// - 最右：**`···` 定制按钮**——打开「工具栏自定义」面板（可见性 / 折叠 / 移动 /
     ///   竖线分隔符 / 重置）。
-    pub(crate) fn render_toolbar(&self, mode: EditorMode, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_toolbar(
+        &self,
+        mode: EditorMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let border = cx.theme().colors.border;
         let entity = cx.entity();
         // 模式指示器的 dropdown_menu 闭包会 move 走 `entity`，工具栏按钮也要用宿主：
@@ -97,69 +101,69 @@ impl EditorHostPanel {
         // 执行位置 / 连接；Minimal = 环境 + 脚本运行；Notebook = 笔记级动作 1c 留白。
         match crate::model::Capabilities::for_mode(mode).toolbar {
             crate::model::ToolbarStyle::Full => {
-            // 左区：组列表（T2c-5）。只有 SQL 模式的执行是“对当前文档执行”：
-            // 文本模式按能力表不通信，分析模式的执行是**笔记级**动作（1c 落地）。
-            // 函数手册（#54-C5）：SQL 模式独有入口（通用/分析模式的能力表里没有它）。
-            toolbar = toolbar.child(
-                Button::new("editor-function-manual")
-                    .ghost()
-                    .small()
-                    .icon(IconName::BookMarked)
-                    .tooltip("函数手册")
-                    .debug_selector(|| "editor-function-manual".to_string())
-                    .on_click({
-                        let toolbar_entity = toolbar_entity.clone();
-                        move |_, window, cx| {
-                            toolbar_entity.update(cx, |panel, cx| {
-                                _ = panel.open_function_manual(window, cx);
-                            });
-                        }
-                    }),
-            );
-            let groups = self.toolbar.groups();
-            for group in &groups {
-                toolbar = toolbar.content(self.render_toolbar_group(group, cx));
-            }
-            // 通道级 + 连接（右对齐）：原型 §2.2 两栏——“执行位置”在“连接”左边；
-            // T2c-5 固定不动（右对齐语义稳定）。
-            toolbar = toolbar.content(
-                div()
-                    .ml_auto()
-                    .h_flex()
-                    .items_center()
-                    .gap_1()
-                    .when(current_channel == ExecChannel::Federated, |row| {
-                        row.child(self.render_sources_picker(cx))
-                    })
-                    // 通道级 + 连接（原型 §2.2 通道级+连接层，工具栏右区）：
-                    // 三固定区：执行通道 pill / 连接名称（运行点 + 短码·名称，只列实时在线、
-                    // 默认跟随当前连接）/ schema@db——各自固定宽 + 截断，不随内容推挤布局
-                    // （2026-10-27；连接定位自状态栏迁此，状态栏左段只留方言/事务等）
-                    .children(render_channel_control(self, &cx.entity()))
-                    .children(render_conn_slots(self, &cx.entity(), cx.theme()))
-                    // 2026-10-27：roLock 在工具栏；折叠开关已移设置页（render 权威同步点）
-                    .child(self.render_ro_lock_button(cx)),
-            );
-            // 最右：`···` 定制面板（布局自定义；低频动作已全部提升常驻，见原型 §2.2 修订）
-            toolbar = toolbar.content(self.render_toolbar_customize(cx));
+                // 左区：组列表（T2c-5）。只有 SQL 模式的执行是“对当前文档执行”：
+                // 文本模式按能力表不通信，分析模式的执行是**笔记级**动作（1c 落地）。
+                // 函数手册（#54-C5）：SQL 模式独有入口（通用/分析模式的能力表里没有它）。
+                toolbar = toolbar.child(
+                    Button::new("editor-function-manual")
+                        .ghost()
+                        .small()
+                        .icon(IconName::BookMarked)
+                        .tooltip("函数手册")
+                        .debug_selector(|| "editor-function-manual".to_string())
+                        .on_click({
+                            let toolbar_entity = toolbar_entity.clone();
+                            move |_, window, cx| {
+                                toolbar_entity.update(cx, |panel, cx| {
+                                    _ = panel.open_function_manual(window, cx);
+                                });
+                            }
+                        }),
+                );
+                let groups = self.toolbar.groups();
+                for group in &groups {
+                    toolbar = toolbar.content(self.render_toolbar_group(group, cx));
+                }
+                // 通道级 + 连接（右对齐）：原型 §2.2 两栏——“执行位置”在“连接”左边；
+                // T2c-5 固定不动（右对齐语义稳定）。
+                toolbar = toolbar.content(
+                    div()
+                        .ml_auto()
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .when(current_channel == ExecChannel::Federated, |row| {
+                            row.child(self.render_sources_picker(cx))
+                        })
+                        // 通道级 + 连接（原型 §2.2 通道级+连接层，工具栏右区）：
+                        // 三固定区：执行通道 pill / 连接名称（运行点 + 短码·名称，只列实时在线、
+                        // 默认跟随当前连接）/ schema@db——各自固定宽 + 截断，不随内容推挤布局
+                        // （2026-10-27；连接定位自状态栏迁此，状态栏左段只留方言/事务等）
+                        .children(render_channel_control(self, &cx.entity()))
+                        .children(render_conn_slots(self, &cx.entity(), cx.theme()))
+                        // 2026-10-27：roLock 在工具栏；折叠开关已移设置页（render 权威同步点）
+                        .child(self.render_ro_lock_button(cx)),
+                );
+                // 最右：`···` 定制面板（布局自定义；低频动作已全部提升常驻，见原型 §2.2 修订）
+                toolbar = toolbar.content(self.render_toolbar_customize(cx));
             }
             crate::model::ToolbarStyle::Minimal => {
-            // 【2b】通用模式：环境选择器 + 运行按钮（无连接档：不摆执行位置 / 连接面包屑）
-            // Markdown 文档额外有「预览 / 源码」切换（渲染态是只读视图）。
-            toolbar = toolbar.content(
-                div()
-                    .ml_auto()
-                    .h_flex()
-                    .items_center()
-                    .gap_1()
-                    .when(self.is_markdown_document(), |row| {
-                        row.child(self.render_markdown_preview_toggle(cx))
-                    })
-                    .child(self.render_env_picker(cx))
-                    .child(self.render_run_script_button(cx))
-                    // 2026-10-27：roLock 也挂通用模式工具栏；折叠开关已移设置页
-                    .child(self.render_ro_lock_button(cx)),
-            );
+                // 【2b】通用模式：环境选择器 + 运行按钮（无连接档：不摆执行位置 / 连接面包屑）
+                // Markdown 文档额外有「预览 / 源码」切换（渲染态是只读视图）。
+                toolbar = toolbar.content(
+                    div()
+                        .ml_auto()
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .when(self.is_markdown_document(), |row| {
+                            row.child(self.render_markdown_preview_toggle(cx))
+                        })
+                        .child(self.render_env_picker(cx))
+                        .child(self.render_run_script_button(cx))
+                        // 2026-10-27：roLock 也挂通用模式工具栏；折叠开关已移设置页
+                        .child(self.render_ro_lock_button(cx)),
+                );
             }
             // Notebook：笔记级工具栏（会话 ▾ / 全部运行 / 重启）——1c 落地。
             // 与 SQL 组模型无关：会话绑定（连接）是笔记级事实，执行是顺序跑全部单元。
@@ -237,7 +241,10 @@ impl EditorHostPanel {
                             .on_click(move |_, _, _| {
                                 let cur = handle.offset().x;
                                 // 回看左侧：offset 增加（趋近 0），最左即 0。
-                                handle.set_offset(point((cur + arrow_step).min(Pixels::from(0.)), Pixels::from(0.)));
+                                handle.set_offset(point(
+                                    (cur + arrow_step).min(Pixels::from(0.)),
+                                    Pixels::from(0.),
+                                ));
                             }),
                     ),
             );
@@ -263,7 +270,10 @@ impl EditorHostPanel {
                             .on_click(move |_, _, _| {
                                 let cur = handle.offset().x;
                                 // 看右侧：offset 减小（更负），最右 clamp 到 max_offset。
-                                handle.set_offset(point((cur - arrow_step).max(max_off), Pixels::from(0.)));
+                                handle.set_offset(point(
+                                    (cur - arrow_step).max(max_off),
+                                    Pixels::from(0.),
+                                ));
                             }),
                     ),
             );
@@ -297,7 +307,10 @@ impl EditorHostPanel {
     ///
     /// 菜单 = 连接列表（当前会话绑定勾选）+「跟随当前活动连接」；空列表时保持
     /// 「跟随当前活动连接」可点（与 SQL 模式 B1 同口径，不假装有连接）。
-    pub(crate) fn render_notebook_session_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_notebook_session_button(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let entity = cx.entity();
         let options = self.shared.connection_options();
         let current = self.notebook_state().session.default_connection.clone();
@@ -351,7 +364,10 @@ impl EditorHostPanel {
     }
 
     /// 【2d-笔记级】全部运行按钮：顺序跑所有可执行单元（SQL / 内核）。
-    pub(crate) fn render_notebook_run_all_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_notebook_run_all_button(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let entity = cx.entity();
         Button::new("editor-notebook-run-all")
             .ghost()
@@ -365,7 +381,10 @@ impl EditorHostPanel {
     }
 
     /// 【2d-笔记级】重启按钮：关闭活跃内核（下次执行自动重拉）。
-    pub(crate) fn render_notebook_restart_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_notebook_restart_button(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let entity = cx.entity();
         Button::new("editor-notebook-restart")
             .ghost()
@@ -388,7 +407,10 @@ impl EditorHostPanel {
 
     /// 【遗留】Markdown 文档「预览 / 源码」切换按钮（通用模式工具栏右侧）。
     /// 预览态 = 只读渲染视图（TextView::markdown），源码态 = 内核编辑器。
-    pub(crate) fn render_markdown_preview_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_markdown_preview_toggle(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let entity = cx.entity();
         let previewing = self.markdown_preview;
         Button::new("editor-markdown-preview-toggle")
@@ -441,7 +463,9 @@ impl EditorHostPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         match id {
-            crate::toolbar::ToolbarItemId::ExecRun => self.render_exec_run_button(cx).into_any_element(),
+            crate::toolbar::ToolbarItemId::ExecRun => {
+                self.render_exec_run_button(cx).into_any_element()
+            }
             crate::toolbar::ToolbarItemId::ExecAll => {
                 self.render_exec_all_button(cx).into_any_element()
             }
@@ -567,7 +591,9 @@ impl EditorHostPanel {
                 self.render_exec_kind_button(head, ExecMenuKind::Selection, cx)
             }
             ToolbarItemId::ExecBatch => self.render_exec_kind_button(head, ExecMenuKind::Batch, cx),
-            ToolbarItemId::ExecNewSet => self.render_exec_kind_button(head, ExecMenuKind::NewSet, cx),
+            ToolbarItemId::ExecNewSet => {
+                self.render_exec_kind_button(head, ExecMenuKind::NewSet, cx)
+            }
             ToolbarItemId::Explain => self.render_explain_button(cx),
             // 折叠组头只放纯按钮：下拉菜单由 DropdownButton 的 ▾ 半区提供，
             // 完整「方言转换 ▾ / 模板 ▾」本体见 render_translate_button / render_template_button
@@ -631,5 +657,4 @@ impl EditorHostPanel {
                 menu
             })
     }
-
 }

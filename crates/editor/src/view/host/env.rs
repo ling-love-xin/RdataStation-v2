@@ -5,18 +5,14 @@
 //!
 //! 拆分纪律：只移动方法体与注释，不改动任何行为；本文件不得出现新的逻辑。
 
-
 // #48 编辑器常规设置（行号开关即时 / 新文档默认缩进·换行·编码）：settings 不依赖 editor，方向合法
-
 
 use crate::execution::{self, ExecTarget};
 // 【下移】结果放置 / 下发原料定义已随结果存储搬到 rds-result-panel（经 crate::store 重导出）
 use crate::store::ResultPlacement;
 
-
 use super::*;
 impl EditorHostPanel {
-
     /// 【2b】通用模式的环境选择器（工具栏右侧）：环境名 + 版本 ▾；未接端口 / 空列表如实置灰。
     pub(crate) fn render_env_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
@@ -46,7 +42,10 @@ impl EditorHostPanel {
                     let id = env.id.clone();
                     let entity = entity.clone();
                     let checked = Some(id.as_str()) == current.as_deref();
-                    let installed = env_installed_states.get(env.id.as_str()).copied().unwrap_or(false);
+                    let installed = env_installed_states
+                        .get(env.id.as_str())
+                        .copied()
+                        .unwrap_or(false);
                     let mut item = PopupMenuItem::new(env.display_name())
                         .checked(checked)
                         .on_click(move |_, _window, app| {
@@ -65,12 +64,11 @@ impl EditorHostPanel {
                     menu = menu.separator();
                 }
                 let manage_entity = entity.clone();
-                let manage = PopupMenuItem::new("管理环境…")
-                    .on_click(move |_, window, app| {
-                        manage_entity.update(app, |panel, cx| {
-                            panel.open_manage_environments(window, cx);
-                        });
+                let manage = PopupMenuItem::new("管理环境…").on_click(move |_, window, app| {
+                    manage_entity.update(app, |panel, cx| {
+                        panel.open_manage_environments(window, cx);
                     });
+                });
                 menu = menu.item(manage);
                 menu
             })
@@ -157,10 +155,12 @@ impl EditorHostPanel {
             return;
         }
         let target = ExecTarget::Script(crate::env::ScriptRequest { env_id, code });
-        match self
-            .shared
-            .submit(self.document.clone(), &target, ResultPlacement::NewSet, execution::RunOptions::default())
-        {
+        match self.shared.submit(
+            self.document.clone(),
+            &target,
+            ResultPlacement::NewSet,
+            execution::RunOptions::default(),
+        ) {
             Ok(()) => {
                 if self.pending == 0 {
                     self.running_since = Some(std::time::Instant::now());

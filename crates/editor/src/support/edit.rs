@@ -272,7 +272,10 @@ mod tests {
         // 不变量：`text` == 把 `replaced` 换成 `block` 的结果（视图层就是按这个顺序写回内核的）
         let cases: [(String, Range<usize>); 4] = [
             ("select 1\nselect 2".to_string(), all("select 1\nselect 2")),
-            ("-- select 1\nselect 2\n".to_string(), all("-- select 1\nselect 2\n")),
+            (
+                "-- select 1\nselect 2\n".to_string(),
+                all("-- select 1\nselect 2\n"),
+            ),
             ("a\n\nb".to_string(), 0..1),
             ("-- a\n-- b".to_string(), all("-- a\n-- b")),
         ];
@@ -281,7 +284,10 @@ mod tests {
             let mut expected = text.clone();
             expected.replace_range(edit.replaced.clone(), &edit.block);
             assert_eq!(edit.text, expected, "块与全文不一致：{text:?}");
-            assert_eq!(edit.selection, edit.replaced.start..edit.replaced.start + edit.block.len());
+            assert_eq!(
+                edit.selection,
+                edit.replaced.start..edit.replaced.start + edit.block.len()
+            );
         }
     }
 

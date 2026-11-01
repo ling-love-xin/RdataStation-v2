@@ -2,32 +2,27 @@
 
 use std::cell::RefCell;
 
-use gpui_kit::*;
 use gpui_kit::base::TreeState;
-use gpui_kit::component::list::ListState;
 use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::list::ListState;
 use gpui_kit::component::table::{TableEvent, TableState};
+use gpui_kit::*;
 
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 
+use super::data::{ResultPanel, ResultSyncInput};
 use crate::column_browser::ColumnBrowserDelegate;
 use crate::grid::{self as result_grid, ResultGridDelegate, ResultStatus, ResultToolbar};
 use crate::ports::{Presentation, ResultActionQueue, ResultRequest, RightTab};
 /// 【类型样式】全局偏好聚合（shell 层：settings 持久化与渲染消费共用）。
 use workbench_shell::result_style::TypeStylePrefs;
-use super::data::{ResultPanel, ResultSyncInput};
 
 impl ResultPanel {
-
     /// 构造空面板：建筛选输入框（含 300ms 防抖订阅）。
     ///
     /// 网格实体由编辑器构造期创建（钩子注入依赖 editor 动作），经 [`Self::set_grids`]
     /// 交进来；构造后、首次 sync 前面板不渲染任何结果。
-    pub fn new(
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        queue: ResultActionQueue,
-    ) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>, queue: ResultActionQueue) -> Self {
         // 【B15】本地筛选框：输入变化走防抖（原型 §5.5 的 300ms），到点才重算视图行序
         let filter_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx);
@@ -56,11 +51,7 @@ impl ResultPanel {
 
         // 占位网格：编辑器构造真网格（含钩子）后经 `set_grids` 替换；占位仅保证
         // 构造后到接线前这段窗口里实体非空（渲染不会走到——还没 sync 过）
-        let grid = result_grid::new_table_state(
-            ResultGridDelegate::empty("尚未执行"),
-            window,
-            cx,
-        );
+        let grid = result_grid::new_table_state(ResultGridDelegate::empty("尚未执行"), window, cx);
 
         // 【值查看器】JSON 展开树状态（`tree::Tree` 组件承载）：选中格变化时事件路径
         // `rebuild_value_tree` 解析 + `set_items` 重建；render 只摆 Tree，不解析 JSON
@@ -70,8 +61,12 @@ impl ResultPanel {
         // delegate 只持投影，数据由 `sync` 灌入；占位网格句柄先借用，`set_grids`
         // 替换网格后 `sync` 会重灌（构造后到接线前不会渲染，见 grid 占位注释）
         let browser_list = cx.new(|cx| {
-            ListState::new(ColumnBrowserDelegate::new(queue.clone(), grid.clone()), window, cx)
-                .searchable(true)
+            ListState::new(
+                ColumnBrowserDelegate::new(queue.clone(), grid.clone()),
+                window,
+                cx,
+            )
+            .searchable(true)
         });
 
         // 【DBeaver 对齐】订阅 table 事件：双击单元格编辑 / 列序拖拽 / 清除选择
@@ -251,7 +246,9 @@ impl ResultPanel {
                     // 【A9】来源表名同理（set_data 会清掉旧的）
                     state.delegate_mut().set_result_table(payload.table);
                     // 【P1】字段注释同理（set_data 会清掉旧的）
-                    state.delegate_mut().set_column_annotations(payload.annotations);
+                    state
+                        .delegate_mut()
+                        .set_column_annotations(payload.annotations);
                     // 【B5】事实帧同理（set_data 会清掉旧的）；交互派生时才读取，render 不解析
                     state.delegate_mut().set_fact(payload.fact);
                     // 【#28】本地叠加层同理（set_data 会清掉旧的）；未接行级动作时为 None
@@ -260,7 +257,9 @@ impl ResultPanel {
                 None => state.delegate_mut().clear(input.empty),
             }
             // 【M8】这份结果能不能洞察（菜单项据此出现 / 消失）
-            state.delegate_mut().set_insight_available(input.insight_available);
+            state
+                .delegate_mut()
+                .set_insight_available(input.insight_available);
             // 【B5b】这份结果还能不能再取一段 / 是不是正在取
             state.delegate_mut().set_has_more(input.has_more);
             state.delegate_mut().set_loading_more(input.loading_more);
@@ -303,6 +302,4 @@ impl ResultPanel {
             });
         }
     }
-
-
 }

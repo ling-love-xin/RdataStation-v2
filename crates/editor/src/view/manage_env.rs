@@ -335,11 +335,16 @@ fn list_view(cx: &App, state: &Entity<ManageEnvState>) -> Div {
         for env in &envs {
             let can_manage = !env.readonly;
             let is_installed = installed.get(&env.id).copied().unwrap_or(false);
-            list = list.child(env_line(theme, env, can_manage, is_installed, state.clone()));
+            list = list.child(env_line(
+                theme,
+                env,
+                can_manage,
+                is_installed,
+                state.clone(),
+            ));
         }
         body = body.child(
-            list
-                .max_h(rems(ui::MANAGE_ENV_LIST_MAX_HEIGHT))
+            list.max_h(rems(ui::MANAGE_ENV_LIST_MAX_HEIGHT))
                 .overflow_y_scrollbar()
                 .into_any_element(),
         );
@@ -362,11 +367,36 @@ fn header_line(theme: &Theme) -> Div {
         .text_xs()
         .text_color(theme.colors.muted_foreground)
         .child(div().flex_1().min_w_0().child("名称"))
-        .child(div().w(rems(ui::MANAGE_ENV_COL_KIND)).flex_none().child("类型"))
-        .child(div().w(rems(ui::MANAGE_ENV_COL_COMMAND)).flex_none().child("命令"))
-        .child(div().w(rems(ui::MANAGE_ENV_COL_ARGS)).flex_none().child("参数"))
-        .child(div().w(rems(ui::MANAGE_ENV_COL_VERSION)).flex_none().child("版本"))
-        .child(div().w(rems(ui::MANAGE_ENV_COL_ACTION)).flex_none().child(""))
+        .child(
+            div()
+                .w(rems(ui::MANAGE_ENV_COL_KIND))
+                .flex_none()
+                .child("类型"),
+        )
+        .child(
+            div()
+                .w(rems(ui::MANAGE_ENV_COL_COMMAND))
+                .flex_none()
+                .child("命令"),
+        )
+        .child(
+            div()
+                .w(rems(ui::MANAGE_ENV_COL_ARGS))
+                .flex_none()
+                .child("参数"),
+        )
+        .child(
+            div()
+                .w(rems(ui::MANAGE_ENV_COL_VERSION))
+                .flex_none()
+                .child("版本"),
+        )
+        .child(
+            div()
+                .w(rems(ui::MANAGE_ENV_COL_ACTION))
+                .flex_none()
+                .child(""),
+        )
 }
 
 /// 一行环境：名称（+ 只读标）/ 类型 / 命令 / 参数 / 版本 / 操作
@@ -499,10 +529,9 @@ fn env_line(
                 .h_flex()
                 .items_center()
                 .gap_1()
-                .when(
-                    can_manage,
-                    |row| row.child(edit_button).child(delete_button),
-                ),
+                .when(can_manage, |row| {
+                    row.child(edit_button).child(delete_button)
+                }),
         )
 }
 
@@ -612,11 +641,11 @@ mod tests {
     use gpui_kit::component::Root;
     use gpui_kit::component::WindowExt as _;
     use gpui_kit::{
-        div, AppContext as _, Entity, IntoElement, Render, Styled as _, TestAppContext,
-        VisualTestContext, Window,
+        AppContext as _, Entity, IntoElement, Render, Styled as _, TestAppContext,
+        VisualTestContext, Window, div,
     };
 
-    use super::{ManageMode, ManageEnvState, open_manage_environments};
+    use super::{ManageEnvState, ManageMode, open_manage_environments};
     use crate::env::{EnvHandle, EnvKind, EnvPort, Environment};
 
     /// 可管理的假端口：内存存自定义环境 + 记录调用
@@ -770,7 +799,11 @@ mod tests {
             cx.update(|_, cx| state.read(cx).mode().clone()),
             ManageMode::List
         );
-        assert_eq!(cx.update(|_, cx| state.read(cx).envs().len()), 2, "内置 + 自定义都在列表");
+        assert_eq!(
+            cx.update(|_, cx| state.read(cx).envs().len()),
+            2,
+            "内置 + 自定义都在列表"
+        );
     }
 
     /// 新增：begin_create → 填输入框 → save → 端口收到 create，回到列表
@@ -793,11 +826,15 @@ mod tests {
             let name = state.read(cx).name.clone();
             let command = state.read(cx).command.clone();
             let args = state.read(cx).args.clone();
-            name.update(cx, |s, cx| s.set_value("我的 Python".to_string(), window, cx));
+            name.update(cx, |s, cx| {
+                s.set_value("我的 Python".to_string(), window, cx)
+            });
             command.update(cx, |s, cx| {
                 s.set_value("C:/python/python.exe".to_string(), window, cx)
             });
-            args.update(cx, |s, cx| s.set_value("-u --no-site".to_string(), window, cx));
+            args.update(cx, |s, cx| {
+                s.set_value("-u --no-site".to_string(), window, cx)
+            });
         });
 
         cx.update(|window, cx| {
@@ -808,11 +845,15 @@ mod tests {
             ManageMode::List,
             "保存成功回列表"
         );
-        assert_eq!(port.calls.borrow().as_slice(), &["create:我的 Python:C:/python/python.exe"]);
+        assert_eq!(
+            port.calls.borrow().as_slice(),
+            &["create:我的 Python:C:/python/python.exe"]
+        );
         let envs = cx.update(|_, cx| state.read(cx).envs());
         assert_eq!(envs.len(), 3);
         assert!(
-            envs.iter().any(|e| e.name == "我的 Python" && e.args == vec!["-u", "--no-site"]),
+            envs.iter()
+                .any(|e| e.name == "我的 Python" && e.args == vec!["-u", "--no-site"]),
             "参数空格切分后原样落库"
         );
     }
@@ -860,7 +901,11 @@ mod tests {
             state.update(cx, |s, cx| s.delete("my-env", window, cx));
         });
         assert_eq!(port.calls.borrow().as_slice(), &["delete:my-env"]);
-        assert_eq!(deleted.borrow().as_slice(), &["my-env"], "删除成功后回调宿主");
+        assert_eq!(
+            deleted.borrow().as_slice(),
+            &["my-env"],
+            "删除成功后回调宿主"
+        );
         assert!(!cx.update(|_, cx| state.read(cx).envs().iter().any(|e| e.id == "my-env")));
     }
 

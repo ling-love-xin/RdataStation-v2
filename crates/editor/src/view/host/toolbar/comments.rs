@@ -100,7 +100,13 @@ impl EditorHostPanel {
         tracing::info!(doc = %self.document, "【探针】on_signature_help：签名帮助（Ctrl+Shift+Space）");
         let text = self.editor.read(cx).value().to_string();
         // 活动光标在前（多光标取第一个即可——签名帮助是"看当前调用"的辅助）
-        let cursor = self.editor.read(cx).cursor_offsets().first().copied().unwrap_or(0);
+        let cursor = self
+            .editor
+            .read(cx)
+            .cursor_offsets()
+            .first()
+            .copied()
+            .unwrap_or(0);
         if let Some(view) = crate::view::signature_help::current_call(&text, cursor) {
             crate::view::signature_help::open_signature_help(window, cx, view);
         }
@@ -122,19 +128,14 @@ impl EditorHostPanel {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<gpui_kit::component::list::ListState<
-        crate::view::function_manual::ManualDelegate,
-    >> {
+    ) -> Entity<gpui_kit::component::list::ListState<crate::view::function_manual::ManualDelegate>>
+    {
         let entity = cx.entity();
-        crate::view::function_manual::open_function_manual(
-            window,
-            cx,
-            move |name, window, cx| {
-                entity.update(cx, |panel, cx| {
-                    panel.insert_manual_function(name, window, cx);
-                });
-            },
-        )
+        crate::view::function_manual::open_function_manual(window, cx, move |name, window, cx| {
+            entity.update(cx, |panel, cx| {
+                panel.insert_manual_function(name, window, cx);
+            });
+        })
     }
 
     /// 手册确认 → 光标处插入函数名 + 同步服务层（同「插入片段」口径，幂等）

@@ -1,19 +1,16 @@
 //! （由 view/tests.rs 拆分，2026-10-29）
 //! 注意：不用 `use super::*` 通配（gpui `test` 宏递归），依赖显式列举。
 
-
+use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{
-    TestAppContext,
-};
 
 use crate::execution::{self, QueryData, QueryRunner};
 use crate::model::EditorMode;
 use crate::service::OpenRequest;
 use crate::shared::EditorShared;
 
-use super::open_panel;
 use super::dialogs::{FakeConnections, option};
+use super::open_panel;
 
 // ===== 【2d】分析笔记本：窗口级测试 =====
 
@@ -37,7 +34,10 @@ impl QueryRunner for NotebookRunner {
         &self,
         request: &crate::cell::CellRequest,
     ) -> Result<crate::cell::CellOutcome, String> {
-        self.seen.lock().unwrap().push(format!("{}:{}", request.session_id, request.cell_id));
+        self.seen
+            .lock()
+            .unwrap()
+            .push(format!("{}:{}", request.session_id, request.cell_id));
         Ok(crate::cell::CellOutcome {
             sql: request.sql.clone(),
             elapsed_ms: 3,
@@ -72,8 +72,14 @@ fn analysis_mode_shows_the_empty_state_guide(cx: &mut TestAppContext) {
         cx.update(|_window, cx| panel.read(cx).notebook_state().cells.is_empty()),
         "新建笔记 = 空单元"
     );
-    assert!(cx.debug_bounds("editor-nb-empty-sql").is_some(), "空态要有 SQL 入口");
-    assert!(cx.debug_bounds("editor-nb-empty-text").is_some(), "空态要有文本入口");
+    assert!(
+        cx.debug_bounds("editor-nb-empty-sql").is_some(),
+        "空态要有 SQL 入口"
+    );
+    assert!(
+        cx.debug_bounds("editor-nb-empty-text").is_some(),
+        "空态要有文本入口"
+    );
 
     // 走面板方法（与按钮回调同一条路）：加一个 SQL 单元 → 空态消失、卡片出现
     cx.update(|window, cx| {
@@ -86,7 +92,10 @@ fn analysis_mode_shows_the_empty_state_guide(cx: &mut TestAppContext) {
         cx.update(|_window, cx| panel.read(cx).notebook_state().cells.len()),
         1
     );
-    assert!(cx.debug_bounds("editor-nb-add-cell").is_some(), "列表尾有插入入口");
+    assert!(
+        cx.debug_bounds("editor-nb-add-cell").is_some(),
+        "列表尾有插入入口"
+    );
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
@@ -123,7 +132,11 @@ fn notebook_cell_actions_are_real(cx: &mut TestAppContext) {
         });
     });
     let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
-    assert_eq!(cells[1].language, crate::cell::CellLanguage::Sql, "Markdown 转 SQL");
+    assert_eq!(
+        cells[1].language,
+        crate::cell::CellLanguage::Sql,
+        "Markdown 转 SQL"
+    );
 
     // 复制第一个：副本插在后面，id 不同、正文原样
     cx.update(|window, cx| {
@@ -164,9 +177,7 @@ fn running_a_sql_cell_applies_the_inline_output(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let shared = EditorShared::new();
-    shared.attach_runner(std::sync::Arc::new(NotebookRunner {
-        seen: seen.clone(),
-    }));
+    shared.attach_runner(std::sync::Arc::new(NotebookRunner { seen: seen.clone() }));
     let id = shared
         .open(OpenRequest::untitled("", EditorMode::Analysis))
         .id()
@@ -227,7 +238,11 @@ fn running_a_sql_cell_applies_the_inline_output(cx: &mut TestAppContext) {
         panel.update(cx, |panel, cx| panel.notebook_run_cell(&id, &text_id, cx));
     });
     let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
-    assert_eq!(cells[1].state, crate::cell::CellState::Idle, "文本单元不可执行");
+    assert_eq!(
+        cells[1].state,
+        crate::cell::CellState::Idle,
+        "文本单元不可执行"
+    );
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
@@ -259,8 +274,17 @@ fn opening_an_rdsnote_populates_the_notebook(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     // 文档正文确为 .rdsnote JSON（服务层没丢内容）
-    let doc_content = shared.service().find(&id).map(|doc| doc.content().to_string());
-    assert!(doc_content.as_deref().unwrap_or("").contains("\"version\": 1"), "服务层要留着 JSON 正文");
+    let doc_content = shared
+        .service()
+        .find(&id)
+        .map(|doc| doc.content().to_string());
+    assert!(
+        doc_content
+            .as_deref()
+            .unwrap_or("")
+            .contains("\"version\": 1"),
+        "服务层要留着 JSON 正文"
+    );
 
     // 笔记本持有器：单元按文件回来（输出 / 状态不跟随）
     let state = cx.update(|_window, cx| panel.read(cx).notebook_state());
@@ -269,11 +293,15 @@ fn opening_an_rdsnote_populates_the_notebook(cx: &mut TestAppContext) {
     assert_eq!(state.cells[0].language, crate::cell::CellLanguage::Sql);
     assert_eq!(state.cells[0].body, "select 1;");
     assert_eq!(state.cells[1].body, "# 备注");
-    assert!(state.cells.iter().all(|cell| cell.outputs.is_empty()), "输出不跟随文件");
+    assert!(
+        state.cells.iter().all(|cell| cell.outputs.is_empty()),
+        "输出不跟随文件"
+    );
 
     // 层真渲染：两个单元卡片都画出来了（▶ 按钮按单元 id 存在）
     assert!(
-        cx.debug_bounds("editor-nb-run-c1").is_some() || cx.debug_bounds("editor-nb-menu-c1").is_some(),
+        cx.debug_bounds("editor-nb-run-c1").is_some()
+            || cx.debug_bounds("editor-nb-menu-c1").is_some(),
         "SQL 单元卡片渲染出来（按 id 找得到）"
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -317,7 +345,8 @@ fn analysis_cell_renders_multiple_output_blocks(cx: &mut TestAppContext) {
     // 四条输出块按序渲染（try_find：不在树里返回 None，隐藏/被裁也算 in-tree）
     for ix in 0..4 {
         assert!(
-            cx.update(|window, _| window.try_find(format!("editor-nb-output-{ix}"))).is_some(),
+            cx.update(|window, _| window.try_find(format!("editor-nb-output-{ix}")))
+                .is_some(),
             "输出块 {ix} 应渲染出来"
         );
     }
@@ -398,7 +427,9 @@ fn switching_execution_source_persists_to_shared(cx: &mut TestAppContext) {
             panel.notebook_set_execution_source(
                 &id,
                 &cell_id,
-                Some(crate::cell::ExecutionSource::Connection("P_orders".to_string())),
+                Some(crate::cell::ExecutionSource::Connection(
+                    "P_orders".to_string(),
+                )),
                 cx,
             );
         });
@@ -406,7 +437,9 @@ fn switching_execution_source_persists_to_shared(cx: &mut TestAppContext) {
     let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
     assert_eq!(
         cells[0].execution_source,
-        Some(crate::cell::ExecutionSource::Connection("P_orders".to_string()))
+        Some(crate::cell::ExecutionSource::Connection(
+            "P_orders".to_string()
+        ))
     );
 
     // 回会话默认
@@ -451,7 +484,10 @@ fn cell_connection_prefers_execution_source_over_document_default(cx: &mut TestA
         conn_id: None,
     };
     // 未指定执行源 → 文档默认
-    assert_eq!(shared.cell_connection_for(&id, &request).as_deref(), Some("P_A"));
+    assert_eq!(
+        shared.cell_connection_for(&id, &request).as_deref(),
+        Some("P_A")
+    );
 
     // 指定执行源 → 它优先
     cx.update(|_window, cx| {
@@ -468,7 +504,10 @@ fn cell_connection_prefers_execution_source_over_document_default(cx: &mut TestA
         conn_id: Some("P_B".to_string()),
         ..request
     };
-    assert_eq!(shared.cell_connection_for(&id, &request).as_deref(), Some("P_B"));
+    assert_eq!(
+        shared.cell_connection_for(&id, &request).as_deref(),
+        Some("P_B")
+    );
 }
 
 /// 【#17】真内核链路（shared 层，不依赖 pump）：启动 → 执行 → 事件轮询 → mime 分发
@@ -486,9 +525,7 @@ fn python_cell_runs_via_real_kernel_and_dispatches_media(cx: &mut TestAppContext
     shared
         .ensure_kernel("python3", &python.to_string_lossy())
         .expect("内核启动（RDS_KERNEL_PYTHON 是否指向带 ipykernel 的解释器？）");
-    shared
-        .kernel_execute("python3", "1 + 1")
-        .expect("提交执行");
+    shared.kernel_execute("python3", "1 + 1").expect("提交执行");
 
     // 轮询事件直到 ExecuteReply（真时钟；内核回执通常 <2s）
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -526,9 +563,10 @@ fn python_cell_runs_via_real_kernel_and_dispatches_media(cx: &mut TestAppContext
     // `1 + 1` 的富输出：text/plain "2" → 文本输出；执行回复 ok
     assert_eq!(status.as_deref(), Some("ok"));
     assert!(
-        outputs.iter().any(|o| matches!(o, crate::cell::Output::Text(t) if t.trim() == "2")),
+        outputs
+            .iter()
+            .any(|o| matches!(o, crate::cell::Output::Text(t) if t.trim() == "2")),
         "text/plain 结果要分发成文本输出：{outputs:?}"
     );
     shared.kernel_shutdown("python3");
 }
-

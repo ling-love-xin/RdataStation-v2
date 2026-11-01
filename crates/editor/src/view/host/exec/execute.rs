@@ -3,7 +3,6 @@
 //! 自 view/host/exec.rs 拆分（2026-10-29 Step 10）：按能力域切分 `impl EditorHostPanel`。
 //! 跨域互调经 `pub(crate)` 方法；本文件不得出现新的逻辑。
 
-
 use crate::commands::ExecuteAll;
 use crate::execution::{self, ExecTarget};
 use crate::store::ResultPlacement;
@@ -11,7 +10,6 @@ use crate::store::ResultPlacement;
 use super::*;
 
 impl EditorHostPanel {
-
     pub(crate) fn execute_preferring_selection(&mut self, cx: &mut Context<Self>) {
         let (text, selection) = self.editor_snapshot(cx);
         let target = execution::resolve_target(&text, selection);

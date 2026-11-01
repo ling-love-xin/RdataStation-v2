@@ -12,8 +12,8 @@
 //! （`workbench::services::editor_exec` 的 `refresh_sources` / `set_federated_primary`），
 //! 与「重新挂载源库」同一条路——端口只管“看”。
 
-use crate::sources::{SourceRow, SourceState, SourcesPort, SourcesSnapshot};
 use crate::shared::EditorShared;
+use crate::sources::{SourceRow, SourceState, SourcesPort, SourcesSnapshot};
 
 use engine::duckdb::federation::registry::{MountState, SessionSnapshot};
 use engine::duckdb::federation::session as fed_session;

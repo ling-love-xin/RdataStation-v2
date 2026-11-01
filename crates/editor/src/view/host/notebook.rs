@@ -5,20 +5,14 @@
 //!
 //! 拆分纪律：只移动方法体与注释，不改动任何行为；本文件不得出现新的逻辑。
 
-
-use gpui_kit::component::input::{
-    EditorState, InputEvent,
-};
+use gpui_kit::component::input::{EditorState, InputEvent};
 // #48 编辑器常规设置（行号开关即时 / 新文档默认缩进·换行·编码）：settings 不依赖 editor，方向合法
-
 
 use crate::model::{DocumentId, EditorMode};
 // 【下移】结果放置 / 下发原料定义已随结果存储搬到 rds-result-panel（经 crate::store 重导出）
 
-
 use super::*;
 impl EditorHostPanel {
-
     /// 【遗留 #10】把笔记本现有单元的编辑器实例补齐（面板进 Dock / 测试入口调用；
     /// 渲染期只读不建实体，创建一律走事件路径——构造期建会重入 panic）
     pub(crate) fn sync_cell_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -35,7 +29,12 @@ impl EditorHostPanel {
     ///
     /// 订阅挂在单元编辑器实体上：Change 事件从它发出，面板此刻不在更新中，
     /// 回写 shared 不会重入（gpui-kit-dev「不要在回调里重入 update 当前实体」）。
-    fn ensure_cell_editor(&mut self, cell: &crate::cell::Cell, window: &mut Window, cx: &mut Context<Self>) {
+    fn ensure_cell_editor(
+        &mut self,
+        cell: &crate::cell::Cell,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.cell_editors.contains_key(&cell.id) {
             return;
         }
@@ -54,22 +53,19 @@ impl EditorHostPanel {
         // 订阅挂面板上下文会 read 面板（subscribe_in 的 ensure_window），面板正被
         // update 时直接 panic；改用无窗口版 `subscribe`（回调里不需要 window，
         // 只回写 shared）——派发时面板已不在更新中
-        let sub = cx.subscribe(
-            &editor,
-            move |_this, state, event: &InputEvent, cx| {
-                if !matches!(event, InputEvent::Change) {
-                    return;
-                }
-                // 正文从单元编辑器实体读（事件路径，可直接 read）
-                let text = state.read(cx).text().to_string();
-                let mut cells = shared.notebook_cells(&document);
-                if let Some(target) = cells.iter_mut().find(|c| c.id == cell_id) {
-                    target.body = text;
-                }
-                shared.set_notebook_cells(&document, cells);
-                cx.notify();
-            },
-        );
+        let sub = cx.subscribe(&editor, move |_this, state, event: &InputEvent, cx| {
+            if !matches!(event, InputEvent::Change) {
+                return;
+            }
+            // 正文从单元编辑器实体读（事件路径，可直接 read）
+            let text = state.read(cx).text().to_string();
+            let mut cells = shared.notebook_cells(&document);
+            if let Some(target) = cells.iter_mut().find(|c| c.id == cell_id) {
+                target.body = text;
+            }
+            shared.set_notebook_cells(&document, cells);
+            cx.notify();
+        });
         self.cell_editors.insert(cell.id.clone(), editor);
         self._cell_editor_subs.insert(cell.id.clone(), sub);
     }
@@ -266,7 +262,10 @@ impl EditorHostPanel {
             return;
         }
         if is_empty {
-            self.set_message(Some("这个 SQL 单元是空的，没有可执行的语句".to_string()), cx);
+            self.set_message(
+                Some("这个 SQL 单元是空的，没有可执行的语句".to_string()),
+                cx,
+            );
             return;
         }
         let Some(cell) = state.cell_mut(id) else {
@@ -326,8 +325,7 @@ impl EditorHostPanel {
         }
         let mut session = self.notebook_state().session;
         session.default_connection = conn_id;
-        self.shared
-            .switch_notebook_session(&self.document, session);
+        self.shared.switch_notebook_session(&self.document, session);
         self.set_message(None, cx);
         cx.notify();
     }
@@ -349,7 +347,10 @@ impl EditorHostPanel {
             .map(|cell| cell.id.clone())
             .collect();
         if self.notebook_pending.is_empty() {
-            self.set_message(Some("没有可执行的单元（可执行单元要有代码）".to_string()), cx);
+            self.set_message(
+                Some("没有可执行的单元（可执行单元要有代码）".to_string()),
+                cx,
+            );
             return;
         }
         self.advance_notebook_queue(cx);
@@ -397,19 +398,17 @@ impl EditorHostPanel {
     /// 会话默认（“上次用过的内核”）。
     ///
     /// 与 SQL 分支分开读 shared（`notebook_run_cell` 里不保留对 state 的借用再调这里）
-    fn run_kernel_cell(
-        &mut self,
-        session_id: &str,
-        cell_id: &str,
-        cx: &mut Context<Self>,
-    ) {
+    fn run_kernel_cell(&mut self, session_id: &str, cell_id: &str, cx: &mut Context<Self>) {
         let mut state = self.notebook_state();
         let Some(cell) = state.cell_mut(cell_id) else {
             return;
         };
         if cell.body.trim().is_empty() {
             self.set_message(
-                Some(format!("这个 {} 单元是空的，没有可执行的代码", cell.language.label())),
+                Some(format!(
+                    "这个 {} 单元是空的，没有可执行的代码",
+                    cell.language.label()
+                )),
                 cx,
             );
             return;
@@ -417,13 +416,17 @@ impl EditorHostPanel {
         // 实际内核：执行源指定优先，否则会话默认 / 注册表第一个可用（#20 注册表路由）
         let source = cell.execution_source.clone();
         let language = cell.language;
-        let kernel_id = match self.shared.resolve_kernel_for(&self.document, source.as_ref(), language) {
-            Ok(spec) => spec.id.clone(),
-            Err(reason) => {
-                self.set_message(Some(reason), cx);
-                return;
-            }
-        };
+        let kernel_id =
+            match self
+                .shared
+                .resolve_kernel_for(&self.document, source.as_ref(), language)
+            {
+                Ok(spec) => spec.id.clone(),
+                Err(reason) => {
+                    self.set_message(Some(reason), cx);
+                    return;
+                }
+            };
         let Some(command) = self
             .shared
             .kernel_specs()
@@ -431,7 +434,10 @@ impl EditorHostPanel {
             .find(|spec| spec.id == kernel_id)
             .map(|spec| spec.command)
         else {
-            self.set_message(Some(format!("内核「{kernel_id}」已从注册表消失，请重启面板")), cx);
+            self.set_message(
+                Some(format!("内核「{kernel_id}」已从注册表消失，请重启面板")),
+                cx,
+            );
             return;
         };
         if let Err(reason) = self.shared.ensure_kernel(&kernel_id, &command) {
@@ -458,7 +464,8 @@ impl EditorHostPanel {
             return;
         }
         // 执行提交成功 → 回写会话默认（“上次用过的内核”）
-        self.shared.set_session_default_kernel(&self.document, Some(kernel_id));
+        self.shared
+            .set_session_default_kernel(&self.document, Some(kernel_id));
         self.set_message(None, cx);
         self.ensure_kernel_pump(cx);
     }
@@ -546,9 +553,8 @@ impl EditorHostPanel {
                     }
                 }
                 rds_kernel::KernelEvent::Error { ename, evalue, .. } => {
-                    cell.outputs.push(crate::cell::Output::Error(format!(
-                        "{ename}: {evalue}"
-                    )));
+                    cell.outputs
+                        .push(crate::cell::Output::Error(format!("{ename}: {evalue}")));
                 }
                 rds_kernel::KernelEvent::Status(_) => {}
                 rds_kernel::KernelEvent::Failed(reason) => {

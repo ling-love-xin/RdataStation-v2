@@ -13,7 +13,6 @@ use crate::session::{SavedSession, SessionStore};
 use super::*;
 
 impl EditorShared {
-
     /// 注入会话存储（**宿主调用一次**；A12）
     pub fn attach_session_store(&self, store: Rc<dyn SessionStore>) {
         *self.sessions.borrow_mut() = Some(store);

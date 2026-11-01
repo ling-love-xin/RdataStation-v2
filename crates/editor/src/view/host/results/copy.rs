@@ -41,7 +41,8 @@ impl EditorHostPanel {
 
     /// 【P2-4】转置行导航：上一行 / 下一行（越界夹取；数据行数来自 delegate）
     pub(crate) fn transpose_step(&mut self, delta: isize, cx: &mut Context<Self>) {
-        self.result_panel.update(cx, |p, cx| p.transpose_step(delta, cx));
+        self.result_panel
+            .update(cx, |p, cx| p.transpose_step(delta, cx));
     }
 
     /// 【B14】`Ctrl+C`（网格里）：把选中的**一格**或**一整行**拷到剪贴板
@@ -80,17 +81,12 @@ impl EditorHostPanel {
         // 【A2】保持形态：下发筛选 / 排序下发的结果集带当初的原料重查（不退回全量）；
         // 普通执行 = 原 SQL 重跑。
         let target = match entry.pushdown.clone() {
-            Some(Pushdown::Filtered { filter, columns }) => {
-                ExecTarget::Filtered {
-                    sql: entry.sql.clone(),
-                    filter,
-                    columns,
-                }
-            }
-            Some(Pushdown::SortedDown {
-                column,
-                descending,
-            }) => ExecTarget::SortedDown {
+            Some(Pushdown::Filtered { filter, columns }) => ExecTarget::Filtered {
+                sql: entry.sql.clone(),
+                filter,
+                columns,
+            },
+            Some(Pushdown::SortedDown { column, descending }) => ExecTarget::SortedDown {
                 sql: entry.sql.clone(),
                 column,
                 descending,
@@ -151,5 +147,4 @@ impl EditorHostPanel {
         let grid = self.grid.clone();
         grid.update(cx, |state, _cx| state.delegate_mut().set_loading_more(true));
     }
-
 }

@@ -4,10 +4,8 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use gpui_kit::TestAppContext;
 use gpui_kit::component::table::TableDelegate as _;
-use gpui_kit::{
-    TestAppContext,
-};
 
 use crate::channel::ExecChannel;
 use crate::execution::{self, QueryData, QueryRunner};
@@ -16,12 +14,12 @@ use crate::model::EditorMode;
 use crate::service::OpenRequest;
 use crate::shared::EditorShared;
 
+use super::MoreUnsupportedRunner;
+use super::dialogs::{FakeConnections, dialog_button_rendered, option};
 use super::{
     grid_rows, open_panel, result_tabs, run_statement, shared_with_segment_runner,
     shared_with_sized_runner, shared_with_toolbar_runner, wait_for_all_pending,
 };
-use super::MoreUnsupportedRunner;
-use super::dialogs::{FakeConnections, option, dialog_button_rendered};
 
 // ===== B15：本地筛选 / 排序 =====
 
@@ -492,10 +490,7 @@ fn refreshing_a_sorted_result_keeps_its_shape(cx: &mut TestAppContext) {
 
     assert_eq!(
         sorted.lock().expect("锁").clone(),
-        [
-            ("name".to_string(), true),
-            ("name".to_string(), true),
-        ],
+        [("name".to_string(), true), ("name".to_string(), true),],
         "刷新 = 再一次排序下发（列与方向原样）"
     );
 }

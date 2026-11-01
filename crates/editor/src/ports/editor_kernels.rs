@@ -37,7 +37,9 @@ impl KernelsPort for WorkbenchKernels {
 /// 后台任务完成即写入，下一次渲染就有真值。
 pub fn attach(shared: &EditorShared, cx: &gpui_kit::App) {
     let cache = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let port = Rc::new(WorkbenchKernels { cache: cache.clone() });
+    let port = Rc::new(WorkbenchKernels {
+        cache: cache.clone(),
+    });
     shared.attach_kernels(port);
     let _ = cx.background_executor().spawn(async move {
         // 探测一次（后台线程：起子进程查解释器 / ipykernel）

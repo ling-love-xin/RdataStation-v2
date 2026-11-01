@@ -1,16 +1,18 @@
 //! 取值 / 复制 / 查找域（`grid/` 第四块）：单元格取值（`cell` / `row_cell_text`）、
 //! 整列 / 整行 / JSON / INSERT 复制、结果内查找、选择复制文本、悬停全文与菜单预览。
 
-use gpui_kit::*;
 use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::*;
 
-use ::shared::string::{tsv_cell, tsv_row};
-use ::shared::FactKind;
+use super::delegate::ResultGridDelegate;
+use super::stats::{
+    ColumnStats, column_stats_from_values, group_by_values, number_group_key, stats_from_fact,
+};
 use crate::rowset::RowRef;
 use crate::ui;
+use ::shared::FactKind;
+use ::shared::string::{tsv_cell, tsv_row};
 use std::ops::Range;
-use super::delegate::ResultGridDelegate;
-use super::stats::{column_stats_from_values, group_by_values, number_group_key, stats_from_fact, ColumnStats};
 impl ResultGridDelegate {
     /// 单元格文案：首列是行号，其余按 `col_ix - 1` 取数据
     ///
@@ -40,11 +42,7 @@ impl ResultGridDelegate {
         }
         let column = self.data_column(col_ix - 1);
         match self.row_ref(row_ix)? {
-            RowRef::Data(data_ix) => self
-                .rows
-                .get(data_ix)?
-                .get(column)
-                .map(String::as_str),
+            RowRef::Data(data_ix) => self.rows.get(data_ix)?.get(column).map(String::as_str),
             RowRef::Local(id) => self.local_cell(id, column),
         }
     }
@@ -120,7 +118,11 @@ impl ResultGridDelegate {
             let cell: String = match reference {
                 RowRef::Data(data_ix) => {
                     // 被删行不参与复制列（#28-B1 排除矩阵）
-                    if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+                    if self
+                        .local
+                        .as_ref()
+                        .is_some_and(|set| set.is_deleted(data_ix))
+                    {
                         continue;
                     }
                     self.rows
@@ -157,7 +159,11 @@ impl ResultGridDelegate {
         (0..self.view_len())
             .filter_map(|view_ix| {
                 let data_ix = self.data_row(view_ix)?;
-                if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+                if self
+                    .local
+                    .as_ref()
+                    .is_some_and(|set| set.is_deleted(data_ix))
+                {
                     return None;
                 }
                 Some(
@@ -245,7 +251,11 @@ impl ResultGridDelegate {
         };
         // 被删底层行不参与整行复制（#28-B1 排除矩阵）
         if let RowRef::Data(data_ix) = reference {
-            if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+            if self
+                .local
+                .as_ref()
+                .is_some_and(|set| set.is_deleted(data_ix))
+            {
                 return String::new();
             }
         }
@@ -292,7 +302,11 @@ impl ResultGridDelegate {
         };
         // 被删底层行不参与行 JSON 复制（#28-B1 排除矩阵）
         if let RowRef::Data(data_ix) = reference {
-            if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+            if self
+                .local
+                .as_ref()
+                .is_some_and(|set| set.is_deleted(data_ix))
+            {
                 return String::new();
             }
         }
@@ -312,7 +326,11 @@ impl ResultGridDelegate {
             return String::new();
         };
         // 被删底层行同样不拼 INSERT（#28-B1 排除矩阵：INSERT 排除被删行）
-        if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+        if self
+            .local
+            .as_ref()
+            .is_some_and(|set| set.is_deleted(data_ix))
+        {
             return String::new();
         }
         let Some(table) = self.result_table.as_deref() else {

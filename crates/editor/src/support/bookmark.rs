@@ -30,11 +30,7 @@ pub fn toggle(bookmarks: &mut Vec<Bookmark>, line: usize) -> bool {
 ///
 /// 折叠说明书签的入口（用户给折叠区域写说明 → `label` 落成说明文字）；
 /// 与 [`toggle`] 的"默认说明 = 行号"互补：本函数让书签带上用户自己的话。
-pub fn set_label(
-    bookmarks: &mut Vec<Bookmark>,
-    line: usize,
-    label: impl Into<String>,
-) -> bool {
+pub fn set_label(bookmarks: &mut Vec<Bookmark>, line: usize, label: impl Into<String>) -> bool {
     let label = label.into();
     if let Some(existing) = bookmarks.iter_mut().find(|b| b.line == line) {
         if existing.label == label {
@@ -229,7 +225,11 @@ mod tests {
         let mut b = vec![bm(1), bm(3), bm(4)];
         assert!(adjust_for_edit(&mut b, d(0, 2, 0)));
         // adjust 内部会 normalize（同一行去重）：原本在 1 的书签 + 锚到 1 的 3 → 都落在行 1
-        assert_eq!(lines(&b), vec![1, 2], "被删行锚到首行（与已在首行的合并），之后的 4 上移到 2");
+        assert_eq!(
+            lines(&b),
+            vec![1, 2],
+            "被删行锚到首行（与已在首行的合并），之后的 4 上移到 2"
+        );
     }
 
     #[test]
@@ -306,7 +306,10 @@ mod tests {
     #[test]
     fn set_label_edits_an_existing_bookmark() {
         let mut b = vec![bm(3), bm(7)];
-        assert!(set_label(&mut b, 3, "折叠说明：CTE 迁移遗留"), "改 label 报真变");
+        assert!(
+            set_label(&mut b, 3, "折叠说明：CTE 迁移遗留"),
+            "改 label 报真变"
+        );
         assert_eq!(b[0].label, "折叠说明：CTE 迁移遗留");
         assert_eq!(b[0].line, 3, "改说明不动行号");
         assert_eq!(b.len(), 2);
@@ -323,7 +326,10 @@ mod tests {
 
     #[test]
     fn set_label_noop_when_label_unchanged() {
-        let mut b = vec![Bookmark { line: 3, label: "原样".to_string() }];
+        let mut b = vec![Bookmark {
+            line: 3,
+            label: "原样".to_string(),
+        }];
         assert!(!set_label(&mut b, 3, "原样"), "同值 = 未变");
         assert_eq!(b.len(), 1);
     }
@@ -348,34 +354,70 @@ mod tests {
     #[test]
     fn filtered_kinds_split_bookmark_vs_fold_by_note() {
         let b = vec![
-            Bookmark { line: 1, label: "1".to_string() },
-            Bookmark { line: 3, label: "3".to_string() },
-            Bookmark { line: 5, label: "折叠说明：CTE 迁移".to_string() },
+            Bookmark {
+                line: 1,
+                label: "1".to_string(),
+            },
+            Bookmark {
+                line: 3,
+                label: "3".to_string(),
+            },
+            Bookmark {
+                line: 5,
+                label: "折叠说明：CTE 迁移".to_string(),
+            },
         ];
         assert_eq!(filtered(&b, BookmarkKind::All, "").len(), 3);
-        let bookmark_only: Vec<usize> = filtered(&b, BookmarkKind::Bookmark, "").iter().map(|x| x.line).collect();
+        let bookmark_only: Vec<usize> = filtered(&b, BookmarkKind::Bookmark, "")
+            .iter()
+            .map(|x| x.line)
+            .collect();
         assert_eq!(bookmark_only, vec![1, 3], "纯书签 = label 即行号");
-        let fold_only: Vec<usize> = filtered(&b, BookmarkKind::Fold, "").iter().map(|x| x.line).collect();
+        let fold_only: Vec<usize> = filtered(&b, BookmarkKind::Fold, "")
+            .iter()
+            .map(|x| x.line)
+            .collect();
         assert_eq!(fold_only, vec![5], "折叠 = 有说明的记录");
     }
 
     #[test]
     fn filtered_tag_query_matches_label_tags() {
         let b = vec![
-            Bookmark { line: 1, label: "1".to_string() },
-            Bookmark { line: 4, label: "#订单 主键核对".to_string() },
-            Bookmark { line: 9, label: "#待办 批量执行".to_string() },
+            Bookmark {
+                line: 1,
+                label: "1".to_string(),
+            },
+            Bookmark {
+                line: 4,
+                label: "#订单 主键核对".to_string(),
+            },
+            Bookmark {
+                line: 9,
+                label: "#待办 批量执行".to_string(),
+            },
         ];
-        assert_eq!(filtered(&b, BookmarkKind::All, "#订单").len(), 1, "#tag 精确过滤");
+        assert_eq!(
+            filtered(&b, BookmarkKind::All, "#订单").len(),
+            1,
+            "#tag 精确过滤"
+        );
         assert_eq!(filtered(&b, BookmarkKind::All, "#待办").len(), 1);
         assert_eq!(filtered(&b, BookmarkKind::All, "#不存在").len(), 0);
-        assert_eq!(filtered(&b, BookmarkKind::All, "#").len(), 0, "空 tag = 不匹配");
+        assert_eq!(
+            filtered(&b, BookmarkKind::All, "#").len(),
+            0,
+            "空 tag = 不匹配"
+        );
     }
 
     #[test]
     fn filtered_digit_query_matches_line_numbers() {
         let b = vec![bm(1), bm(12), bm(27)];
-        assert_eq!(filtered(&b, BookmarkKind::All, "1").len(), 2, "1 命中 1 与 12");
+        assert_eq!(
+            filtered(&b, BookmarkKind::All, "1").len(),
+            2,
+            "1 命中 1 与 12"
+        );
         assert_eq!(filtered(&b, BookmarkKind::All, "27").len(), 1);
         assert_eq!(filtered(&b, BookmarkKind::All, "3").len(), 0);
     }
@@ -383,21 +425,40 @@ mod tests {
     #[test]
     fn filtered_text_query_matches_label_contains() {
         let b = vec![
-            Bookmark { line: 1, label: "1".to_string() },
-            Bookmark { line: 4, label: "订单表主键与唯一约束核对入口".to_string() },
+            Bookmark {
+                line: 1,
+                label: "1".to_string(),
+            },
+            Bookmark {
+                line: 4,
+                label: "订单表主键与唯一约束核对入口".to_string(),
+            },
         ];
         assert_eq!(filtered(&b, BookmarkKind::All, "主键").len(), 1);
         assert_eq!(filtered(&b, BookmarkKind::All, "订单").len(), 1);
         assert_eq!(filtered(&b, BookmarkKind::All, "不存在词").len(), 0);
-        assert_eq!(filtered(&b, BookmarkKind::All, "  ").len(), 2, "空白查询 = 只看类型");
+        assert_eq!(
+            filtered(&b, BookmarkKind::All, "  ").len(),
+            2,
+            "空白查询 = 只看类型"
+        );
     }
 
     #[test]
     fn filtered_kind_and_query_stack() {
         let b = vec![
-            Bookmark { line: 1, label: "1".to_string() },
-            Bookmark { line: 3, label: "3".to_string() },
-            Bookmark { line: 5, label: "#订单 折叠说明".to_string() },
+            Bookmark {
+                line: 1,
+                label: "1".to_string(),
+            },
+            Bookmark {
+                line: 3,
+                label: "3".to_string(),
+            },
+            Bookmark {
+                line: 5,
+                label: "#订单 折叠说明".to_string(),
+            },
         ];
         // 类型 + 查询叠加：折叠类型里找 #订单
         assert_eq!(filtered(&b, BookmarkKind::Fold, "#订单").len(), 1);

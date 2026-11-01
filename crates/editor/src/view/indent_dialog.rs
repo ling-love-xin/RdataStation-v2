@@ -14,8 +14,8 @@ use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
 use gpui_kit::component::{ActiveTheme, Icon, IndexPath, WindowExt as _};
@@ -343,13 +343,19 @@ pub fn open_tab_size_dialog(
 #[cfg(test)]
 mod tests {
     // 注意：不要 `use super::*`——会把顶层 `gpui_kit::*` 的 `test` 宏带进来，递归展开崩溃
-    use super::{indent_entries, IndentAction, IndentGroup};
+    use super::{IndentAction, IndentGroup, indent_entries};
 
     #[test]
     fn entries_mark_current_indent_mode() {
         let entries = indent_entries(true);
-        let use_tabs = entries.iter().find(|e| e.action == IndentAction::UseTabs).unwrap();
-        let use_spaces = entries.iter().find(|e| e.action == IndentAction::UseSpaces).unwrap();
+        let use_tabs = entries
+            .iter()
+            .find(|e| e.action == IndentAction::UseTabs)
+            .unwrap();
+        let use_spaces = entries
+            .iter()
+            .find(|e| e.action == IndentAction::UseSpaces)
+            .unwrap();
         assert!(use_tabs.checked);
         assert!(!use_spaces.checked);
     }

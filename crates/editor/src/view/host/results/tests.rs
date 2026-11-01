@@ -4,12 +4,11 @@
 //! 跨域互调经 `pub(crate)` 方法；字段在 mod.rs 统一 `pub(crate)`。
 
 use super::super::*;
-use result_panel::panel::ResultPanel;
 use crate::view::results::error_card::ErrorCard;
 use crate::view::results::grid::{ResultGridDelegate, ResultStatus, ResultToolbar};
+use result_panel::panel::ResultPanel;
 
 impl EditorHostPanel {
-
     /// 【B6】编辑内核里的诊断条数（错误回填画了没有）
     pub fn diagnostics_for_test(&self, cx: &App) -> usize {
         self.editor
@@ -97,7 +96,12 @@ impl EditorHostPanel {
 
     /// 【B13】结果集标签的通道徽标（供测试断言“每份结果记住了自己是哪档跑的”）
     pub fn result_badges_for_test(&self, cx: &App) -> Vec<String> {
-        self.result_panel.read(cx).tabs().iter().map(|tab| tab.badge()).collect()
+        self.result_panel
+            .read(cx)
+            .tabs()
+            .iter()
+            .map(|tab| tab.badge())
+            .collect()
     }
 
     /// 【B13】结果区顶部那一行提示（切通道后旧结果那一条）
@@ -158,7 +162,8 @@ impl EditorHostPanel {
     pub fn apply_result_style(&self, cx: &mut Context<Self>) {
         if let Some(settings) = cx.try_global::<settings::model::Settings>() {
             let prefs = settings.result_panel.type_style();
-            self.result_panel.update(cx, |p, cx| p.set_type_style(prefs, cx));
+            self.result_panel
+                .update(cx, |p, cx| p.set_type_style(prefs, cx));
         }
     }
 
@@ -225,8 +230,11 @@ impl EditorHostPanel {
 
     /// 【T2c-3 收尾】按当前模式对齐内核光标（走生产代码同一条 `enforce_edit_mode`）
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn enforce_edit_mode_for_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn enforce_edit_mode_for_test(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.enforce_edit_mode(window, cx);
     }
-
 }

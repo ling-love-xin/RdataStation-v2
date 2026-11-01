@@ -4,13 +4,13 @@
 //! 跨域互调经 `pub(crate)` 方法；字段在 mod.rs 统一 `pub(crate)`。
 
 use super::super::*;
-use result_panel::panel::{ExportCtx, GridPayload, ResultSyncInput};
 use crate::channel::{self};
 use crate::diagnostics;
 use crate::export::{self};
 use crate::view::results::error_card::ErrorCard;
 use crate::view::results::grid::{self as result_grid, ResultStatus, ResultToolbar};
 use crate::view::results::sets::{self as result_sets};
+use result_panel::panel::{ExportCtx, GridPayload, ResultSyncInput};
 
 impl EditorHostPanel {
     /// 只对 CSV 文档生效（扩展名判定，口径与状态栏文件类型一致）；非 CSV 文档
@@ -36,7 +36,9 @@ impl EditorHostPanel {
         self.grid.update(cx, |state, cx| {
             state.delegate_mut().set_data(columns, body);
             // 类型必须**在 set_data 之后**设（set_data 会清空类型，防串台）
-            state.delegate_mut().set_column_types(vec![None; column_count]);
+            state
+                .delegate_mut()
+                .set_column_types(vec![None; column_count]);
             state.refresh(cx);
         });
         self.csv_active = true;
@@ -61,7 +63,8 @@ impl EditorHostPanel {
 
     pub(crate) fn sync_result_view(&mut self, cx: &mut Context<Self>) {
         // 先把要用的数据从权威存储里拷出来（不把 `Ref` 带进下面的 `grid.update`）
-        let current_channel = self.channel();        let (
+        let current_channel = self.channel();
+        let (
             tabs,
             active,
             grid_data,
@@ -106,7 +109,11 @@ impl EditorHostPanel {
                     .map(|id| self.shared.connection_status_text(Some(id)))
             });
             (
-                result_sets::tabs(store.sets(&self.document), current_channel, store.pinned(&self.document)),
+                result_sets::tabs(
+                    store.sets(&self.document),
+                    current_channel,
+                    store.pinned(&self.document),
+                ),
                 active,
                 entry.filter(|entry| entry.has_grid()).map(|entry| {
                     (
@@ -152,8 +159,12 @@ impl EditorHostPanel {
                         // 【#28-B3】状态行总行数口径 = 底层未删行 + 本地行（被删底层行不计入；
                         // 本地行始终纳入）。删除标记只从计数里剔除，不参与下推 / 统计链。
                         total_rows: entry.row_count()
-                            - local_snapshot.as_ref().map_or(0, |local| local.deleted_count())
-                            + local_snapshot.as_ref().map_or(0, |local| local.local_count()),
+                            - local_snapshot
+                                .as_ref()
+                                .map_or(0, |local| local.deleted_count())
+                            + local_snapshot
+                                .as_ref()
+                                .map_or(0, |local| local.local_count()),
                         // 选中行在渲染时现读（点行不改结果集，没必要每帧回写状态）
                         selected_row: None,
                         // sync 时没有格选中：当前格值由 `SelectCell` 事件增量更新（见 grid_sub）
@@ -407,8 +418,9 @@ impl EditorHostPanel {
             .results()
             .compare_index(&self.document)
             .unwrap_or(0);
-        self.result_panel
-            .update(cx, |p, _| p.set_compare_projection(compare_active, None, None));
+        self.result_panel.update(cx, |p, _| {
+            p.set_compare_projection(compare_active, None, None)
+        });
     }
 
     /// 【并排对比】工具栏开关：开 = 结果区双栏并排（左主选中 / 右对比选中）
@@ -420,7 +432,8 @@ impl EditorHostPanel {
     /// Dock 化后开关状态归面板实体（`ResultPanel::compare_mode`）；这里的后续
     /// （默认对比对象 / 数据同步 / 清理）由编辑器接着做。
     pub fn toggle_compare_mode(&mut self, cx: &mut Context<Self>) {
-        self.result_panel.update(cx, |p, cx| p.toggle_compare_mode(cx));
+        self.result_panel
+            .update(cx, |p, cx| p.toggle_compare_mode(cx));
         let compare_mode = self.result_panel.read(cx).compare_mode();
         if compare_mode {
             let needs_default = {
@@ -467,5 +480,4 @@ impl EditorHostPanel {
             cx.notify();
         }
     }
-
 }

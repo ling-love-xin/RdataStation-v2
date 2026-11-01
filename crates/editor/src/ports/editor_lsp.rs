@@ -413,19 +413,37 @@ mod tests {
     fn language_for_is_none_outside_general_mode() {
         // SQL / 分析模式一律不配服务（D11 / 笔记本 v1）
         assert_eq!(language_for(EditorMode::Sql, Some(Path::new("a.py"))), None);
-        assert_eq!(language_for(EditorMode::Analysis, Some(Path::new("a.py"))), None);
+        assert_eq!(
+            language_for(EditorMode::Analysis, Some(Path::new("a.py"))),
+            None
+        );
         // 未命名（无路径）不猜
         assert_eq!(language_for(EditorMode::General, None), None);
     }
 
     #[test]
     fn language_for_maps_python_by_extension() {
-        assert_eq!(language_for(EditorMode::General, Some(Path::new("a.py"))), Some("python"));
-        assert_eq!(language_for(EditorMode::General, Some(Path::new("x/a.PY"))), Some("python"));
+        assert_eq!(
+            language_for(EditorMode::General, Some(Path::new("a.py"))),
+            Some("python")
+        );
+        assert_eq!(
+            language_for(EditorMode::General, Some(Path::new("x/a.PY"))),
+            Some("python")
+        );
         // 其它扩展名 / 非 python 语言 → 无服务（v1 只有 Python 一个 server）
-        assert_eq!(language_for(EditorMode::General, Some(Path::new("a.md"))), None);
-        assert_eq!(language_for(EditorMode::General, Some(Path::new("a.rs"))), None);
-        assert_eq!(language_for(EditorMode::General, Some(Path::new("a.txt"))), None);
+        assert_eq!(
+            language_for(EditorMode::General, Some(Path::new("a.md"))),
+            None
+        );
+        assert_eq!(
+            language_for(EditorMode::General, Some(Path::new("a.rs"))),
+            None
+        );
+        assert_eq!(
+            language_for(EditorMode::General, Some(Path::new("a.txt"))),
+            None
+        );
     }
 
     #[test]
@@ -456,10 +474,13 @@ mod tests {
 
         let (claimed, rest) = claim_events(&uri, events);
         assert_eq!(claimed.len(), 1);
-        assert_eq!(claimed[0], LspEvent::Diagnostics(serde_json::json!({
-            "uri": uri,
-            "diagnostics": [{ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } }, "message": "我的" }]
-        })));
+        assert_eq!(
+            claimed[0],
+            LspEvent::Diagnostics(serde_json::json!({
+                "uri": uri,
+                "diagnostics": [{ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } }, "message": "我的" }]
+            }))
+        );
         // 别人的诊断暂存等别人来取；通知 / IoError 不进暂存（IoError 由宿主 `dead` 字段广播）
         assert_eq!(rest.len(), 1);
         assert!(matches!(&rest[0], LspEvent::Diagnostics(_)));

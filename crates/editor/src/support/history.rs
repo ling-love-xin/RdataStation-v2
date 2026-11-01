@@ -114,7 +114,12 @@ pub fn query(q: &HistoryQuery, limit: usize, offset: usize) -> Result<Vec<Histor
         None => {}
     }
     history_store::query_sql_history(&filter, limit, offset)
-        .map(|records| records.iter().map(|record| item_from(record, now)).collect())
+        .map(|records| {
+            records
+                .iter()
+                .map(|record| item_from(record, now))
+                .collect()
+        })
         .map_err(|error| format!("读取历史失败：{error}"))
 }
 
@@ -300,9 +305,17 @@ mod tests {
             sources_text(Some("federated"), aliases).as_deref(),
             Some("源 mysql_src, pg_warehouse")
         );
-        assert_eq!(sources_text(Some("accelerated"), aliases), None, "加速只有一条源");
+        assert_eq!(
+            sources_text(Some("accelerated"), aliases),
+            None,
+            "加速只有一条源"
+        );
         assert_eq!(sources_text(Some("source"), aliases), None);
-        assert_eq!(sources_text(Some("federated"), None), None, "老记录不编一个");
+        assert_eq!(
+            sources_text(Some("federated"), None),
+            None,
+            "老记录不编一个"
+        );
         assert_eq!(sources_text(Some("federated"), Some("   ")), None);
         assert_eq!(sources_text(None, aliases), None);
     }
@@ -350,7 +363,10 @@ mod tests {
         assert_eq!(duration_text(0), "0 ms");
         assert_eq!(duration_text(999), "999 ms");
         assert_eq!(duration_text(1_200), "1.2 s");
-        assert_eq!(rows_text(Some(1204), None).as_deref(), Some("返回 1,204 行"));
+        assert_eq!(
+            rows_text(Some(1204), None).as_deref(),
+            Some("返回 1,204 行")
+        );
         assert_eq!(rows_text(None, Some(3)).as_deref(), Some("影响 3 行"));
         assert_eq!(
             rows_text(Some(1), Some(3)).as_deref(),
@@ -366,7 +382,10 @@ mod tests {
         assert_eq!(source_text(Some("  "), None).as_deref(), None);
         assert_eq!(source_text(None, None).as_deref(), None);
         // 【B13】通道是第二个维度：源库档不缀（默认档缀上去只是噪音）
-        assert_eq!(source_text(Some("mysql"), Some("source")).as_deref(), Some("MYSQL"));
+        assert_eq!(
+            source_text(Some("mysql"), Some("source")).as_deref(),
+            Some("MYSQL")
+        );
         assert_eq!(
             source_text(Some("mysql"), Some("accelerated")).as_deref(),
             Some("MYSQL·加速")

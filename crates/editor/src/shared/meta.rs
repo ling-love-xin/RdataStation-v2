@@ -14,7 +14,6 @@ use crate::model::DocumentId;
 use super::*;
 
 impl EditorShared {
-
     /// 【M8】文档未绑定连接时执行会落到哪条连接上（口径在执行器：绑定优先 → 回退活动连接）
     pub fn active_connection(&self) -> Option<String> {
         let guard = self.exec.borrow();
@@ -103,10 +102,7 @@ impl EditorShared {
     /// 【#20】内核注册表快照（渲染路径可调：端口实现是内存读；未接端口 = 空）
     pub fn kernel_specs(&self) -> Vec<rds_kernel::KernelSpec> {
         let guard = self.kernel_port.borrow();
-        guard
-            .as_ref()
-            .map(|port| port.list())
-            .unwrap_or_default()
+        guard.as_ref().map(|port| port.list()).unwrap_or_default()
     }
 
     /// 【#20】执行源「内核」档的实际内核解析（**纯函数**，见 [`crate::kernel::resolve_kernel`]）：
@@ -117,12 +113,13 @@ impl EditorShared {
         source: Option<&crate::cell::ExecutionSource>,
         language: crate::cell::CellLanguage,
     ) -> Result<rds_kernel::KernelSpec, String> {
-        let session_default = self
-            .notebook_state(document)
-            .session
-            .default_kernel
-            .clone();
-        crate::kernel::resolve_kernel(&self.kernel_specs(), source, session_default.as_deref(), language)
+        let session_default = self.notebook_state(document).session.default_kernel.clone();
+        crate::kernel::resolve_kernel(
+            &self.kernel_specs(),
+            source,
+            session_default.as_deref(),
+            language,
+        )
     }
 
     /// 【B7 切片三】某连接下表的主键列（**只在导出菜单弹出时查一次**——事件路径；

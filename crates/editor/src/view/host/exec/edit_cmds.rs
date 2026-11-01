@@ -3,12 +3,8 @@
 //! 自 view/host/exec.rs 拆分（2026-10-29 Step 10）：按能力域切分 `impl EditorHostPanel`。
 //! 跨域互调经 `pub(crate)` 方法；本文件不得出现新的逻辑。
 
-
 use crate::changes::CellChange;
-use crate::commands::{
-    CopyGridSelection, ExecuteSql,
-    RedoResultEdit, UndoResultEdit,
-};
+use crate::commands::{CopyGridSelection, ExecuteSql, RedoResultEdit, UndoResultEdit};
 
 use super::*;
 
@@ -87,7 +83,10 @@ impl EditorHostPanel {
                     changes.remove(change.row, change.column);
                 } else {
                     changes.upsert(CellChange::pending(
-                        change.row, change.column, original_value, change.original,
+                        change.row,
+                        change.column,
+                        original_value,
+                        change.original,
                     ));
                 }
             });
@@ -121,7 +120,10 @@ impl EditorHostPanel {
                     changes.remove(change.row, change.column);
                 } else {
                     changes.upsert(CellChange::pending(
-                        change.row, change.column, original_value, change.edited,
+                        change.row,
+                        change.column,
+                        original_value,
+                        change.edited,
                     ));
                 }
             });

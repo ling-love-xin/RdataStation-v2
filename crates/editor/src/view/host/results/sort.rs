@@ -57,7 +57,11 @@ impl EditorHostPanel {
     /// 当前结果集在界面上的名字（「洞察此列」的来源标签：面板副标题 / 快照来源用）
     pub(crate) fn result_set_label(&self) -> String {
         // 选中的下标从权威 store 读（不再经面板——纯读路径不借实体）
-        let index = self.shared.results().active_index(&self.document).unwrap_or(0);
+        let index = self
+            .shared
+            .results()
+            .active_index(&self.document)
+            .unwrap_or(0);
         let titled = self
             .shared
             .results()
@@ -79,7 +83,8 @@ impl EditorHostPanel {
     /// 【B15】测试用：直接应用筛选词（跳过 300ms 防抖，验“应用之后怎样”）
     #[cfg(test)]
     pub(crate) fn set_filter_for_test(&mut self, text: &str, cx: &mut Context<Self>) {
-        self.result_panel.update(cx, |p, cx| p.set_filter_value(text, cx));
+        self.result_panel
+            .update(cx, |p, cx| p.set_filter_value(text, cx));
     }
 
     /// 切换结果集（结果集标签条点击）：选中项只有 `ResultStore` 能改，界面按它重画
@@ -91,5 +96,4 @@ impl EditorHostPanel {
             self.sync_result_view(cx);
         }
     }
-
 }

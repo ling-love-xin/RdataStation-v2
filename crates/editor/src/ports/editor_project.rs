@@ -72,7 +72,12 @@ mod tests {
             Err("测试宿主未接入".to_string())
         }
         fn open_history(&self, _cx: &mut App) {}
-        fn open_insight_source_column(&self, _request: crate::shared::InsightColumnRequest, _cx: &mut App) {}
+        fn open_insight_source_column(
+            &self,
+            _request: crate::shared::InsightColumnRequest,
+            _cx: &mut App,
+        ) {
+        }
         fn request_reveal(&self, _object: engine::ObjectRef) {}
     }
 

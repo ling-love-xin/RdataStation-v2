@@ -127,7 +127,9 @@ mod tests {
 
     #[test]
     fn special_spaces_are_hidden() {
-        for ch in ['\u{00A0}', '\u{1680}', '\u{2000}', '\u{200A}', '\u{202F}', '\u{205F}', '\u{3000}'] {
+        for ch in [
+            '\u{00A0}', '\u{1680}', '\u{2000}', '\u{200A}', '\u{202F}', '\u{205F}', '\u{3000}',
+        ] {
             let text = format!("a{ch}b");
             let ranges = hidden_ranges(&text);
             assert_eq!(ranges, vec![range(&text, ch).unwrap()], "{ch:?} 应在列表里");
@@ -165,7 +167,10 @@ mod tests {
         let mut prev_end = 0;
         for r in &ranges {
             assert!(r.start >= prev_end, "区间不重叠");
-            assert!(text.is_char_boundary(r.start) && text.is_char_boundary(r.end), "区间在字符边界");
+            assert!(
+                text.is_char_boundary(r.start) && text.is_char_boundary(r.end),
+                "区间在字符边界"
+            );
             prev_end = r.end;
         }
         assert_eq!(ranges[0], 1..4); // a + ZWSP(3字节)

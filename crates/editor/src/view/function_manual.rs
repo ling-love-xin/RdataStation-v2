@@ -19,7 +19,7 @@ use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
 use gpui_kit::component::{ActiveTheme, IndexPath, WindowExt as _};
 use gpui_kit::*;
 
-use engine::sql::{search_manual, ManualEntry};
+use engine::sql::{ManualEntry, search_manual};
 
 use crate::ui;
 
@@ -118,7 +118,11 @@ impl ListDelegate for ManualDelegate {
             .py_6()
             .text_xs()
             .text_color(theme.colors.muted_foreground)
-            .child(div().text_color(theme.colors.foreground).child("无匹配函数"))
+            .child(
+                div()
+                    .text_color(theme.colors.foreground)
+                    .child("无匹配函数"),
+            )
             .child("试试输入函数名（substr）或中文语义（截取 / 日期）")
             .into_any_element()
     }
@@ -214,12 +218,12 @@ mod tests {
     // 展开出的裸 `#[test]` 会解析到它自己 → recursion limit，见 gpui-kit-dev skill）
     use super::{ManualDelegate, open_function_manual};
     use gpui_kit::component::IndexPath;
-    use gpui_kit::component::list::{ListDelegate, ListState};
     use gpui_kit::component::Root;
     use gpui_kit::component::WindowExt as _;
+    use gpui_kit::component::list::{ListDelegate, ListState};
     use gpui_kit::{
-        AppContext as _, Context, Entity, IntoElement, Render, Styled as _, TestAppContext,
-        Window, div,
+        AppContext as _, Context, Entity, IntoElement, Render, Styled as _, TestAppContext, Window,
+        div,
     };
 
     /// 空壳根视图：只包 `Root`（对话框要真渲染出来需要组件库的 Root 挂 dialog 层）
@@ -237,7 +241,9 @@ mod tests {
 
         let inserted = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
         let ins = inserted.clone();
-        let slot = std::rc::Rc::new(std::cell::RefCell::new(None::<Entity<ListState<ManualDelegate>>>));
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(
+            None::<Entity<ListState<ManualDelegate>>>,
+        ));
         let slot_in = slot.clone();
         // 窗口创建闭包里只挂 Root（open_dialog 依赖 Root entity，必须等窗口建好再开）
         let (_, cx) = cx.add_window_view(move |window, cx| {

@@ -13,8 +13,8 @@
 //! 别的工具写入），直接覆盖就是**静默丢数据**。因此记录读取时的 mtime，保存前比对，
 //! 由调用方决定是否让用户确认（A9 的三态分支）。
 
-use std::fs;
 use std::fmt;
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -57,16 +57,11 @@ pub fn load(path: &Path) -> Result<String, PersistError> {
 }
 
 /// 读文件 + 判定保存格式（`open_file_with` 用：检测到的编码 / 换行要落到文档级状态）
-pub fn load_with_meta(
-    path: &Path,
-) -> Result<(String, crate::encoding::SaveFormat), PersistError> {
+pub fn load_with_meta(path: &Path) -> Result<(String, crate::encoding::SaveFormat), PersistError> {
     let bytes = read_bytes(path)?;
     let (text, encoding) = crate::encoding::decode_bytes(&bytes);
     let eol = crate::encoding::LineEnding::detect(&text);
-    Ok((
-        text,
-        crate::encoding::SaveFormat { encoding, eol },
-    ))
+    Ok((text, crate::encoding::SaveFormat { encoding, eol }))
 }
 
 /// 读原始字节（统一的 Io 错误包装）
@@ -151,7 +146,9 @@ fn to_io(path: &Path, error: std::io::Error) -> PersistError {
 
 /// 文件的修改时间（读不到返回 `None`：文件不存在 / 无权限）
 pub fn modified_time(path: &Path) -> Option<SystemTime> {
-    std::fs::metadata(path).and_then(|meta| meta.modified()).ok()
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
 }
 
 /// 磁盘上的文件是否在 `recorded` 之后被改过（用于"磁盘副本已变"提示）
@@ -214,10 +211,9 @@ fn open_file_with(
     } else {
         load_with_meta(path)?
     };
-    let mut request =
-        crate::service::OpenRequest::file(path, content, mode)
-            .with_tier(tier)
-            .with_format(format);
+    let mut request = crate::service::OpenRequest::file(path, content, mode)
+        .with_tier(tier)
+        .with_format(format);
     if let Some(true) = editor_read_only {
         // 连接维不动（它是另一回事：能不能写库，不是能不能改文本）；
         // 先取值再移动（`with_read_only` 按值收 `self`）。
@@ -236,10 +232,7 @@ fn open_file_with(
 ///
 /// 【2d】分析模式：正文不是内核文本，而是笔记本（会话 + 单元序列）的 JSON 序列化
 /// （`.rdsnote`，见 [`crate::cell::NotebookFile`]）；其它模式写文档正文。
-pub fn save_document(
-    shared: &EditorShared,
-    id: &DocumentId,
-) -> Result<PathBuf, PersistError> {
+pub fn save_document(shared: &EditorShared, id: &DocumentId) -> Result<PathBuf, PersistError> {
     let (path, content, format) = {
         let service = shared.service();
         let document = service
@@ -321,10 +314,8 @@ mod tests {
 
     /// 临时目录（每个用例一个，互不干扰；用完尽力清理）
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "rds_editor_persist_{name}_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("rds_editor_persist_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("建临时目录");
         dir

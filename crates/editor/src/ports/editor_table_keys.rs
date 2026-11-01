@@ -173,7 +173,10 @@ mod tests {
         );
         drop(cache);
 
-        assert_eq!(primary_key_columns("P_ghost", "orders", Some(&root_s)), None);
+        assert_eq!(
+            primary_key_columns("P_ghost", "orders", Some(&root_s)),
+            None
+        );
         assert_eq!(primary_key_columns("P_nk", "orders", Some(&root_s)), None);
         assert_eq!(
             primary_key_columns("P_nk", "events", Some(&root_s)),

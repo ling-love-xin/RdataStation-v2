@@ -16,11 +16,11 @@
 //! - `tests`：全量单元测试（窗口测试仿 host.rs 包一层 `Render` 实体）
 
 pub(crate) mod data;
+pub(crate) mod dialog;
+pub(crate) mod events;
 pub(crate) mod lifecycle;
 pub(crate) mod render;
-pub(crate) mod events;
 pub(crate) mod sidebars;
-pub(crate) mod dialog;
 pub(crate) mod tabs;
 #[cfg(test)]
 mod tests;

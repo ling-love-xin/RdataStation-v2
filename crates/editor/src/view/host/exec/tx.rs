@@ -3,7 +3,6 @@
 //! 自 view/host/exec.rs 拆分（2026-10-29 Step 10）：按能力域切分 `impl EditorHostPanel`。
 //! 跨域互调经 `pub(crate)` 方法；本文件不得出现新的逻辑。
 
-
 use crate::execution::{self, ExecTarget};
 use crate::store::ResultPlacement;
 use crate::translate;
@@ -103,7 +102,10 @@ impl EditorHostPanel {
     pub(crate) fn tx_text(&self) -> String {
         match (self.tx_open, self.tx_since) {
             (true, Some(since)) => {
-                format!("TX 已开启 {}", result_panel::status::elapsed_text(since.elapsed()))
+                format!(
+                    "TX 已开启 {}",
+                    result_panel::status::elapsed_text(since.elapsed())
+                )
             }
             (true, None) => "TX 已开启".to_string(),
             (false, _) => "TX 未开启".to_string(),

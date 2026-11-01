@@ -3,8 +3,8 @@
 //! CSV / JSON / INSERT / SQL Updates / WHERE 子句 的纯编码 + 值字面量与标识符引号
 //! 启发式（[`quote_ident`] / [`cell_literal`] / [`is_null_cell`]）；DuckDB 两档本地不编码。
 
-use crate::store::ResultEntry;
 use super::{ExportFormat, RowKey};
+use crate::store::ResultEntry;
 /// 一条 INSERT 语句最多带几行（SQLite 对多行 VALUES 有编译期上限，200 行对四库都稳）
 const INSERT_ROWS_PER_STATEMENT: usize = 200;
 

@@ -1,15 +1,16 @@
 //! 事件域（`panel/` 第三块）：视图层动作（筛选 / 转置 / 侧栏开关 / 重命名 / 列序 / 选区）+ 过滤器 API。
 
-
-use gpui_kit::*;
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::input::{InputState, TextareaState};
-use gpui_kit::component::table::{TableState, TableDelegate as _};
+use gpui_kit::component::table::{TableDelegate as _, TableState};
+use gpui_kit::*;
 
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 
+use super::data::ResultPanel;
+use super::sidebars::next_right_edge_state;
 use crate::error_card::ErrorCard;
-use crate::grid::cell::{classify_value, json_tree_items, ViewerMode};
+use crate::grid::cell::{ViewerMode, classify_value, json_tree_items};
 use crate::grid::{ResultGridDelegate, ResultStatus, ResultToolbar};
 use crate::ports::{Presentation, ResultRequest, RightTab};
 use crate::script_card::ScriptCard;
@@ -17,11 +18,8 @@ use crate::sets::ResultSetTab;
 use crate::store::ColumnKind;
 /// 【类型样式】全局偏好聚合（shell 层：settings 持久化与渲染消费共用）。
 use workbench_shell::result_style::TypeStylePrefs;
-use super::data::ResultPanel;
-use super::sidebars::next_right_edge_state;
 
 impl ResultPanel {
-
     pub fn on_filter_input(&mut self, text: String, cx: &mut Context<Self>) {
         if self.filter_text == text {
             return;
@@ -60,8 +58,9 @@ impl ResultPanel {
         self.refresh_filter_hint(cx);
         cx.notify();
         if requeue && self.pushdown && !self.filter_text.trim().is_empty() {
-            self.queue
-                .push(ResultRequest::PushdownFilter { value: self.filter_text.trim().to_string() });
+            self.queue.push(ResultRequest::PushdownFilter {
+                value: self.filter_text.trim().to_string(),
+            });
         }
     }
 
@@ -117,12 +116,7 @@ impl ResultPanel {
     /// 【P2-4】转置行导航：上一行 / 下一行（越界夹取；基准 = 当前视图序列长度，
     /// 本地行区段也纳入导航范围——#28-B1 拍板 D2 转置纳入本地行）
     pub fn transpose_step(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let max = self
-            .grid
-            .read(cx)
-            .delegate()
-            .view_len()
-            .saturating_sub(1);
+        let max = self.grid.read(cx).delegate().view_len().saturating_sub(1);
         let next = (self.transpose_row as isize + delta).clamp(0, max as isize) as usize;
         self.transpose_row = next;
         let grid = self.grid.clone();
@@ -304,11 +298,16 @@ impl ResultPanel {
 
     /// 【结果集 #296】按持久化列名序重排一份新结果的列与行（列名匹配，未匹配列
     /// 保持数据序附加在末尾——用户拖过的列还在就保持，新列不猜）。
-    pub(crate) fn apply_column_order(&self, columns: Vec<String>, rows: Vec<Vec<String>>) -> (Vec<String>, Vec<Vec<String>>) {
+    pub(crate) fn apply_column_order(
+        &self,
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+    ) -> (Vec<String>, Vec<Vec<String>>) {
         reorder_by(&self.column_order, columns, rows)
     }
 
-    pub fn set_type_style(&mut self, prefs: TypeStylePrefs, cx: &mut Context<Self>) {        self.type_style = prefs.clone();
+    pub fn set_type_style(&mut self, prefs: TypeStylePrefs, cx: &mut Context<Self>) {
+        self.type_style = prefs.clone();
         self.grid.update(cx, |state, cx| {
             state.delegate_mut().set_type_style(prefs);
             state.refresh(cx);
@@ -373,7 +372,8 @@ impl ResultPanel {
             }
             None => Vec::new(),
         };
-        self.json_tree.update(cx, |state, cx| state.set_items(items, cx));
+        self.json_tree
+            .update(cx, |state, cx| state.set_items(items, cx));
     }
 
     /// 【列浏览器】清单单击选中一列（数据列序）：写清单选中态 + 网格列选中高亮联动。
@@ -430,14 +430,9 @@ impl ResultPanel {
         self.selected_col
             .filter(|c| *c < delegate.columns().len() && !delegate.is_hidden_column(*c))
     }
-
-
 }
 
-
-
 impl ResultPanel {
-
     pub fn apply_column_filter(&mut self, column: usize, value: &str, cx: &mut Context<Self>) {
         self.grid.update(cx, |grid, _| {
             grid.delegate_mut().set_column_filter(if value.is_empty() {
@@ -494,9 +489,7 @@ impl ResultPanel {
 
     /// 当前是否有任何结果区内容（编辑器据此决定结果 dock 是否该开）
     pub fn has_content(&self) -> bool {
-        self.toolbar.is_some()
-            || self.script_card.is_some()
-            || self.error_card.is_some()
+        self.toolbar.is_some() || self.script_card.is_some() || self.error_card.is_some()
     }
 
     /// 对比模式是否开启
@@ -608,10 +601,7 @@ impl ResultPanel {
     pub fn selected_col(&self) -> Option<usize> {
         self.selected_col
     }
-
 }
-
-
 
 /// 【结果集 #296】按持久化列名序重排一份新结果的列与行（纯函数，测试直接覆盖）：
 /// 列名匹配（保留持久化序），未匹配列按数据序附加末尾——用户拖过的列还在就保持，

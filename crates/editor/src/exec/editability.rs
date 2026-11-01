@@ -113,7 +113,11 @@ mod tests {
     use super::*;
     use crate::export::RowKey;
 
-    fn gates(channel: ExecChannel, project: bool, read_only: (bool, bool)) -> (ExecChannel, ProjectState, ReadOnly) {
+    fn gates(
+        channel: ExecChannel,
+        project: bool,
+        read_only: (bool, bool),
+    ) -> (ExecChannel, ProjectState, ReadOnly) {
         (
             channel,
             ProjectState { read_only: project },
@@ -182,7 +186,10 @@ mod tests {
     fn result_editable_ignores_column_dimension() {
         let key = RowKey::single("id");
         let (channel, project, read_only) = gates(ExecChannel::Source, false, (false, false));
-        assert_eq!(result_editable(channel, project, read_only, Some(&key)), Ok(()));
+        assert_eq!(
+            result_editable(channel, project, read_only, Some(&key)),
+            Ok(())
+        );
         assert_eq!(
             result_editable(channel, project, read_only, None),
             Err(EditGate::NoRowKey)

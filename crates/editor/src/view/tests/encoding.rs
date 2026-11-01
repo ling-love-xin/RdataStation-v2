@@ -1,18 +1,12 @@
 //! （由 view/tests.rs 拆分，2026-10-29）
 //! 注意：不用 `use super::*` 通配（gpui `test` 宏递归），依赖显式列举。
 
-
-use gpui_kit::{
-    TestAppContext,
-};
+use gpui_kit::TestAppContext;
 
 use crate::model::EditorMode;
 use crate::shared::EditorShared;
 
-use super::{
-    open_panel,
-    shared_with_document,
-};
+use super::{open_panel, shared_with_document};
 
 // ===== 2c：编码 / 换行 / 不可见字符显示（接线层）=====
 //
@@ -39,15 +33,29 @@ fn panel_encoding_and_eol_switch_marks_dirty(cx: &mut TestAppContext) {
         })
     });
     let format = shared.document_save_format(&id);
-    assert_eq!(format.encoding, crate::encoding::TextEncoding::Gbk, "编码要落到文档级保存格式");
-    assert_eq!(format.eol, crate::encoding::LineEnding::Lf, "换行不受编码切换影响");
-    assert!(cx.update(|_window, cx| panel.read(cx).is_dirty()), "切编码 = 未保存的改动");
+    assert_eq!(
+        format.encoding,
+        crate::encoding::TextEncoding::Gbk,
+        "编码要落到文档级保存格式"
+    );
+    assert_eq!(
+        format.eol,
+        crate::encoding::LineEnding::Lf,
+        "换行不受编码切换影响"
+    );
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).is_dirty()),
+        "切编码 = 未保存的改动"
+    );
     cx.update(|_window, cx| {
         panel.update(cx, |panel, cx| {
             panel.set_encoding(crate::encoding::TextEncoding::Gbk, cx)
         })
     });
-    assert!(cx.update(|_window, cx| panel.read(cx).is_dirty()), "同值重设不应清脏");
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).is_dirty()),
+        "同值重设不应清脏"
+    );
 
     // 切换行 → 格式变 + 仍脏；LF 同值重设无操作
     cx.update(|_window, cx| {
@@ -56,8 +64,16 @@ fn panel_encoding_and_eol_switch_marks_dirty(cx: &mut TestAppContext) {
         })
     });
     let format = shared.document_save_format(&id);
-    assert_eq!(format.eol, crate::encoding::LineEnding::Crlf, "换行要落到文档级保存格式");
-    assert_eq!(format.encoding, crate::encoding::TextEncoding::Gbk, "编码不受换行切换影响");
+    assert_eq!(
+        format.eol,
+        crate::encoding::LineEnding::Crlf,
+        "换行要落到文档级保存格式"
+    );
+    assert_eq!(
+        format.encoding,
+        crate::encoding::TextEncoding::Gbk,
+        "编码不受换行切换影响"
+    );
     assert!(cx.update(|_window, cx| panel.read(cx).is_dirty()));
 }
 
@@ -103,7 +119,10 @@ fn gbk_file_roundtrips_through_open_and_save(cx: &mut TestAppContext) {
         bytes,
         "GBK 文件保存后字节必须原样（编码是保存契约）"
     );
-    assert!(!cx.update(|_window, cx| panel.read(cx).is_dirty()), "保存后清脏");
+    assert!(
+        !cx.update(|_window, cx| panel.read(cx).is_dirty()),
+        "保存后清脏"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -121,24 +140,17 @@ fn show_whitespaces_and_invisible_toggle_through_panel(cx: &mut TestAppContext) 
 
     // 开空白字符（内核双写：`set_show_whitespaces` 需要 window，从测试的 window 闭包拿）
     cx.update(|window, cx| {
-        panel.update(cx, |panel, cx| {
-            panel.set_show_whitespaces(true, window, cx)
-        })
+        panel.update(cx, |panel, cx| panel.set_show_whitespaces(true, window, cx))
     });
     assert!(shared.document_show_whitespaces(&id));
 
     // 开隐藏字符：懒建标注集合并刷当前正文（正文里有一个零宽空格，能算出区间）
-    cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.set_show_invisible(true, cx))
-    });
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.set_show_invisible(true, cx)));
     assert!(shared.document_show_invisible(&id));
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     // 再画一帧 / 关掉：清空集合，状态回落，渲染仍稳
-    cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.set_show_invisible(false, cx))
-    });
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.set_show_invisible(false, cx)));
     assert!(!shared.document_show_invisible(&id));
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
-

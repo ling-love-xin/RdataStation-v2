@@ -147,7 +147,10 @@ mod tests {
         let sql = "SELECT name FROM public.customers";
         let link = jump_to_lsp(sql, target);
         // 列跳转也定位到所属表（宿主选中表后再选中列）
-        assert_eq!(link.target_uri.to_string(), "rds://navigator/public.customers");
+        assert_eq!(
+            link.target_uri.to_string(),
+            "rds://navigator/public.customers"
+        );
         let origin = link.origin_selection_range.expect("有符号区间");
         assert_eq!((origin.start.character, origin.end.character), (7, 11));
     }

@@ -41,12 +41,8 @@ pub fn open_invisible_dialog(
         let fg = theme.colors.foreground;
 
         // ── 左栏：类别清单（每类一行：名称 + 短述 + 右侧 Switch）──
-        let left = div()
-            .v_flex()
-            .gap_2()
-            .flex_1()
-            .min_w_0()
-            .children(hidden::all_categories().into_iter().map(|cat| {
+        let left = div().v_flex().gap_2().flex_1().min_w_0().children(
+            hidden::all_categories().into_iter().map(|cat| {
                 let (name, hint) = category_meta(cat);
                 let on = entity.read(cx).mask & hidden::category_bit(cat) != 0;
                 let e = entity.clone();
@@ -76,7 +72,8 @@ pub fn open_invisible_dialog(
                             .child(div().text_xs().text_color(muted).child(hint)),
                     )
                     .child(sw)
-            }));
+            }),
+        );
 
         // ── 右栏：各类别的符号明细（码点范围说明）──
         let right = div()
@@ -90,33 +87,29 @@ pub fn open_invisible_dialog(
                     .text_color(muted)
                     .child("符号明细（收录范围）"),
             )
-            .children(
-                hidden::all_categories()
-                    .into_iter()
-                    .map(|cat| {
-                        let (name, _) = category_meta(cat);
-                        let detail = category_detail(cat);
-                        let on = entity.read(cx).mask & hidden::category_bit(cat) != 0;
+            .children(hidden::all_categories().into_iter().map(|cat| {
+                let (name, _) = category_meta(cat);
+                let detail = category_detail(cat);
+                let on = entity.read(cx).mask & hidden::category_bit(cat) != 0;
+                div()
+                    .v_flex()
+                    .gap_0p5()
+                    .px_2()
+                    .py_1p5()
+                    .rounded(rems(0.5))
+                    .bg(if on {
+                        theme.colors.list_active.opacity(0.4)
+                    } else {
+                        theme.colors.list
+                    })
+                    .child(
                         div()
-                            .v_flex()
-                            .gap_0p5()
-                            .px_2()
-                            .py_1p5()
-                            .rounded(rems(0.5))
-                            .bg(if on {
-                                theme.colors.list_active.opacity(0.4)
-                            } else {
-                                theme.colors.list
-                            })
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(if on { fg } else { muted })
-                                    .child(format!("{name} · {}", if on { "已显示" } else { "已隐藏" })),
-                            )
-                            .child(div().text_xs().text_color(muted).child(detail))
-                    }),
-            );
+                            .text_xs()
+                            .text_color(if on { fg } else { muted })
+                            .child(format!("{name} · {}", if on { "已显示" } else { "已隐藏" })),
+                    )
+                    .child(div().text_xs().text_color(muted).child(detail))
+            }));
 
         let body = div()
             .h_flex()
@@ -150,10 +143,16 @@ fn category_meta(cat: HiddenCategory) -> (&'static str, &'static str) {
 /// 类别收录的符号明细（右栏）
 fn category_detail(cat: HiddenCategory) -> &'static str {
     match cat {
-        HiddenCategory::ZeroWidth => "ZWSP(U+200B) ZWNJ(U+200C) ZWJ(U+200D) 词连接符(U+2060) BOM(U+FEFF)",
-        HiddenCategory::SpecialSpaces => "NBSP(U+00A0) 古爱尔兰空格(U+1680) 2000-200A 窄NBSP(202F) 中空格(205F) 全角空格(U+3000)",
+        HiddenCategory::ZeroWidth => {
+            "ZWSP(U+200B) ZWNJ(U+200C) ZWJ(U+200D) 词连接符(U+2060) BOM(U+FEFF)"
+        }
+        HiddenCategory::SpecialSpaces => {
+            "NBSP(U+00A0) 古爱尔兰空格(U+1680) 2000-200A 窄NBSP(202F) 中空格(205F) 全角空格(U+3000)"
+        }
         HiddenCategory::Bidi => "U+202A-202E / U+2066-2069（RTL 双向控制）",
-        HiddenCategory::Control => "C0(U+0000-0008,000B,000C,000E-001F) DEL+C1(U+007F-009F)，排除 \\t\\n\\r",
+        HiddenCategory::Control => {
+            "C0(U+0000-0008,000B,000C,000E-001F) DEL+C1(U+007F-009F)，排除 \\t\\n\\r"
+        }
     }
 }
 
@@ -169,7 +168,10 @@ mod tests {
             toggle_mask(0, HiddenCategory::ZeroWidth),
             hidden::category_bit(HiddenCategory::ZeroWidth)
         );
-        let m = toggle_mask(hidden::category_bit(HiddenCategory::ZeroWidth), HiddenCategory::ZeroWidth);
+        let m = toggle_mask(
+            hidden::category_bit(HiddenCategory::ZeroWidth),
+            HiddenCategory::ZeroWidth,
+        );
         assert_eq!(m, 0);
     }
 

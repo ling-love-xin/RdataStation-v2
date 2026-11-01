@@ -10,11 +10,11 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gpui_kit::component::dock::DockArea;
 use gpui_kit::component::Root;
+use gpui_kit::component::dock::DockArea;
 use gpui_kit::{
-    AppContext as _, Context, Entity, IntoElement, KeyBinding, ParentElement as _,
-    Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
+    AppContext as _, Context, Entity, IntoElement, KeyBinding, ParentElement as _, Render,
+    Styled as _, TestAppContext, VisualTestContext, Window, div,
 };
 
 use crate::channel::ExecChannel;
@@ -667,4 +667,3 @@ fn wait_for_result(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>) 
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
-

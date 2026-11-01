@@ -25,7 +25,10 @@ use crate::shared::EditorShared;
 /// 与 `crate::mode::mode_for_extension` 的三档判定对齐：SQL 脚本 / 分析笔记 / 文本与数据。
 /// 过滤只是**默认视图**，用户仍可切到“所有文件”（未知扩展名按文本模式打开，是安全的默认）。
 const FILTERS: &[(&str, &[&str])] = &[
-    ("SQL 脚本", &["sql", "mysql", "pgsql", "psql", "ddl", "tsql"]),
+    (
+        "SQL 脚本",
+        &["sql", "mysql", "pgsql", "psql", "ddl", "tsql"],
+    ),
     ("分析笔记", &["rdsnote", "sqlnote"]),
     ("文本与数据", &["txt", "md", "json", "csv", "log"]),
 ];

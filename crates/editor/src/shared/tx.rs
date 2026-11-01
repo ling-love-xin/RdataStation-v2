@@ -8,7 +8,6 @@
 use super::*;
 
 impl EditorShared {
-
     /// 请一个事务动作（B4）：开始 / 提交 / 回滚；没在跑才接受（理由可读）
     pub fn request_transaction(
         &self,
@@ -65,14 +64,7 @@ impl EditorShared {
         let guard = self.exec.borrow();
         match guard.as_ref() {
             Some(queue) => queue.request_commit_changes(
-                document,
-                connection,
-                schema,
-                channel,
-                table,
-                key,
-                sql,
-                updates,
+                document, connection, schema, channel, table, key, sql, updates,
             ),
             None => Err("当前未接入执行".to_string()),
         }

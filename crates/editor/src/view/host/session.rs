@@ -5,9 +5,7 @@
 //!
 //! 拆分纪律：只移动方法体与注释，不改动任何行为；本文件不得出现新的逻辑。
 
-
 // #48 编辑器常规设置（行号开关即时 / 新文档默认缩进·换行·编码）：settings 不依赖 editor，方向合法
-
 
 use crate::channel::{self, ExecChannel};
 use crate::mode::{self, CellGranularity};
@@ -16,10 +14,8 @@ use crate::model::EditorMode;
 use crate::view::completion;
 use crate::view::dialogs;
 
-
 use super::*;
 impl EditorHostPanel {
-
     /// 当前会话快照（关文档 / 退出时保存用）
     ///
     /// 未命名文档没有稳定标识，返回 `None`（不存——重启后无法把它认回来）。
@@ -99,8 +95,7 @@ impl EditorHostPanel {
             None
         };
         let current_channel = self.channel();
-        let channel = communicating
-            .then(|| channel::status_text(current_channel).to_string());
+        let channel = communicating.then(|| channel::status_text(current_channel).to_string());
         let dialect = communicating
             .then(|| {
                 bound.as_deref().and_then(|conn_id| {
@@ -313,9 +308,8 @@ impl EditorHostPanel {
             self.shared.update(apply);
             return;
         }
-        self.shared.update(|service| {
-            service.set_schema(&self.document, None)
-        });
+        self.shared
+            .update(|service| service.set_schema(&self.document, None));
         self.set_message(
             Some(format!(
                 "schema {schema_name} 不在当前连接里：已回退到连接默认"
@@ -390,7 +384,10 @@ impl EditorHostPanel {
     /// - SQL 模式 → 本地 SQL 目录补全（`completion_enabled`：能力表 + 只读 + 大文件档位）；
     /// - 通用 / 分析模式且语言服务健康可编辑 → LSP 补全（请求转发给语言服务）；
     /// - 都没有 → 摘干净（两个 provider 都摘，不残留）。
-    pub(crate) fn sync_completion_provider(&self, state: &mut gpui_kit::component::input::EditorState) {
+    pub(crate) fn sync_completion_provider(
+        &self,
+        state: &mut gpui_kit::component::input::EditorState,
+    ) {
         let sql_enabled = self.shared.completion_enabled(&self.document);
         let lsp_available = self.lsp_alive
             && self.lsp.is_some()
@@ -404,10 +401,11 @@ impl EditorHostPanel {
         match crate::lsp::host::choose_completion(mode, lsp_available, sql_enabled) {
             crate::lsp::CompletionChoice::Lsp => {
                 if let Some(session) = self.lsp.as_ref() {
-                    let provider = std::rc::Rc::new(crate::lsp::bridge::LspCompletionProvider::new(
-                        session.client.clone(),
-                        session.uri.clone(),
-                    ));
+                    let provider =
+                        std::rc::Rc::new(crate::lsp::bridge::LspCompletionProvider::new(
+                            session.client.clone(),
+                            session.uri.clone(),
+                        ));
                     crate::lsp::bridge::install(state, provider);
                     // 【#21】hover 与补全同源（语言服务）：一起挂、一起摘。
                     // 弹层由内核自带（150ms 防抖 + 自动渲染/收起），这里只补数据源。
@@ -518,7 +516,9 @@ impl EditorHostPanel {
             self.lsp_alive = false;
             if let Some(session) = session {
                 let text = self.editor_text(cx);
-                let _ = session.client.did_open(&session.uri, &session.language_id, &text);
+                let _ = session
+                    .client
+                    .did_open(&session.uri, &session.language_id, &text);
                 self.lsp_version = 1;
                 self.lsp_alive = true;
                 self.lsp = Some(session);
@@ -548,17 +548,15 @@ impl EditorHostPanel {
             .unwrap_or(EditorMode::General);
         if mode == EditorMode::Analysis {
             if text.trim().is_empty() {
-                self.shared.set_notebook_state(&self.document, crate::cell::NotebookState::new());
+                self.shared
+                    .set_notebook_state(&self.document, crate::cell::NotebookState::new());
             } else {
                 match crate::cell::NotebookFile::from_json(&text) {
                     Ok(file) => {
                         let (session, cells) = file.into_state();
                         self.shared.set_notebook_state(
                             &self.document,
-                            crate::cell::NotebookState {
-                                session,
-                                cells,
-                            },
+                            crate::cell::NotebookState { session, cells },
                         );
                     }
                     Err(reason) => {
@@ -586,7 +584,9 @@ impl EditorHostPanel {
         if value_changed && self.lsp_alive {
             if let Some(session) = self.lsp.as_ref() {
                 self.lsp_version += 1;
-                let _ = session.client.did_change(&session.uri, self.lsp_version, &text);
+                let _ = session
+                    .client
+                    .did_change(&session.uri, self.lsp_version, &text);
             }
         }
         // 【2c】同上：隐藏字符标注也走不到 Change 事件（区间是字节偏移，整篇换文本必失效），

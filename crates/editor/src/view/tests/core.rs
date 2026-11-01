@@ -3,26 +3,19 @@
 
 use std::rc::Rc;
 
-use gpui_kit::component::dock::{BasePanel as _, DockPlacement, DockSkin, Panel as _};
 use gpui_kit::component::Root;
-use gpui_kit::{
-    AppContext as _, Entity, Focusable as _, TestAppContext,
-};
+use gpui_kit::component::dock::{BasePanel as _, DockPlacement, DockSkin, Panel as _};
+use gpui_kit::{AppContext as _, Entity, Focusable as _, TestAppContext};
 
 use crate::fold::{FoldSpan, spans as fold_spans};
 use crate::model::{DocumentId, EditorMode};
 use crate::service::OpenRequest;
 use crate::shared::EditorShared;
 use crate::view::fold;
-use crate::view::host::{
-    EditorHostPanel, close_document_in_dock,
-};
+use crate::view::host::{EditorHostPanel, close_document_in_dock};
 
-use super::{
-    bind_editor_keys, open_panel,
-    shared_with_document, temp_dir,
-};
 use super::Harness;
+use super::{bind_editor_keys, open_panel, shared_with_document, temp_dir};
 
 #[gpui_kit::test]
 fn tab_name_tracks_document_title(cx: &mut TestAppContext) {
@@ -313,7 +306,10 @@ fn bookmarks_toggle_persists_to_and_loads_from_the_sidecar(cx: &mut TestAppConte
     // 再切一次 → 移除并回写为空（空书签也落盘，即“清空即持久化”）
     cx.simulate_keystrokes("ctrl-shift-b");
     assert!(shared.bookmarks(&id).is_empty(), "再切应移除书签");
-    assert!(sidecar.exists(), "清空后 sidecar 仍应存在（记录当前空状态）");
+    assert!(
+        sidecar.exists(),
+        "清空后 sidecar 仍应存在（记录当前空状态）"
+    );
     let meta = file_meta::read_meta(&path).expect("读回 meta");
     assert!(meta.bookmarks.is_empty(), "sidecar 应无书签");
 
@@ -330,7 +326,11 @@ fn bookmarks_toggle_persists_to_and_loads_from_the_sidecar(cx: &mut TestAppConte
         });
         panel
     });
-    assert_eq!(shared.bookmarks(&id).len(), 1, "重开面板应从 sidecar 读回书签");
+    assert_eq!(
+        shared.bookmarks(&id).len(),
+        1,
+        "重开面板应从 sidecar 读回书签"
+    );
     assert_eq!(shared.bookmarks(&id)[0].line, 1);
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -396,7 +396,8 @@ fn folding_candidates_are_fed_after_the_gutter_restored(cx: &mut TestAppContext)
         "恢复后打开文档应喂一次候选（构造路径）"
     );
     assert_ne!(
-        candidates_at_open, usize::MAX,
+        candidates_at_open,
+        usize::MAX,
         "恢复后已喂过候选（探针哨兵 MAX 只在从未记录时出现）"
     );
 
@@ -698,9 +699,7 @@ fn focusing_a_non_active_tab_in_a_multi_tab_group_does_not_panic(cx: &mut TestAp
     // 第二个面板是激活标签（后 add 者 active_ix = 1）。
     // 对第一个（非激活）面板调 `focus_self`：修复前这里直接 double-lease panic。
     let first_panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
-    cx.update(|window, cx| {
-        first_panel.update(cx, |panel, cx| panel.focus_self(window, cx))
-    });
+    cx.update(|window, cx| first_panel.update(cx, |panel, cx| panel.focus_self(window, cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     assert_eq!(
@@ -755,4 +754,3 @@ fn write_hint_shows_for_empty_and_hides_after_typing(cx: &mut TestAppContext) {
     // 回到正常编辑器后也要能画出来
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
-

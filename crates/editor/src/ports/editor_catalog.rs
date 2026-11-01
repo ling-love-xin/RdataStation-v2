@@ -160,6 +160,9 @@ mod tests {
             parse_navigator(&Uri::from_str("rds://scratchpad/x").unwrap()),
             None
         );
-        assert_eq!(parse_navigator(&Uri::from_str("rds://navigator/").unwrap()), None);
+        assert_eq!(
+            parse_navigator(&Uri::from_str("rds://navigator/").unwrap()),
+            None
+        );
     }
 }

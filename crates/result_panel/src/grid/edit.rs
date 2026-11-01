@@ -1,16 +1,18 @@
 //! 编辑域（`grid/` 第三块）：编辑态生命周期（`begin_edit` / `commit_edit` /
 //! `cancel_edit` / 编辑框渲染）+ 提交值类型校验。
 
-use gpui_kit::*;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::table::TableState;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
+use super::delegate::{
+    CellEdit, CommitEditHook, CommitLocalEditHook, ResultGridDelegate, RowActionHook,
+};
 use crate::rowset::RowRef;
 use crate::store::ColumnKind;
-use super::delegate::{CellEdit, CommitEditHook, CommitLocalEditHook, ResultGridDelegate, RowActionHook};
 use workbench_shell::product_tokens;
 impl ResultGridDelegate {
     // ---------- 【T2a-4】单元格编辑 ----------
@@ -62,7 +64,8 @@ impl ResultGridDelegate {
         let Some(data_ix) = self.data_row(row_ix) else {
             return false;
         };
-        self.dirty.contains(&(data_ix, self.data_column(col_ix - 1)))
+        self.dirty
+            .contains(&(data_ix, self.data_column(col_ix - 1)))
     }
 
     /// 这一格是不是冲突的（提交没写进去；与脏格分开标色）
@@ -99,7 +102,10 @@ impl ResultGridDelegate {
     /// 返回是否真的进入了（不可编辑 / 点行号槽 / 行越界 / 被标记删除 = `false`）。
     pub fn begin_edit(&mut self, view_row: usize, col_ix: usize) -> bool {
         // 【P2-4】转置是只读视图，双击不进入编辑
-        if self.transposed || !self.editable || self.editing.is_some() || Self::is_row_number(col_ix)
+        if self.transposed
+            || !self.editable
+            || self.editing.is_some()
+            || Self::is_row_number(col_ix)
         {
             return false;
         }
@@ -352,9 +358,11 @@ pub(crate) fn looks_like_date(value: &str) -> bool {
     if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
         return false;
     }
-    if !bytes.iter().enumerate().all(|(i, b)| {
-        i == 4 || i == 7 || b.is_ascii_digit()
-    }) {
+    if !bytes
+        .iter()
+        .enumerate()
+        .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit())
+    {
         return false;
     }
     let month = (bytes[5] - b'0') * 10 + (bytes[6] - b'0');

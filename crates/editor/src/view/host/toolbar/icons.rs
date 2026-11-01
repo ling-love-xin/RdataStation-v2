@@ -54,5 +54,4 @@ impl EditorHostPanel {
                 .with_document(|doc| !doc.read_only().can_edit())
                 .unwrap_or(true)
     }
-
 }

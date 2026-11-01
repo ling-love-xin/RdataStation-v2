@@ -4,8 +4,8 @@
 //! 跨域互调经 `pub(crate)` 方法；字段在 mod.rs 统一 `pub(crate)`。
 
 use super::super::*;
-use gpui_kit::base::input::{Diagnostic, DiagnosticSeverity, Position};
 use crate::diagnostics;
+use gpui_kit::base::input::{Diagnostic, DiagnosticSeverity, Position};
 
 impl EditorHostPanel {
     /// 诊断。三源必须走同一条重建流程：内核的诊断集合只有 `clear` + `push`，分开各写一份
@@ -120,5 +120,4 @@ impl EditorHostPanel {
             state.focus(window, cx);
         });
     }
-
 }

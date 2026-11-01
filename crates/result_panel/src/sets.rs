@@ -11,7 +11,7 @@ use std::rc::Rc;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Size, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, Size};
 use gpui_kit::*;
 
 use crate::store::ResultEntry;
@@ -131,13 +131,15 @@ pub fn render(
             if let Some(on_rename) = actions.on_rename.clone() {
                 let idx = index;
                 suffix = suffix.child(
-                    Button::new(SharedString::from(format!("editor-result-tab-rename-{index}")))
-                        .ghost()
-                        .small()
-                        .icon(IconName::Ellipsis)
-                        .debug_selector(|| format!("editor-result-tab-rename-{index}"))
-                        .tooltip("重命名结果集".to_string())
-                        .on_click(move |_e, w, cx| on_rename(idx, w, cx)),
+                    Button::new(SharedString::from(format!(
+                        "editor-result-tab-rename-{index}"
+                    )))
+                    .ghost()
+                    .small()
+                    .icon(IconName::Ellipsis)
+                    .debug_selector(|| format!("editor-result-tab-rename-{index}"))
+                    .tooltip("重命名结果集".to_string())
+                    .on_click(move |_e, w, cx| on_rename(idx, w, cx)),
                 );
             }
             // 【C1】prefix：钉住时画小图钉（点击取消钉住；未钉住时不占位，避免每个 tab 都挤）
@@ -146,10 +148,12 @@ pub fn render(
                 .suffix(suffix);
             if entry_tab.pinned {
                 let pin_click = actions.on_toggle_pin.clone();
-                let pin_button = Button::new(SharedString::from(format!("editor-result-tab-unpin-{index}")))
-                    .ghost()
-                    .small()
-                    .icon(Icon::default().data(PIN_ICON_SVG));
+                let pin_button = Button::new(SharedString::from(format!(
+                    "editor-result-tab-unpin-{index}"
+                )))
+                .ghost()
+                .small()
+                .icon(Icon::default().data(PIN_ICON_SVG));
                 let pin_button = match pin_click {
                     Some(on_toggle_pin) => {
                         let idx = index;
@@ -262,7 +266,11 @@ mod tests {
         assert_eq!(second[1].badge(), "加速");
 
         // 联邦徽标短码也是两字（与 `label` 不同：标签里挤不下“本地加速”）
-        let federated = tabs(&[ok_on("select 3", ExecChannel::Federated)], ExecChannel::Source, &[]);
+        let federated = tabs(
+            &[ok_on("select 3", ExecChannel::Federated)],
+            ExecChannel::Source,
+            &[],
+        );
         assert_eq!(federated[0].badge(), "联邦·旧");
     }
 

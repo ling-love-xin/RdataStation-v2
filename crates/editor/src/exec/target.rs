@@ -103,16 +103,40 @@ impl PartialEq for ExecTarget {
             (Self::All(a), Self::All(b)) => a == b,
             (Self::Batch(a), Self::Batch(b)) => a == b,
             (
-                Self::Segment { sql: a, offset: oa, limit: la },
-                Self::Segment { sql: b, offset: ob, limit: lb },
+                Self::Segment {
+                    sql: a,
+                    offset: oa,
+                    limit: la,
+                },
+                Self::Segment {
+                    sql: b,
+                    offset: ob,
+                    limit: lb,
+                },
             ) => a == b && oa == ob && la == lb,
             (
-                Self::Filtered { sql: a, filter: fa, columns: ca },
-                Self::Filtered { sql: b, filter: fb, columns: cb },
+                Self::Filtered {
+                    sql: a,
+                    filter: fa,
+                    columns: ca,
+                },
+                Self::Filtered {
+                    sql: b,
+                    filter: fb,
+                    columns: cb,
+                },
             ) => a == b && fa == fb && ca == cb,
             (
-                Self::SortedDown { sql: a, column: ca, descending: da },
-                Self::SortedDown { sql: b, column: cb, descending: db },
+                Self::SortedDown {
+                    sql: a,
+                    column: ca,
+                    descending: da,
+                },
+                Self::SortedDown {
+                    sql: b,
+                    column: cb,
+                    descending: db,
+                },
             ) => a == b && ca == cb && da == db,
             // 事实档快照（`fact`）是引用、不参与语义比较；其余字段逐一对上即相等
             (Self::Analysis(a), Self::Analysis(b)) => {
@@ -125,8 +149,18 @@ impl PartialEq for ExecTarget {
             (Self::Script(a), Self::Script(b)) => a == b,
             (Self::Cell(a), Self::Cell(b)) => a == b,
             (
-                Self::Commit { sql: a, table: ta, key: ka, updates: ua },
-                Self::Commit { sql: b, table: tb, key: kb, updates: ub },
+                Self::Commit {
+                    sql: a,
+                    table: ta,
+                    key: ka,
+                    updates: ua,
+                },
+                Self::Commit {
+                    sql: b,
+                    table: tb,
+                    key: kb,
+                    updates: ub,
+                },
             ) => a == b && ta == tb && ka == kb && ua == ub,
             _ => false,
         }
@@ -487,4 +521,3 @@ fn trimmed(text: &str) -> Option<&str> {
     let trimmed = text.trim();
     (!trimmed.is_empty()).then_some(trimmed)
 }
-

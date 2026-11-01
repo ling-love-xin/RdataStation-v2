@@ -3,14 +3,12 @@
 //! 自 view/host/exec.rs 拆分（2026-10-29 Step 10）：按能力域切分 `impl EditorHostPanel`。
 //! 跨域互调经 `pub(crate)` 方法；本文件不得出现新的逻辑。
 
-
 use crate::store::ResultPlacement;
 use crate::view::fold;
 
 use super::*;
 
 impl EditorHostPanel {
-
     pub(crate) fn ensure_exec_pump(&self, cx: &mut Context<Self>) {
         if let Some(task) = self.exec_pump.borrow().as_ref()
             && !task.is_ready()
@@ -311,9 +309,10 @@ impl EditorHostPanel {
             // 【B4】物化回执信号先取出（`entry_from` 会消费 `outcome`，之后不能再读）；
             // 失败回执不带表名信号 = `None`，回填段整体跳过。
             let fact_receipt = match &outcome.result {
-                Ok(data) => data.source_fact_table.clone().map(|table| {
-                    (data.source_fact_set, data.source_fact_release, table)
-                }),
+                Ok(data) => data
+                    .source_fact_table
+                    .clone()
+                    .map(|table| (data.source_fact_set, data.source_fact_release, table)),
                 Err(_) => None,
             };
             let (mut entry, fact) = entry_from(outcome);

@@ -4,13 +4,13 @@
 //! 跨域互调经 `pub(crate)` 方法；字段在 mod.rs 统一 `pub(crate)`。
 
 use super::super::*;
+use crate::translate;
+use crate::ui;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::switch::Switch;
-use crate::translate;
-use crate::ui;
 
 impl EditorHostPanel {
     pub(crate) fn render_format_button(&self, cx: &mut Context<Self>) -> Button {
@@ -223,17 +223,19 @@ impl EditorHostPanel {
                                     .text_color(muted)
                                     .child(head.label()),
                             )
-                            .child(Switch::new(format!("toolbar-fold-{:?}", head))
-                                .checked(collapsed)
-                                .label("折叠")
-                                .on_click({
-                                    let entity = entity.clone();
-                                    move |_, _window, app| {
-                                        entity.update(app, |panel, cx| {
-                                            panel.toggle_toolbar_collapsed(head, cx);
-                                        });
-                                    }
-                                }))
+                            .child(
+                                Switch::new(format!("toolbar-fold-{:?}", head))
+                                    .checked(collapsed)
+                                    .label("折叠")
+                                    .on_click({
+                                        let entity = entity.clone();
+                                        move |_, _window, app| {
+                                            entity.update(app, |panel, cx| {
+                                                panel.toggle_toolbar_collapsed(head, cx);
+                                            });
+                                        }
+                                    }),
+                            )
                             .child(panel.small_icon_button(
                                 &entity,
                                 format!("toolbar-group-up-{:?}", head),
@@ -310,7 +312,13 @@ impl EditorHostPanel {
                             .pl_3()
                             .debug_selector(move || key.clone())
                             .child(Separator::vertical().h(rems(0.75)))
-                            .child(div().flex_1().text_xs().text_color(muted).child("竖线分隔符"))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child("竖线分隔符"),
+                            )
                             .child(panel.small_icon_button(
                                 &entity,
                                 format!("toolbar-sep-up-{index}"),
@@ -378,5 +386,4 @@ impl EditorHostPanel {
                 body
             })
     }
-
 }

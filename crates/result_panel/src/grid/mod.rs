@@ -69,29 +69,30 @@ pub(crate) mod menu;
 pub(crate) mod stats;
 pub(crate) mod status;
 pub(crate) mod table_impl;
-pub(crate) mod text;
-pub(crate) mod view_rows;
 #[cfg(test)]
 mod tests;
+pub(crate) mod text;
+pub(crate) mod view_rows;
 
+pub use cell::format_cell_text;
 pub use delegate::{
-    CELL_DISPLAY_LIMIT, COLUMN_FILTER_VALUE_LIMIT, RESULT_GRID_CONTEXT, CellEdit,
-    ColumnFilterHook, ColumnStatsHook, CommitEditHook, CommitLocalEditHook, FilterValueHook,
-    InsightColumnHook, LoadMoreHook, PreviewValueHook, ResultGridDelegate, RowActionHook,
-    SortDownHook,
+    CELL_DISPLAY_LIMIT, COLUMN_FILTER_VALUE_LIMIT, CellEdit, ColumnFilterHook, ColumnStatsHook,
+    CommitEditHook, CommitLocalEditHook, FilterValueHook, InsightColumnHook, LoadMoreHook,
+    PreviewValueHook, RESULT_GRID_CONTEXT, ResultGridDelegate, RowActionHook, SortDownHook,
 };
+pub use edit::validate_edit_value;
 pub use menu::{
     ContextAction, ContextMenuItem, ContextTarget, column_browser_menu_items,
     column_distinct_values, column_menu_items, context_menu_items,
 };
-pub use text::{GridSelection, ResultMatch};
-pub use cell::format_cell_text;
-pub use stats::{ColumnStats, column_stats, column_stats_from_values, group_by_values, stats_from_fact, stats_lines};
-pub use edit::validate_edit_value;
-pub use status::{
-    MAX_SINGLE_SEGMENT_ROWS, WINDOW_FETCH_NOTICE,
-    ResultControls, ResultPane, ResultStatus, ResultToolbar, bytes_text, duration_text,
-    fetch_more_hint, new_table_state, render, render_status_row,
-    render_toolbar, status_action_placeholders, status_segments, thousands, truncated_hint,
-    truncation_notice, window_fetch_active,
+pub use stats::{
+    ColumnStats, column_stats, column_stats_from_values, group_by_values, stats_from_fact,
+    stats_lines,
 };
+pub use status::{
+    MAX_SINGLE_SEGMENT_ROWS, ResultControls, ResultPane, ResultStatus, ResultToolbar,
+    WINDOW_FETCH_NOTICE, bytes_text, duration_text, fetch_more_hint, new_table_state, render,
+    render_status_row, render_toolbar, status_action_placeholders, status_segments, thousands,
+    truncated_hint, truncation_notice, window_fetch_active,
+};
+pub use text::{GridSelection, ResultMatch};

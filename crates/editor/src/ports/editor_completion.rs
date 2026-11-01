@@ -46,8 +46,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::channel::ExecChannel;
 use crate::completion::{
-    filter_catalog_by_schema, Candidate, CandidateKind, Catalog, ColumnAnnotation, CompletionPort,
-    TemplateSnippet,
+    Candidate, CandidateKind, Catalog, ColumnAnnotation, CompletionPort, TemplateSnippet,
+    filter_catalog_by_schema,
 };
 
 use database::cache::NavCache;
@@ -221,7 +221,11 @@ impl WorkbenchCompletion {
             .unwrap_or(0);
         self.cache_meta
             .lock()
-            .map(|meta| meta.get(conn_id).map(|entry| entry.fresh(now)).unwrap_or(false))
+            .map(|meta| {
+                meta.get(conn_id)
+                    .map(|entry| entry.fresh(now))
+                    .unwrap_or(false)
+            })
             .unwrap_or(false)
     }
 
@@ -257,7 +261,9 @@ impl WorkbenchCompletion {
                 // 【§710】NavCache 没有对象（导航从未展开过 / 预热只暖了 schema）→
                 // 提交一次整条连接的实时内省（cache-aside 写回 L2，复用导航队列的
                 // 信号量 / 让位），本次如实给空；填好后下一次按键就有候选。
-                let mut submitted = warm_submitted.lock().unwrap_or_else(|poison| poison.into_inner());
+                let mut submitted = warm_submitted
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
                 if submitted.insert(conn_id.clone()) {
                     database::nav_jobs::enqueue_warm_completion(&conn_id, project_root.as_deref());
                 }
@@ -314,7 +320,12 @@ impl WorkbenchCompletion {
 }
 
 impl CompletionPort for WorkbenchCompletion {
-    fn catalog(&self, conn_id: Option<&str>, channel: ExecChannel, schema: Option<&str>) -> Catalog {
+    fn catalog(
+        &self,
+        conn_id: Option<&str>,
+        channel: ExecChannel,
+        schema: Option<&str>,
+    ) -> Catalog {
         let Some(conn_id) = conn_id else {
             // 未绑定连接：执行时跟随“当前连接”，但补全不该猜是哪条（那正是最容易给错的地方）
             return Catalog::default();
@@ -350,7 +361,12 @@ impl CompletionPort for WorkbenchCompletion {
     ///
     /// 联邦通道不探测：联邦是只读副本（写回先被编辑判据的 `ChannelReadOnly` 拦下），
     /// 探测了也用不上。`table` 是 `default_table_name` 猜出来的裸表名。
-    fn primary_key(&self, conn_id: Option<&str>, channel: ExecChannel, table: &str) -> Option<Vec<String>> {
+    fn primary_key(
+        &self,
+        conn_id: Option<&str>,
+        channel: ExecChannel,
+        table: &str,
+    ) -> Option<Vec<String>> {
         if channel == ExecChannel::Federated {
             return None;
         }
@@ -404,8 +420,9 @@ impl CompletionPort for WorkbenchCompletion {
                 ProjectionSource::Star { table } => match table.as_deref() {
                     // `SELECT *`：按表列集展开（实体表；子查询 / 派生表没有 schema 对应列）
                     Some(table) => match find_table(&meta_map, table) {
-                        Some((key, columns)) => out
-                            .extend(columns.iter().map(|meta| Some(meta.to_annotation(&key)))),
+                        Some((key, columns)) => {
+                            out.extend(columns.iter().map(|meta| Some(meta.to_annotation(&key))))
+                        }
                         None => out.push(None),
                     },
                     None => out.push(None),
@@ -418,7 +435,10 @@ impl CompletionPort for WorkbenchCompletion {
             }
         }
         // 展开不够（表达式列 / 缓存列集比真实结果少）补足 None
-        out.extend(std::iter::repeat_n(None, column_count.saturating_sub(out.len())));
+        out.extend(std::iter::repeat_n(
+            None,
+            column_count.saturating_sub(out.len()),
+        ));
         out
     }
 }
@@ -494,7 +514,12 @@ fn add_federated_source(port: &WorkbenchCompletion, entry: &MountedSource, into:
     let two_part = entry.source.kind.needs_secret();
     for object in raw.objects {
         let tail = if two_part {
-            object.label.rsplit('.').next().unwrap_or(&object.label).to_string()
+            object
+                .label
+                .rsplit('.')
+                .next()
+                .unwrap_or(&object.label)
+                .to_string()
         } else {
             object.label.clone()
         };
@@ -505,7 +530,8 @@ fn add_federated_source(port: &WorkbenchCompletion, entry: &MountedSource, into:
         });
     }
     for (table, column, detail) in raw.columns {
-        into.columns.push((format!("{alias}.{table}"), column, detail));
+        into.columns
+            .push((format!("{alias}.{table}"), column, detail));
     }
     into.truncated |= raw.truncated;
 }
@@ -542,7 +568,11 @@ impl ColumnMeta {
 fn load_raw_catalog(
     conn_id: &str,
     project_root: Option<&str>,
-) -> (Catalog, HashMap<String, Vec<String>>, HashMap<String, Vec<ColumnMeta>>) {
+) -> (
+    Catalog,
+    HashMap<String, Vec<String>>,
+    HashMap<String, Vec<ColumnMeta>>,
+) {
     let Some(cache) = NavCache::open(conn_id, project_root) else {
         // 缓存不可用（项目连接缺项目根 / 打开失败）→ 没有候选，如实空着
         return (Catalog::default(), HashMap::new(), HashMap::new());
@@ -571,12 +601,16 @@ fn load_raw_catalog(
                     let qualified = format!("{schema}.{name}");
                     let mut column_meta = Vec::with_capacity(columns.len());
                     for column in columns {
-                        catalog
-                            .columns
-                            .push((qualified.clone(), column.name.clone(), Some(column.data_type.clone())));
+                        catalog.columns.push((
+                            qualified.clone(),
+                            column.name.clone(),
+                            Some(column.data_type.clone()),
+                        ));
                         // 【T2a-2】主键列按表结构顺序收集（NavCache 的列序即 ordinal）
                         if column.is_primary_key {
-                            keys.entry(qualified.clone()).or_default().push(column.name.clone());
+                            keys.entry(qualified.clone())
+                                .or_default()
+                                .push(column.name.clone());
                         }
                         // 【P1】列元数据（字段注释原料：注释 / 类型 / 可空 / 默认）
                         column_meta.push(ColumnMeta {
@@ -629,7 +663,10 @@ fn to_snippet(template: engine::persistence::sql_template_store::SqlTemplate) ->
 ///
 /// 返回 `Rc<WorkbenchCompletion>`：语义诊断目录快照注入（`editor_catalog`）复用
 /// 同一份 L1 目录（同一预载 / 同一条 TTL 防线），不另起一套读取。
-pub fn attach(shared: &crate::shared::EditorShared, host: Rc<dyn EditorHost>) -> Rc<WorkbenchCompletion> {
+pub fn attach(
+    shared: &crate::shared::EditorShared,
+    host: Rc<dyn EditorHost>,
+) -> Rc<WorkbenchCompletion> {
     let port = Rc::new(WorkbenchCompletion::new(host));
     // 模板预载一次（内存读给菜单用；读不到就空着）
     port.schedule_template_load();
@@ -641,16 +678,16 @@ pub fn attach(shared: &crate::shared::EditorShared, host: Rc<dyn EditorHost>) ->
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        driver_to_dialect, find_table, load_raw_catalog, lookup_column, lookup_primary_key,
-        CacheEntryMeta, WorkbenchCompletion, COMPLETION_CACHE_TTL_SECS,
+        COMPLETION_CACHE_TTL_SECS, CacheEntryMeta, WorkbenchCompletion, driver_to_dialect,
+        find_table, load_raw_catalog, lookup_column, lookup_primary_key,
     };
-    use std::collections::HashMap;
-    use std::rc::Rc;
-    use database::cache::NavCache;
     use crate::channel::ExecChannel;
     use crate::completion::{CandidateKind, CompletionPort};
+    use database::cache::NavCache;
     use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind};
     use gpui_kit::App;
+    use std::collections::HashMap;
+    use std::rc::Rc;
     use workbench_shell::model::ConnectionItem;
 
     use crate::host::EditorHost;
@@ -700,7 +737,10 @@ mod tests {
     fn wait_until(cond: impl Fn() -> bool, what: &str) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         while !cond() {
-            assert!(std::time::Instant::now() < deadline, "后台线程未在 3s 内{what}");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "后台线程未在 3s 内{what}"
+            );
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
@@ -773,14 +813,26 @@ mod tests {
         assert_eq!(
             catalog.columns,
             vec![
-                ("public.orders".to_string(), "id".to_string(), Some("integer".to_string())),
-                ("public.orders".to_string(), "total".to_string(), Some("numeric".to_string()))
+                (
+                    "public.orders".to_string(),
+                    "id".to_string(),
+                    Some("integer".to_string())
+                ),
+                (
+                    "public.orders".to_string(),
+                    "total".to_string(),
+                    Some("numeric".to_string())
+                )
             ]
         );
         assert!(!catalog.truncated);
 
         // 【T2a-2】主键映射：主键列按表结构顺序收；非主键列不收；视图没列 → 无映射
-        assert_eq!(keys.get("public.orders"), Some(&vec!["id".to_string()]), "{keys:?}");
+        assert_eq!(
+            keys.get("public.orders"),
+            Some(&vec!["id".to_string()]),
+            "{keys:?}"
+        );
         assert_eq!(keys.get("public.order_stats"), None, "视图没有主键列");
 
         // 【P1】列元数据：注释 / 类型 / 可空 / 默认与 NavCache 列一致（视图没列 → 无映射）
@@ -853,7 +905,10 @@ mod tests {
         assert_eq!(driver_to_dialect("mysql"), Some(SqlDialect::Mysql));
         assert_eq!(driver_to_dialect("mysql_native"), Some(SqlDialect::Mysql));
         assert_eq!(driver_to_dialect("postgres"), Some(SqlDialect::Postgres));
-        assert_eq!(driver_to_dialect("postgres_native"), Some(SqlDialect::Postgres));
+        assert_eq!(
+            driver_to_dialect("postgres_native"),
+            Some(SqlDialect::Postgres)
+        );
         assert_eq!(driver_to_dialect("duckdb"), Some(SqlDialect::Duckdb));
         // 未实证的驱动：如实 None
         assert_eq!(driver_to_dialect("oracle"), None);
@@ -893,7 +948,11 @@ mod tests {
         assert_eq!(ann.source_table.as_deref(), Some("public.orders"));
         assert_eq!(ann.comment.as_deref(), Some("订单号"));
         let ann = lookup_column(&meta, Some("orders"), "id").expect("裸名兜底");
-        assert_eq!(ann.source_table.as_deref(), Some("public.orders"), "来源显示真实限定名");
+        assert_eq!(
+            ann.source_table.as_deref(),
+            Some("public.orders"),
+            "来源显示真实限定名"
+        );
         assert_eq!(lookup_column(&meta, Some("orders"), "nope"), None);
         assert_eq!(lookup_column(&meta, None, "id"), None);
         assert_eq!(lookup_column(&HashMap::new(), Some("orders"), "id"), None);
@@ -942,7 +1001,11 @@ mod tests {
         assert_eq!(first.data_type.as_deref(), Some("integer"));
         assert_eq!(first.nullable, Some(false));
         let second = anns[1].clone().expect("total 有注释");
-        assert_eq!(second.comment.as_deref(), Some("总额"), "列注释来自 NavCache");
+        assert_eq!(
+            second.comment.as_deref(),
+            Some("总额"),
+            "列注释来自 NavCache"
+        );
         assert_eq!(second.nullable, Some(true));
 
         // `SELECT *`：按表列集展开（2 列）
@@ -1006,13 +1069,15 @@ mod tests {
             "未绑定连接不给候选（不猜是哪条）"
         );
         // 第一次问：内存里没有 → 空目录（后台开始载；这里只断言不阻塞、不 panic）
-        assert!(port
-            .catalog(Some("P_nope"), ExecChannel::Source, None)
-            .is_empty());
+        assert!(
+            port.catalog(Some("P_nope"), ExecChannel::Source, None)
+                .is_empty()
+        );
         // 再问一次仍给空（预载还在跑或已失败），但不该 panic
-        assert!(port
-            .catalog(Some("P_nope"), ExecChannel::Source, None)
-            .is_empty());
+        assert!(
+            port.catalog(Some("P_nope"), ExecChannel::Source, None)
+                .is_empty()
+        );
     }
 
     /// 【§710】空 NavCache（导航从未展开过 / 预热只暖 schema）→ 补全未命中时提交
@@ -1132,13 +1197,12 @@ mod tests {
         {
             let mut meta = port.cache_meta.lock().unwrap_or_else(|p| p.into_inner());
             let entry = meta.get_mut("P_ttl_53").expect("条目存在");
-            entry.loaded_at_secs =
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0)
-                    - COMPLETION_CACHE_TTL_SECS
-                    - 60;
+            entry.loaded_at_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0)
+                - COMPLETION_CACHE_TTL_SECS
+                - 60;
         }
 
         // 过期 → 视为未命中（本次给空）并触发重载；等重载落笔

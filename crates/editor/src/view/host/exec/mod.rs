@@ -5,19 +5,16 @@
 //!
 //! 拆分纪律：只移动方法体与注释，不改动任何行为；本文件不得出现新的逻辑。
 
-
 // #48 编辑器常规设置（行号开关即时 / 新文档默认缩进·换行·编码）：settings 不依赖 editor，方向合法
 
-
 // 【下移】结果放置 / 下发原料定义已随结果存储搬到 rds-result-panel（经 crate::store 重导出）
-
 
 use super::*;
 // ==== Step 10 拆分（2026-10-29）：执行域按能力域迁入子模块 ====
 mod connection;
 mod edit_cmds;
-mod row_ops;
 mod execute;
-mod tx;
-mod scan;
 mod pump;
+mod row_ops;
+mod scan;
+mod tx;

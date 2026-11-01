@@ -7,14 +7,14 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui_kit::*;
 use gpui_kit::component::input::InputState;
+use gpui_kit::*;
 
-use ::shared::FactFrame;
-use crate::rowset::{LocalRowSet, RowRef};
-use crate::store::ColumnType;
 use super::menu::column_distinct_values;
 use super::view_rows::TextFingerprint;
+use crate::rowset::{LocalRowSet, RowRef};
+use crate::store::ColumnType;
+use ::shared::FactFrame;
 use workbench_shell::model::ColumnAnnotation;
 use workbench_shell::result_style::TypeStylePrefs;
 /// 结果网格的 key context（`crates/app` 把 `Ctrl+C` 绑在它上面，两边成对）
@@ -152,7 +152,8 @@ pub struct ResultGridDelegate {
     /// 半天才出来"的根因）。指纹覆盖影响文本的所有输入（视图行数 / 列数 /
     /// 隐藏列 / 全局筛选 / 列筛选 / 排序），内容型变更（set_data、本地快照
     /// 替换）在入口显式失效，双保险不依赖逐个方法标脏。
-    pub(crate) text_cache: std::cell::RefCell<Option<(TextFingerprint, String)>>,    /// 【B14】最近右键的单元格（视图行号，列下标含行号槽）——组件库没给访问器，
+    pub(crate) text_cache: std::cell::RefCell<Option<(TextFingerprint, String)>>,
+    /// 【B14】最近右键的单元格（视图行号，列下标含行号槽）——组件库没给访问器，
     /// 所以在 `render_td` 上自己记（事件从最内层开始派发，不会丢）
     pub(crate) context_cell: Option<(usize, usize)>,
     /// 【B15】冻结的数据列（原生 `Column.fixed`：横向滚动时钉在左侧）

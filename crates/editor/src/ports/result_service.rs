@@ -90,8 +90,8 @@ impl ResultService {
         )
     }
 
-    pub fn get_or_create_duckdb(
-    ) -> Result<std::sync::Arc<std::sync::Mutex<duckdb::Connection>>, CoreError> {
+    pub fn get_or_create_duckdb()
+    -> Result<std::sync::Arc<std::sync::Mutex<duckdb::Connection>>, CoreError> {
         engine::services::duckdb_service::DuckDbService::get_or_create_duckdb()
     }
 
@@ -110,7 +110,7 @@ impl ResultService {
         row_identity: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<(usize, String), CoreError> {
         use engine::connection_manager;
-        use engine::services::sql_service::{value_to_sql, SqlExecuteOptions, SqlService};
+        use engine::services::sql_service::{SqlExecuteOptions, SqlService, value_to_sql};
 
         let set_clause = format!("`{}` = {}", column_name, value_to_sql(new_value));
 
@@ -170,7 +170,7 @@ impl ResultService {
             other => {
                 return Err(CoreError::common(shared::error::CommonError::General(
                     format!("不支持的导出格式: {}", other),
-                )))
+                )));
             }
         };
         DuckDbService::export_temp_table(temp_table, file_path, fmt)

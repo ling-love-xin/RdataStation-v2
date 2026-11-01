@@ -1,4 +1,4 @@
-﻿//! 执行（A14）：**执行什么 / 谁来跑 / 跑完放哪**
+//! 执行（A14）：**执行什么 / 谁来跑 / 跑完放哪**
 //!
 //! 三件事各自独立，好让其中最易错的那件可以直接断言：
 //!
@@ -25,8 +25,6 @@
 //! 忙态按连接计数（[`ExecQueue::is_busy_for`]），取消按连接（[`ExecQueue::cancel`]）。
 //! 事务 / 会话亲和（架构 §12 #2）属 1b：那需要 per-session 独占连接，不是这里加锁能解决的。
 
-
-
 // 【下移】ResultPlacement / Pushdown 已随结果存储搬到 rds-result-panel（editor 经
 // `crate::store` 重导出）：执行层与结果存储共用同一份定义，不再各写一份。
 // `pub use` 保持 `crate::execution::ResultPlacement` 旧路径对调用方仍公开。
@@ -35,8 +33,8 @@ pub use crate::store::{Pushdown, ResultPlacement};
 // ==== 拆分兼容层（2026-10-29）：execution.rs 已拆为 exec/{target,runner,notes,queue}.rs ====
 // `crate::exec::execution::*`（即 `crate::execution::*` 旧路径）经以下 re-export 保持不变。
 pub use super::notes::{
-    CommitNote, CommitReport, DuckDbExportRequest, ExecOutcome, ExportNote, SourceAction, SourceNote,
-    SubmitError, TxNote,
+    CommitNote, CommitReport, DuckDbExportRequest, ExecOutcome, ExportNote, SourceAction,
+    SourceNote, SubmitError, TxNote,
 };
 pub use super::queue::ExecQueue;
 pub use super::runner::{QueryData, QueryRunner};

@@ -153,17 +153,17 @@ const ADD_LIMIT: &str = "add-limit-100";
 // 面一：补全
 // ---------------------------------------------------------------------------
 
+mod face_actions;
 /// 光标处要补什么
 ///
 /// **上下文判定与挑排全部转发给 [`crate::completion`]**，这里只做两件事：钳坐标、把
 // ==== Step 9 拆分（2026-10-29）：三面按能力域迁入子模块 ====
 mod face_complete;
 mod face_diag;
-mod face_actions;
 
+pub use face_actions::*;
 pub use face_complete::*;
 pub use face_diag::*;
-pub use face_actions::*;
 
 #[cfg(test)]
 mod tests;

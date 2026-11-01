@@ -5,11 +5,9 @@
 //!
 //! 拆分纪律：只移动方法体与注释，不改动任何行为；本文件不得出现新的逻辑。
 
-
 use gpui_kit::base::text::TextView;
 use gpui_kit::component::input::Editor;
 // #48 编辑器常规设置（行号开关即时 / 新文档默认缩进·换行·编码）：settings 不依赖 editor，方向合法
-
 
 use crate::channel::{self, ExecChannel};
 use crate::execution::ExecTarget;
@@ -17,10 +15,8 @@ use crate::model::{EditorMode, ReadOnly};
 // 【下移】结果放置 / 下发原料定义已随结果存储搬到 rds-result-panel（经 crate::store 重导出）
 use crate::view::editor_menu::{editor_context_menu_entries, menu_from_entries};
 
-
 use super::*;
 impl EditorHostPanel {
-
     /// 编辑区正文：分析模式 = 笔记本（单元卡片）；其它模式 = 内核编辑器
     pub(crate) fn render_editor_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let mode = self
@@ -38,7 +34,11 @@ impl EditorHostPanel {
                     .id("markdown-preview-root")
                     .test_support()
                     .size_full()
-                    .child(TextView::markdown("md-preview", source).scrollable(true).size_full())
+                    .child(
+                        TextView::markdown("md-preview", source)
+                            .scrollable(true)
+                            .size_full(),
+                    )
                     .into_any_element();
             }
             // 需求② 打开即编辑态：不再用欢迎页挡路（点「开始编写」才进编辑），空白文档
@@ -52,8 +52,8 @@ impl EditorHostPanel {
             // 菜单项纯函数化（`editor_context_menu_entries`）便于 headless 断言顺序与禁用态。
             let editor_entity = self.editor.clone();
             let context_menu = move |_menu: gpui_kit::component::native_menu::NativeMenu,
-                                      _window: &mut Window,
-                                      cx: &mut App| {
+                                     _window: &mut Window,
+                                     cx: &mut App| {
                 // 先在小作用域里读状态构造条目（`entries` 是拥有型 Vec，
                 // 块结束即释放 `cx` 上的不可变借用），再翻译成菜单
                 let entries = {
@@ -322,9 +322,7 @@ impl EditorHostPanel {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn commit_in_flight_for_test(
-        &self,
-    ) -> Option<(usize, Vec<(usize, Vec<usize>)>, usize)> {
+    pub fn commit_in_flight_for_test(&self) -> Option<(usize, Vec<(usize, Vec<usize>)>, usize)> {
         self.commit_in_flight.as_ref().map(|inflight| {
             (
                 inflight.set_index,

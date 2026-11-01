@@ -28,14 +28,10 @@ pub fn media_to_outputs(media: &Media) -> Vec<Output> {
         return vec![image];
     }
     // 2. HTML：能解析成表格就用表格；否则回退同一 bundle 的 text/plain
-    if let Some(html) = media
-        .content
-        .iter()
-        .find_map(|m| match m {
-            MediaType::Html(h) => Some(h.clone()),
-            _ => None,
-        })
-    {
+    if let Some(html) = media.content.iter().find_map(|m| match m {
+        MediaType::Html(h) => Some(h.clone()),
+        _ => None,
+    }) {
         if let Some((columns, rows)) = html_table_to_table_data(&html) {
             return vec![Output::TableData { columns, rows }];
         }
@@ -50,14 +46,10 @@ pub fn media_to_outputs(media: &Media) -> Vec<Output> {
             .collect();
     }
     // 3. Markdown（GitHub 风格源码，TextView::markdown 渲染）
-    if let Some(md) = media
-        .content
-        .iter()
-        .find_map(|m| match m {
-            MediaType::Markdown(s) => Some(s.clone()),
-            _ => None,
-        })
-    {
+    if let Some(md) = media.content.iter().find_map(|m| match m {
+        MediaType::Markdown(s) => Some(s.clone()),
+        _ => None,
+    }) {
         return vec![Output::Markdown(md)];
     }
     // 4. 纯文本兜底
@@ -86,7 +78,10 @@ fn first_image(media: &Media) -> Option<Output> {
             _ => continue,
         };
         if let Ok(bytes) = BASE64.decode(encoded) {
-            return Some(Output::Image { bytes, mime: mime.to_string() });
+            return Some(Output::Image {
+                bytes,
+                mime: mime.to_string(),
+            });
         }
     }
     None
@@ -183,7 +178,11 @@ mod tests {
         match &out[0] {
             Output::Image { bytes, mime } => {
                 assert_eq!(mime, "image/png");
-                assert_eq!(bytes.as_slice(), b"\x89PNG\r\n\x1a\n", "base64 解码成原始字节");
+                assert_eq!(
+                    bytes.as_slice(),
+                    b"\x89PNG\r\n\x1a\n",
+                    "base64 解码成原始字节"
+                );
             }
             other => panic!("应出 Image，实际 {other:?}"),
         }

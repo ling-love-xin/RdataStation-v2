@@ -57,7 +57,11 @@ impl Session {
     }
 
     /// 新建一个带绑定的会话
-    pub fn new(id: impl Into<String>, default_connection: Option<String>, env: Option<String>) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        default_connection: Option<String>,
+        env: Option<String>,
+    ) -> Self {
         Self {
             id: id.into(),
             default_connection,
@@ -220,7 +224,9 @@ pub fn worth_saving(session: &SavedSession) -> bool {
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{MemorySessionStore, SavedSession, SessionStore, session_id_for_path, worth_saving};
+    use super::{
+        MemorySessionStore, SavedSession, SessionStore, session_id_for_path, worth_saving,
+    };
     use crate::channel::ExecChannel;
     use crate::model::EditorMode;
 
@@ -343,8 +349,12 @@ mod tests {
     #[test]
     fn latest_follows_the_last_save() {
         let store = MemorySessionStore::new();
-        store.save(&session("a.sql", "select 1;", EditorMode::Sql)).expect("save");
-        store.save(&session("b.txt", "hello", EditorMode::General)).expect("save");
+        store
+            .save(&session("a.sql", "select 1;", EditorMode::Sql))
+            .expect("save");
+        store
+            .save(&session("b.txt", "hello", EditorMode::General))
+            .expect("save");
 
         let latest = store.load_latest().expect("load").expect("有");
         assert_eq!(latest.id, "b.txt");
@@ -416,9 +426,10 @@ mod tests {
 
         // 布局被改过 → 值得存
         let mut customized = blank.clone();
-        customized.toolbar =
-            Some("ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,|,More;ExecRun"
-                .to_string());
+        customized.toolbar = Some(
+            "ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,|,More;ExecRun"
+                .to_string(),
+        );
         assert!(worth_saving(&customized), "排过的工具栏重启不该丢");
 
         // schema 绑了 / 缩进改了 → 值得存

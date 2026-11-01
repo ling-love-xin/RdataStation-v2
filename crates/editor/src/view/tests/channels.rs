@@ -3,9 +3,7 @@
 
 use std::rc::Rc;
 
-use gpui_kit::{
-    Entity, Focusable as _, TestAppContext, VisualTestContext,
-};
+use gpui_kit::{Entity, Focusable as _, TestAppContext, VisualTestContext};
 
 use crate::channel::{ChannelAvailability, ChannelAvailabilitySet, ChannelsPort, ExecChannel};
 use crate::completion::{Candidate, CandidateKind, Catalog};
@@ -19,12 +17,12 @@ use crate::shared::EditorShared;
 use crate::sources::{SourceRow, SourceState, SourcesPort, SourcesSnapshot};
 use crate::view::host::EditorHostPanel;
 
+use super::dialogs::dialog_button_rendered;
+use super::results_b::{attach_export_picker, export_temp_path};
 use super::{
     bind_editor_keys, open_panel, run_statement, shared_with_channel_recorder,
     shared_with_document, shared_with_runner, shared_with_toolbar_runner,
 };
-use super::dialogs::dialog_button_rendered;
-use super::results_b::{attach_export_picker, export_temp_path};
 
 use super::analysis::{FakeSchemas, schema_doc};
 use super::dialogs::{FakeConnections, option};
@@ -554,7 +552,8 @@ fn completion_is_gated_by_mode_and_falls_back_to_keywords(cx: &mut TestAppContex
         "未接端口 → 没有元数据候选（如实，不假装有）"
     );
 
-    let (text_shared, text_id, _seen, _seen_conn) = shared_with_runner("hello", EditorMode::General);
+    let (text_shared, text_id, _seen, _seen_conn) =
+        shared_with_runner("hello", EditorMode::General);
     assert!(
         !text_shared.completion_enabled(&text_id),
         "文本模式不与数据库通信，也不该补全"
@@ -808,7 +807,11 @@ fn the_toolbar_layout_rides_along_with_the_session(cx: &mut TestAppContext) {
             panel.set_toolbar_visible(crate::toolbar::ToolbarItemId::Format, false, cx);
             panel.toggle_toolbar_collapsed(crate::toolbar::ToolbarItemId::ExecRun, cx);
             panel.insert_toolbar_separator(cx);
-            panel.move_toolbar_item(crate::toolbar::ToolbarItemId::History, crate::toolbar::MoveDir::Left, cx);
+            panel.move_toolbar_item(
+                crate::toolbar::ToolbarItemId::History,
+                crate::toolbar::MoveDir::Left,
+                cx,
+            );
         });
     });
     let snapshot = cx
@@ -823,12 +826,9 @@ fn the_toolbar_layout_rides_along_with_the_session(cx: &mut TestAppContext) {
     // 新面板（模拟重启）：恢复会话 → 布局原样回来
     let (panel2, cx) = open_panel(cx, &shared, &id);
     cx.update(|window, cx| {
-        panel2.update(cx, |panel, cx| {
-            panel.restore_session(&snapshot, window, cx)
-        });
+        panel2.update(cx, |panel, cx| panel.restore_session(&snapshot, window, cx));
     });
-    let restored = cx
-        .update(|_window, cx| panel2.read(cx).toolbar_layout_for_test());
+    let restored = cx.update(|_window, cx| panel2.read(cx).toolbar_layout_for_test());
     let expected = crate::toolbar::ToolbarLayout::decode(&code).expect("快照串必可解码");
     assert_eq!(restored, expected, "恢复后布局与改动时一致");
     assert!(
@@ -984,9 +984,7 @@ fn the_indent_rides_along_with_the_session(cx: &mut TestAppContext) {
     // 新面板（模拟重启）：恢复会话 → 缩进原样回来
     let (panel2, cx) = open_panel(cx, &shared, &id);
     cx.update(|window, cx| {
-        panel2.update(cx, |panel, cx| {
-            panel.restore_session(&snapshot, window, cx)
-        });
+        panel2.update(cx, |panel, cx| panel.restore_session(&snapshot, window, cx));
     });
     assert_eq!(shared.document_tab_size(&id), 4, "文档级宽度恢复");
     assert!(shared.document_hard_tabs(&id), "文档级制表符恢复");

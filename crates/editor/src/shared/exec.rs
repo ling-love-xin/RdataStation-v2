@@ -12,7 +12,6 @@ use crate::execution::{ExecQueue, QueryRunner};
 use super::*;
 
 impl EditorShared {
-
     /// 注入执行器（**宿主调用一次**；重复注入会换掉旧通道，旧通道的工作线程随之退出）
     pub fn attach_runner(&self, runner: Arc<dyn QueryRunner>) {
         *self.exec.borrow_mut() = Some(ExecQueue::new(runner));
@@ -51,13 +50,7 @@ impl EditorShared {
             return Err(crate::execution::SubmitError::NoRunner);
         };
         channel_queue.submit(
-            document,
-            target,
-            connection,
-            schema,
-            placement,
-            options,
-            channel,
+            document, target, connection, schema, placement, options, channel,
         )
     }
 

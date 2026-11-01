@@ -543,8 +543,7 @@ impl ToolbarLayout {
                 left: left.clone(),
                 folded: Vec::new(),
             };
-            let heads: Vec<ToolbarItemId> =
-                layout.groups().into_iter().map(|g| g.head).collect();
+            let heads: Vec<ToolbarItemId> = layout.groups().into_iter().map(|g| g.head).collect();
             for name in part.split(',').filter(|s| !s.is_empty()) {
                 let id = ToolbarItemId::ALL
                     .iter()
@@ -586,7 +585,11 @@ mod tests {
             IconName::FileCode,
             "通用 = 脚本/文件"
         );
-        assert_eq!(mode_icon(EditorMode::Sql), IconName::Database, "SQL = 数据库");
+        assert_eq!(
+            mode_icon(EditorMode::Sql),
+            IconName::Database,
+            "SQL = 数据库"
+        );
         assert_eq!(
             mode_icon(EditorMode::Analysis),
             IconName::Notebook,
@@ -670,7 +673,11 @@ mod tests {
             Some(&ToolbarItemId::Format),
             "格式化成为分析组的末成员"
         );
-        assert_eq!(groups[2].head, ToolbarItemId::TxAutoCommit, "事务+历史独立成组");
+        assert_eq!(
+            groups[2].head,
+            ToolbarItemId::TxAutoCommit,
+            "事务+历史独立成组"
+        );
     }
 
     /// 组整体移动：执行簇与格式化所在组交换位置
@@ -785,12 +792,12 @@ mod tests {
 
         // 新增的分隔符在末尾：一路左移到执行簇内部（下标 1，紧挨执行主按钮）。
         // 起始下标动态取（布局加项不改这里——见 `default_layout` 的注释）
-        let mut index = *layout
-            .separator_positions()
-            .last()
-            .expect("有一条新分隔符");
+        let mut index = *layout.separator_positions().last().expect("有一条新分隔符");
         while index > 1 {
-            assert!(layout.move_separator(index, MoveDir::Left), "第 {index} 步应可左移");
+            assert!(
+                layout.move_separator(index, MoveDir::Left),
+                "第 {index} 步应可左移"
+            );
             index -= 1;
         }
 
@@ -798,7 +805,11 @@ mod tests {
         let groups = layout.groups();
         assert_eq!(groups.len(), 4, "分隔符切出第 4 段");
         assert_eq!(groups[0].head, ToolbarItemId::ExecRun);
-        assert_eq!(groups[1].head, ToolbarItemId::ExecAll, "分隔符在 执行/全部运行 之间");
+        assert_eq!(
+            groups[1].head,
+            ToolbarItemId::ExecAll,
+            "分隔符在 执行/全部运行 之间"
+        );
     }
 
     /// 重置默认恢复「执行 + 全部运行」两按钮布局并清折叠

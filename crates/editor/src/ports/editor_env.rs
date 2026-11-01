@@ -101,7 +101,11 @@ impl SystemEnvPort {
             let version = probe.as_ref().map(|(_, v)| v.clone());
             installed.insert(id.to_string(), probe.is_some());
             if let Some((command, _)) = probe {
-                remember_resolved(id, command, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+                remember_resolved(
+                    id,
+                    command,
+                    &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                );
             }
             envs.push(Environment {
                 id: id.to_string(),
@@ -311,9 +315,7 @@ impl EnvPort for SystemEnvPort {
             .store
             .as_ref()
             .ok_or("环境配置存储未接入（全局库未就绪）")?;
-        store
-            .delete(id)
-            .map_err(|e| format!("删除环境失败：{e}"))?;
+        store.delete(id).map_err(|e| format!("删除环境失败：{e}"))?;
         self.drop_memory(id);
         Ok(())
     }
@@ -374,14 +376,8 @@ pub async fn run_script_process(
             .map_err(|error| format!("写入代码失败：{error}"))?;
     }
 
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or("无法获取子进程 stdout")?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or("无法获取子进程 stderr")?;
+    let mut stdout = child.stdout.take().ok_or("无法获取子进程 stdout")?;
+    let mut stderr = child.stderr.take().ok_or("无法获取子进程 stderr")?;
     let mut out_buf = Vec::new();
     let mut err_buf = Vec::new();
 
@@ -389,39 +385,36 @@ pub async fn run_script_process(
     // 永远写不完 → 假死到超时被杀，输出还丢了）。超时到点：`timeout` 返回 `Err` 时
     // 内层 future 已被 drop（上面的 `&mut` 借用随之释放），这里才能自由地杀进程树
     // 并补读残余输出（进程已死 → EOF 立即返回）。
-    let (out, err, status, timed_out) = match tokio::time::timeout(
-        std::time::Duration::from_millis(timeout_ms),
-        async {
+    let (out, err, status, timed_out) =
+        match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
             let _ = tokio::join!(
                 tokio::io::copy(&mut stdout, &mut out_buf),
                 tokio::io::copy(&mut stderr, &mut err_buf),
             );
             child.wait().await
-        },
-    )
-    .await
-    {
-        Ok(status) => {
-            let status =
-                status.map_err(|error| format!("等待子进程失败：{error}"))?;
-            (out_buf, err_buf, Some(status), false)
-        }
-        Err(_elapsed) => {
-            // 超时：杀进程树（Windows `taskkill /T /F`——光杀解释器，它 spawn 的子进程会残留）
-            let pid = child.id().unwrap_or(0);
-            if pid != 0 {
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/PID", &pid.to_string(), "/T", "/F"])
-                    .status();
+        })
+        .await
+        {
+            Ok(status) => {
+                let status = status.map_err(|error| format!("等待子进程失败：{error}"))?;
+                (out_buf, err_buf, Some(status), false)
             }
-            let _ = child.wait().await;
-            let _ = tokio::join!(
-                tokio::io::copy(&mut stdout, &mut out_buf),
-                tokio::io::copy(&mut stderr, &mut err_buf),
-            );
-            (out_buf, err_buf, None, true)
-        }
-    };
+            Err(_elapsed) => {
+                // 超时：杀进程树（Windows `taskkill /T /F`——光杀解释器，它 spawn 的子进程会残留）
+                let pid = child.id().unwrap_or(0);
+                if pid != 0 {
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/PID", &pid.to_string(), "/T", "/F"])
+                        .status();
+                }
+                let _ = child.wait().await;
+                let _ = tokio::join!(
+                    tokio::io::copy(&mut stdout, &mut out_buf),
+                    tokio::io::copy(&mut stderr, &mut err_buf),
+                );
+                (out_buf, err_buf, None, true)
+            }
+        };
 
     Ok(ScriptOutcome {
         exit_code: status.as_ref().and_then(|status| status.code()),
@@ -438,11 +431,7 @@ pub async fn run_script_process(
 /// → `Some("4.3.2")`；没有数字词 / 空行 → `None`。
 fn parse_version_line(line: &str) -> Option<String> {
     line.split_whitespace()
-        .find(|word| {
-            word.chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_digit())
-        })
+        .find(|word| word.chars().next().is_some_and(|c| c.is_ascii_digit()))
         .map(str::to_string)
 }
 
@@ -484,13 +473,12 @@ mod tests {
     use engine::persistence::global_db::GlobalSqlitePool;
     use engine::persistence::script_env_store::ScriptEnvStore;
 
-    use super::{BUILTIN_ENVS, RESOLVED_ENVS, parse_version_line, remember_resolved, resolve, SystemEnvPort};
+    use super::{
+        BUILTIN_ENVS, RESOLVED_ENVS, SystemEnvPort, parse_version_line, remember_resolved, resolve,
+    };
 
     fn temp_db(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "rds_sysenv_{tag}_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("rds_sysenv_{tag}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir.join("global.db")
@@ -500,7 +488,11 @@ mod tests {
     fn open_store(db: &PathBuf) -> ScriptEnvStore {
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
         let pool = runtime.block_on(async {
-            Arc::new(GlobalSqlitePool::new(db.clone(), 1).await.expect("create pool"))
+            Arc::new(
+                GlobalSqlitePool::new(db.clone(), 1)
+                    .await
+                    .expect("create pool"),
+            )
         });
         drop(runtime);
         ScriptEnvStore::new(pool).expect("open store")
@@ -508,7 +500,10 @@ mod tests {
 
     #[test]
     fn version_line_parses_the_first_numeric_word() {
-        assert_eq!(parse_version_line("Python 3.12.1"), Some("3.12.1".to_string()));
+        assert_eq!(
+            parse_version_line("Python 3.12.1"),
+            Some("3.12.1".to_string())
+        );
         assert_eq!(
             parse_version_line("rustc 1.75.0 (0f16a21 2023-12-27)"),
             Some("1.75.0".to_string())
@@ -574,7 +569,12 @@ mod tests {
 
         // 新增：名字 / 类型 / 命令 / 参数；版本探测失败（命令不存在）→ None
         let created = port
-            .create("Py Venv", crate::env::EnvKind::Python, "no-such-interp-xyz", &["-u".to_string()])
+            .create(
+                "Py Venv",
+                crate::env::EnvKind::Python,
+                "no-such-interp-xyz",
+                &["-u".to_string()],
+            )
             .expect("create should succeed");
         assert!(!created.id.is_empty(), "id 由宿主生成");
         assert!(created.id.starts_with("custom-"));
@@ -598,7 +598,13 @@ mod tests {
 
         // 改：换命令 + 参数 → 列表与 memo 都跟着变
         let updated = port
-            .update(&created.id, "Py Venv 3.13", crate::env::EnvKind::Python, "no-such-interp-abc", &["-u".to_string(), "--no-site".to_string()])
+            .update(
+                &created.id,
+                "Py Venv 3.13",
+                crate::env::EnvKind::Python,
+                "no-such-interp-abc",
+                &["-u".to_string(), "--no-site".to_string()],
+            )
             .expect("update should succeed");
         assert_eq!(updated.name, "Py Venv 3.13");
         assert_eq!(updated.command, "no-such-interp-abc");
@@ -609,7 +615,10 @@ mod tests {
             .find(|env| env.id == created.id)
             .expect("updated env still listed");
         assert_eq!(updated_in_list.name, "Py Venv 3.13");
-        assert_eq!(resolve(&created.id).expect("resolve after update").command, "no-such-interp-abc");
+        assert_eq!(
+            resolve(&created.id).expect("resolve after update").command,
+            "no-such-interp-abc"
+        );
 
         // 删：列表 / installed / memo 全部清干净
         port.delete(&created.id).expect("delete should succeed");
@@ -633,12 +642,14 @@ mod tests {
         let port = SystemEnvPort::with_store(Some(store));
 
         // 空名 / 空命令如实拒绝（不写库）
-        assert!(port
-            .create("  ", crate::env::EnvKind::Custom, "cmd", &[])
-            .is_err());
-        assert!(port
-            .create("name", crate::env::EnvKind::Custom, "  ", &[])
-            .is_err());
+        assert!(
+            port.create("  ", crate::env::EnvKind::Custom, "cmd", &[])
+                .is_err()
+        );
+        assert!(
+            port.create("name", crate::env::EnvKind::Custom, "  ", &[])
+                .is_err()
+        );
 
         // 内置环境（python）不可改、不可删
         let py = port
@@ -647,13 +658,17 @@ mod tests {
             .find(|env| env.id == "python")
             .expect("builtin python listed");
         assert!(py.readonly);
-        assert!(port
-            .update("python", "改名", crate::env::EnvKind::Python, "py", &[])
-            .is_err());
+        assert!(
+            port.update("python", "改名", crate::env::EnvKind::Python, "py", &[])
+                .is_err()
+        );
         assert!(port.delete("python").is_err());
 
         // 改 / 删不存在的环境也如实拒绝
-        assert!(port.update("env-404", "x", crate::env::EnvKind::Custom, "cmd", &[]).is_err());
+        assert!(
+            port.update("env-404", "x", crate::env::EnvKind::Custom, "cmd", &[])
+                .is_err()
+        );
         assert!(port.delete("env-404").is_err());
 
         // 清理 memo
@@ -669,9 +684,11 @@ mod tests {
     fn without_a_store_management_is_honestly_rejected() {
         let port = SystemEnvPort::with_store(None);
         assert!(!port.list().is_empty(), "没有存储也有内置环境");
-        assert!(port
-            .create("x", crate::env::EnvKind::Custom, "cmd", &[])
-            .is_err(), "没有存储 = 管理如实拒绝");
+        assert!(
+            port.create("x", crate::env::EnvKind::Custom, "cmd", &[])
+                .is_err(),
+            "没有存储 = 管理如实拒绝"
+        );
         assert!(port.delete("python").is_err(), "没有存储也拒绝内置删除");
     }
 }

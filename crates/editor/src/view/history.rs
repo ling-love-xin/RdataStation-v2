@@ -18,14 +18,14 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::Sizable as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -235,8 +235,7 @@ impl HistoryView {
     /// 当前筛选条件（关键词 + 库类型 + 成败 → 面板端查询条件）
     fn query(&self) -> HistoryQuery {
         HistoryQuery {
-            keyword: (!self.keyword.trim().is_empty())
-                .then(|| self.keyword.trim().to_string()),
+            keyword: (!self.keyword.trim().is_empty()).then(|| self.keyword.trim().to_string()),
             db_type: self.filter_db_type.clone(),
             success: self.filter_success,
         }
@@ -413,14 +412,12 @@ impl Render for HistoryView {
                 .small()
                 .label(db_label)
                 .dropdown_menu(move |menu, _, _| {
-                    let mut menu = menu.item(
-                        PopupMenuItem::new("全部库").on_click({
-                            let entity = entity.clone();
-                            move |_, _, app| {
-                                entity.update(app, |view, cx| view.set_db_filter(None, cx));
-                            }
-                        }),
-                    );
+                    let mut menu = menu.item(PopupMenuItem::new("全部库").on_click({
+                        let entity = entity.clone();
+                        move |_, _, app| {
+                            entity.update(app, |view, cx| view.set_db_filter(None, cx));
+                        }
+                    }));
                     for db in ["sqlite", "mysql", "postgres", "duckdb", "oracle", "mssql"] {
                         let entity = entity.clone();
                         menu = menu.item(PopupMenuItem::new(db).on_click(move |_, _, app| {
@@ -576,7 +573,14 @@ impl Render for HistoryView {
             })
             .when(!self.items.is_empty(), |panel| {
                 panel.child(list).when(self.has_more, |panel| {
-                    panel.child(div().w_full().h_flex().justify_center().py_1().child(load_more))
+                    panel.child(
+                        div()
+                            .w_full()
+                            .h_flex()
+                            .justify_center()
+                            .py_1()
+                            .child(load_more),
+                    )
                 })
             })
     }
@@ -746,12 +750,15 @@ mod tests {
         let cleared = fake.cleared.clone();
         let (view, cx) = cx.add_window_view(|window, cx| {
             let mut view = HistoryView::new(window, cx);
-            view.set_port(Rc::new(FakeHistory {
-                items: fake.items.clone(),
-                loaded: fake.loaded.clone(),
-                removed: fake.removed.clone(),
-                cleared: fake.cleared.clone(),
-            }), cx);
+            view.set_port(
+                Rc::new(FakeHistory {
+                    items: fake.items.clone(),
+                    loaded: fake.loaded.clone(),
+                    removed: fake.removed.clone(),
+                    cleared: fake.cleared.clone(),
+                }),
+                cx,
+            );
             view
         });
 
@@ -805,12 +812,15 @@ mod tests {
         let fake = FakeHistory::new(vec![item("rec-1", "SELECT 1")]);
         let (view, cx) = cx.add_window_view(|window, cx| {
             let mut view = HistoryView::new(window, cx);
-            view.set_port(Rc::new(FakeHistory {
-                items: fake.items.clone(),
-                loaded: fake.loaded.clone(),
-                removed: fake.removed.clone(),
-                cleared: fake.cleared.clone(),
-            }), cx);
+            view.set_port(
+                Rc::new(FakeHistory {
+                    items: fake.items.clone(),
+                    loaded: fake.loaded.clone(),
+                    removed: fake.removed.clone(),
+                    cleared: fake.cleared.clone(),
+                }),
+                cx,
+            );
             view
         });
 
@@ -832,12 +842,15 @@ mod tests {
         let fake = FakeHistory::new(vec![ok.clone(), bad.clone()]);
         let (view, cx) = cx.add_window_view(|window, cx| {
             let mut view = HistoryView::new(window, cx);
-            view.set_port(Rc::new(FakeHistory {
-                items: fake.items.clone(),
-                loaded: fake.loaded.clone(),
-                removed: fake.removed.clone(),
-                cleared: fake.cleared.clone(),
-            }), cx);
+            view.set_port(
+                Rc::new(FakeHistory {
+                    items: fake.items.clone(),
+                    loaded: fake.loaded.clone(),
+                    removed: fake.removed.clone(),
+                    cleared: fake.cleared.clone(),
+                }),
+                cx,
+            );
             view
         });
         assert_eq!(view.read_with(cx, |view, _| view.item_count_for_test()), 2);
@@ -850,7 +863,11 @@ mod tests {
         );
 
         view.update(cx, |view, cx| view.set_success_filter(None, cx));
-        assert_eq!(view.read_with(cx, |view, _| view.item_count_for_test()), 2, "切回全部恢复");
+        assert_eq!(
+            view.read_with(cx, |view, _| view.item_count_for_test()),
+            2,
+            "切回全部恢复"
+        );
     }
 
     /// 库类型筛选：只看 sqlite 时，mysql 行被滤掉
@@ -862,16 +879,21 @@ mod tests {
         let fake = FakeHistory::new(vec![item("my-1", "SELECT 1"), sqlite.clone()]);
         let (view, cx) = cx.add_window_view(|window, cx| {
             let mut view = HistoryView::new(window, cx);
-            view.set_port(Rc::new(FakeHistory {
-                items: fake.items.clone(),
-                loaded: fake.loaded.clone(),
-                removed: fake.removed.clone(),
-                cleared: fake.cleared.clone(),
-            }), cx);
+            view.set_port(
+                Rc::new(FakeHistory {
+                    items: fake.items.clone(),
+                    loaded: fake.loaded.clone(),
+                    removed: fake.removed.clone(),
+                    cleared: fake.cleared.clone(),
+                }),
+                cx,
+            );
             view
         });
 
-        view.update(cx, |view, cx| view.set_db_filter(Some("sqlite".to_string()), cx));
+        view.update(cx, |view, cx| {
+            view.set_db_filter(Some("sqlite".to_string()), cx)
+        });
         assert_eq!(view.read_with(cx, |view, _| view.item_count_for_test()), 1);
         assert_eq!(
             view.read_with(cx, |view, _| view.items_for_test()[0].id.clone()),
@@ -895,12 +917,15 @@ mod tests {
         let removed = fake.removed.clone();
         let (view, cx) = cx.add_window_view(|window, cx| {
             let mut view = HistoryView::new(window, cx);
-            view.set_port(Rc::new(FakeHistory {
-                items: fake.items.clone(),
-                loaded: fake.loaded.clone(),
-                removed: fake.removed.clone(),
-                cleared: fake.cleared.clone(),
-            }), cx);
+            view.set_port(
+                Rc::new(FakeHistory {
+                    items: fake.items.clone(),
+                    loaded: fake.loaded.clone(),
+                    removed: fake.removed.clone(),
+                    cleared: fake.cleared.clone(),
+                }),
+                cx,
+            );
             view
         });
 
@@ -916,7 +941,11 @@ mod tests {
         deleted.sort();
         assert_eq!(deleted, ["rec-3".to_string()], "只删勾选的那条");
         assert_eq!(view.read_with(cx, |view, _| view.item_count_for_test()), 2);
-        assert_eq!(view.read_with(cx, |view, _| view.selected_count()), 0, "删完清空选择");
+        assert_eq!(
+            view.read_with(cx, |view, _| view.selected_count()),
+            0,
+            "删完清空选择"
+        );
     }
 
     /// 「加载更多」：满页时出入口，下一页追加而不是覆盖
@@ -929,20 +958,34 @@ mod tests {
         let fake = FakeHistory::new(items);
         let (view, cx) = cx.add_window_view(|window, cx| {
             let mut view = HistoryView::new(window, cx);
-            view.set_port(Rc::new(FakeHistory {
-                items: fake.items.clone(),
-                loaded: fake.loaded.clone(),
-                removed: fake.removed.clone(),
-                cleared: fake.cleared.clone(),
-            }), cx);
+            view.set_port(
+                Rc::new(FakeHistory {
+                    items: fake.items.clone(),
+                    loaded: fake.loaded.clone(),
+                    removed: fake.removed.clone(),
+                    cleared: fake.cleared.clone(),
+                }),
+                cx,
+            );
             view
         });
 
-        assert_eq!(view.read_with(cx, |view, _| view.item_count_for_test()), 200, "首屏一页");
-        assert!(view.read_with(cx, |view, _| view.has_more_for_test()), "满页 = 还有更多");
+        assert_eq!(
+            view.read_with(cx, |view, _| view.item_count_for_test()),
+            200,
+            "首屏一页"
+        );
+        assert!(
+            view.read_with(cx, |view, _| view.has_more_for_test()),
+            "满页 = 还有更多"
+        );
 
         view.update(cx, |view, cx| view.load_more(cx));
-        assert_eq!(view.read_with(cx, |view, _| view.item_count_for_test()), 201, "追加下一页");
+        assert_eq!(
+            view.read_with(cx, |view, _| view.item_count_for_test()),
+            201,
+            "追加下一页"
+        );
         assert!(
             !view.read_with(cx, |view, _| view.has_more_for_test()),
             "到底了不再出「加载更多」"

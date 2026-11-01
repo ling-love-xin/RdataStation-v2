@@ -32,8 +32,8 @@ use gpui_kit::component::input::{
 };
 // `LanguageConfig` 未从 `component::input` 重导出（只导出 AutoClosingPair / BracketPair
 // / IndentationRules），走 gpui_kit::base（= gpui-base）全路径。
-use gpui_kit::base::input::language_config::LanguageConfig;
 use gpui_kit::App;
+use gpui_kit::base::input::language_config::LanguageConfig;
 
 /// SQL 编辑规则（纯函数，测试可直接断言字段形状）
 ///
@@ -48,16 +48,12 @@ pub fn sql_language_config() -> LanguageConfig {
             BracketPair::new("{", "}"),
         ])
         .auto_closing_pairs([
-            AutoClosingPair::new("(", ")")
-                .not_in([SyntaxContext::String, SyntaxContext::Comment]),
-            AutoClosingPair::new("[", "]")
-                .not_in([SyntaxContext::String, SyntaxContext::Comment]),
-            AutoClosingPair::new("{", "}")
-                .not_in([SyntaxContext::String, SyntaxContext::Comment]),
+            AutoClosingPair::new("(", ")").not_in([SyntaxContext::String, SyntaxContext::Comment]),
+            AutoClosingPair::new("[", "]").not_in([SyntaxContext::String, SyntaxContext::Comment]),
+            AutoClosingPair::new("{", "}").not_in([SyntaxContext::String, SyntaxContext::Comment]),
             // SQL 单引号是字符串字面量定界符：配对后 `''` 转义写法仍可手打。
             // 双引号在 PG / DuckDB 是标识符引用（`"select"` 列名）。
-            AutoClosingPair::new("'", "'")
-                .not_in([SyntaxContext::String, SyntaxContext::Comment]),
+            AutoClosingPair::new("'", "'").not_in([SyntaxContext::String, SyntaxContext::Comment]),
             AutoClosingPair::new("\"", "\"")
                 .not_in([SyntaxContext::String, SyntaxContext::Comment]),
         ])

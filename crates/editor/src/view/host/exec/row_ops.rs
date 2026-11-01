@@ -5,7 +5,6 @@
 
 use result_panel::rowset::{LocalRow, RowOp, RowRef};
 
-
 use super::*;
 
 impl EditorHostPanel {
@@ -15,9 +14,8 @@ impl EditorHostPanel {
     pub(crate) fn insert_local_row(&mut self, anchor_view: Option<usize>, cx: &mut Context<Self>) {
         let document = self.document.clone();
         // 锚点身份先从网格真值翻译成 RowRef（store 闭包内不能再借 grid 实体）
-        let anchor_ref = anchor_view.and_then(|view| {
-            self.grid.read(cx).delegate().reference_of(view)
-        });
+        let anchor_ref =
+            anchor_view.and_then(|view| self.grid.read(cx).delegate().reference_of(view));
         let applied = self.shared.update_results(|store| {
             let active = store.active_index(&document).unwrap_or(0);
             let Some(entry) = store.active(&document) else {
@@ -58,7 +56,7 @@ impl EditorHostPanel {
             let active = store.active_index(&document).unwrap_or(0);
             let snapshot = match reference {
                 RowRef::Data(ix) => store
-                   .active(&document)
+                    .active(&document)
                     .and_then(|entry| entry.rows.get(ix))
                     .cloned()
                     .unwrap_or_default(),
@@ -143,11 +141,7 @@ impl EditorHostPanel {
     /// 栈空再走行级 `RowHistory`；两个栈互不混栈。
     pub(crate) fn undo_row_action(&mut self, cx: &mut Context<Self>) {
         let document = self.document.clone();
-        let active = self
-            .shared
-            .results()
-            .active_index(&document)
-            .unwrap_or(0);
+        let active = self.shared.results().active_index(&document).unwrap_or(0);
         let cell_can_undo = self
             .shared
             .results()
@@ -180,7 +174,9 @@ impl EditorHostPanel {
                         set.unmark_deleted(ix);
                     });
                 }
-                RowOp::RemoveLocal { local_id, cells, .. } => {
+                RowOp::RemoveLocal {
+                    local_id, cells, ..
+                } => {
                     store.mutate_local_rows(&document, active, |set| {
                         set.push_local(LocalRow::new(local_id, cells));
                     });
@@ -196,11 +192,7 @@ impl EditorHostPanel {
     /// 【#28-B3】组合重做：与 [`Self::undo_row_action`] 对称；格级栈优先，空走行级栈。
     pub(crate) fn redo_row_action(&mut self, cx: &mut Context<Self>) {
         let document = self.document.clone();
-        let active = self
-            .shared
-            .results()
-            .active_index(&document)
-            .unwrap_or(0);
+        let active = self.shared.results().active_index(&document).unwrap_or(0);
         let cell_can_redo = self
             .shared
             .results()
@@ -225,9 +217,7 @@ impl EditorHostPanel {
                     });
                 }
                 RowOp::DuplicateLocal {
-                    local_id,
-                    snapshot,
-                    ..
+                    local_id, snapshot, ..
                 } => {
                     store.mutate_local_rows(&document, active, |set| {
                         set.push_local(LocalRow::new(local_id, snapshot));
@@ -250,6 +240,4 @@ impl EditorHostPanel {
             self.sync_result_view(cx);
         }
     }
-
-
 }

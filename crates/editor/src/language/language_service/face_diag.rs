@@ -3,12 +3,11 @@
 //! 自 language/language_service.rs 拆分（2026-10-29 Step 9）：按能力域切分。
 
 use engine::sql::{
-    CatalogTable, HighlightSpan, TokenClass, diagnose, highlight_spans,
-    split_statements,
+    CatalogTable, HighlightSpan, TokenClass, diagnose, highlight_spans, split_statements,
 };
 
-use crate::completion::{CandidateKind, Catalog};
 use super::*;
+use crate::completion::{CandidateKind, Catalog};
 
 pub fn diagnostics(request: &Request) -> Vec<Diagnostic> {
     let text = request.text;
@@ -30,7 +29,12 @@ pub fn diagnostics(request: &Request) -> Vec<Diagnostic> {
     if !request.catalog.is_empty() {
         let tables = catalog_to_semantic(request.catalog);
         for issue in diagnose(text, request.dialect, &tables) {
-            found.push(Diagnostic::new(issue.code, &issue.message, issue.start, issue.end));
+            found.push(Diagnostic::new(
+                issue.code,
+                &issue.message,
+                issue.start,
+                issue.end,
+            ));
         }
     }
 

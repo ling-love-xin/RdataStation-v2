@@ -16,9 +16,9 @@ impl EditorHostPanel {
         };
         let read_only = self.editor_read_only();
         // 语义着色类型：模式切换后按新模式与文档扩展名重算（脚本分派 / CSV 不上色）
-        let highlight_kind =
-            self.with_document(|doc| highlight::kind_for_document(doc.path(), doc.mode()))
-                .unwrap_or(highlight::HighlightKind::None);
+        let highlight_kind = self
+            .with_document(|doc| highlight::kind_for_document(doc.path(), doc.mode()))
+            .unwrap_or(highlight::HighlightKind::None);
 
         // 【LSP】模式切换时重新向宿主要服务（插件加载 / 宿主判定变了能接上；没变 = 无操作）
         self.sync_lsp_session(cx);
@@ -134,5 +134,4 @@ impl EditorHostPanel {
         });
         self.set_message(None, cx);
     }
-
 }

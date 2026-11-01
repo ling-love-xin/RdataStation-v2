@@ -3,12 +3,12 @@
 
 use gpui_kit::*;
 
-use ::shared::string::tsv_row;
+use super::delegate::{ColumnStatsHook, LoadMoreHook, ResultGridDelegate};
+use super::stats::{column_stats, group_by_values, stats_lines};
+use super::text::cell_matches;
 use crate::rowset::{LocalRow, RowRef};
 use crate::store::{ColumnKind, ColumnType};
-use super::stats::{column_stats, group_by_values, stats_lines};
-use super::delegate::{ColumnStatsHook, LoadMoreHook, ResultGridDelegate};
-use super::text::cell_matches;
+use ::shared::string::tsv_row;
 use gpui_kit::component::table::ColumnSort;
 use workbench_shell::model::ColumnAnnotation;
 /// 【文本视图】TSV 文本指纹（缓存 key）：任何影响文本输出的状态变化都会改变指纹。
@@ -146,13 +146,14 @@ impl ResultGridDelegate {
             _ => match self.transpose_row {
                 RowRef::Data(data_ix) => {
                     // 被删底层行不进转置视图（#28-B1 排除矩阵：转置排除被删行）
-                    if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+                    if self
+                        .local
+                        .as_ref()
+                        .is_some_and(|set| set.is_deleted(data_ix))
+                    {
                         return None;
                     }
-                    self.rows
-                        .get(data_ix)?
-                        .get(data_col)
-                        .map(String::as_str)
+                    self.rows.get(data_ix)?.get(data_col).map(String::as_str)
                 }
                 RowRef::Local(id) => self.local_cell(id, data_col),
             },
@@ -215,7 +216,11 @@ impl ResultGridDelegate {
         (0..self.view_len())
             .filter_map(|view_ix| match self.row_ref(view_ix)? {
                 RowRef::Data(data_ix) => {
-                    if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+                    if self
+                        .local
+                        .as_ref()
+                        .is_some_and(|set| set.is_deleted(data_ix))
+                    {
                         return None;
                     }
                     self.rows.get(data_ix).cloned()
@@ -235,7 +240,11 @@ impl ResultGridDelegate {
         (0..self.view_len())
             .filter_map(|view_ix| {
                 let data_ix = self.data_row(view_ix)?;
-                if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+                if self
+                    .local
+                    .as_ref()
+                    .is_some_and(|set| set.is_deleted(data_ix))
+                {
                     return None;
                 }
                 self.rows.get(data_ix).cloned()
@@ -310,7 +319,11 @@ impl ResultGridDelegate {
             };
             let cells: Vec<String> = match reference {
                 RowRef::Data(data_ix) => {
-                    if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+                    if self
+                        .local
+                        .as_ref()
+                        .is_some_and(|set| set.is_deleted(data_ix))
+                    {
                         continue;
                     }
                     self.rows.get(data_ix).cloned().unwrap_or_default()
@@ -393,7 +406,11 @@ impl ResultGridDelegate {
             // 稳定排序：同值时按原顺序（用数据行号做 tie-break，与快排的不稳定性无关）
             data.sort_by(|left, right| {
                 let ordering = self.compare_rows(*left, *right, column);
-                let ordering = if descending { ordering.reverse() } else { ordering };
+                let ordering = if descending {
+                    ordering.reverse()
+                } else {
+                    ordering
+                };
                 ordering.then(left.cmp(right))
             });
         }
@@ -431,11 +448,17 @@ impl ResultGridDelegate {
     /// `"1.0"` 字符串分裂、避免大整数被 parse 截断口径外的字符串误判）；任一格取不到原生
     /// 数值（NULL / 文本族 / 表档 / 无事实档）整对回退显示矩阵的 [`compare_cells`]，
     /// 不出现同一列两套排序口径混排。
-    pub(crate) fn compare_rows(&self, left: usize, right: usize, column: usize) -> std::cmp::Ordering {
+    pub(crate) fn compare_rows(
+        &self,
+        left: usize,
+        right: usize,
+        column: usize,
+    ) -> std::cmp::Ordering {
         if let Some(frame) = self.fact.as_ref() {
-            if let (Some(a), Some(b)) =
-                (frame.column_number(left, column), frame.column_number(right, column))
-            {
+            if let (Some(a), Some(b)) = (
+                frame.column_number(left, column),
+                frame.column_number(right, column),
+            ) {
                 return a.total_cmp(&b);
             }
         }
@@ -497,7 +520,8 @@ impl ResultGridDelegate {
 
     /// 视图行号 → 底层数据行号（本地行返回 `None`：脏格 / 冲突 / 提交批次只认底层行）
     pub(crate) fn data_row(&self, row_ix: usize) -> Option<usize> {
-        self.row_ref(row_ix).and_then(|reference| reference.data_index())
+        self.row_ref(row_ix)
+            .and_then(|reference| reference.data_index())
     }
 
     /// 视图行号 → 行身份（底层行 / 本地行；越界 `None`）。宿主分派行级动作时
@@ -508,7 +532,8 @@ impl ResultGridDelegate {
 
     /// 这一视图行是不是本地新增 / 复制行（渲染底色区分用；底层行 = `false`）
     pub fn row_is_local(&self, row_ix: usize) -> bool {
-        self.row_ref(row_ix).is_some_and(|reference| reference.is_local())
+        self.row_ref(row_ix)
+            .is_some_and(|reference| reference.is_local())
     }
 
     /// 这一视图行是不是被标记删除的底层行（本地行永不标记删除；渲染灰显 + 删除线用）

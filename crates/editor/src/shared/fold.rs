@@ -11,7 +11,6 @@ use crate::scan::ScanScope;
 use super::*;
 
 impl EditorShared {
-
     /// 折叠开不开：用户开关 + 能力表 + 文件档位
     ///
     /// 与 [`Self::completion_enabled`] 同形，但**不看编辑器只读**——折叠是「看结构」的能力，

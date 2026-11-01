@@ -3,20 +3,15 @@
 
 use std::rc::Rc;
 
-use gpui_kit::{
-    TestAppContext, VisualTestContext,
-};
+use gpui_kit::{TestAppContext, VisualTestContext};
 
 use crate::model::EditorMode;
 use crate::service::OpenRequest;
 use crate::shared::EditorShared;
 
-use super::{
-    open_panel,
-    shared_with_document,
-};
 use super::dialogs::{FakeConnections, option};
 use super::notebook_win::NotebookRunner;
+use super::{open_panel, shared_with_document};
 
 // ===== 【2d-笔记级】分析模式工具栏：会话 ▾ / 全部运行 / 重启 =====
 //
@@ -37,23 +32,50 @@ fn notebook_toolbar_actions_appear_only_in_analysis_mode(cx: &mut TestAppContext
     };
 
     // SQL 模式：不出现（SQL 有自己的执行组）
-    assert!(!action_present(cx, "editor-notebook-session"), "SQL 模式不摆会话按钮");
-    assert!(!action_present(cx, "editor-notebook-run-all"), "SQL 模式不摆全部运行");
-    assert!(!action_present(cx, "editor-notebook-restart"), "SQL 模式不摆重启");
+    assert!(
+        !action_present(cx, "editor-notebook-session"),
+        "SQL 模式不摆会话按钮"
+    );
+    assert!(
+        !action_present(cx, "editor-notebook-run-all"),
+        "SQL 模式不摆全部运行"
+    );
+    assert!(
+        !action_present(cx, "editor-notebook-restart"),
+        "SQL 模式不摆重启"
+    );
 
     // 分析模式：三个笔记级按钮出现
     shared.update(|service| service.set_mode(&id, EditorMode::Analysis));
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
-    assert!(action_present(cx, "editor-notebook-session"), "分析模式应有会话按钮");
-    assert!(action_present(cx, "editor-notebook-run-all"), "分析模式应有全部运行按钮");
-    assert!(action_present(cx, "editor-notebook-restart"), "分析模式应有重启按钮");
+    assert!(
+        action_present(cx, "editor-notebook-session"),
+        "分析模式应有会话按钮"
+    );
+    assert!(
+        action_present(cx, "editor-notebook-run-all"),
+        "分析模式应有全部运行按钮"
+    );
+    assert!(
+        action_present(cx, "editor-notebook-restart"),
+        "分析模式应有重启按钮"
+    );
 
     // 通用模式：不出现
     shared.update(|service| service.set_mode(&id, EditorMode::General));
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
-    assert!(!action_present(cx, "editor-notebook-session"), "通用模式不摆会话按钮");
-    assert!(!action_present(cx, "editor-notebook-run-all"), "通用模式不摆全部运行");
-    assert!(!action_present(cx, "editor-notebook-restart"), "通用模式不摆重启");
+    assert!(
+        !action_present(cx, "editor-notebook-session"),
+        "通用模式不摆会话按钮"
+    );
+    assert!(
+        !action_present(cx, "editor-notebook-run-all"),
+        "通用模式不摆全部运行"
+    );
+    assert!(
+        !action_present(cx, "editor-notebook-restart"),
+        "通用模式不摆重启"
+    );
 }
 
 /// 会话菜单切连接 → 会话绑定更新 + 全部有输出单元标 stale（T2d-2）
@@ -111,9 +133,7 @@ fn notebook_run_all_runs_only_executable_cells(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let shared = EditorShared::new();
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    shared.attach_runner(std::sync::Arc::new(NotebookRunner {
-        seen: seen.clone(),
-    }));
+    shared.attach_runner(std::sync::Arc::new(NotebookRunner { seen: seen.clone() }));
     let id = shared
         .open(OpenRequest::untitled("", EditorMode::Analysis))
         .id()
@@ -149,7 +169,10 @@ fn notebook_run_all_runs_only_executable_cells(cx: &mut TestAppContext) {
         if done {
             break;
         }
-        assert!(std::time::Instant::now() < deadline, "单元执行迟迟没进执行链");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "单元执行迟迟没进执行链"
+        );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     let seen = seen.lock().expect("锁").clone();
@@ -179,4 +202,3 @@ fn notebook_restart_without_active_kernels_says_so(cx: &mut TestAppContext) {
         "没有内核时不能假装重启成功"
     );
 }
-

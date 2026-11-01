@@ -41,7 +41,9 @@ impl Render for EditorHostPanel {
         // 【2026-10-28】自定义折叠关键字：设置 → shared → 重新计算折叠候选。
         let want_open_keywords = editor_fold_open_keywords_or_default(cx);
         let want_close_keywords = editor_fold_close_keywords_or_default(cx);
-        if self.shared.fold_open_keywords() != want_open_keywords || self.shared.fold_close_keywords() != want_close_keywords {
+        if self.shared.fold_open_keywords() != want_open_keywords
+            || self.shared.fold_close_keywords() != want_close_keywords
+        {
             self.shared.set_fold_open_keywords(want_open_keywords);
             self.shared.set_fold_close_keywords(want_close_keywords);
             let shared = &self.shared;
@@ -172,10 +174,7 @@ impl Render for EditorHostPanel {
         let split = if result_has_content {
             let result_height = self.result_height.clone();
             v_resizable("editor-result-split")
-                .child(
-                    resizable_panel()
-                        .child(edit_area),
-                )
+                .child(resizable_panel().child(edit_area))
                 .child(
                     resizable_panel()
                         .child(
@@ -186,7 +185,8 @@ impl Render for EditorHostPanel {
                         )
                         .size(font_size * self.result_height.get())
                         .size_range(
-                            font_size * ui::RESULT_PANE_MIN_HEIGHT..font_size * ui::RESULT_MAX_HEIGHT,
+                            font_size * ui::RESULT_PANE_MIN_HEIGHT
+                                ..font_size * ui::RESULT_MAX_HEIGHT,
                         ),
                 )
                 .on_resize(move |state, _window, _cx| {
@@ -220,8 +220,6 @@ impl Render for EditorHostPanel {
         root
     }
 }
-
-
 
 /// 编辑器自身状态栏（需求③ / 状态栏去杂乱）：把文档级上下文（连接·通道·事务 /
 /// 环境族·未保存·执行中·消息 + 右段 行-列·编码·换行·缩进·模式·脏 + 编辑模式 /
@@ -413,7 +411,9 @@ pub(crate) fn render_editor_status_bar(
                             crate::view::indent_dialog::IndentAction::UseTabs => {
                                 panel.set_hard_tabs(true, cx);
                             }
-                            crate::view::indent_dialog::IndentAction::ChangeTabDisplaySize(size) => {
+                            crate::view::indent_dialog::IndentAction::ChangeTabDisplaySize(
+                                size,
+                            ) => {
                                 panel.set_hard_tabs(false, cx);
                                 panel.set_tab_size(size.max(1), cx);
                             }
@@ -693,8 +693,7 @@ pub(crate) fn render_conn_slots(
         .dropdown_menu(move |menu, _window, _cx| {
             let mut menu = menu;
             if !has_port {
-                return menu
-                    .item(PopupMenuItem::new("（未接入连接列表）").disabled(true));
+                return menu.item(PopupMenuItem::new("（未接入连接列表）").disabled(true));
             }
             let follow_entity = conn_entity.clone();
             let unbound = bound.is_none();
@@ -716,24 +715,21 @@ pub(crate) fn render_conn_slots(
                 .map(|o| (format!("{}·{}", o.short, o.name), o.id.clone()))
                 .collect();
             if online_conns.is_empty() {
-                return menu
-                    .item(PopupMenuItem::new("（暂无在线连接）").disabled(true));
+                return menu.item(PopupMenuItem::new("（暂无在线连接）").disabled(true));
             }
             for (label, id) in &online_conns {
                 let entity = conn_entity.clone();
                 let is_current = bound.as_deref() == Some(id.as_str());
                 let label = label.clone();
                 let id = id.clone();
-                menu = menu.item(
-                    PopupMenuItem::new(label)
-                        .checked(is_current)
-                        .on_click(move |_, _window, app| {
-                            let id = id.clone();
-                            entity.update(app, |panel, cx| {
-                                panel.bind_connection(Some(id), cx);
-                            });
-                        }),
-                );
+                menu = menu.item(PopupMenuItem::new(label).checked(is_current).on_click(
+                    move |_, _window, app| {
+                        let id = id.clone();
+                        entity.update(app, |panel, cx| {
+                            panel.bind_connection(Some(id), cx);
+                        });
+                    },
+                ));
             }
             menu
         })
@@ -791,14 +787,12 @@ pub(crate) fn render_conn_slots(
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu;
                 if schemas_menu.is_empty() {
-                    return menu
-                        .item(PopupMenuItem::new("（暂无可切 Schema）").disabled(true));
+                    return menu.item(PopupMenuItem::new("（暂无可切 Schema）").disabled(true));
                 }
                 for item in &schemas_menu {
                     let entity = entity.clone();
                     let schema_name = item.schema.clone();
-                    let is_current =
-                        current_schema.as_deref() == Some(schema_name.as_str());
+                    let is_current = current_schema.as_deref() == Some(schema_name.as_str());
                     menu = menu.item(
                         PopupMenuItem::new(schema_name.clone())
                             .checked(is_current)

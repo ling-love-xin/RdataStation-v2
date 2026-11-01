@@ -180,7 +180,9 @@ fn spans_for(text: &str, kind: HighlightKind) -> Vec<HighlightSpan> {
 
 /// 脚本类型 → 词法器（复用 `engine::script` 各语言纯函数）
 fn script_spans(kind: ScriptFileType, text: &str) -> Vec<HighlightSpan> {
-    use engine::script::{json_spans, log_spans, markdown_spans, python_spans, r_spans, rust_spans};
+    use engine::script::{
+        json_spans, log_spans, markdown_spans, python_spans, r_spans, rust_spans,
+    };
     match kind {
         ScriptFileType::Python => python_spans(text),
         ScriptFileType::R => r_spans(text),
@@ -604,9 +606,10 @@ mod tests {
 
     #[test]
     fn python_script_is_highlighted_with_python_lexer() {
-        let got = decoded("# 注释\ndef f(x):\n    return x", HighlightKind::Script(
-            crate::mode::ScriptFileType::Python,
-        ));
+        let got = decoded(
+            "# 注释\ndef f(x):\n    return x",
+            HighlightKind::Script(crate::mode::ScriptFileType::Python),
+        );
         let names: Vec<&str> = got.iter().map(|(_, _, _, name)| *name).collect();
         assert!(names.contains(&"comment"), "注释应上色：{got:?}");
         assert!(names.contains(&"keyword"), "def/return 应上色：{got:?}");
@@ -615,9 +618,10 @@ mod tests {
 
     #[test]
     fn rust_script_is_highlighted_with_rust_lexer() {
-        let got = decoded("let x = 42; // 数字", HighlightKind::Script(
-            crate::mode::ScriptFileType::Rust,
-        ));
+        let got = decoded(
+            "let x = 42; // 数字",
+            HighlightKind::Script(crate::mode::ScriptFileType::Rust),
+        );
         let names: Vec<&str> = got.iter().map(|(_, _, _, name)| *name).collect();
         assert!(names.contains(&"keyword"), "let 应上色：{got:?}");
         assert!(names.contains(&"number"), "42 应上色：{got:?}");
@@ -695,7 +699,9 @@ mod tests {
     fn default_theme_resolves_the_core_sql_vocabulary(cx: &mut gpui_kit::TestAppContext) {
         cx.update(gpui_kit::init);
         let resolver = cx.update(|cx| cx.theme().highlight_theme.clone());
-        for name in ["keyword", "string", "number", "comment", "function", "type", "boolean"] {
+        for name in [
+            "keyword", "string", "number", "comment", "function", "type", "boolean",
+        ] {
             let style = resolver
                 .style(name)
                 .unwrap_or_else(|| panic!("默认主题必须认识 {name}"));
@@ -751,7 +757,8 @@ mod tests {
         // 推进虚拟时钟越过 100ms 防抖并让就绪任务跑完（写回缓存不可外部观测，
         // 断言「不 panic + 视图可读」即此段在真实窗口环境稳定）。
         cx.update(|window, cx| window.draw(cx).clear(cx));
-        cx.executor().advance_clock(std::time::Duration::from_millis(120));
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(120));
         cx.run_until_parked();
         cx.update(|window, cx| window.draw(cx).clear(cx));
         cx.update(|_window, cx| {

@@ -111,7 +111,10 @@ pub fn spans(
                     // 看看后面是不是 FUNCTION / PROCEDURE / TRIGGER / VIEW
                     if let Some(next) = tokens.get(index + 1) {
                         let next_upper = next.text(text).to_ascii_uppercase();
-                        if matches!(head_word(&next_upper), "FUNCTION" | "PROCEDURE" | "TRIGGER" | "VIEW" | "INDEX" | "TABLE") {
+                        if matches!(
+                            head_word(&next_upper),
+                            "FUNCTION" | "PROCEDURE" | "TRIGGER" | "VIEW" | "INDEX" | "TABLE"
+                        ) {
                             open.push((Opener::Block, line));
                         }
                     }
@@ -173,7 +176,8 @@ fn add_indent_folds(text: &str, found: &mut Vec<FoldSpan>, bracket_spans: &[Fold
         let trimmed = line.trim_start();
         if trimmed.is_empty() {
             indents.push(None); // 空行
-        } else if trimmed.starts_with("--") || trimmed.starts_with("/*") || trimmed.starts_with("*") {
+        } else if trimmed.starts_with("--") || trimmed.starts_with("/*") || trimmed.starts_with("*")
+        {
             indents.push(None); // 注释行
         } else {
             let leading_spaces = line.len() - trimmed.len();
@@ -324,7 +328,10 @@ mod tests {
     /// 只测词法结构。缩进折叠是独立的折叠来源，由 `indent_based_*` 测试显式开启
     /// （`spans(text, true, &[], &[])`）单独验证，避免两类折叠互相干扰。
     fn lines(text: &str) -> Vec<(usize, usize)> {
-        let open: Vec<String> = "CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT".split(',').map(|s| s.to_string()).collect();
+        let open: Vec<String> = "CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT"
+            .split(',')
+            .map(|s| s.to_string())
+            .collect();
         let close: Vec<String> = "END".split(',').map(|s| s.to_string()).collect();
         spans(text, false, &open, &close)
             .into_iter()
@@ -432,7 +439,10 @@ mod tests {
         // 第二组括号从第 2 行的 `(`（`), (`）开到第 4 行的 `)`
         assert_eq!(lines(sql), [(0, 2), (2, 4)]);
 
-        let open: Vec<String> = "CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT".split(',').map(|s| s.to_string()).collect();
+        let open: Vec<String> = "CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT"
+            .split(',')
+            .map(|s| s.to_string())
+            .collect();
         let close: Vec<String> = "END".split(',').map(|s| s.to_string()).collect();
         // 结构语义（括号组的去重与排序）：关闭缩进折叠，避免缩进候选干扰断言
         let found = spans(sql, false, &open, &close);
@@ -457,7 +467,11 @@ mod tests {
             .into_iter()
             .map(|span| (span.start_line, span.end_line))
             .collect();
-        assert!(result.contains(&(0, 3)), "应该有基于缩进的折叠: {:?}", result);
+        assert!(
+            result.contains(&(0, 3)),
+            "应该有基于缩进的折叠: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -483,7 +497,11 @@ mod tests {
             .map(|span| (span.start_line, span.end_line))
             .collect();
         // 应该还是有 SELECT 块的折叠
-        assert!(result.contains(&(0, 3)), "空行和注释行不影响缩进折叠: {:?}", result);
+        assert!(
+            result.contains(&(0, 3)),
+            "空行和注释行不影响缩进折叠: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -495,6 +513,10 @@ mod tests {
             .map(|span| (span.start_line, span.end_line))
             .collect();
         // 缩进都是 0，不应该有基于缩进的折叠
-        assert!(!result.iter().any(|(start, end)| *start == 0 && *end == 2), "缩进相同不应该折叠: {:?}", result);
+        assert!(
+            !result.iter().any(|(start, end)| *start == 0 && *end == 2),
+            "缩进相同不应该折叠: {:?}",
+            result
+        );
     }
 }

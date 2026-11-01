@@ -5,7 +5,7 @@
 //! 内核的 `document_color_provider` 槽位是单槽 `Option`：挂了 provider 后，内核在文本
 //! 变化后 **100ms 防抖** 自动调 `document_colors()`（`update_document_colors`），把返回的
 //! 颜色在对应 range 下方渲染**色块**（`base/element.rs` 的画色路径）。本模块给 SQL /
-//! 脚本文档提供**颜色字面量**识别：`#rgb` / `#rrggbb` / `#rrggbbaa`（也认 `rgb()` / 
+//! 脚本文档提供**颜色字面量**识别：`#rgb` / `#rrggbb` / `#rrggbbaa`（也认 `rgb()` /
 //! `rgba()` 函数字面量——SQL 里颜色常以字符串或十六进制出现）。
 //!
 //! ## 覆盖口径
@@ -154,7 +154,11 @@ mod tests {
     #[test]
     fn hex_parses_all_widths() {
         let rgb = parse_hex("abc").expect("3 位可解析");
-        assert!((rgb.red - 0.667).abs() < 0.01, "a=170/255≈0.667，得 {}", rgb.red);
+        assert!(
+            (rgb.red - 0.667).abs() < 0.01,
+            "a=170/255≈0.667，得 {}",
+            rgb.red
+        );
         assert_eq!(rgb.alpha, 1.0);
         let rrggbb = parse_hex("ff0000").expect("6 位可解析");
         assert_eq!(rrggbb.red, 1.0);

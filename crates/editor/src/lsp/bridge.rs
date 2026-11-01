@@ -145,11 +145,7 @@ fn build_hover_params(uri: &str, position: Position) -> serde_json::Value {
 ///
 /// 语言服务没有 hover 时回 `result: null`——`from_value(null)` 解出 `None`，
 /// 内核收起弹层；有则解出 `Some(Hover)`（`contents` + 可选 `range`）。
-fn request_hover(
-    client: &LspClient,
-    uri: &str,
-    position: Position,
-) -> Result<Option<Hover>> {
+fn request_hover(client: &LspClient, uri: &str, position: Position) -> Result<Option<Hover>> {
     let result = client.call(
         "textDocument/hover",
         build_hover_params(uri, position),
@@ -258,9 +254,7 @@ impl CodeActionProvider for LspCodeActionProvider {
         let uri = self.document_uri.clone();
         // 拿当前文本算请求坐标；`LspClient::call` 同步阻塞 → 放后台线程
         let text = _state.read(cx).text().to_string();
-        cx.background_spawn(async move {
-            request_code_actions(&client, &uri, &text, range)
-        })
+        cx.background_spawn(async move { request_code_actions(&client, &uri, &text, range) })
     }
 
     fn perform_code_action(
@@ -336,7 +330,10 @@ pub fn uninstall_hover(state: &mut EditorState) {
 /// 【#54 C6】装 definition provider（内核槽位 `Option<Rc<dyn DefinitionProvider>>`，
 /// 与 hover 并列的独立槽位，互不影响）。泛型：SQL 自研语义（[`super::sql_definition`]）
 /// 挂这个槽位；宿主按模式决策。
-pub fn install_definition<P: DefinitionProvider + 'static>(state: &mut EditorState, provider: Rc<P>) {
+pub fn install_definition<P: DefinitionProvider + 'static>(
+    state: &mut EditorState,
+    provider: Rc<P>,
+) {
     state.lsp_mut().definition_provider = Some(provider);
 }
 
@@ -429,10 +426,7 @@ mod tests {
                 }
                 assert_eq!(method, want, "方法名应匹配");
             }
-            return (
-                req["id"].as_u64().expect("请求应带 id"),
-                req,
-            );
+            return (req["id"].as_u64().expect("请求应带 id"), req);
         }
     }
 
@@ -440,12 +434,18 @@ mod tests {
     /// - `recv_rx`（返回第一项）= 测试收 client 发来的请求帧（writer 接到它的写侧）；
     /// - `reply_tx`（返回第二项）= 测试回帧给 client；
     /// - `client`（返回第三项）= 客户端句柄。
-    fn harness() -> (Receiver<Vec<u8>>, Sender<Vec<u8>>, std::sync::Arc<LspClient>) {
+    fn harness() -> (
+        Receiver<Vec<u8>>,
+        Sender<Vec<u8>>,
+        std::sync::Arc<LspClient>,
+    ) {
         // client → server（写侧）：writer 发，recv_rx 收
         let (client_write, recv_rx) = channel::<Vec<u8>>();
         // server → client（读侧）：reply_tx 发，client_read 收
         let (reply_tx, client_read) = channel::<Vec<u8>>();
-        let reader = MemoryReader { read_rx: client_read };
+        let reader = MemoryReader {
+            read_rx: client_read,
+        };
         let writer = MemoryWriter {
             write_tx: client_write,
         };
@@ -457,11 +457,17 @@ mod tests {
             client_for_thread.initialize(None, std::time::Duration::from_secs(2))
         });
         let id = next_request(&recv_rx, "initialize").0;
-        let resp = serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": { "capabilities": {} } });
+        let resp =
+            serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": { "capabilities": {} } });
         reply_tx
-            .send(crate::lsp::frame::encode(&serde_json::to_vec(&resp).unwrap()))
+            .send(crate::lsp::frame::encode(
+                &serde_json::to_vec(&resp).unwrap(),
+            ))
             .unwrap();
-        init_handle.join().expect("握手线程应结束").expect("握手应成功");
+        init_handle
+            .join()
+            .expect("握手线程应结束")
+            .expect("握手应成功");
 
         (recv_rx, reply_tx, client)
     }
@@ -524,7 +530,9 @@ mod tests {
             }
         });
         reply_tx
-            .send(crate::lsp::frame::encode(&serde_json::to_vec(&reply).unwrap()))
+            .send(crate::lsp::frame::encode(
+                &serde_json::to_vec(&reply).unwrap(),
+            ))
             .unwrap();
 
         let response = handle.join().expect("补全线程应结束").expect("补全应成功");
@@ -556,7 +564,9 @@ mod tests {
             "error": { "code": -32601, "message": "method not found" }
         });
         reply_tx
-            .send(crate::lsp::frame::encode(&serde_json::to_vec(&err_reply).unwrap()))
+            .send(crate::lsp::frame::encode(
+                &serde_json::to_vec(&err_reply).unwrap(),
+            ))
             .unwrap();
 
         let err = handle.join().expect("补全线程应结束").expect_err("应报错");
@@ -610,9 +620,8 @@ mod tests {
         let position = lsp_types::Position::new(0, 4);
 
         let client_for_thread = client.clone();
-        let handle = std::thread::spawn(move || {
-            request_hover(&client_for_thread, "file:///b.py", position)
-        });
+        let handle =
+            std::thread::spawn(move || request_hover(&client_for_thread, "file:///b.py", position));
 
         let (req_id, req) = next_request(&recv_rx, "textDocument/hover");
         assert_eq!(req["params"]["textDocument"]["uri"], "file:///b.py");
@@ -626,10 +635,16 @@ mod tests {
             }
         });
         reply_tx
-            .send(crate::lsp::frame::encode(&serde_json::to_vec(&reply).unwrap()))
+            .send(crate::lsp::frame::encode(
+                &serde_json::to_vec(&reply).unwrap(),
+            ))
             .unwrap();
 
-        let hover = handle.join().expect("hover 线程应结束").expect("应成功").expect("应有内容");
+        let hover = handle
+            .join()
+            .expect("hover 线程应结束")
+            .expect("应成功")
+            .expect("应有内容");
         // HoverContents 无 Display：按变体取 Markup 的 value 断言
         let value = match &hover.contents {
             lsp_types::HoverContents::Markup(m) => m.value.clone(),
@@ -645,14 +660,15 @@ mod tests {
         let position = lsp_types::Position::new(0, 0);
 
         let client_for_thread = client.clone();
-        let handle = std::thread::spawn(move || {
-            request_hover(&client_for_thread, "file:///b.py", position)
-        });
+        let handle =
+            std::thread::spawn(move || request_hover(&client_for_thread, "file:///b.py", position));
 
         let (req_id, _req) = next_request(&recv_rx, "textDocument/hover");
         let reply = serde_json::json!({ "jsonrpc": "2.0", "id": req_id, "result": null });
         reply_tx
-            .send(crate::lsp::frame::encode(&serde_json::to_vec(&reply).unwrap()))
+            .send(crate::lsp::frame::encode(
+                &serde_json::to_vec(&reply).unwrap(),
+            ))
             .unwrap();
 
         let hover = handle.join().expect("hover 线程应结束").expect("应成功");

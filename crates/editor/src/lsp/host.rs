@@ -29,8 +29,8 @@ use lsp_types::Diagnostic;
 
 use crate::model::{DocumentId, EditorMode};
 
-use super::client::LspEvent;
 use super::LspHandle;
+use super::client::LspEvent;
 
 /// 一个文档的语言服务会话（didOpen 的文档身份；client 是宿主共享的连接）
 ///
@@ -83,7 +83,11 @@ pub enum CompletionChoice {
 /// - SQL 模式 → 本地 SQL 目录补全（`sql_enabled` 已是「能力表 + 只读 + 档位」合判）；
 /// - 非 SQL 模式 → 语言服务补全（`lsp_available` 由调用方算好：服务健康 + 可编辑 + 档位）；
 /// - 都没有 → 不挂。
-pub fn choose_completion(mode: EditorMode, lsp_available: bool, sql_enabled: bool) -> CompletionChoice {
+pub fn choose_completion(
+    mode: EditorMode,
+    lsp_available: bool,
+    sql_enabled: bool,
+) -> CompletionChoice {
     match mode {
         EditorMode::Sql => {
             if sql_enabled {
@@ -230,8 +234,7 @@ mod tests {
 
     #[test]
     fn port_contract_serves_session_and_drains_per_document() {
-        let (client, _events) =
-            LspClient::new(Box::new(NullReader), Box::new(NullWriter));
+        let (client, _events) = LspClient::new(Box::new(NullReader), Box::new(NullWriter));
         let session = LspSession {
             client,
             uri: "file:///a.py".to_string(),

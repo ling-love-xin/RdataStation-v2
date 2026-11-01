@@ -158,7 +158,9 @@ pub struct EditorShared {
     /// `SQL Updates`——没有键列的 `UPDATE` 只能猜，宁可回绝）
     pub(crate) table_keys: Rc<RefCell<Option<crate::export::TableKeysHandle>>>,
     /// 【2d】分析笔记状态（每文档一份：会话 + 单元序列；输出是会话级内存状态）
-    pub(crate) notebooks: Rc<RefCell<std::collections::HashMap<crate::model::DocumentId, crate::cell::NotebookState>>>,
+    pub(crate) notebooks: Rc<
+        RefCell<std::collections::HashMap<crate::model::DocumentId, crate::cell::NotebookState>>,
+    >,
     /// 【#17】分析模式的内核注册表（kernel_id → 真内核会话 + 事件流）
     ///
     /// 生命周期 = 笔记本生命周期：`notebook_close` 时逐个 shutdown。启动 / 执行都是
@@ -186,14 +188,16 @@ pub struct EditorShared {
     /// 自己那份文档的目录，不跨文档串）。宿主（workbench）按文档绑定连接注入；
     /// 无条目 = 扫描不参与语义诊断（与「空目录退化」同一口径，宁缺毋滥）。目录是
     /// 纯数据（`Vec<String>`），可跨扫描工作线程 `Arc` 传递。
-    pub(crate) catalog_snapshots: Rc<RefCell<std::collections::HashMap<crate::model::DocumentId, Arc<Catalog>>>>,
+    pub(crate) catalog_snapshots:
+        Rc<RefCell<std::collections::HashMap<crate::model::DocumentId, Arc<Catalog>>>>,
     /// 【#54 C6/C7】跳转定义目标解析端口（宿主注入；未注入 = 内核走默认文档内移动）
     pub(crate) show_document_port: Rc<RefCell<Option<ShowDocumentPort>>>,
     /// 【书签】每文档一份书签（与 sidecar 同一数据源：`file_meta::Bookmark`）。
     ///
     /// 打开文档时从 `.filename.meta.json` 读入、切换后写回（事件路径，`view/host`）；
     /// 渲染只读。无条目 = 该文档还没有书签记录（与空书签同口径）。
-    pub(crate) bookmarks: Rc<RefCell<std::collections::HashMap<crate::model::DocumentId, Vec<file_meta::Bookmark>>>>,
+    pub(crate) bookmarks:
+        Rc<RefCell<std::collections::HashMap<crate::model::DocumentId, Vec<file_meta::Bookmark>>>>,
 }
 
 impl Clone for EditorShared {
@@ -240,13 +244,13 @@ impl Default for EditorShared {
 }
 
 // ==== Step 4 拆分（2026-10-29）：impl 方法块按能力域迁入子模块 ====
-pub mod exec;
-pub mod notebook;
-pub mod tx;
-pub mod session;
-pub mod meta;
 pub mod env_lsp;
+pub mod exec;
 pub mod fold;
+pub mod meta;
+pub mod notebook;
+pub mod session;
+pub mod tx;
 
 impl EditorShared {
     pub fn new() -> Self {
@@ -277,10 +281,13 @@ impl EditorShared {
             show_folds: Rc::new(std::cell::Cell::new(true)),
             indent_folding: Rc::new(std::cell::Cell::new(true)),
             fold_open_keywords: Rc::new(std::cell::RefCell::new(
-                "CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT".split(',').map(|s| s.to_string()).collect()
+                "CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT"
+                    .split(',')
+                    .map(|s| s.to_string())
+                    .collect(),
             )),
             fold_close_keywords: Rc::new(std::cell::RefCell::new(
-                "END".split(',').map(|s| s.to_string()).collect()
+                "END".split(',').map(|s| s.to_string()).collect(),
             )),
             bookmarks: Rc::new(RefCell::new(std::collections::HashMap::new())),
         }
@@ -374,7 +381,9 @@ fn build_inline_entry(
 mod tests {
     // 安全模式：**不通配导入**
     use super::EditorShared;
-    use crate::cell::{Cell, CellLanguage, CellNote, CellOutcome, CellRequest, CellState, NotebookState, Output};
+    use crate::cell::{
+        Cell, CellLanguage, CellNote, CellOutcome, CellRequest, CellState, NotebookState, Output,
+    };
     use crate::model::DocumentId;
     use crate::session::Session;
 
@@ -438,14 +447,18 @@ mod tests {
         let (shared, _) = notebook(&doc);
 
         // 先切会话（c1 在跑 → 状态回 Idle，输出清空）
-        shared.switch_notebook_session(&doc, Session::new("s2", Some("P_orders".to_string()), None));
+        shared
+            .switch_notebook_session(&doc, Session::new("s2", Some("P_orders".to_string()), None));
         // 旧会话（default）的回执到了：不落
         shared.apply_cell_note(&doc, &note(&doc, "default", "c1", true));
         let cells = shared.notebook_cells(&doc);
         assert_eq!(cells[0].state, CellState::Idle, "旧会话回执不落");
         assert!(cells[0].outputs.is_empty());
         assert_eq!(shared.notebook_session(&doc).id, "s2");
-        assert_eq!(shared.notebook_session(&doc).default_connection.as_deref(), Some("P_orders"));
+        assert_eq!(
+            shared.notebook_session(&doc).default_connection.as_deref(),
+            Some("P_orders")
+        );
     }
 
     /// 没在跑的回执不落（防迟到的旧回执覆盖新结果）
@@ -471,7 +484,9 @@ mod tests {
             sql: "select 1".to_string(),
             conn_id: None,
         };
-        let err = shared.submit_cell(doc.clone(), &request).expect_err("没接执行器该被拒");
+        let err = shared
+            .submit_cell(doc.clone(), &request)
+            .expect_err("没接执行器该被拒");
         assert!(!err.is_empty());
     }
 
@@ -503,7 +518,11 @@ mod tests {
 
         shared.switch_notebook_session(&doc, Session::default_session());
         let cells = shared.notebook_cells(&doc);
-        assert_eq!(cells[0].state, CellState::Stale, "切换会话 → 有输出单元 stale");
+        assert_eq!(
+            cells[0].state,
+            CellState::Stale,
+            "切换会话 → 有输出单元 stale"
+        );
     }
 
     /// 【#54 B】语义诊断目录快照按文档存取：互不串；推 None 即移除；retain 清残留
@@ -519,7 +538,11 @@ mod tests {
                     kind: crate::completion::CandidateKind::Table,
                     detail: None,
                 }],
-                columns: vec![(name.to_string(), "id".to_string(), Some("INTEGER".to_string()))],
+                columns: vec![(
+                    name.to_string(),
+                    "id".to_string(),
+                    Some("INTEGER".to_string()),
+                )],
                 truncated: false,
             })
         };

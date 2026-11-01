@@ -4,13 +4,23 @@
 //!
 use super::*;
 
-pub(crate) fn group_of_first(groups: &[crate::toolbar::ToolbarGroup]) -> crate::toolbar::ToolbarItemId {
-    groups.first().map(|g| g.head).unwrap_or(crate::toolbar::ToolbarItemId::ExecRun)
+pub(crate) fn group_of_first(
+    groups: &[crate::toolbar::ToolbarGroup],
+) -> crate::toolbar::ToolbarItemId {
+    groups
+        .first()
+        .map(|g| g.head)
+        .unwrap_or(crate::toolbar::ToolbarItemId::ExecRun)
 }
 
 /// 【T2c-5】最后一个组的组头（组移动↑↓ 的右边缘判定）
-pub(crate) fn group_of_last(groups: &[crate::toolbar::ToolbarGroup]) -> crate::toolbar::ToolbarItemId {
-    groups.last().map(|g| g.head).unwrap_or(crate::toolbar::ToolbarItemId::ExecRun)
+pub(crate) fn group_of_last(
+    groups: &[crate::toolbar::ToolbarGroup],
+) -> crate::toolbar::ToolbarItemId {
+    groups
+        .last()
+        .map(|g| g.head)
+        .unwrap_or(crate::toolbar::ToolbarItemId::ExecRun)
 }
 
 /// 执行结论 → 结果记录（视图模型转换，不在这做任何 I/O）
@@ -21,7 +31,10 @@ pub(crate) fn group_of_last(groups: &[crate::toolbar::ToolbarGroup]) -> crate::t
 /// - 未绑定连接（`entry.connection` 为空）——不知道去哪张表；
 /// - 宿主没接补全端口 / 端口不支持探测——如实没有行标识；
 /// - 缓存没这张表 / 表没有主键——探测结果为空，同样给 `None`。
-pub(crate) fn probe_primary_key(panel: &EditorHostPanel, entry: &ResultEntry) -> Option<Vec<String>> {
+pub(crate) fn probe_primary_key(
+    panel: &EditorHostPanel,
+    entry: &ResultEntry,
+) -> Option<Vec<String>> {
     if entry.error.is_some() || entry.columns.is_empty() {
         return None;
     }
@@ -39,16 +52,22 @@ pub(crate) fn probe_primary_key(panel: &EditorHostPanel, entry: &ResultEntry) ->
 ///
 /// 与 [`probe_primary_key`] 同口径：失败结果 / 写语句 / 未绑定连接不探测；
 /// 宿主没接注释端口 = 全 `None`（渲染只画列名）。长度与 `entry.columns` 一致。
-pub(crate) fn annotate_columns(panel: &EditorHostPanel, entry: &ResultEntry) -> Vec<Option<ColumnAnnotation>> {
+pub(crate) fn annotate_columns(
+    panel: &EditorHostPanel,
+    entry: &ResultEntry,
+) -> Vec<Option<ColumnAnnotation>> {
     if entry.error.is_some() || entry.columns.is_empty() {
         return vec![];
     }
     let Some(connection) = entry.connection.as_deref() else {
         return vec![None; entry.columns.len()];
     };
-    panel
-        .shared
-        .column_annotations_for(Some(connection), entry.channel, &entry.sql, entry.columns.len())
+    panel.shared.column_annotations_for(
+        Some(connection),
+        entry.channel,
+        &entry.sql,
+        entry.columns.len(),
+    )
 }
 
 /// 执行结论 → 结果条目；同时回执事实帧候选（方案跳 1：无 batches 回执为 `None`）。
@@ -266,7 +285,10 @@ impl From<persist::PersistError> for SaveAsFailure {
 /// 另存为的“选路径 + 写盘”核心（不含失败后的交互）
 ///
 /// 路径选择走宿主注入的端口（[`EditorShared::pick_save_path`]）：编辑器**不依赖** `rfd`。
-pub(crate) fn pick_and_save_as(panel: &Entity<EditorHostPanel>, cx: &mut App) -> Result<(), SaveAsFailure> {
+pub(crate) fn pick_and_save_as(
+    panel: &Entity<EditorHostPanel>,
+    cx: &mut App,
+) -> Result<(), SaveAsFailure> {
     let (current, mode) = {
         let read = panel.read(cx);
         (read.document_path(), read.document_mode())
@@ -399,7 +421,14 @@ pub(crate) fn sync_fold(
         let indent_folding = shared.indent_folding();
         let open_keywords = shared.fold_open_keywords();
         let close_keywords = shared.fold_close_keywords();
-        fold::install(state, &text, indent_folding, &open_keywords, &close_keywords, cx);
+        fold::install(
+            state,
+            &text,
+            indent_folding,
+            &open_keywords,
+            &close_keywords,
+            cx,
+        );
     } else {
         state.set_folding(false, window, cx);
     }

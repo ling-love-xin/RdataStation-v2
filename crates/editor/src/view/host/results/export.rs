@@ -24,7 +24,12 @@ impl EditorHostPanel {
     }
 
     /// 导出的共同开头：选路径（用户取消 = 什么都不做）→ 直接落盘 / 先抓全量
-    pub(crate) fn start_export(&mut self, format: ExportFormat, scope: ExportScope, cx: &mut Context<Self>) {
+    pub(crate) fn start_export(
+        &mut self,
+        format: ExportFormat,
+        scope: ExportScope,
+        cx: &mut Context<Self>,
+    ) {
         tracing::info!(doc = %self.document, format = format.label(), scope = ?scope, "【探针】start_export：导出当前结果集进入");
         if !self.shared.has_export_path_picker() {
             self.set_message(Some("导出未接入（宿主未注入路径选择器）".to_string()), cx);
@@ -165,10 +170,7 @@ impl EditorHostPanel {
         let key = self
             .bound_connection()
             .as_deref()
-            .and_then(|conn| {
-                self.shared
-                    .table_key_columns(Some(conn), &table)
-            })
+            .and_then(|conn| self.shared.table_key_columns(Some(conn), &table))
             .and_then(|columns| export::RowKey::new(columns));
         let text = export::encode_rows_with_key(entry, format, &table, key.as_ref(), &rows);
         // INSERT 对空结果给空串（没有行就没有语句）；CSV / JSON 空结果仍有表头 / `[]`
@@ -196,7 +198,11 @@ impl EditorHostPanel {
     ///
     /// `last_segment_failed` 来自回填循环（取段失败时那句失败**不入存储**，得在这里了断）：
     /// 失败 / 结果集被切换都作废，**不落半截文件**。
-    pub(crate) fn advance_pending_export(&mut self, last_segment_failed: bool, cx: &mut Context<Self>) {
+    pub(crate) fn advance_pending_export(
+        &mut self,
+        last_segment_failed: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(pending) = self.pending_export.as_ref() else {
             return;
         };

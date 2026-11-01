@@ -237,7 +237,10 @@ pub trait QueryRunner: Send + Sync + 'static {
     ///
     /// 默认实现 = 不支持（宿主没接脚本执行能力的真实状态，不是静默失败）。
     /// 与 [`Self::run`] 一样在**工作线程**上调用（实现里可以阻塞）。
-    fn run_script(&self, _request: &crate::env::ScriptRequest) -> Result<crate::env::ScriptOutcome, String> {
+    fn run_script(
+        &self,
+        _request: &crate::env::ScriptRequest,
+    ) -> Result<crate::env::ScriptOutcome, String> {
         Err("当前执行器不支持脚本执行".to_string())
     }
 
@@ -245,7 +248,10 @@ pub trait QueryRunner: Send + Sync + 'static {
     ///
     /// 默认实现 = 不支持（宿主没接单元执行能力的真实状态，不是静默失败）。
     /// 与 [`Self::run_script`] 一样在**工作线程**上调用（实现里可以阻塞）。
-    fn run_cell(&self, _request: &crate::cell::CellRequest) -> Result<crate::cell::CellOutcome, String> {
+    fn run_cell(
+        &self,
+        _request: &crate::cell::CellRequest,
+    ) -> Result<crate::cell::CellOutcome, String> {
         Err("当前执行器不支持单元执行".to_string())
     }
 
@@ -257,4 +263,3 @@ pub trait QueryRunner: Send + Sync + 'static {
         Err("当前执行器不支持导出 Parquet / XLSX".to_string())
     }
 }
-

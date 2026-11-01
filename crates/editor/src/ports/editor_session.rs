@@ -31,9 +31,7 @@ pub fn attach(shared: &EditorShared) {
             // 治理（2026-10-30）：启动装配边界双写——日志系统此时可能已就绪，
             // tracing 承接；未就绪时 eprintln 兜底（原行为不变）。
             tracing::warn!("会话存储未接入（全局库未就绪）：光标与模式不会跨重启保留");
-            eprintln!(
-                "[editor] 会话存储未接入（全局库未就绪）：光标与模式不会跨重启保留"
-            );
+            eprintln!("[editor] 会话存储未接入（全局库未就绪）：光标与模式不会跨重启保留");
         }
     }
 }
@@ -114,14 +112,13 @@ impl WorkbenchSessionStore {
             tab_size: Some(context.tab_size),
             hard_tabs: Some(context.hard_tabs),
             // 【结果集 #296】空串 = 没存过 → 默认序；非空按列名顺序恢复
-            result_column_order: (!context.result_column_order.is_empty())
-                .then(|| {
-                    context
-                        .result_column_order
-                        .split(',')
-                        .map(|column| column.to_string())
-                        .collect()
-                }),
+            result_column_order: (!context.result_column_order.is_empty()).then(|| {
+                context
+                    .result_column_order
+                    .split(',')
+                    .map(|column| column.to_string())
+                    .collect()
+            }),
         }
     }
 }
@@ -254,14 +251,18 @@ mod tests {
     #[test]
     fn the_toolbar_schema_and_indent_travel_through_the_row() {
         let mut customized = session();
-        customized.toolbar =
-            Some("ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,|,More".to_string());
+        customized.toolbar = Some(
+            "ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,|,More".to_string(),
+        );
         customized.schema = Some("analytics".to_string());
         customized.tab_size = Some(4);
         customized.hard_tabs = Some(true);
 
         let row = WorkbenchSessionStore::to_context(&customized);
-        assert_eq!(row.toolbar, customized.toolbar.as_deref().unwrap_or_default());
+        assert_eq!(
+            row.toolbar,
+            customized.toolbar.as_deref().unwrap_or_default()
+        );
         assert_eq!(row.schema, "analytics");
         assert_eq!(row.tab_size, 4);
         assert!(row.hard_tabs);
@@ -273,7 +274,8 @@ mod tests {
         assert_eq!(back.hard_tabs, Some(true));
 
         // 没存过（空串 / 列默认）→ 回来是 None / 默认值：恢复侧不覆盖
-        let plain = WorkbenchSessionStore::to_session(WorkbenchSessionStore::to_context(&session()));
+        let plain =
+            WorkbenchSessionStore::to_session(WorkbenchSessionStore::to_context(&session()));
         assert_eq!(plain.toolbar, None, "空串 = 没存过布局");
         assert_eq!(plain.schema, None, "空串 = 没绑 schema");
         assert_eq!(plain.tab_size, Some(2), "列默认缩进宽度 2");
@@ -292,20 +294,30 @@ mod tests {
     #[test]
     fn the_result_column_order_travels_as_a_comma_list() {
         let mut customized = session();
-        customized.result_column_order =
-            Some(vec!["name".to_string(), "id".to_string(), "created_at".to_string()]);
+        customized.result_column_order = Some(vec![
+            "name".to_string(),
+            "id".to_string(),
+            "created_at".to_string(),
+        ]);
         let row = WorkbenchSessionStore::to_context(&customized);
         assert_eq!(row.result_column_order, "name,id,created_at");
 
         let back = WorkbenchSessionStore::to_session(row);
         assert_eq!(
             back.result_column_order.as_deref(),
-            Some(&["name".to_string(), "id".to_string(), "created_at".to_string()][..]),
+            Some(
+                &[
+                    "name".to_string(),
+                    "id".to_string(),
+                    "created_at".to_string()
+                ][..]
+            ),
             "按列名顺序原样回来"
         );
 
         // 空串 = 没存过 → 默认序（None）
-        let plain = WorkbenchSessionStore::to_session(WorkbenchSessionStore::to_context(&session()));
+        let plain =
+            WorkbenchSessionStore::to_session(WorkbenchSessionStore::to_context(&session()));
         assert_eq!(plain.result_column_order, None, "空串 = 没拖过列序");
     }
 

@@ -223,12 +223,14 @@ mod tests {
             }
         }
         let port = NoopPort;
-        assert!(port
-            .create("Python", EnvKind::Python, "python", &[])
-            .is_err());
-        assert!(port
-            .update("py", "Python", EnvKind::Python, "python", &[])
-            .is_err());
+        assert!(
+            port.create("Python", EnvKind::Python, "python", &[])
+                .is_err()
+        );
+        assert!(
+            port.update("py", "Python", EnvKind::Python, "python", &[])
+                .is_err()
+        );
         assert!(port.delete("py").is_err());
     }
 }

@@ -52,7 +52,9 @@ impl EditorHostPanel {
         match id {
             ToolbarItemId::ExecRun => self.execute_preferring_selection(cx),
             ToolbarItemId::ExecAll => self.run_all(cx),
-            ToolbarItemId::ExecCurrent => self.execute_menu_kind(ExecMenuKind::CurrentStatement, cx),
+            ToolbarItemId::ExecCurrent => {
+                self.execute_menu_kind(ExecMenuKind::CurrentStatement, cx)
+            }
             ToolbarItemId::ExecSelection => self.execute_menu_kind(ExecMenuKind::Selection, cx),
             ToolbarItemId::ExecBatch => self.execute_menu_kind(ExecMenuKind::Batch, cx),
             ToolbarItemId::ExecNewSet => self.execute_menu_kind(ExecMenuKind::NewSet, cx),
@@ -154,5 +156,4 @@ impl EditorHostPanel {
     pub fn toolbar_layout_for_test(&self) -> crate::toolbar::ToolbarLayout {
         self.toolbar.clone()
     }
-
 }

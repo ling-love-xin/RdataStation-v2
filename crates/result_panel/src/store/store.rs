@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::changes::{ChangeSet, EditHistory};
 use crate::rowset::{LocalRowSet, RowHistory};
-use crate::store::{FactState, ResultEntry, ResultPlacement, MAX_RESULT_SETS};
+use crate::store::{FactState, MAX_RESULT_SETS, ResultEntry, ResultPlacement};
 use workbench_shell::model::DocumentId;
 /// 【A3】可追加段事实档合并（方案跳 2：Append 可追加分支新段 batches 并入现有帧）
 ///
@@ -297,8 +297,7 @@ impl ResultStore {
             FactState::None => false,
             FactState::OnDuckDb(_) => true,
             FactState::InMemory(old) => {
-                let Ok(mut frame) =
-                    FactFrame::new(old.columns().to_vec(), old.batches().to_vec())
+                let Ok(mut frame) = FactFrame::new(old.columns().to_vec(), old.batches().to_vec())
                 else {
                     return false;
                 };
@@ -331,8 +330,7 @@ impl ResultStore {
             FactState::None => false,
             FactState::OnDuckDb(_) => true,
             FactState::InMemory(old) => {
-                let Ok(mut frame) =
-                    FactFrame::new(old.columns().to_vec(), old.batches().to_vec())
+                let Ok(mut frame) = FactFrame::new(old.columns().to_vec(), old.batches().to_vec())
                 else {
                     return false;
                 };
@@ -429,7 +427,12 @@ impl ResultStore {
     /// - `None`：清空自定义标题，回到 `结果 N`。
     ///
     /// 返回是否真的改到（文档不存在 / 下标越界 = `false`）。
-    pub fn set_title(&mut self, document: &DocumentId, index: usize, title: Option<String>) -> bool {
+    pub fn set_title(
+        &mut self,
+        document: &DocumentId,
+        index: usize,
+        title: Option<String>,
+    ) -> bool {
         let Some(slot) = self
             .documents
             .iter_mut()
@@ -666,9 +669,9 @@ impl ResultStore {
 /// 内存压力由用户自己去解钉 / 关文档，界面不替他决定）。
 fn evict_oldest(slot: &mut DocumentResults) {
     while slot.sets.len() > MAX_RESULT_SETS {
-        let Some(victim) = (0..slot.sets.len())
-            .find(|index| *index != slot.active && !slot.pinned.get(*index).copied().unwrap_or(false))
-        else {
+        let Some(victim) = (0..slot.sets.len()).find(|index| {
+            *index != slot.active && !slot.pinned.get(*index).copied().unwrap_or(false)
+        }) else {
             break;
         };
         slot.sets.remove(victim);
@@ -724,13 +727,27 @@ mod tests {
     #[test]
     fn replacing_the_same_document_keeps_one_result() {
         let mut store = ResultStore::new();
-        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
-        store.push(entry("doc-1", "select 2", 3), ResultPlacement::Replace, None);
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        store.push(
+            entry("doc-1", "select 2", 3),
+            ResultPlacement::Replace,
+            None,
+        );
 
-        assert_eq!(store.set_count(&DocumentId::new("doc-1")), 1, "同一次执行不叠加");
+        assert_eq!(
+            store.set_count(&DocumentId::new("doc-1")),
+            1,
+            "同一次执行不叠加"
+        );
         assert_eq!(active_sql(&store, "doc-1"), Some("select 2".to_string()));
         assert_eq!(
-            store.active(&DocumentId::new("doc-1")).map(|e| e.row_count()),
+            store
+                .active(&DocumentId::new("doc-1"))
+                .map(|e| e.row_count()),
             Some(3)
         );
     }
@@ -738,8 +755,16 @@ mod tests {
     #[test]
     fn documents_keep_their_own_results() {
         let mut store = ResultStore::new();
-        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
-        store.push(entry("doc-2", "select 2", 2), ResultPlacement::Replace, None);
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        store.push(
+            entry("doc-2", "select 2", 2),
+            ResultPlacement::Replace,
+            None,
+        );
         assert_eq!(store.len(), 2);
         assert_eq!(active_sql(&store, "doc-2"), Some("select 2".to_string()));
     }
@@ -747,7 +772,11 @@ mod tests {
     #[test]
     fn closing_a_document_drops_its_result() {
         let mut store = ResultStore::new();
-        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
         store.clear(&DocumentId::new("doc-1"));
         assert!(store.is_empty());
         assert!(store.active(&DocumentId::new("doc-1")).is_none());
@@ -801,10 +830,7 @@ mod tests {
         let active = store.active(&document).expect("有结果");
         assert_eq!(active.row_count(), 4, "两段接起来");
         assert_eq!(active.elapsed_ms, 8, "耗时累加（抓这份结果花了多久）");
-        assert!(
-            !active.can_fetch_more(),
-            "最后一段没拿满 → 没有下一段了"
-        );
+        assert!(!active.can_fetch_more(), "最后一段没拿满 → 没有下一段了");
     }
 
     /// 列形状变了就不接（当一份新结果落下），不把两行的列错开
@@ -842,8 +868,16 @@ mod tests {
         assert_eq!(store.active_index(&document), Some(1), "新结果被选中");
         assert_eq!(active_sql(&store, "doc-1"), Some("second".to_string()));
 
-        let sqls: Vec<String> = store.sets(&document).iter().map(|e| e.sql.clone()).collect();
-        assert_eq!(sqls, ["first".to_string(), "second".to_string()], "按产生顺序");
+        let sqls: Vec<String> = store
+            .sets(&document)
+            .iter()
+            .map(|e| e.sql.clone())
+            .collect();
+        assert_eq!(
+            sqls,
+            ["first".to_string(), "second".to_string()],
+            "按产生顺序"
+        );
     }
 
     /// 首次执行没有可保留的选中项：新结果集就是被选中的那份
@@ -891,16 +925,27 @@ mod tests {
         }
         // 用户切到第 2 份（下标 1），随后「刷新」（Replace 落到选中项，不增加条数）
         assert!(store.select(&document, 1));
-        store.push(entry("doc-1", "replace-active", 1), ResultPlacement::Replace, None);
+        store.push(
+            entry("doc-1", "replace-active", 1),
+            ResultPlacement::Replace,
+            None,
+        );
         assert_eq!(store.set_count(&document), 3);
-        assert_eq!(active_sql(&store, "doc-1"), Some("replace-active".to_string()));
+        assert_eq!(
+            active_sql(&store, "doc-1"),
+            Some("replace-active".to_string())
+        );
 
         for sql in ["s4", "s5", "s6"] {
             store.push(entry("doc-1", sql, 1), ResultPlacement::NewSet, None);
         }
 
         assert_eq!(store.set_count(&document), MAX_RESULT_SETS, "上限生效");
-        let sqls: Vec<String> = store.sets(&document).iter().map(|e| e.sql.clone()).collect();
+        let sqls: Vec<String> = store
+            .sets(&document)
+            .iter()
+            .map(|e| e.sql.clone())
+            .collect();
         assert!(
             sqls.contains(&"replace-active".to_string()),
             "选中项必须留下：{sqls:?}"
@@ -966,7 +1011,11 @@ mod tests {
     fn compare_cannot_be_the_active_set_itself() {
         let mut store = ResultStore::new();
         let document = DocumentId::new("doc-1");
-        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
         store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet, None);
         // 2026-10-27：NewSet 追加后 active = 最新（index 1）
         assert_eq!(store.active_index(&document), Some(1));
@@ -987,7 +1036,11 @@ mod tests {
     fn selecting_the_compare_set_clears_compare() {
         let mut store = ResultStore::new();
         let document = DocumentId::new("doc-1");
-        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
         store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet, None);
         // active = 1（select 2）；选第 0 份做对比
         assert!(store.select_compare(&document, 0));
@@ -1004,13 +1057,20 @@ mod tests {
     fn toggle_compare_switches_or_clears() {
         let mut store = ResultStore::new();
         let document = DocumentId::new("doc-1");
-        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
         store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet, None);
         store.push(entry("doc-1", "select 3", 3), ResultPlacement::NewSet, None);
         // active = 2（select 3，最新）；选非 active 的份做对比
         assert_eq!(store.active_index(&document), Some(2));
 
-        assert!(store.toggle_compare(&document, 1), "第一次点 = 设上（非 active）");
+        assert!(
+            store.toggle_compare(&document, 1),
+            "第一次点 = 设上（非 active）"
+        );
         assert_eq!(store.compare_index(&document), Some(1));
         assert!(store.toggle_compare(&document, 1), "再点同一份 = 取消");
         assert_eq!(store.compare_index(&document), None);
@@ -1045,7 +1105,11 @@ mod tests {
             ResultPlacement::NewSet,
             None,
         );
-        assert_eq!(store.compare_index(&document), None, "对比对象被淘汰 = 对比失效");
+        assert_eq!(
+            store.compare_index(&document),
+            None,
+            "对比对象被淘汰 = 对比失效"
+        );
 
         // 对比第 2 份；再落一份淘汰它之前的 select1（最旧未选中）→ 对比项前移为 1
         assert!(store.select_compare(&document, 2), "对比第 2 份");
@@ -1063,7 +1127,11 @@ mod tests {
         let mut store = ResultStore::new();
         let document = DocumentId::new("doc-1");
         // 首次执行：历史存在且为空
-        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
         assert!(store.history(&document, 0).is_some_and(|h| !h.can_undo()));
 
         // 追加新结果：历史与 sets 同长
@@ -1077,7 +1145,11 @@ mod tests {
             h.push(crate::changes::CellChange::pending(0, 0, "a", "b"));
         });
         assert!(store.history(&document, 1).is_some_and(|h| h.can_undo()));
-        store.push(entry("doc-1", "select 1b", 1), ResultPlacement::Replace, None);
+        store.push(
+            entry("doc-1", "select 1b", 1),
+            ResultPlacement::Replace,
+            None,
+        );
         assert!(
             store.history(&document, 1).is_some_and(|h| !h.can_undo()),
             "替换后历史清空"
@@ -1089,8 +1161,15 @@ mod tests {
     fn mutate_history_refuses_unknown_slot() {
         let mut store = ResultStore::new();
         let document = DocumentId::new("doc-1");
-        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
-        assert!(!store.mutate_history(&document, 7, |_| {}), "下标越界 = false");
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        assert!(
+            !store.mutate_history(&document, 7, |_| {}),
+            "下标越界 = false"
+        );
         assert!(
             !store.mutate_history(&DocumentId::new("nope"), 0, |_| {}),
             "文档不存在 = false"
@@ -1106,15 +1185,25 @@ mod tests {
         let mut store = ResultStore::new();
         let document = DocumentId::new("doc-1");
         // 首次执行：本地叠加层存在且为空
-        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
-        assert!(store
-            .local_rows(&document, 0)
-            .is_some_and(|set| set.is_empty()));
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        assert!(
+            store
+                .local_rows(&document, 0)
+                .is_some_and(|set| set.is_empty())
+        );
 
         // 追加新结果：叠加层与 sets 同长
         store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet, None);
         assert_eq!(store.sets(&document).len(), 2);
-        assert!(store.local_rows(&document, 1).is_some_and(|set| set.is_empty()));
+        assert!(
+            store
+                .local_rows(&document, 1)
+                .is_some_and(|set| set.is_empty())
+        );
 
         // 往最新那份（active=index 1）写本地行 + 删除标记
         store.mutate_local_rows(&document, 1, |set| {
@@ -1122,12 +1211,18 @@ mod tests {
             set.push_local(LocalRow::new(id, vec!["".to_string()]));
             set.mark_deleted(0);
         });
-        assert!(store
-            .local_rows(&document, 1)
-            .is_some_and(|set| !set.is_empty()));
+        assert!(
+            store
+                .local_rows(&document, 1)
+                .is_some_and(|set| !set.is_empty())
+        );
 
         // 替换选中那份：本地叠加层作废（新数据是新结果，旧本地行没有可归属的对象）
-        store.push(entry("doc-1", "select 1b", 1), ResultPlacement::Replace, None);
+        store.push(
+            entry("doc-1", "select 1b", 1),
+            ResultPlacement::Replace,
+            None,
+        );
         assert!(
             store
                 .local_rows(&document, 1)
@@ -1143,14 +1238,24 @@ mod tests {
 
         let mut store = ResultStore::new();
         let document = DocumentId::new("doc-1");
-        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
-        assert!(store
-            .row_history(&document, 0)
-            .is_some_and(|h| !h.can_undo()));
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        assert!(
+            store
+                .row_history(&document, 0)
+                .is_some_and(|h| !h.can_undo())
+        );
 
         store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet, None);
         assert_eq!(store.sets(&document).len(), 2);
-        assert!(store.row_history(&document, 1).is_some_and(|h| !h.can_undo()));
+        assert!(
+            store
+                .row_history(&document, 1)
+                .is_some_and(|h| !h.can_undo())
+        );
 
         store.mutate_row_history(&document, 1, |h| {
             h.push(RowOp::InsertLocal {
@@ -1158,9 +1263,17 @@ mod tests {
                 anchor: None,
             });
         });
-        assert!(store.row_history(&document, 1).is_some_and(|h| h.can_undo()));
+        assert!(
+            store
+                .row_history(&document, 1)
+                .is_some_and(|h| h.can_undo())
+        );
 
-        store.push(entry("doc-1", "select 1b", 1), ResultPlacement::Replace, None);
+        store.push(
+            entry("doc-1", "select 1b", 1),
+            ResultPlacement::Replace,
+            None,
+        );
         assert!(
             store
                 .row_history(&document, 1)
@@ -1174,8 +1287,15 @@ mod tests {
     fn mutate_local_rows_refuses_unknown_slot() {
         let mut store = ResultStore::new();
         let document = DocumentId::new("doc-1");
-        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
-        assert!(!store.mutate_local_rows(&document, 7, |_| {}), "下标越界 = false");
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        assert!(
+            !store.mutate_local_rows(&document, 7, |_| {}),
+            "下标越界 = false"
+        );
         assert!(
             !store.mutate_local_rows(&DocumentId::new("nope"), 0, |_| {}),
             "文档不存在 = false"
@@ -1188,13 +1308,23 @@ mod tests {
     fn mutate_row_history_refuses_unknown_slot() {
         let mut store = ResultStore::new();
         let document = DocumentId::new("doc-1");
-        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
-        assert!(!store.mutate_row_history(&document, 7, |_| {}), "下标越界 = false");
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        assert!(
+            !store.mutate_row_history(&document, 7, |_| {}),
+            "下标越界 = false"
+        );
         assert!(
             !store.mutate_row_history(&DocumentId::new("nope"), 0, |_| {}),
             "文档不存在 = false"
         );
-        assert!(store.mutate_row_history(&document, 0, |_| {}), "命中 = true");
+        assert!(
+            store.mutate_row_history(&document, 0, |_| {}),
+            "命中 = true"
+        );
     }
 
     /// 【A2】事实档与结果集同生命周期：新结果入槽为 None 档，替换 / 追加保持同序同长
@@ -1204,19 +1334,47 @@ mod tests {
         let document = DocumentId::new("doc-1");
 
         // 首次执行：事实档存在且为 None（A2 尚未接线内存档构造路径）
-        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
-        assert!(store.fact_at(&document, 0).is_some_and(|fact| fact.is_none()));
-        assert!(store.active_fact(&document).is_some_and(|fact| fact.is_none()));
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        assert!(
+            store
+                .fact_at(&document, 0)
+                .is_some_and(|fact| fact.is_none())
+        );
+        assert!(
+            store
+                .active_fact(&document)
+                .is_some_and(|fact| fact.is_none())
+        );
 
         // 追加新结果：事实档与 sets 同长同序
         store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet, None);
         assert_eq!(store.set_count(&document), 2);
-        assert!(store.fact_at(&document, 1).is_some_and(|fact| fact.is_none()));
+        assert!(
+            store
+                .fact_at(&document, 1)
+                .is_some_and(|fact| fact.is_none())
+        );
 
         // 替换选中那份：事实档回 None 档（旧帧随旧结果作废；槽位仍有效、不越界）
-        store.push(entry("doc-1", "select 1b", 1), ResultPlacement::Replace, None);
-        assert!(store.fact_at(&document, 0).is_some_and(|fact| fact.is_none()));
-        assert!(store.active_fact(&document).is_some_and(|fact| fact.is_none()));
+        store.push(
+            entry("doc-1", "select 1b", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        assert!(
+            store
+                .fact_at(&document, 0)
+                .is_some_and(|fact| fact.is_none())
+        );
+        assert!(
+            store
+                .active_fact(&document)
+                .is_some_and(|fact| fact.is_none())
+        );
     }
 
     /// 【A2】fact_at / active_fact 越界与未知文档口径同 sets 系列访问器
@@ -1224,7 +1382,11 @@ mod tests {
     fn fact_access_refuses_unknown_slot() {
         let mut store = ResultStore::new();
         let document = DocumentId::new("doc-1");
-        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
 
         assert!(store.fact_at(&document, 3).is_none(), "下标越界 = None");
         assert!(
@@ -1250,7 +1412,11 @@ mod tests {
         assert!(!table.is_none());
         assert!(table.in_memory().is_none());
         assert!(table.on_duckdb().is_some());
-        assert_eq!(table.estimated_bytes(), 0, "表档 batches 已释放，Rust 堆占用报 0");
+        assert_eq!(
+            table.estimated_bytes(),
+            0,
+            "表档 batches 已释放，Rust 堆占用报 0"
+        );
         assert_eq!(table.temp_table(), Some("tmp_q_result_9"));
         assert_eq!(
             table.on_duckdb().expect("表档帧").row_count(),
@@ -1273,7 +1439,10 @@ mod tests {
         assert!(store.set_fact_table(&document, 0, "tmp_q_result_3".to_string()));
         let fact = store.active_fact(&document).expect("有事实档");
         assert_eq!(fact.temp_table(), Some("tmp_q_result_3"));
-        assert!(fact.in_memory().is_some(), "挂表名不释放 batches，仍为内存档");
+        assert!(
+            fact.in_memory().is_some(),
+            "挂表名不释放 batches，仍为内存档"
+        );
 
         // 无事实档 / 越界 = false
         assert!(!store.set_fact_table(&document, 7, "tmp_q_result_x".to_string()));
@@ -1313,7 +1482,11 @@ mod tests {
     fn promote_refuses_none_fact_slot_and_resets_on_replace() {
         let mut store = ResultStore::new();
         let document = DocumentId::new("doc-1");
-        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
         assert!(
             !store.promote_fact_to_table(&document, 0, "tmp_q_result_x".to_string()),
             "无事实档不能提升"
@@ -1326,8 +1499,16 @@ mod tests {
         );
         store.promote_fact_to_table(&document, 0, "tmp_q_result_8".to_string());
         // 无候选回执替换：表档帧随旧结果作废回 None
-        store.push(entry("doc-1", "select 1b", 1), ResultPlacement::Replace, None);
-        assert!(store.active_fact(&document).is_some_and(|fact| fact.is_none()));
+        store.push(
+            entry("doc-1", "select 1b", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        assert!(
+            store
+                .active_fact(&document)
+                .is_some_and(|fact| fact.is_none())
+        );
     }
 
     /// 【A2】淘汰最旧结果集时事实档平行缩短：不存在“set 没了、fact 残留”的错位
@@ -1358,8 +1539,16 @@ mod tests {
         assert_eq!(active.in_memory().expect("内存档").row_count(), 2);
 
         // 再替换为无候选回执（DML / 加速档 / 联邦档）：旧帧随旧结果作废
-        store.push(entry("doc-1", "select 1b", 1), ResultPlacement::Replace, None);
-        assert!(store.active_fact(&document).is_some_and(|fact| fact.is_none()));
+        store.push(
+            entry("doc-1", "select 1b", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        assert!(
+            store
+                .active_fact(&document)
+                .is_some_and(|fact| fact.is_none())
+        );
     }
 
     /// 【A3】Append 同形状两段：事实帧 batches 合并、行数累加；新段无候选回执保留旧帧
@@ -1411,7 +1600,9 @@ mod tests {
         other.columns = vec!["x".to_string()];
         store.push(other, ResultPlacement::Append, None);
         assert!(
-            store.active_fact(&document).is_some_and(|fact| fact.is_none()),
+            store
+                .active_fact(&document)
+                .is_some_and(|fact| fact.is_none()),
             "形状对不上 = 新结果，旧帧不再归属本段"
         );
     }

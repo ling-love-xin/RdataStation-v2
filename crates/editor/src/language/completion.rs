@@ -133,7 +133,8 @@ pub trait CompletionPort: 'static {
     ///
     /// 实现必须**同步 + 内存**：这是编辑路径（每次按键）。真实元数据由宿主在后台预载，
     /// 没载好就返回空——**宁可这次不补，也不在按键里做 I/O**。
-    fn catalog(&self, conn_id: Option<&str>, channel: ExecChannel, schema: Option<&str>) -> Catalog;
+    fn catalog(&self, conn_id: Option<&str>, channel: ExecChannel, schema: Option<&str>)
+    -> Catalog;
 
     /// 【B9 切片二】模板片段（宿主从 `sql_template_store` 读；未接 = 空）
     ///
@@ -152,7 +153,12 @@ pub trait CompletionPort: 'static {
     /// 默认实现给 `None`：不接的宿主如实不给行标识——判据层（`result_editable` 的
     /// `NoRowKey`）会把该结果整表置为只读，**绝不编造一个键**（写回靠主键 WHERE 定位行，
     /// 猜键就是改错行的风险）。
-    fn primary_key(&self, _conn_id: Option<&str>, _channel: ExecChannel, _table: &str) -> Option<Vec<String>> {
+    fn primary_key(
+        &self,
+        _conn_id: Option<&str>,
+        _channel: ExecChannel,
+        _table: &str,
+    ) -> Option<Vec<String>> {
         None
     }
 
@@ -196,9 +202,7 @@ pub struct TemplateSnippet {
 /// 插入之后按它选中那一小段：用户接着敲表名就把它覆写了，不用先去找到那 7 个字符。
 pub fn placeholder_range(content: &str) -> Option<(usize, usize)> {
     const MARK: &str = "{table}";
-    content
-        .find(MARK)
-        .map(|start| (start, start + MARK.len()))
+    content.find(MARK).map(|start| (start, start + MARK.len()))
 }
 
 /// 【B9 切片二】光标前那段标识符的起点（手动触发 `Ctrl+Space` 时的替换范围）
@@ -255,7 +259,17 @@ const OBJECT_KEYWORDS: [&str; 10] = [
 
 /// `SELECT` 这类**后面跟列 / 表达式**的关键字
 const COLUMN_KEYWORDS: [&str; 12] = [
-    "select", "where", "on", "and", "or", "set", "by", "having", "using", "returning", "case",
+    "select",
+    "where",
+    "on",
+    "and",
+    "or",
+    "set",
+    "by",
+    "having",
+    "using",
+    "returning",
+    "case",
     "when",
 ];
 
@@ -445,9 +459,23 @@ pub fn candidates(catalog: &Catalog, request: &Request, limit: usize) -> Vec<Can
             }
             // `源.` 之后也可能是 schema / 表（联邦档的 `mysql_src.`）
             for object in &catalog.objects {
-                if object.label.to_ascii_lowercase().starts_with(&format!("{qualifier}.")) {
-                    let tail = object.label.split('.').skip(1).collect::<Vec<_>>().join(".");
-                    push(&mut out, &prefix, Candidate::new(tail, object.kind), &object.label);
+                if object
+                    .label
+                    .to_ascii_lowercase()
+                    .starts_with(&format!("{qualifier}."))
+                {
+                    let tail = object
+                        .label
+                        .split('.')
+                        .skip(1)
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    push(
+                        &mut out,
+                        &prefix,
+                        Candidate::new(tail, object.kind),
+                        &object.label,
+                    );
                 }
             }
             // 限定名认不出来（大概率是语句里的**表别名** `o.`，我们不解析 SQL）→ 给全部列。
@@ -460,7 +488,12 @@ pub fn candidates(catalog: &Catalog, request: &Request, limit: usize) -> Vec<Can
         }
         Request::Object { .. } => {
             for object in &catalog.objects {
-                push(&mut out, &prefix, object.clone(), last_segment(&object.label));
+                push(
+                    &mut out,
+                    &prefix,
+                    object.clone(),
+                    last_segment(&object.label),
+                );
             }
         }
         Request::Column { .. } => {
@@ -478,7 +511,12 @@ pub fn candidates(catalog: &Catalog, request: &Request, limit: usize) -> Vec<Can
         }
         Request::Any { .. } => {
             for object in &catalog.objects {
-                push(&mut out, &prefix, object.clone(), last_segment(&object.label));
+                push(
+                    &mut out,
+                    &prefix,
+                    object.clone(),
+                    last_segment(&object.label),
+                );
             }
             for (_, column, _) in &catalog.columns {
                 push(
@@ -541,8 +579,9 @@ pub fn candidates(catalog: &Catalog, request: &Request, limit: usize) -> Vec<Can
 /// 列候选（带类型说明）
 fn column_candidate(column: &str, detail: &Option<String>) -> Candidate {
     match detail {
-        Some(detail) => Candidate::new(column.to_string(), CandidateKind::Column)
-            .with_detail(detail.clone()),
+        Some(detail) => {
+            Candidate::new(column.to_string(), CandidateKind::Column).with_detail(detail.clone())
+        }
         None => Candidate::new(column.to_string(), CandidateKind::Column),
     }
 }
@@ -550,7 +589,9 @@ fn column_candidate(column: &str, detail: &Option<String>) -> Candidate {
 /// 表的限定名与用户敲的前缀对不对得上（全名或最后一段）
 fn table_matches(table: &str, qualifier: &str) -> bool {
     let table = table.to_ascii_lowercase();
-    table == qualifier || last_segment(&table) == qualifier || table.ends_with(&format!(".{qualifier}"))
+    table == qualifier
+        || last_segment(&table) == qualifier
+        || table.ends_with(&format!(".{qualifier}"))
 }
 
 /// 限定名的最后一段（`schema.表` → `表`；`别名.schema.表` → `表`）
@@ -652,7 +693,10 @@ mod tests {
         // 中文 SQL：偏移落在汉字中间时不能 panic（就地回退到上一个边界）
         let sql = "select 名称";
         let request = request_at(sql, sql.len() - 1);
-        assert!(matches!(request, Request::Column { .. } | Request::Any { .. }));
+        assert!(matches!(
+            request,
+            Request::Column { .. } | Request::Any { .. }
+        ));
         // 越界
         let _ = request_at(sql, 9999);
     }
@@ -683,11 +727,7 @@ mod tests {
 
     #[test]
     fn objects_are_matched_by_their_last_segment() {
-        let found = candidates(
-            &catalog(),
-            &at("select * from ord"),
-            50,
-        );
+        let found = candidates(&catalog(), &at("select * from ord"), 50);
         let labels: Vec<&str> = found.iter().map(|c| c.label.as_str()).collect();
         assert_eq!(
             labels,
@@ -702,7 +742,11 @@ mod tests {
         // 限定名认得出来（全名 / 最后一段）→ 只给那个表的列
         let found = candidates(&catalog(), &at("select orders."), 50);
         let labels: Vec<&str> = found.iter().map(|c| c.label.as_str()).collect();
-        assert_eq!(labels, vec!["id", "total"], "限定名按最后一段匹配：{labels:?}");
+        assert_eq!(
+            labels,
+            vec!["id", "total"],
+            "限定名按最后一段匹配：{labels:?}"
+        );
         assert_eq!(found[1].detail.as_deref(), Some("numeric"), "列类型带上");
 
         // 全名也行（`public.orders.`）
@@ -712,14 +756,21 @@ mod tests {
         // 认不出来（大概率是语句里的表别名 `o.`）→ 给全部列，并给出提示性说明
         let found = candidates(&catalog(), &at("select o."), 50);
         let labels: Vec<&str> = found.iter().map(|c| c.label.as_str()).collect();
-        assert_eq!(labels, vec!["id", "order_id", "total"], "别名给全量：{labels:?}");
+        assert_eq!(
+            labels,
+            vec!["id", "order_id", "total"],
+            "别名给全量：{labels:?}"
+        );
     }
 
     #[test]
     fn an_alias_qualifier_offers_the_sources_schemas() {
         // 联邦档：`mysql_src.` → 该源的 schema.表（去掉别名前缀）
         let catalog = Catalog {
-            objects: vec![Candidate::new("mysql_src.orders_db.orders", CandidateKind::Table)],
+            objects: vec![Candidate::new(
+                "mysql_src.orders_db.orders",
+                CandidateKind::Table,
+            )],
             columns: vec![],
             truncated: false,
         };
@@ -755,7 +806,13 @@ mod tests {
         let found = candidates(&duplicated, &at("select * from ord"), 50);
         assert_eq!(found.len(), 1, "同标签只留一条");
 
-        let capped = candidates(&catalog(), &Request::Any { prefix: String::new() }, 3);
+        let capped = candidates(
+            &catalog(),
+            &Request::Any {
+                prefix: String::new(),
+            },
+            3,
+        );
         assert_eq!(capped.len(), 3, "上限生效");
     }
 
@@ -764,11 +821,19 @@ mod tests {
     fn the_word_start_marks_what_manual_completion_should_replace() {
         let text = "select id, total from public.ord";
         assert_eq!(word_start(text, text.len()), text.len() - 3, "`ord`");
-        assert_eq!(word_start(text, 29), 29, "`public.` 之后就空了（`.` 不算标识符）");
+        assert_eq!(
+            word_start(text, 29),
+            29,
+            "`public.` 之后就空了（`.` 不算标识符）"
+        );
         // 光标在 `public` 里面：整个词都算进去（它才是当前在敲的那个词）
         assert_eq!(word_start(text, 28), 22, "`public` 从 22 开始");
         let spaced = "select * from ";
-        assert_eq!(word_start(spaced, spaced.len()), spaced.len(), "空格后就从光标开始插");
+        assert_eq!(
+            word_start(spaced, spaced.len()),
+            spaced.len(),
+            "空格后就从光标开始插"
+        );
         assert_eq!(word_start("", 0), 0);
         assert_eq!(word_start("select 1", 999), 7, "越界钳到文本末尾，词是 `1`");
         // 中文标识符（可当列名用）不该被切坏
@@ -781,10 +846,7 @@ mod tests {
     /// 【B9 切片二】模板里的 `{table}` 要能被选中（没占位符就不选）
     #[test]
     fn the_table_placeholder_is_located_within_the_template() {
-        assert_eq!(
-            placeholder_range("SELECT * FROM {table};"),
-            Some((14, 21))
-        );
+        assert_eq!(placeholder_range("SELECT * FROM {table};"), Some((14, 21)));
         assert_eq!(placeholder_range("SELECT 1;"), None);
         // 只认第一个：替换一个就够，剩下的交给用户
         assert_eq!(placeholder_range("{table} {table}"), Some((0, 7)));
@@ -815,11 +877,17 @@ mod tests {
 
         // 选 analytics：只留 schema 段 = analytics 的对象与列
         let filtered = filter_catalog_by_schema(catalog, Some("analytics"));
-        assert_eq!(filtered.objects.len(), 2, "analytics.orders + analytics.customers");
-        assert!(filtered
-            .objects
-            .iter()
-            .all(|c| c.label.starts_with("analytics.")));
+        assert_eq!(
+            filtered.objects.len(),
+            2,
+            "analytics.orders + analytics.customers"
+        );
+        assert!(
+            filtered
+                .objects
+                .iter()
+                .all(|c| c.label.starts_with("analytics."))
+        );
         assert_eq!(filtered.columns.len(), 1, "analytics.orders.total");
         assert_eq!(filtered.columns[0].0, "analytics.orders");
     }

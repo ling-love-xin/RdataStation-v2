@@ -192,7 +192,12 @@ mod tests {
             start: text.find("select a,b").expect("选区在"),
             end: text.find("where x=1").expect("选区在") + "where x=1".len(),
         };
-        let plan = plan(text, selection.clone(), SqlDialect::Ansi, FormatOptions::default());
+        let plan = plan(
+            text,
+            selection.clone(),
+            SqlDialect::Ansi,
+            FormatOptions::default(),
+        );
         // 选区之前（含注释）逐字不动
         assert!(
             plan.text.starts_with("select 1;\n\n-- 这段别动\n"),
@@ -224,7 +229,12 @@ mod tests {
         let text = "select 1;\nselect a,b from t where x=1;\nselect 3;";
         // 光标落在第二条语句的 `where` 上
         let offset = text.find("where").expect("找得到") + 2;
-        let plan = plan(text, offset..offset, SqlDialect::Ansi, FormatOptions::default());
+        let plan = plan(
+            text,
+            offset..offset,
+            SqlDialect::Ansi,
+            FormatOptions::default(),
+        );
         assert!(plan.text.contains("SELECT\n  1;"), "{:?}", plan.text);
         assert!(plan.selection.is_none(), "整篇格式化不选中任何东西");
         // 光标还在第二条语句的区间内
@@ -244,14 +254,22 @@ mod tests {
         let plan = plan(text, 0..0, SqlDialect::Ansi, FormatOptions::default());
         assert_eq!(plan.formatted, 1);
         assert_eq!(plan.kept_verbatim, 1, "没写完的那句要如实报出来");
-        assert!(plan.text.contains("select (\nselect") || plan.text.contains("select ("), "{:?}", plan.text);
+        assert!(
+            plan.text.contains("select (\nselect") || plan.text.contains("select ("),
+            "{:?}",
+            plan.text
+        );
     }
 
     #[test]
     fn an_already_formatted_document_is_left_alone() {
         let text = "SELECT\n  1;\n\nSELECT\n  2;\n";
         let plan = plan(text, 0..0, SqlDialect::Ansi, FormatOptions::default());
-        assert!(!plan.changes(text), "已经是格式化后的样子就不该改动：{:?}", plan.text);
+        assert!(
+            !plan.changes(text),
+            "已经是格式化后的样子就不该改动：{:?}",
+            plan.text
+        );
     }
 
     #[test]
@@ -260,9 +278,17 @@ mod tests {
         let new = "SELECT\n  1;\n";
         // 落在语句之外（结尾空行）→ 钳到新文本长度（不断言具体值，只断言不越界）
         let mapped = map_offset(old, new, old.len());
-        assert!(mapped <= new.len(), "{mapped} 越过了新文本长度 {}", new.len());
+        assert!(
+            mapped <= new.len(),
+            "{mapped} 越过了新文本长度 {}",
+            new.len()
+        );
         // 越界也不 panic：先钳到旧文本长度，再保证不越新文本
         let mapped = map_offset("select 1;", new, usize::MAX);
-        assert!(mapped <= new.len(), "{mapped} 越过了新文本长度 {}", new.len());
+        assert!(
+            mapped <= new.len(),
+            "{mapped} 越过了新文本长度 {}",
+            new.len()
+        );
     }
 }

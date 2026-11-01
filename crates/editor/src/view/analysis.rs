@@ -20,13 +20,13 @@
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::base::text::TextView;
-use gpui_kit::component::input::{Editor, EditorState};
-use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
 use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
+use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -68,13 +68,11 @@ pub fn render(
     if state.cells.is_empty() {
         return empty_state(cx, document, entity).into_any_element();
     }
-    let mut body = div()
+    let mut body = div().v_flex().w_full().items_center().gap_1().py_2();
+    let mut list = div()
         .v_flex()
         .w_full()
-        .items_center()
-        .gap_1()
-        .py_2();
-    let mut list = div().v_flex().w_full().max_w(rems(ui::NOTEBOOK_CELL_MAX_WIDTH));
+        .max_w(rems(ui::NOTEBOOK_CELL_MAX_WIDTH));
     for (ix, cell) in state.cells.iter().enumerate() {
         list = list.child(cell_card(
             cx,
@@ -120,11 +118,7 @@ fn add_cell_row(document: &DocumentId, entity: &PanelEntity) -> impl IntoElement
 }
 
 /// 空态引导卡（T2d-6 / 原型 §4.4）：没单元时不是空白，而是告诉用户笔记是什么、从哪开始
-fn empty_state(
-    cx: &App,
-    document: &DocumentId,
-    entity: PanelEntity,
-) -> impl IntoElement {
+fn empty_state(cx: &App, document: &DocumentId, entity: PanelEntity) -> impl IntoElement {
     let theme = cx.theme();
     let muted = theme.colors.muted_foreground;
     let entity = entity.clone();
@@ -282,15 +276,16 @@ fn cell_card(
                     // 【B2 延伸】cell 编辑器也挂中文右键菜单（覆盖内核英文默认）：
                     // 与主编辑器同款——能力位在闭包里读捕获的内核实体判断。
                     let editor_entity = editor.clone();
-                    let context_menu = move |_menu: gpui_kit::component::native_menu::NativeMenu,
-                                            _window: &mut Window,
-                                            cx: &mut App| {
-                        let entries = {
-                            let state = editor_entity.read(cx);
-                            editor_context_menu_entries(state)
+                    let context_menu =
+                        move |_menu: gpui_kit::component::native_menu::NativeMenu,
+                              _window: &mut Window,
+                              cx: &mut App| {
+                            let entries = {
+                                let state = editor_entity.read(cx);
+                                editor_context_menu_entries(state)
+                            };
+                            menu_from_entries(entries)
                         };
-                        menu_from_entries(entries)
-                    };
                     // 外层 div 带业务键 id + test_support：headless 测试据此定位 / 点击
                     body.child(
                         div()
@@ -309,7 +304,14 @@ fn cell_card(
             card.child(output_section(theme, cell))
         })
         // 右下角指示器（对齐 VS Code Jupyter：语言 + 执行源，可点切换）
-        .child(cell_footer(theme, cell, document, entity, connections, kernels))
+        .child(cell_footer(
+            theme,
+            cell,
+            document,
+            entity,
+            connections,
+            kernels,
+        ))
 }
 
 /// 右下角指示器：语言标签 + 执行源（连接 / 内核）
@@ -341,7 +343,9 @@ fn cell_footer(
                 Button::new(format!("editor-nb-source-{}", cell.id))
                     .ghost()
                     .xsmall()
-                    .debug_selector(move || format!("editor-nb-source-{}", cell_kind_key(&cell.id.clone())))
+                    .debug_selector(move || {
+                        format!("editor-nb-source-{}", cell_kind_key(&cell.id.clone()))
+                    })
                     .label(label)
                     .dropdown_menu(menu),
             )
@@ -447,7 +451,9 @@ fn execution_source_menu(
                                     panel.notebook_set_execution_source(
                                         &document,
                                         &cell_id,
-                                        Some(crate::cell::ExecutionSource::Connection(conn_id.clone())),
+                                        Some(crate::cell::ExecutionSource::Connection(
+                                            conn_id.clone(),
+                                        )),
                                         cx,
                                     );
                                 });
@@ -526,10 +532,7 @@ fn cell_body_text(cell: &Cell) -> String {
 
 /// 单元输出区：**逐个渲染**输出（多输出语义：一次执行可有 stdout 流 + 富输出，
 /// 顺序 = 到达顺序；每个输出独立成块，之间用顶部分隔线区分）
-fn output_section(
-    theme: &gpui_kit::component::Theme,
-    cell: &Cell,
-) -> impl IntoElement {
+fn output_section(theme: &gpui_kit::component::Theme, cell: &Cell) -> impl IntoElement {
     let mut body = div().w_full().v_flex();
     for (ix, output) in cell.outputs.iter().enumerate() {
         body = body.child(render_output(theme, output, ix));
@@ -545,9 +548,7 @@ fn render_output(
     output: &Output,
     ix: usize,
 ) -> impl IntoElement {
-    let block = div()
-        .id(format!("editor-nb-output-{ix}"))
-        .test_support();
+    let block = div().id(format!("editor-nb-output-{ix}")).test_support();
     match output {
         Output::Table(entry) => {
             let row_count = entry.rows.len();
@@ -614,30 +615,24 @@ fn render_inline_table(
     rows: &[Vec<String>],
     caption: Option<String>,
 ) -> AnyElement {
-    let header = TableHeader::new().child(
-        TableRow::new().children(columns.iter().map(|name| {
-            TableHead::new().child(
+    let header = TableHeader::new().child(TableRow::new().children(columns.iter().map(|name| {
+        TableHead::new().child(
+            div()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(name.clone()),
+        )
+    })));
+    let body = TableBody::new().children(rows.iter().take(ANALYSIS_INLINE_MAX_ROWS).map(|row| {
+        TableRow::new().children(row.iter().map(|cell| {
+            TableCell::new().child(
                 div()
                     .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child(name.clone()),
+                    .text_color(theme.colors.foreground)
+                    .child(cell.clone()),
             )
-        })),
-    );
-    let body = TableBody::new().children(
-        rows.iter()
-            .take(ANALYSIS_INLINE_MAX_ROWS)
-            .map(|row| {
-                TableRow::new().children(row.iter().map(|cell| {
-                    TableCell::new().child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.colors.foreground)
-                            .child(cell.clone()),
-                    )
-                }))
-            }),
-    );
+        }))
+    }));
     div()
         .w_full()
         .px_3()
@@ -670,11 +665,7 @@ fn render_inline_table(
 
 /// 图片输出（matplotlib 的 `image/png` 主力）：`Img` 元素 + Contain 缩放，
 /// 限宽防撑破卡片（原图可能很大）
-fn render_image(
-    theme: &gpui_kit::component::Theme,
-    bytes: &[u8],
-    mime: &str,
-) -> AnyElement {
+fn render_image(theme: &gpui_kit::component::Theme, bytes: &[u8], mime: &str) -> AnyElement {
     let format = match mime {
         "image/jpeg" => ImageFormat::Jpeg,
         "image/gif" => ImageFormat::Gif,
@@ -698,11 +689,31 @@ fn render_image(
 /// 语言徽标：颜色 = 可执行性（可执行 = 主色 / 备注 = 次级色），形状 = 语言
 fn badge(theme: &gpui_kit::component::Theme, language: CellLanguage) -> impl IntoElement {
     let (label, color, bg) = match language {
-        CellLanguage::Sql => ("SQL", theme.colors.primary, theme.colors.primary.opacity(0.12)),
-        CellLanguage::Python => ("Py", theme.colors.primary, theme.colors.primary.opacity(0.12)),
-        CellLanguage::R => ("R", theme.colors.primary, theme.colors.primary.opacity(0.12)),
-        CellLanguage::Julia => ("JL", theme.colors.primary, theme.colors.primary.opacity(0.12)),
-        CellLanguage::Markdown => ("M↓", theme.colors.muted_foreground, theme.colors.muted_foreground.opacity(0.12)),
+        CellLanguage::Sql => (
+            "SQL",
+            theme.colors.primary,
+            theme.colors.primary.opacity(0.12),
+        ),
+        CellLanguage::Python => (
+            "Py",
+            theme.colors.primary,
+            theme.colors.primary.opacity(0.12),
+        ),
+        CellLanguage::R => (
+            "R",
+            theme.colors.primary,
+            theme.colors.primary.opacity(0.12),
+        ),
+        CellLanguage::Julia => (
+            "JL",
+            theme.colors.primary,
+            theme.colors.primary.opacity(0.12),
+        ),
+        CellLanguage::Markdown => (
+            "M↓",
+            theme.colors.muted_foreground,
+            theme.colors.muted_foreground.opacity(0.12),
+        ),
     };
     div()
         .flex_none()
@@ -716,11 +727,7 @@ fn badge(theme: &gpui_kit::component::Theme, language: CellLanguage) -> impl Int
 }
 
 /// ▶ 运行 / 中断：只有 SQL 单元可执行（Text 单元如实不亮）
-fn run_button(
-    cell: &Cell,
-    document: &DocumentId,
-    entity: &PanelEntity,
-) -> impl IntoElement {
+fn run_button(cell: &Cell, document: &DocumentId, entity: &PanelEntity) -> impl IntoElement {
     let running = cell.state == CellState::Running;
     let entity = entity.clone();
     let document = document.clone();
@@ -750,11 +757,7 @@ fn run_button(
 ///
 /// 用 `Button::dropdown_menu` 承载（与 host.rs 的环境选择器同款）：`PopupMenu` 的构造器
 /// 在组件库里是 `pub(crate)`，editor 侧不能直接 new，只能走弹层菜单的 builder 闭包。
-fn menu_button(
-    cell: &Cell,
-    document: &DocumentId,
-    entity: &PanelEntity,
-) -> impl IntoElement {
+fn menu_button(cell: &Cell, document: &DocumentId, entity: &PanelEntity) -> impl IntoElement {
     let id = cell.id.clone();
     let id_debug = id.clone();
     let language = cell.language;

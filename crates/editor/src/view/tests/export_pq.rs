@@ -1,10 +1,7 @@
 //! （由 view/tests.rs 拆分，2026-10-29）
 //! 注意：不用 `use super::*` 通配（gpui `test` 宏递归），依赖显式列举。
 
-
-use gpui_kit::{
-    Entity, TestAppContext, VisualTestContext,
-};
+use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 
 use crate::channel::ExecChannel;
 use crate::execution::{self, QueryData, QueryRunner};
@@ -14,10 +11,8 @@ use crate::service::OpenRequest;
 use crate::shared::EditorShared;
 use crate::view::host::EditorHostPanel;
 
-use super::{
-    grid_rows, open_panel, run_statement, shared_with_runner,
-};
 use super::results_b::{attach_export_picker, export_temp_path};
+use super::{grid_rows, open_panel, run_statement, shared_with_runner};
 
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -142,7 +137,10 @@ fn parquet_export_goes_through_the_runner(cx: &mut TestAppContext) {
         .expect("回执要落到状态栏");
     assert!(message.contains("已导出 3 行"), "{message}");
     assert!(message.contains("Parquet"), "{message}");
-    assert!(message.contains("数字列按文本存储"), "降级档要在回执明示：{message}");
+    assert!(
+        message.contains("数字列按文本存储"),
+        "降级档要在回执明示：{message}"
+    );
     assert!(!path.exists(), "假执行器不写文件（真写是引擎那条路的事）");
 }
 
@@ -195,7 +193,10 @@ fn duckdb_export_follows_the_local_filter(cx: &mut TestAppContext) {
         .update(|_window, cx| panel.read(cx).message.clone())
         .expect("回执要落到状态栏");
     assert!(message.contains("已导出 1 行（已筛选）"), "{message}");
-    assert!(message.contains("数字列按文本存储"), "降级档要在回执明示：{message}");
+    assert!(
+        message.contains("数字列按文本存储"),
+        "降级档要在回执明示：{message}"
+    );
 }
 
 /// 【B7 切片二】执行器不支持这条路时，如实说原因（不静默失败）

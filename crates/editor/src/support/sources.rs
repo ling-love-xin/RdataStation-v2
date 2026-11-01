@@ -83,7 +83,10 @@ pub struct SourcesSnapshot {
 
 impl SourcesSnapshot {
     pub fn ready_count(&self) -> usize {
-        self.sources.iter().filter(|row| row.state.is_ready()).count()
+        self.sources
+            .iter()
+            .filter(|row| row.state.is_ready())
+            .count()
     }
 }
 
@@ -124,10 +127,7 @@ pub fn menu_entries(snapshot: Option<&SourcesSnapshot>) -> Vec<SourceMenuEntry> 
     };
 
     let mut entries = vec![SourceMenuEntry::Info(match snapshot.primary.as_deref() {
-        Some(primary) => format!(
-            "联邦 · {} 个源 · 主源 {primary}",
-            snapshot.sources.len()
-        ),
+        Some(primary) => format!("联邦 · {} 个源 · 主源 {primary}", snapshot.sources.len()),
         None => format!("联邦 · {} 个源 · 当前没有可用源", snapshot.sources.len()),
     })];
     if let Some(note) = &snapshot.note {
@@ -247,7 +247,9 @@ mod tests {
             "{entries:?}"
         );
         assert!(
-            entries.iter().any(|e| matches!(e, SourceMenuEntry::Info(text) if text.contains("已改用"))),
+            entries
+                .iter()
+                .any(|e| matches!(e, SourceMenuEntry::Info(text) if text.contains("已改用"))),
             "回退说明不能吞：{entries:?}"
         );
         assert_eq!(
@@ -267,10 +269,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(
-            actions.contains(&&SourceAction::RefreshAll),
-            "{actions:?}"
-        );
+        assert!(actions.contains(&&SourceAction::RefreshAll), "{actions:?}");
         assert!(
             actions.contains(&&SourceAction::SetPrimary {
                 alias: "mysql_src".to_string()

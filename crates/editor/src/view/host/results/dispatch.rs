@@ -40,7 +40,11 @@ impl EditorHostPanel {
     }
 
     /// 单条结果动作的分派（语义与渲染区删除前的按钮回调一一对应）
-    pub(crate) fn dispatch_result_request(&mut self, request: ResultRequest, cx: &mut Context<Self>) {
+    pub(crate) fn dispatch_result_request(
+        &mut self,
+        request: ResultRequest,
+        cx: &mut Context<Self>,
+    ) {
         match request {
             ResultRequest::SelectSet(index) => self.select_result_set(index, cx),
             ResultRequest::SelectCompare(index) => self.select_compare_set(index, cx),
@@ -98,12 +102,17 @@ impl EditorHostPanel {
             // 生成 SQL 写入面板 exec_sql（右栏「执行SQL」页签）
             ResultRequest::RunFilterAsQuery => self.run_filter_as_query(cx),
             // 【1.2】筛选框展开 / 收起（顶宽筛选条）
-            ResultRequest::ToggleFilterExpand => {
-                self.result_panel.update(cx, |p, cx| p.toggle_filter_expand(cx))
-            }
+            ResultRequest::ToggleFilterExpand => self
+                .result_panel
+                .update(cx, |p, cx| p.toggle_filter_expand(cx)),
             // 【1.2】复制「执行SQL」页签里的 wrapped SQL
             ResultRequest::CopyExecSql => {
-                let sql = self.result_panel.read(cx).exec_sql().unwrap_or("").to_string();
+                let sql = self
+                    .result_panel
+                    .read(cx)
+                    .exec_sql()
+                    .unwrap_or("")
+                    .to_string();
                 if !sql.is_empty() {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(sql));
                 }
@@ -127,13 +136,13 @@ impl EditorHostPanel {
             ResultRequest::LocateError => self.jump_to_error_site(cx),
             ResultRequest::SetPushdown { open } => self.set_pushdown(open, cx),
             // 【侧栏】右侧辅助栏开合：只翻面板状态
-            ResultRequest::ToggleValueSidebar => {
-                self.result_panel.update(cx, |p, cx| p.toggle_value_sidebar(cx))
-            }
+            ResultRequest::ToggleValueSidebar => self
+                .result_panel
+                .update(cx, |p, cx| p.toggle_value_sidebar(cx)),
             // 【侧栏】状态栏左端开关：左侧栏（网格 / 文本 / 记录竖条）开合
-            ResultRequest::ToggleLeftSidebar => {
-                self.result_panel.update(cx, |p, cx| p.toggle_left_sidebar(cx))
-            }
+            ResultRequest::ToggleLeftSidebar => self
+                .result_panel
+                .update(cx, |p, cx| p.toggle_left_sidebar(cx)),
             // 【侧栏】清单行眼睛：切换该列隐藏 / 显示（网格是另一实体，
             // update 它安全；面板再 notify 重画列浏览器的隐藏标记）
             ResultRequest::ToggleColumnVisibility(column) => {
@@ -156,7 +165,8 @@ impl EditorHostPanel {
             }
             // 【右栏】标签页切换（列浏览器 / 值详情 / 计算 / 分组）：纯面板状态
             ResultRequest::SetRightTab(tab) => {
-                self.result_panel.update(cx, |p, cx| p.set_right_tab(tab, cx));
+                self.result_panel
+                    .update(cx, |p, cx| p.set_right_tab(tab, cx));
             }
             // 【列浏览器】清单单击选中列：面板写选中态 + 网格列高亮联动（方法内部已联动网格）
             ResultRequest::SelectColumn(column) => {
@@ -213,7 +223,8 @@ impl EditorHostPanel {
             }
             // 【B1】列头直接显示注释（面板级临时开关）
             ResultRequest::SetShowColumnComments { open } => {
-                self.result_panel.update(cx, |p, cx| p.set_show_column_comments(open, cx));
+                self.result_panel
+                    .update(cx, |p, cx| p.set_show_column_comments(open, cx));
             }
         }
     }
@@ -244,5 +255,4 @@ impl EditorHostPanel {
             entity.update(app, |this, cx| this.request_custom_analysis(window, cx));
         });
     }
-
 }

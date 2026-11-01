@@ -1,10 +1,7 @@
 //! （由 view/tests.rs 拆分，2026-10-29）
 //! 注意：不用 `use super::*` 通配（gpui `test` 宏递归），依赖显式列举。
 
-
-use gpui_kit::{
-    Entity, Focusable as _, TestAppContext, VisualTestContext,
-};
+use gpui_kit::{Entity, Focusable as _, TestAppContext, VisualTestContext};
 
 use crate::channel::ExecChannel;
 use crate::execution::{self, QueryData, QueryRunner};
@@ -13,14 +10,12 @@ use crate::service::OpenRequest;
 use crate::shared::EditorShared;
 use crate::view::host::EditorHostPanel;
 
-use super::{
-    bind_editor_keys, grid_rows, open_panel, result_tabs,
-    shared_with_document, shared_with_runner,
-    shared_with_sized_runner, wait_for_all_pending,
-    wait_for_result, wait_until,
-};
 use super::SeenConnections;
 use super::dialogs::dialog_button_rendered;
+use super::{
+    bind_editor_keys, grid_rows, open_panel, result_tabs, shared_with_document, shared_with_runner,
+    shared_with_sized_runner, wait_for_all_pending, wait_for_result, wait_until,
+};
 
 #[gpui_kit::test]
 fn ctrl_enter_runs_the_statement_under_the_cursor(cx: &mut TestAppContext) {
@@ -346,7 +341,11 @@ fn closing_compare_mode_resets_the_switch_and_clears_the_compare_set(cx: &mut Te
     // 关掉：开关复位、对比选中清掉（下次开对比重新选）
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.toggle_compare_mode(cx)));
     assert!(!cx.update(|_window, cx| panel.read(cx).compare_mode_for_test(cx)));
-    assert_eq!(shared.results().compare_index(&id), None, "对比选中跟着清掉");
+    assert_eq!(
+        shared.results().compare_index(&id),
+        None,
+        "对比选中跟着清掉"
+    );
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
@@ -823,7 +822,10 @@ fn named_parameters_hold_execution_until_filled(cx: &mut TestAppContext) {
     );
     // 修复并行 flaky（2026-10-29）：`finish_bind` 只负责提交，执行器工作线程写入
     // `seen` 在并行全量下可能滞后；断言前必须等它落盘（语义不变，只消除时序假设）。
-    wait_until(|| !seen.lock().expect("锁").is_empty(), "执行器收到替换后的 SQL");
+    wait_until(
+        || !seen.lock().expect("锁").is_empty(),
+        "执行器收到替换后的 SQL",
+    );
     let seen = seen.lock().expect("锁");
     assert_eq!(
         seen.as_slice(),
@@ -859,10 +861,7 @@ fn cancelling_bind_aborts_the_run(cx: &mut TestAppContext) {
         !cx.update(|_window, cx| panel.read(cx).pending_bind_for_test()),
         "取消清掉挂起"
     );
-    assert!(
-        seen.lock().expect("锁").is_empty(),
-        "取消后 SQL 不发给驱动"
-    );
+    assert!(seen.lock().expect("锁").is_empty(), "取消后 SQL 不发给驱动");
 }
 
 // ===== A11：查找 / 替换（内核能力，本 crate 不自建）=====

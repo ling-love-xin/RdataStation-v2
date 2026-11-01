@@ -396,7 +396,12 @@ mod tests {
         let refs = visible_refs(3, &set);
         assert_eq!(
             refs,
-            vec![RowRef::data(0), RowRef::data(2), RowRef::local(a), RowRef::local(b)],
+            vec![
+                RowRef::data(0),
+                RowRef::data(2),
+                RowRef::local(a),
+                RowRef::local(b)
+            ],
             "底层第 1 行被删剔除，本地两行追加在末尾"
         );
     }

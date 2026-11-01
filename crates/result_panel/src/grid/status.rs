@@ -3,7 +3,6 @@
 //! 注：`crate::status`（根模块）提供 `elapsed_text` 等通用文案，与本文件同名不冲突。
 
 use gpui_kit::assets::IconName;
-use gpui_kit::*;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
@@ -12,11 +11,12 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::table::{DataTable, TableState};
 use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
+use super::delegate::{RESULT_GRID_CONTEXT, ResultGridDelegate};
 use crate::status::elapsed_text;
 use crate::ui;
 use ::shared::CurrentTier;
-use super::delegate::{RESULT_GRID_CONTEXT, ResultGridDelegate};
 /// 结果工具栏（⑥，原型 §2.4）：左段 `行数 N` │ `耗时 1.2s` │ `连接名`
 ///
 /// 全是可选真值：没有的东西不显示，也不用占位文案撑场面。
@@ -130,8 +130,7 @@ pub const MAX_SINGLE_SEGMENT_ROWS: usize = 10_000;
 /// 窗口分段加载的代价说明（落实 engine `sql_service.rs:78-79`「这条取舍要写在界面上，
 /// 不能假装它和游标等价」）：每段重跑一次查询，`ORDER BY` 不稳时两段之间可能重复 /
 /// 跳过行。只挂在「还有更多」/「截断」提示的 tooltip 上，不常驻占状态行宽度。
-pub const WINDOW_FETCH_NOTICE: &str =
-    "分段加载：每段重跑查询；无稳定 ORDER BY 时行可能重复或跳过";
+pub const WINDOW_FETCH_NOTICE: &str = "分段加载：每段重跑查询；无稳定 ORDER BY 时行可能重复或跳过";
 
 /// 状态行「还有更多」提示：这段拿满、可能还有下一段（`has_more`）。
 pub fn fetch_more_hint(status: &ResultStatus) -> Option<&'static str> {
@@ -398,10 +397,10 @@ pub fn new_table_state(
             // **再点一下已选中的格子**升级为整行（组件自己的口径，`row_selectable` 已开）
             .row_header(false)
             // 【DBeaver 对齐】释放 gpui-kit table 组件全部能力：
-            .col_movable(true)           // 列序拖拽（拖拽列头改变列顺序）
-            .sortable(true)              // 列头排序（点击列头排序）
-            .col_selectable(true)        // 选中整列
-            .loop_selection(true)        // 键盘导航循环选择
+            .col_movable(true) // 列序拖拽（拖拽列头改变列顺序）
+            .sortable(true) // 列头排序（点击列头排序）
+            .col_selectable(true) // 选中整列
+            .loop_selection(true) // 键盘导航循环选择
             .select_on_modifier_click(true) // Ctrl+点击多选
     })
 }
@@ -482,8 +481,8 @@ pub fn render(
                     ),
             )
         })
-        // ⑦ 结果状态行——已抽到 `render_status_row`（面板级第四行调用：状态栏横跨
-        // 左右栏之下，左端 / 右端挂左右栏开关，见 panel.rs `render`）。这里不再渲染。
+    // ⑦ 结果状态行——已抽到 `render_status_row`（面板级第四行调用：状态栏横跨
+    // 左右栏之下，左端 / 右端挂左右栏开关，见 panel.rs `render`）。这里不再渲染。
 }
 
 /// 【DBeaver 对齐】结果状态行（面板级第四行）：左动作组（写操作 ‖ 翻页 ‖ 系统）→
@@ -515,9 +514,7 @@ pub fn render_status_row(
 ) -> AnyElement {
     let theme = cx.theme();
     let muted = theme.colors.muted_foreground;
-    let (left, _old_right) = status
-        .map(status_segments)
-        .unwrap_or_default();
+    let (left, _old_right) = status.map(status_segments).unwrap_or_default();
     let border = theme.colors.border;
     // 【状态栏三项】右段信息 = 内存 · 查询时间 · 查询条数
     let mem_text = memory;
@@ -549,14 +546,7 @@ pub fn render_status_row(
             .debug_selector(|| format!("editor-result-action-{:?}", icon))
             .into_any_element()
     };
-    let separator = || {
-        div()
-            .w_px()
-            .h_3()
-            .flex_none()
-            .bg(border)
-            .into_any_element()
-    };
+    let separator = || div().w_px().h_3().flex_none().bg(border).into_any_element();
     // 写操作段：保存 · 取消 · 编辑 · 新增行 · 复制行 · 删除行 · 撤销 · 重做。
     // 保存 / 取消复用工具栏的提交 / 回滚对（状态栏不重复挂载），槽位保留禁用占位；
     // 编辑 / 新增 / 复制 / 删除 / 撤销 / 重做由面板注入真钮，未注入（只读结果集等）回退占位。
@@ -656,28 +646,13 @@ pub fn render_status_row(
                 .min_w_0()
                 .ml_auto()
                 .when_some(mem_text, |row, text| {
-                    row.child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .child(SharedString::from(text)),
-                    )
+                    row.child(div().min_w_0().truncate().child(SharedString::from(text)))
                 })
                 .when_some(elapsed, |row, text| {
-                    row.child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .child(SharedString::from(text)),
-                    )
+                    row.child(div().min_w_0().truncate().child(SharedString::from(text)))
                 })
                 .when_some(row_text, |row, text| {
-                    row.child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .child(SharedString::from(text)),
-                    )
+                    row.child(div().min_w_0().truncate().child(SharedString::from(text)))
                 }),
         )
         // 最右：右栏开关（面板注入；`None` 不摆——文本视图无右栏语义时不注入）

@@ -6,25 +6,23 @@
 //!
 //! 多文档 = 同一个 tab 组里的多个面板：`DockLayout::tabs()` 里逐个 `panel_view` 即可。
 
-use std::cell::{Cell, RefCell};
 use result_panel::panel::ResultPanel;
 use result_panel::ports::ResultActionQueue;
+use std::cell::{Cell, RefCell};
 
+use gpui_kit::StatefulInteractiveElement as _;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _, DropdownButton};
-use gpui_kit::component::resizable::{resizable_panel, v_resizable};
-use gpui_kit::component::{Icon, InteractiveElementExt as _, WindowExt as _};
-use gpui_kit::StatefulInteractiveElement as _;
 use gpui_kit::component::dock::{
     BasePanel, DockArea, Panel as ComponentPanel, PanelEvent as BasePanelEvent, PanelId, TabGroup,
 };
-use gpui_kit::component::input::{
-    EditorState, InputEvent, InputState, RangeDecorationCollection,
-};
+use gpui_kit::component::input::{EditorState, InputEvent, InputState, RangeDecorationCollection};
+use gpui_kit::component::resizable::{resizable_panel, v_resizable};
+use gpui_kit::component::{Icon, InteractiveElementExt as _, WindowExt as _};
 // #48 编辑器常规设置（行号开关即时 / 新文档默认缩进·换行·编码）：settings 不依赖 editor，方向合法
 use settings::SettingsService;
 
@@ -69,9 +67,20 @@ fn editor_indent_folding_or_default(cx: &App) -> bool {
 fn editor_fold_open_keywords_or_default(cx: &App) -> Vec<String> {
     if cx.has_global::<settings::model::Settings>() {
         let s = SettingsService::fold_open_keywords(cx);
-        s.split(',').map(|kw| kw.trim().to_uppercase()).filter(|kw| !kw.is_empty()).collect()
+        s.split(',')
+            .map(|kw| kw.trim().to_uppercase())
+            .filter(|kw| !kw.is_empty())
+            .collect()
     } else {
-        vec!["CASE".to_string(), "BEGIN".to_string(), "IF".to_string(), "LOOP".to_string(), "WHILE".to_string(), "FOR".to_string(), "REPEAT".to_string()]
+        vec![
+            "CASE".to_string(),
+            "BEGIN".to_string(),
+            "IF".to_string(),
+            "LOOP".to_string(),
+            "WHILE".to_string(),
+            "FOR".to_string(),
+            "REPEAT".to_string(),
+        ]
     }
 }
 
@@ -79,7 +88,10 @@ fn editor_fold_open_keywords_or_default(cx: &App) -> Vec<String> {
 fn editor_fold_close_keywords_or_default(cx: &App) -> Vec<String> {
     if cx.has_global::<settings::model::Settings>() {
         let s = SettingsService::fold_close_keywords(cx);
-        s.split(',').map(|kw| kw.trim().to_uppercase()).filter(|kw| !kw.is_empty()).collect()
+        s.split(',')
+            .map(|kw| kw.trim().to_uppercase())
+            .filter(|kw| !kw.is_empty())
+            .collect()
     } else {
         vec!["END".to_string()]
     }
@@ -139,7 +151,10 @@ fn editor_language_key(kind: crate::view::highlight::HighlightKind) -> Option<&'
 /// 测试环境未注册 Settings global 时回退 `Auto`（生产在 app 启动经 `SettingsService::init` 注册）。
 fn fact_storage_pref_or_default(cx: &App) -> ::shared::StoragePref {
     if cx.has_global::<settings::model::Settings>() {
-        SettingsService::get(cx).result_panel.fact_storage.to_shared()
+        SettingsService::get(cx)
+            .result_panel
+            .fact_storage
+            .to_shared()
     } else {
         ::shared::StoragePref::Auto
     }
@@ -168,6 +183,7 @@ use gpui_kit::*;
 
 use crate::changes::CellChange;
 use crate::channel::{self};
+use crate::completion::ColumnAnnotation;
 use crate::diagnostics;
 use crate::execution::{self, ExecTarget};
 use crate::export::{self, ExportFormat};
@@ -176,7 +192,6 @@ use crate::model::{DocumentId, EditorMode};
 use crate::persist;
 use crate::service::Document;
 use crate::shared::EditorShared;
-use crate::completion::ColumnAnnotation;
 // 【下移】结果放置 / 下发原料定义已随结果存储搬到 rds-result-panel（经 crate::store 重导出）
 use crate::store::{ResultEntry, ResultPlacement};
 use crate::ui;
@@ -184,9 +199,7 @@ use crate::view::completion;
 use crate::view::dialogs;
 use crate::view::fold;
 use crate::view::highlight;
-use crate::view::results::grid::{
-    self as result_grid, ResultGridDelegate,
-};
+use crate::view::results::grid::{self as result_grid, ResultGridDelegate};
 use crate::view::widgets::status_bar;
 
 /// 【B7】「抓全量后导出」的在途状态
@@ -530,17 +543,16 @@ pub struct EditorHostPanel {
     pub(crate) markdown_preview: bool,
 }
 
-
 // ==== Step 3 拆分（2026-10-29）：impl 方法块按能力域迁入子模块 ====
+pub mod bookmarks;
+pub mod editor_body;
+pub mod env;
+pub mod exec;
+pub mod format;
+pub mod notebook;
+pub mod results;
 pub mod session;
 pub mod toolbar;
-pub mod env;
-pub mod format;
-pub mod bookmarks;
-pub mod notebook;
-pub mod editor_body;
-pub mod exec;
-pub mod results;
 
 impl EditorHostPanel {
     /// 为某文档建面板
@@ -643,9 +655,10 @@ impl EditorHostPanel {
                     if this.lsp_alive {
                         if let Some(session) = this.lsp.as_ref() {
                             this.lsp_version += 1;
-                            let _ = session
-                                .client
-                                .did_change(&session.uri, this.lsp_version, &text);
+                            let _ =
+                                session
+                                    .client
+                                    .did_change(&session.uri, this.lsp_version, &text);
                         }
                     }
                     // 【B18】语句数 / 折叠候选 / 打字期诊断一律**不在事件路径上算**：
@@ -695,11 +708,8 @@ impl EditorHostPanel {
         );
         // 【并排对比】对比栏网格：与主网格同处一次建成（复用一个实体，结果变化只 refresh）。
         // 只在对比模式渲染；数据经 `sync_compare_grid` 从 ResultStore 拷入。
-        let compare_grid = result_grid::new_table_state(
-            ResultGridDelegate::empty("未选择对比结果"),
-            window,
-            cx,
-        );
+        let compare_grid =
+            result_grid::new_table_state(ResultGridDelegate::empty("未选择对比结果"), window, cx);
 
         // Dock 化接线：面板实体 + 动作队列（渲染期 push / 事件路径 drain 分派）。
         // 网格经 `set_grids` 注入**同一实体**——编辑器动作与面板渲染读写同一份 TableState。
@@ -734,133 +744,141 @@ impl EditorHostPanel {
             this.drain_result_actions(cx);
         });
         // 行选中 → 状态行那一段（⑦ 的“已选第 N 行”）要重画（表格自己不通知宿主）
-        let grid_sub = cx.subscribe_in(&grid, window, |panel, grid, event: &TableEvent, window, cx| {
-            let selected_row = grid.read(cx).selected_row().map(|row| row + 1);
-            // 状态行「当前格值」段走面板增量更新（DBeaver 对齐）：先取一次面板实体，
-            // 各分支复用（`result_panel()` 返回 clone，不借用 panel，可随后写 result_selection）
-            let result_panel = panel.result_panel();
-            // 【B14】`Ctrl+C` 复制谁：只认**最近一次选择事件**（组件没公开“当前是选格还是选行”，
-            // 而它两个字段可以同时有值）。键位失效之后再选也就自动作废了，不用额外清理。
-            panel.result_selection = match event {
-                TableEvent::SelectCell(row, col) => {
-                    // 编辑器在事件里读网格 delegate 算好值传给面板（面板不碰网格；
-                    // 长值截断防状态行被撑爆）
-                    let text = grid.read(cx).delegate().cell_text(*row, *col, cx);
-                    result_panel.update(cx, |panel, cx| {
-                        panel.set_selected_cell(Some(Self::clip_cell_preview(&text)), cx);
-                        // 【侧栏】右侧辅助栏（值详情 / 列浏览器）要位置：选中格的原生事件就带着
-                        // window 同步列浏览器 List 内部选中高亮（网格反推路径）
-                        panel.set_selection_pos(Some((*row, *col)), window, cx);
-                    });
-                    Some(result_grid::GridSelection::Cell { row: *row, col: *col })
-                }
-                TableEvent::SelectRow(row) => {
-                    result_panel.update(cx, |panel, cx| {
-                        panel.set_selected_cell(None, cx);
-                        // 【侧栏】选整行不投影单格值详情
-                        panel.set_selection_pos(None, window, cx);
-                    });
-                    Some(result_grid::GridSelection::Row { row: *row })
-                }
-                TableEvent::ClearSelection => {
-                    result_panel.update(cx, |panel, cx| {
-                        panel.set_selected_cell(None, cx);
-                        panel.set_selection_pos(None, window, cx);
-                    });
-                    None
-                }
-                TableEvent::ColumnWidthsChanged(widths) => {
-                    // 【P1-5】拖宽把列宽记进 delegate：排序 / 改行数重建表头时不被打回默认档。
-                    // 组件发完事件已自刷新，这里不再 notify；只记宽度，不改动选中状态。
-                    grid.update(cx, |state, _cx| {
-                        state.delegate_mut().set_column_widths(widths)
-                    });
-                    panel.result_selection
-                }
-                _ => panel.result_selection,
-            };
-            // 【T2a-4】双击单元格 → 进入编辑（原生 `DoubleClickedCell` 事件；判据一次
-            // 问清：通道 / 项目 / 文档 / 连接 / 行标识 / 列。不过就不进编辑，顶部说明原因。
-            if let TableEvent::DoubleClickedCell(row, col) = event {
-                let gate = {
-                    let store = panel.shared.results();
-                    let entry = store.active(&panel.document);
-                    crate::editability::cell_editable(
-                        panel.channel(),
-                        crate::project::ProjectState {
-                            read_only: panel.shared.project_read_only(),
-                        },
-                        panel.read_only_flags(),
-                        entry.and_then(|entry| entry.row_key()).as_ref(),
-                        entry.map(|entry| entry.columns.len()).unwrap_or(0),
-                        col.saturating_sub(1),
-                    )
-                };
-                match gate {
-                    Ok(()) => {
-                        grid.update(cx, |state, cx| {
-                            if state.delegate_mut().begin_edit(*row, *col) {
-                                cx.notify();
-                            }
+        let grid_sub = cx.subscribe_in(
+            &grid,
+            window,
+            |panel, grid, event: &TableEvent, window, cx| {
+                let selected_row = grid.read(cx).selected_row().map(|row| row + 1);
+                // 状态行「当前格值」段走面板增量更新（DBeaver 对齐）：先取一次面板实体，
+                // 各分支复用（`result_panel()` 返回 clone，不借用 panel，可随后写 result_selection）
+                let result_panel = panel.result_panel();
+                // 【B14】`Ctrl+C` 复制谁：只认**最近一次选择事件**（组件没公开“当前是选格还是选行”，
+                // 而它两个字段可以同时有值）。键位失效之后再选也就自动作废了，不用额外清理。
+                panel.result_selection = match event {
+                    TableEvent::SelectCell(row, col) => {
+                        // 编辑器在事件里读网格 delegate 算好值传给面板（面板不碰网格；
+                        // 长值截断防状态行被撑爆）
+                        let text = grid.read(cx).delegate().cell_text(*row, *col, cx);
+                        result_panel.update(cx, |panel, cx| {
+                            panel.set_selected_cell(Some(Self::clip_cell_preview(&text)), cx);
+                            // 【侧栏】右侧辅助栏（值详情 / 列浏览器）要位置：选中格的原生事件就带着
+                            // window 同步列浏览器 List 内部选中高亮（网格反推路径）
+                            panel.set_selection_pos(Some((*row, *col)), window, cx);
                         });
-                        // 【T2a-4】进入编辑后**立即**把焦点交给编辑框（事件路径，不是 render——
-                        // render 是纯读阶段，那里的 `window.focus` 不可靠）。焦点事件在下一帧
-                        // draw 时派发，输入内核据此激活文本输入，用户才能直接打字。
-                        if let Some(input) = grid.read(cx).delegate().edit_input() {
-                            let focus = input.read(cx).focus_handle(cx);
-                            window.focus(&focus, cx);
+                        Some(result_grid::GridSelection::Cell {
+                            row: *row,
+                            col: *col,
+                        })
+                    }
+                    TableEvent::SelectRow(row) => {
+                        result_panel.update(cx, |panel, cx| {
+                            panel.set_selected_cell(None, cx);
+                            // 【侧栏】选整行不投影单格值详情
+                            panel.set_selection_pos(None, window, cx);
+                        });
+                        Some(result_grid::GridSelection::Row { row: *row })
+                    }
+                    TableEvent::ClearSelection => {
+                        result_panel.update(cx, |panel, cx| {
+                            panel.set_selected_cell(None, cx);
+                            panel.set_selection_pos(None, window, cx);
+                        });
+                        None
+                    }
+                    TableEvent::ColumnWidthsChanged(widths) => {
+                        // 【P1-5】拖宽把列宽记进 delegate：排序 / 改行数重建表头时不被打回默认档。
+                        // 组件发完事件已自刷新，这里不再 notify；只记宽度，不改动选中状态。
+                        grid.update(cx, |state, _cx| {
+                            state.delegate_mut().set_column_widths(widths)
+                        });
+                        panel.result_selection
+                    }
+                    _ => panel.result_selection,
+                };
+                // 【T2a-4】双击单元格 → 进入编辑（原生 `DoubleClickedCell` 事件；判据一次
+                // 问清：通道 / 项目 / 文档 / 连接 / 行标识 / 列。不过就不进编辑，顶部说明原因。
+                if let TableEvent::DoubleClickedCell(row, col) = event {
+                    let gate = {
+                        let store = panel.shared.results();
+                        let entry = store.active(&panel.document);
+                        crate::editability::cell_editable(
+                            panel.channel(),
+                            crate::project::ProjectState {
+                                read_only: panel.shared.project_read_only(),
+                            },
+                            panel.read_only_flags(),
+                            entry.and_then(|entry| entry.row_key()).as_ref(),
+                            entry.map(|entry| entry.columns.len()).unwrap_or(0),
+                            col.saturating_sub(1),
+                        )
+                    };
+                    match gate {
+                        Ok(()) => {
+                            grid.update(cx, |state, cx| {
+                                if state.delegate_mut().begin_edit(*row, *col) {
+                                    cx.notify();
+                                }
+                            });
+                            // 【T2a-4】进入编辑后**立即**把焦点交给编辑框（事件路径，不是 render——
+                            // render 是纯读阶段，那里的 `window.focus` 不可靠）。焦点事件在下一帧
+                            // draw 时派发，输入内核据此激活文本输入，用户才能直接打字。
+                            if let Some(input) = grid.read(cx).delegate().edit_input() {
+                                let focus = input.read(cx).focus_handle(cx);
+                                window.focus(&focus, cx);
+                            }
+                        }
+                        Err(reason) => {
+                            // 编辑被拦提示迁入面板（增量写入；sync 全量覆写前保持显示）
+                            panel.result_panel.update(cx, |p, cx| {
+                                p.set_notice(Some(format!("编辑被拦：{}", reason.reason())), cx)
+                            });
                         }
                     }
-                    Err(reason) => {
-                        // 编辑被拦提示迁入面板（增量写入；sync 全量覆写前保持显示）
-                        panel
-                            .result_panel
-                            .update(cx, |p, cx| p.set_notice(Some(format!("编辑被拦：{}", reason.reason())), cx));
-                    }
                 }
-            }
-            // 行选中 → 状态行「已选第 N 行」增量更新（迁入面板实体：`set_selected_row`
-            // 只补 status.selected_row，sync 全量覆写前的中间态保持一致）
-            panel
-                .result_panel
-                .update(cx, |p, cx| p.set_selected_row(selected_row, cx));
-            cx.notify();
-        });
+                // 行选中 → 状态行「已选第 N 行」增量更新（迁入面板实体：`set_selected_row`
+                // 只补 status.selected_row，sync 全量覆写前的中间态保持一致）
+                panel
+                    .result_panel
+                    .update(cx, |p, cx| p.set_selected_row(selected_row, cx));
+                cx.notify();
+            },
+        );
 
         // 【T2a-4】结果表格的单元格编辑框：**一个复用实体**（每次编辑复用同一个，
         // 不做“每格一个实体”的泄漏）。初值同步与聚焦在网格渲染路径做（幂等一次）。
         let edit_input = cx.new(|cx| InputState::new(window, cx));
         // 编辑框事件（原生 `InputEvent`）：输入变化 → 同步到编辑态；Enter / 失焦 → 提交。
         // 提交幂等：`commit_edit` 先清编辑态，失焦带起的第二次 Blur 是空转。
-        let _edit_sub = cx.subscribe_in(
-            &edit_input,
-            window,
-            |panel, state, event, window, cx| match event {
-                InputEvent::Change => {
-                    let value = state.read(cx).value().to_string();
-                    panel.grid.update(cx, |table, _cx| {
-                        table.delegate_mut().sync_edit_value(value);
-                    });
-                }
-                InputEvent::PressEnter { .. } | InputEvent::Blur => {
-                    // 【类型感知】`commit_edit` 返回是否真的交了：类型校验失败 = 编辑态
-                    // 保留 + 红框提示，此时**不能**跑整轮投影（`sync_result_view` 重建网格
-                    // 会把编辑态冲掉）——只请求重绘让红框 / 错误提示上屏。
-                    let committed = panel.grid.update(cx, |table, _cx| {
-                        table.delegate_mut().commit_edit()
-                    });
-                    if committed {
-                        // 【T2a-4】提交完成后投影刷新（脏格 + 待提交计数 + 网格数据一起走
-                        // `sync_result_view`；grid 已退出上面的 update，这里可安全 update 面板）。
-                        // Dock 化后提交按钮组 / 脏格底色读面板投影，不刷新就不会出现。
-                        panel.sync_result_view(cx);
-                    } else {
-                        window.refresh();
+        let _edit_sub =
+            cx.subscribe_in(
+                &edit_input,
+                window,
+                |panel, state, event, window, cx| match event {
+                    InputEvent::Change => {
+                        let value = state.read(cx).value().to_string();
+                        panel.grid.update(cx, |table, _cx| {
+                            table.delegate_mut().sync_edit_value(value);
+                        });
                     }
-                }
-                _ => {}
-            },
-        );
+                    InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                        // 【类型感知】`commit_edit` 返回是否真的交了：类型校验失败 = 编辑态
+                        // 保留 + 红框提示，此时**不能**跑整轮投影（`sync_result_view` 重建网格
+                        // 会把编辑态冲掉）——只请求重绘让红框 / 错误提示上屏。
+                        let committed = panel
+                            .grid
+                            .update(cx, |table, _cx| table.delegate_mut().commit_edit());
+                        if committed {
+                            // 【T2a-4】提交完成后投影刷新（脏格 + 待提交计数 + 网格数据一起走
+                            // `sync_result_view`；grid 已退出上面的 update，这里可安全 update 面板）。
+                            // Dock 化后提交按钮组 / 脏格底色读面板投影，不刷新就不会出现。
+                            panel.sync_result_view(cx);
+                        } else {
+                            window.refresh();
+                        }
+                    }
+                    _ => {}
+                },
+            );
         // 编辑框实体 + 提交钩子注入网格（提交走钩子交回面板落变更集）
         {
             let edit_weak = edit_input.clone();
@@ -885,7 +903,10 @@ impl EditorHostPanel {
                                     changes.remove(row, column);
                                 } else {
                                     changes.upsert(CellChange::pending(
-                                        row, column, original.clone(), edited.clone(),
+                                        row,
+                                        column,
+                                        original.clone(),
+                                        edited.clone(),
                                     ));
                                 }
                             });
@@ -893,9 +914,8 @@ impl EditorHostPanel {
                             // 新编辑入栈时 EditHistory 自动清空重做栈——标准撤销语义）
                             if changed {
                                 store.mutate_history(&document_for_commit, active, |history| {
-                                    history.push(CellChange::pending(
-                                        row, column, original, edited,
-                                    ));
+                                    history
+                                        .push(CellChange::pending(row, column, original, edited));
                                 });
                             }
                         });
@@ -908,22 +928,22 @@ impl EditorHostPanel {
             let shared_for_local = shared.clone();
             let document_for_local = document.clone();
             grid.update(cx, |state, _cx| {
-                state.delegate_mut().set_commit_local_edit_hook(std::rc::Rc::new(
-                    move |local_id, column, edited| {
-                        shared_for_local.update_results(|store| {
-                            let active = store
-                                .active_index(&document_for_local)
-                                .unwrap_or(0);
-                            store.mutate_local_rows(&document_for_local, active, |set| {
-                                if let Some(row) = set.local_row_mut(local_id) {
-                                    if let Some(cell) = row.cells.get_mut(column) {
-                                        *cell = edited;
+                state
+                    .delegate_mut()
+                    .set_commit_local_edit_hook(std::rc::Rc::new(
+                        move |local_id, column, edited| {
+                            shared_for_local.update_results(|store| {
+                                let active = store.active_index(&document_for_local).unwrap_or(0);
+                                store.mutate_local_rows(&document_for_local, active, |set| {
+                                    if let Some(row) = set.local_row_mut(local_id) {
+                                        if let Some(cell) = row.cells.get_mut(column) {
+                                            *cell = edited;
+                                        }
                                     }
-                                }
+                                });
                             });
-                        });
-                    },
-                ));
+                        },
+                    ));
             });
         }
 
@@ -959,13 +979,16 @@ impl EditorHostPanel {
                 ));
                 // 【筛选】列头菜单「按值筛选此列 / 清除」交回面板（空串 = 清除）
                 let filter_weak = filter_weak_col;
-                state.delegate_mut().set_column_filter_hook(std::rc::Rc::new(
-                    move |column: usize, value: &str, app: &mut App| {
-                        let value = value.to_string();
-                        _ = filter_weak
-                            .update(app, |panel, cx| panel.apply_column_filter(column, &value, cx));
-                    },
-                ));
+                state
+                    .delegate_mut()
+                    .set_column_filter_hook(std::rc::Rc::new(
+                        move |column: usize, value: &str, app: &mut App| {
+                            let value = value.to_string();
+                            _ = filter_weak.update(app, |panel, cx| {
+                                panel.apply_column_filter(column, &value, cx)
+                            });
+                        },
+                    ));
                 let sort_weak = sort_weak;
                 state.delegate_mut().set_sort_down_hook(std::rc::Rc::new(
                     move |column: &str, descending: bool, app: &mut App| {
@@ -988,19 +1011,27 @@ impl EditorHostPanel {
                 // 【遗留 #7】「查看完整值」：弹层是宿主的事（对话框生命周期归宿主），
                 // 钩子只把 值 / 列名 / 视图行 带回面板
                 let preview_for_value = preview_weak.clone();
-                state.delegate_mut().set_preview_value_hook(std::rc::Rc::new(
-                    move |value: String, column: String, _column_ix: usize, row: usize, app: &mut App| {
-                        _ = preview_for_value
-                            .update(app, |panel, cx| panel.open_value_preview(&value, &column, row, cx));
-                    },
-                ));
+                state
+                    .delegate_mut()
+                    .set_preview_value_hook(std::rc::Rc::new(
+                        move |value: String,
+                              column: String,
+                              _column_ix: usize,
+                              row: usize,
+                              app: &mut App| {
+                            _ = preview_for_value.update(app, |panel, cx| {
+                                panel.open_value_preview(&value, &column, row, cx)
+                            });
+                        },
+                    ));
                 // 【P2-3】列统计：统计文本已由网格算好，弹层复用「查看完整值」的对话框
                 // （标题 = 列名，正文 = 统计行）
                 let preview_for_stats = preview_weak.clone();
                 state.delegate_mut().set_column_stats_hook(std::rc::Rc::new(
                     move |column: String, text: String, app: &mut App| {
-                        _ = preview_for_stats
-                            .update(app, |panel, cx| panel.open_value_preview(&text, &column, 0, cx));
+                        _ = preview_for_stats.update(app, |panel, cx| {
+                            panel.open_value_preview(&text, &column, 0, cx)
+                        });
                     },
                 ));
                 // 【#28-B3】右键新增 / 复制 / 删除行：动作已在 delegate 打包，转投队列后 notify，
@@ -1027,10 +1058,7 @@ impl EditorHostPanel {
                         let (session, cells) = file.into_state();
                         shared.set_notebook_state(
                             &document,
-                            crate::cell::NotebookState {
-                                session,
-                                cells,
-                            },
+                            crate::cell::NotebookState { session, cells },
                         );
                     }
                     Err(_reason) => {
@@ -1115,7 +1143,9 @@ impl EditorHostPanel {
         panel.sync_lsp_session(cx);
         // 【LSP】新会话的 provider 装配：`new` 里的内联 install 只按 SQL 能力装，
         // 通用模式的 LSP provider 走这里（`sync_mode` 只在切模式时跑，新建不经过它）
-        panel.editor.update(cx, |state, _cx| panel.sync_completion_provider(state));
+        panel
+            .editor
+            .update(cx, |state, _cx| panel.sync_completion_provider(state));
         // 【遗留 #14】CSV 表格展示：打开即把内容解析进结果网格（空文本也是合法 CSV，
         // 给一个空表而非不显示）
         panel.sync_csv_grid(cx);
@@ -1334,7 +1364,8 @@ impl EditorHostPanel {
     ///
     /// 名字必须落在活跃主题的词汇里，否则内核会静默跳过该 token——所以这份图例就是「染不染色」
     /// 的对外契约（见 `crate::view::highlight::TOKEN_NAMES`）。
-    pub fn highlight_legend_for_test(&self, cx: &App) -> Vec<String> {        self.editor
+    pub fn highlight_legend_for_test(&self, cx: &App) -> Vec<String> {
+        self.editor
             .read(cx)
             .lsp()
             .semantic_tokens_provider
@@ -1371,10 +1402,10 @@ impl EditorHostPanel {
 pub mod ops;
 pub mod render;
 // 跨 crate 公共 API（workbench 经 editor::view::host::* 调用）：显式 re-export
+pub(crate) use ops::*;
 pub use ops::{
     close_document_in_dock, close_document_now, request_close_document, request_save_as,
     resolve_close_choice, save_sessions_for,
 };
-pub(crate) use ops::*;
 pub(crate) use render::*;
 pub(crate) mod panel_traits;

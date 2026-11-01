@@ -1071,7 +1071,10 @@ mod tests {
         assert!(service.set_document_hard_tabs(&id, true));
         assert!(service.document_hard_tabs(&id));
         assert_eq!(service.document_tab_size(&id), 4, "切制表符保留空格宽度");
-        assert!(!service.set_document_hard_tabs(&id, true), "同值重设 = 未变");
+        assert!(
+            !service.set_document_hard_tabs(&id, true),
+            "同值重设 = 未变"
+        );
         assert!(service.set_document_hard_tabs(&id, false));
         assert!(!service.document_hard_tabs(&id));
 
@@ -1099,8 +1102,14 @@ mod tests {
         };
         assert!(service.set_document_save_format(&id, gbk));
         assert_eq!(service.document_save_format(&id), gbk);
-        assert!(service.find(&id).expect("doc").is_dirty(), "切编码 = 未保存的改动");
-        assert!(!service.set_document_save_format(&id, gbk), "同值重设 = 未变");
+        assert!(
+            service.find(&id).expect("doc").is_dirty(),
+            "切编码 = 未保存的改动"
+        );
+        assert!(
+            !service.set_document_save_format(&id, gbk),
+            "同值重设 = 未变"
+        );
 
         // 保存：格式前移，干净
         service.mark_saved(&id);
@@ -1129,14 +1138,23 @@ mod tests {
         assert!(service.set_document_show_whitespaces(&id, true));
         assert!(service.document_show_whitespaces(&id));
         assert!(!service.document_show_whitespaces(&id) == false);
-        assert!(!service.set_document_show_whitespaces(&id, true), "同值重设 = 未变");
+        assert!(
+            !service.set_document_show_whitespaces(&id, true),
+            "同值重设 = 未变"
+        );
         // 视图偏好不影响脏状态
         assert!(!service.find(&id).expect("doc").is_dirty());
 
         assert!(service.set_document_show_invisible(&id, true));
         assert!(service.document_show_invisible(&id));
-        assert!(!service.document_show_whitespaces(&id) == false, "两个开关独立");
-        assert!(!service.set_document_show_invisible(&id, true), "同值重设 = 未变");
+        assert!(
+            !service.document_show_whitespaces(&id) == false,
+            "两个开关独立"
+        );
+        assert!(
+            !service.set_document_show_invisible(&id, true),
+            "同值重设 = 未变"
+        );
 
         let ghost = DocumentId::new("ghost-doc");
         assert!(!service.document_show_whitespaces(&ghost));

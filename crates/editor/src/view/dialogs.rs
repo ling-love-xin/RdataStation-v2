@@ -31,7 +31,9 @@ use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::input::{Textarea, TextareaState};
 use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{Icon, IndexPath, InteractiveElementExt as _, Selectable as _, Sizable as _, WindowExt as _};
+use gpui_kit::component::{
+    Icon, IndexPath, InteractiveElementExt as _, Selectable as _, Sizable as _, WindowExt as _,
+};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -150,24 +152,21 @@ pub fn open_save_failure_confirm(
             let on_choice = on_choice.clone();
             move |window, cx| on_choice(SaveFailureChoice::Cancel, window, cx)
         });
-        let save_as = action_button(
-            "editor-save-as",
-            "另存为…",
-            ButtonVariant::Secondary,
-            {
-                let on_choice = on_choice.clone();
-                move |window, cx| on_choice(SaveFailureChoice::SaveAs, window, cx)
-            },
-        );
+        let save_as = action_button("editor-save-as", "另存为…", ButtonVariant::Secondary, {
+            let on_choice = on_choice.clone();
+            move |window, cx| on_choice(SaveFailureChoice::SaveAs, window, cx)
+        });
         let retry = action_button("editor-save-retry", "重试", ButtonVariant::Primary, {
             let on_choice = on_choice.clone();
             move |window, cx| on_choice(SaveFailureChoice::Retry, window, cx)
         });
 
-        dialog
-            .title("保存失败")
-            .child(body)
-            .footer(DialogFooter::new().child(cancel).child(save_as).child(retry))
+        dialog.title("保存失败").child(body).footer(
+            DialogFooter::new()
+                .child(cancel)
+                .child(save_as)
+                .child(retry),
+        )
     });
 }
 
@@ -190,12 +189,7 @@ pub fn open_switch_confirm(
     window.open_dialog(cx, move |dialog, _window, cx| {
         let muted = cx.theme().colors.muted_foreground;
 
-        let mut body = div()
-            .v_flex()
-            .w_full()
-            .gap_2()
-            .text_sm()
-            .child(kind.body());
+        let mut body = div().v_flex().w_full().gap_2().text_sm().child(kind.body());
         // 状态栏同款说明（例如“结果仍保留但置灰”）：与切换后的提示保持一致口径
         if let Some(note) = note {
             body = body.child(div().text_xs().text_color(muted).child(note));
@@ -409,9 +403,12 @@ pub fn open_value_preview(
                 let on_copy = on_copy.clone();
                 move |_, _window, cx| on_copy(cx)
             });
-        let close = action_button("editor-value-preview-close", "关闭", ButtonVariant::Ghost, {
-            move |_window, _cx| {}
-        });
+        let close = action_button(
+            "editor-value-preview-close",
+            "关闭",
+            ButtonVariant::Ghost,
+            { move |_window, _cx| {} },
+        );
 
         dialog
             .title("查看值")
@@ -463,7 +460,9 @@ pub fn open_bind_dialog(
                     .child(
                         // Input 是 RenderOnce（无 id 可观测），套一层带 selector 的 div
                         div()
-                            .debug_selector(move || format!("editor-bind-input-{name_for_selector}"))
+                            .debug_selector(move || {
+                                format!("editor-bind-input-{name_for_selector}")
+                            })
                             .child(Input::new(input)),
                     )
             }));
@@ -480,9 +479,7 @@ pub fn open_bind_dialog(
                 move |_, window, cx| {
                     let values = inputs
                         .iter()
-                        .map(|(name, input)| {
-                            (name.to_string(), input.read(cx).value().to_string())
-                        })
+                        .map(|(name, input)| (name.to_string(), input.read(cx).value().to_string()))
                         .collect();
                     window.close_dialog(cx);
                     on_run(values, window, cx);
@@ -769,32 +766,37 @@ impl SchemaPickerState {
         let border = theme.colors.border;
 
         // 左栏：Database 列表（当前选中 toggled）
-        let left = div()
-            .v_flex()
-            .flex_1()
-            .min_w_0()
-            .children(self.catalogs.iter().enumerate().map(|(i, cat)| {
-                let entity = entity.clone();
-                let label = match cat {
-                    Some(c) => c.clone(),
-                    None => "默认库".to_string(),
-                };
-                Button::new(SharedString::from(format!("schema-picker-cat-{i}")))
-                    .ghost()
-                    .small()
-                    .toggled(i == self.selected)
-                    .debug_selector(move || format!("schema-picker-cat-{i}"))
-                    .label(label)
-                    .on_click(move |_, _window, cx| {
-                        entity.update(cx, |state, cx| {
-                            state.selected = i;
-                            cx.notify();
-                        });
-                    })
-            }));
+        let left =
+            div()
+                .v_flex()
+                .flex_1()
+                .min_w_0()
+                .children(self.catalogs.iter().enumerate().map(|(i, cat)| {
+                    let entity = entity.clone();
+                    let label = match cat {
+                        Some(c) => c.clone(),
+                        None => "默认库".to_string(),
+                    };
+                    Button::new(SharedString::from(format!("schema-picker-cat-{i}")))
+                        .ghost()
+                        .small()
+                        .toggled(i == self.selected)
+                        .debug_selector(move || format!("schema-picker-cat-{i}"))
+                        .label(label)
+                        .on_click(move |_, _window, cx| {
+                            entity.update(cx, |state, cx| {
+                                state.selected = i;
+                                cx.notify();
+                            });
+                        })
+                }));
 
         // 右栏：当前库下的 Schema 列表（点击绑定并关闭）
-        let right_schemas = self.schemas_by.get(self.selected).cloned().unwrap_or_default();
+        let right_schemas = self
+            .schemas_by
+            .get(self.selected)
+            .cloned()
+            .unwrap_or_default();
         let right_on_pick = self.on_pick.clone();
         let right = div()
             .v_flex()
@@ -843,12 +845,7 @@ impl SchemaPickerState {
                             .v_flex()
                             .gap_1()
                             .flex_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child("Database"),
-                            )
+                            .child(div().text_xs().text_color(muted).child("Database"))
                             .child(
                                 div()
                                     .flex_1()
@@ -865,12 +862,7 @@ impl SchemaPickerState {
                             .v_flex()
                             .gap_1()
                             .flex_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child("Schema"),
-                            )
+                            .child(div().text_xs().text_color(muted).child("Schema"))
                             .child(
                                 div()
                                     .flex_1()
@@ -886,7 +878,11 @@ impl SchemaPickerState {
             .child(
                 div()
                     .text_xs()
-                    .text_color(if self.current.is_some() { foreground } else { muted })
+                    .text_color(if self.current.is_some() {
+                        foreground
+                    } else {
+                        muted
+                    })
                     .child(current_label),
             )
     }
@@ -908,10 +904,7 @@ pub fn open_schema_picker(
     window.open_dialog(cx, move |dialog, _window, cx| {
         let body = entity.read(cx).body(entity.clone(), _window, cx);
         let width = cx.theme().font_size * ui::SCHEMA_PICKER_DIALOG_WIDTH;
-        dialog
-            .title("选择 Database/Schema")
-            .w(width)
-            .child(body)
+        dialog.title("选择 Database/Schema").w(width).child(body)
     });
     state
 }
@@ -947,12 +940,9 @@ pub fn open_bookmark_note_dialog(
             .v_flex()
             .w_full()
             .gap_2()
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(format!("第 {line} 行 · 写一句为什么（折叠区域留说明会被记录）")),
-            )
+            .child(div().text_xs().text_color(muted).child(format!(
+                "第 {line} 行 · 写一句为什么（折叠区域留说明会被记录）"
+            )))
             .child(
                 div()
                     .debug_selector(|| "editor-dialog-editor-bookmark-note-input".to_string())
@@ -973,9 +963,12 @@ pub fn open_bookmark_note_dialog(
                     on_submit(text, window, cx);
                 }
             });
-        let cancel = action_button("editor-bookmark-note-cancel", "取消", ButtonVariant::Ghost, {
-            move |_window, _cx| {}
-        });
+        let cancel = action_button(
+            "editor-bookmark-note-cancel",
+            "取消",
+            ButtonVariant::Ghost,
+            { move |_window, _cx| {} },
+        );
 
         dialog
             .title(format!("书签说明 · 第 {line} 行"))
@@ -1007,7 +1000,7 @@ pub fn open_bookmark_manager(
     on_edit: impl Fn(usize, String, &mut Window, &mut App) + 'static,
     on_delete: impl Fn(usize, &mut Window, &mut App) + 'static,
 ) {
-    use crate::bookmark::{filtered, BookmarkKind};
+    use crate::bookmark::{BookmarkKind, filtered};
     use gpui_kit::component::button::ButtonGroup;
     use gpui_kit::component::input::{Input, InputState};
 
@@ -1042,7 +1035,9 @@ pub fn open_bookmark_manager(
                 .small()
                 .label(label)
                 .selected(current_kind == kind)
-                .debug_selector(move || format!("editor-dialog-editor-bookmark-kind-{key}").to_string())
+                .debug_selector(move || {
+                    format!("editor-dialog-editor-bookmark-kind-{key}").to_string()
+                })
                 .on_click(move |_, window, cx| {
                     kind_cell.set(kind);
                     let _ = window.draw(cx); // 强制重绘 → builder 重跑 → 列表按新类型过滤
@@ -1097,7 +1092,9 @@ pub fn open_bookmark_manager(
                 .py_1()
                 .border_b_1()
                 .border_color(border)
-                .debug_selector(move || format!("editor-dialog-editor-bookmark-line-{line}").to_string())
+                .debug_selector(move || {
+                    format!("editor-dialog-editor-bookmark-line-{line}").to_string()
+                })
                 .on_double_click(move |_, window, cx| {
                     window.close_dialog(cx);
                     on_jump(line, window, cx);
@@ -1131,7 +1128,9 @@ pub fn open_bookmark_manager(
                                 .small()
                                 .icon(IconName::Pencil)
                                 .tooltip("编辑")
-                                .debug_selector(move || format!("editor-dialog-editor-bookmark-edit-{line}").to_string())
+                                .debug_selector(move || {
+                                    format!("editor-dialog-editor-bookmark-edit-{line}").to_string()
+                                })
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
                                     on_edit(line, label_full.clone(), window, cx);
@@ -1143,7 +1142,10 @@ pub fn open_bookmark_manager(
                                 .small()
                                 .icon(IconName::Trash)
                                 .tooltip("删除")
-                                .debug_selector(move || format!("editor-dialog-editor-bookmark-delete-{line}").to_string())
+                                .debug_selector(move || {
+                                    format!("editor-dialog-editor-bookmark-delete-{line}")
+                                        .to_string()
+                                })
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
                                     on_delete(line, window, cx);

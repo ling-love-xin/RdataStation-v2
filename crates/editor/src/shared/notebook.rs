@@ -8,9 +8,11 @@
 use super::*;
 
 impl EditorShared {
-
     /// 某文档的笔记状态（没有 = 默认会话 + 空单元）
-    pub fn notebook_state(&self, document: &crate::model::DocumentId) -> crate::cell::NotebookState {
+    pub fn notebook_state(
+        &self,
+        document: &crate::model::DocumentId,
+    ) -> crate::cell::NotebookState {
         self.notebooks
             .borrow()
             .get(document)
@@ -185,18 +187,19 @@ impl EditorShared {
         let Some(queue) = guard.as_ref() else {
             return Err("当前未接入执行".to_string());
         };
-        queue.submit(
-            document,
-            &crate::execution::ExecTarget::Cell(request.clone()),
-            connection,
-            schema,
-            crate::store::ResultPlacement::Replace,
-            crate::execution::RunOptions {
-                use_transaction: false,
-            },
-            channel,
-        )
-        .map_err(|e| e.message().to_string())
+        queue
+            .submit(
+                document,
+                &crate::execution::ExecTarget::Cell(request.clone()),
+                connection,
+                schema,
+                crate::store::ResultPlacement::Replace,
+                crate::execution::RunOptions {
+                    use_transaction: false,
+                },
+                channel,
+            )
+            .map_err(|e| e.message().to_string())
     }
 
     /// 【2d】单元执行的结论（宿主 / 视图轮询取走）
@@ -230,9 +233,9 @@ impl EditorShared {
             return; // 没在跑的回执不落（防止迟到的旧回执覆盖新结果）
         }
         match &note.result {
-            Ok(outcome) => {
-                cell.mark_done(crate::cell::Output::Table(build_inline_entry(document, outcome)))
-            }
+            Ok(outcome) => cell.mark_done(crate::cell::Output::Table(build_inline_entry(
+                document, outcome,
+            ))),
             Err(reason) => cell.mark_error(reason.clone()),
         }
     }

@@ -92,7 +92,10 @@ pub fn site_in_document(document: &str, sql: &str, error: &str) -> Option<ErrorS
         local.len
     };
     let token = (len > 0)
-        .then(|| sql.get(local.offset..local.offset + len).map(str::to_string))
+        .then(|| {
+            sql.get(local.offset..local.offset + len)
+                .map(str::to_string)
+        })
         .flatten();
 
     let (line, column) = line_col(document, offset);
@@ -162,8 +165,7 @@ fn caret_site(error: &str, sql: &str) -> Option<LocalSite> {
         let line_number: usize = number.trim().parse().ok()?;
         let caret = lines.next()?.trim_end();
         // 插入符对齐的是整行错误文本：`LINE 1: ` 这段前缀要从列号里减掉
-        let prefix_len =
-            (line.len() - trimmed.len()) + "LINE ".len() + number.len() + ": ".len();
+        let prefix_len = (line.len() - trimmed.len()) + "LINE ".len() + number.len() + ": ".len();
         let caret_column = caret.chars().take_while(|c| *c == ' ').count();
         let column = caret_column.checked_sub(prefix_len)? + 1;
         let offset = offset_for_line_col(sql, line_number, column)?;

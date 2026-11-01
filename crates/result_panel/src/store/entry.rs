@@ -2,8 +2,8 @@
 //!
 //! 模块文档（结果集权威 / 每文档结果集列表 / 列类型口径）见父模块 `crate::store`。
 
-use ::shared::string::tsv_row;
 use crate::export::RowKey;
+use ::shared::string::tsv_row;
 use workbench_shell::model::{ColumnAnnotation, DocumentId, ExecChannel};
 
 /// 结果落到哪里（B2）：执行族里「批量执行」与「在新结果标签中执行」的差别只在这一维
@@ -30,7 +30,10 @@ pub enum ResultPlacement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pushdown {
     /// 下发筛选：当初的筛选词 + 结果集的列（执行器拼 `WHERE` 用）
-    Filtered { filter: String, columns: Vec<String> },
+    Filtered {
+        filter: String,
+        columns: Vec<String>,
+    },
     /// 排序下发：当初点的列与方向
     SortedDown { column: String, descending: bool },
 }
@@ -48,10 +51,12 @@ impl Pushdown {
                 columns: columns.clone(),
             })
             .or_else(|| {
-                sorted_down.as_ref().map(|(column, descending)| Pushdown::SortedDown {
-                    column: column.clone(),
-                    descending: *descending,
-                })
+                sorted_down
+                    .as_ref()
+                    .map(|(column, descending)| Pushdown::SortedDown {
+                        column: column.clone(),
+                        descending: *descending,
+                    })
             })
     }
 }
@@ -599,7 +604,12 @@ impl ResultEntry {
             }
             return text;
         }
-        let mut text = format!("{} 行 × {} 列 · {} ms", self.row_count(), self.columns.len(), self.elapsed_ms);
+        let mut text = format!(
+            "{} 行 × {} 列 · {} ms",
+            self.row_count(),
+            self.columns.len(),
+            self.elapsed_ms
+        );
         if self.truncated {
             text.push_str(" · 已截断");
         }
@@ -651,7 +661,11 @@ mod tests {
 
         // 结果没 SELECT 主键（select name）→ None（写回没有可绑定的值）
         entry.columns = vec!["name".to_string()];
-        assert_eq!(entry.row_key(), None, "键列不在结果里 = 无法生成 WHERE 绑定");
+        assert_eq!(
+            entry.row_key(),
+            None,
+            "键列不在结果里 = 无法生成 WHERE 绑定"
+        );
 
         // 探测到“空主键”不出现（约定 Some(vec![]) 不产生）——防御断言
         entry.columns = vec!["id".to_string()];

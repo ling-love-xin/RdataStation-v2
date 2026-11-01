@@ -48,7 +48,11 @@ pub struct SqlCodeActionProvider {
 }
 
 impl SqlCodeActionProvider {
-    pub fn new(dialect: SqlDialect, channel: ExecChannel, document_uri: impl Into<String>) -> Rc<Self> {
+    pub fn new(
+        dialect: SqlDialect,
+        channel: ExecChannel,
+        document_uri: impl Into<String>,
+    ) -> Rc<Self> {
         Rc::new(Self {
             dialect,
             channel,
@@ -122,8 +126,10 @@ impl CodeActionProvider for SqlCodeActionProvider {
                                 text_document: OptionalVersionedTextDocumentIdentifier {
                                     // `rds://editor/<id>` 这类占位 URI 能被 fluent-uri 解析；
                                     // 万一解析失败（非法字符串）给稳定的 `file:///rds-untitled`
-                                    uri: LspUri::from_str(&uri)
-                                        .unwrap_or_else(|_| LspUri::from_str("file:///rds-untitled").expect("字面量必合法")),
+                                    uri: LspUri::from_str(&uri).unwrap_or_else(|_| {
+                                        LspUri::from_str("file:///rds-untitled")
+                                            .expect("字面量必合法")
+                                    }),
                                     version: None,
                                 },
                                 edits: vec![OneOf::Left(edit)],

@@ -2,31 +2,30 @@
 
 use std::time::Duration;
 
-use gpui_kit::*;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
 /// 【侧栏丝滑】宽度过渡用 `EffectTransition::width`（元素级动画，动画状态按元素 id
 /// 挂在 gpui 元素树上——render 无需 `&mut App`；id 变化即重启，故用 epoch 区分每次
 /// 开合，与 vendor sidebar 组件同款机制）。
-use gpui_kit::base::animation::{ease_in_out_cubic, EffectTransition};
-use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::list::List;
-use gpui_kit::component::{ActiveTheme as _, Size, Sizable as _};
+use gpui_kit::base::animation::{EffectTransition, ease_in_out_cubic};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
+use gpui_kit::component::list::List;
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size};
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 
-use crate::ports::{Presentation, ResultRequest, RightTab};
-use crate::ui;
 use super::data::ResultPanel;
 use super::tabs::kv_row;
+use crate::ports::{Presentation, ResultRequest, RightTab};
+use crate::ui;
 
 impl ResultPanel {
-
     pub(crate) fn render_text_view(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let mono = theme.mono_font_family.clone();
@@ -55,7 +54,10 @@ impl ResultPanel {
                             .on_click({
                                 let queue = queue.clone();
                                 move |_, _window, app| {
-                                    queue.request(ResultRequest::SetPresentation(Presentation::Grid), app);
+                                    queue.request(
+                                        ResultRequest::SetPresentation(Presentation::Grid),
+                                        app,
+                                    );
                                 }
                             }),
                     )
@@ -68,19 +70,15 @@ impl ResultPanel {
                     ),
             )
             .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .font_family(mono)
-                            .text_xs()
-                            .whitespace_normal()
-                            .child(SharedString::from(text)),
-                    ),
+                div().flex_1().min_h_0().overflow_y_scrollbar().child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .font_family(mono)
+                        .text_xs()
+                        .whitespace_normal()
+                        .child(SharedString::from(text)),
+                ),
             )
             .into_any_element()
     }
@@ -284,7 +282,10 @@ impl ResultPanel {
                     items.push(("驱动类型".into(), data_type));
                 }
                 if let Some(nullable) = annotation.nullable {
-                    items.push(("可空".into(), if nullable { "是".into() } else { "否".into() }));
+                    items.push((
+                        "可空".into(),
+                        if nullable { "是".into() } else { "否".into() },
+                    ));
                 }
                 if let Some(default_value) = annotation.default_value {
                     items.push(("默认值".into(), default_value));
@@ -320,7 +321,6 @@ impl ResultPanel {
             .flex_1()
             .min_h_0()
             .into_any_element();
-
 
         let detail_body: AnyElement = match detail {
             Some((title, items)) => div()
@@ -364,7 +364,10 @@ impl ResultPanel {
                     .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
                     .text_xs()
                     .text_color(muted)
-                    .child(SharedString::from(format!("列浏览器 · {} 列", columns.len()))),
+                    .child(SharedString::from(format!(
+                        "列浏览器 · {} 列",
+                        columns.len()
+                    ))),
             )
             .child(table_head)
             .child(list_body)
@@ -403,11 +406,7 @@ impl ResultPanel {
             RightTab::ExecSql => (IconName::Braces, "执行SQL"),
         };
         let children: Vec<Tab> = std::iter::once(active_tab)
-            .map(|(icon, label)| {
-                Tab::new()
-                    .icon(icon)
-                    .label(SharedString::from(label))
-            })
+            .map(|(icon, label)| Tab::new().icon(icon).label(SharedString::from(label)))
             .collect();
         let tab_bar = TabBar::new("editor-result-right-tabs")
             .segmented()
@@ -536,22 +535,23 @@ impl ResultPanel {
         let collapse_queue = self.queue.clone();
         let collapse_queue2 = self.queue.clone();
         // wrapped SQL 预览：词非空且有原 SQL 时拼 `select * from (原SQL) where 词`
-        let preview = (!self.filter_text.trim().is_empty() && self.result_sql.is_some()).then(|| {
-            let sql = self.result_sql.clone().unwrap_or_default();
-            let word = self.filter_text.trim();
-            let wrapped = format!("select * from ({}) as _q where {}", sql, word);
-            let preview_text: SharedString = if wrapped.len() > 80 {
-                format!("{}…", &wrapped[..80]).into()
-            } else {
-                wrapped.into()
-            };
-            div()
-                .min_w_0()
-                .truncate()
-                .text_xs()
-                .text_color(theme.colors.muted_foreground)
-                .child(preview_text)
-        });
+        let preview =
+            (!self.filter_text.trim().is_empty() && self.result_sql.is_some()).then(|| {
+                let sql = self.result_sql.clone().unwrap_or_default();
+                let word = self.filter_text.trim();
+                let wrapped = format!("select * from ({}) as _q where {}", sql, word);
+                let preview_text: SharedString = if wrapped.len() > 80 {
+                    format!("{}…", &wrapped[..80]).into()
+                } else {
+                    wrapped.into()
+                };
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child(preview_text)
+            });
         div()
             .h_flex()
             .items_center()
@@ -567,39 +567,36 @@ impl ResultPanel {
             .text_xs()
             .debug_selector(|| "editor-result-filter-expand-bar".to_string())
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        // 【2026-10-28 微调（纠正）】输入框内两个内嵌组件：
-                        // **最左侧 = 展开**（prefix：Maximize2，点击收起筛选条，标识本框为
-                        // 展开态）；**最右侧 = 运行**（suffix：▶，wrapped 重查）；
-                        // 输入框无边框（bordered(false)，与工具栏融为搜索条风格）。
-                        Input::new(&self.filter_input)
-                            .bordered(false)
-                            .prefix(
-                                Button::new("editor-result-filter-expand-toggle")
-                                    .ghost()
-                                    .small()
-                                    .icon(IconName::Maximize2)
-                                    .debug_selector(|| "editor-result-filter-expand-toggle".to_string())
-                                    .tooltip("收起筛选条（回到工具栏输入框）")
-                                    .on_click(move |_, _window, app| {
-                                        collapse_queue.request(ResultRequest::ToggleFilterExpand, app);
-                                    }),
-                            )
-                            .suffix(
-                                Button::new("editor-result-filter-expand-run")
-                                    .ghost()
-                                    .small()
-                                    .icon(IconName::Play)
-                                    .debug_selector(|| "editor-result-filter-expand-run".to_string())
-                                    .tooltip("用 select * from (原SQL) where 词 重查（替换当前结果集）")
-                                    .on_click(move |_, _window, app| {
-                                        run_queue.request(ResultRequest::RunFilterAsQuery, app);
-                                    }),
-                            ),
-                    ),
+                div().flex_1().min_w_0().child(
+                    // 【2026-10-28 微调（纠正）】输入框内两个内嵌组件：
+                    // **最左侧 = 展开**（prefix：Maximize2，点击收起筛选条，标识本框为
+                    // 展开态）；**最右侧 = 运行**（suffix：▶，wrapped 重查）；
+                    // 输入框无边框（bordered(false)，与工具栏融为搜索条风格）。
+                    Input::new(&self.filter_input)
+                        .bordered(false)
+                        .prefix(
+                            Button::new("editor-result-filter-expand-toggle")
+                                .ghost()
+                                .small()
+                                .icon(IconName::Maximize2)
+                                .debug_selector(|| "editor-result-filter-expand-toggle".to_string())
+                                .tooltip("收起筛选条（回到工具栏输入框）")
+                                .on_click(move |_, _window, app| {
+                                    collapse_queue.request(ResultRequest::ToggleFilterExpand, app);
+                                }),
+                        )
+                        .suffix(
+                            Button::new("editor-result-filter-expand-run")
+                                .ghost()
+                                .small()
+                                .icon(IconName::Play)
+                                .debug_selector(|| "editor-result-filter-expand-run".to_string())
+                                .tooltip("用 select * from (原SQL) where 词 重查（替换当前结果集）")
+                                .on_click(move |_, _window, app| {
+                                    run_queue.request(ResultRequest::RunFilterAsQuery, app);
+                                }),
+                        ),
+                ),
             )
             .when(!self.filter_text.trim().is_empty(), |row| {
                 row.child(
@@ -628,11 +625,7 @@ impl ResultPanel {
             )
             .into_any_element()
     }
-
-
 }
-
-
 
 /// 【侧栏丝滑】展开 / 收起宽度动画的 `(from, to)` 计算（纯函数，render 调用）：
 /// - `epoch == 0`（首帧）：`from == to`，无动画直接落位（面板初始展开，不能开场就来一遍滑入）
@@ -654,7 +647,10 @@ pub(crate) fn sidebar_width_anim(epoch: u64, show: bool, full: Pixels) -> (Pixel
 /// 【2026-10-28 微调】右侧开关三态转移（纯函数，`toggle_value_sidebar` 调用）：
 /// 收起 `(false,false)` → 窄展开 `(true,false)` → 宽展开 `(true,true)` → 收起。
 /// 返回值 = `(edge_bar_visible, show_value_sidebar)`；不变量：宽展开 ⟹ 竖条可见。
-pub(crate) fn next_right_edge_state(edge_bar_visible: bool, show_value_sidebar: bool) -> (bool, bool) {
+pub(crate) fn next_right_edge_state(
+    edge_bar_visible: bool,
+    show_value_sidebar: bool,
+) -> (bool, bool) {
     match (edge_bar_visible, show_value_sidebar) {
         (false, _) => (true, false),    // 收起 → 窄展开（只显右缘竖条图标条）
         (true, false) => (true, true),  // 窄展开 → 宽展开（右栏内容出现）

@@ -184,10 +184,7 @@ pub fn sql_dialect(db_type: &str) -> Option<engine::sql::SqlDialect> {
 }
 
 /// 把绑定的 id 解析成展示数据；`None` = 解析不出（宿主没给这个连接 / 没接端口）
-pub fn chip_for(
-    conn_id: Option<&str>,
-    options: &[ConnectionOption],
-) -> Option<ConnectionChip> {
+pub fn chip_for(conn_id: Option<&str>, options: &[ConnectionOption]) -> Option<ConnectionChip> {
     let id = conn_id?;
     Some(match options.iter().find(|option| option.id == id) {
         Some(option) => ConnectionChip {
@@ -264,7 +261,10 @@ mod tests {
     fn chip_matches_the_bound_id_only() {
         let options = vec![option("P_a", "a", true), option("P_b", "b", true)];
         assert_eq!(chip_for(Some("P_b"), &options).expect("解析").name, "b");
-        assert_ne!(chip_for(Some("P_b"), &options), chip_for(Some("P_a"), &options));
+        assert_ne!(
+            chip_for(Some("P_b"), &options),
+            chip_for(Some("P_a"), &options)
+        );
         // 大小写不同就是不同的 id（宿主给的 id 是稳定的，不做模糊匹配）
         assert!(chip_for(Some("p_b"), &options).is_some_and(|chip| chip.short == "?"));
     }

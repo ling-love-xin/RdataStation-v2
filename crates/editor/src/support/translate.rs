@@ -180,14 +180,18 @@ mod tests {
             SqlDialect::Postgres,
         );
         assert!(
-            plan.text.starts_with("SELECT `a` FROM `t`;\n\n-- 这段别动\n"),
+            plan.text
+                .starts_with("SELECT `a` FROM `t`;\n\n-- 这段别动\n"),
             "选区之外（含那句 MySQL 原文与注释）逐字不动：{:?}",
             plan.text
         );
         let selected = plan.selection.clone().expect("有选区");
         let transpiled = &plan.text[selected];
         assert!(transpiled.contains("\"b\""), "选区被翻了：{transpiled:?}");
-        assert!(!transpiled.contains('`'), "选区里不该留反引号：{transpiled:?}");
+        assert!(
+            !transpiled.contains('`'),
+            "选区里不该留反引号：{transpiled:?}"
+        );
         assert_eq!(plan.transpiled, 1);
         assert_eq!(plan.kept_verbatim, 0);
     }
@@ -196,7 +200,12 @@ mod tests {
     fn the_whole_document_is_transpiled_and_the_cursor_stays_in_its_statement() {
         let text = "SELECT 1;\nSELECT `a` FROM `t`;\nSELECT 3;";
         let offset = text.find("FROM").expect("找得到") + 2;
-        let plan = plan(text, offset..offset, SqlDialect::Mysql, SqlDialect::Postgres);
+        let plan = plan(
+            text,
+            offset..offset,
+            SqlDialect::Mysql,
+            SqlDialect::Postgres,
+        );
         assert_eq!(plan.transpiled, 3, "{:?}", plan.text);
         assert!(plan.selection.is_none(), "整篇转译不选中任何东西");
         let spans = split_statements(&plan.text);
@@ -230,7 +239,12 @@ mod tests {
     fn a_document_without_a_source_dialect_is_not_guessed_here() {
         // 这里只保证：把 Ansi 当源时也能工作（**谁来给源方言是面板的事**——
         // 未绑定连接时面板会拒绝，而不是悄悄用 Ansi 翻出一份错东西）
-        let plan = plan("SELECT `a` FROM `t`", 0..0, SqlDialect::Ansi, SqlDialect::Postgres);
+        let plan = plan(
+            "SELECT `a` FROM `t`",
+            0..0,
+            SqlDialect::Ansi,
+            SqlDialect::Postgres,
+        );
         assert!(!plan.text.is_empty());
     }
 }

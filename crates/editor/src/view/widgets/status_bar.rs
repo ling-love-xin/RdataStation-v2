@@ -20,8 +20,8 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::component::Icon;
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Icon;
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -188,10 +188,7 @@ pub fn right_badges(inputs: &StatusInputs) -> Vec<StatusBadge> {
         } else {
             format!("已选 {} 字符", inputs.selected_chars)
         };
-        badges.push(StatusBadge {
-            icon: None,
-            text,
-        });
+        badges.push(StatusBadge { icon: None, text });
     }
     // 缩进 / 大小：文档级设置（缩进交互段在右侧 `controls.indent`；大小纯数据，独立微标）
     // 编码 / 换行：2026-10-27 起由右侧**交互段**呈现（`controls.encoding` 按钮弹窗选择、
@@ -339,11 +336,7 @@ pub fn human_size(bytes: usize) -> String {
 /// 画成状态栏（固定高、顶部分隔线；颜色全部来自主题）
 ///
 /// `controls` 里的控件由面板给（它们要拿面板实体去处理点击）。
-pub fn render(
-    inputs: &StatusInputs,
-    controls: StatusControls,
-    cx: &App,
-) -> impl IntoElement {
+pub fn render(inputs: &StatusInputs, controls: StatusControls, cx: &App) -> impl IntoElement {
     let text = labels(inputs);
     let badges = right_badges(inputs);
     let theme = cx.theme();
@@ -369,13 +362,7 @@ pub fn render(
         // 执行方式控件（源库 / 加速 / 联邦可切）：有控件时替代正文里的通道文本段
         .children(controls.channel)
         // 正文超宽时收缩截断而不是把右段推出窗口（VSCode 左段同款行为）
-        .child(
-            div()
-                .min_w_0()
-                .flex_1()
-                .text_ellipsis()
-                .child(text.body),
-        )
+        .child(div().min_w_0().flex_1().text_ellipsis().child(text.body))
         .children(controls.tx);
 
     // 右段微标（VSCode 式）：每个微标独立成段，段间用竖线分隔；宽窗口全显、
@@ -491,10 +478,18 @@ mod tests {
     #[test]
     fn left_shows_channel_and_env_family() {
         let text = labels(&inputs(ReadOnly::none()));
-        assert!(!text.body.contains("条语句"), "语句数已移右段：{}", text.body);
+        assert!(
+            !text.body.contains("条语句"),
+            "语句数已移右段：{}",
+            text.body
+        );
         assert!(!text.body.contains("未保存"));
         // 模式与语句数在右段微标（原型 ⑧：… │ 2 条语句 │ SQL │ 脏）
-        assert!(text.right.iter().any(|b| b.contains("SQL")), "{:?}", text.right);
+        assert!(
+            text.right.iter().any(|b| b.contains("SQL")),
+            "{:?}",
+            text.right
+        );
         assert!(
             text.right.iter().any(|b| b.contains("3 条语句")),
             "{:?}",
@@ -644,7 +639,10 @@ mod tests {
         selecting.selected_chars = 7;
         selecting.selected_rows = 2;
         assert!(
-            labels(&selecting).right.iter().any(|b| b.contains("已选 2 行 · 7 字符")),
+            labels(&selecting)
+                .right
+                .iter()
+                .any(|b| b.contains("已选 2 行 · 7 字符")),
             "跨行选区合并成人读中文徽标：{:?}",
             labels(&selecting).right
         );
@@ -654,7 +652,10 @@ mod tests {
         single_line.selected_chars = 5;
         single_line.selected_rows = 1;
         assert!(
-            labels(&single_line).right.iter().any(|b| b.contains("已选 5 字符")),
+            labels(&single_line)
+                .right
+                .iter()
+                .any(|b| b.contains("已选 5 字符")),
             "单行选区只报字符数：{:?}",
             labels(&single_line).right
         );
@@ -667,8 +668,16 @@ mod tests {
         failed.dirty = true;
         failed.message = Some("未命名文档，请先另存为");
         let text = labels(&failed);
-        assert!(text.body.contains("未命名文档，请先另存为"), "{}", text.body);
-        assert!(text.body.contains("未保存"), "提示不挤掉文档状态：{}", text.body);
+        assert!(
+            text.body.contains("未命名文档，请先另存为"),
+            "{}",
+            text.body
+        );
+        assert!(
+            text.body.contains("未保存"),
+            "提示不挤掉文档状态：{}",
+            text.body
+        );
         assert!(
             !text.right.iter().any(|b| b.contains("另存为")),
             "提示不进右段：{:?}",
@@ -684,7 +693,10 @@ mod tests {
     fn executing_segment_counts_the_time_up() {
         let mut running = inputs(ReadOnly::none());
         running.executing = true;
-        assert!(labels(&running).body.contains("执行中…"), "没耗时也得说在执行");
+        assert!(
+            labels(&running).body.contains("执行中…"),
+            "没耗时也得说在执行"
+        );
 
         running.elapsed = Some(std::time::Duration::from_millis(3400));
         let text = labels(&running).body;
@@ -757,7 +769,11 @@ mod tests {
         let text = labels(&with_dialect);
         assert_eq!(text.connection.as_deref(), Some("●P·orders"));
         assert_eq!(text.dialect.as_deref(), Some("方言 PostgreSQL"));
-        assert!(!text.body.contains("PostgreSQL"), "方言不进正文：{}", text.body);
+        assert!(
+            !text.body.contains("PostgreSQL"),
+            "方言不进正文：{}",
+            text.body
+        );
 
         // 没绑定连接（文本模式 / 未绑定）→ 方言段不占位
         assert!(labels(&inputs(ReadOnly::none())).dialect.is_none());

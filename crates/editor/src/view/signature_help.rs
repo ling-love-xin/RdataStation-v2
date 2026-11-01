@@ -152,11 +152,7 @@ fn signature_view(sig: &FunctionSignature, active: usize) -> SignatureView {
 }
 
 /// 打开签名帮助对话框（宿主在命令处理里调：读文档文本 + 光标 → [`current_call`]）
-pub fn open_signature_help(
-    window: &mut Window,
-    cx: &mut App,
-    view: SignatureView,
-) {
+pub fn open_signature_help(window: &mut Window, cx: &mut App, view: SignatureView) {
     window.open_dialog(cx, move |dialog, _window, cx| {
         let theme = cx.theme();
         // 参数表：当前参数位用主色高亮（VSCode 签名帮助同款口径），其余 muted
@@ -191,7 +187,12 @@ pub fn open_signature_help(
                 .w_full()
                 .gap_2()
                 .child(body)
-                .child(div().text_xs().text_color(theme.colors.muted_foreground).child(desc.clone()))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(desc.clone()),
+                )
                 .into_any_element()
         } else {
             body
@@ -221,7 +222,10 @@ mod tests {
 
     #[test]
     fn no_call_when_no_open_paren() {
-        assert!(current_call("SELECT substr", 13).is_none(), "没 ( 就不是调用");
+        assert!(
+            current_call("SELECT substr", 13).is_none(),
+            "没 ( 就不是调用"
+        );
         assert!(current_call("SELECT 1", 8).is_none(), "不是标识符调用");
     }
 
@@ -255,15 +259,27 @@ mod tests {
         assert_eq!(view.name, "SUBSTR");
         assert_eq!(view.active, 0);
         // 继续输入参数：光标前一字符不是 `(`，不再触发
-        assert!(auto_call("SELECT substr(x", 15).is_none(), "参数输入中不触发");
-        assert!(auto_call("SELECT substr(x,", 16).is_none(), "逗号输入中不触发");
+        assert!(
+            auto_call("SELECT substr(x", 15).is_none(),
+            "参数输入中不触发"
+        );
+        assert!(
+            auto_call("SELECT substr(x,", 16).is_none(),
+            "逗号输入中不触发"
+        );
         // 光标在开头 / 空文本：不触发
         assert!(auto_call("", 0).is_none());
         assert!(auto_call("SELECT 1", 8).is_none(), "前导字符不是 ( 不触发");
         // 字符串 / 注释内的调用括号已排除（A 方案：词法判定，修复首版误弹）
         // "SELECT 'substr('" —— 光标 16 在闭合引号后，最近 ( 在字符串内
-        assert!(current_call("SELECT 'substr('", 16).is_none(), "字符串内的 ( 不识别");
+        assert!(
+            current_call("SELECT 'substr('", 16).is_none(),
+            "字符串内的 ( 不识别"
+        );
         // "SELECT -- substr(\n1" —— 最近 ( 在行注释内（光标 18 在 1 后）
-        assert!(current_call("SELECT -- substr(\n1", 18).is_none(), "注释内的 ( 不识别");
+        assert!(
+            current_call("SELECT -- substr(\n1", 18).is_none(),
+            "注释内的 ( 不识别"
+        );
     }
 }

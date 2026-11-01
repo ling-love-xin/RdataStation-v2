@@ -1,14 +1,14 @@
 //! 菜单域（`grid/` 第五块）：右键 / 列头 / 列浏览器三组菜单项（纯函数）+ 列去重
 //! 取值 + `TableDelegate::context_menu`（网格最近右键单元格 → 菜单动作回钩子）。
 
-use gpui_kit::*;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::TableState;
+use gpui_kit::*;
 
-use crate::rowset::RowRef;
 use super::delegate::ResultGridDelegate;
 use super::stats::{column_stats, stats_lines};
 use super::text::preview_of;
+use crate::rowset::RowRef;
 /// 右键菜单的动作（界面按它决定点击后干什么）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextAction {
@@ -228,7 +228,9 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
     });
     items.push(ContextMenuItem {
         label: format!("列统计「{column_name}」"),
-        action: ContextAction::ColumnStats { column: target.column },
+        action: ContextAction::ColumnStats {
+            column: target.column,
+        },
         separator_before: false,
     });
     if target.hidden_columns > 0 {
@@ -332,7 +334,9 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
     });
     items.push(ContextMenuItem {
         label: format!("列统计「{column_name}」"),
-        action: ContextAction::ColumnStats { column: target.column },
+        action: ContextAction::ColumnStats {
+            column: target.column,
+        },
         separator_before: false,
     });
     if target.hidden_columns > 0 {
@@ -383,7 +387,9 @@ pub fn column_browser_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem>
         },
         ContextMenuItem {
             label: format!("列统计「{column_name}」"),
-            action: ContextAction::ColumnStats { column: target.column },
+            action: ContextAction::ColumnStats {
+                column: target.column,
+            },
             separator_before: false,
         },
     ];
@@ -405,11 +411,7 @@ pub fn column_browser_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem>
 }
 /// 【筛选】这一列的去重取值（纯函数）：按出现顺序去重，最多 `limit` 个；
 /// 列越界 / 无行 = 空切片。`NULL` 是字面量，原样计入（值列表里能筛 NULL）。
-pub fn column_distinct_values(
-    rows: &[Vec<String>],
-    column: usize,
-    limit: usize,
-) -> Vec<String> {
+pub fn column_distinct_values(rows: &[Vec<String>], column: usize, limit: usize) -> Vec<String> {
     let mut seen: Vec<String> = Vec::new();
     for row in rows {
         if let Some(value) = row.get(column) {
@@ -436,238 +438,238 @@ pub(crate) fn context_menu(
     _window: &mut Window,
     cx: &mut Context<TableState<ResultGridDelegate>>,
 ) -> PopupMenu {
-        // 【P2-4】转置是查看视图：右键菜单（筛选 / 排序 / 冻结 / 编辑）对它是错的
-        if delegate.transposed {
-            return menu;
-        }
-        let Some((row, col)) = delegate.context_cell else {
-            return menu;
-        };
-        if ResultGridDelegate::is_row_number(col) || row >= delegate.view_len() {
-            return menu;
-        }
-        let column = delegate.data_column(col - 1);
-        let column_name = delegate
-            .columns
-            .get(column)
-            .cloned()
-            .unwrap_or_else(|| format!("列 {}", column + 1));
-
-        let mut menu = menu;
-        let insight_available = delegate.on_insight_column.is_some() && delegate.insight_available;
-        let target = ContextTarget {
-            value: delegate.cell(row, col),
-            // clone 进 target：外部的 column_name 留着给「查看完整值」分支用
-            column_name: column_name.clone(),
-            column,
-            row,
-            rows: delegate.view_len(),
-            frozen: delegate.is_frozen(column),
-            hidden_columns: delegate.hidden.len(),
-            insight: insight_available,
-            // 【A9】表名给菜单（猜不到 = None → 不摆 INSERT 项）
-            table: delegate.result_table.clone(),
-            // 右键菜单不摆列级筛选段（右键的「按值筛选」是全局词）：两字段留空
-            column_filter_active: false,
-            column_values: Vec::new(),
-            sort_active: delegate
-                .sort_state()
-                .is_some_and(|(sort_col, _)| sort_col == column),
-            // 【#28-B3】行身份 + 编辑闸口 + 删除标记：行级三项菜单按这三个字段判定
-            row_ref: delegate.row_ref(row).unwrap_or(RowRef::default()),
-            editable: delegate.editable,
-            is_deleted: delegate.is_deleted_row(row),
-        };
-        for item in context_menu_items(&target) {
-            if item.separator_before {
-                menu = menu.separator();
-            }
-            match item.action {
-                ContextAction::PreviewValue(value) => {
-                    // 【遗留 #7】没接钩子就不摆这一项（能力没有就不给入口）
-                    if let Some(hook) = delegate.on_preview_value.clone() {
-                        // 分支内克隆副本给闭包（外部的 column_name 后续分支还要用）；
-                        // 闭包是 Fn（可多次调用）：取值必须 clone，不能 move 捕获
-                        let column_name = column_name.clone();
-                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                            move |_, _window, app| {
-                                hook(value.clone(), column_name.clone(), column, row, app)
-                            },
-                        ));
-                    }
-                }
-                ContextAction::FilterByValue(needle) => {
-                    // 没接钩子就不摆这一项（能力没有就不给入口）
-                    if let Some(hook) = delegate.on_filter_value.clone() {
-                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                            move |_, _window, app| hook(&needle, app),
-                        ));
-                    }
-                }
-                ContextAction::SortDown { column, descending } => {
-                    // 与「按值筛选」同口径：没接钩子就不摆这一项
-                    if let Some(hook) = delegate.on_sort_down.clone() {
-                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                            move |_, _window, app| hook(&column, descending, app),
-                        ));
-                    }
-                }
-                ContextAction::CopyValue(copied) => {
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                        move |_, _window, app| {
-                            app.write_to_clipboard(ClipboardItem::new_string(copied.clone()));
-                        },
-                    ));
-                }
-                ContextAction::CopyValueJson(copied) => {
-                    // 【A9】值 JSON 在菜单构造时拼好（`NULL` → null；与导出档同口径）
-                    let text = crate::export::value_to_json(&copied);
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                        move |_, _window, app| {
-                            app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                        },
-                    ));
-                }
-                ContextAction::CopyRowJson(row) => {
-                    // 【A9】整行 JSON（视图行序，与「复制整行（TSV）」同口径）
-                    let text = delegate.row_json_text(row);
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                        move |_, _window, app| {
-                            app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                        },
-                    ));
-                }
-                ContextAction::CopyRowInsert(row) => {
-                    // 【A9】整行 INSERT（表名已由面板同步；拼好的语句带上）
-                    let text = delegate.row_insert_text(row);
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                        move |_, _window, app| {
-                            app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                        },
-                    ));
-                }
-                ContextAction::CopyColumn(column) => {
-                    // 文案先拼好再交给点击回调：菜单项活到的比这一次 `context_menu` 调用长，
-                    // 而“当时那一列是什么”只有现在知道。取值走**视图行序**（看着的才是拷走的）
-                    let text = delegate.column_text(column);
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                        move |_, _window, app| {
-                            app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                        },
-                    ));
-                }
-                ContextAction::CopyRow(row) => {
-                    // 同上：拼好的 TSV 带上（整行 = 各列制表符分隔，粘进表格直接分列）
-                    let text = delegate.row_text(row);
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                        move |_, _window, app| {
-                            app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                        },
-                    ));
-                }
-                ContextAction::ToggleFreeze(column) => {
-                    // 冻结是**表格自己的事**（改的是 `Column.fixed`），不需要面板：
-                    // 点击发生在独立事件里（不在表格的更新栈内），可以安全地更新它并重建列组
-                    let table = cx.entity().clone();
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                        move |_, _window, app| {
-                            table.update(app, |state, cx| {
-                                state.delegate_mut().toggle_freeze(column);
-                                state.refresh(cx);
-                            });
-                        },
-                    ));
-                }
-                ContextAction::InsightColumn { column } => {
-                    // 同「按值筛选」：没接钩子（宿主没接洞察端口）就不摆这一项
-                    if let Some(hook) = delegate.on_insight_column.clone() {
-                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                            move |_, _window, app| hook(&column, app),
-                        ));
-                    }
-                }
-                ContextAction::ColumnStats { column } => {
-                    // 统计是**网格自己算**（纯遍历），弹层由宿主开（复用值预览的对话框通道）
-                    if let Some(hook) = delegate.on_column_stats.clone() {
-                        let name = delegate
-                            .columns
-                            .get(column)
-                            .cloned()
-                            .unwrap_or_default();
-                        let text = stats_lines(&column_stats(&delegate.rows, column)).join("\n");
-                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                            move |_, _window, app| hook(name.clone(), text.clone(), app),
-                        ));
-                    }
-                }
-                ContextAction::HideColumn(column) => {
-                    // 隐藏是**表格自己的事**（改视图列序），与冻结同一条路：点击在独立事件里，
-                    // 可以安全地更新 delegate 并重建列组
-                    let table = cx.entity().clone();
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                        move |_, _window, app| {
-                            table.update(app, |state, cx| {
-                                state.delegate_mut().hide_column(column);
-                                state.refresh(cx);
-                            });
-                        },
-                    ));
-                }
-                ContextAction::ShowAllColumns => {
-                    let table = cx.entity().clone();
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                        move |_, _window, app| {
-                            table.update(app, |state, cx| {
-                                state.delegate_mut().show_all_columns();
-                                state.refresh(cx);
-                            });
-                        },
-                    ));
-                }
-                ContextAction::ClearSort => {
-                    // 取消排序 = 本地回原顺序（与列头菜单同一条路，不下发源库重查）
-                    let table = cx.entity().clone();
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                        move |_, _window, app| {
-                            table.update(app, |state, cx| {
-                                state.delegate_mut().clear_sort();
-                                state.refresh(cx);
-                            });
-                        },
-                    ));
-                }
-                // 【#28-B3】行级动作：网格不持本地行真值，打包成请求交回宿主分派；
-                // 没接钩子（只读结果集）时菜单项已被 `context_menu_items` 收起，这里兜底忽略。
-                ContextAction::InsertRowBelow(row) => {
-                    if let Some(hook) = delegate.on_row_action.clone() {
-                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                            move |_, _window, app| {
-                                hook(crate::ports::ResultRequest::InsertRowBelow(Some(row)), app);
-                            },
-                        ));
-                    }
-                }
-                ContextAction::DuplicateRow(row) => {
-                    if let Some(hook) = delegate.on_row_action.clone() {
-                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                            move |_, _window, app| {
-                                hook(crate::ports::ResultRequest::DuplicateRow(row), app);
-                            },
-                        ));
-                    }
-                }
-                ContextAction::DeleteRow(row) => {
-                    if let Some(hook) = delegate.on_row_action.clone() {
-                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                            move |_, _window, app| {
-                                hook(crate::ports::ResultRequest::DeleteRow(row), app);
-                            },
-                        ));
-                    }
-                }
-                // 列级筛选只属于列头菜单（右键的「按值筛选」是全局词）：右键收到即忽略
-                ContextAction::FilterColumnValue { .. } | ContextAction::ClearColumnFilter { .. } => {}
-            }
-        }
-        menu
+    // 【P2-4】转置是查看视图：右键菜单（筛选 / 排序 / 冻结 / 编辑）对它是错的
+    if delegate.transposed {
+        return menu;
     }
+    let Some((row, col)) = delegate.context_cell else {
+        return menu;
+    };
+    if ResultGridDelegate::is_row_number(col) || row >= delegate.view_len() {
+        return menu;
+    }
+    let column = delegate.data_column(col - 1);
+    let column_name = delegate
+        .columns
+        .get(column)
+        .cloned()
+        .unwrap_or_else(|| format!("列 {}", column + 1));
+
+    let mut menu = menu;
+    let insight_available = delegate.on_insight_column.is_some() && delegate.insight_available;
+    let target = ContextTarget {
+        value: delegate.cell(row, col),
+        // clone 进 target：外部的 column_name 留着给「查看完整值」分支用
+        column_name: column_name.clone(),
+        column,
+        row,
+        rows: delegate.view_len(),
+        frozen: delegate.is_frozen(column),
+        hidden_columns: delegate.hidden.len(),
+        insight: insight_available,
+        // 【A9】表名给菜单（猜不到 = None → 不摆 INSERT 项）
+        table: delegate.result_table.clone(),
+        // 右键菜单不摆列级筛选段（右键的「按值筛选」是全局词）：两字段留空
+        column_filter_active: false,
+        column_values: Vec::new(),
+        sort_active: delegate
+            .sort_state()
+            .is_some_and(|(sort_col, _)| sort_col == column),
+        // 【#28-B3】行身份 + 编辑闸口 + 删除标记：行级三项菜单按这三个字段判定
+        row_ref: delegate.row_ref(row).unwrap_or(RowRef::default()),
+        editable: delegate.editable,
+        is_deleted: delegate.is_deleted_row(row),
+    };
+    for item in context_menu_items(&target) {
+        if item.separator_before {
+            menu = menu.separator();
+        }
+        match item.action {
+            ContextAction::PreviewValue(value) => {
+                // 【遗留 #7】没接钩子就不摆这一项（能力没有就不给入口）
+                if let Some(hook) = delegate.on_preview_value.clone() {
+                    // 分支内克隆副本给闭包（外部的 column_name 后续分支还要用）；
+                    // 闭包是 Fn（可多次调用）：取值必须 clone，不能 move 捕获
+                    let column_name = column_name.clone();
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            hook(value.clone(), column_name.clone(), column, row, app)
+                        },
+                    ));
+                }
+            }
+            ContextAction::FilterByValue(needle) => {
+                // 没接钩子就不摆这一项（能力没有就不给入口）
+                if let Some(hook) = delegate.on_filter_value.clone() {
+                    menu = menu.item(
+                        PopupMenuItem::new(item.label)
+                            .on_click(move |_, _window, app| hook(&needle, app)),
+                    );
+                }
+            }
+            ContextAction::SortDown { column, descending } => {
+                // 与「按值筛选」同口径：没接钩子就不摆这一项
+                if let Some(hook) = delegate.on_sort_down.clone() {
+                    menu = menu.item(
+                        PopupMenuItem::new(item.label)
+                            .on_click(move |_, _window, app| hook(&column, descending, app)),
+                    );
+                }
+            }
+            ContextAction::CopyValue(copied) => {
+                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    move |_, _window, app| {
+                        app.write_to_clipboard(ClipboardItem::new_string(copied.clone()));
+                    },
+                ));
+            }
+            ContextAction::CopyValueJson(copied) => {
+                // 【A9】值 JSON 在菜单构造时拼好（`NULL` → null；与导出档同口径）
+                let text = crate::export::value_to_json(&copied);
+                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    move |_, _window, app| {
+                        app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                    },
+                ));
+            }
+            ContextAction::CopyRowJson(row) => {
+                // 【A9】整行 JSON（视图行序，与「复制整行（TSV）」同口径）
+                let text = delegate.row_json_text(row);
+                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    move |_, _window, app| {
+                        app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                    },
+                ));
+            }
+            ContextAction::CopyRowInsert(row) => {
+                // 【A9】整行 INSERT（表名已由面板同步；拼好的语句带上）
+                let text = delegate.row_insert_text(row);
+                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    move |_, _window, app| {
+                        app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                    },
+                ));
+            }
+            ContextAction::CopyColumn(column) => {
+                // 文案先拼好再交给点击回调：菜单项活到的比这一次 `context_menu` 调用长，
+                // 而“当时那一列是什么”只有现在知道。取值走**视图行序**（看着的才是拷走的）
+                let text = delegate.column_text(column);
+                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    move |_, _window, app| {
+                        app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                    },
+                ));
+            }
+            ContextAction::CopyRow(row) => {
+                // 同上：拼好的 TSV 带上（整行 = 各列制表符分隔，粘进表格直接分列）
+                let text = delegate.row_text(row);
+                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    move |_, _window, app| {
+                        app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                    },
+                ));
+            }
+            ContextAction::ToggleFreeze(column) => {
+                // 冻结是**表格自己的事**（改的是 `Column.fixed`），不需要面板：
+                // 点击发生在独立事件里（不在表格的更新栈内），可以安全地更新它并重建列组
+                let table = cx.entity().clone();
+                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    move |_, _window, app| {
+                        table.update(app, |state, cx| {
+                            state.delegate_mut().toggle_freeze(column);
+                            state.refresh(cx);
+                        });
+                    },
+                ));
+            }
+            ContextAction::InsightColumn { column } => {
+                // 同「按值筛选」：没接钩子（宿主没接洞察端口）就不摆这一项
+                if let Some(hook) = delegate.on_insight_column.clone() {
+                    menu = menu.item(
+                        PopupMenuItem::new(item.label)
+                            .on_click(move |_, _window, app| hook(&column, app)),
+                    );
+                }
+            }
+            ContextAction::ColumnStats { column } => {
+                // 统计是**网格自己算**（纯遍历），弹层由宿主开（复用值预览的对话框通道）
+                if let Some(hook) = delegate.on_column_stats.clone() {
+                    let name = delegate.columns.get(column).cloned().unwrap_or_default();
+                    let text = stats_lines(&column_stats(&delegate.rows, column)).join("\n");
+                    menu = menu.item(
+                        PopupMenuItem::new(item.label)
+                            .on_click(move |_, _window, app| hook(name.clone(), text.clone(), app)),
+                    );
+                }
+            }
+            ContextAction::HideColumn(column) => {
+                // 隐藏是**表格自己的事**（改视图列序），与冻结同一条路：点击在独立事件里，
+                // 可以安全地更新 delegate 并重建列组
+                let table = cx.entity().clone();
+                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    move |_, _window, app| {
+                        table.update(app, |state, cx| {
+                            state.delegate_mut().hide_column(column);
+                            state.refresh(cx);
+                        });
+                    },
+                ));
+            }
+            ContextAction::ShowAllColumns => {
+                let table = cx.entity().clone();
+                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    move |_, _window, app| {
+                        table.update(app, |state, cx| {
+                            state.delegate_mut().show_all_columns();
+                            state.refresh(cx);
+                        });
+                    },
+                ));
+            }
+            ContextAction::ClearSort => {
+                // 取消排序 = 本地回原顺序（与列头菜单同一条路，不下发源库重查）
+                let table = cx.entity().clone();
+                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    move |_, _window, app| {
+                        table.update(app, |state, cx| {
+                            state.delegate_mut().clear_sort();
+                            state.refresh(cx);
+                        });
+                    },
+                ));
+            }
+            // 【#28-B3】行级动作：网格不持本地行真值，打包成请求交回宿主分派；
+            // 没接钩子（只读结果集）时菜单项已被 `context_menu_items` 收起，这里兜底忽略。
+            ContextAction::InsertRowBelow(row) => {
+                if let Some(hook) = delegate.on_row_action.clone() {
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            hook(crate::ports::ResultRequest::InsertRowBelow(Some(row)), app);
+                        },
+                    ));
+                }
+            }
+            ContextAction::DuplicateRow(row) => {
+                if let Some(hook) = delegate.on_row_action.clone() {
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            hook(crate::ports::ResultRequest::DuplicateRow(row), app);
+                        },
+                    ));
+                }
+            }
+            ContextAction::DeleteRow(row) => {
+                if let Some(hook) = delegate.on_row_action.clone() {
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            hook(crate::ports::ResultRequest::DeleteRow(row), app);
+                        },
+                    ));
+                }
+            }
+            // 列级筛选只属于列头菜单（右键的「按值筛选」是全局词）：右键收到即忽略
+            ContextAction::FilterColumnValue { .. } | ContextAction::ClearColumnFilter { .. } => {}
+        }
+    }
+    menu
+}

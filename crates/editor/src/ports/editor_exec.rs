@@ -38,8 +38,8 @@ use engine::services::execution_service::DuckDbExportFormat;
 use engine::services::sql_service::{SqlExecuteOptions, SqlService, window_sql};
 use shared::models::{QueryResult, Value};
 use shared::{
-    dual_estimate, fact_export_mode, storage_choice, CurrentTier, FactExportMode, FactFrame,
-    FactTier,
+    CurrentTier, FactExportMode, FactFrame, FactTier, dual_estimate, fact_export_mode,
+    storage_choice,
 };
 
 /// 引擎执行器（编辑器执行端口的工作台实现）
@@ -689,11 +689,11 @@ impl QueryRunner for EngineQueryRunner {
 
         // ④ 独立事务：已有事务（B4 手动开着）→ 回绝（见方法文档）
         let manager = engine::connection_manager::get_connection_manager();
-        if self
-            .runtime
-            .block_on(manager.has_transaction(&conn_id))
-        {
-            return Err("当前连接已在事务中：先提交 / 回滚它，再批量提交（提交要自己的原子事务）".to_string());
+        if self.runtime.block_on(manager.has_transaction(&conn_id)) {
+            return Err(
+                "当前连接已在事务中：先提交 / 回滚它，再批量提交（提交要自己的原子事务）"
+                    .to_string(),
+            );
         }
 
         // ⑤ 单事务跑：全部成功 COMMIT，任一条失败 ROLLBACK 并整体报错
@@ -919,14 +919,18 @@ impl QueryRunner for EngineQueryRunner {
     /// 编辑器在工作线程上调用（可阻塞）：这里把 env_id 翻译成命令（`editor_env::resolve`），
     /// 再交给 `run_script_process`（stdin 写代码 + 并发收输出 + 超时杀进程树）。
     /// 环境未注册（T2b-3 管理环境落地前只有内置的 python / Rscript / rustc）如实拒绝。
-    fn run_script(&self, request: &crate::env::ScriptRequest) -> Result<crate::env::ScriptOutcome, String> {
+    fn run_script(
+        &self,
+        request: &crate::env::ScriptRequest,
+    ) -> Result<crate::env::ScriptOutcome, String> {
         let env = crate::ports::editor_env::resolve(&request.env_id)?;
-        self.runtime.block_on(crate::ports::editor_env::run_script_process(
-            &env.command,
-            &env.args,
-            &request.code,
-            crate::ports::editor_env::SCRIPT_TIMEOUT_MS,
-        ))
+        self.runtime
+            .block_on(crate::ports::editor_env::run_script_process(
+                &env.command,
+                &env.args,
+                &request.code,
+                crate::ports::editor_env::SCRIPT_TIMEOUT_MS,
+            ))
     }
 
     /// 【D 批待改造】经 DuckDB 落盘（Parquet / XLSX）
@@ -1478,11 +1482,7 @@ mod analysis_tests {
         use arrow::datatypes::{DataType, Field, Schema};
 
         let array: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 2]));
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "id",
-            DataType::Int64,
-            false,
-        )]));
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
         let batch = RecordBatch::try_new(schema, vec![array]).expect("批能建出来");
         Arc::new(FactFrame::new(vec!["id".to_string()], vec![batch]).expect("事实档"))
     }
@@ -1574,7 +1574,10 @@ mod analysis_tests {
             data.source_fact_table.is_some(),
             "常驻表名回传；表档复用 / 新建都要给 host 一个句柄"
         );
-        assert!(data.source_fact_release, "强制表档目标要释放 Rust 堆 batches");
+        assert!(
+            data.source_fact_release,
+            "强制表档目标要释放 Rust 堆 batches"
+        );
     }
 
     /// 分析 SQL 写错：如实报错（不静默出空网格）
@@ -1613,11 +1616,7 @@ mod export_tests {
         use arrow::datatypes::{DataType, Field, Schema};
 
         let array: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 2]));
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "id",
-            DataType::Int64,
-            false,
-        )]));
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
         let batch = RecordBatch::try_new(schema, vec![array]).expect("批能建出来");
         FactFrame::new(vec!["id".to_string()], vec![batch]).expect("事实档")
     }
@@ -1704,10 +1703,8 @@ mod export_tests {
             eprintln!("⏭️ 建不出执行器 runtime，跳过导出探针");
             return;
         };
-        let path = std::env::temp_dir().join(format!(
-            "rds_export_batches_{}.parquet",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("rds_export_batches_{}.parquet", std::process::id()));
         std::fs::remove_file(&path).ok();
 
         let request = DuckDbExportRequest {
@@ -1722,7 +1719,9 @@ mod export_tests {
             // 保真档：不标降级
             degraded: false,
         };
-        let rows = runner.export_via_duckdb(&request).expect("batches 直灌导出该跑通");
+        let rows = runner
+            .export_via_duckdb(&request)
+            .expect("batches 直灌导出该跑通");
         assert_eq!(rows, 2);
 
         let duckdb = engine::services::duckdb_service::DuckDbService::get_or_create_duckdb()
@@ -1735,7 +1734,11 @@ mod export_tests {
         )
         .expect("读回类型");
         assert_eq!(cols, vec!["t".to_string()]);
-        assert_eq!(types[0][0].as_str(), Some("BIGINT"), "数字列保留数值类型，不被收窄成文本");
+        assert_eq!(
+            types[0][0].as_str(),
+            Some("BIGINT"),
+            "数字列保留数值类型，不被收窄成文本"
+        );
 
         std::fs::remove_file(&path).ok();
     }
@@ -1752,12 +1755,13 @@ mod export_tests {
         let mut frame = fact_frame();
         let batches = frame.batches().to_vec();
         // 先经分析设施把 batches 灌进常驻表，拿到真实表名（表档复用的前提）
-        let analysis = crate::ports::result_service::ResultService::execute_duckdb_analysis_from_batches(
-            None,
-            "SELECT * FROM {table}",
-            &batches,
-        )
-        .expect("常驻表应当建出来");
+        let analysis =
+            crate::ports::result_service::ResultService::execute_duckdb_analysis_from_batches(
+                None,
+                "SELECT * FROM {table}",
+                &batches,
+            )
+            .expect("常驻表应当建出来");
         let table = analysis.temp_table.clone();
 
         // 表档帧：挂表名、释放 batches（与 B2 回挂口径一致）
@@ -1765,10 +1769,8 @@ mod export_tests {
         frame.release_batches();
         let fact = Arc::new(frame);
 
-        let path = std::env::temp_dir().join(format!(
-            "rds_export_table_{}.parquet",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("rds_export_table_{}.parquet", std::process::id()));
         std::fs::remove_file(&path).ok();
         let request = DuckDbExportRequest {
             document: DocumentId::new("doc"),

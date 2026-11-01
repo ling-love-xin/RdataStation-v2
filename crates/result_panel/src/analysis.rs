@@ -226,7 +226,10 @@ mod tests {
     fn the_menu_offers_count_and_per_column_grouping() {
         let items = menu_items(&entry(&["id", "tag"], &[&["1", "a"]]));
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
-        assert_eq!(labels, vec!["计数行数", "按「id」分组计数", "按「tag」分组计数"]);
+        assert_eq!(
+            labels,
+            vec!["计数行数", "按「id」分组计数", "按「tag」分组计数"]
+        );
         assert_eq!(
             items[0].sql, "SELECT count(*) AS \"行数\" FROM {table}",
             "占位符留给引擎替换：{}",
@@ -285,7 +288,11 @@ mod tests {
         );
         assert_eq!(small.bridged_rows(), 2);
         assert_eq!(small.dropped_rows, 0);
-        assert!(small.notice().contains("基于已抓取的 2 行"), "{}", small.notice());
+        assert!(
+            small.notice().contains("基于已抓取的 2 行"),
+            "{}",
+            small.notice()
+        );
 
         // 超过上限：截到上限并如实计数
         let rows: Vec<Vec<String>> = (0..(super::ANALYSIS_MAX_ROWS + 5))
@@ -308,7 +315,11 @@ mod tests {
         );
         assert_eq!(capped.bridged_rows(), super::ANALYSIS_MAX_ROWS);
         assert_eq!(capped.dropped_rows, 5);
-        assert!(capped.notice().contains("5 行超出上限未参与"), "{}", capped.notice());
+        assert!(
+            capped.notice().contains("5 行超出上限未参与"),
+            "{}",
+            capped.notice()
+        );
     }
 
     /// 【B3】事实档快照与偏好随请求透传（工作线程据此选保真 / 降级档，不读 global）。

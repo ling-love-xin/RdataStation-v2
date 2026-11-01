@@ -1,24 +1,21 @@
 //! （由 view/tests.rs 拆分，2026-10-29）
 //! 注意：不用 `use super::*` 通配（gpui `test` 宏递归），依赖显式列举。
 
-
 use gpui_kit::component::table::TableDelegate as _;
-use gpui_kit::{
-    TestAppContext, VisualTestContext,
-};
+use gpui_kit::{TestAppContext, VisualTestContext};
 
 use crate::execution::{self};
 use crate::model::EditorMode;
 use crate::service::OpenRequest;
 use crate::shared::EditorShared;
 
+use super::LocatedFailureRunner;
+use super::MoreUnsupportedRunner;
+use super::dialogs::dialog_button_rendered;
 use super::{
     bind_editor_keys, open_panel, run_statement, shared_with_runner, shared_with_segment_runner,
     shared_with_sized_runner, shared_with_toolbar_runner, wait_for_all_pending,
 };
-use super::LocatedFailureRunner;
-use super::MoreUnsupportedRunner;
-use super::dialogs::dialog_button_rendered;
 
 // ===== B5：结果工具栏（复制 / 刷新 / 影响行数 / 截断 / 分栏）=====
 
@@ -569,8 +566,8 @@ fn transpose_opens_without_selection(cx: &mut TestAppContext) {
     // 直调「记录」按钮的最终动作（无选中行）
     let rp = cx.update(|_window, cx| panel.read(cx).result_panel_for_test());
     cx.update(|_window, cx| rp.update(cx, |p, cx| p.toggle_transpose(cx)));
-    let transposed = cx
-        .update(|_window, cx| rp.read(cx).grid().read(cx).delegate().is_transposed());
+    let transposed =
+        cx.update(|_window, cx| rp.read(cx).grid().read(cx).delegate().is_transposed());
     assert!(transposed, "无选中行点记录也应打开转置（第 0 行兜底）");
 
     // 转置到第 0 行（数据行 0）
@@ -914,4 +911,3 @@ fn a_finished_result_does_not_ask_for_more(cx: &mut TestAppContext) {
     wait_for_all_pending(cx, &panel);
     assert!(!wants(cx), "第二段没拿满 → 到底了");
 }
-

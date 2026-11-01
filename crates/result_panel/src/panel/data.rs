@@ -23,11 +23,11 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use gpui_kit::*;
 use gpui_kit::base::TreeState;
-use gpui_kit::component::list::ListState;
 use gpui_kit::component::input::{InputState, TextareaState};
+use gpui_kit::component::list::ListState;
 use gpui_kit::component::table::TableState;
+use gpui_kit::*;
 
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 use ::shared::FactFrame;

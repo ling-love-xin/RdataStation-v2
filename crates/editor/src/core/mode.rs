@@ -201,7 +201,9 @@ impl ConfirmKind {
     pub fn body(self) -> &'static str {
         match self {
             Self::HideResults => "结果仍保留在结果面板，但不再可交互；切回 SQL 模式可继续使用。",
-            Self::ConvertToCells => "当前内容将按所选粒度拆分为可执行单元；连接绑定提升为会话默认连接。",
+            Self::ConvertToCells => {
+                "当前内容将按所选粒度拆分为可执行单元；连接绑定提升为会话默认连接。"
+            }
             Self::ExportToScript => "单元结构会被展开为纯脚本，单元输出与过期状态不会保留。",
             Self::SwitchSession => "会话切换意味着变量空间变化：所有单元的输出将标记为过期。",
         }
@@ -408,7 +410,13 @@ mod switch_tests {
     use super::*;
 
     fn plan(from: EditorMode, to: EditorMode, content: &str, has_results: bool) -> SwitchPlan {
-        plan_switch(from, to, content, has_results, CellGranularity::PerStatement)
+        plan_switch(
+            from,
+            to,
+            content,
+            has_results,
+            CellGranularity::PerStatement,
+        )
     }
 
     /// 四种确认分支逐一断言文案：标题 / 正文 / 按钮都必须有内容，且**不出现“确定 / 取消”**
@@ -428,8 +436,14 @@ mod switch_tests {
             assert!(!kind.body().is_empty(), "{kind:?} 缺正文");
             assert!(!kind.confirm_label().is_empty(), "{kind:?} 缺按钮文案");
             for text in [title, kind.body(), kind.confirm_label()] {
-                assert!(!text.contains("确定"), "{kind:?} 不许用笼统的“确定”：{text}");
-                assert!(!text.contains("取消"), "{kind:?} 的取消由对话框统一提供：{text}");
+                assert!(
+                    !text.contains("确定"),
+                    "{kind:?} 不许用笼统的“确定”：{text}"
+                );
+                assert!(
+                    !text.contains("取消"),
+                    "{kind:?} 的取消由对话框统一提供：{text}"
+                );
             }
             assert!(!titles.contains(&title), "标题彼此重复：{title}");
             titles.push(title);
@@ -456,7 +470,11 @@ mod switch_tests {
     #[test]
     fn plan_confirmation_kinds_are_covered_by_wording() {
         // 文本 → SQL 免确认
-        assert!(plan(EditorMode::General, EditorMode::Sql, "select 1", false).confirm.is_none());
+        assert!(
+            plan(EditorMode::General, EditorMode::Sql, "select 1", false)
+                .confirm
+                .is_none()
+        );
 
         // 需要确认的四个方向都能取到各自文案
         for (from, to) in [
@@ -536,7 +554,10 @@ mod switch_tests {
         let plan = plan(EditorMode::Analysis, EditorMode::Sql, &text, false);
 
         assert_eq!(plan.confirm, Some(ConfirmKind::ExportToScript));
-        assert_eq!(plan.content, SwitchContent::Sql("select 1;\n\nselect 2;".to_string()));
+        assert_eq!(
+            plan.content,
+            SwitchContent::Sql("select 1;\n\nselect 2;".to_string())
+        );
         assert!(plan.note.is_some_and(|n| n.contains("stale")));
     }
 
@@ -562,7 +583,10 @@ mod switch_tests {
     fn statement_split_does_not_break_inside_literals() {
         // 词法级切分（engine::sql::split）：字符串里的分号不是语句边界
         let cells = sql_to_cells("select ';' as x; select 2", CellGranularity::PerStatement);
-        assert_eq!(cells, vec!["select ';' as x".to_string(), "select 2".to_string()]);
+        assert_eq!(
+            cells,
+            vec!["select ';' as x".to_string(), "select 2".to_string()]
+        );
     }
 
     #[test]
@@ -574,10 +598,7 @@ mod switch_tests {
 
     #[test]
     fn cell_text_round_trips() {
-        let cells = vec![
-            "-- 口径说明\nselect 1".to_string(),
-            "select 2".to_string(),
-        ];
+        let cells = vec!["-- 口径说明\nselect 1".to_string(), "select 2".to_string()];
         let text = cells_to_text(&cells);
         assert!(text.contains(CELL_SEPARATOR));
         assert_eq!(cells_from_text(&text), cells, "文本层与单元序列应可互转");
@@ -656,21 +677,21 @@ mod tests {
         assert_eq!(resolve_mode(path, None), EditorMode::Sql);
 
         let note = Path::new("笔记.rdsnote");
-        assert_eq!(
-            resolve_mode(note, Some(EditorMode::Sql)),
-            EditorMode::Sql
-        );
+        assert_eq!(resolve_mode(note, Some(EditorMode::Sql)), EditorMode::Sql);
     }
 
     #[test]
     fn unknown_paths_default_to_safe_text_mode() {
-        assert_eq!(resolve_mode(Path::new("unknown.bin"), None), EditorMode::General);
+        assert_eq!(
+            resolve_mode(Path::new("unknown.bin"), None),
+            EditorMode::General
+        );
     }
 }
 
 #[cfg(test)]
 mod script_file_type_tests {
-    use super::{script_file_type, ScriptFileType};
+    use super::{ScriptFileType, script_file_type};
 
     fn kind_of(path: &str) -> Option<ScriptFileType> {
         script_file_type(std::path::Path::new(path))

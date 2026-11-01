@@ -19,15 +19,15 @@ pub mod env;
 /// 回执类型 → `notes`、队列 → `queue`；`execution` 保留兼容层 re-export（`crate::execution::*`
 /// 旧路径不变）。
 pub mod execution;
-/// 【A14】执行目标（纯函数）：`ExecTarget` 解析 / 菜单映射 / 批量拆分
-pub mod target;
-/// 【A14】执行端口：`QueryRunner` trait（宿主注入）+ `QueryData` 产物
-pub mod runner;
+/// 【B7】导出（CSV / JSON / INSERT 编辑侧编码 + Parquet / XLSX 经 DuckDB COPY）
+pub mod export;
 /// 【A14】执行回执：结论 / 事务 / 提交 / 导出 / 来源动作各 Note 与 `CommitReport` / `SubmitError`
 pub mod notes;
 /// 【A14】执行队列：按连接分组的工作线程 + mpsc + 主线程轮询泵
 pub mod queue;
-/// 【B7】导出（CSV / JSON / INSERT 编辑侧编码 + Parquet / XLSX 经 DuckDB COPY）
-pub mod export;
+/// 【A14】执行端口：`QueryRunner` trait（宿主注入）+ `QueryData` 产物
+pub mod runner;
 /// 【A14】结果集存储（每文档一份结果集列表 + 选中项，上限 5）
 pub mod store;
+/// 【A14】执行目标（纯函数）：`ExecTarget` 解析 / 菜单映射 / 批量拆分
+pub mod target;

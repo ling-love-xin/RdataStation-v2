@@ -5,13 +5,8 @@
 //!
 //! 拆分纪律：只移动方法体与注释，不改动任何行为；本文件不得出现新的逻辑。
 
-
-use gpui_kit::component::input::{
-    RangeDecoration,
-    RangeDecorationStyle,
-};
+use gpui_kit::component::input::{RangeDecoration, RangeDecorationStyle};
 // #48 编辑器常规设置（行号开关即时 / 新文档默认缩进·换行·编码）：settings 不依赖 editor，方向合法
-
 
 use crate::channel::ExecChannel;
 use crate::format;
@@ -19,10 +14,8 @@ use crate::sources;
 // 【下移】结果放置 / 下发原料定义已随结果存储搬到 rds-result-panel（经 crate::store 重导出）
 use crate::translate;
 
-
 use super::*;
 impl EditorHostPanel {
-
     /// 【B10】格式化整篇 / 选区（`Ctrl+Shift+F`、工具栏「⇤ 格式化」）
     ///
     /// 计划（格式化哪一段 / 光标去哪 / 有几条没动）由纯函数 [`crate::format::plan`] 算；
@@ -375,42 +368,36 @@ impl EditorHostPanel {
 
     /// 【T2c-4】重设文档缩进宽度：文档级状态 + 内核 `set_tab_size` 双写（Tab 键缩进真变）
     pub(crate) fn set_tab_size(&mut self, size: usize, cx: &mut Context<Self>) {
-        let changed = self
-            .shared
-            .set_document_tab_size(&self.document, size);
+        let changed = self.shared.set_document_tab_size(&self.document, size);
         if changed {
             // 内核 TabSize 随文档状态走（0.7.1 `set_tab_size` 公开在 EditorState 别名上）
-            self.editor
-                .update(cx, |state, cx| {
-                    state.set_tab_size(
-                        gpui_kit::component::input::TabSize {
-                            tab_size: size,
-                            hard_tabs: false,
-                        },
-                        cx,
-                    );
-                });
+            self.editor.update(cx, |state, cx| {
+                state.set_tab_size(
+                    gpui_kit::component::input::TabSize {
+                        tab_size: size,
+                        hard_tabs: false,
+                    },
+                    cx,
+                );
+            });
             cx.notify();
         }
     }
 
     /// 【T2c-4】重设缩进用制表符还是空格：文档状态 + 内核 TabSize 双写
     pub(crate) fn set_hard_tabs(&mut self, hard: bool, cx: &mut Context<Self>) {
-        let changed = self
-            .shared
-            .set_document_hard_tabs(&self.document, hard);
+        let changed = self.shared.set_document_hard_tabs(&self.document, hard);
         if changed {
             let size = self.shared.document_tab_size(&self.document);
-            self.editor
-                .update(cx, |state, cx| {
-                    state.set_tab_size(
-                        gpui_kit::component::input::TabSize {
-                            tab_size: size,
-                            hard_tabs: hard,
-                        },
-                        cx,
-                    );
-                });
+            self.editor.update(cx, |state, cx| {
+                state.set_tab_size(
+                    gpui_kit::component::input::TabSize {
+                        tab_size: size,
+                        hard_tabs: hard,
+                    },
+                    cx,
+                );
+            });
             cx.notify();
         }
     }
@@ -533,7 +520,9 @@ impl EditorHostPanel {
     /// 启用时懒创建标注集合（`.set` 会把当前正文里所有**启用类别**的隐藏字符刷一遍）；
     /// 全关时清空集合。双栏面板每勾一类调用一次；¶ 总开关走 [`Self::set_show_invisible`]。
     pub(crate) fn set_invisible_categories(&mut self, mask: u8, cx: &mut Context<Self>) {
-        let changed = self.shared.set_document_invisible_mask(&self.document, mask);
+        let changed = self
+            .shared
+            .set_document_invisible_mask(&self.document, mask);
         if !changed {
             return;
         }
@@ -560,7 +549,10 @@ impl EditorHostPanel {
     }
 
     /// 当前文档启用类别的隐藏字符区间（双栏面板 / 内容变化重算共用同一口径）
-    pub(crate) fn invisible_ranges_for(&self, cx: &mut Context<Self>) -> Vec<std::ops::Range<usize>> {
+    pub(crate) fn invisible_ranges_for(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Vec<std::ops::Range<usize>> {
         let mask = self.shared.document_invisible_mask(&self.document);
         let enabled: Vec<_> = crate::hidden::all_categories()
             .into_iter()

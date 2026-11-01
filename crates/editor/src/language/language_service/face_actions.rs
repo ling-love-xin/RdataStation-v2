@@ -2,13 +2,10 @@
 //!
 //! 自 language/language_service.rs 拆分（2026-10-29 Step 9）：按能力域切分。
 
-use engine::sql::{
-    HighlightSpan, SqlStatement, TokenClass, highlight_spans,
-    split_statements,
-};
+use engine::sql::{HighlightSpan, SqlStatement, TokenClass, highlight_spans, split_statements};
 
-use crate::channel::{ExecChannel, statement_allowed};
 use super::*;
+use crate::channel::{ExecChannel, statement_allowed};
 
 pub fn code_actions(request: &Request) -> Vec<CodeAction> {
     let text = request.text;

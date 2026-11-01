@@ -7,8 +7,8 @@ use std::rc::Rc;
 use gpui_kit::component::dock::{BasePanel as _, DockArea, DockPlacement, DockSkin};
 use gpui_kit::component::{Root, WindowExt as _};
 use gpui_kit::{
-    AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _,
-    Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
+    AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Render,
+    Styled as _, TestAppContext, VisualTestContext, Window, div,
 };
 
 use crate::channel::ExecChannel;
@@ -19,13 +19,11 @@ use crate::model::{DocumentId, EditorMode};
 use crate::service::OpenRequest;
 use crate::shared::EditorShared;
 use crate::view::host::{
-    EditorHostPanel, request_close_document, request_save_as,
-    resolve_close_choice,
+    EditorHostPanel, request_close_document, request_save_as, resolve_close_choice,
 };
 
 use super::{
-    bind_editor_keys, open_panel,
-    shared_with_document, shared_with_runner, temp_dir,
+    bind_editor_keys, open_panel, shared_with_document, shared_with_runner, temp_dir,
     wait_for_result,
 };
 
@@ -43,9 +41,7 @@ pub(crate) struct DialogHarness {
 
 impl Render for DialogHarness {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .child(self.area.clone())
+        div().size_full().child(self.area.clone())
     }
 }
 
@@ -144,9 +140,7 @@ fn value_preview_opens_as_a_dialog_from_the_host(cx: &mut TestAppContext) {
     });
     assert!(recorded, "目标要记录（弹层内容在 with_window 路径已验证）");
     assert!(
-        message
-            .as_deref()
-            .is_some_and(|m| m.contains("弹不出")),
+        message.as_deref().is_some_and(|m| m.contains("弹不出")),
         "headless 转手失败要留可读原因：{message:?}"
     );
 }
@@ -1097,4 +1091,3 @@ fn bookmark_manager_shows_empty_state_when_no_bookmarks(cx: &mut TestAppContext)
         "空态文案要在"
     );
 }
-

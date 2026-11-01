@@ -106,21 +106,21 @@
 
 // 能力域目录（2026-10-29 目录化）：core / exec / language / notebook / support
 pub mod core;
-pub mod shared;
+pub mod exec;
 /// 宿主端口（P2-a：`services/editor_*` 下沉后经本 trait 访问 workbench 能力）
 pub mod host;
-pub mod exec;
 pub mod language;
-pub mod notebook;
-pub mod support;
 /// LSP 客户端（JSON-RPC 2.0 over stdio）：宿主侧 provider bridge 的数据源
 pub mod lsp;
-pub mod view;
+pub mod notebook;
 /// 宿主端口实现（P2-a：原 workbench `services/editor_*` 下沉至此）
 pub mod ports;
 /// Quick Open 纯逻辑（P2-c：原 workbench `quick_open/model.rs` + `commands.rs` 下沉；
 /// 渲染与宿主动作端口留在 workbench）
 pub mod quick_open;
+pub mod shared;
+pub mod support;
+pub mod view;
 
 // ═══════════════════════════════════════════════════════════════════════
 // 兼容层：目录化后保持 `editor::xxx` 与 `crate::xxx` 旧路径可用。
@@ -130,4 +130,7 @@ pub use core::{limits, mode, model, service};
 pub use exec::{analysis, changes, channel, editability, env, execution, export, store};
 pub use language::{completion, language_service};
 pub use notebook::{cell, kernel, media, session};
-pub use support::{bookmark, commands, connection, diagnostics, edit, encoding, fold, format, hidden, history, indent, persist, project, scan, sources, toolbar, translate, ui};
+pub use support::{
+    bookmark, commands, connection, diagnostics, edit, encoding, fold, format, hidden, history,
+    indent, persist, project, scan, sources, toolbar, translate, ui,
+};

@@ -68,7 +68,10 @@ impl LspReader for ProcessReader {
         if content_length > self.read_limit {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Content-Length {content_length} 超过上限 {}", self.read_limit),
+                format!(
+                    "Content-Length {content_length} 超过上限 {}",
+                    self.read_limit
+                ),
             ));
         }
         let mut body = vec![0u8; content_length];
@@ -240,7 +243,10 @@ impl LspClient {
         Self::new(reader, writer)
     }
 
-    pub fn new(reader: Box<dyn LspReader>, writer: Box<dyn LspWriter>) -> (Arc<Self>, Receiver<LspEvent>) {
+    pub fn new(
+        reader: Box<dyn LspReader>,
+        writer: Box<dyn LspWriter>,
+    ) -> (Arc<Self>, Receiver<LspEvent>) {
         let shared = Arc::new(Shared {
             pending: Mutex::new(Pending::new()),
             shutdown: AtomicU64::new(0),
@@ -266,7 +272,11 @@ impl LspClient {
     /// 握手：`initialize`（LSP 标准），成功后置 initialized。
     ///
     /// `root_uri` 给 server 一个工作区根（无则给 `None`）。
-    pub fn initialize(&self, root_uri: Option<&str>, timeout: Duration) -> Result<Value, CallError> {
+    pub fn initialize(
+        &self,
+        root_uri: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Value, CallError> {
         let params = json!({
             "processId": null,
             "rootUri": root_uri,
@@ -292,7 +302,9 @@ impl LspClient {
             "method": method,
             "params": params,
         });
-        let bytes = frame::encode(&serde_json::to_vec(&body).map_err(|e| CallError::Protocol(e.to_string()))?);
+        let bytes = frame::encode(
+            &serde_json::to_vec(&body).map_err(|e| CallError::Protocol(e.to_string()))?,
+        );
         let (tx, rx) = mpsc::channel::<Result<Value, CallError>>();
         {
             let mut pending = self
@@ -328,7 +340,9 @@ impl LspClient {
             "method": method,
             "params": params,
         });
-        let bytes = frame::encode(&serde_json::to_vec(&body).map_err(|e| CallError::Protocol(e.to_string()))?);
+        let bytes = frame::encode(
+            &serde_json::to_vec(&body).map_err(|e| CallError::Protocol(e.to_string()))?,
+        );
         let mut writer = self.writer.lock().unwrap_or_else(|e| e.into_inner());
         writer
             .write_frame(&bytes)
@@ -408,11 +422,7 @@ impl LspClient {
     fn stop_reader(&self) {
         self.shared.shutdown.fetch_add(1, Ordering::SeqCst);
         {
-            let _guard = self
-                .shared
-                .slot
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let _guard = self.shared.slot.lock().unwrap_or_else(|e| e.into_inner());
         }
         self.shared.signal.notify_all();
     }
@@ -552,8 +562,7 @@ mod tests {
     /// - `reply_tx`（返回第二项）= 测试回帧给 client（响应 / 通知）；
     /// - `client`（返回第三项）= 客户端句柄；
     /// - `events_rx`（返回第四项）= 客户端事件（诊断 / 通知）。
-    fn harness(
-    ) -> (
+    fn harness() -> (
         Receiver<Vec<u8>>,
         Sender<Vec<u8>>,
         std::sync::Arc<super::LspClient>,
@@ -563,8 +572,12 @@ mod tests {
         let (client_write, server_read) = channel::<Vec<u8>>();
         // server → client（读侧）：reply_tx 发，client_read 收
         let (reply_tx, client_read) = channel::<Vec<u8>>();
-        let reader = MemoryReader { read_rx: client_read };
-        let writer = MemoryWriter { write_tx: client_write };
+        let reader = MemoryReader {
+            read_rx: client_read,
+        };
+        let writer = MemoryWriter {
+            write_tx: client_write,
+        };
         let (client, events_rx) = super::LspClient::new(Box::new(reader), Box::new(writer));
         (server_read, reply_tx, client, events_rx)
     }
@@ -589,10 +602,16 @@ mod tests {
         let resp_body = serde_json::to_vec(&serde_json::json!({
             "jsonrpc": "2.0", "id": id,
             "result": { "capabilities": {} }
-        })).unwrap();
-        reply_tx.send(crate::lsp::frame::encode(&resp_body)).unwrap();
+        }))
+        .unwrap();
+        reply_tx
+            .send(crate::lsp::frame::encode(&resp_body))
+            .unwrap();
 
-        let result = init_handle.join().expect("initialize 线程应结束").expect("握手应成功");
+        let result = init_handle
+            .join()
+            .expect("initialize 线程应结束")
+            .expect("握手应成功");
         assert_eq!(result["capabilities"], serde_json::json!({}));
         assert!(client.is_initialized());
 
@@ -629,8 +648,13 @@ mod tests {
             move || client.initialize(None, std::time::Duration::from_secs(2))
         });
         let id = next_request(&recv_rx, "initialize");
-        let resp = serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": { "capabilities": {} } });
-        reply_tx.send(crate::lsp::frame::encode(&serde_json::to_vec(&resp).unwrap())).unwrap();
+        let resp =
+            serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": { "capabilities": {} } });
+        reply_tx
+            .send(crate::lsp::frame::encode(
+                &serde_json::to_vec(&resp).unwrap(),
+            ))
+            .unwrap();
         init_handle.join().unwrap().expect("握手应成功");
 
         // completion 请求放后台线程；主线程读到请求后回响应
@@ -656,7 +680,11 @@ mod tests {
                 "items": [{ "label": "orders" }]
             }
         });
-        reply_tx.send(crate::lsp::frame::encode(&serde_json::to_vec(&completion_reply).unwrap())).unwrap();
+        reply_tx
+            .send(crate::lsp::frame::encode(
+                &serde_json::to_vec(&completion_reply).unwrap(),
+            ))
+            .unwrap();
 
         let result = call_handle.join().unwrap().expect("completion 应成功");
         assert_eq!(result["items"][0]["label"], "orders");
@@ -675,7 +703,11 @@ mod tests {
                 "diagnostics": [{ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 5 } }, "message": "bad" }]
             }
         });
-        reply_tx.send(crate::lsp::frame::encode(&serde_json::to_vec(&notify).unwrap())).unwrap();
+        reply_tx
+            .send(crate::lsp::frame::encode(
+                &serde_json::to_vec(&notify).unwrap(),
+            ))
+            .unwrap();
 
         let event = poll_event(&events_rx, 50);
         match event {
@@ -710,8 +742,13 @@ mod tests {
             move || client.initialize(None, std::time::Duration::from_secs(2))
         });
         let id = next_request(&recv_rx, "initialize");
-        let resp = serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": { "capabilities": {} } });
-        reply_tx.send(crate::lsp::frame::encode(&serde_json::to_vec(&resp).unwrap())).unwrap();
+        let resp =
+            serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": { "capabilities": {} } });
+        reply_tx
+            .send(crate::lsp::frame::encode(
+                &serde_json::to_vec(&resp).unwrap(),
+            ))
+            .unwrap();
         init_handle.join().unwrap().unwrap();
 
         // 发 completion（后台线程）；主线程读到请求后回 error
@@ -730,7 +767,11 @@ mod tests {
             "jsonrpc": "2.0", "id": req_id,
             "error": { "code": -32601, "message": "method not found" }
         });
-        reply_tx.send(crate::lsp::frame::encode(&serde_json::to_vec(&err_resp).unwrap())).unwrap();
+        reply_tx
+            .send(crate::lsp::frame::encode(
+                &serde_json::to_vec(&err_resp).unwrap(),
+            ))
+            .unwrap();
 
         match outcome_handle.join().unwrap() {
             Err(CallError::Rpc { code, message }) => {
@@ -750,7 +791,11 @@ mod tests {
             "method": "window/logMessage",
             "params": { "type": 3, "message": "hi" }
         });
-        reply_tx.send(crate::lsp::frame::encode(&serde_json::to_vec(&notify).unwrap())).unwrap();
+        reply_tx
+            .send(crate::lsp::frame::encode(
+                &serde_json::to_vec(&notify).unwrap(),
+            ))
+            .unwrap();
 
         match poll_event(&events_rx, 50) {
             Some(LspEvent::Notification(LspNotification { method, params })) => {

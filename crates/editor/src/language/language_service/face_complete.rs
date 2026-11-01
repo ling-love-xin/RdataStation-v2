@@ -2,10 +2,9 @@
 //!
 //! 自 language/language_service.rs 拆分（2026-10-29 Step 9）：按能力域切分。
 
-
-use crate::completion::{self, Candidate, Catalog};
-use super::*;
 use super::face_actions::clamp_byte;
+use super::*;
+use crate::completion::{self, Candidate, Catalog};
 
 /// "未绑定连接就不摆元数据候选"这条口径钉在纯函数层。
 pub fn complete(request: &Request) -> Vec<Candidate> {

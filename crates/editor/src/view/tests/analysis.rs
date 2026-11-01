@@ -3,11 +3,9 @@
 
 use std::rc::Rc;
 
-use gpui_kit::component::table::TableEvent;
 use gpui_kit::component::WindowExt as _;
-use gpui_kit::{
-    AppContext as _, Entity, Focusable as _, TestAppContext, VisualTestContext,
-};
+use gpui_kit::component::table::TableEvent;
+use gpui_kit::{AppContext as _, Entity, Focusable as _, TestAppContext, VisualTestContext};
 
 use crate::channel::ExecChannel;
 use crate::completion::{Candidate, CandidateKind, Catalog};
@@ -20,13 +18,12 @@ use crate::shared::EditorShared;
 use crate::view::host::EditorHostPanel;
 
 use super::{
-    bind_editor_keys, open_panel, run_statement,
-    shared_with_document, wait_for_all_pending,
+    bind_editor_keys, open_panel, run_statement, shared_with_document, wait_for_all_pending,
     wait_for_result,
 };
 
 use super::channels::{FakeCompletion, FakeProject};
-use super::dialogs::{dialog_harness, dialog_button_rendered};
+use super::dialogs::{dialog_button_rendered, dialog_harness};
 
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -158,7 +155,11 @@ fn analysis_sends_the_sql_and_the_grabbed_rows(cx: &mut TestAppContext) {
         Some("本地分析"),
         "血缘要说清这份不是原查询（工具栏的来源段）"
     );
-    assert_eq!(store.active_index(&id), Some(1), "分析结果最新被选中（2026-10-27：每次执行切到最新）");
+    assert_eq!(
+        store.active_index(&id),
+        Some(1),
+        "分析结果最新被选中（2026-10-27：每次执行切到最新）"
+    );
     let message = cx
         .update(|_window, cx| panel.read(cx).message.clone())
         .expect("说明要留一句“基于多少行”");
@@ -698,10 +699,7 @@ fn commit_failure_leaves_changes_intact(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     bind_editor_keys(cx);
 
-    let (shared, id) = commit_ready_shared(
-        "select * from orders",
-        Err("连接已断开".to_string()),
-    );
+    let (shared, id) = commit_ready_shared("select * from orders", Err("连接已断开".to_string()));
     let (panel, cx) = open_panel(cx, &shared, &id);
     run_orders_result(cx, &panel);
 
@@ -747,7 +745,9 @@ fn submit_pending_changes_respects_three_guards(cx: &mut TestAppContext) {
         )
     });
     let reason = cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.submit_pending_changes(cx).unwrap_err())
+        panel.update(cx, |panel, cx| {
+            panel.submit_pending_changes(cx).unwrap_err()
+        })
     });
     assert!(reason.contains("连接为只读"), "{reason}");
 
@@ -755,7 +755,9 @@ fn submit_pending_changes_respects_three_guards(cx: &mut TestAppContext) {
     shared.update(|service| service.set_read_only(&id, crate::model::ReadOnly::none()));
     shared.attach_project(Rc::new(FakeProject { read_only: true }));
     let reason = cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.submit_pending_changes(cx).unwrap_err())
+        panel.update(cx, |panel, cx| {
+            panel.submit_pending_changes(cx).unwrap_err()
+        })
     });
     assert!(reason.contains("项目为只读"), "{reason}");
     shared.attach_project(Rc::new(FakeProject { read_only: false }));
@@ -763,7 +765,9 @@ fn submit_pending_changes_respects_three_guards(cx: &mut TestAppContext) {
     // ③ 通道只读挂载（加速档对源库是只读挂载，写回一律拒）
     shared.update(|service| service.set_channel(&id, ExecChannel::Accelerated));
     let reason = cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.submit_pending_changes(cx).unwrap_err())
+        panel.update(cx, |panel, cx| {
+            panel.submit_pending_changes(cx).unwrap_err()
+        })
     });
     assert!(reason.contains("源库通道"), "{reason}");
 
@@ -793,7 +797,9 @@ fn submit_pending_changes_refuses_without_row_key(cx: &mut TestAppContext) {
     // 直塞一格变更（绕过编辑判据，只测提交防线）→ 提交被拦
     seed_cell_change(&shared, &id, 0, 1, "alice", "alice2");
     let reason = cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.submit_pending_changes(cx).unwrap_err())
+        panel.update(cx, |panel, cx| {
+            panel.submit_pending_changes(cx).unwrap_err()
+        })
     });
     assert!(reason.contains("没探测到主键"), "{reason}");
 }
@@ -809,7 +815,9 @@ fn submit_pending_changes_refuses_without_changes(cx: &mut TestAppContext) {
     run_orders_result(cx, &panel);
 
     let reason = cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.submit_pending_changes(cx).unwrap_err())
+        panel.update(cx, |panel, cx| {
+            panel.submit_pending_changes(cx).unwrap_err()
+        })
     });
     assert!(reason.contains("没有待提交的变更"), "{reason}");
 }
@@ -883,7 +891,9 @@ fn commit_controls_submit_then_vanish_on_receipt(cx: &mut TestAppContext) {
         "有变更时应接受提交"
     );
     let reason = cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.submit_pending_changes(cx).unwrap_err())
+        panel.update(cx, |panel, cx| {
+            panel.submit_pending_changes(cx).unwrap_err()
+        })
     });
     assert!(reason.contains("已有提交在进行中"), "{reason}");
 
@@ -914,7 +924,10 @@ fn discard_controls_clear_pending_and_keep_conflicts(cx: &mut TestAppContext) {
         });
     });
     assert_eq!(
-        shared.results().change_set(&id, 0).map(|c| c.pending_count()),
+        shared
+            .results()
+            .change_set(&id, 0)
+            .map(|c| c.pending_count()),
         Some(1),
         "预置：待提交 1 条 + 冲突 1 条"
     );
@@ -1099,4 +1112,3 @@ fn indent_reset_changes_document_and_renders(cx: &mut TestAppContext) {
     assert_eq!(shared.document_tab_size(&id), 4, "切制表符保留空格宽度");
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
-

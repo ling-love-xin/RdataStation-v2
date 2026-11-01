@@ -117,10 +117,22 @@ mod tests {
         let lsp_types::HoverContents::Markup(markup) = &hover.contents else {
             panic!("应为 Markup 内容");
         };
-        assert!(markup.value.contains("**函数** `substr`"), "{}", markup.value);
-        assert!(markup.value.contains("substr(x, start[, length])"), "{}", markup.value);
+        assert!(
+            markup.value.contains("**函数** `substr`"),
+            "{}",
+            markup.value
+        );
+        assert!(
+            markup.value.contains("substr(x, start[, length])"),
+            "{}",
+            markup.value
+        );
         assert!(markup.value.contains("截取子串"), "{}", markup.value);
-        assert!(markup.value.contains("SELECT substr('hello', 1, 3)"), "{}", markup.value);
+        assert!(
+            markup.value.contains("SELECT substr('hello', 1, 3)"),
+            "{}",
+            markup.value
+        );
         // 区间：'substr' 是第 8 个字符起、5 个字符长（0 基列 7..13）
         let range = hover.range.expect("有区间");
         assert_eq!((range.start.line, range.start.character), (0, 7));
@@ -141,7 +153,11 @@ mod tests {
         let lsp_types::HoverContents::Markup(markup) = &hover.contents else {
             panic!("应为 Markup 内容");
         };
-        assert!(markup.value.contains("**表** `public.customers`"), "{}", markup.value);
+        assert!(
+            markup.value.contains("**表** `public.customers`"),
+            "{}",
+            markup.value
+        );
         assert!(markup.value.contains("列：id、name"), "{}", markup.value);
         let range = hover.range.expect("有区间");
         assert_eq!((range.start.character, range.end.character), (5, 21));

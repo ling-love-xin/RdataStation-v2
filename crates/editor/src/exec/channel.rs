@@ -116,9 +116,7 @@ pub fn menu_items(
         .into_iter()
         .map(|channel| {
             let (available, reason) = match channel {
-                ExecChannel::Source if !connected => {
-                    (false, Some("连接未建立".to_string()))
-                }
+                ExecChannel::Source if !connected => (false, Some("连接未建立".to_string())),
                 ExecChannel::Source => (true, None),
                 other => {
                     let gate = availability.for_channel(other);
@@ -170,7 +168,9 @@ pub fn stale_notice(result_channel: ExecChannel, current: ExecChannel) -> String
 ///
 /// 返回值 = `None` 时**不摆这一项**：源库档没有“挂载”这回事，摆一个按了没用的项就是噪音。
 pub fn refresh_item_label(current: ExecChannel) -> Option<&'static str> {
-    current.runs_locally().then_some("重新挂载源库（刷新表清单）")
+    current
+        .runs_locally()
+        .then_some("重新挂载源库（刷新表清单）")
 }
 
 /// 这条语句作用在**源库对象**上吗（写语句 / DDL）
@@ -221,7 +221,11 @@ mod tests {
         assert!(!ExecChannel::Source.runs_locally());
 
         for channel in [ExecChannel::Accelerated, ExecChannel::Federated] {
-            assert!(!channel.allows_source_writes(), "{} 不能写源库", channel.label());
+            assert!(
+                !channel.allows_source_writes(),
+                "{} 不能写源库",
+                channel.label()
+            );
             assert!(!channel.allows_transactions());
             assert!(channel.runs_locally(), "这两档的语句在 DuckDB 上跑");
         }
@@ -290,7 +294,10 @@ mod tests {
         let items = menu_items(ExecChannel::Accelerated, false, &availability);
         assert_eq!(items[0].label, "源库（连接未建立）");
         assert!(!items[0].available);
-        assert!(items[1].current, "当前是加速档（就算它暂时不可用也如实标着）");
+        assert!(
+            items[1].current,
+            "当前是加速档（就算它暂时不可用也如实标着）"
+        );
         assert!(!items[1].available);
     }
 
@@ -324,7 +331,10 @@ mod tests {
     fn the_stale_notice_names_the_old_channel() {
         let text = stale_notice(ExecChannel::Source, ExecChannel::Accelerated);
         assert!(text.contains("旧结果来自源库"), "{text}");
-        assert!(text.contains("本地加速"), "提示里要带新通道，用户才知道现在是哪档：{text}");
+        assert!(
+            text.contains("本地加速"),
+            "提示里要带新通道，用户才知道现在是哪档：{text}"
+        );
         assert!(text.contains("通道已切换"), "{text}");
     }
 

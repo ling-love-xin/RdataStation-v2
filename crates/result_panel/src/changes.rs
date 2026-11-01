@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::export::{cell_literal, is_null_cell, quote_ident, RowKey};
+use crate::export::{RowKey, cell_literal, is_null_cell, quote_ident};
 
 /// 一个单元格的变更
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,7 +39,12 @@ pub enum CellChangeStatus {
 
 impl CellChange {
     /// 新建一条待提交变更（原值/新值都不为空——空原值也该能改）
-    pub fn pending(row: usize, column: usize, original: impl Into<String>, edited: impl Into<String>) -> Self {
+    pub fn pending(
+        row: usize,
+        column: usize,
+        original: impl Into<String>,
+        edited: impl Into<String>,
+    ) -> Self {
         Self {
             row,
             column,
@@ -277,9 +282,12 @@ pub fn commit_updates_rows(
     if pending_by_row.is_empty() {
         return Err("没有待提交的变更".to_string());
     }
-    let key_ix = key
-        .indices(columns)
-        .ok_or_else(|| format!("键列 {} 不在结果列里（列名要按结果集里的原样给）", key.columns().join(", ")))?;
+    let key_ix = key.indices(columns).ok_or_else(|| {
+        format!(
+            "键列 {} 不在结果列里（列名要按结果集里的原样给）",
+            key.columns().join(", ")
+        )
+    })?;
 
     let target = quote_ident(table);
     let mut lines = Vec::with_capacity(pending_by_row.len());
@@ -323,7 +331,9 @@ pub fn commit_updates_rows(
             })
             .collect::<Vec<_>>()
             .join(" AND ");
-        lines.push(format!("UPDATE {target} SET {assignments} WHERE {predicate};"));
+        lines.push(format!(
+            "UPDATE {target} SET {assignments} WHERE {predicate};"
+        ));
         // 与 lines 同步收集：这一条 UPDATE 对应结果集的哪一行、涉及哪些变更列（跳过的不进）
         per_line.push((*row, changes.iter().map(|c| c.column).collect()));
     }
@@ -421,8 +431,16 @@ mod tests {
         let by_row = set.pending_by_row();
         let updates = commit_updates_rows("fruit", &key, &columns, &rows, &by_row).unwrap();
         assert_eq!(updates.skipped, 0);
-        assert!(updates.sql.contains("UPDATE fruit SET name = '苹果(特价)', price = 3.0 WHERE id = 1;"));
-        assert!(updates.sql.contains("UPDATE fruit SET price = 1.8 WHERE id = 2;"));
+        assert!(
+            updates
+                .sql
+                .contains("UPDATE fruit SET name = '苹果(特价)', price = 3.0 WHERE id = 1;")
+        );
+        assert!(
+            updates
+                .sql
+                .contains("UPDATE fruit SET price = 1.8 WHERE id = 2;")
+        );
         // 键列（id）不进 SET
         assert!(!updates.sql.contains("SET id"));
         // 语句 ↔ 行/列索引：第一条对应数据行 0（变更列 name/price），第二条对应行 1（列 price）

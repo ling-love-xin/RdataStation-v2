@@ -178,7 +178,8 @@ impl ExecQueue {
                                         filter,
                                         columns,
                                     )
-                                } else if let Some((column, descending)) = job.sorted_down.as_ref() {
+                                } else if let Some((column, descending)) = job.sorted_down.as_ref()
+                                {
                                     // 【B14】排序下发：同上，改写与方言差异都在执行器
                                     runner.run_sorted_down(
                                         job.connection.as_deref(),
@@ -206,7 +207,8 @@ impl ExecQueue {
                                     runner.transaction_snapshot(job.connection.as_deref());
                                 if let Ok(mut queue) = done.lock() {
                                     // 【A2】下发载荷（filtered / sorted_down）还原成形成原料，随结论回去
-                                    let pushdown = Pushdown::from_job(&job.filtered, &job.sorted_down);
+                                    let pushdown =
+                                        Pushdown::from_job(&job.filtered, &job.sorted_down);
                                     queue.push_back(ExecOutcome {
                                         document: job.document.clone(),
                                         connection: job.connection.clone(),
@@ -659,4 +661,3 @@ impl Drop for ExecQueue {
         }
     }
 }
-

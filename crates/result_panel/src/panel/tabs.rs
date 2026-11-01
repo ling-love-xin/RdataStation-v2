@@ -1,28 +1,26 @@
 //! 页签域（`panel/` 第六块）：值详情 / 统计 / 分组 / 引用 / 执行 SQL 各右栏页签。
 
-
-use gpui_kit::*;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::list::ListItem;
-use gpui_kit::component::table::TableDelegate;
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::table::TableDelegate;
 use gpui_kit::component::tree::tree;
+use gpui_kit::component::{ActiveTheme as _, Sizable as _};
+use gpui_kit::*;
 
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 
-use crate::grid::cell::{classify_value, hex_lines, hex_to_bytes, ViewerMode};
+use super::data::ResultPanel;
+use crate::grid::cell::{ViewerMode, classify_value, hex_lines, hex_to_bytes};
 use crate::ports::ResultRequest;
 #[cfg(test)]
 use crate::ports::RightTab;
 use crate::store::ColumnKind;
 use crate::ui;
-use super::data::ResultPanel;
 
 impl ResultPanel {
-
     pub(crate) fn render_value_tab(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let muted = theme.colors.muted_foreground;
@@ -303,7 +301,10 @@ impl ResultPanel {
                     .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
                     .text_xs()
                     .text_color(muted)
-                    .child(SharedString::from(format!("按「{name}」分组 · {} 组", groups.len()))),
+                    .child(SharedString::from(format!(
+                        "按「{name}」分组 · {} 组",
+                        groups.len()
+                    ))),
             )
             .child(
                 div()
@@ -324,7 +325,8 @@ impl ResultPanel {
     pub(crate) fn render_exec_sql_tab(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let Some(sql) = self.exec_sql.clone() else {
-            return self.sidebar_empty("在工具栏筛选框输入词并点 ▶ 运行，生成 SQL 会显示在这里", cx);
+            return self
+                .sidebar_empty("在工具栏筛选框输入词并点 ▶ 运行，生成 SQL 会显示在这里", cx);
         };
         let copy_queue = self.queue.clone();
         div()
@@ -387,11 +389,7 @@ impl ResultPanel {
             .child(SharedString::from(text))
             .into_any_element()
     }
-
-
 }
-
-
 
 /// 【右栏】页签下标 → 枚举（TabBar 回调用；与 `RightTab` 定义顺序一致——
 /// Browser=0 / Value=1 / Stats=2 / Group=3 / Reference=4 / ExecSql=5，

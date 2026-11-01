@@ -1,16 +1,9 @@
 //! （由 view/tests.rs 拆分，2026-10-29）
 //! 注意：不用 `use super::*` 通配（gpui `test` 宏递归），依赖显式列举。
 
+use gpui_kit::{TestAppContext, VisualTestContext};
 
-use gpui_kit::{
-    TestAppContext, VisualTestContext,
-};
-
-
-use super::{
-    bind_editor_keys, open_panel,
-    shared_with_document,
-};
+use super::{bind_editor_keys, open_panel, shared_with_document};
 
 // ===== T2c-5：工具栏分组自定义 =====
 //
@@ -39,7 +32,10 @@ fn toolbar_default_shows_exec_and_exec_all_but_not_explicit_targets(cx: &mut Tes
     assert!(present(cx, "editor-template"), "模板常驻");
     assert!(present(cx, "editor-autocommit"), "事务开关常驻");
     assert!(present(cx, "editor-format"), "格式化在");
-    assert!(present(cx, "editor-toolbar-customize"), "最右 ··· 定制按钮在");
+    assert!(
+        present(cx, "editor-toolbar-customize"),
+        "最右 ··· 定制按钮在"
+    );
     // 默认隐藏的执行族显式目标
     assert!(!present(cx, "editor-exec-current"), "执行当前语句默认隐藏");
     assert!(!present(cx, "editor-exec-selection"), "执行选区默认隐藏");
@@ -131,7 +127,9 @@ fn toolbar_move_item_crosses_separators_and_reshapes_groups(cx: &mut TestAppCont
         .group_of(crate::toolbar::ToolbarItemId::Explain)
         .expect("分析组仍在");
     assert!(
-        explain_group.items.contains(&crate::toolbar::ToolbarItemId::Format),
+        explain_group
+            .items
+            .contains(&crate::toolbar::ToolbarItemId::Format),
         "格式化被移进分析组：{:?}",
         explain_group.items
     );
@@ -146,7 +144,11 @@ fn toolbar_move_group_swaps_whole_groups(cx: &mut TestAppContext) {
 
     cx.update(|_window, cx| {
         panel.update(cx, |panel, cx| {
-            panel.move_toolbar_group(crate::toolbar::ToolbarItemId::Explain, crate::toolbar::MoveDir::Left, cx);
+            panel.move_toolbar_group(
+                crate::toolbar::ToolbarItemId::Explain,
+                crate::toolbar::MoveDir::Left,
+                cx,
+            );
         });
     });
 
@@ -211,22 +213,30 @@ fn toolbar_exec_run_cannot_be_hidden_from_the_panel(cx: &mut TestAppContext) {
 
     cx.update(|_window, cx| {
         panel.update(cx, |panel, cx| {
-            let changed = panel.set_toolbar_visible(crate::toolbar::ToolbarItemId::ExecRun, false, cx);
+            let changed =
+                panel.set_toolbar_visible(crate::toolbar::ToolbarItemId::ExecRun, false, cx);
             assert!(!changed, "执行主按钮不可隐藏");
         });
     });
     let layout = cx.update(|_window, cx| panel.read(cx).toolbar_layout_for_test());
-    assert!(layout.is_visible(crate::toolbar::ToolbarItemId::ExecRun), "执行主按钮仍可见");
+    assert!(
+        layout.is_visible(crate::toolbar::ToolbarItemId::ExecRun),
+        "执行主按钮仍可见"
+    );
 
     // 其余成员可以隐藏（比如全部运行）
     cx.update(|_window, cx| {
         panel.update(cx, |panel, cx| {
-            let changed = panel.set_toolbar_visible(crate::toolbar::ToolbarItemId::ExecAll, false, cx);
+            let changed =
+                panel.set_toolbar_visible(crate::toolbar::ToolbarItemId::ExecAll, false, cx);
             assert!(changed, "全部运行可以隐藏");
         });
     });
     let layout = cx.update(|_window, cx| panel.read(cx).toolbar_layout_for_test());
-    assert!(!layout.is_visible(crate::toolbar::ToolbarItemId::ExecAll), "全部运行已隐藏");
+    assert!(
+        !layout.is_visible(crate::toolbar::ToolbarItemId::ExecAll),
+        "全部运行已隐藏"
+    );
 }
 
 /// 【T2c-3 收尾】列编辑 = 内核多光标：默认行编辑单光标；切列编辑后经公开的内核
@@ -328,8 +338,7 @@ fn column_edit_selects_a_block_via_the_kernel(cx: &mut TestAppContext) {
     bind_editor_keys(cx);
 
     // 三行同长："select 1;\n" 10 字节 / "select 2;\n" 10 字节 / "select 3;" 9 字节
-    let (shared, id) =
-        shared_with_document(r"D:\sql\col.sql", "select 1;\nselect 2;\nselect 3;");
+    let (shared, id) = shared_with_document(r"D:\sql\col.sql", "select 1;\nselect 2;\nselect 3;");
     let (panel, cx) = open_panel(cx, &shared, &id);
 
     // 框选 col 1..8 跨三行（起始 offset 1 → 行0列1；结束 offset 28 → 行2列8）
@@ -344,7 +353,10 @@ fn column_edit_selects_a_block_via_the_kernel(cx: &mut TestAppContext) {
     assert_eq!(count, 3, "三行各一条选区");
     let mut offsets = cx.update(|_window, cx| panel.read(cx).cursor_offsets_for_test(cx));
     offsets.sort_unstable();
-    assert_eq!(offsets, vec![8, 18, 28], "每行同列（col 8）落一块的结尾（光标在选区尾）");
+    assert_eq!(
+        offsets,
+        vec![8, 18, 28],
+        "每行同列（col 8）落一块的结尾（光标在选区尾）"
+    );
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
-

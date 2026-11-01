@@ -37,7 +37,11 @@ pub fn convert_indent(text: &str, to_hard_tabs: bool, tab_size: usize) -> String
     let mut out = String::with_capacity(text.len());
     for line in text.split_inclusive('\n') {
         let has_nl = line.ends_with('\n');
-        let body = if has_nl { &line[..line.len() - 1] } else { line };
+        let body = if has_nl {
+            &line[..line.len() - 1]
+        } else {
+            line
+        };
         // 前导空白（空格 + 制表符；\r 属于行尾，不参与缩进）
         let indent_end = body
             .find(|c: char| c != ' ' && c != '\t')
@@ -69,7 +73,11 @@ pub fn trim_trailing_whitespace(text: &str) -> String {
     for line in text.split_inclusive('\n') {
         let has_nl = line.ends_with('\n');
         // 先剥掉行尾 `\n`，再把 CRLF 的 `\r` 单独拎出（`\r` 不是空白，会挡住 trim）
-        let content = if has_nl { &line[..line.len() - 1] } else { line };
+        let content = if has_nl {
+            &line[..line.len() - 1]
+        } else {
+            line
+        };
         let (trim_part, tail) = match content.strip_suffix('\r') {
             Some(stripped) => (stripped, "\r"),
             None => (content, ""),

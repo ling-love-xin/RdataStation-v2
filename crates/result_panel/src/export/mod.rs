@@ -47,10 +47,10 @@ mod encode;
 mod formats;
 mod table_name;
 
-pub use encode::{encode, encode_rows, encode_rows_with_key, encode_updates, encode_where};
 pub(crate) use encode::{
     cell_literal, is_null_cell, quote_ident, row_to_insert, row_to_json, value_to_json,
 };
+pub use encode::{encode, encode_rows, encode_rows_with_key, encode_updates, encode_where};
 pub use formats::{
     ExportExtras, ExportFormat, ExportMenuItem, ExportScope, RowKey, TableKeysHandle,
     TableKeysPort, menu_items, menu_items_for,

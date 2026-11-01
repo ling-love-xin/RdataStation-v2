@@ -67,7 +67,11 @@ pub fn install(
     close_keywords: &[String],
     cx: &mut Context<EditorState>,
 ) {
-    refresh(state, fold::spans(text, indent_folding, open_keywords, close_keywords), cx);
+    refresh(
+        state,
+        fold::spans(text, indent_folding, open_keywords, close_keywords),
+        cx,
+    );
 }
 
 /// 文本变更后重喂候选（**内核不会替我们平移**，见模块文档的上表）

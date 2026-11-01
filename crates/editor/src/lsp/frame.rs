@@ -121,7 +121,11 @@ fn parse_length(header: &[u8]) -> Result<usize, FrameError> {
         .find_map(|line| {
             let line = line.trim();
             let lower = line.to_ascii_lowercase();
-            lower.strip_prefix("content-length:")?.trim().to_owned().into()
+            lower
+                .strip_prefix("content-length:")?
+                .trim()
+                .to_owned()
+                .into()
         })
         .ok_or(FrameError::MissingHeader)?;
     // 只认十进制非负整数；`12abc` / `-1` / 空串一律拒绝
@@ -144,7 +148,13 @@ mod tests {
     fn msg(id: &str) -> (Vec<u8>, LspMessage) {
         let body = format!(r#"{{"jsonrpc":"2.0","id":{id}}}"#).into_bytes();
         let body_len = body.len();
-        (encode(&body), LspMessage { content_length: body_len, body })
+        (
+            encode(&body),
+            LspMessage {
+                content_length: body_len,
+                body,
+            },
+        )
     }
 
     #[test]

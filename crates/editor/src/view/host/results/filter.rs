@@ -67,7 +67,8 @@ impl EditorHostPanel {
     pub(crate) fn apply_filter_value(&mut self, value: &str, cx: &mut Context<Self>) {
         let value = value.to_string();
         // 真值定稿（掐在途防抖 + 立即应用）不依赖窗口
-        self.result_panel.update(cx, |p, cx| p.set_filter_value(&value, cx));
+        self.result_panel
+            .update(cx, |p, cx| p.set_filter_value(&value, cx));
         // 输入框回填在窗口可用时做；拿不到（headless / 已关）就跳过，真值已生效
         let panel = self.result_panel.clone();
         let _ = self.window.update(cx, |_panel, window, app| {
@@ -76,7 +77,12 @@ impl EditorHostPanel {
     }
 
     /// 【筛选】列头菜单「按值筛选此列 / 清除」落点：代理到结果面板（空串 = 清除）
-    pub(crate) fn apply_column_filter(&mut self, column: usize, value: &str, cx: &mut Context<Self>) {
+    pub(crate) fn apply_column_filter(
+        &mut self,
+        column: usize,
+        value: &str,
+        cx: &mut Context<Self>,
+    ) {
         let value = value.to_string();
         self.result_panel
             .update(cx, |p, cx| p.apply_column_filter(column, &value, cx));
@@ -120,7 +126,8 @@ impl EditorHostPanel {
     /// 【遗留 #7】带窗口的值查看器入口（测试走它做窗口级验收；生产钩子经
     /// [`Self::open_value_preview`] 转手调同一实现）
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn open_value_preview_with_window(        &mut self,
+    pub(crate) fn open_value_preview_with_window(
+        &mut self,
         value: &str,
         column: &str,
         row: usize,
@@ -150,14 +157,9 @@ impl EditorHostPanel {
         column: String,
         row: usize,
     ) {
-        dialogs::open_value_preview(
-            window,
-            cx,
-            value.clone(),
-            column.clone(),
-            row,
-            move |app| app.write_to_clipboard(ClipboardItem::new_string(value.clone())),
-        );
+        dialogs::open_value_preview(window, cx, value.clone(), column.clone(), row, move |app| {
+            app.write_to_clipboard(ClipboardItem::new_string(value.clone()))
+        });
     }
 
     /// 【遗留 #7】只读访问器：值查看器目标是否已记录（测试断言用；`ValuePreview` 是私有类型，只暴露 bool）
@@ -235,5 +237,4 @@ impl EditorHostPanel {
             cx,
         );
     }
-
 }

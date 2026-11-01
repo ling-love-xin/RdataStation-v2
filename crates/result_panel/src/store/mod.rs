@@ -44,6 +44,6 @@ mod entry;
 mod fact;
 mod store;
 
-pub use entry::{ColumnKind, ColumnType, Pushdown, ResultEntry, ResultPlacement, MAX_RESULT_SETS};
+pub use entry::{ColumnKind, ColumnType, MAX_RESULT_SETS, Pushdown, ResultEntry, ResultPlacement};
 pub use fact::FactState;
 pub use store::ResultStore;

@@ -5,25 +5,16 @@
 //!
 //! 拆分纪律：只移动方法体与注释，不改动任何行为；本文件不得出现新的逻辑。
 
-
 use gpui_kit::base::input::Position;
-use gpui_kit::component::input::{
-    EditorState, RangeDecoration,
-    RangeDecorationStyle,
-};
+use gpui_kit::component::input::{EditorState, RangeDecoration, RangeDecorationStyle};
 // #48 编辑器常规设置（行号开关即时 / 新文档默认缩进·换行·编码）：settings 不依赖 editor，方向合法
 
-
 use crate::bookmark;
-use crate::commands::{
-    AddBookmarkNote, NextBookmark, PrevBookmark, ToggleBookmark,
-};
+use crate::commands::{AddBookmarkNote, NextBookmark, PrevBookmark, ToggleBookmark};
 // 【下移】结果放置 / 下发原料定义已随结果存储搬到 rds-result-panel（经 crate::store 重导出）
-
 
 use super::*;
 impl EditorHostPanel {
-
     /// 【书签】本文档书签的 sidecar 路径（`None` = 未命名文档，无落盘）
     fn bookmark_path(&self) -> Option<std::path::PathBuf> {
         self.document_path()
@@ -112,7 +103,11 @@ impl EditorHostPanel {
     /// 在 `InputEvent::Change` 回调里调用：内核在 `on_text_changed` 时记录了本次编辑的
     /// `LineDelta`，这里 `take` 出来（消费即清空，避免重复应用），按「编辑区之前不动 /
     /// 区内的锚定到编辑区首行 / 区后的整体平移」校正书签。书签有实际位移才重绘 + 落 sidecar。
-    pub(crate) fn adjust_bookmarks_for_edit(&mut self, state: &Entity<EditorState>, cx: &mut Context<Self>) {
+    pub(crate) fn adjust_bookmarks_for_edit(
+        &mut self,
+        state: &Entity<EditorState>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(delta) = state.update(cx, |s, _| s.take_last_edit_delta()) else {
             return;
         };
@@ -264,11 +259,7 @@ impl EditorHostPanel {
     }
 
     /// 【书签】工具栏「书签」按钮：打开书签管理器浮层（列表 + 跳转 / 编辑 / 删除）
-    pub(crate) fn open_bookmark_manager(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn open_bookmark_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let bookmarks = self.shared.bookmarks(&self.document);
         let entity = cx.entity();
         // 每个回调各持一份 entity（`move` 闭包在定义时即捕获，不能共享同一份）

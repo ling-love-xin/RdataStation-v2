@@ -1266,7 +1266,12 @@ mod tests {
         let titles: Vec<String> = groups[0].rows.iter().map(|r| r.title.clone()).collect();
         assert_eq!(
             titles,
-            vec!["public.apple", "public.Apple", "public.seq_x", "public.zebra"],
+            vec![
+                "public.apple",
+                "public.Apple",
+                "public.seq_x",
+                "public.zebra"
+            ],
             "折叠后 apple 与 Apple 并列，类别兜底表先于视图；其余按字典序"
         );
     }

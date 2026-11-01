@@ -1,21 +1,21 @@
 //! 渲染域（`panel/` 第二块）：主 `render` 组装（投影状态 → 元素树根）。
 
-
-use gpui_kit::*;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
-use gpui_kit::component::toolbar::ToolbarGroup;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::switch::Switch;
+use gpui_kit::component::toolbar::ToolbarGroup;
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 use ::shared::CurrentTier;
 
+use super::data::ResultPanel;
 use crate::error_card::{self};
 use crate::export;
 use crate::grid::{self as result_grid, ResultToolbar};
@@ -23,10 +23,8 @@ use crate::ports::{Presentation, ResultRequest};
 use crate::script_card::{self};
 use crate::sets::{self as result_sets};
 use crate::ui;
-use super::data::ResultPanel;
 
 impl ResultPanel {
-
     pub fn render(&self, cx: &App) -> AnyElement {
         // 脚本卡 / 错误卡 / 无结论分支与 SQL 分支的判定：有卡片就不画网格。
         // 【2b】脚本输出卡片（通用模式）与错误卡片同属「替掉网格」的那类卡；
@@ -70,9 +68,9 @@ impl ResultPanel {
                 .into_any_element()
             })
             .or_else(|| {
-                self.script_card.clone().map(|script| {
-                    script_card::render(&script, cx).into_any_element()
-                })
+                self.script_card
+                    .clone()
+                    .map(|script| script_card::render(&script, cx).into_any_element())
             });
 
         let mut toolbar = self.toolbar.clone().unwrap_or(ResultToolbar {
@@ -194,21 +192,19 @@ impl ResultPanel {
             .when(!self.filter_expanded, |row| {
                 let run_queue = self.queue.clone();
                 row.child(
-                    div()
-                        .w(rems(ui::RESULT_FILTER_WIDTH))
-                        .child(
-                            Input::new(&self.filter_input).suffix(
-                                Button::new("editor-result-filter-run")
-                                    .ghost()
-                                    .small()
-                                    .icon(IconName::Play)
-                                    .debug_selector(|| "editor-result-filter-run".to_string())
-                                    .tooltip("用 select * from (原SQL) where 词 重查（替换当前结果集）")
-                                    .on_click(move |_, _window, app| {
-                                        run_queue.request(ResultRequest::RunFilterAsQuery, app);
-                                    }),
-                            ),
+                    div().w(rems(ui::RESULT_FILTER_WIDTH)).child(
+                        Input::new(&self.filter_input).suffix(
+                            Button::new("editor-result-filter-run")
+                                .ghost()
+                                .small()
+                                .icon(IconName::Play)
+                                .debug_selector(|| "editor-result-filter-run".to_string())
+                                .tooltip("用 select * from (原SQL) where 词 重查（替换当前结果集）")
+                                .on_click(move |_, _window, app| {
+                                    run_queue.request(ResultRequest::RunFilterAsQuery, app);
+                                }),
                         ),
+                    ),
                 )
             })
             .child({
@@ -228,19 +224,22 @@ impl ResultPanel {
                         expand_queue.request(ResultRequest::ToggleFilterExpand, app);
                     })
             })
-            .when(!self.filter_text.trim().is_empty() && !self.filter_expanded, |row| {
-                let queue = self.queue.clone();
-                row.child(
-                    Button::new("editor-result-filter-clear")
-                        .ghost()
-                        .small()
-                        .debug_selector(|| "editor-result-filter-clear".to_string())
-                        .label("✕")
-                        .on_click(move |_, _window, app| {
-                            queue.request(ResultRequest::ClearFilter, app);
-                        }),
-                )
-            })
+            .when(
+                !self.filter_text.trim().is_empty() && !self.filter_expanded,
+                |row| {
+                    let queue = self.queue.clone();
+                    row.child(
+                        Button::new("editor-result-filter-clear")
+                            .ghost()
+                            .small()
+                            .debug_selector(|| "editor-result-filter-clear".to_string())
+                            .label("✕")
+                            .on_click(move |_, _window, app| {
+                                queue.request(ResultRequest::ClearFilter, app);
+                            }),
+                    )
+                },
+            )
             .into_any_element();
 
         // 【B15】「下发源库」开关：开着时应用筛选会重查（拼 WHERE 到原查询）
@@ -509,10 +508,13 @@ impl ResultPanel {
                         let queue = queue.clone();
                         menu = menu.item(PopupMenuItem::new(item.label).on_click(
                             move |_, _window, app| {
-                                queue.request(ResultRequest::Export {
-                                    format,
-                                    all: matches!(scope, export::ExportScope::All),
-                                }, app);
+                                queue.request(
+                                    ResultRequest::Export {
+                                        format,
+                                        all: matches!(scope, export::ExportScope::All),
+                                    },
+                                    app,
+                                );
                             },
                         ));
                     }
@@ -651,9 +653,10 @@ impl ResultPanel {
         // 内存文案在这里从 toolbar 投影（取完就随 toolbar 移进 pane，不能再读）：
         // 内存档报列式占用；表档只标载体；无事实档不摆段。
         let status_memory = match toolbar.fact_tier {
-            Some(CurrentTier::InMemory) if toolbar.fact_bytes > 0 => {
-                Some(format!("内存 {}", result_grid::bytes_text(toolbar.fact_bytes)))
-            }
+            Some(CurrentTier::InMemory) if toolbar.fact_bytes > 0 => Some(format!(
+                "内存 {}",
+                result_grid::bytes_text(toolbar.fact_bytes)
+            )),
             Some(CurrentTier::InMemory) => Some("内存档".to_string()),
             Some(CurrentTier::OnDuckDb) | Some(CurrentTier::None) | None => None,
         };
@@ -753,8 +756,14 @@ impl ResultPanel {
             // 【侧栏丝滑】左右栏容器**始终挂载**（内部宽度补间 + 按 show 挂内容），
             // 不再条件渲染——收起 = 宽度平滑收缩，展开 = 宽度露出内容
             row = row.child(self.render_vertical_bar(cx));
-            row.child(div().flex_1().min_w_0().h_full().child(self.render_text_view(cx)))
-                .into_any_element()
+            row.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(self.render_text_view(cx)),
+            )
+            .into_any_element()
         } else if !self.compare_mode {
             // 普通视图：左栏（可收起）+ 主 pane + 右栏（可收起）+ 右缘竖条（常驻）
             let mut row = div()
@@ -893,7 +902,10 @@ impl ResultPanel {
             // 第二行：工具栏（跨全宽）
             .child(toolbar_el)
             // 【1.2】筛选展开条：点击筛选组展开按钮后，工具栏下方顶宽输入框 + ▶ + ✕
-            .children(self.filter_expanded.then(|| self.render_filter_expand_bar(cx)))
+            .children(
+                self.filter_expanded
+                    .then(|| self.render_filter_expand_bar(cx)),
+            )
             // 第三行：主体
             .child(body)
             // 第四行：状态栏
@@ -903,7 +915,4 @@ impl ResultPanel {
             .children(self.sql_dialog_open.then(|| self.render_sql_dialog(cx)))
             .into_any_element()
     }
-
-
-
 }

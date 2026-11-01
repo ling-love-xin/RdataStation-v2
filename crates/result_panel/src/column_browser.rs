@@ -21,16 +21,16 @@
 //! 会覆盖 item 的 `.selected()`），面板侧 `selected_col` 只作为「选中了哪个数据列」的
 //! 语义权威（明细 / 计算分组兜底 / 网格反推），两处通过 host 事件路径同步。
 
-use gpui_kit::*;
-use gpui_kit::base::StyledExt as _;
 use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::IndexPath;
-use gpui_kit::component::list::{ListDelegate, ListItem, ListState};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::list::{ListDelegate, ListItem, ListState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::TableState;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::grid::{self as result_grid, ResultGridDelegate};
 use crate::ports::{ResultActionQueue, ResultRequest};
@@ -146,8 +146,16 @@ impl ListDelegate for ColumnBrowserDelegate {
             Button::new(("editor-result-col-browser-eye", data_col))
                 .ghost()
                 .small()
-                .icon(if hidden { IconName::EyeOff } else { IconName::Eye })
-                .tooltip(if hidden { "显示此列" } else { "隐藏此列" })
+                .icon(if hidden {
+                    IconName::EyeOff
+                } else {
+                    IconName::Eye
+                })
+                .tooltip(if hidden {
+                    "显示此列"
+                } else {
+                    "隐藏此列"
+                })
                 .on_click(move |_, _window, app| {
                     app.stop_propagation();
                     queue.request(ResultRequest::ToggleColumnVisibility(data_col), app);
@@ -226,9 +234,7 @@ impl ListDelegate for ColumnBrowserDelegate {
                             let text = copy_text.clone();
                             menu = menu.item(PopupMenuItem::new(item.label).on_click(
                                 move |_, _window, app| {
-                                    app.write_to_clipboard(
-                                        ClipboardItem::new_string(text.clone()),
-                                    );
+                                    app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
                                 },
                             ));
                         }
@@ -320,7 +326,12 @@ impl ListDelegate for ColumnBrowserDelegate {
     }
 
     /// 单击 / Enter 确认：入队选中该列（网格列高亮联动由宿主分派）
-    fn confirm(&mut self, _secondary: bool, _window: &mut Window, cx: &mut Context<ListState<Self>>) {
+    fn confirm(
+        &mut self,
+        _secondary: bool,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) {
         if let Some(data_col) = self.last_selected {
             self.queue.push(ResultRequest::SelectColumn(data_col));
         }

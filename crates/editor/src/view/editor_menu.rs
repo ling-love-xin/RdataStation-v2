@@ -117,9 +117,11 @@ pub fn menu_from_entries(entries: Vec<EditorMenuEntry>) -> NativeMenu {
     let mut menu = NativeMenu::new();
     for entry in entries {
         match entry {
-            EditorMenuEntry::Action { label, disabled, action } => {
-                menu = menu.menu_with_disabled(label, disabled, action)
-            }
+            EditorMenuEntry::Action {
+                label,
+                disabled,
+                action,
+            } => menu = menu.menu_with_disabled(label, disabled, action),
             EditorMenuEntry::Separator => menu = menu.separator(),
         }
     }
@@ -136,7 +138,9 @@ mod tests {
         entries
             .iter()
             .map(|entry| match entry {
-                EditorMenuEntry::Action { label, disabled, .. } => (*label, *disabled),
+                EditorMenuEntry::Action {
+                    label, disabled, ..
+                } => (*label, *disabled),
                 EditorMenuEntry::Separator => ("—", false),
             })
             .collect()

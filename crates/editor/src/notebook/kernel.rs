@@ -50,9 +50,7 @@ pub fn resolve_kernel(
     let Some(kernel_language) = kernel_language_of(language) else {
         return Err(format!("{} 单元不跑内核", language.label()));
     };
-    let ready = |spec: &rds_kernel::KernelSpec| {
-        spec.language == kernel_language && spec.ready
-    };
+    let ready = |spec: &rds_kernel::KernelSpec| spec.language == kernel_language && spec.ready;
 
     // 1. 显式指定：id 精确匹配
     if let Some(ExecutionSource::Kernel(id)) = source {
