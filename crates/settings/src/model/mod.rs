@@ -30,8 +30,10 @@ pub use connection::ConnectionDefaults;
 pub use editor::Editor;
 pub use insight::Insight;
 pub use layout::Layout;
-pub use logging::{Logging, LogMinLevel};
-pub use navigator::{default_type_short_map, Navigator, NavigatorFilters, ObjectMaskRule, SavedView};
+pub use logging::{LogMinLevel, Logging};
+pub use navigator::{
+    Navigator, NavigatorFilters, ObjectMaskRule, SavedView, default_type_short_map,
+};
 pub use notifications::Notifications;
 pub use projects::Projects;
 pub use resources::Resources;
@@ -168,7 +170,10 @@ mod tests {
     /// 事实档载体默认 `auto`；旧配置（无 `result_panel` 节）回退默认，不报错。
     #[test]
     fn fact_storage_defaults_to_auto() {
-        assert_eq!(Settings::default().result_panel.fact_storage, FactStoragePref::Auto);
+        assert_eq!(
+            Settings::default().result_panel.fact_storage,
+            FactStoragePref::Auto
+        );
 
         let legacy: Settings = serde_json::from_str("{}").expect("旧配置可读");
         assert_eq!(legacy.result_panel.fact_storage, FactStoragePref::Auto);
@@ -190,9 +195,18 @@ mod tests {
     /// 三档映射到决策层 `shared::StoragePref`；未知落盘值拒绝解析，不猜。
     #[test]
     fn fact_storage_maps_to_shared_and_rejects_unknown() {
-        assert_eq!(FactStoragePref::Auto.to_shared(), ::shared::StoragePref::Auto);
-        assert_eq!(FactStoragePref::Memory.to_shared(), ::shared::StoragePref::Memory);
-        assert_eq!(FactStoragePref::Table.to_shared(), ::shared::StoragePref::Table);
+        assert_eq!(
+            FactStoragePref::Auto.to_shared(),
+            ::shared::StoragePref::Auto
+        );
+        assert_eq!(
+            FactStoragePref::Memory.to_shared(),
+            ::shared::StoragePref::Memory
+        );
+        assert_eq!(
+            FactStoragePref::Table.to_shared(),
+            ::shared::StoragePref::Table
+        );
 
         assert!(FactStoragePref::parse("disk").is_none());
         assert!(FactStoragePref::parse("").is_none());

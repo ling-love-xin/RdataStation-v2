@@ -1,11 +1,10 @@
 //! 编辑器设置项的写入处理（`apply_slot`，由 `SettingsService::apply_by_key` 分发）与读写访问器。
 use gpui_kit::App;
 
+use crate::SettingsService;
 use crate::model::Settings;
 use crate::persistence::persist;
 use crate::registry::{SettingValue, Slot};
-use crate::SettingsService;
-
 
 /// 本域 slot 的标量写入处理；返回 `false` 表示拒绝（值形态不符 / 复合值 / 无法解析）。
 pub(crate) fn apply_slot(
@@ -15,125 +14,125 @@ pub(crate) fn apply_slot(
     cx: &mut App,
 ) -> bool {
     match slot {
-            Slot::EditorShowLineNumbers => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_show_line_numbers(on, cx);
+        Slot::EditorShowLineNumbers => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_show_line_numbers(on, cx);
+        }
+        Slot::EditorShowFolds => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_show_folds(on, cx);
+        }
+        Slot::EditorIndentFolds => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_indent_folding(on, cx);
+        }
+        Slot::EditorFoldOpenKeywords => {
+            let Some(keywords) = value.as_text() else {
+                return false;
+            };
+            SettingsService::set_fold_open_keywords(keywords.to_string(), cx);
+        }
+        Slot::EditorFoldCloseKeywords => {
+            let Some(keywords) = value.as_text() else {
+                return false;
+            };
+            SettingsService::set_fold_close_keywords(keywords.to_string(), cx);
+        }
+        Slot::EditorSoftWrap => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_soft_wrap(on, cx);
+        }
+        Slot::EditorAutoClose => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_auto_close(on, cx);
+        }
+        Slot::EditorSmartIndent => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_smart_indent(on, cx);
+        }
+        Slot::EditorInlineCompletion => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_inline_completion(on, cx);
+        }
+        Slot::EditorDefaultTabSize => {
+            let Some(n) = value.as_number() else {
+                return false;
+            };
+            if !(1.0..=16.0).contains(&n) {
+                return false;
             }
-            Slot::EditorShowFolds => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_show_folds(on, cx);
+            SettingsService::set_default_tab_size(n as i64, cx);
+        }
+        Slot::EditorDefaultHardTabs => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_default_hard_tabs(on, cx);
+        }
+        Slot::EditorDefaultLineEnding => {
+            let Some(v) = value.as_text() else {
+                return false;
+            };
+            // 只认 LF / CRLF（与「重设 ▾」同一套换行档；手改坏时拒绝，不猜）。
+            if !(v == "LF" || v == "CRLF") {
+                return false;
             }
-            Slot::EditorIndentFolds => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_indent_folding(on, cx);
+            SettingsService::set_default_line_ending(&v, cx);
+        }
+        Slot::EditorDefaultEncoding => {
+            let Some(v) = value.as_text() else {
+                return false;
+            };
+            // 只认编码五档（与「重设 ▾」同一套档；手改坏时拒绝，不猜）。
+            if !(v == "UTF-8"
+                || v == "UTF-8-BOM"
+                || v == "GBK"
+                || v == "UTF-16LE"
+                || v == "UTF-16BE")
+            {
+                return false;
             }
-            Slot::EditorFoldOpenKeywords => {
-                let Some(keywords) = value.as_text() else {
-                    return false;
-                };
-                SettingsService::set_fold_open_keywords(keywords.to_string(), cx);
+            SettingsService::set_default_encoding(&v, cx);
+        }
+        Slot::EditorFormatKeywordCase => {
+            let Some(v) = value.as_text() else {
+                return false;
+            };
+            // 只认三档（preserve / upper / lower；手改坏时拒绝，不猜）。
+            if !(v == "preserve" || v == "upper" || v == "lower") {
+                return false;
             }
-            Slot::EditorFoldCloseKeywords => {
-                let Some(keywords) = value.as_text() else {
-                    return false;
-                };
-                SettingsService::set_fold_close_keywords(keywords.to_string(), cx);
+            SettingsService::set_format_keyword_case(&v, cx);
+        }
+        Slot::EditorFormatIndentWidth => {
+            let Some(n) = value.as_number() else {
+                return false;
+            };
+            if !(2.0..=8.0).contains(&n) {
+                return false;
             }
-            Slot::EditorSoftWrap => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_soft_wrap(on, cx);
-            }
-            Slot::EditorAutoClose => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_auto_close(on, cx);
-            }
-            Slot::EditorSmartIndent => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_smart_indent(on, cx);
-            }
-            Slot::EditorInlineCompletion => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_inline_completion(on, cx);
-            }
-            Slot::EditorDefaultTabSize => {
-                let Some(n) = value.as_number() else {
-                    return false;
-                };
-                if !(1.0..=16.0).contains(&n) {
-                    return false;
-                }
-                SettingsService::set_default_tab_size(n as i64, cx);
-            }
-            Slot::EditorDefaultHardTabs => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_default_hard_tabs(on, cx);
-            }
-            Slot::EditorDefaultLineEnding => {
-                let Some(v) = value.as_text() else {
-                    return false;
-                };
-                // 只认 LF / CRLF（与「重设 ▾」同一套换行档；手改坏时拒绝，不猜）。
-                if !(v == "LF" || v == "CRLF") {
-                    return false;
-                }
-                SettingsService::set_default_line_ending(&v, cx);
-            }
-            Slot::EditorDefaultEncoding => {
-                let Some(v) = value.as_text() else {
-                    return false;
-                };
-                // 只认编码五档（与「重设 ▾」同一套档；手改坏时拒绝，不猜）。
-                if !(v == "UTF-8"
-                    || v == "UTF-8-BOM"
-                    || v == "GBK"
-                    || v == "UTF-16LE"
-                    || v == "UTF-16BE")
-                {
-                    return false;
-                }
-                SettingsService::set_default_encoding(&v, cx);
-            }
-            Slot::EditorFormatKeywordCase => {
-                let Some(v) = value.as_text() else {
-                    return false;
-                };
-                // 只认三档（preserve / upper / lower；手改坏时拒绝，不猜）。
-                if !(v == "preserve" || v == "upper" || v == "lower") {
-                    return false;
-                }
-                SettingsService::set_format_keyword_case(&v, cx);
-            }
-            Slot::EditorFormatIndentWidth => {
-                let Some(n) = value.as_number() else {
-                    return false;
-                };
-                if !(2.0..=8.0).contains(&n) {
-                    return false;
-                }
-                SettingsService::set_format_indent_width(n as i64, cx);
-            }
-            Slot::EditorFormatOnSave => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_format_on_save(on, cx);
-            }
+            SettingsService::set_format_indent_width(n as i64, cx);
+        }
+        Slot::EditorFormatOnSave => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_format_on_save(on, cx);
+        }
         _ => return false,
     }
     true

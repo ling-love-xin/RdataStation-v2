@@ -1,11 +1,10 @@
 //! 数据源导航设置项的写入处理（`apply_slot`，由 `SettingsService::apply_by_key` 分发）与读写访问器。
 use gpui_kit::App;
 
+use crate::SettingsService;
 use crate::model::{NavigatorFilters, ObjectMaskRule, SavedView, Settings};
 use crate::persistence::persist;
 use crate::registry::{SettingValue, Slot};
-use crate::SettingsService;
-
 
 /// 本域 slot 的标量写入处理；返回 `false` 表示拒绝（值形态不符 / 复合值 / 无法解析）。
 pub(crate) fn apply_slot(
@@ -15,82 +14,82 @@ pub(crate) fn apply_slot(
     cx: &mut App,
 ) -> bool {
     match slot {
-            Slot::NavigatorSourceShortCode => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_source_short_code(on, cx);
+        Slot::NavigatorSourceShortCode => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_source_short_code(on, cx);
+        }
+        Slot::NavigatorShowTags => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_show_tags(on, cx);
+        }
+        Slot::NavigatorShowScope => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_show_scope(on, cx);
+        }
+        Slot::NavigatorShowNameTypeShort => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_show_name_type_short(on, cx);
+        }
+        Slot::NavigatorRowEstimate => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_row_estimate(on, cx);
+        }
+        Slot::NavigatorShowInlineStats => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_show_inline_stats(on, cx);
+        }
+        Slot::NavigatorShowInlineComment => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_show_inline_comment(on, cx);
+        }
+        Slot::NavigatorShowInlineSize => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_show_inline_size(on, cx);
+        }
+        Slot::NavigatorShowChips => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_show_chips(on, cx);
+        }
+        Slot::NavigatorShowSearch => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_show_search(on, cx);
+        }
+        Slot::NavigatorAutoConnectStartup => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            // 启动时开关只在下次启动生效，不需要即时刷新窗口。
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.navigator.auto_connect_on_startup = on;
             }
-            Slot::NavigatorShowTags => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_show_tags(on, cx);
-            }
-            Slot::NavigatorShowScope => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_show_scope(on, cx);
-            }
-            Slot::NavigatorShowNameTypeShort => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_show_name_type_short(on, cx);
-            }
-            Slot::NavigatorRowEstimate => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_row_estimate(on, cx);
-            }
-            Slot::NavigatorShowInlineStats => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_show_inline_stats(on, cx);
-            }
-            Slot::NavigatorShowInlineComment => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_show_inline_comment(on, cx);
-            }
-            Slot::NavigatorShowInlineSize => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_show_inline_size(on, cx);
-            }
-            Slot::NavigatorShowChips => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_show_chips(on, cx);
-            }
-            Slot::NavigatorShowSearch => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_show_search(on, cx);
-            }
-            Slot::NavigatorAutoConnectStartup => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                // 启动时开关只在下次启动生效，不需要即时刷新窗口。
-                {
-                    let settings = cx.global_mut::<Settings>();
-                    settings.navigator.auto_connect_on_startup = on;
-                }
-                let settings = cx.global::<Settings>().clone();
-                persist(&settings);
-            }
-            Slot::NavigatorFilters
-            | Slot::NavigatorSavedViews
-            | Slot::NavigatorVisibleDatabases
-            | Slot::NavigatorGlobalMask => return false,
+            let settings = cx.global::<Settings>().clone();
+            persist(&settings);
+        }
+        Slot::NavigatorFilters
+        | Slot::NavigatorSavedViews
+        | Slot::NavigatorVisibleDatabases
+        | Slot::NavigatorGlobalMask => return false,
         _ => return false,
     }
     true
@@ -278,7 +277,11 @@ impl SettingsService {
     /// 保存一个命名视图并持久化。
     ///
     /// 同名**拦截**（不覆盖、不自动改名）：返回 `Err("已存在同名视图…")`，由调用方提示改名。
-    pub fn save_saved_view(name: String, filters: NavigatorFilters, cx: &mut App) -> Result<(), String> {
+    pub fn save_saved_view(
+        name: String,
+        filters: NavigatorFilters,
+        cx: &mut App,
+    ) -> Result<(), String> {
         {
             let settings = cx.global_mut::<Settings>();
             if settings.navigator.saved_views.contains_key(&name) {
@@ -376,11 +379,7 @@ impl SettingsService {
     ///
     /// `None` = 删除该连接的白名单记录（回到默认模式）；
     /// `Some(空)` = 显式空白名单（弹框里全取消 = 默认隐藏系统库，但不删记录）。
-    pub fn set_visible_databases(
-        conn_id: &str,
-        visible: Option<Vec<String>>,
-        cx: &mut App,
-    ) {
+    pub fn set_visible_databases(conn_id: &str, visible: Option<Vec<String>>, cx: &mut App) {
         {
             let settings = cx.global_mut::<Settings>();
             match visible {

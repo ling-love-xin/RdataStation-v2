@@ -1,11 +1,10 @@
 //! 资产库设置项的写入处理（`apply_slot`，由 `SettingsService::apply_by_key` 分发）与读写访问器。
 use gpui_kit::App;
 
+use crate::SettingsService;
 use crate::model::Settings;
 use crate::persistence::persist;
 use crate::registry::{SettingValue, Slot};
-use crate::SettingsService;
-
 
 /// 本域 slot 的标量写入处理；返回 `false` 表示拒绝（值形态不符 / 复合值 / 无法解析）。
 pub(crate) fn apply_slot(
@@ -15,20 +14,20 @@ pub(crate) fn apply_slot(
     cx: &mut App,
 ) -> bool {
     match slot {
-            Slot::ResourcesCollapsedGroups | Slot::ResourcesDefaultGroup => return false,
-            Slot::ResourcesKeepVersions => {
-                let Some(value) = value.as_number() else {
-                    return false;
-                };
-                // 页面上只给预设档（含 `-1` = 全留），取整后写入。
-                SettingsService::set_keep_versions(value.round() as i64, cx);
-            }
-            Slot::ResourcesDefaultSort => {
-                let Some(text) = value.as_text() else {
-                    return false;
-                };
-                SettingsService::set_default_resource_sort(text, cx);
-            }
+        Slot::ResourcesCollapsedGroups | Slot::ResourcesDefaultGroup => return false,
+        Slot::ResourcesKeepVersions => {
+            let Some(value) = value.as_number() else {
+                return false;
+            };
+            // 页面上只给预设档（含 `-1` = 全留），取整后写入。
+            SettingsService::set_keep_versions(value.round() as i64, cx);
+        }
+        Slot::ResourcesDefaultSort => {
+            let Some(text) = value.as_text() else {
+                return false;
+            };
+            SettingsService::set_default_resource_sort(text, cx);
+        }
         _ => return false,
     }
     true

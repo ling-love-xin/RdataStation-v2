@@ -7,12 +7,12 @@
 
 use std::rc::Rc;
 
+use gpui_kit::App;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::group_box::GroupBoxVariant;
 use gpui_kit::component::setting::{SelectIndex, SettingGroup, SettingPage, Settings};
 use gpui_kit::component::{IconName, Sizable as _};
 use gpui_kit::px;
-use gpui_kit::App;
 
 use crate::fields;
 use crate::registry::{self};
@@ -55,9 +55,7 @@ pub fn build(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> Settings {
                 groups.push(group);
                 continue;
             }
-            if section == "result_panel"
-                && (*gid == "color" || *gid == "bg" || *gid == "font")
-            {
+            if section == "result_panel" && (*gid == "color" || *gid == "bg" || *gid == "font") {
                 continue;
             }
             let mut group = SettingGroup::new();
@@ -66,16 +64,14 @@ pub fn build(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> Settings {
             }
             // 长节分组给一句说明（分组自解释，减少"杂乱"感）。
             if section == "result_panel" && *gid == "data" {
-                group = group.description(
-                    "列头与单元格的值呈现：注释 / 类型徽标 / 数字格式 / NULL / 布尔",
-                );
+                group = group
+                    .description("列头与单元格的值呈现：注释 / 类型徽标 / 数字格式 / NULL / 布尔");
             }
             // 布局分节：顶部先放左右侧边栏占比预览示意图。
             if section == "layout" && *gid == page_groups[0].0 {
                 group = group.item(fields::layout_preview());
             }
-            for spec in registry::page_rows().filter(|s| s.section == section && s.group == *gid)
-            {
+            for spec in registry::page_rows().filter(|s| s.section == section && s.group == *gid) {
                 group = group.item(fields::value_item(spec, host, notify));
             }
             groups.push(group);
@@ -134,7 +130,10 @@ fn page_description(section: &str) -> Option<&'static str> {
 }
 
 /// 动作行（非设置项，见 `fields::action_row`）：按节从宿主桥取回调。
-fn action_rows(section: &'static str, host: &SettingsHost) -> Vec<gpui_kit::component::setting::SettingItem> {
+fn action_rows(
+    section: &'static str,
+    host: &SettingsHost,
+) -> Vec<gpui_kit::component::setting::SettingItem> {
     let mut items = Vec::new();
     match section {
         "navigator" => {

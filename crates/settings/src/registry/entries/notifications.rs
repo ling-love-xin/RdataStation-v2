@@ -78,12 +78,7 @@ pub fn entries() -> Vec<SettingSpec> {
             hint: "短时间内连续多个同类通知合并成一个计数（如批量连接时）；0 = 不合并",
             hint_inline: true,
             kind: SettingKind::Number,
-            presets: &[
-                (0, "不合并"),
-                (2, "2 秒（默认）"),
-                (3, "3 秒"),
-                (5, "5 秒"),
-            ],
+            presets: &[(0, "不合并"), (2, "2 秒（默认）"), (3, "3 秒"), (5, "5 秒")],
             default_json: "2",
             effect: SettingEffect::Immediate,
             entry: SettingEntry::Page,

@@ -1,6 +1,6 @@
 //! 资产库设置 model（struct + 默认值 + 默认函数）。
-use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Resources {

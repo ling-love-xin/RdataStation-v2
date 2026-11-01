@@ -5,18 +5,18 @@
 use super::SettingSpec;
 
 pub mod appearance;
-pub mod editor;
-pub mod navigator;
-pub mod resources;
 pub mod connection;
-pub mod projects;
-pub mod logging;
-pub mod startup;
-pub mod scratchpad;
+pub mod editor;
 pub mod insight;
-pub mod result_panel;
 pub mod layout;
+pub mod logging;
+pub mod navigator;
 pub mod notifications;
+pub mod projects;
+pub mod resources;
+pub mod result_panel;
+pub mod scratchpad;
+pub mod startup;
 
 /// 合并全部登记项（固定域序）。
 pub fn all() -> Vec<SettingSpec> {

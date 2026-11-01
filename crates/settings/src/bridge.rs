@@ -77,7 +77,7 @@ pub fn reset_to_default(
 mod tests {
     use super::*;
     use crate::model::Settings;
-    use crate::registry::{registry, KindTag};
+    use crate::registry::{KindTag, registry};
 
     #[test]
     fn is_changed_tracks_registry_default() {

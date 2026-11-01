@@ -1,11 +1,10 @@
 //! 启动设置项的写入处理（`apply_slot`，由 `SettingsService::apply_by_key` 分发）与读写访问器。
 use gpui_kit::App;
 
+use crate::SettingsService;
 use crate::model::Settings;
 use crate::persistence::persist;
 use crate::registry::{SettingValue, Slot};
-use crate::SettingsService;
-
 
 /// 本域 slot 的标量写入处理；返回 `false` 表示拒绝（值形态不符 / 复合值 / 无法解析）。
 pub(crate) fn apply_slot(
@@ -15,16 +14,16 @@ pub(crate) fn apply_slot(
     cx: &mut App,
 ) -> bool {
     match slot {
-            Slot::StartupDefaultLeftPanel => {
-                let Some(text) = value.as_text() else {
-                    return false;
-                };
-                // 落盘值只认登记表枚举里的四档；未知值拒绝（设置文件被手改坏时不让写入）。
-                if !matches!(text, "database" | "draft" | "resources" | "plugin") {
-                    return false;
-                }
-                SettingsService::set_startup_default_left_panel(text, cx);
+        Slot::StartupDefaultLeftPanel => {
+            let Some(text) = value.as_text() else {
+                return false;
+            };
+            // 落盘值只认登记表枚举里的四档；未知值拒绝（设置文件被手改坏时不让写入）。
+            if !matches!(text, "database" | "draft" | "resources" | "plugin") {
+                return false;
             }
+            SettingsService::set_startup_default_left_panel(text, cx);
+        }
         _ => return false,
     }
     true

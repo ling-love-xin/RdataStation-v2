@@ -3,7 +3,6 @@ use gpui_kit::App;
 
 use crate::registry::{SettingValue, Slot};
 
-
 /// 本域 slot 的标量写入处理；返回 `false` 表示拒绝（值形态不符 / 复合值 / 无法解析）。
 pub(crate) fn apply_slot(
     slot: Slot,
@@ -12,8 +11,8 @@ pub(crate) fn apply_slot(
     _cx: &mut App,
 ) -> bool {
     match slot {
-            Slot::ScratchpadGroupMaxH => return false,
-            Slot::ScratchpadToolbar => return false,
+        Slot::ScratchpadGroupMaxH => return false,
+        Slot::ScratchpadToolbar => return false,
         _ => return false,
     }
 }

@@ -20,14 +20,14 @@ use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::setting::{RenderOptions, SettingField, SettingItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar, TabVariant};
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, Size, Selectable as _};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Selectable as _, Sizable as _, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::SettingsService;
 use crate::bridge;
 use crate::registry::{SettingKind, SettingSpec, SettingValue};
 use crate::settings_page::SettingsHost;
-use crate::SettingsService;
 
 /// 生成一个「值行」设置项（`Bool` / `BoolPair` / `Enum` / `Number`）。
 ///
@@ -78,17 +78,19 @@ pub fn value_item(
         // 具体原因仍以行内 hint 为准（当前唯一禁用项 hint_inline=true 即走行内）。
         if spec.disabled && !spec.hint_inline {
             let key = spec.key;
-            HoverCard::new(ElementId::Name(SharedString::from(format!("{key}-disabled"))))
-                .trigger(body)
-                .content(move |_, _window, cx| {
-                    div()
-                        .px_2()
-                        .py_1()
-                        .text_xs()
-                        .text_color(cx.theme().colors.muted_foreground)
-                        .child("该能力已预留，尚未启用")
-                })
-                .into_any_element()
+            HoverCard::new(ElementId::Name(SharedString::from(format!(
+                "{key}-disabled"
+            ))))
+            .trigger(body)
+            .content(move |_, _window, cx| {
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(cx.theme().colors.muted_foreground)
+                    .child("该能力已预留，尚未启用")
+            })
+            .into_any_element()
         } else if spec.hint_inline {
             body.into_any_element()
         } else {
@@ -115,7 +117,10 @@ pub fn value_item(
 
     let mut item = SettingItem::new(spec.label, field)
         .disabled(spec.disabled)
-        .keywords([SharedString::from(spec.key), SharedString::from(spec.section_label)]);
+        .keywords([
+            SharedString::from(spec.key),
+            SharedString::from(spec.section_label),
+        ]);
     // 只有行内说明的才给组件 `.description`；悬停提示的由上面的 HoverCard 承担。
     if spec.hint_inline {
         item = item.description(spec.hint);
@@ -162,16 +167,10 @@ pub fn action_row(
                             .child(hint),
                     ),
             )
-            .child(
-                Button::new(id)
-                    .ghost()
-                    .small()
-                    .label(button)
-                    .on_click({
-                        let on_click = on_click.clone();
-                        move |_, window, app| on_click(window, app)
-                    }),
-            )
+            .child(Button::new(id).ghost().small().label(button).on_click({
+                let on_click = on_click.clone();
+                move |_, window, app| on_click(window, app)
+            }))
     })
     // 动作行永远不参与页面级 reset-all。
     .on_reset(|_| false, |_, _| {})
@@ -403,12 +402,13 @@ pub fn type_style_matrix(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> 
     })
     .on_reset(
         move |cx| {
-            ROWS.iter().any(|(align_key, color_key, bg_key, font_key, _)| {
-                matrix_changed(align_key, cx)
-                    || matrix_changed(color_key, cx)
-                    || matrix_changed(bg_key, cx)
-                    || matrix_changed(font_key, cx)
-            })
+            ROWS.iter()
+                .any(|(align_key, color_key, bg_key, font_key, _)| {
+                    matrix_changed(align_key, cx)
+                        || matrix_changed(color_key, cx)
+                        || matrix_changed(bg_key, cx)
+                        || matrix_changed(font_key, cx)
+                })
         },
         move |window, cx| {
             for (align_key, color_key, bg_key, font_key, _) in ROWS {
@@ -420,18 +420,19 @@ pub fn type_style_matrix(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> 
         },
     )
     .keywords(
-        ROWS.iter().flat_map(|(align_key, color_key, bg_key, font_key, _)| {
-            [
-                SharedString::from(*align_key),
-                SharedString::from(*color_key),
-                SharedString::from(*bg_key),
-                SharedString::from(*font_key),
-                SharedString::from("对齐"),
-                SharedString::from("着色"),
-                SharedString::from("背景"),
-                SharedString::from("字体"),
-            ]
-        }),
+        ROWS.iter()
+            .flat_map(|(align_key, color_key, bg_key, font_key, _)| {
+                [
+                    SharedString::from(*align_key),
+                    SharedString::from(*color_key),
+                    SharedString::from(*bg_key),
+                    SharedString::from(*font_key),
+                    SharedString::from("对齐"),
+                    SharedString::from("着色"),
+                    SharedString::from("背景"),
+                    SharedString::from("字体"),
+                ]
+            }),
     )
 }
 
@@ -487,18 +488,16 @@ fn matrix_cell(
                 if let Some(icon) = matrix_swatch(&theme, value, swatch) {
                     item = item.icon(icon);
                 }
-                menu = menu.item(
-                    item.on_click(move |_, window, app| {
-                        bridge::write_scalar(
-                            key,
-                            SettingValue::Text((*value).to_string()),
-                            Some(window),
-                            &notify,
-                            &host_changed,
-                            app,
-                        );
-                    }),
-                );
+                menu = menu.item(item.on_click(move |_, window, app| {
+                    bridge::write_scalar(
+                        key,
+                        SettingValue::Text((*value).to_string()),
+                        Some(window),
+                        &notify,
+                        &host_changed,
+                        app,
+                    );
+                }));
             }
             menu
         })
@@ -633,21 +632,16 @@ fn render_control(
             let selected = if value { 0 } else { 1 };
             let notify = notify.clone();
             let host_changed = host_changed.clone();
-            segmented(
-                spec.key,
-                vec![on, off],
-                selected,
-                move |ix, window, app| {
-                    bridge::write_scalar(
-                        spec.key,
-                        SettingValue::Bool(ix == 0),
-                        Some(window),
-                        &notify,
-                        &host_changed,
-                        app,
-                    );
-                },
-            )
+            segmented(spec.key, vec![on, off], selected, move |ix, window, app| {
+                bridge::write_scalar(
+                    spec.key,
+                    SettingValue::Bool(ix == 0),
+                    Some(window),
+                    &notify,
+                    &host_changed,
+                    app,
+                );
+            })
         }
         SettingKind::Enum(options) => {
             let text = bridge::current_value(cx, spec.key)
@@ -768,13 +762,16 @@ fn reset_button(
 ) -> Button {
     let notify = notify.clone();
     let host_changed = host_changed.clone();
-    Button::new(ElementId::Name(SharedString::from(format!("{}-reset", spec.key))))
-        .ghost()
-        .xsmall()
-        .icon(IconName::RotateCw)
-        .on_click(move |_, window, app| {
-            bridge::reset_to_default(spec, Some(window), &notify, &host_changed, app);
-        })
+    Button::new(ElementId::Name(SharedString::from(format!(
+        "{}-reset",
+        spec.key
+    ))))
+    .ghost()
+    .xsmall()
+    .icon(IconName::RotateCw)
+    .on_click(move |_, window, app| {
+        bridge::reset_to_default(spec, Some(window), &notify, &host_changed, app);
+    })
 }
 
 /// RdataStation vendor patch：标签栏样式实时预览（`appearance.tab_bar_variant`）。

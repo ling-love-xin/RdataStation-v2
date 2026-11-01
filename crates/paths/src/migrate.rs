@@ -201,7 +201,9 @@ fn copy_dir(src: &Path, dest: &Path, overwrite: bool, report: &mut MigrationRepo
     let entries = match std::fs::read_dir(src) {
         Ok(entries) => entries,
         Err(e) => {
-            report.errors.push(format!("读取 {} 失败：{e}", src.display()));
+            report
+                .errors
+                .push(format!("读取 {} 失败：{e}", src.display()));
             return;
         }
     };

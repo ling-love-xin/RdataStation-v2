@@ -12,7 +12,7 @@ use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use thiserror::Error;
 
-use crate::models::{arrow_value_at, QueryResult, Value};
+use crate::models::{QueryResult, Value, arrow_value_at};
 
 /// 事实值：起步档复用显示层同源的六变体，避免再造一套类型化行结构。
 pub type FactValue = Value;
@@ -167,9 +167,7 @@ impl FactFrame {
     /// 列类型族；列索引越界返回 [`FactError::ColumnIndexOutOfRange`]。
     pub fn column_kind(&self, col: usize) -> Result<FactKind, FactError> {
         self.check_col(col)?;
-        Ok(FactKind::from_data_type(
-            self.schema.field(col).data_type(),
-        ))
+        Ok(FactKind::from_data_type(self.schema.field(col).data_type()))
     }
 
     /// 按全局行号 + 列号取值；行索引跨批定位（批内偏移累加）。
@@ -242,7 +240,11 @@ impl FactFrame {
         for batch in &self.batches {
             for array in batch.columns() {
                 let data = array.to_data();
-                total += data.buffers().iter().map(|buffer| buffer.len()).sum::<usize>();
+                total += data
+                    .buffers()
+                    .iter()
+                    .map(|buffer| buffer.len())
+                    .sum::<usize>();
                 if let Some(nulls) = data.nulls() {
                     total += nulls.buffer().len();
                 }
@@ -585,7 +587,11 @@ mod fact_tests {
 
         assert_eq!(fact.row_count(), 4);
         assert_eq!(fact.value_at(0, 0).unwrap(), Value::Int(10));
-        assert_eq!(fact.value_at(2, 0).unwrap(), Value::Int(30), "跨批定位到第二批首行");
+        assert_eq!(
+            fact.value_at(2, 0).unwrap(),
+            Value::Int(30),
+            "跨批定位到第二批首行"
+        );
         assert_eq!(fact.value_at(3, 0).unwrap(), Value::Int(40));
         assert!(matches!(
             fact.value_at(4, 0),
@@ -638,12 +644,22 @@ mod fact_tests {
         )
         .expect("异形状批");
         let err = fact.append_batches(vec![wider]).unwrap_err();
-        assert!(matches!(err, FactError::ShapeMismatch { expected: 1, actual: 2 }));
+        assert!(matches!(
+            err,
+            FactError::ShapeMismatch {
+                expected: 1,
+                actual: 2
+            }
+        ));
         assert_eq!(fact.row_count(), 2, "拒绝后现有内容不被污染");
 
         // 列名 / 类型不一致同样拒绝
         let renamed = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("code", DataType::Int64, false)])),
+            Arc::new(Schema::new(vec![Field::new(
+                "code",
+                DataType::Int64,
+                false,
+            )])),
             vec![Arc::new(Int64Array::from(vec![4i64]))],
         )
         .expect("改名批");
@@ -708,7 +724,11 @@ mod fact_tests {
         assert_eq!(fact.row_count(), 2, "行数缓存保留，不随 batches 清空回 0");
         assert_eq!(fact.estimated_bytes(), 0, "表档 Rust 堆占用报 0");
         assert_eq!(fact.temp_table(), Some("tmp_q_result_7"));
-        assert_eq!(fact.column_count(), 2, "列名 / schema 保留供元数据与类型族访问");
+        assert_eq!(
+            fact.column_count(),
+            2,
+            "列名 / schema 保留供元数据与类型族访问"
+        );
         assert!(fact.rows_as_text().is_empty(), "表档不回读显示矩阵");
         assert!(matches!(
             fact.value_at(0, 0),
@@ -758,7 +778,9 @@ mod fact_tests {
                 Arc::new(Int64Array::from(ids)),
                 Arc::new(Int64Array::from(vals.clone())),
                 Arc::new(Int64Array::from(vals)),
-                Arc::new(Int64Array::from((0..rows as i64).map(Some).collect::<Vec<_>>())),
+                Arc::new(Int64Array::from(
+                    (0..rows as i64).map(Some).collect::<Vec<_>>(),
+                )),
                 Arc::new(Float64Array::from(floats)),
             ];
             fact_from_arrays(&["a", "b", "c", "d", "e"], arrays)
@@ -767,8 +789,9 @@ mod fact_tests {
         fn text(rows: usize) -> FactFrame {
             let mut arrays: Vec<ArrayRef> = Vec::with_capacity(6);
             for col in 0..6 {
-                let cells: Vec<Option<String>> =
-                    (0..rows).map(|row| Some(format!("名称{row}-字段{col}示例文本内容备注"))).collect();
+                let cells: Vec<Option<String>> = (0..rows)
+                    .map(|row| Some(format!("名称{row}-字段{col}示例文本内容备注")))
+                    .collect();
                 arrays.push(Arc::new(StringArray::from(cells)));
             }
             fact_from_arrays(&["f1", "f2", "f3", "f4", "f5", "f6"], arrays)
@@ -776,19 +799,36 @@ mod fact_tests {
 
         fn mixed(rows: usize) -> FactFrame {
             let arrays: Vec<ArrayRef> = vec![
-                Arc::new(Int64Array::from((0..rows as i64).map(Some).collect::<Vec<_>>())),
-                Arc::new(Int64Array::from((0..rows as i64).map(|i| Some(i * 7)).collect::<Vec<_>>())),
-                Arc::new(Float64Array::from((0..rows).map(|i| Some(i as f64 * 0.5)).collect::<Vec<_>>())),
-                Arc::new(Float64Array::from((0..rows).map(|i| Some(i as f64)).collect::<Vec<_>>())),
-                Arc::new(StringArray::from(
-                    (0..rows).map(|row| Some(format!("项{row}"))).collect::<Vec<_>>(),
+                Arc::new(Int64Array::from(
+                    (0..rows as i64).map(Some).collect::<Vec<_>>(),
+                )),
+                Arc::new(Int64Array::from(
+                    (0..rows as i64).map(|i| Some(i * 7)).collect::<Vec<_>>(),
+                )),
+                Arc::new(Float64Array::from(
+                    (0..rows).map(|i| Some(i as f64 * 0.5)).collect::<Vec<_>>(),
+                )),
+                Arc::new(Float64Array::from(
+                    (0..rows).map(|i| Some(i as f64)).collect::<Vec<_>>(),
                 )),
                 Arc::new(StringArray::from(
-                    (0..rows).map(|row| Some(format!("备注{row}"))).collect::<Vec<_>>(),
+                    (0..rows)
+                        .map(|row| Some(format!("项{row}")))
+                        .collect::<Vec<_>>(),
                 )),
-                Arc::new(BooleanArray::from((0..rows).map(|i| Some(i % 2 == 0)).collect::<Vec<_>>())),
+                Arc::new(StringArray::from(
+                    (0..rows)
+                        .map(|row| Some(format!("备注{row}")))
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(BooleanArray::from(
+                    (0..rows).map(|i| Some(i % 2 == 0)).collect::<Vec<_>>(),
+                )),
             ];
-            fact_from_arrays(&["id", "code", "rate", "price", "title", "note", "flag"], arrays)
+            fact_from_arrays(
+                &["id", "code", "rate", "price", "title", "note", "flag"],
+                arrays,
+            )
         }
 
         for rows in [1000usize, 3000] {
@@ -945,7 +985,11 @@ mod fact_tests {
     fn column_stats_bool_counts_nulls_without_numeric() {
         let fact = fact_from_arrays(
             &["flag"],
-            vec![Arc::new(BooleanArray::from(vec![Some(true), None, Some(false)]))],
+            vec![Arc::new(BooleanArray::from(vec![
+                Some(true),
+                None,
+                Some(false),
+            ]))],
         );
         let stats = fact.column_stats(0).expect("Bool 列给计数统计");
         assert_eq!(stats.count, 2);

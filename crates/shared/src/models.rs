@@ -710,7 +710,10 @@ mod value_mapping_tests {
         assert_eq!(json["columns"][0], "id");
         assert_eq!(json["total_rows"], 2, "契约里的 total_rows 要现算");
         assert_eq!(json["rows"].as_array().map(Vec::len), Some(2), "行也要现算");
-        assert_eq!(json["rows"][1][0], 9, "`Value` 是 untagged：整数就是 JSON 数字");
+        assert_eq!(
+            json["rows"][1][0], 9,
+            "`Value` 是 untagged：整数就是 JSON 数字"
+        );
 
         // 往返一趟：这份实例的 `batches` 是空的、行在字段里 —— 三个口径（字段 / batches / 方法）
         // 必须给出同一个答案（此前方法只认 `batches`，于是「明明有行、报 0 行」）。
@@ -742,7 +745,10 @@ mod value_mapping_tests {
         assert_eq!(result.is_read_only, Some(true));
 
         let empty = QueryResult::with_batches(vec!["id".to_string()], vec![], Some(false));
-        assert!(empty.column_types.is_empty(), "空 batches 无 schema → 无类型档");
+        assert!(
+            empty.column_types.is_empty(),
+            "空 batches 无 schema → 无类型档"
+        );
         assert_eq!(empty.is_read_only, Some(false), "is_read_only 由调用方透传");
         assert!(empty.rows.is_empty() && empty.total_rows == 0);
     }

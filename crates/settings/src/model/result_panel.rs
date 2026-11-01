@@ -196,7 +196,9 @@ impl FactStoragePref {
 
     /// 解析落盘值；未知值返回 `None`，由写入路径拒绝而不是猜。
     pub fn parse(s: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|value| value.as_str() == s.trim())
+        Self::ALL
+            .into_iter()
+            .find(|value| value.as_str() == s.trim())
     }
 }
 

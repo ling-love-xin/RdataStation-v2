@@ -62,9 +62,7 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::AppearanceThemeMode => {
             SettingValue::Text(theme_mode_text(settings.appearance.theme_mode))
         }
-        Slot::AppearanceFontSize => {
-            SettingValue::Number(settings.appearance.font_size as f64)
-        }
+        Slot::AppearanceFontSize => SettingValue::Number(settings.appearance.font_size as f64),
         Slot::AppearanceLocale => SettingValue::Text(settings.appearance.locale.clone()),
         Slot::AppearanceTabBarMaxWidth => {
             SettingValue::Number(settings.appearance.tab_bar_max_width as f64)
@@ -75,22 +73,22 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::EditorShowLineNumbers => SettingValue::Bool(settings.editor.show_line_numbers),
         Slot::EditorShowFolds => SettingValue::Bool(settings.editor.show_folds),
         Slot::EditorIndentFolds => SettingValue::Bool(settings.editor.indent_folding),
-        Slot::EditorFoldOpenKeywords => SettingValue::Text(settings.editor.fold_open_keywords.clone()),
-        Slot::EditorFoldCloseKeywords => SettingValue::Text(settings.editor.fold_close_keywords.clone()),
+        Slot::EditorFoldOpenKeywords => {
+            SettingValue::Text(settings.editor.fold_open_keywords.clone())
+        }
+        Slot::EditorFoldCloseKeywords => {
+            SettingValue::Text(settings.editor.fold_close_keywords.clone())
+        }
         Slot::EditorSoftWrap => SettingValue::Bool(settings.editor.soft_wrap),
         Slot::EditorAutoClose => SettingValue::Bool(settings.editor.auto_close),
         Slot::EditorSmartIndent => SettingValue::Bool(settings.editor.smart_indent),
         Slot::EditorInlineCompletion => SettingValue::Bool(settings.editor.inline_completion),
-        Slot::EditorDefaultTabSize => {
-            SettingValue::Number(settings.editor.default_tab_size as f64)
-        }
+        Slot::EditorDefaultTabSize => SettingValue::Number(settings.editor.default_tab_size as f64),
         Slot::EditorDefaultHardTabs => SettingValue::Bool(settings.editor.default_hard_tabs),
         Slot::EditorDefaultLineEnding => {
             SettingValue::Text(settings.editor.default_line_ending.clone())
         }
-        Slot::EditorDefaultEncoding => {
-            SettingValue::Text(settings.editor.default_encoding.clone())
-        }
+        Slot::EditorDefaultEncoding => SettingValue::Text(settings.editor.default_encoding.clone()),
         Slot::EditorFormatKeywordCase => {
             SettingValue::Text(settings.editor.format_keyword_case.clone())
         }
@@ -105,9 +103,7 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
             SettingValue::Bool(settings.navigator.show_name_type_short)
         }
         Slot::NavigatorRowEstimate => SettingValue::Bool(settings.navigator.row_estimate),
-        Slot::NavigatorShowInlineStats => {
-            SettingValue::Bool(settings.navigator.show_inline_stats)
-        }
+        Slot::NavigatorShowInlineStats => SettingValue::Bool(settings.navigator.show_inline_stats),
         Slot::NavigatorShowInlineComment => {
             SettingValue::Bool(settings.navigator.show_inline_comment)
         }
@@ -122,7 +118,9 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::NavigatorGlobalMask => return None,
         Slot::NavigatorShowChips => SettingValue::Bool(settings.navigator.show_chips),
         Slot::NavigatorShowSearch => SettingValue::Bool(settings.navigator.show_search),
-        Slot::NavigatorAutoConnectStartup => SettingValue::Bool(settings.navigator.auto_connect_on_startup),
+        Slot::NavigatorAutoConnectStartup => {
+            SettingValue::Bool(settings.navigator.auto_connect_on_startup)
+        }
         Slot::ResourcesKeepVersions => {
             SettingValue::Number(settings.resources.keep_versions as f64)
         }
@@ -144,26 +142,18 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ScratchpadToolbar => return None,
         // 分区高度上限（数值）：读写走分区拖拽 handle，无标量入口。
         Slot::ScratchpadGroupMaxH => SettingValue::Number(settings.scratchpad.group_max_h as f64),
-        Slot::InsightMemoryLimitMb => {
-            SettingValue::Number(settings.insight.memory_limit_mb as f64)
-        }
-        Slot::InsightFullScanConfirm => {
-            SettingValue::Bool(settings.insight.full_scan_confirm)
-        }
+        Slot::InsightMemoryLimitMb => SettingValue::Number(settings.insight.memory_limit_mb as f64),
+        Slot::InsightFullScanConfirm => SettingValue::Bool(settings.insight.full_scan_confirm),
         Slot::InsightWorkSetLimit => SettingValue::Number(settings.insight.work_set_limit as f64),
         Slot::InsightStatusUsage => SettingValue::Bool(settings.insight.status_usage),
-        Slot::ResultPanelFactStorage => SettingValue::Text(
-            settings.result_panel.fact_storage.as_str().to_string(),
-        ),
+        Slot::ResultPanelFactStorage => {
+            SettingValue::Text(settings.result_panel.fact_storage.as_str().to_string())
+        }
         Slot::ResultPanelShowColumnComments => {
             SettingValue::Bool(settings.result_panel.show_column_comments)
         }
-        Slot::ResultPanelShowTypeBadge => {
-            SettingValue::Bool(settings.result_panel.show_type_badge)
-        }
-        Slot::ResultPanelLoopSelection => {
-            SettingValue::Bool(settings.result_panel.loop_selection)
-        }
+        Slot::ResultPanelShowTypeBadge => SettingValue::Bool(settings.result_panel.show_type_badge),
+        Slot::ResultPanelLoopSelection => SettingValue::Bool(settings.result_panel.loop_selection),
         Slot::ResultPanelSelectOnModifierClick => {
             SettingValue::Bool(settings.result_panel.select_on_modifier_click)
         }
@@ -268,12 +258,8 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::NotificationSuccessToSystem => {
             SettingValue::Bool(settings.notifications.success_to_system)
         }
-        Slot::NotificationInfoToSystem => {
-            SettingValue::Bool(settings.notifications.info_to_system)
-        }
-        Slot::NotificationDoNotDisturb => {
-            SettingValue::Bool(settings.notifications.do_not_disturb)
-        }
+        Slot::NotificationInfoToSystem => SettingValue::Bool(settings.notifications.info_to_system),
+        Slot::NotificationDoNotDisturb => SettingValue::Bool(settings.notifications.do_not_disturb),
     })
 }
 
@@ -316,19 +302,100 @@ impl SettingsService {
             return false;
         };
         match slot {
-            Slot::AppearanceThemeMode | Slot::AppearanceFontSize | Slot::AppearanceLocale | Slot::AppearanceTabBarMaxWidth | Slot::AppearanceTabBarVariant => appearance::apply_slot(slot, value, window, cx),
-            Slot::EditorShowLineNumbers | Slot::EditorShowFolds | Slot::EditorIndentFolds | Slot::EditorFoldOpenKeywords | Slot::EditorFoldCloseKeywords | Slot::EditorSoftWrap | Slot::EditorAutoClose | Slot::EditorSmartIndent | Slot::EditorInlineCompletion | Slot::EditorDefaultTabSize | Slot::EditorDefaultHardTabs | Slot::EditorDefaultLineEnding | Slot::EditorDefaultEncoding | Slot::EditorFormatKeywordCase | Slot::EditorFormatIndentWidth | Slot::EditorFormatOnSave => editor::apply_slot(slot, value, window, cx),
-            Slot::NavigatorSourceShortCode | Slot::NavigatorShowTags | Slot::NavigatorShowScope | Slot::NavigatorShowNameTypeShort | Slot::NavigatorRowEstimate | Slot::NavigatorShowInlineStats | Slot::NavigatorShowInlineComment | Slot::NavigatorShowInlineSize | Slot::NavigatorShowChips | Slot::NavigatorShowSearch | Slot::NavigatorAutoConnectStartup | Slot::NavigatorFilters | Slot::NavigatorSavedViews | Slot::NavigatorVisibleDatabases | Slot::NavigatorGlobalMask => navigator::apply_slot(slot, value, window, cx),
-            Slot::ResourcesCollapsedGroups | Slot::ResourcesDefaultGroup | Slot::ResourcesKeepVersions | Slot::ResourcesDefaultSort => resources::apply_slot(slot, value, window, cx),
-            Slot::ConnectTimeoutMs | Slot::LanDisableTls => connection::apply_slot(slot, value, window, cx),
+            Slot::AppearanceThemeMode
+            | Slot::AppearanceFontSize
+            | Slot::AppearanceLocale
+            | Slot::AppearanceTabBarMaxWidth
+            | Slot::AppearanceTabBarVariant => appearance::apply_slot(slot, value, window, cx),
+            Slot::EditorShowLineNumbers
+            | Slot::EditorShowFolds
+            | Slot::EditorIndentFolds
+            | Slot::EditorFoldOpenKeywords
+            | Slot::EditorFoldCloseKeywords
+            | Slot::EditorSoftWrap
+            | Slot::EditorAutoClose
+            | Slot::EditorSmartIndent
+            | Slot::EditorInlineCompletion
+            | Slot::EditorDefaultTabSize
+            | Slot::EditorDefaultHardTabs
+            | Slot::EditorDefaultLineEnding
+            | Slot::EditorDefaultEncoding
+            | Slot::EditorFormatKeywordCase
+            | Slot::EditorFormatIndentWidth
+            | Slot::EditorFormatOnSave => editor::apply_slot(slot, value, window, cx),
+            Slot::NavigatorSourceShortCode
+            | Slot::NavigatorShowTags
+            | Slot::NavigatorShowScope
+            | Slot::NavigatorShowNameTypeShort
+            | Slot::NavigatorRowEstimate
+            | Slot::NavigatorShowInlineStats
+            | Slot::NavigatorShowInlineComment
+            | Slot::NavigatorShowInlineSize
+            | Slot::NavigatorShowChips
+            | Slot::NavigatorShowSearch
+            | Slot::NavigatorAutoConnectStartup
+            | Slot::NavigatorFilters
+            | Slot::NavigatorSavedViews
+            | Slot::NavigatorVisibleDatabases
+            | Slot::NavigatorGlobalMask => navigator::apply_slot(slot, value, window, cx),
+            Slot::ResourcesCollapsedGroups
+            | Slot::ResourcesDefaultGroup
+            | Slot::ResourcesKeepVersions
+            | Slot::ResourcesDefaultSort => resources::apply_slot(slot, value, window, cx),
+            Slot::ConnectTimeoutMs | Slot::LanDisableTls => {
+                connection::apply_slot(slot, value, window, cx)
+            }
             Slot::ProjectSortMode => projects::apply_slot(slot, value, window, cx),
             Slot::LogMinLevel => logging::apply_slot(slot, value, window, cx),
             Slot::StartupDefaultLeftPanel => startup::apply_slot(slot, value, window, cx),
-            Slot::ScratchpadGroupMaxH | Slot::ScratchpadToolbar => scratchpad::apply_slot(slot, value, window, cx),
-            Slot::InsightMemoryLimitMb | Slot::InsightFullScanConfirm | Slot::InsightWorkSetLimit | Slot::InsightStatusUsage => insight::apply_slot(slot, value, window, cx),
-            Slot::ResultPanelFactStorage | Slot::ResultPanelShowColumnComments | Slot::ResultPanelShowTypeBadge | Slot::ResultPanelLoopSelection | Slot::ResultPanelSelectOnModifierClick | Slot::ResultPanelPersistColumnWidths | Slot::ResultPanelNumberFormat | Slot::ResultPanelNullPlaceholder | Slot::ResultPanelBoolDisplay | Slot::ResultPanelAlignNumeric | Slot::ResultPanelAlignText | Slot::ResultPanelAlignTemporal | Slot::ResultPanelAlignBool | Slot::ResultPanelAlignBlob | Slot::ResultPanelColorNumeric | Slot::ResultPanelColorText | Slot::ResultPanelColorTemporal | Slot::ResultPanelColorBool | Slot::ResultPanelColorBlob | Slot::ResultPanelBgNumeric | Slot::ResultPanelBgText | Slot::ResultPanelBgTemporal | Slot::ResultPanelBgBool | Slot::ResultPanelBgBlob | Slot::ResultPanelFontNumeric | Slot::ResultPanelFontText | Slot::ResultPanelFontTemporal | Slot::ResultPanelFontBool | Slot::ResultPanelFontBlob => result_panel::apply_slot(slot, value, window, cx),
-            Slot::LayoutLocked | Slot::LayoutLeftSidebarWidth | Slot::LayoutRightSidebarWidth => layout::apply_slot(slot, value, window, cx),
-            Slot::NotificationSuccessAutohideSecs | Slot::NotificationWarningAutohideSecs | Slot::NotificationErrorAutohide | Slot::NotificationMergeWindowSecs | Slot::NotificationErrorToSystem | Slot::NotificationWarningToSystem | Slot::NotificationSuccessToSystem | Slot::NotificationInfoToSystem | Slot::NotificationDoNotDisturb => notifications::apply_slot(slot, value, window, cx),
+            Slot::ScratchpadGroupMaxH | Slot::ScratchpadToolbar => {
+                scratchpad::apply_slot(slot, value, window, cx)
+            }
+            Slot::InsightMemoryLimitMb
+            | Slot::InsightFullScanConfirm
+            | Slot::InsightWorkSetLimit
+            | Slot::InsightStatusUsage => insight::apply_slot(slot, value, window, cx),
+            Slot::ResultPanelFactStorage
+            | Slot::ResultPanelShowColumnComments
+            | Slot::ResultPanelShowTypeBadge
+            | Slot::ResultPanelLoopSelection
+            | Slot::ResultPanelSelectOnModifierClick
+            | Slot::ResultPanelPersistColumnWidths
+            | Slot::ResultPanelNumberFormat
+            | Slot::ResultPanelNullPlaceholder
+            | Slot::ResultPanelBoolDisplay
+            | Slot::ResultPanelAlignNumeric
+            | Slot::ResultPanelAlignText
+            | Slot::ResultPanelAlignTemporal
+            | Slot::ResultPanelAlignBool
+            | Slot::ResultPanelAlignBlob
+            | Slot::ResultPanelColorNumeric
+            | Slot::ResultPanelColorText
+            | Slot::ResultPanelColorTemporal
+            | Slot::ResultPanelColorBool
+            | Slot::ResultPanelColorBlob
+            | Slot::ResultPanelBgNumeric
+            | Slot::ResultPanelBgText
+            | Slot::ResultPanelBgTemporal
+            | Slot::ResultPanelBgBool
+            | Slot::ResultPanelBgBlob
+            | Slot::ResultPanelFontNumeric
+            | Slot::ResultPanelFontText
+            | Slot::ResultPanelFontTemporal
+            | Slot::ResultPanelFontBool
+            | Slot::ResultPanelFontBlob => result_panel::apply_slot(slot, value, window, cx),
+            Slot::LayoutLocked | Slot::LayoutLeftSidebarWidth | Slot::LayoutRightSidebarWidth => {
+                layout::apply_slot(slot, value, window, cx)
+            }
+            Slot::NotificationSuccessAutohideSecs
+            | Slot::NotificationWarningAutohideSecs
+            | Slot::NotificationErrorAutohide
+            | Slot::NotificationMergeWindowSecs
+            | Slot::NotificationErrorToSystem
+            | Slot::NotificationWarningToSystem
+            | Slot::NotificationSuccessToSystem
+            | Slot::NotificationInfoToSystem
+            | Slot::NotificationDoNotDisturb => notifications::apply_slot(slot, value, window, cx),
         }
     }
 }

@@ -1,11 +1,10 @@
 //! 连接默认值设置项的写入处理（`apply_slot`，由 `SettingsService::apply_by_key` 分发）与读写访问器。
 use gpui_kit::App;
 
+use crate::SettingsService;
 use crate::model::Settings;
 use crate::persistence::persist;
 use crate::registry::{SettingValue, Slot};
-use crate::SettingsService;
-
 
 /// 本域 slot 的标量写入处理；返回 `false` 表示拒绝（值形态不符 / 复合值 / 无法解析）。
 pub(crate) fn apply_slot(
@@ -15,18 +14,18 @@ pub(crate) fn apply_slot(
     cx: &mut App,
 ) -> bool {
     match slot {
-            Slot::ConnectTimeoutMs => {
-                let Some(ms) = value.as_number() else {
-                    return false;
-                };
-                SettingsService::set_connect_timeout_ms(ms.max(0.) as u64, cx);
-            }
-            Slot::LanDisableTls => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_lan_disable_tls(on, cx);
-            }
+        Slot::ConnectTimeoutMs => {
+            let Some(ms) = value.as_number() else {
+                return false;
+            };
+            SettingsService::set_connect_timeout_ms(ms.max(0.) as u64, cx);
+        }
+        Slot::LanDisableTls => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_lan_disable_tls(on, cx);
+        }
         _ => return false,
     }
     true

@@ -10,11 +10,11 @@
 //! driver（native duckdb 实现）与 engine duckdb（executor/accel）两侧共用。
 use std::sync::Arc;
 
+use crate::error::{CoreError, DatabaseError};
+use crate::models::ArrowBatch;
 use arrow::array::{ArrayRef, BinaryArray, BooleanArray, Float64Array, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use crate::error::{CoreError, DatabaseError};
-use crate::models::ArrowBatch;
 
 pub fn duckdb_rows_to_arrow(
     columns: &[String],

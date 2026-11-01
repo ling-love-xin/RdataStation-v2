@@ -132,7 +132,9 @@ impl Render for SettingsPage {
                 .bg(theme.colors.danger)
                 .text_xs()
                 .text_color(theme.colors.danger_foreground)
-                .child(format!("未能写入 settings.json：{err}（本次改动只在本进程生效）"))
+                .child(format!(
+                    "未能写入 settings.json：{err}（本次改动只在本进程生效）"
+                ))
         });
         // 骨架构造（纯函数）：节 → 页，行 → 分组项；值读写经闭包接 global。
         let skeleton = skeleton::build(&self.host, &self.notify);
@@ -150,13 +152,7 @@ impl Render for SettingsPage {
                     .flex_none()
                     .bg(theme.colors.border),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .child(skeleton),
-            )
+            .child(div().flex_1().min_h_0().w_full().child(skeleton))
             .when_some(notice, |d, notice| d.child(notice))
             .child(self.render_footer(cx))
             .key_context("settings")

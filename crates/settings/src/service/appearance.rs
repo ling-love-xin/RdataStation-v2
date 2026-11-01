@@ -3,12 +3,11 @@ use gpui_kit::App;
 use gpui_kit::component::Theme;
 use gpui_kit::px;
 
+use super::{explicit_theme_mode, theme_mode_from_text};
+use crate::SettingsService;
 use crate::model::{AppearanceMode, Settings};
 use crate::persistence::persist;
 use crate::registry::{SettingValue, Slot};
-use crate::SettingsService;
-use super::{explicit_theme_mode, theme_mode_from_text};
-
 
 /// 本域 slot 的标量写入处理；返回 `false` 表示拒绝（值形态不符 / 复合值 / 无法解析）。
 pub(crate) fn apply_slot(
@@ -18,65 +17,62 @@ pub(crate) fn apply_slot(
     cx: &mut App,
 ) -> bool {
     match slot {
-            Slot::AppearanceThemeMode => {
-                let Some(mode) = value.as_text().and_then(theme_mode_from_text) else {
-                    return false;
-                };
-                SettingsService::set_theme_mode(mode, window, cx);
+        Slot::AppearanceThemeMode => {
+            let Some(mode) = value.as_text().and_then(theme_mode_from_text) else {
+                return false;
+            };
+            SettingsService::set_theme_mode(mode, window, cx);
+        }
+        Slot::AppearanceFontSize => {
+            let Some(size) = value.as_number() else {
+                return false;
+            };
+            // 只认 12–20px（页面只给预设档；设置文件被手改坏时拒绝，不猜）。
+            if !(12.0..=20.0).contains(&size) {
+                return false;
             }
-            Slot::AppearanceFontSize => {
-                let Some(size) = value.as_number() else {
-                    return false;
-                };
-                // 只认 12–20px（页面只给预设档；设置文件被手改坏时拒绝，不猜）。
-                if !(12.0..=20.0).contains(&size) {
-                    return false;
-                }
-                SettingsService::set_font_size(size as f32, window, cx);
+            SettingsService::set_font_size(size as f32, window, cx);
+        }
+        Slot::AppearanceLocale => {
+            let Some(code) = value.as_text() else {
+                return false;
+            };
+            // 只认 zh / en（页面只给预设档；设置文件被手改坏时拒绝，不猜）。
+            if !(code == "zh" || code == "en") {
+                return false;
             }
-            Slot::AppearanceLocale => {
-                let Some(code) = value.as_text() else {
-                    return false;
-                };
-                // 只认 zh / en（页面只给预设档；设置文件被手改坏时拒绝，不猜）。
-                if !(code == "zh" || code == "en") {
-                    return false;
-                }
-                SettingsService::set_locale(&code, window, cx);
+            SettingsService::set_locale(&code, window, cx);
+        }
+        Slot::AppearanceTabBarMaxWidth => {
+            let Some(w) = value.as_number() else {
+                return false;
+            };
+            // 只认 100–600px（页面只给预设档；设置文件被手改坏时拒绝，不猜）。
+            if !(100.0..=600.0).contains(&w) {
+                return false;
             }
-            Slot::AppearanceTabBarMaxWidth => {
-                let Some(w) = value.as_number() else {
-                    return false;
-                };
-                // 只认 100–600px（页面只给预设档；设置文件被手改坏时拒绝，不猜）。
-                if !(100.0..=600.0).contains(&w) {
-                    return false;
-                }
-                {
-                    let settings = cx.global_mut::<Settings>();
-                    settings.appearance.tab_bar_max_width = w as f32;
-                }
-                persist(&cx.global::<Settings>().clone());
-                // 落盘后由 workbench 的 `on_settings_changed` 装配到 DockSkin。
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.appearance.tab_bar_max_width = w as f32;
             }
-            Slot::AppearanceTabBarVariant => {
-                let Some(v) = value.as_text() else {
-                    return false;
-                };
-                // 只认 TabVariant 五态的落盘值（页面只给预设档；手改坏时拒绝，不猜）。
-                if !matches!(
-                    v,
-                    "tab" | "outline" | "pill" | "segmented" | "underline"
-                ) {
-                    return false;
-                }
-                {
-                    let settings = cx.global_mut::<Settings>();
-                    settings.appearance.tab_bar_variant = v.to_string();
-                }
-                persist(&cx.global::<Settings>().clone());
-                // 落盘后由 workbench 的 `on_settings_changed` 装配到 DockSkin。
+            persist(&cx.global::<Settings>().clone());
+            // 落盘后由 workbench 的 `on_settings_changed` 装配到 DockSkin。
+        }
+        Slot::AppearanceTabBarVariant => {
+            let Some(v) = value.as_text() else {
+                return false;
+            };
+            // 只认 TabVariant 五态的落盘值（页面只给预设档；手改坏时拒绝，不猜）。
+            if !matches!(v, "tab" | "outline" | "pill" | "segmented" | "underline") {
+                return false;
             }
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.appearance.tab_bar_variant = v.to_string();
+            }
+            persist(&cx.global::<Settings>().clone());
+            // 落盘后由 workbench 的 `on_settings_changed` 装配到 DockSkin。
+        }
         _ => return false,
     }
     true
@@ -90,7 +86,11 @@ impl SettingsService {
     ///
     /// `System` 走 `Theme::sync_system_appearance`（按系统外观解析）；显式模式走
     /// `Theme::change`。
-    pub fn set_theme_mode(mode: AppearanceMode, mut window: Option<&mut gpui_kit::Window>, cx: &mut App) {
+    pub fn set_theme_mode(
+        mode: AppearanceMode,
+        mut window: Option<&mut gpui_kit::Window>,
+        cx: &mut App,
+    ) {
         {
             let settings = cx.global_mut::<Settings>();
             settings.appearance.theme_mode = mode;
@@ -159,7 +159,8 @@ impl SettingsService {
             None => {
                 for handle in cx.windows() {
                     // update 返回 Result（窗口可能已失效），此处无更优处理路径，显式忽略。
-                    let _ = handle.update(cx, |_view, window, _| window.set_rem_size(px(font_size)));
+                    let _ =
+                        handle.update(cx, |_view, window, _| window.set_rem_size(px(font_size)));
                 }
             }
         }

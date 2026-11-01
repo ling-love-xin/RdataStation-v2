@@ -151,8 +151,16 @@ mod tests {
         let en = &*EN;
         let missing_in_en: Vec<_> = zh.keys().filter(|k| !en.contains_key(*k)).collect();
         let extra_in_en: Vec<_> = en.keys().filter(|k| !zh.contains_key(*k)).collect();
-        assert!(missing_in_en.is_empty(), "en 缺失翻译键: {:?}", missing_in_en);
-        assert!(extra_in_en.is_empty(), "en 含 zh 没有的键: {:?}", extra_in_en);
+        assert!(
+            missing_in_en.is_empty(),
+            "en 缺失翻译键: {:?}",
+            missing_in_en
+        );
+        assert!(
+            extra_in_en.is_empty(),
+            "en 含 zh 没有的键: {:?}",
+            extra_in_en
+        );
     }
 
     /// 目录化资源在 En 模式下被 `tr()` 实际使用（防静态表时代遗留）。

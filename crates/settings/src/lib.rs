@@ -34,8 +34,7 @@ pub use persistence::{
 // tests 区（`use super::*`）依赖的持久化测试辅助，私有引入；公共路径见上方 re-export。
 #[allow(unused_imports)]
 use crate::persistence::{
-    load_settings_from, persist, publish_connection_defaults, save_settings_to,
-    set_last_save_error,
+    load_settings_from, persist, publish_connection_defaults, save_settings_to, set_last_save_error,
 };
 
 // 产品语义 token 已下沉到 `workbench_shell`（视图共用资产，特性 crate 也要用它取色），

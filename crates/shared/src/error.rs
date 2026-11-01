@@ -240,19 +240,26 @@ impl ErrorLocation {
 
     /// 四样都没有 = 这次拿不到位置。
     pub fn is_empty(&self) -> bool {
-        self.schema.is_none() && self.table.is_none() && self.column.is_none() && self.constraint.is_none()
+        self.schema.is_none()
+            && self.table.is_none()
+            && self.column.is_none()
+            && self.constraint.is_none()
     }
 
     /// 照人话写出来：`public.orders.amount` / `orders.tag，约束 uq_tag`；拿不到就是 `None`。
     ///
     /// 顺序有意如此：**对象在前、约束在后** —— 用户先找表，再看是哪条约束。
     pub fn display_text(&self) -> Option<String> {
-        let object = [self.schema.as_deref(), self.table.as_deref(), self.column.as_deref()]
-            .into_iter()
-            .flatten()
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join(".");
+        let object = [
+            self.schema.as_deref(),
+            self.table.as_deref(),
+            self.column.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(".");
         let mut parts: Vec<String> = Vec::new();
         if !object.is_empty() {
             parts.push(object);

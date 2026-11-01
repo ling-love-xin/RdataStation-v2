@@ -1,6 +1,6 @@
 //! 草稿箱设置 model（struct + 默认值 + 默认函数）。
-use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// 与面板 `ToolbarButtonKey::side()` 的默认口径一致——只记录用户显式改过的键。
 #[derive(Debug, Clone, Serialize, Deserialize)]

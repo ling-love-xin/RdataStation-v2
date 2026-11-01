@@ -1,7 +1,7 @@
 //! 数据源导航设置 model（struct + 默认值 + 默认函数）。
-use std::collections::BTreeMap;
 use super::default_true;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NavigatorFilters {

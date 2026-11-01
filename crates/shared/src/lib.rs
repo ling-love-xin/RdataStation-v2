@@ -28,9 +28,9 @@ pub mod utils;
 
 // 重新导出常用错误类型（与 v1 core/mod.rs 一致）
 pub use error::{
-    common_err, conn_err, invalid_arg, not_supported, query_err, storage_err, timeout, CommonError,
-    ConnectionError, CoreError, CoreResult, DatabaseError, ErrorCategory, StorageError,
-    TransactionState,
+    CommonError, ConnectionError, CoreError, CoreResult, DatabaseError, ErrorCategory,
+    StorageError, TransactionState, common_err, conn_err, invalid_arg, not_supported, query_err,
+    storage_err, timeout,
 };
 
 // 重新导出模型层
@@ -38,9 +38,9 @@ pub use models::{QueryResult, Row, Value};
 
 // 重新导出结果集事实层（L0 事实档，见 docs/analysis/结果集数据流-事实层显示层分离方案.md）
 pub use fact::{
-    dual_estimate, fact_export_mode, storage_choice, BATCHES_DUAL_FACTOR, CurrentTier,
-    FactColumnStats, FactError, FactExportMode, FactFrame, FactKind, FactTier, FactValue,
-    MEMORY_HIGH_WATERMARK, MEMORY_LOW_WATERMARK, StoragePref,
+    BATCHES_DUAL_FACTOR, CurrentTier, FactColumnStats, FactError, FactExportMode, FactFrame,
+    FactKind, FactTier, FactValue, MEMORY_HIGH_WATERMARK, MEMORY_LOW_WATERMARK, StoragePref,
+    dual_estimate, fact_export_mode, storage_choice,
 };
 
 // 重新导出拖动载体（编辑器 / 草稿箱的文件拖入）

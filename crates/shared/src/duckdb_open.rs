@@ -47,7 +47,7 @@ pub fn assert_native_format(path: &Path) -> Result<(), CoreError> {
                 "读取 DuckDB 文件元信息失败 {}: {}",
                 path.display(),
                 e
-            ))))
+            ))));
         }
     };
     // 目录 / 符号链接等特殊形态交给下游 `Connection::open` 报错，这里不越权。
@@ -145,10 +145,8 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "rds-duckdb-format-{}-{name}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("rds-duckdb-format-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("建临时目录");
         dir.join("analytics.duckdb")
     }
@@ -179,7 +177,8 @@ mod tests {
         }
         {
             let conn = Connection::open(&path).expect("建原生库");
-            conn.execute_batch("CREATE TABLE t (a INTEGER);").expect("建表");
+            conn.execute_batch("CREATE TABLE t (a INTEGER);")
+                .expect("建表");
         }
         assert_native_format(&path).expect("原生格式应放行");
     }
@@ -192,7 +191,10 @@ mod tests {
         std::fs::write(&path, head).expect("写 SQLite 头");
         let err = assert_native_format(&path).expect_err("SQLite 头必须被拒");
         let msg = format!("{err}");
-        assert!(msg.contains("不是 DuckDB 原生格式"), "错误信息应说明原因：{msg}");
+        assert!(
+            msg.contains("不是 DuckDB 原生格式"),
+            "错误信息应说明原因：{msg}"
+        );
         assert!(msg.contains("SQLite"), "错误信息应点出元凶：{msg}");
     }
 

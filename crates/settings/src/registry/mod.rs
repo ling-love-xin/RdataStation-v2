@@ -377,7 +377,9 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::NavigatorSavedViews => KindTag::Composite,
         Slot::NavigatorVisibleDatabases => KindTag::Composite,
         Slot::NavigatorGlobalMask => KindTag::Composite,
-        Slot::NavigatorShowChips | Slot::NavigatorShowSearch | Slot::NavigatorAutoConnectStartup => KindTag::Bool,
+        Slot::NavigatorShowChips
+        | Slot::NavigatorShowSearch
+        | Slot::NavigatorAutoConnectStartup => KindTag::Bool,
         Slot::LanDisableTls => KindTag::BoolPair,
         Slot::ProjectSortMode => KindTag::Enum,
         Slot::LogMinLevel => KindTag::Enum,
@@ -390,8 +392,10 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::InsightFullScanConfirm | Slot::InsightStatusUsage => KindTag::Bool,
         Slot::ResultPanelFactStorage => KindTag::Enum,
         Slot::ResultPanelShowColumnComments => KindTag::Bool,
-        Slot::ResultPanelShowTypeBadge | Slot::ResultPanelLoopSelection
-        | Slot::ResultPanelSelectOnModifierClick | Slot::ResultPanelPersistColumnWidths => KindTag::Bool,
+        Slot::ResultPanelShowTypeBadge
+        | Slot::ResultPanelLoopSelection
+        | Slot::ResultPanelSelectOnModifierClick
+        | Slot::ResultPanelPersistColumnWidths => KindTag::Bool,
         // 【类型样式】23 项全是枚举（设置页下拉）。
         Slot::ResultPanelNumberFormat
         | Slot::ResultPanelNullPlaceholder
@@ -592,7 +596,9 @@ pub fn page_groups(section: &str) -> Vec<(&'static str, Option<&'static str>)> {
 
 /// 上设置页的行（`entry` 非 `Module`）；页面只渲染这些。
 pub fn page_rows() -> impl Iterator<Item = &'static SettingSpec> {
-    registry().iter().filter(|s| s.entry != SettingEntry::Module)
+    registry()
+        .iter()
+        .filter(|s| s.entry != SettingEntry::Module)
 }
 
 // ===== 契约测试：登记表 ↔ 模型 的三条不变式 =====
@@ -882,7 +888,11 @@ mod tests {
         for s in page_rows() {
             let k = (s.section, s.group);
             if let Some(existing) = labels.get(&k) {
-                assert_eq!(*existing, s.group_label, "分组 `{}` 的显示名不一致", s.group);
+                assert_eq!(
+                    *existing, s.group_label,
+                    "分组 `{}` 的显示名不一致",
+                    s.group
+                );
             } else {
                 labels.insert(k, s.group_label);
             }
@@ -898,7 +908,11 @@ mod tests {
                 }
             }
             let actual: Vec<&str> = groups.iter().map(|(g, _)| *g).collect();
-            assert_eq!(actual, expected, "节 `{}` 的 page_groups 顺序与登记不一致", section);
+            assert_eq!(
+                actual, expected,
+                "节 `{}` 的 page_groups 顺序与登记不一致",
+                section
+            );
             if groups.len() > 1 {
                 for (_, label) in groups {
                     assert!(label.is_some(), "多分组节 `{}` 的分组必须有标题", section);
@@ -925,7 +939,10 @@ mod tests {
     /// 上页的行必须是标量 + 可写；数值行必须有预设档。
     #[test]
     fn page_rows_are_scalar_and_writable() {
-        for s in registry().iter().filter(|s| s.entry != SettingEntry::Module) {
+        for s in registry()
+            .iter()
+            .filter(|s| s.entry != SettingEntry::Module)
+        {
             let slot = slot_for(s.key).expect("上页的项必须有槽位");
             assert!(slot_is_scalar(slot), "`{}` 是复合值，不能上页", s.key);
             assert_ne!(
@@ -984,7 +1001,9 @@ mod tests {
                     matches!(s.default_value(), Some(SettingValue::Bool(_)))
                 }
                 KindTag::Number => matches!(s.default_value(), Some(SettingValue::Number(_))),
-                KindTag::Enum | KindTag::Text => matches!(s.default_value(), Some(SettingValue::Text(_))),
+                KindTag::Enum | KindTag::Text => {
+                    matches!(s.default_value(), Some(SettingValue::Text(_)))
+                }
                 KindTag::Composite => s.default_value().is_none(),
             };
             assert!(ok, "`{}` 的默认值形态与登记形态不符", s.key);

@@ -1,11 +1,10 @@
 //! 布局设置项的写入处理（`apply_slot`，由 `SettingsService::apply_by_key` 分发）与读写访问器。
 use gpui_kit::App;
 
+use crate::SettingsService;
 use crate::model::Settings;
 use crate::persistence::persist;
 use crate::registry::{SettingValue, Slot};
-use crate::SettingsService;
-
 
 /// 本域 slot 的标量写入处理；返回 `false` 表示拒绝（值形态不符 / 复合值 / 无法解析）。
 pub(crate) fn apply_slot(
@@ -15,30 +14,30 @@ pub(crate) fn apply_slot(
     cx: &mut App,
 ) -> bool {
     match slot {
-            Slot::LayoutLocked => {
-                let Some(on) = value.as_bool() else {
-                    return false;
-                };
-                SettingsService::set_layout_locked(on, cx);
+        Slot::LayoutLocked => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_layout_locked(on, cx);
+        }
+        Slot::LayoutLeftSidebarWidth => {
+            let Some(n) = value.as_number() else {
+                return false;
+            };
+            if !(100.0..=2000.0).contains(&n) {
+                return false;
             }
-            Slot::LayoutLeftSidebarWidth => {
-                let Some(n) = value.as_number() else {
-                    return false;
-                };
-                if !(100.0..=2000.0).contains(&n) {
-                    return false;
-                }
-                SettingsService::set_layout_left_sidebar_width(n as i64, cx);
+            SettingsService::set_layout_left_sidebar_width(n as i64, cx);
+        }
+        Slot::LayoutRightSidebarWidth => {
+            let Some(n) = value.as_number() else {
+                return false;
+            };
+            if !(100.0..=2000.0).contains(&n) {
+                return false;
             }
-            Slot::LayoutRightSidebarWidth => {
-                let Some(n) = value.as_number() else {
-                    return false;
-                };
-                if !(100.0..=2000.0).contains(&n) {
-                    return false;
-                }
-                SettingsService::set_layout_right_sidebar_width(n as i64, cx);
-            }
+            SettingsService::set_layout_right_sidebar_width(n as i64, cx);
+        }
         _ => return false,
     }
     true
