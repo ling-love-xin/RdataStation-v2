@@ -80,7 +80,7 @@ div().border_b(ui::HAIRLINE)
 | 侧边栏 | `sidebar` / `sidebar_border` / `sidebar_accent` / `sidebar_accent_foreground` |
 | 活动栏 | `secondary`（背景）+ `sidebar_accent_foreground`（激活条 / 激活图标） |
 | 标题栏 | `title_bar` / `title_bar_border`；挖空槽 `sidebar`（深一档） |
-| 状态栏 | `primary`（背景）+ `primary_foreground`（文字，成对保证对比度） |
+| 状态栏 | `status_bar`（背景）+ `muted_foreground`（文字）——组件 `StatusBar` 硬编码取 `muted_foreground`，故底色保持中性；品牌色状态栏须自绘并显式给白字（见色板 §6） |
 | 列表 / 表格 | `list*` / `table*` |
 | 弹层 | `popover` / `overlay` / `border` |
 | 焦点环 | `ring` |
@@ -90,7 +90,7 @@ div().border_b(ui::HAIRLINE)
 - **标题栏**：高 2.25rem，无窗口标题；logo 1.25rem；挖空槽 1.625rem 高 + 0.875rem 内距；Quick Open 入口 20rem×1.625rem；窗口控制由 `TitleBar` 组件自带
 - **活动栏**：宽 3rem；单项 2.75×2.5rem；激活条 2px（左栏在左、右栏在右）
 - **Dock 边栏**：左 15rem / 右 17.5rem 起步（`set_dock_size`，用户可拖拽）
-- **状态栏**：品牌色 + 白字；左右各一个自绘「完全隐藏 / 恢复」开关
+- **状态栏**：中性 chrome 底（`status_bar`）+ `muted_foreground` 文字；左右各一个自绘「完全隐藏 / 恢复」开关（品牌色变体须自绘，见色板 §6）
 - **徽标（计数徽章）**：最小 1.125rem（18px，与 `NAV_BADGE_SIZE` 同档）；内距 3/5px；**圆角 11px 胶囊**；字号 @16 取 `text_sm`（13–14px）；长文本变体圆角 2px；活动栏角标 ≥10–11px（不取 9px）——规格来源 VS Code `countBadge`，见 `docs/architecture/ui/ui-design-spec.md` §4 与 `vscode-ui-design-system.md` §4.5
 - **换算纪律**：以 VS Code（13px 基准）为参照时一律「×16/13≈1.23 → 圆整 4px 网格」，换算依据登记在 `ui.rs` 模块头；11px 元信息字号与 22px 紧凑档**禁止引入**
 - **树节点**：行高 1.5rem（数据源导航树按虚拟列表用 `NAV_ROW_*`：分组 24 / 连接 26 / 对象 22）；缩进 = 0.5rem + 0.875rem × depth；激活条 2px；标题 `text_sm`（导航树按密度用 `text_xs`）；**悬停不覆盖激活态**；类别靠形状（图标）而非颜色

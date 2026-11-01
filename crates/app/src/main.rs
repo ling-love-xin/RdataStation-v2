@@ -14,6 +14,8 @@
 //! 数据根位置见 `docs/architecture/runtime/data-paths.md`：默认 = 可执行文件所在目录
 //! （安装目录），`RDS_HOME` 可覆盖；日志见 `docs/architecture/runtime/logging.md`。
 
+use std::collections::HashSet;
+
 use analytics_resource::commands::{
     ClearSearch, DeleteSelected, FocusSearch, RenameSelected, SelectAllRows,
 };
@@ -511,6 +513,14 @@ fn init_global_system() {
 /// gpui-kit 默认主题渲染；此处先同步注册，保证 RDS 主题立即可用。
 fn load_theme_assets(themes_dir: &std::path::Path, cx: &mut App) {
     let registry = ThemeRegistry::global_mut(cx);
+    // 键名白名单（由 tools/gen_theme_keys.py 从 gpui-kit schema 生成，与守门测试同源）。
+    let known_keys = load_theme_key_whitelist(themes_dir);
+    if known_keys.is_none() {
+        eprintln!(
+            "[startup] 未读到 theme-keys.json（{}），跳过主题键名校验",
+            themes_dir.join("theme-keys.json").display()
+        );
+    }
     let Ok(entries) = std::fs::read_dir(themes_dir) else {
         return;
     };
@@ -519,17 +529,73 @@ fn load_theme_assets(themes_dir: &std::path::Path, cx: &mut App) {
         if path.extension().and_then(|s| s.to_str()) != Some("json") {
             continue;
         }
-        // 产品语义 token 不是主题文件（结构不同），由 `attach_product_tokens` 单独加载。
-        if path.file_name().and_then(|s| s.to_str()) == Some("product-tokens.json") {
+        // 产品语义 token 不是主题文件（结构不同），由 `attach_product_tokens` 单独加载；
+        // 键名白名单同理，它只是校验用的清单。
+        let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+        if file_name == "product-tokens.json" || file_name == "theme-keys.json" {
             continue;
         }
         match std::fs::read_to_string(&path) {
             Ok(content) => {
+                validate_theme_color_keys(&path, &content, known_keys.as_ref());
                 if let Err(e) = registry.load_themes_from_str(&content) {
                     eprintln!("[startup] 主题文件解析失败 {}: {e}", path.display());
                 }
             }
             Err(e) => eprintln!("[startup] 主题文件读取失败 {}: {e}", path.display()),
+        }
+    }
+}
+
+/// 读 `assets/themes/theme-keys.json` 作为 colors 键名白名单；缺失时返回 `None`（不阻塞启动）。
+fn load_theme_key_whitelist(themes_dir: &std::path::Path) -> Option<HashSet<String>> {
+    let content = std::fs::read_to_string(themes_dir.join("theme-keys.json")).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(&content).ok()?;
+    let keys = value.get("keys")?.as_array()?;
+    let set = keys
+        .iter()
+        .filter_map(|v| v.as_str())
+        .map(str::to_string)
+        .collect::<HashSet<String>>();
+    if set.is_empty() {
+        return None;
+    }
+    Some(set)
+}
+
+/// 校验主题 JSON 里 `colors` 的键名是否都在白名单内。
+///
+/// `ThemeConfigColors` 没有 `deny_unknown_fields`，未知键会被 serde **静默忽略**，
+/// 结果是该 token 回退 gpui-kit 默认色（默认蓝主题掺进珊瑚 UI 里）——不报错、极难排查，
+/// 故在此显式告警。校验失败不阻断加载（主题本身仍可用）。
+fn validate_theme_color_keys(
+    path: &std::path::Path,
+    content: &str,
+    known: Option<&HashSet<String>>,
+) {
+    let Some(known) = known else { return };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(content) else {
+        return;
+    };
+    let Some(themes) = value.get("themes").and_then(|v| v.as_array()) else {
+        return;
+    };
+    for theme in themes {
+        let name = theme.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+        let Some(colors) = theme.get("colors").and_then(|v| v.as_object()) else {
+            continue;
+        };
+        let unknown = colors
+            .keys()
+            .filter(|k| !known.contains(*k))
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        if !unknown.is_empty() {
+            eprintln!(
+                "[startup] 主题 {name}（{}）含 {} 个未知 colors 键，将被静默忽略并回退默认色：{unknown:?}",
+                path.display(),
+                unknown.len()
+            );
         }
     }
 }

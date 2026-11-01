@@ -9,6 +9,8 @@ name: CI
 # 有意不跑（理由见 docs/architecture/release/release-pipeline.md §9）：
 #   - 测试：GPUI 窗口测试要图形栈（Linux runner 无显示服务、Windows runner 只有软件适配
 #     器），2000+ 项的权威口径仍是本机 `cargo test-all`（基线见 module-status.md）
+#     —— 唯一例外是下面的 `ui_guard` job：`rds-ui-guard` 是纯源码扫描，不碰 GPUI、
+#     不吃 DuckDB、1.5 秒跑完，不跑它就等于把 UI 契约守门留在无人值守状态。
 #   - `cargo fmt --check`：存量文件有 rustfmt 漂移（本仓只格式化本轮 hunk），一刀切会全红
 #   - 告警不设硬门禁：存量告警未清零前 `-- -D warnings` 会直接红掉；清零后再加（一行的事）
 #
@@ -88,3 +90,34 @@ jobs:
       # `-j 2`：与 README / .cargo/config.toml 同口径（重型 crate 并发编译吃满内存）
       - name: clippy-all（含全量 check）
         run: cargo clippy-all -j 2
+
+  # 全工作区 UI 契约守门：裸色值/裸尺寸基线 + 主题资产键名合法性。
+  #
+  # 单独开一个 job（而不是挂在 clippy 上）的理由：它**不需要** DuckDB 内核，也不装
+  # Linux 系统依赖，全新检出即可跑；挂在 clippy 上会白白等几十分钟的库下载与构建。
+  ui_guard:
+    name: ui-guard (UI 契约守门)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      # 同 clippy job：`.cargo/config.toml` 把 TEMP 钉到仓库内 `.rds/tmp`，全新检出里没有
+      - name: 预建 TEMP 目录
+        run: mkdir -p .rds/tmp
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Cargo 依赖
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ui-guard
+
+      # 只编 `rds-ui-guard` 一个 crate（零产品依赖，dev-dep 仅 serde_json）。
+      # 主题资产 / vendor schema / product-tokens 都由它直接读文件校验，
+      # 因此 gpui-kit 升级后键数变化、资产写错键名，这里都会红。
+      - name: UI 契约守门
+        run: cargo test -p rds-ui-guard

@@ -24,9 +24,12 @@ impl ResultPanel {
             .flex()
             .items_center()
             .justify_center()
-            // 遮罩：半透明黑（深浅模式通用；theme.colors 无 scrim 字段）。无点击关闭
-            // （kit Div 无 on_click，交互走 ✕ 按钮 / Esc）
-            .bg(gpui::hsla(0., 0., 0., 0.45))
+            // 遮罩：走主题 `overlay` token（明暗各一套），不再写死半透明黑。
+            // ⚠️ `overlay` 与 Quick Open 的遮罩是同一个 token（palette.rs:715），此处靠它表达
+            // 「模态」强度；两者若要分档，须等 schema 支持独立 scrim 键（0.8.1 无，
+            // colors 内写未知键会被 serde 忽略并回退透明）。
+            // 无点击关闭（kit Div 无 on_click，交互走 ✕ 按钮 / Esc）
+            .bg(theme.colors.overlay)
             .debug_selector(|| "editor-result-sql-dialog".to_string())
             .on_key_down(move |event, _window, app| {
                 if event.keystroke.key == "escape" {

@@ -8142,6 +8142,7 @@ dependencies = [
  "rds-plugin",
  "rds-settings",
  "rds-workbench",
+ "serde_json",
  "tokio",
  "tracing",
  "windows-sys 0.59.0",
@@ -8617,6 +8618,13 @@ dependencies = [
  "rds-shared",
  "rusqlite",
  "uuid",
+]
+
+[[package]]
+name = "rds-ui-guard"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

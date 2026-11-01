@@ -3,225 +3,108 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RdataStation v2 明暗主题配色方案</title>
+<title>RdataStation 主题色卡 · 由 rds-theme.json 生成</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #141414; font-family: "Microsoft YaHei", "Segoe UI", sans-serif; color: #d4d4d4; padding: 20px; }
   h1 { font-size: 16px; color: #fff; margin-bottom: 4px; }
-  .sub { font-size: 12px; color: #9a9a9a; margin-bottom: 18px; }
+  .sub { font-size: 12px; color: #9a9a9a; margin-bottom: 18px; line-height: 1.6; }
   .cols { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
-
-  /* 主题面板 */
-  .panel { flex: 1; min-width: 430px; border: 1px solid #3c3c3c; border-radius: 8px; overflow: hidden; background: #1e1e1e; }
-  .panel.light { background: #ffffff; border-color: #d4d4d4; }
-  .panel-head { padding: 10px 14px; font-size: 13px; font-weight: 600; border-bottom: 1px solid; }
-  .panel.dark .panel-head { background: #1e1e1e; color: #fff; border-color: #3c3c3c; }
-  .panel.light .panel-head { background: #f3f3f3; color: #333; border-color: #e7e7e7; }
-  .panel-head .mode { font-size: 11px; font-weight: 400; opacity: .7; margin-left: 8px; }
-
-  /* 迷你窗口示意 */
-  .win { border-radius: 6px; overflow: hidden; margin: 12px 14px 0; border: 1px solid; }
-  .panel.dark .win { border-color: #3c3c3c; }
-  .panel.light .win { border-color: #d4d4d4; }
-  .win-title { display: flex; align-items: center; height: 28px; padding: 0 8px; font-size: 11px; }
-  .panel.dark .win-title { background: #323233; color: #9a9a9a; }
-  .panel.light .win-title { background: #dddddd; color: #616161; }
-  .win-logo { width: 14px; height: 14px; border-radius: 3px; margin-right: 6px; }
-  .panel.dark .win-logo { background: linear-gradient(135deg, #E8735A, #F5A188); }
-  .panel.light .win-logo { background: linear-gradient(135deg, #C25B46, #E8735A); }
-  .win-cutout { font-size: 10px; padding: 2px 8px; border-radius: 4px; border: 1px dashed; }
-  .panel.dark .win-cutout { background: #252526; border-color: #E8846F; color: #9cdcfe; margin-left: 4px; }
-  .panel.light .win-cutout { background: #f3f3f3; border-color: #C25B46; color: #333; margin-left: 4px; }
-  .win-search { margin-left: auto; width: 120px; height: 18px; border-radius: 3px; font-size: 9px; display: flex; align-items: center; padding: 0 6px; }
-  .panel.dark .win-search { background: #3c3c3c; border: 1px solid #E8846F; color: #8a8a8a; }
-  .panel.light .win-search { background: #fff; border: 1px solid #C25B46; color: #8e8e8e; }
-  .win-ctrl { display: flex; margin-left: 8px; gap: 2px; }
-  .win-ctrl span { width: 22px; height: 18px; display: flex; align-items: center; justify-content: center; font-size: 9px; }
-  .win-body { display: flex; height: 140px; }
-  .win-act { width: 22px; display: flex; flex-direction: column; align-items: center; padding-top: 6px; font-size: 10px; gap: 6px; }
-  .panel.dark .win-act { background: #333333; color: #858585; }
-  .panel.light .win-act { background: #ececec; color: #616161; }
-  .win-act .on { color: #fff; border-left: 2px solid #fff; }
-  .panel.light .win-act .on { color: #333; border-left-color: #C25B46; }
-  .win-side { width: 70px; font-size: 9px; padding: 8px; line-height: 1.7; }
-  .panel.dark .win-side { background: #252526; color: #cccccc; border-right: 1px solid #3c3c3c; }
-  .panel.light .win-side { background: #f3f3f3; color: #616161; border-right: 1px solid #e7e7e7; }
-  .win-side .sel { display: inline-block; padding: 0 4px; border-radius: 2px; }
-  .panel.dark .win-side .sel { background: #37373d; color: #fff; }
-  .panel.light .win-side .sel { background: #e4e4e4; color: #333; }
-  .win-editor { flex: 1; font-family: Consolas, monospace; font-size: 9px; padding: 8px; line-height: 1.7; }
-  .panel.dark .win-editor { background: #1e1e1e; color: #d4d4d4; }
-  .panel.light .win-editor { background: #ffffff; color: #000; }
-  .win-status { display: flex; align-items: center; justify-content: space-between; height: 20px; font-size: 9px; color: #fff; padding: 0 8px; }
-  .panel.dark .win-status { background: #A84A38; }
-  .panel.light .win-status { background: #C25B46; }
-
-  /* token 色卡 */
-  .section { padding: 14px; }
-  .section h3 { font-size: 12px; margin-bottom: 10px; font-weight: 600; }
-  .panel.dark .section h3 { color: #fff; }
-  .panel.light .section h3 { color: #333; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-  .chip { display: flex; align-items: center; gap: 8px; font-size: 10px; }
-  .panel.dark .chip { color: #cccccc; }
-  .panel.light .chip { color: #616161; }
-  .sw { width: 26px; height: 18px; border-radius: 3px; border: 1px solid rgba(0,0,0,.15); flex: none; }
-  .chip .name { flex: 1; }
-  .chip .hex { opacity: .65; font-family: Consolas, monospace; }
-
-  /* 语法高亮 */
-  pre.sql { font-family: Consolas, monospace; font-size: 11px; line-height: 1.8; padding: 10px 12px; border-radius: 6px; margin-top: 8px; border: 1px solid; overflow-x: auto; }
-  .panel.dark pre.sql { background: #1e1e1e; border-color: #3c3c3c; }
-  .panel.light pre.sql { background: #ffffff; border-color: #e7e7e7; }
-  .panel.dark .kw { color: #569CD6; } .panel.light .kw { color: #0000FF; }
-  .panel.dark .st { color: #CE9178; } .panel.light .st { color: #A31515; }
-  .panel.dark .fn { color: #DCDCAA; } .panel.light .fn { color: #795E26; }
-  .panel.dark .cm { color: #6A9955; } .panel.light .cm { color: #008000; }
-  .panel.dark .nu { color: #B5CEA8; } .panel.light .nu { color: #098658; }
-  .panel.dark .ty { color: #4EC9B0; } .panel.light .ty { color: #267F99; }
-  .panel.dark .pr { color: #9CDCFE; } .panel.light .pr { color: #0451A5; }
-
-  .foot { margin-top: 16px; font-size: 11px; color: #8a8a8a; line-height: 1.8; }
-  .foot code { background: #252526; padding: 1px 6px; border-radius: 3px; color: #9cdcfe; }
+  .panel { flex: 1; min-width: 420px; border: 1px solid #3c3c3c; border-radius: 8px; overflow: hidden; }
+  .panel-head { padding: 10px 14px; font-size: 13px; font-weight: 600; border-bottom: 1px solid; display: flex; justify-content: space-between; }
+  .panel-head .n { font-size: 11px; font-weight: 400; opacity: .7; }
+  .win { margin: 12px 14px 0; border-radius: 6px; overflow: hidden; font-size: 10px; }
+  .win-title { display: flex; align-items: center; height: 26px; padding: 0 8px; }
+  .win-logo { width: 13px; height: 13px; border-radius: 3px; margin-right: 6px; }
+  .win-cutout { padding: 2px 8px; border-radius: 4px; font-size: 9px; }
+  .win-body { display: flex; height: 118px; }
+  .win-act { width: 20px; display: flex; flex-direction: column; align-items: center; padding-top: 6px; gap: 6px; font-size: 9px; }
+  .win-act .on { width: 100%; text-align: center; }
+  .win-side { width: 74px; padding: 8px; line-height: 1.8; font-size: 9px; }
+  .win-side .sel { display: block; padding: 0 4px; border-radius: 2px; }
+  .win-editor { flex: 1; padding: 8px; line-height: 1.7; font-size: 9px; font-family: Consolas, monospace; }
+  .win-status { display: flex; align-items: center; height: 19px; padding: 0 8px; font-size: 9px; justify-content: space-between; }
+  .section { padding: 12px 14px; }
+  .gname { font-size: 11px; font-weight: 600; margin: 10px 0 6px; padding-bottom: 4px; border-bottom: 1px solid; opacity: .85; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+  .sw { border-radius: 5px; overflow: hidden; border: 1px solid; }
+  .sw .chip { height: 30px; }
+  .sw .meta { padding: 3px 5px; font-size: 9px; line-height: 1.35; }
+  .sw .meta .k { display: block; opacity: .8; word-break: break-all; }
+  .sw .meta .v { display: block; font-family: Consolas, monospace; opacity: .95; }
+  table { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 6px; }
+  td, th { padding: 3px 5px; text-align: left; border-bottom: 1px solid rgba(128,128,128,.25); }
+  .ok { color: #89D185; } .bad { color: #F14C4C; font-weight: 600; }
+  .foot { margin-top: 18px; font-size: 11px; color: #8a8a8a; line-height: 1.7; }
 </style>
 </head>
 <body>
-<h1>RdataStation v2 明暗主题配色方案</h1>
-<div class="sub">VSCode 灰度骨架 + 品牌 coral（#E8735A 系）· 落地文件：assets/themes/rds-theme.json</div>
+<h1>RdataStation 主题色卡</h1>
+<p class="sub">
+  由 <code>assets/themes/rds-theme.json</code> 自动生成 —— 改色后跑 <code>python tools/gen_theme_preview.py</code> 重新生成。<br>
+  生成时间 2026-11-01 23:50 · 色值权威来源 <code>docs/architecture/theme/theme-tokens-complete.md</code>
+</p>
+<div class="cols" id="cols"></div>
+<p class="foot">
+  对比度判定：正文 / 控件文字 ≥ 4.5:1。选中态 <code>list.active</code> / <code>table.active</code> 的 alpha 若超过 0.2 会被 schema 的 clamp_alpha 静默压缩（表现为"选中看不见"），资产里已按上限给值。<br>
+  状态栏：gpui-kit <code>StatusBar</code> 组件文字硬编码取 <code>muted_foreground</code>，故底色保持中性 —— 珊瑚底配灰字仅 1.08:1，不可行（详见色板文档 §6）。
+</p>
+<script>
+const DATA = {"RDS Light":{"colors":{"background":"#FFFFFF","foreground":"#333333","border":"#D4D4D4","input.border":"#B0B0B0","caret":"#BC5340","selection.background":"#ADD6FF4D","overlay":"#00000033","ring":"#BC5340","window.border":"#D4D4D4","link":"#BC5340","link.hover":"#A8452F","link.active":"#943B29","sidebar.background":"#F8F8F8","sidebar.foreground":"#616161","sidebar.border":"#E7E7E7","sidebar.accent.background":"#E8E8E8","sidebar.accent.foreground":"#333333","sidebar.primary.background":"#BC5340","sidebar.primary.foreground":"#FFFFFF","title_bar.background":"#F8F8F8","title_bar.border":"#D4D4D4","status_bar.background":"#F3F3F3","status_bar.border":"#D4D4D4","tab.background":"#F8F8F8","tab.foreground":"#616161","tab.active.background":"#FFFFFF","tab.active.foreground":"#333333","tab_bar.background":"#F8F8F8","tab_bar.segmented.background":"#F3F3F3","popover.background":"#FFFFFF","popover.foreground":"#333333","group_box.background":"#F5F5F5","group_box.foreground":"#333333","group_box.title.foreground":"#616161","accordion.background":"#F5F5F5","list.background":"#FFFFFF","list.hover.background":"#F0F0F0","list.active.background":"#BC534033","list.active.border":"#BC5340","list.even.background":"#FAFAFA","list.head.background":"#FAFAFA","table.background":"#FFFFFF","table.hover.background":"#F0F0F0","table.active.background":"#BC534033","table.active.border":"#BC5340","table.even.background":"#FAFAFA","table.head.background":"#F5F5F5","table.head.foreground":"#616161","table.foot.background":"#F5F5F5","table.foot.foreground":"#616161","table.row.border":"#E1E1E1","description_list.label.background":"#F5F5F5","description_list.label.foreground":"#616161","button.background":"#F3F3F3","button.foreground":"#333333","button.hover.background":"#E8E8E8","button.active.background":"#DCDCDC","button.primary.background":"#BC5340","button.primary.foreground":"#FFFFFF","button.primary.hover.background":"#A8452F","button.primary.active.background":"#943B29","button.secondary.background":"#F3F3F3","button.secondary.foreground":"#333333","button.secondary.hover.background":"#E8E8E8","button.secondary.active.background":"#DCDCDC","button.danger.background":"#B91C1C","button.danger.foreground":"#FFFFFF","button.danger.hover.background":"#991919","button.danger.active.background":"#7F1515","button.success.background":"#15803D","button.success.foreground":"#FFFFFF","button.success.hover.background":"#116932","button.success.active.background":"#0E5328","button.warning.background":"#A16207","button.warning.foreground":"#FFFFFF","button.warning.hover.background":"#854F06","button.warning.active.background":"#6B3F05","button.info.background":"#1D4ED8","button.info.foreground":"#FFFFFF","button.info.hover.background":"#1A43B8","button.info.active.background":"#163796","primary.background":"#BC5340","primary.foreground":"#FFFFFF","primary.hover.background":"#A8452F","primary.active.background":"#943B29","secondary.background":"#F3F3F3","secondary.foreground":"#333333","secondary.hover.background":"#E8E8E8","secondary.active.background":"#DCDCDC","accent.background":"#BC53401A","accent.foreground":"#333333","muted.background":"#F3F3F3","muted.foreground":"#6E6E6E","success.background":"#15803D","success.foreground":"#FFFFFF","success.hover.background":"#116932","success.active.background":"#0E5328","danger.background":"#B91C1C","danger.foreground":"#FFFFFF","danger.hover.background":"#991919","danger.active.background":"#7F1515","warning.background":"#A16207","warning.foreground":"#FFFFFF","warning.hover.background":"#854F06","warning.active.background":"#6B3F05","info.background":"#1D4ED8","info.foreground":"#FFFFFF","info.hover.background":"#1A43B8","info.active.background":"#163796","scrollbar.background":"#FAFAFA00","scrollbar.thumb.background":"#A3A3A3E6","scrollbar.thumb.hover.background":"#8A8A8A","skeleton.background":"#E8E8E8","slider.background":"#D4D4D4","slider.thumb.background":"#BC5340","switch.background":"#D4D4D4","switch.thumb.background":"#FFFFFF","progress.bar.background":"#BC5340","drag.border":"#BC5340A6","drop_target.background":"#BC534033","chart.1":"#2563EB","chart.2":"#0891B2","chart.3":"#BC5340","chart.4":"#B45309","chart.5":"#9333EA","chart.bullish":"#16A34A","chart.bearish":"#DC2626","chart.grid":"#E1E1E1","base.blue":"#2563EB","base.blue.light":"#60A5FA","base.cyan":"#0891B2","base.cyan.light":"#22D3EE","base.green":"#16A34A","base.green.light":"#4ADE80","base.magenta":"#9333EA","base.magenta.light":"#C084FC","base.red":"#DC2626","base.red.light":"#F87171","base.yellow":"#B45309","base.yellow.light":"#FBBF24"},"groups":[{"name":"基础 · 文本","items":[["background","#FFFFFF"],["foreground","#333333"],["border","#D4D4D4"],["input.border","#B0B0B0"],["caret","#BC5340"],["selection.background","#ADD6FF4D"],["overlay","#00000033"],["ring","#BC5340"],["window.border","#D4D4D4"]]},{"name":"链接","items":[["link","#BC5340"],["link.hover","#A8452F"],["link.active","#943B29"]]},{"name":"布局 chrome","items":[["sidebar.background","#F8F8F8"],["sidebar.foreground","#616161"],["sidebar.border","#E7E7E7"],["sidebar.accent.background","#E8E8E8"],["sidebar.accent.foreground","#333333"],["sidebar.primary.background","#BC5340"],["sidebar.primary.foreground","#FFFFFF"],["title_bar.background","#F8F8F8"],["title_bar.border","#D4D4D4"],["status_bar.background","#F3F3F3"],["status_bar.border","#D4D4D4"],["tab.background","#F8F8F8"],["tab.foreground","#616161"],["tab.active.background","#FFFFFF"],["tab.active.foreground","#333333"],["tab_bar.background","#F8F8F8"],["tab_bar.segmented.background","#F3F3F3"],["table.background","#FFFFFF"],["table.hover.background","#F0F0F0"],["table.active.background","#BC534033"],["table.active.border","#BC5340"],["table.even.background","#FAFAFA"],["table.head.background","#F5F5F5"],["table.head.foreground","#616161"],["table.foot.background","#F5F5F5"],["table.foot.foreground","#616161"],["table.row.border","#E1E1E1"]]},{"name":"容器","items":[["popover.background","#FFFFFF"],["popover.foreground","#333333"],["group_box.background","#F5F5F5"],["group_box.foreground","#333333"],["group_box.title.foreground","#616161"],["accordion.background","#F5F5F5"]]},{"name":"列表与表格","items":[["list.background","#FFFFFF"],["list.hover.background","#F0F0F0"],["list.active.background","#BC534033"],["list.active.border","#BC5340"],["list.even.background","#FAFAFA"],["list.head.background","#FAFAFA"],["table.background","#FFFFFF"],["table.hover.background","#F0F0F0"],["table.active.background","#BC534033"],["table.active.border","#BC5340"],["table.even.background","#FAFAFA"],["table.head.background","#F5F5F5"],["table.head.foreground","#616161"],["table.foot.background","#F5F5F5"],["table.foot.foreground","#616161"],["table.row.border","#E1E1E1"],["description_list.label.background","#F5F5F5"],["description_list.label.foreground","#616161"]]},{"name":"按钮","items":[["button.background","#F3F3F3"],["button.foreground","#333333"],["button.hover.background","#E8E8E8"],["button.active.background","#DCDCDC"],["button.primary.background","#BC5340"],["button.primary.foreground","#FFFFFF"],["button.primary.hover.background","#A8452F"],["button.primary.active.background","#943B29"],["button.secondary.background","#F3F3F3"],["button.secondary.foreground","#333333"],["button.secondary.hover.background","#E8E8E8"],["button.secondary.active.background","#DCDCDC"],["button.danger.background","#B91C1C"],["button.danger.foreground","#FFFFFF"],["button.danger.hover.background","#991919"],["button.danger.active.background","#7F1515"],["button.success.background","#15803D"],["button.success.foreground","#FFFFFF"],["button.success.hover.background","#116932"],["button.success.active.background","#0E5328"],["button.warning.background","#A16207"],["button.warning.foreground","#FFFFFF"],["button.warning.hover.background","#854F06"],["button.warning.active.background","#6B3F05"],["button.info.background","#1D4ED8"],["button.info.foreground","#FFFFFF"],["button.info.hover.background","#1A43B8"],["button.info.active.background","#163796"]]},{"name":"语义色","items":[["primary.background","#BC5340"],["primary.foreground","#FFFFFF"],["primary.hover.background","#A8452F"],["primary.active.background","#943B29"],["secondary.background","#F3F3F3"],["secondary.foreground","#333333"],["secondary.hover.background","#E8E8E8"],["secondary.active.background","#DCDCDC"],["accent.background","#BC53401A"],["accent.foreground","#333333"],["muted.background","#F3F3F3"],["muted.foreground","#6E6E6E"],["success.background","#15803D"],["success.foreground","#FFFFFF"],["success.hover.background","#116932"],["success.active.background","#0E5328"],["danger.background","#B91C1C"],["danger.foreground","#FFFFFF"],["danger.hover.background","#991919"],["danger.active.background","#7F1515"],["warning.background","#A16207"],["warning.foreground","#FFFFFF"],["warning.hover.background","#854F06"],["warning.active.background","#6B3F05"],["info.background","#1D4ED8"],["info.foreground","#FFFFFF"],["info.hover.background","#1A43B8"],["info.active.background","#163796"]]},{"name":"控件","items":[["scrollbar.background","#FAFAFA00"],["scrollbar.thumb.background","#A3A3A3E6"],["scrollbar.thumb.hover.background","#8A8A8A"],["skeleton.background","#E8E8E8"],["slider.background","#D4D4D4"],["slider.thumb.background","#BC5340"],["switch.background","#D4D4D4"],["switch.thumb.background","#FFFFFF"],["progress.bar.background","#BC5340"],["drag.border","#BC5340A6"],["drop_target.background","#BC534033"]]},{"name":"图表与基础色","items":[["chart.1","#2563EB"],["chart.2","#0891B2"],["chart.3","#BC5340"],["chart.4","#B45309"],["chart.5","#9333EA"],["chart.bullish","#16A34A"],["chart.bearish","#DC2626"],["chart.grid","#E1E1E1"],["base.blue","#2563EB"],["base.blue.light","#60A5FA"],["base.cyan","#0891B2"],["base.cyan.light","#22D3EE"],["base.green","#16A34A"],["base.green.light","#4ADE80"],["base.magenta","#9333EA"],["base.magenta.light","#C084FC"],["base.red","#DC2626"],["base.red.light","#F87171"],["base.yellow","#B45309"],["base.yellow.light","#FBBF24"]]}],"checks":[{"fg":"foreground","bg":"background","r":12.63},{"fg":"muted.foreground","bg":"background","r":5.1},{"fg":"sidebar.foreground","bg":"sidebar.background","r":5.83},{"fg":"sidebar.accent.foreground","bg":"sidebar.accent.background","r":10.31},{"fg":"popover.foreground","bg":"popover.background","r":12.63},{"fg":"tab.foreground","bg":"tab.background","r":5.83},{"fg":"tab.active.foreground","bg":"tab.active.background","r":12.63},{"fg":"primary.foreground","bg":"primary.background","r":4.72},{"fg":"primary.foreground","bg":"primary.hover.background","r":5.9},{"fg":"primary.foreground","bg":"primary.active.background","r":7.2},{"fg":"button.primary.foreground","bg":"button.primary.background","r":4.72},{"fg":"button.danger.foreground","bg":"button.danger.background","r":6.47},{"fg":"button.success.foreground","bg":"button.success.background","r":5.02},{"fg":"button.warning.foreground","bg":"button.warning.background","r":4.92},{"fg":"button.info.foreground","bg":"button.info.background","r":6.7},{"fg":"success.foreground","bg":"success.background","r":5.02},{"fg":"danger.foreground","bg":"danger.background","r":6.47},{"fg":"warning.foreground","bg":"warning.background","r":4.92},{"fg":"info.foreground","bg":"info.background","r":6.7},{"fg":"table.head.foreground","bg":"table.head.background","r":5.68},{"fg":"muted.foreground","bg":"status_bar.background","r":4.6},{"fg":"link","bg":"background","r":4.72}],"count":140,"highlight":{"editor.foreground":"#1E1E1E","editor.background":"#FFFFFF","editor.active_line.background":"#F5F5F5","editor.line_number":"#929292","editor.active_line_number":"#333333","syntax":{"comment":{"color":"#008000"},"string":{"color":"#A31515"},"number":{"color":"#098658"},"boolean":{"color":"#0B4BC1"},"constant":{"color":"#0B4BC1"},"keyword":{"color":"#0B4BC1"},"function":{"color":"#795E26"},"title":{"color":"#795E26"},"type":{"color":"#267F99"},"tag":{"color":"#800000"},"property":{"color":"#0451A5"},"variable":{"color":"#0451A5"},"string.special":{"color":"#C5060B"},"operator":{"color":"#333333"},"punctuation":{"color":"#333333"}}}},"RDS Dark":{"colors":{"background":"#1F1F1F","foreground":"#CCCCCC","border":"#3C3C3C","input.border":"#4F4F4F","caret":"#E8846F","selection.background":"#264F784D","overlay":"#00000080","ring":"#E8846F","window.border":"#3C3C3C","link":"#E8846F","link.hover":"#F5A188","link.active":"#D9705B","sidebar.background":"#181818","sidebar.foreground":"#CCCCCC","sidebar.border":"#2B2B2B","sidebar.accent.background":"#37373D","sidebar.accent.foreground":"#FFFFFF","sidebar.primary.background":"#E8846F","sidebar.primary.foreground":"#1E1E1E","title_bar.background":"#181818","title_bar.border":"#2B2B2B","status_bar.background":"#181818","status_bar.border":"#2B2B2B","tab.background":"#181818","tab.foreground":"#969696","tab.active.background":"#1F1F1F","tab.active.foreground":"#FFFFFF","tab_bar.background":"#181818","tab_bar.segmented.background":"#252526","popover.background":"#202020","popover.foreground":"#CCCCCC","group_box.background":"#171717","group_box.foreground":"#CCCCCC","group_box.title.foreground":"#969696","accordion.background":"#171717","list.background":"#1F1F1F","list.hover.background":"#2A2D2E","list.active.background":"#E8846F33","list.active.border":"#E8846F","list.even.background":"#252526CC","list.head.background":"#252526CC","table.background":"#1F1F1F","table.hover.background":"#2A2D2E","table.active.background":"#E8846F33","table.active.border":"#E8846F","table.even.background":"#252526CC","table.head.background":"#252526CC","table.head.foreground":"#969696","table.foot.background":"#252526CC","table.foot.foreground":"#969696","table.row.border":"#3C3C3C33","description_list.label.background":"#252526","description_list.label.foreground":"#969696","button.background":"#333333","button.foreground":"#CCCCCC","button.hover.background":"#3A3D41","button.active.background":"#454545","button.primary.background":"#E8846F","button.primary.foreground":"#1E1E1E","button.primary.hover.background":"#F5A188","button.primary.active.background":"#D9705B","button.secondary.background":"#333333","button.secondary.foreground":"#CCCCCC","button.secondary.hover.background":"#3A3D41","button.secondary.active.background":"#454545","button.danger.background":"#F14C4C","button.danger.foreground":"#2A0C0C","button.danger.hover.background":"#F26A6A","button.danger.active.background":"#E84545","button.success.background":"#89D185","button.success.foreground":"#0C1F14","button.success.hover.background":"#A3DE9F","button.success.active.background":"#6FBF6B","button.warning.background":"#E3B341","button.warning.foreground":"#241C02","button.warning.hover.background":"#ECC457","button.warning.active.background":"#C99A2E","button.info.background":"#75BEFF","button.info.foreground":"#0A1626","button.info.hover.background":"#94CDFF","button.info.active.background":"#5AA8EE","primary.background":"#E8846F","primary.foreground":"#1E1E1E","primary.hover.background":"#F5A188","primary.active.background":"#D9705B","secondary.background":"#333333","secondary.foreground":"#CCCCCC","secondary.hover.background":"#3A3D41","secondary.active.background":"#454545","accent.background":"#E8846F1A","accent.foreground":"#CCCCCC","muted.background":"#3A3D41","muted.foreground":"#8A8A8A","success.background":"#89D185","success.foreground":"#0C1F14","success.hover.background":"#A3DE9F","success.active.background":"#6FBF6B","danger.background":"#F14C4C","danger.foreground":"#2A0C0C","danger.hover.background":"#F26A6A","danger.active.background":"#E84545","warning.background":"#E3B341","warning.foreground":"#241C02","warning.hover.background":"#ECC457","warning.active.background":"#C99A2E","info.background":"#75BEFF","info.foreground":"#0A1626","info.hover.background":"#94CDFF","info.active.background":"#5AA8EE","scrollbar.background":"#17171700","scrollbar.thumb.background":"#525252E6","scrollbar.thumb.hover.background":"#6B6B6B","skeleton.background":"#3A3D41","slider.background":"#4F4F4F","slider.thumb.background":"#E8846F","switch.background":"#4F4F4F","switch.thumb.background":"#FFFFFF","progress.bar.background":"#E8846F","drag.border":"#E8846FA6","drop_target.background":"#E8846F33","chart.1":"#3794FF","chart.2":"#4EC9B0","chart.3":"#E8846F","chart.4":"#CCA700","chart.5":"#C586C0","chart.bullish":"#89D185","chart.bearish":"#F14C4C","chart.grid":"#3C3C3C","base.blue":"#3794FF","base.blue.light":"#9CDCFE","base.cyan":"#4EC9B0","base.cyan.light":"#7FE3D0","base.green":"#89D185","base.green.light":"#B5CEA8","base.magenta":"#C586C0","base.magenta.light":"#DDB6D6","base.red":"#F14C4C","base.red.light":"#FF8A8A","base.yellow":"#CCA700","base.yellow.light":"#E3D18B"},"groups":[{"name":"基础 · 文本","items":[["background","#1F1F1F"],["foreground","#CCCCCC"],["border","#3C3C3C"],["input.border","#4F4F4F"],["caret","#E8846F"],["selection.background","#264F784D"],["overlay","#00000080"],["ring","#E8846F"],["window.border","#3C3C3C"]]},{"name":"链接","items":[["link","#E8846F"],["link.hover","#F5A188"],["link.active","#D9705B"]]},{"name":"布局 chrome","items":[["sidebar.background","#181818"],["sidebar.foreground","#CCCCCC"],["sidebar.border","#2B2B2B"],["sidebar.accent.background","#37373D"],["sidebar.accent.foreground","#FFFFFF"],["sidebar.primary.background","#E8846F"],["sidebar.primary.foreground","#1E1E1E"],["title_bar.background","#181818"],["title_bar.border","#2B2B2B"],["status_bar.background","#181818"],["status_bar.border","#2B2B2B"],["tab.background","#181818"],["tab.foreground","#969696"],["tab.active.background","#1F1F1F"],["tab.active.foreground","#FFFFFF"],["tab_bar.background","#181818"],["tab_bar.segmented.background","#252526"],["table.background","#1F1F1F"],["table.hover.background","#2A2D2E"],["table.active.background","#E8846F33"],["table.active.border","#E8846F"],["table.even.background","#252526CC"],["table.head.background","#252526CC"],["table.head.foreground","#969696"],["table.foot.background","#252526CC"],["table.foot.foreground","#969696"],["table.row.border","#3C3C3C33"]]},{"name":"容器","items":[["popover.background","#202020"],["popover.foreground","#CCCCCC"],["group_box.background","#171717"],["group_box.foreground","#CCCCCC"],["group_box.title.foreground","#969696"],["accordion.background","#171717"]]},{"name":"列表与表格","items":[["list.background","#1F1F1F"],["list.hover.background","#2A2D2E"],["list.active.background","#E8846F33"],["list.active.border","#E8846F"],["list.even.background","#252526CC"],["list.head.background","#252526CC"],["table.background","#1F1F1F"],["table.hover.background","#2A2D2E"],["table.active.background","#E8846F33"],["table.active.border","#E8846F"],["table.even.background","#252526CC"],["table.head.background","#252526CC"],["table.head.foreground","#969696"],["table.foot.background","#252526CC"],["table.foot.foreground","#969696"],["table.row.border","#3C3C3C33"],["description_list.label.background","#252526"],["description_list.label.foreground","#969696"]]},{"name":"按钮","items":[["button.background","#333333"],["button.foreground","#CCCCCC"],["button.hover.background","#3A3D41"],["button.active.background","#454545"],["button.primary.background","#E8846F"],["button.primary.foreground","#1E1E1E"],["button.primary.hover.background","#F5A188"],["button.primary.active.background","#D9705B"],["button.secondary.background","#333333"],["button.secondary.foreground","#CCCCCC"],["button.secondary.hover.background","#3A3D41"],["button.secondary.active.background","#454545"],["button.danger.background","#F14C4C"],["button.danger.foreground","#2A0C0C"],["button.danger.hover.background","#F26A6A"],["button.danger.active.background","#E84545"],["button.success.background","#89D185"],["button.success.foreground","#0C1F14"],["button.success.hover.background","#A3DE9F"],["button.success.active.background","#6FBF6B"],["button.warning.background","#E3B341"],["button.warning.foreground","#241C02"],["button.warning.hover.background","#ECC457"],["button.warning.active.background","#C99A2E"],["button.info.background","#75BEFF"],["button.info.foreground","#0A1626"],["button.info.hover.background","#94CDFF"],["button.info.active.background","#5AA8EE"]]},{"name":"语义色","items":[["primary.background","#E8846F"],["primary.foreground","#1E1E1E"],["primary.hover.background","#F5A188"],["primary.active.background","#D9705B"],["secondary.background","#333333"],["secondary.foreground","#CCCCCC"],["secondary.hover.background","#3A3D41"],["secondary.active.background","#454545"],["accent.background","#E8846F1A"],["accent.foreground","#CCCCCC"],["muted.background","#3A3D41"],["muted.foreground","#8A8A8A"],["success.background","#89D185"],["success.foreground","#0C1F14"],["success.hover.background","#A3DE9F"],["success.active.background","#6FBF6B"],["danger.background","#F14C4C"],["danger.foreground","#2A0C0C"],["danger.hover.background","#F26A6A"],["danger.active.background","#E84545"],["warning.background","#E3B341"],["warning.foreground","#241C02"],["warning.hover.background","#ECC457"],["warning.active.background","#C99A2E"],["info.background","#75BEFF"],["info.foreground","#0A1626"],["info.hover.background","#94CDFF"],["info.active.background","#5AA8EE"]]},{"name":"控件","items":[["scrollbar.background","#17171700"],["scrollbar.thumb.background","#525252E6"],["scrollbar.thumb.hover.background","#6B6B6B"],["skeleton.background","#3A3D41"],["slider.background","#4F4F4F"],["slider.thumb.background","#E8846F"],["switch.background","#4F4F4F"],["switch.thumb.background","#FFFFFF"],["progress.bar.background","#E8846F"],["drag.border","#E8846FA6"],["drop_target.background","#E8846F33"]]},{"name":"图表与基础色","items":[["chart.1","#3794FF"],["chart.2","#4EC9B0"],["chart.3","#E8846F"],["chart.4","#CCA700"],["chart.5","#C586C0"],["chart.bullish","#89D185"],["chart.bearish","#F14C4C"],["chart.grid","#3C3C3C"],["base.blue","#3794FF"],["base.blue.light","#9CDCFE"],["base.cyan","#4EC9B0"],["base.cyan.light","#7FE3D0"],["base.green","#89D185"],["base.green.light","#B5CEA8"],["base.magenta","#C586C0"],["base.magenta.light","#DDB6D6"],["base.red","#F14C4C"],["base.red.light","#FF8A8A"],["base.yellow","#CCA700"],["base.yellow.light","#E3D18B"]]}],"checks":[{"fg":"foreground","bg":"background","r":10.26},{"fg":"muted.foreground","bg":"background","r":4.77},{"fg":"sidebar.foreground","bg":"sidebar.background","r":11.06},{"fg":"sidebar.accent.foreground","bg":"sidebar.accent.background","r":11.82},{"fg":"popover.foreground","bg":"popover.background","r":10.15},{"fg":"tab.foreground","bg":"tab.background","r":6.0},{"fg":"tab.active.foreground","bg":"tab.active.background","r":16.48},{"fg":"primary.foreground","bg":"primary.background","r":6.32},{"fg":"primary.foreground","bg":"primary.hover.background","r":8.21},{"fg":"primary.foreground","bg":"primary.active.background","r":5.1},{"fg":"button.primary.foreground","bg":"button.primary.background","r":6.32},{"fg":"button.danger.foreground","bg":"button.danger.background","r":5.08},{"fg":"button.success.foreground","bg":"button.success.background","r":9.43},{"fg":"button.warning.foreground","bg":"button.warning.background","r":8.69},{"fg":"button.info.foreground","bg":"button.info.background","r":9.14},{"fg":"success.foreground","bg":"success.background","r":9.43},{"fg":"danger.foreground","bg":"danger.background","r":5.08},{"fg":"warning.foreground","bg":"warning.background","r":8.69},{"fg":"info.foreground","bg":"info.background","r":9.14},{"fg":"table.head.foreground","bg":"table.head.background","r":5.18},{"fg":"muted.foreground","bg":"status_bar.background","r":5.14},{"fg":"link","bg":"background","r":6.25}],"count":140,"highlight":{"editor.foreground":"#D4D4D4","editor.background":"#1F1F1F","editor.active_line.background":"#2A2D2E","editor.line_number":"#858585","editor.active_line_number":"#C6C6C6","syntax":{"comment":{"color":"#6A9955"},"string":{"color":"#CE9178"},"number":{"color":"#B5CEA8"},"boolean":{"color":"#569CD6"},"constant":{"color":"#569CD6"},"keyword":{"color":"#569CD6"},"function":{"color":"#DCDCAA"},"title":{"color":"#DCDCAA"},"type":{"color":"#4EC9B0"},"tag":{"color":"#569CD6"},"property":{"color":"#9CDCFE"},"variable":{"color":"#9CDCFE"},"string.special":{"color":"#D4D4D4"},"operator":{"color":"#D4D4D4"},"punctuation":{"color":"#D4D4D4"}}}}};
 
-<div class="cols">
-  <!-- 浅色 -->
-  <div class="panel light">
-    <div class="panel-head">RDS Light<span class="mode">mode: light</span></div>
-    <div class="win">
-      <div class="win-title">
-        <div class="win-logo"></div><span style="opacity:.7">项目</span>
-        <span class="win-cutout">营销分析</span>
-        <div class="win-search">搜索或输入命令…</div>
-        <div class="win-ctrl"><span>─</span><span>□</span><span>✕</span></div>
-      </div>
-      <div class="win-body">
-        <div class="win-act"><span>▤</span><span class="on">▣</span><span>▥</span><span>▦</span></div>
-        <div class="win-side">
-          项目：营销分析<br>
-          <span class="sel">▸ 本地 MySQL</span><br>
-          &nbsp;&nbsp;▸ analytics<br>
-          &nbsp;&nbsp;&nbsp;&nbsp;orders
-        </div>
-        <div class="win-editor">
-          <span class="cm">-- 订单画像</span><br>
-          <span class="kw">SELECT</span> customer_id, <span class="fn">COUNT</span>(*) <span class="kw">AS</span> cnt<br>
-          <span class="kw">FROM</span> analytics.orders<br>
-          <span class="kw">WHERE</span> created_at <span class="kw">&gt;=</span> <span class="st">'2026-01-01'</span>
-        </div>
-        <div class="win-act"><span>✦</span><span>⚗</span><span>◷</span></div>
-      </div>
-      <div class="win-status"><span>« 完全隐藏 | 数据库导航</span><span>本地 MySQL · DuckDB · UTF-8</span></div>
-    </div>
+function panel(name, d, isLight) {
+  const c = d.colors;
+  const chrome = isLight ? '#e0e0e0' : '#3c3c3c';
+  const g = k => c[k] || 'transparent';
+  let html = '<div class="panel" style="background:' + g('background') + ';border-color:' + g('border') + '">';
+  html += '<div class="panel-head" style="background:' + g('sidebar.background') + ';color:' + g('foreground') + ';border-color:' + g('border') + '">'
+        + '<span>' + name + '</span><span class="n">' + d.count + ' tokens</span></div>';
 
-    <div class="section">
-      <h3>布局灰度层</h3>
-      <div class="grid">
-        <div class="chip"><div class="sw" style="background:#FFFFFF"></div><span class="name">编辑器 background</span><span class="hex">#FFFFFF</span></div>
-        <div class="chip"><div class="sw" style="background:#F3F3F3"></div><span class="name">侧边栏 sidebar</span><span class="hex">#F3F3F3</span></div>
-        <div class="chip"><div class="sw" style="background:#ECECEC"></div><span class="name">活动栏 (常量)</span><span class="hex">#ECECEC</span></div>
-        <div class="chip"><div class="sw" style="background:#DDDDDD"></div><span class="name">标题栏 title_bar</span><span class="hex">#DDDDDD</span></div>
-        <div class="chip"><div class="sw" style="background:#C25B46"></div><span class="name">状态栏 (primary)</span><span class="hex">#C25B46</span></div>
-        <div class="chip"><div class="sw" style="background:#E4E4E4"></div><span class="name">选中项 accent</span><span class="hex">#E4E4E4</span></div>
-      </div>
-    </div>
+  html += '<div class="win" style="border:1px solid ' + g('border') + '">';
+  html += '<div class="win-title" style="background:' + g('title_bar.background') + ';color:' + g('sidebar.foreground') + ';border-bottom:1px solid ' + g('title_bar.border') + '">'
+        + '<span class="win-logo" style="background:' + g('primary.background') + '"></span>RdataStation'
+        + '<span class="win-cutout" style="margin-left:6px;background:' + g('secondary.background') + ';color:' + g('secondary.foreground') + '">挖空槽</span></div>';
+  html += '<div class="win-body">';
+  html += '<div class="win-act" style="background:' + g('sidebar.background') + ';color:' + g('muted.foreground') + '">'
+        + '<span class="on" style="color:' + g('sidebar.accent.foreground') + ';box-shadow:inset 2px 0 0 ' + g('primary.background') + '">▤</span><span>◇</span><span>◈</span></div>';
+  html += '<div class="win-side" style="background:' + g('sidebar.background') + ';color:' + g('sidebar.foreground') + ';border-right:1px solid ' + g('sidebar.border') + '">'
+        + '<span class="sel" style="background:' + g('list.active.background') + ';color:' + g('foreground') + ';box-shadow:inset 2px 0 0 ' + g('list.active.border') + '">postgres</span>'
+        + '<span>mysql</span><span>duckdb</span></div>';
+  html += '<div class="win-editor" style="background:' + g('background') + ';color:' + g('foreground') + '">'
+        + '<div style="color:' + (d.highlight.syntax && d.highlight.syntax.keyword ? d.highlight.syntax.keyword.color : g('foreground')) + '">SELECT</div>'
+        + '<div style="color:' + g('muted.foreground') + '">  * FROM orders</div>'
+        + '<div style="background:' + g('selection.background') + '">  WHERE id &gt; 10</div>'
+        + '<div style="color:' + g('success.background') + '">✓ 12 rows</div>'
+        + '<div style="color:' + g('danger.background') + '">✗ timeout</div></div>';
+  html += '</div>';
+  html += '<div class="win-status" style="background:' + g('status_bar.background') + ';color:' + g('muted.foreground') + ';border-top:1px solid ' + g('status_bar.border') + '">'
+        + '<span>就绪</span><span style="color:' + g('primary.background') + '">Ln 4, Col 12</span></div>';
+  html += '</div>';
 
-    <div class="section">
-      <h3>关键 token</h3>
-      <div class="grid">
-        <div class="chip"><div class="sw" style="background:#333333"></div><span class="name">foreground</span><span class="hex">#333333</span></div>
-        <div class="chip"><div class="sw" style="background:#616161"></div><span class="name">muted.foreground</span><span class="hex">#616161</span></div>
-        <div class="chip"><div class="sw" style="background:#D4D4D4"></div><span class="name">border</span><span class="hex">#D4D4D4</span></div>
-        <div class="chip"><div class="sw" style="background:#C25B46"></div><span class="name">primary / link</span><span class="hex">#C25B46</span></div>
-        <div class="chip"><div class="sw" style="background:#ADD6FF"></div><span class="name">selection</span><span class="hex">#ADD6FF</span></div>
-        <div class="chip"><div class="sw" style="background:#FFFFFF"></div><span class="name">popover / tab.active</span><span class="hex">#FFFFFF</span></div>
-      </div>
-    </div>
+  html += '<div class="section">';
+  for (const grp of d.groups) {
+    html += '<div class="gname" style="color:' + g('foreground') + ';border-color:' + chrome + '">' + grp.name + '</div><div class="grid">';
+    for (const [k, v] of grp.items) {
+      html += '<div class="sw" style="border-color:' + chrome + '">'
+            + '<div class="chip" style="background:' + v + '"></div>'
+            + '<div class="meta" style="background:' + g('background') + ';color:' + g('foreground') + '">'
+            + '<span class="k">' + k + '</span><span class="v">' + v + '</span></div></div>';
+    }
+    html += '</div>';
+  }
+  html += '<div class="gname" style="color:' + g('foreground') + ';border-color:' + chrome + '">对比度校验</div>';
+  html += '<table><tr><th>前景</th><th>背景</th><th>比值</th></tr>';
+  for (const ck of d.checks) {
+    const ok = ck.r >= 4.5;
+    html += '<tr><td style="color:' + g('foreground') + '">' + ck.fg + '</td><td style="color:' + g('muted.foreground') + '">' + ck.bg + '</td>'
+          + '<td class="' + (ok ? 'ok' : 'bad') + '">' + ck.r.toFixed(2) + ':1</td></tr>';
+  }
+  html += '</table></div></div>';
+  return html;
+}
 
-    <div class="section">
-      <h3>语义色</h3>
-      <div class="grid">
-        <div class="chip"><div class="sw" style="background:#16A34A"></div><span class="name">success</span><span class="hex">#16A34A</span></div>
-        <div class="chip"><div class="sw" style="background:#DC2626"></div><span class="name">danger</span><span class="hex">#DC2626</span></div>
-        <div class="chip"><div class="sw" style="background:#B45309"></div><span class="name">warning</span><span class="hex">#B45309</span></div>
-        <div class="chip"><div class="sw" style="background:#2563EB"></div><span class="name">info</span><span class="hex">#2563EB</span></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 深色 -->
-  <div class="panel dark">
-    <div class="panel-head">RDS Dark<span class="mode">mode: dark</span></div>
-    <div class="win">
-      <div class="win-title">
-        <div class="win-logo"></div><span style="opacity:.7">项目</span>
-        <span class="win-cutout">营销分析</span>
-        <div class="win-search">搜索或输入命令…</div>
-        <div class="win-ctrl"><span>─</span><span>□</span><span>✕</span></div>
-      </div>
-      <div class="win-body">
-        <div class="win-act"><span>▤</span><span class="on">▣</span><span>▥</span><span>▦</span></div>
-        <div class="win-side">
-          项目：营销分析<br>
-          <span class="sel">▸ 本地 MySQL</span><br>
-          &nbsp;&nbsp;▸ analytics<br>
-          &nbsp;&nbsp;&nbsp;&nbsp;orders
-        </div>
-        <div class="win-editor">
-          <span class="cm">-- 订单画像</span><br>
-          <span class="kw">SELECT</span> customer_id, <span class="fn">COUNT</span>(*) <span class="kw">AS</span> cnt<br>
-          <span class="kw">FROM</span> analytics.orders<br>
-          <span class="kw">WHERE</span> created_at <span class="kw">&gt;=</span> <span class="st">'2026-01-01'</span>
-        </div>
-        <div class="win-act"><span>✦</span><span>⚗</span><span>◷</span></div>
-      </div>
-      <div class="win-status"><span>« 完全隐藏 | 数据库导航</span><span>本地 MySQL · DuckDB · UTF-8</span></div>
-    </div>
-
-    <div class="section">
-      <h3>布局灰度层</h3>
-      <div class="grid">
-        <div class="chip"><div class="sw" style="background:#1E1E1E"></div><span class="name">编辑器 background</span><span class="hex">#1E1E1E</span></div>
-        <div class="chip"><div class="sw" style="background:#252526"></div><span class="name">侧边栏 sidebar</span><span class="hex">#252526</span></div>
-        <div class="chip"><div class="sw" style="background:#333333"></div><span class="name">活动栏 (常量)</span><span class="hex">#333333</span></div>
-        <div class="chip"><div class="sw" style="background:#323233"></div><span class="name">标题栏 title_bar</span><span class="hex">#323233</span></div>
-        <div class="chip"><div class="sw" style="background:#A84A38"></div><span class="name">状态栏 (primary)</span><span class="hex">#A84A38</span></div>
-        <div class="chip"><div class="sw" style="background:#37373D"></div><span class="name">选中项 accent</span><span class="hex">#37373D</span></div>
-      </div>
-    </div>
-
-    <div class="section">
-      <h3>关键 token</h3>
-      <div class="grid">
-        <div class="chip"><div class="sw" style="background:#CCCCCC"></div><span class="name">foreground</span><span class="hex">#CCCCCC</span></div>
-        <div class="chip"><div class="sw" style="background:#8A8A8A"></div><span class="name">muted.foreground</span><span class="hex">#8A8A8A</span></div>
-        <div class="chip"><div class="sw" style="background:#3C3C3C"></div><span class="name">border</span><span class="hex">#3C3C3C</span></div>
-        <div class="chip"><div class="sw" style="background:#E8846F"></div><span class="name">primary / link</span><span class="hex">#E8846F</span></div>
-        <div class="chip"><div class="sw" style="background:#264F78"></div><span class="name">selection</span><span class="hex">#264F78</span></div>
-        <div class="chip"><div class="sw" style="background:#252526"></div><span class="name">popover / tab.active</span><span class="hex">#252526</span></div>
-      </div>
-    </div>
-
-    <div class="section">
-      <h3>语义色</h3>
-      <div class="grid">
-        <div class="chip"><div class="sw" style="background:#14532D"></div><span class="name">success</span><span class="hex">#14532D</span></div>
-        <div class="chip"><div class="sw" style="background:#5A1D1D"></div><span class="name">danger</span><span class="hex">#5A1D1D</span></div>
-        <div class="chip"><div class="sw" style="background:#5A4D08"></div><span class="name">warning</span><span class="hex">#5A4D08</span></div>
-        <div class="chip"><div class="sw" style="background:#1A3D5C"></div><span class="name">info</span><span class="hex">#1A3D5C</span></div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="foot">
-  语法高亮采用 VSCode Dark+/Light+ 色板（见两面板 SQL 示例）。<br>
-  落地：<code>assets/themes/rds-theme.json</code> 通过 <code>ThemeRegistry::watch_dir</code> 加载，<code>Theme::change(mode)</code> 切换；活动栏背景为代码常量（dark #333333 / light #ECECEC），状态栏用 <code>theme.colors.primary</code>。
-</div>
+document.getElementById('cols').innerHTML =
+  panel('RDS Light', DATA['RDS Light'], true) + panel('RDS Dark', DATA['RDS Dark'], false);
+</script>
 </body>
 </html>

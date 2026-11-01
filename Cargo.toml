@@ -27,6 +27,8 @@ members = [
     "crates/workbench_shell",
     "crates/result_panel", "crates/file-meta",
     "crates/notification",
+    # 全工作区 UI 契约守门（纯源码/资产扫描，零产品依赖 → 不受单 crate 编译状态影响）
+    "crates/ui_guard",
 ]
 # 默认构建只覆盖 app 依赖图；plugin 的 wasm 轨（extism → wasmtime）已由 `wasm` feature
 # 门控、**默认不编译**（见 crates/plugin/Cargo.toml），裸 `cargo build/check/run` 不碰 wasmtime。

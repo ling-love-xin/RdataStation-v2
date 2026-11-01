@@ -5,7 +5,7 @@ description: RdataStation 主题系统：明暗配色 token 对照、产品语�
 
 # RdataStation 主题系统
 
-设计文档：`docs/architecture/theme/theme-design.md`；色卡预览：`docs/architecture/theme/theme-preview.html`。
+设计文档：`docs/architecture/theme/theme-design.md`（设计意图）；**色值权威来源：`docs/architecture/theme/theme-tokens-complete.md`（140/140 全量色板，冲突以它为准）**；色卡预览：`docs/architecture/theme/theme-preview.html`。
 
 ## 布局灰度分层（核心骨架）
 
@@ -20,7 +20,10 @@ description: RdataStation 主题系统：明暗配色 token 对照、产品语�
 | 活动栏背景 | `#181818` | `#F8F8F8` | 产品语义 token（与侧栏同底，靠激活条/图标区分） |
 | 标题栏背景 | `#181818` | `#F8F8F8` | 标准字段 `title_bar.background` |
 | 挖空槽背景 | `#1F1F1F` | `#FFFFFF` | 产品语义 token（比标题栏亮一档，内嵌感） |
-| 状态栏背景 | `#A84A38` | `#C25B46` | 品牌 coral，`primary` 派生 |
+| 状态栏背景 | `#181818` | `#F3F3F3` | 中性 chrome（**不是 coral**：`StatusBar` 组件文字硬编码 `muted_foreground`，珊瑚底配灰字仅 1.08:1，详见色板 §6） |
+
+> 品牌主色 2026-11-01 起为 **coral-600 `#BC5340`**（light）/ coral-400 `#E8846F`（dark）。
+> 旧 `#C25B46` 配白字仅 4.30:1 已作废。完整色阶见 `theme-tokens-complete.md` §2。
 
 ## 取色规则（硬约束）
 
@@ -29,7 +32,7 @@ description: RdataStation 主题系统：明暗配色 token 对照、产品语�
 
 | 产品角色 | Dark | Light | 消费方 |
 | --- | --- | --- | --- |
-| `activity_bar.background` | `#333333` | `#ECECEC` | 左右活动栏背景 |
+| `activity_bar.background` | `#181818` | `#F8F8F8` | 左右活动栏背景（与侧栏同底，靠激活条/图标区分） |
 | `activity_bar.active_border` | `#FFFFFF` | `#333333` | 激活图标侧条 |
 | `activity_bar.icon.active` | `#FFFFFF` | `#333333` | 激活图标色 |
 | `activity_bar.icon.inactive` | `#858585` | `#616161` | 未激活图标色 |
@@ -64,3 +67,7 @@ settings::product_tokens::get(cx).search_match_background(cx.theme())
 
 - 新增颜色一律先确认主题 JSON 已定义，代码零 hex
 - 明暗切换后对照 `theme-preview.html` 核对：文字对比度（≥ 4.5:1）、选中态、hover、Quick Open 弹层
+- **改色后跑** `python tools/theme_audit.py`：校验 140/140 覆盖、对比度（**含 product-tokens 的 9 个产品角色**）、`clamp_alpha` 合规（选中态 α 超 0.2 会被 schema 静默压缩，表现为"选中看不见"）
+- **改任何 crate 的视图代码后跑** `cargo test -p rds-ui-guard`：全工作区守门（25 个 crate，不只 workbench/insight）。口径是「冻结基线、只拦新增」——存量命中登记在 `BASELINE` 里（多为 `ui.rs` 的合法常量定义），**命中数上升即失败**，新增豁免必须同步上调基线并写明理由
+- **gpui-kit 升级后跑** `python tools/gen_theme_keys.py`：重建 `assets/themes/theme-keys.json`（启动期键名白名单）。键名写错是静默失败（无 `deny_unknown_fields`），未知键会让该 token 回退默认蓝主题
+- `overlay` 是**一键两用**（模态遮罩 + Quick Open 遮罩，无 `scrim` 键可拆档），改它前先看色板 §4.1

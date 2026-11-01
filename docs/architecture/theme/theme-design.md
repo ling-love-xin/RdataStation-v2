@@ -1,5 +1,9 @@
 # RdataStation v2 明暗主题配色设计方案
 
+> ⚠️ **本文件记录设计意图与推导过程，色值已不是权威来源**。
+> 2026-11-01 完成全量色板修订（140/140 token、品牌色明度下压、状态栏改中性），
+> **实际色值一律查 `docs/architecture/theme/theme-tokens-complete.md`**，冲突以那份为准。
+>
 > 状态：已与用户确认 · 落地文件：`assets/themes/rds-theme.json`（可直接加载）· 色卡预览：`docs/architecture/theme/theme-preview.html`
 > 技术栈：gpui-kit 0.7.1（`ThemeRegistry::watch_dir` + `Theme::change(mode, window, cx)`，字段名对齐 0.7.1 `ThemeColor`，0.6.1 → 0.7.1 字段集无变化，2026-10-11 实测）
 > 约束：按编码指南，**应用代码不写裸 hex/rgb**——所有颜色来自主题 JSON 资产与语义 token（见 §5）

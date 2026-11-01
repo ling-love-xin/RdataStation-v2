@@ -31,6 +31,8 @@ plugin.workspace = true
 # 日志接线后本层要补记启动结果（订阅者挂上之前的信息只能在这里回填）
 tracing.workspace = true
 tokio.workspace = true
+# 启动期主题资产键名校验：未知键会被 serde 静默忽略（回退默认蓝主题），需显式告警
+serde_json = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # 启动最早处把控制台代码页切到 UTF-8：tracing stderr / eprintln! 的中文不再按 cp936 乱码

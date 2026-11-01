@@ -16,11 +16,20 @@ pub use workbench_shell::ui::HAIRLINE;
 /// 状态点直径（0.375rem = 6px）：结果集失败点
 pub const STATUS_DOT_SIZE: f32 = 0.375;
 
-/// 结果区默认高度（18rem = 288px；可拖拽后以用户拖到的高度为准）
+/// 结果区默认高度（20rem = 320px，约占窗口高度的 40-50%；可拖拽后以用户拖到的高度为准）
 ///
 /// 结果区出现/消失时编辑区高度会跳一下，但比“按比例分栏”在无结果时不占位更符合
 /// “只显示真实内容”。拖拽改高走组件库的 `ResizablePanel`（不手搓拖动条）。
-pub const RESULT_PANE_HEIGHT: f32 = 18.0;
+///
+/// 2026-11-02 收敛：这一档原先在 `editor/src/support/ui.rs` 另有一份（20.0）。两份里
+/// **生效的是 editor 那份**（`view/host/mod.rs` 用它初始化 `result_height`），本文件这份
+/// 全仓无人引用、是死值，且 18.0 与 20.0 已经分叉。现统一为 20.0 并由 editor re-export，
+/// 单一来源在本文件（依赖方向 `editor → result_panel`，正向引用成立）。
+///
+/// 历史教训（8rem→10rem 那版，来自 editor 侧注释）：工具栏迁 Toolbar 组件后高度
+/// 24px→36px，8rem 下结果主体只剩 44px、编辑行被虚拟列表裁剪会丢 Input 焦点链
+/// （`cell_edit_esc` 回归实测）；12rem 又过大。20rem 是这两个教训之后的落点。
+pub const RESULT_PANE_HEIGHT: f32 = 20.0;
 
 /// 结果区可拖拽的最大高度（48rem = 768px：再高编辑区就没地方了）
 pub const RESULT_MAX_HEIGHT: f32 = 48.0;
