@@ -531,7 +531,10 @@ fn load_theme_assets(themes_dir: &std::path::Path, cx: &mut App) {
         }
         // 产品语义 token 不是主题文件（结构不同），由 `attach_product_tokens` 单独加载；
         // 键名白名单同理，它只是校验用的清单。
-        let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+        let file_name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
         if file_name == "product-tokens.json" || file_name == "theme-keys.json" {
             continue;
         }
