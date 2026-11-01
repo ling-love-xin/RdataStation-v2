@@ -292,14 +292,20 @@ cargo test -p rds-ui-guard                       # 全工作区守门（4 项，
   - 其中 `RESULT_PANE_HEIGHT` 当时**已分叉**：result_panel `18.0` / editor `20.0`。全仓核查后确认 result_panel 那份无人引用（死值）、真正生效的是 editor 的 `20.0`，故统一为 **20.0**，注释已记录 8rem→10rem→20rem 的两次教训。
 - 守门：`shared_constants_do_not_diverge` 会拦新增分叉；确需同名不同值的要登记在 `CONST_DIVERGENCE_ALLOWED` 并写明理由（当前 2 条：`ALL`、`HISTORY_LIMIT`）。取值一致的重复定义只提示、不失败（当前 5 组收敛候选）。
 
-### 7.1 已知未达标（2026-11-01 审计发现，待决）
+### 7.1 已解决：Quick Open 组头（2026-11-02）
 
-| 项 | 实测 | 候选方案 |
+组头文字原先取 `muted_foreground`，实测 light **4.32:1** / dark **3.16:1**（需 4.5）。
+
+两个候选方案里选了**② 改文字色**（`delegate.rs:354` → `theme.colors.foreground`）：
+
+| 方案 | 做法 | 结果 |
 | --- | --- | --- |
-| Quick Open 组头：`muted.foreground` on `quick_open.group.header`（`delegate.rs:354`） | light **4.32:1** / dark **3.16:1**（需 4.5） | ① 改组头底色：light `#ECECEC`→`#F3F3F3`（**4.60 ✓**，分区感不减）；dark `#3A3D41`→`#242424`（4.50 ✓，但与 `background` 仅 **1.06:1** 落差，分区感基本消失） |
-| | | ② **（推荐）**组头文字改 `foreground`：light **10.69:1** / dark **6.8:1**，底色不动、分区感保留，弱化靠 `text_xs` + 底色 |
+| ① 改组头底色 | light `#ECECEC`→`#F3F3F3` | 4.60 ✓，但 dark 要改到 `#242424`（4.50 ✓）时与 `background` 只剩 **1.06:1** 落差，**分区感基本消失** |
+| ② **（采用）** 改文字色 | `muted_foreground` → `foreground` | light **10.69:1** / dark **6.8:1**；底色不动、分区感保留，弱化层级交给 `text_xs` + 底色 |
 
-组头还有一处文字：note「搜索中…」用 `theme.colors.info`（= `info.background`），实测 light 5.67:1 / dark 5.49:1，**已达标**。
+组头另一处文字：note「搜索中…」取 `theme.colors.info`（= `info.background`），light 5.67:1 / dark 5.49:1，本来就达标。
+
+至此主题审计 **186 项校验 0 不达标**。
 
 ---
 

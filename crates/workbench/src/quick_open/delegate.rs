@@ -351,7 +351,11 @@ impl ListDelegate for QuickOpenDelegate {
             .h(rems(ui::QUICK_OPEN_GROUP_HEADER_HEIGHT))
             .px_2()
             .text_xs()
-            .text_color(theme.colors.muted_foreground)
+            // 组头文字取 `foreground` 而非 `muted_foreground`：`muted_foreground` 压在
+            // `quick_open.group.header` 底上只有 light 4.32:1 / dark 3.16:1，不到 AA 的 4.5。
+            // 不动底色（改底色会让 dark 与 background 只剩 1.06:1 落差、分区感消失），
+            // 弱化层级改由 `text_xs` + 底色承担 —— 实测 light 10.69:1 / dark 6.8:1。
+            .text_color(theme.colors.foreground)
             .bg(pt.quick_open_group_header(theme))
             .child(group.title);
         // 「搜索中…」等补充：与计数区分开色（info），一眼看出“还没搜完”而不是“没结果”

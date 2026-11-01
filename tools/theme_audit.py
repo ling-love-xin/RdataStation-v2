@@ -155,7 +155,7 @@ PRODUCT_PAIRS = [
     ("activity_bar.icon.inactive", "activity_bar.background", 3.0, "活动栏未选中图标"),
     ("activity_bar.active_border", "activity_bar.background", 3.0, "活动栏选中指示条"),
     ("foreground", "title_bar.slot.background", 4.5, "挖空槽内文字（假设取 foreground）"),
-    ("muted.foreground", "quick_open.group.header", 4.5, "Quick Open 组头（delegate.rs:354 实测取 muted_foreground）"),
+    ("foreground", "quick_open.group.header", 4.5, "Quick Open 组头（delegate.rs:354 实测取 foreground；2026-11-02 由 muted_foreground 改来）"),
     ("info.background", "quick_open.group.header", 4.5, "组头 note「搜索中…」文字色（delegate.rs:357 取 theme.colors.info = info.background）"),
     ("foreground", "search.match.background", 4.5, "搜索命中高亮底上的正文"),
     ("foreground", "result.local_row_background", 4.5, "本地行底色上的正文"),
