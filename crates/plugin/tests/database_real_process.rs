@@ -131,9 +131,12 @@ async fn cancelling_reaches_the_driver_process() {
         .expect_err("被取消的查询不该成功");
 
     match &error {
-        CoreError::Database(DatabaseError::Query { reason, .. }) => {
-            assert!(reason.contains("取消"), "{reason}");
-        }
+        CoreError::Database(err) => match &**err {
+            DatabaseError::Query { reason, .. } => {
+                assert!(reason.contains("取消"), "{reason}");
+            }
+            other => panic!("取消应当进 DatabaseError::Query（与原生驱动同口径）：{other:?}"),
+        },
         other => panic!("取消应当进 DatabaseError::Query（与原生驱动同口径）：{other:?}"),
     }
     assert!(
@@ -154,12 +157,15 @@ async fn sql_errors_land_in_the_query_domain_with_a_position() {
         .await
         .expect_err("这条 SQL 应当失败");
     match error {
-        CoreError::Database(DatabaseError::Query {
-            position, reason, ..
-        }) => {
-            assert!(reason.contains("SQL 出错"), "{reason}");
-            assert_eq!(position, Some(14), "1 基字符 15 → 0 基字节 14");
-        }
+        CoreError::Database(err) => match *err {
+            DatabaseError::Query {
+                position, reason, ..
+            } => {
+                assert!(reason.contains("SQL 出错"), "{reason}");
+                assert_eq!(position, Some(14), "1 基字符 15 → 0 基字节 14");
+            }
+            other => panic!("{other:?}"),
+        },
         other => panic!("{other:?}"),
     }
 }

@@ -1757,13 +1757,16 @@ mod database_tests {
             },
         );
         match sql_error {
-            CoreError::Database(DatabaseError::Query {
-                position, reason, ..
-            }) => {
-                assert!(reason.contains("does not exist"), "{reason}");
-                // 1 基**字符**位置 15 → 0 基**字节**偏移（中文占多字节，两者不同）
-                assert_eq!(position, Some(14));
-            }
+            CoreError::Database(err) => match *err {
+                DatabaseError::Query {
+                    position, reason, ..
+                } => {
+                    assert!(reason.contains("does not exist"), "{reason}");
+                    // 1 基**字符**位置 15 → 0 基**字节**偏移（中文占多字节，两者不同）
+                    assert_eq!(position, Some(14));
+                }
+                other => panic!("SQL 错应当进 DatabaseError::Query：{other:?}"),
+            },
             other => panic!("SQL 错应当进 DatabaseError::Query：{other:?}"),
         }
 

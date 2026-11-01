@@ -533,12 +533,12 @@ mod tests {
 
     #[test]
     fn missing_result_set_is_not_retryable() {
-        let err = CoreError::Database(DatabaseError::Query {
+        let err = CoreError::Database(Box::new(DatabaseError::Query {
             sql: "SELECT * FROM t_result_7".into(),
             reason: "Catalog Error: Table with name t_result_7 does not exist".into(),
             position: None,
             location: None,
-        });
+        }));
         let info = InsightService::describe_error(&err);
         assert_eq!(info.message, "结果集已失效或已过期，请重新执行查询");
         assert!(!info.retryable, "结果集没了，重试不会变好——要重新执行查询");

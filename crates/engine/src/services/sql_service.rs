@@ -144,24 +144,28 @@ fn unwrap_segment_error(
     window: &WindowedSegment,
 ) -> Result<SqlExecuteResult, CoreError> {
     match result {
-        Err(CoreError::Database(DatabaseError::Query {
-            reason,
-            position,
-            location,
-            ..
-        })) => {
-            let position = position.and_then(|pos| {
-                let offset_in_body = pos.checked_sub(window.body.start)?;
-                (offset_in_body < window.body.len()).then(|| window.indent + offset_in_body)
-            });
-            Err(CoreError::Database(DatabaseError::Query {
-                sql: original.to_string(),
-                reason: scrub_wrapper_text(&reason, window),
+        Err(CoreError::Database(err)) => match *err {
+            DatabaseError::Query {
+                reason,
                 position,
-                // 对象位置（表 / 列 / 约束）与「套没套窗口」无关，原样带过去
                 location,
-            }))
-        }
+                ..
+            } => {
+                let position = position.and_then(|pos| {
+                    let offset_in_body = pos.checked_sub(window.body.start)?;
+                    (offset_in_body < window.body.len()).then(|| window.indent + offset_in_body)
+                });
+                Err(CoreError::Database(Box::new(DatabaseError::Query {
+                    sql: original.to_string(),
+                    reason: scrub_wrapper_text(&reason, window),
+                    position,
+                    // 对象位置（表 / 列 / 约束）与「套没套窗口」无关，原样带过去
+                    location,
+                })))
+            }
+            // 不是 Query 变体：装箱原样塞回
+            other => Err(CoreError::Database(Box::new(other))),
+        },
         other => other,
     }
 }
@@ -1107,7 +1111,10 @@ mod tests {
 
         let mapped =
             unwrap_segment_error(Err(query_error_at(&window.sql, typo_at)), original, &window);
-        let Err(CoreError::Database(DatabaseError::Query { sql, position, .. })) = mapped else {
+        let Err(CoreError::Database(err)) = mapped else {
+            panic!("应当仍是查询错误");
+        };
+        let DatabaseError::Query { sql, position, .. } = *err else {
             panic!("应当仍是查询错误");
         };
         assert_eq!(sql, original, "回显的 SQL 应当是用户写的那句（不带包装）");
@@ -1125,10 +1132,8 @@ mod tests {
         assert!(
             matches!(
                 tailed,
-                Err(CoreError::Database(DatabaseError::Query {
-                    position: None,
-                    ..
-                }))
+                Err(CoreError::Database(err))
+                    if matches!(&*err, DatabaseError::Query { position: None, .. })
             ),
             "落在包装上的位置不该给出去"
         );
@@ -1139,7 +1144,10 @@ mod tests {
         let typo_at = window.sql.find("no_such_column_xyz").expect("有");
         let mapped =
             unwrap_segment_error(Err(query_error_at(&window.sql, typo_at)), indented, &window);
-        let Err(CoreError::Database(DatabaseError::Query { position, .. })) = mapped else {
+        let Err(CoreError::Database(err)) = mapped else {
+            panic!("应当仍是查询错误");
+        };
+        let DatabaseError::Query { position, .. } = *err else {
             panic!("应当仍是查询错误");
         };
         let position = position.expect("位置该还原出来");
@@ -1160,7 +1168,8 @@ mod tests {
         assert!(
             matches!(
                 untouched,
-                Err(CoreError::Database(DatabaseError::TableNotFound { .. }))
+                Err(CoreError::Database(err))
+                    if matches!(&*err, DatabaseError::TableNotFound { .. })
             ),
             "其它错误域不该被改写"
         );

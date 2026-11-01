@@ -43,7 +43,10 @@ use shared::error::{CoreError, DatabaseError, ErrorLocation};
 /// 从出口错误里取出位置（拿不到 = `None`）。
 fn location_of(err: &CoreError) -> Option<ErrorLocation> {
     match err {
-        CoreError::Database(DatabaseError::Query { location, .. }) => location.clone(),
+        CoreError::Database(err) => match &**err {
+            DatabaseError::Query { location, .. } => location.clone(),
+            _ => None,
+        },
         _ => None,
     }
 }

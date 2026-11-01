@@ -36,7 +36,12 @@ pub enum CoreError {
     Connection(ConnectionError),
 
     /// 数据库错误域
-    Database(DatabaseError),
+    ///
+    /// 装箱的原因：`DatabaseError::Query` 带 `sql/reason/position/location` 四个字段，
+    /// 整个变体 160 字节，让 `CoreError` 跟着涨到 160 字节 —— 每次 `Result` 返回
+    /// 都按值拷贝这么多（clippy `result_large_err` 全仓报了 1471 处）。装箱后
+    /// `CoreError` 回到一个指针宽，serde / specta 对 `Box<T>` 透明，线上格式不变。
+    Database(Box<DatabaseError>),
 
     /// 存储错误域
     Storage(StorageError),
@@ -794,7 +799,7 @@ impl CoreError {
 
     /// 创建数据库错误
     pub fn database(err: DatabaseError) -> Self {
-        CoreError::Database(err)
+        CoreError::Database(Box::new(err))
     }
 
     /// 创建存储错误
@@ -841,7 +846,7 @@ impl CoreError {
                 ConnectionError::NotSupported(_) => "CONN_NOT_SUPPORTED",
                 ConnectionError::Other { .. } => "CONN_ERROR",
             },
-            CoreError::Database(e) => match e {
+            CoreError::Database(e) => match &**e {
                 DatabaseError::Query { .. } => "DB_QUERY",
                 DatabaseError::Syntax { .. } => "DB_SYNTAX",
                 DatabaseError::Transaction { .. } => "DB_TRANSACTION",
@@ -945,11 +950,11 @@ impl From<serde_json::Error> for CoreError {
 
 impl From<duckdb::Error> for CoreError {
     fn from(e: duckdb::Error) -> Self {
-        CoreError::Database(DatabaseError::Driver {
+        CoreError::Database(Box::new(DatabaseError::Driver {
             db_type: "DuckDB".to_string(),
             operation: "query".to_string(),
             source: e.to_string(),
-        })
+        }))
     }
 }
 
