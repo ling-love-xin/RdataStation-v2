@@ -27,7 +27,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use editor::execution::{ExecTarget, ResultPlacement, RunOptions, TxAction, TxSnapshot, batch_target};
+use editor::execution::{
+    ExecTarget, ResultPlacement, RunOptions, TxAction, TxSnapshot, batch_target,
+};
 use editor::host::{FederatedSourcePort, FederatedSourceRecord};
 use editor::model::{DocumentId, EditorMode};
 use editor::service::OpenRequest;
@@ -192,12 +194,7 @@ fn run_through_editor(
     expected: usize,
 ) -> Vec<editor::store::ResultEntry> {
     shared
-        .submit(
-            document,
-            target,
-            placement,
-            RunOptions::default(),
-        )
+        .submit(document, target, placement, RunOptions::default())
         .expect("提交执行");
     collect_outcomes(shared, expected)
 }
@@ -234,13 +231,10 @@ fn collect_with_snapshots(
                 .with_affected_rows(data.affected_rows)
                 .with_has_more(data.has_more)
                 .with_channel(channel),
-                Err(error) => editor::store::ResultEntry::failure(
-                    outcome.document,
-                    outcome.sql,
-                    error,
-                    0,
-                )
-                .with_channel(channel),
+                Err(error) => {
+                    editor::store::ResultEntry::failure(outcome.document, outcome.sql, error, 0)
+                        .with_channel(channel)
+                }
             };
             // 落位来自结论自己（"结果放哪"是执行时的语义，不是调用方事后猜的）
             shared.update_results(|store| store.push(entry.clone(), outcome.placement, None));
@@ -415,7 +409,10 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             batch.iter().map(|entry| &entry.error).collect::<Vec<_>>()
         );
         assert_eq!(
-            batch.iter().map(|entry| entry.row_count()).collect::<Vec<_>>(),
+            batch
+                .iter()
+                .map(|entry| entry.row_count())
+                .collect::<Vec<_>>(),
             vec![1, 1, 1],
             "{}：每句各自一行",
             target.driver
@@ -455,7 +452,7 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
                 document.clone(),
                 &ExecTarget::Statement(target.slow_sql.to_string()),
                 ResultPlacement::Replace,
-            RunOptions::default(),
+                RunOptions::default(),
             )
             .expect("提交慢查询");
         // 等它真的开始跑（取消要中断的是“跑着的查询”，不是“刚提交”那个瞬间）
@@ -486,14 +483,19 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
         // B4：事务——自动提交关 → 执行进事务 → **回滚作废 / 提交生效**
         runtime.block_on(manager.close_all_connections());
         let tx_value = b3_value(&target, &value, "tx");
-        let Some(_tx_conn) = connect_with_retry(&runtime, &manager, &target, &tx_value, None) else {
+        let Some(_tx_conn) = connect_with_retry(&runtime, &manager, &target, &tx_value, None)
+        else {
             failed_to_connect.push(format!("{}（B4 事务用连接）", target.driver));
             continue;
         };
         let table = format!("rds_tx_probe_{}", std::process::id());
         // 建表在自动提交下做：四个库对“事务内 DDL”的态度不一样（MySQL 会隐式提交），
         // 把 DDL 拉进事务只会验出驱动差异，验不出我们要的东西
-        run_one(&shared, document.clone(), &format!("CREATE TABLE {table} (n INTEGER)"));
+        run_one(
+            &shared,
+            document.clone(),
+            &format!("CREATE TABLE {table} (n INTEGER)"),
+        );
 
         let (_, in_tx) = run_with_options(
             &shared,
@@ -530,7 +532,11 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
                 use_transaction: true,
             },
         );
-        assert!(committed.in_transaction, "{}：第二次也要进事务", target.driver);
+        assert!(
+            committed.in_transaction,
+            "{}：第二次也要进事务",
+            target.driver
+        );
         tx_action(&shared, document.clone(), TxAction::Commit);
         assert_eq!(
             count_rows(&shared, document.clone(), &table),
@@ -662,14 +668,8 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
         );
         let service = engine::services::sql_service::SqlService::new(manager.clone());
         let segment = |sql: &str, offset: usize, limit: usize| -> Vec<String> {
-            let outcome = runtime.block_on(service.execute_segment(
-                None,
-                sql,
-                limit,
-                offset,
-                None,
-                None,
-            ));
+            let outcome =
+                runtime.block_on(service.execute_segment(None, sql, limit, offset, None, None));
             let result = outcome.unwrap_or_else(|error| {
                 panic!("{}：第 {offset} 段取数失败 —— {error}", target.driver)
             });
@@ -694,7 +694,12 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             target.driver
         );
         // 拿不满一段 = 到底了（编辑器据此决定“还有没有下一段”）
-        assert_eq!(segment(&sql, 4, 2).len(), 1, "{}：最后一段只有 1 行", target.driver);
+        assert_eq!(
+            segment(&sql, 4, 2).len(),
+            1,
+            "{}：最后一段只有 1 行",
+            target.driver
+        );
 
         // 没有结果集的语句不能分段（DML 没有“第 2 段”可言）
         let dml = runtime.block_on(service.execute_segment(
@@ -785,9 +790,7 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             more.error
         );
 
-        let active = shared
-            .results_active(&document)
-            .expect("有选中结果");
+        let active = shared.results_active(&document).expect("有选中结果");
         assert_eq!(
             shared.results().set_count(&document),
             sets_before_page,
@@ -796,8 +799,17 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             sets_before_page,
             shared.results().set_count(&document)
         );
-        assert_eq!(active.row_count(), 1_200, "{}：两段接起来 1200 行", target.driver);
-        assert!(!active.can_fetch_more(), "{}：第二段没拿满 → 到底了", target.driver);
+        assert_eq!(
+            active.row_count(),
+            1_200,
+            "{}：两段接起来 1200 行",
+            target.driver
+        );
+        assert!(
+            !active.can_fetch_more(),
+            "{}：第二段没拿满 → 到底了",
+            target.driver
+        );
         // 拼起来不重不漏：看接缝两边的值
         assert_eq!(
             (active.rows[0][0].as_str(), active.rows[999][0].as_str()),
@@ -945,7 +957,9 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
 
         // B8：历史面板的数据源 —— 走编辑器执行三次（含一次失败），引擎的 `history_store`
         // 里就该有这三条，且耗时 / 成败 / 失败原因 / 行数 / 时间都是真值。
-        let before = editor::history::load(500).map(|items| items.len()).unwrap_or(0);
+        let before = editor::history::load(500)
+            .map(|items| items.len())
+            .unwrap_or(0);
         run_one(&shared, document.clone(), "select 1 as n");
         run_one(&shared, document.clone(), "select 2 as n");
         // 失败那次不能用 `run_one`（它断言语句得成功）：走同一条编辑器链路，只断言“确实失败了”
@@ -1002,7 +1016,9 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
         );
         eprintln!(
             "✅ {}：历史面板数据 —— 三次执行都留痕（成功 {} · 耗时 {} · 失败带原因）",
-            target.driver, succeeded.rows_text.as_deref().unwrap_or("-"), succeeded.duration_text
+            target.driver,
+            succeeded.rows_text.as_deref().unwrap_or("-"),
+            succeeded.duration_text
         );
 
         runtime.block_on(manager.close_all_connections());
@@ -1021,10 +1037,12 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             1,
         );
         let waited = started.elapsed();
-        let error = timed_out[0]
-            .error
-            .clone()
-            .unwrap_or_else(|| format!("{}：这句没超时（{}），超时分支没验到", target.driver, target.slow_sql));
+        let error = timed_out[0].error.clone().unwrap_or_else(|| {
+            format!(
+                "{}：这句没超时（{}），超时分支没验到",
+                target.driver, target.slow_sql
+            )
+        });
         assert!(
             error.contains("timed out"),
             "{}：超时要报可读错误，实得 —— {error}",
@@ -1093,14 +1111,21 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             );
 
             // 清理
-            run_one(&shared, document.clone(), &format!("DROP TABLE {qualified}"));
+            run_one(
+                &shared,
+                document.clone(),
+                &format!("DROP TABLE {qualified}"),
+            );
             let ddl_drop = if target.driver.contains("postgres") {
                 format!("DROP SCHEMA {schema_name}")
             } else {
                 format!("DROP DATABASE `{schema_name}`")
             };
             run_one(&shared, document.clone(), &ddl_drop);
-            eprintln!("✅ {}：切 schema 真影响执行（未限定名落到所选 schema）", target.driver);
+            eprintln!(
+                "✅ {}：切 schema 真影响执行（未限定名落到所选 schema）",
+                target.driver
+            );
         }
 
         runtime.block_on(manager.close_all_connections());
@@ -1207,7 +1232,10 @@ fn check_accelerated_channel(
         editor::channel::ExecChannel::Accelerated,
         "结果集要记住自己是加速档跑的"
     );
-    eprintln!("✅ 本地加速：未限定名查到源表（{}），结果带加速通道", entry.summary());
+    eprintln!(
+        "✅ 本地加速：未限定名查到源表（{}），结果带加速通道",
+        entry.summary()
+    );
 
     // ③：写源库被 DuckDB 拒（编辑器闸门之外的兜底）
     let write = run_through_editor(
@@ -1217,10 +1245,7 @@ fn check_accelerated_channel(
         ResultPlacement::Replace,
         1,
     );
-    let reason = write[0]
-        .error
-        .clone()
-        .expect("加速档写源库必须失败");
+    let reason = write[0].error.clone().expect("加速档写源库必须失败");
     assert!(
         reason.contains("read-only"),
         "拒绝理由要说清是只读挂载：{reason}"
@@ -1264,7 +1289,11 @@ fn check_accelerated_channel(
         ResultPlacement::Replace,
         1,
     );
-    assert!(created[0].error.is_none(), "建新表失败：{:?}", created[0].error);
+    assert!(
+        created[0].error.is_none(),
+        "建新表失败：{:?}",
+        created[0].error
+    );
     shared.update(|service| {
         service.set_channel(&document, editor::channel::ExecChannel::Accelerated);
     });
@@ -1320,13 +1349,15 @@ fn check_accelerated_channel(
     let cleanup = run_through_editor(
         &shared,
         document.clone(),
-        &ExecTarget::Statement(format!(
-            "DROP TABLE IF EXISTS mysql.{table};"
-        )),
+        &ExecTarget::Statement(format!("DROP TABLE IF EXISTS mysql.{table};")),
         ResultPlacement::Replace,
         1,
     );
-    assert!(cleanup[0].error.is_none(), "清理失败：{:?}", cleanup[0].error);
+    assert!(
+        cleanup[0].error.is_none(),
+        "清理失败：{:?}",
+        cleanup[0].error
+    );
     let late_cleanup = run_through_editor(
         &shared,
         document.clone(),
@@ -1334,7 +1365,11 @@ fn check_accelerated_channel(
         ResultPlacement::Replace,
         1,
     );
-    assert!(late_cleanup[0].error.is_none(), "清理失败：{:?}", late_cleanup[0].error);
+    assert!(
+        late_cleanup[0].error.is_none(),
+        "清理失败：{:?}",
+        late_cleanup[0].error
+    );
     runtime.block_on(manager.close_all_connections());
 }
 
@@ -1392,7 +1427,10 @@ fn real_python_script_runs_through_the_editor() {
     );
 
     let document = shared
-        .open(OpenRequest::untitled("print('rds-2b-hi')", EditorMode::General))
+        .open(OpenRequest::untitled(
+            "print('rds-2b-hi')",
+            EditorMode::General,
+        ))
         .id()
         .clone();
     assert!(
@@ -1453,10 +1491,7 @@ fn real_python_script_runs_through_the_editor() {
 }
 
 /// 等脚本结论（生产由面板轮询泵做；这里手动轮询 `drain_script_notes`）
-fn collect_script_notes(
-    shared: &EditorShared,
-    expected: usize,
-) -> Vec<editor::env::ScriptNote> {
+fn collect_script_notes(shared: &EditorShared, expected: usize) -> Vec<editor::env::ScriptNote> {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut collected = Vec::new();
     while collected.len() < expected {

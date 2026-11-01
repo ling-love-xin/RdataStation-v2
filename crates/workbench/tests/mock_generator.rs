@@ -54,9 +54,12 @@ fn draft(table: &str, rows: u32) -> MockDraft {
                     unique: false,
                     dependency: None,
                 },
-                ..column("status", GeneratorConfig::Constant {
-                    value: "new".to_string(),
-                })
+                ..column(
+                    "status",
+                    GeneratorConfig::Constant {
+                        value: "new".to_string(),
+                    },
+                )
             },
         ],
         options: MockRunOptions::new(rows, Some(42), Locale::ZhCn),
@@ -135,11 +138,7 @@ fn append_continues_primary_key_sequence() {
 
     let conn = duckdb::Connection::open(&db).expect("open duckdb");
     let distinct: i64 = conn
-        .query_row(
-            "SELECT COUNT(DISTINCT id) FROM t_append",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT COUNT(DISTINCT id) FROM t_append", [], |r| r.get(0))
         .expect("count distinct ids");
     let max_id: i64 = conn
         .query_row("SELECT MAX(id) FROM t_append", [], |r| r.get(0))
@@ -226,7 +225,9 @@ fn append_rejects_column_mismatch() {
 
     // 目标表缺少结果里的列 → 报缺失列名（不让 DuckDB 原始错误冒到界面）
     let mut narrowed = draft.clone();
-    narrowed.columns.push(column("extra", GeneratorConfig::Digit));
+    narrowed
+        .columns
+        .push(column("extra", GeneratorConfig::Digit));
     let info = generate_at(Some(&db), &narrowed, Some("t_mismatch")).expect("regenerate");
     let err = append_table_at(&db, &info, "t_mismatch").expect_err("应报缺列");
     assert!(err.contains("缺少列"), "err: {err}");
@@ -285,8 +286,8 @@ fn scratchpad_without_project_errors() {
     assert!(err.contains("未打开项目"), "err: {err}");
 
     // 有项目根：写入 {项目}/scratchpad/mock/mock_<表>_<时间戳>.csv（必须落在草稿箱扫描的 scratchpad 树下）
-    let message = save_scratchpad(&info, &MockExportFormat::Csv, Some(&dir))
-        .expect("save to scratchpad");
+    let message =
+        save_scratchpad(&info, &MockExportFormat::Csv, Some(&dir)).expect("save to scratchpad");
     assert!(message.contains("已保存到草稿箱"), "{message}");
     let mock_dir = dir.join("scratchpad").join("mock");
     let saved: Vec<String> = std::fs::read_dir(&mock_dir)

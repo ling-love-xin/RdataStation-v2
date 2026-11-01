@@ -39,7 +39,12 @@ fn navigator_reads_tables_and_columns() {
     let orders = tree.iter().find(|t| t.name == "orders").expect("orders");
     // DuckDB 对 PRIMARY KEY 约束的元数据标记有限（is_primary_key 可能为 false），只断言列存在。
     assert!(orders.columns.iter().any(|c| c.name == "order_id"));
-    assert!(orders.columns.iter().any(|c| c.name == "amount" && c.data_type.contains("DECIMAL")));
+    assert!(
+        orders
+            .columns
+            .iter()
+            .any(|c| c.name == "amount" && c.data_type.contains("DECIMAL"))
+    );
     assert!(orders.columns.iter().any(|c| c.name == "status"));
 
     let _ = std::fs::remove_dir_all(&dir);

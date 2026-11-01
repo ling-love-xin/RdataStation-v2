@@ -33,15 +33,17 @@
 //! `insert_statements`（文本）保留给「导出 SQL 脚本」那个出口。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use engine::sql::{ColumnDefInfo, SqlEngine};
 use mock::mock_view::{
     MockColumnSpec, MockDraft, MockGenInfo, MockPreview, SchemaRequest, SchemaSource,
 };
 use mock::models::{ColumnDef, GeneratorConfig, MockConfig, MockExportFormat, ScenarioTemplate};
-use mock::{MockEngine, TempTableWriteMode, new_cancel_token, parse_data_type, sanitize_identifier};
+use mock::{
+    MockEngine, TempTableWriteMode, new_cancel_token, parse_data_type, sanitize_identifier,
+};
 
 use crate::services::nav_runtime;
 
@@ -270,7 +272,11 @@ where
 
     let rt = nav_runtime::bridge_runtime()?;
     let result = rt
-        .block_on(MockEngine::generate_with_progress(config, cancel, on_progress))
+        .block_on(MockEngine::generate_with_progress(
+            config,
+            cancel,
+            on_progress,
+        ))
         .map_err(|e| format!("Mock 生成失败: {e}"))?;
 
     Ok(MockGenInfo {
@@ -314,7 +320,11 @@ where
 
     let rt = nav_runtime::bridge_runtime()?;
     let scenario = rt
-        .block_on(MockEngine::generate_scenario(template, cancel, on_table_progress))
+        .block_on(MockEngine::generate_scenario(
+            template,
+            cancel,
+            on_table_progress,
+        ))
         .map_err(|e| format!("场景生成失败: {e}"))?;
 
     let mut tables = Vec::with_capacity(scenario.tables.len());

@@ -87,12 +87,19 @@ fn marked_connections_become_federated_sources() {
         .expect("保存 MySQL 连接");
     let sqlite_id = rt
         .block_on(service.save(
-            &marked("sqlite_src", "sqlite", &format!("sqlite://{sqlite_path}"), true),
+            &marked(
+                "sqlite_src",
+                "sqlite",
+                &format!("sqlite://{sqlite_path}"),
+                true,
+            ),
             None,
         ))
         .expect("保存 SQLite 连接");
     assert!(
-        !rt.block_on(engine::connection_manager::get_connection_manager().has_connection(&mysql_id)),
+        !rt.block_on(
+            engine::connection_manager::get_connection_manager().has_connection(&mysql_id)
+        ),
         "本用例刻意不建原生连接：源应该由 DuckDB 直接挂"
     );
 
@@ -133,9 +140,13 @@ fn marked_connections_become_federated_sources() {
         .set_federated_primary(Some(&mysql_id), "sqlite_src")
         .expect("换主源该成功");
     assert!(switch.contains("sqlite_src"), "{switch}");
-    let snapshot = engine::duckdb::federation::session::snapshot_for(&mysql_id)
-        .expect("会话该还在");
-    assert_eq!(snapshot.primary.as_deref(), Some("sqlite_src"), "{snapshot:?}");
+    let snapshot =
+        engine::duckdb::federation::session::snapshot_for(&mysql_id).expect("会话该还在");
+    assert_eq!(
+        snapshot.primary.as_deref(),
+        Some("sqlite_src"),
+        "{snapshot:?}"
+    );
     // 换完之后跨源查询照常（全限定名不受主源影响）
     let after = runner
         .run(
@@ -149,7 +160,10 @@ fn marked_connections_become_federated_sources() {
         )
         .expect("换主源后该照常能查");
     assert_eq!(after.rows.len(), 1, "{:?}", after.rows);
-    eprintln!("✅ 换主源：{switch} · 全限定名照常（blob → {} 行）", after.rows[0][0]);
+    eprintln!(
+        "✅ 换主源：{switch} · 全限定名照常（blob → {} 行）",
+        after.rows[0][0]
+    );
 
     // 【T1.6】重挂：单源（源清单里的行级动作）与全挂（菜单里的那项）
     let one = runner
@@ -165,7 +179,12 @@ fn marked_connections_become_federated_sources() {
     // 撤掉 SQLite 的标记 → 只剩一个源：入口就拒，且说清还差什么
     rt.block_on(service.update(
         &sqlite_id,
-        &marked("sqlite_src", "sqlite", &format!("sqlite://{sqlite_path}"), false),
+        &marked(
+            "sqlite_src",
+            "sqlite",
+            &format!("sqlite://{sqlite_path}"),
+            false,
+        ),
         None,
     ))
     .expect("撤标记");

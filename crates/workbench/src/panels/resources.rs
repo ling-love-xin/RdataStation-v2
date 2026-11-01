@@ -18,8 +18,8 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::*;
 
 use analytics_resource::KeepVersions;
-use analytics_resource::dialogs::index_repair::RepairAction;
 use analytics_resource::dialogs::conflict::ConflictChoice;
+use analytics_resource::dialogs::index_repair::RepairAction;
 use analytics_resource::dialogs::tag::TagDialogEvent;
 use analytics_resource::dialogs::trash::TrashAction;
 use analytics_resource::dialogs::version::VersionAction;
@@ -202,14 +202,16 @@ impl SidebarPanel {
         cx: &mut Context<Self>,
     ) {
         let Some(root) = self.shared.project_root() else {
-            self.shared.say_error("资产库：还没有打开项目，无法继续".to_string(), cx);
+            self.shared
+                .say_error("资产库：还没有打开项目，无法继续".to_string(), cx);
             return;
         };
         match context {
             ConflictContext::Promote(req) => match choice {
                 ConflictChoice::Overwrite => {
                     resource_jobs::enqueue_promote(root, req.clone(), true);
-                    self.shared.say("资产库：正在覆盖升级到全局…".to_string(), cx);
+                    self.shared
+                        .say("资产库：正在覆盖升级到全局…".to_string(), cx);
                 }
                 ConflictChoice::Rename(name) => {
                     let mut req = req.clone();
@@ -218,18 +220,22 @@ impl SidebarPanel {
                     self.shared.say("资产库：正在升级到全局…".to_string(), cx);
                 }
             },
-            ConflictContext::Distribute { global_name, target } => match choice {
+            ConflictContext::Distribute {
+                global_name,
+                target,
+            } => match choice {
                 ConflictChoice::Overwrite => {
-                    resource_jobs::enqueue_distribute(root, global_name.clone(), target.clone(), true);
-                    self.shared.say("资产库：正在覆盖分发到本项目…".to_string(), cx);
-                }
-                ConflictChoice::Rename(name) => {
                     resource_jobs::enqueue_distribute(
                         root,
                         global_name.clone(),
-                        Some(name),
-                        false,
+                        target.clone(),
+                        true,
                     );
+                    self.shared
+                        .say("资产库：正在覆盖分发到本项目…".to_string(), cx);
+                }
+                ConflictChoice::Rename(name) => {
+                    resource_jobs::enqueue_distribute(root, global_name.clone(), Some(name), false);
                     self.shared.say("资产库：正在从全局分发…".to_string(), cx);
                 }
             },
@@ -448,7 +454,8 @@ impl SidebarPanel {
             Err(err) => {
                 // 对比失败不是"动作失败"，不该走版本动作回执；用面板通知条告知。
                 // 治理（2026-10-30）：错误级回执走 say_error（写 notice + notify_host + error 日志）。
-                self.shared.say_error(format!("资产库：无法对比版本：{err}"), cx);
+                self.shared
+                    .say_error(format!("资产库：无法对比版本：{err}"), cx);
                 cx.notify();
             }
         }
@@ -578,10 +585,8 @@ impl SidebarPanel {
         // 开三选对话框（覆盖 / 改名 / 取消；§13.3、§13.6）。
         if let resource_jobs::OpOutcome::Conflict { context, name } = &outcome {
             self.shared.conflict_dialog.borrow_mut().pending = Some(context.clone());
-            self.shared.say(
-                format!("资产库：「{name}」同名冲突，请选择处理方式"),
-                cx,
-            );
+            self.shared
+                .say(format!("资产库：「{name}」同名冲突，请选择处理方式"), cx);
             return;
         }
 

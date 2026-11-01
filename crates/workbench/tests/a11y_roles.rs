@@ -66,7 +66,9 @@ fn open_sidebar(cx: &mut TestAppContext) -> (Entity<SidebarPanel>, &mut VisualTe
 }
 
 /// 打开 RightSidebarPanel 宿主（右侧面板）。
-fn open_right_sidebar(cx: &mut TestAppContext) -> (Entity<RightSidebarPanel>, &mut VisualTestContext) {
+fn open_right_sidebar(
+    cx: &mut TestAppContext,
+) -> (Entity<RightSidebarPanel>, &mut VisualTestContext) {
     let slot: Rc<RefCell<Option<Entity<RightSidebarPanel>>>> = Rc::new(RefCell::new(None));
     let slot_in = slot.clone();
     let (_, cx) = cx.add_window_view(move |window, cx| {

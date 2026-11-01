@@ -166,20 +166,20 @@ fn declared_driver_properties_connect_and_ui_fabricated_keys_are_rejected() {
         checked += 1;
 
         // ① 声明里写的键（直接从声明读，不在这里手抄一份）
-        let declared = declared_properties_json(driver)
-            .unwrap_or_else(|| panic!("{driver} 的声明里没有 driver_properties——属性页就无默认值可填"));
-        let (_, db) = connect_via_record(&rt, driver, &url, None, Some(&declared)).unwrap_or_else(|e| {
-            panic!("{driver} 带声明属性 {declared} 真机连接失败：{e}")
+        let declared = declared_properties_json(driver).unwrap_or_else(|| {
+            panic!("{driver} 的声明里没有 driver_properties——属性页就无默认值可填")
         });
+        let (_, db) = connect_via_record(&rt, driver, &url, None, Some(&declared))
+            .unwrap_or_else(|e| panic!("{driver} 带声明属性 {declared} 真机连接失败：{e}"));
         query_one(&rt, &db).expect("带声明属性时应能查询");
         eprintln!("✅ {driver}：声明的驱动属性 {declared} 下发后连接与查询均正常");
 
         // ② 旧 UI 初值（两个键对两个 Official 驱动都不是它们的参数名）必须被拒
         let fabricated = r#"{"ssl_mode":"prefer","connect_timeout":"10"}"#;
         match connect_via_record(&rt, driver, &url, None, Some(fabricated)) {
-            Err(e) => eprintln!(
-                "✅ {driver}：UI 旧初值被驱动拒下（{e}）——这正是决策 #90 要防的形态"
-            ),
+            Err(e) => {
+                eprintln!("✅ {driver}：UI 旧初值被驱动拒下（{e}）——这正是决策 #90 要防的形态")
+            }
             Ok(_) => panic!(
                 "{driver}：UI 编的属性键居然被接受了——能力矩阵 §2.1 的「未知参数」判断需要重查"
             ),
@@ -283,7 +283,9 @@ fn official_driver_tls_require_connects_and_verify_is_real() {
             }
             Err(e) => {
                 // 服务端没开 TLS（或拒绝加密握手）时，本项在真机上无法覆盖——如实记录，不假装通过。
-                eprintln!("⚠️  {driver}：mode=require 失败（{e}）——服务端可能未启用 TLS，本项未覆盖");
+                eprintln!(
+                    "⚠️  {driver}：mode=require 失败（{e}）——服务端可能未启用 TLS，本项未覆盖"
+                );
             }
         }
     }
@@ -311,7 +313,9 @@ fn pg_server_tls_capability_diagnostic() {
     let with_tls = route(&rt, "postgres", &format!("{url}?sslmode=require"));
     match with_tls {
         Ok(_) => eprintln!("ℹ️  真机 PG **支持** TLS（sqlx sslmode=require 连上了）"),
-        Err(e) => eprintln!("ℹ️  真机 PG **未启用** TLS（sqlx sslmode=require 也失败：{e}）——本项未覆盖"),
+        Err(e) => {
+            eprintln!("ℹ️  真机 PG **未启用** TLS（sqlx sslmode=require 也失败：{e}）——本项未覆盖")
+        }
     }
 }
 

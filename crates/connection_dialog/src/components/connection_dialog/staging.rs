@@ -1,5 +1,5 @@
-use shared::i18n::tr;
 use super::*;
+use shared::i18n::tr;
 
 use engine::persistence::connection_draft_store::{ConnectionDraftRow, ConnectionDraftStore};
 
@@ -153,8 +153,6 @@ impl ConnectionDraft {
             && self.driver_id.trim().is_empty()
     }
 }
-
-
 
 impl<H: 'static> ConnectionDialogState<H> {
     // ===== 暂存列表（多连接连续编辑；原型设计 §2.2）=====
@@ -365,9 +363,13 @@ impl<H: 'static> ConnectionDialogState<H> {
             .map(|x| x.id)
             .unwrap_or_default();
         // Select 选中值：少量短字符串（≤ 5 个），在此分配可接受。
-        let select_text = |sel: &Entity<SelectState<SearchableVec<SharedString>>>| -> Option<String> {
-            sel.read(cx).selected_value().cloned().map(|v| v.to_string())
-        };
+        let select_text =
+            |sel: &Entity<SelectState<SearchableVec<SharedString>>>| -> Option<String> {
+                sel.read(cx)
+                    .selected_value()
+                    .cloned()
+                    .map(|v| v.to_string())
+            };
         let groups_match = {
             let checks = self.group_checks.borrow();
             let checked: Vec<&String> = checks
@@ -427,7 +429,10 @@ impl<H: 'static> ConnectionDialogState<H> {
             // 项目侧（P_/GP_）连接只存项目库：优先用条目记录的项目路径，
             // 旧条目无路径时回退当前会话项目根（否则回读取不到记录）。
             let root = if d.project_path.trim().is_empty() {
-                self.session_project.borrow().as_ref().map(|(_, p)| p.clone())
+                self.session_project
+                    .borrow()
+                    .as_ref()
+                    .map(|(_, p)| p.clone())
             } else {
                 Some(d.project_path.clone())
             };
@@ -512,7 +517,11 @@ impl<H: 'static> ConnectionDialogState<H> {
         self.apply_draft(idx, window, cx);
         self.staging_persist();
         // 中性提示（非“成功”）：新建草稿是过程状态，着色用 Info（#28 分级）。
-        set_result(&self.result, ResultLevel::Info, tr("已新建草稿（填好后保存）"));
+        set_result(
+            &self.result,
+            ResultLevel::Info,
+            tr("已新建草稿（填好后保存）"),
+        );
     }
 
     /// 暂存列表：切换条目（规则 1：先写回当前，再载入目标）。
@@ -531,7 +540,11 @@ impl<H: 'static> ConnectionDialogState<H> {
             .get(idx)
             .map(|d| d.display_name())
             .unwrap_or_default();
-        set_result(&self.result, ResultLevel::Info, format!("已载入条目「{label}」"));
+        set_result(
+            &self.result,
+            ResultLevel::Info,
+            format!("已载入条目「{label}」"),
+        );
         self.draft_cursor.set(idx);
         self.apply_draft(idx, window, cx);
         self.staging_persist();

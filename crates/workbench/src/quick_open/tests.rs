@@ -11,11 +11,11 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, KeyBinding,
     ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
 };
-use gpui_kit::test::TestWindowExt as _;
 
 use crate::commands::QuickOpenLocate;
 use crate::panels::Shared;
@@ -150,10 +150,7 @@ fn open_palette_in(
     let palette_host = host.clone();
     // 两个 ASCII 名的连接：便于用真按键（`s` / `sa`）驱动过滤与漫游
     let shared = Shared::with_connections(
-        vec![
-            conn("sales", "postgres"),
-            conn("sales_archive", "duckdb"),
-        ],
+        vec![conn("sales", "postgres"), conn("sales_archive", "duckdb")],
         None,
     );
     if let Some(root) = project_root {
@@ -162,8 +159,7 @@ fn open_palette_in(
     shared.quick_open.set(true);
     let shared_for_palette = shared.clone();
     let (harness, cx) = cx.add_window_view(|_window, cx| {
-        let palette = cx
-            .new(|cx| QuickOpenPalette::new(shared_for_palette, palette_host, cx));
+        let palette = cx.new(|cx| QuickOpenPalette::new(shared_for_palette, palette_host, cx));
         palette.update(cx, |palette, cx| palette.on_opened(mode, cx));
         Harness { palette }
     });
@@ -205,9 +201,7 @@ fn arrow_keys_move_selection_and_enter_executes(cx: &mut TestAppContext) {
     assert!(first.starts_with("conn:0:"), "首行应是 sales：{first}");
 
     cx.simulate_keystrokes("down");
-    let second = cx.update(|_window, cx| {
-        harness.read(cx).palette.read(cx).selected_key()
-    });
+    let second = cx.update(|_window, cx| harness.read(cx).palette.read(cx).selected_key());
     assert_eq!(
         second.as_deref(),
         Some("conn:1:sales_archive"),
@@ -242,10 +236,17 @@ fn clicking_a_row_executes_the_selected_action(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     let executed = host.taken();
-    assert_eq!(executed.len(), 1, "鼠标点击行应经宿主端口执行一次：{executed:?}");
+    assert_eq!(
+        executed.len(),
+        1,
+        "鼠标点击行应经宿主端口执行一次：{executed:?}"
+    );
     assert_eq!(executed[0].0, Action::SelectConnection(0));
     assert!(!executed[0].1, "普通点击不保留面板");
-    assert!(!shared.quick_open.get(), "执行后面板要关（下一次打开是全新的）");
+    assert!(
+        !shared.quick_open.get(),
+        "执行后面板要关（下一次打开是全新的）"
+    );
 }
 
 /// 点遮罩空白处仍关闭面板，且不派发任何动作（遮罩关闭能力回归）。
@@ -261,7 +262,11 @@ fn clicking_the_overlay_closes_without_executing(cx: &mut TestAppContext) {
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    assert!(host.taken().is_empty(), "点遮罩不应派发动作：{:?}", host.taken());
+    assert!(
+        host.taken().is_empty(),
+        "点遮罩不应派发动作：{:?}",
+        host.taken()
+    );
     assert!(!shared.quick_open.get(), "点遮罩空白必须关掉浮层");
 }
 
@@ -354,7 +359,9 @@ fn locate_key_dispatches_reveal_for_metadata_rows(cx: &mut TestAppContext) {
     // 选中那一行后按 `⌥↵`：应派出「在树中定位」而不是打开属性面板
     let palette = cx.update(|_window, cx| harness.read(cx).palette.clone());
     cx.update(|_window, cx| {
-        palette.update(cx, |palette, cx| palette.set_selection(Some(meta_key.clone()), cx));
+        palette.update(cx, |palette, cx| {
+            palette.set_selection(Some(meta_key.clone()), cx)
+        });
     });
     cx.simulate_keystrokes("alt-enter");
 
@@ -369,7 +376,10 @@ fn locate_key_dispatches_reveal_for_metadata_rows(cx: &mut TestAppContext) {
         other => panic!("⌥↵ 应派发 RevealMetadata，实际 {other:?}"),
     }
     assert!(!executed[0].1, "定位不保留面板");
-    assert!(!shared.quick_open.get(), "定位后面板要关（下一拍才看得到树）");
+    assert!(
+        !shared.quick_open.get(),
+        "定位后面板要关（下一拍才看得到树）"
+    );
 }
 
 /// `⌥↵` 在不支持定位的行上**什么都不做**：不派发动作、也不关面板。
@@ -431,10 +441,7 @@ fn metadata_search_starts_only_from_two_chars(cx: &mut TestAppContext) {
 }
 
 /// Goto 档：空词不发后台搜索（`search_seq` 仍为 0），伪造一条空词命中并推泵上列，返回业务键。
-fn push_goto_meta_row(
-    cx: &mut VisualTestContext,
-    palette: Entity<QuickOpenPalette>,
-) -> String {
+fn push_goto_meta_row(cx: &mut VisualTestContext, palette: Entity<QuickOpenPalette>) -> String {
     database::nav_jobs::push_search_results_for_test(
         database::nav_jobs::SearchConsumer::QuickOpen,
         database::nav_jobs::SearchResult {
@@ -469,11 +476,7 @@ fn goto_palette_locks_metadata_only_without_connection_rows(cx: &mut TestAppCont
         let palette = palette.read(cx);
         (palette.current_mode(), palette.row_keys(cx))
     });
-    assert_eq!(
-        mode,
-        Some(Mode::Goto),
-        "Ctrl+Shift+O 打开应锁定 Goto 档"
-    );
+    assert_eq!(mode, Some(Mode::Goto), "Ctrl+Shift+O 打开应锁定 Goto 档");
     assert!(
         keys.iter().all(|key| !key.starts_with("conn:")),
         "Goto 档不出连接行：{keys:?}"
@@ -487,9 +490,7 @@ fn goto_enter_reveals_metadata_into_tree(cx: &mut TestAppContext) {
     let (host, shared, harness, cx) = open_palette_goto(cx);
     let palette = cx.update(|_window, cx| harness.read(cx).palette.clone());
     let key = push_goto_meta_row(cx, palette.clone());
-    cx.update(|_window, cx| {
-        palette.update(cx, |palette, cx| palette.set_selection(Some(key), cx))
-    });
+    cx.update(|_window, cx| palette.update(cx, |palette, cx| palette.set_selection(Some(key), cx)));
 
     cx.simulate_keystrokes("enter");
 
@@ -504,7 +505,10 @@ fn goto_enter_reveals_metadata_into_tree(cx: &mut TestAppContext) {
         other => panic!("Goto ↵ 主动作应是回树定位，实际 {other:?}"),
     }
     assert!(!executed[0].1, "主动作不保留面板");
-    assert!(!shared.quick_open.get(), "执行后面板要关（下一拍才看得到树）");
+    assert!(
+        !shared.quick_open.get(),
+        "执行后面板要关（下一拍才看得到树）"
+    );
 }
 
 /// Goto 档 `⌥↵`：次级动作 = 打开属性面板（`ShowProperties`），与默认档「⌥↵ 定位」方向相反。
@@ -521,9 +525,7 @@ fn goto_alt_enter_opens_properties_secondary_action(cx: &mut TestAppContext) {
             Some("workbench"),
         )])
     });
-    cx.update(|_window, cx| {
-        palette.update(cx, |palette, cx| palette.set_selection(Some(key), cx))
-    });
+    cx.update(|_window, cx| palette.update(cx, |palette, cx| palette.set_selection(Some(key), cx)));
 
     cx.simulate_keystrokes("alt-enter");
 

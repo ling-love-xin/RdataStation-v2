@@ -14,8 +14,8 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::{ActiveTheme, WindowExt as _};
 use gpui_kit::*;
 
-use settings::model::default_type_short_map;
 use settings::SettingsService;
+use settings::model::default_type_short_map;
 
 use crate::components::dialog_helpers::standard_dialog_body;
 
@@ -129,24 +129,22 @@ pub fn open_type_short_map_dialog(window: &mut Window, cx: &mut App) {
             .child(standard_dialog_body(body))
             .footer(
                 DialogFooter::new()
-                    .child(
-                        Button::new("type-short-map-save")
-                            .label("保存")
-                            .on_click(move |_, window, cx| {
-                                let map = {
-                                    let rows = rows_primary.borrow();
-                                    rows.iter()
-                                        .map(|(t, input)| {
-                                            let v = input.read(cx).value().trim().to_string();
-                                            (t.clone(), v)
-                                        })
-                                        .filter(|(_, v)| !v.is_empty())
-                                        .collect::<std::collections::HashMap<_, _>>()
-                                };
-                                SettingsService::set_type_short_map(map, cx);
-                                window.close_dialog(cx);
-                            }),
-                    )
+                    .child(Button::new("type-short-map-save").label("保存").on_click(
+                        move |_, window, cx| {
+                            let map = {
+                                let rows = rows_primary.borrow();
+                                rows.iter()
+                                    .map(|(t, input)| {
+                                        let v = input.read(cx).value().trim().to_string();
+                                        (t.clone(), v)
+                                    })
+                                    .filter(|(_, v)| !v.is_empty())
+                                    .collect::<std::collections::HashMap<_, _>>()
+                            };
+                            SettingsService::set_type_short_map(map, cx);
+                            window.close_dialog(cx);
+                        },
+                    ))
                     .child(
                         Button::new("type-short-map-reset")
                             .ghost()

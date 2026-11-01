@@ -16,9 +16,7 @@ use std::sync::OnceLock;
 
 use connection::model::DataSourceSaveInput;
 use engine::persistence::global_db::GlobalDatabaseManager;
-use gpui_kit::{
-    IntoElement, Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
-};
+use gpui_kit::{IntoElement, Render, Styled as _, TestAppContext, VisualTestContext, Window, div};
 use rds_workbench::components::connection_dialog::{ConnectionDialogState, ConnectionDraft};
 use rds_workbench::services::data_source_service::DataSourceService;
 
@@ -28,7 +26,11 @@ static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
 struct Host;
 
 impl Render for Host {
-    fn render(&mut self, _window: &mut Window, _cx: &mut gpui_kit::Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut gpui_kit::Context<Self>,
+    ) -> impl IntoElement {
         div().size_full()
     }
 }
@@ -232,14 +234,21 @@ fn staging_lists_only_unsaved_drafts(cx: &mut TestAppContext) {
         names.contains(&"未保存草稿"),
         "未保存草稿不得被清理：{names:?}"
     );
-    assert!(!names.contains(&"历史残留"), "已保存条目应被清理：{names:?}");
+    assert!(
+        !names.contains(&"历史残留"),
+        "已保存条目应被清理：{names:?}"
+    );
     assert!(
         !names.contains(&"only_drafts"),
         "库中连接不得被并入暂存区：{names:?}"
     );
     assert!(drafts.iter().all(|d| d.saved_id.is_none()), "{names:?}");
     let cursor = cx.update(|_, _cx| dialog.draft_cursor.get());
-    assert!(cursor < drafts.len(), "光标不应越界：{cursor} / {}", drafts.len());
+    assert!(
+        cursor < drafts.len(),
+        "光标不应越界：{cursor} / {}",
+        drafts.len()
+    );
 }
 
 /// 分组同步（替换语义）经服务单例走进真实项目库。
@@ -255,8 +264,12 @@ fn groups_sync_through_service() {
     // 项目库里建两个分组（分组管理 UI 归导航模块，这里直接走 store）。
     let store = engine::persistence::ConnectionOrgStore::open_project(&project_root)
         .expect("open project org store");
-    store.create_group("grp_a", "业务库", None).expect("create a");
-    store.create_group("grp_b", "测试库", None).expect("create b");
+    store
+        .create_group("grp_a", "业务库", None)
+        .expect("create a");
+    store
+        .create_group("grp_b", "测试库", None)
+        .expect("create b");
     assert_eq!(service.list_groups(Some(&root_str)).len(), 2);
 
     // 替换语义：先勾两个 → 只留一个 → 清空。

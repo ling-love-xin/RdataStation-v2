@@ -70,7 +70,9 @@ fn singleton_service_and_loader_production_path() {
     let (items, notice) = load_persisted_connections();
     assert!(notice.is_none(), "{notice:?}");
     assert!(
-        items.iter().any(|i| i.id == id && i.name == "singleton_demo"),
+        items
+            .iter()
+            .any(|i| i.id == id && i.name == "singleton_demo"),
         "单例分支应读到新连接：{items:?}"
     );
 

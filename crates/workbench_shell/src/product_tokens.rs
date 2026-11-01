@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use gpui_kit::component::{try_parse_color, ActiveTheme as _, Theme, ThemeMode};
+use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode, try_parse_color};
 use gpui_kit::{App, Global, Hsla};
 use serde::Deserialize;
 

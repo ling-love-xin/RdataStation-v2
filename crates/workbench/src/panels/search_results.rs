@@ -16,13 +16,13 @@ use std::rc::Rc;
 
 use scratchpad::ScratchpadSearchView;
 
+use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, TabGroup};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme, IconName, Sizable as _};
-use gpui_kit::EventEmitter;
 use gpui_kit::*;
 
 use super::shared::Shared;
@@ -109,7 +109,9 @@ impl Render for SearchResultsHostPanel {
         }
         let Some(search) = search else {
             return div()
-                .id("search-results-host").role(gpui::Role::Group).test_support()
+                .id("search-results-host")
+                .role(gpui::Role::Group)
+                .test_support()
                 .size_full()
                 .bg(theme.colors.background)
                 .v_flex()
@@ -142,20 +144,17 @@ impl Render for SearchResultsHostPanel {
                 }
                 state
             });
-            let sub = cx.subscribe_in(
-                &input,
-                window,
-                |this, _e, ev: &InputEvent, window, cx| {
-                    if matches!(ev, InputEvent::PressEnter { .. }) {
-                        this.run_panel_search(window, cx);
-                    }
-                },
-            );
+            let sub = cx.subscribe_in(&input, window, |this, _e, ev: &InputEvent, window, cx| {
+                if matches!(ev, InputEvent::PressEnter { .. }) {
+                    this.run_panel_search(window, cx);
+                }
+            });
             self.panel_input = Some(input);
             self.panel_sub = Some(sub);
         }
         let panel_input = self.panel_input.clone();
-        let (panel_case, panel_regex, panel_word) = (self.panel_case, self.panel_regex, self.panel_word);
+        let (panel_case, panel_regex, panel_word) =
+            (self.panel_case, self.panel_regex, self.panel_word);
         let entity = cx.entity();
         let toggle_panel_case = {
             let entity = entity.clone();
@@ -220,16 +219,8 @@ impl Render for SearchResultsHostPanel {
             // 原型 es-bar（2026-10-11 用户对比 + 2026-10-11 全面对齐）：输入框 + **框外**
             // Aa/ab/.* 开关同行（VSCode 形态；开关不嵌输入框内）——与侧栏搜索行（框内）刻意
             // 区分。顺序按原型 Aa/ab/.*（case 先；2026-10-11 对齐侧栏）。
-            es_bar = es_bar.child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(Input::new(&input).w_full()),
-            );
-            es_bar = es_bar
-                .child(case_btn)
-                .child(word_btn)
-                .child(regex_btn);
+            es_bar = es_bar.child(div().flex_1().min_w_0().child(Input::new(&input).w_full()));
+            es_bar = es_bar.child(case_btn).child(word_btn).child(regex_btn);
         } else {
             es_bar = es_bar.child(div().flex_1());
         }
@@ -257,11 +248,7 @@ impl Render for SearchResultsHostPanel {
 
         let shared = self.shared.clone();
         // 点命中 → 在编辑器里打开该草稿并跳到命中行（相对路径 → 模块内绝对路径）。
-        let open_hit: Rc<dyn Fn(
-            scratchpad::ScratchpadSearchHitTarget,
-            &mut Window,
-            &mut App,
-        )> = {
+        let open_hit: Rc<dyn Fn(scratchpad::ScratchpadSearchHitTarget, &mut Window, &mut App)> = {
             Rc::new(
                 move |target: scratchpad::ScratchpadSearchHitTarget,
                       _window: &mut Window,
@@ -300,7 +287,9 @@ impl Render for SearchResultsHostPanel {
             clear,
         );
         div()
-            .id("search-results-host").role(gpui::Role::Group).test_support()
+            .id("search-results-host")
+            .role(gpui::Role::Group)
+            .test_support()
             .size_full()
             .bg(theme.colors.background)
             .v_flex()

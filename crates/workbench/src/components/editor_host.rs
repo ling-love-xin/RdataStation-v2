@@ -62,7 +62,8 @@ impl EditorHost for WorkbenchEditorHost {
     }
 
     fn open_history(&self, cx: &mut App) {
-        self.shared.open_right_panel(crate::view::RightPanel::History, cx);
+        self.shared
+            .open_right_panel(crate::view::RightPanel::History, cx);
     }
 
     fn open_insight_source_column(&self, request: InsightColumnRequest, cx: &mut App) {

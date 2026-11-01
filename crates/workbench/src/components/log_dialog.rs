@@ -237,19 +237,16 @@ pub fn open_log_dialog(window: &mut Window, cx: &mut App) {
         }
         let state_refresh = state_build.clone();
         let input_refresh = input_build.clone();
-        head = head
-            .child(div().flex_1().min_w_0().child(Input::new(&input_build)))
-            .child(
-                Button::new("log-refresh")
-                    .small()
-                    .label("刷新")
-                    .on_click(move |_, _, app| {
+        head =
+            head.child(div().flex_1().min_w_0().child(Input::new(&input_build)))
+                .child(Button::new("log-refresh").small().label("刷新").on_click(
+                    move |_, _, app| {
                         // 关键字的读取点**只在这里**：输入框变化不重查库
                         // （订阅输入事件会变成每次击键重查，代价与收益不成比例）。
                         let keyword = input_refresh.read(app).value().trim().to_string();
                         fetch(state_refresh.clone(), keyword, app);
-                    }),
-            );
+                    },
+                ));
 
         // ── 体：记录列表（最新在前，超出滚动） ──────────────────────
         let mut body = div()
@@ -330,27 +327,28 @@ pub fn open_log_dialog(window: &mut Window, cx: &mut App) {
                     .child(view.status_text()),
             )
             .child(
-                div().text_xs().text_color(theme.colors.muted_foreground).child(
-                    "库里的记录由后台批量写入，最新 1 秒内可能尚未出现；完整原文见日志文件。",
-                ),
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child(
+                        "库里的记录由后台批量写入，最新 1 秒内可能尚未出现；完整原文见日志文件。",
+                    ),
             )
             .footer(
                 DialogFooter::new()
-                    .child(
-                        Button::new("log-open-dir").label("打开日志目录").on_click(
-                            |_, _, app| {
-                                let dir = paths::log_dir();
-                                if let Err(e) = std::fs::create_dir_all(&dir) {
-                                    eprintln!("[logs] 创建日志目录失败 {}: {e}", dir.display());
-                                    return;
-                                }
-                                if let Err(e) = opener::open(&dir) {
-                                    eprintln!("[logs] 打开日志目录失败 {}: {e}", dir.display());
-                                }
-                                let _ = app;
-                            },
-                        ),
-                    )
+                    .child(Button::new("log-open-dir").label("打开日志目录").on_click(
+                        |_, _, app| {
+                            let dir = paths::log_dir();
+                            if let Err(e) = std::fs::create_dir_all(&dir) {
+                                eprintln!("[logs] 创建日志目录失败 {}: {e}", dir.display());
+                                return;
+                            }
+                            if let Err(e) = opener::open(&dir) {
+                                eprintln!("[logs] 打开日志目录失败 {}: {e}", dir.display());
+                            }
+                            let _ = app;
+                        },
+                    ))
                     .child(
                         Button::new("log-close")
                             .label("关闭")

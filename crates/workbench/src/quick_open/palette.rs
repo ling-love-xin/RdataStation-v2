@@ -16,11 +16,11 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::input::{Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
 use gpui_kit::component::list::{List, ListState};
 use gpui_kit::component::{ActiveTheme, IndexPath};
-use gpui_kit::TestSupportExt as _;
 use gpui_kit::*;
 
 use crate::commands::QuickOpenLocate;
@@ -318,7 +318,9 @@ impl QuickOpenPalette {
             model::Mode::Goto => "跳转到对象（表 · 视图 · 例程 · 序列 · 触发器）",
             _ => "搜索对象、命令…（> 命令 · # 全文）",
         };
-        input.update(cx, |state, cx| state.set_placeholder(placeholder, window, cx));
+        input.update(cx, |state, cx| {
+            state.set_placeholder(placeholder, window, cx)
+        });
         let groups = model::build_groups(&query, &sources);
         let selected = self
             .selected_key
@@ -471,18 +473,20 @@ impl QuickOpenPalette {
         }
         let weak = cx.entity().downgrade();
         let executor = cx.background_executor().clone();
-        let task = cx.spawn(async move |_this, cx| loop {
-            match weak.update(cx, |this, _| this.shared.quick_open.get()) {
-                Ok(open) => {
-                    // 开着时勤取（元数据正在回填），关着时降频空转
-                    let wait = if open { 60 } else { 400 };
-                    executor.timer(Duration::from_millis(wait)).await;
-                    if open {
-                        let _ = weak.update(cx, |this, cx| this.pump_results(cx));
+        let task = cx.spawn(async move |_this, cx| {
+            loop {
+                match weak.update(cx, |this, _| this.shared.quick_open.get()) {
+                    Ok(open) => {
+                        // 开着时勤取（元数据正在回填），关着时降频空转
+                        let wait = if open { 60 } else { 400 };
+                        executor.timer(Duration::from_millis(wait)).await;
+                        if open {
+                            let _ = weak.update(cx, |this, cx| this.pump_results(cx));
+                        }
                     }
+                    // 视图已销毁：退出任务（否则会永远空转）
+                    Err(_) => return,
                 }
-                // 视图已销毁：退出任务（否则会永远空转）
-                Err(_) => return,
             }
         });
         self.pump = Some(task);
@@ -493,9 +497,8 @@ impl QuickOpenPalette {
     /// `pub(crate)`：定位的窗口级测试直接调它（键位与泵的定时器各自已有覆盖），
     /// 免得测一个业务逻辑还要跟 60ms 的轮询时钟赛跑。
     pub(crate) fn pump_results(&mut self, cx: &mut Context<Self>) {
-        let results = database::nav_jobs::drain_search_results(
-            database::nav_jobs::SearchConsumer::QuickOpen,
-        );
+        let results =
+            database::nav_jobs::drain_search_results(database::nav_jobs::SearchConsumer::QuickOpen);
         let lists = scratchpad::jobs::drain_file_lists();
         if results.is_empty() && lists.is_empty() {
             return;
@@ -710,7 +713,10 @@ impl Render for QuickOpenPalette {
                     .absolute()
                     .inset_0()
                     .bg(theme.colors.overlay)
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.close(cx))),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| this.close(cx)),
+                    ),
             )
             .child(
                 div()
@@ -748,16 +754,18 @@ impl Render for QuickOpenPalette {
             )
             // 键盘：焦点在输入框里，单行 Input 不处理 ↑↓ / Esc（会 propagate），
             // 因此这三个 Action 在浮层根上接住；Enter 由输入框事件给出（含 Shift 三态）。
-            .on_action(cx.listener(|this, _: &MoveUp, window, cx| {
-                this.move_selection(-1, window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &MoveDown, window, cx| {
-                this.move_selection(1, window, cx)
-            }))
+            .on_action(
+                cx.listener(|this, _: &MoveUp, window, cx| this.move_selection(-1, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &MoveDown, window, cx| this.move_selection(1, window, cx)),
+            )
             .on_action(cx.listener(|this, _: &Escape, _window, cx| this.close(cx)))
-            .on_action(cx.listener(|this, _: &QuickOpenLocate, window, cx| {
-                this.confirm_locate(window, cx)
-            }))
+            .on_action(
+                cx.listener(|this, _: &QuickOpenLocate, window, cx| {
+                    this.confirm_locate(window, cx)
+                }),
+            )
             .into_any_element()
     }
 }

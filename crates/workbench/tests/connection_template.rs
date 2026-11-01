@@ -46,9 +46,7 @@ impl Harness {
 
 impl Render for Harness {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .child(self.editor.clone())
+        div().size_full().child(self.editor.clone())
     }
 }
 
@@ -92,7 +90,11 @@ fn seed_catalog(dialog: &ConnectionDialogState<Harness>) {
 }
 
 /// 造一条可导出的草稿（含密码，用于验证导出脱敏）。
-fn seed_draft(dialog: &ConnectionDialogState<Harness>, window: &mut Window, cx: &mut gpui_kit::App) {
+fn seed_draft(
+    dialog: &ConnectionDialogState<Harness>,
+    window: &mut Window,
+    cx: &mut gpui_kit::App,
+) {
     dialog
         .name
         .update(cx, |s, cx| s.set_value("生产 PG", window, cx));
@@ -183,7 +185,11 @@ fn import_rejects_invalid_payloads(cx: &mut TestAppContext) {
 
     let err = cx.update(|window, cx| {
         dialog
-            .templates_import(r#"{"kind":"other","version":1,"connections":[]}"#, window, cx)
+            .templates_import(
+                r#"{"kind":"other","version":1,"connections":[]}"#,
+                window,
+                cx,
+            )
             .expect_err("kind 不符应被拒绝")
     });
     assert!(err.contains("kind"), "{err}");

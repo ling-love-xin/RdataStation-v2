@@ -284,8 +284,11 @@ fn schema_insight_runs_on_every_configured_database() {
             mismatch,
             "{}：`status` 一表 INT 一表 VARCHAR，应检出类型不一致（分组：{:?}）",
             target.driver,
-            view.group(SchemaSection::TypeMismatches)
-                .map(|group| group.rows.iter().map(|row| row.title.clone()).collect::<Vec<_>>())
+            view.group(SchemaSection::TypeMismatches).map(|group| group
+                .rows
+                .iter()
+                .map(|row| row.title.clone())
+                .collect::<Vec<_>>())
         );
 
         // 负例：**名写错了要报错**，而不是给一张「零张表」的干净报告
@@ -339,7 +342,9 @@ fn schema_insight_runs_on_every_configured_database() {
         // 清理（真库不留探针表）
         let cleanup_started = std::time::Instant::now();
         for t in [&t1, &t2] {
-            if let Err(error) = runtime.block_on(exec(&conn_id, &format!("DROP TABLE IF EXISTS {t}"))) {
+            if let Err(error) =
+                runtime.block_on(exec(&conn_id, &format!("DROP TABLE IF EXISTS {t}")))
+            {
                 eprintln!("⚠️  {}：清理 {t} 失败 —— {error}", target.driver);
             }
         }

@@ -26,10 +26,8 @@ use gpui_kit::*;
 
 use crate::view::LeftPanel;
 
+use analytics_resource::dialogs::conflict::{ConflictKind, ConflictSeed, open_conflict_dialog};
 use analytics_resource::dialogs::index_repair::{RepairDialogState, open_index_repair_dialog};
-use analytics_resource::dialogs::conflict::{
-    ConflictKind, ConflictSeed, open_conflict_dialog,
-};
 use analytics_resource::dialogs::tag::{TagDialogState, open_tag_dialog};
 use analytics_resource::dialogs::trash::{TrashDialogState, open_trash_dialog};
 use analytics_resource::dialogs::version::{VersionDialogState, open_version_dialog};
@@ -55,13 +53,13 @@ mod shared;
 pub use database::model::PropertyRequest;
 pub use editor::EditorPanel;
 pub use left_tabs::{DatabaseNavPanel, PluginPanel, ResourcePanelTab, ScratchPanel};
-pub use property_panel::{PropertyHostPanel, focus_property_tab};
+pub use metadata_search::{MetadataSearchHostPanel, focus_metadata_search_tab};
 pub use project_picker::ProjectPickerPanel;
+pub use property_panel::{PropertyHostPanel, focus_property_tab};
 pub use right::RightSidebarPanel;
 pub use right_tabs::{ArchivePanel, HistoryPanelTab, InsightPanelTab, MockPanelTab};
 pub use scratchpad::ScratchpadDiffView;
 pub use scratchpad::ScratchpadSearchView;
-pub use metadata_search::{MetadataSearchHostPanel, focus_metadata_search_tab};
 pub use search_results::{SearchResultsHostPanel, focus_search_tab};
 pub use shared::append_sql;
 pub use shared::{

@@ -44,7 +44,8 @@ fn make_service_with_db(dir: &Path) -> (&'static GlobalDatabaseManager, DataSour
         ))
         .expect("init global db");
     let manager: &'static GlobalDatabaseManager = Box::leak(Box::new(manager));
-    let service = DataSourceService::new(manager).with_analysis_db(dir.join("secret-target.duckdb"));
+    let service =
+        DataSourceService::new(manager).with_analysis_db(dir.join("secret-target.duckdb"));
     (manager, service)
 }
 
@@ -101,7 +102,11 @@ fn save_then_list_roundtrip_global_scope() {
     let service = make_service(&dir);
     let rt = runtime();
 
-    let mut i = input("demo_pg", "postgres", "postgres://u:p@10.0.0.9:5433/warehouse");
+    let mut i = input(
+        "demo_pg",
+        "postgres",
+        "postgres://u:p@10.0.0.9:5433/warehouse",
+    );
     i.username = Some("alice".into());
     i.password = Some("s3cret".into());
     i.use_duckdb_fed = Some(true);
@@ -176,7 +181,8 @@ fn update_changes_fields_and_guards_duplicate_name() {
     let mut upd = input("beta_v2", "postgres", "postgres://u:p@10.1.1.1:6543/bdb2");
     upd.username = Some("bob".into());
     upd.password = Some("newpw".into());
-    rt.block_on(service.update(&b_id, &upd, None)).expect("update");
+    rt.block_on(service.update(&b_id, &upd, None))
+        .expect("update");
 
     let b = rt
         .block_on(service.get_global(&b_id))
@@ -213,7 +219,11 @@ fn delete_removes_connection_and_cleans_secret() {
     let service = make_service(&dir);
     let rt = runtime();
 
-    let mut i = input("fed_pg", "postgres", "postgres://bob:pw@127.0.0.1:5432/analytics");
+    let mut i = input(
+        "fed_pg",
+        "postgres",
+        "postgres://bob:pw@127.0.0.1:5432/analytics",
+    );
     i.use_duckdb_fed = Some(true);
     let id = rt.block_on(service.save(&i, None)).expect("save");
 
@@ -224,7 +234,11 @@ fn delete_removes_connection_and_cleans_secret() {
         .expect("open secret db");
     let secrets = mgr.list().expect("list secrets");
     assert_eq!(secrets.len(), 1, "保存后应注册联邦 Secret：{secrets:?}");
-    assert_eq!(secrets[0].name, id.to_lowercase(), "Secret 名为连接 ID 小写形式");
+    assert_eq!(
+        secrets[0].name,
+        id.to_lowercase(),
+        "Secret 名为连接 ID 小写形式"
+    );
     drop(mgr);
 
     let result = rt.block_on(service.delete(&id, None)).expect("delete");
@@ -236,10 +250,15 @@ fn delete_removes_connection_and_cleans_secret() {
     assert!(mgr.list().expect("list").is_empty(), "Secret 应被移除");
     drop(mgr);
 
-    assert!(rt.block_on(service.list()).unwrap().is_empty(), "列表应为空");
+    assert!(
+        rt.block_on(service.list()).unwrap().is_empty(),
+        "列表应为空"
+    );
 
     // 再次删除 → 记录不存在（engine 删除不报错），Secret 清理为 false 不视为失败。
-    let again = rt.block_on(service.delete(&id, None)).expect("delete again");
+    let again = rt
+        .block_on(service.delete(&id, None))
+        .expect("delete again");
     assert!(!again.removed_secret);
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -311,7 +330,11 @@ fn project_side_save_registers_secret_to_project_analysis_db_and_delete_removes(
     )
     .expect("open project secret db");
     let secrets = mgr.list().expect("list project secrets");
-    assert_eq!(secrets.len(), 1, "项目侧保存应注册到项目分析库：{secrets:?}");
+    assert_eq!(
+        secrets.len(),
+        1,
+        "项目侧保存应注册到项目分析库：{secrets:?}"
+    );
     assert_eq!(secrets[0].name, id.to_lowercase());
     drop(mgr);
 
@@ -333,13 +356,19 @@ fn project_side_save_registers_secret_to_project_analysis_db_and_delete_removes(
     let result = rt
         .block_on(service.delete(&id, Some(&project_root.to_string_lossy())))
         .expect("delete");
-    assert!(result.removed_secret, "项目侧删除应清理项目分析库 Secret：{result:?}");
+    assert!(
+        result.removed_secret,
+        "项目侧删除应清理项目分析库 Secret：{result:?}"
+    );
     let mgr = connection::secret::SecretManager::open_with_dir(
         &project_analysis_db,
         Some(&project_secret_dir),
     )
     .expect("reopen project secret db");
-    assert!(mgr.list().expect("list").is_empty(), "项目分析库 Secret 应被移除");
+    assert!(
+        mgr.list().expect("list").is_empty(),
+        "项目分析库 Secret 应被移除"
+    );
     drop(mgr);
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -351,7 +380,11 @@ fn save_without_federation_does_not_register_secret() {
     let service = make_service(&dir);
     let rt = runtime();
 
-    let mut i = input("plain_pg", "postgres", "postgres://u:p@127.0.0.1:5432/plain");
+    let mut i = input(
+        "plain_pg",
+        "postgres",
+        "postgres://u:p@127.0.0.1:5432/plain",
+    );
     i.use_duckdb_fed = Some(false);
     rt.block_on(service.save(&i, None)).expect("save");
 
@@ -423,10 +456,11 @@ fn global_and_project_scope_writes_both_sides() {
     i.use_duckdb_fed = Some(true);
     let path = project_root.to_string_lossy().to_string();
 
-    let pid = rt
-        .block_on(service.save(&i, Some(&path)))
-        .expect("save gp");
-    assert!(pid.starts_with("GP_conn_"), "全局+项目应返回 GP_ 快照 ID：{pid}");
+    let pid = rt.block_on(service.save(&i, Some(&path))).expect("save gp");
+    assert!(
+        pid.starts_with("GP_conn_"),
+        "全局+项目应返回 GP_ 快照 ID：{pid}"
+    );
 
     // 全局侧：G_ 定义可回读。
     let list = rt.block_on(service.list()).unwrap();
@@ -465,16 +499,21 @@ fn global_and_project_scope_writes_both_sides() {
         "GP_ 应回读为全局+项目"
     );
     // 不带项目根：项目侧取不到（不报错，由 UI 降级）；全局 `get` 也查不到 GP_ 行。
-    assert!(rt
-        .block_on(service.get_with_project(&pid, None))
-        .unwrap()
-        .is_none());
+    assert!(
+        rt.block_on(service.get_with_project(&pid, None))
+            .unwrap()
+            .is_none()
+    );
     assert!(rt.block_on(service.get_global(&pid)).unwrap().is_none());
 
     // 项目侧删除：路由到项目库，不误删全局定义。
     rt.block_on(service.delete(&pid, Some(&path)))
         .expect("delete project side");
-    assert_eq!(rt.block_on(service.list()).unwrap().len(), 1, "全局定义仍在");
+    assert_eq!(
+        rt.block_on(service.list()).unwrap().len(),
+        1,
+        "全局定义仍在"
+    );
     let gone = rt.block_on(async {
         let store = open_project_store(&project_root).await;
         store.get_connection(&pid).await
@@ -513,10 +552,11 @@ fn project_scope_readback_requires_project_path() {
     assert_eq!(ds.tags.as_deref(), Some(r#"["dev"]"#));
 
     // 不带项目根 / 走全局 `get`：取不到（不报错，UI 降级为空表单）。
-    assert!(rt
-        .block_on(service.get_with_project(&id, None))
-        .unwrap()
-        .is_none());
+    assert!(
+        rt.block_on(service.get_with_project(&id, None))
+            .unwrap()
+            .is_none()
+    );
     assert!(rt.block_on(service.get_global(&id)).unwrap().is_none());
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -554,7 +594,11 @@ fn file_db_path_survives_save_and_readback() {
         .block_on(service.get_with_project(&pid, Some(&path)))
         .expect("get_with_project")
         .expect("项目侧连接应可读回");
-    assert_eq!(ds.database.as_deref(), Some("C:/data/app.db"), "项目侧同样保留路径");
+    assert_eq!(
+        ds.database.as_deref(),
+        Some("C:/data/app.db"),
+        "项目侧同样保留路径"
+    );
     assert!(blank(ds.host.as_deref()), "文件型不应写主机：{:?}", ds.host);
     // 连接 URL 只从 database 列还原：项目侧文件连接此前因缺路径会直接报“缺少数据库路径”。
     assert_eq!(
@@ -595,17 +639,22 @@ fn project_scope_rejects_non_project_root() {
     assert!(!bogus.join(".RSmeta").exists(), "写路径不得创建项目骨架");
 
     // 读路径：降级为空，同样不建目录。
-    assert!(rt
-        .block_on(service.get_with_project("P_conn_probe", Some(&path)))
-        .expect("读降级不报错")
-        .is_none());
+    assert!(
+        rt.block_on(service.get_with_project("P_conn_probe", Some(&path)))
+            .expect("读降级不报错")
+            .is_none()
+    );
     assert!(!bogus.join(".RSmeta").exists(), "读路径不得创建项目骨架");
 
     // 同步 / 删除（项目侧）同样被拦。
-    assert!(rt
-        .block_on(service.sync_snapshot_from_global("GP_conn_probe_20260912", &path))
-        .is_err());
-    assert!(rt.block_on(service.delete("P_conn_probe", Some(&path))).is_err());
+    assert!(
+        rt.block_on(service.sync_snapshot_from_global("GP_conn_probe_20260912", &path))
+            .is_err()
+    );
+    assert!(
+        rt.block_on(service.delete("P_conn_probe", Some(&path)))
+            .is_err()
+    );
     assert!(!bogus.join(".RSmeta").exists(), "删除路径不得创建项目骨架");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -620,7 +669,11 @@ fn project_update_keeps_password_when_blank() {
     let rt = runtime();
     let path = project_root.to_string_lossy().to_string();
 
-    let mut i = input("pw_keep", "postgres", "postgres://u:secret@127.0.0.1:5432/db");
+    let mut i = input(
+        "pw_keep",
+        "postgres",
+        "postgres://u:secret@127.0.0.1:5432/db",
+    );
     i.scope = ConnectionScope::Project;
     i.password = Some("secret".into());
     let id = rt
@@ -671,13 +724,15 @@ fn snapshot_sync_pulls_latest_global_definition() {
     let path = project_root.to_string_lossy().to_string();
 
     // 1) 建「全局+项目」连接 → 全局定义 G_ + 项目快照 GP_。
-    let mut i = input("sync_gp", "postgres", "postgres://carol:pw1@127.0.0.1:5432/db1");
+    let mut i = input(
+        "sync_gp",
+        "postgres",
+        "postgres://carol:pw1@127.0.0.1:5432/db1",
+    );
     i.scope = ConnectionScope::GlobalAndProject;
     i.password = Some("pw1".into());
     i.tags = Some(r#"["old"]"#.to_string());
-    let pid = rt
-        .block_on(service.save(&i, Some(&path)))
-        .expect("save gp");
+    let pid = rt.block_on(service.save(&i, Some(&path))).expect("save gp");
     let gid = id_prefix::source_global_id(&pid).expect("GP_ 可反查全局源 ID");
 
     // 标签权威表（connection_tags）在项目库侧：保存时已同步为快照的标签。
@@ -689,10 +744,15 @@ fn snapshot_sync_pulls_latest_global_definition() {
     assert_eq!(project_org.list_tags(&pid), vec!["old".to_string()]);
 
     // 2) 改全局定义（名称 / 端口 / 密码 / 标签）——快照是独立副本，此时不同步。
-    let mut upd = input("sync_gp", "postgres", "postgres://carol:pw2@127.0.0.1:5433/db2");
+    let mut upd = input(
+        "sync_gp",
+        "postgres",
+        "postgres://carol:pw2@127.0.0.1:5433/db2",
+    );
     upd.password = Some("pw2".into());
     upd.tags = Some(r#"["new"]"#.to_string());
-    rt.block_on(service.update(&gid, &upd, None)).expect("update global");
+    rt.block_on(service.update(&gid, &upd, None))
+        .expect("update global");
 
     let read = |rt: &tokio::runtime::Runtime| {
         rt.block_on(async {
@@ -740,7 +800,8 @@ fn snapshot_sync_pulls_latest_global_definition() {
         .block_on(service.sync_snapshot_from_global(&pid, "  "))
         .expect_err("缺项目路径应报错");
     assert!(err.to_string().contains("项目路径"), "{err}");
-    rt.block_on(service.delete(&gid, None)).expect("删除全局定义");
+    rt.block_on(service.delete(&gid, None))
+        .expect("删除全局定义");
     let err = rt
         .block_on(service.sync_snapshot_from_global(&pid, &path))
         .expect_err("全局定义不存在应报错");
@@ -851,14 +912,16 @@ fn tags_sync_and_delete_cleanup() {
     g.tags = Some(r#"["prod","core"]"#.to_string());
     let gid = rt.block_on(service.save(&g, None)).expect("save global");
 
-    let global_org =
-        engine::persistence::ConnectionOrgStore::open_at(dir.join("global.db"), false)
-            .expect("open global org");
+    let global_org = engine::persistence::ConnectionOrgStore::open_at(dir.join("global.db"), false)
+        .expect("open global org");
     assert_eq!(
         global_org.list_tags(&gid),
         vec!["core".to_string(), "prod".to_string()]
     );
-    assert_eq!(global_org.list_connections_by_tag("prod"), vec![gid.clone()]);
+    assert_eq!(
+        global_org.list_connections_by_tag("prod"),
+        vec![gid.clone()]
+    );
 
     // 项目连接：标签落项目库；分组关系可加入。
     let mut p = input("tagged_project", "sqlite", "sqlite:///tmp/tp.db");
@@ -874,18 +937,22 @@ fn tags_sync_and_delete_cleanup() {
     )
     .expect("open project org");
     assert_eq!(project_org.list_tags(&pid), vec!["dev".to_string()]);
-    project_org.create_group("g1", "alpha", None).expect("group");
+    project_org
+        .create_group("g1", "alpha", None)
+        .expect("group");
     project_org.add_member("g1", &pid).expect("member");
     assert_eq!(project_org.list_group_members("g1"), vec![pid.clone()]);
 
     // 更新：标签改为新集合（覆盖式）。
     let mut upd = input("tagged_global", "sqlite", "sqlite:///tmp/tg.db");
     upd.tags = Some(r#"["archive"]"#.to_string());
-    rt.block_on(service.update(&gid, &upd, None)).expect("update");
+    rt.block_on(service.update(&gid, &upd, None))
+        .expect("update");
     assert_eq!(global_org.list_tags(&gid), vec!["archive".to_string()]);
 
     // 删除全局连接 → 标签清理。
-    rt.block_on(service.delete(&gid, None)).expect("delete global");
+    rt.block_on(service.delete(&gid, None))
+        .expect("delete global");
     assert!(global_org.list_tags(&gid).is_empty());
     assert!(global_org.list_connections_by_tag("prod").is_empty());
 
@@ -917,7 +984,9 @@ fn global_delete_cleans_project_group_membership() {
         true,
     )
     .expect("open project org");
-    project_org.create_group("g1", "alpha", None).expect("group");
+    project_org
+        .create_group("g1", "alpha", None)
+        .expect("group");
     service
         .set_connection_groups(&gid, &["g1".to_string()], Some(&root_str))
         .expect("分组同步");
@@ -1091,10 +1160,12 @@ fn referenced_network_profile_reaches_connect_request() {
 
     // 3) 档案 → ConnectionMethod（含大写类型键归一 + 项目库路由）。
     let method = rt
-        .block_on(rds_workbench::services::connection_service::resolve_network_method_with_project(
-            ds.network_config_id.as_deref(),
-            Some(&root_str),
-        ))
+        .block_on(
+            rds_workbench::services::connection_service::resolve_network_method_with_project(
+                ds.network_config_id.as_deref(),
+                Some(&root_str),
+            ),
+        )
         .expect("resolve network method");
     assert!(
         matches!(method, Some(ConnectionMethod::HttpProxy(_))),
@@ -1102,12 +1173,9 @@ fn referenced_network_profile_reaches_connect_request() {
     );
 
     // 4) 请求组装带出网络方式 + 作用域路由（此前 network_method 恒为 None）。
-    let req = rds_workbench::services::nav_runtime::build_connect_request(
-        &ds,
-        Some(&root_str),
-        method,
-    )
-    .expect("build connect request");
+    let req =
+        rds_workbench::services::nav_runtime::build_connect_request(&ds, Some(&root_str), method)
+            .expect("build connect request");
     assert_eq!(
         req.connection_type,
         engine::connection_manager::ConnectionType::Project,
@@ -1130,7 +1198,11 @@ fn test_connection_reports_unknown_driver_without_io() {
 
     let result = rt.block_on(service.test(&input("bad", "no_such_driver", "x://y"), None));
     assert!(!result.success);
-    assert!(result.message.contains("驱动") || result.message.contains("no_such_driver"), "{}", result.message);
+    assert!(
+        result.message.contains("驱动") || result.message.contains("no_such_driver"),
+        "{}",
+        result.message
+    );
     assert!(result.version.is_none(), "失败不应返回版本");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -1205,7 +1277,11 @@ fn probe_config_applies_referenced_auth_profile() {
     let err = rt
         .block_on(ConnectionService::build_probe_config(
             Some(global_db),
-            probe_input("postgres", "postgres://db.internal:5432/app", Some("G_auth_missing")),
+            probe_input(
+                "postgres",
+                "postgres://db.internal:5432/app",
+                Some("G_auth_missing"),
+            ),
         ))
         .err()
         .expect("档案缺失必须让配置构建失败");
@@ -1268,7 +1344,8 @@ fn manager_reference_count_and_delete_guard() {
         None,
     ))
     .expect("无引用应可删除");
-    let empty = rt.block_on(service.count_references(ReferenceField::AuthConfig, "", Some(&root_str)));
+    let empty =
+        rt.block_on(service.count_references(ReferenceField::AuthConfig, "", Some(&root_str)));
     assert_eq!(empty.total(), 0, "空 id 不参与统计");
 
     // 2) 全局连接引用二者 → 计数与拦截消息都要说清范围。
@@ -1277,7 +1354,8 @@ fn manager_reference_count_and_delete_guard() {
     g.network_config_id = Some(net_id.into());
     rt.block_on(service.save(&g, None)).expect("save global");
 
-    let auth = rt.block_on(service.count_references(ReferenceField::AuthConfig, auth_id, Some(&root_str)));
+    let auth =
+        rt.block_on(service.count_references(ReferenceField::AuthConfig, auth_id, Some(&root_str)));
     assert_eq!((auth.global, auth.project), (1, 0));
     let err = rt
         .block_on(service.ensure_no_references(
@@ -1288,7 +1366,10 @@ fn manager_reference_count_and_delete_guard() {
         ))
         .expect_err("被引用的认证配置不可删除");
     let msg = err.to_string();
-    assert!(msg.contains("认证配置") && msg.contains("全局 1 条"), "{msg}");
+    assert!(
+        msg.contains("认证配置") && msg.contains("全局 1 条"),
+        "{msg}"
+    );
 
     let net = rt.block_on(service.count_references(ReferenceField::NetworkConfig, net_id, None));
     assert_eq!(net.total(), 1, "网络配置走同一套计数");
@@ -1307,8 +1388,10 @@ fn manager_reference_count_and_delete_guard() {
     let mut p = input("ref_project", "postgres", "postgres://u:p@h:5432/db");
     p.scope = ConnectionScope::Project;
     p.auth_config_id = Some(auth_id.into());
-    rt.block_on(service.save(&p, Some(&root_str))).expect("save project");
-    let both = rt.block_on(service.count_references(ReferenceField::AuthConfig, auth_id, Some(&root_str)));
+    rt.block_on(service.save(&p, Some(&root_str)))
+        .expect("save project");
+    let both =
+        rt.block_on(service.count_references(ReferenceField::AuthConfig, auth_id, Some(&root_str)));
     assert_eq!((both.global, both.project), (1, 1));
     let msg = rt
         .block_on(service.ensure_no_references(
@@ -1319,8 +1402,12 @@ fn manager_reference_count_and_delete_guard() {
         ))
         .expect_err("项目引用同样拦截")
         .to_string();
-    assert!(msg.contains("全局 1 条") && msg.contains("当前项目 1 条"), "{msg}");
-    let no_project = rt.block_on(service.count_references(ReferenceField::AuthConfig, auth_id, None));
+    assert!(
+        msg.contains("全局 1 条") && msg.contains("当前项目 1 条"),
+        "{msg}"
+    );
+    let no_project =
+        rt.block_on(service.count_references(ReferenceField::AuthConfig, auth_id, None));
     assert_eq!(
         (no_project.global, no_project.project),
         (1, 0),
@@ -1349,16 +1436,14 @@ fn manager_reference_count_and_delete_guard() {
     .expect("register project");
 
     // 在当前项目上下文里看：其它项目 1 条（记项目名，每个项目只计一次）
-    let cross = rt.block_on(service.count_references(
-        ReferenceField::AuthConfig,
-        auth_id,
-        Some(&root_str),
-    ));
+    let cross =
+        rt.block_on(service.count_references(ReferenceField::AuthConfig, auth_id, Some(&root_str)));
     assert_eq!(cross.other_projects(), 1, "{cross:?}");
     assert_eq!(cross.other, vec!["另一项目".to_string()]);
 
     // 未打开任何项目时同样能看到（旧实现会漏掉）
-    let cross_none = rt.block_on(service.count_references(ReferenceField::AuthConfig, auth_id, None));
+    let cross_none =
+        rt.block_on(service.count_references(ReferenceField::AuthConfig, auth_id, None));
     assert_eq!(cross_none.other_projects(), 1, "{cross_none:?}");
 
     // 拦截消息列出范围与项目名
@@ -1423,10 +1508,11 @@ fn auth_config_detail_by_name_decrypts_for_edit() {
     assert_eq!(parsed["password"], "s3cret", "回填必须是明文");
 
     // 不存在 → Ok(None)（不是错误）
-    assert!(rt
-        .block_on(service.auth_config_detail_by_name("不存在的档案"))
-        .expect("detail")
-        .is_none());
+    assert!(
+        rt.block_on(service.auth_config_detail_by_name("不存在的档案"))
+            .expect("detail")
+            .is_none()
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1562,9 +1648,9 @@ fn probe_config_applies_referenced_network_profile() {
         },
     ));
     let err = match outcome {
-        Ok((_, _, notes)) => panic!(
-            "不可达的 SSH 档案必须让测试失败（证明真的建了隧道）；notes={notes:?}"
-        ),
+        Ok((_, _, notes)) => {
+            panic!("不可达的 SSH 档案必须让测试失败（证明真的建了隧道）；notes={notes:?}")
+        }
         Err(e) => e,
     };
     assert!(

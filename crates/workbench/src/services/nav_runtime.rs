@@ -16,7 +16,7 @@ use connection::model::DataSource;
 use engine::connection_manager::ConnectionType;
 
 use crate::services::connection_service::{
-    resolve_network_method_with_project, ConnectRequest, ConnectionService,
+    ConnectRequest, ConnectionService, resolve_network_method_with_project,
 };
 use crate::services::data_source_service::DataSourceService;
 
@@ -114,18 +114,23 @@ pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), St
                     return;
                 }
             };
-            let outcome =
-                rt.block_on(
-                    ConnectionService::new(engine::get_connection_manager().clone())
-                        .connect_with_type(req),
-                );
+            let outcome = rt.block_on(
+                ConnectionService::new(engine::get_connection_manager().clone())
+                    .connect_with_type(req),
+            );
             database::nav_jobs::connect_pending_dec();
             match outcome {
-                Ok(_) => { tracing::info!(conn_id = %conn_id, "【探针】建连成功"); database::nav_jobs::submit_connect_outcome(&conn_id, true, "已连接") }
+                Ok(_) => {
+                    tracing::info!(conn_id = %conn_id, "【探针】建连成功");
+                    database::nav_jobs::submit_connect_outcome(&conn_id, true, "已连接")
+                }
                 // 探针建连失败属环境 / 数据性状态（离线、内网不可达、网络档案缺失），
                 // 失败结果已经 `submit_connect_outcome` 回填导航面板，不是进程缺陷 → WARN；
                 // 上方「桥接运行时失败」才是本进程缺陷，保留 ERROR。
-                Err(e) => { tracing::warn!(conn_id = %conn_id, error = %e, "【探针】建连失败"); database::nav_jobs::submit_connect_outcome(&conn_id, false, &e.to_string()) }
+                Err(e) => {
+                    tracing::warn!(conn_id = %conn_id, error = %e, "【探针】建连失败");
+                    database::nav_jobs::submit_connect_outcome(&conn_id, false, &e.to_string())
+                }
             }
         });
     match spawned {

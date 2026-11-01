@@ -63,7 +63,9 @@ impl<H: 'static> ConnectionDialogState<H> {
             window,
             move |_editor, _sel, event: &SelectEvent<SearchableVec<SharedString>>, window, cx| {
                 let SelectEvent::Confirm(value) = event;
-                let Some(value) = value else { return; };
+                let Some(value) = value else {
+                    return;
+                };
                 let env_name = value.to_string();
                 // 切环境 → 异步刷新策略覆盖（`env_policies_loaded_for` 先置位，渲染期不再重复触发）。
                 state.refresh_env_policies_async(&env_name, &entity, window, cx);
@@ -96,7 +98,8 @@ impl<H: 'static> ConnectionDialogState<H> {
         self.blocked_hint.set(false);
         // 当前项目会话接入（C2）：项目根先取会话快照，编辑回读（项目侧 P_/GP_ 只存项目库）
         // 与项目栏预填共用它。
-        let session_root = shared.current_project()
+        let session_root = shared
+            .current_project()
             .map(|p| p.root.to_string_lossy().to_string());
         if let Some(id) = &editing_id {
             self.load_for_edit(id, session_root.as_deref(), window, cx);
@@ -195,7 +198,8 @@ impl<H: 'static> ConnectionDialogState<H> {
 
         // 项目会话变更检测（每帧执行，开销仅一次借用比较）：对话框打开期间「＋ 新增项目」
         // 或外部切换项目后，项目下拉选项与选中项必须跟上新会话。
-        let session_now = shared.current_project()
+        let session_now = shared
+            .current_project()
             .map(|p| (p.name.clone(), p.root.to_string_lossy().to_string()));
         if *self.session_project.borrow() != session_now {
             *self.session_project.borrow_mut() = session_now.clone();
@@ -258,7 +262,9 @@ impl<H: 'static> ConnectionDialogState<H> {
         name.update(cx, |s, cx| {
             s.set_placeholder(tr("名称（如 生产 PG）"), window, cx)
         });
-        remark.update(cx, |s, cx| s.set_placeholder(tr("备注（可选）"), window, cx));
+        remark.update(cx, |s, cx| {
+            s.set_placeholder(tr("备注（可选）"), window, cx)
+        });
         driver_filter.update(cx, |s, cx| {
             s.set_placeholder(tr("搜索类型 / 驱动（回车选中）"), window, cx)
         });

@@ -5,10 +5,10 @@
 
 use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
-use gpui_kit::component::{ActiveTheme};
 use gpui_kit::*;
 
 use crate::view::RightPanel;
@@ -177,11 +177,11 @@ impl RightSidebarPanel {
                     host: crate::components::resource_host::build_host(&self.shared),
                     read_only,
                 };
-                div()
-                    .v_flex()
-                    .size_full()
-                    .min_h_0()
-                    .child(render_detail(&detail, Some(actions), cx))
+                div().v_flex().size_full().min_h_0().child(render_detail(
+                    &detail,
+                    Some(actions),
+                    cx,
+                ))
             }
             None => self.render_archive_detail_empty(cx),
         }

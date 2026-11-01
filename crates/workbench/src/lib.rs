@@ -25,7 +25,9 @@ pub mod view;
 pub use commands::{
     CloseProject, HideSidebars, QuickOpenLocate, RestoreSidebars, SwitchProject, ToggleQuickOpen,
 };
-pub use services::connection_service::{ConnectRequest, ConnectionService, SaveGlobalConnectionInput};
+pub use services::connection_service::{
+    ConnectRequest, ConnectionService, SaveGlobalConnectionInput,
+};
 pub use services::driver_service::DriverService;
 pub use services::result_service::ResultService;
 pub use view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode, WorkbenchView};

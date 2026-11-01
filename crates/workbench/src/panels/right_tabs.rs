@@ -55,12 +55,7 @@ impl Render for InsightPanelTab {
             .update(cx, |panel, cx| panel.set_project_open(open, cx));
         let insight = self.insight.clone();
         // 顶部留 8px 间隔：dock 标题栏与模块内容（含内置工具栏）不贴边（#15）。
-        div()
-            .v_flex()
-            .size_full()
-            .min_h_0()
-            .pt_2()
-            .child(insight)
+        div().v_flex().size_full().min_h_0().pt_2().child(insight)
     }
 }
 
@@ -129,7 +124,6 @@ impl ComponentPanel for InsightPanelTab {
         // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
         menu
     }
-
 }
 pub struct MockPanelTab {
     shared: Shared,
@@ -228,7 +222,6 @@ impl ComponentPanel for MockPanelTab {
         // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
         menu
     }
-
 }
 pub struct HistoryPanelTab {
     shared: Shared,
@@ -258,12 +251,7 @@ impl Render for HistoryPanelTab {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let history = self.history.clone();
         // 顶部留 8px 间隔：dock 标题栏与模块内容不贴边（#15）。
-        div()
-            .v_flex()
-            .size_full()
-            .min_h_0()
-            .pt_2()
-            .child(history)
+        div().v_flex().size_full().min_h_0().pt_2().child(history)
     }
 }
 
@@ -332,7 +320,6 @@ impl ComponentPanel for HistoryPanelTab {
         // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
         menu
     }
-
 }
 ///
 /// 选中变化经宿主观察（`init_workspace` 观察资产库面板实体 → 唤醒本面板）；
@@ -474,5 +461,4 @@ impl ComponentPanel for ArchivePanel {
         // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
         menu
     }
-
 }

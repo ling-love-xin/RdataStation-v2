@@ -127,7 +127,10 @@ fn collect_rows(project_root: Option<&std::path::Path>) -> (Vec<TagRow>, usize, 
 }
 
 /// 按行打开对应域的 `TagTable`（重命名 / 清理都按 `project` 标志选库）。
-fn open_table(project_root: Option<&std::path::Path>, project: bool) -> Result<tag::TagTable, CoreError> {
+fn open_table(
+    project_root: Option<&std::path::Path>,
+    project: bool,
+) -> Result<tag::TagTable, CoreError> {
     match project {
         true => {
             let root = project_root.ok_or_else(|| {
@@ -264,7 +267,11 @@ fn confirm_cleanup(
         return;
     }
     let root = shared.project_root();
-    let preview: Vec<String> = empty.iter().take(5).map(|(_, n, _)| format!("「{n}」")).collect();
+    let preview: Vec<String> = empty
+        .iter()
+        .take(5)
+        .map(|(_, n, _)| format!("「{n}」"))
+        .collect();
     let mut preview_text = preview.join("、");
     if empty.len() > 5 {
         preview_text.push_str(&format!(" 等 {} 个", empty.len()));
@@ -532,7 +539,16 @@ pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Share
                                 let rname = rname_del.clone();
                                 let rproject = rproject;
                                 move |_, window, app| {
-                                    confirm_delete_tag(window, app, shared.clone(), rows.clone(), error.clone(), &rid, &rname, rproject);
+                                    confirm_delete_tag(
+                                        window,
+                                        app,
+                                        shared.clone(),
+                                        rows.clone(),
+                                        error.clone(),
+                                        &rid,
+                                        &rname,
+                                        rproject,
+                                    );
                                 }
                             }),
                         ),
@@ -556,7 +572,13 @@ pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Share
                             let error = error_build.clone();
                             let shared = shared_build.clone();
                             move |_, window, app| {
-                                confirm_cleanup(window, app, shared.clone(), rows.clone(), error.clone());
+                                confirm_cleanup(
+                                    window,
+                                    app,
+                                    shared.clone(),
+                                    rows.clone(),
+                                    error.clone(),
+                                );
                             }
                         }),
                 )
@@ -568,9 +590,6 @@ pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Share
                 ),
         );
 
-        sheet
-            .title("管理标签")
-            .size(px(420.))
-            .child(body)
+        sheet.title("管理标签").size(px(420.)).child(body)
     });
 }

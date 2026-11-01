@@ -21,9 +21,9 @@ use analytics_resource::dialogs::trash::TrashDialogState;
 use analytics_resource::dialogs::version::VersionDialogState;
 use analytics_resource::resource_view::ResourcesPanel;
 
-use gpui_kit::*;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{IconName, Sizable as _};
+use gpui_kit::*;
 
 use database::model::PropertyRequest;
 
@@ -236,7 +236,11 @@ pub fn search_option_button(
     kind: SearchOptionKind,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Button {
-    let mut btn = Button::new(id).ghost().toggled(selected).xsmall().tooltip(tip);
+    let mut btn = Button::new(id)
+        .ghost()
+        .toggled(selected)
+        .xsmall()
+        .tooltip(tip);
     btn = match kind {
         SearchOptionKind::Text(label) => btn.label(label),
         SearchOptionKind::Icon(icon) => btn.icon(icon),

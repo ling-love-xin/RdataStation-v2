@@ -95,11 +95,14 @@ pub fn open_visible_databases_dialog(
 
         // 候选展示过滤：「显示系统对象」关 = 只列非系统对象 + 已勾选的对象（后者保证
         // 已勾选的系统库仍可见、可取消勾选）；开 = 全部。
-        let visible_name = |name: &str, is_system: bool| {
-            !is_system || s.show_system || s.checked.contains(name)
-        };
+        let visible_name =
+            |name: &str, is_system: bool| !is_system || s.show_system || s.checked.contains(name);
 
-        let mut list = div().v_flex().w_full().gap_1().max_h(rems(ui::VIS_DIALOG_LIST_MAX_H));
+        let mut list = div()
+            .v_flex()
+            .w_full()
+            .gap_1()
+            .max_h(rems(ui::VIS_DIALOG_LIST_MAX_H));
         if s.entries.is_empty() {
             list = list.child(
                 div()
@@ -237,32 +240,30 @@ pub fn open_visible_databases_dialog(
             )
             .footer(
                 DialogFooter::new()
-                    .child(
-                        Button::new("vis-apply")
-                            .label("确定")
-                            .on_click({
-                                let state = state_build.clone();
-                                let nav_view = nav_view.clone();
-                                let cid = conn_id_build.clone();
-                                let shared = shared_build.clone();
-                                move |_, window, app| {
-                                    let checked: Vec<String> =
-                                        state.borrow().checked.iter().cloned().collect();
-                                    settings::SettingsService::set_visible_databases(
-                                        &cid, Some(checked), app,
-                                    );
-                                    // 重载该连接整棵子树（清旧子树、按新白名单快照重新过滤加载）。
-                                    if let Some(nav) = nav_view.clone().and_then(|w| w.upgrade()) {
-                                        let cid2 = cid.clone();
-                                        nav.update(app, |this, cx| {
-                                            this.refresh_connection_after_filter(&cid2, cx)
-                                        });
-                                    }
-                                    window.close_dialog(app);
-                                    shared.notify_host(app);
-                                }
-                            }),
-                    )
+                    .child(Button::new("vis-apply").label("确定").on_click({
+                        let state = state_build.clone();
+                        let nav_view = nav_view.clone();
+                        let cid = conn_id_build.clone();
+                        let shared = shared_build.clone();
+                        move |_, window, app| {
+                            let checked: Vec<String> =
+                                state.borrow().checked.iter().cloned().collect();
+                            settings::SettingsService::set_visible_databases(
+                                &cid,
+                                Some(checked),
+                                app,
+                            );
+                            // 重载该连接整棵子树（清旧子树、按新白名单快照重新过滤加载）。
+                            if let Some(nav) = nav_view.clone().and_then(|w| w.upgrade()) {
+                                let cid2 = cid.clone();
+                                nav.update(app, |this, cx| {
+                                    this.refresh_connection_after_filter(&cid2, cx)
+                                });
+                            }
+                            window.close_dialog(app);
+                            shared.notify_host(app);
+                        }
+                    }))
                     .child(
                         Button::new("vis-cancel")
                             .label("取消")

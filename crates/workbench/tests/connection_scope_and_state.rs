@@ -97,7 +97,8 @@ fn scope_visibility_and_runtime_state() {
     let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
     assert!(ids.contains(&"G_conn_only_global"), "{ids:?}");
     assert!(
-        !ids.iter().any(|id| id.starts_with("P_") || id.starts_with("GP_")),
+        !ids.iter()
+            .any(|id| id.starts_with("P_") || id.starts_with("GP_")),
         "未打开项目不应出现项目侧连接：{ids:?}"
     );
 
@@ -120,8 +121,12 @@ fn scope_visibility_and_runtime_state() {
     let config = engine::driver::registry::DriverConnectionConfig::new("sqlite")
         .with_database(sqlite_file.display().to_string());
     let db = rt.block_on(async {
-        let factory = engine::driver::registry::DriverRegistry::get("sqlite").expect("sqlite driver");
-        factory.create(config.clone()).await.expect("create sqlite db")
+        let factory =
+            engine::driver::registry::DriverRegistry::get("sqlite").expect("sqlite driver");
+        factory
+            .create(config.clone())
+            .await
+            .expect("create sqlite db")
     });
     let info = engine::connection_manager::ConnectionInfo {
         id: "G_conn_only_global".to_string(),

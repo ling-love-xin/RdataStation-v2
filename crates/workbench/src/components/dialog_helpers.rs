@@ -21,19 +21,24 @@
 //! });
 //! ```
 
-use gpui_kit::{App, ClickEvent, IntoElement, ParentElement as _, SharedString, Styled as _, Window, div, px};
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::dialog::{
     DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 };
-use gpui_kit::component::WindowExt as _;
+use gpui_kit::{
+    App, ClickEvent, IntoElement, ParentElement as _, SharedString, Styled as _, Window, div, px,
+};
 
 /// 标准对话框内容区。
 ///
 /// 统一的内容区容器：垂直布局、内容间距、最大宽度限制。
 /// 替代手搓的 `div().v_flex().w_full().gap_2()...`。
 pub fn standard_dialog_body(content: impl IntoElement) -> DialogContent {
-    DialogContent::new().w_full().max_w(px(560.0)).child(content)
+    DialogContent::new()
+        .w_full()
+        .max_w(px(560.0))
+        .child(content)
 }
 
 /// 标准对话框标题区。
@@ -83,7 +88,11 @@ pub fn standard_confirm_dialog<F>(
     title: impl Into<SharedString>,
     message: impl Into<SharedString>,
     on_confirm: F,
-) -> impl Fn(gpui_kit::component::dialog::Dialog, &mut Window, &mut App) -> gpui_kit::component::dialog::Dialog
+) -> impl Fn(
+    gpui_kit::component::dialog::Dialog,
+    &mut Window,
+    &mut App,
+) -> gpui_kit::component::dialog::Dialog
 where
     F: Fn(&ClickEvent, &mut Window, &mut App) + Clone + 'static,
 {

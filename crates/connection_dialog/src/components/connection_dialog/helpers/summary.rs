@@ -1,6 +1,5 @@
 use super::*;
 
-
 /// 摘要超过该字符数（或含换行）时，UI 提供「详情」展开（按字符数，避免多字节截断）。
 pub(crate) const RESULT_SUMMARY_MAX_CHARS: usize = 80;
 
@@ -25,9 +24,7 @@ pub(crate) fn create_new_db_file(
     let value = path.to_string_lossy().to_string();
     let is_duckdb = driver_id.eq_ignore_ascii_case("duckdb");
     if path.exists() {
-        let nonempty = std::fs::metadata(path)
-            .map(|m| m.len() > 0)
-            .unwrap_or(true);
+        let nonempty = std::fs::metadata(path).map(|m| m.len() > 0).unwrap_or(true);
         if nonempty {
             return (
                 format!("该文件已存在，未创建：{value}；请换一个文件名，或用「打开文件…」引用它"),
@@ -210,4 +207,3 @@ pub(crate) fn scope_from_label(l: &str) -> ConnectionScope {
 pub(crate) fn default_new_scope() -> &'static str {
     SCOPE_LABELS[1]
 }
-

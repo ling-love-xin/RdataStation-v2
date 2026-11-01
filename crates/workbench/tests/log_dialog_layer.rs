@@ -9,8 +9,7 @@
 
 use gpui_kit::component::{Root, WindowExt as _};
 use gpui_kit::{
-    AppContext as _, Context, IntoElement, Render, Styled as _, TestAppContext, Window,
-    div,
+    AppContext as _, Context, IntoElement, Render, Styled as _, TestAppContext, Window, div,
 };
 
 /// 简化宿主：0.7.1 起对话框层由 Root 自动挂载，宿主只渲染占位视图（生产是 `WorkbenchView`）。
@@ -18,8 +17,7 @@ struct HostView;
 
 impl Render for HostView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
+        div().size_full()
     }
 }
 

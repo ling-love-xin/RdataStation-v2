@@ -14,16 +14,16 @@ use std::rc::Rc;
 
 use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
-use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
 use gpui_kit::component::form::{Field, Form};
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme, Size, Sizable as _, Theme};
+use gpui_kit::component::{ActiveTheme, Sizable as _, Size, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -31,8 +31,8 @@ use super::Shared;
 use database::model::PropertyRequest;
 use database::nav_jobs;
 use database::table_data::{DEFAULT_PAGE_LIMIT, TableDataRequest};
-use property::{ObjectProperties, PageId, PropertyRow, PropertySection, PropertyValueKind};
 use property::PropertyState;
+use property::{ObjectProperties, PageId, PropertyRow, PropertySection, PropertyValueKind};
 use workbench_shell::{tree, ui};
 
 /// 属性行内编辑态（DBeaver 属性编辑：点击可编辑值 → 行内编辑控件）。
@@ -85,7 +85,10 @@ impl PropertyHostPanel {
     pub fn show_properties(&self, request: PropertyRequest, cx: &mut Context<Self>) {
         let key = format!(
             "{}|{:?}|{}|{:?}",
-            request.property.conn_id, request.property.kind, request.property.name, request.property.parent
+            request.property.conn_id,
+            request.property.kind,
+            request.property.name,
+            request.property.parent
         );
         // 驱动目录已缓存（随组织数据一次加载）：补 type_id（属性源分派键）+
         // 组装「驱动友好名 + 类型展示名」（视图层只给驱动 id）。
@@ -109,11 +112,7 @@ impl PropertyHostPanel {
                         ),
                     )
                 }
-                None => (
-                    request.driver.clone(),
-                    request.type_id.clone(),
-                    None,
-                ),
+                None => (request.driver.clone(), request.type_id.clone(), None),
             }
         };
         {
@@ -264,8 +263,9 @@ impl PropertyHostPanel {
     ) {
         let weak = cx.entity().downgrade();
         let executor = cx.background_executor().clone();
-        let metadata =
-            database::metadata_service::MetadataService::new(engine::get_connection_manager().clone());
+        let metadata = database::metadata_service::MetadataService::new(
+            engine::get_connection_manager().clone(),
+        );
         // async move 按值捕获：把传给后台的字段先拆出来，`target` 保持完整供回填闭包用。
         let prop = target.property.clone();
         let driver = target.driver.clone();
@@ -358,18 +358,33 @@ impl PropertyHostPanel {
             if active == PageId::Data {
                 body = body.child(self.render_data_page(entity.clone(), props, &theme));
             } else {
-                body = body.child(self.render_property_view(entity.clone(), props, &theme, window, cx));
+                body = body.child(self.render_property_view(
+                    entity.clone(),
+                    props,
+                    &theme,
+                    window,
+                    cx,
+                ));
             }
         }
 
-        let mut tab_bar = div().h_flex().items_center().gap_1().w_full().border_b_1().border_color(border);
+        let mut tab_bar = div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .w_full()
+            .border_b_1()
+            .border_color(border);
         if is_tabbed {
             tab_bar = tab_bar.child(
                 TabBar::new("property-tabs")
                     .underline()
                     .with_size(Size::Small)
                     .selected_index(active_index)
-                    .children(tabs.iter().map(|(_, label)| Tab::new().label(label.to_string())))
+                    .children(
+                        tabs.iter()
+                            .map(|(_, label)| Tab::new().label(label.to_string())),
+                    )
                     .on_click({
                         let entity = cx.entity();
                         let property = self.property.clone();
@@ -449,18 +464,13 @@ impl PropertyHostPanel {
 
     /// 卡片头：标题 + 可选尾注（规范：`text_xs` 中字重标题 + `muted` 尾注）。
     fn card_header(&self, title: &str, note: Option<&str>, theme: &Theme) -> Div {
-        let mut head = div()
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .w_full()
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.colors.foreground)
-                    .child(title.to_string()),
-            );
+        let mut head = div().h_flex().items_center().gap_2().w_full().child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.colors.foreground)
+                .child(title.to_string()),
+        );
         if let Some(note) = note {
             head = head.child(
                 div()
@@ -508,8 +518,19 @@ impl PropertyHostPanel {
                     .rounded_full()
                     .bg(status_color),
             )
-            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(fg).child(ov.title.clone()))
-            .child(div().text_xs().text_color(muted).child(ov.status_text.clone()))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(fg)
+                    .child(ov.title.clone()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(ov.status_text.clone()),
+            )
             .child(div().flex_1())
             .child(div().text_xs().text_color(muted).child(ov.subtitle.clone()));
 
@@ -576,7 +597,13 @@ impl PropertyHostPanel {
                     .items_center()
                     .gap_2()
                     .w_full()
-                    .child(div().w(rems(ui::PROPERTY_KEY_LABEL_WIDTH)).flex_none().text_color(muted).child(label.clone()))
+                    .child(
+                        div()
+                            .w(rems(ui::PROPERTY_KEY_LABEL_WIDTH))
+                            .flex_none()
+                            .text_color(muted)
+                            .child(label.clone()),
+                    )
                     .child(div().flex_1().min_w_0().text_color(fg).child(value.clone())),
             );
         }
@@ -623,15 +650,15 @@ impl PropertyHostPanel {
         let cols = if rows.len() > 8 { 3 } else { 2 };
         // 网格容器：`Form::vertical()` + `columns`（gpui-component 0.8.1）——
         // label 上 / 控件下 + 列网格均分，替代手搓 chunks 行（2026-10-28 迁移）。
-        section = section.child(
-            Form::vertical()
-                .with_size(Size::Small)
-                .columns(cols)
-                .children(
-                    rows.iter()
-                        .map(|row| self.render_property_cell(entity.clone(), row, theme, window, cx)),
-                ),
-        );
+        section =
+            section.child(
+                Form::vertical()
+                    .with_size(Size::Small)
+                    .columns(cols)
+                    .children(rows.iter().map(|row| {
+                        self.render_property_cell(entity.clone(), row, theme, window, cx)
+                    })),
+            );
         section
     }
 
@@ -681,7 +708,10 @@ impl PropertyHostPanel {
             rail = rail.child(self.render_category_tab(entity.clone(), s, ix, ix == active, theme));
         }
         // 右栏：选中类别内容。
-        let content = div().flex_1().min_w_0().child(self.render_category_section(&props.sections[active], theme));
+        let content = div()
+            .flex_1()
+            .min_w_0()
+            .child(self.render_category_section(&props.sections[active], theme));
         body = body.child(rail).child(content);
         section = section.child(body);
         section
@@ -719,14 +749,12 @@ impl PropertyHostPanel {
             .h(rems(ui::PROPERTY_CAT_ROW_HEIGHT))
             .px_1()
             .when(selected, |el| el.child(tree::active_bar(active_border)))
-            .child(
-                btn.on_click(move |_, _, app| {
-                    entity.update(app, |this, cx| {
-                        this.active_category.set(ix);
-                        cx.notify();
-                    });
-                }),
-            )
+            .child(btn.on_click(move |_, _, app| {
+                entity.update(app, |this, cx| {
+                    this.active_category.set(ix);
+                    cx.notify();
+                });
+            }))
             .child(
                 div()
                     .flex_none()
@@ -743,11 +771,7 @@ impl PropertyHostPanel {
     /// DDL / 源码（`PageId::Ddl` / `PageId::Source`）是长文本段落：走代码块渲染
     /// （等宽 + 复制 + 长行折行不截断），其余类别走通用表格（列 / 索引 / 约束）。
     /// 区分的是**分区展示形态**而非对象类型，`sections` 遍历 / 零分支原则不变。
-    fn render_category_section(
-        &self,
-        s: &PropertySection,
-        theme: &Theme,
-    ) -> Div {
+    fn render_category_section(&self, s: &PropertySection, theme: &Theme) -> Div {
         if matches!(s.id, PageId::Ddl | PageId::Source) {
             return self.render_text_section(s, theme);
         }
@@ -814,11 +838,7 @@ impl PropertyHostPanel {
     /// 长文本段落（DDL / 源码）：等宽代码块 + 复制按钮，长行折行不截断——
     /// 对齐 DBeaver 的 DDL 只读代码视图（2026-10-24；DDL 是用户要读要复制的，
     /// 挂 `text_ellipsis` 会截断 SQL，故此处不截断）。
-    fn render_text_section(
-        &self,
-        s: &PropertySection,
-        theme: &Theme,
-    ) -> Div {
+    fn render_text_section(&self, s: &PropertySection, theme: &Theme) -> Div {
         let fg = theme.colors.foreground;
         let border = theme.colors.border;
         let mono = theme.mono_font_family.clone();
@@ -929,7 +949,11 @@ impl PropertyHostPanel {
             .and_then(|r| r.data)
             .unwrap_or_default();
         let current_offset = current.offset;
-        let current_limit = if current.limit == 0 { DEFAULT_PAGE_LIMIT } else { current.limit };
+        let current_limit = if current.limit == 0 {
+            DEFAULT_PAGE_LIMIT
+        } else {
+            current.limit
+        };
 
         // 表头：行号槽 + 列名（可点击排序——DBeaver 式）。
         let mut header = div()
@@ -940,7 +964,12 @@ impl PropertyHostPanel {
             .pb_1()
             .text_xs()
             .text_color(muted);
-        header = header.child(div().w(rems(ui::PROPERTY_ROW_NUMBER_WIDTH)).flex_none().child("#"));
+        header = header.child(
+            div()
+                .w(rems(ui::PROPERTY_ROW_NUMBER_WIDTH))
+                .flex_none()
+                .child("#"),
+        );
         for (ix, col) in data.columns.iter().enumerate() {
             let sorted = current
                 .order_by
@@ -975,11 +1004,14 @@ impl PropertyHostPanel {
                             .collect::<Vec<_>>();
                         order_by.push((col_name.clone(), asc));
                         entity.update(app, |this, cx| {
-                            this.reload_properties_data(TableDataRequest {
-                                offset: 0,
-                                limit: current.limit,
-                                order_by,
-                            }, cx);
+                            this.reload_properties_data(
+                                TableDataRequest {
+                                    offset: 0,
+                                    limit: current.limit,
+                                    order_by,
+                                },
+                                cx,
+                            );
                         });
                     }),
             );
@@ -997,13 +1029,23 @@ impl PropertyHostPanel {
                 .border_b_1()
                 .border_color(border)
                 .text_color(fg);
-            line = line
-                .child(div().w(rems(ui::PROPERTY_ROW_NUMBER_WIDTH)).flex_none().text_color(muted).child(row_no.to_string()));
+            line = line.child(
+                div()
+                    .w(rems(ui::PROPERTY_ROW_NUMBER_WIDTH))
+                    .flex_none()
+                    .text_color(muted)
+                    .child(row_no.to_string()),
+            );
             for cell in row {
                 line = match cell {
                     Some(v) => line.child(div().flex_1().min_w_0().py_px().child(v.clone())),
                     None => line.child(
-                        div().flex_1().min_w_0().py_px().text_color(muted).child("NULL"),
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .py_px()
+                            .text_color(muted)
+                            .child("NULL"),
                     ),
                 };
             }
@@ -1090,7 +1132,13 @@ impl PropertyHostPanel {
                 .label_fn(move |_: &mut Window, _: &mut App| {
                     div().text_xs().text_color(muted).child(lt.to_string())
                 })
-                .child(div().w_full().min_w_0().text_color(fg).child(row.value.clone()));
+                .child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .text_color(fg)
+                        .child(row.value.clone()),
+                );
         }
 
         match row.value_kind {
@@ -1106,17 +1154,15 @@ impl PropertyHostPanel {
                         div().text_xs().text_color(muted).child(lt.to_string())
                     })
                     .child(
-                        div()
-                            .w_full()
-                            .child(
-                                Switch::new(format!("prop-bool-{}", rid))
-                                    .checked(checked)
-                                    .on_click(move |new_val, _, cx| {
-                                        entity.update(cx, |panel, cx| {
-                                            panel.toggle_property_bool(rid.clone(), *new_val, cx);
-                                        });
-                                    }),
-                            ),
+                        div().w_full().child(
+                            Switch::new(format!("prop-bool-{}", rid))
+                                .checked(checked)
+                                .on_click(move |new_val, _, cx| {
+                                    entity.update(cx, |panel, cx| {
+                                        panel.toggle_property_bool(rid.clone(), *new_val, cx);
+                                    });
+                                }),
+                        ),
                     )
             }
             PropertyValueKind::Select if row.select_options.is_empty() => {
@@ -1127,7 +1173,13 @@ impl PropertyHostPanel {
                     .label_fn(move |_: &mut Window, _: &mut App| {
                         div().text_xs().text_color(muted).child(lt.to_string())
                     })
-                    .child(div().w_full().min_w_0().text_color(fg).child(row.value.clone()))
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .text_color(fg)
+                            .child(row.value.clone()),
+                    )
             }
             PropertyValueKind::Select => {
                 // 常驻下拉（不经编辑按钮，选中即提交）：`use_keyed_state` 在渲染管线内
@@ -1148,10 +1200,19 @@ impl PropertyHostPanel {
                     let sub = cx.subscribe_in(
                         &state,
                         window,
-                        move |panel, _state, event: &SelectEvent<SearchableVec<String>>, _window, cx| {
+                        move |panel,
+                              _state,
+                              event: &SelectEvent<SearchableVec<String>>,
+                              _window,
+                              cx| {
                             if let SelectEvent::Confirm(Some(value)) = event {
                                 if let Some(target) = panel.property_target.borrow().clone() {
-                                    panel.run_property_edit(target, row_id.clone(), value.to_string(), cx);
+                                    panel.run_property_edit(
+                                        target,
+                                        row_id.clone(),
+                                        value.to_string(),
+                                        cx,
+                                    );
                                 }
                             }
                         },
@@ -1190,7 +1251,9 @@ impl PropertyHostPanel {
                     let edit = self.property_edit.borrow().clone().expect("编辑态已检查");
                     let save_entity = entity.clone();
                     let cancel_entity = entity.clone();
-                    let input = Input::new(&edit.input).id(format!("prop-edit-{}", row.id)).w_full();
+                    let input = Input::new(&edit.input)
+                        .id(format!("prop-edit-{}", row.id))
+                        .w_full();
                     let lt = Rc::clone(&label_text);
                     Field::new()
                         .items_start()
@@ -1198,37 +1261,32 @@ impl PropertyHostPanel {
                             div().text_xs().text_color(muted).child(lt.to_string())
                         })
                         .child(
-                            div()
-                                .w_full()
-                                .v_flex()
-                                .gap_1()
-                                .child(input)
-                                .child(
-                                    div()
-                                        .h_flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(
-                                            Button::new(format!("prop-save-{}", row.id))
-                                                .label("保存")
-                                                .with_size(Size::XSmall)
-                                                .on_click(move |_, _, app| {
-                                                    save_entity.update(app, |panel, cx| {
-                                                        panel.submit_property_edit(cx);
-                                                    });
-                                                }),
-                                        )
-                                        .child(
-                                            Button::new(format!("prop-cancel-{}", row.id))
-                                                .label("取消")
-                                                .with_size(Size::XSmall)
-                                                .on_click(move |_, _, app| {
-                                                    cancel_entity.update(app, |panel, cx| {
-                                                        panel.cancel_property_edit(cx);
-                                                    });
-                                                }),
-                                        ),
-                                ),
+                            div().w_full().v_flex().gap_1().child(input).child(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        Button::new(format!("prop-save-{}", row.id))
+                                            .label("保存")
+                                            .with_size(Size::XSmall)
+                                            .on_click(move |_, _, app| {
+                                                save_entity.update(app, |panel, cx| {
+                                                    panel.submit_property_edit(cx);
+                                                });
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new(format!("prop-cancel-{}", row.id))
+                                            .label("取消")
+                                            .with_size(Size::XSmall)
+                                            .on_click(move |_, _, app| {
+                                                cancel_entity.update(app, |panel, cx| {
+                                                    panel.cancel_property_edit(cx);
+                                                });
+                                            }),
+                                    ),
+                            ),
                         )
                 } else {
                     // 未编辑：值 + 编辑按钮（DBeaver 点击可编辑值进入编辑）。
@@ -1247,7 +1305,13 @@ impl PropertyHostPanel {
                                 .items_center()
                                 .gap_2()
                                 .w_full()
-                                .child(div().flex_1().min_w_0().text_color(fg).child(row.value.clone()))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_color(fg)
+                                        .child(row.value.clone()),
+                                )
                                 .child(
                                     Button::new(format!("prop-edit-btn-{}", row.id))
                                         .label("编辑")
@@ -1283,7 +1347,12 @@ impl Render for PropertyHostPanel {
         // 先渲染（可变借用 cx），再取色（不可变借用）——顺序反过来会 E0502。
         let panel = self.render_property_panel(window, cx);
         let bg = cx.theme().colors.background;
-        panel.id("property-host-panel").role(gpui::Role::Group).test_support().bg(bg).size_full()
+        panel
+            .id("property-host-panel")
+            .role(gpui::Role::Group)
+            .test_support()
+            .bg(bg)
+            .size_full()
     }
 }
 

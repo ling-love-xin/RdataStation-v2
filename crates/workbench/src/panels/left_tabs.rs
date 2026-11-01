@@ -14,7 +14,7 @@ use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
 use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
 use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::component::{ActiveTheme, IconName, IndexPath, Size, Sizable};
+use gpui_kit::component::{ActiveTheme, IconName, IndexPath, Sizable, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -25,8 +25,8 @@ use crate::view::LeftPanel;
 
 use analytics_resource::resource_view::ResourcesPanel;
 use database::nav_view::NavView;
-use plugin::wasm::PluginState;
 use plugin::PluginInfo;
+use plugin::wasm::PluginState;
 use scratchpad::ScratchpadView;
 
 use super::Shared;
@@ -75,7 +75,10 @@ impl BasePanel for DatabaseNavPanel {
 
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
         if active {
-            tracing::info!(panel = "database_nav", "【探针】左 dock Tab 激活：数据源导航");
+            tracing::info!(
+                panel = "database_nav",
+                "【探针】左 dock Tab 激活：数据源导航"
+            );
             let shared = self.shared.clone();
             shared.active_left.set(LeftPanel::Database);
             shared.notify_host(cx);
@@ -130,7 +133,6 @@ impl ComponentPanel for DatabaseNavPanel {
         // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
         menu
     }
-
 }
 
 /// 草稿箱 tab：内容 = `scratchpad` crate 的 `ScratchpadView`。
@@ -162,7 +164,12 @@ impl Render for ScratchPanel {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let scratchpad = self.scratchpad.clone();
         // 顶部留 8px 间隔：dock 标题栏与模块内容不贴边（与右侧 dock 统一）
-        div().v_flex().size_full().min_h_0().pt_2().child(scratchpad)
+        div()
+            .v_flex()
+            .size_full()
+            .min_h_0()
+            .pt_2()
+            .child(scratchpad)
     }
 }
 
@@ -232,7 +239,6 @@ impl ComponentPanel for ScratchPanel {
         // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
         menu
     }
-
 }
 /// （该面板自身已实现 `Panel` trait，这里薄壳化以统一 tab 语义 + 同步活动栏）。
 pub struct ResourcePanelTab {
@@ -242,11 +248,7 @@ pub struct ResourcePanelTab {
 }
 
 impl ResourcePanelTab {
-    pub fn new(
-        shared: Shared,
-        resources: Entity<ResourcesPanel>,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(shared: Shared, resources: Entity<ResourcesPanel>, cx: &mut Context<Self>) -> Self {
         Self {
             shared,
             focus_handle: cx.focus_handle(),
@@ -337,7 +339,6 @@ impl ComponentPanel for ResourcePanelTab {
         // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
         menu
     }
-
 }
 struct PluginListDelegate {
     /// 插件数据引用（与 PluginPanel 共享）
@@ -419,38 +420,40 @@ impl ListDelegate for PluginListDelegate {
                 })
         };
 
-        let item = ListItem::new(ElementId::Name(SharedString::from(format!("plugin-row-{id}"))))
-            .h(rems(3.))
-            .px_2()
-            .rounded(cx.theme().radius)
-            .child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .flex_1()
-                    .min_w(rems(0.))
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().colors.foreground)
-                                    .child(SharedString::from(format!("{name}  v{version}"))),
-                            )
-                            .child(div().text_xs().text_color(state_color).child(state_text))
-                            .child(div().flex_1())
-                            .child(button),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().colors.muted_foreground)
-                            .child(id),
-                    ),
-            );
+        let item = ListItem::new(ElementId::Name(SharedString::from(format!(
+            "plugin-row-{id}"
+        ))))
+        .h(rems(3.))
+        .px_2()
+        .rounded(cx.theme().radius)
+        .child(
+            div()
+                .v_flex()
+                .gap_1()
+                .flex_1()
+                .min_w(rems(0.))
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().colors.foreground)
+                                .child(SharedString::from(format!("{name}  v{version}"))),
+                        )
+                        .child(div().text_xs().text_color(state_color).child(state_text))
+                        .child(div().flex_1())
+                        .child(button),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().colors.muted_foreground)
+                        .child(id),
+                ),
+        );
 
         Some(item)
     }
@@ -478,7 +481,12 @@ impl ListDelegate for PluginListDelegate {
         // 插件列表不需要选中态（每行都有独立按钮）
     }
 
-    fn confirm(&mut self, _secondary: bool, _window: &mut Window, _cx: &mut Context<ListState<Self>>) {
+    fn confirm(
+        &mut self,
+        _secondary: bool,
+        _window: &mut Window,
+        _cx: &mut Context<ListState<Self>>,
+    ) {
         // 插件列表不需要 confirm 动作
     }
 }
@@ -616,11 +624,7 @@ impl Render for PluginPanel {
             let panel_entity = cx.entity();
             let plugins = Rc::clone(&self.plugins);
             let list = cx.new(move |cx| {
-                ListState::new(
-                    PluginListDelegate::new(plugins, panel_entity),
-                    window,
-                    cx,
-                )
+                ListState::new(PluginListDelegate::new(plugins, panel_entity), window, cx)
             });
             *self.plugins_list.borrow_mut() = Some(list);
         }
@@ -743,5 +747,4 @@ impl ComponentPanel for PluginPanel {
         // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
         menu
     }
-
 }

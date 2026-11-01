@@ -355,22 +355,28 @@ impl DataSourceService {
         }
         if !count.other.is_empty() {
             let names = if count.other.len() > 3 {
-                format!("{} 等 {} 个项目", count.other[..3].join("、"), count.other.len())
+                format!(
+                    "{} 等 {} 个项目",
+                    count.other[..3].join("、"),
+                    count.other.len()
+                )
             } else {
                 count.other.join("、")
             };
             parts.push(format!("其它项目 {} 条（{}）", count.other.len(), names));
         }
-        Err(CoreError::common(shared::error::CommonError::General(format!(
-            "{}{}正被 {} 连接引用，不能删除；请先修改或删除这些连接（统计范围：全局库 + 已登记项目库）",
-            field.label(),
-            if display_name.trim().is_empty() {
-                String::new()
-            } else {
-                format!("「{}」", display_name.trim())
-            },
-            parts.join("、")
-        ))))
+        Err(CoreError::common(shared::error::CommonError::General(
+            format!(
+                "{}{}正被 {} 连接引用，不能删除；请先修改或删除这些连接（统计范围：全局库 + 已登记项目库）",
+                field.label(),
+                if display_name.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!("「{}」", display_name.trim())
+                },
+                parts.join("、")
+            ),
+        )))
     }
 
     // ==================== 组织元数据（标签 / 分组） ====================
@@ -669,15 +675,15 @@ impl DataSourceService {
             )));
         };
         let Some(src) = self.get_global(&global_id).await? else {
-            return Err(CoreError::common(shared::error::CommonError::General(format!(
-                "全局定义 {global_id} 不存在（可能已被删除），无法同步"
-            ))));
+            return Err(CoreError::common(shared::error::CommonError::General(
+                format!("全局定义 {global_id} 不存在（可能已被删除），无法同步"),
+            )));
         };
         let store = open_project_store(project_path).await?;
         let Some(mut row) = store.get_connection(snapshot_id).await? else {
-            return Err(CoreError::common(shared::error::CommonError::General(format!(
-                "项目侧快照 {snapshot_id} 不存在"
-            ))));
+            return Err(CoreError::common(shared::error::CommonError::General(
+                format!("项目侧快照 {snapshot_id} 不存在"),
+            )));
         };
         // 只覆盖配置字段与凭据密文；`id` / `created_at` / 分组关系保留项目侧现状。
         row.name = src.name.clone();
@@ -701,9 +707,7 @@ impl DataSourceService {
         row.driver_properties = src.driver_properties.clone();
         row.advanced_options = src.advanced_options.clone();
         // 时间戳格式与全局库一致（SQLite CURRENT_TIMESTAMP）。
-        row.updated_at = chrono::Utc::now()
-            .format("%Y-%m-%d %H:%M:%S")
-            .to_string();
+        row.updated_at = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
         store.update_connection(&row).await?;
         // 标签双源一致：快照的 JSON 投影更新后，权威检索表（`connection_tags`）必须跟着变，
         // 否则 `tag:x` 检索与导航标签视图会读到同步前的旧标签。
@@ -853,8 +857,7 @@ impl DataSourceService {
             cleanup_connection_org(self.global_db, conn_id, Some(path));
             // Secret 清理（项目侧补齐，2026-10-03）：目标为项目分析库；未注册过不算失败。
             let removed_secret = super::secret_integration::remove_connection_secret_at(
-                super::secret_integration::analysis_db_for_scope(conn_id, Some(path))
-                    .as_deref(),
+                super::secret_integration::analysis_db_for_scope(conn_id, Some(path)).as_deref(),
                 conn_id,
             );
             // 指纹接线：注销身份登记（已落盘缓存文件不受影响，由「缓存管理」清理）。
@@ -1052,9 +1055,7 @@ impl DataSourceService {
                 )));
             }
         }
-        let now = chrono::Utc::now()
-            .format("%Y-%m-%d %H:%M:%S")
-            .to_string();
+        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let row = ProjectConnection {
             id: pid.clone(),
             name: src.name.clone(),
@@ -1083,7 +1084,12 @@ impl DataSourceService {
             updated_at: now,
         };
         store.create_connection(&row).await?;
-        sync_connection_tags(self.global_db, &pid, src.tags.as_deref(), Some(project_path));
+        sync_connection_tags(
+            self.global_db,
+            &pid,
+            src.tags.as_deref(),
+            Some(project_path),
+        );
         tracing::info!(
             target: "data_source_service",
             global_id = %conn_id,
@@ -1102,7 +1108,11 @@ impl DataSourceService {
     /// 同一套规则；不注册连接池 / 管理器，不写库。
     ///
     /// `project_path` 用于解析 P_/GP_ 前缀的档案（项目根，含 `.RSmeta`）。
-    pub async fn test(&self, input: &DataSourceSaveInput, project_path: Option<&str>) -> TestResult {
+    pub async fn test(
+        &self,
+        input: &DataSourceSaveInput,
+        project_path: Option<&str>,
+    ) -> TestResult {
         let url = build_effective_url(input);
         let (config, guards, notes) = match ConnectionService::build_probe_config(
             Some(self.global_db),
@@ -1161,9 +1171,8 @@ impl DataSourceService {
                     "连接不存在：{conn_id}"
                 )))
             })?;
-        let url = connection::url::build_connection_url(&ds).map_err(|e| {
-            CoreError::common(shared::error::CommonError::General(e))
-        })?;
+        let url = connection::url::build_connection_url(&ds)
+            .map_err(|e| CoreError::common(shared::error::CommonError::General(e)))?;
         let password = match ds.password_encrypted.as_deref() {
             Some(enc) if !enc.is_empty() => Some(shared::crypto::decrypt_password(enc)?),
             _ => None,
@@ -1206,9 +1215,10 @@ impl DataSourceService {
     ) -> Result<(), CoreError> {
         let wanted = name.trim().to_lowercase();
         let existing = self.global_db.get_global_connections(None, None).await?;
-        if existing.iter().any(|c| {
-            c.name.trim().to_lowercase() == wanted && Some(c.id.as_str()) != exclude_id
-        }) {
+        if existing
+            .iter()
+            .any(|c| c.name.trim().to_lowercase() == wanted && Some(c.id.as_str()) != exclude_id)
+        {
             return Err(CoreError::common(shared::error::CommonError::General(
                 // #32 B 案：提示词不出现连接 ID（内部标识），只给可操作的信息。
                 format!("连接名称「{}」已存在，请更换名称", name.trim()),
@@ -1262,9 +1272,7 @@ fn test_failure_message(e: &CoreError) -> String {
             shared::error::ConnectionError::PoolExhausted { .. } => {
                 "连接池已满：稍后重试，或关闭未使用的连接"
             }
-            shared::error::ConnectionError::PoolClosed => {
-                "连接池已关闭：重新连接后再试"
-            }
+            shared::error::ConnectionError::PoolClosed => "连接池已关闭：重新连接后再试",
             shared::error::ConnectionError::Io { .. } => {
                 "I/O 错误：检查文件 / 目录是否可读（文件型库）及磁盘状态"
             }
@@ -1332,8 +1340,12 @@ fn sync_connection_tags(
     let parsed = parse_tags_json(tags);
     match open_org_store(global_db, project_path).and_then(|store| store.set_tags(conn_id, &parsed))
     {
-        Ok(()) => tracing::debug!(target: "data_source_service", conn_id, count = parsed.len(), "连接标签已同步"),
-        Err(e) => tracing::warn!(target: "data_source_service", conn_id, error = %e, "连接标签同步失败（不影响连接保存）"),
+        Ok(()) => {
+            tracing::debug!(target: "data_source_service", conn_id, count = parsed.len(), "连接标签已同步")
+        }
+        Err(e) => {
+            tracing::warn!(target: "data_source_service", conn_id, error = %e, "连接标签同步失败（不影响连接保存）")
+        }
     }
 }
 
@@ -1346,7 +1358,9 @@ fn cleanup_connection_org(
     match open_org_store(global_db, project_path).and_then(|store| store.remove_connection(conn_id))
     {
         Ok(()) => tracing::debug!(target: "data_source_service", conn_id, "连接组织关系已清理"),
-        Err(e) => tracing::warn!(target: "data_source_service", conn_id, error = %e, "连接组织关系清理失败"),
+        Err(e) => {
+            tracing::warn!(target: "data_source_service", conn_id, error = %e, "连接组织关系清理失败")
+        }
     }
 }
 
@@ -1395,7 +1409,12 @@ pub fn rebuild_url_from_fields(
     let port_final = port_num
         .or_else(|| default_port.map(|p| p as u16))
         .or_else(|| cur_port.map(|p| p as u16));
-    connection::url_params::rewrite_url_authority(url, Some(host.trim()), port_final, Some(database.trim()))
+    connection::url_params::rewrite_url_authority(
+        url,
+        Some(host.trim()),
+        port_final,
+        Some(database.trim()),
+    )
 }
 
 /// 项目根预检：必须是**已存在且含 `.RSmeta`** 的目录（比较忽略大小写）。
@@ -1412,10 +1431,12 @@ fn ensure_project_root(project_path: &str) -> Result<(), CoreError> {
     if is_project_root(project_path) {
         return Ok(());
     }
-    Err(CoreError::common(shared::error::CommonError::General(format!(
-        "项目路径无效：{} 不是项目根（缺少 .RSmeta，或目录不存在）",
-        project_path.trim()
-    ))))
+    Err(CoreError::common(shared::error::CommonError::General(
+        format!(
+            "项目路径无效：{} 不是项目根（缺少 .RSmeta，或目录不存在）",
+            project_path.trim()
+        ),
+    )))
 }
 
 /// 打开项目持久化存储（ProjectDatabaseManager::open → ProjectConnectionStore）。
@@ -1695,10 +1716,21 @@ mod tests {
     #[test]
     fn test_normalize_file_db_path_variants() {
         // 裸路径 / 带 scheme / 三斜杠（Windows 盘符）/ Unix 绝对路径。
-        for raw in ["C:/data/a.db", "sqlite://C:/data/a.db", "sqlite:///C:/data/a.db"] {
-            assert_eq!(normalize_file_db_path("sqlite", raw), "C:/data/a.db", "raw={raw}");
+        for raw in [
+            "C:/data/a.db",
+            "sqlite://C:/data/a.db",
+            "sqlite:///C:/data/a.db",
+        ] {
+            assert_eq!(
+                normalize_file_db_path("sqlite", raw),
+                "C:/data/a.db",
+                "raw={raw}"
+            );
         }
-        assert_eq!(normalize_file_db_path("sqlite", "sqlite:///tmp/a.db"), "/tmp/a.db");
+        assert_eq!(
+            normalize_file_db_path("sqlite", "sqlite:///tmp/a.db"),
+            "/tmp/a.db"
+        );
         assert_eq!(normalize_file_db_path("sqlite", "  "), "");
     }
 
@@ -1740,7 +1772,14 @@ mod tests {
         );
         // 端口字段为空 → 用驱动默认端口
         assert_eq!(
-            rebuild_url_from_fields("postgres", "postgres://u@h:5432/db", "h", "", "db", Some(5433)),
+            rebuild_url_from_fields(
+                "postgres",
+                "postgres://u@h:5432/db",
+                "h",
+                "",
+                "db",
+                Some(5433)
+            ),
             "postgres://u@h:5433/db"
         );
         // 主机为空 → 不重建（不产生非法 URL）
@@ -1773,9 +1812,17 @@ mod tests {
         assert_eq!(p, None);
         assert_eq!(d.as_deref(), Some("C:/data/app.db"));
         let (_, _, d) = parse_url_host_port_db("sqlite", "sqlite:///C:/data/app.db");
-        assert_eq!(d.as_deref(), Some("C:/data/app.db"), "盘符前的多余斜杠应去除");
+        assert_eq!(
+            d.as_deref(),
+            Some("C:/data/app.db"),
+            "盘符前的多余斜杠应去除"
+        );
         let (_, _, d) = parse_url_host_port_db("duckdb", "duckdb:///data/a.duckdb");
-        assert_eq!(d.as_deref(), Some("/data/a.duckdb"), "Unix 绝对路径保持原样");
+        assert_eq!(
+            d.as_deref(),
+            Some("/data/a.duckdb"),
+            "Unix 绝对路径保持原样"
+        );
         let (_, _, d) = parse_url_host_port_db("duckdb", "  ");
         assert_eq!(d, None, "空地址不造空 database");
     }

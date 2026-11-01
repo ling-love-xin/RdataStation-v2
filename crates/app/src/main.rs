@@ -19,7 +19,7 @@ use analytics_resource::commands::{
 };
 use editor::commands::{
     CloseDocument, CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, FunctionManual,
-    NextBookmark, PrevBookmark, OpenDocument, SaveDocument, SaveDocumentAs, SignatureHelp,
+    NextBookmark, OpenDocument, PrevBookmark, SaveDocument, SaveDocumentAs, SignatureHelp,
     ToggleBookmark, ToggleComment, TriggerCompletion,
 };
 use gpui_kit::component::{Root, Theme, ThemeRegistry, TitleBar};
@@ -56,7 +56,10 @@ fn main() {
     if let Err(e) = paths::install_process_temp_dir() {
         eprintln!("[startup] 临时目录重定向失败，继续用系统临时目录: {e}");
         // 治理（2026-10-30）：接线前的启动错误进缓冲，`init_logging` 成功后重放三层。
-        engine::logging::startup::record(tracing::Level::WARN, format!("临时目录重定向失败，继续用系统临时目录: {e}"));
+        engine::logging::startup::record(
+            tracing::Level::WARN,
+            format!("临时目录重定向失败，继续用系统临时目录: {e}"),
+        );
     }
     if let Err(e) = paths::ensure_dirs() {
         eprintln!("[startup] 数据目录创建失败: {e}");
@@ -76,7 +79,11 @@ fn main() {
     );
     engine::logging::startup::record(
         tracing::Level::INFO,
-        format!("数据根 {}（来源：{}）", paths::home().display(), paths::home_origin().label()),
+        format!(
+            "数据根 {}（来源：{}）",
+            paths::home().display(),
+            paths::home_origin().label()
+        ),
     );
 
     // Windows 主线程默认 1 MiB 栈，而 GPUI 的视图树构建 / 布局 / 事件派发在 debug
@@ -154,7 +161,9 @@ fn run_app() {
             });
             // 洞察内存上限变更的出口：设置页改上限 → 落盘 + 调这个 sink →
             // 分析引擎连接级设置即时生效（不重启；进入洞察时装配还会兜底对齐一次）。
-            settings::install_insight_memory_limit_sink(engine::duckdb::DuckDBManager::apply_memory_limit_mb);
+            settings::install_insight_memory_limit_sink(
+                engine::duckdb::DuckDBManager::apply_memory_limit_mb,
+            );
             // 退出前把最后一批日志落库：库侧是"每 100 条或每 1 秒"批量提交，
             // 不等这一下，关窗口前最后 1 秒的记录就没了。
             // `Subscription` **一 drop 就退订**（gpui 语义），所以必须 forget —— 钩子要活到进程结束。
@@ -443,7 +452,10 @@ fn init_global_system() {
         eprintln!("[startup] 全局系统库初始化失败: {e}");
         // 治理（2026-10-30）：接线前入缓冲，`init_logging` 成功后重放三层
         //（接线后的补记只带结果摘要，这里带完整错误详情）。
-        engine::logging::startup::record(tracing::Level::ERROR, format!("全局系统库初始化失败: {e}"));
+        engine::logging::startup::record(
+            tracing::Level::ERROR,
+            format!("全局系统库初始化失败: {e}"),
+        );
     }
 
     // 日志接线：库层要写全局库的 `app_logs` 表、并起一个异步消费者任务，

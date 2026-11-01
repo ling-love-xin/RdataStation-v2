@@ -21,21 +21,17 @@ use workbench_shell::ui;
 
 // 连接对话框状态与宿主 trait 直接经 extern crate 路径导入——`crate::components::connection_dialog`
 // 的 use 会遮蔽 crate 名，导致 `connection_dialog::host` 解析失败（E0432）。
-use connection_dialog::host::ConnectionDialogHost;
 use connection_dialog::ConnectionDialogState;
+use connection_dialog::host::ConnectionDialogHost;
 
 use crate::services::db_navigator::NavTable;
 // M5 草稿箱替换入口已收敛到侧栏搜索面板（chrome.rs），本面板不再直接入队草稿箱任务。
 
-
-use super::shared::QueryRequest;
 use super::Shared;
+use super::shared::QueryRequest;
 // 跨模块：导航拖拽载荷（落点转成「打开查询」请求，见 `Shared::request_query`）/ 属性面板状态。
 use database::nav_view::NavDragPayload;
-use scratchpad::{
-    ScratchpadDiffView,
-    scratchpad_view::render_scratchpad_diff_pane,
-};
+use scratchpad::{ScratchpadDiffView, scratchpad_view::render_scratchpad_diff_pane};
 
 /// 中央内容区面板。
 pub struct EditorPanel {
@@ -126,9 +122,7 @@ impl EditorPanel {
     /// 而 `Root` 的 notify 不会让子视图重建元素树。
     pub fn request_new_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog.is_none() {
-            self.dialog = Some(Rc::new(ConnectionDialogState::new(
-                window, cx,
-            )));
+            self.dialog = Some(Rc::new(ConnectionDialogState::new(window, cx)));
             // 新状态 → 旧订阅（若有）失去意义，重建。
             self._dialog_sub = None;
         }
@@ -136,8 +130,7 @@ impl EditorPanel {
         // 重新打开：重置元数据标记，强制下一次渲染重新拉取引用 / 类型 / 驱动目录。
         dialog.meta_refreshed.set(false);
         self.ensure_dialog_subscription(&dialog, window, cx);
-        let shared_host: Rc<dyn ConnectionDialogHost> =
-            Rc::new(self.shared.clone());
+        let shared_host: Rc<dyn ConnectionDialogHost> = Rc::new(self.shared.clone());
         dialog.open(cx.entity(), shared_host, None, window, cx);
         self.shared.notify_host(cx);
     }
@@ -150,17 +143,14 @@ impl EditorPanel {
         cx: &mut Context<Self>,
     ) {
         if self.dialog.is_none() {
-            self.dialog = Some(Rc::new(ConnectionDialogState::new(
-                window, cx,
-            )));
+            self.dialog = Some(Rc::new(ConnectionDialogState::new(window, cx)));
             self._dialog_sub = None;
         }
         let dialog = self.dialog.clone().expect("dialog initialized");
         // 重新打开：重置元数据标记，强制下一次渲染重新拉取（引用 / 类型 / 驱动目录）。
         dialog.meta_refreshed.set(false);
         self.ensure_dialog_subscription(&dialog, window, cx);
-        let shared_host: Rc<dyn ConnectionDialogHost> =
-            Rc::new(self.shared.clone());
+        let shared_host: Rc<dyn ConnectionDialogHost> = Rc::new(self.shared.clone());
         dialog.open(cx.entity(), shared_host, Some(conn_id), window, cx);
         self.shared.notify_host(cx);
     }
@@ -176,8 +166,7 @@ impl EditorPanel {
         cx: &mut Context<Self>,
     ) {
         // 宿主能力经 trait 对象传入（对话框不依赖 Shared 具体类型；字段级 Rc 共享，语义一致）。
-        let shared_host: Rc<dyn ConnectionDialogHost> =
-            Rc::new(self.shared.clone());
+        let shared_host: Rc<dyn ConnectionDialogHost> = Rc::new(self.shared.clone());
         if self._dialog_sub.is_none() {
             self._dialog_sub = Some(dialog.subscribe_project_confirm(&shared_host, window, cx));
         }
@@ -237,9 +226,7 @@ impl Render for EditorPanel {
         // 宿主失效信号（切换连接 / 项目 / Mock 落库）在渲染入口消费：只读 Shared，不写别家数据。
         self.sync_shared_epochs();
         if self.dialog.is_none() {
-            self.dialog = Some(Rc::new(ConnectionDialogState::new(
-                window, cx,
-            )));
+            self.dialog = Some(Rc::new(ConnectionDialogState::new(window, cx)));
         }
 
         // M5 草稿箱搜索结果：替换输入在**侧栏搜索面板**（2026-10-10 起，VSCode 形态），
@@ -510,13 +497,12 @@ impl Render for EditorPanel {
                 let shared = self.shared.clone();
                 let diff_state = self.scratchpad_diff.clone();
                 let entity = entity.clone();
-                let clear = move |_: &gpui_kit::ClickEvent,
-                                  _: &mut gpui_kit::Window,
-                                  app: &mut App| {
-                    *diff_state.borrow_mut() = None;
-                    shared.notify_host(app);
-                    entity.update(app, |_, cx| cx.notify());
-                };
+                let clear =
+                    move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                        *diff_state.borrow_mut() = None;
+                        shared.notify_host(app);
+                        entity.update(app, |_, cx| cx.notify());
+                    };
                 content = content.child(render_scratchpad_diff_pane(diff, theme, clear));
             }
         }

@@ -206,7 +206,10 @@ fn main() {
         println!("（未设置 RDS_PROJECT_PATH，跳过项目种子；全局库已就绪）");
     }
 
-    println!("\n完成。启动 app 后：数据源面板可见 {} 条全局连接（2 条可连接、5 条用于验证错误态）。", conns.len());
+    println!(
+        "\n完成。启动 app 后：数据源面板可见 {} 条全局连接（2 条可连接、5 条用于验证错误态）。",
+        conns.len()
+    );
     println!("清理：删除 {} 即可回到空态。", system_dir.display());
 }
 
@@ -333,7 +336,12 @@ fn seed_project(rt: &tokio::runtime::Runtime, root: &Path, sqlite_path: &Path) {
                 driver: "duckdb".to_string(),
                 host: None,
                 port: None,
-                database: Some(sqlite_path.with_extension("duckdb").to_string_lossy().to_string()),
+                database: Some(
+                    sqlite_path
+                        .with_extension("duckdb")
+                        .to_string_lossy()
+                        .to_string(),
+                ),
                 schema_name: None,
                 username: None,
                 password_encrypted: None,

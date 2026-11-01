@@ -462,9 +462,15 @@ mod tests {
 
     #[test]
     fn parse_unknown_values_fall_back_to_defaults() {
-        assert_eq!(NumberFormatPref::parse("grouped"), NumberFormatPref::Grouped);
+        assert_eq!(
+            NumberFormatPref::parse("grouped"),
+            NumberFormatPref::Grouped
+        );
         assert_eq!(NumberFormatPref::parse("???"), NumberFormatPref::Raw);
-        assert_eq!(NullPlaceholderPref::parse("dash"), NullPlaceholderPref::Dash);
+        assert_eq!(
+            NullPlaceholderPref::parse("dash"),
+            NullPlaceholderPref::Dash
+        );
         assert_eq!(NullPlaceholderPref::parse(""), NullPlaceholderPref::Null);
         assert_eq!(BoolDisplayPref::parse("cn"), BoolDisplayPref::Cn);
         assert_eq!(BoolDisplayPref::parse("x"), BoolDisplayPref::TrueFalse);
@@ -477,7 +483,10 @@ mod tests {
         assert_eq!(BgColorPref::parse("custom"), BgColorPref::Inherit);
         assert_eq!(BgColorPref::parse("???"), BgColorPref::Inherit);
         assert_eq!(FontStylePref::parse("bold"), FontStylePref::Bold);
-        assert_eq!(FontStylePref::parse("line_through"), FontStylePref::LineThrough);
+        assert_eq!(
+            FontStylePref::parse("line_through"),
+            FontStylePref::LineThrough
+        );
         assert_eq!(FontStylePref::parse("x"), FontStylePref::Inherit);
     }
 

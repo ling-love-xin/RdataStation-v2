@@ -321,4 +321,4 @@ fn inject_proxy_auth_from_auth_data(
     }
 
     proxy_config
-}
+}

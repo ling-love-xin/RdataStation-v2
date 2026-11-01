@@ -93,7 +93,12 @@ pub fn apply_insight_prefs(shared: &Shared, cx: &mut App) {
     );
     let status_usage = settings::SettingsService::status_usage(cx);
     let work_set_limit = settings::SettingsService::work_set_limit(cx).max(0) as usize;
-    let Some(panel) = shared.insight_panel.borrow().as_ref().and_then(|w| w.upgrade()) else {
+    let Some(panel) = shared
+        .insight_panel
+        .borrow()
+        .as_ref()
+        .and_then(|w| w.upgrade())
+    else {
         return;
     };
     panel.update(cx, |view, cx| {
@@ -173,12 +178,7 @@ pub fn attach<H: 'static>(
 /// 每次归档生成新时间戳 → 内容指纹不同 → 资产库自动开新版本（审计长在版本上）。
 ///
 /// 快照导出要抢 DuckDB 锁，放后台线程；归档入队与回执回主线程。
-fn archive_from_insight(
-    shared: &Shared,
-    panel: &Entity<InsightView>,
-    key: &str,
-    cx: &mut App,
-) {
+fn archive_from_insight(shared: &Shared, panel: &Entity<InsightView>, key: &str, cx: &mut App) {
     let Some(root) = shared.project_root() else {
         shared.say_error("洞察：归档需要先打开项目", cx);
         return;
@@ -202,17 +202,16 @@ fn archive_from_insight(
     // 保留策略在主线程读好随闭包带入：async 里拿不到 GPUI global 设置
     let keep_versions = KeepVersions::from_setting(settings::SettingsService::keep_versions(cx));
     cx.spawn(async move |cx| {
-        let (path, name) =
-            match InsightService::export_table_snapshot(&root, &temp_table, &label) {
-                Ok(export) => export,
-                Err(error) => {
-                    let message = InsightService::describe_error(&error).message;
-                    let _ = cx.update(|cx| {
-                        shared2.say_error(format!("洞察：归档失败（{message}）"), cx);
-                    });
-                    return;
-                }
-            };
+        let (path, name) = match InsightService::export_table_snapshot(&root, &temp_table, &label) {
+            Ok(export) => export,
+            Err(error) => {
+                let message = InsightService::describe_error(&error).message;
+                let _ = cx.update(|cx| {
+                    shared2.say_error(format!("洞察：归档失败（{message}）"), cx);
+                });
+                return;
+            }
+        };
         resource_jobs::enqueue_archive(
             root.clone(),
             false,

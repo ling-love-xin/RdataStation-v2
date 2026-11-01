@@ -38,12 +38,7 @@ fn collect_tag_names(project_root: Option<&std::path::Path>) -> Vec<String> {
     names.into_iter().collect()
 }
 
-pub fn open_tag_assign_dialog(
-    window: &mut Window,
-    cx: &mut App,
-    shared: &Shared,
-    conn_id: &str,
-) {
+pub fn open_tag_assign_dialog(window: &mut Window, cx: &mut App, shared: &Shared, conn_id: &str) {
     let root = shared.project_root();
     let root_path = root.as_deref();
     let all_tags = collect_tag_names(root_path);
@@ -123,7 +118,9 @@ pub fn open_tag_assign_dialog(
                                 .map(|(_, t)| t.clone())
                                 .collect();
                             let root_ref = root.as_deref();
-                            if let Err(e) = database::nav_store::set_tags(&conn_id, root_ref, &final_tags) {
+                            if let Err(e) =
+                                database::nav_store::set_tags(&conn_id, root_ref, &final_tags)
+                            {
                                 // 治理（2026-10-30）：标签保存失败进日志（此前只走 stderr，日志三层查不到）。
                                 tracing::error!(error = %e, "保存标签失败");
                             }

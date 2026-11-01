@@ -5,11 +5,11 @@ use connection::connector::TunnelGuard;
 use connection::url_params::SslMode;
 use engine::connection_manager::{ConnectionInfo, ConnectionManager, ConnectionType};
 use engine::driver::registry::DriverConnectionConfig;
+use engine::driver::registry::DriverRegistry;
 use engine::driver::router::DataSourceRouter;
 use engine::driver::traits::DynDatabase;
 use engine::persistence::connection_store::{self, RecentConnectionInput};
 use engine::persistence::global_db::{GlobalConnectionSaveInput, GlobalDatabaseManager};
-use engine::driver::registry::DriverRegistry;
 use shared::error::{ConnectionError, CoreError};
 
 use super::network::resolve_network_method_with_project;
@@ -405,7 +405,12 @@ impl ConnectionService {
             attempt += 1;
             let created = tokio::time::timeout(
                 timeout,
-                self.create_database(&db_type, &effective_url, driver_properties.as_deref(), tls.clone()),
+                self.create_database(
+                    &db_type,
+                    &effective_url,
+                    driver_properties.as_deref(),
+                    tls.clone(),
+                ),
             )
             .await;
             match created {
@@ -1018,8 +1023,7 @@ impl ConnectionService {
         // principal：优先 URL 内凭据；无法提取时回落「匿名」（`-`，见 metadata_identity 归一）。
         let principal = connection::url::extract_credentials_from_url(url).0;
         // 驱动默认端口参与地址归一（`h/db` ≡ `h:3306/db`）；查不到默认端口时置 None。
-        let default_port = DriverRegistry::get(db_type)
-            .and_then(|f| f.descriptor().default_port);
+        let default_port = DriverRegistry::get(db_type).and_then(|f| f.descriptor().default_port);
         let identity = engine::persistence::identity_from_url(
             db_type,
             url,
@@ -1072,8 +1076,7 @@ impl ConnectionService {
 
         Ok(())
     }
-
-    }
+}
 
 /// 从全局 DB 解析 network_config_id → ConnectionMethod
 ///
@@ -1147,19 +1150,17 @@ fn tls_request_of(
 fn profile_ssl_config(method: Option<&ConnectionMethod>) -> Option<SslConfig> {
     match method {
         Some(ConnectionMethod::Ssl(cfg)) => Some(cfg.clone()),
-        Some(ConnectionMethod::Chain(hops)) => {
-            hops.iter().enumerate().find_map(|(i, hop)| {
-                let preceded_by_proxy = i > 0
-                    && matches!(
-                        hops[i - 1],
-                        ChainHop::HttpProxy(_) | ChainHop::SocksProxy(_)
-                    );
-                match hop {
-                    ChainHop::Ssl(cfg) if !preceded_by_proxy => Some(cfg.clone()),
-                    _ => None,
-                }
-            })
-        }
+        Some(ConnectionMethod::Chain(hops)) => hops.iter().enumerate().find_map(|(i, hop)| {
+            let preceded_by_proxy = i > 0
+                && matches!(
+                    hops[i - 1],
+                    ChainHop::HttpProxy(_) | ChainHop::SocksProxy(_)
+                );
+            match hop {
+                ChainHop::Ssl(cfg) if !preceded_by_proxy => Some(cfg.clone()),
+                _ => None,
+            }
+        }),
         _ => None,
     }
 }
@@ -1191,8 +1192,8 @@ fn is_lan_url(url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::network::parse_network_config_json;
+    use super::*;
 
     /// 内联 SSL 覆盖的解析（纯函数）：只认 `advanced_options.ssl`，不造默认值。
     #[test]
@@ -1295,7 +1296,9 @@ mod tests {
             verify_server_cert: false,
             ..Default::default()
         };
-        assert!(method_has_ssl_hop(Some(&ConnectionMethod::Ssl(ssl_cfg.clone()))));
+        assert!(method_has_ssl_hop(Some(&ConnectionMethod::Ssl(
+            ssl_cfg.clone()
+        ))));
         assert!(method_has_ssl_hop(Some(&ConnectionMethod::Chain(vec![
             ChainHop::Ssl(ssl_cfg)
         ]))));

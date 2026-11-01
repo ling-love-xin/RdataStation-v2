@@ -74,7 +74,9 @@ pub fn load_persisted_connections_from(dir: &Path) -> (Vec<ConnectionItem>, Opti
 ///   未打开项目时仅全局可见（与作用域语义一致）。
 /// - 项目侧与全局同 ID 时以先到者为准（ID 前缀已区分来源，正常不冲突）。
 /// - 统一填充运行时连接状态。
-pub fn load_connections_for_scope(project_root: Option<&Path>) -> (Vec<ConnectionItem>, Option<String>) {
+pub fn load_connections_for_scope(
+    project_root: Option<&Path>,
+) -> (Vec<ConnectionItem>, Option<String>) {
     let (mut items, mut notice) = load_persisted_connections();
 
     if let Some(root) = project_root {

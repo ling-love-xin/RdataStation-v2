@@ -38,7 +38,10 @@ fn the_editor_column_port_points_the_insight_panel_at_the_source(cx: &mut TestAp
         editor_shared.insight_column_port().is_none(),
         "新编辑器实例还没接宿主端口"
     );
-    rds_workbench::services::editor_insight::attach(&editor_shared, Rc::new(WorkbenchEditorHost::new(shared.clone())));
+    rds_workbench::services::editor_insight::attach(
+        &editor_shared,
+        Rc::new(WorkbenchEditorHost::new(shared.clone())),
+    );
 
     // 面板实体：生产由 `RightSidebarPanel` 构造期登记弱句柄，这里补上
     let view = cx.update(|cx| cx.new(insight::InsightView::new));
@@ -164,7 +167,10 @@ fn the_editor_entry_re_samples_on_the_active_connection(cx: &mut TestAppContext)
     let shared = Shared::with_connections(Vec::new(), None);
     let editor_shared = EditorShared::new();
     rds_workbench::services::editor_exec::attach(&editor_shared, Arc::new(TestFederatedSource));
-    rds_workbench::services::editor_insight::attach(&editor_shared, Rc::new(WorkbenchEditorHost::new(shared.clone())));
+    rds_workbench::services::editor_insight::attach(
+        &editor_shared,
+        Rc::new(WorkbenchEditorHost::new(shared.clone())),
+    );
     let view = cx.update(|cx| cx.new(insight::InsightView::new));
     *shared.insight_panel.borrow_mut() = Some(view.downgrade());
 
@@ -204,13 +210,10 @@ fn the_editor_entry_re_samples_on_the_active_connection(cx: &mut TestAppContext)
                 .with_has_more(data.has_more)
                 .with_channel(channel)
                 .with_connection(connection),
-                Err(error) => editor::store::ResultEntry::failure(
-                    outcome.document,
-                    outcome.sql,
-                    error,
-                    0,
-                )
-                .with_channel(channel),
+                Err(error) => {
+                    editor::store::ResultEntry::failure(outcome.document, outcome.sql, error, 0)
+                        .with_channel(channel)
+                }
             };
             editor_shared.update_results(|store| store.push(entry, outcome.placement, None));
         }
@@ -230,7 +233,10 @@ fn the_editor_entry_re_samples_on_the_active_connection(cx: &mut TestAppContext)
         entry.connection.is_none(),
         "这份文档没绑定连接——正是“跟随活动连接”那一档"
     );
-    assert!(entry.can_insight_column(), "只读查询 + 有列：条目本身可洞察");
+    assert!(
+        entry.can_insight_column(),
+        "只读查询 + 有列：条目本身可洞察"
+    );
     assert_eq!(
         editor_shared.active_connection().as_deref(),
         Some(conn_id.as_str()),
@@ -259,8 +265,13 @@ fn the_editor_entry_re_samples_on_the_active_connection(cx: &mut TestAppContext)
             .and_then(|target| target.source().cloned())
             .expect("面板目标应带源取样")
     });
-    let (temp_table, profile) =
-        insight::InsightService::profile_source_column(None, &source, "amount", &insight::model::ProbeConfig::sample_default()).expect("源取样 + 列画像");
+    let (temp_table, profile) = insight::InsightService::profile_source_column(
+        None,
+        &source,
+        "amount",
+        &insight::model::ProbeConfig::sample_default(),
+    )
+    .expect("源取样 + 列画像");
     eprintln!(
         "✅ 编辑器入口：样本表 {temp_table} · amount {} 行 / {} 空值 / {:?}",
         profile.total_count, profile.null_count, profile.kind

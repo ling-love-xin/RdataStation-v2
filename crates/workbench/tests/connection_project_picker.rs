@@ -68,8 +68,7 @@ impl PickerHarness {
 
 impl Render for PickerHarness {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
+        div().size_full()
     }
 }
 
@@ -160,8 +159,15 @@ fn dropdown_offers_session_project_and_new_entry(cx: &mut TestAppContext) {
     );
     assert_eq!(pick("不存在的项目"), None, "不存在的项目不应可选中");
 
-    let path_value =
-        cx.update(|_, cx| harness.read(cx).dialog(cx).project_path.read(cx).value().to_string());
+    let path_value = cx.update(|_, cx| {
+        harness
+            .read(cx)
+            .dialog(cx)
+            .project_path
+            .read(cx)
+            .value()
+            .to_string()
+    });
     assert_eq!(path_value, root_str, "项目根应写回路径输入");
 }
 
@@ -180,7 +186,10 @@ fn confirm_new_entry_requests_creation_and_clears_selection(cx: &mut TestAppCont
             let h = harness.read(cx);
             (h.dialog(cx), h.shared.clone())
         };
-        { let host: Rc<dyn ConnectionDialogHost> = Rc::new(shared.clone()); dialog.handle_project_confirm(None, &host, window, cx) }
+        {
+            let host: Rc<dyn ConnectionDialogHost> = Rc::new(shared.clone());
+            dialog.handle_project_confirm(None, &host, window, cx)
+        }
     });
     assert!(!cleared, "空确认不应请求新增项目");
     assert!(
@@ -195,7 +204,10 @@ fn confirm_new_entry_requests_creation_and_clears_selection(cx: &mut TestAppCont
             let h = harness.read(cx);
             (h.dialog(cx), h.shared.clone())
         };
-        { let host: Rc<dyn ConnectionDialogHost> = Rc::new(shared.clone()); dialog.handle_project_confirm(Some(&new_label), &host, window, cx) }
+        {
+            let host: Rc<dyn ConnectionDialogHost> = Rc::new(shared.clone());
+            dialog.handle_project_confirm(Some(&new_label), &host, window, cx)
+        }
     });
     assert!(requested, "应识别为「＋ 新增项目」");
     assert!(
@@ -227,7 +239,9 @@ fn confirm_project_writes_back_path(cx: &mut TestAppContext) {
     // 先把路径输入改成陈旧值（模拟手动改过 / 回读别的项目），确认当前会话项目 → 应写回它的根。
     cx.update(|window, cx| {
         let input = harness.read(cx).dialog(cx).project_path.clone();
-        input.update(cx, |s, cx| s.set_value("D:/stale-ish".to_string(), window, cx));
+        input.update(cx, |s, cx| {
+            s.set_value("D:/stale-ish".to_string(), window, cx)
+        });
     });
     let label = SharedString::from("演示项目");
     let requested = cx.update(|window, cx| {
@@ -235,11 +249,21 @@ fn confirm_project_writes_back_path(cx: &mut TestAppContext) {
             let h = harness.read(cx);
             (h.dialog(cx), h.shared.clone())
         };
-        { let host: Rc<dyn ConnectionDialogHost> = Rc::new(shared.clone()); dialog.handle_project_confirm(Some(&label), &host, window, cx) }
+        {
+            let host: Rc<dyn ConnectionDialogHost> = Rc::new(shared.clone());
+            dialog.handle_project_confirm(Some(&label), &host, window, cx)
+        }
     });
     assert!(!requested, "普通项目确认不应请求新增项目");
-    let path_value =
-        cx.update(|_, cx| harness.read(cx).dialog(cx).project_path.read(cx).value().to_string());
+    let path_value = cx.update(|_, cx| {
+        harness
+            .read(cx)
+            .dialog(cx)
+            .project_path
+            .read(cx)
+            .value()
+            .to_string()
+    });
     assert_eq!(path_value, root_str, "选中项目应把项目根写回路径输入");
     assert!(
         !cx.update(|_, cx| harness.read(cx).shared.project_new_request.get()),
@@ -262,7 +286,10 @@ fn confirm_open_folder_requests_folder_dialog(cx: &mut TestAppContext) {
             let h = harness.read(cx);
             (h.dialog(cx), h.shared.clone())
         };
-        { let host: Rc<dyn ConnectionDialogHost> = Rc::new(shared.clone()); dialog.handle_project_confirm(Some(&label), &host, window, cx) }
+        {
+            let host: Rc<dyn ConnectionDialogHost> = Rc::new(shared.clone());
+            dialog.handle_project_confirm(Some(&label), &host, window, cx)
+        }
     });
     assert!(requested, "应识别为动作项（打开现有目录…）");
     assert!(
@@ -307,7 +334,10 @@ fn confirm_no_project_switches_scope_to_global(cx: &mut TestAppContext) {
             let h = harness.read(cx);
             (h.dialog(cx), h.shared.clone())
         };
-        { let host: Rc<dyn ConnectionDialogHost> = Rc::new(shared.clone()); dialog.handle_project_confirm(Some(&label), &host, window, cx) }
+        {
+            let host: Rc<dyn ConnectionDialogHost> = Rc::new(shared.clone());
+            dialog.handle_project_confirm(Some(&label), &host, window, cx)
+        }
     });
     assert!(requested, "应识别为动作项（不需要项目）");
     // 作用域回到「仅全局」，项目路径清空、下拉选中清空。
@@ -321,8 +351,15 @@ fn confirm_no_project_switches_scope_to_global(cx: &mut TestAppContext) {
             .map(|v| v.to_string())
     });
     assert_eq!(scope_now.as_deref(), Some("仅全局"));
-    let path_now =
-        cx.update(|_, cx| harness.read(cx).dialog(cx).project_path.read(cx).value().to_string());
+    let path_now = cx.update(|_, cx| {
+        harness
+            .read(cx)
+            .dialog(cx)
+            .project_path
+            .read(cx)
+            .value()
+            .to_string()
+    });
     assert!(path_now.is_empty(), "项目路径应清空：{path_now}");
     assert!(
         !cx.update(|_, cx| harness.read(cx).shared.project_new_request.get())

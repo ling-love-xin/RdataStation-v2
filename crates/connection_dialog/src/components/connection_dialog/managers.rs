@@ -1,6 +1,6 @@
-use shared::i18n::tr;
 use super::*;
 use crate::services::data_source_service::ReferenceField;
+use shared::i18n::tr;
 
 /// 网络配置字段行的标签列宽（容纳「校验服务器证书」这类长标签）。
 /// 结构尺寸最终应迁移到 `ui.rs` 登记（与对话框的 `DIALOG_*` 同路）。
@@ -85,7 +85,8 @@ pub(crate) fn open_manager<H: 'static>(
     let shared_for_layer = shared.clone();
 
     // 当前项目根：引用计数与删除守卫需要它才能看到 P_/GP_ 连接（未打开项目时仅全局）。
-    let project_root = shared.current_project()
+    let project_root = shared
+        .current_project()
         .map(|p| p.root.to_string_lossy().to_string());
 
     // 拉取列表（按 kind）。
@@ -108,7 +109,10 @@ pub(crate) fn open_manager<H: 'static>(
     {
         let type_items: Vec<SharedString> = match kind {
             0 => AUTH_TYPES.iter().map(|t| SharedString::from(*t)).collect(),
-            1 => NETWORK_TYPES.iter().map(|t| SharedString::from(*t)).collect(),
+            1 => NETWORK_TYPES
+                .iter()
+                .map(|t| SharedString::from(*t))
+                .collect(),
             _ => Vec::new(),
         };
         let type_sel = mgr.borrow().new_type.clone();
@@ -659,7 +663,11 @@ pub(crate) fn open_manager<H: 'static>(
 ///
 /// 引用范围：全局库全部连接 + 当前项目根（`mgr.project_root`；未打开项目时仅全局）。
 /// 逐条扫库会变成 N × (全局 + 项目) 两次查询，所以用 `count_references_batch` 一次取齐。
-pub(crate) fn refresh_manager_items(kind: usize, mgr: &Rc<RefCell<ManagerWorkspace>>, cx: &mut App) {
+pub(crate) fn refresh_manager_items(
+    kind: usize,
+    mgr: &Rc<RefCell<ManagerWorkspace>>,
+    cx: &mut App,
+) {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(_) => return,
@@ -898,7 +906,11 @@ pub(crate) fn delete_manager_item(kind: usize, name: &str, project_root: Option<
 }
 
 /// 刷新指定环境的策略摘要（(类型标签, ID, 启用)）。
-pub(crate) fn refresh_policy_items(env_name: &str, mgr: &Rc<RefCell<ManagerWorkspace>>, cx: &mut App) {
+pub(crate) fn refresh_policy_items(
+    env_name: &str,
+    mgr: &Rc<RefCell<ManagerWorkspace>>,
+    cx: &mut App,
+) {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(_) => return,
@@ -932,7 +944,12 @@ pub(crate) fn refresh_policy_items(env_name: &str, mgr: &Rc<RefCell<ManagerWorks
 ///
 /// 注意：此处只能新建「策略类型的空模板」（`policy_config = NULL`）——具体配置项编辑待环境策略
 /// 编辑器实现；结果行会明确提示，**不替库编造配置值**。
-pub(crate) fn upsert_policy_item(env_name: &str, label: &str, enabled: bool, editing: Option<&str>) -> String {
+pub(crate) fn upsert_policy_item(
+    env_name: &str,
+    label: &str,
+    enabled: bool,
+    editing: Option<&str>,
+) -> String {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => return format!("运行时错误: {e}"),
@@ -984,7 +1001,9 @@ pub(crate) fn upsert_policy_item(env_name: &str, label: &str, enabled: bool, edi
                 "保存成功：{label}（{}）",
                 if enabled { tr("启用") } else { tr("停用") }
             ),
-            None => format!("已创建「{label}」空策略模板（策略类型 {ptype}）：具体配置项待策略编辑器实现"),
+            None => format!(
+                "已创建「{label}」空策略模板（策略类型 {ptype}）：具体配置项待策略编辑器实现"
+            ),
         },
         Err(e) => format!("保存失败: {e}"),
     }

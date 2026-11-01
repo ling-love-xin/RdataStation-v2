@@ -24,12 +24,9 @@ use settings::model::Settings;
 /// 单独渲染右侧面板宿主（隔离 WorkbenchView 装配，a11y_roles 同构）。
 fn open_right_sidebar(
     cx: &mut TestAppContext,
-) -> (
-    Entity<RightSidebarPanel>,
-    Shared,
-    &mut VisualTestContext,
-) {
-    let slot: Rc<RefCell<Option<(Entity<RightSidebarPanel>, Shared)>>> = Rc::new(RefCell::new(None));
+) -> (Entity<RightSidebarPanel>, Shared, &mut VisualTestContext) {
+    let slot: Rc<RefCell<Option<(Entity<RightSidebarPanel>, Shared)>>> =
+        Rc::new(RefCell::new(None));
     let slot_in = slot.clone();
     let (_, cx) = cx.add_window_view(move |window, cx| {
         let shared = Shared::new();
@@ -112,9 +109,8 @@ fn no_project_mock_panel_still_renders(cx: &mut TestAppContext) {
 
     // 活动栏项已迁移为 `SidebarMenuItem`（0.8.1 组件无业务 id，旧 `right-activity-*`
     // id 断言失效）：高亮由 `active(selected)` 承担，此处断言右 Dock 打开后的实际渲染。
-    let dock = cx.update(|window, _| {
-        window.try_find(ElementId::Name(SharedString::from("dock-area")))
-    });
+    let dock =
+        cx.update(|window, _| window.try_find(ElementId::Name(SharedString::from("dock-area"))));
     assert!(dock.is_some(), "无项目时 DockArea 也应在树里");
 
     let draft = snap(cx, "mock-draft-open");
@@ -174,10 +170,7 @@ fn click_draft_row_opens_central_empty_state(cx: &mut TestAppContext) {
 
     // 点击草稿行（TestWindowExt 自己 render_frame + 命中测试）
     cx.update(|window, app| {
-        window.click(
-            ElementId::Name(SharedString::from("mock-draft-open")),
-            app,
-        )
+        window.click(ElementId::Name(SharedString::from("mock-draft-open")), app)
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
@@ -190,11 +183,17 @@ fn click_draft_row_opens_central_empty_state(cx: &mut TestAppContext) {
             .cloned()
             .and_then(|weak| weak.upgrade())
     });
-    assert!(alive.is_some(), "点击草稿行后 shared.mock_details 应有 draft tab");
+    assert!(
+        alive.is_some(),
+        "点击草稿行后 shared.mock_details 应有 draft tab"
+    );
 
     // 断言 2：空态起手卡片（选场景模板按钮）已渲染
     let card = snap(cx, "mock-detail-scenario-empty");
-    assert!(card.visible(), "中央空态卡片应渲染（mock-detail-scenario-empty）");
+    assert!(
+        card.visible(),
+        "中央空态卡片应渲染（mock-detail-scenario-empty）"
+    );
 }
 
 /// 场景 4：Mock 面板**工具栏**的「+」按钮（2026-10-18 起 ＋ 从标题栏迁到面板内工具栏）——
@@ -211,7 +210,10 @@ fn title_suffix_plus_opens_draft_tab(cx: &mut TestAppContext) {
 
     // 工具栏「+」按钮存在且可见（标题栏只留标题，按钮在面板内 toolbar 一行）
     let plus = snap(cx, "mock-toolbar-new-table");
-    assert!(plus.visible(), "Mock 工具栏应有「+」按钮（mock-toolbar-new-table）");
+    assert!(
+        plus.visible(),
+        "Mock 工具栏应有「+」按钮（mock-toolbar-new-table）"
+    );
 
     // 点击「+」→ 打开 / 聚焦中央草稿 tab（与清单草稿行同一目标）
     cx.update(|window, app| {
@@ -230,10 +232,16 @@ fn title_suffix_plus_opens_draft_tab(cx: &mut TestAppContext) {
             .cloned()
             .and_then(|weak| weak.upgrade())
     });
-    assert!(alive.is_some(), "点「+」后 shared.mock_details 应有 draft tab");
+    assert!(
+        alive.is_some(),
+        "点「+」后 shared.mock_details 应有 draft tab"
+    );
 
     let card = snap(cx, "mock-detail-scenario-empty");
-    assert!(card.visible(), "中央空态起手卡片应渲染（mock-detail-scenario-empty）");
+    assert!(
+        card.visible(),
+        "中央空态起手卡片应渲染（mock-detail-scenario-empty）"
+    );
 }
 
 /// 场景 3：单独渲染右侧面板（隔离 WorkbenchView 装配），MockPanel 本身是否渲染草稿行。

@@ -14,7 +14,9 @@ use std::rc::Rc;
 use gpui_kit::App;
 
 use editor::shared::EditorShared;
-use scratchpad::{ScratchpadDiffView, ScratchpadFileInfoView, ScratchpadHost, ScratchpadSearchView};
+use scratchpad::{
+    ScratchpadDiffView, ScratchpadFileInfoView, ScratchpadHost, ScratchpadSearchView,
+};
 
 use crate::panels::Shared;
 

@@ -49,14 +49,13 @@ impl Harness {
 
 impl Render for Harness {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .child(self.editor.clone())
+        div().size_full().child(self.editor.clone())
     }
 }
 
 fn temp_db_path(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("rds_drafts_persist_{}_{}", tag, std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("rds_drafts_persist_{}_{}", tag, std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create temp dir");
     dir.join("global.db")
@@ -85,7 +84,8 @@ fn drafts_survive_restart_and_drop_password(cx: &mut TestAppContext) {
         d1.name.update(cx, |s, cx| s.set_value("草稿A", window, cx));
         d1.url
             .update(cx, |s, cx| s.set_value("mysql://h:3306/a", window, cx));
-        d1.pass.update(cx, |s, cx| s.set_value("secret-a", window, cx));
+        d1.pass
+            .update(cx, |s, cx| s.set_value("secret-a", window, cx));
         // 首次恢复（无非空库）应为空操作。
         d1.staging_restore(window, cx);
     });

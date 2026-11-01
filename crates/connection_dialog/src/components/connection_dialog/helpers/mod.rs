@@ -1,5 +1,5 @@
-use shared::i18n::tr;
 use super::*;
+use shared::i18n::tr;
 
 /// 打开管理器覆盖层（嵌套 Dialog；kind: 0 认证 / 1 网络 / 2 环境）。
 /// 组件默认集（`IconName`）不含数据库 / 锁 / 盾牌等图标；应用注册的是全量
@@ -347,7 +347,6 @@ pub(crate) fn enabled_drivers_of_type(drivers: &[Driver], type_id: &str) -> Vec<
         .cloned()
         .collect()
 }
-
 
 mod capability;
 mod fields;

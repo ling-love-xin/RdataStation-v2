@@ -11,7 +11,7 @@ use gpui_kit::component::list::{ListDelegate, ListItem, ListState};
 use gpui_kit::component::{ActiveTheme, IndexPath, Theme};
 use gpui_kit::*;
 
-use crate::quick_open::model::{Action, Group, Mode, Row, match_span, markup_segments};
+use crate::quick_open::model::{Action, Group, Mode, Row, markup_segments, match_span};
 use crate::quick_open::palette::QuickOpenPalette;
 use crate::ui;
 
@@ -356,15 +356,13 @@ impl ListDelegate for QuickOpenDelegate {
             .child(group.title);
         // 「搜索中…」等补充：与计数区分开色（info），一眼看出“还没搜完”而不是“没结果”
         if !group.note.is_empty() {
-            head = head.child(div().text_color(theme.colors.info).child(group.note.clone()));
-        }
-        Some(
-            head.child(
+            head = head.child(
                 div()
-                    .ml_auto()
-                    .child(format!("{} 条", group.rows.len())),
-            ),
-        )
+                    .text_color(theme.colors.info)
+                    .child(group.note.clone()),
+            );
+        }
+        Some(head.child(div().ml_auto().child(format!("{} 条", group.rows.len()))))
     }
 
     /// 组尾：被截掉的条数（**不静默丢**：告诉用户「还有，但没全显示」）。
@@ -445,12 +443,7 @@ impl ListDelegate for QuickOpenDelegate {
     /// 动作必须在这里（委托持有的行集合上）解析好再传入浮层：不能让浮层回头回读列表实体——
     /// 鼠标确认正发生在列表被 `update` 的栈帧里，重入读取会触发「实体正在被更新」panic。
     /// 键盘 ↵ 不经过这里：由输入框事件直接调浮层 `confirm`（那时不在列表栈帧内，可安全回读）。
-    fn confirm(
-        &mut self,
-        secondary: bool,
-        window: &mut Window,
-        cx: &mut Context<ListState<Self>>,
-    ) {
+    fn confirm(&mut self, secondary: bool, window: &mut Window, cx: &mut Context<ListState<Self>>) {
         let Some(action) = self
             .selected_key
             .as_deref()
@@ -460,8 +453,8 @@ impl ListDelegate for QuickOpenDelegate {
         };
         // 确认时保留面板：列表里的 Ctrl+点击。
         // （Ctrl+↵ 的「后台打开」待编辑器支持后与 Shift 细分。）
-        let _ = self
-            .host
-            .update(cx, |palette, cx| palette.confirm_with(action, secondary, window, cx));
+        let _ = self.host.update(cx, |palette, cx| {
+            palette.confirm_with(action, secondary, window, cx)
+        });
     }
 }

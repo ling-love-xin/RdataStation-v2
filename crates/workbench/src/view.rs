@@ -43,13 +43,13 @@ use crate::panels::{
 };
 use crate::quick_open::model::{Action, Mode};
 use crate::quick_open::palette::{QuickOpenHost, QuickOpenPalette};
-use crate::services::editor_lsp::{LspBlock, WorkbenchLsp};
 use crate::services::editor_completion::WorkbenchCompletion;
+use crate::services::editor_lsp::{LspBlock, WorkbenchLsp};
 use crate::ui;
 use mock::mock_view::{MockDetailView, MockPanel, focus_detail_tab, status_chip_text};
+use settings::SettingsService;
 use settings::commands::{OpenSettings, ToggleThemeMode};
 use settings::settings_page::{SettingsHost, SettingsPage};
-use settings::SettingsService;
 
 /// 左侧活动栏面板。
 ///
@@ -226,7 +226,8 @@ impl WorkbenchView {
         // 项目锁：把项目态端口接上（项目只读时，写源库对象的语句在提交前就被拒）
         crate::services::editor_project::attach(&editor_service, editor_host.clone());
         // B9：把补全端口接上（连接级元数据缓存 → 候选目录；未接时只有关键字与函数）
-        let completion = crate::services::editor_completion::attach(&editor_service, editor_host.clone());
+        let completion =
+            crate::services::editor_completion::attach(&editor_service, editor_host.clone());
         // #54 B：语义诊断目录快照注入（复用补全的 L1 目录；活动文档绑连变化 → 按文档推）。
         // completion 存入视图字段（泵每拍取用；见 `ensure_catalog_pump`）
         let editor_completion = Some(completion);
@@ -371,13 +372,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        self.open_in_editor_with(
-            path,
-            editor::model::ReadOnly::none(),
-            None,
-            window,
-            cx,
-        )
+        self.open_in_editor_with(path, editor::model::ReadOnly::none(), None, window, cx)
     }
 
     /// 同上，但带上**只读维度**（M6 的存档本体：编辑器只读，改它要先去取回）。
@@ -614,11 +609,7 @@ impl WorkbenchView {
                     }
                     editor::view::host::EditorHostEvent::ExecutionFailed(reason) => {
                         // 执行失败 → 弹全局错误通知（Error 类型，不自动消失）。
-                        notification::notify_error(
-                            "SQL 执行失败",
-                            Some(reason.as_str()),
-                            cx,
-                        );
+                        notification::notify_error("SQL 执行失败", Some(reason.as_str()), cx);
                         cx.notify();
                     }
                 }
@@ -906,10 +897,7 @@ impl WorkbenchView {
                         let Some(completion) = this.editor_completion.clone() else {
                             return true;
                         };
-                        crate::services::editor_catalog::pump(
-                            &this.editor_service,
-                            &completion,
-                        );
+                        crate::services::editor_catalog::pump(&this.editor_service, &completion);
                         true
                     })
                     .unwrap_or(false);
@@ -948,8 +936,7 @@ impl WorkbenchView {
             return;
         };
         let shared = self.shared.clone();
-        let panel =
-            cx.new(|cx| crate::panels::SearchResultsHostPanel::new(shared.clone(), cx));
+        let panel = cx.new(|cx| crate::panels::SearchResultsHostPanel::new(shared.clone(), cx));
         self.shared
             .search_results_panel
             .borrow_mut()
@@ -989,8 +976,7 @@ impl WorkbenchView {
             return;
         };
         let shared = self.shared.clone();
-        let panel =
-            cx.new(|cx| crate::panels::MetadataSearchHostPanel::new(shared.clone(), cx));
+        let panel = cx.new(|cx| crate::panels::MetadataSearchHostPanel::new(shared.clone(), cx));
         self.shared
             .metadata_search_panel
             .borrow_mut()
@@ -1049,13 +1035,20 @@ impl WorkbenchView {
                     .map(|session| session.root.clone())
             }));
         self._insight_ws_subs
-            .push(crate::components::insight_actions::attach(&insight_view, &shared, cx));
+            .push(crate::components::insight_actions::attach(
+                &insight_view,
+                &shared,
+                cx,
+            ));
         // 全量统计确认弹窗（subscribe_in 要窗口）+ 装配洞察偏好（设置 → 面板 + 引擎）。
         // 右栏装配（RightSidebarPanel::new）已做过一次；懒创建路径补做，保证
         // 中间页先于右栏打开时设置也生效（apply_insight_prefs 幂等）。
         self._insight_ws_subs
             .push(crate::components::insight_actions::attach_dialogs(
-                &insight_view, &shared, window, cx,
+                &insight_view,
+                &shared,
+                window,
+                cx,
             ));
         crate::components::insight_actions::apply_insight_prefs(&shared, cx);
         // D65 双栏单源：中间工作页目标变化（对比点行 / 后续工具栏切换）→ 右栏摘要联动。
@@ -1063,32 +1056,33 @@ impl WorkbenchView {
         // 把右栏载荷也清掉重发请求——同目标重复设置会白白重取样）。
         let shared_for_sync = self.shared.clone();
         let panel_for_sync = panel.clone();
-        self._insight_ws_subs.push(cx.observe(&panel_for_sync.clone(), move |_, _, cx| {
-            let Some(ws_target) = panel_for_sync
-                .read(cx)
-                .insight_view()
-                .read(cx)
-                .target()
-                .cloned()
-            else {
-                return;
-            };
-            let Some(right) = shared_for_sync
-                .insight_panel
-                .borrow()
-                .clone()
-                .and_then(|weak| weak.upgrade())
-            else {
-                return;
-            };
-            let right_target = right.read(cx).target().cloned();
-            if right_target != Some(ws_target.clone()) {
-                right.update(cx, |panel, cx| panel.set_target(ws_target, cx));
-            }
-            // T18：已洞察表集合快照 → 右栏管理列表（中间页 `opened` 变化都经此同步）
-            let entries = panel_for_sync.read(cx).insight_set_entries(cx);
-            right.update(cx, |panel, cx| panel.set_insight_set(entries, cx));
-        }));
+        self._insight_ws_subs
+            .push(cx.observe(&panel_for_sync.clone(), move |_, _, cx| {
+                let Some(ws_target) = panel_for_sync
+                    .read(cx)
+                    .insight_view()
+                    .read(cx)
+                    .target()
+                    .cloned()
+                else {
+                    return;
+                };
+                let Some(right) = shared_for_sync
+                    .insight_panel
+                    .borrow()
+                    .clone()
+                    .and_then(|weak| weak.upgrade())
+                else {
+                    return;
+                };
+                let right_target = right.read(cx).target().cloned();
+                if right_target != Some(ws_target.clone()) {
+                    right.update(cx, |panel, cx| panel.set_target(ws_target, cx));
+                }
+                // T18：已洞察表集合快照 → 右栏管理列表（中间页 `opened` 变化都经此同步）
+                let entries = panel_for_sync.read(cx).insight_set_entries(cx);
+                right.update(cx, |panel, cx| panel.set_insight_set(entries, cx));
+            }));
         let handle = panel_handle(panel.clone());
         area.update(cx, |area, cx| {
             area.add_panel_view(handle, DockPlacement::Center, None, window, cx);
@@ -1131,7 +1125,8 @@ impl WorkbenchView {
 
     /// 首次 render 时装配 DockArea：创建面板实体、订阅事件；左右 dock 由
     /// `apply_left_mode` / `apply_right_mode` 按 `Shared` 初始状态装配。
-    fn init_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {        // 启动默认模块（用户点名）：设置 `startup.default_left_panel` 覆盖构造期默认。
+    fn init_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 启动默认模块（用户点名）：设置 `startup.default_left_panel` 覆盖构造期默认。
         // 必须在这里（首次 render 装配期）读——早于 `apply_left_mode`，晚于设置加载
         //（app 开窗前 `SettingsService::init` 已跑）。未知值回退默认（`from_key` 的约定）。
         {
@@ -1162,25 +1157,18 @@ impl WorkbenchView {
         let insight_entity = right_sidebar.read(cx).insight_entity();
         let mock_entity = right_sidebar.read(cx).mock_entity();
         let history_entity = right_sidebar.read(cx).history_entity();
-        self.left_nav_tab = Some(cx.new(|cx| {
-            DatabaseNavPanel::new(shared.clone(), nav_entity, cx)
-        }));
-        self.left_scratch_tab = Some(cx.new(|cx| {
-            ScratchPanel::new(shared.clone(), scratch_entity, cx)
-        }));
-        self.left_resource_tab = Some(cx.new(|cx| {
-            ResourcePanelTab::new(shared.clone(), resources_entity, cx)
-        }));
+        self.left_nav_tab =
+            Some(cx.new(|cx| DatabaseNavPanel::new(shared.clone(), nav_entity, cx)));
+        self.left_scratch_tab =
+            Some(cx.new(|cx| ScratchPanel::new(shared.clone(), scratch_entity, cx)));
+        self.left_resource_tab =
+            Some(cx.new(|cx| ResourcePanelTab::new(shared.clone(), resources_entity, cx)));
         self.left_plugin_tab = Some(cx.new(|cx| PluginPanel::new(shared.clone(), cx)));
-        self.right_insight_tab = Some(cx.new(|cx| {
-            InsightPanelTab::new(shared.clone(), insight_entity, cx)
-        }));
-        self.right_mock_tab = Some(cx.new(|cx| {
-            MockPanelTab::new(shared.clone(), mock_entity, cx)
-        }));
-        self.right_history_tab = Some(cx.new(|cx| {
-            HistoryPanelTab::new(shared.clone(), history_entity, cx)
-        }));
+        self.right_insight_tab =
+            Some(cx.new(|cx| InsightPanelTab::new(shared.clone(), insight_entity, cx)));
+        self.right_mock_tab = Some(cx.new(|cx| MockPanelTab::new(shared.clone(), mock_entity, cx)));
+        self.right_history_tab =
+            Some(cx.new(|cx| HistoryPanelTab::new(shared.clone(), history_entity, cx)));
         self.right_archive_tab = Some(cx.new(|cx| ArchivePanel::new(shared.clone(), cx)));
         // B12：旧“编辑区”的 SQL 框已删；M1 的未保存草稿拦截改看**编辑器的未命名文档**
         // （见 `components/project_host.rs` 的 `EditorBridge`），不再需要 `Shared::editor_clear`。
@@ -1375,13 +1363,7 @@ impl WorkbenchView {
                         .insert(key, detail.downgrade());
                     let detail_handle = panel_handle(detail.clone());
                     area_for_detail.update(cx, |area, cx| {
-                        area.add_panel_view(
-                            detail_handle,
-                            DockPlacement::Center,
-                            None,
-                            window,
-                            cx,
-                        );
+                        area.add_panel_view(detail_handle, DockPlacement::Center, None, window, cx);
                     });
                     focus_detail_tab(&detail, window, cx);
                 },
@@ -1653,13 +1635,7 @@ impl WorkbenchView {
                 // render 每帧调用无副作用（与 `apply_left_mode` 的 set_dock 同先例）。
                 if let (Some(handle), Some(id)) = (&active_tab, &active_id) {
                     if area.panel(id.clone()).is_none() {
-                        area.add_panel_view(
-                            handle.clone(),
-                            DockPlacement::Right,
-                            None,
-                            window,
-                            cx,
-                        );
+                        area.add_panel_view(handle.clone(), DockPlacement::Right, None, window, cx);
                     } else {
                         area.select_panel(id.clone(), window, cx);
                     }
@@ -1963,16 +1939,12 @@ impl WorkbenchView {
             .dropdown_menu(|menu, _, _| {
                 let mut menu = menu.item(PopupMenuItem::label("界面语言"));
                 menu = menu.item(PopupMenuItem::separator());
-                menu = menu.item(
-                    PopupMenuItem::new("简体中文").on_click(|_, window, app| {
-                        SettingsService::set_locale("zh-CN", Some(window), app);
-                    }),
-                );
-                menu.item(PopupMenuItem::new("English").on_click(
-                    |_, window, app| {
-                        SettingsService::set_locale("en-US", Some(window), app);
-                    },
-                ))
+                menu = menu.item(PopupMenuItem::new("简体中文").on_click(|_, window, app| {
+                    SettingsService::set_locale("zh-CN", Some(window), app);
+                }));
+                menu.item(PopupMenuItem::new("English").on_click(|_, window, app| {
+                    SettingsService::set_locale("en-US", Some(window), app);
+                }))
             });
         let lang_switch = div()
             .h_flex()
@@ -2030,13 +2002,11 @@ impl WorkbenchView {
                 menu = menu.item(PopupMenuItem::separator());
                 for (key, label) in Self::QUICK_LAYOUT_PRESETS.iter().copied() {
                     let entity = entity.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(label).on_click(move |_, window, app| {
-                            entity.update(app, |this, cx| {
-                                this.apply_quick_layout(key, window, cx);
-                            });
-                        }),
-                    );
+                    menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, app| {
+                        entity.update(app, |this, cx| {
+                            this.apply_quick_layout(key, window, cx);
+                        });
+                    }));
                 }
                 menu
             })
@@ -2137,21 +2107,16 @@ impl WorkbenchView {
 
         let settings_shared = shared.clone();
         let settings_entity = entity.clone();
-        let footer = div()
-            .h_flex()
-            .w_full()
-            .p_2()
-            .justify_center()
-            .child(
-                Button::new("left-settings")
-                    .icon(Icon::new(IconName::Settings))
-                    .ghost()
-                    .on_click(move |_, window, app| {
-                        let entity = settings_entity.clone();
-                        entity.update(app, |this, cx| this.open_settings(window, cx));
-                        settings_shared.quick_open.set(false);
-                    }),
-            );
+        let footer = div().h_flex().w_full().p_2().justify_center().child(
+            Button::new("left-settings")
+                .icon(Icon::new(IconName::Settings))
+                .ghost()
+                .on_click(move |_, window, app| {
+                    let entity = settings_entity.clone();
+                    entity.update(app, |this, cx| this.open_settings(window, cx));
+                    settings_shared.quick_open.set(false);
+                }),
+        );
 
         Sidebar::new("left-activity")
             .side(Side::Left)
@@ -2227,21 +2192,16 @@ impl WorkbenchView {
 
         let settings_shared = shared.clone();
         let settings_entity = entity.clone();
-        let footer = div()
-            .h_flex()
-            .w_full()
-            .p_2()
-            .justify_center()
-            .child(
-                Button::new("right-settings")
-                    .icon(Icon::new(IconName::Settings))
-                    .ghost()
-                    .on_click(move |_, window, app| {
-                        let entity = settings_entity.clone();
-                        entity.update(app, |this, cx| this.open_settings(window, cx));
-                        settings_shared.quick_open.set(false);
-                    }),
-            );
+        let footer = div().h_flex().w_full().p_2().justify_center().child(
+            Button::new("right-settings")
+                .icon(Icon::new(IconName::Settings))
+                .ghost()
+                .on_click(move |_, window, app| {
+                    let entity = settings_entity.clone();
+                    entity.update(app, |this, cx| this.open_settings(window, cx));
+                    settings_shared.quick_open.set(false);
+                }),
+        );
 
         Sidebar::new("right-activity")
             .side(Side::Right)
@@ -2283,10 +2243,9 @@ impl WorkbenchView {
             self.settings_window = None;
         }
         let shared_cache = self.shared.clone();
-        let on_open_cache: Rc<dyn Fn(&mut Window, &mut App)> =
-            Rc::new(move |window, app| {
-                crate::components::cache_dialog::open_cache_dialog(window, app, &shared_cache);
-            });
+        let on_open_cache: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |window, app| {
+            crate::components::cache_dialog::open_cache_dialog(window, app, &shared_cache);
+        });
         // 「打开日志目录」/「查看日志」：设置层不依赖 engine / opener，这两个副作用由宿主实现。
         // 目录不存在（还没写过日志）就先建出来——"打开一个不存在的目录"是纯失败体验。
         let on_open_log_dir: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_window, _app| {
@@ -2301,9 +2260,10 @@ impl WorkbenchView {
         });
         let on_open_log_view: Rc<dyn Fn(&mut Window, &mut App)> =
             Rc::new(move |window, app| crate::components::log_dialog::open_log_dialog(window, app));
-        let on_open_type_short_map: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |window, app| {
-            crate::components::type_short_map_dialog::open_type_short_map_dialog(window, app);
-        });
+        let on_open_type_short_map: Rc<dyn Fn(&mut Window, &mut App)> =
+            Rc::new(move |window, app| {
+                crate::components::type_short_map_dialog::open_type_short_map_dialog(window, app);
+            });
         // 「打开配置文件」（设置页头部入口，Q3）：用系统默认 JSON 编辑器打开
         // `config/settings.json`；文件不存在（还没写过设置）就先建一个空 `{}`，
         // 否则"打开不存在的文件"是纯失败体验（与打开日志目录同一策略）。
@@ -2615,11 +2575,8 @@ impl WorkbenchView {
         let Some(lsp) = self.lsp.as_ref() else {
             return div().into_any_element();
         };
-        let (icon, label) = lsp_status_chip(
-            lsp.is_running(),
-            lsp.is_initialized(),
-            lsp.block().as_ref(),
-        );
+        let (icon, label) =
+            lsp_status_chip(lsp.is_running(), lsp.is_initialized(), lsp.block().as_ref());
         let (fg, hover) = {
             let colors = &cx.theme().colors;
             (colors.primary_foreground, colors.primary_active)
@@ -2864,12 +2821,14 @@ pub fn lsp_status_chip(
     } else {
         match block {
             Some(LspBlock::Manual) => (CatalogIcon::ServerOff, "语言服务：已停止".to_string()),
-            Some(LspBlock::StartFailed(reason)) => {
-                (CatalogIcon::ServerOff, format!("语言服务：未启动（{reason}）"))
-            }
-            Some(LspBlock::Crashed(reason)) => {
-                (CatalogIcon::ServerCrash, format!("语言服务：已断开（{reason}）"))
-            }
+            Some(LspBlock::StartFailed(reason)) => (
+                CatalogIcon::ServerOff,
+                format!("语言服务：未启动（{reason}）"),
+            ),
+            Some(LspBlock::Crashed(reason)) => (
+                CatalogIcon::ServerCrash,
+                format!("语言服务：已断开（{reason}）"),
+            ),
             None => (CatalogIcon::ServerOff, "语言服务：未启动".to_string()),
         }
     }
@@ -3138,18 +3097,8 @@ impl Render for WorkbenchView {
                     } else {
                         1.0
                     };
-                    area.set_dock_size(
-                        DockPlacement::Left,
-                        px(left_width * scale),
-                        window,
-                        cx,
-                    );
-                    area.set_dock_size(
-                        DockPlacement::Right,
-                        px(right_width * scale),
-                        window,
-                        cx,
-                    );
+                    area.set_dock_size(DockPlacement::Left, px(left_width * scale), window, cx);
+                    area.set_dock_size(DockPlacement::Right, px(right_width * scale), window, cx);
                 });
             }
             self.shared.prev_left_sidebar_width.set(left_width);
@@ -3324,7 +3273,9 @@ impl Render for WorkbenchView {
                 let entity = cx.entity();
                 move |_: &SwitchProject, window, cx| {
                     entity.update(cx, |this, cx| {
-                        tracing::info!("【探针】SwitchProject：切换项目动作触发（关闭当前回选择器）");
+                        tracing::info!(
+                            "【探针】SwitchProject：切换项目动作触发（关闭当前回选择器）"
+                        );
                         let host = this.project_host().clone();
                         project::ui::request_close(&host, window, cx);
                     });

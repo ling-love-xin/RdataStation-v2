@@ -220,7 +220,10 @@ pub fn has_federable_extension(db_type: &str) -> bool {
 /// 全局侧连接（`G_`）→ 全局分析库（`{system}/shared.duckdb` 系）；
 /// 项目侧连接（`P_` / `GP_` 项目快照）→ 项目分析库（`{项目}/.RSmeta/analytics.duckdb`）。
 /// 与身份指纹的域隔离同源（`GP_` 项目侧归项目域）。
-pub fn analysis_db_for_scope(conn_id: &str, project_path: Option<&str>) -> Option<std::path::PathBuf> {
+pub fn analysis_db_for_scope(
+    conn_id: &str,
+    project_path: Option<&str>,
+) -> Option<std::path::PathBuf> {
     if engine::persistence::id_prefix::uses_project_storage(conn_id) {
         project_path.map(|p| {
             engine::persistence::project_db::ProjectDatabaseManager::analysis_db_path(
@@ -378,11 +381,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rds_secret_rt_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
-        let mgr = SecretManager::open_with_dir(
-            dir.join("store.duckdb"),
-            Some(&dir.join("secrets")),
-        )
-        .expect("open isolated store");
+        let mgr =
+            SecretManager::open_with_dir(dir.join("store.duckdb"), Some(&dir.join("secrets")))
+                .expect("open isolated store");
         register_connection_secret(
             &mgr,
             "conn-001",
@@ -416,7 +417,10 @@ mod tests {
         assert!(has_federable_extension("mysql"));
         assert!(has_federable_extension("postgres"));
         assert!(has_federable_extension("sqlite"));
-        assert!(has_federable_extension("postgres_native"), "驱动 id 也应归一");
+        assert!(
+            has_federable_extension("postgres_native"),
+            "驱动 id 也应归一"
+        );
         // duckdb 文件源：内核自带能力、无扩展 → 默认不注册
         assert!(!has_federable_extension("duckdb"));
         // 未知 / 无法联邦的类型 → 不注册
@@ -431,7 +435,9 @@ mod tests {
         // 项目侧（P_ / GP_ 项目快照）→ 项目分析库 {项目}/.RSmeta/analytics.duckdb
         let p = analysis_db_for_scope("P_conn_a1b2c3d4", Some("C:/proj/rds-demo"))
             .expect("项目路径存在");
-        assert!(p.ends_with(".RSmeta\\analytics.duckdb") || p.ends_with(".RSmeta/analytics.duckdb"));
+        assert!(
+            p.ends_with(".RSmeta\\analytics.duckdb") || p.ends_with(".RSmeta/analytics.duckdb")
+        );
         let gp = analysis_db_for_scope("GP_conn_prod_20261003", Some("C:/proj/rds-demo"))
             .expect("GP_ 项目侧应归项目域");
         assert_eq!(gp, p, "GP_ 项目快照侧与 P_ 同为项目分析库（域隔离同源）");

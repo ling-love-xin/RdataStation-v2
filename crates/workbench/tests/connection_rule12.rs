@@ -17,9 +17,7 @@ use std::sync::OnceLock;
 
 use engine::persistence::driver_store::Driver;
 use engine::persistence::global_db::GlobalDatabaseManager;
-use gpui_kit::{
-    IntoElement, Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
-};
+use gpui_kit::{IntoElement, Render, Styled as _, TestAppContext, VisualTestContext, Window, div};
 use rds_workbench::components::connection_dialog::ConnectionDialogState;
 
 static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -27,7 +25,11 @@ static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
 struct Host;
 
 impl Render for Host {
-    fn render(&mut self, _window: &mut Window, _cx: &mut gpui_kit::Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut gpui_kit::Context<Self>,
+    ) -> impl IntoElement {
         div().size_full()
     }
 }
@@ -124,9 +126,7 @@ fn select_type_prefills_project_root_for_file_db_only(cx: &mut TestAppContext) {
 
     // 无项目根时不预填（文件型也不应凭空造地址）。
     cx.update(|window, cx| {
-        dialog
-            .url
-            .update(cx, |s, cx| s.set_value("", window, cx));
+        dialog.url.update(cx, |s, cx| s.set_value("", window, cx));
         dialog
             .project_path
             .update(cx, |s, cx| s.set_value("", window, cx));

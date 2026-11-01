@@ -22,15 +22,19 @@ use database::property_providers::global_registry;
 use engine::connection_manager::{ConnectionInfo, ConnectionManager, ConnectionType};
 use engine::driver::AutoDriverRegistrar;
 use engine::driver::registry::DriverConnectionConfig;
+use property::{PageId, PropertyKind};
 use rds_workbench::services::connection_service::{ConnectRequest, ConnectionService};
 use rds_workbench::services::data_source_service::DataSourceService;
-use property::{PageId, PropertyKind};
 
 /// 唯一临时库路径（并行跑不撞名）。
 fn fixture_path(driver: &str) -> String {
     let ext = if driver == "sqlite" { "db" } else { "duckdb" };
     std::env::temp_dir()
-        .join(format!("rds_nav_prop_{}_{}.{ext}", driver, std::process::id()))
+        .join(format!(
+            "rds_nav_prop_{}_{}.{ext}",
+            driver,
+            std::process::id()
+        ))
         .to_string_lossy()
         .into_owned()
 }
@@ -50,7 +54,9 @@ async fn create_fixture(conn_id: &str, manager: &Arc<ConnectionManager>, driver:
         "INSERT INTO parent (id, name) VALUES (1, 'a'), (2, 'b')",
         "INSERT INTO orders (id, parent_id, tag) VALUES (1, 1, 't1'), (2, 2, 't2'), (3, NULL, 't3')",
     ] {
-        db.query(sql).await.unwrap_or_else(|e| panic!("{driver} 执行 {sql} 失败：{e}"));
+        db.query(sql)
+            .await
+            .unwrap_or_else(|e| panic!("{driver} 执行 {sql} 失败：{e}"));
     }
 }
 
@@ -109,7 +115,9 @@ async fn connect_real(
         use_duckdb_fed: false,
         created_at: std::time::Instant::now(),
     };
-    manager.add_connection(cid.clone(), db, info, DriverConnectionConfig::new(driver)).await
+    manager
+        .add_connection(cid.clone(), db, info, DriverConnectionConfig::new(driver))
+        .await
         .unwrap_or_else(|e| panic!("{driver} 注册连接失败：{e}"));
     (cid, manager)
 }
@@ -119,7 +127,11 @@ async fn run_nav_property_chain(driver: &str) {
     let url = fixture_path(driver);
     AutoDriverRegistrar::auto_register();
 
-    let dir = std::env::temp_dir().join(format!("rds_nav_prop_meta_{}_{}", driver, std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "rds_nav_prop_meta_{}_{}",
+        driver,
+        std::process::id()
+    ));
     let _ = std::fs::create_dir_all(&dir);
     let manager_meta = engine::persistence::global_db::GlobalDatabaseManager::new(
         dir.join("global.db"),
@@ -129,7 +141,8 @@ async fn run_nav_property_chain(driver: &str) {
     .await
     .expect("init global db");
     let manager_meta: &'static _ = Box::leak(Box::new(manager_meta));
-    let ds_service = DataSourceService::new(manager_meta).with_analysis_db(dir.join("secret.duckdb"));
+    let ds_service =
+        DataSourceService::new(manager_meta).with_analysis_db(dir.join("secret.duckdb"));
     let conn_service = ConnectionService::new(Arc::new(ConnectionManager::new()));
 
     // 1) 服务层「测试连接」（对话框按钮同源）
@@ -145,7 +158,9 @@ async fn run_nav_property_chain(driver: &str) {
 
     // 3) 导航加载（与树展开同源，cache-aside 写穿 L2）
     let nav = NavigatorService::new(manager.clone());
-    let catalogs = nav.load_children(&cid, &NavPath::Connection, None, false).await
+    let catalogs = nav
+        .load_children(&cid, &NavPath::Connection, None, false)
+        .await
         .unwrap_or_else(|e| panic!("{driver} 加载 catalogs 失败：{e}"));
     assert!(!catalogs.is_empty(), "{driver} catalogs 非空");
     let catalog = catalogs
@@ -154,7 +169,15 @@ async fn run_nav_property_chain(driver: &str) {
         .unwrap_or_else(|| panic!("{driver} catalogs 应含 Catalog 节点：{catalogs:?}"));
     println!("[{driver}] Catalog 层 OK：{}", catalog.name);
 
-    let folders = nav.load_children(&cid, &NavPath::Catalog { catalog: catalog.name.clone() }, None, false)
+    let folders = nav
+        .load_children(
+            &cid,
+            &NavPath::Catalog {
+                catalog: catalog.name.clone(),
+            },
+            None,
+            false,
+        )
         .await
         .unwrap_or_else(|e| panic!("{driver} 加载文件夹失败：{e}"));
     let folder_names: Vec<&str> = folders.iter().map(|n| n.name.as_str()).collect();
@@ -179,8 +202,14 @@ async fn run_nav_property_chain(driver: &str) {
         .await
         .unwrap_or_else(|e| panic!("{driver} 加载表失败：{e}"));
     let table_names: Vec<&str> = tables.iter().map(|n| n.name.as_str()).collect();
-    assert!(table_names.contains(&"orders"), "{driver} 表含 orders：{table_names:?}");
-    assert!(table_names.contains(&"parent"), "{driver} 表含 parent：{table_names:?}");
+    assert!(
+        table_names.contains(&"orders"),
+        "{driver} 表含 orders：{table_names:?}"
+    );
+    assert!(
+        table_names.contains(&"parent"),
+        "{driver} 表含 parent：{table_names:?}"
+    );
     println!("[{driver}] 表层 OK：{table_names:?}");
 
     // 视图文件夹 → v_orders
@@ -198,7 +227,10 @@ async fn run_nav_property_chain(driver: &str) {
         .await
         .unwrap_or_else(|e| panic!("{driver} 加载视图失败：{e}"));
     let view_names: Vec<&str> = views.iter().map(|n| n.name.as_str()).collect();
-    assert!(view_names.contains(&"v_orders"), "{driver} 视图含 v_orders：{view_names:?}");
+    assert!(
+        view_names.contains(&"v_orders"),
+        "{driver} 视图含 v_orders：{view_names:?}"
+    );
     println!("[{driver}] 视图层 OK：{view_names:?}");
 
     // 列层（orders → 4 列）
@@ -216,7 +248,11 @@ async fn run_nav_property_chain(driver: &str) {
         .await
         .unwrap_or_else(|e| panic!("{driver} 加载列失败：{e}"));
     let col_names: Vec<&str> = cols.iter().map(|n| n.name.as_str()).collect();
-    assert_eq!(col_names.len(), 4, "{driver} orders 应有 4 列：{col_names:?}");
+    assert_eq!(
+        col_names.len(),
+        4,
+        "{driver} orders 应有 4 列：{col_names:?}"
+    );
     println!("[{driver}] 列层 OK：{col_names:?}");
 
     // 4) 属性面板（抽取 rds-property 后的取数）
@@ -226,7 +262,11 @@ async fn run_nav_property_chain(driver: &str) {
         source: database::model::NavSource::Global,
         catalog: Some(catalog.name.clone()),
         schema: Some(catalog.name.clone()),
-        parent: if kind == PropertyKind::Column { Some("orders".to_string()) } else { None },
+        parent: if kind == PropertyKind::Column {
+            Some("orders".to_string())
+        } else {
+            None
+        },
         name: name.to_string(),
         kind,
     };
@@ -252,11 +292,27 @@ async fn run_nav_property_chain(driver: &str) {
         table_props.properties
     );
     let section_ids: Vec<PageId> = table_props.sections.iter().map(|s| s.id).collect();
-    assert!(section_ids.contains(&PageId::Columns), "{driver} 表分区含列：{section_ids:?}");
-    assert!(section_ids.contains(&PageId::Indexes), "{driver} 表分区含索引：{section_ids:?}");
-    assert!(section_ids.contains(&PageId::Constraints), "{driver} 表分区含约束：{section_ids:?}");
-    assert!(section_ids.contains(&PageId::Ddl), "{driver} 表分区含 DDL：{section_ids:?}");
-    let cols_section = table_props.sections.iter().find(|s| s.id == PageId::Columns).unwrap();
+    assert!(
+        section_ids.contains(&PageId::Columns),
+        "{driver} 表分区含列：{section_ids:?}"
+    );
+    assert!(
+        section_ids.contains(&PageId::Indexes),
+        "{driver} 表分区含索引：{section_ids:?}"
+    );
+    assert!(
+        section_ids.contains(&PageId::Constraints),
+        "{driver} 表分区含约束：{section_ids:?}"
+    );
+    assert!(
+        section_ids.contains(&PageId::Ddl),
+        "{driver} 表分区含 DDL：{section_ids:?}"
+    );
+    let cols_section = table_props
+        .sections
+        .iter()
+        .find(|s| s.id == PageId::Columns)
+        .unwrap();
     assert_eq!(cols_section.table.rows.len(), 4, "{driver} 列分区 4 行");
     println!(
         "[{driver}] 表属性面板 OK：网格 {} 行 / 分区 {:?}",
@@ -265,7 +321,10 @@ async fn run_nav_property_chain(driver: &str) {
     );
 
     // 表「数据」页：分页抓取（fixture 3 行：id=1..3，第 3 行 parent_id 为 NULL）
-    let data = table_props.data.as_ref().unwrap_or_else(|| panic!("{driver} 表属性应带数据页"));
+    let data = table_props
+        .data
+        .as_ref()
+        .unwrap_or_else(|| panic!("{driver} 表属性应带数据页"));
     assert_eq!(data.columns.len(), 4, "{driver} 数据页 4 列");
     assert_eq!(data.rows.len(), 3, "{driver} 数据页 3 行：{:?}", data.rows);
     assert_eq!(data.total, Some(3), "{driver} 行数 COUNT=3");
@@ -276,7 +335,12 @@ async fn run_nav_property_chain(driver: &str) {
         Some("t1"),
         "{driver} 默认顺序首行 tag=t1"
     );
-    println!("[{driver}] 表数据页 OK（{}/{} 行，total={:?}）", data.rows.len(), data.columns.len(), data.total);
+    println!(
+        "[{driver}] 表数据页 OK（{}/{} 行，total={:?}）",
+        data.rows.len(),
+        data.columns.len(),
+        data.total
+    );
 
     // 分页：limit=1 → 每页 1 行、has_more 探测（limit+1 不多跑 COUNT）
     let page1 = property_panel::load_properties(
@@ -286,7 +350,11 @@ async fn run_nav_property_chain(driver: &str) {
         driver,
         Some(driver),
         None,
-        Some(&database::table_data::TableDataRequest { offset: 0, limit: 1, order_by: vec![] }),
+        Some(&database::table_data::TableDataRequest {
+            offset: 0,
+            limit: 1,
+            order_by: vec![],
+        }),
     )
     .await
     .unwrap_or_else(|e| panic!("{driver} 分页第 1 页失败：{e}"));
@@ -302,7 +370,11 @@ async fn run_nav_property_chain(driver: &str) {
         driver,
         Some(driver),
         None,
-        Some(&database::table_data::TableDataRequest { offset: 2, limit: 1, order_by: vec![] }),
+        Some(&database::table_data::TableDataRequest {
+            offset: 2,
+            limit: 1,
+            order_by: vec![],
+        }),
     )
     .await
     .unwrap_or_else(|e| panic!("{driver} 分页第 3 页失败：{e}"));
@@ -310,7 +382,10 @@ async fn run_nav_property_chain(driver: &str) {
     assert_eq!(p3.rows.len(), 1);
     assert!(!p3.has_more, "{driver} 第 3 页是末页");
     assert_eq!(p3.rows[0][0].as_deref(), Some("3"), "{driver} 第 3 行 id=3");
-    assert_eq!(p3.rows[0][1], None, "{driver} 第 3 行 parent_id 为 NULL（None）");
+    assert_eq!(
+        p3.rows[0][1], None,
+        "{driver} 第 3 行 parent_id 为 NULL（None）"
+    );
     println!("[{driver}] 数据分页 OK（has_more 探测 / NULL 单元格）");
 
     // 排序：tag 升序首行 t1 / 降序首行 t3（列头点击走同一条 `order_by` 链路）
@@ -344,8 +419,16 @@ async fn run_nav_property_chain(driver: &str) {
     )
     .await
     .unwrap_or_else(|e| panic!("{driver} 降序失败：{e}"));
-    assert_eq!(asc.data.as_ref().unwrap().rows[0][2].as_deref(), Some("t1"), "{driver} tag 升序首行 t1");
-    assert_eq!(desc.data.as_ref().unwrap().rows[0][2].as_deref(), Some("t3"), "{driver} tag 降序首行 t3");
+    assert_eq!(
+        asc.data.as_ref().unwrap().rows[0][2].as_deref(),
+        Some("t1"),
+        "{driver} tag 升序首行 t1"
+    );
+    assert_eq!(
+        desc.data.as_ref().unwrap().rows[0][2].as_deref(),
+        Some("t3"),
+        "{driver} tag 降序首行 t3"
+    );
     println!("[{driver}] 数据排序 OK（ASC t1 / DESC t3）");
 
     // 视图：列 + DDL + 数据（视图同样可预览，is_ordered 由用户排序决定）
@@ -364,9 +447,15 @@ async fn run_nav_property_chain(driver: &str) {
         view_props.sections.iter().any(|s| s.id == PageId::Columns),
         "{driver} 视图分区含列"
     );
-    let vdata = view_props.data.as_ref().unwrap_or_else(|| panic!("{driver} 视图应带数据页"));
+    let vdata = view_props
+        .data
+        .as_ref()
+        .unwrap_or_else(|| panic!("{driver} 视图应带数据页"));
     assert_eq!(vdata.rows.len(), 3, "{driver} 视图数据 3 行");
-    assert!(!vdata.is_ordered, "{driver} 视图无主键且无排序，应如实声明无顺序");
+    assert!(
+        !vdata.is_ordered,
+        "{driver} 视图无主键且无排序，应如实声明无顺序"
+    );
     println!("[{driver}] 视图属性面板 + 数据页 OK");
 
     // 列：类型 / 可空 / 主键 / 外键 / 默认值
@@ -382,14 +471,18 @@ async fn run_nav_property_chain(driver: &str) {
     .await
     .unwrap_or_else(|e| panic!("{driver} 列属性失败：{e}"));
     assert!(
-        col_props
-            .properties
-            .iter()
-            .any(|r| r.label == "所属表"),
+        col_props.properties.iter().any(|r| r.label == "所属表"),
         "{driver} 列属性应含所属表：{:?}",
         col_props.properties
     );
-    println!("[{driver}] 列属性面板 OK：{:?}", col_props.properties.iter().map(|r| r.label.as_str()).collect::<Vec<_>>());
+    println!(
+        "[{driver}] 列属性面板 OK：{:?}",
+        col_props
+            .properties
+            .iter()
+            .map(|r| r.label.as_str())
+            .collect::<Vec<_>>()
+    );
 
     // 连接：名称 / 归属域 / 驱动
     let conn_props = property_panel::load_properties(
@@ -458,7 +551,10 @@ async fn run_nav_property_chain(driver: &str) {
         .await
         .unwrap_or_else(|e| panic!("{driver} 二次加载失败：{e}"));
     assert_eq!(
-        tables_again.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(),
+        tables_again
+            .iter()
+            .map(|n| n.name.as_str())
+            .collect::<Vec<_>>(),
         table_names,
         "{driver} 二次加载结果一致"
     );

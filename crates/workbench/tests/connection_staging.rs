@@ -52,9 +52,7 @@ impl Harness {
 
 impl Render for Harness {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .child(self.editor.clone())
+        div().size_full().child(self.editor.clone())
     }
 }
 
@@ -149,11 +147,7 @@ fn staging_clear_empties_draft_box(cx: &mut TestAppContext) {
     cx.update(|_, cx| dialog.staging_clear(cx));
 
     let drafts = cx.update(|_, _cx| dialog.drafts.borrow().clone());
-    assert_eq!(
-        drafts.len(),
-        0,
-        "全成功提交后草稿箱必须清空（不留草稿）"
-    );
+    assert_eq!(drafts.len(), 0, "全成功提交后草稿箱必须清空（不留草稿）");
     assert_eq!(
         cx.update(|_, _cx| dialog.draft_cursor.get()),
         0,
@@ -268,7 +262,10 @@ fn staging_prune_saved_drops_legacy_saved_entries(cx: &mut TestAppContext) {
     assert!(
         drafts.iter().all(|d| d.saved_id.is_none()),
         "已保存条目必须被清理（暂存区只放未保存草稿）：{:?}",
-        drafts.iter().map(|d| d.saved_id.clone()).collect::<Vec<_>>()
+        drafts
+            .iter()
+            .map(|d| d.saved_id.clone())
+            .collect::<Vec<_>>()
     );
     assert!(!drafts.is_empty(), "列表恒非空（补空草稿）");
 }

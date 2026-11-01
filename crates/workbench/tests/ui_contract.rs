@@ -97,7 +97,11 @@ fn ui_size_constants_match_design() {
         (PANEL_HEADER_HEIGHT, 36.0, "面板头高度"),
         (CONTROL_HEIGHT_MD, 32.0, "标准控件高"),
         (CONTROL_HEIGHT_SM, 26.0, "小控件高"),
-        (ROW_ACTION_SIZE, 20.0, "行内动作按钮最小命中区（ui-constraints §8.3）"),
+        (
+            ROW_ACTION_SIZE,
+            20.0,
+            "行内动作按钮最小命中区（ui-constraints §8.3）",
+        ),
         (ICON_SIZE_XS, 12.0, "内联图标"),
         (ICON_SIZE_SM, 14.0, "小图标"),
         (ICON_SIZE_MD, 16.0, "标准图标"),
@@ -135,7 +139,10 @@ fn view_layer_has_no_raw_size_literals() {
     let sources: &[(&str, &str)] = &[
         ("view.rs", include_str!("../src/view.rs")),
         ("panels/mod.rs", include_str!("../src/panels/mod.rs")),
-        ("panels/project_picker.rs", include_str!("../src/panels/project_picker.rs")),
+        (
+            "panels/project_picker.rs",
+            include_str!("../src/panels/project_picker.rs"),
+        ),
         ("panels/shared.rs", include_str!("../src/panels/shared.rs")),
         // 导航视图已下沉到 `database` crate（A'3）：清单里换成 crate 内路径。
         (
@@ -199,12 +206,27 @@ fn view_layer_has_no_raw_size_literals() {
             "database/nav_view/dnd.rs",
             include_str!("../../database/src/nav_view/dnd.rs"),
         ),
-        ("panels/left_tabs.rs", include_str!("../src/panels/left_tabs.rs")),
-        ("panels/right_tabs.rs", include_str!("../src/panels/right_tabs.rs")),
+        (
+            "panels/left_tabs.rs",
+            include_str!("../src/panels/left_tabs.rs"),
+        ),
+        (
+            "panels/right_tabs.rs",
+            include_str!("../src/panels/right_tabs.rs"),
+        ),
         ("panels/editor.rs", include_str!("../src/panels/editor.rs")),
-        ("panels/metadata_search.rs", include_str!("../src/panels/metadata_search.rs")),
-        ("panels/property_panel.rs", include_str!("../src/panels/property_panel.rs")),
-        ("panels/search_results.rs", include_str!("../src/panels/search_results.rs")),
+        (
+            "panels/metadata_search.rs",
+            include_str!("../src/panels/metadata_search.rs"),
+        ),
+        (
+            "panels/property_panel.rs",
+            include_str!("../src/panels/property_panel.rs"),
+        ),
+        (
+            "panels/search_results.rs",
+            include_str!("../src/panels/search_results.rs"),
+        ),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
         // Quick Open（Phase 0：结果区换成 List 组件；后续改动不得回退）
         (
@@ -228,7 +250,9 @@ fn view_layer_has_no_raw_size_literals() {
         ),
         (
             "connection_dialog/project_picker.rs",
-            include_str!("../../connection_dialog/src/components/connection_dialog/project_picker.rs"),
+            include_str!(
+                "../../connection_dialog/src/components/connection_dialog/project_picker.rs"
+            ),
         ),
         (
             "connection_dialog/managers.rs",
@@ -484,11 +508,7 @@ fn view_layer_has_no_raw_size_literals() {
 fn has_literal_px(src: &str) -> bool {
     src.lines().any(|line| {
         line.find("px(")
-            .map(|i| {
-                line.as_bytes()
-                    .get(i + 3)
-                    .is_some_and(u8::is_ascii_digit)
-            })
+            .map(|i| line.as_bytes().get(i + 3).is_some_and(u8::is_ascii_digit))
             .unwrap_or(false)
     })
 }
@@ -502,7 +522,10 @@ fn ui_sources_have_no_raw_color_literals() {
     let sources: &[(&str, &str)] = &[
         ("workbench/view.rs", include_str!("../src/view.rs")),
         ("panels/mod.rs", include_str!("../src/panels/mod.rs")),
-        ("panels/project_picker.rs", include_str!("../src/panels/project_picker.rs")),
+        (
+            "panels/project_picker.rs",
+            include_str!("../src/panels/project_picker.rs"),
+        ),
         ("panels/shared.rs", include_str!("../src/panels/shared.rs")),
         // 导航视图已下沉到 `database` crate（A'3）：清单里换成 crate 内路径。
         (
@@ -566,12 +589,27 @@ fn ui_sources_have_no_raw_color_literals() {
             "database/nav_view/dnd.rs",
             include_str!("../../database/src/nav_view/dnd.rs"),
         ),
-        ("panels/left_tabs.rs", include_str!("../src/panels/left_tabs.rs")),
-        ("panels/right_tabs.rs", include_str!("../src/panels/right_tabs.rs")),
+        (
+            "panels/left_tabs.rs",
+            include_str!("../src/panels/left_tabs.rs"),
+        ),
+        (
+            "panels/right_tabs.rs",
+            include_str!("../src/panels/right_tabs.rs"),
+        ),
         ("panels/editor.rs", include_str!("../src/panels/editor.rs")),
-        ("panels/metadata_search.rs", include_str!("../src/panels/metadata_search.rs")),
-        ("panels/property_panel.rs", include_str!("../src/panels/property_panel.rs")),
-        ("panels/search_results.rs", include_str!("../src/panels/search_results.rs")),
+        (
+            "panels/metadata_search.rs",
+            include_str!("../src/panels/metadata_search.rs"),
+        ),
+        (
+            "panels/property_panel.rs",
+            include_str!("../src/panels/property_panel.rs"),
+        ),
+        (
+            "panels/search_results.rs",
+            include_str!("../src/panels/search_results.rs"),
+        ),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
         (
             "quick_open/delegate.rs",
@@ -593,7 +631,9 @@ fn ui_sources_have_no_raw_color_literals() {
         ),
         (
             "connection_dialog/project_picker.rs",
-            include_str!("../../connection_dialog/src/components/connection_dialog/project_picker.rs"),
+            include_str!(
+                "../../connection_dialog/src/components/connection_dialog/project_picker.rs"
+            ),
         ),
         (
             "connection_dialog/managers.rs",

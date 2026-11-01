@@ -8,8 +8,8 @@
 //! 更深——焦点在列表里时由列表接管（不会两个都动）；焦点在输入框或其它地方时，
 //! 容器级绑定照旧生效（原型 §2.2 规则 6 的行为不变）。
 
-use shared::i18n::tr;
 use super::*;
+use shared::i18n::tr;
 
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::list::{ListDelegate, ListItem, ListState};

@@ -19,7 +19,11 @@ fn history_roundtrip_and_dedupe() {
     append_history_at(&dir, "SELECT 2").expect("append2");
     let hist = append_history_at(&dir, "SELECT 1").expect("append3");
 
-    assert_eq!(hist.first().map(String::as_str), Some("SELECT 1"), "同 SQL 移到最前");
+    assert_eq!(
+        hist.first().map(String::as_str),
+        Some("SELECT 1"),
+        "同 SQL 移到最前"
+    );
     assert_eq!(hist.len(), 2, "去重后共 2 条");
 
     // 重新读取（持久化验证）
@@ -38,7 +42,11 @@ fn history_cap_at_20_newest_first() {
         last = append_history_at(&dir, &format!("SELECT {i}")).expect("append");
     }
     assert_eq!(last.len(), 20, "上限 20 条");
-    assert_eq!(last.first().map(String::as_str), Some("SELECT 29"), "最新在前");
+    assert_eq!(
+        last.first().map(String::as_str),
+        Some("SELECT 29"),
+        "最新在前"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

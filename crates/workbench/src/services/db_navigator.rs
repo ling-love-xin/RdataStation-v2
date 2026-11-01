@@ -7,8 +7,8 @@
 
 use std::path::Path;
 
-use engine::driver::native::duckdb::DuckDbDatabase;
 use engine::Database;
+use engine::driver::native::duckdb::DuckDbDatabase;
 
 /// 导航列（列名 + 类型 + 键/空标记）
 #[derive(Debug, Clone)]

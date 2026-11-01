@@ -413,4 +413,3 @@ pub(crate) fn url_template_example(template: &str, default_port: Option<i32>) ->
         .replace("{schema}", "public")
         .replace("{file_path}", tr("路径"))
 }
-

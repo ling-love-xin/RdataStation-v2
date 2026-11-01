@@ -87,7 +87,13 @@ impl NavHost for WorkbenchNavHost {
         self.shared.say(message, cx);
     }
 
-    fn notify(&self, kind: database::nav_host::HostNotify, title: String, message: Option<String>, cx: &mut App) {
+    fn notify(
+        &self,
+        kind: database::nav_host::HostNotify,
+        title: String,
+        message: Option<String>,
+        cx: &mut App,
+    ) {
         let kind = match kind {
             database::nav_host::HostNotify::Info => notification::NotificationType::Info,
             database::nav_host::HostNotify::Success => notification::NotificationType::Success,
@@ -259,12 +265,7 @@ impl NavHost for WorkbenchNavHost {
         settings::SettingsService::visible_databases(conn_id, cx).map(|v| v.into_iter().collect())
     }
 
-    fn set_visible_databases(
-        &self,
-        conn_id: &str,
-        visible: Option<Vec<String>>,
-        cx: &mut App,
-    ) {
+    fn set_visible_databases(&self, conn_id: &str, visible: Option<Vec<String>>, cx: &mut App) {
         settings::SettingsService::set_visible_databases(conn_id, visible, cx);
     }
 
@@ -469,7 +470,11 @@ impl NavHost for WorkbenchNavHost {
     }
 
     fn open_group_manager(&self, window: &mut Window, cx: &mut App) {
-        crate::components::group_manager_dialog::open_group_manager_dialog(window, cx, &self.shared);
+        crate::components::group_manager_dialog::open_group_manager_dialog(
+            window,
+            cx,
+            &self.shared,
+        );
     }
 
     fn open_tag_manager(&self, window: &mut Window, cx: &mut App) {
@@ -477,7 +482,12 @@ impl NavHost for WorkbenchNavHost {
     }
 
     fn open_tag_assign_dialog(&self, conn_id: &str, window: &mut Window, cx: &mut App) {
-        crate::components::tag_assign_dialog::open_tag_assign_dialog(window, cx, &self.shared, conn_id);
+        crate::components::tag_assign_dialog::open_tag_assign_dialog(
+            window,
+            cx,
+            &self.shared,
+            conn_id,
+        );
     }
 
     fn list_tags_for(&self, conn_id: &str) -> Vec<String> {
@@ -505,7 +515,10 @@ impl NavHost for WorkbenchNavHost {
 
     fn open_visible_databases_dialog(&self, conn_id: &str, window: &mut Window, cx: &mut App) {
         // 弹框候选清单按「当前项目根」定位元数据缓存（None = 全局连接缓存）。
-        let root = self.shared.project_root().map(|p| p.to_string_lossy().to_string());
+        let root = self
+            .shared
+            .project_root()
+            .map(|p| p.to_string_lossy().to_string());
         let nav_view = self
             .shared
             .nav_panel

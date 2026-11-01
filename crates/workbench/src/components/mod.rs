@@ -6,23 +6,23 @@ pub mod cache_dialog;
 // `crate::components::connection_dialog::*` 路径不变（editor.rs 等引用点零改动）。
 pub use connection_dialog::components::connection_dialog;
 pub mod dialog_helpers;
+/// 编辑器宿主端口实现（P2-a：`editor::host::EditorHost` 的 workbench 侧实现）
+pub mod editor_host;
 pub mod group_form_dialog;
 pub mod group_manager_dialog;
-pub mod tag_manager_dialog;
-pub mod tag_assign_dialog;
-pub mod saved_view_dialog;
-pub mod visible_databases_dialog;
-pub mod object_mask_dialog;
 pub mod insight_actions;
 pub mod insight_new_dialog;
-/// 来源选择器通用内核（洞察 / 联邦 / 结果集二次分析共用；当前洞察首个实装）
-pub mod source_picker;
 pub mod log_dialog;
 pub mod mock_host;
 pub mod nav_host;
+pub mod object_mask_dialog;
 pub mod project_host;
-pub mod scratchpad_host;
 pub mod resource_host;
-/// 编辑器宿主端口实现（P2-a：`editor::host::EditorHost` 的 workbench 侧实现）
-pub mod editor_host;
+pub mod saved_view_dialog;
+pub mod scratchpad_host;
+/// 来源选择器通用内核（洞察 / 联邦 / 结果集二次分析共用；当前洞察首个实装）
+pub mod source_picker;
+pub mod tag_assign_dialog;
+pub mod tag_manager_dialog;
 pub mod type_short_map_dialog;
+pub mod visible_databases_dialog;

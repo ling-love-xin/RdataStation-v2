@@ -487,25 +487,38 @@ impl<H: 'static> ConnectionDialogState<H> {
             return;
         }
         let root = self.project_path.read(cx).value().trim().to_string();
-        let project_path = if root.is_empty() { None } else { Some(root.as_str()) };
-        match DataSourceService::global()
-            .and_then(|s| s.create_group(&name, "", project_path))
-        {
+        let project_path = if root.is_empty() {
+            None
+        } else {
+            Some(root.as_str())
+        };
+        match DataSourceService::global().and_then(|s| s.create_group(&name, "", project_path)) {
             Ok(_) => {
                 // 重载目录 + 同步勾选态（新组默认未勾选；多对多保存时以勾选态为准）。
                 if let Some(service) = DataSourceService::global().ok() {
-                    let groups =
-                        service.list_groups(if root.is_empty() { None } else { Some(root.as_str()) });
+                    let groups = service.list_groups(if root.is_empty() {
+                        None
+                    } else {
+                        Some(root.as_str())
+                    });
                     *self.groups.borrow_mut() = groups;
                     self.sync_group_checks();
                 }
                 self.group_new_open.set(false);
                 self.group_new_name
                     .update(cx, |s, cx| s.set_value(String::new(), window, cx));
-                set_result(&self.result, ResultLevel::Success, format!("已创建分组「{name}」"));
+                set_result(
+                    &self.result,
+                    ResultLevel::Success,
+                    format!("已创建分组「{name}」"),
+                );
             }
             Err(e) => {
-                set_result(&self.result, ResultLevel::Error, format!("创建分组失败：{e}"));
+                set_result(
+                    &self.result,
+                    ResultLevel::Error,
+                    format!("创建分组失败：{e}"),
+                );
             }
         }
     }
@@ -1323,7 +1336,11 @@ impl ClonedDialogState {
         } else {
             Some(d.user.trim().to_string())
         };
-        let password = if d.pass.is_empty() { None } else { Some(d.pass.clone()) };
+        let password = if d.pass.is_empty() {
+            None
+        } else {
+            Some(d.pass.clone())
+        };
         // 引用档案：名字 → ID（列表在对话框内已加载；批量提交在后台只带解析后的 ID 过线）。
         let auth_config_id = d.auth_ref.as_deref().and_then(|n| {
             self.auth_list
@@ -1349,8 +1366,7 @@ impl ClonedDialogState {
         let driver_properties = if d.props.is_empty() {
             None
         } else {
-            let map: std::collections::BTreeMap<String, String> =
-                d.props.iter().cloned().collect();
+            let map: std::collections::BTreeMap<String, String> = d.props.iter().cloned().collect();
             serde_json::to_string(&map).ok()
         };
         // 高级选项组装（与 collect 同规则）：SSL 覆盖仅当驱动声明 ssl 时落库；策略覆盖落已勾选的类型。
@@ -1451,8 +1467,8 @@ impl ClonedDialogState {
 mod tests {
     // 不通配导入（`super::*` 会把 gpui 的 `test` 宏带入作用域）；需用到的类型显式引入。
     use super::{
-        AuthConfig, ConnectionDialogState, ConnectionDraft, ConnectionScope, Driver,
-        Environment, NetworkConfig, ResultLevel,
+        AuthConfig, ConnectionDialogState, ConnectionDraft, ConnectionScope, Driver, Environment,
+        NetworkConfig, ResultLevel,
     };
     use std::path::PathBuf;
     use std::rc::Rc;
@@ -1633,18 +1649,37 @@ mod tests {
         assert_eq!(input.username.as_deref(), Some("app"));
         assert_eq!(input.password.as_deref(), Some("s3cret"));
         assert_eq!(input.scope, ConnectionScope::Project, "「仅项目」→ Project");
-        assert_eq!(input.auth_config_id.as_deref(), Some("auth-1"), "认证档案名→ID");
-        assert_eq!(input.network_config_id.as_deref(), Some("net-1"), "网络档案名→ID");
+        assert_eq!(
+            input.auth_config_id.as_deref(),
+            Some("auth-1"),
+            "认证档案名→ID"
+        );
+        assert_eq!(
+            input.network_config_id.as_deref(),
+            Some("net-1"),
+            "网络档案名→ID"
+        );
         assert_eq!(input.environment_id.as_deref(), Some("env-1"), "环境名→ID");
         assert_eq!(input.description.as_deref(), Some("主库"), "remark 应 trim");
         assert_eq!(input.driver_id.as_deref(), Some("postgres"));
         assert_eq!(input.auth_method.as_deref(), Some("password"));
         assert_eq!(input.metadata_path.as_deref(), Some("/cache"));
-        assert_eq!(input.use_duckdb_fed, Some(true), "草稿 duckdb_fed 默认 true");
-        assert_eq!(input.save_password, Some(true), "草稿 save_credentials 默认 true（P0-4）");
+        assert_eq!(
+            input.use_duckdb_fed,
+            Some(true),
+            "草稿 duckdb_fed 默认 true"
+        );
+        assert_eq!(
+            input.save_password,
+            Some(true),
+            "草稿 save_credentials 默认 true（P0-4）"
+        );
         // ssl_mode=verify-full（驱动声明 ssl）→ advanced_options 含 ssl.mode。
         let adv = input.advanced_options.as_deref().unwrap_or_default();
-        assert!(adv.contains("\"ssl\"") && adv.contains("verify-full"), "{adv}");
+        assert!(
+            adv.contains("\"ssl\"") && adv.contains("verify-full"),
+            "{adv}"
+        );
         assert!(!adv.contains("policy_overrides"), "无策略覆盖时不写");
         // P0-4（2026-10-24）：关「保存凭据」→ save_password=false（密码不落库）。
         let mut draft_off = draft.clone();
@@ -1685,8 +1720,16 @@ mod tests {
         assert!(input.network_config_id.is_none(), "文件型不应落网络引用");
         assert!(input.auth_method.is_none(), "文件型不应落认证方法");
         assert!(
-            input.advanced_options.as_deref().unwrap_or_default().is_empty()
-                || !input.advanced_options.as_deref().unwrap_or_default().contains("\"ssl\""),
+            input
+                .advanced_options
+                .as_deref()
+                .unwrap_or_default()
+                .is_empty()
+                || !input
+                    .advanced_options
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("\"ssl\""),
             "文件型不应组装 SSL 高级选项"
         );
     }
@@ -1732,10 +1775,8 @@ mod tests {
     fn test_base_dir() -> PathBuf {
         TEST_BASE
             .get_or_init(|| {
-                let dir = std::env::temp_dir().join(format!(
-                    "rds_conn_dlg_test_{}",
-                    std::process::id()
-                ));
+                let dir =
+                    std::env::temp_dir().join(format!("rds_conn_dlg_test_{}", std::process::id()));
                 let _ = std::fs::remove_dir_all(&dir);
                 std::fs::create_dir_all(&dir).expect("create temp dir");
                 let rt = tokio::runtime::Runtime::new().expect("runtime");
@@ -1781,11 +1822,8 @@ mod tests {
         let (has, cleared, success) = cx.update(|_, cx| {
             let has = dialog.groups.borrow().iter().any(|g| g.name == "测试分组");
             let cleared = dialog.group_new_name.read(cx).value().is_empty();
-            let success = dialog
-                .result
-                .borrow()
-                .as_ref()
-                .map(|r| r.level) == Some(ResultLevel::Success);
+            let success =
+                dialog.result.borrow().as_ref().map(|r| r.level) == Some(ResultLevel::Success);
             (has, cleared, success)
         });
         assert!(has, "新分组应出现在目录");

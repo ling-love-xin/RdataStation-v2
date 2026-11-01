@@ -90,7 +90,12 @@ pub fn db_icon_of(type_id: &str, category: Option<&str>) -> DbIcon {
         "mongodb" => IconName::Braces,
         // 内存 KV：键值对常驻内存。
         "redis" => IconName::MemoryStick,
-        _ => match category.unwrap_or_default().trim().to_ascii_lowercase().as_str() {
+        _ => match category
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "relational" => IconName::Database,
             "file-based" => IconName::HardDrive,
             "analytics" => IconName::DatabaseZap,
@@ -166,9 +171,15 @@ mod tests {
             );
         }
         // 大小写与空白不该改变结果（类型 id 来自库，来源不保证规范）。
-        assert_eq!(db_icon_of(" MySQL ", None), DbIcon::Catalog(IconName::Database));
+        assert_eq!(
+            db_icon_of(" MySQL ", None),
+            DbIcon::Catalog(IconName::Database)
+        );
         // 别名：mssql 的另一种常见写法。
-        assert_eq!(db_icon_of("sqlserver", None), DbIcon::Catalog(IconName::Database));
+        assert_eq!(
+            db_icon_of("sqlserver", None),
+            DbIcon::Catalog(IconName::Database)
+        );
     }
 
     #[test]
@@ -191,7 +202,10 @@ mod tests {
             DbIcon::Catalog(IconName::Boxes)
         );
         // 分类也缺 / 未收录 → 最中性的「库」，不猜。
-        assert_eq!(db_icon_of("unknown", None), DbIcon::Catalog(IconName::Database));
+        assert_eq!(
+            db_icon_of("unknown", None),
+            DbIcon::Catalog(IconName::Database)
+        );
         assert_eq!(
             db_icon_of("unknown", Some("weird-category")),
             DbIcon::Catalog(IconName::Database)

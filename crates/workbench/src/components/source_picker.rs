@@ -174,13 +174,18 @@ impl PickerState {
     /// ① 已连接库选中的表（`(连接 id, 表候选)`）。
     pub fn picked_table(&self) -> Option<(String, TableCandidate)> {
         let conn_id = self.selected_conn.clone()?;
-        let table = self.selected_table.and_then(|i| self.tables.get(i))?.clone();
+        let table = self
+            .selected_table
+            .and_then(|i| self.tables.get(i))?
+            .clone();
         Some((conn_id, table))
     }
 
     /// ② 草稿箱选中的文件 `(相对路径, 绝对路径)`。
     pub fn picked_draft(&self) -> Option<(String, PathBuf)> {
-        self.selected_draft.and_then(|i| self.drafts.get(i)).cloned()
+        self.selected_draft
+            .and_then(|i| self.drafts.get(i))
+            .cloned()
     }
 
     /// ③ 资源分析选中的表名。
@@ -207,8 +212,7 @@ pub struct PickerConfig {
 
 /// 物化策略（消费方注入）：读 `PickerState` 里选中的目标，执行出口动作。
 /// 失败时写 `state.set_note` + `window.refresh()` 回显，不关对话框。
-pub type ConfirmStrategy =
-    Rc<dyn Fn(&Shared, &Rc<RefCell<PickerState>>, &mut Window, &mut App)>;
+pub type ConfirmStrategy = Rc<dyn Fn(&Shared, &Rc<RefCell<PickerState>>, &mut Window, &mut App)>;
 
 /// 导航内省服务（同步 block_on：模态点击粒度小，有缓存时零 I/O）。
 fn navigator(project_root: Option<PathBuf>) -> NavigatorService {
@@ -236,7 +240,11 @@ fn query_schemas(conn_id: &str, catalog: &str, project_root: Option<PathBuf>) ->
         Ok(rt) => rt,
         Err(_) => return Vec::new(),
     };
-    rt.block_on(async { svc.list_all_schemas(conn_id, catalog).await.unwrap_or_default() })
+    rt.block_on(async {
+        svc.list_all_schemas(conn_id, catalog)
+            .await
+            .unwrap_or_default()
+    })
 }
 
 /// 同步查某 schema 下的表（含视图；对齐导航「类别文件夹 → Tables/Views」模型）。
@@ -265,9 +273,7 @@ fn query_tables(
             schema: schema.to_string(),
         }
     };
-    let Ok(_) = rt.block_on(async {
-        svc.load_children(conn_id, &path, None, false).await
-    }) else {
+    let Ok(_) = rt.block_on(async { svc.load_children(conn_id, &path, None, false).await }) else {
         return out;
     };
     // 类别文件夹展开取表 / 视图节点（folder 路径的 schema 与展开路径一致）
@@ -277,13 +283,11 @@ fn query_tables(
             schema: schema.to_string(),
             folder,
         };
-        let children = rt.block_on(async {
-            svc.load_children(conn_id, &folder_path, None, false).await
-        });
+        let children =
+            rt.block_on(async { svc.load_children(conn_id, &folder_path, None, false).await });
         let Ok(children) = children else { continue };
         for node in children {
-            let is_table =
-                matches!(node.kind, NavNodeKind::Table { .. } | NavNodeKind::View);
+            let is_table = matches!(node.kind, NavNodeKind::Table { .. } | NavNodeKind::View);
             if is_table {
                 out.push(TableCandidate {
                     name: node.name.clone(),
@@ -349,9 +353,7 @@ fn collect_analysis_tables(project: Option<&project::ui::OpenProject>) -> Vec<St
         .map(|root| {
             engine::persistence::project_db::ProjectDatabaseManager::analysis_db_path(&root)
         })
-        .or_else(|| {
-            Some(connection_dialog::services::workspace_loader::global_analysis_db_path())
-        });
+        .or_else(|| Some(connection_dialog::services::workspace_loader::global_analysis_db_path()));
     let Some(path) = path else {
         return Vec::new();
     };
@@ -402,8 +404,17 @@ pub fn open_source_picker(
         note = Some("分析引擎库为空或不可用（可在资源分析里先做一次分析）".to_string());
     }
 
-    let initial_tab = config.kinds.first().copied().unwrap_or(SourceKind::Connected);
-    let state = Rc::new(RefCell::new(PickerState::new(conns, drafts, analysis, initial_tab)));
+    let initial_tab = config
+        .kinds
+        .first()
+        .copied()
+        .unwrap_or(SourceKind::Connected);
+    let state = Rc::new(RefCell::new(PickerState::new(
+        conns,
+        drafts,
+        analysis,
+        initial_tab,
+    )));
     state.borrow_mut().note = note;
     let state_build = state.clone();
     let shared_build = shared.clone();
@@ -425,17 +436,14 @@ pub fn open_source_picker(
         let theme = cx.theme();
 
         // —— 来源 Tab 条（按配置裁剪显示）——
-        let tabs = config.kinds.iter().map(|t| Tab::new().label(SharedString::from(t.label())));
+        let tabs = config
+            .kinds
+            .iter()
+            .map(|t| Tab::new().label(SharedString::from(t.label())));
         let tab_bar = TabBar::new(ElementId::Name(SharedString::from("source-picker-tabs")))
             .underline()
             .children(tabs)
-            .selected_index(
-                config
-                    .kinds
-                    .iter()
-                    .position(|t| *t == s.tab)
-                    .unwrap_or(0),
-            )
+            .selected_index(config.kinds.iter().position(|t| *t == s.tab).unwrap_or(0))
             .on_click({
                 let state = state_build.clone();
                 move |index, window, _app| {
@@ -481,19 +489,17 @@ pub fn open_source_picker(
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
                         .child(
-                            Button::new(ElementId::Name(SharedString::from(
-                                "source-picker-ok",
-                            )))
-                            .label(confirm_label)
-                            .disabled(!can_confirm)
-                            .on_click({
-                                let state = state_build.clone();
-                                let shared = shared_build.clone();
-                                let strategy = strategy_build.clone();
-                                move |_, window, cx| {
-                                    strategy(&shared, &state, window, cx);
-                                }
-                            }),
+                            Button::new(ElementId::Name(SharedString::from("source-picker-ok")))
+                                .label(confirm_label)
+                                .disabled(!can_confirm)
+                                .on_click({
+                                    let state = state_build.clone();
+                                    let shared = shared_build.clone();
+                                    let strategy = strategy_build.clone();
+                                    move |_, window, cx| {
+                                        strategy(&shared, &state, window, cx);
+                                    }
+                                }),
                         ),
                 ),
         );
@@ -719,11 +725,7 @@ fn render_scratchpad(
 }
 
 /// ③ 资源分析（DuckDB 内部表）。
-fn render_analysis(
-    s: &PickerState,
-    state: &Rc<RefCell<PickerState>>,
-    cx: &mut App,
-) -> AnyElement {
+fn render_analysis(s: &PickerState, state: &Rc<RefCell<PickerState>>, cx: &mut App) -> AnyElement {
     let muted = cx.theme().colors.muted_foreground;
     let mut list = div()
         .v_flex()
@@ -764,11 +766,7 @@ fn render_analysis(
 }
 
 /// ④ 外部文件（rfd 系统对话框）。
-fn render_external(
-    s: &PickerState,
-    state: &Rc<RefCell<PickerState>>,
-    cx: &mut App,
-) -> AnyElement {
+fn render_external(s: &PickerState, state: &Rc<RefCell<PickerState>>, cx: &mut App) -> AnyElement {
     let muted = cx.theme().colors.muted_foreground;
     let selected = s.external.clone();
     let mut list = div()
@@ -810,8 +808,8 @@ fn render_external(
                     .on_click({
                         let state = state.clone();
                         move |_, window, _app| {
-                            let mut dialog = rfd::FileDialog::new()
-                                .set_title("选择数据文件（DuckDB 支持格式）");
+                            let mut dialog =
+                                rfd::FileDialog::new().set_title("选择数据文件（DuckDB 支持格式）");
                             for (name, exts) in [
                                 ("CSV", &["csv"][..]),
                                 ("Parquet", &["parquet"]),

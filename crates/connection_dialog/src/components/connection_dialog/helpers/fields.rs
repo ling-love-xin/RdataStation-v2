@@ -607,4 +607,3 @@ pub(crate) fn build_auth_config_json(
 pub(crate) fn auth_config_values(auth_type: &str, config_json: &str) -> Vec<(String, String)> {
     spec_field_values(auth_field_specs(auth_type), config_json)
 }
-

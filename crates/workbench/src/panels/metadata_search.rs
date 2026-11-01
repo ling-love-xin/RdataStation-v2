@@ -23,20 +23,22 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use database::model::{property_ref_of, PropertyRequest};
-use database::nav_jobs::{self, NameMatchMode, SearchConsumer, SearchHit, SearchKind, SearchTarget};
+use database::model::{PropertyRequest, property_ref_of};
+use database::nav_jobs::{
+    self, NameMatchMode, SearchConsumer, SearchHit, SearchKind, SearchTarget,
+};
 use database::nav_view::search_hit_locatable;
 use engine::ObjectRef;
 
+use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
+use gpui_kit::component::Theme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, TabGroup};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::Theme;
 use gpui_kit::component::{ActiveTheme, IconName, Sizable as _};
-use gpui_kit::EventEmitter;
 use gpui_kit::*;
 
 use crate::panels::Shared;
@@ -124,15 +126,15 @@ impl MetadataSearchHostPanel {
         }
         let weak = cx.entity().downgrade();
         let executor = cx.background_executor().clone();
-        let task = cx.spawn(async move |_this, cx| loop {
-            match weak.update(cx, |this, cx| this.pump_results(cx)) {
-                Ok(()) => {}
-                // 视图已销毁：退出任务（否则会永远空转）
-                Err(_) => return,
+        let task = cx.spawn(async move |_this, cx| {
+            loop {
+                match weak.update(cx, |this, cx| this.pump_results(cx)) {
+                    Ok(()) => {}
+                    // 视图已销毁：退出任务（否则会永远空转）
+                    Err(_) => return,
+                }
+                executor.timer(Duration::from_millis(60)).await;
             }
-            executor
-                .timer(Duration::from_millis(60))
-                .await;
         });
         self.pump = Some(task);
     }
@@ -236,7 +238,9 @@ impl Render for MetadataSearchHostPanel {
         }
         let Some(search) = search else {
             return div()
-                .id("metadata-search-host").role(gpui::Role::Group).test_support()
+                .id("metadata-search-host")
+                .role(gpui::Role::Group)
+                .test_support()
                 .size_full()
                 .bg(theme.colors.background)
                 .v_flex()
@@ -268,20 +272,17 @@ impl Render for MetadataSearchHostPanel {
                 }
                 state
             });
-            let sub = cx.subscribe_in(
-                &input,
-                window,
-                |this, _e, ev: &InputEvent, window, cx| {
-                    if matches!(ev, InputEvent::PressEnter { .. }) {
-                        this.run_panel_search(window, cx);
-                    }
-                },
-            );
+            let sub = cx.subscribe_in(&input, window, |this, _e, ev: &InputEvent, window, cx| {
+                if matches!(ev, InputEvent::PressEnter { .. }) {
+                    this.run_panel_search(window, cx);
+                }
+            });
             self.panel_input = Some(input);
             self.panel_sub = Some(sub);
         }
         let panel_input = self.panel_input.clone();
-        let (panel_case, panel_regex, panel_word) = (self.panel_case, self.panel_regex, self.panel_word);
+        let (panel_case, panel_regex, panel_word) =
+            (self.panel_case, self.panel_regex, self.panel_word);
         let entity = cx.entity();
         let toggle_panel_case = {
             let entity = entity.clone();
@@ -343,16 +344,8 @@ impl Render for MetadataSearchHostPanel {
             .border_b_1()
             .border_color(border);
         if let Some(input) = panel_input {
-            es_bar = es_bar.child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(Input::new(&input).w_full()),
-            );
-            es_bar = es_bar
-                .child(case_btn)
-                .child(word_btn)
-                .child(regex_btn);
+            es_bar = es_bar.child(div().flex_1().min_w_0().child(Input::new(&input).w_full()));
+            es_bar = es_bar.child(case_btn).child(word_btn).child(regex_btn);
         } else {
             es_bar = es_bar.child(div().flex_1());
         }
@@ -382,50 +375,46 @@ impl Render for MetadataSearchHostPanel {
         // 点命中 → 打开属性面板（请求带全定位信息；与导航搜索结果同一去向）。
         let open_hit: Rc<dyn Fn(SearchHit, &mut Window, &mut App)> = {
             let shared = shared.clone();
-            Rc::new(
-                move |hit: SearchHit, window: &mut Window, app: &mut App| {
-                    let Some(object) = ObjectRef::from_index_hit(
-                        &hit.conn_id,
-                        &hit.object_type,
-                        &hit.object_name,
-                        hit.parent_name.as_deref(),
-                        hit.catalog.as_deref(),
-                        hit.schema.as_deref(),
-                    ) else {
-                        return;
-                    };
-                    let request = PropertyRequest {
-                        property: property_ref_of(&object),
-                        conn_label: hit.conn_label.clone(),
-                        driver: hit.driver.clone(),
-                        type_id: None,
-                        data: None,
-                    };
-                    shared.show_properties(request, window, app);
-                },
-            )
+            Rc::new(move |hit: SearchHit, window: &mut Window, app: &mut App| {
+                let Some(object) = ObjectRef::from_index_hit(
+                    &hit.conn_id,
+                    &hit.object_type,
+                    &hit.object_name,
+                    hit.parent_name.as_deref(),
+                    hit.catalog.as_deref(),
+                    hit.schema.as_deref(),
+                ) else {
+                    return;
+                };
+                let request = PropertyRequest {
+                    property: property_ref_of(&object),
+                    conn_label: hit.conn_label.clone(),
+                    driver: hit.driver.clone(),
+                    type_id: None,
+                    data: None,
+                };
+                shared.show_properties(request, window, app);
+            })
         };
         // 「在树中定位」→ 切左面板到数据源 + `Shared::request_reveal`（与 Quick Open 同口径）。
         let locate_hit: Rc<dyn Fn(SearchHit, &mut App)> = {
             let shared = shared.clone();
-            Rc::new(
-                move |hit: SearchHit, app: &mut App| {
-                    let Some(object) = ObjectRef::from_index_hit(
-                        &hit.conn_id,
-                        &hit.object_type,
-                        &hit.object_name,
-                        hit.parent_name.as_deref(),
-                        hit.catalog.as_deref(),
-                        hit.schema.as_deref(),
-                    ) else {
-                        return;
-                    };
-                    shared.active_left.set(LeftPanel::Database);
-                    shared.left_mode.set(SidebarMode::Expanded);
-                    shared.request_reveal(object);
-                    let _ = app;
-                },
-            )
+            Rc::new(move |hit: SearchHit, app: &mut App| {
+                let Some(object) = ObjectRef::from_index_hit(
+                    &hit.conn_id,
+                    &hit.object_type,
+                    &hit.object_name,
+                    hit.parent_name.as_deref(),
+                    hit.catalog.as_deref(),
+                    hit.schema.as_deref(),
+                ) else {
+                    return;
+                };
+                shared.active_left.set(LeftPanel::Database);
+                shared.left_mode.set(SidebarMode::Expanded);
+                shared.request_reveal(object);
+                let _ = app;
+            })
         };
         // 面板内「关闭」→ 清空结果（面板显示空态）；彻底关标签走 tab ✕。
         let clear = {
@@ -438,7 +427,9 @@ impl Render for MetadataSearchHostPanel {
 
         let pane = render_metadata_search_pane(&search, &theme, &open_hit, &locate_hit, pending);
         div()
-            .id("metadata-search-host").role(gpui::Role::Group).test_support()
+            .id("metadata-search-host")
+            .role(gpui::Role::Group)
+            .test_support()
             .size_full()
             .bg(theme.colors.background)
             .v_flex()
@@ -477,7 +468,10 @@ fn render_metadata_search_pane(
                     .child(if pending {
                         format!("索引搜索：{}（搜索中…）", search.query)
                     } else {
-                        format!("索引搜索：{}（无命中；已搜 {} 个有缓存的连接）", search.query, search.searched)
+                        format!(
+                            "索引搜索：{}（无命中；已搜 {} 个有缓存的连接）",
+                            search.query, search.searched
+                        )
                     }),
             )
             .into_any_element();
@@ -486,7 +480,10 @@ fn render_metadata_search_pane(
     // 按连接分组（保序：首次出现顺序即连接顺序）。
     let mut groups: Vec<(String, String, Vec<&SearchHit>)> = Vec::new();
     for hit in &search.hits {
-        match groups.iter_mut().find(|(conn_id, _, _)| conn_id == &hit.conn_id) {
+        match groups
+            .iter_mut()
+            .find(|(conn_id, _, _)| conn_id == &hit.conn_id)
+        {
             Some((_, _, rows)) => rows.push(hit),
             None => groups.push((hit.conn_id.clone(), hit.conn_label.clone(), vec![hit])),
         }
@@ -626,7 +623,11 @@ fn render_footer(
     let status = if pending {
         "搜索中…".to_string()
     } else {
-        format!("{} 条命中 · 覆盖 {} 个连接", search.hits.len(), search.searched)
+        format!(
+            "{} 条命中 · 覆盖 {} 个连接",
+            search.hits.len(),
+            search.searched
+        )
     };
     div()
         .id("md-footer")
@@ -637,7 +638,12 @@ fn render_footer(
         .h_6()
         .border_t_1()
         .border_color(border)
-        .child(div().text_xs().text_color(if pending { fg } else { muted }).child(status))
+        .child(
+            div()
+                .text_xs()
+                .text_color(if pending { fg } else { muted })
+                .child(status),
+        )
         .child(
             Button::new("md-clear")
                 .ghost()

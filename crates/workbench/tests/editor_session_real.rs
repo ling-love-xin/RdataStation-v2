@@ -45,11 +45,7 @@ fn temp_store(tag: &str) -> (std::path::PathBuf, WorkbenchContextStore) {
     // 不能在 tokio 运行时里调用（`acquire_sync` 会返回可读错误）。
     let runtime = tokio::runtime::Runtime::new().expect("runtime");
     let pool = runtime.block_on(async {
-        std::sync::Arc::new(
-            GlobalSqlitePool::new(db.clone(), 1)
-                .await
-                .expect("建池"),
-        )
+        std::sync::Arc::new(GlobalSqlitePool::new(db.clone(), 1).await.expect("建池"))
     });
     drop(runtime);
 
@@ -71,7 +67,11 @@ fn closing_a_document_saves_its_session_and_reopening_restores_cursor_and_mode(
     let path = dir.join("report.sql");
     std::fs::write(&path, "select 1;\nselect 2;").expect("写盘");
     let document = first
-        .open(OpenRequest::file(&path, "select 1;\nselect 2;", EditorMode::Sql))
+        .open(OpenRequest::file(
+            &path,
+            "select 1;\nselect 2;",
+            EditorMode::Sql,
+        ))
         .id()
         .clone();
 
@@ -373,11 +373,20 @@ fn leaving_the_window_stashes_every_open_document(cx: &mut TestAppContext) {
 
     let a_id = editor::session::session_id_for_path(&a_path);
     let b_id = editor::session::session_id_for_path(&b_path);
-    let saved_a = store.load(&a_id).expect("读会话 a").expect("a.sql 应当有会话");
-    let saved_b = store.load(&b_id).expect("读会话 b").expect("b.sql 应当有会话");
+    let saved_a = store
+        .load(&a_id)
+        .expect("读会话 a")
+        .expect("a.sql 应当有会话");
+    let saved_b = store
+        .load(&b_id)
+        .expect("读会话 b")
+        .expect("b.sql 应当有会话");
     assert_eq!(saved_a.content, "select 1;");
     assert_eq!(saved_b.content, "select 2;");
-    assert_eq!(saved_a.cursor, 4, "存的必须是**当下**的光标，不是打开时的快照");
+    assert_eq!(
+        saved_a.cursor, 4,
+        "存的必须是**当下**的光标，不是打开时的快照"
+    );
 
     let _ = std::fs::remove_dir_all(dir);
 }

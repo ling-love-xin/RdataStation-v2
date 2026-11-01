@@ -102,19 +102,19 @@ pub fn open_save_view_dialog(window: &mut Window, cx: &mut App, filters: NavFilt
         body = body
             .child(field_label(theme, "名称"))
             .child(Input::new(&name_input))
-            .when(name_empty, |this| this.child(hint_line(theme, "名称不能为空")));
+            .when(name_empty, |this| {
+                this.child(hint_line(theme, "名称不能为空"))
+            });
         if let Some(msg) = err.as_ref() {
             body = body.child(hint_line(theme, msg));
         }
         // 预览：保存的就是这一组筛选（只动 facet，不含搜索框）。
-        body = body
-            .child(field_label(theme, "将保存的筛选"))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child(preview.clone()),
-            );
+        body = body.child(field_label(theme, "将保存的筛选")).child(
+            div()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(preview.clone()),
+        );
         dialog
             .title("将当前筛选存为视图")
             .child(standard_dialog_body(body))

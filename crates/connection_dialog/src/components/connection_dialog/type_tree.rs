@@ -11,8 +11,8 @@
 //! 描边。原型 §5 把「选中项底色 / 左边条」映射到的正是这两个 token（`#E4E4E4` / `#C25B46`，
 //! 与旧的两处自绘取值完全相同），所以这是**同一套配色**、只是改由组件画。
 
-use shared::i18n::tr;
 use super::*;
+use shared::i18n::tr;
 
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::list::{ListDelegate, ListItem, ListState};

@@ -12,17 +12,15 @@
 
 use gpui_kit::{AppContext as _, TestAppContext};
 use insight::insight_engine::get_or_create_duckdb;
-use insight::{ColumnKind, InsightPanelState, InsightTarget, InsightView};
 use insight::jobs::{ProfileRequest, request_profile};
+use insight::{ColumnKind, InsightPanelState, InsightTarget, InsightView};
 
 /// 建临时表并插数据（表名唯一：DuckDB 连接是进程级单例）
 fn seed(table: &str, ddl: &str, values: &str) {
     let duckdb = get_or_create_duckdb().expect("应能拿到内存 DuckDB 连接");
     let conn = duckdb.lock().expect("DuckDB 锁不应中毒");
-    conn.execute_batch(&format!(
-        "CREATE OR REPLACE TEMP TABLE \"{table}\" ({ddl})"
-    ))
-    .expect("建临时表");
+    conn.execute_batch(&format!("CREATE OR REPLACE TEMP TABLE \"{table}\" ({ddl})"))
+        .expect("建临时表");
     conn.execute_batch(&format!("INSERT INTO \"{table}\" {values}"))
         .expect("插数据");
 }
@@ -48,7 +46,11 @@ fn profile_request_fills_the_panel(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let table = "t_insight_entry_ok";
     let rows: Vec<String> = (1..=12).map(|i| format!("({i})")).collect();
-    seed(table, "amount INTEGER", &format!("VALUES {}", rows.join(",")));
+    seed(
+        table,
+        "amount INTEGER",
+        &format!("VALUES {}", rows.join(",")),
+    );
 
     let view = cx.update(|cx| {
         let view = cx.new(InsightView::new);
@@ -91,10 +93,7 @@ fn missing_table_reaches_the_panel_as_a_friendly_error(cx: &mut TestAppContext) 
     cx.run_until_parked();
 
     cx.update(|cx| match view.read(cx).state() {
-        InsightPanelState::Error {
-            message,
-            retryable,
-        } => {
+        InsightPanelState::Error { message, retryable } => {
             assert_eq!(message, "结果集已失效或已过期，请重新执行查询");
             assert!(!retryable, "结果集没了不该给重试");
             assert!(!message.contains('['), "不得展示内部错误码：{message}");

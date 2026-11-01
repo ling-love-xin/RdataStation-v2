@@ -199,7 +199,10 @@ mod tests {
             .expect("load 不该报错")
             .expect("品牌包应命中");
         let text = String::from_utf8(bytes.to_vec()).expect("SVG 是文本");
-        assert!(text.contains(r#"fill="currentColor""#), "应补上主题色：{text}");
+        assert!(
+            text.contains(r#"fill="currentColor""#),
+            "应补上主题色：{text}"
+        );
 
         let _ = std::fs::remove_file(&file);
     }

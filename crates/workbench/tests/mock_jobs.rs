@@ -8,9 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use mock::mock_view::{
-    MockDraft, MockJobDone, MockJobKind, MockJobState, MockRunOptions,
-};
+use mock::mock_view::{MockDraft, MockJobDone, MockJobKind, MockJobState, MockRunOptions};
 use mock::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale, MockExportFormat};
 use rds_workbench::services::mock_generator;
 use rds_workbench::services::mock_jobs;
@@ -132,7 +130,8 @@ fn start_while_running_is_rejected_then_recovers() {
     let job = draft("t_job_busy", 50_000);
 
     mock_jobs::start(&job, MockJobKind::Generate, &paths(&db)).expect("首个任务应成功提交");
-    let err = mock_jobs::start(&job, MockJobKind::Generate, &paths(&db)).expect_err("应拒绝并发任务");
+    let err =
+        mock_jobs::start(&job, MockJobKind::Generate, &paths(&db)).expect_err("应拒绝并发任务");
     assert!(err.contains("已有任务"), "err: {err}");
 
     wait_done(Duration::from_secs(180)).expect("首个任务应成功");
