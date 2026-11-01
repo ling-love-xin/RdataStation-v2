@@ -19,7 +19,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use engine::sql::{ColumnDefInfo, SqlEngine};
 use rds_mock::{
     ColumnDataType, ColumnDef, ColumnDependency, GeneratorConfig, Locale, MockConfig, MockEngine,
-    MockError, MockExportFormat, ScenarioTemplate, TempTableWriteMode, TemplateTable, parse_data_type,
+    MockError, MockExportFormat, ScenarioTemplate, TempTableWriteMode, TemplateTable,
+    parse_data_type,
 };
 use shared::models::QueryResult;
 
@@ -534,7 +535,10 @@ async fn ordered_preview_returns_the_global_top_rows() {
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
         }
     }
-    assert!(unknown_column_rejected, "列名不存在应报错（而不是默默当成无排序列）");
+    assert!(
+        unknown_column_rejected,
+        "列名不存在应报错（而不是默默当成无排序列）"
+    );
 }
 
 /// 内存库被人占着时**非阻塞回落** `Ok(None)`：面板据此说「稍后再试」，而不是假装重查过了。
@@ -635,12 +639,9 @@ fn map_column_resolves_parameterized_source_types() {
 async fn cancel_token_is_per_task() {
     // 预置位的令牌：生成在第一批边界就报「已取消」
     let cancelled = Arc::new(AtomicBool::new(true));
-    let result = MockEngine::generate_with_progress(
-        basic_config("t_cancel_prearmed"),
-        cancelled,
-        |_, _| {},
-    )
-    .await;
+    let result =
+        MockEngine::generate_with_progress(basic_config("t_cancel_prearmed"), cancelled, |_, _| {})
+            .await;
     assert!(
         matches!(result, Err(MockError::Generation(_))),
         "预置位的令牌应让生成报已取消: {:?}",
@@ -1040,13 +1041,9 @@ async fn scenario_references_allow_self_and_forward_targets() {
         ],
     };
 
-    let result = MockEngine::generate_scenario(
-        &template,
-        rds_mock::new_cancel_token(),
-        |_, _| {},
-    )
-    .await
-    .expect("自关联与前向引用都应当成功");
+    let result = MockEngine::generate_scenario(&template, rds_mock::new_cancel_token(), |_, _| {})
+        .await
+        .expect("自关联与前向引用都应当成功");
 
     let own = column_of(&result.tables[0].temp_table_name, "id");
     assert!(
@@ -1193,23 +1190,15 @@ async fn fixed_seed_scenarios_repeat_exactly() {
         ],
     };
 
-    let first = MockEngine::generate_scenario(
-        &template,
-        rds_mock::new_cancel_token(),
-        |_, _| {},
-    )
-    .await
-    .expect("第一次生成");
+    let first = MockEngine::generate_scenario(&template, rds_mock::new_cancel_token(), |_, _| {})
+        .await
+        .expect("第一次生成");
     // 临时表同名会被下一次生成重建：立刻快照
     let first_snapshot = snapshot(&first);
 
-    let second = MockEngine::generate_scenario(
-        &template,
-        rds_mock::new_cancel_token(),
-        |_, _| {},
-    )
-    .await
-    .expect("第二次生成");
+    let second = MockEngine::generate_scenario(&template, rds_mock::new_cancel_token(), |_, _| {})
+        .await
+        .expect("第二次生成");
     let second_snapshot = snapshot(&second);
 
     assert_eq!(first.total_rows, second.total_rows);
@@ -1259,22 +1248,16 @@ async fn different_seeds_produce_different_scenario_data() {
         ],
     };
 
-    let first = MockEngine::generate_scenario(
-        &build(Some(7)),
-        rds_mock::new_cancel_token(),
-        |_, _| {},
-    )
-    .await
-    .expect("seed=7 生成");
+    let first =
+        MockEngine::generate_scenario(&build(Some(7)), rds_mock::new_cancel_token(), |_, _| {})
+            .await
+            .expect("seed=7 生成");
     let first_snapshot = snapshot(&first);
 
-    let second = MockEngine::generate_scenario(
-        &build(Some(8)),
-        rds_mock::new_cancel_token(),
-        |_, _| {},
-    )
-    .await
-    .expect("seed=8 生成");
+    let second =
+        MockEngine::generate_scenario(&build(Some(8)), rds_mock::new_cancel_token(), |_, _| {})
+            .await
+            .expect("seed=8 生成");
     let second_snapshot = snapshot(&second);
 
     let differ = first_snapshot
@@ -1293,10 +1276,7 @@ async fn different_seeds_produce_different_scenario_data() {
 #[tokio::test]
 async fn empty_constraint_collection_is_rejected_before_generating() {
     for (hint, generator) in [
-        (
-            "取值集合",
-            GeneratorConfig::ValueSet { values: Vec::new() },
-        ),
+        ("取值集合", GeneratorConfig::ValueSet { values: Vec::new() }),
         (
             "序列取值",
             GeneratorConfig::Sequence {

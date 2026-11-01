@@ -8,8 +8,8 @@
 
 use super::*;
 
-use gpui_kit::component::Icon;
 use content_search::view::hit_line;
+use gpui_kit::component::Icon;
 
 impl ScratchpadRowCtx {
     /// 该显示行是否为内联新建行。
@@ -211,23 +211,21 @@ impl ScratchpadView {
             })
             // 微标（用户点名：zed / VS Code 风格的类型**图标**，不是文本标签）：
             // 文件夹画文件夹图标；文件画扩展名对应的类型图标（sql→database、log→file-terminal…）。
-            .child(
-                if is_folder {
-                    Icon::empty()
-                        .path("icons/folder.svg")
-                        .size(rems(ui::ICON_SIZE_MD))
-                        .flex_none()
-                        .text_color(folder_color)
-                        .into_any_element()
-                } else {
-                    Icon::empty()
-                        .path(scratchpad_type_icon(&entry.name))
-                        .size(rems(ui::ICON_SIZE_MD))
-                        .flex_none()
-                        .text_color(icon_color)
-                        .into_any_element()
-                },
-            )
+            .child(if is_folder {
+                Icon::empty()
+                    .path("icons/folder.svg")
+                    .size(rems(ui::ICON_SIZE_MD))
+                    .flex_none()
+                    .text_color(folder_color)
+                    .into_any_element()
+            } else {
+                Icon::empty()
+                    .path(scratchpad_type_icon(&entry.name))
+                    .size(rems(ui::ICON_SIZE_MD))
+                    .flex_none()
+                    .text_color(icon_color)
+                    .into_any_element()
+            })
             .child(
                 div()
                     .flex_1()
@@ -422,22 +420,22 @@ impl ScratchpadView {
                 let reveal_key = menu_key.clone();
                 let open_sys_entity = menu_entity.clone();
                 let open_sys_key = menu_key.clone();
-                menu = menu.item(
-                    PopupMenuItem::new("在文件管理器中显示").on_click(move |_, _, app| {
+                menu = menu.item(PopupMenuItem::new("在文件管理器中显示").on_click(
+                    move |_, _, app| {
                         reveal_entity.update(app, |this, cx| {
                             this.reveal_scratchpad_location(reveal_key.clone(), cx)
                         });
-                    }),
-                );
+                    },
+                ));
                 if !is_folder {
                     // 「用系统应用打开」：只给文件（文件夹“打开”在资源管理器里就是定位）。
-                    menu = menu.item(
-                        PopupMenuItem::new("用系统应用打开").on_click(move |_, _, app| {
+                    menu = menu.item(PopupMenuItem::new("用系统应用打开").on_click(
+                        move |_, _, app| {
                             open_sys_entity.update(app, |this, cx| {
                                 this.open_scratchpad_location(open_sys_key.clone(), cx)
                             });
-                        }),
-                    );
+                        },
+                    ));
                 }
                 // 「属性」：文件与文件夹都可用（用户点名 2026-10-10：简单属性面板，
                 // 树行 meta 只留大小；时间与「SQL 文件连接哪个数据库」都放这里）。
@@ -452,15 +450,14 @@ impl ScratchpadView {
                 if !is_folder {
                     let tag_entity = menu_entity.clone();
                     let tag_rel = rel_for_tags.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new("标签…").on_click(move |_, window, app| {
+                    menu =
+                        menu.item(PopupMenuItem::new("标签…").on_click(move |_, window, app| {
                             if !tag_rel.is_empty() {
                                 tag_entity.update(app, |this, cx| {
                                     this.open_tag_dialog(window, &tag_rel, cx)
                                 });
                             }
-                        }),
-                    );
+                        }));
                 }
                 let menu = menu;
                 menu.item(
@@ -567,7 +564,12 @@ impl ScratchpadView {
             .child(div().w_2p5().flex_none())
             // 输入框与树行同字号（`xsmall` → `text_xs` 12px，行高 20px 落在 26px 编辑行内），
             // 边框保持 1px 细边框（`bordered` 默认 true：`border_1` + 主题 `input` 色）。
-            .child(div().flex_1().min_w_0().child(Input::new(&input).xsmall().w_full()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Input::new(&input).xsmall().w_full()),
+            )
             .child(
                 Button::new("sp-edit-ok")
                     .ghost()
@@ -818,10 +820,9 @@ impl ScratchpadView {
                     .cursor_pointer()
                     .hover(move |s| s.bg(hover_bg))
                     .on_click(toggle_dir)
-                    .child(tree::disclosure_slot().child(tree::disclosure_icon(
-                        !dir_collapsed,
-                        muted,
-                    )))
+                    .child(
+                        tree::disclosure_slot().child(tree::disclosure_icon(!dir_collapsed, muted)),
+                    )
                     .child(
                         Icon::empty()
                             .path("icons/folder.svg")
@@ -907,10 +908,10 @@ impl ScratchpadView {
                         .on_click(toggle_file)
                         // 缩进层级与草稿箱树文件节点一致（TREE_INDENT × 1）。
                         .child(tree::indent_spacer(ui::TREE_INDENT, 1))
-                        .child(tree::disclosure_slot().child(tree::disclosure_icon(
-                            !file_collapsed,
-                            muted,
-                        )))
+                        .child(
+                            tree::disclosure_slot()
+                                .child(tree::disclosure_icon(!file_collapsed, muted)),
+                        )
                         // 文件类型微标（与草稿箱树同一图标与取色）。
                         .child(
                             Icon::empty()

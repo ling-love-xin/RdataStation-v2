@@ -66,7 +66,10 @@ impl MockJobKind {
     /// 场景生成与批量落库都是一次处理多张表，`rows_total` 为 0，面板据此把
     /// `batches_done / batches_total` 读作表计数。
     pub fn by_table(&self) -> bool {
-        matches!(self, Self::Scenario(_) | Self::PersistAll(_) | Self::ScratchpadAll { .. })
+        matches!(
+            self,
+            Self::Scenario(_) | Self::PersistAll(_) | Self::ScratchpadAll { .. }
+        )
     }
 
     /// 是否**以当前草稿为输入**（目标表 / 列 / 行数）。

@@ -228,7 +228,11 @@ mod tests {
     #[test]
     fn preferred_connection_prefers_explicit_binding() {
         let mut meta = FileMeta::default();
-        assert_eq!(meta.preferred_connection(), None, "未绑定且未执行过 → 不预选");
+        assert_eq!(
+            meta.preferred_connection(),
+            None,
+            "未绑定且未执行过 → 不预选"
+        );
 
         meta.last_connection_id = Some("G_9".to_string());
         assert_eq!(

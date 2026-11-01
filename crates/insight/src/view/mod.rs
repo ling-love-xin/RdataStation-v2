@@ -50,12 +50,12 @@ pub(crate) mod set;
 pub(crate) mod table;
 
 use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::ColorName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::empty::{Empty, EmptyHeader, EmptyMedia, EmptyTitle};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::tag::Tag;
-use gpui_kit::component::ColorName;
 use gpui_kit::component::{Icon, IconName, Sizable as _, Size, Theme};
 use gpui_kit::*;
 
@@ -156,20 +156,19 @@ fn tab_hint(tab: PanelTab) -> &'static str {
 /// `pub(crate)`：右栏下钻区（`drill.rs`）无目标时复用同一版式。
 pub(crate) fn empty_state(icon: IconName, hint: &str, theme: &Theme, icon_px: Pixels) -> Div {
     // 用 gpui-kit Empty 组件：自带居中布局 + 虚线边框 + 媒体/标题槽位
-    let empty = Empty::new()
-        .header(
-            EmptyHeader::new()
-                .media(
-                    EmptyMedia::new()
-                        .with_variant(gpui_kit::component::empty::EmptyMediaVariant::Icon)
-                        .child(
-                            Icon::new(icon)
-                                .with_size(Size::Size(icon_px))
-                                .text_color(theme.colors.muted_foreground),
-                        ),
-                )
-                .title(EmptyTitle::new().child(SharedString::from(hint))),
-        );
+    let empty = Empty::new().header(
+        EmptyHeader::new()
+            .media(
+                EmptyMedia::new()
+                    .with_variant(gpui_kit::component::empty::EmptyMediaVariant::Icon)
+                    .child(
+                        Icon::new(icon)
+                            .with_size(Size::Size(icon_px))
+                            .text_color(theme.colors.muted_foreground),
+                    ),
+            )
+            .title(EmptyTitle::new().child(SharedString::from(hint))),
+    );
     div().w_full().flex_1().child(empty)
 }
 

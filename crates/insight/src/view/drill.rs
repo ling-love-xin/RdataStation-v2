@@ -23,7 +23,9 @@ use gpui_kit::component::{Icon, IconName, Sizable as _, Size, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{empty_state, error_block, grade_color, kind_badge, muted_line, skeleton, sample_loading};
+use super::{
+    empty_state, error_block, grade_color, kind_badge, muted_line, sample_loading, skeleton,
+};
 use crate::insight_view::InsightView;
 use crate::model::{
     ColumnKind, ColumnProfileView, InsightPanelState, InsightTarget, MultiColumnView, PanelTab,
@@ -52,51 +54,57 @@ impl InsightView {
         empty_icon: Pixels,
     ) -> Vec<AnyElement> {
         if let InsightPanelState::Error { message, retryable } = &self.state {
-            return vec![error_block(
-                message,
-                *retryable,
-                entity.clone(),
-                theme,
-                inline_icon,
-            )
-            .into_any_element()];
+            return vec![
+                error_block(message, *retryable, entity.clone(), theme, inline_icon)
+                    .into_any_element(),
+            ];
         }
         let Some(target) = self.target.as_ref() else {
             return vec![
-                empty_state(IconName::Info, "在结果表列头或导航树上右键，选择洞察", theme, empty_icon)
-                    .into_any_element(),
+                empty_state(
+                    IconName::Info,
+                    "在结果表列头或导航树上右键，选择洞察",
+                    theme,
+                    empty_icon,
+                )
+                .into_any_element(),
             ];
         };
         if self.state.is_loading() {
-            return vec![if let Some(note) = self.loading_note.as_deref() {
-                sample_loading(note, theme)
-            } else {
-                skeleton(theme)
-            }
-            .into_any_element()];
+            return vec![
+                if let Some(note) = self.loading_note.as_deref() {
+                    sample_loading(note, theme)
+                } else {
+                    skeleton(theme)
+                }
+                .into_any_element(),
+            ];
         }
 
-        let mut out: Vec<AnyElement> = vec![self.render_dz_title(target, theme, inline_icon).into_any_element()];
+        let mut out: Vec<AnyElement> = vec![
+            self.render_dz_title(target, theme, inline_icon)
+                .into_any_element(),
+        ];
         match target {
             InsightTarget::Table { .. } | InsightTarget::SourceTable { .. } => {
                 if let Some(profile) = self.data.as_table() {
                     out.push(
-                        drill_table_summary(profile, theme, inline_icon, ring_px).into_any_element(),
+                        drill_table_summary(profile, theme, inline_icon, ring_px)
+                            .into_any_element(),
                     );
                     out.push(drill_table_columns(profile, theme, inline_icon).into_any_element());
                 }
             }
             InsightTarget::Column { .. } | InsightTarget::SourceColumn { .. } => {
                 if let Some(profile) = self.data.as_column() {
-                    out.push(
-                        drill_column_summary(profile, theme, inline_icon).into_any_element(),
-                    );
+                    out.push(drill_column_summary(profile, theme, inline_icon).into_any_element());
                 }
             }
             InsightTarget::Schema { .. } => {
                 if let Some(report) = self.data.as_schema() {
                     out.push(
-                        drill_schema_summary(report, theme, inline_icon, ring_px).into_any_element(),
+                        drill_schema_summary(report, theme, inline_icon, ring_px)
+                            .into_any_element(),
                     );
                 }
             }
@@ -219,18 +227,13 @@ fn drill_table_summary(
                         .child("摘要"),
                 )
                 .child(div().flex_1())
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(ring_color)
-                        .child(match quality {
-                            Some(q) if q.checker_applicable > 0 => {
-                                format!("{}/{}", q.checker_hits, q.checker_applicable)
-                            }
-                            Some(_) => "无不适用检查".to_string(),
-                            None => "未评估".to_string(),
-                        }),
-                ),
+                .child(div().text_xs().text_color(ring_color).child(match quality {
+                    Some(q) if q.checker_applicable > 0 => {
+                        format!("{}/{}", q.checker_hits, q.checker_applicable)
+                    }
+                    Some(_) => "无不适用检查".to_string(),
+                    None => "未评估".to_string(),
+                })),
         )
         .child(
             div()
@@ -318,44 +321,43 @@ fn drill_table_columns(profile: &TableProfileView, theme: &Theme, inline_icon: P
                         .child(format!("{high_null} 列值得关注")),
                 ),
         )
-        .child(
-            div().w_full().v_flex().gap_1().children(shown.map(|c| {
-                let rate_color = match c.null_rate {
-                    Some(r) if r > 0.2 => colors.danger,
-                    Some(r) if r > 0.05 => colors.warning,
-                    _ => colors.muted_foreground,
-                };
-                div()
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .text_xs()
-                            .text_color(colors.foreground)
-                            .text_ellipsis()
-                            .child(c.name.clone()),
-                    )
-                    .child(kind_badge(c.kind))
-                    .child(
-                        div()
-                            .w(rems(ui::INSIGHT_TABLE_NULL_RATE_WIDTH))
-                            .flex_none()
-                            .text_xs()
-                            .text_color(rate_color)
-                            .child(c.null_rate.map(crate::model::fmt_pct).unwrap_or_else(|| "—".to_string())),
-                    )
-            })),
-        )
+        .child(div().w_full().v_flex().gap_1().children(shown.map(|c| {
+            let rate_color = match c.null_rate {
+                Some(r) if r > 0.2 => colors.danger,
+                Some(r) if r > 0.05 => colors.warning,
+                _ => colors.muted_foreground,
+            };
+            div()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .text_xs()
+                        .text_color(colors.foreground)
+                        .text_ellipsis()
+                        .child(c.name.clone()),
+                )
+                .child(kind_badge(c.kind))
+                .child(
+                    div()
+                        .w(rems(ui::INSIGHT_TABLE_NULL_RATE_WIDTH))
+                        .flex_none()
+                        .text_xs()
+                        .text_color(rate_color)
+                        .child(
+                            c.null_rate
+                                .map(crate::model::fmt_pct)
+                                .unwrap_or_else(|| "—".to_string()),
+                        ),
+                )
+        })))
         .when(profile.columns.len() > 8, |card| {
             card.child(muted_line(
-                &format!(
-                    "…共 {} 列（完整清单见中间报告）",
-                    profile.columns.len()
-                ),
+                &format!("…共 {} 列（完整清单见中间报告）", profile.columns.len()),
                 theme,
             ))
         })
@@ -390,11 +392,7 @@ fn drill_column_summary(profile: &ColumnProfileView, theme: &Theme, inline_icon:
                 .item("类型", profile.data_type.clone(), 1)
                 .item("总行数", profile.total_count.to_string(), 1)
                 .item("空值数", profile.null_count.to_string(), 1)
-                .item(
-                    "空值率",
-                    crate::model::fmt_pct(profile.null_rate),
-                    1,
-                )
+                .item("空值率", crate::model::fmt_pct(profile.null_rate), 1)
                 .item("样本", profile.sample.len().to_string(), 1),
         )
         .when(warn, |card| {
@@ -478,11 +476,7 @@ fn drill_schema_summary(
                 .bordered(false)
                 .item("表数", report.table_count.to_string(), 1)
                 .item("列数", report.total_columns.to_string(), 1)
-                .item(
-                    "问题数",
-                    format!("{issue_count}"),
-                    1,
-                ),
+                .item("问题数", format!("{issue_count}"), 1),
         )
 }
 
@@ -536,10 +530,7 @@ fn drill_multi_summary(view: &MultiColumnView, theme: &Theme, inline_icon: Pixel
                 })),
         )
         .when(view.columns.len() > 6, |card| {
-            card.child(muted_line(
-                &format!("…共 {} 列", view.columns.len()),
-                theme,
-            ))
+            card.child(muted_line(&format!("…共 {} 列", view.columns.len()), theme))
         })
 }
 
@@ -550,7 +541,9 @@ fn drill_multi_summary(view: &MultiColumnView, theme: &Theme, inline_icon: Pixel
 fn agg_placeholder(theme: &Theme) -> impl IntoElement {
     let colors = theme.colors;
     summary_card(theme)
-        .id(ElementId::Name(SharedString::from("insight-agg-placeholder")))
+        .id(ElementId::Name(SharedString::from(
+            "insight-agg-placeholder",
+        )))
         .test_support()
         .child(
             div()

@@ -159,7 +159,6 @@ impl PreviewCache {
     }
 }
 
-
 /// 可导入结构的连接（来源下拉用）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SchemaSource {
@@ -213,7 +212,11 @@ pub trait MockHost: 'static {
     ///
     /// `pk_hint` 是**本次生成的自增列名**（草稿里 `AutoIncrement` 生成器的列）——
     /// 它对应目标表的隐含主键（v2 不建主键 DDL，自增列就是语义上的主键）。
-    fn append_target_status(&self, table: &str, pk_hint: Option<&str>) -> Option<AppendTargetStatus>;
+    fn append_target_status(
+        &self,
+        table: &str,
+        pk_hint: Option<&str>,
+    ) -> Option<AppendTargetStatus>;
     /// 可导入结构的连接
     fn schema_sources(&self) -> Vec<SchemaSource>;
     /// 读某表的列（源库结构）
@@ -250,4 +253,3 @@ pub trait MockHost: 'static {
     /// 宿主重绘 + 依赖视图刷新（导航树等）
     fn notify(&self, cx: &mut App);
 }
-

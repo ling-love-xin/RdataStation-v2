@@ -367,9 +367,8 @@ pub(super) fn scratchpad_entry_matches(
     let key = entry.path.to_string_lossy().to_string();
     let kids = loaded.get(&key).or(entry.children.as_ref());
     kids.map(|kids| {
-        kids.iter().any(|c| {
-            scratchpad_entry_matches(c, filter, mode, regex, case_sensitive, loaded)
-        })
+        kids.iter()
+            .any(|c| scratchpad_entry_matches(c, filter, mode, regex, case_sensitive, loaded))
     })
     .unwrap_or(false)
 }
@@ -482,8 +481,8 @@ pub fn scratchpad_type_icon(name: &str) -> &'static str {
         "yaml" | "yml" => "icons/file-code.svg",
         "html" | "htm" => "icons/code.svg",
         "css" => "icons/palette.svg",
-        "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx" | "rs" | "go" | "java" | "c" | "h"
-        | "cpp" | "hpp" => "icons/file-code.svg",
+        "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx" | "rs" | "go" | "java" | "c" | "h" | "cpp"
+        | "hpp" => "icons/file-code.svg",
         _ => "icons/file.svg",
     }
 }
@@ -656,7 +655,8 @@ pub(super) fn scratchpad_tag_chips(tags: &[tag::Tag], colors: ScratchpadRowColor
 mod tests {
     // 不 `use super::*`：通配会把 gpui 的 `test` 宏带进作用域（gpui-kit-dev §窗口测试）。
     use super::{
-        flatten_scratchpad, ScratchpadEntry, ScratchpadEntryKind, ScratchpadSearchMode, ScratchpadSort,
+        ScratchpadEntry, ScratchpadEntryKind, ScratchpadSearchMode, ScratchpadSort,
+        flatten_scratchpad,
     };
     use std::collections::{HashMap, HashSet};
     use std::path::{Path, PathBuf};
@@ -767,7 +767,11 @@ mod tests {
             &HashMap::new(),
             &mut out,
         );
-        assert_eq!(out.len(), 2, "无筛选 = 原树压平（文件夹在前，未展开不递归）");
+        assert_eq!(
+            out.len(),
+            2,
+            "无筛选 = 原树压平（文件夹在前，未展开不递归）"
+        );
         assert_eq!(out[0].0, 0);
         assert_eq!(out[0].1.name, "sub");
         assert_eq!(out[1].0, 0);
@@ -794,18 +798,63 @@ mod tests {
     /// Div 无法内省子节点，本测试只钉「可渲染 + 色点映射不崩」。
     #[test]
     fn tag_chips_render_without_panic() {
-        use super::{scratchpad_tag_chips, ScratchpadRowColors};
+        use super::{ScratchpadRowColors, scratchpad_tag_chips};
         use gpui_kit::Hsla;
         let colors = ScratchpadRowColors {
-            hover_bg: Hsla { h: 0., s: 0., l: 0.9, a: 1. },
-            selected_bg: Hsla { h: 0., s: 0., l: 0.85, a: 1. },
-            fg: Hsla { h: 0., s: 0., l: 0.1, a: 1. },
-            muted: Hsla { h: 0., s: 0., l: 0.5, a: 1. },
-            folder_color: Hsla { h: 0., s: 0., l: 0.4, a: 1. },
-            primary: Hsla { h: 0.6, s: 0.8, l: 0.5, a: 1. },
-            info: Hsla { h: 0.55, s: 0.8, l: 0.5, a: 1. },
-            success: Hsla { h: 0.33, s: 0.8, l: 0.5, a: 1. },
-            active_border: Hsla { h: 0.6, s: 0.8, l: 0.5, a: 1. },
+            hover_bg: Hsla {
+                h: 0.,
+                s: 0.,
+                l: 0.9,
+                a: 1.,
+            },
+            selected_bg: Hsla {
+                h: 0.,
+                s: 0.,
+                l: 0.85,
+                a: 1.,
+            },
+            fg: Hsla {
+                h: 0.,
+                s: 0.,
+                l: 0.1,
+                a: 1.,
+            },
+            muted: Hsla {
+                h: 0.,
+                s: 0.,
+                l: 0.5,
+                a: 1.,
+            },
+            folder_color: Hsla {
+                h: 0.,
+                s: 0.,
+                l: 0.4,
+                a: 1.,
+            },
+            primary: Hsla {
+                h: 0.6,
+                s: 0.8,
+                l: 0.5,
+                a: 1.,
+            },
+            info: Hsla {
+                h: 0.55,
+                s: 0.8,
+                l: 0.5,
+                a: 1.,
+            },
+            success: Hsla {
+                h: 0.33,
+                s: 0.8,
+                l: 0.5,
+                a: 1.,
+            },
+            active_border: Hsla {
+                h: 0.6,
+                s: 0.8,
+                l: 0.5,
+                a: 1.,
+            },
         };
         let mk = |id: &str, name: &str| tag::Tag {
             id: id.to_string(),

@@ -67,9 +67,7 @@ pub enum InsightEvent {
     },
     /// 请宿主轻量内省源查询的列清单（探查确认窗口「列」块的候选；`LIMIT 0` /
     /// `DESCRIBE`，不取数据）。失败时列候选为空，确认窗口默认「全部列」。
-    ProbeColumnsRequested {
-        source: crate::model::SampleSource,
-    },
+    ProbeColumnsRequested { source: crate::model::SampleSource },
     /// 请宿主以**全量**口径重新加载该源目标（大表手动全量：取样切换的
     /// 另一半——源目标取样后用户点「全量统计」触发；结果仍落成 `tmp_i_` 临时表，
     /// 后续分析链路与取样完全一致）。
@@ -103,10 +101,7 @@ pub enum InsightEvent {
     ///
     /// 评估全表被取消后，未完成列显示灰态 + 补算按钮；点补算对单列续跑
     /// （同一 `get_column_insight_full` 链路），回填后清除中断标记。
-    ColumnEvaluateRequested {
-        temp_table: String,
-        column: String,
-    },
+    ColumnEvaluateRequested { temp_table: String, column: String },
     /// 请宿主加载多列分析的表单（真实列清单 + `category = multi` 的规则）
     MultiColumnRequested {
         temp_table: String,
@@ -325,8 +320,7 @@ impl ProbeDialogState {
                 match n.filter(|n| *n > 0) {
                     Some(n) => crate::model::ProbeAmount::RowCount(n),
                     None => {
-                        self.parse_notice =
-                            Some("行数需为正整数（如 500）".into());
+                        self.parse_notice = Some("行数需为正整数（如 500）".into());
                         return None;
                     }
                 }
@@ -336,8 +330,7 @@ impl ProbeDialogState {
                 match p.filter(|p| (0.0..=100.0).contains(p)) {
                     Some(p) => crate::model::ProbeAmount::Percent(p),
                     None => {
-                        self.parse_notice =
-                            Some("百分比需在 0–100 之间（如 5）".into());
+                        self.parse_notice = Some("百分比需在 0–100 之间（如 5）".into());
                         return None;
                     }
                 }
@@ -756,7 +749,10 @@ impl InsightView {
                 source: source.clone(),
             });
         }
-        self.probe_dialog = Some(ProbeDialogState::new(target, self.last_probe_config.as_ref()));
+        self.probe_dialog = Some(ProbeDialogState::new(
+            target,
+            self.last_probe_config.as_ref(),
+        ));
         self.state = InsightPanelState::ProbeConfirm;
         cx.notify();
     }
@@ -840,7 +836,12 @@ impl InsightView {
     }
 
     /// 快捷预设：常用行数 / 常用百分比（确认窗口「数据量」块的快捷入口）。
-    pub(crate) fn probe_quick_amount(&mut self, mode: ProbeAmountMode, value: String, cx: &mut Context<Self>) {
+    pub(crate) fn probe_quick_amount(
+        &mut self,
+        mode: ProbeAmountMode,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
         let Some(dialog) = self.probe_dialog.as_mut() else {
             return;
         };
@@ -951,7 +952,11 @@ impl InsightView {
         work_set_limit: usize,
         cx: &mut Context<Self>,
     ) {
-        tracing::info!(status_usage, work_set_limit, "【探针】洞察设置项变更（宿主转发 prefs）");
+        tracing::info!(
+            status_usage,
+            work_set_limit,
+            "【探针】洞察设置项变更（宿主转发 prefs）"
+        );
         self.status_usage = status_usage;
         self.work_set_limit = work_set_limit;
         if !status_usage {
@@ -1559,7 +1564,8 @@ impl InsightView {
         let Some(temp_table) = self.data.sample_table(&target).map(str::to_string) else {
             return;
         };
-        self.eval_cancel.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.eval_cancel
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         let table_name = target.table_name();
         if let Some(profile) = &self.data.table {
             let total = profile.columns.len();
@@ -1578,7 +1584,8 @@ impl InsightView {
     /// 已完成列明细保留；未完成列由 jobs 回填中断标记（灰态 + 可补算）。
     /// 取消是协作式（不中断正在跑的那一列查询，等它回来再停）。
     pub fn cancel_table_evaluation(&mut self, cx: &mut Context<Self>) {
-        self.eval_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.eval_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         tracing::info!("【探针】取消评估全表（已完成列保留，未完成列灰态可补算）");
         cx.notify();
     }
@@ -1593,10 +1600,7 @@ impl InsightView {
         column: String,
         cx: &mut Context<Self>,
     ) {
-        cx.emit(InsightEvent::ColumnEvaluateRequested {
-            temp_table,
-            column,
-        });
+        cx.emit(InsightEvent::ColumnEvaluateRequested { temp_table, column });
         cx.notify();
     }
 
@@ -1654,12 +1658,10 @@ impl InsightView {
             },
             PanelTab::Table => match &target {
                 // 已经有源目标 → 原样再发（取样在接缝里做）
-                InsightTarget::SourceTable { .. } => {
-                    Some(InsightEvent::ProfileRequested {
-                        target,
-                        config: None,
-                    })
-                }
+                InsightTarget::SourceTable { .. } => Some(InsightEvent::ProfileRequested {
+                    target,
+                    config: None,
+                }),
                 // 源列目标看整表：同一个来源，换成表目标（取样口径一致）
                 InsightTarget::SourceColumn { source, .. } => {
                     Some(InsightEvent::ProfileRequested {

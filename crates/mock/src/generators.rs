@@ -1,5 +1,5 @@
-use fake::rand::rngs::StdRng;
 use fake::RngExt;
+use fake::rand::rngs::StdRng;
 use fake::{Fake, Faker};
 
 use crate::models::{ColumnDataType, GeneratorConfig, Locale};
@@ -178,31 +178,19 @@ pub(crate) fn data_type_for_generator(config: &GeneratorConfig) -> ColumnDataTyp
 macro_rules! locale_faker {
     ($locale:expr, $module:ident, $faker:ident, $rng:expr) => {
         match $locale {
-            Locale::ZhCn => fake::faker::$module::zh_cn::$faker()
-                .fake_with_rng::<String, _>($rng),
+            Locale::ZhCn => fake::faker::$module::zh_cn::$faker().fake_with_rng::<String, _>($rng),
             Locale::En => fake::faker::$module::en::$faker().fake_with_rng::<String, _>($rng),
-            Locale::JaJp => fake::faker::$module::ja_jp::$faker()
-                .fake_with_rng::<String, _>($rng),
-            Locale::ZhTw => fake::faker::$module::zh_tw::$faker()
-                .fake_with_rng::<String, _>($rng),
-            Locale::FrFr => fake::faker::$module::fr_fr::$faker()
-                .fake_with_rng::<String, _>($rng),
-            Locale::DeDe => fake::faker::$module::de_de::$faker()
-                .fake_with_rng::<String, _>($rng),
-            Locale::ItIt => fake::faker::$module::it_it::$faker()
-                .fake_with_rng::<String, _>($rng),
-            Locale::PtBr => fake::faker::$module::pt_br::$faker()
-                .fake_with_rng::<String, _>($rng),
-            Locale::PtPt => fake::faker::$module::pt_pt::$faker()
-                .fake_with_rng::<String, _>($rng),
-            Locale::NlNl => fake::faker::$module::nl_nl::$faker()
-                .fake_with_rng::<String, _>($rng),
-            Locale::ArSa => fake::faker::$module::ar_sa::$faker()
-                .fake_with_rng::<String, _>($rng),
-            Locale::TrTr => fake::faker::$module::tr_tr::$faker()
-                .fake_with_rng::<String, _>($rng),
-            Locale::FaIr => fake::faker::$module::fa_ir::$faker()
-                .fake_with_rng::<String, _>($rng),
+            Locale::JaJp => fake::faker::$module::ja_jp::$faker().fake_with_rng::<String, _>($rng),
+            Locale::ZhTw => fake::faker::$module::zh_tw::$faker().fake_with_rng::<String, _>($rng),
+            Locale::FrFr => fake::faker::$module::fr_fr::$faker().fake_with_rng::<String, _>($rng),
+            Locale::DeDe => fake::faker::$module::de_de::$faker().fake_with_rng::<String, _>($rng),
+            Locale::ItIt => fake::faker::$module::it_it::$faker().fake_with_rng::<String, _>($rng),
+            Locale::PtBr => fake::faker::$module::pt_br::$faker().fake_with_rng::<String, _>($rng),
+            Locale::PtPt => fake::faker::$module::pt_pt::$faker().fake_with_rng::<String, _>($rng),
+            Locale::NlNl => fake::faker::$module::nl_nl::$faker().fake_with_rng::<String, _>($rng),
+            Locale::ArSa => fake::faker::$module::ar_sa::$faker().fake_with_rng::<String, _>($rng),
+            Locale::TrTr => fake::faker::$module::tr_tr::$faker().fake_with_rng::<String, _>($rng),
+            Locale::FaIr => fake::faker::$module::fa_ir::$faker().fake_with_rng::<String, _>($rng),
         }
     };
 }
@@ -1743,8 +1731,8 @@ fn generate_from_template(template: &str, rng: &mut StdRng) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fake::rand::rngs::StdRng;
     use fake::rand::SeedableRng;
+    use fake::rand::rngs::StdRng;
 
     fn rng() -> StdRng {
         StdRng::seed_from_u64(42)
@@ -1755,7 +1743,10 @@ mod tests {
         let generator = GeneratorConfig::AutoIncrement { start: 1, step: 1 };
         assert_eq!(generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn), "1");
         assert_eq!(generate_cell(&generator, &mut rng(), 5, &Locale::ZhCn), "6");
-        assert_eq!(generate_cell(&generator, &mut rng(), 9, &Locale::ZhCn), "10");
+        assert_eq!(
+            generate_cell(&generator, &mut rng(), 9, &Locale::ZhCn),
+            "10"
+        );
     }
 
     #[test]
@@ -1806,7 +1797,11 @@ mod tests {
         for _ in 0..30 {
             let val = generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn);
             assert_eq!(val.len(), 1, "digit should be single char, got: {}", val);
-            assert!(val.parse::<u8>().is_ok(), "digit should be numeric, got: {}", val);
+            assert!(
+                val.parse::<u8>().is_ok(),
+                "digit should be numeric, got: {}",
+                val
+            );
         }
     }
 

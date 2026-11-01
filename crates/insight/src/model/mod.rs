@@ -22,26 +22,26 @@ use types::{
 use crate::rule_types::{ExecutionResult, QualityReport};
 
 // ==================== 子模块（拆分：视图模型按职责域下沉，纯位移） ====================
+mod column_profile;
+mod columns;
+mod history;
+mod multi;
+mod panel;
+mod probe;
+mod profile;
 mod sets;
 mod target;
-mod panel;
-mod columns;
-mod profile;
-mod multi;
-mod history;
-mod column_profile;
-mod probe;
 
 // 聚合 re-export：保持 `crate::model::*` 路径与 lib.rs 的 re-export 不变
+pub use column_profile::*;
+pub use columns::*;
+pub use history::*;
+pub use multi::*;
+pub use panel::*;
+pub use probe::*;
+pub use profile::*;
 pub use sets::*;
 pub use target::*;
-pub use panel::*;
-pub use columns::*;
-pub use profile::*;
-pub use multi::*;
-pub use history::*;
-pub use column_profile::*;
-pub use probe::*;
 // ==================== 阈值（原型 §3.1） ====================
 
 /// 空值率超过此值：数值行转 warning 强调

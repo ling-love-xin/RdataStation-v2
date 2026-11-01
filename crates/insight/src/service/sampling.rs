@@ -35,7 +35,9 @@ impl InsightService {
         table_name: &str,
         config: &crate::model::ProbeConfig,
     ) -> Result<(String, TableProfileView), CoreError> {
-        block_on(persistence::profile_source_table(source, table_name, config))
+        block_on(persistence::profile_source_table(
+            source, table_name, config,
+        ))
     }
 
     // ==================== 表探查（Phase 3.1） ====================

@@ -2194,7 +2194,9 @@ pub fn is_method_spec(spec: &GeneratorSpec) -> bool {
         | GeneratorCategory::Markdown
         | GeneratorCategory::DateTime
         | GeneratorCategory::Constraint => true,
-        GeneratorCategory::Tech => matches!(spec.name, "uuid_v1" | "uuid_v3" | "uuid_v4" | "uuid_v5"),
+        GeneratorCategory::Tech => {
+            matches!(spec.name, "uuid_v1" | "uuid_v3" | "uuid_v4" | "uuid_v5")
+        }
         _ => false,
     }
 }
@@ -2205,7 +2207,11 @@ pub fn methods_in_type(data_type: &ColumnDataType) -> Vec<&'static GeneratorSpec
         .iter()
         .copied()
         .filter(|spec| is_method_spec(spec))
-        .filter(|spec| crate::generators::data_type_for_generator(&default_of(spec.name).expect("方法级规格必有默认配置")) == *data_type)
+        .filter(|spec| {
+            crate::generators::data_type_for_generator(
+                &default_of(spec.name).expect("方法级规格必有默认配置"),
+            ) == *data_type
+        })
         .collect()
 }
 

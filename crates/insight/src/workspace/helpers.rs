@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 /// 工具栏竖分隔线
 pub(crate) fn divider(theme: &Theme) -> Div {
     div()
@@ -125,7 +124,10 @@ pub(crate) fn explore_missing_weight(col: &TableColumnView) -> f64 {
 
 /// 该列检查器（评估后的 `TableQualityView::checker` 按列过滤）。
 /// 未评估 / 无检查器 → 空表（不编假值）。
-pub(crate) fn column_checkers(profile: &TableProfileView, col: &TableColumnView) -> Vec<ColumnChecker> {
+pub(crate) fn column_checkers(
+    profile: &TableProfileView,
+    col: &TableColumnView,
+) -> Vec<ColumnChecker> {
     profile
         .quality
         .as_ref()
@@ -206,7 +208,11 @@ pub(crate) fn zone_rows(theme: &Theme, rows: Vec<(String, String)>) -> Div {
 
 /// 分布条（直方图 / Top 值 / 月度 / 布尔共用）：label + 条 + 计数。
 /// 条用原生 flex 宽度（布局不是控件，不必组件化）；取前 `limit` 条防爆版面。
-pub(crate) fn dist_bars(theme: &Theme, bins: &[crate::model::types::DistributionBin], limit: usize) -> Div {
+pub(crate) fn dist_bars(
+    theme: &Theme,
+    bins: &[crate::model::types::DistributionBin],
+    limit: usize,
+) -> Div {
     let colors = theme.colors;
     let mut body = div().v_flex().w_full().gap_1();
     for bin in bins.iter().take(limit) {

@@ -50,9 +50,7 @@ pub fn request_table_evaluation(
             // async 上下文用 update 闭包读面板（AsyncApp 不直接给 &App）
             let cancelled = weak
                 .update(cx, |panel, _| {
-                    panel
-                        .eval_cancel
-                        .load(std::sync::atomic::Ordering::Relaxed)
+                    panel.eval_cancel.load(std::sync::atomic::Ordering::Relaxed)
                 })
                 .unwrap_or(false);
             if cancelled {
@@ -89,9 +87,7 @@ pub fn request_table_evaluation(
         //（quality 保持 None——评估未完成，表级事实摘要不应出现）
         let cancelled = weak
             .update(cx, |panel, _| {
-                panel
-                    .eval_cancel
-                    .load(std::sync::atomic::Ordering::Relaxed)
+                panel.eval_cancel.load(std::sync::atomic::Ordering::Relaxed)
             })
             .unwrap_or(false);
         if cancelled {

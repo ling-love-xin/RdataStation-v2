@@ -880,7 +880,10 @@ impl MockPanel {
         if let Some(scene_id) = detail.task.scene_id.clone() {
             let seed = detail.task.seed.map(|seed| seed as u32);
             let Some(mut template) = crate::templates::get_template_by_id(&scene_id) else {
-                self.fail(format!("场景模板不存在：{scene_id}（可能已从内置清单移除）"), cx);
+                self.fail(
+                    format!("场景模板不存在：{scene_id}（可能已从内置清单移除）"),
+                    cx,
+                );
                 return;
             };
             template.seed = seed;
@@ -888,7 +891,8 @@ impl MockPanel {
             self.load_scenario(template, cx);
             self.outcome = Some(format!(
                 "已重放场景 {name}（seed {}）：确认后再点生成",
-                seed.map(|s| s.to_string()).unwrap_or_else(|| "随机".to_string())
+                seed.map(|s| s.to_string())
+                    .unwrap_or_else(|| "随机".to_string())
             ));
             return;
         }
@@ -1145,7 +1149,10 @@ impl MockPanel {
         }
         // 空白场景（0 张表）先别提交：生成空结果没有意义，引导用户先加第一张表
         if template.tables.is_empty() {
-            self.fail("空白场景还没有表：先用「＋ 加表（当前草稿）」添加第一张", cx);
+            self.fail(
+                "空白场景还没有表：先用「＋ 加表（当前草稿）」添加第一张",
+                cx,
+            );
             return;
         }
         // 生成前校验引用（父表 / 父列不合适就不提交；错误在面板上就地显示）
@@ -1859,7 +1866,12 @@ impl MockPanel {
     ///
     /// 状态在**打开时**读一次：`append_target_status` 是宿主查分析库的只读操作，
     /// 对话框期间库被改的概率与影响都小，「确认前看一眼现状」的用途不受影响。
-    pub fn open_append_dialog(&mut self, table: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open_append_dialog(
+        &mut self,
+        table: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.host.read_only() {
             self.fail("只读模式：不允许写入项目分析库", cx);
             return;
@@ -1903,30 +1915,23 @@ impl MockPanel {
                         (Some(pk), None) => format!("{pk}（空表）"),
                         (None, _) => "（未识别到自增主键列）".to_string(),
                     };
-                    body = body
-                        .child(
-                            div()
-                                .h_flex()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .flex_none()
-                                        .text_xs()
-                                        .text_color(muted)
-                                        .child("目标表现状"),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .text_xs()
-                                        .text_color(fg)
-                                        .child(format!(
-                                            "{} 行 · {pk_text}",
-                                            with_thousands(status.row_count.max(0) as u64)
-                                        )),
-                                ),
-                        );
+                    body = body.child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child("目标表现状"),
+                            )
+                            .child(div().flex_1().text_xs().text_color(fg).child(format!(
+                                "{} 行 · {pk_text}",
+                                with_thousands(status.row_count.max(0) as u64)
+                            ))),
+                    );
                     // 自增起点预告：本次生成的自增列会从 MAX + 1 接续
                     if let (Some(pk), Some(max)) = (&status.pk_column, status.max_pk) {
                         body = body.child(
@@ -2569,7 +2574,10 @@ impl MockPanel {
     }
 
     /// 技术视角：该数据类下的自定义生成器（类型是硬属性，永远挂）。
-    pub(crate) fn user_generators_in_type(&self, data_type: &ColumnDataType) -> Vec<&UserGenerator> {
+    pub(crate) fn user_generators_in_type(
+        &self,
+        data_type: &ColumnDataType,
+    ) -> Vec<&UserGenerator> {
         self.user_generators
             .iter()
             .filter(|ug| &ug.data_type == data_type)
@@ -2661,7 +2669,12 @@ impl MockPanel {
     /// 不能经 `default_of(name)` 查——直接从 `user_generators` 取打包配置。
     /// 生成链路零改动：写回后列配置就是普通列，`generate_cell` 照常跑。
     pub fn apply_user_generator(&mut self, id: u64, ug_id: &str, cx: &mut Context<Self>) {
-        let Some(ug) = self.user_generators.iter().find(|ug| ug.id == ug_id).cloned() else {
+        let Some(ug) = self
+            .user_generators
+            .iter()
+            .find(|ug| ug.id == ug_id)
+            .cloned()
+        else {
             return;
         };
         if let Some(column) = self.draft.columns.iter_mut().find(|c| c.id == id) {

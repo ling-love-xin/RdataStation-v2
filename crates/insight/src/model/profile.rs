@@ -329,8 +329,16 @@ mod tests {
         };
 
         let interrupted = profile.mark_interrupted();
-        let done = interrupted.columns.iter().find(|c| c.name == "done").unwrap();
-        let pending = interrupted.columns.iter().find(|c| c.name == "pending").unwrap();
+        let done = interrupted
+            .columns
+            .iter()
+            .find(|c| c.name == "done")
+            .unwrap();
+        let pending = interrupted
+            .columns
+            .iter()
+            .find(|c| c.name == "pending")
+            .unwrap();
         assert!(!done.interrupted, "已完成列不得标中断");
         assert!(pending.interrupted, "未完成列应标中断");
     }

@@ -5,7 +5,12 @@ use super::*;
 impl super::InsightWorkspacePanel {
     /// 对比页（D66 三态对齐原型）：
     /// 候选态（勾选表 + 开始对比）→ 运行态（进度示意）→ 结果态（事实指标着色 + 点行开画像）。
-    pub(crate) fn render_compare(&self, cx: &Context<Self>, entity: &Entity<Self>, theme: &Theme) -> Div {
+    pub(crate) fn render_compare(
+        &self,
+        cx: &Context<Self>,
+        entity: &Entity<Self>,
+        theme: &Theme,
+    ) -> Div {
         let colors = theme.colors;
         if self.opened.is_empty() {
             return div()
@@ -583,19 +588,15 @@ pub(crate) fn compare_table_scroll(
     header: Div,
     rows: impl IntoIterator<Item = impl IntoElement>,
 ) -> impl IntoElement {
-    div()
-        .flex_none()
-        .w_full()
-        .overflow_x_scrollbar()
-        .child(
-            div()
-                .v_flex()
-                .w_full()
-                .min_w(rems(min_width))
-                .gap_0p5()
-                .child(header)
-                .children(rows),
-        )
+    div().flex_none().w_full().overflow_x_scrollbar().child(
+        div()
+            .v_flex()
+            .w_full()
+            .min_w(rems(min_width))
+            .gap_0p5()
+            .child(header)
+            .children(rows),
+    )
 }
 
 /// 对比行原语：居中行 + 行高（列内容由调用方追加）。

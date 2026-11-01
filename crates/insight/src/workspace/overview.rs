@@ -56,23 +56,22 @@ impl super::InsightWorkspacePanel {
             Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle,
         };
         div().size_full().child(
-            Empty::new()
-                .header(
-                    EmptyHeader::new()
-                        .media(
-                            EmptyMedia::new()
-                                .with_variant(gpui_kit::component::empty::EmptyMediaVariant::Icon)
-                                .child(
-                                    Icon::new(IconName::Eye)
-                                        .with_size(Size::Size(empty_icon))
-                                        .text_color(theme.colors.muted_foreground),
-                                ),
-                        )
-                        .title(EmptyTitle::new().child(SharedString::from("暂无洞察目标")))
-                        .description(EmptyDescription::new().child(SharedString::from(
-                            "在结果列表头或导航树上右键表，选择「查看洞察」",
-                        ))),
-                ),
+            Empty::new().header(
+                EmptyHeader::new()
+                    .media(
+                        EmptyMedia::new()
+                            .with_variant(gpui_kit::component::empty::EmptyMediaVariant::Icon)
+                            .child(
+                                Icon::new(IconName::Eye)
+                                    .with_size(Size::Size(empty_icon))
+                                    .text_color(theme.colors.muted_foreground),
+                            ),
+                    )
+                    .title(EmptyTitle::new().child(SharedString::from("暂无洞察目标")))
+                    .description(EmptyDescription::new().child(SharedString::from(
+                        "在结果列表头或导航树上右键表，选择「查看洞察」",
+                    ))),
+            ),
         )
     }
 

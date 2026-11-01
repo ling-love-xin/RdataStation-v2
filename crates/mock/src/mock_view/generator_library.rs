@@ -22,15 +22,17 @@ use std::time::Duration;
 use super::*;
 use fake::rand::SeedableRng as _;
 use gpui_kit::component::Theme;
-use gpui_kit::component::searchable_list::{SearchableListDelegate, SearchableListItem, SearchableVec};
+use gpui_kit::component::searchable_list::{
+    SearchableListDelegate, SearchableListItem, SearchableVec,
+};
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
 
 use crate::mock_view::panel::MockPanel;
 use crate::mock_view::pure::{
-    column_type_label, complex_param_hint, complex_param_text, param_text, patch_param,
-    patch_param_value, parse_complex_param, parse_percent_ratio,
+    column_type_label, complex_param_hint, complex_param_text, param_text, parse_complex_param,
+    parse_percent_ratio, patch_param, patch_param_value,
 };
 
 /// 样例预览固定种子（与 `detail.rs::SAMPLE_PREVIEW_SEED` 同值同源：样例可复现，纯示意，
@@ -102,8 +104,13 @@ pub(crate) enum LibraryMode {
 /// 参数区 / 样例预览随写回重建——列还没应用，面板列不动）。
 #[derive(Clone)]
 pub(crate) enum LibraryWriteback {
-    Panel { column_id: u64 },
-    ColumnDraft { detail: gpui::WeakEntity<MockDetailView>, column_id: u64 },
+    Panel {
+        column_id: u64,
+    },
+    ColumnDraft {
+        detail: gpui::WeakEntity<MockDetailView>,
+        column_id: u64,
+    },
 }
 
 /// 生成器库对话框的状态（实体由 [`open_library`] 创建；builder 每帧从它读，写入走事件路径）。
@@ -145,7 +152,8 @@ pub(crate) struct CreateDraft {
     /// 类型下拉（`locked_type` 非空时 `None`——类型锁定不可改）
     pub(crate) type_state: Option<Entity<SelectState<SearchableVec<ColumnDataType>>>>,
     /// 业务组下拉（`locked_category` 非空时 `None`）；含「（不分组）」项
-    pub(crate) category_state: Option<Entity<SelectState<SearchableVec<CategoryChoice>>>>,    /// 基础生成器下拉（技术组进入时按锁定类型过滤；项是 `&'static GeneratorSpec`；
+    pub(crate) category_state: Option<Entity<SelectState<SearchableVec<CategoryChoice>>>>,
+    /// 基础生成器下拉（技术组进入时按锁定类型过滤；项是 `&'static GeneratorSpec`；
     /// 编辑模式 `locked_base` 非空时该字段是空壳不用——行渲染走只读文本）
     pub(crate) base_state: Entity<SelectState<SearchableVec<&'static GeneratorSpec>>>,
     /// 编辑模式：被编辑项保存过的完整配置（`locked_base` 的默认配置 + 参数 patch）。
@@ -197,7 +205,9 @@ pub(crate) enum DraftParam {
 
 fn param_key(param: &DraftParam) -> &str {
     match param {
-        DraftParam::Scalar { key, .. } | DraftParam::Bool { key, .. } | DraftParam::Complex { key, .. } => key,
+        DraftParam::Scalar { key, .. }
+        | DraftParam::Bool { key, .. }
+        | DraftParam::Complex { key, .. } => key,
     }
 }
 
@@ -424,11 +434,8 @@ fn render_inspect_footer(
                 .label("应用")
                 .disabled(!has_selection)
                 .on_click(move |_, window, app| {
-                    let Some((config, null_text, unique)) = state_for_apply
-                        .read(app)
-                        .selected
-                        .as_ref()
-                        .map(|i| {
+                    let Some((config, null_text, unique)) =
+                        state_for_apply.read(app).selected.as_ref().map(|i| {
                             (
                                 i.config.clone(),
                                 i.null_input.read(app).value().to_string(),
@@ -662,13 +669,7 @@ pub(crate) fn render_browse_pane(
                             .read(cx)
                             .user_generators_in_category(category)
                             .into_iter()
-                            .map(|ug| {
-                                (
-                                    ug.name.clone(),
-                                    column_type_label(&ug.data_type),
-                                    true,
-                                )
-                            }),
+                            .map(|ug| (ug.name.clone(), column_type_label(&ug.data_type), true)),
                     );
                     // 立即求值成 Vec（惰性迭代器会把闭包里的 &String 借到渲染期，生命周期不够）
                     let item_rows: Vec<gpui_kit::AnyElement> = items
@@ -677,7 +678,14 @@ pub(crate) fn render_browse_pane(
                             render_item_row(&state, &label, &badge, is_user, window, cx)
                         })
                         .collect();
-                    row = row.child(div().v_flex().gap_1().w_full().pl(px(20.)).children(item_rows));
+                    row = row.child(
+                        div()
+                            .v_flex()
+                            .gap_1()
+                            .w_full()
+                            .pl(px(20.))
+                            .children(item_rows),
+                    );
                 }
                 list = list.child(row);
             }
@@ -686,14 +694,8 @@ pub(crate) fn render_browse_pane(
             for data_type in COLUMN_TYPES {
                 let label = column_type_label(&data_type);
                 let is_expanded = !query.is_empty() || expanded_types.contains(&label);
-                let mut row = render_type_group_row(
-                    &state,
-                    &data_type,
-                    &label,
-                    is_expanded,
-                    window,
-                    cx,
-                );
+                let mut row =
+                    render_type_group_row(&state, &data_type, &label, is_expanded, window, cx);
                 if is_expanded {
                     let mut items: Vec<(String, String, bool)> = Vec::new();
                     items.extend(
@@ -720,9 +722,7 @@ pub(crate) fn render_browse_pane(
                             .read(cx)
                             .user_generators_in_type(&data_type)
                             .into_iter()
-                            .map(|ug| {
-                                (ug.name.clone(), column_type_label(&ug.data_type), true)
-                            }),
+                            .map(|ug| (ug.name.clone(), column_type_label(&ug.data_type), true)),
                     );
                     // 立即求值成 Vec（惰性迭代器会把闭包里的 &String 借到渲染期，生命周期不够）
                     let item_rows: Vec<gpui_kit::AnyElement> = items
@@ -731,7 +731,14 @@ pub(crate) fn render_browse_pane(
                             render_item_row(&state, &label, &badge, is_user, window, cx)
                         })
                         .collect();
-                    row = row.child(div().v_flex().gap_1().w_full().pl(px(20.)).children(item_rows));
+                    row = row.child(
+                        div()
+                            .v_flex()
+                            .gap_1()
+                            .w_full()
+                            .pl(px(20.))
+                            .children(item_rows),
+                    );
                 }
                 list = list.child(row);
             }
@@ -910,11 +917,7 @@ fn render_inspector(
                     .text_color(theme.colors.muted_foreground)
                     .child("空值率（%）"),
             )
-            .child(
-                div()
-                    .w(px(90.))
-                    .child(Input::new(&null_input)),
-            ),
+            .child(div().w(px(90.)).child(Input::new(&null_input))),
     );
     // —— 唯一值 ——
     right = right.child(
@@ -1041,31 +1044,26 @@ fn render_group_row(
         .gap_2()
         .w_full()
         .child(
-            div()
-                .h_flex()
-                .items_center()
-                .flex_1()
-                .min_w_0()
-                .child(
-                    Button::new(format!("lib-group-{name}"))
-                        .ghost()
-                        .xsmall()
-                        .icon(if expanded {
-                            IconName::ChevronDown
-                        } else {
-                            IconName::ChevronRight
-                        })
-                        .label(format!("{name}（{item_count}）"))
-                        .toggled(expanded)
-                        .on_click(move |_event, _window, app| {
-                            state_for_toggle.update(app, |s, cx| {
-                                if !s.expanded.remove(&name_for_toggle) {
-                                    s.expanded.insert(name_for_toggle.clone());
-                                }
-                                cx.notify();
-                            });
-                        }),
-                ),
+            div().h_flex().items_center().flex_1().min_w_0().child(
+                Button::new(format!("lib-group-{name}"))
+                    .ghost()
+                    .xsmall()
+                    .icon(if expanded {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .label(format!("{name}（{item_count}）"))
+                    .toggled(expanded)
+                    .on_click(move |_event, _window, app| {
+                        state_for_toggle.update(app, |s, cx| {
+                            if !s.expanded.remove(&name_for_toggle) {
+                                s.expanded.insert(name_for_toggle.clone());
+                            }
+                            cx.notify();
+                        });
+                    }),
+            ),
         )
         .child(
             Button::new(format!("lib-group-plus-{name}"))
@@ -1122,31 +1120,26 @@ fn render_type_group_row(
         .gap_2()
         .w_full()
         .child(
-            div()
-                .h_flex()
-                .items_center()
-                .flex_1()
-                .min_w_0()
-                .child(
-                    Button::new(format!("lib-type-group-{label}"))
-                        .ghost()
-                        .xsmall()
-                        .icon(if expanded {
-                            IconName::ChevronDown
-                        } else {
-                            IconName::ChevronRight
-                        })
-                        .label(format!("{label}（{item_count}）"))
-                        .toggled(expanded)
-                        .on_click(move |_event, _window, app| {
-                            state_for_toggle.update(app, |s, cx| {
-                                if !s.expanded_types.remove(&label_for_toggle) {
-                                    s.expanded_types.insert(label_for_toggle.clone());
-                                }
-                                cx.notify();
-                            });
-                        }),
-                ),
+            div().h_flex().items_center().flex_1().min_w_0().child(
+                Button::new(format!("lib-type-group-{label}"))
+                    .ghost()
+                    .xsmall()
+                    .icon(if expanded {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .label(format!("{label}（{item_count}）"))
+                    .toggled(expanded)
+                    .on_click(move |_event, _window, app| {
+                        state_for_toggle.update(app, |s, cx| {
+                            if !s.expanded_types.remove(&label_for_toggle) {
+                                s.expanded_types.insert(label_for_toggle.clone());
+                            }
+                            cx.notify();
+                        });
+                    }),
+            ),
         )
         .child(
             Button::new(format!("lib-type-group-plus-{label}"))
@@ -1194,29 +1187,32 @@ fn render_item_row(
         .gap_2()
         .w_full()
         .child(
-            div()
-                .h_flex()
-                .items_center()
-                .flex_1()
-                .min_w_0()
-                .child(
-                    Button::new(format!("lib-item-{label}"))
-                        .ghost()
-                        .xsmall()
-                        .label(label)
-                        .on_click(move |_event, window, app| {
-                            let embedded = state_for_click.read(app).embedded;
-                            if embedded {
-                                let s = state_for_click.read(app);
-                                let panel = s.panel.clone();
-                                let writeback = s.writeback.clone();
-                                let ug_id = spec_for_click.clone();
-                                apply_picked_generator(app, window, &panel, &writeback, &ug_id, is_user);
-                            } else {
-                                select_generator(&state_for_click, &spec_for_click, is_user, window, app);
-                            }
-                        }),
-                ),
+            div().h_flex().items_center().flex_1().min_w_0().child(
+                Button::new(format!("lib-item-{label}"))
+                    .ghost()
+                    .xsmall()
+                    .label(label)
+                    .on_click(move |_event, window, app| {
+                        let embedded = state_for_click.read(app).embedded;
+                        if embedded {
+                            let s = state_for_click.read(app);
+                            let panel = s.panel.clone();
+                            let writeback = s.writeback.clone();
+                            let ug_id = spec_for_click.clone();
+                            apply_picked_generator(
+                                app, window, &panel, &writeback, &ug_id, is_user,
+                            );
+                        } else {
+                            select_generator(
+                                &state_for_click,
+                                &spec_for_click,
+                                is_user,
+                                window,
+                                app,
+                            );
+                        }
+                    }),
+            ),
         )
         .child(
             div()
@@ -1258,26 +1254,24 @@ fn render_item_row(
                         });
                     }),
             )
-            .child(
-                {
-                    let state_del = state.clone();
-                    let ug_id_del = spec_name.clone();
-                    Button::new(format!("lib-item-delete-{label}"))
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::Delete)
-                        .tooltip("删除此自定义生成器")
-                        .tooltip_show_delay(Duration::from_millis(500))
-                        .on_click(move |_event, _window, app| {
-                            let s = state_del.read(app);
-                            let panel = s.panel.clone();
-                            let ug_id = ug_id_del.clone();
-                            // 先删 panel 项，再刷新对话框列表（panel.notify 不驱动对话框实体重绘）
-                            panel.update(app, |p, cx| p.delete_user_generator(&ug_id, cx));
-                            state_del.update(app, |_, cx| cx.notify());
-                        })
-                },
-            );
+            .child({
+                let state_del = state.clone();
+                let ug_id_del = spec_name.clone();
+                Button::new(format!("lib-item-delete-{label}"))
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Delete)
+                    .tooltip("删除此自定义生成器")
+                    .tooltip_show_delay(Duration::from_millis(500))
+                    .on_click(move |_event, _window, app| {
+                        let s = state_del.read(app);
+                        let panel = s.panel.clone();
+                        let ug_id = ug_id_del.clone();
+                        // 先删 panel 项，再刷新对话框列表（panel.notify 不驱动对话框实体重绘）
+                        panel.update(app, |p, cx| p.delete_user_generator(&ug_id, cx));
+                        state_del.update(app, |_, cx| cx.notify());
+                    })
+            });
     }
     row.into_any_element()
 }
@@ -1301,7 +1295,12 @@ fn new_create_draft(
     });
     // 业务组下拉（未锁定才建；含「（不分组）」）
     let mut category_items: Vec<CategoryChoice> = vec![CategoryChoice(None)];
-    category_items.extend(GeneratorCategory::ALL.iter().copied().map(|c| CategoryChoice(Some(c))));
+    category_items.extend(
+        GeneratorCategory::ALL
+            .iter()
+            .copied()
+            .map(|c| CategoryChoice(Some(c))),
+    );
     let category_state = locked_category.as_ref().map(|_| {
         let delegate = SearchableVec::new(category_items);
         cx.new(|cx| SelectState::new(delegate, None, window, cx))
@@ -1367,8 +1366,13 @@ fn new_edit_draft(
     window: &mut Window,
     cx: &mut Context<GeneratorLibraryState>,
 ) -> CreateDraft {
-    let mut draft =
-        new_create_draft(panel.clone(), Some(ug.data_type.clone()), ug.category, window, cx);
+    let mut draft = new_create_draft(
+        panel.clone(),
+        Some(ug.data_type.clone()),
+        ug.category,
+        window,
+        cx,
+    );
     // 名字预填（InputState::set_value 不发 Change 事件，无副作用）
     draft
         .name_input
@@ -1502,13 +1506,7 @@ impl GeneratorLibraryState {
     }
 
     /// 标量参数 Change：校验值合法性（值存在输入框里，`patched_config` 现读现 patch）。
-    fn commit_scalar(
-        &mut self,
-        key: &str,
-        text: &str,
-        kind: ParamKind,
-        cx: &mut Context<Self>,
-    ) {
+    fn commit_scalar(&mut self, key: &str, text: &str, kind: ParamKind, cx: &mut Context<Self>) {
         let Some(draft) = self.create.as_mut() else {
             return;
         };
@@ -1585,7 +1583,8 @@ fn submit_create(state: &Entity<GeneratorLibraryState>, window: &mut Window, cx:
         });
         (name, data_type, category, draft.patched_config(cx))
     };
-    let (name, Some(data_type), category, Some(config)) = (name, data_type, category, config) else {
+    let (name, Some(data_type), category, Some(config)) = (name, data_type, category, config)
+    else {
         state.update(cx, |s, cx| {
             if let Some(d) = s.create.as_mut() {
                 d.error = Some("请填写生成器名并选择基础生成器".to_string());
@@ -1655,7 +1654,11 @@ fn render_create_footer(
         )
         .child(
             Button::new("lib-create-save")
-                .label(if editing { "保存修改" } else { "保存并应用" })
+                .label(if editing {
+                    "保存修改"
+                } else {
+                    "保存并应用"
+                })
                 .on_click(move |_event, window, app| {
                     submit_create(&state_for_save, window, app);
                 }),
@@ -1864,10 +1867,12 @@ fn render_create(
                             let state = state.clone();
                             let theme2 = theme.clone();
                             match param {
-                                DraftParam::Scalar { state: input_state, .. } => {
-                                    form_line(&theme2, &label, input_state).into_any_element()
-                                }
-                                DraftParam::Complex { state: text_state, .. } => {
+                                DraftParam::Scalar {
+                                    state: input_state, ..
+                                } => form_line(&theme2, &label, input_state).into_any_element(),
+                                DraftParam::Complex {
+                                    state: text_state, ..
+                                } => {
                                     let hint = complex_param_hint(&key);
                                     complex_form_line(&theme2, &label, hint, text_state)
                                         .into_any_element()
@@ -1943,7 +1948,10 @@ fn render_create(
     // 错误行
     if let Some(error) = &draft.error {
         body = body.child(
-            div().text_xs().text_color(theme.colors.danger).child(error.clone()),
+            div()
+                .text_xs()
+                .text_color(theme.colors.danger)
+                .child(error.clone()),
         );
     }
     body.into_any_element()

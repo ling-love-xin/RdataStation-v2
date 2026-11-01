@@ -269,11 +269,7 @@ pub fn request_probe_columns(
 ///
 /// 列清单（名称 + 类型族）在接缝后台现读——与评估同口径，不持过期列名；
 /// 现算失败不打断画像（迷你图缺席即可，保持 `None` 不编假值）。
-pub fn request_sample_mini_stats(
-    view: &Entity<InsightView>,
-    temp_table: String,
-    cx: &mut App,
-) {
+pub fn request_sample_mini_stats(view: &Entity<InsightView>, temp_table: String, cx: &mut App) {
     let columns: Vec<(String, crate::model::ColumnKind)> = view
         .read(cx)
         .data()

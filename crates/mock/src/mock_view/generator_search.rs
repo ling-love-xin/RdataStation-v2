@@ -65,7 +65,11 @@ impl GeneratorSearchDelegate {
     ///
     /// `current` 由调用方（面板自己的 `&mut self`）算好传入：本方法在面板的 update 里被调用，
     /// 那时 `read` 面板会触发「already being updated」重入 panic。
-    pub(crate) fn new(panel: Entity<MockPanel>, column_id: u64, current: Option<&'static str>) -> Self {
+    pub(crate) fn new(
+        panel: Entity<MockPanel>,
+        column_id: u64,
+        current: Option<&'static str>,
+    ) -> Self {
         Self {
             panel,
             column_id,
@@ -205,4 +209,3 @@ pub fn column_matches(
         haystacks.iter().any(|text| text.contains(&term))
     })
 }
-

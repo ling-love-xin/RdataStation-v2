@@ -4,8 +4,8 @@
 use super::*;
 
 // 样例预览的固定种子：样例稳定可复现（与最终生成的随机种子无关，纯示意）
-use fake::rand::rngs::StdRng;
 use fake::rand::SeedableRng;
+use fake::rand::rngs::StdRng;
 use gpui_kit::component::resizable::{resizable_panel, v_resizable};
 use std::time::Duration;
 
@@ -135,7 +135,8 @@ pub struct MockDetailView {
     pub(crate) preview_table: Option<Entity<TableState<PreviewTableDelegate>>>,
     /// 列编辑对话框内的生成器库状态（「选择生成器窗口」左栏：搜索 + 业务/数据双 Tab +
     /// 分组列表；选中写回草稿，点「应用」才落地）：打开列编辑时创建，关闭后随实体丢弃。
-    pub(crate) generator_browser: Option<Entity<crate::mock_view::generator_library::GeneratorLibraryState>>,
+    pub(crate) generator_browser:
+        Option<Entity<crate::mock_view::generator_library::GeneratorLibraryState>>,
 }
 
 /// 把详情 tab 切到前台（窗口聚焦 + 在所在 Dock 组里选中自身）。
@@ -373,7 +374,12 @@ impl MockDetailView {
             } else {
                 format!("{base_name}_2")
             };
-            while panel.draft().columns.iter().any(|c| c.def.name == candidate) {
+            while panel
+                .draft()
+                .columns
+                .iter()
+                .any(|c| c.def.name == candidate)
+            {
                 n += 1;
                 candidate = if base_name.is_empty() {
                     format!("column_{n}")
@@ -387,7 +393,12 @@ impl MockDetailView {
             let panel = self.panel.clone();
             panel.update(cx, |panel, cx| {
                 panel.add_column(new_name.clone(), base_type, cx);
-                panel.draft().columns.last().map(|c| c.id).unwrap_or_default()
+                panel
+                    .draft()
+                    .columns
+                    .last()
+                    .map(|c| c.id)
+                    .unwrap_or_default()
             })
         };
         self.open_column_dialog(new_id, window, cx);
@@ -418,7 +429,13 @@ impl MockDetailView {
                 ParamWidget::Scalar(state) => state.read(cx).value().to_string(),
                 ParamWidget::Complex(state) => state.read(cx).value().to_string(),
             };
-            if current != draft.original_params.get(index).map(String::as_str).unwrap_or("") {
+            if current
+                != draft
+                    .original_params
+                    .get(index)
+                    .map(String::as_str)
+                    .unwrap_or("")
+            {
                 return true;
             }
         }
@@ -430,7 +447,11 @@ impl MockDetailView {
     /// 取消按钮与 dialog `on_cancel`（ESC / 遮罩）共用。确认框叠在列编辑对话框之上
     ///（vendor 对话框支持栈式多实例）；OK 里连续两次 `close_dialog`——先关确认框自身、
     /// 再关列编辑对话框（`close_dialog_internal` 按「最后活跃」依次弹出）。
-    pub(crate) fn confirm_discard(view: &Entity<MockDetailView>, window: &mut Window, cx: &mut App) {
+    pub(crate) fn confirm_discard(
+        view: &Entity<MockDetailView>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         let view = view.clone();
         window.open_alert_dialog(cx, move |alert, _window, _cx| {
             let view_for_ok = view.clone();
@@ -534,18 +555,16 @@ impl MockDetailView {
         // 生成器库浏览区内嵌（同面板）：分组/最近/搜索/精调直接开在列编辑对话框里，
         // 选中写回草稿（`LibraryWriteback::ColumnDraft`），点「应用」才落地
         let view = cx.entity();
-        self.generator_browser = Some(
-            crate::mock_view::generator_library::create_library_state(
-                self.panel.clone(),
-                crate::mock_view::generator_library::LibraryWriteback::ColumnDraft {
-                    detail: view.downgrade(),
-                    column_id: id,
-                },
-                true,
-                window,
-                cx,
-            ),
-        );
+        self.generator_browser = Some(crate::mock_view::generator_library::create_library_state(
+            self.panel.clone(),
+            crate::mock_view::generator_library::LibraryWriteback::ColumnDraft {
+                detail: view.downgrade(),
+                column_id: id,
+            },
+            true,
+            window,
+            cx,
+        ));
 
         let view = cx.entity();
         let panel = self.panel.clone();
@@ -1311,12 +1330,15 @@ impl MockDetailView {
                 summary.clone()
             };
             // S1④：跨表引用徽标 + 常驻说明（挂在列上的关系，不是外键 DDL）
-            let ref_badge = column.def.dependency.as_ref().map(|dep| {
-                format!("↳ 引用 {}.{}", dep.ref_table, dep.ref_column)
-            });
-            let ref_note = column.def.dependency.is_some().then(|| {
-                "引用目标仅支持自增主键，按自增规律推算取值域，不读取父表已生成的数据。"
-            });
+            let ref_badge = column
+                .def
+                .dependency
+                .as_ref()
+                .map(|dep| format!("↳ 引用 {}.{}", dep.ref_table, dep.ref_column));
+            let ref_note =
+                column.def.dependency.is_some().then(
+                    || "引用目标仅支持自增主键，按自增规律推算取值域，不读取父表已生成的数据。",
+                );
             let panel = self.panel.clone();
             list = list.child(
                 div()
@@ -1389,11 +1411,13 @@ impl MockDetailView {
                                 .label(label)
                                 .tooltip("打开生成器库（业务分类 / 数据类型双视角选择）")
                                 .tooltip_show_delay(Duration::from_millis(500))
-                                .on_click(move |_, window, app| {
-                                    panel.update(app, |p, cx| {
-                                        p.open_generator_library(id, window, cx);
-                                    });
-                                })
+                                .on_click(
+                                    move |_, window, app| {
+                                        panel.update(app, |p, cx| {
+                                            p.open_generator_library(id, window, cx);
+                                        });
+                                    },
+                                )
                             })
                             .child({
                                 let entity = cx.entity();
@@ -1483,7 +1507,8 @@ impl MockDetailView {
                             .child({
                                 // 参数摘要一行 ellipsis 截断；悬停 `HoverCard` 看完整参数与生成器。
                                 // 触发容器样式走 `trigger_style`（组件负责布局该容器）
-                                let summary_text = format!("{unique}空值 {null_percent}% · {detail}");
+                                let summary_text =
+                                    format!("{unique}空值 {null_percent}% · {detail}");
                                 let full_text = if summary.is_empty() {
                                     format!("生成器：{}", spec.label)
                                 } else {
@@ -1953,26 +1978,23 @@ impl Render for MockDetailView {
                     ),
             )
             .child(
-                resizable_panel()
-                    .size(columns_h)
-                    .child(
-                        div()
-                            .size_full()
-                            .min_h_0()
-                            .overflow_y_scrollbar()
-                            .child(columns_block),
-                    ),
+                resizable_panel().size(columns_h).child(
+                    div()
+                        .size_full()
+                        .min_h_0()
+                        .overflow_y_scrollbar()
+                        .child(columns_block),
+                ),
             )
             .child(
-                resizable_panel()
-                    .child(
-                        div()
-                            .size_full()
-                            .min_h_0()
-                            .flex()
-                            .flex_col()
-                            .child(preview_block),
-                    ),
+                resizable_panel().child(
+                    div()
+                        .size_full()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .child(preview_block),
+                ),
             )
             .on_resize(move |state, _window, app| {
                 // 拖到哪记到哪：三段的第 2 段是列区（`sizes()[1]`），换算回 rem 存面板字段
@@ -2002,8 +2024,12 @@ pub(crate) fn render_status_cell(icon: Option<IconName>, text: &str, color: Hsla
         .text_xs()
         .text_color(color)
         .when_some(icon, |cell, icon| {
-            cell.child(Icon::new(icon).size(rems(ui::STATUS_ICON_SIZE)).text_color(color))
-                .child(" ")
+            cell.child(
+                Icon::new(icon)
+                    .size(rems(ui::STATUS_ICON_SIZE))
+                    .text_color(color),
+            )
+            .child(" ")
         })
         .child(SharedString::from(text))
 }
@@ -2526,4 +2552,3 @@ impl ComponentPanel for MockDetailView {
         div().text_sm().font_weight(FontWeight::MEDIUM).child(label)
     }
 }
-

@@ -60,16 +60,10 @@ async fn clear_temp_tables_drops_every_mock_table() {
     );
 
     let dropped = MockEngine::clear_temp_tables().expect("清理应当成功");
-    assert!(
-        dropped.len() >= 2,
-        "至少要删掉刚生成的两张: {dropped:?}"
-    );
+    assert!(dropped.len() >= 2, "至少要删掉刚生成的两张: {dropped:?}");
 
     let after = MockEngine::temp_tables().expect("列临时表");
-    assert!(
-        after.is_empty(),
-        "清理后不应再有 mock 临时表: {after:?}"
-    );
+    assert!(after.is_empty(), "清理后不应再有 mock 临时表: {after:?}");
 
     // 清理是幂等的：再清一次不报错、没有可删的
     let again = MockEngine::clear_temp_tables().expect("重复清理应当无害");
@@ -86,7 +80,10 @@ async fn repeated_generation_keeps_a_single_table() -> MockResult<()> {
 
     let tables = MockEngine::temp_tables()?;
     assert_eq!(
-        tables.iter().filter(|name| name.contains("t_clean_same")).count(),
+        tables
+            .iter()
+            .filter(|name| name.contains("t_clean_same"))
+            .count(),
         1,
         "同名只应有一张: {tables:?}"
     );

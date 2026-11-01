@@ -148,11 +148,10 @@ impl super::InsightWorkspacePanel {
             self.probe_input_subs.borrow_mut().push(sub);
         }
 
-        let pct_state = window.use_keyed_state(
-            SharedString::from("insight-probe-pct"),
-            cx,
-            |window, cx| InputState::new(window, cx).placeholder("如 5"),
-        );
+        let pct_state =
+            window.use_keyed_state(SharedString::from("insight-probe-pct"), cx, |window, cx| {
+                InputState::new(window, cx).placeholder("如 5")
+            });
         if dialog.percent != pct_state.read(cx).value() {
             pct_state.update(cx, |state, cx| {
                 state.set_value(dialog.percent.clone(), window, cx);

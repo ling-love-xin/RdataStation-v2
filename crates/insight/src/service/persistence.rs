@@ -87,7 +87,9 @@ fn build_source_sample_sql(
     };
     let projection = column_projection(subset);
     match amount {
-        crate::model::ProbeAmount::Full => format!("SELECT {projection} FROM ({inner}) AS rds_sample"),
+        crate::model::ProbeAmount::Full => {
+            format!("SELECT {projection} FROM ({inner}) AS rds_sample")
+        }
         crate::model::ProbeAmount::RowCount(n) => {
             format!("SELECT {projection} FROM ({inner}) AS rds_sample LIMIT {n}")
         }
@@ -163,7 +165,8 @@ pub async fn probe_source_columns(source: &SampleSource) -> Result<Vec<String>, 
                 schema: None,
             };
             let sql = format!("SELECT * FROM ({inner}) AS rds_cols LIMIT 0");
-            let result = service                .execute(Some(conn_id.to_string()), &sql, opts)
+            let result = service
+                .execute(Some(conn_id.to_string()), &sql, opts)
                 .await?;
             // 源库 `LIMIT 0` 的列集合即列名（数据不过 Rust 打型，只读结构）
             Ok(crate::service::result_columns_and_rows(&result.result).0)
@@ -224,13 +227,11 @@ async fn count_source_rows(conn_id: &str, source: &SampleSource) -> Result<u64, 
         .first()
         .and_then(|row| row.first())
         .and_then(|v| v.as_i64().or_else(|| v.as_u64().map(|u| u as i64)));
-    first
-        .map(|n| n.max(0) as u64)
-        .ok_or_else(|| {
-            CoreError::common(CommonError::General(
-                "行数估算失败：COUNT 查询没有返回可读的数字".into(),
-            ))
-        })
+    first.map(|n| n.max(0) as u64).ok_or_else(|| {
+        CoreError::common(CommonError::General(
+            "行数估算失败：COUNT 查询没有返回可读的数字".into(),
+        ))
+    })
 }
 
 /// 从一条**源库连接**取样本并落成分析临时表。
@@ -622,13 +623,18 @@ mod tests {
             Some(&["id".into(), "note".into()]),
         );
         assert!(
-            sql.starts_with("SELECT \"id\", \"note\" FROM (SELECT * FROM orders) AS rds_sample LIMIT 10"),
+            sql.starts_with(
+                "SELECT \"id\", \"note\" FROM (SELECT * FROM orders) AS rds_sample LIMIT 10"
+            ),
             "子集列应投影进 SELECT：{sql}"
         );
 
         // 全列（默认口径）= SELECT *
         let sql = build_source_sample_sql(&source, ProbeAmount::RowCount(10), None, None);
-        assert!(sql.starts_with("SELECT * FROM"), "无子集应保持 SELECT *：{sql}");
+        assert!(
+            sql.starts_with("SELECT * FROM"),
+            "无子集应保持 SELECT *：{sql}"
+        );
     }
 
     /// C4：WHERE 过滤包内层先过滤，再投影 + LIMIT（R1 的延伸）。

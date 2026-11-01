@@ -4,13 +4,18 @@ use super::*;
 // 完整 Lucide 图标目录在 `gpui_kit::assets::IconName`（component 版只是保留子集，
 // 没有 Braces）；别名避免与 `super::*` 带来的 component 版同名冲突
 use gpui_kit::assets::IconName as AssetsIconName;
+use gpui_kit::component::ColorName;
 use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyTitle};
 use gpui_kit::component::tag::Tag;
-use gpui_kit::component::ColorName;
 
 impl super::InsightWorkspacePanel {
     /// 报告主 Tab（原型 .report-tabs）：列分布 / 缺失 / 关联性 / 样本。
-    pub(crate) fn render_eda_tabs(&self, _cx: &Context<Self>, entity: &Entity<Self>, theme: &Theme) -> Div {
+    pub(crate) fn render_eda_tabs(
+        &self,
+        _cx: &Context<Self>,
+        entity: &Entity<Self>,
+        theme: &Theme,
+    ) -> Div {
         let current = self.eda_tab.index();
         let tabs = TabBar::new("insight-ws-eda-tabs")
             .underline()
@@ -126,16 +131,16 @@ impl super::InsightWorkspacePanel {
             // 先例——筛选无结果用组件空态，不手搓居中文本）
             cards = cards.child(
                 div().w_full().child(
-                    Empty::new()
-                        .header(
-                            EmptyHeader::new()
-                                .title(EmptyTitle::new().child(SharedString::from(
-                                    "没有符合筛选条件的列",
-                                )))
-                                .description(EmptyDescription::new().child(SharedString::from(
-                                    "调整搜索词或类型筛选后重试",
-                                ))),
-                        ),
+                    Empty::new().header(
+                        EmptyHeader::new()
+                            .title(
+                                EmptyTitle::new().child(SharedString::from("没有符合筛选条件的列")),
+                            )
+                            .description(
+                                EmptyDescription::new()
+                                    .child(SharedString::from("调整搜索词或类型筛选后重试")),
+                            ),
+                    ),
                 ),
             );
         }
@@ -291,23 +296,25 @@ impl super::InsightWorkspacePanel {
                 let name = col.name.clone();
                 let table = temp_table.clone();
                 this.child(
-                    Button::new(SharedString::from(format!(
-                        "insight-ws-col-recalc-{name}"
-                    )))
-                    .ghost()
-                    .xsmall()
-                    .label("补算")
-                    .tooltip("对单列续跑明细统计（补算后清除中断标记）")
-                    .on_click(move |_, _, app| {
-                        entity.update(app, |panel, cx| {
-                            panel.view.update(cx, |view, cx| {
-                                // 防御：无临时表时补算无从发起（正常流程中断列必有临时表）
-                                if let Some(table) = &table {
-                                    view.request_column_evaluation(table.clone(), name.clone(), cx);
-                                }
+                    Button::new(SharedString::from(format!("insight-ws-col-recalc-{name}")))
+                        .ghost()
+                        .xsmall()
+                        .label("补算")
+                        .tooltip("对单列续跑明细统计（补算后清除中断标记）")
+                        .on_click(move |_, _, app| {
+                            entity.update(app, |panel, cx| {
+                                panel.view.update(cx, |view, cx| {
+                                    // 防御：无临时表时补算无从发起（正常流程中断列必有临时表）
+                                    if let Some(table) = &table {
+                                        view.request_column_evaluation(
+                                            table.clone(),
+                                            name.clone(),
+                                            cx,
+                                        );
+                                    }
+                                });
                             });
-                        });
-                    }),
+                        }),
                 )
             })
             // 展开切换（语义 Button，键盘可达；原型为整行点击，等价交互）
@@ -482,7 +489,12 @@ impl super::InsightWorkspacePanel {
                                 .overflow_hidden()
                                 // 真 / 假两段：中性色（primary / muted），不引入「真假=好坏」语义
                                 .child(div().h_full().bg(colors.primary).flex_grow(t as f32))
-                                .child(div().h_full().bg(colors.muted_foreground).flex_grow((1.0 - t) as f32)),
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .bg(colors.muted_foreground)
+                                        .flex_grow((1.0 - t) as f32),
+                                ),
                         )
                         .child(
                             div()
@@ -603,15 +615,8 @@ impl super::InsightWorkspacePanel {
                 let sql = format!("SELECT \"{quoted_col}\" FROM \"{quoted_tbl}\" LIMIT 100");
                 let title = format!("{} · {}", tmp, col.name);
                 body.child(
-                    div()
-                        .h_flex()
-                        .w_full()
-                        .justify_end()
-                        .child(
-                            Button::new(SharedString::from(format!(
-                                "insight-ws-col-sql-{}",
-                                name
-                            )))
+                    div().h_flex().w_full().justify_end().child(
+                        Button::new(SharedString::from(format!("insight-ws-col-sql-{}", name)))
                             .ghost()
                             .xsmall()
                             .icon(AssetsIconName::Braces)
@@ -629,7 +634,7 @@ impl super::InsightWorkspacePanel {
                                     });
                                 });
                             }),
-                        ),
+                    ),
                 )
             })
     }

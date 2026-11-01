@@ -8,10 +8,12 @@
 /// M5 草稿箱：面板内的纯函数语义（排序 / 压平 / 模板后缀 / 请求消费 / 搜索结果映射）。
 ///
 /// 窗口级交互（真点击、真轮询）不在这一层，见 `scratchpad-user-guide.md` §9 验收清单。
-use super::{ScratchpadEntry, ScratchpadEntryKind, ScratchpadSearchMode, ScratchpadSearchView, ScratchpadSort, ScratchpadTemplate, ToolbarButtonCfg, ToolbarButtonKey,
-    flatten_scratchpad, join_scratchpad_rel, scratchpad_apply_template_ext,
-    scratchpad_entry_matches, scratchpad_shows_dirty_dot, scratchpad_size_label,
-    scratchpad_sort_entries, scratchpad_split_name, search_view_from_payload,
+use super::{
+    ScratchpadEntry, ScratchpadEntryKind, ScratchpadSearchMode, ScratchpadSearchView,
+    ScratchpadSort, ScratchpadTemplate, ToolbarButtonCfg, ToolbarButtonKey, flatten_scratchpad,
+    join_scratchpad_rel, scratchpad_apply_template_ext, scratchpad_entry_matches,
+    scratchpad_shows_dirty_dot, scratchpad_size_label, scratchpad_sort_entries,
+    scratchpad_split_name, search_view_from_payload,
 };
 use crate::jobs::SearchPayload;
 use crate::scratchpad_view::scratchpad_jobs;
@@ -225,11 +227,25 @@ fn entry_matches_self_or_loaded_subtree() {
         "空过滤全通过"
     );
     assert!(
-        scratchpad_entry_matches(&dir, "di", ScratchpadSearchMode::Name, false, false, &loaded),
+        scratchpad_entry_matches(
+            &dir,
+            "di",
+            ScratchpadSearchMode::Name,
+            false,
+            false,
+            &loaded
+        ),
         "自身命中"
     );
     assert!(
-        scratchpad_entry_matches(&dir, "deep", ScratchpadSearchMode::Name, false, false, &loaded),
+        scratchpad_entry_matches(
+            &dir,
+            "deep",
+            ScratchpadSearchMode::Name,
+            false,
+            false,
+            &loaded
+        ),
         "懒加载子树命中"
     );
     assert!(!scratchpad_entry_matches(
@@ -290,14 +306,17 @@ use std::rc::Rc;
 
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::{App, Pixels, TestAppContext};
-use gpui_kit::{AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _, Window, div, px};
+use gpui_kit::{
+    AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _, Window,
+    div, px,
+};
 
+use crate::ScratchpadView;
 use crate::host::ScratchpadHost;
 use crate::jobs::LoadResult;
 use crate::scratchpad_view::primitives::{ScratchpadEdit, scratchpad_type_icon};
 use crate::scratchpad_view::render_scratchpad_search_pane;
 use content_search::view::SearchHit as ScratchpadSearchHit;
-use crate::ScratchpadView;
 
 /// 最小宿主：记录打开请求、状态栏提示与搜索结果落地（不接编辑器 / 不接洞察）。
 struct TestHost {
@@ -329,7 +348,10 @@ impl ScratchpadHost for TestHost {
 
 /// 每个用例一个临时项目根（互不干扰；用完尽力清理）。
 fn panel_root(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("rds_scratchpad_panel_{name}_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "rds_scratchpad_panel_{name}_{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("建临时目录");
     dir
@@ -391,8 +413,15 @@ fn panel_renders_and_opens_selected_file(cx: &mut TestAppContext) {
     });
 
     let opened = host.opened.borrow().clone();
-    assert_eq!(opened, vec![root.join("a.sql")], "打开请求必须落到宿主端口，且路径为绝对路径");
-    assert!(host.searches.borrow().is_empty(), "未发起搜索时不得投递搜索结果");
+    assert_eq!(
+        opened,
+        vec![root.join("a.sql")],
+        "打开请求必须落到宿主端口，且路径为绝对路径"
+    );
+    assert!(
+        host.searches.borrow().is_empty(),
+        "未发起搜索时不得投递搜索结果"
+    );
 }
 
 /// K10：只读项目里发起「新建」被拒绝，状态栏提示经宿主端口下发。
@@ -418,7 +447,10 @@ fn readonly_rejects_new_file(cx: &mut TestAppContext) {
         notices.iter().any(|n| n.contains("只读模式")),
         "只读拒绝必须给出可见提示（经宿主端口），实际：{notices:?}"
     );
-    assert!(host.opened.borrow().is_empty(), "只读模式不得产生任何打开请求");
+    assert!(
+        host.opened.borrow().is_empty(),
+        "只读模式不得产生任何打开请求"
+    );
 }
 
 /// K10：命中面板（中央编辑区投影）可构建渲染载荷，且未点击时打开回调不触发。
@@ -451,7 +483,8 @@ fn search_pane_builds_with_hit_target(cx: &mut TestAppContext) {
         after: vec![],
     });
 
-    let captured: Rc<RefCell<Vec<crate::ScratchpadSearchHitTarget>>> = Rc::new(RefCell::new(Vec::new()));
+    let captured: Rc<RefCell<Vec<crate::ScratchpadSearchHitTarget>>> =
+        Rc::new(RefCell::new(Vec::new()));
     let on_open_hit: Rc<dyn Fn(crate::ScratchpadSearchHitTarget, &mut gpui_kit::Window, &mut App)> = {
         let captured = captured.clone();
         Rc::new(move |target, _window, _cx| captured.borrow_mut().push(target))
@@ -604,11 +637,14 @@ fn toolbar_more_toggles_visibility_and_reset(cx: &mut TestAppContext) {
                 ToolbarButtonKey::Reference,
             ] {
                 let mut v = view.scratchpad.borrow_mut();
-                let cfg = v.toolbar_cfg.entry(key).or_insert_with(|| ToolbarButtonCfg {
-                    visible: true,
-                    side: key.default_side_text().to_string(),
-                    ..Default::default()
-                });
+                let cfg = v
+                    .toolbar_cfg
+                    .entry(key)
+                    .or_insert_with(|| ToolbarButtonCfg {
+                        visible: true,
+                        side: key.default_side_text().to_string(),
+                        ..Default::default()
+                    });
                 cfg.visible = !cfg.visible;
             }
             cx.notify();
@@ -621,7 +657,8 @@ fn toolbar_more_toggles_visibility_and_reset(cx: &mut TestAppContext) {
         .size
         .width;
     assert_eq!(
-        hidden_w, Pixels::ZERO,
+        hidden_w,
+        Pixels::ZERO,
         "隐藏左侧全部入口后左分组应为空（宽归 0），实测 {hidden_w:?}"
     );
 
@@ -653,13 +690,14 @@ fn toolbar_more_toggles_visibility_and_reset(cx: &mut TestAppContext) {
     cx.update(|_w, cx| {
         panel.update(cx, |view, cx| {
             let mut v = view.scratchpad.borrow_mut();
-            let cfg = v.toolbar_cfg.entry(ToolbarButtonKey::Sort).or_insert_with(|| {
-                ToolbarButtonCfg {
+            let cfg = v
+                .toolbar_cfg
+                .entry(ToolbarButtonKey::Sort)
+                .or_insert_with(|| ToolbarButtonCfg {
                     visible: true,
                     side: ToolbarButtonKey::Sort.default_side_text().to_string(),
                     ..Default::default()
-                }
-            });
+                });
             cfg.side = "left".to_string();
             cx.notify();
         });
@@ -690,7 +728,10 @@ fn toolbar_more_toggles_visibility_and_reset(cx: &mut TestAppContext) {
         .expect("右分组必须渲染（⋯ 锚点）")
         .size
         .width;
-    assert!(right_w > Pixels::ZERO, "右侧按钮应保持渲染，实测 {right_w:?}");
+    assert!(
+        right_w > Pixels::ZERO,
+        "右侧按钮应保持渲染，实测 {right_w:?}"
+    );
 }
 
 /// 「草稿箱有文件但没显示」排查回归（2026-10-11 用户现场反馈）：
@@ -744,10 +785,7 @@ struct SizedDraftsHarness {
 
 impl Render for SizedDraftsHarness {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .w(px(320.))
-            .h(px(860.))
-            .child(self.panel.clone())
+        div().w(px(320.)).h(px(860.)).child(self.panel.clone())
     }
 }
 

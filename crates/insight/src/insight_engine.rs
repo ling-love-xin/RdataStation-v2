@@ -267,10 +267,7 @@ pub fn compute_table_column_summary_on(
 /// `GROUP BY ALL` 按 **select 列表里未聚合的列** 分组；只选 `COUNT(*)` 时没有
 /// 分组键，会把全表并成一组（冗余=总行数-1，数值虚高）。`*` 展开成全部列即
 /// 「整行分组」，且与列名无关（临时表列结构不定，不拼列名）。
-pub fn compute_dup_rows_on(
-    conn: &duckdb::Connection,
-    temp_table: &str,
-) -> Result<u64, CoreError> {
+pub fn compute_dup_rows_on(conn: &duckdb::Connection, temp_table: &str) -> Result<u64, CoreError> {
     let sql = format!(
         "SELECT COALESCE(SUM(n - 1), 0) FROM (SELECT *, COUNT(*) AS n FROM \"{}\" GROUP BY ALL)",
         temp_table.replace('"', "\"\"")
@@ -421,7 +418,9 @@ pub fn compute_sample_mini_stats_on(
                 if vals.is_empty() {
                     None
                 } else {
-                    Some(ColumnMiniStats::Frequencies(sample_top_frequencies(vals, 3)))
+                    Some(ColumnMiniStats::Frequencies(sample_top_frequencies(
+                        vals, 3,
+                    )))
                 }
             }
             // 类型未识别：不渲染分布（与评估侧口径一致——Unknown 无类型专属统计）
@@ -1712,11 +1711,19 @@ mod tests {
              INSERT INTO \"rs_unique\" VALUES ('a'),('b'),('c')",
         )
         .map_err(duckdb_err)?;
-        assert_eq!(compute_dup_rows_on(&conn, "rs_unique")?, 0, "全唯一不应有冗余");
+        assert_eq!(
+            compute_dup_rows_on(&conn, "rs_unique")?,
+            0,
+            "全唯一不应有冗余"
+        );
         // 空表 → COALESCE 兜底 0（SUM 为 NULL 不是报错）
         conn.execute_batch("CREATE TABLE \"rs_empty\" (\"a\" VARCHAR)")
             .map_err(duckdb_err)?;
-        assert_eq!(compute_dup_rows_on(&conn, "rs_empty")?, 0, "空表应返回 0 而非 NULL");
+        assert_eq!(
+            compute_dup_rows_on(&conn, "rs_empty")?,
+            0,
+            "空表应返回 0 而非 NULL"
+        );
         Ok(())
     }
 }

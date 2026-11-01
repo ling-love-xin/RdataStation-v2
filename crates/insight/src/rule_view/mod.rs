@@ -58,11 +58,11 @@ mod tests {
         TestAppContext, VisualTestContext, Window, div,
     };
 
+    use super::data::row_matches;
     use super::{
         GROUP_ORDER, PendingProjectRules, PendingRulesView, RuleDataInput, RuleRowStatus,
         RulesData, RulesEvent, RulesView, build_rules_data,
     };
-    use super::data::row_matches;
     use crate::rule::RuleScope;
     use crate::rule_types::RuleMeta;
     use crate::service::indexer::{RuleIndexEntry, RuleLoadStatus};

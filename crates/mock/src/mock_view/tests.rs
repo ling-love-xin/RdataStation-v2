@@ -782,7 +782,11 @@ impl MockHost for TestHost {
         self.rec.tables.borrow().clone()
     }
 
-    fn append_target_status(&self, _table: &str, _pk_hint: Option<&str>) -> Option<AppendTargetStatus> {
+    fn append_target_status(
+        &self,
+        _table: &str,
+        _pk_hint: Option<&str>,
+    ) -> Option<AppendTargetStatus> {
         // 测试桩不读真实库：追加对话框的「现状」在窗口测试里不校验
         None
     }
@@ -918,7 +922,10 @@ impl Render for TwinHarness {
         _window: &mut Window,
         _cx: &mut gpui_kit::Context<Self>,
     ) -> impl IntoElement {
-        div().size_full().child(self.draft.clone()).child(self.table.clone())
+        div()
+            .size_full()
+            .child(self.draft.clone())
+            .child(self.table.clone())
     }
 }
 
@@ -946,11 +953,7 @@ fn multiple_detail_tabs_do_not_collide_a11y_ids(cx: &mut TestAppContext) {
         let panel = cx.new(|cx| MockPanel::new(test_host(&rec), cx));
         let draft = cx.new(|cx| MockDetailView::new(panel.clone(), DetailTarget::Draft, cx));
         let table = cx.new(|cx| {
-            MockDetailView::new(
-                panel.clone(),
-                DetailTarget::Table("orders".to_string()),
-                cx,
-            )
+            MockDetailView::new(panel.clone(), DetailTarget::Table("orders".to_string()), cx)
         });
         *slot_in.borrow_mut() = Some((panel.clone(), draft.clone(), table.clone()));
         let harness = cx.new(|_cx| TwinHarness { draft, table });
@@ -1029,7 +1032,11 @@ fn move_and_duplicate_columns_preserve_config(cx: &mut TestAppContext) {
 
     panel.update(cx, |panel, cx| {
         panel.add_column("a".to_string(), ColumnDataType::Integer, cx);
-        panel.add_column("b".to_string(), ColumnDataType::Varchar { length: None }, cx);
+        panel.add_column(
+            "b".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
         panel.add_column("c".to_string(), ColumnDataType::Boolean, cx);
         let ids: Vec<u64> = panel.draft().columns.iter().map(|c| c.id).collect();
         assert_eq!(ids.len(), 3);
@@ -3624,7 +3631,10 @@ fn replaying_a_scene_row_restores_the_template_and_seed(cx: &mut TestAppContext)
         assert_eq!(template.id, "builtin:ecommerce");
         assert_eq!(template.seed, Some(42), "历史里的 seed 套回模板");
         assert_eq!(template.tables.len(), 4, "电商系统内置模板四张表");
-        assert!(panel.scenario_source().is_none(), "场景态：结果来源标注清空");
+        assert!(
+            panel.scenario_source().is_none(),
+            "场景态：结果来源标注清空"
+        );
         assert!(
             panel
                 .outcome
@@ -5031,13 +5041,24 @@ fn data_type_for_generator_spot_checks() {
         data_type_for_generator(&GeneratorConfig::AutoIncrement { start: 1, step: 1 }),
         ColumnDataType::Integer
     );
-    assert_eq!(data_type_for_generator(&GeneratorConfig::Duration), ColumnDataType::Integer);
     assert_eq!(
-        data_type_for_generator(&GeneratorConfig::RandomFloat { min: 0.0, max: 1.0, precision: 2 }),
+        data_type_for_generator(&GeneratorConfig::Duration),
+        ColumnDataType::Integer
+    );
+    assert_eq!(
+        data_type_for_generator(&GeneratorConfig::RandomFloat {
+            min: 0.0,
+            max: 1.0,
+            precision: 2
+        }),
         ColumnDataType::Double
     );
     assert_eq!(
-        data_type_for_generator(&GeneratorConfig::RandomDecimal { min: 0.0, max: 100.0, scale: 2 }),
+        data_type_for_generator(&GeneratorConfig::RandomDecimal {
+            min: 0.0,
+            max: 100.0,
+            scale: 2
+        }),
         ColumnDataType::Decimal {
             precision: 18,
             scale: 2,
@@ -5048,8 +5069,14 @@ fn data_type_for_generator_spot_checks() {
         ColumnDataType::Boolean
     );
     assert_eq!(data_type_for_generator(&date_cfg()), ColumnDataType::Date);
-    assert_eq!(data_type_for_generator(&datetime_cfg()), ColumnDataType::DateTime);
-    assert_eq!(data_type_for_generator(&GeneratorConfig::UuidV4), ColumnDataType::Uuid);
+    assert_eq!(
+        data_type_for_generator(&datetime_cfg()),
+        ColumnDataType::DateTime
+    );
+    assert_eq!(
+        data_type_for_generator(&GeneratorConfig::UuidV4),
+        ColumnDataType::Uuid
+    );
     assert_eq!(
         data_type_for_generator(&GeneratorConfig::Paragraph { count: 2 }),
         ColumnDataType::Text
@@ -5117,7 +5144,9 @@ fn custom_generator_add_dedups_and_filters(cx: &mut TestAppContext) {
             )
             .unwrap();
         assert_eq!(
-            panel.user_generators_in_category(GeneratorCategory::Person).len(),
+            panel
+                .user_generators_in_category(GeneratorCategory::Person)
+                .len(),
             1
         );
         assert_eq!(
@@ -5128,16 +5157,25 @@ fn custom_generator_add_dedups_and_filters(cx: &mut TestAppContext) {
         );
         // 没选业务组的：只挂类型组，不进业务分组
         assert_eq!(
-            panel.user_generators_in_type(&ColumnDataType::Integer).len(),
+            panel
+                .user_generators_in_type(&ColumnDataType::Integer)
+                .len(),
             2,
             "类型组永远挂"
         );
         assert_eq!(
-            panel.user_generators_in_category(GeneratorCategory::Person).len(),
+            panel
+                .user_generators_in_category(GeneratorCategory::Person)
+                .len(),
             1,
             "未选业务组的不进业务分组"
         );
-        assert_eq!(panel.user_generators_in_category(GeneratorCategory::Numeric).len(), 0);
+        assert_eq!(
+            panel
+                .user_generators_in_category(GeneratorCategory::Numeric)
+                .len(),
+            0
+        );
     });
 }
 
@@ -5156,7 +5194,10 @@ fn apply_user_generator_writes_base_and_clears(cx: &mut TestAppContext) {
                 "客户编号",
                 ColumnDataType::Integer,
                 None,
-                GeneratorConfig::AutoIncrement { start: 100, step: 5 },
+                GeneratorConfig::AutoIncrement {
+                    start: 100,
+                    step: 5,
+                },
                 cx,
             )
             .unwrap();
@@ -5165,7 +5206,10 @@ fn apply_user_generator_writes_base_and_clears(cx: &mut TestAppContext) {
         assert!(
             matches!(
                 column.def.generator,
-                GeneratorConfig::AutoIncrement { start: 100, step: 5 }
+                GeneratorConfig::AutoIncrement {
+                    start: 100,
+                    step: 5
+                }
             ),
             "base 配置应整包写回"
         );
@@ -5175,12 +5219,13 @@ fn apply_user_generator_writes_base_and_clears(cx: &mut TestAppContext) {
 
         // 未知 id：no-op，不动已写回配置
         panel.apply_user_generator(id, "不存在", cx);
-        assert!(
-            matches!(
-                panel.draft().columns[0].def.generator,
-                GeneratorConfig::AutoIncrement { start: 100, step: 5 }
-            )
-        );
+        assert!(matches!(
+            panel.draft().columns[0].def.generator,
+            GeneratorConfig::AutoIncrement {
+                start: 100,
+                step: 5
+            }
+        ));
     });
 }
 
@@ -5379,8 +5424,7 @@ fn field_row_library_opens_two_column_with_inspector(cx: &mut TestAppContext) {
     // 仅打开/渲染不应写回列生成器
     panel.update(cx, |panel, _cx| {
         assert_eq!(
-            generator_catalog::spec_of(&panel.draft().columns[0].def.generator)
-                .name,
+            generator_catalog::spec_of(&panel.draft().columns[0].def.generator).name,
             before,
             "打开生成器库对话框不应改动列生成器"
         );
@@ -5539,7 +5583,7 @@ fn search_enter_picks_first_match_for_view(cx: &mut TestAppContext) {
             cx,
         );
     });
-    use super::generator_library::{first_match_for, LibraryView};
+    use super::generator_library::{LibraryView, first_match_for};
     let hit = panel.read_with(cx, |panel, _cx| {
         first_match_for(&LibraryView::Business, "随机", panel)
     });

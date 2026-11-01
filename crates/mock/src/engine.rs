@@ -560,9 +560,7 @@ impl MockEngine {
                     let hit = conn
                         .query_row(&conflict, [], |row| row.get::<_, i32>(0))
                         .map_err(|e| {
-                            MockError::Generation(format!(
-                                "追加冲突预检失败（{col}）：{e}"
-                            ))
+                            MockError::Generation(format!("追加冲突预检失败（{col}）：{e}"))
                         })?;
                     if hit == 1 {
                         return Err(MockError::Generation(format!(
@@ -1256,7 +1254,6 @@ impl MockEngine {
         Self::export(temp_table_name, format, Some(&output_path), None)?;
         Ok(output_path)
     }
-
 }
 
 impl MockEngine {
@@ -1658,7 +1655,8 @@ mod tests {
 
         // Boolean 恒取一侧时只有一个取值
         assert!(
-            unique_capacity_problem(&col(GeneratorConfig::Boolean { ratio: 0 }, 0.0), 100).is_some()
+            unique_capacity_problem(&col(GeneratorConfig::Boolean { ratio: 0 }, 0.0), 100)
+                .is_some()
         );
         // RandomInt 的域是 [min, max] 的整数个数
         assert!(
@@ -1691,8 +1689,18 @@ mod tests {
         );
         // 取值域连续 / 极大的生成器不在这里误伤
         assert!(
-            unique_capacity_problem(&col(GeneratorConfig::RandomFloat { min: 0.0, max: 1.0, precision: 2 }, 0.0), 100_000)
-                .is_none()
+            unique_capacity_problem(
+                &col(
+                    GeneratorConfig::RandomFloat {
+                        min: 0.0,
+                        max: 1.0,
+                        precision: 2
+                    },
+                    0.0
+                ),
+                100_000
+            )
+            .is_none()
         );
         assert!(
             unique_capacity_problem(

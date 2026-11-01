@@ -28,18 +28,17 @@ use crate::rule_view::{RulesEvent, RulesView};
 use crate::service::InsightService;
 use crate::service::rule_trust::RuleTrust;
 
-
 // ==================== 子模块（拆分：按请求职责域下沉，纯位移） ====================
+mod history;
 mod profile;
 mod rules;
 mod table;
-mod history;
 
 // 聚合 re-export：保持 `crate::jobs::*` 路径与外部调用面（workbench `jobs::attach`）不变
+pub use history::*;
 pub use profile::*;
 pub use rules::*;
 pub use table::*;
-pub use history::*;
 
 /// 把面板接上宿主：面板发 `ProfileRequested`，本模块在后台取数后回填。
 ///
@@ -106,10 +105,9 @@ pub fn handle_event(
             table_name.clone(),
             cx,
         ),
-        InsightEvent::ColumnEvaluateRequested {
-            temp_table,
-            column,
-        } => request_column_evaluation(view, project_root, temp_table.clone(), column.clone(), cx),
+        InsightEvent::ColumnEvaluateRequested { temp_table, column } => {
+            request_column_evaluation(view, project_root, temp_table.clone(), column.clone(), cx)
+        }
         InsightEvent::MultiColumnRequested {
             temp_table,
             table_name,
@@ -556,11 +554,7 @@ mod tests {
         // 模拟中断：把 note 列改回未完成 + 灰态（评估取消后 jobs 回填的形态）
         cx.update(|cx| {
             panel.update(cx, |panel, _| {
-                let mut profile = panel
-                    .data
-                    .table
-                    .clone()
-                    .expect("探查后应有画像");
+                let mut profile = panel.data.table.clone().expect("探查后应有画像");
                 if let Some(col) = profile.columns.iter_mut().find(|c| c.name == "note") {
                     col.stats_detail = None;
                     col.interrupted = true;

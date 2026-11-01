@@ -628,9 +628,14 @@ fn multi_tab_shows_sample_guide_without_request_when_no_sample_table(cx: &mut Te
             "insight-multi-need-sample",
         )))
     });
-    assert!(guide.is_none(), "右栏不再渲染多列专门取样引导（聚合占位承担）");
+    assert!(
+        guide.is_none(),
+        "右栏不再渲染多列专门取样引导（聚合占位承担）"
+    );
     let placeholder = cx.update(|window, _| {
-        window.try_find(ElementId::Name(SharedString::from("insight-agg-placeholder")))
+        window.try_find(ElementId::Name(SharedString::from(
+            "insight-agg-placeholder",
+        )))
     });
     assert!(placeholder.is_some(), "多列聚合占位应可见（能力边界）");
 
@@ -1915,20 +1920,14 @@ fn reprobe_keeps_profile_until_table_rebuilt(cx: &mut TestAppContext) {
         view.update(cx, |view, cx| view.open_probe_dialog(target.clone(), cx));
     });
     view.read_with(cx, |view, _| {
-        assert!(
-            view.probe_dialog.is_some(),
-            "重新探查应打开确认窗口（C6）"
-        );
+        assert!(view.probe_dialog.is_some(), "重新探查应打开确认窗口（C6）");
     });
     cx.update(|_window, cx| {
         view.update(cx, |view, cx| view.confirm_probe_dialog(cx));
     });
     view.read_with(cx, |view, _| {
         assert!(view.data.table.is_some(), "R5：确认后旧画像保留（不闪空）");
-        assert!(
-            view.loading_note.is_some(),
-            "重新探查中应显示阶段条说明"
-        );
+        assert!(view.loading_note.is_some(), "重新探查中应显示阶段条说明");
         assert!(view.target().is_some(), "目标保留");
     });
     assert!(

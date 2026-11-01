@@ -38,42 +38,48 @@ impl InsightView {
         // 评估入口（串行逐列；评估中禁用，避免重复排队撞并发上限）+
         // C5 取消入口（评估中显示：停止派发、已完成列保留、未完成列灰态可补算）
         body = body.child(
-            div().h_flex().w_full().gap_2().when(evaluating, |row| {
-                row.child(
-                    Button::new("insight-eval-cancel")
+            div()
+                .h_flex()
+                .w_full()
+                .gap_2()
+                .when(evaluating, |row| {
+                    row.child(
+                        Button::new("insight-eval-cancel")
+                            .small()
+                            .ghost()
+                            .label("取消")
+                            .tooltip("停止评估：已完成列保留，未完成列灰态可补算")
+                            .on_click({
+                                let entity = entity.clone();
+                                move |_, _, app| {
+                                    entity.update(app, |view, cx| view.cancel_table_evaluation(cx))
+                                }
+                            }),
+                    )
+                })
+                .child(div().flex_1())
+                .child(
+                    Button::new("insight-eval-table")
                         .small()
-                        .ghost()
-                        .label("取消")
-                        .tooltip("停止评估：已完成列保留，未完成列灰态可补算")
+                        .icon(if evaluating {
+                            IconName::RotateCw
+                        } else {
+                            IconName::TriangleAlert
+                        })
+                        .label(if evaluating {
+                            "评估中…"
+                        } else {
+                            "评估全表"
+                        })
+                        .disabled(evaluating || profile.columns.is_empty())
+                        .tooltip("逐列串行统计（避免撞后端并发上限），进度会一列列回填")
                         .on_click({
                             let entity = entity.clone();
                             move |_, _, app| {
-                                entity.update(app, |view, cx| view.cancel_table_evaluation(cx))
+                                entity.update(app, |view, cx| view.request_table_evaluation(cx))
                             }
                         }),
-                )
-            }).child(div().flex_1()).child(
-                Button::new("insight-eval-table")
-                    .small()
-                    .icon(if evaluating {
-                        IconName::RotateCw
-                    } else {
-                        IconName::TriangleAlert
-                    })
-                    .label(if evaluating {
-                        "评估中…"
-                    } else {
-                        "评估全表"
-                    })
-                    .disabled(evaluating || profile.columns.is_empty())
-                    .tooltip("逐列串行统计（避免撞后端并发上限），进度会一列列回填")
-                    .on_click({
-                        let entity = entity.clone();
-                        move |_, _, app| {
-                            entity.update(app, |view, cx| view.request_table_evaluation(cx))
-                        }
-                    }),
-            ),
+                ),
         );
 
         // 评估对象提示（建议② / 决策文档 Q1 语义）：评估全表 = 确认窗口生成的表；

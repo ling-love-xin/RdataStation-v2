@@ -27,8 +27,16 @@ fn ui_size_constants_match_design() {
         (INSIGHT_RATIO_BAR_HEIGHT, 6.0, "单条占比条高度"),
         (INSIGHT_INLINE_ICON_SIZE, 14.0, "行内小图标"),
         (INSIGHT_SECTION_TITLE_FONT, 12.0, "分区标题字号"),
-        (INSIGHT_CARD_VALUE_FONT, 28.0, "概览五卡主数值基准字号（设计锚点）"),
-        (INSIGHT_CARD_VALUE_REM, 21.0, "概览五卡主数值实际渲染字号（= 基准 × 缩放）"),
+        (
+            INSIGHT_CARD_VALUE_FONT,
+            28.0,
+            "概览五卡主数值基准字号（设计锚点）",
+        ),
+        (
+            INSIGHT_CARD_VALUE_REM,
+            21.0,
+            "概览五卡主数值实际渲染字号（= 基准 × 缩放）",
+        ),
         (INSIGHT_HEALTH_SCORE_FONT, 36.0, "Schema 健康分字号"),
         (INSIGHT_RULES_DIALOG_WIDTH, 640.0, "规则管理对话框宽度"),
         (INSIGHT_TABLE_INDEX_WIDTH, 20.0, "表探查序号列宽"),
@@ -49,10 +57,18 @@ fn ui_size_constants_match_design() {
         (INSIGHT_CARD_MIN_WIDTH, 176.0, "概览五卡最小宽度"),
         (INSIGHT_SET_LIST_MAX_HEIGHT, 288.0, "右栏集合列表最大高度"),
         (INSIGHT_WS_CHIP_MAX_WIDTH, 224.0, "工具栏目标 chip 最大宽度"),
-        (INSIGHT_WS_TABLE_COL_MIN_WIDTH, 96.0, "对比表「表」列最小宽度"),
+        (
+            INSIGHT_WS_TABLE_COL_MIN_WIDTH,
+            96.0,
+            "对比表「表」列最小宽度",
+        ),
         (INSIGHT_WS_CHECKBOX_WIDTH, 20.0, "对比候选表勾选框占位列宽"),
         (INSIGHT_WS_RESULT_MIN_WIDTH, 588.0, "对比结果表最小内容宽度"),
-        (INSIGHT_WS_CANDIDATE_MIN_WIDTH, 424.0, "对比候选表最小内容宽度"),
+        (
+            INSIGHT_WS_CANDIDATE_MIN_WIDTH,
+            424.0,
+            "对比候选表最小内容宽度",
+        ),
     ];
 
     for (ratio, expected_px, label) in cases {

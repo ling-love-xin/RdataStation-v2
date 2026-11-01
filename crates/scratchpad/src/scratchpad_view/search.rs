@@ -76,7 +76,6 @@ pub(super) fn search_view_from_payload(
     }
 }
 
-
 /// 冲突 Diff 面板（中央编辑区）：左=磁盘 / 右=编辑器缓冲，逐行标行号与增删。
 ///
 /// 与搜索结果面板同一投影：草稿箱只投载荷（`ScratchpadHost::show_diff`），渲染在编辑区。
@@ -182,7 +181,10 @@ pub fn render_scratchpad_file_info_pane(
             .and_then(scratchpad_absolute_time)
             .unwrap_or_else(|| "—".to_string())
     };
-    let db = view.db_connection.clone().unwrap_or_else(|| "—".to_string());
+    let db = view
+        .db_connection
+        .clone()
+        .unwrap_or_else(|| "—".to_string());
 
     let rows = [
         ("类型", view.kind_label.clone()),
@@ -209,7 +211,13 @@ pub fn render_scratchpad_file_info_pane(
                 .gap_2()
                 .w_full()
                 .text_xs()
-                .child(div().flex_none().w(rems(4.5)).text_color(muted).child(label))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(rems(4.5))
+                        .text_color(muted)
+                        .child(label),
+                )
                 .child(div().flex_1().min_w_0().text_color(fg).child(value)),
         );
     }
@@ -225,4 +233,3 @@ pub(super) fn scratchpad_diff_marker(kind: DiffLineKind) -> &'static str {
         DiffLineKind::Unchanged => " ",
     }
 }
-

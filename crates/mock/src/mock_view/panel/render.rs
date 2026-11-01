@@ -323,7 +323,11 @@ impl MockPanel {
     /// 为何是固定档而不是输入框：行数是**重查代价**的旋钮（`LIMIT N`），档位够用就不必解析输入、
     /// 也不必管非法值；同时把「预览多少行」放到看得见的地方（生成时只读 [`PREVIEW_ROWS`] 行，
     /// 想要更多是**重查**临时表，不是就地多显示几行）。
-    pub(crate) fn render_preview_limit_menu(&self, key: &str, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_preview_limit_menu(
+        &self,
+        key: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let entity = cx.entity();
         let current = self.preview_limit;
         Button::new(format!("mock-preview-limit-{key}"))
@@ -402,17 +406,16 @@ impl MockPanel {
                         for preset in items {
                             let entity = entity.clone();
                             let id = preset.id;
-                            menu = menu.item(
-                                PopupMenuItem::new(preset.label)
-                                    .on_click(move |_, _, app| {
-                                        let Some(preset) = preset_by_id(id) else {
-                                            return;
-                                        };
-                                        entity.update(app, |panel, cx| {
-                                            panel.add_preset_column(&preset, cx);
-                                        });
-                                    }),
-                            );
+                            menu = menu.item(PopupMenuItem::new(preset.label).on_click(
+                                move |_, _, app| {
+                                    let Some(preset) = preset_by_id(id) else {
+                                        return;
+                                    };
+                                    entity.update(app, |panel, cx| {
+                                        panel.add_preset_column(&preset, cx);
+                                    });
+                                },
+                            ));
                         }
                     }
                     menu
@@ -451,9 +454,11 @@ impl MockPanel {
         // 搜索词只影响显示，不影响下标语义（index 仍是 results 里的真实位置）。
         let search = self.search_input.clone();
         list = list.child(
-            div()
-                .w_full()
-                .child(search.map(|input| div().child(Input::new(&input))).unwrap_or_else(|| div())),
+            div().w_full().child(
+                search
+                    .map(|input| div().child(Input::new(&input)))
+                    .unwrap_or_else(|| div()),
+            ),
         );
         let query = self
             .search_input
@@ -620,7 +625,11 @@ impl MockPanel {
                 )
             };
             list = list.child(
-                div().text_xs().text_color(muted).text_ellipsis().child(heading),
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .text_ellipsis()
+                    .child(heading),
             );
             let relations = relations_of(&template);
             for table in template.tables.iter() {
@@ -809,9 +818,7 @@ impl MockPanel {
                 format!("生成中 {:.0}%", self.job_percent()),
                 primary,
             ),
-            TableStatus::Persisted => {
-                (Some(IconName::CircleCheck), "已落库".to_string(), success)
-            }
+            TableStatus::Persisted => (Some(IconName::CircleCheck), "已落库".to_string(), success),
             TableStatus::NotPersisted => (Some(IconName::Check), "已生成".to_string(), success),
             TableStatus::DanglingParent => {
                 (Some(IconName::Info), "引用的表未落库".to_string(), warning)
@@ -974,8 +981,7 @@ impl MockPanel {
                                 // 点生成 = 这一轮数据重新验收：先清掉上一轮残留的搜索过滤，
                                 // 免得新清单被旧关键词挡住（曾误判「只生成了一张表」）
                                 if let Some(search) = panel.search_input.clone() {
-                                    search
-                                        .update(cx, |state, cx| state.set_value("", window, cx));
+                                    search.update(cx, |state, cx| state.set_value("", window, cx));
                                 }
                                 panel.run_scenario(cx);
                             });
@@ -987,7 +993,12 @@ impl MockPanel {
                 let seed_box = self
                     .scenario_seed_input
                     .clone()
-                    .map(|input| div().w(rems(ui::NUM_INPUT_WIDTH)).flex_none().child(Input::new(&input)))
+                    .map(|input| {
+                        div()
+                            .w(rems(ui::NUM_INPUT_WIDTH))
+                            .flex_none()
+                            .child(Input::new(&input))
+                    })
                     .unwrap_or_else(|| div().flex_none());
                 let exit = {
                     let entity = cx.entity();
@@ -1140,7 +1151,13 @@ impl MockPanel {
                                 .child(main),
                         ),
                 )
-                .content(move |_, _, _cx| div().p_2().text_xs().max_w(ui::STATUS_TOOLTIP_MAX_WIDTH).child(detail))
+                .content(move |_, _, _cx| {
+                    div()
+                        .p_2()
+                        .text_xs()
+                        .max_w(ui::STATUS_TOOLTIP_MAX_WIDTH)
+                        .child(detail)
+                })
         };
 
         div()
@@ -1161,7 +1178,12 @@ impl MockPanel {
     /// 单表出口（落库 / 追加 / 草稿箱 / 另存为 + 就地反馈）：作用于「当前 tab 那张表」，
     /// 随表上移中央详情 tab（生成 → 落地闭环，2026-10-31）；右面板只留集合级出口。
     /// `window` 仅透传给「另存为」的系统保存对话框（下拉项闭包自取，无需本函数直接使用）。
-    pub(crate) fn render_sinks(&self, key: &str, _window: &mut Window, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn render_sinks(
+        &self,
+        key: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let muted = cx.theme().colors.muted_foreground;
         let success = cx.theme().colors.success;
         let danger = cx.theme().colors.danger;
@@ -1355,31 +1377,27 @@ impl MockPanel {
                     if sources.is_empty() {
                         let entity = entity.clone();
                         menu = menu.item(PopupMenuItem::new("（暂无数据源）").disabled(true));
-                        return menu.item(
-                            PopupMenuItem::new("在对话框里选择连接…").on_click(
-                                move |_, window, app| {
-                                    let entity = entity.clone();
-                                    entity.update(app, |panel, cx| {
-                                        panel.open_import_dialog(window, cx);
-                                    });
-                                },
-                            ),
-                        );
+                        return menu.item(PopupMenuItem::new("在对话框里选择连接…").on_click(
+                            move |_, window, app| {
+                                let entity = entity.clone();
+                                entity.update(app, |panel, cx| {
+                                    panel.open_import_dialog(window, cx);
+                                });
+                            },
+                        ));
                     }
                     for source in sources.iter() {
                         let entity = entity.clone();
                         let conn_id = source.conn_id.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(source.label.clone()).on_click(
-                                move |_, window, app| {
-                                    let entity = entity.clone();
-                                    let conn_id = conn_id.clone();
-                                    entity.update(app, |panel, cx| {
-                                        panel.open_import_for(&conn_id, window, cx);
-                                    });
-                                },
-                            ),
-                        );
+                        menu = menu.item(PopupMenuItem::new(source.label.clone()).on_click(
+                            move |_, window, app| {
+                                let entity = entity.clone();
+                                let conn_id = conn_id.clone();
+                                entity.update(app, |panel, cx| {
+                                    panel.open_import_for(&conn_id, window, cx);
+                                });
+                            },
+                        ));
                     }
                     menu
                 })
@@ -1566,7 +1584,9 @@ impl MockPanel {
                                 .child(Icon::new(IconName::Folder).size(rems(ui::PANEL_ICON_SIZE))),
                         )
                         .title(EmptyTitle::new().child("还没有保存的模板"))
-                        .description(EmptyDescription::new().child("把当前列配置存下来，下次一键套用")),
+                        .description(
+                            EmptyDescription::new().child("把当前列配置存下来，下次一键套用"),
+                        ),
                 ),
             );
         }
@@ -1714,10 +1734,14 @@ impl MockPanel {
                             .media(
                                 EmptyMedia::new()
                                     .with_variant(EmptyMediaVariant::Icon)
-                                    .child(Icon::new(IconName::Inbox).size(rems(ui::PANEL_ICON_SIZE))),
+                                    .child(
+                                        Icon::new(IconName::Inbox).size(rems(ui::PANEL_ICON_SIZE)),
+                                    ),
                             )
                             .title(EmptyTitle::new().child("还没有生成记录"))
-                            .description(EmptyDescription::new().child("跑一次生成后，记录会出现在这里")),
+                            .description(
+                                EmptyDescription::new().child("跑一次生成后，记录会出现在这里"),
+                            ),
                     ),
                 );
             }
@@ -1919,12 +1943,7 @@ impl MockPanel {
     /// ⇄ 连接菜单选中：记下连接后直接进导入对话框（库 / schema 由对话框按连接记录预填，
     /// 见 [`Self::open_import_dialog`] 的 `panel_match` 分支）——对应原型 conn-pop 的
     /// 「选一个连接读它的库表结构」。
-    pub fn open_import_for(
-        &mut self,
-        conn_id: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn open_import_for(&mut self, conn_id: &str, window: &mut Window, cx: &mut Context<Self>) {
         *self.import_conn.borrow_mut() = Some(conn_id.to_string());
         self.open_import_dialog(window, cx);
     }
@@ -2100,7 +2119,11 @@ impl MockPanel {
 }
 
 /// 表单行（标签 + 输入）。
-pub(crate) fn form_line(theme: &gpui_kit::component::Theme, label: &str, input: &Entity<InputState>) -> Div {
+pub(crate) fn form_line(
+    theme: &gpui_kit::component::Theme,
+    label: &str,
+    input: &Entity<InputState>,
+) -> Div {
     div()
         .h_flex()
         .items_center()
@@ -2180,4 +2203,3 @@ impl Render for MockPanel {
             )
     }
 }
-

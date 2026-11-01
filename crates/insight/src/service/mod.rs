@@ -41,7 +41,9 @@ pub(crate) use crate::rule::RuleScope;
 pub(crate) use crate::rule_types::RuleMeta;
 pub(crate) use crate::rule_view::{RuleDataInput, RulesData, build_rules_data};
 pub(crate) use crate::schema_view::SchemaReportView;
-pub(crate) use crate::service::indexer::{RuleIndexStore, SyncOutcome, rule_dir, sync_project_rules};
+pub(crate) use crate::service::indexer::{
+    RuleIndexStore, SyncOutcome, rule_dir, sync_project_rules,
+};
 pub(crate) use crate::service::rule_trust::RuleTrust;
 pub(crate) use crate::{ExecutionResult, with_rules};
 
@@ -107,14 +109,12 @@ impl InsightService {
     }
 }
 
-
 // ==================== InsightService 方法按职责域下沉（纯位移） ====================
-mod sampling;
 mod analyze;
 mod rules;
+mod sampling;
 
 impl InsightService {
-
     /// 错误 → 面板可展示的语义（文案 + 是否可重试）。
     ///
     /// 识别方式是**按消息内容**匹配：引擎侧的 DuckDB 错误还没有结构化分类，

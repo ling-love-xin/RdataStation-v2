@@ -55,7 +55,9 @@ use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::collapsible::Collapsible;
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
-use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle};
+use gpui_kit::component::empty::{
+    Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
+};
 use gpui_kit::component::hover_card::HoverCard;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
@@ -65,10 +67,10 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::tag::Tag;
 use gpui_kit::component::table::{
     Column, ColumnSort, DataTable, TableDelegate, TableEvent, TableState,
 };
+use gpui_kit::component::tag::Tag;
 use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -125,10 +127,10 @@ pub(crate) use generator_search::{GeneratorSearchDelegate, column_matches};
 pub(crate) use panel::{complex_form_line, form_line};
 pub(crate) use pure::{
     COLUMN_TYPES, FILE_FORMATS, LOCALES, PREVIEW_LIMIT_CHOICES, PREVIEW_ROWS, RECENT_GENERATORS,
-    column_type_label, complex_param_hint, complex_param_text, default_generator_for,
-    locale_label, mock_file_name, new_column_spec, param_text, parse_complex_param,
-    parse_percent_ratio, parse_rows, parse_seed, patch_param, patch_param_value, summarize_params,
-    validate_table_name, with_thousands,
+    column_type_label, complex_param_hint, complex_param_text, default_generator_for, locale_label,
+    mock_file_name, new_column_spec, param_text, parse_complex_param, parse_percent_ratio,
+    parse_rows, parse_seed, patch_param, patch_param_value, summarize_params, validate_table_name,
+    with_thousands,
 };
 
 // ---- 仅供测试引用的 re-export（`super::X` 路径只在 `#[cfg(test)]` 的 tests.rs 出现，
@@ -139,8 +141,8 @@ pub(crate) use detail::{ParamWidget, PreviewSnapshot, PreviewTableDelegate};
 pub(crate) use generator_search::search_generators;
 #[cfg(test)]
 pub(crate) use panel::{
-    HistoryReply, JobRowScope, RelationPick, ScenarioRelation, TableStatus, builtin_scenario_choices,
+    HistoryReply, JobRowScope, RelationPick, ScenarioRelation, TableStatus,
+    builtin_scenario_choices,
 };
 #[cfg(test)]
 pub(crate) use pure::work_week_text;
-

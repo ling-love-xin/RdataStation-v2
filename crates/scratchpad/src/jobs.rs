@@ -81,7 +81,10 @@ pub enum OpResult {
     /// 导入外部文件（复制进模块根）。
     Import { outcome: Result<(), String> },
     /// 粘贴（剪切 = 移动，复制 = 递归复制）。
-    Paste { cut: bool, outcome: Result<(), String> },
+    Paste {
+        cut: bool,
+        outcome: Result<(), String>,
+    },
     /// 清空回收站。
     EmptyTrash { outcome: Result<(), String> },
     /// 内容搜索 / 替换后刷新（`replaced` 非空表示本次由替换发起）。
@@ -118,7 +121,10 @@ enum Job {
     /// 硬塞进同一个载荷会让两边都得处理对方的字段。
     FlattenFiles { project_root: PathBuf },
     /// 导入外部文件（逐个复制进模块根）。
-    Import { project_root: PathBuf, paths: Vec<PathBuf> },
+    Import {
+        project_root: PathBuf,
+        paths: Vec<PathBuf>,
+    },
     /// 粘贴（`cut = true` 走 `move_entry`，否则走递归 `copy_entry`）。
     Paste {
         project_root: PathBuf,
@@ -328,9 +334,7 @@ fn worker(rx: mpsc::Receiver<Job>) {
                         });
                         shared().pending_ops.fetch_sub(1, Ordering::SeqCst);
                     }
-                    Job::Diff {
-                        relative_path, ..
-                    } => {
+                    Job::Diff { relative_path, .. } => {
                         lock(&shared().op_results).push(OpResult::Diff {
                             relative_path,
                             outcome: Err(unavailable),
@@ -355,11 +359,11 @@ fn worker(rx: mpsc::Receiver<Job>) {
                     if let Err(e) = store.ensure_dir().await {
                         return Err(e.to_string());
                     }
-                    let entries = store.list_local_entries(0).await.map_err(|e| e.to_string())?;
-                    let refs = store
-                        .external_reference_status()
+                    let entries = store
+                        .list_local_entries(0)
                         .await
-                        .unwrap_or_default();
+                        .map_err(|e| e.to_string())?;
+                    let refs = store.external_reference_status().await.unwrap_or_default();
                     let trash = store.list_trash().await.unwrap_or_default();
                     let mut children: Vec<(String, Vec<ScratchpadEntry>)> = Vec::new();
                     for parent in parents {
@@ -464,16 +468,12 @@ fn worker(rx: mpsc::Receiver<Job>) {
                     }
                     Ok(())
                 });
-                lock(&shared()
-                    .op_results)
-                    .push(OpResult::Paste { cut, outcome });
+                lock(&shared().op_results).push(OpResult::Paste { cut, outcome });
                 shared().pending_ops.fetch_sub(1, Ordering::SeqCst);
             }
             Job::EmptyTrash { project_root } => {
                 let store = ScratchpadStore::new(project_root);
-                let outcome = rt
-                    .block_on(store.empty_trash())
-                    .map_err(|e| e.to_string());
+                let outcome = rt.block_on(store.empty_trash()).map_err(|e| e.to_string());
                 lock(&shared().op_results).push(OpResult::EmptyTrash { outcome });
                 shared().pending_ops.fetch_sub(1, Ordering::SeqCst);
             }
@@ -680,10 +680,7 @@ fn worker(rx: mpsc::Receiver<Job>) {
                             .into_iter()
                             .map(search_match_to_payload)
                             .collect(),
-                        replaced: Some((
-                            r.replaced,
-                            usize::from(r.replaced > 0),
-                        )),
+                        replaced: Some((r.replaced, usize::from(r.replaced > 0))),
                     })
                 });
                 let replaced = match &outcome {
@@ -938,10 +935,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "rds_sp_jobs_{tag}_{}_{unique}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("rds_sp_jobs_{tag}_{}_{unique}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp project");
         dir
     }
@@ -981,7 +976,8 @@ mod tests {
         let project = temp_project("root");
         let store = ScratchpadStore::new(project.clone());
         let rt = rt();
-        rt.block_on(store.create_entry("a.sql", None, false)).unwrap();
+        rt.block_on(store.create_entry("a.sql", None, false))
+            .unwrap();
         rt.block_on(store.create_entry("data", None, true)).unwrap();
         // 先建文件：`save_file` 走 `resolve_path(必须已存在)`，它改的是既有文件的内容。
         rt.block_on(store.create_entry("b.csv", Some("data"), false))
@@ -1018,11 +1014,14 @@ mod tests {
         let project = temp_project("flat");
         let store = ScratchpadStore::new(project.clone());
         let rt = rt();
-        rt.block_on(store.create_entry("z_last.sql", None, false)).unwrap();
-        rt.block_on(store.create_entry("notes", None, true)).unwrap();
+        rt.block_on(store.create_entry("z_last.sql", None, false))
+            .unwrap();
+        rt.block_on(store.create_entry("notes", None, true))
+            .unwrap();
         rt.block_on(store.create_entry("a.md", Some("notes"), false))
             .unwrap();
-        rt.block_on(store.save_file("notes/a.md", "# 笔记")).unwrap();
+        rt.block_on(store.save_file("notes/a.md", "# 笔记"))
+            .unwrap();
 
         enqueue_flatten_files(&project);
         assert!(has_pending_file_list(), "入队后应有在途清单");
@@ -1051,7 +1050,9 @@ mod tests {
         });
         assert!(failed.files.is_none(), "读盘失败应回传 None 而不是空清单");
 
-        wait_for("清单待办清零", || (!has_pending_file_list()).then_some(()));
+        wait_for("清单待办清零", || {
+            (!has_pending_file_list()).then_some(())
+        });
         std::fs::remove_dir_all(&project).ok();
     }
 
@@ -1062,23 +1063,41 @@ mod tests {
         let store = ScratchpadStore::new(project.clone());
         let rt = rt();
         rt.block_on(store.create_entry("dir", None, true)).unwrap();
-        rt.block_on(store.create_entry("a.sql", None, false)).unwrap();
+        rt.block_on(store.create_entry("a.sql", None, false))
+            .unwrap();
         rt.block_on(store.save_file("a.sql", "select 1")).unwrap();
 
         // 复制：
         enqueue_paste(&project, false, vec!["a.sql".to_string()], "dir");
         wait_for("复制结果", || {
-            matches!(drain_ops().as_slice(), [OpResult::Paste { outcome: Ok(()), .. }]).then_some(())
+            matches!(
+                drain_ops().as_slice(),
+                [OpResult::Paste {
+                    outcome: Ok(()),
+                    ..
+                }]
+            )
+            .then_some(())
         });
         assert!(project.join("scratchpad/dir/a_copy.sql").is_file());
 
         // 剪切：原位置应消失。
         enqueue_paste(&project, true, vec!["a.sql".to_string()], "dir");
         wait_for("剪切结果", || {
-            matches!(drain_ops().as_slice(), [OpResult::Paste { cut: true, outcome: Ok(()), .. }])
-                .then_some(())
+            matches!(
+                drain_ops().as_slice(),
+                [OpResult::Paste {
+                    cut: true,
+                    outcome: Ok(()),
+                    ..
+                }]
+            )
+            .then_some(())
         });
-        assert!(!project.join("scratchpad/a.sql").exists(), "剪切后原文件应已移走");
+        assert!(
+            !project.join("scratchpad/a.sql").exists(),
+            "剪切后原文件应已移走"
+        );
         assert!(project.join("scratchpad/dir/a.sql").is_file());
 
         std::fs::remove_dir_all(&project).ok();
@@ -1094,9 +1113,16 @@ mod tests {
 
         enqueue_import(&project, vec![source.clone()]);
         wait_for("导入结果", || {
-            matches!(drain_ops().as_slice(), [OpResult::Import { outcome: Ok(()) }]).then_some(())
+            matches!(
+                drain_ops().as_slice(),
+                [OpResult::Import { outcome: Ok(()) }]
+            )
+            .then_some(())
         });
-        assert!(project.join("scratchpad/raw.csv").is_file(), "导入应复制进模块根");
+        assert!(
+            project.join("scratchpad/raw.csv").is_file(),
+            "导入应复制进模块根"
+        );
 
         // 删一个文件入回收站，再清空。
         let store = ScratchpadStore::new(project.clone());
@@ -1105,8 +1131,11 @@ mod tests {
         assert_eq!(rt.block_on(store.list_trash()).unwrap().len(), 1);
         enqueue_empty_trash(&project);
         wait_for("清空回收站结果", || {
-            matches!(drain_ops().as_slice(), [OpResult::EmptyTrash { outcome: Ok(()) }])
-                .then_some(())
+            matches!(
+                drain_ops().as_slice(),
+                [OpResult::EmptyTrash { outcome: Ok(()) }]
+            )
+            .then_some(())
         });
         assert!(rt.block_on(store.list_trash()).unwrap().is_empty());
 
@@ -1120,7 +1149,8 @@ mod tests {
         let project = temp_project("replace");
         let store = ScratchpadStore::new(project.clone());
         let rt = rt();
-        rt.block_on(store.create_entry("a.sql", None, false)).unwrap();
+        rt.block_on(store.create_entry("a.sql", None, false))
+            .unwrap();
         rt.block_on(store.save_file("a.sql", "select ID from t\nselect id from t\n"))
             .unwrap();
 
@@ -1140,7 +1170,9 @@ mod tests {
         assert!(payload.replaced.is_none(), "搜索任务不带替换汇总");
 
         // 替换：一次任务内完成写回 + 重搜（替换后不应再有命中）。
-        enqueue_replace_all(&project, "id", "key", false, false, false, false, None, None);
+        enqueue_replace_all(
+            &project, "id", "key", false, false, false, false, None, None,
+        );
         let payload = wait_for("替换结果", || {
             drain_ops().into_iter().find_map(|r| match r {
                 OpResult::Search {
@@ -1179,8 +1211,7 @@ mod tests {
         let kids = result.result.expect("子目录列表应成功");
         assert_eq!(kids.len(), 2);
         assert!(
-            kids.iter().any(|k| k.name == "sub")
-                && kids.iter().any(|k| k.name == "x.sql"),
+            kids.iter().any(|k| k.name == "sub") && kids.iter().any(|k| k.name == "x.sql"),
             "应回传该目录的直接子项"
         );
 

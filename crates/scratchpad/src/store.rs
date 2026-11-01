@@ -710,9 +710,8 @@ impl ScratchpadStore {
                 tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
                     if old_sidecar.exists() && !new_sidecar.exists() {
                         if let Some(parent) = new_sidecar.parent() {
-                            std::fs::create_dir_all(parent).map_err(|e| {
-                                io_err(parent, "create_sidecar_dir", e.to_string())
-                            })?;
+                            std::fs::create_dir_all(parent)
+                                .map_err(|e| io_err(parent, "create_sidecar_dir", e.to_string()))?;
                         }
                         std::fs::rename(&old_sidecar, &new_sidecar)
                             .map_err(|e| io_err(&old_sidecar, "rename_meta", e.to_string()))?;
@@ -1146,7 +1145,13 @@ impl ScratchpadStore {
             Ok(Some(FileMeta::from_file_meta(&fm)))
         })
         .await
-        .map_err(|e| io_err(&self.sidecar_path(relative_path), "spawn_blocking", e.to_string()))?
+        .map_err(|e| {
+            io_err(
+                &self.sidecar_path(relative_path),
+                "spawn_blocking",
+                e.to_string(),
+            )
+        })?
     }
 
     /// read-modify-write：读全量 sidecar（无则默认）→ `f` 只改调用方关心的字段 → 写回。
@@ -1168,7 +1173,13 @@ impl ScratchpadStore {
             Ok(())
         })
         .await
-        .map_err(|e| io_err(&self.sidecar_path(relative_path), "spawn_blocking", e.to_string()))?
+        .map_err(|e| {
+            io_err(
+                &self.sidecar_path(relative_path),
+                "spawn_blocking",
+                e.to_string(),
+            )
+        })?
     }
 
     /// 删除某文件的 sidecar（快照语义：源文件离开草稿箱时清理；回收站还原不恢复连接预选）。
@@ -1182,7 +1193,13 @@ impl ScratchpadStore {
             Ok(())
         })
         .await
-        .map_err(|e| io_err(&self.sidecar_path(relative_path), "spawn_blocking", e.to_string()))?
+        .map_err(|e| {
+            io_err(
+                &self.sidecar_path(relative_path),
+                "spawn_blocking",
+                e.to_string(),
+            )
+        })?
     }
 
     /// 绑定文件使用的数据源（仅存连接 ID，不落凭据）。
@@ -1461,9 +1478,8 @@ impl ScratchpadStore {
                 tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
                     if old_sidecar.exists() && !new_sidecar.exists() {
                         if let Some(parent) = new_sidecar.parent() {
-                            std::fs::create_dir_all(parent).map_err(|e| {
-                                io_err(parent, "create_sidecar_dir", e.to_string())
-                            })?;
+                            std::fs::create_dir_all(parent)
+                                .map_err(|e| io_err(parent, "create_sidecar_dir", e.to_string()))?;
                         }
                         std::fs::rename(&old_sidecar, &new_sidecar)
                             .map_err(|e| io_err(&old_sidecar, "move_meta", e.to_string()))?;
@@ -1764,7 +1780,11 @@ fn preserve_case_transform(hit: &str, replacement: &str) -> String {
         // 全大写（如 `FOO` / `FOO_BAR`）
         replacement.to_uppercase()
     } else if hit_has_upper
-        && hit.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+        && hit
+            .chars()
+            .next()
+            .map(|c| c.is_uppercase())
+            .unwrap_or(false)
         && hit.chars().skip(1).all(|c| !c.is_uppercase())
     {
         // 首字母大写、其余小写（如 `Foo`）——只对「其余全小写」的命中做首字母转换，
@@ -1904,7 +1924,9 @@ impl ScratchpadStore {
     }
 
     /// 全部草稿条目的活跃标签（一次查全，列表标签筛选的数据源；键 = 模块内相对路径）。
-    pub fn tags_by_entry(&self) -> Result<std::collections::HashMap<String, Vec<tag::Tag>>, CoreError> {
+    pub fn tags_by_entry(
+        &self,
+    ) -> Result<std::collections::HashMap<String, Vec<tag::Tag>>, CoreError> {
         let table = self.project_tags()?;
         let mut stmt = table
             .conn()
@@ -2170,7 +2192,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            store.file_meta("q.sql").await.unwrap().preferred_connection(),
+            store
+                .file_meta("q.sql")
+                .await
+                .unwrap()
+                .preferred_connection(),
             Some("P_1")
         );
 
@@ -2211,17 +2237,23 @@ mod tests {
 
         assert_eq!(result.left_label, "磁盘");
         assert_eq!(result.right_label, "编辑器");
-        assert!(result.lines.iter().any(|l| {
-            l.kind == DiffLineKind::Unchanged && l.content.trim_end() == "select 1"
-        }));
-        assert!(result
-            .lines
-            .iter()
-            .any(|l| l.kind == DiffLineKind::Removed && l.content.contains("select 2")));
-        assert!(result
-            .lines
-            .iter()
-            .any(|l| l.kind == DiffLineKind::Added && l.content.contains("select 3")));
+        assert!(
+            result.lines.iter().any(|l| {
+                l.kind == DiffLineKind::Unchanged && l.content.trim_end() == "select 1"
+            })
+        );
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|l| l.kind == DiffLineKind::Removed && l.content.contains("select 2"))
+        );
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|l| l.kind == DiffLineKind::Added && l.content.contains("select 3"))
+        );
 
         // 两侧行号各自编号：新增行没有左侧行号，删除行没有右侧行号。
         let added = result
@@ -2287,7 +2319,10 @@ mod tests {
 
         let targets = store.draft_targets([
             (module.join("q.sql"), Some("P_1".to_string())),
-            (project.join("resources").join("r.sql"), Some("P_9".to_string())),
+            (
+                project.join("resources").join("r.sql"),
+                Some("P_9".to_string()),
+            ),
             (module.join("sub").join("a.sql"), None),
         ]);
 
@@ -2356,20 +2391,22 @@ mod tests {
         std::fs::remove_dir_all(&project).ok();
     }
 
-
     #[tokio::test]
     async fn copy_entry_recurses_and_avoids_name_collisions() {
         let project = temp_project("copy");
         let store = ScratchpadStore::new(project.clone());
         store.ensure_dir().await.unwrap();
         store.create_entry("dir", None, true).await.unwrap();
-        store.create_entry("a.sql", Some("dir"), false).await.unwrap();
         store
-            .save_file("dir/a.sql", "select 1")
+            .create_entry("a.sql", Some("dir"), false)
             .await
             .unwrap();
+        store.save_file("dir/a.sql", "select 1").await.unwrap();
         store.create_entry("sub", Some("dir"), true).await.unwrap();
-        store.create_entry("b.txt", Some("dir/sub"), false).await.unwrap();
+        store
+            .create_entry("b.txt", Some("dir/sub"), false)
+            .await
+            .unwrap();
         store.save_file("dir/sub/b.txt", "hi").await.unwrap();
 
         // 复制到模块根：同名再复制一次 → `dir_copy` → `dir_copy_1`。
@@ -2402,7 +2439,12 @@ mod tests {
             "select 2"
         );
         store.copy_entry("root.sql", "").await.unwrap();
-        assert!(project.join(MODULE_DIR_NAME).join("root_copy.sql").is_file());
+        assert!(
+            project
+                .join(MODULE_DIR_NAME)
+                .join("root_copy.sql")
+                .is_file()
+        );
 
         std::fs::remove_dir_all(&project).ok();
     }
@@ -2425,7 +2467,10 @@ mod tests {
             .unwrap();
         assert_eq!(r.replaced, 2);
         let content = store.read_file("a.sql").await.unwrap();
-        assert!(content.contains("select $key"), "字面量替换不解析 `$`：{content}");
+        assert!(
+            content.contains("select $key"),
+            "字面量替换不解析 `$`：{content}"
+        );
 
         // 区分大小写：仅匹配大写。
         let r = store
@@ -2435,7 +2480,10 @@ mod tests {
         assert_eq!(r.replaced, 0, "区分大小写时不应命中 `$key`");
 
         // 正则分组引用。
-        store.save_file("a.sql", "select a1, a2 from t\n").await.unwrap();
+        store
+            .save_file("a.sql", "select a1, a2 from t\n")
+            .await
+            .unwrap();
         let r = store
             .replace_in_file("a.sql", "a([0-9])", "col_$1", true, true, false, false)
             .await
@@ -2471,9 +2519,18 @@ mod tests {
             .unwrap();
         assert_eq!(r.replaced, 5, "SELECT/FROM/select/from/Select 共 5 处命中");
         let content = store.read_file("a.sql").await.unwrap();
-        assert!(content.contains("INTO id INTO t"), "全大写命中应全大写：{content}");
-        assert!(content.contains("into id into t"), "小写命中应原样：{content}");
-        assert!(content.contains("Into x"), "首字母大写命中应首字母大写：{content}");
+        assert!(
+            content.contains("INTO id INTO t"),
+            "全大写命中应全大写：{content}"
+        );
+        assert!(
+            content.contains("into id into t"),
+            "小写命中应原样：{content}"
+        );
+        assert!(
+            content.contains("Into x"),
+            "首字母大写命中应首字母大写：{content}"
+        );
 
         // 混合形态（SeLeCt）保持原样。
         store.save_file("a.sql", "SeLeCt 1\n").await.unwrap();
@@ -2493,7 +2550,15 @@ mod tests {
         // 不存在则展开为空），故分组引用后接普通字符需用 `${1}` 花括号形式。
         store.save_file("a.sql", "col_A1\n").await.unwrap();
         let r = store
-            .replace_in_file("a.sql", "col_([A-Z])[0-9]", "x_${1}_y", true, true, false, true)
+            .replace_in_file(
+                "a.sql",
+                "col_([A-Z])[0-9]",
+                "x_${1}_y",
+                true,
+                true,
+                false,
+                true,
+            )
             .await
             .unwrap();
         assert_eq!(r.replaced, 1);
@@ -2518,7 +2583,6 @@ mod tests {
         std::fs::remove_dir_all(&project).ok();
     }
 
-
     #[tokio::test]
     async fn external_reference_relink_updates_path_only() {
         let project = temp_project("ref_relink");
@@ -2542,7 +2606,12 @@ mod tests {
         assert_eq!(status.alias, "数据", "重新引用只改路径，不改别名");
         assert_eq!(status.path, new_path);
         // 旧路径变成“已存在”（仅路径替换，未知足切换）
-        assert!(store.update_external_reference_path("不存在", new_path).await.is_err());
+        assert!(
+            store
+                .update_external_reference_path("不存在", new_path)
+                .await
+                .is_err()
+        );
 
         std::fs::remove_dir_all(&project).ok();
     }

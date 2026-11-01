@@ -480,13 +480,11 @@ impl InsightWorkspacePanel {
                             .ghost()
                             .icon(IconName::Close)
                             .on_click(move |_, _, app| {
-                                let _ =
-                                    w_close.update(app, |panel, cx| panel.close_opened(ix, cx));
+                                let _ = w_close.update(app, |panel, cx| panel.close_opened(ix, cx));
                             }),
                     )
                     .on_click(move |_, _, app| {
-                        let _ =
-                            w_activate.update(app, |panel, cx| panel.activate_opened(ix, cx));
+                        let _ = w_activate.update(app, |panel, cx| panel.activate_opened(ix, cx));
                     })
             }))
             .when_some(current_ix, |bar, ix| bar.selected_index(ix))
@@ -496,9 +494,9 @@ impl InsightWorkspacePanel {
                     .icon(IconName::Plus)
                     .on_click(move |_, _, app| {
                         let _ = weak.update(app, |panel, cx| {
-                            panel.insight_view().update(cx, |_view, cx| {
-                                cx.emit(InsightEvent::NewInsightRequested)
-                            })
+                            panel
+                                .insight_view()
+                                .update(cx, |_view, cx| cx.emit(InsightEvent::NewInsightRequested))
                         });
                     }),
             )
@@ -854,7 +852,8 @@ mod tests {
     ) {
         panel.update(cx, |p, cx| p.open_target(target, cx));
         panel.update(cx, |p, cx| {
-            p.insight_view().update(cx, |v, cx| v.confirm_probe_dialog(cx));
+            p.insight_view()
+                .update(cx, |v, cx| v.confirm_probe_dialog(cx));
         });
     }
 
@@ -1072,9 +1071,7 @@ mod tests {
             window.draw(cx).clear(cx);
         });
         let confirm = cx.update(|window, _| {
-            window.try_find(ElementId::Name(SharedString::from(
-                "insight-probe-confirm",
-            )))
+            window.try_find(ElementId::Name(SharedString::from("insight-probe-confirm")))
         });
         assert!(
             confirm.is_some(),
@@ -1094,9 +1091,7 @@ mod tests {
             window.draw(cx).clear(cx);
         });
         let confirm = cx.update(|window, _| {
-            window.try_find(ElementId::Name(SharedString::from(
-                "insight-probe-confirm",
-            )))
+            window.try_find(ElementId::Name(SharedString::from("insight-probe-confirm")))
         });
         assert!(confirm.is_none(), "确认探查后确认窗口应关闭并进入取数");
     }

@@ -137,7 +137,10 @@ mod tests {
             columns: ProbeColumns::Subset(vec!["a".into(), "b".into()]),
             ..all.clone()
         };
-        assert_eq!(subset.column_subset(), Some(&["a".to_string(), "b".to_string()][..]));
+        assert_eq!(
+            subset.column_subset(),
+            Some(&["a".to_string(), "b".to_string()][..])
+        );
 
         let filtered = ProbeConfig {
             filter: Some("  amount > 10  ".into()),

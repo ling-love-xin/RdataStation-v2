@@ -119,10 +119,7 @@ fn parse_decimal(raw: &str) -> MockResult<ColumnDataType> {
         );
         return Ok(ColumnDataType::Double);
     }
-    Ok(ColumnDataType::Decimal {
-        precision,
-        scale,
-    })
+    Ok(ColumnDataType::Decimal { precision, scale })
 }
 
 pub struct ColumnMapper;
@@ -1040,8 +1037,14 @@ mod tests {
     /// S2：精度超过 DuckDB 上限（38）→ 显式降级 `DOUBLE`（写 65,30 会被库拒，降级比落 VARCHAR 强）。
     #[test]
     fn test_parse_data_type_decimal_over_precision_degrades_to_double() {
-        assert_eq!(parse_data_type("DECIMAL(65,30)").unwrap(), ColumnDataType::Double);
-        assert_eq!(parse_data_type("NUMERIC(100,10)").unwrap(), ColumnDataType::Double);
+        assert_eq!(
+            parse_data_type("DECIMAL(65,30)").unwrap(),
+            ColumnDataType::Double
+        );
+        assert_eq!(
+            parse_data_type("NUMERIC(100,10)").unwrap(),
+            ColumnDataType::Double
+        );
     }
 
     /// S2：标度大于精度（或精度为 0）是坏类型，报错而不是悄悄写死默认。
@@ -1117,10 +1120,7 @@ mod tests {
             parse_data_type("WEIRD").unwrap(),
             ColumnDataType::Text
         ));
-        assert!(matches!(
-            parse_data_type("").unwrap(),
-            ColumnDataType::Text
-        ));
+        assert!(matches!(parse_data_type("").unwrap(), ColumnDataType::Text));
     }
 
     /// 内部规范名（模板使用）必须与源库类型串走同一套判定。

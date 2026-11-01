@@ -1,5 +1,5 @@
-use shared::models::QueryResult;
 use serde::{Deserialize, Serialize};
+use shared::models::QueryResult;
 use specta::Type;
 
 use crate::generator_catalog::GeneratorCategory;

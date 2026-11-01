@@ -194,8 +194,12 @@ fn overview_table(
                         .bordered(false)
                         .item("总行数", format!("{}", profile.row_count), 1)
                         .item("列数", profile.columns.len().to_string(), 1)
-                        .item("取样", crate::service::persistence::SOURCE_SAMPLE_LIMIT.to_string(), 1),
-                )
+                        .item(
+                            "取样",
+                            crate::service::persistence::SOURCE_SAMPLE_LIMIT.to_string(),
+                            1,
+                        ),
+                ),
         )
         // 卡②检查器命中：68px 环（适用/命中计数，无评级）+ 检查器四态列表 + 事实占比条
         .child(

@@ -32,14 +32,14 @@ pub use scratchpad_view::{
     render_scratchpad_diff_pane, render_scratchpad_file_info_pane, render_scratchpad_search_pane,
 };
 
+pub use jobs::{DirResult, FileListPayload, LoadResult, SearchPayload};
 pub use models::{
     AnalyzableFile, DiffLine, DiffLineKind, DiffResult, ExternalReference, ExternalReferenceStatus,
     FileMeta, FlatFile, ReplaceResult, ScratchpadChangeEntry, ScratchpadChangeEvent,
     ScratchpadConfig, ScratchpadEntry, ScratchpadEntryKind, ScratchpadResponse, SearchMatch,
     SearchResult,
 };
-pub use jobs::{DirResult, FileListPayload, LoadResult, SearchPayload};
-pub use store::{ScratchpadStore, MODULE_DIR_NAME, ORIGIN_SCRATCHPAD};
+pub use store::{MODULE_DIR_NAME, ORIGIN_SCRATCHPAD, ScratchpadStore};
 // 回收站已上提到 engine（中性化：不再返回 `ScratchpadEntry`，来源是字符串标记）。
 // 这里重导出保持 `scratchpad::ProjectTrash` 等旧路径可用。
 pub use engine::persistence::trash::{

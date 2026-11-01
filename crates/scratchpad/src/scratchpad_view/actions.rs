@@ -177,11 +177,7 @@ impl ScratchpadView {
     ///
     /// 用户点名（2026-10-10）：树行 meta 只留大小；时间与连接信息进属性面板。
     /// `db_connection` 为后期「SQL 文件连接哪个数据库」预留（分析文件类型实现后填充）。
-    pub(super) fn show_scratchpad_file_info(
-        &mut self,
-        relative: String,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn show_scratchpad_file_info(&mut self, relative: String, cx: &mut Context<Self>) {
         let Some(root) = self.host.project_root() else {
             self.host.notice("未打开项目".to_string(), cx);
             return;
@@ -314,9 +310,9 @@ impl ScratchpadView {
                     {
                         let mut state = this.scratchpad.borrow_mut();
                         if state.external_drag_over
-                            && state
-                                .external_drag_since
-                                .is_some_and(|since| since.elapsed() > std::time::Duration::from_secs(5))
+                            && state.external_drag_since.is_some_and(|since| {
+                                since.elapsed() > std::time::Duration::from_secs(5)
+                            })
                         {
                             state.external_drag_over = false;
                             state.external_drag_count = 0;
@@ -690,7 +686,12 @@ impl ScratchpadView {
     /// 懒创建草稿箱输入框（名称内联编辑 + 文件名过滤）并订阅事件。
     /// 更多菜单拖拽排序（2026-10-12）：把 `key` 相对当前显示顺序移动 `delta` 格，
     /// 重算全部按钮的 `order` 并落盘。`delta` 由 on_drag_move 的鼠标位移换算。
-    pub(super) fn reorder_toolbar(&mut self, key: ToolbarButtonKey, delta: i32, cx: &mut Context<Self>) {
+    pub(super) fn reorder_toolbar(
+        &mut self,
+        key: ToolbarButtonKey,
+        delta: i32,
+        cx: &mut Context<Self>,
+    ) {
         let mut v = self.scratchpad.borrow_mut();
         let default_order = |k: ToolbarButtonKey| {
             ToolbarButtonKey::ALL
@@ -756,9 +757,8 @@ impl ScratchpadView {
             },
         );
         // #5 内容搜索查询输入：搜索面板打开后独立于文件过滤框，placeholder「搜索文件内容」。
-        let content_search_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("搜索文件内容")
-        });
+        let content_search_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("搜索文件内容"));
         let content_search_sub = cx.subscribe_in(
             &content_search_input,
             window,
@@ -780,19 +780,13 @@ impl ScratchpadView {
                 _ => {}
             },
         );
-        let include_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("包含的文件")
-        });
-        let exclude_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("排除的文件")
-        });
+        let include_input = cx.new(|cx| InputState::new(window, cx).placeholder("包含的文件"));
+        let exclude_input = cx.new(|cx| InputState::new(window, cx).placeholder("排除的文件"));
         // 添加外部引用弹窗（2026-10-12 原型「弹窗输入路径+别名」对齐）：路径 + 别名两个输入框。
-        let ref_path_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("外部文件或目录路径")
-        });
-        let ref_alias_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("别名（默认取名称）")
-        });
+        let ref_path_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("外部文件或目录路径"));
+        let ref_alias_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("别名（默认取名称）"));
         let mut view = self.scratchpad.borrow_mut();
         view.name_input = Some(name_input);
         view._name_sub = Some(name_sub);
@@ -814,7 +808,12 @@ impl ScratchpadView {
     // K1c 口径同新建/重命名）；读取在加载回填时一次读全缓存进状态，事件路径不再开库。
 
     /// 打开标签编辑弹窗（右键「标签…」）：懒建新建输入框，记录目标条目相对路径。
-    pub(super) fn open_tag_dialog(&mut self, window: &mut Window, rel_path: &str, cx: &mut Context<Self>) {
+    pub(super) fn open_tag_dialog(
+        &mut self,
+        window: &mut Window,
+        rel_path: &str,
+        cx: &mut Context<Self>,
+    ) {
         // 标签写项目库属写操作，只读模式拒绝。
         if self.host.read_only() {
             self.host.notice("只读模式：不能修改标签".to_string(), cx);
@@ -835,7 +834,12 @@ impl ScratchpadView {
     }
 
     /// 勾选/取消一个标签（attach / detach；随后重读该条目标签更新缓存）。
-    pub(super) fn toggle_entry_tag(&mut self, rel_path: &str, tag_id: &str, cx: &mut Context<Self>) {
+    pub(super) fn toggle_entry_tag(
+        &mut self,
+        rel_path: &str,
+        tag_id: &str,
+        cx: &mut Context<Self>,
+    ) {
         let Some(root) = self.host.project_root() else {
             return;
         };
@@ -891,7 +895,10 @@ impl ScratchpadView {
         }
         let mut view = self.scratchpad.borrow_mut();
         view.project_tags.push(tag.clone());
-        view.entry_tags.entry(rel_path.to_string()).or_default().push(tag);
+        view.entry_tags
+            .entry(rel_path.to_string())
+            .or_default()
+            .push(tag);
         cx.notify();
     }
 
@@ -1647,7 +1654,8 @@ impl ScratchpadView {
     /// 只读项目拒绝；替换内容为空拒绝。
     pub(super) fn replace_scratchpad_all(&mut self, cx: &mut Context<Self>) {
         if self.host.read_only() {
-            self.host.notice("只读模式：不允许替换草稿内容".to_string(), cx);
+            self.host
+                .notice("只读模式：不允许替换草稿内容".to_string(), cx);
             cx.notify();
             return;
         }
@@ -1729,7 +1737,8 @@ impl ScratchpadView {
     /// 入队 `ReplaceOne`——任务内对指定文件写回后**全量重搜**，保持结果视图口径一致。
     pub(super) fn replace_scratchpad_file(&mut self, file: &str, cx: &mut Context<Self>) {
         if self.host.read_only() {
-            self.host.notice("只读模式：不允许替换草稿内容".to_string(), cx);
+            self.host
+                .notice("只读模式：不允许替换草稿内容".to_string(), cx);
             cx.notify();
             return;
         }
@@ -1859,7 +1868,11 @@ impl ScratchpadView {
 
     /// 确认「添加外部引用」：校验路径存在 + 别名（空则取路径文件名），
     /// 创建成功返回 `true`（Dialog `on_ok` 据此关闭弹窗），失败提示并不关闭。
-    pub(super) fn confirm_ref_dialog(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(super) fn confirm_ref_dialog(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let (path, alias) = {
             let v = self.scratchpad.borrow();
             (

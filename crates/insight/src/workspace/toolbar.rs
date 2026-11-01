@@ -11,7 +11,12 @@ impl super::InsightWorkspacePanel {
     /// - 导出报告尚无宿主写文件通道（列 / 结构导出各有事件，表画像导出未接）——
     ///   disabled + tooltip 标注，不做点了没反应的按钮。
     /// - 目标切换用语义 `Button::dropdown_menu`：方向键 / Escape / 焦点恢复由组件负责。
-    pub(crate) fn render_toolbar(&self, entity: &Entity<Self>, theme: &Theme, cx: &Context<Self>) -> Div {
+    pub(crate) fn render_toolbar(
+        &self,
+        entity: &Entity<Self>,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> Div {
         let colors = theme.colors;
         // 菜单构造需要 opened 快照（闭包 'static，不能借面板状态）：只带 key + 标题
         let candidates: Vec<(String, String)> = self
@@ -57,7 +62,11 @@ impl super::InsightWorkspacePanel {
             } else {
                 CatalogIcon::Expand
             })
-            .label(if is_full { "取样统计" } else { "全量统计" })
+            .label(if is_full {
+                "取样统计"
+            } else {
+                "全量统计"
+            })
             .tooltip(if is_full {
                 "切取样档：对评估全表的查询级过滤现算（行 + 字段，不重建）"
             } else {
@@ -122,11 +131,11 @@ impl super::InsightWorkspacePanel {
             .items_center()
             .border_b_1()
             .border_color(colors.border)
-            .child(
-                Toolbar::new("insight-ws-toolbar")
-                    .xsmall()
-                    .children([refresh_btn, scope_btn, export_btn]),
-            )
+            .child(Toolbar::new("insight-ws-toolbar").xsmall().children([
+                refresh_btn,
+                scope_btn,
+                export_btn,
+            ]))
             .child(divider(theme))
             // 目标切换下拉：已进入洞察的目标 → 切换画像；末项 → 打开多表对比。
             // 菜单闭包要 'static：先克隆实体句柄，不借用参数引用
@@ -143,7 +152,9 @@ impl super::InsightWorkspacePanel {
                     // 全名交给 tooltip（VS Code 约束：长标题省略 + hover 提示全名）。
                     .label(
                         chip.as_ref()
-                            .map(|(_, title)| ellipsize_title(title, ui::INSIGHT_WS_TITLE_MAX_CHARS))
+                            .map(|(_, title)| {
+                                ellipsize_title(title, ui::INSIGHT_WS_TITLE_MAX_CHARS)
+                            })
                             .unwrap_or_else(|| "切换目标".into()),
                     )
                     .tooltip(

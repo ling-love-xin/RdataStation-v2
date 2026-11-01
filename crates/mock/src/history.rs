@@ -438,8 +438,7 @@ fn draft_of_parts(
 /// 存下来的列 → 草稿列（两张「列」表共用的读取面）。
 fn spec_of_stored(column: &impl StoredColumn) -> MockColumnSpec {
     // 写入时类型串是合法的；读回遇到解析失败（手工改库 / 旧版本写入的怪串）退 Text，不拦重放
-    let data_type = parse_data_type(column.column_type())
-        .unwrap_or_else(|_| ColumnDataType::Text);
+    let data_type = parse_data_type(column.column_type()).unwrap_or_else(|_| ColumnDataType::Text);
     let generator = config_from_parts(column.generator(), column.generator_params())
         .unwrap_or_else(|| default_generator_for(&data_type));
     MockColumnSpec {
@@ -894,7 +893,10 @@ mod tests {
         let (task, _) = task_of_run(&draft(), &run, Utc::now());
 
         assert_eq!(task.status, "failed");
-        assert_eq!(task.error_message.as_deref(), Some("项目分析库已存在表 orders"));
+        assert_eq!(
+            task.error_message.as_deref(),
+            Some("项目分析库已存在表 orders")
+        );
         assert_eq!(task.generated_rows, None);
         assert_eq!(task.generation_time_ms, None);
         assert_eq!(task.save_format.as_deref(), Some("table"));

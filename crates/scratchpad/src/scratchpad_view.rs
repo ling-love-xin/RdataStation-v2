@@ -49,8 +49,8 @@ use gpui_kit::component::empty::{
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::toolbar::{Toolbar, ToolbarGroup};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -96,14 +96,13 @@ use search::*;
 // 渲染函数签名比原版多一个 `type_icon` 参数（调用方注入文件类型图标）。
 // 注意：本模块自有子模块 `search`（草稿箱的搜索面板），以下 `search::` 指子模块；
 // 外部内容搜索 crate 只经 `content_search::view` 路径引用。
-pub use search::{
-    ScratchpadDiffView, ScratchpadFileInfoView,
-    render_scratchpad_diff_pane, render_scratchpad_file_info_pane,
-};
 pub use content_search::view::{
-    SearchHitTarget as ScratchpadSearchHitTarget,
-    SearchView as ScratchpadSearchView,
+    SearchHitTarget as ScratchpadSearchHitTarget, SearchView as ScratchpadSearchView,
     render_search_pane as render_scratchpad_search_pane,
+};
+pub use search::{
+    ScratchpadDiffView, ScratchpadFileInfoView, render_scratchpad_diff_pane,
+    render_scratchpad_file_info_pane,
 };
 // 类型图标：`content_search::view` 的 `type_icon` 由调用方注入，workbench 从这里取。
 pub use primitives::scratchpad_type_icon;
@@ -465,7 +464,8 @@ impl Default for ScratchpadViewState {
 
 impl ScratchpadViewState {
     /// 在已加载数据（根 + 懒加载子目录）中查找条目类型。
-    fn kind_of(&self, key: &str) -> Option<ScratchpadEntryKind> {        fn walk(entries: &[ScratchpadEntry], key: &str) -> Option<ScratchpadEntryKind> {
+    fn kind_of(&self, key: &str) -> Option<ScratchpadEntryKind> {
+        fn walk(entries: &[ScratchpadEntry], key: &str) -> Option<ScratchpadEntryKind> {
             for e in entries {
                 if e.path.to_string_lossy() == key {
                     return Some(e.kind.clone());
@@ -573,9 +573,7 @@ impl Focusable for ScratchpadView {
 
 impl Render for ScratchpadView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .child(self.render_scratchpad(window, cx))
+        div().size_full().child(self.render_scratchpad(window, cx))
     }
 }
 

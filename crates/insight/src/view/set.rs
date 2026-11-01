@@ -146,26 +146,16 @@ impl InsightView {
                     .v_flex()
                     .gap_0p5()
                     .px_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(colors.muted_foreground)
-                            .child(
-                                "洞察对象统一为 DuckDB 临时表（源表取样 / 结果集 / CSV 映射）。\
+                    .child(div().text_xs().text_color(colors.muted_foreground).child(
+                        "洞察对象统一为 DuckDB 临时表（源表取样 / 结果集 / CSV 映射）。\
                                  勾选多张表可做质量对比；表间可关系排查（值重叠）；\
                                  需要持久化的归档到分析存档。",
-                            ),
-                    )
+                    ))
                     .when(over_limit, |this| {
-                        this.child(
-                            div()
-                                .text_xs()
-                                .text_color(colors.warning)
-                                .child(format!(
-                                    "集合超 {} 张上限，建议先归档清理（设置可调）",
-                                    self.work_set_limit
-                                )),
-                        )
+                        this.child(div().text_xs().text_color(colors.warning).child(format!(
+                            "集合超 {} 张上限，建议先归档清理（设置可调）",
+                            self.work_set_limit
+                        )))
                     }),
             )
             // 关系排查结果区（it-note 之下，同属集合管理语境）
@@ -179,12 +169,7 @@ impl InsightView {
     ///
     /// 多选框仅在多选模式（`it-head` 开关）下出现；当前选中目标用主题描边 +
     /// 列表激活底色表达（原型 `.cur` coral 描边，真机走主题 token）。
-    fn render_set_row(
-        &self,
-        entry: &InsightSetEntry,
-        entity: &Entity<Self>,
-        theme: &Theme,
-    ) -> Div {
+    fn render_set_row(&self, entry: &InsightSetEntry, entity: &Entity<Self>, theme: &Theme) -> Div {
         let colors = theme.colors;
         let selected = self.selected_tables.contains(&entry.key);
         div()
@@ -244,7 +229,9 @@ impl InsightView {
                             .label(entry.label.clone())
                             .on_click(move |_, _, app| {
                                 entity.update(app, |_view, cx| {
-                                    cx.emit(InsightEvent::ActivateTableRequested { key: key.clone() });
+                                    cx.emit(InsightEvent::ActivateTableRequested {
+                                        key: key.clone(),
+                                    });
                                 });
                             })
                     })

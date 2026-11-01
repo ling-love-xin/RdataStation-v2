@@ -21,8 +21,8 @@ use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::{Icon, IconName, Theme};
 use gpui_kit::*;
 
-use crate::insight_view::{InsightEvent, InsightView};
 use crate::InsightTarget;
+use crate::insight_view::{InsightEvent, InsightView};
 use crate::ui;
 
 impl InsightView {
