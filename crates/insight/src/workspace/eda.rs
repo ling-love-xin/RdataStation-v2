@@ -90,24 +90,23 @@ impl super::InsightWorkspacePanel {
                 .sample_table(target)
                 .map(|t| t.to_string())
         });
-        // 列卡两列网格（原型 `.col-grid`）：`flex_wrap` + 每卡 `min_w + flex_1`——
-        // 容器宽于 2×min_w + gap 时双列平分，窄时自动退单列（对齐
-        // property_panel 指标卡同一套写法）
-        let mut cards = div().h_flex().items_stretch().w_full().gap_2().flex_wrap();
-        for col in &selected {
-            // 滚动锚点注册：复用同一 `ScrollAnchor` 实例（anchor_scroll 靠它持续
-            // 更新 last_origin；每帧重建会让滚动位置永远停在原处）
-            self.col_anchors
-                .borrow_mut()
-                .entry(col.name.clone())
-                .or_insert_with(|| ScrollAnchor::for_handle(self.content_scroll.clone()));
-            let anchor = self.col_anchors.borrow().get(&col.name).cloned();
-            let col_name = col.name.clone();
-            cards = cards.child(
-                div()
-                    .min_w(rems(ui::INSIGHT_WS_COL_CARD_MIN))
-                    .flex_1()
-                    .child(
+        // 列卡恒双列（原型 `.col-grid{repeat(2,1fr)}`）：GPUI 无 CSS grid，按两张一组
+        // 切行、行内两个 `flex_1` 平分——读序与 grid 行优先一致，且同行两张等高。
+        // **不随容器宽塌成单列**，整体宽度兜底见 `ui::INSIGHT_WS_MIN_WIDTH`。
+        let mut cards = div().v_flex().w_full().gap_2();
+        for pair in selected.chunks(2) {
+            let mut row = div().h_flex().items_stretch().w_full().gap_2();
+            for col in pair {
+                // 滚动锚点注册：复用同一 `ScrollAnchor` 实例（anchor_scroll 靠它持续
+                // 更新 last_origin；每帧重建会让滚动位置永远停在原处）
+                self.col_anchors
+                    .borrow_mut()
+                    .entry(col.name.clone())
+                    .or_insert_with(|| ScrollAnchor::for_handle(self.content_scroll.clone()));
+                let anchor = self.col_anchors.borrow().get(&col.name).cloned();
+                let col_name = col.name.clone();
+                row = row.child(
+                    div().flex_1().min_w_0().child(
                         div()
                             // anchor_scroll 在 `StatefulInteractiveElement` 上（0.8.0
                             // gpui-fast div.rs:1557），元素必须带 id 才能挂锚点
@@ -124,7 +123,9 @@ impl super::InsightWorkspacePanel {
                                 is_full,
                             )),
                     ),
-            );
+                );
+            }
+            cards = cards.child(row);
         }
         if selected.is_empty() {
             // 无匹配列：标准 Empty 组件（对齐 database 导航「没有匹配的数据源」

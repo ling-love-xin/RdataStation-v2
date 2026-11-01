@@ -19,17 +19,12 @@ pub const INSIGHT_SAMPLE_MAX_CHARS: usize = 200;
 pub const INSIGHT_INLINE_ICON_SIZE: f32 = 0.875;
 /// 分区标题字号（0.75rem = 12px，对齐面板内的次级信息层级）
 pub const INSIGHT_SECTION_TITLE_FONT: f32 = 0.75;
-/// 概览五卡主数值**基准**字号（1.75rem = 28px；设计锚点，**不直接参与渲染**）
-pub const INSIGHT_CARD_VALUE_FONT: f32 = 1.75;
-/// 概览五卡主数值在卡片内的缩放系数（卡面幅有限，28px 会压掉副标题行）
+/// 概览五卡主数值字号（1.0625rem = 17px；原型 `.o-card .v`，纯事实数值无评级语义）
 ///
-/// 单独登记而不是写在视图里：写在视图时它是一次魔数，与 `ui.rs` 没有机器可读
-/// 的关联——契约锁的就会是那个从未被画出来的 28px，真正被画的 21px 无人看守。
-pub const INSIGHT_CARD_VALUE_SCALE: f32 = 0.75;
-/// 概览五卡主数值**实际渲染字号**（1.3125rem = 21px = 基准 × 缩放）
-///
-/// 视图直接用这一个值（纯事实数值，无评级语义）；见 `ui_contract::card_value_font_is_the_rendered_size`。
-pub const INSIGHT_CARD_VALUE_REM: f32 = INSIGHT_CARD_VALUE_FONT * INSIGHT_CARD_VALUE_SCALE;
+/// 2026-11-01 对齐原型时收敛：此前是「基准 28px × 卡内缩放 0.75 = 21px」两段式——
+/// 比原型重 4px，且真正上屏的 21px 与登记的 28px 分离，契约因此锁了一个从未被
+/// 画出来的数字。原型只有单一 17px，故删掉基准与缩放两个中间量。
+pub const INSIGHT_CARD_VALUE_REM: f32 = 1.0625;
 /// Schema 健康分字号（2.25rem = 36px；结构洞察的头号结论）
 pub const INSIGHT_HEALTH_SCORE_FONT: f32 = 2.25;
 /// 结构报告每行最多给几个表名下钻热点（再多就改成一条链接列表了）
@@ -48,8 +43,6 @@ pub const INSIGHT_TABLE_NULL_RATE_WIDTH: f32 = 3.25;
 pub const INSIGHT_DIFF_LABEL_WIDTH: f32 = 4.0;
 /// 中间工作页对比表：数值列宽（行数 / 列数，4.5rem = 72px）
 pub const INSIGHT_WS_NUM_WIDTH: f32 = 4.5;
-/// 中间工作页对比表：事实指标列宽（3.25rem = 52px，检查器命中比 / 缺失率 / 唯一率）
-pub const INSIGHT_WS_FACT_WIDTH: f32 = 3.25;
 /// 中间工作页对比表：状态词列宽（3.25rem = 52px，命中 / 未命中 / 已评估等短词）
 pub const INSIGHT_WS_STATUS_WIDTH: f32 = 3.25;
 /// 中间工作页：数据源列宽（3.5rem = 56px，容得下「来源 MySQL …」截断）
@@ -65,14 +58,13 @@ pub const INSIGHT_WS_TAB_MAX_WIDTH: f32 = 18.0;
 pub const INSIGHT_OVERVIEW_RING_SIZE: f32 = 4.25;
 /// 列多选 / 列对选择浮层宽度（13.5rem = 216px；Checkbox 行 + 中文列名不换行）
 pub const INSIGHT_PICKER_WIDTH: f32 = 13.5;
-/// EDA 列卡最小宽度（17rem = 272px；列卡网格换行阈值——容器宽于
-/// 2×17rem + gap 时双列，否则自动退单列，对齐原型 `.col-grid` 两列报告密度）
-pub const INSIGHT_WS_COL_CARD_MIN: f32 = 17.0;
-/// 概览五卡最小宽度（11rem = 176px；五卡容器的换行阈值）
+/// 中间工作页最小宽度（42rem = 672px；对齐原型 `body{min-width:1000px}`）
 ///
-/// 与列卡网格同口径：容器窄于 `2×11rem + gap` 退两列、再窄退单列。没有它，五张
-/// 卡会被 `flex_1` 一路压到 21px 数值溢出卡片边框。
-pub const INSIGHT_CARD_MIN_WIDTH: f32 = 11.0;
+/// 原型不做响应式：窗口不够宽就整体横向滚动，栅格保持设计列数（五卡恒 5 列、
+/// 列卡恒双列、对比表恒「指标为行」）。本常量是**中央工作页**那一格的对应值——
+/// 原型 1000px 减去 activity 48px 与右 dock 280px 即得 672px。低于它整页横向
+/// 滚动，而不是折行或压缩栅格。
+pub const INSIGHT_WS_MIN_WIDTH: f32 = 42.0;
 /// 右栏「已洞察表」集合列表最大高度（18rem = 288px，约 5 行卡）
 ///
 /// 集合是**会话级管理入口**，全量渲染会把下钻区整块推出首屏——而下钻区才是用户
@@ -88,22 +80,14 @@ pub const INSIGHT_WS_CHIP_MAX_WIDTH: f32 = 14.0;
 /// 下拉 label 是 Button 的**纯文本槽**（套不了 `max_w` + `text_ellipsis`，那些是
 /// 布局层样式），超长表名会一路撑破工具栏 → 在文本层按字符数截断，hover 给全名。
 pub const INSIGHT_WS_TITLE_MAX_CHARS: usize = 24;
+/// 转置对比表：指标标签列宽（5rem = 80px；容得下「检查器命中」这类五字行标签）
+pub const INSIGHT_WS_METRIC_LABEL_WIDTH: f32 = 5.0;
+/// 转置对比表：每张勾选表一列的列宽（6.5rem = 104px；容得下「128,450」）
+pub const INSIGHT_WS_METRIC_COL_MIN_WIDTH: f32 = 6.5;
 /// 对比结果表「表」列最小宽度（6rem = 96px）
 pub const INSIGHT_WS_TABLE_COL_MIN_WIDTH: f32 = 6.0;
 /// 对比候选表：勾选框占位列宽（1.25rem = 20px，与表头占位同一常量）
 pub const INSIGHT_WS_CHECKBOX_WIDTH: f32 = 1.25;
-/// 对比结果表最小内容宽度（36.75rem = 588px；横向滚动阈值）
-///
-/// = 表列 6 + 数据源 3.5 + 行数 4.5 + 列数 4.5 + 检查器 3.25 + 缺失率 3.25
-///   + 唯一率 3.25 + 值得关注 4.5（刚性列宽合计 33.25rem）
-/// + 7 道列间距（`gap_2` = 0.5rem）+ 左右内距（`px_1` = 0.25rem × 2）
-/// 按表达式推导而不是写死 588：调任一列宽它自动跟着动。
-pub const INSIGHT_WS_RESULT_MIN_WIDTH: f32 = INSIGHT_WS_TABLE_COL_MIN_WIDTH
-    + INSIGHT_WS_SOURCE_WIDTH
-    + INSIGHT_WS_NUM_WIDTH * 3.0
-    + INSIGHT_WS_FACT_WIDTH * 3.0
-    + COMPARE_TABLE_GAP * 7.0
-    + COMPARE_TABLE_PAD * 2.0;
 /// 对比**候选**表最小内容宽度（26.5rem = 424px；横向滚动阈值）
 ///
 /// 同上推导：勾选框 1.25 + 表列 6 + 数据源 3.5 + 行数 4.5 + 列数 4.5 + 状态 3.25
@@ -120,6 +104,18 @@ pub const INSIGHT_WS_CANDIDATE_MIN_WIDTH: f32 = INSIGHT_WS_CHECKBOX_WIDTH
 const COMPARE_TABLE_GAP: f32 = 0.5;
 /// 对比结果表行左右内距（`px_1` 的 rem 倍率）
 const COMPARE_TABLE_PAD: f32 = 0.25;
+
+/// 转置对比表（指标为行 / 表为列）的最小内容宽度
+///
+/// 与结果表不同：它的**列数随勾选表数变化**，阈值无法登记成常量，只能按表数算——
+/// 指标标签列 + 每张表一列 + 列间距 + 左右内距。
+pub fn metric_table_min_width(table_count: usize) -> f32 {
+    let n = table_count as f32;
+    INSIGHT_WS_METRIC_LABEL_WIDTH
+        + INSIGHT_WS_METRIC_COL_MIN_WIDTH * n
+        + COMPARE_TABLE_GAP * n
+        + COMPARE_TABLE_PAD * 2.0
+}
 
 // ===== 与外壳共用的结构尺寸（重导出）=====
 //

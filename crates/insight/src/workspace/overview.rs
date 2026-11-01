@@ -202,13 +202,12 @@ impl super::InsightWorkspacePanel {
             .map(|c| profile.row_count as u64 * Self::col_est_bytes(c.kind))
             .sum();
         let memory_text = fmt_bytes(mem_bytes);
-        // 五卡容器可换行：`flex_1` 单排五份在窄容器（左右 dock 全开时的中央工作页）
-        // 会压到每卡 <100px，21px 数值溢出卡边框。换行阈值由 `ui::INSIGHT_CARD_MIN_WIDTH`
-        // 统一登记（与 EDA 列卡网格同口径）。
+        // 五卡恒一行五份（原型 `.overview-grid{repeat(5,1fr)}`）：不换行、不设最小
+        // 宽——窄容器下由 `summary_card` 内部三行 ellipsis 截断，而不是折行或压缩
+        // 栅格。整体宽度兜底见 `ui::INSIGHT_WS_MIN_WIDTH`（原型 `body{min-width:1000px}`）。
         div()
             .w_full()
             .flex()
-            .flex_wrap()
             .items_stretch()
             .gap_2()
             .child(summary_card(

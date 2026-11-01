@@ -691,23 +691,33 @@ impl Render for InsightWorkspacePanel {
                     // 后者是 kit Scrollable 组件，内部持有自己的 handle，外部 `ScrollAnchor`
                     // 挂不上去；跳列定位依赖 `track_scroll` 的 handle。
                     .overflow_y_scroll()
+                    // 原型不做响应式：内容有最小宽，窄窗横向滚动而不是压缩栅格
+                    .overflow_x_scroll()
                     .track_scroll(&self.content_scroll)
-                    .child(match self.mode {
-                        WorkspaceMode::Insight => self
-                            .render_insight_content(
-                                window,
-                                cx,
-                                &entity,
-                                &theme,
-                                inline_icon,
-                                empty_icon,
-                                ring_px,
-                            )
-                            .into_any_element(),
-                        WorkspaceMode::Compare => {
-                            self.render_compare(cx, &entity, &theme).into_any_element()
-                        }
-                    }),
+                    .child(
+                        div()
+                            // 原型 `body{min-width:1000px}` 在中央工作页这一格的对应值
+                            // （1000 − activity 48 − 右 dock 280 = 672px）：低于它整页
+                            // 横向滚动，五卡恒 5 列、列卡恒双列，不折行不塌列。
+                            .w_full()
+                            .min_w(rems(ui::INSIGHT_WS_MIN_WIDTH))
+                            .child(match self.mode {
+                                WorkspaceMode::Insight => self
+                                    .render_insight_content(
+                                        window,
+                                        cx,
+                                        &entity,
+                                        &theme,
+                                        inline_icon,
+                                        empty_icon,
+                                        ring_px,
+                                    )
+                                    .into_any_element(),
+                                WorkspaceMode::Compare => {
+                                    self.render_compare(cx, &entity, &theme).into_any_element()
+                                }
+                            }),
+                    ),
             )
     }
 }

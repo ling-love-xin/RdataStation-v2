@@ -23,6 +23,52 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-11-01 — 版式路线对齐原型（固定栅格 + 整体横向滚动）
+
+**背景**：真机跑 `examples/insight_preview` 后反馈「差距好多」，遂与
+`docs/architecture/insight/insight-eda-prototype.html` 逐项比对。结论是**功能不缺，
+缺的是版式路线**——实现反而比原型多（spearman / cramer-v / 值重叠 / 探索价值排序）。
+
+| 维度 | 原型 | 原实现 | 本轮处置 |
+|---|---|---|---|
+| 窄窗策略 | `body{min-width:1000px}` + 整体横向滚 | 响应式换行 / 压缩 | 中央工作页加 `INSIGHT_WS_MIN_WIDTH`(672px) + `overflow_x_scroll` |
+| 概览五卡 | `repeat(5,1fr)` **永不换行** | `flex_wrap` + `min_w(176px)` → 换行 | 撤掉 wrap 与 min_w，回 `flex_1` 等分 5 列 |
+| 卡内数值字号 | `.o-card .v` = **17px** | 21px（基准 28 × 缩放 0.75） | 收敛为单一 `INSIGHT_CARD_VALUE_REM`=1.0625rem(17px)，删基准 / 缩放两个中间量 |
+| 列卡网格 | `repeat(2,1fr)` 固定双列 | `min_w(272px)`，窄时塌单列 | 两张一组切行、行内 `flex_1` 平分（读序与 grid 行优先一致，同行等高） |
+| 对比表方向 | **指标为行、表为列** | 表为行、指标为列 | 转置：6 指标行 × N 张表列；新增 `metric_rows` 与 `ui::metric_table_min_width`（按表数算） |
+
+**重要：本轮推翻了上一批布局修复的方向。** 上一批按「响应式换行 / 压缩」修（加
+`flex_wrap` + `min_w`），与原型「固定栅格 + 整体横向滚动」正好相反。教训：动手修布局
+前必须先确认设计源是**响应式**还是**固定栅格**，否则修得越多离原型越远。
+
+**未动（边界外）**：右栏宽原型 280px vs 实现 `RIGHT_DOCK_WIDTH` 320px——属
+`workbench_shell`，非洞察模块，此处仅记录不修改。
+
+**清理**：`INSIGHT_WS_RESULT_MIN_WIDTH` / `INSIGHT_WS_FACT_WIDTH` 在转置后零消费者，
+连同契约登记一并删除（保留会误导后来者以为还有「表为行」的表）。
+
+**验证**：`cargo check -p rds-insight --all-targets` 零 error **零 warning** ·
+`--lib` 261 passed · `--test ui_contract` 7 passed（与基线一致）·
+`cargo build --example insight_preview` 链接通过。
+
+**风险**：仍未经真机确认——尤其 gpui 下 `overflow_x_scroll` + 内容 `min_w` 的实际横向
+滚动手感，以及五卡在约 118px 卡宽下 ellipsis 的截断观感。
+
+### 2026-11-01 — 视图层重复卡片助手收敛 + 过期迁移注释清除
+
+**背景**：盘点「已实现 / 未实现」时暴露的两项一致性欠账。均**非功能改动**，渲染字节不变，属 housekeeping。
+
+| 项 | 处置 |
+|---|---|
+| `view/drill.rs` 与 `view/overview.rs` 各自定义了一份**逐字重复**的 `summary_card` 容器（`rounded_md` + `bg(sidebar)` + `w_full`；drill 6 个 + overview 4 个调用点） | 收敛为 `view/mod.rs` 一处私有 `fn summary_card`，两个子模块改用 `use super::…`（与 §可见性约定一致：父模块私有项对子模块可见）。**未**与 `workspace/helpers.rs` 那版合并——后者是三参数 key/value/sub、`rounded_sm` + `flex_1` 的另一个元语，合并会改变右栏渲染 |
+| `model/types.rs` 头部仍挂 `TODO(migration): 自 v1 result_service.rs 抽取` 与「占位于此」 | 该迁移早已落地（Phase 0.2 边界归位），类型被全 crate 消费。换成如实描述双重契约（宿主载荷 + store 持久化 / `specta` IPC）的头注——把「已完成」说成「待迁移」比没有注释更误人 |
+
+**收益**：右栏卡片版式此前两处独立维护，改一处会静默错另一位；收敛后此风险由类型消灭。
+**风险**：仍是静态核对，未跑真机；但因渲染输出字节不变，视觉回归风险为零。
+
+**验证**：`cargo check -p rds-insight --all-targets` 零 error 零 warning ·
+`cargo test -p rds-insight --lib` 261 passed · `--test ui_contract` 7 passed（与改动前基线一致）。
+
 ### 2026-11-01 — 视图层布局修复（溢出 / 挤压 / 契约漂移）
 
 **背景**：静态核算暴露洞察视图层的一组**布局失效**——所有 UI 契约都管「尺寸从哪来」，没有一个管「值放不放得下」。可用宽口径：中央工作页 = 窗口宽 − activity 48 − 左 dock 288 − 右 dock 320（1280 窗口 ≈ 624px、1024 窗口 ≈ 368px）。真机未跑，以下均为常量推导 + flex 语义推演，**建议在 1024×768 + 左右 dock 全开 + 30 字符长列名的表上一次复现验证**。

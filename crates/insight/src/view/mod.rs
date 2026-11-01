@@ -14,7 +14,8 @@
 //! ```
 //!
 //! 共用助手（本文件）：`kind_badge` · `ratio_bar` · `section_title` ·
-//! `muted_line` · `tab_hint` · `empty_state` · `skeleton` · `error_block`；
+//! `muted_line` · `tab_hint` · `empty_state` · `skeleton` · `error_block` ·
+//! `summary_card`；
 //! `grade_color` 仅供下钻区 schema 摘要（Schema 健康分独立域）使用。
 //!
 //! ## 为什么不做成独立 crate
@@ -115,6 +116,27 @@ pub(crate) fn grade_color(grade: Grade, theme: &Theme) -> Hsla {
         Grade::Fair => colors.warning,
         Grade::Poor | Grade::Bad => colors.danger,
     }
+}
+
+/// 摘要卡容器（对齐产品「卡片语言」：`border + rounded_md + sidebar 底 + 标题头`，
+/// 与 property_panel 洞察总览 / 连接编辑器 / Mock 同规范，见 property-module-spec.md §17；
+/// 不用 GroupBox——outline 变体默认 p_4 在 280px 右栏太宽，content_style 覆盖 padding
+/// 类型复杂，手搓容器但取色全走主题 token）
+///
+/// 模块私有：本目录的 `drill.rs`（下钻区摘要卡 / 表画像卡 / 多列聚合占位）与
+/// `overview.rs`（摘要 Tab）共用同一容器，按本文件的可见性约定用 `use super::…` 取用。
+/// 两个调用宿主的卡片版式必须一致——它们是同一条右栏里的同一类卡片，此前各自
+/// 维护副本（定义逐字重复），改一处就会静默错另一位。
+fn summary_card(theme: &Theme) -> Div {
+    div()
+        .v_flex()
+        .w_full()
+        .gap_1()
+        .p_2()
+        .rounded_md()
+        .border_1()
+        .border_color(theme.colors.border)
+        .bg(theme.colors.sidebar)
 }
 
 /// 比例条（语义进度条）：事实占比维度 / 分布条 / 评估进度共用。

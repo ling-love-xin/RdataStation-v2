@@ -21,7 +21,7 @@ use crate::insight_view::InsightView;
 use crate::model::{ColumnCheckState, ColumnKind, ColumnProfileView, TableProfileView};
 use crate::ui;
 
-use super::kind_badge;
+use super::{kind_badge, summary_card};
 
 impl InsightView {
     /// 摘要 Tab 的载荷：表 / 列画像任一份已有就渲染对应摘要；都没有 → 空态。
@@ -408,20 +408,4 @@ fn overview_column(
                 .item("空值率", null_rate, 1)
                 .item("样本", profile.sample.len().to_string(), 1),
         )
-}
-
-/// 摘要卡容器（对齐产品「卡片语言」：`border + rounded_md + sidebar 底 + 标题头`，
-/// 与 property_panel 洞察总览 / 连接编辑器 / Mock 同规范，见 property-module-spec.md §17；
-/// 不用 GroupBox——outline 变体默认 p_4 在 280px 右栏太宽，content_style 覆盖 padding
-/// 类型复杂，手搓容器但取色全走主题 token）
-fn summary_card(theme: &Theme) -> Div {
-    div()
-        .v_flex()
-        .w_full()
-        .gap_1()
-        .p_2()
-        .rounded_md()
-        .border_1()
-        .border_color(theme.colors.border)
-        .bg(theme.colors.sidebar)
 }

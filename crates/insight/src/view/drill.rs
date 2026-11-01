@@ -25,6 +25,7 @@ use gpui_kit::*;
 
 use super::{
     empty_state, error_block, grade_color, kind_badge, muted_line, sample_loading, skeleton,
+    summary_card,
 };
 use crate::insight_view::InsightView;
 use crate::model::{
@@ -571,18 +572,4 @@ fn agg_placeholder(theme: &Theme) -> impl IntoElement {
             "选中列做 GROUP BY 分组 / 求和 / 均值 / 计数（DBeaver 式聚合）",
             theme,
         ))
-}
-
-/// 摘要卡容器（与旧摘要 / 中间页同卡片语言：`border + rounded_md + sidebar 底`；
-/// 不用 GroupBox——outline 变体默认 p_4 在 280px 右栏太宽）
-fn summary_card(theme: &Theme) -> Div {
-    div()
-        .v_flex()
-        .w_full()
-        .gap_1()
-        .p_2()
-        .rounded_md()
-        .border_1()
-        .border_color(theme.colors.border)
-        .bg(theme.colors.sidebar)
 }

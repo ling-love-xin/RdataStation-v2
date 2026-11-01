@@ -28,14 +28,9 @@ fn ui_size_constants_match_design() {
         (INSIGHT_INLINE_ICON_SIZE, 14.0, "行内小图标"),
         (INSIGHT_SECTION_TITLE_FONT, 12.0, "分区标题字号"),
         (
-            INSIGHT_CARD_VALUE_FONT,
-            28.0,
-            "概览五卡主数值基准字号（设计锚点）",
-        ),
-        (
             INSIGHT_CARD_VALUE_REM,
-            21.0,
-            "概览五卡主数值实际渲染字号（= 基准 × 缩放）",
+            17.0,
+            "概览五卡主数值字号（原型 .o-card .v）",
         ),
         (INSIGHT_HEALTH_SCORE_FONT, 36.0, "Schema 健康分字号"),
         (INSIGHT_RULES_DIALOG_WIDTH, 640.0, "规则管理对话框宽度"),
@@ -50,11 +45,19 @@ fn ui_size_constants_match_design() {
         (INSIGHT_OVERVIEW_RING_SIZE, 68.0, "右栏摘要检查器命中环直径"),
         (INSIGHT_PICKER_WIDTH, 216.0, "列选择浮层宽度"),
         (INSIGHT_WS_NUM_WIDTH, 72.0, "中间工作页数值列宽"),
-        (INSIGHT_WS_FACT_WIDTH, 52.0, "中间工作页事实指标列宽"),
         (INSIGHT_WS_STATUS_WIDTH, 52.0, "中间工作页状态词列宽"),
         (INSIGHT_WS_SOURCE_WIDTH, 56.0, "中间工作页数据源列宽"),
-        (INSIGHT_WS_COL_CARD_MIN, 272.0, "EDA 列卡最小宽度"),
-        (INSIGHT_CARD_MIN_WIDTH, 176.0, "概览五卡最小宽度"),
+        (
+            INSIGHT_WS_MIN_WIDTH,
+            672.0,
+            "中间工作页最小宽度（原型 body min-width:1000px）",
+        ),
+        (
+            INSIGHT_WS_METRIC_LABEL_WIDTH,
+            80.0,
+            "转置对比表指标标签列宽",
+        ),
+        (INSIGHT_WS_METRIC_COL_MIN_WIDTH, 104.0, "转置对比表每表列宽"),
         (INSIGHT_SET_LIST_MAX_HEIGHT, 288.0, "右栏集合列表最大高度"),
         (INSIGHT_WS_CHIP_MAX_WIDTH, 224.0, "工具栏目标 chip 最大宽度"),
         (
@@ -63,7 +66,6 @@ fn ui_size_constants_match_design() {
             "对比表「表」列最小宽度",
         ),
         (INSIGHT_WS_CHECKBOX_WIDTH, 20.0, "对比候选表勾选框占位列宽"),
-        (INSIGHT_WS_RESULT_MIN_WIDTH, 588.0, "对比结果表最小内容宽度"),
         (
             INSIGHT_WS_CANDIDATE_MIN_WIDTH,
             424.0,
@@ -80,25 +82,23 @@ fn ui_size_constants_match_design() {
     }
 }
 
-/// 契约 1b：概览卡数值字号锁的必须是**实际渲染值**，且视图不得自行再乘缩放。
+/// 契约 1b：概览卡数值字号只由 `ui::INSIGHT_CARD_VALUE_REM` 一处决定。
 ///
 /// 历史 bug：`ui.rs` 登记 28px（设计锚点），视图里写 `* 0.75` 画 21px——契约锁了一个
-/// 从未被画出来的数字，真正上屏的 21px 无人看守。`INSIGHT_CARD_VALUE_REM` 把这个
-/// 乘积收进 `ui.rs`，本守卫防止它退回视图。
+/// 从未被画出来的数字，真正上屏的 21px 无人看守。2026-11-01 对齐原型后收敛为单一
+/// 常量（原型 `.o-card .v` 的 17px），「基准」与「缩放」两个中间量已删除；本守卫
+/// 防止它们以任何形式复活。
 #[test]
-fn card_value_font_is_the_rendered_size() {
-    use rds_insight::ui::{
-        INSIGHT_CARD_VALUE_FONT, INSIGHT_CARD_VALUE_REM, INSIGHT_CARD_VALUE_SCALE,
-    };
+fn card_value_font_has_no_intermediate_scaling() {
     assert_eq!(
-        INSIGHT_CARD_VALUE_REM,
-        INSIGHT_CARD_VALUE_FONT * INSIGHT_CARD_VALUE_SCALE,
-        "ui::INSIGHT_CARD_VALUE_REM 必须由「基准 × 缩放」推导，不得写死"
+        rds_insight::ui::INSIGHT_CARD_VALUE_REM * BASE_FONT_SIZE,
+        17.0,
+        "卡片数值字号必须是原型 .o-card .v 的 17px"
     );
     for (name, src) in view_sources() {
         assert!(
-            !src.contains("INSIGHT_CARD_VALUE_FONT *"),
-            "{name} 仍在视图里自行缩放卡片数值字号；请直接用 ui::INSIGHT_CARD_VALUE_REM"
+            !src.contains("INSIGHT_CARD_VALUE_FONT") && !src.contains("INSIGHT_CARD_VALUE_SCALE"),
+            "{name} 仍在引用已删除的卡片数值「基准 / 缩放」中间量；请直接用 ui::INSIGHT_CARD_VALUE_REM"
         );
     }
 }
@@ -107,7 +107,8 @@ fn card_value_font_is_the_rendered_size() {
 ///
 /// 契约 1 / 1b 是手写清单，新常量漏登记就**静默失去守卫**（这是此前真实发生过的
 /// 漂移：`INSIGHT_WS_TAB_MAX_WIDTH` / `INSIGHT_WS_COL_CARD_MIN` 曾双双漏登记，
-/// 而后者是全模块唯一的响应式换行阈值）。故用 `ui.rs` 的源文本反查清单覆盖度。
+/// 后者当时是全模块唯一的响应式换行阈值——2026-11-01 栅格改固定列数后该常量已删）。
+/// 故用 `ui.rs` 的源文本反查清单覆盖度。
 #[test]
 fn every_ui_size_constant_is_registered() {
     let ui_src = include_str!("../src/ui.rs");

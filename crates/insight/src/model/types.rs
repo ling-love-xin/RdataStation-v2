@@ -1,6 +1,11 @@
-//! 列洞察/表画像领域类型（占位于此）
-//! TODO(migration): 自 v1 core/services/result_service.rs 抽取；
-//! 后续随 insight crate（M8）迁移时移入，并视使用方数量决定是否上收 shared。
+//! 列洞察 / 表画像的领域类型。
+//!
+//! 本文件的 struct / enum 同时承载两种契约：
+//! - **宿主 ↔ insight 引擎**的数据载荷（列画像、表探查、结构报告的读取结果）；
+//! - **持久化**（store 的 body / meta 行）与 **tauri IPC 契约**（`specta::Type` 导出到 TS）。
+//!
+//! 已从 v1 `services/result_service.rs` 整体抽出落位（Phase 0.2 边界归位完成），
+//! 不再有 pending migration。
 
 use specta::Type;
 

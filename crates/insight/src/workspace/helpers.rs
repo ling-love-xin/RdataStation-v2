@@ -11,16 +11,16 @@ pub(crate) fn divider(theme: &Theme) -> Div {
         .mx_1()
 }
 
-/// 概览五卡之一（原型 .card：键 + 值 + 说明）
+/// 概览五卡之一（原型 `.o-card`：键 + 值 + 说明）
 ///
-/// 三行文案都走 `text_ellipsis`：**卡片不会被容器无限压缩**（`min_w` 是父级
-/// `flex_wrap` 的换行阈值），收窄时是换行而不是把 21px 数值挤到卡片边框外。
+/// 宽度由父级 `flex_1` 等分（原型 `repeat(5,1fr)`），**不设最小宽**——窄容器下靠
+/// 三行 `text_ellipsis` 截断，不折行、不压缩栅格。
 pub(crate) fn summary_card(theme: &Theme, key: &str, value: String, sub: impl Into<String>) -> Div {
     let colors = theme.colors;
     let sub = sub.into();
     div()
         .flex_1()
-        .min_w(rems(ui::INSIGHT_CARD_MIN_WIDTH))
+        .min_w_0()
         .v_flex()
         .gap_0p5()
         .p_2()

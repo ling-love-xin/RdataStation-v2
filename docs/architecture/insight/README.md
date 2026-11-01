@@ -140,6 +140,29 @@ cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --tes
 - 逐阶段验收场景见 `insight-dev-plan.md` §6（T1–T14）。
 - **基线**（2026-10-25 实测，target 清空后分 target 重跑）：`cargo test -p rds-insight --lib` **244 项**全绿；集成测试 **14 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 / 表探查 / 评估全表 / 多列规则 / **快照历史 · 版本对比 · 清理（真项目目录）** / **与内置 `SUMMARIZE` 交叉校验** → 视图模型）；洞察自有契约 **4 项**（`cargo test -p rds-insight --test ui_contract`：常量契约 / 视图清单 / 裸色守卫 / 裸尺寸守卫）。**新增功能不得减少**。关联宿主 / 依赖同批回归：`cargo test -p rds-settings --lib` **32 项**；`cargo test -p rds-engine --lib duckdb::manager::tests` **11 项**（仅 manager 子集，engine 全量未在本轮重跑）；外壳契约 `cargo test -p rds-workbench --test ui_contract` **9 项**。历史累加台账（迁移基线 53 + Phase 0–5 各批新增）见 `insight-dev-plan.md` §0。临时表一致化（D50/D51/D54）与文件类数据源（D59）的 engine 支撑在 `duckdb::analysis` / `duckdb::manager` / `duckdb::temp_table` / `duckdb_service` 四处；引擎单测台账见 `../module-status.md`。
 
+## 5.1 视觉预览工具（UI 单独验证）
+
+headless 窗口测试断言的是「不 panic、状态不回归」，**它看不到像素**。而洞察的 UI 问题
+恰恰集中在像素层，因此配了独立预览目标：
+
+```sh
+cargo run -p rds-insight --example insight_preview
+```
+
+- **位置**：`crates/insight/examples/insight_preview/`（`main.rs` 主入口 + `scenarios.rs` 场景数据）。
+- **形态**：真窗口 + 真主题 + 真图标；面板即 `InsightWorkspacePanel` 原样装配，**可点击交互**。
+- **场景**：顶栏切换 11 种形态——空态 / 数值列 / 长列名 / 表画像 / 长表名 / 脏表 /
+  对比表 / 快照史 / 多标签 / 错误态 / 加载中。场景说明写在每个 Scenario 的 `hint()`。
+- **宽度档位**：`◀ 窄 / 宽 ▶` 切 368 / 480 / 624 / 784 / 960 / 铺满。**务必看 368 与 480 两档**
+  ——它们对应 1024 / 1152 窗口下中央编辑区的真实可用宽（见 §「可用宽」口径），
+  绝大多数挤压 / 溢出只在这两档现身。
+
+数据经 `InsightView::set_*` 注入（预览工具扮演宿主，同样遵循 D20「面板不自己取数」）：
+**不连库、不起引擎、不写产品数据根**，过程产物落 `.rds/tmp/insight-preview/`（已在 `.gitignore`）。
+
+新增形态：在 `scenarios.rs` 加一个 `Scenario` 变体并补 `label` / `hint` / `apply`。
+`Scenario::ALL` 是**定长数组**，漏同步长度会由编译器报错（故意如此）。
+
 ## 6. 文档地图
 
 | 文档 | 什么时候读它 |
