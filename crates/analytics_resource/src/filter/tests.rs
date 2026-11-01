@@ -1,4 +1,3 @@
-
 use super::{ResourcesFilter, SortField, SortOrder, apply_view, needs_attention};
 use crate::detail_view::ArchiveTagChip;
 use crate::model::{ArchiveKind, ArchiveStatus};
