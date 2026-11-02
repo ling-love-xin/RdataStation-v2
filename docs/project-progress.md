@@ -7,7 +7,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 当前版本 | `0.2.0`（Cargo.toml `[workspace.package]`） |
+| 当前版本 | `0.2.7`（Cargo.toml `[workspace.package]`；除 rds-ui-guard 内部守门 crate 钉 `0.1.0` 外全成员 `version.workspace = true` 继承，bump 只动根 Cargo.toml 一处） |
 | 发布通道 | GitHub Actions 云端构建（打标签即发布，`docs/architecture/release/release-pipeline.md`） |
 | beta 标签 | `RDS-beta-<版本号>` → **仅编译 Windows x86_64** 包 |
 | 定版标签 | `v<版本号>` → 恢复全平台矩阵（Linux/macOS×2） |
@@ -16,6 +16,9 @@
 **已发布**：
 - `RDS-beta-0.1.0`（2026-10-01，gpui-kit 0.6.1，Windows x64 分发包 + sha256）
 - `RDS-beta-0.2.0`（2026-10-01，**gpui-kit 0.7.0**：dialog 层由 Root 自动挂载，移除 14 处手动 `render_dialog_layer`；全仓 0 error / 0 warning，受影响 crate ~1328 测试通过；本地 release 产物 FileVersion 0.2.0）
+- `RDS-beta-0.2.3 / 0.2.4 / 0.2.5`（2026-10-20 / 10-23 / 10-29，Windows 包 + sha256 均由云端 CI 挂载；0.2.2 仅推标签未补 Release 页）
+- `RDS-beta-0.2.6`（2026-10-30，**云端构建失败**：`crates/notification/Cargo.toml` 版本钉在 `0.2.5` 未随 bump 更新，与 Cargo.lock（`0.2.6`）不一致被 `--locked` 拒绝，未建 Release 页；版本号已消耗）
+- `RDS-beta-0.2.7`（2026-11-02，携带 0.2.6 全部内容 + 55 提交；notification 改 `version.workspace = true` 根治漏改；全仓 142 目标 / 3687 过 / 0 失败）
 
 ## 2. 模块状态（主干）
 
