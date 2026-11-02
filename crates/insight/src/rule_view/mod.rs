@@ -122,6 +122,7 @@ mod tests {
             ],
             pending: None,
             trust_declined: false,
+            trust_content_changed: false,
         }
     }
 
@@ -242,6 +243,7 @@ mod tests {
             invalid: 1,
             dir: "/p/.RSmeta/insight-rules".into(),
             declined: false,
+            content_changed: false,
         });
         cx.update(|_window, cx| rules.update(cx, |view, cx| view.set_data(data.clone(), cx)));
         draw(cx);
@@ -306,6 +308,7 @@ mod tests {
             invalid: 0,
             dir: "/p".into(),
             declined: false,
+            content_changed: false,
         };
         assert_eq!(view.count(), 8);
         let summary = view.summary();
@@ -466,6 +469,7 @@ mod tests {
             builtin: vec![meta("null-check", "空值检查")],
             pending: None,
             trust_declined: false,
+            trust_content_changed: false,
         })
     }
 

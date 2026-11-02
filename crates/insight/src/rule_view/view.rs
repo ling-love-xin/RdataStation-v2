@@ -597,6 +597,13 @@ fn pending_banner(pending: &PendingRulesView, entity: &Entity<RulesView>, theme:
                         "该项目带了 {} 条规则；你此前选择了不加载。",
                         pending.count()
                     )
+                } else if pending.content_changed {
+                    // 指纹变化（git pull / 手改）：说清「为什么又问」——
+                    // 被当首次打扰会让用户以为信任丢了
+                    format!(
+                        "规则集内容已变化（你此前信任的是旧版本），已回到未加载——共 {} 条，重新确认后按新内容装配。",
+                        pending.count()
+                    )
                 } else {
                     format!(
                         "该项目带了 {} 条规则，尚未加载（未信任）。",

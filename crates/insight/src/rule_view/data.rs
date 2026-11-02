@@ -92,6 +92,9 @@ pub struct PendingRulesView {
     pub dir: String,
     /// 用户此前已明确选择「不加载」（此时横幅改说「你选择了不加载」）
     pub declined: bool,
+    /// 记录是 Trusted 但内容指纹已不符（迁移 027 起）：横幅改说「内容已变化，
+    /// 请重新确认」——用户要知道**为什么又问了一次**，而不是被当首次打扰
+    pub content_changed: bool,
 }
 
 impl PendingRulesView {
@@ -189,6 +192,8 @@ pub struct RuleDataInput {
     pub builtin: Vec<RuleMeta>,
     /// 未信任而未装配的项目规则（见 [`PendingProjectRules`]）
     pub pending: Option<PendingProjectRules>,
+    /// 记录 Trusted 但指纹不符（内容已变化；横幅话术据此区分）
+    pub trust_content_changed: bool,
     /// 用户此前已明确选择「不加载该项目规则」
     pub trust_declined: bool,
 }
@@ -343,6 +348,40 @@ pub fn build_rules_data(input: RuleDataInput) -> RulesData {
             invalid: pending.invalid,
             dir: pending.dir.display().to_string(),
             declined: input.trust_declined,
+            content_changed: input.trust_content_changed,
         }),
+    }
+}
+
+#[cfg(test)]
+mod content_changed_tests {
+    // 不用 `use super::*`：会把 gpui 的 `test` 属性宏带进作用域（skill 已知坑）
+    use super::{PendingRulesView, RuleDataInput, build_rules_data};
+
+    /// #4a：`trust_content_changed` 输入要透传到 pending 视图——横幅据此刻意区分
+    /// 「首次决定」与「内容已变化」（指纹不符，git pull / 手改都会触发）。
+    #[test]
+    fn content_changed_flag_reaches_pending_view() {
+        let input = RuleDataInput {
+            project_dir: Some(std::path::PathBuf::from("/p/.RSmeta/insight-rules")),
+            global_dir: None,
+            project_rows: Vec::new(),
+            global_rows: Vec::new(),
+            builtin: Vec::new(),
+            pending: Some(crate::rule_registry::PendingProjectRules {
+                dir: std::path::PathBuf::from("/p/.RSmeta/insight-rules"),
+                ids: vec!["gated".into()],
+                invalid: 0,
+            }),
+            trust_declined: false,
+            trust_content_changed: true,
+        };
+        let data = build_rules_data(input);
+        let pending = data.pending.expect("带 pending 输入必有 pending 视图");
+        assert!(
+            pending.content_changed,
+            "透传不能丢——丢了就退回「首次」话术"
+        );
+        assert!(!pending.declined);
     }
 }

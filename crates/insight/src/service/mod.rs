@@ -325,7 +325,7 @@ impl IndexStores {
 
         // 信任门（Q1 ③）：未信任时项目层**没装配**，所以横幅的数据不能从索引行推——
         // 它来自装配侧（`registry.pending_project()`）与信任记录本身。
-        let (pending, trust_declined) = match project_root {
+        let (pending, trust_declined, content_changed) = match project_root {
             Some(root) => {
                 let pending = crate::registry_for(Some(root))
                     .read()
@@ -335,9 +335,11 @@ impl IndexStores {
                     crate::project_rule_trust(root),
                     rule_trust::RuleTrust::Declined
                 );
-                (pending, declined)
+                // 内容指纹不符（迁移 027）：横幅话术区分「首次」与「内容已变化」
+                let content_changed = crate::trust_content_changed(root);
+                (pending, declined, content_changed)
             }
-            None => (None, false),
+            None => (None, false, false),
         };
 
         Ok(build_rules_data(RuleDataInput {
@@ -348,6 +350,7 @@ impl IndexStores {
             builtin,
             pending,
             trust_declined,
+            trust_content_changed: content_changed,
         }))
     }
 }

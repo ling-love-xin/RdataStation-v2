@@ -23,6 +23,18 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-11-03 — 信任横幅话术区分 + 集合空态组件化 + P1-8b 查证收口（backlog 1–4 批）
+
+| 项 | 状态 | 内容 |
+| --- | --- | --- |
+| ① P1-8b Arrow 直灌 | **查证后不做**（结论如下） | 驱动层 `mysql_rows_to_arrow` 类型面实测为 **bool/i64/f64/binary/utf8 五族**——DECIMAL 已在驱动层压成 f64、日期无专型。Arrow 直灌的「类型保真」前提不成立，只剩免 JSON 往返的性能收益，不抵复杂度。**方向修正**：先扩驱动层类型面（Decimal128 / Timestamp / Date 位列 Arrow），此后直灌才有意义；届时按上一条登记的 `create_analysis_temp_table_arrow` 方案实施 |
+| ② P2-12 InsightView 拆分 | **方案定稿待实施** | 四组内聚子状态：`multi_*`（表单选择/执行/提示）、`history_*`（保存/清理/对比/提示）、`overlap_*`（结果/执行/提示）、`set_*`（集合/多选/勾选）各成 struct，字段访问点集中在 insight_view.rs 本体 + view/{multi,history,set}.rs + jobs；probe/scope/prefs 三小组随做随并。纯重构无行为变化，整段会话做 |
+| ③ 右栏「引向中央」按钮化 | **并入 P2-12 同批** | drill 表画像卡尾「…完整清单见中间报告」说明行 → 语义 Button（新事件 `OpenWorkspaceRequested` → 宿主 `focus_insight_workspace_tab`）；说明行本身已是有效引导，单独做跨 crate 改动收益薄，与拆分同批顺手接 |
+| ④a 信任横幅话术 | **已落地** | 新增 `trust_content_changed`（记录 Trusted ∧ 生效非 Trusted = 指纹不符）→ `PendingRulesView.content_changed` → 横幅三分支：declined / **「内容已变化（你此前信任的是旧版本），重新确认后按新内容装配」** / 首次未信任——指纹变化场景用户要知道**为什么又问了一次**，被当首次打扰会以为信任丢了 |
+| ④b 集合空态 | **已落地** | 右栏集合空态升标准 `Empty` 组件（与中央工作页同一口径；标题+引导说「去哪儿开始」：导航树右键 / 草稿箱 / 分析存档） |
+
+**验证**：lib **279**（+1：content_changed 透传断言）+ e2e 14 + 契约 7/9 全绿。落点：`lib.rs`（`trust_record_at` 抽取 + `trust_content_changed`）、`rule_view/{data,view,mod}.rs`、`service/mod.rs`（snapshot 三元组）、`view/set.rs`。
+
 ### 2026-11-03 — P1-8a 源库全量档护栏（+ P1-8b Arrow 直灌方案登记）
 
 **P1-8a 已落地**（lib **278** + e2e 14 + 契约 7/9 全绿）：源库连接路径的「全量档」

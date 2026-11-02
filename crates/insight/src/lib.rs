@@ -199,35 +199,44 @@ fn project_trust_cache() -> &'static TrustCache {
 /// **fail closed**：查不到记录、取不到连接、库里值不认识，一律 [`RuleTrust::Undecided`]
 /// （= 项目层不装配，且会在规则管理里问一次）。
 pub fn project_rule_trust(project_root: &Path) -> RuleTrust {
-    let key = normalized_project_key(project_root);
+    let record = trust_record_at(project_root);
+    effective_trust(record, &get_project_rules_dir(project_root), project_root)
+}
 
-    let record = match project_trust_cache()
+/// 取信任记录（缓存优先，miss 时查一次全局库并回填）。
+fn trust_record_at(project_root: &Path) -> TrustRecord {
+    let key = normalized_project_key(project_root);
+    if let Some(record) = project_trust_cache()
         .read()
         .ok()
         .and_then(|cache| cache.get(&key).cloned())
     {
-        Some(record) => record,
-        None => {
-            let record = match engine::migration::get_global_db_manager() {
-                Some(manager) => {
-                    let db = manager.sqlite_pool().path().clone();
-                    let (state, fingerprint) =
-                        service::rule_trust::read_record_at(&db, project_root);
-                    TrustRecord { state, fingerprint }
-                }
-                None => TrustRecord {
-                    state: RuleTrust::Undecided,
-                    fingerprint: None,
-                },
-            };
-            if let Ok(mut cache) = project_trust_cache().write() {
-                cache.insert(key, record.clone());
-            }
-            record
+        return record;
+    }
+    let record = match engine::migration::get_global_db_manager() {
+        Some(manager) => {
+            let db = manager.sqlite_pool().path().clone();
+            let (state, fingerprint) = service::rule_trust::read_record_at(&db, project_root);
+            TrustRecord { state, fingerprint }
         }
+        None => TrustRecord {
+            state: RuleTrust::Undecided,
+            fingerprint: None,
+        },
     };
+    if let Ok(mut cache) = project_trust_cache().write() {
+        cache.insert(key, record.clone());
+    }
+    record
+}
 
-    effective_trust(record, &get_project_rules_dir(project_root), project_root)
+/// 记录为 `Trusted` 但**生效**不是 `Trusted`（内容指纹不符）——规则管理横幅据此
+/// 刻意区分「首次决定」与「内容已变化，请重新确认」：同一条信任门入口，
+/// 指纹变化场景要让用户知道「为什么又问了一次」（git pull / 手改都会触发）。
+pub fn trust_content_changed(project_root: &Path) -> bool {
+    let record = trust_record_at(project_root);
+    record.state.is_trusted()
+        && !effective_trust(record, &get_project_rules_dir(project_root), project_root).is_trusted()
 }
 
 /// 决定 ∧ 内容指纹一致 → 生效状态（判定细节见 [`project_rule_trust`] 文档）。

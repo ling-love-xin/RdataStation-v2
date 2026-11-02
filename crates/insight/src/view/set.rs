@@ -93,14 +93,21 @@ impl InsightView {
                     .max_h(rems(ui::INSIGHT_SET_LIST_MAX_HEIGHT))
                     .overflow_y_scrollbar()
                     .when(self.insight_set.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .text_xs()
-                                .text_color(colors.muted_foreground)
-                                .child("进入过洞察的表会列在这里，可对比 / 关系排查 / 归档"),
-                        )
+                        // 标准空态组件（与中央工作页空态同一套口径：居中布局 +
+                        // 虚线框 + 标题/说明槽位；说的是「去哪儿开始」）
+                        use gpui_kit::component::empty::{
+                            Empty, EmptyDescription, EmptyHeader, EmptyTitle,
+                        };
+                        this.child(div().w_full().child(
+                            Empty::new().header(
+                                EmptyHeader::new()
+                                    .title(EmptyTitle::new()
+                                        .child("还没有进入过洞察的表"))
+                                    .description(EmptyDescription::new().child(
+                                        "导航树右键「查看洞察」、草稿箱 / 分析存档「查看洞察」都能开始；进入过的表在这里可对比 / 关系排查 / 归档",
+                                    )),
+                            ),
+                        ))
                     })
                     .children(
                         self.insight_set
