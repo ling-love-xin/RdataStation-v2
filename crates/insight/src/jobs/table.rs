@@ -8,6 +8,12 @@ use super::*;
 /// 一列一列跑既不会超限，又能把进度如实给出来。为了让进度真的动起来，每列单独 dispatch
 /// 到后台执行器（而不是一整个循环全在后台），算完一列就回头更新一次面板。
 /// 本模块只回填事实统计与检查器命中，**不合成质量总分 / 等级**（评级归归档后的资产库审计侧）。
+///
+/// 逐列的**基础量走预计算**：基准 bundle 的列摘要（一次查询算出全表各列
+/// total / non_null / unique）+ `DESCRIBE` 的列类型喂给
+/// `get_column_insight_full_with_basics`——每列免 `COUNT / COUNT(DISTINCT) / typeof`
+/// 三查（`COUNT(DISTINCT)` 是全表重聚合，200 列表省 ~199 次单列扫描）。
+/// 摘要缺席（那一步失败）时该列回退自算路径，行为同旧。
 pub fn request_table_evaluation(
     view: &Entity<InsightView>,
     project_root: Option<PathBuf>,
@@ -18,17 +24,15 @@ pub fn request_table_evaluation(
     let weak = view.downgrade();
     cx.spawn(async move |cx| {
         // 先拿列清单：以**磁盘现状**为准（目标带的列可能已过期）
-        let base = {
+        let bundle = {
             let table = temp_table.clone();
-            let name = table_name.clone();
-            let root = project_root.clone();
-            let task = cx.background_executor().spawn(async move {
-                InsightService::profile_table_view(root.as_deref(), &table, &name)
-            });
+            let task = cx
+                .background_executor()
+                .spawn(async move { crate::insight_engine::get_table_eda_bundle(&table) });
             task.await
         };
-        let base = match base {
-            Ok(profile) => profile,
+        let bundle = match bundle {
+            Ok(bundle) => bundle,
             Err(err) => {
                 let info = InsightService::describe_error(&err);
                 let _ = weak.update(cx, |panel, cx| {
@@ -37,6 +41,36 @@ pub fn request_table_evaluation(
                 return;
             }
         };
+        let base = crate::service::table_profile_view_of(&bundle, &table_name);
+
+        // 逐列预计算基础量：摘要计数 + DESCRIBE 列类型（缺任一则该列不进表，回退自算）
+        let basics_by_name: std::collections::HashMap<String, crate::insight_engine::ColumnBasics> =
+            bundle
+                .column_summary
+                .as_ref()
+                .map(|summary| {
+                    summary
+                        .iter()
+                        .filter_map(|brief| {
+                            let data_type = bundle
+                                .profile
+                                .columns
+                                .iter()
+                                .find(|c| c.column_name == brief.name)
+                                .map(|c| c.data_type.clone())?;
+                            Some((
+                                brief.name.clone(),
+                                crate::insight_engine::ColumnBasics {
+                                    total: brief.total,
+                                    non_null: brief.non_null,
+                                    unique: brief.unique,
+                                    data_type,
+                                },
+                            ))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
 
         let total = base.columns.len();
         // 列检查器聚合（评估完成后随表级事实摘要一起写入；见下方 `with_checker`）
@@ -62,8 +96,17 @@ pub fn request_table_evaluation(
             let table = temp_table.clone();
             let name = column.name.clone();
             let root = project_root.clone();
+            let basics = basics_by_name.get(&column.name).cloned();
             let task = cx.background_executor().spawn(async move {
-                InsightService::get_column_insight_full(root.as_deref(), &table, &name)
+                match &basics {
+                    Some(basics) => InsightService::get_column_insight_full_with_basics(
+                        root.as_deref(),
+                        &table,
+                        &name,
+                        basics,
+                    ),
+                    None => InsightService::get_column_insight_full(root.as_deref(), &table, &name),
+                }
             });
             match task.await {
                 Ok(full) => {

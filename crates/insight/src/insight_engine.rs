@@ -120,6 +120,57 @@ pub fn get_column_insight_full_on(
     })
 }
 
+/// [`get_column_insight_full`] 的**预计算基础量**版：basics 来自表级摘要 + `DESCRIBE`
+/// （评估全表逐列用），统计构建免 `COUNT / COUNT(DISTINCT) / typeof` 三查，
+/// 数值列直方图的行数下限判定也复用 `basics.non_null`（再省一查）。
+pub fn get_column_insight_full_with_basics(
+    registry: &RuleRegistry,
+    temp_table: &str,
+    column_name: &str,
+    basics: &ColumnBasics,
+) -> Result<ColumnInsightFull, CoreError> {
+    let _permit = insight_semaphore().try_acquire().map_err(|_| {
+        CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string()))
+    })?;
+
+    let duckdb = get_or_create_duckdb()?;
+    let conn = duckdb.lock().map_err(|e| {
+        CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
+    })?;
+
+    get_column_insight_full_on_with_basics(registry, &conn, temp_table, column_name, basics)
+}
+
+/// [`get_column_insight_full_on`] 的预计算基础量版（已持连接场景，同 `*_on` 口径）。
+pub fn get_column_insight_full_on_with_basics(
+    registry: &RuleRegistry,
+    conn: &duckdb::Connection,
+    temp_table: &str,
+    column_name: &str,
+    basics: &ColumnBasics,
+) -> Result<ColumnInsightFull, CoreError> {
+    let stats = get_column_stats_with_basics(registry, conn, temp_table, column_name, basics)?;
+    let sample = get_column_sample_internal(conn, temp_table, column_name)?;
+
+    let histogram = match &stats.stats_detail {
+        ColumnStatsDetail::Numeric(_) => get_column_histogram_with_non_null(
+            registry,
+            conn,
+            temp_table,
+            column_name,
+            Some(basics.non_null),
+        )
+        .ok(),
+        _ => None,
+    };
+
+    Ok(ColumnInsightFull {
+        stats,
+        sample,
+        histogram,
+    })
+}
+
 /// 临时表画像（表探查（Tab「表」）的数据源）：DuckDB 内省列元数据 + 行数。
 ///
 /// 面板的表目标指向的是 **DuckDB 临时表**（结果集表 / `tmp_i_` 样本表）——
@@ -202,11 +253,11 @@ pub fn get_temp_table_profile_on(
 }
 
 /// EDA 列统计摘要：对临时表**所有列一次查询**拿空值率与唯一值数。
-///
-/// 拼一条 `SELECT`（每列两个表达式：`AVG(col IS NULL)` 与 `COUNT(DISTINCT col)`），
+/// 拼一条 `SELECT`（每列两个表达式：`COUNT(col)` 与 `COUNT(DISTINCT col)`），
 /// 只跑一次 DuckDB 查询——业务表 200+ 列也不该逐列往返。
-/// 唯一率 = 唯一值数 / 非空行数（`COUNT(DISTINCT)` 天然不算 NULL）；
-/// 行数为 0 或统计本身不可用（如空表）返回 `None`，调用方不编假值。
+/// 空值率 / 唯一率从**精确计数**派生（不落 `AVG` 浮点中转）；计数本身保留在
+/// [`ColumnStatBrief`] 上，供逐列评估直接复用（免每列再跑一次 `COUNT(DISTINCT)`
+/// 全表聚合）。行数为 0 或统计本身不可用（如空表）率返回 `None`，调用方不编假值。
 pub fn compute_table_column_summary_on(
     conn: &duckdb::Connection,
     temp_table: &str,
@@ -217,9 +268,7 @@ pub fn compute_table_column_summary_on(
     for (ix, column) in columns.iter().enumerate() {
         // 列名经 quote_ident 转义，防含引号列名（CSV 表头带 `"` 不算罕见）
         let quoted = quote_ident(column);
-        select_parts.push(format!(
-            "AVG(CAST({quoted} IS NULL AS INTEGER)) AS \"__n{ix}\""
-        ));
+        select_parts.push(format!("COUNT({quoted}) AS \"__c{ix}\""));
         select_parts.push(format!("COUNT(DISTINCT {quoted}) AS \"__u{ix}\""));
     }
     let sql = format!(
@@ -249,19 +298,21 @@ pub fn compute_table_column_summary_on(
     })? {
         let total: i64 = row.get::<_, Option<i64>>(0)?.unwrap_or(0);
         for (ix, column) in columns.iter().enumerate() {
-            let null_rate = row.get::<_, Option<f64>>(ix * 2 + 1)?;
+            let non_null: i64 = row.get::<_, Option<i64>>(ix * 2 + 1)?.unwrap_or(0);
             let unique: i64 = row.get::<_, Option<i64>>(ix * 2 + 2)?.unwrap_or(0);
+            // 空值率 = 空行数 / 总行数（精确整数相除，与旧 AVG 口径等值）
+            let null_rate = (total > 0).then(|| {
+                let nulls = (total - non_null).max(0);
+                nulls as f64 / total as f64
+            });
             // 唯一率 = 唯一值数 / **非空行数**（`COUNT(DISTINCT)` 不算 NULL，分母
             // 也不该算；除以总行数会把含空值列的唯一率低估）。全空列兜底 0。
-            let unique_rate = match (null_rate, total > 0) {
-                (Some(null_rate), true) => {
-                    let non_null = (total as f64) * (1.0 - null_rate);
-                    Some((unique as f64) / non_null.max(1.0))
-                }
-                _ => None,
-            };
+            let unique_rate = (total > 0).then(|| (unique as f64) / (non_null as f64).max(1.0));
             result.push(ColumnStatBrief {
                 name: column.clone(),
+                total,
+                non_null,
+                unique,
                 null_rate,
                 unique_rate,
             });
@@ -685,6 +736,7 @@ pub fn get_column_stats_internal(
     temp_table: &str,
     column_name: &str,
 ) -> Result<ColumnStats, CoreError> {
+    // 基础量自算（调用方没有预计算可喂时的路径）：计数 + typeof 两条查询。
     let count_sql = format!(
         "SELECT COUNT(*), COUNT({col}), COUNT(DISTINCT {col}) FROM {table}",
         col = quote_ident(column_name),
@@ -701,13 +753,6 @@ pub fn get_column_stats_internal(
             )))
         })?;
 
-    let null_count = (total - non_null) as usize;
-    let null_rate = if total > 0 {
-        null_count as f64 / total as f64
-    } else {
-        0.0
-    };
-
     let type_sql = format!(
         "SELECT typeof({col}) FROM {table} WHERE {col} IS NOT NULL LIMIT 1",
         col = quote_ident(column_name),
@@ -717,9 +762,69 @@ pub fn get_column_stats_internal(
         .query_row(&type_sql, [], |row| row.get(0))
         .unwrap_or_else(|_| "VARCHAR".to_string());
 
+    get_column_stats_with_basics(
+        registry,
+        conn,
+        temp_table,
+        column_name,
+        &ColumnBasics {
+            total,
+            non_null,
+            unique: unique_cnt,
+            data_type,
+        },
+    )
+}
+
+/// 列画像的**预计算基础量**（总行数 / 非空 / 唯一值 / 列类型）。
+///
+/// 表级摘要（[`compute_table_column_summary_on`]）一次查询就为**全部列**算出
+/// 前三样；`DESCRIBE` 给出列类型。逐列评估把它们喂进来（[`get_column_stats_with_basics`]），
+/// 免去每列重跑 `COUNT / COUNT(DISTINCT)` 全表聚合与 `typeof` 探查
+/// （200 列表 ≈ 省 400 次查询，其中 `COUNT(DISTINCT)` 是重聚合）。
+///
+/// 一致性口径：basics 与后续规则查询**不是同一快照**——分析临时表是取样产物、
+/// 建表后不再写入，可视为不变；若表被回收，规则查询自己会失败（列标灰态可补算）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnBasics {
+    /// 总行数
+    pub total: i64,
+    /// 非空行数
+    pub non_null: i64,
+    /// 唯一值数（`COUNT(DISTINCT)`，不含 NULL）
+    pub unique: i64,
+    /// 列类型名（`DESCRIBE` 的 `column_type`；仅 `non_null > 0` 时参与类型分派）
+    pub data_type: String,
+}
+
+/// 在**预计算基础量**上构建列统计（免 `COUNT / COUNT(DISTINCT) / typeof` 三查）。
+///
+/// 与 [`get_column_stats_internal`] 的关系：后者 = 自算 basics + 本函数；
+/// 数字口径完全一致（同一张表两条路径的 `ColumnStats` 应相等——有等价性测试钉住）。
+pub fn get_column_stats_with_basics(
+    registry: &RuleRegistry,
+    conn: &duckdb::Connection,
+    temp_table: &str,
+    column_name: &str,
+    basics: &ColumnBasics,
+) -> Result<ColumnStats, CoreError> {
+    let ColumnBasics {
+        total,
+        non_null,
+        unique: unique_cnt,
+        data_type,
+    } = basics;
+
+    let null_count = (*total - non_null).max(0);
+    let null_rate = if *total > 0 {
+        null_count as f64 / *total as f64
+    } else {
+        0.0
+    };
+
     let dt_lower = data_type.to_lowercase();
 
-    let stats_detail = if non_null == 0 {
+    let stats_detail = if *non_null == 0 {
         ColumnStatsDetail::Unknown
     } else if is_numeric_type(&dt_lower) {
         compute_numeric_stats(registry, conn, temp_table, column_name)?
@@ -733,13 +838,14 @@ pub fn get_column_stats_internal(
         compute_text_stats(registry, conn, temp_table, column_name)?
     };
 
+    // 饱和转换：领域类型是 u32，超界（>42.9 亿行）封顶而不是回绕成小数
     Ok(ColumnStats {
         column_name: column_name.to_string(),
-        data_type,
-        total_count: total as u32,
-        null_count: null_count as u32,
+        data_type: data_type.clone(),
+        total_count: u32::try_from(*total).unwrap_or(u32::MAX),
+        null_count: u32::try_from(null_count).unwrap_or(u32::MAX),
         null_rate,
-        unique_count: Some(unique_cnt as u32),
+        unique_count: Some(u32::try_from(*unique_cnt).unwrap_or(u32::MAX)),
         stats_detail,
     })
 }
@@ -1072,14 +1178,30 @@ pub fn get_column_histogram_internal(
     temp_table: &str,
     column_name: &str,
 ) -> Result<Vec<DistributionBin>, CoreError> {
-    let count_sql = format!(
-        "SELECT COUNT(*) FROM {table} WHERE {col} IS NOT NULL",
-        table = quote_ident(temp_table),
-        col = quote_ident(column_name)
-    );
-    let count: i64 = conn
-        .query_row(&count_sql, [], |row| row.get(0))
-        .unwrap_or(0);
+    get_column_histogram_with_non_null(registry, conn, temp_table, column_name, None)
+}
+
+/// [`get_column_histogram_internal`] 的非空行数预计算版：`Some(n)` 时免一次
+/// `COUNT … WHERE IS NOT NULL` 查询（行数下限判定直接用预计算值）。
+fn get_column_histogram_with_non_null(
+    registry: &RuleRegistry,
+    conn: &duckdb::Connection,
+    temp_table: &str,
+    column_name: &str,
+    non_null_hint: Option<i64>,
+) -> Result<Vec<DistributionBin>, CoreError> {
+    let count: i64 = match non_null_hint {
+        Some(n) => n,
+        None => {
+            let count_sql = format!(
+                "SELECT COUNT(*) FROM {table} WHERE {col} IS NOT NULL",
+                table = quote_ident(temp_table),
+                col = quote_ident(column_name)
+            );
+            conn.query_row(&count_sql, [], |row| row.get(0))
+                .unwrap_or(0)
+        }
+    };
 
     if count < HISTOGRAM_MIN_ROWS {
         return Ok(vec![]);
@@ -1905,6 +2027,91 @@ value_type = "f64"
             err.to_string().contains("缺少字段"),
             "报错要点名缺失字段（不编 0.0）：{err}"
         );
+        Ok(())
+    }
+
+    /// P1-7 等价性：同一条列上「自算基础量」（`get_column_stats_internal`）与
+    /// 「表级摘要预计算基础量」（`get_column_stats_with_basics`）两条路径的
+    /// `ColumnStats` **完全一致**——预计算是评估全表的批量入口，数字口径不能分叉。
+    /// 覆盖三类列（数值 / 文本 / 布尔）与含 NULL 数据。
+    #[test]
+    fn test_preset_basics_path_matches_self_computed_path() -> Result<(), CoreError> {
+        let conn = duckdb::Connection::open_in_memory().map_err(duckdb_err)?;
+        conn.execute_batch(
+            "CREATE TABLE rs_equiv (amount DOUBLE, note VARCHAR, flag BOOLEAN);
+             INSERT INTO rs_equiv VALUES
+                 (1.0, 'a', true), (2.0, 'b', false), (NULL, 'a', NULL),
+                 (4.0, 'c', true), (5.0, 'a', false), (6.0, NULL, true),
+                 (7.5, 'd', true), (8.0, 'e', false)",
+        )
+        .map_err(duckdb_err)?;
+
+        let registry = test_registry();
+        let names = ["amount", "note", "flag"];
+        let summary = compute_table_column_summary_on(
+            &conn,
+            "rs_equiv",
+            &names.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        )?;
+        // 列类型走 DESCRIBE（与 jobs 评估循环的喂法同源）
+        let profile = get_temp_table_profile_on(&conn, "rs_equiv")?;
+
+        for name in names {
+            let brief = summary
+                .iter()
+                .find(|b| b.name == name)
+                .expect("摘要覆盖全列");
+            let data_type = profile
+                .columns
+                .iter()
+                .find(|c| c.column_name == name)
+                .expect("DESCRIBE 覆盖全列")
+                .data_type
+                .clone();
+            let basics = ColumnBasics {
+                total: brief.total,
+                non_null: brief.non_null,
+                unique: brief.unique,
+                data_type,
+            };
+            let self_computed = get_column_stats_internal(&registry, &conn, "rs_equiv", name)?;
+            let preset = get_column_stats_with_basics(&registry, &conn, "rs_equiv", name, &basics)?;
+            assert_eq!(
+                self_computed, preset,
+                "「{name}」两条路径的列统计必须一致（预计算不得改变口径）"
+            );
+        }
+        Ok(())
+    }
+
+    /// 摘要的**精确计数**是逐列评估的预计算来源：total / non_null / unique 直接
+    /// 来自 SQL 计数（不落浮点中转），空值率 / 唯一率由计数派生。
+    #[test]
+    fn test_column_summary_counts_are_exact() -> Result<(), CoreError> {
+        let conn = duckdb::Connection::open_in_memory().map_err(duckdb_err)?;
+        conn.execute_batch(
+            "CREATE TABLE rs_counts (v INTEGER, t VARCHAR);
+             INSERT INTO rs_counts VALUES
+                 (1, 'x'), (2, 'x'), (NULL, 'y'), (3, NULL), (3, 'x')",
+        )
+        .map_err(duckdb_err)?;
+
+        let summary = compute_table_column_summary_on(
+            &conn,
+            "rs_counts",
+            &["v".to_string(), "t".to_string()],
+        )?;
+        let v = summary.iter().find(|b| b.name == "v").unwrap();
+        assert_eq!(
+            (v.total, v.non_null, v.unique),
+            (5, 4, 3),
+            "v：5 行 4 非空 3 唯一"
+        );
+        assert_eq!(v.null_rate, Some(0.2));
+        assert_eq!(v.unique_rate, Some(0.75));
+
+        let t = summary.iter().find(|b| b.name == "t").unwrap();
+        assert_eq!((t.total, t.non_null, t.unique), (5, 4, 2));
         Ok(())
     }
 }

@@ -80,12 +80,21 @@ pub enum ColumnMiniStats {
 ///
 /// 用于概览五卡（缺失率 / 唯一率）、缺失矩阵与值得关注区——这些指标
 /// 从列级统计现算，不依赖逐列跑规则（规则是「评估全表」的贵工序）。
+/// 计数字段（`total` / `non_null` / `unique`）是**精确值**：逐列评估把它们喂回
+/// 引擎（[`crate::insight_engine::ColumnBasics`]），免去每列重跑一次
+/// `COUNT / COUNT(DISTINCT)` 全表聚合（一次摘要惠及全部列）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnStatBrief {
     pub name: String,
-    /// 空值率（0–1）；列全空 / 查询失败为 `None`
+    /// 总行数（`COUNT(*)`，全列一致；同一查询快照）
+    pub total: i64,
+    /// 非空行数（`COUNT(col)`）
+    pub non_null: i64,
+    /// 唯一值数（`COUNT(DISTINCT col)`，不含 NULL）
+    pub unique: i64,
+    /// 空值率（0–1）= (total − non_null) / total；空表为 `None`
     pub null_rate: Option<f64>,
-    /// 唯一率（唯一值数 / 非空行数，0–1）
+    /// 唯一率（唯一值数 / 非空行数，0–1）；空表为 `None`
     pub unique_rate: Option<f64>,
 }
 

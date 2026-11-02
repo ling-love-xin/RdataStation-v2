@@ -23,6 +23,20 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-11-02 — 评估链逐列去冗余（K24 ⑫：表级摘要喂给逐列评估）
+
+**背景**：上一批加固后评估链剩最后一块冗余——逐列评估每列重跑 `COUNT / COUNT(DISTINCT) / typeof`（其中 `COUNT(DISTINCT)` 是**全表重聚合**），而基准 bundle 的列摘要**一次查询**已算出全表各列计数、`DESCRIBE` 已给列类型。**已完成并验证**（`cargo test -p rds-insight --lib` **270 项**（+2 等价性 / 精确计数）+ 集成 **14 项**（含 `stats_agree_with_duckdb_summarize` 交叉校验——预计算路径数字端到端正确）+ 契约 **7 + 9 项**全绿；examples 编译通过；全套连跑 3 次稳定）：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 精确计数 | `ColumnStatBrief` 增 `total` / `non_null` / `unique`（精确 `i64`，率由计数派生）；摘要 SQL 每列改 `COUNT(col)` + `COUNT(DISTINCT col)`（替代 `AVG(IS NULL)`，免浮点中转；口径不变，`null_rate` / `unique_rate` 语义与取值同旧） | `model/profile.rs` + `insight_engine.rs` |
+| 预计算入口 | 新增 `ColumnBasics`（total / non_null / unique / data_type）与 `get_column_stats_with_basics`（统计构建拆出，免三查）、`get_column_insight_full[_on]_with_basics`（画像入口）；`get_column_stats_internal` = 自算 basics + 前者（两路径同源）。计数转 u32 改**饱和**（原 `as u32` 截断回绕） | `insight_engine.rs` |
+| 直方图提示 | `get_column_histogram_with_non_null(non_null_hint)`：预计算路径免 `COUNT … WHERE IS NOT NULL` 一查（行数下限直接用摘要值） | 同上 |
+| 评估循环接线 | jobs 评估循环：基准改 `get_table_eda_bundle` + `table_profile_view_of`（视图构建与 `profile_table_view` 共用一处），逐列喂 `ColumnBasics`；摘要缺席（该步失败）或列不在摘要 → 回退自算路径（行为同旧）。每列净省 2~3 查（200 列表 ≈ 省 400+ 次查询，其中 199 次为重聚合） | `jobs/table.rs` + `service/mod.rs`（`table_profile_view_of` / 门面 `get_column_insight_full_with_basics`）+ `service/sampling.rs` |
+| 一致性口径 | basics 与后续规则查询非同一快照——分析临时表是取样产物、建表后不再写入；表被回收则规则查询自己失败（列灰态可补算）。**等价性测试**钉住两路径 `ColumnStats` 完全一致（数值 / 文本 / 布尔 × 含 NULL 数据） | `insight_engine.rs` 测试 |
+
+**仍不做**（维持上一批口径）：源库连接路径 Full 档的行数上限与 Arrow 化、`InsightView` 状态分组拆分、typed error 替换 `describe_error` 字符串匹配、信任门内容指纹。
+
 ### 2026-11-02 — 规则执行器与评估链加固（K24：全量审计 → 8 项收口）
 
 **背景**：对洞察 crate 做了一次全量代码审计（引擎 / 执行器 / 注册表 / 服务 / jobs / 视图宿主 / 规则资产），发现一批正确性与静默失败问题，详见 `insight-architecture.md` §11 K24。**已完成并验证**（`cargo test -p rds-insight --lib` **268 项** + 集成 `column_profile_e2e` **14 项** + 洞察契约 `ui_contract` **7 项** + 外壳契约 **9 项**全绿；`--examples` 编译通过）：

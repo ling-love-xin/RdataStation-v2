@@ -58,13 +58,7 @@ impl InsightService {
         // 一次令牌 + 一次锁内取齐四段（DESCRIBE / 列摘要 / 重复行 / 样本；
         // 后三段失败为 None，不阻塞画像——见 get_table_eda_bundle）
         let bundle = crate::insight_engine::get_table_eda_bundle(temp_table)?;
-        let mut view = TableProfileView::from_profile(&bundle.profile, table_name);
-        if let Some(stats) = bundle.column_summary {
-            view.fill_column_stats(&stats);
-        }
-        view.dup_rows = bundle.dup_rows;
-        view.sample = bundle.sample;
-        Ok(view)
+        Ok(super::table_profile_view_of(&bundle, table_name))
     }
 
     // ==================== 跨表关系排查（T19） ====================

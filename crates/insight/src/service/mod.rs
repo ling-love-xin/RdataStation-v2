@@ -80,6 +80,25 @@ impl InsightService {
         })
     }
 
+    /// [`Self::get_column_insight_full`] 的**预计算基础量**版（评估全表逐列用）：
+    /// 表级摘要（`compute_table_column_summary_on`）与 `DESCRIBE` 已给出计数与类型，
+    /// 喂进来免去每列重跑 `COUNT / COUNT(DISTINCT) / typeof`（重聚合省 N-1 次）。
+    pub fn get_column_insight_full_with_basics(
+        project_root: Option<&Path>,
+        temp_table: &str,
+        column_name: &str,
+        basics: &crate::insight_engine::ColumnBasics,
+    ) -> Result<ColumnInsightFull, CoreError> {
+        with_rules(project_root, |registry| {
+            crate::insight_engine::get_column_insight_full_with_basics(
+                registry,
+                temp_table,
+                column_name,
+                basics,
+            )
+        })
+    }
+
     /// 列基础统计（不含样本与直方图），更轻。
     pub fn get_column_insights(
         project_root: Option<&Path>,
@@ -426,6 +445,21 @@ fn hits_any(haystack_lower: &str, needles: &[&str]) -> bool {
 }
 
 // ==================== 引擎结果取数 ====================
+
+/// 表探查 bundle → 视图模型（`profile_table_view` 与评估全表的基准构建共用一处，
+/// 两边永远同一口径——三段附表统计缺席就是缺席，不编假值）。
+pub(crate) fn table_profile_view_of(
+    bundle: &crate::insight_engine::TableEdaBundle,
+    table_name: &str,
+) -> crate::model::TableProfileView {
+    let mut view = crate::model::TableProfileView::from_profile(&bundle.profile, table_name);
+    if let Some(stats) = &bundle.column_summary {
+        view.fill_column_stats(stats);
+    }
+    view.dup_rows = bundle.dup_rows;
+    view.sample = bundle.sample.clone();
+    view
+}
 
 /// 引擎执行结果 → 「列名 + 行」（**进程内**直读，不经 JSON 契约序列化）。
 ///
