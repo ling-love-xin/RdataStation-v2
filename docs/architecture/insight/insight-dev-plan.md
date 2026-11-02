@@ -23,6 +23,27 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-11-02 — 规则执行器与评估链加固（K24：全量审计 → 8 项收口）
+
+**背景**：对洞察 crate 做了一次全量代码审计（引擎 / 执行器 / 注册表 / 服务 / jobs / 视图宿主 / 规则资产），发现一批正确性与静默失败问题，详见 `insight-architecture.md` §11 K24。**已完成并验证**（`cargo test -p rds-insight --lib` **268 项** + 集成 `column_profile_e2e` **14 项** + 洞察契约 `ui_contract` **7 项** + 外壳契约 **9 项**全绿；`--examples` 编译通过）：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 双重执行 | 规则 SQL 旧实现「预执行取列名 + `query_map` 再跑一遍」= 每条规则 ×2；改单次执行（`run_query` 回调式，列名从执行后的 `Rows` 反取 `Statement`）——评估链最大单项性能收益 | `rule_executor.rs` |
+| 静默丢行 | `execute_list` 的 `filter_map(r.ok())` 违反 D19，行读错误现向上抛 | 同上 |
+| single 多行 | 旧实现静默取「最后一行」；改早失败（提示加聚合或声明 `list`） | 同上（+回归用例） |
+| 门控 null 语义 | `min` 遇 null 判失败 / `max` 遇 null 通过的不对称，统一为**均不判**（D49 口径；`validate_rule` 注释同步） | `rule_executor.rs` + `rule_registry.rs` |
+| 标识符转义 | 手拼 SQL 统一走 `quote_ident`（count / typeof / 样本 / 直方图 / 摘要 / 迷你统计 / 重复行 / overlap / DESCRIBE）；含 `"` 的 CSV 表头不再拼坏查询。**已知边界**：规则参数路径仍拒 `"`，含引号列的逐列规则统计会失败（报错可读） | `insight_engine.rs` |
+| 唯一率分母 | `compute_table_column_summary_on` 注释「唯一值数 / 非空行数」、代码除以总行数（含 NULL）——已对齐注释口径（`>0.9` 疑似键判定随之更准） | 同上（+回归用例） |
+| 假统计 | `numeric-stats` 被覆盖成输出契约不完整版本时不再 `unwrap_or(0.0)`，早失败点名缺失字段（K10 加固面） | 同上（+回归用例） |
+| 评估单列失败不连坐 | `request_table_evaluation` 单列失败改标灰态（C5 补算入口）继续；全列失败才推整页错误态——对齐架构 §5.5（原文一直这么承诺，代码此前是「一列失败整表报废」）。新增 `TableProfileView::with_column_interrupted` | `jobs/table.rs` + `model/profile.rs`（+端到端用例） |
+| 表探查一次成型 | 一次表探查（DESCRIBE / 列摘要 / 重复行 / 样本）原各自抢一次 D12 令牌与锁——快速失败窗口 ×4，并行测试下还把偶发配额错误放大成用例失败（实测 1/3 概率）；合并为 `get_table_eda_bundle`（一次令牌 + 一次锁内四段 `*_on`），`profile_table_view` 与 `profile_source_table` 两处重复序列一并收敛 | `insight_engine.rs` + `service/sampling.rs` + `service/persistence.rs` |
+| 缓存 | `builtin_rule_ids()`（索引同步热路径）`OnceLock` 缓存，不再每次重解析 18 份内嵌 TOML | `lib.rs` |
+| 死代码 | 删 `service::persistence::{profile_column_from_table, batch_evaluate_columns, get_column_insight_history}`（零调用者 + 反引号方言写死 + 唯一残留的旧评分模型生产调用点；2026-09-17「两处样本表改姿势」的受益方即这两个函数，改造随函数删除一并退场，历史记录见 2026-09-17 小节） | `service/persistence.rs` + `service/mod.rs` re-export + `rule_trust.rs` 注释 |
+| 静态门 | 黑名单补 `EXECUTE` / `PREPARE` / `ANALYZE` | `rule_registry.rs` |
+
+**本批不做**（另立项）：评估链逐列去冗余（profile 摘要已算过的 null/unique 不必逐列重算，`typeof` 可复用列元数据——表探查侧的四段合并已随 `get_table_eda_bundle` 落地，逐列侧未动）、源库连接路径 Full 档的行数上限与 Arrow 化、`InsightView` 状态分组拆分、typed error 替换 `describe_error` 字符串匹配、信任门内容指纹。
+
 ### 2026-11-01 — 版式路线对齐原型（固定栅格 + 整体横向滚动）
 
 **背景**：真机跑 `examples/insight_preview` 后反馈「差距好多」，遂与

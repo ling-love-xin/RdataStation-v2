@@ -80,7 +80,7 @@ pub fn trust_key(project_root: &Path) -> String {
 ///
 /// **不用连接池的 `acquire_sync`**：它在「已处于 tokio 运行时」的调用点会直接返回错误
 /// （`acquire_sync` 自己的契约），而 `build_registry` 确实可能从异步路径进来
-/// （例如 `profile_column_from_table` 就是 async）。真让它失败，已信任的项目会**静默**
+/// （例如 `sample_source_to_analysis_table` 就是 async）。真让它失败，已信任的项目会**静默**
 /// 少装一层规则——正是本功能要消除的那类问题。
 ///
 /// 改为**自开一条只读连接**：一次主键查询，开销微秒级；而且结果会被进程级缓存记住，

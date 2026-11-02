@@ -1,7 +1,7 @@
 use crate::model::types::ColumnInsightFull;
 use crate::model::{ColumnProfileView, SampleSource, TableProfileView};
 use crate::store::{InsightMetaStore, InsightStorage};
-use crate::{insight_engine, quality_scorer, store};
+use crate::{insight_engine, store};
 use shared::error::{CommonError, CoreError};
 
 /// 源取样的默认行数上限（`ProbeConfig::sample_default` 的 `RowCount` 基数）。
@@ -304,25 +304,14 @@ pub async fn profile_source_table(
     config: &crate::model::ProbeConfig,
 ) -> Result<(String, TableProfileView), CoreError> {
     let temp_table = sample_source_to_analysis_table(source, config).await?;
-    let profile = insight_engine::get_temp_table_profile(&temp_table)?;
-    let mut view = TableProfileView::from_profile(&profile, table_name);
-    // EDA 列统计摘要（缺失率 / 唯一率）：失败不阻塞画像（保留 None）
-    let column_names: Vec<String> = profile
-        .columns
-        .iter()
-        .map(|c| c.column_name.clone())
-        .collect();
-    if let Ok(stats) = insight_engine::compute_table_column_summary(&temp_table, &column_names) {
+    // 一次令牌 + 一次锁内取齐四段（与 profile_table_view 同一口径）
+    let bundle = insight_engine::get_table_eda_bundle(&temp_table)?;
+    let mut view = TableProfileView::from_profile(&bundle.profile, table_name);
+    if let Some(stats) = bundle.column_summary {
         view.fill_column_stats(&stats);
     }
-    // 整行重复统计（概览五卡「重复行」）：失败不阻塞画像，卡位显示「—」
-    if let Ok(dup) = insight_engine::compute_dup_rows(&temp_table) {
-        view.dup_rows = Some(dup);
-    }
-    // EDA 样本（前 5 行）：失败不阻塞画像（样本区给空态）
-    if let Ok(sample) = insight_engine::get_temp_table_sample(&temp_table) {
-        view.sample = Some(sample);
-    }
+    view.dup_rows = bundle.dup_rows;
+    view.sample = bundle.sample;
     Ok((temp_table, view))
 }
 
@@ -397,16 +386,6 @@ pub async fn save_column_insight_snapshot(
     Ok((snapshot_id, version_id))
 }
 
-pub async fn get_column_insight_history(
-    column_name: &str,
-    insight_store: &InsightStorage,
-) -> Result<Vec<crate::store::InsightVersionEntry>, CoreError> {
-    insight_store
-        .columns
-        .get_history(column_name, Some(10))
-        .await
-}
-
 pub async fn cleanup_old_insight_snapshots(
     days: i32,
     insight_store: &InsightStorage,
@@ -434,158 +413,6 @@ pub async fn get_insight_version_detail(
         .columns
         .get_snapshot_by_version(version_id)
         .await
-}
-
-pub async fn profile_column_from_table(
-    project_root: Option<&std::path::Path>,
-    conn_id: String,
-    database: &str,
-    schema: &str,
-    table: &str,
-    column_name: &str,
-) -> Result<ColumnInsightFull, CoreError> {
-    use engine::SqlService;
-    use engine::get_connection_manager;
-    use engine::services::sql_service::SqlExecuteOptions;
-
-    let manager = get_connection_manager().clone();
-    let service = SqlService::new(manager);
-
-    // 采样取自**用户源库**：反引号三段名是 MySQL 语法（PostgreSQL / SQLite 会直接报错）。
-    // 本函数目前无宿主侧调用者（表入口与导航右键欠账，见
-    // `docs/architecture/insight/insight-dev-plan.md`），接线前须先按 `db_type` 分派方言。
-    let sample_sql = format!(
-        "SELECT * FROM `{}`.`{}`.`{}` LIMIT 500",
-        database, schema, table
-    );
-
-    let opts = SqlExecuteOptions {
-        channel: None,
-        record_history: false,
-        use_transaction: false,
-        timeout_ms: Some(15000),
-        use_cache: false,
-        // 取样用三段限定名（`db`.`schema`.`table`），无需会话上下文
-        schema: None,
-    };
-
-    let result = service
-        .execute(Some(conn_id.clone()), &sample_sql, opts)
-        .await?;
-    // 同上：进程内直读
-    let (columns, rows) = crate::service::result_columns_and_rows(&result.result);
-
-    if columns.is_empty() {
-        return Err(CoreError::common(CommonError::General(
-            "无法从表中读取数据".to_string(),
-        )));
-    }
-
-    // 样本表用**分析临时表**的姿势建：带 `tmp_i_` 前缀（TTL / 上限 / 按来源清理才认它），
-    // 并且算完就收掉——它是纯中间产物，留在内存库里只会越积越多（架构 K16）。
-    let duckdb = insight_engine::get_or_create_duckdb()?;
-    let conn = duckdb
-        .lock()
-        .map_err(|e| CoreError::common(CommonError::General(format!("DuckDB lock error: {e}"))))?;
-    engine::duckdb::analysis::with_analysis_temp_table(
-        &conn,
-        &columns,
-        &rows,
-        "col_sample",
-        |temp_table| {
-            // 基础统计由 TOML 规则驱动，故需按项目取规则集。
-            // 用 `*_on`（已持有连接）：与建表同一把锁，避免 `std::sync::Mutex` 自重入。
-            crate::with_rules(project_root, |registry| {
-                insight_engine::get_column_insight_full_on(registry, &conn, temp_table, column_name)
-            })
-        },
-    )
-}
-
-pub async fn batch_evaluate_columns(
-    project_root: Option<&std::path::Path>,
-    conn_id: String,
-    database: &str,
-    schema: &str,
-    table: &str,
-) -> Result<crate::model::types::TableQuality, CoreError> {
-    use engine::SqlService;
-    use engine::get_connection_manager;
-    use engine::services::sql_service::SqlExecuteOptions;
-
-    let manager = get_connection_manager().clone();
-    let service = SqlService::new(manager);
-
-    // 采样取自**用户源库**：反引号三段名是 MySQL 语法（PostgreSQL / SQLite 会直接报错）。
-    // 本函数目前无宿主侧调用者（表入口与导航右键欠账，见
-    // `docs/architecture/insight/insight-dev-plan.md`），接线前须先按 `db_type` 分派方言。
-    let sample_sql = format!(
-        "SELECT * FROM `{}`.`{}`.`{}` LIMIT 500",
-        database, schema, table
-    );
-
-    let opts = SqlExecuteOptions {
-        channel: None,
-        record_history: false,
-        use_transaction: false,
-        timeout_ms: Some(15000),
-        use_cache: false,
-        // 取样用三段限定名（`db`.`schema`.`table`），无需会话上下文
-        schema: None,
-    };
-
-    let result = service.execute(Some(conn_id), &sample_sql, opts).await?;
-    let (col_names, rows_data) = crate::service::result_columns_and_rows(&result.result);
-
-    if col_names.is_empty() {
-        return Ok(crate::model::types::TableQuality {
-            table_name: table.into(),
-            overall_score: 0.0,
-            level: "无数据".into(),
-            column_scores: vec![],
-            summary: "表为空或无数据".into(),
-            scored_count: 0,
-            total_columns: 0,
-        });
-    }
-
-    // 同上：整表评估也是一次性的样本表（逐列串行跑完就收）
-    let duckdb = insight_engine::get_or_create_duckdb()?;
-    let conn = duckdb
-        .lock()
-        .map_err(|e| CoreError::common(CommonError::General(format!("DuckDB lock error: {e}"))))?;
-    engine::duckdb::analysis::with_analysis_temp_table(
-        &conn,
-        &col_names,
-        &rows_data,
-        "table_sample",
-        |temp_table| {
-            // 整表评估：规则集只取一次（不在逐列循环里重复加读锁）。
-            // 串行逐列是刻意的——洞察并发上限为 4 且快速失败，并行会把「部分列静默缺失」
-            // 变成常态；串行起步虽慢，但「哪些列没评上」是确定的（单列失败仍跳过并继续）。
-            crate::with_rules(project_root, |registry| {
-                let mut stats_list: Vec<ColumnInsightFull> = Vec::new();
-                for col_name in &col_names {
-                    let stats = insight_engine::get_column_insight_full_on(
-                        registry, &conn, temp_table, col_name,
-                    );
-                    match stats {
-                        Ok(stats) => stats_list.push(stats),
-                        Err(e) => {
-                            tracing::warn!(
-                                "Skipping column '{}' during batch evaluation: {}",
-                                col_name,
-                                e
-                            );
-                            continue;
-                        }
-                    }
-                }
-
-                Ok(quality_scorer::compute_table_quality(table, &stats_list))
-            })
-        },
-    )
 }
 
 #[cfg(test)]

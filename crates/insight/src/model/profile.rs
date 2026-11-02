@@ -240,6 +240,19 @@ impl TableProfileView {
         next
     }
 
+    /// 单列评估**失败**置中断标记（P0-4：单列失败不连坐，架构 §5.5）。
+    ///
+    /// 与 [`mark_interrupted`]（批量：全部未完成列）互补——评估循环里某一列出错时
+    /// 只标它（灰态 + 补算入口），其余列继续；补算成功由
+    /// [`with_column_detail`](Self::with_column_detail) 清除标记。
+    pub fn with_column_interrupted(&self, column: &str) -> Self {
+        let mut next = self.clone();
+        if let Some(row) = next.columns.iter_mut().find(|row| row.name == column) {
+            row.interrupted = true;
+        }
+        next
+    }
+
     /// 评估完成：清进度、挂一个空的表级事实摘要位。
     ///
     /// 表级摘要只承载检查器事实计数，由 [`with_checker`](Self::with_checker) 填充；
@@ -389,4 +402,42 @@ mod tests {
         assert!(col.stats_detail.is_some(), "补算应回填列明细");
         assert!(!col.interrupted, "补算成功应清除中断标记");
     }
+}
+
+/// P0-4（单列失败不连坐）：`with_column_interrupted` 只标指定列，
+/// 其余列与已有明细不动；与 `mark_interrupted`（全部未完成列）互补。
+#[test]
+fn with_column_interrupted_marks_only_that_column() {
+    let mut profile = TableProfileView::from_profile(
+        &crate::model::types::TableProfile {
+            table_name: "t".into(),
+            db_type: "DuckDB".into(),
+            columns: vec![
+                crate::model::types::TableColumnMeta {
+                    column_name: "good".into(),
+                    data_type: "INTEGER".into(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    ordinal_position: 1,
+                },
+                crate::model::types::TableColumnMeta {
+                    column_name: "bad".into(),
+                    data_type: "INTEGER".into(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    ordinal_position: 2,
+                },
+            ],
+            row_count: Some(2),
+            schema_name: None,
+        },
+        "orders",
+    );
+    profile.columns[0].interrupted = true; // 预置：good 原本就灰态（模拟上一轮失败）
+    let next = profile.with_column_interrupted("bad");
+    assert!(next.columns[0].interrupted, "既有标记不得被清掉");
+    assert!(next.columns[1].interrupted, "指定列应标中断");
+    // 找不到的列是 no-op（不 panic）
+    let same = next.with_column_interrupted("absent");
+    assert_eq!(same.columns.len(), 2);
 }

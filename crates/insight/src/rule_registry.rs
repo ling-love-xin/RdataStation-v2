@@ -331,8 +331,9 @@ pub fn parse_rule_toml(content: &str) -> Result<RuleFile, CoreError> {
 /// 规则 SQL 的**关键字黑名单**：出现即拒（防呆，见 [`validate_rule_sql`]）。
 ///
 /// 收的是「会碰外部世界或写库」的那一类，不是 SQL 全集——规则只该做只读聚合。
-/// 事务控制（`BEGIN`/`COMMIT`/`ROLLBACK`）也一并收：单条查询里写它们没有正当用途。
-const SQL_FORBIDDEN_KEYWORDS: [&str; 28] = [
+/// 事务控制（`BEGIN`/`COMMIT`/`ROLLBACK`）与语句执行（`EXECUTE`/`PREPARE`/
+/// `ANALYZE`）也一并收：单条查询里写它们没有正当用途。
+const SQL_FORBIDDEN_KEYWORDS: [&str; 31] = [
     "ATTACH",
     "DETACH",
     "COPY",
@@ -361,6 +362,9 @@ const SQL_FORBIDDEN_KEYWORDS: [&str; 28] = [
     "BEGIN",
     "COMMIT",
     "ROLLBACK",
+    "EXECUTE",
+    "PREPARE",
+    "ANALYZE",
 ];
 
 /// 校验规则 SQL：**只读聚合是唯一被允许的形态**（架构 D52 / K1）。
@@ -535,9 +539,11 @@ fn sql_tokens(sql: &str) -> Vec<String> {
 ///    走（能来自别人仓库），所以最便宜的防线是在解析期把「不是查询」的写法拒掉（D52）；
 /// 2. **`value_type` 必须在白名单里**——否则写错类型名只会在运行期变成一句难以归因的
 ///    读值错误（把 DOUBLE 列当字符串读）；
-/// 3. **质量门控的 `field` 必须真的存在**——否则「只设 `max`」的判定会**静默通过**
-///    （`evaluate_quality` 里 `actual` 为 `None` 时只有 `min` 判失败），用户以为有门控
-///    其实没有（K11 就是这种：内置的 `null-check` 指着不存在的 `null_rate`）。
+/// 3. **质量门控的 `field` 必须真的存在**——否则门控判定的是 `None`（值缺失与
+///    值合法为 null 同形），用户以为有门控其实没有（K11 就是这种：内置的
+///    `null-check` 指着不存在的 `null_rate`）。字段存在但值为合法 null（如空表
+///    算不出空值率）时 `min` / `max` 一致**不判违规**（D49），那属于数据形态而非
+///    规则缺陷。
 ///
 /// 报错文案要让用户能自己改：直接写出可用取值与当前已有的输出字段。
 fn validate_rule(rule: &RuleFile) -> Result<(), CoreError> {

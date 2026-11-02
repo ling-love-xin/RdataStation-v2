@@ -1,6 +1,6 @@
 # 洞察模块（M8）· 设计理念与架构
 
-> 状态：**Phase 0–5 完成 + 规则安全边界收口**（2026-09-17） · **洞察承载形态决策已更新**（2026-10-18：D63 右栏摘要保留 + 中间洞察工作页并存、D64 三阶段落地、D65 入口语义变更） · **去评级化收口**（2026-10-25：表 / 列画像撤总分环与五档等级，只留事实统计与检查器四态命中；审计 / 评级归 M6 资产库） · **右栏对齐 EDA 原型**（2026-10-30：移除 6-Tab 条，右栏 = 洞察表集合 it-list + 选中目标下钻 drillzone；工具栏按原型重排——新建洞察最右；下钻区按目标类型自适应） · 关联文件：`README.md`（模块入口）、`insight-eda-prototype.html`（现行对齐基准原型）、`insight-dev-plan.md`（开发方案与进度）、`insight-user-guide.md`（使用手册）、`insight-cleanup-2026-10.md`（本轮收口清单）
+> 状态：**Phase 0–5 完成 + 规则安全边界收口**（2026-09-17） · **洞察承载形态决策已更新**（2026-10-18：D63 右栏摘要保留 + 中间洞察工作页并存、D64 三阶段落地、D65 入口语义变更） · **去评级化收口**（2026-10-25：表 / 列画像撤总分环与五档等级，只留事实统计与检查器四态命中；审计 / 评级归 M6 资产库） · **右栏对齐 EDA 原型**（2026-10-30：移除 6-Tab 条，右栏 = 洞察表集合 it-list + 选中目标下钻 drillzone；工具栏按原型重排——新建洞察最右；下钻区按目标类型自适应） · **规则执行器与评估链加固**（2026-11-02：K24——双重执行 / 静默丢行 / 门控 null 语义 / 标识符转义 / 唯一率分母 / 假统计 / 死代码） · 关联文件：`README.md`（模块入口）、`insight-eda-prototype.html`（现行对齐基准原型）、`insight-dev-plan.md`（开发方案与进度）、`insight-user-guide.md`（使用手册）、`insight-cleanup-2026-10.md`（本轮收口清单）
 > 本文回答**为什么这样设计 / 怎么运转**：概念模型 → 不变式 → 分层与归属 → 状态所有权 → 数据流 → 决策表 → 并发 → 降级 → 测试 → 实现映射 → 已知问题（权威）。
 > 现状口径：**画像 / 检查器事实 / 规则 / 报告 / 快照历史全部落地**（含右栏集合 + 下钻面板、中间 EDA 工作页与规则管理对话框）；规则安全边界 = 解析期静态门（D52）+ 项目规则信任门（D53）；临时表走 `duckdb::analysis`（D50/D51）；入口统一为源取样（D58），导航树 / 分析存档 / 草稿箱三个入口与**文件类数据源**（CSV / Parquet / Excel / JSON）已接（D59），Schema 报告的**导出与下钻**已接（D60）。宿主侧入口全部接线：编辑器结果集列头「洞察此列」（2026-09-18，§10 #6，不物化）；仍欠**分析表型存档**（等 M6 P4.1 本体层，见开发方案 §10 #7）。
 
@@ -248,14 +248,19 @@ ProjectInsightStores::save_column_snapshot(insight, entity_source, row_count, el
 
 ### 5.5 表级评估
 
+> 2026-11-02 勘正：本节原先描述的 `service::persistence::batch_evaluate_columns`（源库取样 + 反引号三段名）自迁入起**零调用者**且方言写死，已删除；实际生效路径一直是接缝侧的 `jobs::request_table_evaluation`（与「评估全表」按钮 / Q1 自动评估同一条链）。
+
 ```
-batch_evaluate_columns(root, conn_id, db, schema, table)
-  ① 采样 LIMIT 500 → 建 DuckDB 临时表
-  ② with_rules(root, |reg| { 逐列 get_column_insight_full(reg, ...) })  ← 规则集只取一次
-  ③ finish_evaluation().with_checker(逐列检查器四态) → 回填事实明细 + 检查器适用/命中计数（不合成加权总分与等级）
+jobs::request_table_evaluation(view, root, temp_table, table_name)
+  ① profile_table_view(root, temp_table, name)   ← 列清单以磁盘现状为准（D29/D31/D32）
+  ② 逐列（串行）后台跑 get_column_insight_full(root, temp_table, col)
+       · 成功 → with_column_detail + 检查器四态聚合 + done_count 推进（真进度）
+       · 失败 → 该列 with_column_interrupted（灰态 + 补算入口，C5），**继续下一列**（§11 K24）
+       · 全列失败（临时表没了 / 连接断了）→ 才推整页错误态
+  ③ finish_evaluation().with_checker(聚合) → 清进度 + 检查器适用/命中计数（不合成总分与等级）
 ```
 
-**串行逐列是刻意的**：并发上限为 4 且快速失败，并行会把「部分列静默缺失」变成常态；串行虽慢，但「哪些列没评上」是确定的（单列失败记日志并继续）。进度用独立 `done_count` 计数器逐列回填，不依赖评分模型。
+**串行逐列是刻意的**：并发上限为 4 且快速失败，并行会把「部分列静默缺失」变成常态；串行虽慢，但「哪些列没评上」是确定的（单列失败标灰态可补算并继续，已完成列的结果不被一个整页错误态盖掉）。进度用独立 `done_count` 计数器逐列回填，不依赖评分模型。
 
 ### 5.6 规则热加载（目录监听）
 
@@ -393,7 +398,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 装配 | `registry_for` 缓存、启用禁用生效 | 用**不存在的项目根**避免碰真实项目；注意缓存是进程级静态量 | 已覆盖 |
 | 契约 | 零裸色 / 零裸 `px(` / 视图清单登记 | 外壳 `cargo test -p rds-workbench --test ui_contract`；洞察自有 `cargo test -p rds-insight --test ui_contract`（常量契约 + 裸 px / 裸色 / 视图清单守卫） | 已覆盖 |
 
-**基线**（2026-10-25 实测，target 清空后分 target 重跑）：`cargo test -p rds-insight --lib` **244 项**；集成测试 `column_profile_e2e` **14 项**；洞察契约 `ui_contract` **4 项**；新增功能不得减少。关联宿主 / 依赖回归同批实测：`cargo test -p rds-settings --lib` **32 项**；`cargo test -p rds-engine --lib duckdb::manager::tests` **11 项**（仅此 manager 子集，engine 全量 669 项未在本轮重跑，台账见 `../module-status.md`）；外壳契约 `cargo test -p rds-workbench --test ui_contract` **9 项**。历史累加台账见 `insight-dev-plan.md` §0。
+**基线**（2026-11-02 实测，含本轮加固新增用例）：`cargo test -p rds-insight --lib` **268 项**；集成测试 `column_profile_e2e` **14 项**；洞察契约 `ui_contract` **7 项**；新增功能不得减少。关联宿主 / 依赖回归同批实测：外壳契约 `cargo test -p rds-workbench --test ui_contract` **9 项**。历史累加台账见 `insight-dev-plan.md` §0。
 
 三条测试纪律（来自实际踩坑）：
 1. **进程级静态量（缓存）是测试隔离的敌人**：规则注册表缓存与禁用集合都是进程级静态量，「写入 → 断言」之间被另一个测试的清理动作插入就会间歇失败（实测约 1/5 概率）。对策两条：
@@ -487,6 +492,7 @@ RulesWatcher（后台线程，drop 即停）：
 | K21 | **debug 下导航树表/视图节点右键必崩**：`set_focus called more than once in a single frame`（panic 于 `gpui-pre-0.3.8/src/window/a11y.rs:533`，release 仅 `log::warn` 不崩）——「查看统计 / 结构洞察 / 查看洞察」右键入口在 debug 构建不可用（**2026-10-30 注**：菜单已去重为单个「查看洞察」入口，本问题的入口枚举相应收敛，机制不变） | 高（阻塞 debug 可用性 + 「带真实数据的洞察面板」截图场景） | **机制已查明（2026-10-18），待真机复现定性（2026-10-25 复核：任务 #16 的 completed 标记与本表状态不一致，以本表为准）**：双常驻 `.track_focus` 容器——导航树外层 `database/src/nav_view/chrome.rs:623` 与 PopupMenu 根 `vendor/gpui-component/src/menu/popup_menu.rs:1472`；`div.rs:2326-2344` 凡 `track_focus` + `is_focused` + a11y active 即 `a11y.set_focus(node_id)`（每帧至多一次）；右键打开菜单路径上 `context_menu.rs:176-181`（`build_menu` 对菜单 `focus_handle.focus`）+ `popup_menu.rs:999/:1030`（submenu/parent focus）与树主体 handle 同帧双 claim。vendor 已有 blur 补丁（`context_menu.rs:410-420`）**未拦住**：blur 只清右键事件帧的焦点，PopupMenu 的 `focus()` 发生在下一帧 deferred 构建回调里，跨帧后树主体仍可能在 prepaint 时命中。**未在真机复现前不改 vendor**；修复方向：先试 B6-a 业务侧右键入口前 blur（改动限业务侧、回滚容易）→ 拦不住再 B6-b vendor 补丁增强（build_menu focus 菜单前也清一次）→ 最后 B6-c 改树主体 track_focus 条件（需重验键盘可达） |
 | K22 | ~~`set_target` 切换洞察目标未清 `loading_note`~~：从源目标切到另一目标时，上一目标的取样提示可能残留 | — | **✅ 已修（2026-10-25，A1）**：`set_target` 内重置 `loading_note = None`（`insight_view.rs:460`），配套窗口契约测试钉住「目标切换后 loading_note 必须为空」 |
 | K23 | **多标签与五卡口径（2026-10-30 拍板 A 方案 + 全部含五卡改造，2026-10-31 补测收口）** | — | **✅ 已实施（提交 `f175bff0`）**：① 顶部 tab-strip：多目标多标签，dot=实时状态（加载黄/就绪绿/出错红），✕ 关闭（关当前切相邻，`next_index_after_close` 纯函数：优先右侧原位、越界回退左侧、最后全关回空态），＋ 新建；`open_target` 去重 + 摘要存档。② 中央五卡改原型口径：总行数/列数/缺失单元格（Σ null_rate×行数）/重复行/内存估算；原缺失率/唯一率/值得关注三卡被替换，「值得关注」仍在下文独立列出。③ 右栏集合行：名称改语义 Button 点击切换目标（还原 `InsightSetEntry.target`，双栏联动），kind tag 移 r1，r2 增「版本」钮（打开右栏 Archive）。④ 列卡增「在 SQL 编辑器中查看」（`OpenSqlRequested` → 宿主 `request_query` run=false）。⑤ **重复行 SQL 语义修正（2026-10-31 真实连接实测）**：`GROUP BY ALL` 按 select 列表中未聚合列分组——原实现子查询只 `SELECT COUNT(*)`，无分组键 → 全表并成一组（冗余=总行数-1，数值虚高）；改为 `SELECT *, COUNT(*) ... GROUP BY ALL`（`*` 展开全部列作整行分组键，列无关）；测试 `test_compute_dup_rows_on_real_duckdb` 钉住语法与数值（复合重复=3/全唯一=0/空表=0）。**2026-10-31 双栏冗余收敛**：⑥ 中央工具栏「取样」独立按钮与 report 头 scope 切换合并为工具栏一处「取样↔全量」切换（源表 / 源列目标可用，列画像版式也能切换——此前列目标只有右栏 ⧉ 全量、无取样入口）；report 头保留 kind/scope 徽标只读。⑦ 五卡「内存估算」改为**表级近似**（当前口径行数 × 列类型字节，文本列按 64B/值），不再复用引擎总占用（那是工具栏「内存占用」读数语义）。⑧ 右栏表画像卡删除卡底「值得关注 N 列」「检查器未命中 N 条」两行（卡头计数保留唯一，命中事实由摘要环 hint 承担）。⑨ 聚合占位只在**多列语境**（多列目标或 MultiColumn Tab）渲染，表 / 列 / schema 目标不再显示死区占位。⑩ 右栏 ⟳ 重算画像 / ⧉ 全量统计保留（对齐原型 tbRecalc/tbFull：右栏常驻独立可用 + 列目标全量入口；与中央刷新/切换为双栏分工，同一取数链无状态分裂） |
+| K24 | **规则执行器与评估链加固（2026-11-02 全量审计发现，同日收口）**：① 规则 SQL **双重执行**（预执行取列名 + `query_map` 再跑一遍）——每条规则、每列统计全部 ×2，全量档大表评估耗时直接翻倍；改为单次执行、列名从执行后的 `Rows` 反取 `Statement`（`run_query` 回调式）。② `execute_list` 用 `filter_map(r.ok())` **静默丢行**，违反 D19；行读错误现向上抛。③ `single` 多行结果旧实现**静默取最后一行**；改为早失败（声明与事实不符，D48/D49 同一立场）。④ 质量门控 null 语义不对称（`min` 遇 null 判失败、`max` 遇 null 通过），与 D49「合法 null 不判违规」矛盾；统一为 min/max 均**不判**（报 `actual=null（无值不判）`）。⑤ 手拼 SQL 标识符转义不一致（EDA 摘要 / 迷你统计有转义，count / typeof / 样本 / 直方图 / overlap 裸拼）——含 `"` 的 CSV 表头直接把查询拼坏；统一 `quote_ident`（注意：规则参数路径仍按 `validate_identifiers` 拒 `"`，含引号列的**逐列规则统计**仍会失败但报错可读，属规则参数边界已知限制）。⑥ `compute_table_column_summary_on` 的**唯一率分母错**：注释写「唯一值数 / 非空行数」、代码除以总行数（含 NULL）——含空值列唯一率被低估、`>0.9` 疑似键判定失真；已对齐注释口径。⑦ `numeric-stats` 被覆盖成输出契约不完整版本时旧实现 `unwrap_or(0.0)` **编假统计**；改早失败点名缺失字段（K10 的加固面）。⑧ `builtin_rule_ids()` 每次调用重解析 18 份内嵌 TOML（索引同步热路径）；`OnceLock` 缓存。⑨ 死代码删除：`service::persistence::{profile_column_from_table, batch_evaluate_columns, get_column_insight_history}`（零调用者 + 反引号方言写死 + 唯一残留的旧评分模型生产调用点）。⑩ 静态门黑名单补 `EXECUTE` / `PREPARE` / `ANALYZE`。⑪ 一次表探查原各自抢 **4 次** D12 令牌与锁（DESCRIBE / 列摘要 / 重复行 / 样本）——快速失败窗口 ×4；合并为 `get_table_eda_bundle`（一次令牌 + 一次锁内四段 `*_on`，D14 口径），`profile_table_view` / `profile_source_table` 两处重复序列一并收敛 | 高（①⑤⑥ 为正确性 / 语义错；②③④⑦ 为静默失败面；① 兼为性能——评估链最大单项收益） | **✅ 已修（2026-11-02）**：回归用例 6 条（`single 多行 / min+null 不判 / list 行错误上抛 / 含引号列名摘要 / numeric-stats 契约缺失早失败 / 评估单列失败不连坐`），lib 268 项全绿 |
 
 ## 12. 待确认
 

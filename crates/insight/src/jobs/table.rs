@@ -42,6 +42,9 @@ pub fn request_table_evaluation(
         // 列检查器聚合（评估完成后随表级事实摘要一起写入；见下方 `with_checker`）
         let mut column_checks: Vec<crate::model::ColumnChecker> = Vec::new();
         let mut done_count = 0usize;
+        let mut failed_count = 0usize;
+        // 全列失败时用「最后一次错误」给整页错误态（单个失败不影响其它列）
+        let mut last_error: Option<shared::error::CoreError> = None;
         let mut current = base.evaluating(0, total);
         let _ = weak.update(cx, |panel, cx| panel.set_table_profile(current.clone(), cx));
 
@@ -72,12 +75,20 @@ pub fn request_table_evaluation(
                         .evaluating(done_count, total);
                 }
                 Err(err) => {
-                    // 单列失败不报废整表：直接报错（用户的下一步是重试或修正数据）
-                    let info = InsightService::describe_error(&err);
-                    let _ = weak.update(cx, |panel, cx| {
-                        panel.set_error(info.message, info.retryable, cx)
-                    });
-                    return;
+                    // 单列失败不连坐（架构 §5.5）：失败列标中断（灰态 + 补算入口，C5），
+                    // 其余列继续——「哪些列没评上」要确定，而不是一个整页错误态把
+                    // 已完成列的结果全部盖掉。全列失败才视为表级失败（临时表没了 /
+                    // 连接断了这类对整表成立的错误）。
+                    failed_count += 1;
+                    tracing::warn!(
+                        "评估全表：列 '{}' 失败，已跳过（列卡灰态可补算）：{}",
+                        column.name,
+                        err
+                    );
+                    last_error = Some(err);
+                    current = current
+                        .with_column_interrupted(&column.name)
+                        .evaluating(done_count, total);
                 }
             }
             let _ = weak.update(cx, |panel, cx| panel.set_table_profile(current.clone(), cx));
@@ -93,6 +104,18 @@ pub fn request_table_evaluation(
         if cancelled {
             let interrupted = current.mark_interrupted();
             let _ = weak.update(cx, |panel, cx| panel.set_table_profile(interrupted, cx));
+            return;
+        }
+
+        // 全列失败 = 表级失败（临时表没了 / 连接断了这类对整表成立的错误）：
+        // 没有任何可保留的评估产物，整页错误态给出「为什么」——比一屏灰态补算卡诚实。
+        let table_level_error =
+            last_error.filter(|_| total > 0 && done_count == 0 && failed_count == total);
+        if let Some(err) = table_level_error {
+            let info = InsightService::describe_error(&err);
+            let _ = weak.update(cx, |panel, cx| {
+                panel.set_error(info.message, info.retryable, cx)
+            });
             return;
         }
 

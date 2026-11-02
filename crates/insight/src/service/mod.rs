@@ -48,8 +48,7 @@ pub(crate) use crate::service::rule_trust::RuleTrust;
 pub(crate) use crate::{ExecutionResult, with_rules};
 
 pub use persistence::{
-    batch_evaluate_columns, cleanup_old_insight_snapshots, get_column_insight_history,
-    get_insight_storage_stats, get_insight_version_detail, profile_column_from_table,
+    cleanup_old_insight_snapshots, get_insight_storage_stats, get_insight_version_detail,
     save_column_insight_snapshot,
 };
 

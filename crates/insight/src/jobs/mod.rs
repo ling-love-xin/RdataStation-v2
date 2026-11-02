@@ -686,6 +686,102 @@ mod tests {
         );
     }
 
+    /// P0-4（单列失败不连坐，架构 §5.5）：评估全表时一列失败（列名含 `"`——规则参数
+    /// 校验会拒它，正好是真实可复现的单列失败），其余列照常完成：面板不转整页错误态、
+    /// 失败列灰态可补算、表级事实摘要照出（只含成功列的检查器）。
+    /// 全列失败才推整页错误态。
+    #[gpui_kit::test]
+    fn table_evaluation_survives_a_single_failing_column(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        // good 列正常；bad"col 列名含引号 → 规则参数校验拒绝 → 单列评估失败
+        seed_probe_table(
+            "t_insight_jobs_partial",
+            "\"good\" INTEGER, \"bad\"\"col\" INTEGER",
+            "VALUES (1, 10), (2, 20), (3, 30)",
+        );
+
+        let (host, panel, _sub) = cx.update(|cx| {
+            let host = cx.new(TestHost::new);
+            let panel = cx.new(InsightView::new);
+            let sub = host.update(cx, |_host, host_cx| attach(&panel, host_cx, || None));
+            (host, panel, sub)
+        });
+        let _host = host;
+
+        // D12 快速失败在并行测试下可能瞬时挤满（4 permit 进程级共享，其它用例的
+        // 后台取数也在抢；good 列被配额误伤会标灰态）：那是环境竞争、不是被测行为
+        // ——以「good 列完成评估」为就绪条件，未就绪就重发目标，最多 3 次。
+        let mut good_ready = false;
+        for _ in 0..3 {
+            cx.update(|cx| {
+                panel.update(cx, |panel, cx| {
+                    panel.set_target(
+                        InsightTarget::Table {
+                            temp_table: "t_insight_jobs_partial".into(),
+                            table_name: "orders".into(),
+                        },
+                        cx,
+                    );
+                });
+            });
+            cx.run_until_parked();
+            good_ready = cx.update(|cx| {
+                panel
+                    .read(cx)
+                    .data()
+                    .table
+                    .as_ref()
+                    .and_then(|t| t.columns.iter().find(|c| c.name == "good"))
+                    .is_some_and(|c| c.stats_detail.is_some())
+            });
+            if good_ready {
+                break;
+            }
+        }
+        assert!(
+            good_ready,
+            "三次尝试后 good 列仍未完成评估（并发配额被并行用例长期占用？）"
+        );
+
+        cx.update(|cx| {
+            // 不是整页错误态：表画像还在（§5.5——一个失败列不能盖掉其余列的结果）
+            assert_eq!(
+                panel.read(cx).state(),
+                &InsightPanelState::Data,
+                "单列失败不得推整页错误态"
+            );
+            let table = panel
+                .read(cx)
+                .data()
+                .table
+                .as_ref()
+                .expect("表画像应保留")
+                .clone();
+            let good = table.columns.iter().find(|c| c.name == "good").unwrap();
+            assert!(good.stats_detail.is_some(), "正常列必须完成评估");
+            assert!(!good.interrupted);
+            let bad = table
+                .columns
+                .iter()
+                .find(|c| c.name == "bad\"col")
+                .expect("失败列应还在列清单里");
+            assert!(bad.stats_detail.is_none(), "失败列没有明细");
+            assert!(bad.interrupted, "失败列应标中断（灰态 + 补算入口）");
+            assert!(
+                table.progress.is_none(),
+                "评估应收尾（清进度），而非停在中间态"
+            );
+            let quality = table
+                .quality
+                .expect("部分失败也要出表级事实摘要（只含成功列）");
+            assert!(
+                quality.checker.iter().all(|c| c.column == "good"),
+                "检查器只聚合成功列：{:?}",
+                quality.checker
+            );
+        });
+    }
+
     /// 多列分析：切到「多列」Tab → 表单取数 → 跑规则 → 结果回填（全程真实接线）
     #[gpui_kit::test]
     fn multi_column_flow_loads_the_form_and_runs_a_rule(cx: &mut TestAppContext) {

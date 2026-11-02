@@ -343,12 +343,19 @@ fn scan_pending_project_rules(dir: &Path) -> Option<PendingProjectRules> {
 /// 索引器用它区分两类「库里多出来的行」：
 /// - id 属于内置规则 → 这是**用户的抑制记录**（在项目里关掉了某条内置规则），必须保留；
 /// - 否则 → 规则文件被删，转 `missing` 保留。
+///
+/// 结果编译期就定了（内嵌资源只读），进程内缓存一次——它在每次索引同步的热路径上，
+/// 不值得每次重解析 18 份 TOML。
 pub fn builtin_rule_ids() -> std::collections::HashSet<String> {
-    builtin_registry()
-        .all_rules()
-        .iter()
-        .map(|r| r.meta.id.clone())
-        .collect()
+    static IDS: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
+    IDS.get_or_init(|| {
+        builtin_registry()
+            .all_rules()
+            .iter()
+            .map(|r| r.meta.id.clone())
+            .collect()
+    })
+    .clone()
 }
 
 /// 取某项目的规则注册表（首次访问时按三层组装并缓存）。

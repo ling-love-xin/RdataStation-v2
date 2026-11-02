@@ -235,6 +235,8 @@ builtin     = false              # 可选，默认 false（用户规则写 false
 template    = """SELECT COUNT("{col}") FROM "{table}" """   # 必填，注意字段名是 template 不是 sql
 parameters  = ["table", "col"]   # 可选（默认空数组），会被替换的参数名
 result_type = "single"           # 可选，single（默认，单行对象）| list（多行数组）
+                                 # single 要求结果恰为一行（聚合查询）：多行会在执行期报错
+                                 # （提示补聚合 / 改声明 list），空表返回 null 对象
 
 [[output]]                       # 可选（默认空），一条规则可有多段
 sql_name    = "cnt"              # 必填，SQL SELECT 里的列名/别名
@@ -295,17 +297,16 @@ display_order = 0                # 可选，展示排序
 
 | 情况 | 结果 |
 | --- | --- |
-| 只设 `min`，实际值 < min | **不通过** |
-| 只设 `min`，实际值为 `null` | **不通过**（记为 `actual=null`） |
-| 只设 `max`，实际值 > max | 不通过 |
-| **只设 `max`，实际值为 `null`** | **通过**（当前实现不判失败） |
+| 设 `min`，实际值 < min | **不通过** |
+| 设 `max`，实际值 > max | **不通过** |
+| 实际值为 `null`（字段在、值合法为空，如空表算不出空值率） | **通过**（`min` / `max` 同一口径，记为 `actual=null（无值不判）`） |
 | 所有 `[[quality]]` 均通过 | `QualityReport.passed = true` |
 
 > ✅ **`field` 必须是本规则 `[[output]]` 里真实存在的 `json_name`**——解析期会校验（K11 / Q6 已定：早失败优于静默错），写错时直接报错并列出该规则已有的输出字段。
 >
 > 以前不校验：字段不存在时取值为 `null`，而「只设 `max`」的判定对 `null` 是**通过**——门控形同虚设（内置 `null-check` 就踩了这个）。现在 `null-check` 的 `null_rate` 已由 SQL 真算出来。
 >
-> 仍需自己判断的一处：值合法地是 `null`（如空表算不出空值率）时，「只设 `max`」仍然通过——那是刻意的（没有数据就不该判数据有问题），要令它在 `null` 时也失败就加一个 `min`。
+> null 不判违规是**刻意的**（没有数据就不该判数据有问题，D49 口径）。2026-11-02 前 `min` 与 `max` 对 null 的答案不一致（`min` 判失败、`max` 通过），现统一为均不判（K24 ④）。
 
 ### 4.6 完整可照抄的示例
 

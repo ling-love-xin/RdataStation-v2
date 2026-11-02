@@ -35,6 +35,17 @@ pub const SAMPLE_MINI_LIMIT: u64 = 500;
 /// 批量场景（如「评估全表」）应由调用方串行化，不依赖本上限兜底。
 const INSIGHT_MAX_CONCURRENT: usize = 4;
 
+/// SQL 标识符引用（`"name"`；内部双引号双写）。
+///
+/// 与 `engine::duckdb::temp_table::quote_ident` 同一实现（那边是 `pub(crate)`，
+/// 不跨 crate 导出，这里留洞察侧唯一来源）。**所有手拼 SQL 的列名 / 表名必须走它**：
+/// CSV 表头完全可以含 `"`（如 `amount(USD)"`），裸拼会把查询拼坏（报一句与
+/// 「列名带引号」无关的语法错）甚至改变语义；规则执行路径靠
+/// `RuleExecutor::validate_identifiers` 拦，手拼路径靠这里的转义兜。
+pub(crate) fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
 /// 并发受限时的统一错误文案（面向用户，UI 直接展示）。
 pub const ERR_TOO_MANY_CONCURRENT: &str = "洞察分析任务过多，请稍候重试";
 
@@ -137,7 +148,7 @@ pub fn get_temp_table_profile_on(
     conn: &duckdb::Connection,
     temp_table: &str,
 ) -> Result<TableProfile, CoreError> {
-    let sql = format!("DESCRIBE \"{}\"", temp_table);
+    let sql = format!("DESCRIBE {}", quote_ident(temp_table));
     let mut stmt = conn.prepare(&sql).map_err(|e| {
         CoreError::common(CommonError::General(format!(
             "DuckDB describe prepare failed: {}",
@@ -175,7 +186,7 @@ pub fn get_temp_table_profile_on(
     // 行数失败不算致命：列清单仍可看，只是没行数（与源库内省同一取舍）
     let row_count: i64 = conn
         .query_row(
-            &format!("SELECT COUNT(*) FROM \"{}\"", temp_table),
+            &format!("SELECT COUNT(*) FROM {}", quote_ident(temp_table)),
             [],
             |row| row.get(0),
         )
@@ -204,17 +215,17 @@ pub fn compute_table_column_summary_on(
     let mut select_parts = Vec::with_capacity(columns.len() * 2 + 1);
     select_parts.push("COUNT(*) AS \"__rows\"".to_string());
     for (ix, column) in columns.iter().enumerate() {
-        // 双引号内的引号翻倍转义，防列名注入 / 含引号列名
-        let quoted = column.replace('"', "\"\"");
+        // 列名经 quote_ident 转义，防含引号列名（CSV 表头带 `"` 不算罕见）
+        let quoted = quote_ident(column);
         select_parts.push(format!(
-            "AVG(CAST(\"{quoted}\" IS NULL AS INTEGER)) AS \"__n{ix}\""
+            "AVG(CAST({quoted} IS NULL AS INTEGER)) AS \"__n{ix}\""
         ));
-        select_parts.push(format!("COUNT(DISTINCT \"{quoted}\") AS \"__u{ix}\""));
+        select_parts.push(format!("COUNT(DISTINCT {quoted}) AS \"__u{ix}\""));
     }
     let sql = format!(
-        "SELECT {} FROM \"{}\"",
+        "SELECT {} FROM {}",
         select_parts.join(", "),
-        temp_table.replace('"', "\"\"")
+        quote_ident(temp_table)
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| {
         CoreError::common(CommonError::General(format!(
@@ -240,11 +251,14 @@ pub fn compute_table_column_summary_on(
         for (ix, column) in columns.iter().enumerate() {
             let null_rate = row.get::<_, Option<f64>>(ix * 2 + 1)?;
             let unique: i64 = row.get::<_, Option<i64>>(ix * 2 + 2)?.unwrap_or(0);
-            let unique_rate = if total > 0 {
-                // 唯一率 = 唯一值数 / 非空行数（行数为 0 时无意义 → None）
-                Some((unique as f64) / (total as f64).max(1.0))
-            } else {
-                None
+            // 唯一率 = 唯一值数 / **非空行数**（`COUNT(DISTINCT)` 不算 NULL，分母
+            // 也不该算；除以总行数会把含空值列的唯一率低估）。全空列兜底 0。
+            let unique_rate = match (null_rate, total > 0) {
+                (Some(null_rate), true) => {
+                    let non_null = (total as f64) * (1.0 - null_rate);
+                    Some((unique as f64) / non_null.max(1.0))
+                }
+                _ => None,
             };
             result.push(ColumnStatBrief {
                 name: column.clone(),
@@ -269,8 +283,8 @@ pub fn compute_table_column_summary_on(
 /// 「整行分组」，且与列名无关（临时表列结构不定，不拼列名）。
 pub fn compute_dup_rows_on(conn: &duckdb::Connection, temp_table: &str) -> Result<u64, CoreError> {
     let sql = format!(
-        "SELECT COALESCE(SUM(n - 1), 0) FROM (SELECT *, COUNT(*) AS n FROM \"{}\" GROUP BY ALL)",
-        temp_table.replace('"', "\"\"")
+        "SELECT COALESCE(SUM(n - 1), 0) FROM (SELECT *, COUNT(*) AS n FROM {} GROUP BY ALL)",
+        quote_ident(temp_table)
     );
     let dup: i64 = conn.query_row(&sql, [], |row| row.get(0)).map_err(|e| {
         CoreError::common(CommonError::General(format!(
@@ -329,19 +343,19 @@ pub fn compute_sample_mini_stats_on(
     }
     let mut select_parts = Vec::with_capacity(columns.len());
     for (name, kind) in columns {
-        // 双引号内的引号翻倍转义，防列名注入 / 含引号列名（与 column summary 同口径）
-        let quoted = name.replace('"', "\"\"");
+        // 列名经 quote_ident 转义（与 column summary 同口径）
+        let quoted = quote_ident(name);
         let cast = match kind {
             ColumnKind::Numeric => "AS DOUBLE",
             ColumnKind::Boolean => "AS BOOLEAN",
             ColumnKind::Text | ColumnKind::DateTime | ColumnKind::Unknown => "AS VARCHAR",
         };
-        select_parts.push(format!("CAST(\"{quoted}\" {cast})"));
+        select_parts.push(format!("CAST({quoted} {cast})"));
     }
     let sql = format!(
-        "SELECT {} FROM \"{}\" LIMIT {}",
+        "SELECT {} FROM {} LIMIT {}",
         select_parts.join(", "),
-        temp_table.replace('"', "\"\""),
+        quote_ident(temp_table),
         SAMPLE_MINI_LIMIT
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| {
@@ -523,16 +537,57 @@ pub fn get_temp_table_sample(temp_table: &str) -> Result<crate::model::TableSamp
     get_temp_table_sample_on(&conn, temp_table)
 }
 
+/// 表探查的**一次成型产物**：一次并发令牌 + 一次连接锁内完成四个轻查询。
+///
+/// 为什么要有它：表探查（DESCRIBE / 列摘要 / 重复行 / 样本）是**一个逻辑操作**，
+/// 旧序列各自抢一次令牌与锁——快速失败窗口 ×4（并发配额下「看一眼表」反而比
+/// 「评估一列」更容易撞 D12 上限），四段之间还可能被别的操作插队。失败口径与
+/// 旧序列一致：DESCRIBE 硬失败；摘要 / 重复行 / 样本各自「失败为 `None`，不阻塞画像」。
+pub fn get_table_eda_bundle(temp_table: &str) -> Result<TableEdaBundle, CoreError> {
+    let _permit = insight_semaphore().try_acquire().map_err(|_| {
+        CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string()))
+    })?;
+
+    let duckdb = get_or_create_duckdb()?;
+    let conn = duckdb.lock().map_err(|e| {
+        CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
+    })?;
+
+    let profile = get_temp_table_profile_on(&conn, temp_table)?;
+    let column_names: Vec<String> = profile
+        .columns
+        .iter()
+        .map(|c| c.column_name.clone())
+        .collect();
+    let column_summary = compute_table_column_summary_on(&conn, temp_table, &column_names).ok();
+    let dup_rows = compute_dup_rows_on(&conn, temp_table).ok();
+    let sample = get_temp_table_sample_on(&conn, temp_table).ok();
+    Ok(TableEdaBundle {
+        profile,
+        column_summary,
+        dup_rows,
+        sample,
+    })
+}
+
+/// [`get_table_eda_bundle`] 的产物：列清单硬保证，三段附表统计可缺席（不编假值）。
+pub struct TableEdaBundle {
+    pub profile: TableProfile,
+    /// 全列空值率 / 唯一率摘要（失败 / 未算为 `None`）
+    pub column_summary: Option<Vec<ColumnStatBrief>>,
+    /// 整行重复冗余行数（失败为 `None`）
+    pub dup_rows: Option<u64>,
+    /// 前 5 行样本（失败为 `None`）
+    pub sample: Option<crate::model::TableSample>,
+}
+
 /// 在**调用方已持有的连接**上取样本（同 `*_on` 系列的口径）。
 pub fn get_temp_table_sample_on(
     conn: &duckdb::Connection,
     temp_table: &str,
 ) -> Result<crate::model::TableSample, CoreError> {
     use crate::model::TableSample;
-    let sql = format!(
-        "SELECT * FROM \"{}\" LIMIT 5",
-        temp_table.replace('"', "\"\"")
-    );
+    let sql = format!("SELECT * FROM {} LIMIT 5", quote_ident(temp_table));
     let mut stmt = conn.prepare(&sql).map_err(|e| {
         CoreError::common(CommonError::General(format!(
             "DuckDB sample prepare failed: {}",
@@ -631,8 +686,9 @@ pub fn get_column_stats_internal(
     column_name: &str,
 ) -> Result<ColumnStats, CoreError> {
     let count_sql = format!(
-        "SELECT COUNT(*), COUNT(\"{}\"), COUNT(DISTINCT \"{}\") FROM \"{}\"",
-        column_name, column_name, temp_table
+        "SELECT COUNT(*), COUNT({col}), COUNT(DISTINCT {col}) FROM {table}",
+        col = quote_ident(column_name),
+        table = quote_ident(temp_table)
     );
     let (total, non_null, unique_cnt): (i64, i64, i64) = conn
         .query_row(&count_sql, [], |row| {
@@ -653,8 +709,9 @@ pub fn get_column_stats_internal(
     };
 
     let type_sql = format!(
-        "SELECT typeof(\"{}\") FROM \"{}\" WHERE \"{}\" IS NOT NULL LIMIT 1",
-        column_name, temp_table, column_name
+        "SELECT typeof({col}) FROM {table} WHERE {col} IS NOT NULL LIMIT 1",
+        col = quote_ident(column_name),
+        table = quote_ident(temp_table)
     );
     let data_type: String = conn
         .query_row(&type_sql, [], |row| row.get(0))
@@ -728,22 +785,31 @@ fn compute_numeric_stats(
 
     match RuleExecutor::execute(rule, conn, &params) {
         Ok(serde_json::Value::Object(map)) => {
-            let extract =
-                |key: &str| -> f64 { map.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0) };
+            // 必填字段缺失 = 规则被覆盖成了输出契约不兼容的版本（K10 的静默面：
+            // 旧实现 `unwrap_or(0.0)` 会把缺字段显示成 0，用户看到的是假统计）。
+            // 早失败优于编造值——错误文案点名规则与缺失字段。
+            let require = |key: &str| -> Result<f64, CoreError> {
+                map.get(key).and_then(|v| v.as_f64()).ok_or_else(|| {
+                    CoreError::common(CommonError::General(format!(
+                        "规则 'numeric-stats' 的输出缺少字段 '{}'（被项目/全局规则覆盖？输出契约见内置版本）",
+                        key
+                    )))
+                })
+            };
             let extract_opt = |key: &str| -> Option<f64> { map.get(key).and_then(|v| v.as_f64()) };
-            let min_v = extract("min");
-            let max_v = extract("max");
+            let min_v = require("min")?;
+            let max_v = require("max")?;
             let stddev_v = extract_opt("stddev");
             let is_extreme = detect_extremes(min_v, max_v, stddev_v.unwrap_or(0.0));
 
             Ok(ColumnStatsDetail::Numeric(NumericStats {
                 min: min_v,
                 max: max_v,
-                avg: extract("avg"),
-                median: extract("median"),
-                p25: extract("p25"),
-                p75: extract("p75"),
-                sum: extract("sum"),
+                avg: require("avg")?,
+                median: require("median")?,
+                p25: require("p25")?,
+                p75: require("p75")?,
+                sum: require("sum")?,
                 stddev: stddev_v,
                 skewness: extract_opt("skewness"),
                 kurtosis: extract_opt("kurtosis"),
@@ -761,16 +827,24 @@ fn compute_numeric_stats(
             })?;
             match RuleExecutor::execute(basic_rule, conn, &params) {
                 Ok(serde_json::Value::Object(map)) => {
-                    let extract =
-                        |key: &str| -> f64 { map.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0) };
+                    // 兼容档（无百分位函数的旧 DuckDB）：min/max/avg/median/sum 仍是
+                    // 必填；p25/p75 无来源、如实回 0（降级口径，视图按有无 stddev 展示）。
+                    let require = |key: &str| -> Result<f64, CoreError> {
+                        map.get(key).and_then(|v| v.as_f64()).ok_or_else(|| {
+                            CoreError::common(CommonError::General(format!(
+                                "规则 'numeric-basic' 的输出缺少字段 '{}'（被项目/全局规则覆盖？输出契约见内置版本）",
+                                key
+                            )))
+                        })
+                    };
                     Ok(ColumnStatsDetail::Numeric(NumericStats {
-                        min: extract("min"),
-                        max: extract("max"),
-                        avg: extract("avg"),
-                        median: extract("median"),
+                        min: require("min")?,
+                        max: require("max")?,
+                        avg: require("avg")?,
+                        median: require("median")?,
                         p25: 0.0,
                         p75: 0.0,
-                        sum: extract("sum"),
+                        sum: require("sum")?,
                         stddev: map.get("stddev").and_then(|v| v.as_f64()),
                         skewness: None,
                         kurtosis: None,
@@ -961,8 +1035,10 @@ pub fn get_column_sample_internal(
     column_name: &str,
 ) -> Result<Vec<serde_json::Value>, CoreError> {
     let sql = format!(
-        "SELECT \"{}\" FROM \"{}\" LIMIT {}",
-        column_name, temp_table, DEFAULT_SAMPLE_SIZE
+        "SELECT {col} FROM {table} LIMIT {n}",
+        col = quote_ident(column_name),
+        table = quote_ident(temp_table),
+        n = DEFAULT_SAMPLE_SIZE
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| {
         CoreError::common(CommonError::General(format!(
@@ -997,8 +1073,9 @@ pub fn get_column_histogram_internal(
     column_name: &str,
 ) -> Result<Vec<DistributionBin>, CoreError> {
     let count_sql = format!(
-        "SELECT COUNT(*) FROM \"{}\" WHERE \"{}\" IS NOT NULL",
-        temp_table, column_name
+        "SELECT COUNT(*) FROM {table} WHERE {col} IS NOT NULL",
+        table = quote_ident(temp_table),
+        col = quote_ident(column_name)
     );
     let count: i64 = conn
         .query_row(&count_sql, [], |row| row.get(0))
@@ -1203,12 +1280,12 @@ pub fn compute_column_overlap(
         // 三个标量子查询一次查：避免三次往返（DuckDB 单连接串行，往返是主要开销）。
         let sql = format!(
             "SELECT \
-               (SELECT COUNT(DISTINCT \"{c}\") FROM \"{a}\"), \
-               (SELECT COUNT(DISTINCT \"{c}\") FROM \"{b}\"), \
-               (SELECT COUNT(*) FROM (SELECT DISTINCT \"{c}\" FROM \"{a}\" INTERSECT SELECT DISTINCT \"{c}\" FROM \"{b}\"))",
-            c = name,
-            a = table_a,
-            b = table_b
+               (SELECT COUNT(DISTINCT {c}) FROM {a}), \
+               (SELECT COUNT(DISTINCT {c}) FROM {b}), \
+               (SELECT COUNT(*) FROM (SELECT DISTINCT {c} FROM {a} INTERSECT SELECT DISTINCT {c} FROM {b}))",
+            c = quote_ident(name),
+            a = quote_ident(table_a),
+            b = quote_ident(table_b)
         );
         let (rate_a, rate_b, inter): (i64, i64, i64) = conn
             .query_row(&sql, [], |row| {
@@ -1723,6 +1800,110 @@ mod tests {
             compute_dup_rows_on(&conn, "rs_empty")?,
             0,
             "空表应返回 0 而非 NULL"
+        );
+        Ok(())
+    }
+
+    /// 含 `"` 的列名（CSV 表头完全可能有）必须能过手拼 SQL 路径——EDA 列统计摘要
+    /// 一次查询算全部列的空值率 / 唯一率，列名经 `quote_ident` 转义（双引号双写）。
+    /// 旧实现裸拼 `"{col}"`，这类列名直接把查询拼坏（报一句与「列名带引号」无关的
+    /// 语法错）。
+    #[test]
+    fn test_column_summary_handles_quoted_column_names() -> Result<(), CoreError> {
+        let conn = duckdb::Connection::open_in_memory().map_err(duckdb_err)?;
+        // 列名 `a"b`（DDL 里写作 "a""b"）与 `ok`
+        conn.execute_batch(
+            "CREATE TABLE rs_quoted (\"a\"\"b\" INTEGER, ok INTEGER);
+             INSERT INTO rs_quoted VALUES (1, 1), (2, 2), (NULL, 3), (2, 4);",
+        )
+        .map_err(duckdb_err)?;
+
+        let cols = vec!["a\"b".to_string(), "ok".to_string()];
+        let stats = compute_table_column_summary_on(&conn, "rs_quoted", &cols)?;
+        assert_eq!(stats.len(), 2, "两个列都要有摘要：{stats:?}");
+
+        let aqb = stats
+            .iter()
+            .find(|s| s.name == "a\"b")
+            .expect("含引号列名应进摘要");
+        assert_eq!(aqb.null_rate, Some(0.25), "4 行 1 空");
+        assert_eq!(
+            aqb.unique_rate,
+            Some(2.0 / 3.0),
+            "唯一值 {{1,2}} / 非空 3 行"
+        );
+
+        let ok = stats.iter().find(|s| s.name == "ok").expect("ok 列");
+        assert_eq!(ok.null_rate, Some(0.0));
+        Ok(())
+    }
+
+    /// K10 的加固面：`numeric-stats` 被全局/项目层同名规则覆盖成**输出契约不完整**
+    /// 的版本（缺 p25 等）时，列画像要**早失败**并点名缺失字段——旧实现
+    /// `unwrap_or(0.0)` 会把缺的字段静默显示成 0，用户看到的是假统计。
+    #[test]
+    fn test_overridden_numeric_stats_with_missing_outputs_fails_loudly() -> Result<(), CoreError> {
+        let root = std::env::temp_dir().join(format!(
+            "rds_rule_override_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("建临时规则目录");
+        // 同名覆盖（D3：整体替换）：只输出 min/max，缺 avg/p25/p75/sum…
+        std::fs::write(
+            root.join("numeric-stats.rule.toml"),
+            r#"
+[meta]
+id = "numeric-stats"
+name = "数值列基础统计(不完整覆盖)"
+description = ""
+version = "1.0"
+category = "column"
+applies_to = ["Numeric"]
+builtin = false
+
+[query]
+template = """
+SELECT
+    MIN("{col}")::DOUBLE AS min_val,
+    MAX("{col}")::DOUBLE AS max_val
+FROM "{table}"
+"""
+parameters = ["table", "col"]
+
+[[output]]
+sql_name = "min_val"
+json_name = "min"
+value_type = "f64"
+
+[[output]]
+sql_name = "max_val"
+json_name = "max"
+value_type = "f64"
+"#,
+        )
+        .expect("写覆盖规则");
+
+        let mut registry = crate::builtin_registry();
+        let loaded = registry
+            .load_from_dir(&root, crate::rule::RuleScope::Global)
+            .expect("加载全局层");
+        assert_eq!(loaded, 1, "覆盖规则应被装配");
+        let _ = std::fs::remove_dir_all(&root);
+
+        let conn = duckdb::Connection::open_in_memory().map_err(duckdb_err)?;
+        conn.execute_batch(
+            "CREATE TABLE rs_override (amount DOUBLE);
+             INSERT INTO rs_override VALUES (1.0), (2.0), (3.0);",
+        )
+        .map_err(duckdb_err)?;
+
+        let err = get_column_stats_internal(&registry, &conn, "rs_override", "amount")
+            .expect_err("输出契约不完整必须报错");
+        assert!(
+            err.to_string().contains("缺少字段"),
+            "报错要点名缺失字段（不编 0.0）：{err}"
         );
         Ok(())
     }

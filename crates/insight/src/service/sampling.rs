@@ -55,28 +55,15 @@ impl InsightService {
         table_name: &str,
     ) -> Result<TableProfileView, CoreError> {
         let _ = project_root;
-        let profile = crate::insight_engine::get_temp_table_profile(temp_table)?;
-        let mut view = TableProfileView::from_profile(&profile, table_name);
-        // EDA 列统计摘要（缺失率 / 唯一率）：查询失败不阻塞画像——列清单仍可看，
-        // 只是概览卡 / 缺失矩阵少两列数字（保留 None，不编假值）。
-        let column_names: Vec<String> = profile
-            .columns
-            .iter()
-            .map(|c| c.column_name.clone())
-            .collect();
-        if let Ok(stats) =
-            crate::insight_engine::compute_table_column_summary(temp_table, &column_names)
-        {
+        // 一次令牌 + 一次锁内取齐四段（DESCRIBE / 列摘要 / 重复行 / 样本；
+        // 后三段失败为 None，不阻塞画像——见 get_table_eda_bundle）
+        let bundle = crate::insight_engine::get_table_eda_bundle(temp_table)?;
+        let mut view = TableProfileView::from_profile(&bundle.profile, table_name);
+        if let Some(stats) = bundle.column_summary {
             view.fill_column_stats(&stats);
         }
-        // 整行重复统计（概览五卡「重复行」）：失败不阻塞画像，卡位显示「—」
-        if let Ok(dup) = crate::insight_engine::compute_dup_rows(temp_table) {
-            view.dup_rows = Some(dup);
-        }
-        // EDA 样本（前 5 行）：同样失败不阻塞画像（样本区给空态即可）
-        if let Ok(sample) = crate::insight_engine::get_temp_table_sample(temp_table) {
-            view.sample = Some(sample);
-        }
+        view.dup_rows = bundle.dup_rows;
+        view.sample = bundle.sample;
         Ok(view)
     }
 
