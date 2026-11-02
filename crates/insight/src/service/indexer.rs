@@ -356,8 +356,8 @@ pub fn plan_index(
     planned
 }
 
-/// 规则文件正文的 SHA256。
-fn sha256_hex(bytes: &[u8]) -> String {
+/// 规则文件正文的 SHA256（`pub(crate)`：信任门的内容指纹聚合复用同一实现）。
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(bytes);

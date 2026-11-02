@@ -23,6 +23,21 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-11-02 — 信任门内容指纹（Q1「更严一档」落地，迁移 027）
+
+**背景**：D53 的已知取舍——「信任绑路径不绑内容，`git pull` 带进新规则不重新确认」——是 Q1 预告过的收严方向。本批把决定绑定到**决定时的规则集内容**。**已完成并验证**（lib **277**（+4）+ e2e 14 + 契约 7/9 + store 迁移幂等测试全绿）：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 迁移 027 | `insight_rule_trust` 加 `fingerprint TEXT`；旧记录 NULL = 纯路径语义放行（升级零打扰，下一次决定起绑定）；空规则集的决定绑定空串 `''`（NULL 严格留给旧记录，「先信任空集、后出现文件」也算内容变化） | `crates/store/migrations/global/027_insight_rule_trust_fingerprint.sql` |
+| 指纹 | `ruleset_fingerprint`：与索引扫描同一来源（`scan_scope_dir`），`(相对路径, 文件 SHA256)` 排序聚合再哈希——解析失败的文件也算内容；增 / 删 / 改 / 重命名都变，与扫描顺序无关；`sha256_hex` 提为 `pub(crate)` 复用 | `service/rule_trust.rs` + `service/indexer.rs` |
+| 读取 | `read_record_at` 返回（决定, 指纹）；缺表 / 缺列（025/027 未跑）/ 出错一律 fail closed | 同上 |
+| 写入 | `write` 决定即绑定此刻指纹（decide 链零改动——签名不变，指纹在内部算） | 同上 |
+| 生效判定 | 缓存值 `TrustRecord { state, fingerprint }`；`effective_trust`：非 Trusted 不校验；Trusted ∧ 无指纹（旧记录）→ 放行；Trusted ∧ 指纹不符 → **Undecided（不回写库，重新确认时覆盖）** | `lib.rs`（`project_rule_trust` / `apply_project_rule_trust`） |
+| 回归 | 指纹基础性质（稳定 / 内容变 / 顺序无关 / 重命名变 / 空目录 None）×3 + 端到端：信任 → `git pull` 模拟新规则 → 降级未确认且 pending 摊开两条 → 重新确认装配 | `rule_trust.rs` / `lib.rs` 测试 |
+
+**取舍（有意接受，手册 §4.7 已同步）**：规则开发者改规则也要重新确认——替代路径是全局层（随本机走，无信任门）。
+
 ### 2026-11-02 — 错误分类类型化（K24 ⑬：describe_error 类型优先、子串兜底）
 
 **背景**：面板「要不要给重试」的判断原先完全靠错误 `Display` 文本的子串匹配——而

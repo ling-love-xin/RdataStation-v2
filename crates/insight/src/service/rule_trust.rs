@@ -22,11 +22,13 @@
 //!
 //! `declined` 也落库是有意的：把「不加载」记成一次决定，才不会每次打开项目都追问。
 //!
-//! # 已知取舍
+//! # 已知取舍（2026-11-02 更新：内容指纹已落地）
 //!
-//! 信任绑定**项目路径**，不是规则内容。项目里的规则后来被改动（例如 `git pull` 带进来
-//! 一条新规则）**不会**重新确认——否则用户自己改规则也会被反复打扰。要更严的口径，
-//! 得在这张表上加一列内容指纹（见架构 §12 Q1 的「更严一档」）。
+//! 信任原本只绑定**项目路径**——`git pull` 带进新规则不会重新确认。现在决定同时
+//! 绑定**决定时的规则集内容指纹**（迁移 027）：指纹变了（无论 git pull 还是用户
+//! 自己改）→ 回到未确认重新走一次人的决定。代价是规则开发者改规则也要重新确认，
+//! 顺手的替代路径是把规则放**全局层**（随本机走，无信任门）。旧记录（无指纹列值）
+//! 按纯路径语义放行，升级零打扰，下一次决定起绑定内容。
 
 use std::path::Path;
 
@@ -76,6 +78,31 @@ pub fn trust_key(project_root: &Path) -> String {
         .to_string()
 }
 
+/// 项目规则集的**内容指纹**：对「相对路径 + 文件内容 SHA256」按字典序排序后聚合，再哈希一次。
+///
+/// 口径与索引扫描同一来源（[`crate::service::indexer::scan_scope_dir`]）——**解析失败的
+/// 文件也算内容**（坏规则也是「这份规则集变了」）。文件增 / 删 / 改 / 重命名都会变；
+/// 与扫描顺序无关（排序后聚合）。目录不存在 / 没有规则文件 → `None`。
+pub fn ruleset_fingerprint(dir: &Path) -> Option<String> {
+    let entries = crate::service::indexer::scan_scope_dir(dir, crate::rule::RuleScope::Project);
+    if entries.is_empty() {
+        return None;
+    }
+    let mut parts: Vec<(String, String)> = entries
+        .into_iter()
+        .map(|entry| (entry.source_path, entry.checksum))
+        .collect();
+    parts.sort();
+    let mut buffer = String::new();
+    for (path, checksum) in parts {
+        buffer.push_str(&path);
+        buffer.push('\0');
+        buffer.push_str(&checksum);
+        buffer.push('\n');
+    }
+    Some(crate::service::indexer::sha256_hex(buffer.as_bytes()))
+}
+
 /// 同步读取信任状态（`build_registry` 在同步上下文里，见 [`crate::project_rule_trust`]）。
 ///
 /// **不用连接池的 `acquire_sync`**：它在「已处于 tokio 运行时」的调用点会直接返回错误
@@ -89,6 +116,15 @@ pub fn trust_key(project_root: &Path) -> String {
 /// **不返回 `Result`**：读不到（无记录 / 表未建 / 出错）一律 `Undecided`，
 /// 调用方不需要为「查库失败」准备另一条分支——fail closed 就是唯一正确的失败方向。
 pub fn read_at(global_db: &Path, project_root: &Path) -> RuleTrust {
+    read_record_at(global_db, project_root).0
+}
+
+/// 读取完整信任记录：决定 + 决定时的内容指纹（指纹列由迁移 027 补上）。
+///
+/// 旧记录的指纹为 `NULL`（027 之前决定、尚未再次决定）：按**纯路径语义**放行
+/// （升级零打扰），用户下一次做出决定时起绑定内容。失败口径与 [`read_at`]
+/// 相同——一律 fail closed（`Undecided`，指纹按未绑定）。
+pub fn read_record_at(global_db: &Path, project_root: &Path) -> (RuleTrust, Option<String>) {
     let key = trust_key(project_root);
     let Ok(db) = rusqlite::Connection::open_with_flags(
         global_db,
@@ -98,44 +134,59 @@ pub fn read_at(global_db: &Path, project_root: &Path) -> RuleTrust {
             "[rule-trust] 打不开全局库 {}（项目规则按未信任处理）",
             global_db.display()
         );
-        return RuleTrust::Undecided;
+        return (RuleTrust::Undecided, None);
     };
 
     match db.query_row(
-        "SELECT state FROM insight_rule_trust WHERE project_path = ?1",
+        "SELECT state, fingerprint FROM insight_rule_trust WHERE project_path = ?1",
         rusqlite::params![key],
-        |row| row.get::<_, String>(0),
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
     ) {
-        Ok(state) => RuleTrust::from_db_value(&state),
-        Err(rusqlite::Error::QueryReturnedNoRows) => RuleTrust::Undecided,
+        Ok((state, fingerprint)) => (RuleTrust::from_db_value(&state), fingerprint),
+        Err(rusqlite::Error::QueryReturnedNoRows) => (RuleTrust::Undecided, None),
         // 表还没建（迁移未跑 / 旧库）不算错，按未决定即可；其余错误要留痕
         Err(e) if e.to_string().contains("no such table") => {
             tracing::debug!("[rule-trust] 信任表尚未建立（迁移 025 未跑），按未信任处理");
-            RuleTrust::Undecided
+            (RuleTrust::Undecided, None)
+        }
+        // 指纹列还没建（迁移 027 未跑的旧库）：按未决定处理（fail closed；
+        // 启动迁移随后补列，用户重新决定即绑定内容）
+        Err(e) if e.to_string().contains("no such column") => {
+            tracing::debug!("[rule-trust] 信任表缺指纹列（迁移 027 未跑），按未信任处理");
+            (RuleTrust::Undecided, None)
         }
         Err(e) => {
             tracing::warn!("[rule-trust] 读取信任记录失败（按未信任处理）: {e}");
-            RuleTrust::Undecided
+            (RuleTrust::Undecided, None)
         }
     }
 }
 
 /// 写入信任状态（`Undecided` = 删掉记录，回到「还没决定」）。
+///
+/// 决定即绑定**此刻的规则集内容指纹**（迁移 027）：这次决定针对的是当前磁盘上的
+/// 这份规则集，之后内容变了（git pull / 手改）要重新确认。规则集为空时存空串
+/// （`''`）而不是 `NULL`——`NULL` 严格保留给「迁移 027 之前的旧记录」，这样
+/// 「信任了空规则集、随后出现规则文件」也能被识别为内容变化。
 pub async fn write(
     pool: &GlobalSqlitePool,
     project_root: &Path,
     state: RuleTrust,
 ) -> Result<(), CoreError> {
     let key = trust_key(project_root);
+    let fingerprint =
+        ruleset_fingerprint(&crate::rule_registry::get_project_rules_dir(project_root))
+            .unwrap_or_default();
     let conn = pool.acquire().await?;
     let db = conn.inner()?;
 
     let affected = match state.as_db_value() {
         Some(value) => db.execute(
-            "INSERT INTO insight_rule_trust (project_path, state, decided_at)
-             VALUES (?1, ?2, CURRENT_TIMESTAMP)
-             ON CONFLICT(project_path) DO UPDATE SET state = ?2, decided_at = CURRENT_TIMESTAMP",
-            rusqlite::params![key, value],
+            "INSERT INTO insight_rule_trust (project_path, state, fingerprint, decided_at)
+             VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
+             ON CONFLICT(project_path) DO UPDATE SET
+                 state = ?2, fingerprint = ?3, decided_at = CURRENT_TIMESTAMP",
+            rusqlite::params![key, value, fingerprint],
         ),
         None => db.execute(
             "DELETE FROM insight_rule_trust WHERE project_path = ?1",
@@ -149,7 +200,7 @@ pub async fn write(
     })?;
 
     tracing::info!(
-        "[rule-trust] 项目规则信任状态更新：{} → {:?}（影响 {affected} 行）",
+        "[rule-trust] 项目规则信任状态更新：{} → {:?}（指纹已绑定，影响 {affected} 行）",
         key,
         state
     );
@@ -183,6 +234,7 @@ mod tests {
                     "CREATE TABLE IF NOT EXISTS insight_rule_trust (
                         project_path TEXT PRIMARY KEY,
                         state        TEXT NOT NULL CHECK (state IN ('trusted', 'declined')),
+                        fingerprint  TEXT,
                         decided_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );",
                 )
@@ -283,5 +335,119 @@ mod tests {
         assert!(!RuleTrust::Undecided.is_trusted());
         assert!(!RuleTrust::Declined.is_trusted());
         assert!(RuleTrust::Trusted.is_trusted());
+    }
+
+    /// 指纹基础性质：稳定、随内容变化（增 / 删 / 改 / 重命名）、与建文件顺序无关、
+    /// 空目录 / 缺目录为 `None`。
+    #[test]
+    fn test_ruleset_fingerprint_tracks_content() {
+        let dir = std::env::temp_dir().join(format!(
+            "rds_rule_fp_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // 缺目录 → None
+        assert_eq!(ruleset_fingerprint(&dir), None);
+
+        let rules = dir.join(".RSmeta").join("insight-rules");
+        std::fs::create_dir_all(&rules).expect("建规则目录");
+        // 空目录 → None（没有内容就没有可绑定的东西）
+        assert_eq!(ruleset_fingerprint(&rules), None);
+
+        // 两个文件（倒序创建，验证与顺序无关）
+        std::fs::write(rules.join("b.rule.toml"), "id = \"b\"").expect("b");
+        std::fs::write(rules.join("a.rule.toml"), "id = \"a\"").expect("a");
+        let fp1 = ruleset_fingerprint(&rules).expect("有文件必有指纹");
+
+        // 倒序重建同名同内容 → 指纹不变（排序聚合）
+        std::fs::remove_file(rules.join("a.rule.toml")).expect("删 a");
+        std::fs::remove_file(rules.join("b.rule.toml")).expect("删 b");
+        std::fs::write(rules.join("a.rule.toml"), "id = \"a\"").expect("重建 a");
+        std::fs::write(rules.join("b.rule.toml"), "id = \"b\"").expect("重建 b");
+        assert_eq!(ruleset_fingerprint(&rules).as_deref(), Some(fp1.as_str()));
+
+        // 改内容 → 变
+        std::fs::write(rules.join("a.rule.toml"), "id = \"a2\"").expect("改 a");
+        let fp2 = ruleset_fingerprint(&rules).expect("仍有指纹");
+        assert_ne!(fp1, fp2);
+
+        // 重命名（内容不变）→ 变：绑定的是「路径 + 内容」
+        std::fs::rename(rules.join("a.rule.toml"), rules.join("c.rule.toml")).expect("重命名");
+        assert_ne!(ruleset_fingerprint(&rules).as_deref(), Some(fp2.as_str()));
+
+        // 删到只剩一个 → 变；删空 → None
+        std::fs::remove_file(rules.join("b.rule.toml")).expect("删 b");
+        std::fs::remove_file(rules.join("c.rule.toml")).expect("删 c");
+        assert_eq!(ruleset_fingerprint(&rules), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 决定即绑定内容指纹：write 时规则集的现状被记进记录；
+    /// 规则集为空时存空串（''）而不是 NULL——「信任了空集、随后出现文件」
+    /// 才能被识别为内容变化。
+    #[tokio::test]
+    async fn test_write_binds_ruleset_fingerprint() {
+        let (pool, dir) = temp_db("bind_fp").await;
+        let db = pool.path().clone();
+
+        // 规则集为空的项目：指纹绑定空串
+        let empty = dir.join("proj-empty");
+        std::fs::create_dir_all(&empty).expect("项目目录");
+        write(&pool, &empty, RuleTrust::Trusted)
+            .await
+            .expect("写信任");
+        assert_eq!(
+            read_record_at(&db, &empty),
+            (RuleTrust::Trusted, Some(String::new())),
+            "空规则集绑定空串（不是 NULL——NULL 严格留给旧记录）"
+        );
+
+        // 带规则文件的项目：绑定 = 此刻指纹
+        let with_rules = dir.join("proj-rules");
+        let rules_dir = with_rules.join(".RSmeta").join("insight-rules");
+        std::fs::create_dir_all(&rules_dir).expect("建规则目录");
+        std::fs::write(rules_dir.join("x.rule.toml"), "id = \"x\"").expect("规则");
+        write(&pool, &with_rules, RuleTrust::Trusted)
+            .await
+            .expect("写信任");
+        let expected = ruleset_fingerprint(&rules_dir).expect("指纹");
+        assert_eq!(
+            read_record_at(&db, &with_rules),
+            (RuleTrust::Trusted, Some(expected))
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 迁移 027 之前的旧记录（指纹 NULL）：读取为 `(决定, None)`——
+    /// 调用方（`effective_trust`）按纯路径语义放行，升级零打扰。
+    #[tokio::test]
+    async fn test_legacy_record_without_fingerprint_reads_none() {
+        let (pool, dir) = temp_db("legacy").await;
+        let db = pool.path().clone();
+        let project = dir.join("proj-legacy");
+        std::fs::create_dir_all(&project).expect("项目目录");
+
+        // 手工插一条无指纹的旧记录（等价于 027 前的存量行）
+        {
+            let conn = pool.acquire().await.expect("取连接");
+            conn.inner()
+                .expect("连接")
+                .execute(
+                    "INSERT INTO insight_rule_trust (project_path, state) VALUES (?1, 'trusted')",
+                    rusqlite::params![trust_key(&project)],
+                )
+                .expect("插旧记录");
+        }
+        assert_eq!(
+            read_record_at(&db, &project),
+            (RuleTrust::Trusted, None),
+            "旧记录指纹为 NULL：按未绑定读取（纯路径语义）"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

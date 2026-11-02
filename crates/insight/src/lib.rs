@@ -165,13 +165,22 @@ pub fn normalized_project_key(project_root: &Path) -> PathBuf {
         .unwrap_or_else(|_| project_root.to_path_buf())
 }
 
-/// 项目规则的信任状态缓存（`项目根 → 决定`）。
+/// 项目规则的信任记录缓存（`项目根 → 决定 + 决定时的内容指纹`）。
 ///
 /// 为什么要缓存：`build_registry` 在**同步**上下文里跑（与禁用集合同理），
 /// 而查库是异步的。缓存未命中时直接**同步查一次**全局库（一次主键查询，
 /// 与它已经做的文件读取同量级）——不做异步预热：预热没到之前已信任的项目
 /// 会静默少装一层规则，那比多一次查询严重得多。
-type TrustCache = RwLock<HashMap<PathBuf, RuleTrust>>;
+type TrustCache = RwLock<HashMap<PathBuf, TrustRecord>>;
+
+/// 一条信任决定 + 它绑定的规则集内容指纹（迁移 027 起）。
+#[derive(Debug, Clone)]
+struct TrustRecord {
+    state: RuleTrust,
+    /// 决定时的规则集指纹。`None` = 旧记录未绑定（迁移 027 前的决定，按纯路径
+    /// 语义放行）；`Some("")` = 决定时规则集为空（随后出现文件也算内容变化）。
+    fingerprint: Option<String>,
+}
 
 static PROJECT_TRUST: OnceLock<TrustCache> = OnceLock::new();
 
@@ -179,42 +188,79 @@ fn project_trust_cache() -> &'static TrustCache {
     PROJECT_TRUST.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-/// 某项目的规则信任状态（同步可读，未命中时查一次全局库）。
+/// 某项目的**生效**信任状态（同步可读，未命中时查一次全局库）。
+///
+/// 生效 = 库中的决定 ∧（绑定了指纹时）指纹与磁盘现状一致：
+/// - 非 `Trusted` 的决定不需要指纹校验（反正不装配）；
+/// - `Trusted` 且指纹不符（`git pull` 带进新规则 / 用户手改）→ [`RuleTrust::Undecided`]
+///   **fail closed**——不回写库（决定历史保留），用户在规则管理里重新确认，
+///   确认时写入新指纹（走 [`apply_project_rule_trust`] / `rule_trust::write`）。
 ///
 /// **fail closed**：查不到记录、取不到连接、库里值不认识，一律 [`RuleTrust::Undecided`]
 /// （= 项目层不装配，且会在规则管理里问一次）。
 pub fn project_rule_trust(project_root: &Path) -> RuleTrust {
     let key = normalized_project_key(project_root);
 
-    let cached = project_trust_cache()
+    let record = match project_trust_cache()
         .read()
         .ok()
-        .and_then(|cache| cache.get(&key).copied());
-    if let Some(state) = cached {
-        return state;
-    }
-
-    let state = match engine::migration::get_global_db_manager() {
-        Some(manager) => {
-            let db = manager.sqlite_pool().path().clone();
-            service::rule_trust::read_at(&db, project_root)
+        .and_then(|cache| cache.get(&key).cloned())
+    {
+        Some(record) => record,
+        None => {
+            let record = match engine::migration::get_global_db_manager() {
+                Some(manager) => {
+                    let db = manager.sqlite_pool().path().clone();
+                    let (state, fingerprint) =
+                        service::rule_trust::read_record_at(&db, project_root);
+                    TrustRecord { state, fingerprint }
+                }
+                None => TrustRecord {
+                    state: RuleTrust::Undecided,
+                    fingerprint: None,
+                },
+            };
+            if let Ok(mut cache) = project_trust_cache().write() {
+                cache.insert(key, record.clone());
+            }
+            record
         }
-        None => RuleTrust::Undecided,
     };
 
-    if let Ok(mut cache) = project_trust_cache().write() {
-        cache.insert(key, state);
+    effective_trust(record, &get_project_rules_dir(project_root), project_root)
+}
+
+/// 决定 ∧ 内容指纹一致 → 生效状态（判定细节见 [`project_rule_trust`] 文档）。
+fn effective_trust(record: TrustRecord, rules_dir: &Path, project_root: &Path) -> RuleTrust {
+    if !record.state.is_trusted() {
+        return record.state;
     }
-    state
+    // 旧记录（迁移 027 前决定）：没有绑定指纹 → 纯路径语义放行（升级零打扰）。
+    let Some(bound) = record.fingerprint else {
+        return RuleTrust::Trusted;
+    };
+    let current = service::rule_trust::ruleset_fingerprint(rules_dir).unwrap_or_default();
+    if current == bound {
+        RuleTrust::Trusted
+    } else {
+        tracing::info!(
+            "[rule-trust] 项目 {} 的规则集内容已变化（指纹不符），信任回到未确认（fail closed，不回写库）",
+            project_root.display()
+        );
+        RuleTrust::Undecided
+    }
 }
 
 /// 更新信任缓存并使该项目的注册表缓存失效（用户做出决定后调用）。
 ///
+/// 决定同时绑定**此刻的规则集内容指纹**（与 `rule_trust::write` 同一口径）；
 /// 注册表失效是**必需**的：注册表是「按当时信任状态装配的结果」，状态变了它就不再有效。
 pub fn apply_project_rule_trust(project_root: &Path, state: RuleTrust) {
     let key = normalized_project_key(project_root);
+    let fingerprint =
+        service::rule_trust::ruleset_fingerprint(&get_project_rules_dir(project_root));
     if let Ok(mut cache) = project_trust_cache().write() {
-        cache.insert(key.clone(), state);
+        cache.insert(key.clone(), TrustRecord { state, fingerprint });
     } else {
         tracing::warn!("Failed to update rule trust cache: lock poisoned");
         return;
@@ -698,5 +744,95 @@ value_type = "i64"
 
         clear_registry_cache();
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 信任绑定**内容**（迁移 027 / Q1「更严一档」）：已信任的项目，规则集内容变化
+    /// （git pull / 手改）→ 生效信任回到未确认（不装配、pending 可见、不回写库）；
+    /// 用户重新确认 → 绑定新指纹，规则回来。这就是 D53 原取舍里
+    /// 「git pull 带进来的新规则不会重新确认」那条敞开路径的收口。
+    #[test]
+    fn test_trust_is_reconfirmed_when_ruleset_content_changes() -> Result<(), CoreError> {
+        let _guard = rule_state_guard();
+
+        let root = std::env::temp_dir().join(format!(
+            "rds_insight_trust_fp_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let rules_dir = rule_registry::get_project_rules_dir(&root);
+        std::fs::create_dir_all(&rules_dir).expect("建规则目录");
+        std::fs::write(
+            rules_dir.join("gated.rule.toml"),
+            r#"
+[meta]
+id = "gated-rule"
+name = "内容指纹门控"
+category = "column"
+applies_to = ["Any"]
+version = "1.0"
+builtin = false
+
+[query]
+template = "SELECT COUNT(*) AS total FROM \"{table}\""
+parameters = ["table"]
+
+[[output]]
+sql_name = "total"
+json_name = "total_count"
+value_type = "i64"
+"#,
+        )
+        .expect("写项目规则");
+
+        // ① 用户信任此刻的内容 → 装配
+        apply_project_rule_trust(&root, RuleTrust::Trusted);
+        assert!(
+            with_rules(Some(&root), |reg| Ok(reg.get("gated-rule").is_some()))?,
+            "指纹一致时项目规则应装配"
+        );
+        assert_eq!(project_rule_trust(&root), RuleTrust::Trusted);
+
+        // ② git pull 带进一条新规则（内容变化）→ 生效信任回到未确认，不装配
+        std::fs::write(
+            rules_dir.join("pulled.rule.toml"),
+            std::fs::read_to_string(rules_dir.join("gated.rule.toml"))?
+                .replace("gated-rule", "pulled-rule")
+                .replace("内容指纹门控", "拉进来的规则"),
+        )
+        .expect("模拟 git pull 新规则");
+        clear_registry_cache(); // 注册表是「按当时内容装配的结果」，内容变了必须重建
+
+        assert_eq!(
+            project_rule_trust(&root),
+            RuleTrust::Undecided,
+            "指纹不符 → fail closed 回未确认"
+        );
+        assert!(
+            !with_rules(Some(&root), |reg| Ok(reg.get("gated-rule").is_some()))?,
+            "内容变了，旧信任不得继续放行装配"
+        );
+        let pending = registry_for(Some(&root))
+            .read()
+            .expect("读注册表")
+            .pending_project()
+            .cloned()
+            .expect("未确认但存在项目规则时，pending 必须可见（用户要重新决定）");
+        assert_eq!(pending.count(), 2, "新旧两条都要摊开给用户看");
+
+        // ③ 用户重新确认 → 绑定新指纹 → 两条都装配
+        apply_project_rule_trust(&root, RuleTrust::Trusted);
+        assert_eq!(project_rule_trust(&root), RuleTrust::Trusted);
+        assert!(
+            with_rules(Some(&root), |reg| Ok(
+                reg.get("gated-rule").is_some() && reg.get("pulled-rule").is_some()
+            ))?,
+            "重新确认后按新内容装配"
+        );
+
+        apply_project_rule_trust(&root, RuleTrust::Undecided);
+        clear_rule_caches();
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
     }
 }
