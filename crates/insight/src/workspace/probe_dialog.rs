@@ -282,24 +282,9 @@ impl ProbeDialogBody {
             }
         };
 
-        let confirm = Button::new("insight-probe-confirm")
-            .label("确认探查")
-            .icon(gpui_kit::assets::IconName::Check)
-            .on_click({
-                let view = view.clone();
-                move |_, _, app| {
-                    view.update(app, |v, cx| v.confirm_probe_dialog(cx));
-                }
-            });
-        let cancel = Button::new("insight-probe-cancel")
-            .ghost()
-            .label("取消")
-            .on_click({
-                let view = view.clone();
-                move |_, _, app| {
-                    view.update(app, |v, cx| v.cancel_probe_dialog(cx));
-                }
-            });
+        // 底部操作走**对话框按钮条**（`DialogButtonProps`，信任门同款，见
+        // `sync_probe_modal` 的 on_ok / on_cancel）：确认 / 取消由 Dialog 托管，
+        // 表单不再自绘按钮行；「探查全部」保留在提示区（快捷组合动作）。
         // 探查全部：数据量 = 全量 + 列 = 全部列 + 直接确认（提示区必含的入口）
         let explore_all = Button::new("insight-probe-all")
             .label("探查全部")
@@ -310,7 +295,8 @@ impl ProbeDialogBody {
                     view.update(app, |v, cx| {
                         v.probe_quick_amount(ProbeAmountMode::Full, String::new(), cx);
                         v.probe_set_columns(crate::model::ProbeColumns::All, cx);
-                        v.confirm_probe_dialog(cx);
+                        // 全量 + 全列必然可解析；关窗由 observer 统一处理
+                        let _ = v.confirm_probe_dialog(cx);
                     });
                 }
             });
@@ -516,17 +502,6 @@ impl ProbeDialogBody {
                         .child(SharedString::from(notice)),
                 )
             })
-            .child(Separator::horizontal())
-            // —— 底部操作 ——
-            .child(
-                div()
-                    .h_flex()
-                    .w_full()
-                    .justify_end()
-                    .gap_2()
-                    .child(cancel)
-                    .child(confirm),
-            )
     }
 
     /// 确认窗口区块标题（数据量 / 采样方式 / 探查列 / 过滤 / 规模 / 提示）

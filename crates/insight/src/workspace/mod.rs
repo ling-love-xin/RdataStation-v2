@@ -262,6 +262,10 @@ pub struct InsightWorkspacePanel {
     eda_tab: EdaTab,
     /// 列分布：列多选（默认全选；200+ 列时用户可缩到几个字段）
     sel_cols: Vec<String>,
+    /// 列分布：渐进渲染开关（列数超过 `INSIGHT_WS_COL_RENDER_CAP` 时默认只渲染
+    /// 前 CAP 张卡，「显示全部」置 true——200+ 列全量渲染会卡首帧；虚拟列表
+    /// 见 dev-plan §10 #14，这是低风险缓解）
+    col_show_all: RefCell<bool>,
     /// 列分布：类型筛选（`None` = 全部）
     kind_filter: Option<ColumnKind>,
     /// 列分布：搜索定位（子串命中列名）
@@ -397,6 +401,7 @@ impl InsightWorkspacePanel {
             group: None,
             eda_tab: EdaTab::default(),
             sel_cols: Vec::new(),
+            col_show_all: RefCell::new(false),
             kind_filter: None,
             col_q: String::new(),
             picker_q: String::new(),
@@ -466,12 +471,34 @@ impl InsightWorkspacePanel {
                 let theme = cx.theme().clone();
                 let width = rems(ui::INSIGHT_PROBE_DIALOG_WIDTH).to_pixels(window.rem_size());
                 window.open_dialog(cx, move |dialog, _window, _cx| {
+                    use gpui_kit::component::dialog::DialogButtonProps;
                     dialog
                         .title("探查确认")
                         .w(width)
                         // builder 是 `Fn`（可能多次调用）：实体经 clone 进树，
                         // 同一实体可在多个元素树渲染（render 每树各跑一次）
                         .child(body.clone())
+                        // 底部按钮条（信任门同款）：on_ok 的返回值 =「应否关窗」
+                        // （解析失败时表单行内提示保留、弹窗不关）
+                        .button_props(
+                            DialogButtonProps::default()
+                                .ok_text("确认探查")
+                                .cancel_text("取消")
+                                .show_cancel(true),
+                        )
+                        .on_ok({
+                            let view = view.clone();
+                            move |_, _window, app| {
+                                view.update(app, |v, cx| v.confirm_probe_dialog(cx))
+                            }
+                        })
+                        .on_cancel({
+                            let view = view.clone();
+                            move |_, _window, app| {
+                                view.update(app, |v, cx| v.cancel_probe_dialog(cx));
+                                true
+                            }
+                        })
                         .overlay(true)
                         .border_color(theme.colors.border)
                 });
@@ -1139,8 +1166,7 @@ mod tests {
         cx.update(gpui_kit::init);
         let panel = cx.update(|cx| cx.new(InsightWorkspacePanel::new));
         let panel_for_root = panel.clone();
-        let (_, cx) =
-            cx.add_window_view(move |window, cx| Root::new(panel_for_root, window, cx));
+        let (_, cx) = cx.add_window_view(move |window, cx| Root::new(panel_for_root, window, cx));
 
         cx.update(|window, cx| {
             panel.update(cx, |p, cx| p.open_target(table_target("orders"), cx));

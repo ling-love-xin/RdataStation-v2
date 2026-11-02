@@ -96,10 +96,45 @@ impl super::InsightWorkspacePanel {
             .p(rems(ui::PANEL_PADDING))
             .child(self.render_report_head(cx, profile, entity, theme))
             .child(self.render_overview_cards(cx, profile, theme))
+            .child(self.render_card_jump(entity, theme))
             .child(self.render_type_bar(profile, theme))
             .child(self.render_worth_section(profile, &entity, theme))
             .child(self.render_eda_tabs(cx, entity, theme))
             .child(self.render_eda_body(window, cx, profile, entity, &theme, inline_icon, ring_px))
+    }
+
+    /// 五卡 → 报告 Tab 的快捷跳转：五卡正下方给「缺失矩阵 / 列分布」直达入口。
+    ///
+    /// 数据语境旁的跳转——报告 Tab 条在五卡下方还隔着类型分布与值得关注两段，
+    /// 「缺失单元格」看到问题后一步到缺失矩阵。语义 Button（键盘可达）；
+    /// 点击只改面板状态（事件路径约定）。
+    pub(crate) fn render_card_jump(&self, entity: &Entity<Self>, theme: &Theme) -> Div {
+        let jump = |label: &'static str, tab: EdaTab, id: &'static str| {
+            let entity = entity.clone();
+            Button::new(id)
+                .ghost()
+                .xsmall()
+                .label(label)
+                .text_color(theme.colors.muted_foreground)
+                .on_click(move |_, _, app| {
+                    entity.update(app, |panel, cx| {
+                        panel.eda_tab = tab;
+                        cx.notify();
+                    });
+                })
+        };
+        div()
+            .h_flex()
+            .w_full()
+            .items_center()
+            .justify_end()
+            .gap_1()
+            .child(jump(
+                "缺失矩阵 →",
+                EdaTab::Missing,
+                "insight-ws-jump-missing",
+            ))
+            .child(jump("列分布 →", EdaTab::Cols, "insight-ws-jump-cols"))
     }
 
     /// 报告头（原型 .report-head）：kind 徽标 + scope 徽标（只读显示）。

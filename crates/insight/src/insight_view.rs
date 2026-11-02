@@ -764,15 +764,17 @@ impl InsightView {
     /// 已登记目标 + 已有画像时**保留旧载荷**（R5 不闪空）：重跑建表，新表就绪后
     /// jobs 一次性替换；只更新取样口径与阶段条。新目标走 [`Self::apply_target_and_request`]
     /// 清空旧载荷（跨目标不串数据）。
-    pub(crate) fn confirm_probe_dialog(&mut self, cx: &mut Context<Self>) {
+    /// 返回「窗口是否应关闭」：解析失败（行内提示已写）为 `false`——对话框
+    /// 按钮条的 `on_ok` 以它决定关不关；表单内调用丢弃返回值（状态自洽）。
+    pub(crate) fn confirm_probe_dialog(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(mut dialog) = self.probe_dialog.take() else {
-            return;
+            return false;
         };
         let Some(config) = dialog.to_config() else {
             // 解析失败：行内提示已写入，窗口保留
             self.probe_dialog = Some(dialog);
             cx.notify();
-            return;
+            return false;
         };
         let target = dialog.target.clone();
         self.last_probe_config = Some(config.clone());
@@ -790,7 +792,7 @@ impl InsightView {
                 config: Some(config),
             });
             cx.notify();
-            return;
+            return true;
         }
         // 新目标：切默认 Tab、清旧载荷、取样口径、清加载说明
         self.apply_target_and_request(target.clone(), cx);
@@ -799,6 +801,7 @@ impl InsightView {
             config: Some(config),
         });
         cx.notify();
+        true
     }
 
     /// 取消探查：关闭窗口、清目标（幂等，不建表不改状态）。

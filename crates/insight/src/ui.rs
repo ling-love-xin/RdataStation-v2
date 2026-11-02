@@ -65,6 +65,9 @@ pub const INSIGHT_PICKER_WIDTH: f32 = 13.5;
 /// 原型 1000px 减去 activity 48px 与右 dock 280px 即得 672px。低于它整页横向
 /// 滚动，而不是折行或压缩栅格。
 pub const INSIGHT_WS_MIN_WIDTH: f32 = 42.0;
+/// 列分布渐进渲染上限（40 张卡：200+ 列全量渲染卡首帧；「显示全部」可解锁，
+/// 虚拟列表见 dev-plan §10 #14）
+pub const INSIGHT_WS_COL_RENDER_CAP: usize = 40;
 /// 探查确认弹窗宽度（30rem = 480px；四块表单 + 快捷预设 + 列候选单列排布）
 pub const INSIGHT_PROBE_DIALOG_WIDTH: f32 = 30.0;
 /// 右栏集合行来源徽标列宽（4rem = 64px，容得下最宽的「结果集」标签 + 内距）

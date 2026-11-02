@@ -93,8 +93,16 @@ impl super::InsightWorkspacePanel {
         // 列卡恒双列（原型 `.col-grid{repeat(2,1fr)}`）：GPUI 无 CSS grid，按两张一组
         // 切行、行内两个 `flex_1` 平分——读序与 grid 行优先一致，且同行两张等高。
         // **不随容器宽塌成单列**，整体宽度兜底见 `ui::INSIGHT_WS_MIN_WIDTH`。
+        // 渐进渲染（建议 7 的低风险缓解）：超过上限默认只渲染前 CAP 张，
+        // 尾部给「显示全部」——锚点跳转 / 折叠态与全量渲染完全一致
+        let capped = !*self.col_show_all.borrow() && selected.len() > ui::INSIGHT_WS_COL_RENDER_CAP;
+        let render_list: &[&TableColumnView] = if capped {
+            &selected[..ui::INSIGHT_WS_COL_RENDER_CAP]
+        } else {
+            &selected
+        };
         let mut cards = div().v_flex().w_full().gap_2();
-        for pair in selected.chunks(2) {
+        for pair in render_list.chunks(2) {
             let mut row = div().h_flex().items_stretch().w_full().gap_2();
             for col in pair {
                 // 滚动锚点注册：复用同一 `ScrollAnchor` 实例（anchor_scroll 靠它持续
@@ -126,6 +134,28 @@ impl super::InsightWorkspacePanel {
                 );
             }
             cards = cards.child(row);
+        }
+        if capped {
+            let entity = entity.clone();
+            let total = selected.len();
+            cards = cards.child(
+                div().w_full().flex_none().child(
+                    Button::new("insight-ws-col-show-all")
+                        .ghost()
+                        .xsmall()
+                        .w_full()
+                        .label(format!(
+                            "显示全部 {total} 列（当前渲染前 {} 张卡）",
+                            ui::INSIGHT_WS_COL_RENDER_CAP
+                        ))
+                        .on_click(move |_, _, app| {
+                            entity.update(app, |panel, cx| {
+                                *panel.col_show_all.borrow_mut() = true;
+                                cx.notify();
+                            });
+                        }),
+                ),
+            );
         }
         if selected.is_empty() {
             // 无匹配列：标准 Empty 组件（对齐 database 导航「没有匹配的数据源」
@@ -284,13 +314,8 @@ impl super::InsightWorkspacePanel {
             .when_some(explore_badge, |this, badge| this.child(badge))
             // C5 中断列：灰态徽标 + 补算入口（评估全表被取消后未完成列显示）
             .when(col.interrupted, |this| {
-                this.child(
-                    div()
-                        .flex_none()
-                        .text_xs()
-                        .text_color(colors.warning)
-                        .child("未完成"),
-                )
+                // Tag 化与类型徽标 / 探索徽标同一样式面（此前是唯一的手拼纯文本徽标）
+                this.child(Tag::color(ColorName::Amber).xsmall().child("未完成"))
             })
             .when(col.interrupted, |this| {
                 let entity = entity.clone();
@@ -359,12 +384,28 @@ impl super::InsightWorkspacePanel {
         } else {
             self.render_col_mini_vis(col, theme, is_full)
         };
+        // 折叠态迷你图缺席也要给**原因**（无声空白分不清「没有数据」还是「坏了」）：
+        // 评估中断 / 评估中 / 类型未识别 / 样本不足，四档各说各的
+        let mini_note = (!open && mini.is_none()).then_some(match &col.stats_detail {
+            None if col.interrupted => "评估中断，点「补算」续跑",
+            None => "评估中…图表随后就绪",
+            Some(crate::model::types::ColumnStatsDetail::Unknown) => "类型未识别，无分布图",
+            _ => "样本不足，未生成分布图",
+        });
         let head_block = div()
             .v_flex()
             .w_full()
             .gap_2()
             .child(header)
-            .when_some(mini, |this, m| this.child(m));
+            .when_some(mini, |this, m| this.child(m))
+            .when_some(mini_note, |this, note| {
+                this.child(
+                    div()
+                        .text_xs()
+                        .text_color(colors.muted_foreground)
+                        .child(note),
+                )
+            });
         Collapsible::new()
             .motion_id(SharedString::from(format!(
                 "insight-ws-col-motion-{}",
