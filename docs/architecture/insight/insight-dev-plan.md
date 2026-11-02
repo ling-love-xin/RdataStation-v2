@@ -23,6 +23,20 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-11-02 — 错误分类类型化（K24 ⑬：describe_error 类型优先、子串兜底）
+
+**背景**：面板「要不要给重试」的判断原先完全靠错误 `Display` 文本的子串匹配——而
+`CoreError::Connection` / `CommonError::Timeout` 这两个**类型化变体早已存在**，连接
+错误文本里只要含 "does not exist" 就会被误判成「结果集失效」（丢重试入口）。**已完成
+并验证**（lib **273**（+3）+ e2e 14 + 契约 7/9 全绿）：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 分类出口 | 新增 `InsightErrorKind`（TooManyConcurrent / ResultExpired / ConnectionTrouble / Other）与 `InsightService::classify_error`；`describe_error` 改为「分类 → 文案 + retryable」映射 | `service/mod.rs`（lib.rs re-export） |
+| 类型优先 | `CoreError::Connection(_)` 与 `CommonError::Timeout` 按变体判（不再压平成文本猜子串）；并发配额维持自家常量精确等值 | 同上 |
+| 子串兜底 | DuckDB「表不存在 / catalog / binder」与连接类关键词维持原文匹配（engine 尚无 `TableNotFound` 类 typed error），**子串面不扩大**；等 engine 给出结构化分类后收编 | 同上 |
+| 回归 | 连接变体文本含 "does not exist" 仍判连接类（旧实现会翻转）；`CommonError::Timeout` 走类型路径；配额 / 失效 / 其它三分类直断 | 同上测试模块 |
+
 ### 2026-11-02 — 评估链逐列去冗余（K24 ⑫：表级摘要喂给逐列评估）
 
 **背景**：上一批加固后评估链剩最后一块冗余——逐列评估每列重跑 `COUNT / COUNT(DISTINCT) / typeof`（其中 `COUNT(DISTINCT)` 是**全表重聚合**），而基准 bundle 的列摘要**一次查询**已算出全表各列计数、`DESCRIBE` 已给列类型。**已完成并验证**（`cargo test -p rds-insight --lib` **270 项**（+2 等价性 / 精确计数）+ 集成 **14 项**（含 `stats_agree_with_duckdb_summarize` 交叉校验——预计算路径数字端到端正确）+ 契约 **7 + 9 项**全绿；examples 编译通过；全套连跑 3 次稳定）：

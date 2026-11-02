@@ -63,6 +63,23 @@ pub struct InsightErrorInfo {
     pub retryable: bool,
 }
 
+/// 错误分类（[`InsightService::classify_error`] 的产物）。
+///
+/// 「要不要给重试」的判断**不再依赖错误文案措辞**：类型可判的
+/// （`CoreError::Connection` / `CommonError::Timeout`）按类型判；DuckDB / 驱动侧
+/// 尚无 typed error 的那部分（表不存在等）才落子串兜底，子串面不扩大。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsightErrorKind {
+    /// 并发配额（D12）：瞬时，值得重试
+    TooManyConcurrent,
+    /// 结果集 / 样本表已失效（被回收 / 会话结束）：重试无意义，要重新执行查询
+    ResultExpired,
+    /// 连接类问题（含超时）：多为瞬时，值得重试
+    ConnectionTrouble,
+    /// 其它：原文照给，不承诺重试
+    Other,
+}
+
 /// 洞察服务门面。
 pub struct InsightService;
 
@@ -135,24 +152,57 @@ mod sampling;
 impl InsightService {
     /// 错误 → 面板可展示的语义（文案 + 是否可重试）。
     ///
-    /// 识别方式是**按消息内容**匹配：引擎侧的 DuckDB 错误还没有结构化分类，
-    /// 这是权宜。一旦 engine 给出 typed error（如 `TableNotFound` / `ConnectionLost`），
-    /// 这里应改为匹配类型而不是字符串。
+    /// 分类走 [`Self::classify_error`]（**类型优先，子串兜底**）；
+    /// 这里只负责把分类映射成「给人看的文案 + 要不要给重试入口」。
     pub fn describe_error(err: &CoreError) -> InsightErrorInfo {
-        let raw = strip_error_code(&err.to_string());
-        let lower = raw.to_lowercase();
-
-        // 并发配额（D12）：瞬时，值得重试。文案直接用引擎侧那一份，
-        // 避免「引擎一套、面板又一套」的两份文案。
-        if raw == crate::insight_engine::ERR_TOO_MANY_CONCURRENT {
-            return InsightErrorInfo {
-                message: raw,
+        match Self::classify_error(err) {
+            // 并发配额（D12）：瞬时，值得重试。文案直接用引擎侧那一份，
+            // 避免「引擎一套、面板又一套」的两份文案。
+            InsightErrorKind::TooManyConcurrent => InsightErrorInfo {
+                message: strip_error_code(&err.to_string()),
                 retryable: true,
-            };
+            },
+            // 结果集没了（临时表被重建 / 会话结束 / 超时清理）：重试无意义——
+            // 用户必须重新执行那条查询。
+            InsightErrorKind::ResultExpired => InsightErrorInfo {
+                message: "结果集已失效或已过期，请重新执行查询".into(),
+                retryable: false,
+            },
+            // 连接抖动 / 超时：多为瞬时，值得重试。
+            InsightErrorKind::ConnectionTrouble => InsightErrorInfo {
+                message: "连接不可用，请检查数据源后重试".into(),
+                retryable: true,
+            },
+            // 兜底：原文照给（往往直接可定位），但不主动承诺重试。
+            InsightErrorKind::Other => InsightErrorInfo {
+                message: strip_error_code(&err.to_string()),
+                retryable: false,
+            },
         }
+    }
 
-        // 结果集没了（临时表被重建 / 会话结束 / 超时清理）：重试无意义——
-        // 用户必须重新执行那条查询。
+    /// 错误分类：**类型可判的按类型，判不了的才落到子串**。
+    ///
+    /// 判定次序（前者优先）：
+    /// 1. `CoreError::Connection(_)` / `CommonError::Timeout` → 连接类——这两个
+    ///    **类型化变体早已存在**，旧实现却把它们压平成 Display 文本再猜子串
+    ///    （连接错误文本里只要含 "does not exist" 就会被误判成结果集失效）；
+    /// 2. 并发配额：自家常量精确等值（`ERR_TOO_MANY_CONCURRENT`）；
+    /// 3. 子串兜底：DuckDB「表不存在 / catalog / binder」与连接类关键词——
+    ///    DuckDB / 驱动侧这些错误目前只活在 `General` / `DatabaseError::Query.reason`
+    ///    的**文本**里（engine 未暴露 `TableNotFound` 这类 typed error），
+    ///    在 engine 给出结构化分类之前维持原文匹配，**子串面不再扩大**。
+    pub fn classify_error(err: &CoreError) -> InsightErrorKind {
+        if matches!(err, CoreError::Connection(_)) {
+            return InsightErrorKind::ConnectionTrouble;
+        }
+        if matches!(err, CoreError::Common(CommonError::Timeout { .. })) {
+            return InsightErrorKind::ConnectionTrouble;
+        }
+        if strip_error_code(&err.to_string()) == crate::insight_engine::ERR_TOO_MANY_CONCURRENT {
+            return InsightErrorKind::TooManyConcurrent;
+        }
+        let lower = strip_error_code(&err.to_string()).to_lowercase();
         if hits_any(
             &lower,
             &[
@@ -163,13 +213,8 @@ impl InsightService {
                 "binder error",
             ],
         ) {
-            return InsightErrorInfo {
-                message: "结果集已失效或已过期，请重新执行查询".into(),
-                retryable: false,
-            };
+            return InsightErrorKind::ResultExpired;
         }
-
-        // 连接抖动：多为瞬时，值得重试。
         if hits_any(
             &lower,
             &[
@@ -182,17 +227,10 @@ impl InsightService {
                 "超时",
             ],
         ) {
-            return InsightErrorInfo {
-                message: "连接不可用，请检查数据源后重试".into(),
-                retryable: true,
-            };
+            return InsightErrorKind::ConnectionTrouble;
         }
 
-        // 兵底：原文照给（往往直接可定位），但不主动承诺重试。
-        InsightErrorInfo {
-            message: raw,
-            retryable: false,
-        }
+        InsightErrorKind::Other
     }
 
     // ==================== 历史质量模型门面（兼容保留，表/列画像 UI 已不调用） ====================
@@ -597,6 +635,66 @@ mod tests {
             "原文往往自己就能定位"
         );
         assert!(!info.retryable);
+    }
+
+    /// 类型优先：`CoreError::Connection` 的**文本**里即使含 "does not exist"，
+    /// 也按连接类处理（旧实现把它压平成 Display 文本猜子串，会被误判成结果集失效、
+    /// 丢掉重试入口）。类型化变体早已存在，判定不该依赖文案措辞。
+    #[test]
+    fn typed_connection_variant_wins_over_substring() {
+        let err = CoreError::Connection(ConnectionError::Refused {
+            conn_id: "G_1".into(),
+            reason: "database 'shop' does not exist".into(),
+        });
+        assert_eq!(
+            InsightService::classify_error(&err),
+            super::InsightErrorKind::ConnectionTrouble,
+            "类型可判的按类型：文本里的 'does not exist' 不得翻转结论"
+        );
+        let info = InsightService::describe_error(&err);
+        assert!(info.retryable, "连接类值得重试");
+        assert_eq!(info.message, "连接不可用，请检查数据源后重试");
+    }
+
+    /// `CommonError::Timeout` 是**类型化**超时变体：走类型路径（不靠 "timeout" 子串）。
+    #[test]
+    fn typed_timeout_variant_classifies_as_connection_trouble() {
+        let err = CoreError::Common(CommonError::Timeout {
+            operation: "源取样".into(),
+            duration_ms: 15_000,
+        });
+        assert_eq!(
+            InsightService::classify_error(&err),
+            super::InsightErrorKind::ConnectionTrouble
+        );
+        assert!(InsightService::describe_error(&err).retryable);
+    }
+
+    /// 分类出口本身可直接断言（并发配额 / 结果集失效 / 其它）。
+    #[test]
+    fn classify_error_covers_quota_expired_and_other() {
+        let quota = CoreError::Common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string()));
+        assert_eq!(
+            InsightService::classify_error(&quota),
+            super::InsightErrorKind::TooManyConcurrent
+        );
+
+        let expired = CoreError::Database(Box::new(DatabaseError::Query {
+            sql: "SELECT * FROM t_result_9".into(),
+            reason: "Catalog Error: Table with name t_result_9 does not exist".into(),
+            position: None,
+            location: None,
+        }));
+        assert_eq!(
+            InsightService::classify_error(&expired),
+            super::InsightErrorKind::ResultExpired
+        );
+
+        let other = CoreError::Common(CommonError::General("规则 histogram 执行失败".into()));
+        assert_eq!(
+            InsightService::classify_error(&other),
+            super::InsightErrorKind::Other
+        );
     }
 
     /// 参数拼装：`table` 恒为临时表名，其余按选择顺序对位

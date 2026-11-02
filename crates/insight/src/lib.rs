@@ -72,7 +72,7 @@ pub use service::watcher::{
     DEFAULT_POLL_INTERVAL, RulesWatcher, clear_index_stale, index_is_stale, rules_fingerprint,
     set_watched_project_root, watch_dirs, watched_project_root,
 };
-pub use service::{InsightErrorInfo, InsightService};
+pub use service::{InsightErrorInfo, InsightErrorKind, InsightService};
 pub use store::{
     InsightColumnStore, InsightSchemaReportStore, InsightStorageStats, InsightTableReportStore,
     InsightVersionEntry, snapshot_checksum,
