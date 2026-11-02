@@ -710,9 +710,10 @@ mod tests {
 
         // D12 快速失败在并行测试下可能瞬时挤满（4 permit 进程级共享，其它用例的
         // 后台取数也在抢；good 列被配额误伤会标灰态）：那是环境竞争、不是被测行为
-        // ——以「good 列完成评估」为就绪条件，未就绪就重发目标，最多 3 次。
+        // ——以「good 列完成评估」为就绪条件，未就绪就重发目标。3 次在 `test-all`
+        // 全仓并行下偶发不够（2026-11-02 首次全量跑挂过一次），放宽到 6 次。
         let mut good_ready = false;
-        for _ in 0..3 {
+        for _ in 0..6 {
             cx.update(|cx| {
                 panel.update(cx, |panel, cx| {
                     panel.set_target(
@@ -740,7 +741,7 @@ mod tests {
         }
         assert!(
             good_ready,
-            "三次尝试后 good 列仍未完成评估（并发配额被并行用例长期占用？）"
+            "6 次尝试后 good 列仍未完成评估（并发配额被并行用例长期占用？）"
         );
 
         cx.update(|cx| {
