@@ -1,6 +1,6 @@
 [package]
 name = "rds-notification"
-version = "0.2.5"
+version.workspace = true
 edition = "2021"
 description = "RdataStation 通知系统：全局通知推送、合并、历史记录、通知中心"
 license = "MIT"
