@@ -1215,6 +1215,50 @@ fn generate_produces_preview_without_touching_sinks(cx: &mut TestAppContext) {
     assert!(rec.notifies.get() >= 1, "生成成功后应通知宿主");
 }
 
+/// 预览空态（`Empty` 组件）不只是说明，还带**主操作直达**：草稿 tab 没有结果时，
+/// 预览段给「生成」按钮——真点击应提交任务；任务进行中按钮禁用（不靠任务层拒绝，
+/// 与表头「生成」同一口径）；结果回填后空态让位给表格（按钮不再渲染）。
+#[gpui_kit::test]
+fn preview_empty_state_offers_generate_and_yields_to_the_table(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    draw(cx);
+
+    // 没有结果：空态按钮在场，真点击提交生成（debug_selector 只为找坐标）
+    let bounds = cx
+        .debug_bounds("mock-preview-generate-draft")
+        .expect("空态应给「生成」按钮");
+    cx.simulate_click(
+        gpui_kit::Point::new(bounds.center().x, bounds.center().y),
+        gpui_kit::Modifiers::default(),
+    );
+    assert_eq!(rec.started.borrow().len(), 1, "点击空态按钮应提交生成");
+
+    // 任务进行中（面板自己的运行标记，未轮询回填）：按钮仍在但禁用，再点不重复提交
+    draw(cx);
+    let bounds = cx
+        .debug_bounds("mock-preview-generate-draft")
+        .expect("结果未回填前空态仍在");
+    cx.simulate_click(
+        gpui_kit::Point::new(bounds.center().x, bounds.center().y),
+        gpui_kit::Modifiers::default(),
+    );
+    assert_eq!(rec.started.borrow().len(), 1, "进行中禁用：不重复提交");
+
+    // 结果回填：空态让位给表格，按钮不再渲染
+    poll_job(cx, &panel);
+    draw(cx);
+    assert!(
+        cx.debug_bounds("mock-preview-generate-draft").is_none(),
+        "有结果后不该还有空态按钮"
+    );
+}
+
 /// 项目级出口的可用性判据（`sinks_ready`）= 有结果 + 非只读 + 已打开项目。
 ///
 /// 三个条件缺一个就该禁用按钮：未打开项目时按钮永远点得动、每次都弹同一句拒绝，

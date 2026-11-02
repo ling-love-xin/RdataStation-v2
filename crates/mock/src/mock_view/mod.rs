@@ -56,7 +56,7 @@ use gpui_kit::component::collapsible::Collapsible;
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
 use gpui_kit::component::empty::{
-    Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
+    Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
 };
 use gpui_kit::component::hover_card::HoverCard;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
@@ -142,8 +142,9 @@ pub(crate) use pure::{
 pub(crate) use style::{
     ActionKind, TOOLTIP_DELAY, button, card, card_border, card_divider, card_interactive,
     card_note, card_title, confidence_tag, current_bar, danger_icon_button, danger_text_button,
-    data_type_tag, dropdown_button, error_line, hint_line, icon_button, info_line, kv, row_card,
-    row_card_interactive, row_card_selected, section, success_line, text_hint, warning_line,
+    data_type_tag, dropdown_button, error_line, hint_line, icon_button, info_hint_icon, info_line,
+    kv, row_card, row_card_interactive, row_card_selected, section, success_line, text_hint,
+    warning_line,
 };
 
 // ---- 仅供测试引用的 re-export（`super::X` 路径只在 `#[cfg(test)]` 的 tests.rs 出现，

@@ -1639,36 +1639,85 @@ impl Render for MockDetailView {
                 panel.render_design_head(&tab_key, window, cx)
             })
         } else {
-            let facts = match generated.as_ref() {
-                Some(info) => format!(
-                    "{} · {} 行 · 已生成（临时表 {} · {} ms）",
-                    table,
-                    with_thousands(u64::from(info.row_count)),
-                    info.temp_table_name,
-                    info.elapsed_ms
-                ),
-                // 没结果分两种：切项目把结果清掉了（旧 tab 留着，见 D35），或者这一轮没生成它。
-                // 两种说法的行动建议一样（重新生成），但「为什么没结果」不一样——不能都说成「这一轮」。
-                None if dropped_by_project_switch => format!(
-                    "{table} · 所属项目已切换：这张表的结果已作废（切项目会清空 mock 结果）——重新生成后再看"
-                ),
-                None => format!("{table} · 这一轮没有它的结果（重新生成后再看）"),
-            };
-            let mut head = div().v_flex().gap_1().w_full().child(
-                div()
+            // 事实行：主行只留语义事实（表名 / 行数 / 状态）；临时表名与耗时是技术细节，
+            // 收进悬停（低频解释不常驻，与右面板状态条同一手法）。
+            //
+            // 没结果分两种：切项目把结果清掉了（旧 tab 留着，见 D35），或者这一轮没生成它。
+            // 两种说法的行动建议一样（重新生成），但「为什么没结果」不一样——不能都说成「这一轮」。
+            let facts_row = match generated.as_ref() {
+                Some(info) => div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(fg)
+                            .text_ellipsis()
+                            .child(format!(
+                                "{} · {} 行 · 已生成",
+                                table,
+                                with_thousands(u64::from(info.row_count)),
+                            )),
+                    )
+                    .child({
+                        let temp_table = info.temp_table_name.clone();
+                        let elapsed_ms = info.elapsed_ms;
+                        HoverCard::new(ElementId::Name(SharedString::from(format!(
+                            "mock-facts-tech-{tab_key}"
+                        ))))
+                        .trigger(info_hint_icon(&theme))
+                        .content(move |_, _, _cx| {
+                            div()
+                                .p_2()
+                                .text_xs()
+                                .child(format!(
+                                    "临时表 {temp_table} · 生成耗时 {elapsed_ms} ms"
+                                ))
+                        })
+                    }),
+                None if dropped_by_project_switch => div()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(fg)
                     .text_ellipsis()
-                    .child(facts),
-            );
+                    .child(format!(
+                        "{table} · 所属项目已切换：这张表的结果已作废（切项目会清空 mock 结果）——重新生成后再看"
+                    )),
+                None => div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(fg)
+                    .text_ellipsis()
+                    .child(format!("{table} · 这一轮没有它的结果（重新生成后再看）")),
+            };
+            let mut head = div().v_flex().gap_1().w_full().child(facts_row);
+            // 场景来源：常驻只说「从哪来」（出处是每次都要读的身份信息）；
+            // 「怎么切到别的表」是一次性引导，收进悬停。
             if let Some(source) = scenario_source.clone() {
-                head = head.child(hint_line(
-                    &theme,
-                    format!(
-                        "来自场景模板「{source}」：列与预览都属于它自己；看别的表切 tab（或在右 Dock 结果表清单点一行）"
-                    ),
-                ));
+                head = head.child(
+                    HoverCard::new(ElementId::Name(SharedString::from(format!(
+                        "mock-scenario-source-{tab_key}"
+                    ))))
+                    .trigger(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_1()
+                            .w_full()
+                            .child(card_note(&theme, format!("来自场景模板「{source}」")))
+                            .child(info_hint_icon(&theme)),
+                    )
+                    .content(move |_, _, _cx| {
+                        div().p_2().text_xs().child(
+                            "列与预览都属于它自己；看别的表切 tab（或在右 Dock 结果表清单点一行）",
+                        )
+                    }),
+                );
             }
             if let Some(note) = relation_note.clone() {
                 head = head.child(warning_line(&theme, note));
@@ -1700,12 +1749,7 @@ impl Render for MockDetailView {
         // 三种态各自成块：空态卡片 / draft 标题行 + 字段列表 / 结果表只读列
         let columns_block = if is_draft && draft_columns == 0 {
             // 空态：三种起手方式都摆在这张 tab 上（右 Dock 只管表与集合出口）
-            card(&theme).child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("还没有列：先把这张表造起来"),
-            )
+            card(&theme).child(card_title("还没有列：先把这张表造起来"))
                 .child(
                     div()
                         .h_flex()
@@ -1780,101 +1824,182 @@ impl Render for MockDetailView {
         };
 
         // ── 预览 ──
-        // 标题行：口径说明（排序 / 行数）+ 右侧的「行数」菜单（重查代价随行数走，先说清）
-        let preview_title = match generated.as_ref() {
-            Some(info) => {
-                // 排序生效时把口径说清：这是「按该列排序后的前 N 行」，不是生成顺序的前 N 行
-                let head = match &preview_sort_label {
-                    Some(label) => format!("预览（{label} · 前 {} 行）", preview_shown),
-                    None => format!("预览（前 {} 行）", preview_shown),
-                };
-                format!(
-                    "{head} · {} · 临时表 {} · 本次 {} 行 · {} ms",
-                    info.table_name,
-                    info.temp_table_name,
-                    with_thousands(u64::from(info.row_count)),
-                    info.elapsed_ms
-                )
-            }
-            None if is_draft => {
-                format!("预览（前 {PREVIEW_ROWS} 行）· 尚无结果——点表头「生成」")
-            }
-            None if dropped_by_project_switch => {
-                format!("预览（前 {PREVIEW_ROWS} 行）· 所属项目已切换，结果已作废——重新生成后再看")
-            }
-            None => format!("预览（前 {PREVIEW_ROWS} 行）· 这一轮没有这张表的结果"),
-        };
-        // 段 3：预览（标题行 + 排序提示 + 表格 / 空占位）。表格 `DataTable` 自带
-        // 虚拟化与横向滚动，段内直接撑满——不再随整页滚。
+        // 段 3：预览（标题行 + 表格 / 空态）。表格 `DataTable` 自带虚拟化与横向滚动，
+        // 段内直接撑满——不再随整页滚。单表出口已上移到表头的动作行：这里只留预览。
         let mut preview_block = div().v_flex().gap_2().w_full().flex_1().min_h_0();
-        // 单表出口已上移到表头的动作行（与「生成」同排）：这里只留预览，段内空间全部给表格。
-        preview_block = preview_block.child(
-            div()
-                .h_flex()
-                .items_center()
-                .gap_2()
-                .w_full()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(preview_title),
+
+        // 有结果：标题行常驻的只有「现在看的是哪一段」（排序口径 + 前 N / 共 M 行）；
+        // 临时表名 / 耗时 / 排序的重查语义是低频解释，一并收进 info 悬停
+        // （表名与总行数已在表头事实行，标题行不重复）。
+        if let Some(info) = generated.as_ref() {
+            let title = match &preview_sort_label {
+                // 排序生效时把口径说清：这是「按该列排序后的前 N 行」，不是生成顺序的前 N 行
+                Some(label) => format!(
+                    "预览（{label} · 前 {preview_shown} 行 · 共 {} 行）",
+                    with_thousands(u64::from(info.row_count))
+                ),
+                None => format!(
+                    "预览（前 {preview_shown} 行 · 共 {} 行）",
+                    with_thousands(u64::from(info.row_count))
+                ),
+            };
+            let temp_table = info.temp_table_name.clone();
+            let elapsed_ms = info.elapsed_ms;
+            // 排序生效时才解释重查语义（没排序时「前 N 行」不言自明）
+            let sort_note = preview_sort_label.as_ref().map(|label| {
+                format!(
+                    "「{label}」是重查临时表得来的全局前 {preview_shown} 行，不是生成顺序的前几行；\
+                     点表头右端的箭头可换向 / 取消，右键同一套。"
                 )
-                .child(if generated.is_some() {
-                    self.panel.update(cx, |panel, cx| {
+            });
+            let title_hover = HoverCard::new(ElementId::Name(SharedString::from(format!(
+                "mock-preview-tech-{tab_key}"
+            ))))
+            .trigger(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(muted)
+                            .text_ellipsis()
+                            .child(title),
+                    )
+                    .child(info_hint_icon(&theme)),
+            )
+            .content(move |_, _, _cx| {
+                let mut card = div()
+                    .v_flex()
+                    .gap_1()
+                    .p_2()
+                    .text_xs()
+                    .child(format!("临时表 {temp_table} · 生成耗时 {elapsed_ms} ms"));
+                if let Some(note) = sort_note.clone() {
+                    card = card.child(div().max_w(ui::STATUS_TOOLTIP_MAX_WIDTH).child(note));
+                }
+                card
+            });
+            preview_block = preview_block.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .child(title_hover)
+                    .child(self.panel.update(cx, |panel, cx| {
                         panel.render_preview_limit_menu(&tab_key, cx)
-                    })
-                } else {
-                    div().into_any_element()
-                }),
-        );
-        // 排序的入口提示：箭头与右键都能点，但两处都很轻，先说一句
-        if preview_sort_label.is_some() {
-            preview_block = preview_block.child(hint_line(
-                &theme,
-                "排序是重查临时表得来的（全局前 N 行）；点表头右端的箭头可换向 / 取消，右键同一套。",
-            ));
+                    })),
+            );
         }
 
-        let preview = generated.as_ref().map(|info| info.preview.clone());
-        match preview {
-            Some(preview) if !preview.rows.is_empty() => {
-                // 预览表 = 组件库 `DataTable`（与编辑器结果集同一套原语）：表头 / 列宽拖拽 /
-                // 横向滚动 / 虚拟化 / 键盘选择都是组件的，本处只给容器与一个几十行的 delegate。
-                self.ensure_preview_table(window, cx);
-                if let Some(table) = self.preview_table.clone() {
-                    preview_block = preview_block.child(
-                        div()
-                            .size_full()
-                            .flex_1()
-                            .min_h_0()
-                            .min_w_0()
-                            .debug_selector(|| "mock-preview-table".to_string())
-                            // 行高走组件档位（`ui::PREVIEW_TABLE_SIZE` = XSmall = 26px，与结果集网格同档），
-                            // 单元格字号在 delegate 里取 `text_xs`（与面板其它行的密度一致 —— 这是组件库
-                            // px 基准尺寸的既定例外）
-                            .child(
-                                DataTable::new(&table)
-                                    // 斑马纹 / 密度 / 内距与结果集网格对齐（同一类东西，观感不齐会在并列对照时显形）
-                                    .stripe(true)
-                                    .with_size(ui::PREVIEW_TABLE_SIZE),
-                            ),
-                    );
-                }
-            }
-            _ => {
+        // 表格只认「真有行可显示」：生成结果里有行才画 `DataTable`（预览表 = 组件库
+        // `DataTable`，与编辑器结果集同一套原语：表头 / 列宽拖拽 / 横向滚动 / 虚拟化 /
+        // 键盘选择都是组件的，本处只给容器与一个几十行的 delegate）。
+        let has_preview_rows = generated.as_ref().is_some_and(|_| preview_shown > 0);
+        if has_preview_rows {
+            self.ensure_preview_table(window, cx);
+            if let Some(table) = self.preview_table.clone() {
                 preview_block = preview_block.child(
                     div()
+                        .size_full()
                         .flex_1()
-                        .min_h(rems(ui::PREVIEW_MIN_HEIGHT))
+                        .min_h_0()
                         .min_w_0()
-                        .text_xs()
-                        .text_color(muted)
-                        .child("（暂无预览）"),
+                        .debug_selector(|| "mock-preview-table".to_string())
+                        // 行高走组件档位（`ui::PREVIEW_TABLE_SIZE` = XSmall = 26px，与结果集网格同档），
+                        // 单元格字号在 delegate 里取 `text_xs`（与面板其它行的密度一致 —— 这是组件库
+                        // px 基准尺寸的既定例外）
+                        .child(
+                            DataTable::new(&table)
+                                // 斑马纹 / 密度 / 内距与结果集网格对齐（同一类东西，观感不齐会在并列对照时显形）
+                                .stripe(true)
+                                .with_size(ui::PREVIEW_TABLE_SIZE),
+                        ),
                 );
             }
+        } else {
+            // 没有可显示的行：空态走 `Empty`（与右 Dock 模板 / 历史空态同一支组件——
+            // 自带居中布局 + 虚线框 + 图标变体；此前这里是一行裸文本「（暂无预览）」，
+            // 预览段是三段里最大的一块，一行灰字把视觉重心塌掉了）。
+            // 「为什么空」各说各的引导（rds-design 空态文案规范：原因 + 下一步）；
+            // 草稿 tab 顺手给「生成」主按钮——空态直达主操作，不必回表头找。
+            let (title, desc) = if generated.is_some() {
+                ("预览为空", "这张表没有可显示的行".to_string())
+            } else if dropped_by_project_switch {
+                (
+                    "结果已随项目切换作废",
+                    if is_draft {
+                        "切项目会清空 mock 结果；草稿还在，重新生成后再看".to_string()
+                    } else {
+                        "切项目会清空 mock 结果——回到原项目重开，或重新生成".to_string()
+                    },
+                )
+            } else if is_draft {
+                (
+                    "还没有生成结果",
+                    "点「生成」在内存临时表里产出数据，预览跟着来".to_string(),
+                )
+            } else {
+                (
+                    "这一轮没有它的结果",
+                    "从右 Dock 结果表清单重新生成，或切到草稿 tab 再跑".to_string(),
+                )
+            };
+            // 生成按钮只给草稿 tab（结果表 tab 只读，不给「能只重跑这一张」的错觉）；
+            // 任务进行中禁用（与表头「生成」同一口径，不靠任务层拒绝）
+            let generate_action = if is_draft && generated.is_none() {
+                let panel_entity = self.panel.clone();
+                let running = self.panel.read(cx).is_running();
+                Some(
+                    button(
+                        SharedString::from(format!("mock-preview-generate-{tab_key}")),
+                        "生成",
+                        ActionKind::Main,
+                    )
+                    .disabled(running)
+                    .on_click(move |_, _, app| {
+                        panel_entity.update(app, |panel, cx| panel.run_generate(cx));
+                    }),
+                )
+            } else {
+                None
+            };
+            preview_block = preview_block.child(
+                Empty::new()
+                    .header(
+                        EmptyHeader::new()
+                            // 收件箱 = 「数据还没到」的空态语义（与右 Dock 历史空态同一图标语言）
+                            .media(
+                                EmptyMedia::new()
+                                    .with_variant(EmptyMediaVariant::Icon)
+                                    .child(
+                                        Icon::new(IconName::Inbox).size(rems(ui::PANEL_ICON_SIZE)),
+                                    ),
+                            )
+                            .title(EmptyTitle::new().child(title))
+                            .description(EmptyDescription::new().child(desc)),
+                    )
+                    .when_some(generate_action, |this, btn| {
+                        // `debug_selector` 只是给用例找坐标（真点击检查；`.id(...)` 不登记坐标）
+                        let sel_key = tab_key.clone();
+                        this.content(
+                            EmptyContent::new().child(
+                                div()
+                                    .debug_selector(move || {
+                                        format!("mock-preview-generate-{sel_key}")
+                                    })
+                                    .child(btn),
+                            ),
+                        )
+                    })
+                    .min_h(rems(ui::PREVIEW_MIN_HEIGHT)),
+            );
         }
 
         // 三段可拖分栏（`v_resizable`，仿编辑器结果区分栏先例）：基本信息 / 列区 / 预览。

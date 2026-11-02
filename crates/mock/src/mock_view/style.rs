@@ -56,6 +56,17 @@ pub const CARD_BORDER_TRANSITION: Duration = Duration::from_millis(120);
 
 // ===== 表面（层级）=====
 
+/// 悬停明细的触发记号：弱化小号 info 图标。
+///
+/// 「常驻短句 + 低频解释进悬停」（右面板状态条的手法）在多处复用，图标尺寸与
+/// 弱化色收在这一处，避免各处挑一档灰、一档大——记号不统一，用户就认不出
+/// 「这里能悬停看详情」。
+pub fn info_hint_icon(theme: &Theme) -> Icon {
+    Icon::new(IconName::Info)
+        .size(rems(ui::STATUS_ICON_SIZE))
+        .text_color(theme.colors.muted_foreground)
+}
+
 /// 卡片表面色（比面板抬一档）。
 ///
 /// 取主题 `muted`（亮 neutral-100 / 暗 neutral-800）：它正好是「比 `background` 抬一档」

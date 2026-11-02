@@ -996,8 +996,6 @@ impl MockPanel {
 
     /// 右 Dock 的面板主体：表清单 + 集合动作 + 出口 + 出口反馈（D38）。
     fn render_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let muted = cx.theme().colors.muted_foreground;
-
         let running = self.is_running();
         let generating = self.is_generating();
 
@@ -1174,11 +1172,9 @@ impl MockPanel {
                         .items_center()
                         .gap_1()
                         .w_full()
-                        .child(
-                            Icon::new(IconName::Info)
-                                .size(rems(ui::STATUS_ICON_SIZE))
-                                .text_color(muted),
-                        )
+                        // info 图标走 `info_hint_icon` 原语（尺寸 / 弱化色的单一来源）：
+                        // 悬停明细的记号全模块同一档，用户才认得出「这里能悬停看详情」
+                        .child(info_hint_icon(cx.theme()))
                         .child(card_note(cx.theme(), main)),
                 )
                 .content(move |_, _, _cx| {
