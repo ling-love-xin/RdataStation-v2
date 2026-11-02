@@ -23,6 +23,25 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-11-03 — P1-8a 源库全量档护栏（+ P1-8b Arrow 直灌方案登记）
+
+**P1-8a 已落地**（lib **278** + e2e 14 + 契约 7/9 全绿）：源库连接路径的「全量档」
+先 `COUNT(*)` 过护栏（`SOURCE_FULL_GUARD_ROWS` = 1,000,000，边界含），超限**拒拉并
+给替代路径**（改取样档 / 先过滤）——这一路数据要整表过 Rust（JSON 值往返），千万行
+表是内存尖峰 + 15s 超时的必然失败；DuckDB 内存库路径（文件类）有内存闸（D51）与
+溢写兜底，不设闸。**不做静默截断**（截断的「全量」是假全量）。护栏判定为纯函数
+`check_full_guard`（接线与测试分离）。落点 `service/persistence.rs`。
+
+**P1-8b（Arrow 直灌，未做——实现方案已定）**：源库路径现走 `result_columns_and_rows`
+→ `create_analysis_temp_table`（JSON 打型），DECIMAL→f64、日期→字符串有精度/类型
+损失。改法：`QueryResult.batches`（native 驱动已带 Arrow + schema）→ 新增
+`engine::duckdb::analysis::create_analysis_temp_table_arrow`：① Arrow `DataType` →
+DuckDB DDL 列类型映射；② duckdb crate 的 `appender-arrow` feature（workspace 已启用
+未使用）`Appender` 批量灌入；③ 空表（0 批）回退 JSON 路径保列名。前置查证：
+native 驱动 sqlx→Arrow 转换层的类型保真度（若该层已丢 DECIMAL 精度，需先修驱动层）。
+**收益面**：不只洞察——联邦 / 结果集二次分析共用 `source_picker` 内核，取样通道
+是三方复用面。量级：中（引擎侧 ~150 行 + 类型映射表 + 双路径回归）。
+
 ### 2026-11-02 — UI 建议清单落地（1–9 批：4 项实装 / 2 项查证已达标 / 3 项裁定缓行）
 
 **实装**（lib **277** + e2e 14 + 契约 7/9 全绿）：

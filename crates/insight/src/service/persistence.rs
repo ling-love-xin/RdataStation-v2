@@ -9,6 +9,26 @@ use shared::error::{CommonError, CoreError};
 /// 保留为常量供既有调用方/测试引用；新代码一律走 `ProbeConfig`（确认窗口产物）。
 pub const SOURCE_SAMPLE_LIMIT: usize = 500;
 
+/// 源库连接路径「全量档」的行数护栏（P1-8a）。
+///
+/// 为什么只在源库路径设闸：这一路数据要**整表过 Rust**（`Vec<Vec<Value>>` JSON 值
+/// 往返），千万行表是内存尖峰 + 取数超时（15s）的必然失败，且失败点是一句模糊的
+/// timeout；DuckDB 内存库路径（文件类）CTAS 在库内完成，有内存闸（D51）与溢写
+/// 兜底，无需此闸。超限**拒拉并给引导**（改取样档 / 先过滤），不做静默截断——
+/// 截断的「全量」是假全量。
+pub(crate) const SOURCE_FULL_GUARD_ROWS: u64 = 1_000_000;
+
+/// 全量档护栏判定（纯函数，供接线与测试分离）。
+pub(crate) fn check_full_guard(rows: u64) -> Result<(), CoreError> {
+    if rows > SOURCE_FULL_GUARD_ROWS {
+        return Err(CoreError::common(CommonError::General(format!(
+            "源表约 {rows} 行，超过源库全量拉取上限 {SOURCE_FULL_GUARD_ROWS} 行（全量会整表载入内存）——\
+             请改用「百分比 / 行数」取样档，或在过滤条件里先缩小范围"
+        ))));
+    }
+    Ok(())
+}
+
 /// 源取样统一口径：入口给的只读查询 → `tmp_i_` 分析临时表（建表即登记）。
 ///
 /// 这是「凡能喂给 DuckDB 的数据都能洞察」的落点：导航树表 / 分析存档 / 草稿箱 /
@@ -32,7 +52,8 @@ pub async fn sample_source_to_analysis_table(
     match source.conn_id() {
         Some(conn_id) => {
             // 源库路径：Full / RowCount / WHERE 直接拼进发给源库的 SQL；
-            // Percent → 先 COUNT 估算行数，再 LIMIT（源库无 reservoir 采样）。
+            // Percent → 先 COUNT 估算行数，再 LIMIT（源库无 reservoir 采样）；
+            // Full → 先 COUNT 过护栏（见 check_full_guard），超限拒拉并给取样引导。
             let sql = match &config.amount {
                 crate::model::ProbeAmount::Percent(pct) => {
                     let count = count_source_rows(conn_id, source).await?;
@@ -44,7 +65,17 @@ pub async fn sample_source_to_analysis_table(
                         config.column_subset(),
                     )
                 }
-                _ => build_source_sample_sql(
+                crate::model::ProbeAmount::Full => {
+                    let count = count_source_rows(conn_id, source).await?;
+                    check_full_guard(count)?;
+                    build_source_sample_sql(
+                        source,
+                        config.amount.clone(),
+                        config.filter.as_deref(),
+                        config.column_subset(),
+                    )
+                }
+                crate::model::ProbeAmount::RowCount(_) => build_source_sample_sql(
                     source,
                     config.amount.clone(),
                     config.filter.as_deref(),
@@ -437,6 +468,22 @@ mod tests {
 
     fn duckdb_source(sql: &str) -> SampleSource {
         SampleSource::on_duckdb(sql, "t_probe")
+    }
+
+    /// P1-8a 全量档护栏：低于/等于上限放行，超限拒拉且文案给出**替代路径**
+    /// （取样档 / 先过滤）——不做静默截断，截断的「全量」是假全量。
+    #[test]
+    fn full_guard_rejects_oversized_tables_with_guidance() {
+        assert!(check_full_guard(0).is_ok(), "空表放行");
+        assert!(
+            check_full_guard(SOURCE_FULL_GUARD_ROWS).is_ok(),
+            "恰好等于上限放行（边界含）"
+        );
+        let err = check_full_guard(SOURCE_FULL_GUARD_ROWS + 1).expect_err("超限必须拒拉");
+        let msg = err.to_string();
+        assert!(msg.contains("百分比"), "要给出取样档引导：{msg}");
+        assert!(msg.contains("过滤"), "要给出先过滤引导：{msg}");
+        // 错误码前缀由面板层统一剥离（describe_error → strip_error_code），此处不重复断言
     }
 
     /// C4：未选列不进建表 SQL——列子集投影到 SELECT 列表（双引号内引号翻倍转义）。
