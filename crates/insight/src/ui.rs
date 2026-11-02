@@ -65,16 +65,18 @@ pub const INSIGHT_PICKER_WIDTH: f32 = 13.5;
 /// 原型 1000px 减去 activity 48px 与右 dock 280px 即得 672px。低于它整页横向
 /// 滚动，而不是折行或压缩栅格。
 pub const INSIGHT_WS_MIN_WIDTH: f32 = 42.0;
+/// 探查确认弹窗宽度（30rem = 480px；四块表单 + 快捷预设 + 列候选单列排布）
+pub const INSIGHT_PROBE_DIALOG_WIDTH: f32 = 30.0;
+/// 右栏集合行来源徽标列宽（4rem = 64px，容得下最宽的「结果集」标签 + 内距）
+///
+/// 徽标文案随来源类型变宽窄（源表 / 结果集 / 文件），不定宽会让各行**名称起点
+/// 随类型漂移**——名称列是列表的主读序，必须竖向对齐。
+pub const INSIGHT_SET_KIND_WIDTH: f32 = 4.0;
 /// 右栏「已洞察表」集合列表最大高度（18rem = 288px，约 5 行卡）
 ///
 /// 集合是**会话级管理入口**，全量渲染会把下钻区整块推出首屏——而下钻区才是用户
 /// 点进洞察要看的东西。超过本高度列表自身纵向滚动。
 pub const INSIGHT_SET_LIST_MAX_HEIGHT: f32 = 18.0;
-/// 工具栏当前目标 chip（`来源 · 表名`）最大宽度（14rem = 224px）
-///
-/// chip 在 36px 单行工具栏里：`flex_none` 不该让它把相邻读数挤出可视区。
-/// 内部两段各自 ellipsis（来源次要取窄，表名吃余量）。
-pub const INSIGHT_WS_CHIP_MAX_WIDTH: f32 = 14.0;
 /// 工具栏目标下拉里的表名最多几个字符（超出左侧省略，hover 提示全名）
 ///
 /// 下拉 label 是 Button 的**纯文本槽**（套不了 `max_w` + `text_ellipsis`，那些是

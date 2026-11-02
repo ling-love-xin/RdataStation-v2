@@ -1,11 +1,18 @@
-//! 探查确认窗口渲染（C3：源目标进入洞察先定数据量与列；C6：重取数/重探查复用）。
+//! 探查确认窗口（C3：源目标进入洞察先定数据量与列；C6：重取数/重探查复用）——
+//! **模态弹窗的表单体**（2026-11-02 前内嵌在中央区，用户拍板改弹出）。
 //!
 //! 语义对齐 `docs/architecture/insight/insight-probe-config-decision.md` §5 窗口规格：
 //! 数据量块（全量 / 常用行数 / 常用百分比快捷入口）→ 采样方式块（用户选择 + 差异说明
 //! + seed）→ 探查列块（全部 / 选择 + 候选清单）→ 过滤块（可选 WHERE）→ 提示区
 //! （必含「探查全部」）→ 底部 取消 / 确认探查。
 //!
-//! 渲染只读 `view.probe_dialog()`；编辑经面板回调写回 `InsightView` 的确认窗口状态
+//! 为什么是**独立实体**：对话框 builder 闭包只跑一次，纯 `Div` 是静态快照——
+//! Radio 切换 / 预设点击 / 行内提示都不会刷新；实体元素（`rule_view` 同款）经
+//! `observe(view)` 传播 notify，随 `InsightView` 状态逐帧重渲。
+//! 弹窗的开/关由 `InsightWorkspacePanel::sync_probe_modal` 驱动（观察
+//! `probe_dialog` 状态变迁，经存下的窗口句柄调 `open_dialog` / `close_dialog`）。
+//!
+//! 渲染只读 `view.probe_dialog()`；编辑经回调写回 `InsightView` 的确认窗口状态
 //! （`probe_set_*`），输入框本身用 `use_keyed_state` 惰性创建（同 sample.rs 模式：
 //! 输入权威在 InputState，Change 订阅回写 dialog）。
 
@@ -16,10 +23,29 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::radio::{Radio, RadioGroup};
 use gpui_kit::component::separator::Separator;
+use std::cell::RefCell;
 
-impl super::InsightWorkspacePanel {
-    /// 探查确认窗口（源目标进入洞察时整页渲染；替代 EDA 正文）。
-    pub(crate) fn render_probe_dialog(
+/// 探查确认弹窗的表单体（对话框架构下逐帧重渲；状态权威在 [`InsightView`]）。
+pub(crate) struct ProbeDialogBody {
+    /// 探查状态的唯一权威（编辑经 `probe_set_*` 写回）
+    view: Entity<InsightView>,
+    /// 四个输入框（行数 / 百分比 / 过滤 / 种子）的 Change 订阅（只挂一次）
+    input_subs: RefCell<Vec<Subscription>>,
+    focus_handle: FocusHandle,
+}
+
+impl ProbeDialogBody {
+    pub(crate) fn new(view: Entity<InsightView>, cx: &mut Context<Self>) -> Self {
+        // view 变（radio / 预设 / 候选列 / 行内提示全是 view 状态）→ 本体重渲
+        cx.observe(&view, |_, _, cx| cx.notify()).detach();
+        Self {
+            view,
+            input_subs: RefCell::new(Vec::new()),
+            focus_handle: cx.focus_handle(),
+        }
+    }
+
+    fn render_form(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -132,7 +158,7 @@ impl super::InsightWorkspacePanel {
                 state.set_value(dialog.row_count.clone(), window, cx);
             });
         }
-        if self.probe_input_subs.borrow().is_empty() {
+        if self.input_subs.borrow().is_empty() {
             let sub = cx.subscribe_in(
                 &row_state,
                 window,
@@ -145,7 +171,7 @@ impl super::InsightWorkspacePanel {
                         .update(cx, |v, cx| v.probe_set_row_count(&value, cx));
                 },
             );
-            self.probe_input_subs.borrow_mut().push(sub);
+            self.input_subs.borrow_mut().push(sub);
         }
 
         let pct_state =
@@ -157,7 +183,7 @@ impl super::InsightWorkspacePanel {
                 state.set_value(dialog.percent.clone(), window, cx);
             });
         }
-        if self.probe_input_subs.borrow().len() < 2 {
+        if self.input_subs.borrow().len() < 2 {
             let sub = cx.subscribe_in(
                 &pct_state,
                 window,
@@ -170,7 +196,7 @@ impl super::InsightWorkspacePanel {
                         .update(cx, |v, cx| v.probe_set_percent(&value, cx));
                 },
             );
-            self.probe_input_subs.borrow_mut().push(sub);
+            self.input_subs.borrow_mut().push(sub);
         }
 
         let filter_state = window.use_keyed_state(
@@ -183,7 +209,7 @@ impl super::InsightWorkspacePanel {
                 state.set_value(dialog.filter.clone(), window, cx);
             });
         }
-        if self.probe_input_subs.borrow().len() < 3 {
+        if self.input_subs.borrow().len() < 3 {
             let sub = cx.subscribe_in(
                 &filter_state,
                 window,
@@ -195,7 +221,7 @@ impl super::InsightWorkspacePanel {
                     this.view.update(cx, |v, cx| v.probe_set_filter(&value, cx));
                 },
             );
-            self.probe_input_subs.borrow_mut().push(sub);
+            self.input_subs.borrow_mut().push(sub);
         }
 
         let seed_state = window.use_keyed_state(
@@ -208,7 +234,7 @@ impl super::InsightWorkspacePanel {
                 state.set_value(dialog.seed.clone(), window, cx);
             });
         }
-        if self.probe_input_subs.borrow().len() < 4 {
+        if self.input_subs.borrow().len() < 4 {
             let sub = cx.subscribe_in(
                 &seed_state,
                 window,
@@ -220,7 +246,7 @@ impl super::InsightWorkspacePanel {
                     this.view.update(cx, |v, cx| v.probe_set_seed(&value, cx));
                 },
             );
-            self.probe_input_subs.borrow_mut().push(sub);
+            self.input_subs.borrow_mut().push(sub);
         }
 
         // 规模估算（决策文档 §5：确认窗口含规模预估）：建表口径 N 行 × K 列
@@ -319,7 +345,7 @@ impl super::InsightWorkspacePanel {
                     .child(dialog.target.title()),
             )
             // —— 数据量 ——
-            .child(self.probe_section_title("数据量"))
+            .child(Self::section_title("数据量"))
             .child(amount_group)
             .child(
                 div()
@@ -369,7 +395,7 @@ impl super::InsightWorkspacePanel {
             })
             .child(Separator::horizontal())
             // —— 采样方式 ——
-            .child(self.probe_section_title("采样方式"))
+            .child(Self::section_title("采样方式"))
             .child(sample_group)
             .child(
                 div()
@@ -398,7 +424,7 @@ impl super::InsightWorkspacePanel {
             )
             .child(Separator::horizontal())
             // —— 探查列 ——
-            .child(self.probe_section_title("探查列（未选列不出现在 EDA）"))
+            .child(Self::section_title("探查列（未选列不出现在 EDA）"))
             .child(columns_group)
             .when(!columns_all, |this| {
                 // 选择列：候选清单（Checkbox 列表；无候选 = 内省中 / 失败，提示默认全部列）
@@ -447,7 +473,7 @@ impl super::InsightWorkspacePanel {
             })
             .child(Separator::horizontal())
             // —— 过滤条件（可选） ——
-            .child(self.probe_section_title("过滤条件（可选 WHERE）"))
+            .child(Self::section_title("过滤条件（可选 WHERE）"))
             .child(Input::new(&filter_state).cleanable(true))
             .child(
                 div()
@@ -457,7 +483,7 @@ impl super::InsightWorkspacePanel {
             )
             .child(Separator::horizontal())
             // —— 规模预估 ——
-            .child(self.probe_section_title("规模预估"))
+            .child(Self::section_title("规模预估"))
             .child(
                 div()
                     .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
@@ -465,7 +491,7 @@ impl super::InsightWorkspacePanel {
                     .child(format!("将建分析临时表：{amount_label} × {col_label}")),
             )
             // —— 提示区（必含「探查全部」） ——
-            .child(self.probe_section_title("提示"))
+            .child(Self::section_title("提示"))
             .child(
                 div()
                     .v_flex()
@@ -504,10 +530,29 @@ impl super::InsightWorkspacePanel {
     }
 
     /// 确认窗口区块标题（数据量 / 采样方式 / 探查列 / 过滤 / 规模 / 提示）
-    fn probe_section_title(&self, label: &str) -> Div {
+    fn section_title(label: &str) -> Div {
         div()
             .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
             .font_weight(FontWeight::SEMIBOLD)
             .child(SharedString::from(label))
+    }
+}
+
+impl Focusable for ProbeDialogBody {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for ProbeDialogBody {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        // 状态已不在（确认/取消与关窗之间的一帧竞态）：空盒占位，下一帧弹窗即被
+        // `sync_probe_modal` 关掉——不 panic、不留残影
+        let Some(dialog) = self.view.read(cx).probe_dialog().cloned() else {
+            return div().into_any_element();
+        };
+        self.render_form(window, cx, &dialog, &theme)
+            .into_any_element()
     }
 }

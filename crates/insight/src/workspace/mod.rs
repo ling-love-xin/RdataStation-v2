@@ -249,6 +249,12 @@ pub struct InsightWorkspacePanel {
     compare_done: bool,
     /// 窗口焦点（Dock tab 聚焦用，对齐 property_panel / search_results 的中央面板协议）
     focus_handle: FocusHandle,
+    /// 所在窗口句柄（`on_added_to` / 首帧 render 存下）：探查确认弹窗的开关发生在
+    /// **事件路径**（宿主 `App` 上下文，没有窗口）——经句柄 `update_window` 才能开
+    /// （`rule_view` 的 `begin_load` 存句柄同一手法）
+    window: Option<gpui::AnyWindowHandle>,
+    /// 探查确认弹窗的开合去重（observer 每帧都可能回调，只在状态**变迁**时开/关）
+    probe_modal_open: bool,
     /// 所在 Dock tab 组（`BasePanel::on_added_to` 注入；重复打开时用于聚焦自身）
     group: Option<gpui::WeakEntity<TabGroup>>,
     // ============ EDA 中间页状态（原型 insight-eda-prototype.html） ============
@@ -275,7 +281,6 @@ pub struct InsightWorkspacePanel {
     /// 列卡：展开态集合（点击列卡头切换；业务键列名）
     col_open: RefCell<HashSet<String>>,
     /// 探查确认窗口的输入框订阅（行数 / 百分比 / 过滤 / 种子，同键只挂一次）
-    probe_input_subs: RefCell<Vec<Subscription>>,
     /// 列卡四区：只看规则属性（**按列**存；开启后该列展开体只显示检查器列表。
     /// 原型按单列理解——「开哪列管哪列」；空 = 全部未开启）
     col_rule_only: RefCell<HashMap<String, bool>>,
@@ -373,14 +378,22 @@ impl RelTab {
 
 impl InsightWorkspacePanel {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let view = cx.new(InsightView::new);
+        // 探查确认窗的开关跟随 view 的 `probe_dialog` 状态（源目标进入 → 开；
+        // 确认 / 取消 → 关）。observer 在事件路径回调（可能没有窗口），
+        // 句柄在 `on_added_to` / 首帧 render 存下。
+        cx.observe(&view, |panel, _view, cx| panel.sync_probe_modal(cx))
+            .detach();
         Self {
-            view: cx.new(InsightView::new),
+            view,
             mode: WorkspaceMode::Insight,
             opened: Vec::new(),
             compare_selected: Vec::new(),
             compare_running: false,
             compare_done: false,
             focus_handle: cx.focus_handle(),
+            window: None,
+            probe_modal_open: false,
             group: None,
             eda_tab: EdaTab::default(),
             sel_cols: Vec::new(),
@@ -393,7 +406,6 @@ impl InsightWorkspacePanel {
             rel_rule: None,
             col_search_subs: RefCell::new(Vec::new()),
             col_open: RefCell::new(HashSet::new()),
-            probe_input_subs: RefCell::new(Vec::new()),
             col_rule_only: RefCell::new(HashMap::new()),
             col_detail_zone: RefCell::new(HashMap::new()),
             content_scroll: ScrollHandle::new(),
@@ -429,6 +441,49 @@ impl InsightWorkspacePanel {
             .map(|o| o.to_set_entry(o.key == current_key.as_deref().unwrap_or("")))
             .flatten()
             .collect()
+    }
+
+    /// 探查确认弹窗的开关（view 的 `probe_dialog` 状态**变迁**时由 observer 调）。
+    ///
+    /// - 开：表单体是独立实体 `probe_dialog::ProbeDialogBody`（对话框架构下逐帧重渲，
+    ///   `rule_view` 同款——builder 闭包只跑一次，纯 Div 是静态快照）；
+    /// - 关：`window.close_dialog`——面板自身只开这一个对话框，关的就是它；
+    /// - 拿不到窗口（脱窗口单测 / 非常规装配）：不开不关，状态仍在、不静默丢。
+    fn sync_probe_modal(&mut self, cx: &mut Context<Self>) {
+        let want_open = self.view.read(cx).probe_dialog().is_some();
+        if want_open == self.probe_modal_open {
+            return;
+        }
+        let Some(handle) = self.window else {
+            return;
+        };
+        let view = self.view.clone();
+        let opened = cx.update_window(handle, move |_, window, cx| {
+            if want_open {
+                use gpui::AppContext as _;
+                use gpui_kit::component::WindowExt as _;
+                let body = cx.new(|cx| probe_dialog::ProbeDialogBody::new(view.clone(), cx));
+                let theme = cx.theme().clone();
+                let width = rems(ui::INSIGHT_PROBE_DIALOG_WIDTH).to_pixels(window.rem_size());
+                window.open_dialog(cx, move |dialog, _window, _cx| {
+                    dialog
+                        .title("探查确认")
+                        .w(width)
+                        // builder 是 `Fn`（可能多次调用）：实体经 clone 进树，
+                        // 同一实体可在多个元素树渲染（render 每树各跑一次）
+                        .child(body.clone())
+                        .overlay(true)
+                        .border_color(theme.colors.border)
+                });
+            } else {
+                use gpui_kit::component::WindowExt as _;
+                window.close_dialog(cx);
+            }
+        });
+        match opened {
+            Ok(()) => self.probe_modal_open = want_open,
+            Err(e) => tracing::warn!("[insight] 探查确认弹窗开关失败: {e}"),
+        }
     }
 
     /// 顶部 tab 条（A 方案多标签，2026-10-30 落地；对齐原型 `.tab-strip`）：
@@ -660,6 +715,11 @@ impl InsightWorkspacePanel {
 
 impl Render for InsightWorkspacePanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 句柄兜底：宿主可能在面板进 Dock 之前就 open_target（观察者先于
+        // on_added_to 回调）——首帧补存一次，幂等、不 notify（纯句柄暂存）
+        if self.window.is_none() {
+            self.window = Some(window.window_handle());
+        }
         let entity = cx.entity();
         let theme = cx.theme().clone();
         // render 纯读：一次取当前目标与加载态，供各片段共用（避免片段里重复读实体）
@@ -758,10 +818,12 @@ impl BasePanel for InsightWorkspacePanel {
     fn on_added_to(
         &mut self,
         group: gpui::WeakEntity<TabGroup>,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut gpui::Context<Self>,
     ) {
         self.group = Some(group);
+        // 存窗口句柄：探查弹窗的开要在事件路径发生（那时没有窗口）
+        self.window = Some(window.window_handle());
     }
 
     fn on_removed(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) {
@@ -1068,41 +1130,42 @@ mod tests {
         });
     }
 
-    /// C3：源目标进入洞察先整页渲染探查确认窗口，确认后关闭并进入取样加载态。
+    /// C3（2026-11-02 模态化）：源目标进入洞察**弹出**探查确认窗口（不再内嵌中央区），
+    /// 确认后弹层关闭并进入取样。窗口根包 `Root`（`open_dialog` 依赖它挂对话层）。
     #[gpui_kit::test]
-    fn source_target_renders_probe_dialog_until_confirmed(cx: &mut TestAppContext) {
-        use gpui_kit::test::TestWindowExt as _;
-        use gpui_kit::{ElementId, SharedString};
+    fn source_target_opens_probe_dialog_as_modal(cx: &mut TestAppContext) {
+        use gpui_kit::component::{Root, WindowExt as _};
+
         cx.update(gpui_kit::init);
-        let (panel, cx) = cx.add_window_view(|_window, cx| InsightWorkspacePanel::new(cx));
+        let panel = cx.update(|cx| cx.new(InsightWorkspacePanel::new));
+        let panel_for_root = panel.clone();
+        let (_, cx) =
+            cx.add_window_view(move |window, cx| Root::new(panel_for_root, window, cx));
 
         cx.update(|window, cx| {
             panel.update(cx, |p, cx| p.open_target(table_target("orders"), cx));
             window.draw(cx).clear(cx);
         });
-        let confirm = cx.update(|window, _| {
-            window.try_find(ElementId::Name(SharedString::from("insight-probe-confirm")))
-        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
         assert!(
-            confirm.is_some(),
-            "源目标进入洞察应先渲染探查确认窗口（含确认探查按钮）"
+            cx.update(|window, cx| window.has_active_dialog(cx)),
+            "源目标进入洞察应弹出探查确认（模态）"
         );
-        // 「探查全部」提示区入口也在（决策文档 §5 硬约束）
-        let all = cx.update(|window, _| {
-            window.try_find(ElementId::Name(SharedString::from("insight-probe-all")))
-        });
-        assert!(all.is_some(), "提示区必含「探查全部」入口");
+        // 中央区不再内嵌确认表单：内嵌分支已删（render_insight_content 直接落到
+        // 空态引导）；模态遮罩下主树不可观测（find 的可见性语义），故不在此断言主树
 
-        cx.update(|window, cx| {
+        cx.update(|_, cx| {
             panel.update(cx, |p, cx| {
                 p.insight_view()
                     .update(cx, |v, cx| v.confirm_probe_dialog(cx));
             });
-            window.draw(cx).clear(cx);
         });
-        let confirm = cx.update(|window, _| {
-            window.try_find(ElementId::Name(SharedString::from("insight-probe-confirm")))
-        });
-        assert!(confirm.is_none(), "确认探查后确认窗口应关闭并进入取数");
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            !cx.update(|window, cx| window.has_active_dialog(cx)),
+            "确认探查后弹层应关闭并进入取样加载"
+        );
     }
 }

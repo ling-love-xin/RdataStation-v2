@@ -59,7 +59,8 @@ fn ui_size_constants_match_design() {
         ),
         (INSIGHT_WS_METRIC_COL_MIN_WIDTH, 104.0, "转置对比表每表列宽"),
         (INSIGHT_SET_LIST_MAX_HEIGHT, 288.0, "右栏集合列表最大高度"),
-        (INSIGHT_WS_CHIP_MAX_WIDTH, 224.0, "工具栏目标 chip 最大宽度"),
+        (INSIGHT_PROBE_DIALOG_WIDTH, 480.0, "探查确认弹窗宽度"),
+        (INSIGHT_SET_KIND_WIDTH, 64.0, "右栏集合行来源徽标列宽"),
         (
             INSIGHT_WS_TABLE_COL_MIN_WIDTH,
             96.0,

@@ -25,12 +25,23 @@ impl super::InsightWorkspacePanel {
             .map(|e| (e.key.clone(), e.target.title()))
             .collect();
         let current_key = self.view.read(cx).target().map(target_key);
-        // chip 文本：连接 / 来源描述 · 表名（原型「连接 · 表」）
-        let chip = self
+        // 目标切换按钮的 label **不再显示表名**：正上方的 tab 条已经承担对象名
+        // （VS Code 约束），同一帧上下两行同名是重复信息；按钮只显示**来源描述**
+        // （连接 / 文件——tab 上看不到的那部分），无来源信息时用动作语义兜底。
+        // 全名（含截断）仍由 tooltip 与下拉菜单项承载。
+        let switch_label: Option<SharedString> =
+            self.view.read(cx).target().and_then(|t| match t {
+                InsightTarget::SourceColumn { source, .. }
+                | InsightTarget::SourceTable { source, .. } => {
+                    Some(SharedString::from(format!("来源 {}", source.label())))
+                }
+                _ => None,
+            });
+        let full_title: Option<SharedString> = self
             .view
             .read(cx)
             .target()
-            .map(|t| (t.detail().unwrap_or_else(|| "DuckDB".into()), t.title()));
+            .map(|t| SharedString::from(t.title()));
 
         // 面板头命令按钮行（刷新/取样/导出）：2026-10-28 迁移到 `toolbar::Toolbar`
         // （容器层反例修复）——Toolbar 统一 size 托管 + roving 方向键焦点 + toolbar a11y；
@@ -151,15 +162,13 @@ impl super::InsightWorkspacePanel {
                     // 文本槽，套不上 `max_w` + `text_ellipsis`）→ 文本层按字符数左侧省略，
                     // 全名交给 tooltip（VS Code 约束：长标题省略 + hover 提示全名）。
                     .label(
-                        chip.as_ref()
-                            .map(|(_, title)| {
-                                ellipsize_title(title, ui::INSIGHT_WS_TITLE_MAX_CHARS)
-                            })
-                            .unwrap_or_else(|| "切换目标".into()),
+                        switch_label
+                            .clone()
+                            .unwrap_or_else(|| SharedString::from("切换目标")),
                     )
                     .tooltip(
-                        chip.as_ref()
-                            .map(|(_, title)| SharedString::from(title.clone()))
+                        full_title
+                            .clone()
                             .unwrap_or_else(|| SharedString::from("切换洞察目标")),
                     )
                     .dropdown_menu(move |menu, _, _| {
@@ -190,43 +199,6 @@ impl super::InsightWorkspacePanel {
                     })
             })
             .child(div().flex_1().min_w_0())
-            // 当前目标 chip（原型 target-chip：连接 · 表）
-            .when_some(chip, |this, (source, title)| {
-                this.child(
-                    div()
-                        .flex_none()
-                        .h_flex()
-                        .items_center()
-                        .gap_1()
-                        .px_1()
-                        .h(rems(ui::ROW_HEIGHT * 0.8))
-                        .max_w(rems(ui::INSIGHT_WS_CHIP_MAX_WIDTH))
-                        .overflow_hidden()
-                        .rounded_sm()
-                        .border_1()
-                        .border_color(colors.border)
-                        .text_xs()
-                        .child(
-                            div()
-                                .min_w_0()
-                                .max_w(rems(ui::INSIGHT_WS_SOURCE_WIDTH))
-                                .text_ellipsis()
-                                .text_color(colors.muted_foreground)
-                                .child(source),
-                        )
-                        .child(div().text_color(colors.muted_foreground).child("·"))
-                        .child(
-                            div()
-                                .min_w_0()
-                                // 表名吃 chip 的余量（此前错用「数据源列宽」56px，
-                                // 连一个中文字都放不下）；上限是标题宽度常量
-                                .max_w(rems(ui::INSIGHT_WS_TITLE_MAX_WIDTH))
-                                .text_ellipsis()
-                                .text_color(colors.foreground)
-                                .child(title),
-                        ),
-                )
-            })
             // 分析引擎内存占用（设置「显示内存占用」关闭时整段不渲染）
             .when(self.view.read(cx).status_usage, |bar| {
                 bar.child(self.render_memory_usage(cx, theme))
@@ -264,18 +236,4 @@ impl super::InsightWorkspacePanel {
             .text_color(colors.muted_foreground)
             .child(text)
     }
-}
-
-/// 超长表名在**左侧**省略（`max_chars` 含省略号；保留尾部）。
-///
-/// 表名的区分信息常在尾部（`schema.table` 里是表名、`xxx_2026_report` 里是年份后缀），
-/// 故与 `Button::label` 不同——这里砍头不砍尾。
-fn ellipsize_title(title: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = title.chars().collect();
-    if chars.len() <= max_chars {
-        return title.to_string();
-    }
-    let keep = max_chars.saturating_sub(1);
-    let tail: String = chars[chars.len() - keep..].iter().collect();
-    format!("…{tail}")
 }

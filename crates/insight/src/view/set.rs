@@ -216,7 +216,14 @@ impl InsightView {
                             }),
                         )
                     })
-                    .child(self.source_badge(entry.kind))
+                    // 徽标列定宽：文案随来源类型 2~3 字变宽窄，不定宽会让各行名称
+                    // 起点漂移（名称列是主读序，必须竖向对齐）
+                    .child(
+                        div()
+                            .w(rems(ui::INSIGHT_SET_KIND_WIDTH))
+                            .flex_none()
+                            .child(self.source_badge(entry.kind)),
+                    )
                     .child({
                         let entity = entity.clone();
                         let key = entry.key.clone();

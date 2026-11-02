@@ -1433,6 +1433,12 @@ impl InsightView {
         self.state = InsightPanelState::Data;
         if auto_eval {
             self.request_table_evaluation(cx);
+            // 取样档迷你图同步自动补算（C7）：默认 scope 是 Sample，列卡折叠态读
+            // `mini_stats`——不补算的话首次进入「列分布」一张图都没有（评估产出的
+            // `histogram` 要切到全量档才显示）。500 行轻查询，随评估一并发出。
+            if self.scope == InsightScope::Sample {
+                self.request_sample(cx);
+            }
         }
         cx.notify();
     }

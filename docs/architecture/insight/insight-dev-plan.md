@@ -23,6 +23,19 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-11-02 — 布局四问题收口（用户反馈：探查窗模态化 / 集合行对齐 / 列分布图表 / 标题去重）
+
+**已完成并验证**（lib **277** + e2e 14 + 契约 7/9 全绿；examples 编译通过）：
+
+| 问题 | 根因 | 处置 | 落点 |
+| --- | --- | --- | --- |
+| ① 探查确认窗内嵌中央区，应弹出 | C3 落地时占满 `render_insight_content` | 改**模态弹窗**：表单体抽成独立实体 `ProbeDialogBody`（对话框架构下逐帧重渲，`rule_view` 同款——builder 只跑一次，纯 Div 是静态快照）；面板观察 `probe_dialog` 状态变迁经存下的窗口句柄 `open_dialog` / `close_dialog`（`on_added_to` / 首帧 render 存句柄，`sync_probe_modal` 带 `probe_modal_open` 去重）；中央区在确认期间落到空态引导。宽度常量 `INSIGHT_PROBE_DIALOG_WIDTH`(30rem)，契约基线登记 | `workspace/probe_dialog.rs`（实体化重写）+ `workspace/mod.rs` + `overview.rs`（删内嵌分支）+ `ui.rs` |
+| ② 右栏集合行名称不对齐 | 来源徽标文案 2~3 字宽（源表/结果集/文件），名称起点随类型漂移 | 徽标列定宽 `INSIGHT_SET_KIND_WIDTH`(4rem) | `view/set.rs` + `ui.rs` |
+| ③ 列分布没有图表 | 默认 scope=Sample 读 `mini_stats`，但迷你统计只在用户手动切档时才算（`SampleInsightRequested` 无自动触发）——首次进入一张图都没有 | `set_table_profile` 自动评估时**顺发**取样档迷你统计（Sample scope 下 500 行轻查询随评估一并发出） | `insight_view.rs` |
+| ③ EDA 标题重复 | 表名一处三现：tab 条 + 工具栏切换按钮 label + 尾部「来源 · 表名」chip | 信息分层：**tab = 对象名**（VS Code 约束）；切换按钮 label 改**来源描述**（源目标「来源 xxx」/无来源「切换目标」），tooltip 保留全名；**尾部 chip 整体删除**（来源已由按钮承担）。孤儿 `ellipsize_title` / `INSIGHT_WS_CHIP_MAX_WIDTH` / 基线行一并清理 | `workspace/toolbar.rs` + `ui.rs` + 契约基线 |
+
+**测试**：探查用例改模态断言（Root 包窗口根 + `has_active_dialog` 开/关两态）；模态遮罩下主树不可观测（`find` 可见性语义），「中央区不再内嵌」由删分支本身保证。
+
 ### 2026-11-02 — 信任门内容指纹（Q1「更严一档」落地，迁移 027）
 
 **背景**：D53 的已知取舍——「信任绑路径不绑内容，`git pull` 带进新规则不重新确认」——是 Q1 预告过的收严方向。本批把决定绑定到**决定时的规则集内容**。**已完成并验证**（lib **277**（+4）+ e2e 14 + 契约 7/9 + store 迁移幂等测试全绿）：
