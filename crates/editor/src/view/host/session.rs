@@ -60,6 +60,12 @@ impl EditorHostPanel {
                 let order = self.result_panel.read(cx).column_order();
                 (!order.is_empty()).then_some(order)
             },
+            // 【B5 余项】结果区高度随会话走（面板自持 rem 值；与默认同值 = 没拖过 →
+            // None 不落库，复用「显式非默认才算改过」的既有口径）
+            result_height: {
+                let height = self.result_height.get();
+                (height != crate::ui::RESULT_PANE_HEIGHT).then_some(height)
+            },
         })
     }
 
@@ -281,6 +287,12 @@ impl EditorHostPanel {
                     panel.set_column_order(order.to_vec());
                 });
             }
+        }
+        // 【B5 余项】结果区高度随会话回来：钳到分栏拖拽范围（与 render 的 size_range
+        // 同一份常量——旧库离谱值不带病恢复，恢复的高度必须还拖得动）
+        if let Some(height) = session.result_height {
+            let clamped = height.clamp(crate::ui::RESULT_PANE_MIN_HEIGHT, crate::ui::RESULT_MAX_HEIGHT);
+            self.result_height.set(clamped);
         }
         cx.notify();
     }

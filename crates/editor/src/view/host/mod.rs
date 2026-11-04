@@ -440,7 +440,8 @@ pub struct EditorHostPanel {
     /// 事件路径算 [`ResultSyncInput`] 投影 + `drain_result_actions` 分派面板动作）
     pub(crate) result_panel: Entity<ResultPanel>,
     /// 【结果区分栏】拖拽高度（rem；面板存活期间记住，结果区关闭重开仍沿用；
-    /// 跨会话持久化属 workbench context 层，字段已存在见遗留 #5）
+    /// 跨会话持久化经 `session_snapshot` → `editor_contexts.result_height` 列，
+    /// B5 余项已收口——快照与恢复两侧见 `view/host/session.rs`）
     pub(crate) result_height: std::rc::Rc<Cell<f32>>,
     /// 面板动作队列（面板渲染期 `push`；编辑器事件路径这里 `drain` 分派回动作方法）
     pub(crate) result_action_queue: ResultActionQueue,

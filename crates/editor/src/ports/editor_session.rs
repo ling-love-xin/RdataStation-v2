@@ -75,10 +75,9 @@ impl WorkbenchSessionStore {
             // 【T2c-4 余项】缩进宽度 / 制表符（`None` = 旧会话没存过 → 列默认）
             tab_size: session.tab_size.unwrap_or(2),
             hard_tabs: session.hard_tabs.unwrap_or(false),
-            // 【遗留 #5】结果区高度：editor 会话模型已随结果面板下沉移除该字段
-            //（结果区高度由结果面板自持）；engine 持久化列保留供旧库兼容，
-            // 桥接层固定写列默认 18——editor 不再消费它。
-            result_height: 18.0,
+            // 【B5 余项】结果区高度真写（此前桥接层写死 18 假值）：`None` = 没拖过 →
+            // 落语义默认 20（列是 NOT NULL；20 与界面默认同值，读回按「没拖过」处理）
+            result_height: session.result_height.unwrap_or(crate::ui::RESULT_PANE_HEIGHT),
             // 【结果集 #296】列序编码为逗号串（空串 = 没存过 → 默认序）
             result_column_order: session
                 .result_column_order
@@ -119,6 +118,15 @@ impl WorkbenchSessionStore {
                     .map(|column| column.to_string())
                     .collect()
             }),
+            // 【B5 余项】高度读回：18.0 是桥接层当年写死的假值（所有旧行同值，不代表
+            // 用户拖过）→ 当作没存过；20.0 是「没拖过」落的语义默认，同样回 None——
+            // 两个哨兵值都不覆盖界面默认，真实拖过的值（≠20）才恢复（钳制在 restore 侧）
+            result_height: match context.result_height {
+                height if height != 18.0 && height != crate::ui::RESULT_PANE_HEIGHT => {
+                    Some(height)
+                }
+                _ => None,
+            },
         }
     }
 }
@@ -188,6 +196,7 @@ mod tests {
             tab_size: None,
             hard_tabs: None,
             result_column_order: None,
+            result_height: None,
         }
     }
 
@@ -288,6 +297,35 @@ mod tests {
         row.selection_start = None;
         row.selection_end = None;
         assert_eq!(WorkbenchSessionStore::to_session(row).selection, None);
+    }
+
+    /// 【B5 余项】结果区高度随会话往返：拖过 → 存真实值认回来；没拖过 / 旧库假值
+    ///（桥接层写死的 18）/ 语义默认 20 → 读回 None（恢复侧不覆盖界面默认高度）
+    #[test]
+    fn the_result_height_travels_and_legacy_fake_values_stay_unset() {
+        let mut dragged = session();
+        dragged.result_height = Some(32.5);
+        let row = WorkbenchSessionStore::to_context(&dragged);
+        assert_eq!(row.result_height, 32.5);
+        assert_eq!(
+            WorkbenchSessionStore::to_session(row).result_height,
+            Some(32.5),
+            "拖过的高度原样回来"
+        );
+
+        // 没拖过 → 落语义默认 20（列 NOT NULL）→ 读回 None：不把默认值当用户偏好
+        let plain = WorkbenchSessionStore::to_context(&session());
+        assert_eq!(plain.result_height, crate::ui::RESULT_PANE_HEIGHT);
+        assert_eq!(WorkbenchSessionStore::to_session(plain).result_height, None);
+
+        // 旧库行：桥接层当年写死 18（所有行同值的假值）→ 同样回 None
+        let mut legacy = WorkbenchSessionStore::to_context(&session());
+        legacy.result_height = 18.0;
+        assert_eq!(
+            WorkbenchSessionStore::to_session(legacy).result_height,
+            None,
+            "旧库假值不冒充用户拖过的高度"
+        );
     }
 
     /// 【结果集 #296】列序以逗号串存库、按列名数组认回来；没存过 = 默认序
