@@ -141,7 +141,13 @@ impl EngineQueryRunner {
     ///
     /// 与源库档同口径：查询只取**第一段**（套窗口），写语句原样（DuckDB 侧只读挂载会
     /// 拒掉作用源对象的写，本地临时对象照常允许）。
-    fn run_on_accel(&self, connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
+    /// `lineage` 随历史落库（【B5 余项】；`run()` 把队列注入的执行血缘递过来）。
+    fn run_on_accel(
+        &self,
+        connection: Option<&str>,
+        sql: &str,
+        lineage: &str,
+    ) -> Result<QueryData, String> {
         let source = self.accel_source(connection)?;
         let session = accel::ensure_session(&source)?;
         let (to_run, segmented) = match window_sql(sql, crate::execution::SEGMENT_ROWS, 0) {
@@ -151,7 +157,7 @@ impl EngineQueryRunner {
         let started = std::time::Instant::now();
         let outcome = session.run(&to_run);
         let elapsed_ms = started.elapsed().as_millis() as u64;
-        record_accel_history(&source, sql, elapsed_ms, &outcome);
+        record_accel_history(&source, sql, elapsed_ms, &outcome, Some(lineage));
         // 【B8】历史面板据此重新加载（与源库档同一节拍）
         crate::history::bump();
         let result = match outcome {
@@ -191,7 +197,13 @@ impl EngineQueryRunner {
         let started = std::time::Instant::now();
         let outcome = session.run(&wrapped);
         let elapsed_ms = started.elapsed().as_millis() as u64;
-        record_accel_history(&source, sql, elapsed_ms, &outcome);
+        record_accel_history(
+            &source,
+            sql,
+            elapsed_ms,
+            &outcome,
+            Some(crate::execution::LINEAGE_SEGMENT),
+        );
         crate::history::bump();
         let result = outcome.map_err(|error| error.to_string())?;
         let mut data = to_data(&result, elapsed_ms, false);
@@ -205,13 +217,14 @@ impl EngineQueryRunner {
         connection: Option<&str>,
         rewritten: &engine::sql::Rewrite,
         notice: impl FnOnce(&str) -> String,
+        lineage: &str,
     ) -> Result<QueryData, String> {
         let source = self.accel_source(connection)?;
         let session = accel::ensure_session(&source)?;
         let started = std::time::Instant::now();
         let outcome = session.run(&rewritten.sql);
         let elapsed_ms = started.elapsed().as_millis() as u64;
-        record_accel_history(&source, &rewritten.sql, elapsed_ms, &outcome);
+        record_accel_history(&source, &rewritten.sql, elapsed_ms, &outcome, Some(lineage));
         crate::history::bump();
         let result = outcome.map_err(|error| error.to_string())?;
         let mut data = to_data(&result, elapsed_ms, false);
@@ -279,7 +292,13 @@ impl EngineQueryRunner {
     }
 
     /// 联邦档执行：在联邦会话上跑（源清单为空/全挂不上都会提前给可读原因）
-    fn run_on_federation(&self, connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
+    /// `lineage` 随历史落库（【B5 余项】；`run()` 把队列注入的执行血缘递过来）。
+    fn run_on_federation(
+        &self,
+        connection: Option<&str>,
+        sql: &str,
+        lineage: &str,
+    ) -> Result<QueryData, String> {
         let (plan, session) = self.federated_session(connection)?;
         // 与另两档同口径：查询只取**第一段**（套窗口），写语句原样交给引擎
         let (to_run, segmented) = match window_sql(sql, crate::execution::SEGMENT_ROWS, 0) {
@@ -289,7 +308,7 @@ impl EngineQueryRunner {
         let started = std::time::Instant::now();
         let outcome = session.run(&to_run);
         let elapsed_ms = started.elapsed().as_millis() as u64;
-        record_federation_history(&plan, &session, sql, elapsed_ms, &outcome);
+        record_federation_history(&plan, &session, sql, elapsed_ms, &outcome, Some(lineage));
         crate::history::bump();
         let result = match outcome {
             Ok(ok) => ok,
@@ -329,7 +348,14 @@ impl EngineQueryRunner {
         let started = std::time::Instant::now();
         let outcome = session.run(&wrapped);
         let elapsed_ms = started.elapsed().as_millis() as u64;
-        record_federation_history(&plan, &session, sql, elapsed_ms, &outcome);
+        record_federation_history(
+            &plan,
+            &session,
+            sql,
+            elapsed_ms,
+            &outcome,
+            Some(crate::execution::LINEAGE_SEGMENT),
+        );
         crate::history::bump();
         let result =
             outcome.map_err(|error| explain_federation_error(&session, error.to_string()))?;
@@ -344,12 +370,20 @@ impl EngineQueryRunner {
         connection: Option<&str>,
         rewritten: &engine::sql::Rewrite,
         notice: impl FnOnce(&str) -> String,
+        lineage: &str,
     ) -> Result<QueryData, String> {
         let (plan, session) = self.federated_session(connection)?;
         let started = std::time::Instant::now();
         let outcome = session.run(&rewritten.sql);
         let elapsed_ms = started.elapsed().as_millis() as u64;
-        record_federation_history(&plan, &session, &rewritten.sql, elapsed_ms, &outcome);
+        record_federation_history(
+            &plan,
+            &session,
+            &rewritten.sql,
+            elapsed_ms,
+            &outcome,
+            Some(lineage),
+        );
         crate::history::bump();
         let result =
             outcome.map_err(|error| explain_federation_error(&session, error.to_string()))?;
@@ -392,11 +426,15 @@ impl QueryRunner for EngineQueryRunner {
         // 【B13】本地跑的两档不走源库驱动：这条语句在 DuckDB 上跑（源库只读挂载）。
         // 这两档**不接 schema 上下文**：schema 面包屑是**源库**的概念，DuckDB 侧挂载的
         // 源表名通常已限定（`alias.table`）；等加速/联邦做自己的 schema 语义再接。
+        // 【B5 余项】血缘跟着走（老调用方没给就按「原查询」，不编别的）
+        let lineage = run_options
+            .lineage
+            .unwrap_or(crate::execution::LINEAGE_ORIGINAL);
         if channel == ExecChannel::Federated {
-            return self.run_on_federation(connection, sql);
+            return self.run_on_federation(connection, sql, lineage);
         }
         if channel != ExecChannel::Source {
-            return self.run_on_accel(connection, sql);
+            return self.run_on_accel(connection, sql, lineage);
         }
         let started = std::time::Instant::now();
         let timeout_ms = self.runtime.block_on(self.query_timeout_ms(connection));
@@ -411,6 +449,8 @@ impl QueryRunner for EngineQueryRunner {
             channel: Some(channel.code().to_string()),
             // 【T2c-1】文档绑定的 schema：引擎在发语句前在同一连接上应用会话上下文
             schema: schema.map(str::to_string),
+            // 【B5 余项】血缘随执行进历史（队列从 `ExecTarget::lineage()` 注入）
+            lineage: run_options.lineage.map(str::to_string),
             ..Default::default()
         };
         // 连接：文档绑定了就用它（B1）；未绑定回退到“当前活动连接”（1a 口径）
@@ -494,14 +534,20 @@ impl QueryRunner for EngineQueryRunner {
         let rewritten = engine::sql::rewrite_with_filter(sql, columns, filter, cast_type)?;
         // 【B13】本地跑的两档：改写照样做，但语句在 DuckDB 上跑（不是发回源库）
         if channel == ExecChannel::Federated {
-            return self.run_rewritten_on_federation(connection, &rewritten, |limit| {
-                format!("已去掉原查询的 {limit}（下发筛选要能查到全部行）")
-            });
+            return self.run_rewritten_on_federation(
+                connection,
+                &rewritten,
+                |limit| format!("已去掉原查询的 {limit}（下发筛选要能查到全部行）"),
+                crate::execution::LINEAGE_FILTERED,
+            );
         }
         if channel != ExecChannel::Source {
-            return self.run_rewritten_on_accel(connection, &rewritten, |limit| {
-                format!("已去掉原查询的 {limit}（下发筛选要能查到全部行）")
-            });
+            return self.run_rewritten_on_accel(
+                connection,
+                &rewritten,
+                |limit| format!("已去掉原查询的 {limit}（下发筛选要能查到全部行）"),
+                crate::execution::LINEAGE_FILTERED,
+            );
         }
         let timeout_ms = self.runtime.block_on(self.query_timeout_ms(connection));
         let options = SqlExecuteOptions {
@@ -511,6 +557,8 @@ impl QueryRunner for EngineQueryRunner {
             channel: Some(channel.code().to_string()),
             // 【T2c-1】下发筛选在原查询的 schema 上下文里重查（不能漂回连接默认）
             schema: schema.map(str::to_string),
+            // 【B5 余项】下发筛选的血缘就是动作本身（与 ExecTarget::Filtered 同源）
+            lineage: Some(crate::execution::LINEAGE_FILTERED.to_string()),
             ..Default::default()
         };
         let executed = self.runtime.block_on(self.service.execute(
@@ -541,14 +589,20 @@ impl QueryRunner for EngineQueryRunner {
         let rewritten = engine::sql::rewrite_with_order(sql, column, descending)?;
         // 【B13】本地跑的两档：同上——改写服从“在哪儿跑”
         if channel == ExecChannel::Federated {
-            return self.run_rewritten_on_federation(connection, &rewritten, |limit| {
-                format!("已去掉原查询的 {limit}（排序下发要能排全部行）")
-            });
+            return self.run_rewritten_on_federation(
+                connection,
+                &rewritten,
+                |limit| format!("已去掉原查询的 {limit}（排序下发要能排全部行）"),
+                crate::execution::LINEAGE_SORTED_DOWN,
+            );
         }
         if channel != ExecChannel::Source {
-            return self.run_rewritten_on_accel(connection, &rewritten, |limit| {
-                format!("已去掉原查询的 {limit}（排序下发要能排全部行）")
-            });
+            return self.run_rewritten_on_accel(
+                connection,
+                &rewritten,
+                |limit| format!("已去掉原查询的 {limit}（排序下发要能排全部行）"),
+                crate::execution::LINEAGE_SORTED_DOWN,
+            );
         }
         let timeout_ms = self.runtime.block_on(self.query_timeout_ms(connection));
         let options = SqlExecuteOptions {
@@ -557,6 +611,8 @@ impl QueryRunner for EngineQueryRunner {
             channel: Some(channel.code().to_string()),
             // 【T2c-1】排序下发同筛选：在原查询的 schema 上下文里重查
             schema: schema.map(str::to_string),
+            // 【B5 余项】排序下发的血缘就是动作本身（与 ExecTarget::SortedDown 同源）
+            lineage: Some(crate::execution::LINEAGE_SORTED_DOWN.to_string()),
             ..Default::default()
         };
         let executed = self.runtime.block_on(self.service.execute(
@@ -1113,6 +1169,7 @@ fn record_accel_history(
     sql: &str,
     elapsed_ms: u64,
     outcome: &Result<QueryResult, shared::error::CoreError>,
+    lineage: Option<&str>,
 ) {
     let entry = match outcome {
         Ok(result) => SqlHistoryEntry {
@@ -1125,6 +1182,7 @@ fn record_accel_history(
             rows_affected: None,
             channel: Some(crate::channel::ExecChannel::Accelerated.code().to_string()),
             sources: None,
+            lineage: lineage.map(str::to_string),
         },
         Err(error) => SqlHistoryEntry {
             conn_id: Some(source.conn_id.clone()),
@@ -1136,6 +1194,7 @@ fn record_accel_history(
             rows_affected: None,
             channel: Some(crate::channel::ExecChannel::Accelerated.code().to_string()),
             sources: None,
+            lineage: lineage.map(str::to_string),
         },
     };
     if let Err(error) = history_store::save_sql_history(sql, &entry) {
@@ -1261,6 +1320,7 @@ fn record_federation_history(
     sql: &str,
     elapsed_ms: u64,
     outcome: &Result<QueryResult, shared::error::CoreError>,
+    lineage: Option<&str>,
 ) {
     let snapshot = session.snapshot();
     let ready: Vec<String> = snapshot
@@ -1287,6 +1347,7 @@ fn record_federation_history(
             rows_affected: None,
             channel: Some(ExecChannel::Federated.code().to_string()),
             sources,
+            lineage: lineage.map(str::to_string),
         },
         Err(error) => SqlHistoryEntry {
             conn_id: Some(plan.owner.clone()),
@@ -1298,6 +1359,7 @@ fn record_federation_history(
             rows_affected: None,
             channel: Some(ExecChannel::Federated.code().to_string()),
             sources,
+            lineage: lineage.map(str::to_string),
         },
     };
     if let Err(error) = history_store::save_sql_history(sql, &entry) {

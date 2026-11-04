@@ -614,6 +614,11 @@ pub fn history_meta(item: &HistoryItem) -> String {
     if let Some(sources) = &item.sources_text {
         parts.push(sources.clone());
     }
+    // 【B5 余项】血缘跟在参与源之后：历史列表第二行要能回答“这份数据怎么来的”
+    //（老记录没有就整段缺席，与 sources_text 同口径）
+    if let Some(lineage) = &item.lineage_text {
+        parts.push(format!("来自{lineage}"));
+    }
     if let Some(error) = &item.error {
         parts.push(error.clone());
     }
@@ -640,6 +645,7 @@ mod tests {
             rows_text: Some("返回 1 行".to_string()),
             source_text: Some("MYSQL".to_string()),
             sources_text: None,
+            lineage_text: None,
             db_type: Some("mysql".to_string()),
             error: None,
             conn_id: None,
@@ -734,6 +740,14 @@ mod tests {
         assert_eq!(
             history_meta(&federated),
             "3 分钟前 · 12 ms · 返回 1 行 · MYSQL·联邦 · 源 mysql_src, pg_warehouse"
+        );
+
+        // 【B5 余项】血缘跟在参与源之后（老记录没有这一项就不显示）
+        let mut with_lineage = item("rec-3", "SELECT 1");
+        with_lineage.lineage_text = Some("下发筛选".to_string());
+        assert_eq!(
+            history_meta(&with_lineage),
+            "3 分钟前 · 12 ms · 返回 1 行 · MYSQL · 来自下发筛选"
         );
     }
 

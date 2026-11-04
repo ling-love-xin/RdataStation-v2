@@ -72,6 +72,7 @@ fn opts() -> SqlExecuteOptions {
         timeout_ms: Some(15000),
         use_cache: false,
         schema: None,
+    lineage: None,
     }
 }
 

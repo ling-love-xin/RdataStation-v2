@@ -348,6 +348,7 @@ fn run_options_reach_the_runner_and_the_snapshot_rides_along() {
             ResultPlacement::Replace,
             RunOptions {
                 use_transaction: true,
+                lineage: None,
             },
             crate::channel::ExecChannel::default(),
         )
@@ -357,9 +358,10 @@ fn run_options_reach_the_runner_and_the_snapshot_rides_along() {
     assert_eq!(
         options.lock().expect("锁").as_slice(),
         [RunOptions {
-            use_transaction: true
+            use_transaction: true,
+            lineage: Some(crate::execution::LINEAGE_ORIGINAL),
         }],
-        "自动提交关掉时，执行要带上“进事务”的选项"
+        "自动提交关掉时，执行要带上“进事务”的选项（血缘由 worker 统一注入）"
     );
     assert!(
         done[0].transaction.in_transaction,

@@ -61,6 +61,11 @@ pub struct SqlExecuteOptions {
     ///
     /// 由**执行器**填（它是唯一知道通道的一方）；不填 = 没接通道信息（老调用方）。
     pub channel: Option<String>,
+    /// 【B5 余项】血缘（这份数据怎么来的：原查询 / 下发筛选 / 排序下发…）
+    ///
+    /// 由**执行器**填（编辑器队列从 `ExecTarget::lineage()` 取来）；引擎不解释它，
+    /// 只随历史落库。不填 = 老调用方没给（历史里不出现，不编一个）。
+    pub lineage: Option<String>,
     /// 【T2c-1】本次执行的 schema 上下文（`None` = 未选 → 用连接默认 schema）
     ///
     /// 由**执行器**填（它从文档绑定取；编辑器侧 `EditorShared` 在提交时从服务层拷出）。
@@ -303,6 +308,8 @@ impl SqlService {
         let record_history = options.record_history;
         // 通道要先拷出来：下面 `SqlExecuteOptions { ..options }` 会把整个 options 移进内层执行
         let channel = options.channel.clone();
+        // 【B5 余项】血缘同通道一起拷（同一条历史要用它）
+        let lineage = options.lineage.clone();
         let result = self
             .execute(
                 conn_id.clone(),
@@ -332,6 +339,7 @@ impl SqlService {
                         Some(outcome.result.total_rows() as u64),
                         None,
                         channel.as_deref(),
+                        lineage.as_deref(),
                     )
                     .await;
                 }
@@ -345,6 +353,7 @@ impl SqlService {
                         None,
                         None,
                         channel.as_deref(),
+                        lineage.as_deref(),
                     )
                     .await;
                 }
@@ -365,6 +374,7 @@ impl SqlService {
         rows_returned: Option<u64>,
         rows_affected: Option<u64>,
         channel: Option<&str>,
+        lineage: Option<&str>,
     ) {
         let entry = SqlHistoryEntry {
             conn_id: conn_id.map(str::to_string),
@@ -375,6 +385,7 @@ impl SqlService {
             rows_returned,
             rows_affected,
             channel: channel.map(str::to_string),
+            lineage: lineage.map(str::to_string),
             // 源库档没有“参与源清单”（那是联邦档的事；联邦不走这条路径）
             sources: None,
         };
@@ -420,6 +431,7 @@ impl SqlService {
                     channel: None,
                     // T2c-1：后续段必须落在**同一 schema**（首段是在这个 schema 上下文里取的）
                     schema,
+                    lineage: None,
                 },
             )
             .await;
@@ -563,6 +575,7 @@ impl SqlService {
                         None,
                         None,
                         options.channel.as_deref(),
+                        options.lineage.as_deref(),
                     )
                     .await;
                 }
@@ -614,6 +627,7 @@ impl SqlService {
                     _ => None,
                 },
                 options.channel.as_deref(),
+                options.lineage.as_deref(),
             )
             .await;
         }

@@ -57,7 +57,40 @@ impl ResultPanel {
                             .py_2()
                             .border_b(ui::HAIRLINE)
                             .border_color(theme.colors.border)
-                            .child(div().text_sm().child("原始 SQL"))
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .min_w_0()
+                                    .child(div().text_sm().flex_none().child("原始 SQL"))
+                                    // 【B5 余项】来源行：血缘 + 连接（B15 血缘摘要自
+                                    // 2026-10-28 状态栏三项重构后断头，这里把它接回——
+                                    // 看 SQL 全文时顺带知道这份数据怎么来的）。
+                                    // 数据来自工具栏投影（title 优先，其次血缘），
+                                    // 没有就整段缺席，不编。
+                                    .children(self.toolbar.as_ref().and_then(|toolbar| {
+                                        let lineage = toolbar.lineage.as_deref()?;
+                                        let connection = toolbar.connection.as_deref();
+                                        let text = match connection {
+                                            Some(connection) => {
+                                                format!("来自{lineage} · {connection}")
+                                            }
+                                            None => format!("来自{lineage}"),
+                                        };
+                                        Some(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.colors.muted_foreground)
+                                                .text_ellipsis()
+                                                .overflow_hidden()
+                                                .debug_selector(|| {
+                                                    "editor-result-sql-dialog-lineage".to_string()
+                                                })
+                                                .child(SharedString::from(text)),
+                                        )
+                                    })),
+                            )
                             .child(
                                 Button::new("editor-result-sql-dialog-close")
                                     .ghost()

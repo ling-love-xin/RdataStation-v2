@@ -56,6 +56,8 @@ pub struct HistoryItem {
     pub source_text: Option<String>,
     /// 【联邦】参与源文案（`源 mysql_src, pg_warehouse`；不是联邦档就没有这一项）
     pub sources_text: Option<String>,
+    /// 【B5 余项】血缘文案（`原查询` / `下发筛选` / `本地分析`…；老记录没有这一项）
+    pub lineage_text: Option<String>,
     /// 库类型原始值（**筛选输入**：`source_text` 是格式化文本，不能拿它匹配）
     pub db_type: Option<String>,
     /// 失败原因（成功为 `None`）
@@ -144,6 +146,7 @@ pub fn item_from(record: &SqlHistoryRecord, now: DateTime<Utc>) -> HistoryItem {
         rows_text: rows_text(record.rows_returned, record.rows_affected),
         source_text: source_text(record.db_type.as_deref(), record.channel.as_deref()),
         sources_text: sources_text(record.channel.as_deref(), record.sources.as_deref()),
+        lineage_text: record.lineage.clone(),
         db_type: record.db_type.clone(),
         error: record.error_message.clone(),
         conn_id: record.conn_id.clone(),
@@ -288,6 +291,7 @@ mod tests {
             db_type: Some("mysql".to_string()),
             channel: None,
             sources: None,
+            lineage: None,
             executed_at: Utc.with_ymd_and_hms(2026, 9, 17, 6, 0, 0).unwrap(),
             duration_ms: Some(12),
             success: Some(true),

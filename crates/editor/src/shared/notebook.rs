@@ -196,6 +196,8 @@ impl EditorShared {
                 crate::store::ResultPlacement::Replace,
                 crate::execution::RunOptions {
                     use_transaction: false,
+                    // 单元执行不走 `run` 的历史链（worker 侧对 Cell 载荷另路分派）
+                    lineage: None,
                 },
                 channel,
             )

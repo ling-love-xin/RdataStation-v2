@@ -170,6 +170,9 @@ impl EditorHostPanel {
         // B13：加速 / 联邦没有事务语义，那两档上不走事务
         let options = execution::RunOptions {
             use_transaction: !self.autocommit && channel.allows_transactions(),
+            // 【B5 余项】血缘不用在这里给：worker 侧统一从 `ExecJob.lineage`
+            //（= `ExecTarget::lineage()`）注入，避免两处口径
+            lineage: None,
         };
         match self
             .shared

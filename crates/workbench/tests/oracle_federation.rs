@@ -93,6 +93,7 @@ fn an_oracle_record_joins_the_federation() {
     let runner = editor_exec::runner_for_test().expect("建执行器");
     let options = || RunOptions {
         use_transaction: false,
+        lineage: None,
     };
 
     // ① 一条 SQL 同时读两边：MySQL 源（catalog）× Oracle 源（scanner 表函数）

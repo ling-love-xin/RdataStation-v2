@@ -114,6 +114,7 @@ fn marked_connections_become_federated_sources() {
             sql,
             RunOptions {
                 use_transaction: false,
+                lineage: None,
             },
         )
         .expect("跨源查询该成功");
@@ -156,6 +157,7 @@ fn marked_connections_become_federated_sources() {
             "SELECT count(*) AS n FROM sqlite_src.main.blob",
             RunOptions {
                 use_transaction: false,
+                lineage: None,
             },
         )
         .expect("换主源后该照常能查");
@@ -196,6 +198,7 @@ fn marked_connections_become_federated_sources() {
             "SELECT 1",
             RunOptions {
                 use_transaction: false,
+                lineage: None,
             },
         )
         .expect_err("只剩一个源该拒");

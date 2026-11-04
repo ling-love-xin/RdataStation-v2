@@ -40,7 +40,9 @@ pub use super::queue::ExecQueue;
 pub use super::runner::{QueryData, QueryRunner};
 pub use super::target::{
     ExecMenuKind, ExecTarget, RunOptions, SEGMENT_ROWS, TxAction, TxSnapshot, all_target,
-    batch_target, resolve_target, statement_target, target_for_menu,
+    batch_target, resolve_target, statement_target, target_for_menu, LINEAGE_ANALYSIS,
+    LINEAGE_CELL, LINEAGE_COMMIT, LINEAGE_FILTERED, LINEAGE_ORIGINAL, LINEAGE_SCRIPT,
+    LINEAGE_SEGMENT, LINEAGE_SORTED_DOWN,
 };
 
 #[cfg(test)]

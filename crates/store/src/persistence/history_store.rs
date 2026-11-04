@@ -56,6 +56,10 @@ pub struct HistoryRecord {
     /// 的哪一份数据。别名不含逗号（`registry::validate_alias` 只允许字母数字下划线），
     /// 所以分隔无歧义；老记录没有这一项，读回来是 `None`。
     pub sources: Option<String>,
+    /// 【B5 余项】血缘（这条结果是怎么来的：原查询 / 下发筛选 / 排序下发 / 本地分析…）
+    ///
+    /// 与 `channel`/`sources` 同一演进方式：老记录没有这一项，读回来是 `None`。
+    pub lineage: Option<String>,
 }
 
 impl HistoryRecord {
@@ -86,6 +90,7 @@ impl HistoryRecord {
             rows_returned: None,
             channel: None,
             sources: None,
+            lineage: None,
         }
     }
 
@@ -687,6 +692,7 @@ impl HistoryStore {
             connection_id,
             channel: extract_string(json, "channel"),
             sources: extract_string(json, "sources"),
+            lineage: extract_string(json, "lineage"),
             timestamp: extract_u64(json, "timestamp").unwrap_or(0),
             duration_ms: extract_u64(json, "duration_ms").unwrap_or(0),
             success: extract_bool(json, "success").unwrap_or(false),
@@ -743,6 +749,13 @@ impl HistoryStore {
                 result.push_str(&format!(
                     "    \"sources\": \"{}\",\n",
                     Self::escape_json(sources)
+                ));
+            }
+
+            if let Some(ref lineage) = record.lineage {
+                result.push_str(&format!(
+                    "    \"lineage\": \"{}\",\n",
+                    Self::escape_json(lineage)
                 ));
             }
 
@@ -850,6 +863,8 @@ pub struct SqlHistoryRecord {
     pub channel: Option<String>,
     /// 【联邦】参与本次执行的源别名（逗号分隔；非联邦档为 `None`；老记录为 `None`）
     pub sources: Option<String>,
+    /// 【B5 余项】血缘（结果怎么来的；老记录为 `None`）
+    pub lineage: Option<String>,
     pub executed_at: chrono::DateTime<chrono::Utc>,
     pub duration_ms: Option<u64>,
     pub success: Option<bool>,
@@ -886,6 +901,9 @@ pub struct SqlHistoryEntry {
     /// 写侧在**执行路径**上拼（它才知道这次到底挂了哪些源）；历史面板读它拼出
     /// “`MYSQL·联邦 · 源 mysql_src, pg_warehouse`”。
     pub sources: Option<String>,
+    /// 【B5 余项】血缘（`原查询` / `下发筛选` / `排序下发` / `本地分析`…；提交方在
+    /// `ExecTarget::lineage()` 统一取）——历史列表要能回答“这行结果怎么来的”
+    pub lineage: Option<String>,
 }
 
 /// 保存 SQL 历史（写入全局存储）
@@ -917,6 +935,7 @@ pub fn save_sql_history_into(
     let mut record = HistoryRecord::new(sql.to_string(), db_type, connection_id);
     record.channel = entry.channel.clone();
     record.sources = entry.sources.clone();
+    record.lineage = entry.lineage.clone();
     if entry.success {
         record.mark_success(entry.elapsed_ms);
     } else {
@@ -956,6 +975,7 @@ fn to_public_record(r: &HistoryRecord) -> SqlHistoryRecord {
         },
         channel: r.channel.clone(),
         sources: r.sources.clone(),
+        lineage: r.lineage.clone(),
         executed_at: chrono::DateTime::from_timestamp((r.timestamp / 1000) as i64, 0)
             .unwrap_or_else(chrono::Utc::now),
         duration_ms: Some(r.duration_ms),
@@ -1262,6 +1282,7 @@ mod sql_history_entry_tests {
             rows_affected: None,
             channel: None,
             sources: None,
+            lineage: None,
         };
 
         save_sql_history_into(&mut store, "SELECT 1", &entry).expect("save history");
@@ -1292,6 +1313,7 @@ mod sql_history_entry_tests {
             rows_affected: None,
             channel: Some("accelerated".to_string()),
             sources: None,
+            lineage: None,
         };
         save_sql_history_into(&mut store, "SELECT 1", &entry).expect("save");
         let record = &store.get_records(None)[0];
@@ -1340,6 +1362,7 @@ mod sql_history_entry_tests {
             rows_affected: None,
             channel: Some("federated".to_string()),
             sources: Some("mysql_src, pg_warehouse".to_string()),
+            lineage: None,
         };
         save_sql_history_into(&mut store, "SELECT 1", &entry).expect("save");
 
@@ -1352,6 +1375,56 @@ mod sql_history_entry_tests {
         assert_eq!(
             reloaded.get_records(None)[0].sources.as_deref(),
             Some("mysql_src, pg_warehouse")
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// 【B5 余项】血缘跟着记录落盘与读回（历史列表要能说出“这份数据怎么来的”）
+    #[test]
+    fn the_lineage_round_trips() {
+        let (mut store, path) = temp_store("lineage");
+        let entry = SqlHistoryEntry {
+            conn_id: Some("conn-1".to_string()),
+            db_type: Some("MySQL".to_string()),
+            elapsed_ms: 7,
+            success: true,
+            error_message: None,
+            rows_returned: Some(1),
+            rows_affected: None,
+            channel: Some("source".to_string()),
+            sources: None,
+            lineage: Some("下发筛选".to_string()),
+        };
+        save_sql_history_into(&mut store, "SELECT 1", &entry).expect("save");
+
+        let record = &store.get_records(None)[0];
+        assert_eq!(record.lineage.as_deref(), Some("下发筛选"));
+
+        // 写盘 → 重读：血缘不能只活在内存里
+        let mut reloaded = HistoryStore::new(path.clone());
+        reloaded.load().expect("load");
+        assert_eq!(
+            reloaded.get_records(None)[0].lineage.as_deref(),
+            Some("下发筛选")
+        );
+
+        // 老记录（没有 lineage 字段）读回来是 `None`，不是解析失败
+        let legacy = r#"[{
+  "id": "old-2",
+  "sql": "SELECT 3",
+  "db_type": "sqlite",
+  "connection_id": "conn-1",
+  "timestamp": 1,
+  "duration_ms": 3,
+  "success": true
+}]"#;
+        std::fs::write(&path, legacy).expect("写老格式");
+        reloaded.load().expect("读老格式");
+        assert_eq!(
+            reloaded.get_records(None)[0].lineage,
+            None,
+            "老记录没有血缘 = 不知道，不编一个"
         );
 
         let _ = std::fs::remove_file(path);
@@ -1370,6 +1443,7 @@ mod sql_history_entry_tests {
             rows_affected: Some(3),
             channel: None,
             sources: None,
+            lineage: None,
         };
 
         save_sql_history_into(&mut store, "UPDATE t SET x = 1", &entry).expect("save history");
@@ -1394,6 +1468,7 @@ mod sql_history_entry_tests {
             rows_affected: None,
             channel: None,
             sources: None,
+            lineage: None,
         };
 
         save_sql_history_into(&mut store, "SELECT nope FROM t", &entry).expect("save history");
@@ -1427,6 +1502,7 @@ mod sql_history_entry_tests {
             rows_affected: None,
             channel: None,
             sources: None,
+            lineage: None,
         };
         let sql = format!("SELECT '{}' AS 中文列", "很长很长的中文注释".repeat(20));
         save_sql_history_into(&mut store, &sql, &entry).expect("save history");

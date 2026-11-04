@@ -153,6 +153,10 @@ impl ExecQueue {
                     .stack_size(16 * 1024 * 1024)
                     .spawn(move || {
                         while let Ok(job) = rx.recv() {
+                            // 【B5 余项】把作业血缘注进执行选项（run 路径带去历史落库；
+                            // 下发 / 分段各方法自知其血缘，不读这份）。`RunOptions` 是 Copy。
+                            let mut run_options = job.options;
+                            run_options.lineage = Some(job.lineage);
                             for sql in job.statements {
                                 // 中断之后**不再往下跑**（架构 §3.4：剩余语句各自回一条"已取消"），
                                 // 否则用户看到的"中断"只是打断了当前那一句。
@@ -199,7 +203,7 @@ impl ExecQueue {
                                         job.schema.as_deref(),
                                         job.channel,
                                         &sql,
-                                        job.options,
+                                        run_options,
                                     )
                                 };
                                 // B4：事务状态跟着结论一起回去（界面不必再单独问一句）

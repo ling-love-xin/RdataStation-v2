@@ -143,6 +143,7 @@ impl ResultService {
             use_cache: false,
             // 遗留的单格更新路径（无调用方；T2a 批量提交已取代它）：不接 schema 上下文
             schema: None,
+            lineage: None,
         };
 
         let result = service.execute(Some(conn_id), &sql, opts).await?;

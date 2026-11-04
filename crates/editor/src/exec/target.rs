@@ -295,29 +295,44 @@ impl ExecTarget {
     /// 有自定义标题的结果（执行计划 / 分析）在界面上用标题当来源，不在这里猜。
     pub fn lineage(&self) -> &'static str {
         match self {
-            Self::Segment { .. } => "取下一段",
-            Self::Filtered { .. } => "下发筛选",
-            Self::SortedDown { .. } => "排序下发",
-            Self::Analysis(_) => "本地分析",
-            Self::Script(_) => "脚本执行",
-            Self::Cell(_) => "单元执行",
+            Self::Segment { .. } => LINEAGE_SEGMENT,
+            Self::Filtered { .. } => LINEAGE_FILTERED,
+            Self::SortedDown { .. } => LINEAGE_SORTED_DOWN,
+            Self::Analysis(_) => LINEAGE_ANALYSIS,
+            Self::Script(_) => LINEAGE_SCRIPT,
+            Self::Cell(_) => LINEAGE_CELL,
             // 提交是写回动作，血缘说清“这份是改回源库的结果”——与下发类同源口径
-            Self::Commit { .. } => "本地写回",
+            Self::Commit { .. } => LINEAGE_COMMIT,
             // 普通执行（含选区 / 全部 / 批量）：结果就是那句查询的原始输出
             Self::Empty
             | Self::Selection(_)
             | Self::Statement(_)
             | Self::All(_)
-            | Self::Batch(_) => "原查询",
+            | Self::Batch(_) => LINEAGE_ORIGINAL,
         }
     }
 }
+
+/// 【B5 余项】血缘文案的**单一来源**：`ExecTarget::lineage()`、执行器内的下发 / 分段
+/// 方法（它们拿不到 target，但血缘就是它们自己的名字）与历史落库共用一份，
+/// 改文案只动这里。
+pub const LINEAGE_ORIGINAL: &str = "原查询";
+pub const LINEAGE_SEGMENT: &str = "取下一段";
+pub const LINEAGE_FILTERED: &str = "下发筛选";
+pub const LINEAGE_SORTED_DOWN: &str = "排序下发";
+pub const LINEAGE_ANALYSIS: &str = "本地分析";
+pub const LINEAGE_SCRIPT: &str = "脚本执行";
+pub const LINEAGE_CELL: &str = "单元执行";
+pub const LINEAGE_COMMIT: &str = "本地写回";
 
 /// 一次执行的附加选项（B4）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RunOptions {
     /// 本次执行要不要（在没有事务时）**自动开一个事务**——「自动提交」关掉时为真
     pub use_transaction: bool,
+    /// 【B5 余项】本次执行的血缘（队列侧从 `ExecJob.lineage` 注入；执行器把它带进
+    /// 历史记录）。`None` = 老调用方没给（历史里不出现血缘，不编一个）
+    pub lineage: Option<&'static str>,
 }
 
 /// 会话的事务状态快照（B4）

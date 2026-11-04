@@ -503,6 +503,7 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             &format!("INSERT INTO {table} VALUES (1)"),
             RunOptions {
                 use_transaction: true,
+                lineage: None,
             },
         );
         assert!(
@@ -530,6 +531,7 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             &format!("INSERT INTO {table} VALUES (2)"),
             RunOptions {
                 use_transaction: true,
+                lineage: None,
             },
         );
         assert!(

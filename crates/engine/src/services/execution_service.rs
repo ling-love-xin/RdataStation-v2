@@ -33,6 +33,7 @@ pub async fn re_execute_with_filter(
         use_cache: false,
         // DuckDB 分析路径：无源库 schema 概念，不注入会话上下文
         schema: None,
+        lineage: None,
     };
 
     let result = service
