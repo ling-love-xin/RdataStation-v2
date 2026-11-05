@@ -11,7 +11,7 @@
 //! 数据缺口如实登记：时间列常被 JSON 打型成文本，走 text 降级）。
 //!
 //! 事件接线清单（搬迁核对用，改这里先对照）：
-//! - `insight-ws-col-toggle-{name}`：展开 / 收起（写 `col_open`）
+//! - `insight-ws-col-toggle-{name}`：展开 / 收起（写 `col_open`；折叠行渲染在 folded.rs）
 //! - `insight-ws-col-recalc-{name}`：中断列补算（`request_column_evaluation`）
 //! - `insight-ws-col-zones-{name}`：切区（写 `col_detail_zone`；切「规则」顺带
 //!   `ensure_col_rules` 惰性载入）
@@ -57,7 +57,8 @@ impl InsightWorkspacePanel {
         } else {
             None
         };
-        let folded = self.render_card_folded_row(col, entity, theme, is_full, open, explore_badge);
+        let folded =
+            self.render_card_folded_row(col, &checker, entity, theme, is_full, open, explore_badge);
         let body = self.render_col_card_body(col, &checker, zone, entity, theme, temp_table);
         Collapsible::new()
             .motion_id(SharedString::from(format!(
@@ -68,140 +69,6 @@ impl InsightWorkspacePanel {
             .child(folded)
             .content(body)
             .w_full()
-    }
-
-    /// 折叠行（YData 单行版式）：行头信息 + **右端常驻迷你图**（缺席给原因短文案）。
-    fn render_card_folded_row(
-        &self,
-        col: &TableColumnView,
-        entity: &Entity<Self>,
-        theme: &Theme,
-        is_full: bool,
-        open: bool,
-        explore_badge: Option<Tag>,
-    ) -> Div {
-        let colors = theme.colors;
-        let mini = if open {
-            None
-        } else {
-            self.render_col_mini_vis(col, theme, is_full)
-        };
-        // 迷你图缺席的原因短文案（四档各说各的，不写「样本不足」——
-        // 竞态修复后缺席多为评估中 / 未重算，措辞要与真因一致）
-        let mini_note = (!open && mini.is_none()).then(|| match &col.stats_detail {
-            None if col.interrupted => "评估中断，可补算".to_string(),
-            None => "评估中…".to_string(),
-            Some(crate::model::types::ColumnStatsDetail::Unknown) => "类型未识别".to_string(),
-            _ => "取样统计未就绪（工具栏「取样」重算）".to_string(),
-        });
-        div()
-            .w_full()
-            .h_flex()
-            .items_center()
-            .gap_2()
-            // 展开切换（语义 Button，键盘可达）
-            .child({
-                let entity = entity.clone();
-                let name = col.name.clone();
-                let toggled = open;
-                Button::new(SharedString::from(format!(
-                    "insight-ws-col-toggle-{}",
-                    name
-                )))
-                .ghost()
-                .xsmall()
-                .icon(if toggled {
-                    IconName::ChevronDown
-                } else {
-                    IconName::ChevronRight
-                })
-                .tooltip(if toggled {
-                    "收起"
-                } else {
-                    "展开统计 / 分布 / 检查器 / 样本 / 规则"
-                })
-                .on_click(move |_, _, app| {
-                    entity.update(app, |panel, cx| {
-                        let mut open = panel.col_open.borrow_mut();
-                        if toggled {
-                            open.remove(&name);
-                        } else {
-                            open.insert(name.clone());
-                        }
-                        cx.notify();
-                    });
-                })
-            })
-            .child(
-                div()
-                    .flex_none()
-                    .min_w(rems(6.))
-                    .max_w(rems(14.))
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_ellipsis()
-                    .text_color(colors.foreground)
-                    .child(col.name.clone()),
-            )
-            .child(
-                Tag::color(match col.kind {
-                    ColumnKind::Numeric => ColorName::Green,
-                    ColumnKind::Text => ColorName::Blue,
-                    ColumnKind::DateTime => ColorName::Violet,
-                    ColumnKind::Boolean => ColorName::Teal,
-                    ColumnKind::Unknown => ColorName::Gray,
-                })
-                .xsmall()
-                .child(col.kind.label()),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(colors.muted_foreground)
-                    .child(format!(
-                        "缺失 {}",
-                        col.null_rate
-                            .map(|n| format!("{:.0}%", n * 100.0))
-                            .unwrap_or_else(|| "—".into())
-                    )),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(colors.muted_foreground)
-                    .child(format!(
-                        "唯一 {}",
-                        col.unique_rate
-                            .map(|u| format!("{:.0}%", u * 100.0))
-                            .unwrap_or_else(|| "—".into())
-                    )),
-            )
-            .when_some(explore_badge, |this, badge| this.child(badge))
-            .when(col.interrupted, |this| {
-                this.child(Tag::color(ColorName::Amber).xsmall().child("未完成"))
-            })
-            .child(div().flex_1().min_w_0())
-            // 右端常驻迷你图（YData 核心识别特征）：定宽，缺席时给原因
-            .when_some(mini, |this, m| {
-                this.child(
-                    div()
-                        .flex_none()
-                        .w(rems(ui::INSIGHT_CARD_VIS_WIDTH))
-                        .min_w_0()
-                        .child(m),
-                )
-            })
-            .when_some(mini_note, |this, note| {
-                this.child(
-                    div()
-                        .flex_none()
-                        .text_xs()
-                        .text_color(colors.muted_foreground)
-                        .child(note),
-                )
-            })
     }
 
     /// 列卡展开体：只看规则开关 + （五区 Tab + 区内容 + 检查器汇总）或检查器列表。
@@ -503,13 +370,18 @@ impl InsightWorkspacePanel {
         if col.stats_detail.is_none() {
             return zone_note(theme, "未评估全表，无列级统计（点工具栏「评估」）");
         }
-        let rows = self.type_stats_rows(col);
+        let groups = self.type_stats_groups(col);
         div()
             .h_flex()
             .w_full()
             .items_stretch()
             .gap_2()
-            .child(div().flex_1().min_w_0().child(zone_rows(theme, rows)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(zone_rows_grouped(theme, &groups)),
+            )
             .child(
                 div()
                     .flex_none()
@@ -569,14 +441,17 @@ impl InsightWorkspacePanel {
         }
     }
 
-    /// 类型分派：基础统计行集。
-    fn type_stats_rows(&self, col: &TableColumnView) -> Vec<(String, String)> {
+    /// 类型分派：基础统计**分组**行集（YData Statistics 分组呈现）。
+    fn type_stats_groups(
+        &self,
+        col: &TableColumnView,
+    ) -> Vec<(&'static str, Vec<(String, String)>)> {
         match col.kind {
-            ColumnKind::Numeric => numeric::stats_rows(col),
-            ColumnKind::Text => text::stats_rows(col),
-            ColumnKind::DateTime => datetime::stats_rows(col),
-            ColumnKind::Boolean => boolean::stats_rows(col),
-            ColumnKind::Unknown => vec![("统计".into(), "类型未识别".into())],
+            ColumnKind::Numeric => numeric::stats_groups(col),
+            ColumnKind::Text => text::stats_groups(col),
+            ColumnKind::DateTime => datetime::stats_groups(col),
+            ColumnKind::Boolean => boolean::stats_groups(col),
+            ColumnKind::Unknown => vec![("统计", vec![("—".into(), "类型未识别".into())])],
         }
     }
 
@@ -749,5 +624,6 @@ impl InsightWorkspacePanel {
 
 pub(crate) mod boolean;
 pub(crate) mod datetime;
+pub(crate) mod folded;
 pub(crate) mod numeric;
 pub(crate) mod text;

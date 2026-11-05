@@ -1,4 +1,4 @@
-//! 时间列卡（YData 密度对齐）：统计表行集 / 月度分布图 / 折叠态 Top 条。
+//! 时间列卡（YData 密度对齐）：分组统计表 / 月度分布图 / 折叠态 Top 条。
 //!
 //! 已知数据缺口（如实）：源库取样走 JSON 打型，DATETIME 列常被打成文本
 //! （`ColumnKind::Text`）——本卡只在列类型族为 DateTime 时启用；类型面扩展
@@ -6,25 +6,41 @@
 
 use crate::workspace::*;
 
-/// 基础统计行集（跨度 + 月度 Top 预览）。
-pub(crate) fn stats_rows(col: &TableColumnView) -> Vec<(String, String)> {
+/// 基础统计**分组**行集（范围 / 频次两组）。
+pub(crate) fn stats_groups(col: &TableColumnView) -> Vec<(&'static str, Vec<(String, String)>)> {
     let Some(crate::model::types::ColumnStatsDetail::DateTime(d)) = &col.stats_detail else {
-        return vec![("统计".into(), "无可用统计".into())];
+        return vec![("统计", vec![("—".into(), "无可用统计".into())])];
     };
     vec![
-        ("最早".into(), d.earliest.clone()),
-        ("最晚".into(), d.latest.clone()),
-        ("跨度（天）".into(), fmt_int(d.span_days.max(0) as u32)),
         (
-            "月度 Top".into(),
-            d.monthly_distribution
-                .iter()
-                .take(3)
-                .map(|f| format!("{}（{}）", f.value, f.count))
-                .collect::<Vec<_>>()
-                .join(" · "),
+            "范围",
+            vec![
+                ("最早".into(), d.earliest.clone()),
+                ("最晚".into(), d.latest.clone()),
+                ("跨度（天）".into(), fmt_int(d.span_days.max(0) as u32)),
+            ],
+        ),
+        (
+            "频次",
+            vec![(
+                "月度 Top".into(),
+                d.monthly_distribution
+                    .iter()
+                    .take(3)
+                    .map(|f| format!("{}（{}）", f.value, f.count))
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+            )],
         ),
     ]
+}
+
+/// 折叠行统计块：起止范围。
+pub(crate) fn folded_preview(col: &TableColumnView) -> Vec<(String, String)> {
+    let Some(crate::model::types::ColumnStatsDetail::DateTime(d)) = &col.stats_detail else {
+        return Vec::new();
+    };
+    vec![("范围".into(), format!("{} ~ {}", d.earliest, d.latest))]
 }
 
 /// 分布纯图：月度分布条（前 5）。

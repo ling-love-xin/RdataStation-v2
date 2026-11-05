@@ -1,17 +1,28 @@
-//! 布尔列卡（YData 密度对齐）：统计表行集 / 真假占比图 / 折叠态占比条。
+//! 布尔列卡（YData 密度对齐）：平铺统计行 / 真假占比图 / 折叠统计块。
 
 use crate::workspace::*;
 
-/// 基础统计行集。
-pub(crate) fn stats_rows(col: &TableColumnView) -> Vec<(String, String)> {
+/// 单组无标题（三行不值得分组，平铺渲染）。
+pub(crate) fn stats_groups(col: &TableColumnView) -> Vec<(&'static str, Vec<(String, String)>)> {
     let Some(crate::model::types::ColumnStatsDetail::Boolean(b)) = &col.stats_detail else {
-        return vec![("统计".into(), "无可用统计".into())];
+        return vec![("统计", vec![("—".into(), "无可用统计".into())])];
     };
-    vec![
-        ("真".into(), fmt_int(b.true_count)),
-        ("假".into(), fmt_int(b.false_count)),
-        ("真占比".into(), fmt_pct(b.true_ratio)),
-    ]
+    vec![(
+        "",
+        vec![
+            ("真".into(), fmt_int(b.true_count)),
+            ("假".into(), fmt_int(b.false_count)),
+            ("真占比".into(), fmt_pct(b.true_ratio)),
+        ],
+    )]
+}
+
+/// 折叠行统计块：真占比。
+pub(crate) fn folded_preview(col: &TableColumnView) -> Vec<(String, String)> {
+    let Some(crate::model::types::ColumnStatsDetail::Boolean(b)) = &col.stats_detail else {
+        return Vec::new();
+    };
+    vec![("真".into(), fmt_pct(b.true_ratio))]
 }
 
 /// 分布纯图：真 / 假两柱（中性色，不引入「真假=好坏」语义）。

@@ -826,7 +826,7 @@ mod toolbar;
 // 均只在定义模块内部使用，无需上提。
 pub(crate) use helpers::{
     col_explore_score, column_checkers, dist_bars, divider, note_line, panel_box, pulse_dot,
-    step_dot, summary_card, zone_note, zone_rows,
+    step_dot, summary_card, zone_note, zone_rows_grouped,
 };
 pub(crate) use markdown::{dist_text_bars, render_markdown_report, render_multi_result};
 // ===== 中央 Dock 面板协议（对齐 property_panel / search_results 的装配方式） =====

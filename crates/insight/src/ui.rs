@@ -70,8 +70,8 @@ pub const INSIGHT_PICKER_LIST_MAX_HEIGHT: f32 = 16.0;
 /// 原型 1000px 减去 activity 48px 与右 dock 280px 即得 672px。低于它整页横向
 /// 滚动，而不是折行或压缩栅格。
 pub const INSIGHT_WS_MIN_WIDTH: f32 = 42.0;
-/// 列卡「基础统计」右栏图宽（11rem = 176px；YData 左表右图版式的图定宽）
-pub const INSIGHT_CARD_VIS_WIDTH: f32 = 11.0;
+/// 列卡折叠行迷你图 / 基础统计右栏图宽（15rem = 240px；YData 密度对齐）
+pub const INSIGHT_CARD_VIS_WIDTH: f32 = 15.0;
 /// 列分布渐进渲染上限（40 张卡：200+ 列全量渲染卡首帧；「显示全部」可解锁，
 /// 虚拟列表见 dev-plan §10 #14）
 pub const INSIGHT_WS_COL_RENDER_CAP: usize = 40;

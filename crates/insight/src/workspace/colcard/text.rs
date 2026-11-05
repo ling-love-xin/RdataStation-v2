@@ -1,25 +1,44 @@
-//! 文本列卡（YData 密度对齐）：统计表行集 / Top 频次图 / 折叠态 Top 条。
+//! 文本列卡（YData 密度对齐）：分组统计表 / Top 频次图 / 折叠态 Top 条。
 
 use crate::workspace::*;
 
-/// 基础统计行集（长度统计 + Top 值预览）。
-pub(crate) fn stats_rows(col: &TableColumnView) -> Vec<(String, String)> {
+/// 基础统计**分组**行集（长度 / 频次两组）。
+pub(crate) fn stats_groups(col: &TableColumnView) -> Vec<(&'static str, Vec<(String, String)>)> {
     let Some(crate::model::types::ColumnStatsDetail::Text(t)) = &col.stats_detail else {
-        return vec![("统计".into(), "无可用统计".into())];
+        return vec![("统计", vec![("—".into(), "无可用统计".into())])];
     };
     vec![
-        ("最短长度".into(), fmt_int(t.min_length)),
-        ("最长长度".into(), fmt_int(t.max_length)),
         (
-            "Top 值".into(),
-            t.top_values
-                .iter()
-                .take(3)
-                .map(|f| format!("{}（{}）", f.value, f.count))
-                .collect::<Vec<_>>()
-                .join(" · "),
+            "长度",
+            vec![
+                ("最短".into(), fmt_int(t.min_length)),
+                ("最长".into(), fmt_int(t.max_length)),
+            ],
+        ),
+        (
+            "频次",
+            vec![(
+                "Top 值".into(),
+                t.top_values
+                    .iter()
+                    .take(3)
+                    .map(|f| format!("{}（{}）", f.value, f.count))
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+            )],
         ),
     ]
+}
+
+/// 折叠行统计块：最高频值。
+pub(crate) fn folded_preview(col: &TableColumnView) -> Vec<(String, String)> {
+    let Some(crate::model::types::ColumnStatsDetail::Text(t)) = &col.stats_detail else {
+        return Vec::new();
+    };
+    match t.top_values.first() {
+        Some(f) => vec![("Top".into(), format!("{} ×{}", f.value, f.count))],
+        None => Vec::new(),
+    }
 }
 
 /// 分布纯图：Top 值频次条（前 5）。

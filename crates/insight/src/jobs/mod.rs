@@ -483,9 +483,9 @@ mod tests {
                 matches!(
                     id_mini,
                     Some(crate::model::ColumnMiniStats::Numeric(bins))
-                        if bins.len() <= 8
+                        if bins.len() <= 16
                 ),
-                "数值列应有 ≤8 柱迷你直方图"
+                "数值列应有 ≤16 柱迷你直方图"
             );
             assert!(
                 id.stats_detail.is_some(),

@@ -61,7 +61,11 @@ fn ui_size_constants_match_design() {
         (INSIGHT_SET_LIST_MAX_HEIGHT, 288.0, "右栏集合列表最大高度"),
         (INSIGHT_PROBE_DIALOG_WIDTH, 480.0, "探查确认弹窗宽度"),
         (INSIGHT_SET_KIND_WIDTH, 64.0, "右栏集合行来源徽标列宽"),
-        (INSIGHT_CARD_VIS_WIDTH, 176.0, "列卡基础统计右栏图宽"),
+        (
+            INSIGHT_CARD_VIS_WIDTH,
+            240.0,
+            "列卡折叠行迷你图 / 基础统计右栏图宽",
+        ),
         (
             INSIGHT_PICKER_LIST_MAX_HEIGHT,
             256.0,
@@ -270,6 +274,10 @@ fn view_sources() -> Vec<(String, &'static str)> {
         (
             "workspace/colcard/boolean.rs".to_string(),
             include_str!("../src/workspace/colcard/boolean.rs"),
+        ),
+        (
+            "workspace/colcard/folded.rs".to_string(),
+            include_str!("../src/workspace/colcard/folded.rs"),
         ),
         (
             "workspace/helpers.rs".to_string(),

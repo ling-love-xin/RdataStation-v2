@@ -496,7 +496,7 @@ pub fn compute_sample_mini_stats_on(
     Ok(out)
 }
 
-/// 等宽 8 柱直方图（取样档迷你图）：min/max 均分 8 档；全同值 / 不可比回退单柱。
+/// 等宽 16 柱直方图（取样档迷你图）：min/max 均分 16 档；全同值 / 不可比回退单柱。
 ///
 /// 迷你图渲染只读 `count`（`label` 不进 UI），口径与评估直方图同族（等宽分箱）。
 fn sample_histogram_bins(values: &[f64]) -> Vec<DistributionBin> {
@@ -514,19 +514,21 @@ fn sample_histogram_bins(values: &[f64]) -> Vec<DistributionBin> {
             ratio: 1.0,
         }];
     }
-    let width = (max - min) / 8.0;
-    let mut counts = [0u32; 8];
+    // 16 柱（2026-11-06 YData 密度对齐：240px 折叠行宽下 16 柱 ≈ 15px/柱，可读）
+    const BINS: usize = 16;
+    let width = (max - min) / BINS as f64;
+    let mut counts = [0u32; BINS];
     for &v in values {
         let mut ix = ((v - min) / width).floor() as usize;
-        if ix >= 8 {
-            ix = 7;
+        if ix >= BINS {
+            ix = BINS - 1;
         }
         counts[ix] += 1;
     }
-    (0..8)
+    (0..BINS)
         .map(|ix| {
             let lo = min + width * ix as f64;
-            let hi = if ix == 7 { max } else { lo + width };
+            let hi = if ix == BINS - 1 { max } else { lo + width };
             DistributionBin {
                 label: format!("{lo:.2}~{hi:.2}"),
                 count: counts[ix],

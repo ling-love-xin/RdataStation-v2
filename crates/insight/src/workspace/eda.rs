@@ -301,4 +301,3 @@ impl super::InsightWorkspacePanel {
         panel_box(theme, "缺失矩阵", note, rows)
     }
 }
-

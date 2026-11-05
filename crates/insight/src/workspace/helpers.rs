@@ -174,6 +174,29 @@ pub(crate) fn zone_note(theme: &Theme, text: &str) -> Div {
 }
 
 /// 展开区键值行列表
+/// 分组行集（YData Statistics 呈现）：每组一个小标题 + 该组键值行；
+/// 组标题为空串时平铺（布尔等少行类型不分组）。
+pub(crate) fn zone_rows_grouped(
+    theme: &Theme,
+    groups: &[(&'static str, Vec<(String, String)>)],
+) -> Div {
+    let colors = theme.colors;
+    let mut body = div().v_flex().w_full().gap_1();
+    for (title, rows) in groups {
+        if !title.is_empty() {
+            body = body.child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(colors.muted_foreground)
+                    .child(title.to_string()),
+            );
+        }
+        body = body.child(zone_rows(theme, rows.clone()));
+    }
+    body
+}
+
 pub(crate) fn zone_rows(theme: &Theme, rows: Vec<(String, String)>) -> Div {
     let colors = theme.colors;
     let mut body = div().v_flex().w_full().gap_1();
