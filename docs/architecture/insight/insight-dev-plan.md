@@ -23,6 +23,16 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-11-06 — 单列面板对齐 YData 三件（计数组 / 分位条 / Miss 前置）
+
+展开体面板继续对齐 YData（数据全部现成，纯渲染零新取数）。**已验证**（lib 280 + e2e 14 + 契约 7 全绿）：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 计数组 | Stats 左表最前统一插「计数」组（空值数 / 唯一值，精确计数来自表级摘要）——YData Overview 的 Distinct/Missing 对应物，全类型通用 | `colcard/mod.rs`（type_stats_groups 前置插入，类型分派改名 `type_stats_groups_by_kind`） |
+| 分位条 | 数值卡 Dist 区直方图上方：min→max 轨道按 P25/中位/P75 分四段交替着色，段宽 = 分位间距（一眼看出集中侧）+ 五分位 tick 行——YData Statistics 分位可视化的对应物，纯渲染无交互（按用户指示不追图交互） | `colcard/numeric.rs`（quantile_strip，常数列回退不渲染） |
+| Miss 前置 | 检查器列表**未命中条目排最前**（YData Warnings 语义：问题一眼看到）；其余保持原序 | `colcard/mod.rs`（render_checker_list） |
+
 ### 2026-11-06 — 列分布单列化（用户拍板：一个字段一行，废弃双列网格）
 
 列分布段**一列一行**：每张列卡占满整行（`render_col_section` 废弃 chunks(2)

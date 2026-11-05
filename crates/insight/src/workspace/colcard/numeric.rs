@@ -79,12 +79,18 @@ pub(crate) fn folded_preview(col: &TableColumnView) -> Vec<(String, String)> {
     ]
 }
 
-/// 分布纯图：16 柱等宽直方图（内置 `histogram` 规则同柱数）。
+/// 分布纯图：分位条 + 16 柱直方图（内置 `histogram` 规则同柱数）。
 pub(crate) fn dist_visual(col: &TableColumnView, theme: &Theme) -> Div {
-    match col.histogram.as_ref() {
-        Some(bins) if !bins.is_empty() => dist_bars(theme, bins, 16, &col.name),
-        _ => zone_note(theme, "样本行数不足，未生成直方图"),
+    let mut body = div().v_flex().w_full().gap_2();
+    // 分位条在直方图上方（YData Statistics 同位）：段宽 = 分位间距
+    if let Some(strip) = quantile_strip(col, theme) {
+        body = body.child(strip);
     }
+    match col.histogram.as_ref() {
+        Some(bins) if !bins.is_empty() => body = body.child(dist_bars(theme, bins, 16, &col.name)),
+        _ => body = body.child(zone_note(theme, "样本行数不足，未生成直方图")),
+    }
+    body
 }
 
 /// 分布附注：偏度 / 峰度 + 正态性判定（数值卡独有）。
@@ -113,6 +119,67 @@ pub(crate) fn dist_notes(col: &TableColumnView, theme: &Theme) -> Option<Div> {
         ));
     }
     Some(line)
+}
+
+/// 分位条（YData Statistics 右栏的分位可视化对应物，纯渲染无交互）：
+/// min→max 一条轨道，按 (p25/median/p75 − min)/(max − min) 分四段交替着色，
+/// 段宽即分位间距——一眼看出数据集中在哪一侧；下方 tick 行给五个分位值。
+pub(crate) fn quantile_strip(col: &TableColumnView, theme: &Theme) -> Option<Div> {
+    let Some(crate::model::types::ColumnStatsDetail::Numeric(n)) = &col.stats_detail else {
+        return None;
+    };
+    let span = n.max - n.min;
+    if !span.is_finite() || span <= 0.0 {
+        return None; // 常数列：分位条无意义（单点）
+    }
+    let colors = theme.colors;
+    let pos = |v: f64| -> f32 { (((v - n.min) / span).clamp(0.0, 1.0) * 100.0) as f32 };
+    let seg = |a: f64, b: f64, id: &str, alt: bool| {
+        let w = pos(b) - pos(a);
+        if w <= 0.0 {
+            return None;
+        }
+        Some(
+            div()
+                .h_full()
+                .bg(if alt {
+                    colors.primary
+                } else {
+                    colors.muted_foreground
+                })
+                .flex_grow(w)
+                .id(SharedString::from(format!(
+                    "insight-ws-quant-{}-{}",
+                    col.name, id
+                ))),
+        )
+    };
+    let track = div()
+        .h_flex()
+        .w_full()
+        .h(rems(0.625))
+        .rounded_sm()
+        .overflow_hidden()
+        .bg(colors.sidebar)
+        .when_some(seg(n.min, n.p25, "q1", true), |t, c| t.child(c))
+        .when_some(seg(n.p25, n.median, "q2", false), |t, c| t.child(c))
+        .when_some(seg(n.median, n.p75, "q3", true), |t, c| t.child(c))
+        .when_some(seg(n.p75, n.max, "q4", false), |t, c| t.child(c));
+    Some(
+        div().v_flex().w_full().gap_1().child(track).child(
+            div()
+                .h_flex()
+                .w_full()
+                .gap_2()
+                .text_xs()
+                .text_color(colors.muted_foreground)
+                .child(format!("min {}", fmt_num(n.min)))
+                .child(format!("P25 {}", fmt_num(n.p25)))
+                .child(format!("中位 {}", fmt_num(n.median)))
+                .child(format!("P75 {}", fmt_num(n.p75)))
+                .child(format!("max {}", fmt_num(n.max))),
+        ),
+    )
 }
 
 /// 折叠行迷你直方图（16 柱等宽，柱高 = 最小可读 + 比例段）。

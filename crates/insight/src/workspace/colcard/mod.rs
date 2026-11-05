@@ -442,7 +442,29 @@ impl InsightWorkspacePanel {
     }
 
     /// 类型分派：基础统计**分组**行集（YData Statistics 分组呈现）。
+    ///
+    /// 最前统一插「计数」组（YData Overview 的 Distinct/Missing 对应物）：
+    /// 空值数 / 唯一值——精确计数来自表级摘要（`ColumnStatBrief` 回填），
+    /// 对所有类型通用。
     fn type_stats_groups(
+        &self,
+        col: &TableColumnView,
+    ) -> Vec<(&'static str, Vec<(String, String)>)> {
+        let mut groups = self.type_stats_groups_by_kind(col);
+        let mut counts = Vec::new();
+        if let Some(n) = col.null_count {
+            counts.push(("空值数".into(), fmt_int(n.max(0) as u32)));
+        }
+        if let Some(u) = col.unique_count {
+            counts.push(("唯一值".into(), fmt_int(u.max(0) as u32)));
+        }
+        if !counts.is_empty() {
+            groups.insert(0, ("计数", counts));
+        }
+        groups
+    }
+
+    fn type_stats_groups_by_kind(
         &self,
         col: &TableColumnView,
     ) -> Vec<(&'static str, Vec<(String, String)>)> {
@@ -578,7 +600,10 @@ impl InsightWorkspacePanel {
                 .child("该列无检查器属性");
         }
         let mut rows = div().v_flex().w_full().gap_1();
-        for check in checker {
+        // 未命中前置（YData Warnings 语义：问题一眼看到）；其余保持原序
+        let mut ordered: Vec<&ColumnChecker> = checker.iter().collect();
+        ordered.sort_by_key(|c| !matches!(c.state, ColumnCheckState::Miss));
+        for check in ordered {
             let (state_text, color) = match check.state {
                 ColumnCheckState::Hit => ("命中", colors.success),
                 ColumnCheckState::Miss => ("未命中", colors.danger),
