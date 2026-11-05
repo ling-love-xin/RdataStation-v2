@@ -187,6 +187,23 @@ pub fn request_table_evaluation(
         let _ = weak.update(cx, |panel, cx| {
             let base_now = panel.data.table.clone().unwrap_or_else(|| done.clone());
             panel.set_table_profile(done.merge_onto(&base_now).unwrap_or(done), cx);
+            // 取样档自愈（2026-11-05 真机 10/10 无图的兜底）：评估完成时若有列仍缺
+            // 迷你统计（初算失败 / 时序残留），重发一次取样档现算——幂等，全部齐了
+            // 时是无谓的一次 500 行轻查询，可接受。
+            let missing = panel
+                .data
+                .table
+                .as_ref()
+                .map(|t| {
+                    t.columns
+                        .iter()
+                        .any(|c| c.stats_detail.is_some() && c.mini_stats.is_none())
+                })
+                .unwrap_or(false);
+            if missing {
+                // panel 即 InsightView（weak = view.downgrade()）：直接发取样请求
+                panel.request_sample(cx);
+            }
         });
     })
     .detach();

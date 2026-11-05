@@ -296,7 +296,10 @@ pub fn request_sample_mini_stats(view: &Entity<InsightView>, temp_table: String,
         let _ = weak.update(cx, |panel, cx| match result {
             Ok(stats) => panel.set_sample_mini_stats(stats, cx),
             Err(err) => {
-                tracing::debug!("取样档迷你统计现算失败（迷你图缺席）: {}", err);
+                tracing::warn!(
+                    "取样档迷你统计现算失败（迷你图缺席，工具栏「取样」可重试）: {}",
+                    err
+                );
             }
         });
     })

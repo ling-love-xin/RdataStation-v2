@@ -252,6 +252,26 @@ fn view_sources() -> Vec<(String, &'static str)> {
             include_str!("../src/workspace/eda.rs"),
         ),
         (
+            "workspace/colcard/mod.rs".to_string(),
+            include_str!("../src/workspace/colcard/mod.rs"),
+        ),
+        (
+            "workspace/colcard/numeric.rs".to_string(),
+            include_str!("../src/workspace/colcard/numeric.rs"),
+        ),
+        (
+            "workspace/colcard/text.rs".to_string(),
+            include_str!("../src/workspace/colcard/text.rs"),
+        ),
+        (
+            "workspace/colcard/datetime.rs".to_string(),
+            include_str!("../src/workspace/colcard/datetime.rs"),
+        ),
+        (
+            "workspace/colcard/boolean.rs".to_string(),
+            include_str!("../src/workspace/colcard/boolean.rs"),
+        ),
+        (
             "workspace/helpers.rs".to_string(),
             include_str!("../src/workspace/helpers.rs"),
         ),

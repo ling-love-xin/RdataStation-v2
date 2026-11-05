@@ -810,6 +810,7 @@ impl Render for InsightWorkspacePanel {
     }
 }
 // ===== 子模块（拆分：渲染方法按域下沉，状态/协议/测试留在根） =====
+mod colcard;
 mod compare;
 mod eda;
 mod helpers;
