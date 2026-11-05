@@ -134,7 +134,17 @@ pub fn request_table_evaluation(
                         .evaluating(done_count, total);
                 }
             }
-            let _ = weak.update(cx, |panel, cx| panel.set_table_profile(current.clone(), cx));
+            // 回填**以面板现值为底**（而不是循环外累积的 `current`）：评估进行期间
+            // 面板上可能有并发的其它回填（取样档迷你统计 / 用户动作）——从 `current`
+            // 整体覆盖会把它们冲掉（2026-11-05 真机：mini_stats 回填在评估首列回填前
+            // 到达，被 base 覆盖 → 10/10 列「样本不足，未生成分布图」）。
+            let _ = weak.update(cx, |panel, cx| {
+                let base_now = panel.data.table.clone().unwrap_or_else(|| current.clone());
+                let merged = current
+                    .merge_onto(&base_now)
+                    .unwrap_or_else(|| current.clone());
+                panel.set_table_profile(merged, cx);
+            });
         }
 
         // 中断（取消令牌置位）：未完成列灰态 + 保留已完成明细与进度；不 finish
@@ -146,7 +156,17 @@ pub fn request_table_evaluation(
             .unwrap_or(false);
         if cancelled {
             let interrupted = current.mark_interrupted();
-            let _ = weak.update(cx, |panel, cx| panel.set_table_profile(interrupted, cx));
+            let _ = weak.update(cx, |panel, cx| {
+                let base_now = panel
+                    .data
+                    .table
+                    .clone()
+                    .unwrap_or_else(|| interrupted.clone());
+                panel.set_table_profile(
+                    interrupted.merge_onto(&base_now).unwrap_or(interrupted),
+                    cx,
+                );
+            });
             return;
         }
 
@@ -164,7 +184,10 @@ pub fn request_table_evaluation(
 
         // 评估收尾：清进度、挂空事实摘要位，再由检查器聚合填充命中 / 适用计数
         let done = current.finish_evaluation().with_checker(column_checks);
-        let _ = weak.update(cx, |panel, cx| panel.set_table_profile(done, cx));
+        let _ = weak.update(cx, |panel, cx| {
+            let base_now = panel.data.table.clone().unwrap_or_else(|| done.clone());
+            panel.set_table_profile(done.merge_onto(&base_now).unwrap_or(done), cx);
+        });
     })
     .detach();
 }

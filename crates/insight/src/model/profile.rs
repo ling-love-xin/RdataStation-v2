@@ -259,6 +259,33 @@ impl TableProfileView {
         next
     }
 
+    /// 把评估流的进度 / 列明细 / 中断标记**合并到面板现值**上（评估回填以现值为底，
+    /// 保住并发的其它回填——取样档迷你统计等）。合并口径：
+    /// - `progress` / `quality`：**评估流为准**（它掌握评估生命周期）；
+    /// - 每列：评估流给了明细 / 中断 → 用评估流；否则保留现值列；
+    /// - `dup_rows` / `sample` / 列清单：面板现值为准（评估流不拥有它们）。
+    /// 两侧列清单对不上（表被重建）返回 `None`，调用方退回整体覆盖（旧语义）。
+    pub fn merge_onto(&self, base: &Self) -> Option<Self> {
+        if base.columns.len() != self.columns.len()
+            || base
+                .columns
+                .iter()
+                .zip(self.columns.iter())
+                .any(|(b, e)| b.name != e.name)
+        {
+            return None;
+        }
+        let mut next = base.clone();
+        next.progress = self.progress;
+        next.quality = self.quality.clone();
+        for (eval_col, out) in self.columns.iter().zip(next.columns.iter_mut()) {
+            if eval_col.stats_detail.is_some() || eval_col.interrupted {
+                *out = eval_col.clone();
+            }
+        }
+        Some(next)
+    }
+
     /// 单列评估**失败**置中断标记（P0-4：单列失败不连坐，架构 §5.5）。
     ///
     /// 与 [`mark_interrupted`]（批量：全部未完成列）互补——评估循环里某一列出错时
@@ -314,6 +341,98 @@ impl TableProfileView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 2026-11-05 真机竞态回归：取样档 mini_stats 回填先到、评估首列回填后到，
+    /// 旧实现（current 整体覆盖）把 mini 冲掉 → 全部列卡「样本不足」。
+    /// merge_onto 以面板现值为底：评估流只携带进度 / 明细 / 中断，mini 保留。
+    #[test]
+    fn merge_onto_preserves_concurrent_backfills() {
+        // 面板现值：探查完成 + mini_stats 已回填（evaluation 未开始）
+        let mut base = TableProfileView::from_profile(
+            &crate::model::types::TableProfile {
+                table_name: "t".into(),
+                db_type: "DuckDB".into(),
+                columns: vec![crate::model::types::TableColumnMeta {
+                    column_name: "a".into(),
+                    data_type: "INTEGER".into(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    ordinal_position: 1,
+                }],
+                row_count: Some(3),
+                schema_name: None,
+            },
+            "orders",
+        );
+        base.sample = Some(TableSample {
+            columns: vec!["a".into()],
+            rows: vec![vec!["1".into()]],
+        });
+
+        // 评估流：第一列明细已回填（不带 mini / sample——评估流不拥有它们）
+        let eval = {
+            let mut e = TableProfileView::from_profile(
+                &crate::model::types::TableProfile {
+                    table_name: "t".into(),
+                    db_type: "DuckDB".into(),
+                    columns: vec![crate::model::types::TableColumnMeta {
+                        column_name: "a".into(),
+                        data_type: "INTEGER".into(),
+                        is_nullable: true,
+                        is_primary_key: false,
+                        ordinal_position: 1,
+                    }],
+                    row_count: Some(3),
+                    schema_name: None,
+                },
+                "orders",
+            );
+            e.progress = Some(TableEvalProgress { done: 1, total: 1 });
+            e = e.with_column_detail(
+                "a",
+                &crate::model::types::ColumnInsightFull {
+                    stats: crate::model::types::ColumnStats {
+                        column_name: "a".into(),
+                        data_type: "INTEGER".into(),
+                        total_count: 3,
+                        null_count: 0,
+                        null_rate: 0.0,
+                        unique_count: Some(3),
+                        stats_detail: crate::model::types::ColumnStatsDetail::Numeric(
+                            crate::model::types::NumericStats {
+                                min: 1.0,
+                                max: 3.0,
+                                avg: 2.0,
+                                median: 2.0,
+                                p25: 1.0,
+                                p75: 3.0,
+                                sum: 6.0,
+                                stddev: None,
+                                skewness: None,
+                                kurtosis: None,
+                                zeros: None,
+                                negatives: None,
+                                p95: None,
+                                is_extreme: vec![],
+                            },
+                        ),
+                    },
+                    sample: vec![],
+                    histogram: None,
+                },
+            );
+            e
+        };
+
+        let merged = eval.merge_onto(&base).expect("同列清单应可合并");
+        assert!(merged.sample.is_some(), "sample 保留（现值为准）");
+        assert!(merged.progress.is_some(), "进度以评估流为准");
+        assert!(merged.columns[0].stats_detail.is_some(), "明细以评估流为准");
+        // 列清单不一致（表重建）→ 退回整体覆盖
+        let mut rebuilt = base.clone();
+        rebuilt.columns.clear();
+        assert!(eval.merge_onto(&rebuilt).is_none());
+    }
 
     /// C5：中断标记只落在未完成（无列级明细）列，已完成列不动。
     #[test]

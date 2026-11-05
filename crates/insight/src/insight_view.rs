@@ -732,6 +732,11 @@ impl InsightView {
 
     // ===== 探查确认窗口（C3：进入洞察确认后取数；C6：重取数/重探查复用） =====
 
+    /// 确认窗口是否开着（宿主联动用：确认阶段不推右栏——2026-11-05 循环修复）。
+    pub fn probe_confirm_open(&self) -> bool {
+        self.probe_dialog.is_some()
+    }
+
     /// 确认窗口只读访问（render 纯读路径用）。
     pub(crate) fn probe_dialog(&self) -> Option<&ProbeDialogState> {
         self.probe_dialog.as_ref()

@@ -1060,6 +1060,19 @@ impl WorkbenchView {
         let panel_for_sync = panel.clone();
         self._insight_ws_subs
             .push(cx.observe(&panel_for_sync.clone(), move |_, _, cx| {
+                // 探查确认窗开着（源目标未确认）：target 还没落下，此时**不联动**
+                // ——否则右栏被推着一个「未确认源目标」，而右栏 set_target 对源目标
+                // 只开确认窗不落 target（C3 设计），比较永不相等 → 中间页每次回填
+                // （评估逐列、每秒多次）都重推右栏 → 确认窗无限重开（2026-11-05
+                // 真机 panic：同帧几十个对话框 a11y 重复节点崩溃）。
+                if panel_for_sync
+                    .read(cx)
+                    .insight_view()
+                    .read(cx)
+                    .probe_confirm_open()
+                {
+                    return;
+                }
                 let Some(ws_target) = panel_for_sync
                     .read(cx)
                     .insight_view()
@@ -1079,7 +1092,11 @@ impl WorkbenchView {
                 };
                 let right_target = right.read(cx).target().cloned();
                 if right_target != Some(ws_target.clone()) {
-                    right.update(cx, |panel, cx| panel.set_target(ws_target, cx));
+                    // 中间页能落下 target = 该源目标已确认（C3 拦截在中间页）。
+                    // 右栏同步走**会话内导航**路径（set_target_loaded）——右栏对源
+                    // 目标走 set_target 只会开一个永远没人确认的确认窗（确认在
+                    // 中间页），target 永不落下，联动比较永不收敛（本条修复的另一半）。
+                    right.update(cx, |panel, cx| panel.set_target_loaded(ws_target, cx));
                 }
                 // T18：已洞察表集合快照 → 右栏管理列表（中间页 `opened` 变化都经此同步）
                 let entries = panel_for_sync.read(cx).insight_set_entries(cx);

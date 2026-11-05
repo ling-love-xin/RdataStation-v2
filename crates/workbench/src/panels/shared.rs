@@ -888,6 +888,13 @@ impl Shared {
 
     /// 右栏摘要版：目标联动（D65 双栏单源——入口 / 中间面板的目标变化都同步到这里）
     fn set_right_insight_target(&self, target: &InsightTarget, cx: &mut App) {
+        // 新**源目标**不推右栏：右栏 set_target 对源目标只开确认窗、不落 target
+        // （确认在中间页），右栏 target 永不落下 → 联动比较永不收敛（2026-11-05
+        // 真机循环）。右栏在中间页确认后由 observe 联动补齐（set_target_loaded）；
+        // 非源目标（临时表 / 已确认）与既有行为一致，直接设。
+        if target.source().is_some() {
+            return;
+        }
         let panel = self.insight_panel.borrow().clone();
         if let Some(panel) = panel.and_then(|weak| weak.upgrade()) {
             panel.update(cx, |panel, cx| {
