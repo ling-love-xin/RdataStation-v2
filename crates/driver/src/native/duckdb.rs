@@ -1048,74 +1048,95 @@ impl DuckDbTransaction {
 #[async_trait::async_trait]
 impl Transaction for DuckDbTransaction {
     async fn query(&mut self, sql: &str) -> Result<QueryResult, CoreError> {
-        let conn = self.conn.lock().map_err(|e| {
+        // duckdb crate 是同步库：事务内语句必须挪进阻塞线程池，否则 (a) 单任务 runtime
+        // 被 sync 代码占死，`tokio::time::timeout` 到点也无法 poll（事务超时是摆设）；
+        // (b) 外层超时放弃等待后，阻塞线程里的语句虽会被继续执行，但连接关闭
+        //（ConnectionManager 的止损路径）即触发服务端中止。与 `Database::query`
+        // 同款包法（见本文件 :404）。
+        let conn = Arc::clone(&self.conn);
+        let sql_owned = sql.to_string();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().map_err(|e| {
+                CoreError::database(DatabaseError::Driver {
+                    db_type: "duckdb".to_string(),
+                    operation: "lock".to_string(),
+                    source: e.to_string(),
+                })
+            })?;
+
+            // B5 / P0.6：事务内的写语句同样要真实影响行数
+            if !is_read_only_sql(&sql_owned) && !returns_rows(&sql_owned) {
+                return execute_writing(&conn, &sql_owned);
+            }
+
+            let mut stmt = conn
+                .prepare(&sql_owned)
+                .map_err(|e| duckdb_query_error(&sql_owned, &e))?;
+
+            let row_data: Vec<Vec<duckdb::types::Value>>;
+
+            {
+                let mut rows = stmt
+                    .query([])
+                    .map_err(|e| duckdb_query_error(&sql_owned, &e))?;
+
+                let mut data: Vec<Vec<duckdb::types::Value>> = Vec::new();
+                while let Ok(Some(row)) = rows.next() {
+                    let mut values: Vec<duckdb::types::Value> = Vec::new();
+                    for i in 0.. {
+                        match row.get::<usize, duckdb::types::Value>(i) {
+                            Ok(v) => values.push(v),
+                            Err(_) => break,
+                        }
+                    }
+                    data.push(values);
+                }
+                row_data = data;
+            }
+
+            let column_count: usize = if let Some(first) = row_data.first() {
+                first.len()
+            } else {
+                stmt.column_count()
+            };
+
+            let columns: Vec<String> = if column_count > 0 {
+                (0..column_count)
+                    .map(|i| stmt.column_name(i).map_or("unknown", |v| v).to_string())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            // 与其它路径同一口径：这里的旧写法还漏了 EXPLAIN / PRAGMA（同一条查询在
+            // `query` 与事务两条路上会被判成不同的东西）。
+            let is_read_only = is_read_only_sql(&sql_owned);
+            let row_count = row_data.len();
+
+            let batch = if row_count > 0 {
+                duckdb_rows_to_arrow(&columns, &row_data)?
+            } else {
+                return Ok(QueryResult::with_batches(
+                    columns,
+                    vec![],
+                    Some(is_read_only),
+                ));
+            };
+
+            Ok(QueryResult::with_batches(
+                columns,
+                vec![batch],
+                Some(is_read_only),
+            ))
+        })
+        .await
+        .map_err(|e| {
             CoreError::database(DatabaseError::Driver {
                 db_type: "duckdb".to_string(),
-                operation: "lock".to_string(),
+                operation: "spawn_blocking".to_string(),
                 source: e.to_string(),
             })
-        })?;
-
-        // B5 / P0.6：事务内的写语句同样要真实影响行数
-        if !is_read_only_sql(sql) && !returns_rows(sql) {
-            return execute_writing(&conn, sql);
-        }
-
-        let mut stmt = conn.prepare(sql).map_err(|e| duckdb_query_error(sql, &e))?;
-
-        let row_data: Vec<Vec<duckdb::types::Value>>;
-
-        {
-            let mut rows = stmt.query([]).map_err(|e| duckdb_query_error(sql, &e))?;
-
-            let mut data: Vec<Vec<duckdb::types::Value>> = Vec::new();
-            while let Ok(Some(row)) = rows.next() {
-                let mut values: Vec<duckdb::types::Value> = Vec::new();
-                for i in 0.. {
-                    match row.get::<usize, duckdb::types::Value>(i) {
-                        Ok(v) => values.push(v),
-                        Err(_) => break,
-                    }
-                }
-                data.push(values);
-            }
-            row_data = data;
-        }
-
-        let column_count: usize = if let Some(first) = row_data.first() {
-            first.len()
-        } else {
-            stmt.column_count()
-        };
-
-        let columns: Vec<String> = if column_count > 0 {
-            (0..column_count)
-                .map(|i| stmt.column_name(i).map_or("unknown", |v| v).to_string())
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        // 与其它路径同一口径：这里的旧写法还漏了 EXPLAIN / PRAGMA（同一条查询在
-        // `query` 与事务两条路上会被判成不同的东西）。
-        let is_read_only = is_read_only_sql(sql);
-        let row_count = row_data.len();
-
-        let batch = if row_count > 0 {
-            duckdb_rows_to_arrow(&columns, &row_data)?
-        } else {
-            return Ok(QueryResult::with_batches(
-                columns,
-                vec![],
-                Some(is_read_only),
-            ));
-        };
-
-        Ok(QueryResult::with_batches(
-            columns,
-            vec![batch],
-            Some(is_read_only),
-        ))
+        })?
     }
 
     async fn commit(&mut self) -> Result<(), CoreError> {

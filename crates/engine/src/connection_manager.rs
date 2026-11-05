@@ -684,8 +684,9 @@ impl ConnectionManager {
     /// 返回 `None` = 这个连接上没有活动事务（调用方自己回退到普通执行路径）。
     /// 全程持有槽位：一个连接同时只跑一条事务内语句（事务对象不是可重入的）。
     ///
-    /// 注意：这条路径**暂时不支持取消与超时**（驱动的事务对象只有 `query/commit/rollback`，
-    /// 没有取消令牌入口）——要补得先在驱动 `Transaction` trait 上开取消口。
+    /// 注意：驱动 `Transaction` trait 没有**取消**入口（要补得先开取消口）；
+    /// **超时**由调用方包墙钟限时（`sql_service::query_in_transaction_bounded`，
+    /// 到点弃事务 + 断连重连止损）。
     pub async fn query_in_transaction(
         &self,
         conn_id: &str,

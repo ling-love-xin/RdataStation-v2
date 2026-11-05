@@ -1292,56 +1292,73 @@ impl SqliteTransaction {
 #[async_trait::async_trait]
 impl Transaction for SqliteTransaction {
     async fn query(&mut self, sql: &str) -> Result<QueryResult, CoreError> {
-        let conn = self.conn.lock().map_err(|e| {
+        // rusqlite 是同步库：事务内语句必须挪进阻塞线程池，否则 (a) 单任务 runtime
+        // 被 sync 代码占死，`tokio::time::timeout` 到点也无法 poll（事务超时是摆设）；
+        // (b) 外层超时放弃等待后，阻塞线程里的语句虽会被继续执行，但连接关闭
+        //（ConnectionManager 的止损路径）即触发服务端中止。与 `Database::query_with_params`
+        // 同款包法（见本文件 :490）。
+        let conn = Arc::clone(&self.conn);
+        let sql_owned = sql.to_string();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().map_err(|e| {
+                CoreError::database(DatabaseError::Driver {
+                    db_type: "sqlite".to_string(),
+                    operation: "lock".to_string(),
+                    source: e.to_string(),
+                })
+            })?;
+
+            // B5 / P0.6：事务内的写语句同样要真实影响行数
+            if !is_read_only_sql(&sql_owned) && !returns_rows(&sql_owned) {
+                return execute_writing(&conn, &sql_owned, &[]);
+            }
+
+            let mut stmt = conn.prepare(&sql_owned).map_err(|e| sqlite_error(&sql_owned, e))?;
+
+            let columns: Vec<String> = stmt
+                .column_names()
+                .iter()
+                .map(|name| name.to_string())
+                .collect();
+
+            let mut rows = stmt.query([]).map_err(|e| sqlite_error(&sql_owned, e))?;
+
+            let mut row_data: Vec<Vec<rusqlite::types::Value>> = Vec::new();
+            while let Ok(Some(row)) = rows.next() {
+                let mut values: Vec<rusqlite::types::Value> = Vec::with_capacity(columns.len());
+                for (i, _) in columns.iter().enumerate() {
+                    let v = row.get::<usize, rusqlite::types::Value>(i).map_err(|e| {
+                        CoreError::database(DatabaseError::Driver {
+                            db_type: "sqlite".to_string(),
+                            operation: "row_parsing".to_string(),
+                            source: e.to_string(),
+                        })
+                    })?;
+                    values.push(v);
+                }
+                row_data.push(values);
+            }
+
+            let sql_upper = sql_owned.trim_start().to_uppercase();
+            let _is_read_only = sql_upper.starts_with("SELECT") || sql_upper.starts_with("PRAGMA");
+            let row_count = row_data.len();
+
+            let batch = if row_count > 0 {
+                sqlite_rows_to_arrow(&columns, &row_data)?
+            } else {
+                return Ok(QueryResult::with_batches(columns, vec![], None));
+            };
+
+            Ok(QueryResult::with_batches(columns, vec![batch], None))
+        })
+        .await
+        .map_err(|e| {
             CoreError::database(DatabaseError::Driver {
                 db_type: "sqlite".to_string(),
-                operation: "lock".to_string(),
+                operation: "spawn_blocking".to_string(),
                 source: e.to_string(),
             })
-        })?;
-
-        // B5 / P0.6：事务内的写语句同样要真实影响行数
-        if !is_read_only_sql(sql) && !returns_rows(sql) {
-            return execute_writing(&conn, sql, &[]);
-        }
-
-        let mut stmt = conn.prepare(sql).map_err(|e| sqlite_error(sql, e))?;
-
-        let columns: Vec<String> = stmt
-            .column_names()
-            .iter()
-            .map(|name| name.to_string())
-            .collect();
-
-        let mut rows = stmt.query([]).map_err(|e| sqlite_error(sql, e))?;
-
-        let mut row_data: Vec<Vec<rusqlite::types::Value>> = Vec::new();
-        while let Ok(Some(row)) = rows.next() {
-            let mut values: Vec<rusqlite::types::Value> = Vec::with_capacity(columns.len());
-            for (i, _) in columns.iter().enumerate() {
-                let v = row.get::<usize, rusqlite::types::Value>(i).map_err(|e| {
-                    CoreError::database(DatabaseError::Driver {
-                        db_type: "sqlite".to_string(),
-                        operation: "row_parsing".to_string(),
-                        source: e.to_string(),
-                    })
-                })?;
-                values.push(v);
-            }
-            row_data.push(values);
-        }
-
-        let sql_upper = sql.trim_start().to_uppercase();
-        let _is_read_only = sql_upper.starts_with("SELECT") || sql_upper.starts_with("PRAGMA");
-        let row_count = row_data.len();
-
-        let batch = if row_count > 0 {
-            sqlite_rows_to_arrow(&columns, &row_data)?
-        } else {
-            return Ok(QueryResult::with_batches(columns, vec![], None));
-        };
-
-        Ok(QueryResult::with_batches(columns, vec![batch], None))
+        })?
     }
 
     async fn commit(&mut self) -> Result<(), CoreError> {

@@ -548,10 +548,48 @@ impl SqlService {
                     result?;
                 }
             }
-            match self.manager.query_in_transaction(&tx_key, sql).await {
-                Some(result) => result,
+            // 【B4 余项】事务内语句的超时：驱动 `Transaction` trait 只有 query/commit/rollback
+            // 没有取消口（run_plain 的 CancellationToken 进不了事务对象），所以超时用
+            // `tokio::time::timeout` 兜——到点放弃等待并**断开重连**该物理连接（连接一断，
+            // 服务端会中止还在跑的语句），事务随之整个回滚。半途的事务无法续用（丢了这条
+            // 语句的上下文），如实报「事务已回滚」比假装能继续诚实。
+            match query_in_transaction_bounded(&self.manager, &tx_key, sql, options.timeout_ms)
+                .await
+            {
+                TransactionBounded::Done(result) => result,
                 // 竞态兜底：刚判过还有、这会儿被别处提交/回滚了 → 回落普通路径
-                None => run_plain(&self.manager, &db, sql, options.timeout_ms, &conn_key).await,
+                TransactionBounded::NoTransaction => {
+                    run_plain(&self.manager, &db, sql, options.timeout_ms, &conn_key).await
+                }
+                TransactionBounded::TimedOut(timeout_ms) => {
+                    tracing::warn!(
+                        conn_id = %tx_key,
+                        timeout_ms,
+                        sql = %sql,
+                        "事务内语句超时：弃事务并断开重连该连接"
+                    );
+                    // 次序：先弃事务对象（界面 TX 状态随之消失），再关物理连接
+                    //（服务端中止语句），最后按原配置重连回填池（best-effort——
+                    // 重连失败不掩盖超时主因，下次执行 get_or_reconnect 还会再试）。
+                    self.manager.drop_transaction(&tx_key).await;
+                    self.manager.close_connection(&tx_key).await;
+                    if let Err(error) = self.manager.reconnect_connection(&tx_key).await {
+                        tracing::warn!(
+                            conn_id = %tx_key,
+                            error = %error,
+                            "事务超时后的重连失败（下次执行会再试）"
+                        );
+                    }
+                    Err(CoreError::database(DatabaseError::Query {
+                        sql: sql.to_string(),
+                        reason: format!(
+                            "Query timed out after {}ms (transaction rolled back)",
+                            timeout_ms
+                        ),
+                        position: None,
+                        location: None,
+                    }))
+                }
             }
         } else {
             // T2c-1：非事务路径——schema 上下文落在主连接 `db` 上（与用户语句同连接）。
@@ -966,6 +1004,46 @@ fn query_timeout_error(sql: &str, timeout_ms: u64) -> CoreError {
     })
 }
 
+/// 事务内语句的**限时执行**结果
+enum TransactionBounded {
+    /// 语句跑完了（成功或驱动报错，交调用方分派）
+    Done(Result<QueryResult, CoreError>),
+    /// 连接上已经没有活动事务（竞态兜底：回落普通路径）
+    NoTransaction,
+    /// 超时（附带配置的毫秒数，供报错文案）
+    TimedOut(u64),
+}
+
+/// 事务内语句包一层墙钟超时（【B4 余项】）
+///
+/// 驱动 `Transaction` trait 没有 cancel 令牌入口（`run_plain` 的取消手段进不来），
+/// 所以这里只有**超时放弃**没有取消。`timeout_ms = None` 不包（与 `run_plain` 同口径：
+/// 连接没配超时就是没有超时）。到点后调用方负责弃事务 + 断连止损（见 `execute` 的事务分支）。
+async fn query_in_transaction_bounded(
+    manager: &Arc<ConnectionManager>,
+    tx_key: &str,
+    sql: &str,
+    timeout_ms: Option<u64>,
+) -> TransactionBounded {
+    if let Some(timeout_ms) = timeout_ms {
+        match tokio::time::timeout(
+            tokio::time::Duration::from_millis(timeout_ms),
+            manager.query_in_transaction(tx_key, sql),
+        )
+        .await
+        {
+            Ok(Some(result)) => TransactionBounded::Done(result),
+            Ok(None) => TransactionBounded::NoTransaction,
+            Err(_elapsed) => TransactionBounded::TimedOut(timeout_ms),
+        }
+    } else {
+        match manager.query_in_transaction(tx_key, sql).await {
+            Some(result) => TransactionBounded::Done(result),
+            None => TransactionBounded::NoTransaction,
+        }
+    }
+}
+
 /// 普通执行路径（**带取消令牌与超时**）
 ///
 /// 事务内的语句走另一条路（驱动的事务对象只有 `query/commit/rollback`，没有取消入口），
@@ -1040,6 +1118,68 @@ mod tests {
         let service = new_service();
         let result = service.execute(None, "", Default::default()).await;
         assert!(result.is_err());
+    }
+
+    /// 【B4 余项】事务内语句超时：到点报「事务已回滚」、活动事务被弃、连接重建
+    ///
+    /// 离线可跑：sqlite 文件库 + 有界递归 CTE 烧 CPU（线性递归的队列深度恒 1，
+    /// 不会堆积内存）；`use_transaction: true` 让语句走事务分支，150ms 必超时。
+    ///
+    /// 上界取「数秒能自然跑完」的量而不是无穷：超时只是**放弃等待**（外层 future
+    /// drop），阻塞线程里的语句会继续跑到自然结束——tokio 阻塞线程是非 daemon 的，
+    /// 测试进程要等它退出；上界无穷 = 测试进程永远退不出去（实测踩到）。
+    #[tokio::test]
+    async fn transaction_statement_times_out_and_rolls_back() {
+        use crate::{AutoDriverRegistrar, DriverConnectionConfig};
+
+        AutoDriverRegistrar::register_builtin_drivers();
+        let manager = Arc::new(ConnectionManager::new());
+        let mut config = DriverConnectionConfig::new("sqlite");
+        config.name = Some("事务超时单测".to_string());
+        config.file_path = Some(
+            paths::temp_dir()
+                .join("engine-tx-timeout-test.db")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let (conn_id, _db) = manager
+            .create_connection_with_registry(config)
+            .await
+            .expect("sqlite 建连");
+        let service = SqlService::new(manager.clone());
+
+        let options = SqlExecuteOptions {
+            record_history: false,
+            // 自动提交关 → 引擎自动开事务 → 语句进事务分支（被限时包裹）
+            use_transaction: true,
+            timeout_ms: Some(150),
+            ..Default::default()
+        };
+        // 150ms 跑不完、但十几秒内能自然结束的量：超时先到，测试进程能退出
+        //（上界别调大——debug 下 rusqlite 每次迭代 ~0.3µs，1e8 ≈ 30s，是本测试的主要耗时）
+        let slow = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c \
+                    WHERE x < 100000000) SELECT COUNT(*) FROM c";
+        let started = std::time::Instant::now();
+        let error = service
+            .execute(Some(conn_id.clone()), slow, options)
+            .await
+            .expect_err("慢查询必须超时");
+        let message = error.to_string();
+        assert!(message.contains("timed out"), "{message}");
+        assert!(
+            message.contains("transaction rolled back"),
+            "文案要说清事务已回滚：{message}"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "超时要按配置的 150ms 生效，而不是跑完或无限等"
+        );
+        assert!(
+            !manager.has_transaction(&conn_id).await,
+            "超时后活动事务必须已被弃（界面 TX 状态随之消失）"
+        );
+        manager.remove_connection(&conn_id).await;
+        let _ = std::fs::remove_file(paths::temp_dir().join("engine-tx-timeout-test.db"));
     }
 
     /// 窗口包装：查询套上 `LIMIT/OFFSET`，尾分号与空白先去掉
