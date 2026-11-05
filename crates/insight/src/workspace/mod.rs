@@ -786,7 +786,7 @@ impl Render for InsightWorkspacePanel {
                         div()
                             // 原型 `body{min-width:1000px}` 在中央工作页这一格的对应值
                             // （1000 − activity 48 − 右 dock 280 = 672px）：低于它整页
-                            // 横向滚动，五卡恒 5 列、列卡恒双列，不折行不塌列。
+                            // 横向滚动，五卡恒 5 列、列卡一列一行（2026-11-06），不折行不塌列。
                             .w_full()
                             .min_w(rems(ui::INSIGHT_WS_MIN_WIDTH))
                             .child(match self.mode {

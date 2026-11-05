@@ -66,9 +66,9 @@ pub const INSIGHT_PICKER_LIST_MAX_HEIGHT: f32 = 16.0;
 /// 中间工作页最小宽度（42rem = 672px；对齐原型 `body{min-width:1000px}`）
 ///
 /// 原型不做响应式：窗口不够宽就整体横向滚动，栅格保持设计列数（五卡恒 5 列、
-/// 列卡恒双列、对比表恒「指标为行」）。本常量是**中央工作页**那一格的对应值——
-/// 原型 1000px 减去 activity 48px 与右 dock 280px 即得 672px。低于它整页横向
-/// 滚动，而不是折行或压缩栅格。
+/// 对比表恒「指标为行」；列卡 2026-11-06 起一列一行，不再双列）。本常量是
+/// **中央工作页**那一格的对应值——原型 1000px 减去 activity 48px 与右 dock
+/// 280px 即得 672px。低于它整页横向滚动，而不是折行或压缩栅格。
 pub const INSIGHT_WS_MIN_WIDTH: f32 = 42.0;
 /// 列卡折叠行迷你图 / 基础统计右栏图宽（15rem = 240px；YData 密度对齐）
 pub const INSIGHT_CARD_VIS_WIDTH: f32 = 15.0;

@@ -23,6 +23,26 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-11-06 — 列分布单列化（用户拍板：一个字段一行，废弃双列网格）
+
+列分布段**一列一行**：每张列卡占满整行（`render_col_section` 废弃 chunks(2)
+双列切行）——折叠行的统计块 + 右端 240px 迷你图本就按全宽设计，半宽格子放不下；
+对齐 YData 单列卡流。渐进渲染 / 锚点跳转 / 交互接线不变。相关注释同步
+（`ui.rs` MIN_WIDTH / `workspace/mod.rs`）。**已验证**（lib 280 + e2e 14 + 契约 7 全绿）。
+落点 `workspace/eda.rs`。
+
+### 2026-11-06 — YData 密度收口三件（折叠统计块 / 分组统计表 / 16 柱直方图）
+
+对齐差距盘点（折叠行信息密度 / 统计表组织 / 柱数）的收口批。**已落地并验证**（lib **280** + e2e 14 + 契约 7 全绿；examples 编译过）：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 折叠行统计块 | 类型专属内联块：数值=**均值 + 范围**、文本=Top 值×计数、时间=起止、布尔=真占比——YData「折叠头一眼读全」的核心；**检查器未命中数直接亮在折叠行**（`⚠ n 未命中` danger，YData 行内告警对应物，数据来自已算好的 checker 零查询） | 新 `colcard/folded.rs`（自 mod.rs 抽出，mod.rs 回归纯骨架） |
+| 分组统计表 | 数值卡按 **概览 / 分位 / 离散 / 形状** 四组、文本=长度/频次、时间=范围/频次（对齐 YData Statistics 分组呈现）；布尔三行平铺不分組。新原语 `zone_rows_grouped`（空标题组平铺） | `colcard/{numeric,text,datetime}.rs` + `helpers.rs` |
+| 16 柱直方图 | 内置 `histogram` 规则 10→**16** 分箱（GENERATE_SERIES + 边界同步）；引擎取样迷你直方图 8→16 柱；展示 limit 全部 16；折叠行迷你图宽 176→**240px**（`INSIGHT_CARD_VIS_WIDTH` 15rem，契约同步） | `insight-rules/column/histogram.rule.toml` + `insight_engine.rs` + `colcard/numeric.rs` + `ui.rs` + 契约 |
+
+**不追项（维持盘点结论）**：bin 调节 / log 轴（交互成本高）、Sample 整行表（表级视图）、文本长度分布 / 时间多档直方图（依赖驱动层类型面 P1-8b）。
+
 ### 2026-11-06 — 列卡 YData 版式定稿：colcard/ 类型拆分（一列一行）+ 样本图自愈
 
 **版式定稿**（对齐 YData）：**一列一行可展开卡**——折叠行 = 名称 + 类型徽标 +

@@ -87,9 +87,9 @@ impl super::InsightWorkspacePanel {
                 .sample_table(target)
                 .map(|t| t.to_string())
         });
-        // 列卡恒双列（原型 `.col-grid{repeat(2,1fr)}`）：GPUI 无 CSS grid，按两张一组
-        // 切行、行内两个 `flex_1` 平分——读序与 grid 行优先一致，且同行两张等高。
-        // **不随容器宽塌成单列**，整体宽度兜底见 `ui::INSIGHT_WS_MIN_WIDTH`。
+        // 列卡**一列一行**（2026-11-06 用户拍板，对齐 YData）：每张卡占满整行——
+        // 折叠行（folded.rs）的统计块 + 右端 240px 迷你图就是按全宽设计的，
+        // 半宽格子放不下；双列网格（原型 .col-grid）废弃。
         // 渐进渲染（建议 7 的低风险缓解）：超过上限默认只渲染前 CAP 张，
         // 尾部给「显示全部」——锚点跳转 / 折叠态与全量渲染完全一致
         let capped = !*self.col_show_all.borrow() && selected.len() > ui::INSIGHT_WS_COL_RENDER_CAP;
@@ -99,38 +99,34 @@ impl super::InsightWorkspacePanel {
             &selected
         };
         let mut cards = div().v_flex().w_full().gap_2();
-        for pair in render_list.chunks(2) {
-            let mut row = div().h_flex().items_stretch().w_full().gap_2();
-            for col in pair {
-                // 滚动锚点注册：复用同一 `ScrollAnchor` 实例（anchor_scroll 靠它持续
-                // 更新 last_origin；每帧重建会让滚动位置永远停在原处）
-                self.col_anchors
-                    .borrow_mut()
-                    .entry(col.name.clone())
-                    .or_insert_with(|| ScrollAnchor::for_handle(self.content_scroll.clone()));
-                let anchor = self.col_anchors.borrow().get(&col.name).cloned();
-                let col_name = col.name.clone();
-                row = row.child(
-                    div().flex_1().min_w_0().child(
-                        div()
-                            // anchor_scroll 在 `StatefulInteractiveElement` 上（0.8.0
-                            // gpui-fast div.rs:1557），元素必须带 id 才能挂锚点
-                            .id(SharedString::from(format!(
-                                "insight-ws-col-anchor-{col_name}"
-                            )))
-                            .anchor_scroll(anchor)
-                            .child(self.render_col_card(
-                                profile,
-                                col,
-                                entity,
-                                theme,
-                                temp_table.clone(),
-                                is_full,
-                            )),
-                    ),
-                );
-            }
-            cards = cards.child(row);
+        for col in render_list {
+            // 滚动锚点注册：复用同一 `ScrollAnchor` 实例（anchor_scroll 靠它持续
+            // 更新 last_origin；每帧重建会让滚动位置永远停在原处）
+            self.col_anchors
+                .borrow_mut()
+                .entry(col.name.clone())
+                .or_insert_with(|| ScrollAnchor::for_handle(self.content_scroll.clone()));
+            let anchor = self.col_anchors.borrow().get(&col.name).cloned();
+            let col_name = col.name.clone();
+            cards = cards.child(
+                div().w_full().child(
+                    div()
+                        // anchor_scroll 在 `StatefulInteractiveElement` 上（0.8.0
+                        // gpui-fast div.rs:1557），元素必须带 id 才能挂锚点
+                        .id(SharedString::from(format!(
+                            "insight-ws-col-anchor-{col_name}"
+                        )))
+                        .anchor_scroll(anchor)
+                        .child(self.render_col_card(
+                            profile,
+                            col,
+                            entity,
+                            theme,
+                            temp_table.clone(),
+                            is_full,
+                        )),
+                ),
+            );
         }
         if capped {
             let entity = entity.clone();
