@@ -234,18 +234,22 @@ SQLite 记事务元数据（连接、历史、草稿、资源目录、洞察缓�
 
 ### 实际运行截图
 
-> 以下为 **2026-10-23 真实运行中的 rds-app**（Windows · 深色主题）截图。界面会随版本演进，以 Release 包为准。
+> 以下为 **2026-11-05 真实运行中的 rds-app（0.2.7）**（Windows · 深色主题）截图。界面会随版本演进，以 Release 包为准。
 
 | 截图 | 说明 |
 | --- | --- |
-| ![主工作台](assets/screenshots/RDS-beta-0.2.4/main-window.png) | **主工作台**：左侧数据库导航（数据源树，`[项目]/[共享]` 归属域 + 连接状态）、右侧编辑器（草稿箱文件），顶部项目与工作台标签页、全局搜索 |
-| ![数据库导航](assets/screenshots/RDS-beta-0.2.4/database-navigator.gif) | **数据库导航（M4）**：数据源分组（全部 / 项目 / 全局 / 共享 / 文件库 / 未分组）· 15 个数据源 · 归属徽标（P / G / GP）与连接状态 |
-| ![资产库](assets/screenshots/RDS-beta-0.2.4/analytics-resource.gif) | **资产库（M6）**：搜索存档 · 筛选 / 排序 · 归档条目（已归档 · 大小 · 修改时间） |
-| ![草稿箱](assets/screenshots/RDS-beta-0.2.4/scratchpad.gif) | **草稿箱（M5）**：文件树（data / notes / sql / 测试）· 文件大小 · 引用 / 回收站 |
-| ![Quick Open](assets/screenshots/RDS-beta-0.2.4/quick-open.png) | **Quick Open**：三档搜索（`>` 命令 · `#` 元数据全文 · 无前缀按名称匹配）· 文件与连接结果分类展示 |
-| ![设置](assets/screenshots/RDS-beta-0.2.4/settings.gif) | **设置页**：主题模式（浅色 / 深色 / 跟随系统）· 界面字号 · 界面语言 |
+| ![数据库导航](assets/screenshots/RDS-beta-0.2.7/导航栏.png) | **数据库导航**：数据源树 · 归属域徽标 · 连接状态 · 标签筛选 |
+| ![草稿栏](assets/screenshots/RDS-beta-0.2.7/草稿栏-基本.png) | **草稿栏**：文件树 · 文件大小 · 引用 / 回收站 |
+| ![草稿栏搜索](assets/screenshots/RDS-beta-0.2.7/草稿栏-搜索.png) | **草稿栏搜索**：内容搜索 · 全局替换 · 命中跳转 |
+| ![编辑器 · 通用模式](assets/screenshots/RDS-beta-0.2.7/编辑器-通用模式.png) | **编辑器 · 通用模式**（`.txt` 记事本，不连库） |
+| ![编辑器 · SQL 模式](assets/screenshots/RDS-beta-0.2.7/编辑器-sql.png) | **编辑器 · SQL 模式**：执行 · 格式化 · 结果停靠 · 书签 / 折叠 |
+| ![编辑器 · 分析模式](<assets/screenshots/RDS-beta-0.2.7/编辑器-分析模式(不完整).png>) | **编辑器 · 分析模式**（`.rdsnote` 单元序列；单元正文复用编辑内核属 Phase 1c 未收尾，标注「不完整」） |
+| ![结果集](assets/screenshots/RDS-beta-0.2.7/结果集.png) | **结果集**：多结果标签 · 网格 · 工具栏（血缘 / 耗时 / 影响行数） |
+| ![洞察过程](assets/screenshots/RDS-beta-0.2.7/洞察过程.gif) | **洞察**：六 Tab 画像 · 规则检查 · 质量评分 · 快照对比 |
+| ![Mock 造数](assets/screenshots/RDS-beta-0.2.7/mock截图.png) | **Mock 造数**：生成器库 · 字段预设 · 自定义生成器 · 预览 |
+| ![设置](assets/screenshots/RDS-beta-0.2.7/设置.png) | **设置**：独立 OS 窗口 · 类型样式矩阵 · 打开配置文件 |
 
-> 截图按版本归档在 `assets/screenshots/<版本>/`，后续版本会更新替换。**0.2.4 暂缺**：SQL 编辑器成功网格 / 失败错误卡片画面（现象 2 回执隔离修复后待补录）、洞察（M8）/ Mock 生成（M7）/ 查询历史右 dock 面板画面（命令面板鼠标点击现象 1 暂停，闭环后重录）；未接通模块（如 M9 plugin）暂无截图。**0.2.7 截图待补录**（归档至 `assets/screenshots/RDS-beta-0.2.7/`，重点：洞察探查管线、Mock 预览空态与列编辑弹窗、状态栏任务进度条）。
+> 截图按版本归档在 `assets/screenshots/<版本>/`，后续版本会更新替换。**0.2.7 已补录 10 张**：数据库导航 · 草稿栏（基本 / 搜索）· 编辑器三模式（分析模式标注「不完整」）· 结果集 · 洞察过程 · Mock · 设置；历史版本截图保留在 `RDS-beta-0.2.4` / `RDS-beta-0.2.2` 目录。未接通模块（如 M9 plugin）暂无截图。
 
 ### 设计原型
 
