@@ -95,6 +95,9 @@ mod tests {
             stddev: Some(12.5),
             skewness,
             kurtosis: None,
+            zeros: None,
+            negatives: None,
+            p95: None,
             is_extreme: extremes,
         }
     }
@@ -1233,4 +1236,14 @@ mod tests {
             DeltaView::Up("+1,010".into())
         );
     }
+}
+
+/// 列适用规则的**展示摘要**（自定义规则 Tab，2026-11-06）：id / 名称 / 描述 +
+/// 已代入当前列参数的 SQL（「SQL」入口在编辑器中查看，不执行）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnRuleBrief {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub sql: String,
 }

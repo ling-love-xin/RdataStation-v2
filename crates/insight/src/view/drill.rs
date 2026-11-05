@@ -89,9 +89,16 @@ impl InsightView {
         match target {
             InsightTarget::Table { .. } | InsightTarget::SourceTable { .. } => {
                 if let Some(profile) = self.data.as_table() {
+                    let sample_label = self.sample_amount_label();
                     out.push(
-                        drill_table_summary(profile, theme, inline_icon, ring_px)
-                            .into_any_element(),
+                        drill_table_summary(
+                            profile,
+                            theme,
+                            inline_icon,
+                            ring_px,
+                            sample_label.as_str(),
+                        )
+                        .into_any_element(),
                     );
                     out.push(drill_table_columns(profile, theme, inline_icon).into_any_element());
                 }
@@ -191,6 +198,7 @@ fn drill_table_summary(
     theme: &Theme,
     inline_icon: Pixels,
     ring_px: Pixels,
+    sample_label: &str,
 ) -> Div {
     let colors = theme.colors;
     let quality = profile.quality.as_ref();
@@ -271,11 +279,7 @@ fn drill_table_summary(
                 .bordered(false)
                 .item("总行数", profile.row_count.to_string(), 1)
                 .item("列数", profile.columns.len().to_string(), 1)
-                .item(
-                    "取样",
-                    crate::service::persistence::SOURCE_SAMPLE_LIMIT.to_string(),
-                    1,
-                ),
+                .item("取样", sample_label.to_string(), 1),
         )
 }
 

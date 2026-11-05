@@ -48,7 +48,6 @@ use crate::model::{
     TableProfileView, fmt_int, fmt_num, fmt_pct, fmt_rows, kurt_direction, normality_judge,
     skew_direction,
 };
-use crate::service::persistence::SOURCE_SAMPLE_LIMIT;
 use crate::ui;
 use crate::view::{error_block, skeleton};
 
@@ -288,6 +287,9 @@ pub struct InsightWorkspacePanel {
     /// 列卡四区：只看规则属性（**按列**存；开启后该列展开体只显示检查器列表。
     /// 原型按单列理解——「开哪列管哪列」；空 = 全部未开启）
     col_rule_only: RefCell<HashMap<String, bool>>,
+    /// 自定义规则 Tab 的摘要缓存（列名 → 摘要；首次切到该 Tab 时后台载入，
+    /// 避免每卡每帧跑规则代入）
+    col_rules: RefCell<HashMap<String, Vec<crate::model::ColumnRuleBrief>>>,
     /// 列卡四区：每列当前区（0=基础统计 / 1=分布 / 2=检查器 / 3=样本）
     col_detail_zone: RefCell<HashMap<String, usize>>,
     /// 中间页滚动句柄（值得关注「跳转到该列」用，见 `render_worth_section`）
@@ -334,23 +336,32 @@ pub enum ColZone {
     Dist,
     Quality,
     Sample,
+    /// 自定义规则 Tab（2026-11-06 YData 密度对齐）：适用该列的规则摘要 + SQL 入口
+    Rules,
 }
 
 impl ColZone {
-    pub const ALL: [Self; 4] = [Self::Stats, Self::Dist, Self::Quality, Self::Sample];
+    pub const ALL: [Self; 5] = [
+        Self::Stats,
+        Self::Dist,
+        Self::Quality,
+        Self::Sample,
+        Self::Rules,
+    ];
     pub fn label(self) -> &'static str {
         match self {
             Self::Stats => "基础统计",
             Self::Dist => "分布",
             Self::Quality => "检查器",
             Self::Sample => "样本",
+            Self::Rules => "规则",
         }
     }
     fn index(self) -> usize {
         Self::ALL.iter().position(|z| *z == self).unwrap()
     }
     fn of_index(i: usize) -> Self {
-        Self::ALL[i.min(3)]
+        Self::ALL[i.min(Self::ALL.len() - 1)]
     }
 }
 
@@ -412,6 +423,7 @@ impl InsightWorkspacePanel {
             col_search_subs: RefCell::new(Vec::new()),
             col_open: RefCell::new(HashSet::new()),
             col_rule_only: RefCell::new(HashMap::new()),
+            col_rules: RefCell::new(HashMap::new()),
             col_detail_zone: RefCell::new(HashMap::new()),
             content_scroll: ScrollHandle::new(),
             col_anchors: RefCell::new(HashMap::new()),
@@ -478,20 +490,9 @@ impl InsightWorkspacePanel {
                         // builder 是 `Fn`（可能多次调用）：实体经 clone 进树，
                         // 同一实体可在多个元素树渲染（render 每树各跑一次）
                         .child(body.clone())
-                        // 底部按钮条（信任门同款）：on_ok 的返回值 =「应否关窗」
-                        // （解析失败时表单行内提示保留、弹窗不关）
-                        .button_props(
-                            DialogButtonProps::default()
-                                .ok_text("确认探查")
-                                .cancel_text("取消")
-                                .show_cancel(true),
-                        )
-                        .on_ok({
-                            let view = view.clone();
-                            move |_, _window, app| {
-                                view.update(app, |v, cx| v.confirm_probe_dialog(cx))
-                            }
-                        })
+                        // 三按钮（取消 / 全量探查 / 探查）由 ProbeDialogBody 自绘在表单底部，
+                        // 随状态重渲（主按钮文案随选择列变）；这里只保留 ESC/overlay 取消。
+                        .button_props(DialogButtonProps::default().show_cancel(false))
                         .on_cancel({
                             let view = view.clone();
                             move |_, _window, app| {
@@ -970,6 +971,8 @@ mod tests {
                     kind: crate::model::ColumnKind::Numeric,
                     nullable: false,
                     primary_key: false,
+                    null_count: None,
+                    unique_count: None,
                     null_rate: None,
                     unique_rate: None,
                     stats_detail: None,

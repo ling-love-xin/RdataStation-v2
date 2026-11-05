@@ -83,10 +83,10 @@ pub use store::{
 // 宿主（workbench）经这些类型装配右 Dock 面板：面板自身不做 I/O，取数由宿主发起。
 pub use insight_view::{InsightEvent, InsightView};
 pub use model::{
-    ColumnKind, ColumnProfileView, DistributionBar, Emphasis, InsightPanelState, InsightTarget,
-    KeyValueRow, MultiColumnView, MultiResultView, MultiRuleView, NoteLevel, PanelData, PanelTab,
-    QualityNote, SampleCell, SampleSource, StatRow, TableColumnView, TableEvalProgress,
-    TableProfileView, TableQualityView,
+    ColumnKind, ColumnProfileView, ColumnRuleBrief, DistributionBar, Emphasis, InsightPanelState,
+    InsightTarget, KeyValueRow, MultiColumnView, MultiResultView, MultiRuleView, NoteLevel,
+    PanelData, PanelTab, QualityNote, SampleCell, SampleSource, StatRow, TableColumnView,
+    TableEvalProgress, TableProfileView, TableQualityView,
 };
 pub use quality_scorer::Grade;
 pub use rule_types::{

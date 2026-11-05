@@ -44,6 +44,11 @@ pub struct TableColumnView {
     /// EDA 列统计摘要：空值率（0–1）。表画像时由引擎一次查询回填；
     /// 查询失败 / 未跑为 `None`（不编假值）。
     pub null_rate: Option<f64>,
+    /// 空值**精确个数**（表级摘要回填；YData 密度对齐 2026-11-06——表内显示数，
+    /// 卡头仍是百分比）。未算为 `None`。
+    pub null_count: Option<i64>,
+    /// 唯一值**精确个数**（同上；不含 NULL）。
+    pub unique_count: Option<i64>,
     /// EDA 列统计摘要：唯一率（唯一值数 / 非空行数，0–1）。
     pub unique_rate: Option<f64>,
     /// 列级统计明细（评估全表后回填；未评估为 `None`）：
@@ -171,6 +176,8 @@ impl TableProfileView {
                 nullable: column.is_nullable,
                 primary_key: column.is_primary_key,
                 null_rate: None,
+                null_count: None,
+                unique_count: None,
                 unique_rate: None,
                 stats_detail: None,
                 histogram: None,
@@ -199,6 +206,9 @@ impl TableProfileView {
             if let Some(brief) = stats.iter().find(|b| b.name == column.name) {
                 column.null_rate = brief.null_rate;
                 column.unique_rate = brief.unique_rate;
+                // 精确计数随摘要一并回填（空值数 = 总数 − 非空数）
+                column.null_count = Some((brief.total - brief.non_null).max(0));
+                column.unique_count = Some(brief.unique);
             }
         }
     }
@@ -323,6 +333,8 @@ mod tests {
                     primary_key: false,
                     null_rate: None,
                     unique_rate: None,
+                    null_count: None,
+                    unique_count: None,
                     stats_detail: Some(crate::model::types::ColumnStatsDetail::Unknown),
                     histogram: None,
                     sample_values: Vec::new(),
@@ -338,6 +350,8 @@ mod tests {
                     primary_key: false,
                     null_rate: None,
                     unique_rate: None,
+                    null_count: None,
+                    unique_count: None,
                     stats_detail: None,
                     histogram: None,
                     sample_values: Vec::new(),
@@ -382,6 +396,8 @@ mod tests {
                 primary_key: false,
                 null_rate: None,
                 unique_rate: None,
+                null_count: None,
+                unique_count: None,
                 stats_detail: None,
                 histogram: None,
                 sample_values: Vec::new(),

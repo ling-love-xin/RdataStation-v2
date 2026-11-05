@@ -258,7 +258,7 @@ impl super::InsightWorkspacePanel {
                         let all_names = names.clone();
                         // 反选按钮专属副本：其 on_click move 捕获后不挤占循环的 all_names
                         let none_names = all_names.clone();
-                        let mut body = div()
+                        let body = div()
                             .v_flex()
                             .w(rems(ui::INSIGHT_PICKER_WIDTH))
                             .gap_1()
@@ -309,6 +309,16 @@ impl super::InsightWorkspacePanel {
                             )
                             .child(div().w_full().h_px().bg(colors.border))
                             .child(Input::new(&picker_search_state).cleanable(true));
+                        // 列清单定高滚动（`ui::INSIGHT_PICKER_LIST_MAX_HEIGHT`）：
+                        // 头部（全选/反选 + 分隔线 + 搜索框）固定，只滚清单本身，
+                        // 勾选列时弹层高度不跟着长。
+                        let mut list = div()
+                            .id("insight-ws-col-pick-list")
+                            .v_flex()
+                            .w_full()
+                            .gap_1()
+                            .max_h(rems(ui::INSIGHT_PICKER_LIST_MAX_HEIGHT))
+                            .overflow_y_scrollbar();
                         // 弹层内列名子串过滤（大小写不敏感）；只定位勾选清单，
                         // 不改变全选 / 反选作用的全集口径。
                         let filtered: Vec<&String> = names
@@ -319,7 +329,7 @@ impl super::InsightWorkspacePanel {
                             })
                             .collect();
                         if filtered.is_empty() {
-                            body = body.child(
+                            list = list.child(
                                 div()
                                     .text_xs()
                                     .text_color(colors.muted_foreground)
@@ -332,7 +342,7 @@ impl super::InsightWorkspacePanel {
                             let label = name.clone();
                             let all = all_names.clone();
                             let checked = current.contains(&name);
-                            body = body.child(
+                            list = list.child(
                                 div()
                                     .h_flex()
                                     .items_center()
@@ -368,7 +378,7 @@ impl super::InsightWorkspacePanel {
                                     ),
                             );
                         }
-                        body
+                        body.child(list)
                     })
             })
     }
@@ -390,7 +400,7 @@ impl super::InsightWorkspacePanel {
         };
         let target = self.view.read(cx).target().cloned();
 
-        // 信息表：取样行数 / 源目标 / 临时表（stage ≥ 1 时显示）
+        // 信息表：取样口径 / 源目标 / 临时表（stage ≥ 1 时显示）
         let info = if stage >= 1 {
             let temp = target
                 .as_ref()
@@ -400,6 +410,9 @@ impl super::InsightWorkspacePanel {
                 .as_ref()
                 .and_then(|t| t.detail())
                 .unwrap_or_else(|| "—".into());
+            // 取样口径必须来自**本次确认的配置**（`InsightView::sample_amount_label`）：
+            // 配置化之后写死「500 / 500」会在用户选 1000 行 / 百分比 / 全量时给出错误读数。
+            let amount_label = self.view.read(cx).sample_amount_label();
             Some(
                 div()
                     .w_full()
@@ -408,9 +421,7 @@ impl super::InsightWorkspacePanel {
                     .gap_4()
                     .text_xs()
                     .text_color(colors.muted_foreground)
-                    .child(div().child(format!(
-                        "取样行数 {SOURCE_SAMPLE_LIMIT} / {SOURCE_SAMPLE_LIMIT}"
-                    )))
+                    .child(div().child(format!("取样口径 {amount_label}")))
                     .child(div().child(format!("源目标 {detail}")))
                     .child(div().child(format!("临时表 {temp}"))),
             )

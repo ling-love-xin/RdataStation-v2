@@ -18,6 +18,9 @@ SELECT
     PERCENTILE_DISC(0.75) WITHIN GROUP (ORDER BY "{col}")::DOUBLE AS p75,
     SUM("{col}")::DOUBLE AS sum_val,
     STDDEV_SAMP("{col}")::DOUBLE AS stddev_val,
+    COUNT(*) FILTER (WHERE "{col}" = 0)::BIGINT AS zeros,
+    COUNT(*) FILTER (WHERE "{col}" < 0)::BIGINT AS negatives,
+    PERCENTILE_DISC(0.95) WITHIN GROUP (ORDER BY "{col}")::DOUBLE AS p95_val,
     SKEWNESS("{col}")::DOUBLE AS skewness_val,
     KURTOSIS("{col}")::DOUBLE AS kurtosis_val
 FROM "{table}"
@@ -63,6 +66,21 @@ value_type = "f64"
 [[output]]
 sql_name = "stddev_val"
 json_name = "stddev"
+value_type = "f64?"
+
+[[output]]
+sql_name = "zeros"
+json_name = "zeros"
+value_type = "i64"
+
+[[output]]
+sql_name = "negatives"
+json_name = "negatives"
+value_type = "i64"
+
+[[output]]
+sql_name = "p95_val"
+json_name = "p95"
 value_type = "f64?"
 
 [[output]]

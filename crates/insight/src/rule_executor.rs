@@ -36,7 +36,10 @@ impl RuleExecutor {
         Ok(ExecutionResult { data, quality })
     }
 
-    fn build_sql(rule: &RuleFile, params: &HashMap<String, String>) -> Result<String, CoreError> {
+    pub(crate) fn build_sql(
+        rule: &RuleFile,
+        params: &HashMap<String, String>,
+    ) -> Result<String, CoreError> {
         let mut sql = rule.query.template.clone();
 
         for param_name in &rule.query.parameters {

@@ -919,6 +919,15 @@ fn compute_numeric_stats(
                 stddev: stddev_v,
                 skewness: extract_opt("skewness"),
                 kurtosis: extract_opt("kurtosis"),
+                zeros: map
+                    .get("zeros")
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v.max(0) as u32),
+                negatives: map
+                    .get("negatives")
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v.max(0) as u32),
+                p95: extract_opt("p95"),
                 is_extreme,
             }))
         }
@@ -954,6 +963,9 @@ fn compute_numeric_stats(
                         stddev: map.get("stddev").and_then(|v| v.as_f64()),
                         skewness: None,
                         kurtosis: None,
+                        zeros: None,
+                        negatives: None,
+                        p95: None,
                         is_extreme: vec![],
                     }))
                 }
@@ -1606,6 +1618,9 @@ mod tests {
                     stddev: Some(28.0),
                     skewness: None,
                     kurtosis: None,
+                    zeros: None,
+                    negatives: None,
+                    p95: None,
                     is_extreme: vec![],
                 }),
             },
@@ -1696,6 +1711,9 @@ mod tests {
                     stddev: Some(10.0),
                     skewness: None,
                     kurtosis: None,
+                    zeros: None,
+                    negatives: None,
+                    p95: None,
                     is_extreme: vec![],
                 }),
             },

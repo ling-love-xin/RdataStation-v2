@@ -248,6 +248,63 @@ impl InsightService {
     }
 
     // ==================== 规则 ====================
+
+    /// 适用于**这一列**的规则摘要（自定义规则 Tab，2026-11-06）：
+    /// 类型族匹配（`applies_to` ∋ 列类型族 或 Any）+ 已代入当前列参数的 SQL——
+    /// 展示的是「这条规则会怎么跑」；SQL 入口只查看不执行。
+    /// 单条代入失败（模板参数缺失等）跳过并记日志：坏规则不该拖死整个 Tab。
+    pub fn column_rule_briefs(
+        project_root: Option<&Path>,
+        column: &str,
+        kind: crate::model::ColumnKind,
+    ) -> Result<Vec<crate::model::ColumnRuleBrief>, CoreError> {
+        let family = kind.rule_family();
+        let mut params = std::collections::HashMap::new();
+        params.insert("table".to_string(), "{table}".to_string());
+        params.insert("col".to_string(), column.to_string());
+        params.insert("col1".to_string(), column.to_string());
+        with_rules(project_root, |registry| {
+            let mut out = Vec::new();
+            for rule in registry.all_rules() {
+                // 只收**列级**规则（category = column）：multi 需要选两列、table 是全表
+                if rule.meta.category != "column" {
+                    continue;
+                }
+                let applies = rule
+                    .meta
+                    .applies_to
+                    .iter()
+                    .any(|t| t.eq_ignore_ascii_case(family) || t.eq_ignore_ascii_case("Any"));
+                if !applies {
+                    continue;
+                }
+                // 多参数列规则（col1/col2…）不适合单列 Tab 展示
+                let col_params: Vec<&String> = rule
+                    .query
+                    .parameters
+                    .iter()
+                    .filter(|p| p.as_str() != "table")
+                    .collect();
+                if col_params.len() > 1 {
+                    continue;
+                }
+                match crate::RuleExecutor::build_sql(rule, &params) {
+                    Ok(sql) => out.push(crate::model::ColumnRuleBrief {
+                        id: rule.meta.id.clone(),
+                        name: rule.meta.name.clone(),
+                        description: rule.meta.description.clone(),
+                        sql,
+                    }),
+                    Err(e) => tracing::debug!(
+                        "[insight] 列规则摘要跳过 '{}'（SQL 代入失败）: {e}",
+                        rule.meta.id
+                    ),
+                }
+            }
+            out.sort_by(|a, b| a.id.cmp(&b.id));
+            Ok(out)
+        })
+    }
 }
 
 // ==================== 规则索引库（项目层 / 全局层） ====================

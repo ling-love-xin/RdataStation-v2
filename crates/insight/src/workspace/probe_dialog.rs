@@ -53,19 +53,12 @@ impl ProbeDialogBody {
         theme: &Theme,
     ) -> Div {
         let view = self.view.clone();
-        // 数据量 RadioGroup 的受控索引（全量 / 行数 / 百分比）
+        // 数据量 Radio（模态化改写时 on_change 曾遗漏——点选无反应的回归，2026-11-06 补回）
         let amount_index = match dialog.amount_mode {
             ProbeAmountMode::Full => 0,
             ProbeAmountMode::RowCount => 1,
             ProbeAmountMode::Percent => 2,
         };
-        let sample_index = match dialog.sample_mode {
-            crate::model::ProbeSampleMode::Head => 0,
-            crate::model::ProbeSampleMode::Reservoir => 1,
-        };
-        // 列集合：单选「全部列 / 选择列」
-        let columns_all = matches!(dialog.columns, crate::model::ProbeColumns::All);
-
         let amount_group = RadioGroup::horizontal("insight-probe-amount")
             .selected_index(Some(amount_index))
             .children([
@@ -90,6 +83,13 @@ impl ProbeDialogBody {
                     view.update(app, |v, cx| v.probe_set_amount_mode(mode, cx));
                 }
             });
+
+        // 列集合：单选「全部列 / 选择列」
+        let columns_all = matches!(dialog.columns, crate::model::ProbeColumns::All);
+        let sample_index = match dialog.sample_mode {
+            crate::model::ProbeSampleMode::Head => 0,
+            crate::model::ProbeSampleMode::Reservoir => 1,
+        };
 
         let sample_group = RadioGroup::horizontal("insight-probe-sample")
             .selected_index(Some(sample_index))
@@ -136,7 +136,8 @@ impl ProbeDialogBody {
                 }
             });
 
-        // 快捷预设（全量 / 常用行数 / 常用百分比）：点一下即切模式 + 填值
+        // 快捷预设（全量 / 常用行数 / 常用百分比）：点一下即切模式 + 填值；
+        // 当前值命中哪个 chip 就高亮哪个（toggled），避免顶部三选一与 chips 两层重复。
         let quick_presets: [(ProbeAmountMode, &str, &str); 7] = [
             (ProbeAmountMode::Full, "全量", ""),
             (ProbeAmountMode::RowCount, "500 行", "500"),
@@ -146,6 +147,16 @@ impl ProbeDialogBody {
             (ProbeAmountMode::Percent, "10%", "10"),
             (ProbeAmountMode::Percent, "25%", "25"),
         ];
+        let is_quick_active = |mode: ProbeAmountMode, value: &str| -> bool {
+            if dialog.amount_mode != mode {
+                return false;
+            }
+            match mode {
+                ProbeAmountMode::Full => true,
+                ProbeAmountMode::RowCount => dialog.row_count.trim() == value,
+                ProbeAmountMode::Percent => dialog.percent.trim() == value,
+            }
+        };
 
         // 输入框（渲染管线惰性创建；权威在 InputState，Change 订阅回写 dialog）
         let row_state = window.use_keyed_state(
@@ -282,21 +293,50 @@ impl ProbeDialogBody {
             }
         };
 
-        // 底部操作走**对话框按钮条**（`DialogButtonProps`，信任门同款，见
-        // `sync_probe_modal` 的 on_ok / on_cancel）：确认 / 取消由 Dialog 托管，
-        // 表单不再自绘按钮行；「探查全部」保留在提示区（快捷组合动作）。
-        // 探查全部：数据量 = 全量 + 列 = 全部列 + 直接确认（提示区必含的入口）
-        let explore_all = Button::new("insight-probe-all")
-            .label("探查全部")
+        // 底部三按钮：取消 / 全量探查 / 探查（按当前配置）。
+        // 取消：关窗不动作；全量探查：强制全量+全列直接确认；探查：按当前配置确认。
+        let cancel_btn = Button::new("insight-probe-cancel")
+            .label("取消")
+            .ghost()
+            .on_click({
+                let view = view.clone();
+                move |_, _, app| {
+                    view.update(app, |v, cx| v.cancel_probe_dialog(cx));
+                }
+            });
+        let explore_all_btn = Button::new("insight-probe-all")
+            .label("全量探查")
             .icon(gpui_kit::assets::IconName::Zap)
+            .outline()
             .on_click({
                 let view = view.clone();
                 move |_, _, app| {
                     view.update(app, |v, cx| {
                         v.probe_quick_amount(ProbeAmountMode::Full, String::new(), cx);
                         v.probe_set_columns(crate::model::ProbeColumns::All, cx);
-                        // 全量 + 全列必然可解析；关窗由 observer 统一处理
                         let _ = v.confirm_probe_dialog(cx);
+                    });
+                }
+            });
+        // 主按钮文案随列选择变：全部列 → "探查"；选列 → "探查 N 列"
+        let confirm_label = if columns_all {
+            "探查".to_string()
+        } else {
+            match &dialog.columns {
+                crate::model::ProbeColumns::Subset(sel) if !sel.is_empty() => {
+                    format!("探查 {} 列", sel.len())
+                }
+                _ => "探查".to_string(),
+            }
+        };
+        let confirm_btn = Button::new("insight-probe-confirm")
+            .label(confirm_label)
+            .primary()
+            .on_click({
+                let view = view.clone();
+                move |_, _, app| {
+                    view.update(app, |v, cx| {
+                        v.confirm_probe_dialog(cx);
                     });
                 }
             });
@@ -308,27 +348,29 @@ impl ProbeDialogBody {
             .w_full()
             .gap_2()
             .p(rems(ui::PANEL_PADDING))
-            // 标题
+            // 探查对象（Dialog 标题已是「探查确认」，内容区不再重复小标题）
             .child(
                 div()
                     .h_flex()
                     .w_full()
                     .items_center()
                     .gap_1()
+                    .text_color(theme.colors.muted_foreground)
                     .child(
-                        Icon::new(gpui_kit::assets::IconName::SlidersHorizontal)
-                            .with_size(Size::Size(theme.font_size * ui::INSIGHT_INLINE_ICON_SIZE))
-                            .text_color(theme.colors.muted_foreground),
+                        div()
+                            .flex_none()
+                            .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
+                            .child("探查对象："),
                     )
                     .child(
-                        div().text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT)).font_weight(FontWeight::SEMIBOLD).child("探查确认"),
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
+                            .text_color(theme.colors.foreground)
+                            .child(dialog.target.title()),
                     ),
-            )
-            .child(
-                div()
-                    .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
-                    .text_color(theme.colors.muted_foreground)
-                    .child(dialog.target.title()),
             )
             // —— 数据量 ——
             .child(Self::section_title("数据量"))
@@ -339,11 +381,11 @@ impl ProbeDialogBody {
                     .w_full()
                     .gap_1()
                     .children(quick_presets.iter().map(|(mode, label, value)| {
-                        Button::new(SharedString::from(format!(
-                            "insight-probe-quick-{label}"
-                        )))
+                        let active = is_quick_active(*mode, value);
+                        Button::new(SharedString::from(format!("insight-probe-quick-{label}")))
                             .ghost()
                             .compact()
+                            .toggled(active)
                             .label(label.to_string())
                             .on_click({
                                 let view = view.clone();
@@ -364,8 +406,18 @@ impl ProbeDialogBody {
                         .w_full()
                         .items_center()
                         .gap_2()
-                        .child(div().flex_none().text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT)).child("行数"))
-                        .child(div().flex_1().min_w_0().child(Input::new(&row_state).cleanable(true))),
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
+                                .child("行数"),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(Input::new(&row_state).cleanable(true)),
+                        ),
                 )
             })
             .when(dialog.amount_mode == ProbeAmountMode::Percent, |this| {
@@ -375,8 +427,18 @@ impl ProbeDialogBody {
                         .w_full()
                         .items_center()
                         .gap_2()
-                        .child(div().flex_none().text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT)).child("百分比"))
-                        .child(div().flex_1().min_w_0().child(Input::new(&pct_state).cleanable(true))),
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
+                                .child("百分比"),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(Input::new(&pct_state).cleanable(true)),
+                        ),
                 )
             })
             .child(Separator::horizontal())
@@ -387,11 +449,15 @@ impl ProbeDialogBody {
                 div()
                     .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
                     .text_color(theme.colors.muted_foreground)
-                    .child(if dialog.sample_mode == crate::model::ProbeSampleMode::Head {
-                        SharedString::from("顺序取：确定的前 N 行（与表序一致）")
-                    } else {
-                        SharedString::from("均匀随机：reservoir 取样，随机但有代表性，可配种子复现")
-                    }),
+                    .child(
+                        if dialog.sample_mode == crate::model::ProbeSampleMode::Head {
+                            SharedString::from("顺序取：确定的前 N 行（与表序一致）")
+                        } else {
+                            SharedString::from(
+                                "均匀随机：reservoir 取样，随机但有代表性，可配种子复现",
+                            )
+                        },
+                    ),
             )
             .when(
                 dialog.amount_mode == ProbeAmountMode::Percent
@@ -403,8 +469,18 @@ impl ProbeDialogBody {
                             .w_full()
                             .items_center()
                             .gap_2()
-                            .child(div().flex_none().text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT)).child("种子"))
-                            .child(div().flex_1().min_w_0().child(Input::new(&seed_state).cleanable(true))),
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
+                                    .child("种子"),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(Input::new(&seed_state).cleanable(true)),
+                            ),
                     )
                 },
             )
@@ -426,33 +502,46 @@ impl ProbeDialogBody {
                             .child("正在获取列清单…（获取失败时按全部列探查）"),
                     )
                 } else {
+                    // 列候选清单：**定高滚动**（`ui::INSIGHT_PROBE_COL_LIST_MAX_HEIGHT`）。
+                    // 此前是全量铺开，列一多确认窗口被一路撑高、勾选还会让版式上下跳。
                     this.child(
                         div()
+                            .id("insight-probe-col-list")
                             .v_flex()
                             .w_full()
                             .gap_1()
+                            .max_h(rems(ui::INSIGHT_PROBE_COL_LIST_MAX_HEIGHT))
+                            .overflow_y_scrollbar()
                             .children(dialog.column_candidates.iter().map(|name| {
                                 let name = name.clone();
                                 let view = view.clone();
-                                Checkbox::new(SharedString::from(format!("insight-probe-col-{name}")))
-                                    .label(name.clone())
-                                    .checked(sel.contains(&name))
-                                    .on_click(move |_, _, app| {
-                                        view.update(app, |v, cx| {
-                                            let current = match &v.probe_dialog().map(|d| d.columns.clone()) {
-                                                Some(crate::model::ProbeColumns::Subset(s)) => s.clone(),
+                                Checkbox::new(SharedString::from(format!(
+                                    "insight-probe-col-{name}"
+                                )))
+                                .label(name.clone())
+                                .checked(sel.contains(&name))
+                                .on_click(move |_, _, app| {
+                                    view.update(app, |v, cx| {
+                                        let current =
+                                            match &v.probe_dialog().map(|d| d.columns.clone()) {
+                                                Some(crate::model::ProbeColumns::Subset(s)) => {
+                                                    s.clone()
+                                                }
                                                 _ => vec![name.clone()],
                                             };
-                                            let next = if current.contains(&name) {
-                                                current.into_iter().filter(|c| c != &name).collect()
-                                            } else {
-                                                let mut c = current;
-                                                c.push(name.clone());
-                                                c
-                                            };
-                                            v.probe_set_columns(crate::model::ProbeColumns::Subset(next), cx);
-                                        });
-                                    })
+                                        let next = if current.contains(&name) {
+                                            current.into_iter().filter(|c| c != &name).collect()
+                                        } else {
+                                            let mut c = current;
+                                            c.push(name.clone());
+                                            c
+                                        };
+                                        v.probe_set_columns(
+                                            crate::model::ProbeColumns::Subset(next),
+                                            cx,
+                                        );
+                                    });
+                                })
                             })),
                     )
                 }
@@ -465,7 +554,7 @@ impl ProbeDialogBody {
                 div()
                     .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
                     .text_color(theme.colors.muted_foreground)
-                    .child("条件包在源查询内层（先过滤再取样），如 status = 'active'"),
+                    .child("条件包在源查询内层，先过滤再取样。"),
             )
             .child(Separator::horizontal())
             // —— 规模预估 ——
@@ -474,25 +563,11 @@ impl ProbeDialogBody {
                 div()
                     .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
                     .text_color(theme.colors.muted_foreground)
-                    .child(format!("将建分析临时表：{amount_label} × {col_label}")),
-            )
-            // —— 提示区（必含「探查全部」） ——
-            .child(Self::section_title("提示"))
-            .child(
-                div()
-                    .v_flex()
-                    .w_full()
-                    .gap_1()
-                    .p(rems(ui::PANEL_PADDING))
-                    .rounded_md()
-                    .bg(theme.colors.list)
-                    .child(
-                        div()
-                            .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
-                            .text_color(theme.colors.muted_foreground)
-                            .child("确认后进入 EDA 即评估确认窗口生成表的全部信息（N 行 × K 列）；取样是对评估全表的取样，不仅数据量还有字段。"),
-                    )
-                    .child(explore_all),
+                    .child(if dialog.filter.trim().is_empty() {
+                        format!("将建分析临时表：{amount_label} × {col_label}")
+                    } else {
+                        format!("过滤后取样：{amount_label} × {col_label}")
+                    }),
             )
             .when_some(parse_notice, |this, notice| {
                 this.child(
@@ -502,6 +577,19 @@ impl ProbeDialogBody {
                         .child(SharedString::from(notice)),
                 )
             })
+            // —— 底部三按钮：取消 / 全量探查 / 探查 ——
+            .child(
+                div()
+                    .h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_2()
+                    .pt_1()
+                    .child(cancel_btn)
+                    .child(div().flex_1())
+                    .child(explore_all_btn)
+                    .child(confirm_btn),
+            )
     }
 
     /// 确认窗口区块标题（数据量 / 采样方式 / 探查列 / 过滤 / 规模 / 提示）

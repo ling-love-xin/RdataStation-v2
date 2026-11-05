@@ -54,6 +54,15 @@ pub struct NumericStats {
     pub stddev: Option<f64>,
     pub skewness: Option<f64>,
     pub kurtosis: Option<f64>,
+    /// 0 值个数（2026-11-06 YData 密度对齐；旧快照无此字段 → None）
+    #[serde(default)]
+    pub zeros: Option<u32>,
+    /// 负值个数（同上）
+    #[serde(default)]
+    pub negatives: Option<u32>,
+    /// P95 分位（同上）
+    #[serde(default)]
+    pub p95: Option<f64>,
     pub is_extreme: Vec<ExtremeValue>,
 }
 

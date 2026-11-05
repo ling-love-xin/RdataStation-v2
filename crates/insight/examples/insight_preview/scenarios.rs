@@ -931,6 +931,8 @@ fn col(
         nullable,
         primary_key,
         null_rate: Some(null_rate),
+        null_count: None,
+        unique_count: None,
         unique_rate: Some(unique_rate),
         stats_detail: detail,
         histogram: Some(histogram_bins()),
@@ -1025,6 +1027,9 @@ fn numeric_detail() -> ColumnStatsDetail {
         stddev: Some(1043.82),
         skewness: Some(3.4182),
         kurtosis: Some(19.2204),
+        zeros: Some(3),
+        negatives: Some(0),
+        p95: Some(3120.0),
         is_extreme: vec![
             ExtremeValue {
                 value: 9860.5,

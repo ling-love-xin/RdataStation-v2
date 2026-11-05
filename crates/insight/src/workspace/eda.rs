@@ -626,12 +626,17 @@ impl super::InsightWorkspacePanel {
         .on_click({
             let entity = entity.clone();
             let name = col.name.clone();
+            let col_kind = col.kind; // Copy，闭包外捕获（col 引用不能进 'static 闭包）
             move |index, _, app| {
                 entity.update(app, |panel, cx| {
                     panel
                         .col_detail_zone
                         .borrow_mut()
                         .insert(name.clone(), *index);
+                    // 切到「规则」Tab 顺带惰性载入摘要（事件路径，允许取数）
+                    if ColZone::of_index(*index) == ColZone::Rules {
+                        panel.ensure_col_rules(&name, col_kind, cx);
+                    }
                     cx.notify();
                 });
             }
@@ -644,7 +649,7 @@ impl super::InsightWorkspacePanel {
             .pb_1()
             .child(rule_toggle)
             .child(tabs)
-            .child(self.render_col_zone(col, checker, zone, theme))
+            .child(self.render_col_zone(col, checker, zone, entity, theme))
             .child(self.render_checker_summary(col, checker, theme))
             // 列卡「在 SQL 编辑器中查看」（2026-10-30 对齐原型 col-card 尾部）：
             // 生成该列的探查 SQL（带引号转义），宿主 `open_query_document` 打开
@@ -687,6 +692,7 @@ impl super::InsightWorkspacePanel {
         col: &TableColumnView,
         checker: &[ColumnChecker],
         zone: ColZone,
+        entity: &Entity<Self>,
         theme: &Theme,
     ) -> Div {
         match zone {
@@ -694,10 +700,164 @@ impl super::InsightWorkspacePanel {
             ColZone::Dist => self.render_col_dist_zone(col, theme),
             ColZone::Quality => self.render_checker_list(col, checker, theme),
             ColZone::Sample => self.render_col_sample_zone(col, theme),
+            ColZone::Rules => self.render_col_rules_zone(col, entity, theme),
         }
     }
 
-    /// 基础统计区：按列类型族给键值行（数据来自评估回填的 `stats_detail`）。
+    /// 自定义规则区（2026-11-06 YData 密度对齐「我们多出的那个 Tab」）：
+    /// 适用于该列的规则摘要（id / 名称 / 描述 + 已代入参数的 SQL），
+    /// SQL 入口在编辑器中查看（不执行）。
+    ///
+    /// 摘要**惰性载入**：缓存未命中时先给占位说明——取数发生在切 Tab 的
+    /// **on_click 事件路径**（`ensure_col_rules`，事件路径允许同步取数；
+    /// render 保持纯读）。数十条 TOML 规则的 HashMap 代入是毫秒级。
+    pub(crate) fn render_col_rules_zone(
+        &self,
+        col: &TableColumnView,
+        entity: &Entity<Self>,
+        theme: &Theme,
+    ) -> Div {
+        let colors = theme.colors;
+        let Some(briefs) = self.col_rules.borrow().get(&col.name).cloned() else {
+            let entity = entity.clone();
+            let name = col.name.clone();
+            let kind = col.kind;
+            let root: Option<std::path::PathBuf> = None; // 项目根经 view 宿主闭包解析（与 jobs::attach 同源）
+            let _ = root;
+            // 触发一次事件路径取数：用 `cx.spawn` 不行（render 无 cx 句柄）——
+            // 改为按钮触发（首次点击「载入规则摘要」），避免 render 侧取数。
+            return div()
+                .v_flex()
+                .w_full()
+                .gap_1()
+                .child(zone_note(
+                    theme,
+                    "规则摘要尚未载入（点击下方按钮获取适用于该列的规则）",
+                ))
+                .child(
+                    Button::new(SharedString::from(format!(
+                        "insight-ws-colrule-load-{}",
+                        col.name
+                    )))
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::RefreshCw)
+                    .label("载入规则摘要")
+                    .on_click(move |_, _, app| {
+                        entity.update(app, |panel, cx| {
+                            panel.ensure_col_rules(&name, kind, cx);
+                        });
+                    }),
+                );
+        };
+        if briefs.is_empty() {
+            return zone_note(
+                theme,
+                "没有适用于该类型的列级规则（内置统计见「基础统计」）",
+            );
+        }
+        let mut body = div().v_flex().w_full().gap_1();
+        for brief in briefs {
+            let sql_id =
+                SharedString::from(format!("insight-ws-colrule-sql-{}-{}", col.name, brief.id));
+            let entity = entity.clone();
+            body = body.child(
+                div()
+                    .v_flex()
+                    .w_full()
+                    .gap_0p5()
+                    .p_1()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(colors.border)
+                    .child(
+                        div()
+                            .h_flex()
+                            .w_full()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_ellipsis()
+                                    .text_color(colors.foreground)
+                                    .child(format!("{} · {}", brief.id, brief.name)),
+                            )
+                            .child(
+                                Button::new(sql_id)
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(AssetsIconName::Braces)
+                                    .label("SQL")
+                                    .tooltip("在 SQL 编辑器中查看该规则的代入语句（不执行）")
+                                    .on_click({
+                                        let sql = brief.sql.clone();
+                                        let title = format!("规则 {} · {}", brief.id, col.name);
+                                        move |_, _, app| {
+                                            entity.update(app, |panel, cx| {
+                                                panel.insight_view().update(cx, |_v, cx| {
+                                                    cx.emit(InsightEvent::OpenSqlRequested {
+                                                        sql: sql.clone(),
+                                                        title: title.clone(),
+                                                    });
+                                                });
+                                            });
+                                        }
+                                    }),
+                            ),
+                    )
+                    .when(!brief.description.is_empty(), |row| {
+                        row.child(
+                            div()
+                                .text_xs()
+                                .text_color(colors.muted_foreground)
+                                .child(brief.description.clone()),
+                        )
+                    })
+                    .child(
+                        div()
+                            .w_full()
+                            .text_xs()
+                            .text_color(colors.muted_foreground)
+                            .child(SharedString::from(brief.sql.clone())),
+                    ),
+            );
+        }
+        body
+    }
+
+    /// 列规则摘要载入（事件路径：on_click 触发；同步 `with_rules` 无 I/O，
+    /// 数十条规则代入毫秒级——不合规范的地方在于它在**宿主 App 上下文**，
+    /// 故经后台执行器走一道，与 jobs 同款姿势）。
+    fn ensure_col_rules(&mut self, column: &str, kind: ColumnKind, cx: &mut Context<Self>) {
+        if self.col_rules.borrow().contains_key(column) {
+            return;
+        }
+        let column = column.to_string();
+        let column_for_task = column.clone();
+        let task = cx.background_executor().spawn(async move {
+            crate::service::InsightService::column_rule_briefs(None, &column_for_task, kind)
+        });
+        let weak = cx.entity().downgrade();
+        cx.spawn(async move |_this, cx| {
+            if let Ok(briefs) = task.await {
+                let _ = weak.update(cx, |panel, cx| {
+                    // 取到后再查一次：并发触发下后到的写覆盖同值（幂等）
+                    panel.col_rules.borrow_mut().insert(column, briefs);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// 基础统计区（2026-11-06 YData 密度对齐）：**左侧键值统计表 + 右侧分布图**
+    /// 并排——YData「Statistics」Tab 的版式。图与「分布」Tab 同源（同一份
+    /// stats_detail / histogram），两侧数据一致；窄卡下右图自然压缩（条形按
+    /// ratio 渲染，不折行）。
     pub(crate) fn render_col_stats_zone(&self, col: &TableColumnView, theme: &Theme) -> Div {
         let Some(detail) = &col.stats_detail else {
             return zone_note(theme, "未评估全表，无列级统计（点工具栏「评估」）");
@@ -750,7 +910,58 @@ impl super::InsightWorkspacePanel {
                 vec![("统计".into(), "无可用统计".into())]
             }
         };
-        zone_rows(theme, rows)
+        // 左表右图（YData Statistics 版式）：表吃剩余宽度，图定宽优先
+        div()
+            .h_flex()
+            .w_full()
+            .items_stretch()
+            .gap_2()
+            .child(div().flex_1().min_w_0().child(zone_rows(theme, rows)))
+            .child(
+                div()
+                    .flex_none()
+                    .w(rems(ui::INSIGHT_CARD_VIS_WIDTH))
+                    .min_w_0()
+                    .child(self.render_col_dist_visual(col, theme)),
+            )
+    }
+
+    /// 分布**纯图**（无说明行；Stats 右栏与 Dist 区共用同一份图渲染——
+    /// 数值直方图 / 文本 Top 条 / 时间月度条 / 布尔真占比条）。
+    fn render_col_dist_visual(&self, col: &TableColumnView, theme: &Theme) -> Div {
+        let mut body = div().v_flex().w_full().gap_1();
+        match &col.stats_detail {
+            Some(crate::model::types::ColumnStatsDetail::Numeric(_)) => {
+                if let Some(bins) = &col.histogram {
+                    body = body.child(dist_bars(theme, bins, 8, &col.name));
+                } else {
+                    body = body.child(zone_note(theme, "样本不足"));
+                }
+            }
+            Some(crate::model::types::ColumnStatsDetail::Text(t)) => {
+                body = body.child(dist_text_bars(theme, &t.top_values, 3, &col.name));
+            }
+            Some(crate::model::types::ColumnStatsDetail::DateTime(d)) => {
+                body = body.child(dist_text_bars(theme, &d.monthly_distribution, 3, &col.name));
+            }
+            Some(crate::model::types::ColumnStatsDetail::Boolean(b)) => {
+                let bins = vec![
+                    crate::model::types::DistributionBin {
+                        label: "真".into(),
+                        count: b.true_count,
+                        ratio: b.true_ratio,
+                    },
+                    crate::model::types::DistributionBin {
+                        label: "假".into(),
+                        count: b.false_count,
+                        ratio: 1.0 - b.true_ratio,
+                    },
+                ];
+                body = body.child(dist_bars(theme, &bins, 2, &col.name));
+            }
+            _ => {}
+        }
+        body
     }
 
     /// 分布区：数值列 = 直方图分箱条 + 偏度/峰度 + 正态性判定；文本 = Top 值条；
@@ -761,7 +972,7 @@ impl super::InsightWorkspacePanel {
         match &col.stats_detail {
             Some(crate::model::types::ColumnStatsDetail::Numeric(n)) => {
                 if let Some(bins) = &col.histogram {
-                    body = body.child(dist_bars(theme, &bins, 8));
+                    body = body.child(dist_bars(theme, bins, 8, &col.name));
                 } else {
                     body = body.child(zone_note(theme, "样本行数不足，未生成直方图"));
                 }
@@ -786,10 +997,10 @@ impl super::InsightWorkspacePanel {
                 }
             }
             Some(crate::model::types::ColumnStatsDetail::Text(t)) => {
-                body = body.child(dist_text_bars(theme, &t.top_values, 5));
+                body = body.child(dist_text_bars(theme, &t.top_values, 5, &col.name));
             }
             Some(crate::model::types::ColumnStatsDetail::DateTime(d)) => {
-                body = body.child(dist_text_bars(theme, &d.monthly_distribution, 5));
+                body = body.child(dist_text_bars(theme, &d.monthly_distribution, 5, &col.name));
             }
             Some(crate::model::types::ColumnStatsDetail::Boolean(b)) => {
                 let bins = vec![
@@ -804,7 +1015,7 @@ impl super::InsightWorkspacePanel {
                         ratio: 1.0 - b.true_ratio,
                     },
                 ];
-                body = body.child(dist_bars(theme, &bins, 2));
+                body = body.child(dist_bars(theme, &bins, 2, &col.name));
             }
             None => {
                 body = body.child(zone_note(theme, "未评估全表，无分布数据"));
@@ -1053,8 +1264,10 @@ fn mini_freq_rows(
     let first = items.first()?;
     let max = first.count.max(1);
     let mut rows = div().v_flex().w_full().gap_1();
-    for f in items.iter().take(3) {
-        let key = SharedString::from(format!("insight-ws-mini-{col_name}-{}", f.value));
+    // id 用列名 + 序号：f.value 是用户数据文本，同列 top 值可能撞文本（如 NULL/null），
+    // 用序号兜底避免 a11y 节点 id 重复 panic。
+    for (ix, f) in items.iter().take(3).enumerate() {
+        let key = SharedString::from(format!("insight-ws-mini-{col_name}-{ix}"));
         rows = rows.child(
             div()
                 .h_flex()

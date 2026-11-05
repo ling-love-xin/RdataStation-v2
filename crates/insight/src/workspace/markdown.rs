@@ -155,6 +155,7 @@ pub(crate) fn dist_text_bars(
     theme: &Theme,
     freqs: &[crate::model::types::TextFrequency],
     limit: usize,
+    scope: &str,
 ) -> Div {
     let total: u64 = freqs.iter().map(|f| f.count as u64).sum();
     let bins: Vec<crate::model::types::DistributionBin> = freqs
@@ -169,7 +170,7 @@ pub(crate) fn dist_text_bars(
             },
         })
         .collect();
-    dist_bars(theme, &bins, limit)
+    dist_bars(theme, &bins, limit, scope)
 }
 
 /// 多列规则结果（关联性区共用）：Single = 键值行，Table = 表格。

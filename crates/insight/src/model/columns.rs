@@ -15,6 +15,18 @@ pub enum ColumnKind {
 }
 
 impl ColumnKind {
+    /// 规则匹配用的**类型族名**（与规则 `applies_to` 的内置取值对齐：Numeric /
+    /// Text / DateTime / Boolean；Unknown 匹配 Any 规则）。
+    pub fn rule_family(self) -> &'static str {
+        match self {
+            Self::Numeric => "Numeric",
+            Self::Text => "Text",
+            Self::DateTime => "DateTime",
+            Self::Boolean => "Boolean",
+            Self::Unknown => "Any",
+        }
+    }
+
     pub fn of(detail: &ColumnStatsDetail) -> Self {
         match detail {
             ColumnStatsDetail::Numeric(_) => ColumnKind::Numeric,

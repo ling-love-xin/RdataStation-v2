@@ -58,6 +58,11 @@ pub const INSIGHT_WS_TAB_MAX_WIDTH: f32 = 18.0;
 pub const INSIGHT_OVERVIEW_RING_SIZE: f32 = 4.25;
 /// 列多选 / 列对选择浮层宽度（13.5rem = 216px；Checkbox 行 + 中文列名不换行）
 pub const INSIGHT_PICKER_WIDTH: f32 = 13.5;
+/// 列多选浮层里列清单的最大高度（16rem = 256px，约 9 行）
+///
+/// 与探查确认弹窗同理：200+ 列的清单全量铺开会把弹层撑出屏幕可视区，
+/// 且每次勾选都改变弹层高度、位置跟着跳。超过本高度清单自身纵向滚动。
+pub const INSIGHT_PICKER_LIST_MAX_HEIGHT: f32 = 16.0;
 /// 中间工作页最小宽度（42rem = 672px；对齐原型 `body{min-width:1000px}`）
 ///
 /// 原型不做响应式：窗口不够宽就整体横向滚动，栅格保持设计列数（五卡恒 5 列、
@@ -65,11 +70,19 @@ pub const INSIGHT_PICKER_WIDTH: f32 = 13.5;
 /// 原型 1000px 减去 activity 48px 与右 dock 280px 即得 672px。低于它整页横向
 /// 滚动，而不是折行或压缩栅格。
 pub const INSIGHT_WS_MIN_WIDTH: f32 = 42.0;
+/// 列卡「基础统计」右栏图宽（11rem = 176px；YData 左表右图版式的图定宽）
+pub const INSIGHT_CARD_VIS_WIDTH: f32 = 11.0;
 /// 列分布渐进渲染上限（40 张卡：200+ 列全量渲染卡首帧；「显示全部」可解锁，
 /// 虚拟列表见 dev-plan §10 #14）
 pub const INSIGHT_WS_COL_RENDER_CAP: usize = 40;
 /// 探查确认弹窗宽度（30rem = 480px；四块表单 + 快捷预设 + 列候选单列排布）
 pub const INSIGHT_PROBE_DIALOG_WIDTH: f32 = 30.0;
+/// 探查确认弹窗「探查列」候选清单的最大高度（12rem = 192px，约 6 行列）
+///
+/// 列候选是**可枚举清单**（几十到几百列）：全量铺开会把确认窗口一路撑高、
+/// 每次勾选列还会让版式上下跳（Dialog 只兜到视口高度，用户看到的是「窗口在长」）。
+/// 超过本高度清单自身纵向滚动，窗口总高稳定。
+pub const INSIGHT_PROBE_COL_LIST_MAX_HEIGHT: f32 = 12.0;
 /// 右栏集合行来源徽标列宽（4rem = 64px，容得下最宽的「结果集」标签 + 内距）
 ///
 /// 徽标文案随来源类型变宽窄（源表 / 结果集 / 文件），不定宽会让各行**名称起点

@@ -23,6 +23,27 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-11-06 — EDA 列卡 YData 密度对齐（左表右图 + 规则 Tab + SQL 入口）
+
+**背景**：列分布信息密度与 YData Profiling 差距大——YData 一字段一卡 = 左统计表
++ 右图可切换 Tab。定稿：**Stats Tab 改左右双栏**（左 = 键值统计表，右 = 分布图，
+与 Dist 同源同数据）；新增**「规则」Tab**（本产品超出 YData 的部分）= 适用该列的
+规则摘要（id / 名称 / 描述 + 已代入参数的 SQL）+ SQL 入口（编辑器查看不执行）。
+**已落地并验证**（lib 279 + e2e 14 + 契约 7 全绿；examples 编译过）：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 统计扩展 | `numeric-stats` 规则增 **0 值 / 负值 / P95** 三个输出（TOML + 引擎解析 + `NumericStats` 字段，serde default 旧快照兼容）；预览示例同步 | `insight-rules/column/numeric-stats.rule.toml` + `insight_engine.rs` + `model/types.rs` |
+| 精确计数 | `TableColumnView` 增 `null_count` / `unique_count`（表级摘要回填精确值，卡头仍百分比） | `model/profile.rs` |
+| 左表右图 | Stats 区 `h_flex` 双栏：左 `zone_rows` 统计表（flex_1）+ 右 `render_col_dist_visual` 纯图（定宽 `INSIGHT_CARD_VIS_WIDTH` 11rem）；图与 Dist 区同源渲染（数值直方图 / 文本 Top / 时间月度 / 布尔占比） | `workspace/eda.rs` + `ui.rs`（契约登记） |
+| 规则 Tab | `ColZone::Rules`（5 Tab）；`InsightService::column_rule_briefs`：类型族匹配（`applies_to` ∋ 族或 Any）+ 单列参数代入 `build_sql`（提为 pub(crate)），multi/多列参数规则排除；摘要经 `ColumnRuleBrief` 展示，SQL 按钮发 `OpenSqlRequested` | `service/mod.rs` + `model/mod.rs` + `model/columns.rs`（`rule_family`）+ `rule_executor.rs` |
+| 惰性载入 | 切到 Rules Tab（或首次点「载入规则摘要」按钮）→ 后台代入 → `col_rules` 缓存回填；render 纯读 | `workspace/mod.rs`（col_rules）+ `eda.rs`（ensure_col_rules） |
+| 顺手修回归 | 模态化改写曾丢 `amount_group` 的 `on_change`（数据量 Radio 点选无反应）——补回 | `probe_dialog.rs` |
+
+**同批并行改动说明**：工作区混有另一会话的 insight 未提交改动（取样标签动态化 /
+集合按钮左对齐 / dist_bars 加 scope 参数——本批代码编译依赖），一并入库；mock 侧
+改动（列分区重构）未完成、不卷入。
+
 ### 2026-11-03 — 信任横幅话术区分 + 集合空态组件化 + P1-8b 查证收口（backlog 1–4 批）
 
 | 项 | 状态 | 内容 |

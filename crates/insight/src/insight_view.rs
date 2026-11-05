@@ -1166,6 +1166,23 @@ impl InsightView {
         self.loading_note.as_ref()
     }
 
+    /// 取样口径的人话标签（加载进度卡 / 右栏摘要卡 / 中间页五卡共用）。
+    ///
+    /// 取数已配置化（`ProbeConfig`：全量 / 前 N 行 / 百分比），各处**不能再写死**
+    /// `SOURCE_SAMPLE_LIMIT`——那会在用户选 1000 行或百分比时给出错误读数。
+    /// `None` = 本次会话还没确认过探查配置（按默认值说明）。
+    pub fn sample_amount_label(&self) -> String {
+        match self.last_probe_config.as_ref().map(|c| &c.amount) {
+            Some(crate::model::ProbeAmount::Full) => "全量（不设 LIMIT）".to_string(),
+            Some(crate::model::ProbeAmount::RowCount(n)) => format!("前 {n} 行"),
+            Some(crate::model::ProbeAmount::Percent(p)) => format!("约 {p}%"),
+            None => format!(
+                "前 {} 行（默认）",
+                crate::service::persistence::SOURCE_SAMPLE_LIMIT
+            ),
+        }
+    }
+
     /// 数据态载荷（宿主与测试读；三个 Tab 各自的最近一次结果）
     pub fn data(&self) -> &PanelData {
         &self.data

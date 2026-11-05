@@ -212,10 +212,13 @@ pub(crate) fn dist_bars(
     theme: &Theme,
     bins: &[crate::model::types::DistributionBin],
     limit: usize,
+    scope: &str,
 ) -> Div {
     let colors = theme.colors;
     let mut body = div().v_flex().w_full().gap_1();
-    for bin in bins.iter().take(limit) {
+    // 用 scope + 序号拼 id：bin.label 是用户数据文本（区间/类型/真/假/月份），
+    // 同列 top value 或跨列卡同帧可能撞文本，导致 a11y 节点 id 重复 panic。
+    for (ix, bin) in bins.iter().take(limit).enumerate() {
         body = body.child(
             div()
                 .h_flex()
@@ -233,7 +236,7 @@ pub(crate) fn dist_bars(
                 )
                 .child(
                     div().flex_1().min_w_0().child(
-                        Progress::new(SharedString::from(format!("insight-ws-dist-{}", bin.label)))
+                        Progress::new(SharedString::from(format!("insight-ws-dist-{scope}-{ix}")))
                             .value(bin.ratio.clamp(0.0, 1.0) as f32)
                             .color(colors.primary),
                     ),

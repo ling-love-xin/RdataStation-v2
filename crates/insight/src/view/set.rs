@@ -234,13 +234,21 @@ impl InsightView {
                     .child({
                         let entity = entity.clone();
                         let key = entry.key.clone();
+                        let label = entry.label.clone();
                         Button::new(format!("insight-set-open-{}", entry.key))
                             .ghost()
                             .xsmall()
                             .toggled(entry.is_current)
                             .min_w_0()
                             .flex_1()
-                            .label(entry.label.clone())
+                            // Button 的 label 容器是 `justify_center`（vendor
+                            // `gpui-component/src/button/button.rs:772-779` 的 `h_flex().justify_center()`）：
+                            // 本按钮 `flex_1` 撑满整行剩余宽度，表名因此被**居中**，
+                            // 与左侧定宽徽标（自然左对齐）不齐。这里把文本改由
+                            // `w_full` 的子 div 承载（div 内文本默认左对齐），
+                            // 控件的可读名用 `accessibility_label` 保住。
+                            .accessibility_label(label.clone())
+                            .child(div().w_full().min_w_0().text_ellipsis().child(label))
                             .on_click(move |_, _, app| {
                                 entity.update(app, |_view, cx| {
                                     cx.emit(InsightEvent::ActivateTableRequested {
