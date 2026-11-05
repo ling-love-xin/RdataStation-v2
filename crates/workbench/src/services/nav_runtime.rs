@@ -99,6 +99,8 @@ pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), St
 
     let req = build_connect_request(&ds, project_path, network_method)?;
     let conn_id = conn_id.to_string();
+    // 【C1 余项】项目根随建连线程进预热（`warm_after_connect` 收 owned String）
+    let warm_project_root = project_path.map(str::to_string);
     // 在途计数：导航轮询泵据此保持存活，等本线程的结果回填（见 nav_jobs 文档）。
     database::nav_jobs::connect_pending_inc();
     let spawned = std::thread::Builder::new()
@@ -122,6 +124,10 @@ pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), St
             match outcome {
                 Ok(_) => {
                     tracing::info!(conn_id = %conn_id, "【探针】建连成功");
+                    // 【C1 余项】建连成功即提交 schema 预热（此前是死代码无调用方）：
+                    // 延迟 3s 后台队列跑，让位语义保证不抢用户首次浏览；失败静默
+                    //（预热本就 best-effort，导航展开时自然回填）。
+                    database::nav_jobs::warm_after_connect(&conn_id, warm_project_root.as_deref());
                     database::nav_jobs::submit_connect_outcome(&conn_id, true, "已连接")
                 }
                 // 探针建连失败属环境 / 数据性状态（离线、内网不可达、网络档案缺失），

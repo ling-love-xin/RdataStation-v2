@@ -120,6 +120,10 @@ pub struct WorkbenchCompletion {
     /// （NavCache 空时每次未命中都会读空，不能每敲一个字就向导航队列投一次内省）。
     /// 命中对象后移除——连接元数据变化（如用户新建表后重新内省）时允许再投。
     warm_submitted: Arc<Mutex<HashSet<String>>>,
+    /// 【B9 余项】上次提交「补全实时内省」的时间（按 conn_id，Unix 秒）——TTL 过期
+    /// 重载路径的节流器：L2 部分未命中（新建表 / 列不在缓存）时靠重内省刷新，
+    /// 但不能每次 TTL 过期都投（与 TTL 同频 300s 至多一次），对源库压力才可控。
+    last_warm_secs: Arc<Mutex<HashMap<String, i64>>>,
     /// 【B9 切片二】模板片段（启动时一次性预载；内存读——菜单弹出时会问它）
     templates: Arc<Mutex<Vec<TemplateSnippet>>>,
 }
@@ -132,6 +136,7 @@ impl WorkbenchCompletion {
             keys: Arc::new(Mutex::new(HashMap::new())),
             loading: Arc::new(Mutex::new(HashSet::new())),
             warm_submitted: Arc::new(Mutex::new(HashSet::new())),
+            last_warm_secs: Arc::new(Mutex::new(HashMap::new())),
             meta: Arc::new(Mutex::new(HashMap::new())),
             cache_meta: Arc::new(Mutex::new(HashMap::new())),
             generation: Arc::new(AtomicU64::new(0)),
@@ -229,6 +234,30 @@ impl WorkbenchCompletion {
             .unwrap_or(false)
     }
 
+    /// 【B9 余项】warm 提交节流（与 TTL 同频：`COMPLETION_CACHE_TTL_SECS` 内至多一次）。
+    /// 通过 = `true` 并记下本次时间；未到间隔 = `false`（不记，保住上次提交时刻）。
+    fn warm_throttle_passed(
+        last_warm_secs: &Mutex<HashMap<String, i64>>,
+        conn_id: &str,
+    ) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let mut last = match last_warm_secs.lock() {
+            Ok(guard) => guard,
+            Err(poison) => poison.into_inner(),
+        };
+        let allowed = last
+            .get(conn_id)
+            .map(|submitted_at| now.saturating_sub(*submitted_at) > COMPLETION_CACHE_TTL_SECS)
+            .unwrap_or(true);
+        if allowed {
+            last.insert(conn_id.to_string(), now);
+        }
+        allowed
+    }
+
     /// 起一次后台预载（**同一连接只起一次**；完成前重复调用都是 no-op）
     fn schedule_load(&self, conn_id: &str) {
         {
@@ -250,6 +279,7 @@ impl WorkbenchCompletion {
         let generation = self.generation.clone();
         let loading = self.loading.clone();
         let warm_submitted = self.warm_submitted.clone();
+        let last_warm_secs = self.last_warm_secs.clone();
         let conn_id = conn_id.to_string();
         std::thread::spawn(move || {
             // 【#53】取本次载入代际：写回前若发现已有更高代（期间被重载过）→ 丢弃本次结果。
@@ -271,6 +301,17 @@ impl WorkbenchCompletion {
                 // 命中对象 → 允许未来再内省（元数据变化后重新提交）
                 if let Ok(mut submitted) = warm_submitted.lock() {
                     submitted.remove(&conn_id);
+                }
+                // 【B9 余项】TTL 过期**重载**（cache_meta 已有条目 = 之前载过，本次
+                // 是过期刷新而非首载）且节流通过 → 再投一次内省：L2 部分未命中
+                //（用户新建的表 / 未展开的 schema 不在缓存）要靠重内省跟上，否则
+                // TTL 重读的永远是同一份旧 L2。与 TTL 同频 300s 至多一次。
+                let had_entry = cache_meta
+                    .lock()
+                    .map(|meta| meta.contains_key(&conn_id))
+                    .unwrap_or(false);
+                if had_entry && Self::warm_throttle_passed(&last_warm_secs, &conn_id) {
+                    database::nav_jobs::enqueue_warm_completion(&conn_id, project_root.as_deref());
                 }
             }
             // 【#53】写回前代际比对：已有更高代（期间另一次载入已写回）→ 本次结果作废
@@ -1224,5 +1265,35 @@ mod tests {
         assert!(port.entry_fresh("P_ttl_53"), "重载后条目新鲜");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 【B9 余项】warm 节流：首投放行并记时刻；TTL 间隔内拒绝且**不刷新**时刻；
+    /// 间隔过后再放行（拒绝不重置计时，否则高频调用会永远投不出去）
+    #[test]
+    fn warm_throttle_passes_once_per_ttl_window() {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+
+        let last: Mutex<HashMap<String, i64>> = Mutex::new(HashMap::new());
+        assert!(
+            WorkbenchCompletion::warm_throttle_passed(&last, "P_thr"),
+            "首投放行"
+        );
+        assert!(
+            !WorkbenchCompletion::warm_throttle_passed(&last, "P_thr"),
+            "TTL 间隔内拒绝"
+        );
+        // 人工把时刻拨回 TTL 之前 → 再次放行
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        last.lock()
+            .unwrap()
+            .insert("P_thr".to_string(), now - COMPLETION_CACHE_TTL_SECS - 1);
+        assert!(
+            WorkbenchCompletion::warm_throttle_passed(&last, "P_thr"),
+            "间隔过后再放行"
+        );
     }
 }
