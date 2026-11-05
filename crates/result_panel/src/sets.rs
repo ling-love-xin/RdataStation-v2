@@ -67,8 +67,9 @@ impl ResultSetTab {
 /// 结果集列表 → 标签（纯函数；血缘摘要接在这里）
 ///
 /// `current` = 文档当前的执行通道：与它不同的结果集标 `stale`（旧结果标灰）。
-/// `pinned` 与 `sets` 同序（空切片 = 全部未钉住；宿主侧 [`crate::store::ResultStore`] 提供）。
-pub fn tabs(sets: &[ResultEntry], current: ExecChannel, pinned: &[bool]) -> Vec<ResultSetTab> {
+/// `sets` 吃**引用切片**（条目内聚在 store 槽位里，[`crate::store::ResultStore::sets`]
+/// 收集引用返回）；`pinned` 与 `sets` 同序（空切片 = 全部未钉住；宿主侧提供）。
+pub fn tabs(sets: &[&ResultEntry], current: ExecChannel, pinned: &[bool]) -> Vec<ResultSetTab> {
     sets.iter()
         .enumerate()
         .map(|(index, entry)| ResultSetTab {
@@ -216,11 +217,16 @@ mod tests {
         )
     }
 
+    /// 测试辅助：`&[ResultEntry]` → `Vec<&ResultEntry>`（`tabs` 吃引用切片）
+    fn refs(sets: &[ResultEntry]) -> Vec<&ResultEntry> {
+        sets.iter().collect()
+    }
+
     /// 标签按产生顺序编号，失败项带标记（批量跑的三个结果要一眼看出哪个错了）
     #[test]
     fn labels_are_numbered_in_order_and_failures_are_marked() {
         let rendered = tabs(
-            &[ok("select 1"), failed("select boom"), ok("select 3")],
+            &refs(&[ok("select 1"), failed("select boom"), ok("select 3")]),
             ExecChannel::Source,
             &[],
         );
@@ -239,7 +245,7 @@ mod tests {
             ok("select 1"),
             ok("EXPLAIN select 1").with_title("执行计划"),
         ];
-        let labels: Vec<String> = tabs(&sets, ExecChannel::Source, &[])
+        let labels: Vec<String> = tabs(&refs(&sets), ExecChannel::Source, &[])
             .into_iter()
             .map(|tab| tab.label)
             .collect();
@@ -254,20 +260,20 @@ mod tests {
             ok_on("select 2", ExecChannel::Accelerated),
         ];
         // 当前在源库：第一份是“当前的”，第二份是旧结果
-        let first = tabs(&sets, ExecChannel::Source, &[]);
+        let first = tabs(&refs(&sets), ExecChannel::Source, &[]);
         assert_eq!(first[0].badge(), "源库");
         assert!(!first[0].stale);
         assert_eq!(first[1].badge(), "加速·旧", "旧结果要看得出来不是这档跑的");
         assert!(first[1].stale);
 
         // 切到加速档：角色反过来——徽标不撒谎，只是“旧”的归属变了
-        let second = tabs(&sets, ExecChannel::Accelerated, &[]);
+        let second = tabs(&refs(&sets), ExecChannel::Accelerated, &[]);
         assert_eq!(second[0].badge(), "源库·旧");
         assert_eq!(second[1].badge(), "加速");
 
         // 联邦徽标短码也是两字（与 `label` 不同：标签里挤不下“本地加速”）
         let federated = tabs(
-            &[ok_on("select 3", ExecChannel::Federated)],
+            &refs(&[ok_on("select 3", ExecChannel::Federated)]),
             ExecChannel::Source,
             &[],
         );
@@ -284,7 +290,7 @@ mod tests {
     #[test]
     fn pinned_slice_projects_into_tabs() {
         let sets = [ok("select 1"), ok("select 2"), ok("select 3")];
-        let rendered = tabs(&sets, ExecChannel::Source, &[true, false]);
+        let rendered = tabs(&refs(&sets), ExecChannel::Source, &[true, false]);
         assert_eq!(
             rendered.iter().map(|t| t.pinned).collect::<Vec<_>>(),
             [true, false, false],

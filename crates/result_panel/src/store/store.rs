@@ -1,7 +1,8 @@
 //! 结果集集合（`ResultStore`）与逐文档结果槽——自 store.rs 拆分（2026-10-29）
 //!
-//! 本模块承载结果集列表的集合语义（入槽 / 淘汰 / 追加 / 选中 / 对比）与配套
-//! 平行数组（变更集 / 编辑历史 / 本地叠加层 / 行级历史 / 事实档 / 钉住标记）；
+//! 本模块承载结果集列表的集合语义（入槽 / 淘汰 / 追加 / 选中 / 对比）；每份结果集
+//! 内聚为 [`SetSlot`] 槽位（2026-11-05 自七个平行数组收敛：条目 + 变更集 / 编辑历史 /
+//! 本地叠加层 / 行级历史 / 事实档 / 钉住标记一次落位、一次作废，错位由编译器排除）。
 //! 条目与列类型见 `entry`，事实档载体见 `fact`。
 
 use ::shared::FactFrame;
@@ -37,30 +38,76 @@ fn merge_fact_state(current: &mut FactState, incoming: Option<Arc<FactFrame>>) {
     }
 }
 
-/// 一份文档的结果集（列表 + 选中项 + 对比项）
+/// 一份结果集的槽位：条目 + 与它同生命周期的全部伴生状态（2026-11-05 自七个平行数组收敛）
+///
+/// 原先 `sets` / `changes` / `histories` / `locals` / `row_histories` / `facts` / `pinned`
+/// 七个平行数组靠「同序同增减」的注释纪律维持对齐，增删 / 替换 / 淘汰各有六处七连写。
+/// 收敛为槽位结构体后，一次 push / reset / remove 完成全部伴生状态的落位与作废，
+/// 任何伴生状态再增加时只需给本结构加一个字段，错位风险由编译器排除。
+///
+/// 本结构**不 derive `Clone`**：`FactState` 持 `Arc<FactFrame>`，克隆代价高
+/// （与 [`FactState`] 同一取舍，见 `fact.rs`）；槽位整体 push / replace / remove。
+#[derive(Debug)]
+struct SetSlot {
+    /// 结果条目（列 / 行 / 血缘 / 落位原料）
+    entry: ResultEntry,
+    /// 【T2a-3】**未提交变更**（格级三态；选中项切换不清空——用户切标签看别的结果，
+    /// 回来编辑还在。清空只发生在结果被替换 / 淘汰 / 已提交时）
+    changes: ChangeSet,
+    /// 【撤销】**编辑历史**（撤销 / 重做双栈；历史属于“这次抓到的数据”，结果被
+    /// 替换 / 淘汰时作废，切标签不清空）
+    history: EditHistory,
+    /// 【#28 行级叠加层】本地行集合 + 删除标记（生命周期同格级变更集：结果被
+    /// 替换 / 淘汰时作废，切标签不清空）
+    locals: LocalRowSet,
+    /// 【#28】**行级历史**（新增 / 复制 / 删除双栈；与格级 [`EditHistory`] 并列、互不混栈）
+    row_history: RowHistory,
+    /// 【A2】事实档状态（替换 / 淘汰时随结果作废，切标签不清空）。渲染第一期不读它，
+    /// 分析 / 导出按它选保真路径（A3 接线后生效）
+    fact: FactState,
+    /// 【C1】是否被用户钉住（钉住的槽位在 [`evict_oldest`] 里跳过——用户显式保留的
+    /// 结果不能被 FIFO 挤掉；会话级，不落盘）
+    pinned: bool,
+}
+
+impl SetSlot {
+    /// 新槽位：条目 + 事实档落位，伴生状态全新（新结果是新数据）
+    fn new(entry: ResultEntry, fact: FactState) -> Self {
+        Self {
+            entry,
+            changes: ChangeSet::new(),
+            history: EditHistory::new(),
+            locals: LocalRowSet::new(),
+            row_history: RowHistory::new(),
+            fact,
+            pinned: false,
+        }
+    }
+
+    /// 结果被替换（`Replace` / `Append` 列形状不符落替换分支）：条目换新，伴生状态作废
+    ///
+    /// - 变更集 / 编辑历史 / 本地叠加层 / 行级历史随旧结果作废（新结果是新数据）；
+    /// - 事实档换成新回执候选（无候选 = 降级档）；
+    /// - 钉住态不继承（旧结果已被替换为新结果）；
+    /// - `locals.clear()` 保留本地行 id 计数器（[`LocalRowSet::clear`] 原口径）。
+    fn reset_with(&mut self, entry: ResultEntry, fact: FactState) {
+        self.entry = entry;
+        self.changes = ChangeSet::new();
+        self.history.clear();
+        self.locals.clear();
+        self.row_history.clear();
+        self.fact = fact;
+        self.pinned = false;
+    }
+}
+
+/// 一份文档的结果集（槽位列表 + 选中项 + 对比项）
 #[derive(Debug)]
 struct DocumentResults {
     document: DocumentId,
-    sets: Vec<ResultEntry>,
-    /// 【T2a-3】每份结果集的**未提交变更**（与 `sets` 同序同增减；选中项切换不清空——
-    /// 用户切标签看别的结果，回来编辑还在。清空只发生在结果被替换 / 淘汰 / 已提交时）
-    changes: Vec<ChangeSet>,
-    /// 【撤销】每份结果集的**编辑历史**（撤销 / 重做双栈；与 `changes` 同序同增减——
-    /// 历史属于“这次抓到的数据”，结果被替换 / 淘汰时作废，切标签不清空）
-    histories: Vec<EditHistory>,
-    /// 【#28 行级叠加层】每份结果集的本地行集合 + 删除标记（与 `sets` 同序同增减；
-    /// 生命周期同格级变更集：结果被替换 / 淘汰时作废，切标签不清空）
-    locals: Vec<LocalRowSet>,
-    /// 【#28】每份结果集的**行级历史**（新增 / 复制 / 删除双栈；与格级 `histories`
-    /// 并列、互不混栈；同序同增减，结果作废时清空）
-    row_histories: Vec<RowHistory>,
-    /// 【A2】每份结果集的事实档状态（与 `sets` 同序同增减；替换 / 淘汰时随结果作废，
-    /// 切标签不清空）。渲染第一期不读它，分析 / 导出按它选保真路径（A3 接线后生效）
-    facts: Vec<FactState>,
-    /// 【C1】每份结果集是否被用户钉住（与 `sets` 同序同增减；钉住的 tab 在
-    /// [`evict_oldest`] 里跳过——用户显式保留的结果不能被 FIFO 挤掉；会话级，不落盘）
-    pinned: Vec<bool>,
-    /// 当前选中的结果集下标（始终指向 `sets` 中的有效位置；`sets` 非空时必有）
+    /// 结果集槽位（按产生顺序；每份槽位内聚条目与全部伴生状态）
+    slots: Vec<SetSlot>,
+    /// 当前选中的结果集下标（始终指向 `slots` 中的有效位置；`slots` 非空时必有）
     active: usize,
     /// 【并排对比】对比选中的结果集下标（`None` = 未开对比；`Some` ≠ `active` 恒成立）
     ///
@@ -101,13 +148,7 @@ impl ResultStore {
             None => {
                 self.documents.push(DocumentResults {
                     document,
-                    sets: Vec::new(),
-                    changes: Vec::new(),
-                    histories: Vec::new(),
-                    locals: Vec::new(),
-                    row_histories: Vec::new(),
-                    facts: Vec::new(),
-                    pinned: Vec::new(),
+                    slots: Vec::new(),
                     active: 0,
                     compare: None,
                 });
@@ -117,56 +158,19 @@ impl ResultStore {
 
         match placement {
             // 替换当前选中的那一份（第一次执行时为唯一的一份）
-            ResultPlacement::Replace => {
-                if let Some(current) = slot.sets.get_mut(slot.active) {
-                    *current = entry;
-                    // 【T2a-3】结果被覆盖：旧变更集随旧结果一起作废（新结果是新数据）
-                    if let Some(changes) = slot.changes.get_mut(slot.active) {
-                        *changes = ChangeSet::new();
-                    }
-                    // 【撤销】同理：旧结果的编辑历史随结果作废
-                    if let Some(history) = slot.histories.get_mut(slot.active) {
-                        history.clear();
-                    }
-                    // 【#28】本地叠加层与行级历史随旧结果一起作废
-                    if let Some(local) = slot.locals.get_mut(slot.active) {
-                        local.clear();
-                    }
-                    if let Some(row_history) = slot.row_histories.get_mut(slot.active) {
-                        row_history.clear();
-                    }
-                    // 【A3】旧事实档随旧结果作废：新结果是新数据，旧帧没有可归属的对象；
-                    // 新回执带事实帧候选则挂上，无候选（DML / 加速档 / 联邦档）走降级档。
-                    if let Some(fact_state) = slot.facts.get_mut(slot.active) {
-                        *fact_state = FactState::from_fact(fact.clone());
-                    }
-                    // 【C1】被覆盖的是新结果：钉住态不继承（旧结果已被替换为新结果）
-                    if let Some(pinned) = slot.pinned.get_mut(slot.active) {
-                        *pinned = false;
-                    }
-                } else {
-                    slot.sets.push(entry);
-                    slot.changes.push(ChangeSet::new());
-                    slot.histories.push(EditHistory::new());
-                    slot.locals.push(LocalRowSet::new());
-                    slot.row_histories.push(RowHistory::new());
-                    slot.facts.push(FactState::from_fact(fact));
-                    slot.pinned.push(false);
+            ResultPlacement::Replace => match slot.slots.get_mut(slot.active) {
+                Some(current) => current.reset_with(entry, FactState::from_fact(fact)),
+                None => {
+                    slot.slots.push(SetSlot::new(entry, FactState::from_fact(fact)));
                     slot.active = 0;
                 }
-            }
+            },
             // 追加一份新的，并**切到新结果集**（2026-10-27：用户要「每次执行一个 tab 且看
             // 最新结果」；原实现「选中项不动」导致执行后看不到新结果——观感像『一个 tab
             // 容纳了好多结果』。原型 §4.4「别动用户在看的」就此让位给「每次执行看新结果」）
             ResultPlacement::NewSet => {
-                slot.sets.push(entry);
-                slot.changes.push(ChangeSet::new());
-                slot.histories.push(EditHistory::new());
-                slot.locals.push(LocalRowSet::new());
-                slot.row_histories.push(RowHistory::new());
-                slot.facts.push(FactState::from_fact(fact));
-                slot.pinned.push(false);
-                slot.active = slot.sets.len() - 1;
+                slot.slots.push(SetSlot::new(entry, FactState::from_fact(fact)));
+                slot.active = slot.slots.len() - 1;
             }
             // 【B5b】接在选中那份后面（取下一段）：列形状不一致时落成一份新结果
             ResultPlacement::Append => {
@@ -175,53 +179,22 @@ impl ResultStore {
                 if entry.failed() {
                     return;
                 }
-                // **先判形状，再搬行**：对得上就把这一段**移**进去（换掉原先无条件
-                // `entry.rows.clone()` 的整段深拷贝），对不上则整条 entry 原封不动落下。
+                // **先判形状，再搬行**：对得上就把这一段**移**进去（不整条深拷贝），
+                // 对不上则整条 entry 原封不动落下（落替换分支，伴生状态随之作废）。
                 let appendable = slot
-                    .sets
+                    .slots
                     .get(slot.active)
-                    .is_some_and(|current| current.accepts_columns(&entry.columns));
+                    .is_some_and(|current| current.entry.accepts_columns(&entry.columns));
                 if appendable {
-                    let current = slot.sets.get_mut(slot.active).expect("刚判过这一份在");
-                    current.append_rows(entry.rows, entry.elapsed_ms, entry.has_more);
-                    current.adopt_column_types(entry.column_types);
+                    let current = slot.slots.get_mut(slot.active).expect("刚判过这一份在");
+                    current.entry.append_rows(entry.rows, entry.elapsed_ms, entry.has_more);
+                    current.entry.adopt_column_types(entry.column_types);
                     // 【A3】事实档同形状并入：旧段 + 新段 batches 合并重建；新段无 batches 回执保留旧档
-                    if let Some(fact_state) = slot.facts.get_mut(slot.active) {
-                        merge_fact_state(fact_state, fact);
-                    }
-                } else if let Some(current) = slot.sets.get_mut(slot.active) {
-                    *current = entry;
-                    // 同上：形状对不上落成替换，旧变更作废
-                    if let Some(changes) = slot.changes.get_mut(slot.active) {
-                        *changes = ChangeSet::new();
-                    }
-                    // 【撤销】旧编辑历史随替换作废
-                    if let Some(history) = slot.histories.get_mut(slot.active) {
-                        history.clear();
-                    }
-                    // 【#28】本地叠加层与行级历史随替换作废
-                    if let Some(local) = slot.locals.get_mut(slot.active) {
-                        local.clear();
-                    }
-                    if let Some(row_history) = slot.row_histories.get_mut(slot.active) {
-                        row_history.clear();
-                    }
-                    // 【A3】形状对不上 = 新结果：旧帧不再归属本段，挂新回执事实候选
-                    if let Some(fact_state) = slot.facts.get_mut(slot.active) {
-                        *fact_state = FactState::from_fact(fact.clone());
-                    }
-                    // 【C1】替换分支同 Replace：新结果不继承旧钉住
-                    if let Some(pinned) = slot.pinned.get_mut(slot.active) {
-                        *pinned = false;
-                    }
+                    merge_fact_state(&mut current.fact, fact);
+                } else if let Some(current) = slot.slots.get_mut(slot.active) {
+                    current.reset_with(entry, FactState::from_fact(fact));
                 } else {
-                    slot.sets.push(entry);
-                    slot.changes.push(ChangeSet::new());
-                    slot.histories.push(EditHistory::new());
-                    slot.locals.push(LocalRowSet::new());
-                    slot.row_histories.push(RowHistory::new());
-                    slot.facts.push(FactState::from_fact(fact));
-                    slot.pinned.push(false);
+                    slot.slots.push(SetSlot::new(entry, FactState::from_fact(fact)));
                     slot.active = 0;
                 }
             }
@@ -229,51 +202,60 @@ impl ResultStore {
         evict_oldest(slot);
     }
 
-    /// 某文档的结果集（按产生顺序；没有则空切片）
-    pub fn sets(&self, document: &DocumentId) -> &[ResultEntry] {
+    /// 按文档找结果槽（私有；所有访问器的公共前置）
+    fn slot(&self, document: &DocumentId) -> Option<&DocumentResults> {
+        self.documents.iter().find(|slot| &slot.document == document)
+    }
+
+    /// 按文档找结果槽（可变）
+    fn slot_mut(&mut self, document: &DocumentId) -> Option<&mut DocumentResults> {
         self.documents
-            .iter()
+            .iter_mut()
             .find(|slot| &slot.document == document)
-            .map(|slot| slot.sets.as_slice())
-            .unwrap_or(&[])
+    }
+
+    /// 某文档的结果集（按产生顺序；没有则空）
+    ///
+    /// 槽位化后条目内聚在 [`SetSlot`] 里，这里**收集引用**返回（结果集上限很小，
+    /// 引用拷贝可忽略；原先返回裸切片的前提是条目单独成数组，收敛后不再成立）。
+    pub fn sets(&self, document: &DocumentId) -> Vec<&ResultEntry> {
+        self.slot(document)
+            .map(|slot| slot.slots.iter().map(|s| &s.entry).collect())
+            .unwrap_or_default()
     }
 
     /// 某文档结果集的条数
     pub fn set_count(&self, document: &DocumentId) -> usize {
-        self.sets(document).len()
+        self.slot(document).map_or(0, |slot| slot.slots.len())
     }
 
     /// 某文档当前选中的结果集（结果网格显示的就是这一份）
     pub fn active(&self, document: &DocumentId) -> Option<&ResultEntry> {
-        self.documents
-            .iter()
-            .find(|slot| &slot.document == document)
-            .and_then(|slot| slot.sets.get(slot.active))
+        self.slot(document)
+            .and_then(|slot| slot.slots.get(slot.active))
+            .map(|s| &s.entry)
     }
 
     /// 某文档当前选中的下标（结果集标签条用它画选中态）
     pub fn active_index(&self, document: &DocumentId) -> Option<usize> {
-        self.documents
-            .iter()
-            .find(|slot| &slot.document == document && !slot.sets.is_empty())
+        self.slot(document)
+            .filter(|slot| !slot.slots.is_empty())
             .map(|slot| slot.active)
     }
 
     /// 【A2】指定文档第 `index` 份结果的事实档状态（越界 / 文档不存在 = `None`）。
     /// 渲染第一期不读它；A3 接线后分析 / 带类型导出按它选保真路径。
     pub fn fact_at(&self, document: &DocumentId, index: usize) -> Option<&FactState> {
-        self.documents
-            .iter()
-            .find(|slot| &slot.document == document)
-            .and_then(|slot| slot.facts.get(index))
+        self.slot(document)
+            .and_then(|slot| slot.slots.get(index))
+            .map(|s| &s.fact)
     }
 
     /// 【A2】当前选中结果的事实档状态（与 `active` 同槽位同序）
     pub fn active_fact(&self, document: &DocumentId) -> Option<&FactState> {
-        self.documents
-            .iter()
-            .find(|slot| &slot.document == document)
-            .and_then(|slot| slot.facts.get(slot.active))
+        self.slot(document)
+            .and_then(|slot| slot.slots.get(slot.active))
+            .map(|s| &s.fact)
     }
 
     /// 【B2】物化回写：把常驻表名挂到指定槽位事实帧（分析 / 带类型导出直灌成功后，
@@ -283,14 +265,11 @@ impl ResultStore {
     /// - 表档帧：表名以既有句柄为准，不再二次变更；
     /// - 无事实档 / 越界返回 `false`。
     pub fn set_fact_table(&mut self, document: &DocumentId, index: usize, table: String) -> bool {
-        let Some(slot) = self
-            .documents
-            .iter_mut()
-            .find(|slot| &slot.document == document)
+        let Some(state) = self
+            .slot_mut(document)
+            .and_then(|slot| slot.slots.get_mut(index))
+            .map(|s| &mut s.fact)
         else {
-            return false;
-        };
-        let Some(state) = slot.facts.get_mut(index) else {
             return false;
         };
         match state {
@@ -316,14 +295,11 @@ impl ResultStore {
         index: usize,
         table: String,
     ) -> bool {
-        let Some(slot) = self
-            .documents
-            .iter_mut()
-            .find(|slot| &slot.document == document)
+        let Some(state) = self
+            .slot_mut(document)
+            .and_then(|slot| slot.slots.get_mut(index))
+            .map(|s| &mut s.fact)
         else {
-            return false;
-        };
-        let Some(state) = slot.facts.get_mut(index) else {
             return false;
         };
         match state {
@@ -347,14 +323,10 @@ impl ResultStore {
     /// **变更集不因切换选中而清空**：变更集按结果集存（`changes` 与 `sets` 同序），
     /// 换标签看别的结果、再切回来，这份的编辑还在——清空只发生在结果被覆盖 / 淘汰 / 提交后。
     pub fn select(&mut self, document: &DocumentId, index: usize) -> bool {
-        let Some(slot) = self
-            .documents
-            .iter_mut()
-            .find(|slot| &slot.document == document)
-        else {
+        let Some(slot) = self.slot_mut(document) else {
             return false;
         };
-        if index >= slot.sets.len() || index == slot.active {
+        if index >= slot.slots.len() || index == slot.active {
             return false;
         }
         slot.active = index;
@@ -367,18 +339,14 @@ impl ResultStore {
 
     /// 【并排对比】当前对比选中的下标（`None` = 未开对比；与 `active` 恒不同）
     pub fn compare_index(&self, document: &DocumentId) -> Option<usize> {
-        self.documents
-            .iter()
-            .find(|slot| &slot.document == document)
-            .and_then(|slot| slot.compare)
+        self.slot(document).and_then(|slot| slot.compare)
     }
 
     /// 【并排对比】对比选中的那份结果（并排渲染读它；未开对比 = `None`）
     pub fn compare_entry(&self, document: &DocumentId) -> Option<&ResultEntry> {
-        self.documents
-            .iter()
-            .find(|slot| &slot.document == document)
-            .and_then(|slot| slot.compare.and_then(|index| slot.sets.get(index)))
+        self.slot(document)
+            .and_then(|slot| slot.compare.and_then(|index| slot.slots.get(index)))
+            .map(|s| &s.entry)
     }
 
     /// 【并排对比】把第 `index` 份结果设为对比项（标签条「设为对比」；返回是否真的改了）
@@ -387,14 +355,10 @@ impl ResultStore {
     /// 同一份结果集作为对比项**没有先决条件**——失败 / 写语句的结果也可并排对照
     /// （错误信息并排看也是对比的一部分），不摆网格与否由渲染层各自决定。
     pub fn select_compare(&mut self, document: &DocumentId, index: usize) -> bool {
-        let Some(slot) = self
-            .documents
-            .iter_mut()
-            .find(|slot| &slot.document == document)
-        else {
+        let Some(slot) = self.slot_mut(document) else {
             return false;
         };
-        if index >= slot.sets.len() || index == slot.active {
+        if index >= slot.slots.len() || index == slot.active {
             return false;
         }
         slot.compare = Some(index);
@@ -403,18 +367,14 @@ impl ResultStore {
 
     /// 【并排对比】点同一份 = 取消对比（标签条再次点击；返回是否真的清掉了）
     pub fn toggle_compare(&mut self, document: &DocumentId, index: usize) -> bool {
-        let Some(slot) = self
-            .documents
-            .iter_mut()
-            .find(|slot| &slot.document == document)
-        else {
+        let Some(slot) = self.slot_mut(document) else {
             return false;
         };
         if slot.compare == Some(index) {
             slot.compare = None;
             return true;
         }
-        if index < slot.sets.len() && index != slot.active {
+        if index < slot.slots.len() && index != slot.active {
             slot.compare = Some(index);
             return true;
         }
@@ -433,14 +393,11 @@ impl ResultStore {
         index: usize,
         title: Option<String>,
     ) -> bool {
-        let Some(slot) = self
-            .documents
-            .iter_mut()
-            .find(|slot| &slot.document == document)
+        let Some(entry) = self
+            .slot_mut(document)
+            .and_then(|slot| slot.slots.get_mut(index))
+            .map(|s| &mut s.entry)
         else {
-            return false;
-        };
-        let Some(entry) = slot.sets.get_mut(index) else {
             return false;
         };
         // 空白串视同恢复自动标签（用户清空输入框 = 不想要别名）
@@ -466,14 +423,11 @@ impl ResultStore {
     ///
     /// 返回是否真的改到（文档不存在 / 下标越界 = `false`）。
     pub fn toggle_pin(&mut self, document: &DocumentId, index: usize) -> bool {
-        let Some(slot) = self
-            .documents
-            .iter_mut()
-            .find(|slot| &slot.document == document)
+        let Some(pinned) = self
+            .slot_mut(document)
+            .and_then(|slot| slot.slots.get_mut(index))
+            .map(|s| &mut s.pinned)
         else {
-            return false;
-        };
-        let Some(pinned) = slot.pinned.get_mut(index) else {
             return false;
         };
         *pinned = !*pinned;
@@ -482,28 +436,24 @@ impl ResultStore {
 
     /// 【C1】读某份结果集是否被钉住（越界 = `false`）
     pub fn is_pinned(&self, document: &DocumentId, index: usize) -> bool {
-        self.documents
-            .iter()
-            .find(|slot| &slot.document == document)
-            .and_then(|slot| slot.pinned.get(index).copied())
+        self.slot(document)
+            .and_then(|slot| slot.slots.get(index))
+            .map(|s| s.pinned)
             .unwrap_or(false)
     }
 
-    /// 【C1】整份文档的钉住标记切片（与 `sets` 同序；投影给 [`crate::sets::tabs`] 用）
-    pub fn pinned(&self, document: &DocumentId) -> &[bool] {
-        self.documents
-            .iter()
-            .find(|slot| &slot.document == document)
-            .map(|slot| slot.pinned.as_slice())
-            .unwrap_or(&[])
+    /// 【C1】整份文档的钉住标记（与 [`Self::sets`] 同序；投影给 [`crate::sets::tabs`] 用）
+    pub fn pinned(&self, document: &DocumentId) -> Vec<bool> {
+        self.slot(document)
+            .map(|slot| slot.slots.iter().map(|s| s.pinned).collect())
+            .unwrap_or_default()
     }
 
     /// 【T2a-3】某份结果集的**未提交变更**（只读：UI 标脏格 / 变更计数都读它）
     pub fn change_set(&self, document: &DocumentId, index: usize) -> Option<&ChangeSet> {
-        self.documents
-            .iter()
-            .find(|slot| &slot.document == document)
-            .and_then(|slot| slot.changes.get(index))
+        self.slot(document)
+            .and_then(|slot| slot.slots.get(index))
+            .map(|s| &s.changes)
     }
 
     /// 【T2a-3】变更某份结果集的变更集（单元格提交 / Esc 撤销 / 提交回执标记都走这里）
@@ -515,14 +465,11 @@ impl ResultStore {
         index: usize,
         update: impl FnOnce(&mut ChangeSet),
     ) -> bool {
-        let Some(slot) = self
-            .documents
-            .iter_mut()
-            .find(|slot| &slot.document == document)
+        let Some(changes) = self
+            .slot_mut(document)
+            .and_then(|slot| slot.slots.get_mut(index))
+            .map(|s| &mut s.changes)
         else {
-            return false;
-        };
-        let Some(changes) = slot.changes.get_mut(index) else {
             return false;
         };
         update(changes);
@@ -531,10 +478,9 @@ impl ResultStore {
 
     /// 某份结果集的编辑历史（撤销 / 重做栈；没有则 `None`）
     pub fn history(&self, document: &DocumentId, index: usize) -> Option<&EditHistory> {
-        self.documents
-            .iter()
-            .find(|slot| &slot.document == document)
-            .and_then(|slot| slot.histories.get(index))
+        self.slot(document)
+            .and_then(|slot| slot.slots.get(index))
+            .map(|s| &s.history)
     }
 
     /// 【撤销】变更某份结果集的编辑历史（编辑提交入栈 / 撤销 / 重做 / 结果作废清空都走这里）
@@ -546,14 +492,11 @@ impl ResultStore {
         index: usize,
         update: impl FnOnce(&mut EditHistory),
     ) -> bool {
-        let Some(slot) = self
-            .documents
-            .iter_mut()
-            .find(|slot| &slot.document == document)
+        let Some(history) = self
+            .slot_mut(document)
+            .and_then(|slot| slot.slots.get_mut(index))
+            .map(|s| &mut s.history)
         else {
-            return false;
-        };
-        let Some(history) = slot.histories.get_mut(index) else {
             return false;
         };
         update(history);
@@ -562,10 +505,9 @@ impl ResultStore {
 
     /// 【#28】某份结果集的本地叠加层（本地行 + 删除标记；只读投影 / 计数用）
     pub fn local_rows(&self, document: &DocumentId, index: usize) -> Option<&LocalRowSet> {
-        self.documents
-            .iter()
-            .find(|slot| &slot.document == document)
-            .and_then(|slot| slot.locals.get(index))
+        self.slot(document)
+            .and_then(|slot| slot.slots.get(index))
+            .map(|s| &s.locals)
     }
 
     /// 【#28】变更某份结果集的本地叠加层（新增 / 复制 / 删除标记都走这里）
@@ -577,14 +519,11 @@ impl ResultStore {
         index: usize,
         update: impl FnOnce(&mut LocalRowSet),
     ) -> bool {
-        let Some(slot) = self
-            .documents
-            .iter_mut()
-            .find(|slot| &slot.document == document)
+        let Some(local) = self
+            .slot_mut(document)
+            .and_then(|slot| slot.slots.get_mut(index))
+            .map(|s| &mut s.locals)
         else {
-            return false;
-        };
-        let Some(local) = slot.locals.get_mut(index) else {
             return false;
         };
         update(local);
@@ -593,10 +532,9 @@ impl ResultStore {
 
     /// 【#28】某份结果集的行级历史（新增 / 复制 / 删除撤销重做双栈；没有则 `None`）
     pub fn row_history(&self, document: &DocumentId, index: usize) -> Option<&RowHistory> {
-        self.documents
-            .iter()
-            .find(|slot| &slot.document == document)
-            .and_then(|slot| slot.row_histories.get(index))
+        self.slot(document)
+            .and_then(|slot| slot.slots.get(index))
+            .map(|s| &s.row_history)
     }
 
     /// 【#28】变更某份结果集的行级历史（行级动作入栈 / 撤销 / 重做 / 结果作废清空）
@@ -608,14 +546,11 @@ impl ResultStore {
         index: usize,
         update: impl FnOnce(&mut RowHistory),
     ) -> bool {
-        let Some(slot) = self
-            .documents
-            .iter_mut()
-            .find(|slot| &slot.document == document)
+        let Some(history) = self
+            .slot_mut(document)
+            .and_then(|slot| slot.slots.get_mut(index))
+            .map(|s| &mut s.row_history)
         else {
-            return false;
-        };
-        let Some(history) = slot.row_histories.get_mut(index) else {
             return false;
         };
         update(history);
@@ -634,14 +569,11 @@ impl ResultStore {
         column: usize,
         value: impl Into<String>,
     ) -> bool {
-        let Some(slot) = self
-            .documents
-            .iter_mut()
-            .find(|slot| &slot.document == document)
+        let Some(entry) = self
+            .slot_mut(document)
+            .and_then(|slot| slot.slots.get_mut(index))
+            .map(|s| &mut s.entry)
         else {
-            return false;
-        };
-        let Some(entry) = slot.sets.get_mut(index) else {
             return false;
         };
         entry.apply_cell(row, column, value)
@@ -664,28 +596,18 @@ impl ResultStore {
 
 /// 超过上限就淘汰**最旧的未选中**结果集（选中项保留，选中下标跟着修正）
 ///
-/// 【C1】用户显式钉住（[`DocumentResults::pinned`]）的结果集**永不被 FIFO 淘汰**：
+/// 【C1】用户显式钉住（[`SetSlot::pinned`]）的结果集**永不被 FIFO 淘汰**：
 /// 找 victim 时跳过它们；若全被钉住且还超上限就不再淘汰（钉住是用户的硬约束，
-/// 内存压力由用户自己去解钉 / 关文档，界面不替他决定）。
+/// 内存压力由用户自己去解钉 / 关文档，界面不替他决定）。槽位化后淘汰是一次
+/// `remove`——条目与全部伴生状态同生共死。
 fn evict_oldest(slot: &mut DocumentResults) {
-    while slot.sets.len() > MAX_RESULT_SETS {
-        let Some(victim) = (0..slot.sets.len()).find(|index| {
-            *index != slot.active && !slot.pinned.get(*index).copied().unwrap_or(false)
-        }) else {
+    while slot.slots.len() > MAX_RESULT_SETS {
+        let Some(victim) = (0..slot.slots.len())
+            .find(|index| *index != slot.active && !slot.slots[*index].pinned)
+        else {
             break;
         };
-        slot.sets.remove(victim);
-        // 【T2a-3】变更集跟着结果集一起淘汰（被淘汰那份的编辑没有可提交的对象了）
-        slot.changes.remove(victim);
-        // 【撤销】编辑历史跟着结果集一起淘汰（同理）
-        slot.histories.remove(victim);
-        // 【#28】本地叠加层与行级历史跟着结果集一起淘汰（同理）
-        slot.locals.remove(victim);
-        slot.row_histories.remove(victim);
-        // 【A2】事实档跟着结果集一起淘汰（被淘汰那份的帧没有可归属的结果集了）
-        slot.facts.remove(victim);
-        // 【C1】钉住标记跟着结果集一起淘汰（被淘汰那份的标记没对象了）
-        slot.pinned.remove(victim);
+        slot.slots.remove(victim);
         if victim < slot.active {
             slot.active -= 1;
         }

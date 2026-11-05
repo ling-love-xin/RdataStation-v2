@@ -269,9 +269,18 @@ fn switching_channels_stamps_results_and_greys_the_old_ones(cx: &mut TestAppCont
 
     // 加速档再跑一份：它带的是加速徽标（不是源库）
     run_statement(cx, &panel, "select 2", execution::ResultPlacement::NewSet);
-    let sets = shared.results().sets(&id).to_vec();
-    assert_eq!(sets.len(), 2);
-    assert_eq!(sets[1].channel, ExecChannel::Accelerated);
+    // 【#28-槽位化】条目内聚在 store 槽位里，`sets` 返回引用收集——在块内借 Ref 拷出
+    // 通道值（Ref 是临时值，不能被 let 绑定的借用带出语句）
+    let channels = {
+        let store = shared.results();
+        store
+            .sets(&id)
+            .iter()
+            .map(|entry| entry.channel)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(channels.len(), 2);
+    assert_eq!(channels[1], ExecChannel::Accelerated);
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).result_badges_for_test(cx)),
         ["源库·旧", "加速"]

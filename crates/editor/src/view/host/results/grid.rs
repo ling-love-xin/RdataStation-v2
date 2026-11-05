@@ -110,9 +110,9 @@ impl EditorHostPanel {
             });
             (
                 result_sets::tabs(
-                    store.sets(&self.document),
+                    &store.sets(&self.document),
                     current_channel,
-                    store.pinned(&self.document),
+                    &store.pinned(&self.document),
                 ),
                 active,
                 entry.filter(|entry| entry.has_grid()).map(|entry| {

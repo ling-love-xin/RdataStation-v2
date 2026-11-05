@@ -7,7 +7,8 @@ use ::shared::FactFrame;
 use std::sync::Arc;
 /// 【A2】事实档载体状态（L0 事实层；方案 §4.1 三态状态机）
 ///
-/// 与 [`ResultEntry`] 平行存放在 `DocumentResults.facts`，**不进 `ResultEntry`**：
+/// 与 [`ResultEntry`] 同槽内聚存放在 `DocumentResults` 的 [`SetSlot.fact`]
+/// （2026-11-05 前为平行数组 `DocumentResults.facts`），**不进 `ResultEntry`**：
 /// `Arc<FactFrame>` 深拷贝代价高，挂进 `ResultEntry` 的 `Clone` / `PartialEq` 会触发
 /// 逐值比较与整帧深拷贝。本枚举同样不 derive `Clone`，槽位整体替换 / 淘汰。
 ///

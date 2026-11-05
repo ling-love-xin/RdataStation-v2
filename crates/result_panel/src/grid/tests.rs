@@ -2594,3 +2594,51 @@ fn bench_text_presentation_large_set() {
         "缓存命中应远快于首拼（cold={cold:?} hot={hot:?}）"
     );
 }
+
+/// 【P2 摸底】`sync()` 全量重投影的成本探针（50k × 8，与文本视图基准同规格）。
+///
+/// `ResultPanel::sync()` 每次都把 `GridPayload.rows` 灌进 `set_data`（含视图行重建），
+/// 编辑提交回执 / 脏格更新这些轻量状态变化也走同一条路。本探针量出三段成本：
+/// 1. `reorder_by` **空序透传**（持久化列序为空 = 大多数会话；rows move 直通，应近零）；
+/// 2. `reorder_by` **带持久化列序重排**（#296 列序持久化生效后每次 sync 的新增成本）；
+/// 3. `set_data` **全量重灌**（sync 的主体成本；第二次灌入 = 编辑回执后的重投影）。
+///
+/// 观察口径：release 模式 `cargo test -p rds-result-panel --release bench_set_data -- --nocapture`；
+/// 分段抓取默认 200 行时这些成本无感，只有 FetchAll 到几万行后才可能成为「编辑卡一下」
+/// 的来源——数据超过百毫秒量级时再考虑投影代次短路（`GridPayload` 指纹跳过 `set_data`）。
+#[test]
+fn bench_set_data_resync_large_set() {
+    let cols: Vec<String> = (0..8).map(|i| format!("col{}", i)).collect();
+    let rows: Vec<Vec<String>> = (0..50_000)
+        .map(|r| (0..8).map(|c| format!("v{}:{}", r, c)).collect())
+        .collect();
+
+    // 1) 空序透传（clone 在计时窗口外：只量 move 直通）
+    let cols_a = cols.clone();
+    let rows_a = rows.clone();
+    let t0 = std::time::Instant::now();
+    let _ = crate::panel::events::reorder_by(&[], cols_a, rows_a);
+    let passthrough = t0.elapsed();
+
+    // 2) 带持久化列序：倒序重排（每次 sync 对全部行逐格重排）
+    let cols_b = cols.clone();
+    let rows_b = rows.clone();
+    let order: Vec<String> = cols.iter().rev().cloned().collect();
+    let t1 = std::time::Instant::now();
+    let _ = crate::panel::events::reorder_by(&order, cols_b, rows_b);
+    let reordered = t1.elapsed();
+
+    // 3) set_data 全量重灌：先灌一次（构造期），第二次计时（模拟编辑回执后的重投影）
+    let mut grid = ResultGridDelegate::default();
+    grid.set_data(cols.clone(), rows.clone());
+    let cols_c = cols;
+    let rows_c = rows;
+    let t2 = std::time::Instant::now();
+    grid.set_data(cols_c, rows_c);
+    let resync = t2.elapsed();
+
+    eprintln!(
+        "BENCH sync projection 50k x 8: reorder passthrough={:?} reordered={:?} set_data resync={:?}",
+        passthrough, reordered, resync
+    );
+}
