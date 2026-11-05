@@ -38,7 +38,7 @@ use std::sync::atomic::AtomicBool;
 
 use engine::sql::{ColumnDefInfo, SqlEngine};
 use mock::mock_view::{
-    MockColumnSpec, MockDraft, MockGenInfo, MockPreview, SchemaRequest, SchemaSource,
+    MockColumnSpec, MockGenInfo, MockPreview, MockTableConfig, SchemaRequest, SchemaSource,
 };
 use mock::models::{ColumnDef, GeneratorConfig, MockConfig, MockExportFormat, ScenarioTemplate};
 use mock::{
@@ -157,14 +157,14 @@ fn max_of_column(
 
 /// 追加目标表的现状快照（S3：对话框展示 + 自增起点接续都用它）。
 ///
-/// `pk_column` / `max_pk`：**本次生成的隐含主键**（草稿里 `AutoIncrement` 生成器的列）
+/// `pk_column` / `max_pk`：**本次生成的隐含主键**（表配置里 `AutoIncrement` 生成器的列）
 /// 对应到目标表同名列的最大值——v2 不建主键 DDL，但自增列就是语义上的主键，
 /// 追加时按 `MAX(pk) + 1` 接续（而不是按行数 + 1，行数在目标表被删行后就会偏）。
 #[derive(Debug, Clone)]
 pub struct TableAppendStatus {
     /// 目标表现有行数
     pub row_count: i64,
-    /// 自增（隐含主键）列名；目标表没有该列 / 草稿没有自增列时为 `None`
+    /// 自增（隐含主键）列名；目标表没有该列 / 表配置没有自增列时为 `None`
     pub pk_column: Option<String>,
     /// 自增列现有最大值（表空为 `None`）
     pub max_pk: Option<i64>,
@@ -172,7 +172,7 @@ pub struct TableAppendStatus {
 
 /// 追加目标表现状（S3）：行数 + 自增列 MAX。
 ///
-/// `pk_hint` 是**本次生成的自增列名**（草稿里 `AutoIncrement` 生成器的列）：
+/// `pk_hint` 是**本次生成的自增列名**（表配置里 `AutoIncrement` 生成器的列）：
 /// 它对应目标表的隐含主键。目标表没有该列时 `pk_column` 回落 `None`（自增起点按行数 + 1）。
 pub fn table_append_status(
     db_path: &Path,
@@ -209,7 +209,7 @@ pub fn table_append_status(
 /// 落库 / 落盘是出口的职责（[`persist_table_at`] / [`append_table_at`] / [`export_file`]）。
 pub fn generate_at(
     db_path: Option<&Path>,
-    draft: &MockDraft,
+    draft: &MockTableConfig,
     append_to: Option<&str>,
 ) -> Result<MockGenInfo, String> {
     generate_at_with_progress(db_path, draft, append_to, new_cancel_token(), |_, _| {})
@@ -224,7 +224,7 @@ pub fn generate_at(
 /// 引擎在批次边界返回 `Err("生成已取消")`。
 pub fn generate_at_with_progress<F>(
     db_path: Option<&Path>,
-    draft: &MockDraft,
+    draft: &MockTableConfig,
     append_to: Option<&str>,
     cancel: Arc<AtomicBool>,
     on_progress: F,
@@ -266,7 +266,7 @@ where
         row_count: draft.options.rows,
         seed: draft.options.seed,
         locale: draft.options.locale.clone(),
-        // 留一份给结果：出口（落库建表 / 目标列校对）要凭它，不能再去读草稿
+        // 留一份给结果：出口（落库建表 / 目标列校对）要凭它，不能再去读表配置
         columns: columns.clone(),
     };
 
@@ -296,7 +296,7 @@ const PREVIEW_ROWS: usize = 20;
 ///
 /// 与 [`generate_at`] 的两点不同：
 ///
-/// 1. 目标表 / 列 / 行数全部来自模板——**草稿不参与**（用户的多表选择与草稿配置互不干扰）；
+/// 1. 目标表 / 列 / 行数全部来自模板——**表配置不参与**（用户的多表选择与表配置互不干扰）；
 /// 2. 引擎只回表级摘要（`MockScenarioTableResult` 不带预览），所以这里**逐表**再取一次
 ///    预览（`MockEngine::preview` 读同一张内存临时表），让面板的通用结果区对每张表都成立。
 ///
@@ -442,7 +442,7 @@ pub fn append_table_at(db_path: &Path, info: &MockGenInfo, table: &str) -> Resul
 
 /// 出口：导出文件（CSV / Parquet / Xlsx / SQL INSERT）。
 ///
-/// 写进文件里的表名取自结果（SQL INSERT 的表名、Xlsx 的表头用），不是草稿。
+/// 写进文件里的表名取自结果（SQL INSERT 的表名、Xlsx 的表头用），不是表配置。
 pub fn export_file(
     info: &MockGenInfo,
     format: &MockExportFormat,
@@ -659,6 +659,8 @@ fn map_details(
                 },
                 confidence,
                 sample_value,
+                // 从库表推断出来的列没有「用户点中的自定义生成器」身份
+                user_generator: None,
             })
         })
         .collect()

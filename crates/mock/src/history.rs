@@ -38,7 +38,7 @@ use uuid::Uuid;
 
 use crate::generator_catalog;
 use crate::mock_view::{
-    MockColumnSpec, MockDraft, MockJobDone, MockJobKind, default_generator_for,
+    MockColumnSpec, MockJobDone, MockJobKind, MockTableConfig, default_generator_for,
 };
 use crate::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale};
 use crate::persistence::{
@@ -60,11 +60,17 @@ pub const SAVE_FORMAT_TABLE: &str = "table";
 #[derive(Debug, Clone)]
 pub enum HistoryAction {
     /// 记一次生成运行（成功与失败都记；取消与出口类不记，见 [`RunRecord::of`]）。
-    Record { draft: MockDraft, run: RunRecord },
+    Record {
+        draft: MockTableConfig,
+        run: RunRecord,
+    },
     /// 删一条历史（连带它的列行）。
     DeleteTask(String),
-    /// 把当前草稿存成用户模板。
-    SaveTemplate { name: String, draft: MockDraft },
+    /// 把当前表配置存成用户模板。
+    SaveTemplate {
+        name: String,
+        draft: MockTableConfig,
+    },
     /// 删一个用户模板（连带它的列行）。
     DeleteTemplate(String),
 }
@@ -129,7 +135,7 @@ impl RunRecord {
     pub fn of(
         kind: &MockJobKind,
         result: &Result<MockJobDone, String>,
-        draft: &MockDraft,
+        draft: &MockTableConfig,
     ) -> Option<Self> {
         let (save_format, scene) = match kind {
             MockJobKind::Generate => (None, None),
@@ -271,12 +277,12 @@ async fn read_snapshot(store: &MockGenerationStore, limit: u32) -> Result<Histor
 
 // ==================== 映射（纯函数，单测锁住） ====================
 
-/// 草稿 + 运行结局 → 历史任务与列。
+/// 表配置 + 运行结局 → 历史任务与列。
 ///
 /// 列序即 `sort_order`（读回时按它排）；生成器存**目录名 + 参数 JSON**，与
 /// [`config_from_parts`] 严格对称——重放因此不需要第二套映射表。
 pub fn task_of_run(
-    draft: &MockDraft,
+    draft: &MockTableConfig,
     run: &RunRecord,
     now: DateTime<Utc>,
 ) -> (MockGenerationTask, Vec<MockGenerationColumn>) {
@@ -344,13 +350,13 @@ pub fn task_of_run(
     (task, columns)
 }
 
-/// 草稿 + 模板名 → 用户模板与模板列。
+/// 表配置 + 模板名 → 用户模板与模板列。
 ///
 /// 模板存的是「怎么造数据」（行数 / 种子 / 语言 / 列），**不存目标表名**——表名是
 /// 「造到哪张表」，属于一次运行的输入，不属于可复用的配置，见 [`draft_of_template`]。
 pub fn template_of_draft(
     name: &str,
-    draft: &MockDraft,
+    draft: &MockTableConfig,
     now: DateTime<Utc>,
 ) -> (MockUserTemplate, Vec<MockTemplateColumn>) {
     let template_id = Uuid::new_v4().to_string();
@@ -384,12 +390,12 @@ pub fn template_of_draft(
     (template, columns)
 }
 
-/// 历史条目 + 列 → 草稿（重放）。
+/// 历史条目 + 列 → 表配置（重放）。
 ///
 /// 列 id 从 1 起编：面板拿到后按自己的 `next_id` 重新编号（id 只用于面板内部定位）。
 /// **列依赖不随重放恢复**：`dependency` 是场景模板 / 手加关系的产物，而历史存的是单表配置；
 /// 要它的人重新导入结构或加一次关系即可——凭空塞一个指向不存在父表的依赖，生成期必报错。
-pub fn draft_of_detail(detail: &MockGenerationDetail) -> MockDraft {
+pub fn draft_of_detail(detail: &MockGenerationDetail) -> MockTableConfig {
     let mut draft = draft_of_parts(
         detail.task.row_count,
         detail.task.seed,
@@ -400,11 +406,14 @@ pub fn draft_of_detail(detail: &MockGenerationDetail) -> MockDraft {
     draft
 }
 
-/// 模板 + 列 → 草稿（应用模板）。
+/// 模板 + 列 → 表配置（应用模板）。
 ///
-/// **不改目标表名**：模板不存表名，这里留 `MockDraft::default()` 的名字，由调用方按当前
+/// **不改目标表名**：模板不存表名，这里留 `MockTableConfig::default()` 的名字，由调用方按当前
 /// 输入覆盖（「把这份配置摆回来」不该顺手换掉用户正在写的表名）。
-pub fn draft_of_template(template: &MockUserTemplate, columns: &[MockTemplateColumn]) -> MockDraft {
+pub fn draft_of_template(
+    template: &MockUserTemplate,
+    columns: &[MockTemplateColumn],
+) -> MockTableConfig {
     draft_of_parts(
         template.row_count,
         template.seed,
@@ -413,14 +422,14 @@ pub fn draft_of_template(template: &MockUserTemplate, columns: &[MockTemplateCol
     )
 }
 
-/// 运行参数 + 列 → 草稿（重放与应用模板共用的骨架）。
+/// 运行参数 + 列 → 表配置（重放与应用模板共用的骨架）。
 fn draft_of_parts(
     rows: i32,
     seed: Option<i32>,
     locale: &str,
     columns: impl Iterator<Item = MockColumnSpec>,
-) -> MockDraft {
-    let mut draft = MockDraft::default();
+) -> MockTableConfig {
+    let mut draft = MockTableConfig::default();
     // 行数下限 1：历史行里可能出现 0（旧记录 / 手工改库），引擎对 0 行会直接拒绝
     draft.options.rows = rows.max(1) as u32;
     draft.options.seed = seed.map(|seed| seed as u32);
@@ -435,7 +444,7 @@ fn draft_of_parts(
     draft
 }
 
-/// 存下来的列 → 草稿列（两张「列」表共用的读取面）。
+/// 存下来的列 → 表配置列（两张「列」表共用的读取面）。
 fn spec_of_stored(column: &impl StoredColumn) -> MockColumnSpec {
     // 写入时类型串是合法的；读回遇到解析失败（手工改库 / 旧版本写入的怪串）退 Text，不拦重放
     let data_type = parse_data_type(column.column_type()).unwrap_or_else(|_| ColumnDataType::Text);
@@ -459,6 +468,7 @@ fn spec_of_stored(column: &impl StoredColumn) -> MockColumnSpec {
             .map(str::to_string)
             .unwrap_or_else(|| "manual".to_string()),
         sample_value: String::new(),
+        user_generator: None,
     }
 }
 
@@ -527,7 +537,7 @@ impl StoredColumn for MockTemplateColumn {
     }
 }
 
-/// 草稿列 → 两张「列」表的公共字段（写路径，与 [`StoredColumn`] 对偶）。
+/// 表配置列 → 两张「列」表的公共字段（写路径，与 [`StoredColumn`] 对偶）。
 struct ColumnFields {
     column_name: String,
     column_type: String,
@@ -571,7 +581,7 @@ impl ColumnFields {
             generator_params: self.generator_params,
             null_ratio: self.null_ratio,
             is_unique: self.is_unique,
-            // 主键不是草稿里的概念（v2 没有主键配置），一律不标
+            // 主键不是表配置里的概念（v2 没有主键配置），一律不标
             is_primary_key: false,
             is_foreign_key: self.is_foreign_key,
             ref_table: self.ref_table,
@@ -678,14 +688,14 @@ mod tests {
         generator_parts, task_of_run, time_label,
     };
     use crate::mock_view::{
-        MockColumnSpec, MockDraft, MockGenInfo, MockJobDone, MockJobKind, MockPreview,
-        MockRunOptions,
+        MockColumnSpec, MockGenInfo, MockJobDone, MockJobKind, MockPreview, MockRunOptions,
+        MockTableConfig,
     };
     use crate::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale};
     use crate::persistence::MockGenerationDetail;
 
-    /// 三列草稿：无参生成器 / 带参生成器 / 复杂参数（集合），并带上空值率与唯一性。
-    fn draft() -> MockDraft {
+    /// 三列表配置：无参生成器 / 带参生成器 / 复杂参数（集合），并带上空值率与唯一性。
+    fn draft() -> MockTableConfig {
         let column = |id: u64,
                       name: &str,
                       data_type: ColumnDataType,
@@ -703,8 +713,9 @@ mod tests {
             },
             confidence: "high".to_string(),
             sample_value: String::new(),
+            user_generator: None,
         };
-        MockDraft {
+        MockTableConfig {
             table_name: "orders".to_string(),
             columns: vec![
                 column(

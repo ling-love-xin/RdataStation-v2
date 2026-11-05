@@ -1,6 +1,6 @@
 //! 临时排查测试（2026-10-16）：复现「点 Mock 面板后无新增表入口」的装配级验证。
 //!
-//! 链路：open_right_panel(Mock) → 右 Dock 渲染草稿行（mock-draft-open）→ 点击
+//! 链路：open_right_panel(Mock) → 右 Dock 渲染表配置行（mock-draft-open）→ 点击
 //! → host.open_detail(Draft) → 中央创建 MockDetailView tab（mock_details["draft"]）
 //! → 渲染空态起手卡片（mock-detail-scenario-empty）。
 //!
@@ -102,7 +102,7 @@ fn no_project_mock_panel_still_renders(cx: &mut TestAppContext) {
         "无项目时中央应有项目选择器面板（project-picker-panel）"
     );
 
-    // 点 Mock 图标 → 右 Dock 打开 → 草稿行可见（原 bug：这里什么都看不到）
+    // 点 Mock 图标 → 右 Dock 打开 → 表配置行可见（原 bug：这里什么都看不到）
     let shared = cx.update(|_, app| wb.read(app).shared_for_test());
     cx.update(|_, app| shared.open_right_panel(RightPanel::Mock, app));
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -116,11 +116,11 @@ fn no_project_mock_panel_still_renders(cx: &mut TestAppContext) {
     let draft = snap(cx, "mock-draft-open");
     assert!(
         draft.visible(),
-        "无项目时右 Dock 应显示草稿行（mock-draft-open）"
+        "无项目时右 Dock 应显示表配置行（mock-draft-open）"
     );
 }
 
-/// 场景 1：打开 Mock 面板后，右 Dock 应渲染草稿行（`mock-draft-open`，○ 未生成）。
+/// 场景 1：打开 Mock 面板后，右 Dock 应渲染表配置行（`mock-draft-open`，○ 未生成）。
 #[gpui_kit::test]
 fn mock_panel_open_renders_draft_row(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -154,10 +154,10 @@ fn mock_panel_open_renders_draft_row(cx: &mut TestAppContext) {
     });
 
     let draft = snap(cx, "mock-draft-open");
-    assert!(draft.visible(), "右 Dock 应显示草稿行（mock-draft-open）");
+    assert!(draft.visible(), "右 Dock 应显示表配置行（mock-draft-open）");
 }
 
-/// 场景 2：点击草稿行 → 中央应创建 draft tab 且空态起手卡片渲染出来。
+/// 场景 2：点击表配置行 → 中央应创建 draft tab 且空态起手卡片渲染出来。
 #[gpui_kit::test]
 fn click_draft_row_opens_central_empty_state(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -168,24 +168,17 @@ fn click_draft_row_opens_central_empty_state(cx: &mut TestAppContext) {
     cx.update(|_, app| shared.open_right_panel(RightPanel::Mock, app));
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    // 点击草稿行（TestWindowExt 自己 render_frame + 命中测试）
+    // 点击表配置行（TestWindowExt 自己 render_frame + 命中测试）
     cx.update(|window, app| {
         window.click(ElementId::Name(SharedString::from("mock-draft-open")), app)
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    // 断言 1：中央已创建 draft tab 实体
-    let alive = cx.update(|_, _| {
-        shared
-            .mock_details
-            .borrow()
-            .get("draft")
-            .cloned()
-            .and_then(|weak| weak.upgrade())
-    });
+    // 断言 1：中央已创建表配置 tab 实体（键是 `config:{id}`，每份配置一个 tab）
+    let alive = cx.update(|_, _| has_config_tab(&shared));
     assert!(
-        alive.is_some(),
-        "点击草稿行后 shared.mock_details 应有 draft tab"
+        alive,
+        "点击表配置行后 shared.mock_details 应有 config: 开头的表配置 tab"
     );
 
     // 断言 2：空态起手卡片（选场景模板按钮）已渲染
@@ -197,9 +190,9 @@ fn click_draft_row_opens_central_empty_state(cx: &mut TestAppContext) {
 }
 
 /// 场景 4：Mock 面板**工具栏**的「+」按钮（2026-10-18 起 ＋ 从标题栏迁到面板内工具栏）——
-/// 可见，且点击打开中央草稿 tab。
+/// 可见，且点击打开中央表配置 tab。
 ///
-/// 2026-11-01 起「＋」新表**自带一列**（`new_draft_table` 加 `column_1` + Integer 默认生成器），
+/// 2026-11-01 起「＋」新表**自带一列**（`new_table_config` 加 `column_1` + Integer 默认生成器），
 /// 所以这里落点是**非空态**的列段（`mock-detail-scenario-columns`）；空态卡片
 /// （`mock-detail-scenario-empty`）只在一列都没有时才出现，见 `click_draft_row_opens_central_empty_state`。
 #[gpui_kit::test]
@@ -219,7 +212,7 @@ fn title_suffix_plus_opens_draft_tab(cx: &mut TestAppContext) {
         "Mock 工具栏应有「+」按钮（mock-toolbar-new-table）"
     );
 
-    // 点击「+」→ 打开 / 聚焦中央草稿 tab（与清单草稿行同一目标）
+    // 点击「+」→ 打开 / 聚焦中央表配置 tab（与清单表配置行同一目标）
     cx.update(|window, app| {
         window.click(
             ElementId::Name(SharedString::from("mock-toolbar-new-table")),
@@ -228,17 +221,10 @@ fn title_suffix_plus_opens_draft_tab(cx: &mut TestAppContext) {
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    let alive = cx.update(|_, _| {
-        shared
-            .mock_details
-            .borrow()
-            .get("draft")
-            .cloned()
-            .and_then(|weak| weak.upgrade())
-    });
+    let alive = cx.update(|_, _| has_config_tab(&shared));
     assert!(
-        alive.is_some(),
-        "点「+」后 shared.mock_details 应有 draft tab"
+        alive,
+        "点「+」后 shared.mock_details 应有 config: 开头的表配置 tab"
     );
 
     // 新表自带一列 → 渲染的是列段（非空态）的起手卡片
@@ -249,7 +235,7 @@ fn title_suffix_plus_opens_draft_tab(cx: &mut TestAppContext) {
     );
 }
 
-/// 场景 3：单独渲染右侧面板（隔离 WorkbenchView 装配），MockPanel 本身是否渲染草稿行。
+/// 场景 3：单独渲染右侧面板（隔离 WorkbenchView 装配），MockPanel 本身是否渲染表配置行。
 #[gpui_kit::test]
 fn right_sidebar_alone_renders_draft_row(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -262,6 +248,17 @@ fn right_sidebar_alone_renders_draft_row(cx: &mut TestAppContext) {
     let draft = snap(cx, "mock-draft-open");
     assert!(
         draft.visible(),
-        "单独渲染右侧面板时也应显示草稿行（mock-draft-open）"
+        "单独渲染右侧面板时也应显示表配置行（mock-draft-open）"
     );
+}
+
+/// `shared.mock_details` 里是否已有**任意一份**表配置 tab（键形如 `config:{id}`）。
+///
+/// 多配置改造后每个 tab 的键带配置 id，不再共用一个 `draft` 键；
+/// 首次打开的 id 由 `MockPanel` 的初始 `config_id`/`draft_seq` 决定，
+/// 所以这里按前缀扫描，不写死具体 id。
+fn has_config_tab(shared: &Shared) -> bool {
+    let map = shared.mock_details.borrow();
+    map.iter()
+        .any(|(key, weak)| key.starts_with("config:") && weak.upgrade().is_some())
 }

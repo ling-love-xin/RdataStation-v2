@@ -8406,6 +8406,7 @@ dependencies = [
  "gpui-kit",
  "rand 0.10.2",
  "rds-engine",
+ "rds-notification",
  "rds-paths",
  "rds-shared",
  "rds-workbench-shell",

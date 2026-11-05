@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use mock::mock_view::{MockDraft, MockJobKind, MockJobState, MockRunOptions};
+use mock::mock_view::{MockJobKind, MockJobState, MockRunOptions, MockTableConfig};
 use mock::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale};
 use rds_workbench::services::mock_jobs;
 
@@ -22,8 +22,8 @@ fn temp_dir(tag: &str) -> PathBuf {
 }
 
 /// 20 批（10k 行/批）：取消一定发生在中间批次边界上。
-fn draft(table: &str) -> MockDraft {
-    MockDraft {
+fn draft(table: &str) -> MockTableConfig {
+    MockTableConfig {
         table_name: table.to_string(),
         columns: vec![mock::mock_view::MockColumnSpec {
             id: 0,
@@ -37,6 +37,7 @@ fn draft(table: &str) -> MockDraft {
             },
             confidence: "high".to_string(),
             sample_value: String::new(),
+            user_generator: None,
         }],
         options: MockRunOptions::new(200_000, Some(7), Locale::ZhCn),
     }

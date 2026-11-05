@@ -814,7 +814,7 @@ async fn save_to_scratchpad_writes_file_into_dir() {
         &MockExportFormat::Csv,
         dir.to_str().expect("路径应为 UTF-8"),
     )
-    .expect("保存到草稿目录应当成功");
+    .expect("保存到表配置目录应当成功");
 
     let saved: Vec<_> = std::fs::read_dir(&dir)
         .expect("目录应当可读")

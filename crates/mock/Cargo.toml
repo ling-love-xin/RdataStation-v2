@@ -13,6 +13,10 @@ gpui-kit.workspace = true
 # 视图共用资产（结构尺寸单一来源）：行高 / 激活条等面板尺寸必须与外壳一致，
 # 不再在本 crate 镜像一份。依赖方向 mock → workbench-shell（后者不得依赖任何特性 crate）。
 workbench_shell.workspace = true
+# 全局通知（生成收尾时说一句：切走 tab 后结果 / 失败不该只留在那张 tab 上）
+# `rds-notification` 只依赖 gpui-kit / serde / chrono / tracing / uuid / settings / paths，
+# 不依赖 mock，方向不成环
+notification.workspace = true
 
 # ===== 数据生成 =====
 fake.workspace = true

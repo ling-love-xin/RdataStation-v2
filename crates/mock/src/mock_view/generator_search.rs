@@ -48,7 +48,7 @@ pub fn search_generators(query: &str) -> Vec<&'static GeneratorSpec> {
 ///
 /// 目录只有 143 项且全在内存：`perform_search` 同步过滤，不走异步搜索通道（无需 loading 占位）。
 pub(crate) struct GeneratorSearchDelegate {
-    /// 选中后写回的面板（草稿的单一权威）
+    /// 选中后写回的面板（表配置的单一权威）
     panel: Entity<MockPanel>,
     /// 目标列 id
     column_id: u64,

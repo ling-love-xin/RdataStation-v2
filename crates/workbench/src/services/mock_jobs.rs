@@ -11,7 +11,7 @@
 //! - `AppendTo(表名)`：生成后追加到分析库既有表（同一次任务里完成，自增起点按表内行数接续）；
 //! - `Persist` / `Export` / `Scratchpad`：三个**出口**，只读已生成的内存临时表，分别写分析库新表 /
 //!   指定文件 / 草稿箱目录；目标表名与列定义全部取自**结果自己**（`MockGenInfo`）——
-//!   场景模板的多张表因此能各自落到自己的表名下，**出口不读草稿**。
+//!   场景模板的多张表因此能各自落到自己的表名下，**出口不读表配置**。
 //!
 //! 阶段（[`MockJobPhase`]）：生成有批次粒度进度；写入分析库与写文件跑在 DuckDB / 文件系统内部，
 //! 探不到中间点，只能报「进行中」——面板据此切成不定量进度条。
@@ -30,7 +30,8 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use mock::mock_view::{
-    MockDraft, MockGenInfo, MockJobDone, MockJobKind, MockJobPhase, MockJobProgress, MockJobState,
+    MockGenInfo, MockJobDone, MockJobKind, MockJobPhase, MockJobProgress, MockJobState,
+    MockTableConfig,
 };
 
 use crate::services::mock_generator;
@@ -98,8 +99,8 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// 任务（只能通过 [`start`] 提交）。
 struct Job {
-    /// 单表生成用的草稿（出口类任务只用 `kind` 里的结果，不读它）
-    draft: MockDraft,
+    /// 单表生成用的表配置（出口类任务只用 `kind` 里的结果，不读它）
+    draft: MockTableConfig,
     kind: MockJobKind,
     /// 任务需要的路径（提交时由 UI 线程解析）
     paths: JobPaths,
@@ -279,7 +280,7 @@ fn set_tables_progress(done: usize, total: usize) {
 }
 
 /// 提交后台任务；已有任务在进行中时返回 `Err`。
-pub fn start(draft: &MockDraft, kind: MockJobKind, paths: &JobPaths) -> Result<(), String> {
+pub fn start(draft: &MockTableConfig, kind: MockJobKind, paths: &JobPaths) -> Result<(), String> {
     // S4：每个任务一把取消令牌——任务结束即丢弃，`cancel()` 只影响当前这个任务
     let cancel = Arc::new(AtomicBool::new(false));
     {

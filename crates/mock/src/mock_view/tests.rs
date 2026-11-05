@@ -17,14 +17,14 @@ use gpui_kit::component::list::{ListDelegate as _, ListState};
 use gpui_kit::component::{Root, WindowExt as _};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
-    App, AppContext as _, Entity, IntoElement, ParentElement, Render, Styled as _, TestAppContext,
-    VisualTestContext, Window, div,
+    App, AppContext as _, ElementId, Entity, IntoElement, ParentElement, Render, SharedString,
+    Styled as _, TestAppContext, VisualTestContext, Window, div,
 };
 
 use super::{
     AppendTargetStatus, DetailTarget, HistoryReply, JobRowScope, MockColumnSpec, MockDetailView,
-    MockDraft, MockGenInfo, MockHost, MockJobDone, MockJobKind, MockJobPhase, MockJobProgress,
-    MockJobState, MockPanel, MockPreview, MockRunOptions, RelationPick, RowProgress,
+    MockGenInfo, MockHost, MockJobDone, MockJobKind, MockJobPhase, MockJobProgress, MockJobState,
+    MockPanel, MockPreview, MockRunOptions, MockTableConfig, RelationPick, RowProgress,
     ScenarioRelation, SchemaRequest, SchemaSource, TableStatus, builtin_presets, eta_from_unit_ms,
     eta_text, eta_text_compact, focus_detail_tab, param_text, parse_percent_ratio, parse_rows,
     parse_seed, patch_param, preset_by_id, row_progress_of, search_generators, smooth_unit_ms,
@@ -208,6 +208,27 @@ fn column_type_labels_are_complete() {
         super::column_type_label(&ColumnDataType::Integer),
         "INTEGER"
     );
+}
+
+/// 数据视角的分组键 / 标题必须唯一。
+///
+/// 回归：`column_type_label` 会撞名（`Text` / `Uuid` → `VARCHAR`，`DateTime` /
+/// `Timestamp` → `TIMESTAMP`）；拿它当 ElementId 或 `expanded_types` 的 key 时，
+/// 重复 id 会让 GPUI 的 a11y 节点校验直接 panic——表现为切「数据类型」Tab 闪退。
+#[test]
+fn data_type_keys_and_titles_are_unique() {
+    let mut keys = std::collections::HashSet::new();
+    let mut titles = std::collections::HashSet::new();
+    for data_type in super::COLUMN_TYPES {
+        assert!(
+            keys.insert(super::generator_library::data_type_key(&data_type)),
+            "重复的数据类键：{data_type:?}"
+        );
+        assert!(
+            titles.insert(super::generator_library::data_type_title(&data_type)),
+            "重复的数据类标题：{data_type:?}"
+        );
+    }
 }
 
 // ==================== 工作日历展示（纯逻辑） ====================
@@ -545,6 +566,7 @@ fn test_column(name: &str, generator: GeneratorConfig) -> MockColumnSpec {
         },
         confidence: "high".to_string(),
         sample_value: "1, 2, 3...".to_string(),
+        user_generator: None,
     }
 }
 
@@ -554,7 +576,7 @@ struct TestHost {
 
 impl TestHost {
     /// 造一份生成结果（预览两行，与旧测试的预期一致）。
-    fn gen_info(&self, draft: &MockDraft) -> MockGenInfo {
+    fn gen_info(&self, draft: &MockTableConfig) -> MockGenInfo {
         MockGenInfo {
             table_name: draft.table_name.clone(),
             temp_table_name: format!("temp_mock_{}", draft.table_name),
@@ -570,7 +592,7 @@ impl TestHost {
 
     /// 出口：新建表（同名已存在 → 报错，与真实装配层同一语义）。
     ///
-    /// 目标表名取 `info.table_name`（**不是草稿**）：与 `mock_generator::persist_table_at`
+    /// 目标表名取 `info.table_name`（**不是表配置**）：与 `mock_generator::persist_table_at`
     /// 同一口径——场景模板的多张表因此能各自落到自己的表名下。
     fn persist(&self, info: &MockGenInfo) -> Result<MockJobDone, String> {
         self.rec
@@ -601,7 +623,7 @@ impl TestHost {
 }
 
 impl MockHost for TestHost {
-    fn start_job(&self, draft: &MockDraft, kind: MockJobKind) -> Result<(), String> {
+    fn start_job(&self, draft: &MockTableConfig, kind: MockJobKind) -> Result<(), String> {
         if let Some(err) = self.rec.start_error.borrow().clone() {
             return Err(err);
         }
@@ -905,15 +927,20 @@ impl Render for Harness {
         _window: &mut Window,
         _cx: &mut gpui_kit::Context<Self>,
     ) -> impl IntoElement {
+        // 横向 flex + 撑满交叉轴：块级 div 包裹时 detail 的高度是「内容高」，
+        // 三段分栏在里面没有可分配空间，预览会被推到视口外（真实宿主的 tab 内容区是有界的）
         let root = div()
             .size_full()
-            .child(div().w_96().child(self.panel.clone()))
-            .child(self.detail.clone());
+            .flex()
+            .flex_row()
+            .items_stretch()
+            .child(div().w_96().min_h_0().child(self.panel.clone()))
+            .child(div().flex_1().min_h_0().child(self.detail.clone()));
         root
     }
 }
 
-/// 双 tab 夹具：同一窗口里草稿 tab 与结果表 tab 并存（a11y 重复 id 回归用）。
+/// 双 tab 夹具：同一窗口里表配置 tab 与结果表 tab 并存（a11y 重复 id 回归用）。
 struct TwinHarness {
     draft: Entity<MockDetailView>,
     table: Entity<MockDetailView>,
@@ -934,7 +961,7 @@ impl Render for TwinHarness {
 
 /// 多个详情 tab 并存时，各自的出口按钮 / 分栏 id 必须唯一（拼 `DetailTarget::key`）。
 ///
-/// 判别性用例：单表出口迁进中央 tab 后，若按钮 id 不拼 tab 键，草稿 + 结果表两个 tab
+/// 判别性用例：单表出口迁进中央 tab 后，若按钮 id 不拼 tab 键，表配置 + 结果表两个 tab
 /// 同时挂树 → gpui a11y 树出现重复节点并 panic（真机「点列操作页面关闭后闪退」的根因，
 /// a11y.rs `Duplicate a11y node id`）；`v_resizable` 的分栏 id 同理（还共享 keyed state，
 /// 会互相拖串尺寸）。修复后两帧渲染均不 panic，且两个 tab 的出口按钮各自就位。
@@ -954,7 +981,7 @@ fn multiple_detail_tabs_do_not_collide_a11y_ids(cx: &mut TestAppContext) {
     let slot_in = slot.clone();
     let (_, cx) = cx.add_window_view(move |window, cx| {
         let panel = cx.new(|cx| MockPanel::new(test_host(&rec), cx));
-        let draft = cx.new(|cx| MockDetailView::new(panel.clone(), DetailTarget::Draft, cx));
+        let draft = cx.new(|cx| MockDetailView::new(panel.clone(), DetailTarget::Config(0), cx));
         let table = cx.new(|cx| {
             MockDetailView::new(panel.clone(), DetailTarget::Table("orders".to_string()), cx)
         });
@@ -987,7 +1014,7 @@ fn open_harness(
     let slot_in = slot.clone();
     let (_, cx) = cx.add_window_view(move |window, cx| {
         let panel = cx.new(|cx| MockPanel::new(host, cx));
-        let detail = cx.new(|cx| MockDetailView::new(panel.clone(), DetailTarget::Draft, cx));
+        let detail = cx.new(|cx| MockDetailView::new(panel.clone(), DetailTarget::Config(0), cx));
         *slot_in.borrow_mut() = Some((panel.clone(), detail.clone()));
         // 窗口根必须是 `Root`（Entity 才能交给它）：外包一层 Harness 实体
         let harness = cx.new(|_cx| Harness { panel, detail });
@@ -1215,7 +1242,7 @@ fn generate_produces_preview_without_touching_sinks(cx: &mut TestAppContext) {
     assert!(rec.notifies.get() >= 1, "生成成功后应通知宿主");
 }
 
-/// 预览空态（`Empty` 组件）不只是说明，还带**主操作直达**：草稿 tab 没有结果时，
+/// 预览空态（`Empty` 组件）不只是说明，还带**主操作直达**：表配置 tab 没有结果时，
 /// 预览段给「生成」按钮——真点击应提交任务；任务进行中按钮禁用（不靠任务层拒绝，
 /// 与表头「生成」同一口径）；结果回填后空态让位给表格（按钮不再渲染）。
 #[gpui_kit::test]
@@ -1231,7 +1258,7 @@ fn preview_empty_state_offers_generate_and_yields_to_the_table(cx: &mut TestAppC
 
     // 没有结果：空态按钮在场，真点击提交生成（debug_selector 只为找坐标）
     let bounds = cx
-        .debug_bounds("mock-preview-generate-draft")
+        .debug_bounds("mock-preview-generate-config:0")
         .expect("空态应给「生成」按钮");
     cx.simulate_click(
         gpui_kit::Point::new(bounds.center().x, bounds.center().y),
@@ -1242,7 +1269,7 @@ fn preview_empty_state_offers_generate_and_yields_to_the_table(cx: &mut TestAppC
     // 任务进行中（面板自己的运行标记，未轮询回填）：按钮仍在但禁用，再点不重复提交
     draw(cx);
     let bounds = cx
-        .debug_bounds("mock-preview-generate-draft")
+        .debug_bounds("mock-preview-generate-config:0")
         .expect("结果未回填前空态仍在");
     cx.simulate_click(
         gpui_kit::Point::new(bounds.center().x, bounds.center().y),
@@ -1675,7 +1702,7 @@ fn preview_sort_requeries_and_falls_back_when_the_sample_changes(cx: &mut TestAp
     panel.update(cx, |panel, cx| panel.run_generate(cx));
     poll_job(cx, &panel);
 
-    // 草稿默认表名（假宿主按草稿名回临时表名 `temp_mock_{表}`）
+    // 表配置默认表名（假宿主按表配置名回临时表名 `temp_mock_{表}`）
     let table = panel.read_with(cx, |panel, _cx| panel.draft().table_name.clone());
     panel.update(cx, |panel, _cx| {
         let (preview, sort) = panel.preview_for(&table).expect("刚生成过，有结果");
@@ -2035,7 +2062,7 @@ fn column_filter_narrows_the_field_list(cx: &mut TestAppContext) {
             let panel_ref = panel.read(cx);
             detail
                 .read(cx)
-                .visible_columns(panel_ref, cx)
+                .visible_columns(panel_ref, 0, cx)
                 .iter()
                 .map(|column| column.def.name.clone())
                 .collect()
@@ -2232,7 +2259,7 @@ fn preview_column_widths_survive_a_rebuild(cx: &mut TestAppContext) {
 }
 
 /// `Ctrl+Enter` 真按键（`key_context("mock-detail")`，键位在生产由 `crates/app` 注册）：
-/// 草稿 tab 上提交生成任务；结果表 tab 上什么都不做（D38：它是产物，要改回草稿改完再生成）。
+/// 表配置 tab 上提交生成任务；结果表 tab 上什么都不做（D38：它是产物，要改回表配置改完再生成）。
 ///
 /// 这条用例是**判别性**的：它自己注册生产那份键位，`track_focus` / `key_context` /
 /// `on_action` 任一断，它都会挂——「注册了才宣传」的快捷键必须有这层保障。
@@ -2265,7 +2292,7 @@ fn generate_key_submits_on_the_draft_tab_only(cx: &mut TestAppContext) {
     assert_eq!(
         rec.started.borrow().len(),
         1,
-        "草稿 tab 上 Ctrl+Enter 应提交生成"
+        "表配置 tab 上 Ctrl+Enter 应提交生成"
     );
     assert!(matches!(
         rec.started.borrow().first(),
@@ -2570,7 +2597,7 @@ fn open_detail_calls_host(cx: &mut TestAppContext) {
     assert_eq!(rec.opened_detail.get(), 1);
     assert_eq!(
         rec.opened_targets.borrow().as_slice(),
-        ["draft".to_string()]
+        ["config:0".to_string()]
     );
 }
 
@@ -2592,11 +2619,11 @@ fn each_result_table_gets_its_own_detail_tab(cx: &mut TestAppContext) {
     poll_job(cx, &panel);
     draw(cx);
 
-    // 草稿与结果表是两种身份（键也不同）：同一个键只会有一个 tab
-    assert_eq!(DetailTarget::Draft.key(), "draft");
+    // 表配置与结果表是两种身份（键也不同）：同一个键只会有一个 tab
+    assert_eq!(DetailTarget::Config(0).key(), "config:0");
     assert_eq!(DetailTarget::Table("items".into()).key(), "table:items");
     assert_ne!(
-        DetailTarget::Draft.key(),
+        DetailTarget::Config(0).key(),
         DetailTarget::Table("items".into()).key()
     );
 
@@ -2644,7 +2671,7 @@ fn activating_a_table_tab_makes_it_current(cx: &mut TestAppContext) {
     });
 }
 
-/// tab 标题：结果表写 `表名（N 行）`（行数实时取自结果），草稿写目标表名。
+/// tab 标题：结果表写 `表名（N 行）`（行数实时取自结果），表配置写目标表名。
 #[gpui_kit::test]
 fn tab_titles_name_the_table_and_its_rows(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -2660,7 +2687,7 @@ fn tab_titles_name_the_table_and_its_rows(cx: &mut TestAppContext) {
     let source = panel.clone();
     let (draft_view, orders_view, items_view) = cx.update(|_window, cx| {
         (
-            cx.new(|cx| MockDetailView::new(source.clone(), DetailTarget::Draft, cx)),
+            cx.new(|cx| MockDetailView::new(source.clone(), DetailTarget::Config(0), cx)),
             cx.new(|cx| {
                 MockDetailView::new(source.clone(), DetailTarget::Table("orders".into()), cx)
             }),
@@ -3042,7 +3069,7 @@ fn focus_tab_in_dock_selects_self(cx: &mut TestAppContext) {
         let area = cx.new(|cx| DockArea::new("mock-focus-area", None, window, cx));
         // 再建一个同类面板压在详情之上，再把组切到它：这样详情 tab **不是**当前激活项，
         // `select_tab` 不会走「已激活即返回」的捷径，切换才是真被验证。
-        let other = cx.new(|cx| MockDetailView::new(panel.clone(), DetailTarget::Draft, cx));
+        let other = cx.new(|cx| MockDetailView::new(panel.clone(), DetailTarget::Config(0), cx));
         area.update(cx, |area, cx| {
             area.add_panel(detail.clone(), DockPlacement::Center, None, window, cx);
             area.add_panel(other, DockPlacement::Center, None, window, cx);
@@ -3418,7 +3445,7 @@ fn sinks_require_a_generation_first(cx: &mut TestAppContext) {
     assert!(rec.started.borrow().is_empty(), "不应提交任何任务");
 }
 
-/// 项目切换：面板作废旧生成结果（临时表已被宿主清掉），草稿保留。
+/// 项目切换：面板作废旧生成结果（临时表已被宿主清掉），表配置保留。
 #[gpui_kit::test]
 fn forget_generated_drops_result_but_keeps_draft(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -3446,7 +3473,7 @@ fn forget_generated_drops_result_but_keeps_draft(cx: &mut TestAppContext) {
         assert_eq!(
             panel.draft().table_name,
             "mock_data",
-            "草稿（用户配置）保留"
+            "表配置（用户配置）保留"
         );
         assert_eq!(panel.draft().columns.len(), 1);
     });
@@ -3694,7 +3721,7 @@ fn history_rows_render_and_keep_failure_reasons(cx: &mut TestAppContext) {
     });
 }
 
-/// 重放：草稿整体换成历史里那一套（表名 / 行数 / 种子 / 列），旧结果作废。
+/// 重放：表配置整体换成历史里那一套（表名 / 行数 / 种子 / 列），旧结果作废。
 #[gpui_kit::test]
 fn replay_writes_the_recorded_configuration_into_the_draft(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -3744,8 +3771,7 @@ fn replay_writes_the_recorded_configuration_into_the_draft(cx: &mut TestAppConte
         assert!(panel.gen_info().is_none(), "旧临时表已与新配置对不上，作废");
         // 表名输入框已跟着走（`table_pending` 在渲染时落进输入框并清空）
         let shown = panel
-            .table_input
-            .as_ref()
+            .table_input()
             .expect("渲染后输入框已创建")
             .read(_cx)
             .value()
@@ -3756,7 +3782,7 @@ fn replay_writes_the_recorded_configuration_into_the_draft(cx: &mut TestAppConte
     });
 }
 
-/// 表名打进输入框**当场**写回草稿——右 Dock 清单行与中央 tab 标题都读 `draft.table_name`，
+/// 表名打进输入框**当场**写回表配置——右 Dock 清单行与中央 tab 标题都读 `draft.table_name`，
 /// 不是读输入框。不订阅 Change 的话，从按下第一个键到点「生成」之前这两处显示的
 /// 是上一个名字，用户眼前同时存在两个表名。
 #[gpui_kit::test]
@@ -3768,10 +3794,10 @@ fn typing_in_the_header_writes_back_to_the_draft(cx: &mut TestAppContext) {
     draw(cx);
 
     let table_input = panel
-        .read_with(cx, |panel, _cx| panel.table_input.clone())
+        .read_with(cx, |panel, _cx| panel.table_input().cloned())
         .expect("渲染一帧后表名输入框应已创建");
     let rows_input = panel
-        .read_with(cx, |panel, _cx| panel.rows_input.clone())
+        .read_with(cx, |panel, _cx| panel.rows_input().cloned())
         .expect("渲染一帧后行数输入框应已创建");
     // 走 `insert`（模拟打字，会发 `InputEvent::Change`）；
     // `set_value` 是程序化写入，内部 `emit_events = false`，测不出订阅
@@ -3788,11 +3814,11 @@ fn typing_in_the_header_writes_back_to_the_draft(cx: &mut TestAppContext) {
         assert_eq!(
             panel.draft().table_name,
             "mock_data_v2",
-            "右 Dock 清单与 tab 标题读的是草稿：不点「生成」也要跟着走"
+            "右 Dock 清单与 tab 标题读的是表配置：不点「生成」也要跟着走"
         );
     });
 
-    // 中间态非法值**不写回**：打到一半的空格不该污染草稿，更不该弹错误
+    // 中间态非法值**不写回**：打到一半的空格不该污染表配置，更不该弹错误
     // （错误留给「生成」那一刻的 `sync_inputs`）
     type_in(cx, &table_input, " ");
     panel.read_with(cx, |panel, _cx| {
@@ -3804,7 +3830,7 @@ fn typing_in_the_header_writes_back_to_the_draft(cx: &mut TestAppContext) {
         assert!(panel.error.is_none(), "打字途中不报错");
     });
 
-    // 行数同一条路径：右 Dock 草稿行的「N 行」读的是 `draft.options.rows`
+    // 行数同一条路径：右 Dock 表配置行的「N 行」读的是 `draft.options.rows`
     type_in(cx, &rows_input, "0");
     panel.read_with(cx, |panel, _cx| {
         assert_eq!(
@@ -4115,7 +4141,7 @@ fn scenario_generation_fills_one_result_per_table(cx: &mut TestAppContext) {
     let rec = recorder();
     let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
 
-    // 草稿里一列都没有：场景模板自带列定义，不该被草稿拦住
+    // 表配置里一列都没有：场景模板自带列定义，不该被表配置拦住
     panel.update(cx, |panel, cx| {
         panel.load_scenario(toy_scenario(), cx);
         panel.run_scenario(cx);
@@ -4159,7 +4185,7 @@ fn scenario_generation_fills_one_result_per_table(cx: &mut TestAppContext) {
         let info = panel.gen_info().expect("结果应就绪");
         assert_eq!(info.table_name, "orders");
         assert_eq!(info.temp_table_name, "temp_mock_orders");
-        assert_eq!(panel.draft().table_name, "mock_data", "场景不改草稿");
+        assert_eq!(panel.draft().table_name, "mock_data", "场景不改表配置");
         let outcome = panel.outcome.clone().unwrap_or_default();
         assert!(outcome.contains("3 张表"), "{outcome}");
         assert!(outcome.contains("合计 390 行"), "{outcome}");
@@ -4201,7 +4227,7 @@ fn selecting_a_result_switches_what_the_panel_shows(cx: &mut TestAppContext) {
     });
 }
 
-/// 出口作用于**当前选中**那张：目标表名取自结果，不是草稿。
+/// 出口作用于**当前选中**那张：目标表名取自结果，不是表配置。
 #[gpui_kit::test]
 fn exits_apply_to_the_selected_result_table(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -4301,7 +4327,10 @@ fn scenario_job_reports_tables_as_its_unit(cx: &mut TestAppContext) {
 
     panel.update(cx, |panel, _cx| {
         let progress = panel.job_progress().expect("进行中应有进度");
-        assert_eq!(progress.rows_total, 0, "场景任务的行数由模板定，草稿不参与");
+        assert_eq!(
+            progress.rows_total, 0,
+            "场景任务的行数由模板定，表配置不参与"
+        );
         assert_eq!(progress.rows_done(), 0, "没有行数量纲：别算出行数");
         assert_eq!(progress.batches_total, 3);
         assert!(
@@ -4374,7 +4403,7 @@ fn opening_a_scenario_loads_a_work_copy_without_generating(cx: &mut TestAppConte
         );
     });
 
-    // 退出场景态：工作副本丢掉，草稿与结果不受影响
+    // 退出场景态：工作副本丢掉，表配置与结果不受影响
     panel.update(cx, |panel, cx| panel.close_scenario(cx));
     panel.update(cx, |panel, _cx| {
         assert!(panel.scenario().is_none());
@@ -4599,7 +4628,7 @@ fn the_table_list_keeps_status_and_progress_in_one_place(cx: &mut TestAppContext
     let rec = recorder();
     let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
 
-    // 空闲：没有进度行；折叠段默认收起；草稿还没生成
+    // 空闲：没有进度行；折叠段默认收起；表配置还没生成
     panel.update(cx, |panel, _cx| {
         assert_eq!(panel.job_row_scope(), None);
         assert!(!panel.fold_open, "历史 / 模板默认收起");
@@ -4717,7 +4746,7 @@ fn generator_menu_remembers_recent_picks_and_marks_the_recommendation(cx: &mut T
         let recent: Vec<&str> = panel
             .recent_generators()
             .iter()
-            .map(String::as_str)
+            .map(|(key, _is_user)| key.as_str())
             .collect();
         assert_eq!(recent, ["random_int", "digit"]);
     });
@@ -4857,7 +4886,7 @@ fn batch_landing_keeps_the_successes_and_reports_the_failures(cx: &mut TestAppCo
     });
 }
 
-/// 自定义多表：把当前草稿加进场景工作副本（导入结构 / 列编辑都在单表态里做完）。
+/// 自定义多表：把当前表配置加进场景工作副本（导入结构 / 列编辑都在单表态里做完）。
 #[gpui_kit::test]
 fn a_draft_can_be_added_to_the_scenario_as_another_table(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -4866,7 +4895,7 @@ fn a_draft_can_be_added_to_the_scenario_as_another_table(cx: &mut TestAppContext
 
     panel.update(cx, |panel, cx| {
         panel.load_scenario(toy_scenario(), cx);
-        // 草稿：一张用户自己调好的表
+        // 表配置：一张用户自己调好的表
         panel.draft.table_name = "invoices".to_string();
         panel.draft.options.rows = 750;
         panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
@@ -4887,7 +4916,7 @@ fn a_draft_can_be_added_to_the_scenario_as_another_table(cx: &mut TestAppContext
             "新表加在末尾"
         );
         let added = template.tables.last().expect("新表");
-        assert_eq!(added.row_count, 750, "行数取草稿");
+        assert_eq!(added.row_count, 750, "行数取表配置");
         assert_eq!(
             added
                 .columns
@@ -4895,10 +4924,10 @@ fn a_draft_can_be_added_to_the_scenario_as_another_table(cx: &mut TestAppContext
                 .map(|c| c.name.as_str())
                 .collect::<Vec<_>>(),
             ["id", "amount"],
-            "列取草稿"
+            "列取表配置"
         );
         let outcome = panel.outcome().unwrap_or_default();
-        assert!(outcome.contains("已把草稿 invoices"), "{outcome}");
+        assert!(outcome.contains("已把表配置 invoices"), "{outcome}");
         assert!(outcome.contains("750 行 · 2 列"), "{outcome}");
     });
 
@@ -4916,7 +4945,7 @@ fn a_draft_can_be_added_to_the_scenario_as_another_table(cx: &mut TestAppContext
         assert_eq!(panel.scenario().expect("工作副本").tables.len(), 4);
     });
 
-    // 没列的草稿：拒绝（生不出东西的表加进去只会拖累整次生成）
+    // 没列的表配置：拒绝（生不出东西的表加进去只会拖累整次生成）
     panel.update(cx, |panel, cx| {
         panel.draft.table_name = "empty_one".to_string();
         panel.draft.columns.clear();
@@ -5730,7 +5759,7 @@ fn column_dialog_opens_library_and_writes_back_to_draft(cx: &mut TestAppContext)
         draw(cx);
     }
 
-    // 3) 左栏选中生成器写回草稿：换一个与当前不同的内建生成器
+    // 3) 左栏选中生成器写回表配置：换一个与当前不同的内建生成器
     let picked = generator_catalog::specs_in(generator_catalog::GeneratorCategory::Text)
         .iter()
         .map(|s| s.name.to_string())
@@ -5739,7 +5768,7 @@ fn column_dialog_opens_library_and_writes_back_to_draft(cx: &mut TestAppContext)
     let config = generator_catalog::default_of(&picked).unwrap();
     cx.update(|window, cx| {
         detail.update(cx, |view, cx| {
-            view.apply_generator_config_to_draft(id, config, window, cx);
+            view.apply_generator_config_to_draft(id, config, None, window, cx);
         });
     });
     draw(cx);
@@ -5756,7 +5785,7 @@ fn column_dialog_opens_library_and_writes_back_to_draft(cx: &mut TestAppContext)
         assert_eq!(
             generator_catalog::spec_of(&draft.def.generator).name,
             picked,
-            "列编辑草稿的生成器应已更新"
+            "列编辑表配置的生成器应已更新"
         );
         let spec = generator_catalog::spec_of(&draft.def.generator);
         assert_eq!(
@@ -5770,6 +5799,185 @@ fn column_dialog_opens_library_and_writes_back_to_draft(cx: &mut TestAppContext)
 }
 
 // ==================== 1-7 优化（#42-#48） ====================
+
+/// 样例「重新生成」：同一批次内稳定可复现，点按钮（批次 +1）换一批。
+///
+/// 这条是用户要求「样例有生成按钮」的回归：修复前 `refresh_sample_preview` 用固定
+/// 种子，按钮点下去与上一次完全相同（看起来像坏的）。
+#[gpui_kit::test]
+fn sample_regenerate_pulls_a_new_batch(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+
+    let id = panel.update(cx, |panel, cx| {
+        panel.add_column(
+            "phone".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
+        panel.draft().columns[0].id
+    });
+    draw(cx);
+    cx.update(|window, cx| {
+        detail.update(cx, |view, cx| view.open_column_dialog(id, window, cx));
+        window.draw(cx).clear(cx);
+    });
+
+    let sample = |cx: &mut VisualTestContext| {
+        detail.read_with(cx, |view, _cx| {
+            view.draft
+                .as_ref()
+                .expect("列编辑表配置应存在")
+                .sample_preview
+                .clone()
+        })
+    };
+    let first = sample(cx);
+    assert!(!first.is_empty(), "打开列编辑时应有样例示意值");
+
+    // 同一批次内重复计算：结果不变（改参数不会让示例乱跳）
+    detail.update(cx, |view, cx| view.refresh_sample_preview(cx));
+    assert_eq!(first, sample(cx), "同一批次内样例应稳定可复现");
+
+    // 点「重新生成」= 批次 +1：换一批
+    detail.update(cx, |view, cx| {
+        if let Some(draft) = view.draft.as_mut() {
+            draft.bump_sample_round();
+        }
+        view.refresh_sample_preview(cx);
+    });
+    assert_ne!(first, sample(cx), "点「重新生成」应换一批示意值");
+}
+
+/// 列编辑对话框三横行：行 1「列名 + 搜索」→ 行 2「智能推荐 | 历史生成器」→ 行 3「左库 + 右栏」。
+///
+/// 钉住三件事（改布局前智能/历史都埋在库列表顶部、所有内容挤在左右两栏里）：
+/// 1. 行 2 在行 1 之下、在行 3 之上；
+/// 2. 智能在左、历史在右，且两者同一横行；
+/// 3. 样例的「重新生成」按钮在右栏（属性区之下）且可见。
+#[gpui_kit::test]
+fn column_dialog_lays_out_three_rows(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+
+    let id = panel.update(cx, |panel, cx| {
+        panel.add_column(
+            "phone".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
+        panel.draft().columns[0].id
+    });
+    draw(cx);
+    cx.update(|window, cx| {
+        detail.update(cx, |view, cx| view.open_column_dialog(id, window, cx));
+        // 对话框内容在头几帧继续长高（第 5 帧才稳）：先空出几帧再量几何
+        for _ in 0..5 {
+            window.draw(cx).clear(cx);
+        }
+    });
+
+    let snap = |cx: &mut VisualTestContext, key: &str| {
+        let element_id = ElementId::Name(SharedString::from(key.to_string()));
+        cx.update(|window, _| window.try_find(element_id))
+            .unwrap_or_else(|| panic!("列编辑对话框里应存在 `{key}`"))
+    };
+    let row1 = snap(cx, "mock-col-name");
+    let smart = snap(cx, "mock-lib-smart-block");
+    let history = snap(cx, "mock-lib-history");
+    let right = snap(cx, "mock-col-generator");
+    let sample = snap(cx, "mock-col-sample-refresh");
+
+    assert!(smart.visible() && history.visible(), "行 2 两块应可见");
+    // 行 2 在行 1 之下：列名输入框的底边之上不应再压智能块
+    assert!(
+        smart.bounds().origin.y >= row1.bounds().origin.y + row1.bounds().size.height,
+        "行 2 应排在行 1（列名/搜索）之下：row1={:?} smart={:?}",
+        row1.bounds(),
+        smart.bounds()
+    );
+    // 智能在左、历史在右，同一横行（纵向包围盒互相重叠）
+    let smart_top = smart.bounds().origin.y;
+    let hist_top = history.bounds().origin.y;
+    assert!(
+        smart.bounds().origin.x < history.bounds().origin.x,
+        "智能应在历史左侧：smart={:?} history={:?}",
+        smart.bounds(),
+        history.bounds()
+    );
+    assert!(
+        smart_top <= hist_top + history.bounds().size.height
+            && hist_top <= smart_top + smart.bounds().size.height,
+        "智能与历史应在同一横行：smart={:?} history={:?}",
+        smart.bounds(),
+        history.bounds()
+    );
+    // 行 3 右栏在行 2 之下
+    assert!(
+        right.bounds().origin.y >= smart_top + smart.bounds().size.height,
+        "行 3 右栏应在行 2 之下：smart={:?} right={:?}",
+        smart.bounds(),
+        right.bounds()
+    );
+    // 样例的「重新生成」按钮在右栏里（属性区之下）
+    assert!(sample.visible(), "样例区的重新生成按钮应可见");
+    assert!(
+        sample.bounds().origin.y >= right.bounds().origin.y,
+        "样例按钮应排在右栏属性区之下：right={:?} sample={:?}",
+        right.bounds(),
+        sample.bounds()
+    );
+    // 行 2 必须是**单行**：历史 chips 不能折成两行（折行会把行 3 的库挤矮）
+    assert!(
+        history.bounds().size.height <= gpui_kit::px(48.),
+        "历史 chips 应只占一行：history={:?}",
+        history.bounds()
+    );
+}
+
+/// 列表点选必须能解析出生成器配置——**按 `name`（规范键）与按显示名（历史 bug 的传法）都要能**。
+///
+/// 曾经的真实 bug：列表项把中文显示名当键传给 `apply_picked_generator`，目录按 `name`
+/// 查不到就静默返回 → 点左边任何一项，右栏都不动。这条测试钉住两条：规范键必须解析、
+/// 显示名兜底也必须解析（万一以后又传错，至少不会无声失败）。
+#[gpui_kit::test]
+fn library_pick_resolves_by_key_and_by_label(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    // 显示名唯一，否则「按显示名兜底」得到的答案是随机的
+    let mut labels: Vec<&str> = generator_catalog::all_specs()
+        .iter()
+        .map(|spec| spec.label)
+        .collect();
+    labels.sort_unstable();
+    labels.dedup();
+    assert_eq!(
+        labels.len(),
+        generator_catalog::all_specs().len(),
+        "生成器显示名应唯一"
+    );
+
+    panel.read_with(cx, |panel, _cx| {
+        for spec in generator_catalog::all_specs() {
+            assert!(
+                crate::mock_view::generator_library::picked_config(panel, spec.name, false)
+                    .is_some(),
+                "按 name 应能解析出配置：{}",
+                spec.name
+            );
+            assert!(
+                crate::mock_view::generator_library::picked_config(panel, spec.label, false)
+                    .is_some(),
+                "按显示名也应能解析（列表曾误传 label）：{}",
+                spec.label
+            );
+        }
+    });
+}
 
 #[test]
 fn method_level_partition_marks_methods_only() {
@@ -5878,13 +6086,13 @@ fn column_dialog_shows_type_mismatch_warning(cx: &mut TestAppContext) {
     for _ in 0..4 {
         draw(cx);
     }
-    // 把草稿生成器换成产数值的方法（与所选 Varchar 不匹配）
+    // 把表配置生成器换成产数值的方法（与所选 Varchar 不匹配）
     let numeric_specs = generator_catalog::specs_in(GeneratorCategory::Numeric);
     let int_spec = numeric_specs.first().unwrap();
     let int_gen = generator_catalog::default_of(int_spec.name).unwrap();
     cx.update(|window, cx| {
         detail.update(cx, |view, cx| {
-            view.apply_generator_config_to_draft(id, int_gen, window, cx);
+            view.apply_generator_config_to_draft(id, int_gen, None, window, cx);
         });
         window.draw(cx).clear(cx);
     });
@@ -5913,6 +6121,7 @@ fn column_dialog_zero_param_shows_empty_state(cx: &mut TestAppContext) {
                 def,
                 confidence: col.confidence.clone(),
                 sample_value: col.sample_value.clone(),
+                user_generator: None,
             }
         };
         panel.apply_column(spec, cx);
@@ -5931,7 +6140,7 @@ fn column_dialog_zero_param_shows_empty_state(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn confirm_discard_guards_unsaved_edits(cx: &mut TestAppContext) {
-    // #6 草稿丢失防护：dirty 判定（快照口径）+ 确认框叠层（确认前草稿保留）
+    // #6 表配置丢失防护：dirty 判定（快照口径）+ 确认框叠层（确认前表配置保留）
     cx.update(gpui_kit::init);
     let rec = recorder();
     let (panel, detail, cx) = open_harness(cx, test_host(&rec));
@@ -5951,28 +6160,28 @@ fn confirm_discard_guards_unsaved_edits(cx: &mut TestAppContext) {
     let clean = detail.read_with(cx, |view, cx| {
         MockDetailView::draft_is_dirty(view.draft.as_ref().unwrap(), cx)
     });
-    assert!(!clean, "刚打开的草稿不应视为有未应用修改");
+    assert!(!clean, "刚打开的表配置不应视为有未应用修改");
     // 改生成器：dirty
     let text_specs = generator_catalog::specs_in(GeneratorCategory::Text);
     let other = text_specs.first().unwrap();
     let other_cfg = generator_catalog::default_of(other.name).unwrap();
     cx.update(|window, cx| {
         detail.update(cx, |view, cx| {
-            view.apply_generator_config_to_draft(id, other_cfg, window, cx);
+            view.apply_generator_config_to_draft(id, other_cfg, None, window, cx);
         });
     });
     let dirty = detail.read_with(cx, |view, cx| {
         MockDetailView::draft_is_dirty(view.draft.as_ref().unwrap(), cx)
     });
     assert!(dirty, "改过生成器后应视为有未应用修改");
-    // 弹确认框：确认前草稿保留、确认框叠在列编辑对话框之上
+    // 弹确认框：确认前表配置保留、确认框叠在列编辑对话框之上
     cx.update(|window, cx| {
         MockDetailView::confirm_discard(&detail, window, cx);
         window.draw(cx).clear(cx);
     });
     draw(cx);
     let kept = detail.read_with(cx, |view, _cx| view.draft.is_some());
-    assert!(kept, "确认前不应清空草稿");
+    assert!(kept, "确认前不应清空表配置");
     let dialog_open = cx.update(|window, cx| window.has_active_dialog(cx));
     assert!(dialog_open, "确认框应已叠在列编辑对话框之上");
 }
@@ -6012,4 +6221,155 @@ fn apply_and_next_creates_deduped_next_column(cx: &mut TestAppContext) {
     assert_eq!(second.as_deref(), Some("name_2"), "新列名应按旧名 +2 去重");
     let reopened = cx.update(|window, cx| window.has_active_dialog(cx));
     assert!(reopened, "新列的列编辑对话框应已打开");
+}
+
+/// 「＋」是**再开一份表配置**，不是把当前那份顶掉：每份配置一个自己的 tab，
+/// 旧配置（表名 / 列）原样留着，新配置另起一份（默认表名 + 自带一列）。
+///
+/// 回归：这条曾是用户报的 bug——`DetailTarget` 用无参单例键 `"draft"`、面板只有一份配置，
+/// 宿主按 key 查 `mock_details` 命中旧 tab 就 focus，看起来就是「＋ 覆盖当前 tab」。
+#[gpui_kit::test]
+fn new_config_opens_its_own_tab_and_keeps_the_previous_one(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+    // 首帧：tab 0 的表头输入框建起来（表名 / 行数按配置各一份）
+    draw(cx);
+
+    let (first_id, first_table, first_columns) = panel.read_with(cx, |panel, _cx| {
+        (
+            panel.config_id(),
+            panel.draft().table_name.clone(),
+            panel.draft().columns.len(),
+        )
+    });
+
+    // 点「＋」：新开一份配置
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.new_table_config(window, cx));
+    });
+
+    let second_id = panel.read_with(cx, |panel, _cx| panel.config_id());
+    assert_ne!(second_id, first_id, "「＋」应换到新配置");
+    assert_eq!(
+        rec.opened_targets.borrow().clone(),
+        vec![format!("config:{second_id}")],
+        "「＋」应新开一个 tab，键与既有 tab（config:{first_id}）不同，不复用"
+    );
+
+    let (kept_table, kept_columns, fresh_columns) = panel.read_with(cx, |panel, _cx| {
+        let kept = panel.config_for(first_id);
+        let fresh = panel.config_for(second_id);
+        (
+            kept.table_name.clone(),
+            kept.columns.len(),
+            fresh.columns.len(),
+        )
+    });
+    assert_eq!(kept_table, first_table, "旧配置的表名不该被新配置顶掉");
+    assert_eq!(kept_columns, first_columns, "旧配置的列应原样留着");
+    assert_eq!(fresh_columns, 1, "新配置自带一列（起手即有一颗种子列）");
+
+    // 右面板清单要**列出全部配置**：只画活动那一份时，开过第二个「＋」就回不到前一份
+    let rows = panel.read_with(cx, |panel, _cx| panel.config_rows());
+    assert_eq!(rows.len(), 2, "右面板清单应列出全部表配置：{rows:?}");
+    assert!(
+        rows.iter()
+            .any(|(id, name, ..)| *id == first_id && name == &first_table),
+        "旧配置应仍在清单里（可按行切回）：{rows:?}"
+    );
+}
+
+/// 列编辑右栏必须与左栏选中**精确对齐**：同一 base 的多个自定义项，只有点中的那一项算选中，
+/// 右栏显示它自己的名字（不是 base 的目录名）。
+///
+/// 回归：表配置此前只存解包后的 `base`，同一 base 的多项在左栏会一起高亮，
+/// 右栏「生成器名」也只能显示 base 名——用户看到的就是「右边没跟上左边的选择」。
+#[gpui_kit::test]
+fn custom_pick_aligns_left_list_and_right_pane(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+    let (column_id, first, second) = panel.update(cx, |panel, cx| {
+        panel.add_column("编号".to_string(), ColumnDataType::Integer, cx);
+        // 两份**同 base** 的自定义项：只按 base 认领时分会一起亮
+        let first = panel
+            .add_user_generator(
+                "自增甲",
+                ColumnDataType::Integer,
+                None,
+                GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+                cx,
+            )
+            .unwrap();
+        let second = panel
+            .add_user_generator(
+                "自增乙",
+                ColumnDataType::Integer,
+                None,
+                GeneratorConfig::AutoIncrement { start: 1, step: 2 },
+                cx,
+            )
+            .unwrap();
+        (panel.draft().columns[0].id, first, second)
+    });
+
+    cx.update(|window, cx| {
+        detail.update(cx, |view, cx| {
+            view.open_column_dialog(column_id, window, cx)
+        });
+        window.draw(cx).clear(cx);
+    });
+
+    // 点第二项：解析出的身份必须是它自己（不是第一项、也不只是 base）
+    let (base, picked_id) = panel
+        .read_with(cx, |panel, _cx| {
+            crate::mock_view::generator_library::picked_entry(panel, &second, true)
+        })
+        .expect("自定义项应能解析出 base 与 id");
+    assert_eq!(picked_id.as_deref(), Some(second.as_str()));
+    cx.update(|window, cx| {
+        detail.update(cx, |view, cx| {
+            view.apply_generator_config_to_draft(column_id, base, picked_id, window, cx);
+        });
+        window.draw(cx).clear(cx);
+    });
+
+    let (picked_in_dialog, generator_in_dialog) = detail.read_with(cx, |view, _cx| {
+        let draft = view.draft.as_ref().expect("列编辑对话框应还开着");
+        (
+            draft.picked_user().map(str::to_string),
+            draft.def.generator.clone(),
+        )
+    });
+    assert_eq!(
+        picked_in_dialog.as_deref(),
+        Some(second.as_str()),
+        "表配置应记住点中的是第二项"
+    );
+    assert_eq!(
+        generator_in_dialog,
+        GeneratorConfig::AutoIncrement { start: 1, step: 2 },
+        "参数应换成第二项自己的 base（step=2）"
+    );
+
+    // 应用后列上带着这一身份：下次打开列编辑还能精确高亮
+    cx.update(|window, cx| {
+        let w = &mut *window;
+        detail.update(cx, move |view, cx| view.apply_and_next(w, cx));
+    });
+    let applied = panel.read_with(cx, |panel, _cx| {
+        panel.draft().columns[0].user_generator.clone()
+    });
+    assert_eq!(
+        applied.as_deref(),
+        Some(second.as_str()),
+        "列的 `user_generator` 应写回点中的那一项"
+    );
+    // 另一项各自解析，互不串（按 base 认领会串成同一项）
+    panel.read_with(cx, |panel, _cx| {
+        let other = crate::mock_view::generator_library::picked_entry(panel, &first, true)
+            .expect("第一项也应能解析");
+        assert_eq!(other.1.as_deref(), Some(first.as_str()));
+    });
 }

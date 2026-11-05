@@ -10,7 +10,7 @@ use std::time::Duration;
 /// 因此把 `MockGenInfo` 带在身上——工作线程靠它找到内存临时表、拿到目标表名与列定义，
 /// 而视图侧不能把「最近一次结果」另存一份隐式状态（两处状态必然漂移）。
 ///
-/// 出口类**不读草稿**：场景模板产出的多张表与草稿无关，出口只认结果自己（见 [`MockGenInfo`]）。
+/// 出口类**不读表配置**：场景模板产出的多张表与表配置无关，出口只认结果自己（见 [`MockGenInfo`]）。
 #[derive(Debug, Clone)]
 pub enum MockJobKind {
     /// 只生成到内存临时表（**不写库**）
@@ -74,11 +74,11 @@ impl MockJobKind {
         )
     }
 
-    /// 是否**以当前草稿为输入**（目标表 / 列 / 行数）。
+    /// 是否**以当前表配置为输入**（目标表 / 列 / 行数）。
     ///
-    /// 只有 `Generate` 与 `AppendTo` 是：场景模板自带表与列（草稿不参与也不被改写），
+    /// 只有 `Generate` 与 `AppendTo` 是：场景模板自带表与列（表配置不参与也不被改写），
     /// 三个出口只看已生成的结果（见 [`MockGenInfo`])。
-    /// 面板据此决定要不要先校验草稿（表名 / 行数输入 / 至少一列）。
+    /// 面板据此决定要不要先校验表配置（表名 / 行数输入 / 至少一列）。
     pub fn uses_draft(&self) -> bool {
         matches!(self, Self::Generate | Self::AppendTo(_))
     }
@@ -94,11 +94,11 @@ impl MockJobKind {
         }
     }
 
-    /// 本次任务处理的行数（文案用）：生成类按草稿设定，出口类按已生成结果。
+    /// 本次任务处理的行数（文案用）：生成类按表配置设定，出口类按已生成结果。
     ///
-    /// 场景模板的总行数写在模板里（草稿不参与），因此这里给 0——面板对场景任务
+    /// 场景模板的总行数写在模板里（表配置不参与），因此这里给 0——面板对场景任务
     /// 按「张表」报进度（见 `render_job_row`），不拿行数当量纲。
-    pub fn rows_total(&self, draft: &MockDraft) -> u32 {
+    pub fn rows_total(&self, draft: &MockTableConfig) -> u32 {
         match self {
             Self::Generate | Self::AppendTo(_) => draft.options.rows,
             Self::Scenario(_) | Self::PersistAll(_) | Self::ScratchpadAll { .. } => 0,
@@ -218,7 +218,7 @@ pub struct MockJobProgress {
     pub batches_done: usize,
     /// 总量（单表生成 = 总批次；场景模板 = 总表数）。首次回调前为 0，表示「尚未开始」
     pub batches_total: usize,
-    /// 本次任务的行数（文案用；场景模板为 0，因为行数写在模板里、草稿不参与）
+    /// 本次任务的行数（文案用；场景模板为 0，因为行数写在模板里、表配置不参与）
     pub rows_total: u32,
 }
 

@@ -11,10 +11,31 @@ mod render;
 // 渲染行的共用表单助手（detail.rs / tests 也调用，经本层再导出到 mock_view）
 pub(crate) use render::{complex_form_line, form_line};
 
+/// 一份表配置的三只输入框（懒创建：`InputState` 要 window）。
+///
+/// 按配置 id 分开存：两个配置 tab 并存时，输入态必须各自同源到自己那份配置，
+/// 否则「切到另一张 tab，表名框里还是上一张的名字」。
+pub(crate) struct ConfigInputs {
+    pub(crate) table: Entity<InputState>,
+    pub(crate) rows: Entity<InputState>,
+    pub(crate) seed: Entity<InputState>,
+    /// 待写入表名的值（事件路径置位，下一帧渲染时落地）
+    pending_table: Option<String>,
+    /// 输入框写回订阅（必须持有，丢了就退订）
+    _subs: Vec<Subscription>,
+}
+
 /// Mock 配置面板（右 Dock 17.5rem）：目标 + 选项 + 列来源 + 生成 + 出口。
 pub struct MockPanel {
     host: Rc<dyn MockHost>,
-    pub(crate) draft: MockDraft,
+    /// **活动**表配置：同一时刻面板只编辑它（字段区 / 生成 / 出口都读它）
+    pub(crate) draft: MockTableConfig,
+    /// 活动配置的 id（与表名序号同源，也是 `DetailTarget::Config(id)` 的键）
+    pub(crate) config_id: u64,
+    /// 其余表配置：点「＋」时把上一份收进来，切换配置时再换出去。
+    /// 面板只**编辑**活动那份，但每个 tab 都按自己的 id 读（`config_for`），
+    /// 所以未激活 tab 渲染出来的仍是它自己那份。
+    pub(crate) configs: std::collections::HashMap<u64, MockTableConfig>,
     /// 列 id 计数器（列可增删，键用 id）
     pub(crate) next_id: u64,
     /// 最近一次运行的**结果表**（单表生成 = 1 条；场景模板 = N 条）
@@ -23,18 +44,16 @@ pub struct MockPanel {
     pub(crate) preview_cache: Option<PreviewCache>,
     /// 预览要显示多少行（面板上的「行数」档；生成时只取 [`PREVIEW_ROWS`] 行，要更多得重查）
     preview_limit: usize,
-    /// 中央详情 tab 三段分栏里**列区**的初始高度（rem；拖拽后由 `on_resize` 回写，跨 tab / 跨窗口沿用）
-    pub(crate) detail_columns_rem: f32,
-    /// 字段区的列搜索框（懒创建：`InputState` 要 window；搜索词就存在它里，不另存一份）
-    column_filter: Option<Entity<InputState>>,
-    /// 搜索词变化时重画字段区的订阅（必须持有：丢了就自动退订）
-    column_filter_sub: Option<Subscription>,
-    /// 表头三个输入（表名 / 行数 / 种子）的写回订阅（同样必须持有）。
-    ///
-    /// 为何需要：右 Dock 清单、中央 tab 标题、tab 里的「本次 Mock 表（1）」**都读** `draft`，
-    /// 而输入框是另一份状态——不订阅 Change，打字过程中这两份就是两个值，
-    /// 只有点「生成」时 `sync_inputs` 才把它们对齐一次。
-    _input_subs: Vec<Subscription>,
+    /// 中央详情 tab 三段分栏里**预览区**的初始高度（rem；拖拽后由 `on_resize` 回写，
+    /// 跨 tab / 跨窗口沿用）
+    pub(crate) detail_preview_rem: f32,
+    /// 列编辑对话框第三行**左栏宽度**（px；拖拽后由 `on_resize` 回写，重开对话框沿用）。
+    /// 仍受 220–520 的拖拽范围约束，越界值在渲染时 clamp。
+    pub(crate) column_list_px: f32,
+    /// 字段区的列搜索框，**每份配置一只**（各自筛各自的列；懒创建，搜索词存在框里）
+    column_filters: HashMap<u64, Entity<InputState>>,
+    /// 各配置搜索词变化时重画字段区的订阅（必须持有：丢了就自动退订）
+    column_filter_subs: Vec<Subscription>,
     /// 当前选中的结果表下标（出口作用于它；越界视为 0）
     current: usize,
     /// 当前结果来自哪套场景模板（`None` = 单表生成；面板据此给一句来源说明）
@@ -67,13 +86,12 @@ pub struct MockPanel {
     /// 「编辑表」对话框的输入：表名 / 行数
     pub(crate) edit_name_input: Option<Entity<InputState>>,
     pub(crate) edit_rows_input: Option<Entity<InputState>>,
-    pub(crate) table_input: Option<Entity<InputState>>,
-    /// 待写入表名输入的值（事件路径置位，下一帧渲染时落地）
-    table_pending: Option<String>,
-    /// 行数输入（`pub(crate)`：与 `table_input` 同口径——两者都是「输入框是输入态、
-    /// 草稿是权威态」的双份，测试要能读到输入态验这条同步）
-    pub(crate) rows_input: Option<Entity<InputState>>,
-    seed_input: Option<Entity<InputState>>,
+    /// 每一份表配置各有一组输入（表名 / 行数 / 种子）。
+    ///
+    /// 为什么按配置 id 分开而不是共用一组：两个配置 tab 并存时，共用一组输入就会出现
+    /// 「切到另一张 tab，输入框里还是上一张的表名」——输入态与配置态在这里是两份数据，
+    /// 必须同源到同一份配置。
+    pub(crate) config_inputs: std::collections::HashMap<u64, ConfigInputs>,
     /// 场景生成用的种子输入（`None` = 场景态未开）；值与 `self.scenario.seed` 互相同步
     scenario_seed_input: Option<Entity<InputState>>,
     /// 待写入场景种子输入的值（`load_scenario` 置位，下一帧 `ensure_inputs` 落地）
@@ -107,7 +125,7 @@ pub struct MockPanel {
     /// 「保存为模板」对话框的名称输入框
     template_name: Option<Entity<InputState>>,
     /// 本会话点过的生成器（目录名，最近在前；生成器菜单的「最近使用」，见 B7）
-    recent_generators: Vec<String>,
+    recent_generators: Vec<(String, bool)>,
     /// 本会话的自定义生成器（分组「＋」精调层创建；SQLite 持久化记录在册，见文档 §9.5）
     pub(crate) user_generators: Vec<UserGenerator>,
     /// 底部折叠段（生成历史 / 用户模板）是否展开（默认收起：面板天天用的是上面那份清单）
@@ -171,9 +189,15 @@ enum HistoryTask {
     /// 删一条历史后读回
     Delete(String),
     /// 记一次生成运行后读回
-    Record { draft: MockDraft, run: RunRecord },
-    /// 把草稿存成模板后读回
-    SaveTemplate { name: String, draft: MockDraft },
+    Record {
+        draft: MockTableConfig,
+        run: RunRecord,
+    },
+    /// 把表配置存成模板后读回
+    SaveTemplate {
+        name: String,
+        draft: MockTableConfig,
+    },
     /// 删一个模板后读回
     DeleteTemplate(String),
     /// 取一条历史的完整配置（重放）
@@ -329,15 +353,17 @@ impl MockPanel {
     pub fn new(host: Rc<dyn MockHost>, _cx: &mut Context<Self>) -> Self {
         Self {
             host,
-            draft: MockDraft::default(),
+            draft: MockTableConfig::default(),
+            config_id: 0,
+            configs: std::collections::HashMap::new(),
             next_id: 1,
             results: Vec::new(),
             preview_cache: None,
             preview_limit: PREVIEW_ROWS,
-            detail_columns_rem: 15.0,
-            column_filter: None,
-            column_filter_sub: None,
-            _input_subs: Vec::new(),
+            detail_preview_rem: 20.0,
+            column_list_px: f32::from(ui::COLUMN_GENERATOR_LIST_WIDTH),
+            column_filters: HashMap::new(),
+            column_filter_subs: Vec::new(),
             current: 0,
             scenario_source: None,
             landed: None,
@@ -354,10 +380,7 @@ impl MockPanel {
             table_editing: None,
             edit_name_input: None,
             edit_rows_input: None,
-            table_input: None,
-            table_pending: None,
-            rows_input: None,
-            seed_input: None,
+            config_inputs: std::collections::HashMap::new(),
             scenario_seed_input: None,
             scenario_seed_pending: None,
             search_input: None,
@@ -386,9 +409,104 @@ impl MockPanel {
 
     // ==================== 只读访问器（宿主 / 详情 tab / 测试） ====================
 
-    /// 当前草稿
-    pub fn draft(&self) -> &MockDraft {
+    /// 当前表配置
+    pub fn draft(&self) -> &MockTableConfig {
         &self.draft
+    }
+
+    /// 活动配置的 id（中央 tab 身份 `DetailTarget::Config(id)` 用它）。
+    pub fn config_id(&self) -> u64 {
+        self.config_id
+    }
+
+    /// 按 id 读某份配置：活动那份就是 `draft`，其余在 `configs`。
+    /// 找不到（tab 指向的配置已不存在）时退回活动那份，渲染不出错也不 panic。
+    pub(crate) fn config_for(&self, id: u64) -> &MockTableConfig {
+        if id == self.config_id {
+            &self.draft
+        } else {
+            self.configs.get(&id).unwrap_or(&self.draft)
+        }
+    }
+
+    /// 按 id 取可写引用：活动那份直接给 `draft`，其余从 `configs` 取（缺失则补一份空配置）。
+    pub(crate) fn config_mut(&mut self, id: u64) -> &mut MockTableConfig {
+        if id == self.config_id {
+            &mut self.draft
+        } else {
+            self.configs
+                .entry(id)
+                .or_insert_with(MockTableConfig::default)
+        }
+    }
+
+    /// 面板里**全部**表配置的轻量快照（活动那份 + `configs`），按 id 升序、id 去重。
+    ///
+    /// 右面板清单只画这一层：多配置时每份占一行，点一行就切到它自己的 tab。
+    /// 只画活动那一份时，开过第二个「＋」之后就再也回不到前一份了。
+    pub(crate) fn config_rows(&self) -> Vec<(u64, String, usize, u64)> {
+        let mut rows: Vec<(u64, String, usize, u64)> = self
+            .configs
+            .iter()
+            .map(|(id, config)| {
+                (
+                    *id,
+                    config.table_name.clone(),
+                    config.columns.len(),
+                    config.options.rows as u64,
+                )
+            })
+            .collect();
+        rows.push((
+            self.config_id,
+            self.draft.table_name.clone(),
+            self.draft.columns.len(),
+            self.draft.options.rows as u64,
+        ));
+        rows.sort_by_key(|(id, ..)| *id);
+        rows.dedup_by_key(|(id, ..)| *id);
+        rows
+    }
+
+    /// 把某份配置换成**活动**配置（旧活动收进 `configs`，内容都不丢）。
+    ///
+    /// 调用点：① Dock 真正激活某张配置 tab（`MockDetailView::set_active`，切 tab 即切配置）；
+    /// ② 「写」路径的动作（点按钮 / 打字回写 / 生成 / 出口）——这些只发生在当前可见的那张 tab 上。
+    /// **渲染期不调**：未激活 tab 也会渲染，在 render 里切换会互相抢。
+    pub(crate) fn focus_config(&mut self, id: u64) {
+        if id == self.config_id {
+            return;
+        }
+        let Some(target) = self.configs.remove(&id) else {
+            return;
+        };
+        let previous = std::mem::replace(&mut self.draft, target);
+        self.configs.insert(self.config_id, previous);
+        self.config_id = id;
+        // 结果与提示是上一次生成留下的现场，换配置后不再适用
+        self.outcome = None;
+        self.error = None;
+    }
+
+    /// 事件路径置位「下一帧把表名框写成这个值」（编辑表 / 导入结构改名用）。
+    ///
+    /// 输入框还没建时置位会丢，这没关系：`ensure_inputs_for` 建的时候直接取配置里的表名。
+    fn set_table_pending(&mut self, value: String) {
+        if let Some(inputs) = self.config_inputs.get_mut(&self.config_id) {
+            inputs.pending_table = Some(value);
+        }
+    }
+
+    /// 表名输入框（活动配置的那只；测试与渲染用）
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn table_input(&self) -> Option<&Entity<InputState>> {
+        self.config_inputs.get(&self.config_id).map(|i| &i.table)
+    }
+
+    /// 行数输入框（同上）
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn rows_input(&self) -> Option<&Entity<InputState>> {
+        self.config_inputs.get(&self.config_id).map(|i| &i.rows)
     }
 
     /// 最近一次生成结果
@@ -540,13 +658,13 @@ impl MockPanel {
     /// `pub` 而不是 `pub(crate)`：面板的只读访问器一律公开（宿主 / 详情 tab / 测试都从这儿读，
     /// 与 `scenario_templates()` / `job_kind()` 同口径），不为了少一个 `pub` 让测试去摸私有字段。
     pub fn column_filter_input(&self) -> Option<Entity<InputState>> {
-        self.column_filter.clone()
+        self.column_filters.get(&self.config_id).cloned()
     }
 
-    /// 字段区的列搜索词（空 = 不筛）。搜索词就存在输入框实体里，不另存一份。
-    pub(crate) fn column_filter_query(&self, cx: &App) -> String {
-        self.column_filter
-            .as_ref()
+    /// 某份配置的列搜索词（空 = 不筛）。搜索词就存在输入框实体里，不另存一份。
+    pub(crate) fn column_filter_query(&self, id: u64, cx: &App) -> String {
+        self.column_filters
+            .get(&id)
             .map(|input| input.read(cx).value().trim().to_string())
             .unwrap_or_default()
     }
@@ -556,11 +674,12 @@ impl MockPanel {
     /// 搜索框空着也不隐藏：一个偶尔冒出来的控件比一个一直在那儿的小输入框更让人意外。
     pub(crate) fn render_column_filter(
         &mut self,
+        id: u64,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        self.ensure_inputs(window, cx);
-        match self.column_filter.clone() {
+        self.ensure_inputs_for(id, window, cx);
+        match self.column_filters.get(&id).cloned() {
             Some(input) => div()
                 .flex_none()
                 .w(rems(ui::COLUMN_FILTER_WIDTH))
@@ -702,7 +821,7 @@ impl MockPanel {
     /// 不切项目就会一直在），`gen_info` 里的临时表名已经指向不存在的表——留着它，
     /// 用户下一次点「导出 / 落库」只会拿到一个难懂的「表不存在」。
     ///
-    /// 草稿（目标表名 / 列 / 行数种子）**保留**：那是用户的配置，跨项目可以继续用。
+    /// 表配置（目标表名 / 列 / 行数种子）**保留**：那是用户的配置，跨项目可以继续用。
     pub fn forget_generated(&mut self, cleared: usize, cx: &mut Context<Self>) {
         self.results.clear();
         self.current = 0;
@@ -737,12 +856,12 @@ impl MockPanel {
         self.project_switched
     }
 
-    /// 打开中央「Mock 数据」详情 tab（草稿 tab：字段清单 + 预览）。
+    /// 打开中央「Mock 数据」详情 tab（表配置 tab：字段清单 + 预览）。
     pub fn open_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_detail_for(DetailTarget::Draft, window, cx);
+        self.open_detail_for(DetailTarget::Config(self.config_id), window, cx);
     }
 
-    /// 打开（或聚焦）某个详情 tab：草稿，或某张结果表。
+    /// 打开（或聚焦）某个详情 tab：表配置，或某张结果表。
     pub fn open_detail_for(
         &mut self,
         target: DetailTarget,
@@ -757,12 +876,12 @@ impl MockPanel {
         self.open_detail_for(DetailTarget::Table(table.to_string()), window, cx);
     }
 
-    /// 「查看详情」看谁：有结果就看当前表（tab 就是那张表），没结果看草稿。
+    /// 「查看详情」看谁：有结果就看当前表（tab 就是那张表），没结果看表配置。
     pub fn current_detail_target(&self) -> DetailTarget {
         self.results
             .get(self.current)
             .map(|info| DetailTarget::Table(info.table_name.clone()))
-            .unwrap_or(DetailTarget::Draft)
+            .unwrap_or(DetailTarget::Config(self.config_id))
     }
 
     /// 中央某个 tab 被激活：把它对应的表设为「当前表」（出口作用于它）。
@@ -795,14 +914,14 @@ impl MockPanel {
         self.spawn_history(HistoryTask::Delete(task_id), cx);
     }
 
-    /// 重放一条历史：把当时的表名 / 行数 / 种子 / 语言与列配置写回草稿。
+    /// 重放一条历史：把当时的表名 / 行数 / 种子 / 语言与列配置写回表配置。
     ///
     /// **不自动生成**：重放是「把配置摆回来」，跑不跑由用户定（同模板应用口径）。
     pub fn replay_history(&mut self, task_id: String, cx: &mut Context<Self>) {
         self.spawn_history(HistoryTask::Replay(task_id), cx);
     }
 
-    /// 把当前草稿存成用户模板（名字由保存对话框给，空名在这里拦住）。
+    /// 把当前表配置存成用户模板（名字由保存对话框给，空名在这里拦住）。
     ///
     /// 两道门都落在动作本身而不只在对话框上：对话框只是入口之一，
     /// 校验在这里才能保证「不管谁调都不会存出一份套不出东西的模板」。
@@ -822,7 +941,7 @@ impl MockPanel {
         self.spawn_history(HistoryTask::SaveTemplate { name, draft }, cx);
     }
 
-    /// 应用一个用户模板：把它存的行数 / 种子 / 语言与列写回草稿（**不动目标表名**）。
+    /// 应用一个用户模板：把它存的行数 / 种子 / 语言与列写回表配置（**不动目标表名**）。
     pub fn apply_template(&mut self, template_id: String, cx: &mut Context<Self>) {
         self.spawn_history(HistoryTask::ApplyTemplate(template_id), cx);
     }
@@ -944,7 +1063,7 @@ impl MockPanel {
         let count = draft.columns.len();
         self.next_id = count as u64 + 1;
         self.draft = draft;
-        // 旧结果作废：草稿已是另一套配置，临时表还是上一套的
+        // 旧结果作废：表配置已是另一套配置，临时表还是上一套的
         self.results.clear();
         self.current = 0;
         self.landed = None;
@@ -956,9 +1075,9 @@ impl MockPanel {
         ));
     }
 
-    /// 重放落地：草稿整体换成历史里的那一套（纯状态动作，测试直接调）。
+    /// 重放落地：表配置整体换成历史里的那一套（纯状态动作，测试直接调）。
     ///
-    /// S5：场景历史（`scene_id` 有值）不落草稿——多表配置存不进单表列行，
+    /// S5：场景历史（`scene_id` 有值）不落表配置——多表配置存不进单表列行，
     /// 重放按模板 id 重新取内置模板并套用当时的种子（编辑过的关系不随历史恢复）。
     pub(crate) fn apply_replay(&mut self, detail: MockGenerationDetail, cx: &mut Context<Self>) {
         if let Some(scene_id) = detail.task.scene_id.clone() {
@@ -991,8 +1110,8 @@ impl MockPanel {
             .unwrap_or(0)
             + 1;
         self.draft = draft;
-        self.table_pending = Some(self.draft.table_name.clone());
-        // 旧结果作废：草稿已是另一套配置，临时表还是上一套的
+        self.set_table_pending(self.draft.table_name.clone());
+        // 旧结果作废：表配置已是另一套配置，临时表还是上一套的
         self.results.clear();
         self.current = 0;
         self.landed = None;
@@ -1007,7 +1126,7 @@ impl MockPanel {
     /// 这正是 v1 的主路径（源库结构 → 造新数据），不再依赖「分析库已有同名表」。
     pub fn preset_from_source(&mut self, request: SchemaRequest, cx: &mut Context<Self>) {
         self.draft.table_name = request.table.clone();
-        self.table_pending = Some(request.table.clone());
+        self.set_table_pending(request.table.clone());
         match self.host.import_columns(&request) {
             Ok(columns) => {
                 self.draft.columns = columns;
@@ -1063,19 +1182,19 @@ impl MockPanel {
         self.load_scenario(template, cx);
     }
 
-    /// 把**当前草稿**加进场景工作副本（自定义多表场景的入口）。
+    /// 把**当前表配置**加进场景工作副本（自定义多表场景的入口）。
     ///
-    /// 为何从草稿来：导入源库结构、智能映射、列编辑、行数 / 种子这一整套都在单表态里
+    /// 为何从表配置来：导入源库结构、智能映射、列编辑、行数 / 种子这一整套都在单表态里
     /// 现成可用——“把一张表调到满意，然后把它加进场景”比再做一个多表编辑器便宜得多，
     /// 也不破坏现有交互。
     pub fn add_draft_to_scenario(&mut self, cx: &mut Context<Self>) {
         let name = self.draft.table_name.trim().to_string();
         if name.is_empty() {
-            self.fail("草稿的目标表名为空：先在「目标表名」里填一个", cx);
+            self.fail("表配置的目标表名为空：先在「目标表名」里填一个", cx);
             return;
         }
         if self.draft.columns.is_empty() {
-            self.fail("草稿还没有列：先导入源库结构或手工加列", cx);
+            self.fail("表配置还没有列：先导入源库结构或手工加列", cx);
             return;
         }
         let Some(template) = self.scenario.as_mut() else {
@@ -1084,7 +1203,7 @@ impl MockPanel {
         };
         if template.tables.iter().any(|table| table.name == name) {
             self.fail(
-                format!("场景里已经有表 {name}：先删掉那张，或改草稿的目标表名"),
+                format!("场景里已经有表 {name}：先删掉那张，或改表配置的目标表名"),
                 cx,
             );
             return;
@@ -1097,7 +1216,7 @@ impl MockPanel {
         template.tables.push(table);
         self.error = None;
         self.outcome = Some(format!(
-            "已把草稿 {name}（{} 行 · {} 列）加进本次生成",
+            "已把表配置 {name}（{} 行 · {} 列）加进本次生成",
             with_thousands(u64::from(self.draft.options.rows)),
             self.draft.columns.len()
         ));
@@ -1151,7 +1270,7 @@ impl MockPanel {
         cx.notify();
     }
 
-    /// 退出场景态（丢弃工作副本，草稿与已有结果不受影响）。
+    /// 退出场景态（丢弃工作副本，表配置与已有结果不受影响）。
     pub fn close_scenario(&mut self, cx: &mut Context<Self>) {
         self.scenario = None;
         *self.relation_pick.borrow_mut() = RelationPick::default();
@@ -1161,7 +1280,7 @@ impl MockPanel {
     /// 工具栏「▦ 新增场景」：从空白场景（0 张表）开始建工作副本。
     ///
     /// 与「选模板」同一入口（[`Self::load_scenario`]）：进来的是 0 张表的模板，
-    /// 之后用「＋ 加表（当前草稿）」「＋ 加关系」从零搭起（`add_draft_to_scenario` 的
+    /// 之后用「＋ 加表（当前表配置）」「＋ 加关系」从零搭起（`add_draft_to_scenario` 的
     /// 「先选一套场景模板」门槛由空模板本身满足）。
     pub fn new_blank_scene(&mut self, cx: &mut Context<Self>) {
         if self.is_running() {
@@ -1171,19 +1290,28 @@ impl MockPanel {
         self.load_scenario(crate::templates::blank_scene_template(), cx);
     }
 
-    /// 工具栏「＋」：新建一张草稿表（对齐原型 `newMockTable`——每次点击从一张新表开始配）。
+    /// 工具栏「＋」：新建一张表配置（对齐原型 `newMockTable`——每次点击从一张新表开始配）。
     ///
-    /// 单表态的草稿只有一份（清单那一行就是它，design.md 单表态 = 草稿与结果一行），
-    /// 所以「清单加一条记录」落到实现里 = 把草稿换成一张**新表**（表名递增、列清空、
+    /// 单表态的表配置只有一份（清单那一行就是它，design.md 单表态 = 表配置与结果一行），
+    /// 所以「清单加一条记录」落到实现里 = 把表配置换成一张**新表**（表名递增、列清空、
     /// 行数复位），并聚焦它的中央 tab（配字段 / 名称都在 tab 里）；上一张若已生成，
     /// 结果仍留在清单（`results`），新表生成后再续一条。
-    pub fn new_draft_table(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn new_table_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.draft_seq += 1;
-        self.draft = MockDraft {
-            table_name: format!("mock_table_{}", self.draft_seq),
-            columns: Vec::new(),
-            options: MockRunOptions::new(1000, None, self.draft.options.locale.clone()),
-        };
+        let id = u64::from(self.draft_seq);
+        let locale = self.draft.options.locale.clone();
+        // 上一份收进存储：它自己的 tab 还开着，切回去内容不能丢——这就是「＋」不再
+        // 覆盖当前 tab 的全部实现（以前只有一份 `draft`，新表把旧表就地替换掉）。
+        let previous = std::mem::replace(
+            &mut self.draft,
+            MockTableConfig {
+                table_name: format!("mock_table_{id}"),
+                columns: Vec::new(),
+                options: MockRunOptions::new(1000, None, locale),
+            },
+        );
+        self.configs.insert(self.config_id, previous);
+        self.config_id = id;
         // 新表自带一列：空表起手得先读一段「还没有列」的空态说明才知道能干嘛，
         // 自带一列就能直接改参数 / 生成。命名与生成器都沿用「＋ 加列」的口径
         // （`column_1` + 该类型的默认生成器），不另立特例——否则新表首列与后加的
@@ -1195,8 +1323,9 @@ impl MockPanel {
         );
         // 新表从「未生成」开始：清掉上一张的生成反馈（error 留给失败现场，这里不误清）
         self.outcome = None;
+        self.error = None;
         cx.notify();
-        self.open_detail_for(DetailTarget::Draft, window, cx);
+        self.open_detail_for(DetailTarget::Config(id), window, cx);
     }
 
     /// 工具栏「⟳ 刷新」：重读内存临时表的**当前行数**，同步清单行尾数字。
@@ -1230,7 +1359,7 @@ impl MockPanel {
             return;
         };
         // S5：种子输入 → 模板 seed（留空 = 随机，与单表 seed 输入同一语义）。
-        // 同步在这里而不是 `sync_inputs`：场景不读草稿，输入也只在此刻消费。
+        // 同步在这里而不是 `sync_inputs`：场景不读表配置，输入也只在此刻消费。
         if let Some(input) = self.scenario_seed_input.clone() {
             match parse_seed(&input.read(cx).value()) {
                 Ok(seed) => template.seed = seed,
@@ -1243,7 +1372,7 @@ impl MockPanel {
         // 空白场景（0 张表）先别提交：生成空结果没有意义，引导用户先加第一张表
         if template.tables.is_empty() {
             self.fail(
-                "空白场景还没有表：先用「＋ 加表（当前草稿）」添加第一张",
+                "空白场景还没有表：先用「＋ 加表（当前表配置）」添加第一张",
                 cx,
             );
             return;
@@ -1945,7 +2074,7 @@ impl MockPanel {
             self.fail("只读模式：不允许写入项目分析库", cx);
             return;
         }
-        // 隐含主键 = 草稿里 AutoIncrement 生成器的列（v2 不建主键 DDL，自增列就是主键）
+        // 隐含主键 = 表配置里 AutoIncrement 生成器的列（v2 不建主键 DDL，自增列就是主键）
         let pk_hint = self
             .draft
             .columns
@@ -2057,7 +2186,7 @@ impl MockPanel {
             self.fail("已有任务在进行中（请等它结束或先取消）", cx);
             return;
         }
-        // 草稿驱动的任务才校验草稿：场景模板与出口都不读草稿（见 `MockJobKind::uses_draft`），
+        // 表配置驱动的任务才校验表配置：场景模板与出口都不读表配置（见 `MockJobKind::uses_draft`），
         // 拿它们的输入拦截会给出与当前动作无关的错误
         if kind.uses_draft() {
             if let Err(e) = self.sync_inputs(cx) {
@@ -2368,6 +2497,44 @@ impl MockPanel {
                 (None, None) => self.outcome = Some(note.trim_start_matches('（').to_string()),
             }
         }
+        // 全局通知：任务收尾说一句。中央 tab 的状态格只有「那张 tab 正开着」才看得见，
+        // 批量落库 / 场景生成这类要跑一阵的任务，用户多半已经切到别处了，
+        // 结果与失败必须还能追到（通知中心里留着，不用回来盯进度条）。
+        // 放在最后：`project_changed` 的归属说明也要进通知正文。
+        self.notify_job_result(kind, cx);
+    }
+
+    /// 把任务收尾结果推给全局通知系统（标题按动作类型，正文按结果）。
+    ///
+    /// 只在**收尾那一刻**推一次：进度不推——每批一条通知会把通知中心刷成进度墙，
+    /// 实时进度在中央动作行右侧的状态格里看。
+    /// 三种收尾态与字段一一对应：`succeed` 只设 `outcome`、`fail` 只设 `error`，
+    /// 所以这里按字段读即可；部分失败（批量出口）也是 `error`，不再多编一个 warning 档。
+    fn notify_job_result(&mut self, kind: &MockJobKind, cx: &mut Context<Self>) {
+        let title = match kind {
+            MockJobKind::Generate => "Mock 生成",
+            MockJobKind::Scenario(_) => "Mock 场景生成",
+            MockJobKind::AppendTo(_) => "Mock 追加",
+            MockJobKind::Persist(_) => "Mock 落库",
+            MockJobKind::PersistAll(_) => "Mock 批量落库",
+            MockJobKind::Export { .. } => "Mock 导出",
+            MockJobKind::Scratchpad { .. } => "Mock 存草稿箱",
+            MockJobKind::ScratchpadAll { .. } => "Mock 批量存草稿箱",
+        };
+        // 取消：引擎回的 Err 里带「取消」；用户自己停的不算错误，按 info 报
+        let cancelled = self
+            .error
+            .as_deref()
+            .is_some_and(|err| err.contains("取消"));
+        if let Some(err) = self.error.clone() {
+            if cancelled {
+                notification::notify_info(title, Some(err), cx);
+            } else {
+                notification::notify_error(title, Some(err), cx);
+            }
+        } else if let Some(message) = self.outcome.clone() {
+            notification::notify_success(title, Some(message), cx);
+        }
     }
 
     /// 请求取消进行中的任务：只有**含生成阶段**的任务能取消（引擎按批响应）。
@@ -2471,6 +2638,7 @@ impl MockPanel {
             },
             confidence: preset.confidence.to_string(),
             sample_value: String::new(),
+            user_generator: None,
         };
         self.draft.columns.push(spec);
         self.results.clear();
@@ -2536,7 +2704,7 @@ impl MockPanel {
         let Some(config) = generator_catalog::default_of(name) else {
             return;
         };
-        self.remember_generator(name);
+        self.remember_generator(name, false);
         if let Some(column) = self.draft.columns.iter_mut().find(|c| c.id == id) {
             column.def.generator = config;
             column.confidence = "manual".to_string();
@@ -2560,7 +2728,7 @@ impl MockPanel {
         unique: bool,
         cx: &mut Context<Self>,
     ) {
-        self.remember_generator(generator_catalog::spec_of(&config).name);
+        self.remember_generator(generator_catalog::spec_of(&config).name, false);
         if let Some(column) = self.draft.columns.iter_mut().find(|c| c.id == id) {
             column.def.generator = config;
             column.def.nullable_ratio = nullable_ratio;
@@ -2575,7 +2743,10 @@ impl MockPanel {
     }
 
     /// 本会话点过的生成器（最近在前；生成器菜单的「最近使用」，见 B7）。
-    pub fn recent_generators(&self) -> &[String] {
+    ///
+    /// 记的是 `(键, 是否自定义)`：内建键 = 目录名（`spec.name`），自定义键 = `ug.id`。
+    /// 只存目录名会让自定义生成器永远进不了历史（它没有目录名）。
+    pub fn recent_generators(&self) -> &[(String, bool)] {
         &self.recent_generators
     }
 
@@ -2590,9 +2761,12 @@ impl MockPanel {
     }
 
     /// 记一笔「刚用过哪个生成器」（去重后放最前，只留 [`RECENT_GENERATORS`] 条）。
-    fn remember_generator(&mut self, name: &str) {
-        self.recent_generators.retain(|recent| recent != name);
-        self.recent_generators.insert(0, name.to_string());
+    ///
+    /// `key` 与写回用的键同口径（内建 = `spec.name`，自定义 = `ug.id`）：历史 chips 要按它
+    /// 反查并写回，拿显示名记就再也对不上了。
+    pub(crate) fn remember_generator(&mut self, key: &str, is_user: bool) {
+        self.recent_generators.retain(|(recent, _)| recent != key);
+        self.recent_generators.insert(0, (key.to_string(), is_user));
         self.recent_generators.truncate(RECENT_GENERATORS);
     }
 
@@ -2782,16 +2956,20 @@ impl MockPanel {
 
     /// 从输入框同步目标表名 / 行数 / 种子（生成与出口前调用）。
     fn sync_inputs(&mut self, cx: &App) -> Result<(), String> {
-        if let Some(input) = self.table_input.as_ref() {
-            self.draft.table_name = validate_table_name(&input.read(cx).value())?;
-        } else {
-            self.draft.table_name = validate_table_name(&self.draft.table_name)?;
+        let id = self.config_id;
+        let inputs = self.config_inputs.get(&id);
+        let name = inputs.map(|inputs| inputs.table.read(cx).value().to_string());
+        let rows = inputs.map(|inputs| inputs.rows.read(cx).value().to_string());
+        let seed = inputs.map(|inputs| inputs.seed.read(cx).value().to_string());
+        match name {
+            Some(value) => self.draft.table_name = validate_table_name(&value)?,
+            None => self.draft.table_name = validate_table_name(&self.draft.table_name)?,
         }
-        if let Some(input) = self.rows_input.as_ref() {
-            self.draft.options.rows = parse_rows(&input.read(cx).value())?;
+        if let Some(value) = rows {
+            self.draft.options.rows = parse_rows(&value)?;
         }
-        if let Some(input) = self.seed_input.as_ref() {
-            self.draft.options.seed = parse_seed(&input.read(cx).value())?;
+        if let Some(value) = seed {
+            self.draft.options.seed = parse_seed(&value)?;
         }
         Ok(())
     }
@@ -2824,9 +3002,9 @@ impl MockPanel {
         !self.results.is_empty()
     }
 
-    /// 「另存为」的默认文件名：取**当前结果表**的名字（场景模板下与草稿无关）。
+    /// 「另存为」的默认文件名：取**当前结果表**的名字（场景模板下与表配置无关）。
     ///
-    /// 没结果时回退到草稿的目标表名：按钮在无结果时本来就点不开（`has_result` 拦着），
+    /// 没结果时回退到表配置的目标表名：按钮在无结果时本来就点不开（`has_result` 拦着），
     /// 这里只保证函数本身不会给出空名字。
     pub(crate) fn export_file_name(&self, format: &MockExportFormat) -> String {
         let table = self
@@ -2844,7 +3022,7 @@ impl MockPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(input) = self.rows_input.clone() {
+        if let Some(input) = self.rows_input().cloned() {
             input.update(cx, |state, cx| state.set_value(text, window, cx));
         }
     }
@@ -2922,69 +3100,100 @@ impl MockPanel {
     /// 懒创建表头那几个输入（`InputState::new` 需要 window；事件路径置位的待写值也在这里落地）。
     ///
     /// 表头画在**中央 tab**，但输入状态归面板（单一权威）：面板出让的是渲染，不是状态。
-    fn ensure_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.table_input.is_none() {
-            let initial = self.draft.table_name.clone();
-            let state = cx.new(|cx| InputState::new(window, cx).placeholder("目标表名"));
-            state.update(cx, |s, cx| s.set_value(initial, window, cx));
-            // 打字即写回草稿：右 Dock 的清单行与中央 tab 标题都读 `draft.table_name`
-            //（不是输入框）。不订阅的话，从按下第一个键到点「生成」之前，
-            // 用户眼前的表名与自己刚打的名字是两个值。
-            self._input_subs
-                .push(cx.subscribe(&state, |panel, emitter, ev: &InputEvent, cx| {
+    /// 建（或补齐）**某一份配置**的三只输入框。
+    ///
+    /// 按配置 id 建：中央每个配置 tab 渲染自己的表头时都会调它，这样两个 tab 各有
+    /// 自己的输入态；活动指针只决定「生成 / 出口读哪份」，不影响输入框归属。
+    fn ensure_inputs_for(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.config_inputs.contains_key(&id) {
+            let config = self.config_for(id);
+            let initial_name = config.table_name.clone();
+            let initial_rows = config.options.rows.to_string();
+            let initial_seed = config
+                .options
+                .seed
+                .map(|seed| seed.to_string())
+                .unwrap_or_default();
+
+            let table = cx.new(|cx| InputState::new(window, cx).placeholder("目标表名"));
+            table.update(cx, |s, cx| s.set_value(initial_name, window, cx));
+            let rows = cx.new(|cx| InputState::new(window, cx).placeholder("行数"));
+            rows.update(cx, |s, cx| s.set_value(initial_rows, window, cx));
+            let seed = cx.new(|cx| InputState::new(window, cx).placeholder("随机种子"));
+            seed.update(cx, |s, cx| s.set_value(initial_seed, window, cx));
+
+            let mut subs = Vec::new();
+            // 打字即写回**这一份**配置：闭包带配置 id，配置被换出活动位也不会串到别的表。
+            // 右 Dock 清单行与中央 tab 标题都读 `draft`（不是输入框），不订阅就会出现
+            // 「从按下第一个键到点生成之前，用户眼里的表名与刚打的名字是两个值」。
+            subs.push(
+                cx.subscribe(&table, move |panel, emitter, ev: &InputEvent, cx| {
                     if !matches!(ev, InputEvent::Change) {
                         return;
                     }
-                    // 软校验：打到一半的非法值（空串 / 含空格）**不写回、也不报错**——
+                    // 软校验：打到一半的非法值（空串 / 含空格）不写回、也不报错——
                     // 报错留给「生成」那一刻（`sync_inputs`），打字途中刷红字只会干扰输入
                     if let Ok(name) = validate_table_name(&emitter.read(cx).value()) {
-                        if panel.draft.table_name != name {
-                            panel.draft.table_name = name;
+                        let target = panel.config_mut(id);
+                        if target.table_name != name {
+                            target.table_name = name;
                             cx.notify();
                         }
                     }
-                }));
-            self.table_input = Some(state);
+                }),
+            );
+            subs.push(
+                cx.subscribe(&rows, move |panel, emitter, ev: &InputEvent, cx| {
+                    if !matches!(ev, InputEvent::Change) {
+                        return;
+                    }
+                    if let Ok(value) = parse_rows(&emitter.read(cx).value()) {
+                        let target = panel.config_mut(id);
+                        if target.options.rows != value {
+                            target.options.rows = value;
+                            cx.notify();
+                        }
+                    }
+                }),
+            );
+            subs.push(
+                cx.subscribe(&seed, move |panel, emitter, ev: &InputEvent, cx| {
+                    if !matches!(ev, InputEvent::Change) {
+                        return;
+                    }
+                    if let Ok(value) = parse_seed(&emitter.read(cx).value()) {
+                        let target = panel.config_mut(id);
+                        if target.options.seed != value {
+                            target.options.seed = value;
+                            cx.notify();
+                        }
+                    }
+                }),
+            );
+
+            self.config_inputs.insert(
+                id,
+                ConfigInputs {
+                    table,
+                    rows,
+                    seed,
+                    pending_table: None,
+                    _subs: subs,
+                },
+            );
         }
-        if let (Some(pending), Some(input)) = (self.table_pending.take(), self.table_input.clone())
-        {
+        let pending = self
+            .config_inputs
+            .get_mut(&id)
+            .and_then(|inputs| inputs.pending_table.take());
+        if let (Some(value), Some(input)) = (
+            pending,
+            self.config_inputs
+                .get(&id)
+                .map(|inputs| inputs.table.clone()),
+        ) {
             // `set_value` 不发 Change 事件：这里的回填不会回头触发上面的写回（无回环）
-            input.update(cx, |s, cx| s.set_value(pending, window, cx));
-        }
-        if self.rows_input.is_none() {
-            let initial = self.draft.options.rows.to_string();
-            let state = cx.new(|cx| InputState::new(window, cx).placeholder("行数"));
-            state.update(cx, |s, cx| s.set_value(initial, window, cx));
-            // 同表名：右 Dock 草稿行的「N 行」读的是 `draft.options.rows`
-            self._input_subs
-                .push(cx.subscribe(&state, |panel, emitter, ev: &InputEvent, cx| {
-                    if !matches!(ev, InputEvent::Change) {
-                        return;
-                    }
-                    if let Ok(rows) = parse_rows(&emitter.read(cx).value()) {
-                        if panel.draft.options.rows != rows {
-                            panel.draft.options.rows = rows;
-                            cx.notify();
-                        }
-                    }
-                }));
-            self.rows_input = Some(state);
-        }
-        if self.seed_input.is_none() {
-            let state = cx.new(|cx| InputState::new(window, cx).placeholder("随机种子"));
-            self._input_subs
-                .push(cx.subscribe(&state, |panel, emitter, ev: &InputEvent, cx| {
-                    if !matches!(ev, InputEvent::Change) {
-                        return;
-                    }
-                    if let Ok(seed) = parse_seed(&emitter.read(cx).value()) {
-                        if panel.draft.options.seed != seed {
-                            panel.draft.options.seed = seed;
-                            cx.notify();
-                        }
-                    }
-                }));
-            self.seed_input = Some(state);
+            input.update(cx, |s, cx| s.set_value(value, window, cx));
         }
         // S5：场景种子输入（只在场态渲染；随模板载入预填）
         if self.scenario.is_some() {
@@ -3002,17 +3211,17 @@ impl MockPanel {
             self.scenario_seed_input = None;
             self.scenario_seed_pending = None;
         }
-        if self.column_filter.is_none() {
+        if !self.column_filters.contains_key(&id) {
             let state =
                 cx.new(|cx| InputState::new(window, cx).placeholder("筛选列（列名 / 生成器）"));
             // 搜索词一变就重画：输入框自己会重绘，但列卡片是面板画的
-            self.column_filter_sub =
-                Some(cx.subscribe(&state, |_panel, _input, ev: &InputEvent, cx| {
-                    if matches!(ev, InputEvent::Change) {
-                        cx.notify();
-                    }
-                }));
-            self.column_filter = Some(state);
+            let sub = cx.subscribe(&state, |_panel, _input, ev: &InputEvent, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    cx.notify();
+                }
+            });
+            self.column_filter_subs.push(sub);
+            self.column_filters.insert(id, state);
         }
         // 清单搜索框（工具栏下方 / 清单顶部；搜索词一变就重画，与 `column_filter` 同一订阅模式）
         if self.search_input.is_none() {

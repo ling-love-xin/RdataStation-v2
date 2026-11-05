@@ -2,20 +2,22 @@
 use super::*;
 
 impl MockPanel {
-    /// 表头参数行：表名 / 行数 / 种子 / 语言（草稿可改）。
+    /// 表头参数行：表名 / 行数 / 种子 / 语言（表配置可改）。
     ///
     /// 四个参数**同一行**：它们同属「这张表怎么造」的一次性设定，表名独占一行会把表头撑到
     /// 两行高。每个控件前都带短标签——没有标签时两个数字框加一个下拉根本分不清谁是谁
     /// （标签沿用 `form_line` 的口径：不加冒号，靠位置关系读）。
-    fn render_target_rows(&self, cx: &mut Context<Self>) -> Div {
+    fn render_target_rows(&self, id: u64, cx: &mut Context<Self>) -> Div {
         let hint = text_hint(cx.theme());
         // 标签是「这个框是什么」，比它标的那个值更弱一档——此前标签与值同色，
         // 四个控件摆一排全靠位置猜谁是谁。
         let label = |text: &'static str| div().flex_none().text_xs().text_color(hint).child(text);
+        // 这份配置自己的三只输入框（还没建 = 空，表头只画语言）
+        let inputs = self.config_inputs.get(&id);
 
         let mut row = div().h_flex().items_center().gap_2().w_full();
         // 表名：唯一会变长的（表名可长），吃掉剩余宽度
-        if let Some(input) = self.table_input.clone() {
+        if let Some(input) = inputs.map(|inputs| inputs.table.clone()) {
             row = row.child(
                 div()
                     .h_flex()
@@ -28,7 +30,7 @@ impl MockPanel {
             );
         }
         // 行数 / 种子：定宽数字框（值与标签都短，不需要伸缩）
-        if let Some(input) = self.rows_input.clone() {
+        if let Some(input) = inputs.map(|inputs| inputs.rows.clone()) {
             row = row.child(
                 div()
                     .h_flex()
@@ -44,7 +46,7 @@ impl MockPanel {
                     ),
             );
         }
-        if let Some(input) = self.seed_input.clone() {
+        if let Some(input) = inputs.map(|inputs| inputs.seed.clone()) {
             row = row.child(
                 div()
                     .h_flex()
@@ -60,7 +62,7 @@ impl MockPanel {
                     ),
             );
         }
-        let locale = self.draft.options.locale.clone();
+        let locale = self.config_for(id).options.locale.clone();
         row = row.child(
             div()
                 .h_flex()
@@ -70,6 +72,7 @@ impl MockPanel {
                 .child(label("语言"))
                 .child({
                     let entity = cx.entity();
+                    let config_id = id;
                     dropdown_button("mock-locale", locale_label(&locale))
                         // caret 由原语开（见 `style::dropdown_button`）：菜单藏在 caret 后面
                         // 才是「这里能展开」的信号，漏挂它就只是个看不出有菜单的按钮
@@ -85,7 +88,9 @@ impl MockPanel {
                                         .on_click(move |_, _, app| {
                                             let chosen = chosen.clone();
                                             entity.update(app, |panel, cx| {
-                                                panel.draft.options.locale = chosen;
+                                                // 写回**这张 tab 的那份**配置：语言是配置项，
+                                                // 不能因为活动指针指向别处就写错表
+                                                panel.config_mut(config_id).options.locale = chosen;
                                                 cx.notify();
                                             });
                                         }),
@@ -103,11 +108,12 @@ impl MockPanel {
     ///
     /// 它和四个出口同属「这张表的动作」，与它们排在同一条动作行里（生成 → 落地闭环），
     /// 不再单独占一行（原 `render_generate_row`）——表头省下的一行给列区与预览。
-    fn render_generate_button(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_generate_button(&self, id: u64, cx: &mut Context<Self>) -> AnyElement {
         let running = self.is_running();
         let generating = self.is_generating();
         let has_result = self.has_result();
         let entity = cx.entity();
+        let config_id = id;
         // 生成过一次之后收成 Soft：这张表的主行动让位给四个出口（生成的目的就是落地）
         let mut generate_btn = if has_result {
             button("mock-detail-generate", "重新生成", ActionKind::Soft).xsmall()
@@ -120,7 +126,11 @@ impl MockPanel {
         };
         if !running {
             generate_btn = generate_btn.on_click(move |_, _, app| {
-                entity.update(app, |panel, cx| panel.run_generate(cx));
+                entity.update(app, |panel, cx| {
+                    // 生成的是这张 tab 的表：先切活动指针，任务读的就是这一份配置
+                    panel.focus_config(config_id);
+                    panel.run_generate(cx)
+                });
             });
         }
         generate_btn.into_any_element()
@@ -132,65 +142,34 @@ impl MockPanel {
     /// 与重试从属于同一次生成——它们属于这张表，不属于「有哪些表」那份清单（那是右 Dock 的事）。
     pub(crate) fn render_design_head(
         &mut self,
+        id: u64,
         key: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        self.ensure_inputs(window, cx);
-        let running = self.is_running();
-        let has_result = self.has_result();
+        self.ensure_inputs_for(id, window, cx);
 
         let mut head = div()
             .v_flex()
             .gap_2()
             .w_full()
-            .child(self.render_target_rows(cx));
+            .child(self.render_target_rows(id, cx));
 
         if self.scenario.is_some() {
-            // 场景态：单表生成让位给「生成 N 张表」（在右 Dock），这里只说明草稿的用途
+            // 场景态：单表生成让位给「生成 N 张表」（在右 Dock），这里只说明表配置的用途
             head = head.child(hint_line(
                 cx.theme(),
-                "这是草稿：把表名 / 行数 / 列调好，再去右侧「＋ 加表」把它加进本次生成",
+                "这是表配置：把表名 / 行数 / 列调好，再去右侧「＋ 加表」把它加进本次生成",
             ));
         } else {
             // 动作行（生成 + 四个出口）：它和「表名 / 行数 / 列」同属这张表的闭环，
             // 从预览段上移到这里——原来画在预览上方，出口竖排又把预览挤下去，
             // 每次落地都要往下找。上移后生成 → 落地的读法连成一条。
-            head = head.child(self.render_sinks(key, window, cx));
+            // 进度 / 结果 / 失败也在这条动作行右侧（`render_action_status`）：
+            // 它们说的是「这次动作」的进展与结果，原来各占一行，现在贴着按钮读。
+            head = head.child(self.render_sinks(id, key, window, cx));
         }
 
-        // 单表任务的进度与取消（集合任务的在右 Dock 场景清单下，见 D38）
-        head = head.child(self.render_job_row(JobRowScope::Single, cx));
-
-        // 失败原因就地给 + 重试：只认“没有结果”的失败（生成类）——出口类失败有结果，
-        // 属于出口按钮那段（反馈也就地给在那边）
-        if let Some(err) = self.error.clone().filter(|_| !has_result) {
-            let retry = {
-                let entity = cx.entity();
-                let mut btn = button("mock-detail-retry", "重试", ActionKind::Soft).xsmall();
-                if !running {
-                    btn = btn.on_click(move |_, _, app| {
-                        entity.update(app, |panel, cx| panel.run_generate(cx));
-                    });
-                }
-                btn
-            };
-            head = head.child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .child(
-                        // 原语给色与字号，收缩 / 截断在这里补：右侧还要挂「重试」按钮
-                        error_line(cx.theme(), format!("生成失败：{err}"))
-                            .flex_1()
-                            .min_w_0()
-                            .text_ellipsis(),
-                    )
-                    .child(retry),
-            );
-        }
         head
     }
 
@@ -223,27 +202,16 @@ impl MockPanel {
         )
     }
 
-    /// 任务进行中的进度行：`Progress` 组件 + 阶段文案 + 取消按钮。
+    /// 单表任务的一句话读数（阶段 + 批次/行数 + 剩余时间）。
     ///
-    /// - 生成类有批次粒度回调 → 定量进度条 + 取消（引擎在批次边界响应）；
-    /// - 出口类（写入分析库 / 写文件）跑在 DuckDB 与文件系统内部，拿不到中间进度 →
-    ///   不定量动画；也不给取消（强中断会留下半张表 / 半个文件）。
-    ///
-    /// 空闲时返回一个空占位（保持后续元素的排列稳定）。
-    fn render_job_row(&mut self, scope: JobRowScope, cx: &mut Context<Self>) -> Div {
-        if self.job_row_scope() != Some(scope) {
-            return div();
-        }
-        let Some(job) = self.job.as_ref() else {
-            return div();
+    /// 抽出来是因为它同时喂两处：右 Dock 的集合任务行（`render_job_row`）与中央动作行
+    /// 右侧的状态格（`render_action_status`）。两处口径必须一致——同一个任务旁边
+    /// 一处说「3 / 5 批」、另一处说「60%」，用户会当成两个任务。
+    fn job_status_text(&self) -> Option<String> {
+        let (progress, by_table_detail) = {
+            let job = self.job.as_ref()?;
+            (job.progress, job.kind.by_table())
         };
-        // 量纲即归属（D38）：集合任务（场景 / 批量落库）画在右 Dock 场景清单下，
-        // 单表任务（生成 / 追加 / 三个出口）画在中央这张表的表头。
-        let progress = job.progress;
-        let cancellable = job.kind.generates();
-        let cancel_requested = job.cancel_requested;
-        let by_table_detail = job.kind.by_table();
-
         let detail = match progress.phase {
             MockJobPhase::Generating if progress.batches_total == 0 => "准备中…".to_string(),
             MockJobPhase::Generating if by_table_detail => format!(
@@ -271,19 +239,164 @@ impl MockPanel {
         };
         // 剩余时间与批次读数同一行：它们说的是同一件事的两头（走到哪了 / 还要多久），
         // 分开两行会让人先读到一个、再去找另一个
-        let mut tail = String::new();
-        if let Some(text) = self.job_eta().and_then(eta_text) {
-            tail = format!(" · {text}");
+        let tail = self
+            .job_eta()
+            .and_then(eta_text)
+            .map(|text| format!(" · {text}"))
+            .unwrap_or_default();
+        Some(format!("{detail}{tail}"))
+    }
+
+    /// 动作行右侧的状态格：进度条 + 一句消息（进行中 / 失败 / 结果摘要）。
+    ///
+    /// 它替代原来各占一行的三块：单表进度行（进度条 + 阶段 + 取消）、失败原因 + 重试、
+    /// 结果摘要（临时表 / 行数 / 耗时）。三者都是「这次动作的进展与结果」，贴在「生成」
+    /// 右侧最省一次视线移动；空闲时只占空位（`flex_1`），按钮位置不跳。
+    fn render_action_status(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let slot = div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .flex_1()
+            .min_w_0()
+            .justify_end();
+
+        // 1. 进行中：迷你进度条 + 读数 + 取消（只有生成类可取消：出口类强中断会留半张表 / 半个文件）
+        if self.job_row_scope() == Some(JobRowScope::Single) {
+            let running = self.job.as_ref().map(|job| {
+                (
+                    job.progress.percent(),
+                    !job.progress.phase.is_quantified(),
+                    job.kind.generates(),
+                    job.cancel_requested,
+                )
+            });
+            if let Some((percent, indeterminate, cancellable, cancelling)) = running {
+                let text = self.job_status_text().unwrap_or_default();
+                let cancel = cancellable.then(|| {
+                    let entity = cx.entity();
+                    let label = if cancelling {
+                        "正在取消…"
+                    } else {
+                        "取消"
+                    };
+                    let mut btn = button("mock-cancel-job", label, ActionKind::Soft).xsmall();
+                    if !cancelling {
+                        btn = btn.on_click(move |_, _, app| {
+                            entity.update(app, |panel, cx| panel.cancel_job(cx));
+                        });
+                    }
+                    btn
+                });
+                return slot
+                    .child(
+                        // 动作行只有一行高：用 4px 的迷你档（6px 的表头档会把按钮撑歪）
+                        div()
+                            .flex_none()
+                            .w(rems(ui::ACTION_STATUS_BAR_WIDTH))
+                            .child(job_progress_bar(
+                                "job-single-inline",
+                                percent,
+                                indeterminate,
+                                JobBarSize::Mini,
+                                None,
+                                cx,
+                            )),
+                    )
+                    .child(card_note(&theme, text).flex_1().min_w_0().text_ellipsis())
+                    .children(cancel);
+            }
         }
+
+        // 2. 失败：生成类给「重试」；出口类失败有结果，重跑一次生成没有意义
+        let has_result = self.has_result();
+        if let Some(err) = self.error.clone() {
+            let prefix = if has_result {
+                "操作失败："
+            } else {
+                "生成失败："
+            };
+            let retry = (!has_result).then(|| {
+                let entity = cx.entity();
+                button("mock-detail-retry", "重试", ActionKind::Soft)
+                    .xsmall()
+                    .disabled(self.is_running())
+                    .on_click(move |_, _, app| {
+                        entity.update(app, |panel, cx| panel.run_generate(cx));
+                    })
+            });
+            return slot
+                .child(
+                    // 原语给色与字号，收缩 / 截断在这里补：右侧还要挂「重试」按钮
+                    error_line(&theme, format!("{prefix}{err}"))
+                        .flex_1()
+                        .min_w_0()
+                        .text_ellipsis(),
+                )
+                .children(retry);
+        }
+
+        // 3. 收尾后的成功消息（生成 / 落库 / 导出 / 草稿箱共用同一句 `outcome`）
+        if let Some(text) = self.outcome.clone() {
+            return slot.child(
+                success_line(&theme, text)
+                    .flex_1()
+                    .min_w_0()
+                    .text_ellipsis(),
+            );
+        }
+
+        // 4. 有结果但没有一句话：把「这次的代价」摆出来（临时表 / 行数 / 耗时）
+        if let Some(info) = self.current_info() {
+            let text = format!(
+                "临时表 {} · {} 行 · {} ms",
+                info.temp_table_name,
+                with_thousands(u64::from(info.row_count)),
+                info.elapsed_ms
+            );
+            return slot.child(card_note(&theme, text).flex_1().min_w_0().text_ellipsis());
+        }
+
+        // 空闲且没有任何消息：留空位，不写占位文案（占位会被读成「还没开始」）
+        slot
+    }
+
+    /// 集合任务（右 Dock 场景清单下）的进度行：`Progress` + 阶段文案 + 取消。
+    ///
+    /// 单表任务不再走这里——它并进了中央动作行右侧的状态格（`render_action_status`），
+    /// 那里有「生成」按钮可贴。集合任务画在右 Dock，没有动作行，仍是进度条独占一行。
+    ///
+    /// - 生成类有批次粒度回调 → 定量进度条 + 取消（引擎在批次边界响应）；
+    /// - 出口类（写入分析库 / 写文件）跑在 DuckDB 与文件系统内部，拿不到中间进度 →
+    ///   不定量动画；也不给取消（强中断会留下半张表 / 半个文件）。
+    ///
+    /// 空闲时返回一个空占位（保持后续元素的排列稳定）。
+    fn render_job_row(&mut self, scope: JobRowScope, cx: &mut Context<Self>) -> Div {
+        if self.job_row_scope() != Some(scope) {
+            return div();
+        }
+        let Some(status) = self.job_status_text() else {
+            return div();
+        };
+        let (percent, indeterminate, cancellable, cancelling) = match self.job.as_ref() {
+            Some(job) => (
+                job.progress.percent(),
+                !job.progress.phase.is_quantified(),
+                job.kind.generates(),
+                job.cancel_requested,
+            ),
+            None => return div(),
+        };
         let cancel = cancellable.then(|| {
             let entity = cx.entity();
-            let label = if cancel_requested {
+            let label = if cancelling {
                 "正在取消…"
             } else {
                 "取消"
             };
             let mut btn = button("mock-cancel-job", label, ActionKind::Soft).xsmall();
-            if !cancel_requested {
+            if !cancelling {
                 btn = btn.on_click(move |_, _, app| {
                     entity.update(app, |panel, cx| panel.cancel_job(cx));
                 });
@@ -302,9 +415,9 @@ impl MockPanel {
                     JobRowScope::Single => "job-single",
                     JobRowScope::Collection => "job-collection",
                 },
-                progress.percent(),
+                percent,
                 // 出口阶段（写库 / 写文件）拿不到中间进度 → 不定量滑动
-                !progress.phase.is_quantified(),
+                indeterminate,
                 JobBarSize::Head,
                 None,
                 cx,
@@ -315,7 +428,7 @@ impl MockPanel {
                     .items_center()
                     .gap_2()
                     .w_full()
-                    .child(card_note(cx.theme(), format!("{detail}{tail}")))
+                    .child(card_note(cx.theme(), status))
                     .children(cancel),
             )
     }
@@ -387,25 +500,29 @@ impl MockPanel {
     }
 
     /// 列来源按钮（导入源库结构 / 手工加列）：它们属于「这张表的列」→ 画在中央 tab 的「列」段。
-    pub(crate) fn render_column_source_buttons(&self, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn render_column_source_buttons(&self, id: u64, cx: &mut Context<Self>) -> Div {
         let import = {
             let entity = cx.entity();
+            let config_id = id;
             button("mock-import-schema", "导入结构", ActionKind::Soft)
                 .xsmall()
                 .on_click(move |_, window, app| {
                     entity.update(app, |panel, cx| {
+                        panel.focus_config(config_id);
                         panel.open_import_dialog(window, cx);
                     });
                 })
         };
         let add = {
             let entity = cx.entity();
+            let config_id = id;
             // 列区的主行动；「＋」走组件图标（与工具栏「新增 Mock 表」同一 `Plus`），不手拼字符
             button("mock-add-column", "加列", ActionKind::Main)
                 .xsmall()
                 .icon(IconName::Plus)
                 .on_click(move |_, _, app| {
                     entity.update(app, |panel, cx| {
+                        panel.focus_config(config_id);
                         let index = panel.draft.columns.len() + 1;
                         panel.add_column(format!("column_{index}"), ColumnDataType::Integer, cx);
                     });
@@ -415,6 +532,7 @@ impl MockPanel {
         // 与「导入结构」（源库批量）「加列」（手工起手）三分入口；应用后是普通列可再编辑
         let presets = {
             let entity = cx.entity();
+            let config_id = id;
             button("mock-preset-column", "预设", ActionKind::Soft)
                 .xsmall()
                 .icon(IconName::Folder)
@@ -440,6 +558,7 @@ impl MockPanel {
                                         return;
                                     };
                                     entity.update(app, |panel, cx| {
+                                        panel.focus_config(config_id);
                                         panel.add_preset_column(&preset, cx);
                                     });
                                 },
@@ -841,13 +960,13 @@ impl MockPanel {
                 list = list.child(card);
             }
 
-            // 自定义多表：把当前草稿加进来（导入结构 / 列编辑都在单表态里做完）
+            // 自定义多表：把当前表配置加进来（导入结构 / 列编辑都在单表态里做完）
             let add_table = {
                 let entity = cx.entity();
-                // 场景清单的主行动：把调好的草稿收进本次生成
+                // 场景清单的主行动：把调好的表配置收进本次生成
                 let mut btn = button(
                     "mock-scenario-table-add",
-                    "＋ 加表（当前草稿）",
+                    "＋ 加表（当前表配置）",
                     ActionKind::Main,
                 )
                 .xsmall()
@@ -891,49 +1010,63 @@ impl MockPanel {
                 ))
                 .child(hint_line(
                     &theme,
-                    "加进来的表取草稿的表名 / 行数 / 列：先在中央那张草稿 tab 里调好，再加进本次生成。",
+                    "加进来的表取表配置的表名 / 行数 / 列：先在中央那张表配置 tab 里调好，再加进本次生成。",
                 ));
             return list;
         }
 
-        // ── 单表态：草稿（与它的结果）就这一行 ──
-        // 标题行对齐原型清单头「本次 Mock 表（1）」（结果态走上面的「结果表（N）」分支）
-        list = list.child(section(&theme, "本次 Mock 表（1）"));
-        let name = self.draft.table_name.clone();
-        let rows = with_thousands(self.draft.options.rows as u64);
-        let (icon, status, color) = match self.table_status(&name) {
-            TableStatus::Generating => (
-                Some(IconName::RefreshCw),
-                format!("生成中 {:.0}%", self.job_percent()),
-                primary,
-            ),
-            TableStatus::Persisted => (Some(IconName::CircleCheck), "已落库".to_string(), success),
-            TableStatus::NotPersisted => (Some(IconName::Check), "已生成".to_string(), success),
-            TableStatus::DanglingParent => {
-                (Some(IconName::Info), "引用的表未落库".to_string(), warning)
+        // ── 单表态（还没有结果）：**每一份表配置各占一行** ──
+        // 多配置之后右面板必须能看见、也能切回全部配置：只画活动那一份时，
+        // 开过第二个「＋」就再也回不到前一份（用户 2026-11-05 的反馈）。
+        let configs = self.config_rows();
+        list = list.child(section(
+            &theme,
+            format!("表配置（{}）· 点一行切到它的 tab", configs.len()),
+        ));
+        for (id, name, columns, _rows) in configs {
+            if !query.is_empty() && !name.to_lowercase().contains(&query) {
+                continue;
             }
-            TableStatus::Failed => (Some(IconName::CircleX), "生成失败".to_string(), danger),
-            TableStatus::Idle => (None, "未生成".to_string(), muted),
-        };
-        let open = {
-            let entity = cx.entity();
-            // 键盘可达：与结果行同一口径（keyed focus + Enter/Space 激活；`mock-draft-open` 固定 id）
+            let selected = id == self.config_id;
+            // 状态按**表名**查：这份配置若已经生成过结果，名字就对得上。
+            // 百分比只对活动那份有意义（面板级任务指针指向它）。
+            let (icon, status, color) = match self.table_status(&name) {
+                TableStatus::Generating if selected => (
+                    Some(IconName::RefreshCw),
+                    format!("生成中 {:.0}%", self.job_percent()),
+                    primary,
+                ),
+                TableStatus::Generating => (None, "生成中".to_string(), primary),
+                TableStatus::Persisted => {
+                    (Some(IconName::CircleCheck), "已落库".to_string(), success)
+                }
+                TableStatus::NotPersisted => (Some(IconName::Check), "已生成".to_string(), success),
+                TableStatus::DanglingParent => {
+                    (Some(IconName::Info), "引用的表未落库".to_string(), warning)
+                }
+                TableStatus::Failed => (Some(IconName::CircleX), "生成失败".to_string(), danger),
+                TableStatus::Idle => (None, "未生成".to_string(), muted),
+            };
+            // 活动那份沿用稳定 id `mock-draft-open`（宿主用例与键盘焦点都指着它）；
+            // 其余按配置 id 生成，避免多行重复 ElementId（同帧重复 id 会撞 a11y 校验）。
+            let row_id = if selected {
+                SharedString::from("mock-draft-open")
+            } else {
+                SharedString::from(format!("mock-config-open-{id}"))
+            };
             let open_handle = window
-                .use_keyed_state(
-                    ElementId::Name(SharedString::from("mock-draft-open")),
-                    cx,
-                    |_, cx| cx.focus_handle(),
-                )
+                .use_keyed_state(ElementId::Name(row_id.clone()), cx, |_, cx| {
+                    cx.focus_handle()
+                })
                 .read(cx)
                 .clone();
+            let entity = cx.entity();
             let entity_kb = entity.clone();
-            div()
-                .id("mock-draft-open")
+            let open = div()
+                .id(row_id)
                 .role(gpui::Role::Button)
-                // 自绘可点行：test_support 让 headless 测试可观察（与导航行同口径）；
-                // 无 test_support 的元素不进 observation 注册表，会被误判为「未渲染」
+                // 自绘可点行：test_support 让 headless 测试可观察（与导航行同口径）
                 .test_support()
-                // 不再 `flex_1`：名字取自然宽度，好让状态紧跟其后（长表名靠 ellipsis 收缩）
                 .min_w_0()
                 .text_xs()
                 .font_weight(FontWeight::MEDIUM)
@@ -944,48 +1077,55 @@ impl MockPanel {
                 .child(name.clone())
                 .on_click(move |_, window, app| {
                     entity.update(app, |panel, cx| {
-                        panel.open_detail_for(DetailTarget::Draft, window, cx);
+                        panel.open_detail_for(DetailTarget::Config(id), window, cx);
                     });
                 })
                 .on_key_down(move |event: &KeyDownEvent, window, app| {
                     if event.keystroke.key == "enter" || event.keystroke.key == "space" {
                         entity_kb.update(app, |panel, cx| {
-                            panel.open_detail_for(DetailTarget::Draft, window, cx);
+                            panel.open_detail_for(DetailTarget::Config(id), window, cx);
                         });
                     }
-                })
-        };
-        // 单表态只有这一行：它就是当前表 → 卡片走选中态（常驻，不挂 hover）
-        let mut card = row_card_selected(&theme).child(
-            div()
-                .h_flex()
-                .items_center()
-                .gap_2()
-                .w_full()
-                // 表名 + 状态同栏（状态紧跟表名）：单表态只有这一行，状态更要贴着名字读
-                .child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_1()
-                        .flex_1()
-                        .min_w_0()
-                        .child(open)
-                        .child(render_status_cell(icon, &status, color)),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(format!("{rows} 行")),
-                ),
-        );
-        // 下缘 2px 进度线（这张表就这一行：走到哪了直接看它）
-        if let Some(line) = self.row_progress_overlay("draft", &name, 0, cx) {
-            card = card.child(line);
+                });
+            let mut card = if selected {
+                row_card_selected(&theme)
+            } else {
+                row_card_interactive(&theme)
+            }
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_1()
+                            .flex_1()
+                            .min_w_0()
+                            .child(open)
+                            .child(render_status_cell(icon, &status, color)),
+                    )
+                    // 列数是**这份配置**最能区分彼此的一件事（行数常常一样）
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(format!("{columns} 列")),
+                    ),
+            );
+            // 下缘 2px 进度线：只有活动那份在跑任务
+            if selected {
+                if let Some(line) = self.row_progress_overlay("draft", &name, 0, cx) {
+                    card = card.child(line);
+                }
+            }
+            list = list.child(card);
         }
-        list.child(card)
+        list
         // 状态图例整行删掉：图例解释 6 种态，而实际态已经直接跟在表名旁（图标 + 文字），
         // 再单独列一遍是拿说明挤占 280px 面板的清单空间。状态文字本身就说清了含义。
     }
@@ -1188,7 +1328,7 @@ impl MockPanel {
 
         // 不再自带 `p_2`：面板滚动容器已经给过一遍内距，这里再给就是 16px——
         // 而工具栏是 8px（`PANEL_PADDING`），清单的左边缘比工具栏右错 8px，
-        // 一眼看上去就是没排过的草稿（工具栏有分隔线压着，错开格外显眼）
+        // 一眼看上去就是没排过的表配置（工具栏有分隔线压着，错开格外显眼）
         div()
             .v_flex()
             .gap_2()
@@ -1208,11 +1348,15 @@ impl MockPanel {
     /// `window` 仅透传给「另存为」的系统保存对话框（下拉项闭包自取，无需本函数直接使用）。
     pub(crate) fn render_sinks(
         &self,
+        id: u64,
         key: &str,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let fg = cx.theme().colors.foreground;
+        // 出口是「这张表」的动作：点之前先把活动指针切到这张 tab 对应的配置，
+        // 否则会把上一张表的现场落出去。
+        let config_id = id;
 
         let running = self.is_running();
         // 项目级出口（落库 / 追加 / 草稿箱）都要项目根：没打开项目时直接不可点，
@@ -1230,7 +1374,10 @@ impl MockPanel {
             )
             .disabled(running || !sinks_ready)
             .on_click(move |_, _, app| {
-                entity.update(app, |panel, cx| panel.persist_table(cx));
+                entity.update(app, |panel, cx| {
+                    panel.focus_config(config_id);
+                    panel.persist_table(cx);
+                });
             })
         };
         let append = {
@@ -1255,6 +1402,7 @@ impl MockPanel {
                         move |_, window, app| {
                             let table = table.clone();
                             entity.update(app, |panel, cx| {
+                                panel.focus_config(config_id);
                                 panel.open_append_dialog(table, window, cx);
                             });
                         },
@@ -1277,7 +1425,10 @@ impl MockPanel {
                 for (label, format) in FILE_FORMATS {
                     let entity = entity.clone();
                     menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, app| {
-                        entity.update(app, |panel, cx| panel.save_scratchpad(&format, cx));
+                        entity.update(app, |panel, cx| {
+                            panel.focus_config(config_id);
+                            panel.save_scratchpad(&format, cx)
+                        });
                     }));
                 }
                 menu
@@ -1324,20 +1475,7 @@ impl MockPanel {
                     menu
                 })
         };
-        let outcome = self.outcome.clone();
-        let error = self.error.clone();
         let landed = self.landed.clone();
-
-        // 有结果时把「这次的代价」说出口（临时表 / 行数 / 耗时）：跟动作行同排右侧，
-        // 不再独占一行——它是这轮结果的注脚，不是新信息块。
-        let summary = self.current_info().map(|info| {
-            format!(
-                "临时表 {} · {} 行 · {} ms",
-                info.temp_table_name,
-                with_thousands(u64::from(info.row_count)),
-                info.elapsed_ms
-            )
-        });
 
         div()
             .v_flex()
@@ -1353,16 +1491,16 @@ impl MockPanel {
                     .items_center()
                     .gap_2()
                     .w_full()
-                    .child(self.render_generate_button(cx))
+                    .child(self.render_generate_button(id, cx))
                     .child(persist)
                     .child(append)
                     .child(scratchpad)
                     .child(export)
-                    .children(summary.map(|text| card_note(cx.theme(), text))),
+                    // 进度条 / 失败重试 / 结果摘要都在「生成」右侧这一个状态格里：
+                    // 它们说的是「这次动作」的进展与结果，贴着按钮读，不再各占一行
+                    .child(self.render_action_status(cx)),
             )
-            // 出口反馈就地给（成功 / 失败 / 落库目标 / 当前状态）
-            .children(outcome.map(|text| success_line(cx.theme(), text)))
-            .children(error.map(|err| error_line(cx.theme(), err)))
+            // 落库目标是「落到哪张表」，不是状态：它留成动作行下面单独一句
             .children(landed.map(|table| {
                 div()
                     .text_xs()
@@ -1390,7 +1528,7 @@ impl MockPanel {
                 "新增 Mock 表：开一个中央 tab 配字段与名称",
             )
             .on_click(move |_, window, app| {
-                entity.update(app, |panel, cx| panel.new_draft_table(window, cx));
+                entity.update(app, |panel, cx| panel.new_table_config(window, cx));
             })
         };
         // ⇄ 引用结构 = 原型 conn-pop：先弹连接列表选来源，再进对话框（库 / schema 按连接预填）。
@@ -1461,12 +1599,12 @@ impl MockPanel {
                 entity.update(app, |panel, cx| panel.refresh_tables(cx));
             })
         };
-        // 工具栏右侧的清单状态提示（对齐原型 mockToolHint：单表态「N 张草稿」；
-        // 场景 / 结果态显示本批表数——比原型残留的「1 张草稿」更贴合当前清单）。
+        // 工具栏右侧的清单状态提示（对齐原型 mockToolHint：单表态「N 张表配置」；
+        // 场景 / 结果态显示本批表数——比原型残留的「1 张表配置」更贴合当前清单）。
         let hint = if self.results.is_empty() {
             match &self.scenario {
                 Some(template) => format!("{} 张表", template.tables.len()),
-                None => "1 张草稿".to_string(),
+                None => "1 张表配置".to_string(),
             }
         } else {
             format!("{} 张结果", self.results.len())
@@ -1649,7 +1787,7 @@ impl MockPanel {
 
             // 模板卡片：与历史卡片、列卡片同走 `card` 原语（表面色 + 内距 + 卡内分隔）。
             // 操作是悬停 / 聚焦才显形的——一排卡片上每张都常驻两个按钮，
-            // 摆满一屏就是一屏灰按钮，那是草稿不是产品。
+            // 摆满一屏就是一屏灰按钮，那是表配置不是产品。
             let card_handle = window
                 .use_keyed_state(
                     ElementId::Name(SharedString::from(format!(

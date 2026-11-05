@@ -463,6 +463,7 @@ pub(crate) fn new_column_spec(id: u64, name: String, data_type: ColumnDataType) 
         },
         confidence: "manual".to_string(),
         sample_value: String::new(),
+        user_generator: None,
     }
 }
 

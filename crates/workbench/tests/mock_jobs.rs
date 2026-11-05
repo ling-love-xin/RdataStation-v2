@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use mock::mock_view::{MockDraft, MockJobDone, MockJobKind, MockJobState, MockRunOptions};
+use mock::mock_view::{MockJobDone, MockJobKind, MockJobState, MockRunOptions, MockTableConfig};
 use mock::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale, MockExportFormat};
 use rds_workbench::services::mock_generator;
 use rds_workbench::services::mock_jobs;
@@ -49,12 +49,13 @@ fn column(name: &str, generator: GeneratorConfig) -> mock::mock_view::MockColumn
         },
         confidence: "high".to_string(),
         sample_value: String::new(),
+        user_generator: None,
     }
 }
 
-/// 两列草稿：自增主键 + 随机整数。
-fn draft(table: &str, rows: u32) -> MockDraft {
-    MockDraft {
+/// 两列表配置：自增主键 + 随机整数。
+fn draft(table: &str, rows: u32) -> MockTableConfig {
+    MockTableConfig {
         table_name: table.to_string(),
         columns: vec![
             column("id", GeneratorConfig::AutoIncrement { start: 1, step: 1 }),
@@ -201,7 +202,7 @@ fn clear_temp_tables_wipes_process_temp_tables() {
 }
 
 /// 生成任务的便捷封装：提交 → 等结果 → 取出 `MockGenInfo`（出口任务要用它）。
-fn generate_and_take(draft: &MockDraft, db: &Path) -> mock::mock_view::MockGenInfo {
+fn generate_and_take(draft: &MockTableConfig, db: &Path) -> mock::mock_view::MockGenInfo {
     mock_jobs::start(draft, MockJobKind::Generate, &paths(db)).expect("提交生成任务");
     match wait_done(Duration::from_secs(180)).expect("生成应成功") {
         MockJobDone::Generated(info) => info,
@@ -390,7 +391,7 @@ fn sinks_without_a_project_are_refused_with_a_readable_reason() {
 }
 
 /// 场景模板任务：按内置模板一次生成多张临时表，逐表带预览与列定义，**不写库**；
-/// 再把其中一张落到项目分析库——表名与列定义都取自**结果自己**，不是草稿。
+/// 再把其中一张落到项目分析库——表名与列定义都取自**结果自己**，不是表配置。
 ///
 /// 用最便宜的内置模板（人力资源系统：500 + 20 + 500 行），避免把测试拖成负担。
 #[test]
@@ -398,8 +399,8 @@ fn scenario_job_generates_every_table_without_writing_to_the_db() {
     let _guard = serial();
     let dir = temp_dir("scenario_job");
     let db = dir.join("analytics.duckdb");
-    // 草稿与场景毫无关系，且**一列都没有**：场景模板自带表与列
-    let job = MockDraft {
+    // 表配置与场景毫无关系，且**一列都没有**：场景模板自带表与列
+    let job = MockTableConfig {
         table_name: "unused_by_scenario".to_string(),
         columns: Vec::new(),
         options: MockRunOptions::new(1, None, Locale::ZhCn),
@@ -469,7 +470,7 @@ fn scenario_job_generates_every_table_without_writing_to_the_db() {
         MockJobDone::Persisted { table, rows } => {
             assert_eq!(
                 table, "departments",
-                "表名取自结果，不是草稿的 unused_by_scenario"
+                "表名取自结果，不是表配置的 unused_by_scenario"
             );
             assert_eq!(rows, 20);
         }

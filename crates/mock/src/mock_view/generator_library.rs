@@ -98,10 +98,10 @@ pub(crate) enum LibraryMode {
     Create,
 }
 
-/// 生成器选择的写回目标：列编辑对话框里正在编辑的**那一列草稿**。
+/// 生成器选择的写回目标：列编辑对话框里正在编辑的**那一列表配置**。
 ///
 /// 此前还有 `Panel`（直接写面板列）——那是字段行那个独立「生成器库」窗口的写回目标。
-/// 入口合并进列编辑后，选生成器一律先落在草稿、由「应用」落地：两处口径统一，
+/// 入口合并进列编辑后，选生成器一律先落在表配置、由「应用」落地：两处口径统一，
 /// 也不再留下「点一下就把表改了，反悔只能再选回去」的差别。
 #[derive(Clone)]
 pub(crate) struct LibraryWriteback {
@@ -114,7 +114,7 @@ pub(crate) struct LibraryWriteback {
 pub(crate) struct GeneratorLibraryState {
     pub(crate) panel: Entity<MockPanel>,
     pub(crate) writeback: LibraryWriteback,
-    /// 内嵌模式（列编辑对话框内联浏览区）：无对话框壳，选中即时写回草稿并留在宿主；
+    /// 内嵌模式（列编辑对话框内联浏览区）：无对话框壳，选中即时写回表配置并留在宿主；
     /// 独立的精调层窗口（自定义生成器）为 false。
     pub(crate) embedded: bool,
     pub(crate) mode: LibraryMode,
@@ -127,14 +127,14 @@ pub(crate) struct GeneratorLibraryState {
     pub(crate) expanded_types: HashSet<String>,
     /// 顶部搜索框（占位与搜索词存在它里，不另存一份）
     pub(crate) search_input: Entity<InputState>,
-    /// 精调层草稿（`mode=Create` 时非空）
+    /// 精调层表配置（`mode=Create` 时非空）
     pub(crate) create: Option<CreateDraft>,
     /// 编辑中的自定义生成器 id（`Some` = 精调层是编辑而非新建；保存走 `update_user_generator`）
     pub(crate) editing: Option<String>,
     _search_sub: Option<Subscription>,
 }
 
-/// 精调层草稿（分组「＋」进入时构建，保存成功后丢弃）。
+/// 精调层表配置（分组「＋」进入时构建，保存成功后丢弃）。
 pub(crate) struct CreateDraft {
     /// 从技术组「＋」进入 → 类型锁定（`Some(t)`）；业务组「＋」进入 → `None`（可自选）
     pub(crate) locked_type: Option<ColumnDataType>,
@@ -195,7 +195,7 @@ fn param_key(param: &DraftParam) -> &str {
 
 /// 创建生成器状态实体（浏览 + 搜索 + 精调层共用）。
 ///
-/// `embedded=true` 供列编辑对话框内联（`detail.rs`）：无对话框壳，写回草稿后留在列编辑；
+/// `embedded=true` 供列编辑对话框内联（`detail.rs`）：无对话框壳，写回表配置后留在列编辑；
 /// `embedded=false` 只用于 [`open_create_dialog`] 的独立精调层窗口。
 ///
 /// 列名输入框不在这里：内嵌时列编辑对话框自己有，独立窗口是建生成器（与被编辑的列无关）。
@@ -203,10 +203,23 @@ pub(crate) fn create_library_state(
     panel: Entity<MockPanel>,
     writeback: LibraryWriteback,
     embedded: bool,
+    // 当前这一列用的生成器（只用于「打开时就展开它所在组」）；独立精调窗口传 None。
+    // 不能在这里读 `writeback.detail`：列编辑对话框打开时正持有该视图的 update，
+    // 同栈再 `read` 会 panic（cannot read … while it is already being updated）。
+    initial_generator: Option<GeneratorConfig>,
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<GeneratorLibraryState> {
     let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索定位生成器…"));
+    // 打开时就把「当前这一列用的生成器」所在分组展开：15 个组全收起时，用户得先猜
+    // 它属于哪一类再展开，等于每次都要重新找一遍自己正在用的东西。
+    // （不做滚动定位：`ScrollHandle` 只有顶部/底部滚动，没有按元素滚动，靠搜索框补）
+    let (mut expanded, mut expanded_types) = (HashSet::new(), HashSet::new());
+    if let Some(generator) = initial_generator {
+        let spec = generator_catalog::spec_of(&generator);
+        expanded.insert(spec.category.label().to_string());
+        expanded_types.insert(data_type_key(&data_type_for_spec(spec)).to_string());
+    }
     let state = cx.new(|_cx| GeneratorLibraryState {
         panel: panel.clone(),
         writeback,
@@ -214,8 +227,8 @@ pub(crate) fn create_library_state(
         mode: LibraryMode::Browse,
         view: LibraryView::Business,
         query: String::new(),
-        expanded: HashSet::new(),
-        expanded_types: HashSet::new(),
+        expanded,
+        expanded_types,
         search_input: search_input.clone(),
         create: None,
         editing: None,
@@ -231,7 +244,7 @@ pub(crate) fn create_library_state(
                     s.query = emitter.read(cx).value().to_string();
                     cx.notify();
                 } else if matches!(ev, InputEvent::PressEnter { .. }) {
-                    // 搜索定位：Enter 直接采纳当前视角下第一个命中项（写回草稿/面板，
+                    // 搜索定位：Enter 直接采纳当前视角下第一个命中项（写回表配置/面板，
                     // 与点击列表项同一入口 `apply_picked_generator`；空搜索词不采纳）
                     if s.query.trim().is_empty() {
                         return;
@@ -341,7 +354,7 @@ pub(crate) fn open_create_dialog(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let state = create_library_state(panel, writeback, false, window, cx);
+    let state = create_library_state(panel, writeback, false, None, window, cx);
     state.update(cx, |s, cx| {
         s.mode = LibraryMode::Create;
         match &seed {
@@ -384,10 +397,51 @@ pub(crate) fn open_create_dialog(
 
 // ---------- 浏览模式 ----------
 
-/// 统一写回：`picked` 是内建生成器名（`is_user=false`）或自定义生成器 id（`is_user=true`）。
+/// 把「被点中的那一项」解析成（可写回的生成器配置，自定义项 id）。
 ///
-/// 一律写回**列编辑草稿**（`MockDetailView::apply_generator_config_to_draft`，参数区 / 样例
-/// 预览随写回重建），**不关对话框**——留在列编辑里继续调参，点「应用」才落地。
+/// 键的规范是：内建 = `spec.name`，自定义 = `ug.id`。这里再兜一层显示名
+/// （`spec.label` / `ug.name`）：列表曾经把中文显示名当键传下去，目录按 name 查不到，
+/// 于是**静默什么都不做**——用户看到的就是「点左边列表，右边一点反应都没有」。
+/// 兜底让这类错误退化成「仍然生效」，而不是无声失败。
+///
+/// 第二个返回值是**用户真正点中的自定义项 id**（内建为 `None`）：`def.generator` 只存
+/// 解包后的基础配置，同一 base 的多个自定义项在它上面完全一样，只有这个 id 能说清
+/// 「左栏亮的是哪一项 / 右栏该显示哪个名字」。
+pub(crate) fn picked_entry(
+    panel: &MockPanel,
+    picked: &str,
+    is_user: bool,
+) -> Option<(GeneratorConfig, Option<String>)> {
+    if is_user {
+        panel
+            .user_generators
+            .iter()
+            .find(|ug| ug.id == picked)
+            .or_else(|| panel.user_generators.iter().find(|ug| ug.name == picked))
+            .map(|ug| (ug.base.clone(), Some(ug.id.clone())))
+    } else {
+        generator_catalog::default_of(picked)
+            .or_else(|| {
+                generator_catalog::all_specs()
+                    .iter()
+                    .copied()
+                    .find(|spec| spec.label == picked)
+                    .and_then(|spec| generator_catalog::default_of(spec.name))
+            })
+            .map(|config| (config, None))
+    }
+}
+
+/// 只要可写回的配置（不需要自定义项身份时用；测试与外部调用沿用这个入口）。
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn picked_config(
+    panel: &MockPanel,
+    picked: &str,
+    is_user: bool,
+) -> Option<GeneratorConfig> {
+    picked_entry(panel, picked, is_user).map(|(config, _)| config)
+}
+
 fn apply_picked_generator(
     app: &mut App,
     window: &mut Window,
@@ -396,21 +450,30 @@ fn apply_picked_generator(
     picked: &str,
     is_user: bool,
 ) {
-    // 内建取规格默认配置；自定义解包 base（与 `apply_user_generator` 同源）
-    let config = if is_user {
-        panel
-            .read(app)
-            .user_generators
-            .iter()
-            .find(|ug| ug.id == picked)
-            .map(|ug| ug.base.clone())
-    } else {
-        generator_catalog::default_of(picked)
+    // 内建取规格默认配置；自定义解包 base（与 `apply_user_generator` 同源），
+    // 同时带出「点的是哪一项」的自定义 id。
+    // 解析放在独立作用域里，避免 `panel.read` 的借用活到 `update` 那一步
+    let entry = {
+        let panel_ref = panel.read(app);
+        picked_entry(&panel_ref, picked, is_user)
     };
-    if let Some(config) = config {
-        let _ = writeback.detail.update(app, |v, cx| {
-            v.apply_generator_config_to_draft(writeback.column_id, config, window, cx);
-        });
+    let Some((config, picked_user)) = entry else {
+        return;
+    };
+    let _ = writeback.detail.update(app, |v, cx| {
+        v.apply_generator_config_to_draft(
+            writeback.column_id,
+            config,
+            picked_user.clone(),
+            window,
+            cx,
+        );
+    });
+    // 记一笔历史：自定义项按 `ug.id` 记，历史 chips 才认得回来（内建那两个写回通道
+    // `set_generator` / `set_generator_config` 自己会记 `spec.name`）。
+    // 用解析出来的真实 id：键可能是显示名兜底命中的。
+    if let Some(user_id) = picked_user {
+        panel.update(app, |panel, _cx| panel.remember_generator(&user_id, true));
     }
 }
 
@@ -429,12 +492,11 @@ pub(crate) fn render_search_box(
         .into_any_element()
 }
 
-/// 左栏顶部的「智能推荐」：按列名 + 类型重推这一列的生成器（与手选并列的一条捷径）。
+/// 「智能推荐」按钮：按列名 + 类型重推这一列的生成器（与手选并列的一条捷径）。
 ///
-/// 为什么放在这里而不是字段卡片上：它是「选哪个生成器」的一种解法，不是一个独立动作——
-/// 摆在卡片的操作按钮里，看着会像「对所有列批量智能」。
-/// 放在列表顶部而不是右栏底部：它作用的是「左栏正在选的东西」，跟着选择器走。
-fn render_smart_row(
+/// 位置由调用方决定：列编辑对话框把它放在行 2 的「智能推荐」块里（与「历史生成器」
+/// 并排），不再塞在库列表顶部——它作用的是「这一列怎么造」，不是「库里翻哪一项」。
+pub(crate) fn render_smart_button(
     state: &Entity<GeneratorLibraryState>,
     _theme: &Theme,
     _window: &mut Window,
@@ -446,8 +508,11 @@ fn render_smart_row(
     };
     let column_id = writeback.column_id;
     div()
-        .id("mock-lib-smart")
-        .w_full()
+        // 外层块自己的 id（不与按钮同 id：同帧两个相同 ElementId 会撞 a11y 校验）。
+        // 宽度按内容收（`flex_none`）：行 2 是横向单行，`w_full` 会把右侧「历史」挤成 0 宽
+        .id("mock-lib-smart-block")
+        .test_support()
+        .flex_none()
         .child(
             button("mock-lib-smart", "智能推荐", ActionKind::Quiet)
                 .xsmall()
@@ -462,12 +527,36 @@ fn render_smart_row(
         .into_any_element()
 }
 
-/// TabBar 双视角 + 分组列表（业务视角：15 分类；技术视角：13 数据类）。无搜索框——
-/// 由调用方决定搜索框位置（列编辑对话框 = 置顶横跨全宽；字段行库对话框 = 内联，见
-/// [`render_browse`] 的组合）。列表超高时内部滚动（`flex_1().min_h_0()` 由外层给高度）。
+/// TabBar 双视角 + 分组列表（业务视角：15 分类的**生成器**；技术视角：13 数据类下的
+/// **方法**——两边不是同一批东西的两种排法，`is_method_spec` 决定技术视角只露方法）。
+///
+/// 只负责「库本体」：智能推荐与历史生成器已上移到列编辑对话框的行 2，这里不再渲染，
+/// 列表超高时由本块的 `flex_1().min_h_0()` 内部滚动。
+/// 当前列编辑表配置用的生成器（左栏选中态用）+ 用户点中的自定义项 id。
+///
+/// 二者要一起读：`def.generator` 只说明「用的哪个算法」，同一 base 的多个自定义项在它上面
+/// 完全相同；`picked_user` 才说明「用户点的是列表里的哪一行」。
+fn current_picked(
+    state: &Entity<GeneratorLibraryState>,
+    cx: &App,
+) -> (Option<GeneratorConfig>, Option<String>) {
+    let writeback = state.read(cx).writeback.clone();
+    let Some(detail) = writeback.detail.upgrade() else {
+        return (None, None);
+    };
+    let view = detail.read(cx);
+    match view.draft.as_ref() {
+        Some(draft) => (
+            Some(draft.def.generator.clone()),
+            draft.picked_user().map(str::to_string),
+        ),
+        None => (None, None),
+    }
+}
+
 pub(crate) fn render_browse_pane(
     state: &Entity<GeneratorLibraryState>,
-    theme: &Theme,
+    _theme: &Theme,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui_kit::AnyElement {
@@ -482,12 +571,10 @@ pub(crate) fn render_browse_pane(
     let expanded: HashSet<String> = s.expanded.clone();
     let expanded_types: HashSet<String> = s.expanded_types.clone();
     let query = s.query.clone();
+    // 选中态：当前这一列用的生成器（内建按目录名比；自定义按**点中的那一项** id 比）
+    let (current, picked) = current_picked(&state, cx);
 
     let mut list = div().v_flex().gap_1().w_full();
-    // 最近使用（本会话点过的，菜单退役后这里就是快速路径）：非空才渲染，不受搜索词过滤
-    if let Some(recent) = render_recent(&state, theme, window, cx) {
-        list = list.child(recent);
-    }
     match view_index {
         0 => {
             for category in GeneratorCategory::ALL {
@@ -505,7 +592,9 @@ pub(crate) fn render_browse_pane(
                     cx,
                 ));
                 if is_expanded {
-                    let mut items: Vec<(String, String, bool)> = Vec::new();
+                    // 每项：`(写回键, 显示名, 徽标, 是否自定义, 是否选中)`。写回键必须是目录/
+                    // 自定义库里真正的主键（spec.name / ug.id），显示名只用来画按钮文案
+                    let mut items: Vec<(String, String, String, bool, bool)> = Vec::new();
                     items.extend(
                         generator_catalog::all_specs()
                             .iter()
@@ -513,10 +602,17 @@ pub(crate) fn render_browse_pane(
                             .filter(|spec| spec.category == category)
                             .filter(|spec| query.is_empty() || spec_matches(spec, &query))
                             .map(|spec| {
+                                // 用户点的是自定义项时，内建项一律不高亮（即使 base 用的是同一个算法）
+                                let selected = picked.is_none()
+                                    && current.as_ref().is_some_and(|g| {
+                                        generator_catalog::spec_of(g).name == spec.name
+                                    });
                                 (
+                                    spec.name.to_string(),
                                     spec.label.to_string(),
                                     column_type_label(&data_type_for_spec(spec)),
                                     false,
+                                    selected,
                                 )
                             }),
                     );
@@ -527,13 +623,25 @@ pub(crate) fn render_browse_pane(
                             .read(cx)
                             .user_generators_in_category(category)
                             .into_iter()
-                            .map(|ug| (ug.name.clone(), column_type_label(&ug.data_type), true)),
+                            .map(|ug| {
+                                // 精确到「点中的那一项」：同一 base 的其它自定义项不再跟着亮
+                                let selected = picked.as_deref() == Some(ug.id.as_str());
+                                (
+                                    ug.id.clone(),
+                                    ug.name.clone(),
+                                    column_type_label(&ug.data_type),
+                                    true,
+                                    selected,
+                                )
+                            }),
                     );
                     // 立即求值成 Vec（惰性迭代器会把闭包里的 &String 借到渲染期，生命周期不够）
                     let item_rows: Vec<gpui_kit::AnyElement> = items
                         .into_iter()
-                        .map(|(label, badge, is_user)| {
-                            render_item_row(&state, &label, &badge, is_user, window, cx)
+                        .map(|(key, label, badge, is_user, selected)| {
+                            render_item_row(
+                                &state, &key, &label, &badge, is_user, selected, window, cx,
+                            )
                         })
                         .collect();
                     group = group.child(
@@ -550,19 +658,24 @@ pub(crate) fn render_browse_pane(
         }
         _ => {
             for data_type in COLUMN_TYPES {
-                let label = column_type_label(&data_type);
-                let is_expanded = !query.is_empty() || expanded_types.contains(&label);
+                // `column_type_label` 不唯一（Text/Uuid → VARCHAR，DateTime/Timestamp →
+                // TIMESTAMP）：ElementId 与展开态 key 必须用唯一键，否则重复 id 直接 panic
+                let key = data_type_key(&data_type);
+                let title = data_type_title(&data_type);
+                let is_expanded = !query.is_empty() || expanded_types.contains(key);
                 // 同上：标题行与子项列表垂直包一层，别让子项堆进标题行的 `h_flex`
                 let mut group = div().v_flex().gap_1().w_full().child(render_type_group_row(
                     &state,
                     &data_type,
-                    &label,
+                    &title,
+                    key,
                     is_expanded,
                     window,
                     cx,
                 ));
                 if is_expanded {
-                    let mut items: Vec<(String, String, bool)> = Vec::new();
+                    // 同上：`(写回键, 显示名, 徽标, 是否自定义, 是否选中)`，键不能拿显示名顶替
+                    let mut items: Vec<(String, String, String, bool, bool)> = Vec::new();
                     items.extend(
                         generator_catalog::all_specs()
                             .iter()
@@ -577,7 +690,18 @@ pub(crate) fn render_browse_pane(
                             // 徽标 = 数据类（与所在组一致）：技术视角是「按类型看能用哪些生成方法」，
                             // 不再标业务组名（避免整组看起来像业务组的翻版）
                             .map(|spec| {
-                                (spec.label.to_string(), column_type_label(&data_type), false)
+                                // 用户点的是自定义项时，内建项一律不高亮（即使 base 用的是同一个算法）
+                                let selected = picked.is_none()
+                                    && current.as_ref().is_some_and(|g| {
+                                        generator_catalog::spec_of(g).name == spec.name
+                                    });
+                                (
+                                    spec.name.to_string(),
+                                    spec.label.to_string(),
+                                    column_type_label(&data_type),
+                                    false,
+                                    selected,
+                                )
                             }),
                     );
                     items.extend(
@@ -587,13 +711,25 @@ pub(crate) fn render_browse_pane(
                             .read(cx)
                             .user_generators_in_type(&data_type)
                             .into_iter()
-                            .map(|ug| (ug.name.clone(), column_type_label(&ug.data_type), true)),
+                            .map(|ug| {
+                                // 精确到「点中的那一项」：同一 base 的其它自定义项不再跟着亮
+                                let selected = picked.as_deref() == Some(ug.id.as_str());
+                                (
+                                    ug.id.clone(),
+                                    ug.name.clone(),
+                                    column_type_label(&ug.data_type),
+                                    true,
+                                    selected,
+                                )
+                            }),
                     );
                     // 立即求值成 Vec（惰性迭代器会把闭包里的 &String 借到渲染期，生命周期不够）
                     let item_rows: Vec<gpui_kit::AnyElement> = items
                         .into_iter()
-                        .map(|(label, badge, is_user)| {
-                            render_item_row(&state, &label, &badge, is_user, window, cx)
+                        .map(|(key, label, badge, is_user, selected)| {
+                            render_item_row(
+                                &state, &key, &label, &badge, is_user, selected, window, cx,
+                            )
                         })
                         .collect();
                     group = group.child(
@@ -616,7 +752,6 @@ pub(crate) fn render_browse_pane(
         .w_full()
         .flex_1()
         .min_h_0()
-        .child(render_smart_row(&state, theme, window, cx))
         .child(
             TabBar::new("mock-lib-view")
                 .segmented()
@@ -644,36 +779,76 @@ pub(crate) fn render_browse_pane(
         .into_any_element()
 }
 
-/// 最近使用（本会话点过的生成器，最多 [`RECENT_GENERATORS`] 条）：非空才渲染，
-/// 点击直接应用（静态 spec → `set_generator`）并关闭对话框——菜单退役后的快速路径。
-fn render_recent(
+/// 「历史生成器」块：本会话用过的生成器（最多 [`RECENT_GENERATORS`] 条）。
+///
+/// **只有一行**（不换行、不折行）：行 2 的高度必须可预测，否则会把行 3 的库挤矮；
+/// 超宽由 `overflow_hidden` 裁掉（5 条 xsmall 按钮在对话框宽度内通常放得下）。
+/// 点击直接应用到表配置，**不关对话框**——右栏要就地跟着变。空时给一句灰字，
+/// 免得右侧那块看起来像没渲染。
+///
+/// 历史同时收内建与自定义：内建按目录名反查中文名，自定义按 `ug.id` 反查用户起的名字；
+/// 自定义项被删掉后不再显示（历史里不该留点不动的项）。
+pub(crate) fn render_history_chips(
     state: &Entity<GeneratorLibraryState>,
     theme: &Theme,
     _window: &mut Window,
     cx: &mut App,
-) -> Option<gpui_kit::AnyElement> {
-    let recent: Vec<(&'static str, String)> = state
-        .read(cx)
-        .panel
-        .read(cx)
-        .recent_generators()
-        .iter()
-        .filter_map(|name| {
-            generator_catalog::all_specs()
-                .iter()
-                .copied()
-                .find(|spec| spec.name == name.as_str())
-                .map(|spec| (spec.name, spec.label.to_string()))
-        })
-        .collect();
+) -> gpui_kit::AnyElement {
+    let recent: Vec<(String, String, bool)> = {
+        let panel = state.read(cx).panel.clone();
+        let panel_ref = panel.read(cx);
+        panel_ref
+            .recent_generators()
+            .iter()
+            .filter_map(|(key, is_user)| {
+                if *is_user {
+                    panel_ref
+                        .user_generators()
+                        .iter()
+                        .find(|ug| ug.id == *key)
+                        .map(|ug| (key.clone(), ug.name.clone(), true))
+                } else {
+                    generator_catalog::all_specs()
+                        .iter()
+                        .copied()
+                        .find(|spec| spec.name == key.as_str())
+                        .map(|spec| (key.clone(), spec.label.to_string(), false))
+                }
+            })
+            .collect()
+    };
     if recent.is_empty() {
-        return None;
+        return div()
+            .id("mock-lib-history")
+            .test_support()
+            .h_flex()
+            .items_center()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .text_xs()
+            .text_color(theme.colors.muted_foreground)
+            .child("本会话还没用过生成器")
+            .into_any_element();
     }
-    let mut chips = div().h_flex().gap_1().w_full().flex_wrap();
-    for (name, label) in recent {
+    let mut chips = div()
+        .id("mock-lib-history")
+        .test_support()
+        .h_flex()
+        .items_center()
+        .gap_1()
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden();
+    for (key, label, is_user) in recent {
         let state_for_click = state.clone();
+        let chip_id = if is_user {
+            format!("mock-lib-recent-user-{key}")
+        } else {
+            format!("mock-lib-recent-{key}")
+        };
         chips = chips.child(
-            button(format!("mock-lib-recent-{name}"), label, ActionKind::Quiet)
+            button(chip_id, label, ActionKind::Quiet)
                 .xsmall()
                 .tooltip("最近使用：点击直接应用")
                 .tooltip_show_delay(TOOLTIP_DELAY)
@@ -682,20 +857,11 @@ fn render_recent(
                         let s = state_for_click.read(app);
                         (s.panel.clone(), s.writeback.clone())
                     };
-                    apply_picked_generator(app, window, &panel, &writeback, name, false);
+                    apply_picked_generator(app, window, &panel, &writeback, &key, is_user);
                 }),
         );
     }
-    Some(
-        div()
-            .v_flex()
-            .gap_1()
-            .w_full()
-            // 与清单 / 模板 / 历史三处段标题同一支原语（自带下缘线）
-            .child(section(&theme, "最近使用"))
-            .child(chips)
-            .into_any_element(),
-    )
+    chips.into_any_element()
 }
 
 /// 业务分组行：展开/收起按钮 + 行尾「＋」（键盘可达，`Button`）。
@@ -779,17 +945,20 @@ fn render_group_row(
 fn render_type_group_row(
     state: &Entity<GeneratorLibraryState>,
     data_type: &ColumnDataType,
-    label: &str,
+    title: &str,
+    type_key: &str,
     expanded: bool,
     _window: &mut Window,
     cx: &mut App,
 ) -> gpui_kit::Div {
     let state_for_toggle = state.clone();
-    let label_for_toggle = label.to_string();
+    let type_key_for_toggle = type_key.to_string();
     let state_for_create = state.clone();
     let data_type_for_create = data_type.clone();
+    // 计数与展开后的实际项数同口径：只算方法级（业务生成器不在数据视角）
     let item_count = generator_catalog::all_specs()
         .iter()
+        .filter(|spec| generator_catalog::is_method_spec(spec))
         .filter(|spec| data_type_for_spec(spec) == *data_type)
         .count()
         + state
@@ -807,8 +976,8 @@ fn render_type_group_row(
         .child(
             div().h_flex().items_center().flex_1().min_w_0().child(
                 button(
-                    format!("lib-type-group-{label}"),
-                    format!("{label}（{item_count}）"),
+                    format!("lib-type-group-{type_key}"),
+                    format!("{title}（{item_count}）"),
                     ActionKind::Quiet,
                 )
                 .xsmall()
@@ -820,8 +989,8 @@ fn render_type_group_row(
                 .toggled(expanded)
                 .on_click(move |_event, _window, app| {
                     state_for_toggle.update(app, |s, cx| {
-                        if !s.expanded_types.remove(&label_for_toggle) {
-                            s.expanded_types.insert(label_for_toggle.clone());
+                        if !s.expanded_types.remove(&type_key_for_toggle) {
+                            s.expanded_types.insert(type_key_for_toggle.clone());
                         }
                         cx.notify();
                     });
@@ -830,9 +999,9 @@ fn render_type_group_row(
         )
         .child(
             icon_button(
-                format!("lib-type-group-plus-{label}"),
+                format!("lib-type-group-plus-{type_key}"),
                 IconName::Plus,
-                format!("在“{label}”数据类型下新建生成器"),
+                format!("在“{title}”数据类型下新建生成器"),
             )
             .on_click(move |_event, window, app| {
                 let (panel, writeback) = {
@@ -854,38 +1023,100 @@ fn render_type_group_row(
 }
 
 /// 生成器项行：名称 + 徽标（业务视角徽标 = 数据类；技术视角徽标 = 业务组）。
-/// 点击写回列（内建走 `set_generator`，自定义解包 base）并关对话框。
+///
+/// 点击写回表配置（内建 → 按 `name` 取默认配置，自定义 → 解包 `base`），**不关对话框**：
+/// 右栏每帧按表配置重建，点一项就能就地看到它的属性 / 参数 / 样例。
+///
+/// `key` 是**写回用的稳定键**（内建 = `spec.name`，自定义 = `ug.id`）；`label` 只是给人看的
+/// 中文名。两者不能混用：目录按 name 查、自定义按 id 查，拿 label 去查一律落空 →
+/// 点列表什么都不会发生（这是真实发生过的 bug，见 `picked_config` 的兜底）。
 /// 自定义项行尾另有「编辑」「删除」两个管理按钮（键盘可达，`Button`）。
+/// 一行生成器说明（列表项 hover 预览）：业务组 · 产出类型 · 参数清单。
+///
+/// 目的：不必「点开才知道它是什么」。参数只列键名，完整默认值仍由右栏参数区给。
+fn describe_spec(spec: &'static generator_catalog::GeneratorSpec) -> String {
+    let output = column_type_label(&data_type_for_spec(spec));
+    let params = if spec.params.is_empty() {
+        "无参数".to_string()
+    } else {
+        spec.params
+            .iter()
+            .map(|field| field.key.to_string())
+            .collect::<Vec<_>>()
+            .join(" / ")
+    };
+    format!("{} · 产出 {output} · 参数：{params}", spec.category.label())
+}
+
 fn render_item_row(
     state: &Entity<GeneratorLibraryState>,
+    key: &str,
     label: &str,
     badge: &str,
     is_user: bool,
+    selected: bool,
     _window: &mut Window,
     cx: &mut App,
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme();
     let state_for_click = state.clone();
-    let spec_name = label.to_string();
-    let spec_for_click = spec_name.clone();
+    let picked = key.to_string();
+    // id 区分内建 / 自定义：用户起的名字可能正好等于某个内建生成器标签
+    // （如「姓名」），同名同组会出现重复 ElementId（GPUI a11y 重复 id → panic）
+    let item_id = if is_user {
+        format!("lib-item-user-{key}")
+    } else {
+        format!("lib-item-{key}")
+    };
+    // hover 预览：内建按目录名取规格，自定义按 id 取 base 规格（删掉就退回没有提示）
+    let hint = if is_user {
+        let panel = state.read(cx).panel.clone();
+        panel
+            .read(cx)
+            .user_generators()
+            .iter()
+            .find(|ug| ug.id == key)
+            .map(|ug| {
+                format!(
+                    "自定义 · {}",
+                    describe_spec(generator_catalog::spec_of(&ug.base))
+                )
+            })
+    } else {
+        generator_catalog::spec_by_name(key).map(describe_spec)
+    };
+    let mut item_button = button(item_id, label, ActionKind::Quiet)
+        .xsmall()
+        .toggled(selected)
+        .on_click(move |_event, window, app| {
+            let (panel, writeback) = {
+                let s = state_for_click.read(app);
+                (s.panel.clone(), s.writeback.clone())
+            };
+            apply_picked_generator(app, window, &panel, &writeback, &picked, is_user);
+        });
+    if let Some(hint) = hint {
+        item_button = item_button.tooltip(hint).tooltip_show_delay(TOOLTIP_DELAY);
+    }
     let mut row = div()
         .h_flex()
         .items_center()
         .gap_2()
         .w_full()
+        .px_1()
+        .rounded_sm();
+    // 选中态：把「这一列现在用的是哪一项」标出来（原先没有任何标记，点完看不出当前是哪个）
+    if selected {
+        row = row.bg(theme.colors.list_active);
+    }
+    row = row
         .child(
-            div().h_flex().items_center().flex_1().min_w_0().child(
-                button(format!("lib-item-{label}"), label, ActionKind::Quiet)
-                    .xsmall()
-                    .on_click(move |_event, window, app| {
-                        let (panel, writeback) = {
-                            let s = state_for_click.read(app);
-                            (s.panel.clone(), s.writeback.clone())
-                        };
-                        let ug_id = spec_for_click.clone();
-                        apply_picked_generator(app, window, &panel, &writeback, &ug_id, is_user);
-                    }),
-            ),
+            div()
+                .h_flex()
+                .items_center()
+                .flex_1()
+                .min_w_0()
+                .child(item_button),
         )
         .child(
             div()
@@ -896,10 +1127,10 @@ fn render_item_row(
     // 自定义项：行尾「编辑」（打开精调层预填，含重命名）/「删除」（会话级移除）
     if is_user {
         let state_edit = state.clone();
-        let ug_id_edit = spec_name.clone();
+        let ug_id_edit = key.to_string();
         row = row
             .child(
-                button(format!("lib-item-edit-{label}"), "编辑", ActionKind::Quiet)
+                button(format!("lib-item-edit-{key}"), "编辑", ActionKind::Quiet)
                     .xsmall()
                     .tooltip("重命名 / 修改参数")
                     .tooltip_show_delay(TOOLTIP_DELAY)
@@ -923,9 +1154,9 @@ fn render_item_row(
             )
             .child({
                 let state_del = state.clone();
-                let ug_id_del = spec_name.clone();
+                let ug_id_del = key.to_string();
                 danger_icon_button(
-                    format!("lib-item-delete-{label}"),
+                    format!("lib-item-delete-{key}"),
                     IconName::Delete,
                     "删除此自定义生成器",
                     theme,
@@ -945,7 +1176,7 @@ fn render_item_row(
 
 // ---------- 精调层（创建自定义生成器） ----------
 
-/// 新建精调层草稿：锁定一个维度（类型或业务组），另一维可自选，基础生成器按维度过滤。
+/// 新建精调层表配置：锁定一个维度（类型或业务组），另一维可自选，基础生成器按维度过滤。
 fn new_create_draft(
     panel: Entity<MockPanel>,
     locked_type: Option<ColumnDataType>,
@@ -1007,7 +1238,7 @@ fn new_create_draft(
         error: None,
         _subs: Vec::new(),
     };
-    // 基础生成器身份变化 → 重建参数行 + 刷样例（订阅一次，草稿生命周期内常驻；
+    // 基础生成器身份变化 → 重建参数行 + 刷样例（订阅一次，表配置生命周期内常驻；
     // 换生成器 = 换参数集，旧输入不保留）
     let base_for_sub = draft.base_state.clone();
     let _sub = cx.subscribe_in(
@@ -1024,7 +1255,7 @@ fn new_create_draft(
     draft
 }
 
-/// 编辑精调层草稿：复用创建草稿（类型 / 业务组锁定 = 被编辑项的值），再覆写为编辑态——
+/// 编辑精调层表配置：复用创建表配置（类型 / 业务组锁定 = 被编辑项的值），再覆写为编辑态——
 /// 基础生成器锁定（编辑不改 base：换 base = 换个生成器，删了重建更直接）、参数区 / 样例以
 /// 被编辑项**保存过的配置**为基准（`preset`，用户改过的参数值在编辑重开时不丢）、名字预填。
 fn new_edit_draft(
@@ -1116,7 +1347,7 @@ impl GeneratorLibraryState {
         };
         let spec = generator_catalog::spec_of(&config);
         let fields: Vec<ParamField> = spec.params.iter().copied().collect();
-        // 每个参数一个订阅：Change → 写回草稿值 + 刷样例。Bool 用 Switch（不再退化成文本框）。
+        // 每个参数一个订阅：Change → 写回表配置值 + 刷样例。Bool 用 Switch（不再退化成文本框）。
         for field in fields {
             let key = field.key.to_string();
             match field.kind {
@@ -1269,7 +1500,7 @@ fn submit_create(state: &Entity<GeneratorLibraryState>, window: &mut Window, cx:
     });
     match saved {
         Ok(ug_id) => {
-            // 保存即应用（与「保存双向挂组」一致：创建/编辑完直接写回当前列/草稿）
+            // 保存即应用（与「保存双向挂组」一致：创建/编辑完直接写回当前列/表配置）
             let panel = state.read(cx).panel.clone();
             let writeback = state.read(cx).writeback.clone();
             let embedded = state.read(cx).embedded;
@@ -1280,7 +1511,7 @@ fn submit_create(state: &Entity<GeneratorLibraryState>, window: &mut Window, cx:
                 s.editing = None;
                 cx.notify();
             });
-            // 内嵌模式（列编辑内联）：写回草稿后留在列编辑；弹对话框模式才关
+            // 内嵌模式（列编辑内联）：写回表配置后留在列编辑；弹对话框模式才关
             if !embedded {
                 window.close_dialog(cx);
             }
@@ -1581,6 +1812,50 @@ fn data_type_for_spec(spec: &'static GeneratorSpec) -> ColumnDataType {
         Some(config) => crate::generators::data_type_for_generator(&config),
         None => ColumnDataType::Varchar { length: None },
     }
+}
+
+/// 数据视角的唯一键：`column_type_label` 会撞名（`Text` / `Uuid` → `VARCHAR`，
+/// `DateTime` / `Timestamp` → `TIMESTAMP`），而 ElementId 与 `expanded_types`
+/// 都要求唯一——重复 id 会让 GPUI 的 a11y 节点校验直接 panic（切「数据类型」闪退）。
+pub(crate) fn data_type_key(data_type: &ColumnDataType) -> &'static str {
+    match data_type {
+        ColumnDataType::Integer => "integer",
+        ColumnDataType::BigInt => "big_int",
+        ColumnDataType::Float => "float",
+        ColumnDataType::Double => "double",
+        ColumnDataType::Decimal { .. } => "decimal",
+        ColumnDataType::Boolean => "boolean",
+        ColumnDataType::Varchar { .. } => "varchar",
+        ColumnDataType::Text => "text",
+        ColumnDataType::Date => "date",
+        ColumnDataType::DateTime => "date_time",
+        ColumnDataType::Timestamp => "timestamp",
+        ColumnDataType::Uuid => "uuid",
+        ColumnDataType::Blob => "blob",
+    }
+}
+
+/// 数据视角分组标题：可读且**唯一**（括号内保留 DuckDB 类型，便于和产出对齐）。
+///
+/// 直接用 `column_type_label` 会让三个组都叫 `VARCHAR`、两个组都叫 `TIMESTAMP`，
+/// 用户分不清这是不同的数据类还是重复渲染。
+pub(crate) fn data_type_title(data_type: &ColumnDataType) -> String {
+    let cn = match data_type {
+        ColumnDataType::Integer => "整数",
+        ColumnDataType::BigInt => "长整数",
+        ColumnDataType::Float => "浮点",
+        ColumnDataType::Double => "双精度",
+        ColumnDataType::Decimal { .. } => "定点数",
+        ColumnDataType::Boolean => "布尔",
+        ColumnDataType::Varchar { .. } => "变长文本",
+        ColumnDataType::Text => "长文本",
+        ColumnDataType::Date => "日期",
+        ColumnDataType::DateTime => "日期时间",
+        ColumnDataType::Timestamp => "时间戳",
+        ColumnDataType::Uuid => "UUID",
+        ColumnDataType::Blob => "二进制",
+    };
+    format!("{cn}（{}）", column_type_label(data_type))
 }
 
 /// 搜索匹配：名称 / 中文标签 / 分类标签（大小写不敏感）。

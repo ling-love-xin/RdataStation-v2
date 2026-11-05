@@ -7,7 +7,7 @@
 //!
 //! | 出口 | 语义 |
 //! | --- | --- |
-//! | 打开这张表（右 Dock 清单点一行） | 中央「Mock · {表}」tab：列（草稿可编辑 / 结果只读）+ 预览表格 |
+//! | 打开这张表（右 Dock 清单点一行） | 中央「Mock · {表}」tab：列（表配置可编辑 / 结果只读）+ 预览表格 |
 //! | 持久化为项目分析库表 | 在**项目**分析库（`{项目}/.RSmeta/analytics.duckdb`）**新建**表（已存在则报错，引导改用「追加」） |
 //! | 追加到既有表 | **显式**选择既有表；主键自增起点接续表内行数 |
 //! | 保存到草稿箱 | `{项目}/scratchpad/mock/mock_*.{ext}`（时间戳命名，只读项目禁写；必须落在草稿箱扫描的 scratchpad 树下） |
@@ -113,8 +113,8 @@ mod tests;
 
 // ---- 对外 re-export（workbench 等 crate 经 `mock::mock_view::*` 引用，保持原顶层 API） ----
 pub use contract::{
-    AppendTargetStatus, MockColumnSpec, MockDraft, MockGenInfo, MockHost, MockPreview,
-    MockRunOptions, PreviewSort, SchemaRequest, SchemaSource, flatten_preview,
+    AppendTargetStatus, MockColumnSpec, MockGenInfo, MockHost, MockPreview, MockRunOptions,
+    MockTableConfig, PreviewSort, SchemaRequest, SchemaSource, flatten_preview,
 };
 pub use detail::{DetailTarget, MockDetailView, focus_detail_tab, status_chip_text};
 pub use job::{

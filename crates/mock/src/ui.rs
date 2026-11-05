@@ -35,10 +35,22 @@ pub const NUM_INPUT_WIDTH: f32 = 5.0;
 /// 对话框内输入框宽度（9rem = 144px）
 pub const PARAM_INPUT_WIDTH: f32 = 9.0;
 /// 字段清单滚动区最大高度（16rem = 256px）
+///
+/// A 方案（单行列卡片）落地后**不再使用**：列区段（第 2 段）自己有 `overflow_y_scrollbar`，
+/// 这里再限 256px 会把紧凑单行省下的高度又还回去；常量保留给历史引用点。
 pub const FIELD_LIST_MAX_HEIGHT: f32 = 16.0;
+/// 列卡片（紧凑单行）的最小行高（34px：xsmall 按钮 24px + 上下各 5px 呼吸）
+pub const COLUMN_ROW_HEIGHT: Pixels = px(34.);
+/// 列名格宽（10rem = 160px）：固定宽度是「竖着扫能对齐」的前提，
+/// 短列名留白换取四段信息同一基线，长列名截断
+pub const COLUMN_NAME_CELL_WIDTH: f32 = 10.0;
+/// 生成器按钮格最大宽（9rem = 144px）：超长自定义名截断，宽度让给参数摘要
+pub const COLUMN_GENERATOR_CELL_WIDTH: f32 = 9.0;
+/// 动作行右侧状态格里的迷你进度条宽度（6rem = 96px：够读出走向，又不和读数抢宽度）
+pub const ACTION_STATUS_BAR_WIDTH: f32 = 6.0;
 /// 字段区列搜索框宽度（9rem = 144px；与对话框内输入框同档）
 pub const COLUMN_FILTER_WIDTH: f32 = 9.0;
-/// 新草稿自带的那一列的列名（沿用「＋ 加列」的命名口径 `column_{index}`）
+/// 新表配置自带的那一列的列名（沿用「＋ 加列」的命名口径 `column_{index}`）
 pub const DEFAULT_FIRST_COLUMN_NAME: &str = "column_1";
 
 /// 列卡片右端操作区的固定宽度（7rem = 112px：四个小图标按钮 + 三个间距）
@@ -94,11 +106,26 @@ pub const PANEL_ICON_SIZE: f32 = 1.25;
 
 /// 详情页三段分栏：基本信息段初始高度（100px；resizable_panel 的 size 只收 Pixels，故用 px 常量）
 pub const DETAIL_HEADER_HEIGHT: Pixels = px(100.);
-/// 基本信息段可拉最大高度（220px；看全进度 / 失败重试 / 来源说明）
+/// 基本信息段可缩最小高度（64px：表名行 + 动作行两行，再小就装不下按钮）。
+///
+/// 下界必须**小于**初始高度（100px）：先前下界与初始值同为 100px，
+/// 分隔条往下拖立刻被 `min_h` 卡住，表现为「这条分隔条拖不动」。
+pub const DETAIL_HEADER_MIN_HEIGHT: Pixels = px(64.);
+/// 基本信息段可拉最大高度（220px；看全表名行 / 动作行 / 落库目标）
 pub const DETAIL_HEADER_MAX_HEIGHT: Pixels = px(220.);
+/// 预览段初始高度下限（200px；resizable_panel 的 size_range 只收 Pixels）
+/// 预览此前没有显式尺寸、吃掉全部剩余高度，表格被撑得过高
+pub const DETAIL_PREVIEW_MIN_HEIGHT: Pixels = px(200.);
+/// 预览段高度上限（640px；需要看更多行时拖大，默认按面板 `detail_preview_rem` 收住）
+pub const DETAIL_PREVIEW_MAX_HEIGHT: Pixels = px(640.);
+/// 列区最小高度（120px：只做拖拽下限；高度由 flex 分给剩余，窗口再小也不会溢出）
+pub const DETAIL_COLUMNS_MIN_HEIGHT: Pixels = px(120.);
 
 /// 列编辑对话框总宽（840px）
 pub const COLUMN_DIALOG_WIDTH: Pixels = px(840.);
+/// 列编辑对话框主体高度（620px：固定高度，行 3 两列在内部滚动，
+/// 不再由内容把对话框撑高；展开分组 / 切 Tab 只影响块内滚动）
+pub const COLUMN_DIALOG_HEIGHT: Pixels = px(620.);
 /// 自定义生成器（精调层）对话框总宽（560px：只装一个表单，不需要两栏）
 pub const GENERATOR_DIALOG_WIDTH: Pixels = px(560.);
 /// 列编辑对话框左栏生成器列表宽（280px）

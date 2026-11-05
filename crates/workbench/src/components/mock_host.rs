@@ -29,8 +29,8 @@ use std::rc::Rc;
 
 use gpui_kit::{App, Window};
 use mock::mock_view::{
-    AppendTargetStatus, MockColumnSpec, MockDraft, MockHost, MockJobDone, MockJobKind,
-    MockJobState, MockPreview, SchemaRequest, SchemaSource,
+    AppendTargetStatus, MockColumnSpec, MockHost, MockJobDone, MockJobKind, MockJobState,
+    MockPreview, MockTableConfig, SchemaRequest, SchemaSource,
 };
 
 use crate::panels::Shared;
@@ -57,7 +57,7 @@ impl WorkbenchMockHost {
 }
 
 impl MockHost for WorkbenchMockHost {
-    fn start_job(&self, draft: &MockDraft, kind: MockJobKind) -> Result<(), String> {
+    fn start_job(&self, draft: &MockTableConfig, kind: MockJobKind) -> Result<(), String> {
         // 出口类任务要用的路径在这里（UI 线程）解析：工作线程碰不了 `Shared`
         // 分析库是**项目级**的（`{项目}/.RSmeta/analytics.duckdb`）；未打开项目时为 `None`，
         // 由任务层给出可读拒绝（Mock 不写全局库）

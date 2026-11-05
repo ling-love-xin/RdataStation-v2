@@ -40,9 +40,9 @@ use gpui_kit::component::{ActiveTheme, Root, Theme, ThemeRegistry};
 use gpui_kit::*;
 
 use rds_mock::mock_view::{
-    AppendTargetStatus, DetailTarget, MockColumnSpec, MockDetailView, MockDraft, MockGenInfo,
-    MockHost, MockJobDone, MockJobKind, MockJobPhase, MockJobProgress, MockJobState, MockPanel,
-    MockPreview, SchemaRequest, SchemaSource, flatten_preview,
+    AppendTargetStatus, DetailTarget, MockColumnSpec, MockDetailView, MockGenInfo, MockHost,
+    MockJobDone, MockJobKind, MockJobPhase, MockJobProgress, MockJobState, MockPanel, MockPreview,
+    MockTableConfig, SchemaRequest, SchemaSource, flatten_preview,
 };
 use rds_mock::{ColumnDef, MockConfig, MockEngine, MockExportFormat, sanitize_identifier};
 
@@ -106,11 +106,11 @@ fn run_preview() {
                 window.set_rem_size(px(16.));
                 let panel = cx.new(|cx| MockPanel::new(host_for_window.clone(), cx));
                 let detail =
-                    cx.new(|cx| MockDetailView::new(panel.clone(), DetailTarget::Draft, cx));
+                    cx.new(|cx| MockDetailView::new(panel.clone(), DetailTarget::Config(0), cx));
                 let harness = cx.new(|_cx| PreviewHarness {
                     panel,
                     detail,
-                    tab_key: Some(DetailTarget::Draft.key()),
+                    tab_key: Some(DetailTarget::Config.key()),
                 });
                 // 窗口创建后才拿得到 harness 句柄：回填空位，供「打开详情 tab」切换用
                 *host_for_window.harness.borrow_mut() = Some(harness.downgrade());
@@ -232,8 +232,8 @@ impl PreviewHost {
             .expect("启动预览工作线程");
     }
 
-    /// 草稿 → 引擎配置（预览里就是「所见即所生成」，不做额外加工）。
-    fn config_of(draft: &MockDraft) -> (MockConfig, Vec<ColumnDef>) {
+    /// 表配置 → 引擎配置（预览里就是「所见即所生成」，不做额外加工）。
+    fn config_of(draft: &MockTableConfig) -> (MockConfig, Vec<ColumnDef>) {
         let columns: Vec<ColumnDef> = draft.columns.iter().map(|c| c.def.clone()).collect();
         (
             MockConfig {
@@ -262,7 +262,7 @@ impl PreviewHost {
 }
 
 impl MockHost for PreviewHost {
-    fn start_job(&self, draft: &MockDraft, kind: MockJobKind) -> Result<(), String> {
+    fn start_job(&self, draft: &MockTableConfig, kind: MockJobKind) -> Result<(), String> {
         if self.slot.running.load(Ordering::SeqCst) {
             return Err("已有任务在进行中（请等它结束或先取消）".to_string());
         }

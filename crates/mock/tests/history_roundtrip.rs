@@ -1,7 +1,7 @@
 //! 生成历史的真库端到端（M7 · D4/D5）。
 //!
 //! `persistence_roundtrip.rs` 验的是 store 的读写守恒；这里验的是**它的上一层**：
-//! `history::run` / `list` / `detail` 把「一次生成运行」变成历史行、再从历史行还原成草稿
+//! `history::run` / `list` / `detail` 把「一次生成运行」变成历史行、再从历史行还原成表配置
 //! 的整条链路——面板侧只提交一件 `HistoryAction`，其余全在 mock crate 内完成。
 //!
 //! 每个用例一个临时项目目录（`ProjectDatabaseManager::open` 会跑迁移，互不共享）。
@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use rds_mock::history::{
     self, HistoryAction, RunOutcome, RunRecord, draft_of_detail, draft_of_template,
 };
-use rds_mock::mock_view::{MockColumnSpec, MockDraft, MockRunOptions};
+use rds_mock::mock_view::{MockColumnSpec, MockRunOptions, MockTableConfig};
 use rds_mock::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale};
 use rds_mock::persistence::MockGenerationTask;
 
@@ -29,8 +29,8 @@ fn temp_project(tag: &str) -> PathBuf {
     root
 }
 
-fn draft(table: &str, seed: Option<u32>) -> MockDraft {
-    MockDraft {
+fn draft(table: &str, seed: Option<u32>) -> MockTableConfig {
+    MockTableConfig {
         table_name: table.to_string(),
         columns: vec![
             MockColumnSpec {
@@ -45,6 +45,7 @@ fn draft(table: &str, seed: Option<u32>) -> MockDraft {
                 },
                 confidence: "high".to_string(),
                 sample_value: String::new(),
+                user_generator: None,
             },
             MockColumnSpec {
                 id: 2,
@@ -65,6 +66,7 @@ fn draft(table: &str, seed: Option<u32>) -> MockDraft {
                 },
                 confidence: "low".to_string(),
                 sample_value: String::new(),
+                user_generator: None,
             },
         ],
         // `MockRunOptions` 是 `#[non_exhaustive]`：只有 `new` 一个构造入口（跨 crate）
@@ -121,7 +123,7 @@ async fn a_run_is_recorded_listed_and_replayed() {
         .tasks;
     assert_eq!(ids(&listed), vec![task.id.as_str()]);
 
-    // 重放：草稿从历史还原（生成器与参数经目录名 + 参数 JSON 一条路往返）
+    // 重放：表配置从历史还原（生成器与参数经目录名 + 参数 JSON 一条路往返）
     let detail = history::detail(&root, &task.id).await.expect("读详情");
     let replayed = draft_of_detail(&detail);
     assert_eq!(replayed.table_name, "orders");
@@ -237,7 +239,7 @@ async fn a_template_is_saved_listed_replayed_and_deleted() {
     assert_eq!(template.locale, "EN");
     assert_eq!(template.description.as_deref(), Some("2 列"));
 
-    // 应用：拿详细配置还原出一份草稿（表名由调用方决定，模板里不存）
+    // 应用：拿详细配置还原出一份表配置（表名由调用方决定，模板里不存）
     let (read_back, columns) = history::template_detail(&root, &template.id)
         .await
         .expect("读模板详情");

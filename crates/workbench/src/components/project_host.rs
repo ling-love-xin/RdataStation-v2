@@ -245,11 +245,11 @@ mod tests {
     // `#[gpui_kit::test]` 展开出的裸 `#[test]` 会解析到它自己，无限递归）
     use super::{Shared, clear_mock_temp_tables, clear_result_temp_tables};
     use gpui_kit::TestAppContext;
-    use mock::mock_view::{MockColumnSpec, MockDraft, MockRunOptions};
+    use mock::mock_view::{MockColumnSpec, MockRunOptions, MockTableConfig};
     use mock::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale};
 
-    fn draft(table: &str) -> MockDraft {
-        MockDraft {
+    fn draft(table: &str) -> MockTableConfig {
+        MockTableConfig {
             table_name: table.to_string(),
             columns: vec![MockColumnSpec {
                 id: 0,
@@ -263,6 +263,7 @@ mod tests {
                 },
                 confidence: "high".to_string(),
                 sample_value: String::new(),
+                user_generator: None,
             }],
             options: MockRunOptions::new(10, Some(1), Locale::ZhCn),
         }

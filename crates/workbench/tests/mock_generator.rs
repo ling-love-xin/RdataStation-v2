@@ -1,11 +1,11 @@
 //! M7 Mock 装配层集成测试：生成 → 落库（新建 / 追加）/ 导出的端到端语义。
 //!
 //! 全部走显式路径入口（`*_at`）。出口（落库 / 追加 / 导出 / 草稿箱）的输入是**生成结果自己**
-//! （`MockGenInfo`：目标表名 + 列定义 + 临时表），不读草稿——场景模板产出的多张表因此能各自落地。
+//! （`MockGenInfo`：目标表名 + 列定义 + 临时表），不读表配置——场景模板产出的多张表因此能各自落地。
 
 use std::path::PathBuf;
 
-use mock::mock_view::{MockColumnSpec, MockDraft, MockRunOptions};
+use mock::mock_view::{MockColumnSpec, MockRunOptions, MockTableConfig};
 use mock::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale, MockExportFormat};
 use mock::parse_data_type;
 use rds_workbench::services::mock_generator::{
@@ -33,12 +33,13 @@ fn column(name: &str, generator: GeneratorConfig) -> MockColumnSpec {
         },
         confidence: "high".to_string(),
         sample_value: "1, 2, 3...".to_string(),
+        user_generator: None,
     }
 }
 
-/// 三列草稿：自增主键 + 随机整数 + 文本（覆盖自增接续这条关键语义）。
-fn draft(table: &str, rows: u32) -> MockDraft {
-    MockDraft {
+/// 三列表配置：自增主键 + 随机整数 + 文本（覆盖自增接续这条关键语义）。
+fn draft(table: &str, rows: u32) -> MockTableConfig {
+    MockTableConfig {
         table_name: table.to_string(),
         columns: vec![
             column("id", GeneratorConfig::AutoIncrement { start: 1, step: 1 }),
@@ -165,14 +166,14 @@ fn persist_writes_many_rows_in_one_go() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 目标表多出草稿里没有的列时：只写草稿的列，多出的列走默认值（旧文本路径同一语义）。
+/// 目标表多出表配置里没有的列时：只写表配置的列，多出的列走默认值（旧文本路径同一语义）。
 #[test]
 fn append_leaves_extra_target_columns_at_default() {
     let dir = temp_dir("append_extra");
     let db = dir.join("analytics.duckdb");
     let draft = draft("t_extra", 20);
 
-    // 先建一张「多一列」的目标表（note 不在草稿里）
+    // 先建一张「多一列」的目标表（note 不在表配置里）
     {
         let conn = duckdb::Connection::open(&db).expect("open duckdb");
         conn.execute_batch(
@@ -241,7 +242,7 @@ fn generate_without_columns_errors() {
     let dir = temp_dir("empty");
     let db = dir.join("analytics.duckdb");
 
-    let empty = MockDraft {
+    let empty = MockTableConfig {
         table_name: "empty_t".to_string(),
         columns: Vec::new(),
         options: MockRunOptions::new(10, Some(42), Locale::ZhCn),

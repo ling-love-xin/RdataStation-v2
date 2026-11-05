@@ -3,7 +3,7 @@
 // 继承父模块（mock_view）的全部 use 绑定：std / gpui_kit / models / persistence / generator_catalog 等
 use super::*;
 
-/// 列（草稿）：列定义 + 智能映射元信息。
+/// 列（表配置）：列定义 + 智能映射元信息。
 #[derive(Debug, Clone)]
 pub struct MockColumnSpec {
     /// 稳定 id（列可增删，输入框与列表键用 id 而非下标）
@@ -14,11 +14,20 @@ pub struct MockColumnSpec {
     pub confidence: String,
     /// 智能映射示例值（无参数时作为一行说明）
     pub sample_value: String,
+    /// 列用的是**哪个自定义生成器**（`UserGenerator::id`，内建生成器为 `None`）。
+    ///
+    /// `def.generator` 只存解包后的基础配置，同一 base 的多个自定义项在它上面**完全一样**，
+    /// 无法区分「用户点的是哪一项」——左栏高亮会一起亮、右栏生成器名只能显示 base 名。
+    /// 这个字段记住用户真正选中的那一项：左栏按它精确高亮、右栏与列卡片显示自定义名。
+    ///
+    /// **不落历史库**（`mock_generation_columns` 没有这一列）：重放 / 应用模板恢复的是
+    /// 生成算法本身，自定义项身份丢了只会退回显示 base 名，不影响生成结果。
+    pub user_generator: Option<String>,
 }
 
-/// 生成草稿：目标表名 + 列 + 选项。
+/// 生成配置：目标表名 + 列 + 选项。
 #[derive(Debug, Clone)]
-pub struct MockDraft {
+pub struct MockTableConfig {
     /// 目标表名（用户命名；落库 / 追加 / 文件名都基于它）
     pub table_name: String,
     /// 列清单
@@ -27,7 +36,7 @@ pub struct MockDraft {
     pub options: MockRunOptions,
 }
 
-impl Default for MockDraft {
+impl Default for MockTableConfig {
     fn default() -> Self {
         Self {
             table_name: "mock_data".to_string(),
@@ -69,11 +78,11 @@ impl MockRunOptions {
 /// 生成结果（内存临时表）。
 ///
 /// 带着**列定义**（`columns`）的目的：出口（落库 / 导出 / 草稿箱）只能凭结果自己完成——
-/// 单表生成时它与草稿列一致，但场景模板生成的多张表与草稿**没有任何关系**，
-/// 「拿草稿当出口规格」会在场景下建出列名对不上的表。
+/// 单表生成时它与表配置列一致，但场景模板生成的多张表与表配置**没有任何关系**，
+/// 「拿表配置当出口规格」会在场景下建出列名对不上的表。
 #[derive(Debug, Clone)]
 pub struct MockGenInfo {
-    /// 目标表名（单表生成 = 草稿里的目标表；场景模板 = 模板里的表名）
+    /// 目标表名（单表生成 = 表配置里的目标表；场景模板 = 模板里的表名）
     pub table_name: String,
     /// 内存临时表名（`temp_mock_*`）
     pub temp_table_name: String,
@@ -231,7 +240,7 @@ pub trait MockHost: 'static {
     /// 已有任务进行中时必须返回 `Err`（由视图拦住重复点击）。
     /// 出口类任务用到的路径（分析库 / 项目根）由宿主在**调用前**解析好：
     /// 工作线程不碰宿主状态（`Shared` 里的 `Rc<RefCell<…>>` 也不能跨线程）。
-    fn start_job(&self, draft: &MockDraft, kind: MockJobKind) -> Result<(), String>;
+    fn start_job(&self, draft: &MockTableConfig, kind: MockJobKind) -> Result<(), String>;
     /// 当前任务状态（UI 轮询；实现需为轻量读）。
     fn job_state(&self) -> MockJobState;
     /// 取走已完成任务的结果（**一次性**：取走后归位 Idle）；`None` = 仍在进行。
@@ -242,7 +251,7 @@ pub trait MockHost: 'static {
     fn existing_tables(&self) -> Vec<String>;
     /// 追加目标表现状（S3）：行数 / 隐含主键列 / 最大值；表不存在或未打开项目 → `None`。
     ///
-    /// `pk_hint` 是**本次生成的自增列名**（草稿里 `AutoIncrement` 生成器的列）——
+    /// `pk_hint` 是**本次生成的自增列名**（表配置里 `AutoIncrement` 生成器的列）——
     /// 它对应目标表的隐含主键（v2 不建主键 DDL，自增列就是语义上的主键）。
     fn append_target_status(
         &self,
@@ -278,7 +287,7 @@ pub trait MockHost: 'static {
     /// （见 `history`），存储细节不摊到宿主侧。
     fn project_root(&self) -> Option<PathBuf>;
     /// 打开中央「Mock 数据」详情 tab（字段 + 预览）
-    /// 打开（或聚焦）中央详情 tab（`target` 决定是哪张表 / 草稿）。
+    /// 打开（或聚焦）中央详情 tab（`target` 决定是哪张表 / 表配置）。
     ///
     /// 宿主按 `target.key()` 去重：同一张表只有一个 tab，重复调用就是把它切到前台。
     fn open_detail(&self, target: DetailTarget, window: &mut Window, cx: &mut App);
