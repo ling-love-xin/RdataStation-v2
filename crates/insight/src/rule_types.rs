@@ -10,7 +10,7 @@ use serde_json::Value;
 /// （开发方案 §0 F1 就是这个：一条规则因字段位置写错被静默跳过，而常量还写着 18）。
 /// 2026-09-17 由 18 降为 16：下线两条跑不通的残留规则（见架构 K3 / K15）。
 /// 2026-10-22 由 16 升为 18：新增 spearman-correlation / cramer-v（DuckDB-only 科研统计）。
-pub const BUILTIN_RULE_COUNT: usize = 18;
+pub const BUILTIN_RULE_COUNT: usize = 19;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -90,6 +90,10 @@ pub(crate) fn dist_visual(col: &TableColumnView, theme: &Theme) -> Div {
         Some(bins) if !bins.is_empty() => body = body.child(dist_bars(theme, bins, 16, &col.name)),
         _ => body = body.child(zone_note(theme, "样本行数不足，未生成直方图")),
     }
+    // 极值双小表（YData Extreme Values）：在直方图之下
+    if let Some(tables) = extreme_tables(col, theme) {
+        body = body.child(tables);
+    }
     body
 }
 
@@ -179,6 +183,68 @@ pub(crate) fn quantile_strip(col: &TableColumnView, theme: &Theme) -> Option<Div
                 .child(format!("P75 {}", fmt_num(n.p75)))
                 .child(format!("max {}", fmt_num(n.max))),
         ),
+    )
+}
+
+/// 极值双小表（YData Extreme Values 对应物）：最小 5 / 最大 5 个不同值 + 出现
+/// 次数，并排两列——离散识别一眼可见（如 0 值扎堆、尾部大值）。数据来自
+/// `numeric-extremes` 规则（评估回填）；缺席返回 `None`（不占版面）。
+pub(crate) fn extreme_tables(col: &TableColumnView, theme: &Theme) -> Option<Div> {
+    let extremes = col.extremes.as_ref()?;
+    if extremes.is_empty() {
+        return None;
+    }
+    let colors = theme.colors;
+    let side_table = |title: &'static str, side: &str| -> Div {
+        let rows =
+            div()
+                .v_flex()
+                .w_full()
+                .children(extremes.iter().filter(|e| e.side == side).map(|e| {
+                    div()
+                        .h_flex()
+                        .w_full()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .text_ellipsis()
+                                .text_color(colors.foreground)
+                                .child(e.value.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(colors.muted_foreground)
+                                .child(format!("×{}", e.count)),
+                        )
+                }));
+        div()
+            .v_flex()
+            .flex_1()
+            .min_w_0()
+            .gap_1()
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(colors.muted_foreground)
+                    .child(title),
+            )
+            .child(rows)
+    };
+    Some(
+        div()
+            .h_flex()
+            .w_full()
+            .items_start()
+            .gap_3()
+            .child(side_table("最小 5 值", "min"))
+            .child(side_table("最大 5 值", "max")),
     )
 }
 

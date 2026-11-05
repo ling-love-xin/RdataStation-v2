@@ -976,6 +976,7 @@ mod tests {
                     unique_count: None,
                     null_rate: None,
                     unique_rate: None,
+                    extremes: None,
                     stats_detail: None,
                     histogram: None,
                     sample_values: Vec::new(),

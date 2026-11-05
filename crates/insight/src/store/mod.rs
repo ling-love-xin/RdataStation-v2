@@ -220,6 +220,7 @@ mod tests {
                 count: 5_820,
                 ratio: 0.582,
             }]),
+            extremes: None,
         }
     }
 

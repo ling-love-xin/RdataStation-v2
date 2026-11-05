@@ -132,6 +132,44 @@ impl InsightWorkspacePanel {
                 .child(rule_toggle)
                 .child(self.render_checker_list(col, checker, theme));
         }
+        // 警告块（YData Warnings 对应物）：未命中摘要直接摆在展开体顶部
+        // （最多 3 条 + 等价计数），amber 底框——用户不用切到「检查器」区就知道问题
+        let warnings: Vec<&ColumnChecker> = checker
+            .iter()
+            .filter(|c| c.state == ColumnCheckState::Miss)
+            .collect();
+        let warning_box = (!warnings.is_empty()).then(|| {
+            let mut boxd = div()
+                .v_flex()
+                .w_full()
+                .gap_0p5()
+                .p_1()
+                .rounded_sm()
+                .bg(theme.colors.list)
+                .border_1()
+                .border_color(theme.colors.danger)
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.colors.danger)
+                        .child(format!("⚠ {} 项未命中", warnings.len())),
+                );
+            for check in warnings.iter().take(3) {
+                boxd = boxd.child(div().text_xs().text_color(theme.colors.danger).child(
+                    SharedString::from(format!("{}：{}", check.name, check.detail)),
+                ));
+            }
+            if warnings.len() > 3 {
+                boxd = boxd.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(format!("…等 {} 条（详见检查器区）", warnings.len())),
+                );
+            }
+            boxd
+        });
         // 五区 Tab（segmented；id 带列名防跨列串台）+ 当前区内容 + 检查器汇总
         let tabs = TabBar::new(SharedString::from(format!(
             "insight-ws-col-zones-{}",
@@ -165,6 +203,7 @@ impl InsightWorkspacePanel {
             .px_1()
             .pb_1()
             .child(rule_toggle)
+            .when_some(warning_box, |body, w| body.child(w))
             .child(tabs)
             .child(self.render_col_zone(col, checker, zone, entity, theme))
             .child(self.render_checker_summary(col, checker, theme))

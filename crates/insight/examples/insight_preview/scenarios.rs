@@ -934,6 +934,7 @@ fn col(
         null_count: None,
         unique_count: None,
         unique_rate: Some(unique_rate),
+        extremes: None,
         stats_detail: detail,
         histogram: Some(histogram_bins()),
         sample_values: vec!["a".into(), "b".into(), "c".into()],

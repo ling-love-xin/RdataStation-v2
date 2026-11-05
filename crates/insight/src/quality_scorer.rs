@@ -430,6 +430,7 @@ mod tests {
                     ratio: 0.5,
                 },
             ]),
+            extremes: None,
         }
     }
 
@@ -471,6 +472,7 @@ mod tests {
             },
             sample: vec![],
             histogram: None,
+            extremes: None,
         };
         let qs = compute_column_quality(&qi);
         assert!(qs.overall_score > 50.0);
@@ -494,6 +496,7 @@ mod tests {
             },
             sample: vec![],
             histogram: None,
+            extremes: None,
         };
         let qs = compute_column_quality(&qi);
         assert!(
@@ -639,6 +642,7 @@ mod tests {
             },
             sample: vec![],
             histogram: None,
+            extremes: None,
         };
         let checks = compute_column_checks(&qi);
         let unique = checks.iter().find(|c| c.name == "唯一率").unwrap();
@@ -668,6 +672,7 @@ mod tests {
             },
             sample: vec![],
             histogram: None,
+            extremes: None,
         };
         let checks = compute_column_checks(&qi);
         assert_eq!(checks.len(), 2, "文本列应只有非空率 / 唯一率");

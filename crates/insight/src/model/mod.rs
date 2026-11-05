@@ -80,6 +80,7 @@ mod tests {
             },
             sample: vec![serde_json::json!(1), serde_json::Value::Null],
             histogram: None,
+            extremes: None,
         }
     }
 

@@ -201,6 +201,7 @@ fn profile() -> ColumnProfileView {
             count: 40,
             ratio: 0.4,
         }]),
+        extremes: None,
     })
 }
 
@@ -233,6 +234,7 @@ fn compare_insight(total_count: u32, null_count: u32) -> ColumnInsightFull {
         },
         sample: vec![serde_json::json!(42), serde_json::Value::Null],
         histogram: None,
+        extremes: None,
     }
 }
 
@@ -411,6 +413,7 @@ fn renders_every_state_and_tab(cx: &mut TestAppContext) {
             },
             sample: Vec::new(),
             histogram: None,
+            extremes: None,
         });
         view.update(cx, |view, cx| {
             view.set_tab(PanelTab::Column, cx);
@@ -454,6 +457,7 @@ fn renders_every_state_and_tab(cx: &mut TestAppContext) {
                 },
                 sample: vec![serde_json::json!("x")],
                 histogram: None,
+                extremes: None,
             });
             view.update(cx, |view, cx| view.set_profile(view_model, cx));
             window.draw(cx).clear(cx);

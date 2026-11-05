@@ -198,19 +198,31 @@ pub(crate) fn zone_rows_grouped(
 }
 
 pub(crate) fn zone_rows(theme: &Theme, rows: Vec<(String, String)>) -> Div {
+    // 表格化（2026-11-06 对齐 YData 统计表显示方式）：外框 + 每行 = label 格
+    // （灰底定宽）+ value 格（flex），行间 border 分隔——不是纯文本键值行
     let colors = theme.colors;
-    let mut body = div().v_flex().w_full().gap_1();
+    let mut body = div()
+        .v_flex()
+        .w_full()
+        .rounded_sm()
+        .border_1()
+        .border_color(colors.border)
+        .overflow_hidden();
     for (key, value) in rows {
         body = body.child(
             div()
                 .h_flex()
                 .w_full()
-                .items_center()
-                .gap_2()
+                .items_stretch()
+                .border_b_1()
+                .border_color(colors.border)
                 .child(
                     div()
                         .flex_none()
                         .w(rems(ui::INSIGHT_WS_SOURCE_WIDTH))
+                        .px_1()
+                        .py_0p5()
+                        .bg(colors.sidebar)
                         .text_xs()
                         .text_color(colors.muted_foreground)
                         .child(key),
@@ -219,6 +231,8 @@ pub(crate) fn zone_rows(theme: &Theme, rows: Vec<(String, String)>) -> Div {
                     div()
                         .flex_1()
                         .min_w_0()
+                        .px_1()
+                        .py_0p5()
                         .text_xs()
                         .text_ellipsis()
                         .text_color(colors.foreground)

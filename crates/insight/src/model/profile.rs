@@ -65,6 +65,9 @@ pub struct TableColumnView {
     /// （`stats_detail` / `histogram`）互不覆盖：全量档读评估明细，取样档读本字段；
     /// 取样档未算 / 查询失败 / 列无有效样本为 `None`（不编假值）。
     pub mini_stats: Option<ColumnMiniStats>,
+    /// 极值样本（最小/最大各 5 + 计数，YData Extreme Values 对应物；评估回填；
+    /// 未评估 / 未跑为 `None`）。
+    pub extremes: Option<Vec<crate::model::types::ExtremeSample>>,
     /// 评估中断标记（C5）：评估全表被取消 / 中断时，未完成列置 `true`——
     /// 列卡灰态显示「未完成，可补算」，点补算单列续跑后清除。
     pub interrupted: bool,
@@ -179,6 +182,7 @@ impl TableProfileView {
                 null_count: None,
                 unique_count: None,
                 unique_rate: None,
+                extremes: None,
                 stats_detail: None,
                 histogram: None,
                 sample_values: Vec::new(),
@@ -229,6 +233,7 @@ impl TableProfileView {
         if let Some(row) = next.columns.iter_mut().find(|row| row.name == column) {
             row.stats_detail = Some(full.stats.stats_detail.clone());
             row.histogram = full.histogram.clone();
+            row.extremes = full.extremes.clone();
             row.sample_values = full
                 .sample
                 .iter()
@@ -419,6 +424,7 @@ mod tests {
                     },
                     sample: vec![],
                     histogram: None,
+                    extremes: None,
                 },
             );
             e
@@ -452,6 +458,7 @@ mod tests {
                     primary_key: false,
                     null_rate: None,
                     unique_rate: None,
+                    extremes: None,
                     null_count: None,
                     unique_count: None,
                     stats_detail: Some(crate::model::types::ColumnStatsDetail::Unknown),
@@ -469,6 +476,7 @@ mod tests {
                     primary_key: false,
                     null_rate: None,
                     unique_rate: None,
+                    extremes: None,
                     null_count: None,
                     unique_count: None,
                     stats_detail: None,
@@ -515,6 +523,7 @@ mod tests {
                 primary_key: false,
                 null_rate: None,
                 unique_rate: None,
+                extremes: None,
                 null_count: None,
                 unique_count: None,
                 stats_detail: None,
@@ -539,6 +548,7 @@ mod tests {
                 stats_detail: crate::model::types::ColumnStatsDetail::Unknown,
             },
             histogram: None,
+            extremes: None,
             sample: Vec::new(),
         };
         profile = profile.with_column_detail("c", &full);

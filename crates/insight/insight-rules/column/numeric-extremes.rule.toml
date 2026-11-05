@@ -1,0 +1,41 @@
+[meta]
+id = "numeric-extremes"
+name = "数值极值样本"
+description = "计算数值列最小 5 个 / 最大 5 个不同值及其出现次数（YData Extreme Values 对应物）"
+version = "1.0"
+category = "column"
+applies_to = ["Numeric"]
+builtin = true
+
+[query]
+template = """
+WITH lo AS (
+    SELECT "{col}"::VARCHAR AS v, COUNT(*) AS c
+    FROM "{table}" WHERE "{col}" IS NOT NULL
+    GROUP BY "{col}" ORDER BY "{col}" ASC LIMIT 5
+), hi AS (
+    SELECT "{col}"::VARCHAR AS v, COUNT(*) AS c
+    FROM "{table}" WHERE "{col}" IS NOT NULL
+    GROUP BY "{col}" ORDER BY "{col}" DESC LIMIT 5
+)
+SELECT 'min' AS side, v, c FROM lo
+UNION ALL
+SELECT 'max' AS side, v, c FROM hi
+"""
+parameters = ["table", "col"]
+result_type = "list"
+
+[[output]]
+sql_name = "side"
+json_name = "side"
+value_type = "String"
+
+[[output]]
+sql_name = "v"
+json_name = "value"
+value_type = "String"
+
+[[output]]
+sql_name = "c"
+json_name = "count"
+value_type = "i64"

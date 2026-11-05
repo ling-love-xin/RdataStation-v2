@@ -113,10 +113,18 @@ pub fn get_column_insight_full_on(
         _ => None,
     };
 
+    let extremes = match &stats.stats_detail {
+        ColumnStatsDetail::Numeric(_) => {
+            get_column_extremes_internal(registry, conn, temp_table, column_name).ok()
+        }
+        _ => None,
+    };
+
     Ok(ColumnInsightFull {
         stats,
         sample,
         histogram,
+        extremes,
     })
 }
 
@@ -164,10 +172,19 @@ pub fn get_column_insight_full_on_with_basics(
         _ => None,
     };
 
+    // 极值样本（数值列；失败为 None 不阻塞画像——与直方图同口径）
+    let extremes = match &stats.stats_detail {
+        ColumnStatsDetail::Numeric(_) => {
+            get_column_extremes_internal(registry, conn, temp_table, column_name).ok()
+        }
+        _ => None,
+    };
+
     Ok(ColumnInsightFull {
         stats,
         sample,
         histogram,
+        extremes,
     })
 }
 
@@ -1146,6 +1163,46 @@ use crate::model::{
     ColumnStatBrief, is_array_type, is_binary_type, is_datetime_type, is_numeric_type,
 };
 
+/// 数值列极值样本（YData Extreme Values 对应物）：最小 5 / 最大 5 个不同值
+/// 及出现次数（`numeric-extremes` 规则驱动，规则分层随项目传入）。
+/// 值经 SQL `::VARCHAR` 文本化——DECIMAL/大整数不经 f64，显示保真。
+///
+/// **内部接缝**：只吃显式连接（同 `get_column_stats_internal`）。
+pub fn get_column_extremes_internal(
+    registry: &RuleRegistry,
+    conn: &duckdb::Connection,
+    temp_table: &str,
+    column_name: &str,
+) -> Result<Vec<crate::model::types::ExtremeSample>, CoreError> {
+    let mut params = HashMap::new();
+    params.insert("table".to_string(), temp_table.to_string());
+    params.insert("col".to_string(), column_name.to_string());
+
+    let rule = registry.get("numeric-extremes").ok_or_else(|| {
+        CoreError::common(CommonError::General(
+            "Rule 'numeric-extremes' not found".to_string(),
+        ))
+    })?;
+
+    match RuleExecutor::execute(rule, conn, &params) {
+        Ok(serde_json::Value::Array(arr)) => {
+            let rows: Vec<crate::model::types::ExtremeSample> = arr
+                .iter()
+                .filter_map(|item| {
+                    let obj = item.as_object()?;
+                    Some(crate::model::types::ExtremeSample {
+                        side: obj.get("side")?.as_str()?.to_string(),
+                        value: obj.get("value")?.as_str()?.to_string(),
+                        count: obj.get("count")?.as_i64()?,
+                    })
+                })
+                .collect();
+            Ok(rows)
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
 /// 列样本值（条数取 [`DEFAULT_SAMPLE_SIZE`]）。
 ///
 /// **内部接缝**：只吃显式连接（同 [`get_column_stats_internal`]）。
@@ -1649,6 +1706,7 @@ mod tests {
                     ratio: 0.25,
                 },
             ]),
+            extremes: None,
         };
 
         let qs = quality_scorer::compute_column_quality(&stats);
@@ -1683,6 +1741,7 @@ mod tests {
             },
             sample: vec![],
             histogram: None,
+            extremes: None,
         };
 
         let qs = quality_scorer::compute_column_quality(&stats);
@@ -1732,6 +1791,7 @@ mod tests {
                     ratio: 0.5,
                 },
             ]),
+            extremes: None,
         };
 
         let stats_list = vec![

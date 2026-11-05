@@ -23,6 +23,18 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-11-06 — YData 详细布局收口（表格化统计行 / 警告块 / 极值双小表）
+
+展开体**显示方式**对齐 YData 的最后一批（数据面补齐 + 渲染质感）。**已验证**（lib 280 + e2e 14 + 契约 7 全绿；examples 编译过；lib 全量并行下评估用例仍偶发 D12 配额 flake——降线程必过，已知环境问题）：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 统计表表格化 | `zone_rows` 从纯文本键值行升级为**真表格**：外框 + label 格（灰底定宽）+ value 格 + 行间 border——YData 统计表的质感；分组渲染（zone_rows_grouped）自动继承 | `helpers.rs`（唯一消费方是 colcard Stats，视觉全局统一） |
+| 警告块 | 展开体顶部（规则开关下、tabs 上）**未命中告警框**：`⚠ n 项未命中` + 前 3 条 name:detail + 等价计数——YData Warnings 的展开体顶部呈现；不用切到检查器区就知道问题 | `colcard/mod.rs` |
+| 极值双小表 | 新内置规则 **`numeric-extremes`**（19 条）：最小 5 / 最大 5 个不同值 + 出现次数（UNION ALL 单条查询，值 `::VARCHAR` 文本化保真）；引擎两条链（自算/预计算）挂 `get_column_extremes_internal`；`ColumnInsightFull.extremes`（serde default 旧快照兼容）→ `TableColumnView.extremes`（with_column_detail 回填）→ Dist 区直方图下方**双小表**（并排，值+×计数） | 规则 TOML + `rule_types.rs`（COUNT 19）+ `insight_engine.rs` + `model/types.rs` + `model/profile.rs` + `colcard/numeric.rs` |
+
+**不追（终版口径）**：bin 调节 / log 轴（不做交互）；Memory size per column（列级行数不可得）；Sample 整行表（表级视图）。
+
 ### 2026-11-06 — 单列面板对齐 YData 三件（计数组 / 分位条 / Miss 前置）
 
 展开体面板继续对齐 YData（数据全部现成，纯渲染零新取数）。**已验证**（lib 280 + e2e 14 + 契约 7 全绿）：

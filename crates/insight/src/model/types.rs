@@ -17,6 +17,11 @@ pub struct ColumnInsightFull {
     #[specta(skip)]
     pub sample: Vec<serde_json::Value>,
     pub histogram: Option<Vec<DistributionBin>>,
+    /// 极值样本（最小/最大各 5，`numeric-extremes` 规则回填；旧快照/未跑为
+    /// `None`——serde default 兼容历史 JSON）
+    #[serde(default)]
+    #[specta(skip)]
+    pub extremes: Option<Vec<ExtremeSample>>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Type)]
@@ -70,6 +75,16 @@ pub struct NumericStats {
 pub struct ExtremeValue {
     pub value: f64,
     pub kind: String,
+}
+
+/// 极值**样本行**（YData Extreme Values 双小表数据源，2026-11-06）：
+/// side = "min" | "max"，value 为文本化数值（DECIMAL/日期保真，不经 f64），
+/// count = 该值出现次数。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Type)]
+pub struct ExtremeSample {
+    pub side: String,
+    pub value: String,
+    pub count: i64,
 }
 
 // ==================== 文本列统计 ====================
