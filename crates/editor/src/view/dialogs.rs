@@ -407,7 +407,7 @@ pub fn open_value_preview(
             "editor-value-preview-close",
             "关闭",
             ButtonVariant::Ghost,
-            { move |_window, _cx| {} },
+            move |_window, _cx| {},
         );
 
         dialog
@@ -967,7 +967,7 @@ pub fn open_bookmark_note_dialog(
             "editor-bookmark-note-cancel",
             "取消",
             ButtonVariant::Ghost,
-            { move |_window, _cx| {} },
+            move |_window, _cx| {},
         );
 
         dialog

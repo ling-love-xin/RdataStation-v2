@@ -56,9 +56,6 @@ fn lsp_status_chip_reflects_port_state() {
     assert!(text.contains("对端已关"), "文案：{text}");
 }
 
-/// 默认正文字号（`ui.rs` 倍率换算基准）。
-const BASE_FONT_SIZE: f32 = 16.0;
-
 /// 契约 1：结构尺寸倍率 × 16 必须等于设计值。
 #[test]
 fn ui_size_constants_match_design() {

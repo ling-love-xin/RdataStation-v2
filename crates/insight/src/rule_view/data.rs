@@ -356,7 +356,7 @@ pub fn build_rules_data(input: RuleDataInput) -> RulesData {
 #[cfg(test)]
 mod content_changed_tests {
     // 不用 `use super::*`：会把 gpui 的 `test` 属性宏带进作用域（skill 已知坑）
-    use super::{PendingRulesView, RuleDataInput, build_rules_data};
+    use super::{RuleDataInput, build_rules_data};
 
     /// #4a：`trust_content_changed` 输入要透传到 pending 视图——横幅据此刻意区分
     /// 「首次决定」与「内容已变化」（指纹不符，git pull / 手改都会触发）。
