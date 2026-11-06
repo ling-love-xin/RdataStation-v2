@@ -1,0 +1,2133 @@
+[
+  {
+    "command": "node.create",
+    "as": "root",
+    "params": {
+      "type": "frame",
+      "x": 0,
+      "y": 0,
+      "width": 1280,
+      "height": 800,
+      "name": "Mock 表配置",
+      "props": {
+        "layout": "vertical",
+        "gap": 0,
+        "crossGap": 0,
+        "fill": "#1E1E1E"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "header",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "root"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 1280,
+      "height": 100,
+      "name": "段1 基本信息",
+      "props": {
+        "layout": "vertical",
+        "gap": 8,
+        "crossGap": 8,
+        "padding": 8,
+        "fill": "#252526"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "header"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "表名 mock_data ｜ 行数 2000 ｜ 种子 42 ｜ 语言 zh_CN（输入框组，本稿以文本占位）",
+      "props": {
+        "fontSize": 12,
+        "fill": "#9A9A9A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "header"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "数据只写入项目分析库与文件，不回传源库（M7）",
+      "props": {
+        "fontSize": 12,
+        "fill": "#9A9A9A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "actions",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "header"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 1264,
+      "height": 32,
+      "name": "动作行",
+      "props": {
+        "layout": "horizontal",
+        "gap": 8,
+        "crossGap": 8,
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "gen",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "actions"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 64,
+      "height": 32,
+      "name": "生成",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          10,
+          0,
+          10
+        ],
+        "mainAlign": "center",
+        "crossAlign": "center",
+        "cornerRadius": 6,
+        "fill": "#4F8CFF"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "gen"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "生成",
+      "props": {
+        "fontSize": 12,
+        "fill": "#FFFFFF"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "persist",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "actions"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 152,
+      "height": 32,
+      "name": "持久化",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          10,
+          0,
+          10
+        ],
+        "mainAlign": "center",
+        "crossAlign": "center",
+        "cornerRadius": 6,
+        "fill": "#4F8CFF"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "persist"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "持久化到项目分析库",
+      "props": {
+        "fontSize": 12,
+        "fill": "#FFFFFF"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "append",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "actions"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 116,
+      "height": 32,
+      "name": "追加",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          10,
+          0,
+          10
+        ],
+        "mainAlign": "center",
+        "crossAlign": "center",
+        "cornerRadius": 6,
+        "fill": "#333333"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "append"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "追加到既有表 ▾",
+      "props": {
+        "fontSize": 12,
+        "fill": "#CCCCCC"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "scratch",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "actions"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 112,
+      "height": 32,
+      "name": "草稿箱",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          10,
+          0,
+          10
+        ],
+        "mainAlign": "center",
+        "crossAlign": "center",
+        "cornerRadius": 6,
+        "fill": "#333333"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "scratch"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "保存到草稿箱 ▾",
+      "props": {
+        "fontSize": 12,
+        "fill": "#CCCCCC"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "export",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "actions"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 88,
+      "height": 32,
+      "name": "另存为",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          10,
+          0,
+          10
+        ],
+        "mainAlign": "center",
+        "crossAlign": "center",
+        "cornerRadius": 6,
+        "fill": "#333333"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "export"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "另存为 ▾",
+      "props": {
+        "fontSize": 12,
+        "fill": "#CCCCCC"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "status",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "actions"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 688,
+      "height": 32,
+      "name": "状态格",
+      "props": {
+        "layout": "horizontal",
+        "gap": 8,
+        "crossGap": 8,
+        "crossAlign": "center",
+        "mainAlign": "max",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "bar",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "status"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 96,
+      "height": 4,
+      "name": "进度条",
+      "props": {
+        "cornerRadius": 2,
+        "sizingH": "fixed",
+        "fill": "#4F8CFF"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "status"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "3 / 5 批（≈1,200 / 2,000 行）· 还要 8s",
+      "props": {
+        "fontSize": 12,
+        "fill": "#9A9A9A",
+        "textAutoResize": "truncate",
+        "width": 300
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "cancel",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "status"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 48,
+      "height": 20,
+      "name": "取消",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          4,
+          0,
+          4
+        ],
+        "mainAlign": "center",
+        "crossAlign": "center",
+        "cornerRadius": 4,
+        "fill": "#3A3A3A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "cancel"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "取消",
+      "props": {
+        "fontSize": 12,
+        "fill": "#CCCCCC"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "cols",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "root"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 1280,
+      "height": 400,
+      "name": "段2 列管理区",
+      "props": {
+        "layout": "vertical",
+        "gap": 4,
+        "crossGap": 4,
+        "padding": 20,
+        "fill": "#1E1E1E"
+      }
+    }
+  },
+  {
+    "command": "node.set",
+    "params": {
+      "ids": [
+        {
+          "$ref": "cols"
+        }
+      ],
+      "sizingH": "fill",
+      "sizingV": "fill"
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "colops",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "cols"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 1256,
+      "height": 24,
+      "name": "列区操作行",
+      "props": {
+        "layout": "horizontal",
+        "gap": 8,
+        "crossGap": 8,
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "colops"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "3 列",
+      "props": {
+        "fontSize": 12,
+        "fill": "#8A8A8A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "scenario",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "colops"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 96,
+      "height": 24,
+      "name": "场景模板",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          8,
+          0,
+          8
+        ],
+        "mainAlign": "center",
+        "crossAlign": "center",
+        "cornerRadius": 4,
+        "fill": "#333333"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "preset",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "colops"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 72,
+      "height": 24,
+      "name": "预设",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          8,
+          0,
+          8
+        ],
+        "mainAlign": "center",
+        "crossAlign": "center",
+        "cornerRadius": 4,
+        "fill": "#333333"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "import",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "colops"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 88,
+      "height": 24,
+      "name": "导入结构",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          8,
+          0,
+          8
+        ],
+        "mainAlign": "center",
+        "crossAlign": "center",
+        "cornerRadius": 4,
+        "fill": "#333333"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "spacer",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "colops"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 24,
+      "name": "弹性空档",
+      "props": {
+        "layout": "horizontal",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "filter",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "colops"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 144,
+      "height": 24,
+      "name": "筛选",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          8,
+          0,
+          8
+        ],
+        "crossAlign": "center",
+        "cornerRadius": 4,
+        "fill": "#151515"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "addcol",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "colops"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 80,
+      "height": 24,
+      "name": "加列",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          8,
+          0,
+          8
+        ],
+        "mainAlign": "center",
+        "crossAlign": "center",
+        "cornerRadius": 4,
+        "fill": "#4F8CFF"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "addcol"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "＋ 加列",
+      "props": {
+        "fontSize": 12,
+        "fill": "#FFFFFF"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "row1",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "cols"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 1256,
+      "height": 34,
+      "name": "列行 user_id",
+      "props": {
+        "layout": "horizontal",
+        "gap": 8,
+        "crossGap": 8,
+        "padding": [
+          4,
+          12,
+          4,
+          12
+        ],
+        "crossAlign": "center",
+        "cornerRadius": 6,
+        "sizingH": "fill",
+        "fill": "#2A2A2A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "name1",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "row1"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 176,
+      "height": 20,
+      "name": "列名格1",
+      "props": {
+        "layout": "horizontal",
+        "crossAlign": "center",
+        "sizingH": "fixed",
+        "fill": "#151515",
+        "padding": [
+          0,
+          4,
+          0,
+          4
+        ],
+        "cornerRadius": 3
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "name1"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "user_id",
+      "props": {
+        "fontSize": 14,
+        "fill": "#E0E0E0",
+        "textAutoResize": "truncate",
+        "width": 160
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "type1",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "row1"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 52,
+      "height": 18,
+      "name": "类型标签1",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          4,
+          0,
+          4
+        ],
+        "mainAlign": "center",
+        "crossAlign": "center",
+        "cornerRadius": 3,
+        "fill": "#3A4A5A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "type1"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "BIGINT",
+      "props": {
+        "fontSize": 12,
+        "fill": "#9CC4FF"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "gen1",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "row1"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 144,
+      "height": 20,
+      "name": "生成器格1",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          4,
+          0,
+          4
+        ],
+        "crossAlign": "center",
+        "cornerRadius": 4,
+        "sizingH": "fixed",
+        "fill": "#333333"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "gen1"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "自增 ▾",
+      "props": {
+        "fontSize": 12,
+        "fill": "#CCCCCC",
+        "textAutoResize": "truncate",
+        "width": 120
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "param1",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "row1"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 20,
+      "name": "参数格1",
+      "props": {
+        "layout": "horizontal",
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "param1"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "start=1  step=1",
+      "props": {
+        "fontSize": 12,
+        "fill": "#8A8A8A",
+        "textAutoResize": "truncate",
+        "width": 600
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "ops1",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "row1"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 92,
+      "height": 20,
+      "name": "操作格1",
+      "props": {
+        "layout": "horizontal",
+        "gap": 4,
+        "crossGap": 4,
+        "crossAlign": "center",
+        "sizingH": "fixed",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "ops1"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 20,
+      "height": 20,
+      "name": "上移",
+      "props": {
+        "cornerRadius": 3,
+        "fill": "#3A3A3A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "ops1"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 20,
+      "height": 20,
+      "name": "下移",
+      "props": {
+        "cornerRadius": 3,
+        "fill": "#3A3A3A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "ops1"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 20,
+      "height": 20,
+      "name": "复制",
+      "props": {
+        "cornerRadius": 3,
+        "fill": "#3A3A3A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "ops1"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 20,
+      "height": 20,
+      "name": "删除",
+      "props": {
+        "cornerRadius": 3,
+        "fill": "#8A3A3A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "row2",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "cols"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 1256,
+      "height": 34,
+      "name": "列行 phone",
+      "props": {
+        "layout": "horizontal",
+        "gap": 8,
+        "crossGap": 8,
+        "padding": [
+          4,
+          12,
+          4,
+          12
+        ],
+        "crossAlign": "center",
+        "cornerRadius": 6,
+        "sizingH": "fill",
+        "fill": "#2A2A2A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "name2",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "row2"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 176,
+      "height": 20,
+      "name": "列名格2",
+      "props": {
+        "layout": "horizontal",
+        "crossAlign": "center",
+        "sizingH": "fixed",
+        "fill": "#151515",
+        "padding": [
+          0,
+          4,
+          0,
+          4
+        ],
+        "cornerRadius": 3
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "name2"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "phone",
+      "props": {
+        "fontSize": 14,
+        "fill": "#E0E0E0",
+        "textAutoResize": "truncate",
+        "width": 160
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "type2",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "row2"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 60,
+      "height": 18,
+      "name": "类型标签2",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          4,
+          0,
+          4
+        ],
+        "mainAlign": "center",
+        "crossAlign": "center",
+        "cornerRadius": 3,
+        "fill": "#3A4A5A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "type2"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "VARCHAR",
+      "props": {
+        "fontSize": 12,
+        "fill": "#9CC4FF"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "gen2",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "row2"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 144,
+      "height": 20,
+      "name": "生成器格2",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          4,
+          0,
+          4
+        ],
+        "crossAlign": "center",
+        "cornerRadius": 4,
+        "sizingH": "fixed",
+        "fill": "#333333"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "gen2"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "手机号（自定义） ▾",
+      "props": {
+        "fontSize": 12,
+        "fill": "#CCCCCC",
+        "textAutoResize": "truncate",
+        "width": 120
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "param2",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "row2"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 20,
+      "name": "参数格2",
+      "props": {
+        "layout": "horizontal",
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "param2"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "空值 5% · 前缀 138",
+      "props": {
+        "fontSize": 12,
+        "fill": "#8A8A8A",
+        "textAutoResize": "truncate",
+        "width": 600
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "ops2",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "row2"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 92,
+      "height": 20,
+      "name": "操作格2",
+      "props": {
+        "layout": "horizontal",
+        "gap": 4,
+        "crossGap": 4,
+        "crossAlign": "center",
+        "sizingH": "fixed",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "ops2"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 20,
+      "height": 20,
+      "name": "上移",
+      "props": {
+        "cornerRadius": 3,
+        "fill": "#3A3A3A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "ops2"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 20,
+      "height": 20,
+      "name": "下移",
+      "props": {
+        "cornerRadius": 3,
+        "fill": "#3A3A3A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "ops2"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 20,
+      "height": 20,
+      "name": "复制",
+      "props": {
+        "cornerRadius": 3,
+        "fill": "#3A3A3A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "ops2"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 20,
+      "height": 20,
+      "name": "删除",
+      "props": {
+        "cornerRadius": 3,
+        "fill": "#8A3A3A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "row3",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "cols"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 1256,
+      "height": 34,
+      "name": "列行 email",
+      "props": {
+        "layout": "horizontal",
+        "gap": 8,
+        "crossGap": 8,
+        "padding": [
+          4,
+          12,
+          4,
+          12
+        ],
+        "crossAlign": "center",
+        "cornerRadius": 6,
+        "sizingH": "fill",
+        "fill": "#2A2A2A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "name3",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "row3"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 176,
+      "height": 20,
+      "name": "列名格3",
+      "props": {
+        "layout": "horizontal",
+        "crossAlign": "center",
+        "sizingH": "fixed",
+        "fill": "#151515",
+        "padding": [
+          0,
+          4,
+          0,
+          4
+        ],
+        "cornerRadius": 3
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "name3"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "email",
+      "props": {
+        "fontSize": 14,
+        "fill": "#E0E0E0",
+        "textAutoResize": "truncate",
+        "width": 160
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "type3",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "row3"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 60,
+      "height": 18,
+      "name": "类型标签3",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          4,
+          0,
+          4
+        ],
+        "mainAlign": "center",
+        "crossAlign": "center",
+        "cornerRadius": 3,
+        "fill": "#3A4A5A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "type3"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "VARCHAR",
+      "props": {
+        "fontSize": 12,
+        "fill": "#9CC4FF"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "gen3",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "row3"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 144,
+      "height": 20,
+      "name": "生成器格3",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          4,
+          0,
+          4
+        ],
+        "crossAlign": "center",
+        "cornerRadius": 4,
+        "sizingH": "fixed",
+        "fill": "#333333"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "gen3"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "邮箱 ▾",
+      "props": {
+        "fontSize": 12,
+        "fill": "#CCCCCC",
+        "textAutoResize": "truncate",
+        "width": 120
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "param3",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "row3"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 20,
+      "name": "参数格3",
+      "props": {
+        "layout": "horizontal",
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "param3"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "空值 0% · 域名 example.com",
+      "props": {
+        "fontSize": 12,
+        "fill": "#8A8A8A",
+        "textAutoResize": "truncate",
+        "width": 600
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "ops3",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "row3"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 92,
+      "height": 20,
+      "name": "操作格3",
+      "props": {
+        "layout": "horizontal",
+        "gap": 4,
+        "crossGap": 4,
+        "crossAlign": "center",
+        "sizingH": "fixed",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "ops3"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 20,
+      "height": 20,
+      "name": "上移",
+      "props": {
+        "cornerRadius": 3,
+        "fill": "#3A3A3A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "ops3"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 20,
+      "height": 20,
+      "name": "下移",
+      "props": {
+        "cornerRadius": 3,
+        "fill": "#3A3A3A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "ops3"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 20,
+      "height": 20,
+      "name": "复制",
+      "props": {
+        "cornerRadius": 3,
+        "fill": "#3A3A3A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "ops3"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 20,
+      "height": 20,
+      "name": "删除",
+      "props": {
+        "cornerRadius": 3,
+        "fill": "#8A3A3A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "preview",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "root"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 1280,
+      "height": 300,
+      "name": "段3 预览",
+      "props": {
+        "layout": "vertical",
+        "gap": 8,
+        "crossGap": 8,
+        "padding": 8,
+        "sizingH": "fill",
+        "sizingV": "fixed",
+        "fill": "#1E1E1E"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "pvtitle",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "preview"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 1256,
+      "height": 24,
+      "name": "预览标题行",
+      "props": {
+        "layout": "horizontal",
+        "crossAlign": "center",
+        "mainAlign": "spaceBetween",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "pvtitle"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "预览（前 200 行 · 共 2,000 行）",
+      "props": {
+        "fontSize": 12,
+        "fill": "#8A8A8A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "pvlimit",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "pvtitle"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 72,
+      "height": 24,
+      "name": "行数选择",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          8,
+          0,
+          8
+        ],
+        "mainAlign": "center",
+        "crossAlign": "center",
+        "cornerRadius": 4,
+        "fill": "#333333"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "pvlimit"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "200 ▾",
+      "props": {
+        "fontSize": 12,
+        "fill": "#CCCCCC"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "thead",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "preview"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 1256,
+      "height": 26,
+      "name": "表头行",
+      "props": {
+        "layout": "horizontal",
+        "gap": 0,
+        "crossGap": 0,
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "#2A2A2A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "th1",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "thead"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 418,
+      "height": 26,
+      "name": "表头1",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          8,
+          0,
+          8
+        ],
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "th1"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "user_id",
+      "props": {
+        "fontSize": 12,
+        "fill": "#CCCCCC"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "th2",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "thead"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 418,
+      "height": 26,
+      "name": "表头2",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          8,
+          0,
+          8
+        ],
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "th2"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "phone",
+      "props": {
+        "fontSize": 12,
+        "fill": "#CCCCCC"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "th3",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "thead"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 418,
+      "height": 26,
+      "name": "表头3",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          8,
+          0,
+          8
+        ],
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "th3"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "email",
+      "props": {
+        "fontSize": 12,
+        "fill": "#CCCCCC"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "tr1",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "preview"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 1256,
+      "height": 26,
+      "name": "数据行1",
+      "props": {
+        "layout": "horizontal",
+        "gap": 0,
+        "crossGap": 0,
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "#262626"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "c1",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "tr1"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 418,
+      "height": 26,
+      "name": "数据格1",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          8,
+          0,
+          8
+        ],
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "c1"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "1",
+      "props": {
+        "fontSize": 12,
+        "fill": "#9A9A9A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "c2",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "tr1"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 418,
+      "height": 26,
+      "name": "数据格2",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          8,
+          0,
+          8
+        ],
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "c2"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "13800000001",
+      "props": {
+        "fontSize": 12,
+        "fill": "#9A9A9A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "c3",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "tr1"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 418,
+      "height": 26,
+      "name": "数据格3",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          8,
+          0,
+          8
+        ],
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "c3"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "a@example.com",
+      "props": {
+        "fontSize": 12,
+        "fill": "#9A9A9A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "tr2",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "preview"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 1256,
+      "height": 26,
+      "name": "数据行2",
+      "props": {
+        "layout": "horizontal",
+        "gap": 0,
+        "crossGap": 0,
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "#262626"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "c4",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "tr2"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 418,
+      "height": 26,
+      "name": "数据格4",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          8,
+          0,
+          8
+        ],
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "c4"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "2",
+      "props": {
+        "fontSize": 12,
+        "fill": "#9A9A9A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "c5",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "tr2"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 418,
+      "height": 26,
+      "name": "数据格5",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          8,
+          0,
+          8
+        ],
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "c5"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "13800000002",
+      "props": {
+        "fontSize": 12,
+        "fill": "#9A9A9A"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "as": "c6",
+    "params": {
+      "type": "frame",
+      "parent": {
+        "$ref": "tr2"
+      },
+      "x": 0,
+      "y": 0,
+      "width": 418,
+      "height": 26,
+      "name": "数据格6",
+      "props": {
+        "layout": "horizontal",
+        "padding": [
+          0,
+          8,
+          0,
+          8
+        ],
+        "crossAlign": "center",
+        "sizingH": "fill",
+        "fill": "none"
+      }
+    }
+  },
+  {
+    "command": "node.create",
+    "params": {
+      "type": "text",
+      "parent": {
+        "$ref": "c6"
+      },
+      "x": 0,
+      "y": 0,
+      "text": "b@example.com",
+      "props": {
+        "fontSize": 12,
+        "fill": "#9A9A9A"
+      }
+    }
+  }
+]
