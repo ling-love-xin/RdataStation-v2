@@ -714,8 +714,16 @@ Uninstalled ──install──▶ Installed ──load──▶ Loaded ──ac
 2. **依赖检查**：被引用 → 拒绝（`UninstallFailed` 带引用者列表）；
 3. **DB 记录清理**：`GlobalDatabaseManager::delete_plugin`（engine::migration 全局访问器）。
 
-> 未接（诚实列出）：`install_package` 尚无调用方（安装 UI 是 P4）；依赖检查在 DB 未初始化时
-> 保守放行（卸载只删目录）；`enable/disable` 的 UI 开关是 P4。
+> **安装入口已接上（2026-10-16）**：`plugin::installer::install_from_path` 成为宿主唯一入口
+> （安装目录 `plugins/` 与 global.db 句柄在插件侧解析）；面板工具栏「安装插件」（`.zip` /
+> `.tar.gz`）与「从目录」（含 `plugin.toml` 的目录）两个入口，解包/复制在后台线程执行，
+> 期间禁用按钮并显示「正在安装 …」，完成后刷新清单并写回执。`prepare_install` 先做来源
+> 检查：路径存在、格式可识别、**拒绝 `plugins/<id>` 自身作源**（`copy_plugin` 会先删目标，
+> 源=目标等于先把源删掉）。同时修掉 `detect_format` 的提前返回缺陷：无扩展名的目录此前
+> 永远识别不成 `Directory`（`path.extension()?` 在 `is_dir()` 判断之前返回 `None`）。
+>
+> 仍未接（诚实列出）：依赖检查在 DB 未初始化时保守放行（卸载只删目录）；`enable/disable`
+> 的 UI 开关是 P4（当前面板已有启停按钮，P4 做的是插件贡献的注册表）。
 
 ### 4.9 面板 / 命令 / 设置（宿主注册表）
 

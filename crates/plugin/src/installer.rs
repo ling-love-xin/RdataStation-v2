@@ -37,7 +37,14 @@ impl PluginInstaller {
     }
 
     /// 从文件路径检测插件包格式
+    ///
+    /// 目录优先判定：目录名常常不带扩展名（`plugins/my-plugin`），而
+    /// `path.extension()?` 会在没有扩展名时提前返回 `None`，导致目录形态永远
+    /// 走不到 `Directory` 分支。
     pub fn detect_format(path: &Path) -> Option<PluginPackageFormat> {
+        if path.is_dir() {
+            return Some(PluginPackageFormat::Directory);
+        }
         let ext = path.extension()?.to_str()?.to_lowercase();
         match ext.as_str() {
             "zip" => Some(PluginPackageFormat::Zip),
@@ -50,13 +57,7 @@ impl PluginInstaller {
                 }
                 None
             }
-            _ => {
-                if path.is_dir() {
-                    Some(PluginPackageFormat::Directory)
-                } else {
-                    None
-                }
-            }
+            _ => None,
         }
     }
 
@@ -105,8 +106,17 @@ impl PluginInstaller {
         }
 
         // 7. 加载插件（安装态；wasm / sidecar 运行时在激活时按需加载）
+        //
+        // 加载失败不撤销安装（目录与登记都已落盘），但必须留日志：此前是 `let _ =`
+        // 静默吞掉，用户只会看到「清单里没有这个插件」却没有任何原因。
         if let Some(manager) = get_plugin_manager() {
-            let _ = manager.load_plugin_from_dir(&final_install_path).await;
+            if let Err(e) = manager.load_plugin_from_dir(&final_install_path).await {
+                tracing::warn!(
+                    plugin = %manifest.plugin.id,
+                    error = %e,
+                    "插件安装完成但加载失败（目录与登记保留）"
+                );
+            }
         }
 
         Ok(plugin)
@@ -342,6 +352,61 @@ impl PluginInstaller {
     }
 }
 
+/// 宿主「安装 / 导入插件包」的唯一入口。
+///
+/// `install_package` 要求调用方自己给安装目录与 `'static` 的全局库句柄——那是插件侧的
+/// 存储约定，宿主不该复制一份（尤其是 `plugins_dir()` 这种目录布局规则）。这里把
+/// 「来源检查 + 目录 + 库 + 安装器」一次收拢，宿主只交一个用户选中的路径。
+pub async fn install_from_path(package_path: &Path) -> Result<Plugin, CoreError> {
+    let install_root = paths::plugins_dir();
+    prepare_install(package_path, &install_root)?;
+
+    let db_manager = engine::migration::get_global_db_manager().ok_or_else(|| {
+        CoreError::common(CommonError::general(
+            "全局数据库未初始化，无法安装插件（宿主启动流程未完成）".to_string(),
+        ))
+    })?;
+
+    PluginInstaller::new(install_root)
+        .install_package(package_path, db_manager)
+        .await
+}
+
+/// 安装前的来源检查：路径存在、格式可识别、且不是某个插件的安装目录。
+///
+/// 最后一条是安全底线——`copy_plugin` 在目标已存在时会先 `remove_dir_all`，若用户
+/// 选中的正是 `plugins/<id>` 本身，会先把源目录删掉再复制，装完后目录为空。
+/// 无副作用、不碰全局状态，便于单测。
+pub fn prepare_install(
+    package_path: &Path,
+    install_root: &Path,
+) -> Result<PluginPackageFormat, CoreError> {
+    if !package_path.exists() {
+        return Err(CoreError::common(CommonError::general(format!(
+            "插件包路径不存在: {}",
+            package_path.display()
+        ))));
+    }
+
+    let format = PluginInstaller::detect_format(package_path).ok_or_else(|| {
+        CoreError::common(CommonError::general(format!(
+            "不支持的插件包格式（支持 .zip / .tar.gz，或含 plugin.toml 的插件目录）: {}",
+            package_path.display()
+        )))
+    })?;
+
+    if let (Ok(source), Ok(root)) = (package_path.canonicalize(), install_root.canonicalize()) {
+        if source.starts_with(&root) {
+            return Err(CoreError::common(CommonError::general(format!(
+                "选中的路径已是插件安装目录，不能作为导入源: {}",
+                package_path.display()
+            ))));
+        }
+    }
+
+    Ok(format)
+}
+
 /// 声明的入口落在开发残留目录里就拒绝安装（否则复制时会被跳过，装出一个坏包）。
 ///
 /// 复用 `checksums::required_entries`：覆盖率口径与"安装时真正需要的文件"是同一条，
@@ -512,5 +577,42 @@ executable = "target/agent"
         assert!(!install.join(".git").exists());
         assert!(!install.join("node_modules").exists());
         assert!(!install.join(".DS_Store").exists());
+    }
+
+    /// 目录形态的插件包（开发目录 / 解压后的包）应被接受。
+    #[test]
+    fn prepare_install_accepts_a_plugin_directory() {
+        let dir = TempDir::new("prepare-dir");
+        let package = dir.path().join("package");
+        write(&package, "plugin.toml", MANIFEST);
+
+        let format = prepare_install(&package, &dir.path().join("plugins")).unwrap();
+        assert_eq!(format, PluginPackageFormat::Directory);
+    }
+
+    /// 不认识的扩展名要在安装前就报可读原因，而不是解包到一半才失败。
+    #[test]
+    fn prepare_install_rejects_unknown_format() {
+        let dir = TempDir::new("prepare-unknown");
+        let file = dir.path().join("package.txt");
+        write(dir.path(), "package.txt", "not a plugin");
+
+        let err = prepare_install(&file, &dir.path().join("plugins")).unwrap_err();
+        let text = format!("{err}");
+        assert!(text.contains("不支持的插件包格式"), "{text}");
+    }
+
+    /// 选中的正是 `plugins/<id>` 时必须拒绝：`copy_plugin` 会先删目标目录，
+    /// 目标与源同路径等于先把源删掉。
+    #[test]
+    fn prepare_install_rejects_an_install_dir_as_source() {
+        let dir = TempDir::new("prepare-inside");
+        let root = dir.path().join("plugins");
+        let installed = root.join("com.example.installer");
+        write(&installed, "plugin.toml", MANIFEST);
+
+        let err = prepare_install(&installed, &root).unwrap_err();
+        let text = format!("{err}");
+        assert!(text.contains("安装目录"), "{text}");
     }
 }

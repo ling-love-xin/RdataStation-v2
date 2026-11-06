@@ -8,6 +8,7 @@
 //! - `closable = false`：模块 tab 是布局的一部分，不给 ✕ 关闭（避免重建逻辑）。
 
 use gpui_kit::EventEmitter;
+use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
@@ -20,6 +21,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::view::LeftPanel;
@@ -555,6 +557,8 @@ pub struct PluginPanel {
     error: Rc<RefCell<Option<String>>>,
     /// 最近一次操作的成功回执（与 `error` 互斥，刷新时不清）
     notice: Rc<RefCell<Option<String>>>,
+    /// 安装进行中的提示（`Some` 即忙：按钮置灰、防重复触发；完成后清空）
+    progress: Rc<RefCell<Option<String>>>,
     /// 插件列表状态（懒创建）
     plugins_list: Rc<RefCell<Option<Entity<ListState<PluginListDelegate>>>>>,
 }
@@ -568,6 +572,7 @@ impl PluginPanel {
             loading: Rc::new(Cell::new(false)),
             error: Rc::new(RefCell::new(None)),
             notice: Rc::new(RefCell::new(None)),
+            progress: Rc::new(RefCell::new(None)),
             plugins_list: Rc::new(RefCell::new(None)),
         };
         this.refresh_plugins(cx, true);
@@ -684,6 +689,81 @@ impl PluginPanel {
             });
         });
     }
+
+    /// 选一个插件包文件（`.zip` / `.tar.gz`）安装。
+    fn pick_package_file(&self, cx: &mut Context<Self>) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("选择插件包")
+            .add_filter("插件包", &["zip", "gz"])
+            .pick_file()
+        else {
+            return;
+        };
+        self.install_package(path, cx);
+    }
+
+    /// 选一个插件目录（含 `plugin.toml`）导入（开发目录 / 解压后的包）。
+    fn pick_package_dir(&self, cx: &mut Context<Self>) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("选择插件目录（含 plugin.toml）")
+            .pick_folder()
+        else {
+            return;
+        };
+        self.install_package(path, cx);
+    }
+
+    /// 安装 / 导入插件包。解包、校验、复制都是磁盘操作（大包可达数十 MB）：
+    /// 放后台线程跑，UI 只显示「正在安装 …」，完成后再回主线程写回执并刷新清单。
+    ///
+    /// 安装目录与 global.db 由 `plugin::installer::install_from_path` 内部解析
+    /// （宿主不复制 `plugins_dir()` 这类目录约定）；来源检查也在那里做——
+    /// 选中 `plugins/<id>` 自身会被拒（否则等于先删源目录再复制）。
+    fn install_package(&self, package_path: PathBuf, cx: &mut Context<Self>) {
+        if self.progress.borrow().is_some() {
+            return;
+        }
+        let Some(handle) = plugin::runtime_handle().cloned() else {
+            self.error.replace(Some("插件运行时未初始化".to_string()));
+            cx.notify();
+            return;
+        };
+
+        let label = package_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("插件包")
+            .to_string();
+        self.progress.replace(Some(format!("正在安装 {label}…")));
+        self.error.replace(None);
+        self.notice.replace(None);
+        cx.notify();
+
+        let weak = cx.entity().downgrade();
+        let work = cx.background_executor().spawn(async move {
+            handle.block_on(async { plugin::installer::install_from_path(&package_path).await })
+        });
+        let _ = cx.spawn(async move |_this, cx| {
+            let outcome = work.await;
+            let _ = weak.update(cx, |this, cx| {
+                this.progress.replace(None);
+                match outcome {
+                    Ok(plugin) => {
+                        this.error.replace(None);
+                        this.notice.replace(Some(format!(
+                            "已安装 {} v{}（{}）",
+                            plugin.name, plugin.version, plugin.code
+                        )));
+                    }
+                    Err(e) => {
+                        this.error.replace(Some(format!("{e}")));
+                        this.notice.replace(None);
+                    }
+                };
+                this.refresh_plugins(cx, false);
+            });
+        });
+    }
 }
 
 impl EventEmitter<BasePanelEvent> for PluginPanel {}
@@ -726,8 +806,34 @@ impl Render for PluginPanel {
                 let _ = entity.update(cx, |this, cx| this.refresh_plugins(cx, true));
             });
 
+        // 安装中置灰：解包 + 校验 + 复制在后台跑，期间不接受第二个包（否则并发写
+        // 同一个 `plugins/<id>`）。文案收窄成「安装插件 / 从目录」——240px 面板里
+        // 标题 + 两个动作 + 刷新刚好一行。
+        let busy = self.progress.borrow().is_some();
+        let install_file_entity = cx.entity();
+        let install_file_btn = Button::new("plugin-install-package")
+            .ghost()
+            .label("安装插件")
+            .with_size(Size::XSmall)
+            .disabled(busy)
+            .tooltip("从 .zip / .tar.gz 插件包安装")
+            .on_click(move |_, _window, cx| {
+                let _ = install_file_entity.update(cx, |this, cx| this.pick_package_file(cx));
+            });
+        let install_dir_entity = cx.entity();
+        let install_dir_btn = Button::new("plugin-install-directory")
+            .ghost()
+            .label("从目录")
+            .with_size(Size::XSmall)
+            .disabled(busy)
+            .tooltip("从本地插件目录（含 plugin.toml）导入")
+            .on_click(move |_, _window, cx| {
+                let _ = install_dir_entity.update(cx, |this, cx| this.pick_package_dir(cx));
+            });
+
         let error_text = self.error.borrow().clone();
         let notice_text = self.notice.borrow().clone();
+        let progress_text = self.progress.borrow().clone();
 
         // 懒创建 ListState（只建一次——重建会丢掉列表的选中行状态）
         if self.plugins_list.borrow().is_none() {
@@ -772,6 +878,8 @@ impl Render for PluginPanel {
                             .text_color(fg)
                             .child("插件"),
                     )
+                    .child(install_file_btn)
+                    .child(install_dir_btn)
                     .child(refresh_btn),
             )
             .children(error_text.map(|err| {
@@ -789,6 +897,15 @@ impl Render for PluginPanel {
                     .text_xs()
                     .text_color(cx.theme().colors.success)
                     .child(notice)
+            }))
+            .children(progress_text.map(|progress| {
+                // 安装中是过程态，不是结果回执：用 info 色，完成/失败时被 notice / error 取代
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(cx.theme().colors.info)
+                    .child(progress)
             }))
             .child(
                 div()
