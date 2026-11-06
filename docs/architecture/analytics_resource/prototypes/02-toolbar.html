@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>02 工具栏 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>02 · 工具栏</div>
+  <div class="prow">
+    <h1 class="p-title">工具栏<span class="p-sec">§2.2</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    行高 <code>32px</code>（2rem），搜索框 <code>26px</code> 占满剩余宽。搜索匹配<b>显示名 / 别名 / 标签 / 来源表</b>（按钮上只用两字短名，全名留在菜单里——240px 要跟搜索框抢宽度）。
+    筛选三维：kind（文件 / 分析表 / 引用）、强度、标签（多选、并集、带用量）+ 实例（§13）；排序五键：名称 / 归档时间 / 更新时间 / 大小 / 版本号，箭头上再点翻转。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="01-panel-head.html">← 上一块：面板头</a><a href="03-list-rows.html">下一块：列表行 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>常态<span class="desc">搜索框空、两个按钮未激活</span></div>
+    <div class="canvas pad">
+      <aside class="dockflat" style="height:96px">
+        <div class="toolbar">
+          <div class="sbox">
+            <svg class="ico-sm mag"><use href="#i-search" xlink:href="#i-search"/></svg>
+            <input placeholder="搜索存档（显示名 / 别名 / 标签 / 来源表）">
+          </div>
+          <button class="tbtn" title="筛选：kind / 强度 / 标签">筛选 ▾</button>
+          <button class="tbtn" title="排序：名称 / 归档时间 / 更新时间 / 大小 / 版本号">排序 ▾</button>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>筛选弹层<span class="desc">四节：kind / 强度 / 标签 / 实例；顶部一行「清除筛选」</span></div>
+    <div class="canvas pad">
+      <aside class="dockflat" style="height:392px">
+        <div class="toolbar">
+          <div class="sbox">
+            <svg class="ico-sm mag"><use href="#i-search" xlink:href="#i-search"/></svg>
+            <input placeholder="搜索存档（显示名 / 别名 / 标签 / 来源表）">
+          </div>
+          <button class="tbtn on" title="筛选：kind / 强度 / 标签">筛选 ▾</button>
+          <button class="tbtn" title="排序：名称 / 归档时间 / 更新时间 / 大小 / 版本号">排序 ▾</button>
+
+          <div class="pop pop-filter open">
+            <div class="pop-clear">清除筛选</div>
+            <div class="psec">
+              <div class="ph">kind</div>
+              <div class="pitem on"><span class="tk">&#10003;</span>文件<span class="n">5</span></div>
+              <div class="pitem on"><span class="tk">&#10003;</span>分析表<span class="n">2</span></div>
+              <div class="pitem"><span class="tk">&#10003;</span>引用<span class="n">1</span></div>
+            </div>
+            <div class="psec">
+              <div class="ph">强度</div>
+              <div class="pitem on"><span class="tk">&#10003;</span>已归档<span class="n">5</span></div>
+              <div class="pitem on"><span class="tk">&#10003;</span>分析表<span class="n">2</span></div>
+              <div class="pitem on"><span class="tk">&#10003;</span>引用<span class="n">1</span></div>
+              <div class="pitem"><span class="tk">&#10003;</span>仅显示可能失效</div>
+            </div>
+            <div class="psec">
+              <div class="ph">标签</div>
+              <div class="pitem on"><span class="tk">&#10003;</span>月报</div>
+              <div class="pitem"><span class="tk">&#10003;</span>订单</div>
+              <div class="pitem"><span class="tk">&#10003;</span>临时</div>
+              <div class="pitem"><span class="tk">&#10003;</span>外部</div>
+            </div>
+            <div class="psec">
+              <div class="ph">实例（§13）</div>
+              <div class="pitem on"><span class="tk">&#10003;</span>项目<span class="n">7</span></div>
+              <div class="pitem on"><span class="tk">&#10003;</span>全局<span class="n">1</span></div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>排序弹层<span class="desc">单选；当前项带箭头，末行说明「箭头上再点一次翻转」</span></div>
+    <div class="canvas pad">
+      <aside class="dockflat" style="height:236px">
+        <div class="toolbar">
+          <div class="sbox">
+            <svg class="ico-sm mag"><use href="#i-search" xlink:href="#i-search"/></svg>
+            <input placeholder="搜索存档（显示名 / 别名 / 标签 / 来源表）">
+          </div>
+          <button class="tbtn" title="筛选：kind / 强度 / 标签">筛选 ▾</button>
+          <button class="tbtn on" title="排序：名称 / 归档时间 / 更新时间 / 大小 / 版本号">排序 ▾</button>
+
+          <div class="pop pop-sort open">
+            <div class="ph">排序</div>
+            <div class="pitem on"><span class="tk">&#10003;</span>名称<span class="ar">↑</span></div>
+            <div class="pitem"><span class="tk">&#10003;</span>归档时间</div>
+            <div class="pitem"><span class="tk">&#10003;</span>更新时间</div>
+            <div class="pitem"><span class="tk">&#10003;</span>大小</div>
+            <div class="pitem"><span class="tk">&#10003;</span>版本号</div>
+            <div class="pop-clear" style="border-bottom:none;border-top:1px solid var(--sidebar-border)">箭头上再点一次翻转</div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">D</span>筛选已生效<span class="desc">按钮置 on、搜索框有词、下方结果行数变少（配合 03 / 04 看</span></div>
+    <div class="canvas pad">
+      <aside class="dockflat" style="height:170px">
+        <div class="toolbar">
+          <div class="sbox">
+            <svg class="ico-sm mag"><use href="#i-search" xlink:href="#i-search"/></svg>
+            <input value="渠道">
+          </div>
+          <button class="tbtn on" title="筛选：kind / 强度 / 标签">筛选 ▾</button>
+          <button class="tbtn" title="排序：名称 / 归档时间 / 更新时间 / 大小 / 版本号">排序 ▾</button>
+        </div>
+        <div style="padding:4px 0 8px;overflow:hidden">
+          <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">渠道对比.py</span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">4.6 KB · 5 天前</span></div>
+        </div>
+        <div class="pstatus proto-on" style="margin-top:auto"><span>1 项</span><span class="sep">·</span><span>已归档 1</span><span class="sep">·</span><span>分析表 0</span><span class="sep">·</span><span>引用 0</span><span class="sep">·</span><span>缺失 0</span><span class="sep">·</span><span>索引异常 0</span></div>
+      </aside>
+    </div>
+    <p class="hang">
+      实现口径：五个排序键已全落（<code>filter::SortField::ALL</code> 是菜单顺序的唯一来源）；比较<b>行上的原始值</b>（时间戳 / 字节数）而不是格式化过的 <code>1.2 KB</code> 字符串；缺值在两个方向上都排最后；排序字段写回 <code>resources.default_sort</code>（只存字段、不存方向）。<b>强度维未单做</b>——强度由 kind 决定，多一维等于同一条件说两遍。
+    </p>
+  </section>
+
+  <div class="canvas pad">
+    <p class="hang" style="margin:0">
+      本块样式：<code>.toolbar</code> / <code>.sbox</code> / <code>.tbtn</code> / <code>.pop</code> / <code>.psec</code> / <code>.ph</code> / <code>.pitem</code> / <code>.pop-clear</code>。
+      落地代码：<code>crates/analytics_resource/src/filter/{mod,sort}.rs</code> + <code>src/resource_view/</code> 工具栏渲染。
+    </p>
+  </div>
+
+</main>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

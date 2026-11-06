@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>13 版本历史 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>13 · 版本历史</div>
+  <div class="prow">
+    <h1 class="p-title">版本历史对话框<span class="p-sec">§4.3</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    宽 <code>768px</code>（48rem）· 六列：版本 / 归档时间 / 大小 / 相邻版本差异 / 指纹前 12 位 / 内容副本状态。当前行带「当前」角标。
+    <b>动作栏只在选中历史版后出场</b>：与当前版本对比… / 还原为当前版本 / 取回该版本为草稿 / 删除该版本的内容副本。
+    只追加不覆盖：还原 = 用旧内容生成<b>新版本</b>（与 git <code>revert</code> 同构）；最多 50 行并明说剩余条数。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="12-dialog-checkout.html">← 上一块：取回对话框</a><a href="14-dialog-diff.html">下一块：版本对比 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>未选中<span class="desc">动作栏只给一句提示，不给一排灰按钮</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-versions proto-on">
+        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-history" xlink:href="#i-history"/></svg>版本历史<span class="sub2">dau_report.sql · 只追加，不覆盖历史</span><button class="x">✕</button></div>
+        <div class="dlg-body">
+          <table class="dt">
+            <thead><tr><th>版本</th><th>归档时间</th><th>大小</th><th>相邻版本差异</th><th>指纹前 12 位</th><th>内容副本</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>v3<span class="tcur">当前</span></td>
+                <td class="mono">2026-09-15 09:12</td>
+                <td class="num">1.2 KB</td>
+                <td class="diffd">大小 <span class="up">+0.4 KB</span> · 指纹变化</td>
+                <td class="mono">3f9a2c7b1e04</td>
+                <td><span class="sb b-ok"><span class="d"></span>存在</span></td>
+              </tr>
+              <tr>
+                <td>v2</td>
+                <td class="mono">2026-09-12 20:11</td>
+                <td class="num">820 B</td>
+                <td class="diffd">大小 <span class="dn">−1.1 KB</span> · 指纹变化</td>
+                <td class="mono">8c41d7e9b2aa</td>
+                <td><span class="sb b-ok"><span class="d"></span>存在</span></td>
+              </tr>
+              <tr>
+                <td>v1</td>
+                <td class="mono">2026-09-08 14:03</td>
+                <td class="num">1.9 KB</td>
+                <td class="diffd">—（初始版本）</td>
+                <td class="mono">21f0ab6c5d73</td>
+                <td><span class="sb b-warn">缺失</span></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="actbar"><span class="al">选中一行历史版本后可对比 / 还原 / 取回 / 删除副本</span></div>
+        </div>
+        <div class="dlg-foot"><span>共 3 个版本 · 2 份内容副本 · 保留策略「最近 5 份」</span><span class="grow"></span><button class="btn-p">关闭</button></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>选中 v2<span class="desc">行高亮 + 动作栏四按钮；v1 副本「缺失」= 只能看元数据</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-versions proto-on">
+        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-history" xlink:href="#i-history"/></svg>版本历史<span class="sub2">dau_report.sql · 只追加，不覆盖历史</span><button class="x">✕</button></div>
+        <div class="dlg-body">
+          <table class="dt">
+            <thead><tr><th>版本</th><th>归档时间</th><th>大小</th><th>相邻版本差异</th><th>指纹前 12 位</th><th>内容副本</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>v3<span class="tcur">当前</span></td>
+                <td class="mono">2026-09-15 09:12</td>
+                <td class="num">1.2 KB</td>
+                <td class="diffd">大小 <span class="up">+0.4 KB</span> · 指纹变化</td>
+                <td class="mono">3f9a2c7b1e04</td>
+                <td><span class="sb b-ok"><span class="d"></span>存在</span></td>
+              </tr>
+              <tr class="on">
+                <td>v2</td>
+                <td class="mono">2026-09-12 20:11</td>
+                <td class="num">820 B</td>
+                <td class="diffd">大小 <span class="dn">−1.1 KB</span> · 指纹变化</td>
+                <td class="mono">8c41d7e9b2aa</td>
+                <td><span class="sb b-ok"><span class="d"></span>存在</span></td>
+              </tr>
+              <tr>
+                <td>v1</td>
+                <td class="mono">2026-09-08 14:03</td>
+                <td class="num">1.9 KB</td>
+                <td class="diffd">—（初始版本）</td>
+                <td class="mono">21f0ab6c5d73</td>
+                <td><span class="sb b-warn">缺失</span></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="actbar">
+            <span class="al">对选中版本 v2 的动作：</span>
+            <button class="btn-s">与当前版本对比…</button>
+            <button class="btn-s">还原为当前版本</button>
+            <button class="btn-s">取回该版本为草稿</button>
+            <button class="btn-s">删除该版本的内容副本</button>
+          </div>
+          <div class="note warn"><svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg><span>不做原地回滚：还原 = 用旧内容生成新版本（与 git <code>mono</code> revert 同构）。<b>与当前版本对比…</b> 是只读文本 diff 查看器，只读项目也能看、不写库。内容副本按「最近 5 份」保留，超出只留元数据。</span></div>
+        </div>
+        <div class="dlg-foot"><span>共 3 个版本 · 2 份内容副本 · 保留策略「最近 5 份」</span><span class="grow"></span><button class="btn-p">关闭</button></div>
+      </div>
+    </div>
+    <p class="hang">
+      落地口径（<code>dialogs/version.rs</code> + <code>present::build_version_rows</code>）：六列含当前行；动作栏选中后出场；最多 50 行并明说剩余；动作执行后<b>重取列表并保留选中行的新位置</b>（不关窗）。
+      副本「缺失」的行：还原 / 取回置灰，只留「删除副本」（本来就是空的）。
+    </p>
+  </section>
+
+  <div class="canvas pad">
+    <p class="hang" style="margin:0">
+      本块样式：<code>.dlg.dlg-versions</code>（768px）/ <code>table.dt</code> / <code>tr.on</code> / <code>.tcur</code> / <code>.diffd</code> / <code>.actbar</code> / <code>.note.warn</code>。
+      落地代码：<code>crates/analytics_resource/src/dialogs/version.rs</code> + <code>src/present/</code>（版本行构造）。
+    </p>
+  </div>
+
+</main>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

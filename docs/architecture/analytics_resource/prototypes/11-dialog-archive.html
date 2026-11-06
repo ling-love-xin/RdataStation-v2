@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>11 归档对话框 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>11 · 归档对话框</div>
+  <div class="prow">
+    <h1 class="p-title">归档对话框<span class="p-sec">§4.1</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    宽 <code>544px</code>（34rem）· 只从<b>草稿箱条目 / 本地文件 / 洞察画像</b>三处进来，不在资产库里凭空「新建」。
+    字段：来源（只读 srcbar）/ 显示名 / 别名 / 标签 / 分组（带「默认」预选）/ <b>归档方式</b>（复制到 <code>resources/</code> 或 引用源位置）/ 目标文件（只读 &amp; 冲突时把将写入的名字原样摆出来）。
+    确认成功 → 关闭 + toast + 底部 5 秒撤销条。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="10-context-menu.html">← 上一块：右键菜单</a><a href="12-dialog-checkout.html">下一块：取回对话框 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>copy 模式 · 目标被占<span class="desc">将归档为 x-2.sql（预览里直接给最终名字，不用报错教育用户）</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-archive proto-on">
+        <div class="dlg-head">归档到资产库<span class="sub2">dau_report.sql</span><button class="x">✕</button></div>
+        <div class="dlg-body">
+          <div class="srcbar"><svg class="ico-sm"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="mono">scratchpad/reports/dau_report.sql</span><span class="tagn">草稿箱</span></div>
+          <div class="fgrid">
+            <label class="fl">显示名</label><div class="fw"><input class="inp" value="dau_report.sql"></div>
+            <label class="fl">别名</label><div class="fw"><input class="inp" placeholder="可留空"></div>
+            <div class="fhint">标签 / 别名只影响检索与显示，不改物理路径。</div>
+
+            <label class="fl">标签</label>
+            <div class="fw"><div class="tags" style="margin:0"><span class="tagc">渠道<span class="x">✕</span></span><span class="tagc add">＋ 添加</span></div></div>
+
+            <label class="fl">分组</label><div class="fw"><div class="selw">报表<span class="ar">▾</span></div></div>
+            <div class="fhint">预选<b>默认分组</b>（§2.4）；上次选过的分组不记忆。</div>
+
+            <label class="fl">归档方式</label>
+            <div class="fw">
+              <div class="radios">
+                <label><span class="rdot on"></span>复制到 resources/</label>
+                <label><span class="rdot"></span>引用源位置（仅元数据）</label>
+              </div>
+            </div>
+            <div class="fhint">复制 = 草稿保留为工作副本，本库留只读副本；引用 = 只登记指向，源一变快照就失效。</div>
+
+            <label class="fl">目标文件</label>
+            <div class="fw"><input class="inp ro" value="存为 resources/reports/dau_report-2.sql" readonly></div>
+            <div class="fhint">同名已存在时自动避让为 <code>-2</code> / <code>-3</code> 后缀，此处直接显示最终名字。</div>
+          </div>
+          <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>归档后本条目在资产库<b>只读</b>；要改内容先「取回（检出）」→ 草稿工作副本 → 再归档为新版本（v3）。</span></div>
+        </div>
+        <div class="dlg-foot"><span>目标：项目「营销分析」· 应用守卫会拒写 resources/</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">归档</button></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>reference 模式 · 外部文件<span class="desc">方式区只剩引用（外部文件没有「复制进来」的能力）；指纹与源位置显式展示</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-archive proto-on">
+        <div class="dlg-head">归档到资产库<span class="sub2">sales_daily.csv</span><button class="x">✕</button></div>
+        <div class="dlg-body">
+          <div class="srcbar"><svg class="ico-sm"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="mono">/data/exports/sales_daily.csv</span><span class="tagn">本地文件</span></div>
+          <div class="fgrid">
+            <label class="fl">显示名</label><div class="fw"><input class="inp" value="sales_daily.csv"></div>
+            <label class="fl">别名</label><div class="fw"><input class="inp" placeholder="可留空"></div>
+
+            <label class="fl">标签</label>
+            <div class="fw"><div class="tags" style="margin:0"><span class="tagc">外部<span class="x">✕</span></span><span class="tagc add">＋ 添加</span></div></div>
+
+            <label class="fl">分组</label><div class="fw"><div class="selw">外部数据<span class="ar">▾</span></div></div>
+
+            <label class="fl">归档方式</label>
+            <div class="fw"><div class="radios"><label><span class="rdot on"></span>引用源位置（本库不复制）</label></div></div>
+            <div class="fhint">外部文件默认只登记指向 + 内容指纹；源文件改动后打开会被拦截，由用户决定是否「接受当前内容」。</div>
+
+            <label class="fl">源位置</label>
+            <div class="fw"><input class="inp ro" value="/data/exports/sales_daily.csv" readonly></div>
+            <label class="fl">内容指纹</label>
+            <div class="fw"><input class="inp ro" value="3f9a2c7b1e04（sha256 前 12）" readonly></div>
+          </div>
+          <div class="note warn"><svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg><span>引用型不会带来<b>内容可复现</b>；要真正的存档请先 import 成本地文件，再走「复制到 resources/」。</span></div>
+        </div>
+        <div class="dlg-foot"><span>目标：项目「营销分析」</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">归档</button></div>
+      </div>
+    </div>
+    <p class="hang">
+      落地口径（<code>dialogs/archive.rs</code>）：归档 = <b>copy</b>，草稿保留为工作副本；标签 / 分组 / 别名<b>真落库</b>，失败<b>不回滚</b>已写入的副本，只把失败写进回执；撤销窗口 5 秒（<code>service.rs::undo_archive</code>），版本 &gt; 1 拒绝撤回。
+    </p>
+  </section>
+
+  <div class="canvas pad">
+    <p class="hang" style="margin:0">
+      本块样式：<code>.dlg.dlg-archive</code>（544px）/ <code>.dlg-head</code> / <code>.srcbar</code> / <code>.fgrid</code> / <code>.fhint</code> / <code>.radios</code> / <code>.note</code> / <code>.dlg-foot</code>。
+      落地代码：<code>crates/analytics_resource/src/dialogs/archive.rs</code>。
+    </p>
+  </div>
+
+</main>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

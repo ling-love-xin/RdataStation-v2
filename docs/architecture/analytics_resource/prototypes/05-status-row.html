@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>05 底部状态行 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>05 · 底部状态行</div>
+  <div class="prow">
+    <h1 class="p-title">面板底部状态行<span class="p-sec">§2.5</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    高 <code>24px</code>（1.5rem）· 文案 <code>N 项 · 已归档 X · 分析表 Y · 引用 Z · 缺失 W · 索引异常 V</code>。
+    <b>缺失 / 索引异常非 0 时该段高亮可点</b> → 打开「索引修复」对话框——这是「文件系统 + 索引」双真相源的代价被做成可见、可处理的入口。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="04-group-fold.html">← 上一块：分组折叠</a><a href="06-detail-file.html">下一块：文件型详情 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>常态<span class="desc">异常计数全 0，整行 muted，不提供点击</span></div>
+    <div class="canvas pad">
+      <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
+        <div class="pstatus proto-on" title="8 项 · 已归档 5 · 分析表 2 · 引用 1 · 缺失 0 · 索引异常 0">
+          8 项<span class="sep">·</span>已归档 5<span class="sep">·</span>分析表 2<span class="sep">·</span>引用 1<span class="sep">·</span>缺失 0<span class="sep">·</span>索引异常 0
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>异常高亮<span class="desc">缺失 / 索引异常非 0 → 该段 warning / danger 且可点，整行其余字段不变</span></div>
+    <div class="canvas pad">
+      <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
+        <div class="pstatus proto-on" title="8 项 · 已归档 5 · 分析表 2 · 引用 1 · 缺失 1 · 索引异常 3">
+          8 项<span class="sep">·</span>已归档 5<span class="sep">·</span>分析表 2<span class="sep">·</span>引用 1<span class="sep">·</span><span class="seg warn">缺失 1</span><span class="sep">·</span><span class="seg dang">索引异常 3</span>
+        </div>
+      </div>
+    </div>
+    <p class="hang">一个段独立高亮，<b>不把整行染红</b>——正常项仍在，用户看得到「8 项里只有 4 项要处理」。两段都指向同一个「索引修复」对话框（与 <code>⋯ → 重建索引…</code> 同一条路）。</p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>零项<span class="desc">空库时的状态行，与空态（19 页）成对出现</span></div>
+    <div class="canvas pad">
+      <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
+        <div class="pstatus proto-on" title="0 项 · 没有存档">
+          0 项<span class="sep">·</span>已归档 0<span class="sep">·</span>分析表 0<span class="sep">·</span>引用 0<span class="sep">·</span>缺失 0<span class="sep">·</span>索引异常 0
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">D</span>加载中<span class="desc">前缀「加载中… ·」+ 列表区 3–5 行骨架灰条（规格 §5；旧总集稿未画）</span></div>
+    <div class="canvas pad">
+      <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
+        <div class="panel-body" style="overflow:visible;padding:4px 0">
+          <div class="skrow"><div class="skbar w1"></div></div>
+          <div class="skrow"><div class="skbar w3"></div></div>
+          <div class="skrow"><div class="skbar w2"></div></div>
+        </div>
+        <div class="pstatus proto-on">加载中…<span class="sep">·</span>资产库</div>
+      </div>
+    </div>
+    <p class="hang">取数期间<b>不摆空态</b>（否则「空库」会先闪一下）；骨架走组件 <code>Skeleton</code>（2s 呼吸、只改透明度，<code>reduce_motion</code> 下停在全亮）。列表已有行时不摆骨架，所以不会每帧重绘。</p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">E</span>撤销条<span class="desc">移入回收站后出现（沿用 M5 撤销栏，24px 之上再加 28px）</span></div>
+    <div class="canvas pad">
+      <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
+        <div class="pstatus proto-on">7 项<span class="sep">·</span>已归档 4<span class="sep">·</span>分析表 2<span class="sep">·</span>引用 1<span class="sep">·</span>缺失 0<span class="sep">·</span>索引异常 0</div>
+        <div class="undo on">
+          <span>已移入回收站 dau_report.sql</span>
+          <span class="grow"></span>
+          <span class="link">撤销</span>
+        </div>
+      </div>
+    </div>
+    <p class="hang">撤销窗口 5 秒；撤回 = 删 <code>resources/</code> 副本 + 删登记行（copy 模式）或只删登记行（reference 模式）。版本 &gt; 1 拒绝撤回，回退走版本历史。</p>
+  </section>
+
+  <div class="canvas pad">
+    <p class="hang" style="margin:0">
+      本块样式：<code>.pstatus</code> / <code>.pstatus .sep</code> / <code>.seg.warn</code> / <code>.seg.dang</code> / <code>.undo</code>，以及拆块时补的骨架 <code>.skrow</code> / <code>.skbar</code>。
+      落地代码：<code>crates/analytics_resource/src/present/snapshot.rs</code>（计数）+ 面板状态行渲染。
+    </p>
+  </div>
+
+</main>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>17 升级冲突 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>17 · 升级冲突</div>
+  <div class="prow">
+    <h1 class="p-title">升级 / 分发同名冲突<span class="p-sec">§13.3 · A1</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    三个处置，一屏说完：<b>覆盖全局旧版本</b>（删全局旧表 + 软删旧登记后重走升级，<code>overwritten=true</code>，版本链接续）/ <b>改名升级</b>（换目标名，版本链从头开始）/ <b>取消</b>。
+    同名冲突<b>不能静默覆盖</b>——先摆清「全局已有 v4、来自另一项目」的事实再让用户选。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="16-dialog-repair.html">← 上一块：索引修复</a><a href="18-dialog-insight-archive.html">下一块：洞察归档 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>三选一<span class="desc">默认落在「覆盖」（老用户最常想干的事），但把代价写在提示行里</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-conflict proto-on">
+        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-warn" xlink:href="#i-warn"/></svg>升级到全局<span class="sub2">冲突：全局已有同名资源</span><button class="x">✕</button></div>
+        <div class="dlg-body">
+          <div class="srcbar">
+            <svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+            <span class="mono">mock_orders</span>
+            <span class="tagn">项目分析表 · 待升级</span>
+          </div>
+          <div class="locknote" style="margin-top:0"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg><span>全局 DuckDB（G_ 连接）已有同名表 <code>mock_orders</code>（v4 · 来自另一项目）。同名冲突不能静默覆盖，需先处置。</span></div>
+          <div class="fgrid" style="margin-top:10px">
+            <div class="fl">冲突处置</div>
+            <div class="fw"><div class="radios">
+              <label><span class="rdot on"></span>覆盖全局旧版本（版本链接续）</label>
+              <label><span class="rdot"></span>改名升级（新名入全局）</label>
+              <label><span class="rdot"></span>取消</label>
+            </div></div>
+            <div class="fhint">覆盖 = 删全局旧表 + 软删旧登记后重走升级（<code>overwritten=true</code>）；改名 = 目标新名重排升级路径（§13.3）。</div>
+          </div>
+          <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>跨项目唯一法定路径 = 项目 → 全局 → 项目；项目 ↔ 项目禁止直传。</span></div>
+        </div>
+        <div class="dlg-foot">
+          <span>升级会把表 + 版本信息复制进全局 DuckDB（G_ 连接）</span><span class="grow"></span>
+          <button class="btn-s">取消</button><button class="btn-s">改名</button><button class="btn-p">覆盖</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>改名路径<span class="desc">选「改名升级」后展开目标名输入（不再问第二次）</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-conflict proto-on">
+        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-warn" xlink:href="#i-warn"/></svg>升级到全局<span class="sub2">冲突：全局已有同名资源</span><button class="x">✕</button></div>
+        <div class="dlg-body">
+          <div class="srcbar">
+            <svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+            <span class="mono">mock_orders</span>
+            <span class="tagn">项目分析表 · 待升级</span>
+          </div>
+          <div class="fgrid" style="margin-top:2px">
+            <div class="fl">冲突处置</div>
+            <div class="fw"><div class="radios">
+              <label><span class="rdot"></span>覆盖全局旧版本（版本链接续）</label>
+              <label><span class="rdot on"></span>改名升级（新名入全局）</label>
+              <label><span class="rdot"></span>取消</label>
+            </div></div>
+            <div class="fl">全局新名</div>
+            <div class="fw"><input class="inp" value="mock_orders_marketing"></div>
+            <div class="fhint">新名在全局不能重名；确认后按新名重排升级路径，<b>不续接</b>原全局表的版本链（v1 重新开始）。</div>
+          </div>
+          <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>跨项目唯一法定路径 = 项目 → 全局 → 项目；项目 ↔ 项目禁止直传。</span></div>
+        </div>
+        <div class="dlg-foot">
+          <span>升级会把表 + 版本信息复制进全局 DuckDB（G_ 连接）</span><span class="grow"></span>
+          <button class="btn-s">取消</button><button class="btn-p">以新名升级</button>
+        </div>
+      </div>
+    </div>
+    <p class="hang">
+      两条链的差别要写清：<b>覆盖</b>保住 v5（旧 v4 软删、审计可追）；<b>改名</b>等于新资源（v1 从头，与旧表无 <code>promoted_from</code> 关系）。
+      分发（全局 → 项目）遇到项目同名，同一个对话框换标题「分发到本项目」，处置变成「覆盖项目同名 / 改名分发 / 取消」。
+    </p>
+  </section>
+
+  <div class="canvas pad">
+    <p class="hang" style="margin:0">
+      本块样式：<code>.dlg.dlg-conflict</code> / <code>.srcbar</code> / <code>.locknote</code> / <code>.radios</code> / <code>.note</code>。
+      落地代码：<code>crates/analytics_resource/src/dialogs/conflict.rs</code>。
+    </p>
+  </div>
+
+</main>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

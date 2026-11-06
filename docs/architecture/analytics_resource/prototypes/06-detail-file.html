@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>06 文件型详情 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>06 · 文件型详情</div>
+  <div class="prow">
+    <h1 class="p-title">右侧详情面板 · File 型<span class="p-sec">§3.1</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    宽 <code>320px</code>（20rem）· 分节：头部（kind 图标 + 显示名 + 版本徽标）/ 基本信息 / 来源 / 版本 / 标签与分组 / 内容预览 / 危险区。
+    只读信息区不可编辑；<b>动作只有三条</b>：打开（只读）、取回（检出）…、移入回收站。要改内容必须走「取回」→ 草稿工作副本 → 再归档生成新版本。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="05-status-row.html">← 上一块：状态行</a><a href="07-detail-ref.html">下一块：引用型详情 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>完整分节<span class="desc">dau_report.sql · v3 · 已归档（强）</span></div>
+    <div class="canvas pad">
+      <div class="detailcol">
+        <div class="dstate proto-on" style="flex:none">
+          <div class="dhead">
+            <svg class="ico-sm ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
+            <span class="dnm">dau_report.sql</span>
+            <span class="dver">v3</span>
+            <button class="x" title="重命名显示名（F2，不改物理路径）"><svg class="ico-sm"><use href="#i-edit" xlink:href="#i-edit"/></svg></button>
+          </div>
+          <div class="dsub">别名 渠道日报 · kind 文件（复现强度 强）</div>
+          <div class="dbody" style="overflow:visible">
+            <div class="sect">
+              <div class="sect-h">基本信息<span class="lock">只读</span></div>
+              <div class="kv"><span class="k">实例</span><span class="v"><span class="scope-badge">项目</span></span></div>
+              <div class="kv"><span class="k">大小</span><span class="v">1.2 KB</span></div>
+              <div class="kv"><span class="k">修改时间</span><span class="v">2026-09-12 10:24</span></div>
+              <div class="kv"><span class="k">归档时间</span><span class="v">2026-09-15 09:12</span></div>
+              <div class="kv blk"><span class="k">物理路径</span><span class="v mono">resources/reports/dau_report.sql</span></div>
+              <div class="locknote"><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg><span>归档后不可写，需取回编辑</span></div>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h">来源</div>
+              <div class="kv blk"><span class="k">来源草稿</span><span class="v mono">scratchpad/reports/dau_report.sql</span></div>
+              <div class="kv"><span class="k">来源连接</span><span class="v"><span class="dlink" style="margin:0">本地 MySQL · analytics</span></span></div>
+              <div class="kv"><span class="k">来源表</span><span class="v mono">warehouse.orders</span></div>
+              <div class="kv"><span class="k">内容指纹</span><span class="v mono">3f9a2c7b1e04<span class="cp">复制</span></span></div>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h">版本</div>
+              <div class="vrow"><span>v3</span><span class="dt">今天 09:12</span><span class="cur">当前</span></div>
+              <div class="vrow"><span>v2</span><span class="dt">3 天前</span></div>
+              <div class="vrow"><span>v1</span><span class="dt">1 周前</span></div>
+              <span class="dlink">查看全部…</span>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h">标签与分组</div>
+              <div class="tags">
+                <span class="tagc">渠道<span class="x">✕</span></span>
+                <span class="tagc">月报<span class="x">✕</span></span>
+                <span class="tagc add">＋ 添加标签</span>
+              </div>
+              <div class="kv" style="margin-top:6px"><span class="k">分组</span><span class="v">报表 ▾</span></div>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h">内容预览<span class="lock" style="color:var(--muted)">只读</span></div>
+              <div class="prev">
+                <div class="prev-h"><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg>前 20 行 · 不可编辑</div>
+                <div class="prev-b">SELECT channel,
+  count(*) AS orders,
+  sum(amount) AS gmv
+FROM warehouse.orders
+WHERE created_at &gt;= date '2026-09-01'
+GROUP BY channel...</div>
+              </div>
+            </div>
+
+            <div class="danger-zone">
+              <button class="btn-d">移入回收站</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>头部可编辑<span class="desc">已实现、旧总集稿未体现：显示名点一下开重命名、别名点一下开别名对话框（留空 = 清除）</span></div>
+    <div class="canvas pad">
+      <div class="detailcol">
+        <div class="dstate proto-on" style="flex:none">
+          <div class="dhead">
+            <svg class="ico-sm ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
+            <span class="dnm" style="border-bottom:1px dashed var(--border);cursor:pointer">dau_report.sql</span>
+            <span class="dver">v3</span>
+            <button class="x"><svg class="ico-sm"><use href="#i-edit" xlink:href="#i-edit"/></svg></button>
+          </div>
+          <div class="dsub">别名 <span class="dlink" style="margin:0">渠道日报</span> · kind 文件（复现强度 强）</div>
+          <div class="dbody" style="overflow:visible;padding-bottom:14px">
+            <div class="locknote" style="margin-top:8px"><svg class="ico-sm"><use href="#i-info" xlink:href="#i-info"/></svg><span>只读项目下<b>不摆</b>这两个入口；本体缺失时名字不给改（别名仍可编）。改名<b>只改显示名</b>，不动物理路径。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="hang">点改与 <code>F2</code> / 行右键「重命名…」走<b>同一条链路</code>（同一个单输入对话框）；别名对话框同一入口，留空即清除。</p>
+  </section>
+
+  <div class="canvas pad">
+    <p class="hang" style="margin:0 0 6px">
+      本块样式：<code>.detail</code> / <code>.dstate</code> / <code>.dhead</code> / <code>.dsub</code> / <code>.sect</code> / <code>.kv</code> / <code>.locknote</code> / <code>.vrow</code> / <code>.tags</code> / <code>.prev</code> / <code>.danger-zone</code>。
+    </p>
+    <p class="hang" style="margin:0">
+      <b>落地与原型不一致（需要拍板）</b>：实现落在<b>右 Dock 的「存档详情」档位</b>（<code>RightPanel::Archive</code>），宽度按 <code>RIGHT_DOCK_WIDTH</code>（17.5rem = 280px），不是这里的 320px 编辑区右侧属性面板；<code>h_resizable</code> 宽度记忆要等 M4 接线。版本区「最近 3 条」明细未做（当前是「N 个历史版本」+ 查看全部）。
+      落地代码：<code>crates/analytics_resource/src/detail_view/</code> + <code>present/{detail,snapshot}.rs</code>。
+    </p>
+  </div>
+
+</main>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

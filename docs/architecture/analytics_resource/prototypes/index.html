@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>资产库 / 分析存档（M6）· 分块原型索引</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb">资产库 / 分析存档（M6）原型<span>/</span>索引</div>
+  <div class="prow">
+    <h1 class="p-title">分块原型索引<span class="p-sec">19 块</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    每个 UI 块 / 每个对话框<b>各自一页</b>，页内把这块的<b>所有状态并排摆出来</b>——不再靠 <code>data-*</code> 状态位互斥显隐，改一块不用在脑子里同时装另外 18 个场景。
+    原来的总集稿 <a href="../analytics-resource-prototype.html">analytics-resource-prototype.html</a> 保留不动，继续用来整体走查。
+  </p>
+  <nav class="pnav">
+    <a href="../analytics-resource-prototype.html">总集稿（整体走查）</a>
+    <a href="../analytics-resource-prototype-design.md">设计稿 §2–§5</a>
+    <a href="README.md">本目录 README</a>
+  </nav>
+</header>
+
+<div class="howto">
+  <b>怎么用这一套</b><br>
+  ① 要改<b>视觉</b>（间距 / 颜色 / 行高 / 徽标形状）→ 改 <code>_shared/proto.css</code> 一处，19 页同时生效；<br>
+  ② 要改<b>某一块的布局或文案</b> → 只改那一页的 HTML，不会牵动别块；<br>
+  ③ 要加<b>新状态</b> → 在那页里新加一个 <code>.variant</code> 小节，页内并排即可，不用造状态位；<br>
+  ④ 页脚「本块样式 + 落地代码」告诉你这块在 <code>crates/analytics_resource/</code> 落到哪，评审结论可直接指到文件。<br>
+  <b>三种状态显影手法</b>：<code>proto.css</code> 里本来就有 <code>.open</code> / <code>.on</code> 的（弹层、菜单、横幅、撤销条、重叠表）直接加；没有独立开关的（对话框、右键菜单、状态行、编辑区 tab、详情态）用 <code>page.css</code> 的 <code>.proto-on</code>，它只做 <code>display</code> 与定位还原，不改任何视觉。
+</div>
+
+<div class="idx">
+
+  <section class="idx-group">
+    <h2>一、面板解剖（左 Dock 240px 内部）</h2>
+    <div class="idx-grid">
+      <a class="idx-card" href="01-panel-head.html">
+        <div class="ih"><span class="no">01</span><span class="nm">面板头</span><span class="sec">§2.1</span></div>
+        <div class="ds">标题 + 两个 24px 按钮（＋▾ / ⋯）。3 态：常态 / ＋▾ 两项 / ⋯ 四项带分隔线。</div>
+        <div class="tg"><span>36px</span><span>3 态</span><span>未接线：Ctrl+Shift+A</span></div>
+      </a>
+      <a class="idx-card" href="02-toolbar.html">
+        <div class="ih"><span class="no">02</span><span class="nm">工具栏</span><span class="sec">§2.2</span></div>
+        <div class="ds">搜索框 + 筛选 / 排序两个弹层。4 态：常态 / 筛选四节 / 排序五键 / 筛选已生效联动。</div>
+        <div class="tg"><span>32px 行 · 26px 输入</span><span>4 态</span></div>
+      </a>
+      <a class="idx-card" href="03-list-rows.html">
+        <div class="ih"><span class="no">03</span><span class="nm">列表行</span><span class="sec">§2.3</span></div>
+        <div class="ds">三档 kind（文件 / 分析表 / 引用）、六种行态（默认 / hover / 选中 / 缺失 / 内容已变 / 焦点）、240px 挤占三级递减。</div>
+        <div class="tg"><span>24px 行高</span><span>3 组 11 行</span></div>
+      </a>
+      <a class="idx-card" href="04-group-fold.html">
+        <div class="ih"><span class="no">04</span><span class="nm">分组折叠区</span><span class="sec">§2.4</span></div>
+        <div class="ds">聚合头 + 三层分区、折叠、无分组、默认分组标记。4 态。</div>
+        <div class="tg"><span>24px 头</span><span>4 态</span></div>
+      </a>
+      <a class="idx-card" href="05-status-row.html">
+        <div class="ih"><span class="no">05</span><span class="nm">底部状态行</span><span class="sec">§2.5</span></div>
+        <div class="ds">常态 / 异常段高亮可点 / 零项 / 加载中 / 撤销条。5 态。</div>
+        <div class="tg"><span>24px</span><span>5 态</span></div>
+      </a>
+    </div>
+  </section>
+
+  <section class="idx-group">
+    <h2>二、右侧详情（320px）与洞察集合卡</h2>
+    <div class="idx-grid">
+      <a class="idx-card" href="06-detail-file.html">
+        <div class="ih"><span class="no">06</span><span class="nm">File 型详情</span><span class="sec">§3.1</span></div>
+        <div class="ds">七个分节完整形态 + 头部两处点改（显示名 / 别名）。2 态。</div>
+        <div class="tg"><span>320px</span><span>落地落点待拍板</span></div>
+      </a>
+      <a class="idx-card" href="07-detail-ref.html">
+        <div class="ih"><span class="no">07</span><span class="nm">引用型详情</span><span class="sec">§3.1 / §12.1.1</span></div>
+        <div class="ds">旧 TableRef 行（失效警告条 + 立即校验）与 reference 模式（快照失效 + 两处置）。</div>
+        <div class="tg"><span>2 态</span><span>无版本</span></div>
+      </a>
+      <a class="idx-card" href="08-detail-global.html">
+        <div class="ih"><span class="no">08</span><span class="nm">全局实例行详情</span><span class="sec">§13.2</span></div>
+        <div class="ds">只看只分发：单动作「分发到本项目…」；全局只读、跨项目唯一路径。</div>
+        <div class="tg"><span>1 态</span><span>§13</span></div>
+      </a>
+      <a class="idx-card" href="09-detail-insight.html">
+        <div class="ih"><span class="no">09</span><span class="nm">洞察集合卡</span><span class="sec">§12.2 T18–T21</span></div>
+        <div class="ds">三条目 + 关系排查表展开 / 收起；对比、关系排查、归档三动作。</div>
+        <div class="tg"><span>320px</span><span>2 态</span></div>
+      </a>
+    </div>
+  </section>
+
+  <section class="idx-group">
+    <h2>三、右键与拖拽（行内无常驻按钮）</h2>
+    <div class="idx-grid">
+      <a class="idx-card" href="10-context-menu.html">
+        <div class="ih"><span class="no">10</span><span class="nm">右键菜单</span><span class="sec">§3.2</span></div>
+        <div class="ds">单选态 / 多选态（单选项全灰、批量项带计数）/ 分组头右键 / 拖拽落点。</div>
+        <div class="tg"><span>4 态</span><span>破坏项隔离</span></div>
+      </a>
+    </div>
+  </section>
+
+  <section class="idx-group">
+    <h2>四、对话框（每窗一页）</h2>
+    <div class="idx-grid">
+      <a class="idx-card" href="11-dialog-archive.html">
+        <div class="ih"><span class="no">11</span><span class="nm">归档</span><span class="sec">§4.1</span></div>
+        <div class="ds">copy 模式（目标被占 → x-2.sql）/ reference 模式（外部文件）。</div>
+        <div class="tg"><span>544px</span><span>2 态</span></div>
+      </a>
+      <a class="idx-card" href="12-dialog-checkout.html">
+        <div class="ih"><span class="no">12</span><span class="nm">取回（检出）</span><span class="sec">§4.2</span></div>
+        <div class="ds">三方式 + 重名预避让；只读项目三动作灰。</div>
+        <div class="tg"><span>480px</span><span>2 态</span></div>
+      </a>
+      <a class="idx-card" href="13-dialog-versions.html">
+        <div class="ih"><span class="no">13</span><span class="nm">版本历史</span><span class="sec">§4.3</span></div>
+        <div class="ds">六列表格；未选中 / 选中后动作栏出场。</div>
+        <div class="tg"><span>768px</span><span>2 态</span></div>
+      </a>
+      <a class="idx-card" href="14-dialog-diff.html">
+        <div class="ih"><span class="no">14</span><span class="nm">版本对比</span><span class="sec">§4.3 扩展</span></div>
+        <div class="ds">统一 / 并排两种只读 diff 渲染。</div>
+        <div class="tg"><span>1024px</span><span>2 态</span></div>
+      </a>
+      <a class="idx-card" href="15-dialog-trash.html">
+        <div class="ih"><span class="no">15</span><span class="nm">回收站</span><span class="sec">§4.4</span></div>
+        <div class="ds">跨模块灰行 + 清空二次确认。</div>
+        <div class="tg"><span>640px</span><span>2 态</span></div>
+      </a>
+      <a class="idx-card" href="16-dialog-repair.html">
+        <div class="ih"><span class="no">16</span><span class="nm">索引修复</span><span class="sec">§4.5</span></div>
+        <div class="ds">三类孤儿逐条确认；修完一项自动重扫。</div>
+        <div class="tg"><span>864px</span><span>2 态</span></div>
+      </a>
+      <a class="idx-card" href="17-dialog-conflict.html">
+        <div class="ih"><span class="no">17</span><span class="nm">升级同名冲突</span><span class="sec">§13.3 A1</span></div>
+        <div class="ds">覆盖 / 改名 / 取消三选一；改名后展开目标名输入。</div>
+        <div class="tg"><span>2 态</span><span>§13</span></div>
+      </a>
+      <a class="idx-card" href="18-dialog-insight-archive.html">
+        <div class="ih"><span class="no">18</span><span class="nm">洞察归档</span><span class="sec">§12.2 T20</span></div>
+        <div class="ds">报告视图（file 档，已落地）/ 数据视图（analysis 档，待决策）。</div>
+        <div class="tg"><span>2 态</span><span>固定 copy</span></div>
+      </a>
+    </div>
+  </section>
+
+  <section class="idx-group">
+    <h2>五、空态与异常</h2>
+    <div class="idx-grid">
+      <a class="idx-card" href="19-empty-states.html">
+        <div class="ih"><span class="no">19</span><span class="nm">空态 / 无结果 / 异常横幅</span><span class="sec">§5</span></div>
+        <div class="ds">空库 / 全局空 / 搜索无结果 / 加载骨架 / 缺失与内容已变横幅。5 态。</div>
+        <div class="tg"><span>5 态</span><span>图标 48px</span></div>
+      </a>
+    </div>
+  </section>
+
+  <div class="howto" style="margin-top:4px">
+    <b>没有拆进来的东西（如实说明）</b><br>
+    ① <b>四个动作的时序图</b>（归档 / 取回 / 版本 / 回收站）仍只在设计稿 §4 里，属流程不是 UI 块；<br>
+    ② <b>应用级状态栏、标题栏 36px、活动栏 48px</b> 是外壳，不属本模块，故不做页；<br>
+    ③ <b>主题映射（§6）与尺寸校验表</b>在总集稿末尾与设计稿 §7，属对照表，仍在总集稿看；<br>
+    ④ <b>总集稿六张说明卡片</b>（三种 kind / 只读三重 / 右键条件 / 异常修复 / 洞察联动 / 双实例）尚未拆成独立「说明页」——它们的结论已折进各页 <code>.p-spec</code> 与页脚注，需要原文时看总集稿。
+  </div>
+
+</div>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

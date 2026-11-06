@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>15 回收站 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>15 · 回收站</div>
+  <div class="prow">
+    <h1 class="p-title">回收站对话框<span class="p-sec">§4.4</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    宽 <code>640px</code>（40rem）· 五列：名称 / 原路径 / 删除时间 / 大小 / 操作（行内「还原」「永久删除…」）。
+    <b>只显示 <code>origin = "resources"</code> 的条目</b>——草稿箱、编辑器的条目跨模块<b>不在这里还原</b>，只灰显成一句「属于草稿箱，请在草稿箱还原」。底部汇总明说「N 项存档条目 · M 项属于草稿箱」。
+    永久删除与清空一律二次确认。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="14-dialog-diff.html">← 上一块：版本对比</a><a href="16-dialog-repair.html">下一块：索引修复 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>常态<span class="desc">3 项可操作 + 1 项跨模块灰行</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-trash proto-on">
+        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-trash" xlink:href="#i-trash"/></svg>回收站<span class="sub2">只显示 origin = "resources" 的条目</span><button class="x">✕</button></div>
+        <div class="dlg-body">
+          <table class="dt">
+            <thead><tr><th>名称</th><th>原路径</th><th>删除时间</th><th>大小</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>monthly.md</td>
+                <td class="mono">resources/reports/monthly.md</td>
+                <td class="mono">昨天 18:20</td>
+                <td class="num">3.1 KB</td>
+                <td><div class="trow-act"><button class="btn-s btn-xs">还原</button><button class="btn-s btn-xs">永久删除…</button></div></td>
+              </tr>
+              <tr>
+                <td>sales_daily.csv</td>
+                <td class="mono">resources/data/sales_daily.csv</td>
+                <td class="mono">3 天前</td>
+                <td class="num">8.7 KB</td>
+                <td><div class="trow-act"><button class="btn-s btn-xs">还原</button><button class="btn-s btn-xs">永久删除…</button></div></td>
+              </tr>
+              <tr>
+                <td>临时订单分析.sql</td>
+                <td class="mono">resources/临时订单分析.sql</td>
+                <td class="mono">2 周前</td>
+                <td class="num">12.4 KB</td>
+                <td><div class="trow-act"><button class="btn-s btn-xs">还原</button><button class="btn-s btn-xs">永久删除…</button></div></td>
+              </tr>
+              <tr class="dis">
+                <td>README.md</td>
+                <td class="mono">scratchpad/README.md</td>
+                <td class="mono">1 小时前</td>
+                <td class="num">2.0 KB</td>
+                <td><span style="font-size:10.5px;color:var(--muted)">属于草稿箱，请在草稿箱还原</span></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>跨模块条目只做呈现，不在这里还原——语义由项目级 <code>ProjectTrash</code> 保证。</span></div>
+        </div>
+        <div class="dlg-foot">
+          <span>共 3 项存档条目 · 1 项属于草稿箱</span><span class="grow"></span>
+          <button class="btn-s">还原选中</button><button class="btn-d">清空回收站</button><button class="btn-p">关闭</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>清空二次确认<span class="desc">danger 色框就地展开，按钮是「确认清空 / 取消」，不是系统 alert</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-trash proto-on">
+        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-trash" xlink:href="#i-trash"/></svg>回收站<span class="sub2">只显示 origin = "resources" 的条目</span><button class="x">✕</button></div>
+        <div class="dlg-body">
+          <table class="dt">
+            <thead><tr><th>名称</th><th>原路径</th><th>删除时间</th><th>大小</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>monthly.md</td>
+                <td class="mono">resources/reports/monthly.md</td>
+                <td class="mono">昨天 18:20</td>
+                <td class="num">3.1 KB</td>
+                <td><div class="trow-act"><button class="btn-s btn-xs">还原</button><button class="btn-s btn-xs">永久删除…</button></div></td>
+              </tr>
+              <tr>
+                <td>sales_daily.csv</td>
+                <td class="mono">resources/data/sales_daily.csv</td>
+                <td class="mono">3 天前</td>
+                <td class="num">8.7 KB</td>
+                <td><div class="trow-act"><button class="btn-s btn-xs">还原</button><button class="btn-s btn-xs">永久删除…</button></div></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="alertbox proto-on">
+            <div class="at"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>清空回收站</div>
+            <div class="ad">将永久删除 3 项存档条目及其内容副本，并删除登记行。此操作不可撤销。</div>
+            <div class="aa"><button class="btn-d">确认清空</button><button class="btn-s">取消</button></div>
+          </div>
+        </div>
+        <div class="dlg-foot">
+          <span>共 3 项存档条目 · 1 项属于草稿箱</span><span class="grow"></span>
+          <button class="btn-s">还原选中</button><button class="btn-d">清空回收站</button><button class="btn-p">关闭</button>
+        </div>
+      </div>
+    </div>
+    <p class="hang">
+      落地口径（<code>dialogs/trash.rs</code> + <code>present::build_trash_snapshot</code>）：跨模块条目不列成行、只给一句「N 条属于草稿箱」；最多 100 条并明说剩余；只读项目下<b>三个动作全灰</b>（还原 / 永久删除 / 清空）。
+      <b>回收站 TTL 未做</b>（无自动过期清理）。
+    </p>
+  </section>
+
+  <div class="canvas pad">
+    <p class="hang" style="margin:0">
+      本块样式：<code>.dlg.dlg-trash</code>（640px）/ <code>table.dt</code> / <code>tr.dis</code> / <code>.trow-act</code> / <code>.alertbox</code> / <code>.dlg-foot</code>。
+      落地代码：<code>crates/analytics_resource/src/dialogs/trash.rs</code>。
+    </p>
+  </div>
+
+</main>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

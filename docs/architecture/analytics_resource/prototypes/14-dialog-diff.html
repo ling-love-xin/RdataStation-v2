@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>14 版本对比 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>14 · 版本对比</div>
+  <div class="prow">
+    <h1 class="p-title">版本对比对话框（只读 diff）<span class="p-sec">§4.3 扩展</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    宽 <code>1024px</code>（64rem）· 纯文本 diff，<b>只读</b>：不写库、不产生版本，只读项目也能看。两种形态：<b>统一</b>（<code>+/−</code> 行内联，带上下文行）与<b>并排</b>（左右两列各自行号）。
+    入口只有两处：版本历史里「与当前版本对比…」，以及详情面板版本区「查看全部…」。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="13-dialog-versions.html">← 上一块：版本历史</a><a href="15-dialog-trash.html">下一块：回收站 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>统一视图<span class="desc">+ 绿 / − 红，行号复用（删除与新增共用同一行号）</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-version-diff proto-on">
+        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-history" xlink:href="#i-history"/></svg>dau_report.sql · v2 → v3<span class="sub2">只读 · 文本 diff</span><button class="x">✕</button></div>
+        <div class="dlg-body">
+          <div class="difftool">
+            <span class="dflabel">v2 → v3（当前）的差异 · 只读</span>
+            <div class="mode-sw"><button class="on">统一</button><button>并排</button></div>
+          </div>
+          <div class="diffview mono">
+            <div class="drow ctx"><span class="dno">1</span><span class="dc">-- 渠道日报（自动生成）</span></div>
+            <div class="drow ctx"><span class="dno">2</span><span class="dc">SELECT</span></div>
+            <div class="drow ctx"><span class="dno">3</span><span class="dc">  channel,</span></div>
+            <div class="drow del"><span class="dno">4</span><span class="dc">  DATE(order_time) AS day,</span></div>
+            <div class="drow add"><span class="dno">4</span><span class="dc">  DATE_FORMAT(order_time,'%Y-%m-%d') AS day,</span></div>
+            <div class="drow ctx"><span class="dno">5</span><span class="dc">  COUNT(*) AS orders,</span></div>
+            <div class="drow del"><span class="dno">6</span><span class="dc">  SUM(IF(status='paid',amount,0)) AS gmv,</span></div>
+            <div class="drow add"><span class="dno">6</span><span class="dc">  SUM(CASE WHEN status='paid' THEN amount ELSE 0 END) AS gmv,</span></div>
+            <div class="drow ctx"><span class="dno">7</span><span class="dc">FROM orders</span></div>
+            <div class="drow ctx"><span class="dno">8</span><span class="dc">GROUP BY channel, day</span></div>
+          </div>
+        </div>
+        <div class="dlg-foot"><span>2 处变更 · 8 行上下文</span><span class="grow"></span><button class="btn-p">关闭</button></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>并排视图<span class="desc">左 = 旧版（只画删行与上下文），右 = 当前（只画增行与上下文）</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-version-diff proto-on">
+        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-history" xlink:href="#i-history"/></svg>dau_report.sql · v2 → v3<span class="sub2">只读 · 文本 diff</span><button class="x">✕</button></div>
+        <div class="dlg-body">
+          <div class="difftool">
+            <span class="dflabel">v2 → v3（当前）的差异 · 只读</span>
+            <div class="mode-sw"><button>统一</button><button class="on">并排</button></div>
+          </div>
+          <div class="diffview split mono">
+            <div class="dcol">
+              <div class="drow ctx"><span class="dno">1</span><span class="dc">-- 渠道日报（自动生成）</span></div>
+              <div class="drow ctx"><span class="dno">2</span><span class="dc">SELECT</span></div>
+              <div class="drow ctx"><span class="dno">3</span><span class="dc">  channel,</span></div>
+              <div class="drow del"><span class="dno">4</span><span class="dc">  DATE(order_time) AS day,</span></div>
+              <div class="drow ctx"><span class="dno">5</span><span class="dc">  COUNT(*) AS orders,</span></div>
+              <div class="drow del"><span class="dno">6</span><span class="dc">  SUM(IF(status='paid',amount,0)) AS gmv,</span></div>
+              <div class="drow ctx"><span class="dno">7</span><span class="dc">FROM orders</span></div>
+              <div class="drow ctx"><span class="dno">8</span><span class="dc">GROUP BY channel, day</span></div>
+            </div>
+            <div class="dcol">
+              <div class="drow ctx"><span class="dno">1</span><span class="dc">-- 渠道日报（自动生成）</span></div>
+              <div class="drow ctx"><span class="dno">2</span><span class="dc">SELECT</span></div>
+              <div class="drow ctx"><span class="dno">3</span><span class="dc">  channel,</span></div>
+              <div class="drow add"><span class="dno">4</span><span class="dc">  DATE_FORMAT(order_time,'%Y-%m-%d') AS day,</span></div>
+              <div class="drow ctx"><span class="dno">5</span><span class="dc">  COUNT(*) AS orders,</span></div>
+              <div class="drow add"><span class="dno">6</span><span class="dc">  SUM(CASE WHEN status='paid' THEN amount ELSE 0 END) AS gmv,</span></div>
+              <div class="drow ctx"><span class="dno">7</span><span class="dc">FROM orders</span></div>
+              <div class="drow ctx"><span class="dno">8</span><span class="dc">GROUP BY channel, day</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="dlg-foot"><span>2 处变更 · 8 行上下文</span><span class="grow"></span><button class="btn-p">关闭</button></div>
+      </div>
+    </div>
+    <p class="hang">
+      两种形态共用同一个 diff 结果、只换渲染：切换<b>不重新算 diff</b>（否则两边行号会漂）。超长行一律省略号 + tooltip，不折行（折行会让左右列错位）。59 行的文本在这个宽度下按 <code>max-height:340px</code> 内滚。
+    </p>
+  </section>
+
+  <div class="canvas pad">
+    <p class="hang" style="margin:0">
+      本块样式：<code>.dlg.dlg-version-diff</code>（1024px）/ <code>.difftool</code> / <code>.mode-sw</code> / <code>.diffview</code> / <code>.drow.add|del|ctx</code> / <code>.dno</code> / <code>.dc</code>。
+      落地代码：<code>crates/analytics_resource/src/dialogs/version_diff.rs</code>。
+    </p>
+  </div>
+
+</main>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

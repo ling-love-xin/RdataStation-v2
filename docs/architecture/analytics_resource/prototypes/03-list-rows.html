@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>03 列表行 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>03 · 列表行</div>
+  <div class="prow">
+    <h1 class="p-title">列表行<span class="p-sec">§2.3</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    行高 <code>24px</code>（1.5rem）· kind 图标 三档形状（文件 / 分析表 / 引用，同色只靠形状区分）· 显示名 <code>text_sm</code> · 版本徽标 <code>18px</code>（v1 省略）· 强度徽标是行内<b>唯一色块</b>（已归档 / 分析表 / 引用）· 尾部字段一个 <code>muted</code> 字段。
+    字段优先级：<b>显示名 &gt; 强度徽标 &gt; 版本徽标 &gt; 相对时间 &gt; 大小</b>；放不下一律省略号 + 行 tooltip 补全，不缩行高、不做两行行。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="02-toolbar.html">← 上一块：工具栏</a><a href="04-group-fold.html">下一块：分组折叠 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>三档 kind<span class="desc">文件 / 分析表（项目 + 全局）/ 引用；v1 不显示版本徽标</span></div>
+    <div class="canvas pad">
+      <div class="dockcol" style="height:auto">
+        <div class="row" title="dau_report.sql · 文件 · v3 · 已归档（强）· 1.2 KB · 3 天前">
+          <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
+          <span class="nm">dau_report.sql</span>
+          <span class="ver">v3</span>
+          <span class="sb b-ok"><span class="d"></span>已归档</span>
+          <span class="meta">1.2 KB · 3 天前</span>
+        </div>
+        <div class="row" title="临时订单分析.sql · 文件 · v1（省略版本徽标）· 已归档（强）· 12.4 KB · 昨天">
+          <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
+          <span class="nm">临时订单分析.sql</span>
+          <span class="sb b-ok"><span class="d"></span>已归档</span>
+          <span class="meta">12.4 KB · 昨天</span>
+        </div>
+        <div class="row" title="mock_orders · 分析表（DuckDB）· v1 · 分析表（中）· 12,480 行 × 18 列">
+          <svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+          <span class="nm">mock_orders</span>
+          <span class="scope-badge">项目</span>
+          <span class="sb b-info"><span class="d"></span>分析表</span>
+          <span class="meta">12,480 行 × 18 列</span>
+        </div>
+        <div class="row" title="dwd_orders_view · 分析表（DuckDB 视图）· v2 · 分析表（中）· 1.2M 行 × 26 列 · 全局实例">
+          <svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+          <span class="nm">dwd_orders_view</span>
+          <span class="ver">v2</span>
+          <span class="scope-badge">全局</span>
+          <span class="sb b-info"><span class="d"></span>分析表</span>
+          <span class="meta">1.2M 行 × 26 列</span>
+        </div>
+        <div class="row" title="ods.orders · 引用（TableRef 已划掉，仅旧行兼容）· 引用（弱）· 无指纹 · 6 天前">
+          <svg class="ico ic"><use href="#i-link" xlink:href="#i-link"/></svg>
+          <span class="nm">ods.orders</span>
+          <span class="sb b-warn"><span class="d"></span>引用</span>
+          <span class="meta">无指纹 · 6 天前</span>
+        </div>
+      </div>
+    </div>
+    <p class="hang">kind 图标只用形状：文档形 = 文件、表格形 = 分析表、链接形 = 引用；三者同色（<code>muted</code>），避免与强度徽标撞色。<code>TableRef</code> 已于 2026-10-13 划掉，引用行只对旧行保留读取兼容。</p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>行态<span class="desc">默认 / hover / 选中 / 缺失 / 内容已变（静态显影）</span></div>
+    <div class="canvas pad">
+      <div class="grid3">
+        <div>
+          <div class="hang" style="margin:0 0 4px">默认</div>
+          <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">monthly.md</span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">3.1 KB · 2 周前</span></div>
+        </div>
+        <div>
+          <div class="hang" style="margin:0 0 4px">hover（<code>.row.proto-hover</code>）</div>
+          <div class="row proto-hover"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">monthly.md</span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">3.1 KB · 2 周前</span></div>
+        </div>
+        <div>
+          <div class="hang" style="margin:0 0 4px">选中（左侧 2px 边条 + <code>list.active</code> 底）</div>
+          <div class="row sel"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">dau_report.sql</span><span class="ver">v3</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">1.2 KB · 3 天前</span></div>
+        </div>
+        <div>
+          <div class="hang" style="margin:0 0 4px">本体缺失（灰显 + 删除线 + danger 点）</div>
+          <div class="row miss"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">sales_daily.csv</span><span class="mdot"></span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span></div>
+        </div>
+        <div>
+          <div class="hang" style="margin:0 0 4px">指纹不匹配（行内 warning 徽标）</div>
+          <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">渠道对比.py</span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="sb b-warn">内容已变</span></div>
+        </div>
+        <div>
+          <div class="hang" style="margin:0 0 4px">键盘焦点（行被 ↑↓ 停在上面）</div>
+          <div class="row proto-focus"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">渠道对比.py</span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">4.6 KB · 5 天前</span></div>
+        </div>
+      </div>
+    </div>
+    <p class="hang">悬停<b>不覆盖</b>选中：两者都是同一组组件态（<code>ListItem</code>），选中底在 hover 之下仍然可见。分组头与存档行同形同高（都是 24px），这也是「两个分组头之间每项正好 24px」那条窗口测试钉住的东西。<br>本节列宽约 <code>400px</code>，是<b>放大观察</b>用；真实 <code>240px</code> 下的名字截断见 C。</p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>240px 挤占<span class="desc">三级：全字段被裁 / 省掉大小与时间 / 只留名字与强度</span></div>
+    <div class="canvas pad">
+      <div class="grid3">
+        <div>
+          <div class="hang" style="margin:0 0 4px">① 全字段都塞（<b>尾部被裁</b>，现状）</div>
+          <div class="dockcol" style="height:auto">
+            <div class="row">
+              <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
+              <span class="nm">monthly.md</span>
+              <span class="ver">v2</span>
+              <span class="sb b-ok"><span class="d"></span>已归档</span>
+              <span class="meta">3.1 KB · 2 周前</span>
+            </div>
+          </div>
+          <p class="hang" style="margin:4px 0 0">meta 越出面板右缘 → 被 <code>overflow</code> 裁掉，只剩半个「3.1 KB」。</p>
+        </div>
+        <div>
+          <div class="hang" style="margin:0 0 4px">② 省掉「大小 · 相对时间」</div>
+          <div class="dockcol" style="height:auto">
+            <div class="row">
+              <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
+              <span class="nm">2026Q3_渠道日报_最终版.sql</span>
+              <span class="ver">v3</span>
+              <span class="sb b-ok"><span class="d"></span>已归档</span>
+            </div>
+          </div>
+          <p class="hang" style="margin:4px 0 0">名字能多显示 3 个字，<b>徽标一律不挤</b>（强度是行内唯一色块，挤掉就丢语义）。</p>
+        </div>
+        <div>
+          <div class="hang" style="margin:0 0 4px">③ 只留名字 + 强度徽标</div>
+          <div class="dockcol" style="height:auto">
+            <div class="row">
+              <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
+              <span class="nm">2026Q3_全渠道投放归因_日报_最终修订版_v2.sql</span>
+              <span class="sb b-ok"><span class="d"></span>已归档</span>
+            </div>
+          </div>
+          <p class="hang" style="margin:4px 0 0">名字本身省略号；版本号也省——<b>hover tooltip 里带全字段</b>。</p>
+        </div>
+      </div>
+    </div>
+    <p class="hang">规则是「放不下的信息一律省略 + hover tooltip」，<b>不是</b>缩行高或折行——紧凑一致性优先于信息完整。行 <code>tooltip</code> 里带全字段（kind / 版本 / 强度 / 大小 / 归档时间）。</p>
+  </section>
+
+  <div class="canvas pad">
+    <p class="hang" style="margin:0">
+      本块样式：<code>.row</code> / <code>.row.sel</code> / <code>.row.miss</code> / <code>.nm</code> / <code>.ver</code> / <code>.sb.b-ok|b-info|b-warn</code> / <code>.scope-badge</code> / <code>.mdot</code> / <code>.meta</code>。
+      落地代码：<code>crates/analytics_resource/src/resource_view/list_delegate.rs</code> + <code>row_meta.rs</code>；行距口径 <code>workbench_shell::ui::ROW_HEIGHT</code>。
+    </p>
+  </div>
+
+</main>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

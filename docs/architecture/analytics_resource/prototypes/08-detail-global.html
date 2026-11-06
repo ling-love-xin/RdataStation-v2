@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>08 全局详情 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>08 · 全局详情</div>
+  <div class="prow">
+    <h1 class="p-title">右侧详情面板 · 全局实例行<span class="p-sec">§13.2</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    全局行只看、只分发：动作收敛为一条 <b>「分发到本项目…」</b>。全局共享层是 <b>只读</b> 的，分发到项目后才能在项目侧编辑。
+    跨项目唯一法定路径 = <code>项目 → 全局 → 项目</code>；项目 ↔ 项目禁止直传；<code>promoted_from</code>（草稿→归档）与 <code>scope</code>（项目→全局）是两层升级，不混用。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="07-detail-ref.html">← 上一块：引用型详情</a><a href="09-detail-insight.html">下一块：洞察集合卡 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>轻量详情<span class="desc">基本信息 + 分发一节 + 单动作</span></div>
+    <div class="canvas pad">
+      <div class="detailcol">
+        <div class="dstate proto-on" style="flex:none">
+          <div class="dhead">
+            <svg class="ico-sm ic"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+            <span class="dnm">mock_orders</span>
+            <span class="dver">全局</span>
+          </div>
+          <div class="dsub">kind 分析表 · 全局共享层（G_ 连接）</div>
+          <div class="dbody" style="overflow:visible">
+            <div class="sect">
+              <div class="sect-h">基本信息<span class="lock">只读</span></div>
+              <div class="kv"><span class="k">实例</span><span class="v"><span class="scope-badge">全局</span></span></div>
+              <div class="kv"><span class="k">规模</span><span class="v">12,480 行 × 18 列</span></div>
+              <div class="kv"><span class="k">来源表</span><span class="v mono">mock_orders</span></div>
+              <div class="kv"><span class="k">共享源</span><span class="v">项目「营销分析」升级而来</span></div>
+              <div class="locknote"><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg><span>全局共享层：只读，分发到项目后可在项目侧编辑</span></div>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h">分发</div>
+              <div class="kv blk"><span class="k">目标项目</span><span class="v">分发 = Parquet 中转进项目分析库（P_）并建项目登记 + 版本链（§13.6）</span></div>
+            </div>
+
+            <div class="danger-zone">
+              <button class="btn-p">分发到本项目…</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="hang">
+      全局清单 = <b>用户数据表</b>（系统内部表要过滤，白名单待确认）；行内用虚线徽标 <code>全局</code> 与项目行区分（与强度徽标正交，不抢视觉）。
+      升级（项目 → 全局）与本页相反方向：全局行右键「复制到项目…」= 读全局表写入当前项目库 + 版本链分支；脚本文件重建为 <code>resources/</code> 文件。
+    </p>
+  </section>
+
+  <div class="canvas pad">
+    <p class="hang" style="margin:0">
+      本块样式：<code>.dhead</code> / <code>.dsub</code> / <code>.locknote</code> / <code>.danger-zone</code>（这里放的是主按钮，命名沿用了总集稿）。
+      落地代码：<code>crates/analytics_resource/src/global/</code>（<code>DistributeShape</code> 是外部消费面，不可改名）+ <code>detail_view/</code>。
+    </p>
+  </div>
+
+</main>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

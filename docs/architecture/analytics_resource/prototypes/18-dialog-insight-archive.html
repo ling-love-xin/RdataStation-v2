@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>18 洞察归档 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>18 · 洞察归档</div>
+  <div class="prow">
+    <h1 class="p-title">洞察归档对话框<span class="p-sec">§12.2 · T20</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    画像快照 JSON → 资产库 File 档 <b>copy</b>，统一落 <code>resources/insight/</code>，名称与表名绑定。归档模式<b>固定 copy</b>，不提供 reference（快照必须先落在 <code>.RSmeta/insight-archive/</code> 再复制进来）。
+    快照带 <code>generated_at</code> → 指纹必变 → <b>每次归档都开新版本</b>（有意：审计长在版本上，靠 <code>keep_versions</code> 兜底）。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="17-dialog-conflict.html">← 上一块：升级冲突</a><a href="19-empty-states.html">下一块：空态与异常 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>报告视图归档<span class="desc">已落地（file 档）：显示名 / 目标位置 / 固定 copy / 标签 / 来源表 / 保留策略</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-insight-archive proto-on">
+        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-grid" xlink:href="#i-grid"/></svg>洞察归档<span class="sub2">画像快照 → 资产库 File 档 copy</span><button class="x">✕</button></div>
+        <div class="dlg-body">
+          <div class="srcbar">
+            <svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+            <span class="mono">insight/table_profile/orders_profile.json</span>
+            <span class="tagn">来自洞察中间页</span>
+          </div>
+          <div class="fgrid">
+            <div class="fl">显示名</div>
+            <div class="fw"><input class="inp" value="orders_profile 画像"></div>
+
+            <div class="fl">目标位置</div>
+            <div class="fw"><input class="inp ro" value="resources/insight/orders_profile 画像.json" readonly></div>
+            <div class="fhint">快照统一归档到 <code>resources/insight/</code>，名称与表名绑定。</div>
+
+            <div class="fl">归档模式</div>
+            <div class="fw"><div class="radios"><label><span class="rdot on"></span>复制（固定）</label></div></div>
+            <div class="fhint">快照在 <code>.RSmeta/insight-archive/</code> 生成后复制进 <code>resources/insight/</code>，不提供 reference。</div>
+
+            <div class="fl">标签</div>
+            <div class="fw"><div class="tags" style="margin:0">
+              <span class="tagc">洞察<span class="x">✕</span></span>
+              <span class="tagc">月报<span class="x">✕</span></span>
+              <span class="tagc add">＋ 添加标签</span>
+            </div></div>
+
+            <div class="fl">来源表</div>
+            <div class="fw"><input class="inp ro" value="warehouse.orders（binding.source_table）" readonly></div>
+
+            <div class="fl">保留历史内容</div>
+            <div class="fw"><span class="selw">跟随设置（最近 5 份）<span class="ar">▾</span></span></div>
+          </div>
+          <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>快照带 <code>generated_at</code> 时间戳 → 指纹必变 → <b>每次归档都开新版本</b>（有意：审计长在版本上；靠 <code>keep_versions</code> 兜底）。</span></div>
+        </div>
+        <div class="dlg-foot"><span>归档后回到洞察中间页 · 集合条目保留</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">归档</button></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>待决策的第二种视图<span class="desc">数据视图（analysis 档）尚在等拍板，先把代价摆出来</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-insight-archive proto-on">
+        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-grid" xlink:href="#i-grid"/></svg>洞察归档<span class="sub2">画像快照 → 资产库</span><button class="x">✕</button></div>
+        <div class="dlg-body">
+          <div class="srcbar">
+            <svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+            <span class="mono">insight/table_profile/orders_profile.json</span>
+            <span class="tagn">来自洞察中间页</span>
+          </div>
+          <div class="fgrid">
+            <div class="fl">归档形态</div>
+            <div class="fw"><div class="radios" style="flex-direction:column;align-items:flex-start;gap:8px">
+              <label><span class="rdot on"></span>报告视图（file 档 · 已落地）</label>
+              <label style="opacity:.5"><span class="rdot"></span>数据视图（analysis 档 · 配方 + 画像结构化数据）</label>
+            </div></div>
+            <div class="fhint">数据视图打开 = 桥接结果集做二次分析，需要「配方快照可执性」——这是本期<b>做 / 不做</b>的分界点。</div>
+          </div>
+          <div class="note warn"><svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg><span>A2 两视图：报告视图（file 档）已落地；数据视图（analysis 档）<b>待决策</b>（规格 §12.2.1，本期做 / 不做）。</span></div>
+        </div>
+        <div class="dlg-foot"><span>归档后回到洞察中间页 · 集合条目保留</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">归档</button></div>
+      </div>
+    </div>
+    <p class="hang">数据视图一旦做，就要回答「配方快照在别的实例上还能不能跑」——<b>能跑 = 得带 schema 与函数依赖；不能跑 = 它只是元数据记录，不是可执行存档</b>。<br>另一个未做项：洞察归档<b>不写 <code>promoted_from</code></b>（它来自洞察不是草稿），与草稿→归档的链路在数据层是分开的。</p>
+  </section>
+
+  <div class="canvas pad">
+    <p class="hang" style="margin:0">
+      本块样式与 11 页共用：<code>.dlg.dlg-insight-archive</code> / <code>.srcbar</code> / <code>.fgrid</code> / <code>.tags</code> / <code>.selw</code> / <code>.note.warn</code>。
+      落地代码：<code>crates/analytics_resource/src/dialogs/archive.rs</code>（复用归档对话框，洞察来源只换字段与模式）。
+    </p>
+  </div>
+
+</main>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

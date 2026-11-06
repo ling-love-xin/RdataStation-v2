@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>01 面板头 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>01 · 面板头</div>
+  <div class="prow">
+    <h1 class="p-title">面板头<span class="p-sec">§2.1</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    高 <code>36px</code>（2.25rem）· 标题 <code>text_sm</code> 中等字重 + 前缀图标 · 右端两个 <code>24px</code> 紧凑按钮，各挂一个下拉。
+    <b>＋ ▾</b> = 从草稿箱归档… / 从本地文件归档…（存档本体必须来自某处，不存在凭空创建）；<b>⋯</b> = 重建索引… / 打开资源目录 / 回收站… / 刷新。
+    标题点击 = 折叠/展开（沿用 M4/M5 面板头行为）。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="index.html#p02">下一块：工具栏 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>常态<span class="desc">面板头只有标题与两个按钮，下拉收起</span></div>
+    <div class="canvas pad">
+      <aside class="dockflat" style="height:64px">
+        <div class="panel-head">
+          <svg class="ico-sm"><use href="#i-chart" xlink:href="#i-chart"/></svg>
+          <span class="ttl">资产库</span>
+          <div class="acts">
+            <button class="pact" title="归档到资产库">＋<span class="caret">▾</span></button>
+            <button class="pact" title="更多">⋯</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span><b>＋ ▾</b> 展开<span class="desc">两项，第二项不带图标</span></div>
+    <div class="canvas pad">
+      <aside class="dockflat" style="height:150px">
+        <div class="panel-head">
+          <svg class="ico-sm"><use href="#i-chart" xlink:href="#i-chart"/></svg>
+          <span class="ttl">资产库</span>
+          <div class="acts">
+            <button class="pact on" title="归档到资产库">＋<span class="caret">▾</span></button>
+            <button class="pact" title="更多">⋯</button>
+          </div>
+          <div class="headmenu open">
+            <div class="hmi">从草稿箱归档…<span class="k">Ctrl+Shift+A</span></div>
+            <div class="hmi">从本地文件归档…</div>
+          </div>
+        </div>
+      </aside>
+    </div>
+    <p class="hang">落地差异：<b>草稿箱侧右键「归档为存档…」仍是独立入口，未接到这里</b>（属 M5 的面板）；<code>Ctrl+Shift+A</code> 目前<b>没有键绑定</code>（app 层只绑了 5 个键）。</p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span><b>⋯</b> 展开<span class="desc">四项，中间一条分隔线把「回收站…」与前两项分开</span></div>
+    <div class="canvas pad">
+      <aside class="dockflat" style="height:180px">
+        <div class="panel-head">
+          <svg class="ico-sm"><use href="#i-chart" xlink:href="#i-chart"/></svg>
+          <span class="ttl">资产库</span>
+          <div class="acts">
+            <button class="pact" title="归档到资产库">＋<span class="caret">▾</span></button>
+            <button class="pact on" title="更多">⋯</button>
+          </div>
+          <div class="headmenu open">
+            <div class="hmi">重建索引…</div>
+            <div class="hmi">打开资源目录</div>
+            <div class="hsep"></div>
+            <div class="hmi">回收站…</div>
+            <div class="hmi"><svg class="ico-sm"><use href="#i-refresh" xlink:href="#i-refresh"/></svg>刷新</div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <div class="canvas pad">
+    <p class="hang" style="margin:0">
+      <b>本块要调整的东西都在这一处</b>：<code>proto.css</code> 的 <code>.panel-head</code> / <code>.pact</code> / <code>.caret</code> / <code>.headmenu</code> / <code>.hmi</code> / <code>.hsep</code>。
+      落地代码：<code>crates/analytics_resource/src/resource_view/mod.rs</code> 的面板头渲染 + <code>panels/resources.rs</code> 的宿主装配。
+    </p>
+  </div>
+
+</main>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

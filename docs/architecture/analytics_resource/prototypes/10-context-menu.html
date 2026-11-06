@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>10 右键菜单 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>10 · 右键菜单</div>
+  <div class="prow">
+    <h1 class="p-title">右键菜单<span class="p-sec">§3.2</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    行内<b>不摆常驻按钮</b>，动作全走右键：打开（只读）/ 取回（检出）… / 版本历史… ─ 重命名显示名 / 打标签 / 移动到分组 ─ 升级到全局… ─ 在系统中显示 / 复制路径 ─ <b>移入回收站</b>（破坏性项用分隔线隔离）。
+    多选时单选项（打开 / 取回 / 版本历史 / 升级 / 复制路径 / 在系统中显示）<b>全部置灰</b>，批量项改文案带计数。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="09-detail-insight.html">← 上一块：洞察集合卡</a><a href="11-dialog-archive.html">下一块：归档对话框 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>单选态<span class="desc">文件行 · 一切可用</span></div>
+    <div class="canvas pad">
+      <div class="ctx proto-on">
+        <div class="mi">打开（只读）<span class="k">Enter</span></div>
+        <div class="mi">取回（检出）…</div>
+        <div class="mi">版本历史…</div>
+        <div class="sep"></div>
+        <div class="mi">重命名显示名<span class="k">F2</span></div>
+        <div class="mi">打标签…</div>
+        <div class="mi">移动到分组 ▾</div>
+        <div class="sep"></div>
+        <div class="mi">升级到全局…</div>
+        <div class="sep"></div>
+        <div class="mi">在系统中显示</div>
+        <div class="mi">复制路径</div>
+        <div class="sep"></div>
+        <div class="mi danger">移入回收站<span class="k">Del</span></div>
+      </div>
+    </div>
+    <p class="hang">
+      项目行才有「升级到全局…」；<b>全局行不出现</b>（它已经是全局）。本体异常（缺失 / 内容已变）与只读项目下「取回」置灰；本体不可定位（缺失 / 旧行没登记路径）时「复制路径」「在系统中显示」也置灰——与详情面板动作区同一判据。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>多选态<span class="desc">3 项 · 单选项灰、批量项带计数、移入回收站显示条数</span></div>
+    <div class="canvas pad">
+      <div class="ctx proto-on">
+        <div class="mi cap">多选 3 项时的同一菜单（对照）</div>
+        <div class="mi dim">打开（只读）</div>
+        <div class="mi dim">取回（检出）…（多选不可用）</div>
+        <div class="mi dim">版本历史…（多选不可用）</div>
+        <div class="sep"></div>
+        <div class="mi">批量打标签…<span class="k">3 项</span></div>
+        <div class="mi">批量移动到分组 ▾<span class="k">3 项</span></div>
+        <div class="sep"></div>
+        <div class="mi dim">升级到全局…（多选不可用，§13.3）</div>
+        <div class="sep"></div>
+        <div class="mi danger">移入回收站（3 项）<span class="k">Del</span></div>
+      </div>
+    </div>
+    <p class="hang"><b>重命名不给批量</b>：改哪一条都是猜。批量中途失败时回执要交代「改了 / 移入了 N 处」，不能只报整体失败。移入回收站是对整个选择集生效 + 二次确认（显示数量），完成后底部出撤销条。</p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>分组头右键<span class="desc">已实现、旧总集稿未画（§2.4「第七 / 十五刀」）</span></div>
+    <div class="canvas pad">
+      <div class="grid2">
+        <div>
+          <div style="width:240px">
+            <div class="ghead sub"><span class="chev">▼</span>报表<span class="dft">默认</span><span class="cnt">3</span></div>
+          </div>
+          <div class="ctx proto-on" style="margin-top:6px">
+            <div class="mi">重命名…</div>
+            <div class="mi">设为归档默认分组<span class="k">已设</span></div>
+            <div class="sep"></div>
+            <div class="mi">新建分组…</div>
+            <div class="mi danger">删除分组（成员回未分组）</div>
+          </div>
+        </div>
+        <div>
+          <div class="hang" style="margin-top:0">
+            「全部分组」是<b>聚合头</b>：右键只有「新建分组…」；<br>
+            「未分组」头不出现「设为默认」与「删除分组」（它不能被删、也不该是默认落点）；<br>
+            已设为默认的那个头，菜单项变「取消归档默认分组」，头上显示「默认」小字。
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">D</span>拖拽落点<span class="desc">行拖到分组头 = 移动（落点只有分组头，不接行）</span></div>
+    <div class="canvas pad">
+      <div style="width:240px">
+        <div class="ghead"><span class="chev">▼</span>全部分组<span class="cnt">8 项</span></div>
+        <div class="gbody">
+          <div class="ghead sub"><span class="chev">▶</span>未分组<span class="cnt">3</span></div>
+          <div class="ghead sub proto-drop"><span class="chev">▼</span>报表<span class="cnt">4</span></div>
+          <div class="gbody">
+            <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">monthly.md</span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">3.1 KB · 2 周前</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="hang">
+      口径：① 落点<b>只有分组头</b>——多选时拖一条 = 拖整个选集；拖到「未分组」头 = 移出全部分组；②「全部分组」聚合头<b>不接落点</b>，「拖到某一行」也不接（资产库没有手工排序，拖到行上会承诺一个做不到的语义）；③ 悬停高亮用 <code>list_active</code>（与选中底同 token）；④ 只读项目不给拖；⑤ 拖到当前所在分组不发请求（与菜单里当前项置灰同一口径）。
+    </p>
+  </section>
+
+  <div class="canvas pad">
+    <p class="hang" style="margin:0">
+      本块样式：<code>.ctx</code> / <code>.mi</code> / <code>.mi.dim</code> / <code>.mi.danger</code> / <code>.mi.cap</code> / <code>.sep</code>，拆块时补 <code>.ghead.proto-drop</code>。
+      落地代码：<code>crates/analytics_resource/src/resource_view/</code>（菜单项抽成纯函数以便单测）+ <code>crates/analytics_resource/src/jobs/tag/</code>。
+    </p>
+  </div>
+
+</main>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

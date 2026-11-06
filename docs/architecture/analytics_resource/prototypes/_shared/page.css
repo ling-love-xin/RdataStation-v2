@@ -1,0 +1,97 @@
+/* 原型页外壳样式：只在 prototypes/ 下使用，不改 proto.css（proto.css 是总集稿的原样副本） */
+body.proto{
+  padding:0 0 48px;background:var(--pagebg);
+}
+.phead{max-width:1240px;margin:0 auto;padding:26px 20px 16px;}
+.crumb{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);margin-bottom:8px;}
+.crumb a{color:var(--muted);text-decoration:none;}
+.crumb a:hover{color:var(--fg);text-decoration:underline;}
+.prow{display:flex;align-items:center;gap:12px;}
+.p-title{font-size:19px;font-weight:700;color:var(--fg);letter-spacing:.2px;}
+.p-sec{font-size:11px;font-weight:600;color:var(--primary);border:1px solid var(--active-border);border-radius:5px;padding:1px 6px;vertical-align:3px;}
+.prow .grow{flex:1;}
+.theme-toggle{border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;color:var(--muted);background:var(--bg);}
+.theme-toggle:hover{color:var(--fg);border-color:var(--input-border);}
+.p-spec{max-width:860px;margin-top:8px;font-size:11.5px;line-height:1.75;color:var(--muted);}
+.p-spec b{color:var(--fg);font-weight:600;}
+.p-spec code{font-family:Consolas,monospace;font-size:10.5px;color:var(--fg);background:var(--sidebar);border-radius:4px;padding:0 4px;}
+.pnav{display:flex;gap:14px;margin-top:12px;font-size:11px;}
+.pnav a{color:var(--muted);text-decoration:none;border-bottom:1px dashed var(--border);padding-bottom:1px;}
+.pnav a:hover{color:var(--primary);border-color:var(--primary);}
+
+.stage{max-width:1240px;margin:0 auto;padding:0 20px;}
+.variant{margin-bottom:26px;}
+.variant-h{display:flex;align-items:baseline;gap:8px;margin-bottom:8px;font-size:12px;font-weight:700;color:var(--fg);}
+.variant-h .no{font-family:Consolas,monospace;font-size:11px;color:var(--muted);}
+.variant-h .desc{font-size:11px;font-weight:400;color:var(--muted);}
+.canvas{background:var(--bg);border:1px solid var(--border);border-radius:10px;box-shadow:0 1px 2px rgba(0,0,0,.04);}
+.canvas.pad{padding:14px;}
+.canvas.flush{padding:0;overflow:hidden;}
+.canvas.scroll{padding:0;overflow:auto;}
+.hang{font-size:10.5px;line-height:1.7;color:var(--muted);margin-top:7px;}
+.hang b{color:var(--warning);font-weight:600;}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;align-items:start;}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px;align-items:start;}
+
+/* —— 面板列：240px 左 Dock 的一致外形（proto.css 的 .sidebar-l 只有右边框） —— */
+.dockcol{width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar);}
+.dockcol-tall{height:420px;}
+.dockcol-mid{height:300px;}
+.dockcol-short{height:180px;}
+.dockcol-auto{height:auto;}
+/* 无左邻居的独立面板列：菜单/弹层要能溢出，故不裁剪 */
+.dockflat{width:240px;position:relative;background:var(--sidebar);border:1px solid var(--sidebar-border);border-radius:9px;flex:none;}
+/* 分组头的「默认」标记：已实现、旧总集稿未画（§2.4 落地现状「第十五刀」） */
+.ghead .dft{font-size:8.5px;font-weight:600;color:var(--primary);border:1px solid currentColor;border-radius:3px;padding:0 3px;line-height:13px;letter-spacing:0;flex:none;}
+.ghead .dft+.cnt{margin-left:6px;}
+
+/* 拖拽落点高亮（实现里用 list_active 底；全部分组不接落点） */
+.ghead.proto-drop{background:var(--accent);border-radius:5px;}
+
+/* 详情列 320px */
+.detailcol{width:320px;border:1px solid var(--border);border-radius:9px;overflow:hidden;background:var(--bg);}
+.detailcol-tall{height:560px;}
+
+/* —— 静态态显影：总集稿靠 #wb 的 data-* 互斥显隐，这里用 .proto-on 单独点亮 —— */
+.dlg.proto-on{display:flex;position:relative;left:auto;top:auto;transform:none;margin:0 auto;max-height:none;}
+.pop.proto-on{display:block;position:relative;top:auto;left:auto;right:auto;margin:8px;}
+.headmenu.proto-on{display:block;position:relative;top:auto;right:auto;margin:4px 6px 8px auto;}
+.ctx.proto-on{display:block;position:relative;left:auto;top:auto;}
+.pstatus.proto-on{display:flex;}
+.strip.proto-on{display:flex;}
+.ctab.proto-on{display:flex;}
+.cbody.proto-on{display:block;}
+.cb-none.proto-on{display:flex;}
+.dstate.proto-on{display:flex;}
+.dp-insight.proto-on{display:flex;}
+.undo.proto-on{display:flex;}
+.st.proto-on{display:block;}
+.alertbox.proto-on{display:block;}
+.row.proto-hover{background:var(--hover);}
+.row.proto-focus{outline:1px solid var(--active-border);outline-offset:-1px;}
+
+/* —— 只在拆块页补充的最小示意件（总集稿没有画，规格 §5 要求） —— */
+.skrow{height:24px;display:flex;align-items:center;padding:0 13px;}
+.skbar{height:7px;border-radius:4px;background:var(--sidebar-border);}
+.skbar.w1{width:96px;}
+.skbar.w2{width:72px;}
+.skbar.w3{width:118px;}
+.sk-hint{font-size:10px;color:var(--muted);padding:4px 13px;}
+
+/* 索引页 */
+.idx{max-width:1240px;margin:0 auto;padding:0 20px;}
+.idx-group{margin-bottom:22px;}
+.idx-group h2{font-size:12px;font-weight:700;color:var(--fg);margin-bottom:10px;padding-left:2px;}
+.idx-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(272px,1fr));gap:12px;}
+.idx-card{display:block;text-decoration:none;background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:12px 13px;transition:border-color .12s,box-shadow .12s;}
+.idx-card:hover{border-color:var(--active-border);box-shadow:0 2px 8px rgba(0,0,0,.07);}
+.idx-card .ih{display:flex;align-items:baseline;gap:8px;}
+.idx-card .no{font-family:Consolas,monospace;font-size:11px;color:var(--muted);}
+.idx-card .nm{font-size:13px;font-weight:700;color:var(--fg);}
+.idx-card .sec{margin-left:auto;font-size:10px;color:var(--primary);border:1px solid var(--active-border);border-radius:4px;padding:0 4px;}
+.idx-card .ds{margin-top:6px;font-size:11px;line-height:1.7;color:var(--muted);}
+.idx-card .tg{margin-top:9px;display:flex;flex-wrap:wrap;gap:5px;}
+.idx-card .tg span{font-size:9.5px;color:var(--muted);background:var(--sidebar);border:1px solid var(--sidebar-border);border-radius:4px;padding:0 5px;line-height:15px;}
+.howto{max-width:1240px;margin:0 auto 22px;padding:13px 15px;background:var(--bg);border:1px solid var(--border);border-radius:9px;font-size:11.5px;line-height:1.85;color:var(--muted);}
+.howto b{color:var(--fg);}
+.howto code{font-family:Consolas,monospace;font-size:10.5px;color:var(--fg);background:var(--sidebar);border-radius:4px;padding:0 4px;}

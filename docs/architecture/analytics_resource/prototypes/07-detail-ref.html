@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>07 引用型详情 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>07 · 引用型详情</div>
+  <div class="prow">
+    <h1 class="p-title">右侧详情面板 · 引用型<span class="p-sec">§3.1 / §12.1.1</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    两档引用：<b>旧 <code>TableRef</code> 行</b>（2026-10-13 已划掉，仅读取兼容，顶部必须挂失效警告条「这是引用，源表可能已变更或被删除」+ 立即校验）与
+    <b>reference 归档模式</b>（本体留原位、只存元数据，源变更 → 快照失效 → 不打开 + 顶部失效条 + 两动作）。
+    共同点：无内容指纹 → 版本不递增，只记「当时指向哪」；<b>引用不复现内容</b>。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="06-detail-file.html">← 上一块：文件型详情</a><a href="08-detail-global.html">下一块：全局详情 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>旧 TableRef 行<span class="desc">常态 + 顶部 warning 条；无版本、无指纹</span></div>
+    <div class="canvas pad">
+      <div class="detailcol">
+        <div class="dstate proto-on" style="flex:none">
+          <div class="warnstrip">
+            <svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg>
+            <span class="grow">这是引用，源表可能已变更或被删除<br><span style="opacity:.85">最后校验：2026-09-15 09:02 · 存在</span></span>
+            <button class="btn-s warn">立即校验</button>
+          </div>
+          <div class="dhead">
+            <svg class="ico-sm ic"><use href="#i-link" xlink:href="#i-link"/></svg>
+            <span class="dnm">ods.orders</span>
+            <button class="x" title="重命名显示名（F2，不改物理路径）"><svg class="ico-sm"><use href="#i-edit" xlink:href="#i-edit"/></svg></button>
+          </div>
+          <div class="dsub">kind 引用 · TableRef 已划掉（2026-10-13），本页仅对旧行读取兼容</div>
+          <div class="dbody" style="overflow:visible">
+            <div class="sect">
+              <div class="sect-h">基本信息<span class="lock">只读</span></div>
+              <div class="kv"><span class="k">复现强度</span><span class="v"><span class="sb b-warn"><span class="d"></span>引用</span></span></div>
+              <div class="kv"><span class="k">归档时间</span><span class="v">2026-09-14 16:40</span></div>
+              <div class="kv"><span class="k">内容指纹</span><span class="v">无（引用型不可指纹）</span></div>
+              <div class="kv blk"><span class="k">本体位置</span><span class="v mono">远端 analytics.orders</span></div>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h">来源</div>
+              <div class="kv"><span class="k">来源连接</span><span class="v"><span class="dlink" style="margin:0">本地 MySQL · analytics</span></span></div>
+              <div class="kv"><span class="k">来源表</span><span class="v mono">analytics.orders</span></div>
+              <div class="kv"><span class="k">登记入口</span><span class="v">数据库导航 · 登记为存档</span></div>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h">版本</div>
+              <div class="kv blk"><span class="k">不适用</span><span class="v">无内容指纹 → 版本不递增（引用只记「当时指向哪」）</span></div>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h">标签与分组</div>
+              <div class="tags">
+                <span class="tagc">订单<span class="x">✕</span></span>
+                <span class="tagc">外部<span class="x">✕</span></span>
+                <span class="tagc add">＋ 添加标签</span>
+              </div>
+              <div class="kv" style="margin-top:6px"><span class="k">分组</span><span class="v">外部数据 ▾</span></div>
+            </div>
+
+            <div class="danger-zone">
+              <button class="btn-d">移入回收站</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>reference 型 · 快照失效<span class="desc">源指纹变了：打开被拦截，顶部条换成失效语义 + 「接受当前内容」</span></div>
+    <div class="canvas pad">
+      <div class="detailcol">
+        <div class="dstate proto-on" style="flex:none">
+          <div class="warnstrip">
+            <svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg>
+            <span class="grow">源已变更，快照失效<br><span style="opacity:.85">期望 3f9a2c7b1e04 · 实际 7d20b9c4f1a8 · 打开被拦截（懒校验 §12.1.1 ②）</span></span>
+            <button class="btn-s warn">接受当前内容</button>
+          </div>
+          <div class="dhead">
+            <svg class="ico-sm ic"><use href="#i-link" xlink:href="#i-link"/></svg>
+            <span class="dnm">sales_daily.csv</span>
+            <span class="dver">v2</span>
+          </div>
+          <div class="dsub">kind 文件 · 引用型（本体留源位置，只存元数据）</div>
+          <div class="dbody" style="overflow:visible">
+            <div class="sect">
+              <div class="sect-h">基本信息<span class="lock">只读</span></div>
+              <div class="kv"><span class="k">实例</span><span class="v"><span class="scope-badge">项目</span></span></div>
+              <div class="kv"><span class="k">大小</span><span class="v">源文件大小（读取中）</span></div>
+              <div class="kv"><span class="k">内容指纹</span><span class="v mono">3f9a2c7b1e04</span></div>
+              <div class="kv blk"><span class="k">源位置</span><span class="v mono">/data/exports/sales_daily.csv</span></div>
+              <div class="locknote"><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg><span>引用型：本体在源位置，源变更后快照失效</span></div>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h">失效处置</div>
+              <div class="kv blk"><span class="k">接受当前内容</span><span class="v">以当前源生成新版本（v3）+ 新指纹；成功后清除失效条</span></div>
+              <div class="kv blk"><span class="k">从历史还原</span><span class="v"><span class="dlink" style="margin:0">打开版本历史…</span>挑一版取回</span></div>
+            </div>
+
+            <div class="danger-zone">
+              <button class="btn-d">移入回收站</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="hang">引用型归档模式的三个硬口径：① 本体<b>留源位置</b>，只存元数据（地址 + 指纹 + 版本）；② 打开前懒校验，指纹变了<b>不打开</b>，先摆失效条；③ 移入回收站只删<b>登记记录</b>，源文件不动，之后可从回收站还原登记行。</p>
+  </section>
+
+  <div class="canvas pad">
+    <p class="hang" style="margin:0">
+      本块样式：<code>.warnstrip</code> / <code>.dhead</code> / <code>.locknote</code> / <code>.kv.blk</code>。
+      落地代码：<code>crates/analytics_resource/src/detail_view/</code>（引用只读提示已由 <code>alert_line</code> 覆盖）；<code>TableRef</code> 只保留读取兼容，不新增能力。
+    </p>
+  </div>
+
+</main>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>09 洞察集合卡 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>09 · 洞察集合卡</div>
+  <div class="prow">
+    <h1 class="p-title">右栏「已洞察表」集合卡<span class="p-sec">§12.2 · T18–T21</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    集合 = <b>会话工作集</b>（源表 / 结果集 / 文件三来源）；右栏只读快照，与洞察中间页同源。每条三个动作：<b>对比…</b>（T18，勾选后中间页切 Compare 并激活中央 tab）、<b>关系排查</b>（T19，同名列值域交集，非外键语义）、<b>归档…</b>（T20，画像快照 JSON → File 档 copy 进 <code>resources/insight/</code>）。
+    集合内临时表不参与 30 分钟 TTL 与上限淘汰（T21，内存登记、非 I/O，离开集合解除）。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="08-detail-global.html">← 上一块：全局详情</a><a href="10-context-menu.html">下一块：右键菜单 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>三条目 · 第一条展开关系排查<span class="desc">当前表带「当前」角标；每条显示来源类型与规模</span></div>
+    <div class="canvas pad">
+      <div class="detailcol" style="width:320px">
+        <div class="dp-insight proto-on" style="border-left:none;flex:1">
+          <div class="sethead">
+            <svg class="ico-sm ic"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+            <span class="ttl2">已洞察表</span>
+            <span class="cnt2">3 项 · 会话工作集</span>
+          </div>
+          <div class="setbody">
+            <div class="setintro">进入过洞察分析的表进入此集合（源表 / 结果集 / 文件三来源）；集合内临时表不参与 30 分钟 TTL 清理（T21）。右栏只读快照，集合与当前中间页同源。</div>
+
+            <div class="setitem">
+              <div class="srow1">
+                <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>
+                <span class="snm">orders_profile</span>
+                <span class="scur">当前</span>
+              </div>
+              <div class="ssrc"><svg class="ico-sm" style="color:var(--muted)"><use href="#i-link" xlink:href="#i-link"/></svg>源表 · warehouse.orders</div>
+              <div class="smeta">12,480 行 × 18 列 · 画像 12 项</div>
+              <div class="setacts">
+                <button class="btn-s btn-xs">对比…</button>
+                <button class="btn-s btn-xs">关系排查</button>
+                <button class="btn-p btn-xs">归档…</button>
+              </div>
+              <div class="ovbox on">
+                <div class="ov-h"><svg class="ico-sm"><use href="#i-seq" xlink:href="#i-seq"/></svg>同名列值重叠 · orders_profile ↔ dwd_orders_view</div>
+                <table class="ov-tbl">
+                  <thead><tr><th>同名列</th><th>交集数</th><th>占 orders_profile</th><th>占 dwd_orders_view</th></tr></thead>
+                  <tbody>
+                    <tr><td>order_id</td><td class="num">12,344</td><td class="num">98.9%</td><td class="num">97.6%</td></tr>
+                    <tr><td>channel</td><td class="num">6</td><td class="num">100%</td><td class="num">100%</td></tr>
+                    <tr><td>amount</td><td class="num">—</td><td class="num">数值列不判重叠</td><td class="num">—</td></tr>
+                  </tbody>
+                </table>
+                <div class="ov-note">语义 = 值域交集（非外键）；按交集数降序，无类型兼容同名列显示空态（T19）。</div>
+              </div>
+            </div>
+
+            <div class="setitem">
+              <div class="srow1">
+                <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+                <span class="snm">dwd_orders_view</span>
+              </div>
+              <div class="ssrc"><svg class="ico-sm" style="color:var(--muted)"><use href="#i-plug" xlink:href="#i-plug"/></svg>结果集 · SELECT · 洞察中间页</div>
+              <div class="smeta">1,204,388 行 × 26 列</div>
+              <div class="setacts">
+                <button class="btn-s btn-xs">对比…</button>
+                <button class="btn-s btn-xs">关系排查</button>
+                <button class="btn-p btn-xs">归档…</button>
+              </div>
+            </div>
+
+            <div class="setitem">
+              <div class="srow1">
+                <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>
+                <span class="snm">sales_daily.csv</span>
+              </div>
+              <div class="ssrc"><svg class="ico-sm" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>文件 · 本地导入（无连接）</div>
+              <div class="smeta">3,205 行 × 9 列</div>
+              <div class="setacts">
+                <button class="btn-s btn-xs">对比…</button>
+                <button class="btn-s btn-xs">关系排查</button>
+                <button class="btn-p btn-xs">归档…</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>关系排查收起<span class="desc">默认态：每条只有来源与动作，值重叠表按需展开</span></div>
+    <div class="canvas pad">
+      <div class="detailcol" style="width:320px">
+        <div class="dp-insight proto-on" style="border-left:none;flex:1">
+          <div class="sethead">
+            <svg class="ico-sm ic"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+            <span class="ttl2">已洞察表</span>
+            <span class="cnt2">2 项 · 会话工作集</span>
+          </div>
+          <div class="setbody">
+            <div class="setitem">
+              <div class="srow1">
+                <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+                <span class="snm">dwd_orders_view</span>
+                <span class="scur">当前</span>
+              </div>
+              <div class="ssrc"><svg class="ico-sm" style="color:var(--muted)"><use href="#i-plug" xlink:href="#i-plug"/></svg>结果集 · SELECT · 洞察中间页</div>
+              <div class="smeta">1,204,388 行 × 26 列</div>
+              <div class="setacts">
+                <button class="btn-s btn-xs">对比…</button>
+                <button class="btn-s btn-xs">关系排查</button>
+                <button class="btn-p btn-xs">归档…</button>
+              </div>
+            </div>
+            <div class="setitem">
+              <div class="srow1">
+                <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>
+                <span class="snm">sales_daily.csv</span>
+              </div>
+              <div class="ssrc"><svg class="ico-sm" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>文件 · 本地导入（无连接）</div>
+              <div class="smeta">3,205 行 × 9 列</div>
+              <div class="setacts">
+                <button class="btn-s btn-xs">对比…</button>
+                <button class="btn-s btn-xs">关系排查</button>
+                <button class="btn-p btn-xs">归档…</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="hang">「对比」依赖勾选：右栏勾一条 → 中间页勾当前表 + 切 <code>Compare</code> 形态并激活中央 tab。<b>归档</b>走 11 页的洞察归档对话框（快照固定 copy，不提供 reference）。</p>
+  </section>
+
+  <div class="canvas pad">
+    <p class="hang" style="margin:0">
+      本块样式：<code>.dp-insight</code> / <code>.sethead</code> / <code>.setbody</code> / <code>.setitem</code> / <code>.ssrc</code> / <code>.smeta</code> / <code>.setacts</code> / <code>.ovbox</code> / <code>.ov-tbl</code>。
+      落地代码：洞察 crate 产出集合 + <code>crates/analytics_resource/src/dialogs/archive.rs</code>（洞察来源复用同一归档对话框）。
+    </p>
+  </div>
+
+</main>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>
