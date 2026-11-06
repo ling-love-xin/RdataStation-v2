@@ -11,12 +11,12 @@
 <header class="phead">
   <div class="crumb">资产库 / 分析存档（M6）原型<span>/</span>索引</div>
   <div class="prow">
-    <h1 class="p-title">分块原型索引<span class="p-sec">19 块</span></h1>
+    <h1 class="p-title">分块原型索引<span class="p-sec">22 块</span></h1>
     <span class="grow"></span>
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    每个 UI 块 / 每个对话框<b>各自一页</b>，页内把这块的<b>所有状态并排摆出来</b>——不再靠 <code>data-*</code> 状态位互斥显隐，改一块不用在脑子里同时装另外 18 个场景。
+    每个 UI 块 / 每个对话框<b>各自一页</b>，页内把这块的<b>所有状态并排摆出来</b>——不再靠 <code>data-*</code> 状态位互斥显隐，改一块不用在脑子里同时装另外 21 个场景。
     原来的总集稿 <a href="../analytics-resource-prototype.html">analytics-resource-prototype.html</a> 保留不动，继续用来整体走查。
   </p>
   <nav class="pnav">
@@ -28,7 +28,7 @@
 
 <div class="howto">
   <b>怎么用这一套</b><br>
-  ① 要改<b>视觉</b>（间距 / 颜色 / 行高 / 徽标形状）→ 改 <code>_shared/proto.css</code> 一处，19 页同时生效；<br>
+  ① 要改<b>视觉</b>（间距 / 颜色 / 行高 / 徽标形状）→ 改 <code>_shared/proto.css</code> 一处，22 页同时生效；<br>
   ② 要改<b>某一块的布局或文案</b> → 只改那一页的 HTML，不会牵动别块；<br>
   ③ 要加<b>新状态</b> → 在那页里新加一个 <code>.variant</code> 小节，页内并排即可，不用造状态位；<br>
   ④ 页脚「本块样式 + 落地代码」告诉你这块在 <code>crates/analytics_resource/</code> 落到哪，评审结论可直接指到文件。<br>
@@ -162,12 +162,38 @@
     </div>
   </section>
 
+  <section class="idx-group">
+    <h2>六、补齐的三个对话框（总集稿未画，代码早已有）</h2>
+    <div class="idx-grid">
+      <a class="idx-card" href="20-dialog-rename.html">
+        <div class="ih"><span class="no">20</span><span class="nm">重命名 / 编辑别名</span><span class="sec">§3.1 / §3.2</span></div>
+        <div class="ds">两个字段共用一个形状：显示名 / 别名（留空 = 清除）/ 空名被挡 / 值没变。4 态。</div>
+        <div class="tg"><span>384px</span><span>4 态</span><span>F2 · 行右键</span></div>
+      </a>
+      <a class="idx-card" href="21-dialog-group.html">
+        <div class="ih"><span class="no">21</span><span class="nm">新建 / 重命名分组</span><span class="sec">§2.4 / §3.2</span></div>
+        <div class="ds">新建（主按钮「创建」）/ 重命名（「保存」）/ 空名被挡 / 删除分组二次确认。</div>
+        <div class="tg"><span>384px</span><span>4 态</span><span>单层分组</span></div>
+      </a>
+      <a class="idx-card" href="22-dialog-pick.html">
+        <div class="ih"><span class="no">22</span><span class="nm">草稿选择（从草稿箱归档）</span><span class="sec">§2.1</span></div>
+        <div class="ds">未选 / 已选 2 个（按钮带计数）/ 超 50 条明说还有多少；选一个与多选两条收尾。</div>
+        <div class="tg"><span>544px</span><span>列表 288px</span><span>3 态</span></div>
+      </a>
+    </div>
+    <p class="hang" style="margin-top:8px">
+      这三页是<b>本轮补的</b>：代码早就在（<code>dialogs/rename.rs</code> / <code>group.rs</code> / <code>pick.rs</code>），但总集稿当初没画，导致「详情点头部改名字」「分组区新建」「＋▾ 从草稿箱归档」三条入口在评审页里找不到对应画面。
+      页内状态与落地代码里真实存在的分支一一对应（空名 / 值没变 / 超 50 条这些边界都在实现里，不是补画的想象）。
+    </p>
+  </section>
+
   <div class="howto" style="margin-top:4px">
     <b>没有拆进来的东西（如实说明）</b><br>
     ① <b>四个动作的时序图</b>（归档 / 取回 / 版本 / 回收站）仍只在设计稿 §4 里，属流程不是 UI 块；<br>
     ② <b>应用级状态栏、标题栏 36px、活动栏 48px</b> 是外壳，不属本模块，故不做页；<br>
     ③ <b>主题映射（§6）与尺寸校验表</b>在总集稿末尾与设计稿 §7，属对照表，仍在总集稿看；<br>
-    ④ <b>总集稿六张说明卡片</b>（三种 kind / 只读三重 / 右键条件 / 异常修复 / 洞察联动 / 双实例）尚未拆成独立「说明页」——它们的结论已折进各页 <code>.p-spec</code> 与页脚注，需要原文时看总集稿。
+    ④ <b>总集稿六张说明卡片</b>（三种 kind / 只读三重 / 右键条件 / 异常修复 / 洞察联动 / 双实例）尚未拆成独立「说明页」——它们的结论已折进各页 <code>.p-spec</code> 与页脚注，需要原文时看总集稿；<br>
+    ⑤ <b>§13 双实例链路</b>（升级同名冲突之外的分发 / 实例化 / 跨项目引用四处）<b>仍没有页</b>：规格 §12.2.1 与 §13 里那几段还标着「待用户决策」，画出来等于替用户先拍板，故本轮不补。
   </div>
 
 </div>

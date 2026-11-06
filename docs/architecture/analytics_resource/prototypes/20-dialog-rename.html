@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>20 重命名 / 别名对话框 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>20 · 重命名 / 别名对话框</div>
+  <div class="prow">
+    <h1 class="p-title">重命名 / 编辑别名对话框<span class="p-sec">§3.1 / §3.2</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    宽 <code>384px</code>（24rem）· <b>两个字段共用一个形状</b>：一个输入 + 一行说明 + 保存 / 取消。<b>只改显示名与别名，文件不动</b>——
+    <code>resources/</code> 下的文件名与路径不在这条路上（要改文件名得先取回再归档，§1 原则 2）。
+    三处入口同一条链路：行右键「重命名…」、<code>F2</code>、详情头部点名字；别名只在详情头部点别名。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="19-empty-states.html">← 上一块：空态与异常</a><a href="21-dialog-group.html">下一块：分组名对话框 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>显示名<span class="desc">预填当前名；保存可用（值与当前不同）</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-name proto-on">
+        <div class="dlg-head">重命名<span class="sub2">dau_report.sql · File 型</span><button class="x">✕</button></div>
+        <div class="dlg-body">
+          <input class="inp" value="dau_report.sql">
+          <div class="namehint">只改显示名：<code>resources/</code> 下的文件名与路径不变</div>
+        </div>
+        <div class="dlg-foot"><span>项目「营销分析」</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">保存</button></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>别名（留空 = 清除）<span class="desc">别名是给人看的第二个叫法，空是合法输入</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-name proto-on">
+        <div class="dlg-head">编辑别名<span class="sub2">dau_report.sql</span><button class="x">✕</button></div>
+        <div class="dlg-body">
+          <input class="inp" placeholder="别名（留空 = 清除）" value="">
+          <div class="namehint">别名只是另一个叫法：不影响显示名、文件名与路径</div>
+        </div>
+        <div class="dlg-foot"><span>留空保存 = 清除该别名</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">保存</button></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>两处闸门<span class="desc">左：空名被挡（warning 色说明）；右：值没变（只提示、不算错）</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="grid2">
+        <div class="dlg dlg-name proto-on">
+          <div class="dlg-head">重命名<span class="sub2">空名</span><button class="x">✕</button></div>
+          <div class="dlg-body">
+            <input class="inp" value="   ">
+            <div class="namehint err">显示名不能为空</div>
+          </div>
+          <div class="dlg-foot"><span></span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p" style="opacity:.4">保存</button></div>
+        </div>
+
+        <div class="dlg dlg-name proto-on">
+          <div class="dlg-head">重命名<span class="sub2">值没变</span><button class="x">✕</button></div>
+          <div class="dlg-body">
+            <input class="inp" value="dau_report.sql">
+            <div class="namehint">值没变</div>
+          </div>
+          <div class="dlg-foot"><span></span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p" style="opacity:.4">保存</button></div>
+        </div>
+      </div>
+    </div>
+    <p class="hang">
+      实现口径（<code>dialogs/rename.rs</code>）：闸门是纯函数 <code>rename_gate</code>（<b>带单测</b>）——显示名走 <code>name_hint</code>
+      查空名，别名不走（空 = 清除是合法动作）；<b>Unchanged 只让保存置灰、不显示错误色</b>。说明文字每帧从输入值重算，改回去提示自然消失。
+      实现只在保存按钮与 <code>Enter</code>（on_ok）两处过闸，没有第三处重复校验。宽度常量：
+      <code>ui::NAME_DIALOG_WIDTH = 24rem</code>。
+    </p>
+  </section>
+
+  <div class="canvas pad">
+    <p class="hang" style="margin:0">
+      本块样式：<code>.dlg.dlg-name</code>（384px）/ <code>.inp</code> / <code>.namehint</code>（<code>.err</code> 变 warning）。
+      落地代码：<code>crates/analytics_resource/src/dialogs/rename.rs</code>（窗口用例见 <code>tests/dialog_window.rs</code>）。
+    </p>
+  </div>
+
+</main>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

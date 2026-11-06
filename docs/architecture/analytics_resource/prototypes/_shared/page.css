@@ -52,6 +52,23 @@ body.proto{
 .detailcol{width:320px;border:1px solid var(--border);border-radius:9px;overflow:hidden;background:var(--bg);}
 .detailcol-tall{height:560px;}
 
+/* —— 三个「补页」对话框的宽度（proto.css 只有总集稿画过的那几个宽） —— */
+/* 重命名 / 运行别名：24rem = 384px（ui::NAME_DIALOG_WIDTH） */
+.dlg-name{width:384px;}
+/* 草稿选择：34rem = 544px（ui::PICK_DIALOG_WIDTH） */
+.dlg-pick{width:544px;}
+/* 草稿选择的列表容器：18rem = 288px（ui::PICK_LIST_MAX_HEIGHT） */
+.picklist{max-height:288px;overflow:auto;border:1px solid var(--sidebar-border);border-radius:7px;padding:4px;}
+/* 草稿选择的一行：勾选 + 相对路径 + 来源连接（proto.css 无对应件） */
+.pickrow{display:flex;align-items:center;gap:8px;height:26px;padding:0 5px;border-radius:5px;}
+.pickrow:hover{background:var(--hover);}
+.pickrow .pth{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-family:Consolas,monospace;font-size:10.5px;color:var(--fg);}
+.pickrow .conn{flex:none;font-size:10.5px;color:var(--muted);}
+.picklist .more{font-size:10px;color:var(--muted);padding:5px 6px 3px;}
+/* 单输入小对话框的说明行（与 proto.css 的 .fhint 同位，但这里要贴输入框下方的独立一行） */
+.namehint{margin-top:8px;font-size:10.5px;line-height:1.6;color:var(--muted);}
+.namehint.err{color:var(--warning);}
+
 /* —— 静态态显影：总集稿靠 #wb 的 data-* 互斥显隐，这里用 .proto-on 单独点亮 —— */
 .dlg.proto-on{display:flex;position:relative;left:auto;top:auto;transform:none;margin:0 auto;max-height:none;}
 .pop.proto-on{display:block;position:relative;top:auto;left:auto;right:auto;margin:8px;}
