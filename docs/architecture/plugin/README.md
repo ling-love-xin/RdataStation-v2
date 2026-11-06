@@ -146,7 +146,7 @@ cd docs/architecture/plugin/prototype && node check-prototypes.mjs
 
 **宿主接线已闭环**（2026-10-15）：`manifest.rs` 的 `permissions.host` 承载权限声明；`host_provider.rs` 实现 storage（真落盘 + ttl）与 log（tracing）；`runtime.rs` 运行时循环把事件泵的 `InboundRequest` 路由到 handler 并回帧（实例已收掉则丢弃）；`init_plugin_manager` 在 app 启动时接线（`crates/app/src/main.rs::init_global_system`，失败不阻断启动）并自动 spawn 循环。**仍保持 `Unsupported`**（诚实口径）：`request_credential` / `secret.resolve`（宿主还没有通用 secret store）、`notify`（通知按钮要 UI 回调通道，P4 接界面）、`ssh.open_tunnel`（宿主还没有 SSH 连接引擎）。`cargo test -p rds-plugin` **155/155** 单测 + **61/61** 集成测试。下一步：SSH sidecar 协议方法（`x.ssh.*` + 字节流帧）或 wasm render-document（P3 后半）。
 
-**插件生命周期（P4 前置）已落地**（2026-10-15，VS Code 口径）：六态状态机补全最后三态 —— `shutdown_plugin(id)`（supervisor 只停一个插件的全部实例，会话如实作废）；`deactivate_plugin` Sidecar 分支先停进程（卸载删目录的前提）；`uninstall_plugin` 磁盘卸载（依赖反向索引 `check_dependents` 拒绝被引用者、保留 `plugin-data`、清 global.db、事件）；`enable/disable_plugin`（DB `is_enabled` 权威状态 + 事件）；热插拔 = `scan_and_diff_plugins` 挂在运行时循环（目录即插件：新目录自动加载激活、消失自动停用移除、清单 hash 变化置 `needs_reload` **不热生效**）+ `reload_plugins` 全量重载；`hot_reload_manager.rs` 空壳落为薄封装。`cargo test -p rds-plugin` **155/155** 单测 + **75/75** 集成测试。**未接**（诚实列出）：`install_package` 无调用方（安装 UI 是 P4）；`request_credential` / `notify` / `ssh.open_tunnel` 仍 `Unsupported`；`enable/disable` 的持久化在 DB、UI 开关是 P4；依赖拒绝在 DB 未初始化时保守放行（卸载只删目录）。
+**插件生命周期（P4 前置）已落地**（2026-10-15，VS Code 口径）：六态状态机补全最后三态 —— `shutdown_plugin(id)`（supervisor 只停一个插件的全部实例，会话如实作废）；`deactivate_plugin` Sidecar 分支先停进程（卸载删目录的前提）；`uninstall_plugin` 磁盘卸载（依赖反向索引 `check_dependents` 拒绝被引用者、保留 `plugin-data`、清 global.db、事件）；`enable/disable_plugin`（DB `is_enabled` 权威状态 + 事件）；热插拔 = `scan_and_diff_plugins` 挂在运行时循环（目录即插件：新目录自动加载激活、消失自动停用移除、清单 hash 变化置 `needs_reload` **不热生效**）+ `reload_plugins` 全量重载；`hot_reload_manager.rs` 空壳落为薄封装。`cargo test -p rds-plugin` **155/155** 单测 + **75/75** 集成测试。**当时未接**：`install_package` 无调用方（安装 UI 是 P4）；`request_credential` / `notify` / `ssh.open_tunnel` 仍 `Unsupported`；`enable/disable` 的持久化在 DB、UI 开关是 P4；依赖拒绝在 DB 未初始化时保守放行（卸载只删目录）。
 
 **SSH sidecar 轨 · 协议方法面（第一刀）已落地**（2026-10-15）：`sidecar/ssh.rs` 定义正向 `x.ssh.*` 五方法（connect 建会话凭据走 SecretRef / exec 一次一答 / shell+forward 通道契约就绪 / close 幂等），类型即契约，SSH 插件照此实现即可与宿主桥对接；`x.` 私有前缀天然通过安装期声明校验。`cargo test -p rds-plugin` **165/165** 单测 + **75/75** 集成。
 
@@ -155,6 +155,17 @@ cd docs/architecture/plugin/prototype && node check-prototypes.mjs
 **渲染计算轨（wasm render-document）第一刀已落地**（2026-10-15）：`manifest.capabilities.wasm.render_document` 声明段（函数名 / formats / output_format）+ `render.rs` 渲染服务（`renderer_for` 按格式选渲染器 + `render_document` 调 wasm 插件收产物 + `resolve_spec` 契约预览），纯计算、无 host function 依赖。`cargo test -p rds-plugin` **171/171** 单测 + **75/75** 集成。
 
 **渲染计算轨第二刀（wasm 实证 + 定位更正）已落地**（2026-10-16，commit 4b2274d1）：`tools/plugin-render-mermaid`（mermaid-rs-renderer 0.3.1 编 wasm，Extism PDK 1.4）——JSON 信封契约（source + theme.preset/overrides，非 JSON 退化纯文本）+ 嵌入 DejaVu Sans 子集（200KB）+ 全链路实证 12/12（5 图类型 / CJK / 信封 / 退化 / 明暗 / 语法错）。wasm 2.59MB，首调 26ms。宿主 `render.rs` 信封辅助 + `extism.rs` host_log no-op（panic hook 诊断通道）。`cargo test -p rds-plugin` **186/186** 单测 + 集成全绿。**定位更正（用户拍板方案 A）**：本刀产物属「**一次性渲染 / 导出轨**」（Mermaid 文本 → SVG 预览 / 导出 / 文档嵌入），**不是** ER 绘图交互主路线——主路线是 Q11 定案的 GPUI 原生渲染（`crates/database/src/er/` 已启动）；wasm 轨维持「不再扩建」口径。详见 `plugin-dev-plan.md` §11.4 + `plugin-prototype-design.md` §11.3.1。
+
+**插件登记与面板收尾（2026-10-16）已落地**（commit `fcdc95ce` → `87fef5e8`）：
+登记按清单 id（= `code`）唯一：`register_plugin` 事务内「删同 code 旧行 → 插新行」并沿用旧行的
+`is_enabled` / `installed_at`，配迁移 028 收敛历史重复行 + `UNIQUE(code)` 索引；管理器 scan / enable /
+disable / uninstall 全部改用 by-code 接口（此前按安装 uuid 更新，0 行命中 → 停用重启后自动复活、
+卸载留幽灵行）。覆盖安装先停用旧实例、删目录失败报可读原因、装完按库内 `is_enabled` 激活。热插拔发现
+的新目录补登记（否则 DB 无记录 = 默认启用，面板停用/卸载照样落空）。`plugin_dependencies` 随插件行
+连带清理，不留孤儿。面板：sidecar/frontend 的状态改由真实 `LoadStatus` 透出（原来硬写 Inactive，
+运行中的插件永远显示「已停用」）；安装回执四种文案（保持停用 / 激活失败 / 已安装并启用 / 兜底）；
+变更提示 + 「重载 N」按钮消费 `pending_reloads`。`cargo test -p rds-plugin` **214** 单测 + 集成全绿
+（`lifecycle` 7 条）；`cargo test -p rds-store --lib` **160 passed / 2 ignored**。
 
 **P3（wasm host function 面）、P4（注册表与界面）、P5（生态）未开始**。当前 wasm 插件拿不到任何宿主能力（与「默认拒绝」一致）。
 
