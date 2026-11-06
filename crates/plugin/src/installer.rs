@@ -97,6 +97,18 @@ impl PluginInstaller {
             )))
         })?;
         let final_install_path = self.install_dir.join(&manifest.plugin.id);
+
+        // 覆盖安装（同 id 重装 / 升级）：先把运行中的插件停掉。
+        // Windows 上进程（尤其 sidecar 的 agent.exe）占用文件会让目录删不干净，
+        // 旧版本文件就会和新包混在一起（清单指向新入口、旧入口仍在）。
+        if final_install_path.exists() {
+            if let Some(manager) = get_plugin_manager() {
+                if manager.get_loaded_plugin(&manifest.plugin.id).is_some() {
+                    manager.deactivate_plugin(&manifest.plugin.id).await?;
+                }
+            }
+        }
+
         self.copy_plugin(&package_root, &final_install_path)?;
 
         // 5. 注册到数据库
@@ -113,13 +125,27 @@ impl PluginInstaller {
         //
         // 加载失败不撤销安装（目录与登记都已落盘），但必须留日志：此前是 `let _ =`
         // 静默吞掉，用户只会看到「清单里没有这个插件」却没有任何原因。
+        // 激活按库里的启用状态决定：装完只停在「已加载」时，sidecar 驱动没有注册，
+        // 用户装完立刻建连接会连不上，且看不出原因。
         if let Some(manager) = get_plugin_manager() {
-            if let Err(e) = manager.load_plugin_from_dir(&final_install_path).await {
-                tracing::warn!(
-                    plugin = %manifest.plugin.id,
-                    error = %e,
-                    "插件安装完成但加载失败（目录与登记保留）"
-                );
+            match manager.load_plugin_from_dir(&final_install_path).await {
+                Ok(_) if plugin.is_enabled => {
+                    if let Err(e) = manager.activate_plugin(&manifest.plugin.id).await {
+                        tracing::warn!(
+                            plugin = %manifest.plugin.id,
+                            error = %e,
+                            "插件安装完成但激活失败（目录与登记保留）"
+                        );
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        plugin = %manifest.plugin.id,
+                        error = %e,
+                        "插件安装完成但加载失败（目录与登记保留）"
+                    );
+                }
             }
         }
 
@@ -310,7 +336,14 @@ impl PluginInstaller {
     /// 复制插件到安装目录
     fn copy_plugin(&self, source_dir: &Path, target_dir: &Path) -> Result<(), CoreError> {
         if target_dir.exists() {
-            let _ = std::fs::remove_dir_all(target_dir);
+            // 删除失败不能吞：继续复制会把新包叠在旧包上，留下清单里已经删掉的
+            // 旧入口 / 旧 jar（校验只看源包，查不出来）。
+            std::fs::remove_dir_all(target_dir).map_err(|e| {
+                CoreError::common(CommonError::General(format!(
+                    "覆盖安装前删除旧目录失败（插件进程可能仍在占用文件）: {} — {e}",
+                    target_dir.display()
+                )))
+            })?;
         }
 
         self.copy_dir(source_dir, target_dir)?;
@@ -405,7 +438,17 @@ impl PluginInstaller {
 
         db_manager.register_plugin(&plugin).await?;
 
-        Ok(plugin)
+        // 库层会沿用同 code 旧行的启用状态；返回调用方的实例必须反映落库结果，
+        // 否则重装一个已停用的插件会被当场当成启用并激活。
+        db_manager
+            .get_plugin_by_code(&manifest.plugin.id)
+            .await?
+            .ok_or_else(|| {
+                CoreError::common(CommonError::General(format!(
+                    "插件登记后读不到记录: {}",
+                    manifest.plugin.id
+                )))
+            })
     }
 }
 
@@ -634,6 +677,33 @@ executable = "target/agent"
         assert!(!install.join(".git").exists());
         assert!(!install.join("node_modules").exists());
         assert!(!install.join(".DS_Store").exists());
+    }
+
+    /// 覆盖安装必须整目录替换：删除旧目录失败被吞掉再复制，会把旧版本独有
+    /// 的文件留在新包里（校验只看源包，查不出来）。
+    #[test]
+    fn overwrite_install_drops_files_the_new_package_no_longer_has() {
+        let dir = TempDir::new("copy-overwrite");
+        let source = dir.path().join("package");
+        write(&source, "plugin.toml", MANIFEST);
+        write(&source, "bin/agent", "v2-binary");
+
+        let install = dir.path().join("install");
+        write(&install, "plugin.toml", MANIFEST);
+        write(&install, "bin/agent", "v1-binary");
+        write(&install, "bin/legacy-helper.exe", "old");
+
+        let installer = PluginInstaller::new(install.clone());
+        installer.copy_plugin(&source, &install).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(install.join("bin/agent")).unwrap(),
+            "v2-binary"
+        );
+        assert!(
+            !install.join("bin/legacy-helper.exe").exists(),
+            "旧包独有的文件必须清掉"
+        );
     }
 
     /// 目录形态的插件包（开发目录 / 解压后的包）应被接受。

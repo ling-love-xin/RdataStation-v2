@@ -191,7 +191,10 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 自身作源）→ 解包到 `temp/`（zip 用 `enclosed_name()` 拒路径穿越，tar.gz 靠 `Archive::unpack`）
 → `locate_package_root`（根层清单，或唯一一层插件目录；多候选拒绝）→ `validate_plugin`
 （`plugin.toml` → 清单校验 → 入口存在 → checksums → 拒绝落入开发残留的
-入口）→ 复制（跳过开发残留）→ 登记 global.db → 清理临时目录 → `load_plugin_from_dir`。
+入口）→ 覆盖安装先停运行中的插件 → 整目录替换（删旧目录失败不再吞，报可读原因）→
+登记 global.db（按 code 合并，沿用停用状态与首次安装时间）→ 清理临时目录 →
+`load_plugin_from_dir` → 库里有启用状态就立即 `activate_plugin`（装完即可用；重装一个
+已停用的插件不会自己激活）。
 解包与复制在后台线程执行，面板显示「正在安装 …」并同时禁用两个按钮（防并发写同一目录）；
 完成后刷新清单，成功回执写「已安装 <名称> v<版本>（<code>）」，失败写可读错误。
 **下载 / 应用市场引导**仍二期。
