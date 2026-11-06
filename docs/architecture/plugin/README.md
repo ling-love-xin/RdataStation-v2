@@ -260,7 +260,7 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 放行；发布包应在 P5 打包流程里生成。加载期（`load_plugin_from_dir`）对带
 `checksums.json` 的包再校验一次，装好之后被改同样拦得住；`signature.json`（验"谁签发"）
 仍未做。
-`cargo test -p rds-plugin` **208 单测 + 71 集成**全绿。
+`cargo test -p rds-plugin` **215 单测 + 73 集成**全绿（2026-10-16 复跑）。
 
 **安装器跳过开发残留**（2026-10-16）：`installer::copy_dir` 按 `layout::is_dev_residue`
 跳过 `.git` / `.svn` / `.hg` / `.rds` / `.idea` / `.vscode` / `target` / `node_modules` /
