@@ -183,7 +183,15 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 名称/版本/状态徽标（已激活/已加载/已停用/出错）+ 刷新 + 启用/停用操作。
 数据面 = 全局 `PluginManager`；`manager::runtime_handle` 把宿主 tokio runtime 句柄
 注入全局（enable/disable 依赖 tokio 上下文），面板事件回调在后台 `block_on` 执行不阻塞 UI。
-卸载按钮与下载引导同二期（需确认对话框）。
+
+**卸载入口已接上面板**（2026-10-16）：每行 id 行尾加「卸载」按钮，点击先开确认框
+（`open_alert_dialog`，`ok_variant = Danger`），正文说清三件事：删的是
+`plugins/<id>/` 安装目录、`plugin-data/<id>` 用户数据保留、被其他插件依赖时会被拒绝
+并列出引用者。确认后走 `PluginManager::uninstall_plugin`：依赖检查 → 停用（sidecar
+先停进程）→ 删目录 → 清 global.db `plugin_store` 登记 → 移出索引 → 发事件；面板在
+后台 runtime 执行，完成后刷新清单并把回执写进状态行（失败红灯、成功绿灯，操作错误
+不会被随后成功的清单刷新擦掉）。**安装 / 导入插件包**的入口（`installer::install_package`
+至今无调用方）与下载引导仍二期。
 
 **目录布局已接入代码**（2026-10-16）：`plugin-layout.md` 定稿，`crates/plugin/src/layout.rs`
 成为唯一的路径/布局入口。四处硬约束落地：①清单里所有"指文件"的字段

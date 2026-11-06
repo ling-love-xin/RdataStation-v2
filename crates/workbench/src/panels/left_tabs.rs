@@ -9,7 +9,8 @@
 
 use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
 use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
@@ -420,6 +421,41 @@ impl ListDelegate for PluginListDelegate {
                 })
         };
 
+        // 卸载按钮（行尾，破坏性动作放最后）：先确认再落盘删除。
+        // 确认框要 Window（`open_alert_dialog`），只能在点击回调里开；真正删除走
+        // 面板方法（后台 runtime + tokio，完成后刷新清单）。
+        let uninstall_entity = self.entity.clone();
+        let uninstall_id = id.clone();
+        let uninstall_description = uninstall_confirm_description(&name, &id);
+        let uninstall = Button::new(SharedString::from(format!("plugin-{id}-uninstall")))
+            .ghost()
+            .with_size(Size::XSmall)
+            .label("卸载")
+            .tooltip("从磁盘删除该插件（保留 plugin-data 用户数据）")
+            .on_click(move |_, window, app| {
+                let entity = uninstall_entity.clone();
+                let id = uninstall_id.clone();
+                let description = uninstall_description.clone();
+                window.open_alert_dialog(app, move |alert, _window, _cx| {
+                    let entity = entity.clone();
+                    let id = id.clone();
+                    alert
+                        .confirm()
+                        .title("卸载插件")
+                        .description(SharedString::from(description.clone()))
+                        .ok_text("卸载")
+                        .cancel_text("取消")
+                        .ok_variant(ButtonVariant::Danger)
+                        .on_ok(move |_window, _cx, cx| {
+                            let _ = entity.update(cx, |this, cx| {
+                                this.uninstall_plugin(id.clone(), cx);
+                            });
+                            true
+                        })
+                });
+                app.stop_propagation();
+            });
+
         let item = ListItem::new(ElementId::Name(SharedString::from(format!(
             "plugin-row-{id}"
         ))))
@@ -448,10 +484,22 @@ impl ListDelegate for PluginListDelegate {
                         .child(button),
                 )
                 .child(
+                    // 第二行 = id + 卸载：破坏性动作与启停分开放，
+                    // 240px 面板里一行塞四个控件会互相挤扁
                     div()
-                        .text_xs()
-                        .text_color(cx.theme().colors.muted_foreground)
-                        .child(id),
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .text_xs()
+                                .text_color(cx.theme().colors.muted_foreground)
+                                .child(id),
+                        )
+                        .child(uninstall),
                 ),
         );
 
@@ -491,11 +539,11 @@ impl ListDelegate for PluginListDelegate {
     }
 }
 
-/// 插件 tab：已装插件清单（名称 / 版本 / 状态）+ 刷新 + 启用 / 停用。
+/// 插件 tab：已装插件清单（名称 / 版本 / 状态）+ 刷新 + 启用 / 停用 / 卸载。
 ///
 /// 数据面 = 全局 `PluginManager`（`plugin::manager`，app 启动时初始化）；会话态清单
-/// 由事件路径刷新（render 纯读）：首次 `new` 与「刷新 / 启停」操作后重新拉取。
-/// 启停是异步管理操作（依赖 tokio 上下文），经全局 runtime 句柄在后台执行，不阻塞 UI。
+/// 由事件路径刷新（render 纯读）：首次 `new` 与「刷新 / 启停 / 卸载」操作后重新拉取。
+/// 启停与卸载是异步管理操作（依赖 tokio 上下文），经全局 runtime 句柄在后台执行，不阻塞 UI。
 pub struct PluginPanel {
     shared: Shared,
     focus_handle: FocusHandle,
@@ -503,8 +551,10 @@ pub struct PluginPanel {
     plugins: Rc<RefCell<Vec<PluginInfo>>>,
     /// 刷新进行中（防重复触发）
     loading: Rc<Cell<bool>>,
-    /// 最近一次刷新/操作的错误文案（展示用，成功即清）
+    /// 最近一次操作的错误文案（失败展示，成功即清）
     error: Rc<RefCell<Option<String>>>,
+    /// 最近一次操作的成功回执（与 `error` 互斥，刷新时不清）
+    notice: Rc<RefCell<Option<String>>>,
     /// 插件列表状态（懒创建）
     plugins_list: Rc<RefCell<Option<Entity<ListState<PluginListDelegate>>>>>,
 }
@@ -517,14 +567,18 @@ impl PluginPanel {
             plugins: Rc::new(RefCell::new(Vec::new())),
             loading: Rc::new(Cell::new(false)),
             error: Rc::new(RefCell::new(None)),
+            notice: Rc::new(RefCell::new(None)),
             plugins_list: Rc::new(RefCell::new(None)),
         };
-        this.refresh_plugins(cx);
+        this.refresh_plugins(cx, true);
         this
     }
 
     /// 重新拉取插件清单（后台执行 `list_plugins`，回主线程写状态）。
-    fn refresh_plugins(&self, cx: &mut Context<Self>) {
+    ///
+    /// `clear_error`：下拉成功时是否清掉已有错误。操作路径传 `false`——否则一次
+    /// 失败的操作会被随后成功的 `list_plugins` 把错误文案擦掉，用户看不到原因。
+    fn refresh_plugins(&self, cx: &mut Context<Self>, clear_error: bool) {
         if self.loading.get() {
             return;
         }
@@ -543,7 +597,9 @@ impl PluginPanel {
                     }
                     Ok(Some(items)) => {
                         this.plugins.replace(items);
-                        this.error.replace(None);
+                        if clear_error {
+                            this.error.replace(None);
+                        }
                     }
                     Err(e) => {
                         this.error.replace(Some(format!("{e}")));
@@ -577,10 +633,54 @@ impl PluginPanel {
             };
             let _ = weak.update(cx, |this, cx| {
                 match outcome {
-                    Ok(()) => this.error.replace(None),
-                    Err(e) => this.error.replace(Some(format!("{e}"))),
+                    Ok(()) => {
+                        this.error.replace(None);
+                        this.notice.replace(Some(if enabled {
+                            format!("已启用 {id}")
+                        } else {
+                            format!("已停用 {id}")
+                        }));
+                    }
+                    Err(e) => {
+                        this.error.replace(Some(format!("{e}")));
+                        this.notice.replace(None);
+                    }
                 };
-                this.refresh_plugins(cx);
+                this.refresh_plugins(cx, false);
+            });
+        });
+    }
+
+    /// 卸载插件（磁盘删除，保留 `plugin-data` 用户数据）。
+    ///
+    /// 依赖检查 / 停进程 / 删目录 / 清登记全在 `manager::uninstall_plugin` 里；
+    /// 被其他插件依赖时会返回带引用者清单的错误，这里只需展示。
+    fn uninstall_plugin(&self, id: String, cx: &mut Context<Self>) {
+        let Some(handle) = plugin::runtime_handle().cloned() else {
+            self.error.replace(Some("插件运行时未初始化".to_string()));
+            cx.notify();
+            return;
+        };
+        let Some(mgr) = plugin::get_plugin_manager().cloned() else {
+            self.error.replace(Some("插件运行时未初始化".to_string()));
+            cx.notify();
+            return;
+        };
+        let weak = cx.entity().downgrade();
+        let _ = cx.spawn(async move |_this, cx| {
+            let outcome = handle.block_on(async { mgr.uninstall_plugin(&id).await });
+            let _ = weak.update(cx, |this, cx| {
+                match outcome {
+                    Ok(()) => {
+                        this.error.replace(None);
+                        this.notice.replace(Some(format!("已卸载 {id}")));
+                    }
+                    Err(e) => {
+                        this.error.replace(Some(format!("{e}")));
+                        this.notice.replace(None);
+                    }
+                };
+                this.refresh_plugins(cx, false);
             });
         });
     }
@@ -604,6 +704,15 @@ fn plugin_state_label(state: PluginState) -> (&'static str, &'static str) {
     }
 }
 
+/// 卸载确认框正文（纯函数，便于单测）：说清删什么、留什么、什么情况会被拒。
+fn uninstall_confirm_description(name: &str, id: &str) -> String {
+    format!(
+        "将删除插件「{name}」（{id}）的安装目录，并停掉它正在运行的进程。\n\
+         插件的用户数据（plugin-data/{id}）会保留。\n\
+         若其他插件声明依赖它，卸载会被拒绝并列出引用者。确定卸载？"
+    )
+}
+
 impl Render for PluginPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let fg = cx.theme().colors.foreground;
@@ -614,10 +723,11 @@ impl Render for PluginPanel {
             .with_size(Size::XSmall)
             .tooltip("刷新插件清单")
             .on_click(move |_, _window, cx| {
-                let _ = entity.update(cx, |this, cx| this.refresh_plugins(cx));
+                let _ = entity.update(cx, |this, cx| this.refresh_plugins(cx, true));
             });
 
         let error_text = self.error.borrow().clone();
+        let notice_text = self.notice.borrow().clone();
 
         // 懒创建 ListState（只建一次——重建会丢掉列表的选中行状态）
         if self.plugins_list.borrow().is_none() {
@@ -671,6 +781,14 @@ impl Render for PluginPanel {
                     .text_xs()
                     .text_color(cx.theme().colors.danger)
                     .child(err)
+            }))
+            .children(notice_text.map(|notice| {
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(cx.theme().colors.success)
+                    .child(notice)
             }))
             .child(
                 div()
@@ -746,5 +864,25 @@ impl ComponentPanel for PluginPanel {
     ) -> PopupMenu {
         // 业务项已移到模块内部工具栏，Dock 标题栏菜单只留容器管理项。
         menu
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::uninstall_confirm_description;
+
+    /// 卸载确认框必须把「删什么 / 留什么 / 什么情况被拒」说清楚——
+    /// 这是全仓唯一会删插件目录的入口，用户只在这一步看到后果。
+    #[test]
+    fn uninstall_prompt_states_what_is_deleted_kept_and_blocked() {
+        let text = uninstall_confirm_description("Oracle JDBC", "rds.driver.oracle");
+        assert!(text.contains("Oracle JDBC"), "{text}");
+        assert!(text.contains("rds.driver.oracle"), "{text}");
+        assert!(text.contains("安装目录"), "{text}");
+        assert!(
+            text.contains("plugin-data/rds.driver.oracle"),
+            "必须说明用户数据保留：{text}"
+        );
+        assert!(text.contains("依赖"), "必须说明被依赖时会被拒：{text}");
     }
 }
