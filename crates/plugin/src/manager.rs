@@ -111,6 +111,18 @@ pub enum LoadStatus {
     ActivationFailed(String),
 }
 
+/// 安装态的 `LoadStatus` → 面板用的会话态。
+///
+/// 此前 `list_plugins` 对 sidecar / frontend 插件一律写死 `Inactive`：面板把运行中的插件
+/// 显示成「已停用」，行尾只给「启用」（没有「停用」），用户无法从面板停掉正在跑的插件。
+fn session_state(status: &LoadStatus) -> PluginState {
+    match status {
+        LoadStatus::Active => PluginState::Active,
+        LoadStatus::LoadFailed(_) | LoadStatus::ActivationFailed(_) => PluginState::Error,
+        _ => PluginState::Inactive,
+    }
+}
+
 /// 插件管理器核心：发现 → 加载 → 激活 → 停用 → 卸载，单一入口。
 pub struct PluginManager {
     /// wasm 运行时（Extism；进程内沙箱；仅 `wasm` feature 下存在）
@@ -973,7 +985,7 @@ impl PluginManager {
                         author: m.publisher.clone(),
                         entry_point: String::new(),
                     },
-                    state: PluginState::Inactive,
+                    state: session_state(&lp.status),
                 });
             }
         }

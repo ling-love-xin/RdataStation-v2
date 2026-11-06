@@ -115,6 +115,39 @@ async fn hot_plug_adds_removes_and_marks_reload() {
     assert!(manager.pending_reloads().is_empty());
 }
 
+/// 面板读 `list_plugins`：运行中的插件必须报 `Active`。
+///
+/// 此前 sidecar / frontend 分支一律写死 `Inactive`，面板把正在跑的插件显示成「已停用」，
+/// 行尾只给「启用」——用户在面板里根本停不掉一个运行中的插件。
+#[tokio::test]
+async fn list_reports_running_plugins_as_active() {
+    use rds_plugin::wasm::PluginState;
+
+    let dir = TempDir::new("liststate");
+    let manager = PluginManager::new(dir.0.clone());
+    manager.init().await.unwrap();
+
+    write_plugin(&dir.0, "com.example.run", "v1");
+    manager.scan_and_diff_plugins().await.unwrap();
+
+    let state_of = |manager: &PluginManager| {
+        manager
+            .list_plugins()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == "com.example.run")
+            .expect("插件应出现在清单里")
+            .state
+    };
+    assert_eq!(state_of(&manager), PluginState::Active);
+
+    manager.disable_plugin("com.example.run").await.unwrap();
+    assert_eq!(state_of(&manager), PluginState::Inactive);
+
+    manager.enable_plugin("com.example.run").await.unwrap();
+    assert_eq!(state_of(&manager), PluginState::Active);
+}
+
 /// 磁盘卸载：目录删除 + 索引清理 + PluginUninstalled 事件。
 #[tokio::test]
 async fn uninstall_removes_dir_and_index_and_emits() {
