@@ -173,9 +173,22 @@ impl RightSidebarPanel {
                 // 动作接线：宿主端口在**这一层**注入（面板不认识服务层），
                 // 项目只读随 `Shared` 实时取（不缓进快照——它是窗口级状态）。
                 let read_only = self.shared.project_ui.borrow().read_only;
+                // 选集同理实时取：详情只显示焦点行，但「移动…」动的是整集（与右键同口径）。
+                let selected_ids = {
+                    let panel = self
+                        .shared
+                        .resources_panel
+                        .borrow()
+                        .as_ref()
+                        .and_then(|panel| panel.upgrade());
+                    panel
+                        .map(|panel| panel.read(cx).selected_ids())
+                        .unwrap_or_default()
+                };
                 let actions = DetailActions {
                     host: crate::components::resource_host::build_host(&self.shared),
                     read_only,
+                    selected_ids,
                 };
                 div().v_flex().size_full().min_h_0().child(render_detail(
                     &detail,

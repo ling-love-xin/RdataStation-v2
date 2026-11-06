@@ -1666,6 +1666,7 @@ fn detail_preview_block_renders_text_or_says_why_not(cx: &mut TestAppContext) {
             actions: Some(DetailActions {
                 host: host.clone(),
                 read_only: false,
+                selected_ids: Vec::new(),
             }),
         }
     });
@@ -1688,6 +1689,7 @@ fn detail_preview_block_renders_text_or_says_why_not(cx: &mut TestAppContext) {
             actions: Some(DetailActions {
                 host: host.clone(),
                 read_only: false,
+                selected_ids: Vec::new(),
             }),
         }
     });
@@ -1716,6 +1718,7 @@ fn detail_header_offers_rename_and_alias_only_when_writable(cx: &mut TestAppCont
             actions: Some(DetailActions {
                 host: host.clone(),
                 read_only: false,
+                selected_ids: Vec::new(),
             }),
         }
     });
@@ -1742,6 +1745,7 @@ fn detail_header_offers_rename_and_alias_only_when_writable(cx: &mut TestAppCont
             actions: Some(DetailActions {
                 host: host.clone(),
                 read_only: true,
+                selected_ids: Vec::new(),
             }),
         }
     });
@@ -1763,6 +1767,7 @@ fn detail_header_offers_rename_and_alias_only_when_writable(cx: &mut TestAppCont
             actions: Some(DetailActions {
                 host: host.clone(),
                 read_only: false,
+                selected_ids: Vec::new(),
             }),
         }
     });
@@ -1791,6 +1796,7 @@ fn detail_tag_chips_render_with_actions_only_when_writable(cx: &mut TestAppConte
             actions: Some(DetailActions {
                 host: host.clone(),
                 read_only: false,
+                selected_ids: Vec::new(),
             }),
         }
     });
@@ -1815,6 +1821,7 @@ fn detail_tag_chips_render_with_actions_only_when_writable(cx: &mut TestAppConte
             actions: Some(DetailActions {
                 host: host.clone(),
                 read_only: true,
+                selected_ids: Vec::new(),
             }),
         }
     });

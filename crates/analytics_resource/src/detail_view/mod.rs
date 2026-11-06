@@ -64,6 +64,11 @@ pub struct DetailActions {
     pub host: std::rc::Rc<dyn ResourcesHost>,
     /// 项目只读：写类动作一律禁用（与右键菜单同一判据）。
     pub read_only: bool,
+    /// 面板当前选集（多选时整集，单选时含焦点行）；空 = 只有这一条详情。
+    ///
+    /// 详情面板只展示焦点行，但「移动…」这类批量动作要动整集——与右键菜单
+    /// 「移动到分组 ›」同一口径（`list_delegate/mod.rs` 的 `selection_ids`）。
+    pub selected_ids: Vec<String>,
 }
 
 

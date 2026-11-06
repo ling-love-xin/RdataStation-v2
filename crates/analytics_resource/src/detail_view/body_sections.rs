@@ -188,33 +188,37 @@ pub(super) fn render_body_sections(
 ///
 /// 与行右键的「移动到分组 ›」**同一套宿主动作**（`request_move_to_group`），
 /// 这里只是第二个入口——详情面板里也要能改分组，不能只让用户回列表右键。
+/// 多选时动的是**整选集**（与右键同一口径），按钮上标条数，免得用户以为只动眼前这条。
 fn render_move_to_group(detail: &ArchiveDetail, actions: &DetailActions) -> impl IntoElement {
     let host = actions.host.clone();
-    let resource_id = detail.id.clone();
+    let ids = move_ids(&detail.id, &actions.selected_ids);
+    let count = ids.len();
+    // 多选时各条的分组可能不同，一个勾代表不了整集：菜单既不标 check 也不置灰。
+    let single = count <= 1;
     let current = detail.group_id.clone();
     let groups = detail.groups.clone();
     Button::new("archive-detail-move-group")
         .ghost()
         .xsmall()
         .debug_selector(|| "archive-detail-move-group".to_string())
-        .label("移动…")
+        .label(move_label(count))
         .dropdown_menu(move |menu, _window, _cx| {
             let mut menu = menu;
             // 菜单项与行右键「移动到分组 ›」逐项对齐：未分组 / 各分组 / 新建分组…
             // （标题写在按钮上就够了，菜单里不再摆一行不可点的标题。）
-            // 当前项置灰：点了也不会变（与右键子菜单同一口径）。
+            // 单选时当前项置灰：点了也不会变（与右键子菜单同一口径）。
             menu = menu.item(
                 PopupMenuItem::new("未分组")
-                    .checked(current.is_none())
-                    .disabled(current.is_none())
+                    .checked(single && current.is_none())
+                    .disabled(single && current.is_none())
                     .on_click({
                         let host = host.clone();
-                        let ids = vec![resource_id.clone()];
+                        let ids = ids.clone();
                         move |_, window, cx| host.request_move_to_group(&ids, None, window, cx)
                     }),
             );
             for group in &groups {
-                let is_current = current.as_deref() == Some(group.id.as_str());
+                let is_current = single && current.as_deref() == Some(group.id.as_str());
                 let group_id = group.id.clone();
                 menu = menu.item(
                     PopupMenuItem::new(group.name.clone())
@@ -222,7 +226,7 @@ fn render_move_to_group(detail: &ArchiveDetail, actions: &DetailActions) -> impl
                         .disabled(is_current)
                         .on_click({
                             let host = host.clone();
-                            let ids = vec![resource_id.clone()];
+                            let ids = ids.clone();
                             move |_, window, cx| {
                                 host.request_move_to_group(&ids, Some(&group_id), window, cx)
                             }
@@ -235,4 +239,23 @@ fn render_move_to_group(detail: &ArchiveDetail, actions: &DetailActions) -> impl
                     move |_, window, cx| host.request_create_group(window, cx)
                 }))
         })
+}
+
+/// 「移动…」要动的 id 集：面板给了选集就用选集（多选是整集），
+/// 没给（crate 单测、无宿主场景）就退回眼前这一条详情。
+pub(super) fn move_ids(detail_id: &str, selected: &[String]) -> Vec<String> {
+    if selected.is_empty() {
+        vec![detail_id.to_string()]
+    } else {
+        selected.to_vec()
+    }
+}
+
+/// 按钮文案：多条时标出数量——详情面板只显示焦点行，不标条数等于让用户误判范围。
+pub(super) fn move_label(count: usize) -> String {
+    if count <= 1 {
+        "移动…".to_string()
+    } else {
+        format!("移动 {count} 条…")
+    }
 }

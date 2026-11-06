@@ -348,9 +348,22 @@ impl ArchivePanel {
         match detail {
             Some(detail) => {
                 let read_only = self.shared.project_ui.borrow().read_only;
+                // 选集实时取：详情只显示焦点行，但「移动…」动的是整集（与右键同口径）。
+                let selected_ids = {
+                    let panel = self
+                        .shared
+                        .resources_panel
+                        .borrow()
+                        .as_ref()
+                        .and_then(|panel| panel.upgrade());
+                    panel
+                        .map(|panel| panel.read(cx).selected_ids())
+                        .unwrap_or_default()
+                };
                 let actions = DetailActions {
                     host: crate::components::resource_host::build_host(&self.shared),
                     read_only,
+                    selected_ids,
                 };
                 div()
                     .v_flex()

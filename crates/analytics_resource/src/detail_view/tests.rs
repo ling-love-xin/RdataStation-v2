@@ -1,4 +1,5 @@
 // 安全模式：测试模块不通配导入。
+use super::body_sections::{move_ids, move_label};
 use super::{ArchiveDetail, ArchiveTagChip, alert_line, detail_rows, kind_label, short_hash};
 use crate::model::{ArchiveKind, ArchiveStatus, PayloadMode, RowScope};
 
@@ -140,4 +141,27 @@ fn kind_labels_are_shared_wording() {
     assert_eq!(kind_label(ArchiveKind::File), "受管文件");
     assert_eq!(kind_label(ArchiveKind::Analysis), "分析表");
     assert_eq!(kind_label(ArchiveKind::TableRef), "远端引用");
+}
+
+#[test]
+fn move_targets_the_whole_selection_when_there_is_one() {
+    // 单选：面板选集里就焦点行这一条，动它。
+    let single = move_ids("ar_1", &["ar_1".to_string()]);
+    assert_eq!(single, vec!["ar_1".to_string()]);
+    // 多选：动整集（不是只动详情面板显示的那条）。
+    let multi = move_ids(
+        "ar_2",
+        &["ar_1".to_string(), "ar_2".to_string(), "ar_3".to_string()],
+    );
+    assert_eq!(multi.len(), 3);
+    assert!(multi.contains(&"ar_2".to_string()));
+    // 没有选集（crate 单测 / 无宿主场景）：退回眼前这一条。
+    assert_eq!(move_ids("ar_9", &[]), vec!["ar_9".to_string()]);
+}
+
+#[test]
+fn move_label_counts_only_when_more_than_one() {
+    assert_eq!(move_label(1), "移动…");
+    // 数量要上按钮：详情面板只显示焦点行，不标条数会让人以为只动这一条。
+    assert_eq!(move_label(3), "移动 3 条…");
 }
