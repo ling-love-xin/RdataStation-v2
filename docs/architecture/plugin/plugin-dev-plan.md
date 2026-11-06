@@ -689,6 +689,10 @@ Uninstalled ──install──▶ Installed ──load──▶ Loaded ──ac
   `deactivate` 只回 `Loaded` 不删磁盘；`uninstall` 才是磁盘删除。
 - **disabled 语义**：权威状态 = global.db `plugins.is_enabled`（不是内存标记）——重启后依然禁用；
   扫描 / 自动加载按它决定要不要 activate。
+- **登记唯一性**：`plugins` 主键是安装实例 uuid，运行时身份是 `code`，所以一条 code 只能有一行——
+  写入统一走 `plugin_store::register_plugin`（事务内按 code 删旧行再插新行，沿用旧行的
+  `is_enabled` / `installed_at`）；迁移 `global/028_plugin_code_unique.sql` 收敛历史重复行并加
+  `UNIQUE(code)` 索引，挡住绕过该函数的写入路径。
 - **三个决策点（用户已拍板）**：
   1. 卸载安全 = **依赖反向索引**：被其他插件引用（`dependency.rs::check_dependents`，遍历 DB 全部
      插件解析 manifest 找引用者）→ **拒绝卸载**并列出引用者；

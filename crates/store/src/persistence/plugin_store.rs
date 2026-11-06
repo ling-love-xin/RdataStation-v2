@@ -629,4 +629,44 @@ mod tests {
         );
         assert!(get_plugin(&conn, "uuid-1").unwrap().is_none());
     }
+
+    /// 历史库里已经存在的重复行：迁移 028 收敛成每个 code 一行（保留最新 updated_at），
+    /// 并加上唯一索引——否则任何绕过 `register_plugin` 的写入路径都能再造出重复登记。
+    #[test]
+    fn the_code_unique_migration_collapses_historical_duplicates() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../../migrations/global/001_init.sql"))
+            .unwrap();
+        insert_legacy_row(&conn, "uuid-old", "1.0.0", "2026-10-01T00:00:00Z");
+        insert_legacy_row(&conn, "uuid-new", "1.1.0", "2026-11-01T00:00:00Z");
+
+        conn.execute_batch(include_str!(
+            "../../migrations/global/028_plugin_code_unique.sql"
+        ))
+        .unwrap();
+
+        let all = get_all_plugins(&conn).unwrap();
+        assert_eq!(all.len(), 1, "同一 code 的历史重复行应只留一行");
+        assert_eq!(all[0].id, "uuid-new", "应保留 updated_at 最新的那一行");
+
+        assert!(
+            insert_legacy_row(&conn, "uuid-third", "1.2.0", "2026-12-01T00:00:00Z").is_err(),
+            "唯一索引应拒绝再写入同 code 的第二行"
+        );
+    }
+
+    /// 模拟「升级前」的写入：直接 INSERT，不经过 `register_plugin` 的按 code 合并。
+    fn insert_legacy_row(
+        conn: &Connection,
+        id: &str,
+        version: &str,
+        updated_at: &str,
+    ) -> rusqlite::Result<usize> {
+        conn.execute(
+            "INSERT INTO plugins
+             (id, code, name, version, author, description, repo_url, plugin_type, manifest_json, install_path, is_enabled, is_builtin, installed_at, updated_at)
+             VALUES (?1, 'com.example.demo', 'Demo', ?2, NULL, NULL, NULL, 'sidecar', NULL, '/plugins/com.example.demo', 1, 0, '2026-10-01T00:00:00Z', ?3)",
+            params![id, version, updated_at],
+        )
+    }
 }
