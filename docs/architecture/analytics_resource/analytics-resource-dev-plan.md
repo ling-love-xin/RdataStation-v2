@@ -961,18 +961,21 @@ cargo run -p rds-app -j 2
 | 决策 / 能力 | 文件 |
 | --- | --- |
 | 语义裁决、kind 模型、数据流 | `analytics-resource-architecture.md` §0/§2/§6 |
-| 面板 / 列表 / 状态行 | `crates/analytics_resource/src/resource_view.rs` |
-| 详情属性面板 | `crates/analytics_resource/src/detail_view.rs` |
-| 版本历史 / 回收站 / 分组 / 标签对话框 | `src/{version_view,recycle_view,folder_view,tag_view}.rs` |
+| 面板 / 列表 / 状态行 | `src/resource_view/`（`mod.rs` 装配 · `panel_render/` 分区渲染 · `list.rs` 行 · `groups.rs` 分组折叠 · `filters.rs` 筛选 · `status.rs` 状态行） |
+| 详情属性面板 | `src/detail_view/`（`rows.rs` 四分区取值 · `body_sections.rs` 渲染 · `actions.rs` 底部动作 · `tag_preview.rs` 标签 chips · `header.rs` / `banners.rs`） |
+| 版本历史 / 回收站 / 分组 / 标签对话框 | `src/dialogs/version/`（`mod` · `open` · `render`）· `src/dialogs/group.rs` · `src/dialogs/tag/` · `src/dialogs/rename.rs` / `pick.rs` / `conflict.rs` |
+| 版本 diff 对话框 | `src/dialogs/version_diff.rs`（`parse_display_patch` 决定"有没有东西可看"）+ `src/jobs/version.rs::{diff_text_too_large, unified_patch}`（挡板与 patch 生成都是纯函数，各有单测） |
+| 详情「最近 3 条」版本明细 | 取数 `src/store/version.rs::recent_versions_by_resource`（一次 top-N，不逐行查）· 装配 `src/present/detail.rs::detail_version_lines` · 上限 `src/present/mod.rs::DETAIL_RECENT_VERSIONS` · 同批取数 `src/jobs/refresh.rs` |
+| 详情「组织」区「移动…」下拉 | `src/detail_view/body_sections.rs::render_move_to_group`（`Button::new("archive-detail-move-group")` + `dropdown_menu`，动作复用 `resource_host::group_actions::{request_move_to_group, request_create_group}`）· 分区取值 `src/detail_view/rows.rs`（项目行恒有） |
 | 归档 / 取回 / 索引修复对话框 | `src/dialogs/{archive,checkout,index_repair}.rs` |
-| 领域类型 | `src/model.rs` |
-| 本体层（fs + 只读 + 指纹 + 历史副本） | `src/payload.rs` |
-| 索引层（登记 / 分组 / 标签 / 版本） | `src/{resource,folder,tag,version}.rs` |
-| 服务门面 + 事件 | `src/service.rs` |
-| 索引修复 | `src/indexer.rs` |
-| Action / 快捷键 | `src/commands.rs` + `crates/app/src/main.rs`（`analytics-resource` context） |
+| 领域类型 | `src/model/`（`mod` / `kind` / `types`）· 视图 DTO `src/view_model/`（`row` / `detail` / `dialog_rows`） |
+| 本体层（fs + 只读 + 指纹 + 历史副本） | `src/payload/`（`mod` · `paths` · `inspect` · `versions` · `transfer`） |
+| 索引层（登记 / 分组 / 标签 / 版本） | `src/store/`（`rows` · `folder` · `tag` · `version`） |
+| 服务门面 + 事件 | `src/service/`（`mod` · `archive` · `checkout` · `trash`）· 宿主动作 `src/resource_host/` |
+| 索引修复 | `src/indexer/`（`scan` · `repair` · `tests`） |
+| Action / 快捷键 | `src/commands.rs`（8 个 Action 声明）+ `crates/app/src/main.rs`（`analytics-resource` context 绑 8 条：`ctrl-f` / `escape` / `delete` / `ctrl-a` / `f2` / `ctrl-o` / `ctrl-shift-o` / `ctrl-shift-a`） |
 | 左 Dock 装配（仅协议） | `crates/workbench/src/{view.rs,panels/}` |
-| 迁移 | `crates/engine/migrations/project_meta/020_analytics_resource_archive.sql` |
+| 迁移 | `crates/store/migrations/project_meta/007_analytics_resources.sql`（存档表 / 版本表 / `idx_arv_version`）· 全局镜像 `crates/store/migrations/global/026_analytics_resource_global.sql` |
 | 项目级回收站（上提后） | `crates/engine/src/…`（现 `crates/scratchpad/src/trash.rs`） |
 | 尺寸常量 | 与外壳同语义的重导出：`crates/analytics_resource/src/ui.rs` ← `crates/workbench_shell/src/ui.rs`（`ROW_HEIGHT` / `PANEL_HEADER_HEIGHT` / `ICON_SIZE_SM` / `CONTROL_HEIGHT_SM` / `GROUP_BAR_WIDTH` / `HAIRLINE`，单一来源）；**本 crate 自有**的（对话框宽 / 表格列宽 / 列表上限 / 徽标高 / 工具栏高）就在 `crates/analytics_resource/src/ui.rs`（见原型 §7） |
 | 行态口径与共用原语 | 行外壳 `resource_view.rs::list_row`（压掉 `ListItem` 默认 `py_1`，行距 = `ui::ROW_HEIGHT`）· 分组头展开指示 `workbench_shell::tree::{disclosure_slot,disclosure_icon}` · 分组头 `Enter` 折叠 `resource_view.rs::{header_fold_key,set_selected_index,confirm}` · 对话框行 `dialogs/version.rs::version_line`（`ListItem`）· 勾选 `dialogs/tag.rs`（`Checkbox` + `set_checked`） |

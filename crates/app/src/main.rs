@@ -17,7 +17,8 @@
 use std::collections::HashSet;
 
 use analytics_resource::commands::{
-    ClearSearch, DeleteSelected, FocusSearch, RenameSelected, SelectAllRows,
+    CheckoutSelected, ClearSearch, DeleteSelected, FocusSearch, OpenSelected, RenameSelected,
+    RequestArchive, SelectAllRows,
 };
 use editor::commands::{
     CloseDocument, CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, FunctionManual,
@@ -352,6 +353,15 @@ fn run_app() {
                 // 重命名显示名（原型 §2.3 / §9）：只改 `project.db` 里的名字，`resources/`
                 // 下的文件名与路径不动——想改文件名要先取回再归档（原型 §1 原则 2）。
                 KeyBinding::new("f2", RenameSelected, Some("analytics-resource")),
+                // 打开（只读）（原型 §9 的 `Enter` 走列表确认通道，`Ctrl+O` 是给
+                // 焦点不在行上时留的等价入口：同一条 `OpenSelected`，同一套判据）。
+                KeyBinding::new("ctrl-o", OpenSelected, Some("analytics-resource")),
+                // 取回（检出）为工作副本（原型 §4.5；与右键「取回（检出）…」同一动作，
+                // 用 `Ctrl+Shift+O` 与「打开」成对，避免占用 `Ctrl+C` 一类通用键）。
+                KeyBinding::new("ctrl-shift-o", CheckoutSelected, Some("analytics-resource")),
+                // 归档入口（面板头「归档」的键盘等价）。与草稿箱的 `Ctrl+Shift+A`
+                // 同名不同 context：草稿箱那条在 `scratchpad` context，这条只在资产库内生效。
+                KeyBinding::new("ctrl-shift-a", RequestArchive, Some("analytics-resource")),
                 // M1 项目管理：切换项目（回选择器）/ 关闭项目。
                 KeyBinding::new("ctrl-shift-p", SwitchProject, Some("workbench")),
                 KeyBinding::new("ctrl-shift-w", CloseProject, Some("workbench")),
