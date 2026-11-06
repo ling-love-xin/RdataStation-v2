@@ -142,19 +142,12 @@ impl PluginService {
             .await
     }
 
-    /// 安装新插件
+    /// 登记一个已复制到 `plugins/<code>/` 的插件（只写 global.db，不碰磁盘）。
+    ///
+    /// 真实安装入口是 `installer::install_package`（解包 → 校验 → 复制 → 登记 → 激活）；
+    /// 这里只保留给宿主未来的批量登记 / 内置插件导入用。同一 code 的再次登记按升级处理
+    /// （`register_plugin` 事务内替换旧行并沿用停用状态），不再直接报 `already_exists`。
     pub async fn install_plugin(&self, input: InstallPluginInput) -> Result<Plugin, CoreError> {
-        // 检查是否已存在
-        let existing = self
-            .get_plugin_by_code_version(&input.code, &input.version)
-            .await?;
-        if existing.is_some() {
-            return Err(CoreError::plugin(PluginError::already_exists(
-                input.code.clone(),
-                input.version.clone(),
-            )));
-        }
-
         let plugin = Plugin::from(input);
         self.global_db.register_plugin(&plugin).await?;
 
@@ -164,68 +157,72 @@ impl PluginService {
         Ok(plugin)
     }
 
-    /// 全局启用插件
-    pub async fn enable_plugin(&self, plugin_id: &str) -> Result<(), CoreError> {
-        // 检查插件存在
-        let plugin = self.get_plugin(plugin_id).await?;
+    /// 全局启用插件（`plugin_code` = 清单 id，运行时身份；不是安装实例 uuid）
+    pub async fn enable_plugin(&self, plugin_code: &str) -> Result<(), CoreError> {
+        let plugin = self.get_plugin_by_code(plugin_code).await?;
         if plugin.is_none() {
             return Err(CoreError::plugin(PluginError::not_found(
-                plugin_id.to_string(),
+                plugin_code.to_string(),
             )));
         }
 
         self.global_db
-            .update_plugin_enabled(plugin_id, true)
+            .update_plugin_enabled_by_code(plugin_code, true)
             .await?;
-        emit_plugin_enabled(plugin_id);
+        emit_plugin_enabled(plugin_code);
 
         // 尝试激活插件（管理器未初始化时跳过 —— 宿主尚未接入，见 README D7）
         if let Some(manager) = get_plugin_manager() {
-            let _ = manager.activate_plugin(plugin_id).await;
+            let _ = manager.activate_plugin(plugin_code).await;
         }
 
         Ok(())
     }
 
-    /// 全局禁用插件
-    pub async fn disable_plugin(&self, plugin_id: &str) -> Result<(), CoreError> {
-        let plugin = self.get_plugin(plugin_id).await?;
+    /// 全局禁用插件（同上，按 code）
+    pub async fn disable_plugin(&self, plugin_code: &str) -> Result<(), CoreError> {
+        let plugin = self.get_plugin_by_code(plugin_code).await?;
         if plugin.is_none() {
             return Err(CoreError::plugin(PluginError::not_found(
-                plugin_id.to_string(),
+                plugin_code.to_string(),
             )));
         }
 
         // 先停用插件
         if let Some(manager) = get_plugin_manager() {
-            let _ = manager.deactivate_plugin(plugin_id).await;
+            let _ = manager.deactivate_plugin(plugin_code).await;
         }
 
         self.global_db
-            .update_plugin_enabled(plugin_id, false)
+            .update_plugin_enabled_by_code(plugin_code, false)
             .await?;
-        emit_plugin_disabled(plugin_id);
+        emit_plugin_disabled(plugin_code);
 
         Ok(())
     }
 
-    /// 卸载插件
-    pub async fn uninstall_plugin(&self, plugin_id: &str) -> Result<(), CoreError> {
-        let plugin = self.get_plugin(plugin_id).await?;
+    /// 按 code 查询登记
+    pub async fn get_plugin_by_code(&self, plugin_code: &str) -> Result<Option<Plugin>, CoreError> {
+        self.global_db.get_plugin_by_code(plugin_code).await
+    }
+
+    /// 卸载插件的登记（按 code；磁盘卸载走 `manager.uninstall_plugin`）
+    pub async fn uninstall_plugin(&self, plugin_code: &str) -> Result<(), CoreError> {
+        let plugin = self.get_plugin_by_code(plugin_code).await?;
         if plugin.is_none() {
             return Err(CoreError::plugin(PluginError::not_found(
-                plugin_id.to_string(),
+                plugin_code.to_string(),
             )));
         }
 
         // 先停用和卸载
         if let Some(manager) = get_plugin_manager() {
-            let _ = manager.deactivate_plugin(plugin_id).await;
-            let _ = manager.unload_plugin(plugin_id).await;
+            let _ = manager.deactivate_plugin(plugin_code).await;
+            let _ = manager.unload_plugin(plugin_code).await;
         }
 
-        self.global_db.delete_plugin(plugin_id).await?;
-        emit_plugin_uninstalled(plugin_id);
+        self.global_db.delete_plugin_by_code(plugin_code).await?;
+        emit_plugin_uninstalled(plugin_code);
 
         Ok(())
     }
