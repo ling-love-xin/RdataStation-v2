@@ -82,8 +82,12 @@ impl PluginInstaller {
             PluginPackageFormat::Directory => package_path.to_path_buf(),
         };
 
+        // 2.5 定位真正的包根：压缩工具（含本仓 `tools/zip-dir.ps1`）默认会给包套一层
+        // 目录名，根层就直接找 `plugin.toml` 会把这类最常见的包全判成"清单缺失"。
+        let package_root = Self::locate_package_root(&extracted_dir)?;
+
         // 3. 验证插件
-        let manifest = self.validate_plugin(&extracted_dir)?;
+        let manifest = self.validate_plugin(&package_root)?;
 
         // 4. 复制到最终安装位置（拼路径前必须校验清单 id —— 路径注入防护）
         validate_plugin_id(&manifest.plugin.id).map_err(|e| {
@@ -93,7 +97,7 @@ impl PluginInstaller {
             )))
         })?;
         let final_install_path = self.install_dir.join(&manifest.plugin.id);
-        self.copy_plugin(&extracted_dir, &final_install_path)?;
+        self.copy_plugin(&package_root, &final_install_path)?;
 
         // 5. 注册到数据库
         let plugin = self
@@ -226,6 +230,59 @@ impl PluginInstaller {
         })?;
 
         Ok(dest)
+    }
+
+    /// 找到包根：根层有 `plugin.toml` 就用它；否则只认**唯一**一个含清单的直接子目录。
+    ///
+    /// 压缩工具默认会把目录名带进条目（`my-plugin/plugin.toml`），本仓的
+    /// `tools/zip-dir.ps1` 也如此。只认根层会让这种最常见的包全部装不上；
+    /// 但也不能随便下探——多层目录里挑一个等于替用户猜"要装哪个"。
+    fn locate_package_root(dir: &Path) -> Result<PathBuf, CoreError> {
+        if dir.join("plugin.toml").is_file() {
+            return Ok(dir.to_path_buf());
+        }
+
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        let entries = std::fs::read_dir(dir).map_err(|e| {
+            CoreError::common(CommonError::general(format!(
+                "Failed to read package dir: {}",
+                e
+            )))
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|e| {
+                CoreError::common(CommonError::general(format!(
+                    "Failed to read package entry: {}",
+                    e
+                )))
+            })?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            // macOS 打 zip 附带的资源目录，不是插件
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("__MACOSX")
+            {
+                continue;
+            }
+            if path.join("plugin.toml").is_file() {
+                candidates.push(path);
+            }
+        }
+
+        match candidates.as_slice() {
+            [single] => Ok(single.clone()),
+            [] => Err(CoreError::common(CommonError::general(
+                "plugin.toml not found in plugin package（应在包根层，或只带一层插件目录）",
+            ))),
+            _ => Err(CoreError::common(CommonError::general(format!(
+                "插件包里有多个候选插件目录（{} 个），无法确定安装哪一个",
+                candidates.len()
+            )))),
+        }
     }
 
     /// 验证插件
@@ -614,5 +671,28 @@ executable = "target/agent"
         let err = prepare_install(&installed, &root).unwrap_err();
         let text = format!("{err}");
         assert!(text.contains("安装目录"), "{text}");
+    }
+
+    /// 压缩工具默认给包套一层目录（`my-plugin/plugin.toml`，本仓 zip-dir.ps1 亦然）。
+    /// 包根定位要下探这一层，否则最常见的打包方式全部装不上。
+    #[test]
+    fn package_root_descends_into_a_single_wrapped_folder() {
+        let dir = TempDir::new("root-wrapped");
+        write(dir.path(), "my-plugin/plugin.toml", MANIFEST);
+
+        let root = PluginInstaller::locate_package_root(dir.path()).unwrap();
+        assert_eq!(root, dir.path().join("my-plugin"));
+    }
+
+    /// 多个目录都有清单时不替用户挑：报可读错误，而不是装错一个。
+    #[test]
+    fn package_root_rejects_ambiguous_wrapped_folders() {
+        let dir = TempDir::new("root-ambiguous");
+        write(dir.path(), "a/plugin.toml", MANIFEST);
+        write(dir.path(), "b/plugin.toml", MANIFEST);
+
+        let err = PluginInstaller::locate_package_root(dir.path()).unwrap_err();
+        let text = format!("{err}");
+        assert!(text.contains("多个候选插件目录"), "{text}");
     }
 }
