@@ -4,6 +4,7 @@ mod tests {
     use engine::persistence::ProjectSqlitePool;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use uuid::Uuid;
 
     const MIGRATION_SQL: &str =
@@ -621,7 +622,7 @@ mod tests {
         let old_id = format!("ar_{}", uuid::Uuid::new_v4().simple());
         let now = chrono::Utc::now().to_rfc3339();
         {
-            let conn = store.pool.acquire().await.expect("acquire");
+            let conn = store.pool().acquire().await.expect("acquire");
             conn.inner()
                 .expect("inner")
                 .execute(
@@ -652,7 +653,7 @@ mod tests {
                 .expect("insert old row");
         }
 
-        let conn = store.pool.acquire().await.expect("acquire 2");
+        let conn = store.pool().acquire().await.expect("acquire 2");
         let inner = conn.inner().expect("inner 2");
 
         let columns: Vec<String> = {

@@ -251,7 +251,7 @@ impl AnalyticsResourceStore {
             "SELECT {} FROM analytics_resources r \
              INNER JOIN analytics_resource_tags rt ON r.id = rt.resource_id \
              WHERE rt.tag_id = ? AND r.deleted_at IS NULL ORDER BY r.created_at DESC",
-            crate::resource::qualified_resource_columns("r")
+            crate::store::resource::qualified_resource_columns("r")
         );
         let mut stmt = conn.inner()?.prepare(&sql).map_err(|e| {
             CoreError::storage(StorageError::Persistence {
@@ -262,7 +262,10 @@ impl AnalyticsResourceStore {
         })?;
 
         let resources = stmt
-            .query_map(rusqlite::params![tag_id], crate::resource::map_resource_row)
+            .query_map(
+                rusqlite::params![tag_id],
+                crate::store::resource::map_resource_row,
+            )
             .map_err(|e| {
                 CoreError::storage(StorageError::Persistence {
                     store: "analytics_resource_tags".to_string(),

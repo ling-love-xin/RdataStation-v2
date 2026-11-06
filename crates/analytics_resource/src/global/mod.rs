@@ -1,5 +1,5 @@
 use super::*;
-use crate::resource::{RESOURCE_COLUMNS, map_resource_row};
+use crate::store::resource::{RESOURCE_COLUMNS, map_resource_row};
 use chrono::Utc;
 use rusqlite::OptionalExtension;
 use shared::error::{CommonError, CoreError, StorageError};

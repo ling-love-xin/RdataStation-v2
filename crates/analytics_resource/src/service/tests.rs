@@ -500,7 +500,7 @@ async fn t131_archive_applies_tags_and_group() {
     let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
     let folder = service
         .store()
-        .create_folder(crate::models::CreateFolderRequest {
+        .create_folder(crate::store::rows::CreateFolderRequest {
             name: "月报".to_string(),
             scope: "project".to_string(),
             parent_folder_id: None,
@@ -862,7 +862,7 @@ async fn t128_purge_and_empty_stay_within_our_origin() {
     // 给第一条挂标签与分组：删除时必须连关联一起清（外键无 CASCADE，项目库开了 foreign_keys）。
     let tag = service
         .store()
-        .create_tag(crate::models::CreateTagRequest {
+        .create_tag(crate::store::rows::CreateTagRequest {
             name: "important".to_string(),
             scope: "project".to_string(),
             color: None,

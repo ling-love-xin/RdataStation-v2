@@ -12,7 +12,8 @@ use std::collections::HashSet;
 
 use crate::model::{ArchiveBinding, ArchiveKind, NewArchiveInput, PayloadMode};
 use crate::payload::PayloadStore;
-use crate::{AnalyticsResource, AnalyticsResourceStore, CoreError};
+use crate::{AnalyticsResource, AnalyticsResourceStore};
+use shared::error::CoreError;
 
 /// 一条索引差异。
 #[derive(Debug, Clone, PartialEq, Eq)]

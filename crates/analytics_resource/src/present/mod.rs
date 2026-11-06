@@ -25,7 +25,7 @@ use crate::resource_view::{ArchiveCounts, ArchiveRow, GroupOption, ResourcesSnap
 
 /// 按资源的标签映射：`resource_id → 标签行`（来自 `AnalyticsResourceStore::tags_by_resource`，
 /// 一次查完；逐行查会把一次刷新变成 N+1 次查询）。
-pub type ResourceTags = std::collections::HashMap<String, Vec<crate::models::AnalyticsTag>>;
+pub type ResourceTags = std::collections::HashMap<String, Vec<crate::store::rows::AnalyticsTag>>;
 
 /// 单行状态映射：`resource_id → 状态`（来自 `IndexRepair::scan` 的结果）。
 pub type ArchiveStatuses = std::collections::HashMap<String, ArchiveStatus>;
@@ -299,7 +299,7 @@ pub fn to_row(
 }
 
 /// 标签行模型 → chip（视图只认 id + 名字，不关心 color / scope）。
-pub fn tag_chips(tags: &[crate::models::AnalyticsTag]) -> Vec<ArchiveTagChip> {
+pub fn tag_chips(tags: &[crate::store::rows::AnalyticsTag]) -> Vec<ArchiveTagChip> {
     tags.iter()
         .map(|tag| ArchiveTagChip {
             id: tag.id.clone(),
@@ -310,7 +310,7 @@ pub fn tag_chips(tags: &[crate::models::AnalyticsTag]) -> Vec<ArchiveTagChip> {
 
 /// 标签字典 + 用量 → 视图层的选项（筛选菜单与打标对话框共用）。
 pub fn tag_options(
-    tags: &[crate::models::AnalyticsTag],
+    tags: &[crate::store::rows::AnalyticsTag],
     counts: &std::collections::HashMap<String, i64>,
 ) -> Vec<TagOption> {
     tags.iter()
@@ -416,7 +416,7 @@ struct Candidate {
 /// 不拿当前版本的值顶替——那会伪造历史。
 pub fn build_version_rows(
     current: &AnalyticsResource,
-    versions: &[crate::models::ResourceVersion],
+    versions: &[crate::store::rows::ResourceVersion],
     copies: &[i32],
     payload_ok: bool,
 ) -> Vec<VersionRow> {

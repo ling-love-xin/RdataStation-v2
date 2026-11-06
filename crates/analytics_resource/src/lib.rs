@@ -3,11 +3,11 @@
 //! 把"值得留存、需被引用、要能复现"的分析产物，从工作区转成**只读、有版本、带来源**的正式存档：
 //!
 //! - `model`：领域语义类型（存档种类 / 复现强度 / 本体状态 / 归档凭证）
+//! - `store`：索引层（`project.db` 的登记读写：`resource` / `folder` / `tag` / `version`）；
+//!   `store::rows` 是持久层行模型
 //! - `payload`：本体层（`resources/` 受管文件、只读守卫、内容指纹、历史副本）
 //! - `service`：归档服务（归档 / 取回 / 再归档编排 + 变更事件）
 //! - `indexer`：索引修复（本体与登记表的三类差异：扫描只报告，修复要人工确认）
-//! - `models`：持久层行模型（v1 搬运，逐步并入 `model`）
-//! - `resource` / `folder` / `tag` / `version`：索引层（`project.db`）
 //! - `resource_view` / `detail_view` / `dialogs`：视图层（面板 / 详情 / 对话框；都不自己取数）
 //!
 //! 回收站：v1 的 `recycle.rs`（软删除表）已随 P0.8 废弃，统一走项目级
@@ -15,13 +15,6 @@
 //!
 //! 依赖方向：analytics_resource → engine（persistence::project_db）→ shared。
 //! 设计权威：`docs/architecture/analytics_resource/`。
-
-use std::sync::Arc;
-
-use chrono::{DateTime, Utc};
-
-use engine::persistence::project_db::{ProjectSqlitePool, SqlitePoolConnection};
-use shared::error::CoreError;
 
 pub mod analysis;
 pub mod commands;
@@ -33,102 +26,25 @@ pub mod helpers;
 pub mod indexer;
 pub mod jobs;
 pub mod model;
-pub mod models;
 pub mod payload;
 pub mod present;
 pub mod preview;
 pub mod resource_view;
 pub mod service;
+pub mod store;
 pub mod ui;
 
-pub mod folder;
 pub mod global;
-pub mod resource;
 pub mod resource_host;
-pub mod tag;
-pub mod version;
 
 pub use indexer::{IndexIssue, IndexRepair, IndexScanReport};
 pub use model::*;
-pub use models::*;
 pub use service::ArchiveService;
-
-/// 分析资源存储（SQLite 持久化层）
-#[derive(Clone)]
-pub struct AnalyticsResourceStore {
-    pool: Arc<ProjectSqlitePool>,
-    /// 全局标签定义存储（懒加载：首次标签操作时打开全局库；测试经 `paths` test-support
-    /// 隔离到临时全局库，不碰产品数据根）。
-    global_tags: Arc<std::sync::Mutex<Option<::tag::TagTable>>>,
-    /// 存量标签迁移是否已执行（进程内一次性；迁移本身幂等，可重跑不重复）。
-    tags_migrated: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl AnalyticsResourceStore {
-    pub fn new(pool: Arc<ProjectSqlitePool>) -> Self {
-        Self {
-            pool,
-            global_tags: Arc::new(std::sync::Mutex::new(None)),
-            tags_migrated: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        }
-    }
-
-    async fn get_conn(&self) -> Result<SqlitePoolConnection, CoreError> {
-        self.pool.acquire().await
-    }
-
-    /// 全局标签定义存储（懒加载打开 + 首次使用前跑存量迁移）。
-    ///
-    /// 闭包模式：同步段内完成即放锁（不跨 `await` 持有 `MutexGuard`，避免 async future
-    /// 非 `Send`；`MutexGuard::map` 需要 unstable feature，stable 不可用）。
-    /// 打开失败向上传播——全局库打不开时标签功能不可用，不静默降级。
-    fn with_global_tags<T>(
-        &self,
-        f: impl FnOnce(&::tag::TagTable) -> Result<T, CoreError>,
-    ) -> Result<T, CoreError> {
-        let mut guard = self.global_tags.lock().map_err(|_| {
-            shared::error::CoreError::storage(shared::error::StorageError::Persistence {
-                store: "tags".to_string(),
-                operation: "lock_global_tags".to_string(),
-                reason: "全局标签表锁中毒".to_string(),
-            })
-        })?;
-        if guard.is_none() {
-            *guard = Some(::tag::TagTable::open_global()?);
-        }
-        f(guard.as_ref().expect("刚打开过，必为 Some"))
-    }
-
-    pub(crate) fn parse_datetime(s: String) -> Result<DateTime<Utc>, CoreError> {
-        helpers::parse_datetime(s)
-    }
-
-    pub(crate) fn parse_datetime_sqlite(s: String) -> Result<DateTime<Utc>, rusqlite::Error> {
-        helpers::parse_datetime_sqlite(s)
-    }
-
-    /// 连接池句柄：仅供 crate 内**测试**使用（故障注入与迁移辅助），故不进生产接口。
-    #[cfg(test)]
-    pub(crate) fn pool(&self) -> &Arc<ProjectSqlitePool> {
-        &self.pool
-    }
-
-    /// 测试构造：全局标签库注入**本测试独立**路径（避免共享进程级隔离根导致的
-    /// 跨测试同名标签冲突；`open_at` 语义见 `rds-tag`）。
-    #[cfg(test)]
-    pub(crate) fn new_for_test(
-        pool: Arc<ProjectSqlitePool>,
-        global_db: std::path::PathBuf,
-    ) -> Self {
-        let tags = ::tag::TagTable::open_at(global_db, ::tag::SCOPE_GLOBAL)
-            .expect("测试全局标签库打开失败");
-        Self {
-            pool,
-            global_tags: Arc::new(std::sync::Mutex::new(Some(tags))),
-            tags_migrated: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        }
-    }
-}
+pub use store::rows::{
+    AnalyticsFolder, AnalyticsResource, AnalyticsTag, CreateFolderRequest, CreateTagRequest,
+    ResourceVersion,
+};
+pub use store::AnalyticsResourceStore;
 
 // 持久层回归用例（v1 蓝本搬运，Round 11 时漏声明 mod——导致 560 行用例在 v2 从未被编译）。
 #[cfg(test)]

@@ -208,7 +208,7 @@ pub(crate) async fn run_tag_action(job: &TagActionJob) -> OpOutcome {
         }
         TagJobAction::CreateAndTag { name } => {
             let tag = match store
-                .create_tag(crate::models::CreateTagRequest {
+                .create_tag(crate::store::rows::CreateTagRequest {
                     name: name.clone(),
                     scope: "project".to_string(),
                     color: None,
@@ -298,7 +298,7 @@ pub(crate) async fn run_group_action(job: &GroupActionJob) -> OpOutcome {
     match &job.action {
         GroupJobAction::Create { name } => {
             match store
-                .create_folder(crate::models::CreateFolderRequest {
+                .create_folder(crate::store::rows::CreateFolderRequest {
                     name: name.clone(),
                     scope: "project".to_string(),
                     // 单层分组（架构 D8）：父分组恒为空。

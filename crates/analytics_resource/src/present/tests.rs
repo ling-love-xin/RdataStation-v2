@@ -5,7 +5,7 @@ use super::{
 };
 use crate::dialogs::index_repair::RepairGroup;
 use crate::model::{ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES};
-use crate::models::{AnalyticsResource, ResourceVersion};
+use crate::store::rows::{AnalyticsResource, ResourceVersion};
 use crate::resource_view::{GroupOption, TagOption};
 use crate::{IndexIssue, IndexScanReport};
 use chrono::{DateTime, Duration, Utc};
@@ -332,7 +332,7 @@ fn snapshot_carries_tags_for_rows_details_and_dictionary() {
     let mut tags = ResourceTags::new();
     tags.insert(
         "ar_1".to_string(),
-        vec![crate::models::AnalyticsTag {
+        vec![crate::store::rows::AnalyticsTag {
             id: "at_1".to_string(),
             name: "报表".to_string(),
             color: None,

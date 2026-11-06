@@ -134,7 +134,7 @@ impl ArchiveService {
                 Some(id) => id.clone(),
                 None => match self
                     .store
-                    .create_tag(crate::models::CreateTagRequest {
+                    .create_tag(crate::store::rows::CreateTagRequest {
                         name: name.to_string(),
                         color: None,
                         icon: None,
