@@ -65,44 +65,73 @@
 
 ## 3. 代码地图（括号内为现状）
 
+### 3.1 目录结构
+
+```
+crates/analytics_resource/src/
+├─ lib.rs                     # pub mod 清单 + 显式 re-export
+├─ model.rs / analysis.rs / indexer.rs / preview.rs / ui.rs / commands.rs / helpers.rs
+├─ store/                     # 索引层（project.db 读写）
+│   ├─ mod.rs  rows.rs  resource.rs  folder.rs  tag.rs  version.rs
+├─ payload/                   # 本体层（resources/ 文件与版本副本）
+│   ├─ mod.rs  paths.rs  transfer.rs  inspect.rs  versions.rs
+├─ service/                   # 归档服务门面
+│   ├─ mod.rs  archive.rs  checkout.rs  trash.rs  tests/
+├─ jobs/                      # 工作线程任务队列
+│   ├─ mod.rs  refresh.rs  archive.rs  index.rs  tag.rs  version.rs  rename.rs  global.rs
+├─ global/                    # 系统级实例（提升 / 分发 / 登记 / SQL / 列表）
+├─ present/                   # 索引行 → 面板快照
+├─ filter/                    # 搜索 / 筛选 / 排序纯函数
+├─ view_model/                # 视图模型：行、详情、对话框行、分组语义
+│   ├─ mod.rs  row.rs  detail.rs  dialog_rows.rs
+├─ resource_view/             # 左 Dock 面板
+│   ├─ mod.rs  row_meta.rs  list.rs  filters.rs  groups.rs  init.rs  status.rs  selection.rs  accessors.rs
+│   ├─ list_delegate/         # 列表委托（菜单 / 分组头 / 行）
+│   └─ panel_render/          # 面板骨架 / 提示条 / 空态
+├─ detail_view/               # 详情面板（头部 / 提示条 / 分区 / 动作 / 标签预览）
+├─ dialogs/                   # 归档 / 取回 / 版本 / 回收站 / 索引修复 / 标签 / 分组 / 重命名 / 冲突 / 选择
+├─ resource_host/             # 宿主端口实现（归档 / 详情 / 删除 / 分组 / 杂项动作）
+└─ tests/                     # 根级用例（folders / records / tags）
+```
+
+### 3.2 想改去哪
+
 | 想改 | 去哪 |
 | --- | --- |
-| 领域类型（`ArchiveKind` / `ReproductionStrength` / `ArchiveStatus` / `ArchiveBinding` / 归档与取回请求） | `crates/analytics_resource/src/model.rs`（现状：✅ Phase 0 已实现；`ArchiveOutcome.notes` 带附属项说明，见第八刀） |
-| 本体层（`resources/` 定位、越界拒绝、move、只读、指纹、历史副本与裁剪、版本副本的查 / 用 / 删） | `crates/analytics_resource/src/payload.rs`（现状：✅ Phase 0 + Phase 3 第一刀，`PayloadStore`；`rel_path_taken` / `free_rel_path` 提供重名避让） |
-| 归档服务（归档 / 取回 / 再归档 / 撤销 / **还原到历史版本** + 变更事件） | `crates/analytics_resource/src/service.rs`（现状：✅ Phase 0 + Phase 3 第一刀，`ArchiveService`；`undo_archive` 提供 5 秒反悔窗口；`restore_version` / `checkout_version` 供版本历史；**归档时把请求里的标签 / 分组 / 别名真的落上**（`apply_labels` / `link_tags`，第八刀）） |
-| 索引修复（三类孤儿检测与修复） | `crates/analytics_resource/src/indexer.rs`（现状：✅ Phase 0 已实现 `IndexRepair`） |
-| 登记 CRUD / 分页 / 搜索 / 排序 | `crates/analytics_resource/src/resource.rs`（现状：✅ 搬运 + 边界修复：统一行映射、分页夹紧、`LIKE` 转义、事务化更新；`hard_delete_row` 供撤销与索引修复；归档写入**指纹与体积同批落**（第四刀），写入前夹紧到 `i32` 上限） |
-| 分组（单层） | `crates/analytics_resource/src/folder.rs`（现状：✅ 搬运，含树字段待去掉） |
-| 标签与双向查询（含改名 / 删除 / 按资源批量） | `crates/analytics_resource/src/tag.rs`（现状：✅ Phase 2 前两刀：改名与删除补齐，删标签同事务清关联） |
-| 打标 / 去标 / 标签管理 UI（chips + 标签对话框 + 筛选维） | `crates/analytics_resource/src/dialogs/tag.rs`、`src/detail_view.rs`（标签分区）、`src/filter.rs` + `src/resource_view.rs`（筛选菜单的标签组）（现状：✅ Phase 2 第一 / 三刀） |
-| 分组（单层）与管理入口 | `crates/analytics_resource/src/folder.rs`（建 / 改名 / 删 / 移动 + 批量映射）、`src/dialogs/group.rs`（新建 / 重命名小对话框）、`src/resource_view.rs`（分组折叠区 + 行菜单「移动到分组 ›」+ 分组头右键 + 拖拽落点）、`src/dnd.rs`（拖拽载荷 / 幽灵 / 落点语义）（现状：✅ Phase 2 第二 / 三 / 七 / 十二刀：**折叠态持久化**（按项目分桶的 `resources.collapsed_groups`）+ **拖拽行到分组头**（落点只有分组头）） |
-| 版本（内容指纹版本） | `crates/analytics_resource/src/version.rs`（现状：⚠️ 仍写前快照，但已支持在调用方事务内写快照 + 返回快照行 id；`version_counts()` 批量给详情用；`get_resource_versions()` 给版本历史对话框） |
-| 回收站（移入 / 还原 / 永久删除 / 清空 + 对话框） | `crates/engine/src/persistence/trash.rs`（中性层 `ProjectTrash`：`origin` + `TrashKind` + `empty_origin`）、`crates/analytics_resource/src/service.rs`（四个动作 + 三条守卫）、`crates/analytics_resource/src/resource.rs`（软删 / 复活 / 永久删行）、`crates/analytics_resource/src/dialogs/trash.rs`（对话框；现状：✅ P0.8；v1 的 `recycle.rs` 与 `recycle_bin_dialog.rs` 已删） |
-| 左 Dock 面板（列表 / 工具栏 / 状态行） | `crates/analytics_resource/src/resource_view.rs`（现状：✅ Phase 1 九刀 + **UI 收尾（2026-09-20）**；`list::List` 虚拟化 + kind 图标 + **行点击归位（单击选中 / `Ctrl` / `Shift` / 双击打开）+ 多选与 `Ctrl+A`** + 行右键菜单（含复制路径 / 在系统中显示 / 版本历史… / **重命名…** / 查看统计）已落；**加载态（骨架 + 状态行前缀）**已落；**面板头（标题图标 + `＋ ▾` + `⋯` 四项）**已落；**行态口径**：行距 = `ui::ROW_HEIGHT`（`list_row()`）/ 悬停不覆盖选中 / 分组头展开指示走 `tree::disclosure_*` 且 **`Enter` 也能折叠** / 可点元素一律语义控件；**`F2` 重命名已落**（第十三刀）） |
-| 工具栏规则（搜索 / 筛选 / 排序） | `crates/analytics_resource/src/filter.rs`（现状：✅ 纯函数 + 单测；**五个排序键已落**（第四刀，比原始时间戳 / 字节数、缺值排最后；`key` / `from_key` / `default_order` 供设置项）；标签维 ✅ Phase 2；**搜索匹配面已到齐**（第十一刀：`search_haystack` = 显示名 / 别名 / 来源表 / 标签名 / 尾部，`SEARCH_FIELDS` + `no_match_hint` 供无匹配空态——比展示面宽，故说明写在搜不到的那一刻）） |
-| 详情属性面板（内容层） | `crates/analytics_resource/src/detail_view.rs`（现状：✅ 只读信息区 + **头部可编辑（显示名 / 别名，第十六刀）** + **版本区的「查看全部…」** + **组织分区（分组名）** + **内容预览（第十四刀，`preview.rs` 供数据）** + **动作区（打开（只读）/ 取回…）** + **危险区（移入回收站）**；版本区“最近 3 条”明细随后续批次） |
-| 归档 / 取回 / 草稿选择 / 版本历史 / 索引修复 / 回收站 / 标签 / 分组 / 重命名对话框 | `crates/analytics_resource/src/dialogs/{archive,checkout,pick,version,index_repair,trash,tag,group,rename}.rs`（现状：✅ 表单（归档：显示名 / 别名 / 分组下拉 / 标签 / 保留份数 + 校验）/ 列表 / 版本表格 / 三分组修复行 / 回收站行 / 标签勾选 + 行内 ⋯ / 分组名单输入 + 校验 + 冲突提示 / **重命名单输入 + 闸门（空名挡下、名字没变不给提交）**；执行由宿主注入的 `on_submit` / `on_action` 接手；后六者的行可被宿主换掉） |
-| 详情面板的落点（右 Dock 档位） | `crates/workbench/src/panels/right.rs`（`RightPanel::Archive`：转发渲染 + 空态）、`crates/workbench/src/view.rs`（观察资产库面板 → 唤醒右栏） |
-| 呈现层（索引行 → 面板快照） | `crates/analytics_resource/src/present.rs`（现状：✅ Phase 1 + Phase 3 + Phase 2 第一刀 + **第十四刀（`DetailExtras`：标签 / 分组名 / 预览）**；含 `to_detail` / `format_timestamp` / **`build_version_rows`** / **`tag_chips` / `tag_options`**——宿主桥只需“取数 → 调它 → 推快照”） |
-| 内容预览（前 20 行 / 仅元信息） | `crates/analytics_resource/src/preview.rs`（纯函数 + 常量单一来源：行数 / 读字节 / 大文件阀值 / 文本扩展名）、`crates/workbench/src/services/resource_jobs.rs::load_previews`（工作线程读）（现状：✅ 第十四刀） |
-| 回收站 / 分组 / 标签对话框 | 回收站：✅ `src/dialogs/trash.rs`（P0.8；v1 的 `recycle_bin_dialog.rs` 占位已删）；分组 / 标签视图待 Phase 2 |
-| 索引修复对话框 | `src/dialogs/index_repair.rs`（现状：✅ Phase 3 第二刀 + P0.8：三分组 + 行内动作（含「从回收站还原」）+ 修完重扫换行） |
-| Action 与快捷键 | `src/commands.rs` + `crates/app/src/main.rs`（现状：7 个 Action 均有面板处理器；`Ctrl+F` / `Esc` / `Delete` / `Ctrl+A` 已绑到 `analytics-resource` context；`↑↓` / `Enter` 由列表组件提供；鼠标手势（单击 / `Ctrl` / `Shift` / 双击）由行自己接管） |
-| 左 Dock 装配（面板实体 + 渲染转发） | `crates/workbench/src/panels/resources.rs`（现状：✅ 已接线：构造期建实体 + 宿主端口 + 轮询回填） |
-| 取数后台任务（列表 + 索引健康 + 版本数） | `crates/workbench/src/services/resource_jobs.rs`（现状：✅ 单工作线程 + 结果槽；指纹扫描在工作线程上） |
-| 宿主端口实现 | `crates/workbench/src/components/resource_host.rs`（现状：✅ 归档 = 文件选择 → 对话框 → 入队；取回 = 对话框 → 入队；**打开 = 编辑器只读打开本体**；**打开资源目录 / 刷新 / 版本历史 / 回收站 / 重建索引**均为真实现；**移入回收站 = 批量入队**（详情危险区与右键菜单同一个口）） |
-| 编辑器只读来源（三重守卫之二） | `crates/editor/src/persist.rs`（`open_file_read_only`）、`crates/workbench/src/panels/shared.rs`（`OpenInEditorRequest` 带只读维度）、`crates/workbench/src/view.rs`（`open_in_editor_with`） |
-| 占位渲染 | ✅ 已下线（`render_resources_placeholder` 随接线删除） |
-| 迁移（加 9 列） | `crates/engine/migrations/project_meta/020_analytics_resource_archive.sql`（现状：✅ 已新增，含库层契约测试 t016；**不改 007**） |
-| 项目级回收站（已上提中性化） | `crates/engine/src/persistence/trash.rs`（现状：✅ P0.8；`scratchpad` 侧只重导出旧路径，`list_trash` / `empty_trash` 按 `origin` 过滤） |
-| 连接池（`busy_timeout` / `acquire` 超时 / 归还语义） | `crates/engine/src/persistence/project_db.rs`（现状：⚠️ 三个缺陷，见架构 §13.2） |
-| 尺寸常量 | `crates/analytics_resource/src/ui.rs`（现状：✅ 16 项；**不在 `workbench/ui.rs`**——依赖方向不允许视图反向读 workbench） |
-| 历史内容保留设置项（`resources.keep_versions`） | `crates/settings/src/{model,registry,lib}.rs`（现状：✅ 2026-09-18，「资产库」节 + 预设档行）；宿主接线在 `crates/workbench/src/{components/resource_host.rs,panels/resources.rs}`（主线程读设置 → `KeepVersions::from_setting` → 随作业带入）与 `services/resource_jobs.rs::open_service`（装配 `with_keep_versions`） |
-| 默认排序设置项（`resources.default_sort`） | `crates/settings/src/{model,registry,lib}.rs`（现状：✅ 2026-09-18，「资产库」节第二行；面板里点排序会写回——“默认排序” = 上次用的那个）；接线在 `crates/workbench/src/components/resource_host.rs::remember_sort`（写）与 `panels/resources.rs::build_resources_panel`（构造期注入） |
-| 分组折叠态设置项（`resources.collapsed_groups`） | `crates/settings/src/{model,registry,lib}.rs`（现状：✅ 2026-09-18，复合值：**项目根 → 折叠的 key 列表**，不上页）；接线在 `crates/workbench/src/components/resource_host.rs::remember_collapsed`（写）与 `panels/resources.rs::build_resources_panel`（构造期注入 `ResourcesPanel::set_collapsed`）；位置待确认见 `settings-architecture.md` §14 Q7 |
-| 契约测试范围 | `crates/workbench/tests/ui_contract.rs`（显式文件清单，**不含本 crate 视图**；本 crate 的尺寸/裸值约束暂由自身单测 + 评审保证） |
-| 接线（workspace 别名 / workbench 依赖 / 渲染入口） | `Cargo.toml` 的 `[workspace.dependencies]`（✅ 别名已加）、`crates/workbench/Cargo.toml`（✅ 依赖已加）、面板渲染入口（✅ 已接） |
-| crate 入口文档 | `crates/analytics_resource/README.md`（现状：✅ 已补，特点提炼 + 代码结构 + 能力状态） |
+| 领域类型（`ArchiveKind` / `ReproductionStrength` / `ArchiveStatus` / `ArchiveBinding` / 归档与取回请求） | `src/model.rs`（`ArchiveOutcome.notes` 带附属项说明） |
+| 本体层（`resources/` 定位、越界拒绝、move、只读、指纹、历史副本与裁剪、版本副本的查 / 用 / 删） | `src/payload/`（`mod.rs` 装配 + `paths.rs` 路径安全化 + `transfer.rs` 搬运与只读 + `inspect.rs` 探测 + `versions.rs` 版本副本；`rel_path_taken` / `free_rel_path` 提供重名避让） |
+| 归档服务（归档 / 取回 / 再归档 / 撤销 / 还原到历史版本 + 变更事件） | `src/service/`（`archive.rs` 归档与再归档、`checkout.rs` 取回、`trash.rs` 回收站四动作；`undo_archive` 提供 5 秒反悔窗口；归档时把标签 / 分组 / 别名真的落上） |
+| 索引修复（三类孤儿检测与修复） | `src/indexer.rs`（`IndexRepair`） |
+| 登记 CRUD / 分页 / 搜索 / 排序 | `src/store/resource.rs`（统一行映射、分页夹紧、`LIKE` 转义、事务化更新；`hard_delete_row` 供撤销与索引修复；归档写入指纹与体积同批落） |
+| 行模型（project.db 表的行结构） | `src/store/rows.rs`（原 `models.rs`，v1 遗留命名已并入 store 层） |
+| 分组（单层） | `src/store/folder.rs` |
+| 标签与双向查询（含改名 / 删除 / 按资源批量） | `src/store/tag.rs` |
+| 版本（内容指纹版本） | `src/store/version.rs`（`version_counts()` 批量给详情用；`get_resource_versions()` 给版本历史对话框） |
+| 打标 / 去标 / 标签管理 UI（chips + 标签对话框 + 筛选维） | `src/dialogs/tag/`（`mod.rs` 状态与类型、`open.rs` 入口、`menu.rs` 行尾菜单）、`src/detail_view/tag_preview.rs`、`src/filter/mod.rs` |
+| 分组管理入口 | `src/store/folder.rs`（建 / 改名 / 删 / 移动 + 批量映射）、`src/dialogs/group.rs`、`src/resource_view/groups.rs`（折叠区）、`src/resource_view/list_delegate/menu.rs`（行菜单）、`src/dnd.rs`（拖拽载荷 / 幽灵 / 落点语义） |
+| 回收站（移入 / 还原 / 永久删除 / 清空 + 对话框） | `crates/engine/src/persistence/trash.rs`（中性层 `ProjectTrash`）、`src/service/trash.rs`（四个动作 + 三条守卫）、`src/store/resource.rs`（软删 / 复活 / 永久删行）、`src/dialogs/trash/`（`mod.rs` 行模型与状态、`open.rs` 入口、`render.rs` 表头与条目行） |
+| 左 Dock 面板（列表 / 工具栏 / 状态行） | `src/resource_view/`：`mod.rs` 实体与宿主契约、`list.rs` 列表装配、`filters.rs` 工具栏、`groups.rs` 分组折叠、`init.rs` 构造、`status.rs` 状态行、`selection.rs` 多选、`accessors.rs` 读口；`list_delegate/` 行委托（`mod.rs` 编排、`menu.rs` 右键菜单、`group_header.rs` 分组头、`row.rs` 行信息）；`panel_render/` 面板骨架（`chrome.rs` / `banners.rs` / `empty.rs`） |
+| 视图模型（行、快照、详情、徽标语义） | `src/view_model/`：`row.rs` 行与快照、`detail.rs` 详情快照、`dialog_rows.rs` 对话框行、`row_meta` 仍留展示纯函数（徽标 / 行尾 / 点击归一化） |
+| 工具栏规则（搜索 / 筛选 / 排序） | `src/filter/mod.rs`（纯函数 + 单测；五个排序键，比原始时间戳 / 字节数，缺值排最后；`search_haystack` = 显示名 / 别名 / 来源表 / 标签名 / 尾部） |
+| 详情属性面板（内容层） | `src/detail_view/`：`mod.rs` 装配、`header.rs` 头部、`banners.rs` 提示、`body_sections.rs` 分区、`actions.rs` 动作区、`rows.rs` 属性行、`tag_preview.rs` 标签预览 |
+| 归档 / 取回 / 草稿选择 / 版本历史 / 索引修复 / 回收站 / 标签 / 分组 / 重命名对话框 | `src/dialogs/{archive,checkout,pick,version,index_repair,trash,tag,group,rename,conflict,version_diff}`；已目录化的四者统一形态：`mod.rs` 类型与状态、`open.rs` 入口、`render.rs`（或 `fields.rs` / `menu.rs`）渲染件、`tests.rs` 外置用例 |
+| 详情面板的落点（右 Dock 档位） | `crates/workbench/src/panels/right.rs`（`RightPanel::Archive`）、`crates/workbench/src/view.rs` |
+| 呈现层（索引行 → 面板快照） | `src/present/`（`snapshot.rs` 快照、`rows.rs` 行、`detail.rs` 详情、`versions.rs` 版本行、`trash.rs` 回收站行、`repair.rs` 修复行、`format.rs` 时间与体积文案） |
+| 内容预览（前 20 行 / 仅元信息） | `src/preview.rs`（纯函数 + 常量单一来源）、`crates/workbench/src/services/resource_jobs.rs::load_previews` |
+| 索引修复对话框 | `src/dialogs/index_repair/`（`mod.rs` 三分组与行模型、`open.rs` 入口、`render.rs` 条目行） |
+| 系统级实例（提升 / 分发 / 登记） | `src/global/`（`promote.rs` 提升、`distribute.rs` 分发、`register.rs` 登记、`sql.rs` SQL 常量、`list.rs` 列表） |
+| Action 与快捷键 | `src/commands.rs` + `crates/app/src/main.rs`（`Ctrl+F` / `Esc` / `Delete` / `Ctrl+A` / `F2` 已绑到 `analytics-resource` context；`↑↓` / `Enter` 由列表组件提供） |
+| 左 Dock 装配（面板实体 + 渲染转发） | `crates/workbench/src/panels/resources.rs` |
+| 取数后台任务（列表 + 索引健康 + 版本数） | `crates/workbench/src/services/resource_jobs.rs` |
+| 宿主端口实现 | `src/resource_host/`（`mod.rs` 结构体与薄委托、`archive_actions.rs`、`detail_actions.rs`、`delete_actions.rs`、`group_actions.rs`、`misc_actions.rs`、`helpers.rs`）；workbench 侧桥接在 `crates/workbench/src/components/resource_host.rs` |
+| 编辑器只读来源（三重守卫之二） | `crates/editor/src/persist.rs`、`crates/workbench/src/panels/shared.rs`、`crates/workbench/src/view.rs` |
+| 尺寸常量 | `src/ui.rs`（16 项；不在 `workbench/ui.rs`——依赖方向不允许视图反读 workbench） |
+| 历史内容保留设置项（`resources.keep_versions`） | `crates/settings/src/{model,registry,lib}.rs`；接线在 `crates/workbench/src/{components/resource_host.rs,panels/resources.rs}` 与 `services/resource_jobs.rs::open_service` |
+| 默认排序设置项（`resources.default_sort`） | `crates/settings/src/{model,registry,lib}.rs`；写口 `resource_host::remember_sort` |
+| 分组折叠态设置项（`resources.collapsed_groups`） | `crates/settings/src/{model,registry,lib}.rs`；写口 `resource_host::remember_collapsed` |
+| 契约测试范围 | `crates/workbench/tests/ui_contract.rs`（显式文件清单，不含本 crate 视图） |
+| 接线（workspace 别名 / workbench 依赖 / 渲染入口） | `Cargo.toml` 的 `[workspace.dependencies]`、`crates/workbench/Cargo.toml`、面板渲染入口 |
+| crate 入口文档 | `crates/analytics_resource/README.md` |
 
 数据链路：`scratchpad（发起归档）→ analytics_resource::service（编排）→ payload（本体：resources/ 或 analytics.duckdb）+ store（索引：project.db）`；删除 → `ProjectTrash`。**无 HTTP / IPC 层。**
 

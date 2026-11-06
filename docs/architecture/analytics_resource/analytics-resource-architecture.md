@@ -333,20 +333,28 @@ graph LR
 
 ## 8. 分层与依赖
 
-### 8.1 crate 内文件切分（目标）
+### 8.1 crate 内文件切分（现状，2026-11-06 目录重构后）
 
-| 文件 | 职责 | 现状（2026-09-20 核实：全部已落地，行数为实测） |
-| --- | --- | --- |
-| `model.rs` | 领域类型（`Archive` / `ArchiveKind` / `ArchiveSource` / `ArchiveStatus` / 请求响应） | ✅ 已实现（370 行） |
-| `models.rs` | 持久层行模型（v1 遗留，逐步并入 `model.rs`） | ✅ 已迁移（119 行） |
-| `store/` | 索引读写（`resource` / `folder` / `tag` / `version`），只管 `project.db` | ✅ 已迁移（`recycle.rs` 已删，回收站走 `ProjectTrash` + `deleted_at` 软删） |
-| `payload.rs` | 本体层：`resources/` 文件操作、只读设置、hash、历史副本 | ✅ 已实现（993 行） |
-| `service.rs` | 门面：归档 / 取回 / 检索 / 修复 编排 + 事件 | ✅ 已实现（1909 行） |
-| `indexer.rs` | 索引修复（扫描 / 孤儿检测 / 重建） | ✅ 已实现（508 行） |
-| `resource_view.rs` | 左 Dock 面板（列表 + 工具栏 + 状态行） | ✅ 已实现（2402 行） |
-| `detail_view.rs` | 右侧详情属性面板 | ✅ 已实现（651 行） |
-| `version_view.rs` / `recycle_view.rs` / `folder_view.rs` / `tag_view.rs` | 对话框 | ✅ 四者均已落（`dialogs/{version,trash,group,tag}.rs`） |
-| `commands.rs` | Action 与快捷键 | ✅ 已实现（36 行：`FocusSearch` / `ClearSearch` / `DeleteSelected` / `SelectAllRows` / `OpenSelected`） |
+| 目录 / 文件 | 职责 |
+| --- | --- |
+| `model.rs` | 领域类型（`Archive` / `ArchiveKind` / `ArchiveSource` / `ArchiveStatus` / 请求响应） |
+| `store/` | 索引读写（`rows.rs` 行模型 / `resource.rs` / `folder.rs` / `tag.rs` / `version.rs`），只管 `project.db` |
+| `payload/` | 本体层：`resources/` 文件操作（`paths.rs` 路径安全化 / `transfer.rs` 搬运与只读 / `inspect.rs` 探测 / `versions.rs` 历史副本） |
+| `service/` | 门面编排（`archive.rs` / `checkout.rs` / `trash.rs`）+ `tests/` 按主题分组的用例 |
+| `global/` | 系统级实例（`promote.rs` 提升 / `distribute.rs` 分发 / `register.rs` 登记 / `sql.rs` 常量 / `list.rs` 列表） |
+| `indexer.rs` | 索引修复（扫描 / 孤儿检测 / 重建） |
+| `jobs/` | 工作线程任务队列（`mod.rs` 队列与 worker / `refresh.rs` 刷新链路 / 各领域任务文件） |
+| `present/` | 索引行 → 面板快照（`snapshot.rs` / `rows.rs` / `detail.rs` / `versions.rs` / `trash.rs` / `repair.rs` / `format.rs`） |
+| `filter/` | 搜索 / 筛选 / 排序纯函数 + 用例 |
+| `view_model/` | 视图模型：`row.rs` 行与快照、`detail.rs` 详情快照、`dialog_rows.rs` 对话框行 |
+| `resource_view/` | 左 Dock 面板：`mod.rs` 实体与宿主契约、`list.rs` / `filters.rs` / `groups.rs` / `init.rs` / `status.rs` / `selection.rs` / `accessors.rs` / `row_meta.rs`（展示纯函数）、`list_delegate/`、`panel_render/` |
+| `detail_view/` | 右侧详情面板（`header.rs` / `banners.rs` / `body_sections.rs` / `actions.rs` / `rows.rs` / `tag_preview.rs`） |
+| `dialogs/` | 归档 / 取回 / 版本 / 回收站 / 索引修复 / 标签 / 分组 / 重命名 / 冲突 / 选择；四个大对话框已目录化（`mod.rs` + `open.rs` + 渲染件 + `tests.rs`） |
+| `resource_host/` | 宿主端口实现（`mod.rs` 结构体与薄委托 + `archive_actions` / `detail_actions` / `delete_actions` / `group_actions` / `misc_actions` / `helpers`） |
+| `commands.rs` | Action 与快捷键 |
+| `tests/` | 根级用例（`folders.rs` / `records.rs` / `tags.rs`） |
+
+> 口径变更（2026-11-06）：旧表写"`models.rs` 持久层行模型，逐步并入 `model.rs`"。重构按"持久层归 store、视图层归 view_model"划分，`models.rs` 已改名 `store/rows.rs` 并留在索引层；`model.rs` 保持领域类型单一职责。视图侧 DTO 不再散落在各视图模块，统一收进 `view_model/`。
 
 ### 8.2 视图归属（对齐 `../overview.md`）
 
