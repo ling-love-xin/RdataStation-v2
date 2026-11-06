@@ -203,7 +203,8 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 自身作源）→ 解包到 `temp/`（zip 用 `enclosed_name()` 拒路径穿越，tar.gz 靠 `Archive::unpack`）
 → `locate_package_root`（根层清单，或唯一一层插件目录；多候选拒绝）→ `validate_plugin`
 （`plugin.toml` → 清单校验 → 入口存在 → checksums → 拒绝落入开发残留的
-入口）→ 覆盖安装先停运行中的插件 → 暂存目录复制后整体换入（`temp/rds-plugin-stage-*`
+入口）→ 清单有 `[[dependencies]]` 时先对账必装依赖（缺了就拒绝并点名
+`id@version`，此时旧插件仍在运行）→ 覆盖安装先停运行中的插件 → 暂存目录复制后整体换入（`temp/rds-plugin-stage-*`
 复制完整包 → 删旧目录 → `rename` 到位，避免热插拔扫描看到半成品；换入 / 登记失败会把
 旧插件恢复运行）→
 登记 global.db（按 code 合并，沿用停用状态与首次安装时间；清单依赖同事务写入
@@ -224,7 +225,10 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 `plugin_dependencies`（`register_plugin_with_dependencies`），此前只有读没有写，
 「被依赖不让卸载」永远查不到引用者；同 code 重装时旧行依赖随旧插件行一起清掉
 （commit `1f329785`）。④插件面板空清单改用标准 `empty::Empty`（图标 + 「还没有插件」+
-两条安装入口说明），错误态不显示空态（commit `e6659d59`）。面板安装链补齐后
+两条安装入口说明），错误态不显示空态（commit `e6659d59`）。⑤安装前先对账必装依赖
+（`DependencyManager::validate_dependencies` 此前零调用）：缺依赖直接拒绝并点名
+`id@version`，且发生在动旧目录之前（commit `c825cbe3`）；加载期再复核一次
+`checksums.json`，装好之后被改同样拦得住（commit `1ef852be`）。面板安装链补齐后
 `cargo test -p rds-plugin` **215 单测** + 集成全绿；`cargo test -p rds-store --lib`
 **162 passed / 2 ignored**。
 
