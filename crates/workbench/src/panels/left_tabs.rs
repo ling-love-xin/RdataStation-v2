@@ -14,6 +14,9 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
+use gpui_kit::component::empty::{
+    Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
+};
 use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::{ActiveTheme, IconName, IndexPath, Sizable, Size};
@@ -950,6 +953,31 @@ impl Render for PluginPanel {
         let list_state = self.plugins_list.borrow().clone();
         let list_element = list_state.map(|ls| List::new(&ls));
 
+        // 空态：插件清单为 0 时整块留白会让「装哪儿 / 从哪装」全靠猜，
+        // 用标准 Empty 组件把两个安装入口的用途说清楚（actions 就在头上）。
+        let is_empty = self.plugins.borrow().is_empty() && error_text.is_none();
+        let empty_state = is_empty.then(|| {
+            Empty::new()
+                .header(
+                    EmptyHeader::new()
+                        .media(
+                            EmptyMedia::new()
+                                .with_variant(EmptyMediaVariant::Icon)
+                                .child(LeftPanel::Plugin.icon()),
+                        )
+                        .title(EmptyTitle::new().child("还没有插件"))
+                        .description(EmptyDescription::new().child(
+                            "「安装插件」装 .zip / .tar.gz 包；「从目录」导入含 plugin.toml 的本地目录",
+                        )),
+                )
+                .into_any_element()
+        });
+        let body: Option<AnyElement> = match (empty_state, list_element) {
+            (Some(empty), _) => Some(empty),
+            (None, Some(list)) => Some(list.into_any_element()),
+            (None, None) => None,
+        };
+
         div()
             .v_flex()
             .w_full()
@@ -1022,7 +1050,7 @@ impl Render for PluginPanel {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .when_some(list_element, |this, list| this.child(list)),
+                    .when_some(body, |this, body| this.child(body)),
             )
     }
 }
