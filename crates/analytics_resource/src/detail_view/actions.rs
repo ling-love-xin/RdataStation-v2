@@ -2,6 +2,24 @@
 
 use super::*;
 
+/// 全局行的分发按钮：`(是否可点, 按钮下方那句说明)`。
+///
+/// 抽成纯函数是为了能单测——`Button` 是 `RenderOnce`，渲染完读不到 `disabled`。
+/// 只读项目与列表右键菜单同一判据：分发会往本项目库写表，只读项目不能写。
+fn distribute_affordance(read_only: bool) -> (bool, &'static str) {
+    if read_only {
+        (
+            false,
+            "项目处于只读模式：分发会向本项目库写表，解除只读后再分发。",
+        )
+    } else {
+        (
+            true,
+            "全局实例只读：本体不可打开、取回或删除；需要内容时先分发到本项目。",
+        )
+    }
+}
+
 pub(super) fn render_actions(
     detail: &ArchiveDetail,
     actions: Option<&DetailActions>,
@@ -18,6 +36,9 @@ pub(super) fn render_actions(
         let host = actions.host.clone();
         if detail.scope == RowScope::Global {
             let detail_for_distribute = detail.clone();
+            // 分发要往本项目库写表，只读项目不能写——与列表右键菜单同一判据
+            // （`menu.rs` 里那一项也是 `disabled(… || read_only)`）。
+            let (can_distribute, distribute_hint) = distribute_affordance(actions.read_only);
             out.push(
                 div()
                     .v_flex()
@@ -31,6 +52,7 @@ pub(super) fn render_actions(
                             Button::new("archive-detail-distribute")
                                 .ghost()
                                 .label("分发到本项目…")
+                                .disabled(!can_distribute)
                                 .on_click(move |_, window, cx| {
                                     host.request_distribute_from_global(
                                         &detail_for_distribute.name,
@@ -40,9 +62,7 @@ pub(super) fn render_actions(
                                 }),
                         ),
                     )
-                    .child(div().text_xs().text_color(muted).child(
-                        "全局实例只读：本体不可打开、取回或删除；需要内容时先分发到本项目。",
-                    )),
+                    .child(div().text_xs().text_color(muted).child(distribute_hint)),
             );
         } else {
             let missing = detail.status == ArchiveStatus::Missing;
@@ -159,4 +179,29 @@ pub(super) fn render_actions(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::distribute_affordance;
+
+    #[test]
+    fn distribute_is_disabled_on_a_read_only_project() {
+        let (enabled, hint) = distribute_affordance(true);
+        assert!(!enabled, "只读项目不能分发（会写本项目库）");
+        assert!(
+            hint.contains("只读模式"),
+            "禁用时说明要指向原因，实际：{hint}"
+        );
+    }
+
+    #[test]
+    fn distribute_is_enabled_otherwise() {
+        let (enabled, hint) = distribute_affordance(false);
+        assert!(enabled);
+        assert!(
+            hint.contains("先分发到本项目"),
+            "可分发时说明要指向出口，实际：{hint}"
+        );
+    }
 }
