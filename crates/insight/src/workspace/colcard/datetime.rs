@@ -54,8 +54,9 @@ pub(crate) fn dist_visual(col: &TableColumnView, theme: &Theme) -> Div {
 /// 折叠态月度 Top 条（与文本卡共用渲染）。
 pub(crate) fn mini_freq_rows(
     col_name: &str,
+    variant: &str,
     items: &[crate::model::types::TextFrequency],
     theme: &Theme,
 ) -> Option<Div> {
-    super::text::mini_freq_rows(col_name, items, theme)
+    super::text::mini_freq_rows(col_name, variant, items, theme)
 }

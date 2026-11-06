@@ -138,7 +138,10 @@ pub(crate) fn quantile_strip(col: &TableColumnView, theme: &Theme) -> Option<Div
     }
     let colors = theme.colors;
     let pos = |v: f64| -> f32 { (((v - n.min) / span).clamp(0.0, 1.0) * 100.0) as f32 };
-    let seg = |a: f64, b: f64, id: &str, alt: bool| {
+    // 色块段**不带 id**：纯 div 无交互，带 id 会注册 a11y 节点——而本渲染器
+    // 被 Stats 右栏与 Dist 区共用，同帧双注册就是 Duplicate a11y node id panic
+    //（2026-11-06 真机闪退嫌疑，防御性移除；id 需求只属于可交互元素）
+    let seg = |a: f64, b: f64, alt: bool| {
         let w = pos(b) - pos(a);
         if w <= 0.0 {
             return None;
@@ -151,11 +154,7 @@ pub(crate) fn quantile_strip(col: &TableColumnView, theme: &Theme) -> Option<Div
                 } else {
                     colors.muted_foreground
                 })
-                .flex_grow(w)
-                .id(SharedString::from(format!(
-                    "insight-ws-quant-{}-{}",
-                    col.name, id
-                ))),
+                .flex_grow(w),
         )
     };
     let track = div()
@@ -165,10 +164,10 @@ pub(crate) fn quantile_strip(col: &TableColumnView, theme: &Theme) -> Option<Div
         .rounded_sm()
         .overflow_hidden()
         .bg(colors.sidebar)
-        .when_some(seg(n.min, n.p25, "q1", true), |t, c| t.child(c))
-        .when_some(seg(n.p25, n.median, "q2", false), |t, c| t.child(c))
-        .when_some(seg(n.median, n.p75, "q3", true), |t, c| t.child(c))
-        .when_some(seg(n.p75, n.max, "q4", false), |t, c| t.child(c));
+        .when_some(seg(n.min, n.p25, true), |t, c| t.child(c))
+        .when_some(seg(n.p25, n.median, false), |t, c| t.child(c))
+        .when_some(seg(n.median, n.p75, true), |t, c| t.child(c))
+        .when_some(seg(n.p75, n.max, false), |t, c| t.child(c));
     Some(
         div().v_flex().w_full().gap_1().child(track).child(
             div()

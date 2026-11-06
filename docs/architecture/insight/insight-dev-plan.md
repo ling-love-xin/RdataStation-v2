@@ -23,6 +23,14 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-11-06 — EDA 点击闪退修复（a11y 重复 id 第二轮：渲染器同帧共存）+ D12 测试 flake 根治
+
+**闪退**（panic-1793923115/23241 等，仍是 `Duplicate a11y node id`，但联动循环已修复不复现）：真机操作「EDA 页面点击其它区域」触发。**根因（代码面锁定）**：同一列的分布图渲染器被 **Stats 右栏 / Dist 区 / 折叠行 mini 三处共用**，而 Collapsible **收起后内容保持挂载**（motion_id 语义）——三处可能同帧共存，Progress id 只按「列」区分 → 同帧重复注册。**修复**：① `quantile_strip` 色块段去掉无谓 `.id()`（纯 div 无交互，id 需求只属于可交互元素）；② `mini_freq_rows` 加 **variant 前缀**（折叠行 `"fold"` / 右栏 `"zone"`）——同列不同位不同 id；③ Stats 右栏改用 **mini 渲染器**（`type_mini_chart`，无 `dist-*` id）不再共用完整 `dist_visual`——`dist-*` id 从此只属于 Dist 区。原则固话：**带 id 的元素在同一帧内、同一 id 只能出现一次；共用渲染器必须携带位置前缀**。
+
+**D12 测试 flake 根治**：`INSIGHT_MAX_CONCURRENT` 拆 `#[cfg(test)] 64` / 非 test 4——窗口级测试并行度高（test-threads=核数），多评估用例并发抢 4 permit 是 flake 根因；背压语义属生产，测试不模拟资源紧张。4 连跑全绿（此前约 1/3 概率红）。
+
+**验证**：lib 280（4 连跑）+ e2e 14 + 契约 7 全绿；examples 编译过。落点 `colcard/{numeric,text,datetime,mod}.rs` + `insight_engine.rs`。
+
 ### 2026-11-06 — YData 详细布局收口（表格化统计行 / 警告块 / 极值双小表）
 
 展开体**显示方式**对齐 YData 的最后一批（数据面补齐 + 渲染质感）。**已验证**（lib 280 + e2e 14 + 契约 7 全绿；examples 编译过；lib 全量并行下评估用例仍偶发 D12 配额 flake——降线程必过，已知环境问题）：

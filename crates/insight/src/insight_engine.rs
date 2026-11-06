@@ -33,7 +33,13 @@ pub const SAMPLE_MINI_LIMIT: u64 = 500;
 /// 阻塞等待会把调用线程（可能是 UI 主线程）卡住。超限时调用方收到错误、
 /// 由 UI 呈现「正在分析中，请稍候」并允许重试。
 /// 批量场景（如「评估全表」）应由调用方串行化，不依赖本上限兜底。
+#[cfg(not(test))]
 const INSIGHT_MAX_CONCURRENT: usize = 4;
+/// 测试构建放宽到 64：窗口级测试并行度高（cargo 默认 test-threads = 核数），
+/// 多个评估用例并发抢 4 个 permit 是「D12 配额 flake」的根因（生产无此形态）；
+/// 背压语义本身属于生产，测试环境不模拟资源紧张。
+#[cfg(test)]
+const INSIGHT_MAX_CONCURRENT: usize = 64;
 
 /// SQL 标识符引用（`"name"`；内部双引号双写）。
 ///

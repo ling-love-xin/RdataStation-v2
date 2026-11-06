@@ -49,9 +49,12 @@ pub(crate) fn dist_visual(col: &TableColumnView, theme: &Theme) -> Div {
     dist_text_bars(theme, &t.top_values, 5, &col.name)
 }
 
-/// 折叠态 Top 条（文本 / 月度共用；计数在展开态「分布」区看全）。
+/// 迷你 Top 条（文本 / 月度共用）：`variant` 进元素 id——折叠行（"fold"）与
+/// 展开体 Stats 右栏（"zone"）可能**同帧共存**（Collapsible 收起后内容保持
+/// 挂载），id 不带位置前缀就是 Duplicate a11y node id panic。
 pub(crate) fn mini_freq_rows(
     col_name: &str,
+    variant: &str,
     items: &[crate::model::types::TextFrequency],
     theme: &Theme,
 ) -> Option<Div> {
@@ -62,7 +65,7 @@ pub(crate) fn mini_freq_rows(
     // id 用列名 + 序号：f.value 是用户数据文本，同列 top 值可能撞文本（如 NULL/null），
     // 用序号兜底避免 a11y 节点 id 重复 panic。
     for (ix, f) in items.iter().take(3).enumerate() {
-        let key = SharedString::from(format!("insight-ws-mini-{col_name}-{ix}"));
+        let key = SharedString::from(format!("insight-ws-mini-{col_name}-{variant}-{ix}"));
         rows = rows.child(
             div()
                 .h_flex()

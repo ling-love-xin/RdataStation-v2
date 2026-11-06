@@ -426,8 +426,37 @@ impl InsightWorkspacePanel {
                     .flex_none()
                     .w(rems(ui::INSIGHT_CARD_VIS_WIDTH))
                     .min_w_0()
-                    .child(self.type_dist_visual(col, theme)),
+                    .child(self.type_mini_chart(col, "zone", theme)),
             )
+    }
+
+    /// 类型分派：右栏 mini 图（zone 变体；数值直方 / Top 条 / 真假占比）。
+    ///
+    /// 右栏刻意用 **mini 渲染器**（无 dist id / zone 前缀 id）而不是完整
+    /// `dist_visual`：Stats 右栏 / Dist 区 / 折叠行 mini 三处可能同帧共存
+    /// （Collapsible 收起后内容保持挂载），Progress id 只按「列」区分会重复
+    /// 注册 → Duplicate a11y node id panic（2026-11-06 真机闪退根因防御）。
+    fn type_mini_chart(&self, col: &TableColumnView, variant: &str, theme: &Theme) -> Div {
+        match &col.stats_detail {
+            Some(crate::model::types::ColumnStatsDetail::Numeric(_)) => {
+                match col.histogram.as_ref() {
+                    Some(bins) if !bins.is_empty() => numeric::mini_histogram(theme, bins),
+                    _ => zone_note(theme, "样本行数不足"),
+                }
+            }
+            Some(crate::model::types::ColumnStatsDetail::Text(t)) => {
+                text::mini_freq_rows(&col.name, variant, &t.top_values, theme)
+                    .unwrap_or_else(|| zone_note(theme, "无频次数据"))
+            }
+            Some(crate::model::types::ColumnStatsDetail::DateTime(d)) => {
+                datetime::mini_freq_rows(&col.name, variant, &d.monthly_distribution, theme)
+                    .unwrap_or_else(|| zone_note(theme, "无频次数据"))
+            }
+            Some(crate::model::types::ColumnStatsDetail::Boolean(b)) => {
+                boolean::mini_ratio(theme, b.true_ratio)
+            }
+            _ => zone_note(theme, "类型未识别"),
+        }
     }
 
     /// 分布区：类型专属图 + 附注（数值卡的偏度 / 峰度行）。
@@ -454,7 +483,7 @@ impl InsightWorkspacePanel {
                     Some(numeric::mini_histogram(theme, bins))
                 }
                 crate::model::ColumnMiniStats::Frequencies(freqs) => {
-                    text::mini_freq_rows(&col.name, freqs, theme)
+                    text::mini_freq_rows(&col.name, "fold", freqs, theme)
                 }
                 crate::model::ColumnMiniStats::Boolean { true_ratio } => {
                     Some(boolean::mini_ratio(theme, *true_ratio))
@@ -468,10 +497,10 @@ impl InsightWorkspacePanel {
                 Some(numeric::mini_histogram(theme, bins))
             }
             Some(crate::model::types::ColumnStatsDetail::Text(t)) => {
-                text::mini_freq_rows(&col.name, &t.top_values, theme)
+                text::mini_freq_rows(&col.name, "fold", &t.top_values, theme)
             }
             Some(crate::model::types::ColumnStatsDetail::DateTime(d)) => {
-                datetime::mini_freq_rows(&col.name, &d.monthly_distribution, theme)
+                datetime::mini_freq_rows(&col.name, "fold", &d.monthly_distribution, theme)
             }
             Some(crate::model::types::ColumnStatsDetail::Boolean(b)) => {
                 Some(boolean::mini_ratio(theme, b.true_ratio))
