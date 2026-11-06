@@ -365,7 +365,7 @@ pub fn new_host(backend: Rc<dyn ResourceHostBackend>) -> Rc<dyn ResourcesHost> {
 }
 
 /// 扩展名白名单判定（与 `analytics_resource::global::file_read_expr` 同口径）：
-/// 数据文件升级 = 映射出全局表；其余（sql/py/md 等） = 脚本内容表（方案 A）。
+/// 数据文件升级 = 映射出全局表；文本脚本 = 内容表（方案 A）；两者之外不能升级。
 fn is_data_file_ext(path: &std::path::Path) -> bool {
     matches!(
         path.extension()
@@ -374,4 +374,41 @@ fn is_data_file_ext(path: &std::path::Path) -> bool {
             .as_deref(),
         Some("csv" | "tsv" | "txt" | "parquet" | "xlsx" | "xls" | "json" | "ndjson")
     )
+}
+
+/// 文本脚本白名单：内容是纯文本，可以读成「脚本内容表」进全局库。
+///
+/// 数据文件与文本脚本都是**正向白名单**——不在两张表里的（png / jpg / zip / docx
+/// 这类二进制，或没有扩展名）不允许升级，升级入口先回执说明，而不是让
+/// `global::promote::Script` 分支的 `fs::read_to_string` 撞 UTF-8 失败。
+fn is_text_script_ext(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+            .as_deref(),
+        Some("sql" | "py" | "r" | "md" | "yaml" | "yml" | "toml" | "js" | "ts" | "sh" | "ps1" | "ipynb")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_data_file_ext, is_text_script_ext};
+    use std::path::Path;
+
+    #[test]
+    fn upgrade_shapes_are_positive_whitelists() {
+        // 数据文件 → 映射出表（与 `file_read_expr` 同一张白名单，大小写不敏感）。
+        assert!(is_data_file_ext(Path::new("dau.CSV")));
+        assert!(is_data_file_ext(Path::new("dau.parquet")));
+        // 文本脚本 → 内容表。
+        assert!(is_text_script_ext(Path::new("dau.sql")));
+        assert!(is_text_script_ext(Path::new("README.md")));
+        // 二进制与无扩展名：两张白名单都不收（升级入口据此回执，不交给 read_to_string 撞 UTF-8）。
+        assert!(!is_data_file_ext(Path::new("chart.png")));
+        assert!(!is_text_script_ext(Path::new("chart.png")));
+        assert!(!is_data_file_ext(Path::new("bundle.zip")));
+        assert!(!is_text_script_ext(Path::new("bundle.zip")));
+        assert!(!is_text_script_ext(Path::new("doc")));
+    }
 }

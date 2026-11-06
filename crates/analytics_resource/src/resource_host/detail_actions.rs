@@ -164,11 +164,28 @@ pub(super) fn request_promote_to_global(host: &ResourceHost, detail: &ArchiveDet
             host.notice(format!("资产库：本体文件不存在（{rel}），无法升级"), cx);
             return;
         }
-        // 形态判定：白名单扩展名 → 数据文件映射出表；其余（sql/py/md…）→ 脚本内容表。
+        // 形态判定：数据文件 → 映射出表；文本脚本 → 内容表；其余（png / zip / docx 这类
+        // 二进制）**不能升级**。加固前一律落到 `PromoteKind::Script` 的 `read_to_string`，
+        // 撞 UTF-8 失败后把 `stream did not contain valid UTF-8` 原样丢给用户。
         let kind = if is_data_file_ext(&abs) {
             PromoteKind::DataFile
-        } else {
+        } else if is_text_script_ext(&abs) {
             PromoteKind::Script
+        } else {
+            let ext = abs
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("（无扩展名）")
+                .to_ascii_lowercase();
+            host.notice(
+                format!(
+                    "资产库：{ext} 这类文件不能升级到全局——全局库只收能读成表的数据文件\
+（csv / tsv / parquet / xlsx / json 等）或文本脚本（sql / py / md 等）。\
+内容是数据的话，另存为 csv 再升级；纯二进制文件请留在项目里，用「分发」或共享目录传。"
+                ),
+                cx,
+            );
+            return;
         };
         resource_jobs::enqueue_promote(
             root,
