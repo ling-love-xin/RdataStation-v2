@@ -16,7 +16,8 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    全局行只看、只分发：动作收敛为一条 <b>「分发到本项目…」</b>。全局共享层是 <b>只读</b> 的，分发到项目后才能在项目侧编辑。
+    全局行只看、只分发：动作收敛为一条 <b>「分发到本项目…」</b>（ghost 按钮 + 按钮下方一句说明）。全局共享层是 <b>只读</b> 的，分发到项目后才能在项目侧编辑。
+    <b>不摆的分区</b>：组织（没有项目分组归属）、标签（全局不带本地标签、也不许打标）、危险区（不能删）；版本区还在（有「历史」行），但<b>不挂</b>「查看全部…」入口（没有本地版本链可翻）。
     跨项目唯一法定路径 = <code>项目 → 全局 → 项目</code>；项目 ↔ 项目禁止直传；<code>promoted_from</code>（草稿→归档）与 <code>scope</code>（项目→全局）是两层升级，不混用。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="07-detail-ref.html">← 上一块：引用型详情</a><a href="09-detail-insight.html">下一块：洞察集合卡 →</a></nav>
@@ -25,7 +26,7 @@
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>轻量详情<span class="desc">基本信息 + 分发一节 + 单动作</span></div>
+    <div class="variant-h"><span class="no">A</span>轻量详情<span class="desc">基本 / 来源 / 版本 / 内容预览 / 分发 + 单动作；没有组织与标签</span></div>
     <div class="canvas pad">
       <div class="detailcol">
         <div class="dstate proto-on" style="flex:none">
@@ -38,20 +39,38 @@
           <div class="dbody" style="overflow:visible">
             <div class="sect">
               <div class="sect-h">基本信息<span class="lock">只读</span></div>
-              <div class="kv"><span class="k">实例</span><span class="v"><span class="scope-badge">全局</span></span></div>
+              <div class="kv"><span class="k">种类</span><span class="v">分析表</span></div>
+              <div class="kv"><span class="k">版本</span><span class="v">v2</span></div>
+              <div class="kv"><span class="k">实例</span><span class="v"><span class="scope-badge">全局</span> 全局实例（只读，可分发到本项目）</span></div>
               <div class="kv"><span class="k">规模</span><span class="v">12,480 行 × 18 列</span></div>
-              <div class="kv"><span class="k">来源表</span><span class="v mono">mock_orders</span></div>
-              <div class="kv"><span class="k">共享源</span><span class="v">项目「营销分析」升级而来</span></div>
               <div class="locknote"><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg><span>全局共享层：只读，分发到项目后可在项目侧编辑</span></div>
             </div>
 
             <div class="sect">
+              <div class="sect-h">来源</div>
+              <div class="kv"><span class="k">来源表</span><span class="v mono">mock_orders</span></div>
+              <div class="kv"><span class="k">内容指纹</span><span class="v mono">3f9a2c7b1e04<span class="cp">复制</span></span></div>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h">版本</div>
+              <div class="kv"><span class="k">历史</span><span class="v">1 个历史版本</span></div>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h">内容预览<span class="lock" style="color:var(--muted)">只读</span></div>
+              <div style="color:var(--muted);font-size:11px">仅元信息（不预览内容）</div>
+            </div>
+
+            <div class="sect">
               <div class="sect-h">分发</div>
-              <div class="kv blk"><span class="k">目标项目</span><span class="v">分发 = Parquet 中转进项目分析库（P_）并建项目登记 + 版本链（§13.6）</span></div>
+              <div class="kv blk"><span class="k">分析表</span><span class="v"><code>COPY &lt;全局表&gt; TO '*.parquet' (FORMAT PARQUET)</code> 中转 → <code>CREATE TABLE &lt;项目表&gt; AS SELECT * FROM read_parquet(…)</code>，再写项目登记与版本链接续全局链</span></div>
+              <div class="kv blk"><span class="k">脚本档</span><span class="v">不走 parquet：按 <code>file_rel_path</code> 重建为项目 <code>resources/&lt;rel_path&gt;</code> 文件（File 档）</span></div>
             </div>
 
             <div class="danger-zone">
-              <button class="btn-p">分发到本项目…</button>
+              <button class="btn-s btn-xs">分发到本项目…</button>
+              <div class="locknote" style="margin-top:6px"><svg class="ico-sm"><use href="#i-info" xlink:href="#i-info"/></svg><span>全局实例只读：本体不可打开、取回或删除；需要内容时先分发到本项目。</span></div>
             </div>
           </div>
         </div>
@@ -60,13 +79,37 @@
     <p class="hang">
       全局清单 = <b>用户数据表</b>（系统内部表要过滤，白名单待确认）；行内用虚线徽标 <code>全局</code> 与项目行区分（与强度徽标正交，不抢视觉）。
       升级（项目 → 全局）与本页相反方向：全局行右键「复制到项目…」= 读全局表写入当前项目库 + 版本链分支；脚本文件重建为 <code>resources/</code> 文件。
+      <b>不单独成行</b>：升级来源（哪次 promote、从哪个项目）在面板上不单列一行，只在「来源」区给来源表——要追全链路去看全局登记行的 <code>promoted_from</code>。
     </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>只读项目<span class="desc">分发会往本项目库写表：按钮置灰，说明换成「解除只读后再分发」</span></div>
+    <div class="canvas pad">
+      <div class="detailcol">
+        <div class="dstate proto-on" style="flex:none">
+          <div class="dhead">
+            <svg class="ico-sm ic"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+            <span class="dnm">mock_orders</span>
+            <span class="dver">全局</span>
+          </div>
+          <div class="dsub">kind 分析表 · 全局共享层（G_ 连接）</div>
+          <div class="dbody" style="overflow:visible;padding-bottom:14px">
+            <div class="danger-zone" style="margin-top:0;border-top:0;padding-top:0">
+              <button class="btn-s btn-xs" disabled style="opacity:.5;cursor:not-allowed">分发到本项目…</button>
+              <div class="locknote" style="margin-top:6px"><svg class="ico-sm"><use href="#i-info" xlink:href="#i-info"/></svg><span>项目处于只读模式：分发会向本项目库写表，解除只读后再分发。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="hang">两句话就是 <code>distribute_affordance(read_only)</code> 的两个分支——按钮 <code>disabled</code> 与说明由同一个纯函数给，判据与列表右键「分发」项同一处。</p>
   </section>
 
   <div class="canvas pad">
     <p class="hang" style="margin:0">
-      本块样式：<code>.dhead</code> / <code>.dsub</code> / <code>.locknote</code> / <code>.danger-zone</code>（这里放的是主按钮，命名沿用了总集稿）。
-      落地代码：<code>crates/analytics_resource/src/global/</code>（<code>DistributeShape</code> 是外部消费面，不可改名）+ <code>detail_view/</code>。
+      本块样式：<code>.dhead</code> / <code>.dsub</code> / <code>.sect</code> / <code>.kv</code> / <code>.locknote</code> / <code>.btn-s</code> + <code>.btn-xs</code>；分发按钮仍摆在 <code>.danger-zone</code> 容器里（命名沿用总集稿，实际是<b>唯一主操作</b>，不是危险动作）。
+      落地代码：<code>crates/analytics_resource/src/global/</code>（<code>distribute.rs::distribute</code> 形态二分；<code>DistributeShape</code> 是外部消费面，不可改名）+ <code>detail_view/</code>（<code>rows.rs</code> 在 <code>scope == Global</code> 时不产生组织区、<code>body_sections.rs</code> 不摆标签与版本历史入口、<code>actions.rs::distribute_affordance</code> 给按钮与说明）。
     </p>
   </div>
 
