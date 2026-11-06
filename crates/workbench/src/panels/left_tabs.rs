@@ -750,9 +750,17 @@ impl PluginPanel {
                 match outcome {
                     Ok(plugin) => {
                         this.error.replace(None);
-                        this.notice.replace(Some(format!(
-                            "已安装 {} v{}（{}）",
-                            plugin.name, plugin.version, plugin.code
+                        // 回执要如实：停用的插件装完仍停用、激活失败要说失败——
+                        // 用户不会去翻日志，只写「已安装」等于把问题藏起来。
+                        let state = plugin::get_plugin_manager()
+                            .and_then(|m| m.get_loaded_plugin(&plugin.code))
+                            .map(|p| p.status.session_state());
+                        this.notice.replace(Some(install_receipt(
+                            &plugin.name,
+                            &plugin.version,
+                            &plugin.code,
+                            plugin.is_enabled,
+                            state,
                         )));
                     }
                     Err(e) => {
@@ -771,6 +779,31 @@ impl EventEmitter<BasePanelEvent> for PluginPanel {}
 impl Focusable for PluginPanel {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+/// 安装回执（纯函数，便于单测）：把「库里的启用状态 + 运行时状态」翻成一句人话。
+///
+/// 覆盖安装 / 重装会沿用库里的 `is_enabled`：停用中的插件装完仍停用，回执不能只说
+/// 「已安装」；激活失败（`PluginState::Error`，含 `ActivationFailed` / `LoadFailed`）
+/// 也要在这里说，否则用户以为装好了却连不上。
+fn install_receipt(
+    name: &str,
+    version: &str,
+    code: &str,
+    is_enabled: bool,
+    state: Option<PluginState>,
+) -> String {
+    if !is_enabled {
+        format!("已安装 {name} v{version}（{code}，保持停用）")
+    } else {
+        match state {
+            Some(PluginState::Error) => {
+                format!("已安装 {name} v{version}（{code}），但加载或激活失败，详见日志")
+            }
+            Some(PluginState::Active) => format!("已安装并启用 {name} v{version}（{code}）"),
+            _ => format!("已安装 {name} v{version}（{code}）"),
+        }
     }
 }
 
@@ -986,7 +1019,40 @@ impl ComponentPanel for PluginPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::uninstall_confirm_description;
+    use super::{install_receipt, uninstall_confirm_description};
+    use plugin::wasm::PluginState;
+
+    /// 回执必须如实反映库里的启用状态与运行时结果：只说「已安装」会把停用 / 激活失败藏起来。
+    #[test]
+    fn install_receipt_tells_the_truth_about_enabled_state() {
+        let active = install_receipt(
+            "Oracle JDBC",
+            "1.2.0",
+            "rds.driver.oracle",
+            true,
+            Some(PluginState::Active),
+        );
+        assert!(active.contains("已安装并启用"), "{active}");
+
+        let kept_disabled = install_receipt(
+            "Oracle JDBC",
+            "1.2.0",
+            "rds.driver.oracle",
+            false,
+            Some(PluginState::Inactive),
+        );
+        assert!(kept_disabled.contains("保持停用"), "{kept_disabled}");
+
+        let failed = install_receipt(
+            "Oracle JDBC",
+            "1.2.0",
+            "rds.driver.oracle",
+            true,
+            Some(PluginState::Error),
+        );
+        assert!(failed.contains("激活失败"), "{failed}");
+        assert!(failed.contains("日志"), "必须指出去哪看原因：{failed}");
+    }
 
     /// 卸载确认框必须把「删什么 / 留什么 / 什么情况被拒」说清楚——
     /// 这是全仓唯一会删插件目录的入口，用户只在这一步看到后果。
