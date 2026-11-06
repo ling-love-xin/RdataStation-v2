@@ -1,0 +1,101 @@
+//! 面板快照：行、分组、标签、计数汇总。
+
+use super::*;
+
+/// 组装面板快照：行（按状态与种类计分）+ 计数 + 只读标志 + 标签字典。
+///
+/// 计数口径与状态行文案一一对应：`缺失` 与 `索引异常`（内容已变）各自计数，
+/// 因为它们在上是两个不同的可点入口（都进索引修复，但处理方式不同）。
+pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
+    let SnapshotInputs {
+        resources,
+        global_rows,
+        global_resources,
+        statuses,
+        history_counts,
+        tags: tags_by_resource,
+        tag_dictionary,
+        folders: folders_by_resource,
+        group_dictionary,
+        previews,
+        read_only,
+        now,
+    } = inputs;
+    let mut counts = ArchiveCounts {
+        total: resources.len(),
+        ..ArchiveCounts::default()
+    };
+    let mut rows = Vec::with_capacity(resources.len());
+    let mut details = std::collections::HashMap::with_capacity(resources.len());
+
+    for resource in resources {
+        let row = to_row(
+            resource,
+            statuses,
+            tags_by_resource,
+            folders_by_resource,
+            now,
+        );
+        match row.status {
+            ArchiveStatus::Missing => counts.missing += 1,
+            ArchiveStatus::ContentChanged => counts.drifted += 1,
+            ArchiveStatus::Normal => match row.kind {
+                ArchiveKind::File => counts.archived += 1,
+                ArchiveKind::Analysis => counts.analysis += 1,
+                ArchiveKind::TableRef => counts.table_ref += 1,
+            },
+        }
+        let history_count = history_counts.get(&resource.id).copied().unwrap_or(0);
+        // 标签 chips 就用行上那一份（同一装配来源，不会出现“行里有、详情里没有”）。
+        // 预览同理：宿主没读到就给缺省（「仅元信息」），不在渲染期补读数。
+        let preview = previews.get(&resource.id).cloned().unwrap_or_default();
+        // 分组名从“按行的归属 + 分组字典”拼：认不出的 id 当未分组（与 `filter` 的脏数据口径一致）。
+        let group = folders_by_resource
+            .get(&resource.id)
+            .and_then(|folder_id| group_dictionary.iter().find(|group| &group.id == folder_id))
+            .map(|group| group.name.clone());
+        details.insert(
+            resource.id.clone(),
+            to_detail(
+                resource,
+                row.status,
+                history_count,
+                DetailExtras {
+                    tags: row.tags.clone(),
+                    group,
+                    preview,
+                },
+            ),
+        );
+        rows.push(row);
+    }
+
+    // 全局行详情（§13 收尾 A4）：轻量基本信息区——全局共享层无项目侧标签 / 分组 / 预览，
+    // 历史版本计数也不进项目版本表；动作区由渲染层按 `scope` 收敛到「分发到本项目」。
+    for resource in &global_resources {
+        let preview = previews.get(&resource.id).cloned().unwrap_or_default();
+        details.insert(
+            resource.id.clone(),
+            to_detail(
+                resource,
+                ArchiveStatus::Normal,
+                0,
+                DetailExtras {
+                    tags: Vec::new(),
+                    group: None,
+                    preview,
+                },
+            ),
+        );
+    }
+
+    ResourcesSnapshot {
+        rows,
+        global_rows,
+        counts,
+        read_only,
+        details,
+        tags: tag_dictionary,
+        groups: group_dictionary,
+    }
+}
