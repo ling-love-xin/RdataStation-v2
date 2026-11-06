@@ -16,8 +16,9 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    宽 <code>1024px</code>（64rem）· 纯文本 diff，<b>只读</b>：不写库、不产生版本，只读项目也能看。两种形态：<b>统一</b>（<code>+/−</code> 行内联，带上下文行）与<b>并排</b>（左右两列各自行号）。
-    入口只有两处：版本历史里「与当前版本对比…」，以及详情面板版本区「查看全部…」。
+    宽 <code>64rem</code>（1024px）· 标题「<b>名字 · v2 → v3</b>」· diff 区用 gpui-kit 的 <code>diff::Diff</code> 组件（不是自绘表格）：文件头 + <code>@@</code> hunk 行 + <b>两列行号</b>（旧 / 新）+ 行首 <code>+/−</code> 符号 + 增删底色，最高 <b>28rem</b>（448px）内横纵滚动。
+    顶栏一行「v2 → v3 的差异（只读）」+ 右侧两个 ghost 按钮「统一 / 并排」（<code>toggled</code> 表示当前形态，不是分段控件）。footer 只有一个「关闭」。
+    <b>只读</b>：不写库、不产生版本；只读项目也能看。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="13-dialog-versions.html">← 上一块：版本历史</a><a href="15-dialog-trash.html">下一块：回收站 →</a></nav>
 </header>
@@ -25,78 +26,231 @@
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>统一视图<span class="desc">+ 绿 / − 红，行号复用（删除与新增共用同一行号）</span></div>
+    <div class="variant-h"><span class="no">A</span>统一视图<span class="desc">文件头 + hunk 行 + 两列行号；删行只有旧行号，增行只有新行号</span></div>
     <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="dlg dlg-version-diff proto-on">
-        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-history" xlink:href="#i-history"/></svg>dau_report.sql · v2 → v3<span class="sub2">只读 · 文本 diff</span><button class="x">✕</button></div>
-        <div class="dlg-body">
-          <div class="difftool">
-            <span class="dflabel">v2 → v3（当前）的差异 · 只读</span>
-            <div class="mode-sw"><button class="on">统一</button><button>并排</button></div>
+      <div class="dlg proto-on" style="width:1024px">
+        <div class="dlg-head">dau_report.sql · v2 → v3<button class="x">✕</button></div>
+        <div class="dlg-body" style="padding:12px 14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <span style="font-size:10.5px;color:var(--muted)">v2 → v3 的差异（只读）</span>
+            <span style="display:flex;gap:4px">
+              <button class="btn-s" style="background:var(--accent);border-color:var(--accent)">统一</button>
+              <button class="btn-s">并排</button>
+            </span>
           </div>
-          <div class="diffview mono">
-            <div class="drow ctx"><span class="dno">1</span><span class="dc">-- 渠道日报（自动生成）</span></div>
-            <div class="drow ctx"><span class="dno">2</span><span class="dc">SELECT</span></div>
-            <div class="drow ctx"><span class="dno">3</span><span class="dc">  channel,</span></div>
-            <div class="drow del"><span class="dno">4</span><span class="dc">  DATE(order_time) AS day,</span></div>
-            <div class="drow add"><span class="dno">4</span><span class="dc">  DATE_FORMAT(order_time,'%Y-%m-%d') AS day,</span></div>
-            <div class="drow ctx"><span class="dno">5</span><span class="dc">  COUNT(*) AS orders,</span></div>
-            <div class="drow del"><span class="dno">6</span><span class="dc">  SUM(IF(status='paid',amount,0)) AS gmv,</span></div>
-            <div class="drow add"><span class="dno">6</span><span class="dc">  SUM(CASE WHEN status='paid' THEN amount ELSE 0 END) AS gmv,</span></div>
-            <div class="drow ctx"><span class="dno">7</span><span class="dc">FROM orders</span></div>
-            <div class="drow ctx"><span class="dno">8</span><span class="dc">GROUP BY channel, day</span></div>
+          <div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;font-family:Consolas,'JetBrains Mono',monospace;font-size:11px;line-height:18px;background:var(--bg)">
+            <div style="display:flex;align-items:center;gap:8px;padding:5px 8px 5px 4px;border-bottom:1px solid var(--border);color:var(--muted)">
+              <span style="font-size:9px">▾</span>
+              <span style="font-weight:600;color:var(--fg);font-family:-apple-system,'Segoe UI',sans-serif;font-size:12px">dau_report.sql@3</span>
+              <span style="font-size:10px">+1 −1</span>
+            </div>
+            <div style="display:flex;padding:0 8px;background:color-mix(in srgb,var(--info) 10%,transparent);color:var(--muted)">
+              <span style="width:32px;flex:none"></span><span style="width:32px;flex:none"></span><span style="width:14px;flex:none"></span>
+              <span style="flex:1;white-space:pre">@@ -1,8 +1,8 @@</span>
+            </div>
+            <div style="display:flex;padding:0 8px">
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">1</span>
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">1</span>
+              <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+              <span style="flex:1;white-space:pre">  -- 渠道日报（自动生成）</span>
+            </div>
+            <div style="display:flex;padding:0 8px">
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">2</span>
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">2</span>
+              <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+              <span style="flex:1;white-space:pre">  SELECT</span>
+            </div>
+            <div style="display:flex;padding:0 8px">
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">3</span>
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">3</span>
+              <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+              <span style="flex:1;white-space:pre">    channel,</span>
+            </div>
+            <div style="display:flex;padding:0 8px;background:color-mix(in srgb,var(--danger) 10%,transparent)">
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--danger);user-select:none">4</span>
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none"> </span>
+              <span style="width:14px;flex:none;text-align:center;color:var(--danger)">−</span>
+              <span style="flex:1;white-space:pre">   DATE(order_time) AS day,</span>
+            </div>
+            <div style="display:flex;padding:0 8px;background:color-mix(in srgb,var(--success) 12%,transparent)">
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none"> </span>
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--success);user-select:none">4</span>
+              <span style="width:14px;flex:none;text-align:center;color:var(--success)">+</span>
+              <span style="flex:1;white-space:pre">   DATE_FORMAT(order_time,'%Y-%m-%d') AS day,</span>
+            </div>
+            <div style="display:flex;padding:0 8px">
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">5</span>
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">5</span>
+              <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+              <span style="flex:1;white-space:pre">    COUNT(*) AS orders,</span>
+            </div>
+            <div style="display:flex;padding:0 8px;background:color-mix(in srgb,var(--danger) 10%,transparent)">
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--danger);user-select:none">6</span>
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none"> </span>
+              <span style="width:14px;flex:none;text-align:center;color:var(--danger)">−</span>
+              <span style="flex:1;white-space:pre">   SUM(IF(status='paid',amount,0)) AS gmv,</span>
+            </div>
+            <div style="display:flex;padding:0 8px;background:color-mix(in srgb,var(--success) 12%,transparent)">
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none"> </span>
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--success);user-select:none">6</span>
+              <span style="width:14px;flex:none;text-align:center;color:var(--success)">+</span>
+              <span style="flex:1;white-space:pre">   SUM(CASE WHEN status='paid' THEN amount ELSE 0 END) AS gmv,</span>
+            </div>
+            <div style="display:flex;padding:0 8px">
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">7</span>
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">7</span>
+              <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+              <span style="flex:1;white-space:pre">  FROM orders</span>
+            </div>
+            <div style="display:flex;padding:0 8px">
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">8</span>
+              <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">8</span>
+              <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+              <span style="flex:1;white-space:pre">  GROUP BY channel, day</span>
+            </div>
           </div>
         </div>
-        <div class="dlg-foot"><span>2 处变更 · 8 行上下文</span><span class="grow"></span><button class="btn-p">关闭</button></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="variant">
-    <div class="variant-h"><span class="no">B</span>并排视图<span class="desc">左 = 旧版（只画删行与上下文），右 = 当前（只画增行与上下文）</span></div>
-    <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="dlg dlg-version-diff proto-on">
-        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-history" xlink:href="#i-history"/></svg>dau_report.sql · v2 → v3<span class="sub2">只读 · 文本 diff</span><button class="x">✕</button></div>
-        <div class="dlg-body">
-          <div class="difftool">
-            <span class="dflabel">v2 → v3（当前）的差异 · 只读</span>
-            <div class="mode-sw"><button>统一</button><button class="on">并排</button></div>
-          </div>
-          <div class="diffview split mono">
-            <div class="dcol">
-              <div class="drow ctx"><span class="dno">1</span><span class="dc">-- 渠道日报（自动生成）</span></div>
-              <div class="drow ctx"><span class="dno">2</span><span class="dc">SELECT</span></div>
-              <div class="drow ctx"><span class="dno">3</span><span class="dc">  channel,</span></div>
-              <div class="drow del"><span class="dno">4</span><span class="dc">  DATE(order_time) AS day,</span></div>
-              <div class="drow ctx"><span class="dno">5</span><span class="dc">  COUNT(*) AS orders,</span></div>
-              <div class="drow del"><span class="dno">6</span><span class="dc">  SUM(IF(status='paid',amount,0)) AS gmv,</span></div>
-              <div class="drow ctx"><span class="dno">7</span><span class="dc">FROM orders</span></div>
-              <div class="drow ctx"><span class="dno">8</span><span class="dc">GROUP BY channel, day</span></div>
-            </div>
-            <div class="dcol">
-              <div class="drow ctx"><span class="dno">1</span><span class="dc">-- 渠道日报（自动生成）</span></div>
-              <div class="drow ctx"><span class="dno">2</span><span class="dc">SELECT</span></div>
-              <div class="drow ctx"><span class="dno">3</span><span class="dc">  channel,</span></div>
-              <div class="drow add"><span class="dno">4</span><span class="dc">  DATE_FORMAT(order_time,'%Y-%m-%d') AS day,</span></div>
-              <div class="drow ctx"><span class="dno">5</span><span class="dc">  COUNT(*) AS orders,</span></div>
-              <div class="drow add"><span class="dno">6</span><span class="dc">  SUM(CASE WHEN status='paid' THEN amount ELSE 0 END) AS gmv,</span></div>
-              <div class="drow ctx"><span class="dno">7</span><span class="dc">FROM orders</span></div>
-              <div class="drow ctx"><span class="dno">8</span><span class="dc">GROUP BY channel, day</span></div>
-            </div>
-          </div>
-        </div>
-        <div class="dlg-foot"><span>2 处变更 · 8 行上下文</span><span class="grow"></span><button class="btn-p">关闭</button></div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-p">关闭</button></div>
       </div>
     </div>
     <p class="hang">
-      两种形态共用同一个 diff 结果、只换渲染：切换<b>不重新算 diff</b>（否则两边行号会漂）。超长行一律省略号 + tooltip，不折行（折行会让左右列错位）。59 行的文本在这个宽度下按 <code>max-height:340px</code> 内滚。
+      推翻五处：① 标题没有副标题「只读 · 文本 diff」，就是 <b>`dau_report.sql · v2 → v3`</b>；② 顶栏那句是「<b>v2 → v3 的差异（只读）</b>」，没有「（当前）」——旧侧 v2、新侧永远是你打开时的当前版本；③ 形态切换是两个 <b>ghost 按钮</b>（当前形态 `toggled` 有底），不是分段控件 <code>.mode-sw</code>；④ footer 只有「关闭」，「2 处变更 · 8 行上下文」不存在——增删统计在<b>文件头</b>（`+1 −1`）；⑤ <b>行号不是共用一列</b>：组件的 `line_number(true)` 画的是<b>旧 / 新两条 gutter</b>，删行只有左侧有号、增行只有右侧有号（原型把删行与新增都写成「4」，看着像共用一行号）。
     </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>并排视图<span class="desc">同一份 patch、只换 mode；左右各自一列行号，缺行处留空对齐</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg proto-on" style="width:1024px">
+        <div class="dlg-head">dau_report.sql · v2 → v3<button class="x">✕</button></div>
+        <div class="dlg-body" style="padding:12px 14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <span style="font-size:10.5px;color:var(--muted)">v2 → v3 的差异（只读）</span>
+            <span style="display:flex;gap:4px">
+              <button class="btn-s">统一</button>
+              <button class="btn-s" style="background:var(--accent);border-color:var(--accent)">并排</button>
+            </span>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;font-family:Consolas,'JetBrains Mono',monospace;font-size:11px;line-height:18px;background:var(--bg)">
+            <div style="display:flex;align-items:center;gap:8px;padding:5px 8px 5px 4px;border-bottom:1px solid var(--border);color:var(--muted)">
+              <span style="font-size:9px">▾</span>
+              <span style="font-weight:600;color:var(--fg);font-family:-apple-system,'Segoe UI',sans-serif;font-size:12px">dau_report.sql@3</span>
+              <span style="font-size:10px">+1 −1</span>
+            </div>
+            <div style="display:flex;align-items:flex-start">
+              <div style="flex:1;min-width:0;border-right:1px solid var(--border)">
+                <div style="display:flex;padding:0 8px">
+                  <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">1</span>
+                  <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+                  <span style="flex:1;white-space:pre;overflow:hidden">  -- 渠道日报（自动生成）</span>
+                </div>
+                <div style="display:flex;padding:0 8px">
+                  <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">2</span>
+                  <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+                  <span style="flex:1;white-space:pre">  SELECT</span>
+                </div>
+                <div style="display:flex;padding:0 8px">
+                  <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">3</span>
+                  <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+                  <span style="flex:1;white-space:pre">    channel,</span>
+                </div>
+                <div style="display:flex;padding:0 8px;background:color-mix(in srgb,var(--danger) 10%,transparent)">
+                  <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--danger);user-select:none">4</span>
+                  <span style="width:14px;flex:none;text-align:center;color:var(--danger)">−</span>
+                  <span style="flex:1;white-space:pre">   DATE(order_time) AS day,</span>
+                </div>
+                <div style="display:flex;padding:0 8px">
+                  <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">5</span>
+                  <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+                  <span style="flex:1;white-space:pre">    COUNT(*) AS orders,</span>
+                </div>
+                <div style="display:flex;padding:0 8px;background:color-mix(in srgb,var(--danger) 10%,transparent)">
+                  <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--danger);user-select:none">6</span>
+                  <span style="width:14px;flex:none;text-align:center;color:var(--danger)">−</span>
+                  <span style="flex:1;white-space:pre">   SUM(IF(status='paid',amount,0)) AS gmv,</span>
+                </div>
+                <div style="display:flex;padding:0 8px">
+                  <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">7</span>
+                  <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+                  <span style="flex:1;white-space:pre">  FROM orders</span>
+                </div>
+                <div style="display:flex;padding:0 8px">
+                  <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">8</span>
+                  <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+                  <span style="flex:1;white-space:pre">  GROUP BY channel, day</span>
+                </div>
+              </div>
+              <div style="flex:1;min-width:0">
+                <div style="display:flex;padding:0 8px">
+                  <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">1</span>
+                  <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+                  <span style="flex:1;white-space:pre;overflow:hidden">  -- 渠道日报（自动生成）</span>
+                </div>
+                <div style="display:flex;padding:0 8px">
+                  <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">2</span>
+                  <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+                  <span style="flex:1;white-space:pre">  SELECT</span>
+                </div>
+                <div style="display:flex;padding:0 8px">
+                  <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">3</span>
+                  <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+                  <span style="flex:1;white-space:pre">    channel,</span>
+                </div>
+                <div style="display:flex;padding:0 8px;background:color-mix(in srgb,var(--success) 12%,transparent)">
+                  <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--success);user-select:none">4</span>
+                  <span style="width:14px;flex:none;text-align:center;color:var(--success)">+</span>
+                  <span style="flex:1;white-space:pre">   DATE_FORMAT(order_time,'%Y-%m-%d') AS day,</span>
+                </div>
+                <div style="display:flex;padding:0 8px">
+                  <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">5</span>
+                  <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+                  <span style="flex:1;white-space:pre">    COUNT(*) AS orders,</span>
+                </div>
+                <div style="display:flex;padding:0 8px;background:color-mix(in srgb,var(--success) 12%,transparent)">
+                  <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--success);user-select:none">6</span>
+                  <span style="width:14px;flex:none;text-align:center;color:var(--success)">+</span>
+                  <span style="flex:1;white-space:pre;overflow:hidden">   SUM(CASE WHEN status='paid' THEN amount ELSE 0 END) AS gmv,</span>
+                </div>
+                <div style="display:flex;padding:0 8px">
+                  <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">7</span>
+                  <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+                  <span style="flex:1;white-space:pre">  FROM orders</span>
+                </div>
+                <div style="display:flex;padding:0 8px">
+                  <span style="width:32px;flex:none;text-align:right;padding-right:8px;color:var(--muted);user-select:none">8</span>
+                  <span style="width:14px;flex:none;text-align:center;color:var(--muted)"> </span>
+                  <span style="flex:1;white-space:pre">  GROUP BY channel, day</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-p">关闭</button></div>
+      </div>
+    </div>
+    <p class="hang">
+      「切换不重算」这条对：两个按钮都只调 <code>state.set_mode(...)</code> + <code>window.refresh()</code>，<code>DiffState</code> 在开窗前建好、两份视图共用同一份解析结果。但实现<b>不自绘左右两列</b>——是组件在 Split 模式下把每行拆成左右两格，缺行一侧留空格对齐，行号也跟着变成两列（左旧右新）。
+      <br>原型没画而实现有的：<b>文件头</b>（<code>dau_report.sql@3</code> + <code>+1 −1</code>，左边一个折叠箭头，可把整个文件收起来）、<b><code>@@</code> hunk 行</b>、<b>上下文折叠行</b>（两个 hunk 之间隔得多时，中间那段收成「展开 N 行」）、<b>行号 gutter 可拖选</b>（拖动选一段行再 Ctrl+C 复制原文）、<b>键盘上下 + Shift 扩展 + Ctrl+A 全选</b>、<b>悬停整行高亮</b>（<code>hover_highlight(Line)</code>）、<b>语法高亮</b>（<code>syntax_highlight(true)</code>，按扩展名着色；本页示意没着色）。交互靠组件自带，示意里只画了前三样。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>打不开的那些情况<span class="desc">不开空窗，直接在面板上给一句</span></div>
+    <div class="canvas pad">
+      <div class="note" style="margin:0 0 10px">
+        <b>资产库：无法对比版本：</b>该文件不是文本（可能是二进制），无法对比
+      </div>
+      <p class="hang" style="margin:0">
+        四种情况<b>不弹窗</b>，都走面板通知条（不是版本动作回执、也不是空壳对话框）：副本已被保留策略裁掉（「该版本的内容副本不在（已被保留策略裁剪），无法对比」）/ 本体缺失或没有本体路径（分析表档：「该存档没有本体路径（可能是分析表档）」、缺失：「本体不在位」）/ 不是 UTF-8 文本 / 单侧超过 <b>512 KB</b>（「文件过大，请用编辑器查看差异」）。另外 patch 解析不出内容时（两侧其实一样、或数据异常）<code>open_version_diff_dialog</code> <b>直接返回</b>，连窗都不开。
+      </p>
+    </div>
   </section>
 
   <div class="canvas pad">
     <p class="hang" style="margin:0">
-      本块样式：<code>.dlg.dlg-version-diff</code>（1024px）/ <code>.difftool</code> / <code>.mode-sw</code> / <code>.diffview</code> / <code>.drow.add|del|ctx</code> / <code>.dno</code> / <code>.dc</code>。
-      落地代码：<code>crates/analytics_resource/src/dialogs/version_diff.rs</code>。
+      本块样式：<code>.dlg</code>（1024px）/ <code>.dlg-head</code> / <code>.dlg-body</code> / <code>.dlg-foot</code>；diff 区在本页用<b>内联样式</b>画（两列 32px 行号 gutter + 14px 符号列 + 内容列），不再依赖旧的 <code>.diffview</code> / <code>.drow</code> / <code>.dno</code> / <code>.dc</code> / <code>.difftool</code> / <code>.mode-sw</code>——那些 CSS 是照「共用一列行号 + 分段控件」画的旧账。<br>
+      diff 区不是自绘：<code>Diff::new(&amp;state).line_number(true).syntax_highlight(true).hover_highlight(Line).max_h(rems(28.0))</code>，滚动由组件内部负责（含横向 <code>ScrollableMask</code>）。<code>soft_wrap</code> 默认 <code>false</code> → <b>不折行、横向滚动</b>；原型写的「超长行一律省略号 + tooltip」并不成立。<br>
+      落地代码：<code>crates/analytics_resource/src/dialogs/version_diff.rs</code>（<code>parse_display_patch</code> + <code>open_version_diff_dialog</code>）/ <code>src/jobs/version.rs::load_version_diff</code>（读两版文本、<code>DIFF_MAX_TEXT_BYTES</code>、<code>unified_patch</code>）/ 宿主 <code>crates/workbench/src/panels/resources.rs::apply_version_diff</code>。
     </p>
   </div>
 
