@@ -16,7 +16,7 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    替代文件夹树：<b>单层</b> <code>全部分组 → 未分组 → 各分组</code>。分组头 24px：左侧 2px 色条（<code>list_active_border</code> + 圆头）、展开指示、名称（可带「默认」标记）、计数。
+    替代文件夹树：<b>单层</b> <code>全部分组 → 未分组 → 各分组</code>。分组头 24px：左侧 2px 色条（取 <code>primary</code>，与 <code>list_active_border</code> 同值 + 圆头、高 14px）、展开指示（<code>disclosure_icon</code>，10px 槽）、名称（可带「默认」标记）、计数（<b>纯数字</b>，不带单位）。
     缩进固定两级（<code>depth ∈ {0,1}</code>），<b>不套</b>树的 <code>TREE_BASE_PADDING + depth × TREE_INDENT</code> 公式；折叠态按项目分开持久化。不做多级嵌套 / 面包屑 / 手排序号。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="03-list-rows.html">← 上一块：列表行</a><a href="05-status-row.html">下一块：底部状态行 →</a></nav>
@@ -28,57 +28,58 @@
     <div class="variant-h"><span class="no">A</span>全展开<span class="desc">聚合头「全部分组」+ 三个分组；计数从当前可见行现算</span></div>
     <div class="canvas pad">
       <div class="dockcol" style="height:auto">
-        <div class="ghead"><span class="chev">▼</span>全部分组<span class="cnt">8 项</span></div>
+        <div class="ghead"><span class="chev">▼</span>全部分组<span class="cnt">8</span></div>
         <div class="gbody">
           <div class="ghead sub"><span class="chev">▼</span>未分组<span class="cnt">3</span></div>
           <div class="gbody">
-            <div class="row sel"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">dau_report.sql</span><span class="ver">v3</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">1.2 KB · 3 天前</span></div>
-            <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">渠道对比.py</span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">4.6 KB · 5 天前</span></div>
+            <div class="row sel"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">dau_report.sql</span><span style="color:var(--muted);font-size:12px">v3</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">1.2 KB · 3 天前</span></div>
+            <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">渠道对比.py</span><span style="color:var(--muted);font-size:12px">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">4.6 KB · 5 天前</span></div>
             <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">临时订单分析.sql</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">12.4 KB · 昨天</span></div>
           </div>
           <div class="ghead sub"><span class="chev">▼</span>报表<span class="cnt">3</span></div>
           <div class="gbody">
-            <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">monthly.md</span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">3.1 KB · 2 周前</span></div>
-            <div class="row"><svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg><span class="nm">mock_orders</span><span class="scope-badge">项目</span><span class="sb b-info"><span class="d"></span>分析表</span><span class="meta">12,480 行 × 18 列</span></div>
-            <div class="row"><svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg><span class="nm">dwd_orders_view</span><span class="ver">v2</span><span class="scope-badge">全局</span><span class="sb b-info"><span class="d"></span>分析表</span><span class="meta">1.2M 行 × 26 列</span></div>
+            <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">monthly.md</span><span style="color:var(--muted);font-size:12px">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">3.1 KB · 2 周前</span></div>
+            <div class="row"><svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg><span class="nm">mock_orders</span><span class="sb b-info"><span class="d"></span>分析表</span><span class="meta">12,480 行 × 18 列</span></div>
+            <div class="row"><svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg><span class="nm">dwd_orders_view</span><span style="color:var(--muted);font-size:12px">v2</span><span class="sb b-info"><span class="d"></span>全局</span><span class="meta">1.2M 行 × 26 列</span></div>
           </div>
           <div class="ghead sub"><span class="chev">▼</span>外部数据<span class="cnt">2</span></div>
           <div class="gbody">
             <div class="row"><svg class="ico ic"><use href="#i-link" xlink:href="#i-link"/></svg><span class="nm">ods.orders</span><span class="sb b-warn"><span class="d"></span>引用</span><span class="meta">无指纹 · 6 天前</span></div>
-            <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">sales_daily.csv</span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">8.7 KB · 1 个月前</span></div>
+            <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">sales_daily.csv</span><span style="color:var(--muted);font-size:12px">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">8.7 KB · 1 个月前</span></div>
           </div>
         </div>
       </div>
     </div>
+    <p class="hang">按 <code>group_header.rs</code> 核：<b>计数只写数字</b>（<code>format!("{count}")</code>，没有「项」这个单位；聚合头数的是当前可见行总数）。色条取 <code>primary</code>（与 <code>list_active_border</code> 明暗同值，口径统一），宽 <code>ui::GROUP_BAR_WIDTH</code>（2px）、高 <code>0.875rem</code>=14px、圆头；展开指示走 <code>tree::disclosure_slot()</code> + <code>disclosure_icon(!collapsed, muted)</code> 的 10px 槽。<br><b>「全部分组」自己也能折</b>（<code>collapsed</code> 里放 <code>__all__</code>，折了整块只剩这一行）。缩进只有两档：<code>depth == 0</code> 不缩、<code>depth &gt; 0</code> 给 <code>pl_2</code>（8px），<b>不套</b>树的 <code>TREE_BASE_PADDING + depth × TREE_INDENT</code>。<br>真分组（不是「全部分组」/「未分组」）的头上有右键菜单：重命名… / 设为|取消归档默认分组 / 删除分组 / 新建分组…；两个虚拟头没有菜单，也不接拖拽落点。折叠状态按项目分桶写 <code>resources.collapsed_groups</code>。<br><b>计数与徽标在实现里都是纯文本</b>（<code>text_xs</code> + 主题色，没有底色块 / 描边 / 圆点；计数不带单位）——上图给计数画了胶囊底，是设计意图、实现尚未跟上；`rds-design` 要求状态徽标走 <code>badge::Badge</code>，这条记在设计稿里当欠债。</p>
   </section>
 
   <section class="variant">
     <div class="variant-h"><span class="no">B</span>折叠一组<span class="desc">未分组收起：指示改 ▶，body 挂 <code>.off</code>，计数仍在头上</span></div>
     <div class="canvas pad">
       <div class="dockcol" style="height:auto">
-        <div class="ghead"><span class="chev">▼</span>全部分组<span class="cnt">8 项</span></div>
+        <div class="ghead"><span class="chev">▼</span>全部分组<span class="cnt">8</span></div>
         <div class="gbody">
           <div class="ghead sub"><span class="chev">▶</span>未分组<span class="cnt">3</span></div>
           <div class="gbody off">
-            <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">dau_report.sql</span><span class="ver">v3</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">1.2 KB · 3 天前</span></div>
+            <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">dau_report.sql</span><span style="color:var(--muted);font-size:12px">v3</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">1.2 KB · 3 天前</span></div>
           </div>
           <div class="ghead sub"><span class="chev">▼</span>报表<span class="cnt">3</span></div>
           <div class="gbody">
-            <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">monthly.md</span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">3.1 KB · 2 周前</span></div>
+            <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">monthly.md</span><span style="color:var(--muted);font-size:12px">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">3.1 KB · 2 周前</span></div>
             <div class="row"><svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg><span class="nm">mock_orders</span><span class="sb b-info"><span class="d"></span>分析表</span><span class="meta">12,480 行 × 18 列</span></div>
           </div>
         </div>
       </div>
     </div>
-    <p class="hang">落地差异：展开指示的 <code>▸/▾</code> 字符已退场，改 <code>tree::disclosure_icon</code>（与 M4 导航 / M5 草稿箱同一套，10px 槽）；鼠标点<b>或停在头上按 Enter</b>都能折叠（Enter 走 <code>List</code> 的 confirm 通道，不另做自绘焦点）。上图保留字符版仅为对照。</p>
+    <p class="hang">落地差异：展开指示的 <code>▸/▾</code> 字符已退场，改 <code>tree::disclosure_icon</code>（与 M4 导航 / M5 草稿箱同一套，10px 槽）；鼠标点<b>或停在头上按 Enter</b>都能折叠（Enter 走 <code>List</code> 的 confirm 通道，不另做自绘焦点）。上图保留字符版仅为对照。<br><code>.off</code> 只是原型手法：实现里折叠后这些行<b>根本不进可见列表</b>（<code>build_visible_items</code> 不再产出），不是隐藏起来。</p>
   </section>
 
   <section class="variant">
     <div class="variant-h"><span class="no">C</span>无分组<span class="desc">没建分组时不出头，不多两行噪声</span></div>
     <div class="canvas pad">
       <div class="dockcol" style="height:auto">
-        <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">dau_report.sql</span><span class="ver">v3</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">1.2 KB · 3 天前</span></div>
-        <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">monthly.md</span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">3.1 KB · 2 周前</span></div>
+        <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">dau_report.sql</span><span style="color:var(--muted);font-size:12px">v3</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">1.2 KB · 3 天前</span></div>
+        <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">monthly.md</span><span style="color:var(--muted);font-size:12px">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">3.1 KB · 2 周前</span></div>
       </div>
     </div>
   </section>
@@ -89,21 +90,21 @@
       <div class="dockcol" style="height:auto">
         <div class="ghead sub"><span class="chev">▼</span>报表<span class="dft">默认</span><span class="cnt">3</span></div>
         <div class="gbody">
-          <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">monthly.md</span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">3.1 KB · 2 周前</span></div>
+          <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">monthly.md</span><span style="color:var(--muted);font-size:12px">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">3.1 KB · 2 周前</span></div>
         </div>
         <div class="ghead sub"><span class="chev">▼</span>未分组<span class="cnt">3</span></div>
         <div class="gbody">
-          <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">dau_report.sql</span><span class="ver">v3</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">1.2 KB · 3 天前</span></div>
+          <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">dau_report.sql</span><span style="color:var(--muted);font-size:12px">v3</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">1.2 KB · 3 天前</span></div>
         </div>
       </div>
     </div>
-    <p class="hang">「默认」只影响<b>下一次归档的预选值</b>，不碰已有存档的归属；语义取显式设置（不是「跟随上次」）。</p>
+    <p class="hang">「默认」只影响<b>下一次归档的预选值</b>，不碰已有存档的归属；语义取显式设置（不是「跟随上次」）。标记文案是常量 <code>DEFAULT_GROUP_MARKER = "默认"</code>，画在名称之后、计数之前，<b>是事实提示不是控件</b>——设 / 取消走头上右键菜单里那一项（唯一入口）。</p>
   </section>
 
   <div class="canvas pad">
     <p class="hang" style="margin:0">
       本块样式：<code>.ghead</code> / <code>.ghead.sub</code> / <code>.ghead .cnt</code> / <code>.ghead .chev</code> / <code>.gbody.off</code> / <code>.dft</code>（拆块时补的）。
-      落地代码：<code>crates/analytics_resource/src/filter/mod.rs::build_visible_items</code> + 分组头行渲染；拖拽落点见 <code>10-context-menu</code> 页末。
+      落地代码：<code>crates/analytics_resource/src/filter/mod.rs::build_visible_items</code>（分区与折叠）+ <code>resource_view/list_delegate/group_header.rs</code>（头行渲染、右键菜单、拖拽落点）；行原语 <code>workbench_shell::tree::disclosure_*</code>。本页已不用 <code>.ver</code> / <code>.scope-badge</code>（版本号是纯文本、一行只有一个徽标位）。
     </p>
   </div>
 
