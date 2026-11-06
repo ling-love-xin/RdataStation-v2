@@ -713,6 +713,50 @@ impl PluginPanel {
         self.install_package(path, cx);
     }
 
+    /// 全量重载插件（VS Code「Reload Window」口径）。
+    ///
+    /// 热插拔只把「清单变了」记进 `pending_reloads`，不自动热更正在运行的插件；
+    /// 没有这个入口，用户改完插件文件只能重启应用才生效，`pending_reloads` 也永远没人消费。
+    fn reload_plugins(&self, cx: &mut Context<Self>) {
+        let Some(handle) = plugin::runtime_handle().cloned() else {
+            self.error.replace(Some("插件运行时未初始化".to_string()));
+            cx.notify();
+            return;
+        };
+        let Some(mgr) = plugin::get_plugin_manager().cloned() else {
+            self.error.replace(Some("插件运行时未初始化".to_string()));
+            cx.notify();
+            return;
+        };
+        if self.progress.borrow().is_some() {
+            return;
+        }
+        self.progress.replace(Some("正在重载插件…".to_string()));
+        self.error.replace(None);
+        self.notice.replace(None);
+        cx.notify();
+
+        let weak = cx.entity().downgrade();
+        let _ = cx.spawn(async move |_this, cx| {
+            let outcome = handle.block_on(async { mgr.reload_plugins().await });
+            let _ = weak.update(cx, |this, cx| {
+                this.progress.replace(None);
+                match outcome {
+                    Ok(diff) => {
+                        this.error.replace(None);
+                        this.notice
+                            .replace(Some(format!("已重载插件（加载 {} 个）", diff.added.len())));
+                    }
+                    Err(e) => {
+                        this.error.replace(Some(format!("{e}")));
+                        this.notice.replace(None);
+                    }
+                };
+                this.refresh_plugins(cx, false);
+            });
+        });
+    }
+
     /// 安装 / 导入插件包。解包、校验、复制都是磁盘操作（大包可达数十 MB）：
     /// 放后台线程跑，UI 只显示「正在安装 …」，完成后再回主线程写回执并刷新清单。
     ///
@@ -839,6 +883,23 @@ impl Render for PluginPanel {
                 let _ = entity.update(cx, |this, cx| this.refresh_plugins(cx, true));
             });
 
+        // 清单有变更（热插拔检测到 manifest hash 变化）时才出现：重载是用户明确动作，
+        // 不自动热更正在运行的插件。按钮出现即说明「不重载就不生效」。
+        let pending = plugin::get_plugin_manager()
+            .map(|m| m.pending_reloads().len())
+            .unwrap_or(0);
+        let reload_btn = (pending > 0).then(|| {
+            let reload_entity = cx.entity();
+            Button::new("plugin-reload")
+                .ghost()
+                .label(format!("重载 {pending}"))
+                .with_size(Size::XSmall)
+                .tooltip("插件文件已变更，重载后生效（会停掉所有插件再重新激活）")
+                .on_click(move |_, _window, cx| {
+                    let _ = reload_entity.update(cx, |this, cx| this.reload_plugins(cx));
+                })
+        });
+
         // 安装中置灰：解包 + 校验 + 复制在后台跑，期间不接受第二个包（否则并发写
         // 同一个 `plugins/<id>`）。文案收窄成「安装插件 / 从目录」——240px 面板里
         // 标题 + 两个动作 + 刷新刚好一行。
@@ -915,6 +976,23 @@ impl Render for PluginPanel {
                     .child(install_dir_btn)
                     .child(refresh_btn),
             )
+            // 变更提示单独一行（240px 头部塞不下第四个控件），按钮即「重载」动作
+            .children(reload_btn.map(|btn| {
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_xs()
+                            .text_color(cx.theme().colors.info)
+                            .child(format!("{pending} 个插件文件有变更，重载后生效")),
+                    )
+                    .child(btn)
+            }))
             .children(error_text.map(|err| {
                 div()
                     .px_2()

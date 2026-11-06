@@ -708,7 +708,8 @@ Uninstalled ──install──▶ Installed ──load──▶ Loaded ──ac
     （目录直接拷进 `plugins/`，没走安装器）**先补一条登记**——否则停用 / 卸载按 code 写库
     命中 0 行，重启后又按「无记录 = 启用」复活；
   - 目录消失 → 停用（含停 sidecar 进程）+ 移出运行时索引 + 清该插件的重载标记；
-  - 清单变化 → 置 `needs_reload`（UI 读 `pending_reloads()` 提示「重启生效」）。
+  - 清单变化 → 置 `needs_reload`（插件面板读 `pending_reloads()` 显示「N 个插件文件有变更」
+    + 「重载 N」按钮，点它走 `reload_plugins()`；不点就重启生效）。
 - `reload_plugins()` = VS Code「Reload Window」：停全部已激活 → 清 `needs_reload` →
   **清扫描快照**（否则 diff 判「无变化」会空转）→ 重扫全部重新加载激活。
 
