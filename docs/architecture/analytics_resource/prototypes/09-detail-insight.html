@@ -139,13 +139,13 @@
         </div>
       </div>
     </div>
-    <p class="hang">「对比」依赖勾选：右栏勾一条 → 中间页勾当前表 + 切 <code>Compare</code> 形态并激活中央 tab。<b>归档</b>走 11 页的洞察归档对话框（快照固定 copy，不提供 reference）。</p>
+    <p class="hang">「对比」依赖勾选：右栏勾一条 → 中间页勾当前表 + 切 <code>Compare</code> 形态并激活中央 tab。<b>归档</b>走 <a href="18-dialog-insight-archive.html">18 页</a>的洞察归档对话框（快照固定 copy，不提供 reference）。</p>
   </section>
 
   <div class="canvas pad">
     <p class="hang" style="margin:0">
       本块样式：<code>.dp-insight</code> / <code>.sethead</code> / <code>.setbody</code> / <code>.setitem</code> / <code>.ssrc</code> / <code>.smeta</code> / <code>.setacts</code> / <code>.ovbox</code> / <code>.ov-tbl</code>。
-      落地代码：洞察 crate 产出集合 + <code>crates/analytics_resource/src/dialogs/archive.rs</code>（洞察来源复用同一归档对话框）。
+      落地代码：洞察 crate（<code>crates/insight</code>）产出集合本身，本页不是资产库详情的实现面。M6 只接归档后半段：<code>crates/analytics_resource/src/dialogs/archive.rs</code> 复用同一归档对话框，归档产物按 <code>ArchiveKind::File</code> 落 <code>resources/insight/</code>——资产库详情面板**没有**「洞察」这一档（<code>kind_label</code> 只有受管文件 / 分析表 / 远端引用三档），这类行按文件型渲染、<code>kind_label</code> 显示「受管文件」。
     </p>
   </div>
 
