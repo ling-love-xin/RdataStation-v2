@@ -89,6 +89,15 @@ impl PluginInstaller {
         // 3. 验证插件
         let manifest = self.validate_plugin(&package_root)?;
 
+        // 3.5 必装依赖先对账：缺依赖的包装上去也跑不通（加载 / 激活才报错，
+        // 用户看到的是「装成功了但插件用不了」）。这里在动旧目录之前就拒绝，
+        // 逐个点名缺失的 id@version。
+        if !manifest.dependencies.is_empty() {
+            crate::dependency::DependencyManager::new(db_manager)
+                .validate_dependencies(&manifest)
+                .await?;
+        }
+
         // 4. 复制到最终安装位置（拼路径前必须校验清单 id —— 路径注入防护）
         validate_plugin_id(&manifest.plugin.id).map_err(|e| {
             CoreError::common(CommonError::General(format!(
