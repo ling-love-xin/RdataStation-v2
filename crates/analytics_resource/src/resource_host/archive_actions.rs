@@ -1,6 +1,7 @@
 //! 归档请求：草稿箱批量归档、草稿行点名归档与系统文件归档。
 
 use super::*;
+use crate::dialogs::archive::ArchiveDialogResult;
 
 /// 面板头 `＋▾` 第一项：把草稿箱里**全部**可归档文件摆进挑选对话框（默认一条不勾）。
 pub(super) fn request_archive_from_drafts(host: &ResourceHost, window: &mut Window, cx: &mut App) {
@@ -142,6 +143,38 @@ fn pick_handler(
     }
 }
 
+/// 单条草稿 → 归档请求（纯函数：对话框结果逐字段透传）。
+///
+/// 抽成纯函数是为了钉住「对话框里改的东西要落库」：这条路径此前把 `group_id` 写死
+/// `None`，用户在归档对话框里选的分组被静默丢掉；服务层 `archive` 是会落
+/// `apply_labels(..., req.group_id)` 的，所以丢的是**用户输入**而不是某个默认值。
+fn draft_archive_request(
+    draft: &DraftCandidate,
+    kind: ArchiveKind,
+    rel_path: String,
+    result: ArchiveDialogResult,
+) -> ArchiveRequest {
+    ArchiveRequest {
+        source_path: draft.abs_path.clone(),
+        rel_path,
+        name: result.name,
+        alias: result.alias,
+        kind,
+        payload_mode: result.payload_mode,
+        analysis: None,
+        binding: ArchiveBinding {
+            // 归档凭证的"出处"：草稿相对路径（带模块前缀，与文档口径一致）
+            promoted_from: Some(format!("{}/{}", scratchpad::MODULE_DIR_NAME, draft.rel_path)),
+            source_connection_id: draft.connection_id.clone(),
+            source_table: None,
+        },
+        tags: result.tags,
+        group_id: result.group_id,
+        keep_versions: result.keep_versions,
+        existing_resource_id: None,
+    }
+}
+
 /// 单条草稿的完整归档确认（挑选对话框单选 / 草稿行点名单选共用）。
 #[allow(clippy::too_many_arguments)]
 fn open_archive_for_draft(
@@ -178,30 +211,8 @@ fn open_archive_for_draft(
     let draft = draft.clone();
     let root = root.to_path_buf();
     open_archive_dialog(window, cx, seed, move |result, cx| {
-        let request = ArchiveRequest {
-            source_path: draft.abs_path.clone(),
-            rel_path: resolved_rel.clone(),
-            name: result.name,
-            alias: result.alias,
-            // 数据文件按分析档登记（P4.5）：探测由作业在工作线程上做。
-            kind,
-            payload_mode: result.payload_mode,
-            analysis: None,
-            binding: ArchiveBinding {
-                // 归档凭证的"出处"：草稿相对路径（带模块前缀，与文档口径一致）
-                promoted_from: Some(format!(
-                    "{}/{}",
-                    scratchpad::MODULE_DIR_NAME,
-                    draft.rel_path
-                )),
-                source_connection_id: draft.connection_id.clone(),
-                source_table: None,
-            },
-            tags: result.tags,
-            group_id: None,
-            keep_versions: result.keep_versions,
-            existing_resource_id: None,
-        };
+        // 数据文件按分析档登记（P4.5）：探测由作业在工作线程上做。
+        let request = draft_archive_request(&draft, kind, resolved_rel.clone(), result);
         submit_archive(&root, read_only, request, &backend, cx);
     });
 }
@@ -403,5 +414,66 @@ mod tests {
         let all = vec![candidate(r"D:\p\scratchpad\a.sql", "a.sql")];
         let picked = named_candidates(all, &[PathBuf::from(r"D:\p\scratchpad\zzz.sql")]);
         assert!(picked.is_empty(), "调用方据此给一句「已不在草稿箱里」");
+    }
+
+    /// 归档对话框里选的分组要真的落库：这条路径此前把它写死 `None`（用户选了也丢）。
+    #[test]
+    fn draft_request_keeps_the_group_chosen_in_the_dialog() {
+        let draft = candidate(
+            r"D:\p\scratchpad\reports\dau_report.sql",
+            "reports/dau_report.sql",
+        );
+        let request = draft_archive_request(
+            &draft,
+            ArchiveKind::File,
+            "reports/dau_report-2.sql".to_string(),
+            ArchiveDialogResult {
+                name: "dau_report".to_string(),
+                alias: Some("日活".to_string()),
+                tags: vec!["财务".to_string()],
+                group_id: Some("af_reports".to_string()),
+                keep_versions: Some(KeepVersions::Keep(3)),
+                payload_mode: PayloadMode::Copy,
+            },
+        );
+        assert_eq!(
+            request.group_id.as_deref(),
+            Some("af_reports"),
+            "选的分组不能丢"
+        );
+        assert_eq!(request.alias.as_deref(), Some("日活"));
+        assert_eq!(request.tags, vec!["财务".to_string()]);
+        assert_eq!(request.keep_versions, Some(KeepVersions::Keep(3)));
+        assert_eq!(request.payload_mode, PayloadMode::Copy);
+        assert_eq!(request.rel_path, "reports/dau_report-2.sql", "用已避让的落点");
+        assert_eq!(request.kind, ArchiveKind::File);
+        assert_eq!(
+            request.binding.promoted_from.as_deref(),
+            Some("scratchpad/reports/dau_report.sql")
+        );
+    }
+
+    /// 「未分组」也是用户的选择（空 = 不归组），不能顺手补成默认分组；
+    /// 「保留历史内容」留空同理（= 跟随设置），不是拍一个数字。
+    #[test]
+    fn draft_request_leaves_unset_fields_unset() {
+        let draft = candidate(r"D:\p\scratchpad\a.sql", "a.sql");
+        let request = draft_archive_request(
+            &draft,
+            ArchiveKind::Analysis,
+            "a.sql".to_string(),
+            ArchiveDialogResult {
+                name: "a".to_string(),
+                alias: None,
+                tags: Vec::new(),
+                group_id: None,
+                keep_versions: None,
+                payload_mode: PayloadMode::Reference,
+            },
+        );
+        assert_eq!(request.group_id, None, "未分组就是不归组");
+        assert_eq!(request.keep_versions, None, "留空 = 跟随设置");
+        assert_eq!(request.payload_mode, PayloadMode::Reference);
+        assert_eq!(request.kind, ArchiveKind::Analysis);
     }
 }
