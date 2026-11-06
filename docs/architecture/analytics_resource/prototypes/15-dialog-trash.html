@@ -16,9 +16,11 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    宽 <code>640px</code>（40rem）· 五列：名称 / 原路径 / 删除时间 / 大小 / 操作（行内「还原」「永久删除…」）。
-    <b>只显示 <code>origin = "resources"</code> 的条目</b>——草稿箱、编辑器的条目跨模块<b>不在这里还原</b>，只灰显成一句「属于草稿箱，请在草稿箱还原」。底部汇总明说「N 项存档条目 · M 项属于草稿箱」。
-    永久删除与清空一律二次确认。
+    宽 <code>40rem</code>（640px）· 标题只有两个字「<b>回收站</b>」，<b>没有副标题、标题行没有图标</b>· 列表最高 <code>20rem</code>（320px）内滚动。
+    五列：<b>名称（+类型）/ 原位置 / 删除时间 / 大小 / 空表头（行内两个动作）</b>；列宽 9 / 剩余 / 7.5 / 4 / 9 rem（144 / flex / 120 / 64 / 144px）。
+    只列 <code>origin = "resources"</code> 的条目；<b>别的模块的条目一条都不列行</b>，只在列表下方给一句「另有 N 条「X」的条目共用一个回收站——请在那个模块的界面里处理」。
+    行本身<b>不可点</b>（动作全在行内的两个 ghost 按钮上），所以行没有 hover 底色。
+    footer 只有两个按钮：<b>清空回收站</b>（danger）/ <b>关闭</b>（secondary）。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="14-dialog-diff.html">← 上一块：版本对比</a><a href="16-dialog-repair.html">下一块：索引修复 →</a></nav>
 </header>
@@ -26,101 +28,178 @@
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>常态<span class="desc">3 项可操作 + 1 项跨模块灰行</span></div>
+    <div class="variant-h"><span class="no">A</span>常态<span class="desc">3 项 + 一句跨模块说明；上方「共 3 项」</span></div>
     <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="dlg dlg-trash proto-on">
-        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-trash" xlink:href="#i-trash"/></svg>回收站<span class="sub2">只显示 origin = "resources" 的条目</span><button class="x">✕</button></div>
-        <div class="dlg-body">
-          <table class="dt">
-            <thead><tr><th>名称</th><th>原路径</th><th>删除时间</th><th>大小</th><th>操作</th></tr></thead>
-            <tbody>
-              <tr>
-                <td>monthly.md</td>
-                <td class="mono">resources/reports/monthly.md</td>
-                <td class="mono">昨天 18:20</td>
-                <td class="num">3.1 KB</td>
-                <td><div class="trow-act"><button class="btn-s btn-xs">还原</button><button class="btn-s btn-xs">永久删除…</button></div></td>
-              </tr>
-              <tr>
-                <td>sales_daily.csv</td>
-                <td class="mono">resources/data/sales_daily.csv</td>
-                <td class="mono">3 天前</td>
-                <td class="num">8.7 KB</td>
-                <td><div class="trow-act"><button class="btn-s btn-xs">还原</button><button class="btn-s btn-xs">永久删除…</button></div></td>
-              </tr>
-              <tr>
-                <td>临时订单分析.sql</td>
-                <td class="mono">resources/临时订单分析.sql</td>
-                <td class="mono">2 周前</td>
-                <td class="num">12.4 KB</td>
-                <td><div class="trow-act"><button class="btn-s btn-xs">还原</button><button class="btn-s btn-xs">永久删除…</button></div></td>
-              </tr>
-              <tr class="dis">
-                <td>README.md</td>
-                <td class="mono">scratchpad/README.md</td>
-                <td class="mono">1 小时前</td>
-                <td class="num">2.0 KB</td>
-                <td><span style="font-size:10.5px;color:var(--muted)">属于草稿箱，请在草稿箱还原</span></td>
-              </tr>
-            </tbody>
-          </table>
-          <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>跨模块条目只做呈现，不在这里还原——语义由项目级 <code>ProjectTrash</code> 保证。</span></div>
-        </div>
-        <div class="dlg-foot">
-          <span>共 3 项存档条目 · 1 项属于草稿箱</span><span class="grow"></span>
-          <button class="btn-s">还原选中</button><button class="btn-d">清空回收站</button><button class="btn-p">关闭</button>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="variant">
-    <div class="variant-h"><span class="no">B</span>清空二次确认<span class="desc">danger 色框就地展开，按钮是「确认清空 / 取消」，不是系统 alert</span></div>
-    <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="dlg dlg-trash proto-on">
-        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-trash" xlink:href="#i-trash"/></svg>回收站<span class="sub2">只显示 origin = "resources" 的条目</span><button class="x">✕</button></div>
-        <div class="dlg-body">
-          <table class="dt">
-            <thead><tr><th>名称</th><th>原路径</th><th>删除时间</th><th>大小</th><th>操作</th></tr></thead>
-            <tbody>
-              <tr>
-                <td>monthly.md</td>
-                <td class="mono">resources/reports/monthly.md</td>
-                <td class="mono">昨天 18:20</td>
-                <td class="num">3.1 KB</td>
-                <td><div class="trow-act"><button class="btn-s btn-xs">还原</button><button class="btn-s btn-xs">永久删除…</button></div></td>
-              </tr>
-              <tr>
-                <td>sales_daily.csv</td>
-                <td class="mono">resources/data/sales_daily.csv</td>
-                <td class="mono">3 天前</td>
-                <td class="num">8.7 KB</td>
-                <td><div class="trow-act"><button class="btn-s btn-xs">还原</button><button class="btn-s btn-xs">永久删除…</button></div></td>
-              </tr>
-            </tbody>
-          </table>
-          <div class="alertbox proto-on">
-            <div class="at"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>清空回收站</div>
-            <div class="ad">将永久删除 3 项存档条目及其内容副本，并删除登记行。此操作不可撤销。</div>
-            <div class="aa"><button class="btn-d">确认清空</button><button class="btn-s">取消</button></div>
+      <div class="dlg proto-on" style="width:640px">
+        <div class="dlg-head">回收站<button class="x">✕</button></div>
+        <div class="dlg-body" style="padding:12px 14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <span style="font-size:11px;color:var(--muted);white-space:nowrap">共 3 项</span>
           </div>
+          <div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--bg)">
+            <div style="display:flex;align-items:center;gap:8px;padding:4px 8px;border-bottom:1px solid var(--border);font-size:11px;color:var(--muted)">
+              <div style="width:144px;flex:none">名称</div>
+              <div style="flex:1;min-width:0">原位置</div>
+              <div style="width:120px;flex:none">删除时间</div>
+              <div style="width:64px;flex:none">大小</div>
+              <div style="width:144px;flex:none"></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;padding:4px 8px">
+              <div style="width:144px;flex:none;min-width:0;display:flex;align-items:center;gap:4px">
+                <span style="font-size:13px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">monthly.md</span>
+                <span style="font-size:11px;color:var(--muted);flex:none">文件</span>
+              </div>
+              <div style="flex:1;min-width:0;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:Consolas,monospace">resources/reports/monthly.md</div>
+              <div style="width:120px;flex:none;font-size:11px;color:var(--muted)">2026-11-06 18:20</div>
+              <div style="width:64px;flex:none;font-size:11px;color:var(--muted)">3.1 KB</div>
+              <div style="width:144px;flex:none;display:flex;align-items:center;gap:4px">
+                <button class="btn-s" style="border-color:transparent;background:transparent;font-size:10px;padding:2px 7px;border-radius:5px">还原</button>
+                <button class="btn-s" style="border-color:transparent;background:transparent;font-size:10px;padding:2px 7px;border-radius:5px">永久删除</button>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;padding:4px 8px">
+              <div style="width:144px;flex:none;min-width:0;display:flex;align-items:center;gap:4px">
+                <span style="font-size:13px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">exports</span>
+                <span style="font-size:11px;color:var(--muted);flex:none">目录</span>
+              </div>
+              <div style="flex:1;min-width:0;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:Consolas,monospace">resources/exports</div>
+              <div style="width:120px;flex:none;font-size:11px;color:var(--muted)">2026-11-04 09:12</div>
+              <div style="width:64px;flex:none;font-size:11px;color:var(--muted)"></div>
+              <div style="width:144px;flex:none;display:flex;align-items:center;gap:4px">
+                <button class="btn-s" style="border-color:transparent;background:transparent;font-size:10px;padding:2px 7px;border-radius:5px">还原</button>
+                <button class="btn-s" style="border-color:transparent;background:transparent;font-size:10px;padding:2px 7px;border-radius:5px">永久删除</button>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;padding:4px 8px">
+              <div style="width:144px;flex:none;min-width:0;display:flex;align-items:center;gap:4px">
+                <span style="font-size:13px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">销售日报</span>
+                <span style="font-size:11px;color:var(--muted);flex:none">分析表</span>
+              </div>
+              <div style="flex:1;min-width:0;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:Consolas,monospace">D:\data\sales_2026.parquet</div>
+              <div style="width:120px;flex:none;font-size:11px;color:var(--muted)">2026-10-31 15:40</div>
+              <div style="width:64px;flex:none;font-size:11px;color:var(--muted)">8.7 KB</div>
+              <div style="width:144px;flex:none;display:flex;align-items:center;gap:4px">
+                <button class="btn-s" style="border-color:transparent;background:transparent;font-size:10px;padding:2px 7px;border-radius:5px">还原</button>
+                <button class="btn-s" style="border-color:transparent;background:transparent;font-size:10px;padding:2px 7px;border-radius:5px">永久删除</button>
+              </div>
+            </div>
+          </div>
+          <div style="margin-top:8px;font-size:11px;color:var(--muted);line-height:1.65">另有 2 条「草稿箱」的条目共用一个回收站——请在那个模块的界面里处理</div>
         </div>
-        <div class="dlg-foot">
-          <span>共 3 项存档条目 · 1 项属于草稿箱</span><span class="grow"></span>
-          <button class="btn-s">还原选中</button><button class="btn-d">清空回收站</button><button class="btn-p">关闭</button>
-        </div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-d">清空回收站</button><button class="btn-s">关闭</button></div>
       </div>
     </div>
     <p class="hang">
-      落地口径（<code>dialogs/trash.rs</code> + <code>present::build_trash_snapshot</code>）：跨模块条目不列成行、只给一句「N 条属于草稿箱」；最多 100 条并明说剩余；只读项目下<b>三个动作全灰</b>（还原 / 永久删除 / 清空）。
-      <b>回收站 TTL 未做</b>（无自动过期清理）。
+      推翻的七处：① <b>标题无副标题也无图标</b>（实现是 `dialog.title("回收站")`），原型那句「只显示 origin = "resources" 的条目」不在标题行，实情靠「别人的条目不列行」体现；② <b>不是 `<table class="dt">`</b>——是自绘 `header_line` + `trash_line`（`h_flex` + `gap_2` + `px_2 py_1`），列名第二个是「<b>原位置</b>」不是「原路径」；③ 时间是<b>绝对时间</b>（`format_timestamp` = `%Y-%m-%d %H:%M`，UTC 直显），不是「昨天 18:20 / 3 天前」——回收站是查凭证的地方；④ <b>跨模块条目一条都不列行</b>（原型那行灰的 `README.md` 不存在），只在列表下面一句说明；⑤ 汇总在列表<b>上方左侧</b>「共 N 项」（右侧留给动作期提示），不是 footer 里的「共 3 项存档条目 · 1 项属于草稿箱」；⑥ footer <b>只有两个按钮</b>，「还原选中」不存在（没有选中这个概念，动作全在行内）；⑦ 行内按钮是 ghost small，文案是「永久删除」<b>不带省略号</b>，且「还原 / 永久删除」是两个 ghost（不是带框的 `.btn-s`）。
+      <br>原型没画而实现有的：<b>名称后面跟类型</b>（实体条目是「文件 / 目录」，reference 登记行是「受管文件 / 分析表 / 远端引用」）；<b>目录的大小留空</b>（不是 0）；条目来自<b>两路</b>——`ProjectTrash` 目录里的 copy 本体 + 库里软删的 reference 登记行，按删除时间双指针归并成一份倒序清单。
+      <br>顺带一处观感问题：五列固定宽合计 472px，640 宽下再扣掉对话框内距与行内距，「原位置」只剩约 88px，长路径基本只能看到开头几个字（`resources/rep…`）。要不要把动作列收窄（两个 ghost 按钮实际约 124px）或把原位置折到名称下一行，待定。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>永久删除确认<span class="desc">系统 AlertDialog，叠在上面；描述按粒度分两套</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px;display:flex;justify-content:center">
+      <div class="dlg proto-on" style="width:420px">
+        <div class="dlg-head">永久删除「monthly.md」？<button class="x">✕</button></div>
+        <div class="dlg-body" style="padding:12px 14px">
+          <div style="font-size:11.5px;color:var(--fg);line-height:1.7">本体将从回收站里彻底删除，不可恢复；登记记录一并删除。</div>
+        </div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-d">永久删除</button><button class="btn-s">取消</button></div>
+      </div>
+    </div>
+    <p class="hang">
+      走 <code>window.open_alert_dialog</code>（不是原型那种在列表下面就地展开的 `.alertbox`）。标题 <code>永久删除「{name}」？</code>，描述按归档粒度二选一：<b>copy</b>「本体将从回收站里彻底删除，不可恢复；登记记录一并删除。」；<b>reference</b>「本体留在源位置不受影响；登记记录与版本元数据将彻底删除，不可恢复。」确认按钮文案「永久删除」（danger），带取消。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>清空确认<span class="desc">只清自己名下的条目，描述里明说</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px;display:flex;justify-content:center">
+      <div class="dlg proto-on" style="width:460px">
+        <div class="dlg-head">清空资产库的回收站？<button class="x">✕</button></div>
+        <div class="dlg-body" style="padding:12px 14px">
+          <div style="font-size:11.5px;color:var(--fg);line-height:1.7">将彻底删除资产库的 3 项（本体不再保留，不可恢复）；其他模块共用的条目不会被删。</div>
+        </div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-d">清空</button><button class="btn-s">取消</button></div>
+      </div>
+    </div>
+    <p class="hang">
+      标题「<b>清空资产库的回收站？</b>」，描述里带条数并<b>明说别的模块不受影响</b>（`ProjectTrash::empty_origin` 就是为「只清自己名下的条目」存在的，整仓清空等于越权）；确认按钮文案「清空」（danger）。清空成功后回执「已清空资产库的回收站（N 项，本体不再保留）」；一条都没有时给「回收站里没有资产库的条目」而不是报错。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">D</span>空态 / 只读 / 忙态<span class="desc">一行灰字 + 清空置灰；动作期右上给提示</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px;display:flex;flex-direction:column;gap:16px;align-items:center">
+      <div class="dlg proto-on" style="width:640px">
+        <div class="dlg-head">回收站<button class="x">✕</button></div>
+        <div class="dlg-body" style="padding:12px 14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <span style="font-size:11px;color:var(--muted)">共 0 项</span>
+          </div>
+          <div style="font-size:11px;color:var(--muted);padding:8px 0">回收站是空的</div>
+        </div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-d" style="opacity:.45;cursor:default">清空回收站</button><button class="btn-s">关闭</button></div>
+      </div>
+      <div class="dlg proto-on" style="width:640px">
+        <div class="dlg-head">回收站<button class="x">✕</button></div>
+        <div class="dlg-body" style="padding:12px 14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <span style="font-size:11px;color:var(--muted)">共 2 项</span>
+            <span style="font-size:11px;color:var(--warning);flex:none;white-space:nowrap;min-width:max-content">正在还原…</span>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--bg)">
+            <div style="display:flex;align-items:center;gap:8px;padding:4px 8px;border-bottom:1px solid var(--border);font-size:11px;color:var(--muted)">
+              <div style="width:144px;flex:none">名称</div>
+              <div style="flex:1;min-width:0">原位置</div>
+              <div style="width:120px;flex:none">删除时间</div>
+              <div style="width:64px;flex:none">大小</div>
+              <div style="width:144px;flex:none"></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;padding:4px 8px">
+              <div style="width:144px;flex:none;min-width:0;display:flex;align-items:center;gap:4px">
+                <span style="font-size:13px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">monthly.md</span>
+                <span style="font-size:11px;color:var(--muted);flex:none">文件</span>
+              </div>
+              <div style="flex:1;min-width:0;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:Consolas,monospace">resources/reports/monthly.md</div>
+              <div style="width:120px;flex:none;font-size:11px;color:var(--muted)">2026-11-06 18:20</div>
+              <div style="width:64px;flex:none;font-size:11px;color:var(--muted)">3.1 KB</div>
+              <div style="width:144px;flex:none;display:flex;align-items:center;gap:4px">
+                <button class="btn-s" disabled style="border-color:transparent;background:transparent;font-size:10px;padding:2px 7px;border-radius:5px;opacity:.45">还原</button>
+                <button class="btn-s" disabled style="border-color:transparent;background:transparent;font-size:10px;padding:2px 7px;border-radius:5px;opacity:.45">永久删除</button>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;padding:4px 8px">
+              <div style="width:144px;flex:none;min-width:0;display:flex;align-items:center;gap:4px">
+                <span style="font-size:13px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">销售日报</span>
+                <span style="font-size:11px;color:var(--muted);flex:none">分析表</span>
+              </div>
+              <div style="flex:1;min-width:0;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:Consolas,monospace">D:\data\sales_2026.parquet</div>
+              <div style="width:120px;flex:none;font-size:11px;color:var(--muted)">2026-10-31 15:40</div>
+              <div style="width:64px;flex:none;font-size:11px;color:var(--muted)">8.7 KB</div>
+              <div style="width:144px;flex:none;display:flex;align-items:center;gap:4px">
+                <button class="btn-s" disabled style="border-color:transparent;background:transparent;font-size:10px;padding:2px 7px;border-radius:5px;opacity:.45">还原</button>
+                <button class="btn-s" disabled style="border-color:transparent;background:transparent;font-size:10px;padding:2px 7px;border-radius:5px;opacity:.45">永久删除</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-d" style="opacity:.45;cursor:default">清空回收站</button><button class="btn-s">关闭</button></div>
+      </div>
+    </div>
+    <p class="hang">
+      空态就是一行「<b>回收站是空的</b>」（`text_xs` muted，**不用 `empty::Empty`**——一个对话框里的空清单不需要大图标那块），此时「清空回收站」置灰。
+      动作期：对话框自己 `set_busy(true)` + `set_note(...)`，<b>三个写动作同时置灰</b>（还原 / 永久删除 / 清空），提示挂在「共 N 项」那一行的右侧（warning 色）。提示文案按粒度分派：copy 还原「正在还原…」、reference 还原「正在还原登记记录…」，另外「正在永久删除…」「正在清空…」。
+      <b>只读项目</b>：对话框<b>照常打开</b>（不像取回那样在入口就挡回），只是 `can_write = !busy && !read_only` 让三个写动作全灰；宿主 `request_trash_action` 另有兜底——只读时给「项目为只读模式，不能改回收站」。
+      <b>动作后不关窗</b>：宿主重取一次清单 → `set_rows` / `set_foreign` / `set_busy(false)` / `set_note(None)`，行就地换掉。
     </p>
   </section>
 
   <div class="canvas pad">
     <p class="hang" style="margin:0">
-      本块样式：<code>.dlg.dlg-trash</code>（640px）/ <code>table.dt</code> / <code>tr.dis</code> / <code>.trow-act</code> / <code>.alertbox</code> / <code>.dlg-foot</code>。
-      落地代码：<code>crates/analytics_resource/src/dialogs/trash.rs</code>。
+      本块样式：<code>.dlg</code>（640px）/ <code>.dlg-head</code> / <code>.dlg-body</code> / <code>.dlg-foot</code>；行与表头在本页用<b>内联样式</b>画（144 / flex / 120 / 64 / 144px 五列），不再用旧的 <code>table.dt</code> / <code>tr.dis</code> / <code>.trow-act</code> / <code>.alertbox</code>——那四样是照「表格 + 跨模块灰行 + 就地展开确认」画的旧账。<br>
+      实现锚点：<code>crates/analytics_resource/src/dialogs/trash/{{mod,open,render}}.rs</code>（<code>MAX_TRASH_ROWS = 100</code>、<code>TrashDialogState</code>、<code>header_line</code> / <code>trash_line</code> / footer 两按钮）；<code>src/present/trash.rs::build_trash_snapshot</code> + <code>entity_trash_row</code> + <code>reference_trash_rows</code>；<code>src/jobs/archive/trash.rs::load_trash</code>（双来源归并 + <code>module_label</code>）/ <code>run_trash_action</code> / <code>reload_trash_after</code>；宿主 <code>crates/workbench/src/panels/resources.rs::request_trash_action</code> + <code>apply_trash_rows</code>。<br>
+      超过 100 条时列表末尾补「还有 N 项未列出（一次最多列 100 项）」——<b>不静默截断</b>，也不为这个对话框手搓虚拟化。<b>回收站 TTL 未做</b>（无自动过期清理，条目只增不减）。
     </p>
   </div>
 
