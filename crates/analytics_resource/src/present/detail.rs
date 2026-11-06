@@ -11,6 +11,10 @@ pub struct DetailExtras {
     pub tags: Vec<ArchiveTagChip>,
     /// 分组名（`None` = 未分组；分组字典里认不出的 id 也当未分组——脏数据不能变成一行“分组：?”）。
     pub group: Option<String>,
+    /// 当前分组 id（与 `group` 同源；分组字典里认不出时给 `None`，与名字一致）。
+    pub group_id: Option<String>,
+    /// 可选分组（「移动…」菜单的选择项；全局行给空）。
+    pub groups: Vec<DetailGroupOption>,
     /// 内容预览。
     pub preview: Preview,
 }
@@ -22,6 +26,7 @@ pub fn to_detail(
     resource: &AnalyticsResource,
     status: ArchiveStatus,
     history_count: i64,
+    recent_versions: &[crate::store::rows::ResourceVersion],
     extras: DetailExtras,
 ) -> ArchiveDetail {
     let kind = ArchiveKind::from_db_str(&resource.kind);
@@ -59,6 +64,14 @@ pub fn to_detail(
         } else {
             String::new()
         },
+        recent_versions: detail_version_lines(recent_versions),
+        groups: extras.groups,
+        // 名字与 id 一起给：字典里认不出的 id 两个都给「无」，不出现“名字空、id 有”的错位。
+        group_id: if extras.group.is_some() {
+            extras.group_id
+        } else {
+            None
+        },
         // 标签与分组：标签由调用方给的映射提供（`tags_by_resource`，一次查完）；
         // 分组名由 `folders_by_resource` + 分组字典拼出（两个映射都在宿主手里）。
         tags: extras.tags,
@@ -66,4 +79,32 @@ pub fn to_detail(
         // 内容预览（原型 §3.1）：宿主读完推来，装配层只负责搬（缺项 = 仅元信息）。
         preview: extras.preview,
     }
+}
+
+/// 最近几条历史版本 → 详情「版本」区的摘要行（最多 [`DETAIL_RECENT_VERSIONS`] 条）。
+///
+/// 体积口径与行/详情一致：文件型给体积、分析表型给规模、引用型不给（不假装有值）。
+/// 快照解析不出来**不补造**——时间来自版本行本身（可信），体积留空。
+fn detail_version_lines(versions: &[crate::store::rows::ResourceVersion]) -> Vec<DetailVersionLine> {
+    versions
+        .iter()
+        .take(DETAIL_RECENT_VERSIONS)
+        .map(|version| {
+            let snapshot =
+                serde_json::from_value::<AnalyticsResource>(version.snapshot.clone()).ok();
+            let size_label = match snapshot.as_ref().map(|record| ArchiveKind::from_db_str(&record.kind)) {
+                Some(ArchiveKind::File) => format_size(snapshot.as_ref().and_then(|r| r.file_size)),
+                Some(ArchiveKind::Analysis) => format_scale(
+                    snapshot.as_ref().and_then(|r| r.row_count),
+                    snapshot.as_ref().and_then(|r| r.column_count),
+                ),
+                _ => String::new(),
+            };
+            DetailVersionLine {
+                version: version.version,
+                time_label: format_timestamp(version.created_at),
+                size_label,
+            }
+        })
+        .collect()
 }

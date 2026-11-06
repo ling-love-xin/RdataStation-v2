@@ -1,6 +1,6 @@
 use super::{
-    ArchiveStatuses, FolderMemberships, PreviewMap, ResourceTags, SnapshotInputs, VersionCounts,
-    build_repair_rows, build_snapshot, build_trash_snapshot, build_version_rows,
+    ArchiveStatuses, FolderMemberships, PreviewMap, RecentVersions, ResourceTags, SnapshotInputs,
+    VersionCounts, build_repair_rows, build_snapshot, build_trash_snapshot, build_version_rows,
     format_relative_time, format_scale, format_size, format_timestamp, tail_for,
 };
 use crate::dialogs::index_repair::RepairGroup;
@@ -27,6 +27,12 @@ fn empty_folders() -> &'static FolderMemberships {
 fn empty_previews() -> &'static PreviewMap {
     static EMPTY: std::sync::OnceLock<PreviewMap> = std::sync::OnceLock::new();
     EMPTY.get_or_init(PreviewMap::new)
+}
+
+/// 空「最近版本」映射：不关心版本明细的用例统一用它。
+fn empty_versions() -> &'static RecentVersions {
+    static EMPTY: std::sync::OnceLock<RecentVersions> = std::sync::OnceLock::new();
+    EMPTY.get_or_init(RecentVersions::new)
 }
 
 fn row_model(id: &str, kind: &str, file_size: Option<i32>) -> AnalyticsResource {
@@ -295,6 +301,7 @@ fn details_carry_per_kind_size_and_real_history_count() {
         global_resources: Vec::new(),
         statuses: &ArchiveStatuses::new(),
         history_counts: &counts,
+        recent_versions: empty_versions(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
@@ -318,6 +325,68 @@ fn details_carry_per_kind_size_and_real_history_count() {
 
     let table_ref = snapshot.details.get("ar_ref").expect("引用型详情");
     assert_eq!(table_ref.size_label, "", "引用型不给体积（不假装有值）");
+}
+
+/// 详情「版本」区的最近 3 条：装配层按上限裁、体积口径与行一致、时间用绝对时间。
+///
+/// 快照解析不出来时**只丢体积**（时间来自版本行本身，仍可信）——宁缺不伪。
+#[test]
+fn detail_carries_recent_version_lines_capped_at_three() {
+    let now = Utc::now();
+    let mut analysis = row_model("ar_analysis", "analysis", None);
+    analysis.row_count = Some(12480);
+    analysis.column_count = Some(18);
+    let resources = vec![analysis.clone()];
+
+    let mut counts = VersionCounts::new();
+    counts.insert("ar_analysis".to_string(), 5);
+    let mut recent = RecentVersions::new();
+    // 四条历史（存储层会按 3 条取，这里给 4 条，验证装配层自己也裁一次）。
+    recent.insert(
+        "ar_analysis".to_string(),
+        (1..=4)
+            .rev()
+            .map(|version| ResourceVersion {
+                id: format!("arv_{version}"),
+                resource_id: "ar_analysis".to_string(),
+                version,
+                snapshot: serde_json::to_value(&analysis).expect("snapshot json"),
+                created_at: now - Duration::days(version as i64),
+            })
+            .collect(),
+    );
+
+    let snapshot = build_snapshot(SnapshotInputs {
+        resources: &resources,
+        global_rows: Vec::new(),
+        global_resources: Vec::new(),
+        statuses: &ArchiveStatuses::new(),
+        history_counts: &counts,
+        recent_versions: &recent,
+        tags: empty_tags(),
+        tag_dictionary: Vec::new(),
+        folders: empty_folders(),
+        group_dictionary: Vec::new(),
+        previews: empty_previews(),
+        read_only: false,
+        now,
+    });
+
+    let detail = snapshot.details.get("ar_analysis").expect("分析表详情");
+    assert_eq!(detail.history_label, "5 个历史版本", "总数不受明细条数影响");
+    let lines = &detail.recent_versions;
+    assert_eq!(lines.len(), 3, "最多列 3 条");
+    assert_eq!(
+        lines.iter().map(|line| line.version).collect::<Vec<_>>(),
+        vec![4, 3, 2],
+        "保持取数侧给的降序"
+    );
+    assert_eq!(lines[0].size_label, "12,480 行 × 18 列", "分析表给规模");
+    assert_eq!(
+        lines[0].time_label,
+        format_timestamp(now - Duration::days(4)),
+        "时间用绝对时间（与版本对话框同格式）"
+    );
 }
 
 /// 标签进快照：行带 **id + 名字**（筛选比 id、搜索比名字，一份数据两处用）、
@@ -354,6 +423,7 @@ fn snapshot_carries_tags_for_rows_details_and_dictionary() {
         global_resources: Vec::new(),
         statuses: &ArchiveStatuses::new(),
         history_counts: &VersionCounts::new(),
+        recent_versions: empty_versions(),
         tags: &tags,
         tag_dictionary: dictionary,
         folders: empty_folders(),
@@ -392,6 +462,7 @@ fn rows_carry_alias_and_source_table_for_the_search_surface() {
         global_resources: Vec::new(),
         statuses: &ArchiveStatuses::new(),
         history_counts: &VersionCounts::new(),
+        recent_versions: empty_versions(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
@@ -437,6 +508,7 @@ fn details_carry_group_name_and_preview() {
         global_resources: Vec::new(),
         statuses: &ArchiveStatuses::new(),
         history_counts: &VersionCounts::new(),
+        recent_versions: empty_versions(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: &folders,
@@ -494,6 +566,7 @@ fn snapshot_counts_route_status_before_kind() {
         global_resources: Vec::new(),
         statuses: &statuses,
         history_counts: &VersionCounts::new(),
+        recent_versions: empty_versions(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),

@@ -13,6 +13,7 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
         global_resources,
         statuses,
         history_counts,
+        recent_versions,
         tags: tags_by_resource,
         tag_dictionary,
         folders: folders_by_resource,
@@ -46,23 +47,41 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
             },
         }
         let history_count = history_counts.get(&resource.id).copied().unwrap_or(0);
+        // 「最近 3 条」明细：同一批取数（`recent_versions_by_resource`）按行给，
+        // 没有历史的存档拿到空切片 → 详情只留「只有当前版本」一行。
+        let recent = recent_versions
+            .get(&resource.id)
+            .map(|versions| versions.as_slice())
+            .unwrap_or_default();
         // 标签 chips 就用行上那一份（同一装配来源，不会出现“行里有、详情里没有”）。
         // 预览同理：宿主没读到就给缺省（「仅元信息」），不在渲染期补读数。
         let preview = previews.get(&resource.id).cloned().unwrap_or_default();
         // 分组名从“按行的归属 + 分组字典”拼：认不出的 id 当未分组（与 `filter` 的脏数据口径一致）。
-        let group = folders_by_resource
-            .get(&resource.id)
-            .and_then(|folder_id| group_dictionary.iter().find(|group| &group.id == folder_id))
+        let folder_id = folders_by_resource.get(&resource.id).cloned();
+        let group = folder_id
+            .as_deref()
+            .and_then(|id| group_dictionary.iter().find(|group| group.id == id))
             .map(|group| group.name.clone());
+        // 「移动…」菜单的选择项：「未分组」不进列表（菜单里恒有那一项）。
+        let groups: Vec<DetailGroupOption> = group_dictionary
+            .iter()
+            .map(|group| DetailGroupOption {
+                id: group.id.clone(),
+                name: group.name.clone(),
+            })
+            .collect();
         details.insert(
             resource.id.clone(),
             to_detail(
                 resource,
                 row.status,
                 history_count,
+                recent,
                 DetailExtras {
                     tags: row.tags.clone(),
                     group,
+                    group_id: folder_id,
+                    groups,
                     preview,
                 },
             ),
@@ -80,9 +99,12 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
                 resource,
                 ArchiveStatus::Normal,
                 0,
+                &[],
                 DetailExtras {
                     tags: Vec::new(),
                     group: None,
+                    group_id: None,
+                    groups: Vec::new(),
                     preview,
                 },
             ),

@@ -15,6 +15,7 @@ pub(super) fn render_body_sections(
     for (title, rows) in detail_rows(detail) {
         // 「这个分区要多一个入口吗」得在 `title` 被 move 进子元素之前定下。
         let is_version_section = title == VERSION_SECTION_TITLE;
+        let is_org_section = title == ORG_SECTION_TITLE;
         // kv 行 → gpui-kit `description_list::DescriptionList`（规格 §7.2 UI 统一）：
         // label 对齐由组件管；指纹复制按钮经 `DescriptionText::AnyElement` 承载。
         let mut kv_list = DescriptionList::new()
@@ -102,6 +103,45 @@ pub(super) fn render_body_sections(
                     .child(title),
             )
             .child(kv_list);
+        // 版本区的「最近 3 条」明细（原型 §3.1）：每行 版本号 + 时间 · 体积。
+        // 只列历史版本（当前版本已在「基本信息」的「版本」行），无明细时这一块不出现。
+        // 时间/体积都是宿主格式化好的字，这里只排版；不塞按钮（点开进对话框看全）。
+        if is_version_section && !detail.recent_versions.is_empty() {
+            let mut lines = div().v_flex().w_full().gap_1();
+            for line in &detail.recent_versions {
+                let label = format!("v{}", line.version);
+                let meta = if line.size_label.is_empty() {
+                    line.time_label.clone()
+                } else {
+                    format!("{} · {}", line.time_label, line.size_label)
+                };
+                lines = lines.child(
+                    div()
+                        .h_flex()
+                        .w_full()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(rems(ui::DETAIL_VERSION_LABEL_WIDTH))
+                                .flex_none()
+                                .text_xs()
+                                .text_color(foreground)
+                                .child(label),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .text_ellipsis()
+                                .text_color(muted)
+                                .child(meta),
+                        ),
+                );
+            }
+            section = section.child(lines);
+        }
         // 版本分区多一个入口（原型 §3.1 的「查看全部…」）：打开版本历史对话框。
         // 只读项目下也可用——历史读取与还原是两件事，后者在对话框里自己管。
         // 全局行没有本地版本历史（本体在全局实例），入口不摆（§13.4 动作收敛）。
@@ -121,6 +161,14 @@ pub(super) fn render_body_sections(
                 );
             }
         }
+        // 组织区的「移动…」（原型 §3.1 的分组选择）：与行右键的「移动到分组 ›」同一套宿主动作，
+        // 只是入口在详情面板。未分组 / 当前分组置灰（点了也是白点）；末尾留「新建分组…」。
+        // 只读项目下不给（写类动作一律禁用，与右键同一判据）；全局行没有项目分组归属。
+        if is_org_section && detail.scope != RowScope::Global {
+            if let Some(actions) = actions.filter(|actions| !actions.read_only) {
+                section = section.child(render_move_to_group(detail, actions));
+            }
+        }
         out.push(section);
     }
 
@@ -134,4 +182,57 @@ pub(super) fn render_body_sections(
     // 二进制 / 大文件给一句说明。预览**只读**：这里没有任何编辑入口（原型 §1 原则 3）。
     out.push(render_preview_section(detail, cx));
     out
+}
+
+/// 组织区的「移动…」：一个按钮 + 下拉菜单（未分组 / 各分组 / 新建分组…）。
+///
+/// 与行右键的「移动到分组 ›」**同一套宿主动作**（`request_move_to_group`），
+/// 这里只是第二个入口——详情面板里也要能改分组，不能只让用户回列表右键。
+fn render_move_to_group(detail: &ArchiveDetail, actions: &DetailActions) -> impl IntoElement {
+    let host = actions.host.clone();
+    let resource_id = detail.id.clone();
+    let current = detail.group_id.clone();
+    let groups = detail.groups.clone();
+    Button::new("archive-detail-move-group")
+        .ghost()
+        .xsmall()
+        .debug_selector(|| "archive-detail-move-group".to_string())
+        .label("移动…")
+        .dropdown_menu(move |menu, _window, _cx| {
+            let mut menu = menu;
+            // 菜单项与行右键「移动到分组 ›」逐项对齐：未分组 / 各分组 / 新建分组…
+            // （标题写在按钮上就够了，菜单里不再摆一行不可点的标题。）
+            // 当前项置灰：点了也不会变（与右键子菜单同一口径）。
+            menu = menu.item(
+                PopupMenuItem::new("未分组")
+                    .checked(current.is_none())
+                    .disabled(current.is_none())
+                    .on_click({
+                        let host = host.clone();
+                        let ids = vec![resource_id.clone()];
+                        move |_, window, cx| host.request_move_to_group(&ids, None, window, cx)
+                    }),
+            );
+            for group in &groups {
+                let is_current = current.as_deref() == Some(group.id.as_str());
+                let group_id = group.id.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(group.name.clone())
+                        .checked(is_current)
+                        .disabled(is_current)
+                        .on_click({
+                            let host = host.clone();
+                            let ids = vec![resource_id.clone()];
+                            move |_, window, cx| {
+                                host.request_move_to_group(&ids, Some(&group_id), window, cx)
+                            }
+                        }),
+                );
+            }
+            menu.separator()
+                .item(PopupMenuItem::new("新建分组…").on_click({
+                    let host = host.clone();
+                    move |_, window, cx| host.request_create_group(window, cx)
+                }))
+        })
 }

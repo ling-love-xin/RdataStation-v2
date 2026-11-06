@@ -76,12 +76,17 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
 
     // 4) 组织（**只有分组**：标签是可交互的 chips，在 `render_tag_section` 里单独渲染——
     //    （标签, 值）两列是纯文本通道，装不下带 × 的控件）
-    let mut org = Vec::new();
-    if let Some(group) = detail.group.as_deref() {
-        org.push(("分组", group.to_string()));
-    }
-    if !org.is_empty() {
-        sections.push(("组织".to_string(), org));
+    //
+    //    项目行**总是**给出这一区（未分组也写「未分组」）：这一区下面挂「移动…」入口，
+    //    没有它就没地方把“未分组”的存档移进某个组（原型 §3.1）。
+    //    全局行没有项目分组归属，不摆。
+    if detail.scope != RowScope::Global {
+        let group = detail
+            .group
+            .as_deref()
+            .map(str::to_string)
+            .unwrap_or_else(|| "未分组".to_string());
+        sections.push((ORG_SECTION_TITLE.to_string(), vec![("分组", group)]));
     }
 
     sections

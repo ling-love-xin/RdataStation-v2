@@ -29,6 +29,11 @@ pub const ARCHIVE_EMPTY_ICON_SIZE: f32 = 3.0;
 pub const ARCHIVE_BADGE_HEIGHT: f32 = 1.125;
 /// 详情面板的标签列宽（5.5rem = 88px；固定宽 + 值列弹性，避免长短标签抖动布局）。
 pub const DETAIL_LABEL_WIDTH: f32 = 5.5;
+/// 详情「版本」区最近几条的版本号列宽（2.5rem = 40px）。
+///
+/// 与版本对话框的 `VERSION_COL_VERSION`（3.5rem）不同：那边是七列表格，这团只是
+/// 280px 面板里的三行摘要，版本号只到两三位，留宽会把时间挤到省略号。
+pub const DETAIL_VERSION_LABEL_WIDTH: f32 = 2.5;
 /// 工具栏行高（2.0rem = 32px；原型 §2.2）。
 pub const TOOLBAR_HEIGHT: f32 = 2.0;
 /// 归档确认对话框宽（34.0rem = 544px；原型 §7.1——表单型六字段）。

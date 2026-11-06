@@ -128,6 +128,63 @@ impl AnalyticsResourceStore {
         }
         Ok(counts)
     }
+
+    /// 各存档最近的若干条历史版本（**一次查完**，供详情面板「版本」区的最近 3 条明细）。
+    ///
+    /// 与 [`version_counts`](Self::version_counts) 同一纪律：面板一次要给整个列表的详情，
+    /// 逐行查就是 N+1 次往返。`limit` 按"比它更新的行数 < limit"筛（等价每组 top-N），
+    /// 不依赖窗口函数，`COUNT` 走 `idx_arv_version(resource_id, version DESC)`。
+    ///
+    /// 快照解析失败与 [`get_resource_versions`](Self::get_resource_versions) 同口径：
+    /// 记日志、`Value::Null` 填位（历史值缺失不能拿当前版本顶替）。
+    pub async fn recent_versions_by_resource(
+        &self,
+        limit: usize,
+    ) -> Result<std::collections::HashMap<String, Vec<ResourceVersion>>, CoreError> {
+        let conn = self.get_conn().await?;
+        let mut stmt = conn
+            .inner()?
+            .prepare(
+                r#"
+            SELECT v.id, v.resource_id, v.version, v.snapshot, v.created_at
+            FROM analytics_resource_versions v
+            WHERE (
+                SELECT COUNT(*)
+                FROM analytics_resource_versions newer
+                WHERE newer.resource_id = v.resource_id AND newer.version > v.version
+            ) < ?
+            ORDER BY v.resource_id, v.version DESC
+            "#,
+            )
+            .map_err(|e| versions_err("select", e))?;
+
+        let rows = stmt
+            .query_map(rusqlite::params![limit as i64], |row| {
+                let snapshot_str: String = row.get(3)?;
+                Ok((
+                    row.get::<_, String>(1)?,
+                    ResourceVersion {
+                        id: row.get(0)?,
+                        resource_id: row.get(1)?,
+                        version: row.get(2)?,
+                        snapshot: serde_json::from_str(&snapshot_str).unwrap_or_else(|e| {
+                            tracing::warn!(error = %e, "Failed to parse version snapshot JSON, using null");
+                            Value::Null
+                        }),
+                        created_at: Self::parse_datetime_sqlite(row.get(4)?)?,
+                    },
+                ))
+            })
+            .map_err(|e| versions_err("select", e))?;
+
+        let mut grouped: std::collections::HashMap<String, Vec<ResourceVersion>> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let (resource_id, version) = row.map_err(|e| versions_err("select", e))?;
+            grouped.entry(resource_id).or_default().push(version);
+        }
+        Ok(grouped)
+    }
 }
 
 /// 版本表的错误映射（store 名固定为本表，与文件内既有写法同一口径）。

@@ -12,7 +12,7 @@ pub(crate) use chrono::{DateTime, Utc};
 pub(crate) use engine::persistence::trash::{TrashEntry, TrashKind};
 
 pub(crate) use crate::AnalyticsResource;
-pub(crate) use crate::detail_view::{ArchiveDetail, ArchiveTagChip};
+pub(crate) use crate::detail_view::{ArchiveDetail, ArchiveTagChip, DetailGroupOption, DetailVersionLine};
 pub(crate) use crate::dialogs::index_repair::{RepairGroup, RepairRow};
 pub(crate) use crate::dialogs::trash::TrashRow;
 pub(crate) use crate::dialogs::version::VersionRow;
@@ -37,6 +37,14 @@ pub type PreviewMap = std::collections::HashMap<String, Preview>;
 
 /// 历史版本数映射：`resource_id → 条数`（来自 `AnalyticsResourceStore::version_counts`）。
 pub type VersionCounts = std::collections::HashMap<String, i64>;
+
+/// 按资源的最近版本映射：`resource_id → 最近 N 条`（来自 `recent_versions_by_resource`）。
+pub type RecentVersions = std::collections::HashMap<String, Vec<crate::store::rows::ResourceVersion>>;
+
+/// 详情「版本」区最多列几条明细（原型 §3.1：最近 3 条 + 「查看全部…」）。
+///
+/// 取数与渲染共用这一处：改这里的数，SQL 的 top-N 与面板列几行一起变。
+pub const DETAIL_RECENT_VERSIONS: usize = 3;
 
 /// 大小文案：按 1024 进制分档，`< 1 KB` 用字节（避免出现 `0.0 KB` 这种没信息量的值）。
 mod format;

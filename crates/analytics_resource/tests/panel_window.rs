@@ -19,7 +19,8 @@ use gpui_kit::{
 };
 
 use rds_analytics_resource::commands::{
-    ClearSearch, DeleteSelected, OpenSelected, RenameSelected, SelectAllRows,
+    CheckoutSelected, ClearSearch, DeleteSelected, OpenSelected, RenameSelected, RequestArchive,
+    SelectAllRows,
 };
 use rds_analytics_resource::detail_view::{
     ArchiveDetail, ArchiveTagChip, DetailActions, render_detail,
@@ -275,6 +276,10 @@ fn detail_for(row: &ArchiveRow) -> ArchiveDetail {
         history_label: String::new(),
         tags: Vec::new(),
         group: None,
+        // 版本明细 / 分组选择：窗口用例只关心“摆得出来”，给空集合（无历史、未分组）。
+        recent_versions: Vec::new(),
+        groups: Vec::new(),
+        group_id: None,
         // 预览：窗口用例只关心“能不能摆”，给一段两行的文本就好。
         preview: Preview::Text {
             lines: vec!["select 1".to_string(), "from dual".to_string()],
@@ -691,6 +696,78 @@ fn open_selected_action_hands_the_host_the_row_detail(cx: &mut TestAppContext) {
         vec!["open:ar_2"],
         "打开要拿的是**选中那条的详情**（宿主据此解析本体路径）"
     );
+}
+
+#[gpui_kit::test]
+fn checkout_selected_action_hands_the_host_the_row_detail(cx: &mut TestAppContext) {
+    // 走生产入口：聚焦面板 → 派发 `CheckoutSelected`（app 层的 `Ctrl+Shift+O` 就是派发它；
+    // 右键「取回（检出）…」与详情面板按钮同一条道）。
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_snapshot(
+                snapshot(
+                    vec![
+                        row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1),
+                        row("ar_2", ArchiveKind::File, ArchiveStatus::Normal, 2),
+                    ],
+                    false,
+                ),
+                cx,
+            );
+            panel.set_selected(Some("ar_2".to_string()), cx);
+        });
+    });
+    cx.update(|window, cx| {
+        let handle = panel.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+    });
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(CheckoutSelected), cx);
+    });
+
+    assert_eq!(
+        host.calls(),
+        vec!["checkout:ar_2"],
+        "取回要拿的是选中那条的详情（宿主据此决定落到哪个草稿）"
+    );
+
+    // 没有选中时不半执行：键按了也不该弹出取回对话框。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_selected(None, cx));
+    });
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(CheckoutSelected), cx);
+    });
+    assert_eq!(host.calls(), vec!["checkout:ar_2"], "无选中 → 早退");
+}
+
+#[gpui_kit::test]
+fn request_archive_action_opens_the_file_picker_path(cx: &mut TestAppContext) {
+    // 走生产入口：聚焦面板 → 派发 `RequestArchive`（app 层的 `Ctrl+Shift+A` 就是派发它）。
+    // 动作没有"选菜单"那一步，固定落**本地文件**那条（与面板头第二项一致）。
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    cx.update(|window, cx| {
+        let handle = panel.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+    });
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(RequestArchive), cx);
+    });
+
+    assert_eq!(host.calls(), vec!["archive:file"], "归档入口落本地文件那条");
 }
 
 #[gpui_kit::test]

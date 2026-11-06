@@ -49,6 +49,12 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
         .version_counts()
         .await
         .map_err(|e| format!("读取版本历史失败：{e}"))?;
+    // 「最近 3 条」明细与版本数**同批**取（同一次刷新的另一张表读，不是一个新 N+1）：
+    // 详情面板的版本区既要总数也要三条摘要，分两次逐行查就是 2N 次往返。
+    let recent_versions = store
+        .recent_versions_by_resource(crate::present::DETAIL_RECENT_VERSIONS)
+        .await
+        .map_err(|e| format!("读取最近版本失败：{e}"))?;
     // 标签两件事都**一次查完**（与版本数同理）：按行的映射给详情 chips 与筛选维，
     // 词典给筛选菜单；两者都做成逐行查询就是 2N 次往返。
     let tags_by_resource = store
@@ -115,6 +121,7 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
         global_resources,
         statuses: &statuses,
         history_counts: &history_counts,
+        recent_versions: &recent_versions,
         tags: &tags_by_resource,
         tag_dictionary,
         folders: &folders_by_resource,

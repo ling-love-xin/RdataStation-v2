@@ -87,6 +87,55 @@ async fn t011_version_history() {
     cleanup(dir);
 }
 
+/// 「最近 N 条」的批量取数：每个存档只取最新的 N 条，按版本降序；
+/// 没有历史的存档**不出现在映射里**（详情层据此判定「只有当前版本」）。
+#[tokio::test]
+async fn t011b_recent_versions_take_top_n_per_resource() {
+    let (store, dir) = create_test_store().await;
+    let created = store
+        .insert_archive(NewArchiveInput {
+            resource_type: "table".to_string(),
+            name: "recent".to_string(),
+            alias: None,
+            kind: ArchiveKind::Analysis,
+            content_hash: "aabbccdd00112233".to_string(),
+            definition_sql: None,
+            row_count: None,
+            column_count: None,
+            file_rel_path: "analysis/recent.sql".to_string(),
+            payload_mode: crate::model::PayloadMode::Copy,
+            source_path: None,
+            file_size: None,
+            binding: ArchiveBinding::default(),
+            scope: "project".to_string(),
+        })
+        .await
+        .expect("create archive");
+    // 造 4 条历史（v1..v4）：写前快照语义下这些是历史行，当前版本另算。
+    for version in 1..=4 {
+        let snapshot = serde_json::to_string(&created).expect("snapshot json");
+        store
+            .save_resource_version(&created.id, version, &snapshot)
+            .await
+            .expect("save snapshot");
+    }
+
+    let recent = store
+        .recent_versions_by_resource(3)
+        .await
+        .expect("recent versions");
+    let of_created = recent.get(&created.id).expect("该存档有历史");
+    assert_eq!(of_created.len(), 3, "只要最近 3 条，不把 4 条全带出来");
+    assert_eq!(
+        of_created.iter().map(|v| v.version).collect::<Vec<_>>(),
+        vec![4, 3, 2],
+        "按版本降序取最新的三条"
+    );
+    // 没有历史的存档不占位（映射里缺项 = 只有当前版本）。
+    assert_eq!(recent.len(), 1);
+    cleanup(dir);
+}
+
 #[tokio::test]
 async fn t012_concurrent_create() {
     let (store, dir) = create_test_store().await;

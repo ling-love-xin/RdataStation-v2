@@ -10,6 +10,7 @@ pub(crate) use gpui_kit::base::{Disableable as _, StyledExt};
 pub(crate) use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 pub(crate) use gpui_kit::component::description_list::{DescriptionList, DescriptionText};
 pub(crate) use gpui_kit::component::hover_card::HoverCard;
+pub(crate) use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 pub(crate) use gpui_kit::component::tag::Tag;
 pub(crate) use gpui_kit::component::{ActiveTheme, Icon, Sizable as _, Size};
 pub(crate) use gpui_kit::*;
@@ -30,10 +31,13 @@ pub const HASH_LABEL: &str = "内容指纹";
 /// 「版本」分区的标题（渲染层靠它认出“这个分区要多一个『查看全部…』入口”）。
 pub const VERSION_SECTION_TITLE: &str = "版本";
 
+/// 「组织」分区的标题（渲染层靠它认出“这个分区下面挂『移动…』分组入口”）。
+pub const ORG_SECTION_TITLE: &str = "组织";
+
 /// 「内容预览」分区的标题（原型 §3.1；渲染层与窗口测试共用一处）。
 pub const PREVIEW_SECTION_TITLE: &str = "内容预览";
 
-pub use crate::view_model::detail::{ArchiveDetail, ArchiveTagChip};
+pub use crate::view_model::detail::{ArchiveDetail, ArchiveTagChip, DetailGroupOption, DetailVersionLine};
 
 /// 指纹缩略：前 [`HASH_PREVIEW_LEN`] 位；无指纹（旧行 / `table_ref`）给破折号而不是空白。
 pub fn short_hash(hash: Option<&str>) -> String {

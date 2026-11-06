@@ -16,6 +16,8 @@ pub struct SnapshotInputs<'a> {
     pub global_resources: Vec<AnalyticsResource>,
     pub statuses: &'a ArchiveStatuses,
     pub history_counts: &'a VersionCounts,
+    /// 每行最近的 N 条历史版本（详情「版本」区的明细；与 `history_counts` 同批取数）。
+    pub recent_versions: &'a RecentVersions,
     pub tags: &'a ResourceTags,
     pub tag_dictionary: Vec<TagOption>,
     pub folders: &'a FolderMemberships,

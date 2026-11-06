@@ -23,6 +23,9 @@ fn detail(status: ArchiveStatus, kind: ArchiveKind) -> ArchiveDetail {
         content_hash: Some("0123456789abcdef0123".to_string()),
         payload_rel_path: Some("dau.sql".to_string()),
         history_label: "1 个历史版本".to_string(),
+        recent_versions: Vec::new(),
+        groups: Vec::new(),
+        group_id: None,
         tags: Vec::new(),
         group: None,
         // 预览缺省 = 仅元信息（各用例需要时用结构体更新语法盖掉）。
@@ -65,9 +68,17 @@ fn rows_skip_empty_values_but_keep_fingerprint_placeholder() {
 #[test]
 fn organization_section_keeps_only_the_group() {
     let rows = detail_rows(&detail(ArchiveStatus::Normal, ArchiveKind::File));
+    // 未分组也**照样**给出「组织」区：这一区下面挂着「移动…」入口，
+    // 没有它就没地方把未分组的存档移进某个组。
+    let ungrouped = rows
+        .iter()
+        .find(|(title, _)| title == "组织")
+        .expect("未分组也要有组织区");
     assert!(
-        !rows.iter().any(|(title, _)| title == "组织"),
-        "无分组时不应出现空分区"
+        ungrouped
+            .1
+            .iter()
+            .any(|(label, value)| *label == "分组" && value == "未分组")
     );
 
     let mut with_group = detail(ArchiveStatus::Normal, ArchiveKind::File);
@@ -77,6 +88,7 @@ fn organization_section_keeps_only_the_group() {
         name: "报表".to_string(),
     }];
     with_group.group = Some("报表".to_string());
+    with_group.group_id = Some("af_1".to_string());
     let rows = detail_rows(&with_group);
     let org = rows
         .iter()
@@ -91,6 +103,15 @@ fn organization_section_keeps_only_the_group() {
         !org.1.iter().any(|(label, _)| *label == "标签"),
         "标签不进文本行"
     );
+}
+
+/// 全局行没有项目分组归属：不给「组织」区（不给用户一个点了会错的入口）。
+#[test]
+fn global_rows_have_no_organization_section() {
+    let mut global = detail(ArchiveStatus::Normal, ArchiveKind::File);
+    global.scope = RowScope::Global;
+    let rows = detail_rows(&global);
+    assert!(!rows.iter().any(|(title, _)| title == "组织"));
 }
 
 #[test]
