@@ -44,6 +44,11 @@ pub mod sql_template_store;
 pub mod trash;
 pub mod workbench_context_store;
 
+/// 插件存储的 manager 级集成测试（真实 SQLite + DuckDB 临时库）。
+/// 2026-10-16 才注册：该文件此前从未被编译，字段与构造函数签名都已过时。
+#[cfg(test)]
+mod plugin_store_tests;
+
 pub use cache_version_migration::{CURRENT_CACHE_VERSION, CacheVersionManager};
 pub use connection_draft_store::{ConnectionDraftRow, ConnectionDraftStore};
 pub use connection_org_store::{

@@ -1,188 +1,190 @@
+//! 插件存储的 manager 级集成测试（真实 SQLite + DuckDB 临时库）。
+//!
+//! 2026-10-16 复活：本文件此前用不存在的 `created_at` 字段、`GlobalDatabaseManager::new` 也还是
+//! 旧签名，且没有在 `persistence/mod.rs` 注册 —— 从未被编译过。现在按现行 API 重写，
+//! 覆盖 `global_db.rs` 的异步包装（`plugin_store` 内的纯函数已另有内联单测）。
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::persistence::GlobalSqlitePool;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use uuid::Uuid;
+use std::fs;
+use std::path::PathBuf;
 
-    const GLOBAL_MIGRATION_SQL: &str =
-        include_str!("../../../../migrations/global/001_init.sql");
+use uuid::Uuid;
 
-    async fn create_test_global_store() -> (GlobalDatabaseManager, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("rds_plugin_test_{}", Uuid::new_v4().simple()));
-        fs::create_dir_all(&dir).expect("create temp dir");
-        let db_path = dir.join("global.db");
-        let pool = Arc::new(
-            GlobalSqlitePool::new(db_path.clone(), 2)
-                .await
-                .expect("create pool"),
-        );
-        {
-            let conn = pool.acquire().await.expect("acquire connection");
-            conn.inner()
-                .expect("get connection")
-                .execute_batch(GLOBAL_MIGRATION_SQL)
-                .expect("run migration");
-        }
-        let manager = GlobalDatabaseManager::new(pool, db_path.clone());
-        (manager, dir)
-    }
+use crate::persistence::global_db::GlobalDatabaseManager;
+use crate::persistence::plugin_store::{Plugin, PluginGlobalConfig};
 
-    fn cleanup(dir: PathBuf) {
-        let _ = fs::remove_dir_all(&dir);
-    }
+/// 临时目录 + 已经跑完迁移的全局库；返回后用完调用 `finish`。
+async fn create_test_global_store(tag: &str) -> (GlobalDatabaseManager, PathBuf) {
+    let dir = std::env::temp_dir().join(format!(
+        "rds-plugin-store-{tag}-{}",
+        Uuid::new_v4().simple()
+    ));
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let sqlite_path = dir.join("global.db");
+    let duckdb_path = dir.join("analytics.duckdb");
 
-    #[tokio::test]
-    async fn t001_register_and_get_plugin() {
-        let (manager, dir) = create_test_global_store().await;
-        let now = chrono::Utc::now().to_rfc3339();
-        let plugin = Plugin {
-            id: Uuid::new_v4().to_string(),
-            code: "test.plugin".to_string(),
-            name: "Test Plugin".to_string(),
-            version: "1.0.0".to_string(),
-            author: Some("Test Author".to_string()),
-            description: Some("A test plugin".to_string()),
-            repo_url: Some("https://example.com".to_string()),
-            plugin_type: "wasm".to_string(),
-            manifest_json: Some("{}".to_string()),
-            install_path: "/test/path".to_string(),
-            is_enabled: true,
-            is_builtin: false,
-            created_at: now.clone(),
-            updated_at: now,
-        };
+    // `new` 自己会跑 `init_sqlite_tables` / `init_duckdb_tables`（迁移 001 含 plugins 表）
+    let manager = GlobalDatabaseManager::new(sqlite_path, duckdb_path, 2)
+        .await
+        .expect("create global manager");
+    (manager, dir)
+}
 
-        manager.register_plugin(&plugin).await.expect("register plugin");
+async fn finish(manager: GlobalDatabaseManager, dir: PathBuf) {
+    manager.close().await.expect("close manager");
+    let _ = fs::remove_dir_all(&dir);
+}
 
-        let fetched = manager.get_plugin(&plugin.id).await.expect("get plugin");
-        assert!(fetched.is_some());
-        let fetched = fetched.unwrap();
-        assert_eq!(fetched.code, plugin.code);
-        assert_eq!(fetched.name, plugin.name);
-
-        let by_code = manager.get_plugin_by_code_version(&plugin.code, &plugin.version).await.expect("get by code");
-        assert!(by_code.is_some());
-
-        cleanup(dir);
-    }
-
-    #[tokio::test]
-    async fn t002_get_all_plugins() {
-        let (manager, dir) = create_test_global_store().await;
-        for i in 0..3 {
-            let now = chrono::Utc::now().to_rfc3339();
-            let plugin = Plugin {
-                id: Uuid::new_v4().to_string(),
-                code: format!("test.plugin{}", i),
-                name: format!("Test Plugin {}", i),
-                version: "1.0.0".to_string(),
-                author: None,
-                description: None,
-                repo_url: None,
-                plugin_type: "wasm".to_string(),
-                manifest_json: None,
-                install_path: "/test/path".to_string(),
-                is_enabled: i % 2 == 0,
-                is_builtin: false,
-                created_at: now.clone(),
-                updated_at: now,
-            };
-            manager.register_plugin(&plugin).await.expect("register");
-        }
-
-        let all = manager.get_all_plugins().await.expect("get all");
-        assert_eq!(all.len(), 3);
-
-        cleanup(dir);
-    }
-
-    #[tokio::test]
-    async fn t003_update_plugin_enabled() {
-        let (manager, dir) = create_test_global_store().await;
-        let now = chrono::Utc::now().to_rfc3339();
-        let plugin = Plugin {
-            id: Uuid::new_v4().to_string(),
-            code: "test.plugin".to_string(),
-            name: "Test Plugin".to_string(),
-            version: "1.0.0".to_string(),
-            author: None,
-            description: None,
-            repo_url: None,
-            plugin_type: "wasm".to_string(),
-            manifest_json: None,
-            install_path: "/test/path".to_string(),
-            is_enabled: true,
-            is_builtin: false,
-            created_at: now.clone(),
-            updated_at: now,
-        };
-
-        manager.register_plugin(&plugin).await.expect("register");
-
-        manager.update_plugin_enabled(&plugin.id, false).await.expect("update");
-
-        let fetched = manager.get_plugin(&plugin.id).await.expect("get");
-        assert!(fetched.is_some());
-        assert!(!fetched.unwrap().is_enabled);
-
-        cleanup(dir);
-    }
-
-    #[tokio::test]
-    async fn t004_delete_plugin() {
-        let (manager, dir) = create_test_global_store().await;
-        let now = chrono::Utc::now().to_rfc3339();
-        let plugin = Plugin {
-            id: Uuid::new_v4().to_string(),
-            code: "test.plugin".to_string(),
-            name: "Test Plugin".to_string(),
-            version: "1.0.0".to_string(),
-            author: None,
-            description: None,
-            repo_url: None,
-            plugin_type: "wasm".to_string(),
-            manifest_json: None,
-            install_path: "/test/path".to_string(),
-            is_enabled: true,
-            is_builtin: false,
-            created_at: now.clone(),
-            updated_at: now,
-        };
-
-        manager.register_plugin(&plugin).await.expect("register");
-
-        manager.delete_plugin(&plugin.id).await.expect("delete");
-
-        let fetched = manager.get_plugin(&plugin.id).await.expect("get");
-        assert!(fetched.is_none());
-
-        cleanup(dir);
-    }
-
-    #[tokio::test]
-    async fn t005_global_config() {
-        let (manager, dir) = create_test_global_store().await;
-        let plugin_id = Uuid::new_v4().to_string();
-
-        let config = PluginGlobalConfig {
-            plugin_id: plugin_id.clone(),
-            key: "test.key".to_string(),
-            value: Some("test.value".to_string()),
-            updated_at: chrono::Utc::now().to_rfc3339(),
-        };
-
-        manager.set_plugin_global_config(&config).await.expect("set config");
-
-        let configs = manager.get_plugin_global_configs(&plugin_id).await.expect("get configs");
-        assert_eq!(configs.len(), 1);
-        assert_eq!(configs[0].key, "test.key");
-        assert_eq!(configs[0].value, Some("test.value".to_string()));
-
-        cleanup(dir);
+fn plugin(code: &str, version: &str, is_enabled: bool) -> Plugin {
+    let now = chrono::Utc::now().to_rfc3339();
+    Plugin {
+        id: Uuid::new_v4().to_string(),
+        code: code.to_string(),
+        name: format!("Plugin {code}"),
+        version: version.to_string(),
+        author: Some("Test Author".to_string()),
+        description: Some("A test plugin".to_string()),
+        repo_url: None,
+        plugin_type: "wasm".to_string(),
+        manifest_json: Some("{}".to_string()),
+        install_path: format!("/test/{code}"),
+        is_enabled,
+        is_builtin: false,
+        installed_at: now.clone(),
+        updated_at: now,
     }
 }
 
+#[tokio::test]
+async fn register_then_read_back_by_uuid_and_by_code_version() {
+    let (manager, dir) = create_test_global_store("read-back").await;
+    let p = plugin("test.plugin", "1.0.0", true);
+
+    manager.register_plugin(&p).await.expect("register plugin");
+
+    let fetched = manager
+        .get_plugin(&p.id)
+        .await
+        .expect("get plugin")
+        .expect("row exists");
+    assert_eq!(fetched.code, p.code);
+    assert_eq!(fetched.name, p.name);
+
+    let by_code = manager
+        .get_plugin_by_code_version(&p.code, &p.version)
+        .await
+        .expect("get by code");
+    assert!(by_code.is_some());
+
+    finish(manager, dir).await;
+}
+
+#[tokio::test]
+async fn list_returns_every_registered_plugin() {
+    let (manager, dir) = create_test_global_store("list").await;
+    for i in 0..3 {
+        manager
+            .register_plugin(&plugin(&format!("test.plugin{i}"), "1.0.0", i % 2 == 0))
+            .await
+            .expect("register");
+    }
+
+    let all = manager.get_all_plugins().await.expect("get all");
+    assert_eq!(all.len(), 3);
+
+    finish(manager, dir).await;
+}
+
+#[tokio::test]
+async fn update_enabled_by_uuid_and_by_code_both_land() {
+    let (manager, dir) = create_test_global_store("enable").await;
+    let p = plugin("test.plugin", "1.0.0", true);
+    manager.register_plugin(&p).await.expect("register");
+
+    manager
+        .update_plugin_enabled(&p.id, false)
+        .await
+        .expect("update by uuid");
+    let fetched = manager
+        .get_plugin(&p.id)
+        .await
+        .expect("get")
+        .expect("row exists");
+    assert!(!fetched.is_enabled);
+
+    // 运行时用的是清单 id（= code），这条必须也能命中（此前按 uuid 写会 0 行）
+    manager
+        .update_plugin_enabled_by_code(&p.code, true)
+        .await
+        .expect("update by code");
+    let fetched = manager
+        .get_plugin_by_code(&p.code)
+        .await
+        .expect("get by code")
+        .expect("row exists");
+    assert!(fetched.is_enabled);
+
+    finish(manager, dir).await;
+}
+
+#[tokio::test]
+async fn delete_by_uuid_and_by_code_remove_the_row() {
+    let (manager, dir) = create_test_global_store("delete").await;
+    let by_uuid = plugin("test.uuid", "1.0.0", true);
+    let by_code = plugin("test.code", "1.0.0", true);
+    manager.register_plugin(&by_uuid).await.expect("register");
+    manager.register_plugin(&by_code).await.expect("register");
+
+    manager
+        .delete_plugin(&by_uuid.id)
+        .await
+        .expect("delete by uuid");
+    assert!(
+        manager
+            .get_plugin(&by_uuid.id)
+            .await
+            .expect("get")
+            .is_none()
+    );
+
+    manager
+        .delete_plugin_by_code(&by_code.code)
+        .await
+        .expect("delete by code");
+    assert!(
+        manager
+            .get_plugin_by_code(&by_code.code)
+            .await
+            .expect("get by code")
+            .is_none()
+    );
+
+    finish(manager, dir).await;
+}
+
+#[tokio::test]
+async fn global_config_round_trips() {
+    let (manager, dir) = create_test_global_store("config").await;
+    let plugin_id = Uuid::new_v4().to_string();
+
+    let config = PluginGlobalConfig {
+        plugin_id: plugin_id.clone(),
+        key: "test.key".to_string(),
+        value: Some("test.value".to_string()),
+        updated_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    manager
+        .set_plugin_global_config(&config)
+        .await
+        .expect("set config");
+
+    let configs = manager
+        .get_plugin_global_configs(&plugin_id)
+        .await
+        .expect("get configs");
+    assert_eq!(configs.len(), 1);
+    assert_eq!(configs[0].key, "test.key");
+    assert_eq!(configs[0].value, Some("test.value".to_string()));
+
+    finish(manager, dir).await;
+}
