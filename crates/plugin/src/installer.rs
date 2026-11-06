@@ -404,7 +404,7 @@ impl PluginInstaller {
         if staging.exists() {
             let _ = std::fs::remove_dir_all(&staging);
         }
-        self.copy_dir(source_dir, &staging).map_err(|e| {
+        self.copy_plugin(source_dir, &staging).map_err(|e| {
             let _ = std::fs::remove_dir_all(&staging);
             CoreError::common(CommonError::General(format!(
                 "复制插件到暂存目录失败: {} — {e}",
