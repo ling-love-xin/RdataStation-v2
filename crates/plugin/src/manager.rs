@@ -668,9 +668,9 @@ impl PluginManager {
             })?;
         }
 
-        // 4. 清 global.db 的 plugin_store 记录（DB 未初始化时跳过）
+        // 4. 清 global.db 的 plugin_store 记录（DB 未初始化时跳过；按 code 删，uuid 删不到）
         if let Some(db) = engine::migration::get_global_db_manager() {
-            db.delete_plugin(id).await?;
+            db.delete_plugin_by_code(id).await?;
         }
 
         // 5. 移出运行时索引
@@ -694,7 +694,8 @@ impl PluginManager {
     /// 要不要激活）。**运行中禁用 = 立刻停用**（sidecar 分支会停进程），不是等下次启动。
     pub async fn disable_plugin(&self, id: &str) -> Result<(), CoreError> {
         if let Some(db) = engine::migration::get_global_db_manager() {
-            db.update_plugin_enabled(id, false).await?;
+            // 运行时身份是清单 id（= code），不是安装实例 uuid；按 id 写会 0 行命中
+            db.update_plugin_enabled_by_code(id, false).await?;
         }
         if self
             .plugin_index
@@ -711,7 +712,7 @@ impl PluginManager {
     /// 启用插件（与 [`Self::disable_plugin`] 对称）：持久标记 + 若已加载则重新激活。
     pub async fn enable_plugin(&self, id: &str) -> Result<(), CoreError> {
         if let Some(db) = engine::migration::get_global_db_manager() {
-            db.update_plugin_enabled(id, true).await?;
+            db.update_plugin_enabled_by_code(id, true).await?;
         }
         if self
             .plugin_index
@@ -798,7 +799,7 @@ impl PluginManager {
                 continue;
             }
             let enabled = match engine::migration::get_global_db_manager() {
-                Some(db) => match db.get_plugin(id).await {
+                Some(db) => match db.get_plugin_by_code(id).await {
                     Ok(Some(p)) => p.is_enabled,
                     // DB 里没记录 = 目录直接拷进来的插件，默认启用
                     _ => true,

@@ -1972,6 +1972,17 @@ impl GlobalDatabaseManager {
         Ok(result)
     }
 
+    /// 根据 code 获取插件（运行时身份是清单 id，等于 code；不是安装实例 uuid）
+    pub async fn get_plugin_by_code(
+        &self,
+        code: &str,
+    ) -> Result<Option<plugin_store::Plugin>, CoreError> {
+        let conn = self.sqlite_pool.acquire().await?;
+        let result = plugin_store::get_plugin_by_code(conn.inner()?, code)?;
+
+        Ok(result)
+    }
+
     /// 获取所有已安装插件
     pub async fn get_all_plugins(&self) -> Result<Vec<plugin_store::Plugin>, CoreError> {
         let conn = self.sqlite_pool.acquire().await?;
@@ -1992,6 +2003,26 @@ impl GlobalDatabaseManager {
     pub async fn delete_plugin(&self, id: &str) -> Result<(), CoreError> {
         let conn = self.sqlite_pool.acquire().await?;
         plugin_store::delete_plugin(conn.inner()?, id)?;
+
+        Ok(())
+    }
+
+    /// 按清单 id（code）更新启用状态
+    pub async fn update_plugin_enabled_by_code(
+        &self,
+        code: &str,
+        is_enabled: bool,
+    ) -> Result<(), CoreError> {
+        let conn = self.sqlite_pool.acquire().await?;
+        plugin_store::update_plugin_enabled_by_code(conn.inner()?, code, is_enabled)?;
+
+        Ok(())
+    }
+
+    /// 按清单 id（code）删除登记
+    pub async fn delete_plugin_by_code(&self, code: &str) -> Result<(), CoreError> {
+        let conn = self.sqlite_pool.acquire().await?;
+        plugin_store::delete_plugin_by_code(conn.inner()?, code)?;
 
         Ok(())
     }
