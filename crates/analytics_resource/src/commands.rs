@@ -16,7 +16,8 @@ use gpui_kit::*;
 actions!(
     analytics_resource,
     [
-        /// 归档入口（等价于点面板头「归档」；草稿箱上下文另绑 `Ctrl+Shift+A`）。
+        /// 归档入口：落到面板头 `＋▾` 的第二项「从本地文件归档…」那条（`Ctrl+Shift+A`）。
+        /// 草稿挑选那条（第一项「从草稿箱归档…」）没有键——草稿箱侧也没有同名键。
         RequestArchive,
         /// 打开当前选中存档（只读）。
         OpenSelected,

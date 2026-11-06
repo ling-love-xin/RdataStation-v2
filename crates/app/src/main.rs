@@ -359,8 +359,10 @@ fn run_app() {
                 // 取回（检出）为工作副本（原型 §4.5；与右键「取回（检出）…」同一动作，
                 // 用 `Ctrl+Shift+O` 与「打开」成对，避免占用 `Ctrl+C` 一类通用键）。
                 KeyBinding::new("ctrl-shift-o", CheckoutSelected, Some("analytics-resource")),
-                // 归档入口（面板头「归档」的键盘等价）。与草稿箱的 `Ctrl+Shift+A`
-                // 同名不同 context：草稿箱那条在 `scratchpad` context，这条只在资产库内生效。
+                // 归档入口：落到面板头 `＋▾` 的第二项「从本地文件归档…」（处理器里写明
+                // "动作没有选菜单这一步，落到本地文件那条"）。草稿挑选那条没有键，草稿箱
+                // （`scratchpad` context）也**没有**同名键——它只绑了
+                // `ctrl-a` / `f2` / `delete` / `escape` / `up` / `down` / `enter` / `ctrl-n`。
                 KeyBinding::new("ctrl-shift-a", RequestArchive, Some("analytics-resource")),
                 // M1 项目管理：切换项目（回选择器）/ 关闭项目。
                 KeyBinding::new("ctrl-shift-p", SwitchProject, Some("workbench")),

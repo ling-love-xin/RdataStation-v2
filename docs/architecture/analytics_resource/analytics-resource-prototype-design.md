@@ -165,22 +165,27 @@
 
 ## 4. 核心交互
 
-### 4.1 归档（上游发起，M6 执行）
+### 4.1 归档（M6 自有入口发起）
 
 ```mermaid
 sequenceDiagram
     participant U as 用户
-    participant S as 草稿箱面板
+    participant P as 资产库面板
+    participant PD as 草稿挑选对话框
     participant D as 归档确认对话框
     participant M as 资产库服务
 
-    U->>S: 右键「归档为存档…」
-    S->>D: 打开（预填来源路径、来源连接）
+    U->>P: 面板头 ＋▾ →「从草稿箱归档…」（或空态建议按钮）
+    P->>PD: 打开（候选由宿主备好：草稿箱 → 资产库 的依赖方向）
+    U->>PD: 勾一条 → 展开完整确认；勾多条 → 默认名批量
+    PD->>D: 打开（预填来源路径、来源连接、继承的草稿标签）
     U->>D: 确认（分组 / 标签 / 是否保留历史 / 目标名冲突处理）
     D->>M: archive(请求)
-    M-->>S: ResourcesChanged { Archived, id }
-    S->>S: 刷新树（草稿保留为工作副本 —— 2026-10-13 起默认 copy，不再是 move）
+    M-->>P: ResourcesChanged { Archived, id }
+    P->>P: 刷新列表 + 撤销条（草稿保留为工作副本 —— 2026-10-13 起默认 copy，不再是 move）
 ```
+
+> 草稿箱侧**没有**「归档为存档…」入口（2026-11-06 核实：`crates/scratchpad` 里没有任何调用资产库的端口）；这条链路只能从资产库发起。`Ctrl+Shift+A` 落到的是「从本地文件归档…」（见 §9）。
 
 归档确认对话框字段：
 
@@ -363,21 +368,20 @@ sequenceDiagram
 | `↑` / `↓` | 行漫游 | 同上 |
 | `Enter` | 打开（只读） | 同上 |
 | `F2` | 重命名显示名 | 同上 |
-
-> **落地现状（2026-09-20，第十三刀）**：`F2` 已落（`app` 层绑到 `analytics-resource` context，动作 `RenameSelected`）——只改 `project.db` 里的**显示名**，`resources/` 下的文件名与路径不动；多选与只读项目不响应（与右键菜单里那一项同一判据 `can_rename`）。行右键菜单同步多出「重命名…」（在「版本历史…」下面）。
 | `Delete` | 移入回收站（可撤销） | 同上 |
 | `Ctrl+A` | 全选当前分组（分组未落 → 当前即全部可见行） | 同上 |
 | `Esc` | 清空搜索 / 关菜单 | 同上 |
-| `Ctrl+Shift+A` | 归档当前草稿（草稿箱上下文，**快捷键注册在草稿箱**） | 全局 |
 | `Ctrl+O` | 打开（只读）——`Enter` 之外的等价入口（焦点不在行上时也能开） | 面板聚焦时 |
 | `Ctrl+Shift+O` | 取回（检出）当前选中存档为草稿工作副本 | 同上 |
-| `Ctrl+Shift+A`（资产库 context） | 归档入口（= 面板头「归档」；与草稿箱那条同名不同 context） | 同上 |
+| `Ctrl+Shift+A` | 归档入口——落到面板头 `＋▾` 的**第二项「从本地文件归档…」**；「从草稿箱归档…」那条**没有键** | 同上 |
 
-> **落地现状（2026-11-06）**：`Ctrl+O` / `Ctrl+Shift+O` / `Ctrl+Shift+A` 三条已在 `crates/app/src/main.rs` 绑到 `analytics-resource` context，动作分别对应 `OpenSelected` / `CheckoutSelected` / `RequestArchive`——这三条 Action 此前只有面板里的 `.on_action` 处理器而**没有任何键能触发**（菜单外无入口）。判据与右键菜单、面板头同源：无选中 / 多选 / 只读项目时处理器自己早退，不弹错也不半执行。`Ctrl+Shift+A` 与草稿箱的「归档当前草稿」同键不同 context（草稿箱在 `scratchpad`），互不抢占。
+> **落地现状（2026-09-20，第十三刀）**：`F2` 已落（`app` 层绑到 `analytics-resource` context，动作 `RenameSelected`）——只改 `project.db` 里的**显示名**，`resources/` 下的文件名与路径不动；多选与只读项目不响应（与右键菜单里那一项同一判据 `can_rename`）。行右键菜单同步多出「重命名…」（在「版本历史…」下面）。
+
+> **落地现状（2026-11-06）**：`Ctrl+O` / `Ctrl+Shift+O` / `Ctrl+Shift+A` 三条已在 `crates/app/src/main.rs` 绑到 `analytics-resource` context，动作分别对应 `OpenSelected` / `CheckoutSelected` / `RequestArchive`——这三条 Action 此前只有面板里的 `.on_action` 处理器而**没有任何键能触发**（菜单外无入口）。判据与右键菜单、面板头同源：无选中 / 多选 / 只读项目时处理器自己早退，不弹错也不半执行。**`Ctrl+Shift+A` 落到「从本地文件归档…」**（`RequestArchive` 的处理器写明"动作没有选菜单这一步，落到本地文件那条"），草稿挑选那条（`＋▾` 第一项）没有键；`scratchpad` context 也**没有**同名键——那里只绑了 `ctrl-a` / `f2` / `delete` / `escape` / `↑↓` / `enter` / `ctrl-n`。
 
 > Action 定义在 `crates/analytics_resource/src/commands.rs`，绑定在 `crates/app/src/main.rs`（`analytics-resource` context），与 M4 的 `database-nav` context 同构。
 >
-> **落地现状（2026-09-17）**：`Ctrl+F` / `Esc` / `Delete` / `Ctrl+A` / `↑` / `↓` / `Enter` 均已可用；鼠标手势（单击 / `Ctrl` / `Shift` / 双击）由行自己接管（`classify_row_click`，因为组件默认把单击也接到确认上）。**`F2` 重命名已落（2026-09-20，第十三刀）**；`Ctrl+Shift+A` 注册在草稿箱 context（不在本模块绑）。
+> **落地现状（2026-09-17）**：`Ctrl+F` / `Esc` / `Delete` / `Ctrl+A` / `↑` / `↓` / `Enter` 均已可用；鼠标手势（单击 / `Ctrl` / `Shift` / 双击）由行自己接管（`classify_row_click`，因为组件默认把单击也接到确认上）。**`F2` 重命名已落（2026-09-20，第十三刀）**。
 
 ## 10. 与 V1 的逐项对照
 

@@ -120,7 +120,7 @@ crates/analytics_resource/src/
 | 内容预览（前 20 行 / 仅元信息） | `src/preview.rs`（纯函数 + 常量单一来源）、`crates/workbench/src/services/resource_jobs.rs::load_previews` |
 | 索引修复对话框 | `src/dialogs/index_repair/`（`mod.rs` 三分组与行模型、`open.rs` 入口、`render.rs` 条目行） |
 | 系统级实例（提升 / 分发 / 登记） | `src/global/`（`promote.rs` 提升、`distribute.rs` 分发、`register.rs` 登记、`sql.rs` SQL 常量、`list.rs` 列表） |
-| Action 与快捷键 | `src/commands.rs` + `crates/app/src/main.rs`（`Ctrl+F` / `Esc` / `Delete` / `Ctrl+A` / `F2` 已绑到 `analytics-resource` context；`↑↓` / `Enter` 由列表组件提供） |
+| Action 与快捷键 | `src/commands.rs` + `crates/app/src/main.rs`（`analytics-resource` context 绑 8 条：`ctrl-f` / `escape` / `delete` / `ctrl-a` / `f2` / `ctrl-o` / `ctrl-shift-o` / `ctrl-shift-a`——最后一条落到「从本地文件归档…」，草稿挑选那条无键；`↑↓` / `Enter` 由列表组件提供） |
 | 左 Dock 装配（面板实体 + 渲染转发） | `crates/workbench/src/panels/resources.rs` |
 | 取数后台任务（列表 + 索引健康 + 版本数） | `crates/workbench/src/services/resource_jobs.rs` |
 | 宿主端口实现 | `src/resource_host/`（`mod.rs` 结构体与薄委托、`archive_actions.rs`、`detail_actions.rs`、`delete_actions.rs`、`group_actions.rs`、`misc_actions.rs`、`helpers.rs`）；workbench 侧桥接在 `crates/workbench/src/components/resource_host.rs` |
