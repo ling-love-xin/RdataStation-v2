@@ -101,55 +101,88 @@ impl PluginInstaller {
         // 覆盖安装（同 id 重装 / 升级）：先把运行中的插件停掉。
         // Windows 上进程（尤其 sidecar 的 agent.exe）占用文件会让目录删不干净，
         // 旧版本文件就会和新包混在一起（清单指向新入口、旧入口仍在）。
+        // 记住原来是否在跑：换入 / 登记失败时要把老插件恢复运行，否则一次失败的
+        // 覆盖安装会把「DB 里 enabled」的插件留成运行时停用，直到用户手动点启用。
+        let mut was_active = false;
         if final_install_path.exists() {
             if let Some(manager) = get_plugin_manager() {
-                if manager.get_loaded_plugin(&manifest.plugin.id).is_some() {
+                if let Some(loaded) = manager.get_loaded_plugin(&manifest.plugin.id) {
+                    was_active = loaded.status == crate::manager::LoadStatus::Active;
                     manager.deactivate_plugin(&manifest.plugin.id).await?;
                 }
             }
         }
 
-        // 4.1 先复制到暂存目录，再整体换入：复制过程可能持续数秒，热插拔每 5s 扫一次
-        // `plugins/`，直接往最终目录写会让扫描看到半成品（清单已到、入口还没到）。
-        self.swap_dir_into_place(&package_root, &final_install_path)?;
+        let outcome: Result<Plugin, CoreError> = async {
+            // 4.1 先复制到暂存目录，再整体换入：复制过程可能持续数秒，热插拔每 5s 扫一次
+            // `plugins/`，直接往最终目录写会让扫描看到半成品（清单已到、入口还没到）。
+            self.swap_dir_into_place(&package_root, &final_install_path)?;
 
-        // 5. 注册到数据库
-        let plugin = register_manifest(&manifest, &final_install_path, db_manager).await?;
+            // 5. 注册到数据库
+            let plugin = register_manifest(&manifest, &final_install_path, db_manager).await?;
 
-        // 6. 清理临时解压目录（如果是从压缩包解压的）
-        if format != PluginPackageFormat::Directory {
-            let _ = std::fs::remove_dir_all(&extracted_dir);
-        }
+            // 6. 清理临时解压目录（如果是从压缩包解压的）
+            if format != PluginPackageFormat::Directory {
+                let _ = std::fs::remove_dir_all(&extracted_dir);
+            }
 
-        // 7. 加载插件（安装态；wasm / sidecar 运行时在激活时按需加载）
-        //
-        // 加载失败不撤销安装（目录与登记都已落盘），但必须留日志：此前是 `let _ =`
-        // 静默吞掉，用户只会看到「清单里没有这个插件」却没有任何原因。
-        // 激活按库里的启用状态决定：装完只停在「已加载」时，sidecar 驱动没有注册，
-        // 用户装完立刻建连接会连不上，且看不出原因。
-        if let Some(manager) = get_plugin_manager() {
-            match manager.load_plugin_from_dir(&final_install_path).await {
-                Ok(_) if plugin.is_enabled => {
-                    if let Err(e) = manager.activate_plugin(&manifest.plugin.id).await {
+            // 7. 加载插件（安装态；wasm / sidecar 运行时在激活时按需加载）
+            //
+            // 加载失败不撤销安装（目录与登记都已落盘），但必须留日志：此前是 `let _ =`
+            // 静默吞掉，用户只会看到「清单里没有这个插件」却没有任何原因。
+            // 激活按库里的启用状态决定：装完只停在「已加载」时，sidecar 驱动没有注册，
+            // 用户装完立刻建连接会连不上，且看不出原因。
+            if let Some(manager) = get_plugin_manager() {
+                match manager.load_plugin_from_dir(&final_install_path).await {
+                    Ok(_) if plugin.is_enabled => {
+                        if let Err(e) = manager.activate_plugin(&manifest.plugin.id).await {
+                            tracing::warn!(
+                                plugin = %manifest.plugin.id,
+                                error = %e,
+                                "插件安装完成但激活失败（目录与登记保留）"
+                            );
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
                         tracing::warn!(
                             plugin = %manifest.plugin.id,
                             error = %e,
-                            "插件安装完成但激活失败（目录与登记保留）"
+                            "插件安装完成但加载失败（目录与登记保留）"
                         );
                     }
                 }
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(
-                        plugin = %manifest.plugin.id,
-                        error = %e,
-                        "插件安装完成但加载失败（目录与登记保留）"
-                    );
+            }
+
+            Ok(plugin)
+        }
+        .await;
+
+        // 失败恢复：老插件本来就跑着，安装没成功就不该把它留在停用态。
+        if outcome.is_err() && was_active {
+            if let Some(manager) = get_plugin_manager() {
+                match manager.load_plugin_from_dir(&final_install_path).await {
+                    Ok(_) => {
+                        if let Err(e) = manager.activate_plugin(&manifest.plugin.id).await {
+                            tracing::warn!(
+                                plugin = %manifest.plugin.id,
+                                error = %e,
+                                "覆盖安装失败后恢复旧插件运行失败"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            plugin = %manifest.plugin.id,
+                            error = %e,
+                            "覆盖安装失败后重新加载旧插件失败（目录可能已被替换）"
+                        );
+                    }
                 }
             }
         }
 
-        Ok(plugin)
+        outcome
     }
 
     /// 临时解压目录（用完即删；`paths::temp_dir()` 是 RDS 数据目录下的 temp，随版本走）
