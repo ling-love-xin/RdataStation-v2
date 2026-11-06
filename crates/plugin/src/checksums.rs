@@ -117,6 +117,14 @@ pub fn verify_package(manifest: &PluginManifest, plugin_dir: &Path) -> Result<()
             continue;
         }
 
+        // 安装时会被跳过的开发残留：列了也装不进去，等于是给"完整性"一个假承诺。
+        if layout::is_residue_key(&key) {
+            problems.push(format!(
+                "{key} 属于安装时跳过的开发残留目录，不应列入 {CHECKSUMS_FILE}"
+            ));
+            continue;
+        }
+
         let file = plugin_dir.join(&relative);
         if !file.is_file() {
             problems.push(format!("列出但不是文件：{key}"));
@@ -161,7 +169,7 @@ pub fn verify_package(manifest: &PluginManifest, plugin_dir: &Path) -> Result<()
 ///
 /// 入口一律用**解析后**的路径：多平台包实际跑的是 `bin/<platform>/agent`，
 /// 校验它而不是清单里的基础路径（覆盖率按"真正会被执行的字节"算）。
-fn required_entries(
+pub(crate) fn required_entries(
     manifest: &PluginManifest,
     plugin_dir: &Path,
 ) -> Result<Vec<String>, CoreError> {
@@ -450,6 +458,27 @@ executable = "bin/agent"
         assert!(
             format!("{err}").contains("列出但不是文件：lib/extra.jar"),
             "{err}"
+        );
+    }
+
+    /// 安装时会被跳过的开发残留不能列入：否则校验通过、复制却丢掉，完整性是假承诺。
+    #[test]
+    fn rejects_dev_residue_entries() {
+        let dir = TempDir::new("residue");
+        write(dir.path(), "plugin.toml", "stub");
+        write_checksums(
+            dir.path(),
+            serde_json::json!({
+                "plugin.toml": digest(dir.path(), "plugin.toml"),
+                "target/debug/junk": "0".repeat(64),
+            }),
+        );
+
+        let err = verify_package(&manifest(""), dir.path()).unwrap_err();
+        let text = format!("{err}");
+        assert!(
+            text.contains("开发残留") && text.contains("target/debug/junk"),
+            "{text}"
         );
     }
 }

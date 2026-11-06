@@ -28,6 +28,47 @@ fn layout_error(message: impl Into<String>) -> CoreError {
     CoreError::common(CommonError::General(message.into()))
 }
 
+/// 安装时跳过的开发残留目录（包内容只放运行产物，见 `plugin-layout.md` §5 规则 4）。
+///
+/// 这些是"仓库里的东西"而不是"包里的东西"：`.git` 可能带整段历史，
+/// `target` / `node_modules` / `__pycache__` 是构建与依赖缓存，装进安装目录只会变胖。
+/// `src/` 不在此列 —— 脚本类插件的入口本身就可能写在 `src/` 里，误排除会静默丢文件。
+pub const DEV_RESIDUE_DIRS: &[&str] = &[
+    ".git",
+    ".svn",
+    ".hg",
+    ".rds",
+    ".idea",
+    ".vscode",
+    "target",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+];
+
+/// 安装时跳过的开发残留文件（IDE / 系统残留）。
+pub const DEV_RESIDUE_FILES: &[&str] = &[".DS_Store", "Thumbs.db"];
+
+/// 某个名字是否属于开发残留（目录与文件两张表；大小写不敏感 —— Windows 文件系统本就忽略大小写）。
+pub fn is_dev_residue(name: &str, is_dir: bool) -> bool {
+    let table = if is_dir {
+        DEV_RESIDUE_DIRS
+    } else {
+        DEV_RESIDUE_FILES
+    };
+    table.iter().any(|item| item.eq_ignore_ascii_case(name))
+}
+
+/// 相对键（POSIX `/`）是否落在开发残留目录下（如 `target/junk`）。
+pub fn is_residue_key(key: &str) -> bool {
+    key.split('/').next().is_some_and(|first| {
+        DEV_RESIDUE_DIRS
+            .iter()
+            .any(|d| d.eq_ignore_ascii_case(first))
+    })
+}
+
 /// 校验清单声明的相对路径，返回规范化后的路径（去掉 `./` 前缀）。
 ///
 /// `field` 只用于报错定位（如 `backend.executable` / `capabilities.wasm.entry`）。
@@ -410,5 +451,21 @@ entry = "dist/extension.js"
         assert!(format!("{err}").contains("dist/extension.js"), "{err}");
         touch(dir.path(), "dist/extension.js", "// stub");
         check_declared_entries(&frontend, dir.path()).unwrap();
+    }
+
+    #[test]
+    fn dev_residue_covers_repo_and_build_noise_but_keeps_src() {
+        assert!(is_dev_residue("target", true));
+        assert!(is_dev_residue("TARGET", true), "Windows 文件系统忽略大小写");
+        assert!(is_dev_residue(".git", true));
+        assert!(is_dev_residue("node_modules", true));
+        assert!(is_dev_residue("Thumbs.db", false));
+        assert!(!is_dev_residue("plugin.toml", false));
+        // `src/` 是包内容：脚本类插件的入口可能就在里面，误排除会静默丢文件
+        assert!(!is_dev_residue("src", true));
+
+        assert!(is_residue_key("target/debug/junk"));
+        assert!(!is_residue_key("bin/agent"));
+        assert!(!is_residue_key("src/main.py"));
     }
 }

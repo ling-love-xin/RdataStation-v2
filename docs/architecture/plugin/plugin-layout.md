@@ -74,6 +74,8 @@
 - 键与清单同一套相对路径白名单（POSIX `/`、禁 `..`/盘符/绝对路径），且不许把
   `checksums.json` 自己列进去（哈希无法自指）。
 - 算法目前只认 `sha256`；`signature.json`（验"谁签发"）属 P5，未实现。
+- 列在开发残留目录（`target/`、`.git` 等，见 §5 规则 4）里的文件会被拒绝——安装时不会复制，
+  列进校验只会给完整性一个假承诺。
 - **缺失放行**：老包与开发目录（热插拔直接指源码目录）不带该文件，安装照常成功；
   发布包应在打包流程里生成——不带它等于放弃完整性校验。
 
@@ -122,8 +124,12 @@
 3. **入口必须真实存在**。安装期检查（`layout::check_declared_entries`）：
    声明的入口缺失就拒绝安装并逐个点名，而不是「装成功、激活时才报错」。
    图标 / schema 这类展示与声明式资产只校验路径形态，缺失不阻断安装。
-4. **包里只放运行产物**。安装器是整目录递归复制（`installer::copy_dir`，没有排除表），
-   `src/`、`target/`、`.git` 会被一起装进去。
+4. **包里只放运行产物**。安装器整目录复制，但跳过开发残留——目录
+   `.git` / `.svn` / `.hg` / `.rds` / `.idea` / `.vscode` / `target` / `node_modules` /
+   `__pycache__` / `.pytest_cache` / `.mypy_cache`，文件 `.DS_Store` / `Thumbs.db`
+   （`layout::DEV_RESIDUE_DIRS` / `is_dev_residue`）。`src/`、`lib/` 属于包内容，照常安装
+   （脚本类插件的入口就可能写在 `src/` 里）。清单声明的入口若落在被跳过的目录
+   （如 `executable = "target/agent"`），安装期直接拒绝，不会「校验通过却被复制丢掉」。
 5. **压缩包根 = `plugin.toml` 所在层**。zip / tar.gz 里不要再套一层 `<id>/`：
    解压根找不到 `plugin.toml` 会直接判为「不是插件包」。
 6. **运行期不写安装目录**。安装目录是只读产物：写进去会参与热插拔 hash 判定之外的变化，
@@ -152,6 +158,7 @@
 | 目录名 = id | 加载时 | `manager::load_plugin_from_dir` → `layout::validate_dir_name` |
 | 入口存在性 | 安装时（复制前，对解压产物） | `installer::validate_plugin` → `layout::check_declared_entries` |
 | 随包哈希 + 覆盖率 | 安装时（复制前） | `installer::validate_plugin` → `checksums::verify_package` |
+| 开发残留不落盘 | 安装时（复制） | `installer::copy_dir` → `layout::is_dev_residue`；入口落其中则 `validate_plugin` 拒绝 |
 | wasm 入口解析 | 激活时 | `manager::activate_wasm` → `layout::resolve_asset` |
 | 多平台可执行解析 | 部署时 | `manifest::PluginBackend::resolve_executable` → `layout::resolve_executable` |
 

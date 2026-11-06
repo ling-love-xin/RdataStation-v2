@@ -203,5 +203,11 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 声明了且真实存在的 `plugin.icon` / `connection_schema` 必须列出（否则删一行就能绕过）。
 键沿用清单同一套相对路径白名单（不许逃逸、不许自指）。文件缺失视为老包 / 开发目录，
 放行；发布包应在 P5 打包流程里生成。`signature.json`（验"谁签发"）与运行期校验仍未做。
-`cargo test -p rds-plugin` **204 单测 + 71 集成**全绿。
+`cargo test -p rds-plugin` **208 单测 + 71 集成**全绿。
+
+**安装器跳过开发残留**（2026-10-16）：`installer::copy_dir` 按 `layout::is_dev_residue`
+跳过 `.git` / `.svn` / `.hg` / `.rds` / `.idea` / `.vscode` / `target` / `node_modules` /
+`__pycache__` / `.pytest_cache` / `.mypy_cache` 与 `.DS_Store` / `Thumbs.db`（`src/`、`lib/`
+属于包内容，照常安装）；清单声明的入口若落在这些目录里（如 `executable = "target/agent"`），
+`validate_plugin` 直接拒绝——否则会「校验通过 → 复制时丢掉 → 装出坏包」。
 

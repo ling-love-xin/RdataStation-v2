@@ -234,6 +234,9 @@ impl PluginInstaller {
         crate::layout::check_declared_entries(&manifest, plugin_dir)?;
         // 随包完整性：有 checksums.json 就逐文件比对（缺失视为老包 / 开发目录，放行）。
         crate::checksums::verify_package(&manifest, plugin_dir)?;
+        // 声明入口不许落在安装时会跳过的开发残留目录里：那份配置能通过上面两步，
+        // 却会在复制时被静默丢掉，最后装出一个「清单指着不存在的文件」的包。
+        reject_residue_entries(&manifest, plugin_dir)?;
         Ok(manifest)
     }
 
@@ -248,15 +251,31 @@ impl PluginInstaller {
         Ok(())
     }
 
-    /// 递归复制目录
+    /// 递归复制目录（跳过开发残留：`.git` / `target` / `node_modules` 等，见
+    /// `layout::DEV_RESIDUE_DIRS`）。清单声明的入口若落在这些目录里，`validate_plugin`
+    /// 已经先拒了，这里只负责不把仓库垃圾带进安装目录。
     fn copy_dir(&self, source: &Path, dest: &Path) -> Result<(), std::io::Error> {
         std::fs::create_dir_all(dest)?;
 
         for entry in std::fs::read_dir(source)? {
             let entry = entry?;
             let file_type = entry.file_type()?;
-            let dest_path = dest.join(entry.file_name());
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                // 非 UTF-8 文件名不在白名单的判断范围内：照原样复制，不猜。
+                let dest_path = dest.join(&name);
+                if file_type.is_dir() {
+                    self.copy_dir(&entry.path(), &dest_path)?;
+                } else {
+                    std::fs::copy(entry.path(), dest_path)?;
+                }
+                continue;
+            };
+            if crate::layout::is_dev_residue(name, file_type.is_dir()) {
+                continue;
+            }
 
+            let dest_path = dest.join(name);
             if file_type.is_dir() {
                 self.copy_dir(&entry.path(), &dest_path)?;
             } else {
@@ -321,6 +340,26 @@ impl PluginInstaller {
 
         Ok(plugin)
     }
+}
+
+/// 声明的入口落在开发残留目录里就拒绝安装（否则复制时会被跳过，装出一个坏包）。
+///
+/// 复用 `checksums::required_entries`：覆盖率口径与"安装时真正需要的文件"是同一条，
+/// 这里不必再列一遍 sidecar / script / wasm / frontend 的差别。
+fn reject_residue_entries(manifest: &PluginManifest, plugin_dir: &Path) -> Result<(), CoreError> {
+    let required = crate::checksums::required_entries(manifest, plugin_dir)?;
+    let offenders: Vec<&str> = required
+        .iter()
+        .filter(|key| crate::layout::is_residue_key(key))
+        .map(String::as_str)
+        .collect();
+    if offenders.is_empty() {
+        return Ok(());
+    }
+    Err(CoreError::common(CommonError::General(format!(
+        "插件入口落在安装时跳过的开发残留目录（不会被安装）：\n - {}",
+        offenders.join("\n - ")
+    ))))
 }
 
 #[cfg(test)]
@@ -415,5 +454,63 @@ executable = "bin/agent"
             text.contains("哈希不匹配") && text.contains("bin/agent"),
             "{text}"
         );
+    }
+
+    const MANIFEST_IN_RESIDUE: &str = r#"
+[plugin]
+id = "com.example.residue"
+name = "Residue"
+version = "1.0.0"
+publisher = "test"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "sidecar"
+executable = "target/agent"
+"#;
+
+    /// 入口落在 `target/` 这类会被跳过的目录时，必须在安装前拒绝，而不是
+    /// 「校验通过 → 复制时丢掉 → 装出一个清单指着空文件的包」。
+    #[test]
+    fn declared_entry_in_dev_residue_is_rejected() {
+        let dir = TempDir::new("residue-entry");
+        write(dir.path(), "plugin.toml", MANIFEST_IN_RESIDUE);
+        write(dir.path(), "target/agent", "binary");
+
+        let installer = PluginInstaller::new(dir.path().join("install"));
+        let err = installer.validate_plugin(dir.path()).unwrap_err();
+        let text = format!("{err}");
+        assert!(
+            text.contains("开发残留") && text.contains("target/agent"),
+            "{text}"
+        );
+    }
+
+    /// 复制目录时不带仓库垃圾：`.git` / `target` / `node_modules` 跳过，`src/` 照常装。
+    #[test]
+    fn copy_plugin_skips_dev_residue() {
+        let dir = TempDir::new("copy");
+        let source = dir.path().join("package");
+        write(&source, "plugin.toml", MANIFEST);
+        write(&source, "bin/agent", "binary");
+        write(&source, "src/main.py", "print('hi')");
+        write(&source, "target/debug/junk.o", "obj");
+        write(&source, ".git/HEAD", "ref: refs/heads/main");
+        write(&source, "node_modules/dep/index.js", "// dep");
+        write(&source, ".DS_Store", "junk");
+
+        let install = dir.path().join("install");
+        let installer = PluginInstaller::new(install.clone());
+        installer.copy_plugin(&source, &install).unwrap();
+
+        assert!(install.join("plugin.toml").is_file());
+        assert!(install.join("bin/agent").is_file());
+        assert!(install.join("src/main.py").is_file(), "src/ 属于包内容");
+        assert!(!install.join("target").exists());
+        assert!(!install.join(".git").exists());
+        assert!(!install.join("node_modules").exists());
+        assert!(!install.join(".DS_Store").exists());
     }
 }
