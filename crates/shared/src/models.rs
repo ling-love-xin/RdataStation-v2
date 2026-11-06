@@ -279,6 +279,7 @@ impl QueryResult {
                             DataType::Timestamp(_, _) => "DATETIME",
                             DataType::Date32 | DataType::Date64 => "DATE",
                             DataType::Time32(_) | DataType::Time64(_) => "TIME",
+                            DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => "DECIMAL",
                             _ => "TEXT",
                         }
                         .to_string()
@@ -411,6 +412,12 @@ pub(crate) fn arrow_value_at(array: &dyn Array, index: usize) -> Value {
     if let Some(arr) = array.as_any().downcast_ref::<Time32SecondArray>() {
         return Value::Text(format_time(i64::from(arr.value(index)), 0));
     }
+    // DECIMAL → **保精度文本**（i128 + scale 手写还原，不走 display 兜底——
+    // 其对 Decimal 的分组/负数处理不透明）
+    if let Some(arr) = array.as_any().downcast_ref::<Decimal128Array>() {
+        let (v, scale) = (arr.value(index), arr.scale());
+        return Value::Text(format_decimal_i128(v, scale));
+    }
     if let Some(arr) = array.as_any().downcast_ref::<BinaryArray>() {
         return Value::Bytes(arr.value(index).to_vec());
     }
@@ -420,6 +427,27 @@ pub(crate) fn arrow_value_at(array: &dyn Array, index: usize) -> Value {
         arrow::util::display::array_value_to_string(array, index)
             .unwrap_or_else(|_| format!("<{}>", array.data_type())),
     )
+}
+
+/// Decimal128 → 保精度文本（i128 mantissa + scale）。
+/// 负 scale（Arrow 允许）按整数补零还原；算法与 SQL DECIMAL 字符串语义一致。
+fn format_decimal_i128(v: i128, scale: i8) -> String {
+    if scale <= 0 {
+        return format!("{v}{}", "0".repeat((-scale as i32).max(0) as usize));
+    }
+    // SQL DECIMAL 语义：**保留 scale 位小数**（不截尾零——DECIMAL(10,2) 的 90 分位
+    // 显示 ".90" 而非 ".9"，与 MySQL/PG 原文一致）
+    let scale = scale as usize;
+    let neg = v < 0;
+    let digits = v.unsigned_abs().to_string();
+    let sign = if neg { "-" } else { "" };
+    if digits.len() <= scale {
+        let frac = format!("{}{}", "0".repeat(scale - digits.len()), digits);
+        format!("{sign}0.{frac}")
+    } else {
+        let (int_part, frac_part) = digits.split_at(digits.len() - scale);
+        format!("{sign}{int_part}.{frac_part}")
+    }
 }
 
 /// 微秒时间戳 → "YYYY-MM-DD HH:MM:SS[.fff]"（`divisor` = 每秒的该单位数；
@@ -839,6 +867,30 @@ mod time_format_tests {
 
         let days = Date32Array::from(vec![Some(19_723)]); // 2024-01-01
         assert_eq!(arrow_value_at(&days, 0), Value::Text("2024-01-01".into()));
+    }
+
+    /// 2026-11-06 第二步：DECIMAL 保精度显示（i128 + scale 手写还原）。
+    #[test]
+    fn decimal128_formats_with_exact_scale() {
+        use arrow::array::Decimal128Array;
+        use arrow::datatypes::DataType;
+
+        // DECIMAL(10,2)：12345678.90（mantissa = 1234567890）
+        let arr = Decimal128Array::from(vec![Some(1_234_567_890)])
+            .with_precision_and_scale(10, 2)
+            .expect("合法 p/s");
+        assert_eq!(arrow_value_at(&arr, 0), Value::Text("12345678.90".into()));
+        // 负数（保留 scale 位小数：-12.300，DECIMAL(10,3) 原文语义）
+        let neg = Decimal128Array::from(vec![Some(-12_300)])
+            .with_precision_and_scale(10, 3)
+            .expect("合法 p/s");
+        assert_eq!(arrow_value_at(&neg, 0), Value::Text("-12.300".into()));
+        // 纯小数（整数部分为 0）
+        let frac = Decimal128Array::from(vec![Some(45)])
+            .with_precision_and_scale(5, 4)
+            .expect("合法 p/s");
+        assert_eq!(arrow_value_at(&frac, 0), Value::Text("0.0045".into()));
+        assert_eq!(arr.data_type(), &DataType::Decimal128(10, 2));
     }
 
     /// column_types 粗粒度：时间 Arrow 类型不再兜底成 TEXT。

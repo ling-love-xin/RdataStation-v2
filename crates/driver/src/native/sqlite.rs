@@ -1313,7 +1313,9 @@ impl Transaction for SqliteTransaction {
                 return execute_writing(&conn, &sql_owned, &[]);
             }
 
-            let mut stmt = conn.prepare(&sql_owned).map_err(|e| sqlite_error(&sql_owned, e))?;
+            let mut stmt = conn
+                .prepare(&sql_owned)
+                .map_err(|e| sqlite_error(&sql_owned, e))?;
 
             let columns: Vec<String> = stmt
                 .column_names()

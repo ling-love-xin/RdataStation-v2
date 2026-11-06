@@ -29,6 +29,9 @@ async-trait.workspace = true
 # 避免与 rusqlite 的 libsqlite3-sys `links = "sqlite3"` 冲突（详见 engine Cargo.toml 注记）。
 sqlx.workspace = true
 sqlx-postgres.workspace = true
+# DECIMAL/NUMERIC 直取 Decimal128 用（与 sqlx-mysql/pg 同版本 0.4.10）
+bigdecimal.workspace = true
+num-traits.workspace = true
 sqlx-mysql.workspace = true
 rusqlite.workspace = true
 mysql_async.workspace = true

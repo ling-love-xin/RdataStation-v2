@@ -113,6 +113,8 @@ gpui-kit = "0.8.1"
 # 与本仓同一个大版本，批能直接递过去，不用转格式。
 duckdb = { version = "1.10505.0", features = ["appender-arrow"] }
 arrow = "58.4.0"
+bigdecimal = "0.4"
+num-traits = "0.2"
 
 # 语义着色 provider 的类型（`DocumentRangeSemanticTokensProvider` 的入参 / 返回值）。
 # 必须与 gpui-base 同版本同 features（0.97.0 / `proposed`），否则与 trait 签名不是同一类型。

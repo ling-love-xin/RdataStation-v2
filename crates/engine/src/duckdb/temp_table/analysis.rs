@@ -158,20 +158,22 @@ pub fn create_analysis_temp_table_arrow(
 }
 
 /// Arrow DataType → DuckDB DDL 类型（直灌建表用；保守映射，未列出一律 VARCHAR）。
-fn arrow_type_to_ddl(data_type: &arrow::datatypes::DataType) -> &'static str {
+fn arrow_type_to_ddl(data_type: &arrow::datatypes::DataType) -> String {
     use arrow::datatypes::DataType as D;
     match data_type {
-        D::Int8 | D::Int16 | D::Int32 | D::Int64 => "BIGINT",
-        D::UInt8 | D::UInt16 | D::UInt32 | D::UInt64 => "BIGINT",
-        D::Float16 | D::Float32 | D::Float64 => "DOUBLE",
-        D::Boolean => "BOOLEAN",
-        D::Utf8 | D::LargeUtf8 => "VARCHAR",
-        D::Binary | D::LargeBinary | D::FixedSizeBinary(_) => "BLOB",
-        D::Timestamp(_, _) => "TIMESTAMP",
-        D::Date32 | D::Date64 => "DATE",
-        D::Time32(_) | D::Time64(_) => "TIME",
-        D::Decimal128(_, _) | D::Decimal256(_, _) => "DOUBLE", // DECIMAL 精度保真留待下一批
-        _ => "VARCHAR",
+        D::Int8 | D::Int16 | D::Int32 | D::Int64 => "BIGINT".into(),
+        D::UInt8 | D::UInt16 | D::UInt32 | D::UInt64 => "BIGINT".into(),
+        D::Float16 | D::Float32 | D::Float64 => "DOUBLE".into(),
+        D::Boolean => "BOOLEAN".into(),
+        D::Utf8 | D::LargeUtf8 => "VARCHAR".into(),
+        D::Binary | D::LargeBinary | D::FixedSizeBinary(_) => "BLOB".into(),
+        D::Timestamp(_, _) => "TIMESTAMP".into(),
+        D::Date32 | D::Date64 => "DATE".into(),
+        D::Time32(_) | D::Time64(_) => "TIME".into(),
+        // DECIMAL 精度保真（2026-11-06 第二步）：驱动直取 Decimal128(p,s) 原样落 DDL
+        D::Decimal128(p, s) => format!("DECIMAL({p},{s})"),
+        D::Decimal256(_, _) => "DOUBLE".into(),
+        _ => "VARCHAR".into(),
     }
 }
 

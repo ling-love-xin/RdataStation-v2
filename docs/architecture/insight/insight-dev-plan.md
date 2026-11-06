@@ -23,6 +23,21 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-11-06 — 类型面扩展第二步：DECIMAL Decimal128 全链 + PG 时间族/NUMERIC 直取
+
+**已落地并验证**（driver 100 + shared 59 + engine 219 + insight 280 全绿；clippy 零错误）：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| MySQL DECIMAL | 声明 DECIMAL/NEWDECIMAL **直取 BigDecimal → Decimal128**（i128 mantissa + scale；超 i128 巨精度列回退文本不出错）；不再交文本档 | `driver/native/mysql.rs` |
+| PG 时间族 + NUMERIC | 直取档同构：timestamptz（DateTime\<Utc\>→Timestamp(µs)）/ timestamp / date / time / **numeric**（探测链对它们全失败→Utf8 兜底的历史终结）；直取在探测循环外拦截（`pg_direct_kind`） | `driver/native/postgres.rs` |
+| engine DDL | `arrow_type_to_ddl` 返回 String，Decimal128(p,s) → **DECIMAL(p,s)** 原样落 DDL（此前暂 DOUBLE） | `engine/.../analysis.rs` |
+| shared 显示 | Decimal128 → **保精度文本**（手写 i128+scale 还原，SQL 语义**保留 scale 位小数**不截尾零：DECIMAL(10,2) 显示 .90）；粗粒度 column_types 补 DECIMAL | `shared/models.rs` |
+| 闭环 | MySQL price DECIMAL(10,2) → Decimal128 → DuckDB **DECIMAL(10,2)** 列 → numeric-stats `::DOUBLE` 聚合保真 + 网格显示原文 | — |
+| 依赖 | driver 显式 bigdecimal + num-traits（workspace 注册；ToPrimitive for BigInt） | `Cargo.toml` × 2 |
+
+**测试**：shared（DECIMAL 三形态显示：正常/负数/纯小数 + scale 保留语义）、driver（decimal_precision clamp）、engine（直灌 DECIMAL 类型断言可后续真机补）。
+
 ### 2026-11-06 — 驱动类型面扩展第一步：MySQL 时间族 + Arrow 直灌洞察取样（P1-8b 第一段）
 
 **范围拍板**：先 MySQL 时间族（DATETIME/TIMESTAMP/DATE/TIME——时间列被打成文本的根因，YData 时间列卡的前置），DECIMAL Decimal128 全链与 PG 时间族下一批。**已落地并验证**（driver 98 + shared 58 + engine 219 + insight 280 + e2e 14 + 契约 7 全绿；clippy 零错误）：

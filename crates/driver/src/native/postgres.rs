@@ -2,6 +2,9 @@ use arrow::array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
     StringArray,
 };
+use arrow::array::{
+    Date32Array, Decimal128Array, Time64MicrosecondArray, TimestampMicrosecondArray,
+};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use sqlx::{
@@ -19,7 +22,7 @@ use crate::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, PoolStatus,
     SchemaObjectKind, Transaction,
 };
-use shared::error::{ConnectionError, CoreError, DatabaseError};
+use shared::error::{CommonError, ConnectionError, CoreError, DatabaseError};
 use shared::models::{ArrowBatch, QueryResult, Value};
 
 /// 归一 `ssl-mode=DISABLED`（连接配置注入的大写形式）为 sqlx PG 驱动认识的小写 `disable`。
@@ -1206,6 +1209,42 @@ fn pg_cell_as_text_extra(row: &sqlx::postgres::PgRow, idx: usize) -> Option<Stri
     None
 }
 
+/// PG 直取档（按声明类型，2026-11-06）：时间族 + NUMERIC——探测链对它们全失败。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PgDirectKind {
+    /// timestamptz（带时区）
+    TimestampTz,
+    /// timestamp（无时区）
+    Timestamp,
+    Date,
+    Time,
+    /// numeric（BigDecimal 直取 Decimal128）
+    Decimal,
+}
+
+/// PG 声明类型名 → 直取档（sqlx `type_info().name()` 给的拼写）。
+fn pg_direct_kind(declared: &str) -> Option<PgDirectKind> {
+    match declared {
+        "TIMESTAMPTZ" => Some(PgDirectKind::TimestampTz),
+        "TIMESTAMP" => Some(PgDirectKind::Timestamp),
+        "DATE" => Some(PgDirectKind::Date),
+        "TIME" => Some(PgDirectKind::Time),
+        "NUMERIC" => Some(PgDirectKind::Decimal),
+        _ => None,
+    }
+}
+
+/// Decimal128 的 precision：mantissa 位数与 scale 取大者，clamp 1..=38。
+fn decimal_precision(values: &[Option<i128>], scale: i64) -> u8 {
+    let max_digits = values
+        .iter()
+        .flatten()
+        .map(|m| m.unsigned_abs().to_string().len() as i64)
+        .max()
+        .unwrap_or(1);
+    (max_digits.max(scale).clamp(1, 38)) as u8
+}
+
 fn postgres_rows_to_arrow(
     columns: &[String],
     rows: &[sqlx::postgres::PgRow],
@@ -1224,41 +1263,160 @@ fn postgres_rows_to_arrow(
         let mut bool_values: Vec<Option<bool>> = Vec::with_capacity(num_rows);
         let mut binary_values: Vec<Option<Vec<u8>>> = Vec::with_capacity(num_rows);
 
+        // 时间族 / NUMERIC **按声明类型直取**（2026-11-06 类型面扩展，同 mysql.rs）：
+        // PG 的 timestamptz/timestamp/date/time 与 numeric 走探测链会全失败 →
+        // Utf8 兜底（sqlx 类型检查严格），类型面丢失。直取保真。
+        let declared = rows
+            .first()
+            .map(|r| r.column(col_idx).type_info().name().to_ascii_uppercase())
+            .unwrap_or_default();
+        let direct = pg_direct_kind(&declared);
+        let mut timestamp_values: Vec<Option<i64>> = Vec::with_capacity(num_rows);
+        let mut date_values: Vec<Option<i32>> = Vec::with_capacity(num_rows);
+        let mut time_values: Vec<Option<i64>> = Vec::with_capacity(num_rows);
+        let mut decimal_values: Vec<Option<i128>> = Vec::with_capacity(num_rows);
+        let mut decimal_scale: i64 = 0;
+        let mut decimal_overflow = false;
         // 遍历所有行确定最宽类型（0=Null, 1=Bool, 2=Int32, 3=Int64, 4=Float32, 5=Float64, 6=Binary, 7=Utf8）
         let mut detected_rank: u8 = 0;
         // 非空却解不出来的单元格数（列级聚合，填值循环后面留痕）
         let mut undecodable = 0usize;
 
-        for row in rows {
-            use sqlx::Row;
+        if direct.is_none() {
+            for row in rows {
+                use sqlx::Row;
 
-            let row_rank = if let Ok(Some(_)) = row.try_get::<Option<bool>, _>(col_idx) {
-                1 // Boolean
-            } else if let Ok(Some(_)) = row.try_get::<Option<i32>, _>(col_idx) {
-                2 // Int32
-            } else if let Ok(Some(_)) = row.try_get::<Option<i16>, _>(col_idx) {
-                // PG `int2`：sqlx 的类型检查不放宽（i32 解不了 int2），探测表漏了它就会
-                // 整列落进文本探测再失败 —— 静默 NULL。归 Int32 档，填值时加宽。
-                2 // Int16 → 加宽进 Int32
-            } else if let Ok(Some(_)) = row.try_get::<Option<i64>, _>(col_idx) {
-                3 // Int64
-            } else if let Ok(Some(_)) = row.try_get::<Option<f32>, _>(col_idx) {
-                4 // Float32
-            } else if let Ok(Some(_)) = row.try_get::<Option<f64>, _>(col_idx) {
-                5 // Float64
-            } else if let Ok(Some(_)) = row.try_get::<Option<Vec<u8>>, _>(col_idx) {
-                6 // Binary
-            } else if let Ok(Some(_)) = row.try_get::<Option<String>, _>(col_idx) {
-                7 // Utf8
-            } else {
-                0 // NULL — 不影响类型推断
+                let row_rank = if let Ok(Some(_)) = row.try_get::<Option<bool>, _>(col_idx) {
+                    1 // Boolean
+                } else if let Ok(Some(_)) = row.try_get::<Option<i32>, _>(col_idx) {
+                    2 // Int32
+                } else if let Ok(Some(_)) = row.try_get::<Option<i16>, _>(col_idx) {
+                    // PG `int2`：sqlx 的类型检查不放宽（i32 解不了 int2），探测表漏了它就会
+                    // 整列落进文本探测再失败 —— 静默 NULL。归 Int32 档，填值时加宽。
+                    2 // Int16 → 加宽进 Int32
+                } else if let Ok(Some(_)) = row.try_get::<Option<i64>, _>(col_idx) {
+                    3 // Int64
+                } else if let Ok(Some(_)) = row.try_get::<Option<f32>, _>(col_idx) {
+                    4 // Float32
+                } else if let Ok(Some(_)) = row.try_get::<Option<f64>, _>(col_idx) {
+                    5 // Float64
+                } else if let Ok(Some(_)) = row.try_get::<Option<Vec<u8>>, _>(col_idx) {
+                    6 // Binary
+                } else if let Ok(Some(_)) = row.try_get::<Option<String>, _>(col_idx) {
+                    7 // Utf8
+                } else {
+                    0 // NULL — 不影响类型推断
+                };
+                if row_rank > detected_rank {
+                    detected_rank = row_rank;
+                }
+                if detected_rank == 7 {
+                    break; // Utf8 为最宽类型，无需继续
+                }
+            }
+        }
+
+        // 直取档：timestamptz/timestamp/date/time/numeric（探测链已跳过）
+        if let Some(kind) = direct {
+            for row in rows {
+                use sqlx::Row;
+                match kind {
+                    PgDirectKind::TimestampTz => {
+                        let v: Option<chrono::DateTime<chrono::Utc>> = row
+                            .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(col_idx)
+                            .ok()
+                            .flatten();
+                        timestamp_values.push(v.map(|dt| dt.timestamp_micros()));
+                    }
+                    PgDirectKind::Timestamp => {
+                        let v: Option<chrono::NaiveDateTime> = row
+                            .try_get::<Option<chrono::NaiveDateTime>, _>(col_idx)
+                            .ok()
+                            .flatten();
+                        timestamp_values.push(v.map(|dt| dt.and_utc().timestamp_micros()));
+                    }
+                    PgDirectKind::Date => {
+                        let v: Option<chrono::NaiveDate> = row
+                            .try_get::<Option<chrono::NaiveDate>, _>(col_idx)
+                            .ok()
+                            .flatten();
+                        date_values.push(v.map(|d| {
+                            use chrono::Datelike as _;
+                            d.num_days_from_ce() - 719_163
+                        }));
+                    }
+                    PgDirectKind::Time => {
+                        let v: Option<chrono::NaiveTime> = row
+                            .try_get::<Option<chrono::NaiveTime>, _>(col_idx)
+                            .ok()
+                            .flatten();
+                        time_values.push(v.map(|t| {
+                            use chrono::Timelike as _;
+                            i64::from(t.hour()) * 3_600_000_000
+                                + i64::from(t.minute()) * 60_000_000
+                                + i64::from(t.second()) * 1_000_000
+                                + i64::from(t.nanosecond()) / 1_000
+                        }));
+                    }
+                    PgDirectKind::Decimal => {
+                        let v: Option<bigdecimal::BigDecimal> = row
+                            .try_get::<Option<bigdecimal::BigDecimal>, _>(col_idx)
+                            .ok()
+                            .flatten();
+                        match v {
+                            Some(d) => {
+                                let (bi, sc) = d.as_bigint_and_scale();
+                                decimal_scale = decimal_scale.max(sc);
+                                use num_traits::ToPrimitive as _;
+                                match bi.to_i128() {
+                                    Some(m) => decimal_values.push(Some(m)),
+                                    None => {
+                                        decimal_overflow = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            None => decimal_values.push(None),
+                        }
+                    }
+                }
+            }
+            // 构建数组并继续到下一列
+            let array: ArrayRef = match kind {
+                PgDirectKind::TimestampTz | PgDirectKind::Timestamp => {
+                    Arc::new(TimestampMicrosecondArray::from(timestamp_values))
+                }
+                PgDirectKind::Date => Arc::new(Date32Array::from(date_values)),
+                PgDirectKind::Time => Arc::new(Time64MicrosecondArray::from(time_values)),
+                PgDirectKind::Decimal => {
+                    if decimal_overflow {
+                        // 巨精度回退文本：重新收集（保真降级不出错）
+                        let mut vals: Vec<Option<String>> = Vec::with_capacity(num_rows);
+                        for row in rows {
+                            use sqlx::Row;
+                            let v: Option<bigdecimal::BigDecimal> = row
+                                .try_get::<Option<bigdecimal::BigDecimal>, _>(col_idx)
+                                .ok()
+                                .flatten();
+                            vals.push(v.map(|d| d.to_string()));
+                        }
+                        Arc::new(StringArray::from(vals))
+                    } else {
+                        let precision = decimal_precision(&decimal_values, decimal_scale);
+                        let arr = Decimal128Array::from(decimal_values)
+                            .with_precision_and_scale(precision, decimal_scale.clamp(0, 38) as i8)
+                            .map_err(|e| {
+                                CoreError::common(CommonError::General(format!(
+                                    "NUMERIC 列 {} 转换失败: {e}",
+                                    columns[col_idx]
+                                )))
+                            })?;
+                        Arc::new(arr)
+                    }
+                }
             };
-            if row_rank > detected_rank {
-                detected_rank = row_rank;
-            }
-            if detected_rank == 7 {
-                break; // Utf8 为最宽类型，无需继续
-            }
+            arrays.push(array);
+            continue;
         }
 
         let effective_type = match detected_rank {

@@ -19,7 +19,9 @@ fn names_to_nodes(result: &QueryResult, kind: crate::SchemaObjectKind) -> Vec<cr
     nodes
 }
 use arrow::array::{ArrayRef, BinaryArray, BooleanArray, Float64Array, Int64Array, StringArray};
-use arrow::array::{Date32Array, Time64MicrosecondArray, TimestampMicrosecondArray};
+use arrow::array::{
+    Date32Array, Decimal128Array, Time64MicrosecondArray, TimestampMicrosecondArray,
+};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
@@ -33,7 +35,7 @@ use crate::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, PoolStatus,
     SchemaObjectKind, Transaction,
 };
-use shared::error::{ConnectionError, CoreError, DatabaseError};
+use shared::error::{CommonError, ConnectionError, CoreError, DatabaseError};
 use shared::models::{ArrowBatch, QueryResult, Value};
 
 /// MySQL 数据库连接
@@ -1281,6 +1283,18 @@ enum MySqlTimeKind {
     Time,
 }
 
+/// Decimal128 的 precision：mantissa 位数与 scale 取大者，clamp 1..=38
+/// （Arrow 上限；MySQL DECIMAL 最大 65 位数字——超 38 位的巨精度列回退文本档）。
+fn decimal_precision(values: &[Option<i128>], scale: i64) -> u8 {
+    let max_digits = values
+        .iter()
+        .flatten()
+        .map(|m| m.unsigned_abs().to_string().len() as i64)
+        .max()
+        .unwrap_or(1);
+    (max_digits.max(scale).clamp(1, 38)) as u8
+}
+
 /// MySQL 声明类型名 → 时间族（sqlx `type_info().name()` 对这几族给的就是这些拼写）。
 fn mysql_time_kind(declared: &str) -> Option<MySqlTimeKind> {
     match declared {
@@ -1321,6 +1335,10 @@ fn mysql_rows_to_arrow(
         // 结果是时间列全成 Utf8——网格徽标错、下游 DuckDB 建表变 VARCHAR。
         // MySQL 的 `year` 也报 DATE 语义之外，不在此列。
         let time_kind = mysql_time_kind(&declared);
+        // DECIMAL/NEWDECIMAL **直取 Decimal128**（2026-11-06 类型面扩展第二步）：
+        // 旧口径把它们交给文本档（2026-09-21 改），精度保住了但类型面丢失；
+        // 直取 i128 mantissa + scale，超 i128 的巨精度列回退文本（不出错）。
+        let decimal_kind = matches!(declared.as_str(), "DECIMAL" | "NEWDECIMAL");
         let mut timestamp_values: Vec<Option<i64>> = Vec::with_capacity(num_rows); // 微秒
         let mut date_values: Vec<Option<i32>> = Vec::with_capacity(num_rows); // days since epoch
         let mut time_values: Vec<Option<i64>> = Vec::with_capacity(num_rows); // 微秒
@@ -1338,7 +1356,7 @@ fn mysql_rows_to_arrow(
             declared_numeric_rank(&declared).unwrap_or(0)
         };
 
-        if detected_rank == 0 && time_kind.is_none() {
+        if detected_rank == 0 && time_kind.is_none() && !decimal_kind {
             for row in rows {
                 use sqlx::Row;
 
@@ -1384,6 +1402,50 @@ fn mysql_rows_to_arrow(
             (None, 4) => DataType::Binary,
             (None, _) => DataType::Utf8,
         };
+
+        if decimal_kind {
+            // 直取 BigDecimal → i128 mantissa（任一超 i128 → 整列回退文本保真）
+            let mut values: Vec<Option<i128>> = Vec::with_capacity(num_rows);
+            let mut scale: i64 = 0;
+            let mut overflow = false;
+            for row in rows {
+                use sqlx::Row;
+                let v: Option<bigdecimal::BigDecimal> = row
+                    .try_get::<Option<bigdecimal::BigDecimal>, _>(col_idx)
+                    .ok()
+                    .flatten();
+                match v {
+                    Some(d) => {
+                        let (bi, sc) = d.as_bigint_and_scale();
+                        scale = scale.max(sc);
+                        use num_traits::ToPrimitive as _;
+                        match bi.to_i128() {
+                            Some(m) => values.push(Some(m)),
+                            None => {
+                                overflow = true;
+                                break;
+                            }
+                        }
+                    }
+                    None => values.push(None),
+                }
+            }
+            if !overflow {
+                let precision = decimal_precision(&values, scale);
+                let array = Decimal128Array::from(values)
+                    .with_precision_and_scale(precision, scale.clamp(0, 38) as i8)
+                    .map_err(|e| {
+                        CoreError::common(CommonError::General(format!(
+                            "DECIMAL 列 {} 转换失败: {e}",
+                            columns[col_idx]
+                        )))
+                    })?;
+                arrays.push(Arc::new(array));
+                continue;
+            }
+            // 溢出回退：按文本重收（保真降级不出错）
+            string_values.clear();
+        }
 
         for row in rows {
             use sqlx::Row;
@@ -1829,5 +1891,27 @@ mod time_kind_tests {
         assert_eq!(mysql_time_kind("BIGINT"), None);
         // 空串（0 行结果的兜底）
         assert_eq!(mysql_time_kind(""), None);
+    }
+
+    /// 2026-11-06 第二步：DECIMAL 判定（直取 Decimal128 的分派依据）。
+    #[test]
+    fn mysql_decimal_kind_matches_declared_names() {
+        // decimal_kind 是 matches! 内联判定——这里钉住拼写面
+        for name in ["DECIMAL", "NEWDECIMAL"] {
+            assert!(matches!(name, "DECIMAL" | "NEWDECIMAL"), "{name} 应直取");
+        }
+        assert!(!matches!("VARCHAR", "DECIMAL" | "NEWDECIMAL"));
+    }
+
+    /// decimal_precision：mantissa 位数与 scale 取大、clamp 1..=38。
+    #[test]
+    fn decimal_precision_clamps_to_arrow_range() {
+        assert_eq!(decimal_precision(&[Some(123)], 2), 3); // 1.23 → 3 位
+        assert_eq!(decimal_precision(&[Some(1)], 4), 4); // scale 主导
+        assert_eq!(
+            decimal_precision(&[Some(i128::MAX)], 0),
+            38,
+            "巨精度 clamp 到 Arrow 上限"
+        );
     }
 }
