@@ -109,7 +109,9 @@ impl PluginInstaller {
             }
         }
 
-        self.copy_plugin(&package_root, &final_install_path)?;
+        // 4.1 先复制到暂存目录，再整体换入：复制过程可能持续数秒，热插拔每 5s 扫一次
+        // `plugins/`，直接往最终目录写会让扫描看到半成品（清单已到、入口还没到）。
+        self.swap_dir_into_place(&package_root, &final_install_path)?;
 
         // 5. 注册到数据库
         let plugin = register_manifest(&manifest, &final_install_path, db_manager).await?;
@@ -347,6 +349,65 @@ impl PluginInstaller {
         self.copy_dir(source_dir, target_dir)?;
 
         Ok(())
+    }
+
+    /// 复制到暂存目录后整体换入最终位置。
+    ///
+    /// 直接往 `plugins/<id>/` 里复制会有一个可见窗口：热插拔每 5s 扫一次目录，只要
+    /// 扫描落在「清单已复制、入口文件还没到」的瞬间，就会加载一个残缺插件（要么失败，
+    /// 要么登记成半成品）。暂存目录放在 `paths::temp_dir()`（与 `plugins/` 同属数据根，
+    /// `rename` 不跨卷），换入只在「删旧 → 改名」两瞬间完成。
+    fn swap_dir_into_place(
+        &self,
+        source_dir: &Path,
+        final_install_path: &Path,
+    ) -> Result<(), CoreError> {
+        let name = final_install_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("plugin");
+        let staging =
+            paths::temp_dir().join(format!("rds-plugin-stage-{name}-{}", uuid::Uuid::new_v4()));
+        if staging.exists() {
+            let _ = std::fs::remove_dir_all(&staging);
+        }
+        self.copy_dir(source_dir, &staging).map_err(|e| {
+            let _ = std::fs::remove_dir_all(&staging);
+            CoreError::common(CommonError::General(format!(
+                "复制插件到暂存目录失败: {} — {e}",
+                staging.display()
+            )))
+        })?;
+
+        let outcome = (|| -> Result<(), CoreError> {
+            if final_install_path.exists() {
+                std::fs::remove_dir_all(final_install_path).map_err(|e| {
+                    CoreError::common(CommonError::General(format!(
+                        "覆盖安装前删除旧目录失败（插件进程可能仍在占用文件）: {} — {e}",
+                        final_install_path.display()
+                    )))
+                })?;
+            }
+            match std::fs::rename(&staging, final_install_path) {
+                Ok(()) => Ok(()),
+                Err(rename_err) => {
+                    // 极端情况（不同卷 / 目标被占用）回退为逐文件复制；失败时把半成品
+                    // 目录删掉，避免留下一个「看起来装好了」的残缺插件。
+                    self.copy_dir(&staging, final_install_path).map_err(|e| {
+                        let _ = std::fs::remove_dir_all(final_install_path);
+                        CoreError::common(CommonError::General(format!(
+                            "换入插件目录失败（暂存: {}，目标: {}）: {rename_err} / {e}",
+                            staging.display(),
+                            final_install_path.display()
+                        )))
+                    })?;
+                    Ok(())
+                }
+            }
+        })();
+
+        let _ = std::fs::remove_dir_all(&staging);
+        outcome
     }
 
     /// 递归复制目录（跳过开发残留：`.git` / `target` / `node_modules` 等，见
@@ -704,6 +765,46 @@ executable = "target/agent"
             !install.join("bin/legacy-helper.exe").exists(),
             "旧包独有的文件必须清掉"
         );
+    }
+
+    /// 安装走「暂存目录 → 整体换入」：换入后旧文件不残留，暂存目录也不留垃圾。
+    /// 直接往最终目录复制会让热插拔扫描看见半成品（清单已到、入口还没到）。
+    #[test]
+    fn swap_dir_into_place_replaces_the_old_tree_and_leaves_no_staging() {
+        let dir = TempDir::new("swap-in-place");
+        let source = dir.path().join("package");
+        write(&source, "plugin.toml", MANIFEST);
+        write(&source, "bin/agent", "v2-binary");
+
+        let install = dir.path().join("install");
+        write(&install, "plugin.toml", MANIFEST);
+        write(&install, "bin/agent", "v1-binary");
+        write(&install, "bin/legacy-helper.exe", "old");
+
+        let installer = PluginInstaller::new(install.clone());
+        installer.swap_dir_into_place(&source, &install).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(install.join("bin/agent")).unwrap(),
+            "v2-binary"
+        );
+        assert!(
+            !install.join("bin/legacy-helper.exe").exists(),
+            "换入后旧包独有的文件必须清掉"
+        );
+
+        let temp = paths::temp_dir();
+        if let Ok(entries) = std::fs::read_dir(&temp) {
+            let leftovers: Vec<_> = entries
+                .flatten()
+                .filter(|e| {
+                    e.file_name()
+                        .to_string_lossy()
+                        .starts_with("rds-plugin-stage-install-")
+                })
+                .collect();
+            assert!(leftovers.is_empty(), "暂存目录必须清理: {leftovers:?}");
+        }
     }
 
     /// 目录形态的插件包（开发目录 / 解压后的包）应被接受。
