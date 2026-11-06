@@ -695,11 +695,21 @@ impl fmt::Display for PluginError {
                 dep_code,
                 dep_version,
             } => {
-                write!(
-                    f,
-                    "Plugin '{}' missing dependency '{}@{}'",
-                    plugin_id, dep_code, dep_version
-                )
+                // 安装期对账一次点名多个缺失依赖：`dep_code` 留空、清单塞进
+                // `dep_version`。单个依赖缺失仍走原来的 `'code@ver'` 口径。
+                if dep_code.is_empty() {
+                    write!(
+                        f,
+                        "Plugin '{}' missing dependencies: {}",
+                        plugin_id, dep_version
+                    )
+                } else {
+                    write!(
+                        f,
+                        "Plugin '{}' missing dependency '{}@{}'",
+                        plugin_id, dep_code, dep_version
+                    )
+                }
             }
             PluginError::VersionIncompatible {
                 plugin_id,
@@ -1318,6 +1328,21 @@ mod tests {
 
         let err = CoreError::connection(ConnectionError::timeout("conn1", 5000));
         assert_eq!(err.code(), "CONN_TIMEOUT");
+    }
+
+    #[test]
+    fn dependency_missing_names_the_plugin_and_every_missing_dependency() {
+        let multiple = PluginError::dependency_missing("com.example.app", "", "base@1.0, util@^2");
+        let text = multiple.to_string();
+        assert!(text.contains("com.example.app"), "{text}");
+        assert!(text.contains("base@1.0"), "{text}");
+        assert!(text.contains("util@^2"), "{text}");
+
+        let single = PluginError::dependency_missing("com.example.app", "base", "1.0");
+        assert_eq!(
+            single.to_string(),
+            "Plugin 'com.example.app' missing dependency 'base@1.0'"
+        );
     }
 
     #[test]

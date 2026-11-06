@@ -205,7 +205,7 @@ impl DependencyManager {
                 .join(", ");
 
             return Err(CoreError::plugin(PluginError::dependency_missing(
-                String::new(),
+                manifest.plugin.id.clone(),
                 String::new(),
                 missing_str,
             )));
