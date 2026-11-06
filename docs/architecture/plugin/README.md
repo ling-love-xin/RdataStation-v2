@@ -161,11 +161,12 @@ cd docs/architecture/plugin/prototype && node check-prototypes.mjs
 `is_enabled` / `installed_at`，配迁移 028 收敛历史重复行 + `UNIQUE(code)` 索引；管理器 scan / enable /
 disable / uninstall 全部改用 by-code 接口（此前按安装 uuid 更新，0 行命中 → 停用重启后自动复活、
 卸载留幽灵行）。覆盖安装先停用旧实例、删目录失败报可读原因、装完按库内 `is_enabled` 激活。热插拔发现
-的新目录补登记（否则 DB 无记录 = 默认启用，面板停用/卸载照样落空）。`plugin_dependencies` 随插件行
-连带清理，不留孤儿。面板：sidecar/frontend 的状态改由真实 `LoadStatus` 透出（原来硬写 Inactive，
+的新目录补登记（否则 DB 无记录 = 默认启用，面板停用/卸载照样落空）。`plugin_dependencies`
+随插件行同事务写入 / 连带清理（清单 `[[dependencies]]` → 依赖行，反向检查才查得到引用者），
+不留孤儿。面板：sidecar/frontend 的状态改由真实 `LoadStatus` 透出（原来硬写 Inactive，
 运行中的插件永远显示「已停用」）；安装回执四种文案（保持停用 / 激活失败 / 已安装并启用 / 兜底）；
-变更提示 + 「重载 N」按钮消费 `pending_reloads`。`cargo test -p rds-plugin` **214** 单测 + 集成全绿
-（`lifecycle` 7 条）；`cargo test -p rds-store --lib` **160 passed / 2 ignored**。
+变更提示 + 「重载 N」按钮消费 `pending_reloads`。`cargo test -p rds-plugin` **215** 单测 + 集成全绿
+（`lifecycle` 7 条）；`cargo test -p rds-store --lib` **162 passed / 2 ignored**。
 
 **P3（wasm host function 面）、P4（注册表与界面）、P5（生态）未开始**。当前 wasm 插件拿不到任何宿主能力（与「默认拒绝」一致）。
 
@@ -202,13 +203,30 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 自身作源）→ 解包到 `temp/`（zip 用 `enclosed_name()` 拒路径穿越，tar.gz 靠 `Archive::unpack`）
 → `locate_package_root`（根层清单，或唯一一层插件目录；多候选拒绝）→ `validate_plugin`
 （`plugin.toml` → 清单校验 → 入口存在 → checksums → 拒绝落入开发残留的
-入口）→ 覆盖安装先停运行中的插件 → 整目录替换（删旧目录失败不再吞，报可读原因）→
-登记 global.db（按 code 合并，沿用停用状态与首次安装时间）→ 清理临时目录 →
+入口）→ 覆盖安装先停运行中的插件 → 暂存目录复制后整体换入（`temp/rds-plugin-stage-*`
+复制完整包 → 删旧目录 → `rename` 到位，避免热插拔扫描看到半成品；换入 / 登记失败会把
+旧插件恢复运行）→
+登记 global.db（按 code 合并，沿用停用状态与首次安装时间；清单依赖同事务写入
+`plugin_dependencies`）→ 清理临时目录 →
 `load_plugin_from_dir` → 库里有启用状态就立即 `activate_plugin`（装完即可用；重装一个
 已停用的插件不会自己激活）。
 解包与复制在后台线程执行，面板显示「正在安装 …」并同时禁用两个按钮（防并发写同一目录）；
 完成后刷新清单，成功回执写「已安装 <名称> v<版本>（<code>）」，失败写可读错误。
 **下载 / 应用市场引导**仍二期。
+
+**安装换入 / 失败恢复 / 依赖落库（2026-10-16）**：①安装不再直接往 `plugins/<id>/`
+逐文件复制，改为先复制到 `temp/rds-plugin-stage-<id>-<uuid>` 再「删旧 → `rename`」
+整体换入——热插拔每 5s 扫目录，旧写法存在「清单已到、入口未到」的可加载窗口；`rename`
+失败回退逐文件复制，半成品目录删除，暂存无论成败都清理（commit `60f94c46`）。②覆盖安装
+失败（换入 / 登记报错，常见为 sidecar 文件仍被占用）不再把「DB 里 enabled」的插件留在
+停用态：安装前记录是否 Active，失败时重新 `load_plugin_from_dir` + `activate_plugin`
+恢复（commit `f820e08a`）。③清单 `[[dependencies]]` 随登记同事务写入
+`plugin_dependencies`（`register_plugin_with_dependencies`），此前只有读没有写，
+「被依赖不让卸载」永远查不到引用者；同 code 重装时旧行依赖随旧插件行一起清掉
+（commit `1f329785`）。④插件面板空清单改用标准 `empty::Empty`（图标 + 「还没有插件」+
+两条安装入口说明），错误态不显示空态（commit `e6659d59`）。面板安装链补齐后
+`cargo test -p rds-plugin` **215 单测** + 集成全绿；`cargo test -p rds-store --lib`
+**162 passed / 2 ignored**。
 
 **卸载入口已接上面板**（2026-10-16）：每行 id 行尾加「卸载」按钮，点击先开确认框
 （`open_alert_dialog`，`ok_variant = Danger`），正文说清三件事：删的是
