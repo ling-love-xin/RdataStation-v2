@@ -16,8 +16,8 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    高 <code>24px</code>（1.5rem）· 文案 <code>N 项 · 已归档 X · 分析表 Y · 引用 Z · 缺失 W · 索引异常 V</code>。
-    <b>缺失 / 索引异常非 0 时该段高亮可点</b> → 打开「索引修复」对话框——这是「文件系统 + 索引」双真相源的代价被做成可见、可处理的入口。
+    高 <code>24px</code>（1.5rem）· 文案由 <code>ArchiveCounts::line()</code> 拼：恒有 <code>N 项 · 已归档 X</code>，其余四桶（分析表 / 引用 / 缺失 / 索引异常）<b>只在非 0 时出现</b>。
+    <b>有异常（缺失或索引异常 &gt; 0）时整行转 <code>warning</code> 色、右侧多一颗 ghost「修复…」按钮</b> → 打开「索引修复」对话框（与 <code>⋯ → 重建索引…</code> 同一条 <code>request_index_repair</code>）——这是「文件系统 + 索引」双真相源的代价被做成可见、可处理的入口。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="04-group-fold.html">← 上一块：分组折叠</a><a href="06-detail-file.html">下一块：文件型详情 →</a></nav>
 </header>
@@ -25,34 +25,36 @@
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>常态<span class="desc">异常计数全 0，整行 muted，不提供点击</span></div>
+    <div class="variant-h"><span class="no">A</span>常态<span class="desc">异常桶为 0 → 它们不出现、整行 muted、没有按钮</span></div>
     <div class="canvas pad">
       <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
-        <div class="pstatus proto-on" title="8 项 · 已归档 5 · 分析表 2 · 引用 1 · 缺失 0 · 索引异常 0">
-          8 项<span class="sep">·</span>已归档 5<span class="sep">·</span>分析表 2<span class="sep">·</span>引用 1<span class="sep">·</span>缺失 0<span class="sep">·</span>索引异常 0
+        <div class="pstatus proto-on" title="8 项 · 已归档 5 · 分析表 2 · 引用 1">
+          8 项<span class="sep">·</span>已归档 5<span class="sep">·</span>分析表 2<span class="sep">·</span>引用 1
         </div>
       </div>
     </div>
+    <p class="hang">零桶不显示是这个计数器的口径（<code>line()</code> 里 <code>if count &gt; 0</code>）：常态一行只有「N 项 · 已归档 X」，加上非 0 的类型桶。<b>缺失 / 索引异常为 0 时它们根本不出现</b>，不是写成「缺失 0」——原型此前把六个桶全列出来，等于把状态行当表格用。</p>
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">B</span>异常高亮<span class="desc">缺失 / 索引异常非 0 → 该段 warning / danger 且可点，整行其余字段不变</span></div>
+    <div class="variant-h"><span class="no">B</span>有异常<span class="desc">missing / drifted &gt; 0 → <b>整行</b>转 warning 色 + 右侧一颗 ghost「修复…」</span></div>
     <div class="canvas pad">
-      <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
-        <div class="pstatus proto-on" title="8 项 · 已归档 5 · 分析表 2 · 引用 1 · 缺失 1 · 索引异常 3">
-          8 项<span class="sep">·</span>已归档 5<span class="sep">·</span>分析表 2<span class="sep">·</span>引用 1<span class="sep">·</span><span class="seg warn">缺失 1</span><span class="sep">·</span><span class="seg dang">索引异常 3</span>
+      <div style="width:320px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
+        <div class="pstatus proto-on" title="8 项 · 已归档 5 · 分析表 2 · 引用 1 · 缺失 1 · 索引异常 3" style="justify-content:space-between;color:var(--warning)">
+          <span>8 项<span class="sep">·</span>已归档 5<span class="sep">·</span>分析表 2<span class="sep">·</span>引用 1<span class="sep">·</span>缺失 1<span class="sep">·</span>索引异常 3</span>
+          <span class="btn-s btn-xs" style="border:none;background:none;color:var(--fg)">修复…</span>
         </div>
       </div>
     </div>
-    <p class="hang">一个段独立高亮，<b>不把整行染红</b>——正常项仍在，用户看得到「8 项里只有 4 项要处理」。两段都指向同一个「索引修复」对话框（与 <code>⋯ → 重建索引…</code> 同一条路）。</p>
+    <p class="hang">实现不是「分段高亮、点段落」：<code>render_status_bar</code> 判 <code>counts.has_issues()</code>，为真时<b>整行文字色换成 <code>warning</code></b>，并在右侧摆一颗 <code>Button::ghost</code>「修复…」（<code>px_2</code> 内距、两端对齐）。整行一起变色不是偷懒——它表达的是「这一屏有东西要处理」，条目在哪一段由文案自己说清。<br>这颗按钮与 <code>⋯ → 重建索引…</code> 调同一个 <code>request_index_repair</code>，所以不必在状态行里做两个段级热区。<b>全局实例下这一整块替换掉</b>：文案变「全局 N 项」，异常入口不摆（<code>ArchiveCounts</code> 是项目口径，全局行没有 kind 桶与异常桶）。<br>B 按<b>真实面板宽 320px</b> 画（其余几个态用 240px 只为省地方）：这条行是 <code>px_2</code> + 两端对齐、字号 <code>text_xs</code>，四个非 0 桶加按钮已接近满宽——桶再多一条就会被裁（左段没有 <code>min_w_0</code>，真正的溢出点是文案而不是按钮）。</p>
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">C</span>零项<span class="desc">空库时的状态行，与空态（19 页）成对出现</span></div>
+    <div class="variant-h"><span class="no">C</span>零项<span class="desc">空库只有「0 项 · 已归档 0」，与空态（19 页）成对出现</span></div>
     <div class="canvas pad">
       <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
-        <div class="pstatus proto-on" title="0 项 · 没有存档">
-          0 项<span class="sep">·</span>已归档 0<span class="sep">·</span>分析表 0<span class="sep">·</span>引用 0<span class="sep">·</span>缺失 0<span class="sep">·</span>索引异常 0
+        <div class="pstatus proto-on" title="0 项 · 已归档 0">
+          0 项<span class="sep">·</span>已归档 0
         </div>
       </div>
     </div>
@@ -67,31 +69,31 @@
           <div class="skrow"><div class="skbar w3"></div></div>
           <div class="skrow"><div class="skbar w2"></div></div>
         </div>
-        <div class="pstatus proto-on">加载中…<span class="sep">·</span>资产库</div>
+        <div class="pstatus proto-on">加载中…<span class="sep">·</span>0 项<span class="sep">·</span>已归档 0</div>
       </div>
     </div>
-    <p class="hang">取数期间<b>不摆空态</b>（否则「空库」会先闪一下）；骨架走组件 <code>Skeleton</code>（2s 呼吸、只改透明度，<code>reduce_motion</code> 下停在全亮）。列表已有行时不摆骨架，所以不会每帧重绘。</p>
+    <p class="hang">取数期间<b>不摆空态</b>（否则「空库」会先闪一下）；骨架走组件 <code>Skeleton</code>（2s 呼吸、只改透明度，<code>reduce_motion</code> 下停在全亮）。列表已有行时不摆骨架，所以不会每帧重绘。<b>加载中不抹掉计数</b>：<code>status_line(true)</code> 只是给上一轮 <code>line()</code> 加「加载中… · 」前缀（那几项是上一次的库口径，抹成空白反而像库空了），所以显示的是「加载中… · {上次计数}」。原型此前写的「加载中… · 资产库」是假陈述。</p>
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">E</span>撤销条<span class="desc">移入回收站后出现（沿用 M5 撤销栏，24px 之上再加 28px）</span></div>
+    <div class="variant-h"><span class="no">E</span>撤销条<span class="desc">归档之后出现（不是回收站之后）：文案「已归档「名」」+ ghost「撤销」</span></div>
     <div class="canvas pad">
       <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
-        <div class="pstatus proto-on">7 项<span class="sep">·</span>已归档 4<span class="sep">·</span>分析表 2<span class="sep">·</span>引用 1<span class="sep">·</span>缺失 0<span class="sep">·</span>索引异常 0</div>
-        <div class="undo on">
-          <span>已移入回收站 dau_report.sql</span>
+        <div class="pstatus proto-on">7 项<span class="sep">·</span>已归档 4<span class="sep">·</span>分析表 2<span class="sep">·</span>引用 1</div>
+        <div class="undo on" style="height:24px;background:var(--hover)">
+          <span>已归档「dau_report.sql」</span>
           <span class="grow"></span>
           <span class="link">撤销</span>
         </div>
       </div>
     </div>
-    <p class="hang">撤销窗口 5 秒；撤回 = 删 <code>resources/</code> 副本 + 删登记行（copy 模式）或只删登记行（reference 模式）。版本 &gt; 1 拒绝撤回，回退走版本历史。</p>
+    <p class="hang">撤销窗口 5 秒（<code>status.rs</code> 里 <code>timer(Duration::from_secs(5))</code>，与 M5 撤销栏同一时长）。撤回 = 删 <code>resources/</code> 副本 + 删登记行（copy 模式）或只删登记行（reference 模式）；<b>版本 &gt; 1 拒绝撤回</b>，回退走版本历史。<br>三处按实现改：文案是「已归档「名」」<b>不是</b>「已移入回收站」——这条栏只服务归档的立即反悔，回收站有自己的还原；栏高 <b>24px</b>（<code>ROW_HEIGHT</code>，<code>py_0p5</code> + 20px 按钮），原型画的 28px 会让它「贴着状态行」上下跳；「撤销」是 <code>Button::ghost</code>（无边框，色取 <code>primary</code>，带 tooltip「把这条存档退回归档前的位置」），不是纯文字链接。背景是 <code>list_hover</code>。</p>
   </section>
 
   <div class="canvas pad">
     <p class="hang" style="margin:0">
-      本块样式：<code>.pstatus</code> / <code>.pstatus .sep</code> / <code>.seg.warn</code> / <code>.seg.dang</code> / <code>.undo</code>，以及拆块时补的骨架 <code>.skrow</code> / <code>.skbar</code>。
-      落地代码：<code>crates/analytics_resource/src/present/snapshot.rs</code>（计数）+ 面板状态行渲染。
+      本块样式：<code>.pstatus</code> / <code>.pstatus .sep</code> / <code>.undo</code>，以及拆块时补的骨架 <code>.skrow</code> / <code>.skbar</code>。本页<b>已不用</b> <code>.seg.warn</code> / <code>.seg.dang</code>（实现不做分段高亮，整行转 warning + 一颗「修复…」按钮）。
+      落地代码：<code>crates/analytics_resource/src/view_model/row.rs::ArchiveCounts::line|status_line</code>（文案与零桶口径）+ <code>resource_view/panel_render/banners.rs::render_status_bar</code>（整行配色与「修复…」入口）/ <code>render_undo_bar</code>（撤销条）+ <code>resource_view/status.rs</code>（加载态与 5 秒计时）。
     </p>
   </div>
 
