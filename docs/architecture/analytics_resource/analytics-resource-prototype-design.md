@@ -533,7 +533,8 @@ sequenceDiagram
 
 > 2026-10-22 用户需求：展示两个 DuckDB 实例的资源表，项目可升级到全局。本节为**草案规格**，多处标注【待确认】。
 > 现状锚定（2026-11-06 按源码复核，**取代**旧口径「本节未拍板、实现不动」）：双实例的**数据层与链路已落地**——全局登记表 `crates/store/migrations/global/026_analytics_resource_global.sql`（镜像项目库 `analytics_resources` 全列集 + `scope TEXT NOT NULL DEFAULT 'global'`，只存 `'global'` 行；项目库行照旧写 `'project'`）+ 全局侧独立版本表 `analytics_resource_versions`；实例枚举 `RowScope::{Project,Global}`（`model/kind.rs`）；升级 `global/promote.rs`、分发 `global/distribute.rs`、登记 `global/register.rs`、全局列表 `global/list.rs`、建表语句 `global/sql.rs`；冲突框 `dialogs/conflict.rs::{ConflictKind::Promote, ConflictKind::Distribute}` 两态。全局库 `{system}/analytics.duckdb`（`G_` 前缀）与项目库 `{项目}/.RSmeta/analytics.duckdb`（`P_` / `GP_` 前缀）沿用原锚定。
-> 仍未落地的只有三类：① **分析表型存档的升级**（回执「随 M8 后续批次接入」，本应走 `CREATE TABLE AS`）；② 升级 / 分发**都没有确认对话框**（点一下直接入队，只有撞名开窗，故 13.3 的「默认显示名、可改」无落点）；③ 只读项目的这两项菜单**不置灰**（与「取回」不一致）。评审画面见 `prototypes/23`–`26`。
+> 仍未落地的只有两类：① **分析表型存档的升级**（回执「随 M8 后续批次接入」，本应走 `CREATE TABLE AS`）；② 升级 / 分发**都没有前置确认对话框**（点一下直接入队，只有撞名开窗；§13.3 并未要求这张框，属可选加法，故无冲突时没有「先改名再升级」的落点）。
+> 只读项目这一条已收口：列表右键的升级 / 分发本就有 `disabled(… || read_only)`，**详情面板的「分发到本项目…」按钮此前漏接**（`detail_view/actions.rs` 只对项目行用 `read_only`），2026-11-06 补齐（`distribute_affordance(read_only)` 纯函数 + 两条单测），宿主侧回执保留为兜底。评审画面见 `prototypes/23`–`26`。
 
 ### 13.1 实例概念与标识
 

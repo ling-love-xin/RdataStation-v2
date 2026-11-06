@@ -17,7 +17,7 @@
   </div>
   <p class="p-spec">
     双实例这条链上<b>走不通的六种情形</b>。前四种是<b>已实现的拒绝</b>（回执文案就是代码里那几句，一字未改）；后两种是<b>规格没定的口径</b>，标【待确认】。
-    一律走状态栏回执，<b>不弹对话框</b>——只有撞名有窗（<a href="17-dialog-conflict.html">17 块</a>）。
+    C 节那两条回执现在只作<b>宿主侧兜底</b>——菜单项与详情按钮都已先置灰；其余一律走状态栏回执，<b>不弹对话框</b>（只有撞名有窗，见 <a href="17-dialog-conflict.html">17 块</a>）。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="25-cross-project-flow.html">← 上一块：跨项目全流程</a><a href="01-panel-head.html">回到第一块：面板头 →</a></nav>
 </header>
@@ -59,16 +59,17 @@
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">C</span>只读项目 / 多选<span class="desc">按钮在、但点了不动；多选时那一项直接置灰</span></div>
+    <div class="variant-h"><span class="no">C</span>只读项目 / 多选<span class="desc">两处入口都置灰；挡不住时才轮到回执</span></div>
     <div class="canvas pad">
-      <div class="grid2">
+      <div class="note" style="margin-top:0"><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg><b>只读项目下两处入口都已置灰</b>：列表右键那一项是 <code>disabled(… || read_only)</code>，详情面板的分发按钮用同一判据（<code>detail_view/actions.rs::distribute_affordance</code>）。</div>
+      <div class="grid2" style="margin-top:10px">
         <div>
-          <div class="srcbar" style="margin-bottom:6px"><span class="mono">只读项目</span><span class="tagn">拒绝</span></div>
+          <div class="srcbar" style="margin-bottom:6px"><span class="mono">只读项目</span><span class="tagn">宿主兜底</span></div>
           <div class="fgrid">
             <span class="fl">升级</span><span class="fw"><input class="inp ro" value="资产库：项目为只读模式，不能升级到全局" readonly></span>
             <span class="fl">分发</span><span class="fw"><input class="inp ro" value="资产库：项目为只读模式，不能从全局分发" readonly></span>
           </div>
-          <p class="hang">只读项目的 <a href="10-context-menu.html">右键菜单</a>里这两项目前<b>不置灰</b>，与「取回」那几项的处理不一致。</p>
+          <p class="hang">这两行是<b>宿主侧兜底回执</b>，不是今天的正常路径。</p>
         </div>
         <div>
           <div class="srcbar" style="margin-bottom:6px"><span class="mono">多选（2 条）</span><span class="tagn">置灰</span></div>
@@ -124,7 +125,7 @@
   <div class="canvas pad">
     <p class="hang" style="margin-top:0">
       本块样式：<code>.srcbar</code> / <code>.fgrid</code> / <code>.inp.ro</code> / <code>.note</code> + <code>.note.warn</code> + <code>.note.danger</code> / <code>.ctx.proto-on</code> / <code>.mi</code> / <code>.mi.dim</code> / <code>.sep</code> / <code>.mdot</code>。<br>
-      落地代码：<code>crates/analytics_resource/src/resource_host/detail_actions.rs::request_promote_to_global</code>（四条回执原文）/ <code>::request_distribute_from_global</code>（只读 + 无法分发）/ <code>src/global/promote.rs</code>（脚本分支 <code>read_to_string</code> 的失败文案）/ <code>src/resource_view/list_delegate/menu.rs</code>（多选置灰与 <code>scope</code> 裁剪）。
+      落地代码：<code>crates/analytics_resource/src/resource_host/detail_actions.rs::request_promote_to_global</code>（四条回执原文）/ <code>::request_distribute_from_global</code>（只读 + 无法分发）/ <code>src/global/promote.rs</code>（脚本分支 <code>read_to_string</code> 的失败文案）/ <code>src/resource_view/list_delegate/menu.rs</code>（多选置灰、<code>read_only</code> 置灰与 <code>scope</code> 裁剪）/ <code>src/detail_view/actions.rs::distribute_affordance</code>（详情面板分发按钮同一判据）。
     </p>
   </div>
 </div>

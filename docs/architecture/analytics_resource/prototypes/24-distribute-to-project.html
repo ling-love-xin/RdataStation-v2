@@ -107,7 +107,7 @@
   <div class="canvas pad">
     <p class="hang" style="margin-top:0">
       本块样式：<code>.dlg</code> / <code>.dlg-scope</code>（544px）/ <code>.srcbar</code> / <code>.fgrid</code> / <code>.inp</code> / <code>.inp.ro</code> / <code>.namehint.err</code> / <code>.radios</code> / <code>.rdot</code> / <code>.note</code> + <code>.note.warn</code> / <code>.sinst</code> / <code>.row</code> / <code>.scope-badge</code>。<br>
-      落地代码：<code>crates/analytics_resource/src/resource_host/detail_actions.rs::request_distribute_from_global</code>（入口，只读项目先拒）/ <code>src/global/distribute.rs::distribute</code>（读全局登记 + 项目重名双保险 + parquet 中转建表 / 写回 <code>resources/</code>）/ <code>src/dialogs/conflict.rs</code>（<code>ConflictKind::Distribute</code> 三处文案）/ <code>crates/workbench/src/panels/mod.rs::ensure_conflict_dialog</code>（分发侧冲突名 = 目标名 ?: 全局名）。
+      落地代码：<code>crates/analytics_resource/src/resource_host/detail_actions.rs::request_distribute_from_global</code>（入口，只读项目先拒）/ <code>src/detail_view/actions.rs::distribute_affordance</code>（详情按钮的置灰判据，与右键菜单同源）/ <code>src/global/distribute.rs::distribute</code>（读全局登记 + 项目重名双保险 + parquet 中转建表 / 写回 <code>resources/</code>）/ <code>src/dialogs/conflict.rs</code>（<code>ConflictKind::Distribute</code> 三处文案）/ <code>crates/workbench/src/panels/mod.rs::ensure_conflict_dialog</code>（分发侧冲突名 = 目标名 ?: 全局名）。
     </p>
   </div>
 </div>

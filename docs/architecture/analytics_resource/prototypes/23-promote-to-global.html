@@ -16,9 +16,9 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    <b>本块现状：没有确认对话框</b>。项目行右键「升级到全局…」／详情动作区点一下<b>直接入队</b>，状态栏只给一句「正在升级到全局…」；
+    <b>本块现状：没有前置确认对话框</b>。项目行右键「升级到全局…」点一下<b>直接入队</b>，状态栏只给一句「正在升级到全局…」；
     <b>只有撞名才开窗</b>（<a href="17-dialog-conflict.html">17 块</a>的覆盖 / 改名 / 取消）。目标名一律取显示名，代码里没有「先改名再升级」的入口。
-    变体 C 是<b>规格草案里的那个确认框，代码里没有</b>——摆出来只为拍板，不当已落地画面看。
+    变体 C 是<b>本轮提的一个可选方案，规格里并没有这张框</b>（§13.3 只在冲突时要求询问改名）——摆出来只为拍板，不当规格落差看。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="22-dialog-pick.html">← 上一块：草稿选择</a><a href="24-distribute-to-project.html">下一块：分发到本项目 →</a></nav>
 </header>
@@ -32,7 +32,7 @@
         <div class="snode">
           <div class="sno">1</div>
           <div class="sc"><span class="who">项目行右键</span>「升级到全局…」
-            <span class="sub">多选态里这一项置灰（<a href="10-context-menu.html">10 块</a> ① 有画）；全局行不出现（它已经是全局）。只读项目点了不入队，回执「项目为只读模式，不能升级到全局」。</span>
+            <span class="sub">多选态里这一项置灰（<a href="10-context-menu.html">10 块</a> ① 有画）；全局行不出现（它已经是全局）。<b>只读项目里这一项也置灰</b>（<code>disabled(… || read_only)</code>）；宿主侧还有一道兜底，真点到也回执「项目为只读模式，不能升级到全局」。</span>
           </div>
         </div>
         <div class="sarrow">▼</div>
@@ -76,7 +76,7 @@
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">C</span>规格草案：升级确认框<span class="desc">544px（与归档确认同宽）· <b>代码里没有，供拍板</b></span></div>
+    <div class="variant-h"><span class="no">C</span>可选方案：升级确认框<span class="desc">544px（与归档确认同宽）· <b>规格没写、代码没有，供拍板</b></span></div>
     <div class="canvas pad">
       <div class="dlg dlg-scope proto-on">
         <div class="dlg-head"><svg class="ico-sm"><use href="#i-plug" xlink:href="#i-plug"/></svg>升级到全局<span class="sub2">写入全局分析库（跨项目共享层）</span><button class="x">✕</button></div>
@@ -97,7 +97,7 @@
         </div>
         <div class="dlg-foot"><span>升级不改项目侧那份本体</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">升级到全局</button></div>
       </div>
-      <p class="hang"><b>为什么它是草案</b>：这段是设计稿 §13.3 的描述（目标名默认显示名、可改）。实现选了「不确认、撞名才问」，所以②③两个字段今天都没有落点。<b>要补这张框，得先定「升级前能不能改名」</b>——不改名就得接受冲突处置里才出现改名入口。</p>
+      <p class="hang"><b>为什么把它归到「方案」而不是「落差」</b>：§13.3 只写了「表名默认取显示名，<b>冲突时</b>询问改名」，<b>并没有要求升级前先弹一张确认框</b>——那是本轮提的加法。实现选了「不确认、撞名才问」，与规格并不矛盾，只是能让用户在入队前先看到「形态 / 目标实例 / 版本」这三件会变的事。<b>要不要加，得先定「升级前能不能改名」</b>：不改名，就只能接受改名入口出现在冲突处置里。</p>
     </div>
   </section>
 
