@@ -293,6 +293,21 @@ sequenceDiagram
 > - **列表高度 `VERSION_LIST_MAX_HEIGHT 20.0rem` 内滚动**（`max_h + overflow_y_scrollbar`）；超过 `MAX_VERSION_ROWS = 50` 时末尾补一句「还有 N 个更早的版本未列出（一次最多列 50 个）」。行点击只写 `set_selected(Some(version))`——**再点同一行不会取消选中**。
 > - 原型常驻的那段说明（「不做原地回滚：还原 = 用旧内容生成新版本（与 git revert 同构）…内容副本按「最近 5 份」保留」）在实现里**不常驻**，只剩动作栏下方那一行 hint；「不做原地回滚」这条语义本身是对的，只是搬进了 hint 与提示语。
 
+> **版本对比对话框（§4.3 扩展）按 `dialogs/version_diff.rs` + `jobs/version.rs` 复核**（2026-11-07，14 页）：
+> - **尺寸是两个常量**：`DIFF_DIALOG_WIDTH 64.0`（`font_size * 64` = **1024px**）、`DIFF_LIST_MAX_HEIGHT 28.0`（**448px**）。标题 `{name} · v{old} → v{new}`，**没有副标题**（原型写的「只读 · 文本 diff」不存在）；标题里的 `old → new` 是「被比的那一版 → 打开时的当前版本」。
+> - **顶栏是一行 + 两个按钮**：左侧 `v{old} → v{current} 的差异（只读）`（`text_xs` + muted），右侧 `h_flex().gap_1()` 里两个 **ghost small `Button`**（`diff-mode-unified` / `diff-mode-split`，`.toggled(...)` 表示当前形态）——**不是分段控件**（原型 `.mode-sw` 那种）。点击只做 `state.set_mode(DiffMode::Unified|Split)` + `window.refresh()`，**不重算 patch**。
+> - **主体是组件不是自绘表格**：`Diff::new(&state).line_number(true).syntax_highlight(true).hover_highlight(DiffHoverHighlight::Line).max_h(rems(28.0))`。由此三处与原型不同：① 行号是**旧 / 新两条 gutter**（删行只有左号、增行只有右号），不是共用一列；② 有**文件头**（`document.path()`，本仓即 `dau_report.sql@3`，右侧 `+N −M` 统计，左侧 `collapse-file` 折叠箭头可整块收起）与 **`@@` hunk 行**；③ `soft_wrap` 默认 `false` → **不折行、横向滚动**（组件自带 `ScrollableMask`），原型那句「超长行一律省略号 + tooltip」不成立。
+> - **footer 只有一个按钮**（`diff-close`「关闭」，Secondary small）；原型的「2 处变更 · 8 行上下文」不存在——增删统计在文件头。也没有表单、没有确认动作：这个对话框**只读**，不写库、不产生版本。
+> - **入口只有一处**：版本历史动作栏的「与当前版本对比…」（`Dialogs` 里 `VersionAction::Diff` 分支只开这个查看器）。原型标的「第二入口 = 详情面板版本区『查看全部…』」**是假的**：那个按钮走 `host.request_version_history` → `enqueue_versions`，**只开版本历史对话框**，不直接开 diff（`detail_view` 里 `grep 对比|version_diff|Diff` 零命中）。
+> - **只读项目也能看**：宿主 `request_version_action` **先判 Diff** → `enqueue_version_diff` + `ensure_resources_pump` 后直接 `return`，注释写明「只读项目也能看差异」；只有其余三个动作才走 `if read_only { finish_version_action("项目为只读模式，不能改版本") }`。这与 §4.2 取回相反（取回在入口就挡回），口径是「版本历史 / 对比是要让人看得到的」。
+> - **`DiffState` 必须在 `open_dialog` 之前建好**：builder 是 `Fn`（每帧调），在 builder 里新建 state 会每帧丢。`parse_display_patch` 只在 `DiffFile::parse` 成功**且非空**时返回 `Some`；`open_version_diff_dialog` 收到 `None` 时先 `on_close(cx)` 再 `return`——**连窗都不开**。
+> - **失败不走版本动作回执**：成功时 `shared.version_diff_pending.pending = Some(rows)` + `notify_host` + `cx.notify()`；失败时直接 `shared.say_error(format!("资产库：无法对比版本：{err}"))`（面板通知条）。`VersionAction::Diff` 在 `run_version_action` 里是 `unreachable!`——diff 不走后台动作队列，由 `enqueue_version_diff` 单走一条通道。
+> - **两版文本怎么取**：新侧 `read_resource_text`（按本体路径读），旧侧 `payload().version_copy_file(...)`（读那一版的内容副本）。旧副本缺失的文案是「该版本的内容副本不在（已被保留策略裁剪），无法对比」；**两侧都超限才挡**（`DIFF_MAX_TEXT_BYTES = 512 KB`，单侧超也挡那侧）。
+> - **四种「打不开」的文案都在 `jobs/version.rs`**：无 `file_rel_path`「该存档没有本体路径（可能是分析表档），无法对比」/ 本体不在位「本体不在位（可能是缺失存档），无法对比」/ 非 UTF-8「该文件不是文本（可能是二进制），无法对比」/ 过大 `DIFF_TOO_LARGE`「文件过大，请用编辑器查看差异」。**都不弹窗**，全走面板通知条。
+> - **patch 由 `unified_patch` 生成**：`similar::TextDiff` + `.context_radius(3)`（前后 3 行上下文），头两行 `a/{name}@{old}` / `b/{name}@{new}`——所以文件头显示的 `@3` 是**版本号**不是行号。
+> - **三条单测钉住边界**（`dialogs/version_diff.rs`）：`real_patch_yields_one_file`（一个 patch 只出一个文件、`files[0].path() == "dau.sql@3"`、`additions() == 1`）、`empty_patch_opens_nothing`、`garbage_patch_opens_nothing`（后两条断言「不弹窗」）。
+> - 原型 `.diffview` / `.drow` / `.dno` / `.dc` / `.difftool` / `.mode-sw` 是照「共用一列行号 + 分段控件 + 自绘行」画的旧账，现页已改用内联样式自绘；这六条 CSS 目前**无任何页面引用**（要不要从 `proto.css` 删掉待定，删会动「320 个 css_class」的计数口径）。
+
 ### 4.4 回收站对话框
 
 沿用 M5 的回收站对话框形态（列表 + 还原 + 永久删除 + 清空），**但只显示 `origin = "resources"` 的条目**，并在跨模块条目上显示"属于草稿箱，请在草稿箱还原"的禁用提示（语义已在 `ProjectTrash` 层保证，UI 只做呈现）。
