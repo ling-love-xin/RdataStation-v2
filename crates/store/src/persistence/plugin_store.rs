@@ -96,6 +96,14 @@ pub fn register_plugin(conn: &Connection, plugin: &Plugin) -> Result<(), CoreErr
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| storage_err("register_plugin_begin", e.to_string()))?;
     let outcome = (|| -> Result<(), CoreError> {
+        // 依赖行按安装实例 uuid 关联；删旧插件行前先连带清掉它的依赖，
+        // 否则换 uuid 主键后这些行会永远留在库里指向一个不存在的插件。
+        conn.execute(
+            "DELETE FROM plugin_dependencies
+             WHERE plugin_id IN (SELECT id FROM plugins WHERE code = ?1)",
+            params![plugin.code],
+        )
+        .map_err(|e| storage_err("register_plugin_deps", e.to_string()))?;
         conn.execute("DELETE FROM plugins WHERE code = ?1", params![plugin.code])
             .map_err(|e| storage_err("register_plugin_dedupe", e.to_string()))?;
         conn.execute(
@@ -251,6 +259,12 @@ pub fn update_plugin_enabled_by_code(
 
 /// 按清单 id（`code`）删除登记（卸载）
 pub fn delete_plugin_by_code(conn: &Connection, code: &str) -> Result<(), CoreError> {
+    conn.execute(
+        "DELETE FROM plugin_dependencies
+         WHERE plugin_id IN (SELECT id FROM plugins WHERE code = ?1)",
+        params![code],
+    )
+    .map_err(|e| storage_err("delete_plugin_by_code_deps", e.to_string()))?;
     conn.execute("DELETE FROM plugins WHERE code = ?1", params![code])
         .map_err(|e| storage_err("delete_plugin_by_code", e.to_string()))?;
     Ok(())
@@ -308,6 +322,11 @@ pub fn update_plugin_enabled(
 
 /// 删除插件
 pub fn delete_plugin(conn: &Connection, id: &str) -> Result<(), CoreError> {
+    conn.execute(
+        "DELETE FROM plugin_dependencies WHERE plugin_id = ?1",
+        params![id],
+    )
+    .map_err(|e| storage_err("delete_plugin_deps", e.to_string()))?;
     conn.execute("DELETE FROM plugins WHERE id = ?1", params![id])
         .map_err(|e| storage_err("delete_plugin", e.to_string()))?;
     Ok(())
@@ -628,6 +647,51 @@ mod tests {
                 .is_none()
         );
         assert!(get_plugin(&conn, "uuid-1").unwrap().is_none());
+    }
+
+    /// 依赖行按安装实例 uuid 关联：换 uuid 升级或按 code 卸载后，旧依赖行必须一起消失，
+    /// 否则库里会留下指向不存在插件的孤儿记录。
+    #[test]
+    fn dependencies_are_dropped_with_the_plugin_row() {
+        let conn = migrated_conn();
+        let first = plugin("uuid-1", "1.0.0", true, "2026-10-01T00:00:00Z");
+        register_plugin(&conn, &first).unwrap();
+        register_plugin_dependency(
+            &conn,
+            &PluginDependency {
+                plugin_id: "uuid-1".to_string(),
+                dep_code: "com.example.core".to_string(),
+                dep_version_range: ">=1.0.0".to_string(),
+                is_optional: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(get_plugin_dependencies(&conn, "uuid-1").unwrap().len(), 1);
+
+        // 升级换 uuid：旧行的依赖不能留
+        register_plugin(
+            &conn,
+            &plugin("uuid-2", "1.1.0", true, "2026-10-01T00:00:00Z"),
+        )
+        .unwrap();
+        assert!(
+            get_plugin_dependencies(&conn, "uuid-1").unwrap().is_empty(),
+            "旧安装实例的依赖行应随旧插件行一起删除"
+        );
+
+        // 按 code 卸载：新行的依赖也要清掉
+        register_plugin_dependency(
+            &conn,
+            &PluginDependency {
+                plugin_id: "uuid-2".to_string(),
+                dep_code: "com.example.core".to_string(),
+                dep_version_range: ">=1.0.0".to_string(),
+                is_optional: false,
+            },
+        )
+        .unwrap();
+        delete_plugin_by_code(&conn, "com.example.demo").unwrap();
+        assert!(get_plugin_dependencies(&conn, "uuid-2").unwrap().is_empty());
     }
 
     /// 历史库里已经存在的重复行：迁移 028 收敛成每个 code 一行（保留最新 updated_at），
