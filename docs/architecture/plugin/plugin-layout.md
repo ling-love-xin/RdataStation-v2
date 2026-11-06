@@ -2,8 +2,8 @@
 
 > 状态：2026-10-16 定稿并已接入代码（`crates/plugin/src/layout.rs`）。
 > 本文是「一个插件一个目录」的**唯一**目录口径；`plugin-dev-plan.md` §4.3 / §4.7
-> 与 `plugin-user-guide.md` §2.1 的示例都以本文为准（后者仍是原型稿，清单键名与
-> 代码不一致，见文末「已知分歧」）。
+> 与 `plugin-user-guide.md` §2.1 的示例都以本文为准（后者的清单键名已于
+> 2026-11-07 按 `manifest.rs` 重写，见文末 §9）。
 
 ## 1. 为什么要有这份约定
 
@@ -185,9 +185,14 @@
 
 约定是**新包的默认值**，不是对存量包的强制迁移：入口位置由清单指向，代码两边都认。
 
-## 9. 已知分歧
+## 9. 原型稿与现行清单的差异（已归档）
 
-`plugin-user-guide.md` §2.1 的最小插件用 `schema_version` + `[extension]` + `[main]`，
-`crates/plugin/src/manifest.rs` 里 `schema_version` 零命中，实际是 `[plugin]` + `[backend]` /
-`[capabilities.*]`，且不存在 `[main]`。那份是原型稿（面向尚未落地的扩展宿主），
-引用目录结构（`dist/extension.js` + `media/icon.svg`）时可以沿用，**清单键名不要照抄**。
+早期 `plugin-user-guide.md` §2.1 的最小插件用 `schema_version` + `[extension]` + `[main]` 与
+`[capabilities]` 权限表；现行 `crates/plugin/src/manifest.rs` 里 `schema_version` 零命中，
+实际是 `[plugin]` + `[backend]` + `[permissions]` + `[capabilities.frontend/wasm/driver]`，
+不存在 `[extension]` / `[main]`。2026-11-07 已把该节（连同 §2.2 字段表、§2.4 权限口径、
+§1.1–§1.3 安装/启停/卸载流程）按代码重写。
+
+**仍然要记住的坑**：`PluginManifest` 及其子结构没有 `deny_unknown_fields`，旧原型键写进清单
+会**解析通过但不生效**（例：`contributes.views` / `insightRules` / `mockGenerators` /
+`exporters` 没有对应结构体）。不要照抄旧样例；字段以 §2.2 表为准。

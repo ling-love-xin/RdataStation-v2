@@ -440,8 +440,7 @@ app 启动时 `init_plugin_manager` 自动 spawn 循环。**仍保持 `Unsupport
 （TOML 语义：无表头的顶层键必须放在**任何 `[表]` 头之前**，即文件最前）：
 
 ```toml
-schema_version = 1
-
+# 注意：现行清单没有 schema_version；格式/版本闸是 [plugin.engines].rdatastation
 # 能力面命名空间（借鉴 navop driver.json 的 `api`）：小写字母开头，只含小写/数字/连字符。
 # database | redis | mongodb | ssh | terminal …；不写 = 未声明（老清单向后兼容）
 api = "database"
@@ -466,7 +465,7 @@ protocol     = "rds-driver/1"
 platforms    = ["linux-x64","darwin-arm64","darwin-x64","win-x64"]
 max_instances = 1
 
-[backend.wasm]                        # 原 capabilities.wasm 并入
+[backend.wasm]                        # ⚠️ 未实现：P3 才把 capabilities.wasm 并进来，现在写在 capabilities.wasm
 entry = "plugin.wasm"
 max_memory_mb = 256
 max_cpu_time_ms = 5000
@@ -495,7 +494,7 @@ id = "mssql"  display_name = "SQL Server"  default_port = 1433  connection_schem
 | `transport = "jsonl"` | **保留取值，但运行期明确拒绘**（提示「P1 只支持 framed」） | 「不得静默退化」：老形态清单要在起进程前得到可读原因 |
 | 路径安全 | `executable` 必须是不含 `..` / 根 / 盘符的**相对路径**，**校验期**就挡 | 第三方清单给的字符串，拼路径前先过白名单（与 `validate_plugin_id` 同族） |
 | Windows 后缀 | 清单写 `bin/agent` 且**只有** `bin/agent.exe` 存在时自动补全 | 清单不必为平台分叉；真找不到时报错里显示的是原样路径 |
-| `kind = "script"` | 解析、进同一个进程池（`interpreter` + 脚本路径）；**端到端未接线** | 它本来就是子进程；但 Python / Jupyter 那条线在 P1 之后 |
+| `kind = "script"` | 解析、进同一个进程池（`interpreter` + 脚本路径）；**已接线**（postgres-py / oracle-jdbc 实测） | 它本来就是子进程；Python / Jupyter 那条线在 P1 之后 |
 | 「至少一种形态」 | `[backend]` **也算一种**（不再强制 `capabilities.frontend/wasm`） | 驱动插件本来就没有前端与 wasm |
 
 ### 4.4 能力矩阵（能力缺失必须有处表达）
