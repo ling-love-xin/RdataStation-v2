@@ -676,6 +676,24 @@ sequenceDiagram
 - **冲突**：全局库已有同名表 → 询问（覆盖 / 改名 / 取消），对齐归档冲突处理，不静默覆盖。
 - **只读**：升级后全局行同样只读（库定义冻结语义）。
 
+> **按 `dialogs/conflict.rs` + `panels/{mod,resources}.rs` 复核（2026-11-07 17 页批）**
+>
+> 尺寸对，形态整个不是「三选一」：本合同**升级（§13.3）与分发（§13.6）共用**，一套代码只按 `ConflictKind` 换文案。
+>
+> - **480px / 标题固定「同名冲突」**：`ui::CONFLICT_DIALOG_WIDTH = 30.0`，`dialog.title("同名冲突")`。**没有副标题、标题行没有图标**；两条链路**不换标题**——原型旧稿 B 段那句「分发换标题『分发到本项目』」是假的，分发只是正文里的持有方、动词与覆盖提示不同。
+> - **一个文件装完**：`crates/analytics_resource/src/dialogs/conflict.rs`（约 285 行含单测）：`ConflictKind { Promote, Distribute }` + `ConflictSeed { kind, name }` + `ConflictChoice { Overwrite, Rename(String) }` + `ConflictRenameGate { Ready, Unchanged, Blocked(&'static str) }` + `conflict_gate(current, value)` + `open_conflict_dialog(...)`。旧稿的「三个 radio + 一个『冲突处置』字段标签」**不存在**。
+> - **正文是三段而不是一个表单**：外层 `v_flex gap_3`——① 引言 `text_sm` `foreground`：「{holder}已有同名资源「{name}」。选择处理方式：覆盖旧内容、改用新名称，或取消本次{verb}。」（`holder` = 全局实例 / 当前项目，`verb` = 升级到全局 / 从全局分发）；② 覆盖后果 `text_xs` **warning**（升级「覆盖将删除全局旧表并软删旧登记，新内容接续版本链；旧表内容不可恢复。」/ 分发「覆盖将删除项目旧表 / 旧文件并软删旧登记，新内容接续项目版本链；旧本体不可恢复。」）；③ 内层 `v_flex gap_2`：标签「改用新名称」（`text_xs` muted）+ `Input::new(&name_input)` + 一行校验提示（`text_xs`）。**没有来源条（srcbar）、没有「跨项目唯一法定路径」那条 info note**。
+> - **闸门三态决定提示文案与颜色**（每帧从输入值重算，`conflict_gate` 纯函数）：`Ready` → muted「将以「{value}」{verb}，不覆盖现有内容」；`Unchanged` → warning「名字与现有资源相同，请换一个新名称」；`Blocked` → danger（空名走 `archive::name_hint` 的「显示名不能为空」）。**只有 `Ready` 时 `can_rename = true`**。
+> - **输入框是常驻的，开窗前已预填冲突名**：`ensure_conflict_dialog` 里 `state.set_value(conflict_name, …)`。所以**打开瞬间必然是 `Unchanged`**——提示是 warning、改名按钮是灰的、Enter 也提交不了。旧稿「选了『改名升级』才展开目标名输入」是假的（没有那个单选，也就没有那次展开）。
+> - **footer 三个按钮，一律 small，从左到右**：`conflict-dialog-cancel`（`Secondary`，只 `window.close_dialog(cx)`，**不回调**）/ `conflict-dialog-overwrite`（**`Danger`**，恒可点）/ `conflict-dialog-rename`（**`Primary`**，`.disabled(!can_rename)`）。footer 左半边**没有**「升级会把表 + 版本信息复制进全局 DuckDB」这类长说明（那句在旧稿里，实现没有）。
+> - **键盘**：`Enter = 改名`（`on_ok` 里再走一遍闸门，不过闸就 `return true` **不关窗**）、`Esc = 取消`（`on_cancel(|_,_,_| true)`）、`on_close` 只清 `session`。
+> - **两条路各自重入队**（覆盖与改名是并列的，没有「先选改名再确认」的第二次询问）：覆盖 → 宿主 `enqueue_promote(root, req, true)` + 状态栏「资产库：正在覆盖升级到全局…」；改名 → `req.name = name` 后**非覆盖**重入队 +「正在升级到全局…」（分发侧对应「正在覆盖分发到本项目…」/「正在从全局分发…」）。改名闭包返回 `bool`：不过闸返回 `false`，调用处就不关窗。
+> - **冲突回执怎么进来**：服务层 `InstanceOpError::Conflict { name }` → `jobs/global.rs` 包成 `OpOutcome::Conflict { context, name }` → 宿主 `apply_*` 里**不写失败回执**，先 `conflict_dialog.pending = Some(context)` + 状态栏「资产库：「{name}」同名冲突，请选择处理方式」→ 下一帧 `ensure_conflict_dialog` 开窗。`ConflictContext` 两型：`Promote(PromoteRequest)` / `Distribute { global_name, target }`；分发的展示名 = `target`（未改名时 = 全局名）。
+> - **脏状态也走这个框**：`promote` 的三个冲突分支——全局表在、登记不在；登记在、表不在；两者都在——**一律报 `Conflict`**，而 `ConflictSeed` 不区分它们。所以正文只会说「已有同名资源」，**说不清「有没有旧表可删」**（「登记在、表不在」这种，覆盖时其实没有旧表）。原型若照设计稿摆「全局已有 v4、来自另一项目」，得先扩 `ConflictSeed` 与 `InstanceOpError::Conflict`——现在这两个字段（`kind` / `name`）**根本装不下版本号与来源项目**。
+> - **按钮外观按 vendor 实参**：`ButtonVariant::Danger` 非 outline 时 `bg = tokens.button_danger`（vendor fallback = `danger.mix_oklab(transparent, 0.2)`，即 **20% 红底**）、`fg = button_danger_foreground`（fallback = `danger` 本身）→ 覆盖是**淡红底红字、无描边**，不是原型旧稿 `.btn-d` 的「透明底 + danger 描边」。`Primary` 是实心品牌色 + 白字。禁用态走组件 `disabled()`（Primary 底 `opacity 0.15`、字 `muted_foreground 0.5`）。
+> - **升级侧版本接续是真的，分发侧不接续**（一处口径不一致，只记不改）：`register_global` 取 `MAX(version) WHERE name = ?1 AND scope = 'global'`，**不带 `deleted_at IS NULL`**——覆盖时旧行已软删但仍在表里，所以新版本 = 旧版本 + 1（v4 → v5）；而分发侧 `distribute_overwrite` 先软删项目旧登记，`register_project_table` 的 `MAX(version)` **带 `deleted_at IS NULL`**（`global/register.rs:39`）→ 取不到 → 新登记从 **v1** 重新开始。本节 §13.6 那句「分发版本号接续全局链」也不成立：`next_version` 只查项目侧 `scope='project'`，`global_version` 仅作为 `distributed_from` 快照里的一个字段。
+> - **单测就一条**：`rename_gate_blocks_blank_and_unchanged`（空名 → `Blocked("显示名不能为空")`；原名 / 带空格的原名 → `Unchanged`；新名 → `Ready`）。
+
 ### 13.4 与既有概念的关系
 
 - **`promoted_from`（草稿 → 归档）与 `scope`（项目 → 全局）是两层升级，不混用**：前者追来源草稿相对路径（`model.rs:105`），后者记实例归属。
@@ -693,6 +711,6 @@ sequenceDiagram
 
 ### 13.6 全局 → 项目（分发）与跨项目唯一法定路径
 
-- **入口**：全局实例行（`scope=global`）右键「分发到本项目…」**与详情面板同一颗按钮**（`archive-detail-distribute`，走同一条 `request_distribute_from_global`，回执与冲突框一致；原型 `08` 页按实现画出这颗按钮与两态说明）：从全局 DuckDB 读表 → 写入当前项目库（`COPY … TO '*.parquet' (FORMAT PARQUET)` 中转 + `CREATE TABLE AS SELECT * FROM read_parquet(…)`）+ 登记 + 版本链分支（分发版本号接续全局链，`keep_versions` 同规则）；脚本内容表 → 重建为项目 `resources/<path>` 文件。冲突（项目已有同名）→ 询问（覆盖 / 改名 / 取消）。**同样没有前置确认框**，点了即入队。
+- **入口**：全局实例行（`scope=global`）右键「分发到本项目…」**与详情面板同一颗按钮**（`archive-detail-distribute`，走同一条 `request_distribute_from_global`，回执与冲突框一致；原型 `08` 页按实现画出这颗按钮与两态说明）：从全局 DuckDB 读表 → 写入当前项目库（`COPY … TO '*.parquet' (FORMAT PARQUET)` 中转 + `CREATE TABLE AS SELECT * FROM read_parquet(…)`）+ 登记 + 版本链分支（分发版本号按**项目侧**重排：`register_project_table` 取项目侧 `MAX(version)+1`，`global_version` 只写进 `distributed_from` 快照——**不是**接续全局链，见 §13.3 末复核块里那条不一致）；脚本内容表 → 重建为项目 `resources/<path>` 文件。冲突（项目已有同名）→ 询问（覆盖 / 改名 / 取消）。**同样没有前置确认框**，点了即入队。
 - **唯一法定路径（架构原则，2026-10-22 用户定）**：**项目 ↔ 项目禁止直传**。跨项目共享的唯一路径 = `项目 A → 全局 → 项目 B`：全局是唯一交换中枢，项目之间互不可见、互不读写（隔离语义：每个项目只看得到自己的库 + 全局库，看不到别的项目库）。任何"从项目 A 直接复制到项目 B"的入口都不提供。
 - 全局行只读：分发不删除全局行（全局是长期共享层，`keep_versions` 裁剪由版本规则负责）。
