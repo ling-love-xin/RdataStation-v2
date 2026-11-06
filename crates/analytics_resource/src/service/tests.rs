@@ -1,5 +1,7 @@
 use super::*;
-use crate::model::{ArchiveBinding, ArchiveKind, PayloadMode};
+use crate::model::{
+    ArchiveBinding, ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest, PayloadMode,
+};
 use engine::persistence::ProjectSqlitePool;
 use std::sync::Arc;
 use tokio::fs;
