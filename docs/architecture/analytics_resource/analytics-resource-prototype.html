@@ -1158,7 +1158,7 @@ GROUP BY channel...</div>
 
   <!-- 归档确认对话框（§4.1） -->
   <div class="dlg dlg-archive">
-    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-chart" xlink:href="#i-chart"/></svg>归档为存档<span class="sub2">来源：草稿箱</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x" xlink:href="#i-x"/></svg></button></div>
+    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-chart" xlink:href="#i-chart"/></svg>归档为存档<span class="sub2">来源：草稿箱（面板头全量 / 行右键点名）</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x" xlink:href="#i-x"/></svg></button></div>
     <div class="dlg-body">
       <div class="srcbar">
         <svg class="ico-sm"><use href="#i-doc" xlink:href="#i-doc"/></svg>
@@ -1209,7 +1209,7 @@ GROUP BY channel...</div>
       <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>归档 = 复制 + 只读锁定：本体复制进 <span class="mono">resources/</span> 并冻结，草稿保留为工作副本（2026-10-13 起默认 copy，不再搬走草稿），同时生成 v1 与内容指纹。不存在「凭空创建存档」。</span></div>
     </div>
     <div class="dlg-foot">
-      <span>Ctrl+Shift+A 在草稿箱侧发起</span>
+      <span>资产库面板头 ＋ ▾「从草稿箱归档…」发起（Ctrl+Shift+A 同样走这条）；草稿箱行右键「归档为存档…」到同一个框，只是带的行不同</span>
       <span class="grow"></span>
       <button class="btn-s" data-go="default">取消</button>
       <button class="btn-p" data-toast="已归档 dau_report.sql → resources/reports/（v1）· 草稿保留为工作副本" data-go="default">归档</button>
