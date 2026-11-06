@@ -672,18 +672,37 @@ impl MockPanel {
     /// 字段区表头行里的列搜索框（靠右，固定宽）。
     ///
     /// 搜索框空着也不隐藏：一个偶尔冒出来的控件比一个一直在那儿的小输入框更让人意外。
+    /// 无列时传 `enabled = false`：**留着位置只降不透明度**，不加第一列时工具栏不会凭空多出一个框。
     pub(crate) fn render_column_filter(
         &mut self,
         id: u64,
+        enabled: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         self.ensure_inputs_for(id, window, cx);
+        let theme = cx.theme().clone();
         match self.column_filters.get(&id).cloned() {
+            // 边框自己画：组件默认的 `input` 描边在暗色下几乎看不见，直接看不出这里能输入。
+            // 换成 `background` 内凹底 + `border` 描边 + 圆角，与右侧 xsmall 按钮同高（24px）。
             Some(input) => div()
                 .flex_none()
                 .w(rems(ui::COLUMN_FILTER_WIDTH))
-                .child(Input::new(&input)),
+                .h_6()
+                .h_flex()
+                .items_center()
+                .px_2()
+                .rounded(theme.radius)
+                .bg(theme.colors.background)
+                .border_1()
+                .border_color(theme.colors.border)
+                .opacity(if enabled { 1.0 } else { 0.45 })
+                .child(
+                    Input::new(&input)
+                        .appearance(false)
+                        .bordered(false)
+                        .xsmall(),
+                ),
             None => div().flex_none().w(rems(ui::COLUMN_FILTER_WIDTH)),
         }
     }

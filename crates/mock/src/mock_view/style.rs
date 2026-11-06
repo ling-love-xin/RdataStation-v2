@@ -186,6 +186,10 @@ pub fn row_card_selected(theme: &Theme) -> Div {
 /// 与导航树的 `tree::active_bar` 同形态（绝对定位 + 上下内缩），但**不复用**那个原语：
 /// 语义不同——树条是「选中」（`list_active_border`），这里是「正在编辑」（`primary`）。
 /// 一个列表里可以选中多行，但能编辑的列同时只有一列，所以它是强调色、也稍宽一档。
+///
+/// **2026-11-06 停用**：新表首列上它常驻，与列名条内凹底叠在一起像 bug。
+/// 留着不删——以后真要「对话框关闭后回指刚改的列」时再挂回来。
+#[allow(dead_code)]
 pub fn current_bar(theme: &Theme) -> Div {
     div()
         .absolute()
@@ -312,11 +316,12 @@ pub fn data_type_tag(theme: &Theme, t: &ColumnDataType) -> Div {
     chip(data_type_tone(theme, t), column_type_label(t))
 }
 
-/// 置信度 chip：high=成功色（推断可信）/ manual=信息色（人手定的）/ low=灰（推断没把握）。
+/// 置信度 chip：high=成功色（推断可信）/ manual=灰（人手定的，不是"可信度高"）/ low=灰。
+/// manual 不用 info（蓝）：和类型 chip 的蓝色撞色，三个 chip 糊成一片。
 pub fn confidence_tag(theme: &Theme, confidence: &str) -> Div {
     let (tone, label) = match confidence {
         "high" => (theme.colors.success, "high"),
-        "manual" => (theme.colors.info, "manual"),
+        "manual" => (theme.colors.muted_foreground, "manual"),
         _ => (theme.colors.muted_foreground, "low"),
     };
     chip(tone, label)
@@ -483,6 +488,8 @@ pub fn icon_button(
 ///
 /// 只染图标不染底：卡片里一排操作按钮摆着时，红底按钮会盖过卡片内容——
 /// 危险色留给鼠标悬上去之后认出来的那一眼。
+/// 危险操作图标按钮：默认灰色（不抢视觉），hover 反馈由列行 hover 背景承担。
+/// 此前一直是红色图标，列行里和「上移/下移/复制」同权重但其实是危险操作，视觉太重。
 pub fn danger_icon_button(
     id: impl Into<SharedString>,
     icon: IconName,
@@ -493,7 +500,7 @@ pub fn danger_icon_button(
         .ghost()
         .xsmall()
         .icon(icon)
-        .text_color(theme.colors.danger)
+        .text_color(theme.colors.muted_foreground)
         .tooltip(tooltip.into())
         .tooltip_show_delay(TOOLTIP_DELAY)
 }

@@ -41,9 +41,11 @@ pub const PARAM_INPUT_WIDTH: f32 = 9.0;
 pub const FIELD_LIST_MAX_HEIGHT: f32 = 16.0;
 /// 列卡片（紧凑单行）的最小行高（34px：xsmall 按钮 24px + 上下各 5px 呼吸）
 pub const COLUMN_ROW_HEIGHT: Pixels = px(34.);
-/// 列名格宽（10rem = 160px）：固定宽度是「竖着扫能对齐」的前提，
-/// 短列名留白换取四段信息同一基线，长列名截断
-pub const COLUMN_NAME_CELL_WIDTH: f32 = 10.0;
+/// 列名条宽（11rem = 176px）：固定宽度是「竖着扫能对齐」的前提，短列名留白换取四段信息同一基线。
+///
+/// **只放列名**：类型 / 置信度 / 引用徽标另起一段（此前徽标挤在这一格里，10rem 分给列名
+/// 只剩约 90px，`customer_email_address` 这种名字一律被截成 `customer_…`）。
+pub const COLUMN_NAME_CELL_WIDTH: f32 = 11.0;
 /// 生成器按钮格最大宽（9rem = 144px）：超长自定义名截断，宽度让给参数摘要
 pub const COLUMN_GENERATOR_CELL_WIDTH: f32 = 9.0;
 /// 动作行右侧状态格里的迷你进度条宽度（6rem = 96px：够读出走向，又不和读数抢宽度）
@@ -53,16 +55,9 @@ pub const COLUMN_FILTER_WIDTH: f32 = 9.0;
 /// 新表配置自带的那一列的列名（沿用「＋ 加列」的命名口径 `column_{index}`）
 pub const DEFAULT_FIRST_COLUMN_NAME: &str = "column_1";
 
-/// 列卡片右端操作区的固定宽度（7rem = 112px：四个小图标按钮 + 三个间距）
-///
-/// 操作是悬停 / 聚焦才显形的：显形时右侧若随之变宽，列名区（`flex_1`）会被压缩重排，
-/// 鼠标扫过一排卡片就是一排水波。占位容器在没显形时也占同样宽，卡片纹丝不动。
-pub const CARD_OPS_WIDTH: f32 = 7.0;
-
 /// 清单行右端操作区的固定宽度（5rem = 80px：「编辑」+ 图标删除 + 两个间距）
 ///
-/// 与卡片同口径（[`CARD_OPS_WIDTH`]）：行内操作也是悬停才显形，没有占位容器时
-/// 行数那一格会跟着按钮的有无左右跳。
+/// 行内操作也是悬停才显形，没有占位容器时，行数那一格会跟着按钮的有无左右跳。
 pub const ROW_OPS_WIDTH: f32 = 5.0;
 /// 详情 tab 预览区最小高度（10rem = 160px）
 pub const PREVIEW_MIN_HEIGHT: f32 = 10.0;

@@ -1839,6 +1839,7 @@ pub(crate) fn data_type_key(data_type: &ColumnDataType) -> &'static str {
 ///
 /// 直接用 `column_type_label` 会让三个组都叫 `VARCHAR`、两个组都叫 `TIMESTAMP`，
 /// 用户分不清这是不同的数据类还是重复渲染。
+/// 前缀「产出」：明确这是"产出这个类型的配方"，不是在选数据类型本身。
 pub(crate) fn data_type_title(data_type: &ColumnDataType) -> String {
     let cn = match data_type {
         ColumnDataType::Integer => "整数",
@@ -1855,7 +1856,7 @@ pub(crate) fn data_type_title(data_type: &ColumnDataType) -> String {
         ColumnDataType::Uuid => "UUID",
         ColumnDataType::Blob => "二进制",
     };
-    format!("{cn}（{}）", column_type_label(data_type))
+    format!("产出{cn}（{}）", column_type_label(data_type))
 }
 
 /// 搜索匹配：名称 / 中文标签 / 分类标签（大小写不敏感）。

@@ -695,6 +695,8 @@ impl MockDetailView {
                     None => (spec.label.to_string(), spec.category.label().to_string()),
                 }
             };
+            // 右栏滚动区 id：随选中生成器变化，换生成器时滚动位置自动回顶部
+            let right_scroll_id = SharedString::from(format!("mock-right-scroll::{generator_label}"));
             // 样例预览克隆成值：draft 借用要在左右分栏渲染（需要 `&mut cx`）前结束
             let sample_preview = draft.sample_preview.clone();
             // 左栏生成器库实体（顶部搜索 + 业务/数据双 Tab 列表；选中写回表配置，
@@ -796,6 +798,15 @@ impl MockDetailView {
                     .text_xs()
                     .text_color(theme.colors.foreground)
                     .child(category_label),
+            ));
+            // 注释（后期占位）：字段说明，先只读展示，下版加编辑 + 持久化
+            right = right.child(kv(
+                &theme,
+                "注释",
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child("（后期支持）"),
             ));
             // 类型与生成器解耦的说明：改类型不自动换生成器（避免参数行与生成器不一致）；
             // 想按新类型重推生成器 → 点上方「智能推荐」（行 2 左块）
@@ -936,23 +947,35 @@ impl MockDetailView {
                             .child(sample_preview),
                     ),
             );
-            right = right.child(form_line(&theme, "空值率（%）", &null_state));
-            right = right.child(kv(
-                &theme,
-                "唯一值",
-                Switch::new("mock-col-unique").checked(unique).on_click({
-                    let view = view.clone();
-                    move |checked, _window, app| {
-                        let checked = *checked;
-                        view.update(app, |view, cx| {
-                            if let Some(draft) = view.draft.as_mut() {
-                                draft.def.unique = checked;
-                            }
-                            cx.notify();
-                        });
-                    }
-                }),
-            ));
+            // 公共属性沉底一行：空值率 + 唯一值并排（两个全列通用的开关，不占太多垂直空间）
+            right = right.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_3()
+                    .w_full()
+                    .child(
+                        div().flex_1().min_w_0().child(form_line(&theme, "空值率（%）", &null_state))
+                    )
+                    .child(
+                        div().flex_none().child(kv(
+                            &theme,
+                            "唯一值",
+                            Switch::new("mock-col-unique").checked(unique).on_click({
+                                let view = view.clone();
+                                move |checked, _window, app| {
+                                    let checked = *checked;
+                                    view.update(app, |view, cx| {
+                                        if let Some(draft) = view.draft.as_mut() {
+                                            draft.def.unique = checked;
+                                        }
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                        ))
+                    ),
+            );
 
             // 窗口主体：三横行（用户定稿）——行 1「列名 + 搜索定位」、行 2「智能推荐 | 历史
             // 生成器」、行 3「左：业务分类/数据类型 + 右：属性·参数·样例」。整块定高
@@ -1079,6 +1102,7 @@ impl MockDetailView {
                                         .min_h_0()
                                         .p_2()
                                         .overflow_y_scrollbar()
+                                        .id(right_scroll_id)
                                         .child(right),
                                 ),
                             )
@@ -1442,11 +1466,6 @@ impl MockDetailView {
                 .into_any_element();
         }
 
-        // 正在编辑哪一列（列编辑对话框开着时才有）：那张卡给左缘强调条。
-        // 对话框会盖住卡片区，关掉之后要能一眼看出「刚才改的是这一列」——
-        // 尤其列多了要往下滚，没有这条标识就得靠记名字去找。
-        let editing_id = self.draft.as_ref().map(|draft| draft.column_id());
-
         // 单行卡片之间 4px 就够（8px 会让 20 列多出 80px 纯空白）
         let mut list = div().v_flex().gap_1().w_full();
         // enumerate 拿序号：首 / 末列禁用对应的 ↑/↓（列序 = 生成顺序）
@@ -1502,6 +1521,7 @@ impl MockDetailView {
                 // 而下面 `card_border` 的 `transition(..)` 要可变借用 `cx`
                 .clone();
             let card_focused = card_handle.is_focused(window);
+            // hovered：鼠标扫过 或 键盘焦点停在这行 → 整行高亮
             let active = self.hovered_column == Some(id) || card_focused;
 
             // ── 单行：列名 · 类型 · 生成器 · 参数摘要 · 操作（常驻）──
@@ -1519,26 +1539,34 @@ impl MockDetailView {
             };
             let is_reference = ref_badge.is_some();
 
-            // 身份区：列名定宽（四段对齐的起点）+ 类型 + 置信度 + 引用信号
-            let mut identity = div()
+            // 列名条：宽度自适应内容（最长 12rem=192px 截断），不再定死 176px。
+            // 短名字（id）不浪费空间，长名字最多 192px 截断。
+            let name_cell = div()
                 .h_flex()
                 .items_center()
-                .gap_2()
                 .flex_none()
-                .w(rems(ui::COLUMN_NAME_CELL_WIDTH))
-                .child(
-                    card_title(column.def.name.clone())
-                        .max_w(rems(ui::COLUMN_NAME_CELL_WIDTH))
-                        .text_ellipsis(),
-                )
+                .max_w(rems(12.))
+                .px_1()
+                .rounded(px(3.))
+                .bg(theme.colors.background)
+                .border_1()
+                .border_color(theme.colors.border)
+                .child(card_title(column.def.name.clone()).text_ellipsis());
+            // 类型段：类型 + 置信度 + 引用信号，三样都是徽标，紧跟在列名条后面自成一段
+            let mut meta_cell = div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .flex_none()
                 .child(data_type_tag(&theme, &column.def.data_type));
             // high 是默认档：每列都挂一个绿色 high，只会把「哪列可信度低」淹掉
             if column.confidence != "high" {
-                identity = identity.child(confidence_tag(&theme, &column.confidence));
+                meta_cell = meta_cell.child(confidence_tag(&theme, &column.confidence));
             }
             // 引用列只留一个 ↳：完整「引用 表.列」在悬停全文里，行内宽度留给参数摘要
             if is_reference {
-                identity = identity.child(div().flex_none().text_xs().text_color(info).child("↳"));
+                meta_cell =
+                    meta_cell.child(div().flex_none().text_xs().text_color(info).child("↳"));
             }
 
             // 操作区常驻（四个都有 tooltip；ghost 图标不抢卡片内容的视觉重量）
@@ -1629,18 +1657,9 @@ impl MockDetailView {
                     .child(full_text.clone())
             });
 
-            // 描边色带过渡：悬停 / 聚焦 → `ring`，离开 → `border`（`card_border` 内部插值）。
-            // 走 `card`（不带 CSS `.hover()`）而不是 `card_interactive`：CSS hover 是即时切换，
-            // 插不了值。悬停状态视图自己记着（`hovered_column`）。
-            let border = card_border(
-                &theme,
-                active,
-                format!("mock-field-border-{id}"),
-                window,
-                cx,
-            );
-            // 卡片本身仍可 Tab 到：操作虽已常驻，键盘用户要靠焦点知道停在哪一列
-            let mut row = card(&theme)
+            // 列行：平时透明（整个区域无背景色），hover / focus 时整行 list_hover 底色反馈。
+            // 此前每行都是 card（muted 底 + border），整个区域像一叠小卡片，太重。
+            let mut row = div()
                 .id(ElementId::Name(SharedString::from(format!(
                     "mock-field-{id}"
                 ))))
@@ -1650,9 +1669,13 @@ impl MockDetailView {
                 .px_3()
                 .py_1()
                 .min_h(ui::COLUMN_ROW_HEIGHT)
-                .border_color(border)
-                // 强调条是绝对定位的：卡片必须是定位上下文
-                .relative()
+                .rounded(theme.radius)
+                .bg(if active {
+                    theme.colors.list_hover
+                } else {
+                    gpui::Hsla::transparent_black()
+                })
+                // 卡片本身仍可 Tab 到：操作虽已常驻，键盘用户要靠焦点知道停在哪一列
                 .track_focus(&card_handle)
                 .tab_stop(true)
                 .on_hover({
@@ -1667,12 +1690,11 @@ impl MockDetailView {
                         });
                     }
                 })
-                .child(identity)
+                .child(name_cell)
                 // 生成器入口 = 编辑入口（同一个对话框：选生成器 + 调参数）
                 .child(
                     div()
                         .flex_none()
-                        .max_w(rems(ui::COLUMN_GENERATOR_CELL_WIDTH))
                         .overflow_hidden()
                         .child(
                             button(
@@ -1692,11 +1714,12 @@ impl MockDetailView {
                         ),
                 )
                 .child(summary_el)
+                // 三个 chip（类型 / 置信度 / 引用）挪到右侧：左边是「字段 + 生成器 + 参数」的工作区，
+                // chip 是元信息，和操作区一起靠右，视觉上不挤字段名
+                .child(meta_cell)
                 .child(ops);
-            // 「正在编辑这一列」：左缘 3px 强调条，浮在卡片左缘（不挤动卡内内容）
-            if editing_id == Some(id) {
-                row = row.child(current_bar(&theme));
-            }
+            // （原「正在编辑这一列」的左缘 3px 强调条已撤：它在新表首列上常驻，
+            // 与列名条的内凹底叠在一起像个 bug；真要找回，改 `current_bar` 再挂回来）
             list = list.child(row);
         }
 
@@ -1992,52 +2015,70 @@ impl Render for MockDetailView {
             format!("{draft_columns_shown} / {draft_columns} 列 · 已筛选")
         };
         let mut columns_block = div().v_flex().gap_2().w_full();
-        if is_draft && draft_columns == 0 {
-            // 无列：一行提示 + 起手按钮，不套卡片、不给标题——空态的职责是「告诉你下一步」，
-            // 不是占掉列区高度（列区高度按剩余空间分配，撑一块卡就把预览段压下去）
-            columns_block = columns_block.child(
+        // 列区工具栏：**有列 / 无列同一套元素、同一顺序**（计数 → 场景 → 弹性 → 筛选 → 来源按钮）。
+        // 此前无列态只画「还没有列 + 场景 + 来源按钮」，一加上第一列就多出筛选框、整排按钮右移，
+        // 同一块区域两种排版——无列时改为「计数 0 列 + 筛选禁用」，位置一律不动。
+        let scenario_id = if is_draft && draft_columns == 0 {
+            "mock-detail-scenario-empty"
+        } else {
+            "mock-detail-scenario-columns"
+        };
+        // 工具栏条：自己的底色（list）+ 圆角 + 内距，与下面的列行明确分开。
+        // 此前工具栏和列行在同一块 muted 上，按钮像是"浮"在内容里，没有"工具条"的边界。
+        // 顺序：左组=批量起手（场景 / 预设 / 导入），右组=定位+新增（计数 badge / 筛选 / 加列）。
+        let columns_toolbar = div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .px_2()
+            .py_1()
+            .rounded(theme.radius)
+            .bg(theme.colors.list)
+            .child(self.panel.update(cx, |panel, cx| {
+                panel.render_scenario_button(scenario_id, cx)
+            }))
+            // 批量起手（预设 / 导入结构）紧跟场景模板：三者同属「把这张表的列起手」
+            .child(self.panel.update(cx, |panel, cx| {
+                panel.render_batch_source_buttons(config_id.unwrap_or_default(), cx)
+            }))
+            // 弹性空档：把右组（计数 / 筛选 / 加列）整体推到右端
+            .child(div().flex_1().min_w_0())
+            // 计数 badge：放在定位输入框左边，和筛选是一对（"多少列 / 过滤哪些列"）
+            .child(
                 div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .child(card_note(&theme, "还没有列"))
-                    .child(self.panel.update(cx, |panel, cx| {
-                        panel.render_scenario_button("mock-detail-scenario-empty", cx)
-                    }))
-                    .child(self.panel.update(cx, |panel, cx| {
-                        panel.render_column_source_buttons(config_id.unwrap_or_default(), cx)
-                    })),
-            );
-        } else if is_draft {
-            columns_block = columns_block
-                .child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_2()
-                        .w_full()
-                        // 计数在操作行最左：它和「场景 / 筛选 / 加列」是同一句话（这份清单现在多大）
-                        .child(card_note(&theme, column_count))
-                        .child(
-                            div()
-                                .h_flex()
-                                .items_center()
-                                .gap_2()
-                                .flex_1()
-                                .min_w_0()
-                                .child(self.panel.update(cx, |panel, cx| {
-                                    panel.render_scenario_button("mock-detail-scenario-columns", cx)
-                                })),
-                        )
-                        .child(self.panel.update(cx, |panel, cx| {
-                            panel.render_column_filter(config_id.unwrap_or_default(), window, cx)
-                        }))
-                        .child(self.panel.update(cx, |panel, cx| {
-                            panel.render_column_source_buttons(config_id.unwrap_or_default(), cx)
-                        })),
+                    .flex_none()
+                    .px_1()
+                    .py(px(2.))
+                    .rounded(px(3.))
+                    .bg(theme.colors.popover)
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child(column_count),
+            )
+            .child(self.panel.update(cx, |panel, cx| {
+                panel.render_column_filter(
+                    config_id.unwrap_or_default(),
+                    is_draft && draft_columns > 0,
+                    window,
+                    cx,
                 )
-                .child(self.render_fields(window, cx));
+            }))
+            .child(self.panel.update(cx, |panel, cx| {
+                panel.render_add_column_button(config_id.unwrap_or_default(), cx)
+            }));
+        if is_draft {
+            columns_block = columns_block.child(columns_toolbar);
+            if draft_columns == 0 {
+                // 空清单只留一句「下一步做什么」：按钮全在工具栏里（位置固定），
+                // 这里不画卡、不塞按钮，免得空态把列区高度换成一块居中卡片
+                columns_block = columns_block.child(card_note(
+                    &theme,
+                    "还没有列：用右侧「加列」新建，或走「预设 / 导入结构」批量起手",
+                ));
+            } else {
+                columns_block = columns_block.child(self.render_fields(window, cx));
+            }
         } else {
             // 结果 tab 也不给段标题：列数并进一行小字，和表配置 tab 的读法一致
             columns_block = columns_block
@@ -2278,7 +2319,9 @@ impl Render for MockDetailView {
                             .min_h_0()
                             // 段内内距：三段内容此前都贴着 tab 边缘与分隔条，
                             // 与分栏条的线挤在一起，看着像没排版的表配置
-                            .p_2()
+                            // 三段统一 12px（p_3）：列区原本外层 p_2 + 内层 p_3 双层 = 20px，
+                            // 已合成一层（card 自己 p_0，内容包 p_3）
+                            .p_3()
                             .overflow_y_scrollbar()
                             .child(head_block),
                     ),
@@ -2293,14 +2336,13 @@ impl Render for MockDetailView {
                         div()
                             .size_full()
                             .min_h_0()
-                            .p_2()
-                            // 列区套一层卡片做边界：清单与预览之间没有框时，看起来像同一块
-                            // 内容被分隔条切开；滚动留给框内，滚动条贴框内沿
+                            // 列区不再套 muted 卡片：整个区域的背景色去掉，
+                            // 列行直接铺在页面背景上，只有工具栏条（list 色）做视觉分组。
+                            // 此前列区是一块灰卡片，和段 1/段 3 一样厚重，没有层次。
                             .child(
-                                card(&theme)
+                                div()
                                     .size_full()
                                     .min_h_0()
-                                    .p_0()
                                     .overflow_hidden()
                                     .child(
                                         div()
@@ -2321,7 +2363,7 @@ impl Render for MockDetailView {
                         div()
                             .size_full()
                             .min_h_0()
-                            .p_2()
+                            .p_3()
                             .flex()
                             .flex_col()
                             .child(preview_block),

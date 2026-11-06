@@ -499,8 +499,9 @@ impl MockPanel {
         .into_any_element()
     }
 
-    /// 列来源按钮（导入源库结构 / 手工加列）：它们属于「这张表的列」→ 画在中央 tab 的「列」段。
-    pub(crate) fn render_column_source_buttons(&self, id: u64, cx: &mut Context<Self>) -> Div {
+    /// 批量起手按钮（预设 / 导入结构）：与「场景模板」同属一列——把这张表的列**起手**。
+    /// 放在操作行左侧（紧跟场景模板），与「＋加列」（单个新增，永远最右）分开。
+    pub(crate) fn render_batch_source_buttons(&self, id: u64, cx: &mut Context<Self>) -> Div {
         let import = {
             let entity = cx.entity();
             let config_id = id;
@@ -513,23 +514,8 @@ impl MockPanel {
                     });
                 })
         };
-        let add = {
-            let entity = cx.entity();
-            let config_id = id;
-            // 列区的主行动；「＋」走组件图标（与工具栏「新增 Mock 表」同一 `Plus`），不手拼字符
-            button("mock-add-column", "加列", ActionKind::Main)
-                .xsmall()
-                .icon(IconName::Plus)
-                .on_click(move |_, _, app| {
-                    entity.update(app, |panel, cx| {
-                        panel.focus_config(config_id);
-                        let index = panel.draft.columns.len() + 1;
-                        panel.add_column(format!("column_{index}"), ColumnDataType::Integer, cx);
-                    });
-                })
-        };
         // 字段预设：常用字段（电话/地址/姓名等）一行打包，从分组菜单一键加列。
-        // 与「导入结构」（源库批量）「加列」（手工起手）三分入口；应用后是普通列可再编辑
+        // 与「导入结构」（源库批量）同属批量起手；应用后是普通列可再编辑
         let presets = {
             let entity = cx.entity();
             let config_id = id;
@@ -572,9 +558,26 @@ impl MockPanel {
             .h_flex()
             .items_center()
             .gap_2()
-            .child(import)
             .child(presets)
-            .child(add)
+            .child(import)
+    }
+
+    /// ＋加列：列区主行动，永远在操作行最右。
+    pub(crate) fn render_add_column_button(&self, id: u64, cx: &mut Context<Self>) -> Div {
+        let entity = cx.entity();
+        let config_id = id;
+        // 列区的主行动；「＋」走组件图标（与工具栏「新增 Mock 表」同一 `Plus`），不手拼字符
+        let add = button("mock-add-column", "加列", ActionKind::Main)
+            .xsmall()
+            .icon(IconName::Plus)
+            .on_click(move |_, _, app| {
+                entity.update(app, |panel, cx| {
+                    panel.focus_config(config_id);
+                    let index = panel.draft.columns.len() + 1;
+                    panel.add_column(format!("column_{index}"), ColumnDataType::Integer, cx);
+                });
+            });
+        div().h_flex().items_center().child(add)
     }
 
     /// 表清单：**唯一的管理入口**（D38）——单表 / 本次生成 / 结果表三态共用一个渲染器。
