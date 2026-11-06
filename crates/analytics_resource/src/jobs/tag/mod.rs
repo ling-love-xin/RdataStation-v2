@@ -6,7 +6,6 @@
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
-use engine::persistence::project_db::ProjectDatabaseManager;
 
 use crate::dialogs::tag::{TagChoice, TagDialogSeed};
 use crate::{AnalyticsResourceStore, TagTarget};

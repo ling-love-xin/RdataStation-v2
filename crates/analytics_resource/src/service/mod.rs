@@ -15,8 +15,7 @@ use tokio::sync::broadcast;
 use shared::error::{CoreError, StorageError};
 
 use crate::model::{
-    ArchiveKind, ChangeReason, KeepVersions, ORIGIN_RESOURCES, PayloadMode, ResourcesChanged,
-    TRASH_ID_REF_PREFIX,
+    ArchiveKind, ChangeReason, KeepVersions, PayloadMode, ResourcesChanged,
 };
 use crate::payload::PayloadStore;
 use crate::{AnalyticsResource, AnalyticsResourceStore};

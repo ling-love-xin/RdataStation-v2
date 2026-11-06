@@ -126,8 +126,6 @@ fn repair_err(operation: &str, reason: &str) -> CoreError {
     })
 }
 
-#[cfg(test)]
-
 mod repair;
 mod scan;
 
