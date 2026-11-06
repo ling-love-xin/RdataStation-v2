@@ -312,7 +312,25 @@ sequenceDiagram
 
 沿用 M5 的回收站对话框形态（列表 + 还原 + 永久删除 + 清空），**但只显示 `origin = "resources"` 的条目**，并在跨模块条目上显示"属于草稿箱，请在草稿箱还原"的禁用提示（语义已在 `ProjectTrash` 层保证，UI 只做呈现）。
 
-> **落地现状（2026-09-18，P0.8）**：对话框已落（`dialogs/trash.rs` + `present::build_trash_snapshot` + 宿主接线，入口 = 面板头「⋯ → 回收站…」）。表单：条目表格（名称+类型 / **原位置** / 删除时间 / 大小）+ 行内动作（**还原**、**永久删除**（`AlertDialog` 确认））+ 页脚「**清空回收站**」（`AlertDialog` 确认，文案说明**只清资产库的条目**）+ 「关闭」；行多时滚动，最多列 100 条并**明说**还有多少未列。与规格的一处差异：跨模块条目**不列成行**，只在下方给一句“另有 N 条「草稿箱」的条目共用一个回收站——请在那个模块的界面里处理”——列出来等于摆一个必然被拒的「还原」（origin 校验在服务层）。只读项目下三个动作全部置灰；忙态由宿主收放（动作后重取并换行，不关窗）。
+> **落地现状（2026-09-18，P0.8）**：对话框已落（`dialogs/trash/` + `present::build_trash_snapshot` + 宿主接线，入口 = 面板头「⋯ → 回收站…」）。表单：条目行（名称+类型 / **原位置** / 删除时间 / 大小）+ 行内动作（**还原**、**永久删除**（`AlertDialog` 确认））+ 页脚「**清空回收站**」（`AlertDialog` 确认，文案说明**只清资产库的条目**）+ 「关闭」；行多时滚动，最多列 100 条并**明说**还有多少未列。与规格的一处差异：跨模块条目**不列成行**，只在下方给一句“另有 N 条「草稿箱」的条目共用一个回收站——请在那个模块的界面里处理”——列出来等于摆一个必然被拒的「还原」（origin 校验在服务层）。只读项目下三个动作全部置灰；忙态由对话框自己置上、宿主在动作后重取时清除（就地换行，不关窗）。
+
+> **按 `dialogs/trash/{mod,open,render}.rs` + `present/trash.rs` + `jobs/archive/trash.rs` 复核**（2026-11-07，15 页）：
+> - **尺寸与标题**：`TRASH_DIALOG_WIDTH 40.0`（**640px**）、`TRASH_LIST_MAX_HEIGHT 20.0`（**320px**）。标题只有「回收站」（`dialog.title("回收站")`）——**没有副标题、标题行没有图标**；旧稿那句「只显示 origin = "resources" 的条目」在实现里不存在，这条语义靠「别人的条目不列行」体现。
+> - **行是自绘 div 不是表格**：`header_line` + `trash_line` 都是 `h_flex().items_center().gap_2().px_2().py_1().rounded_sm()`。五格表头是「**名称 / 原位置 / 删除时间 / 大小 / ""**」（第五格表头是空串，行内放两个按钮）；列宽 `TRASH_COL_NAME 9.0`（144px）/ 原位置 `flex_1().min_w_0()`（**原位置不是定宽**）/ `TRASH_COL_TIME 7.5`（120px）/ `TRASH_COL_SIZE 4.0`（64px）/ `TRASH_COL_ACTION 9.0`（144px）。固定列合计 472px，640 宽下再扣对话框内距与行内距，「原位置」只剩约 88px，长路径必然被省略号截断——把动作列收窄或把原位置折成第二行，都还没做。
+> - **行不给 hover**：注释写明「这一行不是可点行，动作全在行内的两个按钮上，所以不给 hover 反馈」，原先那层 `accent.opacity(0.3)` 已删。
+> - **删除时间是绝对时间**：`format_timestamp` = `%Y-%m-%d %H:%M`（UTC 直显），注释「回收站是查凭证的地方，相对时间不够用」。旧稿的「昨天 18:20 / 3 天前 / 2 周前」是假的。
+> - **名称后面跟类型**：实体条目按 `TrashKind` →「文件」/「目录」；reference 登记行走 `detail_view::kind_label(ArchiveKind)` →「受管文件」/「分析表」/「远端引用」。
+> - **「原位置」与「大小」按来源分派**：实体条目 `original_label = "{RESOURCES_DIR_NAME}/{original_rel_path}"`（rel_path 为空则退回文件名）；reference 条目取 `source_path` 或 `file_rel_path` 或 `name`（**不加 `resources/` 前缀**）。`size_label` 走 `format_size`（`B` / `KB`，1024 基准，一位小数），**目录留空**（不是写 0），reference 的 `file_size` 为 `None` 时也留空。
+> - **跨模块条目不列行**：`build_trash_snapshot` 把非 `ORIGIN_RESOURCES` 的条目只按 origin 计数，列表下方逐 origin 给一句「另有 N 条「X」的条目共用一个回收站——请在那个模块的界面里处理」；`module_label` 只认 `scratchpad::ORIGIN_SCRATCHPAD` → 「草稿箱」，其余原样显示代号（宁可见生，不编名字）。
+> - **汇总在列表上方、提示在右侧**：一行 `justify_between`，「共 N 项」（`text_xs` muted、`text_ellipsis`）+ `.when_some(note, …)` 的 warning 提示。空态是一句「回收站是空的」（`py_2` + muted），**没用 `empty::Empty`**——与 13 页「当前 / 在位」纯文本、徽标未迁 `badge::Badge` 是同一类欠债。
+> - **footer 只有两个按钮**：`trash-empty`「清空回收站」（**Danger small**，`disabled(!can_write || rows.is_empty())`）+ `trash-close`「关闭」（Secondary small）。旧稿的「还原选中」**不存在**（没有选中概念，还原是行内的）。`can_write = !busy && !read_only`。
+> - **行内动作是两个 ghost small 按钮**：`trash-restore-{index}`「还原」/ `trash-purge-{index}`「永久删除」，**不带省略号**，`disabled(!can_write)`。
+> - **两个确认都走 `window.open_alert_dialog`**（不是就地展开的 `.alertbox`）：永久删除标题 `format!("永久删除「{name}」？")` + `ok_text("永久删除")` + `Danger` + 取消，描述按粒度分两支（copy「本体将从回收站里彻底删除，不可恢复；登记记录一并删除。」/ reference「本体留在源位置不受影响；登记记录与版本元数据将彻底删除，不可恢复。」）；清空标题「清空资产库的回收站？」+ 正文「将彻底删除资产库的 {count} 项（本体不再保留，不可恢复）；其他模块共用的条目不会被删。」+ `ok_text("清空")` + `Danger` + 取消。
+> - **忙态由对话框置上、宿主收尾**：确认后先 `set_busy(true)` + `set_note(...)`（还原按粒度「正在还原登记记录…」/「正在还原…」、永久删除「正在永久删除…」、清空「正在清空…」），宿主只校验与送作业；动作完成后 `apply_trash_rows` 里 `set_busy(false)` + `set_note(None)` + `set_rows` + `set_foreign` 就地换行，**不关窗**（窗还没开就置 `pending` 等开窗），失败走 `finish_trash_action("读取回收站失败：{err}")`。
+> - **只读项目对话框照常打开**：三个写动作全灰（`can_write = false`），宿主 `request_trash_action` 另挡一道「项目为只读模式，不能改回收站」，无 root 时「还没有打开项目」。与 §4.2 取回相反（取回在入口就挡回）。
+> - **两个来源归并**：`load_trash` 把 `PayloadStore::trash().list()` 的实体条目（走文件系统，不碰项目库）与 `service.deleted_reference_archives()` 的软删 reference 登记行（没有本体可搬）按删除时间**双指针归并**成一份倒序清单；项目库读不到时只 `tracing::warn`，**不弄砸实体清单**（reference 条目不显示）。`TrashRow` 九个字段：`trash_id` / `name` / `original_label` / `kind_label` / `time_label` / `size_label` / `payload_mode` / `resource_id` / `has_payload`。
+> - **落地路径是目录不是单文件**：`crates/analytics_resource/src/dialogs/trash/{mod,open,render,tests}.rs`；旧稿写的 `dialogs/trash.rs` 是假的（本段已把上面「落地现状」段的同一处一并改成目录口径）。
+> - **回收站 TTL 未做**：没有自动过期清理，条目只增不减。一次最多列 `MAX_TRASH_ROWS = 100` 条，末行「还有 N 项未列出（一次最多列 100 项）」——不静默截断，也不为这个对话框手搓虚拟化。
 
 ### 4.5 索引修复对话框（§4.6 同）
 
