@@ -700,7 +700,9 @@ Uninstalled ──install──▶ Installed ──load──▶ Loaded ──ac
 - **不做 watcher**：挂在运行时循环的 5s tick 做目录 diff（`scan_and_diff_plugins`）——
   安装 / 手动拷贝都是低频动作，5s 足够；省掉 watcher 的递归监听与平台差异。
 - 判定基准 = `install_dir/<id>/plugin.toml` 的**内容 hash**（换版本 / 改能力 / 改权限都触发）：
-  - 新目录 → 解析清单 → 加载 + 激活（DB 未禁用才激活）；
+  - 新目录 → 解析清单 → 加载 + 激活（DB 未禁用才激活）；DB 里没有该 code 的登记行时
+    （目录直接拷进 `plugins/`，没走安装器）**先补一条登记**——否则停用 / 卸载按 code 写库
+    命中 0 行，重启后又按「无记录 = 启用」复活；
   - 目录消失 → 停用（含停 sidecar 进程）+ 移出运行时索引 + 清该插件的重载标记；
   - 清单变化 → 置 `needs_reload`（UI 读 `pending_reloads()` 提示「重启生效」）。
 - `reload_plugins()` = VS Code「Reload Window」：停全部已激活 → 清 `needs_reload` →

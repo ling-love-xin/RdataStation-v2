@@ -112,9 +112,7 @@ impl PluginInstaller {
         self.copy_plugin(&package_root, &final_install_path)?;
 
         // 5. 注册到数据库
-        let plugin = self
-            .register_plugin(&manifest, &final_install_path, db_manager)
-            .await?;
+        let plugin = register_manifest(&manifest, &final_install_path, db_manager).await?;
 
         // 6. 清理临时解压目录（如果是从压缩包解压的）
         if format != PluginPackageFormat::Directory {
@@ -385,71 +383,73 @@ impl PluginInstaller {
 
         Ok(())
     }
+}
 
-    /// 注册插件到数据库
-    async fn register_plugin(
-        &self,
-        manifest: &PluginManifest,
-        install_path: &Path,
-        db_manager: &'static GlobalDatabaseManager,
-    ) -> Result<Plugin, CoreError> {
-        let now = chrono::Utc::now().to_rfc3339();
+/// 注册插件到数据库（按 code 合并；返回落库后的实例）。
+///
+/// 收成自由函数是因为热插拔扫描也要用：目录直接拷进 `plugins/` 的插件如果只加载
+/// 不登记，停用/卸载会写 0 行，重启后又按「DB 无记录 = 启用」复活。
+pub(crate) async fn register_manifest(
+    manifest: &PluginManifest,
+    install_path: &Path,
+    db_manager: &'static GlobalDatabaseManager,
+) -> Result<Plugin, CoreError> {
+    let now = chrono::Utc::now().to_rfc3339();
 
-        // 形态判定与 detect_plugin_kind 同口径：`[backend]` 优先（P1 契约），
-        // 再 capabilities.wasm / frontend。此前漏看 backend，sidecar 插件被标成 "unknown"。
-        let plugin_type = if manifest.capabilities.wasm.is_some()
-            || matches!(
-                manifest.backend.as_ref().map(|b| &b.kind),
-                Some(BackendKind::Wasm)
-            ) {
-            "wasm".to_string()
-        } else if let Some(backend) = &manifest.backend {
-            // sidecar / script 都是子进程形态（进进程池）
-            match backend.kind {
-                BackendKind::Sidecar | BackendKind::Script => "sidecar".to_string(),
-                BackendKind::Wasm => "wasm".to_string(),
-            }
-        } else if manifest.capabilities.frontend.is_some() {
-            "frontend".to_string()
+    // 形态判定与 detect_plugin_kind 同口径：`[backend]` 优先（P1 契约），
+    // 再 capabilities.wasm / frontend。此前漏看 backend，sidecar 插件被标成 "unknown"。
+    let plugin_type = if manifest.capabilities.wasm.is_some()
+        || matches!(
+            manifest.backend.as_ref().map(|b| &b.kind),
+            Some(BackendKind::Wasm)
+        ) {
+        "wasm".to_string()
+    } else if let Some(backend) = &manifest.backend {
+        // sidecar / script 都是子进程形态（进进程池）
+        match backend.kind {
+            BackendKind::Sidecar | BackendKind::Script => "sidecar".to_string(),
+            BackendKind::Wasm => "wasm".to_string(),
+        }
+    } else if manifest.capabilities.frontend.is_some() {
+        "frontend".to_string()
+    } else {
+        "unknown".to_string()
+    };
+
+    let plugin = Plugin {
+        id: uuid::Uuid::new_v4().to_string(),
+        code: manifest.plugin.id.clone(),
+        name: manifest.plugin.name.clone(),
+        version: manifest.plugin.version.clone(),
+        author: Some(manifest.plugin.publisher.clone()),
+        description: if manifest.plugin.description.is_empty() {
+            None
         } else {
-            "unknown".to_string()
-        };
+            Some(manifest.plugin.description.clone())
+        },
+        repo_url: None,
+        plugin_type,
+        manifest_json: Some(serde_json::to_string(manifest)?),
+        install_path: install_path.to_string_lossy().to_string(),
+        is_enabled: true,
+        is_builtin: false,
+        installed_at: now.clone(),
+        updated_at: now,
+    };
 
-        let plugin = Plugin {
-            id: uuid::Uuid::new_v4().to_string(),
-            code: manifest.plugin.id.clone(),
-            name: manifest.plugin.name.clone(),
-            version: manifest.plugin.version.clone(),
-            author: Some(manifest.plugin.publisher.clone()),
-            description: if manifest.plugin.description.is_empty() {
-                None
-            } else {
-                Some(manifest.plugin.description.clone())
-            },
-            repo_url: None,
-            plugin_type,
-            manifest_json: Some(serde_json::to_string(manifest)?),
-            install_path: install_path.to_string_lossy().to_string(),
-            is_enabled: true,
-            is_builtin: false,
-            installed_at: now.clone(),
-            updated_at: now,
-        };
+    db_manager.register_plugin(&plugin).await?;
 
-        db_manager.register_plugin(&plugin).await?;
-
-        // 库层会沿用同 code 旧行的启用状态；返回调用方的实例必须反映落库结果，
-        // 否则重装一个已停用的插件会被当场当成启用并激活。
-        db_manager
-            .get_plugin_by_code(&manifest.plugin.id)
-            .await?
-            .ok_or_else(|| {
-                CoreError::common(CommonError::General(format!(
-                    "插件登记后读不到记录: {}",
-                    manifest.plugin.id
-                )))
-            })
-    }
+    // 库层会沿用同 code 旧行的启用状态；返回调用方的实例必须反映落库结果，
+    // 否则重装一个已停用的插件会被当场当成启用并激活。
+    db_manager
+        .get_plugin_by_code(&manifest.plugin.id)
+        .await?
+        .ok_or_else(|| {
+            CoreError::common(CommonError::General(format!(
+                "插件登记后读不到记录: {}",
+                manifest.plugin.id
+            )))
+        })
 }
 
 /// 宿主「安装 / 导入插件包」的唯一入口。

@@ -794,15 +794,34 @@ impl PluginManager {
 
         // 新增：加载 + 激活（DB 未禁用才激活）
         for id in &diff.added {
-            if let Err(e) = self.load_plugin_from_dir(&self.install_dir.join(id)).await {
-                tracing::warn!(plugin_id = %id, error = %e, "热插拔加载失败");
-                continue;
-            }
+            let loaded = match self.load_plugin_from_dir(&self.install_dir.join(id)).await {
+                Ok(loaded) => loaded,
+                Err(e) => {
+                    tracing::warn!(plugin_id = %id, error = %e, "热插拔加载失败");
+                    continue;
+                }
+            };
             let enabled = match engine::migration::get_global_db_manager() {
                 Some(db) => match db.get_plugin_by_code(id).await {
                     Ok(Some(p)) => p.is_enabled,
-                    // DB 里没记录 = 目录直接拷进来的插件，默认启用
-                    _ => true,
+                    Ok(None) => {
+                        // 目录直接拷进来的插件没有登记行：先补登记，否则停用/卸载按 code
+                        // 写库命中 0 行，重启后又按「DB 无记录 = 启用」复活。
+                        if let Err(e) = crate::installer::register_manifest(
+                            &loaded.manifest,
+                            &loaded.install_path,
+                            db,
+                        )
+                        .await
+                        {
+                            tracing::warn!(plugin_id = %id, error = %e, "热插拔登记失败");
+                        }
+                        true
+                    }
+                    Err(e) => {
+                        tracing::warn!(plugin_id = %id, error = %e, "读取插件登记失败，按启用处理");
+                        true
+                    }
                 },
                 None => true,
             };
