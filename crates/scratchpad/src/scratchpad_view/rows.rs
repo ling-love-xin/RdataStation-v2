@@ -100,6 +100,8 @@ impl ScratchpadView {
         // 「查看统计」（M8 洞察）：判定问宿主——读取器口径在 `engine`，草稿箱不认识它
         // （也不该认识：依赖只向下）。判定不是真时菜单项根本不出现。
         let can_stats = !is_folder && self.host.can_view_stats(std::path::Path::new(&key));
+        // 归档只给文件，且只在宿主接过资产库（M6）时摆出来。
+        let can_archive = !is_folder && self.host.can_archive();
         let stats_label = entry.name.clone();
         let is_selected = ctx.selected.contains(&key);
         let is_expanded = ctx.expanded.contains(&key);
@@ -372,16 +374,25 @@ impl ScratchpadView {
             String::new()
         };
 
-        // 右键菜单（打开位置 / 重命名 / 剪切 / 复制 / 删除）。
+        // 右键菜单（归档为存档 / 打开位置 / 重命名 / 剪切 / 复制 / 删除）。
         {
             let menu_entity = entity.clone();
             let menu_key = key.clone();
-            // 文件夹没有「打开」（双击/Enter 的语义是展开）。
+            // 文件夹没有「打开」与「归档为存档」（双击/Enter 的语义是展开）。
             let menu_open = entity.clone();
             let menu_open_key = key.clone();
+            // 多选口径在构造期定（闭包里读不到自己那一帧的选择集）：
+            // 点在被选中的行上且选了多条 → 整个选择集；否则只有这一条。
+            let archive_paths = if can_archive {
+                crate::scratchpad_view::archive_targets(&key, &self.scratchpad.borrow().selected)
+            } else {
+                Vec::new()
+            };
             row.context_menu(move |menu, _window, _cx| {
                 let open_doc_entity = menu_open.clone();
                 let open_doc_key = menu_open_key.clone();
+                let archive_entity = menu_entity.clone();
+                let archive_paths = archive_paths.clone();
                 let rename_entity = menu_entity.clone();
                 let rename_key = menu_key.clone();
                 let cut_entity = menu_entity.clone();
@@ -411,6 +422,19 @@ impl ScratchpadView {
                                     this.request_view_stats(key.clone(), label.clone(), cx)
                                 });
                             }));
+                    }
+                    // 「归档为存档…」（M6）：把这几份草稿交给资产库的归档入口。
+                    // 只在宿主接过资产库时摆出来（`can_archive`），否则是一个点了没反应的入口。
+                    if can_archive {
+                        menu = menu.item(
+                            PopupMenuItem::new("归档为存档…").on_click(move |_, window, app| {
+                                let entity = archive_entity.clone();
+                                let paths = archive_paths.clone();
+                                entity.update(app, |this, cx| {
+                                    this.request_archive_drafts(paths.clone(), window, cx)
+                                });
+                            }),
+                        );
                     }
                 }
                 // 「在文件管理器中显示」：文件与文件夹都可用（定位而不打开）。

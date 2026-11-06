@@ -10,10 +10,10 @@
 /// 窗口级交互（真点击、真轮询）不在这一层，见 `scratchpad-user-guide.md` §9 验收清单。
 use super::{
     ScratchpadEntry, ScratchpadEntryKind, ScratchpadSearchMode, ScratchpadSearchView,
-    ScratchpadSort, ScratchpadTemplate, ToolbarButtonCfg, ToolbarButtonKey, flatten_scratchpad,
-    join_scratchpad_rel, scratchpad_apply_template_ext, scratchpad_entry_matches,
-    scratchpad_shows_dirty_dot, scratchpad_size_label, scratchpad_sort_entries,
-    scratchpad_split_name, search_view_from_payload,
+    ScratchpadSort, ScratchpadTemplate, ToolbarButtonCfg, ToolbarButtonKey, archive_targets,
+    flatten_scratchpad, join_scratchpad_rel, scratchpad_apply_template_ext,
+    scratchpad_entry_matches, scratchpad_shows_dirty_dot, scratchpad_size_label,
+    scratchpad_sort_entries, scratchpad_split_name, search_view_from_payload,
 };
 use crate::jobs::SearchPayload;
 use crate::scratchpad_view::scratchpad_jobs;
@@ -41,6 +41,31 @@ fn folder(name: &str, modified: &str, kids: Option<Vec<ScratchpadEntry>>) -> Scr
         modified_at: Some(modified.to_string()),
         children: kids,
     }
+}
+
+/// 归档点多选（与行右键「移动到分组」同口径）：点在选中的行上且选了多条 → 整个选择集。
+#[test]
+fn archive_targets_takes_the_whole_selection_only_when_clicked_row_is_selected() {
+    let mut selected = HashSet::new();
+    selected.insert("/p/b.sql".to_string());
+    selected.insert("/p/a.sql".to_string());
+    // 点在选中的行上：整个选择集，且排序（同一批两次点出来的顺序一致）。
+    assert_eq!(
+        archive_targets("/p/a.sql", &selected),
+        vec!["/p/a.sql".to_string(), "/p/b.sql".to_string()]
+    );
+    // 点在没选中的行上：只有这一条（多选不替用户决定"顺带归档别的"）。
+    assert_eq!(
+        archive_targets("/p/c.sql", &selected),
+        vec!["/p/c.sql".to_string()]
+    );
+    // 只选了一条：就是这一条。
+    let mut single = HashSet::new();
+    single.insert("/p/a.sql".to_string());
+    assert_eq!(
+        archive_targets("/p/a.sql", &single),
+        vec!["/p/a.sql".to_string()]
+    );
 }
 
 #[test]

@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use gpui_kit::App;
+use gpui_kit::{App, Window};
 
 use editor::shared::EditorShared;
 use scratchpad::{
@@ -134,6 +134,21 @@ impl ScratchpadHost for WorkbenchScratchpadHost {
     fn show_file_info(&self, view: Option<ScratchpadFileInfoView>, cx: &mut App) {
         self.shared.show_scratchpad_file_info(view, cx);
     }
+
+    /// 有项目才有归档可谈（归档要落到 `{项目}/resources/`）。
+    fn can_archive(&self) -> bool {
+        self.shared.project_root().is_some()
+    }
+
+    /// 右键「归档为存档…」→ 资产库的归档入口。
+    ///
+    /// 只做转接：按同一处 `Shared` 现建一份资产库宿主（与资产库面板装配时同一个
+    /// `build_host`，无自有状态），把草稿的绝对路径交给它——候选构造、来源连接、
+    /// 标签继承与确认对话框都在资产库那一侧。
+    fn archive_drafts(&self, paths: Vec<PathBuf>, window: &mut Window, cx: &mut App) {
+        let host = crate::components::resource_host::build_host(&self.shared);
+        host.request_archive_drafts(paths, window, cx);
+    }
 }
 
 /// 构造宿主端口（装配期调用；生产入口 `SidebarPanel::new`）。
@@ -152,6 +167,20 @@ mod tests {
 
     use super::build_host;
     use crate::panels::Shared;
+
+    /// 没开项目时不摆「归档为存档…」：归档要落到 `{项目}/resources/`，没有项目根就无从归档。
+    ///
+    /// 钉这条是因为菜单的摆与不摆由端口决定（`ScratchpadHost::can_archive`），
+    /// 草稿箱那一侧看不到项目状态——端口一改，菜单会在「点了没反应」的状态下重现。
+    #[test]
+    fn archive_entry_is_hidden_without_a_project() {
+        let shared = Shared::new();
+        let editor = EditorShared::new();
+        let host = build_host(&shared, &editor);
+
+        assert!(shared.project_root().is_none(), "前提：没打开项目");
+        assert!(!host.can_archive(), "没有项目根就没有归档目标");
+    }
 
     /// 草稿箱 → 编辑器这颗接口：双击 / `Enter` / 右键「打开」最后都落到
     /// `ScratchpadHost::open_in_editor`，这里断言它真的把**绝对路径**递进了宿主的请求槽

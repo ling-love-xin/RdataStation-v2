@@ -36,7 +36,10 @@ pub(crate) use crate::detail_view::ArchiveDetail;
 pub(crate) use crate::dialogs::archive::{ArchiveConflict, ArchiveDialogSeed, open_archive_dialog};
 pub(crate) use crate::dialogs::checkout::{CheckoutDialogSeed, open_checkout_dialog, suggest_work_copy_name};
 pub(crate) use crate::dialogs::group::{GroupNameEvent, GroupNameKind, open_group_name_dialog};
-pub(crate) use crate::dialogs::pick::{DraftCandidate, PickDialogSeed, open_draft_pick_dialog};
+pub(crate) use crate::dialogs::pick::{
+    DraftCandidate, PickDialogSeed, PickDialogState, open_draft_pick_dialog,
+    open_draft_pick_dialog_with,
+};
 pub(crate) use crate::dialogs::rename::{RenameField, RenameSeed, open_rename_dialog, rename_placeholder};
 pub(crate) use crate::filter::{SortField, SortOrder};
 pub(crate) use crate::model::{
@@ -233,6 +236,14 @@ pub mod misc_actions;
 impl ResourcesHost for ResourceHost {
     fn request_archive_from_drafts(&self, window: &mut Window, cx: &mut App) {
         archive_actions::request_archive_from_drafts(self, window, cx);
+    }
+    fn request_archive_drafts(
+        &self,
+        paths: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        archive_actions::request_archive_drafts(self, paths, window, cx);
     }
     fn request_archive_from_file(&self, window: &mut Window, cx: &mut App) {
         archive_actions::request_archive_from_file(self, window, cx);

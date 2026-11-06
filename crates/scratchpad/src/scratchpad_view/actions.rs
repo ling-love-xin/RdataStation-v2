@@ -1387,6 +1387,25 @@ impl ScratchpadView {
         cx.notify();
     }
 
+    /// 请求把这几份草稿归档为存档（右键「归档为存档…」，M6 资产库）。
+    ///
+    /// 只把**绝对路径**交出去：归档的确认对话框（显示名 / 分组 / 标签继承 / 目标冲突）
+    /// 在资产库那一侧，草稿箱不认识它（依赖方向见 `ScratchpadHost::archive_drafts`）。
+    pub(super) fn request_archive_drafts(
+        &mut self,
+        paths: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if paths.is_empty() {
+            return;
+        }
+        let paths: Vec<std::path::PathBuf> = paths.into_iter().map(std::path::PathBuf::from).collect();
+        self.host.archive_drafts(paths, window, cx);
+        self.host.notify_host(cx);
+        cx.notify();
+    }
+
     /// 懒加载子目录（展开文件夹时调用）：只入队 + 起轮询，结果由 `apply_scratchpad_dirs` 回填。
     pub(super) fn request_scratchpad_dir(&mut self, path: String, cx: &mut Context<Self>) {
         let Some(root) = self.host.project_root() else {

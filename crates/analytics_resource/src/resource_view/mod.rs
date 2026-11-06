@@ -65,6 +65,20 @@ mod panel_render;
 pub trait ResourcesHost: 'static {
     /// 归档入口（面板头「＋ ▾」第一项）：从**草稿箱**选文件归档（宿主弹草稿多选对话框）。
     fn request_archive_from_drafts(&self, window: &mut Window, cx: &mut App);
+    /// 草稿箱行右键「归档为存档…」：候选由**调用方点名**（草稿箱点的是哪几行它自己知道）。
+    ///
+    /// 与 [`Self::request_archive_from_drafts`] 同一套流程（同一个挑选对话框、同一个
+    /// 确认对话框、同一份批量入队），差别只在候选来源与预勾选：一条直接展开确认，
+    /// 多条预勾上再摆挑选对话框。
+    ///
+    /// 默认实现不做事——不接草稿箱的宿主（测试 / 其他入口）不会摆出这条菜单。
+    fn request_archive_drafts(
+        &self,
+        _paths: Vec<std::path::PathBuf>,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) {
+    }
     /// 归档入口（面板头「＋ ▾」第二项）：从**本地文件**选（宿主弹系统文件选择）。
     fn request_archive_from_file(&self, window: &mut Window, cx: &mut App);
     /// 打开（只读）：宿主以**编辑器只读**打开本体——改它要先去取回。

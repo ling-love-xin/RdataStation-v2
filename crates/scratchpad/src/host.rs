@@ -27,7 +27,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::App;
+use gpui_kit::{App, Window};
 
 use crate::scratchpad_view::{ScratchpadDiffView, ScratchpadFileInfoView, ScratchpadSearchView};
 
@@ -113,5 +113,23 @@ pub trait ScratchpadHost: 'static {
     /// 树行 meta 只留大小（用户点名 2026-10-10），时间与连接信息挪进属性面板。
     fn show_file_info(&self, view: Option<ScratchpadFileInfoView>, cx: &mut App) {
         let _ = (view, cx);
+    }
+
+    /// 这个宿主接过资产库（M6）没有？只影响右键菜单里摆不摆「归档为存档…」。
+    ///
+    /// 默认 `false`：不接资产库的宿主（测试 / 其他入口）不该摆出一个点了没反应的入口。
+    fn can_archive(&self) -> bool {
+        false
+    }
+
+    /// 右键「归档为存档…」：把这几份草稿交给**资产库**的归档入口。
+    ///
+    /// 走端口而不是直接调用：依赖方向是 `analytics_resource → scratchpad`（资产库要读
+    /// 草稿箱的目录与 `file_meta` 才能备候选），反过来依赖会成环。所以草稿箱只递
+    /// **绝对路径**，归档确认对话框（显示名 / 分组 / 标签继承 / 目标冲突）全在资产库那一侧。
+    ///
+    /// 默认实现什么都不做（见 [`Self::can_archive`]）。
+    fn archive_drafts(&self, paths: Vec<PathBuf>, window: &mut Window, cx: &mut App) {
+        let _ = (paths, window, cx);
     }
 }

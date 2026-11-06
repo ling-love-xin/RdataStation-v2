@@ -577,5 +577,20 @@ impl Render for ScratchpadView {
     }
 }
 
+/// 右键「归档为存档…」要送去的草稿（绝对路径，已排序）。
+///
+/// 与行右键「移动到分组」同一口径：**点在被选中的行上且选了多条 → 整个选择集**
+/// （多选解锁批量动作）；否则只有点中的这一条。排序是为了让批量归档的顺序可复现
+/// （`HashSet` 无序，否则同一批两次点出来的顺序不一样）。
+pub(super) fn archive_targets(key: &str, selected: &std::collections::HashSet<String>) -> Vec<String> {
+    if selected.len() > 1 && selected.contains(key) {
+        let mut out: Vec<String> = selected.iter().cloned().collect();
+        out.sort();
+        out
+    } else {
+        vec![key.to_string()]
+    }
+}
+
 #[cfg(test)]
 mod tests;
