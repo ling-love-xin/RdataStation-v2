@@ -104,11 +104,11 @@
         <div class="dlg-body" style="padding:12px 14px">
           <div style="font-size:11.5px;color:var(--fg);line-height:1.7">本体将从回收站里彻底删除，不可恢复；登记记录一并删除。</div>
         </div>
-        <div class="dlg-foot"><span class="grow"></span><button class="btn-d">永久删除</button><button class="btn-s">取消</button></div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-d">永久删除</button><button class="btn-s">Cancel</button></div>
       </div>
     </div>
     <p class="hang">
-      走 <code>window.open_alert_dialog</code>（不是原型那种在列表下面就地展开的 `.alertbox`）。标题 <code>永久删除「{name}」？</code>，描述按归档粒度二选一：<b>copy</b>「本体将从回收站里彻底删除，不可恢复；登记记录一并删除。」；<b>reference</b>「本体留在源位置不受影响；登记记录与版本元数据将彻底删除，不可恢复。」确认按钮文案「永久删除」（danger），带取消。
+      走 <code>window.open_alert_dialog</code>（不是原型那种在列表下面就地展开的 `.alertbox`）。标题 <code>永久删除「{name}」？</code>，描述按归档粒度二选一：<b>copy</b>「本体将从回收站里彻底删除，不可恢复；登记记录一并删除。」；<b>reference</b>「本体留在源位置不受影响；登记记录与版本元数据将彻底删除，不可恢复。」确认按钮文案「永久删除」（danger）；<b>取消按钮没设 <code>cancel_text</code></b>，实际显示组件库默认的「Cancel」（欠债，见 16 页那条：组件库 locale 从未设置，fallback 为 en）。
     </p>
   </section>
 
@@ -120,11 +120,11 @@
         <div class="dlg-body" style="padding:12px 14px">
           <div style="font-size:11.5px;color:var(--fg);line-height:1.7">将彻底删除资产库的 3 项（本体不再保留，不可恢复）；其他模块共用的条目不会被删。</div>
         </div>
-        <div class="dlg-foot"><span class="grow"></span><button class="btn-d">清空</button><button class="btn-s">取消</button></div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-d">清空</button><button class="btn-s">Cancel</button></div>
       </div>
     </div>
     <p class="hang">
-      标题「<b>清空资产库的回收站？</b>」，描述里带条数并<b>明说别的模块不受影响</b>（`ProjectTrash::empty_origin` 就是为「只清自己名下的条目」存在的，整仓清空等于越权）；确认按钮文案「清空」（danger）。清空成功后回执「已清空资产库的回收站（N 项，本体不再保留）」；一条都没有时给「回收站里没有资产库的条目」而不是报错。
+      标题「<b>清空资产库的回收站？</b>」，描述里带条数并<b>明说别的模块不受影响</b>（`ProjectTrash::empty_origin` 就是为「只清自己名下的条目」存在的，整仓清空等于越权）；确认按钮文案「清空」（danger），取消按钮同样是默认的「Cancel」。清空成功后回执「已清空资产库的回收站（N 项，本体不再保留）」；一条都没有时给「回收站里没有资产库的条目」而不是报错。
     </p>
   </section>
 

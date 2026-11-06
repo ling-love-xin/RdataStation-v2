@@ -16,8 +16,10 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    宽 <code>864px</code>（54rem）· <b>文件系统是本体权威，登记表只是索引</b>。三类孤儿分行列：① 有文件、无记录 → 补登为存档；② 有记录、无文件 → 从回收站还原 / 删除记录；③ 指纹不匹配 → 接受当前内容（生成新版本）/ 从历史还原。
-    <b>不做自动修复</b>：静默导入会让存档变成用户没同意过的东西。修完一项<b>自动重扫并换行</b>，不关窗。
+    宽 <code>54rem</code>（864px）· 标题只有「<b>索引修复</b>」，<b>没有副标题、标题行没有图标</b>· 列表最高 <code>24rem</code>（384px）内滚动，<b>每组最多列 50 条</b>并明说剩余。
+    只有<b>三组</b>：有文件、无记录 / 有记录、<b>无本体</b> / 指纹不匹配——组头是「标题 + 纯数字计数」，下面紧跟一句组说明（`hint`），再是行。
+    行是自绘 `h_flex` + <code>bg(list_hover)</code> 的浅底块（<b>不是 danger 边框卡片</b>），左侧一列最多三行文字（标题 / 副文案 / 指纹对照），右侧是动作按钮。
+    对话框<b>只报告不自动修</b>；修完一项由宿主重扫换行，不关窗。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="15-dialog-trash.html">← 上一块：回收站</a><a href="17-dialog-conflict.html">下一块：升级冲突 →</a></nav>
 </header>
@@ -25,96 +27,158 @@
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>四类待处理<span class="desc">异类行用 danger 边框；操作按钮逐条给，不给「全部修复」</span></div>
+    <div class="variant-h"><span class="no">A</span>三组待处理<span class="desc">组头标题 + 纯数字计数 + 一句组说明；行按钮按组不同</span></div>
     <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="dlg dlg-repair proto-on">
-        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-warn" xlink:href="#i-warn"/></svg>索引修复<span class="sub2">孤儿检测 · 文件系统是本体权威，登记表是索引</span><button class="x">✕</button></div>
-        <div class="dlg-body">
-          <div class="note warn" style="margin-top:0"><svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg><span>不做自动修复：三类问题全部需要用户逐条确认（静默导入会让存档变成用户没同意过的东西）。</span></div>
-
-          <div class="rgroup" style="margin-top:12px">
-            <div class="rgroup-h"><span class="sym">1</span>有文件、无记录<span class="n">1 项</span></div>
-            <div class="rrow">
-              <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>
-              <span class="rp">resources/reports/adhoc_orders.sql</span>
-              <span class="rsub">2.3 KB · 修改于 3 天前</span>
-              <div class="acts"><button class="btn-s">补登为存档（选择 kind / 来源留空）</button></div>
-            </div>
+      <div class="dlg proto-on" style="width:864px">
+        <div class="dlg-head">索引修复<button class="x">✕</button></div>
+        <div class="dlg-body" style="padding:12px 14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <span style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">共 4 项需要处理</span>
           </div>
 
-          <div class="rgroup">
-            <div class="rgroup-h"><span class="sym">2</span>有记录、无文件<span class="n">1 项</span></div>
-            <div class="rrow err">
-              <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>
-              <span class="rp">sales_daily.csv <span style="color:var(--muted)">期望 resources/data/sales_daily.csv</span></span>
-              <span class="rsub" style="color:var(--danger)">文件不存在</span>
-              <div class="acts"><button class="btn-s">从回收站还原</button><button class="btn-d">删除记录</button></div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:11px;font-weight:600;color:var(--fg)">有文件、无记录</span>
+                <span style="font-size:11px;color:var(--muted)">1</span>
+              </div>
+              <div style="font-size:11px;color:var(--muted)">本体在 resources/ 里但登记表不认识它；补登后就是一个正常存档</div>
+              <div style="display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:6px;background:var(--hover)">
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+                  <div style="font-size:11px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">adhoc_orders.sql</div>
+                  <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">本体 resources/reports/adhoc_orders.sql：存在但没有登记记录</div>
+                </div>
+                <button class="btn-s">补登为存档</button>
+              </div>
             </div>
-          </div>
 
-          <div class="rgroup">
-            <div class="rgroup-h"><span class="sym">3</span>指纹不匹配<span class="n">2 项</span></div>
-            <div class="rrow err">
-              <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>
-              <span class="rp">dau_report.sql <span style="color:var(--muted)">期望 3f9a2c7b1e04 / 实际 7d20b9c4f1a8</span></span>
-              <span class="rsub" style="color:var(--warning)">内容已变</span>
-              <div class="acts"><button class="btn-s">接受当前内容（生成新版本）</button><button class="btn-s">从历史还原</button></div>
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:11px;font-weight:600;color:var(--fg)">有记录、无本体</span>
+                <span style="font-size:11px;color:var(--muted)">1</span>
+              </div>
+              <div style="font-size:11px;color:var(--muted)">本体不在了：从回收站还原（若当初进了回收站），或删掉记录</div>
+              <div style="display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:6px;background:var(--hover)">
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+                  <div style="font-size:11px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">sales_daily.csv</div>
+                  <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">期望位置 resources/data/sales_daily.csv：本体不在了</div>
+                </div>
+                <button class="btn-s" style="border-color:transparent;background:transparent">从回收站还原</button>
+                <button class="btn-s" style="border-color:transparent;background:transparent">删除记录</button>
+              </div>
             </div>
-            <div class="rrow err">
-              <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>
-              <span class="rp">渠道对比.py <span style="color:var(--muted)">期望 8c41d7e9b2aa / 实际 b90f42d6cc17</span></span>
-              <span class="rsub" style="color:var(--warning)">内容已变</span>
-              <div class="acts"><button class="btn-s">接受当前内容（生成新版本）</button><button class="btn-s">从历史还原</button></div>
+
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:11px;font-weight:600;color:var(--fg)">指纹不匹配</span>
+                <span style="font-size:11px;color:var(--muted)">2</span>
+              </div>
+              <div style="font-size:11px;color:var(--muted)">本体被绕过只读改过：接受当前内容（生成新版本），或到版本历史里挑一版还原</div>
+              <div style="display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:6px;background:var(--hover)">
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+                  <div style="font-size:11px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">dau_report.sql</div>
+                  <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">本体 resources/reports/dau_report.sql：内容与登记不符</div>
+                  <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">登记 3f9a2c7b1e04 · 实际 7d20b9c4f1a8</div>
+                </div>
+                <button class="btn-s">接受当前内容</button>
+                <button class="btn-s" style="border-color:transparent;background:transparent">打开版本历史…</button>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:6px;background:var(--hover)">
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+                  <div style="font-size:11px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">渠道对比.py</div>
+                  <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">本体 resources/scripts/渠道对比.py：内容与登记不符</div>
+                  <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">登记 8c41d7e9b2aa · 实际 b90f42d6cc17</div>
+                </div>
+                <button class="btn-s">接受当前内容</button>
+                <button class="btn-s" style="border-color:transparent;background:transparent">打开版本历史…</button>
+              </div>
             </div>
           </div>
         </div>
-        <div class="dlg-foot"><span>共 4 项待处理 · 上次扫描 今天 09:02</span><span class="grow"></span><button class="btn-s">重新扫描</button><button class="btn-p">关闭</button></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="variant">
-    <div class="variant-h"><span class="no">B</span>修完一项<span class="desc">该项消失、分组计数递减；全部处理干净 → 全绿收尾</span></div>
-    <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="dlg dlg-repair proto-on">
-        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-warn" xlink:href="#i-warn"/></svg>索引修复<span class="sub2">孤儿检测 · 文件系统是本体权威，登记表是索引</span><button class="x">✕</button></div>
-        <div class="dlg-body">
-          <div class="rgroup" style="margin-top:2px">
-            <div class="rgroup-h"><span class="sym">1</span>有文件、无记录<span class="n">0 项</span></div>
-            <div class="rrow" style="border-style:dashed;color:var(--muted)">已无待处理项</div>
-          </div>
-          <div class="rgroup">
-            <div class="rgroup-h"><span class="sym">2</span>有记录、无文件<span class="n">1 项</span></div>
-            <div class="rrow err">
-              <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>
-              <span class="rp">sales_daily.csv <span style="color:var(--muted)">期望 resources/data/sales_daily.csv</span></span>
-              <span class="rsub" style="color:var(--danger)">文件不存在</span>
-              <div class="acts"><button class="btn-s">从回收站还原</button><button class="btn-d">删除记录</button></div>
-            </div>
-          </div>
-          <div class="rgroup">
-            <div class="rgroup-h"><span class="sym">3</span>指纹不匹配<span class="n">1 项</span></div>
-            <div class="rrow err">
-              <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>
-              <span class="rp">dau_report.sql <span style="color:var(--muted)">期望 3f9a2c7b1e04 / 实际 7d20b9c4f1a8</span></span>
-              <span class="rsub" style="color:var(--warning)">内容已变</span>
-              <div class="acts"><button class="btn-s">接受当前内容（生成新版本）</button><button class="btn-s">从历史还原</button></div>
-            </div>
-          </div>
-          <div class="note" style="border-color:var(--success);background:color-mix(in srgb,var(--success) 10%,transparent);color:var(--success)"><svg class="ico-sm" style="margin-top:1px"><use href="#i-check" xlink:href="#i-check"/></svg><span>已补登 1 项（adhoc_orders.sql）· 扫描时间已刷新</span></div>
-        </div>
-        <div class="dlg-foot"><span>共 2 项待处理 · 上次扫描 今天 09:31</span><span class="grow"></span><button class="btn-s">重新扫描</button><button class="btn-p">关闭</button></div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">关闭</button></div>
       </div>
     </div>
     <p class="hang">
-      「从历史还原」在这个对话框里<b>就是</b>「打开版本历史…」（同一个能力，不另做一套 UI）；补登时 kind 必选、来源可留空（文件系统里没有来源信息可恢复）。
-      落地代码：<code>dialogs/index_repair.rs</code> + <code>present::build_repair_rows</code> + <code>indexer::{scan,repair}.rs</code>。
+      推翻的九处：① <b>只有三组不是四类</b>（旧稿标题写「四类待处理」，正文却只列三组），第二组名是「有记录、<b>无本体</b>」不是「无文件」；② <b>标题无副标题无图标</b>，旧稿那句「孤儿检测 · 文件系统是本体权威，登记表是索引」不在实现里；③ <b>没有「不做自动修复」的提示条</b>——那个原则只在文件头注释里，对话框不摆一条说明；④ 组头计数是<b>纯数字</b>（「1」不是「1 项」），且组头下面<b>必有一句 `hint`</b>（旧稿整块没有这行）；⑤ 行是 `bg(list_hover)` 的浅底块，<b>没有 danger 边框、没有左侧文件图标</b>；⑥ 行里<b>没有</b>「文件不存在 / 内容已变 / 2.3 KB · 修改于 3 天前」这类状态列与大小；⑦ 按钮文案：补登是「<b>补登为存档</b>」（不带「（选择 kind / 来源留空）」），Changed 组第二个按钮是「<b>打开版本历史…</b>」不是「从历史还原」；⑧ footer <b>只有一个「关闭」</b>，旧稿的「重新扫描」按钮与「共 4 项待处理 · 上次扫描 今天 09:02」都不存在（没有「上次扫描时间」这个字段）；⑨ 落地路径 `indexer::{scan,repair}.rs` 是假的，扫描走 `jobs/index.rs` 的 `load_index_report`。
+      <br>旧稿没画而实现有的：三行文本块（标题 / `detail` / **指纹对照**「登记 … · 实际 …」，只有 Changed 行有第三行）；**组内上限 50 条**（`MAX_REPAIR_ROWS_PER_GROUP = 50`），超出补「还有 N 项未列出（每组一次最多列 50 项）」；空组<b>整块跳过不渲染</b>（不会留一个「0 项」的组头）。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>删除记录确认<span class="desc">三处写动作里只有这一处有确认框</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px;display:flex;justify-content:center">
+      <div class="dlg proto-on" style="width:440px">
+        <div class="dlg-head">删除这条登记记录？<button class="x">✕</button></div>
+        <div class="dlg-body" style="padding:12px 14px">
+          <div style="font-size:11.5px;color:var(--fg);line-height:1.7">本体已经不存在，删掉记录后这个存档就彻底没了（不含回收站）。</div>
+        </div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-p">OK</button><button class="btn-s">Cancel</button></div>
+      </div>
+    </div>
+    <p class="hang">
+      `window.open_alert_dialog`：标题「删除这条登记记录？」，正文「本体已经不存在，删掉记录后这个存档就彻底没了（不含回收站）。」，带取消。
+      按钮文案是一处欠债：这一处只设了 `title` / `description` / `show_cancel`，<b>没设 `ok_text` / `ok_variant` / `cancel_text`</b>，所以确认按钮是组件库默认的「<b>OK</b>」（Primary 变体），取消是「<b>Cancel</b>」。本仓组件库的语言（`gpui_kit::component::set_locale` → `rust_i18n`，fallback 为 en）与业务文案的 `shared::i18n` 是<b>两套</b>，而且前者从未被设置过，所以中文界面里这里会冒出英文按钮。修法两条：本处显式 `ok_text("删除记录")` + `ok_variant(Danger)` + `cancel_text("取消")`；或在 app 启动时把组件库 locale 跟着设置里的语言一起设（一处修，全仓受益）。<br><b>「补登为存档」与「接受当前内容」都没有确认框</b>——两者都可解释（补登只是把文件认领进来；接受当前内容会把旧内容变成「只留元数据」的一版，但回执里明说「旧内容不可得」），所以没做二次确认，与「删除记录」的处理刻意不同。另注意「接受当前内容」虽无确认框，按钮却是<b>普通 small</b>（不是 ghost），危险度靠文案与回执兜（「旧内容不可得，那一版只留元数据」）。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>干净 / 忙态<span class="desc">空态一行 success 字；动作期提示在顶部右侧</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px;display:flex;flex-direction:column;gap:16px;align-items:center">
+      <div class="dlg proto-on" style="width:864px">
+        <div class="dlg-head">索引修复<button class="x">✕</button></div>
+        <div class="dlg-body" style="padding:12px 14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <span style="font-size:11px;color:var(--muted)">共 0 项需要处理</span>
+          </div>
+          <div style="font-size:11px;color:var(--success);padding:8px 0">索引与本体一致：没有需要处理的问题</div>
+        </div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">关闭</button></div>
+      </div>
+      <div class="dlg proto-on" style="width:864px">
+        <div class="dlg-head">索引修复<button class="x">✕</button></div>
+        <div class="dlg-body" style="padding:12px 14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <span style="font-size:11px;color:var(--muted)">共 2 项需要处理</span>
+            <span style="font-size:11px;color:var(--warning);white-space:nowrap;min-width:max-content">正在补登…</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:11px;font-weight:600;color:var(--fg)">有文件、无记录</span>
+              <span style="font-size:11px;color:var(--muted)">2</span>
+            </div>
+            <div style="font-size:11px;color:var(--muted)">本体在 resources/ 里但登记表不认识它；补登后就是一个正常存档</div>
+            <div style="display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:6px;background:var(--hover)">
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+                <div style="font-size:11px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">adhoc_orders.sql</div>
+                <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">本体 resources/reports/adhoc_orders.sql：存在但没有登记记录</div>
+              </div>
+              <button class="btn-s" disabled style="opacity:.45">补登为存档</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:6px;background:var(--hover)">
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+                <div style="font-size:11px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">qa_notes.md</div>
+                <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">本体 resources/reports/qa_notes.md：存在但没有登记记录</div>
+              </div>
+              <button class="btn-s" disabled style="opacity:.45">补登为存档</button>
+            </div>
+            <div style="font-size:11px;color:var(--muted);padding:4px 0">还有 48 项未列出（每组一次最多列 50 项）</div>
+          </div>
+        </div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">关闭</button></div>
+      </div>
+    </div>
+    <p class="hang">
+      空态只有一句「<b>索引与本体一致：没有需要处理的问题</b>」，<b>success 色</b>（不是 warning——对话框开着时用户可能刚修完最后一项，这是好消息）。没有 `.note` 框、没有虚线占位、也没有「全绿收尾」的额外提示条。
+      动作期：<b>对话框自己</b> `set_busy(true)` + `set_note(...)`，写动作全部置灰；提示在「共 N 项需要处理」那一行的右侧（warning 色）。四句文案：补登「正在补登…」、还原「正在从回收站还原…」、删记录「正在删除记录…」、接受内容「正在接受当前内容…」。宿主完成后 `set_busy(false)` + `set_note(None)` + `set_rows` 就地换行，<b>不关窗</b>；扫描失败走面板通知条「扫描索引失败：{err}」。
+      <b>只读项目</b>：对话框照常打开，写动作全灰；「<b>打开版本历史…</b>」<b>不受只读与忙态影响</b>（它不改任何状态，所以没挂 `disabled`）。宿主另有一道兜底「项目为只读模式，不能修复索引」。
     </p>
   </section>
 
   <div class="canvas pad">
     <p class="hang" style="margin:0">
-      本块样式：<code>.dlg.dlg-repair</code>（864px）/ <code>.rgroup</code> / <code>.rgroup-h</code> / <code>.rrow</code> / <code>.rrow.err</code> / <code>.rsub</code> / <code>.acts</code> / <code>.note.warn</code>。
+      本块样式：<code>.dlg</code>（864px）/ <code>.dlg-head</code> / <code>.dlg-body</code> / <code>.dlg-foot</code>；组头、`hint`、行、动作按钮在本页用<b>内联样式</b>画，不再用旧的 <code>.rgroup</code> / <code>.rgroup-h</code> / <code>.rrow</code> / <code>.rrow.err</code> / <code>.rsub</code> / <code>.acts</code> / <code>.note.warn</code>（那套是照「分组框 + danger 边框行 + 状态列 + 顶部警告条」画的旧账）。<br>
+      实现锚点：<code>crates/analytics_resource/src/dialogs/index_repair/{{mod,open,render}}.rs</code>（<code>MAX_REPAIR_ROWS_PER_GROUP = 50</code>、<code>RepairAction</code> 五支、<code>repair_line</code>）；<code>src/present/repair.rs::build_repair_rows</code>（三组顺序 + 组内按 rel_path）；<code>src/view_model/dialog_rows.rs::RepairGroup</code>（<code>title()</code> / <code>hint()</code>）；<code>src/jobs/index.rs::load_index_report</code> + <code>run_repair_action</code>（五分支持回执）；宿主 <code>crates/workbench/src/panels/resources.rs::request_repair_action</code> + <code>apply_index_scan</code>，开窗在 <code>panels/mod.rs::ensure_repair_dialog</code>。<br>
+      入口两处：状态行异常段的「修复…」（<code>index-repair</code>，ghost）与面板头「⋯ → 重建索引…」（<code>HeaderMenuAction::RebuildIndex</code>）——两者都只 <code>enqueue_index_scan</code> + 通知「资产库：正在检查索引…」，<b>扫完才开窗</b>（扫描要逐个本体算 sha256，不能放 UI 线程）。
     </p>
   </div>
 
