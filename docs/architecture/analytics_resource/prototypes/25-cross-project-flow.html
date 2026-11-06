@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>25 跨项目全流程 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>25 · 跨项目全流程</div>
+  <div class="prow">
+    <h1 class="p-title">跨项目全流程<span class="p-sec">§13.1–13.6</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    把<a href="23-promote-to-global.html">23 块</a>与<a href="24-distribute-to-project.html">24 块</a>串成一条链：<b>项目 A → 全局 → 项目 B</b>。
+    这一页是<b>链路视图</b>，不是某个面板的画面——它回答「两边各自点一下之后，什么东西在哪个库里」。
+    <b>唯一法定路径</b>：跨项目只能走全局中转，<b>项目 ↔ 项目禁止直传</b>（代码里根本没有这条边）。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="24-distribute-to-project.html">← 上一块：分发到本项目</a><a href="26-scope-boundaries.html">下一块：边界与拒绝态 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>六个动作串起来<span class="desc">谁在哪一步动了什么</span></div>
+    <div class="canvas pad">
+      <div class="seq">
+        <div class="snode"><div class="sno">1</div><div class="sc"><span class="who">项目 A</span>右键「升级到全局…」<span class="sub">项目 A 的存档行不动；本体被读一次，落到全局。</span></div></div>
+        <div class="sarrow">▼</div>
+        <div class="snode"><div class="sno">2</div><div class="sc"><span class="who">全局</span>建 <code>global.&lt;名&gt;</code> 表 / 内容表 + 登记 <code>scope='global'</code> + 全局版本快照<span class="sub">撞名走<a href="17-dialog-conflict.html">冲突三选一</a>：覆盖（删旧表 + 软删旧登记 + 版本链接续）或改名后重来。</span></div></div>
+        <div class="sarrow">▼</div>
+        <div class="snode"><div class="sno">3</div><div class="sc"><span class="who">全局</span>面板里出现这一行，带 <span class="scope-badge">全局</span>，动作只剩「分发到本项目…」<span class="sub">全局侧只读：没有取回、没有移入回收站、没有版本对比之外的可写动作。</span></div></div>
+        <div class="sarrow">▼</div>
+        <div class="snode"><div class="sno">4</div><div class="sc"><span class="who">项目 B</span>切到「实例 = 全局」的筛选，看到同一行<span class="sub">筛选口径见 <a href="02-toolbar.html">02 块</a> B 的第四节；<a href="03-list-rows.html">03 块</a> 已画行尾 <code>.scope-badge</code>。</span></div></div>
+        <div class="sarrow">▼</div>
+        <div class="snode"><div class="sno">5</div><div class="sc"><span class="who">项目 B</span>右键「分发到本项目…」<span class="sub">盘上落到 <code>B/resources/…</code>（脚本）或 <code>B/analytics.duckdb</code>（表）；版本号接续全局链。</span></div></div>
+        <div class="sarrow">▼</div>
+        <div class="snode"><div class="sno">6</div><div class="sc"><span class="who">项目 B</span>多出一行 <span class="scope-badge">项目</span>，此后<b>只属于 B</b><span class="sub">B 改出来的新版本不会再回到全局；要共享就再走一次第 1 步。</span></div></div>
+      </div>
+      <p class="hang">全程没有「把 A 的东西直接给 B」这个动作。第 2 步产生的全局登记就是<b>唯一的共用副本</b>，A 与 B 各持一份自己的。</p>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>三个实例与两条边<span class="desc">合法的边只有两条；直连那条不存在</span></div>
+    <div class="canvas pad">
+      <div class="grid3">
+        <div class="sinst">
+          <div class="sh"><svg class="ico-sm"><use href="#i-folder" xlink:href="#i-folder"/></svg>项目 A</div>
+          <div class="sd"><code>A/analytics.duckdb</code><br><code>A/resources/</code><br>登记：<code>A/project.sqlite</code></div>
+        </div>
+        <div class="sinst">
+          <div class="sh"><svg class="ico-sm"><use href="#i-plug" xlink:href="#i-plug"/></svg>全局</div>
+          <div class="sd"><code>G_ shared.duckdb</code><br><code>G_ global.sqlite</code><br>登记：<code>scope='global'</code></div>
+        </div>
+        <div class="sinst">
+          <div class="sh"><svg class="ico-sm"><use href="#i-folder" xlink:href="#i-folder"/></svg>项目 B</div>
+          <div class="sd"><code>B/analytics.duckdb</code><br><code>B/resources/</code><br>登记：<code>B/project.sqlite</code></div>
+        </div>
+      </div>
+      <div class="srcbar" style="margin:12px 0 8px"><svg class="ico-sm"><use href="#i-link" xlink:href="#i-link"/></svg><span>合法边 ①</span><span class="mono">项目 → 全局</span><span class="tagn">升级 promote</span></div>
+      <div class="srcbar" style="margin:0 0 8px"><svg class="ico-sm"><use href="#i-link" xlink:href="#i-link"/></svg><span>合法边 ②</span><span class="mono">全局 → 任意项目</span><span class="tagn">分发 distribute</span></div>
+      <div class="noedge"><svg class="ico-sm"><use href="#i-x" xlink:href="#i-x"/></svg><b>项目 A ↔ 项目 B 直传：没有这条边</b>——菜单里没有、登记表里没有、job 队列里也没有。要绕过去只能先升到全局再分发，两步都留痕。</div>
+      <p class="hang">两条边都是<b>复制</b>不是移动：升级不动项目 A 的本体，分发不动全局那一份。<b>「会不会在原处消失」是 M5 草稿箱归档的语义</b>（首次 copy / 再归档 move），跟这一层不是一回事。</p>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>同一份东西在三个实例里的形态<span class="desc">脚本最典型：文件 → 内容表 → 文件</span></div>
+    <div class="canvas pad">
+      <div class="srcbar"><svg class="ico-sm"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="mono">queries/daily.sql</span><span>v1 · 412 B</span><span class="tagn">脚本</span></div>
+      <div class="fgrid">
+        <span class="fl">项目 A</span>
+        <span class="fw"><input class="inp ro" value="resources/queries/daily.sql（真文件，可直接编辑）" readonly></span>
+        <span class="fl">全局</span>
+        <span class="fw"><input class="inp ro" value="表 daily(queries/daily.sql, content, content_hash) —— 方案 A：正文单列，不拆行" readonly></span>
+        <span class="fl">项目 B</span>
+        <span class="fw"><input class="inp ro" value="resources/queries/daily.sql（按全局侧记的相对路径重建）" readonly></span>
+      </div>
+      <div class="note"><svg class="ico-sm"><use href="#i-info" xlink:href="#i-info"/></svg>脚本为什么要变成表：全局库里只有 DuckDB 表，没有「全局 resources 目录」这个概念。方案 A 让它有一列<b>可查、可对比、可复制</b>的正文，分发时再落回文件。</div>
+      <p class="hang">走这条路要接受的代价：<b>全局那份脚本不是文件</b>，不能像项目里那样直接在编辑器打开改（只能分发回项目改）。</p>
+    </div>
+  </section>
+
+</main>
+
+<div class="stage">
+  <div class="canvas pad">
+    <p class="hang" style="margin-top:0">
+      本块样式：<code>.seq</code> + <code>.snode</code> / <code>.sno</code> / <code>.sc</code>（<code>.who</code> / <code>.sub</code>）/ <code>.sarrow</code> / <code>.sinst</code> / <code>.noedge</code> / <code>.srcbar</code> / <code>.fgrid</code> / <code>.inp.ro</code> / <code>.note</code> / <code>.scope-badge</code>。<br>
+      落地代码：<code>crates/analytics_resource/src/global/</code>（<code>mod.rs</code> 实例库 / <code>promote.rs</code> 升级 / <code>distribute.rs</code> 分发 / <code>register.rs</code> 登记 + 版本 / <code>list.rs</code> 全局列表 / <code>sql.rs</code> 建表语句）/ <code>crates/store/migrations/global/026_analytics_resource_global.sql</code>（全局登记表镜像 + <code>scope</code> 列，只存 <code>'global'</code> 行；项目库那行照旧写 <code>'project'</code>）/ <code>src/model/kind.rs::RowScope</code>（<code>Project</code> / <code>Global</code> 两值 + <code>as_db</code>）。
+    </p>
+  </div>
+</div>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

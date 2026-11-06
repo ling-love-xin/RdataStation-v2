@@ -11,12 +11,12 @@
 <header class="phead">
   <div class="crumb">资产库 / 分析存档（M6）原型<span>/</span>索引</div>
   <div class="prow">
-    <h1 class="p-title">分块原型索引<span class="p-sec">22 块</span></h1>
+    <h1 class="p-title">分块原型索引<span class="p-sec">26 块</span></h1>
     <span class="grow"></span>
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    每个 UI 块 / 每个对话框<b>各自一页</b>，页内把这块的<b>所有状态并排摆出来</b>——不再靠 <code>data-*</code> 状态位互斥显隐，改一块不用在脑子里同时装另外 21 个场景。
+    每个 UI 块 / 每个对话框<b>各自一页</b>，页内把这块的<b>所有状态并排摆出来</b>——不再靠 <code>data-*</code> 状态位互斥显隐，改一块不用在脑子里同时装另外 25 个场景。
     原来的总集稿 <a href="../analytics-resource-prototype.html">analytics-resource-prototype.html</a> 保留不动，继续用来整体走查。
   </p>
   <nav class="pnav">
@@ -28,7 +28,7 @@
 
 <div class="howto">
   <b>怎么用这一套</b><br>
-  ① 要改<b>视觉</b>（间距 / 颜色 / 行高 / 徽标形状）→ 改 <code>_shared/proto.css</code> 一处，22 页同时生效；<br>
+  ① 要改<b>视觉</b>（间距 / 颜色 / 行高 / 徽标形状）→ 改 <code>_shared/proto.css</code> 一处，26 页同时生效；<br>
   ② 要改<b>某一块的布局或文案</b> → 只改那一页的 HTML，不会牵动别块；<br>
   ③ 要加<b>新状态</b> → 在那页里新加一个 <code>.variant</code> 小节，页内并排即可，不用造状态位；<br>
   ④ 页脚「本块样式 + 落地代码」告诉你这块在 <code>crates/analytics_resource/</code> 落到哪，评审结论可直接指到文件。<br>
@@ -187,13 +187,45 @@
     </p>
   </section>
 
+  <section class="idx-group">
+    <h2>七、§13 双实例链路（升级 / 分发 / 全流程 / 边界）</h2>
+    <div class="idx-grid">
+      <a class="idx-card" href="23-promote-to-global.html">
+        <div class="ih"><span class="no">23</span><span class="nm">升级到全局</span><span class="sec">§13.3</span></div>
+        <div class="ds">现状三步（无确认框、冲突才开窗）/ 三种本体形态 / 规格草案里的确认框（未实现）/ 升级后两行各记各的。</div>
+        <div class="tg"><span>projects → global</span><span>4 态</span><span>544px</span></div>
+      </a>
+      <a class="idx-card" href="24-distribute-to-project.html">
+        <div class="ih"><span class="no">24</span><span class="nm">分发到本项目</span><span class="sec">§13.6</span></div>
+        <div class="ds">分析表建表 / 脚本重建为文件 / 版本接续全局链 / 撞名走「从全局分发」三选一。</div>
+        <div class="tg"><span>global → project</span><span>4 态</span><span>544px</span></div>
+      </a>
+      <a class="idx-card" href="25-cross-project-flow.html">
+        <div class="ih"><span class="no">25</span><span class="nm">跨项目全流程</span><span class="sec">§13.1–13.6</span></div>
+        <div class="ds">项目 A → 全局 → 项目 B 六个动作；三个实例两条边，直传那条边不存在。</div>
+        <div class="tg"><span>链路视图</span><span>唯一法定路径</span></div>
+      </a>
+      <a class="idx-card" href="26-scope-boundaries.html">
+        <div class="ih"><span class="no">26</span><span class="nm">边界与拒绝态</span><span class="sec">§13.3 / §13.5</span></div>
+        <div class="ds">分析表不能升级（M8 欠债）/ 本体缺失 / 二进制读失败 / 只读与多选 / 两处【待确认】。</div>
+        <div class="tg"><span>回执原文</span><span>5 态</span></div>
+      </a>
+    </div>
+    <p class="hang" style="margin-top:8px">
+      这四页是<b>本轮补的</b>，补的是索引过去自己承认的那条缺口（旧第⑤条：分发 / 实例化 / 跨项目引用没有页）。补之前先核了代码：
+      <b>双实例的数据层早已落地</b>（全局登记表 <code>crates/store/migrations/global/026_analytics_resource_global.sql</code>、<code>global/promote.rs</code>、<code>global/distribute.rs</code>、<code>dialogs/conflict.rs</code> 的两个 <code>ConflictKind</code>），
+      落后的只有「评审页里看不到这些画面」，以及设计稿 §13 开头那句「实现不动」的口径。
+      所以这四页照<b>代码现状</b>画，规格与实现不一致的地方（尤其 23 块：没有确认框）逐条写明，不替任何一方补画。
+    </p>
+  </section>
+
   <div class="howto" style="margin-top:4px">
     <b>没有拆进来的东西（如实说明）</b><br>
     ① <b>四个动作的时序图</b>（归档 / 取回 / 版本 / 回收站）仍只在设计稿 §4 里，属流程不是 UI 块；<br>
     ② <b>应用级状态栏、标题栏 36px、活动栏 48px</b> 是外壳，不属本模块，故不做页；<br>
     ③ <b>主题映射（§6）与尺寸校验表</b>在总集稿末尾与设计稿 §7，属对照表，仍在总集稿看；<br>
     ④ <b>总集稿六张说明卡片</b>（三种 kind / 只读三重 / 右键条件 / 异常修复 / 洞察联动 / 双实例）尚未拆成独立「说明页」——它们的结论已折进各页 <code>.p-spec</code> 与页脚注，需要原文时看总集稿；<br>
-    ⑤ <b>§13 双实例链路</b>（升级同名冲突之外的分发 / 实例化 / 跨项目引用四处）<b>仍没有页</b>：规格 §12.2.1 与 §13 里那几段还标着「待用户决策」，画出来等于替用户先拍板，故本轮不补。
+    ⑤ <b>§13 里两处口径没定</b>（纯文件档（png / zip / docx）进不进全局、分发时能不能直接改名）——它们不是「没画」，是<b>规格自己没写</b>，故只在 <a href="26-scope-boundaries.html">26 块</a> E 节标【待确认】摆着，不造画面。
   </div>
 
 </div>

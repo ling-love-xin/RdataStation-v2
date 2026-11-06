@@ -69,6 +69,26 @@ body.proto{
 .namehint{margin-top:8px;font-size:10.5px;line-height:1.6;color:var(--muted);}
 .namehint.err{color:var(--warning);}
 
+/* —— §13 双实例：升级 / 分发（表单型，与归档确认同宽 34rem = 544px） —— */
+/* 规格里这两个动作原本没有对话框（点一下直接入队），本类只服务「草案确认框」那几页的静态摆放 */
+.dlg-scope{width:544px;}
+
+/* —— §13 链路页的纵向时序（proto.css 只有面板内的 .row，没有时序件） —— */
+.seq{display:flex;flex-direction:column;padding:0;}
+.seq .snode{display:flex;align-items:flex-start;gap:8px;padding:7px 9px;border:1px solid var(--sidebar-border);border-radius:7px;background:var(--bg);}
+.seq .sno{flex:none;width:18px;height:18px;border-radius:50%;background:var(--sidebar);border:1px solid var(--sidebar-border);color:var(--muted);font-size:9.5px;display:flex;align-items:center;justify-content:center;}
+.seq .sc{flex:1;min-width:0;font-size:11px;line-height:1.65;color:var(--fg);}
+.seq .sc .who{display:inline-block;font-size:9.5px;color:var(--primary);border:1px solid var(--active-border);border-radius:4px;padding:0 4px;margin-right:5px;vertical-align:1px;}
+.seq .sc .sub{display:block;font-size:10px;color:var(--muted);margin-top:1px;}
+.seq .sarrow{display:flex;align-items:center;justify-content:center;height:12px;color:var(--muted);font-size:10px;line-height:1;}
+/* 链路页的实例卡（项目 A / 全局 / 项目 B） */
+.sinst{border:1px solid var(--sidebar-border);border-radius:8px;background:var(--sidebar);padding:8px 9px;}
+.sinst .sh{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--fg);}
+.sinst .sd{margin-top:3px;font-size:10px;line-height:1.6;color:var(--muted);}
+.sinst .sd code{font-family:Consolas,monospace;font-size:10px;color:var(--fg);}
+/* 禁止直传的红线（用 .note.danger 会显得像提示条，这里要一眼看出"这条路不存在"） */
+.noedge{display:flex;align-items:center;gap:8px;padding:6px 9px;border:1px dashed var(--danger);border-radius:7px;color:var(--danger);font-size:10.5px;line-height:1.55;background:color-mix(in srgb,var(--danger) 8%,transparent);}
+
 /* —— 静态态显影：总集稿靠 #wb 的 data-* 互斥显隐，这里用 .proto-on 单独点亮 —— */
 .dlg.proto-on{display:flex;position:relative;left:auto;top:auto;transform:none;margin:0 auto;max-height:none;}
 .pop.proto-on{display:block;position:relative;top:auto;left:auto;right:auto;margin:8px;}

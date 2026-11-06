@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>23 升级到全局 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>23 · 升级到全局</div>
+  <div class="prow">
+    <h1 class="p-title">升级到全局<span class="p-sec">§13.3</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    <b>本块现状：没有确认对话框</b>。项目行右键「升级到全局…」／详情动作区点一下<b>直接入队</b>，状态栏只给一句「正在升级到全局…」；
+    <b>只有撞名才开窗</b>（<a href="17-dialog-conflict.html">17 块</a>的覆盖 / 改名 / 取消）。目标名一律取显示名，代码里没有「先改名再升级」的入口。
+    变体 C 是<b>规格草案里的那个确认框，代码里没有</b>——摆出来只为拍板，不当已落地画面看。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="22-dialog-pick.html">← 上一块：草稿选择</a><a href="24-distribute-to-project.html">下一块：分发到本项目 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>现状三步<span class="desc">右键 → 直接入队 → 状态栏一句；冲突才开窗（无中间确认）</span></div>
+    <div class="canvas pad">
+      <div class="seq">
+        <div class="snode">
+          <div class="sno">1</div>
+          <div class="sc"><span class="who">项目行右键</span>「升级到全局…」
+            <span class="sub">多选态里这一项置灰（<a href="10-context-menu.html">10 块</a> ① 有画）；全局行不出现（它已经是全局）。只读项目点了不入队，回执「项目为只读模式，不能升级到全局」。</span>
+          </div>
+        </div>
+        <div class="sarrow">▼</div>
+        <div class="snode">
+          <div class="sno">2</div>
+          <div class="sc"><span class="who">后台 job</span>按本体形态分流
+            <span class="sub">白名单扩展名（csv / tsv / txt / parquet / xlsx / xls / json / ndjson）→ 数据文件映射出表；其余（sql / py / md…）→ 脚本内容表。分析表型存档没有本体文件，直接回执「随 M8 后续批次接入」，不进 job。</span>
+          </div>
+        </div>
+        <div class="sarrow">▼</div>
+        <div class="snode">
+          <div class="sno">3</div>
+          <div class="sc"><span class="who">状态栏</span>「资产库：正在升级到全局…」
+            <span class="sub">成功后面板刷新，全局侧多一行 <span class="scope-badge">全局</span>；项目行原地不动、也不带「已升级」标记。撞名时第 2 步返回冲突，宿主才弹 <a href="17-dialog-conflict.html">17 块</a>。</span>
+          </div>
+        </div>
+      </div>
+      <p class="hang">升级完成后项目行与全局行是<b>两条独立登记</b>：项目行不会因为升过级而变成只读，也<b>不会互相跟随</b>（再次升级才更新全局侧）。</p>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>三种本体形态<span class="desc">同一次点击，落到全局的东西不一样</span></div>
+    <div class="canvas pad">
+      <div class="grid3">
+        <div class="sinst">
+          <div class="sh"><svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg>数据文件 → 表</div>
+          <div class="sd">全局库 <code>CREATE TABLE global.&lt;名&gt; AS SELECT * FROM read_xxx('…')</code>；行数 / 列数由建完的全局表量出来，写进全局登记。</div>
+        </div>
+        <div class="sinst">
+          <div class="sh"><svg class="ico-sm"><use href="#i-doc" xlink:href="#i-doc"/></svg>脚本 → 内容表</div>
+          <div class="sd">方案 A 定稿：单行表 <code>(filename, content, content_hash)</code>，正文整段进 <code>content</code>，不拆行。<b>分发时再重建回文件</b>（见 24 块）。</div>
+        </div>
+        <div class="sinst">
+          <div class="sh"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>分析表型存档 → 拒</div>
+          <div class="sd">本体在项目 <code>analytics.duckdb</code> 里，没有可读的相对路径；今天点了只拿到回执，不进 job。见 <a href="26-scope-boundaries.html">26 块</a>。</div>
+        </div>
+      </div>
+      <p class="hang">三个分支的判定都在宿主那一侧做（扩展名白名单 + <code>payload_rel_path</code> 是否为空），<b>面板上不给用户选形态</b>——升级没有「按什么升」的开关。</p>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>规格草案：升级确认框<span class="desc">544px（与归档确认同宽）· <b>代码里没有，供拍板</b></span></div>
+    <div class="canvas pad">
+      <div class="dlg dlg-scope proto-on">
+        <div class="dlg-head"><svg class="ico-sm"><use href="#i-plug" xlink:href="#i-plug"/></svg>升级到全局<span class="sub2">写入全局分析库（跨项目共享层）</span><button class="x">✕</button></div>
+        <div class="dlg-body">
+          <div class="srcbar"><svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg><span class="mono">orders_q3.csv</span><span>项目存档 · v3</span><span class="tagn">数据文件</span></div>
+          <div class="fgrid">
+            <span class="fl">全局名</span>
+            <span class="fw"><input class="inp" value="orders_q3"></span>
+            <span class="fl">目标实例</span>
+            <span class="fw"><input class="inp ro" value="全局分析库（G_）· 所有项目可见" readonly></span>
+            <span class="fl">形态</span>
+            <span class="fw"><input class="inp ro" value="建表：CREATE TABLE AS read_csv_auto(…)" readonly></span>
+            <span class="fl">版本</span>
+            <span class="fw"><input class="inp ro" value="作为全局侧 v1；再次升级接续全局版本链" readonly></span>
+          </div>
+          <div class="fhint">同类冲突（全局已有同名表或登记）不在这张框里处理——照旧交给<a href="17-dialog-conflict.html">冲突三选一</a>。</div>
+          <div class="locknote"><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg>全局侧只读：升级进来之后，任何项目都不能直接改它的内容，只能「复制到本项目」再改。</div>
+        </div>
+        <div class="dlg-foot"><span>升级不改项目侧那份本体</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">升级到全局</button></div>
+      </div>
+      <p class="hang"><b>为什么它是草案</b>：这段是设计稿 §13.3 的描述（目标名默认显示名、可改）。实现选了「不确认、撞名才问」，所以②③两个字段今天都没有落点。<b>要补这张框，得先定「升级前能不能改名」</b>——不改名就得接受冲突处置里才出现改名入口。</p>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">D</span>升级完成后<span class="desc">全局侧新增一行；项目侧不跟随、不带标记</span></div>
+    <div class="canvas pad">
+      <div class="grid2">
+        <div>
+          <div class="srcbar" style="margin-bottom:6px"><span class="mono">项目实例</span><span>升级前 = 升级后</span><span class="tagn">项目</span></div>
+          <div class="row"><svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg><span class="nm">orders_q3</span><span class="ver">v3</span><span class="scope-badge">项目</span><span class="sb b-info"><span class="d"></span>分析表</span></div>
+        </div>
+        <div>
+          <div class="srcbar" style="margin-bottom:6px"><span class="mono">全局实例</span><span>升级后多这一行</span><span class="tagn">全局</span></div>
+          <div class="row"><svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg><span class="nm">orders_q3</span><span class="ver">v1</span><span class="scope-badge">全局</span><span class="sb b-info"><span class="d"></span>分析表</span></div>
+        </div>
+      </div>
+      <p class="hang">两行的版本号各记各的：全局侧从 v1 起（或被覆盖时接续旧链），项目侧仍是原来的 v3。<b>不要按名字把两行当成同一条记录的两种展示</b>——它们没有联动。</p>
+    </div>
+  </section>
+
+</main>
+
+<div class="stage">
+  <div class="canvas pad">
+    <p class="hang" style="margin-top:0">
+      本块样式：<code>.dlg</code> / <code>.dlg-head</code>（<code>.sub2</code> / <code>.x</code>）/ <code>.dlg-body</code> / <code>.dlg-foot</code> / <code>.dlg-scope</code>（544px，本页新增）/ <code>.srcbar</code>（<code>.mono</code> / <code>.tagn</code>）/ <code>.fgrid</code> / <code>.inp</code> / <code>.inp.ro</code> / <code>.fhint</code> / <code>.locknote</code> / <code>.seq</code> + <code>.snode</code> / <code>.sarrow</code> / <code>.sinst</code> / <code>.scope-badge</code> / <code>.row</code>。<br>
+      落地代码：<code>crates/analytics_resource/src/resource_host/detail_actions.rs::request_promote_to_global</code>（入口与形态判定）/ <code>src/global/promote.rs::promote</code>（双查冲突 + CREATE TABLE AS）/ <code>::promote_overwrite</code>（覆盖分支）/ <code>src/dialogs/conflict.rs</code>（撞名才开的那张框）/ <code>src/resource_view/list_delegate/menu.rs</code>（右键项与多选置灰）。
+    </p>
+  </div>
+</div>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>

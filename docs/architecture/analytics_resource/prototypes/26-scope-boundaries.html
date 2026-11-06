@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>26 边界与拒绝态 · 资产库原型</title>
+<link rel="stylesheet" href="_shared/proto.css">
+<link rel="stylesheet" href="_shared/page.css">
+</head>
+<body class="proto">
+
+<header class="phead">
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>26 · 边界与拒绝态</div>
+  <div class="prow">
+    <h1 class="p-title">边界与拒绝态<span class="p-sec">§13.3 / §13.5</span></h1>
+    <span class="grow"></span>
+    <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
+  </div>
+  <p class="p-spec">
+    双实例这条链上<b>走不通的六种情形</b>。前四种是<b>已实现的拒绝</b>（回执文案就是代码里那几句，一字未改）；后两种是<b>规格没定的口径</b>，标【待确认】。
+    一律走状态栏回执，<b>不弹对话框</b>——只有撞名有窗（<a href="17-dialog-conflict.html">17 块</a>）。
+  </p>
+  <nav class="pnav"><a href="index.html">索引</a><a href="25-cross-project-flow.html">← 上一块：跨项目全流程</a><a href="01-panel-head.html">回到第一块：面板头 →</a></nav>
+</header>
+
+<main class="stage">
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">A</span>分析表型存档不能升级<span class="desc">本体在项目 duckdb 里，没有可读的相对路径 · M8 欠债</span></div>
+    <div class="canvas pad">
+      <div class="srcbar"><svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg><span class="mono">mock_orders</span><span>项目存档 · v1 · 分析表</span><span class="tagn">无本体文件</span></div>
+      <div class="fgrid">
+        <span class="fl">点了会怎样</span>
+        <span class="fw"><input class="inp ro" value="不回执对话框，状态栏一句就结束；这台存档不进 job" readonly></span>
+        <span class="fl">回执原文</span>
+        <span class="fw"><input class="inp ro" value="资产库：分析表型存档的升级随 M8 后续批次接入" readonly></span>
+        <span class="fl">为什么</span>
+        <span class="fw"><input class="inp ro" value="分析表的本体是项目 analytics.duckdb 里的表，没有 resources/ 下的相对路径；读数 / 重建路径未接" readonly></span>
+      </div>
+      <div class="note warn"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>这条<b>不是产品决定，是欠债</b>：分析表本该和「数据文件映射出表」一样能升级。菜单项没置灰、也没提示，用户点了才拿到一句解释。</div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>本体缺失 / 二进制脚本<span class="desc">File 档才有本体；读不出来就到此为止</span></div>
+    <div class="canvas pad">
+      <div class="grid2">
+        <div>
+          <div class="srcbar" style="margin-bottom:6px"><span class="mono">docs/notes.md</span><span class="tagn">本体缺失</span></div>
+          <div class="note danger"><svg class="ico-sm"><use href="#i-x" xlink:href="#i-x"/></svg>资产库：本体文件不存在（docs/notes.md），无法升级</div>
+          <p class="hang">行上会同时出现 <code>.mdot</code> 缺失标记（<a href="03-list-rows.html">03 块</a>）；升级前先修本体，别先升。</p>
+        </div>
+        <div>
+          <div class="srcbar" style="margin-bottom:6px"><span class="mono">assets/logo.png</span><span class="tagn">二进制</span></div>
+          <div class="note danger"><svg class="ico-sm"><use href="#i-x" xlink:href="#i-x"/></svg>读取脚本内容失败（…/resources/assets/logo.png）：stream did not contain valid UTF-8</div>
+          <p class="hang">白名单（csv / tsv / txt / parquet / xlsx / xls / json / ndjson）之外的扩展名一律按脚本处理，<b>二进制就卡在 UTF-8 这一关</b>——回执是技术原文，不是人话。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>只读项目 / 多选<span class="desc">按钮在、但点了不动；多选时那一项直接置灰</span></div>
+    <div class="canvas pad">
+      <div class="grid2">
+        <div>
+          <div class="srcbar" style="margin-bottom:6px"><span class="mono">只读项目</span><span class="tagn">拒绝</span></div>
+          <div class="fgrid">
+            <span class="fl">升级</span><span class="fw"><input class="inp ro" value="资产库：项目为只读模式，不能升级到全局" readonly></span>
+            <span class="fl">分发</span><span class="fw"><input class="inp ro" value="资产库：项目为只读模式，不能从全局分发" readonly></span>
+          </div>
+          <p class="hang">只读项目的 <a href="10-context-menu.html">右键菜单</a>里这两项目前<b>不置灰</b>，与「取回」那几项的处理不一致。</p>
+        </div>
+        <div>
+          <div class="srcbar" style="margin-bottom:6px"><span class="mono">多选（2 条）</span><span class="tagn">置灰</span></div>
+          <div style="width:240px"><div class="ctx proto-on">
+            <div class="mi">打开（只读）</div>
+            <div class="mi">取回到本项目…</div>
+            <div class="mi dim">升级到全局…（多选不可用，§13.3）</div>
+            <div class="mi">移入回收站…（2）</div>
+          </div></div>
+          <p class="hang">升级是<b>一条一份</b>的登记动作，多选会造出一批同名冲突；分批一次一条。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">D</span>全局行上不存在的动作<span class="desc">全局只读三重：取回 / 回收站 / 打标签都不给</span></div>
+    <div class="canvas pad">
+      <div class="srcbar" style="margin-bottom:8px"><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg><span class="mono">全局行右键</span><span>只有一项</span><span class="tagn">只读</span></div>
+      <div style="width:240px"><div class="ctx proto-on">
+        <div class="mi">分发到本项目…</div>
+        <div class="sep"></div>
+        <div class="mi dim">取回到本项目…</div>
+        <div class="mi dim">移入回收站…</div>
+        <div class="mi dim">打标签…</div>
+      </div></div>
+      <p class="hang">置灰三项目前<b>只是不存在</b>（不是画灰）：全局行渲染时按 <code>scope != Global</code> 逐段裁剪，所以那些项压根不进菜单。本页把「本该在哪」摆出来，便于对照。</p>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">E</span>规格没定的两处<span class="desc">【待确认】——拍板前不进代码</span></div>
+    <div class="canvas pad">
+      <div class="fgrid">
+        <span class="fl">① 纯文件档</span>
+        <span class="fw"><input class="inp ro" value="除数据文件 / 脚本 / 分析表之外的 File 档（如 png、zip、docx）进不进全局？" readonly></span>
+        <span class="fl">影响</span>
+        <span class="fw">今天它们会落进「脚本内容表」分支然后读失败；要么明确拒绝并置灰，要么定一套二进制承载。§13 没写。
+      </span>
+        <span class="fl">② 分发后改名</span>
+        <span class="fw"><input class="inp ro" value="分发落名 ↔ 冲突改名 之外，是否允许「分发时就改名」？" readonly></span>
+        <span class="fl">影响</span>
+        <span class="fw">没改名入口时，同名的两份永远撞；只能先撞进冲突框再改名（多一次往返）。
+      </span>
+      </div>
+      <div class="note"><svg class="ico-sm"><use href="#i-info" xlink:href="#i-info"/></svg>这两条与 <a href="25-cross-project-flow.html">25 块</a>的链路不冲突；它们只决定<b>边界上那几个不可升级的档进不进这条链</b>。</div>
+    </div>
+  </section>
+
+</main>
+
+<div class="stage">
+  <div class="canvas pad">
+    <p class="hang" style="margin-top:0">
+      本块样式：<code>.srcbar</code> / <code>.fgrid</code> / <code>.inp.ro</code> / <code>.note</code> + <code>.note.warn</code> + <code>.note.danger</code> / <code>.ctx.proto-on</code> / <code>.mi</code> / <code>.mi.dim</code> / <code>.sep</code> / <code>.mdot</code>。<br>
+      落地代码：<code>crates/analytics_resource/src/resource_host/detail_actions.rs::request_promote_to_global</code>（四条回执原文）/ <code>::request_distribute_from_global</code>（只读 + 无法分发）/ <code>src/global/promote.rs</code>（脚本分支 <code>read_to_string</code> 的失败文案）/ <code>src/resource_view/list_delegate/menu.rs</code>（多选置灰与 <code>scope</code> 裁剪）。
+    </p>
+  </div>
+</div>
+
+<script src="_shared/proto.js"></script>
+</body>
+</html>
