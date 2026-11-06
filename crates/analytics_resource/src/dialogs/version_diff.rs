@@ -30,6 +30,17 @@ pub struct VersionDiffSeed {
     pub patch: String,
 }
 
+/// 待展示的 diff 文件：patch 为空 / 解析不出内容 → `None`（不弹空对话框）。
+///
+/// 抽成纯函数：宿主已挡了非文本与超限，剩下的“这条 patch 到底有没有东西可看”
+/// 得能被单测锁住（否则空 patch 会弹一个只有标题的窗）。
+fn parse_display_patch(patch: &str) -> Option<Vec<DiffFile>> {
+    match DiffFile::parse(patch) {
+        Ok(files) if !files.is_empty() => Some(files),
+        _ => None,
+    }
+}
+
 /// 打开版本 diff 对比对话框（宿主入口）。
 ///
 /// `on_close` 在对话框关闭后调用（宿主据此清掉"当前开着的那一个"的记账）。
@@ -39,9 +50,9 @@ pub fn open_version_diff_dialog(
     seed: VersionDiffSeed,
     on_close: impl Fn(&mut App) + 'static,
 ) {
-    let files = match DiffFile::parse(&seed.patch) {
-        Ok(files) if !files.is_empty() => files,
-        _ => {
+    let files = match parse_display_patch(&seed.patch) {
+        Some(files) => files,
+        None => {
             // patch 为空 / 解析失败：无可展示的差异（宿主已挡了非文本与超限），直接忽略。
             on_close(cx);
             return;
@@ -142,4 +153,43 @@ pub fn open_version_diff_dialog(
             })
             .on_cancel(|_, _, _| true)
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_display_patch;
+
+    const PATCH: &str = "\
+--- a/dau.sql@2
++++ b/dau.sql@3
+@@ -1,2 +1,2 @@
+-select 1;
++select 2;
+ select 3;
+";
+
+    /// 正常 patch → 解析出文件，对话框才会开。
+    ///
+    /// 展示路径取新侧那一行并去掉 `b/` 前缀：带 `@版本` 是**故意**的——面板上要一眼看出
+    /// 这份 diff 是「v2 → v3」，而不是把版本号只写在标题里。
+    #[test]
+    fn real_patch_yields_one_file() {
+        let files = parse_display_patch(PATCH).expect("有差异就该能解析");
+        assert_eq!(files.len(), 1, "单文件 patch");
+        assert_eq!(files[0].path().as_ref(), "dau.sql@3", "新侧路径（去掉 b/）");
+        assert_eq!(files[0].additions(), 1, "新增一行");
+    }
+
+    /// 空 patch（两侧内容一致 / 宿主没给数据）→ 不弹窗（`on_close` 立即回调）。
+    #[test]
+    fn empty_patch_opens_nothing() {
+        assert!(parse_display_patch("").is_none());
+        assert!(parse_display_patch("   \n").is_none());
+    }
+
+    /// 解析不出结构（不是 unified diff）→ 同样不弹窗：宁可不开，也不给一个空壳对话框。
+    #[test]
+    fn garbage_patch_opens_nothing() {
+        assert!(parse_display_patch("这不是 diff").is_none());
+    }
 }

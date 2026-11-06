@@ -18,6 +18,9 @@ use super::{Job, OpOutcome, free_dest, jobs, open_service};
 /// diff 对比的单侧文本大小上限（字节）：超过就不给对比，避免取数线程白算一个大文件。
 const DIFF_MAX_TEXT_BYTES: usize = 512 * 1024;
 
+/// 超限时给用户的话（与阈值同处声明：改阈值时这行文案也在这里一起看）。
+const DIFF_TOO_LARGE: &str = "文件过大，请用编辑器查看差异";
+
 /// 一次版本历史取数任务。
 pub(crate) struct VersionsJob {
     pub(crate) project_root: PathBuf,
@@ -118,16 +121,12 @@ pub(crate) async fn load_version_diff(job: &VersionDiffJob) -> Result<VersionDif
         .map_err(|e| format!("读取历史副本失败：{e}"))?
         .ok_or_else(|| "该版本的内容副本不在（已被保留策略裁剪），无法对比".to_string())?;
     let old_text = read_text_file(&old_path)?;
-    if new_text.len() > DIFF_MAX_TEXT_BYTES || old_text.len() > DIFF_MAX_TEXT_BYTES {
-        return Err("文件过大，请用编辑器查看差异".to_string());
+    if diff_text_too_large(&old_text, &new_text) {
+        return Err(DIFF_TOO_LARGE.to_string());
     }
     let name = current.name.clone();
     let (old_v, new_v) = (job.old_version, current.version);
-    let patch = TextDiff::from_lines(&old_text, &new_text)
-        .unified_diff()
-        .context_radius(3)
-        .header(&format!("a/{name}@{old_v}"), &format!("b/{name}@{new_v}"))
-        .to_string();
+    let patch = unified_patch(&name, old_v, new_v, &old_text, &new_text);
     Ok(VersionDiffRows {
         resource_id: job.resource_id.clone(),
         seed: VersionDiffSeed {
@@ -137,6 +136,28 @@ pub(crate) async fn load_version_diff(job: &VersionDiffJob) -> Result<VersionDif
             patch,
         },
     })
+}
+
+/// 单侧文本是否超出对比上限（两侧都查：旧副本可能比本体大得多）。
+///
+/// 抽成纯函数是为了让"多大算大"这条挡板能被单测锁住——它在消息里对用户承诺了
+/// 「请用编辑器查看差异」，阈值一改，文案与行为要一起变。
+fn diff_text_too_large(old_text: &str, new_text: &str) -> bool {
+    old_text.len() > DIFF_MAX_TEXT_BYTES || new_text.len() > DIFF_MAX_TEXT_BYTES
+}
+
+/// 两版文本 → unified patch（头部带 `a/{name}@{旧版本}` / `b/{name}@{新版本}`，上下各 3 行）。
+///
+/// 纯函数：不碰文件系统、不查库，diff 对话框拿到的就是这段文本（`DiffFile::parse` 再解析）。
+fn unified_patch(name: &str, old_version: i32, new_version: i32, old_text: &str, new_text: &str) -> String {
+    TextDiff::from_lines(old_text, new_text)
+        .unified_diff()
+        .context_radius(3)
+        .header(
+            &format!("a/{name}@{old_version}"),
+            &format!("b/{name}@{new_version}"),
+        )
+        .to_string()
 }
 
 /// 读本体的 UTF-8 文本（diff 只对文本类有意义；非 UTF-8 / 本体缺失直接报错）。
@@ -316,4 +337,72 @@ pub(crate) async fn reload_versions_after(
         resource_id,
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DIFF_MAX_TEXT_BYTES, diff_text_too_large, unified_patch};
+
+    /// 头部两行是 diff 对话框标题之外**唯一**的版本出处：
+    /// `a/名字@旧版`、`b/名字@新版`（`DiffFile::parse` 靠它认出文件名与两侧版本）。
+    #[test]
+    fn patch_header_carries_name_and_both_versions() {
+        let patch = unified_patch("dau.sql", 3, 5, "select 1;\n", "select 2;\n");
+        let lines: Vec<&str> = patch.lines().collect();
+        assert_eq!(lines[0], "--- a/dau.sql@3", "旧侧头：名字 + 旧版本号");
+        assert_eq!(lines[1], "+++ b/dau.sql@5", "新侧头：名字 + 当前版本号");
+        // hunk 头形如 `@@ -1,1 +1,1 @@`（不同版本可能省略 `,1`）：只断两侧行号起点。
+        assert!(
+            lines[2].starts_with("@@ -1") && lines[2].contains("+1"),
+            "改一行 → 一个从第 1 行起的 hunk：{}",
+            lines[2]
+        );
+        assert_eq!(lines[3], "-select 1;");
+        assert_eq!(lines[4], "+select 2;");
+    }
+
+    /// 上下各 3 行上下文：改在第 10 行、其余没动，patch 里只出现 3 行前文 / 3 行后文。
+    #[test]
+    fn patch_keeps_three_lines_of_context() {
+        let old: String = (1..=20).map(|n| format!("line {n}\n")).collect();
+        let mut new: String = (1..=20).map(|n| format!("line {n}\n")).collect();
+        new = new.replace("line 10\n", "line 10 changed\n");
+        let patch = unified_patch("x.sql", 1, 2, &old, &new);
+        assert!(patch.contains(" line 7\n"), "第 10 行前第 3 行在上下文里");
+        assert!(!patch.contains(" line 6\n"), "再往前就被裁掉（不是全文件展开）");
+        assert!(patch.contains(" line 13\n"), "第 10 行后第 3 行在上下文里");
+        assert!(!patch.contains(" line 14\n"), "再往后就被裁掉");
+        assert!(patch.contains("-line 10\n"), "被删的那一行");
+        assert!(patch.contains("+line 10 changed\n"), "换上的那一行");
+        assert_eq!(
+            patch.matches("@@").count(),
+            2,
+            "只有改动附近一个 hunk（两处 `@@` 是同一行的首尾）"
+        );
+    }
+
+    /// 内容一样 → 只有两行头、零 hunk：对话框据此不会画出一个“空 diff”（没有 +/- 行）。
+    #[test]
+    fn identical_text_has_header_but_no_hunks() {
+        let patch = unified_patch("same.sql", 1, 1, "select 1;\n", "select 1;\n");
+        assert!(!patch.contains("@@"), "内容一致就没有 hunk");
+        assert_eq!(
+            patch.lines().skip(2).count(),
+            0,
+            "头两行之后没有任何正文行（没有空的 +/-）"
+        );
+    }
+
+    /// 大小挡板：两侧任一超限都要挡（旧副本可能比本体大得多）。
+    #[test]
+    fn size_guard_covers_either_side() {
+        let small = "select 1;\n";
+        let big = "x".repeat(DIFF_MAX_TEXT_BYTES + 1);
+        assert!(!diff_text_too_large(small, small), "都小 → 放行");
+        assert!(diff_text_too_large(&big, small), "旧侧超限也要挡");
+        assert!(diff_text_too_large(small, &big), "新侧超限要挡");
+        // 恰好等于上限仍放行（边界值不误伤）。
+        let at_limit = "x".repeat(DIFF_MAX_TEXT_BYTES);
+        assert!(!diff_text_too_large(&at_limit, small));
+    }
 }
