@@ -16,9 +16,8 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    宽 <code>544px</code>（34rem）· 只从<b>草稿箱条目 / 本地文件 / 洞察画像</b>三处进来，不在资产库里凭空「新建」。
-    字段：来源（只读 srcbar）/ 显示名 / 别名 / 标签 / 分组（带「默认」预选）/ <b>归档方式</b>（复制到 <code>resources/</code> 或 引用源位置）/ 目标文件（只读 &amp; 冲突时把将写入的名字原样摆出来）。
-    确认成功 → 关闭 + toast + 底部 5 秒撤销条。
+    宽 <code>34rem</code>（544px）· 标题「<b>归档为存档</b>」· 只有<b>草稿箱</b>（面板头 <code>＋▾ → 从草稿箱归档…</code> / 草稿行右键点名）与<b>本地文件</b>（<code>＋▾ → 从本地文件归档…</code>）两处会展开它。
+    结构是「<b>只读三行</b>（来源 / 目标位置·源位置 / 来源连接，标签在左）」+「<b>六个字段</b>（显示名 / 别名 / 分组 / 归档方式 / 标签 / 保留历史内容，标签在上）」。冲突不报错，改摆一行 warning 并把主按钮换成「改名归档」；提交成功 → 关窗 + 回执 + 首次归档给 5 秒撤销条。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="10-context-menu.html">← 上一块：右键菜单</a><a href="12-dialog-checkout.html">下一块：取回对话框 →</a></nav>
 </header>
@@ -26,82 +25,196 @@
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>copy 模式 · 目标被占<span class="desc">将归档为 x-2.sql（预览里直接给最终名字，不用报错教育用户）</span></div>
+    <div class="variant-h"><span class="no">A</span>copy 模式 · 目标被占<span class="desc">只读块第二行给的是<b>已避让的最终路径</b>，冲突另起一行 warning，主按钮变「改名归档」</span></div>
     <div class="canvas pad" style="background:var(--overlay);padding:20px">
       <div class="dlg dlg-archive proto-on">
-        <div class="dlg-head">归档到资产库<span class="sub2">dau_report.sql</span><button class="x">✕</button></div>
+        <div class="dlg-head">归档为存档<button class="x">✕</button></div>
         <div class="dlg-body">
-          <div class="srcbar"><svg class="ico-sm"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="mono">scratchpad/reports/dau_report.sql</span><span class="tagn">草稿箱</span></div>
-          <div class="fgrid">
-            <label class="fl">显示名</label><div class="fw"><input class="inp" value="dau_report.sql"></div>
-            <label class="fl">别名</label><div class="fw"><input class="inp" placeholder="可留空"></div>
-            <div class="fhint">标签 / 别名只影响检索与显示，不改物理路径。</div>
-
-            <label class="fl">标签</label>
-            <div class="fw"><div class="tags" style="margin:0"><span class="tagc">渠道<span class="x">✕</span></span><span class="tagc add">＋ 添加</span></div></div>
-
-            <label class="fl">分组</label><div class="fw"><div class="selw">报表<span class="ar">▾</span></div></div>
-            <div class="fhint">预选<b>默认分组</b>（§2.4）；上次选过的分组不记忆。</div>
-
-            <label class="fl">归档方式</label>
-            <div class="fw">
-              <div class="radios">
-                <label><span class="rdot on"></span>复制到 resources/</label>
-                <label><span class="rdot"></span>引用源位置（仅元数据）</label>
-              </div>
+          <div class="fgrid" style="margin-bottom:10px">
+            <label class="fl">来源</label><div class="fw">草稿箱：reports/dau_report.sql</div>
+            <label class="fl">目标位置</label><div class="fw">resources/reports/dau_report-2.sql</div>
+            <label class="fl">来源连接</label><div class="fw">未记录</div>
+          </div>
+          <div class="fhint" style="margin:0 0 12px;color:var(--warning)">resources/reports/dau_report.sql 已被占用：本次将归档为 resources/reports/dau_report-2.sql（不覆盖）</div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">显示名</div>
+              <input class="inp" value="dau_report">
             </div>
-            <div class="fhint">复制 = 草稿保留为工作副本，本库留只读副本；引用 = 只登记指向，源一变快照就失效。</div>
-
-            <label class="fl">目标文件</label>
-            <div class="fw"><input class="inp ro" value="存为 resources/reports/dau_report-2.sql" readonly></div>
-            <div class="fhint">同名已存在时自动避让为 <code>-2</code> / <code>-3</code> 后缀，此处直接显示最终名字。</div>
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">别名</div>
+              <input class="inp" placeholder="别名（可空）">
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">分组</div>
+              <span style="display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 4px;font-size:11.5px">报表 <span style="color:var(--muted);font-size:9px">▾</span></span>
+              <div style="font-size:10.5px;color:var(--muted);line-height:1.6;margin-top:4px">预选取<b>归档默认分组</b>；下拉第一行是「分组」小节标题，下面是「未分组」与各分组（当前项打勾）。不提供「新建分组…」——建组入口在行菜单与分组头右键。</div>
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">归档方式</div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <div style="display:flex;align-items:flex-start;gap:6px">
+                  <span class="rdot on" style="margin-top:3px"></span>
+                  <div>
+                    <div>复制</div>
+                    <div style="color:var(--muted);font-size:10px;line-height:1.5">复制进 resources/ 并变只读；源文件保留为工作副本，回溯永不失效</div>
+                  </div>
+                </div>
+                <div style="display:flex;align-items:flex-start;gap:6px">
+                  <span class="rdot" style="margin-top:3px"></span>
+                  <div>
+                    <div>引用</div>
+                    <div style="color:var(--muted);font-size:10px;line-height:1.5">只登记元数据与指纹，本体留在源位置；打开时校验源文件指纹</div>
+                  </div>
+                </div>
+              </div>
+              <div style="font-size:10.5px;color:var(--muted);line-height:1.6;margin-top:4px">草稿保留为工作副本，可继续编辑；再次归档将生成新版本</div>
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">标签</div>
+              <input class="inp" placeholder="标签，逗号分隔（可空）">
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">保留历史内容</div>
+              <input class="inp" placeholder="跟随设置（-1 全留）">
+              <div style="font-size:10.5px;color:var(--muted);line-height:1.6;margin-top:4px">留空 = 跟随设置；数字 = 只留最近 N 份（上限 100）；<code>-1</code> = 全部保留。</div>
+            </div>
           </div>
-          <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>归档后本条目在资产库<b>只读</b>；要改内容先「取回（检出）」→ 草稿工作副本 → 再归档为新版本（v3）。</span></div>
         </div>
-        <div class="dlg-foot"><span>目标：项目「营销分析」· 应用守卫会拒写 resources/</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">归档</button></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="variant">
-    <div class="variant-h"><span class="no">B</span>reference 模式 · 外部文件<span class="desc">方式区只剩引用（外部文件没有「复制进来」的能力）；指纹与源位置显式展示</span></div>
-    <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="dlg dlg-archive proto-on">
-        <div class="dlg-head">归档到资产库<span class="sub2">sales_daily.csv</span><button class="x">✕</button></div>
-        <div class="dlg-body">
-          <div class="srcbar"><svg class="ico-sm"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="mono">/data/exports/sales_daily.csv</span><span class="tagn">本地文件</span></div>
-          <div class="fgrid">
-            <label class="fl">显示名</label><div class="fw"><input class="inp" value="sales_daily.csv"></div>
-            <label class="fl">别名</label><div class="fw"><input class="inp" placeholder="可留空"></div>
-
-            <label class="fl">标签</label>
-            <div class="fw"><div class="tags" style="margin:0"><span class="tagc">外部<span class="x">✕</span></span><span class="tagc add">＋ 添加</span></div></div>
-
-            <label class="fl">分组</label><div class="fw"><div class="selw">外部数据<span class="ar">▾</span></div></div>
-
-            <label class="fl">归档方式</label>
-            <div class="fw"><div class="radios"><label><span class="rdot on"></span>引用源位置（本库不复制）</label></div></div>
-            <div class="fhint">外部文件默认只登记指向 + 内容指纹；源文件改动后打开会被拦截，由用户决定是否「接受当前内容」。</div>
-
-            <label class="fl">源位置</label>
-            <div class="fw"><input class="inp ro" value="/data/exports/sales_daily.csv" readonly></div>
-            <label class="fl">内容指纹</label>
-            <div class="fw"><input class="inp ro" value="3f9a2c7b1e04（sha256 前 12）" readonly></div>
-          </div>
-          <div class="note warn"><svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg><span>引用型不会带来<b>内容可复现</b>；要真正的存档请先 import 成本地文件，再走「复制到 resources/」。</span></div>
-        </div>
-        <div class="dlg-foot"><span>目标：项目「营销分析」</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">归档</button></div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">改名归档</button></div>
       </div>
     </div>
     <p class="hang">
-      落地口径（<code>dialogs/archive.rs</code>）：归档 = <b>copy</b>，草稿保留为工作副本；标签 / 分组 / 别名<b>真落库</b>，失败<b>不回滚</b>已写入的副本，只把失败写进回执；撤销窗口 5 秒（<code>service.rs::undo_archive</code>），版本 &gt; 1 拒绝撤回。
+      <b>只读块与表单刻意不同形</b>：只读块标签在左（“告诉你”），表单标签在上（“要你填”）——扫一眼就知道哪几行动不了。只读第二行随归档方式切换：复制 = <b>目标位置</b>（<code>resources/</code> 下的最终相对路径，已做重名避让），引用 = <b>源位置</b>（源绝对路径）。第三行「来源连接」在来源没带连接时照写「<b>未记录</b>」——不猜当前活动连接。<br>
+      <b>目标路径不给输入框</b>：它由来源决定，手打就是绕过 <code>PayloadStore::resolve</code> 的越界与只读守卫。重名避让是主名加 <code>-2</code> / <code>-3</code>…（保留目录与扩展名，试到 <code>-999</code>），<b>开窗前就算好</b>，所以对话框里摆出来的已经是最终名字。<br>
+      显示名默认值是<b>去扩展名的文件名</b>（<code>file_stem</code>），不是带扩展名的文件名。footer 只有「取消 / 归档」两个按钮，左侧不写项目名与守卫说明——原型此前那句「应用守卫会拒写 resources/」是自造术语；真实守卫是只读项目在入口就被挡回：「项目为只读模式，不能归档」。
     </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>分析快照档 · 没有「引用」可选<span class="desc">csv / parquet / xlsx 这类数据文件按分析档登记，归档方式只剩一句说明</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-archive proto-on">
+        <div class="dlg-head">归档为存档<button class="x">✕</button></div>
+        <div class="dlg-body">
+          <div class="fgrid" style="margin-bottom:12px">
+            <label class="fl">来源</label><div class="fw">本地文件：D:\data\exports\sales_daily.csv</div>
+            <label class="fl">目标位置</label><div class="fw">resources/sales_daily.csv</div>
+            <label class="fl">来源连接</label><div class="fw">未记录</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">显示名</div>
+              <input class="inp" value="sales_daily">
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">别名</div>
+              <input class="inp" placeholder="别名（可空）">
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">分组</div>
+              <span style="display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 4px;font-size:11.5px">未分组 <span style="color:var(--muted);font-size:9px">▾</span></span>
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">归档方式</div>
+              <div style="color:var(--muted)">分析快照固定为复制存档</div>
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">标签</div>
+              <input class="inp" placeholder="标签，逗号分隔（可空）">
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">保留历史内容</div>
+              <input class="inp" placeholder="跟随设置（-1 全留）">
+            </div>
+          </div>
+        </div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">归档</button></div>
+      </div>
+    </div>
+    <p class="hang">
+      这里推翻原型原先的「外部文件只剩引用」：<b>档位由扩展名决定</b>（<code>archive_kind_for</code> 走 <code>engine::duckdb::file_reader_function</code>），认得出的数据文件（csv / parquet / xlsx / json）登记为<b>分析表</b>，而「引用」只对受管文件开放（<code>allow_reference = kind == File</code>）——所以这类文件<b>没有单选</b>，只有一句「分析快照固定为复制存档」，连「源位置」行都不摆（第二行仍是目标位置）。<br>
+      落地口径（<code>jobs/archive/run.rs</code>）：探测失败<b>降级而不是拒归档</b>——文件先安全落进 <code>resources/</code>，按文件型登记指纹，日志里记一声。<br>
+      另外「内容指纹」这一行<b>不存在</b>：指纹在归档动作里算并落库，不在对话框展示；目标位置也不改格式（复制是原样搬，<code>resources/sales_daily.csv</code> 仍是 csv）。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>File 档 · 选「引用」<span class="desc">只有受管文件才摆两条单选；选引用时第二行换成源绝对路径</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-archive proto-on">
+        <div class="dlg-head">归档为存档<button class="x">✕</button></div>
+        <div class="dlg-body">
+          <div class="fgrid" style="margin-bottom:12px">
+            <label class="fl">来源</label><div class="fw">本地文件：D:\data\exports\changelog.md</div>
+            <label class="fl">源位置</label><div class="fw">D:\data\exports\changelog.md</div>
+            <label class="fl">来源连接</label><div class="fw">未记录</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">显示名</div>
+              <input class="inp" value="changelog">
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">别名</div>
+              <input class="inp" placeholder="别名（可空）">
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">分组</div>
+              <span style="display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 4px;font-size:11.5px">未分组 <span style="color:var(--muted);font-size:9px">▾</span></span>
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">归档方式</div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <div style="display:flex;align-items:flex-start;gap:6px">
+                  <span class="rdot" style="margin-top:3px"></span>
+                  <div>
+                    <div>复制</div>
+                    <div style="color:var(--muted);font-size:10px;line-height:1.5">复制进 resources/ 并变只读；源文件保留为工作副本，回溯永不失效</div>
+                  </div>
+                </div>
+                <div style="display:flex;align-items:flex-start;gap:6px">
+                  <span class="rdot on" style="margin-top:3px"></span>
+                  <div>
+                    <div>引用</div>
+                    <div style="color:var(--muted);font-size:10px;line-height:1.5">只登记元数据与指纹，本体留在源位置；打开时校验源文件指纹</div>
+                  </div>
+                </div>
+              </div>
+              <div style="font-size:10.5px;color:var(--muted);line-height:1.6;margin-top:4px">本体留原位，只存元数据（地址 + 指纹 + 版本）；源变更后快照失效</div>
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">标签</div>
+              <input class="inp" placeholder="标签，逗号分隔（可空）">
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">保留历史内容</div>
+              <input class="inp" placeholder="跟随设置（-1 全留）">
+            </div>
+          </div>
+        </div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">归档</button></div>
+      </div>
+    </div>
+    <p class="hang">
+      两种模式在<b>落库形态</b>上不同（<code>service/archive.rs</code>）：复制把本体搬进 <code>resources/&lt;rel_path&gt;</code> 并写相对路径；引用<b>不动文件</b>，<code>file_rel_path</code> 存的是源绝对路径——同一源二次归档会被唯一索引挡下（一个源一份引用）。<br>
+      「引用型没有内容可复现」不能只靠这句说明：详情面板与行上都有对应状态（<code>strength_badge</code> 的「引用」档），源变更后打开会被指纹拦下、由用户决定「接受当前内容」。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">D</span>批量草稿 · 不展开这张对话框<span class="desc">多条草稿走挑选对话框后按默认名逐个入队</span></div>
+    <div class="canvas pad">
+      <div class="hang" style="margin:0">
+        只有<b>一条</b>草稿时（面板头全量里只勾一条、或草稿行点名一条）才展开完整的归档确认；<b>多条</b>走「挑选对话框 → 逐条用默认名入队」，回执是一句「已提交 N 个归档…（M 个目标被占，已自动改名）」——列表里没有位置让用户逐个改名，所以那一批<b>没有</b>显示名 / 别名 / 标签 / 分组 / 保留策略的可改机会（标签按草稿条目标签继承，保留策略按设置批带入）。
+      </div>
+    </div>
   </section>
 
   <div class="canvas pad">
     <p class="hang" style="margin:0">
-      本块样式：<code>.dlg.dlg-archive</code>（544px）/ <code>.dlg-head</code> / <code>.srcbar</code> / <code>.fgrid</code> / <code>.fhint</code> / <code>.radios</code> / <code>.note</code> / <code>.dlg-foot</code>。
-      落地代码：<code>crates/analytics_resource/src/dialogs/archive.rs</code>。
+      本块样式：<code>.dlg.dlg-archive</code>（544px）/ <code>.dlg-head</code> / <code>.fgrid</code>（只读块那三行）/ <code>.fhint</code> / <code>.rdot</code> / <code>.inp</code> / <code>.dlg-foot</code>；本页<b>已不用</b> <code>.srcbar</code>（只读区改成标签/值三行）、<code>.tags</code> / <code>.tagc</code>（标签是一个逗号分隔的输入框）、<code>.selw</code>（分组是 ghost 按钮 + 下拉菜单）、<code>.radios</code>（两条竖向单选各带说明）、<code>.inp.ro</code>（本对话框没有只读输入框）。
+      落地代码：<code>crates/analytics_resource/src/dialogs/archive/</code>（<code>mod.rs</code> 的 seed / 校验 / 解析、<code>open.rs</code> 的表单装配与两条提交路径、<code>fields.rs</code> 的只读块与分组 / 模式选择器）+ <code>resource_host/{mod,archive_actions}.rs</code>（seed 备料、重名避让、入队）+ <code>service/archive.rs</code>（两种模式落库）+ <code>jobs/archive/run.rs</code>（撤销凭据只在首次归档给）。
     </p>
   </div>
 
