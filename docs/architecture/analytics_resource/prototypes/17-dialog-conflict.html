@@ -2,22 +2,24 @@
 <html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="UTF-8">
-<title>17 升级冲突 · 资产库原型</title>
+<title>17 同名冲突 · 资产库原型</title>
 <link rel="stylesheet" href="_shared/proto.css">
 <link rel="stylesheet" href="_shared/page.css">
 </head>
 <body class="proto">
 
 <header class="phead">
-  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>17 · 升级冲突</div>
+  <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>17 · 同名冲突</div>
   <div class="prow">
-    <h1 class="p-title">升级 / 分发同名冲突<span class="p-sec">§13.3 · A1</span></h1>
+    <h1 class="p-title">同名冲突对话框<span class="p-sec">§13.3 升级 / §13.6 分发</span></h1>
     <span class="grow"></span>
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    三个处置，一屏说完：<b>覆盖全局旧版本</b>（删全局旧表 + 软删旧登记后重走升级，<code>overwritten=true</code>，版本链接续）/ <b>改名升级</b>（换目标名，版本链从头开始）/ <b>取消</b>。
-    同名冲突<b>不能静默覆盖</b>——先摆清「全局已有 v4、来自另一项目」的事实再让用户选。
+    宽 480px（<code>CONFLICT_DIALOG_WIDTH = 30.0</code>），标题只有「<b>同名冲突</b>」——没有副标题、没有图标；<b>升级与分发共用同一个对话框</b>，动词 / 持有方 / 覆盖提示按类型在正文里分支。
+    正文三段：一句引言（<code>text_sm</code>）+ 一句覆盖后果（<code>text_xs</code> <b>warning</b>）+「改用新名称」标签、输入框、一行校验提示（<code>text_xs</code>，颜色随闸门变）。
+    footer 三个按钮：<b>取消</b>（Secondary）/ <b>覆盖</b>（Danger）/ <b>改名</b>（Primary，<b>过闸才可点</b>）。<b>Enter = 改名、Esc = 取消</b>。
+    输入框<b>开窗前就预填了冲突名</b> → 默认状态是「名字与现有资源相同」，改名按钮一开始是灰的。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="16-dialog-repair.html">← 上一块：索引修复</a><a href="18-dialog-insight-archive.html">下一块：洞察归档 →</a></nav>
 </header>
@@ -25,76 +27,126 @@
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>三选一<span class="desc">默认落在「覆盖」（老用户最常想干的事），但把代价写在提示行里</span></div>
-    <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="dlg dlg-conflict proto-on">
-        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-warn" xlink:href="#i-warn"/></svg>升级到全局<span class="sub2">冲突：全局已有同名资源</span><button class="x">✕</button></div>
-        <div class="dlg-body">
-          <div class="srcbar">
-            <svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg>
-            <span class="mono">mock_orders</span>
-            <span class="tagn">项目分析表 · 待升级</span>
+    <div class="variant-h"><span class="no">A</span>升级到全局 · 初始态<span class="desc">预填冲突名 → 闸门「与原名相同」，提示 warning，改名灰、Enter 也无效</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:22px;display:flex;justify-content:center">
+      <div class="dlg proto-on" style="width:480px">
+        <div class="dlg-head">同名冲突<button class="x">✕</button></div>
+        <div class="dlg-body" style="display:flex;flex-direction:column;gap:12px">
+          <div style="font-size:14px;line-height:1.65">全局实例已有同名资源「mock_orders」。选择处理方式：覆盖旧内容、改用新名称，或取消本次升级到全局。</div>
+          <div style="font-size:12px;line-height:1.65;color:var(--warning)">覆盖将删除全局旧表并软删旧登记，新内容接续版本链；旧表内容不可恢复。</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="font-size:12px;color:var(--muted)">改用新名称</div>
+            <div style="height:32px;border:1px solid var(--input-border);border-radius:6px;background:var(--bg);display:flex;align-items:center;padding:0 10px;font-size:13px">mock_orders<span style="width:1px;height:15px;background:var(--active-border);margin-left:1px"></span></div>
+            <div style="font-size:12px;line-height:1.6;color:var(--warning)">名字与现有资源相同，请换一个新名称</div>
           </div>
-          <div class="locknote" style="margin-top:0"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg><span>全局 DuckDB（G_ 连接）已有同名表 <code>mock_orders</code>（v4 · 来自另一项目）。同名冲突不能静默覆盖，需先处置。</span></div>
-          <div class="fgrid" style="margin-top:10px">
-            <div class="fl">冲突处置</div>
-            <div class="fw"><div class="radios">
-              <label><span class="rdot on"></span>覆盖全局旧版本（版本链接续）</label>
-              <label><span class="rdot"></span>改名升级（新名入全局）</label>
-              <label><span class="rdot"></span>取消</label>
-            </div></div>
-            <div class="fhint">覆盖 = 删全局旧表 + 软删旧登记后重走升级（<code>overwritten=true</code>）；改名 = 目标新名重排升级路径（§13.3）。</div>
-          </div>
-          <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>跨项目唯一法定路径 = 项目 → 全局 → 项目；项目 ↔ 项目禁止直传。</span></div>
         </div>
-        <div class="dlg-foot">
-          <span>升级会把表 + 版本信息复制进全局 DuckDB（G_ 连接）</span><span class="grow"></span>
-          <button class="btn-s">取消</button><button class="btn-s">改名</button><button class="btn-p">覆盖</button>
+        <div class="dlg-foot" style="justify-content:flex-end">
+          <button class="btn-s">取消</button>
+          <button class="btn-s" style="border-color:transparent;background:color-mix(in srgb,var(--danger) 20%,transparent);color:var(--danger);font-weight:600">覆盖</button>
+          <button class="btn-s" disabled style="border-color:transparent;background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--muted);font-weight:600;opacity:.7;cursor:not-allowed">改名</button>
         </div>
       </div>
     </div>
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">B</span>改名路径<span class="desc">选「改名升级」后展开目标名输入（不再问第二次）</span></div>
-    <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="dlg dlg-conflict proto-on">
-        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-warn" xlink:href="#i-warn"/></svg>升级到全局<span class="sub2">冲突：全局已有同名资源</span><button class="x">✕</button></div>
-        <div class="dlg-body">
-          <div class="srcbar">
-            <svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg>
-            <span class="mono">mock_orders</span>
-            <span class="tagn">项目分析表 · 待升级</span>
+    <div class="variant-h"><span class="no">B</span>升级到全局 · 已换新名<span class="desc">闸门 Ready：提示转 muted 并回显新名，改名可点（Enter 走同一条路径）</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:22px;display:flex;justify-content:center">
+      <div class="dlg proto-on" style="width:480px">
+        <div class="dlg-head">同名冲突<button class="x">✕</button></div>
+        <div class="dlg-body" style="display:flex;flex-direction:column;gap:12px">
+          <div style="font-size:14px;line-height:1.65">全局实例已有同名资源「mock_orders」。选择处理方式：覆盖旧内容、改用新名称，或取消本次升级到全局。</div>
+          <div style="font-size:12px;line-height:1.65;color:var(--warning)">覆盖将删除全局旧表并软删旧登记，新内容接续版本链；旧表内容不可恢复。</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="font-size:12px;color:var(--muted)">改用新名称</div>
+            <div style="height:32px;border:1px solid var(--active-border);border-radius:6px;background:var(--bg);display:flex;align-items:center;padding:0 10px;font-size:13px">mock_orders_marketing<span style="width:1px;height:15px;background:var(--active-border);margin-left:1px"></span></div>
+            <div style="font-size:12px;line-height:1.6;color:var(--muted)">将以「mock_orders_marketing」升级到全局，不覆盖现有内容</div>
           </div>
-          <div class="fgrid" style="margin-top:2px">
-            <div class="fl">冲突处置</div>
-            <div class="fw"><div class="radios">
-              <label><span class="rdot"></span>覆盖全局旧版本（版本链接续）</label>
-              <label><span class="rdot on"></span>改名升级（新名入全局）</label>
-              <label><span class="rdot"></span>取消</label>
-            </div></div>
-            <div class="fl">全局新名</div>
-            <div class="fw"><input class="inp" value="mock_orders_marketing"></div>
-            <div class="fhint">新名在全局不能重名；确认后按新名重排升级路径，<b>不续接</b>原全局表的版本链（v1 重新开始）。</div>
-          </div>
-          <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>跨项目唯一法定路径 = 项目 → 全局 → 项目；项目 ↔ 项目禁止直传。</span></div>
         </div>
-        <div class="dlg-foot">
-          <span>升级会把表 + 版本信息复制进全局 DuckDB（G_ 连接）</span><span class="grow"></span>
-          <button class="btn-s">取消</button><button class="btn-p">以新名升级</button>
+        <div class="dlg-foot" style="justify-content:flex-end">
+          <button class="btn-s">取消</button>
+          <button class="btn-s" style="border-color:transparent;background:color-mix(in srgb,var(--danger) 20%,transparent);color:var(--danger);font-weight:600">覆盖</button>
+          <button class="btn-p">改名</button>
         </div>
       </div>
     </div>
-    <p class="hang">
-      两条链的差别要写清：<b>覆盖</b>保住 v5（旧 v4 软删、审计可追）；<b>改名</b>等于新资源（v1 从头，与旧表无 <code>promoted_from</code> 关系）。
-      分发（全局 → 项目）遇到项目同名，同一个对话框换标题「分发到本项目」，处置变成「覆盖项目同名 / 改名分发 / 取消」。
-    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>名字被清空<span class="desc">闸门 Blocked：提示 danger 色，改名依旧灰</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:22px;display:flex;justify-content:center">
+      <div class="dlg proto-on" style="width:480px">
+        <div class="dlg-head">同名冲突<button class="x">✕</button></div>
+        <div class="dlg-body" style="display:flex;flex-direction:column;gap:12px">
+          <div style="font-size:14px;line-height:1.65">全局实例已有同名资源「mock_orders」。选择处理方式：覆盖旧内容、改用新名称，或取消本次升级到全局。</div>
+          <div style="font-size:12px;line-height:1.65;color:var(--warning)">覆盖将删除全局旧表并软删旧登记，新内容接续版本链；旧表内容不可恢复。</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="font-size:12px;color:var(--muted)">改用新名称</div>
+            <div style="height:32px;border:1px solid var(--active-border);border-radius:6px;background:var(--bg);display:flex;align-items:center;padding:0 10px;font-size:13px;color:var(--muted)"><span style="width:1px;height:15px;background:var(--active-border)"></span></div>
+            <div style="font-size:12px;line-height:1.6;color:var(--danger)">显示名不能为空</div>
+          </div>
+        </div>
+        <div class="dlg-foot" style="justify-content:flex-end">
+          <button class="btn-s">取消</button>
+          <button class="btn-s" style="border-color:transparent;background:color-mix(in srgb,var(--danger) 20%,transparent);color:var(--danger);font-weight:600">覆盖</button>
+          <button class="btn-s" disabled style="border-color:transparent;background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--muted);font-weight:600;opacity:.7;cursor:not-allowed">改名</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">D</span>从全局分发 · 同一个对话框<span class="desc">只换正文里的持有方、动词与覆盖后果，标题不变</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:22px;display:flex;justify-content:center">
+      <div class="dlg proto-on" style="width:480px">
+        <div class="dlg-head">同名冲突<button class="x">✕</button></div>
+        <div class="dlg-body" style="display:flex;flex-direction:column;gap:12px">
+          <div style="font-size:14px;line-height:1.65">当前项目已有同名资源「mock_orders」。选择处理方式：覆盖旧内容、改用新名称，或取消本次从全局分发。</div>
+          <div style="font-size:12px;line-height:1.65;color:var(--warning)">覆盖将删除项目旧表 / 旧文件并软删旧登记，新内容接续项目版本链；旧本体不可恢复。</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="font-size:12px;color:var(--muted)">改用新名称</div>
+            <div style="height:32px;border:1px solid var(--input-border);border-radius:6px;background:var(--bg);display:flex;align-items:center;padding:0 10px;font-size:13px">mock_orders<span style="width:1px;height:15px;background:var(--active-border);margin-left:1px"></span></div>
+            <div style="font-size:12px;line-height:1.6;color:var(--warning)">名字与现有资源相同，请换一个新名称</div>
+          </div>
+        </div>
+        <div class="dlg-foot" style="justify-content:flex-end">
+          <button class="btn-s">取消</button>
+          <button class="btn-s" style="border-color:transparent;background:color-mix(in srgb,var(--danger) 20%,transparent);color:var(--danger);font-weight:600">覆盖</button>
+          <button class="btn-s" disabled style="border-color:transparent;background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--muted);font-weight:600;opacity:.7;cursor:not-allowed">改名</button>
+        </div>
+      </div>
+    </div>
   </section>
 
   <div class="canvas pad">
+    <p class="hang" style="margin:0 0 10px">
+      推翻的九处：① <b>不是三选一的 radio 组</b>——实际是「输入框 + 三个按钮」，处置动作全在 footer（<code>conflict-dialog-cancel</code> / <code>conflict-dialog-overwrite</code> / <code>conflict-dialog-rename</code>），正文里没有任何单选控件；
+      ② <b>标题恒为「同名冲突」</b>，升级与分发<b>不换标题</b>（旧稿那句「分发换标题『分发到本项目』」是假的），差异只在引言、覆盖提示与动词（<code>ConflictKind::verb</code> / <code>holder</code> / <code>overwrite_note</code>）；
+      ③ <b>没有标题图标、没有副标题</b>（旧稿 <code>#i-warn</code> +「冲突：全局已有同名资源」都不存在），正文里也没有「全局已有 v4 · 来自另一项目」这行——<code>ConflictSeed</code> 只有 <code>kind</code> 与 <code>name</code> 两个字段，<b>版本号与来源项目根本没传进来</b>；
+      ④ <b>没有 srcbar 那种「项目分析表 · 待升级」来源条</b>、没有「冲突处置」这个字段标签；
+      ⑤ 一句<b>「覆盖会删什么」的 warning 行是有的</b>，但文案是固定的两句（升级：删全局旧表 + 软删旧登记，新内容接续版本链；分发：删项目旧表 / 旧文件 + 软删旧登记），不是旧稿那句「同名冲突不能静默覆盖，需先处置」；
+      ⑥ 没有「跨项目唯一法定路径 = 项目 → 全局 → 项目」那条 info note（它在 §13 设计里，不在对话框里）；
+      ⑦ footer <b>左边没有「升级会把表 + 版本信息复制进全局 DuckDB」这类长说明</b>，三个按钮一律 small：取消 Secondary / <b>覆盖 Danger</b> / 改名 Primary（<code>.disabled(!can_rename)</code>）；
+      ⑧ <b>输入框是常驻的，不是「选了改名才展开」</b>——开窗前由宿主建好并<b>预填冲突名</b>，所以默认状态必是「与原名相同」：提示 warning、改名灰、<b>Enter 也提交不了</b>（<code>on_ok</code> 里同样走一遍闸门，不过闸就 <code>return true</code> 不关窗）；
+      ⑨ <b>改名与覆盖是两条并列的路，不存在「先选改名再确认」的第二次询问</b>——覆盖按钮直接回宿主重入队 <code>enqueue_promote(root, req, true)</code>，改名把 <code>req.name</code> 换成新名后非覆盖重入队；状态栏回执「资产库：正在覆盖升级到全局…」/「正在升级到全局…」（分发侧是「正在覆盖分发到本项目…」/「正在从全局分发…」）。
+    </p>
+    <p class="hang" style="margin:0 0 10px">
+      原型没画而实现有的：<b>闸门三种态</b>（Ready / Unchanged / Blocked，各自一条提示，颜色 muted / warning / danger），B、C 两变体就是为它们补的；<b>输入框在 Ready 态会回显要提交的新名</b>（「将以「{新名}」升级到全局，不覆盖现有内容」）；<b>取消直接关窗、不回调</b>（<code>on_close</code> 只清 session）。
+    </p>
+    <p class="hang" style="margin:0 0 10px">
+      按钮外观按 vendor 实参：<code>ButtonVariant::Danger</code> 非 outline 时取 <code>tokens.button_danger</code>（<code>danger.mix_oklab(transparent, 0.2)</code>，即 <b>20% 红底</b>）+ 文字色 <code>button_danger_foreground</code>（<b>danger 本身</b>）——所以覆盖是<b>淡红底红字、无描边</b>，不是旧稿 <code>.btn-d</code> 的描边透明底。Primary 是实心品牌色 + 白字（<code>.btn-p</code> 那套）。禁用态 gpui 走 <code>disabled()</code>：Primary 底变 <code>opacity 0.15</code>、文字 <code>muted_foreground 0.5</code>。
+    </p>
+    <p class="hang" style="margin:0 0 10px">
+      一处与会话记录不符的实现口径（<b>只记不改</b>）：<code>promote.rs</code> 注释与引言都写「覆盖后新内容接续版本链」，升级侧确为真（<code>register_global</code> 取 <code>MAX(version) WHERE scope='global'</code>、<b>不带 <code>deleted_at IS NULL</code></b>，软删的旧行仍参与取最大值 → v5）；
+      但<b>分发侧不接续</b>：<code>distribute_overwrite</code> 先软删项目旧登记，而 <code>register_project_table</code> 的 <code>MAX(version)</code> <b>带 <code>deleted_at IS NULL</code></b>（<code>register.rs:39</code>）→ 取不到 → 新登记版本从 <b>1</b> 重新开始。所以 D 变体那句「接续项目版本链」是注释口径、不是实际行为。
+    </p>
+    <p class="hang" style="margin:0 0 10px">
+      本块样式：<code>.dlg.proto-on</code> 壳 + 内联（正文三段 / 输入框 / 亮起与灰掉的按钮）；不再用旧稿的 <code>.srcbar</code> / <code>.locknote</code> / <code>.radios</code> / <code>.note</code> / <code>.fgrid</code>。
+      落地代码：<code>crates/analytics_resource/src/dialogs/conflict.rs</code>（一个文件：<code>ConflictKind</code> / <code>ConflictSeed</code> / <code>ConflictChoice</code> / <code>conflict_gate</code> / <code>open_conflict_dialog</code> + 一条闸门单测），宿主在 <code>crates/workbench/src/panels/{mod.rs,resources.rs}</code>（开窗 <code>ensure_conflict_dialog</code>、重入队 <code>request_conflict_choice</code>）。
+    </p>
     <p class="hang" style="margin:0">
-      本块样式：<code>.dlg.dlg-conflict</code> / <code>.srcbar</code> / <code>.locknote</code> / <code>.radios</code> / <code>.note</code>。
-      落地代码：<code>crates/analytics_resource/src/dialogs/conflict.rs</code>。
+      欠债两处：① 冲突回执只带 <code>name</code>，<b>旧全局版本的版本号与来源项目没有进对话框</b>——设计上想「先摆清全局已有 v4、来自另一项目」（本页标题那句），现在摆不出来，要加就得扩 <code>ConflictSeed</code> 与 <code>InstanceOpError::Conflict</code>；
+      ② 15 / 16 页的危险按钮仍按 <code>.btn-d</code> 描边画（与本页「淡红底实心」不一致），要不要统一到 vendor 实参后补。
     </p>
   </div>
 
