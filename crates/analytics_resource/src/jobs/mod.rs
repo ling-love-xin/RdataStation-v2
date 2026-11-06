@@ -375,7 +375,9 @@ pub use tag::{
 };
 pub use version::{enqueue_version_action, enqueue_version_diff, enqueue_versions};
 
-use self::refresh::{collision_name, free_dest, open_service, refresh_after_op};
+use self::refresh::{free_dest, open_service, refresh_after_op};
+#[cfg(test)]
+use self::refresh::collision_name;
 
 pub use self::refresh::{
     drain_index_scan, drain_op, drain_snapshot, drain_tag_rows, drain_trash_rows,

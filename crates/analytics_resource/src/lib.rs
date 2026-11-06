@@ -35,6 +35,7 @@ pub mod store;
 pub mod ui;
 
 pub mod global;
+pub mod view_model;
 pub mod resource_host;
 
 pub use indexer::{IndexIssue, IndexRepair, IndexScanReport};
