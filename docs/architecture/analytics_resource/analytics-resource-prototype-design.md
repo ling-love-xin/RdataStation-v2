@@ -531,14 +531,15 @@ sequenceDiagram
 
 ## 13. 双实例（全局 / 项目分析库）资源展示与升级
 
-> 2026-10-22 用户需求：展示两个 DuckDB 实例的资源表，项目可升级到全局。本节为**草案规格**，多处标注【待确认】；未拍板前实现不动，只进原型。
-> 现状锚定（源码证据）：全局分析库 `{system}/analytics.duckdb`（`connection-dialog/workspace_loader.rs:32-36`，连接前缀 `G_`，`main.rs:153` 系统初始化即用）；项目分析库 `{项目}/.RSmeta/analytics.duckdb`（连接前缀 `P_` / `GP_`，`secret_integration.rs:220-221`）。M6 当前**完全项目作用域**：`ArchiveKind` 无实例字段（`model.rs:13-23`），所有操作 `require_project`（`resource_host.rs:191`），分析表本体 = 项目库（`model.rs:19`、`resource_view.rs:303`），全局库的表不进 M6 列表。
+> 2026-10-22 用户需求：展示两个 DuckDB 实例的资源表，项目可升级到全局。本节为**草案规格**，多处标注【待确认】。
+> 现状锚定（2026-11-06 按源码复核，**取代**旧口径「本节未拍板、实现不动」）：双实例的**数据层与链路已落地**——全局登记表 `crates/store/migrations/global/026_analytics_resource_global.sql`（镜像项目库 `analytics_resources` 全列集 + `scope TEXT NOT NULL DEFAULT 'global'`，只存 `'global'` 行；项目库行照旧写 `'project'`）+ 全局侧独立版本表 `analytics_resource_versions`；实例枚举 `RowScope::{Project,Global}`（`model/kind.rs`）；升级 `global/promote.rs`、分发 `global/distribute.rs`、登记 `global/register.rs`、全局列表 `global/list.rs`、建表语句 `global/sql.rs`；冲突框 `dialogs/conflict.rs::{ConflictKind::Promote, ConflictKind::Distribute}` 两态。全局库 `{system}/analytics.duckdb`（`G_` 前缀）与项目库 `{项目}/.RSmeta/analytics.duckdb`（`P_` / `GP_` 前缀）沿用原锚定。
+> 仍未落地的只有三类：① **分析表型存档的升级**（回执「随 M8 后续批次接入」，本应走 `CREATE TABLE AS`）；② 升级 / 分发**都没有确认对话框**（点一下直接入队，只有撞名开窗，故 13.3 的「默认显示名、可改」无落点）；③ 只读项目的这两项菜单**不置灰**（与「取回」不一致）。评审画面见 `prototypes/23`–`26`。
 
 ### 13.1 实例概念与标识
 
-- `Resource` 新增 **`scope`** 字段：`project`（默认）/ `global`，落库（迁移 025 加列 + CHECK）。
+- `Resource` 新增 **`scope`** 字段：`project`（默认）/ `global`，落库（全局侧建表于迁移 `global/026`，`scope TEXT NOT NULL DEFAULT 'global'` + 项目库沿用 020 存档表的同名列）。
 - **全局实例** = 全局分析库（`{system}/analytics.duckdb`）；**项目实例** = 当前项目分析库（`.RSmeta/analytics.duckdb`）。分析表的"实例" = 其**定义所在库**。
-- 文件型（`File`）资源始终项目级（全局无 `resources/` 概念，升级不适用于文件型）【待确认：是否允许文件资源复制到全局系统目录】。
+- 文件型（`File`）资源：登记仍在项目侧；其中**可映射的数据文件**（CSV/TSV/TXT / Parquet / Excel / JSON 白名单）可升级为全局表（§13.3），白名单之外的二进制（png / zip / docx）今天会落进「脚本内容表」分支后读 UTF-8 失败【待确认：明确拒绝并置灰，还是定一套二进制承载】。
 - 与 `ArchiveKind` 正交：`scope` 回答"定义在哪个库"，`kind` 回答"本体形态"。
 
 ### 13.2 展示：两实例资源表
@@ -572,10 +573,10 @@ sequenceDiagram
 
 - **方案 A（定稿）**：脚本以**内容表**形态进全局 DuckDB——`read_text` 语义（单列 `content` + 行元数据：resource_id / name / version / 指纹 / 原始相对路径），版本信息随行。分发到项目（§13.6）时**重建为文件**（`resources/<path>`），项目 B 拿到的是可编辑脚本。理由：落点统一在全局 DuckDB（符合「表 + 版本信息到全局」）；脚本是文本，`VARCHAR` 无损；分发可逆（表 → 文件）。
 - **方案 B（不采用）**：全局系统目录新增 `{system}/resources/` 存脚本副本——语义与项目侧文件型同构，但全局多一个存储形态，与"落点在 DuckDB"不一致。
-- **二进制 / 不可读文件**：升级拒绝，提示「仅支持数据文件（CSV/Parquet/Excel/JSON）、文本脚本（.sql/.py/.md 等）、分析表」。
+- **二进制 / 不可读文件**：**规格要求拒绝并提示「仅支持数据文件（CSV/Parquet/Excel/JSON）、文本脚本（.sql/.py/.md 等）、分析表」；当前实现没有这道前置判断**——非白名单扩展名一律按脚本处理，二进制会以 `读取脚本内容失败（…）：stream did not contain valid UTF-8` 的技术原文结束【待确认：补前置拒绝，还是另有承载】。
 
 ### 13.6 全局 → 项目（分发）与跨项目唯一法定路径
 
-- **入口**：全局实例行（`scope=global`）右键「复制到项目…」：从全局 DuckDB 读表 → 写入当前项目库（`CREATE TABLE AS`）+ 登记 + 版本链分支（分发版本号接续全局链，`keep_versions` 同规则）；脚本内容表 → 重建为项目 `resources/<path>` 文件。冲突（项目已有同名）→ 询问（覆盖 / 改名 / 取消）。
+- **入口**：全局实例行（`scope=global`）右键「分发到本项目…」（原稿写「复制到项目…」，实现在 `resource_host/detail_actions.rs::request_distribute_from_global`，文案以代码为准）：从全局 DuckDB 读表 → 写入当前项目库（`CREATE TABLE AS`）+ 登记 + 版本链分支（分发版本号接续全局链，`keep_versions` 同规则）；脚本内容表 → 重建为项目 `resources/<path>` 文件。冲突（项目已有同名）→ 询问（覆盖 / 改名 / 取消）。**同样没有前置确认框**，点了即入队。
 - **唯一法定路径（架构原则，2026-10-22 用户定）**：**项目 ↔ 项目禁止直传**。跨项目共享的唯一路径 = `项目 A → 全局 → 项目 B`：全局是唯一交换中枢，项目之间互不可见、互不读写（隔离语义：每个项目只看得到自己的库 + 全局库，看不到别的项目库）。任何"从项目 A 直接复制到项目 B"的入口都不提供。
 - 全局行只读：分发不删除全局行（全局是长期共享层，`keep_versions` 裁剪由版本规则负责）。
