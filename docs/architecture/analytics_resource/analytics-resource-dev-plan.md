@@ -966,7 +966,7 @@ cargo run -p rds-app -j 2
 | 版本历史 / 回收站 / 分组 / 标签对话框 | `src/dialogs/version/`（`mod` · `open` · `render`）· `src/dialogs/group.rs` · `src/dialogs/tag/` · `src/dialogs/rename.rs` / `pick.rs` / `conflict.rs` |
 | 版本 diff 对话框 | `src/dialogs/version_diff.rs`（`parse_display_patch` 决定"有没有东西可看"）+ `src/jobs/version.rs::{diff_text_too_large, unified_patch}`（挡板与 patch 生成都是纯函数，各有单测） |
 | 详情「最近 3 条」版本明细 | 取数 `src/store/version.rs::recent_versions_by_resource`（一次 top-N，不逐行查）· 装配 `src/present/detail.rs::detail_version_lines` · 上限 `src/present/mod.rs::DETAIL_RECENT_VERSIONS` · 同批取数 `src/jobs/refresh.rs` |
-| 详情「组织」区「移动…」下拉 | `src/detail_view/body_sections.rs::render_move_to_group`（`Button::new("archive-detail-move-group")` + `dropdown_menu`，动作复用 `resource_host::group_actions::{request_move_to_group, request_create_group}`）· 分区取值 `src/detail_view/rows.rs`（项目行恒有） |
+| 详情「组织」区「移动…」下拉 | `src/detail_view/body_sections.rs::render_move_to_group`（`Button::new("archive-detail-move-group")` + `dropdown_menu`，动作复用 `resource_host::group_actions::{request_move_to_group, request_create_group}`；多选时作用于 `DetailActions.selected_ids` 整集，按钮文案 `move_label(count)` 标条数，选集由 `panels/{right.rs,right_tabs.rs}` 从面板 `selected_ids()` 实时取）· 分区取值 `src/detail_view/rows.rs`（项目行恒有） |
 | 归档 / 取回 / 索引修复对话框 | `src/dialogs/{archive,checkout,index_repair}.rs` |
 | 领域类型 | `src/model/`（`mod` / `kind` / `types`）· 视图 DTO `src/view_model/`（`row` / `detail` / `dialog_rows`） |
 | 本体层（fs + 只读 + 指纹 + 历史副本） | `src/payload/`（`mod` · `paths` · `inspect` · `versions` · `transfer`） |
