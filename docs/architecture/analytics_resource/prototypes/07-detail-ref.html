@@ -63,17 +63,31 @@
             </div>
 
             <div class="sect">
-              <div class="sect-h">标签与分组</div>
+              <div class="sect-h">组织</div>
+              <div class="kv"><span class="k">分组</span><span class="v">外部数据</span></div>
+              <button class="btn-s btn-xs" style="margin-top:5px">移动…</button>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h">标签</div>
               <div class="tags">
                 <span class="tagc">订单<span class="x">✕</span></span>
                 <span class="tagc">外部<span class="x">✕</span></span>
-                <span class="tagc add">＋ 添加标签</span>
+                <span class="tagc add">＋ 标签</span>
               </div>
-              <div class="kv" style="margin-top:6px"><span class="k">分组</span><span class="v">外部数据 ▾</span></div>
+            </div>
+
+            <div class="sect" style="border-top:1px solid var(--sidebar-border);padding-top:8px">
+              <div style="display:flex;gap:6px">
+                <button class="btn-s btn-xs">打开（只读）</button>
+                <button class="btn-s btn-xs">取回（检出）…</button>
+              </div>
+              <div class="locknote" style="margin-top:6px"><svg class="ico-sm"><use href="#i-info" xlink:href="#i-info"/></svg><span>打开 = 只读查看本体；取回 = 复制一份可写的工作副本（本体不动）</span></div>
             </div>
 
             <div class="danger-zone">
               <button class="btn-d">移入回收站</button>
+              <div class="locknote" style="margin-top:6px"><svg class="ico-sm"><use href="#i-trash" xlink:href="#i-trash"/></svg><span>只删除登记记录与版本元数据，源文件留在原位置不受影响；可从回收站还原登记</span></div>
             </div>
           </div>
         </div>
@@ -125,7 +139,8 @@
 
   <div class="canvas pad">
     <p class="hang" style="margin:0">
-      本块样式：<code>.warnstrip</code> / <code>.dhead</code> / <code>.locknote</code> / <code>.kv.blk</code>。
+      本块样式：<code>.warnstrip</code> / <code>.dhead</code> / <code>.locknote</code> / <code>.kv.blk</code> / <code>.tags</code> + <code>.tagc</code> / <code>.btn-s</code> + <code>.btn-xs</code>。
+      组织区「移动…」与 <a href="06-detail-file.html">06 页</a> C 变体是<b>同一颗按钮</b>（同一套宿主动作），这里只摆按钮、不重复画菜单——引用型同属项目行，分组归属与移动语义和 File 型一致。
       落地代码：<code>crates/analytics_resource/src/detail_view/</code>（引用只读提示已由 <code>alert_line</code> 覆盖）；<code>TableRef</code> 只保留读取兼容，不新增能力。
     </p>
   </div>
