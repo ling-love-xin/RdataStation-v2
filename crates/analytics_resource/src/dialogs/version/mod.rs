@@ -27,27 +27,6 @@ pub(crate) use crate::ui;
 /// 不静默截断，也不为这个对话框手搓虚拟化（行数真成问题时再上 `List`）。
 pub const MAX_VERSION_ROWS: usize = 50;
 
-/// 一行版本（**宿主快照**：对话框只渲染与选中，不做计算、不查文件系统）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VersionRow {
-    /// 版本号（列表按它降序：新的在上）。
-    pub version: i32,
-    /// 是否当前版本（本体上的那一版）。当前版本没有"还原 / 取回该版本"动作
-    /// ——它就是本体，取回走主界面的「取回（检出）…」。
-    pub is_current: bool,
-    /// 版本时间（绝对时间：版本历史是查凭证的地方，相对时间不够用）。
-    pub time_label: String,
-    /// 大小（可能为空：缺 `file_size` 的旧快照）。
-    pub size_label: String,
-    /// 内容指纹前 12 位（可能为空：无指纹的旧行）。
-    pub hash_short: String,
-    /// 内容副本在不在（当前版本 = 本体在位；历史行 = `.RSmeta` 下有副本）。
-    pub has_copy: bool,
-    /// 与**上一版**（版本号 -1）的差异：`较 v1 +1.2 KB · 指纹已变`；最旧一版为空。
-    ///
-    /// 不做行级 diff，只给"大小变了多少、指纹是否变"这两个能一眼扫的值。
-    pub delta_label: String,
-}
 
 /// 打开对话框所需的全部信息（宿主在取数线程上备好）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,3 +163,5 @@ mod render;
 mod tests;
 
 pub use self::open::{open_version_dialog, open_version_dialog_with};
+
+pub use crate::view_model::dialog_rows::VersionRow;

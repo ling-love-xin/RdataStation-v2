@@ -26,57 +26,8 @@ pub(crate) use crate::ui;
 /// 每组最多列多少行：再多只列前 N 并**明说**（扫描一次可能报出成百个未登记文件）。
 pub const MAX_REPAIR_ROWS_PER_GROUP: usize = 50;
 
-/// 修复行所属的分组（与原型 §4.5 的三组一一对应）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RepairGroup {
-    /// 有文件、无记录。
-    Untracked,
-    /// 有记录、无本体。
-    Missing,
-    /// 指纹不匹配。
-    Changed,
-}
 
-impl RepairGroup {
-    /// 分组顺序（原型 §4.5 自上而下，也是"越靠上越接近新增"的顺序）。
-    pub const ALL: [Self; 3] = [Self::Untracked, Self::Missing, Self::Changed];
 
-    /// 分组标题。
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::Untracked => "有文件、无记录",
-            Self::Missing => "有记录、无本体",
-            Self::Changed => "指纹不匹配",
-        }
-    }
-
-    /// 分组说明：一句话讲清这一组是什么、动作会做什么。
-    pub fn hint(self) -> &'static str {
-        match self {
-            Self::Untracked => "本体在 resources/ 里但登记表不认识它；补登后就是一个正常存档",
-            Self::Missing => "本体不在了：从回收站还原（若当初进了回收站），或删掉记录",
-            Self::Changed => {
-                "本体被绕过只读改过：接受当前内容（生成新版本），或到版本历史里挑一版还原"
-            }
-        }
-    }
-}
-
-/// 一行待修复项（**宿主快照**：对话框只渲染与派发动作，不查文件系统）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RepairRow {
-    pub group: RepairGroup,
-    /// 行标题：未登记的是文件名，另两类是存档名。
-    pub title: String,
-    /// 副文案：本体相对路径 / 期望位置。
-    pub detail: String,
-    /// 指纹对照（仅 `Changed` 行有值）。
-    pub hash_detail: String,
-    /// 未登记行的本体相对路径（补登要用）。
-    pub rel_path: String,
-    /// 另两类的存档 id（删记录 / 接受内容 / 打开版本历史要用）。
-    pub resource_id: Option<String>,
-}
 
 /// 对话框状态：**宿主也持一份克隆**（动作完成后 `set_rows` 换掉行数据、`set_busy` 收放）。
 #[derive(Clone)]
@@ -168,3 +119,5 @@ mod render;
 mod tests;
 
 pub use self::open::{open_index_repair_dialog, open_index_repair_dialog_with};
+
+pub use crate::view_model::dialog_rows::{RepairGroup, RepairRow};

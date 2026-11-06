@@ -4,9 +4,11 @@
 //! `pub use` 兜住，外部契约不变。
 
 pub mod detail;
+pub mod dialog_rows;
 pub mod row;
 
 pub use self::detail::{ArchiveDetail, ArchiveTagChip};
+pub use self::dialog_rows::{RepairGroup, RepairRow, TrashRow, VersionRow};
 pub use self::row::{
     ArchiveCounts, ArchiveRow, GroupOption, InstanceFilter, ResourcesSnapshot, TagOption,
 };

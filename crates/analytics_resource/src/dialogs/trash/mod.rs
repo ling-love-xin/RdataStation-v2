@@ -30,28 +30,6 @@ pub(crate) use crate::ui;
 /// 不静默截断，也不为这个对话框手搓虚拟化（行数真成问题时再上 `List`）。
 pub const MAX_TRASH_ROWS: usize = 100;
 
-/// 一行回收站条目（**宿主快照**：对话框只渲染与派发动作）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TrashRow {
-    /// 回收站条目 id（还原 / 永久删除要用）。
-    pub trash_id: String,
-    /// 原显示名（文件名 / 目录名）。
-    pub name: String,
-    /// 原位置（相对项目根，如 `resources/reports/dau.sql`）——"还原到哪"就靠它回答。
-    pub original_label: String,
-    /// 文件 / 目录（目录的"大小"没有意义，靠这一列区分）。
-    pub kind_label: String,
-    /// 删除时间（绝对时间：回收站是查凭证的地方，相对时间不够用）。
-    pub time_label: String,
-    /// 大小（目录为空）。
-    pub size_label: String,
-    /// 归档粒度（copy / reference，§12.1.1 ③）：决定还原 / 永久删除的本体命运与文案分派。
-    pub payload_mode: PayloadMode,
-    /// 登记行 id（reference 条目按它复活 / 永久删除；copy 条目一并带上，动作分派统一口径）。
-    pub resource_id: String,
-    /// 是否有受管本体在回收站：copy = true（本体在 `ProjectTrash`）；reference = false（本体留源位置）。
-    pub has_payload: bool,
-}
 
 /// 别的模块留在项目级回收站里的条目（**只做说明，不列行**）。
 ///
@@ -163,3 +141,5 @@ mod render;
 mod tests;
 
 pub use self::open::{open_trash_dialog, open_trash_dialog_with};
+
+pub use crate::view_model::dialog_rows::TrashRow;
