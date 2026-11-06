@@ -253,7 +253,9 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 `plugin.toml`、清单声明的入口（多平台包按解析后的 `bin/<platform>/agent` 算）、
 声明了且真实存在的 `plugin.icon` / `connection_schema` 必须列出（否则删一行就能绕过）。
 键沿用清单同一套相对路径白名单（不许逃逸、不许自指）。文件缺失视为老包 / 开发目录，
-放行；发布包应在 P5 打包流程里生成。`signature.json`（验"谁签发"）与运行期校验仍未做。
+放行；发布包应在 P5 打包流程里生成。加载期（`load_plugin_from_dir`）对带
+`checksums.json` 的包再校验一次，装好之后被改同样拦得住；`signature.json`（验"谁签发"）
+仍未做。
 `cargo test -p rds-plugin` **208 单测 + 71 集成**全绿。
 
 **安装器跳过开发残留**（2026-10-16）：`installer::copy_dir` 按 `layout::is_dev_residue`

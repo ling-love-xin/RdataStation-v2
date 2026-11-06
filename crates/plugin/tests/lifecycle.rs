@@ -81,6 +81,39 @@ where
     }
 }
 
+/// 带 `checksums.json` 的包在**加载时**也要校验：安装期校验的是解压产物，
+/// 装好之后被改（热插拔直接拷目录、手改文件）同样必须被拦住。
+#[tokio::test]
+async fn load_rejects_a_package_whose_checksums_no_longer_match() {
+    let dir = TempDir::new("tampered");
+    let manager = PluginManager::new(dir.0.clone());
+    manager.init().await.unwrap();
+    write_plugin(&dir.0, "com.example.tampered", "v1");
+
+    let checksums = r#"{
+        "algorithm": "sha256",
+        "files": {
+            "plugin.toml": "0000000000000000000000000000000000000000000000000000000000000000",
+            "main.js": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+    }"#;
+    std::fs::write(
+        dir.0.join("com.example.tampered").join("checksums.json"),
+        checksums,
+    )
+    .unwrap();
+
+    let err = manager
+        .load_plugin_from_dir(&dir.0.join("com.example.tampered"))
+        .await
+        .expect_err("哈希不匹配的包不应加载成功");
+    let message = format!("{err}");
+    assert!(
+        message.contains("完整性校验失败"),
+        "错误信息应点明完整性校验：{message}"
+    );
+}
+
 /// 热插拔：空目录 → 摆插件（出现）→ 删目录（消失）→ 改清单（变化置重载）。
 #[tokio::test]
 async fn hot_plug_adds_removes_and_marks_reload() {

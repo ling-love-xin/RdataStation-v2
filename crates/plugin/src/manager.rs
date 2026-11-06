@@ -366,6 +366,11 @@ impl PluginManager {
         // 卸载删不到目录」。
         crate::layout::validate_dir_name(plugin_dir, &manifest.plugin.id)?;
 
+        // 运行期完整性：带 `checksums.json` 的包在加载时再校验一遍。安装期校验的是
+        // 解压产物，装好之后仍可能被改（热插拔直接拷目录、用户手改文件），只验安装期
+        // 等于只验了「第一次」。不带该文件的老包 / 开发目录照旧放行。
+        crate::checksums::verify_package(&manifest, plugin_dir)?;
+
         let plugin_id = manifest.plugin.id.clone();
         let loaded_plugin = LoadedPlugin {
             id: plugin_id.clone(),
