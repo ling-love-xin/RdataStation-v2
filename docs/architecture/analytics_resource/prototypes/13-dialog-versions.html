@@ -16,9 +16,9 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    宽 <code>768px</code>（48rem）· 六列：版本 / 归档时间 / 大小 / 相邻版本差异 / 指纹前 12 位 / 内容副本状态。当前行带「当前」角标。
-    <b>动作栏只在选中历史版后出场</b>：与当前版本对比… / 还原为当前版本 / 取回该版本为草稿 / 删除该版本的内容副本。
-    只追加不覆盖：还原 = 用旧内容生成<b>新版本</b>（与 git <code>revert</code> 同构）；最多 50 行并明说剩余条数。
+    宽 <code>48rem</code>（768px）· 标题「<b>版本历史 · 名字</b>」，<b>内容末尾</b>再一行「<b>当前版本 v3</b>」（不挨着标题）· 六列<b>按实现的顺序</b>：版本 / 时间 / 大小 / 指纹 / 变化 / 副本。
+    列表上方一行「共 N 个版本」（忙态提示也在这行右侧）；<b>动作栏只在选中某一行后渲染</b>，未选中时整块不出现（不是摆一排灰按钮）。footer 只有一个「关闭」。
+    只追加不覆盖：还原 = 用旧内容生成<b>新版本</b>；最多列 50 个并明说剩余。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="12-dialog-checkout.html">← 上一块：取回对话框</a><a href="14-dialog-diff.html">下一块：版本对比 →</a></nav>
 </header>
@@ -26,104 +26,199 @@
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>未选中<span class="desc">动作栏只给一句提示，不给一排灰按钮</span></div>
+    <div class="variant-h"><span class="no">A</span>未选中<span class="desc">动作栏整块不渲染；变化列写「较 vN …」，最旧一版空</span></div>
     <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="dlg dlg-versions proto-on">
-        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-history" xlink:href="#i-history"/></svg>版本历史<span class="sub2">dau_report.sql · 只追加，不覆盖历史</span><button class="x">✕</button></div>
+      <div class="dlg dlg-versions proto-on" style="width:768px">
+        <div class="dlg-head">版本历史 · dau_report.sql<button class="x">✕</button></div>
         <div class="dlg-body">
+          <div style="font-size:10.5px;color:var(--muted);margin-bottom:6px">共 3 个版本</div>
+
           <table class="dt">
-            <thead><tr><th>版本</th><th>归档时间</th><th>大小</th><th>相邻版本差异</th><th>指纹前 12 位</th><th>内容副本</th></tr></thead>
+            <thead><tr>
+              <th style="width:56px">版本</th><th style="width:120px">时间</th><th style="width:72px">大小</th>
+              <th style="width:130px">指纹</th><th>变化</th><th style="width:72px">副本</th>
+            </tr></thead>
             <tbody>
               <tr>
-                <td>v3<span class="tcur">当前</span></td>
+                <td>v3<span style="color:var(--success);font-size:10px;margin-left:5px">当前</span></td>
                 <td class="mono">2026-09-15 09:12</td>
                 <td class="num">1.2 KB</td>
-                <td class="diffd">大小 <span class="up">+0.4 KB</span> · 指纹变化</td>
                 <td class="mono">3f9a2c7b1e04</td>
-                <td><span class="sb b-ok"><span class="d"></span>存在</span></td>
+                <td class="diffd">较 v2 大小+0.4 KB · 指纹已变</td>
+                <td>在位</td>
               </tr>
               <tr>
                 <td>v2</td>
                 <td class="mono">2026-09-12 20:11</td>
                 <td class="num">820 B</td>
-                <td class="diffd">大小 <span class="dn">−1.1 KB</span> · 指纹变化</td>
                 <td class="mono">8c41d7e9b2aa</td>
-                <td><span class="sb b-ok"><span class="d"></span>存在</span></td>
+                <td class="diffd">较 v1 大小-1.1 KB · 指纹已变</td>
+                <td>在位</td>
               </tr>
               <tr>
                 <td>v1</td>
                 <td class="mono">2026-09-08 14:03</td>
                 <td class="num">1.9 KB</td>
-                <td class="diffd">—（初始版本）</td>
                 <td class="mono">21f0ab6c5d73</td>
-                <td><span class="sb b-warn">缺失</span></td>
+                <td class="diffd"></td>
+                <td style="color:var(--danger)">副本缺失</td>
               </tr>
             </tbody>
           </table>
-          <div class="actbar"><span class="al">选中一行历史版本后可对比 / 还原 / 取回 / 删除副本</span></div>
+          <div style="font-size:10.5px;color:var(--muted);margin-top:8px">当前版本 v3</div>
         </div>
-        <div class="dlg-foot"><span>共 3 个版本 · 2 份内容副本 · 保留策略「最近 5 份」</span><span class="grow"></span><button class="btn-p">关闭</button></div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-p">关闭</button></div>
       </div>
     </div>
+    <p class="hang">
+      推翻三处：① <b>列序</b>是 版本 / 时间 / <b>大小 / 指纹 / 变化 / 副本</b>——原型把「相邻版本差异」放第 4、「指纹前 12 位」放第 5，正好反了；表头文案也就是「时间 / 大小 / 指纹 / 变化 / 副本」，没有「归档时间」「相邻版本差异」「内容副本」这些长名字。<br>
+      ② 变化列是 <b>`较 v2 大小+0.4 KB · 指纹已变`</b>：上界的版本号写进去，两样都能比才给（快照缺字段就不编），最旧一版<b>空着</b>而不是写「—（初始版本）」。<br>
+      ③ 「共 3 个版本 · 2 份内容副本 · 保留策略「最近 5 份」」不在 footer——footer 只有一个「关闭」；列表上方只写「共 N 个版本」，<b>不报「几份副本」「保留策略」</b>（副本数量要遍历目录才知道，对话框不做计算）。<br>
+      另外「当前」是版本列里的一小段 success 色文字（不是带框角标），副本列是 <b>「在位」/「副本缺失」</b>（不是「存在」徽标）。
+    </p>
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">B</span>选中 v2<span class="desc">行高亮 + 动作栏四按钮；v1 副本「缺失」= 只能看元数据</span></div>
+    <div class="variant-h"><span class="no">B</span>选中 v2<span class="desc">行高亮 + 动作栏四按钮（还原是主按钮，文案带生成的版本号）</span></div>
     <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="dlg dlg-versions proto-on">
-        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-history" xlink:href="#i-history"/></svg>版本历史<span class="sub2">dau_report.sql · 只追加，不覆盖历史</span><button class="x">✕</button></div>
+      <div class="dlg dlg-versions proto-on" style="width:768px">
+        <div class="dlg-head">版本历史 · dau_report.sql<button class="x">✕</button></div>
         <div class="dlg-body">
+          <div style="font-size:10.5px;color:var(--muted);margin-bottom:6px">共 3 个版本</div>
+
           <table class="dt">
-            <thead><tr><th>版本</th><th>归档时间</th><th>大小</th><th>相邻版本差异</th><th>指纹前 12 位</th><th>内容副本</th></tr></thead>
+            <thead><tr>
+              <th style="width:56px">版本</th><th style="width:120px">时间</th><th style="width:72px">大小</th>
+              <th style="width:130px">指纹</th><th>变化</th><th style="width:72px">副本</th>
+            </tr></thead>
             <tbody>
               <tr>
-                <td>v3<span class="tcur">当前</span></td>
+                <td>v3<span style="color:var(--success);font-size:10px;margin-left:5px">当前</span></td>
                 <td class="mono">2026-09-15 09:12</td>
                 <td class="num">1.2 KB</td>
-                <td class="diffd">大小 <span class="up">+0.4 KB</span> · 指纹变化</td>
                 <td class="mono">3f9a2c7b1e04</td>
-                <td><span class="sb b-ok"><span class="d"></span>存在</span></td>
+                <td class="diffd">较 v2 大小+0.4 KB · 指纹已变</td>
+                <td>在位</td>
               </tr>
               <tr class="on">
                 <td>v2</td>
                 <td class="mono">2026-09-12 20:11</td>
                 <td class="num">820 B</td>
-                <td class="diffd">大小 <span class="dn">−1.1 KB</span> · 指纹变化</td>
                 <td class="mono">8c41d7e9b2aa</td>
-                <td><span class="sb b-ok"><span class="d"></span>存在</span></td>
+                <td class="diffd">较 v1 大小-1.1 KB · 指纹已变</td>
+                <td>在位</td>
               </tr>
               <tr>
                 <td>v1</td>
                 <td class="mono">2026-09-08 14:03</td>
                 <td class="num">1.9 KB</td>
-                <td class="diffd">—（初始版本）</td>
                 <td class="mono">21f0ab6c5d73</td>
-                <td><span class="sb b-warn">缺失</span></td>
+                <td class="diffd"></td>
+                <td style="color:var(--danger)">副本缺失</td>
               </tr>
             </tbody>
           </table>
-          <div class="actbar">
-            <span class="al">对选中版本 v2 的动作：</span>
-            <button class="btn-s">与当前版本对比…</button>
-            <button class="btn-s">还原为当前版本</button>
-            <button class="btn-s">取回该版本为草稿</button>
-            <button class="btn-s">删除该版本的内容副本</button>
+          <div class="actbar" style="border-top:1px solid var(--border);padding-top:8px;margin-top:10px;align-items:flex-start;flex-direction:column;gap:4px">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <button style="border:none;background:transparent;color:var(--fg);font-size:11px;padding:4px 8px">与当前版本对比…</button>
+              <button class="btn-p">还原为当前版本（生成 v3）</button>
+              <button style="border:none;background:transparent;color:var(--fg);font-size:11px;padding:4px 8px">取回该版本为草稿</button>
+              <button style="border:none;background:transparent;color:var(--fg);font-size:11px;padding:4px 8px">删除内容副本</button>
+            </div>
+            <div style="font-size:10.5px;color:var(--muted);line-height:1.6">还原 = 用这一版的内容生成新版本；取回 = 复制一份可写草稿（本体不动）</div>
           </div>
-          <div class="note warn"><svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg><span>不做原地回滚：还原 = 用旧内容生成新版本（与 git <code>mono</code> revert 同构）。<b>与当前版本对比…</b> 是只读文本 diff 查看器，只读项目也能看、不写库。内容副本按「最近 5 份」保留，超出只留元数据。</span></div>
+          <div style="font-size:10.5px;color:var(--muted);margin-top:8px">当前版本 v3</div>
         </div>
-        <div class="dlg-foot"><span>共 3 个版本 · 2 份内容副本 · 保留策略「最近 5 份」</span><span class="grow"></span><button class="btn-p">关闭</button></div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-p">关闭</button></div>
       </div>
     </div>
     <p class="hang">
-      落地口径（<code>dialogs/version.rs</code> + <code>present::build_version_rows</code>）：六列含当前行；动作栏选中后出场；最多 50 行并明说剩余；动作执行后<b>重取列表并保留选中行的新位置</b>（不关窗）。
-      副本「缺失」的行：还原 / 取回置灰，只留「删除副本」（本来就是空的）。
+      四处要按实现改：① 动作栏<b>没有「对选中版本 v2 的动作：」这行引导，四个按钮直接排开；② 删除那条叫 <b>「删除内容副本」</b>（不带「该版本的」）；③ <b>还原是唯一的 primary 按钮</b>，文案带生成的版本号「还原为当前版本（生成 v3）」——选中的是 v2，还原出来的是 v3，这句话就是给用户看的「会新增一版」；④ 按钮下面<b>有一行状态说明</b>：常态是「还原 = 用这一版的内容生成新版本；取回 = 复制一份可写草稿（本体不动）」。
     </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>选中 v1（副本已被裁）<span class="desc">四个动作全灰 + 说明；当前版本行同理</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-versions proto-on" style="width:768px">
+        <div class="dlg-head">版本历史 · dau_report.sql<button class="x">✕</button></div>
+        <div class="dlg-body">
+          <div style="font-size:10.5px;color:var(--muted);margin-bottom:6px">共 3 个版本</div>
+
+          <table class="dt">
+            <thead><tr>
+              <th style="width:56px">版本</th><th style="width:120px">时间</th><th style="width:72px">大小</th>
+              <th style="width:130px">指纹</th><th>变化</th><th style="width:72px">副本</th>
+            </tr></thead>
+            <tbody>
+              <tr>
+                <td>v3<span style="color:var(--success);font-size:10px;margin-left:5px">当前</span></td>
+                <td class="mono">2026-09-15 09:12</td>
+                <td class="num">1.2 KB</td>
+                <td class="mono">3f9a2c7b1e04</td>
+                <td class="diffd">较 v2 大小+0.4 KB · 指纹已变</td>
+                <td>在位</td>
+              </tr>
+              <tr>
+                <td>v2</td>
+                <td class="mono">2026-09-12 20:11</td>
+                <td class="num">820 B</td>
+                <td class="mono">8c41d7e9b2aa</td>
+                <td class="diffd">较 v1 大小-1.1 KB · 指纹已变</td>
+                <td>在位</td>
+              </tr>
+              <tr class="on">
+                <td>v1</td>
+                <td class="mono">2026-09-08 14:03</td>
+                <td class="num">1.9 KB</td>
+                <td class="mono">21f0ab6c5d73</td>
+                <td class="diffd"></td>
+                <td style="color:var(--danger)">副本缺失</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="actbar" style="border-top:1px solid var(--border);padding-top:8px;margin-top:10px;align-items:flex-start;flex-direction:column;gap:4px">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <button style="border:none;background:transparent;color:var(--fg);font-size:11px;padding:4px 8px;opacity:.4">与当前版本对比…</button>
+              <button class="btn-p" style="opacity:.4">还原为当前版本（生成 v2）</button>
+              <button style="border:none;background:transparent;color:var(--fg);font-size:11px;padding:4px 8px;opacity:.4">取回该版本为草稿</button>
+              <button style="border:none;background:transparent;color:var(--fg);font-size:11px;padding:4px 8px;opacity:.4">删除内容副本</button>
+            </div>
+            <div style="font-size:10.5px;color:var(--muted);line-height:1.6">该版本只留了元数据（内容副本已被保留策略裁剪），不能还原或取回</div>
+          </div>
+          <div style="font-size:10.5px;color:var(--muted);margin-top:8px">当前版本 v3</div>
+        </div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-p">关闭</button></div>
+      </div>
+    </div>
+    <p class="hang">
+      推翻原型的「副本缺失只留删除副本」：那一行<b>四个动作全灰</b>——连「删除内容副本」也灰（副本已经不在了，没有可删的东西）。能做的只有「看元数据」。<br>
+      同一套判据还管两处：<b>当前版本行</b>（四个动作里三个写动作全灰，还原按钮文案改成「当前版本」；对比也灰——它就是本体，和谁比都不对），hint 改成「这是当前版本（本体上的内容）：取回请用详情面板的「取回（检出）…」」；<b>只读项目</b>下对话框<b>照常打开</b>，写动作灰、hint 改成「项目处于只读模式：还原 / 取回 / 删副本都是写操作」，但「与当前版本对比…」<b>仍可点</b>（只读查看，不写库）。这点与 12 页相反：取回在入口就被挡回，版本历史是要让人<b>看得到</b>的。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">D</span>「删除内容副本」的二次确认<span class="desc">副本不进回收站，删了不可恢复</span></div>
+    <div class="canvas pad">
+      <div class="dlg proto-on" style="width:420px">
+        <div class="dlg-head">删除 v1 的内容副本？<button class="x">✕</button></div>
+        <div class="dlg-body">
+          <div style="font-size:11px;line-height:1.7;color:var(--fg)">版本记录会保留（列表里仍能看到这一版），但它的内容将无法再还原或取回。<br>副本不入回收站，删除后不可恢复。</div>
+        </div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">取消</button><button class="btn-d">删除</button></div>
+      </div>
+      <div class="hang" style="margin:12px 0 0">
+        原型没画这一步。删副本是真执行且不可逆（回执与二次确认是同一个口径：<b>版本行留着、内容没了</b>），所以要过一次 <code>AlertDialog</code>；确认后按钮置忙、动作栏上方出现 warning 色一句「正在删除 v1 的内容副本…」，完成后宿主<b>重取列表并换行</b>（不关窗，选中的版本若还在就保持选中）。
+      </div>
+    </div>
   </section>
 
   <div class="canvas pad">
     <p class="hang" style="margin:0">
-      本块样式：<code>.dlg.dlg-versions</code>（768px）/ <code>table.dt</code> / <code>tr.on</code> / <code>.tcur</code> / <code>.diffd</code> / <code>.actbar</code> / <code>.note.warn</code>。
-      落地代码：<code>crates/analytics_resource/src/dialogs/version.rs</code> + <code>src/present/</code>（版本行构造）。
+      本块样式：<code>.dlg</code>（768px）/ <code>.dlg-head</code> / <code>.dlg-body</code> / <code>.dlg-foot</code> / <code>table.dt</code> / <code>tr.on</code> / <code>.diffd</code> / <code>.actbar</code> / <code>.btn-p</code> / <code>.btn-d</code>；本页<b>已不用</b> <code>.tcur</code>（「当前」是纯文字不是角标）、<code>.sb</code>（副本列不摆徽标）、<code>.note.warn</code>（「不做原地回滚」那段说明不进对话框，只留动作栏下方一行 hint）。<br>
+      「当前版本 v3」在<b>内容末尾</b>（动作栏之后、footer 之前），不是标题下的副标题——实现把它当 content 的最后一个子元素挂着。<br>
+      表格是<b>示意</b>：实现是自绘的 <code>h_flex</code> 行（<code>ListItem</code>）+ 表头下一条 hairline，行间无分隔线；列宽按 <code>ui::VERSION_COL_*</code>（3.5 / 8 / 5 / 9 / flex / 5 rem），列表最高 <code>20rem</code> 内滚动，超过 50 行时末尾补一句「还有 N 个更早的版本未列出（一次最多列 50 个）」。<br>
+      落地代码：<code>crates/analytics_resource/src/dialogs/version/{mod,open,render}.rs</code>（状态 / 装配 / 表头与行与动作栏）+ <code>src/present/versions.rs</code>（<code>build_version_rows</code> 与 <code>version_delta</code> 的文案口径）+ <code>src/view_model/dialog_rows.rs::VersionRow</code>。
     </p>
   </div>
 
