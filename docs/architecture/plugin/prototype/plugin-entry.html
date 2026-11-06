@@ -19,6 +19,12 @@
     - plugin-dev-plan.md §4.4 能力矩阵 / §4.6 权限与信任双轨 / §4.8 项目引用对账 / P5 发布与签名
     - 布局与尺寸：docs/architecture/layout/layout-design.md、rds-ui-spec skill
 
+  现状口径（2026-10-16，必读）
+    当前已实现的安装入口是 **ZIP / TAR.GZ 包 + 本地目录**（`installer::install_from_path`），
+    没有 `.rdsx` 后缀、没有签名校验、没有「扩展宿主热重载」。本稿里的「从磁盘安装 /
+    `.rdsx` / Ed25519 签名 / 逐资源 SHA-256」属 **P5 规划**，不代表已落地；安装期只做
+    清单校验 + 入口存在性 + 可选 `checksums.json` 的 SHA-256 比对。
+
   尺寸出处（不自己编）
     标题栏 2.25rem=36 · 活动栏 3rem=48 · 左 Dock 15rem=240 · 面板头 2.25rem=36 ·
     列表行 1.5rem=24（两行式行 2.75rem=44）· 小控件 1.625rem=26 · 细线 1px
