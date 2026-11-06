@@ -16,8 +16,8 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    行高 <code>24px</code>（1.5rem）· kind 图标 三档形状（文件 / 分析表 / 引用，同色只靠形状区分）· 显示名 <code>text_sm</code> · 版本徽标 <code>18px</code>（v1 省略）· 强度徽标是行内<b>唯一色块</b>（已归档 / 分析表 / 引用）· 尾部字段一个 <code>muted</code> 字段。
-    字段优先级：<b>显示名 &gt; 强度徽标 &gt; 版本徽标 &gt; 相对时间 &gt; 大小</b>；放不下一律省略号 + 行 tooltip 补全，不缩行高、不做两行行。
+    行高 <code>24px</code>（1.5rem）· kind 图标 三档形状（文件 / 分析表 / 引用，同色只靠形状区分）· 显示名 <code>text_sm</code> · 版本号 <code>text_xs 12px</code> 纯文本（v1 省略；<b>不占徽标位</b>）· 强度徽标是行内<b>唯一色块</b>（已归档 / 分析表 / 引用 / 缺失 / 内容已变）· 尾部字段一个 <code>muted</code> 字段。
+    字段优先级：<b>显示名 &gt; 强度徽标 &gt; 版本号 &gt; 相对时间 &gt; 大小</b>；放不下一律省略号，不缩行高、不做两行行。现状<b>没有</b>行 tooltip（<code>row.rs</code> 没挂 <code>.tooltip()</code>，原型此前写的「tooltip 补全全字段」是假陈述）。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="02-toolbar.html">← 上一块：工具栏</a><a href="04-group-fold.html">下一块：分组折叠 →</a></nav>
 </header>
@@ -25,17 +25,17 @@
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>三档 kind<span class="desc">文件 / 分析表（项目 + 全局）/ 引用；v1 不显示版本徽标</span></div>
+    <div class="variant-h"><span class="no">A</span>三档 kind<span class="desc">文件 / 分析表（项目 + 全局）/ 引用；v1 不显示版本号</span></div>
     <div class="canvas pad">
       <div class="dockcol" style="height:auto">
         <div class="row" title="dau_report.sql · 文件 · v3 · 已归档（强）· 1.2 KB · 3 天前">
           <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
           <span class="nm">dau_report.sql</span>
-          <span class="ver">v3</span>
+          <span style="color:var(--muted);font-size:12px">v3</span>
           <span class="sb b-ok"><span class="d"></span>已归档</span>
           <span class="meta">1.2 KB · 3 天前</span>
         </div>
-        <div class="row" title="临时订单分析.sql · 文件 · v1（省略版本徽标）· 已归档（强）· 12.4 KB · 昨天">
+        <div class="row" title="临时订单分析.sql · 文件 · v1（省略版本号）· 已归档（强）· 12.4 KB · 昨天">
           <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
           <span class="nm">临时订单分析.sql</span>
           <span class="sb b-ok"><span class="d"></span>已归档</span>
@@ -44,16 +44,14 @@
         <div class="row" title="mock_orders · 分析表（DuckDB）· v1 · 分析表（中）· 12,480 行 × 18 列">
           <svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg>
           <span class="nm">mock_orders</span>
-          <span class="scope-badge">项目</span>
           <span class="sb b-info"><span class="d"></span>分析表</span>
           <span class="meta">12,480 行 × 18 列</span>
         </div>
-        <div class="row" title="dwd_orders_view · 分析表（DuckDB 视图）· v2 · 分析表（中）· 1.2M 行 × 26 列 · 全局实例">
+        <div class="row" title="dwd_orders_view · 分析表（DuckDB 视图）· v2 · 全局实例 · 1.2M 行 × 26 列">
           <svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg>
           <span class="nm">dwd_orders_view</span>
-          <span class="ver">v2</span>
-          <span class="scope-badge">全局</span>
-          <span class="sb b-info"><span class="d"></span>分析表</span>
+          <span style="color:var(--muted);font-size:12px">v2</span>
+          <span class="sb b-info"><span class="d"></span>全局</span>
           <span class="meta">1.2M 行 × 26 列</span>
         </div>
         <div class="row" title="ods.orders · 引用（TableRef 已划掉，仅旧行兼容）· 引用（弱）· 无指纹 · 6 天前">
@@ -64,36 +62,36 @@
         </div>
       </div>
     </div>
-    <p class="hang">kind 图标只用形状：文档形 = 文件、表格形 = 分析表、链接形 = 引用；三者同色（<code>muted</code>），避免与强度徽标撞色。<code>TableRef</code> 已于 2026-10-13 划掉，引用行只对旧行保留读取兼容。</p>
+    <p class="hang">kind 图标只用形状：文档形 = 文件、表格形 = 分析表、链接形 = 引用；三者同色（<code>muted</code>），避免与强度徽标撞色。<code>TableRef</code> 已于 2026-10-13 划掉，引用行只对旧行保留读取兼容。<br><b>一行只有一个徽标位</b>（2026-11-07 按 <code>list_delegate/row.rs</code> 核）：项目行放强度徽标（已归档 / 分析表 / 引用），<b>不放实例徽标</b>；全局行的徽标位被「全局」占掉（info 色），强度徽标不再出现——原型此前把两者并排画在一行，已按实现改。</p>
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">B</span>行态<span class="desc">默认 / hover / 选中 / 缺失 / 内容已变（静态显影）</span></div>
+    <div class="variant-h"><span class="no">B</span>行态<span class="desc">默认 / hover / 选中（= 键盘焦点）/ 缺失 / 内容已变（静态显影）</span></div>
     <div class="canvas pad">
       <div class="grid3">
         <div>
           <div class="hang" style="margin:0 0 4px">默认</div>
-          <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">monthly.md</span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">3.1 KB · 2 周前</span></div>
+          <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">monthly.md</span><span style="color:var(--muted);font-size:12px">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">3.1 KB · 2 周前</span></div>
         </div>
         <div>
           <div class="hang" style="margin:0 0 4px">hover（<code>.row.proto-hover</code>）</div>
-          <div class="row proto-hover"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">monthly.md</span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">3.1 KB · 2 周前</span></div>
+          <div class="row proto-hover"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">monthly.md</span><span style="color:var(--muted);font-size:12px">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">3.1 KB · 2 周前</span></div>
         </div>
         <div>
           <div class="hang" style="margin:0 0 4px">选中（左侧 2px 边条 + <code>list.active</code> 底）</div>
-          <div class="row sel"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">dau_report.sql</span><span class="ver">v3</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">1.2 KB · 3 天前</span></div>
+          <div class="row sel"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">dau_report.sql</span><span style="color:var(--muted);font-size:12px">v3</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">1.2 KB · 3 天前</span></div>
         </div>
         <div>
-          <div class="hang" style="margin:0 0 4px">本体缺失（灰显 + 删除线 + danger 点）</div>
-          <div class="row miss"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">sales_daily.csv</span><span class="mdot"></span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span></div>
+          <div class="hang" style="margin:0 0 4px">本体缺失（名称灰显 + 徽标换「缺失」）</div>
+          <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm" style="color:var(--muted)">sales_daily.csv</span><span style="color:var(--muted);font-size:12px">v2</span><span class="sb" style="color:var(--danger);background:color-mix(in srgb,var(--danger) 14%,transparent)"><span class="d"></span>缺失</span></div>
         </div>
         <div>
-          <div class="hang" style="margin:0 0 4px">指纹不匹配（行内 warning 徽标）</div>
-          <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">渠道对比.py</span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="sb b-warn">内容已变</span></div>
+          <div class="hang" style="margin:0 0 4px">指纹不匹配（徽标<b>换成</b>「内容已变」）</div>
+          <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">渠道对比.py</span><span style="color:var(--muted);font-size:12px">v2</span><span class="sb b-warn"><span class="d"></span>内容已变</span></div>
         </div>
         <div>
-          <div class="hang" style="margin:0 0 4px">键盘焦点（行被 ↑↓ 停在上面）</div>
-          <div class="row proto-focus"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">渠道对比.py</span><span class="ver">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">4.6 KB · 5 天前</span></div>
+          <div class="hang" style="margin:0 0 4px">键盘停在行上（就是选中态，没有第二套焦点视觉）</div>
+          <div class="row sel"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">渠道对比.py</span><span style="color:var(--muted);font-size:12px">v2</span><span class="sb b-ok"><span class="d"></span>已归档</span><span class="meta">4.6 KB · 5 天前</span></div>
         </div>
       </div>
     </div>
@@ -101,16 +99,16 @@
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">C</span>240px 挤占<span class="desc">三级：全字段被裁 / 省掉大小与时间 / 只留名字与强度</span></div>
+    <div class="variant-h"><span class="no">C</span>240px 挤占<span class="desc">现状只有一种裁法（名字先让位、尾部整段被裁）；分级递减是设想，未落地</span></div>
     <div class="canvas pad">
       <div class="grid3">
         <div>
-          <div class="hang" style="margin:0 0 4px">① 全字段都塞（<b>尾部被裁</b>，现状）</div>
+          <div class="hang" style="margin:0 0 4px">① 现状：名字 <code>flex_1</code> 先让位，尾部整段被裁</div>
           <div class="dockcol" style="height:auto">
             <div class="row">
               <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
               <span class="nm">monthly.md</span>
-              <span class="ver">v2</span>
+              <span style="color:var(--muted);font-size:12px">v2</span>
               <span class="sb b-ok"><span class="d"></span>已归档</span>
               <span class="meta">3.1 KB · 2 周前</span>
             </div>
@@ -118,19 +116,19 @@
           <p class="hang" style="margin:4px 0 0">meta 越出面板右缘 → 被 <code>overflow</code> 裁掉，只剩半个「3.1 KB」。</p>
         </div>
         <div>
-          <div class="hang" style="margin:0 0 4px">② 省掉「大小 · 相对时间」</div>
+          <div class="hang" style="margin:0 0 4px">② 设想：省掉「大小 · 相对时间」<span style="color:var(--muted)">（未落地）</span></div>
           <div class="dockcol" style="height:auto">
             <div class="row">
               <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
               <span class="nm">2026Q3_渠道日报_最终版.sql</span>
-              <span class="ver">v3</span>
+              <span style="color:var(--muted);font-size:12px">v3</span>
               <span class="sb b-ok"><span class="d"></span>已归档</span>
             </div>
           </div>
           <p class="hang" style="margin:4px 0 0">名字能多显示 3 个字，<b>徽标一律不挤</b>（强度是行内唯一色块，挤掉就丢语义）。</p>
         </div>
         <div>
-          <div class="hang" style="margin:0 0 4px">③ 只留名字 + 强度徽标</div>
+          <div class="hang" style="margin:0 0 4px">③ 设想：只留名字 + 强度徽标<span style="color:var(--muted)">（未落地）</span></div>
           <div class="dockcol" style="height:auto">
             <div class="row">
               <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
@@ -138,17 +136,18 @@
               <span class="sb b-ok"><span class="d"></span>已归档</span>
             </div>
           </div>
-          <p class="hang" style="margin:4px 0 0">名字本身省略号；版本号也省——<b>hover tooltip 里带全字段</b>。</p>
+          <p class="hang" style="margin:4px 0 0">名字本身省略号；版本号也省——<b>没有 tooltip 兜底</b>，要看全字段得点开右边详情。</p>
         </div>
       </div>
     </div>
-    <p class="hang">规则是「放不下的信息一律省略 + hover tooltip」，<b>不是</b>缩行高或折行——紧凑一致性优先于信息完整。行 <code>tooltip</code> 里带全字段（kind / 版本 / 强度 / 大小 / 归档时间）。</p>
+    <p class="hang"><b>现状只有①</b>：<code>row.rs</code> 把名字放 <code>flex_1</code> + <code>text_ellipsis</code>，版本号与强度徽标、尾部字段全是 <code>flex_none</code>，所以宽度不够时<b>名字先被省略号吃掉、尾部整段被面板右缘裁掉</b>——没有「按宽度省字段」的分级逻辑，也<b>没有</b> hover tooltip（行上没有 `.tooltip()`；原型此前写「tooltip 补全全字段」是假陈述）。②③ 是设想的降级方案，要做得在渲染层加宽度测量（当前 240px 面宽下不值当）。规则不变：<b>不缩行高、不折两行</b>，紧凑一致性优先于信息完整。</p>
   </section>
 
   <div class="canvas pad">
     <p class="hang" style="margin:0">
-      本块样式：<code>.row</code> / <code>.row.sel</code> / <code>.row.miss</code> / <code>.nm</code> / <code>.ver</code> / <code>.sb.b-ok|b-info|b-warn</code> / <code>.scope-badge</code> / <code>.mdot</code> / <code>.meta</code>。
-      落地代码：<code>crates/analytics_resource/src/resource_view/list_delegate.rs</code> + <code>row_meta.rs</code>；行距口径 <code>workbench_shell::ui::ROW_HEIGHT</code>。
+      本块样式：<code>.row</code> / <code>.row.sel</code> / <code>.row.proto-hover</code> / <code>.nm</code> / <code>.sb.b-ok|b-info|b-warn</code> / <code>.meta</code>。
+      落地代码：<code>crates/analytics_resource/src/resource_view/list_delegate/row.rs</code> + <code>row_meta.rs</code>；行距口径 <code>workbench_shell::ui::ROW_HEIGHT</code>。
+      <br>本页已<b>不再使用</b> <code>.row.miss</code>（删除线）/ <code>.mdot</code>（danger 小圆点）/ <code>.ver</code>（版本徽标）/ <code>.scope-badge</code>（实例徽标）——它们与实现不同构：缺失只灰显名称不划掉，版本号是纯文本，一行只有一个徽标位。这四个类仍留在 <code>proto.css</code> 里供其它页使用。
     </p>
   </div>
 
