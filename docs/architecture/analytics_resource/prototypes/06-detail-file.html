@@ -16,8 +16,8 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    宽 <code>320px</code>（20rem）· 分节：头部（kind 图标 + 显示名 + 版本徽标）/ 基本信息 / 来源 / 版本 / 标签与分组 / 内容预览 / 危险区。
-    只读信息区不可编辑；<b>动作只有三条</b>：打开（只读）、取回（检出）…、移入回收站。要改内容必须走「取回」→ 草稿工作副本 → 再归档生成新版本。
+    宽 <code>320px</code>（<code>RIGHT_DOCK_WIDTH</code> = 20rem）· 分节：头部（kind 图标 + 显示名 + 版本徽标 + 别名）/ 基本信息（含实例徽标）/ 来源 / 版本（含最近 3 条明细 + 查看全部…）/ <b>组织</b>（分组 + 「移动…」）/ <b>标签</b> / 动作区 / 危险区。
+    只读信息区不可编辑；写类动作全在面板里：头部改名与别名、组织「移动…」、标签「＋ 标签」、动作区「取回（检出）…」、危险区「移入回收站」——只读项目下这些入口不摆或置灰。要改内容必须走「取回」→ 草稿工作副本 → 再归档生成新版本。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="05-status-row.html">← 上一块：状态行</a><a href="07-detail-ref.html">下一块：引用型详情 →</a></nav>
 </header>
@@ -25,7 +25,7 @@
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>完整分节<span class="desc">dau_report.sql · v3 · 已归档（强）</span></div>
+    <div class="variant-h"><span class="no">A</span>完整分节<span class="desc">dau_report.sql · v3 · 已归档（强）· 顺序按实现：基本 / 来源 / 版本 / 组织 / 标签 / 内容预览 + 动作区</span></div>
     <div class="canvas pad">
       <div class="detailcol">
         <div class="dstate proto-on" style="flex:none">
@@ -40,6 +40,7 @@
             <div class="sect">
               <div class="sect-h">基本信息<span class="lock">只读</span></div>
               <div class="kv"><span class="k">实例</span><span class="v"><span class="scope-badge">项目</span></span></div>
+              <div class="kv"><span class="k">版本</span><span class="v">v3</span></div>
               <div class="kv"><span class="k">大小</span><span class="v">1.2 KB</span></div>
               <div class="kv"><span class="k">修改时间</span><span class="v">2026-09-12 10:24</span></div>
               <div class="kv"><span class="k">归档时间</span><span class="v">2026-09-15 09:12</span></div>
@@ -57,20 +58,25 @@
 
             <div class="sect">
               <div class="sect-h">版本</div>
-              <div class="vrow"><span>v3</span><span class="dt">今天 09:12</span><span class="cur">当前</span></div>
-              <div class="vrow"><span>v2</span><span class="dt">3 天前</span></div>
-              <div class="vrow"><span>v1</span><span class="dt">1 周前</span></div>
+              <div class="kv"><span class="k">历史</span><span class="v">2 个历史版本</span></div>
+              <div class="vrow"><span>v2</span><span class="dt">3 天前 · 1.1 KB</span></div>
+              <div class="vrow"><span>v1</span><span class="dt">1 周前 · 980 B</span></div>
               <span class="dlink">查看全部…</span>
             </div>
 
             <div class="sect">
-              <div class="sect-h">标签与分组</div>
+              <div class="sect-h">组织</div>
+              <div class="kv"><span class="k">分组</span><span class="v">报表</span></div>
+              <button class="btn-s btn-xs" style="margin-top:5px">移动…</button>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h">标签</div>
               <div class="tags">
                 <span class="tagc">渠道<span class="x">✕</span></span>
                 <span class="tagc">月报<span class="x">✕</span></span>
-                <span class="tagc add">＋ 添加标签</span>
+                <span class="tagc add">＋ 标签</span>
               </div>
-              <div class="kv" style="margin-top:6px"><span class="k">分组</span><span class="v">报表 ▾</span></div>
             </div>
 
             <div class="sect">
@@ -86,8 +92,17 @@ GROUP BY channel...</div>
               </div>
             </div>
 
+            <div class="sect" style="border-top:1px solid var(--sidebar-border);padding-top:8px">
+              <div style="display:flex;gap:6px">
+                <button class="btn-s btn-xs">打开（只读）</button>
+                <button class="btn-s btn-xs">取回（检出）…</button>
+              </div>
+              <div class="locknote" style="margin-top:6px"><svg class="ico-sm"><use href="#i-info" xlink:href="#i-info"/></svg><span>打开 = 只读查看本体；取回 = 复制一份可写的工作副本（本体不动）</span></div>
+            </div>
+
             <div class="danger-zone">
               <button class="btn-d">移入回收站</button>
+              <div class="locknote" style="margin-top:6px"><svg class="ico-sm"><use href="#i-trash" xlink:href="#i-trash"/></svg><span>本体与登记一起进项目级回收站，之后可从面板头「⋯ → 回收站…」还原</span></div>
             </div>
           </div>
         </div>
@@ -113,16 +128,53 @@ GROUP BY channel...</div>
         </div>
       </div>
     </div>
-    <p class="hang">点改与 <code>F2</code> / 行右键「重命名…」走<b>同一条链路</code>（同一个单输入对话框）；别名对话框同一入口，留空即清除。</p>
+    <p class="hang">点改与 <code>F2</code> / 行右键「重命名…」走<b>同一条链路</b>（同一个单输入对话框）；别名对话框同一入口，留空即清除。</p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>组织区「移动…」<span class="desc">此前代码有、原型一字未画：单选标当前项并置灰，多选只标条数</span></div>
+    <div class="canvas pad">
+      <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap">
+        <div style="flex:1;min-width:280px;max-width:340px">
+          <button class="btn-s btn-xs">移动…</button>
+          <div class="ctx proto-on" style="margin-top:6px">
+            <div class="mi cap">单选 · 当前分组＝报表</div>
+            <div class="mi">未分组</div>
+            <div class="mi dim">报表<span class="k">当前</span></div>
+            <div class="mi">月度</div>
+            <div class="mi">临时</div>
+            <div class="sep"></div>
+            <div class="mi">新建分组…</div>
+          </div>
+        </div>
+        <div style="flex:1;min-width:280px;max-width:340px">
+          <button class="btn-s btn-xs">移动 3 条…</button>
+          <div class="ctx proto-on" style="margin-top:6px">
+            <div class="mi cap">多选 3 条 · 各条分组可能不同</div>
+            <div class="mi">未分组</div>
+            <div class="mi">报表</div>
+            <div class="mi">月度</div>
+            <div class="mi">临时</div>
+            <div class="sep"></div>
+            <div class="mi">新建分组…</div>
+          </div>
+        </div>
+      </div>
+      <p class="hang">
+        与行右键「移动到分组 ›」<b>同一套宿主动作</b>（<code>request_move_to_group</code>），这里只是第二个入口。多选时动的是<b>整选集</b>（按可见顺序过滤），按钮上标条数，免得以为只动眼前这条；菜单<b>既不标当前项也不置灰</b>——各条分组可能不同，一个勾代表不了整集。
+        <br>「未分组」始终可点（已是未分组时点它也是白点，与右键同口径）；只读项目下这颗按钮<b>不摆</b>；全局行没有项目分组归属，整块分区不渲染。
+      </p>
+    </div>
   </section>
 
   <div class="canvas pad">
     <p class="hang" style="margin:0 0 6px">
-      本块样式：<code>.detail</code> / <code>.dstate</code> / <code>.dhead</code> / <code>.dsub</code> / <code>.sect</code> / <code>.kv</code> / <code>.locknote</code> / <code>.vrow</code> / <code>.tags</code> / <code>.prev</code> / <code>.danger-zone</code>。
+      本块样式：<code>.detailcol</code> / <code>.dstate</code> / <code>.dhead</code> / <code>.dsub</code> / <code>.sect</code> / <code>.kv</code> / <code>.locknote</code> / <code>.vrow</code> / <code>.tags</code> / <code>.tagc</code> / <code>.prev</code> / <code>.danger-zone</code> / <code>.btn-s</code> + <code>.btn-xs</code> / <code>.btn-d</code> / <code>.ctx</code> + <code>.mi</code> + <code>.mi.dim</code> + <code>.mi.cap</code> + <code>.sep</code>。
     </p>
     <p class="hang" style="margin:0">
-      <b>落地与原型不一致（需要拍板）</b>：实现落在<b>右 Dock 的「存档详情」档位</b>（<code>RightPanel::Archive</code>），宽度按 <code>RIGHT_DOCK_WIDTH</code>（17.5rem = 280px），不是这里的 320px 编辑区右侧属性面板；<code>h_resizable</code> 宽度记忆要等 M4 接线。版本区「最近 3 条」明细未做（当前是「N 个历史版本」+ 查看全部）。
-      落地代码：<code>crates/analytics_resource/src/detail_view/</code> + <code>present/{detail,snapshot}.rs</code>。
+      <b>宽度口径</b>：实现落在<b>右 Dock 的「存档详情」档位</b>（<code>RightPanel::Archive</code>），宽度按 <code>RIGHT_DOCK_WIDTH</code>（<code>20.0rem</code> = 320px，<code>workbench_shell/src/ui.rs:68</code>；契约值见 <code>workbench/tests/ui_contract.rs:71</code>），与本页一致——不是另开一块 320px 的属性面板。<code>h_resizable</code> 宽度记忆还没接。
+      版本区的「最近 3 条」明细已做：只列<b>历史</b>版本（当前版本在基本信息「版本」行），每行 版本号 + 时间 · 体积，下面接「查看全部…」。
+      落地代码：<code>crates/analytics_resource/src/detail_view/{mod,header,rows,body_sections,actions,tag_preview}.rs</code>（组织区 <code>render_move_to_group</code> / <code>move_ids</code> / <code>move_label</code> 在 <code>body_sections.rs</code> 尾部）+ <code>present/{detail,snapshot}.rs</code>。
     </p>
   </div>
 
