@@ -533,14 +533,14 @@ sequenceDiagram
 
 > 2026-10-22 用户需求：展示两个 DuckDB 实例的资源表，项目可升级到全局。本节为**草案规格**，多处标注【待确认】。
 > 现状锚定（2026-11-06 按源码复核，**取代**旧口径「本节未拍板、实现不动」）：双实例的**数据层与链路已落地**——全局登记表 `crates/store/migrations/global/026_analytics_resource_global.sql`（镜像项目库 `analytics_resources` 全列集 + `scope TEXT NOT NULL DEFAULT 'global'`，只存 `'global'` 行；项目库行照旧写 `'project'`）+ 全局侧独立版本表 `analytics_resource_versions`；实例枚举 `RowScope::{Project,Global}`（`model/kind.rs`）；升级 `global/promote.rs`、分发 `global/distribute.rs`、登记 `global/register.rs`、全局列表 `global/list.rs`、建表语句 `global/sql.rs`；冲突框 `dialogs/conflict.rs::{ConflictKind::Promote, ConflictKind::Distribute}` 两态。全局库 `{system}/analytics.duckdb`（`G_` 前缀）与项目库 `{项目}/.RSmeta/analytics.duckdb`（`P_` / `GP_` 前缀）沿用原锚定。
-> 仍未落地的只有两类：① **分析表型存档的升级**（回执「随 M8 后续批次接入」，本应走 `CREATE TABLE AS`）；② 升级 / 分发**都没有前置确认对话框**（点一下直接入队，只有撞名开窗；§13.3 并未要求这张框，属可选加法，故无冲突时没有「先改名再升级」的落点）。
+> 仍未落地的只有两类：① **分析表型存档的升级**（回执「随 M8 后续批次接入」，本应走 `CREATE TABLE AS`）；② 升级 / 分发**都没有前置确认对话框**（点一下直接入队，只有撞名开窗；§13.3 并未要求这张框，属可选加法）。分发侧的改名**只在撞名之后**：冲突框选「改名」→ `ConflictChoice::Rename(name)` → `enqueue_distribute(root, global_name, Some(name))`（`panels/resources.rs:237`），所以「分发前先自定义个名」没有落点；要不要加，见 `prototypes/26` E 节。
 > 只读项目这一条已收口：列表右键的升级 / 分发本就有 `disabled(… || read_only)`，**详情面板的「分发到本项目…」按钮此前漏接**（`detail_view/actions.rs` 只对项目行用 `read_only`），2026-11-06 补齐（`distribute_affordance(read_only)` 纯函数 + 两条单测），宿主侧回执保留为兜底。评审画面见 `prototypes/23`–`26`。
 
 ### 13.1 实例概念与标识
 
 - `Resource` 新增 **`scope`** 字段：`project`（默认）/ `global`，落库（全局侧建表于迁移 `global/026`，`scope TEXT NOT NULL DEFAULT 'global'` + 项目库沿用 020 存档表的同名列）。
 - **全局实例** = 全局分析库（`{system}/analytics.duckdb`）；**项目实例** = 当前项目分析库（`.RSmeta/analytics.duckdb`）。分析表的"实例" = 其**定义所在库**。
-- 文件型（`File`）资源：登记仍在项目侧；其中**可映射的数据文件**（CSV/TSV/TXT / Parquet / Excel / JSON 白名单）可升级为全局表（§13.3），白名单之外的二进制（png / zip / docx）今天会落进「脚本内容表」分支后读 UTF-8 失败【待确认：明确拒绝并置灰，还是定一套二进制承载】。
+- 文件型（`File`）资源：登记仍在项目侧；其中**可映射的数据文件**（CSV/TSV/TXT / Parquet / Excel / JSON 白名单）可升级为全局表（§13.3），**纯文本脚本**（sql / py / md / yaml 等）升级为内容表；白名单之外的二进制（png / zip / docx）**升级入口直接拒绝**（`resource_host::is_text_script_ext` 与之配套的 `is_data_file_ext` 两张正向白名单，2026-11-07 落）——此前它们会落进「脚本内容表」分支，`fs::read_to_string` 撞 UTF-8 失败，中文界面里冒一行 `stream did not contain valid UTF-8`。【待确认：要不要给全局库加二进制承载，即"进不进全局"，见 `prototypes/26` E 节】
 - 与 `ArchiveKind` 正交：`scope` 回答"定义在哪个库"，`kind` 回答"本体形态"。
 
 ### 13.2 展示：两实例资源表
