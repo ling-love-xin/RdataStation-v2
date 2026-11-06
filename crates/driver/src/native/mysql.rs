@@ -19,6 +19,7 @@ fn names_to_nodes(result: &QueryResult, kind: crate::SchemaObjectKind) -> Vec<cr
     nodes
 }
 use arrow::array::{ArrayRef, BinaryArray, BooleanArray, Float64Array, Int64Array, StringArray};
+use arrow::array::{Date32Array, Time64MicrosecondArray, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
@@ -1269,6 +1270,27 @@ fn declared_numeric_rank(name: &str) -> Option<u8> {
     })
 }
 
+/// MySQL 时间族的 Arrow 目标形态（按**声明类型**直取，不走探测）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MySqlTimeKind {
+    /// DATETIME / TIMESTAMP → 微秒时间戳
+    DateTime,
+    /// DATE → days since epoch
+    Date,
+    /// TIME → 当日微秒
+    Time,
+}
+
+/// MySQL 声明类型名 → 时间族（sqlx `type_info().name()` 对这几族给的就是这些拼写）。
+fn mysql_time_kind(declared: &str) -> Option<MySqlTimeKind> {
+    match declared {
+        "DATETIME" | "TIMESTAMP" => Some(MySqlTimeKind::DateTime),
+        "DATE" => Some(MySqlTimeKind::Date),
+        "TIME" => Some(MySqlTimeKind::Time),
+        _ => None,
+    }
+}
+
 fn mysql_rows_to_arrow(
     columns: &[String],
     rows: &[sqlx::mysql::MySqlRow],
@@ -1294,6 +1316,14 @@ fn mysql_rows_to_arrow(
             .map(|r| r.column(col_idx).type_info().name().to_ascii_uppercase())
             .unwrap_or_default();
         let declared_text = is_text_type_name(&declared);
+        // 时间族**按声明类型直取**（2026-11-06 类型面扩展）：DATETIME/TIMESTAMP/DATE/TIME
+        // 若走下面的探测链会被解成字符串（sqlx 对它们的 `String` 解码恰好成功），
+        // 结果是时间列全成 Utf8——网格徽标错、下游 DuckDB 建表变 VARCHAR。
+        // MySQL 的 `year` 也报 DATE 语义之外，不在此列。
+        let time_kind = mysql_time_kind(&declared);
+        let mut timestamp_values: Vec<Option<i64>> = Vec::with_capacity(num_rows); // 微秒
+        let mut date_values: Vec<Option<i32>> = Vec::with_capacity(num_rows); // days since epoch
+        let mut time_values: Vec<Option<i64>> = Vec::with_capacity(num_rows); // 微秒
         // 不在按声明名强制二进制：MySQL 把 TEXT 列也报成协议类型 BLOB（sqlx 名 = "BLOB"），
         // 无法只凭声明名区分 TEXT 与真 BLOB；统一交给下面的**字节 UTF-8 判定**。
         //
@@ -1308,7 +1338,7 @@ fn mysql_rows_to_arrow(
             declared_numeric_rank(&declared).unwrap_or(0)
         };
 
-        if detected_rank == 0 {
+        if detected_rank == 0 && time_kind.is_none() {
             for row in rows {
                 use sqlx::Row;
 
@@ -1340,18 +1370,59 @@ fn mysql_rows_to_arrow(
             }
         }
 
-        let effective_type = match detected_rank {
-            1 => DataType::Boolean,
-            2 => DataType::Int64,
-            3 => DataType::Float64,
-            4 => DataType::Binary,
-            _ => DataType::Utf8,
+        let effective_type = match (&time_kind, detected_rank) {
+            (Some(MySqlTimeKind::DateTime), _) => {
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
+            }
+            (Some(MySqlTimeKind::Date), _) => DataType::Date32,
+            (Some(MySqlTimeKind::Time), _) => {
+                DataType::Time64(arrow::datatypes::TimeUnit::Microsecond)
+            }
+            (None, 1) => DataType::Boolean,
+            (None, 2) => DataType::Int64,
+            (None, 3) => DataType::Float64,
+            (None, 4) => DataType::Binary,
+            (None, _) => DataType::Utf8,
         };
 
         for row in rows {
             use sqlx::Row;
 
             match effective_type {
+                DataType::Timestamp(_, _) => {
+                    use sqlx::Row;
+                    let v: Option<chrono::NaiveDateTime> = row
+                        .try_get::<Option<chrono::NaiveDateTime>, _>(col_idx)
+                        .ok()
+                        .flatten();
+                    timestamp_values.push(v.map(|dt| dt.and_utc().timestamp_micros()));
+                }
+                DataType::Date32 => {
+                    use sqlx::Row;
+                    let v: Option<chrono::NaiveDate> = row
+                        .try_get::<Option<chrono::NaiveDate>, _>(col_idx)
+                        .ok()
+                        .flatten();
+                    date_values.push(v.map(|d| {
+                        use chrono::Datelike as _;
+                        // days since epoch（1970-01-01）：CE 天数差（Datelike trait）
+                        d.num_days_from_ce() - 719_163
+                    }));
+                }
+                DataType::Time64(_) => {
+                    use sqlx::Row;
+                    let v: Option<chrono::NaiveTime> = row
+                        .try_get::<Option<chrono::NaiveTime>, _>(col_idx)
+                        .ok()
+                        .flatten();
+                    time_values.push(v.map(|t| {
+                        use chrono::Timelike as _;
+                        i64::from(t.hour()) * 3_600_000_000
+                            + i64::from(t.minute()) * 60_000_000
+                            + i64::from(t.second()) * 1_000_000
+                            + i64::from(t.nanosecond()) / 1_000
+                    }));
+                }
                 DataType::Boolean => {
                     bool_values.push(row.try_get::<Option<bool>, _>(col_idx).ok().flatten());
                 }
@@ -1408,6 +1479,11 @@ fn mysql_rows_to_arrow(
         }
 
         let array: ArrayRef = match effective_type {
+            DataType::Timestamp(_, _) => {
+                Arc::new(TimestampMicrosecondArray::from(timestamp_values))
+            }
+            DataType::Date32 => Arc::new(Date32Array::from(date_values)),
+            DataType::Time64(_) => Arc::new(Time64MicrosecondArray::from(time_values)),
             DataType::Boolean => Arc::new(BooleanArray::from(bool_values)),
             DataType::Int64 => Arc::new(Int64Array::from(int_values)),
             DataType::Float64 => Arc::new(Float64Array::from(float_values)),
@@ -1733,5 +1809,25 @@ mod tests {
         let result = db.query("SELECT 1").await?;
         assert_eq!(result.is_read_only, Some(true));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod time_kind_tests {
+    use super::*;
+
+    /// 2026-11-06 类型面扩展：MySQL 声明类型 → 时间族直取（不再被探测链解成字符串）。
+    #[test]
+    fn mysql_time_kind_covers_declared_names() {
+        assert_eq!(mysql_time_kind("DATETIME"), Some(MySqlTimeKind::DateTime));
+        assert_eq!(mysql_time_kind("TIMESTAMP"), Some(MySqlTimeKind::DateTime));
+        assert_eq!(mysql_time_kind("DATE"), Some(MySqlTimeKind::Date));
+        assert_eq!(mysql_time_kind("TIME"), Some(MySqlTimeKind::Time));
+        // 非时间族
+        assert_eq!(mysql_time_kind("DECIMAL"), None);
+        assert_eq!(mysql_time_kind("VARCHAR"), None);
+        assert_eq!(mysql_time_kind("BIGINT"), None);
+        // 空串（0 行结果的兜底）
+        assert_eq!(mysql_time_kind(""), None);
     }
 }

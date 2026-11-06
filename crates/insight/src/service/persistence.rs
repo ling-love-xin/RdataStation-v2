@@ -291,7 +291,23 @@ async fn sample_from_connection(
     let result = service
         .execute(Some(conn_id.to_string()), sample_sql, opts)
         .await?;
-    // 进程内直读（不能走 JSON 契约序列化：它不含 `batches`，永远是空行）
+    // **Arrow 直灌优先**（P1-8b 第一步，2026-11-06）：类型从 Arrow schema 直接映射
+    // （时间列保真，不再 JSON 打型成 VARCHAR）；批次缺失 / 空行回退 JSON 打型路径
+    // （保列名，K20 已保证空结果也有列）。
+    if let Some(batch) = result.result.batches.first() {
+        if !batch.schema().fields().is_empty() {
+            let duckdb = insight_engine::get_or_create_duckdb()?;
+            let conn = duckdb.lock().map_err(|e| {
+                CoreError::common(CommonError::General(format!("DuckDB lock error: {e}")))
+            })?;
+            return engine::duckdb::analysis::create_analysis_temp_table_arrow(
+                &conn,
+                batch,
+                "source_sample",
+            );
+        }
+    }
+
     let (columns, rows) = crate::service::result_columns_and_rows(&result.result);
     if columns.is_empty() {
         return Err(CoreError::common(CommonError::General(format!(

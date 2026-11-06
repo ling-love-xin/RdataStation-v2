@@ -23,6 +23,20 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-11-06 — 驱动类型面扩展第一步：MySQL 时间族 + Arrow 直灌洞察取样（P1-8b 第一段）
+
+**范围拍板**：先 MySQL 时间族（DATETIME/TIMESTAMP/DATE/TIME——时间列被打成文本的根因，YData 时间列卡的前置），DECIMAL Decimal128 全链与 PG 时间族下一批。**已落地并验证**（driver 98 + shared 58 + engine 219 + insight 280 + e2e 14 + 契约 7 全绿；clippy 零错误）：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 时间族直取 | `mysql_rows_to_arrow`：声明类型 DATETIME/TIMESTAMP→**Arrow Timestamp(µs)**、DATE→Date32、TIME→Time64(µs)（sqlx-mysql 已带 chrono feature，`NaiveDateTime/NaiveDate/NaiveTime` 直取，不再被探测链解成字符串）；`mysql_time_kind` 纯函数 + 判定测试 | `driver/native/mysql.rs` |
+| 下游显示 | `column_types` 粗粒度补时间族（Timestamp→DATETIME / Date32/64→DATE / Time→TIME——网格徽标不再 TEXT）；`arrow_value_at` 时间数组→**格式化文本**（"YYYY-MM-DD HH:MM:SS[.fff]"，MySQL DATETIME 无时区语义按 UTC 解释） | `shared/models.rs` |
+| **Arrow 直灌** | 新 `create_analysis_temp_table_arrow`：类型从 Arrow schema 直接映射 DDL（`arrow_type_to_ddl` 保守映射，DECIMAL 暂 DOUBLE），数据走 duckdb crate **appender-arrow**（`append_record_batch` + flush，C++ 侧灌入不过 Rust 值序列化）；失败收半成品；**洞察取样切换**：源库路径 batches 非空走直灌、缺失回退 JSON 打型 | `engine/duckdb/temp_table/analysis.rs` + `insight/service/persistence.rs` |
+| 闭环价值 | MySQL DATETIME → Arrow Timestamp → **DuckDB TIMESTAMP 临时表**——洞察时间列卡（datetime.rs）首次有真数据；结果网格类型徽标正确；直灌免 JSON 往返（大表取样更快） | — |
+| 测试 | engine 直灌端到端（Timestamp/Date32/Utf8/Int64 batch → DESCRIBE 断言 `created=TIMESTAMP` / `day=DATE` + 行数）；shared 时间格式化 + column_types；driver 时间族判定 | 各文件测试模块 |
+
+**下一批（已登记）**：DECIMAL→Decimal128 全链（驱动 bigdecimal→i128 + DuckDB DECIMAL DDL）、PG 时间族同构扩展、`execute_duckdb_analysis` 结果集物化路径切换直灌。
+
 ### 2026-11-06 — EDA 点击闪退修复（a11y 重复 id 第二轮：渲染器同帧共存）+ D12 测试 flake 根治
 
 **闪退**（panic-1793923115/23241 等，仍是 `Duplicate a11y node id`，但联动循环已修复不复现）：真机操作「EDA 页面点击其它区域」触发。**根因（代码面锁定）**：同一列的分布图渲染器被 **Stats 右栏 / Dist 区 / 折叠行 mini 三处共用**，而 Collapsible **收起后内容保持挂载**（motion_id 语义）——三处可能同帧共存，Progress id 只按「列」区分 → 同帧重复注册。**修复**：① `quantile_strip` 色块段去掉无谓 `.id()`（纯 div 无交互，id 需求只属于可交互元素）；② `mini_freq_rows` 加 **variant 前缀**（折叠行 `"fold"` / 右栏 `"zone"`）——同列不同位不同 id；③ Stats 右栏改用 **mini 渲染器**（`type_mini_chart`，无 `dist-*` id）不再共用完整 `dist_visual`——`dist-*` id 从此只属于 Dist 区。原则固话：**带 id 的元素在同一帧内、同一 id 只能出现一次；共用渲染器必须携带位置前缀**。

@@ -274,6 +274,11 @@ impl QueryResult {
                             DataType::Binary
                             | DataType::LargeBinary
                             | DataType::FixedSizeBinary(_) => "BYTES",
+                            // 时间族（2026-11-06 类型面扩展：MySQL DATETIME/DATE/TIME
+                            // 直取 Arrow 时间类型后，粗粒度徽标不能再兜底成 TEXT）
+                            DataType::Timestamp(_, _) => "DATETIME",
+                            DataType::Date32 | DataType::Date64 => "DATE",
+                            DataType::Time32(_) | DataType::Time64(_) => "TIME",
                             _ => "TEXT",
                         }
                         .to_string()
@@ -381,6 +386,31 @@ pub(crate) fn arrow_value_at(array: &dyn Array, index: usize) -> Value {
     if let Some(arr) = array.as_any().downcast_ref::<BooleanArray>() {
         return Value::Bool(arr.value(index));
     }
+    // 时间族 → **格式化文本**（Value 无 DateTime 变体；网格显示按「YYYY-MM-DD HH:MM:SS」
+    // 口径，与 MySQL 原文一致）。无时区语义（MySQL DATETIME 本就无时区），按 UTC 解释。
+    if let Some(arr) = array.as_any().downcast_ref::<TimestampMicrosecondArray>() {
+        return Value::Text(format_naive_datetime(arr.value(index), 1_000_000));
+    }
+    if let Some(arr) = array.as_any().downcast_ref::<TimestampMillisecondArray>() {
+        return Value::Text(format_naive_datetime(arr.value(index), 1_000));
+    }
+    if let Some(arr) = array.as_any().downcast_ref::<TimestampSecondArray>() {
+        return Value::Text(format_naive_datetime(arr.value(index), 1));
+    }
+    if let Some(arr) = array.as_any().downcast_ref::<Date32Array>() {
+        let date = chrono::NaiveDate::from_num_days_from_ce_opt(arr.value(index) + 719_163);
+        return match date {
+            Some(d) => Value::Text(d.format("%Y-%m-%d").to_string()),
+            None => Value::Text("<date out of range>".into()),
+        };
+    }
+    if let Some(arr) = array.as_any().downcast_ref::<Time64MicrosecondArray>() {
+        let micros = arr.value(index);
+        return Value::Text(format_time(micros / 1_000_000, (micros % 1_000_000) as u32));
+    }
+    if let Some(arr) = array.as_any().downcast_ref::<Time32SecondArray>() {
+        return Value::Text(format_time(i64::from(arr.value(index)), 0));
+    }
     if let Some(arr) = array.as_any().downcast_ref::<BinaryArray>() {
         return Value::Bytes(arr.value(index).to_vec());
     }
@@ -390,6 +420,35 @@ pub(crate) fn arrow_value_at(array: &dyn Array, index: usize) -> Value {
         arrow::util::display::array_value_to_string(array, index)
             .unwrap_or_else(|_| format!("<{}>", array.data_type())),
     )
+}
+
+/// 微秒时间戳 → "YYYY-MM-DD HH:MM:SS[.fff]"（`divisor` = 每秒的该单位数；
+/// 超秒部分按毫秒保留三位）。MySQL DATETIME 无时区语义，按 UTC 解释即原值。
+fn format_naive_datetime(v: i64, divisor: i64) -> String {
+    let secs = v.div_euclid(divisor);
+    let sub = v.rem_euclid(divisor);
+    match chrono::DateTime::from_timestamp(secs, 0) {
+        Some(dt) => {
+            let base = dt.format("%Y-%m-%d %H:%M:%S").to_string();
+            if sub > 0 {
+                format!("{}.{}", base, format!("{:03}", (sub * 1000) / divisor))
+            } else {
+                base
+            }
+        }
+        None => format!("<timestamp {v}>"),
+    }
+}
+
+/// 当日秒数 + 纳秒 → "HH:MM:SS[.fff]"。
+fn format_time(secs: i64, nanos: u32) -> String {
+    let (h, rem) = (secs / 3600, secs % 3600);
+    let (m, sec) = (rem / 60, rem % 60);
+    if nanos > 0 {
+        format!("{h:02}:{m:02}:{sec:02}.{:03}", nanos / 1_000_000)
+    } else {
+        format!("{h:02}:{m:02}:{sec:02}")
+    }
 }
 
 /// 序列化支持
@@ -751,5 +810,47 @@ mod value_mapping_tests {
         );
         assert_eq!(empty.is_read_only, Some(false), "is_read_only 由调用方透传");
         assert!(empty.rows.is_empty() && empty.total_rows == 0);
+    }
+}
+
+#[cfg(test)]
+mod time_format_tests {
+    use super::*;
+    use arrow::array::{Date32Array, TimestampMicrosecondArray};
+    use arrow::datatypes::DataType;
+    use std::sync::Arc;
+
+    /// 2026-11-06 类型面扩展：时间 Arrow 数组 → 网格文本（"YYYY-MM-DD HH:MM:SS"）。
+    #[test]
+    fn arrow_time_values_format_as_readable_text() {
+        let arr = TimestampMicrosecondArray::from(vec![
+            Some(1_735_689_600_000_000), // 2025-01-01 00:00:00 UTC
+            None,
+        ]);
+        assert_eq!(
+            arrow_value_at(&arr, 0),
+            Value::Text("2025-01-01 00:00:00".into())
+        );
+        assert_eq!(arrow_value_at(&arr, 1), Value::Null);
+        assert_eq!(
+            arr.data_type(),
+            &DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
+        );
+
+        let days = Date32Array::from(vec![Some(19_723)]); // 2024-01-01
+        assert_eq!(arrow_value_at(&days, 0), Value::Text("2024-01-01".into()));
+    }
+
+    /// column_types 粗粒度：时间 Arrow 类型不再兜底成 TEXT。
+    #[test]
+    fn column_types_keep_time_family() {
+        use arrow::datatypes::{Field, Schema, TimeUnit};
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("t", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+            Field::new("d", DataType::Date32, true),
+        ]));
+        let batch = RecordBatch::new_empty(schema);
+        let result = QueryResult::from_batches(vec!["t".into(), "d".into()], vec![batch]);
+        assert_eq!(result.column_types(), vec!["DATETIME", "DATE"]);
     }
 }

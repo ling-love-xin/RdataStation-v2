@@ -20,6 +20,7 @@
 //! [`TempTableSource::Mock`] 的前缀对齐），所以宿主的「项目切换时清掉」对它有效；
 //! 本模块做的就是让**洞察**也回到同一套前缀口径。
 
+use arrow::record_batch::RecordBatch;
 use duckdb::Connection;
 use serde_json::Value;
 use shared::error::{CommonError, CoreError};
@@ -87,6 +88,91 @@ pub fn create_analysis_temp_table(
     DuckDBManager::register_temp_table(&table);
     warn_if_near_capacity();
     Ok(table)
+}
+
+/// 从 **Arrow 批**建一张分析临时表并登记（P1-8b 第一步，2026-11-06）。
+///
+/// 与 JSON 打型版（[`create_analysis_temp_table`]）的区别：类型从 Arrow schema
+/// 直接映射（Timestamp/Date/Time 保真），数据走 duckdb crate 的
+/// **appender-arrow**（`append_record_batch`，批内 C++ 侧灌入）——不过 Rust 值
+/// 序列化，时间列不再变 VARCHAR。
+///
+/// 类型映射见 [`arrow_type_to_ddl`]；失败（建表 / 灌数据）会把半成品收掉。
+pub fn create_analysis_temp_table_arrow(
+    conn: &Connection,
+    batch: &RecordBatch,
+    description: &str,
+) -> Result<String, CoreError> {
+    if let Err(e) = cleanup_analysis_temp_tables(conn) {
+        tracing::warn!("[analysis] 惰性清理洞察中间表失败: {e}");
+    }
+
+    let table = generate_table_name(description);
+    let col_defs: Vec<String> = batch
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| {
+            format!(
+                "{} {}",
+                quote_ident(f.name()),
+                arrow_type_to_ddl(f.data_type())
+            )
+        })
+        .collect();
+    conn.execute_batch(&format!(
+        "CREATE TABLE {}({})",
+        quote_ident(&table),
+        col_defs.join(", ")
+    ))
+    .map_err(|e| {
+        CoreError::common(CommonError::General(format!(
+            "建分析临时表 {table} 失败（Arrow 直灌，来源：{description}）: {e}"
+        )))
+    })?;
+
+    // 灌数据（0 行批跳过——表结构已就位）；失败收半成品
+    let appender_result = (|| -> Result<(), CoreError> {
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+        let mut app = conn.appender(&table).map_err(|e| {
+            CoreError::common(CommonError::General(format!("建 appender 失败: {e}")))
+        })?;
+        app.append_record_batch(batch.clone()).map_err(|e| {
+            CoreError::common(CommonError::General(format!("Arrow 批灌入失败: {e}")))
+        })?;
+        app.flush().map_err(|e| {
+            CoreError::common(CommonError::General(format!("appender flush 失败: {e}")))
+        })?;
+        Ok(())
+    })();
+    if let Err(e) = appender_result {
+        let _ = drop_analysis_temp_table(conn, &table);
+        return Err(e);
+    }
+
+    DuckDBManager::register_temp_table(&table);
+    warn_if_near_capacity();
+    Ok(table)
+}
+
+/// Arrow DataType → DuckDB DDL 类型（直灌建表用；保守映射，未列出一律 VARCHAR）。
+fn arrow_type_to_ddl(data_type: &arrow::datatypes::DataType) -> &'static str {
+    use arrow::datatypes::DataType as D;
+    match data_type {
+        D::Int8 | D::Int16 | D::Int32 | D::Int64 => "BIGINT",
+        D::UInt8 | D::UInt16 | D::UInt32 | D::UInt64 => "BIGINT",
+        D::Float16 | D::Float32 | D::Float64 => "DOUBLE",
+        D::Boolean => "BOOLEAN",
+        D::Utf8 | D::LargeUtf8 => "VARCHAR",
+        D::Binary | D::LargeBinary | D::FixedSizeBinary(_) => "BLOB",
+        D::Timestamp(_, _) => "TIMESTAMP",
+        D::Date32 | D::Date64 => "DATE",
+        D::Time32(_) | D::Time64(_) => "TIME",
+        D::Decimal128(_, _) | D::Decimal256(_, _) => "DOUBLE", // DECIMAL 精度保真留待下一批
+        _ => "VARCHAR",
+    }
 }
 
 /// 直接以一条 `SELECT` **建**一张分析临时表（`CREATE TABLE … AS`），并登记。
@@ -431,5 +517,90 @@ mod tests {
         assert!(table_exists(&conn, &fresh), "刚建的表不能被清掉");
 
         drop_analysis_temp_table(&conn, &fresh).expect("收尾");
+    }
+}
+
+#[cfg(test)]
+mod arrow_tests {
+    use super::*;
+
+    /// Arrow 直灌端到端（P1-8b 第一步）：带 Timestamp/Date32/Utf8/Int64 列的
+    /// batch → 建表 → DESCRIBE 验证 **DuckDB 侧类型保真**（时间列不再 VARCHAR），
+    /// SELECT 验证行数与值。
+    #[test]
+    fn arrow_direct_load_preserves_time_types() -> Result<(), CoreError> {
+        use arrow::array::{Date32Array, Int64Array, StringArray, TimestampMicrosecondArray};
+        use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+        use arrow::record_batch::RecordBatch;
+        use std::sync::Arc;
+
+        let conn = Connection::open_in_memory()
+            .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new(
+                "created",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            ),
+            Field::new("day", DataType::Date32, true),
+            Field::new("note", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    Some(1_735_689_600_000_000), // 2025-01-01 04:00:00 UTC
+                    None,
+                ])),
+                Arc::new(Date32Array::from(vec![Some(19_723), Some(19_724)])), // 2024-01-01/02
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        )
+        .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?;
+
+        let table = create_analysis_temp_table_arrow(&conn, &batch, "arrow_probe")?;
+        assert!(table.starts_with(ANALYSIS_TABLE_PREFIX));
+
+        // 类型保真：DESCRIBE 的列类型就是 DuckDB 原生时间类型
+        let mut stmt = conn
+            .prepare(&format!("DESCRIBE {}", quote_ident(&table)))
+            .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?;
+        let mut rows = stmt
+            .query([])
+            .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?;
+        let mut types = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?
+        {
+            let name: String = row
+                .get(0)
+                .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?;
+            let ty: String = row
+                .get(1)
+                .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?;
+            types.push(format!("{name}={ty}"));
+        }
+        assert!(
+            types.iter().any(|t| t.starts_with("created=TIMESTAMP")),
+            "时间列应为 TIMESTAMP：{types:?}"
+        );
+        assert!(types.iter().any(|t| t.starts_with("day=DATE")), "{types:?}");
+
+        // 行数与值
+        let count: i64 = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM {}", quote_ident(&table)),
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?;
+        assert_eq!(count, 2);
+
+        // 收尾（表名守卫内）
+        drop_analysis_temp_table(&conn, &table)?;
+        Ok(())
     }
 }
