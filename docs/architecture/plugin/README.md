@@ -189,7 +189,8 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 `plugin::installer::install_from_path` —— 安装目录（`plugins/`）与 global.db 句柄由插件侧
 解析，宿主只交用户选中的路径。安装链：`prepare_install`（存在性 / 格式 / 拒绝 `plugins/<id>`
 自身作源）→ 解包到 `temp/`（zip 用 `enclosed_name()` 拒路径穿越，tar.gz 靠 `Archive::unpack`）
-→ `validate_plugin`（`plugin.toml` → 清单校验 → 入口存在 → checksums → 拒绝落入开发残留的
+→ `locate_package_root`（根层清单，或唯一一层插件目录；多候选拒绝）→ `validate_plugin`
+（`plugin.toml` → 清单校验 → 入口存在 → checksums → 拒绝落入开发残留的
 入口）→ 复制（跳过开发残留）→ 登记 global.db → 清理临时目录 → `load_plugin_from_dir`。
 解包与复制在后台线程执行，面板显示「正在安装 …」并同时禁用两个按钮（防并发写同一目录）；
 完成后刷新清单，成功回执写「已安装 <名称> v<版本>（<code>）」，失败写可读错误。
