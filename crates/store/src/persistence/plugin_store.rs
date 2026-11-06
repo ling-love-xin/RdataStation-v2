@@ -78,6 +78,19 @@ fn storage_err(operation: &str, reason: String) -> CoreError {
 /// 于是 `get_all_plugins` 出现重复、卸载后会留幽灵记录。这里按 code 合并：
 /// 沿用最近一行的 `is_enabled` 与 `installed_at`——用户停用的插件重装后不该自己变回启用。
 pub fn register_plugin(conn: &Connection, plugin: &Plugin) -> Result<(), CoreError> {
+    register_plugin_with_dependencies(conn, plugin, &[])
+}
+
+/// 注册插件并整体替换它的依赖行（同一事务）。
+///
+/// 依赖行必须跟着插件登记一起落库：只写 `plugins` 不写 `plugin_dependencies`，
+/// 「被依赖不让卸载」的反向检查永远查不到引用者；分开写又会出现「插件已登记、
+/// 依赖没写进去」的半截状态。同 code 旧行的依赖在下面一并清掉再写新行。
+pub fn register_plugin_with_dependencies(
+    conn: &Connection,
+    plugin: &Plugin,
+    deps: &[PluginDependency],
+) -> Result<(), CoreError> {
     let previous: Option<(i32, String)> = conn
         .query_row(
             "SELECT is_enabled, installed_at FROM plugins WHERE code = ?1
@@ -128,6 +141,21 @@ pub fn register_plugin(conn: &Connection, plugin: &Plugin) -> Result<(), CoreErr
             ],
         )
         .map_err(|e| storage_err("register_plugin", e.to_string()))?;
+        for dep in deps {
+            // 依赖行统一挂到本次登记的安装实例 uuid 上（同 code 旧行已删）。
+            conn.execute(
+                "INSERT OR REPLACE INTO plugin_dependencies
+                 (plugin_id, dep_code, dep_version_range, is_optional)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    plugin.id,
+                    dep.dep_code,
+                    dep.dep_version_range,
+                    dep.is_optional as i32,
+                ],
+            )
+            .map_err(|e| storage_err("register_plugin_dep_insert", e.to_string()))?;
+        }
         Ok(())
     })();
 

@@ -8,7 +8,7 @@ use crate::events::*;
 use crate::manager::get_plugin_manager;
 use engine::persistence::global_db::GlobalDatabaseManager;
 use engine::persistence::plugin_store::{
-    Plugin, PluginGlobalConfig, ProjectPluginConfig, ProjectUsedPlugin,
+    Plugin, PluginDependency, PluginGlobalConfig, ProjectPluginConfig, ProjectUsedPlugin,
 };
 use engine::persistence::project_connection_store::ProjectConnectionStore;
 use shared::error::{CoreError, PluginError};
@@ -149,7 +149,29 @@ impl PluginService {
     /// （`register_plugin` 事务内替换旧行并沿用停用状态），不再直接报 `already_exists`。
     pub async fn install_plugin(&self, input: InstallPluginInput) -> Result<Plugin, CoreError> {
         let plugin = Plugin::from(input);
-        self.global_db.register_plugin(&plugin).await?;
+        // 清单里声明的依赖跟插件行一起登记：只写 plugins 不写 plugin_dependencies，
+        // 「被依赖不让卸载」的反向检查就查不到引用者。清单解析失败不在这里报——
+        // 本入口只做登记，清单合法性由真实安装器 / 加载器负责。
+        let deps: Vec<PluginDependency> = plugin
+            .manifest_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<crate::manifest::PluginManifest>(json).ok())
+            .map(|manifest| {
+                manifest
+                    .dependencies
+                    .into_iter()
+                    .map(|d| PluginDependency {
+                        plugin_id: plugin.id.clone(),
+                        dep_code: d.id,
+                        dep_version_range: d.version,
+                        is_optional: false,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.global_db
+            .register_plugin_with_dependencies(&plugin, &deps)
+            .await?;
 
         // 发布插件已安装事件
         emit_plugin_installed(&plugin.id, &plugin.code, &plugin.version);

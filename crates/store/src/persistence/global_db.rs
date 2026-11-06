@@ -1952,6 +1952,21 @@ impl GlobalDatabaseManager {
         Ok(())
     }
 
+    /// 注册插件并同事务替换它的依赖行。
+    ///
+    /// 安装 / 热插拔登记都走这个入口：依赖行跟插件行一起提交，避免只登记插件而
+    /// `plugin_dependencies` 空着（反向依赖检查就永远查不到引用者）。
+    pub async fn register_plugin_with_dependencies(
+        &self,
+        plugin: &plugin_store::Plugin,
+        deps: &[plugin_store::PluginDependency],
+    ) -> Result<(), CoreError> {
+        let conn = self.sqlite_pool.acquire().await?;
+        plugin_store::register_plugin_with_dependencies(conn.inner()?, plugin, deps)?;
+
+        Ok(())
+    }
+
     /// 根据 ID 获取插件
     pub async fn get_plugin(&self, id: &str) -> Result<Option<plugin_store::Plugin>, CoreError> {
         let conn = self.sqlite_pool.acquire().await?;

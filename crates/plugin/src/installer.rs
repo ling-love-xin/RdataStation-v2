@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use engine::persistence::global_db::GlobalDatabaseManager;
-use engine::persistence::plugin_store::Plugin;
+use engine::persistence::plugin_store::{Plugin, PluginDependency};
 use paths::validate_plugin_id;
 use shared::error::{CommonError, CoreError};
 
@@ -531,7 +531,20 @@ pub(crate) async fn register_manifest(
         updated_at: now,
     };
 
-    db_manager.register_plugin(&plugin).await?;
+    let deps: Vec<PluginDependency> = manifest
+        .dependencies
+        .iter()
+        .map(|d| PluginDependency {
+            plugin_id: plugin.id.clone(),
+            dep_code: d.id.clone(),
+            // 清单里只有 `id` + `version`（精确版本），库里存成版本范围字段。
+            dep_version_range: d.version.clone(),
+            is_optional: false,
+        })
+        .collect();
+    db_manager
+        .register_plugin_with_dependencies(&plugin, &deps)
+        .await?;
 
     // 库层会沿用同 code 旧行的启用状态；返回调用方的实例必须反映落库结果，
     // 否则重装一个已停用的插件会被当场当成启用并激活。

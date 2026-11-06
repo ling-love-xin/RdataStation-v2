@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::persistence::global_db::GlobalDatabaseManager;
-use crate::persistence::plugin_store::{Plugin, PluginGlobalConfig};
+use crate::persistence::plugin_store::{Plugin, PluginDependency, PluginGlobalConfig};
 
 /// 临时目录 + 已经跑完迁移的全局库；返回后用完调用 `finish`。
 async fn create_test_global_store(tag: &str) -> (GlobalDatabaseManager, PathBuf) {
@@ -185,6 +185,55 @@ async fn global_config_round_trips() {
     assert_eq!(configs.len(), 1);
     assert_eq!(configs[0].key, "test.key");
     assert_eq!(configs[0].value, Some("test.value".to_string()));
+
+    finish(manager, dir).await;
+}
+
+/// 依赖行必须跟插件登记一起落库，并在同 code 重装时跟着旧行一起换掉。
+/// 只登记插件不登记依赖，「被依赖不让卸载」的反向检查就永远查不到引用者。
+#[tokio::test]
+async fn dependencies_are_registered_and_replaced_with_the_plugin_row() {
+    let (manager, dir) = create_test_global_store("deps").await;
+    let p = plugin("test.consumer", "1.0.0", true);
+    let dep = PluginDependency {
+        plugin_id: p.id.clone(),
+        dep_code: "test.base".to_string(),
+        dep_version_range: "1.0.0".to_string(),
+        is_optional: false,
+    };
+
+    manager
+        .register_plugin_with_dependencies(&p, std::slice::from_ref(&dep))
+        .await
+        .expect("register with deps");
+    let deps = manager
+        .get_plugin_dependencies(&p.id)
+        .await
+        .expect("get deps");
+    assert_eq!(deps.len(), 1);
+    assert_eq!(deps[0].dep_code, "test.base");
+
+    // 同 code 换新版本重装（清单不再依赖任何插件）：旧 uuid 的依赖行必须消失。
+    let reinstalled = plugin("test.consumer", "2.0.0", true);
+    manager
+        .register_plugin_with_dependencies(&reinstalled, &[])
+        .await
+        .expect("reinstall without deps");
+    assert!(
+        manager
+            .get_plugin_dependencies(&p.id)
+            .await
+            .expect("get old deps")
+            .is_empty(),
+        "旧安装实例的依赖行应随旧插件行一起清掉"
+    );
+    assert!(
+        manager
+            .get_plugin_dependencies(&reinstalled.id)
+            .await
+            .expect("get new deps")
+            .is_empty()
+    );
 
     finish(manager, dir).await;
 }
