@@ -185,7 +185,7 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 注入全局（enable/disable 依赖 tokio 上下文），面板事件回调在后台 `block_on` 执行不阻塞 UI。
 卸载按钮与下载引导同二期（需确认对话框）。
 
-**目录布局已接入代码**（2026-11-06）：`plugin-layout.md` 定稿，`crates/plugin/src/layout.rs`
+**目录布局已接入代码**（2026-10-16）：`plugin-layout.md` 定稿，`crates/plugin/src/layout.rs`
 成为唯一的路径/布局入口。四处硬约束落地：①清单里所有"指文件"的字段
 （`backend.executable` / `capabilities.wasm.entry` / `capabilities.frontend.entry` /
 `plugin.icon` / `drivers[].connection_schema`）统一走相对路径白名单（POSIX `/`、
@@ -195,3 +195,13 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 ④`backend.executable` 支持 `bin/<platform>/agent` 优先、`bin/agent` 回退（多平台包不必为
 平台分叉清单）。另：驱动描述符不再接收 `plugin.icon`（那里是 emoji 字符徽标，塞资源路径
 会显示文件名；插件图标归 P4 插件列表）。`cargo test -p rds-plugin` 全绿。
+
+**随包完整性校验已落地**（2026-10-16）：`crates/plugin/src/checksums.rs` 解析包根
+`checksums.json`（`{ "algorithm": "sha256", "files": { "<相对路径>": "<64 位 hex>" } }`），
+安装期 `installer::validate_plugin` 在**复制目录之前**逐文件比对 sha256，并检查覆盖率——
+`plugin.toml`、清单声明的入口（多平台包按解析后的 `bin/<platform>/agent` 算）、
+声明了且真实存在的 `plugin.icon` / `connection_schema` 必须列出（否则删一行就能绕过）。
+键沿用清单同一套相对路径白名单（不许逃逸、不许自指）。文件缺失视为老包 / 开发目录，
+放行；发布包应在 P5 打包流程里生成。`signature.json`（验"谁签发"）与运行期校验仍未做。
+`cargo test -p rds-plugin` **204 单测 + 71 集成**全绿。
+

@@ -232,6 +232,8 @@ impl PluginInstaller {
         // 安装期就检查声明的入口是否在包里：否则「装成功、激活时才报错」，
         // 与「装前给可读原因」的口径不一致（目录约定见 plugin-layout.md）。
         crate::layout::check_declared_entries(&manifest, plugin_dir)?;
+        // 随包完整性：有 checksums.json 就逐文件比对（缺失视为老包 / 开发目录，放行）。
+        crate::checksums::verify_package(&manifest, plugin_dir)?;
         Ok(manifest)
     }
 
@@ -318,5 +320,100 @@ impl PluginInstaller {
         db_manager.register_plugin(&plugin).await?;
 
         Ok(plugin)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::checksums::CHECKSUMS_FILE;
+    use sha2::{Digest, Sha256};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// 一次性临时目录（Drop 清理；测试不写仓库目录）
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let dir = std::env::temp_dir().join(format!(
+                "rds-plugin-installer-{tag}-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write(dir: &Path, relative: &str, body: &str) {
+        let path = dir.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    const MANIFEST: &str = r#"
+[plugin]
+id = "com.example.installer"
+name = "Installer"
+version = "1.0.0"
+publisher = "test"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "sidecar"
+executable = "bin/agent"
+"#;
+
+    fn sha256(dir: &Path, relative: &str) -> String {
+        let bytes = std::fs::read(dir.join(relative)).unwrap();
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        hex::encode(hasher.finalize())
+    }
+
+    /// `install_package` 的顺序是「解包 → `validate_plugin` → 复制目录」；这里直接测
+    /// 那一步校验本身：坏哈希的包在校验期就被拒，走不到复制与落库。
+    #[test]
+    fn validate_plugin_rejects_a_tampered_package() {
+        let dir = TempDir::new("tampered");
+        write(dir.path(), "plugin.toml", MANIFEST);
+        write(dir.path(), "bin/agent", "original-binary");
+
+        let checksums = serde_json::json!({
+            "algorithm": "sha256",
+            "files": {
+                "plugin.toml": sha256(dir.path(), "plugin.toml"),
+                "bin/agent": sha256(dir.path(), "bin/agent"),
+            }
+        })
+        .to_string();
+        write(dir.path(), CHECKSUMS_FILE, &checksums);
+
+        let installer = PluginInstaller::new(dir.path().join("install"));
+        installer.validate_plugin(dir.path()).unwrap();
+
+        // 装包被篡改：哈希对不上就拒绝
+        write(dir.path(), "bin/agent", "tampered-binary");
+        let err = installer.validate_plugin(dir.path()).unwrap_err();
+        let text = format!("{err}");
+        assert!(
+            text.contains("哈希不匹配") && text.contains("bin/agent"),
+            "{text}"
+        );
     }
 }

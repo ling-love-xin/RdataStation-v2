@@ -39,6 +39,9 @@ tracing.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 toml.workspace = true
+# 随包完整性（checksums.json 的 sha256；见 src/checksums.rs）
+sha2.workspace = true
+hex.workspace = true
 
 # ===== 插件包解压（installer：zip / tar.gz）=====
 zip.workspace = true

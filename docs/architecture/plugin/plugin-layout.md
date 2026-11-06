@@ -51,8 +51,31 @@
 │   └── extension.js
 ├── schemas/                     # 声明式资产（connection_schema 等）
 ├── media/                       # 展示资产：icon.svg / 截图 / 示例
-└── checksums.json               # P5 随包校验（可选）
+└── checksums.json               # 随包完整性（sha256，可选；格式见下）
 ```
+
+`checksums.json` 的形态与校验时机：
+
+```json
+{
+  "algorithm": "sha256",
+  "files": {
+    "plugin.toml": "<64 位十六进制>",
+    "bin/agent": "<64 位十六进制>"
+  }
+}
+```
+
+- **时机**：安装期（`installer::validate_plugin` → `crates/plugin/src/checksums.rs::verify_package`），
+  对解压产物 / 源目录校验，**复制目录之前**；装进去的字节和校验过的是同一份。
+- **覆盖率**（防"删一行绕过"）：`plugin.toml`、清单声明的入口（多平台包按**解析后**的
+  `bin/<platform>/agent` 算）、声明了且真实存在的 `plugin.icon` / `connection_schema`
+  必须列出；其余依赖（`lib/*.jar` 等）建议全列。
+- 键与清单同一套相对路径白名单（POSIX `/`、禁 `..`/盘符/绝对路径），且不许把
+  `checksums.json` 自己列进去（哈希无法自指）。
+- 算法目前只认 `sha256`；`signature.json`（验"谁签发"）属 P5，未实现。
+- **缺失放行**：老包与开发目录（热插拔直接指源码目录）不带该文件，安装照常成功；
+  发布包应在打包流程里生成——不带它等于放弃完整性校验。
 
 各目录的职责边界：
 
@@ -106,6 +129,8 @@
 6. **运行期不写安装目录**。安装目录是只读产物：写进去会参与热插拔 hash 判定之外的变化，
    卸载时一起被删。持久数据走 `plugin-data/<id>`，缓存走 `plugin-cache/<id>`，
    子进程工作目录走 `tmp/sidecar/<id>`。
+7. **发布包带 `checksums.json`**。安装期逐文件校验 sha256 并检查覆盖率（见 §3 末）；
+   缺失不阻断安装（兼容老包与开发目录），但发布包不带它就没有"字节是否仍是作者签发的"这一层。
 
 ## 6. 版本不进目录名
 
@@ -126,6 +151,7 @@
 | 相对路径形态（五字段） | 解析清单时 | `manifest::PluginManifest::validate_asset_paths` |
 | 目录名 = id | 加载时 | `manager::load_plugin_from_dir` → `layout::validate_dir_name` |
 | 入口存在性 | 安装时（复制前，对解压产物） | `installer::validate_plugin` → `layout::check_declared_entries` |
+| 随包哈希 + 覆盖率 | 安装时（复制前） | `installer::validate_plugin` → `checksums::verify_package` |
 | wasm 入口解析 | 激活时 | `manager::activate_wasm` → `layout::resolve_asset` |
 | 多平台可执行解析 | 部署时 | `manifest::PluginBackend::resolve_executable` → `layout::resolve_executable` |
 
@@ -138,6 +164,9 @@
   插件列表/详情 UI（P4）要展示插件图标时，再补宿主侧 icon resolver。
 - 路径校验是**逐段白名单**（拒绝 `..` / 盘符 / 根），不做 symlink 解析后的二次确认；
   插件包里的符号链接按平台语义处理（P5 随包签名时再收紧）。
+- `checksums.json` **只在安装期**校验：运行期与热插拔（开发者目录）不校验，
+  `signature.json`（签名与签发者信任链）未实现。安装目录的只读性靠文件系统权限与卸载流程
+  保证，不靠每次启动重算哈希。
 
 ## 8. 既有示例包的对齐建议
 

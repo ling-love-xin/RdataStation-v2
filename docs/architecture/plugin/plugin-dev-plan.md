@@ -642,7 +642,7 @@ pub fn plugin_registry_dir()-> PathBuf  // plugins/.registry（分发包缓存 +
 
 **symlink 防御**：解析器返回**打开目录的句柄**而非路径；Linux 用 `openat2(RESOLVE_BENEATH)`（`cap-std`），其他平台逐段 `openat`。**禁止 check-then-use**——gpui-kit 文档记录过两次失败的尝试（字符串比较漏整条 link；字符串比较 + canonicalize 抓不住 check 与 syscall 之间植入的 link）。
 
-**插件目录内部布局**：`plugins/<id>/` 里怎么摆（`bin/` `lib/` `wasm/` `dist/` `schemas/` `media/`、多平台 `bin/<platform>/`、入口由清单指向、目录名 = id、路径白名单、安装期入口存在性）2026-11-06 定稿并已接入代码，**以 `plugin-layout.md` 为准**（本节只讲外层四目录）。
+**插件目录内部布局**：`plugins/<id>/` 里怎么摆（`bin/` `lib/` `wasm/` `dist/` `schemas/` `media/`、多平台 `bin/<platform>/`、入口由清单指向、目录名 = id、路径白名单、安装期入口存在性、`checksums.json` 完整性）2026-10-16 定稿并已接入代码，**以 `plugin-layout.md` 为准**（本节只讲外层四目录）。
 
 ### 4.8 生命周期与项目引用对账
 

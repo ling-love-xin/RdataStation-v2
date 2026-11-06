@@ -20,6 +20,7 @@
 //!
 //! 依赖方向：plugin → engine → shared。
 
+pub mod checksums;
 pub mod dependency;
 pub mod events;
 pub mod installer;
