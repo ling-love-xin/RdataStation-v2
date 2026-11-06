@@ -101,21 +101,33 @@
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">E</span>规格没定的两处<span class="desc">【待确认】——拍板前不进代码</span></div>
+    <div class="variant-h"><span class="no">E</span>规格没定的两处<span class="desc">【待确认】——两路的代价摆在这里，① 的拒绝回执已落</span></div>
     <div class="canvas pad">
       <div class="fgrid">
         <span class="fl">① 纯文件档</span>
-        <span class="fw"><input class="inp ro" value="除数据文件 / 脚本 / 分析表之外的 File 档（如 png、zip、docx）进不进全局？" readonly></span>
-        <span class="fl">影响</span>
-        <span class="fw">今天它们会落进「脚本内容表」分支然后读失败；要么明确拒绝并置灰，要么定一套二进制承载。§13 没写。
+        <span class="fw"><input class="inp ro" value="除数据文件 / 文本脚本 / 分析表之外的 File 档（如 png、zip、docx）进不进全局？" readonly></span>
+        <span class="fl">现状</span>
+        <span class="fw">升级入口只判了「是不是数据文件」，其余一律走「脚本内容表」的 <code>read_to_string</code>；二进制因此撞 UTF-8，中文界面里冒出一行 <code>stream did not contain valid UTF-8</code>。<b>2026-11-07 已落</b>：补一张文本脚本白名单（<code>sql / py / md / yaml / ipynb…</code>），两张白名单都不收的（png / zip / docx / 无扩展名）<b>在入队前回执</b>，原话是「png 这类文件不能升级到全局——全局库只收能读成表的数据文件（csv / tsv / parquet / xlsx / json 等）或文本脚本（sql / py / md 等）。内容是数据的话，另存为 csv 再升级；纯二进制文件请留在项目里，用「分发」或共享目录传。」<br>注意：这只是把失败说清楚，<b>没有回答「要不要支持」</b>。
+      </span>
+        <span class="fl">路径 A</span>
+        <span class="fw"><b>明确拒绝（当前语义，已落）</b>：全局库只收「能读成表的数据」与「纯文本脚本」，二进制留项目侧。代价 0。另一面是：二进制从此<b>没有跨项目路径</b>——分发是全局 → 项目，它进不了全局，也就分不回来；跨项目传 png / docx 只剩共享目录。
+      </span>
+        <span class="fl">路径 B</span>
+        <span class="fw"><b>给全局库加文件承载</b>（全局侧存 blob 路径 + 全局版 <code>payload_mode = copy</code>）。代价：<code>026</code> 迁移加列、<code>global/register.rs</code> 三处写入、版本链按 blob 指纹、分发要能拷回项目、<code>global/tests.rs</code> 补面——一整刀，不是顺手活。收益：归档里的 png / docx 能进全局、能分发，和表型走同一条链。
       </span>
         <span class="fl">② 分发后改名</span>
         <span class="fw"><input class="inp ro" value="分发落名 ↔ 冲突改名 之外，是否允许「分发时就改名」？" readonly></span>
-        <span class="fl">影响</span>
-        <span class="fw">没改名入口时，同名的两份永远撞；只能先撞进冲突框再改名（多一次往返）。
+        <span class="fl">现状</span>
+        <span class="fw">分发入口传的是 <code>enqueue_distribute(root, name, <b>None</b>, false)</code>，落名＝全局名。只有撞名之后才有改名：冲突框选「改名」→ <code>ConflictChoice::Rename(name)</code> → <code>enqueue_distribute(root, global_name, Some(name), false)</code>（<code>panels/resources.rs:237</code>）。所以是<b>「撞了才能改」，不是「分发前能改」</b>。
+      </span>
+        <span class="fl">路径 A</span>
+        <span class="fw"><b>维持撞名后再改</b>：零改动，且与 §13.4「分发不弹前置框、点一下就走」一致。代价：两份同名的永远先撞一次，多一个往返（撞 → 框 → 改名 → 再分发）。
+      </span>
+        <span class="fl">路径 B</span>
+        <span class="fw"><b>分发前先取名</b>：菜单加「分发并改名…」，开一个单输入框（复用冲突框里那个 rename 输入的形态）。代价：一个新对话框 + 一处菜单入口 + 测试；收益：省掉必然撞的那次往返。代价的另一面：分发从「一步」变「两步」，与 §13.4 的取向相反。
       </span>
       </div>
-      <div class="note"><svg class="ico-sm"><use href="#i-info" xlink:href="#i-info"/></svg>这两条与 <a href="25-cross-project-flow.html">25 块</a>的链路不冲突；它们只决定<b>边界上那几个不可升级的档进不进这条链</b>。</div>
+      <div class="note"><svg class="ico-sm"><use href="#i-info" xlink:href="#i-info"/></svg>这两条与 <a href="25-cross-project-flow.html">25 块</a>的链路不冲突；它们只决定<b>边界上那几个进不了这条链的档</b>，以及<b>要不要给它们开口子</b>。① 的「拒绝」已经进了代码，② 现在就是「撞了再改」。两处都等一句拍板。</div>
     </div>
   </section>
 
@@ -125,7 +137,7 @@
   <div class="canvas pad">
     <p class="hang" style="margin-top:0">
       本块样式：<code>.srcbar</code> / <code>.fgrid</code> / <code>.inp.ro</code> / <code>.note</code> + <code>.note.warn</code> + <code>.note.danger</code> / <code>.ctx.proto-on</code> / <code>.mi</code> / <code>.mi.dim</code> / <code>.sep</code> / <code>.mdot</code>。<br>
-      落地代码：<code>crates/analytics_resource/src/resource_host/detail_actions.rs::request_promote_to_global</code>（四条回执原文）/ <code>::request_distribute_from_global</code>（只读 + 无法分发）/ <code>src/global/promote.rs</code>（脚本分支 <code>read_to_string</code> 的失败文案）/ <code>src/resource_view/list_delegate/menu.rs</code>（多选置灰、<code>read_only</code> 置灰与 <code>scope</code> 裁剪）/ <code>src/detail_view/actions.rs::distribute_affordance</code>（详情面板分发按钮同一判据）。
+      落地代码：<code>crates/analytics_resource/src/resource_host/detail_actions.rs::request_promote_to_global</code>（四条回执原文 + 升级形态判定）/ <code>::request_distribute_from_global</code>（只读 + 无法分发）/ <code>src/resource_host/mod.rs::{is_data_file_ext,is_text_script_ext}</code>（两张正向白名单，二进制在入队前被拒）/ <code>src/global/promote.rs</code>（脚本分支 <code>read_to_string</code> 的失败文案）/ <code>src/resource_view/list_delegate/menu.rs</code>（多选置灰、<code>read_only</code> 置灰与 <code>scope</code> 裁剪）/ <code>src/detail_view/actions.rs::distribute_affordance</code>（详情面板分发按钮同一判据）。
     </p>
   </div>
 </div>
