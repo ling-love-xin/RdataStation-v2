@@ -2,7 +2,7 @@
 <html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="UTF-8">
-<title>12 取回对话框 · 资产库原型</title>
+<title>12 取回（检出）对话框 · 资产库原型</title>
 <link rel="stylesheet" href="_shared/proto.css">
 <link rel="stylesheet" href="_shared/page.css">
 </head>
@@ -16,8 +16,8 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    宽 <code>480px</code>（30rem）· 取回 = 把只读副本<b>拷回可写区</b>（草稿箱），不是「解除只读锁」。三个选项：<b>拷回草稿箱</b>（默认，最常用）/ 在编辑器中打开只读副本 / 另存为…
-    目标重名<b>在动文件前就定死</b>（自动 <code>-2</code>），不能「先拷再报错」。
+    宽 <code>30rem</code>（480px）· 标题「<b>取回（检出）</b>」，没有副标题 · 只有<b>两个可改项</b>：<b>文件名</b>（默认 <code>&lt;显示名&gt;（工作副本）&lt;扩展名&gt;</code>）与「<b>取回后打开</b>」（默认勾上）。
+    落点固定是<b>草稿箱模块目录</b>，对话框只读摆出这个目录；重名避让<b>不在对话框里</b>——它在动文件时做，回执才说真实路径。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="11-dialog-archive.html">← 上一块：归档对话框</a><a href="13-dialog-versions.html">下一块：版本历史 →</a></nav>
 </header>
@@ -25,70 +25,85 @@
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>常态<span class="desc">dau_report.sql · v3 → 草稿箱同名已存在，显示 -2</span></div>
+    <div class="variant-h"><span class="no">A</span>常态<span class="desc">只读两行（存档 / 目标目录）+ 文件名 + 一个勾选</span></div>
     <div class="canvas pad" style="background:var(--overlay);padding:20px">
       <div class="dlg dlg-checkout proto-on">
-        <div class="dlg-head">取回（检出）<span class="sub2">dau_report.sql · v3</span><button class="x">✕</button></div>
+        <div class="dlg-head">取回（检出）<button class="x">✕</button></div>
         <div class="dlg-body">
-          <div class="srcbar"><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg><span class="mono">resources/reports/dau_report.sql</span><span class="tagn">只读</span></div>
-          <div class="fgrid">
-            <label class="fl">取回方式</label>
-            <div class="fw">
-              <div class="radios" style="flex-direction:column;align-items:flex-start;gap:9px">
-                <label><span class="rdot on"></span>拷回草稿箱（可编辑）</label>
-                <label><span class="rdot"></span>在编辑器中打开只读副本</label>
-                <label><span class="rdot"></span>另存为…</label>
-              </div>
-            </div>
-            <div class="fhint">草稿箱是唯一可写区。取回后的副本与原存档<b>无关联</b>；改完再归档会生成新版本（v4）。</div>
-
-            <label class="fl">目标位置</label>
-            <div class="fw"><input class="inp ro" value="scratchpad/reports/dau_report-2.sql" readonly></div>
-            <div class="fhint">草稿箱已有同名 → 自动避让为 <code>-2</code>，此处直接给最终路径。</div>
+          <div class="fgrid" style="margin-bottom:12px">
+            <label class="fl">存档</label><div class="fw">dau_report.sql（v3）</div>
+            <label class="fl">目标目录</label><div class="fw">D:\RdataStation\营销分析\scratchpad</div>
           </div>
-          <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>不做「原地解锁」：回滚用旧内容生成<b>新版本</b>，历史链只增不改。</span></div>
-        </div>
-        <div class="dlg-foot"><span>项目「营销分析」</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">取回</button></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="variant">
-    <div class="variant-h"><span class="no">B</span>只读项目<span class="desc">三动作全灰 + 顶部条说明原因（不给可点但报错的按钮）</span></div>
-    <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="dlg dlg-checkout proto-on">
-        <div class="dlg-head">取回（检出）<span class="sub2">monthly.md · v2</span><button class="x">✕</button></div>
-        <div class="dlg-body">
-          <div class="warnstrip" style="border-radius:7px;border:1px solid var(--warning);margin-bottom:12px">
-            <svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg>
-            <span class="grow">当前项目为只读：应用守卫拒写 <code>resources/</code>、编辑器只读、文件系统只读属性</span>
-          </div>
-          <div class="fgrid">
-            <label class="fl">取回方式</label>
-            <div class="fw">
-              <div class="radios" style="flex-direction:column;align-items:flex-start;gap:9px">
-                <label style="opacity:.45"><span class="rdot"></span>拷回草稿箱（可编辑）</label>
-                <label><span class="rdot on"></span>在编辑器中打开只读副本</label>
-                <label style="opacity:.45"><span class="rdot"></span>另存为…</label>
-              </div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">文件名</div>
+              <input class="inp" value="dau_report（工作副本）.sql">
             </div>
-            <div class="fhint">只读项目只保留「打开只读副本」——它能看，但不承诺可写。</div>
-            <label class="fl">目标位置</label>
-            <div class="fw"><input class="inp ro" value="（只读项目不可取回）" readonly></div>
+            <div style="display:flex;align-items:center;gap:6px;font-size:11.5px">
+              <span style="width:12px;height:12px;border-radius:3px;border:1px solid var(--primary);background:var(--primary);display:inline-flex;align-items:center;justify-content:center;flex:none"><svg style="width:10px;height:10px;color:#fff;stroke:#fff;fill:none" viewBox="0 0 16 16"><use href="#i-check" xlink:href="#i-check"/></svg></span>取回后打开
+            </div>
+            <div style="font-size:10.5px;color:var(--muted);line-height:1.6">本体不动。修改后再次归档将生成 v4</div>
           </div>
         </div>
-        <div class="dlg-foot"><span>项目「归档只读」</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p" style="opacity:.4">取回</button></div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">取回</button></div>
       </div>
     </div>
     <p class="hang">
-      落地口径（<code>dialogs/checkout.rs</code>）：三个字段齐备；重名避让在<b>动文件之前</b>算好；<code>derived_from_resource_id</code>（取回副本反查来源存档）<b>未做</b>（属 M5 范围）——所以现在取回的副本与存档之间在数据层没有边。
+      推翻原型的「三种取回方式」：实现里<b>没有</b>「拷回草稿箱 / 在编辑器中打开只读副本 / 另存为…」三选一，也<b>没有</b>「目标位置」输入框。真实可改的只有文件名与一个「取回后打开」勾选——取回的本意就是「拿一份可写副本接着改」，所以去处只有一个（草稿箱），「只读打开」是详情面板「打开（只读）」那一入口的事，不是取回的变体。<br>
+      默认文件名是 <code>&lt;显示名&gt;（工作副本）&lt;扩展名&gt;</code>：扩展名在括号<b>外面</b>，否则编辑器会按未知类型打开。显示名本身已经去掉了扩展名，所以扩展名由宿主持有，不从名字里猜。<br>
+      只读块是「标签在左」的两行（<b>存档</b>「名（v3）」/ <b>目标目录</b>），目录是宿主机绝对路径——M6 不认识草稿箱的目录结构（依赖方向是 <code>analytics_resource → scratchpad</code>），只把 <code>root/scratchpad</code> 交给对话框展示。
     </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>文件名非法<span class="desc">空 / 路径分隔符 / 系统保留名在对话框里挡下，重名不在这一档</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-checkout proto-on">
+        <div class="dlg-head">取回（检出）<button class="x">✕</button></div>
+        <div class="dlg-body">
+          <div class="fgrid" style="margin-bottom:12px">
+            <label class="fl">存档</label><div class="fw">monthly.md（v2）</div>
+            <label class="fl">目标目录</label><div class="fw">D:\RdataStation\归档只读\scratchpad</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">文件名</div>
+              <input class="inp" value="con.sql">
+              <div style="font-size:10.5px;color:var(--danger);line-height:1.6;margin-top:4px">这是系统保留名，换一个</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;font-size:11.5px">
+              <span style="width:12px;height:12px;border-radius:3px;border:1px solid var(--primary);background:var(--primary);display:inline-flex;align-items:center;justify-content:center;flex:none"><svg style="width:10px;height:10px;color:#fff;stroke:#fff;fill:none" viewBox="0 0 16 16"><use href="#i-check" xlink:href="#i-check"/></svg></span>取回后打开
+            </div>
+            <div style="font-size:10.5px;color:var(--muted);line-height:1.6">本体不动。修改后再次归档将生成 v3</div>
+          </div>
+        </div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">取回</button></div>
+      </div>
+    </div>
+    <p class="hang">
+      校验只拦<b>注定失败</b>的那几条：空、<code>.</code> / <code>..</code>、路径分隔符与 Windows 非法字符（<code>\ / : * ? " &lt; &gt; |</code>）、保留设备名（CON / PRN / AUX / NUL / COM1-9 / LPT1-9，按<b>去扩展名的主干</b>比较，<code>console.sql</code> 不误伤）。提示是 <b>danger 色一行小字</b>，提交按钮按下但校验不过时对话框保持打开（不关窗、不弹 toast）。<br>
+      <b>重名不在这里判</b>：草稿箱里已有同名是正常情况，由动文件时的 <code>free_dest</code> 自动避让成 <code>-2</code>，回执里说真实路径。原型此前把避让结果画进对话框（<code>dau_report-2.sql</code> 的只读输入框），那一步在开窗时并不知道——目录快照到提交之间文件系统还会变。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>只读项目 · 对话框根本不展开<span class="desc">门禁在入口，不是「打开后三动作全灰」</span></div>
+    <div class="canvas pad">
+      <div class="note warn" style="margin:0">
+        <svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg>
+        <span>资产库：项目为只读模式，不能取回</span>
+      </div>
+      <div class="hang" style="margin:12px 0 0">
+        只读项目的判断在<b>入口</b>（<code>request_checkout</code>）就做完：给一句面板回执就返回，<b>对话框不打开</b>。所以原型 B 那套「顶部 warning 条 + 三个动作灰掉两个」并不存在——那个形态等于先把用户放进一个注定失败的窗口。<br>
+        同一口径的还有归档（「项目为只读模式，不能归档」）与升级到全局（「…不能升级到全局」）；菜单项的置灰（<code>can_checkout = !is_global &amp;&amp; 正常 &amp;&amp; 非只读</code>）是<b>第二道</b>，防的是「用户从菜单点进来」。
+      </div>
+    </div>
   </section>
 
   <div class="canvas pad">
     <p class="hang" style="margin:0">
-      本块样式：<code>.dlg.dlg-checkout</code>（480px）/ <code>.srcbar</code> / <code>.radios</code> / <code>.fhint</code>。
-      落地代码：<code>crates/analytics_resource/src/dialogs/checkout.rs</code>。
+      本块样式：<code>.dlg.dlg-checkout</code>（480px）/ <code>.dlg-head</code> / <code>.fgrid</code>（只读两行）/ <code>.inp</code> / <code>#i-check</code>（勾选框）/ <code>.dlg-foot</code> / <code>.note.warn</code>；本页<b>已不用</b> <code>.radios</code>（不是三选一）、<code>.srcbar</code>（没有顶部来源卡片）、<code>.rdot</code>（勾选不是单选）、<code>.dlg-head .sub2</code>（无副标题）、<code>.warnstrip</code>（只读项目不进对话框）。
+      落地代码：<code>crates/analytics_resource/src/dialogs/checkout.rs</code>（seed / 文件名校验 / 默认名拼法 / 两条提交路径）+ <code>resource_host/detail_actions.rs::request_checkout</code>（只读门禁与目录备料）+ <code>jobs/archive/run.rs::run_checkout</code>（<code>free_dest</code> 重名避让、回执给真实落点）。
     </p>
   </div>
 
