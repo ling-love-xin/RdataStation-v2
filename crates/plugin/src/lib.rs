@@ -23,6 +23,7 @@
 pub mod dependency;
 pub mod events;
 pub mod installer;
+pub mod layout;
 pub mod manager;
 pub mod manifest;
 pub mod permission;

@@ -346,6 +346,11 @@ impl PluginManager {
             )))
         })?;
 
+        // 目录名必须等于清单 id（见 `layout` 模块文档）：热插拔 diff 按目录名索引、
+        // 卸载按 id 删 `install_dir/<id>`，不一致会出现「加载成功但 diff 认不出、
+        // 卸载删不到目录」。
+        crate::layout::validate_dir_name(plugin_dir, &manifest.plugin.id)?;
+
         let plugin_id = manifest.plugin.id.clone();
         let loaded_plugin = LoadedPlugin {
             id: plugin_id.clone(),
@@ -477,7 +482,13 @@ impl PluginManager {
                 ))
             })?;
 
-        let wasm_path = loaded.install_path.join(&wasm_entry);
+        // 路径走统一的目录约定闸（相对 / POSIX `/` / 不许 `..`），
+        // 不再直接 `install_path.join(entry)` —— 后者允许 `../../x.wasm` 读到目录外。
+        let wasm_path = crate::layout::resolve_asset(
+            &loaded.install_path,
+            "capabilities.wasm.entry",
+            &wasm_entry,
+        )?;
         let wasm_bytes = std::fs::read(&wasm_path).map_err(|e| {
             CoreError::common(CommonError::Internal(format!(
                 "Failed to read wasm {}: {}",

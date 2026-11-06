@@ -24,6 +24,7 @@
 | `plugin-architecture.md` | **设计意图**：最初为什么这么想 | 想知道"为什么有 sidecar / wasm 两轨"时 |
 | `plugin-dev-plan.md` | **做什么、做到哪**：现状盘点 / 决策 D1–D6 / 与既有设计的优劣势 / 阶段 P0–P5 / 验收 / 风险 | **动手前必读**；改动清单在 §5.1 |
 | `plugin-prototype-design.md` | **长什么样**：进程与信任边界 / 清单字段 / `rds` API 面 / 激活时机 / 贡献点映射 / 示例插件 / Q7–Q10 定案依据 | 写插件、写宿主侧注册表、评审形态时 |
+| `plugin-layout.md` | **目录怎么摆**：一个插件一个目录的内部布局、入口解析（多平台）、路径白名单、打包与版本规则 | 写插件包 / 改加载·安装·卸载逻辑时 |
 | `plugin-user-guide.md` | **怎么用**：面向使用者的入口与操作、面向作者的从零写一个插件 | 交付/试用/写插件时 |
 | `prototype/*.html` | **可交互形态稿**（五张，含插件入口） | 评审界面时；索引见 `prototype/README.md` |
 
@@ -42,6 +43,7 @@
 | D5 | stdio + 二进制分帧（不是本地端口；Arrow IPC 是二进制） |
 | D6 | 扩展宿主运行时 = 内置 QuickJS（`rquickjs`）；**有意不兼容 npm**；重计算下沉 `rds.duckdb` |
 | D7 | **宿主侧接入暂缓**：`PluginService` 现 0 调用方；等插件完成度达标（P1 真机三项 + P2 收尾）后**另行评估**是否接入 workbench；期间不写 P4 接线代码 |
+| D8 | **一个插件一个目录**：安装本体 `plugins/<id>/`（只读产物），内部按轨分目录（`bin/` `lib/` `wasm/` `dist/` `schemas/` `media/`），入口位置由清单指向；目录名必须等于 `plugin.id`，版本不进目录名。清单里所有路径共用一套白名单，安装期检查入口存在。详见 `plugin-layout.md` |
 | Q7 | ✅ = D6 |
 | Q8 | ✅ webview **可提供，但限全屏面板 / 独立窗口**；与 GPUI 元素混排**实践上不支持**（z-order）；本仓要接就锁 `gpui-wry = "=0.6.1"` |
 | — | 错误码表见 `plugin-dev-plan.md` §4.2.2（`-32001`…`-32008`；能力拒绝是 `-32006 capability_denied`） |
@@ -182,3 +184,14 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 数据面 = 全局 `PluginManager`；`manager::runtime_handle` 把宿主 tokio runtime 句柄
 注入全局（enable/disable 依赖 tokio 上下文），面板事件回调在后台 `block_on` 执行不阻塞 UI。
 卸载按钮与下载引导同二期（需确认对话框）。
+
+**目录布局已接入代码**（2026-11-06）：`plugin-layout.md` 定稿，`crates/plugin/src/layout.rs`
+成为唯一的路径/布局入口。四处硬约束落地：①清单里所有"指文件"的字段
+（`backend.executable` / `capabilities.wasm.entry` / `capabilities.frontend.entry` /
+`plugin.icon` / `drivers[].connection_schema`）统一走相对路径白名单（POSIX `/`、
+禁 `..`/盘符/绝对路径）；②目录名必须等于 `plugin.id`（`load_plugin_from_dir` 拒绝不一致，
+避免热插拔 diff 与卸载各认一个 key）；③安装期检查声明的入口真实存在
+（`installer::validate_plugin` → `layout::check_declared_entries`），不再"装成功、激活才报错"；
+④`backend.executable` 支持 `bin/<platform>/agent` 优先、`bin/agent` 回退（多平台包不必为
+平台分叉清单）。另：驱动描述符不再接收 `plugin.icon`（那里是 emoji 字符徽标，塞资源路径
+会显示文件名；插件图标归 P4 插件列表）。`cargo test -p rds-plugin` 全绿。

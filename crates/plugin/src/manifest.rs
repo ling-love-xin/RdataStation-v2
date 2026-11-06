@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use shared::error::{CommonError, CoreError, StorageError};
 
@@ -252,46 +252,31 @@ impl PluginBackend {
     }
 
     /// 声明的 `executable` 是否为合法的**相对路径**（只做形参校验，不碰文件系统）。
-    pub fn relative_executable(&self) -> Result<&Path, CoreError> {
-        let declared = self
-            .executable
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| manifest_error("backend.executable is required for sidecar / script"))?;
-
-        let relative = Path::new(declared);
-        if relative.is_absolute() {
-            return Err(manifest_error(format!(
-                "backend.executable = {declared} must be relative to the plugin directory"
-            )));
-        }
-        // 逐段白名单：只留普通段（`..` / 盘符 / 根都拒绝）
-        if !relative
-            .components()
-            .all(|c| matches!(c, Component::Normal(_)))
-        {
-            return Err(manifest_error(format!(
-                "backend.executable = {declared} escapes the plugin directory"
-            )));
-        }
-        Ok(relative)
+    ///
+    /// 白名单与 wasm / frontend / icon / connection_schema 共用
+    /// [`crate::layout::validate_relative_path`]：相对插件目录、POSIX `/`、
+    /// 不含 `..` / 盘符 / 绝对路径。
+    pub fn relative_executable(&self) -> Result<PathBuf, CoreError> {
+        self.declared_executable().and_then(|declared| {
+            crate::layout::validate_relative_path("backend.executable", declared)
+        })
     }
 
-    /// 拼出真实路径。
+    /// 拼出真实路径：`bin/<platform>/agent` 优先 → `bin/agent` → Windows `.exe` 补全。
     ///
-    /// Windows 上 `bin/agent` 实际通常叫 `bin/agent.exe`：**只在没写后缀、且带后缀的那个
-    /// 真的存在**时补上 —— 这样清单不用为平台分叉，而真找不到时错误信息里显示的是原样路径
-    /// （不是我们凭空加的 `.exe`）。
+    /// 解析规则集中在 [`crate::layout::resolve_executable`]（目录约定见
+    /// `docs/architecture/plugin/plugin-layout.md`）；这里只负责把"缺字段"的口径
+    /// 保持在原处（`validate_backend` 已先报过一次，运行期仍要独立可读）。
     pub fn resolve_executable(&self, plugin_dir: &Path) -> Result<PathBuf, CoreError> {
-        let relative = self.relative_executable()?;
-        let path = plugin_dir.join(relative);
-        if cfg!(windows) && path.extension().is_none() {
-            let with_exe = path.with_extension("exe");
-            if with_exe.is_file() {
-                return Ok(with_exe);
-            }
-        }
-        Ok(path)
+        let declared = self.declared_executable()?;
+        crate::layout::resolve_executable(plugin_dir, "backend.executable", declared)
+    }
+
+    fn declared_executable(&self) -> Result<&str, CoreError> {
+        self.executable
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| manifest_error("backend.executable is required for sidecar / script"))
     }
 
     /// 清单声明的平台里有没有当前平台（**空 = 未声明**，不阻挡）。
@@ -515,8 +500,37 @@ impl PluginManifest {
             ));
         }
         self.validate_backend()?;
+        self.validate_asset_paths()?;
         self.validate_api()?;
         self.validate_methods()?;
+        Ok(())
+    }
+
+    /// 清单里所有"指文件"的字段统一过路径白名单。
+    ///
+    /// 这些字段都会被宿主拼进插件目录（wasm 模块 / 前端模块 / 插件图标 /
+    /// 驱动连接 schema），写 `../` 或盘符就能读到目录外，所以与
+    /// `backend.executable` 共用同一道闸。这里只校验**形态**，不查存在性：
+    /// 入口是否存在由安装期 [`crate::layout::check_declared_entries`] 负责
+    /// （图标 / schema 这类展示与声明式资产缺失不阻断安装）。
+    fn validate_asset_paths(&self) -> Result<(), CoreError> {
+        if let Some(icon) = &self.plugin.icon {
+            crate::layout::validate_relative_path("plugin.icon", icon)?;
+        }
+        if let Some(wasm) = &self.capabilities.wasm {
+            crate::layout::validate_relative_path("capabilities.wasm.entry", &wasm.entry)?;
+        }
+        if let Some(frontend) = &self.capabilities.frontend {
+            crate::layout::validate_relative_path("capabilities.frontend.entry", &frontend.entry)?;
+        }
+        for driver in &self.contributes.drivers {
+            if let Some(schema) = &driver.connection_schema {
+                crate::layout::validate_relative_path(
+                    "contributes.drivers[].connection_schema",
+                    schema,
+                )?;
+            }
+        }
         Ok(())
     }
 

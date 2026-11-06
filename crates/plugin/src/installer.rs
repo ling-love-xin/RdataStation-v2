@@ -229,6 +229,9 @@ impl PluginInstaller {
 
         let manifest = ManifestParser::parse(&manifest_path)?;
         manifest.validate()?;
+        // 安装期就检查声明的入口是否在包里：否则「装成功、激活时才报错」，
+        // 与「装前给可读原因」的口径不一致（目录约定见 plugin-layout.md）。
+        crate::layout::check_declared_entries(&manifest, plugin_dir)?;
         Ok(manifest)
     }
 

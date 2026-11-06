@@ -349,9 +349,11 @@ fn descriptor_for(
     if let Some(template) = &driver.url_template {
         descriptor = descriptor.with_url_template(template.clone());
     }
-    if let Some(icon) = &manifest.plugin.icon {
-        descriptor = descriptor.with_icon(icon.clone());
-    }
+    // `manifest.plugin.icon` **不往驱动描述符里塞**：descriptor.icon 的消费方
+    // （连接对话框类型列表）把它当**字符徽标**直接渲染（内置族是 🐬/🐘 这类 emoji），
+    // 而清单的 icon 是插件包内的相对资源路径（`media/icon.svg`）——塞进去只会显示
+    // 一串文件名字面量。插件图标归插件列表/详情 UI（P4，需要宿主 icon resolver），
+    // 语义见 `docs/architecture/plugin/plugin-layout.md`。
 
     // 标准五件套 + 可选文件路径；**都不标必填**（理由见模块文档）
     let fields = [
@@ -424,7 +426,13 @@ features = ["transactions", "cancel"]
         assert_eq!(descriptor.driver_kind.as_str(), "sidecar");
         assert_eq!(descriptor.target_database.as_deref(), Some("mssql"));
         assert_eq!(descriptor.default_port, Some(1433));
-        assert_eq!(descriptor.icon.as_deref(), Some("icon.png"));
+        // 插件图标是包内资源路径（`media/icon.svg`），而 descriptor.icon 的消费方
+        // 把字符串当**字符徽标**渲染（内置族是 emoji），所以这里必须是 None，
+        // 不能把 "icon.png" 塞进类型列表显示成文件名。
+        assert_eq!(
+            descriptor.icon, None,
+            "插件图标不参与驱动描述符（见 plugin-layout.md）"
+        );
         assert!(descriptor.description.contains("com.example.sqlserver"));
         assert_eq!(
             descriptor.capabilities,
