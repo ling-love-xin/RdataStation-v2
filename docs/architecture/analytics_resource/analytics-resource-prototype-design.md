@@ -764,14 +764,16 @@ sequenceDiagram
 - 全局表的打开语义 = 与分析表同（ATTACH + 定义重建 / 配方），只读。
 - **详情面板对全局行的分区收敛（2026-11-07 按源码核）**：基本 / 来源 / 版本 / **内容预览**照常渲染（分析表预览只有一句「仅元信息（不预览内容）」）；**组织**（`rows.rs` 的 `scope != RowScope::Global` 条件）与**标签**（`body_sections.rs`）不渲染；版本区有「历史」行但**不挂**「查看全部…」入口；动作区只剩「分发到本项目…」一颗（ghost）+ 按钮下一句说明，**没有危险区**（全局行不能删）。原型 `08` 页按此重画成 A（常态）/ B（只读项目，按钮置灰）。
 
-### 13.3 升级：项目 → 全局（promote，2026-10-22 澄清：**表 + 版本信息**进全局 DuckDB）
+### 13.3 升级：项目 → 全局（promote）
 
 > 用户澄清（2026-10-22）：升级的落点是**全局 DuckDB 的表 + 版本信息**，不是只迁定义。数据文件升级 = 映射出 DuckDB 表后同路径；脚本文件单独处理（§13.5）。
+>
+> **2026-11-07 按源码核**：DuckDB 只放**表本体**；版本信息落在**全局 SQLite 的登记表与版本快照表**（`register_global` 同事务写 `analytics_resources` + `analytics_resource_versions`）。
 
-- **入口**：分析表 / 数据文件（`scope=project`）行右键菜单「升级到全局…」（多选不可用，对齐"版本历史仅单选"判据）。
-- **分析表**：`CREATE TABLE global.<name> AS SELECT * FROM <项目表>`（**定义 + 数据全量**复制到全局库 `G_` 连接）+ 全局侧版本信息登记（版本链与项目侧独立，`keep_versions` 同规则）；项目行保留并标记「已升级」，`promoted_from` 记项目表名。
-- **数据文件（可映射）**：CSV/TSV/TXT / Parquet / Excel / JSON（`file_reader_function` 白名单，`file_reader.rs:15-29`）→ 升级 = 用对应读取函数**映射出全局 DuckDB 表**（`CREATE TABLE global.<name> AS SELECT * FROM read_csv_auto(...)` 等）+ 版本信息登记；项目侧原文件保留（只读来源）。表名默认取显示名，冲突时询问改名。
-- **冲突**：全局库已有同名表 → 询问（覆盖 / 改名 / 取消），对齐归档冲突处理，不静默覆盖。
+- **入口**：项目行右键菜单「升级到全局…」，**全仓仅此一处**（`list_delegate/menu.rs:103-115`）；置灰判据 `!can_open || multi_count > 1 || read_only`，其中 `can_open` 含 `payload_rel_path.is_some()`。详情面板没有升级按钮。
+- **分析表型存档：今天不能升级**（2026-11-07 按源码核）。本体在项目分析库、没有 `payload_rel_path`，所以 `can_open` 已把它挡在菜单外（灰）；宿主那句「随 M8 后续批次接入」是不可达的防御分支。全局登记行也不记来源：`promoted_from` 恒 NULL，`kind` 一律按 `analysis` 落（见 §13.3.1）。
+- **数据文件（可映射）**：`is_data_file_ext` 的 8 个扩展名——csv / tsv / txt / parquet / xlsx / xls / json / ndjson（`resource_host/mod.rs:369-377`，两张正向白名单之一）→ 升级 = 用对应读取函数**映射出全局 DuckDB 表**（`CREATE TABLE global.<name> AS SELECT * FROM read_csv_auto(...)` 等）+ 版本信息登记；项目侧原文件保留（只读来源）。表名默认取显示名，冲突时询问改名。
+- **冲突**：全局库已有同名表（或残留登记）→ 询问（覆盖 / 改名 / 取消），对齐归档冲突处理，不静默覆盖。三种组合（表在登记不在 / 登记在表不在 / 都在）回同一个 `Conflict { name }`，框里看不出差别（见 §13.3.1）。
 - **只读**：升级后全局行同样只读（库定义冻结语义）。
 
 > **按 `dialogs/conflict.rs` + `panels/{mod,resources}.rs` 复核（2026-11-07 17 页批）**
@@ -791,6 +793,24 @@ sequenceDiagram
 > - **按钮外观按 vendor 实参**：`ButtonVariant::Danger` 非 outline 时 `bg = tokens.button_danger`（vendor fallback = `danger.mix_oklab(transparent, 0.2)`，即 **20% 红底**）、`fg = button_danger_foreground`（fallback = `danger` 本身）→ 覆盖是**淡红底红字、无描边**，不是原型旧稿 `.btn-d` 的「透明底 + danger 描边」。`Primary` 是实心品牌色 + 白字。禁用态走组件 `disabled()`（Primary 底 `opacity 0.15`、字 `muted_foreground 0.5`）。
 > - **升级侧版本接续是真的，分发侧不接续**（一处口径不一致，只记不改）：`register_global` 取 `MAX(version) WHERE name = ?1 AND scope = 'global'`，**不带 `deleted_at IS NULL`**——覆盖时旧行已软删但仍在表里，所以新版本 = 旧版本 + 1（v4 → v5）；而分发侧 `distribute_overwrite` 先软删项目旧登记，`register_project_table` 的 `MAX(version)` **带 `deleted_at IS NULL`**（`global/register.rs:39`）→ 取不到 → 新登记从 **v1** 重新开始。本节 §13.6 那句「分发版本号接续全局链」也不成立：`next_version` 只查项目侧 `scope='project'`，`global_version` 仅作为 `distributed_from` 快照里的一个字段。
 > - **单测就一条**：`rename_gate_blocks_blank_and_unchanged`（空名 → `Blocked("显示名不能为空")`；原名 / 带空格的原名 → `Unchanged`；新名 → `Ready`）。
+
+#### 13.3.1 升级到全局（23 页）实现复核（2026-11-07）
+
+> 逐条对回 `resource_host/detail_actions.rs::request_promote_to_global`、`resource_host/mod.rs`（两张白名单）、`global/promote.rs`、`global/register.rs::register_global`、`jobs/global.rs::run_promote` 与 `resource_view/list_delegate/{menu.rs,mod.rs}`。
+
+- **入口只有一处**：项目行右键「升级到全局…」（`menu.rs:103-115`）。判据 `.disabled(!can_open || multi_count > 1 || read_only)`；`can_open = status != Missing && payload_rel_path.is_some()`（`list_delegate/mod.rs:203-208`）。详情面板**没有**升级按钮——全仓只有 `menu.rs:111` 一处调用 `request_promote_to_global`。
+- **分析表型存档在菜单上就是灰的**：`can_open` 含 `payload_rel_path.is_some()`，而分析表型（kind = analysis）的本体在项目 `analytics.duckdb`、没有相对路径。所以宿主那句「资产库：分析表型存档的升级随 M8 后续批次接入」（`detail_actions.rs:158-161`）**在 UI 上不可达**——它是一道防御分支，不是用户会看到的话术。
+- **形态判定是两张正向白名单，不是一个「其余」兜底**：数据文件 8 个 `csv | tsv | txt | parquet | xlsx | xls | json | ndjson`（`is_data_file_ext`，`mod.rs:369-377`）；文本脚本 12 个 `sql | py | r | md | yaml | yml | toml | js | ts | sh | ps1 | ipynb`（`is_text_script_ext`，`mod.rs:384-392`）。两表之外（png / jpg / zip / docx、或没有扩展名）**在入队前就回执**，一句话点名扩展名并给两条出路（另存 csv / 走分发或共享目录，`detail_actions.rs:174-189`）。这处是修 `Script` 分支 `fs::read_to_string` 撞 UTF-8 那批补的（原先把 `stream did not contain valid UTF-8` 技术原文丢给用户）。
+- **前置拒绝一共三句**：无项目根「无法升级：还没有打开项目」、只读项目「项目为只读模式，不能升级」、本体文件不存在「资产库：本体文件不存在（{rel}），无法升级」（`detail_actions.rs:152-166`）。
+- **数据文件 = 真表**：`CREATE TABLE <name> AS SELECT * FROM <file_read_expr>`（`promote.rs:69-78`），行数 / 列数由建完的表**真量**（`table_stats`）后写进登记。
+- **脚本 = 单行内容表**：`(filename, content, content_hash)`，正文整段 `INSERT`（`promote.rs:89-112`）；**行数 1 / 列数 3 是写死的常量**（`:112`），不是量出来的——内容表的统计口径与数据表不同。
+- **全局登记的落值**（`register_global`，`register.rs:219-250` 的 INSERT 实参）：`scope = 'global'`、`kind = 'analysis'`（**一律按分析表登记，不继承项目侧的 file / analysis 档**）、`readonly = 1`（全局侧只读是登记行自带的，不靠界面约定）、`payload_mode = 'copy'`、`file_rel_path = req.rel_path`、`definition_sql` 有值（数据文件是建表 SQL、脚本是一句中文描述）、`source_path` = 项目侧的**绝对路径**（换项目或换机器就没有意义）；`alias` / `created_by` / `promoted_from` / `parent_version_id` / `parent_resource_id` / `source_connection_id` / `source_table` / `source_query` **全部 NULL**——**没有「谁升过来的」这条线**。
+- **版本号 = `MAX(version) + 1`，且查询不带 `deleted_at IS NULL`**（`register.rs:192-198`）：覆盖时旧行已被软删但仍在表里，所以版本号能接续（v4 → v5）；新名字第一次升级从 v1 起。
+- **「覆盖」不是覆盖同一行**：`drop_global_table` + `UPDATE … SET deleted_at`（软删旧登记，**不硬删**）+ 再走一遍 `promote`（`promote.rs:125-146`）→ 新行是新的 `arg_<uuid>`，有自己的版本快照。于是「版本接续」只是**数字**接续：版本历史按 `resource_id` 查，新行只看得到自己那条 v5，看不到被软删的 v4（那是另一个 id）。§13.2 说的「一条记录挂多版本」在升级路径上不成立。
+- **覆盖没有跨库事务**（`promote.rs:130-142`）：`drop_global_table` 走 DuckDB、软删登记走全局 SQLite，两次独立 execute，中间失败也没有回滚——留下的正是 `promote` 里那两种脏状态（表没了登记还在）。而冲突框对「表在登记不在 / 登记在表不在 / 都在」只报同一个 `Conflict { name }`，用户分不出「有没有旧表可删」（扩展字段才能带上版本号与来源项目，与 17 页那条同源）。
+- **两条回执**：入队时「资产库：正在升级到全局…」（`detail_actions.rs:203`），覆盖分支换「正在覆盖升级到全局…」（`panels/resources.rs:214`）；完成后统一「资产库：已升级「X」v{n} 到全局实例（跨项目可分发）」（`:659-661`）——**首次升级与覆盖共用这一句**，回执不区分两者。
+- **没有前置确认框是规格没要求**：§13.3 只写「表名默认取显示名，冲突时询问改名」，没要求入队前先确认。原型 23 页那块 544px 的「升级确认框」是**提案**，代码里没有 `PROMOTE_*` 宽度常量、也没有对应对话框文件；真要加，得先定「升级前能不能改名」（不改名，改名入口就只能待在冲突处置里）。
+- **注释与实现的陈旧**：`jobs/global.rs:35-36` 写「其余（sql/py/md 等）→ 脚本内容表」（实际两表之外的二进制被拒，不是进内容表）；`promote.rs:121-124` 把冲突询问挂成「§13.2」（在 §13.3），且「成为新版本（版本号接续旧链）」容易被读成同一行。另 `promote.rs:129` 留着一条 `tracing::info!("【探针】升级到全局 promote_overwrite 进入（覆盖）")`，属调试残留。
 
 ### 13.4 与既有概念的关系
 
