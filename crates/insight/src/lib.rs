@@ -40,8 +40,6 @@ pub mod store;
 pub(crate) mod test_support;
 pub mod ui;
 /// 洞察面板的渲染片段（按 Tab 分文件；状态宿主在 [`insight_view`]）
-mod view;
-/// 洞察**中间工作页**（D63：右栏摘要 + 中央可停靠洞察 tab 并存；含多表对比视图）
 pub mod workspace;
 
 use std::collections::HashMap;

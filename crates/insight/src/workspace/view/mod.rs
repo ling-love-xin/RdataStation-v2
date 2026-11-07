@@ -28,7 +28,7 @@
 //!
 //! - **片段入口**（`render_header` / `render_insight_set` / `render_drillzone`）
 //!   对 crate 可见：宿主的 `impl Render` 在 `insight_view.rs` 里转发。
-//! - 只在本目录内用的片段是 `pub(in crate::view)`；视图内部的
+//! - 只在本目录内用的片段是 `pub(in crate::workspace::view)`；视图内部的
 //!   小片段与助手是**模块私有**，子模块用 `use super::…` 取用（父模块私有项对子模块可见）。
 //! - `InsightView` 的字段是 `pub(crate)`：片段与宿主不在同一个模块，读字段必须如此。
 //!   对外 API（`InsightView` 的 `pub` 方法与 [`crate::insight_view::InsightEvent`]）没有变化。

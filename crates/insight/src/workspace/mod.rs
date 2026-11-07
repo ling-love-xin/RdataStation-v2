@@ -48,7 +48,8 @@ use crate::model::{
     skew_direction,
 };
 use crate::ui;
-use crate::view::{error_block, skeleton};
+pub(crate) mod view;
+use crate::workspace::view::{error_block, skeleton};
 
 mod types;
 pub use types::*;

@@ -30,7 +30,7 @@ impl InsightView {
     ///
     /// 2026-10-30 右栏对齐 EDA 原型后不再由右栏渲染；保留供中间页 / 资产库复用，勿删。
     #[allow(dead_code)]
-    pub(in crate::view) fn render_history(
+    pub(in crate::workspace::view) fn render_history(
         &self,
         history: &HistoryView,
         entity: &Entity<Self>,
