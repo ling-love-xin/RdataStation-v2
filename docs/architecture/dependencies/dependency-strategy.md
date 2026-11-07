@@ -119,6 +119,13 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
   - 方法论提示：`cargo update -p <pkg> --precise <ver>` 在**第一次**调用时就会把同批所有兼容的补丁版本一起带上，
     后续对已升级的包再用 `--precise <旧版本>` 会报 `package ID specification … did not match any packages`——不是失败，是已经升好了
 
+- **sqlglot 能力释放**（2026-11-08，同分支）：版本早已在 `=0.11.1`，这轮不是升级而是**把库吃干**
+  - `crates/sql/src/analysis.rs` 新建，8 项上游能力统一出口（`scope_report` / `column_types` / `lineage_of_column` / `diff_summaries` / `pushdown_sql` / `plan_summary` / `translate_time_format` / `unsupported_for_target`），一律 `Result<_, String>`、错误只带一行中文原因；`pub use` 到 `engine::sql`，业务侧不必摸 `sqlglot_rust`
+  - 编辑器侧接 3 处：悬停补「来源：a、b」（`sql_hover.rs`）、代码动作「把 WHERE 下推进子查询」（`face_actions.rs`）、语义诊断加设置闸（`face_diag.rs`）
+  - 设置暴露：`crates/settings` 新增 `sql_analysis` 域（model / registry entries / service 三层 + 3 个 `Bool` 开关），偏好走「原子量 + 装配层 sink」跨层传递（`settings` 不依赖 `rds-sql`），启动时用落盘值推一次保证首帧生效
+  - 验证：`cargo test -p rds-sql -j 2` **206 passed**（195 基线 + `analysis` 11 条）；`cargo test -p rds-settings --lib` 34 passed；`cargo test -p rds-editor --lib` 746 passed / 2 条既有失败；`cargo build -p rds-app` 通过 + 20s 启动冒烟 0 panic / 0 ERROR
+  - 未接线（真正剩下的）：`Schema` 组装（`column_types`/`lineage_of_column` 需要上游把 `MetadataService` 表列拼成 `TypedTable`）、`builder` 自由构造器、方言动态注册
+
 以上验证：`cargo check-all` 全量通过；`cargo test-all`（全 workspace）**约 430 项全过**（engine 219 / insight 53 / mock 56 / connection 21 / shared 19 / workbench 12 / project 10 / plugin 11，加 workbench 集成测试 19 项）。
 
 待办：

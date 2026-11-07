@@ -150,12 +150,15 @@ graph TD
 | `resources.collapsed_groups` | 资产库 | 复合值：`{项目根: [分组 key]}` | `{}` | 下次操作 | `components/resource_host.rs::remember_collapsed`（写）+ `panels/resources.rs::build_resources_panel`（读，注入 `ResourcesPanel::set_collapsed`） | 模块内（不上页） | ✅ 已落地（2026-09-18；作用域见 §14 Q7） |
 | `resources.default_group` | 资产库 | 复合值：`{项目根: 分组 id}` | `{}` | 下次归档 | `components/resource_host.rs::remember_default_group`（写）+ 同处 `default_group_for_archive` / `build_resources_panel`（读，注入 `ResourcesPanel::set_default_group` 并作为 `ArchiveDialogSeed::group_id`） | 模块内（不上页；入口在分组头右键） | ✅ 已落地（2026-09-20；作用域与 Q7 同） |
 | `logging.min_level` | 日志 | enum `TRACE`/`DEBUG`/`INFO`/`WARN`/`ERROR` | `INFO` | 即时 | `crates/app/src/main.rs`（启动取值）；运行时经装配层注册的 sink → `engine::logging::reload_log_level` | 设置页（另有「查看日志…」/「打开日志目录」两个动作行） | ✅ 已落地（2026-09-16） |
+| `sql_analysis.semantic_diagnostics` | SQL 分析 | bool | `true` | 即时 | `crates/editor/src/language/language_service/face_diag.rs`（关掉只跑词法层诊断）；偏好经装配层 `settings::install_sql_analysis_sink` → `rds_sql::analysis::set_prefs` | 设置页 | ✅ 已落地（2026-11-08） |
+| `sql_analysis.predicate_pushdown` | SQL 分析 | bool | `true` | 即时 | `crates/editor/src/language/language_service/face_actions.rs`（关掉不摆「把 WHERE 下推进子查询」这条代码动作） | 设置页 | ✅ 已落地（2026-11-08） |
+| `sql_analysis.hover_scope` | SQL 分析 | bool | `true` | 即时 | `crates/editor/src/lsp/sql_hover.rs`（关掉悬停不再补「来源：a、b」一行） | 设置页 | ✅ 已落地（2026-11-08） |
 | `resources.keep_versions` | 分析资产 | i32（`0` = 只留元数据；`-1` = 全留） | `5` | 下次归档 | `analytics_resource/src/service.rs`（现为常量 `DEFAULT_KEEP_VERSIONS`） | 设置页 | ⬜ 待 M6 P2.4 接线 |
 
 > 命名约定：JSON 字段一律 **snake_case**（与现有 `theme_mode` / `source_short_code` / `sort_mode` 一致）。M6 文档里写的 `resources.keepVersions` 是同一项的早期命名，**已于 2026-09-18 落地为 `resources.keep_versions`**（M6 侧同步改口）。
 > **设置层不依赖 `engine`**：`logging.min_level` 在设置侧是独立的 `LogMinLevel`（同词表），改级别后的“重载日志系统”由装配层（`crates/app`）注册的 sink 完成——反向依赖会把双引擎拖进设置层的依赖图。
 > `navigator.filters` 是**复合值**（4 个可选筛选项打包），登记为一项；若将来拆成多个独立开关，需重新过准入五条。
-> **代码侧权威是 `crates/settings/src/registry/`**（`mod.rs`：`SettingSpec` / `registry()`（OnceLock + `entries::all()`）/ `sections()` / `page_rows()` + **`Slot` 分发表**（`slot_for` / `slot_kind` / `slot_is_scalar`）+ `presets` + 契约测试；`entries/` 13 个按域登记文件，`entries/mod.rs::all()` 固定域序）：本表与它必须逐项一致。改动顺序：**先改代码表 → 再改消费方 → 最后同步本表**。
+> **代码侧权威是 `crates/settings/src/registry/`**（`mod.rs`：`SettingSpec` / `registry()`（OnceLock + `entries::all()`）/ `sections()` / `page_rows()` + **`Slot` 分发表**（`slot_for` / `slot_kind` / `slot_is_scalar`）+ `presets` + 契约测试；`entries/` 14 个按域登记文件（2026-11-08 新增 `sql_analysis`），`entries/mod.rs::all()` 固定域序）：本表与它必须逐项一致。改动顺序：**先改代码表 → 再改消费方 → 最后同步本表**。
 > **唯一读写路径**：页面对某项的"读当前值 / 写新值 / 判是否偏离默认"全部走 `service/mod.rs::{value_by_key, apply_by_key}`（按 `Slot` 分发到 `service/<域>.rs::apply_slot`）；页面不直接碰 model 字段，也不落盘。新增项的接入首续：登记 → 模型 → 槽位 → 消费方 → 文档表。
 
 > **分组（gpui-kit demo 两级导航）**：`SettingSpec` 新增 `group`（节内子分组 id）与 `group_label`（显示名）。页面按 `registry::page_groups(section)`（登记顺序去重）生成分组卡片，侧栏据此渲染两级导航——对齐 gpui-kit demo：**多分组节**（外观=主题/标签栏、编辑器=编辑行为/新文档默认值、数据源导航=名称/过滤/行内信息、结果集面板=数据/选择与操作/对齐/着色）分组带标题；**单分组节**（资产库/连接/项目/日志/启动/草稿箱/洞察/布局/通知，`group_label = None`）渲染为无名分组，对齐 demo 的 General 页；动作行（「查看日志…」等）归入独立「操作」分组。**纯 Module 节**（如草稿箱，设置全在面板本地菜单/拖拽 handle）不进导航，避免空页面——`sections()` 只返回有上页内容的节。契约测试 `groups_are_contiguous_and_consistently_named` 保证同节分组连续、同名分组显示名一致、`page_groups` 顺序与登记一致、多分组节分组必有标题。

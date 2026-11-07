@@ -66,6 +66,9 @@
 | SQL 回归（0.11.1） | 同上 | **195 passed / 10 passed / 0 failed**，与基线逐项一致（含 `test_generated_sql_is_pinned`） |
 | 应用编译 | `cargo check -p rds-app -j 2` | exit 0，**0 error 0 warning**，57.6s |
 | 编辑器回归 | `cargo test -p rds-editor -j 2` | 746 passed / **2 failed** / 1 ignored |
+| 能力出口（2026-11-08 新接线） | `cargo test -p rds-sql -j 2` | **206 passed**（195 基线 + `analysis` 11 条）/ 探针 10 passed / 0 failed |
+| 设置域 | `cargo test -p rds-settings --lib -j 2` | 34 passed / 0 failed（三条新 key 通过注册契约校验） |
+| 三处消费 + 装配 | `cargo check -p rds-settings -p rds-editor -p rds-app --all-targets` | 全部 exit 0，0 error |
 
 **那 2 条失败与本升级无关**（已在 0.10.33 上复现，升级前后失败断言原文相同）：
 
@@ -100,28 +103,46 @@ cargo check -p rds-app -j 2     # 应得 0 error 0 warning
 
 回滚：`git checkout -- Cargo.toml Cargo.lock crates/sql/src/builder.rs`（或直接 revert 本分支的两个 commit）。
 
-## 8. 能力释放度（0.11.1 上重新确认）
+## 8. 能力释放度（0.11.1 上重新确认，2026-11-08 已接线）
 
-**结论：没有完全释放。** 已接进产品的只有 6 项基础能力，另有 6 项「上游现成、探针实测可用、但产品还没接线」，
-真正的差距不在库版本，而在我们没把 `Schema` 组装起来（血缘 / 类型标注 / 列限定都以它为前置）。
+**结论：出口层已「完整释放」，编辑器侧接了 3 项 + 3 个设置开关；剩下的不是库能力缺口，而是「上游没人传表结构」。**
 
-| 能力 | 状态 | 事实 |
-| --- | --- | --- |
-| 解析 / 语法校验 / 代码生成 / 方言转译 | ✅ 已用 | 执行路由、格式化、方言转移器；`transpile` 对脚本会**静默截断**（多条语句要 `transpile_statements`） |
-| 词法 tokenizer（高亮） | ✅ 已用 | `position` 是**字符下标**，不能当字节偏移 |
-| 语句切分 | ✅ 已用（自研） | `crates/sql/src/split.rs` 词法状态机，**故意不用 sqlglot**（未写完的文本也要能切） |
-| 方言覆盖 | 🟡 部分 | 上游 30 种方言，我们在 `crates/sql` 里用到 11 种（Ansi 90 次、Postgres 25、Duckdb 24、Mysql 22、Sqlite 16、Oracle 12、BigQuery/Snowflake/Redshift 各 10、MsSQL 7、Tsql 5） |
-| DDL / DML AST 构建（`builder` 全量） | 🟡 未接线 | 我们只用了 `select` / `select_all`，其余实体靠手写结构体字面量——这正是 0.11 加两个字段就要改代码的原因；改用建造器可降低这类升级成本 |
-| 类型标注 `annotate_types` | ⚪ 实测可用、未接线 | 运算后仍保持类型（`total * 2 → Decimal{12,2}`），值查看器 / 图表轴 / 数字格式化直接受益 |
-| 列级血缘 `lineage_sql` | ⚪ 实测可用、未接线 | 按输出别名能追到基列、表达式也能追；`editor-dev-plan` 里「分析结果血缘摘要」的遗留项就等它 |
-| 作用域分析 `build_scope` | ⚪ 实测可用、未接线 | **无需 schema**，接线最轻；可用于补全排序（「当前语句引用了哪些表」） |
-| AST 差异 `diff_sql` | ⚪ 实测可用、未接线 | 粒度到 `SelectItem` / `Expr` / `OrderByItem`；结果集对比（V1 有 `ResultDiffViewer`）、笔记版本链 diff |
-| 谓词下推 `pushdown_predicates` | ⚪ 实测可用、未接线 | 过滤能推入派生表；**保留**：`unnest_subqueries` 改写与 NULL 语义不等价 |
-| 本地查询计划 `plan` | ⚪ 实测可用、限定用途 | 只是 sqlglot 自建计划，**不是源库 EXPLAIN**；DDL 直接报不支持 |
-| Schema / 方言插件 / 时间格式 | ⚪ 未用 | `format_time_dialect` 是「方言转移器」的高价值子集（时间格式串转换） |
-| 内存执行器 `executor` | ⛔ 不采用 | 只在内存表上跑，无事务/并发/权限；本地分析一律走 DuckDB |
+`crates/sql/src/analysis.rs` 把 0.11.1 里 8 项此前完全没出口的能力统一封成函数，一律 `Result<_, String>`
+（错误只带一行中文原因，不外泄上游类型），并 `pub use` 到 `engine::sql`——业务侧写法与原有 `diagnose` / `hover_at` 一致：
 
-接线优先级（按「产品价值 / 成本」排）：**① `build_scope`（免 schema，补全排序）→ ② `annotate_types` + `MappingSchema`
-（值查看器类型）→ ③ `lineage_sql`（结果血缘）→ ④ `diff_sql`（结果对比）→ ⑤ `pushdown_predicates`（联邦改写，须先定 NULL 语义）**。
-②③ 的共同前置「驱动类型 → `ast::DataType` 映射表 + 从 `MetadataService` 组装表列」才是真正的工程量。
-逐项源码证据与行为边界见 `docs/architecture/editor/editor-prototype-design.md` §7.4（已同步到 0.11.1）。
+| 能力（上游） | 出口函数 | 前置 | 编辑器侧接线 | 状态 |
+| --- | --- | --- | --- | --- |
+| 作用域分析 `build_scope` | `scope_report` | 无（不查元数据） | 悬停补「来源表」一行 | ✅ 已接线（`sql_analysis.hover_scope`） |
+| 类型标注 `annotate_types` | `column_types` / `data_type_label` | `TypedTable`（表名 + 列名/类型名） | 暂无 UI 调用方 | 🟡 已出口，待上游组表结构 |
+| 列级血缘 `lineage_sql` | `lineage_of_column` | `TypedTable` | 暂无 UI 调用方 | 🟡 已出口，待上游组表结构 |
+| AST 差异 `diff_sql` | `diff_summaries` | 无 | 暂无 UI 调用方 | 🟡 已出口（结果集对比 / 版本链 diff 可直接用） |
+| 谓词下推 `pushdown_predicates` | `pushdown_sql` | 无 | 代码动作「把 WHERE 下推进子查询」 | ✅ 已接线（`sql_analysis.predicate_pushdown`） |
+| 本地计划 `plan` | `plan_summary`（含 mermaid） | 无（DDL 直报不支持） | 暂无 UI 调用方 | 🟡 已出口 |
+| 时间格式串转换 `format_time_dialect` | `translate_time_format` | 无 | 方言转移器未调用 | 🟡 已出口 |
+| 目标方言兼容校验 `validate_dialect_support` | `unsupported_for_target` | 无 | 暂无 UI 调用方 | 🟡 已出口 |
+| 语义诊断（`diagnose` + 目录） | 原有 `diagnose` | 表目录 | 打字期未知表/未知列 | ✅ 已接线（`sql_analysis.semantic_diagnostics` 闸） |
+
+### 8.1 设置暴露（`crates/settings` 的 `sql_analysis` 域）
+
+设置项是**能力开关**（不是调参），改动即时生效、不重启：
+
+| key | 界面文案 | 默认 | 生效点 |
+| --- | --- | --- | --- |
+| `sql_analysis.semantic_diagnostics` | 语义诊断 | 开 | `face_diag.rs`：关掉只跑词法层诊断（大文件打字卡顿的退路） |
+| `sql_analysis.predicate_pushdown` | 谓词下推改写 | 开 | `face_actions.rs`：关掉则不摆「把 WHERE 下推进子查询」这条动作 |
+| `sql_analysis.hover_scope` | 悬停显示来源表 | 开 | `sql_hover.rs`：关掉则悬停不再补「来源：a、b」那行 |
+
+跨层传递沿用仓库既有口径（`settings` 不依赖 `rds-sql`）：偏好存三个 `AtomicBool`，
+设置侧改开关 → 落盘 → `install_sql_analysis_sink` 回调 → `rds_sql::analysis::set_prefs`；
+启动时 `SettingsService::init` 之后立刻用落盘值推一次，保证首帧就按设置生效（读侧无锁，打字路径零成本）。
+
+### 8.2 仍未接线（真正剩下的三块）
+
+1. **完整 `Schema` 组装**：`column_types` / `lineage_of_column` 已能吃 `TypedTable`，但没有调用方把
+   `MetadataService` 的表列拼成 `TypedTable` 再喂进来——这一步落地后「值查看器类型」与「结果血缘」就能接上。
+2. **`builder` 的 ~50 个自由构造器**：我们仍只用手写结构体字面量为主，这正是 0.11 加两个字段就要改两处代码的根因。
+3. **方言插件 / `DialectPlugin` 注册**：上游 30 种方言我们固定用 11 种，动态注册未接。
+
+> `executor`（内存执行器）依旧**不采用**：无事务/并发/权限，本地分析一律走 DuckDB。
+
+逐项源码证据与行为边界见 `docs/architecture/editor/editor-prototype-design.md` §7.4。
