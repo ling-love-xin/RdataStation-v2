@@ -124,7 +124,7 @@ gpui-kit = { version = "0.9.0", features = ["gpui-fast"] }
 # 升 1.5 线内 patch 时改本行 + `.cargo/config.toml` 的 DUCKDB_LIB_DIR + `third_party/duckdb/` 三处成对。
 duckdb = { version = "=1.10506.1", features = ["appender-arrow"] }
 arrow = "58.4.0"
-bigdecimal = "0.4"
+bigdecimal = "0.4.11"
 num-traits = "0.2"
 
 # 语义着色 provider 的类型（`DocumentRangeSemanticTokensProvider` 的入参 / 返回值）。
@@ -133,7 +133,7 @@ lsp-types = { version = "0.97.0", features = ["proposed"] }
 # 错误类型（gpui-base 的 provider trait 用 `anyhow::Result`）
 anyhow = "1.0"
 # 文本编码转码（editor 2c：磁盘字节 ↔ 内核 Unicode）；已在锁里（其他依赖传递带入），无需新增编译
-encoding_rs = "0.8.41"
+encoding_rs = "0.8.44"
 rusqlite = { version = "0.40", features = ["bundled", "chrono", "serde_json"] }
 # 只用 MySQL / Postgres：关闭默认 feature 以移除 `any` 驱动。
 # `any` 会带入 sqlx-sqlite → libsqlite3-sys（声明 links = "sqlite3"），
@@ -199,26 +199,26 @@ postgres-native-tls = "0.5.3"
 
 # ===== Async 运行时 =====
 # 全 workspace 共用一套 feature（feature 在解析时取并集，逐 crate 裁剪无实际收益）
-tokio = { version = "1.53.1", features = ["full"] }
-tokio-util = { version = "0.7.19", features = ["full"] }
+tokio = { version = "1.54.1", features = ["full"] }
+tokio-util = { version = "0.7.20", features = ["full"] }
 futures = "0.3.34"
 async-trait = "0.1.92"
 
 # ===== Jupyter 内核协议（分析模式 Python/R/Julia 内核，走纯 Rust ZMQ）=====
 jupyter-zmq-client = "1.0.1"
-jupyter-protocol = "2.0.1"
+jupyter-protocol = "2.0.3"
 # 内核接入层 crate（编辑器的分析模式依赖它；依赖只向下，kernel 不依赖 editor / gpui）
 rds-kernel = { path = "crates/kernel" }
 
 # ===== 序列化 =====
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+serde_json = "1.0.154"
 # 与 TS 类型生成链路绑定的 rc 版本，精确锁定；升级需同步核对 11 个使用方
 specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json", "chrono"] }
 
 # ===== 时间与标识 =====
 chrono = { version = "0.4.45", features = ["serde"] }
-uuid = { version = "1.26.1", features = ["v4", "serde"] }
+uuid = { version = "1.29.1", features = ["v4", "serde"] }
 
 # ===== 日志追踪 =====
 tracing = "0.1.44"
@@ -226,7 +226,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json", "ti
 tracing-appender = "0.2.5"
 
 # ===== 错误处理 =====
-thiserror = "2.0.20"
+thiserror = "2.0.21"
 
 # ===== 连接层（SSL / SSH / Proxy）=====
 native-tls = "0.2.18"
@@ -247,7 +247,7 @@ dirs = "7.0.0"
 dashmap = "6.2.1"
 once_cell = "1.21.4"
 lru = "0.18.4"
-rand = "0.10.2"
+rand = "0.10.3"
 regex = "1.13.1"
 # 测试用临时目录（dev-dependency 专用；已在 Cargo.lock 作为传递依赖解析到 3.27.0）
 tempfile = "3.27.0"
@@ -255,7 +255,7 @@ include_dir = "0.7.4"
 toml = "1.1.5"
 # flate2 曾于 2026-09-19 移除（metadata_cache 压缩分支零调用）；2026-10-15 随
 # 插件压缩包安装（installer 的 extract_tar_gz）重新启用，与 tar / zip 一起供 rds-plugin 使用。
-flate2 = "1.1.10"
+flate2 = "1.1.11"
 tar = "0.4.46"
 zip = "0.6.6"
 # SQL 编辑器核心解析/转译：业务关键依赖，精确锁定
@@ -267,7 +267,7 @@ rfd = "0.17"
 
 # ===== 单使用方依赖（同样集中声明，避免各模块自行挑版本）=====
 aes-gcm = "0.11.1"
-similar = "3.2.0"
+similar = "3.2.1"
 opener = { version = "0.8.5", features = ["reveal"] }
 # 文件监控（草稿箱 watch；与 Cargo.lock 已解析的 7.x 对齐）
 notify = "7.0.0"
@@ -297,7 +297,7 @@ extism = "1.30.0"
 
 # ===== 构建脚本工具 =====
 # Windows 下把 assets/icons/icon.ico 嵌入 exe 资源（任务栏 / 窗口图标）
-winresource = "0.1"
+winresource = "0.1.34"
 
 [profile.dev]
 debug = "line-tables-only"
