@@ -811,6 +811,7 @@ async fn save_to_scratchpad_writes_file_into_dir() {
 
     MockEngine::save_to_scratchpad(
         &result.temp_table_name,
+        "t_scratchpad",
         &MockExportFormat::Csv,
         dir.to_str().expect("路径应为 UTF-8"),
     )

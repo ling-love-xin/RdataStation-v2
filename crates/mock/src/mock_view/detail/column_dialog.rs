@@ -725,6 +725,8 @@ impl MockDetailView {
             return;
         }
         draft.def.generator = config;
+        // 选择新生成器后，自动同步产出类型为该生成器的产出类型
+        draft.def.data_type = crate::generators::data_type_for_generator(&draft.def.generator);
         // 「点的是哪一项」：内建 = None（按 base 名认领即可），自定义 = 那一项的 id
         // （否则同一 base 的多个自定义项在左栏会一起高亮、右栏只能显示 base 名）
         draft.picked_user = picked_user;

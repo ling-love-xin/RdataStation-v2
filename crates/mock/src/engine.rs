@@ -1236,11 +1236,13 @@ impl MockEngine {
     /// （供面板显示具体位置）。
     pub fn save_to_scratchpad(
         temp_table_name: &str,
+        display_name: &str,
         format: &MockExportFormat,
         scratchpad_dir: &str,
     ) -> MockResult<String> {
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-        let base_name = temp_table_name.trim_start_matches(TEMP_MOCK_PREFIX);
+        // 文件名用用户原始输入的表名（显示名），而不是清理后的临时表名
+        let base_name = display_name.trim();
         let ext = match format {
             MockExportFormat::Csv => "csv",
             MockExportFormat::Parquet => "parquet",

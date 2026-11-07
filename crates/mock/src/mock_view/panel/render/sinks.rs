@@ -29,7 +29,7 @@ impl MockPanel {
             // 口头的层级不算数，画出来的才是（四个同形态时，用户只能读文字分辨）
             button(
                 format!("mock-persist-{key}"),
-                "持久化到项目分析库",
+                "资产化",
                 ActionKind::Main,
             )
             .disabled(running || !sinks_ready)
@@ -45,7 +45,7 @@ impl MockPanel {
             let tables = self.existing_tables.clone();
             button(
                 format!("mock-append-{key}"),
-                "追加到既有表",
+                "追加",
                 ActionKind::Soft,
             )
             .dropdown_caret(true)
@@ -75,7 +75,7 @@ impl MockPanel {
             let entity = cx.entity();
             button(
                 format!("mock-save-scratchpad-{key}"),
-                "保存到草稿箱",
+                "保存",
                 ActionKind::Soft,
             )
             .dropdown_caret(true)
@@ -96,7 +96,7 @@ impl MockPanel {
         };
         let export = {
             let entity = cx.entity();
-            button(format!("mock-export-{key}"), "另存为", ActionKind::Soft)
+            button(format!("mock-export-{key}"), "导出", ActionKind::Soft)
                 .dropdown_caret(true)
                 .disabled(running || !self.has_result())
                 .dropdown_menu(move |menu, _window, _cx| {
