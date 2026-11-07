@@ -561,8 +561,9 @@ pub struct Tab {
     pub(super) hovered: bool,
     pub(super) max_width: Option<Pixels>,
     pub(super) on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
-    /// RdataStation vendor patch: right-click context menu builder.
-    pub(super) on_context_menu: Option<Rc<dyn Fn(PopupMenu, &mut Window, &mut App) -> PopupMenu + 'static>>,
+    /// 【项目私有 patch】右键菜单构建器。
+    pub(super) on_context_menu:
+        Option<Rc<dyn Fn(PopupMenu, &mut Window, &mut App) -> PopupMenu + 'static>>,
 }
 
 impl From<&'static str> for Tab {
@@ -714,7 +715,7 @@ impl Tab {
         self
     }
 
-    /// RdataStation vendor patch: set the right-click context menu builder.
+    /// 【项目私有 patch】设置右键菜单构建器。
     pub fn on_context_menu(
         mut self,
         builder: impl Fn(PopupMenu, &mut Window, &mut App) -> PopupMenu + 'static,
@@ -1078,9 +1079,8 @@ impl RenderOnce for Tab {
             .when_some(self.on_click.clone(), |this, on_click| {
                 this.on_click(move |event, window, cx| on_click(event, window, cx))
             });
-        // 右键菜单：`context_menu`（ContextMenuExt）返回 `ContextMenu<T>` 链尾包装，
-        // 嵌在 `when_some` 里类型不匹配（闭包需返回 `T`）。链结束后包住整个元素；
-        // 无菜单时原样返回，两分支用 `into_any_element` 统一（render 返回 impl IntoElement）。
+        // 【项目私有 patch】右键菜单：context_menu 返回 ContextMenu 包装，嵌在 when_some
+        // 里类型不匹配（闭包需返回 T）。链结束后包住整个元素；无菜单时原样返回。
         if let Some(builder) = self.on_context_menu.clone() {
             tab_element
                 .context_menu(move |menu, window, cx| builder(menu, window, cx))

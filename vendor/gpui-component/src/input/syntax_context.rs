@@ -10,14 +10,12 @@ use gpui_base::input::SyntaxContextProvider;
 
 /// 自定义语法上下文提供者工厂：现造一个 provider。
 ///
-/// 存工厂而非 provider 实例：自定义 provider 应无状态（`context_at` 每次对
-/// 当前全文判定）；内核 `EditorLanguage` 会把 provider 缓存到下次语言变更，
-/// 故每次现造没有重复解析损失。闭包加 `Send + Sync` 以便进全局注册表。
+/// 存工厂而非实例：自定义 provider 应无状态（`context_at` 每次对当前全文判定）；
+/// 内核 `EditorLanguage` 会把 provider 缓存到下次语言变更，故每次现造没有重复解析损失。
+/// 闭包加 `Send + Sync` 以便进全局注册表。
 pub type SyntaxContextFactory =
     Arc<dyn Fn() -> Option<Rc<dyn SyntaxContextProvider>> + Send + Sync>;
 
-/// 自定义语法上下文提供者的注册表（RdataStation A 方案：自研 SQL 词法器判定
-/// 字符串/注释，理解与高亮同源，无需 tree-sitter grammar）。
 fn custom_providers() -> &'static LazyLock<Mutex<HashMap<SharedString, SyntaxContextFactory>>> {
     static REGISTRY: LazyLock<Mutex<HashMap<SharedString, SyntaxContextFactory>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -26,10 +24,7 @@ fn custom_providers() -> &'static LazyLock<Mutex<HashMap<SharedString, SyntaxCon
 
 /// 注册自定义语法上下文提供者工厂，**优先于**该语言的 tree-sitter grammar
 /// 生效（未命中才回退 grammar 路径）。幂等：重复注册同语言覆盖。
-pub fn register_syntax_context_provider(
-    language: &str,
-    factory: SyntaxContextFactory,
-) {
+pub fn register_syntax_context_provider(language: &str, factory: SyntaxContextFactory) {
     custom_providers()
         .lock()
         .unwrap()

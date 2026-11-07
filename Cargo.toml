@@ -96,7 +96,13 @@ file_meta = { path = "crates/file-meta", package = "rds-file-meta" }
 # 0.8.1：在 upgrade/gpui-kit-0.8.1 分支升级（2026-10-27）。符号兼容 patch 增量
 # （gpui-base +4 文件/84 变更、gpui-component 112 文件变更，均 0 删除），vendor 换 0.8.1
 # 发布包并重打私有 patch；gpui-pre 0.3.9→0.3.10（ScrollEvent 改名，项目不直接用）。
-gpui-kit = "0.8.1"
+# 0.9.0：在 upgrade/gpui-kit-0.9.0 分支升级（2026-11-08）。gpui-pre =0.3.11、
+# gpui-fast 0.1.13；重点改动是输入内核 blink_cursor 重写（+429/−80）与
+# 文本选择、布局若干处；私有 patch 需重打（上游未实现其中 4 个符号）。
+# gpui-fast：换渲染内核（gpui-fast / gpui-fast-platform / gpui-fast-web 一并进图，
+# 与 gpui-pre 两套核心同编，二进制不双份）。开启后宿主 exe 必须自带 Windows
+# manifest（gpui-fast 的 windows-manifest-provided-by-host），见 crates/app/build.rs。
+gpui-kit = { version = "0.9.0", features = ["gpui-fast"] }
 
 # ===== 分析引擎与数据库驱动 =====
 # arrow 主版本由 duckdb 决定（两端之间传 RecordBatch，必须是同一 arrow），

@@ -479,7 +479,7 @@ impl TabGroupSkin {
             }
         }
 
-        // RdataStation vendor patch: apply tab bar variant and max width from SkinShared.
+        // 【项目私有 patch】套用标签样式与单标签最大宽度。
         let tab_bar_variant = self.shared.tab_bar_variant();
         let tab_bar_max_width = px(self.shared.tab_bar_max_width());
 
@@ -606,38 +606,30 @@ impl TabGroupSkin {
                                 let visible_count = visible.len();
                                 this.on_context_menu(move |menu, _window, _cx| {
                                     let mut menu = menu;
-                                    // 缩放/最大化
-                                    menu = menu.item(
-                                        PopupMenuItem::new(if is_zoomed { "还原" } else { "缩放" })
-                                            .on_click({
-                                                let group = group.clone();
-                                                move |_, window, cx| {
-                                                    group.toggle_zoom(window, cx);
-                                                }
-                                            }),
-                                    );
-                                    // 分隔线
+                                    menu = menu.item(PopupMenuItem::new(if is_zoomed { "还原" } else { "缩放" })
+                                        .on_click({
+                                            let group = group.clone();
+                                            move |_, window, cx| {
+                                                group.toggle_zoom(window, cx);
+                                            }
+                                        }));
                                     menu = menu.item(PopupMenuItem::separator());
-                                    // 关闭当前标签
                                     if is_closable {
                                         menu = menu.item(
                                             PopupMenuItem::new("关闭")
                                                 .on_click({
                                                     let group = group.clone();
-                                                    let panel_id = panel_id;
                                                     move |_, window, cx| {
                                                         group.close(panel_id, window, cx);
                                                     }
                                                 }),
                                         );
                                     }
-                                    // 关闭其他标签（仅当有多个标签时）
                                     if visible_count > 1 {
                                         menu = menu.item(
                                             PopupMenuItem::new("关闭其他标签")
                                                 .on_click({
                                                     let group = group.clone();
-                                                    let panel_id = panel_id;
                                                     let panels = panels.clone();
                                                     move |_, window, cx| {
                                                         for panel in panels.iter() {
@@ -649,7 +641,6 @@ impl TabGroupSkin {
                                                     }
                                                 }),
                                         );
-                                        // 关闭全部标签
                                         menu = menu.item(
                                             PopupMenuItem::new("关闭全部标签")
                                                 .on_click({
