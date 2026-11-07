@@ -426,7 +426,10 @@ impl ResultPanel {
                 div()
                     .px_2()
                     .py_1()
-                    .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
+                    // 固定 `h` 只够容一行小字号文本；选中列后右侧出现 small 档按钮
+                    // （vendor `button.rs` 实测 `Size::Small => h_6` = 24px），连同上下
+                    // `py_1` 会超出 1.5rem 的行高把按钮压掉几个像素，故按内容撑高
+                    .min_h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
                     .h_flex()
                     .items_center()
                     .gap_2()
