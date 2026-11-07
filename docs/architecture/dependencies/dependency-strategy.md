@@ -25,13 +25,15 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 版本号写「当前构建实际使用的最低版本」，取值来自 `Cargo.lock` 的解析结果；同大版本内一律取最新。
 先 `cargo update` 让锁文件升到最新兼容版，再把该版本回填到根表，避免两者不一致。
 
+**查「上游有没有新版」不能只信本地 `cargo info`**：本机 `CARGO_HOME` 的 config 把 crates-io 换成了 tuna 镜像，镜像索引会滞后（实测 2026-11-07：本地索引报 `gpui-kit` 最新 0.8.1，而 crates.io 已于 2026-11-02 发布 0.9.0）。核实口径：`https://crates.io/api/v1/crates/<crate>` 看 `max_version`，再对 GitHub tag 交叉确认（本仓依赖的上游：`longbridge/gpui-kit`、`longbridge/gpui-fast`、`duckdb/duckdb-rs`、`protegrity/sql-glot-rust`）。
+
 ### R4 例外（精确锁定，不随 `cargo update` 漂移）
 
 | 依赖 | 约束 | 原因 |
 | --- | --- | --- |
-| `gpui-kit` | `0.7.1` | 与 gpui 版本强绑定：`gpui-kit` / `gpui-base` / `gpui-component` / `gpui-kit-assets` **必须同版本**（门面与内部错配会出问题），随 GPUI-kit 发布节奏整套升（当前 0.7.1，2026-10-11 由 0.7.0 升入，见 `docs/architecture/ui/gpui-kit-0.7-migration.md`）。写法是 caret 约束，实际生效版本看 `Cargo.lock` |
+| `gpui-kit` | `0.8.1` | 与 gpui 版本强绑定：`gpui-kit` / `gpui-base` / `gpui-component` / `gpui-kit-assets` **必须同版本**（门面与内部错配会出问题），随 GPUI-kit 发布节奏整套升（当前 0.8.1，2026-10-27 由 0.8.0 升入，见 `docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md` 与 `docs/architecture/dependencies/duckdb-2.0-gpui-kit-0.8.1-upgrade-assessment.md`；`gpui-base` / `gpui-component` 两个包走 `vendor/` 私有 patch，见根 `Cargo.toml` `[patch.crates-io]`）。写法是 caret 约束，实际生效版本看 `Cargo.lock` |
 | `specta` | `=2.0.0-rc.25` | rc 阶段，11 个 crate 共用；升级需同步核对类型生成链路 |
-| `sqlglot-rust` | `=0.10.29` | SQL 转译/生成行为对版本敏感（业务关键，见 §5），升级需跑 SQL 回归 |
+| `sqlglot-rust` | `=0.10.33` | SQL 转译/生成行为对版本敏感（业务关键，见 §5），升级需跑 SQL 回归（0.10.29 → 0.10.33 于 2026-10-24，修「单条转译静默截断」） |
 | `arrow` | `58.4.0` | 主版本跟随 `duckdb`：两端之间传 `RecordBatch`，必须是同一 arrow，不能单独升 |
 
 ## 2. 升级流程
@@ -71,16 +73,18 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 - `thiserror` 1.0.69 → 2.0.20、`lru` 0.12.5 → 0.18.4、`similar` 2.7.0 → 3.2.0、`opener` 0.7.2 → 0.8.5（用法简单，未改代码）
 - `dirs` 5.0.1 → 7.0.0、`x509-parser` 0.17.0 → 0.18.1（未改代码）
 - `aes-gcm` 0.10.3 → 0.11.1（`crates/shared/src/crypto.rs`：`OsRng` 改用 `rand::rngs::OsRng`，`Nonce::from_slice` 改 `Nonce::try_from`，旧的 `aes_gcm::aead::OsRng` 已被移除）
-- `toml` 0.8.23 → 1.1.5、`reqwest` 0.12.28 → 0.13.5（未改代码；reqwest 0.13 把 `rustls-tls` feature 改名为 `rustls`）
+- `toml` 0.8.23 → 1.1.5（未改代码）
+  - 另注：`reqwest` 条目当前**没有任何使用方**——`Cargo.lock` 里没有 `reqwest` 这个包（只有 gpui-kit 带入的 `gpui-pre-reqwest`），全仓也没有 `use reqwest`。此前记的「`reqwest` 0.12.28 → 0.13.5 已完成」不成立（该升级从未落到图上），条目可以直接删除
 - `rusqlite` 0.32.1 → **0.40.2**（与 sqlx 联动，见 §5「native 库约束」）。代码改动集中在 `crates/engine/src/persistence/`：
   - `log_store.rs`：3 处 `COUNT(*)` 先取 `i64` 再 `as usize`
   - `sql_template_store.rs`：`created_at_ms` / `updated_at_ms` 写入用 `as i64`，读回用 `row.get::<_, i64>(..)? as u64`
   - `workbench_context_store.rs`：`updated_at_ms` 同上；可空列 `selection_start` / `selection_end`（`Option<usize>`）用 `Option<i64>` + `map`，保持 NULL ↔ None 语义
   - 根因：rusqlite 0.33+ **移除了 `u64` / `usize` 的 `ToSql` / `FromSql`**（SQLite 整数只有 i64，避免越界歧义）
 - `mysql_async` 0.34.2 → **0.37.1**（零代码改动；连带 `mysql_common` 升到 0.37.3，并消掉图上的 `base64 0.21.7` 重复）
-- `sqlglot-rust` 0.9.25 → **0.10.29**（跨 0.9 → 0.10）。代码改动仅 1 处：`crates/engine/src/sql/builder.rs` 的 `TableRef` 字面量补上新字段 `alias_quote_style`（此处无别名，取 `QuoteStyle::None`）
+- `sqlglot-rust` 0.9.25 → **0.10.29**（跨 0.9 → 0.10）。代码改动仅 1 处：`builder.rs`（当时在 `crates/engine/src/sql/`，2026-10-29 随 SQL 能力抽到 `crates/sql`）的 `TableRef` 字面量补上新字段 `alias_quote_style`（此处无别名，取 `QuoteStyle::None`）
   - 行为核对：比对两版生成器源码，表名加引号路径完全一致（`write_quoted(&table.name, table.name_quote_style)`），0.10 只新增了**别名**的引号处理；我们的 `TableRef` 无别名，生成结果不变
   - 新增回归用例 `test_generated_sql_is_pinned`：把 CREATE TABLE / DROP TABLE / SELECT / INSERT 的生成结果与引号风格钉死，后续升级越界即失败
+- `sqlglot-rust` 0.10.29 → **0.10.33**（2026-10-24）：修复「单条转译静默截断」；`test_generated_sql_is_pinned` 的生成结果未变，无需改代码
 - `sqlx` 0.8.6 → **0.9.0**：
   - feature 改名：`runtime-tokio-native-tls` → `runtime-tokio` + `tls-native-tls`
   - `query()` 自 0.9 起只接受 `&'static str`，动态 SQL 必须显式审计：8 处（`driver/native/mysql.rs`、`postgres.rs` 各 4 处）改为 `sqlx::query(sqlx::AssertSqlSafe(sql))`；参数仍统一走 `bind`，不做字符串拼接
@@ -98,11 +102,14 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 待办：
 
-| 依赖 | 当前 | 最新可用 | 代码使用点 | 备注 |
+| 依赖 | 当前 | 最新可用（2026-11-07 核实） | 代码使用点 | 备注 |
 | --- | --- | --- | --- | --- |
-| `arrow` | 58.4.0 | 59.3.0 | — | **不可单独升**，须与 `duckdb` 同步（见 R4） |
+| `duckdb` | 1.10505.0（DuckDB 1.5.5） | `1.10506.1`（DuckDB 1.5.6）/ `1.20000.1`（DuckDB 2.0.x） | `crates/engine`（`DUCKDB_LIB_DIR` 动态链接） | 1.5 线内 patch（→ `1.10506.1`）仍要 `arrow ^58`，可单独升，但 crate 版本必须与 `third_party/duckdb/` 的库版本成对换；2.0 线要 `arrow ^60` 且有存储格式单向兼容，见 `duckdb-2.0-gpui-kit-0.8.1-upgrade-assessment.md`，继续暂缓 |
+| `arrow` | 58.4.0 | 60.1.0 | — | **不可单独升**，须与 `duckdb` 同步（见 R4）；只有上 DuckDB 2.0 线才需要 60 |
+| `gpui-kit` | 0.8.1 | 0.9.0（crates.io 2026-11-02） | UI 全仓 | 0.9.0 把 `gpui-pre` 钉到 `=0.3.11`、`gpui-fast` 到 0.1.13；`gpui-base` / `gpui-component` 要按 0.9.0 发布包重打私有 patch，未评估 |
+| `sqlglot-rust` | 0.10.33 | 0.11.1（crates.io 2026-10-28） | `crates/sql` | 跨 0.10 → 0.11，须先跑 `cargo test -p rds-sql` 的 SQL 回归，未评估 |
 
-（驱动层（`rusqlite` / `sqlx` / `mysql_async`）、SQL 引擎（`sqlglot-rust`）、连接层（`russh`）已全部升到可用的最新版。）
+（驱动层（`rusqlite` / `sqlx` / `mysql_async`）、连接层（`russh`）已升到可用的最新版；SQL 引擎与 UI 家族的上游新版本见上表。）
 
 ## 5. 关键依赖与约束
 
@@ -117,7 +124,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 ### 业务关键依赖
 
-- **`sqlglot-rust`｜SQL 编辑器的解析 / 格式化 / 转译**：`crates/engine/src/sql/`（`mod.rs` / `engine.rs` / `parser.rs` / `formatter.rs` / `transpiler.rs` / `builder.rs`）是它在全仓的**唯一接入点**，业务模块只 `use crate::sql::SqlEngine`，不直接依赖 sqlglot API。它直接支撑编辑页面的 SQL 能力，因此精确锁定 `=0.10.29`。升级前必须跑 SQL 回归：`cargo test -p rds-engine sql::` 覆盖 parser（语句分类）/ formatter / transpiler / builder，其中 `builder::tests::test_generated_sql_is_pinned` 钉住了生成 SQL 的字面结果（含标识符加引号方式）。
+- **`sqlglot-rust`｜SQL 编辑器的解析 / 格式化 / 转译**：`crates/sql`（`rds-sql`，2026-10-29 自 engine 抽取）是它在全仓的**唯一接入点**（`engine.rs` / `parser.rs` / `formatter.rs` / `transpiler.rs` / `builder.rs` / `split.rs` / `highlight.rs` / `semantic.rs` / `bind.rs`，脚本词法器在 `script/`）；`crates/engine/src/sql/mod.rs` 只是 `pub use rds_sql::*` 的命名空间薄壳，业务模块不直接依赖 sqlglot API。它直接支撑编辑页面的 SQL 能力，因此精确锁定 `=0.10.33`。升级前必须跑 SQL 回归：`cargo test -p rds-sql`，覆盖 parser（语句分类）/ formatter / transpiler / builder，其中 `builder::tests::test_generated_sql_is_pinned` 钉住了生成 SQL 的字面结果（含标识符加引号方式）。
 - **`gpui-kit` 家族**：`gpui-kit` / `gpui-base` / `gpui-component` / `gpui-kit-assets` 必须同版本，随 GPUI-kit 发布节奏整套升（见 R4）。
 - **`arrow` 跟随 `duckdb`**（见 R4）。
 
@@ -171,10 +178,10 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 | --- | --- |
 | R1 第三方依赖版本唯一入口 | `Cargo.toml` → `[workspace.dependencies]` |
 | R1 内部 crate 路径唯一入口 | 同上（`paths` / `shared` / `engine` / `connection` / `insight` / `mock` / `settings` / `workbench` 条目） |
-| R2 crate 内写法 | `crates/*/Cargo.toml`（16 个成员） |
+| R2 crate 内写法 | `crates/*/Cargo.toml`（成员清单见根 `Cargo.toml` `members`） |
 | R3 版本取值来自解析结果 | `Cargo.lock` ↔ 根表版本号 |
-| R4 例外：gpui-kit | `Cargo.toml` → `gpui-kit = "0.7.1"` |
-| R4 例外：specta / sqlglot-rust | 同上（精确锁定条目；sqlglot 的唯一边界见 `crates/engine/src/sql/`） |
+| R4 例外：gpui-kit | `Cargo.toml` → `gpui-kit = "0.8.1"` |
+| R4 例外：specta / sqlglot-rust | 同上（精确锁定条目；sqlglot 的唯一边界见 `crates/sql`） |
 | R4 例外：arrow 跟随 duckdb | 同上（`arrow` / `duckdb` 条目） |
 | v1 目录不参与构建 | `Cargo.toml` → `workspace.exclude` |
 | 版本继承（version/edition） | `Cargo.toml` → `[workspace.package]` |
@@ -184,6 +191,6 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 | crate 命名（目录/键 = 去前缀名） | 根 `Cargo.toml` 成员与依赖键 + 本文件 §6 |
 | 加密后端约束（ring） | `Cargo.toml` → `russh` 条目（`default-features = false`） |
 | native 库约束（links） | `Cargo.toml` → `sqlx` 条目（最小 feature 集） |
-| SQL 生成结果回归 | `crates/engine/src/sql/builder.rs` → `tests::test_generated_sql_is_pinned` |
+| SQL 生成结果回归 | `crates/sql/src/builder.rs` → `tests::test_generated_sql_is_pinned` |
 | sqlx 0.9 动态 SQL 审计 | `crates/engine/src/driver/native/{mysql,postgres}.rs` → `sqlx::AssertSqlSafe` |
 | rand 0.10 系统随机源 | `crates/shared/src/crypto.rs` → `SysRng` + `TryRng::try_fill_bytes` |
