@@ -48,13 +48,37 @@ impl ResourcesPanel {
             .request_move_to_group(&moving, dnd::drop_folder(&target), window, cx);
         cx.notify();
     }
-    /// `F2` / 「重命名…」的**目标**：单选语义 + 只读项目不给改（判据在 [`can_rename`]）。
+    /// `F2` / 「重命名…」的**目标**：判据走 [`can_rename`]（与右键菜单、详情头部同一份）。
     ///
-    /// 与菜单项同一判据：改名没有“批量”的意义（改哪一条都是猜），只管焦点行。
+    /// 与菜单项同一判据：改名没有“批量”的意义（改哪一条都是猜），只管焦点行；
+    /// 全局行在这条上也被挡（全局登记不归本项目管）。
     pub fn rename_target(&self) -> Option<String> {
-        can_rename(self.multi.len(), self.snapshot.read_only)
-            .then(|| self.selected.clone())
-            .flatten()
+        let id = self.selected.clone()?;
+        can_rename(&self.action_context(&id)).then_some(id)
+    }
+    /// 一行当前的动作上下文（详情优先：它带着本体相对路径；没有详情时从行降级）。
+    fn action_context(&self, id: &str) -> ActionContext {
+        if let Some(detail) = self.snapshot.details.get(id) {
+            return detail.action_context(self.snapshot.read_only, self.multi.len());
+        }
+        let row = self
+            .snapshot
+            .rows
+            .iter()
+            .chain(self.snapshot.global_rows.iter())
+            .find(|row| row.id == id);
+        match row {
+            Some(row) => {
+                ActionContext::from_row(row.scope, row.status, self.snapshot.read_only, self.multi.len())
+            }
+            // 行刚被刷掉：按"缺失且无本体"处理——需要本体的动作一律挡住，不猜。
+            None => ActionContext::from_row(
+                RowScope::Project,
+                ArchiveStatus::Missing,
+                self.snapshot.read_only,
+                self.multi.len(),
+            ),
+        }
     }
     /// 归档默认分组（当前值；`None` = 没设）。
     pub fn default_group(&self) -> Option<&str> {

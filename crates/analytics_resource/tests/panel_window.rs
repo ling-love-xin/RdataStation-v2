@@ -1756,8 +1756,7 @@ fn detail_header_offers_rename_and_alias_only_when_writable(cx: &mut TestAppCont
     assert!(cx.debug_bounds("archive-detail-alias").is_none());
     drop(read_only);
 
-    // 本体缺失：名字不给改（那一行的问题先去索引修复；与右键菜单置灰同口径），
-    // 但别名仍可编（它不碰本体）。
+    // 本体缺失：名字与别名都不给入口——那一行先走索引修复（统一判据 `can_rename`）。
     let (missing, cx) = cx.add_window_view({
         let host = host.clone();
         let mut detail = detail_for(&row("ar_1", ArchiveKind::File, ArchiveStatus::Missing, 1));
@@ -1775,7 +1774,7 @@ fn detail_header_offers_rename_and_alias_only_when_writable(cx: &mut TestAppCont
         window.draw(cx).clear(cx);
     });
     assert!(cx.debug_bounds("archive-detail-rename").is_none());
-    assert!(cx.debug_bounds("archive-detail-alias").is_some());
+    assert!(cx.debug_bounds("archive-detail-alias").is_none());
     drop(missing);
 }
 

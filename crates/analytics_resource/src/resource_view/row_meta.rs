@@ -131,12 +131,9 @@ pub fn default_group_entry_label(is_default: bool) -> &'static str {
     }
 }
 
-/// 行是否可重命名（原型 §3.2 / §9：`F2` 与右键「重命名…」**同一判据**，两处各写一遍就会漂）。
-///
-/// 两条不许：多选（改名没有“批量”的意义——改哪一条都是猜）与只读项目（写不进去）。
-pub fn can_rename(multi_count: usize, read_only: bool) -> bool {
-    multi_count <= 1 && !read_only
-}
+/// 行是否可重命名：判据统一在 [`crate::model::can_rename`]（四个入口共用——
+/// 多选 / 只读项目 / 全局行都挡）。这里不再自写一份：`F2` 与右键菜单曾各写一套，
+/// 结果全局行按 `F2` 会开窗，随后报「还没有打开项目」。
 
 /// 这条存档能否「查看统计」（M8 洞察）：判定按种类分，三类的可分析性来源不同。
 ///

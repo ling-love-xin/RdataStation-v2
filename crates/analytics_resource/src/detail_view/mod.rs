@@ -15,7 +15,10 @@ pub(crate) use gpui_kit::component::tag::Tag;
 pub(crate) use gpui_kit::component::{ActiveTheme, Icon, Sizable as _, Size};
 pub(crate) use gpui_kit::*;
 
-pub(crate) use crate::model::{ArchiveKind, ArchiveStatus, DeleteTarget, PayloadMode, RowScope};
+pub(crate) use crate::model::{
+    ArchiveKind, ArchiveStatus, DeleteTarget, PayloadMode, RowScope, can_checkout,
+    can_delete_from_detail, can_open, can_rename,
+};
 pub(crate) use crate::resource_view::{BadgeTone, ResourcesHost, badge_tone, kind_icon, strength_badge};
 pub(crate) use crate::ui;
 

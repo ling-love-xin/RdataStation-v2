@@ -21,10 +21,11 @@ use gpui_kit::*;
 use crate::detail_view::ArchiveDetail;
 use crate::dnd::{self, ArchiveDragGhost, ArchiveDragPayload, GroupDrop};
 use crate::filter::VisibleItem;
-use crate::model::{ArchiveStatus, DeleteTarget, PayloadMode};
+use crate::model::{ActionContext, ArchiveStatus, DeleteTarget, PayloadMode};
 use crate::resource_view::{
     ArchiveRow, BadgeTone, DEFAULT_GROUP_MARKER, GroupOption, ResourcesHost, ResourcesPanel,
-    RowClick, badge_tone, can_rename, can_view_stats, classify_row_click,
+    RowClick, badge_tone, can_checkout, can_delete_row, can_distribute, can_edit_tags,
+    can_move_to_group, can_open, can_promote, can_rename, can_view_stats, classify_row_click,
     default_group_entry_label, kind_icon, strength_badge, tag_entry_label, tag_targets,
 };
 use crate::ui;
@@ -199,19 +200,26 @@ impl ListDelegate for ArchiveListDelegate {
         let tag_label = tag_entry_label(multi_count);
         // 打开 / 取回都要整条详情：渲染期提前拷一份（菜单回调触发时面板已被借用）。
         let open_detail = self.details.get(&row.id).cloned();
-        // 「打开（只读）」要本体在位；「查看统计」只对数据可得的行为真（口径见 `can_view_stats`）。
-        let can_open = open_detail
-            .as_ref()
-            .map(|detail| {
-                detail.status != ArchiveStatus::Missing && detail.payload_rel_path.is_some()
-            })
-            .unwrap_or(false);
-        let can_stats = open_detail.as_ref().is_some_and(can_view_stats);
-        // 取回要往草稿箱写工作副本：本体异常与只读项目都不给走。
-        let can_checkout = !is_global && row.status == ArchiveStatus::Normal && !self.read_only;
         let read_only = self.read_only;
-        // 拖到分组头 = 移动：只读项目不给拖（拖起来也落不下去）。
-        let drag_payload = (!is_global && !read_only).then(|| ArchiveDragPayload {
+        // 动作判据**统一在 `model::affordance`**：右键菜单 / `F2` / 详情头部 / 详情动作区
+        // 共用同一份判定，这里只把上下文装好（逐项判据不再各写一份）。
+        let ctx = open_detail
+            .as_ref()
+            .map(|detail| detail.action_context(read_only, multi_count))
+            .unwrap_or_else(|| ActionContext::from_row(row.scope, row.status, read_only, multi_count));
+        // 逐项判据（变量名带 `_row` 后缀：避免遮蔽同名判定函数，下面还有调用）。
+        let can_open_row = can_open(&ctx);
+        // 「查看统计」按种类判（`can_view_stats` 要本体路径与连接信息，比只判状态细）。
+        let can_stats = open_detail.as_ref().is_some_and(can_view_stats);
+        let can_checkout_row = can_checkout(&ctx);
+        let can_distribute_row = can_distribute(&ctx);
+        let can_promote_row = can_promote(&ctx);
+        let can_rename_row = can_rename(&ctx);
+        let can_edit_tags_row = can_edit_tags(&ctx);
+        let can_move_to_group_row = can_move_to_group(&ctx);
+        let can_delete_row_flag = can_delete_row(&ctx);
+        // 拖到分组头 = 移动：只读项目 / 全局行不给拖（拖起来也落不下去）。
+        let drag_payload = can_move_to_group_row.then(|| ArchiveDragPayload {
             ids: selection_ids.clone(),
             kind: row.kind,
             label: dnd::drag_label(&row.name, selection_ids.len()),
@@ -220,12 +228,17 @@ impl ListDelegate for ArchiveListDelegate {
         let multi_bg = cx.theme().colors.list_active;
         let params = menu::RowMenuParams {
             host: self.host.clone(),
-            is_global,
-            read_only,
-            multi_count,
-            can_open,
-            can_checkout,
+            can_open: can_open_row,
+            can_checkout: can_checkout_row,
             can_stats,
+            can_distribute: can_distribute_row,
+            can_promote: can_promote_row,
+            can_rename: can_rename_row,
+            can_edit_tags: can_edit_tags_row,
+            can_move_to_group: can_move_to_group_row,
+            can_delete: can_delete_row_flag,
+            can_versions: !is_global && multi_count <= 1,
+            multi_count,
             tag_label,
             tag_targets,
             selection_ids,

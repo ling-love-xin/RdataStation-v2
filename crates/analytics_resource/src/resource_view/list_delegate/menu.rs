@@ -5,15 +5,25 @@ use crate::model::TagTarget;
 
 use super::*;
 
+/// 菜单的可用性**由调用方算好传进来**（判据在 `model::affordance`，本文件只按结果挂 `.disabled`）。
+///
+/// 早先这里内联 `!can_open || multi > 1 || read_only` 一类表达式：同一件事在菜单里一份、
+/// `F2` 里一份、详情里两份，四处漂移（全局行甚至会漏掉「不能再升级」这条）。
 #[derive(Clone)]
 pub(super) struct RowMenuParams {
     pub(super) host: Rc<dyn ResourcesHost>,
-    pub(super) is_global: bool,
-    pub(super) read_only: bool,
-    pub(super) multi_count: usize,
     pub(super) can_open: bool,
     pub(super) can_checkout: bool,
     pub(super) can_stats: bool,
+    pub(super) can_distribute: bool,
+    pub(super) can_promote: bool,
+    pub(super) can_rename: bool,
+    pub(super) can_edit_tags: bool,
+    pub(super) can_move_to_group: bool,
+    pub(super) can_delete: bool,
+    pub(super) can_versions: bool,
+    /// 只影响文案（「移入回收站（3 项）」）与子菜单摆不摆，不参与判据。
+    pub(super) multi_count: usize,
     pub(super) tag_label: String,
     pub(super) tag_targets: Vec<TagTarget>,
     pub(super) selection_ids: Vec<String>,
@@ -39,9 +49,14 @@ pub(super) fn build(
     let can_open = p.can_open;
     let can_checkout = p.can_checkout;
     let can_stats = p.can_stats;
+    let can_distribute = p.can_distribute;
+    let can_promote = p.can_promote;
+    let can_rename = p.can_rename;
+    let can_edit_tags = p.can_edit_tags;
+    let can_move_to_group = p.can_move_to_group;
+    let can_delete = p.can_delete;
+    let can_versions = p.can_versions;
     let multi_count = p.multi_count;
-    let is_global = p.is_global;
-    let read_only = p.read_only;
     let tag_label = p.tag_label.clone();
     let tag_targets = p.tag_targets.clone();
     let selection_ids = p.selection_ids.clone();
@@ -54,7 +69,7 @@ pub(super) fn build(
                         let mut menu = menu;
                         menu = menu.item(
                             PopupMenuItem::new("打开（只读）")
-                                .disabled(!can_open || multi_count > 1)
+                                .disabled(!can_open)
                                 .on_click({
                                     let host = host.clone();
                                     let detail = open_detail.clone();
@@ -71,10 +86,10 @@ pub(super) fn build(
                         );
                         // 「分发到本项目…」（§13）：全局 → 项目，跨项目唯一法定路径。
                         // 全局行本体在全局 DuckDB，项目侧动作全置灰，分发是唯一可用动作；
-                        // 只读项目也不给分发（分发写项目库）。
+                        // 判据（全局行 / 本体在位 / 单选 / 项目非只读）在 `can_distribute`。
                         menu = menu.item(
                             PopupMenuItem::new("分发到本项目…")
-                                .disabled(!is_global || multi_count > 1 || read_only)
+                                .disabled(!can_distribute)
                                 .on_click({
                                     let host = host.clone();
                                     let name = distribute_name.clone();
@@ -97,12 +112,12 @@ pub(super) fn build(
                                 }),
                         );
                         // 「升级到全局…」（§13）：项目 → 全局，表 + 版本信息进全局 DuckDB。
-                        // 判据与「打开」同源（File 档且本体在位）；只读项目不给升级
-                        // （升级会写全局库，本质是一次发布）。分析表型存档由宿主侧再挡一层
+                        // 判据 = 项目行 + 本体在位 + 单选 + 项目非只读（`can_promote`）：
+                        // 全局行必须挡（否则把全局表再来一次升级）；分析表型存档由宿主侧再挡一层
                         // （其升级依赖分析表读取路径，M8 后续批次接）。
                         menu = menu.item(
                             PopupMenuItem::new("升级到全局…")
-                                .disabled(!can_open || multi_count > 1 || read_only)
+                                .disabled(!can_promote)
                                 .on_click({
                                     let host = host.clone();
                                     let detail = open_detail.clone();
@@ -115,7 +130,7 @@ pub(super) fn build(
                         );
                         menu = menu.item(
                             PopupMenuItem::new("取回（检出）…")
-                                .disabled(!can_checkout || multi_count > 1)
+                                .disabled(!can_checkout)
                                 .on_click({
                                     let host = host.clone();
                                     let detail = checkout_detail.clone();
@@ -128,7 +143,7 @@ pub(super) fn build(
                         );
                         menu = menu.item(
                             PopupMenuItem::new("版本历史…")
-                                .disabled(multi_count > 1 || is_global)
+                                .disabled(!can_versions)
                                 .on_click({
                                     let host = host.clone();
                                     let id = id_versions.clone();
@@ -138,10 +153,10 @@ pub(super) fn build(
                                 }),
                         );
                         // 「重命名…」：只改**显示名**（文件名 / 路径不动，原型 §1 原则 2）；
-                        // 多选不给改（改哪一条都是猜），只读项目不给改。
+                        // 判据（单选 / 项目非只读 / 项目行）在 `can_rename`——与 `F2` 同一份。
                         menu = menu.item(
                             PopupMenuItem::new("重命名…")
-                                .disabled(!can_rename(multi_count, read_only) || is_global)
+                                .disabled(!can_rename)
                                 .on_click({
                                     let host = host.clone();
                                     let id = rename_id.clone();
@@ -151,7 +166,7 @@ pub(super) fn build(
                         // 破坏性项用分隔线隔离；其上的两项是"本体在哪儿"的日常动作（原型 §3.2）。
                         menu = menu.item(
                             PopupMenuItem::new("复制路径")
-                                .disabled(!can_open || multi_count > 1)
+                                .disabled(!can_open)
                                 .on_click({
                                     let host = host.clone();
                                     let detail = open_detail.clone();
@@ -164,7 +179,7 @@ pub(super) fn build(
                         );
                         menu = menu.item(
                             PopupMenuItem::new("在系统中显示")
-                                .disabled(!can_open || multi_count > 1)
+                                .disabled(!can_open)
                                 .on_click({
                                     let host = host.clone();
                                     let detail = open_detail.clone();
@@ -179,7 +194,7 @@ pub(super) fn build(
                         // 多选时作用于整选集（勾选 = 全部打上，取消 = 全部摘掉）。
                         menu = menu.item(
                             PopupMenuItem::new(tag_label.clone())
-                                .disabled(read_only || is_global)
+                                .disabled(!can_edit_tags)
                                 .on_click({
                                     let host = host.clone();
                                     let targets = tag_targets.clone();
@@ -190,8 +205,8 @@ pub(super) fn build(
                         );
                         // 「移动到分组 ›」：子菜单列出各分组 + 未分组 + 新建（原型 §2.4：
                         // 拖拽之外的等价入口；多选也用这一条，批量移动是原型里多选解锁的动作）。
-                        // 全局行没有项目分组归属，整个子菜单不给摆。
-                        if !is_global {
+                        // 全局行没有项目分组归属、只读项目写不进去——两者都不摆（判据同拖拽）。
+                        if can_move_to_group {
                             let move_ids: Vec<String> = selection_ids.clone();
                             menu = menu.submenu("移动到分组", window, _cx, {
                                 let host = host.clone();
@@ -257,7 +272,7 @@ pub(super) fn build(
                         };
                         menu.separator().item(
                             PopupMenuItem::new(delete_label)
-                                .disabled(is_global)
+                                .disabled(!can_delete)
                                 .on_click({
                                     let host = host.clone();
                                     let targets = delete_targets.clone();

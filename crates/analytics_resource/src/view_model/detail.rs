@@ -1,6 +1,6 @@
 //! 详情快照：一条存档的属性面（宿主已格式化为可读文案）。
 
-use crate::model::{ArchiveKind, ArchiveStatus, PayloadMode, RowScope};
+use crate::model::{ActionContext, ArchiveKind, ArchiveStatus, PayloadMode, RowScope};
 use crate::preview::Preview;
 
 /// 一条存档的详情快照（**宿主已格式化**：大小 / 时间 / 标签等都已是人读文案）。
@@ -56,6 +56,22 @@ pub struct ArchiveDetail {
     /// 宿主没给预览时也不假装有内容。
     pub preview: Preview,
     pub group: Option<String>,
+}
+
+impl ArchiveDetail {
+    /// 装成动作判定的上下文（[`crate::model::ActionContext`]）。
+    ///
+    /// `read_only` 是**项目**的东西（不是 `self.readonly` 那一列：那是归档只读），
+    /// 所以由调用方给；`multi_count` 同理（详情默认单选，列表多选时才 > 1）。
+    pub fn action_context(&self, read_only: bool, multi_count: usize) -> ActionContext {
+        ActionContext {
+            scope: self.scope,
+            status: self.status,
+            has_payload: self.payload_rel_path.is_some(),
+            read_only,
+            multi_count,
+        }
+    }
 }
 
 /// 详情面板里的一枚标签 chip。

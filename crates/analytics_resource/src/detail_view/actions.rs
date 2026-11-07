@@ -5,12 +5,18 @@ use super::*;
 /// 全局行的分发按钮：`(是否可点, 按钮下方那句说明)`。
 ///
 /// 抽成纯函数是为了能单测——`Button` 是 `RenderOnce`，渲染完读不到 `disabled`。
-/// 只读项目与列表右键菜单同一判据：分发会往本项目库写表，只读项目不能写。
-fn distribute_affordance(read_only: bool) -> (bool, &'static str) {
-    if read_only {
+/// 判据本身在 [`crate::model::can_distribute`]（与列表右键菜单同一份），这里只负责
+/// 把"为什么不能点"翻译成人话。
+fn distribute_affordance(ctx: &crate::model::ActionContext) -> (bool, &'static str) {
+    if ctx.read_only {
         (
             false,
             "项目处于只读模式：分发会向本项目库写表，解除只读后再分发。",
+        )
+    } else if ctx.status == ArchiveStatus::Missing {
+        (
+            false,
+            "全局实例的本体缺失（表可能已被删除或移动）：先在其他项目重新升级一次，再分发。",
         )
     } else {
         (
@@ -34,11 +40,12 @@ pub(super) fn render_actions(
     // 唯一动作 = 分发到本项目，打开 / 取回 / 删除 / 打标 / 分组 / 版本历史一律不摆。
     if let Some(actions) = actions {
         let host = actions.host.clone();
+        // 动作判据统一在 `model::affordance`（详情恒单选，`multi_count` 给 1）。
+        let ctx = detail.action_context(actions.read_only, 1);
         if detail.scope == RowScope::Global {
             let detail_for_distribute = detail.clone();
-            // 分发要往本项目库写表，只读项目不能写——与列表右键菜单同一判据
-            // （`menu.rs` 里那一项也是 `disabled(… || read_only)`）。
-            let (can_distribute, distribute_hint) = distribute_affordance(actions.read_only);
+            // 分发要往本项目库写表：只读项目 / 本体缺失都挡住（与列表右键菜单同一判据）。
+            let (can_distribute, distribute_hint) = distribute_affordance(&ctx);
             out.push(
                 div()
                     .v_flex()
@@ -67,14 +74,14 @@ pub(super) fn render_actions(
         } else {
             let missing = detail.status == ArchiveStatus::Missing;
             let changed = detail.status == ArchiveStatus::ContentChanged;
-            let can_open = !missing && detail.payload_rel_path.is_some();
-            let can_checkout = !missing && !changed && !actions.read_only;
+            // 三个判据都走同一份上下文（多选的限制在列表侧，详情恒单选）。
+            let can_open = can_open(&ctx);
+            let can_checkout = can_checkout(&ctx);
+            let is_reference = detail.payload_mode == PayloadMode::Reference;
             // 危险区（原型 §3.1）：与日常动作隔开（分隔线 + danger 文字按钮）。
             // copy 与 reference 都可移入回收站（B3 服务层已支持）：copy 搬本体进回收站，
             // reference 只删登记行 + 版本元数据，本体留在源位置。
-            let has_payload = detail.payload_rel_path.is_some();
-            let can_delete = !missing && has_payload && !actions.read_only;
-            let is_reference = detail.payload_mode == PayloadMode::Reference;
+            let can_delete = can_delete_from_detail(&ctx);
             // 禁用时给的理由要**指向出口**（去哪儿处理），不是一句"不可用"。
             let hint = if missing {
                 "本体缺失，先在状态行「修复…」处理"
@@ -184,10 +191,20 @@ pub(super) fn render_actions(
 #[cfg(test)]
 mod tests {
     use super::distribute_affordance;
+    use crate::model::{ActionContext, ArchiveStatus, RowScope};
+
+    fn global_ctx() -> ActionContext {
+        let mut ctx = ActionContext::project_row();
+        ctx.scope = RowScope::Global;
+        ctx.has_payload = false; // 分析表型全局行：本体在全局库，没有项目侧路径
+        ctx
+    }
 
     #[test]
     fn distribute_is_disabled_on_a_read_only_project() {
-        let (enabled, hint) = distribute_affordance(true);
+        let mut ctx = global_ctx();
+        ctx.read_only = true;
+        let (enabled, hint) = distribute_affordance(&ctx);
         assert!(!enabled, "只读项目不能分发（会写本项目库）");
         assert!(
             hint.contains("只读模式"),
@@ -196,8 +213,20 @@ mod tests {
     }
 
     #[test]
+    fn distribute_is_disabled_when_the_global_payload_is_missing() {
+        let mut ctx = global_ctx();
+        ctx.status = ArchiveStatus::Missing;
+        let (enabled, hint) = distribute_affordance(&ctx);
+        assert!(!enabled, "本体缺失时 COPY 必失败，入口就该置灰");
+        assert!(
+            hint.contains("本体缺失"),
+            "禁用时说明要指向原因，实际：{hint}"
+        );
+    }
+
+    #[test]
     fn distribute_is_enabled_otherwise() {
-        let (enabled, hint) = distribute_affordance(false);
+        let (enabled, hint) = distribute_affordance(&global_ctx());
         assert!(enabled);
         assert!(
             hint.contains("先分发到本项目"),

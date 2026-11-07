@@ -1,8 +1,10 @@
 //! 领域类型：种类与状态、请求与回执、变更事件。
 
+mod affordance;
 mod kind;
 mod types;
 
+pub use affordance::*;
 pub use kind::*;
 pub use types::*;
 

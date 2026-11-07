@@ -6,7 +6,7 @@ use super::{
 };
 use crate::detail_view::ArchiveDetail;
 use crate::filter::VisibleItem;
-use crate::model::{ArchiveKind, ArchiveStatus, PayloadMode, RowScope};
+use crate::model::{ActionContext, ArchiveKind, ArchiveStatus, PayloadMode, RowScope};
 use gpui_kit::Modifiers;
 use gpui_kit::component::IndexPath;
 
@@ -275,13 +275,21 @@ fn badge_tone_marks_weak_strength_as_warning() {
     );
 }
 
-/// 改名判据只有一处：`F2` 与右键「重命名…」共用它（多选不给改、只读项目不给改）。
+/// 改名判据只有一处（`model::can_rename`）：`F2` / 右键「重命名…」/ 详情名字 / 详情别名共用它。
 #[test]
-fn rename_needs_a_single_row_in_a_writable_project() {
-    assert!(can_rename(0, false), "焦点行单独一条时可用");
-    assert!(can_rename(1, false));
-    assert!(!can_rename(2, false), "多选不给改（改哪一条都是猜）");
-    assert!(!can_rename(1, true), "只读项目不给改");
+fn rename_needs_a_single_writable_project_row() {
+    let mut ctx = ActionContext::project_row();
+    ctx.multi_count = 0;
+    assert!(can_rename(&ctx), "焦点行单独一条时可用");
+    let mut ctx = ActionContext::project_row();
+    ctx.multi_count = 2;
+    assert!(!can_rename(&ctx), "多选不给改（改哪一条都是猜）");
+    let mut ctx = ActionContext::project_row();
+    ctx.read_only = true;
+    assert!(!can_rename(&ctx), "只读项目不给改");
+    let mut ctx = ActionContext::project_row();
+    ctx.scope = RowScope::Global;
+    assert!(!can_rename(&ctx), "全局登记不归本项目管（旧判据在这里漏了）");
 }
 
 /// 默认分组那一项的文案随状态翻转（同一个入口兼备“设”与“取消”）。

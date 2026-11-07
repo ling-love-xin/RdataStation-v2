@@ -11,7 +11,9 @@ use super::*;
 /// 关闭入口组合 `Button::ghost` 内嵌（0.7.1 `Tag` 无内置 ×，决策 D5）。
 pub(crate) fn render_tag_section(detail: &ArchiveDetail, actions: Option<&DetailActions>, cx: &App) -> Div {
     let muted = cx.theme().colors.muted_foreground;
-    let read_only = actions.map(|a| a.read_only).unwrap_or(true);
+    // 判据走 [`crate::model::can_edit_tags`]（与右键菜单同一份）：全局行没有项目标签归属，
+    // 旧判据只看项目只读，于是全局行详情也能摘标签。
+    let can_edit = actions.is_some_and(|a| crate::model::can_edit_tags(&detail.action_context(a.read_only, 1)));
 
     let mut chips = div().h_flex().w_full().flex_wrap().items_center().gap_1();
     if detail.tags.is_empty() {
@@ -23,7 +25,7 @@ pub(crate) fn render_tag_section(detail: &ArchiveDetail, actions: Option<&Detail
             .gap_1()
             .child(chip.name.clone());
         if let Some(actions) = actions {
-            if !read_only {
+            if can_edit {
                 // × = 去掉这个标签（不再要一次确认：重新打上只需两步）。
                 // 语义按钮（不是自绘 div）：自带 hover / 焦点 / 键盘，且命中区有 20px 下限。
                 let host = actions.host.clone();
@@ -74,7 +76,7 @@ pub(crate) fn render_tag_section(detail: &ArchiveDetail, actions: Option<&Detail
                 .xsmall()
                 .debug_selector(|| "archive-detail-add-tag".to_string())
                 .label("＋ 标签")
-                .disabled(read_only)
+                .disabled(!can_edit)
                 .on_click(move |_, window, cx| {
                     // 详情面板永远是**一元**：批量走列表的多选 + 右键菜单。
                     host.request_edit_tags(
@@ -92,10 +94,10 @@ pub(crate) fn render_tag_section(detail: &ArchiveDetail, actions: Option<&Detail
     section
 }
 /// 渲染详情面板内容（只读信息区 + 标签分区 + 动作区 + 危险区）。
-/// 头部显示名：可点时是个 ghost 按钮（`F2` 的同一条链路），没宿主 / 只读项目时是纯文本。
+/// 头部显示名：可点时是个 ghost 按钮（`F2` 的同一条链路），没宿主 / 不可改时是纯文本。
 ///
-/// 缺失本体（`Missing`）的行**不给改名入口**：那一行的问题先得在索引修复里解决
-/// （与右键菜单里“本体异常则置灰”同一口径）。
+/// 判据走 [`can_rename`]（与右键菜单、`F2` 同一份）：全局行与只读项目都不给入口——
+/// 旧判据只看项目只读，于是**全局行详情的名字也能点**，点下去必然失败。
 pub(crate) fn name_link(detail: &ArchiveDetail, actions: Option<&DetailActions>, foreground: Hsla) -> Div {
     let base = div()
         .min_w_0()
@@ -103,7 +105,7 @@ pub(crate) fn name_link(detail: &ArchiveDetail, actions: Option<&DetailActions>,
         .font_weight(FontWeight::MEDIUM)
         .text_ellipsis()
         .text_color(foreground);
-    let editable = actions.is_some_and(|a| !a.read_only) && detail.status != ArchiveStatus::Missing;
+    let editable = actions.is_some_and(|a| can_rename(&detail.action_context(a.read_only, 1)));
     let Some(actions) = actions.filter(|_| editable) else {
         return base.child(detail.name.clone());
     };
@@ -133,7 +135,7 @@ pub(crate) fn alias_line(
     } else {
         alias.to_string()
     };
-    let editable = actions.is_some_and(|a| !a.read_only);
+    let editable = actions.is_some_and(|a| can_rename(&detail.action_context(a.read_only, 1)));
     let Some(actions) = actions.filter(|_| editable) else {
         return div().text_xs().text_color(muted).child(label);
     };

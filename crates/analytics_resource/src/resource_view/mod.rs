@@ -34,13 +34,17 @@ pub(crate) use gpui_kit::*;
 pub(crate) use crate::detail_view::ArchiveDetail;
 pub(crate) use crate::dnd::{self, GroupDrop};
 pub(crate) use crate::filter::{self, ResourcesFilter, SortField, SortOrder, VisibleItem};
-pub(crate) use crate::model::{ArchiveKind, ArchiveUndo, DeleteTarget, TagTarget};
+pub(crate) use crate::model::{
+    ActionContext, ArchiveKind, ArchiveStatus, ArchiveUndo, DeleteTarget, RowScope,
+    TagTarget, can_checkout, can_delete_row, can_distribute, can_edit_tags, can_move_to_group,
+    can_open, can_promote, can_rename,
+};
 
 // ---- P1 拆分：视图模型/行级纯函数 -> row_meta；列表委托 -> list_delegate；区域渲染 -> panel_render ----
 mod row_meta;
 pub use row_meta::{
     ArchiveCounts, ArchiveRow, BadgeTone, DEFAULT_GROUP_MARKER, GroupOption, InstanceFilter,
-    ResourcesSnapshot, RowClick, TagOption, badge_tone, can_rename, can_view_stats,
+    ResourcesSnapshot, RowClick, TagOption, badge_tone, can_view_stats,
     classify_row_click, default_group_entry_label, row_tail, strength_badge, tag_entry_label,
     tag_targets,
 };

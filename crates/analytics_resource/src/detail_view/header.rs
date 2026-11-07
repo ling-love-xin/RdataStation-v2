@@ -54,8 +54,8 @@ pub(super) fn render_header(
     );
     if let Some(alias) = detail.alias.as_deref() {
         header = header.child(alias_line(detail, actions, alias, muted));
-    } else if actions.is_some_and(|a| !a.read_only) {
-        // 没别名时给一个轻量入口（只读项目不给：点了也写不进去）。
+    } else if actions.is_some_and(|a| can_rename(&detail.action_context(a.read_only, 1))) {
+        // 没别名时给一个轻量入口（不可改时不给：点了也写不进去）。判据与显示名同一份。
         header = header.child(alias_line(detail, actions, "", muted));
     }
     if detail.status == ArchiveStatus::Missing {

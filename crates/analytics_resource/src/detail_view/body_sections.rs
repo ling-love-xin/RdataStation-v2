@@ -163,9 +163,11 @@ pub(super) fn render_body_sections(
         }
         // 组织区的「移动…」（原型 §3.1 的分组选择）：与行右键的「移动到分组 ›」同一套宿主动作，
         // 只是入口在详情面板。未分组 / 当前分组置灰（点了也是白点）；末尾留「新建分组…」。
-        // 只读项目下不给（写类动作一律禁用，与右键同一判据）；全局行没有项目分组归属。
-        if is_org_section && detail.scope != RowScope::Global {
-            if let Some(actions) = actions.filter(|actions| !actions.read_only) {
+        // 判据走 [`crate::model::can_move_to_group`]（与右键菜单、拖拽同一份）。
+        if is_org_section {
+            if let Some(actions) = actions.filter(|actions| {
+                crate::model::can_move_to_group(&detail.action_context(actions.read_only, 1))
+            }) {
                 section = section.child(render_move_to_group(detail, actions));
             }
         }
