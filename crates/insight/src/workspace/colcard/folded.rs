@@ -1,5 +1,5 @@
 //! 折叠行（YData 单行版式，2026-11-06 自 colcard/mod.rs 抽出）：
-//! 名称 + 类型徽标 + 缺失/唯一 + **统计块** + 探索价值 + 检查器未命中 + 右端迷你图。
+//! 名称 + 类型徽标 + 缺失/唯一 + **统计块** + 探索价值 + 检查器未命中。
 //!
 //! 统计块按类型分派（numeric 均值+范围 / text Top 值 / datetime 范围 / boolean
 //! 真占比）——YData 折叠头一眼读全的关键；检查器未命中数直接亮在折叠行
@@ -17,7 +17,6 @@ impl InsightWorkspacePanel {
         checker: &[ColumnChecker],
         entity: &Entity<Self>,
         theme: &Theme,
-        is_full: bool,
         open: bool,
         explore_badge: Option<Tag>,
     ) -> Div {

@@ -33,7 +33,6 @@ impl InsightWorkspacePanel {
         entity: &Entity<Self>,
         theme: &Theme,
         temp_table: Option<String>,
-        is_full: bool,
     ) -> impl IntoElement {
         let checker = column_checkers(profile, col);
         let explore = col_explore_score(col, &checker);
@@ -57,7 +56,7 @@ impl InsightWorkspacePanel {
             None
         };
         let folded =
-            self.render_card_folded_row(col, &checker, entity, theme, is_full, open, explore_badge);
+            self.render_card_folded_row(col, &checker, entity, theme, open, explore_badge);
         let body = self.render_col_card_body(col, &checker, zone, entity, theme, temp_table);
         Collapsible::new()
             .motion_id(SharedString::from(format!(

@@ -118,7 +118,7 @@ impl MockDetailView {
                 .flex_none()
                 .max_w(rems(12.))
                 .px_1()
-                .rounded(px(3.))
+                .rounded(ui::CHIP_RADIUS)
                 .bg(theme.colors.background)
                 .border_1()
                 .border_color(theme.colors.border)
@@ -230,7 +230,7 @@ impl MockDetailView {
 
             // 列行：平时透明（整个区域无背景色），hover / focus 时整行 list_hover 底色反馈。
             // 此前每行都是 card（muted 底 + border），整个区域像一叠小卡片，太重。
-            let mut row = div()
+            let row = div()
                 .id(ElementId::Name(SharedString::from(format!(
                     "mock-field-{id}"
                 ))))
@@ -244,7 +244,7 @@ impl MockDetailView {
                 .bg(if active {
                     theme.colors.list_hover
                 } else {
-                    gpui::Hsla::transparent_black()
+                    transparent_black()
                 })
                 // 卡片本身仍可 Tab 到：操作虽已常驻，键盘用户要靠焦点知道停在哪一列
                 .track_focus(&card_handle)

@@ -15,7 +15,7 @@ pub(crate) fn render_create(
     };
     let theme = theme.clone();
     let name_state = draft.name_input.clone();
-    let mut body = div().v_flex().gap_2().w_full().h(px(420.));
+    let mut body = div().v_flex().gap_2().w_full().h(ui::GENERATOR_BODY_HEIGHT);
     body = body.child(form_line(&theme, "生成器名", &name_state));
     // 类型行：锁定 → 只读文本；未锁定 → Select（用户定稿：字段名「产出类型」）
     body = match &draft.locked_type {
@@ -35,8 +35,8 @@ pub(crate) fn render_create(
                     &theme,
                     "产出类型",
                     Select::new(type_state)
-                        .menu_width(px(260.))
-                        .menu_max_h(px(220.))
+                        .menu_width(ui::GENERATOR_MENU_WIDTH)
+                        .menu_max_h(ui::GENERATOR_MENU_MAX_HEIGHT)
                         .placeholder("选择产出类型…")
                         .accessibility_label("产出类型"),
                 ))
@@ -63,8 +63,8 @@ pub(crate) fn render_create(
                     &theme,
                     "业务组",
                     Select::new(category_state)
-                        .menu_width(px(260.))
-                        .menu_max_h(px(220.))
+                        .menu_width(ui::GENERATOR_MENU_WIDTH)
+                        .menu_max_h(ui::GENERATOR_MENU_MAX_HEIGHT)
                         .placeholder("选择业务组（可不选）")
                         .accessibility_label("业务组"),
                 ))
@@ -103,8 +103,8 @@ pub(crate) fn render_create(
             &theme,
             "基础生成器",
             Select::new(&draft.base_state)
-                .menu_width(px(260.))
-                .menu_max_h(px(220.))
+                .menu_width(ui::GENERATOR_MENU_WIDTH)
+                .menu_max_h(ui::GENERATOR_MENU_MAX_HEIGHT)
                 .placeholder("选择基础生成器…")
                 .accessibility_label("基础生成器"),
         )),

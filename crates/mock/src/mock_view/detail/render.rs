@@ -231,8 +231,8 @@ impl Render for MockDetailView {
                 div()
                     .flex_none()
                     .px_1()
-                    .py(px(2.))
-                    .rounded(px(3.))
+                    .py(ui::ROW_CARD_PY)
+                    .rounded(ui::CHIP_RADIUS)
                     .bg(theme.colors.popover)
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
@@ -510,10 +510,10 @@ impl Render for MockDetailView {
             )
             .child(
                 resizable_panel()
-                    .size_range(ui::DETAIL_COLUMNS_MIN_HEIGHT..px(4000.))
+                    .size_range(ui::DETAIL_COLUMNS_MIN_HEIGHT..ui::DETAIL_COLUMNS_MAX_HEIGHT)
                     // basis 0：不按内容高度撑开（面板默认 basis = auto，列一多会把预览
                     // 段推到视口外），高度完全由 flex 分配——清单比预览更需要高度
-                    .flex_basis(px(0.))
+                    .flex_basis(ui::FLEX_BASIS_ZERO)
                     .child(
                         div()
                             .size_full()

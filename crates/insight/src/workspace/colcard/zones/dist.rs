@@ -13,46 +13,6 @@ impl super::super::super::InsightWorkspacePanel {
         body
     }
 
-    /// 折叠态迷你图（按 scope 与类型分派；`None` = 缺席，调用方给原因文案）。
-    pub(crate) fn render_col_mini_vis(
-        &self,
-        col: &TableColumnView,
-        theme: &Theme,
-        is_full: bool,
-    ) -> Option<Div> {
-        // 取样档：迷你统计（C7 并入取样链路，查询级过滤现算回填）
-        if !is_full {
-            return match col.mini_stats.as_ref()? {
-                crate::model::ColumnMiniStats::Numeric(bins) => {
-                    Some(numeric::mini_histogram(theme, bins))
-                }
-                crate::model::ColumnMiniStats::Frequencies(freqs) => {
-                    text::mini_freq_rows(&col.name, "fold", freqs, theme)
-                }
-                crate::model::ColumnMiniStats::Boolean { true_ratio } => {
-                    Some(boolean::mini_ratio(theme, *true_ratio))
-                }
-            };
-        }
-        // 全量档：评估产物（评估全表逐列回填）
-        match &col.stats_detail {
-            Some(crate::model::types::ColumnStatsDetail::Numeric(_)) => {
-                let bins = col.histogram.as_ref()?;
-                Some(numeric::mini_histogram(theme, bins))
-            }
-            Some(crate::model::types::ColumnStatsDetail::Text(t)) => {
-                text::mini_freq_rows(&col.name, "fold", &t.top_values, theme)
-            }
-            Some(crate::model::types::ColumnStatsDetail::DateTime(d)) => {
-                datetime::mini_freq_rows(&col.name, "fold", &d.monthly_distribution, theme)
-            }
-            Some(crate::model::types::ColumnStatsDetail::Boolean(b)) => {
-                Some(boolean::mini_ratio(theme, b.true_ratio))
-            }
-            _ => None,
-        }
-    }
-
     /// 类型分派：分布纯图。
     pub(crate) fn type_dist_visual(&self, col: &TableColumnView, theme: &Theme) -> Div {
         if col.stats_detail.is_none() {

@@ -65,9 +65,6 @@ impl super::InsightWorkspacePanel {
         theme: &Theme,
     ) -> Div {
         let colors = theme.colors;
-        // 迷你图数据源按口径分流（Q2 / C7）：全量档读评估明细（stats_detail /
-        // histogram），取样档读查询级过滤现算的迷你统计（mini_stats）——两档互不覆盖
-        let is_full = self.view.read(cx).scope() == crate::insight_view::InsightScope::Full;
         let columns = &profile.columns;
         // 显式勾选为空 = 全选（避免与列集同步的簿记；200+ 列默认全看）
         let selected: Vec<&TableColumnView> = columns
@@ -88,8 +85,8 @@ impl super::InsightWorkspacePanel {
                 .map(|t| t.to_string())
         });
         // 列卡**一列一行**（2026-11-06 用户拍板，对齐 YData）：每张卡占满整行——
-        // 折叠行（folded.rs）的统计块 + 右端 240px 迷你图就是按全宽设计的，
-        // 半宽格子放不下；双列网格（原型 .col-grid）废弃。
+        // 折叠行（folded.rs）的统计块按全宽设计，半宽格子放不下；
+        // 双列网格（原型 .col-grid）废弃。
         // 渐进渲染（建议 7 的低风险缓解）：超过上限默认只渲染前 CAP 张，
         // 尾部给「显示全部」——锚点跳转 / 折叠态与全量渲染完全一致
         let capped = !*self.col_show_all.borrow() && selected.len() > ui::INSIGHT_WS_COL_RENDER_CAP;
@@ -123,7 +120,6 @@ impl super::InsightWorkspacePanel {
                             entity,
                             theme,
                             temp_table.clone(),
-                            is_full,
                         )),
                 ),
             );

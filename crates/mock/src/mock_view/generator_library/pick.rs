@@ -116,7 +116,7 @@ pub(crate) fn render_browse_pane(
                             .v_flex()
                             .gap_1()
                             .w_full()
-                            .pl(px(20.))
+                            .pl(ui::GENERATOR_PICK_INDENT)
                             .children(item_rows),
                     );
                 }
@@ -204,7 +204,7 @@ pub(crate) fn render_browse_pane(
                             .v_flex()
                             .gap_1()
                             .w_full()
-                            .pl(px(20.))
+                            .pl(ui::GENERATOR_PICK_INDENT)
                             .children(item_rows),
                     );
                 }

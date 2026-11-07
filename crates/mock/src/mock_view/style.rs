@@ -36,7 +36,6 @@
 // 继承父模块（mock_view）的全部 use 绑定
 use super::*;
 
-use gpui_kit::base::motion::{Transition, transition};
 use gpui_kit::component::Theme;
 use gpui_kit::{Hsla, px};
 use std::time::Duration;
@@ -46,13 +45,6 @@ use std::time::Duration;
 /// 此前有的 300ms 有的 500ms：鼠标扫过一排按钮，有的立刻弹、有的慢半拍——
 /// 同一个面板里两种手感，看着像两个应用拼起来的。
 pub const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
-
-/// 卡片悬停 / 聚焦的描边过渡时长（120ms）。
-///
-/// 组件的 `.hover()` 是**即时切换**（无过渡）：卡片在面板里排成一列时，鼠标扫过去
-/// 是一连串硬切，加上右侧操作同时冒出来，整排卡片跟着抖。给 120ms 之后是
-/// 「跟着鼠标走」的连续感；再长就会在快速扫过一排卡片时拖出一串尾巴。
-pub const CARD_BORDER_TRANSITION: Duration = Duration::from_millis(120);
 
 // ===== 表面（层级）=====
 
@@ -105,38 +97,6 @@ pub fn card(theme: &Theme) -> Div {
 pub fn card_interactive(theme: &Theme) -> Div {
     let hover_border = theme.colors.ring;
     card(theme).hover(move |s| s.border_color(hover_border))
-}
-
-/// 卡片描边色（悬停 / 聚焦时从 `border` 过渡到 `ring`）。
-///
-/// 用 [`transition`] 而不是 `card_interactive` 的 CSS `.hover()`：后者是即时切换，
-/// 而这里要的是**连续**变化。「悬停」是视图状态（`hovered_column` / 焦点句柄），
-/// 不是 CSS 伪类——所以能拿到目标值、交给 `transition` 插值。
-///
-/// `id` 必须每张卡唯一（`transition` 用 keyed state 记过渡起点，撞 id 会让两张卡
-/// 共用一条时间线，鼠标从一张移到另一张时颜色从错的值开始变）。
-///
-/// `transition` 内部已按 `cx.reduce_motion()` 走零时长分支——系统开了「减少动效」
-/// 时自动退回即时切换，这里不用再判一次。
-pub fn card_border(
-    theme: &Theme,
-    active: bool,
-    id: impl Into<gpui_kit::base::motion::TransitionId>,
-    window: &mut Window,
-    cx: &mut App,
-) -> Hsla {
-    let target = if active {
-        theme.colors.ring
-    } else {
-        theme.colors.border
-    };
-    transition(
-        id,
-        target,
-        Transition::new(CARD_BORDER_TRANSITION),
-        window,
-        cx,
-    )
 }
 
 /// 清单行卡片（结果表 / 场景表 / 表配置那一行）。

@@ -146,3 +146,30 @@ pub const STATUS_BAR_BAR_WIDTH: Pixels = px(64.);
 pub const CURRENT_BAR_WIDTH: Pixels = px(3.);
 /// 标识条上下内缩（2px）：卡片有圆角，条贴满上下会露出直角。
 pub const CURRENT_BAR_INSET: Pixels = px(2.);
+
+// ===== 拆分补齐的形态尺寸 =====
+//
+// 以下常量原先作为裸 `px(N.)` 手写在 `detail.rs` / `panel::render.rs` /
+// `generator_library.rs` 单文件内部；拆成目录后按契约提回本文件单一来源
+// （`ui_guard` 的 `no_new_hardcoded_color_or_pixel` 守卫要求视图层不出现裸 px）。
+
+/// chip / 列名条圆角（3px；与 `style::chip` 同档）
+pub const CHIP_RADIUS: Pixels = px(3.);
+/// 清单行上下的内距（2px）
+pub const ROW_CARD_PY: Pixels = px(2.);
+/// 列区可拖最大高度（4000px：`resizable_panel` 的 size_range 只收 Pixels）
+pub const DETAIL_COLUMNS_MAX_HEIGHT: Pixels = px(4000.);
+/// 弹性零基准（`flex_basis(0)` / `size_range(.., 0)` 的零边）
+pub const FLEX_BASIS_ZERO: Pixels = px(0.);
+/// 自定义生成器对话框表单主体高度（420px）
+pub const GENERATOR_BODY_HEIGHT: Pixels = px(420.);
+/// 生成器下拉菜单宽度（260px）
+pub const GENERATOR_MENU_WIDTH: Pixels = px(260.);
+/// 生成器下拉菜单最大高度（220px）
+pub const GENERATOR_MENU_MAX_HEIGHT: Pixels = px(220.);
+/// 生成器列表项内缩（20px）
+pub const GENERATOR_PICK_INDENT: Pixels = px(20.);
+/// 列编辑对话框列清单宽度下限（220px，与 `column_list_px.clamp` 同一处）
+pub const COLUMN_LIST_MIN: f32 = 220.;
+/// 列编辑对话框列清单宽度上限（520px）
+pub const COLUMN_LIST_MAX: f32 = 520.;

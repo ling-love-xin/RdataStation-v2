@@ -729,8 +729,10 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(include_str!("../../migrations/global/001_init.sql"))
             .unwrap();
-        insert_legacy_row(&conn, "uuid-old", "1.0.0", "2026-10-01T00:00:00Z");
-        insert_legacy_row(&conn, "uuid-new", "1.1.0", "2026-11-01T00:00:00Z");
+        insert_legacy_row(&conn, "uuid-old", "1.0.0", "2026-10-01T00:00:00Z")
+            .expect("构造历史重复行（旧）");
+        insert_legacy_row(&conn, "uuid-new", "1.1.0", "2026-11-01T00:00:00Z")
+            .expect("构造历史重复行（新）");
 
         conn.execute_batch(include_str!(
             "../../migrations/global/028_plugin_code_unique.sql"

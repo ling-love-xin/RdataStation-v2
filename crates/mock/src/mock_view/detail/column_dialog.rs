@@ -21,7 +21,7 @@ impl MockDetailView {
 
         let null_initial = format!("{}", (column.def.nullable_ratio * 100.0).round() as i64);
         // 第三行左栏宽度沿用上次拖拽的结果（面板字段，仍受 220–520 约束）
-        let list_width = px(self.panel.read(cx).column_list_px.clamp(220., 520.));
+        let list_width = px(self.panel.read(cx).column_list_px.clamp(ui::COLUMN_LIST_MIN, ui::COLUMN_LIST_MAX));
         let null_input = cx.new(|cx| InputState::new(window, cx).placeholder("0~100"));
         null_input.update(cx, |s, cx| s.set_value(null_initial.clone(), window, cx));
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("列名"));
@@ -553,7 +553,7 @@ impl MockDetailView {
                             .child(
                                 resizable_panel()
                                     .size(list_width)
-                                    .size_range(px(220.)..px(520.))
+                                    .size_range(px(ui::COLUMN_LIST_MIN)..px(ui::COLUMN_LIST_MAX))
                                     .child(
                                         div()
                                             .size_full()
@@ -570,7 +570,7 @@ impl MockDetailView {
                                     ),
                             )
                             .child(
-                                resizable_panel().flex_basis(px(0.)).child(
+                                resizable_panel().flex_basis(ui::FLEX_BASIS_ZERO).child(
                                     div()
                                         .size_full()
                                         .min_h_0()
