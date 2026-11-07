@@ -197,11 +197,11 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 
 | 优先级 | 项 | 现状 / 缺口 | 状态 |
 | --- | --- | --- | --- |
-| 高（阻塞） | **gutter 书签入口 4 项**：① 已标记行常显 📌/✎ ② hover 淡色 + 单击切换 ③ Shift+单击弹说明 ④ 折叠箭头旁 ✎ 角标 | **内核无定制口**：`vendor/gpui-base/src/input/base/element.rs` 行号 paint 段与 `paint_fold_icons` 无 marker 注入；`state.rs:12480 set_line_number` 只有行号开关；`input/editor/decorations.rs` 只有 `RangeDecoration`（Fill/Frame）/ `TextDecoration`，无 gutter 图标能力。实现需改 vendor：`state.rs` 加 `gutter_markers` + setter、prepaint 布局 marker 位置、`element.rs` paint + hitbox + 交互 | 待授权改 vendor |
+| 高（阻塞） | **gutter 书签入口 4 项**：① 已标记行常显书签轮廓 / 带横线书签 ② hover 淡色 + 单击切换 ③ Shift+单击弹说明 ④ 折叠箭头旁实心笔形角标 | **已按授权改 vendor 落地（2026-11-08）**：内核 `vendor/gpui-base/src/input/base/state.rs` 新增 `GutterMarkerKind{Bookmark,BookmarkNote,FoldNote}` / `GutterMarker{line,kind}` / `set_gutter_markers` / `gutter_markers` 与上报事件 `InputEvent::GutterMarkerClick{line,shift}`（切换/弹框语义留在应用层）；`element.rs` 新增 `GutterMarkerLayout` + `layout_gutter_markers` + `paint_gutter_markers`（marker 列 18px / 图标 13px / 折叠角标 9px；`layout_line_numbers` 仅在 markers 非空时留宽，未用书签的编辑器像素不变；hover 已标记 0.5、未标记 0.3；点击 `cx.stop_propagation()` 后上报）。editor 侧：`view/host/bookmarks.rs` 的 `push_gutter_markers`（1 起→0 起，判据 `label == 行号`，有说明附带 `FoldNote`）+ `on_gutter_marker_click`（Shift → 说明框，否则切换）；`view/host/mod.rs` 订阅分派。测试：`crates/editor/src/view/tests/bookmarks.rs` 2 例（标记投影、单击/Shift 分派） | ✅ 已实现，待人工验收像素与 hover |
 | 中 | 书签行号漂移不校正 | `view/host/bookmarks.rs:61`（「行号漂移暂不校正」）：编辑器插入/删除行后 sidecar 行号指向漂移 | 待排期 |
 | 中 | 标签方案 B / C | 现只有 A「说明即标签」（`#tag` 约定，schema 与 sidecar 零变更）；B = 结构化 `tags: Vec<String>`（需 schema + sidecar 迁移）、C = 全局 Tag System（远期） | 待排期 |
 | 低 | 行内悬停信息 + 设置开关 | 用户已定口径「跳转后鼠标位于当前行时显示信息，设置可关闭」——无实现痕迹（editor 源码无相关代码） | 待排期 |
-| 低 | 书签交互无自动化测试 | headless 下对话框按钮点击分发不可靠（`simulate_click` 单独跑能中、全套跑中不了），只断言 `debug_bounds`；双击 / 编辑 / 删除靠人工验收 | 已知限制 |
+| 低 | 书签交互无自动化测试 | headless 下对话框按钮点击分发不可靠（`simulate_click` 单独跑能中、全套跑中不了），只断言 `debug_bounds`；双击 / 编辑 / 删除靠人工验收；gutter 的 hover 淡色与图标像素亦无自动断言 | 已知限制 |
 
 ## 十三、SQL 三执行通道（2026-11-08 核证）
 

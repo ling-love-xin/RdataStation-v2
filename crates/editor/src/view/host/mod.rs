@@ -629,6 +629,11 @@ impl EditorHostPanel {
             &editor,
             window,
             |this, state, event: &InputEvent, window, cx| {
+                // 【书签】gutter 书签列单击：内核只给行号与 Shift，语义在这里定
+                if let InputEvent::GutterMarkerClick { line, shift } = event {
+                    this.on_gutter_marker_click(*line, *shift, window, cx);
+                    return;
+                }
                 if matches!(event, InputEvent::Change) {
                     // 【T2c-3 收尾】行编辑模式强制单光标（列编辑 = 多光标）：文本变更时
                     // 把多光标收拢到活动光标。订阅闭包里的 `state` 是内核实体的引用，

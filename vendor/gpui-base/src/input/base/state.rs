@@ -134,6 +134,38 @@ pub enum InputEvent {
     PressEnter { secondary: bool, shift: bool },
     Focus,
     Blur,
+    /// 行号栏（gutter）上的标记被单击。
+    ///
+    /// `line` 是缓冲区行号（0 基），`shift` 表示点击时按住了 Shift。内核不解释
+    /// 语义：切换书签、打开说明弹窗这类决定留给应用（订阅本事件后自行判断）。
+    GutterMarkerClick { line: usize, shift: bool },
+}
+
+/// 行号栏（gutter）上绘制的标记类型。
+///
+/// 内核只按类型选字形与位置，不关心它代表什么业务：应用经
+/// [`InputBaseState::set_gutter_markers`] 投影，点击经
+/// [`InputEvent::GutterMarkerClick`] 回到应用。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum GutterMarkerKind {
+    /// 无说明的书签：书签字形，常显。
+    Bookmark,
+    /// 有说明的书签：书签字形（带内容横线），常显。
+    BookmarkNote,
+    /// 折叠说明：仅当该行是折叠候选时，在折叠箭头旁画笔形角标。
+    FoldNote,
+}
+
+/// 一条 gutter 标记：某一行要画的标记类型。
+///
+/// 同一行可以有多条（既是有说明的书签、又位于折叠首行），
+/// [`InputBaseState::set_gutter_markers`] 按 `(line, kind)` 排序去重。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct GutterMarker {
+    /// 缓冲区行号（0 基）。
+    pub line: usize,
+    /// 该行要画的标记。
+    pub kind: GutterMarkerKind,
 }
 
 /// 一次文本编辑在行维度的增量（0 基）。
@@ -541,6 +573,10 @@ pub struct InputBaseState<M: InputModeKind> {
     /// is rebuilt at the top of every render, which is what keeps it current
     /// when the palette changes after the state was built.
     pub(super) editor_style: InputEditorStyle,
+    /// 行号栏（gutter）标记：书签 / 折叠说明，按 `(line, kind)` 升序。
+    ///
+    /// 内核只负责画与点击上报；语义由应用决定（见 [`InputEvent::GutterMarkerClick`]）。
+    pub(super) gutter_markers: Vec<GutterMarker>,
     /// What a consumer projected, kept verbatim so that resolution never
     /// consumes its own output: resolving in place would fill the unset
     /// colours once and then never see them as unset again, which is the same
@@ -1031,6 +1067,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             mask_pattern: MaskPattern::default(),
             mask_pattern_set: false,
             editor_style: InputEditorStyle::default(),
+            gutter_markers: Vec::new(),
             projected_editor_style: InputEditorStyle::default(),
             accessibility: None,
             scrollbar_renderer: None,
@@ -12362,6 +12399,42 @@ impl InputBaseState<crate::input::TextareaMode> {
     pub fn auto_grow(mut self, min_rows: usize, max_rows: usize) -> Self {
         self.mode = LayoutMode::auto_grow(min_rows, max_rows);
         self
+    }
+}
+
+/// 行号栏（gutter）标记：书签 / 折叠说明的读写与点击上报。
+impl<M: InputModeKind> InputBaseState<M> {
+    /// 替换行号栏（gutter）标记。
+    ///
+    /// 标记按 `(line, kind)` 排序去重后保存；内容不变时不重绘。空列表表示不画，
+    /// 行号栏也不为标记留宽——未用书签的编辑器与之前逐像素相同。
+    ///
+    /// 同一行可以给多条：`Bookmark` / `BookmarkNote` 画在行号右侧的书签列，
+    /// `FoldNote` 只有在该行是折叠候选时才会画到折叠箭头旁（判据在内核）。
+    pub fn set_gutter_markers(&mut self, markers: Vec<GutterMarker>, cx: &mut Context<Self>) {
+        let mut markers = markers;
+        markers.sort();
+        markers.dedup();
+        if self.gutter_markers == markers {
+            return;
+        }
+        self.gutter_markers = markers;
+        cx.notify();
+    }
+
+    /// 当前行号栏标记（按 `(line, kind)` 升序）。
+    pub fn gutter_markers(&self) -> &[GutterMarker] {
+        &self.gutter_markers
+    }
+
+    /// 上报一次 gutter 标记单击（元素层在命中后调用）。
+    pub(crate) fn report_gutter_marker_click(
+        &mut self,
+        line: usize,
+        shift: bool,
+        cx: &mut Context<Self>,
+    ) {
+        cx.emit(InputEvent::GutterMarkerClick { line, shift });
     }
 }
 

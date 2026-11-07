@@ -5,7 +5,7 @@
 //!
 //! 拆分纪律：只移动方法体与注释，不改动任何行为；本文件不得出现新的逻辑。
 
-use gpui_kit::base::input::Position;
+use gpui_kit::base::input::{GutterMarker, GutterMarkerKind, Position};
 use gpui_kit::component::input::{EditorState, RangeDecoration, RangeDecorationStyle};
 // #48 编辑器常规设置（行号开关即时 / 新文档默认缩进·换行·编码）：settings 不依赖 editor，方向合法
 
@@ -88,6 +88,38 @@ impl EditorHostPanel {
         if let Some(collection) = &self.bookmark_decorations {
             collection.set(decorations, cx);
         }
+        self.push_gutter_markers(cx);
+    }
+
+    /// 【书签】把书签投影成内核 gutter 标记：书签字形 + 折叠说明角标。
+    ///
+    /// 判据与书签管理器一致（`label == 行号` = 无说明）：无说明画书签轮廓，有说明画
+    /// 带横线的书签（形状区分，不靠颜色）。有说明的行若正好是折叠候选，内核在折叠
+    /// 箭头旁再画一枚笔形角标（是否候选由内核判定，非候选只画书签不画角标）。
+    fn push_gutter_markers(&mut self, cx: &mut Context<Self>) {
+        let bookmarks = self.shared.bookmarks(&self.document);
+        let mut markers = Vec::with_capacity(bookmarks.len() * 2);
+        for b in bookmarks.iter() {
+            // 书签行号 1 起（sidecar 口径）→ 内核 0 起
+            let line = b.line.saturating_sub(1);
+            let is_note = b.label != b.line.to_string();
+            markers.push(GutterMarker {
+                line,
+                kind: if is_note {
+                    GutterMarkerKind::BookmarkNote
+                } else {
+                    GutterMarkerKind::Bookmark
+                },
+            });
+            if is_note {
+                markers.push(GutterMarker {
+                    line,
+                    kind: GutterMarkerKind::FoldNote,
+                });
+            }
+        }
+        self.editor
+            .update(cx, |state, cx| state.set_gutter_markers(markers, cx));
     }
 
     /// 【书签】当前光标所在行（1 起；编辑器内核行号 0 起）
@@ -127,6 +159,31 @@ impl EditorHostPanel {
         cx: &mut Context<Self>,
     ) {
         let line_1 = self.cursor_line_1(cx);
+        let mut bookmarks = self.shared.bookmarks(&self.document);
+        bookmark::toggle(&mut bookmarks, line_1);
+        bookmark::normalize(&mut bookmarks);
+        self.shared.set_bookmarks(&self.document, bookmarks);
+        self.refresh_bookmark_decorations(cx);
+        self.sync_bookmarks(cx);
+        cx.notify();
+    }
+
+    /// 【书签】gutter 书签列单击（内核上报的行号 0 起）。
+    ///
+    /// - 无 Shift：切换该行书签（有则删、无则加，与 `Ctrl+Shift+B` 同一语义）；
+    /// - Shift：直接给该行弹说明框（不切换，只编辑说明）。
+    pub(crate) fn on_gutter_marker_click(
+        &mut self,
+        line: usize,
+        shift: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let line_1 = line + 1;
+        if shift {
+            self.open_bookmark_note_for_line(line_1, window, cx);
+            return;
+        }
         let mut bookmarks = self.shared.bookmarks(&self.document);
         bookmark::toggle(&mut bookmarks, line_1);
         bookmark::normalize(&mut bookmarks);
@@ -237,6 +294,18 @@ impl EditorHostPanel {
         cx: &mut Context<Self>,
     ) {
         let line_1 = self.cursor_line_1(cx);
+        self.open_bookmark_note_for_line(line_1, window, cx);
+    }
+
+    /// 【书签】给指定行（1 起）弹说明输入框（预填现有说明，没有则填行号）。
+    ///
+    /// 右键「添加书签/说明…」与 gutter Shift+单击共用这一条路径。
+    pub(crate) fn open_bookmark_note_for_line(
+        &mut self,
+        line_1: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let initial = self
             .shared
             .bookmarks(&self.document)

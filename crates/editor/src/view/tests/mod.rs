@@ -96,6 +96,7 @@ fn shared_with_document(path: &str, content: &str) -> (EditorShared, DocumentId)
 // 辅助与假执行器集中在本文件（mod.rs），子模块经 `use super::` 显式引用。
 // ────────────────────────────────────────────────────────────────────────
 mod analysis;
+mod bookmarks;
 mod channels;
 mod core;
 mod dialogs;
