@@ -219,8 +219,22 @@ fn every_view_module_is_registered_in_the_manifests() {
 fn view_sources() -> Vec<(String, &'static str)> {
     let mut out: Vec<(String, &'static str)> = vec![
         (
-            "insight_view.rs".to_string(),
-            include_str!("../src/insight_view.rs"),
+            // 宿主 `InsightView` 已拆分为 insight_view/ 目录（mod.rs + probe.rs +
+            // render.rs + state.rs），四个文件都在裸 px / 裸色守卫范围内，逐个登记。
+            "insight_view/mod.rs".to_string(),
+            include_str!("../src/insight_view/mod.rs"),
+        ),
+        (
+            "insight_view/probe.rs".to_string(),
+            include_str!("../src/insight_view/probe.rs"),
+        ),
+        (
+            "insight_view/render.rs".to_string(),
+            include_str!("../src/insight_view/render.rs"),
+        ),
+        (
+            "insight_view/state.rs".to_string(),
+            include_str!("../src/insight_view/state.rs"),
         ),
         (
             "schema_view.rs".to_string(),
@@ -307,18 +321,18 @@ fn view_sources() -> Vec<(String, &'static str)> {
 
     for rel in scan_view_sources() {
         let src: &'static str = match rel.as_str() {
-            "view/mod.rs" => include_str!("../src/view/mod.rs"),
-            "view/column.rs" => include_str!("../src/view/column.rs"),
-            "view/drill.rs" => include_str!("../src/view/drill.rs"),
-            "view/header.rs" => include_str!("../src/view/header.rs"),
-            "view/history.rs" => include_str!("../src/view/history.rs"),
-            "view/multi.rs" => include_str!("../src/view/multi.rs"),
-            "view/overview.rs" => include_str!("../src/view/overview.rs"),
-            "view/schema.rs" => include_str!("../src/view/schema.rs"),
-            "view/set.rs" => include_str!("../src/view/set.rs"),
-            "view/table.rs" => include_str!("../src/view/table.rs"),
+            "workspace/view/mod.rs" => include_str!("../src/workspace/view/mod.rs"),
+            "workspace/view/column.rs" => include_str!("../src/workspace/view/column.rs"),
+            "workspace/view/drill.rs" => include_str!("../src/workspace/view/drill.rs"),
+            "workspace/view/header.rs" => include_str!("../src/workspace/view/header.rs"),
+            "workspace/view/history.rs" => include_str!("../src/workspace/view/history.rs"),
+            "workspace/view/multi.rs" => include_str!("../src/workspace/view/multi.rs"),
+            "workspace/view/overview.rs" => include_str!("../src/workspace/view/overview.rs"),
+            "workspace/view/schema.rs" => include_str!("../src/workspace/view/schema.rs"),
+            "workspace/view/set.rs" => include_str!("../src/workspace/view/set.rs"),
+            "workspace/view/table.rs" => include_str!("../src/workspace/view/table.rs"),
             other => {
-                panic!("view/ 目录出现未登记的源文件：{other}（请在本函数补 include_str 分支）")
+                panic!("workspace/view/ 目录出现未登记的源文件：{other}（请在本函数补 include_str 分支）")
             }
         };
         out.push((rel, src));
@@ -327,7 +341,7 @@ fn view_sources() -> Vec<(String, &'static str)> {
     out
 }
 
-/// 递归收集 `src/view/` 下的全部 `.rs` 文件（返回相对 `src/` 的路径，`/` 分隔）。
+/// 递归收集 `src/workspace/view/` 下的全部 `.rs` 文件（返回相对 `src/` 的路径，`/` 分隔）。
 fn scan_view_sources() -> Vec<String> {
     fn walk(dir: &std::path::Path, base: &std::path::Path, out: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -346,7 +360,7 @@ fn scan_view_sources() -> Vec<String> {
 
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut out = Vec::new();
-    walk(&base.join("view"), &base, &mut out);
+    walk(&base.join("workspace/view"), &base, &mut out);
     out.sort();
     out
 }

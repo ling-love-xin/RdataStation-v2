@@ -70,12 +70,20 @@ fn the_editor_column_port_points_the_insight_panel_at_the_source(cx: &mut TestAp
     assert_eq!(shared.active_right.get(), RightPanel::Insight);
 
     cx.update(|cx| {
-        // 源列目标进入洞察走 C3 探查确认（确认前不落 `target`）——联动正确性
-        // 看中间页队列：`open_insight_source_column` 已把完整目标递进队列。
+        // 源目标**不推右栏**（843af5d1 真机双栏联动死循环的根因修复）：右栏保持空态、
+        // 不开探查确认窗、不落 target；完整目标由中间页队列承接（下面逐字段核对）。
         assert_eq!(
             view.read(cx).state(),
-            &InsightPanelState::ProbeConfirm,
-            "源列目标进入洞察应停在探查确认窗"
+            &InsightPanelState::Empty,
+            "右栏不应因源目标离开空态"
+        );
+        assert!(
+            !view.read(cx).probe_confirm_open(),
+            "右栏不该为源目标开探查确认窗"
+        );
+        assert!(
+            view.read(cx).target().is_none(),
+            "确认前右栏不落目标"
         );
         let queued = shared
             .pending_insight_target

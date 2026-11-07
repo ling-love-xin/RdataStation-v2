@@ -20,17 +20,17 @@ use std::path::{Path, PathBuf};
 const BASELINE: &[(&str, usize, usize)] = &[
     ("crates/editor/src/lsp/document_color.rs", 1, 0),
     ("crates/editor/src/support/ui.rs", 0, 2),
-    ("crates/mock/src/mock_view/generator_library.rs", 0, 9),
     ("crates/mock/src/mock_view/progress.rs", 0, 3),
     // 3 = 几何原语，都是**物理像素**、不随字号缩放，放在本文件（样式原语层）单一来源：
     // `px(0.)` 标识条左缘归零 · `px(1.)` 卡片内分隔发丝线 · `px(3.)` chip 圆角。
     // 提去 ui.rs 反而把「形态在函数内单一来源」拆散，故登记不迁。
     ("crates/mock/src/mock_view/style.rs", 0, 3),
     ("crates/mock/src/schema_map.rs", 1, 0),
-    // 12 = 10 + 进度条三件套与「当前编辑列」标识条的 4 个新 Pixels 常量
-    // （`ROW_PROGRESS_LINE_HEIGHT` / `STATUS_BAR_BAR_WIDTH` / `CURRENT_BAR_WIDTH` /
-    // `CURRENT_BAR_INSET`），另 2 处因旧 px 行被 rem 常量替代而抵消。
-    ("crates/mock/src/ui.rs", 0, 12),
+    // 26 = 原 12 + 拆分补齐的 8 个 Pixels 常量（`CHIP_RADIUS` / `ROW_CARD_PY` /
+    // `DETAIL_COLUMNS_MAX_HEIGHT` / `FLEX_BASIS_ZERO` / `GENERATOR_BODY_HEIGHT` /
+    // `GENERATOR_MENU_WIDTH` / `GENERATOR_MENU_MAX_HEIGHT` / `GENERATOR_PICK_INDENT`）。
+    // 本文件是尺寸常量单一来源，`px(N.)` 在此是**推荐写法**，不是违规。
+    ("crates/mock/src/ui.rs", 0, 26),
     ("crates/notification/src/view.rs", 0, 3),
     ("crates/result_panel/src/grid/header.rs", 0, 1),
     ("crates/result_panel/src/panel/dialog.rs", 0, 3),

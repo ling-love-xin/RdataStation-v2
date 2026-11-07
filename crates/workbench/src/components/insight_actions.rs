@@ -319,7 +319,7 @@ mod tests {
     // 与 `#[gpui_kit::test]` 展开出的裸 `#[test]` 自相残杀）。
     use gpui_kit::{AppContext as _, Subscription, TestAppContext};
 
-    use insight::{InsightEvent, InsightPanelState, InsightTarget, InsightView, SampleSource};
+    use insight::{InsightEvent, InsightTarget, InsightView, SampleSource};
 
     use super::attach;
     use crate::panels::Shared;
@@ -390,12 +390,29 @@ mod tests {
             "下钻要把右 Dock 展开到洞察"
         );
         assert_eq!(shared.active_right.get(), RightPanel::Insight);
-        // 源取样目标进入洞察走 C3 探查确认（确认前不落 `target`；D58 下钻语义：
-        // 用户先定数据量 / 列，确认后才切目标并取数）
+        // 源目标**不推右栏**（843af5d1 真机双栏联动死循环的根因修复）：右栏既不开
+        // 探查确认窗，也不落 target；完整目标改由中间页队列承接（宿主 render 的
+        // `ensure_insight_workspace_panel` 消费）。这里同时钉住两条口径。
+        assert!(
+            !panel.read_with(cx, |view, _| view.probe_confirm_open()),
+            "源目标不该给右栏开探查确认窗"
+        );
+        assert!(
+            matches!(
+                panel.read_with(cx, |view, _| view.target().cloned()),
+                Some(InsightTarget::Schema { .. })
+            ),
+            "右栏目标仍是下钻前的结构报告目标（源目标不推右栏）"
+        );
+        let queued = shared
+            .pending_insight_target
+            .borrow()
+            .clone()
+            .expect("中间页队列应已拿到下钻目标");
+        let source = queued.source().expect("下钻目标是源取样目标");
         assert_eq!(
-            panel.read_with(cx, |view, _| view.state().clone()),
-            InsightPanelState::ProbeConfirm,
-            "下钻到源取样：停在探查确认窗（确认前不落目标）"
+            source.sql, "SELECT * FROM `mall`.`order`",
+            "下钻的取样 SQL：限定名按驱动加引号"
         );
         // 限定名引号在取样 SQL 生成侧（`drilldown` 与测试同源）；来源标签空段略去
         // 由 `insight_sample_sql` 的调用方拼，这里验证引号口径本身。

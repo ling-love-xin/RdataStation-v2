@@ -465,8 +465,32 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../../mock/src/mock_view/contract.rs"),
         ),
         (
-            "mock/mock_view/detail.rs",
-            include_str!("../../mock/src/mock_view/detail.rs"),
+            "mock/mock_view/detail/column_dialog.rs",
+            include_str!("../../mock/src/mock_view/detail/column_dialog.rs"),
+        ),
+        (
+            "mock/mock_view/detail/column_edit.rs",
+            include_str!("../../mock/src/mock_view/detail/column_edit.rs"),
+        ),
+        (
+            "mock/mock_view/detail/fields.rs",
+            include_str!("../../mock/src/mock_view/detail/fields.rs"),
+        ),
+        (
+            "mock/mock_view/detail/mod.rs",
+            include_str!("../../mock/src/mock_view/detail/mod.rs"),
+        ),
+        (
+            "mock/mock_view/detail/params.rs",
+            include_str!("../../mock/src/mock_view/detail/params.rs"),
+        ),
+        (
+            "mock/mock_view/detail/preview_table.rs",
+            include_str!("../../mock/src/mock_view/detail/preview_table.rs"),
+        ),
+        (
+            "mock/mock_view/detail/render.rs",
+            include_str!("../../mock/src/mock_view/detail/render.rs"),
         ),
         (
             "mock/mock_view/generator_search.rs",
@@ -485,8 +509,52 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../../mock/src/mock_view/panel/mod.rs"),
         ),
         (
-            "mock/mock_view/panel/render.rs",
-            include_str!("../../mock/src/mock_view/panel/render.rs"),
+            "mock/mock_view/panel/render/actions.rs",
+            include_str!("../../mock/src/mock_view/panel/render/actions.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/columns.rs",
+            include_str!("../../mock/src/mock_view/panel/render/columns.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/dialogs.rs",
+            include_str!("../../mock/src/mock_view/panel/render/dialogs.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/folds.rs",
+            include_str!("../../mock/src/mock_view/panel/render/folds.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/form.rs",
+            include_str!("../../mock/src/mock_view/panel/render/form.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/header.rs",
+            include_str!("../../mock/src/mock_view/panel/render/header.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/history.rs",
+            include_str!("../../mock/src/mock_view/panel/render/history.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/mod.rs",
+            include_str!("../../mock/src/mock_view/panel/render/mod.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/sinks.rs",
+            include_str!("../../mock/src/mock_view/panel/render/sinks.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/status.rs",
+            include_str!("../../mock/src/mock_view/panel/render/status.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/table_list.rs",
+            include_str!("../../mock/src/mock_view/panel/render/table_list.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/toolbar.rs",
+            include_str!("../../mock/src/mock_view/panel/render/toolbar.rs"),
         ),
     ];
 
@@ -846,8 +914,32 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../../mock/src/mock_view/contract.rs"),
         ),
         (
-            "mock/mock_view/detail.rs",
-            include_str!("../../mock/src/mock_view/detail.rs"),
+            "mock/mock_view/detail/column_dialog.rs",
+            include_str!("../../mock/src/mock_view/detail/column_dialog.rs"),
+        ),
+        (
+            "mock/mock_view/detail/column_edit.rs",
+            include_str!("../../mock/src/mock_view/detail/column_edit.rs"),
+        ),
+        (
+            "mock/mock_view/detail/fields.rs",
+            include_str!("../../mock/src/mock_view/detail/fields.rs"),
+        ),
+        (
+            "mock/mock_view/detail/mod.rs",
+            include_str!("../../mock/src/mock_view/detail/mod.rs"),
+        ),
+        (
+            "mock/mock_view/detail/params.rs",
+            include_str!("../../mock/src/mock_view/detail/params.rs"),
+        ),
+        (
+            "mock/mock_view/detail/preview_table.rs",
+            include_str!("../../mock/src/mock_view/detail/preview_table.rs"),
+        ),
+        (
+            "mock/mock_view/detail/render.rs",
+            include_str!("../../mock/src/mock_view/detail/render.rs"),
         ),
         (
             "mock/mock_view/generator_search.rs",
@@ -866,8 +958,52 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../../mock/src/mock_view/panel/mod.rs"),
         ),
         (
-            "mock/mock_view/panel/render.rs",
-            include_str!("../../mock/src/mock_view/panel/render.rs"),
+            "mock/mock_view/panel/render/actions.rs",
+            include_str!("../../mock/src/mock_view/panel/render/actions.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/columns.rs",
+            include_str!("../../mock/src/mock_view/panel/render/columns.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/dialogs.rs",
+            include_str!("../../mock/src/mock_view/panel/render/dialogs.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/folds.rs",
+            include_str!("../../mock/src/mock_view/panel/render/folds.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/form.rs",
+            include_str!("../../mock/src/mock_view/panel/render/form.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/header.rs",
+            include_str!("../../mock/src/mock_view/panel/render/header.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/history.rs",
+            include_str!("../../mock/src/mock_view/panel/render/history.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/mod.rs",
+            include_str!("../../mock/src/mock_view/panel/render/mod.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/sinks.rs",
+            include_str!("../../mock/src/mock_view/panel/render/sinks.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/status.rs",
+            include_str!("../../mock/src/mock_view/panel/render/status.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/table_list.rs",
+            include_str!("../../mock/src/mock_view/panel/render/table_list.rs"),
+        ),
+        (
+            "mock/mock_view/panel/render/toolbar.rs",
+            include_str!("../../mock/src/mock_view/panel/render/toolbar.rs"),
         ),
     ];
 
@@ -934,12 +1070,31 @@ fn every_panel_module_is_registered_in_the_manifests() {
         "scratchpad/scratchpad_view.rs",
         "mock/mock_view/mod.rs",
         "mock/mock_view/contract.rs",
-        "mock/mock_view/detail.rs",
+        // 详情 tab 已拆分为 detail/ 目录（7 个文件），逐个点名。
+        "mock/mock_view/detail/column_dialog.rs",
+        "mock/mock_view/detail/column_edit.rs",
+        "mock/mock_view/detail/fields.rs",
+        "mock/mock_view/detail/mod.rs",
+        "mock/mock_view/detail/params.rs",
+        "mock/mock_view/detail/preview_table.rs",
+        "mock/mock_view/detail/render.rs",
         "mock/mock_view/generator_search.rs",
         "mock/mock_view/job.rs",
         "mock/mock_view/pure.rs",
         "mock/mock_view/panel/mod.rs",
-        "mock/mock_view/panel/render.rs",
+        // 面板渲染已拆分为 panel/render/ 目录（12 个文件），逐个点名。
+        "mock/mock_view/panel/render/actions.rs",
+        "mock/mock_view/panel/render/columns.rs",
+        "mock/mock_view/panel/render/dialogs.rs",
+        "mock/mock_view/panel/render/folds.rs",
+        "mock/mock_view/panel/render/form.rs",
+        "mock/mock_view/panel/render/header.rs",
+        "mock/mock_view/panel/render/history.rs",
+        "mock/mock_view/panel/render/mod.rs",
+        "mock/mock_view/panel/render/sinks.rs",
+        "mock/mock_view/panel/render/status.rs",
+        "mock/mock_view/panel/render/table_list.rs",
+        "mock/mock_view/panel/render/toolbar.rs",
     ] {
         let quoted = format!("\"{rel}\"");
         assert!(
