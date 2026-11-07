@@ -110,7 +110,7 @@ fn run_preview() {
                 let harness = cx.new(|_cx| PreviewHarness {
                     panel,
                     detail,
-                    tab_key: Some(DetailTarget::Config.key()),
+                    tab_key: Some(DetailTarget::Config(0).key()),
                 });
                 // 窗口创建后才拿得到 harness 句柄：回填空位，供「打开详情 tab」切换用
                 *host_for_window.harness.borrow_mut() = Some(harness.downgrade());
