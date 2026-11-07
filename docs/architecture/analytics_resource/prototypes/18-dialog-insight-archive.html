@@ -11,93 +11,155 @@
 <header class="phead">
   <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>18 · 洞察归档</div>
   <div class="prow">
-    <h1 class="p-title">洞察归档对话框<span class="p-sec">§12.2 · T20</span></h1>
+    <h1 class="p-title">洞察归档 · 一键入库<span class="p-sec">§12.2 · T20</span></h1>
     <span class="grow"></span>
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    画像快照 JSON → 资产库 File 档 <b>copy</b>，统一落 <code>resources/insight/</code>，名称与表名绑定。归档模式<b>固定 copy</b>，不提供 reference（快照必须先落在 <code>.RSmeta/insight-archive/</code> 再复制进来）。
-    快照带 <code>generated_at</code> → 指纹必变 → <b>每次归档都开新版本</b>（有意：审计长在版本上，靠 <code>keep_versions</code> 兜底）。
+    <b>没有对话框</b>。右栏「已洞察表集合」每行右侧有四颗 ghost xsmall 钮（对比 / 关系 / 归档 / 版本），点「归档」就是全部交互：宿主取快照 → 落 <code>.RSmeta/insight-archive/</code> → 入队归档任务 → 立刻回执「洞察：已归档「{名}」到资产库」。
+    显示名、目标位置、标签、保留策略<b>全都不用用户填</b>：名字固定拼成「洞察·{集合条目名}」，路径固定 <code>insight/{集合条目名}.json</code>，标签固定 <code>["洞察"]</code>，保留策略跟设置走。
   </p>
-  <nav class="pnav"><a href="index.html">索引</a><a href="17-dialog-conflict.html">← 上一块：升级冲突</a><a href="19-empty-states.html">下一块：空态与异常 →</a></nav>
+  <nav class="pnav"><a href="index.html">索引</a><a href="17-dialog-conflict.html">← 上一块：同名冲突</a><a href="19-empty-states.html">下一块：空态与异常 →</a></nav>
 </header>
 
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>报告视图归档<span class="desc">已落地（file 档）：显示名 / 目标位置 / 固定 copy / 标签 / 来源表 / 保留策略</span></div>
-    <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="dlg dlg-insight-archive proto-on">
-        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-grid" xlink:href="#i-grid"/></svg>洞察归档<span class="sub2">画像快照 → 资产库 File 档 copy</span><button class="x">✕</button></div>
-        <div class="dlg-body">
-          <div class="srcbar">
-            <svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg>
-            <span class="mono">insight/table_profile/orders_profile.json</span>
-            <span class="tagn">来自洞察中间页</span>
+    <div class="variant-h"><span class="no">A</span>入口：右栏集合行的「归档」钮<span class="desc">r1 = 来源徽标 + 名称（点它切目标）+ 行数；r2 = 检查器命中 + 四钮</span></div>
+    <div class="canvas pad" style="background:var(--sidebar);padding:20px">
+      <div style="width:340px;display:flex;flex-direction:column;gap:6px">
+
+        <div style="box-sizing:border-box;width:100%;min-width:0;border:1px solid var(--primary);border-radius:7px;background:var(--list-active);padding:5px;display:flex;flex-direction:column;gap:2px">
+          <div style="display:flex;align-items:center;gap:4px">
+            <span style="flex:none;width:56px;font-size:10px;padding:1px 4px;border:1px solid var(--info);border-radius:4px;color:var(--info);text-align:center">来源表</span>
+            <span style="flex:1;min-width:0;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">warehouse.orders</span>
+            <span style="flex:none;width:64px;text-align:right;font-family:var(--mono);font-size:10.5px;color:var(--muted)">12.4k 行</span>
           </div>
-          <div class="fgrid">
-            <div class="fl">显示名</div>
-            <div class="fw"><input class="inp" value="orders_profile 画像"></div>
-
-            <div class="fl">目标位置</div>
-            <div class="fw"><input class="inp ro" value="resources/insight/orders_profile 画像.json" readonly></div>
-            <div class="fhint">快照统一归档到 <code>resources/insight/</code>，名称与表名绑定。</div>
-
-            <div class="fl">归档模式</div>
-            <div class="fw"><div class="radios"><label><span class="rdot on"></span>复制（固定）</label></div></div>
-            <div class="fhint">快照在 <code>.RSmeta/insight-archive/</code> 生成后复制进 <code>resources/insight/</code>，不提供 reference。</div>
-
-            <div class="fl">标签</div>
-            <div class="fw"><div class="tags" style="margin:0">
-              <span class="tagc">洞察<span class="x">✕</span></span>
-              <span class="tagc">月报<span class="x">✕</span></span>
-              <span class="tagc add">＋ 添加标签</span>
-            </div></div>
-
-            <div class="fl">来源表</div>
-            <div class="fw"><input class="inp ro" value="warehouse.orders（binding.source_table）" readonly></div>
-
-            <div class="fl">保留历史内容</div>
-            <div class="fw"><span class="selw">跟随设置（最近 5 份）<span class="ar">▾</span></span></div>
+          <div style="display:flex;align-items:center;gap:4px">
+            <span style="font-size:10.5px;color:var(--success)">检查器 4/4</span>
+            <span style="margin-left:auto;display:flex;gap:2px">
+              <button class="btn-s" style="border:none;background:transparent;padding:1px 6px;font-size:10.5px;color:var(--muted)">对比</button>
+              <button class="btn-s" style="border:none;background:transparent;padding:1px 6px;font-size:10.5px;color:var(--muted)">关系</button>
+              <button class="btn-s" style="border:none;background:transparent;padding:1px 6px;font-size:10.5px;color:var(--fg)">归档</button>
+              <button class="btn-s" style="border:none;background:transparent;padding:1px 6px;font-size:10.5px;color:var(--muted)">版本</button>
+            </span>
           </div>
-          <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>快照带 <code>generated_at</code> 时间戳 → 指纹必变 → <b>每次归档都开新版本</b>（有意：审计长在版本上；靠 <code>keep_versions</code> 兜底）。</span></div>
         </div>
-        <div class="dlg-foot"><span>归档后回到洞察中间页 · 集合条目保留</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">归档</button></div>
+
+        <div style="box-sizing:border-box;width:100%;min-width:0;border:1px solid var(--border);border-radius:7px;background:var(--sidebar);padding:5px;display:flex;flex-direction:column;gap:2px;opacity:.85">
+          <div style="display:flex;align-items:center;gap:4px">
+            <span style="flex:none;width:56px;font-size:10px;padding:1px 4px;border:1px solid var(--warning);border-radius:4px;color:var(--warning);text-align:center">结果集</span>
+            <span style="flex:1;min-width:0;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">select * from orders where qty &gt; 10</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:4px">
+            <span style="font-size:10.5px;color:var(--muted)">未取样</span>
+            <span style="margin-left:auto;display:flex;gap:2px">
+              <button class="btn-s" style="border:none;background:transparent;padding:1px 6px;font-size:10.5px;color:var(--muted)">对比</button>
+              <button class="btn-s" style="border:none;background:transparent;padding:1px 6px;font-size:10.5px;color:var(--muted);opacity:.45;cursor:not-allowed" disabled>关系</button>
+              <button class="btn-s" style="border:none;background:transparent;padding:1px 6px;font-size:10.5px;color:var(--muted);opacity:.45;cursor:not-allowed" disabled>归档</button>
+              <button class="btn-s" style="border:none;background:transparent;padding:1px 6px;font-size:10.5px;color:var(--muted)">版本</button>
+            </span>
+          </div>
+        </div>
+
       </div>
     </div>
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">B</span>待决策的第二种视图<span class="desc">数据视图（analysis 档）尚在等拍板，先把代价摆出来</span></div>
-    <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="dlg dlg-insight-archive proto-on">
-        <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-grid" xlink:href="#i-grid"/></svg>洞察归档<span class="sub2">画像快照 → 资产库</span><button class="x">✕</button></div>
-        <div class="dlg-body">
-          <div class="srcbar">
-            <svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg>
-            <span class="mono">insight/table_profile/orders_profile.json</span>
-            <span class="tagn">来自洞察中间页</span>
-          </div>
-          <div class="fgrid">
-            <div class="fl">归档形态</div>
-            <div class="fw"><div class="radios" style="flex-direction:column;align-items:flex-start;gap:8px">
-              <label><span class="rdot on"></span>报告视图（file 档 · 已落地）</label>
-              <label style="opacity:.5"><span class="rdot"></span>数据视图（analysis 档 · 配方 + 画像结构化数据）</label>
-            </div></div>
-            <div class="fhint">数据视图打开 = 桥接结果集做二次分析，需要「配方快照可执性」——这是本期<b>做 / 不做</b>的分界点。</div>
-          </div>
-          <div class="note warn"><svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg><span>A2 两视图：报告视图（file 档）已落地；数据视图（analysis 档）<b>待决策</b>（规格 §12.2.1，本期做 / 不做）。</span></div>
+    <div class="variant-h"><span class="no">B</span>入库后的那一行与它带的字段<span class="desc">名字、路径、标签、来源表全是推导出来的，用户没有一处可改</span></div>
+    <div class="canvas pad" style="background:var(--sidebar);padding:20px">
+      <div style="width:420px;display:flex;flex-direction:column;gap:10px">
+
+        <div style="border:1px solid var(--border);border-radius:7px;background:var(--bg);padding:6px 8px;display:flex;align-items:center;gap:6px;font-size:12.5px">
+          <span style="flex:none;width:56px;font-size:10px;padding:1px 4px;border:1px solid var(--muted);border-radius:4px;color:var(--muted);text-align:center">文件</span>
+          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">洞察·warehouse.orders</span>
+          <span style="flex:none;font-family:var(--mono);font-size:10.5px;color:var(--muted)">v1</span>
         </div>
-        <div class="dlg-foot"><span>归档后回到洞察中间页 · 集合条目保留</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">归档</button></div>
+
+        <div style="display:grid;grid-template-columns:76px 1fr;gap:4px 10px;font-size:11.5px;line-height:1.7">
+          <div style="color:var(--muted)">显示名</div><div>洞察·warehouse.orders</div>
+          <div style="color:var(--muted)">位置</div><div style="font-family:var(--mono);font-size:11px">resources/insight/warehouse.orders.json</div>
+          <div style="color:var(--muted)">类型 / 模式</div><div>File · <b>复制</b>（固定，不提供引用）</div>
+          <div style="color:var(--muted)">标签</div><div>洞察<span style="color:var(--muted);font-size:10.5px">（固定一颗，不可改）</span></div>
+          <div style="color:var(--muted)">来源表</div><div style="font-family:var(--mono);font-size:11px">warehouse.orders <span style="font-family:inherit;color:var(--muted)">（binding.source_table = 集合条目名）</span></div>
+          <div style="color:var(--muted)">来源草稿</div><div style="color:var(--muted)">—（promoted_from 为空：它来自洞察，不是草稿）</div>
+          <div style="color:var(--muted)">分组 / 别名</div><div style="color:var(--muted)">—（都不填）</div>
+          <div style="color:var(--muted)">保留历史</div><div style="color:var(--muted)">跟设置走（请求里 keep_versions 传 None）</div>
+          <div style="color:var(--muted)">本体来源</div><div style="font-family:var(--mono);font-size:11px">.RSmeta/insight-archive/{名}_{YYYYMMDDHHMMSS}.json</div>
+        </div>
+
       </div>
     </div>
-    <p class="hang">数据视图一旦做，就要回答「配方快照在别的实例上还能不能跑」——<b>能跑 = 得带 schema 与函数依赖；不能跑 = 它只是元数据记录，不是可执行存档</b>。<br>另一个未做项：洞察归档<b>不写 <code>promoted_from</code></b>（它来自洞察不是草稿），与草稿→归档的链路在数据层是分开的。</p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>快照本体：只有结构，没有分布<span class="desc">json 的六个键，别把它当「画像」</span></div>
+    <div class="canvas pad" style="background:var(--sidebar);padding:20px">
+      <pre style="margin:0;width:560px;padding:10px 12px;border:1px solid var(--border);border-radius:7px;background:var(--bg);font-family:var(--mono);font-size:11px;line-height:1.6;overflow:auto">{
+  "kind": "insight_table_snapshot",
+  "table": "warehouse.orders",
+  "generated_at": "2026-11-07T18:22:41+08:00",
+  "row_count": 12403,
+  "column_count": 9,
+  "columns": [
+    { "name": "order_id", "type": "BIGINT", "nullable": false, "primary_key": true },
+    { "name": "customer", "type": "VARCHAR", "nullable": true,  "primary_key": false }
+    …
+  ]
+}</pre>
+      <p class="hang" style="margin:8px 0 0;max-width:560px">
+        这六个键是<b>全部内容</b>：列名 / 类型 / 可空 / 主键（来自 <code>DESCRIBE</code>）+ 行数 + 列数 + 时间戳。空值率、唯一值数、分布分位、检查器命中<b>一个都没进快照</b>——它们在洞察面板的临时表里，过期就没了。
+        <code>generated_at</code> 进指纹 → 同一张表两次归档的内容必然不同。
+      </p>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">D</span>第二次点「归档」会失败，而不是开 v2<span class="desc">目标路径按相对路径查重，命中就报错</span></div>
+    <div class="canvas pad" style="background:var(--sidebar);padding:20px">
+      <div style="width:560px;display:flex;flex-direction:column;gap:8px">
+
+        <div style="border:1px solid var(--border);border-radius:7px;background:var(--bg);padding:8px 10px;display:flex;gap:8px;font-size:11.5px;line-height:1.6">
+          <span style="flex:none;width:44px;color:var(--success);font-weight:600">即时</span>
+          <span>洞察：已归档「warehouse.orders」到资产库<span style="color:var(--muted)">（入队后无条件打印，还没等任务结果）</span></span>
+        </div>
+
+        <div style="border:1px solid var(--danger);border-radius:7px;background:color-mix(in srgb,var(--danger) 8%,transparent);padding:8px 10px;display:flex;gap:8px;font-size:11.5px;line-height:1.6">
+          <span style="flex:none;width:44px;color:var(--danger);font-weight:600">随后</span>
+          <span>归档失败：目标路径已被存档「洞察·warehouse.orders」（id=arp_3f9…）占用；请改名或先移除旧存档</span>
+        </div>
+
+        <p class="hang" style="margin:0">
+          失败来自 <code>ArchiveService::archive_new</code> 的 <code>find_archive_by_rel_path</code>：请求里 <code>rel_path</code> 恒为 <code>insight/{集合条目名}.json</code>、<code>existing_resource_id</code> 恒为 <code>None</code> → 第一次归档占住这个路径，第二次<b>同一张表</b>再归档就撞上「路径已占用」。
+          <b>所以「每次归档都开新版本」不成立</b>——洞察这条链路根本不产出 v2、v3，想留第二次快照只能先移除旧存档、或由人去改名。
+          真正的多版本只有在<b>走归档对话框</b>（11 页，来源是草稿 / 文件）并选「并入既有存档」时才发生。
+        </p>
+
+      </div>
+    </div>
   </section>
 
   <div class="canvas pad">
+    <p class="hang" style="margin:0 0 10px">
+      推翻的七处：① <b>没有「洞察归档」对话框</b>——旧稿 A 变体的标题、<code>sub2</code>、图标、<code>srcbar</code>、<code>fgrid</code> 六个字段、info note、footer「取消 / 归档」全部不存在；
+      ② <b>没有可编辑的显示名</b>（固定「洞察·{集合条目名}」）、<b>没有目标位置回显</b>（固定拼 <code>insight/{名}.json</code>）；
+      ③ <b>没有「归档模式」单选</b>——<code>payload_mode</code> 在代码里写死 <code>Copy</code>，界面上连一行说明都没有；
+      ④ <b>没有标签编辑器</b>——<code>tags: vec!["洞察"]</code> 写死，用户加不了第二颗；
+      ⑤ <b>没有「来源表」只读输入框</b>——它只写进 <code>binding.source_table</code>，在资产库详情里才看得到；
+      ⑥ <b>没有保留策略下拉</b>——<code>keep_versions: None</code> + 主线程读设置后随任务带入；
+      ⑦ <b>没有 B 变体那个「报告视图 / 数据视图」二选一</b>——<code>ArchiveKind::File</code> 写死，A2 数据视图本来就还没拍板，界面上更没有这个选项。
+    </p>
+    <p class="hang" style="margin:0 0 10px">
+      原型没画而实现有的：<b>前置三条拒绝</b>——未打开项目「洞察：归档需要先打开项目」、项目只读「洞察：项目为只读，不能归档」、集合里该条没 <code>temp_table</code>「洞察：该表尚未完成取样，无法归档」（同一判据也把行上的「归档 / 关系」两颗钮置灰，见 A 变体第二行）；
+      <b>快照导出要抢 DuckDB 锁</b>，所以放后台线程，入队与回执回主线程；<b>本体先落 <code>.RSmeta/insight-archive/</code></b> 再复制进 <code>resources/</code>（谁都不删 .RSmeta 那份，于是每次归档在项目目录里多留一个带时间戳的 JSON）。
+    </p>
+    <p class="hang" style="margin:0 0 10px">
+      欠债三处：① <b>回执错位</b>——洞察侧入队后立刻说「已归档」，任务失败（路径占用 / 服务打不开）只会得到 <code>OpOutcome::Failed{action:"归档"}</code>，由资产库面板那侧消费；洞察面板不一定看得到。② <b>路径裸拼</b>——<code>insight/{集合条目名}.json</code> 没有 slug 化，条目名里带 <code>/</code> 或反斜杠会拼出子目录 / 非法路径；<code>.RSmeta</code> 那份文件名同理（<code>{名}_{时间戳}.json</code>）。③ <b>「画像」名不副实</b>——快照只有结构元数据；要让归档后的存档承载洞察结论，得先决定把哪些统计写进 JSON（这与 A2「数据视图要不要做」是同一个分界点）。
+    </p>
     <p class="hang" style="margin:0">
-      本块样式与 11 页共用：<code>.dlg.dlg-insight-archive</code> / <code>.srcbar</code> / <code>.fgrid</code> / <code>.tags</code> / <code>.selw</code> / <code>.note.warn</code>。
-      落地代码：<code>crates/analytics_resource/src/dialogs/archive.rs</code>（复用归档对话框，洞察来源只换字段与模式）。
+      落地代码：入口在 <code>crates/insight/src/view/set.rs</code>（<code>row_op_button</code> 四颗，归档 id <code>insight-set-archive-{key}</code>、<code>.disabled(entry.temp_table.is_none())</code>）；事件 <code>InsightEvent::ArchiveRequested { key }</code> → 宿主 <code>crates/workbench/src/components/insight_actions.rs::archive_from_insight</code>；
+      快照 <code>crates/insight/src/service/sampling.rs::export_table_snapshot</code>；入库 <code>crates/analytics_resource/src/service/archive.rs::archive_new</code>（+ <code>jobs/archive/mod.rs::enqueue_archive</code>）。本块整页不再使用 <code>.dlg</code> / <code>.fgrid</code> / <code>.srcbar</code> / <code>.tags</code> / <code>.selw</code>。
     </p>
   </div>
 
