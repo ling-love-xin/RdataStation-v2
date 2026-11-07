@@ -254,7 +254,10 @@ async fn g004_distribute_table_to_project() {
             )
             .expect("query project row");
     assert_eq!(scope, "project");
-    assert!(promoted_from.starts_with("global:"), "项目行记全局来源");
+    assert!(
+        promoted_from.starts_with(crate::model::GLOBAL_PREFIX),
+        "项目行记全局来源"
+    );
 
     let _ = fs::remove_dir_all(&env.dir);
 }

@@ -1,6 +1,7 @@
 //! 项目表 / 文件登记与全局登记。
 
 use super::*;
+use crate::model::GLOBAL_PREFIX;
 
 impl GlobalInstanceStore {
     /// 读全局脚本内容表首行（分发重建文件用）。
@@ -71,7 +72,7 @@ impl GlobalInstanceStore {
                 next_version,
                 now,
                 content_hash,
-                format!("global:{}", global_id),
+                format!("{GLOBAL_PREFIX}{global_id}"),
                 definition_sql,
             ],
         )
@@ -80,7 +81,7 @@ impl GlobalInstanceStore {
         // 项目版本快照（版本 = 接续项目内同名链；快照记全局来源，回推"这次分发的是哪一版全局"）。
         let snapshot = serde_json::json!({
             "kind": "analysis",
-            "distributed_from": format!("global:{}", global_id),
+            "distributed_from": format!("{GLOBAL_PREFIX}{global_id}"),
             "global_version": global_version,
             "content_hash": content_hash,
             "row_count": row_count,
@@ -153,14 +154,14 @@ impl GlobalInstanceStore {
                 now,
                 content_hash,
                 rel_path,
-                format!("global:{}", global_id),
+                format!("{GLOBAL_PREFIX}{global_id}"),
             ],
         )
         .map_err(sqlite_err("insert_project_file"))?;
 
         let snapshot = serde_json::json!({
             "kind": "file",
-            "distributed_from": format!("global:{}", global_id),
+            "distributed_from": format!("{GLOBAL_PREFIX}{global_id}"),
             "global_version": global_version,
             "content_hash": content_hash,
             "rel_path": rel_path,
