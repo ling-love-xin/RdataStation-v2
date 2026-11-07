@@ -56,33 +56,33 @@
         <span class="fw"><input class="inp ro" value="resources/&lt;全局 rel_path&gt; 是文件即冲突（只有脚本档走这一查）" readonly></span>
       </div>
       <p class="hang">
-        报出去的名字是<b>目标名</b>（未改名 = 全局名）——三查任一命中都汇成同一个 <code>Conflict { name }</code>，框里只说「{持有方}已有同名资源「{目标名}」」，<b>不说撞的是登记、表还是文件</b>。
+        报出去的名字是<b>目标名</b>（未改名 = 全局名）——三查<b>按顺序</b>返回第一个命中（<code>ConflictField::Registry</code> / <code>Table</code> / <code>File</code>），包进 <code>Conflict { name, field }</code>，框里因此能说「{持有方}已有同名资源「{目标名}」（撞在登记表 / 数据表 / 本体文件）」。
         ② 查不区分 schema 与连接，只看 <code>table_name</code>——同库别的 schema 里有同名表也会判冲突。
       </p>
     </div>
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">C</span>版本与来源<span class="desc">旧稿写错的第 1、2 处：版本不接续全局链；来源看得见，但是内部 id</span></div>
+    <div class="variant-h"><span class="no">C</span>版本与来源<span class="desc">旧稿写错的第 1、2 处：版本接续的是项目内同名链（不是全局链）；来源现在显示成「来源全局实例」</span></div>
     <div class="canvas pad">
       <div class="grid2" style="grid-template-columns:1fr 1fr">
         <div class="sinst">
-          <div class="sh"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>版本：从 v1 起，不是「接续全局 v2」</div>
-          <div class="sd"><code>register_project_table</code> / <code>register_project_file</code> 取的是<b>项目侧</b> <code>MAX(version) WHERE name AND scope='project' AND deleted_at IS NULL</code>；首次分发项目里没有同名行 → 0 + 1 = <b>v1</b>。覆盖分支会先把旧行软删，<code>deleted_at IS NULL</code> 再查还是 0 → 仍然 <b>v1</b>。<br>所以回执里那个 <code>v{n}</code> 恒为 v1；全局版本号只写进快照的 <code>global_version</code>（见右卡）。</div>
+          <div class="sh"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>版本：接续项目内同名链，不是「接续全局 v2」</div>
+          <div class="sd"><code>register_project_table</code> / <code>register_project_file</code> 取的是<b>项目侧</b> <code>MAX(version) WHERE name AND scope='project'</code>（<b>不带 <code>deleted_at IS NULL</code></b>）；首次分发项目里没有同名行 → 0 + 1 = <b>v1</b>。覆盖分支先把旧行软删，这一查仍数得到它 → <b>v2</b>（再覆盖 v3…）。<br>所以回执里的 <code>v{n}</code> 覆盖时是 v2+；全局版本号只写进快照的 <code>global_version</code>（见右卡）。</div>
         </div>
         <div class="sinst">
-          <div class="sh"><svg class="ico-sm"><use href="#i-link" xlink:href="#i-link"/></svg>来源：详情里真会显示，且是内部 id</div>
-          <div class="sd"><code>promoted_from = 'global:arp_&lt;uuid&gt;'</code>，而详情「来源」区把它当<b>「来源草稿」</b>渲染（<code>detail_view/rows.rs:52-54</code>）→ 用户看到的是「来源草稿：global:arp_3f2a…」。表档还多一行「来源表：&lt;目标名&gt;」（<code>source_table = 自己的名字</code>，等于自己指向自己）；<code>source_path</code> 为 NULL。</div>
+          <div class="sh"><svg class="ico-sm"><use href="#i-link" xlink:href="#i-link"/></svg>来源：详情里真会显示，读时按前缀分义</div>
+          <div class="sd"><code>promoted_from = 'global:arp_&lt;uuid&gt;'</code>；详情「来源」区按前缀解释（<code>model/promoted_from.rs</code> 的 <code>PromotedFrom</code>）→ 显示「来源<b>全局实例</b>」+ 去前缀的 <code>arp_3f2a…</code>，不再出现「来源草稿：global:arp_…」。草稿归档写的相对路径仍显示「来源草稿」。表档还多一行「来源表：&lt;目标名&gt;」（<code>source_table = 自己的名字</code>，等于自己指向自己）；<code>source_path</code> 为 NULL。</div>
         </div>
       </div>
       <div class="srcbar" style="margin-top:12px;margin-bottom:0"><svg class="ico-sm"><use href="#i-info" xlink:href="#i-info"/></svg><span class="mono">详情「来源」区实际渲染的三行</span><span class="tagn">分发落下的表档</span></div>
       <div class="kv blk" style="display:grid;grid-template-columns:92px 1fr;gap:6px 10px;padding:9px 12px;border:1px solid var(--border);border-top:none;border-radius:0 0 7px 7px;background:var(--bg);font-size:11.5px">
-        <span style="color:var(--muted)">来源草稿</span><span class="mono">global:arp_9c41d7e2…</span>
+        <span style="color:var(--muted)">来源全局实例</span><span class="mono">arp_9c41d7e2…</span>
         <span style="color:var(--muted)">来源表</span><span class="mono">dwd_orders_view</span>
         <span style="color:var(--muted)">指纹</span><span class="mono">—（快照里的 content_hash）</span>
       </div>
       <p class="hang">
-        「草稿出处」与「全局来源」<b>挤在同一个字段上</b>：升级侧恒 NULL（不记谁升过来的），分发侧塞 <code>global:&lt;id&gt;</code>，而显示口径只认识草稿路径。要让人看懂，得给分布来源单开一列或加一个「来自全局」的解析（本轮只记不改）。
+        「草稿出处」与「全局来源」<b>仍挤在同一个字段上</b>：升级侧恒 NULL（不记谁升过来的），分发侧塞 <code>global:&lt;id&gt;</code>。2026-11-07 已在读侧按前缀分义（<code>PromotedFrom::parse</code>，前缀由 <code>GLOBAL_PREFIX</code> 单一来源），显示面不再串；真要干净还得给来源单开一列（要新迁移 + 改列名清单与断言，未做）。
         <br>快照里的 <code>distributed_from</code> / <code>global_version</code> 没有任何界面读——<code>present/detail.rs</code> 反序列化快照只取 kind / 文件大小 / 行数列数。所以「回到全局那条链接」不存在。
       </p>
     </div>
@@ -94,7 +94,7 @@
       <div class="grid2" style="grid-template-columns:1fr 1fr">
         <div class="sinst">
           <div class="sh"><svg class="ico-sm"><use href="#i-copy" xlink:href="#i-copy"/></svg>覆盖</div>
-          <div class="sd">文案原文：「覆盖将删除项目旧表 / 旧文件并软删旧登记，<b>新内容接续项目版本链</b>；旧本体不可恢复。」<br>选中后 <code>enqueue_distribute(root, 全局名, target, true)</code> + 状态栏「资产库：正在覆盖分发到本项目…」。<br><b>「接续项目版本链」这句不成立</b>——覆盖后落到 v1（见 C 段）。</div>
+          <div class="sd">文案原文：「覆盖将删除项目旧表 / 旧文件并软删旧登记，<b>新分发成为同名链的下一版（版本号接着涨）</b>；旧本体不可恢复。」<br>选中后 <code>enqueue_distribute(root, 全局名, target, true)</code> + 状态栏「资产库：正在覆盖分发到本项目…」。<br>这句现在<b>成立</b>——覆盖后落 v2（见 C 段），文案与 <code>next_version</code> 已同口径。</div>
         </div>
         <div class="sinst">
           <div class="sh"><svg class="ico-sm"><use href="#i-edit" xlink:href="#i-edit"/></svg>改名</div>
@@ -115,11 +115,11 @@
       <div class="grid2" style="grid-template-columns:1fr 1fr">
         <div class="sinst">
           <div class="sh"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>覆盖 = 先删再看，三步跨三个地方</div>
-          <div class="sd">① <code>DROP TABLE IF EXISTS &lt;目标名&gt;</code>（<b>无条件</b>，不管目标是表还是文件）→ ② 若全局行有 <code>rel_path</code> 就删 <code>resources/&lt;rel&gt;</code> → ③ 软删项目登记（按目标名）→ 再走一遍 <code>distribute</code>。<br>DuckDB / 文件系统 / SQLite 各一次，<b>没有事务</b>；中途失败留下的是「表没了登记还在」或「登记没了表还在」——而重名三查对这两种脏状态只报同一个冲突名。</div>
+          <div class="sd">① <code>DROP TABLE IF EXISTS &lt;目标名&gt;</code>（<b>无条件</b>，不管目标是表还是文件）→ ② 若全局行有 <code>rel_path</code> 就删 <code>resources/&lt;rel&gt;</code> → ③ 软删项目登记（按目标名）→ 再走一遍 <code>distribute</code>。<br>DuckDB / 文件系统 / SQLite 各一次，<b>没有事务</b>；中途失败留下的是「表没了登记还在」或「登记没了表还在」——而重名三查只能说清撞在哪一层（<code>ConflictField</code>），却<b>说不清「这是上次中断留下的脏状态」</b>——照框里给的三条路怎么选都清不掉脏。</div>
         </div>
         <div class="sinst">
           <div class="sh"><svg class="ico-sm"><use href="#i-doc" xlink:href="#i-doc"/></svg>脚本档：改名字，不改文件路径</div>
-          <div class="sd">重建目标恒为 <code>resources/&lt;全局 rel&gt;</code>，改名只换登记名。于是项目里若已有这个文件（也许属于另一条不同名的资源），③ 查一直命中 → 冲突框一直报「已有同名资源「&lt;新名&gt;」」，<b>换任何名字都撞同一道墙</b>，且框里不会说「是文件占着」。</div>
+          <div class="sd">重建目标恒为 <code>resources/&lt;全局 rel&gt;</code>，改名只换登记名。于是项目里若已有这个文件（也许属于另一条不同名的资源），③ 查一直命中 → 冲突框一直报「已有同名资源「&lt;新名&gt;」」，<b>换任何名字都撞同一道墙</b>；2026-11-07 起三查回执带 <code>ConflictField</code>，框里会说「撞在本体文件」，用户能看出是文件占位而不是名字重复。</div>
         </div>
       </div>
       <p class="hang">
@@ -135,7 +135,7 @@
   <div class="canvas pad">
     <p class="hang" style="margin-top:0">
       本块样式：<code>.sinst</code> / <code>.grid2</code>（本页两列处内联 <code>1fr 1fr</code>）/ <code>.fgrid</code> / <code>.inp.ro</code> / <code>.srcbar</code> / <code>.kv.blk</code>（本页内联成两列网格）/ <code>.scope-badge</code> / <code>.row</code>。<br>
-      落地代码：<code>resource_host/detail_actions.rs::request_distribute_from_global</code>（前置三句：无项目根 / 只读项目 / 入队「正在从全局分发…」）/ <code>detail_view/actions.rs::distribute_affordance</code>（详情按钮判据 + 两句说明）/ <code>global/distribute.rs::distribute</code>（读全局登记 + 三查 + parquet 中转建表 / 写回 <code>resources/</code>）与 <code>::distribute_overwrite</code>（覆盖三步）/ <code>global/mod.rs::project_name_taken</code>（三查本体）/ <code>global/register.rs::register_project_table / register_project_file</code>（版本从 v1、<code>promoted_from = global:&lt;id&gt;</code>、快照）/ <code>jobs/global.rs::run_distribute</code>（回执分级）/ <code>panels/resources.rs:210-244 / 662-672</code>（冲突处置与「已从全局分发…到本项目」）。<br>
+      落地代码：<code>resource_host/detail_actions.rs::request_distribute_from_global</code>（前置三句：无项目根 / 只读项目 / 入队「正在从全局分发…」）/ <code>detail_view/actions.rs::distribute_affordance</code>（详情按钮判据 + 两句说明）/ <code>global/distribute.rs::distribute</code>（读全局登记 + 三查 + parquet 中转建表 / 写回 <code>resources/</code>）与 <code>::distribute_overwrite</code>（覆盖三步）/ <code>global/mod.rs::project_name_taken</code>（三查本体）/ <code>global/register.rs::register_project_table / register_project_file</code>（版本接续同名链、<code>promoted_from = global:&lt;id&gt;</code>、快照）/ <code>jobs/global.rs::run_distribute</code>（回执分级）/ <code>panels/resources.rs:210-244 / 662-672</code>（冲突处置与「已从全局分发…到本项目」）。<br>
       下一步建议：<code>std::env::temp_dir()</code> 中转（<code>distribute.rs:105</code>）与 <code>distribute_overwrite</code> 里的两处「【探针】」日志（<code>:170</code>）属顺手能清的技术债，本页只登记不动代码。
     </p>
   </div>

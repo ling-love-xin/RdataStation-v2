@@ -64,7 +64,7 @@
 
             <div class="sect">
               <div class="sect-h">分发</div>
-              <div class="kv blk"><span class="k">分析表</span><span class="v"><code>COPY &lt;全局表&gt; TO '*.parquet' (FORMAT PARQUET)</code> 中转 → <code>CREATE TABLE &lt;项目表&gt; AS SELECT * FROM read_parquet(…)</code>，再写项目登记与版本链接续全局链</span></div>
+              <div class="kv blk"><span class="k">分析表</span><span class="v"><code>COPY &lt;全局表&gt; TO '*.parquet' (FORMAT PARQUET)</code> 中转 → <code>CREATE TABLE &lt;项目表&gt; AS SELECT * FROM read_parquet(…)</code>，再写项目登记与项目内同名的版本链</span></div>
               <div class="kv blk"><span class="k">脚本档</span><span class="v">不走 parquet：按 <code>file_rel_path</code> 重建为项目 <code>resources/&lt;rel_path&gt;</code> 文件（File 档）</span></div>
             </div>
 
