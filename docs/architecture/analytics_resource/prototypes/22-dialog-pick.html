@@ -16,95 +16,159 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    宽 <code>544px</code>（34rem）· 列表最高 <code>288px</code>（18rem）· <b>一行一个草稿</b>：勾选框 + <code>scratchpad/</code> 下相对路径 + 来源连接。
-    顶部「已选 n / 共 N 个」+ 全选开关；最多列 <code>50</code> 条，超出<b>明说还有多少条没列出</b>（不静默截断、不为这个对话框手搓虚拟化）。
-    <b>选一个和多选是两条收尾</b>：选一个 → 展开完整的归档确认（可改显示名）；选多个 → 用默认名批量归档。
+    宽 <code>544px</code>（<code>ui::PICK_DIALOG_WIDTH = 34rem</code>）· 列表最高 <code>288px</code>（<code>PICK_LIST_MAX_HEIGHT = 18rem</code>）· <b>一行一个草稿</b>：勾选框 + <code>scratchpad/</code> 下相对路径 + 来源连接。
+    顶部「已选 n / 共 N 个」+ 全选开关；最多列 <code>50</code> 条（<code>MAX_DRAFT_ROWS</code>），超出<b>明说还有多少条没列出</b>。
+    <b>选一个和多选是两条收尾</b>：选一个 → 展开完整的归档确认（可改显示名、可改分组）；选多个 → 用默认名批量入队。
   </p>
-  <nav class="pnav"><a href="index.html">索引</a><a href="21-dialog-group.html">← 上一块：分组名</a><a href="10-context-menu.html">下一块：右键菜单 →</a></nav>
+  <nav class="pnav"><a href="index.html">索引</a><a href="21-dialog-group.html">← 上一块：分组名</a><a href="23-promote-to-global.html">下一块：升级到全局 →</a></nav>
 </header>
 
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>未选<span class="desc">按钮灰「归档」；不预选任何一条（点哪个归档哪个）</span></div>
+    <div class="variant-h"><span class="no">A</span>未选<span class="desc">主按钮灰「归档」；<b>不预选任何一条</b>（点哪个归档哪个）</span></div>
     <div class="canvas pad" style="background:var(--overlay);padding:20px">
       <div class="dlg dlg-pick proto-on">
-        <div class="dlg-head">从草稿箱归档<span class="sub2">项目「营销分析」</span><button class="x">✕</button></div>
+        <div class="dlg-head">从草稿箱归档<button class="x">✕</button></div>
         <div class="dlg-body">
           <div style="display:flex;align-items:center;justify-content:space-between;padding:0 0 6px">
             <span style="font-size:10.5px;color:var(--muted)">已选 0 / 共 4 个</span>
             <label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--fg)"><span class="ckbox"></span>全选</label>
           </div>
           <div class="picklist">
-            <div class="pickrow"><span class="ckbox"></span><span class="pth">reports/dau_report.sql</span><span class="conn">营销分析库</span></div>
+            <div class="pickrow"><span class="ckbox"></span><span class="pth">reports/dau_report.sql</span><span class="conn">conn_mkt_01</span></div>
             <div class="pickrow"><span class="ckbox"></span><span class="pth">reports/monthly.md</span><span class="conn"></span></div>
-            <div class="pickrow"><span class="ckbox"></span><span class="pth">data/sales_daily.csv</span><span class="conn">营销分析库</span></div>
+            <div class="pickrow"><span class="ckbox"></span><span class="pth">data/sales_daily.csv</span><span class="conn">conn_mkt_01</span></div>
             <div class="pickrow"><span class="ckbox"></span><span class="pth">临时订单分析.sql</span><span class="conn"></span></div>
           </div>
           <div class="namehint">选一个 → 可改显示名；选多个 → 用默认名批量归档</div>
         </div>
-        <div class="dlg-foot"><span></span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p" style="opacity:.4">归档</button></div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p" style="opacity:.4">归档</button></div>
       </div>
     </div>
+    <p class="hang">
+      <b>三处推翻旧稿</b><br>
+      ① 头部<b>没有副标题</b>「项目「营销分析」」——<code>dialog.title("从草稿箱归档")</code> 只吃一个标题（<code>dialogs/pick.rs:193</code>）。<br>
+      ② 行右侧那一列不是连接名，是<b>连接 id</b>：<code>DraftCandidate.connection_id</code> 来自 <code>file_meta.preferred_connection()</code>（显式绑定优先、其次上次执行用过的那条），而 <code>FileMeta</code> 注释写明「仅存 ID，凭据在 auth_store」（<code>scratchpad/src/models.rs:94</code>、<code>:107-115</code>）；<code>pick.rs:168-175</code> 直接把它当文本 <code>child(connection)</code> 打出来。<br>
+      ③ 旧稿写的「营销分析库」是连接<b>显示名</b>，实现没有这一层解析——<b>用户实际看到的是 <code>conn_mkt_01</code> 这样的 id</b>（宽度不够时还会被省略号吃掉一半）。
+    </p>
   </section>
 
   <section class="variant">
     <div class="variant-h"><span class="no">B</span>已选 2 个<span class="desc">主按钮带计数「归档 2 个」——不点下去也知道会作用几条</span></div>
     <div class="canvas pad" style="background:var(--overlay);padding:20px">
       <div class="dlg dlg-pick proto-on">
-        <div class="dlg-head">从草稿箱归档<span class="sub2">项目「营销分析」</span><button class="x">✕</button></div>
+        <div class="dlg-head">从草稿箱归档<button class="x">✕</button></div>
         <div class="dlg-body">
           <div style="display:flex;align-items:center;justify-content:space-between;padding:0 0 6px">
             <span style="font-size:10.5px;color:var(--muted)">已选 2 / 共 4 个</span>
             <label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--fg)"><span class="ckbox"></span>全选</label>
           </div>
           <div class="picklist">
-            <div class="pickrow"><span class="ckbox on">✓</span><span class="pth">reports/dau_report.sql</span><span class="conn">营销分析库</span></div>
+            <div class="pickrow"><span class="ckbox on">✓</span><span class="pth">reports/dau_report.sql</span><span class="conn">conn_mkt_01</span></div>
             <div class="pickrow"><span class="ckbox"></span><span class="pth">reports/monthly.md</span><span class="conn"></span></div>
-            <div class="pickrow"><span class="ckbox on">✓</span><span class="pth">data/sales_daily.csv</span><span class="conn">营销分析库</span></div>
+            <div class="pickrow"><span class="ckbox on">✓</span><span class="pth">data/sales_daily.csv</span><span class="conn">conn_mkt_01</span></div>
             <div class="pickrow"><span class="ckbox"></span><span class="pth">临时订单分析.sql</span><span class="conn"></span></div>
           </div>
-          <div class="namehint">选多个 → 用默认名批量归档：显示名取文件名去扩展名，来源连接各自带出</div>
+          <div class="namehint">选一个 → 可改显示名；选多个 → 用默认名批量归档</div>
         </div>
-        <div class="dlg-foot"><span></span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">归档 2 个</button></div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">归档 2 个</button></div>
       </div>
     </div>
+    <p class="hang">
+      说明行<b>只有一句</b>，且两条收尾共用它（<code>pick.rs:230-233</code>）——旧稿 B 块把它换成了「选多个 → 用默认名批量归档：显示名取文件名去扩展名，来源连接各自带出」，实现没有这句变体。<br>
+      行内<b>只有那个勾选框可点</b>：整行没有点击区域，点路径文字不会勾上（<code>:149-177</code> 的 <code>h_flex</code> 不挂 <code>on_click</code>）。行高也不是 <code>ROW_HEIGHT</code>，由 <code>Checkbox</code> 自身撑开（容器只给了 <code>gap_1</code>）。
+    </p>
   </section>
 
   <section class="variant">
     <div class="variant-h"><span class="no">C</span>超出 50 条<span class="desc">只列前 50 条 + 末尾一行「还有 N 个未列出」</span></div>
     <div class="canvas pad" style="background:var(--overlay);padding:20px">
       <div class="dlg dlg-pick proto-on">
-        <div class="dlg-head">从草稿箱归档<span class="sub2">项目「数据治理」</span><button class="x">✕</button></div>
+        <div class="dlg-head">从草稿箱归档<button class="x">✕</button></div>
         <div class="dlg-body">
           <div style="display:flex;align-items:center;justify-content:space-between;padding:0 0 6px">
             <span style="font-size:10.5px;color:var(--muted)">已选 1 / 共 68 个</span>
             <label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--fg)"><span class="ckbox"></span>全选</label>
           </div>
           <div class="picklist">
-            <div class="pickrow"><span class="ckbox on">✓</span><span class="pth">tmp/q1_cleanup.sql</span><span class="conn">数据治理库</span></div>
-            <div class="pickrow"><span class="ckbox"></span><span class="pth">tmp/q2_cleanup.sql</span><span class="conn">数据治理库</span></div>
+            <div class="pickrow"><span class="ckbox on">✓</span><span class="pth">tmp/q1_cleanup.sql</span><span class="conn">conn_gov_02</span></div>
+            <div class="pickrow"><span class="ckbox"></span><span class="pth">tmp/q2_cleanup.sql</span><span class="conn">conn_gov_02</span></div>
             <div class="pickrow"><span class="ckbox"></span><span class="pth">tmp/q3_cleanup.sql</span><span class="conn"></span></div>
             <div class="pickrow"><span class="ckbox"></span><span class="pth">tmp/q4_cleanup.sql</span><span class="conn"></span></div>
             <div class="more">还有 18 个未列出（一次最多选 50 个）</div>
           </div>
-          <div class="namehint">超出部分不静默丢掉：说清还有多少条，再去列表里分批选。</div>
+          <div class="namehint">选一个 → 可改显示名；选多个 → 用默认名批量归档</div>
         </div>
-        <div class="dlg-foot"><span></span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">归档 1 个</button></div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">归档 1 个</button></div>
       </div>
     </div>
     <p class="hang">
-      实现口径（<code>dialogs/pick.rs</code>）：候选<b>由宿主备好</b>（M6 不认识草稿箱内部结构，依赖方向是 <code>scratchpad → analytics_resource</code>），
-      本对话框只做选中与确认；选中态 <code>PickDialogState</code> 在开窗前建好（builder 是 <code>Fn</code>，每帧重建会漏 state）；
-      <code>MAX_DRAFT_ROWS = 50</code>，<b>全选是一个开关</b>（已全选时再点 = 全清，省一个按钮）。
-      单选那条会在关窗后<b>再开一个归档确认对话框</b>——所以代码里先 <code>close_dialog</code> 再回调。
+      文案与实现逐字一致：<code>format!("还有 {} 个未列出（一次最多选 {MAX_DRAFT_ROWS} 个）", candidates.len() - shown)</code>（<code>pick.rs:179-190</code>）。<br>
+      「全选」的语义是<b>一个开关</b>：已全选时再点 = 全清（<code>state.set_all(!all_selected)</code>，<code>:132-138</code>）——省一个按钮，也意味着「全选」不区分「只勾列出的 50 条」与「勾全部 68 条」：<b>它只作用于候选全集，但可见的只有前 50 行</b>。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">D</span>两条入口 × 两条收尾：挑完之后会发生什么</div>
+    <div class="canvas pad" style="background:var(--sidebar);padding:16px">
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;font-size:11px">
+
+        <div style="width:420px;flex:none;border:1px solid var(--sidebar-border);border-radius:8px;padding:10px;background:var(--bg)">
+          <div style="font-weight:700;margin-bottom:6px">入口一：面板头 <code>＋▾</code> 第一项</div>
+          <div style="color:var(--muted);line-height:1.9">
+            候选 = 草稿箱里<b>全部</b>可归档文件（目录不算），<b>一条都不预勾</b><br>
+            文件树压平时把内部/隐藏路径挡在门外（<code>relative_path_of</code> 同一守卫）<br>
+            候选为空 → <b>对话框不开</b>，直接提示「资产库：草稿箱里还没有可归档的文件」
+          </div>
+        </div>
+
+        <div style="width:420px;flex:none;border:1px solid var(--sidebar-border);border-radius:8px;padding:10px;background:var(--bg)">
+          <div style="font-weight:700;margin-bottom:6px">入口二：草稿行右键「归档为存档…」</div>
+          <div style="color:var(--muted);line-height:1.9">
+            候选由<b>调用方点名</b>，且只认快照里还在的（刚被移走/删除的路径不硬归档）<br>
+            一条 → <b>跳过挑选对话框</b>，直进归档确认<br>
+            多条 → 预勾上再摆挑选框（留个剔除的机会）
+          </div>
+        </div>
+
+        <div style="width:420px;flex:none;border:1px solid var(--sidebar-border);border-radius:8px;padding:10px;background:var(--bg)">
+          <div style="font-weight:700;margin-bottom:6px">收尾一：只勾一条</div>
+          <div style="color:var(--muted);line-height:1.9">
+            关窗后<b>再开归档确认对话框</b>（先 <code>close_dialog</code> 再回调，否则新框被旧框顶掉）<br>
+            可改显示名 / 别名 / 分组 / 归档方式 / 标签；草稿标签<b>预填进对话框</b>，可改可删
+          </div>
+        </div>
+
+        <div style="width:420px;flex:none;border:1px solid var(--sidebar-border);border-radius:8px;padding:10px;background:var(--bg)">
+          <div style="font-weight:700;margin-bottom:6px">收尾二：勾多条</div>
+          <div style="color:var(--muted);line-height:1.9">
+            默认名（文件名去扩展名）+ <code>PayloadMode::Copy</code> + <b>分组恒 <code>None</code></b> + 保留策略按设置批 + 标签继承<br>
+            逐个入队；目标被占就 <code>free_rel_path</code> 自动改名<br>
+            回执「资产库：已提交 N 个归档…（M 个目标被占，已自动改名）」
+          </div>
+        </div>
+
+      </div>
+    </div>
+    <p class="hang">
+      <b>多选那条的代价写在注释里</b>：列表里没有位置让用户逐个改名，「与其摆一个假的批量编辑，不如说清批量用的是默认名」（<code>pick.rs:8-11</code>）。
+      所以只勾一条以上（即勾 2 条及以上）就<b>没有分组可选</b>——分组只能进「只勾一条」那条路，或先用单选逐条归档。
+    </p>
+    <p class="hang" style="margin-top:8px">
+      <b>键盘：本对话框没有绑 <code>Enter</code></b>。它自画 footer 两枚按钮、只调了 <code>.on_cancel(...)</code>、<b>没调 <code>.on_ok(...)</code></b>（<code>pick.rs:235-271</code>），所以 <code>Esc</code> 能取消、「归档」只能用鼠标点。
+      这与 20 / 21 页刚好相反：那边 <code>on_ok</code> 恒返回 <code>true</code>，<code>Enter</code> 会关窗（哪怕该拦的没拦住）。
     </p>
   </section>
 
   <div class="canvas pad">
+    <p class="hang" style="margin:0 0 8px">
+      链路：<code>request_archive_from_drafts</code> / <code>request_archive_drafts</code>（<code>resource_host/archive_actions.rs:7-106</code>）→ <code>open_draft_pick_dialog</code> → 提交回调 <code>pick_handler</code>（<code>:119-144</code>）→ 单选 <code>open_archive_for_draft</code> / 多选 <code>archive_many</code>（<code>:221-282</code>）。
+      前置：无项目根 → 「资产库：无法归档：还没有打开项目」；只读 → 「资产库：项目为只读模式，不能归档」。
+    </p>
     <p class="hang" style="margin:0">
-      本块样式：<code>.dlg.dlg-pick</code>（544px）/ <code>.picklist</code>（max 288px）/ <code>.pickrow</code> / <code>.ckbox</code>（proto.css 原件）。
-      落地代码：<code>crates/analytics_resource/src/dialogs/pick.rs</code>；入口是面板头 <code>＋ ▾</code> 第一项（见 01 页）。
+      本块样式：<code>.dlg.dlg-pick</code>（544px）/ <code>.picklist</code>（max 288px）/ <code>.pickrow</code> / <code>.ckbox</code>（proto.css 原件）/ <code>.more</code>。
+      落地代码：<code>crates/analytics_resource/src/dialogs/pick.rs</code>（<code>MAX_DRAFT_ROWS = 50</code>、<code>PickDialogState</code> 由外部持有——builder 每帧重建，状态放进闭包里会被漏掉）。
     </p>
   </div>
 
