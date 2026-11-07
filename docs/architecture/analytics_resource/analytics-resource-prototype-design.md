@@ -606,7 +606,7 @@ sequenceDiagram
 **集合条目动作**：
 - **对比**：右栏勾选 → 中间页勾选该表 + 切 `WorkspaceMode::Compare` + 激活中央 tab（`consume_insight_compare`）；
 - **关系排查**：当前目标 ↔ 集合条目两临时表同名列值域交集（`OverlapView`：交集数 + 占双方值域比例，按交集数降序；无类型兼容同名列 → 空态说明）；
-- **归档**：画像快照 JSON → 资产库 File 档 copy（`resources/insight/`）+ 登记 + 版本链；标签预置「洞察」，`binding.source_table` = 表名。快照带时间戳 → 指纹必变 → 每次归档开新版本（有意：审计长在版本上；靠 `keep_versions` 兜底）。
+- **归档**：画像快照 JSON → 资产库 File 档 copy（`resources/insight/`）+ 登记 + 版本链；标签预置「洞察」，`binding.source_table` = 表名。快照带时间戳 → 指纹必变，但**不是**「每次归档开新版本」：本路径 `rel_path` 恒为 `insight/{label}.json`、`existing_resource_id` 恒为 `None`，同一张表再归档一次会撞「目标路径已被存档」而失败（多版本只在归档对话框「并入既有存档」那条路发生）。详见 §12.2.2。
 
 **临时表保护（T21）**：集合内表进 `TempTableManager` 保护名单，不参与 30 分钟 TTL 与上限淘汰；离开集合解除保护。保护名单是内存登记，非 I/O。
 
@@ -621,7 +621,7 @@ sequenceDiagram
 
 > 2026-10-13 裁决 16：「洞察归档 = 一资产两视图」已拍板方向，**本期做 / 不做待用户决策**；本节给出完整交互规格，决策通过后按此实现。核心命题对齐架构文档：「分析资源 = 结果集的变体（配方 + 小快照 + 元数据），可复现、不占盘；复现依赖源版本还在」。
 
-**归档入口（档位选择）**：洞察集合卡「归档」→ 归档对话框新增「归档档位」分区（两枚单选，默认 `报告 file`）：
+**归档入口（档位选择）**：洞察集合卡「归档」当前是**一键入库、没有对话框**（T20 实际装配，见 §12.2.2）；若 data 档通过决策，需先补一个可选择的入口（对话框分区或行内菜单），再按下列两档落：
 - **报告（file 档，T20 现状）**：结论文本渲染快照，走 File 档 copy（`resources/insight/`）。
 - **数据（analysis 档）**：快照 = 画像结构化数据 + 配方；登记为 `Analysis` 档（`ArchiveKind::Analysis`），落盘路径同 `resources/insight/`。
 
@@ -638,6 +638,27 @@ sequenceDiagram
 **版本链**：data 档与 file 档**共享版本链**（一资产两视图）：同一次洞察归档产生 data 快照与报告快照，登记同一 `resource_id`，各视图对应独立版本号；`keep_versions` 裁剪时两视图按各自版本链独立保留。
 
 **与 T20 的关系**：T20 已实现的是「报告 file 档」路径（`export_table_snapshot` → `enqueue_archive`）。data 档若本期做，复用同一入口，新增 `ArchiveKind::Analysis` 分支与配方导出；若不做，文档保持「当前仅 file 档」标注，决策后更新本节状态行。
+
+#### 12.2.2 洞察归档（18 页）实现复核（2026-11-07）
+
+> 逐条对回 `crates/insight` 与 `crates/workbench`、`crates/analytics_resource` 的实现；与 §12.2 / §12.2.1 上文冲突处以本节为准。
+
+- **没有「洞察归档」对话框**：入口是右栏「已洞察表集合」每行右侧四颗 ghost xsmall 钮（对比 / 关系 / 归档 / 版本，`crates/insight/src/view/set.rs:301-334`），点「归档」（id `insight-set-archive-{key}`，`set.rs:317-324`）就是全部交互。
+- **四颗钮，文档只列了三颗**：§12.2「集合条目动作」写的是对比 / 关系 / 归档三条，行上实际有四颗——第四颗「版本」恒可点（`set.rs:327-334`），点它走 `TableHistoryRequested` → 宿主先说一句「洞察：已打开「{key}」的归档版本列表」再打开右栏 Archive 面板（`insight_actions.rs:154-157`）。置灰判据只有 `temp_table`：归档与关系同为 `.disabled(entry.temp_table.is_none())`（`set.rs:314`、`:322`），对比恒可点（`set.rs:301-308`）。
+- **事件只报业务键**：`InsightEvent::ArchiveRequested { key }`（`crates/insight/src/insight_view.rs:146`）→ 宿主 `archive_from_insight`（`crates/workbench/src/components/insight_actions.rs:181-245`，订阅在 `:144-146`）。
+- **三条前置拒绝（旧稿没画）**：未打开项目 →「洞察：归档需要先打开项目」；项目只读 →「洞察：项目为只读，不能归档」；集合里没有该条的 `temp_table` →「洞察：该表尚未完成取样，无法归档」（`insight_actions.rs:182-199`）。
+- **字段全部推导，用户一处也改不了**：显示名 `洞察·{label}`、`rel_path` = `insight/{label}.json`、`kind` = `ArchiveKind::File`、`payload_mode` = `Copy`、`tags` = `["洞察"]`、`binding` = `{promoted_from: None, source_connection_id: None, source_table: Some(label)}`、`alias` / `group_id` / `keep_versions` / `existing_resource_id` 均为 `None`（`insight_actions.rs:215-238`）。旧稿里的显示名输入框、目标位置只读行、模式单选、标签编辑器、保留策略下拉在实现里都不存在。
+- **保留策略跟设置走**：主线程先 `KeepVersions::from_setting(settings::SettingsService::keep_versions(cx))` 再随闭包带入（`insight_actions.rs:203`，注释说明 async 里拿不到 GPUI global），请求侧 `keep_versions: None`。
+- **快照导出在后台线程**：导出要抢 DuckDB 锁，故 `cx.spawn` 里跑；入队与回执回主线程（`insight_actions.rs:180`、`:204-244`）。
+- **快照落 `.RSmeta/insight-archive/`**：文件名 `{label}_{%Y%m%d%H%M%S}.json`，返回 `(绝对路径, label)`（`crates/insight/src/service/sampling.rs:99-135`，目录在 `:123-129`）。它先在项目目录里生成，再由归档任务复制进 `resources/`。
+- **快照只有六个键，不是「画像」**：`kind`（`insight_table_snapshot`）/ `table` / `generated_at` / `row_count` / `column_count` / `columns[{name, type, nullable, primary_key}]`（`sampling.rs:107-121`）——列级只有 `DESCRIBE` 元数据，**没有**缺失率 / 唯一率 / 分布分位 / 检查器命中。§12.2.1 写的「逐列统计」在 file 档里不存在。
+- **回执是乐观的**：入队后立刻 `say("洞察：已归档「{name}」到资产库")`（`insight_actions.rs:239-242`），不等任务结果；导出失败另有「洞察：归档失败（{message}）」（`:207-213`）。
+- **失败只落在资产库侧**：`run_archive` 失败 → `OpOutcome::Failed { action: "归档", reason }`（`crates/analytics_resource/src/jobs/archive/run.rs:71-74`），由资产库面板那侧消费；洞察面板不一定看得到——回执错位是现存欠债。
+- **第二次归档撞路径就失败**：`ArchiveService::archive` 见 `existing_resource_id = None` 走 `archive_new`（`crates/analytics_resource/src/service/archive.rs:25-26`），而 `archive_new` 先 `find_archive_by_rel_path(&req.rel_path)`，命中即报「目标路径已被存档「{name}」（id=…）占用；请改名或先移除旧存档」（`archive.rs:50-58`）。因为 `rel_path` 恒为 `insight/{label}.json`，**同一张表再归档一次就会撞上**，不会开 v2。§12.2 原句「每次归档开新版本」据此改写。
+- **没走重名避让**：归档对话框那条路用 `PayloadStore::free_rel_path` 预避让并提示改名（`crates/analytics_resource/src/resource_host/mod.rs:127-133`），多选草稿归档也做（`resource_host/archive_actions.rs:233-236`）；洞察这条路直接 `enqueue_archive`，所以重名的表现是「报错」而不是「自动改名」。
+- **`.RSmeta` 那份会留下**：归档是 copy 语义（本体复制进 `resources/`），源文件不搬走；`insight-archive/` 下带时间戳的 JSON 无人清理，每次归档在项目目录里多一份。
+- **路径未 slug 化**：`insight/{label}.json`（`insight_actions.rs:220`）与 `{label}_{stamp}.json`（`sampling.rs:128`）都直接拼集合条目名；label 含 `/` 或 `\` 会拼出子目录或非法路径，当前无兜底（未实测）。
+- **A2 两视图在界面上不存在**：`kind: ArchiveKind::File` 写死（`insight_actions.rs:223`），没有「档位单选」；代码里也没有洞察入口的 `ArchiveKind::Analysis` 分支。§12.2.1 的「归档对话框新增档位分区」是待做规格，不是现状——状态仍为「待用户决策」。
 
 ### 12.3 全局标签（rds-tag，0.2.3）
 
