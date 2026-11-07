@@ -35,8 +35,11 @@
   → `total` / `amount` / `orders.amount`）。
 - **为什么不接**：产品侧**没有血缘视图**。函数出口在，数据能算，但摆不到任何界面上；
   硬接只能塞进悬停，把一行提示撑成三段，反而稀释 hover 的信息量。
-- **触发条件**：血缘面板（列来源图 / ETL 影响分析）立项时直接接，数据形状已经现成。
-- **成本**：面板落地后 ≈ 1 天（组装 `TypedTable` 已有通路，只需渲染）。
+- **触发条件**：已经给出可执行设计——**不做面板，先做「列上的一条来源链」**，落在结果集列注释通道
+  （`ColumnAnnotation` + 表头 tooltip）上，0.5–1 天可上。详细方案、口径与待验证项见
+  `docs/architecture/editor/column-lineage-design.md`。
+- **成本**：第一段 ≈ 0.5–1 天（`ColumnAnnotation.upstream` + 注释产出侧一次调用 + tooltip 一行）；
+  第二段右键弹层 ≈ 0.5 天；右 Dock 面板 ≈ 2–3 天（等「多列 / 跨结果集」诉求）。
 - **前置**：无额外前置（`TypedTable` 已由目录快照提供）。
 
 ### 3.2 AST 差异 `diff_summaries`

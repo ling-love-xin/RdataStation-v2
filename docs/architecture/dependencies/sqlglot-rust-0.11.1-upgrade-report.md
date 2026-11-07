@@ -152,6 +152,9 @@ cargo check -p rds-app -j 2     # 应得 0 error 0 warning
 
 `docs/architecture/dependencies/sqlglot-unwired-backlog.md`
 
+其中**列级血缘已经给出可执行设计**（先做「列上的一条来源链」，不做面板）：
+`docs/architecture/editor/column-lineage-design.md`。
+
 > `executor`（内存执行器）依旧**不采用**：无事务/并发/权限，本地分析一律走 DuckDB。
 
 逐项源码证据与行为边界见 `docs/architecture/editor/editor-prototype-design.md` §7.4。
