@@ -57,8 +57,15 @@ const FOLD_ICON_HITBOX_WIDTH: Pixels = px(18.);
 const GUTTER_MARKER_HITBOX_WIDTH: Pixels = px(18.);
 /// 书签标记字形本体宽度。
 const GUTTER_MARKER_ICON_WIDTH: Pixels = px(13.);
-/// 折叠箭头上的说明角标宽度。
-const GUTTER_FOLD_NOTE_BADGE_WIDTH: Pixels = px(9.);
+/// 折叠说明的下划线宽度：说明 = 一道横线（与「有说明书签」同一套视觉语言）。
+const GUTTER_FOLD_NOTE_UNDERLINE_WIDTH: Pixels = px(9.);
+/// 折叠说明下划线的粗细。
+const GUTTER_FOLD_NOTE_UNDERLINE_HEIGHT: Pixels = px(1.5);
+/// 悬停说明气泡的内边距（左右 / 上下）。
+const GUTTER_NOTE_POPOVER_PADDING_X: Pixels = px(6.);
+const GUTTER_NOTE_POPOVER_PADDING_Y: Pixels = px(3.);
+/// 悬停说明气泡的最大宽度：超出按字符截断并补省略号。
+const GUTTER_NOTE_POPOVER_MAX_WIDTH: Pixels = px(420.);
 const MAX_HIGHLIGHT_LINE_LENGTH: usize = 10_000;
 const MIN_LINE_NUMBER_DIGITS: usize = 3;
 const MAX_LINE_NUMBER_DIGITS: usize = 7;
@@ -77,8 +84,8 @@ const FOLD_CHEVRON_DOWN_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg"
 const GUTTER_BOOKMARK_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>"#;
 /// 有说明书签：同一书签轮廓 + 内部内容横线（与「无说明」在形状上区分，不靠颜色）。
 const GUTTER_BOOKMARK_NOTE_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/><path d="M9.5 10.5h5" stroke-width="2.6"/></svg>"#;
-/// 折叠说明角标：实心笔形，缩到 9px 仍可辨。
-const GUTTER_PEN_BADGE_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M17.7 2.3a2 2 0 0 1 2.8 0l1.2 1.2a2 2 0 0 1 0 2.8L9.4 18.6l-4.6 1.2a.6.6 0 0 1-.8-.8l1.2-4.6z"/></svg>"#;
+/// 折叠说明：画在折叠箭头下方的一道横线（不占新空间，与书签的「说明 = 横线」一致）。
+
 
 fn compose_decorations(
     mut styles: Vec<(Range<usize>, HighlightStyle)>,
@@ -487,6 +494,9 @@ struct FoldIconLayout {
     line_number_hitbox: Hitbox,
     /// List of (display_row, is_folded, icon_element) pairs for each fold candidate
     icons: Vec<(usize, bool, gpui::AnyElement)>,
+    /// Rows carrying a fold note: their chevron stays visible off-hover, so a
+    /// folded-and-annotated row is distinguishable from a plain fold candidate.
+    fold_note_rows: Vec<usize>,
 }
 
 /// Layout information for gutter markers (bookmarks and fold notes).
@@ -499,18 +509,30 @@ struct GutterMarkerLayout {
     marker_hitbox: Hitbox,
     /// Left edge of the bookmark column.
     marker_column_x: Pixels,
+    /// Width of the bookmark column (`0` when nothing is marked): the line-number
+    /// text starts after it, so the column sits at the very left of the gutter.
+    column_width: Pixels,
     /// Viewport top of the first visible row, including scroll offset.
     top: Pixels,
     /// Height of one visual row.
     line_height: Pixels,
     /// Buffer line of every visual row, in vertical order (a wrapped line repeats).
     rows: Vec<usize>,
-    /// Markers to paint this frame, sorted by `(line, kind)`.
-    markers: Vec<(usize, GutterMarkerKind)>,
-    /// Fold notes: (line, badge rect) for rows that both carry a note and start a fold.
+    /// Markers to paint this frame, sorted by `(line, kind)`; the note rides along.
+    markers: Vec<(usize, GutterMarkerKind, SharedString)>,
+    /// Fold notes: (line, underline rect) for rows that both carry a note and start a fold.
     fold_notes: Vec<(usize, Bounds<Pixels>)>,
+    /// The note popover under the pointer: shaped text, its rect, and its colours.
+    hover_note: Option<HoverNote>,
     /// Row the pointer was on at the last paint, to repaint only when it changes.
     last_hovered_row: Rc<Cell<Option<usize>>>,
+}
+
+/// A note shown under the pointer, laid out at prepaint time.
+struct HoverNote {
+    text: ShapedLine,
+    bounds: Bounds<Pixels>,
+    background: gpui::Hsla,
 }
 
 pub(super) struct TextElement<M: InputModeKind> {
@@ -1436,9 +1458,10 @@ impl<M: InputModeKind> TextElement<M> {
         let mut icon_layout = FoldIconLayout {
             line_number_hitbox,
             icons: vec![],
+            fold_note_rows: vec![],
         };
 
-        let fold_infos: Vec<FoldInfo> = {
+        let (fold_infos, fold_note_rows): (Vec<FoldInfo>, Vec<usize>) = {
             let state = self.state.read(cx);
             if !state.mode.is_folding() {
                 return icon_layout;
@@ -1465,7 +1488,16 @@ impl<M: InputModeKind> TextElement<M> {
                 offset_y += line.wrapped_lines.len() * last_layout.line_height;
             }
 
-            infos
+            // A row that carries a note keeps its chevron visible off-hover: the
+            // arrow plus the underline below it reads as "this fold has a note".
+            let note_rows = state
+                .gutter_markers
+                .iter()
+                .filter(|marker| marker.kind == GutterMarkerKind::FoldNote)
+                .map(|marker| marker.line)
+                .collect();
+
+            (infos, note_rows)
         }; // state is dropped here
 
         // Second pass: create and prepaint icons
@@ -1549,6 +1581,7 @@ impl<M: InputModeKind> TextElement<M> {
                 .push((info.display_row, info.is_folded, icon));
         }
 
+        icon_layout.fold_note_rows = fold_note_rows;
         icon_layout
     }
 
@@ -1578,10 +1611,14 @@ impl<M: InputModeKind> TextElement<M> {
                 }
             });
         }
+        let note_rows = fold_icon_layout.fold_note_rows.clone();
         for (display_row, is_folded, icon) in fold_icon_layout.icons.iter_mut() {
             let is_current_line = current_row == Some(*display_row);
+            let has_note = note_rows.contains(display_row);
 
-            if !is_hovered && !is_current_line && !*is_folded {
+            // A folded row stays visible anyway; a row with a note stays visible so
+            // the arrow + underline keeps telling "this fold has a note" off-hover.
+            if !is_hovered && !is_current_line && !*is_folded && !has_note {
                 continue;
             }
 
@@ -1613,12 +1650,14 @@ fn gutter_hovered_row(
 }
 
 impl<M: InputModeKind> TextElement<M> {
-    /// Layout gutter markers: the bookmark column and the pen badges beside fold arrows.
+    /// Layout gutter markers: the bookmark column and the notes on fold rows.
     ///
-    /// Positions come from the unscrolled `origin_x`, the same origin the fold icons
-    /// use, so markers stay inside the gutter while the text scrolls horizontally.
-    /// The column is a single hitbox plus a row list instead of one element per line:
-    /// an unmarked row only ever shows a faint hint while hovered.
+    /// The column sits at the very left of the gutter (line numbers shift right by
+    /// its width), like the bookmark column of a code editor. Positions come from
+    /// the unscrolled `origin_x`, the same origin the fold icons use, so markers
+    /// stay inside the gutter while the text scrolls horizontally.
+    /// The column is a single hitbox plus a row list instead of one element per
+    /// line: an unmarked row only ever shows a faint hint while hovered.
     fn layout_gutter_markers(
         &self,
         origin_x: Pixels,
@@ -1627,20 +1666,20 @@ impl<M: InputModeKind> TextElement<M> {
         window: &mut Window,
         cx: &mut App,
     ) -> GutterMarkerLayout {
-        let is_folding = self.state.read(cx).mode.is_folding();
-        let marker_column_right = origin_x + last_layout.line_number_width
-            - LINE_NUMBER_RIGHT_MARGIN
-            - if is_folding {
-                FOLD_ICON_HITBOX_WIDTH
-            } else {
-                px(0.)
-            };
-        let marker_column_x = marker_column_right - GUTTER_MARKER_HITBOX_WIDTH;
+        let has_column = !self.state.read(cx).gutter_markers.is_empty();
+        let marker_column_x = origin_x;
         let top = bounds.origin.y + last_layout.visible_top;
+        // No markers means no column: a zero-width hitbox neither reports a hover
+        // nor swallows a click meant for the line numbers.
+        let column_width = if has_column {
+            GUTTER_MARKER_HITBOX_WIDTH
+        } else {
+            px(0.)
+        };
         let marker_hitbox = window.insert_hitbox(
             Bounds::new(
                 point(marker_column_x, top),
-                size(GUTTER_MARKER_HITBOX_WIDTH, bounds.size.height),
+                size(column_width, bounds.size.height),
             ),
             HitboxBehavior::Normal,
         );
@@ -1648,11 +1687,13 @@ impl<M: InputModeKind> TextElement<M> {
         let mut layout = GutterMarkerLayout {
             marker_hitbox,
             marker_column_x,
+            column_width,
             top,
             line_height: last_layout.line_height,
             rows: Vec::new(),
             markers: Vec::new(),
             fold_notes: Vec::new(),
+            hover_note: None,
             last_hovered_row: Rc::new(Cell::new(None)),
         };
 
@@ -1663,7 +1704,7 @@ impl<M: InputModeKind> TextElement<M> {
         layout.markers = state
             .gutter_markers
             .iter()
-            .map(|marker| (marker.line, marker.kind))
+            .map(|marker| (marker.line, marker.kind, marker.note.clone()))
             .collect();
 
         let fold_icon_x = origin_x
@@ -1681,24 +1722,99 @@ impl<M: InputModeKind> TextElement<M> {
                 layout.rows.push(buffer_line);
             }
 
-            let has_fold_note = state
-                .gutter_markers
-                .iter()
-                .any(|marker| marker.line == buffer_line && marker.kind == GutterMarkerKind::FoldNote);
+            let has_fold_note = state.gutter_markers.iter().any(|marker| {
+                marker.line == buffer_line && marker.kind == GutterMarkerKind::FoldNote
+            });
             if has_fold_note && state.display_map.is_fold_candidate(buffer_line) {
+                // A short underline right below the chevron: the same "note = line"
+                // language the bookmarks use, and it needs no extra column width.
                 layout.fold_notes.push((
                     buffer_line,
                     Bounds::new(
                         point(
-                            fold_icon_x + FOLD_ICON_WIDTH - GUTTER_FOLD_NOTE_BADGE_WIDTH,
-                            bounds.origin.y + offset_y,
+                            fold_icon_x + (FOLD_ICON_WIDTH - GUTTER_FOLD_NOTE_UNDERLINE_WIDTH).half(),
+                            bounds.origin.y + offset_y + last_layout.line_height
+                                - GUTTER_FOLD_NOTE_UNDERLINE_HEIGHT
+                                - px(2.),
                         ),
-                        size(GUTTER_FOLD_NOTE_BADGE_WIDTH, GUTTER_FOLD_NOTE_BADGE_WIDTH),
+                        size(
+                            GUTTER_FOLD_NOTE_UNDERLINE_WIDTH,
+                            GUTTER_FOLD_NOTE_UNDERLINE_HEIGHT,
+                        ),
                     ),
                 ));
             }
 
             offset_y += line.wrapped_lines.len() * last_layout.line_height;
+        }
+
+        // The note under the pointer is shaped here so paint only has to draw it.
+        // Only markers that carry text (a note, not a bare bookmark) qualify.
+        let hovered_row =
+            gutter_hovered_row(&layout.marker_hitbox, top, last_layout.line_height, window);
+        if let Some(hovered_row) = hovered_row {
+            let note = layout
+                .rows
+                .get(hovered_row)
+                .copied()
+                .and_then(|buffer_line| {
+                    layout
+                        .markers
+                        .iter()
+                        .find(|(line, kind, note)| {
+                            *line == buffer_line
+                                && !note.is_empty()
+                                && matches!(
+                                    kind,
+                                    GutterMarkerKind::Bookmark | GutterMarkerKind::BookmarkNote
+                                )
+                        })
+                        .map(|(_, _, note)| note.clone())
+                });
+            if let Some(note) = note {
+                let text_style = window.text_style().clone();
+                let font_size = text_style.font_size.to_pixels(window.rem_size());
+                // Truncate by a conservative per-character width so a long note
+                // never grows past the cap; the ellipsis marks the cut.
+                let max_chars = (GUTTER_NOTE_POPOVER_MAX_WIDTH.as_f32()
+                    / (font_size.as_f32() * 0.8))
+                    .max(1.) as usize;
+                let note_text: SharedString = if note.chars().count() > max_chars {
+                    let kept: String = note.chars().take(max_chars.saturating_sub(1)).collect();
+                    format!("{kept}…").into()
+                } else {
+                    note
+                };
+                let runs = [TextRun {
+                    len: note_text.len(),
+                    font: text_style.font(),
+                    color: state.editor_style.foreground,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }];
+                let shaped = window.text_system().shape_line(note_text, font_size, &runs, None);
+                let note_width = shaped.width + GUTTER_NOTE_POPOVER_PADDING_X * 2.;
+                let note_height = last_layout.line_height + GUTTER_NOTE_POPOVER_PADDING_Y * 2.;
+                let mut note_x = origin_x + last_layout.line_number_width + px(6.);
+                let right_limit = bounds.origin.x + bounds.size.width - px(4.);
+                if note_x + note_width > right_limit {
+                    note_x = (right_limit - note_width)
+                        .max(bounds.origin.x + GUTTER_MARKER_HITBOX_WIDTH);
+                }
+                layout.hover_note = Some(HoverNote {
+                    text: shaped,
+                    bounds: Bounds::new(
+                        point(
+                            note_x,
+                            top + last_layout.line_height * hovered_row as f32
+                                + (last_layout.line_height - note_height).half(),
+                        ),
+                        size(note_width, note_height),
+                    ),
+                    background: state.editor_style.foreground.opacity(0.12),
+                });
+            }
         }
 
         layout
@@ -1771,15 +1887,8 @@ impl<M: InputModeKind> TextElement<M> {
         }
 
         let base_color = window.text_style().color;
-        for (_, badge_bounds) in marker_layout.fold_notes.iter() {
-            let _ = window.paint_svg(
-                *badge_bounds,
-                "input-gutter-fold-note".into(),
-                Some(GUTTER_PEN_BADGE_SVG),
-                TransformationMatrix::default(),
-                base_color.opacity(0.8),
-                cx,
-            );
+        for (_, underline_bounds) in marker_layout.fold_notes.iter() {
+            window.paint_quad(fill(*underline_bounds, base_color.opacity(0.7)));
         }
 
         let icon_offset = (GUTTER_MARKER_HITBOX_WIDTH - GUTTER_MARKER_ICON_WIDTH).half();
@@ -1787,14 +1896,14 @@ impl<M: InputModeKind> TextElement<M> {
             let kind = marker_layout
                 .markers
                 .iter()
-                .find(|(line, kind)| {
+                .find(|(line, kind, _)| {
                     *line == *buffer_line
                         && matches!(
                             kind,
                             GutterMarkerKind::Bookmark | GutterMarkerKind::BookmarkNote
                         )
                 })
-                .map(|(_, kind)| *kind);
+                .map(|(_, kind, _)| *kind);
             let hovered = hovered_row == Some(row_index);
             // Path keys are per drawing, not per color: a hovered icon reuses the same
             // path as its resting form (only the color changes), but the two bookmark
@@ -1841,6 +1950,23 @@ impl<M: InputModeKind> TextElement<M> {
                 Some(svg),
                 TransformationMatrix::default(),
                 color,
+                cx,
+            );
+        }
+
+        // The note popover goes last, so it sits above the text it describes.
+        if let Some(note) = marker_layout.hover_note.as_ref() {
+            window.paint_quad(fill(note.bounds, note.background));
+            let text_origin = point(
+                note.bounds.origin.x + GUTTER_NOTE_POPOVER_PADDING_X,
+                note.bounds.origin.y + GUTTER_NOTE_POPOVER_PADDING_Y,
+            );
+            _ = note.text.paint(
+                text_origin,
+                marker_layout.line_height,
+                TextAlign::Left,
+                None,
+                window,
                 cx,
             );
         }
@@ -3786,7 +3912,12 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 .iter()
                 .zip(prepaint.last_layout.visible_buffer_lines.iter())
             {
-                let p = point(input_bounds.origin.x, origin.y + offset_y);
+                // The bookmark column owns the left edge of the gutter, so the digits
+                // start after it: bookmarks read as "left of the line numbers".
+                let p = point(
+                    input_bounds.origin.x + prepaint.gutter_marker_layout.column_width,
+                    origin.y + offset_y,
+                );
                 let is_active = prepaint.current_row == Some(buffer_line);
 
                 let height = line_height * lines.len() as f32;

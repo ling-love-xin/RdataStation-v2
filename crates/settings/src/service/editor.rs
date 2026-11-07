@@ -20,6 +20,12 @@ pub(crate) fn apply_slot(
             };
             SettingsService::set_show_line_numbers(on, cx);
         }
+        Slot::EditorBookmarkHoverNote => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_bookmark_hover_note(on, cx);
+        }
         Slot::EditorShowFolds => {
             let Some(on) = value.as_bool() else {
                 return false;
@@ -156,6 +162,22 @@ impl SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.editor.show_line_numbers = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+    /// 读取「书签悬停说明」开关（`EditorHostPanel::render` 渲染权威同步点读取）。
+    pub fn bookmark_hover_note(cx: &App) -> bool {
+        cx.global::<Settings>().editor.bookmark_hover_note
+    }
+    /// 书签悬停说明开关：更新 global → 持久化 → 立即重绘所有窗口。
+    ///
+    /// 即时生效靠 `refresh_windows`：下一帧 `EditorHostPanel::render` 读到新值，
+    /// 与面板内缓存比较后重新投影 gutter 标记（关掉时不再下发说明文本）。
+    pub fn set_bookmark_hover_note(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.bookmark_hover_note = on;
         }
         persist(&cx.global::<Settings>().clone());
         cx.refresh_windows();

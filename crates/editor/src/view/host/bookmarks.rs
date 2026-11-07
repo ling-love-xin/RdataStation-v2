@@ -91,18 +91,27 @@ impl EditorHostPanel {
         self.push_gutter_markers(cx);
     }
 
-    /// 【书签】把书签投影成内核 gutter 标记：书签字形 + 折叠说明角标。
+    /// 【书签】把书签投影成内核 gutter 标记：书签字形 + 折叠说明横线。
     ///
     /// 判据与书签管理器一致（`label == 行号` = 无说明）：无说明画书签轮廓，有说明画
     /// 带横线的书签（形状区分，不靠颜色）。有说明的行若正好是折叠候选，内核在折叠
-    /// 箭头旁再画一枚笔形角标（是否候选由内核判定，非候选只画书签不画角标）。
-    fn push_gutter_markers(&mut self, cx: &mut Context<Self>) {
+    /// 箭头下方画一道横线并让箭头常显（是否候选由内核判定，非候选只画书签不画横线）。
+    ///
+    /// 说明文本随标记一起下发，供内核在指针停在该行时显示；设置里关掉「悬停显示
+    /// 说明」时下发空文本，内核只画标记不弹提示。
+    pub(crate) fn push_gutter_markers(&mut self, cx: &mut Context<Self>) {
         let bookmarks = self.shared.bookmarks(&self.document);
+        let hover_notes = super::editor_bookmark_hover_note_or_default(cx);
         let mut markers = Vec::with_capacity(bookmarks.len() * 2);
         for b in bookmarks.iter() {
             // 书签行号 1 起（sidecar 口径）→ 内核 0 起
             let line = b.line.saturating_sub(1);
             let is_note = b.label != b.line.to_string();
+            let note = if is_note && hover_notes {
+                b.label.as_str()
+            } else {
+                ""
+            };
             markers.push(GutterMarker {
                 line,
                 kind: if is_note {
@@ -110,11 +119,13 @@ impl EditorHostPanel {
                 } else {
                     GutterMarkerKind::Bookmark
                 },
+                note: note.into(),
             });
             if is_note {
                 markers.push(GutterMarker {
                     line,
                     kind: GutterMarkerKind::FoldNote,
+                    note: note.into(),
                 });
             }
         }

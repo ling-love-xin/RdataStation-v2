@@ -54,6 +54,17 @@ fn editor_show_folds_or_default(cx: &App) -> bool {
     }
 }
 
+/// 读「书签悬停显示说明」开关（设置在设置页；测试环境回退默认 true）。
+///
+/// 关掉时 `push_gutter_markers` 不下发说明文本，内核只画标记不弹提示。
+fn editor_bookmark_hover_note_or_default(cx: &App) -> bool {
+    if cx.has_global::<settings::model::Settings>() {
+        SettingsService::bookmark_hover_note(cx)
+    } else {
+        true
+    }
+}
+
 /// 【2026-10-28】读「基于缩进的折叠」开关（测试环境回退默认 true）。
 fn editor_indent_folding_or_default(cx: &App) -> bool {
     if cx.has_global::<settings::model::Settings>() {
@@ -393,6 +404,8 @@ pub struct EditorHostPanel {
     pub(crate) closed: bool,
     /// #48 行号开关缓存（设置 → render 权威同步点 → 内核 `set_line_number`）
     pub(crate) show_line_numbers: bool,
+    /// 书签悬停说明开关缓存（设置 → render 权威同步点 → 重新投影 gutter markers）
+    pub(crate) show_bookmark_hover_note: bool,
     /// #64 自动换行开关缓存（设置 → render 权威同步点 → 内核 `set_soft_wrap`）
     pub(crate) soft_wrap: bool,
     /// #65 自动闭合括号开关缓存（设置 → render 权威同步点 → 内核 `set_auto_close`）
@@ -1088,6 +1101,8 @@ impl EditorHostPanel {
             closed: false,
             // #48 面板创建即取设置当前值（与内核默认一致；后续变化由 render 同步）
             show_line_numbers: editor_show_line_numbers_or_default(cx),
+            // 书签悬停说明：创建时取设置值，render 权威同步点比对后重新投影标记
+            show_bookmark_hover_note: editor_bookmark_hover_note_or_default(cx),
             // #64 自动换行缓存：创建时取设置值，render 权威同步点比对后同步内核
             soft_wrap: editor_soft_wrap_or_default(cx),
             // #65 自动闭合 / 智能缩进缓存：同 soft_wrap（创建时取设置值）

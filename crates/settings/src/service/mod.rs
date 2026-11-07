@@ -71,6 +71,7 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
             SettingValue::Text(settings.appearance.tab_bar_variant.clone())
         }
         Slot::EditorShowLineNumbers => SettingValue::Bool(settings.editor.show_line_numbers),
+        Slot::EditorBookmarkHoverNote => SettingValue::Bool(settings.editor.bookmark_hover_note),
         Slot::EditorShowFolds => SettingValue::Bool(settings.editor.show_folds),
         Slot::EditorIndentFolds => SettingValue::Bool(settings.editor.indent_folding),
         Slot::EditorFoldOpenKeywords => {
@@ -308,6 +309,7 @@ impl SettingsService {
             | Slot::AppearanceTabBarMaxWidth
             | Slot::AppearanceTabBarVariant => appearance::apply_slot(slot, value, window, cx),
             Slot::EditorShowLineNumbers
+            | Slot::EditorBookmarkHoverNote
             | Slot::EditorShowFolds
             | Slot::EditorIndentFolds
             | Slot::EditorFoldOpenKeywords

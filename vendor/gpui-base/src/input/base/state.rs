@@ -156,16 +156,34 @@ pub enum GutterMarkerKind {
     FoldNote,
 }
 
-/// 一条 gutter 标记：某一行要画的标记类型。
+/// 一条 gutter 标记：某一行要画的标记类型，以及该行的说明文本。
 ///
 /// 同一行可以有多条（既是有说明的书签、又位于折叠首行），
 /// [`InputBaseState::set_gutter_markers`] 按 `(line, kind)` 排序去重。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// `note` 只用于指针停在该行时显示说明；是否下发归应用决定——设置里关掉
+/// 「悬停显示说明」时传空串，内核就只画标记、不弹提示。
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GutterMarker {
     /// 缓冲区行号（0 基）。
     pub line: usize,
     /// 该行要画的标记。
     pub kind: GutterMarkerKind,
+    /// 该行的说明文本（空串 = 无说明）。
+    pub note: SharedString,
+}
+
+impl Ord for GutterMarker {
+    /// 只按 `(line, kind)` 排序：`note` 是随行内容，不参与定位。
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.line, self.kind).cmp(&(other.line, other.kind))
+    }
+}
+
+impl PartialOrd for GutterMarker {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 /// 一次文本编辑在行维度的增量（0 基）。

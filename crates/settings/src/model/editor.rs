@@ -6,6 +6,11 @@ pub struct Editor {
     /// 编辑区是否显示行号（即时生效；内核 `LayoutMode::CodeEditor.line_number`）。
     #[serde(default = "default_show_line_numbers")]
     pub show_line_numbers: bool,
+    /// 指针停在「有说明」的书签行时，是否显示说明文本（默认开）。
+    /// 即时生效：编辑器 render 权威同步点重新投影 gutter 标记；关掉时不再把说明
+    /// 文本下发给内核，只画图标不弹提示。
+    #[serde(default = "default_bookmark_hover_note")]
+    pub bookmark_hover_note: bool,
     /// 是否启用代码折叠（2026-10-27 起开关移到设置页；默认开）。
     /// 即时生效：编辑器 render 权威同步点把设置值同步到 `shared.show_folds` →
     /// `sync_fold` 重跑（install / set_folding(false)）。
@@ -72,6 +77,7 @@ impl Default for Editor {
     fn default() -> Self {
         Self {
             show_line_numbers: default_show_line_numbers(),
+            bookmark_hover_note: default_bookmark_hover_note(),
             show_folds: default_show_folds(),
             indent_folding: default_indent_folding(),
             fold_open_keywords: default_fold_open_keywords(),
@@ -92,6 +98,11 @@ impl Default for Editor {
 }
 
 fn default_show_line_numbers() -> bool {
+    true
+}
+
+/// 书签悬停说明默认开（用户原始要求：「鼠标位于当前行时显示信息」）
+fn default_bookmark_hover_note() -> bool {
     true
 }
 
