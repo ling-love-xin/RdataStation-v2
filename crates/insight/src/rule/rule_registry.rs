@@ -6,7 +6,7 @@ use include_dir::Dir;
 use shared::error::{CommonError, CoreError};
 use tracing;
 
-use super::rule::{RuleLoadFailure, RuleScope, RuleSource};
+use super::{RuleLoadFailure, RuleScope, RuleSource};
 use super::rule_types::RuleFile;
 
 /// 规则注册表：内存中的规则集（按项目根缓存，见 `crate::registry_for`）。

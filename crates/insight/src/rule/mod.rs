@@ -15,6 +15,20 @@
 //! `Builtin` 层不可删，但可经索引表的抑制记录**禁用**（`enabled = 0`）——
 //! 这样用户能关掉一条不想要的内置规则，而不必伪造一个同名覆盖文件。
 
+pub mod rule_executor;
+pub mod rule_registry;
+pub mod rule_types;
+
+pub use rule_executor::RuleExecutor;
+pub use rule_registry::{
+    PendingProjectRules, RULES_DIR_NAME, RuleRegistry, get_global_rules_dir, get_project_rules_dir,
+    parse_rule_toml,
+};
+pub use rule_types::{
+    ExecutionResult, OutputField, QualityCheck, QualityReport, QualityRule, RenderHint, RuleFile,
+    RuleMeta, RuleQuery,
+};
+
 use serde::{Deserialize, Serialize};
 
 /// 规则作用域；枚举顺序即覆盖优先级（由低到高）。

@@ -27,9 +27,10 @@ pub mod jobs;
 pub mod model;
 pub mod quality_scorer;
 pub mod rule;
-pub mod rule_executor;
-pub mod rule_registry;
-pub mod rule_types;
+// 兼容别名：保留根路径引用，避免大量文件改动
+pub use rule::rule_executor;
+pub use rule::rule_registry;
+pub use rule::rule_types;
 pub mod rule_view;
 pub mod schema_analyzer;
 pub mod schema_view;
@@ -59,10 +60,9 @@ pub use store::{InsightMetaStore, InsightSnapshotMeta, InsightStorage, ProjectIn
 
 pub use insight_engine::{detect_extremes, get_temp_table_profile};
 pub use rule::{RuleLoadFailure, RuleScope, RuleSource};
-pub use rule_executor::RuleExecutor;
-pub use rule_registry::{
-    PendingProjectRules, RULES_DIR_NAME, RuleRegistry, get_global_rules_dir, get_project_rules_dir,
-    parse_rule_toml,
+pub use rule::{
+    PendingProjectRules, RULES_DIR_NAME, RuleExecutor, RuleRegistry, get_global_rules_dir,
+    get_project_rules_dir, parse_rule_toml,
 };
 pub use service::indexer::{
     RuleIndexEntry, RuleIndexStore, RuleLoadStatus, SyncOutcome, plan_index, scan_scope_dir,
@@ -90,7 +90,7 @@ pub use model::{
     TableEvalProgress, TableProfileView, TableQualityView,
 };
 pub use quality_scorer::Grade;
-pub use rule_types::{
+pub use rule::{
     ExecutionResult, OutputField, QualityCheck, QualityReport, QualityRule, RenderHint, RuleFile,
     RuleMeta, RuleQuery,
 };
