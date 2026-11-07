@@ -31,7 +31,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 | 依赖 | 约束 | 原因 |
 | --- | --- | --- |
-| `gpui-kit` | `0.8.1` | 与 gpui 版本强绑定：`gpui-kit` / `gpui-base` / `gpui-component` / `gpui-kit-assets` **必须同版本**（门面与内部错配会出问题），随 GPUI-kit 发布节奏整套升（当前 0.8.1，2026-10-27 由 0.8.0 升入，见 `docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md` 与 `docs/architecture/dependencies/duckdb-2.0-gpui-kit-0.8.1-upgrade-assessment.md`；`gpui-base` / `gpui-component` 两个包走 `vendor/` 私有 patch，见根 `Cargo.toml` `[patch.crates-io]`）。写法是 caret 约束，实际生效版本看 `Cargo.lock` |
+| `gpui-kit` | `0.9.0` + `features = ["gpui-fast"]` | 与 gpui 版本强绑定：`gpui-kit` / `gpui-base` / `gpui-component` / `gpui-kit-assets` **必须同版本**（门面与内部错配会出问题），随 GPUI-kit 发布节奏整套升（当前 0.9.0，2026-11-08 由 0.8.1 升入，见 `docs/architecture/ui/gpui-kit-0.9.0-upgrade-report.md`、`docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md` 与 `docs/architecture/dependencies/duckdb-2.0-gpui-kit-0.8.1-upgrade-assessment.md`；`gpui-base` / `gpui-component` 两个包走 `vendor/` 私有 patch，见根 `Cargo.toml` `[patch.crates-io]`）。写法是 caret 约束，实际生效版本看 `Cargo.lock`。`gpui-fast` 是**换渲染内核**而非开关：`gpui-fast*` 与 `gpui-pre*` 两套核心同编；`gpui-fast` 自身不嵌 Windows manifest，本项目由 `gpui-pre` 的默认 `windows-manifest` 提供（不要在应用侧再嵌，见 §4 的 0.9.0 记录） |
 | `specta` | `=2.0.0-rc.25` | rc 阶段，11 个 crate 共用；升级需同步核对类型生成链路 |
 | `sqlglot-rust` | `=0.10.33` | SQL 转译/生成行为对版本敏感（业务关键，见 §5），升级需跑 SQL 回归（0.10.29 → 0.10.33 于 2026-10-24，修「单条转译静默截断」） |
 | `arrow` | `58.4.0` | 主版本跟随 `duckdb`：两端之间传 `RecordBatch`，必须是同一 arrow，不能单独升 |
@@ -98,6 +98,13 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
   - `PrivateKeyWithHashAlg::new` 不再返回 `Result`，移除对应的 `map_err` 分支
   - 单测去掉 RNG 依赖：改用两把固定测试公钥（`PublicKey::from_openssh`）—— `rand_core 0.10` 已移除 `OsRng`，且 `PrivateKey::random` 要求的 trait 与 rand 0.8 不兼容；`connection` 的 `dev-dependencies.rand` 随之删除
 
+- `gpui-kit` 0.8.1 → **0.9.0**（2026-11-08，分支 `upgrade/gpui-kit-0.9.0`），同批开启 `gpui-fast`：
+  - 家族同版本 0.9.0（`gpui-kit` / `gpui-base` / `gpui-component` / `gpui-kit-assets`）；`gpui-pre` 0.3.10 → **`=0.3.11`**、`gpui-fast` 0.1.12 → 0.1.13
+  - `gpui-base` / `gpui-component` 整目录换 0.9.0 发布包源码后**私有 patch 逐条重打**（11 个文件）；上游 0.9.0 仍无 `add_cursor_above_line` / `add_cursor_below_line` / `collapse_cursors` / `select_columnar_block`，这 4 个符号不能指望上游
+  - `git apply` 在本机不可用（发布包行尾与 patch 上下文行不匹配，13 个 hunk 全 reject），改为锚点字符串替换（每条先断言出现次数），全过程见 `docs/architecture/ui/gpui-kit-0.9.0-upgrade-report.md` §3
+  - `gpui-fast` 是**换渲染内核**：`gpui-fast*` 与 `gpui-pre*` 两套核心同编（构建时间/磁盘各多一份，二进制不双份）；`gpui-fast` 走 `windows-manifest-provided-by-host`（自己不自嵌清单），但依赖图里 `gpui-pre` 的默认 feature `windows-manifest` 已经嵌了一份 ID=1 清单（内容含 PerMonitorV2 / SegmentHeap / comctl32 v6 / asInvoker），应用侧再嵌会 `CVT1100` 资源重复 → `LNK1123`；因此 `crates/app/build.rs` 保持只嵌 icon，并注释说明何时才需要自嵌
+  - 验证：`cargo check` 三级 + 开 `gpui-fast` 后再全量 check 均 0 error 0 warning，**项目侧零代码改动**（断裂面全被 vendor patch 吸收）；运行时（IME 组字 / 多光标 / 折叠 / 拖拽 / a11y / 滚动性能）未验
+
 以上验证：`cargo check-all` 全量通过；`cargo test-all`（全 workspace）**约 430 项全过**（engine 219 / insight 53 / mock 56 / connection 21 / shared 19 / workbench 12 / project 10 / plugin 11，加 workbench 集成测试 19 项）。
 
 待办：
@@ -106,7 +113,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 | --- | --- | --- | --- | --- |
 | `duckdb` | 1.10505.0（DuckDB 1.5.5） | `1.10506.1`（DuckDB 1.5.6）/ `1.20000.1`（DuckDB 2.0.x） | `crates/engine`（`DUCKDB_LIB_DIR` 动态链接） | 1.5 线内 patch（→ `1.10506.1`）仍要 `arrow ^58`，可单独升，但 crate 版本必须与 `third_party/duckdb/` 的库版本成对换；2.0 线要 `arrow ^60` 且有存储格式单向兼容，见 `duckdb-2.0-gpui-kit-0.8.1-upgrade-assessment.md`，继续暂缓 |
 | `arrow` | 58.4.0 | 60.1.0 | — | **不可单独升**，须与 `duckdb` 同步（见 R4）；只有上 DuckDB 2.0 线才需要 60 |
-| `gpui-kit` | 0.8.1 | 0.9.0（crates.io 2026-11-02） | UI 全仓 | 0.9.0 把 `gpui-pre` 钉到 `=0.3.11`、`gpui-fast` 到 0.1.13；`gpui-base` / `gpui-component` 要按 0.9.0 发布包重打私有 patch，未评估 |
+| `gpui-kit` | 0.9.0 + `features = ["gpui-fast"]` | ✅ 已升（2026-11-08） | UI 全仓 | 编译全绿（含开 fast 后）；剩运行时回归与滚动性能基线，见 `gpui-kit-0.9.0-upgrade-report.md` §7 |
 | `sqlglot-rust` | 0.10.33 | 0.11.1（crates.io 2026-10-28） | `crates/sql` | 跨 0.10 → 0.11，须先跑 `cargo test -p rds-sql` 的 SQL 回归，未评估 |
 
 （驱动层（`rusqlite` / `sqlx` / `mysql_async`）、连接层（`russh`）已升到可用的最新版；SQL 引擎与 UI 家族的上游新版本见上表。）
@@ -180,7 +187,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 | R1 内部 crate 路径唯一入口 | 同上（`paths` / `shared` / `engine` / `connection` / `insight` / `mock` / `settings` / `workbench` 条目） |
 | R2 crate 内写法 | `crates/*/Cargo.toml`（成员清单见根 `Cargo.toml` `members`） |
 | R3 版本取值来自解析结果 | `Cargo.lock` ↔ 根表版本号 |
-| R4 例外：gpui-kit | `Cargo.toml` → `gpui-kit = "0.8.1"` |
+| R4 例外：gpui-kit | `Cargo.toml` → `gpui-kit = { version = "0.9.0", features = ["gpui-fast"] }`（vendor 两个包见 `[patch.crates-io]`，清单见 `crates/app/build.rs`） |
 | R4 例外：specta / sqlglot-rust | 同上（精确锁定条目；sqlglot 的唯一边界见 `crates/sql`） |
 | R4 例外：arrow 跟随 duckdb | 同上（`arrow` / `duckdb` 条目） |
 | v1 目录不参与构建 | `Cargo.toml` → `workspace.exclude` |
