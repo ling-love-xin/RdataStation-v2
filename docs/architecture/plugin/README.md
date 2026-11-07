@@ -166,6 +166,8 @@ disable / uninstall 全部改用 by-code 接口（此前按安装 uuid 更新，
 不留孤儿。面板：sidecar/frontend 的状态改由真实 `LoadStatus` 透出（原来硬写 Inactive，
 运行中的插件永远显示「已停用」）；加载 / 激活失败的行把原因并进第二行
 （`id · 原因：…`，danger 色，240px 面板放不下第三行；完整堆栈仍看 tracing 日志）；
+加载期完整性校验失败的包不再从列表里消失——以 `LoadFailed` 留在会话缓存，
+面板能看到原因并直接卸载（此前只能手删目录）；
 安装回执四种文案（保持停用 / 激活失败 / 已安装并启用 / 兜底）；
 变更提示 + 「重载 N」按钮消费 `pending_reloads`。`cargo test -p rds-plugin` **215** 单测 + 集成全绿
 （`lifecycle` 8 条）；`cargo test -p rds-store --lib` **162 passed / 2 ignored**。
