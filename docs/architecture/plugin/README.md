@@ -166,9 +166,13 @@ disable / uninstall 全部改用 by-code 接口（此前按安装 uuid 更新，
 不留孤儿。面板：sidecar/frontend 的状态改由真实 `LoadStatus` 透出（原来硬写 Inactive，
 运行中的插件永远显示「已停用」）；安装回执四种文案（保持停用 / 激活失败 / 已安装并启用 / 兜底）；
 变更提示 + 「重载 N」按钮消费 `pending_reloads`。`cargo test -p rds-plugin` **215** 单测 + 集成全绿
-（`lifecycle` 7 条）；`cargo test -p rds-store --lib` **162 passed / 2 ignored**。
+（`lifecycle` 8 条）；`cargo test -p rds-store --lib` **162 passed / 2 ignored**。
 
-**P3（wasm host function 面）、P4（注册表与界面）、P5（生态）未开始**。当前 wasm 插件拿不到任何宿主能力（与「默认拒绝」一致）。
+**P3（wasm host function 面）未开始**（当前 wasm 插件拿不到任何宿主能力，与「默认拒绝」一致）；
+**P4 插件面板与安装链已落地（2026-10-16）**——列表 / 状态徽标 / 空态 / 安装包 / 从目录 / 刷新 /
+重载 N / 启停 / 卸载，安装链含依赖对账与加载期完整性复核；**P4 注册表 / 贡献点未开始**
+（`PanelRegistry` / `CommandRegistry` / 设置外部登记项、`project_resources` 对账、插件图标 resolver）；
+**P5（分发与签名）未开始**。
 
 HTTP 旧路径（`client.rs` + 旧 `manager.rs`）已删除，`rds-plugin` 不再依赖 `reqwest`。
 验收仍是「能连 → 能查 3000 行（Arrow 到宿主）→ 能取消 → **宿主退出无孤儿进程**」（后者靠一条协议级约定：宿主持有 stdin 管道，sidecar 见 EOF 即退，见 dev-plan §4.2.1）。
@@ -184,7 +188,8 @@ oracle 用例真连 H2（url_override）查询通过，postgres-py 部署+注册
 rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：`SessionDriver::describe`
 此前不带 `session_id`（Rust 靶子容忍、Java 壳按契约严格校验，暴露为「会话不存在」）。
 未接（如实列出）：用户自定 driver jar 路径白名单 v1 未实现（壳只扫自身目录/lib）；
-`third_party` jre/python 自动下载为二期；插件 UI 入口归档与面板接入未做（P4）。
+`third_party` jre/python 自动下载为二期；插件前端 UI 的入口归档与扩展宿主未做
+（插件列表 / 安装链已在 P4 落地，2026-10-16）。
 
 **用户自定驱动 jar（`backend.driver_jars`）已落地**（2026-10-22）：
 清单 `[backend]` 新增 `driver_jars`（仅 `runtime = "java"`，绝对路径，文件或目录），
