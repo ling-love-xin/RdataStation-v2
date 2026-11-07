@@ -102,6 +102,14 @@ patch 注释一并从英文 `RdataStation vendor patch (0.8.1)` 改为【项目�
 2. **性能未测**：没有滚动帧时间 / 首帧 / 内存基线数据。`engine` 侧结果集仍有 10000 行硬顶，要测 10 万行滚动得先放开或走 `load_more`。
 3. **业务代码 0 报错 ≠ 行为等价**：0.9.0 的断裂面被 vendor patch 吸收，说明项目依赖的旧签名都还在；但语义变化（尤其光标/选择）不会体现在编译错误里。
 4. **patch 与上游长期分叉**：4 个符号上游至今没有，`resize_handle` 的 padding 是项目口味，`syntax_context` 注册表是项目扩展——每次 gpui-kit 升级都要重演 §3 的迁移动作，成本随 patch 面增长。
+5. **⚠️ `gpui-fast` 开启后有 6 条既有 UI 用例失败（2026-11-08 实测，未定性完）**：全量 `cargo test --workspace -j 1 --no-fail-fast` 在开 `gpui-fast` 时共 8 条失败，其中 2 条是仓库既有的 `rds-editor` 失败（与本次无关），另 6 条是：
+   - `analytics_resource/tests/dialog_window.rs`：`version_dialog_lists_rows_and_shows_actions_after_selection`（L445）、`index_repair_dialog_groups_rows_and_shows_inline_actions`（L525）
+   - `right_sidebar_alone_renders_draft_row`、`header_interaction::clicking_the_title_row_collapses_and_restores`、`nav_tree_rows_are_laid_out_by_the_virtual_list`、`mock_view::tests::column_dialog_shows_type_mismatch_warning`
+   **A/B 已做的部分**：同一份 0.9.0 代码下，把 `features = ["gpui-fast"]` 去掉后 `dialog_window` 10/10 通过；`main`（0.8.1，无 fast）同样 10/10 通过。→ 这两条**确定由 `gpui-fast` 引起**，而不是 0.9.0 的 API 变更。
+   **机制（源码证据，未定论）**：`debug_bounds` 读的是「上一帧的绘制记录表」`window.rendered_frame.debug_bounds`；retained 渲染会对**没有重新绘制**的子树复用上一帧的绘制记录（`Frame::reuse_paint`，见 `gpui-fast-0.1.13/src/window.rs:4370-4374`）。
+   于是「元素已从树里移除」与「`debug_bounds` 仍返回 Some」可以同时成立——**断言消失的用例在 fast 下不可靠**。尚未确认这是「纯测试口径问题」还是「画面真的残留旧内容」（后者需要 `cx.notify()` 之类的不失效就不会重绘，属真 UI bug）。
+   **影响面**：全仓共 37 处 `debug_bounds(..).is_none()` 断言（`analytics_resource`/`panel_window` 等），开 fast 后都需要重新确认口径。
+   **处置建议**：`gpui-fast` 先作为可切换开关保留（用户明确要求开启，当前 worktree 已开），但**不进主干默认值**，等这 6 条定性；若确认是绘制残留，则是 retained 模式的接线成本，需逐个视图补失效点。
 
 ## 8. 复现步骤
 
