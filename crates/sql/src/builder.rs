@@ -145,7 +145,11 @@ fn create_table_sql(
         table,
         columns,
         constraints: vec![],
+        // sqlglot-rust 0.11.1 给 `CreateTableStatement` 增了两个字段（CTAS 的 `WITH` 属性与
+        // `WITH [NO] DATA`）。我们只生成普通建表，两者都留空；生成器在 `as_select` 为 None 时会忽略它们。
+        with_properties: vec![],
         as_select: None,
+        with_data: None,
     });
     generate(&stmt, Dialect::DuckDb)
 }
@@ -244,7 +248,10 @@ pub fn build_create_table_as_select(table: &str, source_table: &str) -> String {
         table: make_table_ref(table),
         columns: vec![],
         constraints: vec![],
+        // 同上（0.11.1 新增字段）：CTAS 不带 `WITH` 属性、也不写 `WITH DATA` 子句。
+        with_properties: vec![],
         as_select: Some(Box::new(select_all().from(source_table).build())),
+        with_data: None,
     });
     generate(&stmt, Dialect::DuckDb)
 }
