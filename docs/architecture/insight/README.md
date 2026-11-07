@@ -172,9 +172,12 @@ cargo run -p rds-insight --example insight_preview
 | `insight-dev-plan.md` | **做什么、做到哪**：已确认决策 9 项 / **§0 进度记录** / 现状盘点 / **§2 五项实证缺陷** / 目标 crate 边界 / **§4 规则作用域与索引表设计** / Phase 0–5 任务 / 测试场景 T1–T14 / 风险 R1–R7 / 实现位置映射 / 验证命令 / **§10 未接与预留项（收口清单 · 权威）** / **§11 `insight_view.rs` 按 Tab 位移（已完成 2026-09-18）+ 右栏对齐 EDA 原型（已完成 2026-10-30，见 §11 尾部注记）** |
 | `insight-extension-notes.md` | **实现手段与第三方扩展的调研记录**（讨论稿）：现状约束（外部编译库 / 单例 / 已有扩展机制）/ 边界（三层实现 · 扩展可换实现不可换语义 · 准入四件套）/ 候选扩展逐项评估（`dq` / `stats_duck` / `datasketches` / `stochastic` + 顺带发现）/ 可参考的扩展设计（GE / Deequ / dbt / Soda / gatekeeper …）/ **§6 可采取之处（不引扩展也能拿的 10 条）** / 探针口径 |
 | `insight-user-guide.md` | **怎么用**：入口 / 界面导览与怎么看数字 / 典型流程 / **§4 规则编写指南（对外契约：三层作用域 · 字段全表 · `value_type` 表 · 质量门控语义 · 可照抄示例 · 安全边界）** / **§4.8 内置规则 18 条一览** / FAQ 排查 / USIT 验收清单 |
-| `insight-eda-prototype.html` | **现行可交互基准原型**（右栏集合 + 下钻 + 中间 EDA 工作页；2026-10-18 对齐版，**2026-10-30 真机右栏已对齐其右侧面板**）。旧 `insight-prototype.html` / `insight-workspace-prototype.html` / `insight-prototype-design.md` 为早期废弃稿，**不再作对齐基准** |
+| `prototypes/eda/eda.html` | **EDA 列卡交互原型**（右栏集合 + 下钻 + 中间 EDA 工作页；2026-10-18 对齐版，**2026-10-30 真机右栏已对齐其右侧面板**）。旧 `insight-prototype.html` / `insight-workspace-prototype.html` / `insight-prototype-design.md` 为早期废弃稿，已归 `_backup/` |
+| `prototypes/workspace/workspace.html` | **工作区主框架原型**（tab 条 / 左栏 / 右栏布局基准） |
+| `prototypes/probe-dialog/` | **探查确认弹窗原型**（当前无 HTML，直接改 GPUI；对应 `workspace/probe_dialog.rs`） |
+| `prototypes/source-picker/` | **新建洞察来源选择原型**（当前无 HTML，待出） |
 | `insight-showcase.md` | **一页看懂（可贴版）**：一句话 + 它替你做到的事 / 为什么不是一个统计面板（V1 七处逐条对照）/ 集合 + 下钻 · 一个目标模型 / 三个高光 / 四个剧本 / 五步旅程与分层架构（**mermaid 图**）/ 规则 TOML 与两道门 / 入口矩阵 / 事实与证据 / 边界 · 这些事它不做 / 文档地图 |
-| `insight-showcase.html` | **一页看懂（视觉版）**：首屏是工作台线框，右 Dock 洞察面板（集合 + 下钻，对齐 EDA 原型）；吸顶导航滚动高亮 + KPI / 高光 / 剧本 / 流程 / 分层 / 表格排版。**宣传稿：数字以本目录其他文档为准**；自包含、明暗双主题、离线可开 |
+| `prototypes/overview/overview.html` | **一页看懂（视觉版）**：首屏是工作台线框，右 Dock 洞察面板（集合 + 下钻，对齐 EDA 原型）；吸顶导航滚动高亮 + KPI / 高光 / 剧本 / 流程 / 分层 / 表格排版。**宣传稿：数字以本目录其他文档为准**；自包含、明暗双主题、离线可开 |
 | `../overview.md` | M8 定位与 crate 依赖方向（§九大模块与 crate 对应） |
 | `../connection/connection-dialog-architecture.md` | 作用域与快照（`G_`/`P_`/`GP_`）的既有范式参照 |
 | `../ui/ui-design-spec.md` | 三层约束（主题 token / 尺寸常量 / 组件规格） |

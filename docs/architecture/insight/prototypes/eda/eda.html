@@ -265,19 +265,15 @@
   .cc-vis { margin-top: 8px; }
   .cc-body { display: none; margin-top: 10px; border-top: 1px solid var(--border-soft); padding-top: 10px; }
   .col-card.open .cc-body { display: block; }
-  /* 展开态四区 Tab */
-  .cc-zones { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
-  .cc-zone { padding: 4px 9px; font-size: 11.5px; color: var(--muted); border-bottom: 2px solid transparent; }
-  .cc-zone:hover { color: var(--text); }
-  .cc-zone.active { color: var(--text); border-bottom-color: var(--coral); }
-  .cc-zone-only { margin-left: auto; display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--dim); cursor: pointer; user-select: none; }
-  .cc-zone-only input { accent-color: var(--coral); }
-  .cc-zone-body { font-size: 12px; }
-  .cc-detail { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 16px; }
+  /* 展开态单列分区（对齐 ydata 长滚动） */
+  .cc-section { margin-bottom: 14px; }
+  .cc-section:last-child { margin-bottom: 0; }
+  .cc-sec-title { font-size: 11.5px; font-weight: 600; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.3px; }
+  .cc-sec-note { font-weight: 400; color: var(--dim); text-transform: none; letter-spacing: 0; margin-left: 6px; }
+  .cc-detail { display: flex; flex-direction: column; gap: 0; }
   .cc-detail .row { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; border-bottom: 1px dashed var(--border-soft); }
   .cc-detail .row span { color: var(--muted); }
   .cc-detail .row b { font-family: var(--mono); font-weight: 500; }
-  .cc-detail.full { grid-template-columns: 1fr; }
   /* 规则命中 */
   .rule-list { display: flex; flex-direction: column; gap: 5px; }
   .rule-item { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--chrome); }
@@ -566,8 +562,6 @@ const state = {
   corrCols: null,       // 关联性列对选择（默认数值列）
   corrPickOpen: false,
   corrPickQ: "",
-  detailZone: "stats",  // 列卡展开区：stats/dist/quality/sample
-  ruleOnly: false,      // 列卡「只看规则属性」
   multi: false,         // 集合多选模式
   selTables: new Set(), // 勾选的表
   view: "eda",          // eda | compare | archive（资产库审计）
@@ -680,35 +674,37 @@ function miniVis(col) {
   return "";
 }
 
-/* ---------- 列卡：折叠概要 + 展开四区（统计/分布/检查器/样本）+ 只看规则 ---------- */
-function zoneBody(col, zone) {
-  if (zone === "stats") {
-    const rows = (col.stats || []).map(([k, v]) =>
-      `<div class="row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
-    return `<div class="cc-detail">${rows}</div>`;
-  }
-  if (zone === "dist") {
-    // 数值列分布检验（科研级描述）：正态性 p 值 + 偏度/峰度（取样集上计算）
-    const norm = col.norm ? `<div class="norm-line ${col.norm.cls}">
-      <span class="nlabel">正态性</span>
-      <span class="nval">Shapiro-Wilk p=${col.norm.p}</span>
-      <span class="nval">偏度 ${col.norm.skew}</span>
-      <span class="nval">峰度 ${col.norm.kurt}</span>
-      <span class="njudge">${esc(col.norm.judge)}</span></div>` : "";
-    return `<div class="cc-vis">${miniVis(col)}</div>${norm}
-      <div class="sec-note" style="margin-top:6px">${esc(col.distNote || "完整分布直方图 / Top N（展开态）")}</div>`;
-  }
-  if (zone === "quality") {
-    const rows = (col.quality || []).map(([k, v, bad]) =>
-      `<div class="row"><span>${esc(k)}</span><b ${bad ? 'style="color:var(--danger)"' : ""}>${esc(v)}</b></div>`).join("");
-    return `<div class="cc-detail">${rows}</div>`;
-  }
-  if (zone === "sample") {
-    const rows = (col.samples || []).map(v =>
-      `<div class="row"><span>样本</span><b style="font-family:var(--mono)">${esc(v)}</b></div>`).join("");
-    return `<div class="cc-detail full">${rows}</div>`;
-  }
-  return "";
+/* ---------- 列卡：折叠概要 + 展开单列长滚动（对齐 ydata）+ 检查器特色 ---------- */
+function expandedBody(col) {
+  // 基础统计（单列文字列表，对齐 ydata）
+  const statsRows = (col.stats || []).map(([k, v]) =>
+    `<div class="row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
+  // 分布可视化（静态条形图，无交互）
+  const vis = miniVis(col);
+  // 正态性检验（数值列特色）
+  const norm = col.norm ? `<div class="norm-line ${col.norm.cls}">
+    <span class="nlabel">正态性</span>
+    <span class="nval">Shapiro-Wilk p=${col.norm.p}</span>
+    <span class="nval">偏度 ${col.norm.skew}</span>
+    <span class="nval">峰度 ${col.norm.kurt}</span>
+    <span class="njudge">${esc(col.norm.judge)}</span></div>` : "";
+  // 样本（前 5 条，对齐 ydata 的 sample）
+  const sampleRows = (col.samples || []).map((v, i) =>
+    `<div class="row"><span>样本 ${i+1}</span><b style="font-family:var(--mono)">${esc(v)}</b></div>`).join("");
+  return `
+    <div class="cc-section">
+      <div class="cc-sec-title">基础统计</div>
+      <div class="cc-detail">${statsRows}</div>
+    </div>
+    <div class="cc-section">
+      <div class="cc-sec-title">分布</div>
+      <div class="cc-vis">${vis}</div>
+      ${norm}
+    </div>
+    <div class="cc-section">
+      <div class="cc-sec-title">样本</div>
+      <div class="cc-detail">${sampleRows}</div>
+    </div>`;
 }
 
 /* 检查器命中列表：四态（命中 / 未命中 / 不适用-类型 / 不适用-列排除） */
@@ -728,25 +724,25 @@ function ruleList(col) {
 function colCard(col) {
   const open = state.openCols.has(col.name);
   const missCls = col.missing > 0.2 ? "miss" : "";
-  // 折叠态关键统计（比 v2 多一行：唯一/均值/空值率）
+  // 折叠态关键统计
   const statsLine = (col.statsLine || []).map(([k, v, bad]) =>
     `<span class="m ${bad ? "miss" : ""}">${esc(k)} <b>${esc(v)}</b></span>`).join("");
-  // 探索价值徽标（默认按此排序，业务表 200+ 列时快速定位「值得看」的列）
+  // 探索价值徽标
   const es = exploreScore(col, TABLES[state.table]);
   const exploreBadge = es >= 3
     ? `<span class="cc-explore hot" title="探索价值高：缺失 / 空值 / 高基数 / 检查器未命中">关注 ${es.toFixed(1)}</span>`
     : es >= 1
       ? `<span class="cc-explore" title="探索价值">${es.toFixed(1)}</span>`
       : "";
-  // 展开态四区（质量区改名「检查器」，弱化审计心智）
-  const zones = [["stats", "基础统计"], ["dist", "分布"], ["quality", "检查器"], ["sample", "样本"]]
-    .map(([z, l]) => `<span class="cc-zone ${state.detailZone === z ? "active" : ""}" data-zone="${z}">${l}</span>`).join("");
-  const ruleToggle = `<label class="cc-zone-only"><input type="checkbox" id="ruleOnly" ${state.ruleOnly ? "checked" : ""}>只看规则属性</label>`;
+  // 展开态：单列长滚动（对齐 ydata）+ 检查器特色区
   const rl = ruleList(col);
   const rules = rl.items;
-  const body = state.ruleOnly
-    ? `<div class="rule-list">${rules || '<div style="color:var(--dim)">该列无检查器属性</div>'}</div>`
-    : `<div class="cc-zones">${zones}${ruleToggle}</div><div class="cc-zone-body">${zoneBody(col, state.detailZone)}</div>${rules ? `<div style="margin-top:8px;border-top:1px dashed var(--border-soft);padding-top:8px"><div class="sec-note" style="margin-bottom:4px">检查器 ${rl.hits}/${rl.total} 命中${rl.nas ? ` · ${rl.nas} 不适用` : ""}</div><div class="rule-list">${rules}</div></div>` : ""}`;
+  const body = open ? `
+    ${expandedBody(col)}
+    ${rules ? `<div class="cc-section">
+      <div class="cc-sec-title">检查器 <span class="cc-sec-note">${rl.hits}/${rl.total} 命中${rl.nas ? ` · ${rl.nas} 不适用` : ""}</span></div>
+      <div class="rule-list">${rules}</div>
+    </div>` : ""}` : "";
   return `<div class="col-card ${open ? "open" : ""}" data-col="${esc(col.name)}">
     <div class="cc-head">
       <span class="cc-name">${esc(col.name)}</span>
@@ -755,7 +751,6 @@ function colCard(col) {
       <span class="cc-chev">${open ? "▾" : "▸"}</span>
     </div>
     <div class="cc-stats">${statsLine || `<span class="m ${missCls}">缺失 <b>${pct(col.missing)}</b></span><span class="m">唯一 <b>${esc(col.unique)}</b></span>`}</div>
-    <div class="cc-vis">${open ? "" : miniVis(col)}</div>
     <div class="cc-body">${body}
       <div class="drill"><button class="btn ghost" data-drill="${esc(col.name)}" title="在 SQL 编辑器中打开针对该列的查询">在 SQL 编辑器中查看</button></div>
     </div>
@@ -1338,26 +1333,15 @@ function bindEvents(t) {
   });
   document.querySelectorAll(".col-card").forEach(el => {
     el.addEventListener("click", (ev) => {
-      if (ev.target.closest("[data-drill]") || ev.target.closest("[data-zone]") || ev.target.closest(".cc-zone-only")) return;
+      if (ev.target.closest("[data-drill]")) return;
       const n = el.dataset.col;
       state.openCols.has(n) ? state.openCols.delete(n) : state.openCols.add(n);
-      state.detailZone = "stats";
-      state.ruleOnly = false;
-      render();
-    });
-  });
-  document.querySelectorAll(".cc-zone").forEach(el => {
-    el.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      state.detailZone = el.dataset.zone;
       render();
     });
   });
   document.querySelectorAll("[data-drill]").forEach(el => {
     el.addEventListener("click", () => toast("原型演示：在 SQL 编辑器中打开「SELECT … WHERE " + el.dataset.drill + " …」"));
   });
-  const ruleOnly = document.getElementById("ruleOnly");
-  if (ruleOnly) ruleOnly.addEventListener("change", () => { state.ruleOnly = ruleOnly.checked; render(); });
 
   // 字段筛选：搜索定位 + 下拉多选
   const fq = document.getElementById("fq");
@@ -1407,8 +1391,6 @@ function bindEvents(t) {
       const n = el.dataset.wcol;
       state.rtab = "cols";
       state.openCols.add(n);
-      state.detailZone = "stats";
-      state.ruleOnly = false;
       render();
       document.getElementById("colGrid") && document.getElementById("colGrid").scrollIntoView({ behavior: "smooth", block: "start" });
     });

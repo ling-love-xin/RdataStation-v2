@@ -1,0 +1,112 @@
+<html style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f7;">
+<title>探查确认弹窗原型</title>
+<div style="max-width:520px;margin:40px auto;background:#fff;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.12);overflow:hidden;">
+  <!-- Dialog 标题栏 -->
+  <div style="padding:16px 20px 12px;border-bottom:1px solid #eee;">
+    <div style="font-size:15px;font-weight:600;color:#1d1d1f;">探查确认</div>
+  </div>
+
+  <!-- 内容区 -->
+  <div style="padding:16px 20px;display:flex;flex-direction:column;gap:12px;">
+
+    <!-- 探查对象 -->
+    <div style="display:flex;align-items:center;gap:6px;font-size:13px;color:#86868b;">
+      <span>探查对象：</span>
+      <span style="color:#1d1d1f;font-weight:500;">orders</span>
+    </div>
+
+    <!-- 数据量 -->
+    <div>
+      <div style="font-size:12px;font-weight:600;color:#1d1d1f;margin-bottom:6px;">数据量</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;">
+        <button style="padding:4px 10px;font-size:12px;border:1px solid #d2d2d7;border-radius:6px;background:#fff;cursor:pointer;">全量</button>
+        <button style="padding:4px 10px;font-size:12px;border:1px solid #007aff;border-radius:6px;background:#e8f0fe;cursor:pointer;color:#007aff;font-weight:500;">1,000 行</button>
+        <button style="padding:4px 10px;font-size:12px;border:1px solid #d2d2d7;border-radius:6px;background:#fff;cursor:pointer;">500 行</button>
+        <button style="padding:4px 10px;font-size:12px;border:1px solid #d2d2d7;border-radius:6px;background:#fff;cursor:pointer;">5,000 行</button>
+        <button style="padding:4px 10px;font-size:12px;border:1px solid #d2d2d7;border-radius:6px;background:#fff;cursor:pointer;">5%</button>
+        <button style="padding:4px 10px;font-size:12px;border:1px solid #d2d2d7;border-radius:6px;background:#fff;cursor:pointer;">10%</button>
+        <button style="padding:4px 10px;font-size:12px;border:1px solid #d2d2d7;border-radius:6px;background:#fff;cursor:pointer;">25%</button>
+      </div>
+      <div style="margin-top:8px;display:flex;align-items:center;gap:8px;font-size:13px;">
+        <span style="color:#86868b;flex:none;">行数</span>
+        <input type="text" value="1000" style="flex:1;padding:6px 10px;border:1px solid #d2d2d7;border-radius:6px;font-size:13px;">
+      </div>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #eee;margin:4px 0;">
+
+    <!-- 采样方式 -->
+    <div>
+      <div style="font-size:12px;font-weight:600;color:#1d1d1f;margin-bottom:6px;">采样方式</div>
+      <div style="display:flex;gap:16px;font-size:13px;">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="radio" name="sample" checked>
+          <span>顺序取</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="radio" name="sample">
+          <span>均匀随机</span>
+        </label>
+      </div>
+      <div style="margin-top:4px;font-size:12px;color:#86868b;">顺序取：确定的前 N 行（与表序一致）</div>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #eee;margin:4px 0;">
+
+    <!-- 探查列 -->
+    <div>
+      <div style="font-size:12px;font-weight:600;color:#1d1d1f;margin-bottom:6px;">探查列（未选列不出现在 EDA）</div>
+      <div style="display:flex;gap:16px;font-size:13px;">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="radio" name="cols" checked>
+          <span>全部列</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="radio" name="cols">
+          <span>选择列</span>
+        </label>
+      </div>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #eee;margin:4px 0;">
+
+    <!-- 过滤条件 -->
+    <div>
+      <div style="font-size:12px;font-weight:600;color:#1d1d1f;margin-bottom:6px;">过滤条件（可选 WHERE）</div>
+      <input type="text" placeholder="如 status = 'active'" style="width:100%;padding:6px 10px;border:1px solid #d2d2d7;border-radius:6px;font-size:13px;box-sizing:border-box;">
+      <div style="margin-top:4px;font-size:12px;color:#86868b;">条件包在源查询内层，先过滤再取样。</div>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #eee;margin:4px 0;">
+
+    <!-- 规模预估 -->
+    <div>
+      <div style="font-size:12px;font-weight:600;color:#1d1d1f;margin-bottom:6px;">规模预估</div>
+      <div style="font-size:12px;color:#86868b;">将建分析临时表：1,000 行 × 8 列</div>
+    </div>
+
+  </div>
+
+  <!-- 底部三按钮 -->
+  <div style="padding:12px 20px;border-top:1px solid #eee;display:flex;align-items:center;gap:8px;">
+    <button style="padding:6px 14px;font-size:13px;border:1px solid #d2d2d7;border-radius:6px;background:#fff;cursor:pointer;color:#1d1d1f;">取消</button>
+    <div style="flex:1;"></div>
+    <button style="padding:6px 14px;font-size:13px;border:1px solid #007aff;border-radius:6px;background:#fff;cursor:pointer;color:#007aff;display:flex;align-items:center;gap:4px;">
+      <span>⚡</span>
+      <span>全量探查</span>
+    </button>
+    <button style="padding:6px 14px;font-size:13px;border:none;border-radius:6px;background:#007aff;cursor:pointer;color:#fff;font-weight:500;">探查</button>
+  </div>
+</div>
+
+<!-- 状态说明 -->
+<div style="max-width:520px;margin:20px auto;font-size:12px;color:#86868b;line-height:1.6;">
+  <div style="font-weight:600;color:#1d1d1f;margin-bottom:4px;">原型说明：</div>
+  <ul style="margin:0;padding-left:20px;">
+    <li>数据量：chips 快捷预设 + toggled 高亮（当前选中 1,000 行）</li>
+    <li>底部三按钮：取消（ghost 左）/ 全量探查（outline+Zap 右中）/ 探查（primary 最右）</li>
+    <li>主按钮文案随列选择变：全部列→"探查"；选列→"探查 N 列"</li>
+    <li>规模预估：过滤为空时"将建分析临时表"，非空时"过滤后取样"</li>
+  </ul>
+</div>
+</html>
