@@ -351,8 +351,9 @@ pub(crate) fn render_td(
 
 /// 每节点最多展开子项数（大字段截断：数组 / 对象超限时追加「… 还有 N 项」占位）
 pub(crate) const JSON_TREE_CHILD_LIMIT: usize = 500;
-/// hex 转储每行字节数（offset · hex · ASCII 三栏）
-const HEX_DUMP_BYTES_PER_LINE: usize = 16;
+/// hex 转储每行字节数（offset · hex · ASCII 三栏）。
+/// 页大小在面板侧按「本常量 × 每页行数」算（翻页必须按行首对齐）
+pub(crate) const HEX_DUMP_BYTES_PER_LINE: usize = 16;
 
 /// 值查看器内容模式（按列类型 + 值形态分派）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -415,6 +416,18 @@ pub(crate) fn detect_image_format(hex: &str) -> Option<&'static str> {
 }
 
 /// hex 文本 → 字节（偶数位才认；末尾不完整忽略）
+/// 魔数格式名 → gpui 图片格式（只认值查看器能直接显示的静态格式；
+/// 认不出返回 `None`，调用处回 hex 转储或文本占位）
+pub(crate) fn image_format_of(name: &str) -> Option<ImageFormat> {
+    match name {
+        "PNG" => Some(ImageFormat::Png),
+        "JPEG" => Some(ImageFormat::Jpeg),
+        "GIF" => Some(ImageFormat::Gif),
+        "WebP" => Some(ImageFormat::Webp),
+        _ => None,
+    }
+}
+
 pub(crate) fn hex_to_bytes(hex: &str) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(hex.len() / 2);
     let mut iter = hex.bytes();

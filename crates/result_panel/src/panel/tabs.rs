@@ -1,6 +1,7 @@
 //! 页签域（`panel/` 第六块）：值详情 / 统计 / 分组 / 引用 / 执行 SQL 各右栏页签。
 
 use gpui_kit::assets::IconName;
+use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::list::ListItem;
@@ -13,12 +14,46 @@ use gpui_kit::*;
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 
 use super::data::ResultPanel;
-use crate::grid::cell::{ViewerMode, classify_value, hex_lines, hex_to_bytes};
-use crate::ports::ResultRequest;
+use crate::grid::cell::{
+    HEX_DUMP_BYTES_PER_LINE, ViewerMode, classify_value, hex_lines, hex_to_bytes,
+};
+use crate::ports::{ResultActionQueue, ResultRequest};
 #[cfg(test)]
 use crate::ports::RightTab;
 use crate::store::ColumnKind;
 use crate::ui;
+
+/// 【P2-1】hex 转储每页行数（16 行 × 16 字节 = 256 字节 / 页）
+const HEX_LINES_PER_PAGE: usize = 16;
+
+/// 【P2-1】hex 页号与总页数：空值也算 1 页（好显示「第 1/1 页」），页号夹到合法范围
+pub(crate) fn hex_page_clamp(total_bytes: usize, page: usize) -> (usize, usize) {
+    let page_bytes = HEX_LINES_PER_PAGE * HEX_DUMP_BYTES_PER_LINE;
+    let total_pages = total_bytes.div_ceil(page_bytes).max(1);
+    (page.min(total_pages - 1), total_pages)
+}
+
+/// 【P2-1】hex 翻页按钮：到边界直接禁用（不靠"点了页号不动"兜底）
+fn hex_page_button(
+    id: &'static str,
+    icon: IconName,
+    tooltip: &'static str,
+    target_page: usize,
+    enabled: bool,
+    queue: ResultActionQueue,
+) -> AnyElement {
+    Button::new(id)
+        .ghost()
+        .small()
+        .icon(icon)
+        .tooltip(tooltip)
+        .debug_selector(move || id.to_string())
+        .disabled(!enabled)
+        .on_click(move |_, _window, app| {
+            queue.request(ResultRequest::HexPage(target_page), app);
+        })
+        .into_any_element()
+}
 
 impl ResultPanel {
     pub(crate) fn render_value_tab(&self, cx: &App) -> AnyElement {
@@ -115,19 +150,47 @@ impl ResultPanel {
             ViewerMode::Json => self.render_json_tree(cx),
             ViewerMode::Hex => self.render_hex_dump(value, cx),
             ViewerMode::Image { format, size } => {
-                let theme = cx.theme();
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .px_2()
-                    .py_1()
-                    .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child(SharedString::from(format!(
-                        "图片预览：{format} · {size} B（解码待接线）"
-                    )))
-                    .into_any_element()
+                let muted = cx.theme().colors.muted_foreground;
+                // 【P2-2】事件路径已把 hex 解成 `Arc<Image>`（`rebuild_value_tree`），
+                // 这里只摆 `img`：元素在 layout/paint 期按内容 id 走资产缓存解码。
+                // 真解码失败由 `with_fallback` 回落文本（不静默空白）。
+                if let Some(image) = &self.value_image {
+                    let fallback = format;
+                    let fallback_size = size;
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scrollbar()
+                        .p_2()
+                        .child(
+                            img(ImageSource::Image(image.clone()))
+                                .w_full()
+                                .max_h_full()
+                                .with_fallback(move || {
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .child(SharedString::from(format!(
+                                            "图片解码失败（{fallback} · {fallback_size} B）"
+                                        )))
+                                        .into_any_element()
+                                }),
+                        )
+                        .into_any_element()
+                } else {
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scrollbar()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(SharedString::from(format!(
+                            "图片预览不可用：{format} · {size} B（格式不在支持集，或值不是合法 hex）"
+                        )))
+                        .into_any_element()
+                }
             }
         }
     }
@@ -176,24 +239,82 @@ impl ResultPanel {
         .into_any_element()
     }
 
-    /// 【值查看器】hex 转储（第一页 16 行 = 256 字节；render 成本有上界，翻页后续）
+    /// 【值查看器 P2-1】hex 转储（每页 16 行 = 256 字节，可翻页）
+    ///
+    /// 分页是**可读性**而非性能优化：一屏只摆 16 行（offset · hex · ASCII 三栏），
+    /// 大 BLOB 不必把上千行拼成字符串塞进元素树。页号是面板自持的纯视图态，按钮经
+    /// `ResultRequest::HexPage` 回到 [`ResultPanel::set_hex_page`] 改它（再由宿主 drain
+    /// 回来），所以 render 仍是纯读路径。
     fn render_hex_dump(&self, hex_text: &str, cx: &App) -> AnyElement {
         let theme = cx.theme();
+        let muted = theme.colors.muted_foreground;
         let bytes = hex_to_bytes(hex_text);
-        let lines = hex_lines(&bytes, 0, 16);
+        let total_bytes = bytes.len();
+        // 页码兜底：值变短 / 清空后旧页号可能越界，渲染期夹住（不写回状态）
+        let (page, total_pages) = hex_page_clamp(total_bytes, self.hex_page);
+        let lines = hex_lines(
+            &bytes,
+            page * HEX_LINES_PER_PAGE * HEX_DUMP_BYTES_PER_LINE,
+            HEX_LINES_PER_PAGE,
+        );
+
+        let pager = div()
+            .h_flex()
+            .flex_none()
+            .items_center()
+            .justify_between()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .text_xs()
+            .text_color(muted)
+            .child(SharedString::from(format!(
+                "第 {}/{} 页 · 共 {total_bytes} 字节",
+                page + 1,
+                total_pages
+            )))
+            .child(
+                div()
+                    .h_flex()
+                    .gap_1()
+                    .child(hex_page_button(
+                        "editor-result-hex-prev",
+                        IconName::ChevronLeft,
+                        "上一页（前 256 字节）",
+                        page.saturating_sub(1),
+                        page > 0,
+                        self.queue.clone(),
+                    ))
+                    .child(hex_page_button(
+                        "editor-result-hex-next",
+                        IconName::ChevronRight,
+                        "下一页（后 256 字节）",
+                        page + 1,
+                        page + 1 < total_pages,
+                        self.queue.clone(),
+                    )),
+            );
+
         div()
             .flex_1()
             .min_h_0()
-            .overflow_y_scrollbar()
-            .px_2()
-            .py_1()
-            .font_family(theme.mono_font_family.clone())
-            .text_xs()
-            .children(
-                lines
-                    .into_iter()
-                    .map(|line| div().child(SharedString::from(line))),
+            .v_flex()
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .px_2()
+                    .py_1()
+                    .font_family(theme.mono_font_family.clone())
+                    .text_xs()
+                    .children(
+                        lines
+                            .into_iter()
+                            .map(|line| div().child(SharedString::from(line))),
+                    ),
             )
+            .child(pager)
             .into_any_element()
     }
 

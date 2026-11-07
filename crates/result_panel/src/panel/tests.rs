@@ -263,3 +263,44 @@ fn rendered_ui_elements_survive(cx: &mut gpui_kit::TestAppContext) {
         "关闭后 SQL 弹窗应消失"
     );
 }
+
+/// 【P2-3】多选集合推进：Ctrl 点击增删、普通点击单选替换、结果升序去重
+#[test]
+fn multi_selection_toggles_with_ctrl_and_replaces_without() {
+    use crate::column_browser::next_multi_selection;
+
+    // 单选替换：不管原先选了多少，普通点击只剩这一列
+    assert_eq!(next_multi_selection(&[], 2, false), vec![2]);
+    assert_eq!(next_multi_selection(&[0, 5], 2, false), vec![2]);
+
+    // Ctrl 加选：追加并升序（面板与批量动作都按数据列序处理）
+    assert_eq!(next_multi_selection(&[], 2, true), vec![2]);
+    assert_eq!(next_multi_selection(&[2], 0, true), vec![0, 2]);
+    assert_eq!(next_multi_selection(&[2, 7], 4, true), vec![2, 4, 7]);
+
+    // Ctrl 再点已在集合里的列 = 取消；取消到空允许（用户可能清空后重新框选）
+    assert_eq!(next_multi_selection(&[0, 2], 2, true), vec![0]);
+    assert_eq!(next_multi_selection(&[2], 2, true), Vec::<usize>::new());
+
+    // 重复项不会累积（同一列 Ctrl 加两次回到原集合）
+    assert_eq!(next_multi_selection(&[0, 2], 2, true), vec![0]);
+}
+
+#[test]
+fn hex_page_clamps_to_the_last_page() {
+    use crate::panel::tabs::hex_page_clamp;
+
+    // 空值：也算 1 页（页签显示「第 1/1 页」，不出现「第 1/0 页」）
+    assert_eq!(hex_page_clamp(0, 0), (0, 1));
+    assert_eq!(hex_page_clamp(0, 5), (0, 1), "空值下任何页号都落到 0");
+
+    // 整页边界：恰好 256 字节 = 1 页；多 1 字节就开第 2 页
+    assert_eq!(hex_page_clamp(256, 0), (0, 1));
+    assert_eq!(hex_page_clamp(257, 0), (0, 2));
+    assert_eq!(hex_page_clamp(257, 1), (1, 2));
+    assert_eq!(hex_page_clamp(257, 9), (1, 2), "越界页号夹到末页");
+
+    // 1KB = 4 页（每页 16 行 × 16 字节）
+    assert_eq!(hex_page_clamp(1024, 3), (3, 4));
+    assert_eq!(hex_page_clamp(1024, 4), (3, 4));
+}

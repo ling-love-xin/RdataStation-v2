@@ -3,7 +3,7 @@
 
 use crate::grid::cell::{
     ViewerMode, blob_summary, cell_display_text, cell_style, classify_value, clip_cell_display,
-    detect_image_format, hex_lines, json_tree_items, pretty_json_display,
+    detect_image_format, hex_lines, image_format_of, json_tree_items, pretty_json_display,
 };
 use crate::grid::header::header_tooltip_lines;
 use crate::grid::stats::fmt_stat_num;
@@ -11,6 +11,7 @@ use crate::grid::status::format_integer_cell;
 use crate::grid::status::{FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION};
 use crate::grid::text::{cell_matches, find_in_cell, preview_of};
 use crate::grid::view_rows::compare_cells;
+use gpui_kit::ImageFormat;
 use crate::grid::{
     CELL_DISPLAY_LIMIT, ContextAction, ContextTarget, GridSelection, MAX_SINGLE_SEGMENT_ROWS,
     ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar, WINDOW_FETCH_NOTICE,
@@ -204,6 +205,23 @@ fn detect_image_format_recognizes_magic_bytes() {
     assert_eq!(detect_image_format(""), None);
     // 非 hex 文本不误判
     assert_eq!(detect_image_format("hello world"), None);
+}
+
+/// 图片魔数 → gpui 图片格式：四个支持格式都映射，未登记的名字 → None
+/// （值查看器据此决定摆 `img` 还是回文本占位）
+#[test]
+fn image_format_of_maps_recognized_magic_names() {
+    assert_eq!(image_format_of("PNG"), Some(ImageFormat::Png));
+    assert_eq!(image_format_of("JPEG"), Some(ImageFormat::Jpeg));
+    assert_eq!(image_format_of("GIF"), Some(ImageFormat::Gif));
+    assert_eq!(image_format_of("WebP"), Some(ImageFormat::Webp));
+    assert_eq!(image_format_of("BMP"), None);
+    assert_eq!(image_format_of(""), None);
+    // 端到端：魔数识别 → 格式映射，两段必须都能接上（断链会静默退回文本占位）
+    assert_eq!(
+        detect_image_format("89504e470d0a1a0a").and_then(image_format_of),
+        Some(ImageFormat::Png)
+    );
 }
 
 /// hex 转储：offset 行格式 / limit 截断 / ASCII 可读字符 / 越界空
@@ -1891,6 +1909,30 @@ fn hidden_columns_are_skipped_in_view_but_kept_in_data() {
         vec![vec!["1".to_string(), "2".to_string()]],
     );
     assert_eq!(grid.visible_column_count(), 2, "新结果回到全部列");
+}
+
+/// 【P2-3】批量显隐：整批隐藏 / 整批显示；整批隐藏到"全藏"时仍保留至少 1 列
+#[test]
+fn set_columns_hidden_keeps_one_visible_column() {
+    let mut grid = ResultGridDelegate::default();
+    grid.set_data(
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        vec![vec!["1".to_string(), "2".to_string(), "3".to_string()]],
+    );
+
+    // 整批隐藏 0 / 2：两列都藏，剩 1 列可见
+    grid.set_columns_hidden(&[0, 2], true);
+    assert!(grid.is_hidden_column(0) && grid.is_hidden_column(2));
+    assert_eq!(grid.visible_column_count(), 1);
+
+    // 再把最后一列也藏进去 —— 底线生效，可见列数不会掉到 0
+    grid.set_columns_hidden(&[1], true);
+    assert_eq!(grid.visible_column_count(), 1, "至少保留 1 列可见");
+
+    // 整批显示：全部放回
+    grid.set_columns_hidden(&[0, 1, 2], false);
+    assert_eq!(grid.visible_column_count(), 3);
+    assert_eq!(grid.hidden_count(), 0);
 }
 
 /// 【侧栏】单列取消隐藏：`show_column` 只放回这一列，其它隐藏列原样保留

@@ -1,5 +1,7 @@
 //! 事件域（`panel/` 第三块）：视图层动作（筛选 / 转置 / 侧栏开关 / 重命名 / 列序 / 选区）+ 过滤器 API。
 
+use std::sync::Arc;
+
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::input::{InputState, TextareaState};
 use gpui_kit::component::table::{TableDelegate as _, TableState};
@@ -10,7 +12,9 @@ use gpui_kit::*;
 use super::data::ResultPanel;
 use super::sidebars::next_right_edge_state;
 use crate::error_card::ErrorCard;
-use crate::grid::cell::{ViewerMode, classify_value, json_tree_items};
+use crate::grid::cell::{
+    ViewerMode, classify_value, hex_to_bytes, image_format_of, json_tree_items,
+};
 use crate::grid::{ResultGridDelegate, ResultStatus, ResultToolbar};
 use crate::ports::{Presentation, ResultRequest, RightTab};
 use crate::script_card::ScriptCard;
@@ -338,6 +342,8 @@ impl ResultPanel {
         cx: &mut Context<Self>,
     ) {
         self.selection_pos = pos;
+        // 【P2-1】换了格（或清选）→ hex 转储回第 1 页，不把上一格翻到的页号带过去
+        self.hex_page = 0;
         if let Some((_row, col)) = pos {
             if col > 0 {
                 let delegate = self.grid.read(cx).delegate();
@@ -362,11 +368,27 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【P2-1】值查看器 hex 转储翻页（页号 0 基）。
+    ///
+    /// 纯视图态，不重算值：只改页号并重渲（`render_hex_dump` 按页号取本页行）。
+    /// 越界不在这里夹（渲染期还会按总页数夹一次）——但同页重复点击不白刷一帧。
+    pub fn set_hex_page(&mut self, page: usize, cx: &mut Context<Self>) {
+        if self.hex_page == page {
+            return;
+        }
+        self.hex_page = page;
+        cx.notify();
+    }
+
     /// 【值查看器】选中格变化时重建 JSON 展开树（事件路径：解析 + `set_items`；
     /// render 只摆 Tree，不解析 JSON——render 纯读红线）。
     /// 非 JSON 值 → 清空树；清选 → 空。
+    ///
+    /// 同时重建图片（P2-2）：选中 BLOB 且魔数认出格式时，把 hex 解成 `Arc<Image>`
+    /// 放 `value_image`。`Image::from_bytes` 只做内存构造（真解码在 `img` 的 layout
+    /// 期按内容 id 走资产缓存），所以放在事件路径上，render 端零解析。
     pub fn rebuild_value_tree(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let items = match self.selection_pos {
+        let (items, image) = match self.selection_pos {
             Some((row, col)) => {
                 let grid = self.grid.read(cx);
                 let delegate = grid.delegate();
@@ -377,14 +399,62 @@ impl ResultPanel {
                     delegate.column_kind(col)
                 };
                 match classify_value(kind, &value) {
-                    ViewerMode::Json => json_tree_items(&value).unwrap_or_default(),
-                    _ => Vec::new(),
+                    ViewerMode::Json => (json_tree_items(&value).unwrap_or_default(), None),
+                    ViewerMode::Image { format, .. } => (
+                        Vec::new(),
+                        image_format_of(format).map(|format| {
+                            Arc::new(Image::from_bytes(format, hex_to_bytes(&value)))
+                        }),
+                    ),
+                    _ => (Vec::new(), None),
                 }
             }
-            None => Vec::new(),
+            None => (Vec::new(), None),
         };
+        self.value_image = image;
         self.json_tree
             .update(cx, |state, cx| state.set_items(items, cx));
+    }
+
+    /// 【P2-3】清单多选集合镜像（delegate 经 `ColumnSelectionChanged` 回传）：
+    /// 面板只存一份给标题行「已选 N 列」与批量按钮用，选集权威仍在 delegate。
+    pub fn set_multi_selected(&mut self, columns: Vec<usize>, cx: &mut Context<Self>) {
+        if self.multi_selected == columns {
+            return;
+        }
+        self.multi_selected = columns;
+        cx.notify();
+    }
+
+    /// 【P2-3】批量显隐（列浏览器多选批量动作）：直接改网格 delegate（逐列复用单列
+    /// 接口，隐藏仍有「至少 1 列可见」底线），再 notify 让清单的隐藏标记跟着刷新。
+    pub fn set_columns_hidden(
+        &mut self,
+        columns: Vec<usize>,
+        hidden: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let grid = self.grid.clone();
+        grid.update(cx, |state, cx| {
+            state.delegate_mut().set_columns_hidden(&columns, hidden);
+            state.refresh(cx);
+        });
+        cx.notify();
+    }
+
+    /// 【列浏览器】清空多选集合（批量按钮「清空选择」；面板先写镜像，
+    /// 再让 delegate 跟上，两边不会因为顺序不同而各说各话）
+    pub fn clear_multi_selected(&mut self, cx: &mut Context<Self>) {
+        if self.multi_selected.is_empty() {
+            return;
+        }
+        self.multi_selected.clear();
+        let browser = self.browser_list.clone();
+        browser.update(cx, |list, cx| {
+            list.delegate_mut().set_selected_columns(Vec::new());
+            cx.notify();
+        });
+        cx.notify();
     }
 
     /// 【列浏览器】清单单击选中一列（数据列序）：写清单选中态 + 网格列选中高亮联动。

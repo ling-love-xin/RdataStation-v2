@@ -97,14 +97,14 @@ cargo check -p rds-editor -p rds-workbench -p rds-workbench-shell  # 通过（wo
 
 | 优先级 | 项 | 现状 / 期望 |
 | --- | --- | --- |
-| 高 | 列浏览器多选批量动作 | 清单已迁移 List（单选联动）；多选（批量隐藏/冻结/复制列名等）未做 |
+| 高 | ~~列浏览器多选批量动作~~ | **已交付（2026-11-08，P2-3）**：`List` 只给单个 `selected_index` + `confirm(secondary)`，没有集合语义 → 集合由 `ColumnBrowserDelegate.selected_set` 自持（Ctrl 点击增删 / 普通点击单选替换，纯函数 `next_multi_selection`），行内容按集合自绘底色（`list_active`）；集合经 `ResultRequest::ColumnSelectionChanged` 回传面板镜像，标题行出现「已选 N 列」+「隐藏所选 / 显示所选 / 清空选择」三钮，批量显隐走 `SetColumnsHidden { columns, hidden }` → `delegate.set_columns_hidden`（隐藏仍保「至少 1 列可见」底线）。**冻结 / 复制列名批量未做**（多选只接了显隐，其余仍走单列右键） |
 | 中 | ~~列宽持久化~~ | **已交付（2026-11-08，P1-3）**：列宽按列名随会话落库（`result_column_widths` 列 + `列名=宽` 逗号串编解码 + `TableEvent::ColumnWidthsChanged` → `save_session_now`），并受全局开关 `result_panel.persist_column_widths` 管 |
 | 中 | COUNT 精确总数 / 跨帧统计缓存 / 小数分组 | §8.13 渲染改进批次的延后项（当前列统计按可见行现算、整数千分位） |
 | 中 | 并排对比增强 | 双栏等宽 → 可拖拽分隔；右栏列宽/滚动独立记忆 |
 | 中 | 行级叠加层收尾 | 锚点插入落点、本地行进统计/分组、fact 原生整表聚合逐行排除（§8.10 ④ 遗留）——**依赖 §2.4-A2 内存事实档接线** |
 | 低 | P3 钻取关联数据 | 右键值→查关联表；`ColumnDetail.references` 已就位，取数链路现成（用户明确下期）；右栏「引用」页签当前为空态 |
 | 低 | 执行上下文模型 | 物理连接/事务/取消 per-context 独立（下一版本规划，0.2.4 不实现）；**结果归属按文档分槽不变** |
-| 低 | DBeaver 对标未实现项（backlog） | ① 撤销 / 重做（网格编辑历史栈，`RowHistory` 快照已就位）；② 二进制 / 图片**单元格**渲染（网格内仍文本降级显示）；值查看器已按类型分派（Text / Json / Hex / Image 占位，2026-10-30），**图片解码 P2**（需事件路径 + Shared 字段 → `ui_contract.rs` 白名单登记）；③ 多级分组表头（DataTable 单级表头）。均为对标 DBeaver 完整表格功能的独立 backlog，不在当前排期（2026-10-29 补录，10-30 更新②） |
+| 低 | DBeaver 对标未实现项（backlog） | ① 撤销 / 重做（网格编辑历史栈，`RowHistory` 快照已就位）；② 二进制 / 图片**网格内单元格**渲染（网格内仍文本降级显示；**值查看器的图片解码已于 2026-11-08 交付**，P2-2）；③ 多级分组表头（DataTable 单级表头）。均为对标 DBeaver 完整表格功能的独立 backlog，不在当前排期（2026-10-29 补录，10-30 更新②，11-08 更新②） |
 
 > **核查更正（2026-11-08，调用链五段核对）**：原表「高 · 列序拖拽 UI 入口未接线」**已不成立，故删除**。
 > 实测全链路已闭合：`grid/status.rs:400 col_movable(true)`（组件开启）→ `panel/lifecycle.rs:93-99`
@@ -192,11 +192,21 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 | --- | --- |
 | 分派纯函数层（cell.rs） | `ViewerMode`（Text / Json / Hex / Image）+ `classify_value`（Binary → 图片魔数命中 `Image{format,size}` / 否则 `Hex`；`{` / `[` 前缀 → `Json`）+ `detect_image_format`（PNG / JPEG / GIF / WebP 魔数）+ `hex_to_bytes` + `hex_lines`（offset·hex·ASCII 三栏，16 字节/行）+ `json_tree_items`（嵌套 JSON/数组展开树） |
 | JSON 展开树 | `tree::Tree` 组件 + `TreeState`：`ResultPanel.json_tree` 字段；事件路径 `rebuild_value_tree` 解析 + `set_items` 重建，**render 只摆不解析**（纯读红线）；每节点子项上限 `JSON_TREE_CHILD_LIMIT = 500`，超出追加「… 还有 N 项」占位；顶层预展开 2 层；缩进 / 展开箭头行内自画（`ui::JSON_TREE_INDENT_STEP` / `JSON_TREE_ARROW_WIDTH`） |
-| Hex 转储 | 等宽字体 + 第一页 16 行（256 字节），翻页浏览后续 |
-| 图片预览 | 值查看器 `Image` 占位（格式 · 字节数）；解码需事件路径 + Shared 字段 → `workbench/tests/ui_contract.rs:891` 白名单登记，**P2 遗留** |
+| Hex 转储 | 等宽字体 + **按页翻页**（2026-11-08 P2-1）：每页 16 行 × 16 字节（256 字节），底部页栏「第 n/N 页 · 共 X 字节」+ 上一页 / 下一页按钮（`ResultPanel.hex_page` 纯视图态，`ResultRequest::HexPage` 回面板；到边界按钮置灰，换选中格复位到第 1 页） |
+| 图片预览 | **已真解码显示**（2026-11-08 P2-2）：事件路径 `rebuild_value_tree` 把 hex 解成 `Arc<Image>`（`Image::from_bytes` 只做内存构造，解码在 `img` 的 layout 期按内容 id 走资产缓存）→ 面板 `value_image` → render 摆 `img(ImageSource::Image(..)).w_full().max_h_full()`；解码失败 `with_fallback` 回落文案，格式不在支持集回文本占位 |
 | **Bug 修复** | `lifecycle.rs` 订阅补 `TableEvent::SelectCell`：选格即 `set_selection_pos` + `rebuild_value_tree`（此前只接双击——「点击文字半天才出来」根因之一）；`ClearSelection` 同步清空树 |
 
 验证：`cargo test -p rds-result-panel --lib` = **213 passed / 0 failed**（新增 5 测试：classify 分派 / 魔数识别 / hex 分页 / JSON 嵌套树 / 大数组截断 + 非法 JSON 拒绝）。
+
+### 2.12 2026-11-08（P2 批：值查看器 hex 翻页 / 图片预览 + 列浏览器多选）
+
+| 项 | 落地 |
+| --- | --- |
+| P2-1 hex 转储翻页 | `panel/tabs.rs`：`HEX_LINES_PER_PAGE = 16` + `hex_page_clamp(total, page) -> (page, total_pages)`（空值也算 1 页、页号夹到末页）+ `hex_page_button`（ghost/small/icon/disabled 到边界即禁用）；`render_hex_dump` 改「本页 16 行滚动区 + 底部页栏（`第 n/N 页 · 共 X 字节` + 上一页 / 下一页）」。页号是面板自持纯视图态 `ResultPanel.hex_page`，按钮经 `ResultRequest::HexPage(usize)` 走队列——**tab 的 render 签名只有 `&App`、拿不到 `&mut Context`**，所以统一用 `queue.request(.., app)` 而不是 `cx.listener`；`set_selection_pos` 复位 `hex_page = 0`（换格不留在旧页）；`grid/cell.rs` 的 `HEX_DUMP_BYTES_PER_LINE` 提升为 `pub(crate)` |
+| P2-2 图片解码预览 | `grid/cell.rs` 加 `image_format_of(name) -> Option<ImageFormat>`（PNG / JPEG / GIF / WebP → `ImageFormat::{Png, Jpeg, Gif, Webp}`）；`rebuild_value_tree` 在**事件路径**把 hex 解成 `Arc<Image>` 存 `ResultPanel.value_image`（`Image::from_bytes` 只做内存构造，真解码在 `img` 的 layout/paint 期按内容 id 走资产缓存 → render 纯读不破）；render 的 `Image` 分支只摆 `img(ImageSource::Image(..)).w_full().max_h_full()`（`ObjectFit::Contain` 是默认），解码失败走 `with_fallback` 回落文案、格式不在支持集回文本占位。**布局陷阱（gpui-pre 0.3.10 `elements/img.rs` request_layout）**：`style.size` 为 `Auto` 时会按真实像素尺寸写 size（4000×3000 的图会撑爆面板），必须显式给宽（`w_full()`）+ 高度上限（`max_h_full()`）才让 contain 生效 |
+| P2-3 列浏览器多选 | 见 §2.4 表「列浏览器多选批量动作」行的落地说明；另加 `ResultPanel.multi_selected` 镜像、`panel/events.rs::{set_multi_selected, set_columns_hidden, clear_multi_selected}`、`ResultRequest::{SetColumnsHidden, ColumnSelectionChanged, ClearColumnSelection}` + `dispatch.rs` 三条分派；`sync` 换投影时按当前列数剔除越界列号后**回灌** delegate（`set_data` 会清 delegate 侧集合，不回灌则刷新一次就丢用户选集） |
+
+验证：`cargo test -p rds-result-panel --lib` = **218 passed / 0 failed**（本批新增 4 测试：hex 分页夹取 / 图片格式映射链路 / 多选集合推进 / 批量显隐保底 1 列）；`cargo check -p rds-result-panel -p rds-editor` 通过（0 warning）。
 
 ---
 
@@ -217,7 +227,7 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 1. 先重跑 §1.3 三条验证命令，确认基线（尤其 **207 passed / 0 failed**）落地。
 2. 处理 §2.1 提交待办：先 `git status` / `git diff` 摘本线 hunk，与并行线协调后统一提交类型样式渲染消费（settings 三文件 + grid.rs + host.rs + workbench view.rs）。
 3. 知悉 §2.2 外线阻塞（settings 契约测试）与 §1.3 契约测试既有失败，不替并行线补。
-4. 按 §2.4 优先级推进功能遗留（建议先「列浏览器多选批量动作」「列序拖拽」两个高优先级项，开工前先按模块惯例说理解、列方案）。
+4. 按 §2.4 优先级推进功能遗留（P0（注释与文档漂移）/ P1（分页·行号跳转·列宽落盘）/ P2（hex 翻页·图片预览·列浏览器多选）已交付；剩余见 §2.4 表，开工前先按模块惯例说理解、列方案）。
 5. 每完成一批：跑 §1.3 基线 + 记录到 `result-panel.md`（新增 §8.2x 迭代小节），提交只 add 本线文件。
 
 ## 5. 常用锚点（行号随近期提交微移，以现场 grep 为准）

@@ -15,6 +15,15 @@
 //!   [`crate::grid::column_browser_menu_items`]）。
 //! - 搜索：列名 / 类型名 / 注释忽略大小写包含匹配；隐藏列保留在清单（置灰斜体）。
 //!
+//! ## 多选（P2-3）
+//!
+//! `List` 只维护**单个** `selected_index`（每次点击强制覆盖，`confirm` 只把
+//! `secondary` 修饰键透传过来），没有集合语义。所以多选集合由本 delegate 自持
+//! （[`Self::selected_columns`]），`confirm` 里按「Ctrl 点击增删 / 普通点击单选替换」
+//! 算出新集合，经 `ResultRequest::ColumnSelectionChanged` 回传面板镜像；行内容的
+//! 集合底色也在 `render_item` 里按集合自绘（List 的 `selected` 高亮仍表示"焦点行"，
+//! 两者可分离：焦点行可以不在集合里）。
+//!
 //! ## 选中归属
 //!
 //! 清单行的选中**高亮**由 List 内部 `selected_index` 统一管理（`render_list_item`
@@ -50,6 +59,9 @@ pub struct ColumnBrowserDelegate {
     query: String,
     /// 最近一次选中的数据列序（`set_selected_index` 记录，`confirm` 消费）
     last_selected: Option<usize>,
+    /// 【P2-3】多选集合（数据列序，升序去重）。`List` 本身只给单个 `selected_index`，
+    /// 集合语义只能由 delegate 自持：`confirm(secondary)` 增删、普通点击替换成单元素。
+    selected_set: Vec<usize>,
     /// 动作队列（单击选中 / 双击定位 / 眼睛切显隐 / 右键动作都经它交宿主分派）
     queue: ResultActionQueue,
     /// 网格实体（右键动作直接 update 网格 delegate：冻结 / 隐藏 / 显示全部 / 清排序）
@@ -66,6 +78,7 @@ impl ColumnBrowserDelegate {
             comments: Vec::new(),
             query: String::new(),
             last_selected: None,
+            selected_set: Vec::new(),
             queue,
             grid,
         }
@@ -85,6 +98,22 @@ impl ColumnBrowserDelegate {
         self.hidden_columns = hidden_columns;
         self.comments = comments;
         self.last_selected = None;
+        // 换结果集后旧列序号全部失效，集合一并清空（否则批量动作会打到同号的另一列）
+        self.selected_set.clear();
+    }
+
+    /// 【P2-3】当前多选集合（数据列序，升序）
+    pub fn selected_columns(&self) -> &[usize] {
+        &self.selected_set
+    }
+
+    /// 【P2-3】面板镜像回灌选集（「清空选择」按钮走这条路；与现集合相同则不动，
+    /// 避免每帧 `set_*` 抖动）
+    pub fn set_selected_columns(&mut self, columns: Vec<usize>) {
+        if self.selected_set == columns {
+            return;
+        }
+        self.selected_set = columns;
     }
 
     /// 面板 `sync` 同步真实网格实体：构造期传入的是占位网格（面板尚未建好表状态），
@@ -139,6 +168,8 @@ impl ListDelegate for ColumnBrowserDelegate {
         let hidden = self.hidden_columns.get(data_col).copied().unwrap_or(false);
         let theme = cx.theme();
         let muted = theme.muted_foreground;
+        let selected_bg = theme.list_active;
+        let in_set = self.selected_set.contains(&data_col);
 
         // 眼睛：只切显隐，不冒泡触发行选中（与手搓版同口径）
         let eye = {
@@ -210,6 +241,9 @@ impl ListDelegate for ColumnBrowserDelegate {
             .gap_1()
             .min_w_0()
             .when(hidden, |r| r.text_color(muted).italic())
+            // 多选集合底色：List 只画单个 `selected`（焦点行），集合高亮只能由内容层
+            // 自绘；两者可分离（焦点行可以不在集合里，例如 Ctrl 点掉了它）
+            .when(in_set, |r| r.bg(selected_bg))
             .child(
                 div()
                     .flex_1()
@@ -325,15 +359,24 @@ impl ListDelegate for ColumnBrowserDelegate {
         cx.notify();
     }
 
-    /// 单击 / Enter 确认：入队选中该列（网格列高亮联动由宿主分派）
+    /// 单击 / Enter 确认：入队选中该列（网格列高亮联动由宿主分派）。
+    /// `secondary` = 点击时按了 Ctrl/Cmd（`List` 的 `ClickEvent::modifiers().secondary`）：
+    /// 按下 → 该列在集合里增删（多选），否则 → 集合替换成这一列（单选）。
+    /// 集合一变就回传面板（`ColumnSelectionChanged`），面板据此渲染"已选 N 列"。
     fn confirm(
         &mut self,
-        _secondary: bool,
+        secondary: bool,
         _window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) {
         if let Some(data_col) = self.last_selected {
             self.queue.push(ResultRequest::SelectColumn(data_col));
+            let next = next_multi_selection(&self.selected_set, data_col, secondary);
+            if next != self.selected_set {
+                self.selected_set = next.clone();
+                self.queue
+                    .push(ResultRequest::ColumnSelectionChanged(next));
+            }
         }
         cx.notify();
     }
@@ -354,6 +397,27 @@ impl ListDelegate for ColumnBrowserDelegate {
             .text_color(cx.theme().muted_foreground)
             .child("无匹配列")
             .into_any_element()
+    }
+}
+
+/// 多选集合推进（纯函数）：`additive`（Ctrl/Cmd 点击）= 有则删、无则加；
+/// 非 additive = 替换成单元素。返回值升序去重（面板/批量动作都按数据列序处理）。
+pub(crate) fn next_multi_selection(
+    current: &[usize],
+    clicked: usize,
+    additive: bool,
+) -> Vec<usize> {
+    if !additive {
+        return vec![clicked];
+    }
+    if current.contains(&clicked) {
+        current.iter().copied().filter(|c| *c != clicked).collect()
+    } else {
+        let mut next: Vec<usize> = current.to_vec();
+        next.push(clicked);
+        next.sort_unstable();
+        next.dedup();
+        next
     }
 }
 

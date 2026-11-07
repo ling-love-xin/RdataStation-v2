@@ -176,11 +176,17 @@ impl ResultPanel {
             sql_textarea: None,
             filter_expanded: false,
             selection_pos: None,
+            // 【P2-1】值查看器 hex 页号（纯视图态，换选中格复位）
+            hex_page: 0,
+            // 【P2-2】值查看器图片（事件路径解码后放这里；render 只摆）
+            value_image: None,
             // 【结果集 #296】列序默认空 = 数据序；宿主构造期注入持久化列序
             column_order: Vec::new(),
             // 【P1-3】列宽快照默认空 = 没拖过；宿主恢复会话时注入
             column_widths: Vec::new(),
             selected_col: None,
+            // 【P2-3】多选集合镜像（delegate 经 `ColumnSelectionChanged` 回传）
+            multi_selected: Vec::new(),
             browser_list,
             row_count_input,
             _row_count_sub: Some(row_count_sub),
@@ -316,6 +322,14 @@ impl ResultPanel {
         // 搜索词**跨结果保留**的既有口径不变——`set_data` 只换投影，不清搜索框）。
         // List 内部选中高亮（selected_index）没有窗口句柄可在这里复位，换结果后
         // 可能残留旧行高亮，用户点击 / 搜索 / 网格反推后即纠正（记录在案）。
+        // 【P2-3】多选集合镜像：换投影后先剔除越界列号（旧结果集的同号列不能继续命中），
+        // 再把面板镜像回灌给 delegate——`set_data` 会清空 delegate 侧集合，二者要重新对齐，
+        // 否则刷新一次（同一份结果重灌）就把用户的多选丢了。
+        let mirrored_selection = {
+            let column_count = self.grid.read(cx).delegate().columns().len();
+            self.multi_selected.retain(|c| *c < column_count);
+            self.multi_selected.clone()
+        };
         {
             let grid = self.grid.clone();
             let browser = self.browser_list.clone();
@@ -341,6 +355,8 @@ impl ResultPanel {
                     .collect();
                 list.delegate_mut()
                     .set_data(columns, type_names, hidden, comments);
+                list.delegate_mut()
+                    .set_selected_columns(mirrored_selection);
             });
         }
     }

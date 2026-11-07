@@ -168,7 +168,7 @@ editor-result-compare-layout（h_flex，对比模式开启时）
 | 状态栏合并进全局状态栏 | 另一会话（用户明确）；布局债根因（host.rs 状态栏在 `v_resizable` 之下不在 min 保护链）记录在案 |
 | ResultPanel Dock 化 | 见 §8 方案（用户已拍板：底部 dock + 全局联动 + 有结果自动开 + 移除嵌式结果区） |
 | 结果面板侧边栏 | ✅ 早期交付（`ee3077fa`）：左右分栏——左栏列结构、右栏选中格值详情；该形态后被 §8.11 / §8.12 取代 |
-| 列浏览器（右栏页签） | ✅ 本轮交付（§8.12）：列浏览器并入右侧辅助栏，与值详情 / 计算 / 分组同栏四页签切换；清单 ↔ 网格双向选中联动；隐藏走眼睛、冻结/排序/筛选/列统计走右键；左栏已整体移除、宽度全部还给网格；遗留：多选批量动作、列序拖拽 |
+| 列浏览器（右栏页签） | ✅ 本轮交付（§8.12）：列浏览器并入右侧辅助栏，与值详情 / 计算 / 分组同栏四页签切换；清单 ↔ 网格双向选中联动；隐藏走眼睛、冻结/排序/筛选/列统计走右键；左栏已整体移除、宽度全部还给网格。**清单多选批量动作已于 2026-11-08 交付（§8.21：Ctrl 点击选集 + 隐藏/显示所选 + 清空选择）**，列序拖拽也已通链路（§2.4 核查更正）；剩余遗留：搜索词跨结果持久化口径、清单行类型图标、引用页签 |
 | 渲染改进批次（clip / 分段语义 / JSON 美化 / 列宽记忆 / 千分位 / 列级统计） | ✅ 本轮交付（§8.13）：单元格 300 字符裁剪、状态行分段提示、JSON pretty、会话内列宽记忆、整数千分位、计算 / 分组列级访问器；延后：COUNT 精确总数、跨帧统计缓存、小数分组（**列宽落盘已于 2026-11-08 交付**，见 §8.7） |
 | 事实层 / 显示层分离 · A 批底座 | ✅ 本轮交付（§8.14）：A1 `FactFrame` 类型与访问器落 shared；A2 `facts` 平行槽位 + `FactState` 三态；A3 `QueryData.fact` 双产物入槽；A4 `fact_storage` 三档偏好 + Auto 分流纯函数与高低水位；B（DuckDB 分析保真链 / 表档接通）、D（导出分级）待开工；C（IronCalc）待拍板；E（engine 第一跳失真）另立项 |
 | 事实层 / 显示层分离 · B 批保真链 | ✅ 已交付（§8.15，提交 `84a81572`）：常驻表句柄回挂、分析三分支保真、内存档列式统计 / 排序 / 分组、表档占用可见、漂移注释勘误 |
@@ -243,6 +243,11 @@ workbench 层薄壳面板 `workbench → editor → result_panel`（结果动作
 | `SelectColumn(usize)` | 清单单击选中列 | `select_column`（写 `selected_col` + 网格列高亮） |
 | `LocateColumn(usize)` | 清单双击定位 | `locate_column`（滚到该列首行并选中） |
 | `ClearColumnSearch` | 清单搜索框 ✕ | `clear_column_search_via_window`（转手 `clear_column_search(window, cx)`） |
+| `SetColumnsHidden { columns, hidden }` | 【P2-3】清单批量显隐（隐藏所选 / 显示所选） | `set_columns_hidden`（`delegate.set_columns_hidden` + 刷新；隐藏仍保「至少 1 列可见」） |
+| `ColumnSelectionChanged(Vec<usize>)` | 【P2-3】清单多选集合变化（delegate 是权威，回传面板镜像） | `set_multi_selected`（面板 `multi_selected` 驱动标题行「已选 N 列」+ 批量按钮） |
+| `ClearColumnSelection` | 【P2-3】清单「清空选择」 | `clear_multi_selected`（面板镜像与 delegate 集合一起清） |
+| `GoPage(PageTarget)` / `GoRow(usize)` | 【P1】状态栏翻页三钮 / 行号跳转 | `go_page` / `go_row` |
+| `HexPage(usize)` | 【P2-1】值查看器 hex 转储翻页 | 宿主只把页号还回面板：`panel.set_hex_page(page, cx)` |
 | `SetPresentation(Presentation)` / `SetRightTab(RightTab)` | 竖条显示方式 / 右栏页签 | `set_presentation` / `set_right_tab`（纯面板状态） |
 
 > 网格内部交互（右键菜单 / 行编辑 / 列统计 / 值预览 / 加载更多）**不走队列**——它们经
@@ -565,7 +570,7 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 1. 清单行只留眼睛（隐藏开关，单击眼睛**不改变**选中列）；冻结 / 排序 / 隐藏 / 列统计 / 复制列名 / 显示全部走右键菜单；行上不摆图钉、排序箭头、拖拽手柄。
 2. 列顺序拖拽本轮不做（kit 手势 + `move_column` 钩子现成；列序模型与隐藏 / 冻结 / 转置映射改造紧随下一轮）。
 3. 搜索匹配范围 = **列名 + 类型名 + 注释**（忽略大小写包含匹配；DBeaver 原版只匹配列名，本轮加宽）；空词全量原序；隐藏列保留在清单（置灰斜体 + 眼睛关闭态）；无匹配摆空态「无匹配列」。
-4. 本轮清单只**单选**；多选批量动作（批量隐藏 / 冻结 / 复制列名）下一轮。
+4. 本轮清单只**单选**；多选批量动作（批量隐藏 / 冻结 / 复制列名）下一轮。**（2026-11-08 更新：批量隐藏 / 显示 / 清空选择已交付，见 §8.21；冻结 / 复制列名仍走单列右键。）**
 5. （初版决策）右栏 `RightTab::Metadata` 页签与对应 `SetRightTab` 分支直接删除，不留兼容分支；右栏只留 值详情 / 计算 / 分组。**§8.12 变更**：列浏览器以 `RightTab::Browser` 作为新默认页签加回右栏，重排为 Browser / Value / Stats / Group。
 
 **状态模型**：
@@ -596,7 +601,7 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 
 **测试基线（§8.11 本轮回归，历史记录）**：`cargo test -p rds-result-panel --lib` = **155 passed / 0 failed**（基线 147 + 新增 8 例：`column_browser_menu_items` 3 例——本地动作子集 / 条件项出现条件 / 动作归属与列号映射；`filter_browser_columns` 5 例——空词全量原序 / 列名忽略大小写 / 类型名 / 注释 / 无匹配空）。§8.12 迁移后基线为 **156 passed / 0 failed**（见下节）。`cargo test -p rds-editor --lib` 本轮被并行线「函数手册 #54-C5」未提交改动阻塞（`host.rs` 重复 `IconName` 导入 E0252 + 未跟踪 `function_manual.rs` 测试模块通配导入 recursion limit），非本线因果；本线 host.rs 仅 drain 段分派小段 + 窗口转手方法，写法与既有 `ToggleColumnVisibility` / `clear_filter_via_window` 同范式，待并行线解阻后复跑。
 
-**下一轮 backlog**：多选批量动作；列顺序拖拽（`move_column` 钩子 + 列序模型与隐藏 / 冻结 / 转置映射改造）；搜索词是否跨结果持久化的口径复核；清单行类型图标（替代类型名文本后缀）。
+**下一轮 backlog**：~~多选批量动作~~（已交付，见 §8.21）；~~列顺序拖拽~~（全链路已通，见 §2.4 核查更正）；搜索词是否跨结果持久化的口径复核；清单行类型图标（替代类型名文本后缀）。
 
 ### 8.12 列浏览器并入右栏四页签（2026-10-24，本轮拍板）
 
@@ -625,7 +630,7 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 
 **测试基线（本轮回归）**：`cargo test -p rds-result-panel --lib` = **156 passed / 0 failed**（迁移前 155；新增 `right_tab_index_maps_to_four_tabs` 断言 0/1/2/3 与 99 越界映射；5 例 `filter_browser_columns` 纯函数测试与 3 例菜单测试保留；文档回写轮复跑复核仍为 156 passed / 0 failed）。`cargo check -p rds-editor --lib` 仍被并行线「函数手册 #54-C5」未提交改动阻塞：10 个编译错误逐条核对路径——`host.rs:24` 重复 `IconName` 导入（E0252）、`host.rs:1513` 函数手册按钮（`IconName::BookMarked`），其余全部在未跟踪 `crates/editor/src/view/function_manual.rs`（`Rc` 缺失、`v_flex`/`h_flex`/`open_dialog`/`close_dialog` 缺 trait 导入、值移动借用、unused `ManualCategory` 等）；本线分派段（删除 `ToggleColumnSidebar`、`SetRightTab`/`SelectColumn`/`LocateColumn`/`ClearColumnSearch`）未引入新错误。按纪律不替并行线修、不绕过、不提交其 hunk，待解阻后复跑。
 
-**遗留 backlog**（沿用 §8.11）：多选批量动作；列顺序拖拽；搜索词跨结果持久化口径复核；清单行类型图标；「引用」页签（外键面包屑 + 引用表只读预览）。
+**遗留 backlog**（沿用 §8.11）：~~多选批量动作~~（已交付，见 §8.21）；~~列顺序拖拽~~（全链路已通）；搜索词跨结果持久化口径复核；清单行类型图标；「引用」页签（外键面包屑 + 引用表只读预览）。
 
 ### 8.13 渲染改进批次（P0-1 / P0-2a / P1-4 / P1-5 / P2-1 / P2-2）
 
@@ -803,14 +808,15 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 4. **取全部行 / 计算总行数**：底部工具栏按钮（`ResultRequest::FetchAll` 变体未加）。
 5. **结果面板最大化**：`Ctrl+Shift+6`（dock 面板 `zoom_control` 未实现）。
 6. **引用页签**：外键引用查看（面包屑 + 引用表只读预览，需下发 SQL 查源库）。
-7. **多选批量动作**：列浏览器多选批量动作（需多选模型 + 批量动作入口）。
+7. **多选批量动作**：列浏览器多选批量动作（需多选模型 + 批量动作入口）——**已于 2026-11-08 交付**（Ctrl 点击选集 + 隐藏/显示所选 + 清空选择，见 §8.21）。
 8. **列序拖拽**：列顺序拖拽（`move_column` 钩子 + 列序模型与隐藏/冻结/转置映射改造）。
 9. **列宽 backlog**：双击列头边缘自动适应内容宽度、右键列头「设置列宽」输入数值（跨会话持久化已于 2026-11-08 交付）。
 
 > **核查更正（2026-11-08）**：本节是当年盘点快照，以下条目已不成立——④ `ResultRequest::FetchAll`
 > 变体**已加**（`ports.rs`，宿主侧仍是单段取数、循环版未实现）；⑧ 列序拖拽**全链路已通**
 > （见 §2.4 核查更正：组件 `col_movable` → 面板订阅 → `save_session_now` → 编解码）；
-> ⑨ 列宽跨会话持久化**已交付**（见 §8.7 列布局持久化行）。①②③⑤⑥⑦ 仍待做。
+> ⑨ 列宽跨会话持久化**已交付**（见 §8.7 列布局持久化行）；⑦ 列浏览器多选批量动作**已交付**
+> （见 §8.21）。①②③⑤⑥ 仍待做。
 
 **测试基线**：`cargo test -p rds-result-panel --lib` = **196 passed / 0 failed**。
 
@@ -979,6 +985,20 @@ panel.rs 删掉手搓过滤 / 行渲染 / 搜索框约 200 行。
 `font_style` 后保持）；`cargo test -p rds-settings --lib` = **34 passed / 0 failed**
 （`every_model_leaf_is_registered` 契约测试已过：23 项全登记，并行线阻塞已消除）；
 `cargo check -p rds-workbench-shell -p rds-settings -p rds-result-panel` 通过。
+
+### 8.21 P2 批：值查看器 hex 翻页 / 图片预览 + 列浏览器多选（2026-11-08）
+
+（遗留盘点顺序表里的 P2 三项；P0 / P1 见 `result-panel-handoff.md` §2.12 与 §2.4 核查更正块，本仓提交 `7a9afb5c` / `bbf81746`。）
+
+| 项 | 落地要点 |
+| --- | --- |
+| P2-1 hex 转储翻页 | 原实现固定 `hex_lines(&bytes, 0, 16)`（只显示首页 256 字节）；现加 `HEX_LINES_PER_PAGE = 16` + 纯函数 `hex_page_clamp(total_bytes, page) -> (page, total_pages)`（空值也算 1 页、页号夹末页）+ `hex_page_button`（到边界禁用）；底部页栏「第 n/N 页 · 共 X 字节」+ 上一页 / 下一页。**页号是纯视图态**（`ResultPanel.hex_page`），按钮经 `ResultRequest::HexPage(usize)` 回面板——tab 的 render 只有 `&App`、拿不到 `&mut Context`，故走 `queue.request(.., app)` 而非 `cx.listener`；`set_selection_pos` 里复位 `hex_page = 0` |
+| P2-2 图片解码预览 | 原 `ViewerMode::Image` 只渲一行「格式 · 字节数」占位。现 `grid/cell.rs::image_format_of(name)`（PNG / JPEG / GIF / WebP → `ImageFormat`）→ 事件路径 `rebuild_value_tree` 把 hex 解成 `Arc<Image>` 存 `ResultPanel.value_image` → render 摆 `img(ImageSource::Image(..)).w_full().max_h_full()`，解码失败 `with_fallback` 回落文案、格式不在支持集回文本占位。**为什么解码不在 render**：`Image::from_bytes` 只内存构造（`id = hash(bytes)` 命中资产缓存），真解码在 `img` 的 layout/paint 期走 `use_asset::<AssetLogger<ImageDecoder>>`，render 仍是纯读路径。**布局陷阱**：`Img` 在 `size` 为 `Auto` 时按真实像素写 size（大图会撑爆面板），必须显式给宽 + 高度上限 |
+| P2-3 列浏览器多选 | `List` 每次点击强制覆盖 `selected_index`、只透传 `confirm(secondary)`（vendor 0.8.1 `list/list.rs:516-526`），没有集合语义 → 集合由 `ColumnBrowserDelegate.selected_set` 自持：`next_multi_selection(current, clicked, additive)`（Ctrl 增删 / 普通单选替换 / 升序去重）+ `render_item` 按集合自绘底色；集合经 `ColumnSelectionChanged` 回传面板镜像 `multi_selected`，标题行出「已选 N 列」+ 隐藏所选 / 显示所选 / 清空选择三钮；批量显隐走 `SetColumnsHidden { columns, hidden }` → `delegate.set_columns_hidden`（逐列复用 `hide_column`，隐藏仍保「至少 1 列可见」底线）。`sync` 换投影时按列数剔除越界列号后回灌 delegate（`set_data` 清集合，不回灌则刷新一次丢选集） |
+
+**验证**：`cargo test -p rds-result-panel --lib` = **218 passed / 0 failed**；
+`cargo check -p rds-result-panel -p rds-editor` 通过（0 warning）。
+**未验证项（如实登记）**：`.w_full()`（Relative）+ `.max_h_full()` 在**真实窗口**下能否夹住超大图、`ObjectFit::Contain` 是否按预期生效——只通过编译与纯函数单测，未跑真窗口帧测。
 
 ## 8. 协作纪律
 

@@ -127,6 +127,11 @@ impl EditorHostPanel {
             }
             ResultRequest::GoPage(target) => self.go_page(target, cx),
             ResultRequest::GoRow(row) => self.go_row(row, cx),
+            // 【P2-1】值查看器 hex 翻页：页号是面板自持的纯视图态，宿主只把请求还回面板
+            ResultRequest::HexPage(page) => {
+                self.result_panel
+                    .update(cx, |panel, cx| panel.set_hex_page(page, cx));
+            }
             ResultRequest::Export { format, all } => {
                 if all {
                     self.export_active_result_all(format, cx);
@@ -174,6 +179,21 @@ impl EditorHostPanel {
             ResultRequest::SelectColumn(column) => {
                 self.result_panel
                     .update(cx, |p, cx| p.select_column(column, cx));
+            }
+            // 【P2-3】列浏览器多选批量显隐 / 选集镜像 / 清空选集：都是纯面板 + 网格
+            // delegate 的本地状态，宿主只转发（选集权威在 delegate，面板存镜像）
+            ResultRequest::SetColumnsHidden { columns, hidden } => {
+                self.result_panel.update(cx, |p, cx| {
+                    p.set_columns_hidden(columns, hidden, cx);
+                });
+            }
+            ResultRequest::ColumnSelectionChanged(columns) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.set_multi_selected(columns, cx));
+            }
+            ResultRequest::ClearColumnSelection => {
+                self.result_panel
+                    .update(cx, |p, cx| p.clear_multi_selected(cx));
             }
             // 【列浏览器】清单双击定位：网格滚到该列首行并选中
             ResultRequest::LocateColumn(column) => {

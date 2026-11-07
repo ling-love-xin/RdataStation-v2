@@ -60,6 +60,19 @@ impl ResultGridDelegate {
         self.hidden.clear();
     }
 
+    /// 批量显隐（**数据列序**；列浏览器多选批量动作）。逐列复用单列接口——
+    /// 隐藏时"至少留 1 列可见"的底线由 [`Self::hide_column`] 逐列把住，
+    /// 因此整批隐藏一个只剩 1 列的宽表时，最后那一列会保留。
+    pub fn set_columns_hidden(&mut self, columns: &[usize], hidden: bool) {
+        for &column in columns {
+            if hidden {
+                self.hide_column(column);
+            } else {
+                self.show_column(column);
+            }
+        }
+    }
+
     /// 列名（**数据列序**；侧栏列结构列表读它，借读不拷）
     pub fn columns(&self) -> &[String] {
         &self.columns

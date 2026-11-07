@@ -92,6 +92,9 @@ pub enum ResultRequest {
     /// 【P1-2】状态栏行号跳转（**1 基**，与行号列显示同口径）：滚到该行并选中；
     /// 越界由宿主夹到最后一行。纯视图导航，不重查。
     GoRow(usize),
+    /// 【P2-1】值查看器 hex 转储翻页（目标页号，0 基；越界由面板夹到合法页）。
+    /// 面板自持页号（纯视图态），所以这条同样走队列回到面板自己处理。
+    HexPage(usize),
     /// 导出（格式 × 范围）
     Export { format: ExportFormat, all: bool },
     /// 错误卡片「复制错误」
@@ -106,6 +109,15 @@ pub enum ResultRequest {
     ToggleLeftSidebar,
     /// 左栏列浏览器清单行眼睛：切换该列隐藏 / 显示（宿主 update 网格 + 面板）
     ToggleColumnVisibility(usize),
+    /// 【P2-3】列浏览器多选批量显隐：把 `columns`（数据列序）整批设为隐藏 / 显示
+    /// （逐列复用单列接口，隐藏仍保留「至少 1 列可见」底线）
+    SetColumnsHidden { columns: Vec<usize>, hidden: bool },
+    /// 【P2-3】清单多选集合变化（Ctrl 点击增删 / 普通点击单选替换）：delegate 是
+    /// 选集的权威（`List` 只给 `confirm(secondary)`，不维护集合），面板只镜像它
+    /// （标题行「已选 N 列」与批量按钮可见性据此渲染）
+    ColumnSelectionChanged(Vec<usize>),
+    /// 【P2-3】清空清单多选集合（标题行「清空选择」按钮）
+    ClearColumnSelection,
     /// 列浏览器清单单击选中一列（数据列序）：写清单选中态 + 网格列高亮联动
     SelectColumn(usize),
     /// 列浏览器清单双击定位：网格滚到该列首行并选中

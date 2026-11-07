@@ -190,6 +190,14 @@ pub struct ResultPanel {
     /// 【侧栏】最近选中格位置（**视图行**, 含行号槽列；宿主 `TableEvent::SelectCell`
     /// 事件写入，选行 / 清选置 `None`）。右栏值详情据此读网格取完整值 / 列名 / 类型。
     pub(crate) selection_pos: Option<(usize, usize)>,
+    /// 【值查看器 P2-1】hex 转储当前页（0 基，每页 16 行 = 256 字节）。面板自持的纯
+    /// 视图态：换选中格 / 清选时复位到 0（`set_selection_pos` 里做），翻页按钮经
+    /// `ResultRequest::HexPage` 回来改它。值本身很大时不物化全部行，只取本页区间。
+    pub(crate) hex_page: usize,
+    /// 【P2-2】值查看器图片：选中 BLOB 且魔数认得出图片格式时，事件路径把 hex 解成
+    /// `Arc<Image>`（`Image::from_bytes` 只是内存构造，真正解码在 `img` 的 layout/paint
+    /// 期按内容 id 走资产缓存），render 只摆 `img`。非图片 / 认不出格式 → `None`。
+    pub(crate) value_image: Option<Arc<Image>>,
     /// 【结果集 #296】持久化的列序（列名数组；空 = 默认序）。宿主在构造期注入
     /// （重启恢复），`TableEvent::MoveColumn` 订阅更新，并经
     /// `ResultRequest::ColumnOrderChanged` 回写宿主落库。换新结果时按列名匹配重排。
@@ -198,6 +206,10 @@ pub struct ResultPanel {
     /// 清单单击写入；网格选中格经 `selection_pos` 反推同步；新结果集 / 切标签 /
     /// 对比模式重置为 `None`（渲染兜底第一可见列）。清单选中 ≠ 网格焦点。
     pub(crate) selected_col: Option<usize>,
+    /// 【P2-3】列浏览器多选集合（数据列序，升序）= delegate 集合的镜像：
+    /// 选集权威在 [`crate::column_browser::ColumnBrowserDelegate`]（`List` 只给
+    /// `confirm(secondary)`），面板存一份用于标题行「已选 N 列」与批量按钮。
+    pub(crate) multi_selected: Vec<usize>,
     /// 【列浏览器】清单 List 实体（kit `list::{ListState, ListDelegate}` 承载；
     /// 选中高亮由 List 内部 `selected_index` 管理，搜索框也在 List 内置里——
     /// 面板不再自持搜索输入框 / 搜索词，见 [`crate::column_browser`]）

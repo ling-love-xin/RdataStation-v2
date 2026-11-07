@@ -349,6 +349,71 @@ impl ResultPanel {
             None => self.sidebar_empty("暂无列", cx),
         };
 
+        // 标题行：【P2-3】多选非空时右侧摆批量动作（隐藏所选 / 显示所选 / 清空选择）。
+        // 计数与按钮都随 `multi_selected` 现算；按钮走队列回宿主分派（render 是纯读路径）。
+        let selected_count = self.multi_selected.len();
+        let batch_actions: AnyElement = if selected_count == 0 {
+            div().into_any_element()
+        } else {
+            let selected: Vec<usize> = self.multi_selected.clone();
+            let hide_queue = self.queue.clone();
+            let hide_cols = selected.clone();
+            let show_queue = self.queue.clone();
+            let show_cols = selected;
+            let clear_queue = self.queue.clone();
+            div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .text_color(muted)
+                        .child(SharedString::from(format!("已选 {selected_count} 列"))),
+                )
+                .child(
+                    Button::new("editor-result-col-batch-hide")
+                        .ghost()
+                        .small()
+                        .label("隐藏所选")
+                        .tooltip("把选中的列整批隐藏（仍保留至少 1 列可见）")
+                        .on_click(move |_, _window, app| {
+                            hide_queue.request(
+                                ResultRequest::SetColumnsHidden {
+                                    columns: hide_cols.clone(),
+                                    hidden: true,
+                                },
+                                app,
+                            );
+                        }),
+                )
+                .child(
+                    Button::new("editor-result-col-batch-show")
+                        .ghost()
+                        .small()
+                        .label("显示所选")
+                        .tooltip("把选中的列整批取消隐藏")
+                        .on_click(move |_, _window, app| {
+                            show_queue.request(
+                                ResultRequest::SetColumnsHidden {
+                                    columns: show_cols.clone(),
+                                    hidden: false,
+                                },
+                                app,
+                            );
+                        }),
+                )
+                .child(
+                    Button::new("editor-result-col-batch-clear")
+                        .ghost()
+                        .small()
+                        .label("清空选择")
+                        .on_click(move |_, _window, app| {
+                            clear_queue.request(ResultRequest::ClearColumnSelection, app);
+                        }),
+                )
+                .into_any_element()
+        };
+
         // 页签内容区：宽度 / 边框 / 背景由右栏外壳统一控制，这里只排上下三段
         div()
             .flex_1()
@@ -362,12 +427,16 @@ impl ResultPanel {
                     .px_2()
                     .py_1()
                     .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
                     .text_xs()
                     .text_color(muted)
                     .child(SharedString::from(format!(
                         "列浏览器 · {} 列",
                         columns.len()
-                    ))),
+                    )))
+                    .child(batch_actions),
             )
             .child(table_head)
             .child(list_body)
