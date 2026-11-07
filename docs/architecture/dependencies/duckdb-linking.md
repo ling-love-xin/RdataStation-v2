@@ -22,17 +22,19 @@
 | 取库脚本 | `tools/fetch-duckdb.sh` |
 | 构建期指向 | `.cargo/config.toml` 的 `[env] DUCKDB_LIB_DIR`（`relative = true`，开发机零环境变量） |
 | 运行时 dll 拷贝 | `crates/engine/build.rs`（拷到 `target/<profile>/` 与 `.../deps/`） |
-| crate 版本 | 根 `Cargo.toml` 的 `duckdb = "1.10505.0"`（对应 DuckDB **v1.5.5**） |
+| crate 版本 | 根 `Cargo.toml` 的 `duckdb = "=1.10506.1"`（对应 DuckDB **v1.5.6**，**精确锁定**，见 §5 第 1 条） |
 | 体积守门 | `tools/target-guard.sh`（§9） |
 
-**版本映射**：crate 版本第二段的十进制数编码 DuckDB 版本——`10505` → `1.5.5`
+**版本映射**：crate 版本第二段的十进制数编码 DuckDB 版本——`10506` → `1.5.6`
 （`libduckdb-sys` build script 的 `duckdb_version_from_pkg_version`）。**crate 与库必须成对升级**，
 不一致会在运行期以符号缺失 / 崩溃体现，而不是编译期。
+**必须写 `=` 精确锁定**：`1.10505` / `1.10506` / `1.20000` 是三条不同内核线，caret 约束会被解析到
+`1.20000.1`（DuckDB 2.0，连带强制 `arrow 60`）——2026-11-08 实测踩到，见 `duckdb-1.5.6-upgrade-report.md` §3。
 
 ## 3. 首次与换机
 
 ```bash
-tools/fetch-duckdb.sh            # 默认 1.5.5 → third_party/duckdb/1.5.5/
+tools/fetch-duckdb.sh            # 默认 1.5.6 → third_party/duckdb/1.5.6/
 cargo check -p rds-engine        # 冒烟
 ```
 
@@ -47,15 +49,22 @@ cargo check -p rds-engine        # 冒烟
   与 `target/<profile>/deps/`（测试二进制）。这是 `libduckdb-sys` 的 `DUCKDB_DOWNLOAD_LIB`
   路径同款手法（那边拷的是它下载到 `target/duckdb-download/` 的那份）。
 - **Linux / macOS**：动态库靠 rpath / `LD_LIBRARY_PATH` 解析（拷到 exe 旁无效），
-  开发机导出 `export LD_LIBRARY_PATH="$PWD/third_party/duckdb/1.5.5"`。
+  开发机导出 `export LD_LIBRARY_PATH="$PWD/third_party/duckdb/1.5.6"`。
 
 ## 5. 升级内核
 
-1. 根 `Cargo.toml`：改 `duckdb` 版本（按 §2 的映射写第二段）；
-2. `tools/fetch-duckdb.sh <新版本>`；
+1. 根 `Cargo.toml`：改 `duckdb` 版本（按 §2 的映射写第二段），**必须带 `=`**——只写 caret 会被
+   cargo 解析到 `1.20000.1`（2.0 线，同时把 `arrow` 拉到 60）；
+2. `tools/fetch-duckdb.sh <新版本>`（无 bash / curl 的 Windows 环境见下方「手取」）；
 3. `.cargo/config.toml`：改 `DUCKDB_LIB_DIR` 的路径；
 4. 冒烟：`cargo test -p rds-engine --lib` 与 `cargo test -p rds-mock`（引擎与 mock 是最重的两个 DuckDB 使用方）；
 5. 回填本文 + `dependency-strategy.md` 的版本记录。
+
+**手取（脚本跑不了时）**：资产是 `libduckdb-windows-amd64.zip`（Windows）/ `libduckdb-linux-amd64.zip` /
+`libduckdb-osx-universal.zip`，地址 `https://github.com/duckdb/duckdb/releases/download/v<版本>/<资产>`，
+本机走镜像前缀 `https://ghproxy.net/`。解压到 `third_party/duckdb/<版本>/` 后目录里必须有
+`duckdb.dll` + `duckdb.h`（`libduckdb-sys` 从 `DUCKDB_LIB_DIR` 找头文件生成 bindings），
+另带 `duckdb.lib`（Windows 链接用）、`duckdb.hpp`、`duckdb_extension.h`。
 
 ## 6. 与扩展的关系（不变）
 

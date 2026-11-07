@@ -111,7 +111,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 | 依赖 | 当前 | 最新可用（2026-11-07 核实） | 代码使用点 | 备注 |
 | --- | --- | --- | --- | --- |
-| `duckdb` | 1.10505.0（DuckDB 1.5.5） | `1.10506.1`（DuckDB 1.5.6）/ `1.20000.1`（DuckDB 2.0.x） | `crates/engine`（`DUCKDB_LIB_DIR` 动态链接） | 1.5 线内 patch（→ `1.10506.1`）仍要 `arrow ^58`，可单独升，但 crate 版本必须与 `third_party/duckdb/` 的库版本成对换；2.0 线要 `arrow ^60` 且有存储格式单向兼容，见 `duckdb-2.0-gpui-kit-0.8.1-upgrade-assessment.md`，继续暂缓 |
+| `duckdb` | `=1.10506.1`（DuckDB 1.5.6） | ✅ 已升（2026-11-08）；2.0 线 `1.20000.1` 暂缓 | `crates/engine`（`DUCKDB_LIB_DIR` 动态链接） | 1.5 线内 patch 升完，`arrow` 仍 58.4.0 未动；**必须 `=` 精确锁定**（caret 会被解析到 `1.20000.1` 并强拉 `arrow 60`）；2.0 线要 `arrow ^60` 且有存储格式单向兼容，见 `duckdb-2.0-gpui-kit-0.8.1-upgrade-assessment.md`，继续暂缓 |
 | `arrow` | 58.4.0 | 60.1.0 | — | **不可单独升**，须与 `duckdb` 同步（见 R4）；只有上 DuckDB 2.0 线才需要 60 |
 | `gpui-kit` | 0.9.0 + `features = ["gpui-fast"]` | ✅ 已升（2026-11-08） | UI 全仓 | 编译全绿（含开 fast 后）；剩运行时回归与滚动性能基线，见 `gpui-kit-0.9.0-upgrade-report.md` §7 |
 | `sqlglot-rust` | 0.10.33 | 0.11.1（crates.io 2026-10-28） | `crates/sql` | 跨 0.10 → 0.11，须先跑 `cargo test -p rds-sql` 的 SQL 回归，未评估 |
