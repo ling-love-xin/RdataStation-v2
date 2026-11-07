@@ -69,8 +69,14 @@ impl GlobalInstanceStore {
 
         // ---- 项目侧重名双保险探测（SQLite 未删登记 + DuckDB 表 + resources 文件）----
         // 与升级侧 `promote` 同口径：登记层与本体层任一命中都按冲突走询问，不静默覆盖。
-        if project_name_taken(project, project_root, &target_name, rel_path.as_deref()).await? {
-            return Err(InstanceOpError::Conflict { name: target_name });
+        // 命中层名一并回传：冲突框要说清是登记、是表、还是文件。
+        if let Some(field) =
+            project_name_taken(project, project_root, &target_name, rel_path.as_deref()).await?
+        {
+            return Err(InstanceOpError::Conflict {
+                name: target_name,
+                field,
+            });
         }
 
         // ---- 形态判定 + 落项目 ----

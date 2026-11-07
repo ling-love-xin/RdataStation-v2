@@ -50,7 +50,10 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
     // 2) 来源（归档凭证的"出处"：回答这结论是用什么数据得出的）
     let mut source = Vec::new();
     if let Some(from) = detail.promoted_from.as_deref() {
-        source.push(("来源草稿", from.to_string()));
+        // 一字段两义（升级写全局 id、草稿归档写相对路径）：按前缀分开说，不把
+        // `global:arg_…` 当成一个路径卖给用户。
+        let from = PromotedFrom::parse(from);
+        source.push((from.label(), from.value().to_string()));
     }
     if let Some(conn) = detail.source_connection_id.as_deref() {
         source.push(("来源连接", conn.to_string()));

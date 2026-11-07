@@ -197,10 +197,17 @@ pub struct ConflictDialogSession {
 /// `ensure_conflict_dialog` 里开窗；覆盖 / 改名重入队由对话框回调触发。
 #[derive(Default)]
 pub struct ConflictDialogFlow {
-    /// 待开的冲突凭据（工作线程回传；含原始升级请求 / 全局资源名与目标名）。
-    pub pending: Option<crate::services::resource_jobs::ConflictContext>,
+    /// 待开的冲突凭据（工作线程回传；含原始升级请求 / 全局资源名与目标名，以及撞在哪一层）。
+    pub pending: Option<ConflictRecovery>,
     /// 已开的会话（`None` = 没开；关窗时清掉）。
     pub session: Option<ConflictDialogSession>,
+}
+
+/// 待开的冲突回执：重试凭据 + 撞在哪一层（`field` 决定对话框里那句"撞在登记表 / 数据表 / 本体文件"）。
+#[derive(Clone)]
+pub struct ConflictRecovery {
+    pub context: crate::services::resource_jobs::ConflictContext,
+    pub field: analytics_resource::global::ConflictField,
 }
 
 /// 把一段 SQL 追加到草稿末尾（空草稿直接落片段）。

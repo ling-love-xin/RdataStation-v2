@@ -52,10 +52,11 @@ pub(crate) async fn run_promote(job: &PromoteJob) -> OpOutcome {
     };
     let outcome = match outcome {
         Ok(outcome) => outcome,
-        Err(InstanceOpError::Conflict { name }) => {
+        Err(InstanceOpError::Conflict { name, field }) => {
             return OpOutcome::Conflict {
                 context: ConflictContext::Promote(job.request.clone()),
                 name,
+                field,
             };
         }
         Err(reason) => {
@@ -143,12 +144,13 @@ pub(crate) async fn run_distribute(job: &DistributeJob) -> OpOutcome {
                 DistributeShape::File => DistributeShape::File,
             },
         },
-        Err(InstanceOpError::Conflict { name }) => OpOutcome::Conflict {
+        Err(InstanceOpError::Conflict { name, field }) => OpOutcome::Conflict {
             context: ConflictContext::Distribute {
                 global_name: job.name.clone(),
                 target: job.target.clone(),
             },
             name,
+            field,
         },
         Err(InstanceOpError::NotFound { name }) => OpOutcome::Failed {
             action: "从全局分发",

@@ -583,8 +583,17 @@ impl SidebarPanel {
 
         // 同名冲突：不写失败回执，把凭据落 `pending`，下一帧由 `ensure_conflict_dialog`
         // 开三选对话框（覆盖 / 改名 / 取消；§13.3、§13.6）。
-        if let resource_jobs::OpOutcome::Conflict { context, name } = &outcome {
-            self.shared.conflict_dialog.borrow_mut().pending = Some(context.clone());
+        if let resource_jobs::OpOutcome::Conflict {
+            context,
+            name,
+            field,
+        } = &outcome
+        {
+            self.shared.conflict_dialog.borrow_mut().pending =
+                Some(crate::panels::shared::ConflictRecovery {
+                    context: context.clone(),
+                    field: *field,
+                });
             self.shared
                 .say(format!("资产库：「{name}」同名冲突，请选择处理方式"), cx);
             return;

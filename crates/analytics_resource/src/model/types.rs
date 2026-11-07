@@ -49,7 +49,8 @@ pub struct ArchiveRequest {
 /// 一次归档的**撤销凭据**（原型 §4.1 的"立即反悔窗口"）。
 ///
 /// 为什么原路径跟着凭据走、而不入库：归档**不往库里记"本体原来在哪"**
-/// （`ArchiveBinding.promoted_from` 记的是来源草稿的**相对**路径，本地文件归档时它还是空的），
+/// （`ArchiveBinding.promoted_from` 记的是**出处**——草稿归档的相对路径，或升级 / 分发时的
+/// 全局实例 id，见 [`PromotedFrom`]——本地文件归档时它还是空的），
 /// 而撤销窗口只有几秒——在内存里传比给所有存档加一列更诚实：过期就没了，
 /// 不会在库里留一个"看起来能撤销"的字段。
 #[derive(Debug, Clone, PartialEq, Eq)]

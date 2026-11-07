@@ -2,10 +2,12 @@
 
 mod affordance;
 mod kind;
+mod promoted_from;
 mod types;
 
 pub use affordance::*;
 pub use kind::*;
+pub use promoted_from::*;
 pub use types::*;
 
 #[cfg(test)]

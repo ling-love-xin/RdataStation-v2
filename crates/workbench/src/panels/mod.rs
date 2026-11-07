@@ -360,9 +360,10 @@ impl SidebarPanel {
     /// 覆盖 / 改名后的重入队由 `SidebarPanel::request_conflict_choice` 执行（需要项目根与
     /// 宿主刷新端口，都在面板层，不放进对话框 crate）。
     pub(crate) fn ensure_conflict_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(context) = self.shared.conflict_dialog.borrow_mut().pending.take() else {
+        let Some(recovery) = self.shared.conflict_dialog.borrow_mut().pending.take() else {
             return;
         };
+        let context = recovery.context;
         // 冲突类型与展示名从凭据推导：升级 = 原始请求名；分发 = 目标名（未改名时 = 全局名）。
         let (kind, conflict_name) = match &context {
             crate::services::resource_jobs::ConflictContext::Promote(req) => {
@@ -379,6 +380,7 @@ impl SidebarPanel {
         let seed = ConflictSeed {
             kind,
             name: conflict_name.clone(),
+            field: recovery.field,
         };
         let name_input = cx.new(|cx| {
             let mut state = gpui_kit::component::input::InputState::new(window, cx);

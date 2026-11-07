@@ -90,12 +90,45 @@ pub enum DistributeShape {
     File,
 }
 
+/// 冲突撞在目标实例的**哪一层**（三查的结论：登记 / 物理表 / 原件）。
+///
+/// 这个结论必须带进冲突框：三查都可能命中，但用户要做的事不一样——
+/// 撞在登记层是同名存档（可改名；覆盖要软删登记），撞在表层是库里已有同名表
+/// （改名也要看表名是否被别的东西用着），撞在文件层是 `resources/` 下已有同名原件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictField {
+    /// SQLite 登记表里已有同名（`deleted_at IS NULL`）。
+    Registry,
+    /// 目标 DuckDB 里已有同名物理表。
+    Table,
+    /// 目标项目 `resources/` 下已有同名原件（脚本档分发）。
+    File,
+    /// 登记与物理表都在（升级侧双保险同时命中）。
+    RegistryAndTable,
+}
+
+impl ConflictField {
+    /// 中文层名（冲突框的一句话说明用；不含"撞在"这类状语，调用方拼）。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Registry => "登记表",
+            Self::Table => "数据表",
+            Self::File => "本体文件",
+            Self::RegistryAndTable => "登记表和数据表",
+        }
+    }
+}
+
 /// 双实例操作错误。
 #[derive(Debug, thiserror::Error)]
 pub enum InstanceOpError {
     /// 同名冲突（升级目标全局表 / 分发目标项目表已存在）——UI 应弹「覆盖 / 改名 / 取消」。
-    #[error("同名冲突：{name}")]
-    Conflict { name: String },
+    #[error("同名冲突：{name}（撞在{}）", field.label())]
+    Conflict {
+        name: String,
+        /// 撞在哪一层：让冲突框说清"是登记、是表、还是文件"，而不是笼统一句"已有同名"。
+        field: ConflictField,
+    },
     /// 资源不存在（分发引用了未登记的全局资源）。
     #[error("资源不存在：{name}")]
     NotFound { name: String },
@@ -144,13 +177,15 @@ pub fn write_project_file(
 /// 项目侧重名双保险探测（§13.6 冲突询问）：SQLite 未删登记 + DuckDB 表 + resources 文件，
 /// 任一命中即视为冲突。与升级侧 `promote` 的"登记层 + 本体层"口径一致，不静默覆盖。
 ///
+/// 返回**命中哪一层**（`None` = 没撞），让冲突框能说清是登记、表还是文件。
+///
 /// `rel_path` 只用于脚本档文件存在性探测（文件路径固定、不随改名变化）；分析表档传 `None`。
 async fn project_name_taken(
     project: &ProjectDuckConn,
     project_root: &Path,
     name: &str,
     rel_path: Option<&str>,
-) -> Result<bool, InstanceOpError> {
+) -> Result<Option<ConflictField>, InstanceOpError> {
     // 1. SQLite 登记层（scope = 'project'，未软删）。
     let pool = project.1.clone();
     let conn = pool.acquire().await.map_err(InstanceOpError::Core)?;
@@ -164,7 +199,7 @@ async fn project_name_taken(
         )
         .map_err(sqlite_err("check_project_conflict"))?;
     if registered > 0 {
-        return Ok(true);
+        return Ok(Some(ConflictField::Registry));
     }
 
     // 2. DuckDB 表存在（分析表档；标识符规范化为小写，与 `table_exists` 同口径）。
@@ -184,16 +219,16 @@ async fn project_name_taken(
         > 0;
     drop(guard);
     if table_exists {
-        return Ok(true);
+        return Ok(Some(ConflictField::Table));
     }
 
     // 3. resources 文件存在（脚本档；路径固定，不随显示名变化）。
     if let Some(rel) = rel_path {
         if project_root.join("resources").join(rel).is_file() {
-            return Ok(true);
+            return Ok(Some(ConflictField::File));
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
 /// 项目 DuckDB 表行数 / 列数统计（分发建表后）。

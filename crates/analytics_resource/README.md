@@ -29,6 +29,12 @@
 | 要素 | 列 / 位置 | 回答的问题 |
 | --- | --- | --- |
 | 来源 | `promoted_from` / `source_connection_id` / `source_table` | 这结论是用什么数据得出的 |
+
+> **`promoted_from` 一字段两义（2026-11-07 记录）**：草稿归档写来源草稿的相对路径（`scratchpad/<rel>`），
+> 升级到全局 / 分发落项目写 `global:<全局实例 id>`。读取面按前缀分开解释
+> （[`PromotedFrom`](src/model/promoted_from.rs)）：详情「来源」区据此显示「来源草稿」+ 路径、
+> 或「来源全局实例」+ id（前缀是库里的约定，不露给用户）。真要拆成两列时，
+> `global:` 前缀就是可回填的迁移线索（需新迁移 + 改列名清单 + 改 `starts_with("global:")` 断言）。
 | 代码 | 本体文件本身（`file`）或 `definition_sql`（`analysis`） | 怎么算的 |
 | 内容指纹 | `content_hash`（sha256） | 还是不是当初那份 |
 
@@ -79,6 +85,8 @@
 | --- | --- | --- |
 | `src/lib.rs` | `AnalyticsResourceStore`（索引层入口）+ 模块声明 | ✅ |
 | `src/model.rs` | 领域语义类型：`ArchiveKind` / `ReproductionStrength` / `ArchiveStatus` / `ArchiveBinding` / **`KeepVersions`（历史内容保留策略；设置项的有符号数在这里收成类型）** / `ArchiveRequest` / `CheckoutRequest` | ✅ Phase 0 + P2.4 |
+| `src/model/affordance.rs` | **归档动作判据族**（纯函数，零 GPUI）：`ActionContext { scope, status, has_payload, read_only, multi_count }` + 九个 `can_*`（打开 / 检出 / 升级 / 分发 / 改名 / 改标签 / 移动分组 / 删行 / 详情删除）——列表右键、`F2`、详情动作区、菜单共用同一份，不在各处各判一遍 | ✅ 2026-11-07 |
+| `src/model/promoted_from.rs` | `promoted_from` 的两义解释：`PromotedFrom`（`Draft` / `Global`）+ `parse`（按 `global:` 前缀）+ `label` / `value`（详情「来源」区用） | ✅ 2026-11-07 |
 | `src/payload.rs` | 本体层：`resolve` 守卫、归档搬运（跨设备兜底）、只读标记、sha256 指纹、**`file_size`（登记用的字节数）**、历史副本与裁剪（`store_version_copy` / `prune_version_copies`）、**版本副本查询与使用**（`version_copies` / `version_copy_file` / `delete_version_copy` / `copy_version_out` / `restore_version_copy`）、`replace_payload` / `move_payload_out`、`rel_path_taken` / `free_rel_path`（重名避让，命名规则只此一处） | ✅ Phase 0 + Phase 3 第一刀 |
 | `src/models.rs` | 持久层行模型（v1 搬运 + 迁移 020 的 9 个新列） | ✅ |
 | `src/service.rs` | 归档服务：归档（首次）/ 再归档（指纹未变即幂等、变了才增版本）/ 取回（检出）/ **还原到历史版本**（用旧内容生成新版本；无副本拒、指纹相同幂等）/ **取回历史版本** / **撤销归档**（本体移回 + 硬删行）/ **移入回收站**（批量，本体进 `ProjectTrash` + 登记行软删）/ **从回收站还原**（`origin` 校验 + 同名避让后登记行跟改）/ **按原相对路径还原**（索引修复那条）/ **永久删除与清空**（只动本模块的条目）编排 + **归档时把标签 / 分组真的落上**（`apply_labels` / `link_tags`：标签按名找、找不到就建；附属项失败记进 `ArchiveOutcome.notes` 不回滚主操作）+ **历史内容保留策略**（`KeepVersions`：全留 / 只留元数据 / 保留最近 n 份，两处裁剪合并为 `prune_copies`）+ `ResourcesChanged` 广播 | ✅ Phase 0 + Phase 3 + P0.8 + P2.4 + Phase 2 第八刀 |

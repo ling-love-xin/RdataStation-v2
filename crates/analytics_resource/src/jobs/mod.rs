@@ -154,6 +154,8 @@ pub enum OpOutcome {
         context: ConflictContext,
         /// 冲突名（对话框标题与回执用；改名后以新名为准）。
         name: String,
+        /// 撞在目标实例的哪一层（登记 / 表 / 文件）：冲突框据此说清"到底撞了什么"。
+        field: crate::global::ConflictField,
     },
 }
 

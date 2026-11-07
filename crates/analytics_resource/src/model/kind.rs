@@ -122,7 +122,8 @@ pub enum ArchiveStatus {
 /// 归档凭证里的"出处"（架构 §2.3）：回答"这结论是用什么数据得出的"。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ArchiveBinding {
-    /// 来源草稿的相对路径（`scratchpad/` 下，归档时定）。
+    /// 出处（一字段两义，读时按 [`PromotedFrom`](crate::model::PromotedFrom) 解释）：
+    /// 从草稿归档写 `scratchpad/<rel>`，升级到全局 / 分发落项目写 `global:<全局实例 id>`。
     pub promoted_from: Option<String>,
     /// 来源连接 id（可空；值取自草稿 `file_meta.last_connection_id`）。
     pub source_connection_id: Option<String>,

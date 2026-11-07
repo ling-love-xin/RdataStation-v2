@@ -322,3 +322,91 @@ async fn g006_global_row_missing_returns_not_found() {
     );
     let _ = fs::remove_dir_all(&env.dir);
 }
+
+/// 冲突回执要说清**撞在哪一层**：三查（登记 / 表 / 文件）都可能命中，
+/// 但用户接下来要做的事不一样，笼统一句"已有同名"帮不上判断。
+#[tokio::test]
+async fn g007_conflict_reports_which_field_was_hit() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    let req = promote_req("orders_field", &csv, PromoteKind::DataFile);
+    env.store.promote(&req).await.expect("first promote");
+
+    // 升级侧：登记与全局表都在 → 双命中。
+    let err = env
+        .store
+        .promote(&req)
+        .await
+        .expect_err("second promote must conflict");
+    match err {
+        InstanceOpError::Conflict { field, .. } => {
+            assert_eq!(field, ConflictField::RegistryAndTable, "两查都命中");
+        }
+        other => panic!("应报 Conflict，实际 {other:?}"),
+    }
+
+    // 分发侧：项目登记里已有同名 → 只命中登记层（表在但表不是第一查）。
+    let project_conn = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    env.store
+        .distribute(&project_conn, &env.project_root, "orders_field", None)
+        .await
+        .expect("first distribute");
+    let err = env
+        .store
+        .distribute(&project_conn, &env.project_root, "orders_field", None)
+        .await
+        .expect_err("second distribute must conflict");
+    match err {
+        InstanceOpError::Conflict { field, .. } => {
+            assert_eq!(field, ConflictField::Registry, "登记层先命中");
+        }
+        other => panic!("应报 Conflict，实际 {other:?}"),
+    }
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+/// 覆盖 = 同名链的下一版，不是"从 v1 重开"。
+///
+/// 两端注册层都按同名（含已软删）的 `MAX(version) + 1` 取号；若某端漏掉这条，
+/// 覆盖后版本会退回 1，用户看到的历史就断了（本用例专门钉住分发侧）。
+#[tokio::test]
+async fn g008_distribute_overwrite_keeps_the_version_chain() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    let req = promote_req("chain_orders", &csv, PromoteKind::DataFile);
+    env.store.promote(&req).await.expect("promote");
+
+    let project_conn = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    let first = env
+        .store
+        .distribute(&project_conn, &env.project_root, "chain_orders", None)
+        .await
+        .expect("first distribute");
+    assert_eq!(first.version, 1, "项目侧首版");
+
+    let second = env
+        .store
+        .distribute_overwrite(&project_conn, &env.project_root, "chain_orders", None)
+        .await
+        .expect("overwrite distribute");
+    assert_eq!(second.version, 2, "覆盖后版本号接着涨（不是退回 v1）");
+
+    // 活跃登记仍只有一条，且它是 v2。
+    let pool = &env.project_pool;
+    let conn = pool.acquire().await.expect("acquire");
+    let conn = conn.inner().expect("inner");
+    let versions: Vec<i32> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT version FROM analytics_resources \
+                 WHERE name = 'chain_orders' AND scope = 'project' AND deleted_at IS NULL",
+            )
+            .expect("prepare");
+        let rows = stmt.query_map([], |row| row.get(0)).expect("query");
+        rows.map(|r| r.expect("row")).collect()
+    };
+    assert_eq!(versions, vec![2], "覆盖后只剩 v2 一条活跃登记");
+
+    let _ = fs::remove_dir_all(&env.dir);
+}

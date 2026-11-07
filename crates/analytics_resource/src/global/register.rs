@@ -34,9 +34,12 @@ impl GlobalInstanceStore {
         let conn = pool.acquire().await?;
         let conn = conn.inner()?;
 
+        // 版本号按**同名链**接续：查询不过滤 `deleted_at`——覆盖路径会先软删旧登记，
+        // 若只看未删行，"用新内容替换同名资源"就成了"第一次分发"（版本退回 v1、历史断开）。
+        // 与全局侧 `register_global` 同口径（2026-11-07 统一）。
         let next_version: i32 = conn
             .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM analytics_resources WHERE name = ?1 AND scope = 'project' AND deleted_at IS NULL",
+                "SELECT COALESCE(MAX(version), 0) FROM analytics_resources WHERE name = ?1 AND scope = 'project'",
                 rusqlite::params![name],
                 |row| row.get::<_, i32>(0),
             )
@@ -74,7 +77,7 @@ impl GlobalInstanceStore {
         )
         .map_err(sqlite_err("insert_project_table"))?;
 
-        // 项目版本快照（版本 = 接续全局链，快照记全局来源）。
+        // 项目版本快照（版本 = 接续项目内同名链；快照记全局来源，回推"这次分发的是哪一版全局"）。
         let snapshot = serde_json::json!({
             "kind": "analysis",
             "distributed_from": format!("global:{}", global_id),
@@ -115,9 +118,10 @@ impl GlobalInstanceStore {
         let conn = pool.acquire().await?;
         let conn = conn.inner()?;
 
+        // 同名链接续（不过滤 `deleted_at`，理由同 `register_project_table`）。
         let next_version: i32 = conn
             .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM analytics_resources WHERE name = ?1 AND scope = 'project' AND deleted_at IS NULL",
+                "SELECT COALESCE(MAX(version), 0) FROM analytics_resources WHERE name = ?1 AND scope = 'project'",
                 rusqlite::params![name],
                 |row| row.get::<_, i32>(0),
             )
@@ -180,7 +184,11 @@ impl GlobalInstanceStore {
 
     // ==================== 内部 ====================
 
-    /// 全局登记 + 版本快照（升级落点）。覆盖时版本接续旧链，否则从 1 开始。
+    /// 全局登记 + 版本快照（升级落点）。
+    ///
+    /// 版本号取**同名（`scope = 'global'`）的最大值 + 1**，不过滤 `deleted_at`：
+    /// 覆盖路径先软删旧登记，若只看未删行，覆盖就退化成"从 v1 重开"（版本链断掉）。
+    /// 登记 id 每次都换新（`arg_<uuid>`）——版本链靠 `name` + `version` 串，不靠 id。
     pub(super) fn register_global(
         &self,
         name: &str,
@@ -196,7 +204,6 @@ impl GlobalInstanceStore {
                     |row| row.get::<_, i32>(0),
                 )
                 .map_err(sqlite_err("next_global_version"))? + 1;
-
             let id = format!("arg_{}", uuid::Uuid::new_v4().simple());
             let now = Utc::now().to_rfc3339();
             // 数据文件 / 分析表：本体 = 全局表，重建定义 = 建表 SQL（可复现）。

@@ -37,17 +37,20 @@ impl GlobalInstanceStore {
             // 全局表在、登记不在：脏状态（索引修复同族）。不静默覆盖，按冲突走询问。
             return Err(InstanceOpError::Conflict {
                 name: req.name.clone(),
+                field: ConflictField::Table,
             });
         }
         if existing.is_some() && !table_exists {
             // 登记在、表不在：同属脏状态，冲突路径覆盖时会重建表，安全。
             return Err(InstanceOpError::Conflict {
                 name: req.name.clone(),
+                field: ConflictField::Registry,
             });
         }
         if existing.is_some() && table_exists {
             return Err(InstanceOpError::Conflict {
                 name: req.name.clone(),
+                field: ConflictField::RegistryAndTable,
             });
         }
 
