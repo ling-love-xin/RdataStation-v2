@@ -268,6 +268,11 @@ pub struct ResultPanel {
     /// 【P1-3】列宽快照（列名 → 像素宽），面板侧权威值：拖拽结束时由订阅写入、
     /// 宿主存档时读走、会话恢复时回灌。跨结果集保留（按列名匹配，对不上的列忽略）。
     pub(crate) column_widths: Vec<(String, f32)>,
+    /// 【列布局落盘】隐藏列快照（列名）。与列宽同一条通道：交互路径改完即取快照、
+    /// 宿主存档时读走、会话恢复时回灌，由下一次 `sync` 在 `set_data` 之后落到 delegate。
+    pub(crate) column_hidden: Vec<String>,
+    /// 【列布局落盘】冻结列快照（列名，口径同 `column_hidden`）
+    pub(crate) column_frozen: Vec<String>,
     /// 【DBeaver 对齐】状态栏中段行数输入框（可编辑：输入行号跳到该行）
     pub(crate) row_count_input: Entity<InputState>,
     /// 【P1-2】行号输入框的订阅句柄（仅持有——句柄丢了解订就跟着走；`set_value`

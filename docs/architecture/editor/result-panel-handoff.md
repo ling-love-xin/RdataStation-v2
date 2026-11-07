@@ -208,6 +208,21 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 
 验证：`cargo test -p rds-result-panel --lib` = **218 passed / 0 failed**（本批新增 4 测试：hex 分页夹取 / 图片格式映射链路 / 多选集合推进 / 批量显隐保底 1 列）；`cargo check -p rds-result-panel -p rds-editor` 通过（0 warning）。
 
+### 2.13 2026-11-08（列隐藏 / 冻结落盘：盘点首选项）
+
+| 层 | 落地 |
+| --- | --- |
+| 面板 | `ResultPanel.column_hidden` / `column_frozen`（`Vec<String>`，与 `column_widths` 同层同生命周期、按列名匹配）；`set_column_hidden` / `set_column_frozen` / `column_hidden()` / `column_frozen()`；`snapshot_column_layout(cx)` 读 delegate 快照 → 与面板字段比 → 真变了才推请求 |
+| delegate | `hidden_column_snapshot` / `apply_hidden_columns` / `frozen_column_snapshot` / `apply_frozen_columns`（下标 ↔ 列名，找不到静默跳过；隐藏逐列 `hide_column` 守住「至少 1 列可见」；冻结去重排序）；新增字段 `action_queue: Option<ResultActionQueue>` + `set_action_queue` |
+| 时序 | `panel/lifecycle.rs::sync` 的 `grid.update` 闭包内、`set_data` 之后依次回填 列宽 → 隐藏 → 冻结（必须闭包内做：同一 `grid.update` 里再 `grid.read(cx)` 会重入 panic） |
+| 触发 | 新枚举 `ResultRequest::ColumnLayoutChanged`（无载荷）。列头菜单（`header.rs` 三项）/ 单元格右键（`menu.rs` 三项）/ 列浏览器右键（`column_browser.rs` 三项）就地改 delegate 后 `queue.request(..)`；`set_grids` 现在收 `cx` 并把队列注入主网格 + 对比网格；单列眼睛与批量显隐在面板方法内改完直接 `snapshot_column_layout` |
+| 落库 | `dispatch.rs` 的 `ColumnLayoutChanged` 分支 = 先取面板快照 + `save_session_now`（列头 / 右键路径面板快照滞后，必须补取）；眼睛路径不再显式存，靠 drain 循环处理冒出来的请求，一次操作只写一遍 |
+| 会话 / 存储 | `SavedSession` 两字段 → `host/session.rs` 保存 + 恢复 → `ports/editor_session.rs` 逗号串编解码 → `EditorContext` 两字段 → 建表 + `ensure_column` → INSERT `?1..?18` → 三处 SELECT + `row.get(15)/(16)`（`updated_at_ms` 顺移 17）→ `tests/channels.rs` 四处 fixture 补 `None` |
+
+口径：不复用 `persist_column_widths` 开关（那个只管列宽）；隐藏 / 冻结与列序同语义，总随会话走，空则存 `None`。已知限制：列名含逗号会被拆错（与列宽串同款，只影响恢复）。
+
+验证：`cargo test -p rds-result-panel --lib` = **220 passed / 0 failed**（+2：按列名往返换列序仍钉对列 / 回填全隐藏仍保 1 列）；`cargo test -p rds-store --lib` = **163 passed / 0 failed**（+1 三路 SELECT 同值）；`cargo test -p rds-editor --lib` = **751 passed / 0 failed / 1 ignored**；`cargo check -p rds-result-panel -p rds-editor -p rds-store` 通过（0 warning）。未验证：真窗口「隐藏 → 关窗重开 → 仍隐藏」的端到端。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

@@ -626,6 +626,8 @@ fn the_channel_comes_back_with_the_session_or_falls_back_with_a_reason(cx: &mut 
         hard_tabs: None,
         result_column_order: None,
         result_column_widths: None,
+        result_column_hidden: None,
+        result_column_frozen: None,
         result_height: None,
     };
     cx.update(|window, cx| {
@@ -712,6 +714,8 @@ fn the_connection_binding_comes_back_with_the_session(cx: &mut TestAppContext) {
         hard_tabs: None,
         result_column_order: None,
         result_column_widths: None,
+        result_column_hidden: None,
+        result_column_frozen: None,
         result_height: None,
     };
 
@@ -869,6 +873,8 @@ fn the_toolbar_layout_rides_along_with_the_session(cx: &mut TestAppContext) {
         hard_tabs: None,
         result_column_order: None,
         result_column_widths: None,
+        result_column_hidden: None,
+        result_column_frozen: None,
         result_height: None,
     };
     let (panel3, cx) = open_panel(cx, &shared, &id);
@@ -903,6 +909,8 @@ fn the_schema_binding_comes_back_with_the_session(cx: &mut TestAppContext) {
         hard_tabs: None,
         result_column_order: None,
         result_column_widths: None,
+        result_column_hidden: None,
+        result_column_frozen: None,
         result_height: None,
     };
 

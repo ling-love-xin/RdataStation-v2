@@ -311,6 +311,27 @@ impl ResultPanel {
         self.column_widths = widths;
     }
 
+    /// 【列布局落盘】当前隐藏列快照（列名；宿主保存会话时读取）
+    pub fn column_hidden(&self) -> Vec<String> {
+        self.column_hidden.clone()
+    }
+
+    /// 【列布局落盘】注入持久化隐藏列（会话恢复时宿主调）：与列宽同口径，只写快照，
+    /// 落到 delegate 由下一次 `sync` 在 `set_data` 之后统一回填
+    pub fn set_column_hidden(&mut self, hidden: Vec<String>) {
+        self.column_hidden = hidden;
+    }
+
+    /// 【列布局落盘】当前冻结列快照（列名；宿主保存会话时读取）
+    pub fn column_frozen(&self) -> Vec<String> {
+        self.column_frozen.clone()
+    }
+
+    /// 【列布局落盘】注入持久化冻结列（会话恢复时宿主调）
+    pub fn set_column_frozen(&mut self, frozen: Vec<String>) {
+        self.column_frozen = frozen;
+    }
+
     /// 【结果集 #296】按持久化列名序重排一份新结果的列与行（列名匹配，未匹配列
     /// 保持数据序附加在末尾——用户拖过的列还在就保持，新列不猜）。
     pub(crate) fn apply_column_order(
@@ -428,6 +449,7 @@ impl ResultPanel {
 
     /// 【P2-3】批量显隐（列浏览器多选批量动作）：直接改网格 delegate（逐列复用单列
     /// 接口，隐藏仍有「至少 1 列可见」底线），再 notify 让清单的隐藏标记跟着刷新。
+    /// 【列布局落盘】改完即取快照并推落库请求（与单列眼睛同一条通道）。
     pub fn set_columns_hidden(
         &mut self,
         columns: Vec<usize>,
@@ -439,7 +461,29 @@ impl ResultPanel {
             state.delegate_mut().set_columns_hidden(&columns, hidden);
             state.refresh(cx);
         });
+        self.snapshot_column_layout(cx);
         cx.notify();
+    }
+
+    /// 【列布局落盘】把 delegate 的隐藏 / 冻结集合取回面板快照；有变化就推一条
+    /// 「该存了」（宿主在同一次事件里 `save_session_now`）。
+    ///
+    /// 交互路径统一走这里：单列眼睛（`ToggleColumnVisibility` 的宿主分支）、批量显隐、
+    /// 冻结切换。只在快照真的变了才推，避免一次点击触发两次写库。
+    pub fn snapshot_column_layout(&mut self, cx: &mut Context<Self>) {
+        let (hidden, frozen) = {
+            let delegate = self.grid.read(cx).delegate();
+            (
+                delegate.hidden_column_snapshot(),
+                delegate.frozen_column_snapshot(),
+            )
+        };
+        let changed = hidden != self.column_hidden || frozen != self.column_frozen;
+        self.column_hidden = hidden;
+        self.column_frozen = frozen;
+        if changed {
+            self.queue.push(ResultRequest::ColumnLayoutChanged);
+        }
     }
 
     /// 【列浏览器】清空多选集合（批量按钮「清空选择」；面板先写镜像，

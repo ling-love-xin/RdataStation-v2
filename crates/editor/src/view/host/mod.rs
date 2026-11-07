@@ -722,7 +722,7 @@ impl EditorHostPanel {
         let result_action_queue = ResultActionQueue::new();
         let result_panel = cx.new(|cx| {
             let mut panel = ResultPanel::new(window, cx, result_action_queue.clone());
-            panel.set_grids(grid.clone(), Some(compare_grid.clone()));
+            panel.set_grids(grid.clone(), Some(compare_grid.clone()), cx);
             // 【B2】全局偏好 `result_panel.show_column_comments` 启动时同步到面板（面板级临时开关
             // 覆盖此默认值；用户在面板工具栏切换后不再回写全局——全局只控"默认开不开"）
             if let Some(settings) = cx.try_global::<settings::model::Settings>() {

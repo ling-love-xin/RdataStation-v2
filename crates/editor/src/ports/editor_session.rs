@@ -96,6 +96,17 @@ impl WorkbenchSessionStore {
                         .join(",")
                 })
                 .unwrap_or_default(),
+            // 【列布局落盘】隐藏 / 冻结编码为逗号串（空串 = 没改过）
+            result_column_hidden: session
+                .result_column_hidden
+                .clone()
+                .unwrap_or_default()
+                .join(","),
+            result_column_frozen: session
+                .result_column_frozen
+                .clone()
+                .unwrap_or_default()
+                .join(","),
             updated_at_ms: now_ms(),
         }
     }
@@ -146,6 +157,22 @@ impl WorkbenchSessionStore {
                         .collect::<Option<Vec<_>>>()
                 }
             },
+            // 【列布局落盘】空串 = 没改过；非空按列名恢复（列名含 `,` 时会被拆错，
+            // 与列宽同一处已知限制：库里列名带逗号属罕见，且错拆只影响恢复，不写坏数据）
+            result_column_hidden: (!context.result_column_hidden.is_empty()).then(|| {
+                context
+                    .result_column_hidden
+                    .split(',')
+                    .map(|column| column.to_string())
+                    .collect()
+            }),
+            result_column_frozen: (!context.result_column_frozen.is_empty()).then(|| {
+                context
+                    .result_column_frozen
+                    .split(',')
+                    .map(|column| column.to_string())
+                    .collect()
+            }),
             // 【B5 余项】高度读回：18.0 是桥接层当年写死的假值（所有旧行同值，不代表
             // 用户拖过）→ 当作没存过；20.0 是「没拖过」落的语义默认，同样回 None——
             // 两个哨兵值都不覆盖界面默认，真实拖过的值（≠20）才恢复（钳制在 restore 侧）
@@ -225,6 +252,8 @@ mod tests {
             hard_tabs: None,
             result_column_order: None,
             result_column_widths: None,
+            result_column_hidden: None,
+            result_column_frozen: None,
             result_height: None,
         }
     }

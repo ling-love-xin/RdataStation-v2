@@ -1935,6 +1935,56 @@ fn set_columns_hidden_keeps_one_visible_column() {
     assert_eq!(grid.hidden_count(), 0);
 }
 
+/// 【列布局落盘】隐藏 / 冻结快照按**列名**往返：新结果换了列序，按名字回填仍钉对列；
+/// 列名对不上静默跳过；隐藏仍守「至少 1 列可见」底线
+#[test]
+fn column_layout_snapshots_round_trip_by_name() {
+    let mut grid = ResultGridDelegate::default();
+    grid.set_data(
+        vec!["id".to_string(), "name".to_string(), "blob".to_string()],
+        vec![vec!["1".to_string(), "alice".to_string(), "aabb".to_string()]],
+    );
+    grid.hide_column(1);
+    grid.toggle_freeze(2);
+
+    // 快照是列名，不是下标（下标会随列序重排而失效）
+    assert_eq!(grid.hidden_column_snapshot(), vec!["name".to_string()]);
+    assert_eq!(grid.frozen_column_snapshot(), vec!["blob".to_string()]);
+
+    // 新结果把列序倒过来（模拟持久化列序重排）：set_data 清空两张清单
+    grid.set_data(
+        vec!["blob".to_string(), "name".to_string(), "id".to_string()],
+        vec![vec!["aabb".to_string(), "alice".to_string(), "1".to_string()]],
+    );
+    assert_eq!(grid.visible_column_count(), 3, "set_data 后回到全部可见");
+    assert_eq!(grid.hidden_count(), 0);
+
+    // 按名字回填：隐藏 name（新下标 1）与冻结 blob（新下标 0）
+    grid.apply_hidden_columns(&["name".to_string(), "missing".to_string()]);
+    grid.apply_frozen_columns(&[
+        "blob".to_string(),
+        "blob".to_string(),
+        "missing".to_string(),
+    ]);
+    assert!(grid.is_hidden_column(1), "按列名钉到新列序的 name");
+    assert_eq!(grid.visible_column_count(), 2);
+    assert!(grid.is_frozen(0), "按列名钉到新列序的 blob");
+    assert_eq!(grid.frozen_column_snapshot(), vec!["blob".to_string()]);
+}
+
+/// 【列布局落盘】回填整列全隐藏的旧快照：仍守「至少 1 列可见」（与交互路径同一份底线）
+#[test]
+fn apply_hidden_columns_still_keeps_one_visible_column() {
+    let mut grid = ResultGridDelegate::default();
+    grid.set_data(
+        vec!["a".to_string(), "b".to_string()],
+        vec![vec!["1".to_string(), "2".to_string()]],
+    );
+    grid.apply_hidden_columns(&["a".to_string(), "b".to_string()]);
+    assert_eq!(grid.visible_column_count(), 1, "至少保留 1 列可见");
+    assert!(grid.is_hidden_column(0) || grid.is_hidden_column(1));
+}
+
 /// 【侧栏】单列取消隐藏：`show_column` 只放回这一列，其它隐藏列原样保留
 /// （与「显示全部」整批清空的粒度区别开——左栏的眼睛是单列粒度）
 #[test]

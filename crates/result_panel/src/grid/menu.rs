@@ -8,6 +8,7 @@ use gpui_kit::*;
 use super::delegate::ResultGridDelegate;
 use super::stats::{column_stats, stats_lines};
 use super::text::preview_of;
+use crate::ports::ResultRequest;
 use crate::rowset::RowRef;
 /// 右键菜单的动作（界面按它决定点击后干什么）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -572,13 +573,18 @@ pub(crate) fn context_menu(
             ContextAction::ToggleFreeze(column) => {
                 // 冻结是**表格自己的事**（改的是 `Column.fixed`），不需要面板：
                 // 点击发生在独立事件里（不在表格的更新栈内），可以安全地更新它并重建列组
+                // 【列布局落盘】改完交回「该存了」：宿主那边先取面板快照再存会话
                 let table = cx.entity().clone();
+                let queue = delegate.action_queue.clone();
                 menu = menu.item(PopupMenuItem::new(item.label).on_click(
                     move |_, _window, app| {
                         table.update(app, |state, cx| {
                             state.delegate_mut().toggle_freeze(column);
                             state.refresh(cx);
                         });
+                        if let Some(queue) = &queue {
+                            queue.request(ResultRequest::ColumnLayoutChanged, app);
+                        }
                     },
                 ));
             }
@@ -605,24 +611,33 @@ pub(crate) fn context_menu(
             ContextAction::HideColumn(column) => {
                 // 隐藏是**表格自己的事**（改视图列序），与冻结同一条路：点击在独立事件里，
                 // 可以安全地更新 delegate 并重建列组
+                // 【列布局落盘】改完交回「该存了」（口径同冻结）
                 let table = cx.entity().clone();
+                let queue = delegate.action_queue.clone();
                 menu = menu.item(PopupMenuItem::new(item.label).on_click(
                     move |_, _window, app| {
                         table.update(app, |state, cx| {
                             state.delegate_mut().hide_column(column);
                             state.refresh(cx);
                         });
+                        if let Some(queue) = &queue {
+                            queue.request(ResultRequest::ColumnLayoutChanged, app);
+                        }
                     },
                 ));
             }
             ContextAction::ShowAllColumns => {
                 let table = cx.entity().clone();
+                let queue = delegate.action_queue.clone();
                 menu = menu.item(PopupMenuItem::new(item.label).on_click(
                     move |_, _window, app| {
                         table.update(app, |state, cx| {
                             state.delegate_mut().show_all_columns();
                             state.refresh(cx);
                         });
+                        if let Some(queue) = &queue {
+                            queue.request(ResultRequest::ColumnLayoutChanged, app);
+                        }
                     },
                 ));
             }

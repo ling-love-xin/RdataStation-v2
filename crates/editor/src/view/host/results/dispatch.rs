@@ -163,6 +163,11 @@ impl EditorHostPanel {
                     }
                     table.refresh(cx);
                 });
+                // 【列布局落盘】面板取快照（有变化才推 `ColumnLayoutChanged`）：
+                // drain 循环随后会处理那条请求并落库——这里不再显式存一次，
+                // 否则同一操作要写两遍会话
+                self.result_panel
+                    .update(cx, |panel, cx| panel.snapshot_column_layout(cx));
                 self.result_panel.update(cx, |_, cx| cx.notify());
             }
             // 【呈现】显示方式（网格 / 文本）：纯面板状态，宿主只转发
@@ -225,6 +230,14 @@ impl EditorHostPanel {
             }
             // 【P1-3】列宽拖拽结束：面板快照已是权威值，同样只做「落库」这一件事
             ResultRequest::ColumnWidthsChanged => {
+                self.save_session_now(cx);
+                cx.notify();
+            }
+            // 【列布局落盘】隐藏 / 冻结改了：列头菜单 / 列头右键是就地改 delegate 的，
+            // 面板快照还没跟上——先取快照，再落库（面板方法内部推的这条请求不会重复存）
+            ResultRequest::ColumnLayoutChanged => {
+                self.result_panel
+                    .update(cx, |panel, cx| panel.snapshot_column_layout(cx));
                 self.save_session_now(cx);
                 cx.notify();
             }

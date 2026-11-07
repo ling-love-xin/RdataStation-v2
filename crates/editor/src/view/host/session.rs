@@ -76,6 +76,16 @@ impl EditorHostPanel {
                 };
                 (!widths.is_empty()).then_some(widths)
             },
+            // 【列布局落盘】隐藏 / 冻结随会话走（面板自持快照；空 = 没改过 → None 不落库）。
+            // 不受 `persist_column_widths` 管：那个开关只针对列宽记忆
+            result_column_hidden: {
+                let hidden = self.result_panel.read(cx).column_hidden();
+                (!hidden.is_empty()).then_some(hidden)
+            },
+            result_column_frozen: {
+                let frozen = self.result_panel.read(cx).column_frozen();
+                (!frozen.is_empty()).then_some(frozen)
+            },
             // 【B5 余项】结果区高度随会话走（面板自持 rem 值；与默认同值 = 没拖过 →
             // None 不落库，复用「显式非默认才算改过」的既有口径）
             result_height: {
@@ -317,6 +327,22 @@ impl EditorHostPanel {
                         panel.set_column_widths(widths);
                     });
                 }
+            }
+        }
+        // 【列布局落盘】隐藏 / 冻结随会话回来：注入面板，落到 delegate 由下一次
+        // `sync` 在 `set_data` 之后统一回填（按列名匹配，对不上的列跳过）
+        if let Some(hidden) = session.result_column_hidden.clone() {
+            if !hidden.is_empty() {
+                self.result_panel.update(cx, |panel, _cx| {
+                    panel.set_column_hidden(hidden);
+                });
+            }
+        }
+        if let Some(frozen) = session.result_column_frozen.clone() {
+            if !frozen.is_empty() {
+                self.result_panel.update(cx, |panel, _cx| {
+                    panel.set_column_frozen(frozen);
+                });
             }
         }
         // 【B5 余项】结果区高度随会话回来：钳到分栏拖拽范围（与 render 的 size_range

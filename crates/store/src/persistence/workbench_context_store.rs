@@ -112,6 +112,12 @@ pub struct EditorContext {
     /// 已知限制：列名本身若含 `,` 或 `=` 会与分隔符冲突——真遇到就整串忽略（宁可用
     /// 默认宽，也不半残地恢复出一组错宽度），与列序串的既有取舍一致。
     pub result_column_widths: String,
+    /// 【列布局落盘】被隐藏的列（列名逗号串；空串 = 没隐藏过）。
+    ///
+    /// 与列宽 / 列序同口径按**列名**记；恢复时按名字对，对不上的列名跳过。
+    pub result_column_hidden: String,
+    /// 【列布局落盘】被冻结的列（列名逗号串；空串 = 没冻结过）
+    pub result_column_frozen: String,
     /// 更新时间
     pub updated_at_ms: u64,
 }
@@ -180,6 +186,8 @@ impl WorkbenchContextStore {
                     result_height REAL NOT NULL DEFAULT 18,
                     result_column_order TEXT NOT NULL DEFAULT '',
                     result_column_widths TEXT NOT NULL DEFAULT '',
+                    result_column_hidden TEXT NOT NULL DEFAULT '',
+                    result_column_frozen TEXT NOT NULL DEFAULT '',
                     updated_at_ms INTEGER NOT NULL
                 )",
                 [],
@@ -253,6 +261,19 @@ impl WorkbenchContextStore {
                 "result_column_widths",
                 "TEXT NOT NULL DEFAULT ''",
             )?;
+            // 【列布局落盘】老库也要能存隐藏 / 冻结列（空串 = 没改过）
+            ensure_column(
+                conn,
+                "editor_contexts",
+                "result_column_hidden",
+                "TEXT NOT NULL DEFAULT ''",
+            )?;
+            ensure_column(
+                conn,
+                "editor_contexts",
+                "result_column_frozen",
+                "TEXT NOT NULL DEFAULT ''",
+            )?;
 
             Ok(())
         })
@@ -322,8 +343,9 @@ impl WorkbenchContextStore {
             conn.execute(
                 "INSERT OR REPLACE INTO editor_contexts
                  (id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
-                  toolbar, schema, tab_size, hard_tabs, result_height, result_column_order, result_column_widths, updated_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                  toolbar, schema, tab_size, hard_tabs, result_height, result_column_order, result_column_widths,
+                  result_column_hidden, result_column_frozen, updated_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
                 params![
                     context.id,
                     context.connection_id,
@@ -340,6 +362,8 @@ impl WorkbenchContextStore {
                     context.result_height,
                     context.result_column_order,
                     context.result_column_widths,
+                    context.result_column_hidden,
+                    context.result_column_frozen,
                     context.updated_at_ms as i64,
                 ],
             ).map_err(|e| CoreError::storage(StorageError::Persistence {
@@ -357,7 +381,8 @@ impl WorkbenchContextStore {
         self.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
-                        toolbar, schema, tab_size, hard_tabs, result_height, result_column_order, result_column_widths, updated_at_ms
+                        toolbar, schema, tab_size, hard_tabs, result_height, result_column_order, result_column_widths,
+                        result_column_hidden, result_column_frozen, updated_at_ms
                  FROM editor_contexts WHERE id = ?1"
             ).map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -382,7 +407,9 @@ impl WorkbenchContextStore {
                     result_height: row.get::<_, f64>(12)? as f32,
                     result_column_order: row.get(13)?,
                     result_column_widths: row.get(14)?,
-                    updated_at_ms: row.get::<_, i64>(15)? as u64,
+                    result_column_hidden: row.get(15)?,
+                    result_column_frozen: row.get(16)?,
+                    updated_at_ms: row.get::<_, i64>(17)? as u64,
                 })
             }).optional().map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -403,7 +430,8 @@ impl WorkbenchContextStore {
             let mut stmt = conn
                 .prepare(
                     "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
-                            toolbar, schema, tab_size, hard_tabs, result_height, result_column_order, result_column_widths, updated_at_ms
+                            toolbar, schema, tab_size, hard_tabs, result_height, result_column_order, result_column_widths,
+                            result_column_hidden, result_column_frozen, updated_at_ms
                      FROM editor_contexts ORDER BY updated_at_ms DESC LIMIT 1",
                 )
                 .map_err(|e| {
@@ -432,7 +460,9 @@ impl WorkbenchContextStore {
                         result_height: row.get::<_, f64>(12)? as f32,
                         result_column_order: row.get(13)?,
                         result_column_widths: row.get(14)?,
-                    updated_at_ms: row.get::<_, i64>(15)? as u64,
+                        result_column_hidden: row.get(15)?,
+                        result_column_frozen: row.get(16)?,
+                        updated_at_ms: row.get::<_, i64>(17)? as u64,
                     })
                 })
                 .optional()
@@ -457,7 +487,8 @@ impl WorkbenchContextStore {
             let mut stmt = conn
                 .prepare(
                     "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
-                            toolbar, schema, tab_size, hard_tabs, result_height, result_column_order, result_column_widths, updated_at_ms
+                            toolbar, schema, tab_size, hard_tabs, result_height, result_column_order, result_column_widths,
+                            result_column_hidden, result_column_frozen, updated_at_ms
                      FROM editor_contexts ORDER BY updated_at_ms DESC",
                 )
                 .map_err(|e| {
@@ -486,7 +517,9 @@ impl WorkbenchContextStore {
                         result_height: row.get::<_, f64>(12)? as f32,
                         result_column_order: row.get(13)?,
                         result_column_widths: row.get(14)?,
-                    updated_at_ms: row.get::<_, i64>(15)? as u64,
+                        result_column_hidden: row.get(15)?,
+                        result_column_frozen: row.get(16)?,
+                        updated_at_ms: row.get::<_, i64>(17)? as u64,
                     })
                 })
                 .map_err(|e| {
@@ -643,6 +676,8 @@ mod tests {
             result_height: 18.0,
             result_column_order: String::new(),
             result_column_widths: String::new(),
+            result_column_hidden: String::new(),
+            result_column_frozen: String::new(),
             updated_at_ms: 1_700_000_000_000,
         }
     }
@@ -669,6 +704,42 @@ mod tests {
             .expect("load")
             .expect("有记录");
         assert_eq!(latest.channel, "accelerated", "最近一份走同一条列映射");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 【列布局落盘】隐藏 / 冻结列与列序 / 列宽同表落库：三条 SELECT 路径
+    /// （单份 / 最近一份 / 全部）都要读回同一套值（列位次错一位就会串到别的字段上）
+    #[test]
+    fn editor_context_round_trips_column_layout_strings() {
+        let (dir, db) = temp_db("column-layout");
+        let store = open_store(&db);
+
+        let mut saved = context("doc.sql", "sql");
+        saved.result_column_order = "id,name".to_string();
+        saved.result_column_widths = "id=120".to_string();
+        saved.result_column_hidden = "blob,name".to_string();
+        saved.result_column_frozen = "id".to_string();
+        store.save_editor_context(&saved).expect("save");
+
+        let loaded = store
+            .load_editor_context("doc.sql")
+            .expect("load")
+            .expect("存在");
+        assert_eq!(loaded.result_column_hidden, "blob,name");
+        assert_eq!(loaded.result_column_frozen, "id");
+        assert_eq!(loaded.result_column_order, "id,name", "位次没串位");
+        assert_eq!(loaded.result_column_widths, "id=120");
+
+        let latest = store
+            .load_latest_editor_context()
+            .expect("load")
+            .expect("有记录");
+        assert_eq!(latest.result_column_hidden, "blob,name");
+
+        let all = store.load_all_editor_contexts().expect("load all");
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].result_column_frozen, "id");
 
         let _ = std::fs::remove_dir_all(dir);
     }

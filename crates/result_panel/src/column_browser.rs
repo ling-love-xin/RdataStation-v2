@@ -196,6 +196,8 @@ impl ListDelegate for ColumnBrowserDelegate {
         // 右键菜单素材在 render 期一次取好（与列头菜单同口径；闭包活到比本帧长，
         // 「当时这一列是什么」只有现在知道）
         let grid_entity = self.grid.clone();
+        // 【列布局落盘】清单右键的隐藏 / 冻结也改 delegate，改完从这里交回「该存了」
+        let layout_queue = self.queue.clone();
         let delegate = self.grid.read(&*cx).delegate();
         let frozen = delegate.is_frozen(data_col);
         let sort_active = delegate
@@ -274,34 +276,40 @@ impl ListDelegate for ColumnBrowserDelegate {
                         }
                         result_grid::ContextAction::ToggleFreeze(column) => {
                             let grid_entity = grid_entity.clone();
+                            let queue = layout_queue.clone();
                             menu = menu.item(PopupMenuItem::new(item.label).on_click(
                                 move |_, _window, app| {
                                     grid_entity.update(app, |state, cx| {
                                         state.delegate_mut().toggle_freeze(column);
                                         state.refresh(cx);
                                     });
+                                    queue.request(ResultRequest::ColumnLayoutChanged, app);
                                 },
                             ));
                         }
                         result_grid::ContextAction::HideColumn(column) => {
                             let grid_entity = grid_entity.clone();
+                            let queue = layout_queue.clone();
                             menu = menu.item(PopupMenuItem::new(item.label).on_click(
                                 move |_, _window, app| {
                                     grid_entity.update(app, |state, cx| {
                                         state.delegate_mut().hide_column(column);
                                         state.refresh(cx);
                                     });
+                                    queue.request(ResultRequest::ColumnLayoutChanged, app);
                                 },
                             ));
                         }
                         result_grid::ContextAction::ShowAllColumns => {
                             let grid_entity = grid_entity.clone();
+                            let queue = layout_queue.clone();
                             menu = menu.item(PopupMenuItem::new(item.label).on_click(
                                 move |_, _window, app| {
                                     grid_entity.update(app, |state, cx| {
                                         state.delegate_mut().show_all_columns();
                                         state.refresh(cx);
                                     });
+                                    queue.request(ResultRequest::ColumnLayoutChanged, app);
                                 },
                             ));
                         }

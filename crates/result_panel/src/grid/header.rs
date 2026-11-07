@@ -14,6 +14,7 @@ use gpui_kit::*;
 use super::delegate::ResultGridDelegate;
 use super::menu::{ContextAction, ContextTarget, column_menu_items};
 use super::stats::{column_stats, stats_lines};
+use crate::ports::ResultRequest;
 use crate::rowset::RowRef;
 use crate::store::ColumnKind;
 use crate::ui;
@@ -243,6 +244,9 @@ pub(crate) fn render_th(
     let on_column_stats = delegate.on_column_stats.clone();
     let on_insight_column = delegate.on_insight_column.clone();
     let on_column_filter = delegate.on_column_filter.clone();
+    // 【列布局落盘】动作队列在闭包外取出（owned）：builder 要求 `'static`，闭包里
+    // 不能再借 `delegate`
+    let layout_queue = delegate.action_queue.clone();
     let head = head.child(
         // guard 层带 id：`on_click` 是 StatefulInteractiveElement 方法（裸 div 只有
         // `on_mouse_down`）；点击落在 guard 上时截住冒泡，列头排序收不到
@@ -281,36 +285,58 @@ pub(crate) fn render_th(
                                 ContextAction::ToggleFreeze(column) => {
                                     // 冻结是**表格自己的事**（改 `Column.fixed`）：点击在
                                     // 独立事件里，可安全更新它并重建列组
+                                    // 【列布局落盘】改完交回「该存了」（宿主先取快照再存）
                                     let table = table.clone();
+                                    let queue = layout_queue.clone();
                                     menu = menu.item(PopupMenuItem::new(label).on_click(
                                         move |_, _window, app| {
                                             table.update(app, |state, cx| {
                                                 state.delegate_mut().toggle_freeze(column);
                                                 state.refresh(cx);
                                             });
+                                            if let Some(queue) = &queue {
+                                                queue.request(
+                                                    ResultRequest::ColumnLayoutChanged,
+                                                    app,
+                                                );
+                                            }
                                         },
                                     ));
                                 }
                                 ContextAction::HideColumn(column) => {
                                     // 隐藏是**表格自己的事**（改视图列序），与冻结同一条路
                                     let table = table.clone();
+                                    let queue = layout_queue.clone();
                                     menu = menu.item(PopupMenuItem::new(label).on_click(
                                         move |_, _window, app| {
                                             table.update(app, |state, cx| {
                                                 state.delegate_mut().hide_column(column);
                                                 state.refresh(cx);
                                             });
+                                            if let Some(queue) = &queue {
+                                                queue.request(
+                                                    ResultRequest::ColumnLayoutChanged,
+                                                    app,
+                                                );
+                                            }
                                         },
                                     ));
                                 }
                                 ContextAction::ShowAllColumns => {
                                     let table = table.clone();
+                                    let queue = layout_queue.clone();
                                     menu = menu.item(PopupMenuItem::new(label).on_click(
                                         move |_, _window, app| {
                                             table.update(app, |state, cx| {
                                                 state.delegate_mut().show_all_columns();
                                                 state.refresh(cx);
                                             });
+                                            if let Some(queue) = &queue {
+                                                queue.request(
+                                                    ResultRequest::ColumnLayoutChanged,
+                                                    app,
+                                                );
+                                            }
                                         },
                                     ));
                                 }

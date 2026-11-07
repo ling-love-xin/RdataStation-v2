@@ -211,6 +211,10 @@ pub struct ResultGridDelegate {
     pub(crate) on_commit_local_edit: Option<CommitLocalEditHook>,
     /// 【#28-B3】行级动作回调（面板注入：新增 / 复制 / 删除一行打包成请求交回宿主分派）
     pub(crate) on_row_action: Option<RowActionHook>,
+    /// 【列布局落盘】动作队列（面板注入）：列头菜单 / 列头右键里的「冻结」不直接改
+    /// delegate，而是把请求交回宿主——宿主改完才能借同一条通道存会话。
+    /// `None` = 独立网格（单元测试等），菜单退回就地切换。
+    pub(crate) action_queue: Option<crate::ports::ResultActionQueue>,
     /// 【T2a-3】脏格集合（**数据行序**，含列序；面板从权威变更集投影，标底色）
     pub(crate) dirty: Vec<(usize, usize)>,
     /// 【T2a-6】冲突格集合（提交回执标过 `Conflict` 的格子；面板从权威变更集投影）
@@ -379,6 +383,57 @@ impl ResultGridDelegate {
                 self.column_widths.insert(name.clone(), gpui_kit::px(*width));
             }
         }
+    }
+
+    /// 【列布局落盘】当前隐藏列快照（**列名**，不是下标），供宿主落进会话。
+    ///
+    /// 用列名而不是下标：列序会被持久化列序重排（`set_data` 时物理重排一次），
+    /// 下标跨会话不稳定；列名对不上就跳过（`apply_hidden_columns`）。
+    pub fn hidden_column_snapshot(&self) -> Vec<String> {
+        self.hidden
+            .iter()
+            .filter_map(|data_col| self.columns.get(*data_col).cloned())
+            .collect()
+    }
+
+    /// 【列布局落盘】按列名回填隐藏列（`set_data` 之后调：它会清空隐藏清单）。
+    ///
+    /// 逐列走 [`Self::hide_column`]——「至少留 1 列可见」的底线与交互路径同一份实现；
+    /// 找不到的列名静默跳过（结果换了表 / 列被重命名）。
+    pub fn apply_hidden_columns(&mut self, names: &[String]) {
+        for name in names {
+            if let Some(data_col) = self.columns.iter().position(|column| column == name) {
+                self.hide_column(data_col);
+            }
+        }
+    }
+
+    /// 【列布局落盘】当前冻结列快照（**列名**，口径同 [`Self::hidden_column_snapshot`]）
+    pub fn frozen_column_snapshot(&self) -> Vec<String> {
+        self.frozen
+            .iter()
+            .filter_map(|data_col| self.columns.get(*data_col).cloned())
+            .collect()
+    }
+
+    /// 【列布局落盘】按列名回填冻结列（`set_data` 之后调：它会清空冻结清单）。
+    ///
+    /// 冻结是集合语义（不是顺序），重复列名只钉一次；找不到的列名静默跳过。
+    pub fn apply_frozen_columns(&mut self, names: &[String]) {
+        for name in names {
+            if let Some(data_col) = self.columns.iter().position(|column| column == name) {
+                if !self.frozen.contains(&data_col) {
+                    self.frozen.push(data_col);
+                }
+            }
+        }
+        self.frozen.sort_unstable();
+    }
+
+    /// 【列布局落盘】注入动作队列（面板接线时调用一次）：列头菜单 / 列头右键的「冻结」
+    /// 经它交回宿主分派——UI 回调里直接改 delegate 就没有落库触发点。
+    pub fn set_action_queue(&mut self, queue: crate::ports::ResultActionQueue) {
+        self.action_queue = Some(queue);
     }
 
     /// 【A9】同步结果来源表名（与 `set_data` 同一次同步里、在它之后调）

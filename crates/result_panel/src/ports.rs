@@ -152,6 +152,10 @@ pub enum ResultRequest {
     /// 【P1-3】列宽拖拽结束（列名 → 像素宽的权威值已写进面板快照）——宿主收到只做
     /// 「该存了」这件事：值直接从面板 `column_widths()` 读，不带载荷（与列序同通道）。
     ColumnWidthsChanged,
+    /// 【列布局落盘】隐藏 / 冻结改了（面板快照已更新到 `column_hidden()` /
+    /// `column_frozen()`）——宿主收到只做「该存了」，值从面板读，不带载荷。
+    /// 列头菜单 / 列头右键就地改 delegate 的路径也发它：宿主先取面板快照再存会话。
+    ColumnLayoutChanged,
     /// 【C1】切换第 `index` 份结果集的钉住态（钉住不被 FIFO 淘汰；会话级）。
     TogglePin(usize),
     /// 【C1】进入第 `index` 份结果集的重命名态（面板弹输入框；输入确认后再发

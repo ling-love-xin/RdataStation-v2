@@ -1000,6 +1000,78 @@ panel.rs 删掉手搓过滤 / 行渲染 / 搜索框约 200 行。
 `cargo check -p rds-result-panel -p rds-editor` 通过（0 warning）。
 **未验证项（如实登记）**：`.w_full()`（Relative）+ `.max_h_full()` 在**真实窗口**下能否夹住超大图、`ObjectFit::Contain` 是否按预期生效——只通过编译与纯函数单测，未跑真窗口帧测。
 
+### 8.22 列隐藏 / 冻结落盘（盘点首项，2026-11-08）
+
+**为什么要做**：竞品对照盘点的第一优先项——隐藏 / 冻结的**能力**早在 P2 批就有
+（`grid/view_rows.rs::hide_column` / `toggle_freeze`），会话通道也已有（列序 / 列宽），
+缺的只是"把这两张清单写进会话、重启后再读回来"这一层。
+
+**数据口径（列名，不是下标）**：`ResultPanel` 新增 `column_hidden` / `column_frozen`
+（`Vec<String>`），与 `column_widths` 同层、同生命周期：跨结果集保留、按列名匹配。
+不用下标的原因：`set_data` 前会按持久化列序**物理重排** `columns` / `rows`
+（`panel::events::apply_column_order` → `reorder_by`），下标跨会话不稳定。
+
+**delegate 能力**（`grid/delegate.rs`）：
+
+| 方法 | 语义 |
+| --- | --- |
+| `hidden_column_snapshot` / `frozen_column_snapshot` | 把 `hidden` / `frozen`（数据列下标）映射成列名（`columns.get(..)`，越界静默丢弃） |
+| `apply_hidden_columns` / `apply_frozen_columns` | 按列名找数据列回填；**找不到的列名静默跳过**（换了表 / 列改名就回默认）；隐藏逐列走 `hide_column`，因此「至少 1 列可见」的底线与交互路径同一份实现；冻结去重后 `sort_unstable` |
+
+**回灌时序（关键）**：`panel::lifecycle::sync` 的 `grid.update` 闭包内，必须在
+`set_data` **之后**（它会 `clear()` 列宽 / 隐藏 / 冻结三张表）依次回填
+列宽 → 隐藏 → 冻结。且必须在闭包**内部**完成——在同一 `grid.update` 里再去
+`self.grid.read(cx)` 会重入 panic。
+
+**触发与落库（只推一条无载荷请求）**：
+
+- 新枚举 `ResultRequest::ColumnLayoutChanged`（`ports.rs`）。
+- 面板 `snapshot_column_layout(cx)`：读 delegate 两个快照 → 与面板字段比 → **真变了才**
+  `queue.push(ColumnLayoutChanged)`（避免一次点击两次写库）。
+- 宿主 `dispatch_result_request` 的 `ColumnLayoutChanged` 分支：先
+  `panel.snapshot_column_layout(cx)`（列头菜单 / 列头右键 / 列浏览器右键是**就地改 delegate**
+  的，面板快照这时还没跟上）再 `save_session_now(cx)`。
+- 列头菜单（`grid/header.rs` 的 `ToggleFreeze` / `HideColumn` / `ShowAllColumns`）、
+  单元格右键菜单（`grid/menu.rs` 同名三项）、列浏览器清单右键（`column_browser.rs` 同名三项）
+  改完 delegate 后 `queue.request(ColumnLayoutChanged, app)`。它们拿不到面板方法，所以经队列。
+- `set_grids(grid, compare_grid, cx)` 把 `action_queue` 注入主网格与对比网格的 delegate
+  （delegate 字段 `action_queue: Option<ResultActionQueue>`）。`None` = 独立网格（单测），
+  菜单退回就地切换、不推请求。
+- 单列眼睛（`ToggleColumnVisibility`）与批量显隐（`set_columns_hidden`）在**面板方法内**
+  改 delegate，随后直接调 `snapshot_column_layout`；不再显式 `save_session_now`，
+  靠 drain 循环处理冒出来的 `ColumnLayoutChanged` 落库（一次操作一次写库）。
+
+**存储六层**（与列宽同一条通道）：
+
+1. `editor::notebook::session::SavedSession` 加 `result_column_hidden` / `result_column_frozen`
+   （`Option<Vec<String>>`，`None` = 没改过）。
+2. `editor::view::host::session` 保存块取面板快照（空则 `None`）、恢复块注入面板
+   （`set_column_hidden` / `set_column_frozen`，落到 delegate 由下一次 `sync` 回填）。
+3. `editor::ports::editor_session` 编码为逗号串 / 解码（空串 → `None`）。
+4. `store::persistence::workbench_context_store::EditorContext` 加两个 `String` 字段；
+   `CREATE TABLE` 加两列 + `ensure_column` 幂等补老库。
+5. INSERT 扩到 `?1..?18`；三处 SELECT（单份 / 最近一份 / 全部）同步加列，
+   `row.get(15)` / `get(16)`，`updated_at_ms` 顺移到 17。
+6. `editor::view::tests::channels` 四处 `SavedSession` fixture 补两个 `None`。
+
+**开关口径**：不复用 `settings.result_panel.persist_column_widths`——那个开关只针对列宽记忆；
+隐藏 / 冻结是"用户怎么摆这张表"，与列序同语义，总随会话走。
+
+**已知限制（如实登记）**：列名本身含 `,` 时逗号串会被拆错（与列宽串的既有取舍一致；
+只影响恢复，不会写坏数据）。要彻底解决得把会话串升级成带转义的编码，与"列宽键粒度
+升级为 `connection/db/table`"一并处理（盘点表里已标为待用户拍板项）。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **220 passed / 0 failed**
+（218 + 2 新增：`column_layout_snapshots_round_trip_by_name`（换列序后按名字钉对列、
+找不到的列名跳过）、`apply_hidden_columns_still_keeps_one_visible_column`）；
+`cargo test -p rds-store --lib` = **163 passed / 0 failed**（+1 新增
+`editor_context_round_trips_column_layout_strings`，三条 SELECT 路径同值）；
+`cargo test -p rds-editor --lib` = **751 passed / 0 failed / 1 ignored**
+（并行线书签用例已由其 `72823e9e` 修好）；
+`cargo check -p rds-result-panel -p rds-editor -p rds-store` 通过（0 warning）。
+**未验证项**：真窗口里"隐藏 → 重启 → 列仍隐藏"的端到端，只到 headless 单测 + SQL 往返，
+未跑一次真实的关窗重开。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

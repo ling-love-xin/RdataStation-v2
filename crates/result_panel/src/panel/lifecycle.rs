@@ -184,6 +184,9 @@ impl ResultPanel {
             column_order: Vec::new(),
             // 【P1-3】列宽快照默认空 = 没拖过；宿主恢复会话时注入
             column_widths: Vec::new(),
+            // 【列布局落盘】隐藏 / 冻结快照默认空 = 没改过；宿主恢复会话时注入
+            column_hidden: Vec::new(),
+            column_frozen: Vec::new(),
             selected_col: None,
             // 【P2-3】多选集合镜像（delegate 经 `ColumnSelectionChanged` 回传）
             multi_selected: Vec::new(),
@@ -225,9 +228,20 @@ impl ResultPanel {
         &mut self,
         grid: Entity<TableState<ResultGridDelegate>>,
         compare_grid: Option<Entity<TableState<ResultGridDelegate>>>,
+        cx: &mut Context<Self>,
     ) {
         self.grid = grid;
         self.compare_grid = compare_grid;
+        // 【列布局落盘】把动作队列注入两个网格：列头菜单 / 列头右键的隐藏、冻结是在
+        // UI 回调里直接改 delegate 的，改完经队列交回宿主——宿主先取面板快照再存会话。
+        let queue = self.queue.clone();
+        let grid = self.grid.clone();
+        grid.update(cx, |state, _cx| {
+            state.delegate_mut().set_action_queue(queue.clone())
+        });
+        if let Some(compare) = self.compare_grid.clone() {
+            compare.update(cx, |state, _cx| state.delegate_mut().set_action_queue(queue));
+        }
     }
 
     /// 对比栏投影（编辑器 `sync_compare_grid` 时调用；与主栏投影同口径，只读）
@@ -289,6 +303,12 @@ impl ResultPanel {
                     // 对不上的列跳过（结果换了表 / 列名变了就回默认档）
                     let widths = self.column_widths.clone();
                     state.delegate_mut().apply_column_width_snapshot(&widths);
+                    // 【列布局落盘】隐藏 / 冻结同理：必须排在 set_data 之后（它清空两张清单），
+                    // 也排在列宽之后（隐藏会改变可见列序，后续步骤不依赖它，顺序仅需一致）
+                    let hidden = self.column_hidden.clone();
+                    state.delegate_mut().apply_hidden_columns(&hidden);
+                    let frozen = self.column_frozen.clone();
+                    state.delegate_mut().apply_frozen_columns(&frozen);
                     // 【Q6】类型必须**在 set_data 之后**设：`set_data` 会清空类型
                     state.delegate_mut().set_column_types(payload.column_types);
                     // 【A9】来源表名同理（set_data 会清掉旧的）
