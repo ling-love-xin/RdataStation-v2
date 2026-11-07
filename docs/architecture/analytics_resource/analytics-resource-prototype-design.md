@@ -185,6 +185,25 @@
 > - **分组头菜单**（`group_header.rs`，只挂在 `is_real_group` 头上）：重命名… → 设为|取消归档默认分组 → **删除分组** → 分隔线 → 新建分组…。`__all__` / `__ungrouped__` **完全没有菜单**（不是「只留新建分组」）。
 > - **拖拽的不对称**：`__ungrouped__` 是落点（`GroupDrop::Ungroup` = 移出分组）但没有右键菜单；`__all__` 是 `NotATarget`，连 `drag_over` 都不挂。`rows_to_move` 只发**真正要改归属**的行（已在目标分组的、认不出的 id 都不发），所以「拖到当前分组」是静默无操作，不是发一次空请求。
 
+#### 3.9 重命名 / 别名（20 页）实现复核（2026-11-07）
+
+> 逐条对回 `dialogs/rename.rs`、`resource_host/group_actions.rs`、`jobs/rename.rs` 与 `store/resource/write.rs`。
+
+- **形状与宽度**：单输入 + 一行提示 + 两枚按钮；`.w(cx.theme().font_size * ui::NAME_DIALOG_WIDTH)` = 16 × 24 = **384px**（`dialogs/rename.rs:166-167`）。标题恒为「重命名」/「编辑别名」，`Dialog::title` 只吃一个元素（vendor `dialog/dialog.rs:402`）——**没有副标题槽**，原型旧稿的「dau_report.sql · File 型」无实现位置。右上 `✕` 来自 `close_button` 默认 `true`（`dialog.rs:228`、渲染在 `:846-859`）。
+- **footer 只有两枚按钮**：取消（Secondary）/ 保存（Primary），都 `.small()`，`debug_selector` 为 `archive-rename-cancel` / `archive-rename-ok`（`rename.rs:186-211`）。旧稿 footer 左侧的两段文字（「项目「营销分析」」/「留空保存 = 清除该别名」）**没有实现位置**；「留空 = 清除」这层意思只出现在占位符里。
+- **闸门是纯函数**：`rename_gate(field, current, value)`（`rename.rs:89-110`）。显示名先走 `name_hint` 挡空（消息「显示名不能为空」出自 `dialogs/archive/mod.rs:153-155`），再判 `trimmed == current.trim()` → `Unchanged`；别名**不查空名**、只判 `Unchanged`（空是合法输入 = 清除）。两条单测覆盖「首尾空格不算改动 / 只改大小写算真改动 / 别名清空是合法改动」（`:230-255`）。
+- **提示行每帧从输入值重算**（`:127-133`）：`Ready` → 字段说明；`Unchanged` → 「值没变」且 `is_error = false`（muted，**不算错**）；`Blocked` → `name_hint` 的原文且 `is_error = true`（warning）。因为不是标志位，改回去提示自然消失。
+- **两份字段说明**：显示名「只改显示名：resources/ 下的文件名与路径不变」/ 别名「别名只是另一个叫法：不影响显示名、文件名与路径」（`:80-85`）。**占位符**：显示名「显示名」/ 别名「别名（留空 = 清除）」（`:71-76`），宿主经 `rename_placeholder` 取同一份字符串（`:221-223`）。
+- **四处入口、四套判据**：行右键「重命名…」`can_rename && !is_global`（`resource_view/list_delegate/menu.rs:144`）；`F2` 只走 `can_rename`（`resource_view/groups.rs:54-58`，**不看全局**）；详情头部点名字 `!read_only && status != Missing`（`detail_view/tag_preview.rs:106`）；详情头部点别名 `!read_only`（`:136`，不看 status）。`can_rename(multi_count, read_only)` 本身只有「单选 && 非只读」两条（`resource_view/row_meta.rs:137-139`）。
+- **判据不一致的后果**：① 全局实例上右键置灰、`F2` 却能按下，按下后 `require_project` 报「资产库：无法重命名：还没有打开项目」（`resource_host/helpers.rs:17-25`）——全局实例明明开着项目，话术答非所问；② 本体缺失行右键能改、详情头部名字却点不动。
+- **`Enter` 在闸门不过时仍会关窗**：`on_ok` 恒返回 `true`（`rename.rs:212-215`），而 `true` 的语义就是关窗（vendor `dialog.rs:91`）。保存按钮那条被 `.disabled(!can_submit)` 挡住，键盘这条路没挡：空名时按 `Enter`，对话框关闭、名字没改、也没有任何提示。
+- **前置拒绝（对话框不开）**：无项目根 → 「资产库：无法重命名：还没有打开项目」/「…无法编辑别名…」；只读项目 → 「资产库：项目为只读模式，不能改显示名」/「…不能改别名」（`group_actions.rs:85-91`、`:131-137`）。
+- **初值来源不同**：改名取**面板快照** `row_name`（取不到就空着）；别名取**详情** `row_alias`（`Option<Option<String>>`，两层 `unwrap_or_default` 展平）（`group_actions.rs:92-93`、`:138-142`）。取不到时 `seed.name` 为空串——此时显示名会被 `name_hint` 先挡，别名则任何输入都算改动。
+- **提交链路与两条回执**：`enqueue_rename` / `enqueue_set_alias` + `refresh_resources` + 立即回执「资产库：正在把「旧」改名为「新」…」/「资产库：正在更新别名…」（`group_actions.rs:112-125`、`:161-171`）；作业完成后的回执「资产库：已改名为「新」」（**不复述旧名**，`panels/resources.rs:641-642`）/「已把「X」的别名设为「Y」」/「已清除「X」的别名」（`jobs/rename.rs:70-75`）。失败两侧统一「资产库：{action}{reason}」，action 是「重命名」/「编辑别名」。
+- **不涨版本**：`rename_resource` / `set_alias` 只 `UPDATE` 一列，**不走 `update_resource`**（后者要 `version + 1` 并写版本快照）（`store/resource/write.rs:58-110`）；`updated_at` 由表上 `trg_ar_updated_at` 触发器维护（`UPDATE OF name` 在其触发列里），代码不重复写。
+- **不查重名**：SQL 只有 `UPDATE analytics_resources SET name = ? WHERE id = ? AND deleted_at IS NULL`，`affected = 0` 才报「资源不存在或已删除」（`write.rs:75-84`）。**两条存档可以同名，界面上不提示**——§1 原则 2 只说「显示名与路径分离」，没规定显示名唯一。
+- **别名存 NULL 不存空串**：`set_alias` 里 `alias.map(str::trim).filter(|v| !v.is_empty())`（`write.rs:97`），理由写在注释：空串会在界面上变成「有一行空别名」。
+
 ## 4. 核心交互
 
 ### 4.1 归档（M6 自有入口发起）
@@ -509,7 +528,7 @@ sequenceDiagram
 | `Ctrl+F` | 聚焦搜索 | 面板聚焦时 |
 | `↑` / `↓` | 行漫游 | 同上 |
 | `Enter` | 打开（只读） | 同上 |
-| `F2` | 重命名显示名 | 同上 |
+| `F2` | 重命名显示名 | 判据只走 `can_rename`（单选 && 非只读），**不看全局实例**——全局实例上 `F2` 能按下却会报「还没有打开项目」，见 §3.9 |
 | `Delete` | 移入回收站（可撤销） | 同上 |
 | `Ctrl+A` | 全选当前分组（分组未落 → 当前即全部可见行） | 同上 |
 | `Esc` | 清空搜索 / 关菜单 | 同上 |
