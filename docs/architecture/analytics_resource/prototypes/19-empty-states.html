@@ -11,117 +11,181 @@
 <header class="phead">
   <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>19 · 空态与异常</div>
   <div class="prow">
-    <h1 class="p-title">空态 / 无结果 / 异常横幅<span class="p-sec">§5</span></h1>
+    <h1 class="p-title">空态与异常 · 四种空要分得清<span class="p-sec">§5</span></h1>
     <span class="grow"></span>
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    四种「看起来都是空的」要分得清：<b>空库</b>（给下一步）/ <b>全局空</b>（解释为什么不能直接归档）/ <b>搜索无结果</b>（说明当前几个条件叠加，给一键清空）/ <b>加载中</b>（骨架，不摆空态）。
-    空态图标 <code>48px</code> + 标题 + 一句为什么 + 最多两个按钮 + 可选一条建议行。
+    分流的判据只有两条：<code>view_rows.is_empty()</code>（有没有行）与 <code>filter.is_empty()</code>（条件空不空，= 搜索词 + 种类 + 标签 + 只看异常四维全空）。
+    有行就画行；没行且条件空 → <b>加载中骨架</b>（取数期）或 <b>空库</b>（真没有）；没行但条件非空 → <b>无匹配</b>。三种空态都走组件 <code>empty::Empty</code>，骨架走 <code>skeleton::Skeleton</code>。
   </p>
-  <nav class="pnav"><a href="index.html">索引</a><a href="18-dialog-insight-archive.html">← 上一块：洞察归档</a><a href="index.html">返回索引</a></nav>
+  <nav class="pnav"><a href="index.html">索引</a><a href="18-dialog-insight-archive.html">← 上一块：洞察归档</a><a href="20-dialog-rename.html">下一块：重命名 →</a></nav>
 </header>
 
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>空库（项目）<span class="desc">主按钮「从草稿箱归档…」+ 建议行点名具体草稿</span></div>
-    <div class="canvas pad">
-      <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
-        <div class="empty-state" style="padding:24px 14px 16px">
+    <div class="variant-h"><span class="no">A</span>空库（项目实例）<span class="desc">两枚按钮，都受只读门禁</span></div>
+    <div class="canvas pad" style="display:flex;gap:24px;align-items:flex-start;background:var(--sidebar);padding:20px">
+      <div style="flex:none;width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
+        <div class="empty-state" style="padding:24px 14px 18px">
           <div class="big"><svg><use href="#i-chart" xlink:href="#i-chart"/></svg></div>
           <div class="t">还没有任何存档</div>
-          <div class="d">把值得留存的草稿归档进来，<br>它就有了版本、来源与内容指纹。</div>
-          <div class="btns"><button class="btn-p btn-xs">从草稿箱归档…</button><button class="btn-s btn-xs">了解资产库能做什么</button></div>
-          <div class="sug">
-            <svg class="ico-sm ic"><use href="#i-info" xlink:href="#i-info"/></svg>
-            <span>草稿箱里有 <b>3</b> 个文件看起来值得归档（dau_report.sql · monthly.md · 渠道对比.py）<br><span class="dlink" style="margin-top:2px">去归档…</span></span>
-          </div>
-        </div>
-      </div>
-    </div>
-    <p class="hang"><b>落地差异</b>：空库双按钮已落（组件 <code>Empty</code> + <code>Skeleton</code>）；建议行「草稿箱有 N 个值得归档」<b>未做</b>（要读 M5 草稿箱清单，跨模块查询没接）。</p>
-  </section>
-
-  <section class="variant">
-    <div class="variant-h"><span class="no">B</span>全局实例空<span class="desc">不给归档按钮——全局本来就不能直接归档，只解释规则</span></div>
-    <div class="canvas pad">
-      <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
-        <div class="empty-state" style="padding:24px 14px 16px">
-          <div class="big"><svg><use href="#i-grid" xlink:href="#i-grid"/></svg></div>
-          <div class="t">全局实例暂无资源</div>
-          <div class="d">全局分析库（G_ 连接）是跨项目的共享层。<br>项目里的存档可通过右键「升级到全局…」共享到全局，再供其他项目分发。</div>
-          <div class="btns"><button class="btn-s btn-xs">了解全局共享规则</button></div>
-          <div class="sug">
-            <svg class="ico-sm ic"><use href="#i-info" xlink:href="#i-info"/></svg>
-            <span>全局不能直接归档：只能由项目行升级而来；全局 → 项目分发是跨项目唯一法定路径（§13）</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="variant">
-    <div class="variant-h"><span class="no">C</span>搜索无结果<span class="desc">把「哪几个条件叠加」原样写出来，给一键清空</span></div>
-    <div class="canvas pad">
-      <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
-        <div class="empty-state" style="padding:24px 14px 16px">
-          <div class="big"><svg><use href="#i-search" xlink:href="#i-search"/></svg></div>
-          <div class="t">没有匹配的存档</div>
-          <div class="d">当前条件：关键词「渠道」+ 标签 月报 + kind 引用（3 个条件叠加）<br>换个关键词，或放宽筛选条件。</div>
-          <div class="btns"><button class="btn-s btn-xs">清空搜索与筛选</button></div>
-        </div>
-      </div>
-    </div>
-    <p class="hang"><code>filter::no_match_hint</code> 是这条文案的<b>单一来源</code>——空态提示与状态行计数不许各写一遍，否则改口径要改两处。</p>
-  </section>
-
-  <section class="variant">
-    <div class="variant-h"><span class="no">D</span>加载中<span class="desc">3 行骨架，不摆空态（避免「空库」闪一下再出结果）</span></div>
-    <div class="canvas pad">
-      <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar);padding:6px 0">
-        <div class="skrow"><div class="skbar w1"></div></div>
-        <div class="skrow"><div class="skbar w3"></div></div>
-        <div class="skrow"><div class="skbar w2"></div></div>
-        <div class="sk-hint">加载中…</div>
-      </div>
-    </div>
-  </section>
-
-  <section class="variant">
-    <div class="variant-h"><span class="no">E</span>异常横幅<span class="desc">本体缺失 / 内容已变：横幅在列表区顶部，整块可点进详情或索引修复</span></div>
-    <div class="canvas pad">
-      <div class="grid2">
-        <div>
-          <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
-            <div class="warnstrip">
-              <svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg>
-              <span class="grow">1 个存档本体缺失：sales_daily.csv<br><span style="opacity:.85">从回收站还原，或删除登记记录</span></span>
-            </div>
-            <div class="row miss"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">sales_daily.csv</span><span class="mdot"></span><span class="sb b-ok"><span class="d"></span>已归档</span></div>
-          </div>
-        </div>
-        <div>
-          <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
-            <div class="warnstrip">
-              <svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg>
-              <span class="grow">2 个存档内容已变：dau_report.sql、渠道对比.py<br><span style="opacity:.85">接受当前内容生成新版本，或从历史还原</span></span>
-            </div>
-            <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">dau_report.sql</span><span class="ver">v3</span><span class="sb b-ok"><span class="d"></span>已归档</span></div>
-          </div>
+          <div class="d">把草稿箱里值得留存的文件归档进来，<br>它就变成只读、带版本、可追溯的存档</div>
+          <div class="btns"><button class="btn-p btn-xs">从草稿箱归档…</button><button class="btn-s btn-xs">从本地文件归档…</button></div>
         </div>
       </div>
     </div>
     <p class="hang">
-      横幅只在<b>异常计数 &gt; 0</b> 时出现，与底部状态行的 warn/dang 段是同一份计数（两处不许各算一遍）。点横幅 = 打开「索引修复」对话框（16 页），不是一个只读提示条。<br>
-      <b>未做</b>：索引异常首次进入的顶部一次性提示条（§5「未做」第二条）。
+      标题与说明是两串硬编码字符串（<code>panel_render/empty.rs:55-65</code>）；按钮两枚——<b>从草稿箱归档…</b>（<code>primary</code>，<code>id=archive-for-empty</code>）与<b>从本地文件归档…</b>（<code>secondary</code>）。
+      两枚都 <code>.disabled(read_only)</code>：只读项目里空态只是告诉你这儿会有东西，不给你入口。
+      <b>旧稿的三处不成立</b>：说明里的「来源与内容指纹」被写成「只读、带版本、可追溯」；第二枚按钮不是「了解资产库能做什么」而是「从本地文件归档…」；建议行「草稿箱里有 3 个文件看起来值得归档（…）」不存在——<code>EmptyContent</code> 里只有两枚按钮，没有第三个槽。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>全局实例空<span class="desc">一枚按钮都没有，只解释规则</span></div>
+    <div class="canvas pad" style="display:flex;gap:24px;align-items:flex-start;background:var(--sidebar);padding:20px">
+      <div style="flex:none;width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
+        <div class="empty-state" style="padding:24px 14px 18px">
+          <div class="big"><svg><use href="#i-grid" xlink:href="#i-grid"/></svg></div>
+          <div class="t">全局实例还没有存档</div>
+          <div class="d">把项目里值得共享的存档升级到全局后会出现在这里；全局实例不直接归档，跨项目分发都从这里选。</div>
+        </div>
+      </div>
+    </div>
+    <p class="hang">
+      判据是面板级实例 <code>InstanceFilter::Global</code>（<code>empty.rs:54</code>）——不是筛选条件的一部分，所以全局实例即便筛选全空也走这一支。
+      <code>is_global</code> 时<b>根本不拼 <code>EmptyContent</code></b>（<code>empty.rs:73-74</code>）：既没有「了解全局共享规则」按钮，也没有建议行。旧稿画的那枚按钮是凭空的。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>无匹配（两档文案）<span class="desc">副文案由 <code>filter::no_match_hint</code> 一处给，只按「有没有搜索词」分流</span></div>
+    <div class="canvas pad" style="background:var(--sidebar);padding:20px">
+      <div style="display:flex;gap:24px;flex-wrap:wrap">
+
+        <div>
+          <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
+            <div class="empty-state" style="padding:22px 14px 16px">
+              <div class="big"><svg><use href="#i-search" xlink:href="#i-search"/></svg></div>
+              <div class="t">没有匹配的存档</div>
+              <div class="d">换个关键词，或改搜这些字段：<br>显示名 / 别名 / 标签 / 来源表 / 尾部信息</div>
+              <div class="btns"><button class="btn-s btn-xs">清空筛选</button></div>
+            </div>
+          </div>
+          <p style="margin:6px 0 0;font-size:11px;color:var(--muted)">C1 有搜索词</p>
+        </div>
+
+        <div>
+          <div style="width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
+            <div class="empty-state" style="padding:22px 14px 16px">
+              <div class="big"><svg><use href="#i-search" xlink:href="#i-search"/></svg></div>
+              <div class="t">没有匹配的存档</div>
+              <div class="d">去掉几个筛选条件，或清空筛选</div>
+              <div class="btns"><button class="btn-s btn-xs">清空筛选</button></div>
+            </div>
+          </div>
+          <p style="margin:6px 0 0;font-size:11px;color:var(--muted)">C2 只有筛选、没有搜索词</p>
+        </div>
+
+      </div>
+    </div>
+    <p class="hang">
+      旧稿 C 的副文案「当前条件：关键词「渠道」+ 标签 月报 + kind 引用（3 个条件叠加）」<b>不存在</b>：<code>no_match_hint</code> 只吃 <code>query</code> 一个参数（<code>filter/mod.rs:239-245</code>），不读标签与种类，也不拼「几个条件叠加」。
+      C1 反过来告诉你<b>哪五个字段能搜</b>（<code>SEARCH_FIELDS</code>，<code>mod.rs:233</code>）——搜不到的那一刻才是需要知道这件事的时候。按钮文案是「清空筛选」（<code>ghost</code>），不是「清空搜索与筛选」。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">D</span>加载中<span class="desc">三条递减灰条；「加载中…」只出现在底部状态行</span></div>
+    <div class="canvas pad" style="display:flex;gap:24px;align-items:flex-start;background:var(--sidebar);padding:20px">
+      <div style="flex:none;width:240px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
+        <div style="padding:8px;display:flex;flex-direction:column;gap:8px">
+          <div style="height:24px;width:75%;border-radius:4px;background:color-mix(in srgb,var(--muted) 22%,transparent)"></div>
+          <div style="height:24px;width:55%;border-radius:4px;background:color-mix(in srgb,var(--muted) 22%,transparent)"></div>
+          <div style="height:24px;width:65%;border-radius:4px;background:color-mix(in srgb,var(--muted) 22%,transparent)"></div>
+        </div>
+        <div style="border-top:1px solid var(--border);height:24px;display:flex;align-items:center;justify-content:space-between;padding:0 8px;font-size:11px;color:var(--muted)">
+          <span>加载中… · 12 项 · 已归档 9 · 缺失 1</span>
+        </div>
+      </div>
+    </div>
+    <p class="hang">
+      三条 <code>Skeleton</code> 宽度比 <code>0.75 / 0.55 / 0.65</code>、高 <code>ui::ROW_HEIGHT</code>（24px）、<code>gap_2</code> + <code>p_2</code>，灰条自带 2s 呼吸（<code>empty.rs:28-47</code>，<code>reduce_motion</code> 下停在全亮），并挂 <code>debug_selector = archive-loading</code> 供窗口测试断言「取数期间不摆空态」。
+      <b>列表区没有「加载中…」这行字</b>（旧稿的 <code>.sk-hint</code> 不存在）——字样只在底部状态行做前缀，而且<b>不抹掉计数</b>：<code>加载中… · 12 项 · 已归档 9…</code>（<code>view_model/row.rs:100-108</code>），抹掉反而让人以为库空了。全局实例前缀换成 <code>加载中… · 全局 N 项</code>。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">E</span>提示与异常：六种条，各在各的位置<span class="desc">列表区一次性条 / notice / 撤销栏 / 详情横幅 / 引用失效条 / 状态行异常态</span></div>
+    <div class="canvas pad" style="background:var(--sidebar);padding:20px">
+      <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
+
+        <div>
+          <div style="width:280px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
+            <div style="display:flex;align-items:center;gap:8px;padding:4px 8px;border-bottom:1px solid var(--border);font-size:11px;color:var(--warning)">
+              <span style="flex:1;min-width:0">发现本体缺失 1 项、内容已变 2 项，可在状态行「修复…」处理。</span>
+              <button style="border:none;background:transparent;color:var(--muted);font-size:11px;cursor:pointer">×</button>
+            </div>
+            <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">sales_daily.csv</span><span class="mdot"></span><span class="sb b-warn"><span class="d"></span>本体缺失</span></div>
+            <div style="border-top:1px solid var(--border);height:24px;display:flex;align-items:center;justify-content:space-between;padding:0 8px;font-size:11px;color:var(--warning)">
+              <span>12 项 · 已归档 9 · 缺失 1 · 索引异常 2</span>
+              <button style="border:none;background:transparent;color:var(--fg);font-size:11px;cursor:pointer">修复…</button>
+            </div>
+          </div>
+          <p style="margin:6px 0 0;font-size:11px;color:var(--muted)">E1 列表区：顶部一次性条 + 底部状态行异常态</p>
+        </div>
+
+        <div>
+          <div style="width:280px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--sidebar)">
+            <div style="padding:4px 8px;border-bottom:1px solid var(--border);font-size:11px;color:var(--info)">项目已切换到「仓库分析」，列表按新项目重读</div>
+            <div class="row"><svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg><span class="nm">dau_report.sql</span><span class="mdot"></span><span class="sb b-ok"><span class="d"></span>已归档</span></div>
+            <div style="height:24px;display:flex;align-items:center;gap:8px;padding:0 8px;background:var(--hover);border-top:1px solid var(--border);font-size:11px">
+              <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">已归档「dau_report.sql」</span>
+              <button style="border:none;background:transparent;color:var(--primary);font-size:11px;cursor:pointer">撤销</button>
+            </div>
+            <div style="border-top:1px solid var(--border);height:24px;display:flex;align-items:center;padding:0 8px;font-size:11px;color:var(--muted)">12 项 · 已归档 10</div>
+          </div>
+          <p style="margin:6px 0 0;font-size:11px;color:var(--muted)">E2 notice 条 + 撤销栏（固定状态行上方）</p>
+        </div>
+
+        <div>
+          <div style="width:320px;border:1px solid var(--sidebar-border);border-radius:9px;overflow:hidden;background:var(--bg);padding:8px;display:flex;flex-direction:column;gap:6px">
+            <div style="border:1px solid var(--warning);color:var(--warning);font-size:11px;padding:4px 8px;border-radius:4px">本体缺失：可能被手工删除或移动，可用索引修复还原或删除记录</div>
+            <div style="border:1px solid var(--warning);color:var(--warning);font-size:11px;padding:4px 8px;border-radius:4px">内容已变：本体被绕过只读改过，可接受当前内容（生成新版本）或从历史还原</div>
+            <div style="border:1px solid var(--warning);color:var(--warning);font-size:11px;padding:4px 8px;border-radius:4px">这是引用：源表可能已变更或被删除，使用前建议立即校验</div>
+            <div style="border:1px solid var(--warning);color:var(--warning);font-size:11px;padding:4px 8px;border-radius:4px">
+              源已变更，快照失效：当前源文件与归档时的指纹不一致。
+              <div style="display:flex;gap:8px;margin-top:4px">
+                <button class="btn-s btn-xs">接受当前内容</button><button class="btn-s btn-xs">从历史还原</button>
+              </div>
+            </div>
+          </div>
+          <p style="margin:6px 0 0;font-size:11px;color:var(--muted)">E3 详情面板横幅（前三档纯文本，第四档带两枚钮）</p>
+        </div>
+
+      </div>
+    </div>
+    <p class="hang">
+      <b>旧稿最要紧的一条过期结论</b>：它写着「<b>未做</b>：索引异常首次进入的顶部一次性提示条（§5「未做」第二条）」——<b>现在做了</b>：<code>render_index_issue_banner</code>（<code>resource_view/panel_render/banners.rs:121-174</code>），仅项目实例、<code>counts.has_issues()</code>、且本会话没被关过时出现（<code>announced_index_issue</code> 纯内存标记）；文案「发现本体缺失 N 项、内容已变 M 项，可在状态行「修复…」处理。」，<code>×</code> 关掉后本会话不再出现。全局实例直接返回 <code>None</code>（没有本地索引口径）。
+    </p>
+    <p class="hang" style="margin-top:8px">
+      其余五处也与旧稿不同：① 顶部那条<b>整块不可点</b>，没有「点横幅进索引修复」——要处理走底部状态行的「修复…」（<code>banners.rs:112-119</code>）；② 详情横幅的缺失文案指的是<b>索引修复</b>，不是旧稿写的「从回收站还原」（回收站里没有本体，见 <code>detail_view/actions.rs:89</code> 的拒绝话术）；③ 详情横幅共<b>五档</b>，多出「分析表结构已变」（文案来自 <code>analysis::STRUCTURE_CHANGED_NOTE</code>）、「这是引用：源表可能已变更或被删除」（<code>TableRef</code> 常态提示）、「引用型：本体在源位置，源变更后快照失效」（<code>detail_view/rows.rs:96-120</code>）；④ 引用失效条是<b>独立一条</b>，带「接受当前内容」「从历史还原」两枚按钮，槽位由宿主按 <code>resource_id</code> 维护、不进索引统计（<code>detail_view/banners.rs:28-87</code>）；⑤ 还有一条容易漏的 <code>render_notice</code> 文本条：同一字段按 <code>read_only</code> 决定颜色（只读 = warning，其余 = info）——<code>banners.rs:12-17</code>。
+    </p>
+    <p class="hang" style="margin-top:8px">
+      欠债两条：① 详情横幅纯文本、没有「去修复」按钮，用户得自己回面板状态行找入口（两处文案还不同：面板条说「可在状态行「修复…」处理」，详情条说「可用索引修复还原或删除记录」）；② <b>加载中被筛选挡住</b>：<code>filter.is_empty()</code> 才给骨架，条件非空时取数期间直接摆「没有匹配的存档」——队列还没回来就宣布「没有匹配」，快速输入时会闪。
     </p>
   </section>
 
   <div class="canvas pad">
+    <p class="hang" style="margin:0 0 8px">
+      分流与位置（<code>resource_view/panel_render/mod.rs:47-62</code>）：
+      <code>view_rows.is_empty()</code> 为真时，<code>filter.is_empty()</code> 为真 → <code>loading ? 骨架 : 空库</code>，否则 → 无匹配；有行 → <code>List</code>。
+      三种空态都是 <code>empty::Empty</code>（<code>EmptyHeader</code> + <code>EmptyTitle</code> + <code>EmptyDescription</code>，按钮进 <code>EmptyContent</code>），骨架是 <code>skeleton::Skeleton</code>——没有一个手搓的居中 div，也没有一个手写灰条。
+    </p>
     <p class="hang" style="margin:0">
-      本块样式：<code>.empty-state</code>（<code>.big</code> / <code>.t</code> / <code>.d</code> / <code>.btns</code> / <code>.sug</code>）/ <code>.warnstrip</code> / <code>.row.miss</code> / 拆块时补的 <code>.skrow</code> / <code>.skbar</code>。
-      落地代码：<code>crates/analytics_resource/src/resource_view/</code>（空态与横幅）+ <code>src/filter/mod.rs::no_match_hint</code>。
+      本块样式：<code>.empty-state</code>（<code>.big</code> / <code>.t</code> / <code>.d</code> / <code>.btns</code>，<b>不再用</b> <code>.sug</code>）、<code>.row</code>、<code>.sb</code>；旧稿的 <code>.skrow</code> / <code>.skbar</code> / <code>.sk-hint</code> / <code>.warnstrip</code> / <code>.row.miss</code> 在本页不再引用（实现里横幅与骨架都由组件出，不是 CSS 画的）。
     </p>
   </div>
 
