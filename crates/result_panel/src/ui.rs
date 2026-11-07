@@ -54,6 +54,35 @@ pub const RESULT_FILTER_WIDTH: f32 = 11.25;
 /// 结果网格列宽（128px；`Column::width` 只收 `Pixels`，故这里不做 rem 换算）
 pub const RESULT_COLUMN_WIDTH: Pixels = px(128.);
 
+/// 类型默认列宽档（用户**没拖过、也没双击自适应过**的列用哪一档）
+///
+/// 口径：按 `ColumnKind`（归一化语义类型）选，不按驱动原始类型名——MySQL 报 `int`、
+/// PG 报 `int4`，语义都是"数字列"，宽该一样。数值推导见
+/// `docs/architecture/editor/result-panel.md` §8.24；未知类型仍走
+/// [`RESULT_COLUMN_WIDTH`]（128），守住「类型缺失时一个像素都不变」的既有原则。
+pub const RESULT_COLUMN_WIDTH_NUMERIC: Pixels = px(130.);
+
+/// 布尔列（`true` / `TRUE` / 中文映射都很短，宽的是表头 badge + 列名）
+pub const RESULT_COLUMN_WIDTH_BOOLEAN: Pixels = px(96.);
+
+/// 日期 / 时间列（`2026-11-08` / `12:34:56` 十来字符）
+pub const RESULT_COLUMN_WIDTH_DATE_TIME: Pixels = px(120.);
+
+/// 时间戳列（`2026-11-08 12:34:56.789 +08` 二十多字符）
+pub const RESULT_COLUMN_WIDTH_TIMESTAMP: Pixels = px(210.);
+
+/// UUID 列（36 字符，不截断能读全）
+pub const RESULT_COLUMN_WIDTH_UUID: Pixels = px(300.);
+
+/// JSON 列（美化成多行前，首行常见一个对象头）
+pub const RESULT_COLUMN_WIDTH_JSON: Pixels = px(260.);
+
+/// 二进制列（我们画的是 `BLOB · N B` 摘要而非整串 hex，所以不照抄 tusk 的 bytea 220）
+pub const RESULT_COLUMN_WIDTH_BINARY: Pixels = px(160.);
+
+/// 文本列（长文本靠悬停全文与自适应，初值只给个能读一小段话的宽度）
+pub const RESULT_COLUMN_WIDTH_TEXT: Pixels = px(200.);
+
 /// 结果网格首列的行号槽宽（48px，原型 §2.4 的固定 `#` 列）
 pub const RESULT_ROW_NUMBER_WIDTH: Pixels = px(48.);
 

@@ -15,7 +15,36 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::delegate::ResultGridDelegate;
+use crate::store::ColumnKind;
 use crate::ui;
+
+/// 列类型 → 默认列宽（用户没拖过、也没双击自适应过的列用哪一档）
+///
+/// 口径：按 [`ColumnKind`]（归一化语义类型）而不是驱动原始类型名——MySQL 报 `int`、
+/// PG 报 `int4`，语义都是"数字列"，宽该一样。未知类型回到 [`ui::RESULT_COLUMN_WIDTH`]
+/// （128），守住「类型缺失时一个像素都不变」的既有原则（驱动没填类型之前，所有真实结果
+/// 走的都是这一档）。
+///
+/// 取值与推导：tusk 给过的四档照搬（numeric 130 / timestamptz 210 / uuid 300 / json 260）；
+/// 竞品没给的（boolean / date·time / text / binary）按「典型展示串宽 + 内边距」推：
+/// 字号 12px，西文数字平均宽 ≈ 0.55 × 字号 ≈ 6.6px/字符，单元格左右内边距合计 24px
+/// （自身 `px_2` 16 + 组件 `RESULT_TABLE_SIZE` = XSmall 档 8）。明细见
+/// `docs/architecture/editor/result-panel.md` §8.24。
+pub(crate) fn default_column_width(kind: ColumnKind) -> Pixels {
+    match kind {
+        ColumnKind::Integer | ColumnKind::Float | ColumnKind::Decimal => {
+            ui::RESULT_COLUMN_WIDTH_NUMERIC
+        }
+        ColumnKind::Boolean => ui::RESULT_COLUMN_WIDTH_BOOLEAN,
+        ColumnKind::Timestamp => ui::RESULT_COLUMN_WIDTH_TIMESTAMP,
+        ColumnKind::Date | ColumnKind::Time => ui::RESULT_COLUMN_WIDTH_DATE_TIME,
+        ColumnKind::Uuid => ui::RESULT_COLUMN_WIDTH_UUID,
+        ColumnKind::Json => ui::RESULT_COLUMN_WIDTH_JSON,
+        ColumnKind::Binary => ui::RESULT_COLUMN_WIDTH_BINARY,
+        ColumnKind::Text => ui::RESULT_COLUMN_WIDTH_TEXT,
+        ColumnKind::Unknown => ui::RESULT_COLUMN_WIDTH,
+    }
+}
 impl TableDelegate for ResultGridDelegate {
     /// 表头单元格（转发到 [`crate::grid::header::render_th`]）
     fn render_th(
@@ -204,11 +233,13 @@ impl TableDelegate for ResultGridDelegate {
             .cloned()
             .unwrap_or_else(|| format!("列 {}", index + 1));
         // 【P1-5】拖过的列按列名回填用户宽度；没拖过走默认档（行号槽 / 转置列在上面分支已返回）
+        // 【类型默认宽】这一档按**列类型**取，不再一律 128：数字窄、时间戳宽、uuid 最宽；
+        // 驱动没给类型时 `column_kind` 是 `Unknown`，仍是 128（与既有口径一致）
         let width = self
             .column_widths
             .get(&name)
             .copied()
-            .unwrap_or(ui::RESULT_COLUMN_WIDTH);
+            .unwrap_or_else(|| default_column_width(self.column_kind(col_ix)));
         Column::new(format!("col-{index}"), name)
             .width(width)
             .min_width(ui::RESULT_COLUMN_MIN_WIDTH)

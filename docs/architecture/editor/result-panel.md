@@ -1083,7 +1083,7 @@ panel.rs 删掉手搓过滤 / 行渲染 / 搜索框约 200 行。
 | 位置 | 事实 |
 | --- | --- |
 | `table/state.rs:1730-1737` | resize handle 的 `on_mouse_down`：`click_count == 2` → `fit_col(ix)`；`1` → 清 `fitted_col` |
-| `table/state.rs:1284-1313` | `fit_col`：问 delegate 要内容宽 → 加列 padding（`column.paddings`，否则 `size.table_cell_padding()`，Medium 左右各 8）→ 按 `scale_factor` 逐段 `ceil` 到整设备像素（文本宽哪怕差一个分数像素也会被截断）→ `resize_cols` → 变了才 emit `TableEvent::ColumnWidthsChanged` |
+| `table/state.rs:1284-1313` | `fit_col`：问 delegate 要内容宽 → 加列 padding（`column.paddings`，否则 `size.table_cell_padding()`；本仓 `RESULT_TABLE_SIZE` = `Size::XSmall`，左右各 4px）→ 按 `scale_factor` 逐段 `ceil` 到整设备像素（文本宽哪怕差一个分数像素也会被截断）→ `resize_cols` → 变了才 emit `TableEvent::ColumnWidthsChanged` |
 | `table/state.rs:280-285` | `fitted_col` 只用于屏蔽"双击后紧跟着的那一下拖拽"，**不会**每帧重算（一次双击 = 一次采样） |
 | `table/column.rs:219-221` | 列宽上界默认 1200px，组件侧已兜住，delegate 不必自己夹 |
 
@@ -1101,8 +1101,9 @@ panel.rs 删掉手搓过滤 / 行渲染 / 搜索框约 200 行。
   （NULL 占位 / 千分位 / 布尔中文）、JSON 美化、BLOB 摘要、`CELL_DISPLAY_LIMIT=300` 截断全都
   算在内；布尔 / 时间族用主题等宽字体测（与 `cell_style` 的 `monospace` 一致），否则数字列会
   量偏窄。
-- **双层内边距**：delegate 自己加 16px（`px_2`），组件再加 16px（`table_cell_padding` Medium）。
-  只算一层的话文字正好压在余量里被省略号吃掉，双击就白点了。
+- **双层内边距**：delegate 自己加 16px（`px_2` 左右各 8），组件再按 `RESULT_TABLE_SIZE`
+  （= `Size::XSmall`，`table_cell_padding()` 左右各 4）加 8px，合计 24px。只算一层的话
+  文字正好压在余量里被省略号吃掉，双击就白点了。
 - 行号槽返回 `None`（组件侧 `resizable(false)` 已先拦，这里再守一道）。转置视图照常自适应
   （列名取「字段 / 值」，列级类型 `Unknown` → 默认字体）。
 
@@ -1117,6 +1118,57 @@ panel.rs 删掉手搓过滤 / 行渲染 / 搜索框约 200 行。
 `cargo check -p rds-result-panel -p rds-editor -p rds-store` 通过（0 warning）。
 **未验证项**：真窗口里双击列头分隔线的端到端（headless 只到 `fit_column` 的返回值，没走真实
 鼠标双击 + `ColumnWidthsChanged` 落库）；真实字体下"每列多 16px 观感是否偏宽"也没目视。
+（§8.24 落地后同一条命令 = 222 passed。）
+
+### 8.24 类型默认列宽（2026-11-08）
+
+**为什么要做**：盘点第三项。列宽此前是**一刀切 128px**（`RESULT_COLUMN_WIDTH`）：一份
+`id / created_at / payload` 的结果新建出来三列一样宽——时间戳被截、id 白占地方。竞品（tusk）
+按类型给初值，这里把同一思路落到我们自己的**语义类型**上。
+
+**优先级**：`column_widths`（用户拖过 / 双击自适应过，按列名落盘）> 类型默认宽 > 128。
+用户一旦动过这一列，类型档就永久让位——初值只负责"第一次看到时像样"。
+
+**口径（按 `ColumnKind`，不按驱动原始类型名）**：`int` / `int4` / `bigint` 都是数字列，宽度该
+一样；`ColumnKind` 已是归一化语义类型（`ColumnKind::parse` 一张词表，见 `store/entry.rs`）。
+未知类型回到 128，守住「类型缺失时一个像素都不变」的既有原则（驱动没填类型时，所有列仍是
+今天的样子）。
+
+| `ColumnKind` | 宽 | 依据 |
+| --- | --- | --- |
+| Integer / Float / Decimal | 130 | tusk numeric 130；容得下 `-1234567890.12345` |
+| Boolean | 96 | 值很短（`true` / `是`），宽的是表头 badge + 列名 |
+| Date / Time | 120 | `2026-11-08` / `12:34:56` 十来字符，留余量 |
+| Timestamp | 210 | tusk timestamptz 210；`2026-11-08 12:34:56.789 +08` 二十多字符 |
+| Uuid | 300 | tusk uuid 300；36 字符不截断 |
+| Json | 260 | tusk json 260 |
+| Binary | 160 | **不照抄** tusk bytea 220——我们画的是 `BLOB · N B` 摘要，不是整串 hex |
+| Text | 200 | 竞品没给；初值能读一小段话，长文本靠悬停全文 + 双击自适应 |
+| Unknown | 128 | 与现状一致 |
+
+推导口径（竞品没给的几档）：字号 `text_xs` = 12px，西文数字平均宽 ≈ 0.55 × 字号 ≈ 6.6px/字符；
+单元格左右内边距合计 24px（自身 `px_2` 16 + 组件 `RESULT_TABLE_SIZE` XSmall 档 8）。
+
+**落点**：
+
+- `ui.rs`：8 个 `RESULT_COLUMN_WIDTH_*` 常量（结构尺寸进常量表，视图里不出现裸 `px`）。
+- `grid/table_impl.rs::default_column_width(kind)`：**穷尽 match**——新增 `ColumnKind` 变体会
+  编译失败，逼着补档。
+- `column()`：`column_widths.get(name)` 命中就用它，否则 `default_column_width(column_kind(col_ix))`。
+  时序安全：`sync` 里 `set_column_types` 排在 `set_data` 之后、`refresh(cx)` 之前
+  （`panel/lifecycle.rs:313` / `:338`），所以 `column()` 第一次被问时类型已就位，不会"先 128 再跳"。
+- 转置视图的「字段 / 值」两列仍走 128：混合类型没有可用的类型档（转置时 `column_kind` 为
+  `Unknown`）。
+
+**已知边界**：类型默认宽只影响"没有落盘记录"的列；`column_widths` 按**列名全局记忆**（同名不同
+表会串，已登记为待拍板项），所以同一列名在另一张表里会沿用旧宽度、不回到类型档。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **222 passed / 0 failed**（+1
+`default_column_width_follows_type_until_the_user_drags`：11 档全覆盖表 + uuid 300 / boolean 96
+走真实 `column()` + 拖过后按用户值）；`cargo check -p rds-result-panel -p rds-editor -p rds-store`
+0 warning。
+**未验证项**：真实窗口里"新建一份结果 → 各列初始宽度看着合不合适"没目视；
+`RESULT_COLUMN_WIDTH_TEXT` = 200 对中文长文本列是否仍偏窄没实测。
 
 ## 8. 协作纪律
 

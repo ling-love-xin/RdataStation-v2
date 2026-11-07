@@ -229,11 +229,24 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 | --- | --- |
 | 入口 | 组件早已提供：双击 resize handle → `TableState::fit_col` → `TableDelegate::fit_column`（trait 默认 `None`，本仓此前没实现，所以双击没反应） |
 | 实现 | 新模块 `crates/result_panel/src/grid/fit.rs`；`TableDelegate::fit_column` 在 `grid/table_impl.rs` 薄转发。只回答**内容宽**，padding / min-max / `ColumnWidthsChanged` 全由组件做 |
-| 宽度 | 表头 = 类型 badge(8px) + 列名 + 排序箭头 + `▽` + `gap_1`(4px)，不含列头菜单按钮；单元格 = 前 200 视图行最宽的展示串 + `px_2`(16px)；两层 padding 都要算（组件再加 16px） |
+| 宽度 | 表头 = 类型 badge(8px) + 列名 + 排序箭头 + `▽` + `gap_1`(4px)，不含列头菜单按钮；单元格 = 前 200 视图行最宽的展示串 + `px_2`(16px)；两层 padding 都要算（组件按 `RESULT_TABLE_SIZE` = XSmall 档再 +8px） |
 | 口径 | 测"画出来的那串"（NULL 占位 / 千分位 / 布尔中文 / JSON 美化 / BLOB 摘要 / 300 截断）；等宽族用 `theme.mono_font_family`；行号槽返回 `None`；转置视图可自适应 |
 | 落盘 | 零新增接线：`ColumnWidthsChanged` 已在 `panel/lifecycle.rs` 订阅 → 与拖拽同一条通道 |
 
 采样上限 `FIT_SAMPLE_ROWS = 200`。`fitted_col` 只屏蔽双击后那一下拖拽，不会每帧重算。验证：`cargo test -p rds-result-panel --lib` = **221 passed / 0 failed**（+1）；`cargo check -p rds-result-panel -p rds-editor -p rds-store` 0 warning。未验证：真窗口双击端到端、真实字体下观感是否偏宽。
+
+### 2.15 2026-11-08（类型默认列宽：盘点第三项）
+
+| 层 | 落地 |
+| --- | --- |
+| 优先级 | `column_widths`（用户拖过 / 双击自适应过，按列名落盘）> 类型默认宽 > 128；用户动过就永久让位 |
+| 口径 | 按 `ColumnKind` 归一化语义（`int` / `int4` / `bigint` 同档），不按驱动原名；`Unknown` 仍 128（「类型缺失一个像素都不变」） |
+| 取值 | numeric 130 / boolean 96 / date·time 120 / timestamp 210 / uuid 300 / json 260 / binary 160（我们画 `BLOB · N B` 摘要，不照抄 tusk bytea 220）/ text 200 / unknown 128 |
+| 落点 | `ui.rs` 8 个 `RESULT_COLUMN_WIDTH_*` 常量；`grid/table_impl.rs::default_column_width(kind)` 穷尽 match；`column()` 改 `column_widths.get(name).copied().unwrap_or_else(|| default_column_width(column_kind(col_ix)))` |
+| 时序 | `set_column_types` 在 `set_data` 之后、`refresh(cx)` 之前（`panel/lifecycle.rs:313` / `:338`），`column()` 首次被问时类型已就位，不会「先 128 再跳」 |
+| 例外 | 转置视图「字段 / 值」两列仍 128（混合类型无可用档）；行号槽不变 |
+
+推导：`text_xs` = 12px，西文数字宽 ≈ 0.55 × 字号 ≈ 6.6px/字符，内边距合计 24px（自身 `px_2` 16 + 组件 XSmall 8）。验证：`cargo test -p rds-result-panel --lib` = **222 passed / 0 failed**（+1 `default_column_width_follows_type_until_the_user_drags`）；三 crate check 0 warning。未验证：真窗口初始观感、text 200 对中文长文本是否仍偏窄。
 
 ---
 

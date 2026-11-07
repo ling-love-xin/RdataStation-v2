@@ -2801,3 +2801,70 @@ fn fit_column_follows_content_and_caps_the_sample(cx: &mut gpui_kit::TestAppCont
         "第 {FIT_SAMPLE_ROWS} 行之后的超长值不该进采样：{capped:?}"
     );
 }
+
+/// 【类型默认列宽】没拖过、也没双击自适应过的列按**列类型**给初值；拖过的一律按用户宽度
+/// （类型档不覆盖用户选择）；未知类型仍是 128（守住「类型缺失时一个像素都不变」）
+#[gpui_kit::test]
+fn default_column_width_follows_type_until_the_user_drags(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    // 1) 纯函数口径：11 档全覆盖（`default_column_width` 是穷尽 match，漏一档编译不过）
+    for (kind, expected) in [
+        (ColumnKind::Integer, crate::ui::RESULT_COLUMN_WIDTH_NUMERIC),
+        (ColumnKind::Float, crate::ui::RESULT_COLUMN_WIDTH_NUMERIC),
+        (ColumnKind::Decimal, crate::ui::RESULT_COLUMN_WIDTH_NUMERIC),
+        (ColumnKind::Boolean, crate::ui::RESULT_COLUMN_WIDTH_BOOLEAN),
+        (ColumnKind::Timestamp, crate::ui::RESULT_COLUMN_WIDTH_TIMESTAMP),
+        (ColumnKind::Date, crate::ui::RESULT_COLUMN_WIDTH_DATE_TIME),
+        (ColumnKind::Time, crate::ui::RESULT_COLUMN_WIDTH_DATE_TIME),
+        (ColumnKind::Uuid, crate::ui::RESULT_COLUMN_WIDTH_UUID),
+        (ColumnKind::Json, crate::ui::RESULT_COLUMN_WIDTH_JSON),
+        (ColumnKind::Binary, crate::ui::RESULT_COLUMN_WIDTH_BINARY),
+        (ColumnKind::Text, crate::ui::RESULT_COLUMN_WIDTH_TEXT),
+        (ColumnKind::Unknown, crate::ui::RESULT_COLUMN_WIDTH),
+    ] {
+        assert_eq!(
+            crate::grid::table_impl::default_column_width(kind),
+            expected,
+            "{kind:?} 的默认宽不符"
+        );
+    }
+
+    // 2) 走真实列定义（列宽是从 `column()` 里取的，这里钉的是「类型 → 列宽」那一段）
+    let mut typed = grid();
+    typed.set_column_types(vec![
+        Some(ColumnType::parse("uuid")),
+        Some(ColumnType::parse("boolean")),
+    ]);
+    cx.update(|cx: &mut App| {
+        assert_eq!(
+            typed.column(1, cx).width,
+            crate::ui::RESULT_COLUMN_WIDTH_UUID,
+            "uuid 列走 300"
+        );
+        assert_eq!(
+            typed.column(2, cx).width,
+            crate::ui::RESULT_COLUMN_WIDTH_BOOLEAN,
+            "boolean 列走 96"
+        );
+    });
+
+    // 3) 拖过之后按用户宽度，类型档不再生效
+    typed.set_column_widths(&[
+        crate::ui::RESULT_ROW_NUMBER_WIDTH,
+        gpui_kit::px(200.),
+        gpui_kit::px(70.),
+    ]);
+    cx.update(|cx: &mut App| {
+        assert_eq!(
+            typed.column(1, cx).width,
+            gpui_kit::px(200.),
+            "uuid 列拖过按用户值"
+        );
+        assert_eq!(
+            typed.column(2, cx).width,
+            gpui_kit::px(70.),
+            "boolean 列拖过按用户值"
+        );
+    });
+}
