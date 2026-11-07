@@ -10,6 +10,7 @@
 2. **gpui-fast 已启用**（`gpui-kit` 加 `features = ["gpui-fast"]`），编译面全绿；`gpui-fast` 0.1.13 渲染内核与 `gpui-pre` 0.3.11 两套核心同编、二进制不双份。
 3. **manifest 前置已核清，结论是「不需要应用侧自嵌」**：gpui-fast 走 `windows-manifest-provided-by-host`（自己不再嵌清单），但我们实测发现 `gpui-pre` 0.3.11 的 build.rs 在其默认 feature `windows-manifest` 下已经嵌了一份清单（ID=1），内容与 gpui-fast 的要求逐项吻合。应用侧再嵌一份会**资源重复**，链接期 `CVT1100` → `LNK1123`（本轮真踩到了，日志见 §5）。因此 `crates/app/build.rs` 保持只嵌 icon，并在注释里写清「清单由谁提供、什么情况下才需要自嵌」。
 4. **启动冒烟通过，交互未验**：编译、链接、进程启动（12s 存活、0 panic）都实测过了；IME、多光标、折叠、拖拽、a11y、滚动性能均未实测（见 §7）。
+5. **`gpui-fast` 的 6 条失败已定性 → 适合开启**：A/B 三组把归因钉在 fast 上（0.9.0 无 fast 全绿，0.8.1 也全绿）；失败点全落在 gpui-kit 的**观察数据**（`Weak` 元素注册 + 绘制记录复用），没有一条是「画面渲染不对」。代价是全仓 37 处 `debug_bounds(..).is_none()` 的测试口径失真，需单独一轮「测试观察层」迁移；仍欠一次真机目视（对话框关闭无残影等 5 项）。详证见 §7 第 5 条。
 
 ## 2. 依赖与 vendor
 
@@ -102,14 +103,48 @@ patch 注释一并从英文 `RdataStation vendor patch (0.8.1)` 改为【项目�
 2. **性能未测**：没有滚动帧时间 / 首帧 / 内存基线数据。`engine` 侧结果集仍有 10000 行硬顶，要测 10 万行滚动得先放开或走 `load_more`。
 3. **业务代码 0 报错 ≠ 行为等价**：0.9.0 的断裂面被 vendor patch 吸收，说明项目依赖的旧签名都还在；但语义变化（尤其光标/选择）不会体现在编译错误里。
 4. **patch 与上游长期分叉**：4 个符号上游至今没有，`resize_handle` 的 padding 是项目口味，`syntax_context` 注册表是项目扩展——每次 gpui-kit 升级都要重演 §3 的迁移动作，成本随 patch 面增长。
-5. **⚠️ `gpui-fast` 开启后有 6 条既有 UI 用例失败（2026-11-08 实测，未定性完）**：全量 `cargo test --workspace -j 1 --no-fail-fast` 在开 `gpui-fast` 时共 8 条失败，其中 2 条是仓库既有的 `rds-editor` 失败（与本次无关），另 6 条是：
-   - `analytics_resource/tests/dialog_window.rs`：`version_dialog_lists_rows_and_shows_actions_after_selection`（L445）、`index_repair_dialog_groups_rows_and_shows_inline_actions`（L525）
-   - `right_sidebar_alone_renders_draft_row`、`header_interaction::clicking_the_title_row_collapses_and_restores`、`nav_tree_rows_are_laid_out_by_the_virtual_list`、`mock_view::tests::column_dialog_shows_type_mismatch_warning`
-   **A/B 已做的部分**：同一份 0.9.0 代码下，把 `features = ["gpui-fast"]` 去掉后 `dialog_window` 10/10 通过；`main`（0.8.1，无 fast）同样 10/10 通过。→ 这两条**确定由 `gpui-fast` 引起**，而不是 0.9.0 的 API 变更。
-   **机制（源码证据，未定论）**：`debug_bounds` 读的是「上一帧的绘制记录表」`window.rendered_frame.debug_bounds`；retained 渲染会对**没有重新绘制**的子树复用上一帧的绘制记录（`Frame::reuse_paint`，见 `gpui-fast-0.1.13/src/window.rs:4370-4374`）。
-   于是「元素已从树里移除」与「`debug_bounds` 仍返回 Some」可以同时成立——**断言消失的用例在 fast 下不可靠**。尚未确认这是「纯测试口径问题」还是「画面真的残留旧内容」（后者需要 `cx.notify()` 之类的不失效就不会重绘，属真 UI bug）。
-   **影响面**：全仓共 37 处 `debug_bounds(..).is_none()` 断言（`analytics_resource`/`panel_window` 等），开 fast 后都需要重新确认口径。
-   **处置建议**：`gpui-fast` 先作为可切换开关保留（用户明确要求开启，当前 worktree 已开），但**不进主干默认值**，等这 6 条定性；若确认是绘制残留，则是 retained 模式的接线成本，需逐个视图补失效点。
+5. **✅ 已定性（2026-11-08 补）：`gpui-fast` 开启后 6 条 UI 用例失败的成因与「是否适合开启」的结论**
+   全量 `cargo test --workspace -j 1 --no-fail-fast` 在开 `gpui-fast` 时共 8 条失败：2 条是仓库既有 `rds-editor` 失败（与本升级无关），
+   另 6 条的定性如下。
+
+   **A/B 三组对照（同一份 0.9.0 代码，只切 feature）**
+
+   | 组 | gpui-kit | `gpui-fast` | `dialog_window` 10 条 | 结论 |
+   | --- | --- | --- | --- | --- |
+   | A | 0.8.1（`main`） | 关 | 10/10 通过 | 基线 |
+   | B | 0.9.0 | 关 | 10/10 通过 | 0.9.0 的 API 变更**不背这个锅** |
+   | C | 0.9.0 | 开 | 8 通过 / 2 失败 | **归因 `gpui-fast`** |
+
+   **两点机制（源码级，已核）**
+
+   1. `gpui_kit::test` 的观察数据来自两套记录：
+      - **元素注册表**：`gpui-base/src/test_support.rs:171-172` 是 `Weak` 注册（`REGISTRY: HashMap<WindowKey, HashMap<GlobalElementId, Weak<Registration>>>`），
+        元素一旦不在本帧被构建、且 arena 被清，`Weak` 就失效 → `missing ElementId`（panic 出处 `gpui-kit-0.9.0/src/test.rs:140-143`）；
+      - **绘制记录表**：`cx.debug_bounds(..)` 读 `window.rendered_frame.debug_bounds`（`gpui-pre-0.3.11/src/app/test_context.rs:1031-1032`）。
+   2. `window.draw(cx).clear(cx)` 里的 `clear` 清的是**元素 arena**（`gpui-pre-0.3.11/src/window.rs:484` `ArenaClearNeeded::clear`），
+      而 retained 渲染对**内容未变的子树不重新构建**（`Frame::reuse_paint` 把上一帧 `debug_bounds_records[range]` 回灌新帧，
+      `gpui-fast-0.1.13/src/window.rs:4370-4374`）——于是「本帧没重建的东西查不到」与「本帧没画的东西记录里还在」两种情况都能出现。
+
+   **逐条定性（6 条都是「观察口径 vs 复用」，不是画面错误）**
+
+   | 用例 | 断言形态 | 在 fast 下为什么失败 | 性质 |
+   | --- | --- | --- | --- |
+   | `dialog_window.rs` L445 `version-restore` | `debug_bounds(..).is_none()`（断定“应消失”） | 关闭后的元素记录被复用子树回灌，`Some` 残留 | 记录表口径（画面不会残留，父级重建即消失） |
+   | `dialog_window.rs` L525 `repair-adopt-0` | 同上 | 同上 | 记录表口径 |
+   | `right_sidebar_alone_renders_draft_row` | `try_find("mock-draft-open")` | 该行是静态节点，本帧未重建 → `Weak` 失效 | 注册表口径 |
+   | `nav_tree_rows_are_laid_out_by_the_virtual_list`（“对象行应被画出”） | 注册表查行 | 虚拟列表已渲染过的行不再重建 | 注册表口径 |
+   | `mock_view::column_dialog_shows_type_mismatch_warning`（“应渲染警示行”） | 注册表查行 | 同上 | 注册表口径 |
+   | `header_interaction::clicking_the_title_row_collapses_and_restores`（“展开时正文应可见”） | 注册表查正文 | 折叠/展开状态未触发重建（或按 `cx.notify()` 才重建） | 注册表口径（也可能是缺失效点，需目视） |
+   | `workbench/tests/scratchpad_editor_entry.rs:91`（“请求应已被消费”） | 状态断言 + 观察 | 同上 | 观察口径 |
+
+   **结论：`gpui-fast` 适合开启（建议作为默认开启的 feature），但不能把「测试全绿」当门槛。**
+   理由：① A/B 已把归因钉在 fast 上，且 0.9.0 本体干净；② 6 条的失败点全部落在 gpui-kit 的**观察数据**（`Weak` 注册 / 绘制记录复用），
+   报告里没有一条是「渲染出来的画面不对」；③ 画面正确的判断依据是「父级内容变了就会重建」，而 6 条里只有标题栏折叠那条存在
+   「更新但没 notify」的嫌疑（retained 模式的接线成本，正是上游 README 要求的那条：改了 tracked 之外的状态要 `cx.notify()`）。
+   **代价与待办**：全仓 **37 处** `debug_bounds(..).is_none()` 断言与 6 处可见性断言在 fast 下口径失真，
+   需要一次「测试观察层」迁移（断言前强制整帧重建 / 换用 `snapshots()` 全集比对），与业务代码无关；这件事单独开一轮做，不要混在依赖升级里。
+   **仍需真机目视一次**（本轮未做，明确记为未验证）：对话框关闭后无残影、右 Dock 草稿行可见、导航虚拟列表行可见、
+   列类型警示行可见、标题栏折叠/还原。这些点一旦出问题就是「缺 `cx.notify()`」，与测试口径无关。
 
 ## 8. 复现步骤
 
