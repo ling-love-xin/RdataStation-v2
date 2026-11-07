@@ -76,6 +76,11 @@ pub struct PluginInfo {
     pub kind: PluginKind,
     pub metadata: PluginMetadata,
     pub state: PluginState,
+    /// 最近一次加载 / 激活失败的原因（`state == Error` 时非空）。
+    ///
+    /// 面板只显示状态徽标时，用户看不到「为什么出错」；把失败原因带出来，
+    /// 才能在 240px 窄面板里一行说明（完整日志仍以 tracing 为准）。
+    pub error: Option<String>,
 }
 
 /// 已加载的插件（安装态记录；原 loader.rs 的 `LoadedPlugin` 并入）
@@ -122,6 +127,14 @@ impl LoadStatus {
             LoadStatus::Active => PluginState::Active,
             LoadStatus::LoadFailed(_) | LoadStatus::ActivationFailed(_) => PluginState::Error,
             _ => PluginState::Inactive,
+        }
+    }
+
+    /// 加载 / 激活失败的可读原因（成功态与「未激活」均为 `None`）。
+    pub fn error_reason(&self) -> Option<&str> {
+        match self {
+            LoadStatus::LoadFailed(reason) | LoadStatus::ActivationFailed(reason) => Some(reason),
+            _ => None,
         }
     }
 }
@@ -277,6 +290,7 @@ impl PluginManager {
                 entry_point: String::new(),
             },
             state: PluginState::Inactive,
+            error: None,
         }))
     }
 
@@ -958,6 +972,8 @@ impl PluginManager {
                     kind: PluginKind::Wasm,
                     metadata: meta,
                     state,
+                    // Extism 侧只保存状态枚举，没有错误文本；wasm 失败原因仍看日志。
+                    error: None,
                 })
                 .collect();
             plugins.extend(wasm_plugins);
@@ -994,6 +1010,7 @@ impl PluginManager {
                         entry_point: String::new(),
                     },
                     state: lp.status.session_state(),
+                    error: lp.status.error_reason().map(str::to_string),
                 });
             }
         }

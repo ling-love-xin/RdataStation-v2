@@ -389,6 +389,7 @@ impl ListDelegate for PluginListDelegate {
         let name = p.name.clone();
         let version = p.version.clone();
         let active = p.state == PluginState::Active;
+        let error = p.error.clone();
         let (state_text, state_color) = plugin_state_label(p.state);
         let state_color = match state_color {
             "success" => cx.theme().colors.success,
@@ -461,6 +462,12 @@ impl ListDelegate for PluginListDelegate {
                 app.stop_propagation();
             });
 
+        // 出错行把原因并进第二行：240px 面板放不下第三行，完整堆栈仍看日志。
+        let (subtitle, subtitle_color) = match &error {
+            Some(reason) => (format!("{id} · 原因：{reason}"), cx.theme().colors.danger),
+            None => (id.clone(), cx.theme().colors.muted_foreground),
+        };
+
         let item = ListItem::new(ElementId::Name(SharedString::from(format!(
             "plugin-row-{id}"
         ))))
@@ -501,8 +508,8 @@ impl ListDelegate for PluginListDelegate {
                                 .min_w_0()
                                 .text_ellipsis()
                                 .text_xs()
-                                .text_color(cx.theme().colors.muted_foreground)
-                                .child(id),
+                                .text_color(subtitle_color)
+                                .child(subtitle),
                         )
                         .child(uninstall),
                 ),
