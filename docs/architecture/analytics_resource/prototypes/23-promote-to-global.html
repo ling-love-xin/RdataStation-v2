@@ -18,7 +18,7 @@
   <p class="p-spec">
     <b>本块现状：没有前置确认对话框</b>。项目行右键「升级到全局…」点一下<b>直接入队</b>，状态栏只给一句「正在升级到全局…」；
     <b>只有撞名才开窗</b>（<a href="17-dialog-conflict.html">17 块</a>的覆盖 / 改名 / 取消）。目标名一律取显示名，代码里没有「先改名再升级」的入口。
-    变体 C 是<b>本轮提的一个可选方案，规格里并没有这张框</b>（§13.3 只在冲突时要求询问改名）——摆出来只为拍板，不当规格落差看。
+    变体 D 是<b>本轮提的一个可选方案，规格里并没有这张框</b>（§13.3 只在冲突时要求询问改名）——摆出来只为拍板，不当规格落差看。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="22-dialog-pick.html">← 上一块：草稿选择</a><a href="24-distribute-to-project.html">下一块：分发到本项目 →</a></nav>
 </header>
@@ -32,46 +32,58 @@
         <div class="snode">
           <div class="sno">1</div>
           <div class="sc"><span class="who">项目行右键</span>「升级到全局…」
-            <span class="sub">多选态里这一项置灰（<a href="10-context-menu.html">10 块</a> ① 有画）；全局行不出现（它已经是全局）。<b>只读项目里这一项也置灰</b>（<code>disabled(… || read_only)</code>）；宿主侧还有一道兜底，真点到也回执「项目为只读模式，不能升级到全局」。</span>
+            <span class="sub">判据 <code>!can_open || multi_count &gt; 1 || read_only</code>（<code>list_delegate/menu.rs:105</code>）。多选态置灰、全局行不出现、只读项目也置灰；宿主侧还有一道兜底，真点到也回执「项目为只读模式，不能升级到全局」。<b>关键：<code>can_open</code> 里含 <code>payload_rel_path.is_some()</code></b>（<code>list_delegate/mod.rs:203-208</code>）——所以<b>分析表型存档在菜单上就是灰的</b>，根本进不了第 2 步。</span>
           </div>
         </div>
         <div class="sarrow">▼</div>
         <div class="snode">
           <div class="sno">2</div>
-          <div class="sc"><span class="who">后台 job</span>按本体形态分流
-            <span class="sub">白名单扩展名（csv / tsv / txt / parquet / xlsx / xls / json / ndjson）→ 数据文件映射出表；其余（sql / py / md…）→ 脚本内容表。分析表型存档没有本体文件，直接回执「随 M8 后续批次接入」，不进 job。</span>
+          <div class="sc"><span class="who">宿主</span>按本体扩展名分流（三张表，两个拒）
+            <span class="sub"><b>数据文件 8 个</b>：csv / tsv / txt / parquet / xlsx / xls / json / ndjson → <code>PromoteKind::DataFile</code>，建表。<br>
+            <b>文本脚本 12 个</b>：sql / py / r / md / yaml / yml / toml / js / ts / sh / ps1 / ipynb → <code>PromoteKind::Script</code>，内容表。<br>
+            <b>其余一律拒</b>（png / zip / docx 这类二进制、或没有扩展名）——回执一段长文案：说明这两张名单、建议另存 csv 或走「分发」/ 共享目录。<br>
+            <b>另拒分析表型档</b>：<code>payload_rel_path</code> 为空 → 「分析表型存档的升级随 M8 后续批次接入」（<code>detail_actions.rs:158-161</code>）。</span>
           </div>
         </div>
         <div class="sarrow">▼</div>
         <div class="snode">
           <div class="sno">3</div>
           <div class="sc"><span class="who">状态栏</span>「资产库：正在升级到全局…」
-            <span class="sub">成功后面板刷新，全局侧多一行 <span class="scope-badge">全局</span>；项目行原地不动、也不带「已升级」标记。撞名时第 2 步返回冲突，宿主才弹 <a href="17-dialog-conflict.html">17 块</a>。</span>
+            <span class="sub">完成后：<b>「资产库：已升级「X」v{n} 到全局实例（跨项目可分发）」</b>（<code>workbench/src/panels/resources.rs:659-661</code>），面板刷新，全局侧多一行 <span class="scope-badge">全局</span>；项目行原地不动、也不带「已升级」标记。撞名时第 2 步返回冲突，宿主才弹 <a href="17-dialog-conflict.html">17 块</a>。</span>
           </div>
         </div>
       </div>
-      <p class="hang">升级完成后项目行与全局行是<b>两条独立登记</b>：项目行不会因为升过级而变成只读，也<b>不会互相跟随</b>（再次升级才更新全局侧）。</p>
+      <p class="hang">
+        <b>旧稿第 2 步写错了两处</b>：① 「白名单扩展名 → 表；<b>其余</b>（sql / py / md…）→ 内容表」——不是「其余」，是<b>两张正向白名单</b>，两表之外的二进制被单独拦下并给长回执（<code>mod.rs:381-392</code> 注释明写「不在两张表里的一律不允许升级」；这处是修 UTF-8 崩溃那批补的，见 <a href="../analytics-resource-dev-plan.md">开发计划</a>）。② 分析表型那句回执<b>在唯一的入口上不可达</b>：菜单已用 <code>!can_open</code> 先置灰，详情面板也没有升级入口（全仓只有 <code>menu.rs:111</code> 一处调用）。
+      </p>
+      <p class="hang" style="margin-top:8px">
+        升级完成后项目行与全局行是<b>两条独立登记</b>：项目行不会因为升过级而变成只读，也<b>不会互相跟随</b>。
+      </p>
     </div>
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">B</span>三种本体形态<span class="desc">同一次点击，落到全局的东西不一样</span></div>
+    <div class="variant-h"><span class="no">B</span>四种结局，不是三种<span class="desc">同一次点击，落到全局的东西不一样（第四种是「什么都不落」）</span></div>
     <div class="canvas pad">
-      <div class="grid3">
+      <div class="grid2" style="grid-template-columns:1fr 1fr">
         <div class="sinst">
-          <div class="sh"><svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg>数据文件 → 表</div>
-          <div class="sd">全局库 <code>CREATE TABLE global.&lt;名&gt; AS SELECT * FROM read_xxx('…')</code>；行数 / 列数由建完的全局表量出来，写进全局登记。</div>
+          <div class="sh"><svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg>数据文件 → 真表</div>
+          <div class="sd">全局库 <code>CREATE TABLE global.&lt;名&gt; AS SELECT * FROM read_xxx('…')</code>；<b>行数 / 列数由建完的全局表真量</b>（<code>table_stats</code>），写进全局登记。</div>
         </div>
         <div class="sinst">
-          <div class="sh"><svg class="ico-sm"><use href="#i-doc" xlink:href="#i-doc"/></svg>脚本 → 内容表</div>
-          <div class="sd">方案 A 定稿：单行表 <code>(filename, content, content_hash)</code>，正文整段进 <code>content</code>，不拆行。<b>分发时再重建回文件</b>（见 24 块）。</div>
+          <div class="sh"><svg class="ico-sm"><use href="#i-doc" xlink:href="#i-doc"/></svg>文本脚本 → 内容表</div>
+          <div class="sd">方案 A 定稿：单行表 <code>(filename, content, content_hash)</code>，正文整段进 <code>content</code>，不拆行。<b>行数 1 / 列数 3 是写死的常量</b>（<code>promote.rs:112</code>），不是量的。<b>分发时再重建回文件</b>（见 24 块）。</div>
         </div>
         <div class="sinst">
-          <div class="sh"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>分析表型存档 → 拒</div>
-          <div class="sd">本体在项目 <code>analytics.duckdb</code> 里，没有可读的相对路径；今天点了只拿到回执，不进 job。见 <a href="26-scope-boundaries.html">26 块</a>。</div>
+          <div class="sh"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>二进制 / 无扩展名 → 拒（有回执）</div>
+          <div class="sd">不在两张白名单里的文件：宿主<b>在建库之前</b>就拦下，回执里点名扩展名并给两条出路（另存 csv、或走分发 / 共享目录）。<b>这类行在菜单上不置灰</b>——能点，点了才知道不收。</div>
+        </div>
+        <div class="sinst">
+          <div class="sh"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>分析表型存档 → 拒（菜单已灰）</div>
+          <div class="sd">本体在项目 <code>analytics.duckdb</code> 里，没有可读的相对路径。回执「随 M8 后续批次接入」存在，但<b>用户触发不到</b>——<code>can_open</code> 先把它挡在菜单外。见 <a href="26-scope-boundaries.html">26 块</a>。</div>
         </div>
       </div>
-      <p class="hang">三个分支的判定都在宿主那一侧做（扩展名白名单 + <code>payload_rel_path</code> 是否为空），<b>面板上不给用户选形态</b>——升级没有「按什么升」的开关。</p>
+      <p class="hang">四个分支全在宿主那一侧判（扩展名白名单 + <code>payload_rel_path</code> 是否为空），<b>面板上不给用户选形态</b>——升级没有「按什么升」的开关。</p>
     </div>
   </section>
 
@@ -92,12 +104,15 @@
             <span class="fl">版本</span>
             <span class="fw"><input class="inp ro" value="作为全局侧 v1；再次升级接续全局版本链" readonly></span>
           </div>
-          <div class="fhint">同类冲突（全局已有同名表或登记）不在这张框里处理——照旧交给<a href="17-dialog-conflict.html">冲突三选一</a>。</div>
-          <div class="locknote"><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg>全局侧只读：升级进来之后，任何项目都不能直接改它的内容，只能「复制到本项目」再改。</div>
+          <p style="font-size:10.5px;color:var(--muted);line-height:1.6;margin:8px 0 0">同类冲突（全局已有同名表或登记）不在这张框里处理——照旧交给<a href="17-dialog-conflict.html">冲突三选一</a>。</p>
+          <div class="locknote" style="margin-top:8px"><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg>全局侧只读：升级进来之后，任何项目都不能直接改它的内容，只能「复制到本项目」再改。</div>
         </div>
         <div class="dlg-foot"><span>升级不改项目侧那份本体</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">升级到全局</button></div>
       </div>
-      <p class="hang"><b>为什么把它归到「方案」而不是「落差」</b>：§13.3 只写了「表名默认取显示名，<b>冲突时</b>询问改名」，<b>并没有要求升级前先弹一张确认框</b>——那是本轮提的加法。实现选了「不确认、撞名才问」，与规格并不矛盾，只是能让用户在入队前先看到「形态 / 目标实例 / 版本」这三件会变的事。<b>要不要加，得先定「升级前能不能改名」</b>：不改名，就只能接受改名入口出现在冲突处置里。</p>
+      <p class="hang">
+        <b>为什么把它归到「方案」而不是「落差」</b>：§13.3 只写了「表名默认取显示名，<b>冲突时</b>询问改名」，<b>并没有要求升级前先弹一张确认框</b>——那是本轮提的加法。实现选了「不确认、撞名才问」，与规格并不矛盾，只是能让用户在入队前先看到「形态 / 目标实例 / 版本」这三件会变的事。<b>要不要加，得先定「升级前能不能改名」</b>：不改名，就只能接受改名入口出现在冲突处置里。
+        <br>框里那句「全局侧只读」有实现支撑：全局登记行 <code>readonly = 1</code>（见 D 段）。
+      </p>
     </div>
   </section>
 
@@ -114,8 +129,59 @@
           <div class="row"><svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg><span class="nm">orders_q3</span><span class="ver">v1</span><span class="scope-badge">全局</span><span class="sb b-info"><span class="d"></span>分析表</span></div>
         </div>
       </div>
-      <p class="hang">两行的版本号各记各的：全局侧从 v1 起（或被覆盖时接续旧链），项目侧仍是原来的 v3。<b>不要按名字把两行当成同一条记录的两种展示</b>——它们没有联动。</p>
+      <p class="hang">
+        两行的版本号各记各的：全局侧从 v1 起（或被覆盖时数字接续）。<b>不要按名字把两行当成同一条记录的两种展示</b>——它们没有联动，也没有「谁升过来的」这条线：<code>register_global</code> 落的是 <code>promoted_from = NULL</code>，只有 <code>source_path</code>（项目侧的绝对路径，换个项目/机器就没意义）。<code>register.rs:229-248</code>
+      </p>
+      <p class="hang" style="margin-top:8px">
+        全局行还有三处与项目行不同的落值：<code>kind = 'analysis'</code>（<b>一律按分析表登记</b>，不继承项目侧的 file / analysis 档）、<code>readonly = 1</code>（全局侧只读是<b>登记行自己带的</b>，不靠界面约定）、<code>payload_mode = 'copy'</code>。
+      </p>
     </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">E</span>冲突与覆盖：三态同框、覆盖换 id</div>
+    <div class="canvas pad" style="background:var(--sidebar);padding:16px">
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;font-size:11px">
+
+        <div style="width:420px;flex:none;border:1px solid var(--sidebar-border);border-radius:8px;padding:10px;background:var(--bg)">
+          <div style="font-weight:700;margin-bottom:6px">冲突检测是「先登记、再查表」双查</div>
+          <div style="color:var(--muted);line-height:1.9">
+            ① 全局登记行同名（<code>name + scope='global' + deleted_at IS NULL</code>，取 <code>MAX(version)</code>）<br>
+            ② 全局 DuckDB 里同名表在不在（<code>table_exists</code>）<br>
+            三种组合（表在登记不在 / 登记在表不在 / 都在）<b>都返回同一个 <code>Conflict { name }</code></b>——注释里分了「脏状态」与正常冲突，但冲突框里看不出差别，用户看到的都是同一句「已有同名」。
+          </div>
+        </div>
+
+        <div style="width:420px;flex:none;border:1px solid var(--sidebar-border);border-radius:8px;padding:10px;background:var(--bg)">
+          <div style="font-weight:700;margin-bottom:6px">「覆盖」= 删表 + 软删旧登记 + 新建一条</div>
+          <div style="color:var(--muted);line-height:1.9">
+            <code>drop_global_table</code> → <code>UPDATE … SET deleted_at = ?</code>（旧登记<b>软删</b>，不硬删）→ 再走一遍 <code>promote</code><br>
+            新版本号 = <code>MAX(version) + 1</code>，而这条查询<b>不带 <code>deleted_at IS NULL</code></b>，所以软删行的旧版本号也算进去 → 数字接续得上
+          </div>
+        </div>
+
+        <div style="width:420px;flex:none;border:1px solid var(--sidebar-border);border-radius:8px;padding:10px;background:var(--bg)">
+          <div style="font-weight:700;margin-bottom:6px">但版本链只在快照表里「数字接续」</div>
+          <div style="color:var(--muted);line-height:1.9">
+            每次升级都新生成 <code>arg_&lt;uuid&gt;</code>，版本快照挂在<b>各自的 <code>resource_id</code></b> 下<br>
+            → 「版本历史」按 <code>resource_id</code> 查：新行只看得到自己那条 v2，看不到被软删的 v1（那是另一个 id）<br>
+            → 界面上「一条记录挂多版本」并不成立，只有版本号那串数字是连着的
+          </div>
+        </div>
+
+        <div style="width:420px;flex:none;border:1px solid var(--sidebar-border);border-radius:8px;padding:10px;background:var(--bg)">
+          <div style="font-weight:700;margin-bottom:6px">回执：两条</div>
+          <div style="color:var(--muted);line-height:1.9">
+            入队那一刻「正在升级到全局…」；覆盖分支「正在覆盖升级到全局…」（<code>panels/resources.rs:214</code>）<br>
+            完成后「已升级「X」v{n} 到全局实例（跨项目可分发）」——<b>覆盖与首次升级共用这一句</b>，回执里不说是覆盖还是新建
+          </div>
+        </div>
+
+      </div>
+    </div>
+    <p class="hang">
+      <b>一句话的落差</b>：设计稿 §13.2 说全局实例「表 + 版本信息进全局 DuckDB」，实现里版本信息进的是<b>全局 SQLite 的登记表与快照表</b>，DuckDB 只放表本体。这句话没写错但容易误读，已在设计稿里改准。
+    </p>
   </section>
 
 </main>
@@ -124,7 +190,7 @@
   <div class="canvas pad">
     <p class="hang" style="margin-top:0">
       本块样式：<code>.dlg</code> / <code>.dlg-head</code>（<code>.sub2</code> / <code>.x</code>）/ <code>.dlg-body</code> / <code>.dlg-foot</code> / <code>.dlg-scope</code>（544px，本页新增）/ <code>.srcbar</code>（<code>.mono</code> / <code>.tagn</code>）/ <code>.fgrid</code> / <code>.inp</code> / <code>.inp.ro</code> / <code>.fhint</code> / <code>.locknote</code> / <code>.seq</code> + <code>.snode</code> / <code>.sarrow</code> / <code>.sinst</code> / <code>.scope-badge</code> / <code>.row</code>。<br>
-      落地代码：<code>crates/analytics_resource/src/resource_host/detail_actions.rs::request_promote_to_global</code>（入口与形态判定）/ <code>src/global/promote.rs::promote</code>（双查冲突 + CREATE TABLE AS）/ <code>::promote_overwrite</code>（覆盖分支）/ <code>src/dialogs/conflict.rs</code>（撞名才开的那张框）/ <code>src/resource_view/list_delegate/menu.rs</code>（右键项与多选置灰）。
+      落地代码：<code>crates/analytics_resource/src/resource_host/detail_actions.rs::request_promote_to_global</code>（入口与形态判定）/ <code>src/resource_host/mod.rs::is_data_file_ext</code>、<code>::is_text_script_ext</code>（两张白名单）/ <code>src/global/promote.rs::promote</code>（双查冲突 + CREATE TABLE AS）/ <code>::promote_overwrite</code>（覆盖分支）/ <code>src/global/register.rs::register_global</code>（登记 + 版本快照）/ <code>src/jobs/global.rs::run_promote</code>（冲突上报）/ <code>src/dialogs/conflict.rs</code>（撞名才开的那张框）/ <code>src/resource_view/list_delegate/menu.rs</code>（右键项与置灰）。
     </p>
   </div>
 </div>
