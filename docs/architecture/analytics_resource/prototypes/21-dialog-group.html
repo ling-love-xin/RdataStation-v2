@@ -11,13 +11,14 @@
 <header class="phead">
   <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>21 · 分组名对话框</div>
   <div class="prow">
-    <h1 class="p-title">新建 / 重命名分组对话框<span class="p-sec">§2.4 / §3.2</span></h1>
+    <h1 class="p-title">新建 / 重命名 / 删除分组<span class="p-sec">§2.4 / §3.2</span></h1>
     <span class="grow"></span>
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    宽 <code>384px</code>（24rem）· 分组是<b>单层</b>的：没有子分组。一个输入 + 一行说明 + 主按钮（新建叫「创建」、重命名叫「保存」）。
-    <b>「移动到分组」不走对话框</b>——行右键子菜单一次点击完成，多一级对话框反而多两步（§3.2）。
+    <b>前两个 384px</b>（<code>ui::NAME_DIALOG_WIDTH = 24rem</code>）/ <b>删除确认 448px</b>（组件 <code>Dialog</code> 的默认宽，<code>vendor/dialog/dialog.rs:223</code>）。
+    新建与重命名<b>共用一个形状</b>：单输入 + 一行提示 + 取消 / 主按钮（「创建」或「保存」），<b>标题只有一行、没有副标题</b>。
+    删除走组件 <code>AlertDialog</code>，<b>不是</b>自绘的小对话框。分组是<b>单层</b>的（没有子分组），「移动到分组」不进对话框。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="20-dialog-rename.html">← 上一块：重命名 / 别名</a><a href="22-dialog-pick.html">下一块：草稿选择 →</a></nav>
 </header>
@@ -25,72 +26,136 @@
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>新建分组<span class="desc">入口：分组区「＋ 新建分组」/ 分组头右键 / 移动菜单末项 / 详情「移动…」末项</span></div>
+    <div class="variant-h"><span class="no">A</span>新建分组<span class="desc"><code>GroupNameKind::Create</code> · 三处入口：分组头右键「新建分组…」/ 行右键「移动到分组 ›」末项 / 详情「移动…」末项</span></div>
     <div class="canvas pad" style="background:var(--overlay);padding:20px">
       <div class="dlg dlg-name proto-on">
-        <div class="dlg-head">新建分组<span class="sub2">项目「营销分析」</span><button class="x">✕</button></div>
+        <div class="dlg-head">新建分组<button class="x">✕</button></div>
         <div class="dlg-body">
           <input class="inp" placeholder="分组名" value="">
           <div class="namehint">分组是单层的：没有子分组，也不影响存档本体</div>
         </div>
-        <div class="dlg-foot"><span></span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">创建</button></div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">创建</button></div>
       </div>
     </div>
+    <p class="hang">
+      <b>三处推翻旧稿</b><br>
+      ① <b>没有副标题</b>「项目「营销分析」」——<code>dialog.title(title)</code> 只吃一个标题（<code>dialogs/group.rs:107-108</code>）。<br>
+      ② <b>没有「分组区「＋ 新建分组」」这一处入口</b>——全仓只有三处调 <code>request_create_group</code>：分组头右键（<code>group_header.rs:147-149</code>）、行右键「移动到分组 ›」末项（<code>list_delegate/menu.rs:241-244</code>）、详情「移动…」末项（<code>detail_view/body_sections.rs:237-239</code>）。面板上并没有那个「＋」按钮。<br>
+      ③ 输入框占位符「分组名」是<b>宿主建成 <code>InputState</code> 时设的</b>（<code>group_actions.rs:17-19</code>）；对话框里算出的 <code>placeholder</code> 常量被 <code>let _ = placeholder;</code> 丢掉（<code>group.rs:67</code>）——当前视觉不受影响，但以后想把占位符挪进对话框会踩空。
+    </p>
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">B</span>重命名分组<span class="desc">预填当前名字；主按钮文案是「保存」</span></div>
+    <div class="variant-h"><span class="no">B</span>重命名分组<span class="desc"><code>GroupNameKind::Rename{id}</code> · 预填当前名；主按钮文案换成「保存」</span></div>
     <div class="canvas pad" style="background:var(--overlay);padding:20px">
       <div class="dlg dlg-name proto-on">
-        <div class="dlg-head">重命名分组<span class="sub2">3 个存档</span><button class="x">✕</button></div>
+        <div class="dlg-head">重命名分组<button class="x">✕</button></div>
         <div class="dlg-body">
-          <input class="inp" value="日报">
+          <input class="inp" value="日报" placeholder="分组名">
           <div class="namehint">只改显示名：组里的存档不动</div>
         </div>
-        <div class="dlg-foot"><span></span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">保存</button></div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">保存</button></div>
       </div>
     </div>
+    <p class="hang">
+      旧稿 B 的副标题「3 个存档」同样不存在。<br>
+      另外这里<b>没有 <code>Unchanged</code> 那一档</b>（与 20 页的存档重命名不同）：名字没改也能点「保存」，后端 <code>rename_folder</code> 对「改成当前名」是<b>幂等返回原行</b>（<code>store/folder.rs:107-109</code>），于是回执照样报「已把分组改名为「日报」」——其实什么都没发生。
+    </p>
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">C</span>空名被挡<span class="desc">只有这一条闸门（分组名不能为空），说明转 warning 色、主按钮置灰</span></div>
+    <div class="variant-h"><span class="no">C</span>空名被挡<span class="desc">唯一一道闸门；说明转 warning 色、主按钮置灰</span></div>
     <div class="canvas pad" style="background:var(--overlay);padding:20px">
       <div class="dlg dlg-name proto-on">
-        <div class="dlg-head">新建分组<span class="sub2">项目「营销分析」</span><button class="x">✕</button></div>
+        <div class="dlg-head">新建分组<button class="x">✕</button></div>
         <div class="dlg-body">
           <input class="inp" value="  ">
           <div class="namehint err">分组名不能为空</div>
         </div>
-        <div class="dlg-foot"><span></span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p" style="opacity:.4">创建</button></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="variant">
-    <div class="variant-h"><span class="no">D</span>删除分组（二次确认）<span class="desc">分组头右键「删除分组…」；破坏性动作单独一支，不与重命名混</span></div>
-    <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="dlg dlg-name proto-on">
-        <div class="dlg-head"><svg class="ico-sm" style="color:var(--danger)"><use href="#i-warn" xlink:href="#i-warn"/></svg>删除分组<span class="sub2">「日报」· 3 个存档</span><button class="x">✕</button></div>
-        <div class="dlg-body">
-          <div class="namehint" style="color:var(--fg)">
-            删除分组「日报」？<br>
-            <span style="color:var(--muted)">组里的存档不会被删，它们会回到「未分组」。</span>
-          </div>
-        </div>
-        <div class="dlg-foot"><span></span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-d">删除</button></div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p" style="opacity:.4">创建</button></div>
       </div>
     </div>
     <p class="hang">
-      实现口径（<code>dialogs/group.rs</code> + <code>resource_host/group_actions.rs</code>）：新建与重命名共用一个对话框，形态由
-      <code>GroupNameKind::{Create, Rename{id}}</code> 决定（标题 / 主按钮文案 / 提交事件都不一样，重命名要带 id）；
-      <b>删除走 <code>request_delete_group</code> 的 alert</b>，文案就是上面这两句——<b>不删存档</b>是这句话里最要紧的一半。
+      闸门就一条：<code>value.trim().is_empty()</code> → 「分组名不能为空」（<code>group.rs:64-66</code>），与后端 <code>create_folder</code> 的第一句拒绝同文（<code>store/folder.rs:43-45</code>）。<br>
+      <b>同款键盘缺口</b>（与 20 页一样）：<code>on_ok</code> 恒返回 <code>true</code>（<code>group.rs:137-140</code>）→ 空名时按 <code>Enter</code> 仍关窗：分组没建成，也没有任何提示。按钮那条被 <code>.disabled</code> 挡住了，<code>Enter</code> 没挡。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">D</span>删除分组 · 组件 <code>AlertDialog</code><span class="desc">448px · 无 ✕ · 无图标 · 标题是问句 · 取消按钮显示英文「Cancel」</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg proto-on" style="width:448px">
+        <div style="padding:20px 20px 0;display:flex;flex-direction:column;gap:4px">
+          <div style="font-size:14px;font-weight:600;color:var(--fg)">删除分组「日报」？</div>
+          <div style="font-size:12px;color:var(--muted);line-height:1.6">组里的存档不会被删，它们会回到「未分组」。</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:16px 20px 20px">
+          <span class="grow"></span>
+          <button class="btn-s">Cancel</button>
+          <button style="height:26px;padding:0 12px;border:none;border-radius:6px;background:rgba(220,38,38,.2);color:var(--danger);font-size:11.5px;font-family:inherit">删除</button>
+        </div>
+      </div>
+    </div>
+    <p class="hang">
+      <b>旧稿 D 整块重画</b>。旧稿按 <code>384px</code> 的 <code>.dlg-name</code> 画了一个自绘对话框：带 <code>#i-warn</code> 图标、标题「删除分组」+ 副标题「「日报」· 3 个存档」、两行正文、<code>✕</code>、<code>.btn-d</code> 描边的「删除」。实际是组件 <code>AlertDialog</code>（<code>group_actions.rs:189-216</code>）：<br>
+      ① <code>AlertDialog::new</code> 自带 <code>.close_button(false)</code>（<code>vendor/alert_dialog.rs:80-84</code>）→ <b>没有 ✕</b>；本处没调 <code>.icon(…)</code> → <b>没有图标</b>。<br>
+      ② 宽度是 <code>Dialog</code> 的默认 <b>448px</b>（<code>vendor/dialog/dialog.rs:223</code>），不是 384。<br>
+      ③ 标题是<b>问句</b>「删除分组「X」？」，正文只有一句描述「组里的存档不会被删，它们会回到「未分组」。」（<code>alert.title(…)</code> + <code>alert.description(…)</code>）。<br>
+      ④ 确认按钮 <code>ok_variant(Danger)</code> → <b>淡红底实心</b>（<code>theme/schema.rs:937-947</code> 的 <code>button_danger = danger.mix_oklab(transparent, 0.2)</code>），不是 <code>.btn-d</code> 的描边。
+    </p>
+    <p class="hang" style="margin-top:8px">
+      <b>取消按钮是英文</b>：只设了 <code>ok_text("删除")</code> 与 <code>show_cancel(true)</code>，<b>没设 <code>cancel_text</code></b>（<code>group_actions.rs:198-203</code>）→ 组件库按 <code>rust_i18n</code> 的默认文案给「Cancel」（本仓从未把组件库 locale 设为中文，与 15 / 16 页同一条欠债）。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">E</span>提交之后：四条回执，各自说清做了什么</div>
+    <div class="canvas pad" style="background:var(--sidebar);padding:16px">
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;font-size:11px">
+
+        <div style="width:320px;border:1px solid var(--sidebar-border);border-radius:8px;padding:10px;background:var(--bg)">
+          <div style="font-weight:700;margin-bottom:6px">立即回执（提交那一刻）</div>
+          <div style="color:var(--muted);line-height:1.9">
+            新建「资产库：正在新建分组「X」…」<br>
+            重命名「资产库：正在重命名分组为「X」…」<br>
+            删除「资产库：正在删除分组…」<br>
+            移动「资产库：正在移动…」
+          </div>
+        </div>
+
+        <div style="width:320px;border:1px solid var(--sidebar-border);border-radius:8px;padding:10px;background:var(--bg)">
+          <div style="font-weight:700;margin-bottom:6px">完成回执（工作线程回来）</div>
+          <div style="color:var(--muted);line-height:1.9">
+            新建「已新建分组「X」」<br>
+            重命名「已把分组改名为「X」」<br>
+            删除「分组已删除（里面没有存档）」/「分组已删除，N 条存档回到未分组」<br>
+            移动「已移动 N 条存档到分组」/「已把 N 条存档移回未分组」
+          </div>
+        </div>
+
+        <div style="width:320px;border:1px solid var(--sidebar-border);border-radius:8px;padding:10px;background:var(--bg)">
+          <div style="font-weight:700;margin-bottom:6px">重名只在后端拦</div>
+          <div style="color:var(--muted);line-height:1.9">
+            对话框<b>不查重名</b>；<code>create_folder</code> / <code>rename_folder</code> 才用 <code>folder_name_taken</code>（同 <code>scope</code> 且未删）比一次（<code>store/folder.rs:52-54</code>、<code>:110-112</code>）<br>
+            撞了以后回执是「资产库：新建分组：已经有同名分组「X」」
+          </div>
+        </div>
+
+      </div>
+    </div>
+    <p class="hang">
+      与 20 页对照着看更有意思：<b>存档改名不查重名</b>（两条存档可以同名），<b>分组名查</b>（要唯一）——两个「改显示名」的对话框长得一样，后端的口径却不同。
+      移动那条还有一处取舍写在注释里：逐条移、中途失败不预回滚，错误里带「（已移动 N 条）」（<code>jobs/tag/group.rs:63-82</code>）。
     </p>
   </section>
 
   <div class="canvas pad">
+    <p class="hang" style="margin:0 0 8px">
+      链路：<code>request_create_group</code> / <code>request_rename_group</code>（<code>resource_host/group_actions.rs:5-81</code>）→ <code>enqueue_group_action</code> → <code>jobs/tag/group.rs</code> 的 <code>run_group_action</code> → <code>OpOutcome::GroupDone{note}</code>；<code>request_delete_group</code>（<code>:174-217</code>）走 <code>open_alert_dialog</code>。
+      三者前置一致：无项目根 → 「无法新建分组」/「无法重命名分组」/「无法删除分组」；只读 → 「资产库：项目为只读模式，不能改分组」。
+    </p>
     <p class="hang" style="margin:0">
-      本块样式：<code>.dlg.dlg-name</code>（384px）/ <code>.namehint</code> / <code>.btn-d</code>（危险动作）。
-      落地代码：<code>crates/analytics_resource/src/dialogs/group.rs</code>、<code>src/resource_host/group_actions.rs</code>。
+      本块样式：<code>.dlg.dlg-name</code>（384px）/ <code>.dlg</code> + 内联 <code>448px</code>（删除确认）/ <code>.inp</code> / <code>.namehint</code>（<code>.err</code> = warning）。
     </p>
   </div>
 
