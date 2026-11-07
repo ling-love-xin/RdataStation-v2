@@ -11,14 +11,14 @@
 <header class="phead">
   <div class="crumb"><a href="index.html">资产库 / 分析存档（M6）原型</a><span>/</span>20 · 重命名 / 别名对话框</div>
   <div class="prow">
-    <h1 class="p-title">重命名 / 编辑别名对话框<span class="p-sec">§3.1 / §3.2</span></h1>
+    <h1 class="p-title">重命名 / 编辑别名<span class="p-sec">§3.1 / §3.2</span></h1>
     <span class="grow"></span>
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    宽 <code>384px</code>（24rem）· <b>两个字段共用一个形状</b>：一个输入 + 一行说明 + 保存 / 取消。<b>只改显示名与别名，文件不动</b>——
-    <code>resources/</code> 下的文件名与路径不在这条路上（要改文件名得先取回再归档，§1 原则 2）。
-    三处入口同一条链路：行右键「重命名…」、<code>F2</code>、详情头部点名字；别名只在详情头部点别名。
+    宽 <code>384px</code>（<code>ui::NAME_DIALOG_WIDTH = 24rem</code>，按 <code>font_size × 24</code> 算）· <b>两个字段共用一个形状</b>：<b>单输入 + 一行提示 + 取消 / 保存</b>。
+    标题只有「重命名」或「编辑别名」——<b>没有副标题</b>，footer <b>只有两枚按钮</b>。
+    只改 <code>name</code> 一列或 <code>alias</code> 一列：不涨版本、不写版本快照、不动 <code>resources/</code> 下的文件名与路径。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="19-empty-states.html">← 上一块：空态与异常</a><a href="21-dialog-group.html">下一块：分组名对话框 →</a></nav>
 </header>
@@ -26,68 +26,129 @@
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>显示名<span class="desc">预填当前名；保存可用（值与当前不同）</span></div>
+    <div class="variant-h"><span class="no">A</span>显示名 · 可提交<span class="desc">预填当前名；值与当前不同 → <code>Ready</code>，保存可用</span></div>
     <div class="canvas pad" style="background:var(--overlay);padding:20px">
       <div class="dlg dlg-name proto-on">
-        <div class="dlg-head">重命名<span class="sub2">dau_report.sql · File 型</span><button class="x">✕</button></div>
+        <div class="dlg-head">重命名<button class="x">✕</button></div>
         <div class="dlg-body">
-          <input class="inp" value="dau_report.sql">
-          <div class="namehint">只改显示名：<code>resources/</code> 下的文件名与路径不变</div>
+          <input class="inp" value="dau_report.sql" placeholder="显示名">
+          <div class="namehint">只改显示名：resources/ 下的文件名与路径不变</div>
         </div>
-        <div class="dlg-foot"><span>项目「营销分析」</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">保存</button></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="variant">
-    <div class="variant-h"><span class="no">B</span>别名（留空 = 清除）<span class="desc">别名是给人看的第二个叫法，空是合法输入</span></div>
-    <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="dlg dlg-name proto-on">
-        <div class="dlg-head">编辑别名<span class="sub2">dau_report.sql</span><button class="x">✕</button></div>
-        <div class="dlg-body">
-          <input class="inp" placeholder="别名（留空 = 清除）" value="">
-          <div class="namehint">别名只是另一个叫法：不影响显示名、文件名与路径</div>
-        </div>
-        <div class="dlg-foot"><span>留空保存 = 清除该别名</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">保存</button></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="variant">
-    <div class="variant-h"><span class="no">C</span>两处闸门<span class="desc">左：空名被挡（warning 色说明）；右：值没变（只提示、不算错）</span></div>
-    <div class="canvas pad" style="background:var(--overlay);padding:20px">
-      <div class="grid2">
-        <div class="dlg dlg-name proto-on">
-          <div class="dlg-head">重命名<span class="sub2">空名</span><button class="x">✕</button></div>
-          <div class="dlg-body">
-            <input class="inp" value="   ">
-            <div class="namehint err">显示名不能为空</div>
-          </div>
-          <div class="dlg-foot"><span></span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p" style="opacity:.4">保存</button></div>
-        </div>
-
-        <div class="dlg dlg-name proto-on">
-          <div class="dlg-head">重命名<span class="sub2">值没变</span><button class="x">✕</button></div>
-          <div class="dlg-body">
-            <input class="inp" value="dau_report.sql">
-            <div class="namehint">值没变</div>
-          </div>
-          <div class="dlg-foot"><span></span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p" style="opacity:.4">保存</button></div>
-        </div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">保存</button></div>
       </div>
     </div>
     <p class="hang">
-      实现口径（<code>dialogs/rename.rs</code>）：闸门是纯函数 <code>rename_gate</code>（<b>带单测</b>）——显示名走 <code>name_hint</code>
-      查空名，别名不走（空 = 清除是合法动作）；<b>Unchanged 只让保存置灰、不显示错误色</b>。说明文字每帧从输入值重算，改回去提示自然消失。
-      实现只在保存按钮与 <code>Enter</code>（on_ok）两处过闸，没有第三处重复校验。宽度常量：
-      <code>ui::NAME_DIALOG_WIDTH = 24rem</code>。
+      <b>三处推翻旧稿</b>：① 头部没有副标题「dau_report.sql · File 型」——<code>dialog.title(field.title())</code> 只吃一个标题（<code>dialogs/rename.rs:166</code>），类型与当前名都不在标题里；② footer 左侧没有「项目「营销分析」」那段文字——<code>DialogFooter</code> 里只有取消（Secondary）与保存（Primary）两枚 <code>small</code>（<code>:186-211</code>）；③ 输入框只有 placeholder「显示名」，没有 label。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">B</span>别名 · 留空就是清除<span class="desc">空是合法输入，所以占位符要把「留空 = 清除」说清</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div class="dlg dlg-name proto-on">
+        <div class="dlg-head">编辑别名<button class="x">✕</button></div>
+        <div class="dlg-body">
+          <input class="inp" value="" placeholder="别名（留空 = 清除）">
+          <div class="namehint">别名只是另一个叫法：不影响显示名、文件名与路径</div>
+        </div>
+        <div class="dlg-foot"><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">保存</button></div>
+      </div>
+    </div>
+    <p class="hang">
+      别名一档<b>不走空名校验</b>（<code>rename_gate</code> 的 <code>Alias</code> 分支，<code>rename.rs:102-108</code>）：当前为空、输入仍为空 → <code>Unchanged</code>；当前有值、输入清空 → <code>Ready</code>（这就是「清除别名」那条路，存 NULL 不存空串）。旧稿 B 的 footer 文字「留空保存 = 清除该别名」<b>不存在</b>，这条信息只在占位符里。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">C</span>两道闸门<span class="desc">左：空名 → <code>Blocked</code>（warning 色）；右：值没变 → <code>Unchanged</code>（只置灰，不算错）</span></div>
+    <div class="canvas pad" style="background:var(--overlay);padding:20px">
+      <div style="display:flex;gap:32px;flex-wrap:wrap;align-items:flex-start;justify-content:center">
+
+        <div>
+          <div class="dlg dlg-name proto-on">
+            <div class="dlg-head">重命名<button class="x">✕</button></div>
+            <div class="dlg-body">
+              <input class="inp" value="   ">
+              <div class="namehint err">显示名不能为空</div>
+            </div>
+            <div class="dlg-foot"><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p" style="opacity:.4">保存</button></div>
+          </div>
+          <p style="margin:6px 0 0;font-size:11px;color:var(--muted)">C1 空名（三格空格也算空）</p>
+        </div>
+
+        <div>
+          <div class="dlg dlg-name proto-on">
+            <div class="dlg-head">重命名<button class="x">✕</button></div>
+            <div class="dlg-body">
+              <input class="inp" value="dau_report.sql">
+              <div class="namehint">值没变</div>
+            </div>
+            <div class="dlg-foot"><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p" style="opacity:.4">保存</button></div>
+          </div>
+          <p style="margin:6px 0 0;font-size:11px;color:var(--muted)">C2 值没变（首尾空格不算改动）</p>
+        </div>
+
+      </div>
+    </div>
+    <p class="hang">
+      闸门是纯函数 <code>rename_gate(field, current, value)</code>（<code>rename.rs:89-110</code>，<code>tests</code> 里两条用例覆盖「空名挡下 / 值没变不提交 / 首尾空格不算改动 / 别名空是合法」）。
+      提示行每帧从输入值重算（<code>:129-133</code>）：<code>Ready</code> 给字段说明、<code>Unchanged</code> 给「值没变」（<b>灰色</b>，不算错）、<code>Blocked</code> 给 <code>name_hint</code> 的「显示名不能为空」（<b>warning 色</b>）。
+    </p>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">D</span>一条完整链路：入口 → 前置拒绝 → 提交 → 两条回执</div>
+    <div class="canvas pad" style="background:var(--sidebar);padding:16px">
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;font-size:11px">
+
+        <div style="width:300px;border:1px solid var(--sidebar-border);border-radius:8px;padding:10px;background:var(--bg)">
+          <div style="font-weight:700;margin-bottom:6px">四处入口 · 四处判据</div>
+          <div style="color:var(--muted);line-height:1.9">
+            行右键「重命名…」：<code>can_rename</code> && <code>!is_global</code><br>
+            <code>F2</code>：<code>can_rename</code> = 单选 && <code>!read_only</code>（<b>不看全局</b>）<br>
+            详情头部点名字：<code>!read_only && status != Missing</code><br>
+            详情头部点别名：<code>!read_only</code>（不看 status）
+          </div>
+          <div style="margin-top:6px;color:var(--danger)">↑ 四套判据：全局实例上右键置灰、<code>F2</code> 却能按下，按下后弹出「资产库：无法重命名：还没有打开项目」（<code>helpers.rs:17-25</code>）；缺失行右键能改、详情头部名字点不动</div>
+        </div>
+
+        <div style="width:300px;border:1px solid var(--sidebar-border);border-radius:8px;padding:10px;background:var(--bg)">
+          <div style="font-weight:700;margin-bottom:6px">前置拒绝（对话框不开）</div>
+          <div style="color:var(--muted);line-height:1.9">
+            无项目根 → 通知标题「无法重命名」/「无法编辑别名」<br>
+            只读项目 → 通知条「资产库：项目为只读模式，不能改显示名」<br>
+            只读项目（别名）→ 通知条「资产库：项目为只读模式，不能改别名」
+          </div>
+          <div style="margin-top:6px;color:var(--muted)">初值来源不同：改名取<b>面板快照</b> <code>row_name</code>，别名取<b>详情</b> <code>row_alias</code>；取不到就空着</div>
+        </div>
+
+        <div style="width:300px;border:1px solid var(--sidebar-border);border-radius:8px;padding:10px;background:var(--bg)">
+          <div style="font-weight:700;margin-bottom:6px">提交后：先「正在…」再「已…」</div>
+          <div style="color:var(--muted);line-height:1.9">
+            改名立即回执「资产库：正在把「旧」改名为「新」…」<br>
+            入队完成回执「资产库：已改名为「新」」<br>
+            别名立即回执「资产库：正在更新别名…」<br>
+            完成回执「资产库：已把「X」的别名设为「Y」」/「已清除「X」的别名」
+          </div>
+        </div>
+
+      </div>
+    </div>
+    <p class="hang">
+      <b>两条真欠债</b>：① 判据四套（上左卡片红字）——右键比 <code>F2</code> 多一条 <code>!is_global</code>、详情头部名字又多一条 <code>status != Missing</code>；同一行在同一屏上可能一处可点一处不可点，全局实例下 <code>F2</code> 更会走到「还没有打开项目」的错误话术；
+      ② <b>Enter 在闸门不过时仍会关窗</b>：<code>on_ok</code> 恒返回 <code>true</code>（<code>rename.rs:212-215</code>），而 <code>true</code> 的语义就是关窗（vendor <code>dialog.rs:91</code>）——按钮那条被 <code>.disabled</code> 挡住了，键盘这条路没挡：空名时按 Enter，对话框关了、名字没改、也没有任何提示。
+    </p>
+    <p class="hang" style="margin-top:8px">
+      <b>一条容易误判的事实</b>：改名<b>不查重名</b>。后端只有 <code>UPDATE analytics_resources SET name = ? WHERE id = ? AND deleted_at IS NULL</code>（<code>store/resource/write.rs:75-84</code>），<code>affected = 0</code> 才报「资源不存在或已删除」——两条存档可以同名，界面上也不会提示。显示名不是唯一键，这条在 §3.2 里没写。
     </p>
   </section>
 
   <div class="canvas pad">
+    <p class="hang" style="margin:0 0 8px">
+      链路实现：<code>request_rename</code> / <code>request_edit_alias</code>（<code>resource_host/group_actions.rs:83-172</code>，前置拒绝、初值来源、入队 + <code>refresh_resources</code> + 立即回执都在这里）→ <code>resource_jobs::enqueue_rename</code> / <code>enqueue_set_alias</code> → <code>jobs/rename.rs</code> 的 <code>run_rename</code> / <code>run_set_alias</code>（失败 → <code>OpOutcome::Failed{action:"重命名" / "编辑别名"}</code>）→ 面板侧回执（<code>panels/resources.rs:642-644</code>）。
+    </p>
     <p class="hang" style="margin:0">
-      本块样式：<code>.dlg.dlg-name</code>（384px）/ <code>.inp</code> / <code>.namehint</code>（<code>.err</code> 变 warning）。
-      落地代码：<code>crates/analytics_resource/src/dialogs/rename.rs</code>（窗口用例见 <code>tests/dialog_window.rs</code>）。
+      本块样式：<code>.dlg.dlg-name</code> / <code>.inp</code> / <code>.namehint</code>（<code>.err</code> = warning）。窗口用例见 <code>tests/dialog_window.rs</code>（改名与别名各一组闸门断言）。
     </p>
   </div>
 
