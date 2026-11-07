@@ -111,13 +111,18 @@ gpui-kit = { version = "0.9.0", features = ["gpui-fast"] }
 # 内核走**动态链接**（不再开 `bundled`）：编 DuckDB 的 C++ 内核单次要数分钟，
 # 且并发链接静态库会耗尽内存（全仓 `-j 2` 的由来）。库由 `tools/fetch-duckdb.sh`
 # 取到 `third_party/duckdb/<版本>/`，路径在 `.cargo/config.toml` 的 `[env]`。
-# **crate 版本与库版本必须成对升级**：`1.10505.0` ↔ DuckDB `v1.5.5`（映射规则：
-# 第二段十进制数 `10505` → `1.5.5`，见 `libduckdb-sys` 的 build script）。
+# **crate 版本与库版本必须成对升级**：`1.10506.1` ↔ DuckDB `v1.5.6`（映射规则：
+# 第二段十进制数 `10506` → `1.5.6`，见 `libduckdb-sys` 的 build script）。
+# 1.5 线内的 patch 升级（`1.10505.0` → `1.10506.1`，2026-11-08）：arrow 仍要 `^58`，
+# 不动 arrow、不动存储格式；库换 `third_party/duckdb/1.5.6/` 并同步 `.cargo/config.toml`。
 # `appender-arrow`（→ `vtab-arrow` → `vtab` + `num`）是**纯 crate 侧**特性（不动 C 内核、不动
 # 动态库）：给的是 `Appender::append_record_batch` 与 `Statement::query_arrow` —— 二次分析
 # 那条「结果集直灌 DuckDB」的路就靠它们（P2.5，§4.5.2）。duckdb-rs 依赖的 arrow 是 58，
 # 与本仓同一个大版本，批能直接递过去，不用转格式。
-duckdb = { version = "1.10505.0", features = ["appender-arrow"] }
+# **精确锁定**：duckdb 的版本号不是语义化兼容的（`1.10505` / `1.10506` / `1.20000`
+# 是三条不同的内核线），用 caret 约束会被解析到 `1.20000.1`（DuckDB 2.0，强制 arrow 60）。
+# 升 1.5 线内 patch 时改本行 + `.cargo/config.toml` 的 DUCKDB_LIB_DIR + `third_party/duckdb/` 三处成对。
+duckdb = { version = "=1.10506.1", features = ["appender-arrow"] }
 arrow = "58.4.0"
 bigdecimal = "0.4"
 num-traits = "0.2"
@@ -127,7 +132,7 @@ num-traits = "0.2"
 lsp-types = { version = "0.97.0", features = ["proposed"] }
 # 错误类型（gpui-base 的 provider trait 用 `anyhow::Result`）
 anyhow = "1.0"
-# 文本编码转码（editor 2c：磁盘字节 ↔ 内核 Unicode）；已在锁里（reqwest 传递依赖），无需新增编译
+# 文本编码转码（editor 2c：磁盘字节 ↔ 内核 Unicode）；已在锁里（其他依赖传递带入），无需新增编译
 encoding_rs = "0.8.41"
 rusqlite = { version = "0.40", features = ["bundled", "chrono", "serde_json"] }
 # 只用 MySQL / Postgres：关闭默认 feature 以移除 `any` 驱动。
@@ -286,7 +291,9 @@ fake = { version = "5.1.0", features = [
 # （extism 1.30 强绑定 wasmtime v43 且无 wasmi/wasm3 后端，单它就为发布二进制贡献约 20–40MB；
 # 门控细节见 crates/plugin/Cargo.toml 与 docs/architecture/plugin/README.md Q10）
 extism = "1.30.0"
-reqwest = { version = "0.12.28", features = ["json", "rustls-tls"] }
+# 曾在此声明 `reqwest = { version = "0.12.28", ... }`（2026-11-08 删除）：
+# 全仓 `use reqwest` 零命中、`Cargo.lock` 里也没有该包——rds-plugin 的 sidecar 通道早已改用
+# std 的 JSON-RPC 直连（见 crates/plugin/src/sidecar/mod.rs 模块头），声明是死条目。
 
 # ===== 构建脚本工具 =====
 # Windows 下把 assets/icons/icon.ico 嵌入 exe 资源（任务栏 / 窗口图标）

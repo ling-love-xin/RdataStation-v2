@@ -7,7 +7,7 @@
 #
 # 用法：
 #   tools/fetch-duckdb.sh                 # 取默认版本（与 Cargo.toml 的 duckdb 版本对齐）
-#   tools/fetch-duckdb.sh 1.5.5           # 显式给版本
+#   tools/fetch-duckdb.sh 1.5.6           # 显式给版本
 #   GH_PROXY= tools/fetch-duckdb.sh       # 不走镜像（能直连 GitHub 时）
 #
 # 平台：按当前系统选资产（Windows amd64 / Linux amd64 / macOS universal）。
@@ -17,7 +17,7 @@ set -euo pipefail
 # 在 UTF-8 语言环境下会把多字节字节吞进变量名，报 `ASSET: unbound variable` 这种莫名其妙的错；
 # Windows / Linux 的 bash 5.x 不受影响（CI 的 macOS 作业钤过这个坑，见 release-pipeline.md §7）。
 
-VERSION="${1:-1.5.5}"
+VERSION="${1:-1.5.6}"
 # 镜像前缀：本机实测 GitHub 直连不通，镜像可达；能直连时用 GH_PROXY= 关掉
 GH_PROXY="${GH_PROXY-https://ghproxy.net/}"
 

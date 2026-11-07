@@ -32,7 +32,7 @@ RUST_MIN_STACK = "268435456"
 #   - 目录相对本文件（`relative = true`）：开发机不需要设任何环境变量；
 #   - 库不在位时 `crates/engine/build.rs` 会给出一条可执行的提示；
 #   - 不开 `force`：换版本 / 换机器时可用自己的 DUCKDB_LIB_DIR 覆盖。
-DUCKDB_LIB_DIR = { value = "third_party/duckdb/1.5.5", relative = true }
+DUCKDB_LIB_DIR = { value = "third_party/duckdb/1.5.6", relative = true }
 
 # 运行时数据根（设计见 docs/architecture/runtime/data-paths.md）：
 # 发布版默认落在**可执行文件所在目录**（安装目录）；但开发时那是 `target/debug`，
