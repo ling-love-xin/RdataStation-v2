@@ -1255,7 +1255,8 @@ mod tests {
         let mut store = ResultStore::new();
         let document = DocumentId::new("doc-1");
 
-        // 首次执行：事实档存在且为 None（A2 尚未接线内存档构造路径）
+        // 首次执行：事实档槽位存在但内容为 None——这里主动传 None 模拟「无事实档」路径
+        // （内存档 / 表档的真实构造走 A2/B 批已交付的链，不在本测试覆盖面内）
         store.push(
             entry("doc-1", "select 1", 1),
             ResultPlacement::Replace,

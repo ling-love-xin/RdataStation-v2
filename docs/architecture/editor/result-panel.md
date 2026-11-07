@@ -310,7 +310,7 @@ blanco-ref / tusk-ref 等），拍板「可以并实现，要文档记录，补�
 | pending 变更合并 UPDATE 单事务 | blanco：批量变更集 → 一条 UPDATE 事务 | 同上 | backlog |
 | 撤销 / 重做（快照） | tusk `History<T>` 快照栈 | 同上 | ✅ 已交付：`EditHistory` 双栈（`changes.rs`，每格编辑一步、新编辑清空重做栈、随结果集作废）+ 接线（提交入栈、`Ctrl+Z`/`Ctrl+Shift+Z` 恢复上一步值写回变更集并重投影，store `histories` 槽与 `changes` 同序） |
 | 类型感知单元格编辑 | tusk：按列类型出编辑器/校验 | 同上 | ✅ 本轮交付**提交校验档**（`ee3077fa`）：数字列必须数字、布尔列限 `true/false/1/0/t/f/yes/no`、UUID 查 `8-4-4-4-12` 形状、日期查 `YYYY-MM-DD`+月日范围；非法拒绝提交（编辑态保留 + 红框 + 悬停错误文案），空 / `NULL` 放行（删值语义）；输入一变化即清错误。Select / Calendar 类型化编辑器（tusk 进一步）仍 backlog |
-| 列布局持久化（顺序/宽度/隐藏） | blanco `ColumnLayout` 落盘 + 重放 | 同上 | 阻塞：跨会话落盘依赖会话文件（`editor_session.rs` 正被状态栏合并线占用），同会话列宽保留已达成 |
+| 列布局持久化（顺序/宽度/隐藏） | blanco `ColumnLayout` 落盘 + 重放 | 同上 | **部分已交付（2026-11-08 核查更正）**：**列序已落盘**——`editor_session.rs` 的 `result_column_order` 编解码 + 宿主 `save_session_now`（`dispatch.rs:200-203`）；**列宽 / 隐藏仍只内存**（`grid/delegate.rs:325`），但**阻塞已解除**（`editor_session.rs` 已稳定，加字段即可复用同通道），同会话列宽保留已达成 |
 | IME / 输入法支持 | rustgrid：编辑器输入法路径 | 同上 | backlog |
 | 列宽用户设定 | cellar `widths_user_set` | 同上 | backlog |
 | 每执行一 Job + 连接级锁 | DBeaver：独立执行 Job、连接级互斥 | `竞品分析-多面板并发执行阻塞.md`（执行架构，与 execution-context-model 衔接） | 下一版本规划（execution-context-model） |

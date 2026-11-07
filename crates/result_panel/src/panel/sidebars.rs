@@ -389,8 +389,8 @@ impl ResultPanel {
     /// 页签用 kit `TabBar`（不手搓）；切页走队列交宿主 `set_right_tab`。
     /// 「引用」页留 backlog（见 result-panel.md §8.12）。计算 / 分组是纯函数
     /// （`column_stats` / `group_by_count`，不引 polars——见 result-panel.md §8.8）；
-    /// 每次渲染按当前可见行现算（中小结果集可接受，大表本地聚合的缓存 / 下发
-    /// GROUP BY 是后续项，记在文档）。
+    /// 每次渲染按当前可见行现算（中小结果集可接受）；**大表下这里会每帧全量算**，
+    /// 缓存聚合结果、或把聚合下推成服务端 GROUP BY 查询，属后续优化项（记在文档）。
     pub(crate) fn render_right_sidebar(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let show = self.show_value_sidebar;

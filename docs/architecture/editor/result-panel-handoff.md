@@ -98,7 +98,6 @@ cargo check -p rds-editor -p rds-workbench -p rds-workbench-shell  # 通过（wo
 | 优先级 | 项 | 现状 / 期望 |
 | --- | --- | --- |
 | 高 | 列浏览器多选批量动作 | 清单已迁移 List（单选联动）；多选（批量隐藏/冻结/复制列名等）未做 |
-| 高 | 列序拖拽 | 列浏览器/表头拖拽重排列序；`column_order` 状态与 `ColumnOrderChanged` 队列已就位，**UI 拖拽入口未接线** |
 | 中 | 列宽持久化 | DataTable/TableState 列宽拖拽现成，但不落盘；换文档/重启恢复默认宽；待评估落 NavCache/会话 |
 | 中 | COUNT 精确总数 / 跨帧统计缓存 / 小数分组 | §8.13 渲染改进批次的延后项（当前列统计按可见行现算、整数千分位） |
 | 中 | 并排对比增强 | 双栏等宽 → 可拖拽分隔；右栏列宽/滚动独立记忆 |
@@ -106,6 +105,14 @@ cargo check -p rds-editor -p rds-workbench -p rds-workbench-shell  # 通过（wo
 | 低 | P3 钻取关联数据 | 右键值→查关联表；`ColumnDetail.references` 已就位，取数链路现成（用户明确下期）；右栏「引用」页签当前为空态 |
 | 低 | 执行上下文模型 | 物理连接/事务/取消 per-context 独立（下一版本规划，0.2.4 不实现）；**结果归属按文档分槽不变** |
 | 低 | DBeaver 对标未实现项（backlog） | ① 撤销 / 重做（网格编辑历史栈，`RowHistory` 快照已就位）；② 二进制 / 图片**单元格**渲染（网格内仍文本降级显示）；值查看器已按类型分派（Text / Json / Hex / Image 占位，2026-10-30），**图片解码 P2**（需事件路径 + Shared 字段 → `ui_contract.rs` 白名单登记）；③ 多级分组表头（DataTable 单级表头）。均为对标 DBeaver 完整表格功能的独立 backlog，不在当前排期（2026-10-29 补录，10-30 更新②） |
+
+> **核查更正（2026-11-08，调用链五段核对）**：原表「高 · 列序拖拽 UI 入口未接线」**已不成立，故删除**。
+> 实测全链路已闭合：`grid/status.rs:400 col_movable(true)`（组件开启）→ `panel/lifecycle.rs:93-99`
+> 拖拽后推 `ResultRequest::ColumnOrderChanged` → `editor/.../dispatch.rs:200-203` 宿主 `save_session_now` 落库
+> → `panel/events.rs:301 apply_column_order` + `lifecycle.rs:242` 换新结果时按列名重排
+> → `editor/src/ports/editor_session.rs:82-116` 编解码为逗号串（含测试 `:333-359`）。
+> 同时「列宽持久化」条目的**阻塞已解除**：`editor_session.rs` 已稳定承载 `result_column_order` 编解码，
+> 列宽只需复用同通道加字段（不再依赖被占用文件）。
 
 ### 2.5 清理记录（2026-10-28，脏代码已移除）
 
