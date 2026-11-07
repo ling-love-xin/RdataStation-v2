@@ -3,7 +3,8 @@
 > 维护约定：本文档只记录**当前仍未完成 / 未接线**的事项；已完成项移入
 > `editor-impl-taskbook.md` 或对应提交。更新时同步任务板（#37 等）与
 > 本仓 git 提交链。状态字段：`待排期` / `已批准` / `进行中` / `下期` / `已关闭`。
-> 最后盘点：2026-10-27（状态栏三项收尾：Ch 微标 / 注释修正 / 替换字形探查）。
+> 最后盘点：2026-11-08（书签与折叠线、SQL 三执行通道核证、语义层 workbench 注入闭合；
+> 新增 §十二 / §十三，漂移更正见文末「文档漂移更正」）。
 
 ## 一、结果网格（DBeaver 表格能力分期）
 
@@ -85,12 +86,12 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 1. ~~阻塞阶段②：队列按连接分组并发 + 取消按作业句柄（任务 #52，进行中）~~ ✅ 已提交 `7ac86854`（2026-10-24）
 2. 补全缓存 MetadataCache TTL/generation（任务 #53）：代码已提交 `75c8bb07`；2026-10-24 收口 workbench 编译后 `cargo test -p rds-workbench --lib editor_completion` **12 测试全绿**（TTL 边界 / 时钟回拨 / 过期重载代际递增）——✅ 已验
 3. #54 语义层（engine 四能力全部完成：`c7de3e06` 诊断 / `129eb656` hover / `d69a971f` 签名 / `2f90e066` 手册 / `1136862f` 跳转 + refs）——**editor 侧接线全部完成**：
-   - ① 语义诊断 editor 层已接（`96be41a8`：`Request.dialect` + Catalog→CatalogTable + diagnostics 语义段 + 3 测试）；B 批目录注入端口已提交（`76b59ac1`：`EditorShared::set_catalog_snapshot` + scan 提交链带目录与方言 + `sql_dialect_for_document` 统一口径）——**运行时语义诊断待 workbench 注入目录快照**（并行线设计；空目录 → 语义段跳过）
-   - ② SQL hover 已接（`cd23301e`：`lsp/sql_hover.rs` + `install_hover` 泛型化 + Sql 分支挂载，函数签名/中文可测；表/列列列表待目录注入）
+   - ① 语义诊断 editor 层已接（`96be41a8`：`Request.dialect` + Catalog→CatalogTable + diagnostics 语义段 + 3 测试）；B 批目录注入端口已提交（`76b59ac1`：`EditorShared::set_catalog_snapshot` + scan 提交链带目录与方言 + `sql_dialect_for_document` 统一口径）——✅ **workbench 注入已闭合（2026-11-08 核证）**：`workbench/src/view.rs:887 ensure_catalog_pump`（1 s 一拍、复用补全 L1 目录）+ `:1203` 挂载；空目录 → 语义段跳过
+   - ② SQL hover 已接（`cd23301e`：`lsp/sql_hover.rs` + `install_hover` 泛型化 + Sql 分支挂载，函数签名/中文可测；表/列列表随目录注入已有数据源，**列级展示效果待人工验收**）
    - ③ 函数手册 Dialog 已提交（C5：`function_manual.rs` + `FunctionManual` action + `Ctrl+Shift+M` + 工具栏书本按钮，597→602 测试全绿）
-   - ③ 签名帮助已提交（C4：`signature_help.rs` + `SignatureHelp` action + `Ctrl+Shift+Space`，当前参数位高亮；「输入 `(` 自动弹」留二期）
+   - ③ 签名帮助已提交（C4：`signature_help.rs` + `SignatureHelp` action + `Ctrl+Shift+Space`，当前参数位高亮；「输入 `(` 自动弹」二期已接入：`host/mod.rs:642-651` 在 `InputEvent::Change` 上判 `auto_call`，模态 Dialog 打开时不抢）
    - ④ 跳转定义已提交（C6/C7：`lsp/sql_definition.rs` + `install_definition`，`rds://navigator` 由 workbench show_document handler 解析定位导航树）
-   - ④ 收尾：workbench 侧注入（文档绑定连接→目录快照推送 + show_document 的 rds://navigator 定位）属并行线设计，注入后 B1-B4 / C2 / C3 / C6 / C7 实测解锁
+   - ④ 收尾：✅ **已闭合（2026-11-08 核证）**——目录快照推送（`ensure_catalog_pump`）与 `rds://navigator` 定位（`view.rs:238 attach_jump`）均已在 workbench 接线；B1-B4 / C2 / C3 / C6 / C7 转人工验收
 4. P3 钻取（下期）
 5. **SQL 格式化增强（2026-10-28 用户定：优先级高）**——见「十、SQL 格式化增强」
 
@@ -182,3 +183,57 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 - analyze 路径结果无列类型/注释（`ResultSet` 无类型字段，已知边界）
 - 函数手册官方文档 URL：workbench 按「引擎+函数名」生成（真实环境验证后定）
 - 列类型进目录后 hover 补类型：`annotate_types` 现多数表达式返回 Unknown，暂不做
+
+## 十二、书签与折叠（2026-11-08 盘点）
+
+**已交付基线（勿当缺口）**：v1——工具栏 `editor-bookmarks` 按钮（三模式通用）+ 右键
+「添加书签/说明…」（`AddBookmarkNote`）+ 快捷键（`Ctrl+Shift+B` / `F8` 下一 / `Shift+F8` 上一）
++ 说明对话框 + 跳转（`jump_to_line`）+ sidecar 落盘；v4——书签管理器浮层
+（`open_bookmark_manager`）：搜索定位框内嵌「全部 / 书签 / 折叠」类型按钮（`Input::suffix` +
+`ButtonGroup`）、三栏列表（行号 ｜ 徽标+说明 ｜ 编辑 / 删除图标）、**双击行跳转**、空态区分
+「无书签 / 过滤后无匹配」；工具栏图标固定 `IconName::Bookmark`（`23d6397d`，函数手册保持
+`BookMarked`）。数据口径：`file_meta::Bookmark { line, label }`（1 起）；徽标判据
+`label == 行号`；折叠无说明不记录、书签空说明如实保存（`apply_bookmark_label`）。
+
+| 优先级 | 项 | 现状 / 缺口 | 状态 |
+| --- | --- | --- | --- |
+| 高（阻塞） | **gutter 书签入口 4 项**：① 已标记行常显 📌/✎ ② hover 淡色 + 单击切换 ③ Shift+单击弹说明 ④ 折叠箭头旁 ✎ 角标 | **内核无定制口**：`vendor/gpui-base/src/input/base/element.rs` 行号 paint 段与 `paint_fold_icons` 无 marker 注入；`state.rs:12480 set_line_number` 只有行号开关；`input/editor/decorations.rs` 只有 `RangeDecoration`（Fill/Frame）/ `TextDecoration`，无 gutter 图标能力。实现需改 vendor：`state.rs` 加 `gutter_markers` + setter、prepaint 布局 marker 位置、`element.rs` paint + hitbox + 交互 | 待授权改 vendor |
+| 中 | 书签行号漂移不校正 | `view/host/bookmarks.rs:61`（「行号漂移暂不校正」）：编辑器插入/删除行后 sidecar 行号指向漂移 | 待排期 |
+| 中 | 标签方案 B / C | 现只有 A「说明即标签」（`#tag` 约定，schema 与 sidecar 零变更）；B = 结构化 `tags: Vec<String>`（需 schema + sidecar 迁移）、C = 全局 Tag System（远期） | 待排期 |
+| 低 | 行内悬停信息 + 设置开关 | 用户已定口径「跳转后鼠标位于当前行时显示信息，设置可关闭」——无实现痕迹（editor 源码无相关代码） | 待排期 |
+| 低 | 书签交互无自动化测试 | headless 下对话框按钮点击分发不可靠（`simulate_click` 单独跑能中、全套跑中不了），只断言 `debug_bounds`；双击 / 编辑 / 删除靠人工验收 | 已知限制 |
+
+## 十三、SQL 三执行通道（2026-11-08 核证）
+
+| 通道 | 入口 → 动作 | 状态 |
+| --- | --- | --- |
+| 快捷键 | `Ctrl+Enter` → `ExecuteSql` → `execute_preferring_selection`；`Ctrl+Shift+Enter` → `ExecuteAll` → `run_all`（`app/main.rs:268-272`） | ✅ 通 |
+| 工具栏 | `editor-exec-run` / `editor-exec-all` / 执行位置族 5 项（`ExecMenuKind::ALL`，`exec/target.rs:442`）/ `editor-explain` | ✅ 通 |
+| 宿主 | workbench `request.run` → `run_all` | ✅ 通 |
+
+核心提交线唯一闭合：`execute` → `execute_labeled`（守卫拒绝留痕）→ 提交 → `ensure_exec_pump`
+（`exec/pump.rs:12`）→ `drain_exec_results` 回填（`exec/pump.rs:93`）。
+
+**唯一接通缺口**：右键菜单没有 SQL 执行项——`view/editor_menu.rs:65-107` 只有剪切 / 复制 /
+粘贴 / 全选 / 添加书签说明 / 转到定义 / 代码操作。
+
+## 跨 crate 指针：结果面板（rds-result-panel）
+
+结果面板遗留清单在 [`result-panel-handoff.md`](result-panel-handoff.md) §2.4，本模块不重复维护。
+2026-11-08 复核补一条更正：**「行级叠加层收尾」的 A2 依赖已解除**——事实档载体与构造链已交付
+（`store/store.rs` 的「A2 事实档状态」槽位 + `FactFrame` 合并/降级；外部线 `7a9afb5c` 确认
+「内存档/表档构造走 A2/B 批已交付链」）；剩余缺口是**渲染期尚未消费事实档**（注释「渲染第一期
+不读它」）与行级叠加收尾本身。
+
+## 文档漂移更正（2026-11-08，调用链核对）
+
+以下声明仍以「遗留 / 未实现」措辞存在于代码注释，实际调用链已闭合；本批同步修正注释措辞：
+
+| 位置 | 旧声明 | 实际情况 |
+| --- | --- | --- |
+| `view/host/toolbar/render.rs:408` | 【遗留】Markdown「预览 / 源码」切换 | 已闭合：`render.rs:160` 挂载 → `toggle_markdown_preview` → `editor_body.rs:28` 渲染 `TextView::markdown` |
+| `core/model.rs:124` | 「笔记级动作当前未实现」 | 已闭合（2d）：`view/host/notebook.rs:315/338/378` 会话切换 / 全部运行 / 重启 + 工具栏挂载 |
+| `view/signature_help.rs:12` | 「输入 `(` 自动弹」留二期 | 二期已接入：`host/mod.rs:642-651`（`InputEvent::Change` + `auto_call`，模态不抢） |
+| `view/widgets/status_bar.rs:79` | 【2b/遗留 #14】脚本文件类型段 | 已接入，测试 `status_bar_shows_the_script_file_type_segment_in_general_mode` |
+| `lib.rs:57` | 「其余控件（格式化 / 历史 / 更多 / 执行位置）未实现就不放」 | 已落地：「⋯ 更多」含方言转译 / 执行计划（`format.rs:91`），执行位置族 5 项在工具栏 |
+| `result-panel-handoff.md:100` | 「列序拖拽 UI 未接线」 | 外部线 `7a9afb5c` 已删该条（五段链路闭合） |
