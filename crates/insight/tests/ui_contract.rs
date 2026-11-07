@@ -248,8 +248,8 @@ fn view_sources() -> Vec<(String, &'static str)> {
             include_str!("../src/workspace/mod.rs"),
         ),
         (
-            "workspace/compare.rs".to_string(),
-            include_str!("../src/workspace/compare.rs"),
+            "workspace/compare/mod.rs".to_string(),
+            include_str!("../src/workspace/compare/mod.rs"),
         ),
         (
             "workspace/eda.rs".to_string(),

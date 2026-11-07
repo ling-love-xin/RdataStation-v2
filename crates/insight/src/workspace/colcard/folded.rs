@@ -22,18 +22,6 @@ impl InsightWorkspacePanel {
         explore_badge: Option<Tag>,
     ) -> Div {
         let colors = theme.colors;
-        let mini = if open {
-            None
-        } else {
-            self.render_col_mini_vis(col, theme, is_full)
-        };
-        // 迷你图缺席的原因短文案（四档各说各的，与真因一致——不写「样本不足」）
-        let mini_note = (!open && mini.is_none()).then(|| match &col.stats_detail {
-            None if col.interrupted => "评估中断，可补算".to_string(),
-            None => "评估中…".to_string(),
-            Some(crate::model::types::ColumnStatsDetail::Unknown) => "类型未识别".to_string(),
-            _ => "取样统计未就绪（工具栏「取样」重算）".to_string(),
-        });
         let misses = checker
             .iter()
             .filter(|c| c.state == ColumnCheckState::Miss)
@@ -51,6 +39,11 @@ impl InsightWorkspacePanel {
             .h_flex()
             .items_center()
             .gap_2()
+            .px_1()
+            .py_0p5()
+            .rounded_sm()
+            .bg(colors.sidebar)
+            .hover(|this| this.bg(colors.sidebar_accent))
             // 展开切换（语义 Button，键盘可达）
             .child({
                 let entity = entity.clone();
@@ -155,24 +148,5 @@ impl InsightWorkspacePanel {
                 this.child(Tag::color(ColorName::Amber).xsmall().child("未完成"))
             })
             .child(div().flex_1().min_w_0())
-            // 右端常驻迷你图：定宽（15rem = 240px），缺席时给原因
-            .when_some(mini, |this, m| {
-                this.child(
-                    div()
-                        .flex_none()
-                        .w(rems(ui::INSIGHT_CARD_VIS_WIDTH))
-                        .min_w_0()
-                        .child(m),
-                )
-            })
-            .when_some(mini_note, |this, note| {
-                this.child(
-                    div()
-                        .flex_none()
-                        .text_xs()
-                        .text_color(colors.muted_foreground)
-                        .child(note),
-                )
-            })
     }
 }

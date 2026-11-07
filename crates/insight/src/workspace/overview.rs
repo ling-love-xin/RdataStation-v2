@@ -388,6 +388,7 @@ impl super::InsightWorkspacePanel {
                     IconName::CircleAlert,
                     format!("{column} 检查器未命中 {n} 条"),
                     column,
+                    "checker",
                     theme,
                 ));
                 added += 1;
@@ -414,6 +415,7 @@ impl super::InsightWorkspacePanel {
                     col.null_rate.unwrap_or(0.0) * 100.0
                 ),
                 &col.name,
+                "missing",
                 theme,
             ));
             added += 1;
@@ -434,6 +436,7 @@ impl super::InsightWorkspacePanel {
                     col.unique_rate.unwrap_or(0.0) * 100.0
                 ),
                 &col.name,
+                "highcard",
                 theme,
             ));
             added += 1;
@@ -450,6 +453,7 @@ impl super::InsightWorkspacePanel {
                 IconName::EyeOff,
                 format!("{} 类型未识别（{}）", col.name, col.data_type),
                 &col.name,
+                "unknown",
                 theme,
             ));
             added += 1;
@@ -476,6 +480,7 @@ impl super::InsightWorkspacePanel {
         icon: IconName,
         text: String,
         column: &str,
+        category: &str,
         theme: &Theme,
     ) -> impl IntoElement {
         let colors = theme.colors;
@@ -483,7 +488,7 @@ impl super::InsightWorkspacePanel {
         let entity = entity.clone();
         let column = column.to_string();
         let label = text.clone();
-        Button::new(SharedString::from(format!("insight-ws-worth-{column}")))
+        Button::new(SharedString::from(format!("insight-ws-worth-{category}-{column}")))
             .ghost()
             .xsmall()
             .w_full()

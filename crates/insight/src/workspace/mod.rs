@@ -28,13 +28,12 @@ use gpui_kit::component::badge::Badge;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::collapsible::Collapsible;
-use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, TabGroup};
+use gpui_kit::component::dock::TabGroup;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, Size, Theme};
@@ -44,148 +43,26 @@ use gpui_kit::*;
 use crate::insight_view::{InsightEvent, InsightView};
 use crate::model::{
     ColumnCheckState, ColumnChecker, ColumnKind, InsightPanelState, InsightSetEntry,
-    InsightSetKind, InsightTarget, MultiResultView, NULL_RATE_NOTE, TableColumnView,
+    InsightTarget, MultiResultView, NULL_RATE_NOTE, TableColumnView,
     TableProfileView, fmt_int, fmt_num, fmt_pct, fmt_rows, kurt_direction, normality_judge,
     skew_direction,
 };
 use crate::ui;
 use crate::view::{error_block, skeleton};
 
-/// 中间工作页的两种形态
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkspaceMode {
-    /// 单表画像（原型「洞察工作页」：工具栏 + 画像版式）
-    Insight,
-    /// 多表对比（D64 阶段②，不重新取数；三态：候选 → 运行 → 结果）
-    Compare,
-}
+mod types;
+pub use types::*;
 
-/// 会话内已进入洞察的目标（对比候选）。
-///
-/// 「只有进入过洞察的表才能选择对比」——候选源就是本列表：导航树 / 结果列表 /
-/// SQL 编辑器等入口**在打开洞察时**都会经 [`InsightWorkspacePanel::open_target`] 登记。
-/// 历史快照候选留待 `InsightTableReportStore` 落库后接入（D64 阶段②后半）。
-#[derive(Debug, Clone)]
-pub struct OpenedTarget {
-    /// 稳定业务键（跨目标种类去重用，见 [`target_key`]）
-    pub key: String,
-    pub target: InsightTarget,
-    /// 该目标最近一次完成的表画像摘要；未完成 / 非表目标为 `None`（不编假值）
-    pub summary: Option<TargetSummary>,
-}
+mod tab_strip;
+mod actions;
 
-/// 画像摘要：对比聚合的最小事实集（行数 / 列数 / 检查器命中 / 缺失率 / 唯一率 /
-/// 值得关注列数），**不重新取数**；不含质量总分或等级（评级归归档后的资产库）。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TargetSummary {
-    pub row_count: Option<u64>,
-    pub column_count: Option<usize>,
-    /// 检查器命中计数（适用且通过；无评级语义）
-    pub checker_hits: Option<usize>,
-    pub checker_applicable: Option<usize>,
-    /// 表级缺失率均值（0–1；列统计未跑为 `None`）
-    pub null_rate: Option<f64>,
-    /// 表级唯一率均值（0–1；列统计未跑为 `None`）
-    pub unique_rate: Option<f64>,
-    /// 值得关注列数（缺失率高于阈值 / 检查器未命中的列，评估后才有）
-    pub attention_columns: Option<usize>,
-}
-
-impl TargetSummary {
-    fn of_table(profile: &TableProfileView) -> Self {
-        let (null_rate, unique_rate) = {
-            let (mut null_sum, mut null_n, mut uniq_sum, mut uniq_n) = (0.0, 0usize, 0.0, 0usize);
-            for c in &profile.columns {
-                if let Some(n) = c.null_rate {
-                    null_sum += n;
-                    null_n += 1;
-                }
-                if let Some(u) = c.unique_rate {
-                    uniq_sum += u;
-                    uniq_n += 1;
-                }
-            }
-            (
-                (null_n > 0).then_some(null_sum / null_n as f64),
-                (uniq_n > 0).then_some(uniq_sum / uniq_n as f64),
-            )
-        };
-        // 值得关注列：缺失率 > 20% 或检查器未命中（事实口径，不依赖旧评分等级）
-        let attention_columns = profile.quality.as_ref().map(|q| {
-            let miss: std::collections::HashSet<&str> = q
-                .checker
-                .iter()
-                .filter(|c| c.state == ColumnCheckState::Miss)
-                .map(|c| c.column.as_str())
-                .collect();
-            profile
-                .columns
-                .iter()
-                .filter(|c| {
-                    miss.contains(c.name.as_str()) || c.null_rate.map(|r| r > 0.2).unwrap_or(false)
-                })
-                .count()
-        });
-        Self {
-            row_count: Some(profile.row_count),
-            column_count: Some(profile.columns.len()),
-            checker_hits: profile.quality.as_ref().map(|q| q.checker_hits),
-            checker_applicable: profile.quality.as_ref().map(|q| q.checker_applicable),
-            null_rate,
-            unique_rate,
-            attention_columns,
-        }
-    }
-}
-
-impl OpenedTarget {
-    /// 转成右栏「已洞察表」集合条目。
-    ///
-    /// 只收**表级**目标（列 / 多列 / Schema 没有独立的集合身份）；
-    /// 来源种类判定：源表目标看有没有连接（有 = 源库表，`None` = 文件），
-    /// 临时表目标（结果集 / 落库样本）一律按结果集呈现。
-    pub(crate) fn to_set_entry(&self, is_current: bool) -> Option<InsightSetEntry> {
-        let (kind, source, temp_table) = match &self.target {
-            InsightTarget::SourceTable { source, .. } => {
-                let kind = if source.conn_id().is_some() {
-                    InsightSetKind::SourceTable
-                } else {
-                    InsightSetKind::File
-                };
-                (kind, source.label().to_string(), None)
-            }
-            InsightTarget::Table { temp_table, .. } => (
-                InsightSetKind::ResultSet,
-                temp_table.clone(),
-                Some(temp_table.clone()),
-            ),
-            _ => return None,
-        };
-        let (row_count, column_count, checker_hits, checker_applicable) = match self.summary {
-            Some(summary) => (
-                summary.row_count,
-                summary.column_count,
-                summary.checker_hits,
-                summary.checker_applicable,
-            ),
-            None => (None, None, None, None),
-        };
-        Some(InsightSetEntry {
-            key: self.key.clone(),
-            label: self.target.table_name(),
-            kind,
-            source,
-            temp_table,
-            row_count,
-            column_count,
-            checker_hits,
-            checker_applicable,
-            // 集合行「切换目标」的还原依据（宿主经 `request_insight_switch` 使用）
-            target: self.target.clone(),
-            is_current,
-        })
-    }
-}
+// 以下类型已搬 types.rs：
+// - WorkspaceMode
+// - OpenedTarget + impl to_set_entry
+// - TargetSummary + impl of_table
+// - EdaTab
+// - ColZone
+// - RelTab
 
 /// 关掉 index 后应切到的相邻 tab：优先右侧原位，越界回退左侧；
 /// 最后一个也被关掉（`len_after == 0`）时返回 `None`（面板回空态）。
@@ -299,97 +176,7 @@ pub struct InsightWorkspacePanel {
     col_anchors: RefCell<HashMap<String, ScrollAnchor>>,
 }
 
-/// 报告主 Tab（原型 .report-tabs：列分布 / 缺失 / 关联性 / 样本）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum EdaTab {
-    #[default]
-    Cols,
-    Missing,
-    Rel,
-    Sample,
-}
-
-impl EdaTab {
-    pub const ALL: [Self; 4] = [Self::Cols, Self::Missing, Self::Rel, Self::Sample];
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Cols => "列分布",
-            Self::Missing => "缺失",
-            Self::Rel => "关联性",
-            Self::Sample => "样本",
-        }
-    }
-    fn index(self) -> usize {
-        Self::ALL.iter().position(|t| *t == self).unwrap()
-    }
-    fn of_index(i: usize) -> Self {
-        Self::ALL[i.min(3)]
-    }
-}
-
-/// 列卡展开四区（原型 .cc-zones：基础统计 / 分布 / 检查器 / 样本）。
-/// 区状态按列存（`col_detail_zone`），不共用全局区，避免切列串台。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ColZone {
-    #[default]
-    Stats,
-    Dist,
-    Quality,
-    Sample,
-    /// 自定义规则 Tab（2026-11-06 YData 密度对齐）：适用该列的规则摘要 + SQL 入口
-    Rules,
-}
-
-impl ColZone {
-    pub const ALL: [Self; 5] = [
-        Self::Stats,
-        Self::Dist,
-        Self::Quality,
-        Self::Sample,
-        Self::Rules,
-    ];
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Stats => "基础统计",
-            Self::Dist => "分布",
-            Self::Quality => "检查器",
-            Self::Sample => "样本",
-            Self::Rules => "规则",
-        }
-    }
-    fn index(self) -> usize {
-        Self::ALL.iter().position(|z| *z == self).unwrap()
-    }
-    fn of_index(i: usize) -> Self {
-        Self::ALL[i.min(Self::ALL.len() - 1)]
-    }
-}
-
-/// 关联性子 Tab（原型 .rel-tabs：数值相关 / 分类关联 / 值重叠）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RelTab {
-    #[default]
-    Corr,
-    Assoc,
-    Overlap,
-}
-
-impl RelTab {
-    pub const ALL: [Self; 3] = [Self::Corr, Self::Assoc, Self::Overlap];
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Corr => "数值相关",
-            Self::Assoc => "分类关联",
-            Self::Overlap => "值重叠",
-        }
-    }
-    fn index(self) -> usize {
-        Self::ALL.iter().position(|t| *t == self).unwrap()
-    }
-    fn of_index(i: usize) -> Self {
-        Self::ALL[i.min(2)]
-    }
-}
+// EdaTab / ColZone / RelTab 已搬 types.rs
 
 impl InsightWorkspacePanel {
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -517,216 +304,9 @@ impl InsightWorkspacePanel {
     /// 顶部 tab 条（A 方案多标签，2026-10-30 落地；对齐原型 `.tab-strip`）：
     /// 每个进入过洞察的目标一个 tab，dot = 当前目标实时状态（Loading 黄 /
     /// 就绪绿 / 出错红；非当前 tab 是静态灰点表示「已打开过」），✕ 关闭该 tab，
-    /// 最右 ＋ 打开「新建洞察」（宿主对话框）。
-    ///
-    /// 点击回调只改状态（`activate_opened` / `close_opened` / 发事件），
-    /// 副作用留在事件路径——对齐 render 纯读约定。
-    fn render_tab_strip(
-        &mut self,
-        entity: &Entity<Self>,
-        theme: &Theme,
-        tab_max_width: Pixels,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
-        let colors = theme.colors;
-        let current_key = self.view.read(cx).target().map(target_key);
-        let current_ix = self
-            .opened
-            .iter()
-            .position(|o| Some(o.key.clone()) == current_key);
-        let weak = entity.downgrade();
-        TabBar::new("insight-ws-tabs")
-            // `Tab::max_width` 是 `pub(super)`（只能 tab 模块内部用）——tab 条级
-            // `max_width` 才是公开 API（0.8.1 vendor tab_bar.rs:133）：每 tab 超宽
-            // 省略号截断。它只收 `Pixels`，故用 render 入口处的主题基准字号换算
-            // （此前写死 `× 16.0`，用户调 UI 字号时这一处不跟着动）。
-            .max_width(tab_max_width)
-            .children(self.opened.iter().enumerate().map(|(ix, entry)| {
-                let key = entry.key.clone();
-                let is_current = current_ix == Some(ix);
-                let dot = if is_current {
-                    match self.view.read(cx).state() {
-                        InsightPanelState::Loading => Badge::new().dot().color(colors.warning),
-                        InsightPanelState::Error { .. } => Badge::new().dot().color(colors.danger),
-                        _ => Badge::new().dot().color(colors.success),
-                    }
-                } else {
-                    Badge::new().dot().color(colors.muted_foreground)
-                };
-                let w_close = weak.clone();
-                let w_activate = weak.clone();
-                Tab::new()
-                    .label(entry.target.title())
-                    .prefix(dot)
-                    .suffix(
-                        Button::new(format!("insight-ws-tab-close-{key}"))
-                            .ghost()
-                            .icon(IconName::Close)
-                            .on_click(move |_, _, app| {
-                                let _ = w_close.update(app, |panel, cx| panel.close_opened(ix, cx));
-                            }),
-                    )
-                    .on_click(move |_, _, app| {
-                        let _ = w_activate.update(app, |panel, cx| panel.activate_opened(ix, cx));
-                    })
-            }))
-            .when_some(current_ix, |bar, ix| bar.selected_index(ix))
-            .suffix(
-                Button::new("insight-ws-tab-new")
-                    .ghost()
-                    .icon(IconName::Plus)
-                    .on_click(move |_, _, app| {
-                        let _ = weak.update(app, |panel, cx| {
-                            panel
-                                .insight_view()
-                                .update(cx, |_view, cx| cx.emit(InsightEvent::NewInsightRequested))
-                        });
-                    }),
-            )
-    }
-
     /// 指向新目标：先把当前目标的画像摘要存档进 `opened`（对比聚合不重取数的前提），
     /// 再登记 / 去重，最后交 [`InsightView::set_target`]。
     ///
-    /// 入口语义（D65）：「查看统计」在中间开 tab（本面板由宿主建一次），
-    /// **多 tab 形态（A 方案，2026-10-30 落地）**：每个进入过洞察的目标占一个
-    /// 顶部 tab（`opened` 即 tab 列表，新目标在前）；打开已有 tab 只切目标、
-    /// 不重登记（去重分支）。
-    pub fn open_target(&mut self, target: InsightTarget, cx: &mut Context<Self>) {
-        self.archive_summary(cx);
-        let key = target_key(&target);
-        let already = self.opened.iter().any(|e| e.key == key);
-        if let Some(entry) = self.opened.iter_mut().find(|e| e.key == key) {
-            entry.target = target.clone();
-        } else {
-            self.opened.insert(
-                0,
-                OpenedTarget {
-                    key,
-                    target: target.clone(),
-                    summary: None,
-                },
-            );
-        }
-        // 回到画像形态：打开某个目标意味着要看它的画像（D66 对齐原型入口语义）
-        self.mode = WorkspaceMode::Insight;
-        // 已登记目标 = 本次会话确认过（切 tab / 关 tab / 候选重开）：直接取数；
-        // 新目标走探查确认窗口（C3：进入洞察先定数据量与列）
-        self.view.update(cx, |view, cx| {
-            if already {
-                view.set_target_loaded(target, cx);
-            } else {
-                view.set_target(target, cx);
-            }
-        });
-        cx.notify();
-    }
-
-    /// 顶部 tab 切换（A 方案）：切到已登记的 `opened` 目标。
-    ///
-    /// 复用 `open_target` 的去重分支（已登记则只更新目标 + 切画像形态）；
-    /// 与新建入口的区别是这里**必然已登记**，不会新增 tab。
-    pub fn activate_opened(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(entry) = self.opened.get(index).cloned() else {
-            return;
-        };
-        self.open_target(entry.target, cx);
-    }
-
-    /// 顶部 tab 关闭（A 方案 ✕）：从 `opened` 移除该目标。
-    ///
-    /// 关的是**当前目标**时：先存档摘要，再切相邻目标（优先右侧原位，
-    /// 边界回退左侧）；关掉**最后一个** tab 时清空面板回无目标空态。
-    /// 对比候选是 `opened` 的子集语义（候选 = 已进入洞察的目标），
-    /// 关闭的 tab 同时离开候选池。
-    pub fn close_opened(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index >= self.opened.len() {
-            return;
-        }
-        let closing_key = self.opened[index].key.clone();
-        self.opened.remove(index);
-        let current_key = self.view.read(cx).target().map(target_key);
-        if current_key.as_deref() != Some(closing_key.as_str()) {
-            cx.notify();
-            return;
-        }
-        let next = match next_index_after_close(self.opened.len(), index) {
-            Some(ix) => ix,
-            None => {
-                self.view.update(cx, |view, cx| view.clear_target(cx));
-                cx.notify();
-                return;
-            }
-        };
-        let target = self.opened[next].target.clone();
-        self.open_target(target, cx);
-    }
-
-    /// 切换形态（画像 / 对比）。切到对比不打断取数：`view` 状态保留，切回即见。
-    pub fn set_mode(&mut self, mode: WorkspaceMode, cx: &mut Context<Self>) {
-        if self.mode != mode {
-            self.mode = mode;
-            cx.notify();
-        }
-    }
-
-    /// 对比候选勾选（Checkbox 回调只给布尔，这里按 key 翻转）
-    pub fn toggle_candidate(&mut self, key: &str, cx: &mut Context<Self>) {
-        if let Some(pos) = self.compare_selected.iter().position(|k| k == key) {
-            self.compare_selected.remove(pos);
-        } else {
-            self.compare_selected.push(key.to_string());
-        }
-        cx.notify();
-    }
-
-    /// 对比列表点行：重新打开该目标画像（并切回画像形态）
-    pub fn open_candidate(&mut self, key: &str, cx: &mut Context<Self>) {
-        let Some(entry) = self.opened.iter().find(|e| e.key == key) else {
-            return;
-        };
-        let target = entry.target.clone();
-        // 复用 open_target：登记 / 摘要存档 / 切回画像形态都在同一条路径
-        self.open_target(target, cx);
-        cx.notify();
-    }
-
-    /// 刷新（⟳）：重发当前 Tab 的取数请求（画像 / 结构按目标 Tab 各走各的）
-    pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        self.view.update(cx, |view, cx| view.reload(cx));
-    }
-
-    /// 开始对比（原型「开始对比」按钮）：勾选集 → 运行中 → 结果。
-    ///
-    /// 阶段②聚合会话内已完成的画像摘要、**不重新取数**，结果瞬时可得；
-    /// 「运行中」给 600ms 示意（对齐原型三态交互），随后落成结果表。
-    pub fn start_compare(&mut self, cx: &mut Context<Self>) {
-        if self.compare_selected.is_empty() || self.compare_running {
-            return;
-        }
-        self.compare_running = true;
-        self.compare_done = false;
-        cx.notify();
-        let weak = cx.entity().downgrade();
-        let timer = cx.background_executor().timer(Duration::from_millis(600));
-        cx.spawn(async move |_, cx| {
-            timer.await;
-            let _ = weak.update(cx, |panel, cx| {
-                panel.compare_running = false;
-                panel.compare_done = true;
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    /// 重新对比：清掉结果态回到候选态（勾选保留）
-    fn reset_compare(&mut self, cx: &mut Context<Self>) {
-        self.compare_running = false;
-        self.compare_done = false;
-        cx.notify();
-    }
-
     /// 切到旧目标前，把**当前目标**已完成的表画像摘要写回 `opened`。
     fn archive_summary(&mut self, cx: &Context<Self>) {
         let Some(current_key) = self.view.read(cx).target().map(target_key) else {
@@ -812,6 +392,7 @@ impl Render for InsightWorkspacePanel {
 // ===== 子模块（拆分：渲染方法按域下沉，状态/协议/测试留在根） =====
 mod colcard;
 mod compare;
+mod dock;
 mod eda;
 mod helpers;
 mod markdown;
@@ -829,101 +410,7 @@ pub(crate) use helpers::{
     step_dot, summary_card, zone_note, zone_rows_grouped,
 };
 pub(crate) use markdown::{dist_text_bars, render_markdown_report, render_multi_result};
-// ===== 中央 Dock 面板协议（对齐 property_panel / search_results 的装配方式） =====
-
-impl EventEmitter<gpui_kit::component::dock::PanelEvent> for InsightWorkspacePanel {}
-
-impl Focusable for InsightWorkspacePanel {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-}
-
-impl BasePanel for InsightWorkspacePanel {
-    fn panel_name(&self) -> &'static str {
-        "insight-workspace"
-    }
-
-    fn on_added_to(
-        &mut self,
-        group: gpui::WeakEntity<TabGroup>,
-        window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
-    ) {
-        self.group = Some(group);
-        // 存窗口句柄：探查弹窗的开要在事件路径发生（那时没有窗口）
-        self.window = Some(window.window_handle());
-    }
-
-    fn on_removed(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) {
-        // 中间洞察 tab 被 ✕ 关闭：面板随 Dock 移除而 drop（宿主只持弱句柄），
-        // 下次入口再打开时按「未建」重建——目标集合（`opened`）会清空，
-        // 与对比候选「会话内已进入洞察」口径一致（关掉工作页 = 放弃本轮候选）。
-        self.group = None;
-    }
-}
-
-impl ComponentPanel for InsightWorkspacePanel {
-    /// Dock tab 标题 = 当前洞察目标表名（参考 VS Code「tab 标题 = 打开对象名」约束），
-    /// 未打开目标时回退「洞察」。
-    fn tab_name(&self, cx: &App) -> Option<SharedString> {
-        Some(
-            self.view
-                .read(cx)
-                .target()
-                .map(|t| SharedString::from(t.title()))
-                .unwrap_or_else(|| SharedString::from("洞察")),
-        )
-    }
-
-    fn title(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        let name = self
-            .view
-            .read(cx)
-            .target()
-            .map(|t| SharedString::from(t.title()))
-            .unwrap_or_else(|| SharedString::from("洞察"));
-        // 标题栏内超长表名省略（vscode 约束：长标题省略 + hover 提示全名）
-        div()
-            .text_sm()
-            .font_weight(FontWeight::MEDIUM)
-            .max_w(rems(ui::INSIGHT_WS_TITLE_MAX_WIDTH))
-            .overflow_hidden()
-            .text_ellipsis()
-            .child(name)
-    }
-}
-
-/// 把中间洞察 tab 切到前台（窗口聚焦 + 在所在 Dock 组里选中自身）。
-///
-/// **必须在实体更新之外调用**（与 `focus_property_tab` 同因：`TabGroup` 切 tab 会回读
-/// 面板实体，在更新闭包内调用会 double lease panic）。选中按面板 `entity_id` 定位。
-pub fn focus_insight_workspace_tab(
-    panel: &Entity<InsightWorkspacePanel>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let (focus_handle, group) = {
-        let view = panel.read(cx);
-        (view.focus_handle.clone(), view.group.clone())
-    };
-    window.focus(&focus_handle, cx);
-    let Some(group) = group else {
-        return;
-    };
-    let me = panel.entity_id();
-    group
-        .update(cx, |group, cx| {
-            let ix = group
-                .panels()
-                .iter()
-                .position(|p| p.view().entity_id() == me);
-            if let Some(ix) = ix {
-                group.select_tab(ix, window, cx);
-            }
-        })
-        .ok();
-}
+pub use dock::focus_insight_workspace_tab;
 
 #[cfg(test)]
 mod tests {
