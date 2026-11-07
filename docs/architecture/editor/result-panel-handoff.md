@@ -223,6 +223,18 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 
 验证：`cargo test -p rds-result-panel --lib` = **220 passed / 0 failed**（+2：按列名往返换列序仍钉对列 / 回填全隐藏仍保 1 列）；`cargo test -p rds-store --lib` = **163 passed / 0 failed**（+1 三路 SELECT 同值）；`cargo test -p rds-editor --lib` = **751 passed / 0 failed / 1 ignored**；`cargo check -p rds-result-panel -p rds-editor -p rds-store` 通过（0 warning）。未验证：真窗口「隐藏 → 关窗重开 → 仍隐藏」的端到端。
 
+### 2.14 2026-11-08（列宽自适应：盘点第二优先项）
+
+| 层 | 落地 |
+| --- | --- |
+| 入口 | 组件早已提供：双击 resize handle → `TableState::fit_col` → `TableDelegate::fit_column`（trait 默认 `None`，本仓此前没实现，所以双击没反应） |
+| 实现 | 新模块 `crates/result_panel/src/grid/fit.rs`；`TableDelegate::fit_column` 在 `grid/table_impl.rs` 薄转发。只回答**内容宽**，padding / min-max / `ColumnWidthsChanged` 全由组件做 |
+| 宽度 | 表头 = 类型 badge(8px) + 列名 + 排序箭头 + `▽` + `gap_1`(4px)，不含列头菜单按钮；单元格 = 前 200 视图行最宽的展示串 + `px_2`(16px)；两层 padding 都要算（组件再加 16px） |
+| 口径 | 测"画出来的那串"（NULL 占位 / 千分位 / 布尔中文 / JSON 美化 / BLOB 摘要 / 300 截断）；等宽族用 `theme.mono_font_family`；行号槽返回 `None`；转置视图可自适应 |
+| 落盘 | 零新增接线：`ColumnWidthsChanged` 已在 `panel/lifecycle.rs` 订阅 → 与拖拽同一条通道 |
+
+采样上限 `FIT_SAMPLE_ROWS = 200`。`fitted_col` 只屏蔽双击后那一下拖拽，不会每帧重算。验证：`cargo test -p rds-result-panel --lib` = **221 passed / 0 failed**（+1）；`cargo check -p rds-result-panel -p rds-editor -p rds-store` 0 warning。未验证：真窗口双击端到端、真实字体下观感是否偏宽。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

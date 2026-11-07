@@ -2734,3 +2734,70 @@ fn bench_set_data_resync_large_set() {
         passthrough, reordered, resync
     );
 }
+
+/// 只为了拿到 `Window`（文本测量需要 `window.text_system()`）的空视图
+struct BlankView;
+impl gpui_kit::Render for BlankView {
+    fn render(
+        &mut self,
+        _window: &mut gpui_kit::Window,
+        _cx: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        gpui_kit::div()
+    }
+}
+
+/// 【P1 列宽自适应】双击列头分隔线：行号槽拒绝（`None`）、宽度随内容增长、采样只覆盖前
+/// [`FIT_SAMPLE_ROWS`] 个视图行
+///
+/// 断言一律用**相对比较**（宽列 > 窄列、结果落在某个数量级内），不写死具体像素：字体族、
+/// 缩放、字形度量都随系统变，写死只会得到“在别人机器上必挂”的用例。
+#[gpui_kit::test]
+fn fit_column_follows_content_and_caps_the_sample(cx: &mut gpui_kit::TestAppContext) {
+    use crate::grid::fit::FIT_SAMPLE_ROWS;
+    use gpui_kit::px;
+
+    cx.update(gpui_kit::init);
+    let (_, mut vcx) = cx.add_window_view(|_window, _cx| BlankView);
+    let fit = |grid: &ResultGridDelegate, col_ix: usize, vcx: &mut gpui_kit::VisualTestContext| {
+        vcx.update(move |window, cx| crate::grid::fit::fit_column(grid, col_ix, window, cx))
+    };
+
+    // 1) 行号槽：不可自适应（双击它不该发生任何事）
+    let plain = grid();
+    assert_eq!(fit(&plain, 0, &mut vcx), None, "行号槽不该自适应");
+
+    // 2) 内容越宽，量出来的列越宽（窄列 a / 宽列中文）
+    let mut wide = ResultGridDelegate::empty("尚未执行");
+    wide.set_data(
+        vec!["a".to_string(), "b".to_string()],
+        vec![
+            vec!["a".to_string(), "这是一段明显更长的内容".to_string()],
+            vec!["b".to_string(), "这是另一段明显更长的内容".to_string()],
+        ],
+    );
+    let narrow_w = fit(&wide, 1, &mut vcx).expect("数据列应自适应");
+    let wide_w = fit(&wide, 2, &mut vcx).expect("数据列应自适应");
+    assert!(
+        wide_w > narrow_w,
+        "长内容列应更宽：narrow={narrow_w:?} wide={wide_w:?}"
+    );
+    // 至少包住单元格左右内边距（只算内容宽的实现会小于这个值）
+    assert!(
+        narrow_w >= px(16.),
+        "列宽应含单元格内边距：{narrow_w:?}"
+    );
+
+    // 3) 采样上限：第 FIT_SAMPLE_ROWS+1 行的超长值不参与——否则宽度会到几千像素
+    let mut many = ResultGridDelegate::empty("尚未执行");
+    let mut rows: Vec<Vec<String>> = (0..FIT_SAMPLE_ROWS)
+        .map(|_| vec!["x".to_string(), "a".to_string()])
+        .collect();
+    rows.push(vec!["y".to_string(), "W".repeat(400)]);
+    many.set_data(vec!["a".to_string(), "b".to_string()], rows);
+    let capped = fit(&many, 2, &mut vcx).expect("数据列应自适应");
+    assert!(
+        capped < px(100.),
+        "第 {FIT_SAMPLE_ROWS} 行之后的超长值不该进采样：{capped:?}"
+    );
+}

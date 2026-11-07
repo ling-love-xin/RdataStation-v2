@@ -1072,6 +1072,52 @@ panel.rs 删掉手搓过滤 / 行渲染 / 搜索框约 200 行。
 **未验证项**：真窗口里"隐藏 → 重启 → 列仍隐藏"的端到端，只到 headless 单测 + SQL 往返，
 未跑一次真实的关窗重开。
 
+### 8.23 列宽自适应（双击列头分隔线，2026-11-08）
+
+**为什么要做**：竞品对照盘点的第二优先项。能力入口早就在组件库里（双击 resize handle →
+`TableState::fit_col` → `TableDelegate::fit_column`），但本仓从未实现 `fit_column`（trait 默认
+返回 `None`），所以双击一直是"什么也不发生"——这不是新造能力，是把已有钩子填上。
+
+**组件链路（vendor 权威，勿凭记忆）**：
+
+| 位置 | 事实 |
+| --- | --- |
+| `table/state.rs:1730-1737` | resize handle 的 `on_mouse_down`：`click_count == 2` → `fit_col(ix)`；`1` → 清 `fitted_col` |
+| `table/state.rs:1284-1313` | `fit_col`：问 delegate 要内容宽 → 加列 padding（`column.paddings`，否则 `size.table_cell_padding()`，Medium 左右各 8）→ 按 `scale_factor` 逐段 `ceil` 到整设备像素（文本宽哪怕差一个分数像素也会被截断）→ `resize_cols` → 变了才 emit `TableEvent::ColumnWidthsChanged` |
+| `table/state.rs:280-285` | `fitted_col` 只用于屏蔽"双击后紧跟着的那一下拖拽"，**不会**每帧重算（一次双击 = 一次采样） |
+| `table/column.rs:219-221` | 列宽上界默认 1200px，组件侧已兜住，delegate 不必自己夹 |
+
+**实现分工（新模块 `grid/fit.rs`）**：只回答**内容宽度**，padding / min-max / 事件全由组件做；
+**不写 delegate 状态**——列宽随后的 `ColumnWidthsChanged` 回灌（`panel/lifecycle.rs` 已订阅）
+走的就是拖拽同一条通道，因此落盘 / 跨会话恢复零新增接线。
+
+**宽度构成（与渲染同口径，不是估算）**：
+
+- 表头：类型 badge（`px_1` 左右各 4 + 符号宽）+ 列名 + 排序箭头（`↑`/`↓`）+ 筛选 `▽`，
+  两两之间 `gap_1` 4px。**不含列头菜单按钮**：它浮在列头右端、被截也不影响读列名，算进去
+  会让每列凭空多 28px（竞品同样不含）。
+- 单元格：前 **200 个视图行**（`FIT_SAMPLE_ROWS`，对齐 dbdelve `FITTED_ROWS=200` / cellar 前
+  200 行）里最宽的那串 + 左右各 8px（`render_td` 的 `px_2`）。测的是**画出来的那串**：类型样式
+  （NULL 占位 / 千分位 / 布尔中文）、JSON 美化、BLOB 摘要、`CELL_DISPLAY_LIMIT=300` 截断全都
+  算在内；布尔 / 时间族用主题等宽字体测（与 `cell_style` 的 `monospace` 一致），否则数字列会
+  量偏窄。
+- **双层内边距**：delegate 自己加 16px（`px_2`），组件再加 16px（`table_cell_padding` Medium）。
+  只算一层的话文字正好压在余量里被省略号吃掉，双击就白点了。
+- 行号槽返回 `None`（组件侧 `resizable(false)` 已先拦，这里再守一道）。转置视图照常自适应
+  （列名取「字段 / 值」，列级类型 `Unknown` → 默认字体）。
+
+**测量 API**（gpui-pre 0.3.10 实查）：`window.text_style().font()` 取当前字体 →
+`window.text_system().shape_line(text, font_size, &[TextRun{..}], None).width()`（字形推进宽）。
+字号 `text_xs()` = `rems(0.75)` = `0.75 × window.rem_size()`，表头与单元格都这一档。`shape_line`
+遇换行符会 panic：单行单元格里换行被当空白，测宽时替换成空格。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **221 passed / 0 failed**（+1
+`fit_column_follows_content_and_caps_the_sample`：行号槽 `None` / 长内容列更宽 / 第
+`FIT_SAMPLE_ROWS` 行之后的超长值不进采样；断言取相对比较，不写死像素）；
+`cargo check -p rds-result-panel -p rds-editor -p rds-store` 通过（0 warning）。
+**未验证项**：真窗口里双击列头分隔线的端到端（headless 只到 `fit_column` 的返回值，没走真实
+鼠标双击 + `ColumnWidthsChanged` 落库）；真实字体下"每列多 16px 观感是否偏宽"也没目视。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

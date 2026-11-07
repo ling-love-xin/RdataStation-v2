@@ -49,6 +49,17 @@ impl TableDelegate for ResultGridDelegate {
         crate::grid::menu::context_menu(self, row_ix, menu, window, cx)
     }
 
+    /// 列宽自适应（转发到 [`crate::grid::fit`]）：组件库双击 resize handle 时问这里要
+    /// 这一列的内容宽度（默认 trait 实现返回 `None` = 双击没反应）
+    fn fit_column(
+        &mut self,
+        col_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> Option<Pixels> {
+        crate::grid::fit::fit_column(self, col_ix, window, cx)
+    }
+
     fn columns_count(&self, _cx: &App) -> usize {
         // 首列是行号槽（原型 §2.4）：没有结果时不画它，空态就交回给 `render_empty`；
         // 有结果时 = 数据列 + 行号槽 − 隐藏列

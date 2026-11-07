@@ -51,6 +51,7 @@
 //! | [`stats`] | 列统计 / 分组计数 / 统计文本 |
 //! | [`cell`] | 单元格渲染（样式 / 裁剪 / JSON / BLOB + `render_td`） |
 //! | [`header`] | 表头渲染（截断 / 类型标签 / 排序箭头 + `render_th`） |
+//! | [`fit`] | 列宽自适应（双击列头分隔线：按内容算宽 + `fit_column`） |
 //! | [`table_impl`] | `TableDelegate` 其余方法（列数 / 排序 / 拖列 / 取下一段 / 空态） |
 //! | [`status`] | 工具栏 / 状态行 / 提示文案 / 渲染家族 |
 //! | [`tests`] | 全量单元测试（原 `mod tests` 整体迁入） |
@@ -64,6 +65,7 @@
 pub(crate) mod cell;
 pub(crate) mod delegate;
 pub(crate) mod edit;
+pub(crate) mod fit;
 pub(crate) mod header;
 pub(crate) mod menu;
 pub(crate) mod stats;
