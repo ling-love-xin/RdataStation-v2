@@ -76,7 +76,8 @@ pub struct StatusInputs<'a> {
     pub channel: Option<&'a str>,
     /// 【2b】通用模式的执行环境段（`环境 Python 3.12`）；`None` = 不显示（非通用模式 / 未选）
     pub env: Option<&'a str>,
-    /// 【2b/遗留 #14】通用模式的脚本文件类型段（`类型 Python`）；`None` = 不显示
+    /// 【2b】通用模式的脚本文件类型段（`类型 Python`，已接入：`session.rs` 供给，
+    /// 测试 `status_bar_shows_the_script_file_type_segment_in_general_mode`）；`None` = 不显示
     /// （非通用模式 / 非脚本扩展名）。判定走 `mode::script_file_type`，展示类型名；
     /// 上色本体由 `view::highlight` 按类型分派词法器（CSV 走表格展示不上色）。
     pub file_type: Option<&'a str>,

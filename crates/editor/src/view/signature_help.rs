@@ -9,7 +9,8 @@
 //! ## 方案（首版，见 `sql-semantic-remaining-design.md` §二）
 //!
 //! - 触发：`Ctrl+Shift+Space` 手动（命令 [`crate::commands::SignatureHelp`]）；
-//!   「输入 `(` 自动弹」留二期（要监听输入事件 + 去抖，避免打字时闪）
+//!   「输入 `(` 自动弹」二期已接入（`view/host/mod.rs` 在 `InputEvent::Change` 上判
+//!   `auto_call`，模态 Dialog 打开时不抢）
 //! - 识别：纯函数 [`current_call`] 找「光标前的函数调用」（标识符 + 紧跟 `(`，
 //!   数光标前括号内的逗号 → 当前参数位）
 //! - 数据：engine 内置签名目录 [`builtin_signatures`]（约 50 个常用函数；在线系统表

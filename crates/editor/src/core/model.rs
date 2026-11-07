@@ -121,8 +121,9 @@ pub enum ToolbarStyle {
     Minimal,
     /// 完整（执行族 + 文档级动作 + 执行位置 + 连接）
     Full,
-    /// 笔记级（会话 / 全部运行 / 重启）+ 单元级动作；**笔记级动作当前未实现**
-    /// （1c 留白：宿主工具栏只渲染模式指示器，见 render_toolbar 的 Notebook 分支）
+    /// 笔记级（会话 / 全部运行 / 重启）+ 单元级动作；笔记级动作已落地（2d）：
+    /// 会话切换 / 全部运行队列 / 重启内核，见 `view/host/notebook.rs` 与
+    /// `render_toolbar` 的 Notebook 分支
     Notebook,
 }
 

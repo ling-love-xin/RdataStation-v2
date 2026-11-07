@@ -405,8 +405,9 @@ impl EditorHostPanel {
         crate::mode::script_file_type(&path) == Some(crate::mode::ScriptFileType::Markdown)
     }
 
-    /// 【遗留】Markdown 文档「预览 / 源码」切换按钮（通用模式工具栏右侧）。
-    /// 预览态 = 只读渲染视图（TextView::markdown），源码态 = 内核编辑器。
+    /// Markdown 文档「预览 / 源码」切换按钮（通用模式工具栏右侧；挂载点见
+    /// `render_toolbar` 的 `row.child(...)`）。预览态 = 只读渲染视图（`TextView::markdown`，
+    /// 消费见 `host/editor_body.rs`），源码态 = 内核编辑器。
     pub(crate) fn render_markdown_preview_toggle(
         &self,
         cx: &mut Context<Self>,
