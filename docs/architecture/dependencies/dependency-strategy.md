@@ -121,10 +121,11 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 - **sqlglot 能力释放**（2026-11-08，同分支）：版本早已在 `=0.11.1`，这轮不是升级而是**把库吃干**
   - `crates/sql/src/analysis.rs` 新建，8 项上游能力统一出口（`scope_report` / `column_types` / `lineage_of_column` / `diff_summaries` / `pushdown_sql` / `plan_summary` / `translate_time_format` / `unsupported_for_target`），一律 `Result<_, String>`、错误只带一行中文原因；`pub use` 到 `engine::sql`，业务侧不必摸 `sqlglot_rust`
-  - 编辑器侧接 3 处：悬停补「来源：a、b」（`sql_hover.rs`）、代码动作「把 WHERE 下推进子查询」（`face_actions.rs`）、语义诊断加设置闸（`face_diag.rs`）
+  - 编辑器侧接 6 处：悬停补「来源：a、b」+ 悬停表/列列表（`sql_hover.rs`）、代码动作「把 WHERE 下推进子查询」（`face_actions.rs`）、语义诊断加设置闸（`face_diag.rs`）、**悬停列补「类型：X」**（`column_types`，2026-11-08 第二批）、**方言转译的状态栏提示**（`translate_time_format` + `unsupported_for_target`，落在 `translate::notes`）
+  - **表列快照复用既有通道**：`WorkbenchCompletion` L1 缓存（`Catalog.columns` 带类型名）→ `editor_catalog::pump` 每秒按文档推给 `EditorShared` → hover / 补全 / 语义诊断共读。对**每个源库**生效（MySQL / PG / SQLite / Oracle / SQL Server / DuckDB），不是 DuckDB 分析模式专有
   - 设置暴露：`crates/settings` 新增 `sql_analysis` 域（model / registry entries / service 三层 + 3 个 `Bool` 开关），偏好走「原子量 + 装配层 sink」跨层传递（`settings` 不依赖 `rds-sql`），启动时用落盘值推一次保证首帧生效
-  - 验证：`cargo test -p rds-sql -j 2` **206 passed**（195 基线 + `analysis` 11 条）；`cargo test -p rds-settings --lib` 34 passed；`cargo test -p rds-editor --lib` 746 passed / 2 条既有失败；`cargo build -p rds-app` 通过 + 20s 启动冒烟 0 panic / 0 ERROR
-  - 未接线（真正剩下的）：`Schema` 组装（`column_types`/`lineage_of_column` 需要上游把 `MetadataService` 表列拼成 `TypedTable`）、`builder` 自由构造器、方言动态注册
+  - 验证：`cargo test -p rds-sql -j 2` **206 passed**（195 基线 + `analysis` 11 条）；`cargo test -p rds-settings --lib` 34 passed；`cargo test -p rds-editor --lib` **750 passed / 2 条既有失败**（+4 条本轮悬停/转译用例）；`cargo build -p rds-app` 8m17s 通过 + 20s 启动冒烟 0 panic / 0 ERROR
+  - 压后（逐条触发条件见 `sqlglot-unwired-backlog.md`）：`lineage_of_column`（等血缘面板）、`diff_summaries`（等版本/结果对比界面）、`plan_summary`（只该进调试面板，不给普通用户）、`builder` 自由构造器、方言动态注册
 
 以上验证：`cargo check-all` 全量通过；`cargo test-all`（全 workspace）**约 430 项全过**（engine 219 / insight 53 / mock 56 / connection 21 / shared 19 / workbench 12 / project 10 / plugin 11，加 workbench 集成测试 19 项）。
 

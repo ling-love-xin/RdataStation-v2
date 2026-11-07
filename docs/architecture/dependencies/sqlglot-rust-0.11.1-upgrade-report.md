@@ -103,23 +103,23 @@ cargo check -p rds-app -j 2     # 应得 0 error 0 warning
 
 回滚：`git checkout -- Cargo.toml Cargo.lock crates/sql/src/builder.rs`（或直接 revert 本分支的两个 commit）。
 
-## 8. 能力释放度（0.11.1 上重新确认，2026-11-08 已接线）
+## 8. 能力释放度（0.11.1 上重新确认，2026-11-08 已接线 6 项）
 
-**结论：出口层已「完整释放」，编辑器侧接了 3 项 + 3 个设置开关；剩下的不是库能力缺口，而是「上游没人传表结构」。**
+**结论：出口层 8 项「完整释放」，编辑器侧已接 6 项 + 3 个设置开关；剩下的两项（血缘、diff）与计划面板不是能力缺口，而是**没有 UI 承载**——按需接，不做「为接线而接线」。**
 
 `crates/sql/src/analysis.rs` 把 0.11.1 里 8 项此前完全没出口的能力统一封成函数，一律 `Result<_, String>`
 （错误只带一行中文原因，不外泄上游类型），并 `pub use` 到 `engine::sql`——业务侧写法与原有 `diagnose` / `hover_at` 一致：
 
 | 能力（上游） | 出口函数 | 前置 | 编辑器侧接线 | 状态 |
 | --- | --- | --- | --- | --- |
-| 作用域分析 `build_scope` | `scope_report` | 无（不查元数据） | 悬停补「来源表」一行 | ✅ 已接线（`sql_analysis.hover_scope`） |
-| 类型标注 `annotate_types` | `column_types` / `data_type_label` | `TypedTable`（表名 + 列名/类型名） | 暂无 UI 调用方 | 🟡 已出口，待上游组表结构 |
-| 列级血缘 `lineage_sql` | `lineage_of_column` | `TypedTable` | 暂无 UI 调用方 | 🟡 已出口，待上游组表结构 |
-| AST 差异 `diff_sql` | `diff_summaries` | 无 | 暂无 UI 调用方 | 🟡 已出口（结果集对比 / 版本链 diff 可直接用） |
+| 作用域分析 `build_scope` | `scope_report` | 无（不查元数据） | 悬停补「来源表」一行 + 悬停表/列列表（目录快照） | ✅ 已接线（`sql_analysis.hover_scope`） |
+| 类型标注 `annotate_types` | `column_types` / `data_type_label` | `TypedTable`（表名 + 列名/类型名） | 悬停列补「类型：DECIMAL(12,2)」一行 | ✅ 已接线（2026-11-08，目录快照喂 `TypedTable`） |
+| 列级血缘 `lineage_sql` | `lineage_of_column` | `TypedTable` | 暂无 UI 承载（血缘面板未立项） | 🟡 压后（触发条件见 `sqlglot-unwired-backlog.md`） |
+| AST 差异 `diff_sql` | `diff_summaries` | 无 | 暂无 UI 承载（版本/结果对比未立项） | 🟡 压后（同上） |
 | 谓词下推 `pushdown_predicates` | `pushdown_sql` | 无 | 代码动作「把 WHERE 下推进子查询」 | ✅ 已接线（`sql_analysis.predicate_pushdown`） |
-| 本地计划 `plan` | `plan_summary`（含 mermaid） | 无（DDL 直报不支持） | 暂无 UI 调用方 | 🟡 已出口 |
-| 时间格式串转换 `format_time_dialect` | `translate_time_format` | 无 | 方言转移器未调用 | 🟡 已出口 |
-| 目标方言兼容校验 `validate_dialect_support` | `unsupported_for_target` | 无 | 暂无 UI 调用方 | 🟡 已出口 |
+| 本地计划 `plan` | `plan_summary`（含 mermaid） | 无（DDL 直报不支持） | 明确不给普通用户（是 sqlglot 自建计划，不是源库 EXPLAIN） | 🟡 压后（只该进调试面板） |
+| 时间格式串转换 `format_time_dialect` | `translate_time_format` | 无 | 转译提示「时间格式 %Y-%m-%d → YYYY-MM-DD」 | ✅ 已接线（2026-11-08，`translate::notes`） |
+| 目标方言兼容校验 `validate_dialect_support` | `unsupported_for_target` | 无 | 转译提示「目标方言不支持：…」 | ✅ 已接线（2026-11-08，`translate::notes`） |
 | 语义诊断（`diagnose` + 目录） | 原有 `diagnose` | 表目录 | 打字期未知表/未知列 | ✅ 已接线（`sql_analysis.semantic_diagnostics` 闸） |
 
 ### 8.1 设置暴露（`crates/settings` 的 `sql_analysis` 域）
@@ -136,12 +136,21 @@ cargo check -p rds-app -j 2     # 应得 0 error 0 warning
 设置侧改开关 → 落盘 → `install_sql_analysis_sink` 回调 → `rds_sql::analysis::set_prefs`；
 启动时 `SettingsService::init` 之后立刻用落盘值推一次，保证首帧就按设置生效（读侧无锁，打字路径零成本）。
 
-### 8.2 仍未接线（真正剩下的三块）
+### 8.2 表列快照从哪来（**各源库，不只 DuckDB 分析模式**）
 
-1. **完整 `Schema` 组装**：`column_types` / `lineage_of_column` 已能吃 `TypedTable`，但没有调用方把
-   `MetadataService` 的表列拼成 `TypedTable` 再喂进来——这一步落地后「值查看器类型」与「结果血缘」就能接上。
-2. **`builder` 的 ~50 个自由构造器**：我们仍只用手写结构体字面量为主，这正是 0.11 加两个字段就要改两处代码的根因。
-3. **方言插件 / `DialectPlugin` 注册**：上游 30 种方言我们固定用 11 种，动态注册未接。
+`column_types` 需要的 `TypedTable` 不是新造的一条元数据通路，而是复用仓库**已有的目录快照通道**：
+
+1. `WorkbenchCompletion` 的 L1 目录缓存按**连接**给出 `Catalog`（`objects` + `columns: (限定表名, 列名, Option<类型名>)`，见 `crates/editor/src/language/completion.rs:88`）；
+2. `editor_catalog::pump`（`crates/workbench/src/view.rs:902`，1s 一拍）把「活动文档绑定连接」的目录按文档推进 `EditorShared::set_catalog_snapshot`；
+3. hover / 补全 / 语义诊断读同一份快照（`catalog_snapshot_for` / `completion_catalog`）。
+
+因此这条能力对**每个源库**一视同仁：MySQL、PostgreSQL、SQLite、Oracle、SQL Server、DuckDB……只要文档绑了连接、导航树把表列载进 L1 缓存，hover 就有「类型：X」与列列表；未绑定连接或目录没载好则如实退化（不给类型，不猜）。DuckDB 分析模式只是**其中一种**使用场景，不是它的前提。
+
+### 8.3 仍未接线（压后项，逐条记在侧）
+
+血缘、diff、计划面板、`builder` 构造器、方言动态注册这五块的**现状 / 为什么不接 / 什么条件再接 / 接线成本**单独立了一份决策侧记：
+
+`docs/architecture/dependencies/sqlglot-unwired-backlog.md`
 
 > `executor`（内存执行器）依旧**不采用**：无事务/并发/权限，本地分析一律走 DuckDB。
 
