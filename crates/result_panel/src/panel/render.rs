@@ -19,7 +19,7 @@ use super::data::ResultPanel;
 use crate::error_card::{self};
 use crate::export;
 use crate::grid::{self as result_grid, ResultToolbar};
-use crate::ports::{Presentation, ResultRequest};
+use crate::ports::{PageTarget, Presentation, ResultRequest};
 use crate::script_card::{self};
 use crate::sets::{self as result_sets};
 use crate::ui;
@@ -386,6 +386,55 @@ impl ResultPanel {
                     .into_any_element()
             });
 
+        // 【分页】状态栏翻页三钮（首页 / 上页 / 末页）：**纯视图滚动**——不重查源库，
+        // 因此不需要精确总数（「末页」= 已抓到的最后一行，语义是"到底了"而不是
+        // "库里的第 N 页"）。下页由现有「获取数据」真钮（`more`）承担：它只在还有下一段
+        // 时出现，语义正好衔接。0 行结果集不注入，回退禁用占位。
+        let page_btn = |id: &'static str,
+                        icon: IconName,
+                        tooltip: &'static str,
+                        target: PageTarget| {
+            let queue = self.queue.clone();
+            Button::new(id)
+                .ghost()
+                .small()
+                .icon(icon)
+                .tooltip(tooltip)
+                .debug_selector(move || id.to_string())
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::GoPage(target), app);
+                })
+                .into_any_element()
+        };
+        let has_rows = self
+            .status
+            .as_ref()
+            .is_some_and(|status| status.total_rows > 0);
+        let (first_page, prev_page, last_page) = if has_rows {
+            (
+                Some(page_btn(
+                    "editor-result-page-first",
+                    IconName::SkipBack,
+                    "首页（滚到第 1 行）",
+                    PageTarget::First,
+                )),
+                Some(page_btn(
+                    "editor-result-page-prev",
+                    IconName::ChevronLeft,
+                    "上一页（上移一屏）",
+                    PageTarget::Prev,
+                )),
+                Some(page_btn(
+                    "editor-result-page-last",
+                    IconName::SkipForward,
+                    "末页（滚到已抓到的最后一行）",
+                    PageTarget::Last,
+                )),
+            )
+        } else {
+            (None, None, None)
+        };
+
         // 【#28-B3】状态栏行级动作钮：新增 / 复制 / 删除一行。只读结果集（`!editable`）
         // 不注入，回退 grid.rs 的禁用占位钮；复制 / 删除必须有选中行才可用。
         // 选中行号取状态行 1 基记录（格选中与行选中都记行；0 基交给宿主翻译身份）。
@@ -572,6 +621,9 @@ impl ResultPanel {
             refresh,
             more,
             fetch_all,
+            first_page,
+            prev_page,
+            last_page,
             insert_row,
             duplicate_row,
             delete_row,
@@ -593,18 +645,24 @@ impl ResultPanel {
             refresh,
             more,
             fetch_all,
+            first_page,
+            prev_page,
+            last_page,
             insert_row,
             duplicate_row,
             delete_row,
             undo,
             redo,
         } = controls;
-        // 【四行布局】状态栏动作控件 = 解构出的移动字段重组（more / fetch_all / 行级 /
-        // 撤销重做 / 导出 / 刷新；`..Default` 兜底其余槽位）。导出 / 刷新 2026-10-28
+        // 【四行布局】状态栏动作控件 = 解构出的移动字段重组（more / fetch_all / 翻页 /
+        // 行级 / 撤销重做 / 导出 / 刷新；`..Default` 兜底其余槽位）。导出 / 刷新 2026-10-28
         // 从工具栏移入状态栏（用户口径：执行信息与导出刷新都归结果集状态栏）
         let status_controls = result_grid::ResultControls {
             more,
             fetch_all,
+            first_page,
+            prev_page,
+            last_page,
             insert_row,
             duplicate_row,
             delete_row,

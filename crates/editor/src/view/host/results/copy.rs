@@ -7,6 +7,7 @@ use super::super::*;
 use crate::execution::{self, ExecTarget};
 use crate::store::{Pushdown, ResultEntry, ResultPlacement};
 use crate::view::results::grid::{self as result_grid};
+use result_panel::ports::PageTarget;
 
 impl EditorHostPanel {
     /// 【B5】复制当前结果集（TSV）
@@ -137,8 +138,76 @@ impl EditorHostPanel {
         }
     }
 
-    /// 【B5b】标记“正在取下一段”
+    /// 【分页】状态栏翻页（首页 / 上页 / 下页 / 末页）：**纯视图滚动**，不重查源库
     ///
+    /// 为什么不是带 OFFSET 重取：分段取数依赖源库给出稳定顺序，无 `ORDER BY` 的查询上
+    /// 翻页会重复 / 跳行（`WINDOW_FETCH_NOTICE` 已就此提示）；而已抓到的行本来就在内存里，
+    /// 翻页只是把视口挪过去——零重查、零风险，且「末页」不需要下发 COUNT（末页 = 已抓到的
+    /// 最后一行，语义是"到底了"而不是"库里的第 N 页"）。
+    ///
+    /// 目标行以网格回写的**可见首行**为基准，一屏 = `SEGMENT_ROWS`；下页滚到末尾且这份
+    /// 结果还有下一段时，顺带发一次取下一段（与「获取数据」真钮同一条路）。
+    pub(crate) fn go_page(&mut self, target: PageTarget, cx: &mut Context<Self>) {
+        let page = execution::SEGMENT_ROWS;
+        let (total, top) = {
+            let grid = self.grid.read(cx);
+            let delegate = grid.delegate();
+            (delegate.view_total(), delegate.visible_top())
+        };
+        let Some(last) = total.checked_sub(1) else {
+            // 空结果集：没有可滚的目标（按钮本就不该出现，这里防御一次）
+            return;
+        };
+        let mut need_more = false;
+        let row = match target {
+            PageTarget::First => 0,
+            PageTarget::Last => last,
+            PageTarget::Prev => top.saturating_sub(page),
+            PageTarget::Next => {
+                let next = top.saturating_add(page);
+                if next >= last {
+                    // 已经到（或越过）末尾：还有下一段就先取数（新行追加后会留在收尾处），
+                    // 否则停在最后一行
+                    need_more = self
+                        .shared
+                        .results_active(&self.document)
+                        .is_some_and(|entry| entry.can_fetch_more());
+                    last
+                } else {
+                    next
+                }
+            }
+        };
+        let grid = self.grid.clone();
+        grid.update(cx, |state, cx| state.scroll_to_row(row, cx));
+        if need_more {
+            self.fetch_more(cx);
+        }
+    }
+
+    /// 【P1-2】状态栏行号跳转（**1 基**行号，与行号列显示同口径）：滚到该行并选中。
+    ///
+    /// 纯视图导航：不重查源库（行已在内存里）。越界不报错而是夹到最后一行——用户敲
+    /// `9999` 时想要的是"到底"，弹一句"没有这一行"只会多一次点击。
+    pub(crate) fn go_row(&mut self, row: usize, cx: &mut Context<Self>) {
+        let grid = self.grid.clone();
+        let total = {
+            let state = grid.read(cx);
+            state.delegate().view_total()
+        };
+        let Some(last) = total.checked_sub(1) else {
+            self.set_message(Some("这份结果还没有行".to_string()), cx);
+            return;
+        };
+        let target = row.saturating_sub(1).min(last);
+        grid.update(cx, |state, cx| {
+            state.scroll_to_row(target, cx);
+            // 选中同一行：状态行「已选第 N 行」随之更新（否则滚过去了但"选中的"还在原处）
+            state.set_selected_row(target, cx);
+        });
+    }
+
+    /// 【B5b】标记“正在取下一段”
     /// 除了面板自己的真值，还要**当场**同步给网格的 delegate：提交到回填之间没有
     /// `sync_result_view`（那是一次全量投影，太重），不补这一下的话“滚动到底”会在
     /// 这段窗口里反复触发、每次都撞上“执行中”的回绝。

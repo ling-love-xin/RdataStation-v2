@@ -98,7 +98,7 @@ cargo check -p rds-editor -p rds-workbench -p rds-workbench-shell  # 通过（wo
 | 优先级 | 项 | 现状 / 期望 |
 | --- | --- | --- |
 | 高 | 列浏览器多选批量动作 | 清单已迁移 List（单选联动）；多选（批量隐藏/冻结/复制列名等）未做 |
-| 中 | 列宽持久化 | DataTable/TableState 列宽拖拽现成，但不落盘；换文档/重启恢复默认宽；待评估落 NavCache/会话 |
+| 中 | ~~列宽持久化~~ | **已交付（2026-11-08，P1-3）**：列宽按列名随会话落库（`result_column_widths` 列 + `列名=宽` 逗号串编解码 + `TableEvent::ColumnWidthsChanged` → `save_session_now`），并受全局开关 `result_panel.persist_column_widths` 管 |
 | 中 | COUNT 精确总数 / 跨帧统计缓存 / 小数分组 | §8.13 渲染改进批次的延后项（当前列统计按可见行现算、整数千分位） |
 | 中 | 并排对比增强 | 双栏等宽 → 可拖拽分隔；右栏列宽/滚动独立记忆 |
 | 中 | 行级叠加层收尾 | 锚点插入落点、本地行进统计/分组、fact 原生整表聚合逐行排除（§8.10 ④ 遗留）——**依赖 §2.4-A2 内存事实档接线** |
@@ -111,8 +111,12 @@ cargo check -p rds-editor -p rds-workbench -p rds-workbench-shell  # 通过（wo
 > 拖拽后推 `ResultRequest::ColumnOrderChanged` → `editor/.../dispatch.rs:200-203` 宿主 `save_session_now` 落库
 > → `panel/events.rs:301 apply_column_order` + `lifecycle.rs:242` 换新结果时按列名重排
 > → `editor/src/ports/editor_session.rs:82-116` 编解码为逗号串（含测试 `:333-359`）。
-> 同时「列宽持久化」条目的**阻塞已解除**：`editor_session.rs` 已稳定承载 `result_column_order` 编解码，
-> 列宽只需复用同通道加字段（不再依赖被占用文件）。
+> 同时原「列宽持久化」条目的阻塞当时已解除（`editor_session.rs` 已稳定承载 `result_column_order`
+> 编解码，列宽只需复用同通道加字段）——**该项已于同日 P1-3 落地**：`EditorContext.result_column_widths`
+> + 老库幂等补列（`ensure_column`）+ `editor_session.rs` 的 `列名=宽` 逗号串编解码（测试
+> `the_result_column_widths_travel_as_name_width_pairs`）+ 面板快照（`panel/lifecycle.rs` 订阅
+> `TableEvent::ColumnWidthsChanged` → `ResultRequest::ColumnWidthsChanged` → 宿主 `save_session_now`，
+> `set_data` 之后按列名回填）+ 全局开关 `result_panel.persist_column_widths` 读写两侧均判。
 
 ### 2.5 清理记录（2026-10-28，脏代码已移除）
 

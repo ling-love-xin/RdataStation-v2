@@ -125,6 +125,8 @@ impl EditorHostPanel {
                 //  实现方式：调用 fetch_more 的循环版本，直到 has_more = false）
                 self.fetch_more(cx);
             }
+            ResultRequest::GoPage(target) => self.go_page(target, cx),
+            ResultRequest::GoRow(row) => self.go_row(row, cx),
             ResultRequest::Export { format, all } => {
                 if all {
                     self.export_active_result_all(format, cx);
@@ -198,6 +200,11 @@ impl EditorHostPanel {
             // 【结果集 #296】列序拖拽：面板订阅里已更新 `column_order`（权威值），
             // 这里只需触发落库（与 Ctrl+S 同一条快照链路，改动即存）
             ResultRequest::ColumnOrderChanged { .. } => {
+                self.save_session_now(cx);
+                cx.notify();
+            }
+            // 【P1-3】列宽拖拽结束：面板快照已是权威值，同样只做「落库」这一件事
+            ResultRequest::ColumnWidthsChanged => {
                 self.save_session_now(cx);
                 cx.notify();
             }

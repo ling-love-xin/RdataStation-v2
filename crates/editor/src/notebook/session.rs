@@ -110,6 +110,9 @@ pub struct SavedSession {
     /// 【结果集 #296】结果集列序（列名数组；`None` = 没拖过 → 默认序）。
     /// 同文档重跑 / 重启后恢复用户拖过的列序（结果面板按列名匹配重排）
     pub result_column_order: Option<Vec<String>>,
+    /// 【P1-3】结果集列宽（`(列名, 像素宽)`；`None` = 没拖过 → 用默认档）。
+    /// 与列序同口径按列名记：列序变了 / 列隐藏了，重启回填仍按名字对得上
+    pub result_column_widths: Option<Vec<(String, f32)>>,
     /// 【B5 余项】结果区分栏高度（rem；`None` = 没拖过 / 与默认同值 → 不覆盖默认）。
     /// 随会话走（与列序同语义：面板自持的展示偏好，文档级而非全局）
     pub result_height: Option<f32>,
@@ -248,6 +251,7 @@ mod tests {
             tab_size: None,
             hard_tabs: None,
             result_column_order: None,
+            result_column_widths: None,
             result_height: None,
         }
     }

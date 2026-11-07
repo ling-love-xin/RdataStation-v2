@@ -18,6 +18,24 @@ use std::rc::Rc;
 
 use crate::export::ExportFormat;
 
+/// 【分页】状态栏翻页目标（**纯视图滚动，不重查源库**）
+///
+/// 为什么是滚动而不是带 OFFSET 重取：`fetch_next` 那套分段取数依赖源库给出**稳定顺序**，
+/// 无 `ORDER BY` 的查询上翻页会重复 / 跳行（`WINDOW_FETCH_NOTICE` 已就此提示）；而已抓到的
+/// 行本来就在内存里，翻页只是把视口挪过去——零重查、零风险，且「末页」不需要下发 COUNT
+/// （末页 = 已抓到的最后一行，语义是"到底了"而不是"库里的第 N 页"）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageTarget {
+    /// 首页：滚到第 1 行
+    First,
+    /// 上一页：以当前可见首行为基准上移一屏
+    Prev,
+    /// 下一页：以当前可见首行为基准下移一屏（到底且还有下一段时顺带取数）
+    Next,
+    /// 末页：滚到已抓到的最后一行
+    Last,
+}
+
 /// 结果面板发出的面板级动作请求（编辑器宿主 drain 后分派）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResultRequest {
@@ -68,6 +86,12 @@ pub enum ResultRequest {
     FetchMore,
     /// 取全部行（DBeaver 对齐：抓全量数据）
     FetchAll,
+    /// 【分页】状态栏翻页（首页 / 上页 / 下页 / 末页）：**纯视图滚动**，不重查
+    /// （下页到底且这份结果还有下一段时，宿主顺带发一次取下一段）
+    GoPage(PageTarget),
+    /// 【P1-2】状态栏行号跳转（**1 基**，与行号列显示同口径）：滚到该行并选中；
+    /// 越界由宿主夹到最后一行。纯视图导航，不重查。
+    GoRow(usize),
     /// 导出（格式 × 范围）
     Export { format: ExportFormat, all: bool },
     /// 错误卡片「复制错误」
@@ -113,6 +137,9 @@ pub enum ResultRequest {
     /// 【结果集 #296】列头拖拽出新列序（列名数组，按显示序）——宿主持久化到会话
     /// （跨会话恢复：同文档重跑按列名匹配重排）。空数组 = 不该发生（拖拽必有新序）。
     ColumnOrderChanged { order: Vec<String> },
+    /// 【P1-3】列宽拖拽结束（列名 → 像素宽的权威值已写进面板快照）——宿主收到只做
+    /// 「该存了」这件事：值直接从面板 `column_widths()` 读，不带载荷（与列序同通道）。
+    ColumnWidthsChanged,
     /// 【C1】切换第 `index` 份结果集的钉住态（钉住不被 FIFO 淘汰；会话级）。
     TogglePin(usize),
     /// 【C1】进入第 `index` 份结果集的重命名态（面板弹输入框；输入确认后再发

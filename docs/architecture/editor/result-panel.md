@@ -169,7 +169,7 @@ editor-result-compare-layout（h_flex，对比模式开启时）
 | ResultPanel Dock 化 | 见 §8 方案（用户已拍板：底部 dock + 全局联动 + 有结果自动开 + 移除嵌式结果区） |
 | 结果面板侧边栏 | ✅ 早期交付（`ee3077fa`）：左右分栏——左栏列结构、右栏选中格值详情；该形态后被 §8.11 / §8.12 取代 |
 | 列浏览器（右栏页签） | ✅ 本轮交付（§8.12）：列浏览器并入右侧辅助栏，与值详情 / 计算 / 分组同栏四页签切换；清单 ↔ 网格双向选中联动；隐藏走眼睛、冻结/排序/筛选/列统计走右键；左栏已整体移除、宽度全部还给网格；遗留：多选批量动作、列序拖拽 |
-| 渲染改进批次（clip / 分段语义 / JSON 美化 / 列宽记忆 / 千分位 / 列级统计） | ✅ 本轮交付（§8.13）：单元格 300 字符裁剪、状态行分段提示、JSON pretty、会话内列宽记忆、整数千分位、计算 / 分组列级访问器；延后：COUNT 精确总数、列宽落盘、跨帧统计缓存、小数分组 |
+| 渲染改进批次（clip / 分段语义 / JSON 美化 / 列宽记忆 / 千分位 / 列级统计） | ✅ 本轮交付（§8.13）：单元格 300 字符裁剪、状态行分段提示、JSON pretty、会话内列宽记忆、整数千分位、计算 / 分组列级访问器；延后：COUNT 精确总数、跨帧统计缓存、小数分组（**列宽落盘已于 2026-11-08 交付**，见 §8.7） |
 | 事实层 / 显示层分离 · A 批底座 | ✅ 本轮交付（§8.14）：A1 `FactFrame` 类型与访问器落 shared；A2 `facts` 平行槽位 + `FactState` 三态；A3 `QueryData.fact` 双产物入槽；A4 `fact_storage` 三档偏好 + Auto 分流纯函数与高低水位；B（DuckDB 分析保真链 / 表档接通）、D（导出分级）待开工；C（IronCalc）待拍板；E（engine 第一跳失真）另立项 |
 | 事实层 / 显示层分离 · B 批保真链 | ✅ 已交付（§8.15，提交 `84a81572`）：常驻表句柄回挂、分析三分支保真、内存档列式统计 / 排序 / 分组、表档占用可见、漂移注释勘误 |
 | 事实层 / 显示层分离 · D1 导出分级 | ✅ 本轮交付（§8.16，提交 `83655b26`）：Parquet / XLSX 事实档三分支保真直灌，无事实档猜型降级档回执标注；文本档不动；typed JSON 新档后置 |
@@ -310,7 +310,7 @@ blanco-ref / tusk-ref 等），拍板「可以并实现，要文档记录，补�
 | pending 变更合并 UPDATE 单事务 | blanco：批量变更集 → 一条 UPDATE 事务 | 同上 | backlog |
 | 撤销 / 重做（快照） | tusk `History<T>` 快照栈 | 同上 | ✅ 已交付：`EditHistory` 双栈（`changes.rs`，每格编辑一步、新编辑清空重做栈、随结果集作废）+ 接线（提交入栈、`Ctrl+Z`/`Ctrl+Shift+Z` 恢复上一步值写回变更集并重投影，store `histories` 槽与 `changes` 同序） |
 | 类型感知单元格编辑 | tusk：按列类型出编辑器/校验 | 同上 | ✅ 本轮交付**提交校验档**（`ee3077fa`）：数字列必须数字、布尔列限 `true/false/1/0/t/f/yes/no`、UUID 查 `8-4-4-4-12` 形状、日期查 `YYYY-MM-DD`+月日范围；非法拒绝提交（编辑态保留 + 红框 + 悬停错误文案），空 / `NULL` 放行（删值语义）；输入一变化即清错误。Select / Calendar 类型化编辑器（tusk 进一步）仍 backlog |
-| 列布局持久化（顺序/宽度/隐藏） | blanco `ColumnLayout` 落盘 + 重放 | 同上 | **部分已交付（2026-11-08 核查更正）**：**列序已落盘**——`editor_session.rs` 的 `result_column_order` 编解码 + 宿主 `save_session_now`（`dispatch.rs:200-203`）；**列宽 / 隐藏仍只内存**（`grid/delegate.rs:325`），但**阻塞已解除**（`editor_session.rs` 已稳定，加字段即可复用同通道），同会话列宽保留已达成 |
+| 列布局持久化（顺序/宽度/隐藏） | blanco `ColumnLayout` 落盘 + 重放 | 同上 | **列序与列宽已交付（2026-11-08）**：列序走 `editor_session.rs` 的 `result_column_order` 编解码 + 宿主 `save_session_now`（`dispatch.rs:200-203`）；列宽走 `result_column_widths`（`列名=宽` 逗号串 + 老库 `ensure_column` 补列），面板订阅 `TableEvent::ColumnWidthsChanged` 存快照 → `ResultRequest::ColumnWidthsChanged` → `save_session_now`，`set_data` 之后按列名回填；开关 `result_panel.persist_column_widths` 读写两侧都判。**列隐藏仍只内存**（`grid/delegate.rs` 的 `hidden`），未落盘 |
 | IME / 输入法支持 | rustgrid：编辑器输入法路径 | 同上 | backlog |
 | 列宽用户设定 | cellar `widths_user_set` | 同上 | backlog |
 | 每执行一 Job + 连接级锁 | DBeaver：独立执行 Job、连接级互斥 | `竞品分析-多面板并发执行阻塞.md`（执行架构，与 execution-context-model 衔接） | 下一版本规划（execution-context-model） |
@@ -420,7 +420,7 @@ ellipsis，hover tooltip 看全——tooltip 已含注释分块，不重复造�
 **列宽 backlog（未实现，DBeaver 有）**：
 - 双击列头边缘自动适应内容宽度（auto-fit）
 - 右键列头「设置列宽」输入数值
-- 列宽跨会话持久化（当前只会话内按列名记）
+- ~~列宽跨会话持久化~~（**已交付 2026-11-08**，见 §8.7 列布局持久化行）
 
 **既定路线**：分组 / 统计用纯函数补齐（可测、无新依赖）；大表分析继续走 DuckDB。
 
@@ -643,7 +643,7 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 **明确延后 / 不做（本轮不立项）**：
 
 - COUNT 精确总数（`count_wrapped` + 默认关开关 + 2s 超时放弃）——延后；engine `QueryResult.total_rows` 恒 0，`has_more` 时状态行只能报 `N+`。
-- 列宽落盘持久化（跨连接 / 库 / 表列集合的 `ColumnLayout` 重放）——延后，仅会话内记忆。
+- ~~列宽落盘持久化~~（**已交付 2026-11-08**）：跨连接 / 库 / 表按**列名**恢复 `列名=宽` 快照；列集合变了（换表 / 列名重命名）对不上的列回默认档，不做 `ColumnLayout` 整体重放。
 - 统计 / 分组结果跨帧缓存——未做：render 须保持纯读（不在 render 内写 Shared / 复杂计算），事件期算好存状态的失效口径（筛选 / 排序 / 取段追加 / 选中列 / 转置）易脏；且右栏非活动页签根本不渲染，收益不抵风险。现扫成本已随 P2-2 消除整行物化而下降，记 backlog。
 - 小数 / Decimal 整数部分分组——延后，先只对可解析 `i64` 的整数值分组。
 - 结果落盘恢复（dbdelve `StoredGrid`）→ P1 另立项；全量流式拉入（dbdelve 4GB 持有）→ 不采纳，保留窗口模式内存界住；polars 不引入（§8.8 选型记录）。
@@ -805,7 +805,12 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 6. **引用页签**：外键引用查看（面包屑 + 引用表只读预览，需下发 SQL 查源库）。
 7. **多选批量动作**：列浏览器多选批量动作（需多选模型 + 批量动作入口）。
 8. **列序拖拽**：列顺序拖拽（`move_column` 钩子 + 列序模型与隐藏/冻结/转置映射改造）。
-9. **列宽 backlog**：双击列头边缘自动适应内容宽度、右键列头「设置列宽」输入数值、列宽跨会话持久化（当前只会话内按列名记）。
+9. **列宽 backlog**：双击列头边缘自动适应内容宽度、右键列头「设置列宽」输入数值（跨会话持久化已于 2026-11-08 交付）。
+
+> **核查更正（2026-11-08）**：本节是当年盘点快照，以下条目已不成立——④ `ResultRequest::FetchAll`
+> 变体**已加**（`ports.rs`，宿主侧仍是单段取数、循环版未实现）；⑧ 列序拖拽**全链路已通**
+> （见 §2.4 核查更正：组件 `col_movable` → 面板订阅 → `save_session_now` → 编解码）；
+> ⑨ 列宽跨会话持久化**已交付**（见 §8.7 列布局持久化行）。①②③⑤⑥⑦ 仍待做。
 
 **测试基线**：`cargo test -p rds-result-panel --lib` = **196 passed / 0 failed**。
 

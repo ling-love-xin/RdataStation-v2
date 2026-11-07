@@ -84,6 +84,18 @@ impl WorkbenchSessionStore {
                 .clone()
                 .unwrap_or_default()
                 .join(","),
+            // 【P1-3】列宽编码为 `列名=宽` 逗号串（空串 = 没拖过 → 默认档）
+            result_column_widths: session
+                .result_column_widths
+                .as_ref()
+                .map(|widths| {
+                    widths
+                        .iter()
+                        .map(|(name, width)| format!("{name}={width}"))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .unwrap_or_default(),
             updated_at_ms: now_ms(),
         }
     }
@@ -118,6 +130,22 @@ impl WorkbenchSessionStore {
                     .map(|column| column.to_string())
                     .collect()
             }),
+            // 【P1-3】空串 = 没拖过；任一项缺 `=` 或宽度解析失败 → **整串忽略**（宁可
+            // 回默认档，也不恢复出一组错宽度；列名含 `,`/`=` 时同样落到这里）
+            result_column_widths: {
+                let raw = &context.result_column_widths;
+                if raw.is_empty() {
+                    None
+                } else {
+                    raw.split(',')
+                        .map(|pair| {
+                            let (name, width) = pair.split_once('=')?;
+                            let width = width.parse::<f32>().ok()?;
+                            Some((name.to_string(), width))
+                        })
+                        .collect::<Option<Vec<_>>>()
+                }
+            },
             // 【B5 余项】高度读回：18.0 是桥接层当年写死的假值（所有旧行同值，不代表
             // 用户拖过）→ 当作没存过；20.0 是「没拖过」落的语义默认，同样回 None——
             // 两个哨兵值都不覆盖界面默认，真实拖过的值（≠20）才恢复（钳制在 restore 侧）
@@ -196,6 +224,7 @@ mod tests {
             tab_size: None,
             hard_tabs: None,
             result_column_order: None,
+            result_column_widths: None,
             result_height: None,
         }
     }
@@ -357,6 +386,41 @@ mod tests {
         let plain =
             WorkbenchSessionStore::to_session(WorkbenchSessionStore::to_context(&session()));
         assert_eq!(plain.result_column_order, None, "空串 = 没拖过列序");
+    }
+
+    /// 【P1-3】列宽以 `列名=宽度` 逗号串存库、按 `(列名, 宽)` 认回来；坏串整串忽略
+    #[test]
+    fn the_result_column_widths_travel_as_name_width_pairs() {
+        let mut customized = session();
+        customized.result_column_widths = Some(vec![
+            ("name".to_string(), 120.0),
+            ("id".to_string(), 80.5),
+        ]);
+        let row = WorkbenchSessionStore::to_context(&customized);
+        assert_eq!(row.result_column_widths, "name=120,id=80.5");
+
+        let back = WorkbenchSessionStore::to_session(row);
+        assert_eq!(
+            back.result_column_widths,
+            Some(vec![
+                ("name".to_string(), 120.0),
+                ("id".to_string(), 80.5)
+            ]),
+            "按列名对宽度原样回来"
+        );
+
+        let plain =
+            WorkbenchSessionStore::to_session(WorkbenchSessionStore::to_context(&session()));
+        assert_eq!(plain.result_column_widths, None, "空串 = 没拖过列宽");
+
+        // 坏串（任一项缺 `=` 或宽度解析不了）：整串忽略，不半残恢复出一组错宽度
+        let mut broken = WorkbenchSessionStore::to_context(&session());
+        broken.result_column_widths = "name=120,bad".to_string();
+        assert_eq!(
+            WorkbenchSessionStore::to_session(broken).result_column_widths,
+            None,
+            "坏串宁可回默认档"
+        );
     }
 
     #[test]

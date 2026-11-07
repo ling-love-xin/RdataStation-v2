@@ -156,16 +156,16 @@ pub fn window_fetch_active(status: &ResultStatus) -> bool {
     status.has_more || status.truncated_hint.is_some()
 }
 
-/// 底部动作状态行的**占位动作钮**（#26 视图骨架：本轮全部禁用灰态）。
+/// 底部动作状态行的**占位动作钮**（写操作段仍未接线，翻页段已由面板注入真钮）。
 ///
 /// 顺序对齐 DBeaver 底部动作条，三段：
-/// - 写操作段（0..7）：保存 · 取消 · 新增行 · 复制行 · 删除行 · 撤销 · 重做；
-/// - 翻页段（7..10）：首页 · 上页 · 末页——「下页」是现有取下一段真钮，由
-///   `ResultControls.more` 注入，不进占位清单；
-/// - 系统段（10..）：导出 · 设置。
+/// - 写操作段（0..7）：保存 · 取消 · 修改 · 新增行 · 复制行 · 删除行 · 撤销 · 重做；
+/// - 翻页段（8..10）：首页 · 上页 · 末页——**已接线**（面板注入 `first_page` /
+///   `prev_page` / `last_page`，纯视图滚动）；「下页」是现有取下一段真钮
+///   （`ResultControls.more`），不进占位清单；
+/// - 系统段（11..）：导出 · 刷新。
 ///
-/// 行级叠加层模型（新增 / 复制 / 删除 + 行级撤销重做）是下一轮任务，见
-/// `result-panel.md` §8.10 ④；本轮只摆位、不接线，按钮一律 `disabled(true)`。
+/// 未注入时（无结果集）回退到这里，按钮一律 `disabled(true)` 占位。
 pub fn status_action_placeholders() -> Vec<(IconName, &'static str)> {
     vec![
         (IconName::Save, "保存（待行级模型落地）"),
@@ -176,9 +176,9 @@ pub fn status_action_placeholders() -> Vec<(IconName, &'static str)> {
         (IconName::Trash, "删除行（暂未支持下发）"),
         (IconName::Undo2, "撤销"),
         (IconName::Redo2, "重做"),
-        (IconName::SkipBack, "首页（窗口化取数暂不支持）"),
-        (IconName::ChevronLeft, "上页（窗口化取数暂不支持）"),
-        (IconName::SkipForward, "末页（窗口化取数暂不支持）"),
+        (IconName::SkipBack, "首页（滚到第 1 行）"),
+        (IconName::ChevronLeft, "上一页（上移一屏）"),
+        (IconName::SkipForward, "末页（滚到已抓到的最后一行）"),
         (IconName::Download, "导出"),
     ]
 }
@@ -213,6 +213,12 @@ pub struct ResultControls {
     pub more: Option<AnyElement>,
     /// 【DBeaver 对齐】取全部行（一次性抓全量；只在这份结果还有下一段时给）
     pub fetch_all: Option<AnyElement>,
+    /// 【分页】首页（滚到第 1 行；面板注入，无结果集时不注入 → 回退禁用占位）
+    pub first_page: Option<AnyElement>,
+    /// 【分页】上一页（以可见首行为基准上移一屏；同上）
+    pub prev_page: Option<AnyElement>,
+    /// 【分页】末页（滚到已抓到的最后一行；同上）
+    pub last_page: Option<AnyElement>,
     /// 【#28-B3】新增行（面板注入；只读结果集不注入 → 回退禁用占位钮）
     pub insert_row: Option<AnyElement>,
     /// 【#28-B3】复制当前选中行为本地行（同上）
@@ -570,12 +576,19 @@ pub fn render_status_row(
             .redo
             .unwrap_or_else(|| placeholder_btn(placeholders[7])),
     ];
-    // 翻页段占位：首页 · 上页（下页 = 现有取下一段真钮；末页占位）
+    // 翻页段：首页 · 上页（面板注入真钮 = 纯视图滚动；未注入回退禁用占位）
+    // 下页 = 现有取下一段真钮；末页 = 滚到已抓到的最后一行
     let pager_before = [
-        placeholder_btn(placeholders[FIRST_PAGER_ACTION]),
-        placeholder_btn(placeholders[FIRST_PAGER_ACTION + 1]),
+        controls
+            .first_page
+            .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_PAGER_ACTION])),
+        controls
+            .prev_page
+            .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_PAGER_ACTION + 1])),
     ];
-    let last_pager = placeholder_btn(placeholders[FIRST_SYSTEM_ACTION - 1]);
+    let last_pager = controls
+        .last_page
+        .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_SYSTEM_ACTION - 1]));
     // 系统段：导出 · 刷新（2026-10-28 从工具栏移入状态栏；面板注入真钮，
     // 未注入（无导出上下文 / 不可刷新）回退禁用占位——占位仍占位，布局不跳）
     let refresh_placeholder = (IconName::RotateCw, "刷新（重跑当前 SQL）");

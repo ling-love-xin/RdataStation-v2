@@ -139,7 +139,7 @@ dbdelve 同款取舍（`result_grid.rs:1313-1333,1555-1602`）：`clip` 只影�
 ### 5.1 计划外同批落地（见 `result-panel.md` §8.13）
 
 - **P1-4 格内 JSON pretty-print**：`pretty_json_display`，对象 / 数组压缩串美化，非法 JSON / 裸标量回退普通文本；展示派生，原文走完整值路径。
-- **P1-5 列宽会话内记忆**：`column_widths: HashMap<String, Pixels>` 按列名存（隐藏列 / 将来列序拖拽不错位）；`set_data` 清空；宿主接 `TableEvent::ColumnWidthsChanged`；不落盘。
+- **P1-5 列宽会话内记忆**：`column_widths: HashMap<String, Pixels>` 按列名存（隐藏列 / 将来列序拖拽不错位）；`set_data` 清空；宿主接 `TableEvent::ColumnWidthsChanged`。**跨会话持久化已于 2026-11-08（P1-3）补上**：面板快照 → `ResultRequest::ColumnWidthsChanged` → `save_session_now` → `result_column_widths`（受 `result_panel.persist_column_widths` 开关控制）。
 - **P2-1 整数千分位**：`group_digits` 内核 + `format_integer_cell`；数值列整数分组，浮点 / 文本 / NULL 不分组；展示层，原值不变。
 - **P2-2 计算 / 分组列级访问器**：`column_stats_from_values` / `group_by_values` 列级纯函数 + delegate `column_values` / `column_stats_for` / `group_by_for`；消除 `visible_rows()` 整行矩阵物化；菜单事件期一次性现算保留不动。跨帧结果缓存未做（render 纯读 + 失效口径易脏，记 backlog）。
 

@@ -253,6 +253,12 @@ pub struct ResultPanel {
     /// host 构造时同步（settings.result_panel.type_style()），设置页变更由 workbench
     /// 钩子推 `set_type_style` 即时生效；只影响渲染显示。
     pub(crate) type_style: TypeStylePrefs,
-    /// 【DBeaver 对齐】状态栏中段行数输入框（可编辑，输入行号跳转；暂不接跳转逻辑）
+    /// 【P1-3】列宽快照（列名 → 像素宽），面板侧权威值：拖拽结束时由订阅写入、
+    /// 宿主存档时读走、会话恢复时回灌。跨结果集保留（按列名匹配，对不上的列忽略）。
+    pub(crate) column_widths: Vec<(String, f32)>,
+    /// 【DBeaver 对齐】状态栏中段行数输入框（可编辑：输入行号跳到该行）
     pub(crate) row_count_input: Entity<InputState>,
+    /// 【P1-2】行号输入框的订阅句柄（仅持有——句柄丢了解订就跟着走；`set_value`
+    /// 程序化回填不发事件，所以只有用户真敲键才会入队 `GoRow`）
+    pub(crate) _row_count_sub: Option<Subscription>,
 }

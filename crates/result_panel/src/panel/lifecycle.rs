@@ -42,12 +42,33 @@ impl ResultPanel {
         // 订阅句柄仅持有（防重复建立）；面板实体自身不需要额外使用
         let _ = filter_sub;
 
-        // 【DBeaver 对齐】状态栏中段行数输入框：可编辑，输入行号跳转（暂不接跳转逻辑）
+        // 【DBeaver 对齐】状态栏中段行数输入框：可编辑，输入行号跳转到该行
         let row_count_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx);
             state.set_placeholder("200", window, cx);
             state
         });
+        // 【P1-2】行号跳转订阅：`InputState::set_value` 程序化回填**不发**事件
+        // （宿主 sync 时每帧刷新行数文案不会把自己再触发一遍），所以只有用户真敲键
+        // 才入队；非数字 / 0 静默忽略（中段一直在编辑，边敲边报错太吵）。
+        let row_count_sub = cx.subscribe_in(
+            &row_count_input,
+            window,
+            |this, state, event: &InputEvent, _window, cx| {
+                if !matches!(event, InputEvent::Change) {
+                    return;
+                }
+                let text = state.read(cx).value().to_string();
+                let Ok(row) = text.trim().parse::<usize>() else {
+                    return;
+                };
+                if row == 0 {
+                    return;
+                }
+                this.queue.push(ResultRequest::GoRow(row));
+                cx.notify();
+            },
+        );
 
         // 占位网格：编辑器构造真网格（含钩子）后经 `set_grids` 替换；占位仅保证
         // 构造后到接线前这段窗口里实体非空（渲染不会走到——还没 sync 过）
@@ -109,6 +130,20 @@ impl ResultPanel {
                         this.rebuild_value_tree(window, cx);
                         cx.notify();
                     }
+                    // 【P1-3】列宽拖拽结束：先把宽度记进 delegate（宿主那份订阅同样会记，
+                    // 同值幂等；这样不依赖两个订阅者的先后顺序），再取面板快照并推
+                    // 「该存了」——宿主从 `panel.column_widths()` 读值落会话
+                    TableEvent::ColumnWidthsChanged(widths) => {
+                        let widths = widths.clone();
+                        this.grid.update(cx, |state, _cx| {
+                            state.delegate_mut().set_column_widths(&widths)
+                        });
+                        let snapshot = this.grid.read(cx).delegate().column_width_snapshot();
+                        if snapshot != this.column_widths {
+                            this.column_widths = snapshot;
+                            this.queue.push(ResultRequest::ColumnWidthsChanged);
+                        }
+                    }
                     // 其他事件忽略（SelectRow / SelectColumn / SelectCell 已由
                     // delegate 内联处理或后续接线）
                     _ => {}
@@ -143,9 +178,12 @@ impl ResultPanel {
             selection_pos: None,
             // 【结果集 #296】列序默认空 = 数据序；宿主构造期注入持久化列序
             column_order: Vec::new(),
+            // 【P1-3】列宽快照默认空 = 没拖过；宿主恢复会话时注入
+            column_widths: Vec::new(),
             selected_col: None,
             browser_list,
             row_count_input,
+            _row_count_sub: Some(row_count_sub),
             presentation: Presentation::Grid,
             right_tab: RightTab::Browser,
             compare_active: 0,
@@ -241,6 +279,10 @@ impl ResultPanel {
                     // 【结果集 #296】先按持久化列名序重排（空 = 默认序，原样直通）
                     let (columns, rows) = self.apply_column_order(payload.columns, payload.rows);
                     state.delegate_mut().set_data(columns, rows);
+                    // 【P1-3】持久化列宽**在 set_data（清空列宽表）之后**回填：按列名对，
+                    // 对不上的列跳过（结果换了表 / 列名变了就回默认档）
+                    let widths = self.column_widths.clone();
+                    state.delegate_mut().apply_column_width_snapshot(&widths);
                     // 【Q6】类型必须**在 set_data 之后**设：`set_data` 会清空类型
                     state.delegate_mut().set_column_types(payload.column_types);
                     // 【A9】来源表名同理（set_data 会清掉旧的）

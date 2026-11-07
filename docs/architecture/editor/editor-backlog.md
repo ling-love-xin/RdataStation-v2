@@ -46,7 +46,7 @@ P1 边界（已实现，勿当缺口）：`SELECT *` 只展开实体表；表达
 
 | 项 | 现状 | 说明 |
 | --- | --- | --- |
-| 列宽持久化 | DataTable/TableState 列宽拖拽现成，但不持久化 | 换文档/重启恢复默认宽；待评估是否落 NavCache/会话 |
+| ~~列宽持久化~~ | ✅ 已交付（2026-11-08）：会话 `result_column_widths` + `列名=宽` 编解码 + `persist_column_widths` 开关 | 换文档/重启按列名恢复；列名对不上的列回默认档 |
 | analyze 路径 | 分析/引擎内结果无列类型也无注释 | `ResultSet` 无类型字段；P1 已按「无注释」如实处理（已知边界） |
 
 ## 五、工程与流程
@@ -178,7 +178,7 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 
 - AGENTS.md 标「GPUI-kit 0.8.x」而 vendor / 代码按 0.7.1（版本口径是否有意，未确认）
 - 执行上下文模型（DBeaver per-context 独立连接）：讨论定稿未开工（0.2.4 不实现，见 `../connection/execution-context-model.md`）
-- 列宽持久化（DataTable 拖拽现成，不持久化）：待评估是否落 NavCache/会话
+- ~~列宽持久化~~：✅ 已交付（2026-11-08，落会话 `result_column_widths`，受 `result_panel.persist_column_widths` 开关控制）
 - analyze 路径结果无列类型/注释（`ResultSet` 无类型字段，已知边界）
 - 函数手册官方文档 URL：workbench 按「引擎+函数名」生成（真实环境验证后定）
 - 列类型进目录后 hover 补类型：`annotate_types` 现多数表达式返回 Unknown，暂不做

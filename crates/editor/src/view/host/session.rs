@@ -60,6 +60,22 @@ impl EditorHostPanel {
                 let order = self.result_panel.read(cx).column_order();
                 (!order.is_empty()).then_some(order)
             },
+            // 【P1-3】列宽随会话走（面板自持快照；空 = 没拖过 → None 不落库）。
+            // 受全局开关 `result_panel.persist_column_widths` 管：关掉就按「没拖过」
+            // 处理（只保留会话内记忆，不写库也不读回——与列序的"总是存"不同，
+            // 列宽是用户明确给了开关的那一项）
+            result_column_widths: {
+                let persist = cx
+                    .try_global::<settings::model::Settings>()
+                    .map(|settings| settings.result_panel.persist_column_widths)
+                    .unwrap_or(false);
+                let widths = if persist {
+                    self.result_panel.read(cx).column_widths()
+                } else {
+                    Vec::new()
+                };
+                (!widths.is_empty()).then_some(widths)
+            },
             // 【B5 余项】结果区高度随会话走（面板自持 rem 值；与默认同值 = 没拖过 →
             // None 不落库，复用「显式非默认才算改过」的既有口径）
             result_height: {
@@ -286,6 +302,21 @@ impl EditorHostPanel {
                 self.result_panel.update(cx, |panel, _cx| {
                     panel.set_column_order(order.to_vec());
                 });
+            }
+        }
+        // 【P1-3】列宽随会话回来：注入面板（面板按列名对宽度，重跑后同样生效）。
+        // 开关关掉时不读回（库里可能还留着旧值，但用户此刻不想跨会话带列宽）
+        let persist_widths = cx
+            .try_global::<settings::model::Settings>()
+            .map(|settings| settings.result_panel.persist_column_widths)
+            .unwrap_or(false);
+        if persist_widths {
+            if let Some(widths) = session.result_column_widths.clone() {
+                if !widths.is_empty() {
+                    self.result_panel.update(cx, |panel, _cx| {
+                        panel.set_column_widths(widths);
+                    });
+                }
             }
         }
         // 【B5 余项】结果区高度随会话回来：钳到分栏拖拽范围（与 render 的 size_range

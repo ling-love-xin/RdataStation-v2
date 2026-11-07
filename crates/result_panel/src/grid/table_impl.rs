@@ -5,6 +5,8 @@
 //! `render_td` / `context_menu` 的实际逻辑在 [`header`] / [`cell`] / [`menu`] 的
 //! **顶层自由函数**中，这里只做薄转发（2026-10-29 拆分）。
 
+use std::ops::Range;
+
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::menu::PopupMenu;
@@ -115,6 +117,17 @@ impl TableDelegate for ResultGridDelegate {
         });
         // 视图行序变了，重画（表格自己也会 notify，但这里是真值变了）
         cx.notify();
+    }
+
+    /// 【分页】视口首行回写：状态栏「上页 / 下页」按它算目标行（组件库在可见范围
+    /// 变化时频繁调用，这里只赋一个 `usize`，不碰数据）。
+    fn visible_rows_changed(
+        &mut self,
+        visible_range: Range<usize>,
+        _window: &mut Window,
+        _cx: &mut Context<TableState<Self>>,
+    ) {
+        self.visible_top = visible_range.start;
     }
 
     /// 滚动到底自动加载（B5b）：组件库在可见范围距末尾不足 `load_more_threshold` 行时

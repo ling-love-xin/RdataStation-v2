@@ -296,6 +296,17 @@ impl ResultPanel {
         self.column_order.clone()
     }
 
+    /// 【P1-3】当前列宽快照（列名 → 像素宽；宿主保存会话时读取）
+    pub fn column_widths(&self) -> Vec<(String, f32)> {
+        self.column_widths.clone()
+    }
+
+    /// 【P1-3】注入持久化列宽（会话恢复时宿主调）：只写快照，落到 delegate 由下一次
+    /// `sync` 在 `set_data` 之后统一回填（没数据时先别写一批对不上列的宽度）
+    pub fn set_column_widths(&mut self, widths: Vec<(String, f32)>) {
+        self.column_widths = widths;
+    }
+
     /// 【结果集 #296】按持久化列名序重排一份新结果的列与行（列名匹配，未匹配列
     /// 保持数据序附加在末尾——用户拖过的列还在就保持，新列不猜）。
     pub(crate) fn apply_column_order(

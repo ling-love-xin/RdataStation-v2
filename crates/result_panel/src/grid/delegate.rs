@@ -226,6 +226,10 @@ pub struct ResultGridDelegate {
     /// 不持真值——真值在 store 结果集槽位，切换结果集 / 刷新由宿主重新投影）。
     /// `None` = 纯底层结果集（现状行为不变）。本地行参与网格视图与筛选命中，不参与列排序。
     pub(crate) local: Option<LocalRowSet>,
+    /// 【分页】当前视口首行（**视图行序**，0 基）。由组件库 `visible_rows_changed`
+    /// 回写（滚动 / 筛选 / 排序后都会变），供状态栏「上页 / 下页」算目标行。
+    /// 面板不自己猜滚动位置——表格才是滚动位置的唯一真值。
+    pub(crate) visible_top: usize,
 }
 impl ResultGridDelegate {
     /// 空网格：只带一句空态说明
@@ -240,6 +244,21 @@ impl ResultGridDelegate {
     /// `TableEvent::MoveColumn` 订阅里读这份快照做持久化。
     pub fn display_order(&self) -> Vec<String> {
         self.display_order.clone()
+    }
+
+    /// 【分页】当前视口首行（视图行序，0 基）；翻页按钮据此算上 / 下一页目标。
+    pub fn visible_top(&self) -> usize {
+        self.visible_top
+    }
+
+    /// 【分页】当前视图行数（筛选 / 排序后的可见行数；转置视图为可见字段数）。
+    /// 与 `TableDelegate::rows_count` 同口径，供宿主翻页算「末页」——不引 trait 到宿主。
+    pub fn view_total(&self) -> usize {
+        if self.transposed {
+            self.transpose_columns().len()
+        } else {
+            self.view_len()
+        }
     }
 
     /// 换一批数据（结果集变化时从权威拷贝一次；网格不持有第二份真值）
@@ -337,6 +356,28 @@ impl ResultGridDelegate {
                 continue;
             };
             self.column_widths.insert(name, *width);
+        }
+    }
+
+    /// 【P1-3】当前会话内列宽快照（列名 → 像素宽），供宿主落进会话。
+    ///
+    /// 只含**用户拖过**的列：没拖过的列不进表（恢复时自然回默认档，也避免把
+    /// 组件库测量出的列宽当成用户意图）。
+    pub fn column_width_snapshot(&self) -> Vec<(String, f32)> {
+        self.column_widths
+            .iter()
+            .map(|(name, width)| (name.clone(), f32::from(*width)))
+            .collect()
+    }
+
+    /// 【P1-3】按列名回填持久化列宽（`set_data` 之后调：它会清空列宽表）。
+    ///
+    /// 列名对不上就跳过那一列（结果换表 / 列被重命名时按名字对不上，不按位置硬套）。
+    pub fn apply_column_width_snapshot(&mut self, widths: &[(String, f32)]) {
+        for (name, width) in widths {
+            if self.columns.iter().any(|column| column == name) {
+                self.column_widths.insert(name.clone(), gpui_kit::px(*width));
+            }
         }
     }
 
