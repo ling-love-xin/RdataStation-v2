@@ -33,7 +33,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 | --- | --- | --- |
 | `gpui-kit` | `0.9.0` + `features = ["gpui-fast"]` | 与 gpui 版本强绑定：`gpui-kit` / `gpui-base` / `gpui-component` / `gpui-kit-assets` **必须同版本**（门面与内部错配会出问题），随 GPUI-kit 发布节奏整套升（当前 0.9.0，2026-11-08 由 0.8.1 升入，见 `docs/architecture/ui/gpui-kit-0.9.0-upgrade-report.md`、`docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md` 与 `docs/architecture/dependencies/duckdb-2.0-gpui-kit-0.8.1-upgrade-assessment.md`；`gpui-base` / `gpui-component` 两个包走 `vendor/` 私有 patch，见根 `Cargo.toml` `[patch.crates-io]`）。写法是 caret 约束，实际生效版本看 `Cargo.lock`。`gpui-fast` 是**换渲染内核**而非开关：`gpui-fast*` 与 `gpui-pre*` 两套核心同编；`gpui-fast` 自身不嵌 Windows manifest，本项目由 `gpui-pre` 的默认 `windows-manifest` 提供（不要在应用侧再嵌，见 §4 的 0.9.0 记录） |
 | `specta` | `=2.0.0-rc.25` | rc 阶段，11 个 crate 共用；升级需同步核对类型生成链路 |
-| `sqlglot-rust` | `=0.10.33` | SQL 转译/生成行为对版本敏感（业务关键，见 §5），升级需跑 SQL 回归（0.10.29 → 0.10.33 于 2026-10-24，修「单条转译静默截断」） |
+| `sqlglot-rust` | `=0.11.1` | SQL 转译/生成行为对版本敏感（业务关键，见 §5），升级需跑 SQL 回归（0.10.29 → 0.10.33 于 2026-10-24，修「单条转译静默截断」；0.10.33 → 0.11.1 于 2026-11-08，代码仅 2 处补 CTAS 字段） |
 | `arrow` | `58.4.0` | 主版本跟随 `duckdb`：两端之间传 `RecordBatch`，必须是同一 arrow，不能单独升 |
 
 ## 2. 升级流程
@@ -85,6 +85,9 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
   - 行为核对：比对两版生成器源码，表名加引号路径完全一致（`write_quoted(&table.name, table.name_quote_style)`），0.10 只新增了**别名**的引号处理；我们的 `TableRef` 无别名，生成结果不变
   - 新增回归用例 `test_generated_sql_is_pinned`：把 CREATE TABLE / DROP TABLE / SELECT / INSERT 的生成结果与引号风格钉死，后续升级越界即失败
 - `sqlglot-rust` 0.10.29 → **0.10.33**（2026-10-24）：修复「单条转译静默截断」；`test_generated_sql_is_pinned` 的生成结果未变，无需改代码
+- `sqlglot-rust` 0.10.33 → **0.11.1**（2026-11-08，跨 0.10 → 0.11）：上游 19 个源文件 +848/−379（解析器重写 +405/−146、新增 `src/precedence.rs` 优先级表、生成器 +98/−5）。代码改动仅 2 处：`crates/sql/src/builder.rs` 的两处 `CreateTableStatement` 字面量补 `with_properties`（CTAS 的 `WITH` 属性）与 `with_data`（`WITH [NO] DATA`），我们都取空值，生成结果不变
+  - 验证：`cargo test -p rds-sql` **195 + 10 项与 0.10.33 基线逐项相同**（含钉死生成 SQL 的 `test_generated_sql_is_pinned`）；`cargo check -p rds-app` 0 error 0 warning
+  - 处置：`crates/editor` 的 2 条视图用例失败（`legacy::opening_an_analysis_document_builds_a_cell_editor_per_cell` / `notebook_win::analysis_cell_renders_multiple_output_blocks`）**已在 0.10.33 上复现，属仓库既有失败**，与本升级无关，见 `sqlglot-rust-0.11.1-upgrade-report.md` §5
 - `sqlx` 0.8.6 → **0.9.0**：
   - feature 改名：`runtime-tokio-native-tls` → `runtime-tokio` + `tls-native-tls`
   - `query()` 自 0.9 起只接受 `&'static str`，动态 SQL 必须显式审计：8 处（`driver/native/mysql.rs`、`postgres.rs` 各 4 处）改为 `sqlx::query(sqlx::AssertSqlSafe(sql))`；参数仍统一走 `bind`，不做字符串拼接
@@ -114,7 +117,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 | `duckdb` | `=1.10506.1`（DuckDB 1.5.6） | ✅ 已升（2026-11-08）；2.0 线 `1.20000.1` 暂缓 | `crates/engine`（`DUCKDB_LIB_DIR` 动态链接） | 1.5 线内 patch 升完，`arrow` 仍 58.4.0 未动；**必须 `=` 精确锁定**（caret 会被解析到 `1.20000.1` 并强拉 `arrow 60`）；2.0 线要 `arrow ^60` 且有存储格式单向兼容，见 `duckdb-2.0-gpui-kit-0.8.1-upgrade-assessment.md`，继续暂缓 |
 | `arrow` | 58.4.0 | 60.1.0 | — | **不可单独升**，须与 `duckdb` 同步（见 R4）；只有上 DuckDB 2.0 线才需要 60 |
 | `gpui-kit` | 0.9.0 + `features = ["gpui-fast"]` | ✅ 已升（2026-11-08） | UI 全仓 | 编译全绿（含开 fast 后）；剩运行时回归与滚动性能基线，见 `gpui-kit-0.9.0-upgrade-report.md` §7 |
-| `sqlglot-rust` | 0.10.33 | 0.11.1（crates.io 2026-10-28） | `crates/sql` | 跨 0.10 → 0.11，须先跑 `cargo test -p rds-sql` 的 SQL 回归，未评估 |
+| `sqlglot-rust` | `=0.11.1` | ✅ 已升（2026-11-08） | `crates/sql` | 跨 0.10 → 0.11，代码仅 2 处补 CTAS 新字段；`cargo test -p rds-sql` 与基线逐项一致，见 `sqlglot-rust-0.11.1-upgrade-report.md` |
 
 （驱动层（`rusqlite` / `sqlx` / `mysql_async`）、连接层（`russh`）已升到可用的最新版；SQL 引擎与 UI 家族的上游新版本见上表。）
 
@@ -131,7 +134,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 ### 业务关键依赖
 
-- **`sqlglot-rust`｜SQL 编辑器的解析 / 格式化 / 转译**：`crates/sql`（`rds-sql`，2026-10-29 自 engine 抽取）是它在全仓的**唯一接入点**（`engine.rs` / `parser.rs` / `formatter.rs` / `transpiler.rs` / `builder.rs` / `split.rs` / `highlight.rs` / `semantic.rs` / `bind.rs`，脚本词法器在 `script/`）；`crates/engine/src/sql/mod.rs` 只是 `pub use rds_sql::*` 的命名空间薄壳，业务模块不直接依赖 sqlglot API。它直接支撑编辑页面的 SQL 能力，因此精确锁定 `=0.10.33`。升级前必须跑 SQL 回归：`cargo test -p rds-sql`，覆盖 parser（语句分类）/ formatter / transpiler / builder，其中 `builder::tests::test_generated_sql_is_pinned` 钉住了生成 SQL 的字面结果（含标识符加引号方式）。
+- **`sqlglot-rust`｜SQL 编辑器的解析 / 格式化 / 转译**：`crates/sql`（`rds-sql`，2026-10-29 自 engine 抽取）是它在全仓的**唯一接入点**（`engine.rs` / `parser.rs` / `formatter.rs` / `transpiler.rs` / `builder.rs` / `split.rs` / `highlight.rs` / `semantic.rs` / `bind.rs`，脚本词法器在 `script/`）；`crates/engine/src/sql/mod.rs` 只是 `pub use rds_sql::*` 的命名空间薄壳，业务模块不直接依赖 sqlglot API。它直接支撑编辑页面的 SQL 能力，因此精确锁定 `=0.11.1`。升级前必须跑 SQL 回归：`cargo test -p rds-sql`，覆盖 parser（语句分类）/ formatter / transpiler / builder，其中 `builder::tests::test_generated_sql_is_pinned` 钉住了生成 SQL 的字面结果（含标识符加引号方式）。
 - **`gpui-kit` 家族**：`gpui-kit` / `gpui-base` / `gpui-component` / `gpui-kit-assets` 必须同版本，随 GPUI-kit 发布节奏整套升（见 R4）。
 - **`arrow` 跟随 `duckdb`**（见 R4）。
 
