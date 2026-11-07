@@ -39,14 +39,47 @@ use engine::sql::{TokenClass, highlight_spans};
 /// 超过此字节数不算折叠候选（与着色门槛 1 MB 同量级）
 pub const MAX_BYTES: usize = 1_000_000;
 
-/// 一个可折叠的行区间（**0 基、闭区间**，保证 `start_line < end_line`）
+/// 折叠的两种来源，**末行的处理不一样**（见 [`kernel_end_line`]）
 ///
-/// 语义与内核的 `FoldRange` 一致：折叠后 `start_line` 与 `end_line` **都仍然可见**，
-/// 藏起来的是中间那几行（`state.rs` 的 `unfold_at` 文档）。
+/// - 结构块：末行是 `)` / `END` / `*/` 这类收尾符号。收起整块时它也该跟着收起来，
+///   否则用户眼里"折叠了但最后一行还挂着"，等于没折干净；
+/// - 缩进块（VS Code 风格）：末行是块里最后一条**内容行**。按缩进猜测的边界本来就比
+///   结构块弱，把内容行也藏掉是拿猜测当事实，保留可见更有用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FoldKind {
+    /// 括号组 / 块关键字 / 跨行字面量与注释（配对的收尾行）
+    Structural,
+    /// 缩进块（最后一条内容行）
+    Indent,
+}
+
+/// 一个可折叠的行区间（**0 基、真实末行**，保证 `start_line < end_line`）
+///
+/// `end_line` 记录的是**折叠块真实可见的末行**（`)` / `END` / 块内最后一条内容行），
+/// 不是内核 `FoldRange` 的 `end_line`——两者差多少由 [`kernel_end_line`] 决定：
+///
+/// 内核（`fold_map.rs::rebuild`）的语义是"首行与末行都保持可见、只藏中间"，即
+/// `FoldRange{start, end}` 藏 `[start+1, end-1]`。所以：
+///
+/// - **结构块**下发 `end + 1` → 内核藏 `[start+1, end]`，末行 `)` / `END` 一起收起；
+/// - **缩进块**下发 `end` → 内核藏 `[start+1, end-1]`，最后一条内容行保留可见。
+///
+/// 这样"末行要不要收"就是我们自己的口径，不必去改内核的统一语义。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FoldSpan {
     pub start_line: usize,
     pub end_line: usize,
+    pub kind: FoldKind,
+}
+
+/// 该候选下发给内核时应使用的 `end_line`（口径见 [`FoldSpan`] 的文档）
+pub fn kernel_end_line(span: &FoldSpan) -> usize {
+    match span.kind {
+        // 末端让给内核去藏：`[start+1, end]` 全收起，只剩首行
+        FoldKind::Structural => span.end_line + 1,
+        // 末行是内容行：交给内核按原语义保留可见
+        FoldKind::Indent => span.end_line,
+    }
 }
 
 /// 开括号的两类：括号组 vs 块关键字（`CASE` / `BEGIN` / `IF` / `LOOP` … `END`）
@@ -56,12 +89,14 @@ enum Opener {
     Block,
 }
 
-/// 计算折叠候选（**纯函数**；返回按起始行升序、同起始行按结束行升序，已去重）
+/// 计算折叠候选（**纯函数**；返回按起始行升序，已去重，**同起始行只留一条**）
 ///
 /// 三层来源：
 /// 1. **括号组**：`(` ... `)`
 /// 2. **块关键字**：自定义开/闭关键字列表（默认：CASE/BEGIN/IF/LOOP/WHILE/FOR/REPEAT ↔ END）
 /// 3. **缩进块**（VS Code 风格）：只要下一行缩进比当前行大，就认为是一个块的开始
+///
+/// 同一起始行既是结构块又是缩进块时留结构块（词法配对比缩进猜测确定；内核也按起始行去重）。
 pub fn spans(
     text: &str,
     indent_folding: bool,
@@ -132,7 +167,7 @@ pub fn spans(
             // 跨行的字面量与注释本身就可以折（多行 `/* … */`、含换行的字符串）
             TokenClass::String | TokenClass::Comment => {
                 let end_line = line_of(&starts, token.end.saturating_sub(1));
-                push(&mut found, line, end_line);
+                push(&mut found, line, end_line, FoldKind::Structural);
             }
             _ => {}
         }
@@ -148,7 +183,25 @@ pub fn spans(
 
     found.sort_unstable();
     found.dedup();
+    // 内核按**起始行**去重（`fold_map.rs::set_candidates` 的 `dedup_by_key(start_line)`），
+    // 同一行既有结构块又有缩进块时它只会留下一个。结构块的边界来自词法配对，比缩进猜测
+    // 确定得多，所以同起始行统一择优留结构块——顺带保证我们这边一个起始行只发一条。
+    found.sort_by(|a, b| {
+        a.start_line
+            .cmp(&b.start_line)
+            .then_with(|| kind_rank(a.kind).cmp(&kind_rank(b.kind)))
+            .then_with(|| b.end_line.cmp(&a.end_line))
+    });
+    found.dedup_by(|later, earlier| earlier.start_line == later.start_line);
     found
+}
+
+/// 同起始行择优时的顺序（小的优先）：结构块 > 缩进块
+fn kind_rank(kind: FoldKind) -> u8 {
+    match kind {
+        FoldKind::Structural => 0,
+        FoldKind::Indent => 1,
+    }
 }
 
 /// 基于缩进的折叠：只要下一行缩进比当前行大，就认为是一个块的开始
@@ -230,7 +283,7 @@ fn add_indent_folds(text: &str, found: &mut Vec<FoldSpan>, bracket_spans: &[Fold
         }
 
         // 块结束行 = 最后一个缩进 > 当前行缩进的行
-        // 折叠区间 = [i, end_line]（i 是块开始，end_line 是块的最后一行）
+        // 折叠区间 = [i, end_line]（i 是块开始，end_line 是块的最后一条内容行）
         // 排除括号组内部的缩进块（括号组已覆盖该区域，内部不另折——2026-10-29）
         let inside_bracket = bracket_spans
             .iter()
@@ -239,7 +292,7 @@ fn add_indent_folds(text: &str, found: &mut Vec<FoldSpan>, bracket_spans: &[Fold
             i += 1;
             continue;
         }
-        push(found, i, end_line);
+        push(found, i, end_line, FoldKind::Indent);
 
         i += 1; // 下一行继续检查（嵌套块）
     }
@@ -274,6 +327,7 @@ fn close(
     let span = FoldSpan {
         start_line,
         end_line,
+        kind: FoldKind::Structural,
     };
     if start_line < end_line {
         found.push(span.clone());
@@ -284,11 +338,12 @@ fn close(
 }
 
 /// 只收跨行的（同行的折了等于没折）
-fn push(found: &mut Vec<FoldSpan>, start_line: usize, end_line: usize) {
+fn push(found: &mut Vec<FoldSpan>, start_line: usize, end_line: usize, kind: FoldKind) {
     if start_line < end_line {
         found.push(FoldSpan {
             start_line,
             end_line,
+            kind,
         });
     }
 }
@@ -320,7 +375,7 @@ fn line_of(starts: &[usize], offset: usize) -> usize {
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**（见 `view/tests.rs` 顶部说明）
-    use super::{FoldSpan, MAX_BYTES, spans};
+    use super::{FoldKind, FoldSpan, MAX_BYTES, kernel_end_line, spans};
 
     /// 断言用形状：(起始行, 结束行)
     ///
@@ -351,10 +406,13 @@ mod tests {
     }
 
     #[test]
-    fn nested_groups_are_sorted_and_end_where_they_close() {
-        // 三处结构：外层括号 0→5、CASE 1→4、内层括号 1→3
+    fn nested_groups_on_one_line_keep_the_outermost() {
+        // 三处结构：外层括号 0→5、CASE 1→4、内层括号 1→3。
+        // 第 1 行同时开了 CASE 与 `(`，而内核按起始行只折一个
+        // （`fold_map.rs::set_candidates` 的 `dedup_by_key(start_line)`），
+        // 所以这里也只发一条：留范围更大的 CASE（1→4）。
         let sql = "SELECT (\n  CASE WHEN a THEN (\n    1\n  )\n  END\n) FROM t";
-        assert_eq!(lines(sql), [(0, 5), (1, 3), (1, 4)]);
+        assert_eq!(lines(sql), [(0, 5), (1, 4)]);
     }
 
     #[test]
@@ -450,6 +508,7 @@ mod tests {
             |FoldSpan {
                  start_line,
                  end_line,
+                 ..
              }| start_line < end_line
         ));
         assert!(
@@ -518,5 +577,58 @@ mod tests {
             "缩进相同不应该折叠: {:?}",
             result
         );
+    }
+
+    #[test]
+    fn kernel_end_line_tucks_in_the_closing_line_of_a_structural_block() {
+        // 括号组：真实末行第 2 行的 `)` 交给内核一起收（下发 3）
+        let sql = "SELECT (\n  1\n) AS x";
+        let found = spans(sql, false, &[], &[]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].kind, FoldKind::Structural);
+        assert_eq!(kernel_end_line(&found[0]), 3);
+        // 关键字块同理：`END` 所在行也要收（需显式给关键字列表）
+        let open = vec!["CASE".to_string()];
+        let close = vec!["END".to_string()];
+        let sql = "SELECT CASE\n  WHEN a THEN 1\n  ELSE 2\nEND AS x";
+        let found = spans(sql, false, &open, &close);
+        assert_eq!(found.len(), 1);
+        assert_eq!(kernel_end_line(&found[0]), 4);
+        // 跨行注释也属于结构块
+        let sql = "/* 说明： (\n   还是 (  */\nSELECT 1";
+        let found = spans(sql, false, &[], &[]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(kernel_end_line(&found[0]), 2);
+    }
+
+    #[test]
+    fn kernel_end_line_keeps_the_last_content_line_of_an_indent_block() {
+        // 缩进块：末行是内容行（第 2 行 `  b`），维持真实末行，内核留它可见
+        let sql = "SELECT\n  a,\n  b\nFROM t";
+        let found = spans(sql, true, &[], &[]);
+        let indent = found
+            .iter()
+            .find(|span| span.kind == FoldKind::Indent)
+            .expect("应有缩进候选");
+        assert_eq!(indent.start_line, 0);
+        assert_eq!(indent.end_line, 2);
+        assert_eq!(kernel_end_line(indent), 2);
+    }
+
+    #[test]
+    fn a_structural_block_wins_over_an_indent_block_on_the_same_line() {
+        // `CASE` 行既是关键字块的开始，也满足缩进块条件；内核按起始行只留一条，
+        // 所以这里必须只发一条、且是结构块，否则末行收不收就取决于运气
+        let open = vec!["CASE".to_string()];
+        let close = vec!["END".to_string()];
+        let sql = "CASE\n  WHEN a THEN 1\n  ELSE 2\nEND";
+        let found = spans(sql, true, &open, &close);
+        let at_start: Vec<&FoldSpan> = found
+            .iter()
+            .filter(|span| span.start_line == 0)
+            .collect();
+        assert_eq!(at_start.len(), 1, "同起始行只发一条: {:?}", at_start);
+        assert_eq!(at_start[0].kind, FoldKind::Structural);
+        assert_eq!(kernel_end_line(at_start[0]), 4);
     }
 }
