@@ -40,7 +40,7 @@ use sqlglot_rust::ast::{DataType, SelectItem, Statement, TableRef};
 use sqlglot_rust::schema::MappingSchema;
 use sqlglot_rust::optimizer::scope_analysis::Source;
 use sqlglot_rust::{
-    ChangeAction, Dialect, LineageConfig, LineageNode, Scope, annotate_types, build_scope,
+    AstNode, ChangeAction, Dialect, LineageConfig, LineageNode, Scope, annotate_types, build_scope,
     diff_sql, format_time_dialect, generate, parse, plan, pushdown_predicates,
 };
 
@@ -190,12 +190,15 @@ fn table_path(table: &TableRef) -> String {
 // ===========================================================================
 
 /// 调用方给的一张表（列名 + 驱动报的类型名）
-#[derive(Debug, Clone, Copy)]
-pub struct TypedTable<'a> {
+///
+/// **owned**：调用方的目录快照常要跨线程送进后台任务（hover 就这条路径），
+/// 借用式结构在那里活不过 `'static`，所以这里直接收字符串。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TypedTable {
     /// 限定表名（与语句里出现的形式一致即可：`t` / `s.t` / `c.s.t`）
-    pub qualified_name: &'a str,
+    pub qualified_name: String,
     /// 列定义：`(列名, 类型名)`。类型名按 [`parse_type_name`] 归一
-    pub columns: &'a [(&'a str, &'a str)],
+    pub columns: Vec<(String, String)>,
 }
 
 /// 一条投影列的实际类型（`annotate_types` 的结果）
@@ -213,7 +216,7 @@ pub struct TypedColumn {
 pub fn column_types(
     sql: &str,
     dialect: SqlDialect,
-    tables: &[TypedTable<'_>],
+    tables: &[TypedTable],
 ) -> Result<Vec<TypedColumn>, String> {
     if tables.is_empty() {
         return Ok(Vec::new());
@@ -233,9 +236,11 @@ pub fn column_types(
             SelectItem::Expr { expr, alias, .. } => {
                 let data_type = annotations.get_type(expr)?;
                 Some(TypedColumn {
+                    // 没别名时用**表达式文本**（`amount` / `SUM(amount)`）：调用方拿它跟
+                    // 悬停词 / 结果列名对得上；`{:?}` 是结构体调试串，用户看不懂也匹配不上
                     name: alias
                         .clone()
-                        .unwrap_or_else(|| format!("{expr:?}").split_whitespace().next().unwrap_or("").to_string()),
+                        .unwrap_or_else(|| node_text(&AstNode::Expr(expr.clone()))),
                     data_type: data_type_label(data_type),
                 })
             }
@@ -318,14 +323,14 @@ pub fn data_type_label(data_type: &DataType) -> String {
 }
 
 /// 调用方表目录 → `MappingSchema`
-fn mapping_schema(dialect: Dialect, tables: &[TypedTable<'_>]) -> Result<MappingSchema, String> {
+fn mapping_schema(dialect: Dialect, tables: &[TypedTable]) -> Result<MappingSchema, String> {
     let mut schema = MappingSchema::new(dialect);
     for table in tables {
         let path: Vec<&str> = table.qualified_name.split('.').collect();
         let columns: Vec<(String, DataType)> = table
             .columns
             .iter()
-            .map(|(name, ty)| ((*name).to_string(), parse_type_name(ty)))
+            .map(|(name, ty)| (name.clone(), parse_type_name(ty)))
             .collect();
         schema
             .replace_table(&path, columns)
@@ -356,7 +361,7 @@ pub fn lineage_of_column(
     sql: &str,
     dialect: SqlDialect,
     column: &str,
-    tables: &[TypedTable<'_>],
+    tables: &[TypedTable],
 ) -> Result<Vec<LineageStep>, String> {
     if tables.is_empty() {
         return Ok(Vec::new());

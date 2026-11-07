@@ -80,6 +80,11 @@ pub struct TranspilePlan {
     pub selection: Option<Range<usize>>,
     /// 替换后光标该在哪（字节偏移）
     pub cursor: usize,
+    /// 给用户看的提示（目标方言不支持的特性、被顺带改掉的时间格式）
+    ///
+    /// 这些**不阻断**转译（用户可能就是要先翻过去再手改），但必须摆出来：
+    /// 转译后的 SQL 在目标库里跑不起来时，用户得知道是这里先说过的。
+    pub notes: Vec<String>,
 }
 
 impl TranspilePlan {
@@ -115,6 +120,7 @@ pub fn plan(
             kept_verbatim: report.kept_verbatim,
             selection: Some(start..end),
             cursor: end,
+            notes: notes(slice, source, target),
         };
     }
 
@@ -126,7 +132,63 @@ pub fn plan(
         kept_verbatim: report.kept_verbatim,
         selection: None,
         cursor,
+        notes: notes(text, source, target),
     }
+}
+
+/// 转译前先算提示：目标方言不支持的特性 + 会被改写的时间格式
+///
+/// 只算**用户给的那段 SQL**（选区转译就只算选区）：整篇的提示在选区场景里是噪音。
+fn notes(sql: &str, source: SqlDialect, target: SqlDialect) -> Vec<String> {
+    let mut notes = Vec::new();
+    // 目标方言不支持的特性：上游 `validate_dialect_support` 给的清单，最多摆两条
+    if let Ok(unsupported) = engine::sql::unsupported_for_target(sql, target) {
+        for item in unsupported.iter().take(2) {
+            notes.push(format!("目标方言不支持：{item}"));
+        }
+        if unsupported.len() > 2 {
+            notes.push(format!("另有 {} 项同样不支持", unsupported.len() - 2));
+        }
+    }
+    // 时间格式：转译会顺手把 `%Y-%m-%d` 改成 `YYYY-MM-DD`，说出来免得用户以为改了错
+    for (from, to) in time_formats(sql, source, target) {
+        notes.push(format!("时间格式 {from} → {to}"));
+    }
+    notes
+}
+
+/// 找出 SQL 里会被改写的格式串：引号内、含 `%` 指令的字面量
+///
+/// 不做正则：只在 `'` / `"` 配对之间取内容，逐段交给上游 `format_time_dialect` 判，
+/// 改了就记一条（同一对被改的格式串只报一次）。
+fn time_formats(sql: &str, source: SqlDialect, target: SqlDialect) -> Vec<(String, String)> {
+    let bytes = sql.as_bytes();
+    let mut found: Vec<(String, String)> = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        let quote = bytes[index];
+        if quote != b'\'' && quote != b'"' {
+            index += 1;
+            continue;
+        }
+        let start = index + 1;
+        let mut end = start;
+        while end < bytes.len() && bytes[end] != quote {
+            end += 1;
+        }
+        if end >= bytes.len() {
+            break;
+        }
+        let literal = &sql[start..end];
+        if literal.contains('%') {
+            let converted = engine::sql::translate_time_format(literal, source, target);
+            if converted != literal && !found.iter().any(|(from, _)| from == literal) {
+                found.push((literal.to_string(), converted));
+            }
+        }
+        index = end + 1;
+    }
+    found
 }
 
 #[cfg(test)]
@@ -246,5 +308,28 @@ mod tests {
             SqlDialect::Postgres,
         );
         assert!(!plan.text.is_empty());
+    }
+
+    #[test]
+    fn a_time_format_literal_is_reported_before_the_user_runs_it() {
+        // MySQL 的 `%Y-%m-%d` 到 Postgres 是 `YYYY-MM-DD`：转译会顺手改掉，
+        // 用户得知道自己写的东西被换了写法（否则会以为工具改错了）
+        let plan = plan(
+            "SELECT DATE_FORMAT(d, '%Y-%m-%d') FROM t",
+            0..0,
+            SqlDialect::Mysql,
+            SqlDialect::Postgres,
+        );
+        assert!(
+            plan.notes.iter().any(|note| note.contains("时间格式")),
+            "应有一条时间格式提示：{:?}",
+            plan.notes
+        );
+    }
+
+    #[test]
+    fn plain_sql_carries_no_notes() {
+        let plan = plan("SELECT a FROM t", 0..0, SqlDialect::Mysql, SqlDialect::Postgres);
+        assert!(plan.notes.is_empty(), "没风险就别吵：{:?}", plan.notes);
     }
 }

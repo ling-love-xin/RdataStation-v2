@@ -123,7 +123,7 @@ impl EditorHostPanel {
         let (text, selection) = self.editor_snapshot(cx);
         let plan = translate::plan(&text, selection, source, target);
         if !plan.changes(&text) {
-            let message = if plan.kept_verbatim > 0 {
+            let mut message = if plan.kept_verbatim > 0 {
                 format!(
                     "{} 条语句转译不了（可能是还没写完），已原样保留",
                     plan.kept_verbatim
@@ -131,6 +131,7 @@ impl EditorHostPanel {
             } else {
                 format!("已经是 {label} 能直接用的写法")
             };
+            Self::push_notes(&mut message, &plan.notes);
             self.set_message(Some(message), cx);
             return;
         }
@@ -146,7 +147,19 @@ impl EditorHostPanel {
         if plan.kept_verbatim > 0 {
             message.push_str(&format!("；{} 条解析不了，原样保留", plan.kept_verbatim));
         }
+        // 目标方言不支持 / 时间格式被改写：不阻断，但必须摆出来（见 `translate::notes`）
+        Self::push_notes(&mut message, &plan.notes);
         self.set_message(Some(message), cx);
+    }
+
+    /// 把转译提示接到状态栏文案尾部
+    ///
+    /// 状态栏是一行，提示最多再添三条（`translate::notes` 已在上游封顶）。
+    fn push_notes(message: &mut String, notes: &[String]) {
+        for note in notes {
+            message.push_str("；");
+            message.push_str(note);
+        }
     }
 
     /// 把一次“整篇 / 选区改写”的结果落到内核（格式化与转译共用）

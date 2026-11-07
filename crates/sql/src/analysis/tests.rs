@@ -2,8 +2,12 @@
 
 use super::*;
 
-fn users() -> [(&'static str, &'static str); 3] {
-    [("id", "int"), ("amount", "decimal(12,2)"), ("name", "varchar")]
+fn users() -> Vec<(String, String)> {
+    vec![
+        ("id".to_string(), "int".to_string()),
+        ("amount".to_string(), "decimal(12,2)".to_string()),
+        ("name".to_string(), "varchar".to_string()),
+    ]
 }
 
 #[test]
@@ -44,8 +48,8 @@ fn scope_report_does_not_need_catalog() {
 #[test]
 fn column_types_annotates_expression_result() {
     let tables = [TypedTable {
-        qualified_name: "users",
-        columns: &users(),
+        qualified_name: "users".to_string(),
+        columns: users(),
     }];
     let typed = column_types(
         "SELECT id, amount * 2 AS doubled FROM users",
@@ -71,8 +75,11 @@ fn column_types_returns_empty_without_catalog() {
 #[test]
 fn lineage_traces_output_column_to_base_column() {
     let tables = [TypedTable {
-        qualified_name: "orders",
-        columns: &[("amount", "decimal"), ("id", "int")],
+        qualified_name: "orders".to_string(),
+        columns: vec![
+            ("amount".to_string(), "decimal".to_string()),
+            ("id".to_string(), "int".to_string()),
+        ],
     }];
     let steps = lineage_of_column(
         "SELECT SUM(amount) AS total FROM orders",

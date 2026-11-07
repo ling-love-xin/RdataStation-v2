@@ -8,13 +8,16 @@
 //! 本 provider（走自研语义层，`engine::sql::hover_at`）。宿主在 `view/host.rs` 的
 //! `CompletionChoice::Sql` 分支安装——与补全同源（一次决策、一起挂摘）。
 //!
-//! ## 无目录口径
+//! ## 目录口径（2026-11-08 起可注入）
 //!
-//! editor 不依赖 database crate（无 NavCache），hover 时传**空表目录**：函数 hover
-//! 照常（签名 + 中文描述 + 示例是内置的），表 / 列 hover 退化为「仅引用词」
-//! （`hover_at` 内部对无目录表只给表名、列给所属表名，列列表不可得）——与
-//! `semantic` 无目录退化同一口径，宁缺毋滥。目录注入（跨 crate，见 backlog §建议优先级）
-//! 后表 / 列列表自然解锁。
+//! editor 不依赖 database crate（无 NavCache），但宿主早就在推**每文档的目录快照**
+//! （[`crate::shared::EditorShared::set_catalog_snapshot`]，文档绑定连接 / Schema 切换 /
+//! 导航树刷新时推）。本 provider 现在可以从那条既有通道取快照：
+//! - 有快照 → 表 / 列 hover 能列出列、并给一行「类型：X」（`column_types` + `annotate_types`）；
+//! - 无快照（未绑定连接 / 目录没载好）→ 退化回原来的「仅引用词」口径，宁缺毋滥。
+//!
+//! 快照来自**该文档绑定的那条连接**（MySQL / PG / SQLite / Oracle / DuckDB 都一样），
+//! 不是 DuckDB 分析模式专有——hover、补全、语义诊断走的都是同一份快照。
 
 use std::rc::Rc;
 
@@ -23,17 +26,47 @@ use gpui_kit::component::input::{HoverProvider, Rope};
 use gpui_kit::*;
 use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Range};
 
-use engine::sql::{HoverInfo, HoverKind, SqlDialect, hover_at};
+use engine::sql::{
+    CatalogTable, HoverInfo, HoverKind, SqlDialect, TypedTable, column_types, hover_at,
+};
 
-/// SQL 语义 hover provider（无状态：方言创建时定，可随时重建）
+use crate::language::completion::Catalog;
+use crate::model::DocumentId;
+use crate::shared::EditorShared;
+
+/// SQL 语义 hover provider（方言创建时定；可带一份目录快照来源）
 pub struct SqlHoverProvider {
     /// 源方言（宿主按文档绑定连接的驱动给；未绑定时 Ansi——解析失败返回 None，安全）
     dialect: SqlDialect,
+    /// 目录快照来源：`(宿主共享态, 文档)`。未接 = 仍走「无目录」退化口径（测试用）
+    catalog: Option<(EditorShared, DocumentId)>,
 }
 
 impl SqlHoverProvider {
+    /// 无目录（测试 / 未接宿主）：表列 hover 只给引用词
     pub fn new(dialect: SqlDialect) -> Rc<Self> {
-        Rc::new(Self { dialect })
+        Rc::new(Self {
+            dialect,
+            catalog: None,
+        })
+    }
+
+    /// 接宿主目录快照：hover 时现取该文档当前的快照（连接 / Schema 切换后自动跟随）
+    pub fn with_catalog(
+        dialect: SqlDialect,
+        shared: EditorShared,
+        document: DocumentId,
+    ) -> Rc<Self> {
+        Rc::new(Self {
+            dialect,
+            catalog: Some((shared, document)),
+        })
+    }
+
+    /// 取当前目录快照（内存读；未注入 / 未载好 = `None`）
+    fn snapshot(&self) -> Option<std::sync::Arc<Catalog>> {
+        let (shared, document) = self.catalog.as_ref()?;
+        shared.catalog_snapshot_for(document)
     }
 }
 
@@ -49,9 +82,31 @@ impl HoverProvider for SqlHoverProvider {
         let dialect = self.dialect;
         // 设置闸：`sql_analysis.hover_scope`（读进程内原子量，后台线程里读也安全）
         let with_scope = engine::sql::prefs().hover_scope;
+        // 目录快照：**主线程现取**（快照是 `Rc<Catalog>`，不能跨线程），再摊成 owned 的
+        // `TypedTable` 送进后台——连接 / Schema 一切换，下一帧 hover 就跟着变。
+        let typed: Vec<TypedTable> = self
+            .snapshot()
+            .map(|catalog| typed_tables(&catalog))
+            .unwrap_or_default();
         // `hover_at` 是纯计算（sqlglot 解析），放后台线程跑，别卡 UI 帧
         cx.background_spawn(async move {
-            Ok(hover_at(&sql, dialect, &[], offset).map(|mut info| {
+            // 借用窗口只在本次调用内：从 owned 数据临时拼 `CatalogTable`
+            let columns: Vec<Vec<&str>> = typed
+                .iter()
+                .map(|table| table.columns.iter().map(|(name, _)| name.as_str()).collect())
+                .collect();
+            let tables: Vec<CatalogTable<'_>> = typed
+                .iter()
+                .zip(columns.iter())
+                .map(|(table, cols)| CatalogTable {
+                    qualified_name: table.qualified_name.as_str(),
+                    columns: cols.clone(),
+                })
+                .collect();
+            Ok(hover_at(&sql, dialect, &tables, offset).map(|mut info| {
+                if let Some(line) = column_type_line(&sql, dialect, &typed, &info) {
+                    info.lines.push(line);
+                }
                 if with_scope {
                     if let Some(line) = scope_source_line(&sql, dialect, info.kind) {
                         info.lines.push(line);
@@ -61,6 +116,45 @@ impl HoverProvider for SqlHoverProvider {
             }))
         })
     }
+}
+
+/// 宿主目录快照 → `TypedTable`（名字与类型都照快照来；快照没给类型就留空串）
+fn typed_tables(catalog: &Catalog) -> Vec<TypedTable> {
+    let mut tables: Vec<TypedTable> = Vec::new();
+    for (qualified, column, type_name) in &catalog.columns {
+        match tables
+            .iter_mut()
+            .find(|table| &table.qualified_name == qualified)
+        {
+            Some(table) => table
+                .columns
+                .push((column.clone(), type_name.clone().unwrap_or_default())),
+            None => tables.push(TypedTable {
+                qualified_name: qualified.clone(),
+                columns: vec![(column.clone(), type_name.clone().unwrap_or_default())],
+            }),
+        }
+    }
+    tables
+}
+
+/// 悬停到的列 / 表达式 → 一行「类型：X」
+///
+/// 只在**有目录**且 `annotate_types` 能给出类型时才有（没有元数据就不编）；表与函数不给。
+fn column_type_line(
+    sql: &str,
+    dialect: SqlDialect,
+    tables: &[TypedTable],
+    info: &HoverInfo,
+) -> Option<String> {
+    if tables.is_empty() || !matches!(info.kind, HoverKind::Column) {
+        return None;
+    }
+    let typed = column_types(sql, dialect, tables).ok()?;
+    let found = typed
+        .iter()
+        .find(|column| column.name.eq_ignore_ascii_case(&info.title))?;
+    Some(format!("类型：{}", found.data_type))
 }
 
 /// 悬停内容里补的那一行「来源：orders、totals」
@@ -131,8 +225,9 @@ fn byte_position(text: &str, offset: usize) -> lsp_types::Position {
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{byte_position, hover_to_lsp};
-    use engine::sql::{HoverInfo, HoverKind};
+    use super::{byte_position, column_type_line, hover_to_lsp, typed_tables};
+    use crate::language::completion::Catalog;
+    use engine::sql::{HoverInfo, HoverKind, SqlDialect};
 
     #[test]
     fn function_hover_renders_signature_and_chinese() {
@@ -199,8 +294,66 @@ mod tests {
     }
 
     #[test]
+    fn catalog_snapshot_becomes_typed_tables_and_a_type_line() {
+        // 宿主快照 → `TypedTable`：每个限定表一组，列名与类型名都照快照来
+        let catalog = Catalog {
+            objects: Vec::new(),
+            columns: vec![
+                ("public.users".to_string(), "id".to_string(), Some("int".to_string())),
+                ("public.users".to_string(), "amount".to_string(), Some("decimal(12,2)".to_string())),
+                ("public.orders".to_string(), "total".to_string(), None),
+            ],
+            truncated: false,
+        };
+        let typed = typed_tables(&catalog);
+        assert_eq!(typed.len(), 2, "两张表各一组：{typed:?}");
+        let users = typed
+            .iter()
+            .find(|table| table.qualified_name == "public.users")
+            .expect("users 在");
+        assert_eq!(users.columns.len(), 2, "{users:?}");
+        assert_eq!(users.columns[1].1, "decimal(12,2)", "类型名照抄快照");
+        let orders = typed
+            .iter()
+            .find(|table| table.qualified_name == "public.orders")
+            .expect("orders 在");
+        assert_eq!(orders.columns[0].1, "", "快照没给类型就留空，不编");
+
+        // 列 hover → 一行「类型：X」（annotate_types 按目录算出来的）
+        let info = HoverInfo {
+            kind: HoverKind::Column,
+            title: "amount".into(),
+            lines: Vec::new(),
+            start: 0,
+            end: 6,
+        };
+        let line = column_type_line(
+            "SELECT amount FROM public.users",
+            SqlDialect::Postgres,
+            &typed,
+            &info,
+        );
+        assert!(
+            line.as_deref().is_some_and(|line| line.contains("DECIMAL")),
+            "{line:?}"
+        );
+    }
+
+    #[test]
+    fn no_catalog_means_no_type_line() {
+        // 未绑定连接 / 目录没载好：宁可不说，也不猜类型
+        let info = HoverInfo {
+            kind: HoverKind::Table,
+            title: "public.users".into(),
+            lines: Vec::new(),
+            start: 0,
+            end: 6,
+        };
+        assert!(column_type_line("SELECT id FROM public.users", SqlDialect::Postgres, &[], &info).is_none());
+    }
+
+    #[test]
     fn byte_position_counts_lines_and_chars() {
-        // 行按 \n 数、列按字符数（中文按字符不是字节）
         let sql = "SELECT 1\n  FROM t";
         assert_eq!(byte_position(sql, 0), lsp_types::Position::new(0, 0));
         assert_eq!(byte_position(sql, 7), lsp_types::Position::new(0, 7));

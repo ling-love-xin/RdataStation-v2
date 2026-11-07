@@ -502,7 +502,11 @@ impl EditorHostPanel {
                 let dialect = self.sql_dialect_for_document();
                 crate::lsp::bridge::install_hover(
                     state,
-                    crate::lsp::sql_hover::SqlHoverProvider::new(dialect),
+                    crate::lsp::sql_hover::SqlHoverProvider::with_catalog(
+                        dialect,
+                        self.shared.clone(),
+                        self.document.clone(),
+                    ),
                 );
                 // 【#54 C6/C7】跳转定义与 hover 同源（自研语义层，同一方言）：一起挂。
                 // 内核 hover 预取自动出「下划线 + Ctrl+Click hitbox」（definitions.rs），
