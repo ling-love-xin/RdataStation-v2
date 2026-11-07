@@ -463,9 +463,11 @@ impl ListDelegate for PluginListDelegate {
             });
 
         // 出错行把原因并进第二行：240px 面板放不下第三行，完整堆栈仍看日志。
-        let (subtitle, subtitle_color) = match &error {
-            Some(reason) => (format!("{id} · 原因：{reason}"), cx.theme().colors.danger),
-            None => (id.clone(), cx.theme().colors.muted_foreground),
+        let subtitle = plugin_row_subtitle(&id, error.as_deref());
+        let subtitle_color = if error.is_some() {
+            cx.theme().colors.danger
+        } else {
+            cx.theme().colors.muted_foreground
         };
 
         let item = ListItem::new(ElementId::Name(SharedString::from(format!(
@@ -836,6 +838,15 @@ impl Focusable for PluginPanel {
     }
 }
 
+/// 插件行第二行文案（纯函数，便于单测）：无错误时只显示 id；
+/// 出错时把原因接在后面（`id · 原因：…`），面板行高固定 3rem，放不下第三行。
+fn plugin_row_subtitle(id: &str, error: Option<&str>) -> String {
+    match error {
+        Some(reason) => format!("{id} · 原因：{reason}"),
+        None => id.to_string(),
+    }
+}
+
 /// 安装回执（纯函数，便于单测）：把「库里的启用状态 + 运行时状态」翻成一句人话。
 ///
 /// 覆盖安装 / 重装会沿用库里的 `is_enabled`：停用中的插件装完仍停用，回执不能只说
@@ -1132,8 +1143,22 @@ impl ComponentPanel for PluginPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::{install_receipt, uninstall_confirm_description};
+    use super::{install_receipt, plugin_row_subtitle, uninstall_confirm_description};
     use plugin::wasm::PluginState;
+
+    /// 出错行必须把 id 和原因同时留下：只显示原因会分不清是哪个插件，
+    /// 只显示 id 则又把「为什么出错」藏回日志里。
+    #[test]
+    fn plugin_row_subtitle_keeps_the_id_and_the_error_reason() {
+        assert_eq!(
+            plugin_row_subtitle("rds.driver.oracle", None),
+            "rds.driver.oracle"
+        );
+        let failed = plugin_row_subtitle("rds.driver.oracle", Some("进程启动失败：超时"));
+        assert!(failed.contains("rds.driver.oracle"), "{failed}");
+        assert!(failed.contains("原因："), "{failed}");
+        assert!(failed.contains("进程启动失败：超时"), "{failed}");
+    }
 
     /// 回执必须如实反映库里的启用状态与运行时结果：只说「已安装」会把停用 / 激活失败藏起来。
     #[test]
