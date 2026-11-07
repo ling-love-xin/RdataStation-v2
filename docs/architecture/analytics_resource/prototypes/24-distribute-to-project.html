@@ -16,8 +16,8 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    全局行<b>唯一能做的事</b>：复制一份进当前项目。入口两处——全局行右键「分发到本项目…」／<a href="08-detail-global.html">08 块</a>详情面板那颗单动作按钮。
-    跟升级一样<b>没有确认框</b>：点一下直接入队，撞名才开<a href="17-dialog-conflict.html">冲突三选一</a>（这张框在分发时标题变「从全局分发」，冲突持有方写「当前项目」）。
+    全局行<b>唯一能做的事</b>：复制一份进当前项目。两处入口——全局行右键「分发到本项目…」（判据 <code>!is_global || multi_count &gt; 1 || read_only</code>，<b>不判本体状态</b>）／<a href="08-detail-global.html">08 块</a>详情那颗 <code>archive-detail-distribute</code>（判据只有 <code>read_only</code>）。
+    跟升级一样<b>没有确认框</b>：点了即入队，撞名才开<a href="17-dialog-conflict.html">同名冲突</a>（标题固定，与升级共用）。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="23-promote-to-global.html">← 上一块：升级到全局</a><a href="25-cross-project-flow.html">下一块：跨项目全流程 →</a></nav>
 </header>
@@ -25,79 +25,107 @@
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>入口与两份形态<span class="desc">分析表 → 建项目表；脚本内容表 → 重建为文件</span></div>
+    <div class="variant-h"><span class="no">A</span>两份形态与落点<span class="desc">表 → 建项目表；脚本内容表 → 重建为文件</span></div>
     <div class="canvas pad">
       <div class="grid2">
         <div class="sinst">
-          <div class="sh"><svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg>全局分析表 → 项目分析表</div>
-          <div class="sd">全局连接 <code>COPY … TO parquet</code> 中转 → 项目连接 <code>CREATE TABLE AS read_parquet(…)</code>。落成 <span class="scope-badge">项目</span> 行的 kind = 分析表。<br>为什么不用 ATTACH：Windows 单句柄上限，项目连接去 ATTACH 全局库文件会撞「文件被占用」。</div>
+          <div class="sh"><svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg>全局表 → 项目分析表（Analysis 档）</div>
+          <div class="sd">全局连接 <code>COPY &lt;名&gt; TO '&lt;tmp&gt;.parquet' (FORMAT PARQUET)</code> → 项目连接 <code>CREATE TABLE &lt;目标名&gt; AS SELECT * FROM read_parquet('…')</code> → <code>project_table_stats</code> 真量行列 → 登记 <code>kind='analysis'</code>。<br>为什么不用 ATTACH：Windows 单句柄限制下项目连接去 ATTACH 全局库文件会撞「文件被占用」（全局写连接由 <code>GlobalDatabaseManager</code> 持有），parquet 中转无锁冲突。</div>
         </div>
         <div class="sinst">
-          <div class="sh"><svg class="ico-sm"><use href="#i-doc" xlink:href="#i-doc"/></svg>脚本内容表 → 项目文件</div>
-          <div class="sd">读回 <code>content</code> 整段，写进当前项目的 <code>resources/&lt;原相对路径&gt;</code>，登记成 <span class="scope-badge">项目</span> 的 File 档。<br>重建的路径沿用全局侧记的原始相对路径，<b>不重新猜目录</b>。</div>
+          <div class="sh"><svg class="ico-sm"><use href="#i-doc" xlink:href="#i-doc"/></svg>脚本内容表 → 项目文件（File 档）</div>
+          <div class="sd">读回 <code>SELECT "content" FROM &lt;名&gt; LIMIT 1</code> 整段，写进本项目 <code>resources/&lt;全局行记的 rel_path&gt;</code>（目录 <code>create_dir_all</code>、文件直接写）→ 登记 <code>kind='file'</code>、<code>file_rel_path = rel</code>。<br>重建路径<b>固定用全局侧记的那条相对路径</b>，不随改名变，也不重新猜目录。</div>
         </div>
       </div>
-      <p class="hang">形态判定只有一条：全局登记的 <code>file_rel_path</code> 非空 = 脚本内容表 → 重建文件；为空 = 表 → 建表。用户侧看不到这个判定，也<b>无法强制选另一种</b>。</p>
+      <p class="hang">
+        形态判定只有一条：全局登记的 <code>file_rel_path</code> 非空 = 脚本档 → 重建文件；为空 = 表档 → 建表。用户看不到这个判定，也无法强制选另一种。
+        <br>两侧落值都带 <code>readonly = 1</code>、<code>promoted_from = 'global:&lt;全局 id&gt;'</code>、<code>payload_mode = 'copy'</code>——项目侧「归档后只读」的规矩对分发下来的行同样成立。
+      </p>
     </div>
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">B</span>版本与来源<span class="desc">分发是全局链的「分支」，不是新东西从 v1 起</span></div>
+    <div class="variant-h"><span class="no">B</span>撞名的三查<span class="desc">登记层 + 本体层 + 文件层，任一命中就询问</span></div>
     <div class="canvas pad">
-      <div class="srcbar"><svg class="ico-sm"><use href="#i-link" xlink:href="#i-link"/></svg><span class="mono">dwd_orders_view</span><span>全局 v2 → 项目 v2</span><span class="tagn">版本接续</span></div>
       <div class="fgrid">
-        <span class="fl">项目落名</span>
-        <span class="fw"><input class="inp ro" value="dwd_orders_view（未改名时沿用全局名）" readonly></span>
-        <span class="fl">来源</span>
-        <span class="fw"><input class="inp ro" value="全局实例 dwd_orders_view · v2" readonly></span>
-        <span class="fl">版本</span>
-        <span class="fw"><input class="inp ro" value="接续全局版本号（全局 v2 → 项目 v2），此后按项目自己的链往下走" readonly></span>
+        <span class="fl">① 登记</span>
+        <span class="fw"><input class="inp ro" value="项目 SQLite：name + scope='project' + deleted_at IS NULL，计数 &gt; 0 即冲突" readonly></span>
+        <span class="fl">② 表本体</span>
+        <span class="fw"><input class="inp ro" value="项目 DuckDB：information_schema.tables 里 table_name = 目标名小写，命中即冲突" readonly></span>
+        <span class="fl">③ 文件本体</span>
+        <span class="fw"><input class="inp ro" value="resources/&lt;全局 rel_path&gt; 是文件即冲突（只有脚本档走这一查）" readonly></span>
       </div>
-      <div class="note"><svg class="ico-sm"><use href="#i-info" xlink:href="#i-info"/></svg>分发之后两侧<b>互不跟随</b>：在项目里改出来的 v3 不会回到全局；要共享就再走一次「升级到全局…」。</div>
+      <p class="hang">
+        报出去的名字是<b>目标名</b>（未改名 = 全局名）——三查任一命中都汇成同一个 <code>Conflict { name }</code>，框里只说「{持有方}已有同名资源「{目标名}」」，<b>不说撞的是登记、表还是文件</b>。
+        ② 查不区分 schema 与连接，只看 <code>table_name</code>——同库别的 schema 里有同名表也会判冲突。
+      </p>
     </div>
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">C</span>撞名：从全局分发<span class="desc">同一张框，标题 / 冲突持有方 / 覆盖说明换成本项目口径</span></div>
+    <div class="variant-h"><span class="no">C</span>版本与来源<span class="desc">旧稿写错的第 1、2 处：版本不接续全局链；来源看得见，但是内部 id</span></div>
     <div class="canvas pad">
-      <div class="dlg dlg-scope proto-on">
-        <div class="dlg-head"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>从全局分发<span class="sub2">冲突：当前项目已有同名资源</span><button class="x">✕</button></div>
-        <div class="dlg-body">
-          <div class="srcbar"><svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg><span class="mono">dwd_orders_view</span><span>全局 v2（只读）</span><span class="tagn">冲突名</span></div>
-          <div class="fgrid">
-            <span class="fl">当前项目已有</span>
-            <span class="fw"><input class="inp ro" value="dwd_orders_view · v1 · 分析表" readonly></span>
-            <span class="fl">新名</span>
-            <span class="fw"><input class="inp" value="dwd_orders_view"></span>
-          </div>
-          <div class="namehint err" style="margin-top:8px">与冲突名相同 —— 冲突还在，不能提交；先改成别的名字。</div>
-          <div class="radios" style="margin-top:10px">
-            <label><span class="rdot"></span>覆盖项目旧内容</label>
-            <label><span class="rdot on"></span>换个名字分发</label>
-            <label><span class="rdot"></span>取消</label>
-          </div>
-          <div class="note warn"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>覆盖将删除项目旧表 / 旧文件并软删旧登记，新内容接续项目版本链；<b>旧本体不可恢复</b>。</div>
+      <div class="grid2" style="grid-template-columns:1fr 1fr">
+        <div class="sinst">
+          <div class="sh"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>版本：从 v1 起，不是「接续全局 v2」</div>
+          <div class="sd"><code>register_project_table</code> / <code>register_project_file</code> 取的是<b>项目侧</b> <code>MAX(version) WHERE name AND scope='project' AND deleted_at IS NULL</code>；首次分发项目里没有同名行 → 0 + 1 = <b>v1</b>。覆盖分支会先把旧行软删，<code>deleted_at IS NULL</code> 再查还是 0 → 仍然 <b>v1</b>。<br>所以回执里那个 <code>v{n}</code> 恒为 v1；全局版本号只写进快照的 <code>global_version</code>（见右卡）。</div>
         </div>
-        <div class="dlg-foot"><span>两个动作都不动全局侧</span><span class="grow"></span><button class="btn-s">取消</button><button class="btn-p">分发到本项目</button></div>
+        <div class="sinst">
+          <div class="sh"><svg class="ico-sm"><use href="#i-link" xlink:href="#i-link"/></svg>来源：详情里真会显示，且是内部 id</div>
+          <div class="sd"><code>promoted_from = 'global:arp_&lt;uuid&gt;'</code>，而详情「来源」区把它当<b>「来源草稿」</b>渲染（<code>detail_view/rows.rs:52-54</code>）→ 用户看到的是「来源草稿：global:arp_3f2a…」。表档还多一行「来源表：&lt;目标名&gt;」（<code>source_table = 自己的名字</code>，等于自己指向自己）；<code>source_path</code> 为 NULL。</div>
+        </div>
       </div>
-      <p class="hang">这一页画的是<b>改名的中间态</b>（新名还没改、提交被挡）。三选一的完整形态在 <a href="17-dialog-conflict.html">17 块</a>，两页共用同一套结构，只换标题与说明文案。</p>
+      <div class="srcbar" style="margin-top:12px;margin-bottom:0"><svg class="ico-sm"><use href="#i-info" xlink:href="#i-info"/></svg><span class="mono">详情「来源」区实际渲染的三行</span><span class="tagn">分发落下的表档</span></div>
+      <div class="kv blk" style="display:grid;grid-template-columns:92px 1fr;gap:6px 10px;padding:9px 12px;border:1px solid var(--border);border-top:none;border-radius:0 0 7px 7px;background:var(--bg);font-size:11.5px">
+        <span style="color:var(--muted)">来源草稿</span><span class="mono">global:arp_9c41d7e2…</span>
+        <span style="color:var(--muted)">来源表</span><span class="mono">dwd_orders_view</span>
+        <span style="color:var(--muted)">指纹</span><span class="mono">—（快照里的 content_hash）</span>
+      </div>
+      <p class="hang">
+        「草稿出处」与「全局来源」<b>挤在同一个字段上</b>：升级侧恒 NULL（不记谁升过来的），分发侧塞 <code>global:&lt;id&gt;</code>，而显示口径只认识草稿路径。要让人看懂，得给分布来源单开一列或加一个「来自全局」的解析（本轮只记不改）。
+        <br>快照里的 <code>distributed_from</code> / <code>global_version</code> 没有任何界面读——<code>present/detail.rs</code> 反序列化快照只取 kind / 文件大小 / 行数列数。所以「回到全局那条链接」不存在。
+      </p>
     </div>
   </section>
 
   <section class="variant">
-    <div class="variant-h"><span class="no">D</span>分发完成后的落点<span class="desc">全局行不动；项目里多一行、且不带全局标记</span></div>
+    <div class="variant-h"><span class="no">D</span>撞名之后：覆盖 / 改名<span class="desc">对话框本身就是 17 页 D 段那张，这里只记分发的两句文案</span></div>
     <div class="canvas pad">
-      <div class="grid2">
-        <div>
-          <div class="srcbar" style="margin-bottom:6px"><span class="mono">全局实例</span><span>分发前后一致</span><span class="tagn">只读</span></div>
-          <div class="row"><svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg><span class="nm">dwd_orders_view</span><span class="ver">v2</span><span class="scope-badge">全局</span><span class="sb b-info"><span class="d"></span>分析表</span><span class="meta">1.2M 行 × 26 列</span></div>
+      <div class="grid2" style="grid-template-columns:1fr 1fr">
+        <div class="sinst">
+          <div class="sh"><svg class="ico-sm"><use href="#i-copy" xlink:href="#i-copy"/></svg>覆盖</div>
+          <div class="sd">文案原文：「覆盖将删除项目旧表 / 旧文件并软删旧登记，<b>新内容接续项目版本链</b>；旧本体不可恢复。」<br>选中后 <code>enqueue_distribute(root, 全局名, target, true)</code> + 状态栏「资产库：正在覆盖分发到本项目…」。<br><b>「接续项目版本链」这句不成立</b>——覆盖后落到 v1（见 C 段）。</div>
         </div>
-        <div>
-          <div class="srcbar" style="margin-bottom:6px"><span class="mono">当前项目</span><span>分发后多这一行</span><span class="tagn">项目</span></div>
-          <div class="row"><svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg><span class="nm">dwd_orders_view</span><span class="ver">v2</span><span class="scope-badge">项目</span><span class="sb b-info"><span class="d"></span>分析表</span><span class="meta">1.2M 行 × 26 列</span></div>
+        <div class="sinst">
+          <div class="sh"><svg class="ico-sm"><use href="#i-edit" xlink:href="#i-edit"/></svg>改名</div>
+          <div class="sd">输入框常驻、开窗已预填冲突名 → 打开瞬间必是 <code>Unchanged</code>（提示 warning、改名键灰、Enter 也提交不了）。改成别的新名且过闸（<code>Ready</code>）后 <code>enqueue_distribute(root, 全局名, Some(新名), false)</code> +「资产库：正在从全局分发…」。</div>
         </div>
       </div>
-      <p class="hang">落下的这一行<b>与项目里自己归档的行长得一模一样</b>：没有「来自全局」徽标，也没有回到全局的链接——来源只存在详情面板的「实例」行与登记表里。</p>
+      <p class="hang">
+        对话框形态见 <a href="17-dialog-conflict.html">17 页 D 段</a>：480px、标题固定「同名冲突」、无副标题、三颗 small 按钮（取消 / 覆盖（Danger 淡红底）/ 改名 Primary）、<code>Enter = 改名</code>、<code>Esc = 取消</code>。
+        分发与升级<b>只换正文</b>：持有方「当前项目」、动词「从全局分发」、覆盖后果换成上面那句。
+        <br>另查：<code>ConflictContext::Distribute { global_name, target }</code> 决定冲突框正文里的名字——<b>只有没改名时才等于全局名</b>，改过一次名后正文说的就是那个新名。
+      </p>
+    </div>
+  </section>
+
+  <section class="variant">
+    <div class="variant-h"><span class="no">E</span>覆盖分支的两个坑<span class="desc">只记不改：没有跨库事务；脚本档改名绕不过文件占位</span></div>
+    <div class="canvas pad">
+      <div class="grid2" style="grid-template-columns:1fr 1fr">
+        <div class="sinst">
+          <div class="sh"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>覆盖 = 先删再看，三步跨三个地方</div>
+          <div class="sd">① <code>DROP TABLE IF EXISTS &lt;目标名&gt;</code>（<b>无条件</b>，不管目标是表还是文件）→ ② 若全局行有 <code>rel_path</code> 就删 <code>resources/&lt;rel&gt;</code> → ③ 软删项目登记（按目标名）→ 再走一遍 <code>distribute</code>。<br>DuckDB / 文件系统 / SQLite 各一次，<b>没有事务</b>；中途失败留下的是「表没了登记还在」或「登记没了表还在」——而重名三查对这两种脏状态只报同一个冲突名。</div>
+        </div>
+        <div class="sinst">
+          <div class="sh"><svg class="ico-sm"><use href="#i-doc" xlink:href="#i-doc"/></svg>脚本档：改名字，不改文件路径</div>
+          <div class="sd">重建目标恒为 <code>resources/&lt;全局 rel&gt;</code>，改名只换登记名。于是项目里若已有这个文件（也许属于另一条不同名的资源），③ 查一直命中 → 冲突框一直报「已有同名资源「&lt;新名&gt;」」，<b>换任何名字都撞同一道墙</b>，且框里不会说「是文件占着」。</div>
+        </div>
+      </div>
+      <p class="hang">
+        两条都是实现层面的账，不是规格没写：规格 §13.6 只要求「冲突时询问（覆盖 / 改名 / 取消）」，没说覆盖要做到原子、也没说脚本档撞文件时该怎么脱身。
+        真要修：覆盖三步收进一个「先算后改」的流程（或在失败时把已删的东西记下来回执里说清），脚本档要么把 rel 也当冲突目标、要么落文件时改名。
+      </p>
     </div>
   </section>
 
@@ -106,8 +134,9 @@
 <div class="stage">
   <div class="canvas pad">
     <p class="hang" style="margin-top:0">
-      本块样式：<code>.dlg</code> / <code>.dlg-scope</code>（544px）/ <code>.srcbar</code> / <code>.fgrid</code> / <code>.inp</code> / <code>.inp.ro</code> / <code>.namehint.err</code> / <code>.radios</code> / <code>.rdot</code> / <code>.note</code> + <code>.note.warn</code> / <code>.sinst</code> / <code>.row</code> / <code>.scope-badge</code>。<br>
-      落地代码：<code>crates/analytics_resource/src/resource_host/detail_actions.rs::request_distribute_from_global</code>（入口，只读项目先拒）/ <code>src/detail_view/actions.rs::distribute_affordance</code>（详情按钮的置灰判据，与右键菜单同源）/ <code>src/global/distribute.rs::distribute</code>（读全局登记 + 项目重名双保险 + parquet 中转建表 / 写回 <code>resources/</code>）/ <code>src/dialogs/conflict.rs</code>（<code>ConflictKind::Distribute</code> 三处文案）/ <code>crates/workbench/src/panels/mod.rs::ensure_conflict_dialog</code>（分发侧冲突名 = 目标名 ?: 全局名）。
+      本块样式：<code>.sinst</code> / <code>.grid2</code>（本页两列处内联 <code>1fr 1fr</code>）/ <code>.fgrid</code> / <code>.inp.ro</code> / <code>.srcbar</code> / <code>.kv.blk</code>（本页内联成两列网格）/ <code>.scope-badge</code> / <code>.row</code>。<br>
+      落地代码：<code>resource_host/detail_actions.rs::request_distribute_from_global</code>（前置三句：无项目根 / 只读项目 / 入队「正在从全局分发…」）/ <code>detail_view/actions.rs::distribute_affordance</code>（详情按钮判据 + 两句说明）/ <code>global/distribute.rs::distribute</code>（读全局登记 + 三查 + parquet 中转建表 / 写回 <code>resources/</code>）与 <code>::distribute_overwrite</code>（覆盖三步）/ <code>global/mod.rs::project_name_taken</code>（三查本体）/ <code>global/register.rs::register_project_table / register_project_file</code>（版本从 v1、<code>promoted_from = global:&lt;id&gt;</code>、快照）/ <code>jobs/global.rs::run_distribute</code>（回执分级）/ <code>panels/resources.rs:210-244 / 662-672</code>（冲突处置与「已从全局分发…到本项目」）。<br>
+      下一步建议：<code>std::env::temp_dir()</code> 中转（<code>distribute.rs:105</code>）与 <code>distribute_overwrite</code> 里的两处「【探针】」日志（<code>:170</code>）属顺手能清的技术债，本页只登记不动代码。
     </p>
   </div>
 </div>
