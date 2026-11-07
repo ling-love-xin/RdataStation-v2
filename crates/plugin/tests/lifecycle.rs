@@ -112,6 +112,24 @@ async fn load_rejects_a_package_whose_checksums_no_longer_match() {
         message.contains("完整性校验失败"),
         "错误信息应点明完整性校验：{message}"
     );
+
+    // 校验失败的包仍要留在会话缓存里，面板才看得到「出错」并能直接卸载；
+    // 早期实现直接 return，坏包从列表里消失，用户只剩手删目录一条路。
+    let listed = manager.list_plugins().unwrap();
+    let entry = listed
+        .iter()
+        .find(|p| p.id == "com.example.tampered")
+        .expect("校验失败的包应仍出现在列表里");
+    assert_eq!(entry.state, rds_plugin::wasm::PluginState::Error);
+    assert!(
+        entry
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("完整性校验失败"),
+        "列表行应带上失败原因：{:?}",
+        entry.error
+    );
 }
 
 /// 热插拔：空目录 → 摆插件（出现）→ 删目录（消失）→ 改清单（变化置重载）。

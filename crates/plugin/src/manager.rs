@@ -383,7 +383,26 @@ impl PluginManager {
         // 运行期完整性：带 `checksums.json` 的包在加载时再校验一遍。安装期校验的是
         // 解压产物，装好之后仍可能被改（热插拔直接拷目录、用户手改文件），只验安装期
         // 等于只验了「第一次」。不带该文件的老包 / 开发目录照旧放行。
-        crate::checksums::verify_package(&manifest, plugin_dir)?;
+        //
+        // 形态判定提到校验之前：校验失败也要把插件留在缓存里（`LoadFailed`），
+        // 否则面板列表里根本没有这一行，用户既看不到原因、也无法从面板卸载坏包。
+        let kind = self.detect_plugin_kind(&manifest)?;
+        if let Err(e) = crate::checksums::verify_package(&manifest, plugin_dir) {
+            let plugin_id = manifest.plugin.id.clone();
+            let failed = LoadedPlugin {
+                id: plugin_id.clone(),
+                manifest,
+                install_path: plugin_dir.to_path_buf(),
+                status: LoadStatus::LoadFailed(e.to_string()),
+            };
+            if let Ok(mut index) = self.plugin_index.write() {
+                index.insert(plugin_id.clone(), kind);
+            }
+            if let Ok(mut map) = self.loaded_plugins.write() {
+                map.insert(plugin_id, failed);
+            }
+            return Err(e);
+        }
 
         let plugin_id = manifest.plugin.id.clone();
         let loaded_plugin = LoadedPlugin {
@@ -395,7 +414,6 @@ impl PluginManager {
 
         // 同步登记形态索引：热插拔新增路径只走这里（不经 load_plugin），
         // 不登记的话 activate 会 not_found、removed 分支会跳过 unload（曾静默失败）
-        let kind = self.detect_plugin_kind(&loaded_plugin.manifest)?;
         self.plugin_index
             .write()
             .map_err(|_| lock_err("plugin_index"))?
