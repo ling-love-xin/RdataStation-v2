@@ -600,8 +600,14 @@
 > ① 逐项 grep 解包源码（`~/.cargo/registry/…/sqlglot-rust-0.10.29/src/`）核**公开签名与定义位置**，记行号；
 > ② 读**实现**补“行为级”事实（哪一步会丢注释、`position` 是字符还是字节、`transpile` 吃不吃多语句）；
 > ③ 用真实 SQL **实跑**（`crates/engine/tests/sqlglot_capabilities.rs`，离线）——本表 ⚪ 项已逐条落地为实测结论（标为 ✅ 已实测）。
-> 锁定版本 `=0.10.29`，行号稳定可复现。重跑命令：
-> `cargo test -p rds-engine --test sqlglot_capabilities -j 2 -- --nocapture --test-threads=1`
+>
+> **2026-11-08 复核（升级到 `=0.11.1` 后）**：探针随 `rds-sql` 抽取已迁到
+> `crates/sql/tests/sqlglot_capabilities.rs`，重跑命令改为
+> `cargo test -p rds-sql --test sqlglot_capabilities -j 2 -- --nocapture --test-threads=1`；
+> 10 项探针在 0.11.1 上**全部通过**（不变量：不 panic、生成 SQL 可再解析、同句 diff 只产 `Keep`、WHERE 改动必产 `Update`），
+> 本表的行为级结论继续有效。**但下表行号是 0.10.29 的行号**——0.11.1 有 19 个源文件改动（解析器重写、新增
+> `src/precedence.rs`、`CreateTableStatement` 增 `with_properties`/`with_data`），引用源码位置时以 0.11.1 现读为准，
+> 不要照抄行号。升级本身的记录见 `docs/architecture/dependencies/sqlglot-rust-0.11.1-upgrade-report.md`。
 >
 > **证据强度**：✅ 已核（签名 + 关键实现路径 + **真实 SQL 实测**）；⚪ 仅核签名，未实测——接线前先补验证用例。
 

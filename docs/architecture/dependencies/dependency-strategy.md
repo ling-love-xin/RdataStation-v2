@@ -108,6 +108,17 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
   - `gpui-fast` 是**换渲染内核**：`gpui-fast*` 与 `gpui-pre*` 两套核心同编（构建时间/磁盘各多一份，二进制不双份）；`gpui-fast` 走 `windows-manifest-provided-by-host`（自己不自嵌清单），但依赖图里 `gpui-pre` 的默认 feature `windows-manifest` 已经嵌了一份 ID=1 清单（内容含 PerMonitorV2 / SegmentHeap / comctl32 v6 / asInvoker），应用侧再嵌会 `CVT1100` 资源重复 → `LNK1123`；因此 `crates/app/build.rs` 保持只嵌 icon，并注释说明何时才需要自嵌
   - 验证：`cargo check` 三级 + 开 `gpui-fast` 后再全量 check 均 0 error 0 warning，**项目侧零代码改动**（断裂面全被 vendor patch 吸收）；运行时（IME 组字 / 多光标 / 折叠 / 拖拽 / a11y / 滚动性能）未验
 
+- **patch 级批次**（2026-11-08，分支 `chore/deps-patch-batch-2026-11`）：一次性升 12 个补丁版本，**项目侧零代码改动**
+  - `tokio` 1.53.1 → **1.54.1**、`tokio-util` 0.7.19 → **0.7.20**、`serde_json` 1.0.151 → **1.0.154**、
+    `thiserror` 2.0.20 → **2.0.21**、`uuid` 1.26.1 → **1.29.1**、`encoding_rs` 0.8.41 → **0.8.44**、
+    `flate2` 1.1.10 → **1.1.11**、`bigdecimal` 0.4.10 → **0.4.11**、`jupyter-protocol` 2.0.2 → **2.0.3**（根表原先写 2.0.1，已对齐）、
+    `rand` 0.10.2 → **0.10.3**、`similar` 3.2.0 → **3.2.1**、`winresource` 0.1.31 → **0.1.34**
+  - 锁的连带变化：`jupyter-protocol` 2.0.3 去掉 `multiversion` / `multiversion-macros`（少两个包）；
+    `thiserror 1.0.69` / `rand 0.8.8` `0.9.5` / `similar 2.7.0` 三份旧版本仍在（第三方钉死，与 R2 的多版本现状一致）
+  - 验证：`cargo check-all`（全 workspace 全 targets）**0 error 0 warning**，4m45s；`cargo test-all` 见下条
+  - 方法论提示：`cargo update -p <pkg> --precise <ver>` 在**第一次**调用时就会把同批所有兼容的补丁版本一起带上，
+    后续对已升级的包再用 `--precise <旧版本>` 会报 `package ID specification … did not match any packages`——不是失败，是已经升好了
+
 以上验证：`cargo check-all` 全量通过；`cargo test-all`（全 workspace）**约 430 项全过**（engine 219 / insight 53 / mock 56 / connection 21 / shared 19 / workbench 12 / project 10 / plugin 11，加 workbench 集成测试 19 项）。
 
 待办：

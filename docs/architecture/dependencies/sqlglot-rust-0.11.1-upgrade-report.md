@@ -99,3 +99,29 @@ cargo check -p rds-app -j 2     # 应得 0 error 0 warning
 ```
 
 回滚：`git checkout -- Cargo.toml Cargo.lock crates/sql/src/builder.rs`（或直接 revert 本分支的两个 commit）。
+
+## 8. 能力释放度（0.11.1 上重新确认）
+
+**结论：没有完全释放。** 已接进产品的只有 6 项基础能力，另有 6 项「上游现成、探针实测可用、但产品还没接线」，
+真正的差距不在库版本，而在我们没把 `Schema` 组装起来（血缘 / 类型标注 / 列限定都以它为前置）。
+
+| 能力 | 状态 | 事实 |
+| --- | --- | --- |
+| 解析 / 语法校验 / 代码生成 / 方言转译 | ✅ 已用 | 执行路由、格式化、方言转移器；`transpile` 对脚本会**静默截断**（多条语句要 `transpile_statements`） |
+| 词法 tokenizer（高亮） | ✅ 已用 | `position` 是**字符下标**，不能当字节偏移 |
+| 语句切分 | ✅ 已用（自研） | `crates/sql/src/split.rs` 词法状态机，**故意不用 sqlglot**（未写完的文本也要能切） |
+| 方言覆盖 | 🟡 部分 | 上游 30 种方言，我们在 `crates/sql` 里用到 11 种（Ansi 90 次、Postgres 25、Duckdb 24、Mysql 22、Sqlite 16、Oracle 12、BigQuery/Snowflake/Redshift 各 10、MsSQL 7、Tsql 5） |
+| DDL / DML AST 构建（`builder` 全量） | 🟡 未接线 | 我们只用了 `select` / `select_all`，其余实体靠手写结构体字面量——这正是 0.11 加两个字段就要改代码的原因；改用建造器可降低这类升级成本 |
+| 类型标注 `annotate_types` | ⚪ 实测可用、未接线 | 运算后仍保持类型（`total * 2 → Decimal{12,2}`），值查看器 / 图表轴 / 数字格式化直接受益 |
+| 列级血缘 `lineage_sql` | ⚪ 实测可用、未接线 | 按输出别名能追到基列、表达式也能追；`editor-dev-plan` 里「分析结果血缘摘要」的遗留项就等它 |
+| 作用域分析 `build_scope` | ⚪ 实测可用、未接线 | **无需 schema**，接线最轻；可用于补全排序（「当前语句引用了哪些表」） |
+| AST 差异 `diff_sql` | ⚪ 实测可用、未接线 | 粒度到 `SelectItem` / `Expr` / `OrderByItem`；结果集对比（V1 有 `ResultDiffViewer`）、笔记版本链 diff |
+| 谓词下推 `pushdown_predicates` | ⚪ 实测可用、未接线 | 过滤能推入派生表；**保留**：`unnest_subqueries` 改写与 NULL 语义不等价 |
+| 本地查询计划 `plan` | ⚪ 实测可用、限定用途 | 只是 sqlglot 自建计划，**不是源库 EXPLAIN**；DDL 直接报不支持 |
+| Schema / 方言插件 / 时间格式 | ⚪ 未用 | `format_time_dialect` 是「方言转移器」的高价值子集（时间格式串转换） |
+| 内存执行器 `executor` | ⛔ 不采用 | 只在内存表上跑，无事务/并发/权限；本地分析一律走 DuckDB |
+
+接线优先级（按「产品价值 / 成本」排）：**① `build_scope`（免 schema，补全排序）→ ② `annotate_types` + `MappingSchema`
+（值查看器类型）→ ③ `lineage_sql`（结果血缘）→ ④ `diff_sql`（结果对比）→ ⑤ `pushdown_predicates`（联邦改写，须先定 NULL 语义）**。
+②③ 的共同前置「驱动类型 → `ast::DataType` 映射表 + 从 `MetadataService` 组装表列」才是真正的工程量。
+逐项源码证据与行为边界见 `docs/architecture/editor/editor-prototype-design.md` §7.4（已同步到 0.11.1）。
