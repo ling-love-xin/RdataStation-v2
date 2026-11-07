@@ -490,3 +490,4 @@ impl EventEmitter<InsightEvent> for InsightView {}
 
 pub mod state;
 pub mod render;
+pub mod probe;
