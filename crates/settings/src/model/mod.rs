@@ -21,6 +21,7 @@ pub mod projects;
 pub mod resources;
 pub mod result_panel;
 pub mod scratchpad;
+pub mod sql_analysis;
 pub mod startup;
 
 use serde::{Deserialize, Serialize};
@@ -39,6 +40,7 @@ pub use projects::Projects;
 pub use resources::Resources;
 pub use result_panel::{FactStoragePref, ResultPanel};
 pub use scratchpad::{Scratchpad, ToolbarButtonCfg};
+pub use sql_analysis::SqlAnalysis;
 pub use startup::Startup;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -74,6 +76,9 @@ pub struct Settings {
     /// 通知设置（自动消失时间、批量合并）。
     #[serde(default)]
     pub notifications: Notifications,
+    /// SQL 分析设置（sqlglot 高级能力在编辑器侧的开关，见 `model/sql_analysis.rs`）。
+    #[serde(default)]
+    pub sql_analysis: SqlAnalysis,
 }
 
 impl gpui_kit::Global for Settings {}

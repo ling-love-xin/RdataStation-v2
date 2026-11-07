@@ -183,6 +183,12 @@ pub enum Slot {
     InsightFullScanConfirm,
     InsightWorkSetLimit,
     InsightStatusUsage,
+    /// 打字期语义诊断（未知表 / 未知列；关掉只留词法层诊断）。
+    SqlAnalysisSemanticDiagnostics,
+    /// 补全候选按当前语句作用域排序。
+    SqlAnalysisPredicatePushdown,
+    /// 悬停补一行「来源表」。
+    SqlAnalysisHoverScope,
     /// 结果集事实档载体偏好（auto / memory / table；分流纯函数在 `shared::fact`，
     /// 触发物化路径 B 批接通消费）。
     ResultPanelFactStorage,
@@ -296,6 +302,9 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "insight.full_scan_confirm" => Slot::InsightFullScanConfirm,
         "insight.work_set_limit" => Slot::InsightWorkSetLimit,
         "insight.status_usage" => Slot::InsightStatusUsage,
+        "sql_analysis.semantic_diagnostics" => Slot::SqlAnalysisSemanticDiagnostics,
+        "sql_analysis.predicate_pushdown" => Slot::SqlAnalysisPredicatePushdown,
+        "sql_analysis.hover_scope" => Slot::SqlAnalysisHoverScope,
         "result_panel.fact_storage" => Slot::ResultPanelFactStorage,
         "result_panel.show_column_comments" => Slot::ResultPanelShowColumnComments,
         "result_panel.show_type_badge" => Slot::ResultPanelShowTypeBadge,
@@ -394,6 +403,9 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::ScratchpadGroupMaxH => KindTag::Number,
         Slot::InsightMemoryLimitMb | Slot::InsightWorkSetLimit => KindTag::Number,
         Slot::InsightFullScanConfirm | Slot::InsightStatusUsage => KindTag::Bool,
+        Slot::SqlAnalysisSemanticDiagnostics
+        | Slot::SqlAnalysisPredicatePushdown
+        | Slot::SqlAnalysisHoverScope => KindTag::Bool,
         Slot::ResultPanelFactStorage => KindTag::Enum,
         Slot::ResultPanelShowColumnComments => KindTag::Bool,
         Slot::ResultPanelShowTypeBadge

@@ -16,6 +16,7 @@ pub mod projects;
 pub mod resources;
 pub mod result_panel;
 pub mod scratchpad;
+pub mod sql_analysis;
 pub mod startup;
 
 /// 合并全部登记项（固定域序）。
@@ -34,5 +35,6 @@ pub fn all() -> Vec<SettingSpec> {
     v.extend(result_panel::entries());
     v.extend(layout::entries());
     v.extend(notifications::entries());
+    v.extend(sql_analysis::entries());
     v
 }

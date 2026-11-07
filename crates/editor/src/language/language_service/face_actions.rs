@@ -29,7 +29,50 @@ pub fn code_actions(request: &Request) -> Vec<CodeAction> {
     if let Some(action) = add_limit_action(sql, &spans, statement.end) {
         found.push(action);
     }
+    // 谓词下推（sqlglot `pushdown_predicates`）：设置开关 `sql_analysis.predicate_pushdown`
+    // 控制是否把这条改写动作摆出来（读进程内原子量，无锁）。
+    if engine::sql::prefs().predicate_pushdown {
+        if let Some(action) = pushdown_action(sql, request.dialect, statement) {
+            found.push(action);
+        }
+    }
     found
+}
+
+/// 「把 WHERE 下推进子查询」：只给首关键字是 SELECT、且改写后确实变了样的语句
+///
+/// 改写**整句替换**（`pushdown_predicates` 会重新生成 SQL，原格式化不保留）；
+/// 没变 / 解析失败 / 非 SELECT 一律不给——摆一条点了没反应的动作用于唬人。
+fn pushdown_action(
+    sql: &str,
+    dialect: engine::sql::SqlDialect,
+    statement: SqlStatement,
+) -> Option<CodeAction> {
+    let first = highlight_spans(sql)
+        .into_iter()
+        .next()
+        .map(|span| sql[span.start..span.end].to_ascii_lowercase());
+    if first.as_deref() != Some("select") {
+        return None;
+    }
+    let rewritten = engine::sql::pushdown_sql(sql, dialect).ok()?;
+    if normalize(&rewritten) == normalize(sql) {
+        return None;
+    }
+    Some(CodeAction {
+        id: PUSHDOWN_PREDICATES,
+        title: "把 WHERE 下推进子查询（改写当前语句）".to_string(),
+        edit: TextEdit {
+            start: statement.start,
+            end: statement.end,
+            replacement: rewritten,
+        },
+    })
+}
+
+/// 比较改写是否真的变了（空白无关）
+fn normalize(sql: &str) -> String {
+    sql.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// 这次改写作用在哪条语句上

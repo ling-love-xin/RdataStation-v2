@@ -148,6 +148,8 @@ pub struct CodeAction {
 const ADD_WHERE: &str = "add-where-match-nothing";
 /// 加 `LIMIT 100`：先看一眼前 100 行
 const ADD_LIMIT: &str = "add-limit-100";
+/// 把 WHERE 下推进子查询（sqlglot `pushdown_predicates`；`sql_analysis.predicate_pushdown` 控制）
+const PUSHDOWN_PREDICATES: &str = "pushdown-predicates";
 
 // ---------------------------------------------------------------------------
 // 面一：补全

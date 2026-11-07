@@ -47,11 +47,46 @@ impl HoverProvider for SqlHoverProvider {
     ) -> Task<Result<Option<Hover>>> {
         let sql = text.to_string();
         let dialect = self.dialect;
+        // 设置闸：`sql_analysis.hover_scope`（读进程内原子量，后台线程里读也安全）
+        let with_scope = engine::sql::prefs().hover_scope;
         // `hover_at` 是纯计算（sqlglot 解析），放后台线程跑，别卡 UI 帧
         cx.background_spawn(async move {
-            Ok(hover_at(&sql, dialect, &[], offset).map(|info| hover_to_lsp(&sql, info)))
+            Ok(hover_at(&sql, dialect, &[], offset).map(|mut info| {
+                if with_scope {
+                    if let Some(line) = scope_source_line(&sql, dialect, info.kind) {
+                        info.lines.push(line);
+                    }
+                }
+                hover_to_lsp(&sql, info)
+            }))
         })
     }
+}
+
+/// 悬停内容里补的那一行「来源：orders、totals」
+///
+/// 只给表 / 列（函数没有来源）；作用域里全是有名字的表才给——派生表/CTE 混在里面时
+/// 一句话说不清，宁可不加（与 usage 口径一致：说不准就不说）。
+fn scope_source_line(sql: &str, dialect: engine::sql::SqlDialect, kind: HoverKind) -> Option<String> {
+    if matches!(kind, HoverKind::Function) {
+        return None;
+    }
+    let report = engine::sql::scope_report(sql, dialect).ok()?;
+    if report.sources.is_empty() {
+        return None;
+    }
+    let mut tables: Vec<String> = report
+        .sources
+        .iter()
+        .filter(|source| !source.derived && !source.table.is_empty())
+        .map(|source| source.table.clone())
+        .collect();
+    tables.sort();
+    tables.dedup();
+    if tables.is_empty() {
+        return None;
+    }
+    Some(format!("来源：{}", tables.join("、")))
 }
 
 /// 自研 HoverInfo → LSP Hover（Markdown 内容；range = 引用词字节区间）

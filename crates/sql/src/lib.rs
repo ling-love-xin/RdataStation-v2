@@ -22,6 +22,7 @@
 //! - `script` — 脚本语言词法高亮（Python / R / Rust / Markdown / JSON / Log，
 //!   自 engine `script` 模块随迁，产出与 SQL 同构的 `HighlightSpan`）
 
+mod analysis;
 mod bind;
 mod builder;
 mod engine;
@@ -41,6 +42,11 @@ mod semantic;
 mod split;
 mod transpiler;
 
+pub use analysis::{
+    AnalysisPrefs, ChangeSummary, LineageStep, PlanSummary, ScopeReport, ScopeSource, TypedColumn,
+    TypedTable, column_types, data_type_label, diff_summaries, lineage_of_column, plan_summary,
+    prefs, pushdown_sql, scope_report, set_prefs, translate_time_format, unsupported_for_target,
+};
 pub use bind::{param_names, substitute_params};
 pub use builder::QualifiedTable;
 pub use engine::{AlterOperation, ColumnDefInfo, DdlInfo, SqlDialect, SqlEngine, SqlStatementType};

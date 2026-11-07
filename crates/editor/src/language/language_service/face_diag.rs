@@ -25,8 +25,10 @@ pub fn diagnostics(request: &Request) -> Vec<Diagnostic> {
     }
 
     // 语义层：有表目录才做（未知表 / 未知列）。目录为空 = 调用方没有元数据
-    // （scan / 未绑定连接）→ 跳过，与 engine::sql::diagnose 的无目录退化同口径
-    if !request.catalog.is_empty() {
+    // （scan / 未绑定连接）→ 跳过，与 engine::sql::diagnose 的无目录退化同口径。
+    // 另有一道设置闸（`sql_analysis.semantic_diagnostics`）：关掉后只留词法层诊断，
+    // 省下每次打字的解析开销（大文件打字卡顿的退路）。
+    if !request.catalog.is_empty() && engine::sql::prefs().semantic_diagnostics {
         let tables = catalog_to_semantic(request.catalog);
         for issue in diagnose(text, request.dialect, &tables) {
             found.push(Diagnostic::new(

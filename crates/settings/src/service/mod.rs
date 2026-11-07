@@ -25,11 +25,13 @@ mod projects;
 mod resources;
 mod result_panel;
 mod scratchpad;
+mod sql_analysis;
 mod startup;
 
 // 副作用出口 sink 的 re-export：lib.rs 据此保持 `settings::install_*` 公共路径不变。
 pub use insight::install_insight_memory_limit_sink;
 pub use logging::install_log_level_sink;
+pub use sql_analysis::install_sql_analysis_sink;
 
 /// 主题模式的文本形态（落盘值，与 `registry` 的枚举选项同源）。
 pub(crate) fn theme_mode_text(mode: AppearanceMode) -> String {
@@ -147,6 +149,13 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::InsightFullScanConfirm => SettingValue::Bool(settings.insight.full_scan_confirm),
         Slot::InsightWorkSetLimit => SettingValue::Number(settings.insight.work_set_limit as f64),
         Slot::InsightStatusUsage => SettingValue::Bool(settings.insight.status_usage),
+        Slot::SqlAnalysisSemanticDiagnostics => {
+            SettingValue::Bool(settings.sql_analysis.semantic_diagnostics)
+        }
+        Slot::SqlAnalysisPredicatePushdown => {
+            SettingValue::Bool(settings.sql_analysis.predicate_pushdown)
+        }
+        Slot::SqlAnalysisHoverScope => SettingValue::Bool(settings.sql_analysis.hover_scope),
         Slot::ResultPanelFactStorage => {
             SettingValue::Text(settings.result_panel.fact_storage.as_str().to_string())
         }
@@ -357,6 +366,9 @@ impl SettingsService {
             | Slot::InsightFullScanConfirm
             | Slot::InsightWorkSetLimit
             | Slot::InsightStatusUsage => insight::apply_slot(slot, value, window, cx),
+            Slot::SqlAnalysisSemanticDiagnostics
+            | Slot::SqlAnalysisPredicatePushdown
+            | Slot::SqlAnalysisHoverScope => sql_analysis::apply_slot(slot, value, window, cx),
             Slot::ResultPanelFactStorage
             | Slot::ResultPanelShowColumnComments
             | Slot::ResultPanelShowTypeBadge

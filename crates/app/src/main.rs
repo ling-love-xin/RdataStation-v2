@@ -167,6 +167,15 @@ fn run_app() {
             settings::install_insight_memory_limit_sink(
                 engine::duckdb::DuckDBManager::apply_memory_limit_mb,
             );
+            // SQL 分析三开关的出口：设置页改开关 → 落盘 + 调这个 sink →
+            // `rds_sql::analysis` 的进程内偏好即时生效（语言服务读侧无锁，下一帧就换口径）。
+            settings::install_sql_analysis_sink(|semantic_diagnostics, predicate_pushdown, hover_scope| {
+                engine::sql::set_prefs(engine::sql::AnalysisPrefs {
+                    semantic_diagnostics,
+                    predicate_pushdown,
+                    hover_scope,
+                });
+            });
             // 退出前把最后一批日志落库：库侧是"每 100 条或每 1 秒"批量提交，
             // 不等这一下，关窗口前最后 1 秒的记录就没了。
             // `Subscription` **一 drop 就退订**（gpui 语义），所以必须 forget —— 钩子要活到进程结束。
@@ -182,6 +191,16 @@ fn run_app() {
 
             // 1. 设置：加载 <RDS_HOME>/config/settings.json 为 global。
             SettingsService::init(cx);
+            // 1b. 把落盘的 SQL 分析三开关推给 `rds_sql::analysis`（sink 只管后续变更，
+            //     首帧要的是"启动即按设置生效"，不能等用户进设置页改一次才对准）。
+            {
+                let prefs = SettingsService::sql_analysis(cx);
+                engine::sql::set_prefs(engine::sql::AnalysisPrefs {
+                    semantic_diagnostics: prefs.semantic_diagnostics,
+                    predicate_pushdown: prefs.predicate_pushdown,
+                    hover_scope: prefs.hover_scope,
+                });
+            }
 
             // 2. 主题资产：先同步加载目录内主题并接入 `Theme`，保证首帧即为 RDS 配色。
             //    （`watch_dir` 为异步加载，若仅依赖它，窗口创建早于加载完成时会停留在
