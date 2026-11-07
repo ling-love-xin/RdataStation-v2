@@ -64,3 +64,6 @@ docs/analysis/
 docs/**/_backup/
 docs/**/_shots/
 docs/**/*autofix-backup-*.html
+
+# Zed IDE 计划文件（本机资产，不入库）
+/.zcode/
