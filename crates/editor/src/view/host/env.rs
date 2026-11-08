@@ -187,10 +187,9 @@ impl EditorHostPanel {
     /// 【2b】收脚本执行的结论（主线程轮询取走）：变成一张输出卡片钉在结果区
     pub(crate) fn drain_script_notes(&mut self, cx: &mut Context<Self>) {
         let mut mine_arrived = 0usize;
-        for note in self.shared.drain_script_notes() {
-            if note.document != self.document {
-                continue;
-            }
+        // 【B1】只取本文档的回执：全取会把别文档的脚本结论抢走并丢弃（与单元回执同一个坑）
+        let notes = self.shared.drain_script_notes_for(&self.document);
+        for note in notes {
             mine_arrived += 1;
             let env_name = self
                 .envs()

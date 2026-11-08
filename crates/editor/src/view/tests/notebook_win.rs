@@ -171,6 +171,112 @@ fn notebook_cell_actions_are_real(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
+/// 【B2 / B3】复制出来的单元 id 必须唯一；转类型 / 删除要清掉该单元的旧错误线
+///
+/// 区分性证明（两条断言在旧实现下都会红）：
+/// - 旧实现两次复制都产出 `<id>-copy`；同 id 会让 `ensure_cell_editor` 见 id 已存在直接
+///   return，第二个副本没有编辑器实例、两个单元共用正文；
+/// - 旧实现的 `cell_error_marks` 只在重跑与回执成功时清，转换与删除都不碰它——SQL 单元
+///   失败（有波浪线）→ 转 Markdown → 转回 SQL，波浪线原地复活。
+#[gpui_kit::test]
+fn cell_copy_ids_are_unique_and_convert_or_delete_clears_error_marks(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Sql, window, cx);
+        });
+    });
+    let first = cx.update(|_window, cx| panel.read(cx).notebook_state().cells[0].id.clone());
+
+    // 连点两次「复制单元」
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_duplicate_cell(&id, &first, window, cx);
+            panel.notebook_duplicate_cell(&id, &first, window, cx);
+        });
+    });
+    let ids: Vec<String> = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .notebook_state()
+            .cells
+            .iter()
+            .map(|cell| cell.id.clone())
+            .collect()
+    });
+    assert_eq!(ids.len(), 3, "两个副本都进列表");
+    assert_eq!(ids[0], first);
+    assert_eq!(
+        ids[1],
+        format!("{first}-copy-2"),
+        "第二个副本紧跟原单元，id 必须再退一档（{ids:?}）"
+    );
+    assert_eq!(ids[2], format!("{first}-copy"), "第一个副本被挤到后面（{ids:?}）");
+
+    // 造一条执行错误位点（仿真「本单元跑失败、正文有波浪线」）
+    let mark = crate::view::cell_diagnostics::ExecMark {
+        site: crate::diagnostics::ErrorSite {
+            offset: 0,
+            len: 0,
+            line: 1,
+            column: 1,
+            token: None,
+        },
+        reason: "syntax error near `wheree`".to_string(),
+    };
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, _cx| {
+            panel.cell_error_marks.insert(first.clone(), mark.clone());
+        });
+    });
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).cell_error_marks.len()),
+        1,
+        "错误位点先落进去"
+    );
+
+    // 转类型（SQL → Markdown）：输出已清空、没再跑过，旧错误线不能留
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_convert_cell(&id, &first, window, cx);
+        });
+    });
+    assert!(
+        !cx.update(|_window, cx| panel
+            .read(cx)
+            .cell_error_marks
+            .contains_key(&first)),
+        "转类型后旧错误线不能留（否则转回 SQL 会复活）"
+    );
+
+    // 再插一条 → 删除该单元 → 同样不能留
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, _cx| {
+            panel.cell_error_marks.insert(first.clone(), mark);
+        });
+    });
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_delete_cell(&id, &first, window, cx);
+        });
+    });
+    assert!(
+        !cx.update(|_window, cx| panel
+            .read(cx)
+            .cell_error_marks
+            .contains_key(&first)),
+        "删除单元后它的错误线不能留"
+    );
+}
+
 /// 运行 SQL 单元：走 `run_cell` 假执行器 → 回执经泵落到单元输出（内联 Table 投影）
 #[gpui_kit::test]
 fn running_a_sql_cell_applies_the_inline_output(cx: &mut TestAppContext) {

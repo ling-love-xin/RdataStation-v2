@@ -214,6 +214,8 @@ impl EditorHostPanel {
         // 【遗留 #10】编辑器实例与订阅一并丢弃（句柄即生命周期）
         self.cell_editors.remove(id);
         self._cell_editor_subs.remove(id);
+        // 【B3】该单元的错误线也一并清掉：单元都不在了，标记留着只会在 id 复用时复活
+        self.cell_error_marks.remove(id);
         cx.notify();
     }
 
@@ -251,11 +253,17 @@ impl EditorHostPanel {
             return;
         };
         let original = state.cells[pos].clone();
-        let mut copy = crate::cell::Cell::new(
-            format!("{}-copy", original.id),
-            original.language,
-            original.body,
-        );
+        // 【B2】副本 id 必须唯一：连点两次「复制单元」不能都叫 `c1-copy`——同 id 会让
+        // `ensure_cell_editor` 见 id 已存在直接 return，于是两个单元共用同一个编辑器实例、
+        // 正文互相串。`c1-copy` 已占用就退到 `c1-copy-2`、`c1-copy-3`…
+        let base = format!("{}-copy", original.id);
+        let mut copy_id = base.clone();
+        let mut n = 2;
+        while state.cells.iter().any(|cell| cell.id == copy_id) {
+            copy_id = format!("{base}-{n}");
+            n += 1;
+        }
+        let mut copy = crate::cell::Cell::new(copy_id, original.language, original.body);
         // 副本继承执行源（复制的就是同一语言的同一执行目标）
         copy.execution_source = original.execution_source.clone();
         state.cells.insert(pos + 1, copy);
@@ -293,6 +301,9 @@ impl EditorHostPanel {
         // `ensure_cell_editor` 从 shared 读，不需要手动搬运）
         self.cell_editors.remove(id);
         self._cell_editor_subs.remove(id);
+        // 【B3】旧语言的错误线不能留：输出已经清空、也没再跑过，转回原语言时那条波浪线
+        // 会原地复活（`cell_error_marks` 只在重跑与回执成功时清，转换路径原先漏了）
+        self.cell_error_marks.remove(id);
         if let Some(cell) = self.notebook_state().cells.iter().find(|c| c.id == id) {
             let cell = cell.clone();
             self.ensure_cell_editor(&cell, window, cx);
@@ -691,10 +702,11 @@ impl EditorHostPanel {
     /// 【2d】收单元执行的结论（主线程轮询取走）：按会话 + 单元 id 回填内联输出
     pub(crate) fn drain_cell_notes(&mut self, cx: &mut Context<Self>) {
         let mut mine_arrived = 0usize;
-        for note in self.shared.drain_cell_notes() {
-            if note.document != self.document {
-                continue;
-            }
+        // 【B1】只取本文档的回执：多面板共享同一执行队列，若这里全取，空闲面板会把别文档
+        // 的结论抢走并丢弃，归属面板的单元永久停在「执行中」（原先靠下面的 continue 兜底，
+        // 但那时回执已经被取走了）
+        let notes = self.shared.drain_cell_notes_for(&self.document);
+        for note in notes {
             mine_arrived += 1;
             // 【15.15】SQL 单元执行失败的位点进**该单元自己**的诊断（与词法同一条重建）。
             // 只处理会被落下的回执（会话一致 + 该单元仍在跑），判据与 `apply_cell_note`

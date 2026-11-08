@@ -177,5 +177,19 @@ impl EditorShared {
             .unwrap_or_default()
     }
 
+    /// 【B1】只取本文档的脚本结论（别文档的留在队列，等归属面板自己取走）
+    ///
+    /// 与 [`Self::drain_exec_for`] 同一口径：多面板共享队列，全取会把别文档的回执抢走丢弃。
+    pub fn drain_script_notes_for(
+        &self,
+        document: &crate::model::DocumentId,
+    ) -> Vec<crate::env::ScriptNote> {
+        let guard = self.exec.borrow();
+        guard
+            .as_ref()
+            .map(|channel| channel.drain_script_notes_for(document))
+            .unwrap_or_default()
+    }
+
     // ===== 【2d】分析笔记：会话级单元序列（每文档一份） =====
 }

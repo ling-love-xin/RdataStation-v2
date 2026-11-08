@@ -232,6 +232,18 @@ impl EditorShared {
             .unwrap_or_default()
     }
 
+    /// 【B1】只取本文档的单元结论（别文档的留在队列，等归属面板自己取走）
+    pub fn drain_cell_notes_for(
+        &self,
+        document: &crate::model::DocumentId,
+    ) -> Vec<crate::cell::CellNote> {
+        let guard = self.exec.borrow();
+        guard
+            .as_ref()
+            .map(|channel| channel.drain_cell_notes_for(document))
+            .unwrap_or_default()
+    }
+
     /// 把一条单元回执**落到某文档的笔记状态**上（Running → Done / Error）
     ///
     /// 回执带会话 id：切会话后到期的回执不落（会话已经换了，别把旧结果贴进新会话）。

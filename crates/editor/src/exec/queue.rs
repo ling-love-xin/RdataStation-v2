@@ -295,6 +295,46 @@ impl ExecQueue {
         queue.drain(..).collect()
     }
 
+    /// 【B1】只取**本文档**的单元结论（其余留在队列里，等归属面板自己的泵取走）
+    ///
+    /// 必须按文档过滤：多面板共享同一队列，空闲面板的泵若用 [`Self::drain_cell_notes`] 全取，
+    /// 就会把别文档的回执**抢走并丢弃**，归属面板的单元永久停在「执行中」。SQL 主通道早已用
+    /// `drain_for(document)` 修过同一个坑（`view/host/exec/pump.rs` 有原注释）。
+    pub fn drain_cell_notes_for(&self, document: &DocumentId) -> Vec<crate::cell::CellNote> {
+        Self::drain_matching(&self.cell_notes, |note| &note.document == document)
+    }
+
+    /// 【B1】只取**本文档**的脚本结论（同 `drain_cell_notes_for`：脚本与单元是两个独立通道，
+    /// 但都在同一个共享队列上，抢食问题一模一样）
+    pub fn drain_script_notes_for(&self, document: &DocumentId) -> Vec<crate::env::ScriptNote> {
+        Self::drain_matching(&self.script_notes, |note| &note.document == document)
+    }
+
+    /// 从共享队列里摘出满足条件的条目，其余**按原顺序留在队列**
+    ///
+    /// 不用 `retain` + `clone`：条目可能是大结果（`QueryData` 的整张表），clone 一次就多一份
+    /// 全量内存；这里靠 `pop_front` 搬运句柄，成本是 O(n) 指针移动。
+    fn drain_matching<T, F>(queue: &Arc<Mutex<VecDeque<T>>>, belongs: F) -> Vec<T>
+    where
+        F: Fn(&T) -> bool,
+    {
+        let mut queue = match queue.lock() {
+            Ok(queue) => queue,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let mut mine = Vec::new();
+        let mut others = VecDeque::new();
+        while let Some(item) = queue.pop_front() {
+            if belongs(&item) {
+                mine.push(item);
+            } else {
+                others.push_back(item);
+            }
+        }
+        *queue = others;
+        mine
+    }
+
     /// 提交一次执行（空目标会被拒；**同连接内排队**，不同连接并行——阶段②）
     ///
     /// `connection` 是**文档绑定的连接**（B1）；`None` = 未绑定，进统一未绑定队列，
@@ -663,5 +703,101 @@ impl Drop for ExecQueue {
         if let Ok(conns) = self.conns.get_mut() {
             conns.clear();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 队列单测不需要真执行器：`ExecQueue::new` 只建通道表，连接队列与 worker 都是懒建的
+    struct SilentRunner;
+
+    impl crate::execution::QueryRunner for SilentRunner {
+        fn run(
+            &self,
+            _connection: Option<&str>,
+            _schema: Option<&str>,
+            _channel: crate::channel::ExecChannel,
+            _sql: &str,
+            _options: RunOptions,
+        ) -> Result<crate::execution::QueryData, String> {
+            Ok(crate::execution::QueryData::default())
+        }
+    }
+
+    fn fresh_queue() -> ExecQueue {
+        ExecQueue::new(Arc::new(SilentRunner))
+    }
+
+    fn cell_note(document: &DocumentId, cell: &str) -> crate::cell::CellNote {
+        crate::cell::CellNote {
+            document: document.clone(),
+            session_id: "default".to_string(),
+            cell_id: cell.to_string(),
+            result: Err("表不存在".to_string()),
+        }
+    }
+
+    fn script_note(document: &DocumentId, env: &str) -> crate::env::ScriptNote {
+        crate::env::ScriptNote {
+            document: document.clone(),
+            env_id: env.to_string(),
+            result: Err("超时".to_string()),
+        }
+    }
+
+    /// 【B1】按文档取单元回执：只取本文档的，别文档的**原样留在队列**（不会被抢走丢弃）
+    ///
+    /// 区分性证明：旧的 `drain_cell_notes()` 是全取（`queue.drain(..)`），空闲面板的泵会把
+    /// 别文档的回执一起取走，视图层发现不是自己文档就 `continue`——那个面板的单元永久停在
+    /// 「执行中」。这里把两条不同文档的回执同时塞进同一个队列，断言 A 只拿走自己的、B 的还在。
+    #[test]
+    fn draining_by_document_leaves_other_documents_in_the_queue() {
+        let a = DocumentId::new("nb-a");
+        let b = DocumentId::new("nb-b");
+        let queue = fresh_queue();
+        {
+            let mut notes = lock(&queue.cell_notes);
+            notes.extend([cell_note(&a, "c1"), cell_note(&b, "c1"), cell_note(&a, "c2")]);
+        }
+
+        // A 的泵：只拿到自己的两条（顺序保持）
+        let mine = queue.drain_cell_notes_for(&a);
+        assert_eq!(mine.len(), 2, "只取本文档的回执");
+        assert_eq!(mine[0].cell_id, "c1");
+        assert_eq!(mine[1].cell_id, "c2");
+        assert!(mine.iter().all(|note| note.document == a));
+
+        // B 的那条仍在队列里，B 的泵随后能取到——这正是旧实现会丢掉的
+        let left = queue.drain_cell_notes_for(&b);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].document, b);
+        assert_eq!(left[0].cell_id, "c1");
+
+        // 两个文档都没有残留
+        assert!(queue.drain_cell_notes_for(&a).is_empty());
+        assert!(queue.drain_cell_notes().is_empty(), "全取入口此时看到的是空队列");
+    }
+
+    /// 【B1】脚本通道同一口径（脚本与单元是两条独立通道，但在同一个共享队列上，抢食一模一样）
+    #[test]
+    fn draining_scripts_by_document_also_keeps_foreign_notes() {
+        let a = DocumentId::new("nb-a");
+        let b = DocumentId::new("nb-b");
+        let queue = fresh_queue();
+        assert!(
+            queue.drain_script_notes_for(&a).is_empty(),
+            "空队列不产出回执"
+        );
+
+        lock(&queue.script_notes).push_back(script_note(&b, "py"));
+        assert!(
+            queue.drain_script_notes_for(&a).is_empty(),
+            "别文档的脚本回执不能被 A 的泵取走"
+        );
+        let after = queue.drain_script_notes_for(&b);
+        assert_eq!(after.len(), 1, "归属文档仍能取到自己的脚本回执");
+        assert_eq!(after[0].env_id, "py");
     }
 }
