@@ -2025,13 +2025,13 @@ impl std::fmt::Debug for TableColumnWidthsCache {
 }
 
 fn text_system_id(window: &Window) -> usize {
-    std::rc::Rc::as_ptr(window.text_system()) as usize
+    std::sync::Arc::as_ptr(window.text_system()) as usize
 }
 
 struct TableColumnWidths {
     /// Identity of the window text system the widths were measured with.
-    /// `WindowTextSystem` is `Rc`-shared and the cache must stay `Send`, so
-    /// only its address is kept.
+    /// `WindowTextSystem` is `Arc`-shared (gpui-pre 0.3.11) and the cache must
+    /// stay `Send`, so only its address is kept.
     text_system: usize,
     /// The styles the header row and the body rows render with.
     text_styles: TableTextStyles,
