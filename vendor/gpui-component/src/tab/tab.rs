@@ -3,6 +3,7 @@ use std::{rc::Rc, time::Duration};
 use crate::animation::{Lerp, ease_in_out_cubic};
 use crate::{ActiveTheme, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex};
 use crate::menu::{ContextMenuExt, PopupMenu};
+use crate::tooltip::ComponentTooltip;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, Background, ClickEvent, Edges, ElementId,
@@ -564,6 +565,16 @@ pub struct Tab {
     /// 【项目私有 patch】右键菜单构建器。
     pub(super) on_context_menu:
         Option<Rc<dyn Fn(PopupMenu, &mut Window, &mut App) -> PopupMenu + 'static>>,
+    /// 【项目私有 patch】悬停提示。
+    ///
+    /// 上游 0.9.0 的 `Tab` 没有任何 tooltip 入口（其他组件各自持有一份
+    /// [`ComponentTooltip`]，Tab 漏掉了）。结果集标签条要按 DBeaver 的口径把**原始 SQL**
+    /// 挂在各自标签的悬停提示上（`MultiTabsQueryResultsContainer.java:96-103`
+    /// 的 `tabItem.setToolTipText(toolTip)`），所以这里补上同一套机制：
+    /// 默认空 = 行为与上游一致，只有调用方显式 `tooltip(..)` 才会挂。
+    tooltip: ComponentTooltip,
+    /// 【项目私有 patch】拖拽重排回调（由 [`super::TabBar::on_reorder`] 统一下发到每个标签）。
+    pub(super) reorder: Option<Rc<dyn Fn(usize, usize, &mut Window, &mut App) + 'static>>,
 }
 
 impl From<&'static str> for Tab {
@@ -620,6 +631,8 @@ impl Default for Tab {
             max_width: None,
             on_click: None,
             on_context_menu: None,
+            tooltip: ComponentTooltip::default(),
+            reorder: None,
         }
     }
 }
@@ -724,6 +737,16 @@ impl Tab {
         self
     }
 
+    /// 【项目私有 patch】设置悬停提示文本。
+    ///
+    /// 与 `Button` / `Switch` 等组件的 `.tooltip()` 同一语义（同一份
+    /// [`ComponentTooltip`]，入场动效与延迟一致）。标签宽度受 `max_width` 截断时，
+    /// 提示里可以放完整内容——这正是结果集标签「只显示『结果 1』、悬停看原始 SQL」的用法。
+    pub fn tooltip(mut self, text: impl Into<SharedString>) -> Self {
+        self.tooltip.text = Some((text.into(), None));
+        self
+    }
+
     /// Set index to the tab.
     pub(crate) fn ix(mut self, ix: usize) -> Self {
         self.ix = ix;
@@ -817,6 +840,8 @@ impl RenderOnce for Tab {
         let folder = self.variant == TabVariant::Folder;
         let metrics = FolderTabMetrics::new(self.size, cx);
         let has_prefix = self.prefix.is_some();
+        // 【项目私有 patch】拖拽重排要用到标签文案（`self.label` 后面会被 label 分支 move）
+        let reorder_label = self.label.clone();
 
         let segmented_indicator_active =
             self.variant == TabVariant::Segmented && self.indicator_active;
@@ -1079,6 +1104,21 @@ impl RenderOnce for Tab {
             .when_some(self.on_click.clone(), |this, on_click| {
                 this.on_click(move |event, window, cx| on_click(event, window, cx))
             });
+        // 【项目私有 patch】悬停提示：与其他组件同一套 `ComponentTooltip`（自带入场动效、
+        // 延迟与减弱动效适配），未设置时原样返回、零开销。
+        let tab_element = self.tooltip.apply(tab_element);
+        // 【项目私有 patch】拖拽重排：把「我是第几个 + 我叫什么 + 落到别处要通知谁」
+        // 交给 base 层的 `on_reorder`（base 负责拖拽载荷与落点判定）。
+        let tab_element = match self.reorder {
+            Some(handler) => {
+                let ix = self.ix;
+                let label = reorder_label.unwrap_or_default();
+                tab_element.on_reorder(ix, label, move |from, to, window, cx| {
+                    handler(from, to, window, cx)
+                })
+            }
+            None => tab_element,
+        };
         // 【项目私有 patch】右键菜单：context_menu 返回 ContextMenu 包装，嵌在 when_some
         // 里类型不匹配（闭包需返回 T）。链结束后包住整个元素；无菜单时原样返回。
         if let Some(builder) = self.on_context_menu.clone() {

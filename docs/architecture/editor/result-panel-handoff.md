@@ -323,6 +323,27 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 
 验证：`cargo test -p rds-result-panel --lib` = **228 passed / 0 failed**（+1 `sets::tests::tab_strip_matches_the_editor_dock_tab_height`，真渲染读 `debug_bounds` 断言 32px，旧实现读 24 必挂）；`cargo test -p rds-ui-guard` = 4 passed；`cargo check` 两个 crate 0 warning。未验证：真窗口观感、tab 内「⋯」/钉住按钮在 Medium 12px 内边距下的排布。
 
+### 2.22 2026-11-08（标签条按 DBeaver 补齐：图标 / 关闭 / tooltip / 拖拽重排）
+
+用户指令「请你完整对齐 dbeaver 的设计」，四项一起落地（前一轮我只做了图标，被这句覆盖）。
+
+| # | DBeaver 出处 | 本仓落地 |
+| --- | --- | --- |
+| ① 图标 | `MultiTabsQueryResultsContainer.java:68-77` `setImage(IMG_DATA_GRID)` | `RESULT_SET_ICON = "icons/table.svg"` 挂 `Tab::prefix()`（**不用** `Tab::icon()`：`tab.rs:871/:888-896` 会让 `max_width` 失效且不挂 children）。走资产路径而非 `IconName`（`default-icons.txt` 106 个无 table/grid，`AllAssets` 1818 个有） |
+| ② 关闭 | 同 `setShowClose(true)` | `TabActions::on_close` → suffix 末尾 ghost 小按钮 → `ResultRequest::CloseSet` → `store.remove_set`。**有意偏离**：移除槽位而非留空白页；**只剩一份拒删**（下游按「至少一份」装配）；钉住不阻止关闭 |
+| ③ tooltip | `:95-103` `setToolTipText(toolTip)` | `ResultSetTab.sql` 投影 → `Tab::tooltip()`。vendor 两层原本无 tooltip 入口，本轮在 `gpui-component/tab/tab.rs` 补 `tooltip: ComponentTooltip` 字段 + `pub fn tooltip`，复用上游同一套（动效/延迟都自带） |
+| ④ 拖拽重排 | `SQLEditor.java:1518` `new TabFolderReorder(resultTabs)`；`:1541-1549`；`TabFolderReorder.java:35-45`（`ITEM_MOVE_EVENT` 带 oldIndex/newIndex） | `store.move_set(from,to)`（整份槽位搬，`active`/`compare` 同经 `reorder_index`）→ `ResultRequest::MoveSet` → `TabBar::on_reorder`。vendor：`gpui-base` 的 `TabReorder`/`TabDragGhost`/`Tab::on_reorder`，`gpui-component` 的 `TabBar::on_reorder` 每帧下发到每个标签 |
+
+**vendor 私有 patch 记账（0.9.0，三文件）**：
+
+- `gpui-base/src/tabs.rs`：`TabReorder`（`index`/`label`/`on_move`）、`TabDragGhost`（`Render` 预览视图）、`Tab::reorder` 字段 + `pub fn on_reorder`、`RenderOnce` 里 `on_drag`/`on_drop`。**`TabDragGhost` 用裸 `hsla`**：base 层拿不到主题色，是「零裸色值」的唯一显式例外。
+- `gpui-component/src/tab/tab.rs`：`tooltip: ComponentTooltip` 字段 + `pub fn tooltip`；`reorder` 字段（`on_reorder` 由 Bar 下发，因为 `ix` 是每帧 `.ix()` 注入、构造期未知）。
+- `gpui-component/src/tab/tab_bar.rs`：`on_reorder` 字段 + `pub fn on_reorder` + 渲染循环里 `tab.reorder = self.on_reorder.clone()`。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **240 passed / 0 failed**（+4 拖拽用例：`dragging_a_set_forward_moves_it_and_keeps_selection_on_it` / `dragging_a_set_backward_shifts_the_neighbours` / `reordering_remaps_the_compare_index` / `reordering_ignores_noops_and_out_of_range_targets`）；`cargo check -p rds-result-panel` / `-p rds-editor` 均 Finished 0 warning；`cargo test -p rds-ui-guard` = 4 passed。`debug_bounds` 只吃 `&'static str`（`test_context.rs:1032`），断言侧一律静态字面量。
+
+**未验证（需真窗口）**：32px tab 内塞图标+徽标+「⋯」+关闭（+图钉）是否挤；tooltip 实际延迟与位置；拖拽手势观感（阈值、落点反馈、ghost 深色主题反差）——headless 无鼠标拖拽，只有编译级 + store 单测保证。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

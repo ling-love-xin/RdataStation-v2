@@ -1,16 +1,56 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, ClickEvent, Div, ElementId, InteractiveElement, Interactivity, IntoElement,
-    MouseButton, ParentElement, Refineable as _, RenderOnce, Role, SharedString,
-    StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _,
-    relative,
+    AnyElement, App, AppContext as _, ClickEvent, Context, Div, ElementId, InteractiveElement,
+    Interactivity, IntoElement, MouseButton, ParentElement, Refineable as _, Render, RenderOnce,
+    Role, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window, div, hsla,
+    prelude::FluentBuilder as _, relative,
 };
 use smallvec::SmallVec;
 
 use crate::{StateStyle, StyledExt as _, TestSupportExt as _, a11y_disabled::A11yDisabledExt as _};
 
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+
+/// 【项目私有 patch】拖拽重排的载荷与回调。
+///
+/// gpui 的 `on_drag` 要求拖拽值能跨元素传递（落点拿到的是**拖起那个元素**的值），
+/// 所以值类型就用标签下标 `usize`；落点那边再补上自己的下标，交给 `on_move`
+/// ——对应 DBeaver `TabFolderReorder` 的 `ITEM_MOVE_EVENT`（`TabFolderReorder.java:35-45`，
+/// 事件里同时带 `oldIndex` 与 `newIndex`）。
+pub struct TabReorder {
+    /// 本标签在标签条里的下标（拖起时的载荷）
+    pub index: usize,
+    /// 拖拽浮层上显示的名字（被拖标签的文案）
+    pub label: SharedString,
+    /// `(from, to)`：拖起者的下标与落点的下标
+    pub on_move: Rc<dyn Fn(usize, usize, &mut Window, &mut App) + 'static>,
+}
+
+/// 【项目私有 patch】拖拽时跟着指针的小浮层。
+///
+/// gpui 的 `on_drag` 只接受一个 `Entity<W: Render>` 作为拖拽预览，没有「不画预览」的
+/// 选项，所以至少要有一个视图。这里画一个小胶囊显示被拖标签的名字——比一块空白更容易
+/// 判断「我正在搬哪一个」。`gpui-base` 拿不到主题色（它在 gpui-component 之上），
+/// 因此用中性半透明白 + 细边框，深色主题下也只是轻微反差，不喧宾夺主。
+struct TabDragGhost {
+    label: SharedString,
+}
+
+impl Render for TabDragGhost {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .border_1()
+            .border_color(hsla(0., 0., 0., 0.25))
+            .bg(hsla(0., 0., 1., 0.92))
+            .text_color(hsla(0., 0., 0.15, 1.))
+            .text_sm()
+            .child(self.label.clone())
+    }
+}
 
 /// An unstyled tab that owns pointer activation and accessibility behavior.
 ///
@@ -32,6 +72,8 @@ pub struct Tab {
     accessibility_label: Option<SharedString>,
     position_in_set: Option<usize>,
     size_of_set: Option<usize>,
+    /// 【项目私有 patch】拖拽重排（`None` = 不可拖，行为与上游一致）
+    reorder: Option<TabReorder>,
 }
 
 impl Tab {
@@ -48,6 +90,7 @@ impl Tab {
             accessibility_label: None,
             position_in_set: None,
             size_of_set: None,
+            reorder: None,
         }
     }
 
@@ -90,6 +133,25 @@ impl Tab {
 
     pub fn styles(mut self, build: impl FnOnce(TabStyles) -> TabStyles) -> Self {
         self.semantic_styles = build(self.semantic_styles);
+        self
+    }
+
+    /// 【项目私有 patch】让这个标签可拖拽重排。
+    ///
+    /// `index` 建在拖拽载荷上（拖起时携带），落点时再与本标签的 `index` 组成
+    /// `(from, to)` 交给 `on_move`——调用方（标签条）只负责把整条重排意图转成
+    /// 一个业务动作（例如「把第 from 份结果集搬到第 to 位」）。
+    pub fn on_reorder(
+        mut self,
+        index: usize,
+        label: impl Into<SharedString>,
+        on_move: impl Fn(usize, usize, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.reorder = Some(TabReorder {
+            index,
+            label: label.into(),
+            on_move: Rc::new(on_move),
+        });
         self
     }
 
@@ -177,6 +239,25 @@ impl RenderOnce for Tab {
                     this.on_click(move |event, window, cx| on_click(event, window, cx))
                 },
             )
+            // 【项目私有 patch】拖拽重排：拖起时载荷为本标签下标，落到别的标签上时
+            // 把 (from, to) 交给标签条的回调。
+            .when_some(self.reorder, |mut this, reorder| {
+                let target = reorder.index;
+                let label = reorder.label.clone();
+                let on_move = reorder.on_move.clone();
+                this.interactivity().on_drag(
+                    target,
+                    move |_value, _offset, _window, cx| {
+                        let label = label.clone();
+                        cx.new(move |_| TabDragGhost { label })
+                    },
+                );
+                this.interactivity()
+                    .on_drop(move |from: &usize, window, cx| {
+                        (on_move)(*from, target, window, cx)
+                    });
+                this
+            })
             .children(self.children)
             .refine_style(&style)
             .a11y_disabled(disabled)

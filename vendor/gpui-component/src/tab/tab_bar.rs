@@ -61,6 +61,9 @@ pub struct TabBar {
     menu: bool,
     max_width: Option<Pixels>,
     on_click: Option<Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>>,
+    /// 【项目私有 patch】拖拽重排回调：`(被拖的下标, 落点下标)`。
+    /// `None` = 标签不可拖，行为与上游一致。
+    on_reorder: Option<Rc<dyn Fn(usize, usize, &mut Window, &mut App) + 'static>>,
 }
 
 impl TabBar {
@@ -82,7 +85,21 @@ impl TabBar {
             on_click: None,
             menu: false,
             max_width: None,
+            on_reorder: None,
         }
+    }
+
+    /// 【项目私有 patch】让整条标签条可拖拽重排。
+    ///
+    /// 只登记一次，渲染时下发给每个标签（每个标签自己知道自己第几个）。
+    /// 对应 DBeaver 在结果集标签条上装 `new TabFolderReorder(resultTabs)`
+    /// （`SQLEditor.java:1518`）——能力属于整条标签条，不属于单个标签。
+    pub fn on_reorder(
+        mut self,
+        handler: impl Fn(usize, usize, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_reorder = Some(Rc::new(handler));
+        self
     }
 
     /// Set the Tab variant, all children will inherit the variant.
@@ -522,6 +539,8 @@ impl RenderOnce for TabBar {
             tab.indicator_ready = indicator_ready;
             tab.indicator_epoch = indicator_epoch;
             tab.hovered = hovered_ix == Some(ix);
+            // 【项目私有 patch】拖拽重排：整条标签条的回调下发给每个标签
+            tab.reorder = self.on_reorder.clone();
             tab.separator = self.variant == TabVariant::Folder
                 && ix + 1 < num_tabs
                 && !has_shape(ix)

@@ -1455,6 +1455,44 @@ enum 类 `Select` 需要"值 → 显示"映射来源，当前拿不到枚举定�
 **未验证**：真窗口观感（32px 后标签条占掉网格 8px 高度是否显紧）、tab 内右侧「⋯」与钉住
 小按钮在 Medium 档 12px 内边距下的排布、Medium 的 hover/选中底色在结果集这张标签条上的观感。
 
+### 8.31 结果集标签条按 DBeaver 补齐四项（图标 / 关闭 / tooltip / 拖拽重排，2026-11-08）
+
+**指令（用户原话）**：「请你完整对齐 dbeaver 的设计」。此前我先只做了图标，用户明确要求补全
+其余三项，故本轮四项一起落地。逐项取证 DBeaver 源码（本地竞品仓 `D:\RdataStation\RDS\dbeaver-ref`），
+再对照实现：
+
+| # | DBeaver 的做法（出处） | 本仓实现 | 差异 / 取舍 |
+| --- | --- | --- | --- |
+| ① tab 图标 | `MultiTabsQueryResultsContainer.java:68-77` 的 `tabItem.setImage(SQLEditor.IMG_DATA_GRID)`——每个结果集标签都带 DataGrid 图标 | `sets.rs` 的 `RESULT_SET_ICON = "icons/table.svg"`，经 `Tab::prefix()` 挂 `Icon::default().path(..)` | 不用 `Tab::icon()`：vendor `tab.rs:871` 有 icon 时 `max_width` 失效、`:888-896` 走 `w(inner_height*1.25)` 定宽且**不挂 children**，会把标题徽标与按钮全挤掉。图标走**资产路径**而非 `IconName`：`default-icons.txt` 106 个里没有任何 table/grid，而应用注册的 `gpui_kit::assets::AllAssets` 有全量 1818 个 Lucide |
+| ② 关闭按钮 | 同 `:68-77` 的 `tabItem.setShowClose(true)` | `TabActions::on_close` → suffix 末尾 `Button::ghost().small().icon(IconName::Close).tooltip("关闭这个结果集")`；`ResultRequest::CloseSet` → `store.remove_set` | **语义有意偏离**：DBeaver 关掉标签会留一个空白页，我们是从 store 移除槽位（条目 + 变更集/历史/本地行/行级历史/事实档一并丢弃），且**只剩一份时拒删**——下游全部按「至少一份」装配。判据写在 `remove_set` 注释里。钉住不阻止关闭（钉住挡的是自动淘汰） |
+| ③ tooltip 显示原始 SQL | `MultiTabsQueryResultsContainer.java:95-103` 的 `tabItem.setToolTipText(toolTip)`（`updateResultsName` 里挂原始 SQL） | `ResultSetTab.sql` 投影（`tabs()` 里 `entry.sql.clone()`）→ `Tab::tooltip(SharedString)`。空 SQL 不挂（避免一个空白气泡） | vendor 两层原本**都没有 tooltip 入口**，本轮在 `gpui-component/src/tab/tab.rs` 补字段 `tooltip: ComponentTooltip` + `pub fn tooltip(text)`，链尾 `self.tooltip.apply(tab_element)`——复用上游 `Button`/`Switch` 同一套（自带入场动效、延迟、减弱动效适配），未设置时原样返回、零开销 |
+| ④ 拖拽重排 | `SQLEditor.java:1518` `new TabFolderReorder(resultTabs)`；`:1541-1549` 监听 `ITEM_MOVE_EVENT` 更新引用；`TabFolderReorder.java:35-45` 事件带 `oldIndex`/`newIndex` | 三层：`store.move_set(from, to)`（整份槽位 `Vec::remove`+`insert`，`active`/`compare` 都经 `reorder_index` 重映射）→ `ResultRequest::MoveSet{from,to}` → `TabBar::on_reorder`。vendor 侧 `gpui-base` 的 `TabReorder`（载荷 = 自己的下标）+ `TabDragGhost`（跟着指针的小胶囊）+ `Tab::on_reorder`；`gpui-component` 的 `TabBar::on_reorder` 每帧把回调下发到每个标签 | gpui 的 `on_drag` **强制**要一个 `Entity<W: Render>` 作拖拽预览（没有「不画预览」选项），所以 base 层新增了 `TabDragGhost` 视图。它在 `gpui-base` 里**拿不到主题色**（gpui-component 在它之上），只能用中性半透明白 + 细边框——这是仓库「零裸色值」红线的一处**显式例外**，理由写在结构体注释里。拖拽能力归属「整条标签条」（与 DBeaver 把 `TabFolderReorder` 装在 CTabFolder 上一致），不是单个标签 |
+
+**store 侧不变量**：`move_set` 越界 / 回原位 / 文档不存在一律返回 `false` 且不动；
+`active` 与 `compare` 同经 `reorder_index(index, from, to)`，因此 `compare ≠ active` 保持。
+
+**验证**：
+
+- `cargo test -p rds-result-panel --lib` = **240 passed / 0 failed**（改前 235；+4 条拖拽
+  `dragging_a_set_forward_moves_it_and_keeps_selection_on_it` /
+  `dragging_a_set_backward_shifts_the_neighbours` /
+  `reordering_remaps_the_compare_index` /
+  `reordering_ignores_noops_and_out_of_range_targets`，
+  sets 侧 `tabs_keep_the_source_sql_for_the_tooltip` 等 5 条已在上一步落地）。
+- `cargo check -p rds-result-panel` / `-p rds-editor` 均 Finished、**0 warning**；
+  `cargo test -p rds-ui-guard` = 4 passed。
+- 两条 `debug_bounds` 断言走静态字符串字面量：`gpui-fast-0.1.13/src/app/test_context.rs:1032`
+  的签名是 `debug_bounds(&mut self, selector: &'static str)`，`format!` 出来的 `String`
+  传不进（E0308 实测），故关闭按钮/图标前缀的选择器用字面量数组遍历。
+
+**未验证（需真窗口）**：图标 + 通道徽标 + 「⋯」+ 关闭（钉住时再加图钉）全塞进 32px tab 是否挤；
+`ComponentTooltip` 在标签上的实际延迟与浮层位置；拖拽手势的完整观感（拖起阈值、落点高亮、
+`TabDragGhost` 在深色主题下的反差）——headless 测不了鼠标拖拽，`on_drag`/`on_drop` 只有编译级
+保证与 store 层单测。
+
+**副作用（承接 §8.30，仍未处理）**：`RESULT_PANE_HEIGHT` 仍是 `20.0`（320px），标签条从 24 抬到
+32 后网格少了 8px（26px 行高下约少 1/3 行），是否抬到 340 待用户反馈。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

@@ -449,6 +449,66 @@ impl ResultStore {
             .unwrap_or_default()
     }
 
+    /// 【DBeaver 对齐】关闭第 `index` 份结果集（标签上的关闭按钮）——从槽位移除，
+    /// 条目与全部伴生状态（变更集 / 编辑历史 / 本地行 / 行级历史 / 事实档）一并丢弃。
+    ///
+    /// 返回是否真的删了：
+    /// - 文档不存在 / 下标越界 = `false`（防御投影错位）；
+    /// - **只剩最后一份时不删**（`slots` 允许为空的假设在整个下游（`active` 恒指向
+    ///   有效槽位、面板四行骨架按“有结果”装配）都不成立；DBeaver 关掉最后一个结果页
+    ///   会留下空白页，我们选择“留一份、由新查询覆盖”，这是与它的一处有意偏离）。
+    ///
+    /// 索引修正口径与 [`evict_oldest`] 一致，另补两条：关掉的正是 `active` 时顺位落到
+    /// 同一位置（末尾删则退到新的最后一项）；`compare` 指向被删项时对比随之取消。
+    ///
+    /// 钉住态不阻止关闭：钉住挡的是**自动淘汰**，不是用户主动关（用户点了关闭就是
+    /// 明确不要这份了）。
+    pub fn remove_set(&mut self, document: &DocumentId, index: usize) -> bool {
+        let Some(slot) = self.slot_mut(document) else {
+            return false;
+        };
+        if index >= slot.slots.len() || slot.slots.len() <= 1 {
+            return false;
+        }
+        slot.slots.remove(index);
+        if index < slot.active {
+            slot.active -= 1;
+        } else if index == slot.active {
+            slot.active = slot.active.min(slot.slots.len() - 1);
+        }
+        match slot.compare {
+            Some(compare) if compare == index => slot.compare = None,
+            Some(compare) if compare > index => slot.compare = Some(compare - 1),
+            other => slot.compare = other,
+        }
+        true
+    }
+
+    /// 【DBeaver 对齐】把第 `from` 份结果集拖到 `to` 位置（标签条拖拽重排）
+    ///
+    /// 对应 `SQLEditor.java:1518` 的 `new TabFolderReorder(resultTabs)`：
+    /// 槽位顺序是用户可改的展示顺序，条目 / 变更集 / 历史等都**随槽位一起搬**
+    /// （拖走的是整份结果，不是把内容塞到另一个槽位上）。
+    ///
+    /// 返回是否真的移动了：文档不存在 / 越界 / 拖回原位一律 `false`（不制造无意义的重排）。
+    ///
+    /// `active` 与 `compare` 都按「同一个换位置换」重映射，所以两者原本不同的话
+    /// （不变式 `compare ≠ active`）移动后仍然不同。
+    pub fn move_set(&mut self, document: &DocumentId, from: usize, to: usize) -> bool {
+        let Some(slot) = self.slot_mut(document) else {
+            return false;
+        };
+        let len = slot.slots.len();
+        if from >= len || to >= len || from == to {
+            return false;
+        }
+        let moved = slot.slots.remove(from);
+        slot.slots.insert(to, moved);
+        slot.active = reorder_index(slot.active, from, to);
+        slot.compare = slot.compare.map(|compare| reorder_index(compare, from, to));
+        true
+    }
+
     /// 【T2a-3】某份结果集的**未提交变更**（只读：UI 标脏格 / 变更计数都读它）
     pub fn change_set(&self, document: &DocumentId, index: usize) -> Option<&ChangeSet> {
         self.slot(document)
@@ -617,6 +677,24 @@ fn evict_oldest(slot: &mut DocumentResults) {
             Some(compare) if compare > victim => slot.compare = Some(compare - 1),
             _ => {}
         }
+    }
+}
+
+/// 【DBeaver 对齐】重排后某个下标的新位置：把第 `from` 项搬到 `to` 处时，
+/// 其余各项的位移（`Vec::remove` + `Vec::insert` 的真实语义）。
+///
+/// 三个分支：自己搬到新位置；落在 (from, to] 区间内向前挤一位；落在 [to, from)
+/// 区间内向后挪一位；区间外不动。用同一个函数重算 `active` 与 `compare`，
+/// 保证两者的相对顺序与槽位保持一致。
+fn reorder_index(index: usize, from: usize, to: usize) -> usize {
+    if index == from {
+        to
+    } else if from < index && index <= to {
+        index - 1
+    } else if to <= index && index < from {
+        index + 1
+    } else {
+        index
     }
 }
 
@@ -999,6 +1077,188 @@ mod tests {
         assert!(store.toggle_compare(&document, 0), "点别的份 = 换成它");
         assert_eq!(store.compare_index(&document), Some(0));
         assert!(!store.toggle_compare(&document, 99), "越界不改");
+    }
+
+    // ===== 【DBeaver 对齐】标签上的关闭按钮：移除单个结果集 =====
+
+    /// 关掉选中项之前的一份：选中下标跟着前移，看的是原来那份（不会跳到别的结果）
+    #[test]
+    fn closing_a_set_before_the_active_one_shifts_the_selection_down() {
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet, None);
+        store.push(entry("doc-1", "select 3", 3), ResultPlacement::NewSet, None);
+        // NewSet 追加后 active = 最新（index 2）
+        assert_eq!(store.active_index(&document), Some(2));
+
+        assert!(store.remove_set(&document, 0), "关掉最旧的一份");
+        assert_eq!(store.set_count(&document), 2);
+        assert_eq!(store.active_index(&document), Some(1), "下标跟着前移");
+        assert_eq!(
+            active_sql(&store, "doc-1"),
+            Some("select 3".to_string()),
+            "看的还是原来那份"
+        );
+    }
+
+    /// 关掉的正是当前看着的那份：顺位落到同一位置；关末项时退到新的最后一份
+    #[test]
+    fn closing_the_active_set_falls_onto_its_neighbour() {
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet, None);
+        store.push(entry("doc-1", "select 3", 3), ResultPlacement::NewSet, None);
+        // active = 2；关掉它 → 退到 index 1（新的最后一份）
+        assert!(store.remove_set(&document, 2));
+        assert_eq!(store.active_index(&document), Some(1));
+        assert_eq!(active_sql(&store, "doc-1"), Some("select 2".to_string()));
+
+        // 再把当前这份关掉 → 只剩 select 1，active 归 0
+        assert!(store.remove_set(&document, 1));
+        assert_eq!(store.set_count(&document), 1);
+        assert_eq!(store.active_index(&document), Some(0));
+        assert_eq!(active_sql(&store, "doc-1"), Some("select 1".to_string()));
+    }
+
+    /// 对比项：关掉的正是它 → 取消对比；关在它之前 → 对比下标跟着前移
+    #[test]
+    fn closing_a_set_clears_or_rewinds_compare() {
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet, None);
+        store.push(entry("doc-1", "select 3", 3), ResultPlacement::NewSet, None);
+        // active = 2；对比第 0 份
+        assert!(store.select_compare(&document, 0));
+
+        assert!(store.remove_set(&document, 1), "关掉对比项之后的一份");
+        assert_eq!(
+            store.compare_index(&document),
+            Some(0),
+            "对比项在删除点之前，不受影响"
+        );
+
+        assert!(store.remove_set(&document, 0), "关掉对比项本身");
+        assert_eq!(store.compare_index(&document), None, "对比对象不在了就清掉");
+    }
+
+    /// 只剩最后一份 / 下标越界都不删：面板不允许出现“没有任何结果集”的状态
+    #[test]
+    fn closing_never_empties_the_slot_list() {
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        assert!(!store.remove_set(&document, 0), "只剩一份时不删");
+        assert_eq!(store.set_count(&document), 1);
+
+        store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet, None);
+        assert!(!store.remove_set(&document, 99), "越界不改");
+        assert_eq!(store.set_count(&document), 2);
+        assert!(!store.remove_set(&DocumentId::new("doc-missing"), 0), "文档不存在");
+    }
+
+    // ===== 【DBeaver 对齐】标签拖拽重排 =====
+
+    fn sqls(store: &ResultStore, document: &str) -> Vec<String> {
+        store
+            .sets(&DocumentId::new(document))
+            .iter()
+            .map(|entry| entry.sql.clone())
+            .collect()
+    }
+
+    fn three_sets() -> (ResultStore, DocumentId) {
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet, None);
+        store.push(entry("doc-1", "select 3", 3), ResultPlacement::NewSet, None);
+        (store, document)
+    }
+
+    /// 把当前选中的那份往前拖：顺序变了，**选的还是同一份**（不是同一位置）
+    #[test]
+    fn dragging_a_set_forward_moves_it_and_keeps_selection_on_it() {
+        let (mut store, document) = three_sets();
+        assert_eq!(store.active_index(&document), Some(2), "active 在最新一份");
+
+        assert!(store.move_set(&document, 2, 0), "拖到最前面");
+        assert_eq!(sqls(&store, "doc-1"), ["select 3", "select 1", "select 2"]);
+        assert_eq!(store.active_index(&document), Some(0), "选中跟着那份走");
+        assert_eq!(
+            active_sql(&store, "doc-1"),
+            Some("select 3".to_string()),
+            "看的还是同一份数据"
+        );
+    }
+
+    /// 把中间那份往后拖：邻居依次前移，选中（另一份）跟着重映射
+    #[test]
+    fn dragging_a_set_backward_shifts_the_neighbours() {
+        let (mut store, document) = three_sets();
+        // active = 2；把第 0 份拖到最后
+        assert!(store.move_set(&document, 0, 2));
+        assert_eq!(sqls(&store, "doc-1"), ["select 2", "select 3", "select 1"]);
+        assert_eq!(
+            store.active_index(&document),
+            Some(1),
+            "原本在第 2 位的 select 3 前移一位"
+        );
+        assert_eq!(active_sql(&store, "doc-1"), Some("select 3".to_string()));
+    }
+
+    /// 对比项与选中项都按同一个换位置换重映射，且仍不相等（不变式不破）
+    #[test]
+    fn reordering_remaps_the_compare_index() {
+        let (mut store, document) = three_sets();
+        // active = 2（select 3），对比第 0 份（select 1）
+        assert!(store.select_compare(&document, 0));
+        assert!(store.move_set(&document, 0, 1), "对比项从前排挪到中间");
+        assert_eq!(sqls(&store, "doc-1"), ["select 2", "select 1", "select 3"]);
+        assert_eq!(store.compare_index(&document), Some(1), "对比项跟着走");
+        assert_eq!(
+            store.active_index(&document),
+            Some(2),
+            "另一侧不受影响（在 from 之后）"
+        );
+    }
+
+    /// 拖回原位 / 越界 / 文档不存在都不改（不制造无意义的“重排成功”）
+    #[test]
+    fn reordering_ignores_noops_and_out_of_range_targets() {
+        let (mut store, document) = three_sets();
+        let before = sqls(&store, "doc-1");
+        assert!(!store.move_set(&document, 1, 1), "拖回原位");
+        assert!(!store.move_set(&document, 0, 99), "目标越界");
+        assert!(!store.move_set(&document, 99, 0), "源越界");
+        assert!(
+            !store.move_set(&DocumentId::new("doc-missing"), 0, 1),
+            "文档不存在"
+        );
+        assert_eq!(sqls(&store, "doc-1"), before, "顺序不变");
+        assert_eq!(store.active_index(&document), Some(2));
     }
 
     /// 淘汰：对比项被挤掉 → 清空；对比项位置前移 → 跟着减

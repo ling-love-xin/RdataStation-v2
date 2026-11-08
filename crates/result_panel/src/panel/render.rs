@@ -85,6 +85,8 @@ impl ResultPanel {
             let queue_pick = self.queue.clone();
             let queue_rename = self.queue.clone();
             let queue_pin = self.queue.clone();
+            let queue_close = self.queue.clone();
+            let queue_move = self.queue.clone();
             let actions = result_sets::TabActions {
                 // 「⋯」按钮：进入重命名态（事件路径；request 立即通知面板 → 宿主 drain）
                 on_rename: Some(std::rc::Rc::new(move |index, _w, app| {
@@ -92,6 +94,14 @@ impl ResultPanel {
                 })),
                 on_toggle_pin: Some(std::rc::Rc::new(move |index, app| {
                     queue_pin.request(ResultRequest::TogglePin(index), app);
+                })),
+                // 【DBeaver 对齐】标签上的关闭按钮：移除该结果集（宿主 drain 后调 store）
+                on_close: Some(std::rc::Rc::new(move |index, app| {
+                    queue_close.request(ResultRequest::CloseSet(index), app);
+                })),
+                // 【DBeaver 对齐】拖拽重排：把拖起的第 from 份搬到第 to 位
+                on_reorder: Some(std::rc::Rc::new(move |from, to, _w, app| {
+                    queue_move.request(ResultRequest::MoveSet { from, to }, app);
                 })),
             };
             result_sets::render(

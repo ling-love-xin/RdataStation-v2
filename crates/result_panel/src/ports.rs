@@ -158,6 +158,13 @@ pub enum ResultRequest {
     ColumnLayoutChanged,
     /// 【C1】切换第 `index` 份结果集的钉住态（钉住不被 FIFO 淘汰；会话级）。
     TogglePin(usize),
+    /// 【DBeaver 对齐】关闭第 `index` 份结果集（标签上的关闭按钮）：宿主从 store 移除
+    /// 该槽位（条目与变更集 / 历史 / 事实档一并丢弃）。只剩一份时 store 拒绝删除
+    /// （`remove_set` 的口径，见其注释——与 DBeaver「关掉后留空白页」是一处有意偏离）。
+    CloseSet(usize),
+    /// 【DBeaver 对齐】拖动标签重排：把第 `from` 份结果集搬到第 `to` 位
+    /// （对应 `SQLEditor.java:1518` 的 `TabFolderReorder`；槽位整份搬，选中项跟着走）。
+    MoveSet { from: usize, to: usize },
     /// 【C1】进入第 `index` 份结果集的重命名态（面板弹输入框；输入确认后再发
     /// [`Self::RenameSet`]）。单独走一条事件路径是因为 render 闭包拿不到 `&mut App`，
     /// 不能在 render 里直接改面板状态。

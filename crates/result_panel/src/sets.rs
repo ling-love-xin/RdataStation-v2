@@ -22,6 +22,17 @@ use workbench_shell::model::ExecChannel;
 /// `default-icons.txt` 子集（无 pin），而 `Icon::data` 吃内联 SVG 字节——直接用它。
 const PIN_ICON_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>"#;
 
+/// 【DBeaver 对齐】结果集标签的类型图标：DBeaver 每个结果 tab 都挂
+/// `SQLEditor.IMG_DATA_GRID`（`MultiTabsQueryResultsContainer.java:73`），一排骨并排时
+/// 靠「图标 + 序号」扫视比纯文字快。
+///
+/// 走**资产路径**而不是 `IconName`：`gpui-component::IconName` 只保留
+/// `default-icons.txt` 的 106 个兼容图标（其中没有任何 table / grid），而应用层注册的是
+/// `gpui_kit::assets::AllAssets`（全量 Lucide 1818 个），所以按路径直接引用即可
+/// ——与 `workbench_shell::model::LeftPanel::icon` 同一口径。
+const RESULT_SET_ICON: &str = "icons/table.svg";
+
+
 /// 【C1】标签条每个 tab 的「⋯」菜单动作回调（宿主侧传入；对比栏传 `None` = 不画菜单按钮）
 #[derive(Default, Clone)]
 pub struct TabActions {
@@ -30,6 +41,12 @@ pub struct TabActions {
     /// 用户点了「钉住 / 取消钉住」：宿主直接切 store.pinned
     /// （签名带 `&mut App`：按钮点击经 [`ResultActionQueue::request`] 立即通知面板 → 宿主 drain）
     pub on_toggle_pin: Option<Rc<dyn Fn(usize, &mut App) + 'static>>,
+    /// 【DBeaver 对齐】用户点了标签上的关闭按钮：宿主从 store 移除该结果集
+    /// （`None` = 不画关闭按钮，对比栏就是这种）
+    pub on_close: Option<Rc<dyn Fn(usize, &mut App) + 'static>>,
+    /// 【DBeaver 对齐】标签拖拽重排：`(被拖的下标, 落点下标)`
+    /// （`None` = 标签不可拖，对比栏就是这种）
+    pub on_reorder: Option<Rc<dyn Fn(usize, usize, &mut Window, &mut App) + 'static>>,
 }
 
 /// 一个结果集标签的展示数据（**纯计算**：渲染路径不临时算这些）
@@ -48,6 +65,10 @@ pub struct ResultSetTab {
     pub stale: bool,
     /// 【C1】这份结果是否被用户钉住（标签 prefix 画小图钉；淘汰时跳过）
     pub pinned: bool,
+    /// 【DBeaver 对齐】产生这份结果的**原始 SQL**：标签宽度有限、文案只有「结果 N」，
+    /// 悬停提示里给出原始 SQL 才能确认「这个标签对应哪条语句」
+    /// （`MultiTabsQueryResultsContainer.java:96-103` 的 `setToolTipText(toolTip)`）。
+    pub sql: String,
 }
 
 impl ResultSetTab {
@@ -83,6 +104,7 @@ pub fn tabs(sets: &[&ResultEntry], current: ExecChannel, pinned: &[bool]) -> Vec
             stale: entry.channel != current,
             // 【C1】钉住标记：pinned 切片越界按未钉住处理（防御投影错位）
             pinned: pinned.get(index).copied().unwrap_or(false),
+            sql: entry.sql.clone(),
         })
         .collect()
 }
@@ -143,10 +165,35 @@ pub fn render(
                     .on_click(move |_e, w, cx| on_rename(idx, w, cx)),
                 );
             }
-            // 【C1】prefix：钉住时画小图钉（点击取消钉住；未钉住时不占位，避免每个 tab 都挤）
-            let mut tab_el = Tab::new()
-                .label(SharedString::from(entry_tab.label.clone()))
-                .suffix(suffix);
+            // 【DBeaver 对齐】后缀最右端是关闭按钮（对应它的 `resultsTab.setShowClose(true)`）。
+            // 钉住的结果集同样可关：钉住挡的是自动淘汰，不是用户主动关。
+            if let Some(on_close) = actions.on_close.clone() {
+                let idx = index;
+                suffix = suffix.child(
+                    Button::new(SharedString::from(format!(
+                        "editor-result-tab-close-{index}"
+                    )))
+                    .ghost()
+                    .small()
+                    .icon(IconName::Close)
+                    .debug_selector(|| format!("editor-result-tab-close-{index}"))
+                    .tooltip("关闭这个结果集".to_string())
+                    .on_click(move |_e, _w, cx| on_close(idx, cx)),
+                );
+            }
+            // 【DBeaver 对齐】prefix = 结果集类型图标 + （钉住时）小图钉按钮。
+            // 两者的顺序按 DBeaver：图标贴在最左，钉住是状态标记紧随其后。
+            let mut prefix = div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .debug_selector(|| format!("editor-result-tab-prefix-{index}"))
+                .child(
+                    // 类型图标（视觉识别用；与徽标文案分工：图标给一眼定位，文字给准确归类）
+                    Icon::default()
+                        .path(RESULT_SET_ICON)
+                        .with_size(Size::Small),
+                );
             if entry_tab.pinned {
                 let pin_click = actions.on_toggle_pin.clone();
                 let pin_button = Button::new(SharedString::from(format!(
@@ -162,29 +209,42 @@ pub fn render(
                     }
                     None => pin_button,
                 };
-                tab_el = tab_el.prefix(pin_button);
+                prefix = prefix.child(pin_button);
+            }
+            let mut tab_el = Tab::new()
+                .label(SharedString::from(entry_tab.label.clone()))
+                .prefix(prefix)
+                .suffix(suffix);
+            // 【DBeaver 对齐】悬停显示原始 SQL（空 SQL 不挂，避免一个空白气泡）
+            if !entry_tab.sql.is_empty() {
+                tab_el = tab_el.tooltip(SharedString::from(entry_tab.sql.clone()));
             }
             tab_el
         })
         .collect();
+
+    let mut tab_bar = TabBar::new("editor-result-sets")
+        // 【DBeaver 对齐】tab 样式和 SQL 编辑器一致（TabVariant::Tab，不是 Folder）；
+        // size 也跟着编辑器走——dock 的 `TabBar::new("tab-bar")` 没写 size（默认
+        // Medium = 32px），这里若留在 Small 档就是 24px，比文件标签条矮 8px。
+        .with_size(Size::Medium)
+        .track_scroll(scroll_handle)
+        .menu(true)
+        .selected_index(active)
+        .children(children)
+        .on_click(on_pick);
+    // 【DBeaver 对齐】拖拽重排（DBeaver 在结果集标签条上装 `TabFolderReorder`，
+    // `SQLEditor.java:1518`）；没接线时不启用，标签就是普通可点标签。
+    if let Some(on_reorder) = actions.on_reorder.clone() {
+        tab_bar = tab_bar.on_reorder(move |from, to, window, cx| on_reorder(from, to, window, cx));
+    }
 
     div()
         // 结构尺寸走常量表；TabBar 自身的高度由组件库按 size 档位决定（Medium = 32px）
         .h(rems(ui::RESULT_TABS_HEIGHT))
         // 测试按选择器断言原型 §2.4 的竖向顺序（⑤ 在 ⑥ 之上）
         .debug_selector(|| "editor-result-tabs".to_string())
-        .child(
-            TabBar::new("editor-result-sets")
-                // 【DBeaver 对齐】tab 样式和 SQL 编辑器一致（TabVariant::Tab，不是 Folder）；
-                // size 也跟着编辑器走——dock 的 `TabBar::new("tab-bar")` 没写 size（默认
-                // Medium = 32px），这里若留在 Small 档就是 24px，比文件标签条矮 8px。
-                .with_size(Size::Medium)
-                .track_scroll(scroll_handle)
-                .menu(true)
-                .selected_index(active)
-                .children(children)
-                .on_click(on_pick),
-        )
+        .child(tab_bar)
 }
 
 #[cfg(test)]
@@ -193,7 +253,8 @@ mod tests {
     use super::{render, tabs, ResultSetTab, TabActions};
     use crate::store::ResultEntry;
     use gpui_kit::{
-        div, Context, IntoElement, ParentElement as _, Render, ScrollHandle, Styled as _, Window,
+        div, AssetSource as _, Context, IntoElement, ParentElement as _, Render, ScrollHandle,
+        Styled as _, Window,
     };
     use workbench_shell::model::{DocumentId, ExecChannel};
 
@@ -201,6 +262,25 @@ mod tests {
     struct TabsHarness {
         tabs: Vec<ResultSetTab>,
         scroll: ScrollHandle,
+        actions: TabActions,
+    }
+
+    impl TabsHarness {
+        fn new(tabs: Vec<ResultSetTab>) -> Self {
+            Self {
+                tabs,
+                scroll: ScrollHandle::new(),
+                actions: TabActions::default(),
+            }
+        }
+
+        fn with_actions(tabs: Vec<ResultSetTab>, actions: TabActions) -> Self {
+            Self {
+                tabs,
+                scroll: ScrollHandle::new(),
+                actions,
+            }
+        }
     }
 
     impl Render for TabsHarness {
@@ -211,7 +291,7 @@ mod tests {
                     &self.tabs,
                     0,
                     |_, _, _| {},
-                    TabActions::default(),
+                    self.actions.clone(),
                     cx,
                     &self.scroll,
                 ))
@@ -324,6 +404,24 @@ mod tests {
         );
     }
 
+    /// 【DBeaver 对齐】标签要带着产生它的**原始 SQL**（悬停提示用）
+    ///
+    /// 标签文案只有「结果 N」，用户靠悬停确认这份数据是哪条语句跑出来的；
+    /// 多行 SQL 也原样保留（不能在投影这一层折叠成一行——提示里要看到原文）。
+    #[test]
+    fn tabs_keep_the_source_sql_for_the_tooltip() {
+        let sets = [
+            ok("select 1 from t"),
+            ok("select 2\nfrom t\nwhere x > 1"),
+        ];
+        let rendered = tabs(&refs(&sets), ExecChannel::Source, &[]);
+        assert_eq!(rendered[0].sql, "select 1 from t");
+        assert_eq!(
+            rendered[1].sql, "select 2\nfrom t\nwhere x > 1",
+            "多行 SQL 原样保留"
+        );
+    }
+
     /// 标签条高度必须与编辑器文件标签条同档（32px）
     ///
     /// 编辑器那边是 dock 的 `TabBar::new("tab-bar")`，**不写 size** → `Size::default()`
@@ -335,9 +433,8 @@ mod tests {
     fn tab_strip_matches_the_editor_dock_tab_height(cx: &mut gpui_kit::TestAppContext) {
         cx.update(gpui_kit::init);
         let sets = [ok("select 1"), ok("select 2")];
-        let (_, vcx) = cx.add_window_view(|_, _| TabsHarness {
-            tabs: tabs(&refs(&sets), ExecChannel::Source, &[]),
-            scroll: ScrollHandle::new(),
+        let (_, vcx) = cx.add_window_view(|_, _| {
+            TabsHarness::new(tabs(&refs(&sets), ExecChannel::Source, &[]))
         });
         // 首帧只排位置，第二帧才是稳定几何
         vcx.update(|window, cx| {
@@ -356,5 +453,102 @@ mod tests {
             "结果集标签条要与编辑器文件标签条等高（Medium 档 32px），实际 {}",
             bounds.size.height
         );
+    }
+
+    /// 【DBeaver 对齐】类型图标的资产路径必须真的能在全量目录里解析到
+    ///
+    /// `Icon::path` 走的是字符串路径，写错在界面上只是**静默空白**（不 panic、不报错），
+    /// 而 headless 测试没注册 assets，渲染层也验不出来。所以这里直接问资产源：
+    /// `gpui-kit-assets` 的 `AllAssets`（应用层注册的就是它，全量 1818 个 Lucide）能否
+    /// 加载出这个路径——路径拼错会返回 `Err`，路径不存在返回 `Ok(None)`，两种都能拦住。
+    #[test]
+    fn the_result_set_icon_path_resolves_in_the_full_catalog() {
+        let loaded = gpui_kit::assets::AllAssets
+            .load(super::RESULT_SET_ICON)
+            .expect("资产路径拼错会返回 Err（图标名写错最常见的坑）");
+        let bytes = loaded.expect("全量目录里应有 icons/table.svg（lucide 1.43 收录）");
+        assert!(
+            !bytes.is_empty(),
+            "icons/table.svg 不应是空文件，否则 tab 图标会渲染成空白"
+        );
+    }
+
+    /// 【DBeaver 对齐】每个 tab 都带关闭按钮（对应 `resultsTab.setShowClose(true)`）
+    ///
+    /// 没传 `on_close` 时不画（对比栏就是这种：那栏的结果不能关）；传了就有，
+    /// 且按钮是真实占位的（24×24 的小按钮），不是零宽空壳。
+    #[gpui_kit::test]
+    fn tabs_carry_a_close_button_only_when_the_host_wires_it(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let sets = [ok("select 1"), ok("select 2")];
+
+        // ① 没有 on_close：不画关闭按钮
+        let (_, vcx) = cx.add_window_view(|_, _| {
+            TabsHarness::new(tabs(&refs(&sets), ExecChannel::Source, &[]))
+        });
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        assert!(
+            vcx.debug_bounds("editor-result-tab-close-0").is_none(),
+            "宿主没接线时不该画关闭按钮"
+        );
+    }
+
+    /// 传了 `on_close`：每个 tab 都有独立的关闭按钮，宽度是真实小按钮（24px）
+    #[gpui_kit::test]
+    fn wired_close_buttons_take_real_space(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let sets = [ok("select 1"), ok("select 2")];
+        let closed = std::rc::Rc::new(std::cell::Cell::new(Vec::<usize>::new()));
+        let actions = {
+            let closed = closed.clone();
+            TabActions {
+                on_close: Some(std::rc::Rc::new(move |index, _app| {
+                    let mut log = closed.take();
+                    log.push(index);
+                    closed.set(log);
+                })),
+                ..TabActions::default()
+            }
+        };
+        let (_, vcx) = cx.add_window_view(|_, _| {
+            TabsHarness::with_actions(
+                tabs(&refs(&sets), ExecChannel::Source, &[]),
+                actions.clone(),
+            )
+        });
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+
+        // `debug_bounds` 只吃 `&'static str`，所以按字面量逐个量（本用例两个 tab）
+        for selector in [
+            "editor-result-tab-close-0",
+            "editor-result-tab-close-1",
+        ] {
+            let bounds = vcx
+                .debug_bounds(selector)
+                .unwrap_or_else(|| panic!("每个 tab 都应有关闭按钮：{selector} 没登记"));
+            assert!(
+                bounds.size.width >= gpui_kit::px(16.),
+                "关闭按钮是真实小按钮（`small()` 档 24px），{selector} 实际宽 {}",
+                bounds.size.width
+            );
+        }
+        // 接线抽查：直接用回调本身验索引归属（headless 点 Button 不稳，索引错位
+        // 这种 bug 由这条 + store 用例共同覆盖）
+        vcx.update(|_, app| {
+            if let Some(on_close) = actions.on_close.clone() {
+                on_close(1, app);
+            }
+        });
+        assert_eq!(closed.take(), vec![1], "回调收到的是被点那份的下标");
     }
 }

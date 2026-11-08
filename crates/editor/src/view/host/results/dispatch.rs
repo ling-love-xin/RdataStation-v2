@@ -247,6 +247,21 @@ impl EditorHostPanel {
                     .update_results(|store| store.toggle_pin(&self.document, index));
                 cx.notify();
             }
+            // 【DBeaver 对齐】关闭第 index 份结果集：从 store 移除该槽位（条目 + 变更集 /
+            // 历史 / 事实档一并丢弃）。只剩一份时 store 拒绝删除，界面不额外报错——
+            // 关闭按钮那次点击什么也不会发生，与「至少留一份」的口径一致。
+            ResultRequest::CloseSet(index) => {
+                self.shared
+                    .update_results(|store| store.remove_set(&self.document, index));
+                cx.notify();
+            }
+            // 【DBeaver 对齐】标签拖拽重排：整份槽位（条目 + 伴随状态）搬到新位置，
+            // 选中项跟着那份走（`store::reorder_index`）。
+            ResultRequest::MoveSet { from, to } => {
+                self.shared
+                    .update_results(|store| store.move_set(&self.document, from, to));
+                cx.notify();
+            }
             // 【C1】进入重命名态（需要 window 创建/回填输入框，走窗口句柄转手）
             ResultRequest::BeginRename(index) => {
                 let panel = self.result_panel.clone();
