@@ -144,6 +144,10 @@ pub(crate) fn render_th(
             None
         }
     });
+    // 【列头菜单 2026-11-08】悬停表头才出现的组 key：菜单默认**不占列宽**（绝对定位
+    // 浮在列名右端，`invisible`），只有整格 hover 才显形。列头菜单恒吃 24px 会把窄列的
+    // 列名挤到读不出（布尔列 96px 时只剩 37px），而它其实一直是"想起来了才点"的控件。
+    let header_hover_group: SharedString = format!("editor-result-th-hover-{col_ix}").into();
     let main_row = div()
         .h_flex()
         .items_center()
@@ -151,6 +155,10 @@ pub(crate) fn render_th(
         .w_full()
         .min_w_0()
         .truncate()
+        // 菜单用 `absolute` 贴右端，需要本行当定位父
+        .relative()
+        // 整格 hover 组（菜单显形的触发源）；先例见 vendor `attachment.rs` 的移除按钮
+        .group(header_hover_group.clone())
         // 给用例读主行几何（表头带 22px 内容高，主行被挤成 0 高时列名整行看不见——
         // 2026-11-08 的"字段被遮挡"就是这个；断言见 `grid/tests.rs`
         // `header_main_row_keeps_a_readable_height`）
@@ -161,6 +169,8 @@ pub(crate) fn render_th(
                 .flex_1()
                 .min_w_0()
                 .truncate()
+                // 给用例量「列名拿到多少宽度」：菜单若回到流内会直接吃掉这一块
+                .debug_selector(move || format!("editor-result-th-name-{col_ix}"))
                 .child(SharedString::from(name.clone())),
         )
         .when_some(sort_indicator, |row, arrow| {
@@ -259,17 +269,24 @@ pub(crate) fn render_th(
     // 【列布局落盘】动作队列在闭包外取出（owned）：builder 要求 `'static`，闭包里
     // 不能再借 `delegate`
     let layout_queue = delegate.action_queue.clone();
-    // 【列头菜单】并入**主行右端**（与列名同一行），不当第二行 child：
-    // 表头带只有 22px 内容高，任何"第二行"都会把主行挤成 0 高、列名被裁
-    // （2026-11-08 截图实证：字只有半截残线）。
+    // 【列头菜单】贴在主行**右端之上**（绝对定位，不参与流）：既不当第二行 child
+    // （表头带只有 22px 内容高，任何"第二行"都会把主行挤成 0 高、列名被裁——2026-11-08
+    // 截图实证：字只有半截残线），也不占列宽（恒吃 24px 会把窄列列名挤到读不出）。
+    // 默认 `invisible`，整格 hover 才显形（`header_hover_group`），
+    // 先例：vendor `attachment.rs` 的悬停删除按钮。
+    let menu_hover_group = header_hover_group.clone();
     let main_row = main_row.child(
         // guard 层带 id：`on_click` 是 StatefulInteractiveElement 方法（裸 div 只有
         // `on_mouse_down`）；点击落在 guard 上时截住冒泡，列头排序收不到
         div()
             .id(("editor-result-col-menu-guard", col_ix))
-            .flex_none()
-            // 同 `editor-result-th-main-{col_ix}`：给用例钉"菜单和列名同一行"
+            .absolute()
+            .top_0()
+            .right_0()
+            // 同 `editor-result-th-main-{col_ix}`：给用例钉"菜单贴右端、与列名重叠"
             .debug_selector(move || format!("editor-result-col-menu-{col_ix}"))
+            .invisible()
+            .group_hover(menu_hover_group, |this| this.visible())
             .on_click(|_, _, cx| cx.stop_propagation())
             .child(
                 DropdownButton::new(("editor-result-col-menu", col_ix))

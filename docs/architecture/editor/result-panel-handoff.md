@@ -300,6 +300,18 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 
 验证：`cargo test -p rds-result-panel --lib` = **226 passed / 0 failed**（+1 `narrow_column_tiers_keep_the_header_readable` 算术护栏）；`cargo test -p rds-ui-guard` = 4 passed；`cargo check -p rds-result-panel` / `-p rds-editor` 均 0 warning。未验证：真窗口 40px 工具栏观感、24px 筛选框可点性、120px 布尔列多列并排的总宽影响。
 
+### 2.20 2026-11-08（列头菜单改绝对定位 + 悬停显形，不再占列宽）
+
+| 层 | 落地 |
+| --- | --- |
+| 问题 | 菜单自 §2.17 起并进主行流内当 `flex_none` 子元素，恒占 24px——成了窄列列名被挤没的主因（布尔列 96px 时列名只剩 37px），而它平时根本用不上 |
+| 改法 | guard 改 `absolute().top_0().right_0()` 贴在主行右端之上（不参与流），默认 `invisible()`；主行挂 `.group("editor-result-th-hover-{col_ix}")`，guard 挂 `.group_hover(同名组, visible)`。先例：vendor `gpui-component/src/attachment.rs` 的悬停删除按钮 |
+| 测宽 | `grid/fit.rs` 撤销菜单占宽；`crate::ui::RESULT_FIT_COLUMN_MENU` 删除（裸 px 基线 17 → 16） |
+| 实测 | 未知类型列：128 − 组件 padding 8 − 组件自带排序图标槽 16 = 列名 **104px**（旧实现 80） |
+| 取舍 | hover 时菜单压住列名最右 24px（全名有 tooltip 兜底）；菜单 24px 高于 22px 内容高，底部裁 2px。**不采用**「hover 才占宽 `w(0)`→`w(24)`」——列名会被横向挤走，跳动比遮挡显眼 |
+
+验证：`cargo test -p rds-result-panel --lib` = **227 passed / 0 failed**（+1 `header_column_menu_floats_and_leaves_the_name_its_full_width`：列名宽 ≥ 96 且与主行差 ≤ 8，旧实现两条都挂）；`cargo test -p rds-ui-guard` = 4 passed；`cargo check -p rds-result-panel` 0 warning。未验证：真窗口 hover 手感、tooltip 与菜单是否打架、2px 裁切的图标观感；触屏入口靠列头右键菜单（同源 `column_menu_items`）未目视。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

@@ -2921,12 +2921,14 @@ fn default_column_width_follows_type_until_the_user_drags(cx: &mut gpui_kit::Tes
 /// 【窄档列宽回归 2026-11-08】默认列宽档与最小列宽都必须给**列名**留出可读空间。
 ///
 /// 列宽真正要装的是表头，不是值：表头固定占宽上界 = 组件左右 padding 8 + 类型 badge
-/// 19（11px 单字符 + `px_1`）+ badge / 列名 / 菜单之间两个 `gap_1` 8 + 列头菜单 24 = 59。
-/// 96px 的布尔档扣掉这 59 只剩 37（5–6 个西文字符，`is_active` 会变 `is_a…`）；
-/// 64px 的最小宽更只剩 5px，连省略号都摆不下。这条用例把两个数字钉住，改回去立刻挂。
+/// 19（11px 单字符 + `px_1`）+ badge / 列名之间一个 `gap_1` 4 = **35**。
+/// （列头菜单从 2026-11-08 起是绝对定位、悬停才显形，**不计入**这一份——它此前并进主行
+/// 流内恒吃 24px，是窄列列名被挤没的主因。）
+/// 96px 的旧布尔档扣掉 51 只剩 45（5–6 个西文字符，`is_active` 会变 `is_a…`）；
+/// 64px 的旧最小宽更只剩 13px，连省略号都摆不下。这条用例把数字钉住，改回去立刻挂。
 #[test]
 fn narrow_column_tiers_keep_the_header_readable() {
-    const HEADER_FIXED: gpui_kit::Pixels = gpui_kit::px(59.);
+    const HEADER_FIXED: gpui_kit::Pixels = gpui_kit::px(35.);
     // 8 个 12px 西文字符 ≈ 56px——「能认出列名」的下限
     const READABLE: gpui_kit::Pixels = gpui_kit::px(56.);
 
@@ -3027,23 +3029,26 @@ fn header_main_row_keeps_a_readable_height(cx: &mut gpui_kit::TestAppContext) {
 
     // 列头菜单必须与列名**同一行**：它一旦落成主行的兄弟（第二行），22px 内容高
     // 先被菜单排满，主行就被挤成 0——这正是被遮挡的形态。
-    let menu = vcx
-        .debug_bounds("editor-result-col-menu-1")
-        .expect("列头菜单应有 debug 几何");
-    let offset = (menu.origin.y - main.origin.y).abs();
-    assert!(
-        offset < gpui_kit::px(4.),
-        "列头菜单落到了第二行：main.y={:?} menu.y={:?}",
-        main.origin.y,
-        menu.origin.y
-    );
-    // 菜单在流内就真实占列宽（XSmall 档实测 24×24），`ui::RESULT_FIT_COLUMN_MENU` 就是按
-    // 它取的：常量要是写歪了，双击自适应算出的宽度就会差这一块
-    assert!(
-        menu.size.width >= gpui_kit::px(16.) && menu.size.width <= gpui_kit::px(32.),
-        "列头菜单占宽异常（`RESULT_FIT_COLUMN_MENU` 需要按实测校准）：{:?}",
-        menu.size.width
-    );
+    // 2026-11-08 起菜单是绝对定位 + 悬停才显形（默认 `invisible`），观测可能不登记
+    // 不可见元素：取不到就跳过几何校验（"不占位"由
+    // `header_column_menu_floats_and_leaves_the_name_its_full_width` 正面钉住）。
+    if let Some(menu) = vcx.debug_bounds("editor-result-col-menu-1") {
+        let offset = (menu.origin.y - main.origin.y).abs();
+        assert!(
+            offset < gpui_kit::px(4.),
+            "列头菜单落到了第二行：main.y={:?} menu.y={:?}",
+            main.origin.y,
+            menu.origin.y
+        );
+        // 贴右端：绝对定位后它应该压在主行右边缘附近，而不是另起一行
+        let right_gap = (main.origin.x + main.size.width) - (menu.origin.x + menu.size.width);
+        assert!(
+            right_gap.abs() <= gpui_kit::px(2.),
+            "列头菜单没贴主行右端：main.right={:?} menu.right={:?}",
+            main.origin.x + main.size.width,
+            menu.origin.x + menu.size.width
+        );
+    }
 }
 
 /// 【注释表头 2026-11-08】注释开关开启时表头是**两行**（列名主行 + 注释小字），
@@ -3118,5 +3123,48 @@ fn comment_header_row_gets_room_for_two_lines(cx: &mut gpui_kit::TestAppContext)
         "注释行应落主行下方：main.y={:?} comment.y={:?}",
         main.origin.y,
         comment.origin.y
+    );
+}
+
+/// 【列头菜单不再占列宽 2026-11-08】菜单此前并进主行流内，恒吃 24px：布尔列 96px 时
+/// 列名只剩 37px（`is_active` → `is_a…`）。改成绝对定位贴右端 + 悬停表头才显形之后，
+/// 列名拿整列宽。
+///
+/// 几何口径：`grid()` 两列都是未知类型（无 badge、无排序箭头、无筛选 ▽），默认列宽
+/// 128 扣掉组件左右 padding 8、再扣掉组件 `render_th` 自带的排序图标槽（实测 16）→
+/// 列名应拿到 **104**。菜单若回到流内（旧实现）只剩 80，断言 >= 96 足以区分两代实现。
+#[gpui_kit::test]
+fn header_column_menu_floats_and_leaves_the_name_its_full_width(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (_, vcx) = cx.add_window_view(|window, cx| HeaderHarness {
+        state: cx.new(|cx| gpui_kit::component::table::TableState::new(grid(), window, cx)),
+    });
+    for _ in 0..2 {
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+    }
+
+    let name = vcx
+        .debug_bounds("editor-result-th-name-1")
+        .expect("列名应有 debug 几何");
+    let main = vcx
+        .debug_bounds("editor-result-th-main-1")
+        .expect("表头主行应有 debug 几何");
+
+    assert!(
+        name.size.width >= gpui_kit::px(96.),
+        "列名没拿到整列宽（列头菜单又回到流内占位了？）：name={:?} main={:?}",
+        name.size.width,
+        main.size.width
+    );
+    // 列名是主行里唯一的 flex 子元素：它就该铺满主行（差值只剩 `gap_1` 的余量）
+    assert!(
+        main.size.width - name.size.width <= gpui_kit::px(8.),
+        "列名没有铺满主行，流里还有别的占宽元素：main={:?} name={:?}",
+        main.size.width,
+        name.size.width
     );
 }

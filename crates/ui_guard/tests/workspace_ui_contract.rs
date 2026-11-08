@@ -35,15 +35,15 @@ const BASELINE: &[(&str, usize, usize)] = &[
     ("crates/result_panel/src/grid/header.rs", 0, 1),
     ("crates/result_panel/src/panel/dialog.rs", 0, 3),
     ("crates/result_panel/src/panel/sidebars.rs", 0, 2),
-    // 17 = 原 4 + 类型默认列宽 8 档（numeric / boolean / date·time / timestamp / uuid /
+    // 16 = 原 4 + 类型默认列宽 8 档（numeric / boolean / date·time / timestamp / uuid /
     // json / binary / text，`20fb50a4`）+ 列宽自适应 3 档（`RESULT_FIT_CELL_PADDING` /
     // `RESULT_FIT_HEADER_GAP` / `RESULT_FIT_BADGE_PADDING`，`44040e21` 起原先散在
-    // `grid/fit.rs`，2026-11-08 按「结构尺寸进常量表」收上来）+ 列头菜单占宽 1 档
-    // （`RESULT_FIT_COLUMN_MENU`：菜单从浮层改主行流内后真实吃列宽，测宽必须算它）+
-    // 注释表头两行高 1 档（`RESULT_HEADER_COMMENT_ROW_HEIGHT`：注释开启时表头抬到 40px，
-    // 否则两行挤在 22px 内容高里各被裁一半）。
+    // `grid/fit.rs`，2026-11-08 按「结构尺寸进常量表」收上来）+ 注释表头两行高 1 档
+    // （`RESULT_HEADER_COMMENT_ROW_HEIGHT`：注释开启时表头抬到 40px，否则两行挤在 22px
+    // 内容高里各被裁一半）。列头菜单占宽那档（`RESULT_FIT_COLUMN_MENU`）已删除——菜单
+    // 改成绝对定位、悬停才显形，不再占列宽也不再参与测宽。
     // 本文件是尺寸常量单一来源，`px(N.)` 在此是**推荐写法**，不是违规。
-    ("crates/result_panel/src/ui.rs", 0, 17),
+    ("crates/result_panel/src/ui.rs", 0, 16),
     ("crates/settings/src/skeleton.rs", 0, 1),
     ("crates/workbench/src/components/dialog_helpers.rs", 0, 1),
     (

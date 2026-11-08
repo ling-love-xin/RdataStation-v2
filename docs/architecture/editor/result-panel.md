@@ -1094,10 +1094,11 @@ panel.rs 删掉手搓过滤 / 行渲染 / 搜索框约 200 行。
 **宽度构成（与渲染同口径，不是估算）**：
 
 - 表头：类型 badge（`px_1` 左右各 4 + 符号宽）+ 列名 + 排序箭头（`↑`/`↓`）+ 筛选 `▽` +
-  列头菜单，两两之间 `gap_1` 4px。**列头菜单算在内**（`RESULT_FIT_COLUMN_MENU` = 24px，
-  XSmall 档实测）：2026-11-08 §8.26 把菜单从「浮在列头右端」改成主行流内的 `flex_none`
-  子元素后它真实吃掉列宽，不算就会让自适应算出的宽度刚好差这一块、列名照样被省略号吃掉。
-  （原文「不含列头菜单，竞品同样不含」写于它还是浮层的时期，随 §8.26 一并作废。）
+  列头菜单，两两之间 `gap_1` 4px。**列头菜单不算**：2026-11-08 §8.29 把它改成**绝对定位**
+  （贴主行右端、悬停表头才显形），既不占列宽也不参与测宽，`RESULT_FIT_COLUMN_MENU` 已删除。
+  （§8.26 时期它曾并进主行流内恒吃 24px、测宽因此把它算进来；那条口径随 §8.29 一并作废。）
+- 另注：组件 `render_th` 自带一个排序图标槽（`justify_between` 的右端），实测占约 16px，
+  这一块**不在** delegate 的测宽里也不该在——它由组件自己预留。
 - 单元格：前 **200 个视图行**（`FIT_SAMPLE_ROWS`，对齐 dbdelve `FITTED_ROWS=200` / cellar 前
   200 行）里最宽的那串 + 左右各 8px（`render_td` 的 `px_2`）。测的是**画出来的那串**：类型样式
   （NULL 占位 / 千分位 / 布尔中文）、JSON 美化、BLOB 摘要、`CELL_DISPLAY_LIMIT=300` 截断全都
@@ -1280,6 +1281,11 @@ enum 类 `Select` 需要"值 → 显示"映射来源，当前拿不到枚举定�
 滚动时表头带是否稳定；窄列（`RESULT_COLUMN_WIDTH_BOOLEAN` = 96px）在菜单占 24px 后
 列名剩余宽度是否够读，未目视。
 
+> **2026-11-08 后续（§8.28 / §8.29 已改写本节两处结论）**：①「窄列 96px 列名够不够读」
+> 实测不够——扣掉 badge/菜单/gap 只剩 37px，布尔档已抬到 120；②「菜单进流内所以测宽要算
+> 24px」已作废——菜单改回**绝对定位**（悬停才显形），不占列宽也不参与测宽，
+> `RESULT_FIT_COLUMN_MENU` 常量已删除。
+
 ### 8.27 注释表头两行高度 + 表头尺寸口径收敛（2026-11-08）
 
 **问题（实证）**：`show_column_comments` 是面板工具栏的「注释」开关，`delegate` 注释写的是
@@ -1366,6 +1372,47 @@ enum 类 `Select` 需要"值 → 显示"映射来源，当前拿不到枚举定�
 
 **未验证**：真窗口下 40px 工具栏的观感（相对 26px 表头 / 24px 状态栏的节奏）、24px
 筛选框的可点性、120px 布尔列在多列并排时的总宽影响（20 个布尔列从 1920 → 2400）。
+
+### 8.29 列头菜单改为绝对定位 + 悬停显形，不再占列宽（2026-11-08）
+
+**问题（几何实证）**：菜单从 §8.26 起并进主行流内当 `flex_none` 子元素，实测占 24px，
+于是它反过来成了窄列列名被挤没的主因：布尔列 96px 时列名只剩
+`96 − 8（组件 padding） − 19（badge） − 8（两个 gap） − 24（菜单） = 37px`。
+而它其实是「想起来了才点」的控件，平时一直占着位置。
+
+**改法**：
+
+- 菜单 guard 从流内改成 `absolute().top_0().right_0()`，贴在主行**右端之上**（不参与流，
+  也不改列宽）；
+- 默认 `invisible()`，整格 hover 才显形：主行挂 `.group("editor-result-th-hover-{col_ix}")`，
+  guard 挂 `.group_hover(同名组, |this| this.visible())`——先例是 vendor
+  `gpui-component/src/attachment.rs` 的悬停删除按钮（`.group(...)` + `.absolute().top_0()
+  .right_0().invisible().group_hover(...)`）；
+- 主行加 `.relative()` 当定位父；列名加 `debug_selector("editor-result-th-name-{col_ix}")`
+  供用例量「列名拿到多少宽度」；
+- `grid/fit.rs` 撤销菜单占宽（`RESULT_FIT_COLUMN_MENU` 删除），`crate::ui` 少一个裸 px
+  （`ui_guard` 基线 17 → 16）。
+
+**几何实测（headless，两帧后读 `debug_bounds`）**：`grid()` 未知类型列、默认列宽 128，
+
+```
+列宽 128 − 组件左右 padding 8 − 组件自带排序图标槽 16（`render_th` 的 justify_between 右端）
+        = 列名 104px（菜单在流内的旧实现只剩 80）
+```
+
+**取舍**：hover 时菜单压住列名最右 24px（列名全名本来就有悬停 tooltip 兜底）；
+菜单高 24px > 表头内容高 22px，底部 2px 会被组件 `overflow_hidden` 裁掉（图标垂直居中，
+不影响可读）。**不采用**「hover 时才占宽（`w(0)` → `w(24)`）」：那会让列名在 hover 瞬间
+被横向挤走，视觉跳动比遮挡更显眼。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **227 passed / 0 failed**（+1
+`header_column_menu_floats_and_leaves_the_name_its_full_width`：列名宽 ≥ 96px 且与主行宽差
+≤ 8px——旧实现在流内占 24px，两条都挂）；`cargo test -p rds-ui-guard` = 4 passed；
+`cargo check -p rds-result-panel` 0 warning。
+
+**未验证**：真窗口下 hover 出菜单的手感（mouse-out 是否立刻消失、tooltip 与菜单是否打架）、
+菜单在 22px 内容高里被裁 2px 后的图标观感；触屏（无 hover）下入口靠**列头右键菜单**
+（列级项与这里同源 `column_menu_items`），未目视确认。
 
 ## 8. 协作纪律
 
