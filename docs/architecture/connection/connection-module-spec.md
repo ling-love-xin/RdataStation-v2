@@ -47,7 +47,7 @@
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 桌面框架  | gpui 2.x（自定义 Window/Dialog 宿主）；组件库 gpui-kit 0.7.1（TabBar/Switch/Input/Button/List）                                                                                            |
 | 服务层   | `DataSourceService`（workbench）+ `connection` crate（传输 / 协议链 / URL）+ `engine` crate（持久化 / 驱动 / 缓存）                                                                           |
-| 数据库引擎 | SQLite（`rusqlite`，全局 / 项目元数据）、DuckDB 1.5.5（分析引擎 + 联邦 Secret，`DUCKDB_LIB_DIR=third_party/duckdb/1.5.5`）、mysql/postgres 客户端库                                                  |
+| 数据库引擎 | SQLite（`rusqlite`，全局 / 项目元数据）、DuckDB 1.5.6（分析引擎 + 联邦 Secret，`DUCKDB_LIB_DIR=third_party/duckdb/1.5.6`）、mysql/postgres 客户端库                                                  |
 | 凭据加密  | AES-256-GCM，`AES:` 前缀幂等（读路径解密 / 列表脱敏 / 存量迁移）                                                                                                                                |
 | 异步    | tokio runtime（服务层同步 `block_on` 风格，UI 线程用 `background_executor` + `spawn_in` 续体）                                                                                             |
 | 构建约束  | `cargo build/test`**&#x20;必须&#x20;**`-j 2`（`-j 4` 触发 0xc0000409 + rust\_oom，Windows 已知）；`.cargo/config.toml` 已设 `RDS_HOME=.rds`、`DUCKDB_LIB_DIR`、`RUST_MIN_STACK=268435456` |
@@ -365,7 +365,7 @@ pub struct ConnectionDraft {
 | `postgres`        | sqlx         | postgres    |
 | `postgres_native` | Official 客户端 | postgres    |
 | `sqlite`          | 内建           | sqlite（文件型） |
-| `duckdb`          | DuckDB 1.5.5 | duckdb（文件型） |
+| `duckdb`          | DuckDB 1.5.6 | duckdb（文件型） |
 
 
 

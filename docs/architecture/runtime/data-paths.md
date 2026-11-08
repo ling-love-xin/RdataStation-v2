@@ -32,7 +32,7 @@
 ├── data/                       # global.sqlite / shared.duckdb / 密钥库
 ├── logs/app.log                # 日志（保留期清理不变）
 ├── tmp/                        # DuckDB spill / 联邦临时库 / 进程 scratch
-└── extensions/                 # DuckDB 引擎扩展（内部再按内核版本分子目录，如 v1.5.5/；
+└── extensions/                 # DuckDB 引擎扩展（内部再按内核版本分子目录，如 v1.5.6/；
                               #   与应用插件的 plugins/ 不是一回事，见 §8.2 第 6 条）
 ```
 

@@ -317,7 +317,7 @@ NavView → nav_jobs（后台线程 + 独立 tokio 运行时）→ NavigatorServ
 - **异步/线程**：tokio 全域；导航侧有进程级桥接运行时（`nav_runtime::bridge_runtime`），但 workbench 另有 **10 处 `Runtime::new()`**（2026-11-01 复核：该数字吻合；**全仓产品代码共 41 处**，集中在 `connection_dialog` 20 处——本文原口径只覆盖 workbench，不代表全仓）。
 - **连接**：`ConnectionManager`（连接池 + 隧道注册表 + 空闲回收）；文件型库同 URL 多 id 走**别名**（同一 `Arc<dyn Database>`，文件只开一次）。
 - **DuckDB 单例**：内存闸 2GB、溢写口 `<RDS_HOME>/tmp`、`max_temp_directory_size` 10GB；临时表按来源前缀管理。
-- **依赖治理［档］**：版本唯一入口在根 `[workspace.dependencies]`；四件精确锁定（gpui-kit 家族 / specta / sqlglot-rust / arrow 跟随 duckdb）；DuckDB 动态链接 `third_party/duckdb/1.5.5`，**crate 版本与库版本必须成对升级**。
+- **依赖治理［档］**：版本唯一入口在根 `[workspace.dependencies]`；四件精确锁定（gpui-kit 家族 / specta / sqlglot-rust / arrow 跟随 duckdb）；DuckDB 动态链接 `third_party/duckdb/1.5.6`，**crate 版本与库版本必须成对升级**。
 
 ---
 

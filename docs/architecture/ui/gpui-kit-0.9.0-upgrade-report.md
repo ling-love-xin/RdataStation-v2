@@ -163,3 +163,96 @@ cargo check -p rds-app -j 2
 ```
 
 诊断产物（不入库）：`.rds/tmp/pristine/`（干净解包）、`.rds/tmp/patches/*.patch`（0.8.1 上的 patch 原文）、`port_base.py` / `port_comp.py`。
+
+## 9. rebase 到 main 之后：书签列 patch 的二次移植（2026-11-08）
+
+**背景**：本分支起了之后 main 往前走了 26 个 commit（mock panel 拆分那批），其中 `8234474b` /
+`a569df57` 在 **0.8.1 的 vendor 上**加了「书签列 / 折叠说明」这套 UI 私有 patch。把 vendor 整体换成
+0.9.0 之后，两边的改动在同一个文件上撞了。
+
+**冲突表象**：`git rebase main` 第 1/15 个 commit 就在
+`vendor/gpui-base/src/input/base/element.rs` 冲突。取值时应取**我们的 0.9.0**（目录整体替换），
+但随后发现是**半成品状态**：
+
+| 文件 | main 的 patch 量 | rebase 后实际落进 0.9.0 的 |
+| --- | --- | --- |
+| `input/base/state.rs` | 224 行 | 91 行（自动合并能对上的部分） |
+| `input/base/element.rs` | 464 行 | **0 行**（冲突，取了 0.9.0 侧） |
+
+后果是「数据结构在、绘制与点击都不在」——`GutterMarker` / `set_gutter_markers` /
+`InputEvent::GutterMarkerClick` 都还在，`element.rs` 里却一处都没引用它们：**书签会静默消失**，
+而且编译器不会报错（只是死字段）。所以不能就这么合。
+
+**为什么不能改走 0.9.0 自带的 `gutter_decorations`**：0.9.0 新增的 `GutterDecoration` 是**只画不点**
+（`InputExtras::gutter_decorations` 返回 `&GutterDecoration`，内核没有装饰点击事件）；而我们的书签要
+「点击切换 / Shift 开说明 / 悬停弹说明气泡」，缺了点击就只剩半个功能。因此**保留私有 patch**，
+把它移植到 0.9.0。
+
+**移植方法**（可复用）：
+
+1. 先试三方合并：base=`pristine/gpui-base-0.8.1`、ours=0.9.0、theirs=main 打过 patch 的 0.8.1，
+   `git merge-file -p`。**失败**——element.rs 30 处冲突、state.rs 50 处，粒度太细。
+2. 改用「**只搬新增块 + 锚点替换**」（与 §3 同一个套路）：常量段、两个结构
+   （`GutterMarkerLayout` / `HoverNote`）、两个方法（`layout_gutter_markers` /
+   `paint_gutter_markers`）按**行号原样**搬过来；9 个接线点用「字符串替换 + `count == expect` 断言」，
+   全部一次通过（脚本 `.rds/tmp/port_gutter.py`）。
+3. **行尾坑**：工作区文件是 CRLF，直接按 `\n` 断言会全部落空（第一次跑 15 处全 0）；脚本必须
+   `read → replace("\r\n","\n") → 编辑 → 写回时还原 CRLF`。
+4. 适配 0.9.0 的差异（编译报错逐个消）：`Cell` / `MouseDownEvent` / `TransformationMatrix` 补导入；
+   行号数字的右移改成**叠加** `line_number_offset + gutter_marker_layout.column_width`
+   （0.9.0 自带 `gutter_decorations` 的 offset，不能覆盖它）。
+
+**验证**：`cargo check -p gpui-base` 0 error 0 warning；`-p gpui-component -p rds-editor -p rds-app`
+0 error（仅 `rds-mock` 2 条既有告警）。提交 `9aacef30`。
+
+**这一节的教训**：「vendor 目录整体替换」在 rebase 时**不能只看冲突列表**——自动合并会静默保留对方
+patch 的一部分（这里 state.rs 落了 41%），剩下的部分既不报错也不生效。判断法是挑一个**只在该 patch
+里出现的符号**，在目标版本里 grep：`GutterMarkerKind` 在 vendor 里只有 state.rs 命中、
+element.rs 里 0 命中，就说明绘制侧丢了。
+
+## 10. rebase 后全量回归（2026-11-08）
+
+命令：`cargo test --workspace -j 1 --no-fail-fast --exclude rds-mock`。
+
+**排除 rds-mock 的原因（与升级无关）**：main 自己的 `crates/mock/src/generators/text.rs:222` 写着
+`mod tests;`，而 `generators/text/tests.rs` 还没提交——`rds-mock` 的**测试目标**编译不过
+（`E0583`）。`rds-mock` 作为**库**照常编译并被其它 crate 依赖，只是它自己的单测这一个 target 跳过。
+同理 `--all-targets` 的 workspace check 也会卡在这一处；除它之外 `cargo check -p gpui-base` /
+`-p gpui-component -p rds-editor -p rds-app` 全 0 error。
+
+**结果：135 个测试目标，3502 passed / 9 failed。**
+
+| 目标 | 结果 | 说明 |
+| --- | --- | --- |
+| `rds-editor --lib` | 758 passed / **2 failed** | `view::tests::legacy::opening_an_analysis_document_builds_a_cell_editor_per_cell`（`legacy.rs:58`）、`view::tests::notebook_win::analysis_cell_renders_multiple_output_blocks`（`notebook_win.rs:347`）——rebase 前基线就是这 2 条 |
+| `rds-analytics-resource --test dialog_window` | 8 / **2 failed** | `version_dialog_lists_rows_and_shows_actions_after_selection`（`L445`，即旧名 `version-restore`）、`index_repair_dialog_groups_rows_and_shows_inline_actions`（`L525`，`assertion failed: cx.debug_bounds("repair-adopt-0").is_none()`）——gpui-fast 观察层口径 |
+| `rds-connection-dialog --lib` | 66 / **1 failed** | `header_interaction::clicking_the_title_row_collapses_and_restores`（`helpers/tests.rs:1076`，`展开时正文应可见`） |
+| `rds-database --lib` | 302 / **1 failed** | `nav_view::tests::nav_tree_rows_are_laid_out_by_the_virtual_list`（`nav_view/tests.rs:812`，`对象行应被画出`） |
+| `rds-workbench --test mock_panel_probe` | 4 / **1 failed** | `right_sidebar_alone_renders_draft_row`（`missing ElementId Name("mock-draft-open")`，panic 落在 `gpui-kit-0.9.0/src/test.rs:142`） |
+| `rds-workbench --test scratchpad_editor_entry` | 0 / **1 failed** | `an_open_request_lands_in_a_sql_editor_tab`（`scratchpad_editor_entry.rs:89`，`请求应已被消费（取出即清空）`） |
+| `rds-ui-guard --test workspace_ui_contract` | 3 / **1 failed** | `no_new_hardcoded_color_or_pixel` —— **main 自带，与本次升级无关**（见下） |
+
+前 6 条与 rebase 前的基线**逐条对应**（基线 8 条里那条 `mock_view::tests::column_dialog_shows_type_mismatch_warning` 属 `rds-mock`，本轮被 exclude，所以这里少一条）。第 7 条是新出现的：
+
+- `no_new_hardcoded_color_or_pixel` 报的是 `crates/result_panel/src/grid/fit.rs`（未登记的新文件，裸色值 0 / 裸 px 6）与 `crates/result_panel/src/ui.rs`（`px(4) -> 12`）。这两个文件来自 **main 的 `44040e21`「列宽自适应」**，本分支一行都没碰 `crates/result_panel/`（`git diff --name-only a569df57..HEAD` 里没有它）。也就是说：main 上这条守卫本来就是红的，只是 main 当前测试编译不过（`rds-mock` 的 `mod tests;`），没人跑过它。
+- 处置：**不在升级分支里改别人的 UI 代码**（提常量的量值、登记 BASELINE 都是设计取舍）。记在这里当交接项，由 result_panel 那侧决定。
+
+结论：**本次升级没有引入新的业务失败**；gpui-fast 的 6 条仍然是「观察层口径」那批（§7 第 5 条），
+`9aacef30` 的书签列移植没有把相关用例打红。
+
+**书签列移植的行为证据**（不只是「编译过」）——`rds-editor --lib` 里这三条全 `ok`：
+
+```
+test view::tests::bookmarks::bookmarks_project_into_gutter_markers ... ok
+test view::tests::bookmarks::gutter_click_toggles_bookmark_and_shift_opens_note ... ok
+test view::tests::bookmarks::bookmark_hover_note_setting_off_strips_note ... ok
+test view::tests::core::folding_candidates_are_fed_after_the_gutter_restored ... ok
+```
+
+第一条断言的是 `GutterMarker` 列表真的从编辑器投进 gutter（绘制侧数据源在了）；第二条断言**点击
+能切换书签、Shift 点击能开说明**（这正好是「0.9.0 自带 `gutter_decorations` 只画不点」那半个功能
+被补回来的证据）；第三条断言关掉设置后说明被剥掉。仍**未做**的是真机目视：书签列是否真的画在
+行号左侧、折叠说明下划线位置、悬停气泡形态。
+
+
+

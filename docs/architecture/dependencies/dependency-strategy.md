@@ -140,6 +140,39 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 （驱动层（`rusqlite` / `sqlx` / `mysql_async`）、连接层（`russh`）已升到可用的最新版；SQL 引擎与 UI 家族的上游新版本见上表。）
 
+### 4.1 并入主线（2026-11-08）
+
+分支 `chore/deps-patch-batch-2026-11` rebase 到 main `a569df57`（15 个 commit 顺次落在新的
+main 头上，hash 全部重写），随后补了一个移植 commit `9aacef30`，再 ff 并入 main。
+
+rebase 本身**不冲突之外的坑**（值得记住的一条）：vendor 目录是**整目录替换**，main 在这两个
+vendor 上还叠着私有 patch。rebase 时若对冲突文件取「我们的 0.9.0」，git 会把对方的 patch
+**静默合并进去一部分**——`state.rs` 落了 41%（91/224 行），`element.rs` 落 0%（464 行全丢）。
+两边都不报错，结果就是书签列数据结构在、绘制与点击不在。判据：挑一个只在该 patch 里出现的符号
+（这里 `GutterMarkerKind`）在目标版本里 grep，若只在定义侧命中、调用侧 0 命中，就说明功能被削了
+一半。详见 `docs/architecture/ui/gpui-kit-0.9.0-upgrade-report.md` §9。
+
+回退通道：`backup/pre-rebase-2026-11-08`（rebase 前的完整状态，`a82123c0`）。
+
+回归（`cargo test --workspace -j 1 --no-fail-fast --exclude rds-mock`，135 个目标）：
+**3502 passed / 9 failed**。9 条里 8 条与升级前的基线逐条对应（`rds-editor` 2 条既有 +
+`analytics-resource` / `connection-dialog` / `database` / `mock_panel_probe` / `scratchpad_editor_entry`
+5 个目标里的 gpui-fast 观察层口径），第 9 条 `rds-ui-guard::no_new_hardcoded_color_or_pixel`
+**是 main 自带的**（`44040e21` 的列宽自适应在 `result_panel` 新增裸 px 未登记 BASELINE），本分支
+没碰 `crates/result_panel/`。排除 `rds-mock` 的原因是 main 自己的
+`crates/mock/src/generators/text.rs:222` 声明了 `mod tests;` 但对应文件未提交（`E0583`），属在改内容。
+详见 `docs/architecture/ui/gpui-kit-0.9.0-upgrade-report.md` §10。
+
+**文档同步**：本轮除新增两份报告（`gpui-kit-0.9.0-upgrade-report.md` §9/§10、本节）外，还把
+「描述当前状态」的过期版本号一并改掉——`docs/project-progress.md`（1.5.5→1.5.6）、
+`docs/architecture/connection/connection-module-spec.md`（两处，含 `DUCKDB_LIB_DIR` 路径）、
+`docs/architecture/core-design-current.md`（`third_party/duckdb/1.5.5`→`1.5.6`）、
+`docs/architecture/runtime/data-paths.md`（扩展目录示例 `v1.5.5/`→`v1.5.6/`）。
+**故意不改**的是历史记录型引用：`connection-test-report-2026-10-01` /
+`database-navigator-test-report-2026-10-03` / `property-test-report-2026-10-03` / `editor-dev-plan` §0
+历史条目 / `editor-architecture.md` 的踩坑条目 / `gpui-kit-0.8.0-upgrade-report` —— 那些写的是
+「当时在 1.5.5 上实测出的事实」，改版本号会把历史记录改成假话。
+
 ## 5. 关键依赖与约束
 
 ### DuckDB 内核与扩展（**不要为了拿扩展而重编内核**）
