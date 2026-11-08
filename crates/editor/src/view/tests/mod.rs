@@ -108,6 +108,7 @@ mod general_win;
 mod legacy;
 mod notebook_toolbar;
 mod notebook_win;
+mod notebook_lsp;
 mod results_a;
 mod results_b;
 mod toolbar_custom;

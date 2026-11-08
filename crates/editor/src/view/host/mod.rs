@@ -360,6 +360,12 @@ pub struct EditorHostPanel {
     /// 所以位点按单元存。与词法诊断一起在 `rebuild_cell_diagnostics` 里合并重建。
     pub(crate) cell_error_marks:
         std::collections::HashMap<String, crate::view::cell_diagnostics::ExecMark>,
+    /// 【A1】各单元的**语言服务**会话与最近一次诊断（键 = 单元 id；只有 Python 单元进来）
+    ///
+    /// 与 [`Self::lsp`] 的区别：那是**文档级**会话（通用模式 `.py` 整篇），这是**单元级**
+    /// 会话（分析笔记里每个 Python 单元一条独立 uri）。两者共用同一个 server 连接，
+    /// 事件按 uri 认领，互不串台。
+    pub(crate) cell_lsp: std::collections::HashMap<String, notebook::CellLsp>,
     /// 结果轮询任务句柄（空闲即退出；句柄存活到下一次提交）
     pub(crate) exec_pump: RefCell<Option<Task<()>>>,
     /// 【#17】正在跑的内核单元（同一时间最多一个，与 `has_running` 防并发一致）

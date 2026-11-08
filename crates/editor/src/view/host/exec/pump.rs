@@ -246,6 +246,8 @@ impl EditorHostPanel {
         self.drain_script_notes(cx);
         // 【2d】单元执行的结论：独立通道（结果走内联输出，不是结果区）
         self.drain_cell_notes(cx);
+        // 【A1】分析笔记逐单元的语言服务：接会话 + 收诊断（与执行回执同一拍，互不挤占）
+        self.drain_cell_lsp(cx);
 
         // 多面板共享同一执行队列：只取本文档回执，别文档回执留在队列等归属面板自己取走
         // （否则空闲面板的泵会抢先 drain 走别的文档结论并丢弃，归属面板结果区不再刷新）。

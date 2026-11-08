@@ -12,6 +12,24 @@ use crate::model::{DocumentId, EditorMode};
 // 【下移】结果放置 / 下发原料定义已随结果存储搬到 rds-result-panel（经 crate::store 重导出）
 
 use super::*;
+
+/// 【A1】一个单元的语言服务会话（面板持有；`didOpen` 已发）
+///
+/// 与文档级 [`crate::lsp::LspSession`] 的唯一区别是 uri 按单元区分；`client` 仍是全库共用的
+/// 一条连接（一个 server 服务多份文档，实测可行）。`version` 是 `didChange` 用的文档版本，
+/// `diagnostics` 是服务端最近一次推给**本单元**的那一批（空列表 = 服务端主动清空，语义上
+/// 等于「没有诊断」，与「还没收到过」在内核里表现一致）。
+pub(crate) struct CellLsp {
+    /// 会话（client + 单元 uri + 语言 id）
+    pub session: crate::lsp::LspSession,
+    /// `didChange` 的文档版本（`didOpen` 后从 1 起，每次正文变化自增）
+    pub version: i64,
+    /// 服务端最近一次推给本单元的诊断（与语法 / 执行错误在 `cell_diagnostics::apply` 里合并）
+    pub diagnostics: Vec<lsp_types::Diagnostic>,
+    /// provider 是否已装上（会话换了要重装；重复装会顶掉同槽位的旧 provider，无害但无谓）
+    pub providers_installed: bool,
+}
+
 impl EditorHostPanel {
     /// 【遗留 #10】把笔记本现有单元的编辑器实例补齐（面板进 Dock / 测试入口调用；
     /// 渲染期只读不建实体，创建一律走事件路径——构造期建会重入 panic）
@@ -65,6 +83,9 @@ impl EditorHostPanel {
         let document = self.document.clone();
         let shared = self.shared.clone();
         let cell_id = cell.id.clone();
+        // 【A1】Python 单元：正文变化要发 `didChange`（与 SQL 单元一样走 defer 回面板，
+        // 只是落脚方法换成统一入口 `on_cell_text_changed`）
+        let is_python = cell.language == crate::cell::CellLanguage::Python;
         let panel = cx.entity().downgrade();
         // 订阅挂面板上下文会 read 面板（subscribe_in 的 ensure_window），面板正被
         // update 时直接 panic；改用无窗口版 `subscribe`（回调里不需要 window，
@@ -80,15 +101,15 @@ impl EditorHostPanel {
                 target.body = text;
             }
             shared.set_notebook_cells(&document, cells);
-            // 【15.14/15.15】重建该单元自己的诊断。**不能在这里 update 本实体**——
-            // Change 由它自己发出，此刻正在 update 中（重入会 panic）；`cx.defer`
-            // 推到本次更新结束后，由面板统一重建（词法 + 执行错误一条流程）。
-            if sql_completion {
+            // 【15.14/15.15/A1】重建该单元自己的诊断（SQL：词法+语义；Python：语言服务）。
+            // **不能在这里 update 本实体**——Change 由它自己发出，此刻正在 update 中
+            // （重入会 panic）；`cx.defer` 推到本次更新结束后，由面板统一重建。
+            if sql_completion || is_python {
                 let panel = panel.clone();
                 let cell_id = cell_id.clone();
                 cx.defer(move |cx| {
                     let _ = panel.update(cx, |panel, cx| {
-                        panel.rebuild_cell_diagnostics(&cell_id, cx);
+                        panel.on_cell_text_changed(&cell_id, cx);
                     });
                 });
             }
@@ -98,14 +119,26 @@ impl EditorHostPanel {
         self._cell_editor_subs.insert(cell.id.clone(), sub);
         // 首帧诊断：单元一出现就带波浪线（词法 + 上次执行错误），不必等第一次敲键
         self.rebuild_cell_diagnostics(&cell.id, cx);
+        // 【A1】Python 单元立刻尝试接语言服务；服务还在启动时 `sync_cell_lsp` 不住手，
+        // 下一拍泵会再接一次（会话就绪即 didOpen + 装 provider）
+        if is_python {
+            let cell_id = cell.id.clone();
+            self.sync_cell_lsp(&cell_id, cx);
+            // 【A1】有 Python 单元就必须有泵在跑：单元可能是文档打开后才加的，而建面板那次
+            // `sync_lsp_session` 里还没有单元（那时 `lsp_wants` 为 false、泵没起）
+            self.ensure_exec_pump(cx);
+        }
     }
 
-    /// 【15.14/15.15】重建某个单元自己的诊断集合（词法/语义现算 + 上次执行错误合并）
+    /// 【15.14/15.15/A1】重建某个单元自己的诊断集合（**三源只在这一个入口合并**）
     ///
-    /// 三源只在这一个入口重建——单元执行错误（`exec`）与打字期诊断（`found`）各写一遍
-    /// 就会互相擦掉（内核的诊断集合只有 `clear` + `push`，见 `cell_diagnostics::apply`）。
-    /// 门控与补全同一条：只有 SQL 单元且补全开着才接（Python / R / Julia 要 per-cell
-    /// 语言服务会话，见 §15.14 未覆盖）。
+    /// 源一：SQL 单元的本地词法 / 语义（`found`；语言服务不参与 SQL）
+    /// 源二：执行错误（`cell_error_marks`，面板持有）
+    /// 源三：语言服务（`cell_lsp` 里该单元最近一批 `publishDiagnostics`，只有 Python 单元有）
+    ///
+    /// 三条来源各写一遍 `clear` 就会互相擦掉（内核的诊断集合只有 `clear` + `push`，见
+    /// `cell_diagnostics::apply`）。门控：SQL 单元仍需「补全能力开着」才给词法诊断；
+    /// Python 单元只要会话在就给语言服务诊断（与补全能力位无关——诊断不该被补全档位连坐）。
     pub(crate) fn rebuild_cell_diagnostics(&self, cell_id: &str, cx: &mut Context<Self>) {
         let Some(editor) = self.cell_editors.get(cell_id).cloned() else {
             return;
@@ -114,21 +147,26 @@ impl EditorHostPanel {
         let Some(cell) = cells.iter().find(|cell| cell.id == cell_id) else {
             return;
         };
-        if !cell.language.uses_local_sql_completion()
-            || !self.shared.completion_enabled(&self.document)
+        let found = if cell.language.uses_local_sql_completion()
+            && self.shared.completion_enabled(&self.document)
         {
-            return;
-        }
-        let body = cell.body.clone();
-        let catalog = self
-            .shared
-            .catalog_snapshot_for(&self.document)
-            .unwrap_or_else(|| std::sync::Arc::new(crate::completion::Catalog::default()));
-        let dialect = self.sql_dialect_for_document();
-        let found = crate::view::cell_diagnostics::diagnostics_for(&body, &catalog, dialect);
+            let catalog = self
+                .shared
+                .catalog_snapshot_for(&self.document)
+                .unwrap_or_else(|| std::sync::Arc::new(crate::completion::Catalog::default()));
+            let dialect = self.sql_dialect_for_document();
+            crate::view::cell_diagnostics::diagnostics_for(&cell.body, &catalog, dialect)
+        } else {
+            Vec::new()
+        };
         let mark = self.cell_error_marks.get(cell_id).cloned();
+        let lsp: Vec<lsp_types::Diagnostic> = self
+            .cell_lsp
+            .get(cell_id)
+            .map(|slot| slot.diagnostics.clone())
+            .unwrap_or_default();
         editor.update(cx, |state, cx| {
-            crate::view::cell_diagnostics::apply(state, &found, mark.as_ref(), cx);
+            crate::view::cell_diagnostics::apply(state, &found, mark.as_ref(), &lsp, cx);
         });
     }
 
@@ -141,6 +179,196 @@ impl EditorHostPanel {
         // 逐个走同一个入口（三源合并只在一处），不另写一套批量逻辑。
         for id in self.cell_editors.keys() {
             self.rebuild_cell_diagnostics(id, cx);
+        }
+    }
+
+    // ===== 【A1】分析笔记的逐单元语言服务（Python）=====
+
+    /// 给一个 Python 单元接上语言服务（无会话就建，会话换了就换）
+    ///
+    /// 每拍由泵调用：服务启动中 / 被停 / 崩溃重启都在这里收敛（`(None,None)` 判定为「没变化」，
+    /// 不重复做事）。非分析笔记 / 非 Python 单元 / 宿主给不出会话 → 如实什么都不做。
+    pub(crate) fn sync_cell_lsp(&mut self, cell_id: &str, cx: &mut Context<Self>) {
+        if self.document_mode() != Some(EditorMode::Analysis) {
+            return;
+        }
+        let Some(cell) = self
+            .notebook_state()
+            .cells
+            .into_iter()
+            .find(|cell| cell.id == cell_id)
+        else {
+            return;
+        };
+        if cell.language != crate::cell::CellLanguage::Python {
+            return;
+        }
+        let session = self.shared.lsp_cell_service(&self.document, cell_id);
+        // 判据与文档级同款：uri 相同也可能是换了连接（server 崩溃重启后 uri 不变），并 ptr_eq
+        let same = match (self.cell_lsp.get(cell_id), &session) {
+            (Some(old), Some(new)) => {
+                old.session.uri == new.uri
+                    && std::sync::Arc::ptr_eq(&old.session.client, &new.client)
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        if same {
+            return;
+        }
+        // 旧会话收尾（尽力）：关文档，服务端别留一份再没人管的正文
+        if let Some(old) = self.cell_lsp.remove(cell_id) {
+            let _ = old.session.client.did_close(&old.session.uri);
+        }
+        let Some(session) = session else {
+            // 现在没有会话（服务未起 / 被停 / 已崩）：摘 provider + 重画（清掉语言服务那源）
+            self.uninstall_cell_providers(cell_id, cx);
+            self.rebuild_cell_diagnostics(cell_id, cx);
+            return;
+        };
+        // didOpen：正文取单元自己的内核（就是用户正在编辑的文本）
+        let text = self
+            .cell_editors
+            .get(cell_id)
+            .map(|editor| editor.read(cx).value().to_string())
+            .unwrap_or_else(|| cell.body.clone());
+        let _ = session
+            .client
+            .did_open(&session.uri, &session.language_id, &text);
+        self.cell_lsp.insert(
+            cell_id.to_string(),
+            CellLsp {
+                session: session.clone(),
+                version: 1,
+                diagnostics: Vec::new(),
+                providers_installed: false,
+            },
+        );
+        self.install_cell_providers(cell_id, session, cx);
+        // 新会话：三源重画（旧的语言服务诊断已随会话丢弃）
+        self.rebuild_cell_diagnostics(cell_id, cx);
+        cx.notify();
+    }
+
+    /// 给单元编辑器装语言服务 provider（补全 + hover；与文档级同一对构造，uri 换成单元自己的）
+    ///
+    /// 只读文档不装（摘干净）——与文档级 `sync_completion_provider` 的同一条口径。
+    fn install_cell_providers(
+        &mut self,
+        cell_id: &str,
+        session: crate::lsp::LspSession,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(editor) = self.cell_editors.get(cell_id).cloned() else {
+            return;
+        };
+        let read_only = self.editor_read_only();
+        editor.update(cx, |state, _cx| {
+            if read_only {
+                crate::lsp::bridge::uninstall(state);
+                crate::lsp::bridge::uninstall_hover(state);
+                return;
+            }
+            crate::lsp::bridge::install(
+                state,
+                std::rc::Rc::new(crate::lsp::bridge::LspCompletionProvider::new(
+                    session.client.clone(),
+                    session.uri.clone(),
+                )),
+            );
+            // hover 与补全同源（语言服务）：一起挂、一起摘（弹层由内核自带）
+            crate::lsp::bridge::install_hover(
+                state,
+                std::rc::Rc::new(crate::lsp::bridge::LspHoverProvider::new(
+                    session.client.clone(),
+                    session.uri.clone(),
+                )),
+            );
+        });
+        if let Some(slot) = self.cell_lsp.get_mut(cell_id) {
+            slot.providers_installed = true;
+        }
+    }
+
+    /// 摘掉单元编辑器上的语言服务 provider（会话没了 / 服务死了 / 只读）
+    fn uninstall_cell_providers(&mut self, cell_id: &str, cx: &mut Context<Self>) {
+        let Some(editor) = self.cell_editors.get(cell_id).cloned() else {
+            return;
+        };
+        editor.update(cx, |state, _cx| {
+            crate::lsp::bridge::uninstall(state);
+            crate::lsp::bridge::uninstall_hover(state);
+        });
+        if let Some(slot) = self.cell_lsp.get_mut(cell_id) {
+            slot.providers_installed = false;
+        }
+    }
+
+    /// 单元正文变了：有会话就 `didChange`（全量一次），然后重画该单元诊断
+    ///
+    /// 由单元编辑器的 Change 订阅经 `cx.defer` 调进来（回调里不能 update 本实体）。
+    /// 没有会话（服务未起 / 非 Python 单元）→ 只重画，不发协议。
+    pub(crate) fn on_cell_text_changed(&mut self, cell_id: &str, cx: &mut Context<Self>) {
+        let Some(editor) = self.cell_editors.get(cell_id).cloned() else {
+            return;
+        };
+        let text = editor.read(cx).value().to_string();
+        if let Some(slot) = self.cell_lsp.get_mut(cell_id) {
+            slot.version = slot.version.saturating_add(1);
+            let version = slot.version;
+            let session = slot.session.clone();
+            // 尽力：写失败不报（读线程断了会有 IoError 事件把会话摘掉）
+            let _ = session.client.did_change(&session.uri, version, &text);
+        }
+        self.rebuild_cell_diagnostics(cell_id, cx);
+    }
+
+    /// 取走各单元的语言服务事件并按 uri 折叠（每拍由泵调用）
+    ///
+    /// 先同步会话（服务刚就绪的单元在这一拍接上），再取事件，最后**只重画有变化**的单元
+    /// （诊断没变的单元不必每拍 notify，省一整轮重绘）。
+    pub(crate) fn drain_cell_lsp(&mut self, cx: &mut Context<Self>) {
+        if self.document_mode() != Some(EditorMode::Analysis) {
+            return;
+        }
+        // ① 该接的接上 / 该摘的摘掉
+        let ids: Vec<String> = self
+            .notebook_state()
+            .cells
+            .iter()
+            .map(|cell| cell.id.clone())
+            .collect();
+        for id in &ids {
+            self.sync_cell_lsp(id, cx);
+        }
+        // ② 按单元 uri 认领事件（别家的事件由端口暂存，不抢）
+        let mut changed: Vec<String> = Vec::new();
+        let mut dead: Vec<String> = Vec::new();
+        for (cell_id, slot) in self.cell_lsp.iter_mut() {
+            let uri = slot.session.uri.clone();
+            let events = self.shared.drain_lsp_events_for_uri(&uri);
+            if events.is_empty() {
+                continue;
+            }
+            let fold = crate::lsp::host::fold_events(&uri, events);
+            if let Some(list) = fold.diagnostics {
+                slot.diagnostics = list;
+                changed.push(cell_id.clone());
+            }
+            if !fold.alive {
+                dead.push(cell_id.clone());
+            }
+        }
+        // ③ 服务死了：摘会话 + 摘 provider（下一拍的 `sync_cell_lsp` 按宿主新会话重建）
+        for cell_id in dead {
+            if let Some(old) = self.cell_lsp.remove(&cell_id) {
+                let _ = old.session.client.did_close(&old.session.uri);
+            }
+            self.uninstall_cell_providers(&cell_id, cx);
+            changed.push(cell_id);
+        }
+        for cell_id in changed {
+            self.rebuild_cell_diagnostics(&cell_id, cx);
         }
     }
 
@@ -214,6 +442,10 @@ impl EditorHostPanel {
         // 【遗留 #10】编辑器实例与订阅一并丢弃（句柄即生命周期）
         self.cell_editors.remove(id);
         self._cell_editor_subs.remove(id);
+        // 【A1】语言服务会话也要收尾：单元没了，服务端不该再留一份正文（下次同 id 会重新 didOpen）
+        if let Some(slot) = self.cell_lsp.remove(id) {
+            let _ = slot.session.client.did_close(&slot.session.uri);
+        }
         // 【B3】该单元的错误线也一并清掉：单元都不在了，标记留着只会在 id 复用时复活
         self.cell_error_marks.remove(id);
         cx.notify();
@@ -301,6 +533,10 @@ impl EditorHostPanel {
         // `ensure_cell_editor` 从 shared 读，不需要手动搬运）
         self.cell_editors.remove(id);
         self._cell_editor_subs.remove(id);
+        // 【A1】会话跟着编辑器一起作废：转成非 Python 后语言服务不该再服务这个 uri
+        if let Some(slot) = self.cell_lsp.remove(id) {
+            let _ = slot.session.client.did_close(&slot.session.uri);
+        }
         // 【B3】旧语言的错误线不能留：输出已经清空、也没再跑过，转回原语言时那条波浪线
         // 会原地复活（`cell_error_marks` 只在重跑与回执成功时清，转换路径原先漏了）
         self.cell_error_marks.remove(id);

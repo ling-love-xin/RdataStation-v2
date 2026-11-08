@@ -62,13 +62,19 @@ pub fn diagnostics_for(
 
 /// 把诊断重建进单元内核（内核只有 `clear` + `push`，所以必须一处重建，别分开各写一份）
 ///
-/// 词法/语义（`found`）与执行错误（`exec`）在这一个入口合并——两条来源要是各写一遍
-/// `clear`，后写的会擦掉先写的。来源分别标「语法」与「执行」、严重度统一 Error、
-/// `code` 原样带给内核——与主编辑器 `apply_error_marks` 的词法层与执行层同一口径。
+/// **三源**在这个入口合并：词法/语义（`found`，源「语法」）、执行错误（`exec`，源「执行」）、
+/// 语言服务（`lsp`，源「语言服务」，来自 `textDocument/publishDiagnostics`）。三条来源要是
+/// 各写一遍 `clear`，后写的会擦掉先写的。严重度：语法 / 执行统一 Error（与主编辑器
+/// `apply_error_marks` 同一口径）；语言服务用服务端给的 severity，`None` 按 Warning（
+/// 服务端不写 severity 时不该被当成错误，但也不该看不见）。
+///
+/// 【A1】`lsp` 的 range 直接用：单元是独立内核实例，服务端返回的就是该单元正文坐标，
+/// 不存在「文档行号偏移」的换算（这一点此前被误判过）。
 pub fn apply(
     state: &mut EditorState,
     found: &[Diagnostic],
     exec: Option<&ExecMark>,
+    lsp: &[lsp_types::Diagnostic],
     cx: &mut gpui_kit::Context<EditorState>,
 ) {
     let text = state.value().to_string();
@@ -87,6 +93,22 @@ pub fn apply(
             .with_severity(DiagnosticSeverity::Error)
             .with_source("语法")
             .with_code(one.code),
+        );
+    }
+    // 【A1】语言服务：range 已是 0 基行列（LSP 口径），直接进内核
+    for one in lsp {
+        diagnostics.push(
+            KernelDiagnostic::new(
+                Position::new(one.range.start.line, one.range.start.character)
+                    ..Position::new(one.range.end.line, one.range.end.character),
+                one.message.clone(),
+            )
+            .with_severity(
+                one.severity
+                    .map(Into::into)
+                    .unwrap_or(DiagnosticSeverity::Warning),
+            )
+            .with_source("语言服务"),
         );
     }
     if let Some(mark) = exec {

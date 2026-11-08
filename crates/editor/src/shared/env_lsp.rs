@@ -150,6 +150,25 @@ impl EditorShared {
         port.as_ref().is_some_and(|port| port.wants(document))
     }
 
+    /// 【A1】分析笔记里某个单元的会话（未接端口 / 该单元不配 / 服务未就绪 = `None`，如实）
+    pub fn lsp_cell_service(
+        &self,
+        document: &DocumentId,
+        cell_id: &str,
+    ) -> Option<crate::lsp::LspSession> {
+        let port = self.lsp.borrow();
+        port.as_ref()
+            .and_then(|port| port.cell_service(document, cell_id))
+    }
+
+    /// 【A1】按单元 uri 取走语言服务事件（未接端口 = 空；端口按 uri 认领，别家的事件暂存）
+    pub fn drain_lsp_events_for_uri(&self, uri: &str) -> Vec<crate::lsp::LspEvent> {
+        let port = self.lsp.borrow();
+        port.as_ref()
+            .map(|port| port.drain_for_uri(uri))
+            .unwrap_or_default()
+    }
+
     /// 是否接了补全端口（未接 = 只给关键字与函数）
     pub fn has_completion(&self) -> bool {
         self.completion.borrow().is_some()

@@ -94,6 +94,26 @@ fn uri_for(document: &DocumentId) -> String {
     format!("untitled:Rds-{}", document.as_str())
 }
 
+/// 【A1】单元 → LSP 语言 id（**纯函数，可单测**）
+///
+/// 只有 Python 单元接语言服务：R / Julia 还没有对应 server（§16.2 B 组待拍板），SQL 单元
+/// 走本地目录补全（`uses_local_sql_completion`），Markdown 不可执行也不需要服务。
+fn cell_language_for(language: crate::cell::CellLanguage) -> Option<&'static str> {
+    match language {
+        crate::cell::CellLanguage::Python => Some("python"),
+        _ => None,
+    }
+}
+
+/// 【A1】单元 → LSP uri（**纯函数，可单测**）
+///
+/// 单元是独立内核实例：uri 必须按单元区分，否则同一文档里两个 Python 单元共用一条 uri，
+/// 服务端只保留最后一份正文、诊断互相覆盖。形状 `untitled:Rds-<doc>-<cell>`，与文档级
+/// `untitled:Rds-<doc>` 天然不同（不会互相认领）。
+fn uri_for_cell(document: &DocumentId, cell_id: &str) -> String {
+    format!("untitled:Rds-{}-{cell_id}", document.as_str())
+}
+
 /// 把一批事件按 `uri` 认领：本文档的 `publishDiagnostics` 归 `claimed`，其它文档的暂存
 /// （**不丢**：多面板共用一个 server，别家的事件等别家来取）；`IoError` 是全局死讯，交给
 /// 调用方单独广播（不进 `claimed`，也不暂存给某一方）。其余通知忽略。
@@ -184,13 +204,43 @@ impl WorkbenchLsp {
         self.blocked.borrow().clone()
     }
 
-    /// 当前**需要**语言服务的文档数（通用模式 + `.py`）；0 = 没有面板在用，可回收
+    /// 当前**需要**语言服务的文档数（通用模式 + `.py`；**含 Python 单元的分析笔记**）；0 = 没有面板在用，可回收
+    ///
+    /// 【A1】分析笔记必须算进来：不然「只开着一个 Python 单元笔记」时计数为 0，服务刚起就被
+    /// `reap_if_idle` 回收，单元永远接不上（表现为「补全/诊断时有时无」）。
     pub fn active_document_count(&self) -> usize {
-        let docs = self.editor.service();
-        docs.documents()
+        let ids: Vec<DocumentId> = {
+            let docs = self.editor.service();
+            docs.documents().iter().map(|doc| doc.id().clone()).collect()
+        };
+        ids.iter().filter(|id| self.needs_service(id)).count()
+    }
+
+    /// 该文档是否需要语言服务（`.py` 文档，或含 Python 单元的分析笔记）
+    fn needs_service(&self, document: &DocumentId) -> bool {
+        let (is_py_document, is_analysis) = {
+            let docs = self.editor.service();
+            match docs.find(document) {
+                Some(doc) => (
+                    language_for(doc.mode(), doc.path()).is_some(),
+                    doc.mode() == EditorMode::Analysis,
+                ),
+                None => return false,
+            }
+        };
+        if is_py_document {
+            return true;
+        }
+        // 分析笔记：只要有一个 Python 单元就该有服务（R / Julia 尚无 server）
+        is_analysis && self.has_python_cell(document)
+    }
+
+    /// 该文档是否含 Python 单元（读共享快照；笔记可能还没渲染出来，不依赖视图状态）
+    fn has_python_cell(&self, document: &DocumentId) -> bool {
+        self.editor
+            .notebook_cells(document)
             .iter()
-            .filter(|doc| language_for(doc.mode(), doc.path()).is_some())
-            .count()
+            .any(|cell| cell.language == crate::cell::CellLanguage::Python)
     }
 
     /// 手动启动（状态栏「启动」）：清拦住原因（含崩溃 / 启动失败）+ 拉起
@@ -274,40 +324,33 @@ impl WorkbenchLsp {
         }
         *self.events.borrow_mut() = None;
     }
-}
 
-impl LspPort for WorkbenchLsp {
-    fn service(&self, document: &DocumentId) -> Option<LspSession> {
-        // 文档不存在（已关）→ 无服务；模式 / 扩展名不支持 → 无服务（不猜）
-        // `service()` 返回借用（Ref），必须 let 绑定撑住生命周期
-        let language_id = {
-            let docs = self.editor.service();
-            let doc = docs.find(document)?;
-            language_for(doc.mode(), doc.path())?.to_string()
-        };
-        // 后台握手失败 → 收尾（否则会卡在「启动中」：面板一直问、一直拿不到会话）
+    /// 服务就绪判定（**文档级与单元级共用**，口径只此一处）
+    ///
+    /// 三步一口不省：① 收尾后台握手失败（否则调用方会卡在「启动中」）；② 被拦住（手动停 /
+    /// 启动失败 / 崩溃待重启）如实回 `None`；③ 首次有需求时按需拉起，握手完成前也回 `None`
+    /// （面板保持轮询，就绪即接上）。
+    fn ready_client(&self) -> Option<LspHandle> {
         if self.init_failed.swap(false, Ordering::SeqCst) {
             self.mark_dead("初始化握手失败".to_string());
             return None;
         }
-        // 被拦住（手动停 / 启动失败 / 崩溃待重启）→ 无服务（如实）
         if self.blocked.borrow().is_some() {
             return None;
         }
-        // 首次有文档要服务时按需拉起（就绪前返回 None，面板保持轮询，就绪即接上）
         self.ensure_started();
         let client = self.server.borrow().as_ref()?.clone();
         if !client.is_initialized() {
             return None;
         }
-        Some(LspSession {
-            client,
-            uri: uri_for(document),
-            language_id,
-        })
+        Some(client)
     }
 
-    fn drain_for(&self, document: &DocumentId) -> Vec<LspEvent> {
+    /// 按 `uri` 认领事件（**文档级与单元级共用**：只差认领键）
+    ///
+    /// 先收新事件（不阻塞；读线程持续写进 channel）并入暂存，再按 uri 认领；别家的事件回
+    /// 暂存队列（不丢）。`IoError` 走 `mark_dead` 广播，不进任何一方的队列。
+    fn drain_claimed(&self, uri: &str) -> Vec<LspEvent> {
         // 先收新事件（不阻塞；读线程持续写进 channel），并入暂存
         let mut events = std::mem::take(&mut *self.pending.borrow_mut());
         let mut died: Option<String> = None;
@@ -331,27 +374,76 @@ impl LspPort for WorkbenchLsp {
                 }
             }
         }
-        let (claimed, rest) = claim_events(&uri_for(document), events);
+        let (claimed, rest) = claim_events(uri, events);
         if let Some(reason) = died {
             // 首次发现死讯：广播 + 摘句柄 + 拦住（待手动重启）；暂存的一并丢弃（server 没了）
             self.mark_dead(reason);
         } else {
             *self.pending.borrow_mut() = rest;
         }
-        // 全局死讯广播：server 死后每个文档的 `drain_for` 都带上一份（面板据此摘 provider 停泵）
+        // 全局死讯广播：server 死后每个调用方的 `drain_for` / `drain_for_uri` 都带上一份
+        // （面板据此摘 provider 停泵 / 单元据此摘会话停轮询）
         let mut result = claimed;
         if let Some(dead) = self.dead.borrow().clone() {
             result.insert(0, LspEvent::IoError(dead));
         }
         result
     }
+}
+
+impl LspPort for WorkbenchLsp {
+    fn service(&self, document: &DocumentId) -> Option<LspSession> {
+        // 文档不存在（已关）→ 无服务；模式 / 扩展名不支持 → 无服务（不猜）
+        // `service()` 返回借用（Ref），必须 let 绑定撑住生命周期
+        let language_id = {
+            let docs = self.editor.service();
+            let doc = docs.find(document)?;
+            language_for(doc.mode(), doc.path())?.to_string()
+        };
+        let client = self.ready_client()?;
+        Some(LspSession {
+            client,
+            uri: uri_for(document),
+            language_id,
+        })
+    }
+
+    /// 【A1】分析笔记里某个单元的语言服务会话
+    ///
+    /// 与文档级共用 [`WorkbenchLsp::ready_client`] 的就绪判定（启动 / 拦住 / 握手失败的口径
+    /// 只此一处），差别只有两件：uri 换成单元级、语言 id 按单元语言判（非 Python = 没有）。
+    fn cell_service(&self, document: &DocumentId, cell_id: &str) -> Option<LspSession> {
+        let language_id = {
+            let cell = self
+                .editor
+                .notebook_cells(document)
+                .into_iter()
+                .find(|cell| cell.id == cell_id)?;
+            cell_language_for(cell.language)?.to_string()
+        };
+        let client = self.ready_client()?;
+        Some(LspSession {
+            client,
+            uri: uri_for_cell(document, cell_id),
+            language_id,
+        })
+    }
+
+    fn drain_for(&self, document: &DocumentId) -> Vec<LspEvent> {
+        self.drain_claimed(&uri_for(document))
+    }
+
+    /// 【A1】单元级通道：认领键换成单元 uri，其余（暂存别家事件、死讯广播）与文档级同一套
+    fn drain_for_uri(&self, uri: &str) -> Vec<LspEvent> {
+        self.drain_claimed(uri)
+    }
 
     fn wants(&self, document: &DocumentId) -> bool {
         // 「想要」只看文档本身该不该配服务，**不看服务启没启 / 是不是被停了**：
         // 面板据此在服务未起 / 被停 / 崩溃时保持轻轮询，重启后自动重连。
-        let docs = self.editor.service();
-        docs.find(document)
-            .is_some_and(|doc| language_for(doc.mode(), doc.path()).is_some())
+        // 【A1】分析笔记含 Python 单元时同样「想要」——否则单元会话一旦建起、泵却因
+        // 「文档不想要」而退出，服务重启后单元永远接不回来。
+        self.needs_service(document)
     }
 }
 
@@ -424,7 +516,7 @@ mod tests {
     use crate::lsp::LspEvent;
     use crate::model::{DocumentId, EditorMode};
 
-    use super::{claim_events, language_for, uri_for};
+    use super::{claim_events, cell_language_for, language_for, uri_for, uri_for_cell};
 
     fn doc(id: &str) -> DocumentId {
         DocumentId::new(id)
@@ -513,5 +605,29 @@ mod tests {
         let (claimed, rest) = claim_events(&uri, VecDeque::new());
         assert!(claimed.is_empty());
         assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn cell_language_for_only_python_cells() {
+        use crate::cell::CellLanguage;
+        // 【A1】只有 Python 单元接语言服务：R / Julia 尚无 server（§16.2 B 组待拍板），
+        // SQL 单元走本地目录补全，Markdown 不可执行——都不许假装有服务
+        assert_eq!(cell_language_for(CellLanguage::Python), Some("python"));
+        assert_eq!(cell_language_for(CellLanguage::Sql), None);
+        assert_eq!(cell_language_for(CellLanguage::Markdown), None);
+        assert_eq!(cell_language_for(CellLanguage::R), None);
+        assert_eq!(cell_language_for(CellLanguage::Julia), None);
+    }
+
+    #[test]
+    fn uri_for_cell_is_distinct_per_cell_and_never_collides_with_document() {
+        let d1 = doc("doc-1");
+        assert_eq!(uri_for_cell(&d1, "c1"), "untitled:Rds-doc-1-c1");
+        // 同一文档两个单元必须不同 uri（否则服务端只留一份正文、诊断互相覆盖）
+        assert_ne!(uri_for_cell(&d1, "c1"), uri_for_cell(&d1, "c2"));
+        // 不同文档的同名单元也不同
+        assert_ne!(uri_for_cell(&d1, "c1"), uri_for_cell(&doc("doc-2"), "c1"));
+        // 文档级 uri 与单元级永不互相认领（认领是精确相等）
+        assert_ne!(uri_for(&d1), uri_for_cell(&d1, "c1"));
     }
 }

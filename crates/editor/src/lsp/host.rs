@@ -62,6 +62,25 @@ pub trait LspPort: 'static {
         let _ = document;
         false
     }
+
+    /// 【A1】分析笔记里**某个单元**的语言服务会话（`None` = 该单元不该配 / 服务未就绪）
+    ///
+    /// 单元是独立内核实例：uri 要按单元区分（`untitled:Rds-<doc>-<cell>`），否则同一文档里
+    /// 两个 Python 单元的诊断会互相覆盖。默认实现回 `None`——不实现这条的宿主（含所有既有
+    /// 假端口）行为完全不变，单元级语言服务就是「如实没有」。
+    fn cell_service(&self, document: &DocumentId, cell_id: &str) -> Option<LspSession> {
+        let _ = (document, cell_id);
+        None
+    }
+
+    /// 【A1】按 **uri** 取走待处理事件（单元级通道；文档级仍用 [`Self::drain_for`]）
+    ///
+    /// 与 `drain_for` 的区别只是认领键：单元有自己的 uri。默认实现回空——未实现 = 没有
+    /// 单元级事件，不留假数据。
+    fn drain_for_uri(&self, uri: &str) -> Vec<LspEvent> {
+        let _ = uri;
+        Vec::new()
+    }
 }
 
 /// 端口句柄（主线程共享；与 `CompletionHandle` / `EnvHandle` 同款）

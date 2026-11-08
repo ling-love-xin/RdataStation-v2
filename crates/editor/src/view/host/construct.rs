@@ -614,6 +614,8 @@ impl EditorHostPanel {
             scan_diagnostics: Vec::new(),
             error_reason: None,
             cell_error_marks: std::collections::HashMap::new(),
+            // 【A1】单元级语言服务会话：首次 `sync_cell_lsp` 时按需建立
+            cell_lsp: std::collections::HashMap::new(),
             _editor_sub: Some(sub),
             _grid_sub: Some(grid_sub),
             _result_panel_sub: Some(result_panel_sub),
