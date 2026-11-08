@@ -834,7 +834,7 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 | `shared/env_lsp.rs::catalog_revision`（新增） | 读代际 |
 | `shared/env_lsp.rs::retain_catalog_snapshots` | 只在实际删了条目（关文档）时才 +1 |
 | `view/host/mod.rs` + `construct.rs` | 面板缓存字段 `catalog_revision: u64`（最近一次比对过的代际） |
-| `view/host/render.rs` | 权威同步点：代际不等 → 更新缓存 → `cx.defer` 重建（**不在 render 里直接写内核**，同单元 Change 回调那条理由） |
+| `view/host/render.rs` | 权威同步点：代际不等 → 更新缓存 → **同步**调 `rebuild_all_cell_diagnostics`。试过用 `cx.defer` 挪出渲染栈，但渲染周期里排的 defer 在 `window.draw` 下**不摊平**（headless 用例实测：defer 版本红、同步版本绿），只能像行号/书签列那十余个同步点一样直接写 |
 | `view/host/notebook.rs::rebuild_all_cell_diagnostics`（新增） | 遍历 `cell_editors` 逐个走同一个 `rebuild_cell_diagnostics`——三源合并只在一处，不另写批量逻辑；非笔记模式 `cell_editors` 为空 → 安全空转 |
 | `view/tests/legacy.rs` | 新用例 `a_new_catalog_snapshot_refreshes_cell_diagnostics_without_typing`：目录先含 `t_old`（c1 干净）→ 换成只含 `t_new` 的一份 → **不敲键**，只渲一帧 → c1 出现 `unknown_table` 诊断，c2 仍干净 |
 | `shared/mod.rs`（单测） | 新用例 `catalog_revision_only_moves_when_the_snapshot_really_changes`：同一份 `Arc` 重复推不涨 / 换目录涨 / 清条目涨 / 空推不涨 / `retain` 没真删不涨 |
