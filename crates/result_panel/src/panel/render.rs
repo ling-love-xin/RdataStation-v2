@@ -193,17 +193,24 @@ impl ResultPanel {
                 let run_queue = self.queue.clone();
                 row.child(
                     div().w(rems(ui::RESULT_FILTER_WIDTH)).child(
-                        Input::new(&self.filter_input).suffix(
-                            Button::new("editor-result-filter-run")
-                                .ghost()
-                                .small()
-                                .icon(IconName::Play)
-                                .debug_selector(|| "editor-result-filter-run".to_string())
-                                .tooltip("用 select * from (原SQL) where 词 重查（替换当前结果集）")
-                                .on_click(move |_, _window, app| {
-                                    run_queue.request(ResultRequest::RunFilterAsQuery, app);
-                                }),
-                        ),
+                        // 【2026-11-08 高度对齐】Input 默认 Medium 档 = 32px，在 40px 工具栏里
+                        // 上下只剩 4px，且与同排 `Toolbar` XSmall 的 24px 按钮差 8px 高。
+                        // 降到 `small`（24px）后一行控件同档；字号随之 12px → 14px（更好读）。
+                        Input::new(&self.filter_input)
+                            .small()
+                            .suffix(
+                                Button::new("editor-result-filter-run")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::Play)
+                                    .debug_selector(|| "editor-result-filter-run".to_string())
+                                    .tooltip(
+                                        "用 select * from (原SQL) where 词 重查（替换当前结果集）",
+                                    )
+                                    .on_click(move |_, _window, app| {
+                                        run_queue.request(ResultRequest::RunFilterAsQuery, app);
+                                    }),
+                            ),
                     ),
                 )
             })

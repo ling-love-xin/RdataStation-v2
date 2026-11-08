@@ -646,6 +646,9 @@ impl ResultPanel {
                     // 输入框无边框（bordered(false)，与工具栏融为搜索条风格）。
                     Input::new(&self.filter_input)
                         .bordered(false)
+                        // 【2026-11-08】与工具栏筛选框同档（24px）：展开条原先 32px + py_1
+                        // = 40px 高，回到工具栏 36px 时高度会跳一下；同档后两处一致。
+                        .small()
                         .prefix(
                             Button::new("editor-result-filter-expand-toggle")
                                 .ghost()

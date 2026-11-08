@@ -287,6 +287,19 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 
 验证：`cargo test -p rds-result-panel --lib` = **225 passed / 0 failed**（+1 `comment_header_row_gets_room_for_two_lines`：两态纯逻辑 + 真渲染几何 —— 主行 ≥14px、注释行 ≥12px 且在主行下方；不抬表头时注释行取不到 bounds）；`cargo test -p rds-ui-guard` = 4 passed；`cargo check -p rds-result-panel` 0 warning。未验证：真窗口 40px 表头观感、11px badge 可读性、开注释后可视行数少一行的体感。
 
+### 2.19 2026-11-08（窄档列宽补齐 + 工具栏高 40px + 筛选框同档）
+
+| 层 | 落地 |
+| --- | --- |
+| 布尔列 | `RESULT_COLUMN_WIDTH_BOOLEAN` 96 → **120**：96 扣掉组件 padding 8 + badge 19 + 两个 gap 8 + 列头菜单 24 = 只剩 37px 给列名（5–6 个西文字符，`is_active` → `is_a…`）。列宽要装的是表头，不是值 |
+| 最小列宽 | `RESULT_COLUMN_MIN_WIDTH` 64 → **80**：64 时列名只剩 5px，连省略号都摆不下。最小宽只管兜住不可用态，可读性靠悬停 tooltip |
+| 兜底语义 | `Column::min_width` 会把拖到的更小值抬上去；`default_column_width_follows_type_until_the_user_drags` 里「拖到 70」的断言改成显式表达这条兜底（故意留 70 钉住） |
+| 工具栏高 | `RESULT_TOOLBAR_HEIGHT` 2.25 → **2.5**（36 → 40px）：36 正好等于 `Toolbar` XSmall 自身最小高（28 + p_1 8），容器上下零余量 |
+| 筛选框档位 | 常态工具栏与展开态筛选条的 `Input` 都加 `.small()`（32 → 24px，与同排 24px 按钮同档，字号 12 → 14）；这也是「工具栏挤」的真实原因——32px 输入框塞在 36px 里只剩上下各 2px |
+| 注释漂移 | `grid/status.rs` 那条「结果区已提到 10rem」过时注释改写为当前 20rem，并保留「压缩前先量网格剩余高度」的警告 |
+
+验证：`cargo test -p rds-result-panel --lib` = **226 passed / 0 failed**（+1 `narrow_column_tiers_keep_the_header_readable` 算术护栏）；`cargo test -p rds-ui-guard` = 4 passed；`cargo check -p rds-result-panel` / `-p rds-editor` 均 0 warning。未验证：真窗口 40px 工具栏观感、24px 筛选框可点性、120px 布尔列多列并排的总宽影响。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

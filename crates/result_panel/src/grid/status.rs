@@ -280,9 +280,11 @@ pub fn render_toolbar(
         .gap_2()
         .px_2()
         // 工具栏比状态栏高：Toolbar XSmall（min_h_7 + p_1 = 36px）放不进 24px 状态栏档。
-        // 注意：36px 会压缩结果主体——结果区默认高度已同步提到 10rem（editor/ui.rs
-        // RESULT_PANE_HEIGHT），保证网格表头 + 前两行可见（编辑行被虚拟列表裁剪会
-        // 丢 Input 焦点链，cell_edit_esc 曾因此回归）
+        // 2026-11-08 抬到 40px（`ui::RESULT_TOOLBAR_HEIGHT`）：36px 正好等于 Toolbar 自身
+        // 最小高、上下零余量，筛选框 Input 那时还是 Medium 档 32px 直接贴边。结果区默认高
+        // 是 `RESULT_PANE_HEIGHT` 20rem（320px），这 4px 不影响网格可容纳行数。
+        // 注意：编辑行被虚拟列表裁剪会丢 Input 焦点链（`cell_edit_esc` 曾因此回归），
+        // 再压缩工具栏 / 结果区默认高之前必须先量网格实际剩余高度。
         .h(rems(ui::RESULT_TOOLBAR_HEIGHT))
         .flex_none()
         .border_b(ui::HAIRLINE)

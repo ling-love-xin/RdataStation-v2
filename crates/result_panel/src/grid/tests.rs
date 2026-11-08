@@ -2883,16 +2883,27 @@ fn default_column_width_follows_type_until_the_user_drags(cx: &mut gpui_kit::Tes
         assert_eq!(
             typed.column(2, cx).width,
             crate::ui::RESULT_COLUMN_WIDTH_BOOLEAN,
-            "boolean 列走 96"
+            "boolean 列走布尔档（120，按表头 badge + 列名 + 列头菜单算出来的）"
         );
     });
 
     // 3) 拖过之后按用户宽度，类型档不再生效
+    //    注意 70 < `RESULT_COLUMN_MIN_WIDTH`（80）：列宽会被最小宽兜底，这是组件的
+    //    `Column::min_width` 语义，不是拖拽没生效——2026-11-08 把最小宽从 64 提到 80 后
+    //    这里就从「等于用户值」变成「等于最小宽」，故意保留 70 来钉住这条兜底行为。
     typed.set_column_widths(&[
         crate::ui::RESULT_ROW_NUMBER_WIDTH,
         gpui_kit::px(200.),
         gpui_kit::px(70.),
     ]);
+    let expected_boolean = {
+        let dragged = gpui_kit::px(70.);
+        if dragged < crate::ui::RESULT_COLUMN_MIN_WIDTH {
+            crate::ui::RESULT_COLUMN_MIN_WIDTH
+        } else {
+            dragged
+        }
+    };
     cx.update(|cx: &mut App| {
         assert_eq!(
             typed.column(1, cx).width,
@@ -2901,10 +2912,58 @@ fn default_column_width_follows_type_until_the_user_drags(cx: &mut gpui_kit::Tes
         );
         assert_eq!(
             typed.column(2, cx).width,
-            gpui_kit::px(70.),
-            "boolean 列拖过按用户值"
+            expected_boolean,
+            "boolean 列拖过按用户值（低于最小宽时被兜底到最小宽）"
         );
     });
+}
+
+/// 【窄档列宽回归 2026-11-08】默认列宽档与最小列宽都必须给**列名**留出可读空间。
+///
+/// 列宽真正要装的是表头，不是值：表头固定占宽上界 = 组件左右 padding 8 + 类型 badge
+/// 19（11px 单字符 + `px_1`）+ badge / 列名 / 菜单之间两个 `gap_1` 8 + 列头菜单 24 = 59。
+/// 96px 的布尔档扣掉这 59 只剩 37（5–6 个西文字符，`is_active` 会变 `is_a…`）；
+/// 64px 的最小宽更只剩 5px，连省略号都摆不下。这条用例把两个数字钉住，改回去立刻挂。
+#[test]
+fn narrow_column_tiers_keep_the_header_readable() {
+    const HEADER_FIXED: gpui_kit::Pixels = gpui_kit::px(59.);
+    // 8 个 12px 西文字符 ≈ 56px——「能认出列名」的下限
+    const READABLE: gpui_kit::Pixels = gpui_kit::px(56.);
+
+    let boolean_room = crate::ui::RESULT_COLUMN_WIDTH_BOOLEAN - HEADER_FIXED;
+    assert!(
+        boolean_room >= READABLE,
+        "布尔列默认档 {:?} 扣掉表头固定占宽后只剩 {:?} 给列名（要求 >= {:?}）",
+        crate::ui::RESULT_COLUMN_WIDTH_BOOLEAN,
+        boolean_room,
+        READABLE
+    );
+
+    // 最小宽不要求「能读」，但至少要留出一段非零空间——列名不能归零
+    let min_room = crate::ui::RESULT_COLUMN_MIN_WIDTH - HEADER_FIXED;
+    assert!(
+        min_room >= gpui_kit::px(16.),
+        "最小列宽 {:?} 扣掉表头固定占宽后只剩 {:?}，列名被挤成一条缝",
+        crate::ui::RESULT_COLUMN_MIN_WIDTH,
+        min_room
+    );
+
+    // 其余默认档都比布尔档宽，天然满足；这里只确认没有哪一档掉到布尔档以下
+    for (label, width) in [
+        ("numeric", crate::ui::RESULT_COLUMN_WIDTH_NUMERIC),
+        ("date/time", crate::ui::RESULT_COLUMN_WIDTH_DATE_TIME),
+        ("timestamp", crate::ui::RESULT_COLUMN_WIDTH_TIMESTAMP),
+        ("uuid", crate::ui::RESULT_COLUMN_WIDTH_UUID),
+        ("json", crate::ui::RESULT_COLUMN_WIDTH_JSON),
+        ("binary", crate::ui::RESULT_COLUMN_WIDTH_BINARY),
+        ("text", crate::ui::RESULT_COLUMN_WIDTH_TEXT),
+    ] {
+        assert!(
+            width - HEADER_FIXED >= READABLE,
+            "{label} 档 {:?} 给列名的空间不足",
+            width
+        );
+    }
 }
 
 /// 只为把表格真正渲染进窗口的探针视图（几何必须来自真实布局）

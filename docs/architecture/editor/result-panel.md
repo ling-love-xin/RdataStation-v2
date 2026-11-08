@@ -1321,6 +1321,52 @@ enum 类 `Select` 需要"值 → 显示"映射来源，当前拿不到枚举定�
 在真实字体下的可读性；开启注释后表头变高会不会挤压可视行数到"少一行"的体感（组件按
 `header_band_height` 重算 `page_item_count`，逻辑上正确，观感未目视）。
 
+### 8.28 窄档列宽补齐 + 工具栏高 40px + 筛选框同档（2026-11-08）
+
+**问题一：布尔列 96px 读不出列名**。96 是按「布尔值本身很短」给的，但列宽真正要装的是
+**表头**。算术（`vendor/gpui-component/src/sizing.rs` XSmall 档 + `grid/header.rs` 构成）：
+
+```
+96 − 8（组件左右 padding）           = 88
+    − 19（badge：11px 符号 + px_1 8）
+    −  8（badge/列名/菜单之间两个 gap_1）
+    − 24（列头菜单）
+    = 37px 给列名   →  5–6 个西文字符（`is_active` 渲染成 `is_a…`）
+```
+
+改 `RESULT_COLUMN_WIDTH_BOOLEAN` **96 → 120**（列名留 61px ≈ 9 字符）。其余档实测都够
+（numeric 130 留 79、date/time 120 留 69、timestamp / uuid / json / binary / text 更宽）。
+
+**问题二：最小列宽 64px 时列名只剩 5px**。64 时 badge(19) + 菜单(24) + 两个 gap(8) = 51
+已经吃掉可用宽（56）的一大半。最小宽的职责是**兜住不可用态**、不是保证可读，所以取
+**64 → 80**（列名留 21px ≈ 3 字符 + 省略号，看全名靠悬停 tooltip）。
+
+这条有一个可观察的行为变化：`Column::min_width` 会把用户拖到的更小值兜底上去。既有用例
+`default_column_width_follows_type_until_the_user_drags` 里「拖到 70」那一步，原先等于
+用户值、现在等于 80——用例改成显式断言这条兜底语义（故意保留 70 来钉住它）。
+
+**问题三：工具栏 36px 上下零余量**。36 = `Toolbar` XSmall 自身最小高（`min_h_7` 28 +
+`p_1` 8），容器高正好等于内容高；同时筛选框 `Input` 还停在组件默认 **Medium 档**
+（`h_8` = 32px，见 `vendor/gpui-component/src/sizing.rs:281` 的 `input_h`），在 36px 里
+只剩上下各 2px，视觉上直接顶满上下边框——这才是「工具栏显得挤/矮」的实测原因，不是容器
+本身给得不够。
+
+- `RESULT_TOOLBAR_HEIGHT` **2.25 → 2.5**（36 → 40px）；
+- 常态筛选框与展开态筛选条的 `Input` 都加 `.small()`（32 → 24px，与同排 `Toolbar`
+  XSmall 的 24px 按钮同档；字号随之 12 → 14px，输入更好读）；
+- 40px 相比 36px 多占 4px：结果区默认高 `RESULT_PANE_HEIGHT` = 20rem（320px），不影响
+  网格可容纳行数（8rem/10rem 时代的「编辑行被虚拟列表裁剪丢 Input 焦点链」教训仍然有效，
+  只是当前余量足够；`grid/status.rs` 那条过时注释已按实际值改写）。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **226 passed / 0 failed**（+1
+`narrow_column_tiers_keep_the_header_readable`：把「表头固定占宽 59」与「列名可读下限 56」
+钉成算术护栏，布尔档或最小宽改回去立刻挂）；`cargo test -p rds-ui-guard` = 4 passed
+（常量值变化不增删 `px(N.)`，基线仍 17）；`cargo check -p rds-result-panel` 与
+`cargo check -p rds-editor` 均 0 warning。
+
+**未验证**：真窗口下 40px 工具栏的观感（相对 26px 表头 / 24px 状态栏的节奏）、24px
+筛选框的可点性、120px 布尔列在多列并排时的总宽影响（20 个布尔列从 1920 → 2400）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
