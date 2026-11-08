@@ -57,8 +57,9 @@ impl EditorHostPanel {
 
     /// 【书签】把本文档书签刷成行级 Fill 标记（懒创建集合；样式同隐藏字符先例）
     ///
-    /// 书签行号 1 起（sidecar 口径）→ 内核 0 起换算；超出文档行数的书签直接跳过
-    /// （行号漂移暂不校正，见 rds-file-meta 文档）。
+    /// 书签行号 1 起（sidecar 口径）→ 内核 0 起换算；超出文档行数的书签直接跳过。
+    /// 行号本身在文本编辑后由 [`Self::adjust_bookmarks_for_edit`]（方案 A：内核编辑行增量）
+    /// 校正一过，本函数只负责把「当前」行号投影成装饰——它不感知编辑，不要在这里再算平移。
     fn refresh_bookmark_decorations(&mut self, cx: &mut Context<Self>) {
         use gpui_kit::component::input::RopeExt as _;
         // 懒创建集合（先 update 再取色：`cx.theme()` 借用了 `cx`，见 gpui-kit-dev 规范）

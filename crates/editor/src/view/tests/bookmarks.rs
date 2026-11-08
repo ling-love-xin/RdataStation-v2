@@ -6,7 +6,7 @@
 //! 像素效果靠人工验收。
 
 use gpui_kit::base::input::{GutterMarker, GutterMarkerKind};
-use gpui_kit::TestAppContext;
+use gpui_kit::{Focusable as _, TestAppContext};
 
 use crate::model::EditorMode;
 use crate::shared::EditorShared;
@@ -163,6 +163,72 @@ fn bookmark_hover_note_setting_off_strips_note(cx: &mut TestAppContext) {
     assert!(
         markers.iter().all(|marker| marker.note.is_empty()),
         "开关关闭后不下发说明文本"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 文本编辑后书签行号跟随平移（方案 A：内核编辑行增量）。
+///
+/// 钉的是**接线**：`support/bookmark.rs::adjust_for_edit` 的用例只证明算法，
+/// 这里从真实编辑（行首 Enter 插一行）走到 `InputEvent::Change` →
+/// `adjust_bookmarks_for_edit` → shared 书签 → sidecar 回写，证明书签真的跟着走。
+#[gpui_kit::test]
+fn bookmarks_follow_an_inserted_line(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let dir = temp_dir("bookmark_shift");
+    let path = dir.join("shift.sql");
+    std::fs::write(&path, "select 1\nselect 2\nselect 3").expect("写盘");
+    let shared = EditorShared::new();
+    let id = crate::persist::open_file(&shared, &path, EditorMode::Sql)
+        .expect("打开")
+        .id()
+        .clone();
+
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-bookmark-shift");
+    let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 第 3 行放一枚带说明书签
+    cx.update(|window, cx| {
+        panel.update(cx, |p, cx| {
+            p.apply_bookmark_label(3, "第三行".to_string(), window, cx)
+        });
+    });
+    assert_eq!(shared.bookmarks(&id)[0].line, 3);
+
+    // 打开后光标在文首；聚焦内核编辑器后插一个换行（原第 3 行 → 第 4 行）
+    let handle = cx.update(|_window, cx| panel.read(cx).editor.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+    let end = cx.update(|_window, cx| panel.read(cx).editor.read(cx).selected_range().end);
+    assert_eq!(end, 0, "前提：打开后光标在文首");
+    cx.simulate_input("\n");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
+    assert!(
+        text.starts_with('\n'),
+        "前提：换行确实插在文首，实际 {text:?}"
+    );
+    assert_eq!(
+        shared.bookmarks(&id)[0].line,
+        4,
+        "书签应随插入整体下移一行"
+    );
+    // 说明文本不随行号变（说明是用户写的，不是行号）
+    assert_eq!(shared.bookmarks(&id)[0].label, "第三行");
+
+    // 再删掉这行（Backspace 在行首合并空行）→ 书签回到第 3 行
+    cx.simulate_keystrokes("backspace");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
+    assert_eq!(text, "select 1\nselect 2\nselect 3", "前提：删行回到原文");
+    assert_eq!(
+        shared.bookmarks(&id)[0].line,
+        3,
+        "书签应随删行整体上移一行"
     );
 
     let _ = std::fs::remove_dir_all(&dir);
