@@ -55,8 +55,8 @@ P1 边界（已实现，勿当缺口）：`SELECT *` 只展开实体表；表达
 | 项 | 现状 | 影响 / 处置 |
 | --- | --- | --- |
 | origin/main 推送 | ✅ 已推送（2026-10-28）：44 个 commit 同步（0 领先 0 落后），含内核能力释放 / A 方案 / cell 菜单 / 结果集 tab 一致化等 | 完成 |
-| insight 线大量未提交 | 工作区 47 处：`crates/insight/*`、`plugin/*`、`workbench/tests/*`（3 个）、docs/insight 等 | 阻塞 `cargo test -p rds-workbench` 整包（test-cfg 编译错误）；P 线提交不碰 Cargo.lock / insight 文件 |
-| Cargo.lock 未提交改动 | 被其他线改过 | 不随 P 线提交 |
+| insight 线未提交（外部线） | 2026-11-08 复核：未提交只剩 `docs/architecture/insight/**`（1 处修改 + 6 个未跟踪），`crates/insight/*` / `plugin/*` 均已落库 | ✅ **不再阻塞**：`cargo test -p rds-workbench --lib --no-run` exit 0（2.07s，已编过）；用例本次未跑 |
+| Cargo.lock 未提交改动 | 2026-11-08 复核 `git status` 不含 Cargo.lock | ✅ 已无改动 |
 
 ## 六、已完结（盘点确认无遗留）
 
@@ -177,7 +177,7 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 
 ## 九、未决项（不编造，记录现状）
 
-- AGENTS.md 标「GPUI-kit 0.8.x」而 vendor / 代码按 0.7.1（版本口径是否有意，未确认）
+- ~~AGENTS.md 标「GPUI-kit 0.8.x」而 vendor / 代码按 0.7.1~~：✅ **已闭合**（2026-11-08 核实）——`Cargo.toml` 为 `gpui-kit = "0.8.1"`，`Cargo.lock` 的 gpui-kit / gpui-base / gpui-component 均 **0.8.1**、gpui-pre **0.3.10**，`vendor/{gpui-base,gpui-component}` 同为 0.8.1；AGENTS.md 的「0.8.x」是正确口径
 - 执行上下文模型（DBeaver per-context 独立连接）：讨论定稿未开工（0.2.4 不实现，见 `../connection/execution-context-model.md`）
 - ~~列宽持久化~~：✅ 已交付（2026-11-08，落会话 `result_column_widths`，受 `result_panel.persist_column_widths` 开关控制）
 - analyze 路径结果无列类型/注释（`ResultSet` 无类型字段，已知边界）
@@ -247,3 +247,74 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 | `rds-mock` 两条 warning | ① `mock_view/mod.rs` `use crate::history::{self, …}` 的多余 `self`；② `pub(crate) fn spawn_history` 收私有 `HistoryTask`（`private_interfaces`） | ① 去掉 `self`；② `HistoryTask` 提 `pub(crate)` 并注明白为何不留在私有 | ✅ 已清 |
 | `generators` 测试是孤儿 | `144c4c0b` 拆文件时把内联 `mod tests` 提成 `crates/mock/src/generators/tests.rs`，却没在 `generators/mod.rs` 声明；同时 `text.rs` 末尾留着指向不存在 `generators/text/tests.rs` 的 `#[cfg(test)] mod tests;` → `cargo test -p rds-mock --lib` 自那时起 `E0583` 编译失败，**69 个生成器用例从未跑过**（`cargo check` 不带 `--all-targets` 不编译 `cfg(test)`，所以 workspace check 一路绿灯） | `mod.rs` 补 `#[cfg(test)] mod tests;`（附原因注释）、删 `text.rs` 断链与文件末尾多余的模块闭合括号；`cargo test -p rds-mock --lib` 首跑 243 例 | ✅ 已修，243 passed |
 | 类型不匹配警示用例走错入口 | `column_dialog_shows_type_mismatch_warning` 用「换生成器」触发警示，但 `apply_generator_config_to_draft` 会顺带把 `data_type` 同步成生成器产出类型 → 恒不匹配；真实触发是「改类型下拉、生成器不动」 | 把下拉回调抽成 `MockDetailView::select_column_type`（UI 与用例同一入口），用例改走它 | ✅ 已修 |
+
+## 十五、全模块遗留盘点（2026-11-08，调用链核对）
+
+盘点口径：文档声明 + 代码内 `暂不/后续/尚未/未实现` 声明（58 处）+ 设置项消费核对
+（`settings/registry/entries/editor.rs` 17 个 `editor.*` key 逐个回 `crates/editor/src` 查消费）。
+任一条按**调用链五段**（定义 → 生产者 → 通道 → 宿主消费 → 落盘/回放）核对，缺一段才算真遗留。
+
+边界：本表只记**代码侧调用链缺段**。gpui-kit 0.9.0 + gpui-fast 合并后需要**人工目视**验收的 8 项
+（判的是"画面有没有"，自动化观察层读不到）记在 `../ui/ui-todo.md` §五，不进本表；`rds-editor --lib`
+的两条已知失败用例（`legacy.rs:58`、`notebook_win.rs:347`）见 `../ui/gpui-kit-0.9.0-upgrade-report.md` §12。
+
+### 15.1 真遗留（调用链缺段，带证据）
+
+| 优先级 | 项 | 缺在哪一段 | 证据 |
+| --- | --- | --- | --- |
+| **高** | **折叠候选的后台路径不吃 `editor.fold_open_keywords` / `fold_close_keywords`** | 生产者：`Job` 无关键字字段，`run()` 写死默认表 | ✅ **本轮已修，见 15.4**。原证据：`support/scan.rs:88-97`（`Job{revision,text,channel,scope,catalog,dialect}`）、`support/scan.rs:236-242`（硬编码 `CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT` / `END`）；消费在 `view/host/exec/pump.rs:98-105`（`fold::refresh` 覆盖候选）。前台正确口径：`view/host/render.rs:49-55`（设置→shared）+ `view/host/ops.rs:420-431`（`sync_fold`→`fold::install`）。**原后果**：改设置后首帧正确，编辑一次即被后台候选覆盖回默认关键字（设置静默失效） |
+| 高 | 右键菜单无 SQL 执行项 | 宿主消费分支：`menu_entries` 无执行条目 | `view/editor_menu.rs:63-110`（剪切/复制/粘贴/全选/添加书签说明/转到定义/代码操作） |
+| 中 | 书签行号漂移不校正 | 回放：sidecar 行号不随编辑平移 | `view/host/bookmarks.rs:61` |
+| 中 | 分析模式逐单元补全未装 provider | 装配：cell 编辑器只建实例不装 provider | `view/host/notebook.rs:44-49`（`EditorState::new(..).language(..)` + `set_value`，无 completion / diagnostics）；`completion::install` 仅两处主编辑器（`view/host/mod.rs:633`、`view/host/session.rs:498`） |
+| 中 | 标签方案 B（结构化 `tags`）/ C（全局 Tag System） | 数据层：现只有 A「说明即标签」 | §十二 |
+| 低 | 跳转后自动弹说明 / hover 300ms 延迟 | 事件回传：`jump_to_line` 不回传行号 | §十二（`gutter_hovered_row` 当帧计算） |
+| 低 | 修饰符高亮未映射（readonly / deprecated） | 渲染：主题侧无对应 token | `view/highlight.rs:217` |
+| 低 | 脚本执行超时不可配 | 设置：无 `editor.env_timeout` | `ports/editor_env.rs:69` |
+| 低 | R 内核单元占位（只有语言标签） | 执行端：无 R 解释器 | `notebook/cell.rs:49` |
+| 下期 | P3 钻取关联数据（右键值→查关联表） | 入口：菜单未接 | §一（用户明确下期） |
+| 下一版本 | 执行上下文模型（per-context 独立连接/事务/取消） | 整体未开工 | §二 + `../connection/execution-context-model.md` |
+| 记录在案 | 高亮 token 自定义 A+B | 配置层：无入口 | §十一 |
+| 已排除 | 不可见字符替换字形 | 内核 `RangeDecorationStyle` 无 replacement 字形 | §六（⛔ 不硬做） |
+| 已排除 | 三通道 `尚未接入 / 尚未注册外部源` 文案 | 设计如此（宿主没注入端口就如实报不可用） | `exec/channel.rs:59/278`、`view/host/render.rs:555` |
+
+### 15.2 文档漂移（声明仍写「未实现」，调用链已闭合）
+
+| 位置 | 旧声明 | 实际情况 |
+| --- | --- | --- |
+| `lsp/mod.rs:19` | 「其余 hover / definition 等 provider 槽位暂未实现」 | 已实现并挂载：`lsp/sql_hover.rs`（`view/host/session.rs:503-506`）、`lsp/sql_definition.rs`（工具栏/右键「转到定义」）、`lsp/sql_code_action.rs`、`lsp/document_color.rs` |
+| `view/analysis.rs:9`、`:520` | 「单元正文按纯文本渲染，编辑内核复用属后续」 | 已复用内核：`analysis.rs:273-300` 挂 `Editor::new(&editor)`（定高 + 中文右键菜单）；纯文本只剩 `when_none` 回退分支（`:260-272`，编辑器实例没建出来时） |
+| `view/host/notebook.rs:28` | 【遗留 #10】「为一个单元确保内核编辑器实例存在」 | #10 已交付，措辞应改 |
+| §五 | insight 未提交阻塞 workbench 整包测试 | `cargo test -p rds-workbench --lib --no-run` exit 0（2.07s） |
+| §九 | AGENTS.md 0.8.x 与 vendor 0.7.1 口径未确认 | 全链 0.8.1（`Cargo.toml` / `Cargo.lock` / `vendor`），AGENTS.md 正确。**盘点当日晚间已升 gpui-kit 0.9.0 / gpui-pre 0.3.11**，见 `../ui/gpui-kit-0.9.0-upgrade-report.md` |
+
+### 15.3 优化点（不影响可用性）
+
+| 项 | 观察 | 建议 |
+| --- | --- | --- |
+| 折叠候选算两遍 | 前台 `sync_fold`（`fold::install`，全文）与后台 scan（`fold::spans`，全文）各算一次；后者每编辑一拍 | **关键字已贯通（15.4 已做）**；"后台成为唯一候选来源、前台 install 只在设置/模式/换文本变化时跑"**未做**（会改候选刷新时机，等折叠区人工验收完再动） |
+| 设置项消费面已核 | 17 个 `editor.*` 除 `inline_completion` 外都有代码消费；`default_line_ending` / `default_tab_size` / `default_hard_tabs` 在新文档创建时读（`view/host/mod.rs:1201-1205`） | `inline_completion` 是**刻意置灰**（B1 预留），放开 `disabled` 时必须同步接 provider，否则即静默失效 |
+| 大文件 | `ports/editor_exec.rs` 1947 行、`view/host/mod.rs` 1366、`quick_open/model.rs` 1226、`view/dialogs.rs` 1220 | 沿 `view/host/` 已验证的按域拆分惯例继续切 |
+| `view/signature_help.rs:17` | 「DBeaver 式完整目录留给后续」 | 已有 C5 函数手册 + #54 B 目录注入，复核这句是否还成立 |
+
+### 15.4 本轮已修（2026-11-08，15.1 第 1 条）
+
+**折叠关键字贯通后台扫描**（`crates/editor` 内 2 文件）：
+
+- `support/scan.rs`：新增 `FoldKeywords { open, close }`（`defaults()` 与 settings 默认同值；
+  `Default` 刻意取内置表而非空表——空表会让扫描一个块候选都不给）；`Job` 增加 `fold_keywords`
+  字段；`run()` 删掉硬编码关键字表，改用提交时带进来的值。
+- `view/host/exec/scan.rs::submit_scan`：从 `shared.fold_open_keywords()` / `fold_close_keywords()`
+  取设置值（与前台 `sync_fold` 同一份 shared，同源），随 `Job` 进扫描线程。
+- 新增用例 `the_scan_uses_the_fold_keywords_it_was_given`：同一段 `WHEN … END` 文本，
+  默认口径 0 个块候选、自定义口径 1 个 `(0, 2)` 候选，钉住"后台真的吃了设置"。
+  **选词注意**：`fold::spans` 只在词法归 `Keyword` 的 token 上判块，`DO` 这类词会落进
+  `Identifier`，写这类用例必须用真关键字。
+
+验证：`cargo check -p rds-editor --all-targets -j 1` → 0；`cargo test -p rds-editor --lib -- --test-threads=1`
+→ 758 passed / 2 failed / 1 ignored（两条失败即本节开头边界里记的基线）；`cargo test -p rds-workbench --test ui_contract` → 9 passed。
+
+**附带修复**（不在本模块范围，但阻塞 `--all-targets` 编译）：vendor `gpui-base` 的
+`text/node.rs` / `test_support.rs` 仍按 `Rc::as_ptr(window.text_system())` 取身份指针，而
+gpui-pre 0.3.11 起 `text_system()` 返回 `&Arc<WindowTextSystem>` → E0308，必须改 `Arc::as_ptr`。
+
+**未做（有意）**：前台/后台候选双算的合并（会改候选刷新时机，等折叠区人工验收完再动），见 15.3 第 1 条。
