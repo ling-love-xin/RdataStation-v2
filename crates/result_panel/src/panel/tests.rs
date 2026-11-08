@@ -233,6 +233,19 @@ fn rendered_ui_elements_survive(cx: &mut gpui_kit::TestAppContext) {
     // 1) 空面板根恒渲染
     assert!(visible("editor-result-root", cx), "空面板根应渲染可见");
 
+    // 1.5) 筛选区外框（DBeaver `CompositeBorderPainter` 等价物）：
+    //      高 26px = `Input.small()` 24 + 上下各 1px 边框；落在 32px 工具栏里居中
+    //      → 上下各 3px，正好等于 DBeaver 的 `marginHeight = 3`（`ResultSetFilterPanel.java:164`）。
+    //      量绝对像素而不是比值：Input 档位、边框、工具栏高任一改动都会先红。
+    let filter_bounds = cx
+        .debug_bounds("editor-result-filter")
+        .expect("筛选区外框必须带 debug_selector 才量得到");
+    let filter_height = f32::from(filter_bounds.size.height);
+    assert!(
+        (filter_height - 26.0).abs() < 0.5,
+        "筛选区外框应为 26px（Input 24 + 上下边框各 1px，对齐 DBeaver marginHeight=3），实际 {filter_height}px"
+    );
+
     // 2) 展开筛选条：两内嵌按钮（左=展开 / 右=运行）随条出现
     cx.update(|_, app| panel.update(app, |p, cx| p.toggle_filter_expand(cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));

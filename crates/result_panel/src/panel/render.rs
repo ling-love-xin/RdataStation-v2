@@ -3,6 +3,7 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::input::Input;
@@ -196,20 +197,50 @@ impl ResultPanel {
         // （Maximize2）打开顶宽筛选条（filter_expanded，输入框移到工具栏下方全宽）。
         // 展开态下工具栏筛选组不再渲染输入框（同一 InputState 实体一帧只能渲染
         // 一处，双渲染会元素 id 冲突），只留展开按钮（toggled 高亮指示展开态）。
+        // 【DBeaver 对齐 2026-11-08】筛选区外框（`CompositeBorderPainter` 等价物）：
+        // DBeaver 的 `filterComposite` 挂 `new CompositeBorderPainter(...)`
+        // （`ResultSetFilterPanel.java:182`），`CompositeBorderPainter.paintControl` 沿外框
+        // `gc.drawRectangle(0, 0, bounds.width - 1, bounds.height - 1)` 画**一整圈 1px**
+        // （`CompositeBorderPainter.java:34-39`）。它圈住的是「活动对象 / 展开 / 筛选文本 /
+        // 执行 / 历史」五个子控件，也就是**整个筛选区是一组**。本仓对应结构是
+        // 「筛选输入 + 运行（suffix）+ 展开 + 清除」，所以由这个容器自己画边框。
+        //
+        // 底色：DBeaver 文本框底是列表底（`UIStyles.getDefaultTextBackground()` →
+        // `COLOR_LIST_BACKGROUND`，`UIStyles.java:131-133`），而外层面板是 widget 灰底；
+        // 本仓即 `theme.colors.background`（面板白）压在工具栏的 `tab_bar` 灰底上。
+        //
+        // 高度不写死：`Input.small()` 24px + 上下各 1px 边框 = 26px，落在 32px 工具栏里
+        // 居中 → 上下各 3px，正好等于 DBeaver 的 `marginHeight = 3`。
+        //
+        // 宽度 `flex_1`：DBeaver 左列是 `GridData(FILL_HORIZONTAL)`（`:180`），右列 ToolBar
+        // 才是内容宽；此前固定 11.25rem(180px) 撑不满一行，看着"没对齐"。
+        let theme = cx.theme();
         let filter = div()
             .h_flex()
             .items_center()
             .gap_1()
+            .flex_1()
+            .min_w_0()
+            .bg(theme.colors.background)
+            .border_1()
+            .border_color(theme.colors.input)
+            .rounded(theme.radius)
             .debug_selector(|| "editor-result-filter".to_string())
             .when(!self.filter_expanded, |row| {
                 let run_queue = self.queue.clone();
                 row.child(
-                    div().w(rems(ui::RESULT_FILTER_WIDTH)).child(
+                    div().flex_1().min_w_0().child(
                         // 【2026-11-08 高度对齐】Input 默认 Medium 档 = 32px，在 40px 工具栏里
                         // 上下只剩 4px，且与同排 `Toolbar` XSmall 的 24px 按钮差 8px 高。
                         // 降到 `small`（24px）后一行控件同档；字号随之 12px → 14px（更好读）。
+                        //
+                        // 【DBeaver 对齐】`appearance(false)` 让出 bg / rounded / 焦点环：
+                        // 那圈边框现在由外层容器画（DBeaver 内部文本框本身无边框），
+                        // 否则两层描边会叠成双框。焦点靠 caret 指示，与 DBeaver 的
+                        // StyledText 一致（它那圈框也不随 focus 变色）。
                         Input::new(&self.filter_input)
                             .small()
+                            .appearance(false)
                             .suffix(
                                 Button::new("editor-result-filter-run")
                                     .ghost()

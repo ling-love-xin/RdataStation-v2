@@ -1699,6 +1699,52 @@ XSmall 的 `p_1` 上下 8px」。`Input` 在 §8.32 前后已降到 `.small()`�
 - **筛选条高度 28-32px 的精确对齐**：DBeaver 由内容自然决定（无常量），我们受组件最小档约束取
   32px，理论上有 0-4px 残差；**未在真 DBeaver 里量过实际像素**（本仓没有可运行的 DBeaver 实例）。
 
+### 8.35 结果集工具栏第二轮对齐（筛选区外框 / 3px 内距 / 吃满宽 / 右段去内距，2026-11-08）
+
+§8.34 交付后用户确认「先按 A」（底色保持 `tab_bar.background` = `#F8F8F8`，不做整体压暗），
+同时要求「工具栏的调整对齐要赶紧对齐」——颜色选择先冻结，结构对齐继续推。
+
+**本轮五项（前四项合成一个「筛选区控件组」，第五项是右段边缘）**：
+
+| # | 项 | DBeaver 依据 | 改前 | 改后 |
+| --- | --- | --- | --- | --- |
+| 1 | 工具栏水平内距 | `GridLayout.marginWidth = 3`（`ResultSetFilterPanel.java:165`） | `px_2`(8px) | `RESULT_TOOLBAR_PADDING` = `px(3.)`（`ui.rs` 新增常量） |
+| 2 | 筛选区**一整圈** 1px 框 | `filterComposite` 挂 `CompositeBorderPainter`（`:182`）→ `drawRectangle(0, 0, w-1, h-1)`（`CompositeBorderPainter.java:34-39`） | 无外框，只有 `Input` 自带边框 | 容器 `border_1 + border_color(colors.input) + rounded(theme.radius)`；`Input` 改 `.appearance(false)` 让出边框 |
+| 3 | 筛选区底 | `getDefaultTextBackground()` → `COLOR_LIST_BACKGROUND`（`UIStyles.java:131-133`） | 透明（直接吃工具栏 widget 灰） | `colors.background`（面板白）压在 `tab_bar` 灰底上 |
+| 4 | 宽度分配 | 左列 `GridData(FILL_HORIZONTAL)`（`:180`）、右列 ToolBar 内容宽 | 固定 `11.25rem`(180px) | 左段与筛选容器都 `flex_1 + min_w_0` |
+| 5 | 右段 ToolBar 内距 | 右列 ToolBar 自身没有内边距，图标距面板边 3px | 组件 XSmall 自带 `p_1`（8px）→ 右端 11px 空白 | `.p_0()` 覆盖（`refine_style` 在 `p_1` 之后，vendor `toolbar.rs:253-257`） |
+
+**筛选区高度为什么是 26px（而不是硬给一个常量）**：`Input.small()` 24px + 上下各 1px 边框
+= 26px，落在 32px 工具栏里 `items_center` 居中 → 上下各 3px，**正好等于 DBeaver 的
+`marginHeight = 3`**。所以没有新增高度常量：3px 是算术结果，不是抄来的数字。同理工具栏只加
+水平 `.px(3px)` 不加 `.py()`——右段 `Toolbar` 受 `min_h_7`(28) 托底，一旦把可用高度压到
+26px 就会裁掉它自己的内边距。
+
+**为什么让 `Input` 交出边框**：DBeaver 那圈框画在**父 composite** 上，内部的 `StyledText` 本身
+无边框。我们若两层都画就是双框叠加。`appearance(false)` 同时关掉 bg / rounded / 边框 /
+焦点环（vendor `input.rs:798-804`、`:809`）。**这是本轮的取舍**：输入框不再有自身焦点环，焦点
+靠文字 caret 指示——与 DBeaver 一致（它那圈框也不随 focus 变色），但比 gpui-kit 默认的
+`bordered + focus_ring` 弱一档。要回退只需两处：去掉 `.appearance(false)`、撤掉容器边框。
+文本内距不受影响（`BaseInput` 的 `input_px/input_py` 在 `input.rs:788-789`，与 appearance 无关）。
+
+**3px 为什么不吃 `px_1`(4px) 档位**：DBeaver 原值就是 3；`ui.rs` 是尺寸常量单一来源，
+`px(N.)` 在那是推荐写法（`ui_guard` 的 `BASELINE` 记为额度，本轮 `16 → 17` 并加注理由）。
+
+**验证**：`cargo check -p rds-result-panel` Finished **0 warning**；
+`cargo test -p rds-workbench-shell --lib` = **14 passed**；
+`cargo test -p rds-result-panel --lib` = **242 passed / 0 failed**（用例数不变，断言加在既有
+`panel::tests::rendered_ui_elements_survive`：**真实面板**渲染两帧后 `debug_bounds`
+量出 `editor-result-filter` 外框高 **26px**，Input 档位 / 边框 / 工具栏高任一改动都会先红）；
+`cargo test -p rds-ui-guard` = **4 passed**（`BASELINE` 更新后；首轮曾因新增 `px(3.)` 命中
+`no_new_hardcoded_color_or_pixel` 而 FAILED，是门禁按设计生效）。
+
+**「图片分隔符」一项改判为已对齐（不再算缺口）**：DBeaver 用 `UIIcon.SEPARATOR_V` **图片资产**
+（`UIUtils.java:218-222`）是因为 SWT `ToolItem` 里画不了线；本仓用 `div` 画 1px 竖线是**同一个
+视觉结果**，不是降级。仍保留 1×24px，不引入资产。
+
+**仍未做**：DBeaver 筛选条的真实像素高（本仓没有可运行的 DBeaver 实例，只能按「组件最小档 +
+与标签条等高」推），这条继续作为未验证项登记。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

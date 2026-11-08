@@ -43,7 +43,10 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // 内容高里各被裁一半）。列头菜单占宽那档（`RESULT_FIT_COLUMN_MENU`）已删除——菜单
     // 改成绝对定位、悬停才显形，不再占列宽也不再参与测宽。
     // 本文件是尺寸常量单一来源，`px(N.)` 在此是**推荐写法**，不是违规。
-    ("crates/result_panel/src/ui.rs", 0, 16),
+    // 2026-11-08 16 → 17：新增 `RESULT_TOOLBAR_PADDING = px(3.)`，对齐 DBeaver
+    // `ResultSetFilterPanel` 的 `GridLayout.marginWidth = 3`（`ResultSetFilterPanel.java:165`）。
+    // 3px 是 DBeaver 原值，不能拿 `px_1`(4px) 凑档位。
+    ("crates/result_panel/src/ui.rs", 0, 17),
     ("crates/settings/src/skeleton.rs", 0, 1),
     ("crates/workbench/src/components/dialog_helpers.rs", 0, 1),
     (

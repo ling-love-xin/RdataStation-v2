@@ -279,7 +279,10 @@ pub fn render_toolbar(
         .items_center()
         .justify_between()
         .gap_2()
-        .px_2()
+        // 水平内距 3px（`ui::RESULT_TOOLBAR_PADDING`）：DBeaver 的筛选条面板 `marginWidth = 3`
+        // （`ResultSetFilterPanel.java:163-166`），此前 `px_2`(8px) 宽了 5px。垂直方向不加，
+        // 由「32px 行高居中 26px 筛选区」自然形成 3px（见 `ui.rs` 常量注释）。
+        .px(ui::RESULT_TOOLBAR_PADDING)
         // 高度 32px（`ui::RESULT_TOOLBAR_HEIGHT`）= 右段 24px 控件 + Toolbar 的 `p_1` 上下
         // 8px，即**内容自然高**；同时与标签条（`ui::RESULT_TABS_HEIGHT`）等高。
         //
@@ -307,6 +310,10 @@ pub fn render_toolbar(
                 .h_flex()
                 .items_center()
                 .gap_2()
+                // 左段吃满剩余宽：DBeaver 左列（筛选复合体）是 `GridData(FILL_HORIZONTAL)`
+                // （`ResultSetFilterPanel.java:180`），右列才按内容宽。不给 `flex_1` 时左段
+                // 会收缩到内容宽，里面那个 `flex_1` 的筛选框也就撑不开（flex_basis 无处分配）。
+                .flex_1()
                 .min_w_0()
                 // 【1.1】工具栏最左侧 SQL 预览：面板构造的可点击元素（Button 自带 hover
                 // 高亮 + 手型提示可点击；点击展开完整 SQL 条，见 panel.rs render）
@@ -327,6 +334,13 @@ pub fn render_toolbar(
             // DBeaver 的观感）；只有两组都非空时才插，避免空段留一条孤线。
             Toolbar::new("editor-result-toolbar-actions")
                 .xsmall()
+                // 【DBeaver 对齐 2026-11-08】组件 XSmall 档自带 `p_1`（上下左右各 8px，见
+                // vendor `toolbar.rs:253`），会把工具栏那 3px 外边距整个吃掉——右端图标距
+                // 面板边缘变成 11px，DBeaver 只有 3px（`ResultSetFilterPanel.java:165`
+                // 的 `marginWidth = 3`，右列 ToolBar 本身没有内边距）。
+                // `refine_style` 在 `p_1` 之后执行（`toolbar.rs:253-257`），外部 `.p_0()`
+                // 的 `padding: Some(..)` 会覆盖它；高度由 `min_h_7`(28) 托底，图标仍 24px 居中。
+                .p_0()
                 .contents({
                     let mut contents: Vec<AnyElement> = [pushdown, comments]
                         .into_iter()

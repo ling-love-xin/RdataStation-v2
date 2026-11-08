@@ -59,6 +59,18 @@ pub const RESULT_STATUS_BAR_HEIGHT: f32 = 1.5;
 /// 一条整齐的 chrome 带（DBeaver 这两块同高、同 widget 底色）。
 pub const RESULT_TOOLBAR_HEIGHT: f32 = 2.0;
 
+/// 结果工具栏水平内距（3px）
+///
+/// 【DBeaver 对齐 2026-11-08】DBeaver 的筛选条面板是 `GridLayout(2, false)` 且
+/// `marginHeight = 3` / `marginWidth = 3`（`ResultSetFilterPanel.java:163-166`），
+/// 四边各留 3px。此前这里用 `px_2`（8px，Tailwind 档位），比 DBeaver 宽 5px。
+///
+/// 只给水平：垂直方向 DBeaver 的 3px 由「面板 26px 内容 + 32px 行高居中」自然形成
+/// （我们的筛选区外框 = Input 24px + 上下各 1px 边框 = 26px，32px 行里居中 → 上下各 3px）。
+/// 不能给 `.py()`：右段 `Toolbar` 的自然高就是 32px（`min_h_7` 28 + `p_1` 上下 8 的内容高），
+/// 一旦把可用高度压到 26px 就会裁掉它的内边距。
+pub const RESULT_TOOLBAR_PADDING: Pixels = px(3.);
+
 /// 结果集标签条高（2rem = 32px）
 ///
 /// 2026-11-08 抬到 32px：此前是 1.5rem(24px)，与 `TabBar::with_size(Size::Small)`
@@ -73,7 +85,11 @@ pub const RESULT_TABS_HEIGHT: f32 = 2.0;
 /// 行号跳转输入是 backlog；窄框对齐 DBeaver 状态行中段的小输入槽位）
 pub const RESULT_ROW_COUNT_BOX_WIDTH: f32 = 4.5;
 
-/// 结果工具栏的本地筛选框宽（11.25rem = 180px；原型 §5.5 的 `⌕ 筛选`，够放下十来个字符的词）
+/// 筛选输入框宽（11.25rem = 180px；原型 §5.5 的 `⌕ 筛选`，够放下十来个字符的词）
+///
+/// 【2026-11-08 起只剩一个消费者】工具栏筛选框已改为 `flex_1` 吃满剩余宽（对齐 DBeaver
+/// 左列 `GridData(FILL_HORIZONTAL)`，`ResultSetFilterPanel.java:180`），本常量现在只给
+/// **结果集重命名输入框**用（`panel/render.rs` 的重命名条）。
 pub const RESULT_FILTER_WIDTH: f32 = 11.25;
 
 /// 结果网格列宽（128px；`Column::width` 只收 `Pixels`，故这里不做 rem 换算）

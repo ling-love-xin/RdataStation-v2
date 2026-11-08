@@ -461,11 +461,41 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 **242 passed**（新增 `grid::tests::the_result_toolbar_keeps_the_tabs_height`，真实布局量出 32px）；
 `rds-ui-guard` 4 passed。网格可用高度 +8px，控件一个像素没动（不触发 §2.10 记的 Input 焦点链风险）。
 
-**未做**：筛选区整圈 1px 边框（`CompositeBorderPainter`，等价需自绘容器包住预览 + 筛选，与「禁手搓」
-冲突）；面板四周 3px 外边距（现 `px_2` = 8px、无垂直内距）；图片分隔符（`UIIcon.SEPARATOR_V`，本仓资产
-无同名图）；DBeaver 筛选条真实像素高未在真实例上量过（本仓无可运行 DBeaver）。
+**当时未做**（其中前两项已由 §2.26 补上，第三项改判为「视觉等价、不算缺口」）：筛选区整圈 1px 边框
+（`CompositeBorderPainter`，需自绘容器包住筛选组）；面板四周 3px 外边距（当时 `px_2` = 8px、无垂直
+内距）；图片分隔符（`UIIcon.SEPARATOR_V`）；DBeaver 筛选条真实像素高未在真实例上量过（本仓无可运行
+DBeaver）。
+
+### 2.26 2026-11-08（工具栏第二轮：筛选区外框 / 3px 内距 / 吃满宽 / 右段去内距）
+
+用户「先按 A」（底色 `#F8F8F8` 不动）＋「工具栏的调整对齐要赶紧对齐」。
+
+| # | 项 | DBeaver 依据 | 改后 |
+| --- | --- | --- | --- |
+| 1 | 工具栏水平内距 | `marginWidth = 3`（`ResultSetFilterPanel.java:165`） | `ui::RESULT_TOOLBAR_PADDING` = `px(3.)`，`.px()` 用它 |
+| 2 | 筛选区一整圈 1px 框 | `CompositeBorderPainter`（`:182` / `.java:34-39`） | 容器 `border_1 + border_color(colors.input) + rounded`；`Input.appearance(false)` 让出边框 |
+| 3 | 筛选区底 | `COLOR_LIST_BACKGROUND`（`UIStyles.java:131-133`） | `colors.background`（白） |
+| 4 | 宽度分配 | 左列 `FILL_HORIZONTAL`（`:180`） | 左段 + 筛选容器 `flex_1 + min_w_0`；`RESULT_FILTER_WIDTH` 只剩重命名框消费 |
+| 5 | 右段 ToolBar 内距 | 右列 ToolBar 无内边距 | `.p_0()`（`refine_style` 在 `p_1` 之后，vendor `toolbar.rs:253-257`） |
+
+**高度没新增常量**：`Input.small()` 24 + 上下边框各 1 = **26px**，32px 工具栏里居中 → 上下各
+3px = DBeaver `marginHeight = 3`。工具栏**只加水平 px、不加 py**：右段 `Toolbar` 有 `min_h_7`(28)
+托底，压到 26px 会裁它的内边距。
+
+**取舍（需知情）**：`Input.appearance(false)` 会一并去掉输入框自身的**焦点环**，焦点改由 caret
+指示（DBeaver 的框同样不随 focus 变色）。觉得太弱就回退两处：去掉 `.appearance(false)` + 撤掉
+容器边框。
+
+**验证**：check 0 warning；result_panel **242 passed**（断言加在既有
+`panel::tests::rendered_ui_elements_survive`，真实面板量出外框 26px）；workbench-shell 14 passed；
+ui-guard 4 passed（`BASELINE` 从 `(0, 16)` 调到 `(0, 17)`，因新增 `px(3.)`——首轮是门禁先红的，
+按设计生效）。
+
+**「图片分隔符」改判为已对齐**：DBeaver 用图片是因为 SWT `ToolItem` 画不了线，本仓 `div` 1px 竖线
+是同一视觉结果。
 
 ---
+
 
 ## 3. 并行线协作纪律（工作区现状）
 
@@ -490,7 +520,7 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 ## 5. 常用锚点（行号随近期提交微移，以现场 grep 为准）
 
 - `panel/`：`mod.rs`（门面 + pub 面 re-export：`GridPayload` / `ExportCtx` / `ResultSyncInput` / `ResultPanel` / `AnalysisItem`）；`render.rs` 主 `render` 组装；`sidebars.rs` `render_vertical_bar`（左缘竖条：网格/文本/记录/上一行/下一行）/ `render_right_edge_bar`（右缘竖条，页签图标区）/ `render_right_sidebar`（横 tab 只显激活页签）/ `render_browser_tab` / `render_filter_expand_bar`（展开条：左=展开右=运行无边框）+ `sidebar_width_anim` / `next_right_edge_state` 纯函数；`tabs.rs` `render_value_tab` / `render_stats_tab` / `render_group_tab` / `render_reference_tab`（backlog 空态）/ `render_exec_sql_tab` + `kv_row` / `fmt_stat` / `right_tab_from_index`；`dialog.rs` `render_sql_dialog`（SQL 预览弹窗浮层）；`events.rs` `toggle_value_sidebar`（三态）/ `toggle_transpose` / `open_sql_dialog` / `close_sql_dialog`（事件路径，需 window）+ `reorder_by` 纯函数；`lifecycle.rs` `new` / `sync`（投影同步）；`tests.rs` 尾部 `rendered_ui_elements_survive`（渲染断言防回退，见 §2.10）。
-- `ui.rs`：`RESULT_VERTICAL_BAR_WIDTH`（2.25）/ `RESULT_SIDEBAR_RIGHT_WIDTH`（20.0）/ `RESULT_STATUS_BAR_HEIGHT`（1.5）/ `RESULT_TOOLBAR_HEIGHT`（2.0，与 `RESULT_TABS_HEIGHT` 同高）。
+- `ui.rs`：`RESULT_VERTICAL_BAR_WIDTH`（2.25）/ `RESULT_SIDEBAR_RIGHT_WIDTH`（20.0）/ `RESULT_STATUS_BAR_HEIGHT`（1.5）/ `RESULT_TOOLBAR_HEIGHT`（2.0，与 `RESULT_TABS_HEIGHT` 同高）/ `RESULT_TOOLBAR_PADDING`（`px(3.)`，水平内距，对齐 DBeaver `marginWidth = 3`）。
 - `ports.rs`：`ResultRequest` 全集（含 #7 / §2.9 新增变体 `RunFilterAsQuery` / `ToggleFilterExpand` / `OpenSqlDialog` / `CloseSqlDialog`；`ToggleSqlPreview` 已删）+ `ResultActionQueue`（`request` / `set_panel` / `push` / `drain`）。
 - `grid/`：`delegate.rs` `ResultGridDelegate`（TableDelegate 主体实现 + 钩子类型 + RESULT_GRID_CONTEXT 等常量）；`cell.rs` `render_td` / `header.rs` `render_th` / `menu.rs` `context_menu`（trait 方法不可分块 → 顶层自由函数 + `table_impl.rs` 薄转发）；`status.rs` `render_status_row`（三项新签名）/ `ResultToolbar` / `ResultStatus` / `ResultControls` / `ResultPane`；`text.rs` `format_cell_text` / `view_rows.rs` `text_presentation` 指纹缓存 / `stats.rs` 列统计 / `edit.rs` 行编辑 / `tests.rs`（全量测试迁入）。
 - `store/`：`store.rs` `ResultStore`（按文档分槽，多结果集 sets(document) + TabBar 标签；事实档 A2 未接线）+ `entry.rs` / `fact.rs`。
