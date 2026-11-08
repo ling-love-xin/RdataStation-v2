@@ -30,8 +30,12 @@ pub const STATUS_DOT_SIZE: f32 = 0.375;
 /// 2026-11-02 收敛：此前这 13 个 `RESULT_*` 在 `result_panel/src/ui.rs` 与这里各定义一份。
 /// 其中 `RESULT_PANE_HEIGHT` 已实际漂移到两个值（这里 20.0 / 那边 18.0，而 result_panel
 /// 那份全仓无人引用、是死值，真正生效的是 20.0）。现在统一 re-export，改一处即改全部。
+///
+/// 2026-11-08：`RESULT_HEADER_HEIGHT` 已从 `result_panel::ui` 删除（那边实测全仓零使用、
+/// 32px 也与组件实际表头高 26px 不符，替换为 `RESULT_HEADER_COMMENT_ROW_HEIGHT`）。
+/// 这里同步去掉该项 re-export——漏掉这一处会让 `rds-editor` 编译失败（E0432）。
 pub use result_panel::ui::{
-    RESULT_COLUMN_MIN_WIDTH, RESULT_COLUMN_WIDTH, RESULT_FILTER_WIDTH, RESULT_HEADER_HEIGHT,
+    RESULT_COLUMN_MIN_WIDTH, RESULT_COLUMN_WIDTH, RESULT_FILTER_WIDTH,
     RESULT_HEADER_TYPE_FONT_SIZE, RESULT_MAX_HEIGHT, RESULT_MIN_HEIGHT, RESULT_PANE_HEIGHT,
     RESULT_ROW_NUMBER_WIDTH, RESULT_STATUS_BAR_HEIGHT, RESULT_TABLE_SIZE, RESULT_TABS_HEIGHT,
     RESULT_TOOLTIP_MAX_WIDTH,
