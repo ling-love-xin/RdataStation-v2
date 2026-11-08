@@ -3,8 +3,8 @@
 > 维护约定：本文档只记录**当前仍未完成 / 未接线**的事项；已完成项移入
 > `editor-impl-taskbook.md` 或对应提交。更新时同步任务板（#37 等）与
 > 本仓 git 提交链。状态字段：`待排期` / `已批准` / `进行中` / `下期` / `已关闭`。
-> 最后盘点：2026-11-08（书签与折叠线、SQL 三执行通道核证、语义层 workbench 注入闭合；
-> 新增 §十二 / §十三，漂移更正见文末「文档漂移更正」）。
+> 最后盘点：2026-11-09（逐单元补全/诊断/执行错误三条闭合后重排全量遗留，见 §16
+> 「遗留总账」；§15.14 / §15.15 为本轮改法记录）。
 
 ## 一、结果网格（DBeaver 表格能力分期）
 
@@ -294,7 +294,7 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 | 折叠候选算两遍 | 前台 `sync_fold`（`fold::install`，全文）与后台 scan（`fold::spans`，全文）各算一次；后者每编辑一拍 | **关键字已贯通（15.4 已做）**；"后台成为唯一候选来源、前台 install 只在设置/模式/换文本变化时跑"**未做**（会改候选刷新时机，等折叠区人工验收完再动） |
 | 设置项消费面已核 | 17 个 `editor.*` 除 `inline_completion` 外都有代码消费；`default_line_ending` / `default_tab_size` / `default_hard_tabs` 在新文档创建时读（`view/host/mod.rs` 的 `apply_editor_defaults`） | `inline_completion` 是**刻意置灰**（B1 预留），放开 `disabled` 时必须同步接 provider，否则即静默失效 |
 | 大文件 | ✅ `ports/editor_exec.rs` **已拆（2026-11-08）**：2058 行 → `ports/editor_exec/` 8 个文件（`mod.rs` 128 / `conn.rs` 83 / `accel_exec.rs` 102 / `federation.rs` 384 / `runner.rs` 741 / `convert.rs` 83 / `history.rs` 45 / `tests.rs` 532），最大块从 2058 降到 741。✅ `quick_open/model.rs` **已拆（2026-11-08）**：1299 行 → `quick_open/model/` 6 个文件（`mod.rs` 26 / `types.rs` 220 / `groups.rs` 241 / `sources.rs` 131 / `scoring.rs` 113 / `tests.rs` 588），最大块从 1299 降到 588。✅ `view/dialogs.rs` **已拆（2026-11-08）**：1303 行 → `view/dialogs/` 9 个文件（`mod.rs` 83 / `confirm.rs` 221 / `analysis_sql.rs` 65 / `value_preview.rs` 77 / `bind.rs` 92 / `connection_picker.rs` 199 / `schema_picker.rs` 210 / `bookmarks.rs` 298 / `picker_tests.rs` 95），最大块从 1303 降到 298。✅ `view/host/mod.rs` **已拆（2026-11-08，实测 1478 行——本节旧记的 1366 已过期）**：1478 → 留在 `mod.rs` 668（模块文档 + 导入 + `PendingExport`/`PendingBind`/`EditMode`/`EditorStatusSnapshot`/`EditorHostEvent`/`EditorHostPanel` 结构定义 + 子模块声明 + 构造以外的 impl 方法 + 尾部 re-export）/ `construct.rs` 645（`EditorHostPanel::new` 那一个 636 行单体，独立 `impl` 块）/ `settings_defaults.rs` 180（15 个「设置 → 行为」读取辅助，全部 `pub(crate)` 并由 `pub(crate) use settings_defaults::*;` 转出，调用点零改动），最大块从 1478 降到 668。**四处大文件全部拆完** | 沿 `view/host/` 已验证的按域拆分惯例切完。`editor_exec/runner.rs`（741）与 `model/tests.rs`（588）已到无痛上限：`impl QueryRunner for EngineQueryRunner` 同一类型只能有一个 trait impl 块，**不能再按方法拆文件**；单文件用例要再降得按域拆 `tests/` 目录——两者都属改结构，不再是无损搬运 |
-| 大文件拆分纪律 | 四批拆分实证：目录化后模块路径不变（`ports::editor_exec::attach` / `quick_open::model::Row` / `view::dialogs::open_close_confirm` 等对外签名零改动）；子模块里同名 `mod accel` 会与 `use engine::duckdb::accel` 撞车（E0255），须改名 `accel_exec`；`use` 经 `use super::*` 被后代模块使用**不会**报 unused（`dialogs/mod.rs` 一份统一导入供 8 个子文件共用、`host/mod.rs` 一份供 `construct.rs` / `settings_defaults.rs` 共用，均零 warning）；`view/host/mod.rs` 拆出 `construct.rs` 后仍是同类型多处 `impl EditorHostPanel` 块（合法，`new` 独占一块） | 后续拆包按此八条走：① 不动对外路径（`pub use` 子模块通配，别逐个枚举）；② 子模块名避开外部 crate 同名；③ inherent 方法跨文件调用一律 `pub(crate)`；④ 用例要跨文件访问结构体私有字段时**字段也要 `pub(crate)`**（只提方法不够：读字段报 E0616、直接 struct literal 构造报 E0451，两批才全暴露）；⑤ 批量 `Replace("    X: T,")` 会误伤函数形参——同一名字常在 `fn new(..)`/`open_xxx(..)` 的形参里也出现，改完必须 grep 逐处确认；⑥ 搬走 `impl` 内的一段方法时 **`impl` 头跟着搬、留在原处的部分各自补一行 `impl` 头**（否则 `unexpected closing delimiter`）；⑦ 切片按 1-based 闭区间核对末行是不是 `}`（少取一行就 `unclosed delimiter`）；⑧ 新子文件必须有 `use super::*;`，父模块的导入到不了子模块（缺它一片 `cannot find type` E0425/E0433）。**`view/host/` 还剩三块 500 行以上**：`render.rs` 848 / `session.rs` 782 / `construct.rs` 645，都属"单一职责但行数大"，要再降得拆方法体（属改结构） |
+| 大文件拆分纪律 | 四批拆分实证：目录化后模块路径不变（`ports::editor_exec::attach` / `quick_open::model::Row` / `view::dialogs::open_close_confirm` 等对外签名零改动）；子模块里同名 `mod accel` 会与 `use engine::duckdb::accel` 撞车（E0255），须改名 `accel_exec`；`use` 经 `use super::*` 被后代模块使用**不会**报 unused（`dialogs/mod.rs` 一份统一导入供 8 个子文件共用、`host/mod.rs` 一份供 `construct.rs` / `settings_defaults.rs` 共用，均零 warning）；`view/host/mod.rs` 拆出 `construct.rs` 后仍是同类型多处 `impl EditorHostPanel` 块（合法，`new` 独占一块） | 后续拆包按此八条走：① 不动对外路径（`pub use` 子模块通配，别逐个枚举）；② 子模块名避开外部 crate 同名；③ inherent 方法跨文件调用一律 `pub(crate)`；④ 用例要跨文件访问结构体私有字段时**字段也要 `pub(crate)`**（只提方法不够：读字段报 E0616、直接 struct literal 构造报 E0451，两批才全暴露）；⑤ 批量 `Replace("    X: T,")` 会误伤函数形参——同一名字常在 `fn new(..)`/`open_xxx(..)` 的形参里也出现，改完必须 grep 逐处确认；⑥ 搬走 `impl` 内的一段方法时 **`impl` 头跟着搬、留在原处的部分各自补一行 `impl` 头**（否则 `unexpected closing delimiter`）；⑦ 切片按 1-based 闭区间核对末行是不是 `}`（少取一行就 `unclosed delimiter`）；⑧ 新子文件必须有 `use super::*;`，父模块的导入到不了子模块（缺它一片 `cannot find type` E0425/E0433）。**`view/host/` 还剩七块 500 行以上**（2026-11-09 实测，旧记的 848/782/645 已随 §15.14/§15.15 增补漂移）：`render.rs` 833 / `session.rs` 759 / `notebook.rs` 715 / `toolbar/render.rs` 648 / `construct.rs` 633 / `mod.rs` 632 / `format.rs` 561，都属"单一职责但行数大"，要再降得拆方法体（属改结构，见 §16.2 B4） |
 | `view/signature_help.rs:17` | 「DBeaver 式完整目录留给后续」 | 已有 C5 函数手册 + #54 B 目录注入，复核这句是否还成立 |
 
 ### 15.4 本轮已修（2026-11-08，15.1 第 1 条）
@@ -794,4 +794,92 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
    就主动重画，需订阅连接事件（另一条接线）。
 3. 结果卡片的「定位」按钮仍只作用于主编辑器路径（`jump_to_error_site`）；单元的诊断目前
    只画波浪线、不做跳转（单元里位置本来就在眼前，跳转需求未出现）。
+
+## 16. 遗留总账（2026-11-09 全量盘点）
+
+**盘点口径**：文档声明（§一 ~ §15）+ 代码内 `TODO|FIXME|未接线|暂不支持|暂不|遗留|待接线`
+全扫（`crates/editor/src` 命中 45 处，其中 39 处是【遗留 #N】历史编号注释、对应能力都已交付，
+只剩措辞）+ 设置项消费核对 + 各文件行数实测。逐条按**调用链五段**（类型定义 → 生产者 →
+通道/事件 → 宿主消费分支 → 落盘/回放）核对：整链闭合的不进本表（记进 §16.7），缺一段才算。
+
+**本表按"谁能拍板"分档**，与旧文档的"按优先级"不同——因为剩下的项里，卡在代码上的
+（§16.1）和卡在决定上的（§16.2）不该混在同一张优先级表里排。
+
+### 16.1 可继续推进（代码侧，无需产品/成本决定）
+
+| # | 项 | 证据 | 现在的影响 | 处置 |
+| --- | --- | --- | --- | --- |
+| A1 | **per-cell 语言服务会话**（分析模式的单元补全/诊断） | `ports/editor_lsp.rs:25-27`「v1 只服务 Python（`.py`）；分析模式（`.rdsnote`）暂不服务；Markdown 留后」；主编辑器装 provider 只在 `view/host/mod.rs` / `session.rs` 两处 | Python / R / Julia 单元没有补全与诊断；`choose_completion` 对 `Analysis` 仍可能把 LSP provider 装到主 state（笔记模式无人调用，无害但无用） | 一条改动同时收口三笔账：§15.8 未做 2、§15.14 未覆盖（语言面）、§15.15 未覆盖 1。需虚拟 URI + 每单元一份会话，**架构级，但不需要产品决定**——只要接受"每单元一个 server 会话"的资源成本 |
+| A2 | **连接变更未订阅** | §15.15 未覆盖 2；`rebuild_cell_diagnostics` 每次现取快照，但触发点是敲键/执行 | 切连接 / 切 Schema 后，已有单元的语义诊断要下一次敲键或执行才按新快照刷新 | 订阅连接事件 → 主动重建全部单元。工作量小，属接线 |
+| A3 | **折叠候选双算未合并** | §15.3 第 1 条：前台 `sync_fold`（`fold::install`，全文）与后台 scan（`fold::spans`，全文）各算一次，后者每编辑一拍 | 纯 CPU 重复，未见卡顿；合并会改候选刷新时机（后台成为唯一来源），属行为变更 | **有意推迟**，等折叠区人工验收（`ui-todo.md` V-6/V-7）确认后再动 |
+| A4 | `save_cell_update` 死代码 | `ports/result_service.rs:105`，全仓 `grep save_cell_update` 仅 1 命中（定义本身），零调用方；注释自述「遗留的单格更新路径（无调用方；T2a 批量提交已取代它）」 | 无运行时影响；留着会误导"单格更新还走这条路" | 直接删（含 `:144` 那句注释）。若哪天要恢复单格编辑，是重新接 T2a 批量链，不是复活这条 |
+| A5 | `inline_completion` 置灰（B1 预留） | §八 B1：设置项 `disabled` + 默认关 + hint「能力已预留」；内核 `CompletionProvider::inline_completion()` 默认返回空 | 用户看到开关但点不动（刻意的） | **放开 `disabled` 时必须同步接 provider**，否则从"刻意的灰"变成"静默失效" |
+
+### 16.2 需你拍板（产品口径 / 成本量级 / 架构取舍）
+
+| # | 项 | 证据 | 卡在哪 | 需要你定什么 |
+| --- | --- | --- | --- | --- |
+| B1 | 标签方案 B（结构化 `tags: Vec<String>`）/ C（全局 Tag System） | §十二：现只有 A「说明即标签」（`#tag` 约定，schema / sidecar 零变更） | 数据层：B 要 schema + sidecar 迁移；C 是远期系统 | 走 B 还是维持 A？C 是否进路线图 |
+| B2 | 修饰符高亮（readonly / deprecated） | `view/highlight.rs:217`（`token_modifiers: Vec::new()` + 注释「暂不用：主题侧也未映射」） | 三处同时缺：内核 `decode_semantic_tokens` 不消费 `token_modifiers_bitset`；主题无 modifier token；SQL 词法没把 readonly/deprecated 判为独立 type | 值不值得改 vendor 内核 + 扩主题？**先得定"SQL 里哪些 token 算 readonly/deprecated"**（现在没有这个概念） |
+| B3 | R 内核单元（只有语言标签） | `notebook/cell.rs:49` | 执行端：无 R 解释器接线 | 要不要真做？与 Python 内核（已通）成本量级不同 |
+| B4 | `view/host/` 继续降到 500 行内 | 实测（2026-11-09）：`render.rs` 833 / `session.rs` 759 / `notebook.rs` 715 / `toolbar/render.rs` 648 / `construct.rs` 633 / `mod.rs` 632 / `format.rs` 561 | 都是"单一职责但行数大"，再降必须拆方法体（改结构，不是无损搬运） | 接受到哪一档？还是维持现状（拆分纪律已证明无损搬运的空间已用尽） |
+| B5 | 高亮 token 自定义 A+B | §十一：三层全硬编码，无配置入口；内核 `HighlightStyleResolver` 支持包一层用户覆盖 resolver（可行） | 配置层：无入口 | 是否立项（scope 级匹配已明确不做） |
+| B6 | 分析笔记的环境维度不可改 | `view/host/notebook.rs:380`「环境维度暂不在此菜单改（分析环境跟随通用模式解释器）」 | 菜单只有连接/会话级动作 | 分析笔记要不要独立环境选择（= 又一个 per-cell/每笔记的执行上下文问题） |
+
+### 16.3 已排期（口径已定，不重复讨论）
+
+| 项 | 口径 | 证据 |
+| --- | --- | --- |
+| P3 钻取关联数据（右键值 → 查关联表） | 用户明确「下期」；`ColumnDetail.references` 已就位，取数链路现成 | §一 P3 |
+| 执行上下文模型（per-context 独立连接 / 事务 / 取消） | 讨论定稿未开工，**0.2.4 不实现**；方案 A/B/C 与待拍板项见 `../connection/execution-context-model.md` | §二 |
+
+### 16.4 已知边界（记录在案，别当遗留重复立项）
+
+| 项 | 证据 | 为什么不是遗留 |
+| --- | --- | --- |
+| analyze 路径结果无列类型 / 注释 | `ResultSet` 无类型字段 | P1 已按「无注释」如实处理（§四） |
+| `explain_sql` 部分方言返回 None → 「暂不支持生成执行计划」 | `view/host/exec/tx.rs:45-53` | 方言能力边界，不是没接线：能出计划的方言已出 |
+| 函数手册的官方文档 URL | workbench 按「引擎 + 函数名」生成 | 需真实环境验证后定口径（§九） |
+| hover 补列类型 | `annotate_types` 多数表达式返回 `Unknown` | 依赖 sqlglot 语义层，暂不做（§九） |
+| 补全候选被截断时界面未标注 | `language/completion.rs:93`（字段有、界面没摆） | 现有候选表远未触发上限；留着给状态栏/诊断用 |
+| 尾随注释在格式化后丢失 | §十 边界 | sqlglot 生成器行为，已记录 |
+| 未闭合字符串时签名帮助可能误弹 | §八 A 方案边界 | 补上闭合引号即正确 |
+| 不可见字符「替换符号」渲染 | §六：内核 `RangeDecorationStyle` 仅 `Fill`/`Frame`，无 replacement 字形 | ⛔ 不硬做，等内核能力 |
+| 单元诊断只画波浪线、不做跳转 | §15.15 未覆盖 3 | 位置就在单元里眼前，跳转需求未出现 |
+| 书签交互无自动化断言（双击/编辑/删除、hover 像素） | §十二：headless 下对话框按钮点击分发不可靠 | 已知测试设施限制，靠人工验收 |
+| 大文件无痛上限 | `ports/editor_exec/runner.rs` 741、`quick_open/model/tests.rs` 588 | 同一类型只能有一个 trait impl 块；再降只能改结构 |
+
+### 16.5 测试与验收基线（现状，不是待办）
+
+| 项 | 现状 |
+| --- | --- |
+| `cargo test -p rds-editor --lib -- --test-threads=1` | **766 passed / 3 failed / 1 ignored**。三条固定失败：`view/tests/legacy.rs:58`（渲染树找不到 `editor-nb-cell-source-c1`）、`view/tests/notebook_win.rs:347`（多输出块）、`view/tests/results_a.rs:290`（表头排序箭头）——归因见 `../ui/gpui-kit-0.9.0-upgrade-report.md` §12（观察层口径，非产品缺失） |
+| `ui-todo.md` §五 V-1 … V-8 | **8 项全 ⬜**（V-1 对话框关闭残影 / V-2 右 Dock 草稿行 / V-3 导航树虚拟行 / V-4 列类型警示行 / V-5 标题栏折叠还原 / V-6 书签图标在 gutter 最左 / V-7 有说明折叠行箭头常显+横线 / V-8 悬停说明气泡）。判的是"画面有没有"，自动化观察层读不到，只能人工目视 |
+| `cargo check --workspace` | 不通过：`windows` crate `STATUS_STACK_BUFFER_OVERRUN`（环境限制，只用 `-p` 单 crate） |
+| `cargo check -p gpui-base --all-targets` | 必失败：bench `text_view_scroll` 缺 `gpui_fast_platform`（只用 `--lib`） |
+
+### 16.6 工程与协作
+
+| 项 | 现状（2026-11-09 实测） | 处置 |
+| --- | --- | --- |
+| origin/main 未推送 | `git rev-list --left-right --count origin/main...main` = `0	106`（本地领先 **106** 个提交，`origin/main` 停在 `9ce3c98e`）。旧记录「71」已过期 | 用户口径：只做本地合并，推送另行安排 |
+| 外部线在途 | `git status --short` 只剩 insight 线：`docs/architecture/insight/prototypes/eda/eda.html`（M）+ 6 个未跟踪（`insight-correlation-l1-spec.md`、`col-bool/col-date/col-num/col-text/eda-by-type.html`） | 一律不碰。此前记录的 `crates/database/src/nav_view/{rows,tests}.rs` 已被他人提交 |
+| 结果面板遗留 | 维护在 `result-panel-handoff.md` §2.4，本模块不重复；剩余缺口是**渲染期尚未消费事实档** | 跨 crate，归结果面板线 |
+
+### 16.7 本轮（2026-11-08 ~ 11-09）已闭合，别重复立项
+
+| 项 | 落点 |
+| --- | --- |
+| 折叠关键字贯通后台扫描 | §15.4（原 §15.1 第 1 条） |
+| 右键菜单 SQL 执行项 | §15.5（原 §15.1 第 2 条） |
+| 书签行号漂移校正（记录校准） | §15.6 + §十二（原 §15.1 第 3 条本是过时记录） |
+| 文档漂移 7 处注释 | §15.11（原 §15.2） |
+| 四处大文件拆分（`editor_exec` / `quick_open` / `dialogs` / `host/mod`） | §15.3 + §15.12 |
+| 跳转后自动弹书签说明（内核跳转 pin） | §15.10 |
+| hover 300ms 延迟 | §15.13 |
+| 脚本执行超时可配 | §15.9（原 §15.1 第 5 条） |
+| 分析模式逐单元补全 | §15.8（原 §15.1 第 4 条） |
+| 逐单元诊断（词法/语义） | §15.14 |
+| 单元执行错误进单元诊断 + 快照每次现取 | §15.15（闭合 §15.14 未覆盖 1、2） |
+
 
