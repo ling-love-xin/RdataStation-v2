@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use gpui_kit::component::date_picker::DatePickerState;
 use gpui_kit::component::input::InputState;
 use gpui_kit::*;
 
@@ -205,6 +206,9 @@ pub struct ResultGridDelegate {
     /// 【T2a-4】复用的编辑框实体（宿主构造时创建，同步数据时注入；每次编辑
     /// 复用同一个，不做“每格一个实体”的泄漏）
     pub(crate) edit_input: Option<Entity<InputState>>,
+    /// 【类型感知】复用的日期选择器实体（宿主注入）：`Date` 列编辑时用它替代 `Input`
+    /// （日历弹层 + 可手敲），值仍以 `YYYY-MM-DD` 字符串提交
+    pub(crate) edit_calendar: Option<Entity<DatePickerState>>,
     /// 【T2a-4】提交回调（面板注入：落变更集）
     pub(crate) on_commit_edit: Option<CommitEditHook>,
     /// 【#28-B4】本地行格编辑提交回调（面板注入：写回本地行快照；不进变更集 / 撤销栈）

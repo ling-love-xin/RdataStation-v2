@@ -248,6 +248,20 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 
 推导：`text_xs` = 12px，西文数字宽 ≈ 0.55 × 字号 ≈ 6.6px/字符，内边距合计 24px（自身 `px_2` 16 + 组件 XSmall 8）。验证：`cargo test -p rds-result-panel --lib` = **222 passed / 0 failed**（+1 `default_column_width_follows_type_until_the_user_drags`）；三 crate check 0 warning。未验证：真窗口初始观感、text 200 对中文长文本是否仍偏窄。
 
+### 2.16 2026-11-08（类型感知单元格编辑：盘点第四项）
+
+| 层 | 落地 |
+| --- | --- |
+| 已有 | 提交**校验**早就是类型感知的（`validate_edit_value`：整数 / 数字 / 布尔 / 日期 / UUID 各有闸口）；缺的是**编辑器** |
+| Boolean | `true` / `false` 双态 `Button`（`.toggled()` 标当前值），点一次即定值提交 |
+| Date | `DatePicker`（自带日历弹层 + 可手敲，格式 `%Y-%m-%d`）；`DatePickerEvent::Change` → `YYYY-MM-DD` 字符串 → 提交 |
+| 其余 | `Input` 原样（Integer / Float / Decimal / Text / Uuid / Json / Binary / Time / Timestamp / Unknown） |
+| 通道 | 两种新控件都走 `delegate.commit_edit_as(value)`：写值 → `commit_edit`，校验 / `CommitEditHook` / 脏格 / 冲突 / 撤销栈全不另开 |
+| 落点 | `delegate` 新增 `edit_calendar`（与 `edit_input` 同款「一份复用」）+ `set_edit_calendar`；`render_edit_cell` 按 `column_kind(col_ix)`（含行号槽的组件列序）分叉，返回 `AnyElement`；宿主 `host/mod.rs` 建 `DatePickerState` + `subscribe_in(DatePickerEvent::Change)` + 注入 |
+| 不做 | Time / Timestamp 不换时间字段（各驱动时刻格式不同，复合值转字符串会抹平原格式）；JSON 校验美化另一个量级；enum `Select` 缺「值 → 显示」映射来源 |
+
+已知边界：日历**不预置当前值**（打开落在今天所在月，要预置得解析 `NaiveDate`）；布尔按钮文案用 ASCII `true`/`false`，不跟随单元格显示样式；转置视图只读、不进编辑。验证：`cargo test -p rds-result-panel --lib` = **223 passed / 0 failed**（+1 布尔通道）；`cargo check -p rds-result-panel -p rds-editor` 0 warning；`cargo test -p rds-editor --lib` = 761 passed / **2 failed**（升级报告 §7 第 232 行已登记的基线既有，与本次无关）。未验证：真窗口点日历 / 点布尔按钮的端到端。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

@@ -1083,7 +1083,7 @@ panel.rs 删掉手搓过滤 / 行渲染 / 搜索框约 200 行。
 | 位置 | 事实 |
 | --- | --- |
 | `table/state.rs:1730-1737` | resize handle 的 `on_mouse_down`：`click_count == 2` → `fit_col(ix)`；`1` → 清 `fitted_col` |
-| `table/state.rs:1284-1313` | `fit_col`：问 delegate 要内容宽 → 加列 padding（`column.paddings`，否则 `size.table_cell_padding()`；本仓 `RESULT_TABLE_SIZE` = `Size::XSmall`，左右各 4px）→ 按 `scale_factor` 逐段 `ceil` 到整设备像素（文本宽哪怕差一个分数像素也会被截断）→ `resize_cols` → 变了才 emit `TableEvent::ColumnWidthsChanged` |
+| `table/state.rs:1292-1321` | `fit_col`：问 delegate 要内容宽 → 加列 padding（`column.paddings`，否则 `size.table_cell_padding()`；本仓 `RESULT_TABLE_SIZE` = `Size::XSmall`，左右各 4px）→ 按 `scale_factor` 逐段 `ceil` 到整设备像素（文本宽哪怕差一个分数像素也会被截断）→ `resize_cols` → 变了才 emit `TableEvent::ColumnWidthsChanged`（0.9.0 复核：原记 1284 起，升级后为 1292；`sizing.rs:69-76` 的 XSmall 仍上下 2 / 左右 4，未变） |
 | `table/state.rs:280-285` | `fitted_col` 只用于屏蔽"双击后紧跟着的那一下拖拽"，**不会**每帧重算（一次双击 = 一次采样） |
 | `table/column.rs:219-221` | 列宽上界默认 1200px，组件侧已兜住，delegate 不必自己夹 |
 
@@ -1169,6 +1169,68 @@ panel.rs 删掉手搓过滤 / 行渲染 / 搜索框约 200 行。
 0 warning。
 **未验证项**：真实窗口里"新建一份结果 → 各列初始宽度看着合不合适"没目视；
 `RESULT_COLUMN_WIDTH_TEXT` = 200 对中文长文本列是否仍偏窄没实测。
+
+### 8.25 类型感知单元格编辑（2026-11-08）
+
+**为什么要做**：盘点第四项。此前**已经有了**类型感知的**提交校验**（`validate_edit_value`：
+整数列只收整数、布尔列只收 true/false/1/0…、日期列只收 `YYYY-MM-DD`、UUID 查形状），
+缺的是**编辑器本身**——只有一种 `Input`，日期列要用户手敲 `2026-11-08`、布尔列要手敲
+`true`。竞品（dbdelve §3.3）按列类型给控件，这里把同一思路落到自己的语义类型上。
+
+**范围（用户已确认的口径）**：
+
+| 列类型 | 编辑器 | 值怎么提交 |
+| --- | --- | --- |
+| Boolean | `true` / `false` 双态按钮（`Button` + `.toggled()` 显示当前值） | 点一次即定值提交 |
+| Date | `DatePicker`（自带日历弹层 + 也能手敲，格式 `%Y-%m-%d`） | 选一次即提交，`DatePickerEvent::Change` → `YYYY-MM-DD` 字符串 |
+| Integer / Float / Decimal / Text / Uuid / Json / Binary / Time / Timestamp / Unknown | 仍用 `Input` | 手敲 + Enter / 失焦 |
+
+**不做**：`Time` / `Timestamp` 不换时间字段控件——时刻与时区的书写口径各驱动不同
+（`12:34:56` / `12:34:56.789` / `+08` / 无时区），控件产出的是"日期 + 时间"复合值，
+再转回字符串会把驱动原有格式抹平；JSON 要校验 + 美化，是另一个量级，仍用 `Input`；
+enum 类 `Select` 需要"值 → 显示"映射来源，当前拿不到枚举定义，不做。
+
+**硬约束（不破既有链路）**：两种新控件都**不新开提交路径**——布尔走
+`commit_edit_as(value)`，日历走同一条 `commit_edit_as(YYYY-MM-DD)`；两者都是
+「写进编辑态 → `commit_edit`」，因此类型校验、`CommitEditHook`（变更集 upsert）、脏格 /
+冲突投影、撤销栈、提交被拒时的红框提示全部原样生效。`commit_edit_as` 返回 `false`
+（校验没过）时编辑态与红框保留，与手敲 Enter 被拒的表现一致。
+
+**落点**：
+
+- `grid/delegate.rs`：新增两个复用实体字段 `edit_input`（原有）/ `edit_calendar`（新），
+  由宿主注入——与编辑框一样是**一份复用**，不给每格建实体。
+- `grid/edit.rs::render_edit_cell`：按 `column_kind(col_ix)` 分叉（`column_kind` 吃的是
+  **含行号槽的组件列序**，内部自己 `data_column(col_ix - 1)`）；返回类型从 `impl IntoElement`
+  改成 `AnyElement`（两条分支元素类型不同）。布尔分支**不碰 `InputState`**，所以放在
+  `expect("宿主必注入编辑框实体")` 之前——没注入编辑框的独立网格也能用。
+- `crates/editor/src/view/host/mod.rs`：与 `edit_input` 并排创建
+  `DatePickerState::new(window, cx).date_format("%Y-%m-%d")`，`subscribe_in` 订阅
+  `DatePickerEvent::Change` → `format("%Y-%m-%d")` → `commit_edit_as` → 已提交则
+  `sync_result_view`（与 Enter 分支同款），未提交则 `window.refresh()` 让红框上屏。
+- 日历状态由 `vendor/gpui-component/src/lib.rs:139` 的 `date_picker::init(cx)` 注册
+  （`gpui_kit::init` 已包含），无额外初始化接线。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **223 passed / 0 failed**（+2：布尔列
+`boolean_edit_commits_through_the_same_channel`（钩子收到 原值 `yes` → 新值 `true`、
+提交后编辑态清空、非法值被拒并保留编辑态）；`cargo check -p rds-result-panel -p rds-editor`
+0 warning；`cargo test -p rds-editor --lib` = 761 passed / **2 failed**，两条是
+`view::tests::legacy::opening_an_analysis_document_builds_a_cell_editor_per_cell`（`legacy.rs:58`）
+与 `view::tests::notebook_win::analysis_cell_renders_multiple_output_blocks`——升级报告 §7
+第 232 行已登记为「rebase 前基线就是这 2 条」，与本次改动无关（都是 `try_find` 读
+元素注册表，属 gpui-fast 观察层口径）。
+
+**未验证 / 已知边界**：
+
+- 真窗口里点日历选日、点布尔按钮的端到端没目视（headless 下日历弹层与按钮点击都在
+  元素观测层，gpui-fast 开启后点击类断言不可靠，只到纯逻辑与编译）。
+- 日历**不预置当前值**：打开落在"今天所在月"，不是这一格原来那一天。要预置得把
+  字符串解析成 `NaiveDate`（引 chrono 或走 `calendar` 模块的解析），本轮没做——对
+  "改成另一个日期"够用，对"在原日期上挪一天"要多点一步。
+- 布尔按钮文案用 `true` / `false`（数据库值本体），不跟随单元格的显示格式（如 `是`/`否`
+  或 `✔`/`✘`）：编辑态写的是要提交的值，不是展示样式；若将来单元格显示改成中文，
+  这里仍保持 ASCII 值。
+- 转置视图是只读，不进入编辑（`begin_edit` 已先拦），所以转置里看不到这些控件。
 
 ## 8. 协作纪律
 

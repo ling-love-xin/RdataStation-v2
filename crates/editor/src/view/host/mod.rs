@@ -20,6 +20,7 @@ use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _, Dr
 use gpui_kit::component::dock::{
     BasePanel, DockArea, Panel as ComponentPanel, PanelEvent as BasePanelEvent, PanelId, TabGroup,
 };
+use gpui_kit::component::date_picker::{DatePickerEvent, DatePickerState};
 use gpui_kit::component::input::{EditorState, InputEvent, InputState, RangeDecorationCollection};
 use gpui_kit::component::resizable::{resizable_panel, v_resizable};
 use gpui_kit::component::{Icon, InteractiveElementExt as _, WindowExt as _};
@@ -866,6 +867,31 @@ impl EditorHostPanel {
         // 【T2a-4】结果表格的单元格编辑框：**一个复用实体**（每次编辑复用同一个，
         // 不做“每格一个实体”的泄漏）。初值同步与聚焦在网格渲染路径做（幂等一次）。
         let edit_input = cx.new(|cx| InputState::new(window, cx));
+        // 【类型感知】日期列的日历实体：与编辑框同一个「复用一份」原则（不给每格建实体）。
+        // 显示格式按 `YYYY-MM-DD`——与 `Date` 列在校验（`looks_like_date`）和落库里的字符串
+        // 口径一致，避免日历上看到 `2026/11/08`、提交成 `2026-11-08` 的“两副面孔”。
+        let edit_calendar = cx
+            .new(|cx| DatePickerState::new(window, cx).date_format(SharedString::from("%Y-%m-%d")));
+        // 日历选中即提交：`Change` 在弹层里每选一次就发（时间精度的场景会连发，
+        // 这里只认日期列，选一次定一次）。提交仍走 `commit_edit_as` → 同一条校验 / 钩子通道。
+        let _calendar_sub = cx.subscribe_in(
+            &edit_calendar,
+            window,
+            |panel, _state, event: &DatePickerEvent, window, cx| {
+                let DatePickerEvent::Change(value) = event;
+                let Some(text) = value.format("%Y-%m-%d") else {
+                    return;
+                };
+                let committed = panel.grid.update(cx, |table, _cx| {
+                    table.delegate_mut().commit_edit_as(text.to_string())
+                });
+                if committed {
+                    panel.sync_result_view(cx);
+                } else {
+                    window.refresh();
+                }
+            },
+        );
         // 编辑框事件（原生 `InputEvent`）：输入变化 → 同步到编辑态；Enter / 失焦 → 提交。
         // 提交幂等：`commit_edit` 先清编辑态，失焦带起的第二次 Blur 是空转。
         let _edit_sub =
@@ -903,6 +929,9 @@ impl EditorHostPanel {
             let edit_weak = edit_input.clone();
             grid.update(cx, |state, _cx| {
                 state.delegate_mut().set_edit_input(edit_weak);
+                state
+                    .delegate_mut()
+                    .set_edit_calendar(edit_calendar.clone());
             });
             let shared_for_commit = shared.clone();
             let document_for_commit = document.clone();

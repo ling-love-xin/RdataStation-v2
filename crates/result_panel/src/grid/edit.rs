@@ -3,6 +3,8 @@
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::date_picker::{DatePicker, DatePickerState};
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::table::TableState;
 use gpui_kit::component::tooltip::Tooltip;
@@ -26,6 +28,11 @@ impl ResultGridDelegate {
     /// 编辑框实体（宿主构造时创建、同步数据时注入；编辑框渲染用同一个实体）
     pub fn set_edit_input(&mut self, input: Entity<InputState>) {
         self.edit_input = Some(input);
+    }
+
+    /// 【类型感知】日期选择器实体（宿主构造时创建、注入；`Date` 列编辑用）
+    pub fn set_edit_calendar(&mut self, calendar: Entity<DatePickerState>) {
+        self.edit_calendar = Some(calendar);
     }
 
     /// 提交回调（宿主注入：落变更集）
@@ -305,6 +312,33 @@ impl ResultGridDelegate {
                 .child(true_button)
                 .child(false_button)
                 .into_any_element();
+        }
+        // 【类型感知】日期列：换成日历选择器（`DatePicker` 自带日历弹层 + 也可手敲）。
+        // 值仍是 `YYYY-MM-DD` 字符串（宿主订阅 `DatePickerEvent::Change` → `commit_edit_as`），
+        // 不引入新的值类型，变更集 / 校验 / 脏格通道原样。宿主没注入日历实体就退回 `Input`。
+        if self.column_kind(col_ix) == ColumnKind::Date {
+            if let Some(calendar) = self.edit_calendar.clone() {
+                let theme = cx.theme();
+                let edit_bg = if self.row_is_local(row_ix) {
+                    product_tokens::get(cx).result_local_row_background(theme)
+                } else {
+                    theme.colors.background
+                };
+                return div()
+                    .id(format!("editor-result-edit-cell-{row_ix}-{col_ix}"))
+                    .size_full()
+                    .h_full()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .bg(edit_bg)
+                    .child(
+                        DatePicker::new(&calendar)
+                            .w_full()
+                            .with_size(crate::ui::RESULT_TABLE_SIZE),
+                    )
+                    .into_any_element();
+            }
         }
         let state = self.edit_input.clone().expect("宿主必注入编辑框实体");
         // 幂等一次性：首次渲染时同步初值（`set_value` **不发** `InputEvent::Change`，
