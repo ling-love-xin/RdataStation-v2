@@ -210,6 +210,13 @@ impl NavView {
         let border = cx.theme().colors.border;
         let accent = cx.theme().colors.primary;
         let source_filter = self.nav.borrow().source_filter;
+        // 工具栏「收起 / 展开本组」的作用目标：由**点击分组头**认领（`active_group`）。
+        // 目标是未分组容器或现存分组时才可用；从未点过 / 目标分组已被删 → 按钮禁用，
+        // 不允许退化成「一键收全部分组」。
+        let active_group: Option<String> = {
+            let view = self.nav.borrow();
+            view.fold_target().map(|gid| gid.to_string())
+        };
         // B6 staged：待提交条目数（面板头「提交 N」按钮预算；空集不渲染、不占槽位）。
         let staged_count = self.nav.borrow().staged_count();
 
@@ -415,6 +422,50 @@ impl NavView {
                                         this.host.notice("没有已连接的连接".to_string(), cx);
                                     }
                                 }
+                            });
+                        }
+                    }),
+            )
+            // 分组折叠入口（⇅）已从组头移到面板头工具栏：组头右侧只留批量连接两个按钮，
+            // 组名因此能拿到更多宽度。按钮只作用于「点击认领过的当前分组」，语义仍是
+            // 「收起 / 展开本组已展开的成员」，不波及其它分组；未认领时禁用。
+            .child(
+                Button::new("nav-fold-active")
+                    .ghost()
+                    .xsmall()
+                    .icon(
+                        Icon::empty()
+                            .path("icons/chevrons-up-down.svg")
+                            .text_color(muted),
+                    )
+                    .tooltip(if active_group.is_some() {
+                        "收起 / 展开当前分组已展开的连接（只影响这一组）"
+                    } else {
+                        "先点一下分组头认领分组，再点这里收起 / 展开该组"
+                    })
+                    .disabled(active_group.is_none())
+                    .on_click({
+                        let entity = cx.entity();
+                        let target = active_group.clone();
+                        move |_, _, app: &mut App| {
+                            let Some(gid) = target.clone() else {
+                                return;
+                            };
+                            entity.update(app, |this, cx| {
+                                // 成员口径与组头时期一致：未分组走 `ungrouped_order`。
+                                let members: Vec<String> = {
+                                    let view = this.nav.borrow();
+                                    if gid == super::GROUP_UNGROUPED {
+                                        view.ungrouped_order.clone()
+                                    } else {
+                                        view.group_order.get(&gid).cloned().unwrap_or_default()
+                                    }
+                                };
+                                {
+                                    let mut view = this.nav.borrow_mut();
+                                    super::rows::toggle_fold_members(&mut view.expanded, &members);
+                                }
+                                cx.notify();
                             });
                         }
                     }),

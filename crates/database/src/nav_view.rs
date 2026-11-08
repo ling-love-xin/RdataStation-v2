@@ -365,6 +365,13 @@ pub struct NavViewState {
     group_order: HashMap<String, Vec<String>>,
     /// 「未分组」容器里**已手动排序**的连接 ID（顺序）。未列出的回退到名称升序。
     ungrouped_order: Vec<String>,
+    /// 工具栏「收起 / 展开本组」的作用目标（分组 ID，或未分组容器哨兵）。
+    ///
+    /// 收起动作已从分组头移到面板头工具栏；工具栏是全局面板级控件、不带「哪一组」上下文，
+    /// 所以由**点击分组头**置位（点组头 = 折叠组 + 认领为当前分组），工具栏按钮据此
+    /// 只作用于该组；未点过 / 该组已被删除时按钮禁用（`None` 或 ID 失效），
+    /// 杜绝「一键收全部分组」的越界语义。
+    active_group: Option<String>,
     /// 最近使用过的连接 ID（新→旧；来自宿主最近连接记录，`reload_nav_org` 缓存，
     /// 连接成功时由 `note_connection_used` 更新）。「最近连接排序」的数据源。
     recent: Vec<String>,
@@ -486,6 +493,17 @@ impl NavViewState {
     /// 待提交条目总数（面板头「提交 N」预算；空集不渲染按钮）。
     pub(super) fn staged_count(&self) -> usize {
         self.staged_ops.len()
+    }
+
+    /// 工具栏「收起 / 展开本组」的**有效作用目标**：`active_group` 指向的组仍存在时返回它。
+    ///
+    /// 「未分组」是伪分组（哨兵 ID，不在 `group_order` 里），被认领后即视为有效；
+    /// 目标分组被删除 / 撤销后返回 `None`，面板头按钮随之禁用——不允许退化成
+    /// 「一键收全部分组」（那正是组头时期被否掉的越界语义）。
+    pub(super) fn fold_target(&self) -> Option<&str> {
+        self.active_group
+            .as_deref()
+            .filter(|gid| *gid == GROUP_UNGROUPED || self.group_order.contains_key(*gid))
     }
 
     /// 入队一个破坏性动作；按 §4.7 去重 / 冲突归并规则归并，返回结果三态。

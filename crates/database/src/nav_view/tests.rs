@@ -3121,3 +3121,31 @@ fn toggle_fold_members_only_touches_its_own_group() {
         "展开只补成员第一层（A 自身），不连带其子树"
     );
 }
+
+/// 面板头折叠按钮的作用目标 = 认领过的分组：未认领 / 分组已被删除时无目标（按钮禁用）。
+///
+/// 对应「折叠入口搬到工具栏」后的唯一上下文来源；没有它，全局按钮会重新变成
+/// 「一键收全部分组」。
+#[test]
+fn fold_target_follows_the_claimed_group() {
+    let mut view = super::NavViewState::default();
+    assert!(view.fold_target().is_none(), "从未点过分组头 → 无目标");
+
+    view.active_group = Some("A".to_string());
+    assert!(
+        view.fold_target().is_none(),
+        "认领的分组在 `group_order` 里不存在（如刚被删除）→ 无目标"
+    );
+
+    view.group_order
+        .insert("A".to_string(), vec!["conn-a".to_string()]);
+    assert_eq!(view.fold_target(), Some("A"), "分组存在 → 目标为它");
+
+    // 「未分组」是伪分组：不走 `group_order`，被认领后直接有效。
+    view.active_group = Some(super::GROUP_UNGROUPED.to_string());
+    assert_eq!(
+        view.fold_target(),
+        Some(super::GROUP_UNGROUPED),
+        "未分组容器被认领后即为有效目标"
+    );
+}

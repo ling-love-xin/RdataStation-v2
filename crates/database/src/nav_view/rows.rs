@@ -732,6 +732,9 @@ impl NavView {
                             } else {
                                 view.collapsed_groups.insert(gid.clone());
                             }
+                            // 认领为「当前分组」：工具栏上的「收起 / 展开本组」只对它生效
+                            // （折叠入口已从组头移到面板头工具栏，工具栏自身不带分组上下文）。
+                            view.active_group = Some(gid.clone());
                         }
                         cx.notify();
                     });
@@ -897,48 +900,10 @@ impl NavView {
                             });
                         }
                     }),
-            )
-            // 收起 / 展开**本组**已展开的成员（不改其它分组，也不折叠组头本身）。
-            // 旧实现取的是 `nav.groups` 里**全部分组**的 id 做全局折叠，挂在单个分组头上语义越界。
-            // 现在的口径：组内存在任何展开项（连接根或其子树，key = `conn_id` 或 `conn_id/...`）
-            // 就全部收起；否则展开本组成员的第一层（子树仍保持收起，展开由用户逐级点）。
-            .child(
-                Button::new(format!("nav-group-foldall-{group_id}"))
-                    .ghost()
-                    .xsmall()
-                    .icon(
-                        Icon::empty()
-                            .path("icons/chevrons-up-down.svg")
-                            .text_color(muted),
-                    )
-                    .on_click({
-                        let entity = entity.clone();
-                        // 闭包 move 自己的拷贝，不动原 `gid`（后面拖排序还要用它）。
-                        let gid_fold = gid.clone();
-                        let ungrouped_fold = is_ungrouped;
-                        move |_, _, app: &mut App| {
-                            entity.update(app, |this, cx| {
-                                // 成员口径与批量连接一致：未分组走 `ungrouped_order`。
-                                let members: Vec<String> = {
-                                    let view = this.nav.borrow();
-                                    if ungrouped_fold {
-                                        view.ungrouped_order.clone()
-                                    } else {
-                                        view.group_order
-                                            .get(&gid_fold)
-                                            .cloned()
-                                            .unwrap_or_default()
-                                    }
-                                };
-                                {
-                                    let mut view = this.nav.borrow_mut();
-                                    toggle_fold_members(&mut view.expanded, &members);
-                                }
-                                cx.notify();
-                            });
-                        }
-                    }),
             );
+        // 「收起 / 展开本组已展开的成员」入口已移到面板头工具栏（`nav-fold-active`）：
+        // 组头右侧只留批量连接两个按钮，第三个 ⇅ 会让组名可用的宽度更小，且它读的是
+        // 「点击过的这一组」，放在全局面板头反而更好认领（见 `NavViewState::active_group`）。
 
         // 分组之间可拖排序（「未分组」是伪分组，不可拖）。
         if !is_ungrouped {
@@ -1645,11 +1610,16 @@ impl NavView {
                     let conn_name = conn.name.clone();
                     let conn_driver = conn.driver.clone();
                     let focus = self.focus_handle.clone();
+                    // 行所属分组：点组内任意连接行也认领该组，面板头「收起 / 展开本组」
+                    // 的观察目标因此跟着选中行走（不必先点一次组头）。
+                    let scope_gid = scope_key.to_string();
                     move |ev, window, app| {
                         focus.focus(window, app);
                         // 单击选中（键盘导航基准）；双击打开属性；再次点击展开 / 折叠。
                         let sel_key = conn_id.clone();
+                        let gid_for_active = scope_gid.clone();
                         entity.update(app, |this, cx| {
+                            this.nav.borrow_mut().active_group = Some(gid_for_active.clone());
                             this.set_nav_selected(Some(sel_key.clone()), cx);
                             cx.notify();
                         });
