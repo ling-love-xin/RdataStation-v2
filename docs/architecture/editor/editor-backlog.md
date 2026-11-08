@@ -199,7 +199,7 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 | --- | --- | --- | --- |
 | 高（阻塞） | **gutter 书签入口 5 项**：① 已标记行常显书签轮廓 / 带横线书签 ② hover 淡色 + 单击切换 ③ Shift+单击弹说明 ④ 有说明的折叠行：箭头常显 + 箭头下方一道横线（「无说明」的可折叠行仍只在 hover / 当前行 / 已折叠时才显箭头）⑤ 指针停在有说明书签行时显示说明气泡（设置 `editor.bookmark_hover_note` 可关） | **已按授权改 vendor 落地（2026-11-08；第一轮 4 项 + 第二轮按像素验收反馈调整）**：内核 `vendor/gpui-base/src/input/base/state.rs` 的 `GutterMarker{line, kind, note}`（`note: SharedString`，空串 = 无说明；`Ord/PartialOrd` 只按 `(line, kind)` 比较，`set_gutter_markers` 仍按 `(line,kind)` 排序去重）；`GutterMarkerKind{Bookmark,BookmarkNote,FoldNote}` + `set_gutter_markers` / `gutter_markers` + 上报事件 `InputEvent::GutterMarkerClick{line,shift}`（切换 / 弹框语义留在应用层）。`element.rs`：书签列移到 gutter **最左**（`GutterMarkerLayout.column_width`，`marker_column_x = origin_x`，行号文本整体右移一列）；`layout_line_numbers` 仅在 markers 非空时留宽 18px、图标 13px，**无标记时列宽 0 且 hitbox 零宽**（不吞行号点击、未用书签的编辑器行号栏宽度不变）；折叠说明改为「箭头下方一道横线」（`GUTTER_FOLD_NOTE_UNDERLINE_WIDTH 9` / `HEIGHT 1.5`，画在箭头 hitbox 内不占新空间，`FoldIconLayout.fold_note_rows` 让该行箭头常显），原 9px 笔形角标 SVG 已删；悬停说明 `HoverNote`（`shape_line` 截断到 `GUTTER_NOTE_POPOVER_MAX_WIDTH 420px` 并补 `…`、内边距 6/3、画在书签列右侧该行下方、半透明底 `fill`）；hover 已标记 0.5 / 未标记 0.3，点击 `cx.stop_propagation()` 后上报。editor 侧：`view/host/bookmarks.rs::push_gutter_markers`（1 起→0 起，判据 `label == 行号`，有说明同时附 `BookmarkNote` 与 `FoldNote` 并下发同一 `note`；设置关掉时下发空串）+ `on_gutter_marker_click`（Shift → 说明框，否则切换）；`view/host/mod.rs` 订阅分派 + `editor_bookmark_hover_note_or_default` 读取包装；`view/host/render.rs` 新增 `show_bookmark_hover_note` 缓存比较 → 重新投影。设置 crate 全链新增 `editor.bookmark_hover_note`（`model/editor.rs` 字段 + 默认 true / `registry` Slot + slot_for + slot_kind(Bool) / `service/editor.rs` apply_slot + `bookmark_hover_note`/`set_bookmark_hover_note` / `service/mod.rs` by_key 分发 + value_by_key / `registry/entries/editor.rs` 登记项，设置页用 Switch）。测试：`crates/editor/src/view/tests/bookmarks.rs` 3 例（标记与说明投影、单击 / Shift 分派、设置关闭后说明不下发） | ✅ 已实现并人工验收（2026-11-08 用户回「验证基本没有问题」） |
 | 中 | **折叠末行收起（统一 `end+1`）** | 内核 `fold_map.rs::rebuild` 只藏 `[start+1, end-1]`（首末行都强制可见），所以 `SELECT (` 折起来后 `)` 还挂着、`SELECT / a / b` 折起来 `b` 还挂着。用户口径：**不动内核**，在候选侧加一——`crates/editor/src/support/fold.rs` 的 `FoldSpan.end_line` 记**块真实末行**，`kernel_end_line()` 统一返回 `end_line + 1`，`view/fold.rs::to_kernel` 走它：内核因此藏 `[start+1, end]`，**两类块都只留首行**（`(`…`)` / `CASE`…`END` / 多行注释 / 缩进块最后一条内容行一起收起，对齐 VS Code）。缩进块末行恰是文档最后一行时也安全（内核 `rebuild` 越界兜底、`line_start_offset(end+1)` 落回文本末尾）。另：同起始行只发一条并留**范围最大**者（内核 `set_candidates` 的 `dedup_by_key(start_line)` 只留一个，否则折一次能收几行取决于排序） | ✅ 已实现并人工验收（2026-11-08 用户回「ok，没有问题了」；`3cdf651f`） |
-| 中 | 书签行号漂移不校正 | `view/host/bookmarks.rs:61`（「行号漂移暂不校正」）：编辑器插入/删除行后 sidecar 行号指向漂移 | 待排期 |
+| 中 | 书签行号漂移不校正 | **已在 `8234474b` 实现，本轮只校准记录**：`view/host/bookmarks.rs::adjust_bookmarks_for_edit` 在 `InputEvent::Change` 里 `take_last_edit_delta`（vendor 私有 patch）→ `support/bookmark.rs::adjust_for_edit` 按「区前不动 / 区内锚到首行 / 区后整体平移」改书签并回写 sidecar；本轮补端到端用例 `bookmarks_follow_an_inserted_line`，并修掉 `bookmarks.rs:61` 那句已过时的「暂不校正」注释。原证据（`:61` 注释）已不成立 | ✅ 已实现（记录已校准） |
 | 中 | 标签方案 B / C | 现只有 A「说明即标签」（`#tag` 约定，schema 与 sidecar 零变更）；B = 结构化 `tags: Vec<String>`（需 schema + sidecar 迁移）、C = 全局 Tag System（远期） | 待排期 |
 | 低 | 行内悬停信息 + 设置开关 | 用户口径「跳转后鼠标位于当前行时显示信息，设置可关闭」。已交付部分：指针停在有说明书签 / 折叠行时出说明气泡，设置 `editor.bookmark_hover_note` 可关（随 gutter 5 项，`8234474b`）。仍缺：**跳转到书签后自动弹出**说明——`jump_to_line` 只定位光标，不回传「刚跳到哪一行」，要做需给跳转动作加事件回传；另 hover 气泡目前无 300ms 延迟（`gutter_hovered_row` 按当前指针位置当帧计算，加延迟要给 input 挂计时器） | 部分已实现，自动弹出与延迟待排期 |
 | 低 | 书签交互无自动化测试 | headless 下对话框按钮点击分发不可靠（`simulate_click` 单独跑能中、全套跑中不了），只断言 `debug_bounds`；双击 / 编辑 / 删除靠人工验收；gutter 的 hover 淡色与图标像素亦无自动断言 | 已知限制 |
@@ -264,7 +264,7 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 | --- | --- | --- | --- |
 | **高** | **折叠候选的后台路径不吃 `editor.fold_open_keywords` / `fold_close_keywords`** | 生产者：`Job` 无关键字字段，`run()` 写死默认表 | ✅ **本轮已修，见 15.4**。原证据：`support/scan.rs:88-97`（`Job{revision,text,channel,scope,catalog,dialect}`）、`support/scan.rs:236-242`（硬编码 `CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT` / `END`）；消费在 `view/host/exec/pump.rs:98-105`（`fold::refresh` 覆盖候选）。前台正确口径：`view/host/render.rs:49-55`（设置→shared）+ `view/host/ops.rs:420-431`（`sync_fold`→`fold::install`）。**原后果**：改设置后首帧正确，编辑一次即被后台候选覆盖回默认关键字（设置静默失效） |
 | 高 | 右键菜单无 SQL 执行项 | 宿主消费分支：`menu_entries` 无执行条目 | ✅ **本轮已修**，见 15.5。原证据：`view/editor_menu.rs:63-110`（只有剪切/复制/粘贴/全选/添加书签说明/转到定义/代码操作） |
-| 中 | 书签行号漂移不校正 | 回放：sidecar 行号不随编辑平移 | `view/host/bookmarks.rs:61` |
+| ~~中~~ | ~~书签行号漂移不校正~~ | 回放：sidecar 行号**会**随编辑平移（方案 A 已实现，`8234474b`；本轮补端到端用例） | `view/host/bookmarks.rs:149`（`adjust_bookmarks_for_edit`） |
 | 中 | 分析模式逐单元补全未装 provider | 装配：cell 编辑器只建实例不装 provider | `view/host/notebook.rs:44-49`（`EditorState::new(..).language(..)` + `set_value`，无 completion / diagnostics）；`completion::install` 仅两处主编辑器（`view/host/mod.rs:633`、`view/host/session.rs:498`） |
 | 中 | 标签方案 B（结构化 `tags`）/ C（全局 Tag System） | 数据层：现只有 A「说明即标签」 | §十二 |
 | 低 | 跳转后自动弹说明 / hover 300ms 延迟 | 事件回传：`jump_to_line` 不回传行号 | §十二（`gutter_hovered_row` 当帧计算） |
@@ -335,3 +335,24 @@ gpui-pre 0.3.11 起 `text_system()` 返回 `&Arc<WindowTextSystem>` → E0308，
 
 验证：`cargo check -p rds-editor --all-targets -j 1` → 0；`view::editor_menu` → 8 passed；
 `rds-editor --lib` → 761 passed / 2 failed / 1 ignored（仍只有那两条基线失败）。
+
+### 15.6 本轮校准：书签行号校正**早已实现**（15.1 第 3 条原是过时记录）
+
+盘点发现 15.1 第 3 条与 `view/host/bookmarks.rs:61` 注释都写着「行号漂移暂不校正」，但
+**`8234474b` 就已经做了方案 A**，调用链完整：
+
+`InputEvent::Change`（`view/host/mod.rs:697`）→ `adjust_bookmarks_for_edit`
+（`bookmarks.rs:149`）→ `state.take_last_edit_delta()`（vendor 项目私有 patch，
+`vendor/gpui-base/src/input/base/state.rs:3590`）→ `bookmark::adjust_for_edit`
+（`support/bookmark.rs:105`，5 条单测）→ `shared.set_bookmarks` + 重绘 + `sync_bookmarks` 回写 sidecar。
+
+本轮做的两件（不改行为）：
+
+1. `bookmarks.rs:61` 注释改成「行号由 `adjust_bookmarks_for_edit` 校正，本函数只投影」——
+   原句会让后来的人在 `refresh_bookmark_decorations` 里重算一次平移（那边拿不到 delta）。
+2. 新增端到端用例 `view/tests/bookmarks.rs::bookmarks_follow_an_inserted_line`：真实换行插入
+   → 书签 3→4、说明文本不变；再删行 → 4→3。原单测只证明算法，这条证明**接线通**。
+
+headless 经验：正文编辑要走 `editor.read(cx).focus_handle(cx)` + `focus` 再 `cx.simulate_input("\n")`；
+`simulate_keystrokes("enter")` 和面板自己的 `focus_self` 都到不了内核 `EditorState`（前者没焦点、
+后者是异步切 tab），文本不会变——用例里成了「前提不成立」的假失败。
