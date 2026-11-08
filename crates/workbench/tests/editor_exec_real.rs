@@ -1447,6 +1447,7 @@ fn real_python_script_runs_through_the_editor() {
             &ExecTarget::Script(editor::env::ScriptRequest {
                 env_id: "python".to_string(),
                 code: "print('rds-2b-hi')".to_string(),
+                timeout_ms: editor::ports::editor_env::SCRIPT_TIMEOUT_MS,
             }),
             ResultPlacement::NewSet,
             RunOptions::default(),
@@ -1476,6 +1477,7 @@ fn real_python_script_runs_through_the_editor() {
         &ExecTarget::Script(editor::env::ScriptRequest {
             env_id: "rscript".to_string(),
             code: "1+1".to_string(),
+            timeout_ms: editor::ports::editor_env::SCRIPT_TIMEOUT_MS,
         }),
         ResultPlacement::NewSet,
         RunOptions::default(),
@@ -1490,6 +1492,75 @@ fn real_python_script_runs_through_the_editor() {
     );
     let _ = refused; // submit 侧是否 Err 由队列忙态决定，结论侧才是真值
     eprintln!("✅ 未装环境如实拒绝（结论为 Err）");
+}
+
+/// 【2026-11-08】真机：超时取自**请求**，不是写死的常量
+///
+/// 区分性证明：脚本睡 3 秒，请求只给 0.8 秒 → 必须被判超时（`timed_out == true`），
+/// 且总耗时明显短于脚本自然结束。若执行器仍旧读 `SCRIPT_TIMEOUT_MS`（60 秒），
+/// 这条用例会看到脚本正常跑完（`timed_out == false`）而失败——两种口径产出不同。
+///
+/// 这就是设置项 `editor.env_timeout_ms` 真的接进执行链路的反向证明：
+/// 宿主在 `run_script` 里读设置、随 `ScriptRequest` 传入，工作线程不读全局设置。
+#[test]
+fn script_timeout_comes_from_the_request_not_the_constant() {
+    let Some(python) = local_python() else {
+        eprintln!("⏭️  超时贯通验证：本机没有可用的 python / py，跳过");
+        return;
+    };
+    eprintln!("⏱️  用 {python} 验证「请求自带超时」生效");
+
+    let shared = EditorShared::new();
+    rds_workbench::services::editor_env::attach(&shared);
+    rds_workbench::services::editor_exec::attach(&shared, Arc::new(TestFederatedSource));
+
+    let code = "import time\ntime.sleep(3)\nprint('done')";
+    let document = shared
+        .open(OpenRequest::untitled(code, EditorMode::General))
+        .id()
+        .clone();
+    assert!(
+        shared.update(|service| service.set_env(&document, Some("python".to_string()))),
+        "绑定 python 环境应当算作变更"
+    );
+
+    let started = Instant::now();
+    shared
+        .submit(
+            document.clone(),
+            &ExecTarget::Script(editor::env::ScriptRequest {
+                env_id: "python".to_string(),
+                code: code.to_string(),
+                // 0.8 秒 ≪ 脚本的 3 秒睡眠
+                timeout_ms: 800,
+            }),
+            ResultPlacement::NewSet,
+            RunOptions::default(),
+        )
+        .expect("提交脚本执行");
+
+    let notes = collect_script_notes(&shared, 1);
+    let note = notes.into_iter().next().expect("应有脚本结论");
+    match note.result {
+        Ok(outcome) => {
+            assert!(
+                outcome.timed_out,
+                "0.8 秒超时下 3 秒脚本必须被判超时；timed_out 为 false 说明还在用写死的常量"
+            );
+            assert!(
+                !outcome.stdout.contains("done"),
+                "超时杀进程前不该跑完：{:?}",
+                outcome.stdout
+            );
+        }
+        Err(reason) => panic!("脚本执行失败：{reason}"),
+    }
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "应当早于脚本自然结束（实际 {elapsed:?}）"
+    );
+    eprintln!("✅ 请求自带超时生效（0.8 秒杀掉 3 秒脚本，耗时 {elapsed:?}）");
 }
 
 /// 等脚本结论（生产由面板轮询泵做；这里手动轮询 `drain_script_notes`）

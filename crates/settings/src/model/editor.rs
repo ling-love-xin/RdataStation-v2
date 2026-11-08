@@ -77,6 +77,11 @@ pub struct Editor {
     /// 保存时自动格式化 SQL（默认关；开启后 Ctrl+S 落盘前先跑格式化）。
     #[serde(default = "default_format_on_save")]
     pub format_on_save: bool,
+    /// 脚本执行超时（毫秒，默认 60000）。到点杀**进程树**，结论带 `timed_out = true`。
+    /// 只作用于通用模式的本地脚本（Python / R / Rustc）；数据库查询不受此项影响。
+    /// 每次执行时由宿主读出来随 `ScriptRequest` 进执行线程（工作线程不碰全局设置）。
+    #[serde(default = "default_env_timeout_ms")]
+    pub env_timeout_ms: i64,
 }
 
 impl Default for Editor {
@@ -100,6 +105,7 @@ impl Default for Editor {
             format_keyword_case: default_format_keyword_case(),
             format_indent_width: default_format_indent_width(),
             format_on_save: default_format_on_save(),
+            env_timeout_ms: default_env_timeout_ms(),
         }
     }
 }
@@ -187,4 +193,10 @@ fn default_format_indent_width() -> i64 {
 /// 保存时自动格式化默认：关
 fn default_format_on_save() -> bool {
     false
+}
+
+/// 脚本执行超时默认：60 秒（与 `ports/editor_env.rs::SCRIPT_TIMEOUT_MS` 同值——
+/// 两处必须一起改，否则「用户没配过」时前后台口径又会分叉）
+fn default_env_timeout_ms() -> i64 {
+    60_000
 }

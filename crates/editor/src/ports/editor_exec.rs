@@ -974,6 +974,7 @@ impl QueryRunner for EngineQueryRunner {
     ///
     /// 编辑器在工作线程上调用（可阻塞）：这里把 env_id 翻译成命令（`editor_env::resolve`），
     /// 再交给 `run_script_process`（stdin 写代码 + 并发收输出 + 超时杀进程树）。
+    /// 超时用**请求自带的** `timeout_ms`（宿主按设置读出后传入）——执行线程不读设置。
     /// 环境未注册（T2b-3 管理环境落地前只有内置的 python / Rscript / rustc）如实拒绝。
     fn run_script(
         &self,
@@ -985,7 +986,7 @@ impl QueryRunner for EngineQueryRunner {
                 &env.command,
                 &env.args,
                 &request.code,
-                crate::ports::editor_env::SCRIPT_TIMEOUT_MS,
+                request.timeout_ms,
             ))
     }
 

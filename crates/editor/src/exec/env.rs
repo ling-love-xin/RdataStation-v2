@@ -81,13 +81,16 @@ impl Environment {
     }
 }
 
-/// 一次脚本执行请求（编辑器只表达意图：用哪个环境 + 跑什么代码）
+/// 一次脚本执行请求（编辑器只表达意图：用哪个环境、跑什么代码、跑多久算超时）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptRequest {
     /// 目标环境的 id（执行器拿它去 [环境目录 / 已注册环境] 里找命令）
     pub env_id: String,
     /// 要跑的代码（原样，不预包装）
     pub code: String,
+    /// 超时（毫秒）：宿主在提交时按设置读出并随请求传入——执行线程不读全局设置。
+    /// 到点杀**进程树**，结论带 `timed_out = true`。
+    pub timeout_ms: u64,
 }
 
 /// 一次脚本执行的结论（执行器给的真实值）

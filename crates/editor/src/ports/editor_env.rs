@@ -64,9 +64,11 @@ pub struct ResolvedEnv {
 static RESOLVED_ENVS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, ResolvedEnv>>> =
     std::sync::OnceLock::new();
 
-/// 脚本执行的超时（毫秒）：防止 `while True: pass` 这类脚本把执行线程永远占住。
+/// 脚本执行的**兜底**超时（毫秒）：防止 `while True: pass` 这类脚本把执行线程永远占住。
 ///
-/// MVP 先给一个保守默认；T2b-3「管理环境」落地后仍用这个默认（超时可配列为后续项）。
+/// 正常路径不读这个常量：超时由宿主按设置项 `editor.env_timeout_ms` 在提交时读出、
+/// 随 [`crate::env::ScriptRequest::timeout_ms`] 传入。常量只在设置服务未装载时兜底
+/// （headless 宿主 / 早期测试），值与设置项默认值同值——两处改必须一起改。
 /// 到点杀**进程树**，结论如实带 `timed_out = true`（退出码是杀进程给的，不是脚本自己退的）。
 pub const SCRIPT_TIMEOUT_MS: u64 = 60_000;
 

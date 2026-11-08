@@ -145,6 +145,16 @@ pub(crate) fn apply_slot(
             };
             SettingsService::set_format_on_save(on, cx);
         }
+        Slot::EditorEnvTimeoutMs => {
+            let Some(n) = value.as_number() else {
+                return false;
+            };
+            // 1 秒 – 1 小时：低于 1 秒会把正常启动的脚本误杀，高于 1 小时等于没超时。
+            if !(1_000.0..=3_600_000.0).contains(&n) {
+                return false;
+            }
+            SettingsService::set_env_timeout_ms(n as i64, cx);
+        }
         _ => return false,
     }
     true
@@ -394,6 +404,21 @@ impl SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.editor.format_on_save = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+    /// 脚本执行超时（毫秒）：宿主在构造 `ScriptRequest` 时读出来随请求进执行线程。
+    ///
+    /// 执行线程**不读**全局设置（后台线程不该碰 `App`）；所以这里是唯一权威来源，
+    /// 每次执行现读，改完下一次执行即用（不需要 `refresh_windows`——不牵渲染）。
+    pub fn env_timeout_ms(cx: &App) -> u64 {
+        cx.global::<Settings>().editor.env_timeout_ms.max(1) as u64
+    }
+    /// 脚本执行超时写入（1 秒 – 1 小时；范围校验在 `apply_slot`，这里再夹一次防越界）。
+    pub fn set_env_timeout_ms(ms: i64, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.env_timeout_ms = ms.clamp(1_000, 3_600_000);
         }
         persist(&cx.global::<Settings>().clone());
     }

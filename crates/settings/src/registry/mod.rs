@@ -139,6 +139,8 @@ pub enum Slot {
     EditorFormatIndentWidth,
     /// 【2026-10-28】保存时自动格式化 SQL（默认关）。
     EditorFormatOnSave,
+    /// 【2026-11-08】脚本执行超时（毫秒，默认 60000；随 `ScriptRequest` 进执行线程）。
+    EditorEnvTimeoutMs,
     AppearanceFontSize,
     AppearanceLocale,
     AppearanceTabBarMaxWidth,
@@ -271,6 +273,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "editor.format_keyword_case" => Slot::EditorFormatKeywordCase,
         "editor.format_indent_width" => Slot::EditorFormatIndentWidth,
         "editor.format_on_save" => Slot::EditorFormatOnSave,
+        "editor.env_timeout_ms" => Slot::EditorEnvTimeoutMs,
         "appearance.font_size" => Slot::AppearanceFontSize,
         "appearance.locale" => Slot::AppearanceLocale,
         "appearance.tab_bar_max_width" => Slot::AppearanceTabBarMaxWidth,
@@ -368,6 +371,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         | Slot::EditorSmartIndent
         | Slot::EditorInlineCompletion => KindTag::Bool,
         Slot::EditorDefaultTabSize => KindTag::Number,
+        Slot::EditorEnvTimeoutMs => KindTag::Number,
         Slot::EditorDefaultLineEnding | Slot::EditorDefaultEncoding => KindTag::Enum,
         Slot::EditorFoldOpenKeywords | Slot::EditorFoldCloseKeywords => KindTag::Text,
         Slot::AppearanceFontSize => KindTag::Number,

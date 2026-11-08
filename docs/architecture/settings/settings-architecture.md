@@ -137,6 +137,7 @@ graph TD
 | `editor.default_hard_tabs` | 编辑器 | bool | `false` | 下次操作 | `crates/editor/src/view/host.rs::apply_editor_defaults`（新建文档） | 设置页 | ✅ 已落地（2026-10-24，#48） |
 | `editor.default_line_ending` | 编辑器 | enum `LF`/`CRLF` | `LF` | 下次操作 | `crates/editor/src/view/host.rs::apply_editor_defaults`（新建文档） | 设置页 | ✅ 已落地（2026-10-24，#48） |
 | `editor.default_encoding` | 编辑器 | enum 编码五档 | `UTF-8` | 下次操作 | `crates/editor/src/view/host.rs::apply_editor_defaults`（新建文档） | 设置页 | ✅ 已落地（2026-10-24，#48） |
+| `editor.env_timeout_ms` | 编辑器 | i64（1000–3600000 ms） | `60000` | 即时（下一次执行） | `crates/editor/src/view/host/env.rs::EditorHostPanel::run_script`（读设置 → 随 `ScriptRequest::timeout_ms` 进执行线程；工作线程不读全局设置） | 设置页 | ✅ 已落地（2026-11-08） |
 | `navigator.source_short_code` | 数据源导航 | bool | `true` | 即时 | `database/src/nav_view.rs::render_connection_row` | 设置页 | ✅ 已落地 |
 | `navigator.show_tags` | 数据源导航 | bool | `false` | 即时 | `database/src/nav_view.rs::render_connection_row` | 两者 | ✅ 已落地 |
 | `navigator.show_scope` | 数据源导航 | bool | `true` | 即时 | `database/src/nav_view.rs::render_connection_row` | 两者 | ✅ 已落地 |

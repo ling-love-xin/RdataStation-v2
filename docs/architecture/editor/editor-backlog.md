@@ -269,7 +269,7 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 | 中 | 标签方案 B（结构化 `tags`）/ C（全局 Tag System） | 数据层：现只有 A「说明即标签」 | §十二 |
 | 低 | 跳转后自动弹说明 / hover 300ms 延迟 | 事件回传：`jump_to_line` 不回传行号 | §十二（`gutter_hovered_row` 当帧计算） |
 | 低 | 修饰符高亮未映射（readonly / deprecated） | 渲染：主题侧无对应 token | `view/highlight.rs:217` |
-| 低 | 脚本执行超时不可配 | 设置：无 `editor.env_timeout` | `ports/editor_env.rs:69` |
+| ~~低~~ | ~~脚本执行超时不可配~~ | ✅ **本轮已修（2026-11-08）**：设置项 `editor.env_timeout_ms`（默认 60000，1000–3600000）+ 超时随 `ScriptRequest::timeout_ms` 进执行线程，见 §15.9 | 原证据：无 `editor.env_timeout`；`ports/editor_env.rs` 只有写死常量 |
 | 低 | R 内核单元占位（只有语言标签） | 执行端：无 R 解释器 | `notebook/cell.rs:49` |
 | 下期 | P3 钻取关联数据（右键值→查关联表） | 入口：菜单未接 | §一（用户明确下期） |
 | 下一版本 | 执行上下文模型（per-context 独立连接/事务/取消） | 整体未开工 | §二 + `../connection/execution-context-model.md` |
@@ -466,4 +466,55 @@ headless 经验：正文编辑要走 `editor.read(cx).focus_handle(cx)` + `focus
 2. **Python / R / Julia 单元的补全**：需要 per-cell 语言服务会话（虚拟 URI），是一条独立改造。
 3. `choose_completion` 对 `Analysis` 仍可能把 LSP provider 装到主 state —— 笔记模式下没人调用，
    无害但无用；改它会动"唯一开关处"的语义，留到与 per-cell LSP 一起做时收口。
+
+### 15.9 脚本执行超时可配（15.1 第 5 条已修）
+
+**问题**：`ports/editor_env.rs` 只有写死的 `SCRIPT_TIMEOUT_MS = 60_000`，`run_script` 直接把常量
+塞进 `run_script_process`——用户改不了，长跑脚本（训练、批量导出）一律被 60 秒杀掉。原注释也自认
+「超时可配列为后续项」。
+
+**改法：配置在主线程读出、随请求进执行线程**（不是让工作线程读设置——它拿不到 `App`）。
+
+| 层 | 位置 | 改动 |
+| --- | --- | --- |
+| 模型 | `settings/src/model/editor.rs` | `env_timeout_ms: i64`（`#[serde(default = "default_env_timeout_ms")]` = `60000`）+ `Default` |
+| 登记 | `settings/src/registry/entries/editor.rs` | `editor.env_timeout_ms`（Number，组 `exec`/「执行」，presets 10 秒 / 30 秒 / 60 秒（默认）/ 5 分钟，`Immediate`） |
+| 槽位 | `settings/src/registry/mod.rs` | `Slot::EditorEnvTimeoutMs` + `slot_for` + `slot_kind = Number` |
+| 读写 | `settings/src/service/{mod.rs,editor.rs}` | `value_by_key` / `apply_by_key` 分发 + `apply_slot`（范围 1000–3600000）+ `env_timeout_ms(cx)` / `set_env_timeout_ms`（`clamp` 兜底，不调 `refresh_windows`——不牵渲染） |
+| 请求 | `editor/src/exec/env.rs` | `ScriptRequest` 加 `timeout_ms: u64`（必填：逼每处调用方想清楚） |
+| 生产构造 | `editor/src/view/host/env.rs::run_script` | 提交前读设置（设置服务未装载时回退 `SCRIPT_TIMEOUT_MS`，不取 0）→ 随请求传入 |
+| 消费 | `editor/src/ports/editor_exec.rs::run_script` | `request.timeout_ms` 取代常量 |
+| 常量 | `editor/src/ports/editor_env.rs` | 注释改为「兜底」：只服务设置未装载的宿主，值与设置默认同值（两处同改） |
+
+**为什么不在执行线程里读设置**：后台线程不该碰 `App`（`Settings` 是 `App` 全局）。设置值必须在
+提交边界由主线程快照后传入——这与 §15.4「折叠关键字贯通后台扫描」同一条纪律。
+
+**验证**：
+
+- `cargo test -p rds-settings --lib` → **34 passed / 0 failed**（含 `every_model_leaf_is_registered`、
+  `registered_defaults_match_the_model`、`page_rows_are_scalar_and_writable`、
+  `number_presets_are_consistent`、`groups_are_contiguous_and_consistently_named` 五项契约）
+- `cargo check -p rds-editor --all-targets -j 1` → exit 0
+- `rds-editor --lib -- --test-threads=1` → **763 passed / 3 failed / 1 ignored**（与 §15.8 基线逐条一致）
+- 新增真机用例 `script_timeout_comes_from_the_request_not_the_constant`（`workbench/tests/editor_exec_real.rs`）
+  → 1 passed：脚本 `time.sleep(3)`、请求只给 800ms → `timed_out == true`、`stdout` 不含 `done`、总耗时
+  1.17s。**这是区分性证明**：若执行器仍读 60 秒常量，脚本会正常跑完（`timed_out == false`）而失败。
+- `real_python_script_runs_through_the_editor` 回归 → 1 passed（原链路未被改坏）
+- `cargo test -p rds-workbench --test ui_contract` → **9 passed / 0 failed**
+- `cargo build -p rds-app` → exit 0
+
+**边界与未做**：
+
+1. 只覆盖**本地脚本**（Python / R / Rustc）。数据库查询的超时走连接默认值 / 取消通道，不归此项。
+2. 不提供「0 = 不限」语义：范围硬约束 1 秒–1 小时。低到 1 秒以下会把正常解释器启动误杀，
+   高于 1 小时等同没超时——两档都不做成可选项，避免"配了等于没配"。
+3. `SCRIPT_TIMEOUT_MS` 与设置默认值是**两处同值**（`60000`），注释里已写死这条约束；
+   改一处必须改另一处，否则「用户没配过」时前后台口径又会分叉。
+
+**顺带修复（上轮遗漏，本轮门禁照出来）**：`crates/workbench/tests/ui_contract.rs::every_panel_module_is_registered_in_the_manifests`
+红——`src/panels/overview.rs`（上一轮工作台概览卡片新增）没登记进尺寸 / 颜色两份契约清单，
+等于这两份契约对该文件静默失效。已在两处清单各补一条登记；补后 `ui_contract` 9 passed
+（同时证明 overview.rs 无裸色值、无裸尺寸字面量）。
+
+
 

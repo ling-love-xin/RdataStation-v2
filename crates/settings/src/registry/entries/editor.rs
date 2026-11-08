@@ -338,5 +338,28 @@ pub fn entries() -> Vec<SettingSpec> {
             composite: false,
             disabled: false,
         },
+        SettingSpec {
+            key: "editor.env_timeout_ms",
+            section: "editor",
+            section_label: "编辑器",
+            group: "exec",
+            group_label: Some("执行"),
+            label: "脚本执行超时",
+            hint: "本地脚本（Python / R / Rustc）跑超过这个时间就杀进程树，结论标注「已超时」（默认 60000 毫秒 = 60 秒）；数据库查询不受此项影响，改后下一次执行即用",
+            hint_inline: true,
+            kind: SettingKind::Number,
+            presets: &[
+                (10_000, "10 秒"),
+                (30_000, "30 秒"),
+                (60_000, "60 秒（默认）"),
+                (300_000, "5 分钟"),
+            ],
+            default_json: "60000",
+            effect: SettingEffect::Immediate,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/view/host/env.rs::EditorHostPanel::run_script（随 ScriptRequest 进执行线程）",
+            composite: false,
+            disabled: false,
+        },
     ]
 }

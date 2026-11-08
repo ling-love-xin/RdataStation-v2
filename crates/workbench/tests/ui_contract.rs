@@ -225,6 +225,11 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../src/panels/search_results.rs"),
         ),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
+        // 工作台概览卡片（2026-11-08）：尺寸与颜色同受这两份契约约束
+        (
+            "panels/overview.rs",
+            include_str!("../src/panels/overview.rs"),
+        ),
         // Quick Open（Phase 0：结果区换成 List 组件；后续改动不得回退）
         (
             "quick_open/delegate.rs",
@@ -676,6 +681,11 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../src/panels/search_results.rs"),
         ),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
+        // 工作台概览卡片（2026-11-08）：尺寸与颜色同受这两份契约约束
+        (
+            "panels/overview.rs",
+            include_str!("../src/panels/overview.rs"),
+        ),
         (
             "quick_open/delegate.rs",
             include_str!("../src/quick_open/delegate.rs"),

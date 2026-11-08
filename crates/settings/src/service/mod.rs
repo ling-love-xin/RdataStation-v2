@@ -88,6 +88,7 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::EditorSmartIndent => SettingValue::Bool(settings.editor.smart_indent),
         Slot::EditorInlineCompletion => SettingValue::Bool(settings.editor.inline_completion),
         Slot::EditorDefaultTabSize => SettingValue::Number(settings.editor.default_tab_size as f64),
+        Slot::EditorEnvTimeoutMs => SettingValue::Number(settings.editor.env_timeout_ms as f64),
         Slot::EditorDefaultHardTabs => SettingValue::Bool(settings.editor.default_hard_tabs),
         Slot::EditorDefaultLineEnding => {
             SettingValue::Text(settings.editor.default_line_ending.clone())
@@ -335,7 +336,8 @@ impl SettingsService {
             | Slot::EditorDefaultEncoding
             | Slot::EditorFormatKeywordCase
             | Slot::EditorFormatIndentWidth
-            | Slot::EditorFormatOnSave => editor::apply_slot(slot, value, window, cx),
+            | Slot::EditorFormatOnSave
+            | Slot::EditorEnvTimeoutMs => editor::apply_slot(slot, value, window, cx),
             Slot::NavigatorSourceShortCode
             | Slot::NavigatorShowTags
             | Slot::NavigatorShowScope

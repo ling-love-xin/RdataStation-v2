@@ -154,7 +154,18 @@ impl EditorHostPanel {
             self.set_message(Some("文档是空的，没有可执行的脚本".to_string()), cx);
             return;
         }
-        let target = ExecTarget::Script(crate::env::ScriptRequest { env_id, code });
+        // 超时值在这里读出、随请求进执行线程（工作线程不读全局设置，也不该读）。
+        // 设置项没装载时（headless 宿主 / 早期测试）回退内置默认，不取 0。
+        let timeout_ms = if cx.has_global::<settings::model::Settings>() {
+            settings::SettingsService::env_timeout_ms(cx)
+        } else {
+            crate::ports::editor_env::SCRIPT_TIMEOUT_MS
+        };
+        let target = ExecTarget::Script(crate::env::ScriptRequest {
+            env_id,
+            code,
+            timeout_ms,
+        });
         match self.shared.submit(
             self.document.clone(),
             &target,
