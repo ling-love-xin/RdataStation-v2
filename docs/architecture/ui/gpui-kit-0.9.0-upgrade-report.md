@@ -234,7 +234,15 @@ element.rs 里 0 命中，就说明绘制侧丢了。
 | `rds-workbench --test scratchpad_editor_entry` | 0 / **1 failed** | `an_open_request_lands_in_a_sql_editor_tab`（`scratchpad_editor_entry.rs:89`，`请求应已被消费（取出即清空）`） |
 | `rds-ui-guard --test workspace_ui_contract` | 3 / **1 failed** | `no_new_hardcoded_color_or_pixel` —— **main 自带，与本次升级无关**（见下） |
 
-前 6 条与 rebase 前的基线**逐条对应**（基线 8 条里那条 `mock_view::tests::column_dialog_shows_type_mismatch_warning` 属 `rds-mock`，本轮被 exclude，所以这里少一条）。第 7 条是新出现的：
+前 6 条与 rebase 前的基线**逐条对应**。基线里那第 7 条 UI 观察层用例
+`mock_view::tests::column_dialog_shows_type_mismatch_warning` 属 `rds-mock`，本轮被 exclude 没跑；
+并入前 main 的 `5675df1e` 删掉了那条悬空的 `mod tests;`，于是**补跑**
+`cargo test -p rds-mock -j 2`：**292 项全绿、0 failed**，其中
+`mock_view::tests::column_dialog_shows_type_mismatch_warning ... ok` ——
+**它在 main 的 mock 拆分之后就复现不了了**（不再走那条受复用绘制影响的断言路径）。
+所以完整账目是 **3794 passed / 9 failed**（3502 + 292），基线的 7 条 UI 观察层里 6 条复现、1 条消失。
+
+第 7 个失败目标（`rds-ui-guard`）是新出现的：
 
 - `no_new_hardcoded_color_or_pixel` 报的是 `crates/result_panel/src/grid/fit.rs`（未登记的新文件，裸色值 0 / 裸 px 6）与 `crates/result_panel/src/ui.rs`（`px(4) -> 12`）。这两个文件来自 **main 的 `44040e21`「列宽自适应」**，本分支一行都没碰 `crates/result_panel/`（`git diff --name-only a569df57..HEAD` 里没有它）。也就是说：main 上这条守卫本来就是红的，只是 main 当前测试编译不过（`rds-mock` 的 `mod tests;`），没人跑过它。
 - 处置：**不在升级分支里改别人的 UI 代码**（提常量的量值、登记 BASELINE 都是设计取舍）。记在这里当交接项，由 result_panel 那侧决定。
