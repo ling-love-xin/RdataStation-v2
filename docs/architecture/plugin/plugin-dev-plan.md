@@ -759,6 +759,13 @@ Uninstalled ──install──▶ Installed ──load──▶ Loaded ──ac
 > 卸载冲突方后不重启就只能挂错误行。`enable_plugin` 对清单损坏仍明确拒绝
 > （「插件清单损坏，无法启用」），面板只是不再给这个点了没反应的死按钮。
 >
+> **2026-10-16 进展（第四刀，宿主事件订阅）**：插件面板在创建时订阅
+> `plugin::events` 的生命周期事件，热插拔扫描 / 安装 / 卸载 / 启停后自动重拉列表
+> （此前 `events.rs` 零宿主订阅方，面板只能手动 ⟳）；`Custom` 事件不触发，
+> 刷新进行中收到事件记一次补刷，慢消费者 `Lagged` 时强制重拉。
+> 同时 `retry_load_plugin` 在库内无登记行时补登记，避免重试成功后停用 / 卸载
+> 按 code 写库命中 0 行、重启又复活。
+>
 > **仍未接**：`LeftPanel`/`RightPanel` → `PanelId`、
 > Quick Open 命令合并、设置页外部登记项渲染、未注册 id 占位面板、`project_resources` 对账与图标 resolver。
 
@@ -1143,7 +1150,8 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 
 **插件入口面板**（2026-10-22，P4 一期）：
 - `crates/workbench/src/panels/left_tabs.rs` PluginPanel：占位 → 已装插件列表
-  （`plugin::manager::list_plugins`，会话态 `Rc<RefCell<Vec<PluginInfo>>>`，事件路径刷新）；
+  （`plugin::manager::list_plugins`，会话态 `Rc<RefCell<Vec<PluginInfo>>>`，事件路径刷新；
+  创建时订阅 `plugin::events` 生命周期事件，热插拔 / 安装 / 卸载 / 启停自动重拉，⟳ 为手动兜底）；
   行 = 名称 v版本 + 状态徽标（Active/Loaded/Inactive/Error 语义色）+ 启用/停用 `Button::ghost`；
   头部刷新按钮（`IconName::RefreshCw`）；空态与错误文案。
 - `manager.rs`：`PLUGIN_RUNTIME_HANDLE` 全局 tokio Handle（`set_runtime_handle` / `runtime_handle`），

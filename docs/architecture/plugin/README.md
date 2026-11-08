@@ -173,7 +173,11 @@ disable / uninstall 全部改用 by-code 接口（此前按安装 uuid 更新，
 （`PluginKind::Unknown` + 失败原因，面板同样可卸载；手删目录后下一次扫描自动清掉）；
 错误行行尾的「重试」调 `PluginManager::retry_load_plugin` 重新解析清单、复核 checksums
 并再试建注册表——冲突被拒时清单本身没变，热插拔 diff 判「无变化」，卸载冲突方后只能靠
-这个入口恢复（成功按库内 `is_enabled` 决定是否激活，并清掉该插件的变更标记）；
+这个入口恢复（成功按库内 `is_enabled` 决定是否激活，并清掉该插件的变更标记；库内没有
+登记行时补登记，避免后续停用 / 卸载按 code 写库命中 0 行、重启又复活）；
+面板订阅 `events` 的插件生命周期事件（加载 / 激活 / 停用 / 安装 / 卸载 / 启停），
+热插拔扫描或面板外的操作都会自动重拉列表；`Custom` 事件不触发，刷新进行中收到事件
+会记一次补刷，慢消费者 `Lagged` 时也强制重拉，不会让订阅循环静默退出；
 安装回执四种文案（保持停用 / 激活失败 / 已安装并启用 / 兜底）；
 变更提示 + 「重载 N」按钮消费 `pending_reloads`。`cargo test -p rds-plugin` **224** 单测 + **80** 集成全绿
 （`lifecycle` 15 条）；`cargo test -p rds-store --lib` **162 passed / 2 ignored**。
@@ -183,7 +187,8 @@ disable / uninstall 全部改用 by-code 接口（此前按安装 uuid 更新，
 重载 N / 启停 / 卸载，安装链含依赖对账与加载期完整性复核；**贡献点注册表模型已落地**
 （`contributes::ContributionRegistry`：三张表合并、跨插件 id 冲突在**第二个插件加载期**即拒绝
 并以错误行留在列表、清单期 id / 面板位置 / 设置类型校验，`PluginManager::contributions()`
-按插件 id 稳定排序查询；失败行可经 `retry_load_plugin` 重试恢复）；**宿主接线未开始**
+按插件 id 稳定排序查询；失败行可经 `retry_load_plugin` 重试恢复）；**宿主接线仅完成
+面板生命周期事件刷新**（列表随热插拔 / 安装 / 卸载 / 启停自动重拉），其余未开始
 （`CommandRegistry` 接 Quick Open、`PanelRegistry` 接左右 Dock、设置外部登记项、
 `project_resources` 对账、插件图标 resolver）；**P5（分发与签名）未开始**。
 

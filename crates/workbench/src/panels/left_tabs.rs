@@ -577,6 +577,8 @@ pub struct PluginPanel {
     plugins: Rc<RefCell<Vec<PluginInfo>>>,
     /// 刷新进行中（防重复触发）
     loading: Rc<Cell<bool>>,
+    /// 刷新进行中又收到刷新请求：结束后再拉一次，避免事件被 `loading` 直接吞掉
+    refresh_again: Rc<Cell<bool>>,
     /// 最近一次操作的错误文案（失败展示，成功即清）
     error: Rc<RefCell<Option<String>>>,
     /// 最近一次操作的成功回执（与 `error` 互斥，刷新时不清）
@@ -594,13 +596,40 @@ impl PluginPanel {
             focus_handle: cx.focus_handle(),
             plugins: Rc::new(RefCell::new(Vec::new())),
             loading: Rc::new(Cell::new(false)),
+            refresh_again: Rc::new(Cell::new(false)),
             error: Rc::new(RefCell::new(None)),
             notice: Rc::new(RefCell::new(None)),
             progress: Rc::new(RefCell::new(None)),
             plugins_list: Rc::new(RefCell::new(None)),
         };
         this.refresh_plugins(cx, true);
+        Self::subscribe_events(cx);
         this
+    }
+
+    /// 订阅插件生命周期事件：热插拔扫描 / 安装 / 卸载 / 启停都不经过面板按钮，
+    /// 不订阅就只能靠用户手动「刷新」才看到列表变化（`events.rs` 此前零宿主订阅方）。
+    fn subscribe_events(cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        let mut receiver = plugin::events::get_event_manager().subscribe();
+        let _ = cx.spawn(async move |_this, cx| {
+            loop {
+                match receiver.recv().await {
+                    Ok(event) => {
+                        if !event_touches_plugin_list(&event) {
+                            continue;
+                        }
+                        let _ = weak.update(cx, |this, cx| this.refresh_plugins(cx, false));
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(dropped)) => {
+                        // 慢消费者丢事件时不能静默停掉循环：强制再拉一次当前清单。
+                        tracing::warn!(dropped, "插件面板事件订阅落后，重新拉取插件清单");
+                        let _ = weak.update(cx, |this, cx| this.refresh_plugins(cx, false));
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
     }
 
     /// 重新拉取插件清单（后台执行 `list_plugins`，回主线程写状态）。
@@ -609,9 +638,12 @@ impl PluginPanel {
     /// 失败的操作会被随后成功的 `list_plugins` 把错误文案擦掉，用户看不到原因。
     fn refresh_plugins(&self, cx: &mut Context<Self>, clear_error: bool) {
         if self.loading.get() {
+            // 刷新是一次异步快照读取：期间来的事件可能读不到最新清单，记一个补刷。
+            self.refresh_again.set(true);
             return;
         }
         self.loading.set(true);
+        self.refresh_again.set(false);
         let weak = cx.entity().downgrade();
         let _ = cx.spawn(async move |_this, cx| {
             // list_plugins 是同步快照读取；放进后台线程避免任何潜在 I/O 阻塞 UI
@@ -635,6 +667,9 @@ impl PluginPanel {
                     }
                 };
                 cx.notify();
+                if this.refresh_again.replace(false) {
+                    this.refresh_plugins(cx, false);
+                }
             });
         });
     }
@@ -930,6 +965,14 @@ fn install_receipt(
     }
 }
 
+/// 该事件是否可能改变插件列表（纯函数，便于单测）。
+///
+/// 生命周期事件都会改列表或状态；`Custom` 是插件自定义事件，与面板清单无关，
+/// 订阅侧不能因为它每来一条就拉一次 `list_plugins`。
+fn event_touches_plugin_list(event: &plugin::events::PluginEvent) -> bool {
+    !matches!(event, plugin::events::PluginEvent::Custom { .. })
+}
+
 /// 插件状态徽标（文案 + 语义色）。
 fn plugin_state_label(state: PluginState) -> (&'static str, &'static str) {
     match state {
@@ -1201,7 +1244,11 @@ impl ComponentPanel for PluginPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::{install_receipt, plugin_row_subtitle, uninstall_confirm_description};
+    use super::{
+        event_touches_plugin_list, install_receipt, plugin_row_subtitle,
+        uninstall_confirm_description,
+    };
+    use plugin::events::PluginEvent;
     use plugin::wasm::PluginState;
 
     /// 出错行必须把 id 和原因同时留下：只显示原因会分不清是哪个插件，
@@ -1216,6 +1263,27 @@ mod tests {
         assert!(failed.contains("rds.driver.oracle"), "{failed}");
         assert!(failed.contains("原因："), "{failed}");
         assert!(failed.contains("进程启动失败：超时"), "{failed}");
+    }
+
+    /// 事件订阅只应把「会改清单 / 状态」的生命周期事件翻成刷新；自定义事件不触发。
+    #[test]
+    fn only_lifecycle_events_trigger_a_list_refresh() {
+        assert!(event_touches_plugin_list(&PluginEvent::PluginLoaded {
+            plugin_id: "a".into()
+        }));
+        assert!(event_touches_plugin_list(&PluginEvent::PluginInstalled {
+            plugin_id: "a".into(),
+            code: "a".into(),
+            version: "1.0".into(),
+        }));
+        assert!(event_touches_plugin_list(&PluginEvent::PluginDisabled {
+            plugin_id: "a".into()
+        }));
+        assert!(!event_touches_plugin_list(&PluginEvent::Custom {
+            plugin_id: "a".into(),
+            event_name: "progress".into(),
+            payload: serde_json::json!({"pct": 10}),
+        }));
     }
 
     /// 回执必须如实反映库里的启用状态与运行时结果：只说「已安装」会把停用 / 激活失败藏起来。

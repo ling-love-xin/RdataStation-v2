@@ -883,7 +883,20 @@ impl PluginManager {
         let enabled = match engine::migration::get_global_db_manager() {
             Some(db) => match db.get_plugin_by_code(id).await {
                 Ok(Some(plugin)) => plugin.is_enabled,
-                Ok(None) => true,
+                Ok(None) => {
+                    // 目录直接拷进来的插件没有登记行：重试成功后补登记，
+                    // 否则之后的停用 / 卸载按 code 写库命中 0 行，重启按「无记录=启用」复活。
+                    if let Err(e) = crate::installer::register_manifest(
+                        &loaded.manifest,
+                        &loaded.install_path,
+                        db,
+                    )
+                    .await
+                    {
+                        tracing::warn!(plugin_id = %id, error = %e, "重试加载后登记失败");
+                    }
+                    true
+                }
                 Err(e) => {
                     tracing::warn!(plugin_id = %id, error = %e, "重试读取插件登记失败，按启用处理");
                     true
