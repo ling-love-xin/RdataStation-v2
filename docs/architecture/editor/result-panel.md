@@ -1414,6 +1414,47 @@ enum 类 `Select` 需要"值 → 显示"映射来源，当前拿不到枚举定�
 菜单在 22px 内容高里被裁 2px 后的图标观感；触屏（无 hover）下入口靠**列头右键菜单**
 （列级项与这里同源 `column_menu_items`），未目视确认。
 
+### 8.30 结果集标签条抬到编辑器同档（Small 24px → Medium 32px，2026-11-08）
+
+**问题（用户原话）**：「结果集的标题不是要跟编辑器的文件表一致吗，为什么感觉目前结果集的标题还感觉高度低」。
+
+**取证（全在 vendor 权威源码里，不是推断）**：
+
+| | 编辑器文件标签条 | 结果集标签条（改前） |
+| --- | --- | --- |
+| 组件 | dock `TabBar::new("tab-bar")`（`dock/tab_panel.rs:486-489`） | `TabBar::new("editor-result-sets")`（`sets.rs:177`） |
+| size 档 | **不写** → `Size::default()` = `Medium`（`sizing.rs:6-13` 的 `#[default]`） | `Size::Small` |
+| variant | `shared.tab_bar_variant()`，默认 `Tab` | 默认 `Tab`（一致） |
+| Tab 档高 | Tab+Medium = **32px**（`tab/tab.rs:79-82`） | Tab+Small = **24px**（`tab.rs:71-74`） |
+| 容器外层高 | 无（TabBar 自己撑） | `.h(rems(1.5))` = **24px**，与组件高**相等、零余量** |
+| tab 间 gap | Medium 12px（`tab_bar.rs:380-384`） | Small 8px |
+| 左右内边距 | Medium 12px（`tab.rs:113-119`） | Small 10px |
+| tab 内高 | Medium 30px（`tab.rs:103-108`） | Small 22px |
+| 字号 | Small/Medium 都是 `text_sm`（14px，`tab.rs:975-979`） | 同（**唯一没差别的一项**） |
+
+所以不是"结果集标签条容器矮了一点"，而是**整整差一个档位**：24 vs 32 = 8px，且容器把 24 卡死、
+连半像素余量都没有。用户肉眼看出"低一截"成立。
+
+**改法**：
+
+- `sets.rs` 的 `TabBar` 档位 `Size::Small` → **`Size::Medium`**，与 dock 的 `tab-bar` 同档，
+  高度 / gap / 内边距 / tab 内高四样一起对齐（字号本来就一样）；
+- `ui::RESULT_TABS_HEIGHT` `1.5`（24px）→ **`2.0`**（32px），容器高 == 组件高，保持"照档位
+  写常量"的既有口径。
+
+**顺带查清的一件事**：dock 的**单面板标题条**（`render_title`，只有一个文件时走这条）
+是 `.h(px(30.))`（`dock/tab_panel.rs:386-388`）。也就是编辑器在单文件时 30px、多文件 tab 时
+32px，两者不完全一致。结果集标签条恒为多标签形态，因此对齐 **32px** 的那条。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **228 passed / 0 failed**（+1
+`sets::tests::tab_strip_matches_the_editor_dock_tab_height`：真实渲染标签条后读
+`debug_bounds("editor-result-tabs")`，断言高 == 32px——`TabVariant::height` 在 vendor 里是
+私有函数，只能靠真渲染量；旧实现读到 24 必挂）；`cargo test -p rds-ui-guard` = 4 passed；
+`cargo check -p rds-result-panel` / `-p rds-editor` 均 0 warning。
+
+**未验证**：真窗口观感（32px 后标签条占掉网格 8px 高度是否显紧）、tab 内右侧「⋯」与钉住
+小按钮在 Medium 档 12px 内边距下的排布、Medium 的 hover/选中底色在结果集这张标签条上的观感。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

@@ -48,8 +48,15 @@ pub const RESULT_STATUS_BAR_HEIGHT: f32 = 1.5;
 /// 结果区默认高 `RESULT_PANE_HEIGHT` = 20rem（320px），这 4px 不影响网格可容纳行数。
 pub const RESULT_TOOLBAR_HEIGHT: f32 = 2.5;
 
-/// 结果集标签条高（1.5rem = 24px，与状态行同档；TabBar 的 Small 档就是这个高）
-pub const RESULT_TABS_HEIGHT: f32 = 1.5;
+/// 结果集标签条高（2rem = 32px）
+///
+/// 2026-11-08 抬到 32px：此前是 1.5rem(24px)，与 `TabBar::with_size(Size::Small)`
+/// 的 Tab 档高**正好相等**，容器高 == 组件高、零余量，看着比编辑器的文件标签条矮一截。
+/// 编辑器文件标签条走 dock 的 `TabBar::new("tab-bar")`，**没写 size** → `Size::default()`
+/// = Medium，`TabVariant::Tab` 在 Medium 档是 32px（vendor `tab/tab.rs:79-82`）。
+/// 所以这里把结果集也放到 Medium 档，高度 / gap（Medium 12px vs Small 8px）/ 内边距
+/// （Medium 12px vs Small 10px）三样都与编辑器同档，字号不变（两档都是 `text_sm` 14px）。
+pub const RESULT_TABS_HEIGHT: f32 = 2.0;
 
 /// 底部动作状态行**中段行数框**宽（4.5rem = 72px：只读显示「共 N[+] 行」，
 /// 行号跳转输入是 backlog；窄框对齐 DBeaver 状态行中段的小输入槽位）

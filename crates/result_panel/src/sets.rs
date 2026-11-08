@@ -169,14 +169,16 @@ pub fn render(
         .collect();
 
     div()
-        // 结构尺寸走常量表；TabBar 自身的高度由组件库按 size 档位决定（Small = 24px）
+        // 结构尺寸走常量表；TabBar 自身的高度由组件库按 size 档位决定（Medium = 32px）
         .h(rems(ui::RESULT_TABS_HEIGHT))
         // 测试按选择器断言原型 §2.4 的竖向顺序（⑤ 在 ⑥ 之上）
         .debug_selector(|| "editor-result-tabs".to_string())
         .child(
             TabBar::new("editor-result-sets")
-                // 【DBeaver 对齐】tab 样式和 SQL 编辑器一致（TabVariant::Tab，不是 Folder）
-                .with_size(Size::Small)
+                // 【DBeaver 对齐】tab 样式和 SQL 编辑器一致（TabVariant::Tab，不是 Folder）；
+                // size 也跟着编辑器走——dock 的 `TabBar::new("tab-bar")` 没写 size（默认
+                // Medium = 32px），这里若留在 Small 档就是 24px，比文件标签条矮 8px。
+                .with_size(Size::Medium)
                 .track_scroll(scroll_handle)
                 .menu(true)
                 .selected_index(active)
@@ -188,9 +190,33 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::tabs;
+    use super::{render, tabs, ResultSetTab, TabActions};
     use crate::store::ResultEntry;
+    use gpui_kit::{
+        div, Context, IntoElement, ParentElement as _, Render, ScrollHandle, Styled as _, Window,
+    };
     use workbench_shell::model::{DocumentId, ExecChannel};
+
+    /// 只画标签条的最小宿主：几何断言需要真实排一遍（`render` 要 `&App` 取主题色）
+    struct TabsHarness {
+        tabs: Vec<ResultSetTab>,
+        scroll: ScrollHandle,
+    }
+
+    impl Render for TabsHarness {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w_full()
+                .child(render(
+                    &self.tabs,
+                    0,
+                    |_, _, _| {},
+                    TabActions::default(),
+                    cx,
+                    &self.scroll,
+                ))
+        }
+    }
 
     fn ok(sql: &str) -> ResultEntry {
         ok_on(sql, ExecChannel::Source)
@@ -295,6 +321,40 @@ mod tests {
             rendered.iter().map(|t| t.pinned).collect::<Vec<_>>(),
             [true, false, false],
             "pinned 切片越界按未钉住处理"
+        );
+    }
+
+    /// 标签条高度必须与编辑器文件标签条同档（32px）
+    ///
+    /// 编辑器那边是 dock 的 `TabBar::new("tab-bar")`，**不写 size** → `Size::default()`
+    /// = Medium，`TabVariant::Tab` 在 Medium 档 32px（vendor `tab/tab.rs:79-82`）。
+    /// 这里原先用 `Size::Small`（24px）且外层容器也写死 24px，比文件标签条矮 8px 且零余量，
+    /// 用户直接看出"结果集标题比编辑器标签矮"。`TabVariant::height` 在 vendor 里是私有
+    /// 函数，只能靠真渲染量——旧实现下这条断言读到 24。
+    #[gpui_kit::test]
+    fn tab_strip_matches_the_editor_dock_tab_height(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let sets = [ok("select 1"), ok("select 2")];
+        let (_, vcx) = cx.add_window_view(|_, _| TabsHarness {
+            tabs: tabs(&refs(&sets), ExecChannel::Source, &[]),
+            scroll: ScrollHandle::new(),
+        });
+        // 首帧只排位置，第二帧才是稳定几何
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+
+        let bounds = vcx
+            .debug_bounds("editor-result-tabs")
+            .expect("标签条容器必须带 debug_selector 才量得到");
+        assert_eq!(
+            bounds.size.height,
+            gpui_kit::px(32.),
+            "结果集标签条要与编辑器文件标签条等高（Medium 档 32px），实际 {}",
+            bounds.size.height
         );
     }
 }

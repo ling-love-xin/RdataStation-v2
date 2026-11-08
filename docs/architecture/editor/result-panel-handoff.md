@@ -312,6 +312,17 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 
 验证：`cargo test -p rds-result-panel --lib` = **227 passed / 0 failed**（+1 `header_column_menu_floats_and_leaves_the_name_its_full_width`：列名宽 ≥ 96 且与主行差 ≤ 8，旧实现两条都挂）；`cargo test -p rds-ui-guard` = 4 passed；`cargo check -p rds-result-panel` 0 warning。未验证：真窗口 hover 手感、tooltip 与菜单是否打架、2px 裁切的图标观感；触屏入口靠列头右键菜单（同源 `column_menu_items`）未目视。
 
+### 2.21 2026-11-08（结果集标签条抬到编辑器同档 32px）
+
+| 层 | 落地 |
+| --- | --- |
+| 问题 | 用户"结果集标题比编辑器文件表矮"。实证是**差一个 size 档**，不是差几像素 |
+| 取证 | 编辑器 = dock `TabBar::new("tab-bar")` 不写 size → `Size::default()`=Medium → Tab+Medium **32px**；结果集原为 `Size::Small` → Tab+Small **24px**，外层 `.h(1.5rem)` 还卡死 24（零余量）。gap/内边距/内高均为 12/12/30 vs 8/10/22，字号两档相同（14px） |
+| 改法 | `sets.rs` 档位 Small → **Medium**；`ui::RESULT_TABS_HEIGHT` 1.5 → **2.0**（32px） |
+| 附带事实 | dock 单面板标题条（`render_title`）是固定 30px——编辑器单文件 30 / 多文件 32。结果集恒为多标签形态，故对齐 32 |
+
+验证：`cargo test -p rds-result-panel --lib` = **228 passed / 0 failed**（+1 `sets::tests::tab_strip_matches_the_editor_dock_tab_height`，真渲染读 `debug_bounds` 断言 32px，旧实现读 24 必挂）；`cargo test -p rds-ui-guard` = 4 passed；`cargo check` 两个 crate 0 warning。未验证：真窗口观感、tab 内「⋯」/钉住按钮在 Medium 12px 内边距下的排布。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）
