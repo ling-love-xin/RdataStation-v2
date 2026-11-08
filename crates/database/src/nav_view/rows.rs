@@ -1725,28 +1725,38 @@ impl NavView {
                 // 归属域列的右偏移也是行尾 overlay 的锚点（见 `ops_right`），两者同源、不会错位。
                 .child(div().flex_1().min_w_0())
                 .when(scope_visible, |s| {
-                    // 归属域格置最右（需求③）：**刚好两个字符宽**、内容居中——`GP` 满格，
-                    // `P` / `G` 也落进同一格居中（2026-11-09：格宽 2.4rem → 1rem，
-                    // 去掉内距，列宽不再随内容起伏）。
+                    // 归属域格置最右（需求③）：**刚好两个字符宽**但要容得下 `GP`，
+                    // `P` / `G` 也落进同一格居中（2026-11-09：1rem → 1.25rem，GP 不再挤）。
+                    // 底框（背景）是**固定矩形**：宽 = 格宽、高 = `NAV_SCOPE_CHIP_H`，
+                    // 所以 `P` / `G` / `GP` 的胶囊大小完全一致（此前只有大小不一致，其余形态保留）。
+                    // hover 高亮也落在这一块背景上（热区 = 底框），指针进入这一格时底色加深。
                     // #30 来源标识加背景框：未连接时中性底 + 灰字（不显示颜色）；
                     // 连接成功才给来源色文字 + 同色淡底（胶囊）。
                     let scope_badge = if connected {
                         div()
                             .h_flex()
+                            .w_full()
+                            .h(rems(ui::NAV_SCOPE_CHIP_H))
                             .items_center()
                             .justify_center()
                             .rounded_sm()
                             .bg(scope_color.alpha(0.14))
+                            .group_hover("nav-scope-cell", move |s| {
+                                s.bg(scope_color.alpha(0.26))
+                            })
                             .text_xs()
                             .text_color(scope_color)
                             .child(source_text.clone())
                     } else {
                         div()
                             .h_flex()
+                            .w_full()
+                            .h(rems(ui::NAV_SCOPE_CHIP_H))
                             .items_center()
                             .justify_center()
                             .rounded_sm()
                             .bg(muted.alpha(0.12))
+                            .group_hover("nav-scope-cell", move |s| s.bg(muted.alpha(0.22)))
                             .text_xs()
                             .text_color(muted)
                             .child(source_text.clone())
@@ -1757,6 +1767,7 @@ impl NavView {
                         .flex()
                         .justify_center()
                         .items_center()
+                        .group("nav-scope-cell")
                         .child(scope_badge);
                     // 唯一热区：hover 卡只挂这两字符的格子上；卡内容 = 归属域全称 + 名称卡原有细节
                     // （此前名称卡与归属域卡分开两处，一行两个弹层入口）。
