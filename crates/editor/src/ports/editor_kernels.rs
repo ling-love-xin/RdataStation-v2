@@ -68,6 +68,7 @@ mod tests {
             command: "python".to_string(),
             ready: true,
             note: None,
+            launch: rds_kernel::KernelLaunch::ipykernel("python"),
         };
         *port.cache.lock().unwrap() = vec![spec];
         assert_eq!(port.list().len(), 1);

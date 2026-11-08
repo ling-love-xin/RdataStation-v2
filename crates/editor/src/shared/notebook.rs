@@ -88,11 +88,30 @@ impl EditorShared {
     /// `command` = 注册表解析出的解释器可执行路径（见 [`crate::kernel::resolve_kernel`]）。
     /// 失败给可读原因（解释器没装 ipykernel / 握手超时等）
     pub fn ensure_kernel(&self, kernel_id: &str, command: &str) -> Result<(), String> {
+        self.ensure_kernel_with(
+            kernel_id,
+            &rds_kernel::KernelLaunch::ipykernel(command),
+            command,
+        )
+    }
+
+    /// 【#21】按注册表条目启动内核：argv 模板 / env / 中断方式由 Jupyter kernelspec 决定
+    pub fn ensure_kernel_spec(&self, spec: &rds_kernel::KernelSpec) -> Result<(), String> {
+        self.ensure_kernel_with(&spec.id, &spec.launch, &spec.command)
+    }
+
+    /// 已启动 = 直接返回；否则按给定启动参数起一个会话并存进表
+    fn ensure_kernel_with(
+        &self,
+        kernel_id: &str,
+        launch: &rds_kernel::KernelLaunch,
+        command: &str,
+    ) -> Result<(), String> {
         let mut kernels = self.kernels.borrow_mut();
         if kernels.contains_key(kernel_id) {
             return Ok(());
         }
-        let mut session = rds_kernel::KernelSession::spawn(std::path::Path::new(command))
+        let mut session = rds_kernel::KernelSession::spawn_spec(launch, kernel_id)
             .map_err(|e| e.to_string())?;
         let events = session.take_events();
         kernels.insert(

@@ -494,32 +494,24 @@ impl EditorHostPanel {
         // 实际内核：执行源指定优先，否则会话默认 / 注册表第一个可用（#20 注册表路由）
         let source = cell.execution_source.clone();
         let language = cell.language;
-        let kernel_id =
-            match self
-                .shared
-                .resolve_kernel_for(&self.document, source.as_ref(), language)
-            {
-                Ok(spec) => spec.id.clone(),
-                Err(reason) => {
-                    self.set_message(Some(reason), cx);
-                    return;
-                }
-            };
-        let Some(command) = self
+        // 解析到**条目本身**（而不是先拿 id 再回查）：启动要用 kernelspec 的 argv 模板，
+        // 回查会把 `launch` 丢掉，只剩一条可执行路径（R / Julia 就走不起来了）
+        let spec = match self
             .shared
-            .kernel_specs()
-            .into_iter()
-            .find(|spec| spec.id == kernel_id)
-            .map(|spec| spec.command)
-        else {
+            .resolve_kernel_for(&self.document, source.as_ref(), language)
+        {
+            Ok(spec) => spec,
+            Err(reason) => {
+                self.set_message(Some(reason), cx);
+                return;
+            }
+        };
+        let kernel_id = spec.id.clone();
+        if let Err(reason) = self.shared.ensure_kernel_spec(&spec) {
             self.set_message(
-                Some(format!("内核「{kernel_id}」已从注册表消失，请重启面板")),
+                Some(format!("内核 {} 启动失败：{reason}", spec.display_name)),
                 cx,
             );
-            return;
-        };
-        if let Err(reason) = self.shared.ensure_kernel(&kernel_id, &command) {
-            self.set_message(Some(format!("内核 {kernel_id} 启动失败：{reason}")), cx);
             return;
         }
         let code = cell.body.clone();

@@ -54,17 +54,23 @@ pub fn resolve_kernel(
 
     // 1. 显式指定：id 精确匹配
     if let Some(ExecutionSource::Kernel(id)) = source {
-        let Some(spec) = specs.iter().find(|spec| &spec.id == id) else {
-            return Err(format!("内核「{id}」不在注册表里（重启后可能已失效）"));
-        };
-        if !spec.ready {
-            return Err(format!(
-                "内核「{}」不可用：{}",
-                spec.display_name,
-                spec.note.unwrap_or("未就绪")
-            ));
+        if let Some(spec) = specs.iter().find(|spec| &spec.id == id) {
+            if !spec.ready {
+                return Err(format!(
+                    "内核「{}」不可用：{}",
+                    spec.display_name,
+                    spec.note.unwrap_or("未就绪")
+                ));
+            }
+            return Ok(spec.clone());
         }
-        return Ok(spec.clone());
+        // 兼容：kernelspec 接管后，旧探测条目（`python` / `python-venv` / `r` / `julia`）
+        // 不再产出，老 `.rdsnote` 里显式指定的这些 id 会查不到。此时退化为「同语言第一个
+        // 可用内核」，而不是把该单元永久卡在「内核不在注册表里」。`ks:` 是本轮引入的
+        // kernelspec 命名空间前缀——带它的 id 就是真实条目，查不到照旧报错。
+        if id.starts_with("ks:") {
+            return Err(format!("内核「{id}」不在注册表里（重启后可能已失效）"));
+        }
     }
 
     // 2. 会话默认（上次用过的、且语言匹配）
@@ -114,6 +120,11 @@ mod tests {
             command: id.to_string(),
             ready,
             note: if ready { None } else { Some("未装内核包") },
+            launch: if ready {
+                rds_kernel::KernelLaunch::ipykernel(id)
+            } else {
+                rds_kernel::KernelLaunch::placeholder()
+            },
         }
     }
 
@@ -162,6 +173,31 @@ mod tests {
         ];
         let resolved = resolve_kernel(&stale, None, Some("python"), CellLanguage::Python).unwrap();
         assert_eq!(resolved.id, "python-venv");
+    }
+
+    /// 旧命名（`python` 这类探测 id）在 kernelspec 接管后不再产出：显式指定退化为
+    /// 同语言第一个可用内核，老笔记不至于永久报「内核不在注册表里」；而 `ks:` 命名
+    /// 空间内的 id 查不到就是真失效，仍要报错
+    #[test]
+    fn legacy_explicit_id_falls_back_after_kernelspec_takeover() {
+        let specs = vec![spec("ks:python3", rds_kernel::KernelLanguage::Python, true)];
+        let resolved = resolve_kernel(
+            &specs,
+            Some(&ExecutionSource::Kernel("python".to_string())),
+            None,
+            CellLanguage::Python,
+        )
+        .unwrap();
+        assert_eq!(resolved.id, "ks:python3");
+
+        let missing = resolve_kernel(
+            &specs,
+            Some(&ExecutionSource::Kernel("ks:gone".to_string())),
+            None,
+            CellLanguage::Python,
+        )
+        .unwrap_err();
+        assert!(missing.contains("不在注册表里"), "{missing}");
     }
 
     /// 一个都没有 → 错误信息带上每个未 ready 内核的原因（用户知道装什么）

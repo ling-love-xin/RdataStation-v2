@@ -1,13 +1,19 @@
 //! Jupyter 内核会话：启动内核进程、ZMQ 四通道连接、执行与事件回传
 //!
-//! 结构：`spawn` 起一个后台 tokio 线程（端口挑选 → 写 connection file →
-//! 启动 `python -m ipykernel_launcher -f <connfile>` → 连接 iopub/shell/control →
-//! 事件循环），调用方通过 `execute / interrupt / shutdown` 发命令，
-//! 通过 `take_events()` 消费 [`KernelEvent`]。
+//! 结构：`spawn_spec` 起一个后台 tokio 线程（端口挑选 → 写 connection file →
+//! 按 kernelspec 的 argv 模板启动内核进程 → 连接 iopub/shell/control → 事件循环），
+//! 调用方通过 `execute / interrupt / shutdown` 发命令，通过 `take_events()` 消费
+//! [`KernelEvent`]。
 //!
 //! 设计取舍：
 //! - 内核**进程与 connection file 由本模块管理**（精确控制超时 / 清理 / 生命周期）；
 //!   ZMQ 四通道与消息签名委托 jupyter-zmq-client（纯 Rust zeromq，无 libzmq 依赖）。
+//! - **启动命令来自 Jupyter kernelspec**（`kernel.json` 的 `argv` / `env`），所以
+//!   R / Julia / 任意已装内核都能起；`{connection_file}` 占位由本层替换。#20 之前的
+//!   `python -m ipykernel_launcher` 写死路径退化为 [`KernelLaunch::ipykernel`] 兜底。
+//! - `interrupt_mode = "signal"`（IRkernel 声明）目前**仍走 control 通道**：Windows
+//!   没有给子进程投递 SIGINT 的标准方式，硬杀会丢掉内核态。这条是已知限制，不是
+//!   实现遗漏（R 单元的「中断」按钮效果因此与 Python 相同）。
 //! - 富输出（`execute_result` / `display_data`）以原始 mime bundle（[`jupyter_protocol::Media`]）
 //!   原样回传，**渲染由上层分发器负责**（GPUI 原生：PNG / markdown / 文本 / 表格）。
 //! - 会话为「单命令队列」：同一时间只执行一个单元（与笔记本 `has_running` 防并发一致），
@@ -30,6 +36,8 @@ use jupyter_zmq_client::{
     wait_for_iopub_welcome,
 };
 use tokio::sync::mpsc;
+
+use crate::registry::KernelLaunch;
 
 /// 内核生命周期状态（UI 侧据此渲染状态文案 / 禁用控件）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,11 +107,24 @@ pub struct KernelSession {
 impl KernelSession {
     /// 启动一个 Python 内核（`python` 指向带 ipykernel 的解释器可执行文件）。
     ///
+    /// 等价于 [`Self::spawn_spec`] 的 ipykernel 直启模板，保留是为了不打断既有
+    /// 调用点与集成测试；新代码应直接用 `spawn_spec`（它按 kernelspec 启动）。
+    pub fn spawn(python: &Path) -> Result<Self> {
+        let command = python.display().to_string();
+        Self::spawn_spec(&KernelLaunch::ipykernel(&command), "python3")
+    }
+
+    /// 按 Jupyter kernelspec 的启动参数起内核（`{connection_file}` 由本层替换）。
+    ///
     /// 同步返回：内部起后台 tokio 线程做端口 / 进程 / 握手，成功后本函数才返回
     /// （启动失败 = 这里直接 Err，不留半死会话）。
-    pub fn spawn(python: &Path) -> Result<Self> {
-        // 转 owned：线程闭包要求 'static（&Path 生命周期不够）
-        let python = python.to_path_buf();
+    pub fn spawn_spec(launch: &KernelLaunch, kernel_name: &str) -> Result<Self> {
+        if !launch.is_launchable() {
+            bail!("内核启动参数不完整（argv 必须包含 {{connection_file}} 占位）");
+        }
+        // 转 owned：线程闭包要求 'static（&KernelLaunch 生命周期不够）
+        let launch = launch.clone();
+        let kernel_name = kernel_name.to_string();
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<Result<LaunchParts>>();
 
         // 内核线程：tokio runtime + 启动 + 事件循环，全程不碰 UI 线程
@@ -121,7 +142,7 @@ impl KernelSession {
                         return;
                     }
                 };
-                let _ = rt.block_on(run_kernel_launch(&python, ready_tx));
+                let _ = rt.block_on(run_kernel_launch(&launch, &kernel_name, ready_tx));
             })
             .context("spawn rds-kernel 线程失败")?;
 
@@ -179,7 +200,8 @@ struct LaunchParts {
 
 /// 内核启动全流程（tokio 线程内）：端口 → 进程 → 握手 → 交还控制端 → 事件循环
 async fn run_kernel_launch(
-    python: &Path,
+    launch: &KernelLaunch,
+    kernel_name: &str,
     ready: tokio::sync::oneshot::Sender<Result<LaunchParts>>,
 ) -> Result<()> {
     let session_id = new_session_id();
@@ -198,23 +220,36 @@ async fn run_kernel_launch(
             hb_port: ports[4],
             key: new_key_hex(),
             signature_scheme: "hmac-sha256".to_string(),
-            kernel_name: Some("python3".to_string()),
+            kernel_name: Some(kernel_name.to_string()),
         };
 
         // 2. connection file（临时目录；内核进程读它绑定端口）
         let conn_file = write_connection_file(&info).context("写 connection file 失败")?;
 
-        // 3. 启动内核进程（stderr 弃置；日志后续版本再收）
-        let mut child = ProcCommand::new(python)
-            .arg("-m")
-            .arg("ipykernel_launcher")
-            .arg("-f")
-            .arg(&conn_file)
+        // 3. 启动内核进程（argv 来自 kernelspec；`{connection_file}` 换成真实路径）
+        //    stdin 固定 null：`allow_stdin=false`（见事件循环），内核不会等输入。
+        let mut command = ProcCommand::new(&launch.argv[0]);
+        for arg in &launch.argv[1..] {
+            command.arg(if arg.as_str() == "{connection_file}" {
+                conn_file.as_os_str()
+            } else {
+                std::ffi::OsStr::new(arg.as_str())
+            });
+        }
+        if !launch.env.is_empty() {
+            command.envs(
+                launch
+                    .env
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value.as_str())),
+            );
+        }
+        let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .with_context(|| format!("启动内核进程失败（python = {}）", python.display()))?;
+            .with_context(|| format!("启动内核进程失败（{}）", launch.argv[0]))?;
 
         // 4. ZMQ 四通道（stdin 按需再连；heartbeat 不做硬依赖）
         // iopub 需 `mut`：握手时 `wait_for_iopub_welcome(&mut …)`
