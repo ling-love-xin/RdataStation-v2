@@ -203,7 +203,8 @@ cargo check -p rds-app -j 2
    （0.9.0 自带 `gutter_decorations` 的 offset，不能覆盖它）。
 
 **验证**：`cargo check -p gpui-base` 0 error 0 warning；`-p gpui-component -p rds-editor -p rds-app`
-0 error（仅 `rds-mock` 2 条既有告警）。提交 `9aacef30`。
+0 error（仅 `rds-mock` 2 条既有告警）。提交标题「fix(vendor): 把 main 的书签列 / 折叠说明 patch
+移植到 gpui-kit 0.9.0 内核」——**hash 每次 rebase 都会重写，以标题为准**（并入主线时是 `dce9433d`）。
 
 **这一节的教训**：「vendor 目录整体替换」在 rebase 时**不能只看冲突列表**——自动合并会静默保留对方
 patch 的一部分（这里 state.rs 落了 41%），剩下的部分既不报错也不生效。判断法是挑一个**只在该 patch
@@ -212,7 +213,8 @@ element.rs 里 0 命中，就说明绘制侧丢了。
 
 ## 10. rebase 后全量回归（2026-11-08）
 
-命令：`cargo test --workspace -j 1 --no-fail-fast --exclude rds-mock`。
+命令：`cargo test --workspace -j 1 --no-fail-fast --exclude rds-mock`（在 rebase 到 `a569df57`
+的那一版上跑；并入主线前 main 又前进了 2 个 commit，见 §11）。
 
 **排除 rds-mock 的原因（与升级无关）**：main 自己的 `crates/mock/src/generators/text.rs:222` 写着
 `mod tests;`，而 `generators/text/tests.rs` 还没提交——`rds-mock` 的**测试目标**编译不过
@@ -253,6 +255,49 @@ test view::tests::core::folding_candidates_are_fed_after_the_gutter_restored ...
 能切换书签、Shift 点击能开说明**（这正好是「0.9.0 自带 `gutter_decorations` 只画不点」那半个功能
 被补回来的证据）；第三条断言关掉设置后说明被剥掉。仍**未做**的是真机目视：书签列是否真的画在
 行号左侧、折叠说明下划线位置、悬停气泡形态。
+
+## 11. 二次 rebase 与并入主线（2026-11-08）
+
+第一次 rebase 到 `a569df57` 之后、准备并入之前，main 又往前走了 **2 个 commit**：
+
+| commit | 内容 |
+| --- | --- |
+| `3cdf651f` | feat(editor): 折叠末行一律收起（候选侧统一 `end+1`，对齐 VS Code） |
+| `5675df1e` | fix(mock,editor): 清掉 gutter 收尾后遗留的技术债 |
+
+**碰面分析**：这两个 commit 改的是 `crates/editor/src/support/fold.rs`、`view/fold.rs`、
+`view/host/toolbar/render.rs`、`view/tests/core.rs`、`crates/mock/**`、`editor-backlog.md`；
+本分支改的是 vendor 两包、`Cargo.toml`/`lock`、`crates/sql`、`crates/settings`、
+`crates/editor/{language/language_service, lsp/sql_hover.rs, support/translate.rs, view/host/{format,session}.rs}`
+与若干 docs。**改动面零重叠**，二次 `git rebase 5675df1e` 17/17 一次过、无冲突。
+
+**复验（折叠正好和书签列在同一片区域，只跑 `rds-editor` lib）**：`757 passed / 2 failed`
+（失败仍是 §10 那两条既有），其中 bookmark / gutter 相关 **28 条全 `ok`**，fold 相关**零失败**。
+总数从 761 变 760 的原因**不是丢用例**：main 把 fold 用例改名合并了——旧名
+`a_structural_block_wins_over_an_indent_block_on_the_same_line` /
+`kernel_end_line_keeps_the_last_content_line_of_an_indent_block` /
+`kernel_end_line_tucks_in_the_closing_line_of_a_structural_block` /
+`kernel_ranges_keep_the_last_content_line_of_an_indent_block` /
+`kernel_ranges_tuck_the_closing_line_of_a_structural_block`（5 条），
+新名 `kernel_end_line_tucks_in_the_last_line_of_every_block_kind` /
+`the_widest_block_wins_when_two_blocks_start_on_one_line` /
+`kernel_ranges_also_tuck_the_last_content_line_of_an_indent_block` /
+`kernel_ranges_tuck_the_closing_line_of_a_block`（4 条）。
+
+**并入**：`git merge --ff-only` 到 main，HEAD = 分支 HEAD = `7c12d7e8`（无 merge commit）。
+
+**冒烟**：`cargo build -p rds-app -j 2` 3m48s 成功；`target\debug\rds-app.exe` 跑 20 秒，
+日志 49 行、**panic 0 / ERROR 0 / WARN 0**，启动链路（旧数据迁移 → 全局系统库 → 日志系统 →
+插件管理器 → `Themes reloaded successfully` → 项目 SQLite 迁移 → 导航树恢复 `G_real_mysql`）
+全部走完。
+
+**两件交接项**（都不是升级本身的问题）：
+
+1. `rds-ui-guard::no_new_hardcoded_color_or_pixel` 仍红（`result_panel` 的 `grid/fit.rs` 裸 px 6、
+   `ui.rs` `px(4) -> 12`），来自 main 的 `44040e21`「列宽自适应」，本分支没碰 `crates/result_panel/`。
+2. main 工作区（`D:\RdataStation\RDS\RdataStation-v2`）的 `target/` 是按 0.8.1 建的，ff 之后
+   第一次构建要全量重编（Rust 侧依赖树换了一大批），不是回归。
+
 
 
 

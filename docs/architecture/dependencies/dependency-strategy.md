@@ -142,10 +142,13 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 ### 4.1 并入主线（2026-11-08）
 
-分支 `chore/deps-patch-batch-2026-11` rebase 到 main `a569df57`（15 个 commit 顺次落在新的
-main 头上，hash 全部重写），随后补了一个移植 commit `9aacef30`，再 ff 并入 main。
+分支 `chore/deps-patch-batch-2026-11` rebase 到 main（`a569df57` 一次、`5675df1e` 又一次——
+中间 main 又落了折叠末行与清技术债 2 个 commit，与本分支改动面零重叠，二次 rebase 17/17 无冲突），
+随后补了一个移植 commit「把 main 的书签列 / 折叠说明 patch 移植到 gpui-kit 0.9.0 内核」
+（hash 随 rebase 重写，以标题为准；并入时 `dce9433d`），最后 `--ff-only` 并入 main
+（HEAD 与分支同为 `7c12d7e8`，无 merge commit）。
 
-rebase 本身**不冲突之外的坑**（值得记住的一条）：vendor 目录是**整目录替换**，main 在这两个
+rebase 顺带暴露的一个坑（值得记住）：vendor 目录是**整目录替换**，main 在这两个
 vendor 上还叠着私有 patch。rebase 时若对冲突文件取「我们的 0.9.0」，git 会把对方的 patch
 **静默合并进去一部分**——`state.rs` 落了 41%（91/224 行），`element.rs` 落 0%（464 行全丢）。
 两边都不报错，结果就是书签列数据结构在、绘制与点击不在。判据：挑一个只在该 patch 里出现的符号
