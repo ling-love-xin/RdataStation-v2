@@ -174,8 +174,6 @@ pub const NAV_ROW_TREE: f32 = 1.375;
 /// 虚拟列表不会反过来测量行高（`v_virtual_list` 按给定高度定义布局），所以这些附加行
 /// 在渲染里也显式钉高：改这里就要同步改渲染（见 `nav_row_height`）。
 pub const NAV_SUBLINE: f32 = 1.125;
-/// 行内标签编辑器块高（3.5rem = 56px；内容超出时内部滚动）。
-pub const NAV_EDITOR_TAG: f32 = 3.5;
 /// 行内「复制为模板」编辑器块高（4.5rem = 72px）。
 pub const NAV_EDITOR_COPY: f32 = 4.5;
 /// 行内归组编辑器块高（5.5rem = 88px；分组多时内部滚动）。

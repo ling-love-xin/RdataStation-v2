@@ -1461,10 +1461,6 @@ pub(super) fn nav_row_height(
                     ui::NAV_EDITOR_GROUP,
                 )
                 .add_if(
-                    view.tag_editor_for.as_deref() == Some(conn.id.as_str()),
-                    ui::NAV_EDITOR_TAG,
-                )
-                .add_if(
                     view.copy_for.as_deref() == Some(conn.id.as_str()),
                     ui::NAV_EDITOR_COPY,
                 )

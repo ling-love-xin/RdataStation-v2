@@ -1,15 +1,18 @@
-//! 行内编辑器：归组 / 标签 / 复制为模板 的渲染与提交路径。
+//! 行内编辑器：归组 / 复制为模板 的渲染与提交路径。
 //!
-//! 这些块**参与行高计算**（`NAV_EDITOR_TAG` / `_COPY` / `_GROUP`，与 `rows.rs` 的行高
+//! 这些块**参与行高计算**（`NAV_EDITOR_COPY` / `_GROUP`，与 `rows.rs` 的行高
 //! 常量成对）：改块高必须同步改 `nav_row_height`，所以两者相邻放着更好找。
+//!
+//! 标签编辑器不在行内：2026-11-08 撤掉连接行尾 `+` / `✎` 后，行内标签面板失去入口，
+//! 整条链路已删除；打标签走右键「打标签…」Popover（对象级勾选）。
 
 use super::*;
 
 impl NavView {
-    /// 连接行内联组织编辑器：分组多选（多对多）+「新建分组」+ 标签输入。
+    /// 连接行内联组织编辑器：分组多选（多对多）+「新建分组」。
     /// 行内**归组**编辑器（右键「移动到分组…」打开）：多选切换 + 新建分组。
     ///
-    /// 只处理分组；标签由 [`Self::render_tag_editor`]（行尾 `+`）单独负责。
+    /// 只处理分组；标签走右键菜单的「打标签…」Popover，不在行内编辑。
     pub(super) fn render_group_editor(
         &self,
         conn: &ConnectionItem,
@@ -154,39 +157,6 @@ impl NavView {
         panel
     }
 
-    /// 行内**标签**编辑器（行尾 `+` 打开）：仅标签输入，回车保存。
-    pub(super) fn render_tag_editor(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        let muted = cx.theme().colors.muted_foreground;
-        let border = cx.theme().colors.border;
-        let bg = cx.theme().colors.popover;
-        let mut panel = div()
-            .id("nav-tag-editor")
-            .v_flex()
-            .w_full()
-            .h(rems(ui::NAV_EDITOR_TAG))
-            .overflow_y_scroll()
-            .ml_6()
-            .mr_1()
-            .mb_1()
-            .p_2()
-            .gap_1()
-            .rounded_md()
-            .border_1()
-            .border_color(border)
-            .bg(bg)
-            .child(
-                div()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("标签（逗号分隔，回车保存）"),
-            );
-        if let Some(input) = &self.nav_tag_input {
-            panel = panel.child(Input::new(input));
-        }
-        panel
-    }
-
     /// 行内「复制为模板」编辑器（右键「复制连接（模板）…」打开）：输入新名，回车提交。
     pub(super) fn render_copy_editor(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let muted = cx.theme().colors.muted_foreground;
@@ -245,28 +215,6 @@ impl NavView {
             }
             n += 1;
         }
-    }
-
-    /// 提交连接行内联标签输入（逗号分隔 → 覆盖式保存）。
-    pub(super) fn commit_nav_tags(&mut self, cx: &mut Context<Self>) {
-        let Some(conn_id) = self.nav.borrow().tag_editor_for.clone() else {
-            return;
-        };
-        let Some(input) = self.nav_tag_input.clone() else {
-            return;
-        };
-        let text = input.read(cx).value().to_string();
-        let tags: Vec<String> = text
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        let root = self.host.project_root();
-        match crate::nav_store::set_tags(&conn_id, root.as_deref(), &tags) {
-            Ok(()) => self.reload_nav_org(),
-            Err(e) => self.host.notice(format!("保存标签失败: {e}"), cx),
-        }
-        cx.notify();
     }
 
     /// 分组表单初值（编辑时需带上描述；分组头渲染只拿到名称）。

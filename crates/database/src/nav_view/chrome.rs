@@ -106,58 +106,9 @@ impl NavView {
             view.search_facets = parsed;
         }
 
-        // 连接行内联**标签**编辑器（`+` 打开）打开时，按需创建标签输入框
-        // 并用当前标签预填；关闭时销毁，保证下次打开重新回填。
-        let tag_editor_for = self.nav.borrow().tag_editor_for.clone();
-        match &tag_editor_for {
-            Some(conn_id) => {
-                // 已为**本**连接建过则复用；否则重建并重新预填（曾在 A 开过再切 B 时
-                // 会沿用 A 的输入值 → 回车把 A 的标签写到 B）。
-                let stale = self.nav_tag_input.is_none()
-                    || self.nav_tag_input_for.as_deref() != Some(conn_id.as_str());
-                if stale {
-                    // 预填标签来自 `+` 按钮**事件回调**里的快照（`tag_editor_tags`）：
-                    // render 零 I/O——读库已从 render 路径移到 `+` 点击时完成。
-                    let current = {
-                        let view = self.nav.borrow();
-                        if view
-                            .tag_editor_tags
-                            .as_ref()
-                            .is_some_and(|(c, _)| c == conn_id)
-                        {
-                            view.tag_editor_tags
-                                .as_ref()
-                                .map(|(_, t)| t.clone())
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    };
-                    let text = current.join(", ");
-                    let input =
-                        cx.new(|cx| InputState::new(window, cx).placeholder("标签，逗号分隔"));
-                    input.update(cx, |s, cx| s.set_value(text, window, cx));
-                    let sub = cx.subscribe_in(
-                        &input,
-                        window,
-                        |this, _e, ev: &InputEvent, _w, cx| match ev {
-                            InputEvent::Change => cx.notify(),
-                            InputEvent::PressEnter { .. } => this.commit_nav_tags(cx),
-                            _ => {}
-                        },
-                    );
-                    self.nav_tag_input = Some(input);
-                    self.nav_tag_input_for = Some(conn_id.clone());
-                    self._nav_tag_sub = Some(sub);
-                }
-            }
-            None => {
-                self.nav_tag_input = None;
-                self.nav_tag_input_for = None;
-                self._nav_tag_sub = None;
-            }
-        }
-
+        // 连接行内联**标签**编辑器已在 2026-11-08 撤除：行尾 `+` / `✎` 让位给名称宽度后，
+        // 该面板失去唯一入口（`tag_editor_for` 从此无写入点，整条 render 分支不可达），
+        // 打标签统一走对象/连接行右键菜单的「打标签…」Popover。
         // 连接行内「复制为模板」输入框：打开时创建并预填「原名 副本」，关闭时销毁。
         let copy_for = self.nav.borrow().copy_for.clone();
         match &copy_for {

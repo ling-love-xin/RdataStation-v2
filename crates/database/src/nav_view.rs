@@ -439,13 +439,6 @@ pub struct NavViewState {
     collapsed_groups: HashSet<String>,
     /// 正在内联编辑分组（归组）的连接 ID（None = 未打开）。
     group_picker_for: Option<String>,
-    /// 正在内联编辑**标签**的连接 ID（None = 未打开；`+` 专用）。
-    tag_editor_for: Option<String>,
-    /// 行内标签编辑器打开时的预填快照（连接 ID + 标签列表）。
-    ///
-    /// 由 `+` 按钮在**事件回调**里预读一次并缓存（render 零 I/O），
-    /// 编辑器打开期间直接复用；换连接打开时被新快照覆盖。
-    tag_editor_tags: Option<(String, Vec<String>)>,
     /// 正在内联「复制为模板」的连接 ID（None = 未打开）。
     copy_for: Option<String>,
     /// 正在内联重命名的分组 ID（None = 未打开）。
@@ -758,11 +751,6 @@ pub struct NavView {
     /// 数据源导航搜索框（懒创建）。
     nav_search: Option<Entity<InputState>>,
     _nav_search_sub: Option<Subscription>,
-    /// 连接行内联标签输入框（组织编辑器打开时创建，关闭时销毁）。
-    nav_tag_input: Option<Entity<InputState>>,
-    /// 当前标签输入框对应的连接 ID（切换连接时重建并重新预填）。
-    nav_tag_input_for: Option<String>,
-    _nav_tag_sub: Option<Subscription>,
     /// 行内「复制为模板」输入框（打开时创建，关闭时销毁）。
     nav_copy_input: Option<Entity<InputState>>,
     /// 当前复制输入框对应的连接 ID（切换连接时重建）。
@@ -823,9 +811,6 @@ impl NavView {
             nav: Rc::new(RefCell::new(nav)),
             nav_search: None,
             _nav_search_sub: None,
-            nav_tag_input: None,
-            nav_tag_input_for: None,
-            _nav_tag_sub: None,
             nav_copy_input: None,
             nav_copy_input_for: None,
             _nav_copy_sub: None,

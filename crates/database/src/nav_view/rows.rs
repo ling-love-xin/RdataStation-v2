@@ -2222,16 +2222,13 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             );
         }
 
-        // 行内编辑器：归组（右键「移动到分组…」）与标签（行尾 `+`）分开，各司其职。
+        // 行内编辑器：归组（右键「移动到分组…」）与复制模板（右键「复制连接（模板）…」）
+        // 各一，互不混用；标签不在行内（走右键「打标签…」Popover）。
         // 块高在各自的渲染里钉成常量（见 `ui::NAV_EDITOR_*`）：虚拟列表按估算高度
         // 定义行槽位，内容高过槽位会压到下一行，所以不能是「内容说多少就多少」。
         let picker_open = self.nav.borrow().group_picker_for.as_deref() == Some(conn.id.as_str());
         if picker_open {
             block = block.child(self.render_group_editor(conn, &scope_key, cx));
-        }
-        let tag_open = self.nav.borrow().tag_editor_for.as_deref() == Some(conn.id.as_str());
-        if tag_open {
-            block = block.child(self.render_tag_editor(cx));
         }
         let copy_open = self.nav.borrow().copy_for.as_deref() == Some(conn.id.as_str());
         if copy_open {
