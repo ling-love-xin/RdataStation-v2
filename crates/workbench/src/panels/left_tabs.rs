@@ -1341,6 +1341,9 @@ mod tests {
         assert!(event_touches_plugin_list(&PluginEvent::PluginDisabled {
             plugin_id: "a".into()
         }));
+        assert!(event_touches_plugin_list(&PluginEvent::PluginChanged {
+            plugin_id: "a".into()
+        }));
         assert!(!event_touches_plugin_list(&PluginEvent::Custom {
             plugin_id: "a".into(),
             event_name: "progress".into(),

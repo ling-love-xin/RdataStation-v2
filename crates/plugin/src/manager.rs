@@ -1066,18 +1066,24 @@ impl PluginManager {
                 .retain(|p| p != id);
         }
 
-        // 变化：置 needs_reload（更新不热生效，VS Code 口径），UI 层读它提示重载
+        // 变化：置 needs_reload（更新不热生效，VS Code 口径），UI 层读它提示重载。
+        // 每次**新进入**待重载集合时发一条事件：面板订阅后能立刻看到「重载 N」，
+        // 不必等用户手动刷新；同一插件在未重载前不再重复发（扫描每 5s 一轮）。
         for id in &diff.changed {
-            if !self
-                .needs_reload
-                .read()
-                .map_err(|_| lock_err("needs_reload"))?
-                .contains(id)
-            {
-                self.needs_reload
+            let newly_marked = {
+                let mut pending = self
+                    .needs_reload
                     .write()
-                    .map_err(|_| lock_err("needs_reload"))?
-                    .push(id.clone());
+                    .map_err(|_| lock_err("needs_reload"))?;
+                if pending.contains(id) {
+                    false
+                } else {
+                    pending.push(id.clone());
+                    true
+                }
+            };
+            if newly_marked {
+                crate::events::emit_plugin_changed(id);
             }
         }
 

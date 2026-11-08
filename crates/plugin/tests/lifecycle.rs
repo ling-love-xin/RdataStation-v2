@@ -419,11 +419,20 @@ async fn hot_plug_adds_removes_and_marks_reload() {
     assert_eq!(diff.added, vec!["com.example.hot"]);
     assert!(manager.get_loaded_plugin("com.example.hot").is_some());
 
-    // 清单内容变化：置 needs_reload，不热生效
+    // 清单内容变化：置 needs_reload，不热生效；并发出 PluginChanged 供面板
+    // 立刻显示「重载 N」（此前只改内存标记、不发事件，面板订阅了也看不到）。
+    let mut rx = get_event_manager().subscribe();
     write_plugin(&dir.0, "com.example.hot", "v2-changed");
     let diff = manager.scan_and_diff_plugins().await.unwrap();
     assert_eq!(diff.changed, vec!["com.example.hot"]);
     assert_eq!(manager.pending_reloads(), vec!["com.example.hot"]);
+    let event = recv_matching(&mut rx, |event| {
+        matches!(
+            event,
+            PluginEvent::PluginChanged { plugin_id } if plugin_id == "com.example.hot"
+        )
+    });
+    assert!(matches!(event, PluginEvent::PluginChanged { .. }));
 
     // 目录消失 = 插件消失：停用 + 移出运行时索引与安装态缓存
     std::fs::remove_dir_all(dir.0.join("com.example.hot")).unwrap();

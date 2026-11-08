@@ -771,6 +771,10 @@ Uninstalled ──install──▶ Installed ──load──▶ Loaded ──ac
 > 此前只有安装 / 重载置忙，启停与卸载可并发点，可能安装中卸载同一目录或
 > enable / disable 交错；启停 / 卸载同时补「正在…」进度文案与完成清理。
 >
+> **2026-10-16 进展（第六刀，变化事件）**：热插拔扫描发现清单内容变化时新增
+> `PluginEvent::PluginChanged`（同一插件进入 `needs_reload` 时只发一次），面板订阅后
+> 立即显示「重载 N」；此前只写内存标记不发事件，列表订阅了也看不到变更提示。
+>
 > **仍未接**：`LeftPanel`/`RightPanel` → `PanelId`、
 > Quick Open 命令合并、设置页外部登记项渲染、未注册 id 占位面板、`project_resources` 对账与图标 resolver。
 

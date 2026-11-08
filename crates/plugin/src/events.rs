@@ -30,6 +30,8 @@ pub enum PluginEvent {
     PluginEnabled { plugin_id: String },
     /// 插件已禁用
     PluginDisabled { plugin_id: String },
+    /// 插件文件已变化，等待重载（已写入 `needs_reload`，运行中的实例仍是旧版本）
+    PluginChanged { plugin_id: String },
     /// 自定义事件
     Custom {
         plugin_id: String,
@@ -141,6 +143,13 @@ pub fn emit_plugin_enabled(plugin_id: &str) {
 /// 发布插件已禁用事件
 pub fn emit_plugin_disabled(plugin_id: &str) {
     get_event_manager().emit(PluginEvent::PluginDisabled {
+        plugin_id: plugin_id.to_string(),
+    });
+}
+
+/// 发布插件文件已变化事件（进入待重载状态；同一插件只发一次，避免每轮扫描重复发）
+pub fn emit_plugin_changed(plugin_id: &str) {
+    get_event_manager().emit(PluginEvent::PluginChanged {
         plugin_id: plugin_id.to_string(),
     });
 }
