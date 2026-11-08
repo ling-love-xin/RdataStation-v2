@@ -292,9 +292,9 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 | 项 | 观察 | 建议 |
 | --- | --- | --- |
 | 折叠候选算两遍 | 前台 `sync_fold`（`fold::install`，全文）与后台 scan（`fold::spans`，全文）各算一次；后者每编辑一拍 | **关键字已贯通（15.4 已做）**；"后台成为唯一候选来源、前台 install 只在设置/模式/换文本变化时跑"**未做**（会改候选刷新时机，等折叠区人工验收完再动） |
-| 设置项消费面已核 | 17 个 `editor.*` 除 `inline_completion` 外都有代码消费；`default_line_ending` / `default_tab_size` / `default_hard_tabs` 在新文档创建时读（`view/host/mod.rs:1201-1205`） | `inline_completion` 是**刻意置灰**（B1 预留），放开 `disabled` 时必须同步接 provider，否则即静默失效 |
-| 大文件 | ✅ `ports/editor_exec.rs` **已拆（2026-11-08）**：2058 行 → `ports/editor_exec/` 8 个文件（`mod.rs` 128 / `conn.rs` 83 / `accel_exec.rs` 102 / `federation.rs` 384 / `runner.rs` 741 / `convert.rs` 83 / `history.rs` 45 / `tests.rs` 532），最大块从 2058 降到 741。✅ `quick_open/model.rs` **已拆（2026-11-08）**：1299 行 → `quick_open/model/` 6 个文件（`mod.rs` 26 / `types.rs` 220 / `groups.rs` 241 / `sources.rs` 131 / `scoring.rs` 113 / `tests.rs` 588），最大块从 1299 降到 588。✅ `view/dialogs.rs` **已拆（2026-11-08）**：1303 行 → `view/dialogs/` 9 个文件（`mod.rs` 83 / `confirm.rs` 221 / `analysis_sql.rs` 65 / `value_preview.rs` 77 / `bind.rs` 92 / `connection_picker.rs` 199 / `schema_picker.rs` 210 / `bookmarks.rs` 298 / `picker_tests.rs` 95），最大块从 1303 降到 298。**仍大**：只剩 `view/host/mod.rs` 1366 | 沿 `view/host/` 已验证的按域拆分惯例继续切。`editor_exec` 的 `runner.rs` 已到无痛上限——`impl QueryRunner for EngineQueryRunner` 同一类型只能有一个 trait impl 块，**不能再按方法拆文件**；要继续降只能给 trait 方法做瘦转发（方法体搬成 inherent 方法再分文件），属改结构不再是无损搬运。`model` 的 `tests.rs` 588 行同理属"单文件用例"上限：要再降得把用例按域（parse / groups / scoring / sources）拆成 `tests/` 目录 |
-| 大文件拆分纪律 | 三批拆分实证：目录化后模块路径不变（`ports::editor_exec::attach` / `quick_open::model::Row` / `view::dialogs::open_close_confirm` 等对外签名零改动）；子模块里同名 `mod accel` 会与 `use engine::duckdb::accel` 撞车（E0255），须改名 `accel_exec`；`use` 经 `use super::*` 被后代模块使用**不会**报 unused（`dialogs/mod.rs` 一份统一导入供 8 个子文件共用，零 warning） | 后续拆包按此五条走：① 不动对外路径（`pub use` 子模块通配，别逐个枚举）；② 子模块名避开外部 crate 同名；③ inherent 方法跨文件调用一律 `pub(crate)`；④ 用例要跨文件访问结构体私有字段时**字段也要 `pub(crate)`**（只提方法不够：读字段报 E0616、直接 struct literal 构造报 E0451，两批才全暴露）；⑤ 批量 `Replace("    X: T,")` 会误伤函数形参——同一名字常在 `fn new(..)`/`open_xxx(..)` 的形参里也出现，改完必须 grep 逐处确认 |
+| 设置项消费面已核 | 17 个 `editor.*` 除 `inline_completion` 外都有代码消费；`default_line_ending` / `default_tab_size` / `default_hard_tabs` 在新文档创建时读（`view/host/mod.rs` 的 `apply_editor_defaults`） | `inline_completion` 是**刻意置灰**（B1 预留），放开 `disabled` 时必须同步接 provider，否则即静默失效 |
+| 大文件 | ✅ `ports/editor_exec.rs` **已拆（2026-11-08）**：2058 行 → `ports/editor_exec/` 8 个文件（`mod.rs` 128 / `conn.rs` 83 / `accel_exec.rs` 102 / `federation.rs` 384 / `runner.rs` 741 / `convert.rs` 83 / `history.rs` 45 / `tests.rs` 532），最大块从 2058 降到 741。✅ `quick_open/model.rs` **已拆（2026-11-08）**：1299 行 → `quick_open/model/` 6 个文件（`mod.rs` 26 / `types.rs` 220 / `groups.rs` 241 / `sources.rs` 131 / `scoring.rs` 113 / `tests.rs` 588），最大块从 1299 降到 588。✅ `view/dialogs.rs` **已拆（2026-11-08）**：1303 行 → `view/dialogs/` 9 个文件（`mod.rs` 83 / `confirm.rs` 221 / `analysis_sql.rs` 65 / `value_preview.rs` 77 / `bind.rs` 92 / `connection_picker.rs` 199 / `schema_picker.rs` 210 / `bookmarks.rs` 298 / `picker_tests.rs` 95），最大块从 1303 降到 298。✅ `view/host/mod.rs` **已拆（2026-11-08，实测 1478 行——本节旧记的 1366 已过期）**：1478 → 留在 `mod.rs` 668（模块文档 + 导入 + `PendingExport`/`PendingBind`/`EditMode`/`EditorStatusSnapshot`/`EditorHostEvent`/`EditorHostPanel` 结构定义 + 子模块声明 + 构造以外的 impl 方法 + 尾部 re-export）/ `construct.rs` 645（`EditorHostPanel::new` 那一个 636 行单体，独立 `impl` 块）/ `settings_defaults.rs` 180（15 个「设置 → 行为」读取辅助，全部 `pub(crate)` 并由 `pub(crate) use settings_defaults::*;` 转出，调用点零改动），最大块从 1478 降到 668。**四处大文件全部拆完** | 沿 `view/host/` 已验证的按域拆分惯例切完。`editor_exec/runner.rs`（741）与 `model/tests.rs`（588）已到无痛上限：`impl QueryRunner for EngineQueryRunner` 同一类型只能有一个 trait impl 块，**不能再按方法拆文件**；单文件用例要再降得按域拆 `tests/` 目录——两者都属改结构，不再是无损搬运 |
+| 大文件拆分纪律 | 四批拆分实证：目录化后模块路径不变（`ports::editor_exec::attach` / `quick_open::model::Row` / `view::dialogs::open_close_confirm` 等对外签名零改动）；子模块里同名 `mod accel` 会与 `use engine::duckdb::accel` 撞车（E0255），须改名 `accel_exec`；`use` 经 `use super::*` 被后代模块使用**不会**报 unused（`dialogs/mod.rs` 一份统一导入供 8 个子文件共用、`host/mod.rs` 一份供 `construct.rs` / `settings_defaults.rs` 共用，均零 warning）；`view/host/mod.rs` 拆出 `construct.rs` 后仍是同类型多处 `impl EditorHostPanel` 块（合法，`new` 独占一块） | 后续拆包按此八条走：① 不动对外路径（`pub use` 子模块通配，别逐个枚举）；② 子模块名避开外部 crate 同名；③ inherent 方法跨文件调用一律 `pub(crate)`；④ 用例要跨文件访问结构体私有字段时**字段也要 `pub(crate)`**（只提方法不够：读字段报 E0616、直接 struct literal 构造报 E0451，两批才全暴露）；⑤ 批量 `Replace("    X: T,")` 会误伤函数形参——同一名字常在 `fn new(..)`/`open_xxx(..)` 的形参里也出现，改完必须 grep 逐处确认；⑥ 搬走 `impl` 内的一段方法时 **`impl` 头跟着搬、留在原处的部分各自补一行 `impl` 头**（否则 `unexpected closing delimiter`）；⑦ 切片按 1-based 闭区间核对末行是不是 `}`（少取一行就 `unclosed delimiter`）；⑧ 新子文件必须有 `use super::*;`，父模块的导入到不了子模块（缺它一片 `cannot find type` E0425/E0433）。**`view/host/` 还剩三块 500 行以上**：`render.rs` 848 / `session.rs` 782 / `construct.rs` 645，都属"单一职责但行数大"，要再降得拆方法体（属改结构） |
 | `view/signature_help.rs:17` | 「DBeaver 式完整目录留给后续」 | 已有 C5 函数手册 + #54 B 目录注入，复核这句是否还成立 |
 
 ### 15.4 本轮已修（2026-11-08，15.1 第 1 条）
@@ -342,7 +342,7 @@ gpui-pre 0.3.11 起 `text_system()` 返回 `&Arc<WindowTextSystem>` → E0308，
 盘点发现 15.1 第 3 条与 `view/host/bookmarks.rs:61` 注释都写着「行号漂移暂不校正」，但
 **`8234474b` 就已经做了方案 A**，调用链完整：
 
-`InputEvent::Change`（`view/host/mod.rs:697`）→ `adjust_bookmarks_for_edit`
+`InputEvent::Change`（`view/host/construct.rs:129`）→ `adjust_bookmarks_for_edit`
 （`bookmarks.rs:149`）→ `state.take_last_edit_delta()`（vendor 项目私有 patch，
 `vendor/gpui-base/src/input/base/state.rs:3590`）→ `bookmark::adjust_for_edit`
 （`support/bookmark.rs:105`，5 条单测）→ `shared.set_bookmarks` + 重绘 + `sync_bookmarks` 回写 sidecar。
@@ -393,7 +393,7 @@ headless 经验：正文编辑要走 `editor.read(cx).focus_handle(cx)` + `focus
 | `settings/src/service/mod.rs` | `value_by_key` 读分支 + `apply_by_key` 的 editor 域分支 |
 | `settings/src/service/editor.rs` | `apply_slot` 分支 + `bookmark_column(cx)` / `set_bookmark_column(on, cx)`（改 global → `persist` → `refresh_windows`） |
 
-**宿主**（crates/editor，三处）：`host/mod.rs` 加 `editor_bookmark_column_or_default`（无全局回退
+**宿主**（crates/editor，三处）：`host/settings_defaults.rs` 加 `editor_bookmark_column_or_default`（无全局回退
 `true`）+ 面板缓存字段 `show_bookmark_column`（**初值取内核默认 `true`**——若初值取设置值，
 「设置为关」时缓存与设置相等，render 永不调用内核 setter）；`host/render.rs` 在行号开关同款
 同步块里比对后调 `set_gutter_marker_column`。
@@ -424,7 +424,7 @@ headless 经验：正文编辑要走 `editor.read(cx).focus_handle(cx)` + `focus
 
 **问题本体是「能力位空转」**：`Capabilities::for_mode(Analysis)` 的 `completion` 一直是 `true`
 （`core/model.rs:219`，原注释还写着「1c 预留，尚未装 provider」），`completion_enabled` 因此对
-`.rdsnote` 一律回 true——但 provider 只装在两处**主编辑器**（`view/host/mod.rs:647`、
+`.rdsnote` 一律回 true——但 provider 只装在两处**主编辑器**（`view/host/construct.rs:66`、
 `view/host/session.rs:498`）。笔记模式下主编辑器的正文是单元列表，那个 provider 一辈子没人调用；
 单元自己的内核（`view/host/notebook.rs:44-49`）只 `EditorState::new(..).language(..)` + `set_value`。
 `choose_completion`（`lsp/host.rs:86`）对 `Analysis` 走 `_` 分支、只认 LSP，所以分析模式连 SQL
@@ -586,7 +586,49 @@ headless 经验：正文编辑要走 `editor.read(cx).focus_handle(cx)` + `focus
 验证：`cargo check -p rds-editor --all-targets -j 1` → exit 0（只动注释与文档，无行为变化）；
 `rds-editor --lib` 不重跑（本轮无代码语义改动，上一次全量即 §15.10 的 764/3/1）。
 
+### 15.12 `view/host/mod.rs` 拆分（§15.3 大文件第 4 批，也是最后一批）
 
+**拆前实测 1478 行**（§15.3 旧记的 1366 是更早的盘点值，已过期——这也是本轮先量再切的原因）。
 
+切法与边界（按顶层结构切，不动任何方法体）：
 
+| 文件 | 行数 | 内容 |
+| --- | --- | --- |
+| `mod.rs` | 668 | 模块文档 + 导出的两段导入（原 `:9-28` 与 `:203-227` 合到一处）+ `mod construct;` / `mod settings_defaults;` / `pub(crate) use settings_defaults::*;` + `PendingExport` / `PendingBind`(+`impl`) / `EditMode`(+`impl`) / `EditorStatusSnapshot` / `EditorHostEvent` / `impl EventEmitter` / `EditorHostPanel` 结构定义 + 10 个子模块声明 + `apply_editor_defaults` 起的一段 impl 方法 + 尾部 `ops` / `render` re-export |
+| `construct.rs` | 645 | `impl EditorHostPanel { pub fn new(..) }`——原 `:591-1226` 的 **636 行单体构造函数**整段搬家，独占一个 `impl` 块 |
+| `settings_defaults.rs` | 180 | 原 `:30-201` 的 15 个「设置 → 行为」读取辅助（`editor_settings_or_default` / `editor_show_line_numbers_or_default` / `editor_fold_*` / `fact_storage_pref_or_default` / `active_fact_snapshot` / `active_set_index` 等），一律 `pub(crate)` |
 
+为什么这么切：`new` 里的装配有严格顺序（建内核 → 装 provider → 订阅 → 恢复会话 → 应用设置默认），
+拆成小函数会让"谁在谁之前"看不出，所以整段搬；设置辅助是纯读取、无状态，独立成文件最干净。
+`settings_defaults.rs` 的名字刻意避开 `settings`（外部 crate 同名，E0255 风险）。
+
+**零改动边界**：`mod.rs` 仍是 `view::host` 的模块根，`pub use ops::{…}` 与 `pub(crate) use render::*;`
+原样保留，`view/mod.rs`、`workbench` 侧调用点一行没改；10 个子模块的 `use super::*` 继续吃到
+`mod.rs` 那段落统一导入（与 `dialogs/mod.rs` 同一模式），**零 unused warning**。
+
+**三轮编译错误的成因**（写下来防下次重犯）：
+1. `unexpected closing delimiter`（`mod.rs:655`）——把 `impl EditorHostPanel {`（原 `:586`）连同 `new`
+   一起搬给了 `construct.rs`，留在 `mod.rs` 的那段方法失去 impl 头。补一行 `impl EditorHostPanel {` 即可。
+2. `settings_defaults.rs:177` `unclosed delimiter`——切片取了 `:30-201`，而 `active_set_index` 的收尾 `}`
+   在 `:202`。按 1-based 闭区间重取 `30..202`。
+3. 一片 `cannot find type App` / `EditorShared` / `SettingsService`（E0425/E0433）+ `unused import:
+   settings::SettingsService`——新文件忘了 `use super::*;`，父模块的导入到不了子模块。
+
+验证（全部实跑）：
+
+- `cargo check -p rds-editor --lib -j 1` → exit 0，**零 warning**
+- `cargo check -p rds-editor --all-targets -j 1` → exit 0
+- `cargo test -p rds-editor --lib -- --test-threads=1` → **764 passed / 3 failed / 1 ignored**，
+  与 §15.10 基线逐条一致（三条既有失败仍是 `legacy.rs` / `notebook_win.rs` / `results_a.rs`）——
+  这就是"纯结构改动、零行为变化"的运行证据
+- `cargo build -j 1 -p rds-app` → exit 0（45.71s）
+- 重启应用（新二进制）**pid 23636**：stderr 92 行、`panic=0` / `ERROR=0`
+
+**一次需要解释的噪音（已排除）**：第一次重启（`Stop-Process -Force` 后仅等 800ms 就起新进程）的
+日志里出现 6 条 `ERROR … gpui-fast-windows … 无效的窗口句柄 (0x80070578 / 0x80040102)`，
+集中在同一秒、之后不再出现。把间隔拉到 2s 再重启一次 → **0 条**。结论：这是强杀上一进程后窗口句柄
+尚未回收的启动竞态，落在 `gpui-fast-windows` 依赖里，与本轮改动代码零交集，不是回归。
+（顺带记下：重启脚本的 `Start-Sleep` 别压到 1s 以内。）
+
+**没有做的**：没有继续把 `construct.rs` 的 `new` 拆成小函数，也没有动 `render.rs`（848）/ `session.rs`（782）
+——那属于改方法结构，不是无损搬家，需要单独决策。
