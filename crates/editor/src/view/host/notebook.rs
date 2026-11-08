@@ -47,20 +47,41 @@ impl EditorHostPanel {
         // 只有 SQL 单元吃本地目录补全；候选与主编辑器同源（宿主推给本文档的目录快照）。
         let sql_completion = cell.language.uses_local_sql_completion()
             && self.shared.completion_enabled(&self.document);
+        // 【15.14】逐单元诊断：目录快照与方言在创建时取一次（与主编辑器 `submit_scan`
+        // 同一来源：`catalog_snapshot_for` + `sql_dialect_for_document`），随闭包进变化回调。
+        let cell_catalog = self
+            .shared
+            .catalog_snapshot_for(&self.document)
+            .unwrap_or_else(|| std::sync::Arc::new(crate::completion::Catalog::default()));
+        let cell_dialect = self.sql_dialect_for_document();
         let completion_shared = self.shared.clone();
         let completion_document = self.document.clone();
+        let initial_text = body.clone();
         let editor = cx.new(|cx| {
             // `language` 是消费式 builder：链在 `new` 后面
             let mut state = EditorState::new(window, cx).language(language);
+            // 首帧诊断：单元一出现就带波浪线，不必等第一次敲键
+            let initial = if sql_completion {
+                crate::view::cell_diagnostics::diagnostics_for(
+                    &initial_text,
+                    &cell_catalog,
+                    cell_dialect,
+                )
+            } else {
+                Vec::new()
+            };
             state.set_value(body, window, cx);
             if sql_completion {
                 crate::view::completion::install(&mut state, completion_shared, completion_document);
+                crate::view::cell_diagnostics::apply(&mut state, &initial, cx);
             }
             state
         });
         let document = self.document.clone();
         let shared = self.shared.clone();
         let cell_id = cell.id.clone();
+        let cell_editor = editor.clone();
+        let change_catalog = cell_catalog.clone();
         // 订阅挂面板上下文会 read 面板（subscribe_in 的 ensure_window），面板正被
         // update 时直接 panic；改用无窗口版 `subscribe`（回调里不需要 window，
         // 只回写 shared）——派发时面板已不在更新中
@@ -70,6 +91,22 @@ impl EditorHostPanel {
             }
             // 正文从单元编辑器实体读（事件路径，可直接 read）
             let text = state.read(cx).text().to_string();
+            // 【15.14】正文一变就重建该单元自己的诊断（主编辑器的诊断扫的是单元列表 JSON，
+            // 对单元里的 SQL 没有意义）。**不能在这里 update 本实体**——Change 由它自己发出，
+            // 此刻它正在 update 中（重入会 panic）；`cx.defer` 推到本次更新结束后再写内核。
+            if sql_completion {
+                let found = crate::view::cell_diagnostics::diagnostics_for(
+                    &text,
+                    &change_catalog,
+                    cell_dialect,
+                );
+                let target = cell_editor.clone();
+                cx.defer(move |cx| {
+                    let _ = target.update(cx, |state, cx| {
+                        crate::view::cell_diagnostics::apply(state, &found, cx);
+                    });
+                });
+            }
             let mut cells = shared.notebook_cells(&document);
             if let Some(target) = cells.iter_mut().find(|c| c.id == cell_id) {
                 target.body = text;

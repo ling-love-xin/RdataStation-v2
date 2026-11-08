@@ -261,3 +261,77 @@ fn non_markdown_documents_have_no_preview_toggle(cx: &mut TestAppContext) {
         "非 Markdown 文档不出现预览切换"
     );
 }
+
+// ===== 【15.14】逐单元诊断 =====
+
+/// 一份带三个单元的 `.rdsnote`：好 SQL / 坏 SQL（未闭合字符串）/ 文本
+fn analysis_note_with_bad_sql() -> &'static str {
+    r###"{"version":1,"session":{"id":"default","default_connection":null,"env":null},"cells":[
+        {"id":"c1","kind":"sql","body":"select 1;"},
+        {"id":"c2","kind":"sql","body":"select 'abc"},
+        {"id":"c3","kind":"text","body":"## 备注"}]}"###
+}
+
+/// 【15.14】诊断必须挂在**单元自己的内核**上，且逐单元独立重建
+///
+/// 三件事一起钉：
+/// 1. 打开即诊断（单元一出现就带波浪线，不必等敲键）；
+/// 2. 单元之间互不影响（坏的那条只脏自己，好 SQL 与文本单元干净）；
+/// 3. 正文变化后重算（打一个未闭合引号 → 该单元诊断出现）。
+///
+/// 第 3 条同时覆盖 `cx.defer` 那条路径：Change 由单元编辑器自己发出，回调里不能重入
+/// update 本实体，重建被推迟到本次更新之后——这里靠 `run_until_parked` 把推迟的那步跑掉。
+#[gpui_kit::test]
+fn cell_diagnostics_are_per_cell_and_rebuild_on_typing(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::file(
+            r"D:\notes\diag.rdsnote",
+            analysis_note_with_bad_sql(),
+            EditorMode::Analysis,
+        ))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_cell_editors(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let count_of = |cx: &mut gpui_kit::VisualTestContext, cell_id: &str| {
+        let editor = cx.update(|_window, cx| {
+            panel
+                .read(cx)
+                .cell_editors
+                .get(cell_id)
+                .cloned()
+                .expect("单元编辑器实例要存在")
+        });
+        cx.update(|_window, cx| {
+            editor.update(cx, |state, _| {
+                state.diagnostics().map(|set| set.len()).unwrap_or(0)
+            })
+        })
+    };
+
+    assert_eq!(count_of(cx, "c1"), 0, "好 SQL 不该有诊断");
+    assert!(
+        count_of(cx, "c2") >= 1,
+        "未闭合字符串的单元一打开就该有诊断（首帧重建）"
+    );
+    assert_eq!(count_of(cx, "c3"), 0, "文本单元不吃 SQL 诊断");
+
+    // 点进 c1 敲一个未闭合的块注释开头（内核不会为它自动补字符）：词法层报「块注释没有闭合」
+    cx.update(|window, cx| window.click("editor-nb-cell-source-c1", cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.simulate_input("/");
+    cx.simulate_input("*");
+    cx.run_until_parked();
+
+    let body = cx.update(|_window, _cx| shared.notebook_cells(&id)[0].body.clone());
+    let count = count_of(cx, "c1");
+    assert!(
+        count >= 1,
+        "正文变化后该单元自己的诊断要重建（正文：{body:?}，诊断数：{count}）"
+    );
+    assert_eq!(count_of(cx, "c3"), 0, "重建只作用于本单元，别的单元不受牵连");
+}

@@ -265,7 +265,7 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 | **高** | **折叠候选的后台路径不吃 `editor.fold_open_keywords` / `fold_close_keywords`** | 生产者：`Job` 无关键字字段，`run()` 写死默认表 | ✅ **本轮已修，见 15.4**。原证据：`support/scan.rs:88-97`（`Job{revision,text,channel,scope,catalog,dialect}`）、`support/scan.rs:236-242`（硬编码 `CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT` / `END`）；消费在 `view/host/exec/pump.rs:98-105`（`fold::refresh` 覆盖候选）。前台正确口径：`view/host/render.rs:49-55`（设置→shared）+ `view/host/ops.rs:420-431`（`sync_fold`→`fold::install`）。**原后果**：改设置后首帧正确，编辑一次即被后台候选覆盖回默认关键字（设置静默失效） |
 | 高 | 右键菜单无 SQL 执行项 | 宿主消费分支：`menu_entries` 无执行条目 | ✅ **本轮已修**，见 15.5。原证据：`view/editor_menu.rs:63-110`（只有剪切/复制/粘贴/全选/添加书签说明/转到定义/代码操作） |
 | ~~中~~ | ~~书签行号漂移不校正~~ | 回放：sidecar 行号**会**随编辑平移（方案 A 已实现，`8234474b`；本轮补端到端用例） | `view/host/bookmarks.rs:149`（`adjust_bookmarks_for_edit`） |
-| 中 | 分析模式逐单元补全未装 provider | 装配：cell 编辑器只建实例不装 provider | ✅ **本轮已修（补全），见 15.8**。原证据：`view/host/notebook.rs:44-49`（`EditorState::new(..).language(..)` + `set_value`，无 completion / diagnostics）；`completion::install` 仅两处主编辑器（`view/host/mod.rs:633`、`view/host/session.rs:498`）。**逐单元 diagnostics 仍未做**，见 15.8 末尾 |
+| 中 | 分析模式逐单元补全未装 provider | 装配：cell 编辑器只建实例不装 provider | ✅ **补全已修（15.8）、诊断已修（2026-11-09，见 15.14）**。原证据：`view/host/notebook.rs:44-49`（`EditorState::new(..).language(..)` + `set_value`，无 completion / diagnostics）；`completion::install` 仅两处主编辑器（`view/host/mod.rs:633`、`view/host/session.rs:498`）。逐单元诊断的落点：`view/cell_diagnostics.rs`（新增）+ `ensure_cell_editor` 首帧与 Change 后重建 |
 | 中 | 标签方案 B（结构化 `tags`）/ C（全局 Tag System） | 数据层：现只有 A「说明即标签」 | §十二 |
 | ~~低~~ | ~~跳转后自动弹说明~~ / ~~hover 300ms 延迟~~ | ✅ **两条都已修（2026-11-08）**：跳转后自动弹说明 = 内核「跳转 pin」（`set_gutter_note_pin`，`jump_to_line` 落地即 pin 给内核），见 §15.10；hover 300ms 延迟 = 内核 `gutter_hover_note_since` 跨帧计时 + `request_animation_frame` 推帧，见 §15.13 | 原证据：`jump_to_line` 不回传行号；`gutter_hovered_row` 当帧计算 |
 | 低 | 修饰符高亮未映射（readonly / deprecated） | 渲染：主题侧无对应 token | `view/highlight.rs:217` |
@@ -461,9 +461,9 @@ headless 经验：正文编辑要走 `editor.read(cx).focus_handle(cx)` + `focus
 
 **本轮未做（如实记录）**：
 
-1. **逐单元语义诊断（diagnostics）**：15.1 原文把 completion 与 diagnostics 写在同一格。诊断要
+1. ~~**逐单元语义诊断（diagnostics）**~~：15.1 原文把 completion 与 diagnostics 写在同一格。诊断要
    每单元独立的 SQL 解析上下文与 catalog 位置映射，`sql_diagnostics` 目前只装在主编辑器上；
-   未做。
+   未做。→ **已做（2026-11-09），见 §15.14**
 2. **Python / R / Julia 单元的补全**：需要 per-cell 语言服务会话（虚拟 URI），是一条独立改造。
 3. `choose_completion` 对 `Analysis` 仍可能把 LSP provider 装到主 state —— 笔记模式下没人调用，
    无害但无用；改它会动"唯一开关处"的语义，留到与 per-cell LSP 一起做时收口。
@@ -699,3 +699,53 @@ cargo test --manifest-path .rds\tmp\gpui-base-probe\Cargo.toml --lib -j 1 `
 **未覆盖**：延迟本身是体感项，只有人工能判"300ms 是否偏慢/偏快"；自动化只钉住了判定函数与
 "换行即重置"的语义。`gpui-base --all-targets` 仍会挂在 bench `text_view_scroll`
 （缺 `gpui_fast_platform`），与本轮改动无关，属该 bench 的老问题。
+
+## 15.14 分析模式逐单元诊断（2026-11-09，闭合 §15.8「本轮未做」第 1 条）
+
+**问题**：诊断的三条来源（打字期词法 / LSP / 执行错误）**只在一处重建**——
+`view/host/results/errors.rs::apply_error_marks`——而它只 `self.editor.update(..)`（主编辑器）。
+笔记模式下主编辑器正文是**单元列表 JSON**：后台扫描（`support/scan.rs::run`）对整篇
+`job.text` 调 `language_service::diagnostics`，算出来的是"这段 JSON 的括号/引号"，
+单元里那段 SQL 的错永远报不出来。能力表给分析模式 `diagnostics: true`，但这个位一直没落地。
+
+**为什么不能只把 provider 装到单元**：诊断在内核里不是 provider 槽位（`lsp_mut()` 只有
+completion / hover / definition 等），而是"调用方算好再推"的集合：
+`EditorState::diagnostics_mut() -> Option<&mut DiagnosticSet>`，集合只有 `clear` + `push`。
+
+**改法**（新增 1 个模块 + 1 处接线 + 1 条用例）：
+
+| 位置 | 改动 |
+| --- | --- |
+| `view/cell_diagnostics.rs`（新增） | ① `diagnostics_for(text, catalog, dialect)` 纯函数，内部就是 `language_service::diagnostics(&Request{text, cursor:0, selection:None, catalog, connection:None, channel:默认, dialect})`——与后台扫描同一填法，不另造判据；② `apply(state, found, cx)`：`clear` 后逐条 `push`，行列用 `Diagnostic::positions(&text)`（0 基），来源「语法」、严重度 Error、`code` 原样带给内核——与主编辑器词法层同一口径 |
+| `view/host/notebook.rs::ensure_cell_editor` | ① 建实例时取一次目录快照（`shared.catalog_snapshot_for(&document)`）与方言（`self.sql_dialect_for_document()`），与 `submit_scan` 同源；② `cx.new` 里 `set_value` 之后立刻 `apply`（**首帧就有波浪线**，不必等敲键）；③ Change 订阅里重算，**经 `cx.defer`** 写回内核 |
+| `view/tests/legacy.rs` | 新用例 `cell_diagnostics_are_per_cell_and_rebuild_on_typing`：好 SQL 单元 0 条、未闭合字符串单元 ≥1 条、文本单元 0 条；再点进好 SQL 单元敲 `/*` → 该单元自己出现诊断，另一个单元不受影响 |
+
+**为什么必须 `cx.defer`**：Change 事件由单元编辑器**自己**发出，此刻它正在 `update` 中；
+在订阅回调里再 `update` 同一实体会 panic（`cannot update … while it is already being updated`，
+与 gpui-kit-dev「不要在回调里重入 update 当前实体」同一条）。延迟到本次更新结束再写，
+订阅里只做"算"。
+
+**门控**：只有 `CellLanguage::uses_local_sql_completion()`（即 SQL 单元）且
+`completion_enabled(&document)` 的单元接诊断。Python / R / Julia 单元不接——它们的诊断要
+per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
+
+**验证**：
+
+- `cargo check -p rds-editor --lib -j 1` → exit 0，零 warning
+- 定向 `cell_diagnostics_are_per_cell_and_rebuild_on_typing` → 1 passed
+- `cargo check -p rds-editor --all-targets -j 1` → exit 0
+- `cargo test -p rds-editor --lib -- --test-threads=1` → **765 passed / 3 failed / 1 ignored**
+  （= §15.13 基线 764 + 本轮 1 条；三条失败仍是既有基线 `legacy.rs:58` / `notebook_win.rs:347` /
+  `results_a.rs:290`）
+- `cargo build -j 1 -p rds-app` → exit 0；重启应用后日志 0 panic / 0 ERROR
+
+**未覆盖（如实记录）**：
+
+1. **执行错误没有进单元诊断**：单元跑出错误时，错误信息仍以「单元输出块」呈现（
+   `source「执行」` 那条只喂主编辑器与结果面板）。要把"这个单元的 SQL 在第 N 行出错"也画成
+   波浪线，需要执行回执里带上 per-cell 错误位点，属执行端改造。
+2. **目录快照与方言是创建时快照**：用户切连接/切 Schema 后，已存在的单元仍按旧快照算语义诊断
+   （词法层不受影响）。重建单元实例（增删单元、重开文档）即刷新；持续跟随要订阅连接变更，
+   属另一条接线。
+3. 延迟/抖动未测：每次 Change 同步算一次是纯 CPU（单元文本远小于 `SCAN_MAX_BYTES`），
+   但没有为"超大单元"设闸；如出现卡顿，可照 `scan_scope` 的做法按档位关掉。
