@@ -84,12 +84,52 @@ impl ScanScope {
     }
 }
 
+/// 折叠关键字（后台扫描与前台 `sync_fold` 共用的同一口径）
+///
+/// 为什么要有这一份：扫描线程在 `support` 层，**零 GPUI、不读设置**，设置值只能由主线程
+/// 在提交时带进来。此前这里缺这一段，扫描线程直接写死默认表——用户改了
+/// `editor.fold_open_keywords`（比如加 `DO $`）后，首帧 install 正确，但编辑一次就被后台
+/// 候选覆盖回默认关键字（设置静默失效）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoldKeywords {
+    pub open: Vec<String>,
+    pub close: Vec<String>,
+}
+
+impl FoldKeywords {
+    /// 内置默认（与 settings 的 `default_fold_open_keywords` / `default_fold_close_keywords` 同值）
+    pub fn defaults() -> Self {
+        Self {
+            open: "CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT"
+                .split(',')
+                .map(|s| s.to_string())
+                .collect(),
+            close: "END".split(',').map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// 由主线程按设置解析后的两份列表构造（提交扫描时带入）
+    pub fn new(open: Vec<String>, close: Vec<String>) -> Self {
+        Self { open, close }
+    }
+}
+
+impl Default for FoldKeywords {
+    /// 默认 = 内置表。**刻意不是空表**：空表会让扫描一个块候选都不给，
+    /// 与"设置没配"应当得到的行为不一致。
+    fn default() -> Self {
+        Self::defaults()
+    }
+}
+
 /// 一份待算的活（只留最新那一份）
 struct Job {
     revision: u64,
     text: String,
     channel: ExecChannel,
     scope: ScanScope,
+    /// 折叠关键字（设置口径，见 [`FoldKeywords`]）
+    fold_keywords: FoldKeywords,
     /// 【#54 B】语义诊断目录快照（`Catalog::default()` = 空目录，语义段跳过）
     catalog: Arc<Catalog>,
     /// 【#54 B】语义诊断方言（宿主按文档绑定连接的驱动给；Ansi = 通用兜底）
@@ -136,13 +176,15 @@ impl Scanner {
     }
 
     /// 提交一份文本（**覆盖**尚未开算的那一份）；`catalog` / `dialect` = 语义诊断的
-    /// 目录快照与方言（宿主按文档绑定连接注入；空目录 + Ansi = 语义段跳过）
+    /// 目录快照与方言（宿主按文档绑定连接注入；空目录 + Ansi = 语义段跳过），
+    /// `fold_keywords` = 折叠关键字（由主线程按设置带进来，扫描线程不读设置）
     pub fn submit(
         &self,
         revision: u64,
         text: String,
         channel: ExecChannel,
         scope: ScanScope,
+        fold_keywords: FoldKeywords,
         catalog: Arc<Catalog>,
         dialect: engine::sql::SqlDialect,
     ) {
@@ -156,6 +198,7 @@ impl Scanner {
             text,
             channel,
             scope,
+            fold_keywords,
             catalog,
             dialect,
         });
@@ -233,13 +276,13 @@ fn worker_loop(shared: &Shared, sender: &Sender<ScanReport>) {
 fn run(job: &Job) -> ScanReport {
     let statements = engine::sql::split_statements(&job.text).len();
     let folds = if job.scope.folds {
-        // 后台扫描暂时用默认关键字，后续再传设置
-        let open: Vec<String> = "CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT"
-            .split(',')
-            .map(|s| s.to_string())
-            .collect();
-        let close: Vec<String> = "END".split(',').map(|s| s.to_string()).collect();
-        fold::spans(&job.text, true, &open, &close)
+        // 关键字是提交时带进来的设置口径（`FoldKeywords`），**不在这里写死默认表**
+        fold::spans(
+            &job.text,
+            true,
+            &job.fold_keywords.open,
+            &job.fold_keywords.close,
+        )
     } else {
         Vec::new()
     };
@@ -269,7 +312,7 @@ fn run(job: &Job) -> ScanReport {
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{Job, ScanScope, Scanner, is_current, run};
+    use super::{FoldKeywords, Job, ScanScope, Scanner, is_current, run};
     use crate::channel::ExecChannel;
     use crate::completion::Catalog;
     use std::time::{Duration, Instant};
@@ -299,6 +342,7 @@ mod tests {
             "SELECT (\n  1\n);\nSELECT 2;".to_string(),
             ExecChannel::Source,
             ScanScope::full(),
+            FoldKeywords::defaults(),
             std::sync::Arc::new(Catalog::default()),
             engine::sql::SqlDialect::Ansi,
         );
@@ -319,6 +363,7 @@ mod tests {
             "SELECT (\n  1\n);\nSELECT 'x".to_string(),
             ExecChannel::Source,
             ScanScope::full(),
+            FoldKeywords::defaults(),
             std::sync::Arc::new(Catalog::default()),
             engine::sql::SqlDialect::Ansi,
         );
@@ -334,6 +379,7 @@ mod tests {
             text: "SELECT (\n  1\n)".to_string(),
             channel: ExecChannel::Source,
             scope: ScanScope::none(),
+            fold_keywords: FoldKeywords::defaults(),
             catalog: std::sync::Arc::new(Catalog::default()),
             dialect: engine::sql::SqlDialect::Ansi,
         };
@@ -347,6 +393,44 @@ mod tests {
     }
 
     #[test]
+    fn the_scan_uses_the_fold_keywords_it_was_given() {
+        // 钉住「设置静默失效」那个坑：后台扫描必须吃**提交时带进来的**关键字，
+        // 不能自己写死默认表。同一段文本：默认口径无块候选，自定义口径有。
+        //
+        // 选词注意：`fold::spans` 只在词法归为 `Keyword` 的 token 上判块关键字，
+        // 所以这里必须用真关键字（`WHEN` / `END`），不能用 `DO` 这类会落进
+        // Identifier 的词——否则默认口径也没候选，测不出差异。
+        let text = "WHEN\nSELECT 1;\nEND\n".to_string();
+        let job_with = |fold_keywords: FoldKeywords| Job {
+            revision: 1,
+            text: text.clone(),
+            channel: ExecChannel::Source,
+            scope: ScanScope::full(),
+            fold_keywords,
+            catalog: std::sync::Arc::new(Catalog::default()),
+            dialect: engine::sql::SqlDialect::Ansi,
+        };
+
+        let with_defaults = run(&job_with(FoldKeywords::defaults()));
+        assert!(
+            with_defaults.folds.is_empty(),
+            "WHEN 不在默认开块表里，默认口径下不该给出块候选"
+        );
+
+        let custom = FoldKeywords::new(vec!["WHEN".to_string()], vec!["END".to_string()]);
+        let with_custom = run(&job_with(custom));
+        assert_eq!(with_custom.folds.len(), 1, "自定义关键字应产出块候选");
+        assert_eq!(
+            (
+                with_custom.folds[0].start_line,
+                with_custom.folds[0].end_line
+            ),
+            (0, 2),
+            "块从 WHEN 行起、到 END 行止"
+        );
+    }
+
+    #[test]
     fn only_the_latest_submission_is_computed() {
         // **合并**：连提交三次，最终拿到的必须是最后那一次的修订号（前面两份被覆盖）
         let scanner = Scanner::new();
@@ -356,6 +440,7 @@ mod tests {
                 format!("SELECT {revision};"),
                 ExecChannel::Source,
                 ScanScope::full(),
+                FoldKeywords::defaults(),
                 std::sync::Arc::new(Catalog::default()),
                 engine::sql::SqlDialect::Ansi,
             );
@@ -377,6 +462,7 @@ mod tests {
             "SELECT 1;".to_string(),
             ExecChannel::Source,
             ScanScope::full(),
+            FoldKeywords::defaults(),
             std::sync::Arc::new(Catalog::default()),
             engine::sql::SqlDialect::Ansi,
         );
@@ -395,6 +481,7 @@ mod tests {
             "SELECT 1;".to_string(),
             ExecChannel::Source,
             ScanScope::full(),
+            FoldKeywords::defaults(),
             std::sync::Arc::new(Catalog::default()),
             engine::sql::SqlDialect::Ansi,
         );

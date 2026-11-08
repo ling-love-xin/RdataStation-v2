@@ -27,9 +27,22 @@ impl EditorHostPanel {
             .catalog_snapshot_for(&self.document)
             .unwrap_or_else(|| std::sync::Arc::new(crate::completion::Catalog::default()));
         let dialect = self.sql_dialect_for_document();
+        // 折叠关键字：设置口径（前台 `sync_fold` 用的是同一份 shared 值）。
+        // 扫描线程不读设置，必须由这里带进去——否则改设置后会被后台候选覆盖回默认表。
+        let fold_keywords = crate::scan::FoldKeywords::new(
+            self.shared.fold_open_keywords(),
+            self.shared.fold_close_keywords(),
+        );
         self.scan_revision = self.scan_revision.wrapping_add(1);
-        self.scanner
-            .submit(self.scan_revision, text, channel, scope, catalog, dialect);
+        self.scanner.submit(
+            self.scan_revision,
+            text,
+            channel,
+            scope,
+            fold_keywords,
+            catalog,
+            dialect,
+        );
         self.scan_pending = true;
         // 扫描不是“执行”，但它也要人按节拍把回执取回来——共用同一条轮询泵
         self.ensure_exec_pump(cx);
