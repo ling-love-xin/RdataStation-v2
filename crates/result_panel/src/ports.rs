@@ -80,6 +80,8 @@ pub enum ResultRequest {
     CloseSqlDialog,
     /// 【1.2】复制「执行SQL」页签里的 wrapped SQL（筛选框运行生成的）
     CopyExecSql,
+    /// 【R1】复制当前选中单元格的值（值详情页工具条的复制钮；无选中格时为空操作）
+    CopyValue,
     /// 刷新（重跑当前结果 SQL）
     Refresh,
     /// 取下一段

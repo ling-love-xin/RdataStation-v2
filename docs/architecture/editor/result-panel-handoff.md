@@ -641,6 +641,25 @@ datetime #5CA259 / numeric #C0C0FF / string #D0D0D0）。全表见 `result-panel
 **仍未做**：值详情 / 分组 / 引用 / 执行SQL 四页工具条；统计项增删跨会话持久化；
 R3 / R4 / R5。
 
+### 2.32 2026-11-09（右栏 R1 收口：四页页内工具条统一）
+
+`result-panel.md` §8.41 是完整证据，这里只留接手要点。
+
+**做法**：抽 `panel_toolbar(debug_id, title, actions, cx)`（`panel/tabs.rs`）——28px、
+左标题 `truncate` + 右 `Toolbar.xsmall().p_0().contents(actions)` + 底边 `HAIRLINE`；
+计算页改成复用它，值详情 / 分组 / 执行SQL 三页接入。**引用页保持空态**：DBeaver
+`ReferencesPanel.contributeActions`（`:156-158`）本身是空实现，摆按钮反而是偏离。
+
+**新增能力**：`ResultRequest::CopyValue` + 面板 `pub fn selected_value_text(cx)`（注意
+**必须 `pub`**，`pub(crate)` 时 editor crate 调不到、编译警告 `never used`）+ dispatch
+分支走 `cx.write_to_clipboard`（与 `CopySql` / `CopyExecSql` 同机制）。
+
+**测试**：`panel_harness` 抽成公用测试壳（空面板 + 两列网格 + 预选第 2 列），
+`right_panel_pages_share_the_toolbar_shape` 断言三页工具条可见 + 值详情工具条 28px。
+
+**验证**：panel **248**（原 247 + 1）/ guard **4** / shell **14** passed；
+`cargo check -p rds-editor` 通过。
+
 ---
 
 

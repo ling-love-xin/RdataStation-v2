@@ -106,24 +106,38 @@ impl ResultPanel {
                 base
             }
         };
+        // 【R1】页内工具条：左「列名 · 类型」，右「位置标记 + 复制当前值」
+        // （DBeaver 值页动作来自 `valueManager.contributeActions` 与 `SaveValueAction`，
+        // `ValueViewerPanel.java:409-428`；本仓只读预览，等价能力是复制）
+        let marker = div()
+            .text_xs()
+            .text_color(muted)
+            .child(SharedString::from(row_marker))
+            .into_any_element();
+        let copy = {
+            let queue = self.queue.clone();
+            Button::new("editor-result-value-copy")
+                .ghost()
+                .xsmall()
+                .debug_selector(|| "editor-result-value-copy".to_string())
+                .icon(IconName::Copy)
+                .tooltip("复制当前单元格的值")
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::CopyValue, app);
+                })
+                .into_any_element()
+        };
         div()
             .flex_1()
             .min_h_0()
             .v_flex()
             .debug_selector(|| "editor-result-value-tab".to_string())
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_1()
-                    .px_2()
-                    .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
-                    .text_xs()
-                    .text_color(muted)
-                    .child(SharedString::from(title))
-                    .child(SharedString::from(row_marker)),
-            )
+            .child(self.panel_toolbar(
+                "editor-result-value-toolbar",
+                SharedString::from(title),
+                vec![marker, copy],
+                cx,
+            ))
             .child({
                 // 【值查看器分派】按列类型 + 值形态选内容形态：文本块 / JSON 树 / hex 转储 /
                 // 图片占位（纯 render 层；JSON 树状态由事件路径 `rebuild_value_tree` 重建）
@@ -135,6 +149,13 @@ impl ResultPanel {
                 self.render_value_body(kind, &value, cx)
             })
             .into_any_element()
+    }
+
+    /// 【R1】当前选中单元格的显示文本（值详情页「复制」用；事件路径调用，render 不读）
+    pub fn selected_value_text(&self, cx: &App) -> Option<String> {
+        let (row, col) = self.selection_pos?;
+        let grid = self.grid.read(cx);
+        Some(grid.delegate().cell_text(row, col, cx))
     }
 
     /// 【值查看器】内容区按分派模式渲染（纯 render 层；JSON 树解析在事件路径）
@@ -415,10 +436,53 @@ impl ResultPanel {
     }
 
     /// 【R2】计算页工具条：左「列名」标题 + 右动作（＋ 添加 / Reset / 口径 toggle），
+    /// 【R1】右栏各页共用的页内工具条：对齐 DBeaver 每个面板内部的一条
+    /// `ToolBarManager(SWT.HORIZONTAL | SWT.RIGHT | SWT.FLAT)`（`ResultSetViewer.java:1337-1374`，
+    /// 动作由各面板 `contributeActions` 贡献）。
+    /// 形态：高 28px（面板头档 = vendor `Toolbar` XSmall 自带的 `min_h_7`，容器同高才不溢出）、
+    /// 左标题 / 右动作组、底边一条 `HAIRLINE` 分隔线。
+    /// **动作只给本仓已有能力**——不造没有底层实现的按钮：DBeaver 的引用页
+    /// `contributeActions` 是空实现（`ReferencesPanel.java:156-158`），该页保持空态。
+    fn panel_toolbar(
+        &self,
+        debug_id: &'static str,
+        title: SharedString,
+        actions: Vec<AnyElement>,
+        cx: &App,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        div()
+            .h_flex()
+            .items_center()
+            .justify_between()
+            .gap_1()
+            .px_2()
+            .h(rems(ui::RESULT_PANEL_TOOLBAR_HEIGHT))
+            .flex_none()
+            .text_xs()
+            .border_b(ui::HAIRLINE)
+            .border_color(theme.colors.border)
+            .debug_selector(move || debug_id.to_string())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(theme.colors.muted_foreground)
+                    .child(title),
+            )
+            .child(
+                Toolbar::new(format!("{debug_id}-actions"))
+                    .xsmall()
+                    .p_0()
+                    .contents(actions),
+            )
+            .into_any_element()
+    }
+
     /// 对齐 DBeaver Calc 的 `fillToolBar`（`AggregateColumnsPanel.java:322-331`：
     /// ＋ / − / Reset / 分隔 / 分组 / 口径）。本仓「−」在统计行行尾，这里只摆三件。
     fn stats_toolbar(&self, column_name: &str, cx: &App) -> AnyElement {
-        let muted = cx.theme().colors.muted_foreground;
         let missing: Vec<StatsItem> = StatsItem::ALL
             .into_iter()
             .filter(|item| !self.stats_items.contains(item))
@@ -496,31 +560,12 @@ impl ResultPanel {
                 })
                 .into_any_element()
         };
-        div()
-            .h_flex()
-            .items_center()
-            .justify_between()
-            .gap_1()
-            .px_2()
-            .h(rems(ui::RESULT_PANEL_TOOLBAR_HEIGHT))
-            .flex_none()
-            .text_xs()
-            .debug_selector(|| "editor-result-stats-toolbar".to_string())
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(muted)
-                    .child(SharedString::from(format!("「{column_name}」统计"))),
-            )
-            .child(
-                Toolbar::new("editor-result-stats-actions")
-                    .xsmall()
-                    .p_0()
-                    .contents(vec![add, reset, mode_button]),
-            )
-            .into_any_element()
+        self.panel_toolbar(
+            "editor-result-stats-toolbar",
+            SharedString::from(format!("「{column_name}」统计")),
+            vec![add, reset, mode_button],
+            cx,
+        )
     }
 
     /// 【R2】计算页一行：函数名（左）+ 值（右）+ 行尾停用钮（替代 DBeaver 的「−」）
@@ -610,18 +655,12 @@ impl ResultPanel {
             .flex_1()
             .min_h_0()
             .debug_selector(|| "editor-result-group-tab".to_string())
-            .child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
-                    .text_xs()
-                    .text_color(muted)
-                    .child(SharedString::from(format!(
-                        "按「{name}」分组 · {} 组",
-                        groups.len()
-                    ))),
-            )
+            .child(self.panel_toolbar(
+                "editor-result-group-toolbar",
+                SharedString::from(format!("按「{name}」分组 · {} 组", groups.len())),
+                Vec::new(),
+                cx,
+            ))
             .child(
                 div()
                     .flex_1()
@@ -644,45 +683,41 @@ impl ResultPanel {
             return self
                 .sidebar_empty("在工具栏筛选框输入词并点 ▶ 运行，生成 SQL 会显示在这里", cx);
         };
-        let copy_queue = self.queue.clone();
+        // 【R1】页内工具条：左「生成的 SQL」、右复制（原先是在 `p_2` 里自绘的一行标题）
+        let copy = {
+            let copy_queue = self.queue.clone();
+            Button::new("editor-result-exec-sql-copy")
+                .ghost()
+                .xsmall()
+                .debug_selector(|| "editor-result-exec-sql-copy".to_string())
+                .icon(IconName::Copy)
+                .label("复制")
+                .tooltip("复制生成的 SQL".to_string())
+                .on_click(move |_, _window, app| {
+                    copy_queue.request(ResultRequest::CopyExecSql, app);
+                })
+                .into_any_element()
+        };
         div()
             .v_flex()
             .w_full()
             .h_full()
-            .gap_2()
-            .p_2()
             .debug_selector(|| "editor-result-exec-sql-tab".to_string())
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child(SharedString::from("生成的 SQL")),
-                    )
-                    .child(
-                        Button::new("editor-result-exec-sql-copy")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Copy)
-                            .label("复制")
-                            .tooltip("复制生成的 SQL".to_string())
-                            .on_click(move |_, _window, app| {
-                                copy_queue.request(ResultRequest::CopyExecSql, app);
-                            }),
-                    ),
-            )
+            .child(self.panel_toolbar(
+                "editor-result-exec-sql-toolbar",
+                SharedString::from("生成的 SQL"),
+                vec![copy],
+                cx,
+            ))
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
+                    .m_2()
                     .overflow_y_scrollbar()
                     .bg(theme.colors.background)
-                    .p_2()
                     .rounded_md()
+                    .p_2()
                     .text_xs()
                     .text_color(theme.colors.foreground)
                     .child(SharedString::from(sql)),

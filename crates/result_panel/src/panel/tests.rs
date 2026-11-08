@@ -488,6 +488,129 @@ fn stats_tab_renders_toolbar_header_and_rows(cx: &mut gpui_kit::TestAppContext) 
     );
 }
 
+/// 【R1/R2 测试壳】空面板 + 两列网格（`id` / `amount`，含一个 NULL 值）。
+/// `ResultPanel` 没有标准 `Render`（自定义 `render(&self, cx)`，宿主手动调），
+/// 所以包一层 `PanelHost` 实体转发；`selected_col` 预置第 2 列，计算 / 分组页才有作用列。
+fn panel_harness<'a>(
+    cx: &'a mut gpui_kit::TestAppContext,
+) -> (
+    gpui_kit::Entity<super::ResultPanel>,
+    &'a mut gpui_kit::VisualTestContext,
+) {
+    use gpui_kit::component::table::TableState;
+    use gpui_kit::component::Root;
+    use gpui_kit::{AppContext as _, Entity, IntoElement, Render};
+
+    struct PanelHost {
+        panel: Entity<super::ResultPanel>,
+    }
+    impl Render for PanelHost {
+        fn render(
+            &mut self,
+            _window: &mut gpui_kit::Window,
+            cx: &mut gpui_kit::Context<Self>,
+        ) -> impl IntoElement {
+            self.panel.read(cx).render(cx)
+        }
+    }
+
+    let slot: std::rc::Rc<std::cell::RefCell<Option<Entity<super::ResultPanel>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let slot_in = slot.clone();
+    let (_, vcx) = cx.add_window_view(move |window, cx| {
+        let queue = crate::ports::ResultActionQueue::new();
+        let panel = cx.new(|cx| super::ResultPanel::new(window, cx, queue));
+        let mut delegate = crate::grid::ResultGridDelegate::default();
+        delegate.set_data(
+            vec!["id".to_string(), "amount".to_string()],
+            vec![
+                vec!["1".to_string(), "1234.5".to_string()],
+                vec!["2".to_string(), "NULL".to_string()],
+            ],
+        );
+        let grid: Entity<TableState<crate::grid::ResultGridDelegate>> =
+            cx.new(|cx| TableState::new(delegate, window, cx));
+        panel.update(cx, |p, cx| {
+            p.set_grids(grid, None, cx);
+            p.selected_col = Some(1);
+        });
+        *slot_in.borrow_mut() = Some(panel.clone());
+        let host = cx.new(|_| PanelHost { panel });
+        Root::new(host, window, cx)
+    });
+    let panel = slot.borrow().clone().expect("ResultPanel 已创建");
+    (panel, vcx)
+}
+
+/// 【R1】右栏页内工具条形态统一：值详情 / 分组 / 执行SQL 三页各一条 28px 工具条，
+/// 动作只挂已有能力（值详情=复制当前值、执行SQL=复制 SQL、分组无动作——DBeaver 的
+/// `ReferencesPanel.contributeActions` 也是空实现，故引用页维持空态）。
+#[gpui_kit::test]
+fn right_panel_pages_share_the_toolbar_shape(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let visible = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> bool {
+        let by_id = cx.update(|window, _| {
+            window
+                .try_find(ElementId::Name(SharedString::from(id.to_string())))
+                .is_some_and(|snap| snap.visible())
+        });
+        by_id || cx.debug_bounds(id).is_some()
+    };
+
+    // 1) 值详情：工具条 + 复制当前值
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.selection_pos = Some((0, 1));
+            p.set_right_tab(RightTab::Value, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    for id in ["editor-result-value-toolbar", "editor-result-value-copy"] {
+        assert!(visible(id, cx), "值详情页元素 {id} 应渲染可见");
+    }
+    let value_toolbar_h = f32::from(
+        cx.debug_bounds("editor-result-value-toolbar")
+            .expect("值详情工具条应带 debug_selector 才量得到")
+            .size
+            .height,
+    );
+    assert!(
+        (value_toolbar_h - 28.0).abs() < 0.5,
+        "值详情工具条应与计算页同高 28px，实际 {value_toolbar_h}px"
+    );
+
+    // 2) 分组：工具条在（标题里带组数），无动作
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.set_right_tab(RightTab::Group, cx))
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        visible("editor-result-group-toolbar", cx),
+        "分组页工具条应渲染可见"
+    );
+
+    // 3) 执行SQL：工具条 + 复制
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.exec_sql = Some("select 1 as n".to_string());
+            p.set_right_tab(RightTab::ExecSql, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    for id in [
+        "editor-result-exec-sql-toolbar",
+        "editor-result-exec-sql-copy",
+    ] {
+        assert!(visible(id, cx), "执行SQL页元素 {id} 应渲染可见");
+    }
+}
+
 /// 【P2-3】多选集合推进：Ctrl 点击增删、普通点击单选替换、结果升序去重
 #[test]
 fn multi_selection_toggles_with_ctrl_and_replaces_without() {

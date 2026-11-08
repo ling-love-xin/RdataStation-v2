@@ -117,6 +117,17 @@ impl EditorHostPanel {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(sql));
                 }
             }
+            // 【R1】复制值详情页当前单元格的值（工具条复制钮；无选中格时为空操作）
+            ResultRequest::CopyValue => {
+                let value = self
+                    .result_panel
+                    .read(cx)
+                    .selected_value_text(cx)
+                    .unwrap_or_default();
+                if !value.is_empty() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(value));
+                }
+            }
             ResultRequest::Refresh => self.refresh_active_result(cx),
             ResultRequest::FetchMore => self.fetch_more(cx),
             ResultRequest::FetchAll => {

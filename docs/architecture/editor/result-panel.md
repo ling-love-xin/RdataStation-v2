@@ -2098,6 +2098,62 @@ SUM/AVG 对字符串累计不成立）。
 - `AggregateColumnsPanel` 的 `packColumns` 等列宽自适应（本仓右栏是固定列宽）
 - R3（Grouping 配置化）/ R4（Metadata、References 实做）/ R5（布局方向切换 + 可拖分栏）
 
+### 8.41 右栏 R1 收口：四页页内工具条统一（值详情 / 分组 / 引用 / 执行SQL）
+
+§8.40 只落了计算页。本节把「每面板一条页内工具条」补到其余各页，并用 DBeaver 的
+面板动作清单决定**每页放什么**——不按「每页都得摆几个按钮」造齐。
+
+#### 8.41.1 各面板动作实证（`contributeActions`）
+
+| 面板 | DBeaver 工具条动作 | 依据 |
+| --- | --- | --- |
+| Calc | ＋ / − / Reset / 分隔 / 分组 / 口径 | `AggregateColumnsPanel.java:322-331`（§8.40 已落地） |
+| Value | `valueManager.contributeActions(…)` + 可编辑时的 `SaveValueAction` | `ValueViewerPanel.java:409-428` |
+| Metadata | **只一个**「按结果集生成 DDL」 | `MetaDataPanel.java:204-215` |
+| References | **空实现**（方法体里没有任何 `manager.add`） | `ReferencesPanel.java:156-158` |
+| Grouping | 无 `contributeActions`（动作经 `GroupingAction` 扩展点驱动，属 R3） | `resultset/panel/` 全量 grep 无命中 |
+
+结论：**References 页在 DBeaver 本来就是空工具条**，本仓维持空态即等价；Metadata 页
+本仓尚未建（R4）。
+
+#### 8.41.2 统一容器
+
+`panel_toolbar(debug_id, title, actions, cx)`（`panel/tabs.rs`）：
+
+- 高 `ui::RESULT_PANEL_TOOLBAR_HEIGHT`（**28px** = vendor `Toolbar` XSmall 自带的 `min_h_7`）
+- 左标题 `truncate`（窄栏必须截断，否则推挤右侧动作）/ 右 `Toolbar(…).xsmall().p_0().contents(actions)`
+- 底边一条 `HAIRLINE` 分隔线
+
+计算页原先自绘的那份改为复用它，五页共用同一形态（避免两套工具条各走各的）。
+
+#### 8.41.3 各页落点
+
+| 页 | 标题 | 右侧动作 | 相对原状的变化 |
+| --- | --- | --- | --- |
+| 值详情 | 「列名 · 类型」 | 位置标记（灰字）+ 复制值 | 原 24px（`RESULT_STATUS_BAR_HEIGHT`）标题行 → 28px 工具条；**新增** `ResultRequest::CopyValue`，宿主 `cx.write_to_clipboard`（与 `CopySql` / `CopyExecSql` 同机制），面板提供 `selected_value_text(cx)` |
+| 分组 | 「按「X」分组 · N 组」 | 无 | 原 24px 行 → 28px 工具条 |
+| 引用 | 空态 | 无 | 不动（依据 §8.41.1） |
+| 执行SQL | 「生成的 SQL」 | 复制 | 原 `p_2` 里自绘标题行 → 28px 工具条；复制钮 `.small()` → `.xsmall()`；SQL 内容块改 `m_2` + 圆角 + 滚动 |
+| 计算 | 「「X」统计」 | ＋ / Reset / 口径 | 改走统一容器（R2 已落地，行为不变） |
+
+背景口径：DBeaver 的 `ToolBarManager` 是 `SWT.RIGHT | SWT.FLAT`，没有左边框也没有
+背景色——本仓容器只加 `border_b` 一条（与它的 `needsSeparator()` 等价），背景沿用右栏
+`theme.colors.sidebar`。
+
+#### 8.41.4 新增测试
+
+`right_panel_pages_share_the_toolbar_shape`（`panel/tests.rs`）：值详情页断言工具条与复制钮
+可见、**量高 28px**（与计算页同高），分组页断言工具条在，执行SQL 页断言工具条与复制钮在。
+测试壳抽成 `panel_harness`（空面板 + 两列网格 + 预选第 2 列），与 §8.40.5 那个渲染用例同源。
+
+**验证**：`rds-result-panel --lib` **248 passed**（原 247 + 1）；`cargo check -p rds-editor` 通过。
+
+#### 8.41.5 仍未做
+
+- 值详情「保存值」（DBeaver 的 `SaveValueAction`）：本仓单元格编辑走网格内联编辑，值页只读
+- Metadata 页 / 引用页的真实内容（R4）
+- 页内工具条无更多动作可放：320px 窄栏里标题 + 一个动作已接近饱和，再加会截断标题
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
