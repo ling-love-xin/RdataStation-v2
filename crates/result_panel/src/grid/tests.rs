@@ -3051,6 +3051,39 @@ fn header_main_row_keeps_a_readable_height(cx: &mut gpui_kit::TestAppContext) {
     }
 }
 
+/// 【结果集配色槽 2026-11-08】奇数行的斑马底色由 delegate 自己的行容器（`render_tr`）
+/// 铺 DBeaver `cell.odd.background` 同款浅底，而不是组件库 `.stripe(true)` 的全局
+/// `tokens.table_even`。
+///
+/// headless 下读不到颜色，这里只锁**分支真的跑了**：`editor-result-row-odd` 是奇数行
+/// 专属哨兵，取不到它说明 `render_tr` 没被调用（或表根本没渲染出来）——那样这个槽就是
+/// 空转，颜色改了一整轮却不上屏。颜色覆盖链的源码依据见 `table_impl.rs::render_tr` 注释。
+#[gpui_kit::test]
+fn odd_rows_paint_the_stripe_from_the_delegate_row_container(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (_, vcx) = cx.add_window_view(|window, cx| HeaderHarness {
+        state: cx.new(|cx| gpui_kit::component::table::TableState::new(grid(), window, cx)),
+    });
+
+    // 首帧只排位置，几何第二帧才稳定（配 retained 渲染内核尤其）
+    for _ in 0..2 {
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+    }
+
+    let odd = vcx
+        .debug_bounds("editor-result-row-odd")
+        .expect("奇数行应有 delegate 行容器（取不到 → render_tr 没被调用，配色槽空转）");
+    assert!(
+        odd.size.height >= gpui_kit::px(10.),
+        "奇数行容器应有真实高度：odd={:?}",
+        odd.size.height
+    );
+}
+
 /// 【注释表头 2026-11-08】注释开关开启时表头是**两行**（列名主行 + 注释小字），
 /// 但表头带高一直跟着组件的行高档走（XSmall = 26px，扣 padding 只剩 22px 内容高）：
 /// 两行挤 22px 的结果是各被 `overflow_hidden` 裁掉一半，主行读不出字。

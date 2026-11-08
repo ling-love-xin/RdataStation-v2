@@ -17,6 +17,7 @@ use gpui_kit::*;
 use super::delegate::ResultGridDelegate;
 use crate::store::ColumnKind;
 use crate::ui;
+use workbench_shell::product_tokens;
 
 /// 列类型 → 默认列宽（用户没拖过、也没双击自适应过的列用哪一档）
 ///
@@ -46,6 +47,31 @@ pub(crate) fn default_column_width(kind: ColumnKind) -> Pixels {
     }
 }
 impl TableDelegate for ResultGridDelegate {
+    /// 行容器：只铺奇数行的斑马底色（本 crate 唯一一处 delegate 原生绘制）
+    ///
+    /// 【结果集配色槽】DBeaver 的斑马纹是**结果集专属**主题色（`cell.odd.background`，
+    /// 默认 235,245,255），而组件库的 `.stripe(true)` 铺在行层却取全局主题
+    /// `tokens.table_even`（所有表格共用）。delegate 的样式会在组件链末尾经
+    /// `refine_style` 重放（vendor `table/state.rs:2258` 取快照、`:2278` 重放），
+    /// 所以这里铺的底色最终生效，且 hover 仍由组件的 `table_hover` 覆盖（符合预期）。
+    fn render_tr(
+        &mut self,
+        row_ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> Stateful<Div> {
+        let theme = cx.theme();
+        let tr = div().id(("row", row_ix));
+        if row_ix % 2 == 1 {
+            tr.bg(product_tokens::get(cx).result_odd_row_background(theme))
+                // 回归哨兵：颜色在 headless 下读不到，用例只能坐实「奇数行分支真的在跑」
+                //（否则这个槽就是空转——delegate 的 `render_tr` 没被调用时静默失效）
+                .debug_selector(|| "editor-result-row-odd".to_string())
+        } else {
+            tr
+        }
+    }
+
     /// 表头单元格（转发到 [`crate::grid::header::render_th`]）
     fn render_th(
         &mut self,

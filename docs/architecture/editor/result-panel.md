@@ -1541,6 +1541,96 @@ enum 类 `Select` 需要"值 → 显示"映射来源，当前拿不到枚举定�
 `IconName` 语义是否一眼可读（`Save` 表「提交」、`Sigma` 表「分析」、`DatabaseZap` 表「下发源库」
 都需要靠 tooltip 兜底）；`ComponentTooltip` 在这排小图标上的延迟/位置。
 
+### 8.33 结果集配色槽（对齐 DBeaver 结果集专属主题色，2026-11-08）
+
+**指令**：第四阶段由用户在交互选项里选定「结果集配色槽」。该选项的口径写的是「**全局生效**——
+所有表格（Mock 预览、设置页等）的选中/斑马纹都会跟着变」，用户接受该副作用。**实际落地的路径与
+选项描述有一个差异**：四个槽走的是**产品语义 token**（`workbench_shell::product_tokens`），只在
+结果集网格内消费，Mock 预览/设置页等其它表格**不受影响**。差异原因见下「为什么不动 vendor」一节。
+
+**DBeaver 取证**（`D:\RdataStation\RDS\dbeaver-ref`，逐行实读）：权威源是
+`plugins\org.jkiss.dbeaver.ui.editors.data\plugin.xml:1144-1263` 的 `<colorDefinition>` 段
+（`categoryId="org.jkiss.dbeaver.ui.presentation.results"`）：
+
+| id（省略前缀 `org.jkiss.dbeaver.sql.resultset.color.`） | 默认值 | 行号 |
+| --- | --- | --- |
+| `selection.background` | 175, 215, 255 | :1156 |
+| `cell.odd.background` | 235, 245, 255 | :1170 |
+| `cell.modified.background` | 255, 228, 181 | :1184 |
+| `cell.error.background` | 255, 128, 255 | :1191 |
+| `cell.new.background` | 228, 255, 181 | :1198 |
+| `cell.deleted.background` / `cell.readonly.background` | 255, 99, 71 | :1205 / :1212 |
+| `cell.matched.background` | 255, 215, 0 | :1219 |
+| `lines.normal` / `lines.selected` | 240,240,240 / 105,105,105 | :1226 / :1233 |
+
+消费侧对应 `plugins\org.jkiss.dbeaver.ui.editors.data\src\org\jkiss\dbeaver\ui\controls\resultset\
+ResultSetThemeSettings.java`（`:38-84` 22 个 `@ThemeColor` 字段，斑马纹消费点
+`SpreadsheetPresentation.java:2881`、`PlainTextPresentation.java:154`）。
+**深色主题这一批没有覆盖**：`css\e4-dark-data-editor.css` 全文 grep `resultset|result.` 命中 0，
+`e4-data-editor.css`（浅色）只有 `header.background = 251,251,251` 一条。
+
+**为什么不动 vendor**：改 `ThemeColor`/`ThemeTokens` 加结果集字段要动 `vendor/gpui-component`
+的主题 crate（全局 141 个字段、双 vendor patch），收益只有「所有表格一起变」——而这恰好不是我们要
+的结果（DBeaver 的这批色就是**结果集专属**）。本仓早有 `workbench_shell::product_tokens` 这个
+产品角色设施（`result.local_row_background` 同例），沿用即可，vendor 一行不动。
+
+**消费通道（本 crate 唯一一处 delegate 原生绘制行的正当理由）**：`DataTable`/`TableState` 没有任何
+按行/按格着色的公开 API（`vendor/gpui-component/src/table/delegate.rs` 全文 269 行只有
+`render_th` / `render_td` / `render_tr` 等渲染钩子，无背景注入）。但 `state.rs` 的渲染顺序给了入口：
+
+- `:2257-2258` `let mut tr = self.delegate.render_tr(...); let style = tr.style().clone();`
+  —— 先把 delegate 返回的**样式快照**存下来；
+- `:2274-2278` 组件自己再挂行底线与 `.when(is_stripe_row, |this| this.bg(tokens.table_even))`
+  （条纹取的是**全局** `table_even`）；
+- `:2278` `.refine_style(&style)` 把快照重放一遍。
+
+`refine` 的语义经源码核实：`vendor/gpui-base/src/styled.rs:79-82` 是
+`self.style().refine(style)`，落到 `gpui-pre` 的 `derive_refineable` 生成代码
+（`derive_refineable.rs:158-176`）—— **`Option` 字段为 `Some` 就覆盖当前值**。所以 delegate 在
+`render_tr` 里铺的 `bg` 会盖过组件的 `table_even`，而 `.hover(table_hover)` 在 refine 之后，
+悬停仍归组件（符合预期）。
+
+**落地四件**：
+
+| # | 位置 | 改动 |
+| --- | --- | --- |
+| 1 | `crates/workbench_shell/src/product_tokens.rs` | 新增 3 个角色 `result.odd_row.background` / `result.cell.modified.background` / `result.cell.error.background`（`TokenMap` + `ProductTokens` + `from_map`），三个访问器全部带 `unwrap_or_else` 回退（缺失 → 组件同款 `tokens.table_even` / 旧口径 `warning`·`danger` 16%），守「资产不全也不 panic」 |
+| 2 | `assets/themes/product-tokens.json` | 明暗各加三槽；`result.local_row_background` 由 `#F7E9E5`/`#382620` 换成 DBeaver `cell.new.background` 的 `#E4FFB5`/`#2A3A1E` |
+| 3 | `crates/result_panel/src/grid/cell.rs` | 脏格 `warning.opacity(0.16)` → `result_cell_modified_background`、冲突格 `danger.opacity(0.16)` → `result_cell_error_background`（两者在闭包外先求值，避免 `cx` 借用打架） |
+| 4 | `crates/result_panel/src/grid/table_impl.rs` | 新增 `TableDelegate::render_tr`：奇数行 `bg(result_odd_row_background(theme))`，偶数行保持裸 `div()`（观感不动） |
+
+**行为变化（需用户知情）**：`result.local_row_background` 从品牌珊瑚浅底（`#F7E9E5`/`#382620`）
+换成 DBeaver 新增行的浅绿（`#E4FFB5`/`#2A3A1E`）。这是本地新增/复制行的底色，用户在之前的
+交互选项里**没有被告知**这个变化，已作为待确认项登记。
+
+**深色一套是推导值，不是照抄**：DBeaver 该批 colorDefinition 只有一套浅色值、深色 css 零覆盖，
+故 `#1C2129`（斑马）/ `#3A3120`（脏格）/ `#4A2131`（错误格）/ `#2A3A1E`（本地行）是按深色背景
+等亮度比推导，`product-tokens.json` 的 `$comment` 已写明「非照抄」。待用户确认。
+
+**验证**：`cargo check -p rds-result-panel` Finished、**0 warning**（首轮踩 E0308：
+`theme.tokens.table_even` 是 `ThemeToken` 不是 `Hsla`，改 `.unwrap_or_else(|| ....into())`）；
+`cargo test -p rds-workbench-shell --lib` = **14 passed**（含新增
+`product_tokens::tests::parses_result_color_slots_and_falls_back`）；
+`cargo test -p rds-result-panel --lib` = **241 passed / 0 failed**（含新增
+`grid::tests::odd_rows_paint_the_stripe_from_the_delegate_row_container`）；
+`cargo test -p rds-ui-guard` = **4 passed**（`PRODUCT_ROLES` 白名单补 3 个键，否则
+`product_tokens_use_declared_role_names` 会挂——键名写错时 token 会被静默丢弃，这道门禁正是防这个）。
+
+新增渲染用例只锁「奇数行分支真的跑了」（行容器挂 `debug_selector("editor-result-row-odd")`，
+取不到就说明 `render_tr` 没被调用、配色槽空转）；**颜色本身 headless 读不到**，颜色正确性由
+`refine` 覆盖语义的源码证据 + 真窗口目视共同担保。
+
+**本轮未接的 DBeaver 槽（如实登记）**：`selection.background`/`foreground`（选中格仍走组件
+`table_active`）；`cell.matched.background`（本仓无筛选命中高亮功能）；`lines.normal`/`lines.selected`
+（每格网格线——`DataTable.bordered(true)` 只加最外圈整框，不提供内部网格线，要做需自绘列分隔）；
+`header.*` 四槽（表头自画但取 vendor token）；`preview.background`；
+`cell.deleted.background`/`cell.readonly.background`（删除行现用灰字 + 删除线，不铺红底）；
+`null.foreground` 与 `dtNumeric`/`dtString` 等数据类型色。
+
+**未验证（需真窗口）**：奇数行 `#EBF5FF` 在深色行底线（`table_row_border`）间的观感是否过浅；
+脏格 `#FFE4B5` 与本地行 `#E4FFB5` 同时出现时是否会糊成一片（两色都淡、相邻列可能并排）；
+冲突格 `#FF80FF` 是全饱和洋红，实色铺底是否刺眼（DBeaver 原值就是这个，未做降饱和）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

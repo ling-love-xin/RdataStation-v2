@@ -92,6 +92,10 @@ const PRODUCT_ROLES: &[&str] = &[
     "search.match.background",
     "staged.drop",
     "result.local_row_background",
+    // 【结果集配色槽】对齐 DBeaver 结果集 colorDefinition 的三个槽
+    "result.odd_row.background",
+    "result.cell.modified.background",
+    "result.cell.error.background",
 ];
 
 struct Hits {

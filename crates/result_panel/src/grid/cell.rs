@@ -279,6 +279,10 @@ pub(crate) fn render_td(
     // 【B14】右键菜单要用“哪个单元格”：组件库只公开了 `right_clicked_row`，
     // 没有单元格访问器，所以在单元格自己身上记一笔（事件从最内层派发，不会丢）
     let table = cx.entity().clone();
+    // 【结果集配色槽】脏格 / 冲突格底色在闭包外先求值：`product_tokens::get` 要借 `cx`，
+    // 而 `.when` 的闭包捕获后与后面的多次借用打架。
+    let dirty_bg = product_tokens::get(cx).result_cell_modified_background(theme);
+    let conflict_bg = product_tokens::get(cx).result_cell_error_background(theme);
     let mut cell = div()
         // 悬停提示要求元素有 id：gpui 的**流式** `tooltip` 声明在
         // `StatefulInteractiveElement` 上（没 id 的裸 `div` 只有直调 `Interactivity` 的写法），
@@ -314,14 +318,17 @@ pub(crate) fn render_td(
         })
         // 【#28-B4】本地行底色（先铺，脏格 / 冲突格后续底色覆盖其上）
         .when_some(local_bg, |cell, bg| cell.bg(bg))
-        // 【T2a-3】脏格（未提交变更）：浅警告底色，一眼看出哪些格子会被写回
+        // 【T2a-3】脏格（未提交变更）：DBeaver `cell.modified.background` 同角色底色
+        //（产品 token `result.cell.modified.background`；资产缺失回退旧口径 warning 16%）
         .when(delegate.is_dirty(row_ix, col_ix), |cell| {
-            cell.bg(theme.colors.warning.opacity(0.16))
+            cell.bg(dirty_bg)
         })
-        // 【T2a-6】冲突格（提交没写进去）：danger 底色，与脏格区分——优先级高于脏格
-        // （冲突格先被标过 dirty 的可能性存在：同一格再编辑后提交，两段底色会叠）
+        // 【T2a-6】冲突格（提交没写进去）：DBeaver `cell.error.background` 同角色底色，
+        // 与脏格区分——优先级高于脏格（冲突格先被标过 dirty 的可能性存在：同一格再编辑
+        // 后提交，两段底色会叠）；产品 token `result.cell.error.background`，
+        // 资产缺失回退旧口径 danger 16%
         .when(delegate.is_conflict(row_ix, col_ix), |cell| {
-            cell.bg(theme.colors.danger.opacity(0.16))
+            cell.bg(conflict_bg)
         })
         // 【类型感知】数字右对齐；其余左对齐
         .text_align(style.align)

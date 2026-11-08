@@ -384,6 +384,55 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 **未验证（需真窗口）**：六个图标 + 一条竖线挤在 40px 行里是否过密；`Save`/`Sigma`/`DatabaseZap`
 的语义是否一眼可读（靠 tooltip 兜底）；小图标上 `ComponentTooltip` 的延迟与位置。
 
+### 2.24 2026-11-08（结果集配色槽：接 DBeaver 结果集专属主题色）
+
+第四阶段由用户在交互选项里选定「结果集配色槽」，选项里写的副作用是「**全局生效**——所有表格都会
+跟着变」，用户接受。**实际只落在结果集内**（走产品 token 而非 vendor 全局主题），因为 DBeaver 这批
+色本身就是结果集专属的（`colorDefinition` 的 `categoryId` 是 `...presentation.results`）。这个差异
+已写进 `result-panel.md` §8.33，交付时也向用户说明。
+
+**DBeaver 取证**：`plugins\org.jkiss.dbeaver.ui.editors.data\plugin.xml:1144-1263` 的
+`<colorDefinition>` 段逐行实读——`cell.odd.background` = 235,245,255（:1170）、
+`cell.modified.background` = 255,228,181（:1184）、`cell.error.background` = 255,128,255（:1191）、
+`cell.new.background` = 228,255,181（:1198）、`selection.background` = 175,215,255（:1156）。
+**深色没覆盖**：`css\e4-dark-data-editor.css` grep `resultset|result.` 命中 0。
+
+**落地四处**：
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/workbench_shell/src/product_tokens.rs` | 3 个新角色（`result.odd_row.background` / `result.cell.modified.background` / `result.cell.error.background`）+ 3 个带 `unwrap_or_else` 回退的访问器 + 单测 `parses_result_color_slots_and_falls_back` |
+| `assets/themes/product-tokens.json` | 明暗各三槽；`result.local_row_background` 由 `#F7E9E5`/`#382620` 换成 `#E4FFB5`/`#2A3A1E` |
+| `crates/result_panel/src/grid/cell.rs` | 脏格 / 冲突格底色改走 token（闭包外先求值，避免 `cx` 借用打架） |
+| `crates/result_panel/src/grid/table_impl.rs` | 新增 `TableDelegate::render_tr`：奇数行铺斑马底色（本 crate 唯一一处 delegate 原生绘行） |
+
+**关键机制（源码级，非推测）**：`table/state.rs:2257-2258` 存 delegate 的样式快照、`:2277` 组件自己
+铺全局 `tokens.table_even`、`:2278` `.refine_style(&style)` 重放快照；`refine` 的语义是
+**`Option` 字段 `Some` 即覆盖**（`gpui-base/src/styled.rs:79-82` → `gpui-refineable` 生成代码
+`derive_refineable.rs:158-176`）。所以 delegate 的 `bg` 胜出，hover 仍归组件。
+
+**行为变化（用户此前未被告知）**：本地新增/复制行底色从品牌珊瑚浅底变浅绿（对齐 DBeaver
+`cell.new.background`）。待确认。
+
+**深色一套是推导值**：`#1C2129` / `#3A3120` / `#4A2131` / `#2A3A1E`，按深色背景等亮度比推导，
+`product-tokens.json` 的 `$comment` 写明「非照抄」。待确认。
+
+**验证**：`cargo check -p rds-result-panel` Finished 0 warning；
+`cargo test -p rds-workbench-shell --lib` = 14 passed；
+`cargo test -p rds-result-panel --lib` = **241 passed / 0 failed**（新增
+`odd_rows_paint_the_stripe_from_the_delegate_row_container` 锁「`render_tr` 真的被调用」，
+行容器挂 `debug_selector("editor-result-row-odd")`——取不到就说明配色槽空转）；
+`cargo test -p rds-ui-guard` = 4 passed（`PRODUCT_ROLES` 补 3 键，否则键名写错会被静默丢弃，
+正是这道门禁拦的对象）。
+
+**未接的槽**（DBeaver 有、本轮没做）：`selection.background/foreground`（仍走组件 `table_active`）；
+`cell.matched.background`（本仓无筛选命中高亮）；`lines.normal`/`lines.selected`（每格网格线，
+`bordered(true)` 只有最外圈整框）；`header.*` 四槽；`preview.background`；
+`cell.deleted`/`cell.readonly`（删除行仍灰字 + 删除线，不铺红底）；`null.foreground` 与数据类型色。
+
+**未验证（需真窗口）**：`#EBF5FF` 斑马底在深色行底线间的观感；脏格 `#FFE4B5` 与本地行 `#E4FFB5`
+相邻时会不会糊；冲突格 `#FF80FF` 全饱和洋红实色铺底是否刺眼（DBeaver 原值如此，未降饱和）。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）
