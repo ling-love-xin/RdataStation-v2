@@ -2916,12 +2916,17 @@ impl gpui_kit::Render for HeaderHarness {
     fn render(
         &mut self,
         _window: &mut gpui_kit::Window,
-        _cx: &mut gpui_kit::Context<Self>,
+        cx: &mut gpui_kit::Context<Self>,
     ) -> impl gpui_kit::IntoElement {
-        gpui_kit::div().size_full().child(
-            gpui_kit::component::table::DataTable::new(&self.state)
-                .with_size(crate::ui::RESULT_TABLE_SIZE),
-        )
+        // 走生产路径：表头带高由 delegate 决定（注释开启 → 40px，单行 → 组件默认 26px）
+        let header_height = self.state.read(cx).delegate().header_row_height();
+        let table = gpui_kit::component::table::DataTable::new(&self.state)
+            .with_size(crate::ui::RESULT_TABLE_SIZE);
+        let table = match header_height {
+            Some(height) => table.header_row_height(height),
+            None => table,
+        };
+        gpui_kit::div().size_full().child(table)
     }
 }
 
@@ -2979,5 +2984,80 @@ fn header_main_row_keeps_a_readable_height(cx: &mut gpui_kit::TestAppContext) {
         menu.size.width >= gpui_kit::px(16.) && menu.size.width <= gpui_kit::px(32.),
         "列头菜单占宽异常（`RESULT_FIT_COLUMN_MENU` 需要按实测校准）：{:?}",
         menu.size.width
+    );
+}
+
+/// 【注释表头 2026-11-08】注释开关开启时表头是**两行**（列名主行 + 注释小字），
+/// 但表头带高一直跟着组件的行高档走（XSmall = 26px，扣 padding 只剩 22px 内容高）：
+/// 两行挤 22px 的结果是各被 `overflow_hidden` 裁掉一半，主行读不出字。
+///
+/// 修复：`ResultGridDelegate::header_row_height()` 在这**一档**返回 40px（内容高 36 =
+/// 两行各 18px），宿主把它交给 `DataTable::header_row_height`。单行表头返回 `None`，
+/// 一个像素都不动。
+#[gpui_kit::test]
+fn comment_header_row_gets_room_for_two_lines(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    // 1) 纯逻辑：只有注释开关会抬表头
+    let mut plain = grid();
+    assert_eq!(
+        plain.header_row_height(),
+        None,
+        "单行表头不该覆盖组件默认高度（默认视觉必须一个像素都不变）"
+    );
+    plain.set_show_column_comments(true);
+    assert_eq!(
+        plain.header_row_height(),
+        Some(crate::ui::RESULT_HEADER_COMMENT_ROW_HEIGHT),
+        "注释开启后表头是两行，必须给覆盖高度"
+    );
+
+    // 2) 几何：真渲染两帧后两行都上屏、且不重叠
+    let annotation = ColumnAnnotation {
+        source_table: None,
+        source_column: None,
+        comment: Some("总额".into()),
+        data_type: None,
+        nullable: None,
+        default_value: None,
+    };
+    let (_, vcx) = cx.add_window_view(|window, cx| HeaderHarness {
+        state: cx.new(|cx| {
+            let mut state = gpui_kit::component::table::TableState::new(grid(), window, cx);
+            state.delegate_mut().set_show_column_comments(true);
+            state.delegate_mut().set_column_annotations(vec![
+                Some(annotation.clone()),
+                Some(annotation),
+            ]);
+            state
+        }),
+    });
+    for _ in 0..2 {
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+    }
+
+    let main = vcx
+        .debug_bounds("editor-result-th-main-1")
+        .expect("表头主行应有 debug 几何");
+    let comment = vcx
+        .debug_bounds("editor-result-th-comment-1")
+        .expect("注释开关开着、列有注释时注释行必须上屏（被裁的形态下这里取不到）");
+    assert!(
+        main.size.height >= gpui_kit::px(14.),
+        "抬高表头后主行仍须装下一行文字：main={:?}",
+        main.size.height
+    );
+    assert!(
+        comment.size.height >= gpui_kit::px(12.),
+        "注释行被裁成一条缝：comment={:?}",
+        comment.size.height
+    );
+    assert!(
+        comment.origin.y > main.origin.y,
+        "注释行应落主行下方：main.y={:?} comment.y={:?}",
+        main.origin.y,
+        comment.origin.y
     );
 }

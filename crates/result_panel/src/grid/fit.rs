@@ -48,6 +48,9 @@ pub(crate) fn fit_column(
     }
     // `text_xs()` = `rems(0.75)`：表头与单元格都是这一档，所以这里用同一个字号
     let font_size = window.rem_size() * 0.75;
+    // 类型 badge 比列名小一档（`ui::RESULT_HEADER_TYPE_FONT_SIZE`）：量符号宽必须用
+    // badge 自己的字号，否则双击自适应算出的宽度会比实际渲染多一两个字符
+    let badge_font_size = window.rem_size() * crate::ui::RESULT_HEADER_TYPE_FONT_SIZE;
     let base_style = window.text_style();
     let base_font = base_style.font();
     let color = base_style.color;
@@ -59,7 +62,15 @@ pub(crate) fn fit_column(
         font
     };
 
-    let header = header_width(delegate, col_ix, window, &base_font, color, font_size);
+    let header = header_width(
+        delegate,
+        col_ix,
+        window,
+        &base_font,
+        color,
+        font_size,
+        badge_font_size,
+    );
     let cells = cells_width(
         delegate, col_ix, window, &base_font, &mono_font, color, font_size,
     );
@@ -78,6 +89,7 @@ fn header_width(
     font: &Font,
     color: Hsla,
     font_size: Pixels,
+    badge_font_size: Pixels,
 ) -> Pixels {
     let name = if delegate.transposed {
         // 转置视图固定两列：字段 / 值
@@ -96,9 +108,9 @@ fn header_width(
         delegate.data_column(col_ix - 1)
     };
     let mut widths: Vec<Pixels> = Vec::new();
-    // 类型 badge（与 `render_th` 同一个符号；未知类型不画，也就不占宽）
+    // 类型 badge（与 `render_th` 同一个符号、同一个字号；未知类型不画，也就不占宽）
     if let Some(sym) = ResultGridDelegate::type_kind_sym(delegate.column_kind(col_ix)) {
-        widths.push(BADGE_H_PADDING + measure(window, sym, font, color, font_size));
+        widths.push(BADGE_H_PADDING + measure(window, sym, font, color, badge_font_size));
     }
     widths.push(measure(window, &name, font, color, font_size));
     if let Some((sort_col, descending)) = delegate.sort_state() {

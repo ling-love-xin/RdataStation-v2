@@ -441,6 +441,8 @@ pub fn render(
         .min_h_0()
         // 测试按选择器断言“结果区在不在、多高”：分栏是结构，不是装饰
         .debug_selector(|| "editor-result-pane".to_string())
+        // 表头带高度：只有「注释开关开启」（表头两行）时才由 delegate 给覆盖值 40px；
+        // 单行表头返回 `None`，走组件默认 26px（见 `ResultGridDelegate::header_row_height`）
         // ⑤ 结果集标签条（原型里在工具栏上面）
         .children(tabs)
         // 【B13】切通道后的那一行提示（原型 §5.7 规则 2）：旧结果不删，但要能看出它不是
@@ -480,10 +482,16 @@ pub fn render(
                     // 密度档走常量表（`RESULT_TABLE_SIZE` = 组件 XSmall = 26px）——
                     // 不写 size 就落到组件默认档 32px（原型稿写的是 22px，三个数都不一致，见常量注释）
                     .child(
+                        // 表头带高：注释开关开启时是两行（列名 + 注释小字），26px 装不下，
+                        // delegate 给 40px；单行时 `None`，用组件默认（= `RESULT_TABLE_SIZE` 档）
                         DataTable::new(state)
                             .stripe(true)
                             .bordered(false)
-                            .with_size(ui::RESULT_TABLE_SIZE),
+                            .with_size(ui::RESULT_TABLE_SIZE)
+                            .when_some(
+                                state.read(cx).delegate().header_row_height(),
+                                |table, header_height| table.header_row_height(header_height),
+                            ),
                     ),
             )
         })

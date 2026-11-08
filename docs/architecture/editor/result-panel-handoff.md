@@ -270,9 +270,22 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 | 根因 | 表头带 26px、减 `table_cell_padding` 上下各 2px → **内容高 22px**；`render_th` 却把表头造 `v_flex` 两行，主行用 `size_full()` 抢满 22px，第二行（列头菜单）一挂，flex 先满足 `flex_none` 的 28px 菜单 → 主行被分到 **0 高** |
 | 修法 | 主行 `size_full()` → `w_full()`；`head` 加 `justify_center`；列头菜单从第二行并入主行尾端（`flex_none` + `on_click` 守卫挡排序）；提前 return 分支同步 |
 | 同批口径 | 菜单进流内就真实吃列宽（XSmall 实测 24×24），`grid/fit.rs` 新增 `RESULT_FIT_COLUMN_MENU` 计入测宽，否则双击自适应后列名照样被省略号吃掉（原文「不含列头菜单」作废） |
-| 取舍 | 表头带只有 22px，`comment_line` 第二行必然被裁（要两行都可见得抬 `header_row_height` 或去掉注释行，未定） |
+| 取舍 | 表头带只有 22px，`comment_line` 第二行必然被裁——**同轮已解决**（见 §2.18），此处留作当时判断记录 |
 
 验证：`cargo test -p rds-result-panel --lib` = **224 passed / 0 failed**（+1 `header_main_row_keeps_a_readable_height`：真 `TableState` + `DataTable` 渲染后读 `debug_bounds`，断言主行高 14–22px、菜单与主行同行；旧实现下两条都挂）；`cargo test -p rds-ui-guard` = 4 passed / 0 failed（`ui.rs` 裸 px 基线 15 → 16）。未验证：真窗口目视、滚动时表头带稳定性、96px 布尔列扣掉菜单 24px 后列名剩余宽度。
+
+### 2.18 2026-11-08（注释表头两行高度 + 表头尺寸口径收敛）
+
+| 层 | 落地 |
+| --- | --- |
+| 问题 | 「注释」开关承诺"开启后列头变高（两行）"，但表头高度从来没跟着变：两行挤 22px 内容高，各被 `overflow_hidden` 裁一半，主行还被压到读不出字 |
+| 抬高的口子 | `DataTable::header_row_height(impl Into<Pixels>)`（`vendor table/data_table.rs:153`）；组件侧 `header_band_height` = 该值 × 列组行数（`state.rs:807-818`），`page_item_count` 一并跟着算 |
+| 实现 | `ResultGridDelegate::header_row_height()`：注释开启 → `Some(ui::RESULT_HEADER_COMMENT_ROW_HEIGHT)`（40px，内容高 36 = 两行各 18px）；单行 → `None`（组件默认 26px，默认视觉零变化）。`grid/status.rs` 渲染处把值交给 `DataTable`，视图不写死尺寸 |
+| badge 字号 | `RESULT_HEADER_TYPE_FONT_SIZE`（11px）从死常量变生效：`render_th` badge 用它，`grid/fit.rs` 量符号宽也用它（两边同字号，否则自适应差一两个字符） |
+| 死常量 | `RESULT_HEADER_HEIGHT`（2rem = 32px）零引用且与实现的 26px 不符，**删除** |
+| guard | `ui.rs` 裸 px 基线 16 → 17（新增那个 `px(40.)`） |
+
+验证：`cargo test -p rds-result-panel --lib` = **225 passed / 0 failed**（+1 `comment_header_row_gets_room_for_two_lines`：两态纯逻辑 + 真渲染几何 —— 主行 ≥14px、注释行 ≥12px 且在主行下方；不抬表头时注释行取不到 bounds）；`cargo test -p rds-ui-guard` = 4 passed；`cargo check -p rds-result-panel` 0 warning。未验证：真窗口 40px 表头观感、11px badge 可读性、开注释后可视行数少一行的体感。
 
 ---
 

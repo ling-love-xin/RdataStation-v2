@@ -1266,9 +1266,9 @@ enum 类 `Select` 需要"值 → 显示"映射来源，当前拿不到枚举定�
 而 `grid/fit.rs` 原先按「不含菜单」测宽。已在 `crate::ui` 新增 `RESULT_FIT_COLUMN_MENU = 24px`
 并计入 `header_width`——否则双击自适应算出的宽度差这一块，列名照样被省略号吃掉。
 
-**已知取舍**：表头带只有 22px 内容高，`comment_line`（列注释第二行）在这一带里必然被裁
-（`head` 的第二行）。要两行都可见得抬 `header_row_height`（`TableOptions` 有覆盖口），
-或干脆去掉注释行——本轮未定，注释行保留并加注说明。
+**已知取舍（同轮已解决，见 §8.27）**：表头带只有 22px 内容高，`comment_line`（列注释
+第二行）在这一带里必然被裁。当时判断「要两行都可见得抬 `header_row_height`」，随即
+按这条做了：注释开关开启时表头带由 delegate 抬到 40px。
 
 **验证**：`cargo test -p rds-result-panel --lib` = **224 passed / 0 failed**（+1
 `header_main_row_keeps_a_readable_height`：真实 `TableState` + `DataTable` 渲染进 headless 窗口，
@@ -1279,6 +1279,47 @@ enum 类 `Select` 需要"值 → 显示"映射来源，当前拿不到枚举定�
 **未验证项**：真实窗口下的目视（headless 只证到几何，未目视字体渲染与 badge/箭头位置）；
 滚动时表头带是否稳定；窄列（`RESULT_COLUMN_WIDTH_BOOLEAN` = 96px）在菜单占 24px 后
 列名剩余宽度是否够读，未目视。
+
+### 8.27 注释表头两行高度 + 表头尺寸口径收敛（2026-11-08）
+
+**问题（实证）**：`show_column_comments` 是面板工具栏的「注释」开关，`delegate` 注释写的是
+「开启后列头变高（两行：列名 + 注释小字）」——但**表头高度从来没跟着变**。实际路径：
+开关只是让 `render_th` 多画一个 `comment_line`，表头带仍是组件 `table_row_height()`
+（XSmall = 26px，扣 padding 只剩 22px 内容高），两行挤 22px 各被 `overflow_hidden` 裁掉
+一半，主行还会被压到读不出字。等于开关有一半是空转的（开了只多出一个被裁的残条）。
+
+同时清掉两处**零引用死常量**（`grep` 全 crate 只命中定义行）：
+
+| 常量 | 原值 | 实情 |
+| --- | --- | --- |
+| `RESULT_HEADER_HEIGHT` | `2.0`（2rem = 32px，「列名行高」） | 表头高一直由组件按密度档给 26px；32 是设计稿口径遗留，与实现不符（也已**删除**） |
+| `RESULT_HEADER_TYPE_FONT_SIZE` | `0.6875`（11px，「类型小标签字号」） | badge 实际用 `text_xs`（12px）；规格没落地 |
+
+**修复**：
+
+- `ResultGridDelegate::header_row_height() -> Option<Pixels>`：**只有**注释开关开启时返回
+  `ui::RESULT_HEADER_COMMENT_ROW_HEIGHT`（40px），单行表头返回 `None`（走组件默认 26px，
+  默认视觉一个像素都不动）。40px 的依据：`DataTable::header_row_height` 给的是整条表头带
+  （`header_band_height` = 该值 × 列组行数），`render_cell` 再吃上下 padding 4px → 内容高
+  36 = 两行各 18px（`text_xs` 行高），刚好装下。
+- `grid/status.rs` 渲染处：`DataTable::new(state)…when_some(state.read(cx).delegate()
+  .header_row_height(), |t, h| t.header_row_height(h))`——值来自 delegate，不散在视图里。
+- badge 字号落地：`render_th` 的 badge 从 `text_xs` 改为
+  `text_size(rems(RESULT_HEADER_TYPE_FONT_SIZE))`（11px，比列名小一档）；
+  `grid/fit.rs` 量 badge 符号宽同步改用 11px（**两边字号必须一致**，否则双击自适应算出的
+  宽度会与实际渲染差一两个字符——这是「测宽口径」第二次踩的同一个坑）。
+- `comment_line` 加 `debug_selector("editor-result-th-comment-{col_ix}")` 供用例读几何。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **225 passed / 0 failed**（+1
+`comment_header_row_gets_room_for_two_lines`：① 纯逻辑两态——单行 `None`、注释开启
+`Some(40px)`；② 真 `TableState` + `DataTable` 渲染两帧后 `debug_bounds` 读到主行高
+≥ 14px、注释行高 ≥ 12px、注释行在主行**下方**且不重叠。未抬表头时注释行取不到 bounds，
+断言必挂）；`cargo test -p rds-ui-guard` = 4 passed / 0 failed（`ui.rs` 裸 px 基线
+16 → 17）；`cargo check -p rds-result-panel` 0 warning。
+
+**未验证**：真窗口下 40px 表头的观感（比 26px 的行高突兀与否，只有眼睛能判）；11px badge
+在真实字体下的可读性；开启注释后表头变高会不会挤压可视行数到"少一行"的体感（组件按
+`header_band_height` 重算 `page_item_count`，逻辑上正确，观感未目视）。
 
 ## 8. 协作纪律
 

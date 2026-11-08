@@ -128,7 +128,9 @@ pub(crate) fn render_th(
             .bg(color.opacity(0.18))
             .text_color(color)
             .px_1()
-            .text_xs()
+            // 字号走常量表：比列名（`text_xs` 12px）小一档，`grid/fit.rs` 量 badge 符号宽
+            // 用的是同一个字号（两边不一致会让双击自适应算出的宽度和实际渲染差一两个字符）
+            .text_size(gpui_kit::rems(crate::ui::RESULT_HEADER_TYPE_FONT_SIZE))
             .rounded(gpui_kit::px(3.))
             .flex_none()
             .child(SharedString::from(sym))
@@ -179,8 +181,8 @@ pub(crate) fn render_th(
         });
 
     // 【B1】注释第二行：开关开启 + 列有注释时画（muted 小字，截短；hover tooltip 看全）
-    // 表头带只有 22px 内容高，注释行与主行同时存在时**注释行会被组件裁掉**（既有取舍：
-    // 主行是必须看的那行，注释留给 hover tooltip）。这里保留结构不做高度博弈。
+    // 两行要装得下，表头带由 `ResultGridDelegate::header_row_height()` 抬到 40px
+    // （内容高 36 = 两行各 18px）；没抬之前这行会被组件的 `overflow_hidden` 裁掉。
     let comment_line = if delegate.show_column_comments
         && !ResultGridDelegate::is_row_number(col_ix)
         && !delegate.transposed
@@ -199,6 +201,8 @@ pub(crate) fn render_th(
                     .truncate()
                     .text_xs()
                     .text_color(muted)
+                    // 给用例读「注释行真的上屏了」：表头没抬高时这一行会被组件裁掉
+                    .debug_selector(move || format!("editor-result-th-comment-{col_ix}"))
                     .child(SharedString::from(comment))
             })
     } else {

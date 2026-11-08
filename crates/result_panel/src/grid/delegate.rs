@@ -341,6 +341,20 @@ impl ResultGridDelegate {
         self.show_column_comments = on;
     }
 
+    /// 表头带该多高（`None` = 用组件默认，即 [`crate::ui::RESULT_TABLE_SIZE`] 档的行高 26px）。
+    ///
+    /// 只有「注释开关开启」这一档才抬：那时表头是**两行**（列名主行 + 注释小字），组件
+    /// 默认的 26px 减掉 `table_cell_padding` 上下各 2px 只剩 22px 内容高，两行各被裁一半
+    /// ——主行会被压到读不出字（2026-11-08「字段被遮挡」就是这一族问题的极端形态：
+    /// 列头菜单当时还是第二行，直接把主行挤成 0）。单行表头一个像素都不动，
+    /// 默认视觉不变。
+    ///
+    /// 由宿主在渲染表格时读给 `DataTable::header_row_height`（`grid/status.rs`）。
+    pub(crate) fn header_row_height(&self) -> Option<Pixels> {
+        self.show_column_comments
+            .then_some(crate::ui::RESULT_HEADER_COMMENT_ROW_HEIGHT)
+    }
+
     /// 【类型样式】同步全局偏好（数字格式 / NULL 占位 / 布尔映射 / 按族对齐与前景色）。
     ///
     /// 与 [`Self::set_show_column_comments`] 同口径：**面板视图偏好**，不随 `set_data` 清掉；

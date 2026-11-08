@@ -135,14 +135,26 @@ pub const JSON_TREE_INDENT_STEP: f32 = 0.75;
 /// 值查看器 JSON 展开树：箭头指示符宽度（0.8rem = 12.8px，folder 与非 folder 行对齐）
 pub const JSON_TREE_ARROW_WIDTH: f32 = 0.8;
 
-/// 结果网格列名行高（2rem = 32px）
-pub const RESULT_HEADER_HEIGHT: f32 = 2.0;
+/// 表头带抬到「两行」时的高度（40px）
+///
+/// **只有「注释开关开启」这一档才用**（`ResultGridDelegate::header_row_height`）；单行
+/// 表头不给覆盖值，用组件默认 `table_row_height()` = [`RESULT_TABLE_SIZE`] 档 = 26px。
+///
+/// 为什么是 40：组件按 `DataTable::header_row_height(px)` 给整条表头带（`header_band_height`
+/// = 该值 × 列组行数，`vendor table/state.rs:807-818`），`render_cell` 再吃掉上下 padding
+/// 4px → 内容高 36px。两行各 18px（`text_xs` 的行高）刚好装下。
+///
+/// 历史：这里原先有个 `RESULT_HEADER_HEIGHT = 2.0`（2rem = 32px，"结果网格列名行高"），
+/// 全仓零引用——表头高一直由组件按密度档给 26px，那个常量是设计稿口径的遗留，**32 也与
+/// 现实不符**（26px 连一行 badge + 列名都紧）。2026-11-08 删掉它，改成这个真生效的覆盖值。
+pub const RESULT_HEADER_COMMENT_ROW_HEIGHT: Pixels = px(40.);
 
 /// 表头**类型小标签**的字号倍率（0.6875rem = 11px）
 ///
-/// 比单元格正文（`text_xs` = 12px）再小一档：规格要求它“小字、次级色”，而表头行只有
-/// 一行高度（组件按密度档给 26px），两行排不下——所以做成同行内、比列名小一档的标签，
-/// 层级靠**字号 + `muted_foreground`**两条分开。
+/// 比单元格正文与列名（`text_xs` = 12px）再小一档：规格要求它“小字、次级色”，而表头行
+/// 只有一行高度（组件按密度档给 26px），两行排不下——所以做成同行内、比列名小一档的标签，
+/// 层级靠**字号 + 族色**两条分开。`grid/header.rs` 画 badge、`grid/fit.rs` 量 badge 符号宽
+/// 都用这一档（两边字号必须一致，否则双击自适应算出的宽度会和实际渲染差一两个字符）。
 pub const RESULT_HEADER_TYPE_FONT_SIZE: f32 = 0.6875;
 
 /// 结果区最小高度（7rem = 112px：工具栏 24 + 多结果时的标签条 24 + 至少两行网格）
