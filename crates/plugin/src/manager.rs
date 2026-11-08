@@ -386,6 +386,32 @@ impl PluginManager {
         }
     }
 
+    /// 加载前检查候选清单与已在会话里的健康插件的贡献点是否撞车。
+    ///
+    /// 跨插件冲突若推迟到 `contributions()` 查询时才暴露，两个插件都会显示「已加载」，
+    /// 但注册表整体不可用；这里在第二个插件加载时就拒绝，坏包以错误行留在列表里，
+    /// 用户能看到原因并卸载。同名插件（重载 / 覆盖）先排除自身，避免自己和自己冲突。
+    fn check_contribution_conflicts(&self, candidate: &PluginManifest) -> Result<(), CoreError> {
+        let loaded = self
+            .loaded_plugins
+            .read()
+            .map_err(|_| lock_err("loaded_plugins"))?;
+        let mut manifests: Vec<&PluginManifest> = loaded
+            .values()
+            .filter(|plugin| {
+                plugin.id != candidate.plugin.id && plugin.status.error_reason().is_none()
+            })
+            .map(|plugin| &plugin.manifest)
+            .collect();
+        manifests.push(candidate);
+        // HashMap 遍历顺序不稳定；按插件 id 排一下，冲突文案里的「先声明者」才可复现。
+        manifests.sort_by(|a, b| a.plugin.id.cmp(&b.plugin.id));
+        ContributionRegistry::build(manifests).map_err(|error| {
+            CoreError::common(CommonError::General(format!("插件加载被拒绝：{error}")))
+        })?;
+        Ok(())
+    }
+
     /// 从目录加载单个插件（解析清单、校验、入缓存；**不启动运行时**）。
     ///
     /// 清单 `plugin.id` 由第三方给出，进 `install_path` / 索引前必须先过
@@ -453,6 +479,13 @@ impl PluginManager {
             if let Ok(mut map) = self.loaded_plugins.write() {
                 map.insert(plugin_id, failed);
             }
+            return Err(e);
+        }
+
+        // 跨插件贡献点冲突在加载期就拒绝：否则两个插件都显示「已加载」，
+        // 直到宿主查注册表才整体报错，用户不知道该停用谁。
+        if let Err(e) = self.check_contribution_conflicts(&manifest) {
+            self.record_failed_load(plugin_dir, &e);
             return Err(e);
         }
 
@@ -1156,19 +1189,20 @@ impl PluginManager {
     /// 汇总当前已成功加载插件的贡献点。
     ///
     /// 加载失败 / 校验失败的插件不参与：它们的清单不可信，不能把命令或面板
-    /// 挂到宿主上。跨插件 id 冲突返回错误，宿主据此提示用户而不是静默让后装的
-    /// 插件覆盖先装的。
+    /// 挂到宿主上。输出按插件 id 排序，保证同一个插件集合每次查到的顺序一致
+    /// （`HashMap` 的遍历顺序不稳定，宿主列表会莫名其妙重排）。
     pub fn contributions(&self) -> Result<ContributionRegistry, CoreError> {
         let loaded = self
             .loaded_plugins
             .read()
             .map_err(|_| lock_err("loaded_plugins"))?;
-        ContributionRegistry::build(
-            loaded
-                .values()
-                .filter(|plugin| plugin.status.error_reason().is_none())
-                .map(|plugin| &plugin.manifest),
-        )
+        let mut manifests: Vec<&PluginManifest> = loaded
+            .values()
+            .filter(|plugin| plugin.status.error_reason().is_none())
+            .map(|plugin| &plugin.manifest)
+            .collect();
+        manifests.sort_by(|a, b| a.plugin.id.cmp(&b.plugin.id));
+        ContributionRegistry::build(manifests)
     }
 
     /// 获取 WASM 管理器引用（仅 `wasm` feature 下存在；宿主接入 wasm 渲染轨用）

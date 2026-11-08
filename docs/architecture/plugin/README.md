@@ -85,7 +85,7 @@
 | `tests/factory_real_process.rs` | ✅ **P1 工厂路径端到端**（靶子同上）：装一个「插件目录」（二进制 + 清单）→ 注册 → `DriverRegistry::get` → `create(配置)` → 查询 3000 行 → 丢掉句柄后会话被交还 / 串行第二条连接排队并超时（且不留幽灵会话）/ 二进制不在时进连接域并说清原因 / 取消仍然真取消；4 条集成测试 |
 | `tests/database_real_process.rs` | ✅ **P1 接引擎的端到端**（靶子同上）：3000 行经 `Database::query` 进 `QueryResult.batches` 且 `to_rows()` 值对得上 / 内联那条线格式也进 `batches` / 取消令牌 → 真取消（<1s 收场）/ SQL 错带 1 基字符→字节偏移的光标位 / 事务未接线明确报不支持 / `meta()` 说得出支持 Arrow / 会话收掉后句柄明确失效；7 条集成测试 |
 | `tests/supervisor_real_process.rs` | ✅ **P1 真进程端到端**（靶子同上）：开会话过进程边界 / 串行排队与自动放行 / 放行失败如实作废且不卡住实例 / 崩溃要求人工重启 / 心跳判死 / 空闲回收后旧事件不误伤新实例 / 起不来不留僵尸 `Starting` / 收摊全部作废；8 条集成测试。**生命周期加 `shutdown_plugin` 只停单插件**（2026-10-15）：双插件各起实例，只停 A，断言 B 的进程 / 会话不受影响 → 9 条集成测试 |
-| `tests/lifecycle.rs` | ✅ **生命周期端到端**（2026-10-15 新建）：热插拔（目录出现→自动加载激活、消失→停用移除、清单变化→needs_reload）、磁盘卸载（目录删除 + 索引清理 + 事件 + 幂等 + id 安全校验）、启停（disable/enable 事件）、全量重载（清快照重扫全部重新加载激活）；13 条集成测试（含坏清单 / 目录名不一致仍在列表留行 / 坏包拒绝启用 / 坏包可卸载 / 两插件贡献点同 id 冲突报错且卸载一侧后恢复） |
+| `tests/lifecycle.rs` | ✅ **生命周期端到端**（2026-10-15 新建）：热插拔（目录出现→自动加载激活、消失→停用移除、清单变化→needs_reload）、磁盘卸载（目录删除 + 索引清理 + 事件 + 幂等 + id 安全校验）、启停（disable/enable 事件）、全量重载（清快照重扫全部重新加载激活）；14 条集成测试（含坏清单 / 目录名不一致仍在列表留行 / 坏包拒绝启用 / 坏包可卸载 / 两插件贡献点同 id 时第二个在加载期被拒绝、以错误行留在列表，修好清单可恢复，卸载一侧后剩余声明仍在；贡献点按插件 id 稳定排序） |
 | `tests/fixture/sidecar.rs`（`[[bin]] rds-sidecar-fixture`） | ✅ **测试靶子**：**独立的**帧编解码对端（两侧不共用实现，见 `dev-plan` §6.1），并用 arrow crate 真的编出 IPC 流。脚本化 SQL：`select rows=<n>` / `hold_ms=<n>`（可取消的慢查询）/ `fail`；开关 `--ignore-eof` / `--exit-ms=<n>` / `--force-inline`。**不连真库** —— 真库那一步属实机验收 |
 | `tests/spawn_real_process.rs` | ✅ **P1 进程层端到端**：起进程 → 握手 → 调用 → 收摊、超时不断连、崩溃交还在飞调用并给出退出码、**没调用也能发现它死了**、不守 EOF 约定时强杀、stderr 落盘；8 条集成测试 |
 | `sidecar/{health_checker,hot_reload_manager}.rs` | **2 字节**空文件（P1 健康检查会落在这里） |
@@ -173,13 +173,14 @@ disable / uninstall 全部改用 by-code 接口（此前按安装 uuid 更新，
 （`PluginKind::Unknown` + 失败原因，面板同样可卸载；手删目录后下一次扫描自动清掉）；
 安装回执四种文案（保持停用 / 激活失败 / 已安装并启用 / 兜底）；
 变更提示 + 「重载 N」按钮消费 `pending_reloads`。`cargo test -p rds-plugin` **224** 单测 + 集成全绿
-（`lifecycle` 13 条）；`cargo test -p rds-store --lib` **162 passed / 2 ignored**。
+（`lifecycle` 14 条）；`cargo test -p rds-store --lib` **162 passed / 2 ignored**。
 
 **P3（wasm host function 面）未开始**（当前 wasm 插件拿不到任何宿主能力，与「默认拒绝」一致）；
 **P4 插件面板与安装链已落地（2026-10-16）**——列表 / 状态徽标 / 空态 / 安装包 / 从目录 / 刷新 /
 重载 N / 启停 / 卸载，安装链含依赖对账与加载期完整性复核；**贡献点注册表模型已落地**
-（`contributes::ContributionRegistry`：三张表合并、跨插件 id 冲突、清单期 id / 面板位置 /
-设置类型校验，`PluginManager::contributions()` 可查询）；**宿主接线未开始**
+（`contributes::ContributionRegistry`：三张表合并、跨插件 id 冲突在**第二个插件加载期**即拒绝
+并以错误行留在列表、清单期 id / 面板位置 / 设置类型校验，`PluginManager::contributions()`
+按插件 id 稳定排序查询）；**宿主接线未开始**
 （`CommandRegistry` 接 Quick Open、`PanelRegistry` 接左右 Dock、设置外部登记项、
 `project_resources` 对账、插件图标 resolver）；**P5（分发与签名）未开始**。
 
@@ -274,7 +275,7 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 放行；发布包应在 P5 打包流程里生成。加载期（`load_plugin_from_dir`）对带
 `checksums.json` 的包再校验一次，装好之后被改同样拦得住；`signature.json`（验"谁签发"）
 仍未做。
-`cargo test -p rds-plugin` **224 单测 + 78 集成**全绿（2026-10-16 复跑）。
+`cargo test -p rds-plugin` **224 单测 + 79 集成**全绿（2026-10-16 复跑）。
 
 **安装器跳过开发残留**（2026-10-16）：`installer::copy_dir` 按 `layout::is_dev_residue`
 跳过 `.git` / `.svn` / `.hg` / `.rds` / `.idea` / `.vscode` / `target` / `node_modules` /

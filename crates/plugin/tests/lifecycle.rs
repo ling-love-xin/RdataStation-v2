@@ -256,9 +256,14 @@ async fn a_plugin_whose_directory_name_disagrees_with_the_manifest_stays_in_the_
     );
 }
 
-/// 两个插件声明同一个命令 id：注册表必须报冲突，卸载其中一个后恢复。
+/// 两个插件声明同一个命令 id：第二个在加载期被拒绝，第一个保持可用。
+///
+/// 冲突若拖到查注册表时才报，两个插件都会显示「已加载」，宿主拿到的是整体错误。
+/// 现在第二个插件以错误行留在列表（可看原因、可卸载），修好清单后能重新加载。
 #[tokio::test]
-async fn a_contribution_id_conflict_between_plugins_is_reported() {
+async fn a_contribution_id_conflict_rejects_the_second_plugin() {
+    use rds_plugin::manager::PluginKind;
+
     let dir = TempDir::new("contrib-conflict");
     let manager = PluginManager::new(dir.0.clone());
     manager.init().await.unwrap();
@@ -269,26 +274,90 @@ title = "共享命令"
 "#;
     write_plugin_with_contributes(&dir.0, "com.example.a", "v1", command);
     write_plugin_with_contributes(&dir.0, "com.example.b", "v1", command);
-    manager
-        .load_plugin_from_dir(&dir.0.join("com.example.a"))
-        .await
-        .unwrap();
-    manager
-        .load_plugin_from_dir(&dir.0.join("com.example.b"))
-        .await
-        .unwrap();
+    let plugin_a = dir.0.join("com.example.a");
+    let plugin_b = dir.0.join("com.example.b");
+    manager.load_plugin_from_dir(&plugin_a).await.unwrap();
 
-    let error = manager.contributions().unwrap_err().to_string();
+    let error = manager.load_plugin_from_dir(&plugin_b).await.unwrap_err();
+    let error = error.to_string();
     assert!(error.contains("命令贡献点 id 冲突"), "{error}");
     assert!(error.contains("shared.cmd"), "{error}");
     assert!(error.contains("com.example.a"), "{error}");
     assert!(error.contains("com.example.b"), "{error}");
 
+    // 被拒的插件不进加载缓存，但以错误行留在列表：面板看得到原因、也能卸载。
+    assert!(manager.get_loaded_plugin("com.example.b").is_none());
+    let row = manager
+        .list_plugins()
+        .unwrap()
+        .into_iter()
+        .find(|plugin| plugin.id == "com.example.b")
+        .expect("被拒插件应留在列表");
+    assert_eq!(row.kind, PluginKind::Unknown);
+    assert!(row.error.as_deref().is_some_and(|e| e.contains("贡献点")));
+
+    // 注册表只剩先加载的插件，不再整体失败。
+    let registry = manager.contributions().unwrap();
+    assert_eq!(registry.commands().len(), 1);
+    assert_eq!(registry.commands()[0].plugin_id, "com.example.a");
+
+    // 同名插件重载不算冲突（排除自身，否则改完清单也永远装不回来）。
+    manager.load_plugin_from_dir(&plugin_a).await.unwrap();
+
+    // 改掉冲突 id 后第二个插件可正常加载，错误行被清掉。
+    let unique = r#"[[contributes.commands]]
+id = "unique.cmd"
+title = "独立命令"
+"#;
+    write_plugin_with_contributes(&dir.0, "com.example.b", "v2-fixed", unique);
+    manager.load_plugin_from_dir(&plugin_b).await.unwrap();
+    let registry = manager.contributions().unwrap();
+    assert_eq!(registry.commands().len(), 2);
+    let row = manager
+        .list_plugins()
+        .unwrap()
+        .into_iter()
+        .find(|plugin| plugin.id == "com.example.b")
+        .expect("修好后应恢复为正常行");
+    assert!(row.error.is_none());
+
+    // 卸载一侧后，另一侧的声明仍在。
     manager.uninstall_plugin("com.example.a").await.unwrap();
     let registry = manager.contributions().unwrap();
     assert_eq!(registry.commands().len(), 1);
-    assert_eq!(registry.commands()[0].id, "shared.cmd");
+    assert_eq!(registry.commands()[0].id, "unique.cmd");
     assert_eq!(registry.commands()[0].plugin_id, "com.example.b");
+}
+
+/// 注册表输出按插件 id 排序，不受加载顺序（`HashMap` 遍历顺序）影响。
+#[tokio::test]
+async fn contributions_are_sorted_by_plugin_id() {
+    let dir = TempDir::new("contrib-order");
+    let manager = PluginManager::new(dir.0.clone());
+    manager.init().await.unwrap();
+
+    let command_a = "[[contributes.commands]]\nid = \"a.cmd\"\ntitle = \"A\"\n";
+    let command_b = "[[contributes.commands]]\nid = \"b.cmd\"\ntitle = \"B\"\n";
+    write_plugin_with_contributes(&dir.0, "com.example.b", "v1", command_b);
+    write_plugin_with_contributes(&dir.0, "com.example.a", "v1", command_a);
+    manager
+        .load_plugin_from_dir(&dir.0.join("com.example.b"))
+        .await
+        .unwrap();
+    manager
+        .load_plugin_from_dir(&dir.0.join("com.example.a"))
+        .await
+        .unwrap();
+
+    let registry = manager.contributions().unwrap();
+    assert_eq!(
+        registry
+            .commands()
+            .iter()
+            .map(|command| command.plugin_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["com.example.a", "com.example.b"]
+    );
 }
 
 /// 热插拔：空目录 → 摆插件（出现）→ 删目录（消失）→ 改清单（变化置重载）。
