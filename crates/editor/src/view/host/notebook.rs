@@ -47,41 +47,25 @@ impl EditorHostPanel {
         // 只有 SQL 单元吃本地目录补全；候选与主编辑器同源（宿主推给本文档的目录快照）。
         let sql_completion = cell.language.uses_local_sql_completion()
             && self.shared.completion_enabled(&self.document);
-        // 【15.14】逐单元诊断：目录快照与方言在创建时取一次（与主编辑器 `submit_scan`
-        // 同一来源：`catalog_snapshot_for` + `sql_dialect_for_document`），随闭包进变化回调。
-        let cell_catalog = self
-            .shared
-            .catalog_snapshot_for(&self.document)
-            .unwrap_or_else(|| std::sync::Arc::new(crate::completion::Catalog::default()));
-        let cell_dialect = self.sql_dialect_for_document();
+        // 【15.14】目录快照与方言不再随闭包进变化回调：正文一变就 `cx.defer` 回面板
+        // `rebuild_cell_diagnostics`，由它现取（`catalog_snapshot_for` + `sql_dialect_for_document`，
+        // 与主编辑器 `submit_scan` 同一来源）。这样执行错误与词法诊断走同一条重建，
+        // 且切连接后下一次敲键就能拿到新快照，不必重建单元实例。
         let completion_shared = self.shared.clone();
         let completion_document = self.document.clone();
-        let initial_text = body.clone();
         let editor = cx.new(|cx| {
             // `language` 是消费式 builder：链在 `new` 后面
             let mut state = EditorState::new(window, cx).language(language);
-            // 首帧诊断：单元一出现就带波浪线，不必等第一次敲键
-            let initial = if sql_completion {
-                crate::view::cell_diagnostics::diagnostics_for(
-                    &initial_text,
-                    &cell_catalog,
-                    cell_dialect,
-                )
-            } else {
-                Vec::new()
-            };
             state.set_value(body, window, cx);
             if sql_completion {
                 crate::view::completion::install(&mut state, completion_shared, completion_document);
-                crate::view::cell_diagnostics::apply(&mut state, &initial, cx);
             }
             state
         });
         let document = self.document.clone();
         let shared = self.shared.clone();
         let cell_id = cell.id.clone();
-        let cell_editor = editor.clone();
-        let change_catalog = cell_catalog.clone();
+        let panel = cx.entity().downgrade();
         // 订阅挂面板上下文会 read 面板（subscribe_in 的 ensure_window），面板正被
         // update 时直接 panic；改用无窗口版 `subscribe`（回调里不需要 window，
         // 只回写 shared）——派发时面板已不在更新中
@@ -91,31 +75,61 @@ impl EditorHostPanel {
             }
             // 正文从单元编辑器实体读（事件路径，可直接 read）
             let text = state.read(cx).text().to_string();
-            // 【15.14】正文一变就重建该单元自己的诊断（主编辑器的诊断扫的是单元列表 JSON，
-            // 对单元里的 SQL 没有意义）。**不能在这里 update 本实体**——Change 由它自己发出，
-            // 此刻它正在 update 中（重入会 panic）；`cx.defer` 推到本次更新结束后再写内核。
-            if sql_completion {
-                let found = crate::view::cell_diagnostics::diagnostics_for(
-                    &text,
-                    &change_catalog,
-                    cell_dialect,
-                );
-                let target = cell_editor.clone();
-                cx.defer(move |cx| {
-                    let _ = target.update(cx, |state, cx| {
-                        crate::view::cell_diagnostics::apply(state, &found, cx);
-                    });
-                });
-            }
             let mut cells = shared.notebook_cells(&document);
             if let Some(target) = cells.iter_mut().find(|c| c.id == cell_id) {
                 target.body = text;
             }
             shared.set_notebook_cells(&document, cells);
+            // 【15.14/15.15】重建该单元自己的诊断。**不能在这里 update 本实体**——
+            // Change 由它自己发出，此刻正在 update 中（重入会 panic）；`cx.defer`
+            // 推到本次更新结束后，由面板统一重建（词法 + 执行错误一条流程）。
+            if sql_completion {
+                let panel = panel.clone();
+                let cell_id = cell_id.clone();
+                cx.defer(move |cx| {
+                    let _ = panel.update(cx, |panel, cx| {
+                        panel.rebuild_cell_diagnostics(&cell_id, cx);
+                    });
+                });
+            }
             cx.notify();
         });
         self.cell_editors.insert(cell.id.clone(), editor);
         self._cell_editor_subs.insert(cell.id.clone(), sub);
+        // 首帧诊断：单元一出现就带波浪线（词法 + 上次执行错误），不必等第一次敲键
+        self.rebuild_cell_diagnostics(&cell.id, cx);
+    }
+
+    /// 【15.14/15.15】重建某个单元自己的诊断集合（词法/语义现算 + 上次执行错误合并）
+    ///
+    /// 三源只在这一个入口重建——单元执行错误（`exec`）与打字期诊断（`found`）各写一遍
+    /// 就会互相擦掉（内核的诊断集合只有 `clear` + `push`，见 `cell_diagnostics::apply`）。
+    /// 门控与补全同一条：只有 SQL 单元且补全开着才接（Python / R / Julia 要 per-cell
+    /// 语言服务会话，见 §15.14 未覆盖）。
+    pub(crate) fn rebuild_cell_diagnostics(&self, cell_id: &str, cx: &mut Context<Self>) {
+        let Some(editor) = self.cell_editors.get(cell_id).cloned() else {
+            return;
+        };
+        let cells = self.notebook_state().cells;
+        let Some(cell) = cells.iter().find(|cell| cell.id == cell_id) else {
+            return;
+        };
+        if !cell.language.uses_local_sql_completion()
+            || !self.shared.completion_enabled(&self.document)
+        {
+            return;
+        }
+        let body = cell.body.clone();
+        let catalog = self
+            .shared
+            .catalog_snapshot_for(&self.document)
+            .unwrap_or_else(|| std::sync::Arc::new(crate::completion::Catalog::default()));
+        let dialect = self.sql_dialect_for_document();
+        let found = crate::view::cell_diagnostics::diagnostics_for(&body, &catalog, dialect);
+        let mark = self.cell_error_marks.get(cell_id).cloned();
+        editor.update(cx, |state, cx| {
+            crate::view::cell_diagnostics::apply(state, &found, mark.as_ref(), cx);
+        });
     }
 
     /// 取本文档的笔记状态（渲染用快照）
@@ -335,6 +349,10 @@ impl EditorHostPanel {
         self.shared.set_notebook_cells(&self.document, state.cells);
         match self.shared.submit_cell(self.document.clone(), &request) {
             Ok(()) => {
+                // 【15.15】重跑即清上一次的执行错误（新的结果没回来之前不该还挂着旧波浪线；
+                // 词法诊断照旧由 `rebuild_cell_diagnostics` 现算）
+                self.cell_error_marks.remove(id);
+                self.rebuild_cell_diagnostics(id, cx);
                 if self.pending == 0 {
                     self.running_since = Some(std::time::Instant::now());
                 }
@@ -634,6 +652,30 @@ impl EditorHostPanel {
         }
     }
 
+    /// 【15.15】从一条单元回执里取出「执行出错位点」（**认不出就不给位置**）
+    ///
+    /// 与主编辑器同一判据（`crate::diagnostics::site_in_document`）：位置先在**这次提交的
+    /// SQL** 里算出来，再平移回**当前**单元正文。正文在提交后被改过 → `find` 不到 → 返回
+    /// `None`，界面只留输出块里那句原因，不猜位置（定位错比不定位更糟）。
+    fn cell_error_mark_for_note(
+        &self,
+        note: &crate::cell::CellNote,
+    ) -> Option<crate::view::cell_diagnostics::ExecMark> {
+        let outcome = note.result.as_ref().ok()?;
+        let reason = outcome.result.as_ref().err()?;
+        let body = self
+            .notebook_state()
+            .cells
+            .into_iter()
+            .find(|cell| cell.id == note.cell_id)?
+            .body;
+        let site = crate::diagnostics::site_in_document(&body, &outcome.sql, reason)?;
+        Some(crate::view::cell_diagnostics::ExecMark {
+            site,
+            reason: reason.clone(),
+        })
+    }
+
     /// 中断单元执行（沿执行队列的取消；没在跑 = 如实回绝）
     pub(crate) fn notebook_cancel_run(&mut self, cx: &mut Context<Self>) {
         match self.shared.cancel_for(&self.document) {
@@ -650,7 +692,34 @@ impl EditorHostPanel {
                 continue;
             }
             mine_arrived += 1;
+            // 【15.15】SQL 单元执行失败的位点进**该单元自己**的诊断（与词法同一条重建）。
+            // 只处理会被落下的回执（会话一致 + 该单元仍在跑），判据与 `apply_cell_note`
+            // 完全一致——迟到的旧回执不该把旧错误贴到新一次执行上。
+            let accepted = {
+                let state = self.notebook_state();
+                state.session.id == note.session_id
+                    && state
+                        .cells
+                        .iter()
+                        .find(|cell| cell.id == note.cell_id)
+                        .map(|cell| cell.state == crate::cell::CellState::Running)
+                        .unwrap_or(false)
+            };
+            if accepted {
+                match self.cell_error_mark_for_note(&note) {
+                    Some(mark) => {
+                        self.cell_error_marks.insert(note.cell_id.clone(), mark);
+                    }
+                    // 成功（或提交层失败、认不出位置）→ 清掉旧错，不留过期波浪线
+                    None => {
+                        self.cell_error_marks.remove(&note.cell_id);
+                    }
+                }
+            }
             self.shared.apply_cell_note(&self.document, &note);
+            if accepted {
+                self.rebuild_cell_diagnostics(&note.cell_id, cx);
+            }
         }
         // 回执按本文档的份数收口 pending（与脚本同口径）
         if mine_arrived > 0 {

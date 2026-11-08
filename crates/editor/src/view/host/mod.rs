@@ -354,6 +354,12 @@ pub struct EditorHostPanel {
     pub(crate) scan_diagnostics: Vec<language_service::Diagnostic>,
     /// 【B6】执行错误的原因（`None` = 这次成功）；与词法诊断合并重建时要连它一起重画
     pub(crate) error_reason: Option<String>,
+    /// 【15.15】各单元最近一次执行失败留下的位点（键 = 单元 id）
+    ///
+    /// 单元正文与主编辑器正文是两套坐标系：执行错误要画在**单元自己**的编辑器上，
+    /// 所以位点按单元存。与词法诊断一起在 `rebuild_cell_diagnostics` 里合并重建。
+    pub(crate) cell_error_marks:
+        std::collections::HashMap<String, crate::view::cell_diagnostics::ExecMark>,
     /// 结果轮询任务句柄（空闲即退出；句柄存活到下一次提交）
     pub(crate) exec_pump: RefCell<Option<Task<()>>>,
     /// 【#17】正在跑的内核单元（同一时间最多一个，与 `has_running` 防并发一致）

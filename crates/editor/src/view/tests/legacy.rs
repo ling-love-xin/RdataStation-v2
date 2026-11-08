@@ -335,3 +335,174 @@ fn cell_diagnostics_are_per_cell_and_rebuild_on_typing(cx: &mut TestAppContext) 
     );
     assert_eq!(count_of(cx, "c3"), 0, "重建只作用于本单元，别的单元不受牵连");
 }
+
+// ===== 【15.15】单元执行错误进单元诊断 =====
+
+/// 假执行器：SQL 里带 `wheree` → 回「带位置的解析错误」（PG 口径 `at position N`）；
+/// 否则成功。两种结论都要能造，才能钉住"重跑成功后旧错误必须清掉"。
+struct CellErrorRunner;
+
+impl crate::execution::QueryRunner for CellErrorRunner {
+    fn run(
+        &self,
+        _connection: Option<&str>,
+        _schema: Option<&str>,
+        _channel: crate::channel::ExecChannel,
+        _sql: &str,
+        _options: crate::execution::RunOptions,
+    ) -> Result<crate::execution::QueryData, String> {
+        Ok(crate::execution::QueryData::default())
+    }
+
+    fn run_cell(
+        &self,
+        request: &crate::cell::CellRequest,
+    ) -> Result<crate::cell::CellOutcome, String> {
+        let sql = request.sql.clone();
+        let result = match sql.find("wheree") {
+            Some(position) => Err(format!(
+                "Query failed at position {position}: syntax error at or near \"wheree\""
+            )),
+            None => Ok(crate::execution::QueryData {
+                columns: vec!["n".to_string()],
+                rows: vec![vec!["1".to_string()]],
+                ..Default::default()
+            }),
+        };
+        Ok(crate::cell::CellOutcome {
+            sql,
+            elapsed_ms: 2,
+            affected_rows: None,
+            truncated: false,
+            result,
+        })
+    }
+}
+
+/// 一份两单元的 `.rdsnote`：c1 的 SQL 执行必然失败（词法干净），c2 正常
+fn analysis_note_with_a_failing_sql() -> &'static str {
+    r###"{"version":1,"session":{"id":"default","default_connection":null,"env":null},"cells":[
+        {"id":"c1","kind":"sql","body":"select * from t wheree 1 = 1;"},
+        {"id":"c2","kind":"sql","body":"select 1;"}]}"###
+}
+
+/// 【15.15】执行错误落在**该单元自己**的诊断上，重跑成功后清掉
+///
+/// 三件事：① 跑之前干净（词法层对这段 SQL 无话可说）；② 失败回执到了以后，
+/// 该单元出现来源「执行」的诊断，位点来自驱动原文的 `at position N`；
+/// ③ 改好 SQL 重跑成功 → 旧执行错误被清掉（与词法诊断同在一条重建流程里）。
+#[gpui_kit::test]
+fn a_failing_cell_run_marks_its_own_cell_and_a_successful_rerun_clears_it(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(CellErrorRunner));
+    let id = shared
+        .open(OpenRequest::file(
+            r"D:\notes\exec_diag.rdsnote",
+            analysis_note_with_a_failing_sql(),
+            EditorMode::Analysis,
+        ))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_cell_editors(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 诊断来源列表（`Some("执行")` 就是执行错误那份，便于与词法层区分）
+    let sources_of = |cx: &mut gpui_kit::VisualTestContext, cell_id: &str| {
+        let editor = cx.update(|_window, cx| {
+            panel
+                .read(cx)
+                .cell_editors
+                .get(cell_id)
+                .cloned()
+                .expect("单元编辑器实例要存在")
+        });
+        cx.update(|_window, cx| {
+            editor.update(cx, |state, _| {
+                state
+                    .diagnostics()
+                    .map(|set| {
+                        set.range(0..usize::MAX)
+                            .map(|entry| entry.diagnostic.source.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            })
+        })
+    };
+
+    // ① 跑之前：词法干净，没有执行错误
+    assert!(
+        sources_of(cx, "c1").is_empty(),
+        "还没跑过的单元不该有诊断（词法层对这段 SQL 无话可说）"
+    );
+    assert_eq!(sources_of(cx, "c2"), vec![], "另一个单元干净");
+
+    // ② 跑一次（必然失败）：等到回执落地，再断言该单元出现「执行」诊断
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.notebook_run_cell(&id, "c1", cx));
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let finished = loop {
+        let finished = cx.update(|_window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.drain_cell_notes(cx);
+                let cell = panel
+                    .notebook_state()
+                    .cells
+                    .into_iter()
+                    .find(|cell| cell.id == "c1")
+                    .expect("c1 还在");
+                cell.state == crate::cell::CellState::Done
+                    || cell.state == crate::cell::CellState::Error
+            })
+        });
+        if finished || std::time::Instant::now() > deadline {
+            break finished;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    assert!(finished, "回执要落到单元上（Done / Error）");
+    let sources = sources_of(cx, "c1");
+    assert!(
+        sources.iter().any(|source| source.as_ref().is_some_and(|s| s.as_str() == "执行")),
+        "执行失败的位点要进该单元自己的诊断（实际来源：{sources:?}）"
+    );
+    assert_eq!(sources_of(cx, "c2"), vec![], "别的单元不被牵连");
+
+    // ③ 改好 SQL 重跑（成功）→ 旧执行错误清掉
+    let mut state = cx.update(|_window, _cx| shared.notebook_state(&id));
+    state.cells[0].body = "select * from t where 1 = 1;".to_string();
+    let cells = state.cells;
+    cx.update(|_window, _cx| shared.set_notebook_cells(&id, cells));
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.notebook_run_cell(&id, "c1", cx));
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let finished = loop {
+        let finished = cx.update(|_window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.drain_cell_notes(cx);
+                panel
+                    .notebook_state()
+                    .cells
+                    .into_iter()
+                    .find(|cell| cell.id == "c1")
+                    .is_some_and(|cell| cell.state == crate::cell::CellState::Done)
+            })
+        });
+        if finished || std::time::Instant::now() > deadline {
+            break finished;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    assert!(finished, "重跑要成功收口（Done）");
+    assert_eq!(
+        sources_of(cx, "c1"),
+        vec![],
+        "重跑成功后上一次的执行错误必须清掉（不留过期波浪线）"
+    );
+}

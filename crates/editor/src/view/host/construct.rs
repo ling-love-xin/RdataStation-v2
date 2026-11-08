@@ -608,6 +608,7 @@ impl EditorHostPanel {
             scan_pending: false,
             scan_diagnostics: Vec::new(),
             error_reason: None,
+            cell_error_marks: std::collections::HashMap::new(),
             _editor_sub: Some(sub),
             _grid_sub: Some(grid_sub),
             _result_panel_sub: Some(result_panel_sub),

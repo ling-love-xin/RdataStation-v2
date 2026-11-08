@@ -23,7 +23,22 @@
 use gpui_kit::base::input::{Diagnostic as KernelDiagnostic, DiagnosticSeverity, EditorState, Position};
 
 use crate::completion::Catalog;
+use crate::diagnostics::ErrorSite;
 use crate::language_service::{self, Diagnostic, Request};
+
+/// 一次单元执行失败留下的位点（**面板持有**，不是内核状态）
+///
+/// 为什么要有它：单元执行错误与打字期诊断是两条来源，但内核的诊断集合只有
+/// `clear` + `push`——两条来源各写各的就会互相擦掉（重跑成功后旧错误还挂着，
+/// 或者一敲键执行错误就消失）。所以执行错误存成一条"记忆"，与词法诊断在
+/// [`apply`] 里合并重建（与主编辑器 `apply_error_marks` 同一纪律）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecMark {
+    /// 出错的位点（**文档坐标系**：1 基行列 + 0 基字节；由 `site_in_document` 定位）
+    pub site: ErrorSite,
+    /// 驱动给的原因原文（不加工，用户要能对上日志）
+    pub reason: String,
+}
 
 /// 一段单元正文 → 诊断（**纯函数**：可离线断言，不碰内核、不碰 App）
 ///
@@ -47,12 +62,13 @@ pub fn diagnostics_for(
 
 /// 把诊断重建进单元内核（内核只有 `clear` + `push`，所以必须一处重建，别分开各写一份）
 ///
-/// 来源标「语法」、严重度统一 Error、`code` 原样带给内核——与主编辑器
-/// （`view/host/results/errors.rs::apply_error_marks`）的词法层同一口径，
-/// 同一个错在主编辑器与单元里长得一样。
+/// 词法/语义（`found`）与执行错误（`exec`）在这一个入口合并——两条来源要是各写一遍
+/// `clear`，后写的会擦掉先写的。来源分别标「语法」与「执行」、严重度统一 Error、
+/// `code` 原样带给内核——与主编辑器 `apply_error_marks` 的词法层与执行层同一口径。
 pub fn apply(
     state: &mut EditorState,
     found: &[Diagnostic],
+    exec: Option<&ExecMark>,
     cx: &mut gpui_kit::Context<EditorState>,
 ) {
     let text = state.value().to_string();
@@ -71,6 +87,25 @@ pub fn apply(
             .with_severity(DiagnosticSeverity::Error)
             .with_source("语法")
             .with_code(one.code),
+        );
+    }
+    if let Some(mark) = exec {
+        // 位点是 1 基行列（给人看的口径），内核 `Position` 要 0 基
+        let (end_line, end_column) = mark.site.end();
+        diagnostics.push(
+            KernelDiagnostic::new(
+                Position::new(
+                    mark.site.line.saturating_sub(1) as u32,
+                    mark.site.column.saturating_sub(1) as u32,
+                )
+                    ..Position::new(
+                        end_line.saturating_sub(1) as u32,
+                        end_column.saturating_sub(1) as u32,
+                    ),
+                mark.reason.clone(),
+            )
+            .with_severity(DiagnosticSeverity::Error)
+            .with_source("执行"),
         );
     }
     cx.notify();

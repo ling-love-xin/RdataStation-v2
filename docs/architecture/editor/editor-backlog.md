@@ -741,11 +741,57 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 
 **未覆盖（如实记录）**：
 
-1. **执行错误没有进单元诊断**：单元跑出错误时，错误信息仍以「单元输出块」呈现（
+1. ~~**执行错误没有进单元诊断**~~：单元跑出错误时，错误信息仍以「单元输出块」呈现（
    `source「执行」` 那条只喂主编辑器与结果面板）。要把"这个单元的 SQL 在第 N 行出错"也画成
-   波浪线，需要执行回执里带上 per-cell 错误位点，属执行端改造。
-2. **目录快照与方言是创建时快照**：用户切连接/切 Schema 后，已存在的单元仍按旧快照算语义诊断
+   波浪线，需要执行回执里带上 per-cell 错误位点，属执行端改造。→ **已做（2026-11-09），见 §15.15**
+2. ~~**目录快照与方言是创建时快照**~~：用户切连接/切 Schema 后，已存在的单元仍按旧快照算语义诊断
    （词法层不受影响）。重建单元实例（增删单元、重开文档）即刷新；持续跟随要订阅连接变更，
-   属另一条接线。
+   属另一条接线。→ **已随 §15.15 顺带修**：重建入口改成每次现取
+   （`catalog_snapshot_for` + `sql_dialect_for_document`），切连接后**下一次敲键或执行**即用新快照，
+   不必重建单元实例；仍不订阅连接变更（连接一变就主动重画是另一条接线）
 3. 延迟/抖动未测：每次 Change 同步算一次是纯 CPU（单元文本远小于 `SCAN_MAX_BYTES`），
    但没有为"超大单元"设闸；如出现卡顿，可照 `scan_scope` 的做法按档位关掉。
+
+## 15.15 单元执行错误进单元诊断（2026-11-09，闭合 §15.14 未覆盖第 1、2 条）
+
+**问题**：单元执行失败时错误只以「输出块」呈现，编辑区里没有任何标记——用户要在结果卡片里
+读一句驱动原文，再自己数第几行。主编辑器有这套（`error_site` + `apply_error_marks`），
+单元没有：那是主编辑器坐标系，路径不同。另外单元诊断的目录快照/方言原本是**创建时快照**，
+切连接后已存在的单元仍按旧快照算语义诊断。
+
+**为什么必须做成"一条重建流程"**：内核的诊断集合只有 `clear` + `push`（不是 provider 槽位）。
+词法诊断与执行错误要是各写一遍，后写的必然擦掉先写的——重跑成功旧错误还挂着，或一敲键
+执行错误就消失。所以执行错误存成面板字段一条"记忆"，与词法诊断在同一个入口合并重建。
+
+**改法**：
+
+| 位置 | 改动 |
+| --- | --- |
+| `view/cell_diagnostics.rs` | 新增 `ExecMark { site, reason }`（位点 + 驱动原文）；`apply` 增第三参 `exec`：词法（来源「语法」）与执行错误（来源「执行」）在两趟 push 里合并，一次 `clear` 管全部 |
+| `view/host/mod.rs` + `construct.rs` | 面板新增 `cell_error_marks: HashMap<String, ExecMark>`（键 = 单元 id；位点按单元存，因为单元正文与主编辑器正文是两套坐标系） |
+| `view/host/notebook.rs::ensure_cell_editor` | 变化回调不再自带 catalog/dialect 闭包，改为 `cx.defer` 回面板 `rebuild_cell_diagnostics`（单元 id + weak 句柄）；建实例后立刻调一次（首帧就带波浪线） |
+| `notebook.rs::rebuild_cell_diagnostics`（新增） | **唯一的重建入口**：现取 units 正文 + 目录快照 + 方言 → 算词法 → 合并 `cell_error_marks` → 写内核。每次重建都现取快照，因此切连接后下一次敲键/执行即刷新（不再依赖"重建单元实例"） |
+| `notebook.rs::drain_cell_notes` | 回执到达时：判据与 `apply_cell_note` 一致（会话一致 + 单元仍在 Running）才认；失败→写 mark，成功或提交层失败→清 mark；然后重建该单元 |
+| `notebook.rs::notebook_run_cell` | 提交成功即清该单元旧 mark 并重建（新结果没回来之前不该还挂着旧波浪线） |
+| `notebook.rs::cell_error_mark_for_note`（新增） | 从回执取位点：`site_in_document(当前单元正文, 这次提交的 SQL, 错误原文)`——与主编辑器同一判据；正文在提交后被改过就认不出，**不给位置**（只在输出块里报原因，不猜） |
+| `view/tests/legacy.rs` | 新用例 `a_failing_cell_run_marks_its_own_cell_and_a_successful_rerun_clears_it`：假执行器按 SQL 内容回"带 `at position N` 的解析错误"或成功 |
+
+**验证**：
+
+- `cargo check -p rds-editor --lib -j 1` → exit 0，零 warning
+- 定向用例 → 1 passed
+- `cargo check -p rds-editor --all-targets -j 1` → exit 0
+- `cargo test -p rds-editor --lib -- --test-threads=1` → **766 passed / 3 failed / 1 ignored**
+  （= §15.14 基线 765 + 本轮 1 条；三条失败仍是 `legacy.rs:58` / `notebook_win.rs:347` /
+  `results_a.rs:290`）
+- `cargo build -j 1 -p rds-app` → exit 0；重启后日志 0 panic / 0 ERROR
+
+**未覆盖（如实记录）**：
+
+1. **只覆盖 SQL 单元**：Python / R / Julia 的内核错误（`KernelEvent::Error`）仍是输出块，
+   它们的位点要先有 per-cell 语言服务会话（§15.8 未做 2 / §15.14 未覆盖）。
+2. **不订阅连接变更**：切连接后语义诊断要"下一次敲键或执行"才按新快照刷新；要做到连接一变
+   就主动重画，需订阅连接事件（另一条接线）。
+3. 结果卡片的「定位」按钮仍只作用于主编辑器路径（`jump_to_error_site`）；单元的诊断目前
+   只画波浪线、不做跳转（单元里位置本来就在眼前，跳转需求未出现）。
+
