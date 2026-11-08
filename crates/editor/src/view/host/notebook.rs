@@ -41,10 +41,21 @@ impl EditorHostPanel {
         let body = cell.body.clone();
         // 内核编辑器语言 = 单元语言的持久化键（EditorState::language 吃 "sql"/"markdown" 等）
         let language = cell.language.as_key();
+        // 【15.1 第 4 条】分析模式的逐单元补全：能力表对分析模式给 `completion: true`，
+        // 但 provider 必须挂在**单元自己的内核**上——笔记模式下主编辑器的正文是单元列表，
+        // 主 state 上那个 provider 一辈子没人调用（能力位空转）。
+        // 只有 SQL 单元吃本地目录补全；候选与主编辑器同源（宿主推给本文档的目录快照）。
+        let sql_completion = cell.language.uses_local_sql_completion()
+            && self.shared.completion_enabled(&self.document);
+        let completion_shared = self.shared.clone();
+        let completion_document = self.document.clone();
         let editor = cx.new(|cx| {
             // `language` 是消费式 builder：链在 `new` 后面
             let mut state = EditorState::new(window, cx).language(language);
             state.set_value(body, window, cx);
+            if sql_completion {
+                crate::view::completion::install(&mut state, completion_shared, completion_document);
+            }
             state
         });
         let document = self.document.clone();

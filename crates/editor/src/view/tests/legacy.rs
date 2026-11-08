@@ -58,6 +58,47 @@ fn opening_an_analysis_document_builds_a_cell_editor_per_cell(cx: &mut TestAppCo
     assert!(rendered, "单元源在渲染树里是内核编辑器（不是纯文本回退）");
 }
 
+/// 【15.1 第 4 条】分析模式的逐单元补全：能力表的 `completion` 位要与**单元自己的内核**对上
+///
+/// SQL 单元必须真的装上 SQL 目录补全 provider（不然能力位就是空头支票：主编辑器的
+/// provider 在笔记模式下没人调用）；文本单元不装（它不吃 SQL 候选）。
+#[gpui_kit::test]
+fn sql_cells_of_a_note_get_the_completion_provider(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::file(
+            r"D:\notes\d.rdsnote",
+            analysis_note_two_cells(),
+            EditorMode::Analysis,
+        ))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_cell_editors(window, cx)));
+
+    let provider_of = |cx: &mut gpui_kit::VisualTestContext, cell_id: &str| {
+        cx.update(|_window, cx| {
+            let editor = panel
+                .read(cx)
+                .cell_editors
+                .get(cell_id)
+                .cloned()
+                .expect("单元编辑器实例要存在");
+            editor.update(cx, |state, _| state.lsp_mut().completion_provider.is_some())
+        })
+    };
+
+    assert!(
+        provider_of(cx, "c1"),
+        "SQL 单元的补全 provider 要装在自己的内核上（能力表 completion=true 的落地点）"
+    );
+    assert!(
+        !provider_of(cx, "c2"),
+        "文本单元不吃 SQL 目录补全，装上会给错候选"
+    );
+}
+
 /// 新增 / 复制 / 删除单元时，编辑器实例与单元序列保持同步（创建 / 移除随生命周期）
 #[gpui_kit::test]
 fn cell_editors_follow_add_duplicate_and_delete(cx: &mut TestAppContext) {

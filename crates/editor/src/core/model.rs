@@ -168,8 +168,9 @@ pub struct Capabilities {
     pub kind: DocumentKind,
     pub language: LanguageService,
     /// 本地 SQL 目录补全档（SQL 模式为真值；通用模式恒 false——.py 的 LSP 补全
-    /// 走独立判定 lsp_available，与该位无关；分析模式为 1c 预留，逐单元补全
-    /// 尚未装 provider，见 sync_completion_provider 注释）
+    /// 走独立判定 lsp_available，与该位无关；分析模式为真值：provider 按**单元语言**
+    /// 装到每个 SQL 单元自己的内核上，见 `view/host/notebook.rs::ensure_cell_editor`；
+    /// Python / R / Julia 单元不吃这一位，它们的补全要各自的语言服务会话）
     pub completion: bool,
     /// 是否启用折叠（大文件档位下会被运行时降级；候选由我们自己算，见 `fold` 模块）
     pub folding: bool,

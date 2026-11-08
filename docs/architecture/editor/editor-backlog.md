@@ -265,7 +265,7 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 | **高** | **折叠候选的后台路径不吃 `editor.fold_open_keywords` / `fold_close_keywords`** | 生产者：`Job` 无关键字字段，`run()` 写死默认表 | ✅ **本轮已修，见 15.4**。原证据：`support/scan.rs:88-97`（`Job{revision,text,channel,scope,catalog,dialect}`）、`support/scan.rs:236-242`（硬编码 `CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT` / `END`）；消费在 `view/host/exec/pump.rs:98-105`（`fold::refresh` 覆盖候选）。前台正确口径：`view/host/render.rs:49-55`（设置→shared）+ `view/host/ops.rs:420-431`（`sync_fold`→`fold::install`）。**原后果**：改设置后首帧正确，编辑一次即被后台候选覆盖回默认关键字（设置静默失效） |
 | 高 | 右键菜单无 SQL 执行项 | 宿主消费分支：`menu_entries` 无执行条目 | ✅ **本轮已修**，见 15.5。原证据：`view/editor_menu.rs:63-110`（只有剪切/复制/粘贴/全选/添加书签说明/转到定义/代码操作） |
 | ~~中~~ | ~~书签行号漂移不校正~~ | 回放：sidecar 行号**会**随编辑平移（方案 A 已实现，`8234474b`；本轮补端到端用例） | `view/host/bookmarks.rs:149`（`adjust_bookmarks_for_edit`） |
-| 中 | 分析模式逐单元补全未装 provider | 装配：cell 编辑器只建实例不装 provider | `view/host/notebook.rs:44-49`（`EditorState::new(..).language(..)` + `set_value`，无 completion / diagnostics）；`completion::install` 仅两处主编辑器（`view/host/mod.rs:633`、`view/host/session.rs:498`） |
+| 中 | 分析模式逐单元补全未装 provider | 装配：cell 编辑器只建实例不装 provider | ✅ **本轮已修（补全），见 15.8**。原证据：`view/host/notebook.rs:44-49`（`EditorState::new(..).language(..)` + `set_value`，无 completion / diagnostics）；`completion::install` 仅两处主编辑器（`view/host/mod.rs:633`、`view/host/session.rs:498`）。**逐单元 diagnostics 仍未做**，见 15.8 末尾 |
 | 中 | 标签方案 B（结构化 `tags`）/ C（全局 Tag System） | 数据层：现只有 A「说明即标签」 | §十二 |
 | 低 | 跳转后自动弹说明 / hover 300ms 延迟 | 事件回传：`jump_to_line` 不回传行号 | §十二（`gutter_hovered_row` 当帧计算） |
 | 低 | 修饰符高亮未映射（readonly / deprecated） | 渲染：主题侧无对应 token | `view/highlight.rs:217` |
@@ -418,3 +418,52 @@ headless 经验：正文编辑要走 `editor.read(cx).focus_handle(cx)` + `focus
 **未覆盖**：列宽属布局层，headless 下没有可断言的接缝（`gutter_markers()` 只反映数据不反映宽度），
 常显效果靠人工验收：打开任一 `.sql`（无书签）与「查看数据」文档，行号左侧应有一列空白槽，
 悬停出淡书签、点一下即加书签；设置页关掉「常显书签列」后，那列在零书签时消失。
+
+### 15.8 分析模式逐单元补全（15.1 第 4 条已修）
+
+**问题本体是「能力位空转」**：`Capabilities::for_mode(Analysis)` 的 `completion` 一直是 `true`
+（`core/model.rs:219`，原注释还写着「1c 预留，尚未装 provider」），`completion_enabled` 因此对
+`.rdsnote` 一律回 true——但 provider 只装在两处**主编辑器**（`view/host/mod.rs:647`、
+`view/host/session.rs:498`）。笔记模式下主编辑器的正文是单元列表，那个 provider 一辈子没人调用；
+单元自己的内核（`view/host/notebook.rs:44-49`）只 `EditorState::new(..).language(..)` + `set_value`。
+`choose_completion`（`lsp/host.rs:86`）对 `Analysis` 走 `_` 分支、只认 LSP，所以分析模式连 SQL
+目录补全的选择都走不到。
+
+**改法**（`crates/editor` 三文件 + 一处用例）：
+
+| 位置 | 改动 |
+| --- | --- |
+| `notebook/cell.rs` | `CellLanguage::uses_local_sql_completion()`（只有 `Sql` 为真）+ 单测 `only_sql_cells_use_the_local_sql_completion` |
+| `view/host/notebook.rs` | `ensure_cell_editor` 建实例时：`uses_local_sql_completion()` **且** `shared.completion_enabled(&document)` → `completion::install(&mut state, shared, document)`，装在单元自己的内核上 |
+| `core/model.rs` | `completion` 字段注释改写：分析模式为真值，由单元语言门控落到单元内核 |
+| `view/tests/legacy.rs` | 新用例 `sql_cells_of_a_note_get_the_completion_provider`：SQL 单元 `lsp_mut().completion_provider.is_some()`、文本单元 `None` |
+
+**为什么按单元语言门控**：本地目录补全给的是表名 / 列名候选，Python / R / Julia 单元吃这一位
+就是满屏错候选。它们的补全要各自的语言服务会话，而笔记模式还没给单元建会话（一条 URI 一个会话，
+单元没有自己的路径）——**如实不装**，不拿 SQL 候选冒充。
+
+**验证**：
+
+- `cargo check -p rds-editor --all-targets -j 1` → exit 0
+- `cargo test -p rds-editor --lib notebook::cell` → 11 passed（含新单测）
+- `view::tests::legacy::sql_cells_of_a_note_get_the_completion_provider` → 1 passed
+  —— 顺带证明 `completion_enabled` 对 `.rdsnote` 真的回 true（分析文档可编辑、非大文件档位）
+- `rds-editor --lib -- --test-threads=1` → **763 passed / 3 failed / 1 ignored**（比 15.5 的 761
+  多出的 2 条即本轮新增）。三条失败全部是既有基线：
+  `legacy::opening_an_analysis_document_builds_a_cell_editor_per_cell`（渲染树找不到
+  `editor-nb-cell-source-c1`，见 `../ui/gpui-kit-0.9.0-upgrade-report.md` §12）、
+  `notebook_win::analysis_cell_renders_multiple_output_blocks`（同上 §12）、
+  `results_a::the_result_header_sorts_from_its_arrow`（`editor-result-th-1` 无坐标）。
+  第三条上轮归因于 `result_panel` 在途改动，**那笔改动已由他人提交（`a24d9c18`，改
+  `grid/header.rs` / `ui.rs` / `delegate.rs`）且失败照旧**——与本轮四个文件零交集（本轮只碰
+  `notebook/` / `view/host/notebook.rs` / `view/tests/legacy.rs` / `core/model.rs` 注释）。
+
+**本轮未做（如实记录）**：
+
+1. **逐单元语义诊断（diagnostics）**：15.1 原文把 completion 与 diagnostics 写在同一格。诊断要
+   每单元独立的 SQL 解析上下文与 catalog 位置映射，`sql_diagnostics` 目前只装在主编辑器上；
+   未做。
+2. **Python / R / Julia 单元的补全**：需要 per-cell 语言服务会话（虚拟 URI），是一条独立改造。
+3. `choose_completion` 对 `Analysis` 仍可能把 LSP provider 装到主 state —— 笔记模式下没人调用，
+   无害但无用；改它会动"唯一开关处"的语义，留到与 per-cell LSP 一起做时收口。
+

@@ -75,6 +75,16 @@ impl CellLanguage {
         }
     }
 
+    /// 该单元语言是否吃**本地 SQL 目录补全**（分析模式逐单元补全的门控）。
+    ///
+    /// 只有 SQL 单元：候选来自宿主推给文档的目录快照（与主编辑器同一个来源）。
+    /// Python / R / Julia 的补全要各自的语言服务会话，笔记模式还没为单元建会话
+    /// （`editor-backlog.md` §15.1 第 4 条），此时如实不装——宁可没有补全，也不给
+    /// 一整屏不相关的表名 / 列名候选。
+    pub fn uses_local_sql_completion(self) -> bool {
+        matches!(self, Self::Sql)
+    }
+
     /// 从持久化键还原（认不出来的值 = Markdown，不 panic）
     pub fn from_key(key: &str) -> Self {
         match key {
@@ -481,6 +491,26 @@ mod tests {
 
     fn md_cell(id: &str, body: &str) -> Cell {
         Cell::new(id, CellLanguage::Markdown, body)
+    }
+
+    /// 逐单元补全的门控：只有 SQL 单元吃本地目录补全。
+    ///
+    /// 这条钉的是「分析模式能力表 `completion: true` 不许被 Python / R / Julia 单元
+    /// 蹭走」——那三种语言的补全要各自的语言服务会话，笔记模式还没建会话。
+    #[test]
+    fn only_sql_cells_use_the_local_sql_completion() {
+        assert!(CellLanguage::Sql.uses_local_sql_completion());
+        for language in [
+            CellLanguage::Python,
+            CellLanguage::Markdown,
+            CellLanguage::R,
+            CellLanguage::Julia,
+        ] {
+            assert!(
+                !language.uses_local_sql_completion(),
+                "{language:?} 不该吃本地 SQL 目录补全"
+            );
+        }
     }
 
     /// 单元状态机：Idle → Running → Done / Error；会话切换 → Stale
