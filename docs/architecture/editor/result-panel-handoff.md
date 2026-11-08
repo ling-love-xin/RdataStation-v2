@@ -494,6 +494,31 @@ ui-guard 4 passed（`BASELINE` 从 `(0, 16)` 调到 `(0, 17)`，因新增 `px(3.
 **「图片分隔符」改判为已对齐**：DBeaver 用图片是因为 SWT `ToolItem` 画不了线，本仓 `div` 1px 竖线
 是同一视觉结果。
 
+### 2.27 2026-11-08（表头底色收回 widget 档：去掉第四层）
+
+§2.25 / §2.26 之后工具栏与标签条同为 `#F8F8F8` / `#181818`，但表头还是 `#F5F5F5` / `#252526CC`，
+面板灰阶于是有**三层**（chrome → 表头 → 网格白）；DBeaver 只有**两层**。
+
+**依据**：`header.background` = `COLOR_WIDGET_BACKGROUND`（`plugin.xml:1240`），与筛选条 /
+TabFolder 同一档（`UIStyles.getDefaultWidgetBackground()`，`UIStyles.java:122-129`）；只有数据区
+才是 `COLOR_LIST_BACKGROUND`（`:131-133`）。A 方案下本仓 widget 档 = `tab_bar.background`。
+
+**改动两个值**（`assets/themes/rds-theme.json`，`table.head.background`）：
+
+- light `#F5F5F5` → **`#F8F8F8`**（= `tab_bar.background`）
+- dark `#252526CC` → **`#181818`**（= `tab_bar.background`）
+
+`table.head.foreground` 不动：底变亮后 `#616161` 对比度更高，不触发 WCAG 回归。值改在主题资产、
+`DataTable` 全局生效（结果集 + Mock 预览表），符合「全局统一、不做 per 结果集覆盖」口径，也与
+DBeaver（任何表头都是 widget 底）一致。
+
+**验证**：JSON 严格解析通过并回读两值；result_panel **242 passed**、workbench-shell **14 passed**、
+ui-guard **4 passed**（用例数与基线一致，纯配置值不动几何）。
+
+**仍未做**：表头下边线仍是 `table.row.border`（`#E1E1E1`），DBeaver `header.border` 是
+`COLOR_WIDGET_DARK_SHADOW`（更深，`plugin.xml:1261`）——表头行边框在 `table/state.rs` 内部，
+`TableDelegate` 只有 `render_th` 内容槽，**未取证到外部覆盖入口**，登记未做。
+
 ---
 
 

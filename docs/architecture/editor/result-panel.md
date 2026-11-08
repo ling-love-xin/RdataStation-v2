@@ -1745,6 +1745,51 @@ XSmall 的 `p_1` 上下 8px」。`Input` 在 §8.32 前后已降到 `.small()`�
 **仍未做**：DBeaver 筛选条的真实像素高（本仓没有可运行的 DBeaver 实例，只能按「组件最小档 +
 与标签条等高」推），这条继续作为未验证项登记。
 
+### 8.36 表头底色收回 widget 档（去掉多出来的第四层，2026-11-08）
+
+§8.34 / §8.35 之后工具栏与标签条已同为 `tab_bar.background`（`#F8F8F8` / `#181818`），但表头仍是
+`#F5F5F5` / `#252526CC` —— 比 chrome 深一档，于是结果集面板的灰阶是**三层**
+（标签条 + 工具栏 `#F8F8F8` → 表头 `#F5F5F5` → 网格 `#FFFFFF`），而 DBeaver 只有**两层**。
+
+**DBeaver 依据（三类取值同出一源）**：
+
+| 区域 | DBeaver 取值 | 出处 |
+| --- | --- | --- |
+| 表头底 | `header.background` = `COLOR_WIDGET_BACKGROUND` | `plugin.xml:1240`（`org.jkiss.dbeaver.sql.resultset.color.header.background`） |
+| 筛选条 / TabFolder 底 | `getDefaultWidgetBackground()` = 主题 `INACTIVE_TAB_BG_START` → 回退 `COLOR_WIDGET_BACKGROUND` | `UIStyles.java:122-129` |
+| 网格底 | `getDefaultTextBackground()` = `COLOR_LIST_BACKGROUND` | `UIStyles.java:131-133` |
+
+即表头与筛选条是**同一档 widget 底**，只有数据区才跳一档列表白。本仓 A 方案（用户拍板：不全局压暗，
+widget 档就取 `tab_bar.background`）下，这一档就是 `#F8F8F8` / `#181818`，故：
+
+| 槽 | 改前 | 改后 | 依据 |
+| --- | --- | --- | --- |
+| `table.head.background` light | `#F5F5F5` | `#F8F8F8` | = `tab_bar.background`，取 widget 档 |
+| `table.head.background` dark | `#252526CC` | `#181818` | 同上 |
+
+**为什么不动 `table.head.foreground`**：新底比旧底更亮，`#616161` 在 `#F8F8F8` 上的对比度高于在
+`#F5F5F5` 上（旧值 `#8E8E8E` 在 `#F5F5F5` 上只有 3.01:1 才被改成 `#616161` 的），所以底色变亮
+只提高对比度、不触发 WCAG 回归。文字值保持 —— 注意 DBeaver 的表头字是 `COLOR_LIST_FOREGROUND`
+（近黑，`plugin.xml:1247`），与本仓 `#616161` 仍有差异，**本轮不动**（改深会让整条表头变重，属观感
+取舍，等真窗口看过再说）。
+
+**影响面（为什么改主题资产而不是结果集单点）**：`table.head.background` 是 `DataTable` 的**全局**
+token（`theme/schema.rs:601-603`，回退链 `table_head ← tokens.list_head`，`:1021`），改它同时作用于
+结果集网格与 Mock 预览表。这既符合「全局统一配置、不做 per 结果集覆盖」的既定口径，也与 DBeaver
+一致（它任何 `Table`/`Tree` 的表头都是 widget 底）。`table.foot.*` 未动（结果集没有 footer）。
+
+**验证**：`assets/themes/rds-theme.json` 用 python `json.load` 严格解析通过（顶层是
+`themes` **数组**，按 `modes` 取 `light` / `dark`），并回读两值为 `#F8F8F8` / `#181818`；
+`cargo test -p rds-ui-guard` = **4 passed**（主题键名契约照旧）、
+`cargo test -p rds-workbench-shell --lib` = **14 passed**、
+`cargo test -p rds-result-panel --lib` = **242 passed / 0 failed**（用例数与基线一致，本次无新增断言
+——这条是纯配置值，几何不受影响）。
+
+**仍未做（如实登记）**：表头与网格之间的分隔线仍由组件按 `table.row.border`（`#E1E1E1` /
+`#3C3C3C33`）画，而 DBeaver 的 `header.border` 是 `COLOR_WIDGET_DARK_SHADOW`（明显更深，`plugin.xml:1261`），
+这条未对齐也**未取证到外部覆盖入口**（表头行边框在 `table/state.rs` 内部，`TableDelegate` 只有
+`render_th` 的内容槽），本轮不动。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
