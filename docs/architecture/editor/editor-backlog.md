@@ -293,7 +293,8 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 | --- | --- | --- |
 | 折叠候选算两遍 | 前台 `sync_fold`（`fold::install`，全文）与后台 scan（`fold::spans`，全文）各算一次；后者每编辑一拍 | **关键字已贯通（15.4 已做）**；"后台成为唯一候选来源、前台 install 只在设置/模式/换文本变化时跑"**未做**（会改候选刷新时机，等折叠区人工验收完再动） |
 | 设置项消费面已核 | 17 个 `editor.*` 除 `inline_completion` 外都有代码消费；`default_line_ending` / `default_tab_size` / `default_hard_tabs` 在新文档创建时读（`view/host/mod.rs:1201-1205`） | `inline_completion` 是**刻意置灰**（B1 预留），放开 `disabled` 时必须同步接 provider，否则即静默失效 |
-| 大文件 | `ports/editor_exec.rs` 1947 行、`view/host/mod.rs` 1366、`quick_open/model.rs` 1226、`view/dialogs.rs` 1220 | 沿 `view/host/` 已验证的按域拆分惯例继续切 |
+| 大文件 | ✅ `ports/editor_exec.rs` **已拆（2026-11-08）**：2058 行 → `ports/editor_exec/` 8 个文件（`mod.rs` 128 / `conn.rs` 83 / `accel_exec.rs` 102 / `federation.rs` 384 / `runner.rs` 741 / `convert.rs` 83 / `history.rs` 45 / `tests.rs` 532），最大块从 2058 降到 741。**仍大**：`view/host/mod.rs` 1366、`quick_open/model.rs` 1226、`view/dialogs.rs` 1220 | 沿 `view/host/` 已验证的按域拆分惯例继续切。`editor_exec` 的 `runner.rs` 已到无痛上限——`impl QueryRunner for EngineQueryRunner` 同一类型只能有一个 trait impl 块，**不能再按方法拆文件**；要继续降只能给 trait 方法做瘦转发（方法体搬成 inherent 方法再分文件），属改结构不再是无损搬运 |
+| 大文件拆分纪律 | `editor_exec` 拆分实证：目录化后模块路径不变（`ports::editor_exec::attach` 等对外签名零改动）；子模块里同名 `mod accel` 会与 `use engine::duckdb::accel` 撞车（E0255），须改名 `accel_exec` | 后续拆包按此三条走：不动对外路径 / 子模块名避开外部 crate 同名 / inherent 方法跨文件调用一律 `pub(crate)` |
 | `view/signature_help.rs:17` | 「DBeaver 式完整目录留给后续」 | 已有 C5 函数手册 + #54 B 目录注入，复核这句是否还成立 |
 
 ### 15.4 本轮已修（2026-11-08，15.1 第 1 条）
@@ -483,7 +484,7 @@ headless 经验：正文编辑要走 `editor.read(cx).focus_handle(cx)` + `focus
 | 读写 | `settings/src/service/{mod.rs,editor.rs}` | `value_by_key` / `apply_by_key` 分发 + `apply_slot`（范围 1000–3600000）+ `env_timeout_ms(cx)` / `set_env_timeout_ms`（`clamp` 兜底，不调 `refresh_windows`——不牵渲染） |
 | 请求 | `editor/src/exec/env.rs` | `ScriptRequest` 加 `timeout_ms: u64`（必填：逼每处调用方想清楚） |
 | 生产构造 | `editor/src/view/host/env.rs::run_script` | 提交前读设置（设置服务未装载时回退 `SCRIPT_TIMEOUT_MS`，不取 0）→ 随请求传入 |
-| 消费 | `editor/src/ports/editor_exec.rs::run_script` | `request.timeout_ms` 取代常量 |
+| 消费 | `editor/src/ports/editor_exec/runner.rs::run_script` | `request.timeout_ms` 取代常量（文件位置：2026-11-08 目录化后由 `ports/editor_exec.rs` 移入 `runner.rs`） |
 | 常量 | `editor/src/ports/editor_env.rs` | 注释改为「兜底」：只服务设置未装载的宿主，值与设置默认同值（两处同改） |
 
 **为什么不在执行线程里读设置**：后台线程不该碰 `App`（`Settings` 是 `App` 全局）。设置值必须在
