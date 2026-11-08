@@ -400,16 +400,19 @@ impl ListDelegate for PluginListDelegate {
         };
 
         // 启用/停用按钮（行尾）。清单都没解析出来的目录没有可激活的运行时：
-        // 给一个禁用的说明按钮，别让用户点了「启用」却什么都没有发生。
+        // 给「重试」而不是「启用」——修好清单或卸载冲突插件后，重试是唯一不重启的恢复入口。
         let entity = self.entity.clone();
         let action_id = id.clone();
         let button = if p.kind == PluginKind::Unknown {
-            Button::new(SharedString::from(format!("plugin-{id}-broken")))
+            Button::new(SharedString::from(format!("plugin-{id}-retry")))
                 .ghost()
                 .with_size(Size::XSmall)
-                .label("无法启用")
-                .tooltip("插件清单损坏，请先修复清单或直接卸载")
-                .disabled(true)
+                .label("重试")
+                .tooltip("重新解析清单并加载（修好清单或卸载冲突插件后使用）")
+                .on_click(move |_, _window, app| {
+                    let _ = entity.update(app, |this, cx| this.retry_plugin(action_id.clone(), cx));
+                    app.stop_propagation();
+                })
         } else if active {
             Button::new(SharedString::from(format!("plugin-{id}-disable")))
                 .ghost()
@@ -632,6 +635,52 @@ impl PluginPanel {
                     }
                 };
                 cx.notify();
+            });
+        });
+    }
+
+    /// 重试一个加载失败的插件（错误行上的「重试」）。
+    ///
+    /// 冲突拒绝时清单本身没变：等冲突方卸载后，热插拔扫描不会把它当成「新增 / 变化」
+    /// 自动重试，所以必须给用户一个显式入口，否则只能重启应用才恢复。
+    fn retry_plugin(&self, id: String, cx: &mut Context<Self>) {
+        if self.progress.borrow().is_some() {
+            return;
+        }
+        let Some(handle) = plugin::runtime_handle().cloned() else {
+            self.error.replace(Some("插件运行时未初始化".to_string()));
+            cx.notify();
+            return;
+        };
+        let Some(mgr) = plugin::get_plugin_manager().cloned() else {
+            self.error.replace(Some("插件运行时未初始化".to_string()));
+            cx.notify();
+            return;
+        };
+        self.progress.replace(Some(format!("正在重试 {id}…")));
+        self.error.replace(None);
+        self.notice.replace(None);
+        cx.notify();
+
+        let weak = cx.entity().downgrade();
+        let _ = cx.spawn(async move |_this, cx| {
+            let outcome = handle.block_on(async { mgr.retry_load_plugin(&id).await });
+            let _ = weak.update(cx, |this, cx| {
+                this.progress.replace(None);
+                match outcome {
+                    Ok(loaded) => {
+                        this.error.replace(None);
+                        this.notice.replace(Some(format!(
+                            "已重新加载插件「{}」",
+                            loaded.manifest.plugin.name
+                        )));
+                    }
+                    Err(e) => {
+                        this.error.replace(Some(format!("{e}")));
+                        this.notice.replace(None);
+                    }
+                };
+                this.refresh_plugins(cx, false);
             });
         });
     }

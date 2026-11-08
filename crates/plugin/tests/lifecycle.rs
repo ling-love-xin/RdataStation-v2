@@ -329,6 +329,46 @@ title = "独立命令"
     assert_eq!(registry.commands()[0].plugin_id, "com.example.b");
 }
 
+/// 冲突方卸载后，被拒插件可显式重试加载（不用重启应用）。
+#[tokio::test]
+async fn a_conflict_rejected_plugin_can_be_retried_after_the_other_is_uninstalled() {
+    let dir = TempDir::new("contrib-retry");
+    let manager = PluginManager::new(dir.0.clone());
+    manager.init().await.unwrap();
+
+    let command = r#"[[contributes.commands]]
+id = "shared.cmd"
+title = "共享命令"
+"#;
+    write_plugin_with_contributes(&dir.0, "com.example.a", "v1", command);
+    write_plugin_with_contributes(&dir.0, "com.example.b", "v1", command);
+    manager
+        .load_plugin_from_dir(&dir.0.join("com.example.a"))
+        .await
+        .unwrap();
+    assert!(
+        manager
+            .load_plugin_from_dir(&dir.0.join("com.example.b"))
+            .await
+            .is_err()
+    );
+
+    manager.uninstall_plugin("com.example.a").await.unwrap();
+    manager.retry_load_plugin("com.example.b").await.unwrap();
+
+    let registry = manager.contributions().unwrap();
+    assert_eq!(registry.commands().len(), 1);
+    assert_eq!(registry.commands()[0].id, "shared.cmd");
+    assert_eq!(registry.commands()[0].plugin_id, "com.example.b");
+    let row = manager
+        .list_plugins()
+        .unwrap()
+        .into_iter()
+        .find(|plugin| plugin.id == "com.example.b")
+        .expect("重试成功后应恢复为正常行");
+    assert!(row.error.is_none());
+}
+
 /// 注册表输出按插件 id 排序，不受加载顺序（`HashMap` 遍历顺序）影响。
 #[tokio::test]
 async fn contributions_are_sorted_by_plugin_id() {

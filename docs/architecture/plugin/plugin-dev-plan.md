@@ -750,7 +750,16 @@ Uninstalled ──install──▶ Installed ──load──▶ Loaded ──ac
 > **2026-10-16 进展（第二刀）**：冲突检查前移到**第二个插件加载期**——候选清单与已在会话里的
 > 健康插件合并试建注册表，撞车即拒绝加载，并以错误行留在列表（可看原因、可卸载、可修清单后
 > 重新加载）；同名插件重载先排除自身。`PluginManager::contributions()` 按插件 id 稳定排序，
-> 避免 `HashMap` 顺序导致宿主列表每次重排。**仍未接**：`LeftPanel`/`RightPanel` → `PanelId`、
+> 避免 `HashMap` 顺序导致宿主列表每次重排。
+>
+> **2026-10-16 进展（第三刀）**：错误行的「无法启用」改为可点的「重试」——
+> `PluginManager::retry_load_plugin(id)` 重新解析清单、复核 checksums、再试建注册表；
+> 成功后按库内 `is_enabled` 决定是否激活，并清掉该插件的 `needs_reload` 标记。
+> 补的是冲突拒绝的恢复缺口：冲突被拒时清单本身没变，热插拔 diff 一直判「无变化」，
+> 卸载冲突方后不重启就只能挂错误行。`enable_plugin` 对清单损坏仍明确拒绝
+> （「插件清单损坏，无法启用」），面板只是不再给这个点了没反应的死按钮。
+>
+> **仍未接**：`LeftPanel`/`RightPanel` → `PanelId`、
 > Quick Open 命令合并、设置页外部登记项渲染、未注册 id 占位面板、`project_resources` 对账与图标 resolver。
 
 ---
@@ -991,10 +1000,10 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 | P2 | 🟡 **代码面已齐**（四刀：协议 / 引擎元数据面 / 能力门控 / 一致性验收） | 见 §11.1（`cargo test -p rds-plugin` = 114/114 + 集成 61/61） |
 | P2.5 | 🟡 **底座已落地**（第 1 刀），接线未做 | 见 §11.2 |
 | P3 | 🟢 **前半（反向 Host API 面）已闭环**（2026-10-15）；wasm host function 面未建 | `sidecar/host.rs`：`host.*` 七个方法常量 + `SecretRef` 引用制 + params/result 类型 + `HostApiProvider` trait（默认 `Unsupported`）+ `HostApiHandler`（方法级 glob 权限闸）；`router.rs` 按 JSON-RPC 判据识别反向请求（带 id + method）；`conn.rs` 增 `ConnEvent::InboundRequest` + `reply` / `reply_error`；`supervisor.rs` 事件泵透传 `InboundRequest`（按代过滤）+ `instance_conn_handle`（反向请求无 session_id，按插件实例键拿句柄回帧）。**宿主接线闭环**：`permissions.host` 承载声明、`host_provider.rs`（storage 落盘 + log）、`runtime.rs` 运行时循环（tick 驱动 + 分发回帧）、app 启动 `init_plugin_manager` 自动 spawn。**仍 Unsupported**：credential / notify-actions / ssh（宿主无对应设施，诚实口径）。`cargo test -p rds-plugin` **155/155** 单测 + **61/61** 集成。蓝本：navop `extension-protocol/src/host.rs` |
-| P4 前置 | 🟢 **生命周期已落地**（2026-10-15，VS Code 口径，方案见 §4.8.1–§4.8.3） | `supervisor::shutdown_plugin(id)`（只停一个插件全部实例，会话如实作废，双插件集成测试只停 A 不碰 B）；`deactivate_plugin` Sidecar 分支先停进程（卸载删目录的前提）；`uninstall_plugin`（依赖反向索引 `check_dependents` 拒绝被引用者 → 停用 → 删 `install_dir/<id>/` → `delete_plugin_by_code` 清 DB → 事件；**保留 plugin-data**；id 安全校验）；`enable_plugin` / `disable_plugin`（DB `is_enabled` 权威状态 + 事件 + 运行中立刻停用/激活）；`scan_and_diff_plugins` 热插拔（目录即插件，内容 hash diff：新增自动加载激活 / 消失自动停用移除 / 变化置 needs_reload 不热生效）挂在运行时循环 tick；`reload_plugins`（清快照重扫全量重新加载激活）+ `pending_reloads()`；`hot_reload_manager.rs` 空壳落为薄封装。修一处静默失败：`load_plugin_from_dir` 此前不登记 `plugin_index`（热插拔 activate 会 not_found）。`cargo test -p rds-plugin` **224** 单测 + **79** 集成全绿（`tests/lifecycle.rs` **14 条**，含加载期完整性拒绝 + `supervisor_real_process.rs` 9 条等）。**面板已接**：安装 / 从目录 / 启停 / 卸载 / 变更后「重载 N」（2026-10-16）。**仍未接**：`request_credential` / `notify` / `ssh.open_tunnel` 仍 `Unsupported`；依赖检查在 DB 未初始化时保守放行 |
+| P4 前置 | 🟢 **生命周期已落地**（2026-10-15，VS Code 口径，方案见 §4.8.1–§4.8.3） | `supervisor::shutdown_plugin(id)`（只停一个插件全部实例，会话如实作废，双插件集成测试只停 A 不碰 B）；`deactivate_plugin` Sidecar 分支先停进程（卸载删目录的前提）；`uninstall_plugin`（依赖反向索引 `check_dependents` 拒绝被引用者 → 停用 → 删 `install_dir/<id>/` → `delete_plugin_by_code` 清 DB → 事件；**保留 plugin-data**；id 安全校验）；`enable_plugin` / `disable_plugin`（DB `is_enabled` 权威状态 + 事件 + 运行中立刻停用/激活）；`scan_and_diff_plugins` 热插拔（目录即插件，内容 hash diff：新增自动加载激活 / 消失自动停用移除 / 变化置 needs_reload 不热生效）挂在运行时循环 tick；`reload_plugins`（清快照重扫全量重新加载激活）+ `pending_reloads()`；`hot_reload_manager.rs` 空壳落为薄封装。修一处静默失败：`load_plugin_from_dir` 此前不登记 `plugin_index`（热插拔 activate 会 not_found）。`cargo test -p rds-plugin` **224** 单测 + **80** 集成全绿（`tests/lifecycle.rs` **15 条**，含加载期完整性拒绝、冲突拒绝后经「重试」恢复 + `supervisor_real_process.rs` 9 条等）。**面板已接**：安装 / 从目录 / 启停 / 卸载 / 错误行重试 / 变更后「重载 N」（2026-10-16）。**仍未接**：`request_credential` / `notify` / `ssh.open_tunnel` 仍 `Unsupported`；依赖检查在 DB 未初始化时保守放行 |
 | SSH 轨 | 🟢 **两刀已落地**（2026-10-15）：协议方法面 + 字节流帧 | **第一刀**：`sidecar/ssh.rs` 正向 `x.ssh.*` 五方法 + 参数/结果类型（connect 凭据走 SecretRef / exec 一次一答 / shell+forward 通道契约就绪 / close 幂等）；`x.` 私有前缀天然通过安装期声明校验（不污染协议命名空间）；与反向 `host.ssh.open_tunnel`（宿主是引擎）方向互补；10 条单测。**第二刀**：`KIND_STREAM=0x03` 承载 shell/forward 持续双向字节流——payload `[u16 BE 通道 id 长][channel_id][u8 flags(0=数据/1=EOF)][流数据]`，方向由发送者隐含，与 Arrow 附件正交可插队；`proto.rs` 新 kind + 构造器（通道 id 超 `u16::MAX` 拒绝）、`router.rs` 流事件 + `decode_stream_payload`（坏 payload=Issue）、`conn.rs` `write_stream`/`write_eof`（下行）+ 事件（上行）、`supervisor.rs` 事件泵按代透传、`runtime.rs` 显式分发（debug 只记元信息）。`cargo test -p rds-plugin` **183/183** 单测（supervisor 新增：事件泵透传带上下文、无 live 实例时流事件不外报）+ **75/75** 集成。**未接**：宿主侧消费（终端面板订阅流渲染 shell / 隧道面板订阅通道数据，P4；真实进程级流帧用例随宿主消费一起补，fixture 届时需支持发 `KIND_STREAM` 帧） |
 | 渲染计算轨 | 🟢 **render-document 第一刀已落地**（2026-10-15）；**wasm 第二刀可行性评估完成**（2026-10-16，结论：**可行**，详见 §11.3）；真实 wasm 资产未做 | `manifest.capabilities.wasm.render_document` 声明段（function 默认 `render` / formats / output_format 默认 `svg`）+ `render.rs` 服务（`renderer_for` 按格式选渲染器、`render_document` 调 wasm 插件收产物、`resolve_spec` 契约预览）；纯计算、无 host function 依赖（与 `allowed_host_functions` 正交）；6 条单测。`cargo test -p rds-plugin` **171/171** 单测 + **75/75** 集成。**未做**：真实 wasm 渲染资产（mermaid-rs-renderer 编 wasm，第二刀决策待用户拍板后动手）；宿主 UI 面板调用（P4） |
-| P4 | 🟡 **插件面板与安装链已落地**（2026-10-16）；**贡献点注册表模型已落地**（2026-10-16），宿主接线未开始 | 面板：列表 + 状态徽标 + 空态（`empty::Empty`）+ 安装包 / 从目录 / 刷新 / 重载 N / 启停 / 卸载；安装链：格式探测 → 解包 → 包根定位 → 清单 / 入口 / checksums 校验 → **必装依赖对账（缺依赖拒绝，旧插件仍在运行）** → 暂存目录整体换入 → 按 code 登记（依赖同事务落库）→ 失败恢复旧插件运行；**每次加载（含热插拔新增 / 扫描补登记）复核 `checksums.json`**。贡献点：`contributes::ContributionRegistry`（三张表合并 / 跨插件 id 冲突在第二个插件加载期拒绝并留错误行 / 清单期 id·位置·类型校验）+ `PluginManager::contributions()`（按插件 id 稳定排序）。**未开始**：`PanelRegistry` / `CommandRegistry` 接宿主 UI、设置外部登记项渲染、`project_resources` 对账、插件贡献图标 resolver |
+| P4 | 🟡 **插件面板与安装链已落地**（2026-10-16）；**贡献点注册表模型已落地**（2026-10-16），宿主接线未开始 | 面板：列表 + 状态徽标 + 空态（`empty::Empty`）+ 安装包 / 从目录 / 刷新 / 重载 N / 启停 / 卸载 / 错误行「重试」；安装链：格式探测 → 解包 → 包根定位 → 清单 / 入口 / checksums 校验 → **必装依赖对账（缺依赖拒绝，旧插件仍在运行）** → 暂存目录整体换入 → 按 code 登记（依赖同事务落库）→ 失败恢复旧插件运行；**每次加载（含热插拔新增 / 扫描补登记）复核 `checksums.json`**。贡献点：`contributes::ContributionRegistry`（三张表合并 / 跨插件 id 冲突在第二个插件加载期拒绝并留错误行 / 清单期 id·位置·类型校验）+ `PluginManager::contributions()`（按插件 id 稳定排序）、`retry_load_plugin`（失败行重试恢复）。**未开始**：`PanelRegistry` / `CommandRegistry` 接宿主 UI、设置外部登记项渲染、`project_resources` 对账、插件贡献图标 resolver |
 | P5 | ⬜ 未开始 | — |
 ### 11.2 P2.5 的落地清单
 

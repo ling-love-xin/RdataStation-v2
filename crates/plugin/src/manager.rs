@@ -855,6 +855,48 @@ impl PluginManager {
         Ok(())
     }
 
+    /// 重试加载一个失败插件（错误行上的「重试」入口）。
+    ///
+    /// 冲突拒绝发生在清单**没变**的情况下：即使冲突方后来被卸载，热插拔扫描也不会
+    /// 把它当「新增 / 变化」自动重试。这里给用户一个显式动作：重新解析清单、复核
+    /// checksums、再试建注册表；成功后按 DB 的启用状态决定是否激活，并清掉变更标记。
+    pub async fn retry_load_plugin(&self, id: &str) -> Result<LoadedPlugin, CoreError> {
+        validate_plugin_id(id).map_err(|e| {
+            CoreError::common(CommonError::Internal(format!(
+                "插件 id 不合法，无法重试: {id} ({e})"
+            )))
+        })?;
+        let plugin_dir = self.install_dir.join(id);
+        if !plugin_dir.is_dir() {
+            return Err(CoreError::common(CommonError::Internal(format!(
+                "插件目录不存在，无法重试: {}",
+                plugin_dir.display()
+            ))));
+        }
+
+        let loaded = self.load_plugin_from_dir(&plugin_dir).await?;
+        self.needs_reload
+            .write()
+            .map_err(|_| lock_err("needs_reload"))?
+            .retain(|plugin_id| plugin_id != id);
+
+        let enabled = match engine::migration::get_global_db_manager() {
+            Some(db) => match db.get_plugin_by_code(id).await {
+                Ok(Some(plugin)) => plugin.is_enabled,
+                Ok(None) => true,
+                Err(e) => {
+                    tracing::warn!(plugin_id = %id, error = %e, "重试读取插件登记失败，按启用处理");
+                    true
+                }
+            },
+            None => true,
+        };
+        if enabled {
+            self.activate_plugin(id).await?;
+        }
+        Ok(loaded)
+    }
+
     /// 启用插件（与 [`Self::disable_plugin`] 对称）：持久标记 + 若已加载则重新激活。
     pub async fn enable_plugin(&self, id: &str) -> Result<(), CoreError> {
         // 坏包只以错误行留在列表里，没有可激活的运行时；先拒绝并说清原因，
