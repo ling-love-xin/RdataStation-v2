@@ -2286,10 +2286,90 @@ straddle 5px 命中带宽）、光标 `cursor_col_resize`、`ResizeHandleState{I
 
 - **布局方向切换**（DBeaver `:1032 setOrientation`：网格下方 vs 右侧）：本仓右栏是
   `h_flex` 行内子元素，改上下结构要重排根 `v_flex` 与状态栏归属，另作一轮。
-- **比例持久化**（DBeaver `:1033 setWeights`）：列宽走的是 `persist_column_widths` +
-  session 通道，右栏宽度目前只在会话内有效，未进偏好项。
+- **比例持久化**：已做完，见 §8.45（全局偏好项 `result_panel.sidebar_width`，px 值）。
 - **双击复位默认宽度**：DBeaver 无此交互，暂不引入。
 - 手柄 3px / 5px 命中带宽、拖拽时右栏内容的换行与截断观感，仍需真窗口目视（当前不具备条件）。
+
+### 8.45 R5 第二步：右栏宽度持久化（对齐 DBeaver `panelRatio`）
+
+#### 8.45.1 DBeaver 侧事实（实读 `ResultSetViewer.java`）
+
+- `:1021` `int[] panelWeights = new int[]{700, 300};` —— 默认 7:3。
+- `:1023-1031` 有 `activePresentationDescriptor` 时读 `getPresentationSettings()`：
+  `:1027-1029` `if (settings.panelRatio > 0) panelWeights = new int[]{1000 - settings.panelRatio, settings.panelRatio};`；
+  `:1032` `setOrientation(...)`，`:1033` `viewerSash.setWeights(panelWeights)`。
+- `:382-389` `panelFolder.addListener(SWT.Resize, ...)` → `getPresentationSettings().panelRatio = weights[1];`
+  —— **只写内存 settings 对象，不落盘**。
+- `:1238-1248` `getPresentationSettings()`：按 `activePresentationDescriptor` 分组存 `presentationSettings` map。
+- `:1250-1268` `savePresentationSettings()`：把 map 写进 `IDialogSettings` 的
+  `SETTINGS_SECTION_PRESENTATIONS` 段（每 presentation 一子段：`enabledPanelIds` / `activePanelId` /
+  `panelRatio` / `panelsVisible` / `verticalLayout`）。
+- 调用点只有 5 处（`:1205` 在 `setActivePresentation` 内、`:1437`、`:1515`、`:1548` =
+  `toggleVerticalLayout()`、`:2335`）：**拖拽后不立即落盘**，靠展示类型切换 / 面板开关 / 方向切换时才写。
+
+结论：DBeaver 的 `panelRatio` = **千分比、表示右栏占比、按展示类型分组、跨结果集共用**；
+拖拽只改内存，落盘是「惰性」的（其它交互顺手保存）。
+
+#### 8.45.2 本仓方案与偏离
+
+采用 **全局偏好项 `result_panel.sidebar_width`（px，默认 320，范围 192~640）**：
+
+- 粒度：全局一份，不按展示类型分多份 —— 本仓 `Presentation` 与 DBeaver 的
+  presentation descriptor 不是一一对应（本仓一个面板内同时有网格/文本/值详情等多页），
+  按类型分份需要先定义映射，属未决项（登记在 8.45.5）。
+- 单位：px 而非千分比 —— 本仓右栏是绝对宽度的 `h_flex` 子元素（`right_sidebar_width: Pixels`），
+  存 px 可省去「÷ 父宽」的换算依赖（父宽在拖拽期其实就是窗口宽，但恢复时不可靠）。
+- 落盘时机：比 DBeaver 更早 —— **松手即写**（DBeaver 是惰性写）。本仓没有「展示类型切换」这个用户动作
+  的稳定对应点，惰性写会让拖完的宽度在重启后丢失。
+
+#### 8.45.3 落点（10 个文件）
+
+| 层 | 文件 | 改动 |
+| --- | --- | --- |
+| settings | `model/result_panel.rs` | `sidebar_width: i64` + `Default` 初值 + `default_result_sidebar_width()` |
+| settings | `registry/entries/result_panel.rs` | `result_panel.sidebar_width` 条目（Number / 布局组 / 预设 192·320·480·640） |
+| settings | `registry/mod.rs` | `Slot::ResultPanelSidebarWidth` + key 映射 + `KindTag::Number` |
+| settings | `service/mod.rs` | 读值分支 `SettingValue::Number(...)` |
+| settings | `service/result_panel.rs` | `apply_slot` 分支（越界 return false，不静默夹取）+ 公开 setter |
+| 面板 | `ports.rs` | `ResultRequest::EndResizeRightSidebar`（无载荷，`Eq` 安全） |
+| 面板 | `panel/events.rs` | `end_right_sidebar_resize() -> Option<Pixels>` / `set_right_sidebar_width_px()` |
+| 面板 | `panel/render.rs` | 根元素 `.when(dragging, on_mouse_up(→ EndResizeRightSidebar))` |
+| 宿主 | `results/dispatch.rs` | 分支：取回宽度 → `SettingsService::set_result_panel_sidebar_width` |
+| 宿主 | `view/host/construct.rs` | 构造面板后把偏好项注入 `set_right_sidebar_width_px` |
+
+关键做法：
+
+- **松手信号**走「面板根 `on_mouse_up`」而非 `window.on_mouse_event`：后者要求
+  `debug_assert_paint()`（只在 paint 期成立），在 `Render::render` 内注册窗口级监听
+  在 headless 测试里不稳；`on_mouse_up` 走正常冒泡，且只在 `right_sidebar_dragging` 为真时挂
+  （`.when` 门控），拖拽结束后自动摘除，不产生常驻窗口级监听。
+- **初值注入**复用 `clamp_right_sidebar_width(px(w), 0.)`（`dx = 0` 时它等价于「夹取当前值」），
+  不在面板里再写一份上下限比较。
+- **setter 幂等**：与现值相同直接 return，避免拖拽结束的无谓写盘。
+
+#### 8.45.4 本轮踩到的环境事故（勿重复踩）
+
+1. **D 盘被 target 占满（0 字节空闲）导致 `Edit` 把文件写空**：`crates/settings/src/service/result_panel.rs`
+   与并行线的 `docs/architecture/editor/editor-backlog.md` 都变成 0 字节（`git diff --numstat`
+   显示 `0 338` / `0 1048`）。处置：`git checkout -- <路径>` 复原并重做本线改动；随后全仓扫
+   0 字节文件（命中只剩 `.gitkeep`、`docs/tmp/*.log`、`tools/_archive/r31_*.log`、`.delta` 嵌套仓库旧文件）。
+   → 写盘前先看 `Get-PSDrive -Name D` 剩余空间。
+2. **`RUST_MIN_STACK=268435456` 会让冷编译崩**：该变量同样作用于 rustc 的编译线程栈，
+   冷编 `windows` crate 时多线程各申请 256MB → `STATUS_STACK_BUFFER_OVERRUN (0xc0000409)`。
+   **编译命令不要带这个大栈设置**（它本是给 gpui 测试进程用的）；实测去掉后
+   `cargo check -p rds-settings` 一次通过（4m51s，0 error / 0 warning）。
+3. **并行线 `cargo clean` / `cargo test` 会与本线抢同一个 `target` 锁**：表现为
+   `Blocking waiting for file lock`、`could not parse/generate dep info ... os error 3`。
+   处置：先等 `cargo.exe` 进程清零再起本线的门禁，不要并发跑。
+4. 另一条：`Edit` 的 `old_string` 末尾带换行而 `new_string` 不带时，会把两行拼成一行
+   （`toggle_left_sidebar` 的签名与首句曾被拼在一起）；改完立刻回读该处确认。
+
+#### 8.45.5 本轮未做 / 待定
+
+- **按展示类型分组**（DBeaver 语义原样）：需先定义本仓 `Presentation` ↔ descriptor 映射，用户未表态。
+- **布局方向切换**（`:1032 setOrientation`）：见 8.44.5，仍未开工。
+- **双击手柄复位默认宽度**：DBeaver 无此交互，暂不引入。
+- 重启后宽度复现、拖拽落盘时机的手感，仍需真窗口目视。
 
 ## 8. 协作纪律
 

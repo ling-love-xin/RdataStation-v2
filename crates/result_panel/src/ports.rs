@@ -113,6 +113,9 @@ pub enum ResultRequest {
     /// 面板按「宽度 - dx」更新并 clamp 到 ui 的上下限；纯视图状态，不落盘。
     /// 取整像素（`ResultRequest` 需要 `Eq`，故不携带 `f32`）。
     ResizeRightSidebar(i32),
+    /// 【R5 比例持久化】拖拽结束定稿：宿主把面板当前右栏宽度写进全局偏好项
+    /// （`result_panel.sidebar_width`）。拖拽过程只改内存宽度，落盘只在这一刻做一次。
+    EndResizeRightSidebar,
     /// 左栏列浏览器清单行眼睛：切换该列隐藏 / 显示（宿主 update 网格 + 面板）
     ToggleColumnVisibility(usize),
     /// 【P2-3】列浏览器多选批量显隐：把 `columns`（数据列序）整批设为隐藏 / 显示

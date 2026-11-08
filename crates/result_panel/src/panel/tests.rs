@@ -146,6 +146,46 @@ fn resize_handle_mounts_only_when_the_sidebar_is_expanded(cx: &mut gpui_kit::Tes
     assert!(handle_present(vcx), "回到宽展开后手柄应重新挂载");
 }
 
+/// 【R5 比例持久化】偏好项注入宽度：按拖拽路径同一套上下限夹取（超界不静默放过）
+#[gpui_kit::test]
+fn sidebar_width_pref_is_injected_and_clamped(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, vcx) = panel_harness(cx);
+    vcx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            let min = px(crate::ui::RESULT_SIDEBAR_RIGHT_MIN_WIDTH * 16.0);
+            let max = px(crate::ui::RESULT_SIDEBAR_RIGHT_MAX_WIDTH * 16.0);
+            // 常态值（默认 320）原样落位
+            p.set_right_sidebar_width_px(320.0, cx);
+            assert_eq!(p.right_sidebar_width, px(320.));
+            // 低于下限 / 高于上限：夹到边界（复用 `clamp_right_sidebar_width`）
+            p.set_right_sidebar_width_px(100.0, cx);
+            assert_eq!(p.right_sidebar_width, min);
+            p.set_right_sidebar_width_px(9999.0, cx);
+            assert_eq!(p.right_sidebar_width, max);
+        });
+    });
+}
+
+/// 【R5 比例持久化】松手才交宽度：非拖拽态返回 `None`（点了下手柄不该触发写盘）
+#[gpui_kit::test]
+fn end_resize_reports_width_only_while_dragging(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, vcx) = panel_harness(cx);
+    vcx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            // 初始非拖拽：不交宽度
+            assert_eq!(p.end_right_sidebar_resize(cx), None);
+            // 向右拖 40px（默认 320 → 280），松手回传夹取后的宽度并清标记
+            p.resize_right_sidebar(40.0, cx);
+            assert_eq!(p.end_right_sidebar_resize(cx), Some(px(280.)));
+            assert!(!p.right_sidebar_dragging, "松手后应清拖拽标记");
+            // 再松一次：已是非拖拽态，不重复交宽度
+            assert_eq!(p.end_right_sidebar_resize(cx), None);
+        });
+    });
+}
+
 /// 右侧开关三态循环：收起 → 窄展开 → 宽展开 → 收起；每次点击恰好在三态间轮转
 #[test]
 fn right_edge_state_cycles_through_three_states() {

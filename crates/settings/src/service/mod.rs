@@ -172,6 +172,10 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResultPanelPersistColumnWidths => {
             SettingValue::Bool(settings.result_panel.persist_column_widths)
         }
+        // 【R5】结果集右栏宽度（px）
+        Slot::ResultPanelSidebarWidth => {
+            SettingValue::Number(settings.result_panel.sidebar_width as f64)
+        }
         // 【类型样式】13 项枚举：落盘值 → 设置页显示
         Slot::ResultPanelNumberFormat => {
             SettingValue::Text(settings.result_panel.number_format.as_str().to_string())
@@ -378,6 +382,7 @@ impl SettingsService {
             | Slot::ResultPanelShowTypeBadge
             | Slot::ResultPanelLoopSelection
             | Slot::ResultPanelSelectOnModifierClick
+            | Slot::ResultPanelSidebarWidth
             | Slot::ResultPanelPersistColumnWidths
             | Slot::ResultPanelNumberFormat
             | Slot::ResultPanelNullPlaceholder

@@ -165,6 +165,19 @@ impl EditorHostPanel {
             ResultRequest::ResizeRightSidebar(dx) => self
                 .result_panel
                 .update(cx, |p, cx| p.resize_right_sidebar(dx as f32, cx)),
+            // 【R5 比例持久化】松手定稿：面板交回当前宽度（像素），写进全局偏好项
+            // `result_panel.sidebar_width`（DBeaver 的 `panelRatio` 对应项，本仓按 px 存）。
+            ResultRequest::EndResizeRightSidebar => {
+                let width = self
+                    .result_panel
+                    .update(cx, |p, cx| p.end_right_sidebar_resize(cx));
+                if let Some(width) = width {
+                    settings::SettingsService::set_result_panel_sidebar_width(
+                        width.as_f32(),
+                        cx,
+                    );
+                }
+            }
             // 【侧栏】清单行眼睛：切换该列隐藏 / 显示（网格是另一实体，
             // update 它安全；面板再 notify 重画列浏览器的隐藏标记）
             ResultRequest::ToggleColumnVisibility(column) => {

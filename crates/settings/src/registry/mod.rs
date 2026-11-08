@@ -206,6 +206,8 @@ pub enum Slot {
     ResultPanelSelectOnModifierClick,
     /// 列宽是否跨会话持久化（关闭则只在当前会话内记忆）。
     ResultPanelPersistColumnWidths,
+    /// 【R5 对齐 DBeaver `setWeights`】结果集右栏（页签侧栏）宽度（px，192~640）。
+    ResultPanelSidebarWidth,
     /// 【类型样式】数字显示格式（raw / grouped / fixed2 / scientific）。
     ResultPanelNumberFormat,
     /// 【类型样式】NULL 显示占位（null / emptyset / dash）。
@@ -317,6 +319,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "result_panel.loop_selection" => Slot::ResultPanelLoopSelection,
         "result_panel.select_on_modifier_click" => Slot::ResultPanelSelectOnModifierClick,
         "result_panel.persist_column_widths" => Slot::ResultPanelPersistColumnWidths,
+        "result_panel.sidebar_width" => Slot::ResultPanelSidebarWidth,
         "result_panel.number_format" => Slot::ResultPanelNumberFormat,
         "result_panel.null_placeholder" => Slot::ResultPanelNullPlaceholder,
         "result_panel.bool_display" => Slot::ResultPanelBoolDisplay,
@@ -420,6 +423,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         | Slot::ResultPanelLoopSelection
         | Slot::ResultPanelSelectOnModifierClick
         | Slot::ResultPanelPersistColumnWidths => KindTag::Bool,
+        Slot::ResultPanelSidebarWidth => KindTag::Number,
         // 【类型样式】23 项全是枚举（设置页下拉）。
         Slot::ResultPanelNumberFormat
         | Slot::ResultPanelNullPlaceholder

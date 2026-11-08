@@ -717,12 +717,34 @@ R3 / R4 / R5。
 `resize_handle_mounts_only_when_the_sidebar_is_expanded`）/ guard **4** / shell **14** passed；
 `cargo check -p rds-editor` 通过。
 
-**仍未做**：布局方向切换（DBeaver `setOrientation`，网格下方 vs 右侧）；比例持久化
-（`setWeights`，本仓无偏好项）；双击复位；手柄命中带宽与拖拽手感的真窗口目视。
+**仍未做**：布局方向切换（DBeaver `setOrientation`，网格下方 vs 右侧）；双击复位；
+手柄命中带宽与拖拽手感的真窗口目视。（比例持久化已在 §2.35 落地）
 
 **关于 `theme-tokens-complete.md`**：本批（P0/P1/P3/R1/R2/R3/R5）**不需要**写进那份文档——
 它的职责是色板与「尺寸常量单一来源」守门，而本批未改任何色值；R5 新增的两个尺寸常量只在
 `result_panel/src/ui.rs` 单处定义（`shared_constants_do_not_diverge` 仍 4 passed，无分叉）。
+
+### 2.35 R5 第二步「比例持久化」（代码已落，待编译验证）
+
+口径：全局偏好项 `result_panel.sidebar_width`（px，默认 320，范围 192~640），
+与 DBeaver 的 `panelRatio`（千分比 / 按展示类型分组 / 惰性落盘）有意偏离，理由写在
+`result-panel.md §8.45.2`。**落盘时机取「松手即写」**，不是 DBeaver 的惰性写 —— 本仓没有
+「展示类型切换」的稳定对应动作，惰性写会让重启丢宽度。
+
+代码面共 10 文件：settings 5（model / entries / registry mod / service mod / service result_panel）、
+面板 3（`ports.rs` 加 `EndResizeRightSidebar`、`panel/events.rs` 加
+`end_right_sidebar_resize() -> Option<Pixels>` 与 `set_right_sidebar_width_px()`、
+`panel/render.rs` 根元素 `.when(dragging, on_mouse_up → EndResizeRightSidebar)`）、
+宿主 2（`results/dispatch.rs` 分支落盘、`view/host/construct.rs` 构造后注入初值）。
+
+**验证现状（如实）**：`cargo check -p rds-settings` 已通过（4m51s，0 error / 0 warning）；
+`rds-result-panel` / `rds-editor` 的 check 与三处门禁（panel 252 / guard 4 / shell 14）
+**尚未跑**，也未提交。
+
+**环境坑（两次编译失败的真因）**：`RUST_MIN_STACK=268435456` 同样作用于 rustc 编译线程，
+冷编 `windows` crate 会 `STATUS_STACK_BUFFER_OVERRUN`；**编译命令不要带它**（只在跑 gpui 测试时设）。
+另：D 盘曾被 target 占满（0 空闲）导致 `Edit` 把两个文件写成 0 字节（`settings/src/service/result_panel.rs`
+与并行线 `editor-backlog.md`），已 `git checkout` 复原；写盘前先查 D 盘剩余。
 
 ---
 

@@ -1067,12 +1067,23 @@ impl ResultPanel {
             .into_any_element()
         });
 
+        // 【R5 比例持久化】松手落盘点：拖拽期 `right_sidebar_dragging` 为真，
+        // 此时 mouse_up 冒泡到面板根 → 入队 `EndResizeRightSidebar`，由宿主把
+        // 当前宽度写进全局偏好项（拖拽过程中改的只是内存宽度，不写盘）。
+        let end_resize_queue = self.queue.clone();
+        let resizing_right_sidebar = self.right_sidebar_dragging;
         div()
             .v_flex()
             .w_full()
             .h_full()
             .min_h_0()
             .debug_selector(|| "editor-result-root".to_string())
+            .when(resizing_right_sidebar, |el| {
+                // 手柄拖拽只由左键发起，所以松手也只听左键
+                el.on_mouse_up(MouseButton::Left, move |_, _window, app| {
+                    end_resize_queue.request(ResultRequest::EndResizeRightSidebar, app);
+                })
+            })
             // 第一行：结果集标签条（跨全宽；含 C1 重命名条）
             .children(tabs)
             // 第二行：工具栏（跨全宽）

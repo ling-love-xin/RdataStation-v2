@@ -311,6 +311,26 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【R5 比例持久化】松手定稿：清拖拽标记并交回当前宽度（像素），由宿主写全局偏好项。
+    /// 返回 `None` = 本次不在拖拽（例如只是点了一下手柄），不需要落盘。
+    pub fn end_right_sidebar_resize(&mut self, cx: &mut Context<Self>) -> Option<Pixels> {
+        if !self.right_sidebar_dragging {
+            return None;
+        }
+        self.right_sidebar_dragging = false;
+        cx.notify();
+        Some(self.right_sidebar_width)
+    }
+
+    /// 【R5 比例持久化】初值注入：面板构造后由宿主把全局偏好项（px）写进来。
+    /// 复用 `clamp_right_sidebar_width`（`dx = 0` 时它就是"夹取当前值"），
+    /// 保证与拖拽路径同一套上下限，不在这里再写一份常量比较。
+    pub fn set_right_sidebar_width_px(&mut self, width_px: f32, cx: &mut Context<Self>) {
+        self.right_sidebar_width =
+            super::sidebars::clamp_right_sidebar_width(px(width_px), 0.);
+        cx.notify();
+    }
+
     /// 【侧栏】左侧栏（网格 / 文本 / 记录竖条）开关：只翻面板状态（网格数据不动）；
     /// epoch 递增同上
     pub fn toggle_left_sidebar(&mut self, cx: &mut Context<Self>) {

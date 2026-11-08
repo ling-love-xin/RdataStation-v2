@@ -176,6 +176,34 @@ pub fn entries() -> Vec<SettingSpec> {
             disabled: false,
         },
         SettingSpec {
+            // 【R5 对齐 DBeaver `viewerSash.setWeights`】右栏（页签侧栏）宽度：
+            // DBeaver 的 `panelRatio` 按展示类型存千分比、跨结果集共用（`ResultSetViewer.java:1021-1033`
+            // / `:1250-1268`）；本仓右栏是行内固定宽元素，改存 px（差异与理由见 model 注释）。
+            key: "result_panel.sidebar_width",
+            section: "result_panel",
+            section_label: "结果集面板",
+            group: "layout",
+            group_label: Some("布局"),
+            label: "右栏宽度",
+            hint: "结果集右栏（列浏览器 / 值详情 / 计算 / 分组…）的宽度，可拖右侧分栏手柄调整；\
+                 拖完自动记在这里，下次启动沿用",
+            hint_inline: true,
+            kind: SettingKind::Number,
+            presets: &[
+                (192, "192px（最窄）"),
+                (320, "320px（默认）"),
+                (480, "480px"),
+                (640, "640px（最宽）"),
+            ],
+            default_json: "320",
+            effect: SettingEffect::NextUse,
+            entry: SettingEntry::Page,
+            consumer: "crates/result_panel/src/panel/sidebars.rs::set_right_sidebar_width_px（初值注入）\
+                      / crates/editor/src/view/host/results/dispatch.rs::EndResizeRightSidebar（拖完写回）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
             key: "result_panel.align_numeric",
             section: "result_panel",
             section_label: "结果集面板",

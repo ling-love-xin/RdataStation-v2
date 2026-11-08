@@ -79,6 +79,21 @@ pub(crate) fn apply_slot(
             }
             persist(&cx.global::<Settings>().clone());
         }
+        Slot::ResultPanelSidebarWidth => {
+            // 【R5】右栏宽度：数值项，超出 192~640 直接拒绝（不静默夹取 ——
+            // 手柄拖拽路径自己夹，设置页手填则按登记范围报错）。
+            let Some(n) = value.as_number() else {
+                return false;
+            };
+            if !(192.0..=640.0).contains(&n) {
+                return false;
+            }
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.result_panel.sidebar_width = n as i64;
+            }
+            persist(&cx.global::<Settings>().clone());
+        }
         Slot::ResultPanelNumberFormat => {
             let Some(text) = value.as_text() else {
                 return false;
@@ -335,4 +350,23 @@ pub(crate) fn apply_slot(
         _ => return false,
     }
     true
+}
+
+impl crate::service::SettingsService {
+    /// 【R5】写结果集右栏宽度（px）：手柄拖完由宿主落盘。
+    ///
+    /// 夹取到 `192..=640`（与面板侧 `RESULT_SIDEBAR_RIGHT_MIN_WIDTH` /
+    /// `MAX_WIDTH` 同范围）；与现值相同则不写盘，避免拖拽结束时无谓 IO。
+    pub fn set_result_panel_sidebar_width(px: f32, cx: &mut App) {
+        let px = (px.round() as i64).clamp(192, 640);
+        if cx.global::<Settings>().result_panel.sidebar_width == px {
+            return;
+        }
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.result_panel.sidebar_width = px;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
 }

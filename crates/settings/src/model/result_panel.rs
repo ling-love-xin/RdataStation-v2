@@ -26,6 +26,17 @@ pub struct ResultPanel {
     /// 【DBeaver 对齐】列宽是否跨会话持久化（关闭则只在当前会话内记忆）。
     #[serde(default = "default_true")]
     pub persist_column_widths: bool,
+    /// 【R5 对齐 DBeaver `viewerSash.setWeights`】结果集右栏（页签侧栏）宽度，单位 px
+    /// （基准字号 16px 下的像素；实际按界面字号同比例缩放）。
+    ///
+    /// 语义边界（实证见 `docs/architecture/editor/result-panel.md` §8.45）：
+    /// - DBeaver 存的是**千分比** `panelRatio`（面板占整行的千分之几，默认 300），
+    ///   按展示类型（presentation）分段、跨结果集共用；
+    /// - 本仓右栏是行内固定宽元素（R5 第一步口径），没有「按行宽测比例」的设施，
+    ///   故存**像素**而不是比例 —— 窗口变宽时右栏宽度不跟着变，这是已知差异；
+    /// - 作用域与 DBeaver 一致：**全局一份**（跨结果集 / 跨文档共用），不随会话快照落库。
+    #[serde(default = "default_result_sidebar_width")]
+    pub sidebar_width: i64,
     /// 【类型样式】数字显示格式（默认原始值；只影响渲染显示，复制 / 导出仍用原始值）。
     #[serde(default)]
     pub number_format: workbench_shell::result_style::NumberFormatPref,
@@ -90,6 +101,8 @@ impl Default for ResultPanel {
             loop_selection: true,
             select_on_modifier_click: true,
             persist_column_widths: true,
+            // 右栏宽度出厂值 = `result_panel::ui::RESULT_SIDEBAR_RIGHT_WIDTH`（20rem @16px）
+            sidebar_width: default_result_sidebar_width(),
             // 类型样式默认全继承 / 原始值（与渲染现状逐项一致）
             number_format: workbench_shell::result_style::NumberFormatPref::Raw,
             null_placeholder: workbench_shell::result_style::NullPlaceholderPref::Null,
@@ -204,4 +217,10 @@ impl FactStoragePref {
 
 fn default_result_fact_storage() -> FactStoragePref {
     FactStoragePref::Auto
+}
+
+/// 结果集右栏宽度出厂值：320px（= `result_panel::ui::RESULT_SIDEBAR_RIGHT_WIDTH` 的
+/// 20rem 在基准字号 16px 下的像素值；常量在那一侧单处定义，此处只写数值并保持一致）。
+fn default_result_sidebar_width() -> i64 {
+    320
 }

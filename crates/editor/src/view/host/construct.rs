@@ -176,12 +176,17 @@ impl EditorHostPanel {
                 //（try_global 的借用与 `cx` 可变借用冲突 → E0502，2026-10-28 修复）。
                 let on = settings.result_panel.show_column_comments;
                 let type_style = settings.result_panel.type_style();
+                // 【R5 比例持久化】右栏宽度初值（px）：必须与上面两项一起**先拷贝**，
+                // 最后一行再读 `settings` 会把借用拉到块末，与下面的 `&mut cx` 冲突（E0502）。
+                let sidebar_width = settings.result_panel.sidebar_width;
                 if on {
                     panel.set_show_column_comments(true, cx);
                 }
                 // 【类型样式】全局偏好启动同步（数字格式 / NULL 占位 / 布尔映射 / 按族对齐与前景色）；
                 // 设置页后续变更走 `apply_result_style`（workbench 钩子）即时生效
                 panel.set_type_style(type_style, cx);
+                // 用户上次拖到的右栏宽度在此复用（面板内按 ui 上下限夹取）
+                panel.set_right_sidebar_width_px(sidebar_width as f32, cx);
             }
             panel
         });
