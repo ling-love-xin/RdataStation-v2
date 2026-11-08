@@ -263,7 +263,7 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 | 优先级 | 项 | 缺在哪一段 | 证据 |
 | --- | --- | --- | --- |
 | **高** | **折叠候选的后台路径不吃 `editor.fold_open_keywords` / `fold_close_keywords`** | 生产者：`Job` 无关键字字段，`run()` 写死默认表 | ✅ **本轮已修，见 15.4**。原证据：`support/scan.rs:88-97`（`Job{revision,text,channel,scope,catalog,dialect}`）、`support/scan.rs:236-242`（硬编码 `CASE,BEGIN,IF,LOOP,WHILE,FOR,REPEAT` / `END`）；消费在 `view/host/exec/pump.rs:98-105`（`fold::refresh` 覆盖候选）。前台正确口径：`view/host/render.rs:49-55`（设置→shared）+ `view/host/ops.rs:420-431`（`sync_fold`→`fold::install`）。**原后果**：改设置后首帧正确，编辑一次即被后台候选覆盖回默认关键字（设置静默失效） |
-| 高 | 右键菜单无 SQL 执行项 | 宿主消费分支：`menu_entries` 无执行条目 | `view/editor_menu.rs:63-110`（剪切/复制/粘贴/全选/添加书签说明/转到定义/代码操作） |
+| 高 | 右键菜单无 SQL 执行项 | 宿主消费分支：`menu_entries` 无执行条目 | ✅ **本轮已修**，见 15.5。原证据：`view/editor_menu.rs:63-110`（只有剪切/复制/粘贴/全选/添加书签说明/转到定义/代码操作） |
 | 中 | 书签行号漂移不校正 | 回放：sidecar 行号不随编辑平移 | `view/host/bookmarks.rs:61` |
 | 中 | 分析模式逐单元补全未装 provider | 装配：cell 编辑器只建实例不装 provider | `view/host/notebook.rs:44-49`（`EditorState::new(..).language(..)` + `set_value`，无 completion / diagnostics）；`completion::install` 仅两处主编辑器（`view/host/mod.rs:633`、`view/host/session.rs:498`） |
 | 中 | 标签方案 B（结构化 `tags`）/ C（全局 Tag System） | 数据层：现只有 A「说明即标签」 | §十二 |
@@ -318,3 +318,20 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 gpui-pre 0.3.11 起 `text_system()` 返回 `&Arc<WindowTextSystem>` → E0308，必须改 `Arc::as_ptr`。
 
 **未做（有意）**：前台/后台候选双算的合并（会改候选刷新时机，等折叠区人工验收完再动），见 15.3 第 1 条。
+
+### 15.5 本轮已修（续）：右键菜单执行项（15.1 第 2 条）
+
+**改法**（`crates/editor` 内 3 文件）：
+
+- `view/editor_menu.rs`：新增 `MenuExec`（`Hidden` / `Ready` / `Unavailable`）——内核
+  `EditorState` 不知道文档模式，执行项能力位不能从内核读，改由宿主判定后传进纯函数；
+  `menu_entries` 在组首插入「执行」（`ExecuteSql`）与「执行全部」（`ExecuteAll`）。
+- `view/host/editor_body.rs`：`exec = 能力表允许通信 ? (通道就绪 ? Ready : Unavailable) : Hidden`；
+  通道未就绪时**保留项但置灰**（灰的原因由状态栏与执行提示解释，不在菜单里猜）。
+- `view/analysis.rs`：分析单元显式传 `Hidden` —— 单元运行走笔记本自己的入口，不接主执行链。
+
+用例 3 条：`sql_document_offers_execute_items_before_edit_items` /
+`unready_channel_keeps_execute_items_visible_but_greyed` / `plain_text_editor_has_no_execute_items`。
+
+验证：`cargo check -p rds-editor --all-targets -j 1` → 0；`view::editor_menu` → 8 passed；
+`rds-editor --lib` → 761 passed / 2 failed / 1 ignored（仍只有那两条基线失败）。
