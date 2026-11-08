@@ -53,3 +53,25 @@ fn default_layout_left_sidebar_width() -> i64 {
 fn default_layout_right_sidebar_width() -> i64 {
     (ui::RIGHT_DOCK_WIDTH * ui::BASE_FONT_SIZE) as i64
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 起步宽同源守卫：默认值必须等于 `ui::*_DOCK_WIDTH × ui::BASE_FONT_SIZE`。
+    ///
+    /// `registry::tests::registered_defaults_match_the_model` 只比对「登记表 default_json ↔ model
+    /// 默认值」，两边一起漂（例如都改回 250 / 300）时它拦不住；而首帧 render 的「设置值 → Dock」
+    /// 同步会按 `font_size/16` 缩放并覆盖启动宽（`view.rs:3120-3141`），两值不同就在首帧静默缩水。
+    #[test]
+    fn sidebar_width_defaults_stay_in_sync_with_dock_startup_width() {
+        let expected_left = (ui::LEFT_DOCK_WIDTH * ui::BASE_FONT_SIZE) as i64;
+        let expected_right = (ui::RIGHT_DOCK_WIDTH * ui::BASE_FONT_SIZE) as i64;
+        assert_eq!(default_layout_left_sidebar_width(), expected_left);
+        assert_eq!(default_layout_right_sidebar_width(), expected_right);
+        // 结构体默认（serde 缺段兜底走的是同一对函数，这里一并锁住）
+        let d = Layout::default();
+        assert_eq!(d.left_sidebar_width, expected_left);
+        assert_eq!(d.right_sidebar_width, expected_right);
+    }
+}
