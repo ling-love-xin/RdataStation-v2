@@ -50,9 +50,9 @@ pub fn is_enabled(mode: EditorMode) -> bool {
 /// 候选 → 内核形状（纯函数，可逐条断言）
 ///
 /// 内核 `FoldRange{start, end}` 的语义是"首行与末行都可见、只藏 `[start+1, end-1]`"
-/// （`display_map/fold_map.rs::rebuild`）。为了让结构块（`(`…`)`、`CASE`…`END`、多行注释）
-/// 收起时**末行一起收起来**，末行由 [`fold::kernel_end_line`] 按候选来源决定是否让给内核：
-/// 结构块传 `end + 1`（内核因此藏到真实末行），缩进块照传 `end`（最后一条内容行保持可见）。
+/// （`display_map/fold_map.rs::rebuild`），所以 `end` 统一由 [`fold::kernel_end_line`]
+/// 加一：折叠后**只留首行**，末行（`)` / `END` / 缩进块最后一条内容行）一起收起，
+/// 与 VS Code 一致。
 ///
 /// `FoldRange::new` 对 `start_line <= end_line` 有断言，而 [`fold::spans`] 保证
 /// `start_line < end_line`——转换这一层是唯一把两者接起来的窄口。
@@ -129,7 +129,7 @@ mod tests {
     }
 
     #[test]
-    fn kernel_ranges_tuck_the_closing_line_of_a_structural_block() {
+    fn kernel_ranges_tuck_the_closing_line_of_a_block() {
         let open = vec!["CASE".to_string(), "BEGIN".to_string()];
         let close = vec!["END".to_string()];
         // 结构语义（括号折叠）：关闭缩进折叠，只留括号候选
@@ -137,22 +137,22 @@ mod tests {
         assert_eq!(spans.len(), 1);
         let kernel = to_kernel(spans);
         assert_eq!(kernel.len(), 1);
-        // 真实末行是第 2 行的 `)`；下发给内核的是 3，于是内核藏 [1, 2]，`(` 与 `)` 都收起
+        // 真实末行是第 2 行的 `)`；下发给内核的是 3，于是内核藏 [1, 2]，只剩 `SELECT (` 可见
         assert_eq!((kernel[0].start_line, kernel[0].end_line), (0, 3));
     }
 
     #[test]
-    fn kernel_ranges_keep_the_last_content_line_of_an_indent_block() {
+    fn kernel_ranges_also_tuck_the_last_content_line_of_an_indent_block() {
         let open: Vec<String> = vec![];
         let close: Vec<String> = vec![];
-        // 缩进折叠：末行是内容行，按原语义下发，内核保留它可见
+        // 缩进折叠同样收末行：`a`、`b` 都藏，折完只剩 `SELECT`（对齐 VS Code）
         let spans = fold::spans("SELECT\n  a,\n  b\nFROM t", true, &open, &close);
         let kernel = to_kernel(spans);
         let range = kernel
             .iter()
             .find(|range| range.start_line == 0)
             .expect("SELECT 行应有缩进候选");
-        assert_eq!(range.end_line, 2);
+        assert_eq!(range.end_line, 3);
     }
 
     #[test]

@@ -7,7 +7,7 @@ use gpui_kit::component::Root;
 use gpui_kit::component::dock::{BasePanel as _, DockPlacement, DockSkin, Panel as _};
 use gpui_kit::{AppContext as _, Entity, Focusable as _, TestAppContext};
 
-use crate::fold::{FoldKind, FoldSpan, spans as fold_spans};
+use crate::fold::{FoldSpan, spans as fold_spans};
 use crate::model::{DocumentId, EditorMode};
 use crate::service::OpenRequest;
 use crate::shared::EditorShared;
@@ -382,7 +382,6 @@ fn folding_candidates_are_fed_after_the_gutter_restored(cx: &mut TestAppContext)
         [FoldSpan {
             start_line: 0,
             end_line: 3,
-            kind: FoldKind::Structural,
         }],
         "文本本身仍有可折行块（`fold_spans` 是纯文本分析，与开关无关）"
     );
