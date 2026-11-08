@@ -3248,7 +3248,7 @@ fn the_result_toolbar_keeps_the_tabs_height(cx: &mut gpui_kit::TestAppContext) {
         .expect("工具栏应有 debug 几何（没渲染出来时这里为空）");
     let height = bar.size.height.as_f32();
     assert!(
-        (height - 32.0).abs() < 0.5,
-        "工具栏高应为 32px（24px 控件 + Toolbar `p_1` 上下 8px，与标签条同档），实得 {height}"
+        (height - 30.0).abs() < 0.5,
+        "工具栏高应为 30px（DBeaver `3 + 2 + 20 + 2 + 3`；本仓 20px 控件 + 24px 筛选区 + 上下各 3px），实得 {height}"
     );
 }

@@ -209,8 +209,11 @@ impl ResultPanel {
         // `COLOR_LIST_BACKGROUND`，`UIStyles.java:131-133`），而外层面板是 widget 灰底；
         // 本仓即 `theme.colors.background`（面板白）压在工具栏的 `tab_bar` 灰底上。
         //
-        // 高度不写死：`Input.small()` 24px + 上下各 1px 边框 = 26px，落在 32px 工具栏里
-        // 居中 → 上下各 3px，正好等于 DBeaver 的 `marginHeight = 3`。
+        // 高度对齐 DBeaver：`Input.xsmall()` 20px（`Size::input_h` 的 `h_5`）+
+        // 上下 1px 边框 + 上下各 1px 内距 = 24px，落在 30px 工具栏里上下各 3px。
+        // DBeaver 那边是 `filterComposite marginHeight 2 + MIN_FILTER_TEXT_HEIGHT 20
+        // + marginHeight 2` = 24px，外层 `marginHeight 3`（`ResultSetFilterPanel.java:103/164/175`）
+        // → 总高 30px，与本仓逐段相等。
         //
         // 宽度 `flex_1`：DBeaver 左列是 `GridData(FILL_HORIZONTAL)`（`:180`），右列 ToolBar
         // 才是内容宽；此前固定 11.25rem(180px) 撑不满一行，看着"没对齐"。
@@ -229,6 +232,11 @@ impl ResultPanel {
             .bg(theme.colors.background)
             .border_1()
             .border_color(theme.colors.input)
+            // 内距 1px：DBeaver 的 `filterComposite` 有 `marginHeight/marginWidth = 2`
+            // （`ResultSetFilterPanel.java:175-176`），它那圈框线是 `paintControl` 画的、
+            // 不占布局，所以「框到内容」的留白只有那 2px。本仓边框是布局里的 1px，
+            // 再补 1px 内距才等价于它的 2px，总量 24px 才对得上。
+            .p(ui::HAIRLINE)
             .debug_selector(|| "editor-result-filter".to_string())
             .when(!self.filter_expanded, |row| {
                 let run_queue = self.queue.clone();
@@ -238,17 +246,23 @@ impl ResultPanel {
                         // 上下只剩 4px，且与同排 `Toolbar` XSmall 的 24px 按钮差 8px 高。
                         // 降到 `small`（24px）后一行控件同档；字号随之 12px → 14px（更好读）。
                         //
+                        // 【DBeaver 对齐 2026-11-08 三次】档位 Small → XSmall：
+                        // DBeaver 筛选文本控件被 `MIN_FILTER_TEXT_HEIGHT = 20` 钉在 20px
+                        // （`ResultSetFilterPanel.java:103`），本仓 Small 档是 24px，
+                        // 高出一档；XSmall 的 `input_h` 正是 `h_5` = 20px，
+                        // 与 DBeaver 逐像素相等。
+                        //
                         // 【DBeaver 对齐】`appearance(false)` 让出 bg / rounded / 焦点环：
                         // 那圈边框现在由外层容器画（DBeaver 内部文本框本身无边框），
                         // 否则两层描边会叠成双框。焦点靠 caret 指示，与 DBeaver 的
                         // StyledText 一致（它那圈框也不随 focus 变色）。
                         Input::new(&self.filter_input)
-                            .small()
+                            .xsmall()
                             .appearance(false)
                             .suffix(
                                 Button::new("editor-result-filter-run")
                                     .ghost()
-                                    .small()
+                                    .xsmall()
                                     .icon(IconName::Play)
                                     .debug_selector(|| "editor-result-filter-run".to_string())
                                     .tooltip(
@@ -265,7 +279,7 @@ impl ResultPanel {
                 let expand_queue = self.queue.clone();
                 Button::new("editor-result-filter-expand")
                     .ghost()
-                    .small()
+                    .xsmall()
                     .icon(IconName::Maximize2)
                     .toggled(self.filter_expanded)
                     .debug_selector(|| "editor-result-filter-expand".to_string())
@@ -285,7 +299,7 @@ impl ResultPanel {
                     row.child(
                         Button::new("editor-result-filter-clear")
                             .ghost()
-                            .small()
+                            .xsmall()
                             .debug_selector(|| "editor-result-filter-clear".to_string())
                             .label("✕")
                             .on_click(move |_, _window, app| {
@@ -306,7 +320,7 @@ impl ResultPanel {
             let checked = self.pushdown;
             Button::new("editor-result-pushdown")
                 .ghost()
-                .small()
+                .xsmall()
                 .toggled(checked)
                 .icon(IconName::DatabaseZap)
                 .tooltip("下发源库：开着时应用筛选会拼 WHERE 重查源库")
@@ -322,7 +336,7 @@ impl ResultPanel {
             let checked = self.show_column_comments;
             Button::new("editor-result-show-comments")
                 .ghost()
-                .small()
+                .xsmall()
                 .toggled(checked)
                 .icon(IconName::FileText)
                 .tooltip("显示列注释（列头第二行）")
@@ -346,7 +360,7 @@ impl ResultPanel {
             let queue = self.queue.clone();
             Button::new("editor-result-compare")
                 .ghost()
-                .small()
+                .xsmall()
                 .toggled(self.compare_mode)
                 .icon(IconName::Columns2)
                 .tooltip("并排对比")
@@ -367,7 +381,7 @@ impl ResultPanel {
             let pending = self.pending_changes;
             let commit_btn = Button::new("editor-result-commit")
                 .ghost()
-                .small()
+                .xsmall()
                 .debug_selector(|| "editor-result-commit".to_string())
                 .disabled(submitting)
                 .icon(IconName::Save)
@@ -378,7 +392,7 @@ impl ResultPanel {
             let queue = self.queue.clone();
             let discard = Button::new("editor-result-discard")
                 .ghost()
-                .small()
+                .xsmall()
                 .debug_selector(|| "editor-result-discard".to_string())
                 .icon(IconName::RotateCcw)
                 .tooltip("撤销全部未提交变更（回滚本地改动）")
@@ -404,7 +418,7 @@ impl ResultPanel {
             let queue = self.queue.clone();
             Button::new("editor-result-copy")
                 .ghost()
-                .small()
+                .xsmall()
                 .debug_selector(|| "editor-result-copy".to_string())
                 .icon(IconName::Copy)
                 .tooltip("复制整份结果为 TSV（含表头）")
@@ -417,7 +431,7 @@ impl ResultPanel {
             let queue = self.queue.clone();
             Button::new("editor-result-refresh")
                 .ghost()
-                .small()
+                .xsmall()
                 .debug_selector(|| "editor-result-refresh".to_string())
                 .label("⟳ 刷新")
                 .on_click(move |_, _window, app| {
@@ -654,11 +668,11 @@ impl ResultPanel {
             let queue = self.queue.clone();
             let items = self.analysis_items.clone();
             DropdownButton::new("editor-result-analysis")
-                .small()
+                .xsmall()
                 .button(
                     Button::new("editor-result-analysis-btn")
                         .ghost()
-                        .small()
+                        .xsmall()
                         .debug_selector(|| "editor-result-analysis".to_string())
                         .icon(IconName::Sigma)
                         .tooltip("分析当前结果（对已抓行跑聚合）"),

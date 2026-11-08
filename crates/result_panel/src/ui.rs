@@ -57,7 +57,14 @@ pub const RESULT_STATUS_BAR_HEIGHT: f32 = 1.5;
 /// 于是 40px 里多出的 8px 是 Input 降档后没回收的空白（上下各 4px），观感上工具栏
 /// 比标签条"虚胖"。收回 32px 后与 [`RESULT_TABS_HEIGHT`] 等高，标签条 + 工具栏连成
 /// 一条整齐的 chrome 带（DBeaver 这两块同高、同 widget 底色）。
-pub const RESULT_TOOLBAR_HEIGHT: f32 = 2.0;
+/// 工具栏高 30px。DBeaver `ResultSetFilterPanel` 没有总高常量，但它由四圈 margin
+/// 加上一个**明确的 20px 行高**撑出来：外层 `marginHeight = 3`（`:164`）×2 +
+/// `filterComposite` 的 `marginHeight = 2`（`:175`）×2 + `MIN_FILTER_TEXT_HEIGHT = 20`
+/// （`:103`，同时也是展开 / 执行 / 历史三个面板的 `heightHint`，见 `:1067/:1304/:1351`）
+/// = 30px。本仓控件取同一 20px 档（`Input::xsmall()` / `Button::xsmall()`，见
+/// `vendor/gpui-component/src/sizing.rs:281-289` 的 `h_5`），容器 1px 边框 + 1px 内距
+/// 得 24px，在 30px 里上下各 3px，与 DBeaver 的 `3 + 2 + 20 + 2 + 3` 逐段相等。
+pub const RESULT_TOOLBAR_HEIGHT: f32 = 1.875;
 
 /// 结果工具栏水平内距（3px）
 ///

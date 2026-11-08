@@ -646,13 +646,15 @@ impl ResultPanel {
                     // 输入框无边框（bordered(false)，与工具栏融为搜索条风格）。
                     Input::new(&self.filter_input)
                         .bordered(false)
-                        // 【2026-11-08】与工具栏筛选框同档（24px）：展开条原先 32px + py_1
-                        // = 40px 高，回到工具栏 36px 时高度会跳一下；同档后两处一致。
-                        .small()
+                        // 【2026-11-08】与工具栏筛选框同档：展开条原先 32px + py_1 = 40px 高，
+                        // 回到工具栏时高度会跳一下；两处必须同档。
+                        // 【2026-11-08 三次】工具栏那边降到 XSmall 20px（对齐 DBeaver 的
+                        // `MIN_FILTER_TEXT_HEIGHT`，`ResultSetFilterPanel.java:103`），这里跟随。
+                        .xsmall()
                         .prefix(
                             Button::new("editor-result-filter-expand-toggle")
                                 .ghost()
-                                .small()
+                                .xsmall()
                                 .icon(IconName::Maximize2)
                                 .debug_selector(|| "editor-result-filter-expand-toggle".to_string())
                                 .tooltip("收起筛选条（回到工具栏输入框）")
@@ -663,7 +665,7 @@ impl ResultPanel {
                         .suffix(
                             Button::new("editor-result-filter-expand-run")
                                 .ghost()
-                                .small()
+                                .xsmall()
                                 .icon(IconName::Play)
                                 .debug_selector(|| "editor-result-filter-expand-run".to_string())
                                 .tooltip("用 select * from (原SQL) where 词 重查（替换当前结果集）")
@@ -677,7 +679,7 @@ impl ResultPanel {
                 row.child(
                     Button::new("editor-result-filter-expand-clear")
                         .ghost()
-                        .small()
+                        .xsmall()
                         .debug_selector(|| "editor-result-filter-expand-clear".to_string())
                         .label("✕ 清除")
                         .on_click(move |_, _window, app| {
@@ -689,7 +691,7 @@ impl ResultPanel {
             .child(
                 Button::new("editor-result-filter-expand-collapse")
                     .ghost()
-                    .small()
+                    .xsmall()
                     .icon(IconName::Minimize)
                     .debug_selector(|| "editor-result-filter-expand-collapse".to_string())
                     .label("收起")

@@ -281,10 +281,12 @@ pub fn render_toolbar(
         .gap_2()
         // 水平内距 3px（`ui::RESULT_TOOLBAR_PADDING`）：DBeaver 的筛选条面板 `marginWidth = 3`
         // （`ResultSetFilterPanel.java:163-166`），此前 `px_2`(8px) 宽了 5px。垂直方向不加，
-        // 由「32px 行高居中 26px 筛选区」自然形成 3px（见 `ui.rs` 常量注释）。
+        // 由「30px 行高居中 24px 筛选区」自然形成 3px（见 `ui.rs` 常量注释）。
         .px(ui::RESULT_TOOLBAR_PADDING)
-        // 高度 32px（`ui::RESULT_TOOLBAR_HEIGHT`）= 右段 24px 控件 + Toolbar 的 `p_1` 上下
-        // 8px，即**内容自然高**；同时与标签条（`ui::RESULT_TABS_HEIGHT`）等高。
+        // 高度 30px（`ui::RESULT_TOOLBAR_HEIGHT`）= DBeaver 的 `3 + 2 + 20 + 2 + 3` 逐段相等：
+        // 右段控件 20px（XSmall 档，`sizing.rs:281-289` 的 `h_5`）+ 筛选区 24px
+        // （20 + 边框 1px 与内距 1px 各两道）。**不再与标签条（32px）等高**，
+        // 这是 DBeaver 的原生关系：筛选条比它上方的 TabFolder 矮。
         //
         // 【DBeaver 对齐 2026-11-08】底色铺 `tab_bar`：DBeaver 的筛选条与上方 TabFolder
         // 同属「非活动标签 / widget」背景档（`UIStyles.getDefaultWidgetBackground()`，
@@ -295,8 +297,8 @@ pub fn render_toolbar(
         // 面板背景（白），与标签条之间断开一层，观感上「没对齐」。
         //
         // 注意：编辑行被虚拟列表裁剪会丢 Input 焦点链（`cell_edit_esc` 曾因此回归），
-        // 再压缩工具栏之前必须先量网格实际剩余高度；本次 40→32 回收的是 Input 降档后
-        // 多出的空白（控件本身一个像素没动），网格可用高度反而 +8px。
+        // 再压缩工具栏之前必须先量网格实际剩余高度；40→32→30 三次回收的都是控件降档
+        // 让出的空白（容器边距与控件间距未动），网格可用高度反而增加。
         .h(rems(ui::RESULT_TOOLBAR_HEIGHT))
         .flex_none()
         .bg(theme.colors.tab_bar)
@@ -323,15 +325,15 @@ pub fn render_toolbar(
         )
         .child(
             // 右段：纯按钮序列 → Toolbar 组件（统一容器 + a11y 语义；contents 槽收
-            // AnyElement，按钮保留 ghost/small 外观；顺序照原型 §2.4 右段：
+            // AnyElement，按钮统一 ghost/xsmall 档（与筛选区同为 20px）；顺序照原型 §2.4 右段：
             // ⌕ 筛选（左段）· 下发源库 / 注释（图标 toggle）· ⧉ 对比 · 提交/撤销 ·
             // Σ 分析 ▾ · 复制；导出 ▾ / ⟳ 刷新已移状态栏系统段）
             //
             // 【DBeaver 对齐 2026-11-08】组间补一条竖分隔线：DBeaver 的筛选条用
             // `UIUtils.createToolBarSeparator`（`ResultSetFilterPanel.java:354`）把
             // 「筛选/开关」与「其它动作」分开，视觉上不靠间距硬撑。这里同样只用
-            // 1px 线（`ui::HAIRLINE`）+ 24px 高（两端各留 8px，比撑满 40px 更接近
-            // DBeaver 的观感）；只有两组都非空时才插，避免空段留一条孤线。
+            // 1px 线（`ui::HAIRLINE`）+ 24px 高（在 30px 行里上下各留 3px，比撑满
+            // 更接近 DBeaver 的观感）；只有两组都非空时才插，避免空段留一条孤线。
             Toolbar::new("editor-result-toolbar-actions")
                 .xsmall()
                 // 【DBeaver 对齐 2026-11-08】组件 XSmall 档自带 `p_1`（上下左右各 8px，见
@@ -339,7 +341,8 @@ pub fn render_toolbar(
                 // 面板边缘变成 11px，DBeaver 只有 3px（`ResultSetFilterPanel.java:165`
                 // 的 `marginWidth = 3`，右列 ToolBar 本身没有内边距）。
                 // `refine_style` 在 `p_1` 之后执行（`toolbar.rs:253-257`），外部 `.p_0()`
-                // 的 `padding: Some(..)` 会覆盖它；高度由 `min_h_7`(28) 托底，图标仍 24px 居中。
+                // 的 `padding: Some(..)` 会覆盖它；高度由 `min_h_7`(28) 托底（30px 行里放得下），
+                // 按钮本身 20px 居中。
                 .p_0()
                 .contents({
                     let mut contents: Vec<AnyElement> = [pushdown, comments]
