@@ -737,9 +737,10 @@ R3 / R4 / R5。
 `panel/render.rs` 根元素 `.when(dragging, on_mouse_up → EndResizeRightSidebar)`）、
 宿主 2（`results/dispatch.rs` 分支落盘、`view/host/construct.rs` 构造后注入初值）。
 
-**验证现状（如实）**：`cargo check -p rds-settings` 已通过（4m51s，0 error / 0 warning）；
-`rds-result-panel` / `rds-editor` 的 check 与三处门禁（panel 252 / guard 4 / shell 14）
-**尚未跑**，也未提交。
+**验证**：`cargo check -p rds-settings` / `-p rds-result-panel` / `-p rds-editor` 三条均通过；
+门禁 panel **254**（原 252 + 2：`sidebar_width_pref_is_injected_and_clamped` /
+`end_resize_reports_width_only_while_dragging`）/ settings **35** / shell **14** / guard **4** 全绿。
+已提交 `065cbb7d`（13 files +288/−4）。
 
 **环境坑（两次编译失败的真因）**：`RUST_MIN_STACK=268435456` 同样作用于 rustc 编译线程，
 冷编 `windows` crate 会 `STATUS_STACK_BUFFER_OVERRUN`；**编译命令不要带它**（只在跑 gpui 测试时设）。

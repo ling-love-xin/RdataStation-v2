@@ -2364,7 +2364,20 @@ straddle 5px 命中带宽）、光标 `cursor_col_resize`、`ResizeHandleState{I
 4. 另一条：`Edit` 的 `old_string` 末尾带换行而 `new_string` 不带时，会把两行拼成一行
    （`toggle_left_sidebar` 的签名与首句曾被拼在一起）；改完立刻回读该处确认。
 
-#### 8.45.5 本轮未做 / 待定
+#### 8.45.5 验证
+
+- `cargo check -p rds-settings`（4m51s，0 error / 0 warning）/ `-p rds-result-panel` / `-p rds-editor` 均通过。
+- 门禁：panel **254**（252 + 2）、settings **35**、workbench_shell **14**、ui_guard **4** 全绿。
+  两条新测是纯逻辑断言：`sidebar_width_pref_is_injected_and_clamped`（注入 320 原样落位、
+  100→192、9999→640）、`end_resize_reports_width_only_while_dragging`（非拖拽 None、
+  拖 40px 后松手 `Some(280)`、再松一次仍 None）。
+- settings 侧不另加单测：新条目的形态/预设/默认值与字段映射已由 `registry/mod.rs`
+  既有的四条契约测试（`every_registered_key_has_a_matching_slot` /
+  `page_rows_are_scalar_and_writable` / `number_presets_are_consistent` /
+  `default_value_follows_the_declared_kind`）自动覆盖（本次 35 条全过）。
+- **尚未做的验收**：真窗口重启后宽度复现、拖拽落盘时机的手感。
+
+#### 8.45.6 本轮未做 / 待定
 
 - **按展示类型分组**（DBeaver 语义原样）：需先定义本仓 `Presentation` ↔ descriptor 映射，用户未表态。
 - **布局方向切换**（`:1032 setOrientation`）：见 8.44.5，仍未开工。
