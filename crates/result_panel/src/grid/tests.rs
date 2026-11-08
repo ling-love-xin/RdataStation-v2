@@ -3015,6 +3015,13 @@ fn header_main_row_keeps_a_readable_height(cx: &mut gpui_kit::TestAppContext) {
     let main = vcx
         .debug_bounds("editor-result-th-main-1")
         .expect("表头主行应有 debug 几何（表格没渲染出来时这里为空）");
+
+    // 表头带的下边线挂在 `render_header` 的 hook 上（本仓唯一一处给表头加边框的地方）。
+    // 组件若不调用这个 hook，边框会静默缺失而与「组件没这入口」分不清——先坐实它跑了。
+    assert!(
+        vcx.debug_bounds("editor-result-header-band").is_some(),
+        "表头容器 hook 没被调用：DBeaver 的表头分隔线不会落地"
+    );
     assert!(
         main.size.height >= gpui_kit::px(14.),
         "表头主行被挤扁，列名会被裁掉：main={:?}",

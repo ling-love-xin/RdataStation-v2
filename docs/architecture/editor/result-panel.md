@@ -1786,9 +1786,8 @@ token（`theme/schema.rs:601-603`，回退链 `table_head ← tokens.list_head`�
 ——这条是纯配置值，几何不受影响）。
 
 **仍未做（如实登记）**：表头与网格之间的分隔线仍由组件按 `table.row.border`（`#E1E1E1` /
-`#3C3C3C33`）画，而 DBeaver 的 `header.border` 是 `COLOR_WIDGET_DARK_SHADOW`（明显更深，`plugin.xml:1261`），
-这条未对齐也**未取证到外部覆盖入口**（表头行边框在 `table/state.rs` 内部，`TableDelegate` 只有
-`render_th` 的内容槽），本轮不动。
+`#3C3C3C33`）画，而 DBeaver 的 `header.border` 是 `COLOR_WIDGET_DARK_SHADOW`（明显更深，`plugin.xml:1258`）。
+**该判断里的「无外部覆盖入口」当场被推翻**——入口是 `TableDelegate::render_header`，见 §8.37（同轮接上）。
 
 #### 8.36.1 补记：DBeaver 结果集「选中色 / 表头色 / 网格线」的消费点已取证（2026-11-08）
 
@@ -1816,6 +1815,53 @@ token（`theme/schema.rs:601-603`，回退链 `table_head ← tokens.list_head`�
 都已确认真的参与结果集渲染，但本仓它们画在 vendor `DataTable` 内部（表头行底色 / 行边框 / 单元格边框），
 `TableDelegate` 只暴露 `render_th` / `render_td` 的**内容槽**，没有覆盖这些颜色的入口 —— 要接必须改 vendor，
 本轮不动，继续作为未对齐项登记。
+
+### 8.37 表头分隔线对齐 DBeaver `header.border`（2026-11-08）
+
+§8.36 把表头底收回 chrome 档（`#F8F8F8`）之后，表头与网格白（`#FFFFFF`）只差 7/255 —— **底色本身已经不
+足以分层**。DBeaver 的分层是两条叠加：表头 widget 底 **＋** 一条明显更深的分隔线（`header.border` =
+`COLOR_WIDGET_DARK_SHADOW`，`plugin.xml:1258`）。本轮补的正是这条线。
+
+**入口（此前误判为「无」，本轮修正）**：
+
+| 事实 | 出处 |
+| --- | --- |
+| 组件只给**数据行**画下边（`border_b_1` + `table_row_border`） | vendor `table/state.rs:2274-2276` |
+| 表头行只有铺底 + 文字色，自身没有边框 | `table/state.rs:2059-2069` |
+| 组件先铺默认样式，再 `.refine_style(&style)` 重放 delegate 返回元素的样式快照 | `table/state.rs:2056` / `:2069` |
+| `TableDelegate::render_header` 返回 `Stateful<Div>`，默认实现是空壳 `div().id("header")` | `table/delegate.rs:64-70` |
+
+即：**delegate 在 `render_header` 里给的边框会被重放到最上层**。之前只看 `render_th`（内容槽）就下了
+「无入口」的结论，是取证面不够。
+
+**落地**（`crates/result_panel/src/grid/table_impl.rs`，`TableDelegate for ResultGridDelegate`）：
+
+```rust
+fn render_header(&mut self, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> Stateful<Div> {
+    div()
+        .id("editor-result-header-band")
+        .debug_selector(|| "editor-result-header-band".to_string())   // 哨兵，见下
+        .border_b(ui::HAIRLINE)
+        .border_color(cx.theme().colors.border)
+}
+```
+
+- **色取 `colors.border`**（`#D4D4D4` / `#3C3C3C`），不是 `table.row.border`（`#E1E1E1`）：表头线必须比行底线
+  深一档才有分隔作用。本仓没有 `COLOR_WIDGET_DARK_SHADOW` 这个语义面，`border` 是唯一正确的描边槽；
+  要更接近 DBeaver 的强度需要新增语义槽（**未做**，属主题契约层改动）。
+- **不会叠线**：数据行只画下边、表头自身无边框，表头下方原本就是断开的。
+- **表头带高不变**（单行 26px / 双行 40px）；1px 边框从内容区里吃，单行表头主行 18 → **17px**，仍落在既有
+  断言的 `>= 14` / `<= 22` 区间内。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **242 passed / 0 failed**；
+`cargo test -p rds-ui-guard` = **4 passed**；`cargo test -p rds-workbench-shell --lib` = **14 passed**。
+新增哨兵断言在既有 `grid::tests::header_main_row_keeps_a_readable_height` 里：必须能取到
+`editor-result-header-band` 的几何 —— 组件不调用这个 hook 时边框会**静默缺失**，与「组件没这个入口」
+无法区分，所以先把 hook 真在跑钉住。
+
+**仍未接（入口确实不存在）**：`header.selected.background`（表头选中列底色）画在 `render_col_wrap`
+（`state.rs:1606`），`lines.normal` / `lines.selected`（**每格**网格线）画在单元格包装层 —— 两处都在组件内部，
+`TableDelegate` 没有对应槽，要接必须改 vendor。
 
 ## 8. 协作纪律
 

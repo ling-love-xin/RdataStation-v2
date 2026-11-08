@@ -519,6 +519,35 @@ ui-guard **4 passed**（用例数与基线一致，纯配置值不动几何）�
 `COLOR_WIDGET_DARK_SHADOW`（更深，`plugin.xml:1261`）——表头行边框在 `table/state.rs` 内部，
 `TableDelegate` 只有 `render_th` 内容槽，**未取证到外部覆盖入口**，登记未做。
 
+### 2.28 2026-11-08（表头分隔线：`render_header` 这个入口找到了）
+
+§2.27 里「表头线没有外部入口」那条**当场被推翻**：`TableDelegate::render_header`
+（`vendor table/delegate.rs:64-70`，默认空壳 `div().id("header")`）返回的 `Stateful<Div>`
+会被组件 `.refine_style(&style)` 重放到默认样式**之后**（`table/state.rs:2056` 取快照 / `:2069` 重放），
+所以 delegate 给的 `border_b` 能落地。之前只看 `render_th`（内容槽）就判「无入口」，取证面不够。
+
+**改动**（`crates/result_panel/src/grid/table_impl.rs`）：
+
+```rust
+fn render_header(...) -> Stateful<Div> {
+    div().id("editor-result-header-band")
+        .debug_selector(|| "editor-result-header-band".to_string())
+        .border_b(ui::HAIRLINE)
+        .border_color(cx.theme().colors.border)
+}
+```
+
+- 色取 `colors.border`（`#D4D4D4` / `#3C3C3C`）而非 `table.row.border`（`#E1E1E1`）：表头线必须比行底线深一档；
+  本仓无 `COLOR_WIDGET_DARK_SHADOW` 语义面，要更强须新增槽（未做）
+- 不叠线：数据行只画下边（`state.rs:2274-2276`）、表头自身无边框
+- 表头带高不变；1px 从内容区吃，单行主行 18 → 17px，仍在既有 `>=14 / <=22` 断言区间
+
+**验证**：result_panel **242 passed**（哨兵断言钉住 hook 真在跑——不跑时边框静默缺失，与「没入口」分不清）、
+ui-guard **4 passed**、workbench-shell **14 passed**。
+
+**仍未接**：`header.selected.background`（`state.rs:1606` `render_col_wrap`）与 `lines.normal`/`lines.selected`
+（每格网格线，单元格包装层）——组件内部绘制，`TableDelegate` 无槽，要接必须改 vendor。
+
 ---
 
 

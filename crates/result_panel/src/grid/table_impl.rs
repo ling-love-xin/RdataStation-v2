@@ -72,6 +72,31 @@ impl TableDelegate for ResultGridDelegate {
         }
     }
 
+    /// 表头行容器：补一条下边线（对齐 DBeaver `header.border`）
+    ///
+    /// DBeaver 结果集的表头与数据区之间有一条 `resultset.color.header.border` 画的分隔线
+    /// （默认 `COLOR_WIDGET_DARK_SHADOW`，比每行的 `lines.normal`(240,240,240) 深得多，
+    /// `plugin.xml:1258`）；本仓组件只给**数据行**画下边（vendor `table/state.rs:2274-2276`），
+    /// 表头行自身只有铺底 + 文字色、没有边框（`:2059-2069`），所以表头底部原本是断开的。
+    ///
+    /// 为什么这里能改：组件先铺默认样式，再 `.refine_style(&style)` 重放 delegate 返回元素的
+    /// 样式快照（`table/state.rs:2056` 取快照、`:2069` 重放），故 delegate 给的边框落在最上层。
+    /// 取 `colors.border`（不是 `table.row.border`）：表头线要比行底线深一档才起到分隔作用，
+    /// 而本仓没有 `COLOR_WIDGET_DARK_SHADOW` 这个语义面，`border` 是唯一正确的描边槽。
+    fn render_header(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> Stateful<Div> {
+        div()
+            .id("editor-result-header-band")
+            // 回归哨兵：边框宽度在 headless 下读不到，只能坐实「这个 hook 真被组件调用了」
+            //（不被调用时边框静默缺失，与「组件没这入口」无法区分）
+            .debug_selector(|| "editor-result-header-band".to_string())
+            .border_b(ui::HAIRLINE)
+            .border_color(cx.theme().colors.border)
+    }
+
     /// 表头单元格（转发到 [`crate::grid::header::render_th`]）
     fn render_th(
         &mut self,
