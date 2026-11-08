@@ -7,7 +7,7 @@ use crate::grid::cell::{
 };
 use crate::grid::header::header_tooltip_lines;
 use crate::grid::stats::fmt_stat_num;
-use crate::grid::status::format_integer_cell;
+use crate::grid::status::{format_integer_cell, render_toolbar};
 use crate::grid::status::{FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION};
 use crate::grid::text::{cell_matches, find_in_cell, preview_of};
 use crate::grid::view_rows::compare_cells;
@@ -3199,5 +3199,49 @@ fn header_column_menu_floats_and_leaves_the_name_its_full_width(
         "列名没有铺满主行，流里还有别的占宽元素：main={:?} name={:?}",
         main.size.width,
         name.size.width
+    );
+}
+
+/// 只为把工具栏真正渲染进窗口的探针视图（几何必须来自真实布局）
+struct ToolbarHarness;
+
+impl gpui_kit::Render for ToolbarHarness {
+    fn render(
+        &mut self,
+        _window: &mut gpui_kit::Window,
+        cx: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        // 走生产路径：左右两段都留空，量的就是容器自己写死的高与底色
+        render_toolbar(None, None, None, None, None, None, None, None, cx)
+    }
+}
+
+/// 【工具栏高度 2026-11-08】工具栏高 = 标签条高 = 2rem/32px，两块连成一条 chrome 带。
+///
+/// 旧值 40px 的来历：筛选框 `Input` 还是 Medium 档（`h_8` 32px）+ Toolbar `p_1` 上下
+/// 8px = 40；`Input` 降到 `.small()`（24px）后这 8px 没回收，工具栏比标签条虚胖一圈
+/// （用户实拍指出「工具栏没对齐 DBeaver，背景、高度等等」）。
+///
+/// 断言写**绝对值 32**（默认主题字号 16px 下的 `rems(2.0)`）而不是「等于 tabs 常量」：
+/// 两个常量一旦有人各自改档，绝对值这条先红。
+#[gpui_kit::test]
+fn the_result_toolbar_keeps_the_tabs_height(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (_, vcx) = cx.add_window_view(|_window, _cx| ToolbarHarness);
+
+    // 首帧只排位置，几何第二帧才稳定（配 retained 渲染内核尤其）
+    for _ in 0..2 {
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+    }
+
+    let bar = vcx
+        .debug_bounds("editor-result-toolbar")
+        .expect("工具栏应有 debug 几何（没渲染出来时这里为空）");
+    let height = bar.size.height.as_f32();
+    assert!(
+        (height - 32.0).abs() < 0.5,
+        "工具栏高应为 32px（24px 控件 + Toolbar `p_1` 上下 8px，与标签条同档），实得 {height}"
     );
 }

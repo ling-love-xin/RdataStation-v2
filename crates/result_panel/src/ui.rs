@@ -39,14 +39,25 @@ pub const RESULT_STATUS_BAR_HEIGHT: f32 = 1.5;
 
 /// 结果区工具栏高（2.5rem = 40px）
 ///
-/// 2026-10-28 工具栏迁 `Toolbar` 组件后独立成档：Toolbar XSmall = `min_h_7`(28px) +
-/// `p_1`(8px) = 36px，24px 状态栏档放不下，当时给 36px。
+/// 2026-10-28 工具栏迁 `Toolbar` 组件后独立成档：当时按「`min_h_7`(28px) + `p_1`(8px)」
+/// 算成 36px 给档。
 ///
-/// 2026-11-08 抬到 40px：36px **正好等于 Toolbar 自身最小高**，上下零余量（筛选框
-/// `Input` 当时还是默认 Medium 档 = `h_8` 32px，在 36px 里只剩上下各 2px，视觉上顶满
-/// 边框）。40px + 筛选框降到 `small`(24px) 后，一行控件同档、上下各 8px 余量。
-/// 结果区默认高 `RESULT_PANE_HEIGHT` = 20rem（320px），这 4px 不影响网格可容纳行数。
-pub const RESULT_TOOLBAR_HEIGHT: f32 = 2.5;
+/// 2026-11-08 抬到 40px：筛选框 `Input` 当时还是默认 Medium 档（`h_8` = 32px），
+/// 32 + Toolbar 的 `p_1` 上下 8px = 40，故定 40px。
+///
+/// **2026-11-08 收回到 32px（对齐 DBeaver）**：上面两个算术都不对，真实高度是
+/// **由内容撑出来的**——
+/// - `Toolbar` XSmall 是 `min_h_7`(28) + `p_1`(4px 全向)（vendor `toolbar.rs:253`），
+///   `min_h` 是**最小总高**不是内容高，所以它不是 36；
+/// - 右段所有控件（`Button` / `DropdownButton` 的 `.small()`）真实高 24px
+///   （vendor `button.rs:688-700`：图标按钮 `size_6`、带文字 `h_6`），加 `p_1` 上下
+///   8px → 自然高 **32px**；
+/// - 筛选框 `Input` 已降到 `.small()`（24px），不再需要 Medium 档那 8px。
+///
+/// 于是 40px 里多出的 8px 是 Input 降档后没回收的空白（上下各 4px），观感上工具栏
+/// 比标签条"虚胖"。收回 32px 后与 [`RESULT_TABS_HEIGHT`] 等高，标签条 + 工具栏连成
+/// 一条整齐的 chrome 带（DBeaver 这两块同高、同 widget 底色）。
+pub const RESULT_TOOLBAR_HEIGHT: f32 = 2.0;
 
 /// 结果集标签条高（2rem = 32px）
 ///

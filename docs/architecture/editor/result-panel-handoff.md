@@ -365,7 +365,7 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 | 右段按钮 | `提交变更 (N)` / `撤销变更` / `复制` / `⚗ 分析` 带文字 | 纯图标 + tooltip：`Save`（计数进 tooltip）/ `RotateCcw` / `Copy` / `Sigma`；对比保持 `Columns2` |
 | 两个开关 | `Switch`「下发源库」「注释」 | `.ghost().small().toggled(..).icon(..).tooltip(..)`（`DatabaseZap` / `FileText`）。`Button::on_click` 不给新值 → 闭包捕获当前 bool 取反；请求载荷（`SetPushdown` / `SetShowColumnComments`）不变 |
 | 分组 | 只有 `gap` | 两组之间 1px 竖线 `w(ui::HAIRLINE).h(rems(1.5)).bg(theme.colors.border)`，**两组都非空才插**。不用 `separator::Separator::vertical()`：它渲染成 `absolute().h_full()`（`separator.rs:80-84`），进 `Toolbar::contents` 流式槽会定位到外层祖先 |
-| 高度 | 40px（§8.28） | **不动**（用户已验收；压缩会碰「虚拟列表裁剪丢 Input 焦点链」那条风险） |
+| 高度 | 40px（§8.28） | **不动**（用户已验收；压缩会碰「虚拟列表裁剪丢 Input 焦点链」那条风险）——**该前提已被 §2.25 推翻**（用户实拍指出高度也没对齐，40 → 32px 且补 `tab_bar` 底，控件本身未动） |
 
 功能与摆放条件一律不变：SQL 预览仍最左（保留 `SQL: <前 60 字>` 文字——它是信息位不是按钮标签）；
 对比仍 `tabs.len() >= 2`、提交/撤销仍 `pending_changes > 0`（提交中置灰）、分析仍 `analysis_items` 非空。
@@ -433,6 +433,38 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 **未验证（需真窗口）**：`#EBF5FF` 斑马底在深色行底线间的观感；脏格 `#FFE4B5` 与本地行 `#E4FFB5`
 相邻时会不会糊；冲突格 `#FF80FF` 全饱和洋红实色铺底是否刺眼（DBeaver 原值如此，未降饱和）。
 
+### 2.25 2026-11-08（工具栏背景 + 高度对齐 DBeaver：40px → 32px，补 `tab_bar` 底）
+
+用户实拍：「结果集的工具栏似乎没有对齐 dbeaver，如背景、高度等等」——**推翻 §2.23 里「高度 40px
+不动」的前提**。
+
+**两个根因**：
+
+1. **背景**：`render_toolbar` 整条没有 `.bg()`，底色靠父容器透传（面板背景 = 白）。而 DBeaver 的
+   筛选条与上方 TabFolder 同属「非活动标签 / widget」背景档（`UIStyles.getDefaultWidgetBackground()`
+   → 主题 `INACTIVE_TAB_BG_START`，回退系统 `COLOR_WIDGET_BACKGROUND`；`UIStyles.java:122-129`），
+   网格才是列表底白（`getDefaultTextBackground()` → `COLOR_LIST_BACKGROUND`；`:131-133`）。
+   结果：我们标签条（`#F8F8F8`）与工具栏（白）断层，DBeaver 是连续一条。
+2. **高度**：40px 的来历是「筛选框 `Input` 还是 Medium 档 `h_8`(32) + `Toolbar` 的 `p_1` 上下 8」。
+   `Input` 已降到 `.small()`(24)，那 8px 没回收。
+
+顺带纠正文档里流传的错算术「Toolbar XSmall = `min_h_7`(28) + `p_1`(8) = 36px」：`min_h_7` 是
+**最小总高**约束（vendor `toolbar.rs:253`），右段控件真实高 24px（vendor `button.rs:688-700`），
+加 `p_1` 8px → **自然高 32px**。
+
+**改动两行**：
+
+- `ui.rs`：`RESULT_TOOLBAR_HEIGHT` `2.5` → **`2.0`**（32px，与 `RESULT_TABS_HEIGHT` 同值）
+- `grid/status.rs`：容器加 `.bg(theme.colors.tab_bar)`
+
+**验证**：`check` 0 warning；`rds-workbench-shell --lib` 14 passed；`rds-result-panel --lib`
+**242 passed**（新增 `grid::tests::the_result_toolbar_keeps_the_tabs_height`，真实布局量出 32px）；
+`rds-ui-guard` 4 passed。网格可用高度 +8px，控件一个像素没动（不触发 §2.10 记的 Input 焦点链风险）。
+
+**未做**：筛选区整圈 1px 边框（`CompositeBorderPainter`，等价需自绘容器包住预览 + 筛选，与「禁手搓」
+冲突）；面板四周 3px 外边距（现 `px_2` = 8px、无垂直内距）；图片分隔符（`UIIcon.SEPARATOR_V`，本仓资产
+无同名图）；DBeaver 筛选条真实像素高未在真实例上量过（本仓无可运行 DBeaver）。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）
@@ -458,7 +490,7 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 ## 5. 常用锚点（行号随近期提交微移，以现场 grep 为准）
 
 - `panel/`：`mod.rs`（门面 + pub 面 re-export：`GridPayload` / `ExportCtx` / `ResultSyncInput` / `ResultPanel` / `AnalysisItem`）；`render.rs` 主 `render` 组装；`sidebars.rs` `render_vertical_bar`（左缘竖条：网格/文本/记录/上一行/下一行）/ `render_right_edge_bar`（右缘竖条，页签图标区）/ `render_right_sidebar`（横 tab 只显激活页签）/ `render_browser_tab` / `render_filter_expand_bar`（展开条：左=展开右=运行无边框）+ `sidebar_width_anim` / `next_right_edge_state` 纯函数；`tabs.rs` `render_value_tab` / `render_stats_tab` / `render_group_tab` / `render_reference_tab`（backlog 空态）/ `render_exec_sql_tab` + `kv_row` / `fmt_stat` / `right_tab_from_index`；`dialog.rs` `render_sql_dialog`（SQL 预览弹窗浮层）；`events.rs` `toggle_value_sidebar`（三态）/ `toggle_transpose` / `open_sql_dialog` / `close_sql_dialog`（事件路径，需 window）+ `reorder_by` 纯函数；`lifecycle.rs` `new` / `sync`（投影同步）；`tests.rs` 尾部 `rendered_ui_elements_survive`（渲染断言防回退，见 §2.10）。
-- `ui.rs`：`RESULT_VERTICAL_BAR_WIDTH`（2.25）/ `RESULT_SIDEBAR_RIGHT_WIDTH`（20.0）/ `RESULT_STATUS_BAR_HEIGHT`（1.5）/ `RESULT_TOOLBAR_HEIGHT`（2.25）。
+- `ui.rs`：`RESULT_VERTICAL_BAR_WIDTH`（2.25）/ `RESULT_SIDEBAR_RIGHT_WIDTH`（20.0）/ `RESULT_STATUS_BAR_HEIGHT`（1.5）/ `RESULT_TOOLBAR_HEIGHT`（2.0，与 `RESULT_TABS_HEIGHT` 同高）。
 - `ports.rs`：`ResultRequest` 全集（含 #7 / §2.9 新增变体 `RunFilterAsQuery` / `ToggleFilterExpand` / `OpenSqlDialog` / `CloseSqlDialog`；`ToggleSqlPreview` 已删）+ `ResultActionQueue`（`request` / `set_panel` / `push` / `drain`）。
 - `grid/`：`delegate.rs` `ResultGridDelegate`（TableDelegate 主体实现 + 钩子类型 + RESULT_GRID_CONTEXT 等常量）；`cell.rs` `render_td` / `header.rs` `render_th` / `menu.rs` `context_menu`（trait 方法不可分块 → 顶层自由函数 + `table_impl.rs` 薄转发）；`status.rs` `render_status_row`（三项新签名）/ `ResultToolbar` / `ResultStatus` / `ResultControls` / `ResultPane`；`text.rs` `format_cell_text` / `view_rows.rs` `text_presentation` 指纹缓存 / `stats.rs` 列统计 / `edit.rs` 行编辑 / `tests.rs`（全量测试迁入）。
 - `store/`：`store.rs` `ResultStore`（按文档分槽，多结果集 sets(document) + TabBar 标签；事实档 A2 未接线）+ `entry.rs` / `fact.rs`。

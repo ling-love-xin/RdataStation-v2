@@ -202,6 +202,8 @@ gpui-kit 固定语义面装不下的产品角色，仍走独立资产，代码�
 
 浅色四槽取 DBeaver 原值。**深色一套是推导值**：DBeaver 该批 colorDefinition 只有一套浅色值，深色主题 css（`e4-dark-data-editor.css`）实测零覆盖，故按深色背景等亮度比推导（非照抄），结论已登记为待用户确认的取舍（见 `result-panel.md` §8.33）。
 
+**结果集工具栏的 chrome 底色不新增产品角色**：直接复用固定语义面的 `tab_bar.background`（`#F8F8F8` / `#181818`），让工具栏与上方结果集标签条同底、连成一条 chrome 带。语义对应 DBeaver 的「非活动标签 / widget 背景」层（`UIStyles.getDefaultWidgetBackground()` = 主题 `INACTIVE_TAB_BG_START` → 回退系统 `COLOR_WIDGET_BACKGROUND`），与网格的列表底（`getDefaultTextBackground()` → `COLOR_LIST_BACKGROUND`，白）分层；取证与取舍见 `result-panel.md` §8.34。
+
 ---
 
 ## 5. 语法高亮（编辑器）

@@ -280,14 +280,23 @@ pub fn render_toolbar(
         .justify_between()
         .gap_2()
         .px_2()
-        // 工具栏比状态栏高：Toolbar XSmall（min_h_7 + p_1 = 36px）放不进 24px 状态栏档。
-        // 2026-11-08 抬到 40px（`ui::RESULT_TOOLBAR_HEIGHT`）：36px 正好等于 Toolbar 自身
-        // 最小高、上下零余量，筛选框 Input 那时还是 Medium 档 32px 直接贴边。结果区默认高
-        // 是 `RESULT_PANE_HEIGHT` 20rem（320px），这 4px 不影响网格可容纳行数。
+        // 高度 32px（`ui::RESULT_TOOLBAR_HEIGHT`）= 右段 24px 控件 + Toolbar 的 `p_1` 上下
+        // 8px，即**内容自然高**；同时与标签条（`ui::RESULT_TABS_HEIGHT`）等高。
+        //
+        // 【DBeaver 对齐 2026-11-08】底色铺 `tab_bar`：DBeaver 的筛选条与上方 TabFolder
+        // 同属「非活动标签 / widget」背景档（`UIStyles.getDefaultWidgetBackground()`，
+        // `UIStyles.java:122-129` → 主题色 `INACTIVE_TAB_BG_START`，缺失回退系统
+        // `COLOR_WIDGET_BACKGROUND`），而网格是列表底（`getDefaultTextBackground()` →
+        // `COLOR_LIST_BACKGROUND`，白）。本仓对应角色就是 `tab_bar.background`
+        // （`assets/themes/rds-theme.json`：`#F8F8F8` / `#181818`）。不铺底色时工具栏继承
+        // 面板背景（白），与标签条之间断开一层，观感上「没对齐」。
+        //
         // 注意：编辑行被虚拟列表裁剪会丢 Input 焦点链（`cell_edit_esc` 曾因此回归），
-        // 再压缩工具栏 / 结果区默认高之前必须先量网格实际剩余高度。
+        // 再压缩工具栏之前必须先量网格实际剩余高度；本次 40→32 回收的是 Input 降档后
+        // 多出的空白（控件本身一个像素没动），网格可用高度反而 +8px。
         .h(rems(ui::RESULT_TOOLBAR_HEIGHT))
         .flex_none()
+        .bg(theme.colors.tab_bar)
         .border_b(ui::HAIRLINE)
         .border_color(theme.colors.border)
         .text_xs()

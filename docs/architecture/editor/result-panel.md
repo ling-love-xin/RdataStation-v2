@@ -1518,7 +1518,7 @@ enum 类 `Select` 需要"值 → 显示"映射来源，当前拿不到枚举定�
 | 右段按钮形态 | 纯图标 + tooltip（`ToolItem` 自带） | `Button`：对比/分析/复制部分带图标，`提交变更 (N)` / `撤销变更` / `复制` / `⚗ 分析` 带文字 | 全部**纯图标 + tooltip**：对比 `Columns2`、提交 `Save`（计数进 tooltip「提交 N 项变更到源库」）、撤销 `RotateCcw`、分析 `Sigma`、复制 `Copy` |
 | 二元开关 | CHECK `ToolItem`（图标 + 按下态） | `Switch`「下发源库」「注释」各占一整块（轨道 + 文字） | **图标 toggle** `Button`：`.ghost().small().toggled(..).icon(..).tooltip(..)`（下发源库 `DatabaseZap`、注释 `FileText`）。点击回调里自己翻转（`Button::on_click` 不给新值，闭包捕获当前 bool 取反）；`SetPushdown` / `SetShowColumnComments` 的请求载荷不变 |
 | 分组 | `UIUtils.createToolBarSeparator` 竖线 | 只有 `gap` | 开关组与动作组之间插一条 1px 竖线：`w(ui::HAIRLINE).h(rems(1.5)).bg(theme.colors.border)`，**两组都非空才插**（避免空段留孤线）。不用 `separator::Separator::vertical()`：它渲染成 `absolute().h_full()`（`vendor/gpui-component/src/separator.rs:80-84`），塞进 `Toolbar::contents` 的流式槽位会定位到外层祖先，故按同一语义自画 1px 线 |
-| 高度 | SWT ToolBar 天然紧凑（约 24px） | 40px（`ui::RESULT_TOOLBAR_HEIGHT`，§8.28 定的） | **不动**——用户已验收当前高度；本轮的收形靠「去文字 + 去开关轨道 + 加竖线」实现，靠压缩高度反而会碰 §8.28 记录的「编辑行被虚拟列表裁剪丢 Input 焦点链」风险 |
+| 高度 | SWT ToolBar 天然紧凑（约 24px） | 40px（`ui::RESULT_TOOLBAR_HEIGHT`，§8.28 定的） | **当时不动**——用户已验收当前高度；收形靠「去文字 + 去开关轨道 + 加竖线」，压缩高度会碰 §8.28 记录的「编辑行被虚拟列表裁剪丢 Input 焦点链」风险。**该判断已被 §8.34 推翻**：40px 里有 8px 是 `Input` 降档后没回收的空白，已收回 32px（控件未动） |
 
 **范围不变（只改形态，不改任何功能与摆放条件）**：SQL 预览仍在最左（保留 `SQL: <前 60 字>` 文字，
 它是「一眼看查询」的信息位，不是按钮标签）；筛选框 / 展开态不变；对比仍只在 `tabs.len() >= 2` 摆；
@@ -1630,6 +1630,74 @@ ResultSetThemeSettings.java`（`:38-84` 22 个 `@ThemeColor` 字段，斑马纹�
 **未验证（需真窗口）**：奇数行 `#EBF5FF` 在深色行底线（`table_row_border`）间的观感是否过浅；
 脏格 `#FFE4B5` 与本地行 `#E4FFB5` 同时出现时是否会糊成一片（两色都淡、相邻列可能并排）；
 冲突格 `#FF80FF` 是全饱和洋红，实色铺底是否刺眼（DBeaver 原值就是这个，未做降饱和）。
+
+### 8.34 结果集工具栏背景与高度对齐 DBeaver（2026-11-08）
+
+用户实拍反馈：「结果集的工具栏似乎没有对齐 dbeaver，如背景、高度等等」。**这是一条推翻
+§8.32 前提的反馈**——§8.32 当时把「高度 40px 不动」写进文档，理由是「用户已验收」，实际
+验收的只是按钮形态。
+
+**取证（我们侧，`grid/status.rs::render_toolbar`）**：整条工具栏**没有任何 `.bg()`**，背景靠
+父容器透传；高度写死 `.h(rems(ui::RESULT_TOOLBAR_HEIGHT))` = **40px**；只有一条 1px 下边框。
+
+**取证（DBeaver 侧，均已实读源码）**：
+
+| 事实 | 位置 |
+| --- | --- |
+| 面板 `GridLayout(2, false)`，`marginHeight = 3`、`marginWidth = 3` | `ResultSetFilterPanel.java:163-166` |
+| 左列 `filterComposite` 挂 `new CompositeBorderPainter(...)` | `ResultSetFilterPanel.java:182` |
+| `CompositeBorderPainter` = 沿控件外框 `drawRectangle(0, 0, w-1, h-1)`**一整圈 1px**，色 = `UIUtils.getShadowColor()` | `CompositeBorderPainter.java:34-39` |
+| 框色随明暗换档：浅色 `COLOR_WIDGET_LIGHT_SHADOW`；深色 Windows `COLOR_WIDGET_DARK_SHADOW` / macOS `COLOR_WIDGET_NORMAL_SHADOW` | `UIUtils.java:212-216` |
+| 右列 `new ToolBar(this, SWT.HORIZONTAL \| SWT.RIGHT)` + `VERTICAL_ALIGN_CENTER`，**没有固定像素高** | `ResultSetFilterPanel.java:315-316` |
+| 分隔符是**图片资产**（`UIIcon.SEPARATOR_V` 包 `Label` 再包 `SWT.SEPARATOR`），不是像素线 | `UIUtils.java:218-222` |
+| 面板背景 = 主题 `INACTIVE_TAB_BG_START`，缺失回退系统 `COLOR_WIDGET_BACKGROUND` | `UIStyles.java:122-129` |
+| 文本/网格背景 = `COLOR_LIST_BACKGROUND`（白） | `UIStyles.java:131-133` |
+
+也就是说 DBeaver 的层次是：**标签条与筛选条同属「非活动标签 / widget」背景档（灰），网格是
+列表底（白）**。插件级 css 是空壳（`e4-dbeaver-widgets.css` 49 B、`e4-dark-dbeaver-widgets.css`
+49 B、`e4-dbeaver.css` 55 B），所以这不是某条 css 能照抄的值，而是平台色语义。
+
+**根因（高度）**：40px 的来历是「筛选框 `Input` 还是默认 Medium 档 `h_8`(32px) + `Toolbar`
+XSmall 的 `p_1` 上下 8px」。`Input` 在 §8.32 前后已降到 `.small()`（24px），**那 8px 没回收**，
+工具栏于是比标签条虚胖一圈。
+
+同时纠正两处历史算术错误（原文写「Toolbar XSmall = `min_h_7`(28px) + `p_1`(8px) = 36px」）：
+- `min_h_7` 是**最小总高**约束，不是内容高（vendor `toolbar.rs:253`）；
+- 右段所有控件（`Button` / `DropdownButton` 的 `.small()`）真实高 **24px**（vendor
+  `button.rs:688-700`：纯图标 `size_6`、带文字 `h_6`），加 `p_1` 上下 8px → **自然高 32px**。
+
+**落地两行**：
+
+| # | 位置 | 改动 |
+| --- | --- | --- |
+| 1 | `crates/result_panel/src/ui.rs` | `RESULT_TOOLBAR_HEIGHT` `2.5`(40px) → **`2.0`(32px)**，与 `RESULT_TABS_HEIGHT` 同值；注释重写并纠正上述算术 |
+| 2 | `crates/result_panel/src/grid/status.rs` | 容器加 `.bg(theme.colors.tab_bar)` —— 本仓对应「非活动标签 / widget 背景」的角色就是 `tab_bar.background`（`assets/themes/rds-theme.json`：浅 `#F8F8F8` / 深 `#181818`），与标签条（`TabVariant::Tab` 取 `tokens.tab_bar`，vendor `tab_bar.rs:403-406`）连成一条 chrome 带 |
+
+**为什么不是 28px 也不是其它值**：`Toolbar` XSmall 的 `min_h_7` 是 28px 下限，但在 24px 控件
++ `p_1` 的前提下自然高就是 32px；32 又是标签条档位，两块等高最整齐。再往下压必须脱离
+`Toolbar` 组件（违反「组件选型禁手搓」红线），不做。
+
+**行为变化**：网格可用高度 **+8px**（工具栏矮了，结果区 `RESULT_PANE_HEIGHT` 不动）。控件一个
+像素没改，`Input` 仍是 `.small()`，所以不存在 §8.28 记的「编辑行被虚拟列表裁剪丢 Input 焦点链」
+风险。
+
+**验证**：`cargo check -p rds-result-panel` Finished、**0 warning**；
+`cargo test -p rds-workbench-shell --lib` = **14 passed**；
+`cargo test -p rds-result-panel --lib` = **242 passed / 0 failed**（新增
+`grid::tests::the_result_toolbar_keeps_the_tabs_height`，真实布局量出 32px，锁住「有人把它改回 40」
+和「两个常量各自改档」两种情况）；
+`cargo test -p rds-ui-guard` = **4 passed**。
+
+**本轮未做（如实登记）**：
+
+- **筛选区整圈 1px 边框**（`CompositeBorderPainter`）：我们筛选框是 `Input` 组件自带边框，语义
+  等价但不铺满整条；要等价需自绘一个包住「预览 + 筛选」的容器，与「组件选型禁手搓」冲突，未做。
+- **面板四周 3px 外边距**：我们 `px_2`(8px) 水平内距、无垂直内距；DBeaver 是 3px 四周。差 5px，
+  未调（改了要连带量标签条对齐）。
+- **图片分隔符**：仍用自画 1px `div`（1.5rem = 24px 高）。DBeaver 那条是图片资产
+  （`UIIcon.SEPARATOR_V`），我们资产包里没有同名图，未替换。
+- **筛选条高度 28-32px 的精确对齐**：DBeaver 由内容自然决定（无常量），我们受组件最小档约束取
+  32px，理论上有 0-4px 残差；**未在真 DBeaver 里量过实际像素**（本仓没有可运行的 DBeaver 实例）。
 
 ## 8. 协作纪律
 
