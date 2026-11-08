@@ -262,6 +262,18 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 
 已知边界：日历**不预置当前值**（打开落在今天所在月，要预置得解析 `NaiveDate`）；布尔按钮文案用 ASCII `true`/`false`，不跟随单元格显示样式；转置视图只读、不进编辑。验证：`cargo test -p rds-result-panel --lib` = **223 passed / 0 failed**（+1 布尔通道）；`cargo check -p rds-result-panel -p rds-editor` 0 warning；`cargo test -p rds-editor --lib` = 761 passed / **2 failed**（升级报告 §7 第 232 行已登记的基线既有，与本次无关）。未验证：真窗口点日历 / 点布尔按钮的端到端。
 
+### 2.17 2026-11-08（表头列名被裁修复：用户截图「结果集字段被遮挡」）
+
+| 层 | 落地 |
+| --- | --- |
+| 现象 | 表头带里没有列名，只剩贴在上沿的一条彩色残线（badge 上半截）+ 右端下拉箭头；行号槽 / 数据行 / 筛选框正常 |
+| 根因 | 表头带 26px、减 `table_cell_padding` 上下各 2px → **内容高 22px**；`render_th` 却把表头造 `v_flex` 两行，主行用 `size_full()` 抢满 22px，第二行（列头菜单）一挂，flex 先满足 `flex_none` 的 28px 菜单 → 主行被分到 **0 高** |
+| 修法 | 主行 `size_full()` → `w_full()`；`head` 加 `justify_center`；列头菜单从第二行并入主行尾端（`flex_none` + `on_click` 守卫挡排序）；提前 return 分支同步 |
+| 同批口径 | 菜单进流内就真实吃列宽（XSmall 实测 24×24），`grid/fit.rs` 新增 `RESULT_FIT_COLUMN_MENU` 计入测宽，否则双击自适应后列名照样被省略号吃掉（原文「不含列头菜单」作废） |
+| 取舍 | 表头带只有 22px，`comment_line` 第二行必然被裁（要两行都可见得抬 `header_row_height` 或去掉注释行，未定） |
+
+验证：`cargo test -p rds-result-panel --lib` = **224 passed / 0 failed**（+1 `header_main_row_keeps_a_readable_height`：真 `TableState` + `DataTable` 渲染后读 `debug_bounds`，断言主行高 14–22px、菜单与主行同行；旧实现下两条都挂）；`cargo test -p rds-ui-guard` = 4 passed / 0 failed（`ui.rs` 裸 px 基线 15 → 16）。未验证：真窗口目视、滚动时表头带稳定性、96px 布尔列扣掉菜单 24px 后列名剩余宽度。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

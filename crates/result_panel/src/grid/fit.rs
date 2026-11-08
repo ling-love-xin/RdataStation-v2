@@ -18,7 +18,7 @@ use super::delegate::{CELL_DISPLAY_LIMIT, ResultGridDelegate};
 use crate::store::ColumnKind;
 use crate::ui::{
     RESULT_FIT_BADGE_PADDING as BADGE_H_PADDING, RESULT_FIT_CELL_PADDING as CELL_H_PADDING,
-    RESULT_FIT_HEADER_GAP as HEADER_GAP,
+    RESULT_FIT_COLUMN_MENU as COLUMN_MENU_W, RESULT_FIT_HEADER_GAP as HEADER_GAP,
 };
 
 /// 采样行数上限（对齐 dbdelve `FITTED_ROWS = 200` / cellar 前 200 行 / tusk 首行 cap）：
@@ -66,10 +66,11 @@ pub(crate) fn fit_column(
     Some(header.max(cells))
 }
 
-/// 表头块宽：badge + 列名 + 排序箭头 + 筛选 ▽，加上它们之间的 `gap_1`
+/// 表头块宽：badge + 列名 + 排序箭头 + 筛选 ▽ + 列头菜单，加上它们之间的 `gap_1`
 ///
-/// 与 [`crate::grid::header::render_th`] 同一份构成。列头菜单按钮（`DropdownButton`）不算：
-/// 它浮在列头右端、被截掉也不影响读列名，算进去会让每列凭空多 28px（竞品同样不含）。
+/// 与 [`crate::grid::header::render_th`] 同一份构成。列头菜单**必须算**（`COLUMN_MENU_W`）：
+/// 它现在是主行流内的 `flex_none` 子元素，真实吃掉列宽——不算就会让双击自适应算出的宽度
+/// 刚好差这一块，列名被省略号吃掉（这正是 2026-11-08 表头遮挡那条的另一半）。
 fn header_width(
     delegate: &ResultGridDelegate,
     col_ix: usize,
@@ -108,6 +109,10 @@ fn header_width(
     }
     if delegate.has_column_filter(column) {
         widths.push(measure(window, "▽", font, color, font_size));
+    }
+    // 列头菜单（转置视图没有：那边的列头是提前 return 的纯文本）
+    if !delegate.transposed {
+        widths.push(COLUMN_MENU_W);
     }
     let gaps = HEADER_GAP * widths.len().saturating_sub(1) as f32;
     widths.into_iter().fold(Pixels::ZERO, |sum, width| sum + width) + gaps

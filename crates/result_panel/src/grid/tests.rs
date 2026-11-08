@@ -30,6 +30,8 @@ use gpui_kit::App;
 use gpui_kit::TextAlign;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::table::{ColumnSort, TableDelegate as _};
+use gpui_kit::component::Sizable as _;
+use gpui_kit::{AppContext as _, ParentElement as _, Styled as _};
 use std::rc::Rc;
 use std::sync::Arc;
 use workbench_shell::model::ColumnAnnotation;
@@ -2903,4 +2905,79 @@ fn default_column_width_follows_type_until_the_user_drags(cx: &mut gpui_kit::Tes
             "boolean 列拖过按用户值"
         );
     });
+}
+
+/// 只为把表格真正渲染进窗口的探针视图（几何必须来自真实布局）
+struct HeaderHarness {
+    state: gpui_kit::Entity<gpui_kit::component::table::TableState<ResultGridDelegate>>,
+}
+
+impl gpui_kit::Render for HeaderHarness {
+    fn render(
+        &mut self,
+        _window: &mut gpui_kit::Window,
+        _cx: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        gpui_kit::div().size_full().child(
+            gpui_kit::component::table::DataTable::new(&self.state)
+                .with_size(crate::ui::RESULT_TABLE_SIZE),
+        )
+    }
+}
+
+/// 【表头遮挡回归 2026-11-08】表头带高 = 组件 `table_row_height()`（本仓 `RESULT_TABLE_SIZE`
+/// = XSmall 档 = 26px，减上下 padding 4px 只剩 **22px** 内容高）。列头菜单曾经是主行的
+/// **兄弟**——同一个 `v_flex` 里的第二行；两行高度加起来远超 22px，flex 先把 28px 的菜单排满，
+/// 主行被挤成 0 高：表头只剩 badge 的半截彩色残线，列名整行看不见（用户截图实证）。
+///
+/// 修复后菜单并进主行（`flex_none`），这里锁住「主行至少装得下一行文字」——
+/// 旧实现下 `main.size.height` 是 0，断言必挂。
+#[gpui_kit::test]
+fn header_main_row_keeps_a_readable_height(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (_, vcx) = cx.add_window_view(|window, cx| HeaderHarness {
+        state: cx.new(|cx| gpui_kit::component::table::TableState::new(grid(), window, cx)),
+    });
+
+    // 首帧只排位置，几何第二帧才稳定（配 retained 渲染内核尤其）
+    for _ in 0..2 {
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+    }
+
+    let main = vcx
+        .debug_bounds("editor-result-th-main-1")
+        .expect("表头主行应有 debug 几何（表格没渲染出来时这里为空）");
+    assert!(
+        main.size.height >= gpui_kit::px(14.),
+        "表头主行被挤扁，列名会被裁掉：main={:?}",
+        main.size.height
+    );
+    // 表头带 26px、上下 padding 4px → 主行不可能高过 22px
+    assert!(
+        main.size.height <= gpui_kit::px(22.),
+        "主行不该高过表头内容区：main={:?}",
+        main.size.height
+    );
+
+    // 列头菜单必须与列名**同一行**：它一旦落成主行的兄弟（第二行），22px 内容高
+    // 先被菜单排满，主行就被挤成 0——这正是被遮挡的形态。
+    let menu = vcx
+        .debug_bounds("editor-result-col-menu-1")
+        .expect("列头菜单应有 debug 几何");
+    let offset = (menu.origin.y - main.origin.y).abs();
+    assert!(
+        offset < gpui_kit::px(4.),
+        "列头菜单落到了第二行：main.y={:?} menu.y={:?}",
+        main.origin.y,
+        menu.origin.y
+    );
+    // 菜单在流内就真实占列宽（XSmall 档实测 24×24），`ui::RESULT_FIT_COLUMN_MENU` 就是按
+    // 它取的：常量要是写歪了，双击自适应算出的宽度就会差这一块
+    assert!(
+        menu.size.width >= gpui_kit::px(16.) && menu.size.width <= gpui_kit::px(32.),
+        "列头菜单占宽异常（`RESULT_FIT_COLUMN_MENU` 需要按实测校准）：{:?}",
+        menu.size.width
+    );
 }

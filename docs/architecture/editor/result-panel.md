@@ -1093,9 +1093,11 @@ panel.rs 删掉手搓过滤 / 行渲染 / 搜索框约 200 行。
 
 **宽度构成（与渲染同口径，不是估算）**：
 
-- 表头：类型 badge（`px_1` 左右各 4 + 符号宽）+ 列名 + 排序箭头（`↑`/`↓`）+ 筛选 `▽`，
-  两两之间 `gap_1` 4px。**不含列头菜单按钮**：它浮在列头右端、被截也不影响读列名，算进去
-  会让每列凭空多 28px（竞品同样不含）。
+- 表头：类型 badge（`px_1` 左右各 4 + 符号宽）+ 列名 + 排序箭头（`↑`/`↓`）+ 筛选 `▽` +
+  列头菜单，两两之间 `gap_1` 4px。**列头菜单算在内**（`RESULT_FIT_COLUMN_MENU` = 24px，
+  XSmall 档实测）：2026-11-08 §8.26 把菜单从「浮在列头右端」改成主行流内的 `flex_none`
+  子元素后它真实吃掉列宽，不算就会让自适应算出的宽度刚好差这一块、列名照样被省略号吃掉。
+  （原文「不含列头菜单，竞品同样不含」写于它还是浮层的时期，随 §8.26 一并作废。）
 - 单元格：前 **200 个视图行**（`FIT_SAMPLE_ROWS`，对齐 dbdelve `FITTED_ROWS=200` / cellar 前
   200 行）里最宽的那串 + 左右各 8px（`render_td` 的 `px_2`）。测的是**画出来的那串**：类型样式
   （NULL 占位 / 千分位 / 布尔中文）、JSON 美化、BLOB 摘要、`CELL_DISPLAY_LIMIT=300` 截断全都
@@ -1231,6 +1233,52 @@ enum 类 `Select` 需要"值 → 显示"映射来源，当前拿不到枚举定�
   或 `✔`/`✘`）：编辑态写的是要提交的值，不是展示样式；若将来单元格显示改成中文，
   这里仍保持 ASCII 值。
 - 转置视图是只读，不进入编辑（`begin_edit` 已先拦），所以转置里看不到这些控件。
+
+### 8.26 表头列名被裁修复（2026-11-08）
+
+**现象（用户截图实证）**：结果集表头带里没有列名，只剩贴着上沿的一条彩色残线（类型 badge
+的色块上半截）和右端一个向下箭头（列头菜单）；行号槽 `#`、数据行、筛选框、工具行都正常。
+
+**根因链（vendor 0.9.0 权威源码实查）**：
+
+1. `Sizing::XSmall.table_row_height()` = **26px**（`vendor/gpui-component/src/sizing.rs:57-65`）；
+   `table_cell_padding()` = 上下 2 / 左右 4（同上 `:69-96`）→ `render_cell` 的 `table_cell_size`
+   吃掉上下 4px，**表头内容高只剩 22px**。
+2. `TableState::header_band_height()` = `header_row_height() * header_layout.len().max(1)`
+   （`table/state.rs:807-818`，未设 `header_row_height` 时取 `table_row_height()`）。
+3. `TableState::render_th` 是一层 `h_flex().h_full()` 包 `render_cell(...)`（`:1878-1911`），
+   `render_cell` 自身 `h_full().overflow_hidden().whitespace_nowrap()`（`:1514-1550`）。
+4. 本仓 `grid/header.rs::render_th` 把表头造成 `v_flex` **两行**：主行（badge + 列名 +
+   排序箭头 + 筛选 ▽）用 `size_full()` 占满 22px，第二行是列头菜单（`d7af6f5d` 引入）。
+   两行挂上去后 flex 先满足 `flex_none` 的 28px 菜单，主行被分到 **0 高** → 列名整行不可见，
+   只剩 badge 的彩色上沿和菜单箭头。
+
+**修复**：
+
+- 主行 `size_full()` → **`w_full()`**（纵向交给容器，不再抢全部高度）；
+- 容器 `head` = `v_flex().size_full().min_w_0().justify_center()`，主行在其中垂直居中；
+- 列头菜单从 `head` 的**第二行**并进 `main_row` **尾部**（`flex_none`，与列名同一行右端），
+  外层还包一层 `on_click(stop_propagation)` 的守卫，避免点菜单触发列头排序；
+- 提前 return 分支（转置 / 行号槽 / 空列名）同步改成 `justify_center` 并前置到接菜单之前
+  （避免白构造菜单项）。
+
+**同一改动的另一半（测宽口径）**：菜单进了流内就**真实占列宽**（XSmall 档实测 24×24），
+而 `grid/fit.rs` 原先按「不含菜单」测宽。已在 `crate::ui` 新增 `RESULT_FIT_COLUMN_MENU = 24px`
+并计入 `header_width`——否则双击自适应算出的宽度差这一块，列名照样被省略号吃掉。
+
+**已知取舍**：表头带只有 22px 内容高，`comment_line`（列注释第二行）在这一带里必然被裁
+（`head` 的第二行）。要两行都可见得抬 `header_row_height`（`TableOptions` 有覆盖口），
+或干脆去掉注释行——本轮未定，注释行保留并加注说明。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **224 passed / 0 failed**（+1
+`header_main_row_keeps_a_readable_height`：真实 `TableState` + `DataTable` 渲染进 headless 窗口，
+读 `debug_bounds` 断言主行高 14–22px、列头菜单与主行 y 差 < 4px——旧实现下主行高 0、菜单在
+第二行，两断言都会挂；同时实测菜单占宽 24px，与 `RESULT_FIT_COLUMN_MENU` 一致）。
+`cargo test -p rds-ui-guard` = 4 passed / 0 failed（`ui.rs` 裸 px 基线 15 → 16）。
+
+**未验证项**：真实窗口下的目视（headless 只证到几何，未目视字体渲染与 badge/箭头位置）；
+滚动时表头带是否稳定；窄列（`RESULT_COLUMN_WIDTH_BOOLEAN` = 96px）在菜单占 24px 后
+列名剩余宽度是否够读，未目视。
 
 ## 8. 协作纪律
 

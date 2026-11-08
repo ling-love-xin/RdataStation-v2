@@ -146,9 +146,13 @@ pub(crate) fn render_th(
         .h_flex()
         .items_center()
         .gap_1()
-        .size_full()
+        .w_full()
         .min_w_0()
         .truncate()
+        // 给用例读主行几何（表头带 22px 内容高，主行被挤成 0 高时列名整行看不见——
+        // 2026-11-08 的"字段被遮挡"就是这个；断言见 `grid/tests.rs`
+        // `header_main_row_keeps_a_readable_height`）
+        .debug_selector(move || format!("editor-result-th-main-{col_ix}"))
         .when_some(type_badge, |row, badge| row.child(badge))
         .child(
             div()
@@ -175,6 +179,8 @@ pub(crate) fn render_th(
         });
 
     // 【B1】注释第二行：开关开启 + 列有注释时画（muted 小字，截短；hover tooltip 看全）
+    // 表头带只有 22px 内容高，注释行与主行同时存在时**注释行会被组件裁掉**（既有取舍：
+    // 主行是必须看的那行，注释留给 hover tooltip）。这里保留结构不做高度博弈。
     let comment_line = if delegate.show_column_comments
         && !ResultGridDelegate::is_row_number(col_ix)
         && !delegate.transposed
@@ -199,16 +205,18 @@ pub(crate) fn render_th(
         None
     };
 
-    let head = div()
-        .v_flex()
-        .size_full()
-        .min_w_0()
-        .debug_selector(move || format!("editor-result-th-{col_ix}"))
-        .child(main_row)
-        .when_some(comment_line, |head, line| head.child(line));
-    // 转置视图只画列名（类型是混合的，注释表头没有意义）；行号槽 / 空列名同理
+    // 转置视图只画列名（类型是混合的，注释表头没有意义）；行号槽 / 空列名同理。
+    // 这几档不挂列头菜单，所以在接菜单之前就返回（否则会白构造一份菜单项）。
     if delegate.transposed || ResultGridDelegate::is_row_number(col_ix) || name.is_empty() {
-        return head.into_any_element();
+        return div()
+            .v_flex()
+            .size_full()
+            .min_w_0()
+            .justify_center()
+            .debug_selector(move || format!("editor-result-th-{col_ix}"))
+            .child(main_row)
+            .when_some(comment_line, |head, line| head.child(line))
+            .into_any_element();
     }
     // 【列头菜单】DBeaver 列头箭头：排序 / 复制此列 / 冻结 / 隐藏 / 统计 / 洞察
     // （= 右键菜单的列级子集，见 `column_menu_items`）。外包一层 `stop_propagation`：
@@ -247,11 +255,17 @@ pub(crate) fn render_th(
     // 【列布局落盘】动作队列在闭包外取出（owned）：builder 要求 `'static`，闭包里
     // 不能再借 `delegate`
     let layout_queue = delegate.action_queue.clone();
-    let head = head.child(
+    // 【列头菜单】并入**主行右端**（与列名同一行），不当第二行 child：
+    // 表头带只有 22px 内容高，任何"第二行"都会把主行挤成 0 高、列名被裁
+    // （2026-11-08 截图实证：字只有半截残线）。
+    let main_row = main_row.child(
         // guard 层带 id：`on_click` 是 StatefulInteractiveElement 方法（裸 div 只有
         // `on_mouse_down`）；点击落在 guard 上时截住冒泡，列头排序收不到
         div()
             .id(("editor-result-col-menu-guard", col_ix))
+            .flex_none()
+            // 同 `editor-result-th-main-{col_ix}`：给用例钉"菜单和列名同一行"
+            .debug_selector(move || format!("editor-result-col-menu-{col_ix}"))
             .on_click(|_, _, cx| cx.stop_propagation())
             .child(
                 DropdownButton::new(("editor-result-col-menu", col_ix))
@@ -411,6 +425,13 @@ pub(crate) fn render_th(
         .flatten();
     let tip_name = name.clone();
     let tip_label = label.clone();
+    let head = div()
+        .v_flex()
+        .size_full()
+        .min_w_0()
+        .justify_center()
+        .child(main_row)
+        .when_some(comment_line, |head, line| head.child(line));
     head.id(("editor-result-th", col_ix))
         .tooltip(move |window, cx| {
             let (title, meta) =

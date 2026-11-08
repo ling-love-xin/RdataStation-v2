@@ -114,6 +114,13 @@ pub const RESULT_FIT_HEADER_GAP: Pixels = px(4.);
 /// 列宽自适应：类型 badge 的 `px_1` 左右合计
 pub const RESULT_FIT_BADGE_PADDING: Pixels = px(8.);
 
+/// 列宽自适应：列头菜单按钮（`DropdownButton` 的 caret 半边）实际占的列宽。
+///
+/// 2026-11-08 起菜单从「浮在列头右端」改成**主行流内**的 `flex_none` 子元素（它以前是
+/// 第二行，把主行挤成 0 高、列名整行被裁）。它一旦在流内就真实吃掉列宽，测宽必须算进来，
+/// 否则双击自适应算出的宽度刚好差这一块，列名照样被省略号吃掉。
+pub const RESULT_FIT_COLUMN_MENU: Pixels = px(24.);
+
 /// 结果网格单元格 / 表头悬停全文的最大宽度（24rem = 384px）。
 ///
 /// 悬停提示跟着鼠标走，比这更宽就会被窗口边缘截掉；超出的部分**折行**（长 JSON / 长文本
