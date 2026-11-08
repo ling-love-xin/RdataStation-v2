@@ -160,3 +160,66 @@
 | 同步 I/O 待迁点（P1） | `nav.rs` 4 处 / `scratchpad_panel.rs` 14 处 `block_on` |
 | 后台任务正例（迁移目标形态） | `crates/workbench/src/services/scratchpad_jobs.rs`、`nav_jobs.rs` |
 | M6 资产库面板装配（crate 内视图 + 宿主端口 + 后台取数） | `panels/resources.rs`、`components/resource_host.rs`、`services/resource_jobs.rs` |
+| 工作台 tab 业务数据概览卡片（后台取数 + 纯读渲染） | `panels/overview.rs`（渲染）、`services/overview.rs`（取数）、`panels/editor.rs`（宿主字段与任务） |
+
+## 7. 工作台 tab 的「业务数据概览」卡片（2026-11-08）
+
+### 7.1 口径
+
+用户口径：「统计指的是**项目中的**连接、洞察、mock 等各个模块的**业务数据**」，呈现形态为**卡片**；
+`docs/architecture/ui/ui-todo.md` 是用户升级后自测项，不在本次范围。
+
+因此四张卡的主数值一律取**真实业务数据**，模块能力数只放副行（不拿「我们支持多少」冒充「用户用了多少」）：
+
+| 卡 | 主数值 | 来源 | 库 / 位置 |
+| --- | --- | --- | --- |
+| 连接 | 连接总数 | `Shared::connections`（`ConnectionItem` 清单） | 内存 |
+| 项目元数据 | 元数据表行数 | `tables` 表 `COUNT(*)` | SQLite `{项目}/.RSmeta/project.db`（**只读打开**，与主写连接并发读安全） |
+| 洞察画像 | 已存报表条数 | `insight_table_reports` + `insight_schema_reports` 的 `COUNT(*)` | DuckDB `{项目}/.RSmeta/analytics.duckdb`（建表语句在 `crates/insight/src/store/body.rs:439/:503`） |
+| 分析库 | 分析库表数 | `mock_generator::existing_tables_at()`（`information_schema.tables` 的 `main` schema） | 同上 DuckDB；副行带 `mock::generator_catalog::all_specs().len()`（生成器种类，代码目录） |
+
+列数、已连接数、项目名进副行/次级信息。
+
+### 7.2 线程模型（为什么不在 render 里查库）
+
+`render` 是纯读路径（gpui-kit 硬约束：不做 I/O、不写 `Shared`）。取数全部在
+`services::overview::load()` 里同步完成，由 `EditorPanel::spawn_overview` 放进
+`cx.background_executor()` 的阻塞任务，结果经 `weak.update` 回填到面板字段 `overview`，
+再 `cx.notify()` 出帧。连接清单与连接状态在**入队时**从 `Shared` 克隆一份过去
+（背景线程不能碰 `Rc<RefCell<..>>`）。
+
+触发点只有两个：`render` 入口的 `ensure_overview`（首帧 / 项目根变化时取一次，`overview_for`
+比对项目根，不会每帧重取）、以及卡片右上「刷新」按钮（`reload_overview`，忽略当前快照重取）。
+任务句柄存 `overview_task: Option<Task<()>>`（覆盖即取消上一枚）。
+
+### 7.3 失败降级（不阻塞、不 panic）
+
+- 项目未初始化 / 缺 `project.db`：项目卡显示「—」，一条原因进 `problems`；
+- 分析库文件不存在（本项目还没跑过查询/洞察/mock）：洞察卡与分析库卡显示「—」+ 原因；
+- 洞察画像表还没建（本项目没跑过该类洞察）：按 0 计，不算失败（`query_row` 失败即跳过该表）；
+- 卡片顶部只展示前两条 `problems`（`warning` 色），不占满页面。
+
+**风险与取舍**（必须知道的边界）：分析库取数是 `duckdb::Connection::open`（读写模式，与既有
+`mock_generator::open_analysis_db` 同口径）。Windows 上项目分析库存在单句柄争用问题
+（`crates/store/src/persistence/project_db.rs:379-385`、`:452-455`），若此刻主写连接正持有该库，
+这里会**失败并降级为「—」**，不会阻塞 UI。要彻底消除该争用，需要走「由持有连接的模块自报计数」
+或「主连接上的只读查询通道」，那是跨 crate 的改造，本次未做。
+
+### 7.4 验证
+
+- `cargo check -p rds-workbench --all-targets -j 1` → exit 0
+- `cargo test -p rds-workbench --lib services::overview -- --test-threads=1` → **2 passed**
+  （`counts_connections_without_project`：未开项目只用内存数据且 `problems` 为空；
+  `reads_project_metadata_from_sqlite`：造最小 `.RSmeta/project.db`，断言表 2 / 列 3、
+  分析库缺失走降级并给出可读原因）
+- `cargo build -p rds-app` → exit 0；应用重启后 `stderr` 无 `panic`/`ERROR`
+- **未覆盖**：卡片实际版式（列宽/换行/字号）属布局层，headless 无可断言接缝，靠人工验收；
+  「点刷新确实重新取数」只经代码路径确认（同一函数被按钮与首帧共用），无点击级用例。
+
+### 7.5 顺带修掉的编译阻塞（不属于本功能）
+
+`crates/result_panel` 在途改动把 `RESULT_HEADER_HEIGHT` 删了（`result_panel/src/ui.rs:147`
+注释称「全仓零引用」），但 `crates/editor/src/support/ui.rs:34` 的 re-export 仍引用它，
+导致 `rds-editor` 编译失败（E0432）并连带阻断 `rds-workbench` / `rds-app` 构建。
+本次从 re-export 列表移除该项（全仓仅此一处引用，语义与那边的删除一致），未改 `result_panel` 任何文件。
+

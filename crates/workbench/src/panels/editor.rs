@@ -56,6 +56,15 @@ pub struct EditorPanel {
     scratchpad_diff: Rc<RefCell<Option<ScratchpadDiffView>>>,
     /// 分析库元数据树是否正在后台加载（避免 render 每帧重复入队）。
     nav_tree_loading: Cell<bool>,
+    /// 工作台 tab「业务数据概览」的计数快照：后台线程取数（`services::overview`），
+    /// render 只读它——I/O 不进 render 是 gpui-kit 的硬约束。
+    overview: Option<crate::services::overview::OverviewCounts>,
+    /// 概览取数任务的持有句柄（drop = 取消；重新取数时覆盖旧的）。
+    overview_task: Option<Task<()>>,
+    /// 本快照对应的项目根（`None` = 未打开项目）：与当前项目不一致即重取。
+    overview_for: Option<std::path::PathBuf>,
+    /// 是否已发起过取数（`overview_for` 区分不出「没发起」与「未开项目」）。
+    overview_started: bool,
 }
 
 impl EditorPanel {
@@ -89,7 +98,73 @@ impl EditorPanel {
             nav_cache_epoch: 0,
             scratchpad_diff: Rc::new(RefCell::new(None)),
             nav_tree_loading: Cell::new(false),
+            overview: None,
+            overview_task: None,
+            overview_for: None,
+            overview_started: false,
         }
+    }
+
+    /// 首帧 / 项目切换后起一次概览取数（`render` 入口调用，但取数本身在后台线程）。
+    fn ensure_overview(&mut self, cx: &mut Context<Self>) {
+        let project = self
+            .shared
+            .project
+            .borrow()
+            .as_ref()
+            .map(|p| (p.name.clone(), p.root.clone()));
+        let current_root = project.as_ref().map(|(_, root)| root.clone());
+        if self.overview_started && self.overview_for == current_root {
+            return;
+        }
+        self.overview_for = current_root;
+        self.overview = None;
+        self.overview_started = true;
+        self.spawn_overview(project, cx);
+    }
+
+    /// 「刷新」按钮：忽略当前快照，按同一批输入重新取一次。
+    fn reload_overview(&mut self, cx: &mut Context<Self>) {
+        let project = self
+            .shared
+            .project
+            .borrow()
+            .as_ref()
+            .map(|p| (p.name.clone(), p.root.clone()));
+        self.overview_for = project.as_ref().map(|(_, root)| root.clone());
+        self.overview = None;
+        self.overview_started = true;
+        self.spawn_overview(project, cx);
+    }
+
+    /// 真正起后台任务：阻塞读库放 `background_executor`，回填在主线程。
+    ///
+    /// 连接数与连接状态直接从 `Shared` 克隆一份过去（背景线程不能碰 `Rc<RefCell<..>>`）。
+    fn spawn_overview(&mut self, project: Option<(String, std::path::PathBuf)>, cx: &mut Context<Self>) {
+        let flags: Vec<bool> = self
+            .shared
+            .connections
+            .borrow()
+            .iter()
+            .map(|item| item.connected)
+            .collect();
+        let executor = cx.background_executor().clone();
+        let weak = cx.entity().downgrade();
+        let task = cx.spawn(async move |_this, cx| {
+            let counts = executor
+                .spawn(async move {
+                    let project_ref = project
+                        .as_ref()
+                        .map(|(name, root)| (name.as_str(), root.as_path()));
+                    crate::services::overview::load(project_ref, &flags)
+                })
+                .await;
+            let _ = weak.update(cx, |this, cx| {
+                this.overview = Some(counts);
+                cx.notify();
+            });
+        });
+        self.overview_task = Some(task);
     }
 
     /// 消费宿主侧的失效信号（宿主只递增 `Shared` 的 epoch，不碰本面板数据）。
@@ -225,6 +300,8 @@ impl Render for EditorPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 宿主失效信号（切换连接 / 项目 / Mock 落库）在渲染入口消费：只读 Shared，不写别家数据。
         self.sync_shared_epochs();
+        // 概览卡片：首帧 / 换项目时在后台取一次数（render 内不做 I/O，见 services/overview.rs）。
+        self.ensure_overview(cx);
         if self.dialog.is_none() {
             self.dialog = Some(Rc::new(ConnectionDialogState::new(window, cx)));
         }
@@ -274,6 +351,18 @@ impl Render for EditorPanel {
                             .child("选中连接查看真实元数据；本地加速（DuckDB Secret）将在连接建立后自动注册"),
                     ),
             );
+
+        // 工作台 tab 的「业务数据概览」：连接 / 项目元数据 / 洞察画像 / 分析库表。
+        // 快照可能还是 None（首帧取数未回填），卡片自己显示「…」。
+        let overview_snapshot = self.overview.clone();
+        let entity_for_refresh = entity.clone();
+        content = content.child(super::overview::render_overview_cards(
+            overview_snapshot.as_ref(),
+            theme,
+            move |_window, app| {
+                entity_for_refresh.update(app, |this, cx| this.reload_overview(cx));
+            },
+        ));
 
         // Round 22：选中连接 → 真实元数据详情卡片（键值行）。
         if let Some(item) = self.shared.selected_connection() {

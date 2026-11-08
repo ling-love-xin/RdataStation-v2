@@ -41,6 +41,8 @@ use ::editor::shared::EditorShared;
 mod editor;
 mod left_tabs;
 mod metadata_search;
+/// 工作台 tab 顶部的「业务数据概览」卡片（数据：`services::overview`）
+mod overview;
 mod project_picker;
 mod property_panel;
 mod resources;
