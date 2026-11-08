@@ -1790,6 +1790,33 @@ token（`theme/schema.rs:601-603`，回退链 `table_head ← tokens.list_head`�
 这条未对齐也**未取证到外部覆盖入口**（表头行边框在 `table/state.rs` 内部，`TableDelegate` 只有
 `render_th` 的内容槽），本轮不动。
 
+#### 8.36.1 补记：DBeaver 结果集「选中色 / 表头色 / 网格线」的消费点已取证（2026-11-08）
+
+此前只查到 `plugin.xml` 里的 colorDefinition 默认值、扫不到消费点（`7b78e0f0` 那次整树扫描输出为空）。
+本轮限定到 `org.jkiss.dbeaver.ui.editors.data` 插件，链条闭合：
+
+| 环节 | 证据 |
+| --- | --- |
+| 常量 | `ThemeConstants.java:26-30`：`COLOR_SQL_RESULT_SET_SELECTION_FORE/BACK` = `resultset.color.selection.foreground/background`，另有 `COLOR_SQL_RESULT_HEADER_*`、`COLOR_SQL_RESULT_LINES_*` |
+| 注入 | `ResultSetThemeSettings.java:48-73`：`@ThemeColor(...)` 把上述 id 注入 `ThemeListener` 单例 `instance` 的字段（`backgroundSelected` / `foregroundSelected` / `cellHeaderSelectedBackground` / `cellHeaderBorder` / `lineNormalColor` / `lineSelectedColor`） |
+| 渲染 | `SpreadsheetPresentation.java:2784/2788/2809/2817/2821` 用 `instance.backgroundSelected` 作**选中格/行**背景（`selectedCellColor`）；`:1535` 表头选中背景；`:1542-1543` 把 `lineNormalColor` / `lineSelectedColor` 交给 `spreadsheet.setLineColor/setLineSelectedColor`；`:3380` 表头边框 |
+
+**结论一（选中色）**：DBeaver 结果集选中是**实心** `#AFD7FF`（175,215,255，`plugin.xml:1156`）+ 前景
+`0,0,0`；本仓是 `tokens.table_active` = **珊瑚 20% 透明**（`#BC534033` / `#E8846F33`）。色相与强度都不对齐。
+
+**结论二（为什么本轮仍不改）**：`theme/schema.rs:1036-1059` 的 `clamp_alpha` 把 `table_active` 的 alpha
+上限压到 **0.2**。即便把 `table.active.background` 写成不透明的 `#AFD7FF`，运行时也只得到 20% 透明淡蓝
+（白底上 ≈ `#E6F1FF`），**复刻不出 DBeaver 的实心强度**；要实心必须改 vendor 的 clamp 上限（属主题契约
+层改动，按「不给 vendor 加字段/不改契约」的既定原则否决）。20% 淡蓝的可辨识度弱于现状的珊瑚 20%，
+改过去反而更像「没选中」，故**保持现状**，把「是否放宽 clamp 上限以换实心选中蓝」作为**待用户拍板**的
+取舍登记（受影响面：结果集 + Mock 预览表两处 `DataTable`，`list_active` 不受影响）。
+
+**结论三（其余三槽）**：`header.selected.background`（`COLOR_LIST_SELECTION`）、`header.border`
+（`COLOR_WIDGET_DARK_SHADOW`）、`lines.normal` / `lines.selected`（240,240,240 / 105,105,105，**每格**网格线）
+都已确认真的参与结果集渲染，但本仓它们画在 vendor `DataTable` 内部（表头行底色 / 行边框 / 单元格边框），
+`TableDelegate` 只暴露 `render_th` / `render_td` 的**内容槽**，没有覆盖这些颜色的入口 —— 要接必须改 vendor，
+本轮不动，继续作为未对齐项登记。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
