@@ -350,6 +350,8 @@ impl ComponentPanel for ResourcePanelTab {
 struct PluginListDelegate {
     /// 插件数据引用（与 PluginPanel 共享）
     plugins: Rc<RefCell<Vec<PluginInfo>>>,
+    /// 面板当前进行中的操作（`Some` 即忙：行内启停 / 卸载 / 重试一并置灰）
+    progress: Rc<RefCell<Option<String>>>,
     /// PluginPanel 实体引用（用于调用 set_plugin_enabled）
     entity: Entity<PluginPanel>,
     /// 行数缓存（渲染期同步）
@@ -357,9 +359,14 @@ struct PluginListDelegate {
 }
 
 impl PluginListDelegate {
-    fn new(plugins: Rc<RefCell<Vec<PluginInfo>>>, entity: Entity<PluginPanel>) -> Self {
+    fn new(
+        plugins: Rc<RefCell<Vec<PluginInfo>>>,
+        progress: Rc<RefCell<Option<String>>>,
+        entity: Entity<PluginPanel>,
+    ) -> Self {
         Self {
             plugins,
+            progress,
             entity,
             len: 0,
         }
@@ -401,6 +408,9 @@ impl ListDelegate for PluginListDelegate {
 
         // 启用/停用按钮（行尾）。清单都没解析出来的目录没有可激活的运行时：
         // 给「重试」而不是「启用」——修好清单或卸载冲突插件后，重试是唯一不重启的恢复入口。
+        // 任一操作进行中（安装 / 重载 / 启停 / 卸载 / 重试）都置灰：启停与卸载也会动
+        // 同一个 `plugins/<id>` 目录与进程，不能和安装并发。
+        let busy = panel_busy(&self.progress);
         let entity = self.entity.clone();
         let action_id = id.clone();
         let button = if p.kind == PluginKind::Unknown {
@@ -409,6 +419,7 @@ impl ListDelegate for PluginListDelegate {
                 .with_size(Size::XSmall)
                 .label("重试")
                 .tooltip("重新解析清单并加载（修好清单或卸载冲突插件后使用）")
+                .disabled(busy)
                 .on_click(move |_, _window, app| {
                     let _ = entity.update(app, |this, cx| this.retry_plugin(action_id.clone(), cx));
                     app.stop_propagation();
@@ -419,6 +430,7 @@ impl ListDelegate for PluginListDelegate {
                 .with_size(Size::XSmall)
                 .label("停用")
                 .tooltip("停用后本会话立即停止运行（进程停用），下次启动不再激活")
+                .disabled(busy)
                 .on_click(move |_, _window, app| {
                     let _ = entity.update(app, |this, cx| {
                         this.set_plugin_enabled(action_id.clone(), false, cx)
@@ -431,6 +443,7 @@ impl ListDelegate for PluginListDelegate {
                 .with_size(Size::XSmall)
                 .label("启用")
                 .tooltip("启用并立即激活")
+                .disabled(busy)
                 .on_click(move |_, _window, app| {
                     let _ = entity.update(app, |this, cx| {
                         this.set_plugin_enabled(action_id.clone(), true, cx)
@@ -450,6 +463,7 @@ impl ListDelegate for PluginListDelegate {
             .with_size(Size::XSmall)
             .label("卸载")
             .tooltip("从磁盘删除该插件（保留 plugin-data 用户数据）")
+            .disabled(busy)
             .on_click(move |_, window, app| {
                 let entity = uninstall_entity.clone();
                 let id = uninstall_id.clone();
@@ -679,7 +693,7 @@ impl PluginPanel {
     /// 冲突拒绝时清单本身没变：等冲突方卸载后，热插拔扫描不会把它当成「新增 / 变化」
     /// 自动重试，所以必须给用户一个显式入口，否则只能重启应用才恢复。
     fn retry_plugin(&self, id: String, cx: &mut Context<Self>) {
-        if self.progress.borrow().is_some() {
+        if panel_busy(&self.progress) {
             return;
         }
         let Some(handle) = plugin::runtime_handle().cloned() else {
@@ -733,6 +747,17 @@ impl PluginPanel {
             cx.notify();
             return;
         };
+        // 启停会写 global.db 并停 / 起进程；同一时间只允许一个操作，避免连点
+        // 造成 disable 与 enable 交错、最终状态取决于完成顺序。
+        if panel_busy(&self.progress) {
+            return;
+        }
+        let action = if enabled { "启用" } else { "停用" };
+        self.progress.replace(Some(format!("正在{action} {id}…")));
+        self.error.replace(None);
+        self.notice.replace(None);
+        cx.notify();
+
         let weak = cx.entity().downgrade();
         let _ = cx.spawn(async move |_this, cx| {
             // block_on 跑在 gpui 后台线程（cx.spawn 的 executor），不阻塞 UI 线程
@@ -742,6 +767,7 @@ impl PluginPanel {
                 handle.block_on(async { mgr.disable_plugin(&id).await })
             };
             let _ = weak.update(cx, |this, cx| {
+                this.progress.replace(None);
                 match outcome {
                     Ok(()) => {
                         this.error.replace(None);
@@ -776,10 +802,21 @@ impl PluginPanel {
             cx.notify();
             return;
         };
+        // 卸载会停进程、删 `plugins/<id>/`；必须与安装 / 启停互斥，否则可能删掉
+        // 正在换入的目标目录。
+        if panel_busy(&self.progress) {
+            return;
+        }
+        self.progress.replace(Some(format!("正在卸载 {id}…")));
+        self.error.replace(None);
+        self.notice.replace(None);
+        cx.notify();
+
         let weak = cx.entity().downgrade();
         let _ = cx.spawn(async move |_this, cx| {
             let outcome = handle.block_on(async { mgr.uninstall_plugin(&id).await });
             let _ = weak.update(cx, |this, cx| {
+                this.progress.replace(None);
                 match outcome {
                     Ok(()) => {
                         this.error.replace(None);
@@ -833,7 +870,7 @@ impl PluginPanel {
             cx.notify();
             return;
         };
-        if self.progress.borrow().is_some() {
+        if panel_busy(&self.progress) {
             return;
         }
         self.progress.replace(Some("正在重载插件…".to_string()));
@@ -869,7 +906,7 @@ impl PluginPanel {
     /// （宿主不复制 `plugins_dir()` 这类目录约定）；来源检查也在那里做——
     /// 选中 `plugins/<id>` 自身会被拒（否则等于先删源目录再复制）。
     fn install_package(&self, package_path: PathBuf, cx: &mut Context<Self>) {
-        if self.progress.borrow().is_some() {
+        if panel_busy(&self.progress) {
             return;
         }
         let Some(handle) = plugin::runtime_handle().cloned() else {
@@ -929,6 +966,14 @@ impl Focusable for PluginPanel {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
+}
+
+/// 面板是否有进行中的操作（纯函数，便于单测）。
+///
+/// `progress` 既是状态栏文案也是忙碌标记：安装 / 重载 / 启停 / 卸载 / 重试任一在跑，
+/// 其它入口都必须拒绝或置灰——它们会同时改 `plugins/<id>` 目录或进程状态。
+fn panel_busy(progress: &Rc<RefCell<Option<String>>>) -> bool {
+    progress.borrow().is_some()
 }
 
 /// 插件行第二行文案（纯函数，便于单测）：无错误时只显示 id；
@@ -1025,7 +1070,7 @@ impl Render for PluginPanel {
         // 安装中置灰：解包 + 校验 + 复制在后台跑，期间不接受第二个包（否则并发写
         // 同一个 `plugins/<id>`）。文案收窄成「安装插件 / 从目录」——240px 面板里
         // 标题 + 两个动作 + 刷新刚好一行。
-        let busy = self.progress.borrow().is_some();
+        let busy = panel_busy(&self.progress);
         let install_file_entity = cx.entity();
         let install_file_btn = Button::new("plugin-install-package")
             .ghost()
@@ -1055,8 +1100,13 @@ impl Render for PluginPanel {
         if self.plugins_list.borrow().is_none() {
             let panel_entity = cx.entity();
             let plugins = Rc::clone(&self.plugins);
+            let progress = Rc::clone(&self.progress);
             let list = cx.new(move |cx| {
-                ListState::new(PluginListDelegate::new(plugins, panel_entity), window, cx)
+                ListState::new(
+                    PluginListDelegate::new(plugins, progress, panel_entity),
+                    window,
+                    cx,
+                )
             });
             *self.plugins_list.borrow_mut() = Some(list);
         }
@@ -1245,11 +1295,23 @@ impl ComponentPanel for PluginPanel {
 #[cfg(test)]
 mod tests {
     use super::{
-        event_touches_plugin_list, install_receipt, plugin_row_subtitle,
+        event_touches_plugin_list, install_receipt, panel_busy, plugin_row_subtitle,
         uninstall_confirm_description,
     };
     use plugin::events::PluginEvent;
     use plugin::wasm::PluginState;
+
+    /// 忙碌标记只看 progress 文本是否在：空 = 可操作，有文案 = 其它入口全部拒绝。
+    /// 安装 / 重载 / 启停 / 卸载共用这一个标记，不能各自维护一套。
+    #[test]
+    fn pending_operation_marks_the_panel_busy() {
+        let progress = std::rc::Rc::new(std::cell::RefCell::new(None));
+        assert!(!panel_busy(&progress));
+        *progress.borrow_mut() = Some("正在安装 demo.zip…".to_string());
+        assert!(panel_busy(&progress));
+        *progress.borrow_mut() = None;
+        assert!(!panel_busy(&progress));
+    }
 
     /// 出错行必须把 id 和原因同时留下：只显示原因会分不清是哪个插件，
     /// 只显示 id 则又把「为什么出错」藏回日志里。

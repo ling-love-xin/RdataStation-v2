@@ -766,6 +766,11 @@ Uninstalled ──install──▶ Installed ──load──▶ Loaded ──ac
 > 同时 `retry_load_plugin` 在库内无登记行时补登记，避免重试成功后停用 / 卸载
 > 按 code 写库命中 0 行、重启又复活。
 >
+> **2026-10-16 进展（第五刀，面板操作互斥）**：安装 / 重载 / 启停 / 卸载 / 重试
+> 共用 `progress` 忙碌标记，任一进行中其余入口直接拒绝、行内按钮一并置灰——
+> 此前只有安装 / 重载置忙，启停与卸载可并发点，可能安装中卸载同一目录或
+> enable / disable 交错；启停 / 卸载同时补「正在…」进度文案与完成清理。
+>
 > **仍未接**：`LeftPanel`/`RightPanel` → `PanelId`、
 > Quick Open 命令合并、设置页外部登记项渲染、未注册 id 占位面板、`project_resources` 对账与图标 resolver。
 
