@@ -904,9 +904,16 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 
 ### 必须实测的风险（动手前先验，不靠推断）
 
+0. **本机当前没有 jedi-language-server**（2026-11-09 实测）：`where python` 命中的三个解释器
+   （沙箱 runtime 3.x、`C:\Users\sling\AppData\Local\Python\pythoncore-3.14-64`、uv 的
+   `cpython-3.12.14`）逐个 `import jedi_language_server` **全部失败**（`ModuleNotFoundError`）。
+   所以这一条改动就算接完，**本机真机也只能看到"如实无服务"**（状态栏会显示启动失败原因）。
+   要真机验收必须先装（`uv pip install jedi-language-server` 或用户自己的 venv）。这条不写清，
+   很容易变成"改完了但没人能验证"。
 1. **jedi-language-server 是否真能同时接多个 `untitled:` 文档**：机制上 LSP 支持（`did_open` 多 uri），
    但本仓从未在一条连接上开过两份 `untitled:` 文档，jedi 对无路径文档的解析行为未知。**先做一次
-   手工探针**（起 server、`did_open` 两个 `untitled:Rds-*`、各发一次补全请求）再改代码。
+   手工探针**（起 server、`did_open` 两个 `untitled:Rds-*`、各发一次补全请求）再改代码——探针依赖
+   上面第 0 条（装了才能验）。
 2. **单元内坐标是否需要换算**：不需要——单元是独立内核实例，LSP 返回的 range 就是单元正文坐标，
    直接进该单元的 `DiagnosticSet`（与"文档行号偏移"无关，这一点此前被误判过）。
 3. **R / Julia 不在本方案内**：`editor_env::resolve` 目前只解析 Python；R 服务还要先定"是否真要
