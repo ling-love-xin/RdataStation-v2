@@ -1481,23 +1481,8 @@ impl NavView {
             NavSource::Shared => cx.theme().colors.primary,
         };
 
-        // 失败连接的行内错误摘要（报错分级：读路径**行内可见 + 可重试，不弹窗**）。
-        // 常驻一行 danger 小字 + 省略号；全量原因在徽标 hover 卡（`状态：连接失败`）与
-        // 行尾重试按钮的 hover 上，不让错误占掉整行宽度。
-        let err_summary = error.as_ref().map(|err| {
-            div()
-                .id(format!("nav-conn-err-{}::{}", scope_key, conn.id))
-                .flex_none()
-                .max_w(rems(ui::NAV_ERR_SUMMARY_W))
-                .overflow_hidden()
-                .text_ellipsis()
-                .text_xs()
-                .text_color(danger)
-                .child(err.clone())
-        });
-
         // D12 连接行主机名副标：档案默认开（SQLite / DuckDB 本地库默认关）；host 为空不显，
-        // port 非空拼 `host:port`。与错误摘要同槽位同行，不增行高；门控判定走纯函数。
+        // port 非空拼 `host:port`，不增行高；门控判定走纯函数。
         let host_subline = host_subline_text(
             crate::nav::family_profile::family_inline_profile(&type_id),
             conn.host.as_deref(),
@@ -1660,12 +1645,9 @@ impl NavView {
                 .group("nav-conn-row")
                 .child(badge)
                 .child({
-                    // 名称槽（方案③）：整块交给 hover 卡做 trigger——名称被 `text_ellipsis()`
-                    // 截断后这是唯一的「看全」通道，卡本身不占排版宽。
-                    // 横向画布落地后 trigger 是 `flex_none + min_w/max_w`（见
-                    // `primitives::nav_name_hover_card`），宽度按内容取，所以内层**不能**用
-                    // `w_full()`（auto 宽容器里 100% 成环）；名称自身带上限 `NAV_NAME_MAX_W`
-                    // 才能触发省略号。
+                    // 名称槽（方案③）：**不再包 hover 卡**（2026-11-09 合并入口：全名/类型/主机
+                    // 连同归属域全称都进行尾那张卡，热区只在归属域格上），所以这里只是一个
+                    // 普通行内块——`min_w_0 + overflow_hidden` 让名称可省略，其余信息左锚跟随。
                     let name_body = div()
                         .min_w_0()
                         .overflow_hidden()
@@ -1730,17 +1712,11 @@ impl NavView {
                                     .text_color(muted)
                                     .child(text),
                             )
-                        })
-                        // 失败连接：错误摘要放进名称容器（紧跟名称/host），
-                        // 行尾重试按钮因此不随错误状态左右移动、保持对齐。
-                        .when_some(err_summary, |s, e| s.child(e));
-                    nav_name_hover_card(
-                        SharedString::from(format!("nav-conn-name-{}::{}", scope_key, conn.id)),
-                        name_body.into_any_element(),
-                        conn_base_name.clone(),
-                        name_card_detail,
-                    )
-                    .into_any_element()
+                        });
+                    // 2026-11-09 行内不再显示错误摘要（失败原因看徽标卡 / 行尾重试的 hover）；
+                    // 名称槽也不单独挂卡（此前一行上「名称卡 + 归属域卡」两个热区），
+                    // 整张连接卡改挂到行尾「归属域格」上，见下方 scope 列。
+                    name_body.into_any_element()
                 })
                 // 行尾操作 overlay（现仅失败连接的重试）：仅 hover / 选中显，无失败时不挂。
                 // 需求③：归在归属域列**之前**（归属域置最右），操作按钮与名称更近。
@@ -1749,8 +1725,9 @@ impl NavView {
                 // 归属域列的右偏移也是行尾 overlay 的锚点（见 `ops_right`），两者同源、不会错位。
                 .child(div().flex_1().min_w_0())
                 .when(scope_visible, |s| {
-                    // 归属域列置最右（需求③）：固定宽度右对齐列；短码不是自解释的，
-                    // hover 卡给一句人话（§2.3）。
+                    // 归属域格置最右（需求③）：**刚好两个字符宽**、内容居中——`GP` 满格，
+                    // `P` / `G` 也落进同一格居中（2026-11-09：格宽 2.4rem → 1rem，
+                    // 去掉内距，列宽不再随内容起伏）。
                     // #30 来源标识加背景框：未连接时中性底 + 灰字（不显示颜色）；
                     // 连接成功才给来源色文字 + 同色淡底（胶囊）。
                     let scope_badge = if connected {
@@ -1758,7 +1735,6 @@ impl NavView {
                             .h_flex()
                             .items_center()
                             .justify_center()
-                            .px_1()
                             .rounded_sm()
                             .bg(scope_color.alpha(0.14))
                             .text_xs()
@@ -1769,7 +1745,6 @@ impl NavView {
                             .h_flex()
                             .items_center()
                             .justify_center()
-                            .px_1()
                             .rounded_sm()
                             .bg(muted.alpha(0.12))
                             .text_xs()
@@ -1780,13 +1755,20 @@ impl NavView {
                         .w(rems(scope_col))
                         .flex_none()
                         .flex()
-                        .justify_end()
+                        .justify_center()
                         .items_center()
                         .child(scope_badge);
-                    s.child(nav_scope_hover_card(
+                    // 唯一热区：hover 卡只挂这两字符的格子上；卡内容 = 归属域全称 + 名称卡原有细节
+                    // （此前名称卡与归属域卡分开两处，一行两个弹层入口）。
+                    let mut scope_card_detail = Vec::with_capacity(name_card_detail.len() + 1);
+                    scope_card_detail.push(nav_scope_tooltip(source));
+                    scope_card_detail.extend(name_card_detail.iter().cloned());
+                    s.child(nav_name_hover_card(
                         SharedString::from(format!("nav-scope-{}::{}", scope_key, conn.id)),
                         column,
-                        nav_scope_tooltip(source),
+                        conn_base_name.clone(),
+                        scope_card_detail,
+                        HoverTriggerStyle::Inline,
                     ))
                 })
                 // 拖拽（归组 + 组内排序）：拖起本行；落点 = 行（插到该行之前）/ 分组头（见 `render_group_header`）。
@@ -2554,6 +2536,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         title_el.into_any_element(),
                         node.name.clone(),
                         detail,
+                        HoverTriggerStyle::NameSlot,
                     )
                     .into_any_element()
                 } else {

@@ -159,9 +159,10 @@ pub const NAV_PREFIX_TIMEOUT_MS: u64 = 800;
 /// 为何不是 16px：可点区下限按 20px 取——宿主行高只有 26px（`NAV_ROW_CONNECTION`），
 /// 再大就吃掉名称列；这两个按钮只在 hover / 选中时显，指针此时已在行内。
 pub const NAV_ROW_ACTION_SIZE: f32 = 1.25;
-/// 连接行归属域列宽（短码模式；2.4rem ≈ 38px）。
-pub const NAV_SCOPE_COL_SHORT: f32 = 2.4;
-/// 连接行归属域列宽（文字模式；3.4rem ≈ 54px）。
+/// 连接行归属域格宽（短码模式）：**刚好两个字符**（`GP` 满格，`P` / `G` 也落在同一格里居中），
+/// 1rem ≈ 16px@16 基准。格宽不随内容起伏，右缘对齐点因此固定（2026-11-09 由 2.4rem 收到 1rem）。
+pub const NAV_SCOPE_COL_SHORT: f32 = 1.0;
+/// 连接行归属域格宽（文字模式）：`项目 / 全局 / 共享` 两汉字放不进两字符格，故保留原宽。
 pub const NAV_SCOPE_COL_TEXT: f32 = 3.4;
 /// 分组头行高（1.5rem = 24px）。
 pub const NAV_ROW_GROUP: f32 = 1.5;
@@ -180,8 +181,6 @@ pub const NAV_EDITOR_COPY: f32 = 4.5;
 pub const NAV_EDITOR_GROUP: f32 = 5.5;
 /// 面板头部高度（2.25rem ≈ 36px）
 pub const PANEL_HEADER_HEIGHT: f32 = 2.25;
-/// 失败连接行的行内错误摘要最大宽（6.5rem ≈ 104px；超出省略，hover 卡看全量）。
-pub const NAV_ERR_SUMMARY_W: f32 = 6.5;
 /// 连接行主机名副标（`host:port`）最大宽（6rem ≈ 96px；超出省略，双击连接看全量）。
 pub const NAV_HOST_SUBLINE_W: f32 = 6.0;
 /// 对象行注释副标最大宽（8rem ≈ 128px；超出省略，属性面板看全量）。

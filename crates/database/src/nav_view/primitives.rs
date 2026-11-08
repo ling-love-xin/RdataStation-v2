@@ -57,33 +57,8 @@ pub(super) fn parse_nav_search(raw: &str) -> NavSearchFacets {
     out
 }
 
-/// 徽标 hover 卡：类型 / 状态 / 驱动（gpui-kit 0.7.1 无通用 `.tooltip` 扩展，故用 `HoverCard`）。
-/// 归属域列 tooltip（原型设计 §2.3 要求）：把 `P` / `G` / `GP` 展开成一句人话。
-///
-/// 为何必须有：短码是**系统事实**（记录存在哪个域、谁能看到），但两个字母对用户不是自解释的；
-/// 属性面板只接对象，不接「这条连接存在哪」，所以这句解释的稳态去处在行内——与徽标 hover 卡
-/// （类型 / 状态 / 驱动）同一套 300ms 延迟，避免鼠标扫过整棵树时弹层乱闪。
-pub(super) fn nav_scope_hover_card(
-    id: SharedString,
-    trigger: impl IntoElement + 'static,
-    text: String,
-) -> impl IntoElement {
-    use gpui_kit::component::hover_card::HoverCard;
-    HoverCard::new(id)
-        .open_delay(std::time::Duration::from_millis(300))
-        .trigger(trigger)
-        .content(move |_, _window, cx| {
-            let fg = cx.theme().colors.foreground;
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(fg)
-                .child(text.clone())
-        })
-}
-
 /// 归属域短码 / 文字的 tooltip 文案（§2.3 的三档）。
+/// 消费方：连接行唯一那张 hover 卡的首行（卡挂归属域格，见 `rows.rs` 的 scope 列）。
 pub(super) fn nav_scope_tooltip(source: NavSource) -> String {
     match source {
         NavSource::Project => "归属域：项目连接（仅本项目可见）".to_string(),
@@ -106,7 +81,20 @@ pub(super) fn strip_nav_scope_prefix(name: &str) -> String {
     name.to_string()
 }
 
+/// hover 卡的触发槽口径：名称槽要按名称宽度口径夹取（省略号），行内小格只按内容取宽。
+///
+/// 为什么需要区分：连接行的卡现在挂在**归属域那两个字符的格子**上（格宽 1rem），
+/// 若沿用名称槽的 `min_w(NAV_NAME_MIN_W)`，会把两字符格撑到 5rem、挤掉名称。
+#[derive(Clone, Copy)]
+pub(super) enum HoverTriggerStyle {
+    /// 名称槽：`min_w(NAV_NAME_MIN_W)` + `max_w(NAV_NAME_MAX_W)` + 溢出裁剪。
+    NameSlot,
+    /// 行内小元素：只 `flex_none`，宽度随内容。
+    Inline,
+}
+
 /// 行名「全名」hover 卡：名称被 `text_ellipsis()` 截断后唯一的看全通道。
+/// 连接行那张卡同时承载「归属域全称 + 类型 + 主机」（两个入口已合并到归属域格上）。
 ///
 /// 名称槽的宽度口径（2026-11-08 横向画布落地后）：视口宽不再钉死行宽，行宽 = 画布宽
 /// （`ui::NAV_TREE_CANVAS_W` = 30rem），所以名称按内容取宽、上限 `ui::NAV_NAME_MAX_W`
@@ -117,25 +105,28 @@ pub(super) fn strip_nav_scope_prefix(name: &str) -> String {
 /// 外层横向滚动承接（`chrome.rs` 树区装配）。
 ///
 /// 延迟与徽标卡 / 归属域卡同为 300ms：鼠标扫过整棵树时不闪。
-/// `trigger_style` 固定为 `flex_none + min_w(NAV_NAME_MIN_W) + max_w(NAV_NAME_MAX_W)
-/// + overflow_hidden`——调用方的行内标题槽就是这个语义；被包进去的 trigger 自身
+/// `trigger_style` 由 `slot` 决定：`NameSlot` = `flex_none + min_w(NAV_NAME_MIN_W)
+/// + max_w(NAV_NAME_MAX_W) + overflow_hidden`（调用方的行内标题槽就是这个语义）；
+/// `Inline` = 只 `flex_none`（连接行的归属域格只有两字符宽）。被包进去的 trigger 自身
 /// 按内容取宽（**不要再写 `w_full()`**，那会在 auto 宽容器里成环）。
 pub(super) fn nav_name_hover_card(
     id: SharedString,
     trigger: impl IntoElement + 'static,
     title: String,
     detail: Vec<String>,
+    slot: HoverTriggerStyle,
 ) -> impl IntoElement {
     use gpui_kit::component::hover_card::HoverCard;
     HoverCard::new(id)
         .open_delay(std::time::Duration::from_millis(300))
-        .trigger_style(
-            gpui_kit::StyleRefinement::default()
+        .trigger_style(match slot {
+            HoverTriggerStyle::NameSlot => gpui_kit::StyleRefinement::default()
                 .flex_none()
                 .min_w(rems(ui::NAV_NAME_MIN_W))
                 .max_w(rems(ui::NAV_NAME_MAX_W))
                 .overflow_hidden(),
-        )
+            HoverTriggerStyle::Inline => gpui_kit::StyleRefinement::default().flex_none(),
+        })
         .trigger(trigger)
         .content(move |_, _window, cx| {
             let fg = cx.theme().colors.foreground;
