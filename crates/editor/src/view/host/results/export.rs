@@ -84,6 +84,39 @@ impl EditorHostPanel {
         }
     }
 
+    /// 【保存值】把值详情页当前格的值存成文件（对齐 DBeaver「保存至文件…」）。
+    ///
+    /// DBeaver 侧实证：`ContentValueManager.contributeContentActions`（`:86-99`）往值页
+    /// 工具条贡献该动作，`saveToFile`（`:291-334`）负责选路径 + 写盘（文本 UTF-8、二进制直写、
+    /// 取消不算错误、失败弹提示）；另一个 `SaveValueAction`（`ValueViewerPanel.java:445`）
+    /// 是把值**写回结果集**，本仓只读预览故不做。
+    ///
+    /// 与导出的区别：导出是**整个结果集**（按格式编码、默认名从 SQL 猜表名），保存值是
+    /// **一个格子**（字节由面板按值形态算好，默认名带行列号与形态扩展名）。两条路径共用
+    /// 「注入式路径选择端口」，但**不共用** picker：另存为 picker 无格式过滤，正好适配
+    /// 「值可以是 txt / json / png / bin」这种无固定格式的落盘。
+    pub(crate) fn save_selected_value(&mut self, cx: &mut Context<Self>) {
+        if !self.shared.has_save_path_picker() {
+            self.set_message(Some("保存值未接入（宿主未注入路径选择器）".to_string()), cx);
+            return;
+        }
+        let Some(payload) = self.result_panel.read(cx).selected_value_payload(cx) else {
+            self.set_message(Some("先选中一个单元格再保存值".to_string()), cx);
+            return;
+        };
+        let Some(path) = self.shared.pick_save_path(None, payload.default_name) else {
+            // 用户取消：不是错误，不弹提示（与另存为 / 导出同口径）
+            return;
+        };
+        match std::fs::write(&path, &payload.bytes) {
+            Ok(()) => self.set_message(
+                Some(format!("已保存值到 {}", path.display())),
+                cx,
+            ),
+            Err(err) => self.set_message(Some(format!("保存值失败：{err}")), cx),
+        }
+    }
+
     /// 【B7】筛选中时导出的是**筛后的行集**（原型 §5.5）。
     ///
     /// 【#28-B1 排除矩阵】导出序列 = 底层未删行：本地行不进任何导出档、被删行排除；

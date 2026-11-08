@@ -41,7 +41,8 @@
 
 ```powershell
 $env:RUST_MIN_STACK='268435456'; cd D:\RdataStation\RDS\RdataStation-v2
-cargo test -p rds-result-panel --lib    # 基线：252 passed / 0 failed（含 rendered_ui_elements_survive 防回退）
+cargo test -p rds-result-panel --lib    # 基线：257 passed / 0 failed（含 rendered_ui_elements_survive 防回退）
+cargo test -p rds-settings --lib        # 基线：35 passed / 0 failed
 cargo test -p rds-ui-guard              # 基线：4 passed / 0 failed（含 no_new_hardcoded_color_or_pixel）
 cargo test -p rds-workbench-shell --lib # 基线：14 passed / 0 failed
 cargo check -p rds-editor -p rds-workbench -p rds-workbench-shell  # 通过（workbench 7 warnings 为并行线遗留）
@@ -774,8 +775,34 @@ R3 / R4 / R5。
 **仍未做**：方向状态与竖排高度的跨会话持久化、对比模式下的方向切换、
 竖排观感的真窗口目视。
 
----
+### 2.37 保存值「保存至文件…」（对齐 DBeaver `ContentValueManager.saveToFile`）
 
+值详情页工具条右段新增「保存值」按钮（`editor-result-value-save`，`IconName::Download`）。
+证据与偏离全文见 `result-panel.md §8.47`，接手要点：
+
+- **对齐的是哪一支（容易搞错）**：DBeaver 值页有两个动作，`SaveValueAction`
+  （`ValueViewerPanel.java:445`，command `…core.resultset.cell.save`）的 `saveValue()`（`:370-385`）
+  是把编辑器里的值 **写回结果集**；真正「保存至文件…」在
+  `ContentValueManager.contributeContentActions`（`:86-99`）→ `saveToFile`（`:291-334`）。
+  **本仓只做后者**（只读预览、无写回通道）。
+- **职责切分**：面板算字节 + 默认文件名（`value_payload(kind, value, row, col)` 纯函数、
+  `ResultPanel::selected_value_payload`），宿主只选路径 + 写盘
+  （`editor/.../results/export.rs::save_selected_value`）。取消 = 直接 return 不提示。
+- **端口**：复用 `SavePathPicker`（`(当前路径, 默认名)`），**不用** `ExportPathPicker`
+  （后者签名带 `ExportFormat`，而值可以是 txt / json / png / bin，无固定格式）。
+- **形态映射**：图片 → `hex_to_bytes` 真字节 + 格式名小写扩展名；Hex → 真字节 + `bin`；
+  Json → 原文 + `json`；Text → 原文 + `txt`。默认名 `value_r{行}_c{列}.{ext}`（1 基）。
+- **三条偏离**：① 触发条件放宽（DBeaver 只对 `DBDContent` 摆该动作，本仓任意格都摆，
+  文本也能落盘）；② 默认名不取列名（列名可能含 `/ : *` 与超长中文，清洗会引平台差异）；
+  ③ 未做 "Open in external editor"（`ContentValueManager.java:100-134`）。
+
+**验证**：`cargo check -p rds-result-panel` / `-p rds-editor` 通过（0 error / 0 warning）；
+门禁 panel **257**（256 + 1：`value_payload_extracts_bytes_and_extension_by_shape`）/ guard **4**
+全绿（本轮未动 settings / workbench_shell）。
+
+**仍未做**：external editor、列名当默认名、「写回结果集」通道、320px 窄栏三按钮拥挤度目视。
+
+---
 
 ## 3. 并行线协作纪律（工作区现状）
 
@@ -791,7 +818,7 @@ R3 / R4 / R5。
 
 ## 4. 接手指引（新会话建议顺序）
 
-1. 先重跑 §1.3 三条验证命令，确认基线（尤其 **207 passed / 0 failed**）落地。
+1. 先重跑 §1.3 四条验证命令，确认基线（尤其 **257 passed / 0 failed**）落地。
 2. 处理 §2.1 提交待办：先 `git status` / `git diff` 摘本线 hunk，与并行线协调后统一提交类型样式渲染消费（settings 三文件 + grid.rs + host.rs + workbench view.rs）。
 3. 知悉 §2.2 外线阻塞（settings 契约测试）与 §1.3 契约测试既有失败，不替并行线补。
 4. 按 §2.4 优先级推进功能遗留（P0（注释与文档漂移）/ P1（分页·行号跳转·列宽落盘）/ P2（hex 翻页·图片预览·列浏览器多选）已交付；剩余见 §2.4 表，开工前先按模块惯例说理解、列方案）。
@@ -799,9 +826,9 @@ R3 / R4 / R5。
 
 ## 5. 常用锚点（行号随近期提交微移，以现场 grep 为准）
 
-- `panel/`：`mod.rs`（门面 + pub 面 re-export：`GridPayload` / `ExportCtx` / `ResultSyncInput` / `ResultPanel` / `AnalysisItem`）；`render.rs` 主 `render` 组装；`sidebars.rs` `render_vertical_bar`（左缘竖条：网格/文本/记录/上一行/下一行）/ `render_right_edge_bar`（右缘竖条，页签图标区）/ `render_right_sidebar`（横 tab 只显激活页签）/ `render_browser_tab` / `render_filter_expand_bar`（展开条：左=展开右=运行无边框）+ `sidebar_width_anim` / `next_right_edge_state` / `clamp_right_sidebar_width` / `clamp_right_sidebar_height` 纯函数 + **R5** `SidebarResizeDrag` / `render_right_sidebar_resize`（`resize_handle` 独立手柄，id `editor-result-right-sidebar-resize`，横排 Horizontal / 竖排 Vertical）；`tabs.rs` `render_value_tab` / `render_stats_tab` / `render_group_tab` / `render_reference_tab`（backlog 空态）/ `render_exec_sql_tab` + `kv_row` / `fmt_stat` / `right_tab_from_index` + `panel_toolbar`（28px 页内工具条公用件）；`dialog.rs` `render_sql_dialog`（SQL 预览弹窗浮层）；`events.rs` `toggle_value_sidebar`（三态）/ `resize_right_sidebar`（拖拽改宽度 / 竖排改高度）/ **R5** `toggle_vertical_layout`（方向切换，清拖拽标记）/ `end_right_sidebar_resize` / `set_right_sidebar_width_px`/ `toggle_transpose` / `open_sql_dialog` / `close_sql_dialog`（事件路径，需 window）+ `reorder_by` 纯函数；`lifecycle.rs` `new` / `sync`（投影同步）；`tests.rs` 尾部 `rendered_ui_elements_survive`（渲染断言防回退，见 §2.10）。
+- `panel/`：`mod.rs`（门面 + pub 面 re-export：`GridPayload` / `ExportCtx` / `ResultSyncInput` / `ResultPanel` / `AnalysisItem`）；`render.rs` 主 `render` 组装；`sidebars.rs` `render_vertical_bar`（左缘竖条：网格/文本/记录/上一行/下一行）/ `render_right_edge_bar`（右缘竖条，页签图标区）/ `render_right_sidebar`（横 tab 只显激活页签）/ `render_browser_tab` / `render_filter_expand_bar`（展开条：左=展开右=运行无边框）+ `sidebar_width_anim` / `next_right_edge_state` / `clamp_right_sidebar_width` / `clamp_right_sidebar_height` 纯函数 + **R5** `SidebarResizeDrag` / `render_right_sidebar_resize`（`resize_handle` 独立手柄，id `editor-result-right-sidebar-resize`，横排 Horizontal / 竖排 Vertical）；`tabs.rs` `render_value_tab`（值页工具条右段 = 位置标记 + 复制 + **保存值** `editor-result-value-save`）/ `render_stats_tab` / `render_group_tab` / `render_reference_tab`（backlog 空态）/ `render_exec_sql_tab` + **保存值** `value_payload(kind, value, row, col)`（纯函数，形态→字节+默认名）/ `ResultPanel::selected_value_payload` + `kv_row` / `fmt_stat` / `right_tab_from_index` + `panel_toolbar`（28px 页内工具条公用件）；`dialog.rs` `render_sql_dialog`（SQL 预览弹窗浮层）；`events.rs` `toggle_value_sidebar`（三态）/ `resize_right_sidebar`（拖拽改宽度 / 竖排改高度）/ **R5** `toggle_vertical_layout`（方向切换，清拖拽标记）/ `end_right_sidebar_resize` / `set_right_sidebar_width_px`/ `toggle_transpose` / `open_sql_dialog` / `close_sql_dialog`（事件路径，需 window）+ `reorder_by` 纯函数；`lifecycle.rs` `new` / `sync`（投影同步）；`tests.rs` 尾部 `rendered_ui_elements_survive`（渲染断言防回退，见 §2.10）。
 - `ui.rs`：`RESULT_VERTICAL_BAR_WIDTH`（2.25）/ `RESULT_SIDEBAR_RIGHT_WIDTH`（20.0）+ **R5** `RESULT_SIDEBAR_RIGHT_MIN_WIDTH`（12.0 = 192px）/ `RESULT_SIDEBAR_RIGHT_MAX_WIDTH`（40.0 = 640px，均 f32，避裸 `px(`）/ **R5 方向切换** `RESULT_SIDEBAR_RIGHT_HEIGHT`（15.0 = 240px）/ `RESULT_SIDEBAR_RIGHT_MIN_HEIGHT`（8.0 = 128px）/ `RESULT_SIDEBAR_RIGHT_MAX_HEIGHT`（32.0 = 512px）/ `RESULT_STATUS_BAR_HEIGHT`（1.5）/ `RESULT_TOOLBAR_HEIGHT`（**1.875 = 30px，比标签条 2.0 矮一档**，对齐 DBeaver `3+2+20+2+3`）/ `RESULT_PANEL_TOOLBAR_HEIGHT`（**1.75 = 28px，右栏页内工具条，必须等于 vendor `toolbar.rs:242-259` XSmall 档的 `min_h_7`**）/ `RESULT_TOOLBAR_PADDING`（`px(3.)`，水平内距，对齐 DBeaver `marginWidth = 3`）。
-- `ports.rs`：`ResultRequest` 全集（含 #7 / §2.9 新增变体 `RunFilterAsQuery` / `ToggleFilterExpand` / `OpenSqlDialog` / `CloseSqlDialog`；`ToggleSqlPreview` 已删）+ `ResultActionQueue`（`request` / `set_panel` / `push` / `drain`）。
+- `ports.rs`：`ResultRequest` 全集（含 #7 / §2.9 新增变体 `RunFilterAsQuery` / `ToggleFilterExpand` / `OpenSqlDialog` / `CloseSqlDialog`；`ToggleSqlPreview` 已删）+ **§2.37** `SaveValue` 变体 / `ValuePayload { bytes, default_name }` + `ResultActionQueue`（`request` / `set_panel` / `push` / `drain`）。
 - `grid/`：`delegate.rs` `ResultGridDelegate`（TableDelegate 主体实现 + 钩子类型 + RESULT_GRID_CONTEXT 等常量）；`cell.rs` `render_td` / `header.rs` `render_th` / `menu.rs` `context_menu`（trait 方法不可分块 → 顶层自由函数 + `table_impl.rs` 薄转发）；`status.rs` `render_status_row`（三项新签名）/ `ResultToolbar` / `ResultStatus` / `ResultControls` / `ResultPane`；`text.rs` `format_cell_text` / `view_rows.rs` `text_presentation` 指纹缓存 / `stats.rs` 列统计 / `edit.rs` 行编辑 / `tests.rs`（全量测试迁入）。
 - `store/`：`store.rs` `ResultStore`（按文档分槽，多结果集 sets(document) + TabBar 标签；事实档 A2 未接线）+ `entry.rs` / `fact.rs`。
 - `export/`：`mod.rs` 门面 + `formats.rs` / `encode.rs` / `table_name.rs`（editor 侧 `pub use result_panel::export::*` 通配，全 pub 面保持）。

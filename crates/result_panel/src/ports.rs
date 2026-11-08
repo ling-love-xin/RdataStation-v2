@@ -82,6 +82,21 @@ pub enum ResultRequest {
     CopyExecSql,
     /// 【R1】复制当前选中单元格的值（值详情页工具条的复制钮；无选中格时为空操作）
     CopyValue,
+    /// 【保存值】把当前选中格的值存成文件。
+    ///
+    /// **对齐的是哪个动作**（实证口径）：DBeaver 值页工具条由
+    /// `ValueViewerPanel.fillToolBar`（`ValueViewerPanel.java:409-428`）装三样东西——
+    /// `valueManager.contributeActions(...)`（`ContentValueManager.contributeContentActions`
+    /// 在此贡献「保存至文件…」`ResultSetMessages.model_jdbc_save_to_file_`，图标 `UIIcon.SAVE_AS`，
+    /// 见 `ContentValueManager.java:86-99`）、引用值动作，以及**只在非只读时才加**的
+    /// `SaveValueAction`（`:445`，command `…core.resultset.cell.save`，`saveValue()` 于 `:370-385`
+    /// 把编辑器里的值**写回结果集**——`previewController.updateValue`，不是存文件）。
+    /// 本仓只读预览、无写回通道，故只做「保存至文件」这一支：`ContentValueManager.saveToFile`
+    /// （`:291-334`，文本按 UTF-8、二进制直写、用户取消不算错误、失败弹提示）。
+    ///
+    /// 字节与默认文件名由面板算好（[`ResultPanel::selected_value_payload`]），
+    /// 宿主只负责选路径 + 写盘。
+    SaveValue,
     /// 刷新（重跑当前结果 SQL）
     Refresh,
     /// 取下一段
@@ -208,6 +223,19 @@ pub enum ResultRequest {
     SetGroupSort(GroupSort),
     /// 【R3 分组页】「仅重复」：只保留行数 > 1 的分组（对齐 DBeaver 分组面板同名选项）
     SetGroupDuplicatesOnly(bool),
+}
+
+/// 【保存值】待落盘的内容：面板算字节与默认文件名，宿主只选路径 + 写盘。
+///
+/// 为什么由面板算字节：值查看器的三种形态（文本 / JSON / hex & 图片）**同源于格子文本**
+/// （二进制是 hex 文本，`hex_to_bytes` 可无损还原；图片也是同一份 hex 文本经魔数判定），
+/// 只有面板手里有 `selection_pos` 与列类型，宿主不该再理解一遍值形态。
+pub struct ValuePayload {
+    /// 要写的字节：文本 / JSON = 展示文本原文；二进制 = hex 还原出的真字节
+    /// （图片因此存下来就是可用的 png/jpg/gif/webp）
+    pub bytes: Vec<u8>,
+    /// 默认文件名（扩展名按值形态给），只给文件名、不含目录
+    pub default_name: String,
 }
 
 /// 【R2】计算页的统计项（对齐 DBeaver Calc 的可配置聚合函数集

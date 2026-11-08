@@ -128,6 +128,9 @@ impl EditorHostPanel {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(value));
                 }
             }
+            // 【保存值】把值详情页当前格存成文件（对齐 DBeaver「保存至文件…」）：
+            // 字节与默认文件名由面板按值形态算好，这里只走「选路径 + 写盘」
+            ResultRequest::SaveValue => self.save_selected_value(cx),
             ResultRequest::Refresh => self.refresh_active_result(cx),
             ResultRequest::FetchMore => self.fetch_more(cx),
             ResultRequest::FetchAll => {

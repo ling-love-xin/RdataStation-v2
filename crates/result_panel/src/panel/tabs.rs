@@ -20,7 +20,9 @@ use crate::grid::cell::{
     HEX_DUMP_BYTES_PER_LINE, ViewerMode, classify_value, hex_lines, hex_to_bytes,
 };
 use crate::grid::stats::{ColumnStats, fmt_grouped, text_minmax};
-use crate::ports::{GroupSort, ResultActionQueue, ResultRequest, StatsItem, StatsMode};
+use crate::ports::{
+    GroupSort, ResultActionQueue, ResultRequest, StatsItem, StatsMode, ValuePayload,
+};
 #[cfg(test)]
 use crate::ports::RightTab;
 use crate::store::ColumnKind;
@@ -28,6 +30,34 @@ use crate::ui;
 
 /// 【P2-1】hex 转储每页行数（16 行 × 16 字节 = 256 字节 / 页）
 const HEX_LINES_PER_PAGE: usize = 16;
+
+/// 【保存值】按值形态给出待落盘的字节与默认文件名（纯函数；测试直接钉它）。
+///
+/// 三条口径（与值查看器同源，宿主不必再判一次值形态）：
+/// - 文本 / JSON：写展示文本原文（JSON 存下来就是合法的 `.json`）；
+/// - 二进制（hex 转储 / 图片）：写 `hex_to_bytes` 还原出的**真字节**——图片存下来
+///   就是可用的 png/jpg/gif/webp，不是一份 hex 文本。
+///
+/// 默认文件名只给「行列号 + 扩展名」（1 基行号与列号），不带列名：列名可能含文件系统
+/// 非法字符（`/` `:` `*` 等）与超长中文，清洗规则会引出一整套平台差异，不如不拼。
+pub(crate) fn value_payload(
+    kind: ColumnKind,
+    value: &str,
+    row: usize,
+    col: usize,
+) -> ValuePayload {
+    let (bytes, ext) = match classify_value(kind, value) {
+        // 图片格式名（PNG / JPEG / GIF / WebP）直接当扩展名（小写），与字节内容一致
+        ViewerMode::Image { format, .. } => (hex_to_bytes(value), format.to_ascii_lowercase()),
+        ViewerMode::Hex => (hex_to_bytes(value), "bin".to_string()),
+        ViewerMode::Json => (value.as_bytes().to_vec(), "json".to_string()),
+        ViewerMode::Text => (value.as_bytes().to_vec(), "txt".to_string()),
+    };
+    ValuePayload {
+        bytes,
+        default_name: format!("value_r{}_c{}.{ext}", row + 1, col),
+    }
+}
 
 /// 【P2-1】hex 页号与总页数：空值也算 1 页（好显示「第 1/1 页」），页号夹到合法范围
 pub(crate) fn hex_page_clamp(total_bytes: usize, page: usize) -> (usize, usize) {
@@ -106,9 +136,10 @@ impl ResultPanel {
                 base
             }
         };
-        // 【R1】页内工具条：左「列名 · 类型」，右「位置标记 + 复制当前值」
-        // （DBeaver 值页动作来自 `valueManager.contributeActions` 与 `SaveValueAction`，
-        // `ValueViewerPanel.java:409-428`；本仓只读预览，等价能力是复制）
+        // 【R1】页内工具条：左「列名 · 类型」，右「位置标记 + 复制当前值 + 保存值」
+        // （DBeaver 值页动作来自 `valueManager.contributeActions`——「保存至文件…」在
+        // `ContentValueManager.contributeContentActions` 里贡献——与 `SaveValueAction`
+        // （把值**写回**结果集，本仓只读预览不做）；本仓动作集 = 复制 + 保存至文件）
         let marker = div()
             .text_xs()
             .text_color(muted)
@@ -127,6 +158,22 @@ impl ResultPanel {
                 })
                 .into_any_element()
         };
+        // 【保存值】对齐 DBeaver「保存至文件…」（`ContentValueManager.contributeContentActions`
+        // `:86-99` → `saveToFile` `:291-334`）：落盘动作在宿主（选路径 + 写盘），
+        // 面板只交字节与默认文件名
+        let save = {
+            let queue = self.queue.clone();
+            Button::new("editor-result-value-save")
+                .ghost()
+                .xsmall()
+                .debug_selector(|| "editor-result-value-save".to_string())
+                .icon(IconName::Download)
+                .tooltip("把当前值保存到文件")
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::SaveValue, app);
+                })
+                .into_any_element()
+        };
         div()
             .flex_1()
             .min_h_0()
@@ -135,7 +182,7 @@ impl ResultPanel {
             .child(self.panel_toolbar(
                 "editor-result-value-toolbar",
                 SharedString::from(title),
-                vec![marker, copy],
+                vec![marker, copy, save],
                 cx,
             ))
             .child({
@@ -156,6 +203,24 @@ impl ResultPanel {
         let (row, col) = self.selection_pos?;
         let grid = self.grid.read(cx);
         Some(grid.delegate().cell_text(row, col, cx))
+    }
+
+    /// 【保存值】当前选中格的待落盘内容（对齐 DBeaver「保存至文件…」
+    /// `ContentValueManager.saveToFile`；事件路径调用）。
+    ///
+    /// 字节与默认名全部由 [`value_payload`] 按值形态算，这里只补「选中格 → 列类型」的一跳；
+    /// 行号槽（`col == 0`）给不出列类型，按文本处理（与值查看器同口径）。
+    pub fn selected_value_payload(&self, cx: &App) -> Option<ValuePayload> {
+        let (row, col) = self.selection_pos?;
+        let grid = self.grid.read(cx);
+        let delegate = grid.delegate();
+        let value = delegate.cell_text(row, col, cx);
+        let kind = if col == 0 {
+            ColumnKind::Unknown
+        } else {
+            delegate.column_kind(col)
+        };
+        Some(value_payload(kind, &value, row, col))
     }
 
     /// 【值查看器】内容区按分派模式渲染（纯 render 层；JSON 树解析在事件路径）

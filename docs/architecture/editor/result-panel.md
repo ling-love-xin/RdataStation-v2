@@ -2459,6 +2459,85 @@ straddle 5px 命中带宽）、光标 `cursor_col_resize`、`ResizeHandleState{I
 - 竖排下右缘竖条仍纵贯全高是否与 DBeaver 观感一致（真窗口目视待做）。
 - 竖排时状态栏归属、`compare_mode` 下的方向切换（对比模式双栏结构，本批未接）。
 
+### 8.47 保存值：值详情页「保存至文件…」（对齐 DBeaver `ContentValueManager.saveToFile`）
+
+#### 8.47.1 DBeaver 侧事实（逐条可核）
+
+值页工具条装配在 `ValueViewerPanel.fillToolBar`（`ValueViewerPanel.java:409-428`）：
+`valueManager.contributeActions(...)` → `GROUP_ACTIONS_ADDITIONAL` 后追加引用值动作 →
+**仅非只读时**追加 `SaveValueAction`（`:445`）。两条动作是**两件不同的事**，别混：
+
+| 动作 | 位置 | 实际行为 |
+| --- | --- | --- |
+| 「保存至文件…」`model_jdbc_save_to_file_` | `ui/data/managers/ContentValueManager.java:86-99`（`contributeContentActions`） | `saveToFile(controller)`（`:291-334`）：**选路径 + 写盘** |
+| `SaveValueAction` | `ValueViewerPanel.java:445`，command `…core.resultset.cell.save`（`ValueViewCommandHandler.java:34`，`:49-51` 与 `SMART_ENTER` 同走 `saveValue()`） | `saveValue()`（`:370-385`）= `extractEditorValue` → `previewController.updateValue(newValue, true)`：**把编辑器里的值写回结果集**，不是存文件 |
+
+- 「保存至文件…」的触发条件：`controller.getValue() instanceof DBDContent` **且非 NULL**
+  （`ContentValueManager.java:92`）——只对 LOB / LONG / BINARY 类值出现在值页工具条上；
+  同一处还摆 "Open in external editor"（`:100-134`）。
+- 文案：`ResultSetMessages_zh.properties:455 model_jdbc_save_to_file_ = 保存至文件...`
+  （英文 `ResultSetMessages.properties:151 = Save to file ...`），图标 `UIIcon.SAVE_AS`。
+- `saveToFile` 细节：`DialogUtils.selectFileForSave(shell, controller.getValueName())`
+  （`:299`，**默认文件名取「值名」即列属性名**）→ 取消 `null` 即 `return`，不算错误（`:300-302`）
+  → 文本内容（`ContentUtils.isTextContent`）按 **UTF-8** reader 落盘（`:307-314`），
+  其余按二进制流直写（`:315-319`）→ 失败弹 `model_jdbc_could_not_save_content` /
+  `model_jdbc_could_not_save_content_to_file_ + path`（`:326-329`）。
+- `SaveValueAction` 另有「自动应用值」勾选项（`AS_DROP_DOWN_MENU`）——写回通道的配套。
+
+#### 8.47.2 本仓口径与偏离
+
+- **只做「保存至文件」这一支**：本仓结果集是只读预览，没有 `previewController.updateValue`
+  那种写回通道（事务类改造不在范围内），故 `SaveValueAction` / 自动应用值不做。
+- **一致点**：入口在值页工具条右段（`位置标记 + 复制 + 保存`）；文本原样按 UTF-8 写出
+  （Rust `String` → `as_bytes()`，等价 `GeneralUtils.UTF8_ENCODING`）；二进制写真字节；
+  用户取消不弹提示；失败走宿主消息行。
+- **偏离 1（触发条件放宽）**：DBeaver 只对 `DBDContent` 摆「保存至文件」，文本值另有
+  `TextViewDialog` 自己的保存入口；本仓没有那层对话框，故**任意格都摆保存按钮**，
+  文本也能直接落盘。
+- **偏离 2（默认文件名）**：DBeaver 用 `getValueName()`（列属性名）；本仓用
+  `value_r{行}_c{列}.{扩展名}`（1 基行列号）。理由：列名可能含 `/ : *` 等文件系统非法字符
+  与超长中文，清洗规则会引出一整套平台差异，不如不拼。
+- **偏离 3（未做 external editor）**：`ContentValueManager.java:100-134` 的
+  "Open in external editor" 不做（需外部进程拉起 + 临时目录管理）。
+- **端口选型**：复用宿主既有 `SavePathPicker`（另存为 picker，只收 `(当前路径, 默认名)`），
+  **不用** `ExportPathPicker` —— 后者签名带 `ExportFormat`，而值可以是 txt / json / png / bin，
+  没有固定格式。两者都由 `crates/editor/src/ports/editor_files.rs:37 attach()` 用 `rfd` 注入。
+
+**值形态 → 落盘内容**（`value_payload` 纯函数，与值查看器同源 `classify_value`）：
+
+| 形态 | 字节 | 扩展名 |
+| --- | --- | --- |
+| `Image { format }` | `hex_to_bytes(值)` 还原真字节 | 格式名小写（`png` / `jpeg` / `gif` / `webp`） |
+| `Hex` | `hex_to_bytes(值)` | `bin` |
+| `Json` | 展示文本原文 | `json` |
+| `Text` | 展示文本原文 | `txt` |
+
+图片存下来是**可直接打开的图片**，不是一份 hex 文本。
+
+#### 8.47.3 落点（5 文件）
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/ports.rs` | `ResultRequest::SaveValue`（紧接 `CopyValue`；注释写清两条 DBeaver 动作的区别）+ 文件末 `pub struct ValuePayload { pub bytes: Vec<u8>, pub default_name: String }` |
+| `panel/tabs.rs` | 纯函数 `value_payload(kind, value, row, col) → ValuePayload`（放在 `hex_page_clamp` 之前）；`ResultPanel::selected_value_payload(&self, cx)`（`selection_pos` → `cell_text` → `column_kind`，`col == 0` 按文本）；`render_value_tab` 工具条右段 `vec![marker, copy, save]`，按钮 id `editor-result-value-save`（`ghost().xsmall()` + `IconName::Download`） |
+| `panel/tests.rs` | 纯函数测试 `value_payload_extracts_bytes_and_extension_by_shape`（文本 / JSON / 二进制 / PNG 魔数四条）；工具条形态测试的 id 列表加入 `editor-result-value-save` |
+| `editor/src/view/host/results/export.rs` | `save_selected_value(&mut self, cx)`：无 picker → 提示未接入；无选中格 → 提示先选格；`pick_save_path(None, default_name)` 返回 `None` = 用户取消直接 return；`std::fs::write` 成功 / 失败各一条状态消息 |
+| `editor/src/view/host/results/dispatch.rs` | `ResultRequest::SaveValue => self.save_selected_value(cx)`（`CopyValue` 之后） |
+
+#### 8.47.4 验证
+
+- `cargo check -p rds-result-panel` / `-p rds-editor` 通过（0 error / 0 warning）。
+- 门禁：panel **257**（256 + 1 条新测）、ui_guard **4**、settings **35**、workbench_shell **14**。
+- 新测钉住四条形态映射与命名（`1234.5 → value_r1_c1.txt`、`{"a":1}`（row 4 / col 2 基 0）
+  `→ value_r5_c2.json`、`0102FF → [01,02,FF] + .bin`、PNG 魔数 `89504E470D0A1A0A` → 真字节 + `.png`）。
+
+#### 8.47.5 未做 / 待定
+
+- "Open in external editor"（`ContentValueManager.java:100-134`）未做。
+- 默认名不取列名（偏离 2），如需对齐 DBeaver 需先定列名清洗规则。
+- 「写回结果集」（`SaveValueAction` + 自动应用值）本仓不支持，属结构性缺口。
+- 320px 窄栏下三按钮（标记 / 复制 / 保存）是否挤，真窗口目视待做。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

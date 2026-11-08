@@ -7,12 +7,44 @@ use super::reorder_by;
 use super::right_tab_from_index;
 use super::sidebar_width_anim;
 use super::tabs::stat_value;
+use super::tabs::value_payload;
 use crate::column_browser::filter_browser_columns;
 use crate::grid::stats::ColumnStats;
 use super::tabs::arrange_groups;
 use crate::ports::{GroupSort, RightTab, StatsItem, StatsMode};
+use crate::store::ColumnKind;
 use gpui_kit::Pixels;
 use gpui_kit::px;
+
+/// 【保存值】字节与默认名按值形态给（纯函数；宿主只负责选路径 + 写盘）。
+///
+/// 四个分支各钉一条：文本 / JSON 写原文，二进制写 hex 还原的真字节（不是 hex 文本），
+/// 图片扩展名随魔数（PNG → `.png`），这样存下来的图片文件能直接被看图软件打开。
+#[test]
+fn value_payload_extracts_bytes_and_extension_by_shape() {
+    // 文本：原样字节 + .txt（行列号 1 基）
+    let p = value_payload(ColumnKind::Unknown, "1234.5", 0, 1);
+    assert_eq!(p.bytes, b"1234.5".to_vec());
+    assert_eq!(p.default_name, "value_r1_c1.txt");
+
+    // JSON：原文 + .json（存下来仍是合法 JSON，不是美化后的树）
+    let p = value_payload(ColumnKind::Json, "{\"a\":1}", 4, 2);
+    assert_eq!(p.bytes, b"{\"a\":1}".to_vec());
+    assert_eq!(p.default_name, "value_r5_c2.json");
+
+    // 二进制（非图片）：hex 还原真字节 + .bin
+    let p = value_payload(ColumnKind::Binary, "0102FF", 0, 3);
+    assert_eq!(p.bytes, vec![0x01, 0x02, 0xFF]);
+    assert_eq!(p.default_name, "value_r1_c3.bin");
+
+    // 图片（PNG 魔数）：真字节 + .png（扩展名来自魔数，大写格式名转小写）
+    let p = value_payload(ColumnKind::Binary, "89504E470D0A1A0A", 7, 1);
+    assert_eq!(
+        p.bytes,
+        vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+    );
+    assert_eq!(p.default_name, "value_r8_c1.png");
+}
 
 /// 三份等长样本：列名 / 类型名 / 注释（注释可空）
 fn sample() -> (Vec<String>, Vec<String>, Vec<Option<String>>) {
@@ -760,7 +792,8 @@ fn panel_harness<'a>(
 }
 
 /// 【R1】右栏页内工具条形态统一：值详情 / 分组 / 执行SQL 三页各一条 28px 工具条，
-/// 动作只挂已有能力（值详情=复制当前值、执行SQL=复制 SQL、分组无动作——DBeaver 的
+/// 动作只挂已有能力（值详情=复制当前值 + 保存至文件（对齐 DBeaver
+/// `ContentValueManager.contributeContentActions`）、执行SQL=复制 SQL、分组无动作——DBeaver 的
 /// `ReferencesPanel.contributeActions` 也是空实现，故引用页维持空态）。
 #[gpui_kit::test]
 fn right_panel_pages_share_the_toolbar_shape(cx: &mut gpui_kit::TestAppContext) {
@@ -780,7 +813,7 @@ fn right_panel_pages_share_the_toolbar_shape(cx: &mut gpui_kit::TestAppContext) 
         by_id || cx.debug_bounds(id).is_some()
     };
 
-    // 1) 值详情：工具条 + 复制当前值
+    // 1) 值详情：工具条 + 复制当前值 + 保存值（保存值对齐 DBeaver「保存至文件…」）
     cx.update(|_, app| {
         panel.update(app, |p, cx| {
             p.selection_pos = Some((0, 1));
@@ -788,7 +821,11 @@ fn right_panel_pages_share_the_toolbar_shape(cx: &mut gpui_kit::TestAppContext) 
         })
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    for id in ["editor-result-value-toolbar", "editor-result-value-copy"] {
+    for id in [
+        "editor-result-value-toolbar",
+        "editor-result-value-copy",
+        "editor-result-value-save",
+    ] {
         assert!(visible(id, cx), "值详情页元素 {id} 应渲染可见");
     }
     let value_toolbar_h = f32::from(
