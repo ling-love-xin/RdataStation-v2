@@ -392,6 +392,7 @@ impl ResultPanel {
                     .border_color(theme.colors.border)
                     .text_xs()
                     .text_color(muted)
+                    .debug_selector(|| "editor-result-stats-header".to_string())
                     .child(
                         div()
                             .w(rems(ui::RESULT_SIDEBAR_KV_LABEL_WIDTH))
@@ -504,6 +505,7 @@ impl ResultPanel {
             .h(rems(ui::RESULT_PANEL_TOOLBAR_HEIGHT))
             .flex_none()
             .text_xs()
+            .debug_selector(|| "editor-result-stats-toolbar".to_string())
             .child(
                 div()
                     .flex_1()
@@ -525,7 +527,8 @@ impl ResultPanel {
     fn stat_row(&self, item: StatsItem, value: &str, cx: &App) -> AnyElement {
         let muted = cx.theme().colors.muted_foreground;
         let queue = self.queue.clone();
-        let debug_id = format!("editor-result-stat-{:?}", item);
+        let row_id = format!("editor-result-stat-row-{:?}", item);
+        let remove_id = format!("editor-result-stat-remove-{:?}", item);
         div()
             .h_flex()
             .items_center()
@@ -533,6 +536,7 @@ impl ResultPanel {
             .px_2()
             .h_5()
             .text_xs()
+            .debug_selector(move || row_id.clone())
             .child(
                 div()
                     .w(rems(ui::RESULT_SIDEBAR_KV_LABEL_WIDTH))
@@ -551,7 +555,7 @@ impl ResultPanel {
                 Button::new(format!("editor-result-stat-remove-{:?}", item))
                     .ghost()
                     .xsmall()
-                    .debug_selector(move || debug_id.clone())
+                    .debug_selector(move || remove_id.clone())
                     .icon(IconName::X)
                     .tooltip(format!("停用「{}」", item.label()))
                     .on_click(move |_, _window, app| {

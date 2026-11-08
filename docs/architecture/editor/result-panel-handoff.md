@@ -633,9 +633,10 @@ datetime #5CA259 / numeric #C0C0FF / string #D0D0D0）。全表见 `result-panel
 **踩坑**：`StyledExt` 没带 `.when(..)`（`gpui_kit::Div` / `Scrollable` 都没有这个方法，
 编译 `E0599`）——条件元素改用 `bool::then(|| …into_any_element())` + `children(Option<..>)`。
 
-**验证**：panel **246**（原 242 + 4 条：`fmt_grouped` / `text_minmax` / `stat_value` /
-`stats_defaults_are_full_set_in_display_order`）/ guard **4** / shell **14** passed；
-`cargo check -p rds-editor` 通过。
+**验证**：panel **247**（原 242 + 5：`fmt_grouped` / `text_minmax` / `stat_value` /
+`stats_defaults_are_full_set_in_display_order` / `stats_tab_renders_toolbar_header_and_rows`
+（最后一条是真渲染断言——工具条 28px、表头与行各 20px，且停用 Sum 后行消失、Reset 后回来））
+/ guard **4** / shell **14** passed；`cargo check -p rds-editor` 通过。
 
 **仍未做**：值详情 / 分组 / 引用 / 执行SQL 四页工具条；统计项增删跨会话持久化；
 R3 / R4 / R5。

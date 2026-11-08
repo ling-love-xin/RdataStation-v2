@@ -352,6 +352,142 @@ fn rendered_ui_elements_survive(cx: &mut gpui_kit::TestAppContext) {
     );
 }
 
+/// 【R2】计算页真渲染（不只跑纯函数）：面板工具条三件 / 两列表头 / 六行统计（含行尾 ×）
+/// 都要真画出来；行高 20px、工具条 28px；停用一项后该行消失、Reset 后回来（行为闭环）。
+///
+/// 谁把工具条拿掉、把 `stats_items` 写死回六行、或让 `Text` 口径把 Avg/Sum 也算出值，
+/// 此用例即红。
+#[gpui_kit::test]
+fn stats_tab_renders_toolbar_header_and_rows(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::component::table::TableState;
+    use gpui_kit::component::Root;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{AppContext as _, ElementId, Entity, IntoElement, Render, SharedString};
+
+    // 宿主壳（与 `rendered_ui_elements_survive` 同口径：ResultPanel 自定义 render）
+    struct PanelHost {
+        panel: Entity<super::ResultPanel>,
+    }
+    impl Render for PanelHost {
+        fn render(
+            &mut self,
+            _window: &mut gpui_kit::Window,
+            cx: &mut gpui_kit::Context<Self>,
+        ) -> impl IntoElement {
+            self.panel.read(cx).render(cx)
+        }
+    }
+
+    cx.update(gpui_kit::init);
+    let slot: std::rc::Rc<std::cell::RefCell<Option<Entity<super::ResultPanel>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let slot_in = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let queue = crate::ports::ResultActionQueue::new();
+        let panel = cx.new(|cx| super::ResultPanel::new(window, cx, queue));
+        let mut delegate = crate::grid::ResultGridDelegate::default();
+        delegate.set_data(
+            vec!["id".to_string(), "amount".to_string()],
+            vec![
+                vec!["1".to_string(), "1234.5".to_string()],
+                vec!["2".to_string(), "NULL".to_string()],
+            ],
+        );
+        let grid: Entity<TableState<crate::grid::ResultGridDelegate>> =
+            cx.new(|cx| TableState::new(delegate, window, cx));
+        panel.update(cx, |p, cx| {
+            p.set_grids(grid, None, cx);
+            // 列浏览器清单选中第 2 列（amount）→ 计算页作用列
+            p.selected_col = Some(1);
+            p.set_right_tab(RightTab::Stats, cx);
+        });
+        *slot_in.borrow_mut() = Some(panel.clone());
+        let host = cx.new(|_| PanelHost { panel });
+        Root::new(host, window, cx)
+    });
+    let panel = slot.borrow().clone().expect("ResultPanel 已创建");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let visible = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> bool {
+        let by_id = cx.update(|window, _| {
+            window
+                .try_find(ElementId::Name(SharedString::from(id.to_string())))
+                .is_some_and(|snap| snap.visible())
+        });
+        by_id || cx.debug_bounds(id).is_some()
+    };
+
+    // 1) 工具条三件 + 表头 + 六行 + 行尾 × 全部真渲染
+    for id in [
+        "editor-result-stats-tab",
+        "editor-result-stats-toolbar",
+        "editor-result-stats-header",
+        "editor-result-stat-add",
+        "editor-result-stat-reset",
+        "editor-result-stat-mode",
+        "editor-result-stat-row-Count",
+        "editor-result-stat-row-Nulls",
+        "editor-result-stat-row-Min",
+        "editor-result-stat-row-Max",
+        "editor-result-stat-row-Avg",
+        "editor-result-stat-row-Sum",
+        "editor-result-stat-remove-Sum",
+    ] {
+        assert!(visible(id, cx), "计算页元素 {id} 应渲染可见");
+    }
+
+    // 2) 量像素：工具条 28px（= vendor Toolbar XSmall 的 `min_h_7`，容器同高避免溢出）、
+    //    表头与统计行各 20px（DBeaver 侧面板的 SWT 行高档）
+    let toolbar_h = f32::from(
+        cx.debug_bounds("editor-result-stats-toolbar")
+            .expect("工具条应带 debug_selector 才量得到")
+            .size
+            .height,
+    );
+    assert!(
+        (toolbar_h - 28.0).abs() < 0.5,
+        "面板工具条应 28px（与 Toolbar XSmall 托底同高），实际 {toolbar_h}px"
+    );
+    let header_h = f32::from(
+        cx.debug_bounds("editor-result-stats-header")
+            .expect("表头应带 debug_selector 才量得到")
+            .size
+            .height,
+    );
+    assert!(
+        (header_h - 20.0).abs() < 0.5,
+        "表头应 20px，实际 {header_h}px"
+    );
+    let row_h = f32::from(
+        cx.debug_bounds("editor-result-stat-row-Count")
+            .expect("统计行应带 debug_selector 才量得到")
+            .size
+            .height,
+    );
+    assert!(
+        (row_h - 20.0).abs() < 0.5,
+        "统计行应 20px，实际 {row_h}px"
+    );
+
+    // 3) 行为闭环：停用 Sum → 该行消失；Reset → 回来
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.remove_stats_item(StatsItem::Sum, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        !visible("editor-result-stat-row-Sum", cx),
+        "停用 Sum 后该行应消失"
+    );
+    cx.update(|_, app| panel.update(app, |p, cx| p.reset_stats_items(cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        visible("editor-result-stat-row-Sum", cx),
+        "Reset 后 Sum 行应回来"
+    );
+}
+
 /// 【P2-3】多选集合推进：Ctrl 点击增删、普通点击单选替换、结果升序去重
 #[test]
 fn multi_selection_toggles_with_ctrl_and_replaces_without() {

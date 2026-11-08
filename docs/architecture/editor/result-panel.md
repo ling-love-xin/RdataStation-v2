@@ -2076,7 +2076,7 @@ SUM/AVG 对字符串累计不成立）。
 3. **不做右键 Copy / CopyAll**：本仓统计页尚无右键菜单基建，且工具栏已有全局复制；
    登记为后续增强（`AggregateColumnsPanel.java:471-496` 的 `func=value` 文案可直接照搬）。
 
-#### 8.40.5 新增测试（4 条）
+#### 8.40.5 新增测试（5 条）
 
 | 用例 | 文件 | 钉住什么 |
 | --- | --- | --- |
@@ -2084,8 +2084,11 @@ SUM/AVG 对字符串累计不成立）。
 | `text_minmax_ignores_null_and_orders_lexically` | `grid/tests.rs` | 字符串口径排除 NULL、字典序、空列=无极值 |
 | `stat_value_respects_mode_and_missing_samples` | `panel/tests.rs` | 口径决定 Min/Max 比较方式、Avg/Sum 无值、计数不受口径影响 |
 | `stats_defaults_are_full_set_in_display_order` | `panel/tests.rs` | 默认全集与展示顺序、`supports_text_mode`、口径可来回切 |
+| `stats_tab_renders_toolbar_header_and_rows` | `panel/tests.rs` | **真渲染**：工具条三件 + 两列表头 + 六行 + 行尾 × 都可见；量像素（工具条 28px、表头与行各 20px）；停用 Sum 后该行消失、Reset 后回来 |
 
-**验证**：`rds-result-panel --lib` **246 passed**（原 242 + 4）；`rds-ui-guard` **4 passed**；
+最后一条是渲染层闭环，防的正是「代码里写着但对齐没落到画面上」这类静默回退。
+
+**验证**：`rds-result-panel --lib` **247 passed**（原 242 + 5）；`rds-ui-guard` **4 passed**；
 `rds-workbench-shell --lib` **14 passed**；`cargo check -p rds-editor` 通过。
 
 #### 8.40.6 仍未做
