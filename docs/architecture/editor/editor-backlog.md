@@ -956,6 +956,34 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 - 真机：`.rdsnote` 里 Python 单元敲 `import os` 后 `os.` 出补全；故意写未定义名字看是否有波浪线。
 - 未装 `jedi-language-server` 的环境必须**如实无服务**（不假装、不 panic）。
 
+### 外部参考调研（GitHub 实测，2026-11-09）
+
+本地 13 个竞品仓库没有任何 notebook 客户端实现（前文已核），故转 GitHub 检索。查询与命中
+（GitHub 仓库搜索 API 实调）：`jupyter lsp in:name,description` → 47 条；
+`notebook language server protocol cells in:description`、`marimo notebook language server lsp`、
+`polynote notebook language server` → **均 0 条**。
+
+| 项目 | 星 | 语言 / 状态 | 核心机制（读源码/README 所得） | 对 A1 的取舍 |
+| --- | --- | --- | --- | --- |
+| `jupyter-lsp/jupyterlab-lsp` | 2002 | TS，活跃 | **虚拟文档**：每个 cell 一个 URI；可选「影子文件系统」——在 `virtual_documents` 目录落盘真实文件，拦 `didOpen/didChange/didSave` 把 cell 内容增量写进文件（`python_packages/jupyter_lsp/jupyter_lsp/virtual_documents_shadow.py` 自带 `apply_change` 增量合并）；server 声明 `requires_documents_on_disk: false` 时整段短路不落盘 | **机制最完整的业界答案**；但落盘那条我们不需要（见实测 ②） |
+| `microsoft/vscode-jupyter-lsp-middleware` | 9 | TS，**已归档**（2021→2023） | 专职「notebook cell ↔ LSP」中间件，cell URI 映射 + 消息转发 | 已归档且栈不同，只作机制旁证 |
+| `TheSquake/epycell` | 11 | **Rust**，2026-06 | 终端 Jupyter；**每个 cell 编辑时 spawn 一个自造 `epycell-lsp`**，经 ZMQ 桥到 kernel 拿「运行中命名空间」补全 | 同语言栈，但走「per-cell 一个 server」；我们一 server 多文档（实测 ①），不采用 |
+| `ArneshBanerjee/zed-jupyter` | 20 | Python + Rust ext，2026-09 | **反例**：不做 per-cell LSP，而是把 notebook 与 `# %%` percent script **配对**，LSP/执行都作用在那份 `.py` 上；自带 stdlib LSP 只给 `.ipynb` 做 JSON/nbformat 校验 | 绕开问题而非解决；notebook 内没有真正的语言服务 |
+
+**我们自己的三条实测**（探针 `.rds/tmp/lsp_probe.py`、`lsp_probe_diag.py`、`lsp_probe_change.py`）
+
+| # | 待验假设 | 做法 | 结果 |
+| --- | --- | --- | --- |
+| ① | 一条连接能否服务多个无文件文档 | 同一连接 `didOpen` 两个 `untitled:` 文档各请求补全 | ✅ `os.` → 457 条、`jso` → 1 条 `json` |
+| ② | 无磁盘文件能否拿到**诊断** | `didOpen` 语法错误 `def broken(:`，等 3s 收 `publishDiagnostics` | ✅ 1 条：`SyntaxError: invalid syntax`，`severity=1`，range line 0 char 11–12，`source=compile`，**uri 即 `untitled:`** |
+| ③ | client 发**全量** `didChange` 是否被接受（server 声明 `change: 2` 增量） | `os.` 补全 457 条 → 全量替换为 `jso` → 再补全 | ✅ 无 error，457 → 1（`json`），**全量同步被正确应用** |
+
+**据此收敛出的三条设计确认**：
+1. **不需要影子文件系统**：jedi 对 `untitled:` 的补全与诊断都工作，不落盘、不碰用户目录。
+2. **不需要 per-cell server**：一个常驻 server 服务所有单元（`epycell` 式 per-cell spawn 只会多进程）。
+3. **不需要改同步模式**：既有 `LspClient::did_change`（`lsp/client.rs:368`，全量 `contentChanges`）可直接复用，
+   不必为 `change: 2` 另做增量合并（jupyter-lsp 的 `apply_change` 不引入）。
+
 ## 16. 遗留总账（2026-11-09 全量盘点）
 
 **盘点口径**：文档声明（§一 ~ §15）+ 代码内 `TODO|FIXME|未接线|暂不支持|暂不|遗留|待接线`
