@@ -922,8 +922,9 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 ### 必须实测的风险（动手前先验，不靠推断）
 
 0. **环境已就绪（2026-11-09 实测；原“本机没有 jedi”的结论已作废）**：`jedi-language-server`
-   0.47.0 装在 `D:\python-UV\lsp`（uv venv，基于 cpython-3.12.14；`UV_CACHE_DIR=D:\python-UV\cache`，
-   **产物不落用户目录**）。`D:\python-UV\` 本来就在用户 PATH 里、且该目录**没有 `python.exe`**
+   0.47.0 装在 `D:\python-UV\lsp`（uv venv，基于 cpython-3.12.14；`UV_CACHE_DIR=D:\python-UV\cache`、
+   `UV_PYTHON_INSTALL_DIR=D:\python-UV\python`，**解释器 / venv / 缓存全部在 D 盘、不落用户目录**，
+   `pyvenv.cfg` 的 `home` 已指向 `D:\python-UV\python\…`）。`D:\python-UV\` 本来就在用户 PATH 里、且该目录**没有 `python.exe`**
    （只有 uv / uvx / ruff / jj / fossil / uvw），所以把 `jedi-language-server.exe` 复制进去后
    `Get-Command jedi-language-server` 命中 `D:\python-UV\jedi-language-server.exe`，
    **既按 PATH 设计走，也不劫持全局 `python`**。
