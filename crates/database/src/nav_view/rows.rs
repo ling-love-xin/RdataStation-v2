@@ -1478,7 +1478,7 @@ impl NavView {
             let chips = if self.host.show_tags(cx) {
                 chips
             } else {
-                // 与行尾 `+` / `✎` 同一把组钥匙（`nav-conn-row`）：hover / 选中才显。
+                // 与行尾重试按钮同一把组钥匙（`nav-conn-row`）：hover / 选中才显。
                 chips
                     .invisible()
                     .group_hover("nav-conn-row", |s| s.visible())
@@ -1526,8 +1526,9 @@ impl NavView {
             conn.port,
         );
 
-        // 行尾操作：`+` 加标签 · `✎` 编辑 · 失败连接另带 `⟳ 重试`（仅 hover / 选中显；
-        // 连接 / 断开走右键菜单）。
+        // 行尾操作：只剩失败连接的 `⟳ 重试`（仅 hover / 选中显）。`+`（行内改标签）与
+        // `✎`（编辑连接）2026-11-08 已撤：它们在 hover 时压在名称尾部，换来的只是右键菜单
+        // 里已有入口的重复（「编辑连接…」/「打标签…」）。连接 / 断开一直走右键菜单。
         //
         // 2026-11-08 改 overlay（方案①）：这组按钮以前是 flex 流里的常驻槽（两个 1.25rem
         // 图标按钮 + gap ≈ 2.625rem），在 203px 宽的面板里吃掉 17% 的名称宽度——而它只在
@@ -1538,15 +1539,16 @@ impl NavView {
         //
         // 隐藏用 `invisible()` 而不是 `opacity(0)`：两者的区别在命中测试——
         // `Visibility::Hidden` 的元素既不绘制也不登记 hitbox，`opacity(0)` 的元素
-        // **仍能点到**（鼠标滑到行尾空白就可能误触发加标签 / 打开编辑对话框）。
+        // **仍能点到**（鼠标滑到行尾空白就可能误触发重试）。
         // absolute 元素即使可见也不占排版宽，所以不再靠「槽位常驻」防抖动。
-        let ops = {
+        // 无失败连接时整组不挂：空 overlay 仍带 `px_1` + 底色，会在名称尾部压出一块色块。
+        let ops = error.as_ref().map(|_| {
             let entity = cx.entity();
-            let host = self.host.clone();
-            let cid = conn_id.clone();
+            let cid_retry = conn_id.clone();
+            let root_retry = project_root.clone();
             // overlay 右偏移：归属域列可见时贴住它的左缘，关闭时贴行尾。
             let ops_right = if scope_visible { scope_col } else { 0.0 };
-            let mut ops = div()
+            div()
                 .h_flex()
                 .items_center()
                 .gap_0p5()
@@ -1557,13 +1559,10 @@ impl NavView {
                 .px_1()
                 .bg(if selected { selected_bg } else { hover })
                 .when(!selected, |s| s.invisible())
-                .group_hover("nav-conn-row", |s| s.visible());
-            // 失败连接：行尾「重试」按钮（与右键「连接」同一动作：重新建连并加载）。
-            if error.is_some() {
-                let entity_retry = entity.clone();
-                let cid_retry = conn_id.clone();
-                let root_retry = project_root.clone();
-                ops = ops.child(
+                .group_hover("nav-conn-row", |s| s.visible())
+                // 失败连接：行尾「重试」按钮（与右键「连接」同一动作：重新建连并加载）。
+                // 连接 / 断开不进 hover 行操作：仅右键菜单提供（避免误触与视觉噪声）。
+                .child(
                     Button::new(format!("nav-conn-retry-{}::{}", scope_key, conn.id))
                         .ghost()
                         .xsmall()
@@ -1575,57 +1574,14 @@ impl NavView {
                         .on_click(move |_, _, app: &mut App| {
                             let cid = cid_retry.clone();
                             let root = root_retry.clone();
-                            entity_retry.update(app, |this, cx| {
+                            entity.update(app, |this, cx| {
                                 this.toggle_connection(&cid, root.as_deref(), cx);
                                 cx.notify();
                             });
                         }),
-                );
-            }
-            // `+`：仅**标签**行内编辑（`+` 只处理标签；归组走右键「移动到分组…」）。
-            ops = ops.child(
-                Button::new(format!("nav-conn-addtag-{}::{}", scope_key, conn.id))
-                    .ghost()
-                    .xsmall()
-                    .icon(Icon::empty().path("icons/plus.svg").text_color(muted))
-                    .on_click({
-                        let entity = entity.clone();
-                        let cid = cid.clone();
-                        move |_, _, app: &mut App| {
-                            let cid = cid.clone();
-                            entity.update(app, |this, cx| {
-                                let mut view = this.nav.borrow_mut();
-                                let open = view.tag_editor_for.as_deref() != Some(cid.as_str());
-                                view.tag_editor_for = if open { Some(cid.clone()) } else { None };
-                                if open {
-                                    // 预填标签在**事件路径**读一次库并缓存：
-                                    // render 只读快照（`tag_editor_tags`），render 零 I/O。
-                                    let root = this.host.project_root();
-                                    let tags = crate::nav_store::list_tags(&cid, root.as_deref());
-                                    view.tag_editor_tags = Some((cid.clone(), tags));
-                                }
-                                cx.notify();
-                            });
-                        }
-                    }),
-            );
-            // `✎`：在对话框中编辑连接。
-            ops = ops.child(
-                Button::new(format!("nav-conn-edit-{}::{}", scope_key, conn.id))
-                    .ghost()
-                    .xsmall()
-                    .icon(Icon::empty().path("icons/pencil.svg").text_color(muted))
-                    .on_click({
-                        let host = host.clone();
-                        let cid = cid.clone();
-                        move |_, window, app: &mut App| {
-                            host.edit_connection(&cid, window, app);
-                        }
-                    }),
-            );
-            // 连接 / 断开不进 hover 行操作：仅右键菜单提供（避免误触与视觉噪声）。
-            ops
-        };
+                )
+                .into_any_element()
+        });
 
         // 「设为主组」子菜单数据（仅归组的连接出现）：所属分组 + 当前主组 + 是否显式。
         let (menu_groups, menu_primary, menu_primary_explicit) = {
@@ -1789,7 +1745,7 @@ impl NavView {
                             )
                         })
                         // 失败连接：错误摘要放进名称容器（紧跟名称/host），
-                        // 行尾操作（`+` 新建标签 / `✎` 编辑）因此不随错误状态左右移动、保持对齐。
+                        // 行尾重试按钮因此不随错误状态左右移动、保持对齐。
                         .when_some(err_summary, |s, e| s.child(e));
                     nav_name_hover_card(
                         SharedString::from(format!("nav-conn-name-{}::{}", scope_key, conn.id)),
@@ -1799,9 +1755,9 @@ impl NavView {
                     )
                     .into_any_element()
                 })
-                // 行尾操作组（`+` 加标签 / `✎` 编辑）：仅 hover / 选中显。
+                // 行尾操作 overlay（现仅失败连接的重试）：仅 hover / 选中显，无失败时不挂。
                 // 需求③：归在归属域列**之前**（归属域置最右），操作按钮与名称更近。
-                .child(ops)
+                .children(ops)
                 .when(scope_visible, |s| {
                     // 归属域列置最右（需求③）：固定宽度右对齐列；短码不是自解释的，
                     // hover 卡给一句人话（§2.3）。
