@@ -192,6 +192,14 @@ pub struct ResultPanel {
     /// 开合补间，否则每帧拖拽都会触发一次补间、手柄黏手）。下一次点开关时清回 false，
     /// 让开合重新有动画。
     pub(crate) right_sidebar_dragging: bool,
+    /// 【R5 布局方向切换】右栏在**右侧**还是**下方**（对齐 DBeaver `verticalLayout`，
+    /// 默认 `false` = 网格左 / 右栏右）。为真时主体改竖排：网格在上、右栏满宽在下，
+    /// 拖拽手柄改贴右栏顶边、位移按纵向算（`right_sidebar_height` 生效）。
+    pub(crate) vertical_layout: bool,
+    /// 【R5 布局方向切换】竖排时右栏高度（默认 `RESULT_SIDEBAR_RIGHT_HEIGHT` = 240px）。
+    /// **不进全局偏好项**：偏好项 `result_panel.sidebar_width` 是横向 px 宽度口径，
+    /// 纵向高度共用一个值会互相串（偏离口径见 result-panel.md §8.46.2）。
+    pub(crate) right_sidebar_height: Pixels,
     /// 【值查看器】JSON 展开树状态（`tree::Tree` 组件承载；选中格变化时事件路径
     /// `rebuild_value_tree` 解析 + `set_items` 重建，render 只摆——JSON 解析不进 render）
     pub(crate) json_tree: Entity<TreeState>,

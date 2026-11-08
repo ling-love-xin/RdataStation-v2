@@ -717,14 +717,14 @@ R3 / R4 / R5。
 `resize_handle_mounts_only_when_the_sidebar_is_expanded`）/ guard **4** / shell **14** passed；
 `cargo check -p rds-editor` 通过。
 
-**仍未做**：布局方向切换（DBeaver `setOrientation`，网格下方 vs 右侧）；双击复位；
-手柄命中带宽与拖拽手感的真窗口目视。（比例持久化已在 §2.35 落地）
+**仍未做**：双击复位；手柄命中带宽与拖拽手感的真窗口目视。
+（比例持久化已在 §2.35 落地；布局方向切换已在 §2.36 落地）
 
 **关于 `theme-tokens-complete.md`**：本批（P0/P1/P3/R1/R2/R3/R5）**不需要**写进那份文档——
 它的职责是色板与「尺寸常量单一来源」守门，而本批未改任何色值；R5 新增的两个尺寸常量只在
 `result_panel/src/ui.rs` 单处定义（`shared_constants_do_not_diverge` 仍 4 passed，无分叉）。
 
-### 2.35 R5 第二步「比例持久化」（代码已落，待编译验证）
+### 2.35 R5 第二步「比例持久化」（已提交 `065cbb7d`）
 
 口径：全局偏好项 `result_panel.sidebar_width`（px，默认 320，范围 192~640），
 与 DBeaver 的 `panelRatio`（千分比 / 按展示类型分组 / 惰性落盘）有意偏离，理由写在
@@ -746,6 +746,33 @@ R3 / R4 / R5。
 冷编 `windows` crate 会 `STATUS_STACK_BUFFER_OVERRUN`；**编译命令不要带它**（只在跑 gpui 测试时设）。
 另：D 盘曾被 target 占满（0 空闲）导致 `Edit` 把两个文件写成 0 字节（`settings/src/service/result_panel.rs`
 与并行线 `editor-backlog.md`），已 `git checkout` 复原；写盘前先查 D 盘剩余。
+
+### 2.36 R5 第三步「布局方向切换」（已提交）
+
+对齐 DBeaver `CMD_TOGGLE_LAYOUT` → `toggleVerticalLayout()`：右栏在**右侧**与**网格下方**之间切换。
+证据与偏离全文见 `result-panel.md §8.46`，接手要点：
+
+- **状态**：`vertical_layout: bool`（默认 `false`，同 `ResultSetViewer.java:1020`）+
+  `right_sidebar_height: Pixels`（默认 240px）。两个方向各记自己的尺寸：横排改宽度、
+  竖排改高度，互不影响。
+- **换向**：普通视图「主 pane + 右栏」外层容器按方向 `h_flex()` / `v_flex()`（`items_stretch`）；
+  左右两条竖条留在这一层纵贯整高（与 DBeaver `panelSwitchFolder` 在 SashForm 之外同构）。
+- **手柄换轴**：`Axis::Horizontal`+`Leading`（右栏左边缘）↔ `Axis::Vertical`+`Leading`（右栏顶边）；
+  `on_drag_move` 取 x / y 位移，口径仍是 `size - delta`。keyed state 键按方向分开
+  （`editor-result-right-sidebar-drag-x` / `-drag-y`），否则换向后把上一帧另一轴坐标当基准会跳一格。
+- **入口**：右缘竖条**底部**加 `IconName::RotateCcw` 按钮（页签图标后用 `flex_1()` 间隔块推到底，
+  等价 DBeaver 的 1×1 `FILL_VERTICAL` 空标签），`toggled(vertical_layout)` 表达当前方向。
+- **两条偏离**：① 竖排高度**不进偏好项**（宽度偏好是横向 px 口径，共用会串；DBeaver 用千分比才通用）；
+  ② 竖排**不做开合补间**（`EffectTransition` 只有 `width`，且换向不是展开/收起动作）。
+  另 `vertical_layout` 自身也**未持久化**（DBeaver 存 presentations 段，需先解决按展示类型分组）。
+- **竖排松手**：`end_right_sidebar_resize` 返回 `None`（只清拖拽标记，不落盘）。
+
+**验证**：`cargo check -p rds-result-panel` / `-p rds-editor` 通过（0 error / 0 warning）；
+门禁 panel **256**（254 + 2：`right_sidebar_height_clamps_between_ui_limits` /
+`toggle_vertical_layout_flips_and_stops_persisting_widths`）/ shell **14** / guard **4** 全绿。
+
+**仍未做**：方向状态与竖排高度的跨会话持久化、对比模式下的方向切换、
+竖排观感的真窗口目视。
 
 ---
 
@@ -772,8 +799,8 @@ R3 / R4 / R5。
 
 ## 5. 常用锚点（行号随近期提交微移，以现场 grep 为准）
 
-- `panel/`：`mod.rs`（门面 + pub 面 re-export：`GridPayload` / `ExportCtx` / `ResultSyncInput` / `ResultPanel` / `AnalysisItem`）；`render.rs` 主 `render` 组装；`sidebars.rs` `render_vertical_bar`（左缘竖条：网格/文本/记录/上一行/下一行）/ `render_right_edge_bar`（右缘竖条，页签图标区）/ `render_right_sidebar`（横 tab 只显激活页签）/ `render_browser_tab` / `render_filter_expand_bar`（展开条：左=展开右=运行无边框）+ `sidebar_width_anim` / `next_right_edge_state` / `clamp_right_sidebar_width` 纯函数 + **R5** `SidebarResizeDrag` / `render_right_sidebar_resize`（`resize_handle` 独立手柄，id `editor-result-right-sidebar-resize`）；`tabs.rs` `render_value_tab` / `render_stats_tab` / `render_group_tab` / `render_reference_tab`（backlog 空态）/ `render_exec_sql_tab` + `kv_row` / `fmt_stat` / `right_tab_from_index` + `panel_toolbar`（28px 页内工具条公用件）；`dialog.rs` `render_sql_dialog`（SQL 预览弹窗浮层）；`events.rs` `toggle_value_sidebar`（三态）/ `resize_right_sidebar`（拖拽改宽度）/ `toggle_transpose` / `open_sql_dialog` / `close_sql_dialog`（事件路径，需 window）+ `reorder_by` 纯函数；`lifecycle.rs` `new` / `sync`（投影同步）；`tests.rs` 尾部 `rendered_ui_elements_survive`（渲染断言防回退，见 §2.10）。
-- `ui.rs`：`RESULT_VERTICAL_BAR_WIDTH`（2.25）/ `RESULT_SIDEBAR_RIGHT_WIDTH`（20.0）+ **R5** `RESULT_SIDEBAR_RIGHT_MIN_WIDTH`（12.0 = 192px）/ `RESULT_SIDEBAR_RIGHT_MAX_WIDTH`（40.0 = 640px，均 f32，避裸 `px(`）/ `RESULT_STATUS_BAR_HEIGHT`（1.5）/ `RESULT_TOOLBAR_HEIGHT`（**1.875 = 30px，比标签条 2.0 矮一档**，对齐 DBeaver `3+2+20+2+3`）/ `RESULT_PANEL_TOOLBAR_HEIGHT`（**1.75 = 28px，右栏页内工具条，必须等于 vendor `toolbar.rs:242-259` XSmall 档的 `min_h_7`**）/ `RESULT_TOOLBAR_PADDING`（`px(3.)`，水平内距，对齐 DBeaver `marginWidth = 3`）。
+- `panel/`：`mod.rs`（门面 + pub 面 re-export：`GridPayload` / `ExportCtx` / `ResultSyncInput` / `ResultPanel` / `AnalysisItem`）；`render.rs` 主 `render` 组装；`sidebars.rs` `render_vertical_bar`（左缘竖条：网格/文本/记录/上一行/下一行）/ `render_right_edge_bar`（右缘竖条，页签图标区）/ `render_right_sidebar`（横 tab 只显激活页签）/ `render_browser_tab` / `render_filter_expand_bar`（展开条：左=展开右=运行无边框）+ `sidebar_width_anim` / `next_right_edge_state` / `clamp_right_sidebar_width` / `clamp_right_sidebar_height` 纯函数 + **R5** `SidebarResizeDrag` / `render_right_sidebar_resize`（`resize_handle` 独立手柄，id `editor-result-right-sidebar-resize`，横排 Horizontal / 竖排 Vertical）；`tabs.rs` `render_value_tab` / `render_stats_tab` / `render_group_tab` / `render_reference_tab`（backlog 空态）/ `render_exec_sql_tab` + `kv_row` / `fmt_stat` / `right_tab_from_index` + `panel_toolbar`（28px 页内工具条公用件）；`dialog.rs` `render_sql_dialog`（SQL 预览弹窗浮层）；`events.rs` `toggle_value_sidebar`（三态）/ `resize_right_sidebar`（拖拽改宽度 / 竖排改高度）/ **R5** `toggle_vertical_layout`（方向切换，清拖拽标记）/ `end_right_sidebar_resize` / `set_right_sidebar_width_px`/ `toggle_transpose` / `open_sql_dialog` / `close_sql_dialog`（事件路径，需 window）+ `reorder_by` 纯函数；`lifecycle.rs` `new` / `sync`（投影同步）；`tests.rs` 尾部 `rendered_ui_elements_survive`（渲染断言防回退，见 §2.10）。
+- `ui.rs`：`RESULT_VERTICAL_BAR_WIDTH`（2.25）/ `RESULT_SIDEBAR_RIGHT_WIDTH`（20.0）+ **R5** `RESULT_SIDEBAR_RIGHT_MIN_WIDTH`（12.0 = 192px）/ `RESULT_SIDEBAR_RIGHT_MAX_WIDTH`（40.0 = 640px，均 f32，避裸 `px(`）/ **R5 方向切换** `RESULT_SIDEBAR_RIGHT_HEIGHT`（15.0 = 240px）/ `RESULT_SIDEBAR_RIGHT_MIN_HEIGHT`（8.0 = 128px）/ `RESULT_SIDEBAR_RIGHT_MAX_HEIGHT`（32.0 = 512px）/ `RESULT_STATUS_BAR_HEIGHT`（1.5）/ `RESULT_TOOLBAR_HEIGHT`（**1.875 = 30px，比标签条 2.0 矮一档**，对齐 DBeaver `3+2+20+2+3`）/ `RESULT_PANEL_TOOLBAR_HEIGHT`（**1.75 = 28px，右栏页内工具条，必须等于 vendor `toolbar.rs:242-259` XSmall 档的 `min_h_7`**）/ `RESULT_TOOLBAR_PADDING`（`px(3.)`，水平内距，对齐 DBeaver `marginWidth = 3`）。
 - `ports.rs`：`ResultRequest` 全集（含 #7 / §2.9 新增变体 `RunFilterAsQuery` / `ToggleFilterExpand` / `OpenSqlDialog` / `CloseSqlDialog`；`ToggleSqlPreview` 已删）+ `ResultActionQueue`（`request` / `set_panel` / `push` / `drain`）。
 - `grid/`：`delegate.rs` `ResultGridDelegate`（TableDelegate 主体实现 + 钩子类型 + RESULT_GRID_CONTEXT 等常量）；`cell.rs` `render_td` / `header.rs` `render_th` / `menu.rs` `context_menu`（trait 方法不可分块 → 顶层自由函数 + `table_impl.rs` 薄转发）；`status.rs` `render_status_row`（三项新签名）/ `ResultToolbar` / `ResultStatus` / `ResultControls` / `ResultPane`；`text.rs` `format_cell_text` / `view_rows.rs` `text_presentation` 指纹缓存 / `stats.rs` 列统计 / `edit.rs` 行编辑 / `tests.rs`（全量测试迁入）。
 - `store/`：`store.rs` `ResultStore`（按文档分槽，多结果集 sets(document) + TabBar 标签；事实档 A2 未接线）+ `entry.rs` / `fact.rs`。

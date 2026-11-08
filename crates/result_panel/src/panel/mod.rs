@@ -32,6 +32,9 @@ pub use data::{AnalysisItem, ExportCtx, GridPayload, ResultPanel, ResultSyncInpu
 #[cfg(test)]
 pub(crate) use events::reorder_by;
 #[cfg(test)]
-pub(crate) use sidebars::{clamp_right_sidebar_width, next_right_edge_state, sidebar_width_anim};
+pub(crate) use sidebars::{
+    clamp_right_sidebar_height, clamp_right_sidebar_width, next_right_edge_state,
+    sidebar_width_anim,
+};
 #[cfg(test)]
 pub(crate) use tabs::right_tab_from_index;

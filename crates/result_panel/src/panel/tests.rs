@@ -1,5 +1,6 @@
 //! panel/ 全量单元测试
 
+use super::clamp_right_sidebar_height;
 use super::clamp_right_sidebar_width;
 use super::next_right_edge_state;
 use super::reorder_by;
@@ -182,6 +183,55 @@ fn end_resize_reports_width_only_while_dragging(cx: &mut gpui_kit::TestAppContex
             assert!(!p.right_sidebar_dragging, "松手后应清拖拽标记");
             // 再松一次：已是非拖拽态，不重复交宽度
             assert_eq!(p.end_right_sidebar_resize(cx), None);
+        });
+    });
+}
+
+/// 【R5 布局方向切换】竖排高度夹取：与宽度同一套「朝手柄方向即变小」口径
+#[test]
+fn right_sidebar_height_clamps_between_ui_limits() {
+    let min = px(crate::ui::RESULT_SIDEBAR_RIGHT_MIN_HEIGHT * 16.0);
+    let max = px(crate::ui::RESULT_SIDEBAR_RIGHT_MAX_HEIGHT * 16.0);
+    let default = px(crate::ui::RESULT_SIDEBAR_RIGHT_HEIGHT * 16.0);
+    // 顶边手柄：向下拖（dy 正）→ 变矮；向上拖 → 变高
+    assert_eq!(clamp_right_sidebar_height(default, 40.0), px(200.));
+    assert_eq!(clamp_right_sidebar_height(default, -40.0), px(280.));
+    // 拖过头：夹在上下限，不反向越界
+    assert_eq!(clamp_right_sidebar_height(default, 9999.0), min);
+    assert_eq!(clamp_right_sidebar_height(default, -9999.0), max);
+    assert_eq!(clamp_right_sidebar_height(min, 10.0), min);
+    assert_eq!(clamp_right_sidebar_height(max, -10.0), max);
+}
+
+/// 【R5 布局方向切换】切方向翻状态并清拖拽标记；竖排拖拽改高度、松手不回传（高度不落盘）
+#[gpui_kit::test]
+fn toggle_vertical_layout_flips_and_stops_persisting_widths(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, vcx) = panel_harness(cx);
+    vcx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            assert!(!p.vertical_layout, "默认横排（网格左 / 右栏右）");
+            p.toggle_vertical_layout(cx);
+            assert!(p.vertical_layout, "切一次应变成竖排");
+            assert!(!p.right_sidebar_dragging, "切方向应清掉拖拽标记");
+            // 竖排拖拽：只改高度，宽度原封不动
+            let width_before = p.right_sidebar_width;
+            let height_before = p.right_sidebar_height;
+            p.resize_right_sidebar(40.0, cx);
+            assert_eq!(p.right_sidebar_width, width_before, "竖排不该改宽度");
+            assert_eq!(p.right_sidebar_height, height_before - px(40.));
+            // 松手：竖排不回传尺寸（高度没有对应偏好项），只清标记
+            assert_eq!(p.end_right_sidebar_resize(cx), None);
+            assert!(!p.right_sidebar_dragging);
+            assert_eq!(
+                p.right_sidebar_height,
+                height_before - px(40.),
+                "高度留在内存里，切回横排再切竖排仍生效"
+            );
+            // 切回横排：宽度原封不动（两个方向各自记自己的尺寸）
+            p.toggle_vertical_layout(cx);
+            assert!(!p.vertical_layout);
+            assert_eq!(p.right_sidebar_width, width_before);
         });
     });
 }

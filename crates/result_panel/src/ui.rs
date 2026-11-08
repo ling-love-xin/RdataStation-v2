@@ -243,6 +243,18 @@ pub const RESULT_SIDEBAR_RIGHT_MIN_WIDTH: f32 = 12.0;
 /// 与 DBeaver 面板最多占半屏的观感一致。
 pub const RESULT_SIDEBAR_RIGHT_MAX_WIDTH: f32 = 40.0;
 
+/// 【R5 布局方向切换】「网格下方」方向下右栏的默认高度（15rem = 240px）：
+/// DBeaver 用同一个 `panelRatio` 表示第二栏占比（`setWeights` 换方向后仍成立），
+/// 本仓横竖两个方向各用 px 尺寸，默认高取结果区约三分之一。
+pub const RESULT_SIDEBAR_RIGHT_HEIGHT: f32 = 15.0;
+
+/// 【R5 布局方向切换】竖排时右栏高度下限（8rem = 128px）：再矮页内工具条与明细区
+/// 就放不下，与宽度下限（12rem）同一个收口思路。
+pub const RESULT_SIDEBAR_RIGHT_MIN_HEIGHT: f32 = 8.0;
+
+/// 【R5 布局方向切换】竖排时右栏高度上限（32rem = 512px）：超过就压掉网格可见行数。
+pub const RESULT_SIDEBAR_RIGHT_MAX_HEIGHT: f32 = 32.0;
+
 /// 右栏「计算 / 列浏览器明细」键值行的**标签列宽**（4.5rem = 72px）：
 /// 「最小值 / 来源表 / 默认值」这类最长约四个字，72px 放下不挤值列
 pub const RESULT_SIDEBAR_KV_LABEL_WIDTH: f32 = 4.5;

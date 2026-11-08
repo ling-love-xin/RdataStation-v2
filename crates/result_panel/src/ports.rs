@@ -109,13 +109,18 @@ pub enum ResultRequest {
     ToggleValueSidebar,
     /// 状态栏左端开关：左侧栏（网格 / 文本 / 记录竖条）开合（完全收起 = 不占宽度）
     ToggleLeftSidebar,
-    /// 【R5 可拖分栏】拖右栏左边缘改宽度：`dx` = 本次拖拽的水平位移（像素，向右为正）。
-    /// 面板按「宽度 - dx」更新并 clamp 到 ui 的上下限；纯视图状态，不落盘。
+    /// 【R5 可拖分栏】拖右栏分栏边改尺寸：`delta` = 本次拖拽沿**分栏法线**的位移
+    /// （像素；横排是 x、竖排是 y，正向 = 朝手柄方向即**尺寸变小**，与横排口径同构）。
+    /// 面板按方向更新宽度或高度并 clamp 到 ui 的上下限；纯视图状态，不落盘。
     /// 取整像素（`ResultRequest` 需要 `Eq`，故不携带 `f32`）。
     ResizeRightSidebar(i32),
     /// 【R5 比例持久化】拖拽结束定稿：宿主把面板当前右栏宽度写进全局偏好项
     /// （`result_panel.sidebar_width`）。拖拽过程只改内存宽度，落盘只在这一刻做一次。
+    /// 竖排（网格下方）时只清拖拽标记、不落盘（高度没有对应偏好项）。
     EndResizeRightSidebar,
+    /// 【R5 布局方向切换】右栏在右侧 / 下方之间切换（对齐 DBeaver
+    /// `CMD_TOGGLE_LAYOUT` → `toggleVerticalLayout`）：纯视图状态，不落盘。
+    ToggleVerticalLayout,
     /// 左栏列浏览器清单行眼睛：切换该列隐藏 / 显示（宿主 update 网格 + 面板）
     ToggleColumnVisibility(usize),
     /// 【P2-3】列浏览器多选批量显隐：把 `columns`（数据列序）整批设为隐藏 / 显示

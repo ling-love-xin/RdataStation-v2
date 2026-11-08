@@ -2380,9 +2380,84 @@ straddle 5px 命中带宽）、光标 `cursor_col_resize`、`ResizeHandleState{I
 #### 8.45.6 本轮未做 / 待定
 
 - **按展示类型分组**（DBeaver 语义原样）：需先定义本仓 `Presentation` ↔ descriptor 映射，用户未表态。
-- **布局方向切换**（`:1032 setOrientation`）：见 8.44.5，仍未开工。
 - **双击手柄复位默认宽度**：DBeaver 无此交互，暂不引入。
 - 重启后宽度复现、拖拽落盘时机的手感，仍需真窗口目视。
+
+### 8.46 R5 第三步：布局方向切换（对齐 DBeaver `toggleLayout`）
+
+#### 8.46.1 DBeaver 侧事实（逐条可核）
+
+- `ResultSetViewer.java:1020` `boolean verticalLayout = false;`（默认横排 = 网格左 / 面板右）。
+- `:1026` 有 active presentation 时取 `settings.verticalLayout`；`:1032`
+  `viewerSash.setOrientation(verticalLayout ? SWT.VERTICAL : SWT.HORIZONTAL);`
+- `:1544-1547` `toggleVerticalLayout()`：翻 `settings.verticalLayout` 后**立即** `setOrientation`。
+- 入口一（竖条按钮）`:1082-1083`：先 `UIUtils.createEmptyLabel(panelSwitchFolder, 1, 1)`
+  配 `GridData.FILL_VERTICAL` 把后续控件推到底部，再
+  `VerticalButton.create(panelSwitchFolder, SWT.RIGHT | SWT.CHECK, getSite(), IResultSetCommands.CMD_TOGGLE_LAYOUT, false)`
+  —— **CHECK 型**（带选中态）。
+- 入口二（上下文菜单）`:1584` `ActionUtils.makeCommandContribution(site, CMD_TOGGLE_LAYOUT)`。
+- 命令注册：`plugin.xml:312` id `org.jkiss.dbeaver.core.resultset.grid.toggleLayout`；
+  `:367` 图标 `platform:/plugin/org.jkiss.dbeaver.ui/icons/misc/rotate_left.svg`；
+  `:436` handler `ResultSetHandlerMain`。
+- 分派：`handler/ResultSetHandlerMain.java:176-178` `case CMD_TOGGLE_LAYOUT: rsv.toggleVerticalLayout();`
+- 持久化：`:1233` 读 `pSection.getBoolean("verticalLayout")`、`:1265` 写回
+  `SETTINGS_SECTION_PRESENTATIONS`（与 `panelRatio` 同一段，按展示类型分组）。
+
+#### 8.46.2 本仓实现口径与偏离
+
+- **方向语义一致**：`vertical_layout = true` = 网格在上、面板满宽在下；
+  `false` = 网格左、面板右。默认 `false`（同 `:1020`）。
+- **容器换向**：普通视图里「主 pane + 右栏」的外层容器按方向 `h_flex()` / `v_flex()`
+  （`items_stretch`）；左缘竖条与右缘竖条留在这一层、贯穿整高，不随方向移动
+  （DBeaver 的 `panelSwitchFolder` 也在 SashForm 之外、纵贯整高，同构）。
+- **拖拽手柄随方向换轴**：横排 `Axis::Horizontal` + `Leading`（右栏左边缘），
+  竖排 `Axis::Vertical` + `Leading`（右栏顶边）；`on_drag_move` 取 x 或 y 位移，
+  增量口径不变（`size - delta`，两方向都是「朝手柄方向即变小」）。
+  keyed state 键按方向分开（`-drag-x` / `-drag-y`）：切换方向后上一帧另一轴的
+  坐标若被当成基准会跳一格。
+- **入口一致**：切换按钮挂在右缘竖条**底部**（页签图标之后用一个 `flex_1()` 间隔块
+  推到底，等价 DBeaver 的 1×1 `FILL_VERTICAL` 空标签）；`toggled(vertical_layout)`
+  表达当前方向（对应 `SWT.CHECK`）。图标用 `IconName::RotateCcw` —— 与 DBeaver
+  `rotate_left.svg` 同为逆时针箭头。
+- **偏离 1（高度不进偏好项）**：DBeaver 横竖共用同一个 `panelRatio`（千分比），
+  所以换方向后比例仍成立；本仓两个方向各用 px 尺寸（宽度偏好 `result_panel.sidebar_width`
+  是横向口径），若让竖排高度共用同一个值会串（320px 宽 ≈ 240px 高不是同一语义）。
+  因此竖排高度 `right_sidebar_height` 只在面板内存里（切方向来回仍保留各自的值），
+  尺寸与边界走 `crate::ui` 的高度三元组（默认 15rem / 下限 8rem / 上限 32rem）。
+- **偏离 2（竖排不做开合补间）**：`EffectTransition` 只提供 `width(from, to)`，没有
+  height 补间；方向切换本身也不是展开 / 收起动作（DBeaver 换向同样无动画）。
+  横排保留原 160ms 宽度补间与拖拽期 1ms 直写。
+- **偏离 3（方向状态不持久化）**：DBeaver 存 `presentations` 段（按展示类型）；
+  本仓 `vertical_layout` 目前只在面板内存里（重启回默认横排）。要走持久化需先解决
+  「按展示类型分组」的映射问题（同 §8.45.6 第一项）。
+
+#### 8.46.3 落点（8 文件）
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/ui.rs` | `RESULT_SIDEBAR_RIGHT_HEIGHT` 15.0 / `_MIN_HEIGHT` 8.0 / `_MAX_HEIGHT` 32.0（f32，不新增裸 `px(`） |
+| `panel/data.rs` | `vertical_layout: bool`（默认 false）+ `right_sidebar_height: Pixels` |
+| `panel/lifecycle.rs` | 两字段初始化 |
+| `panel/events.rs` | `resize_right_sidebar` 按方向改宽度/高度；`end_right_sidebar_resize` 竖排返回 `None`；新增 `toggle_vertical_layout`（翻状态 + 清拖拽标记） |
+| `panel/sidebars.rs` | `clamp_right_sidebar_height` 纯函数；手柄按方向选 `Axis` 与位移轴、keyed state 键分开；`render_right_sidebar` 竖排改 `w_full + h(height) + border_t`（无补间）；`render_right_edge_bar` 底部加切换按钮 |
+| `panel/render.rs` | 主 pane + 右栏外层容器按方向 `h_flex`/`v_flex` |
+| `panel/mod.rs` / `panel/tests.rs` | 测试导出 `clamp_right_sidebar_height`；+2 测（高度夹取 / 切方向与竖排不落盘） |
+| `editor/src/view/host/results/dispatch.rs` | 新增 `ToggleVerticalLayout` 分支 |
+
+#### 8.46.4 验证
+
+- `cargo check -p rds-result-panel` / `-p rds-editor` 通过（0 error / 0 warning）。
+- 门禁：panel **256**（254 + 2）、workbench_shell **14**、ui_guard **4** 全绿。
+- 两条新测：`right_sidebar_height_clamps_between_ui_limits`（240→200/280、越界夹到
+  128/512、边界同向不反向）、`toggle_vertical_layout_flips_and_stops_persisting_widths`
+  （默认横排 → 切竖排 → 拖 40px 只改高度不改宽度 → 松手 `None` → 切回横排宽度原封不动）。
+
+#### 8.46.5 未做 / 待定
+
+- `vertical_layout` 跨会话持久化（需先定 `Presentation` ↔ DBeaver descriptor 映射）。
+- 竖排高度持久化（与宽度共用一个偏好项会串，需要独立偏好项或改用千分比口径）。
+- 竖排下右缘竖条仍纵贯全高是否与 DBeaver 观感一致（真窗口目视待做）。
+- 竖排时状态栏归属、`compare_mode` 下的方向切换（对比模式双栏结构，本批未接）。
 
 ## 8. 协作纪律
 

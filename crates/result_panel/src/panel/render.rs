@@ -950,8 +950,21 @@ impl ResultPanel {
                 .min_h_0()
                 .debug_selector(|| "editor-result-sidebars".to_string());
             row = row.child(self.render_vertical_bar(cx));
-            row = row.child(div().flex_1().min_w_0().h_full().child(result_pane));
-            row = row.child(self.render_right_sidebar(cx));
+            // 【R5 布局方向切换】主 pane 与右栏的外层容器按方向换 flex 方向：
+            // 横排 = 主 pane 在左、右栏在右；竖排 = 主 pane 在上、右栏满宽在下
+            // （对齐 DBeaver `viewerSash.setOrientation(verticalLayout ? VERTICAL : HORIZONTAL)`）。
+            // 左缘竖条与右缘竖条都在这一层、贯穿整高，不随方向移动（与 DBeaver 竖条位置一致）。
+            let mut main_area = div().flex_1().min_w_0().min_h_0();
+            main_area = if self.vertical_layout {
+                main_area.v_flex().items_stretch()
+            } else {
+                main_area.h_flex().items_stretch()
+            };
+            row = row.child(
+                main_area
+                    .child(div().flex_1().min_w_0().min_h_0().child(result_pane))
+                    .child(self.render_right_sidebar(cx)),
+            );
             // 【右缘竖条】三态开关控制可见性（`edge_bar_visible`）；有可复制语义
             // （有网格结果）时才挂（与右栏页签同条件）
             row = row.children(

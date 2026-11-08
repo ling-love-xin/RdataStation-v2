@@ -525,31 +525,44 @@ impl ResultPanel {
         // 拖拽期用 1ms（vendor 补间的 progress = elapsed/duration，给 0 会算出 NaN、
         // 触发 `animated value should be finite` 断言；1ms 且 from==to 即等于直写）
         let anim_ms = if self.right_sidebar_dragging { 1 } else { 160 };
-        let wrapper = div()
-            .h_full()
+        // 【R5 布局方向切换】竖排时右栏满宽、高度取 `right_sidebar_height`：**不做开合补间**
+        // （`EffectTransition` 只提供 `width` 补间，没有 height），方向切换本身也不是
+        // 展开 / 收起动作；横排保持原来的宽度补间。
+        let vertical = self.vertical_layout;
+        let mut wrapper = div()
             .flex_none()
             .overflow_hidden()
-            .border_l(ui::HAIRLINE)
             .bg(theme.colors.sidebar)
-            .debug_selector(|| "editor-result-value-sidebar".to_string())
-            .when(show, |el| {
-                el.child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_1()
-                        .px_2()
-                        .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
-                        .flex_1()
-                        .min_w_0()
-                        .child(div().flex_1().min_w_0().child(tab_bar))
-                        .children(close),
-                )
-                .child(content)
-                // 【R5 可拖分栏】手柄贴右栏**左边缘**（inside Leading）：vendor 的 band
-                // 是绝对定位的细条，不占内容流；宽度改动由拖拽请求回面板状态。
-                .child(self.render_right_sidebar_resize())
-            });
+            .debug_selector(|| "editor-result-value-sidebar".to_string());
+        wrapper = if vertical {
+            wrapper
+                .w_full()
+                .h(self.right_sidebar_height)
+                .border_t(ui::HAIRLINE)
+        } else {
+            wrapper.h_full().border_l(ui::HAIRLINE)
+        };
+        let wrapper = wrapper.when(show, |el| {
+            el.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
+                    .flex_1()
+                    .min_w_0()
+                    .child(div().flex_1().min_w_0().child(tab_bar))
+                    .children(close),
+            )
+            .child(content)
+            // 【R5 可拖分栏】手柄贴分栏边缘（inside Leading）：横排是左边缘、竖排是顶边；
+            // vendor 的 band 是绝对定位的细条，不占内容流；尺寸改动由拖拽请求回面板状态。
+            .child(self.render_right_sidebar_resize())
+        });
+        if vertical {
+            return wrapper.into_any_element();
+        }
         EffectTransition::new(Duration::from_millis(anim_ms))
             .ease(ease_in_out_cubic)
             .width(from, to)
@@ -563,43 +576,57 @@ impl ResultPanel {
             .into_any_element()
     }
 
-    /// 【R5 可拖分栏】右栏左边缘的拖拽手柄。
+    /// 【R5 可拖分栏】右栏分栏边缘的拖拽手柄。
     ///
     /// 用 vendor `resize_handle`（base 拥有 band 的位置 / 光标 / 指针态 / 拖拽载荷，
-    /// 只把「拖了之后改什么」留给调用方）：贴左边缘 `HandleEdge::Leading`，拖拽载荷
-    /// 走 `SidebarResizeDrag`，每帧 `on_drag_move` 取**本次位移增量**发
+    /// 只把「拖了之后改什么」留给调用方）：横排贴右栏**左边缘**（`Leading` + `Axis::Horizontal`），
+    /// 竖排贴右栏**顶边**（`Leading` + `Axis::Vertical`，与 DBeaver `setOrientation` 同一口径）。
+    /// 拖拽载荷走 `SidebarResizeDrag`，每帧 `on_drag_move` 取**本次位移增量**发
     /// `ResizeRightSidebar`（增量口径不依赖绝对坐标，窗口滚动 / 缩放都不会算错）。
     fn render_right_sidebar_resize(&self) -> AnyElement {
         let queue = self.queue.clone();
+        let vertical = self.vertical_layout;
+        // 轴向跟着布局方向走：横排拖 x、竖排拖 y；keyed state 键也分开，
+        // 免得切换方向后上一帧的另一轴坐标被当成基准（会跳一格）
+        let axis = if vertical {
+            Axis::Vertical
+        } else {
+            Axis::Horizontal
+        };
+        let state_key = if vertical {
+            "editor-result-right-sidebar-drag-y"
+        } else {
+            "editor-result-right-sidebar-drag-x"
+        };
         resize_handle::<SidebarResizeDrag, SidebarResizeDrag>(
             "editor-result-right-sidebar-resize",
-            Axis::Horizontal,
+            axis,
         )
         .inside(HandleEdge::Leading)
-        .on_drag(SidebarResizeDrag, |drag, position, window, cx| {
-            // 拖拽起始：把按下时的指针 x 写进窗口级元素状态，作为增量口径的基准
+        .on_drag(SidebarResizeDrag, move |drag, position, window, cx| {
+            // 拖拽起始：把按下时的指针坐标写进窗口级元素状态，作为增量口径的基准
             // （`MouseMoveEvent` 没有 `previous_position`，只能自己记上一次位置）。
-            let last_x = window.use_keyed_state(
-                "editor-result-right-sidebar-drag-x",
-                cx,
-                |_, _| std::cell::Cell::new(position.x),
-            );
-            last_x.update(cx, |cell, _| cell.set(position.x));
+            let start = if vertical { position.y } else { position.x };
+            let last = window.use_keyed_state(state_key, cx, move |_, _| {
+                std::cell::Cell::new(start)
+            });
+            last.update(cx, |cell, _| cell.set(start));
             cx.new(|_| *drag)
         })
         .on_drag_move::<SidebarResizeDrag>(move |event, window, app| {
-            let pos = event.event.position.x;
-            let last_x = window.use_keyed_state(
-                "editor-result-right-sidebar-drag-x",
-                app,
-                |_, _| std::cell::Cell::new(pos),
-            );
-            let prev = last_x.read(app).get();
-            last_x.update(app, |cell, _| cell.set(pos));
-            // `Pixels::as_f32`：本帧与上一帧的水平位移（像素）
-            let dx = (pos - prev).as_f32();
-            if dx != 0. {
-                queue.request(ResultRequest::ResizeRightSidebar(dx.round() as i32), app);
+            let pos = if vertical {
+                event.event.position.y
+            } else {
+                event.event.position.x
+            };
+            let last =
+                window.use_keyed_state(state_key, app, |_, _| std::cell::Cell::new(pos));
+            let prev = last.read(app).get();
+            last.update(app, |cell, _| cell.set(pos));
+            // `Pixels::as_f32`：本帧与上一帧沿分栏法线的位移（像素）
+            let delta = (pos - prev).as_f32();
+            if delta != 0. {
+                queue.request(ResultRequest::ResizeRightSidebar(delta.round() as i32), app);
             }
         })
         .into_any_element()
@@ -623,6 +650,7 @@ impl ResultPanel {
             (RightTab::ExecSql, IconName::Braces, "执行SQL"),
         ];
         let queue = self.queue.clone();
+        let layout_queue = self.queue.clone();
         let active = self.right_tab;
         div()
             .h_full()
@@ -650,6 +678,28 @@ impl ResultPanel {
                     })
                     .into_any_element()
             }))
+            // 【R5 布局方向切换】DBeaver 把 toggleLayout 挂在这条竖条**底部**
+            // （`ResultSetViewer.java:1082-1083`：先塞一个 1×1 `FILL_VERTICAL` 空标签把按钮
+            // 推到最下方，再 `VerticalButton.create(..., CMD_TOGGLE_LAYOUT, false)`）。
+            // 本仓用 `flex_1()` 间隔块同法；按钮沿用 `toggled` 表达「当前是否竖排」。
+            .child(div().flex_1())
+            .child(
+                Button::new("editor-result-edge-vertical-layout")
+                    .ghost()
+                    .small()
+                    .debug_selector(|| "editor-result-edge-vertical-layout".to_string())
+                    .toggled(self.vertical_layout)
+                    .icon(IconName::RotateCcw)
+                    .tooltip(if self.vertical_layout {
+                        "切回布局方向：面板在网格右侧"
+                    } else {
+                        "切换布局方向：面板在网格下方"
+                    })
+                    .on_click(move |_, _window, app| {
+                        layout_queue.request(ResultRequest::ToggleVerticalLayout, app);
+                    })
+                    .into_any_element(),
+            )
             .into_any_element()
     }
 
@@ -807,6 +857,21 @@ pub(crate) fn clamp_right_sidebar_width(current: Pixels, dx: f32) -> Pixels {
         width = max;
     }
     width
+}
+
+/// 【R5 布局方向切换】竖排高度夹取：`delta` 为本次拖拽的纵向位移（像素，向下为正 →
+/// 位于下方的右栏变矮，与横排「朝手柄方向即变小」同构），
+/// 结果夹到 `RESULT_SIDEBAR_RIGHT_MIN_HEIGHT..=RESULT_SIDEBAR_RIGHT_MAX_HEIGHT`。
+pub(crate) fn clamp_right_sidebar_height(current: Pixels, delta: f32) -> Pixels {
+    let min = px(ui::RESULT_SIDEBAR_RIGHT_MIN_HEIGHT * 16.0);
+    let max = px(ui::RESULT_SIDEBAR_RIGHT_MAX_HEIGHT * 16.0);
+    let mut height = current - px(delta);
+    if height < min {
+        height = min;
+    } else if height > max {
+        height = max;
+    }
+    height
 }
 
 pub(crate) fn sidebar_width_anim(epoch: u64, show: bool, full: Pixels) -> (Pixels, Pixels) {

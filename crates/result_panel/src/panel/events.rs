@@ -300,26 +300,40 @@ impl ResultPanel {
         cx.notify();
     }
 
-    /// 【R5 可拖分栏】拖右栏左边缘改宽度（`dx` = 本次位移，像素，向右为正 → 变窄）。
+    /// 【R5 可拖分栏】拖右栏分栏边改尺寸（`delta` = 沿分栏法线的位移，像素，正向 = 变小）。
     ///
-    /// 纯视图状态：宽度 clamp 到 `crate::ui` 的上下限后写回；`right_sidebar_dragging`
-    /// 置真让右栏接下来直写宽度（不重播开合补间，否则手柄会黏手）。
-    pub fn resize_right_sidebar(&mut self, dx: f32, cx: &mut Context<Self>) {
-        self.right_sidebar_width =
-            super::sidebars::clamp_right_sidebar_width(self.right_sidebar_width, dx);
+    /// 横排改宽度、竖排改高度，两条路径各自 clamp 到 `crate::ui` 的上下限；
+    /// `right_sidebar_dragging` 置真让右栏接下来直写尺寸（不重播开合补间，否则手柄会黏手）。
+    pub fn resize_right_sidebar(&mut self, delta: f32, cx: &mut Context<Self>) {
+        if self.vertical_layout {
+            self.right_sidebar_height =
+                super::sidebars::clamp_right_sidebar_height(self.right_sidebar_height, delta);
+        } else {
+            self.right_sidebar_width =
+                super::sidebars::clamp_right_sidebar_width(self.right_sidebar_width, delta);
+        }
         self.right_sidebar_dragging = true;
         cx.notify();
     }
 
-    /// 【R5 比例持久化】松手定稿：清拖拽标记并交回当前宽度（像素），由宿主写全局偏好项。
-    /// 返回 `None` = 本次不在拖拽（例如只是点了一下手柄），不需要落盘。
+    /// 【R5 比例持久化】松手定稿：清拖拽标记，横排时交回当前宽度（像素）由宿主写全局偏好项。
+    /// 返回 `None` = 本次不在拖拽（只是点了一下手柄）或竖排（高度没有对应偏好项），不需落盘。
     pub fn end_right_sidebar_resize(&mut self, cx: &mut Context<Self>) -> Option<Pixels> {
         if !self.right_sidebar_dragging {
             return None;
         }
         self.right_sidebar_dragging = false;
         cx.notify();
-        Some(self.right_sidebar_width)
+        // 竖排改的是高度：本仓没有与之对应的偏好项（宽度偏好是横向 px 口径，共用会串）
+        (!self.vertical_layout).then_some(self.right_sidebar_width)
+    }
+
+    /// 【R5 布局方向切换】右栏在右侧 / 下方之间切换（对齐 DBeaver `toggleVerticalLayout`）：
+    /// 只翻面板状态并清拖拽标记（切换瞬间的位移基准作废，否则下一次拖拽会跳一格）。
+    pub fn toggle_vertical_layout(&mut self, cx: &mut Context<Self>) {
+        self.vertical_layout = !self.vertical_layout;
+        self.right_sidebar_dragging = false;
+        cx.notify();
     }
 
     /// 【R5 比例持久化】初值注入：面板构造后由宿主把全局偏好项（px）写进来。

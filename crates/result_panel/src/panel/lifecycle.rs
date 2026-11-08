@@ -216,6 +216,9 @@ impl ResultPanel {
             // 【R5 可拖分栏】右栏宽度默认档（拖拽后可改，开合动画以它为满宽）
             right_sidebar_width: px(crate::ui::RESULT_SIDEBAR_RIGHT_WIDTH * 16.0),
             right_sidebar_dragging: false,
+            // 【R5 布局方向切换】默认横排（网格左 / 右栏右），与 DBeaver `verticalLayout = false` 一致
+            vertical_layout: false,
+            right_sidebar_height: px(crate::ui::RESULT_SIDEBAR_RIGHT_HEIGHT * 16.0),
             compare_active: 0,
             compare_toolbar: None,
             compare_status: None,
