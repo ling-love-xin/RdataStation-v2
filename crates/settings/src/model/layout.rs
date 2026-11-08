@@ -44,7 +44,12 @@ fn default_layout_left_sidebar_width() -> i64 {
     (ui::LEFT_DOCK_WIDTH * ui::BASE_FONT_SIZE) as i64
 }
 
-/// 右侧侧边栏宽度：默认 300px。
+/// 右侧侧边栏宽度：默认 320px。
+///
+/// 与左栏同一口径：`ui::RIGHT_DOCK_WIDTH`（20rem）× `ui::BASE_FONT_SIZE`（16px）= 320px，
+/// 与启动时 `apply_right_mode` 的 `font_size × RIGHT_DOCK_WIDTH` 同源
+/// （`crates/workbench/src/view.rs:1642` / `:1667`）。旧默认 300 在 13px 字号下会被首帧同步
+/// 覆盖成 244px（启动本身是 260px），与左栏旧默认 250→203 是同一类静默缩水。
 fn default_layout_right_sidebar_width() -> i64 {
-    300
+    (ui::RIGHT_DOCK_WIDTH * ui::BASE_FONT_SIZE) as i64
 }
