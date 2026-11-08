@@ -2008,6 +2008,93 @@ DBeaver 右列 ToolBar 有五个 `ToolItem`（`:315-379`）：ERASE / FILTER（�
 `rds-workbench-shell --lib` **14 passed**；三档提交 `a4574c83`（P0）、`4f8acd47`（P1）、
 P3 与本文档同一提交。
 
+### 8.40 右栏：面板内工具条（R1）+「计算」页对齐 DBeaver Calc（R2）
+
+右栏对比分析交付后用户拍板：**R1 只加每面板工具条**（不撤销 2026-10-28「横 tab 只显当前
+页签」的既有决定），**并直接做 R2**。本节落地 R1 的第一处（计算页工具条）与 R2 的全部内容。
+
+#### 8.40.1 为什么 R1 不搬「页签并列」
+
+DBeaver 右栏是 `new CTabFolder(viewerSash, SWT.FLAT|SWT.TOP)`（`ResultSetViewer.java:358`），
+每个面板一个 `CTabItem(SWT.CLOSE)`、并列可关（`:1330-1345`）；本仓 2026-10-28 已拍板横 tab
+只显当前页签（320px 窄右栏并列多页签会把标题挤没）。**该决定未推翻**——R1 只补每个面板内部
+固定一行靠右工具条，即 DBeaver 的
+`ToolBarManager(SWT.HORIZONTAL | SWT.RIGHT | SWT.FLAT)`（`:1337-1374`，`contributeActions`
+挂面板自己的动作，`needsSeparator()` 为真时插一条分隔线）。
+
+#### 8.40.2 计算页差异实证（`AggregateColumnsPanel.java` 全 498 行）
+
+| 维度 | DBeaver Calc | 本仓改造前 | 本轮 |
+| --- | --- | --- | --- |
+| 输入 | 多单元格 / 多列选区（`aggregateSelection`，`:199-214`） | 单列（网格选中格优先、列浏览器选中列兜底） | 保持单列，见 8.40.4 |
+| 函数集 | 注册表 + ＋ / − / Reset（`:365` / `:418` / `:438`） | 六项写死 | **可增删 + Reset** |
+| 聚合口径 | `aggregateAsStrings` CHECK（`:348`） | 无 | **数值 / 字符串 toggle** |
+| 分组聚合 | `GroupByColumnsAction` CHECK（`:333`） | 无（另有独立「分组」页签） | 不实现，见 8.40.4 |
+| 表头 | `Tree` 两列头 Function / Value（`:90-94`） | 无 | **两列表头** |
+| 千分位 | `###,###,###,###,###,##0.###`（`:65-66`） | `format!("{:.2}")` | **`fmt_grouped`** |
+| 面板工具条 | 六动作（＋/−/Reset/分隔/分组/口径，`:322-331`） | 无 | **＋ / Reset / 口径**（R1） |
+| 右键菜单 | Copy / CopyAll（`:106-112`） | 无 | 未做，登记在册 |
+
+取值链路保持原口径：`column_stats_for(column)`（内存档数值列走 `FactFrame` 列式原生聚合，
+有被删行时回退显示矩阵口径）；**只有字符串口径**才取整列 `column_values(column)` 算字典序
+极值（`text_minmax`），数值口径不物化整行矩阵。
+
+#### 8.40.3 四处代码落点
+
+**请求与状态**（`ports.rs` / `panel/data.rs` / `panel/lifecycle.rs`）：
+
+- `ResultRequest{AddStatsItem, RemoveStatsItem, ResetStatsItems, SetStatsMode}`
+- `StatsItem{Count, Nulls, Min, Max, Avg, Sum}` + `ALL` / `label()` / `supports_text_mode()`
+- `StatsMode{Numeric(默认), Text}` + `toggled()`
+- 面板字段 `stats_items: Vec<StatsItem>` / `stats_mode: StatsMode`，构造默认
+  全集 + `Numeric`
+
+**事件路径**（`panel/events.rs`）：`add_stats_item` 按 `ALL` 的固定顺序插入而非追加（删了
+再加回去要回原位，否则行序随操作乱跳）；`remove_stats_item` / `reset_stats_items` /
+`set_stats_mode` 都只在真变化时 `cx.notify()`。`editor/src/view/host/results/dispatch.rs`
+四条分支只转发（纯面板视图状态，不落盘、不影响取数）。
+
+**取值纯函数**（`panel/tabs.rs::stat_value`）：计数类不受口径影响；数值口径
+Min/Max/Avg/Sum 走千分位，字符串口径 Min/Max 走字典序、Avg/Sum 出 `—`（DBeaver 的
+SUM/AVG 对字符串累计不成立）。
+
+**工具条与行**（`panel/tabs.rs::stats_toolbar` / `stat_row`）：
+`Toolbar::new("editor-result-stats-actions").xsmall().p_0()` 收「＋ / Reset / 口径」三件，
+左列是「「列名」统计」；行 = 函数名（`RESULT_SIDEBAR_KV_LABEL_WIDTH`）+ 值 + 行尾 ×。
+容器高走新常量 `ui::RESULT_PANEL_TOOLBAR_HEIGHT`（**1.75 = 28px**）——它是 vendor
+`toolbar.rs:242-259` 里 XSmall 档自带的 `min_h_7`，容器写 24px（状态行档）会让 Toolbar
+溢出 4px 压住下方表头，所以容器高必须与组件托底高一致。
+
+#### 8.40.4 三处**有意偏离**（不是遗漏）
+
+1. **不做「行选中后点 −」**：DBeaver 的 − 删的是 `Tree` 里选中的函数行；本仓统计行是普通
+   元素、没有行选中模型，改为每行行尾一个 × —— 避免为对齐一个按钮引入整棵 `Tree`。
+2. **不做「按列分组聚合」**：`GroupByColumnsAction` 的输入是**多单元格选区**，本仓 delegate
+   只有 `selection_pos: Option<(usize, usize)>` 单格 + `selected_col` 单列（`multi_selected`
+   是列浏览器清单的多选，不是网格选区），派生不出「选中的若干单元格」。要做需先给
+   `DataTable` 引入单元格选区，属独立工程；且本仓已有独立「分组」页签，重复实现会两处打架。
+3. **不做右键 Copy / CopyAll**：本仓统计页尚无右键菜单基建，且工具栏已有全局复制；
+   登记为后续增强（`AggregateColumnsPanel.java:471-496` 的 `func=value` 文案可直接照搬）。
+
+#### 8.40.5 新增测试（4 条）
+
+| 用例 | 文件 | 钉住什么 |
+| --- | --- | --- |
+| `fmt_grouped_inserts_thousand_separators` | `grid/tests.rs` | 千分位分组 + 负数 + 非有限值 |
+| `text_minmax_ignores_null_and_orders_lexically` | `grid/tests.rs` | 字符串口径排除 NULL、字典序、空列=无极值 |
+| `stat_value_respects_mode_and_missing_samples` | `panel/tests.rs` | 口径决定 Min/Max 比较方式、Avg/Sum 无值、计数不受口径影响 |
+| `stats_defaults_are_full_set_in_display_order` | `panel/tests.rs` | 默认全集与展示顺序、`supports_text_mode`、口径可来回切 |
+
+**验证**：`rds-result-panel --lib` **246 passed**（原 242 + 4）；`rds-ui-guard` **4 passed**；
+`rds-workbench-shell --lib` **14 passed**；`cargo check -p rds-editor` 通过。
+
+#### 8.40.6 仍未做
+
+- 值详情 / 分组 / 引用 / 执行SQL 四页的同构面板工具条（R1 剩余部分）
+- 统计项增删的**跨会话持久化**（DBeaver 写 `IDialogSettings`；本仓暂无对应偏好项）
+- `AggregateColumnsPanel` 的 `packColumns` 等列宽自适应（本仓右栏是固定列宽）
+- R3（Grouping 配置化）/ R4（Metadata、References 实做）/ R5（布局方向切换 + 可拖分栏）
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

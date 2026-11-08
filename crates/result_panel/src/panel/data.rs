@@ -36,7 +36,7 @@ use crate::column_browser::ColumnBrowserDelegate;
 use crate::error_card::ErrorCard;
 use crate::export;
 use crate::grid::{ResultGridDelegate, ResultStatus, ResultToolbar};
-use crate::ports::{Presentation, ResultActionQueue, RightTab};
+use crate::ports::{Presentation, ResultActionQueue, RightTab, StatsItem, StatsMode};
 use crate::script_card::ScriptCard;
 use crate::sets::ResultSetTab;
 use workbench_shell::model::ColumnAnnotation;
@@ -219,6 +219,13 @@ pub struct ResultPanel {
     pub(crate) presentation: Presentation,
     /// 【右栏】当前标签页（对齐 DBeaver 右侧面板组：列浏览器 / 值详情 / 计算 / 分组）
     pub(crate) right_tab: RightTab,
+    /// 【R2 计算页】启用的统计项集合（顺序 = 渲染顺序）。对齐 DBeaver Calc 的
+    /// `AggregateColumnsPanel.enabledFunctions`：`+` 添加 / 行尾 × 删除 / Reset 恢复。
+    /// 顺序按下标保存，用户增删不会打乱已启用项的相对次序。
+    pub(crate) stats_items: Vec<StatsItem>,
+    /// 【R2 计算页】聚合口径（数值 / 字符串）。对齐 DBeaver Calc 的
+    /// `aggregateAsStrings` CHECK：字符串口径下 MIN/MAX 走字典序，AVG/SUM 不出值。
+    pub(crate) stats_mode: StatsMode,
     /// 【并排对比】对比栏的投影（编辑器 `sync_compare_grid` 时经
     /// [`Self::set_compare_projection`] 写入；render 期只读）
     pub(crate) compare_active: usize,

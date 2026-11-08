@@ -37,6 +37,14 @@ pub const RESULT_MAX_HEIGHT: f32 = 48.0;
 /// 结果区状态行高（1.5rem = 24px，与编辑器状态栏同档；结果工具栏同高）
 pub const RESULT_STATUS_BAR_HEIGHT: f32 = 1.5;
 
+/// 右栏面板自带工具条高（1.75rem = 28px）。
+/// 来源：vendor `toolbar.rs:242-259` 的 XSmall 档自带 `min_h_7`（= 28px），即
+/// gpui-kit `Toolbar` 组件在 XSmall 下的实际托底高度。对齐 DBeaver 侧面板自带
+/// 工具条（`ResultSetViewer.java:1337-1374` 的 `ToolBarManager(SWT.RIGHT)`）时，
+/// 容器高必须与组件托底高一致：写 24px（状态行档）会让 28px 的 Toolbar 溢出，
+/// 压住下方表头那一行。
+pub const RESULT_PANEL_TOOLBAR_HEIGHT: f32 = 1.75;
+
 /// 结果区工具栏高（2.5rem = 40px）
 ///
 /// 2026-10-28 工具栏迁 `Toolbar` 组件后独立成档：当时按「`min_h_7`(28px) + `p_1`(8px)」

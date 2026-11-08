@@ -3,10 +3,12 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::list::ListItem;
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::table::TableDelegate;
+use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::tree::tree;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::*;
@@ -17,7 +19,8 @@ use super::data::ResultPanel;
 use crate::grid::cell::{
     HEX_DUMP_BYTES_PER_LINE, ViewerMode, classify_value, hex_lines, hex_to_bytes,
 };
-use crate::ports::{ResultActionQueue, ResultRequest};
+use crate::grid::stats::{ColumnStats, fmt_grouped, text_minmax};
+use crate::ports::{ResultActionQueue, ResultRequest, StatsItem, StatsMode};
 #[cfg(test)]
 use crate::ports::RightTab;
 use crate::store::ColumnKind;
@@ -318,12 +321,20 @@ impl ResultPanel {
             .into_any_element()
     }
 
-    /// 【右栏】计算页（DBeaver「计算」）：选中列的 count / NULL / min / max / avg / sum。
+    /// 【右栏】计算页（对齐 DBeaver Calc `AggregateColumnsPanel`）：
+    /// 列级聚合 + **可配置函数集**（＋ 添加 / 行尾 × 停用 / Reset 恢复）+ **聚合口径**
+    /// 切换（数值 / 字符串）+ 两列表头（Function / Value）+ 千分位数字。
     ///
     /// 作用列 = 网格选中格优先（`selection_pos`），列浏览器清单选中列（`selected_col`）兜底；
-    /// 转置视图不给语义列。数据 = 列级访问器 `column_stats_for`（只取目标列取值，
-    /// 不物化整行矩阵；纯函数口径与列头菜单弹层一致）。
-    /// 数值统计只在列里有可解析数值样本时才填（文本 / BLOB 只计 count / NULL）。
+    /// 转置视图不给语义列。数据 = 列级访问器 `column_stats_for`（数值口径走事实档列式
+    /// 原生聚合，不物化整行矩阵）；字符串口径才取整列取值算字典序极值。
+    ///
+    /// **与 DBeaver 的两处有意偏离**（登记在册，不是遗漏）：
+    /// 1. DBeaver 的「−」删的是 Tree 里选中的函数行；本仓统计行是普通元素、没有行选中
+    ///    模型，改为每行行尾一个 ×（避免为对齐一个按钮去引整棵 Tree）。
+    /// 2. DBeaver 的「按列分组聚合」（`GroupByColumnsAction`）以**多单元格选区**为输入；
+    ///    本仓网格只有单格选择（`selection_pos: Option<(usize, usize)>`），没有多选模型，
+    ///    故不实现——要做需先给 DataTable 引入单元格选区，属独立工程。
     pub(crate) fn render_stats_tab(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let muted = theme.colors.muted_foreground;
@@ -332,40 +343,220 @@ impl ResultPanel {
         let Some(data_col) = self.inspect_column(delegate) else {
             return self.sidebar_empty("选中一个数据列查看统计", cx);
         };
-        // 【P2-2】列级访问器：只取目标列取值，不再 `visible_rows()` 物化整行矩阵
-        let stats = delegate.column_stats_for(data_col);
         let name = delegate
             .columns()
             .get(data_col)
             .cloned()
             .unwrap_or_else(|| "列".to_string());
-        let items: Vec<(String, String)> = vec![
-            ("非空".into(), stats.count.to_string()),
-            ("NULL".into(), stats.nulls.to_string()),
-            ("最小值".into(), fmt_stat(stats.min)),
-            ("最大值".into(), fmt_stat(stats.max)),
-            ("均值".into(), fmt_stat(stats.avg)),
-            ("合计".into(), fmt_stat(stats.sum)),
-        ];
+        let stats = delegate.column_stats_for(data_col);
+        // 字符串口径才需要整列取值（数值口径走事实档列式原生聚合，不物化矩阵）
+        let text_extremes = matches!(self.stats_mode, StatsMode::Text)
+            .then(|| text_minmax(&delegate.column_values(data_col)));
+        let rows: Vec<AnyElement> = self
+            .stats_items
+            .iter()
+            .map(|item| {
+                let value = stat_value(*item, &stats, text_extremes.as_ref(), self.stats_mode);
+                self.stat_row(*item, &value, cx)
+            })
+            .collect();
+        // 全停用时的空态提示（不引 `when`：本 crate 的 styled 扩展没带这个便捷方法）
+        let empty_hint = rows.is_empty().then(|| {
+            div()
+                .px_2()
+                .py_1()
+                .text_xs()
+                .text_color(muted)
+                .child(SharedString::from("没有启用任何统计项：点 ＋ 添加"))
+                .into_any_element()
+        });
         div()
             .flex_1()
             .min_h_0()
+            .v_flex()
             .debug_selector(|| "editor-result-stats-tab".to_string())
+            // 【R1 对齐】面板内工具条：DBeaver 每个侧面板自带一行靠右工具条
+            // （`ResultSetViewer.java:1337-1374` 的 `ToolBarManager(SWT.RIGHT)`），
+            // 本页把「＋ / Reset / 口径」收进这里（标题在左，动作在右，两列布局）
+            .child(self.stats_toolbar(&name, cx))
+            // 表头：对齐 DBeaver Calc 的 Tree 两个列头（Function / Value）
             .child(
                 div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
                     .px_2()
-                    .py_1()
-                    .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
+                    .h_5()
+                    .flex_none()
+                    .border_b(ui::HAIRLINE)
+                    .border_color(theme.colors.border)
                     .text_xs()
                     .text_color(muted)
-                    .child(SharedString::from(format!("「{name}」统计"))),
+                    .child(
+                        div()
+                            .w(rems(ui::RESULT_SIDEBAR_KV_LABEL_WIDTH))
+                            .flex_none()
+                            .child(SharedString::from("函数")),
+                    )
+                    .child(div().flex_1().child(SharedString::from("值")))
+                    // 行尾删除钮那一列的表头留白（与统计行的 × 列同宽）
+                    .child(div().w(rems(1.25)).flex_none()),
             )
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scrollbar()
-                    .children(items.into_iter().map(|(k, v)| kv_row(&k, &v, cx))),
+                    .children(empty_hint)
+                    .children(rows)
+                    .overflow_y_scrollbar(),
+            )
+            .into_any_element()
+    }
+
+    /// 【R2】计算页工具条：左「列名」标题 + 右动作（＋ 添加 / Reset / 口径 toggle），
+    /// 对齐 DBeaver Calc 的 `fillToolBar`（`AggregateColumnsPanel.java:322-331`：
+    /// ＋ / − / Reset / 分隔 / 分组 / 口径）。本仓「−」在统计行行尾，这里只摆三件。
+    fn stats_toolbar(&self, column_name: &str, cx: &App) -> AnyElement {
+        let muted = cx.theme().colors.muted_foreground;
+        let missing: Vec<StatsItem> = StatsItem::ALL
+            .into_iter()
+            .filter(|item| !self.stats_items.contains(item))
+            .collect();
+        // ＋：还有未启用项才是下拉菜单；全启用时禁用（DBeaver 此时菜单为空、点了没反应，
+        // 本仓直接给禁用态，避免"点了没反应"的假按钮）
+        let add: AnyElement = if missing.is_empty() {
+            Button::new("editor-result-stat-add")
+                .ghost()
+                .xsmall()
+                .icon(IconName::Plus)
+                .tooltip("六项统计都已启用")
+                .disabled(true)
+                .into_any_element()
+        } else {
+            let queue = self.queue.clone();
+            DropdownButton::new("editor-result-stat-add")
+                .xsmall()
+                .button(
+                    Button::new("editor-result-stat-add-btn")
+                        .ghost()
+                        .xsmall()
+                        .debug_selector(|| "editor-result-stat-add".to_string())
+                        .icon(IconName::Plus)
+                        .tooltip("添加统计项"),
+                )
+                .dropdown_menu(move |menu, _window, _app| {
+                    let mut menu = menu;
+                    for item in missing.iter().copied() {
+                        let queue = queue.clone();
+                        menu = menu.item(PopupMenuItem::new(item.label().to_string()).on_click(
+                            move |_, _window, app| {
+                                queue.request(ResultRequest::AddStatsItem(item), app);
+                            },
+                        ));
+                    }
+                    menu
+                })
+                .into_any_element()
+        };
+        let reset = {
+            let queue = self.queue.clone();
+            Button::new("editor-result-stat-reset")
+                .ghost()
+                .xsmall()
+                .debug_selector(|| "editor-result-stat-reset".to_string())
+                .icon(IconName::RotateCcw)
+                .tooltip("恢复默认统计项（六项全开）")
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::ResetStatsItems, app);
+                })
+                .into_any_element()
+        };
+        // 口径 toggle：数值 / 字符串（DBeaver 用 TYPE_NUMBER / TYPE_STRING 图标 CHECK 表达；
+        // 本仓给文字标签，窄图标位放不下两个语义）
+        let mode_button = {
+            let queue = self.queue.clone();
+            let text_mode = matches!(self.stats_mode, StatsMode::Text);
+            Button::new("editor-result-stat-mode")
+                .ghost()
+                .xsmall()
+                .debug_selector(|| "editor-result-stat-mode".to_string())
+                .label(if text_mode { "字符串" } else { "数值" })
+                .toggled(text_mode)
+                .tooltip("聚合口径：数值时最小/最大值按数值比较；字符串时按字典序（文本列也给极值）")
+                .on_click(move |_, _window, app| {
+                    queue.request(
+                        ResultRequest::SetStatsMode(if text_mode {
+                            StatsMode::Numeric
+                        } else {
+                            StatsMode::Text
+                        }),
+                        app,
+                    );
+                })
+                .into_any_element()
+        };
+        div()
+            .h_flex()
+            .items_center()
+            .justify_between()
+            .gap_1()
+            .px_2()
+            .h(rems(ui::RESULT_PANEL_TOOLBAR_HEIGHT))
+            .flex_none()
+            .text_xs()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(muted)
+                    .child(SharedString::from(format!("「{column_name}」统计"))),
+            )
+            .child(
+                Toolbar::new("editor-result-stats-actions")
+                    .xsmall()
+                    .p_0()
+                    .contents(vec![add, reset, mode_button]),
+            )
+            .into_any_element()
+    }
+
+    /// 【R2】计算页一行：函数名（左）+ 值（右）+ 行尾停用钮（替代 DBeaver 的「−」）
+    fn stat_row(&self, item: StatsItem, value: &str, cx: &App) -> AnyElement {
+        let muted = cx.theme().colors.muted_foreground;
+        let queue = self.queue.clone();
+        let debug_id = format!("editor-result-stat-{:?}", item);
+        div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .h_5()
+            .text_xs()
+            .child(
+                div()
+                    .w(rems(ui::RESULT_SIDEBAR_KV_LABEL_WIDTH))
+                    .flex_none()
+                    .text_color(muted)
+                    .child(SharedString::from(item.label())),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_ellipsis()
+                    .child(SharedString::from(value.to_string())),
+            )
+            .child(
+                Button::new(format!("editor-result-stat-remove-{:?}", item))
+                    .ghost()
+                    .xsmall()
+                    .debug_selector(move || debug_id.clone())
+                    .icon(IconName::X)
+                    .tooltip(format!("停用「{}」", item.label()))
+                    .on_click(move |_, _window, app| {
+                        queue.request(ResultRequest::RemoveStatsItem(item), app);
+                    }),
             )
             .into_any_element()
     }
@@ -555,15 +746,50 @@ pub(crate) fn kv_row(label: &str, value: &str, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// 【右栏】统计值格式化：整数样去尾零（1.0 → 1），否则保留两位；无数值样本 = —
+/// 【右栏】统计值格式化：无数值样本 = —；有值走千分位（对齐 DBeaver Calc 的
+/// `###,###,###,###,###,##0.###`，见 [`fmt_grouped`]）
 pub(crate) fn fmt_stat(value: Option<f64>) -> String {
-    value
-        .map(|v| {
-            if v.fract() == 0.0 {
-                format!("{}", v as i64)
+    value.map(fmt_grouped).unwrap_or_else(|| "—".to_string())
+}
+
+/// 【R2 计算页】单项取值（纯函数，便于单测）：
+/// - 计数类（非空 / NULL）不受口径影响，走千分位整数
+/// - 数值口径：Min/Max/Avg/Sum 走千分位浮点，无样本 = —
+/// - 字符串口径：Min/Max 走字典序（文本列也给极值）；Avg/Sum 不出值（DBeaver 的
+///   SUM/AVG 对字符串累计不成立）
+pub(crate) fn stat_value(
+    item: StatsItem,
+    stats: &ColumnStats,
+    text_extremes: Option<&(Option<String>, Option<String>)>,
+    mode: StatsMode,
+) -> String {
+    match item {
+        StatsItem::Count => fmt_grouped(stats.count as f64),
+        StatsItem::Nulls => fmt_grouped(stats.nulls as f64),
+        StatsItem::Min | StatsItem::Max => {
+            if matches!(mode, StatsMode::Text) {
+                let pick = text_extremes.and_then(|(min, max)| {
+                    if matches!(item, StatsItem::Min) {
+                        min.clone()
+                    } else {
+                        max.clone()
+                    }
+                });
+                pick.unwrap_or_else(|| "—".to_string())
+            } else if matches!(item, StatsItem::Min) {
+                fmt_stat(stats.min)
             } else {
-                format!("{:.2}", v)
+                fmt_stat(stats.max)
             }
-        })
-        .unwrap_or_else(|| "—".to_string())
+        }
+        StatsItem::Avg | StatsItem::Sum => {
+            if matches!(mode, StatsMode::Text) {
+                "—".to_string()
+            } else if matches!(item, StatsItem::Avg) {
+                fmt_stat(stats.avg)
+            } else {
+                fmt_stat(stats.sum)
+            }
+        }
+    }
 }

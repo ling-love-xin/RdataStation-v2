@@ -6,7 +6,7 @@ use crate::grid::cell::{
     detect_image_format, hex_lines, image_format_of, json_tree_items, pretty_json_display,
 };
 use crate::grid::header::header_tooltip_lines;
-use crate::grid::stats::fmt_stat_num;
+use crate::grid::stats::{fmt_grouped, fmt_stat_num, text_minmax};
 use crate::grid::status::{format_integer_cell, render_toolbar};
 use crate::grid::status::{FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION};
 use crate::grid::text::{cell_matches, find_in_cell, preview_of};
@@ -2175,6 +2175,37 @@ fn stats_lines_are_key_value_pairs() {
     );
     assert_eq!(fmt_stat_num(1.0), "1", "去尾零");
     assert_eq!(fmt_stat_num(1.500000), "1.5");
+}
+
+/// 【R2】千分位格式化：整数每 3 位插逗号、小数去尾零（对齐 DBeaver Calc 的
+/// `DOUBLE_FORMAT` = `###,###,###,###,###,##0.###`）
+#[test]
+fn fmt_grouped_inserts_thousand_separators() {
+    assert_eq!(fmt_grouped(0.0), "0");
+    assert_eq!(fmt_grouped(999.0), "999");
+    assert_eq!(fmt_grouped(1000.0), "1,000");
+    assert_eq!(fmt_grouped(1234.0), "1,234");
+    assert_eq!(fmt_grouped(1234567.0), "1,234,567");
+    assert_eq!(fmt_grouped(-1234.5), "-1,234.5");
+    // 非有限值不分组（沿用原样文本）
+    assert_eq!(fmt_grouped(f64::NAN), "NaN");
+}
+
+/// 【R2】字符串口径极值：排除 NULL 后按字典序取最小 / 最大（文本列也能给极值）
+#[test]
+fn text_minmax_ignores_null_and_orders_lexically() {
+    let values = vec![
+        "banana".to_string(),
+        "NULL".to_string(),
+        "apple".to_string(),
+        "cherry".to_string(),
+    ];
+    let (min, max) = text_minmax(&values);
+    assert_eq!(min.as_deref(), Some("apple"));
+    assert_eq!(max.as_deref(), Some("cherry"));
+    // 全 NULL / 空列 = 无极值（渲染层出 —）
+    assert_eq!(text_minmax(&["NULL".to_string()]), (None, None));
+    assert_eq!(text_minmax(&[] as &[String]), (None, None));
 }
 
 /// 【P2-1】隐藏到只剩 1 列就拒绝（全藏了表格没有内容）

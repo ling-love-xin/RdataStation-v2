@@ -281,6 +281,24 @@ impl EditorHostPanel {
                 self.result_panel
                     .update(cx, |p, cx| p.set_show_column_comments(open, cx));
             }
+            // 【R2 计算页】函数集增删 / 复位 / 口径切换：全是面板本地视图状态
+            // （不落盘、不影响取数），宿主只转发（与 SetRightTab 同口径）
+            ResultRequest::AddStatsItem(item) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.add_stats_item(item, cx));
+            }
+            ResultRequest::RemoveStatsItem(item) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.remove_stats_item(item, cx));
+            }
+            ResultRequest::ResetStatsItems => {
+                self.result_panel
+                    .update(cx, |p, cx| p.reset_stats_items(cx));
+            }
+            ResultRequest::SetStatsMode(mode) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.set_stats_mode(mode, cx));
+            }
         }
     }
 

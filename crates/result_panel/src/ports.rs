@@ -175,6 +175,88 @@ pub enum ResultRequest {
     CancelRename,
     /// 【B1】面板级临时开关：列头直接显示注释（覆盖全局偏好）
     SetShowColumnComments { open: bool },
+
+    // 【R2 计算页对齐 DBeaver Calc】`AggregateColumnsPanel` 的函数集与口径都是可变的
+    // （`+:365` / `-:418` / `Reset:438` / `GroupByColumns:333` / `ValueTypeToggle:348`），
+    // 本仓这四项都经队列回面板（render 是纯读路径，不能就地改状态）。
+    /// 启用一个统计项（对齐「＋添加函数」）
+    AddStatsItem(StatsItem),
+    /// 停用一个统计项（对齐「－删除选中函数」；本仓由统计行行尾的 × 触发，
+    /// 因为统计行是普通元素、不是可选中 Tree 行，避免为对齐按钮引入整棵 Tree）
+    RemoveStatsItem(StatsItem),
+    /// 恢复默认函数集（对齐「Reset」）
+    ResetStatsItems,
+    /// 切换聚合口径（对齐 `aggregateAsStrings` CHECK：影响 MIN/MAX 的比较方式）
+    SetStatsMode(StatsMode),
+}
+
+/// 【R2】计算页的统计项（对齐 DBeaver Calc 的可配置聚合函数集
+/// `AggregateColumnsPanel.enabledFunctions`，来源 `FunctionsRegistry` 的
+/// `AggregateFunctionDescriptor`）。本仓不引注册表，六项固定可选。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StatsItem {
+    /// 非空值数（COUNT，DBeaver `IAggregateFunction` 的 count）
+    Count,
+    /// NULL 数（本地扩展项：DBeaver 用 COUNT 与行数的差表达，本仓直给）
+    Nulls,
+    /// 最小值
+    Min,
+    /// 最大值
+    Max,
+    /// 均值（仅数值口径有值）
+    Avg,
+    /// 合计（仅数值口径有值）
+    Sum,
+}
+
+impl StatsItem {
+    /// 默认全集（顺序 = 原「计算」页六行的顺序）
+    pub const ALL: [StatsItem; 6] = [
+        Self::Count,
+        Self::Nulls,
+        Self::Min,
+        Self::Max,
+        Self::Avg,
+        Self::Sum,
+    ];
+
+    /// 展示名（语义对标 DBeaver 的 COUNT / SUM / AVG / MIN / MAX 函数标签）
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Count => "非空",
+            Self::Nulls => "NULL",
+            Self::Min => "最小值",
+            Self::Max => "最大值",
+            Self::Avg => "均值",
+            Self::Sum => "合计",
+        }
+    }
+
+    /// 数值口径之外是否仍有意义：Min/Max 在字符串口径下按字典序比较，
+    /// Avg/Sum 只有数值口径有值（DBeaver 的 SUM/AVG 对字符串累计不成立）。
+    pub fn supports_text_mode(self) -> bool {
+        matches!(self, Self::Count | Self::Nulls | Self::Min | Self::Max)
+    }
+}
+
+/// 【R2】计算页聚合口径（对齐 DBeaver Calc 的 `aggregateAsStrings` CHECK）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StatsMode {
+    /// 数值口径（默认）：Min/Max 按数值比较，Avg/Sum 有值
+    #[default]
+    Numeric,
+    /// 字符串口径：Min/Max 按字典序比较（文本列也能给极值），Avg/Sum 不出值
+    Text,
+}
+
+impl StatsMode {
+    /// 另一个口径（按钮 toggle 用）
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Numeric => Self::Text,
+            Self::Text => Self::Numeric,
+        }
+    }
 }
 
 /// 结果集呈现方式（DBeaver Data Editor 的显示方式：网格 / 文本）

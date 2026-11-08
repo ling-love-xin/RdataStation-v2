@@ -4,8 +4,10 @@ use super::next_right_edge_state;
 use super::reorder_by;
 use super::right_tab_from_index;
 use super::sidebar_width_anim;
+use super::tabs::stat_value;
 use crate::column_browser::filter_browser_columns;
-use crate::ports::RightTab;
+use crate::grid::stats::ColumnStats;
+use crate::ports::{RightTab, StatsItem, StatsMode};
 use gpui_kit::Pixels;
 use gpui_kit::px;
 
@@ -116,6 +118,63 @@ fn right_tab_index_maps_to_four_tabs() {
     assert_eq!(right_tab_from_index(2), RightTab::Stats);
     assert_eq!(right_tab_from_index(3), RightTab::Group);
     assert_eq!(right_tab_from_index(99), RightTab::Browser);
+}
+
+/// 【R2 计算页】单项取值：口径决定 Min/Max 的比较方式，Avg/Sum 只在数值口径出值，
+/// 计数类不受口径影响（对齐 DBeaver `aggregateAsStrings`）
+#[test]
+fn stat_value_respects_mode_and_missing_samples() {
+    let stats = ColumnStats {
+        count: 1234,
+        nulls: 2,
+        min: Some(1.0),
+        max: Some(2000.0),
+        sum: Some(2001.0),
+        avg: Some(1000.5),
+    };
+    let text = (Some("apple".to_string()), Some("zebra".to_string()));
+    // 数值口径：极值走数值比较 + 千分位
+    assert_eq!(stat_value(StatsItem::Min, &stats, None, StatsMode::Numeric), "1");
+    assert_eq!(
+        stat_value(StatsItem::Max, &stats, None, StatsMode::Numeric),
+        "2,000"
+    );
+    // 字符串口径：极值走字典序，Avg/Sum 不出值
+    assert_eq!(
+        stat_value(StatsItem::Min, &stats, Some(&text), StatsMode::Text),
+        "apple"
+    );
+    assert_eq!(
+        stat_value(StatsItem::Max, &stats, Some(&text), StatsMode::Text),
+        "zebra"
+    );
+    assert_eq!(
+        stat_value(StatsItem::Avg, &stats, Some(&text), StatsMode::Text),
+        "—"
+    );
+    assert_eq!(
+        stat_value(StatsItem::Sum, &stats, Some(&text), StatsMode::Text),
+        "—"
+    );
+    // 计数类不受口径影响（字符串口径下仍是千分位整数）
+    assert_eq!(
+        stat_value(StatsItem::Count, &stats, None, StatsMode::Text),
+        "1,234"
+    );
+}
+
+/// 【R2 计算页】默认函数集 = 六项全集、展示顺序固定；口径默认数值且可来回切
+#[test]
+fn stats_defaults_are_full_set_in_display_order() {
+    assert_eq!(StatsItem::ALL.len(), 6);
+    assert_eq!(StatsItem::ALL[0], StatsItem::Count);
+    assert_eq!(StatsItem::ALL[5], StatsItem::Sum);
+    // 只有 Min/Max 支持字符串口径（SUM/AVG 对字符串累计不成立）
+    assert!(StatsItem::Min.supports_text_mode());
+    assert!(!StatsItem::Sum.supports_text_mode());
+    assert_eq!(StatsMode::default(), StatsMode::Numeric);
+    assert_eq!(StatsMode::Numeric.toggled(), StatsMode::Text);
+    assert_eq!(StatsMode::Text.toggled(), StatsMode::Numeric);
 }
 
 /// 【结果集 #296】空列序 = 默认序原样直通（列 / 行一字不差）

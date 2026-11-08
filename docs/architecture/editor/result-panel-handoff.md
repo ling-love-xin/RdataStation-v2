@@ -606,6 +606,40 @@ datetime #5CA259 / numeric #C0C0FF / string #D0D0D0）。全表见 `result-panel
 
 **验证**：panel **242** / guard **4** / shell **14** passed。
 
+### 2.31 2026-11-09（右栏 R1 面板工具条 + R2 计算页对齐 DBeaver Calc）
+
+`result-panel.md` §8.40 是完整证据，这里只留接手要点。
+
+**用户拍板**：R1 **不搬**页签并列（2026-10-28「横 tab 只显当前页签」的决定不撤销），只加
+每面板工具条；并直接做 R2。R1 本轮只落了计算页（另四页未加工具条）。
+
+**R2 做了什么**（`AggregateColumnsPanel.java` 全 498 行实证）：
+
+1. 函数集可变：`StatsItem{Count,Nulls,Min,Max,Avg,Sum}` + `ALL`，
+   `ResultRequest{AddStatsItem,RemoveStatsItem,ResetStatsItems}`；`add_stats_item` 按 `ALL`
+   固定顺序插入（不是追加），删了再加回原位。
+2. 聚合口径：`StatsMode{Numeric,Text}` + `SetStatsMode`，对齐 `aggregateAsStrings`（`:348`）：
+   字符串口径 Min/Max 走字典序（`grid/stats.rs::text_minmax`），Avg/Sum 出 `—`。
+3. 千分位：`grid/stats.rs::fmt_grouped`（对齐 `###,###,###,###,###,##0.###`，`:65-66`）；
+   `panel/tabs.rs::fmt_stat` 改走它。
+4. 表头两列（函数 / 值）+ 行尾 ×（替代 DBeaver 的「行选中后点 −」）。
+5. 面板工具条（R1 首处）：`Toolbar` 收「＋ / Reset / 口径」；新常量
+   `ui::RESULT_PANEL_TOOLBAR_HEIGHT = 1.75`（28px）——**必须**等于 vendor `toolbar.rs:242-259`
+   XSmall 档自带的 `min_h_7`，写 24px 会溢出压住表头。
+
+**三处有意偏离**：不做行选中删除（改行尾 ×）；不做「按列分组聚合」（本仓网格只有
+`selection_pos` 单格选区，且已有独立分组页签）；不做右键 Copy/CopyAll。
+
+**踩坑**：`StyledExt` 没带 `.when(..)`（`gpui_kit::Div` / `Scrollable` 都没有这个方法，
+编译 `E0599`）——条件元素改用 `bool::then(|| …into_any_element())` + `children(Option<..>)`。
+
+**验证**：panel **246**（原 242 + 4 条：`fmt_grouped` / `text_minmax` / `stat_value` /
+`stats_defaults_are_full_set_in_display_order`）/ guard **4** / shell **14** passed；
+`cargo check -p rds-editor` 通过。
+
+**仍未做**：值详情 / 分组 / 引用 / 执行SQL 四页工具条；统计项增删跨会话持久化；
+R3 / R4 / R5。
+
 ---
 
 

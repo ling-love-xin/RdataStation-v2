@@ -129,3 +129,55 @@ pub(crate) fn fmt_stat_num(value: f64) -> String {
     }
     text
 }
+
+/// 【R2 计算页】千分位格式化（对齐 DBeaver Calc 的 `DOUBLE_FORMAT` =
+/// `###,###,###,###,###,##0.###`，见 `AggregateColumnsPanel.java:65-66`）：
+/// 整数部分每 3 位插一个逗号，小数部分沿用 [`fmt_stat_num`] 的去尾零口径。
+/// 纯字符串处理，超大值不溢出（不做浮点截断）。
+pub fn fmt_grouped(value: f64) -> String {
+    if !value.is_finite() {
+        // NaN / ±Inf：DBeaver 走 `Object.toString()`，本仓沿用原样文本
+        return fmt_stat_num(value);
+    }
+    let text = fmt_stat_num(value);
+    let (sign, body) = match text.strip_prefix('-') {
+        Some(rest) => ("-", rest.to_string()),
+        None => ("", text),
+    };
+    let (int_part, frac) = match body.split_once('.') {
+        Some((int, frac)) => (int.to_string(), Some(frac.to_string())),
+        None => (body, None),
+    };
+    let mut grouped = String::with_capacity(int_part.len() + int_part.len() / 3);
+    for (ix, ch) in int_part.chars().enumerate() {
+        if ix > 0 && (int_part.chars().count() - ix) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(ch);
+    }
+    match frac {
+        Some(frac) => format!("{sign}{grouped}.{frac}"),
+        None => format!("{sign}{grouped}"),
+    }
+}
+
+/// 【R2 计算页】字符串口径的极值：排除 `NULL` 后按**字典序**取最小 / 最大，
+/// 供文本列在字符串口径下给出「最小值 / 最大值」（对齐 DBeaver
+/// `aggregateAsStrings` 让 MIN/MAX 走字符串比较的语义）。
+/// 纯函数（输入只有一列取值），与 [`column_stats_from_values`] 同一输入形态。
+pub fn text_minmax(values: &[String]) -> (Option<String>, Option<String>) {
+    let mut min: Option<&String> = None;
+    let mut max: Option<&String> = None;
+    for cell in values {
+        if cell == "NULL" {
+            continue;
+        }
+        if min.map_or(true, |current| cell < current) {
+            min = Some(cell);
+        }
+        if max.map_or(true, |current| cell > current) {
+            max = Some(cell);
+        }
+    }
+    (min.cloned(), max.cloned())
+}

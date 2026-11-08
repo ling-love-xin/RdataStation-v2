@@ -16,7 +16,7 @@ use crate::grid::cell::{
     ViewerMode, classify_value, hex_to_bytes, image_format_of, json_tree_items,
 };
 use crate::grid::{ResultGridDelegate, ResultStatus, ResultToolbar};
-use crate::ports::{Presentation, ResultRequest, RightTab};
+use crate::ports::{Presentation, ResultRequest, RightTab, StatsItem, StatsMode};
 use crate::script_card::ScriptCard;
 use crate::sets::ResultSetTab;
 use crate::store::ColumnKind;
@@ -155,6 +155,62 @@ impl ResultPanel {
             self.show_value_sidebar = true;
             self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
         }
+        cx.notify();
+    }
+
+    /// 【R2 计算页】启用一个统计项（对齐 DBeaver Calc「＋添加函数」）。
+    ///
+    /// 插入位置按 [`StatsItem::ALL`] 的固定顺序算（不是追加到末尾）：DBeaver 的
+    /// `AddFunctionItemAction` 是 `enabledFunctions.add(func)` 追加，但它的函数集来自
+    /// 注册表、顺序本身不固定；本仓六项有稳定的展示顺序（非空 → NULL → 最小 → 最大 →
+    /// 均值 → 合计），删了再加回去要回到原位，否则行序会随操作乱跳。
+    pub fn add_stats_item(&mut self, item: StatsItem, cx: &mut Context<Self>) {
+        if self.stats_items.contains(&item) {
+            return;
+        }
+        let rank = StatsItem::ALL
+            .iter()
+            .position(|candidate| *candidate == item)
+            .unwrap_or(usize::MAX);
+        let insert_at = self
+            .stats_items
+            .iter()
+            .position(|existing| {
+                StatsItem::ALL
+                    .iter()
+                    .position(|candidate| candidate == existing)
+                    .unwrap_or(usize::MAX)
+                    > rank
+            })
+            .unwrap_or(self.stats_items.len());
+        self.stats_items.insert(insert_at, item);
+        cx.notify();
+    }
+
+    /// 【R2 计算页】停用一个统计项（统计行行尾 × 触发；对齐「−删除函数」语义）
+    pub fn remove_stats_item(&mut self, item: StatsItem, cx: &mut Context<Self>) {
+        let before = self.stats_items.len();
+        self.stats_items.retain(|existing| *existing != item);
+        if self.stats_items.len() != before {
+            cx.notify();
+        }
+    }
+
+    /// 【R2 计算页】恢复默认函数集（六项全开；对齐「Reset」）
+    pub fn reset_stats_items(&mut self, cx: &mut Context<Self>) {
+        if self.stats_items == StatsItem::ALL.to_vec() {
+            return;
+        }
+        self.stats_items = StatsItem::ALL.to_vec();
+        cx.notify();
+    }
+
+    /// 【R2 计算页】切换聚合口径（数值 / 字符串；对齐 `aggregateAsStrings` CHECK）
+    pub fn set_stats_mode(&mut self, mode: StatsMode, cx: &mut Context<Self>) {
+        if self.stats_mode == mode {
+            return;
+        }
+        self.stats_mode = mode;
         cx.notify();
     }
 

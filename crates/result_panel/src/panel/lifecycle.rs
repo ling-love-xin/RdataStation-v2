@@ -206,6 +206,9 @@ impl ResultPanel {
             _row_count_sub: Some(row_count_sub),
             presentation: Presentation::Grid,
             right_tab: RightTab::Browser,
+            // 【R2 计算页】默认全集（与 DBeaver `loadDefaultFunctions` 同口径：默认函数全上）
+            stats_items: crate::ports::StatsItem::ALL.to_vec(),
+            stats_mode: crate::ports::StatsMode::Numeric,
             compare_active: 0,
             compare_toolbar: None,
             compare_status: None,
