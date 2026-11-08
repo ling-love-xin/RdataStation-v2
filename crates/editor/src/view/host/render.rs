@@ -15,6 +15,16 @@ impl Render for EditorHostPanel {
                 state.set_line_number(want_line_numbers, window, cx)
             });
         }
+        // 常显书签列：设置 → 面板缓存 → 内核（render 权威同步点，同 #48 行号）。
+        // 开：零书签也留一列（空行可悬停加书签）；关：回到「有书签才出列」。
+        // 内核值相同内部直接 return，不 notify → 无重绘循环。
+        let want_bookmark_column = editor_bookmark_column_or_default(cx);
+        if self.show_bookmark_column != want_bookmark_column {
+            self.show_bookmark_column = want_bookmark_column;
+            self.editor.update(cx, |state, cx| {
+                state.set_gutter_marker_column(want_bookmark_column, cx)
+            });
+        }
         // 书签悬停说明：设置 → 面板缓存 → 重新投影 gutter markers（说明文本只在
         // 开启时随标记下发，内核据此决定画不画悬停提示）。
         let want_bookmark_hover_note = editor_bookmark_hover_note_or_default(cx);

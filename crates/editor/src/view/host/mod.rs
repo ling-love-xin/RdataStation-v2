@@ -66,6 +66,18 @@ fn editor_bookmark_hover_note_or_default(cx: &App) -> bool {
     }
 }
 
+/// 读「常显书签列」开关（设置在设置页；测试环境回退默认 true）。
+///
+/// 开：代码编辑器零书签也留出一列（空行悬停出淡书签、点击即加）；关：回到
+/// 「有书签才出列」。内核侧只影响布局，书签数据与快捷键入口不受影响。
+fn editor_bookmark_column_or_default(cx: &App) -> bool {
+    if cx.has_global::<settings::model::Settings>() {
+        SettingsService::bookmark_column(cx)
+    } else {
+        true
+    }
+}
+
 /// 【2026-10-28】读「基于缩进的折叠」开关（测试环境回退默认 true）。
 fn editor_indent_folding_or_default(cx: &App) -> bool {
     if cx.has_global::<settings::model::Settings>() {
@@ -407,6 +419,8 @@ pub struct EditorHostPanel {
     pub(crate) show_line_numbers: bool,
     /// 书签悬停说明开关缓存（设置 → render 权威同步点 → 重新投影 gutter markers）
     pub(crate) show_bookmark_hover_note: bool,
+    /// 常显书签列开关缓存（设置 → render 权威同步点 → 内核 `set_gutter_marker_column`）
+    pub(crate) show_bookmark_column: bool,
     /// #64 自动换行开关缓存（设置 → render 权威同步点 → 内核 `set_soft_wrap`）
     pub(crate) soft_wrap: bool,
     /// #65 自动闭合括号开关缓存（设置 → render 权威同步点 → 内核 `set_auto_close`）
@@ -1132,6 +1146,9 @@ impl EditorHostPanel {
             show_line_numbers: editor_show_line_numbers_or_default(cx),
             // 书签悬停说明：创建时取设置值，render 权威同步点比对后重新投影标记
             show_bookmark_hover_note: editor_bookmark_hover_note_or_default(cx),
+            // 常显书签列：缓存初值取内核默认（true），render 首帧即比对设置并同步，
+            // 免得「设置为关」时因初值等于设置值而永远不调用内核 setter。
+            show_bookmark_column: true,
             // #64 自动换行缓存：创建时取设置值，render 权威同步点比对后同步内核
             soft_wrap: editor_soft_wrap_or_default(cx),
             // #65 自动闭合 / 智能缩进缓存：同 soft_wrap（创建时取设置值）

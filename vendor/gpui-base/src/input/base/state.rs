@@ -619,6 +619,11 @@ pub struct InputBaseState<M: InputModeKind> {
     ///
     /// 内核只负责画与点击上报；语义由应用决定（见 [`InputEvent::GutterMarkerClick`]）。
     pub(super) gutter_markers: Vec<GutterMarker>,
+    /// 代码编辑器是否常显书签列（默认开，`set_gutter_marker_column` 改）。
+    ///
+    /// 开：代码编辑器即使零标记也留出一列（空行悬停出淡书签、点击即加标记）；
+    /// 关：回到「有标记才出列」——零标记不留宽，已有标记照旧显示。
+    pub(super) gutter_marker_column: bool,
     /// What a consumer projected, kept verbatim so that resolution never
     /// consumes its own output: resolving in place would fill the unset
     /// colours once and then never see them as unset again, which is the same
@@ -1114,6 +1119,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             mask_pattern_set: false,
             editor_style: InputEditorStyle::default(),
             gutter_markers: Vec::new(),
+            gutter_marker_column: true,
             projected_editor_style: InputEditorStyle::default(),
             accessibility: None,
             scrollbar_renderer: None,
@@ -12992,8 +12998,8 @@ impl InputBaseState<crate::input::TextareaMode> {
 impl<M: InputModeKind> InputBaseState<M> {
     /// 替换行号栏（gutter）标记。
     ///
-    /// 标记按 `(line, kind)` 排序去重后保存；内容不变时不重绘。空列表表示不画，
-    /// 行号栏也不为标记留宽——未用书签的编辑器与之前逐像素相同。
+    /// 标记按 `(line, kind)` 排序去重后保存；内容不变时不重绘。空列表表示不画；
+    /// 是否为标记留宽由 [`Self::set_gutter_marker_column`] 决定（代码编辑器默认常显）。
     ///
     /// 同一行可以给多条：`Bookmark` / `BookmarkNote` 画在行号右侧的书签列，
     /// `FoldNote` 只有在该行是折叠候选时才会画到折叠箭头旁（判据在内核）。
@@ -13006,6 +13012,30 @@ impl<M: InputModeKind> InputBaseState<M> {
         }
         self.gutter_markers = markers;
         cx.notify();
+    }
+
+    /// 设置代码编辑器是否常显书签列（默认开）。
+    ///
+    /// 开（默认）：代码编辑器即使零标记也留出一列——空行悬停出淡书签提示、点击即加
+    /// 书签/说明，与 VS Code 的 glyph margin 同口径。关：回到「有标记才出列」，零书签
+    /// 不留宽；已有书签照旧显示（不会因关开关而看不见已有书签）。
+    /// 非代码编辑器模式不受此开关影响：永远只在有标记时出列。
+    pub fn set_gutter_marker_column(&mut self, show: bool, cx: &mut Context<Self>) {
+        if self.gutter_marker_column == show {
+            return;
+        }
+        self.gutter_marker_column = show;
+        cx.notify();
+    }
+
+    /// 本帧行号栏是否要为标记留一列（元素层布局用）。
+    ///
+    /// 有标记时任何模式都出列；零标记时只有「代码编辑器 + 开关开」才留空列。
+    pub(crate) fn shows_gutter_column(&self) -> bool {
+        if !self.gutter_markers.is_empty() {
+            return true;
+        }
+        self.gutter_marker_column && matches!(self.mode, LayoutMode::CodeEditor { .. })
     }
 
     /// 当前行号栏标记（按 `(line, kind)` 升序）。

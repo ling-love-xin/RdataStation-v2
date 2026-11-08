@@ -11,6 +11,12 @@ pub struct Editor {
     /// 文本下发给内核，只画图标不弹提示。
     #[serde(default = "default_bookmark_hover_note")]
     pub bookmark_hover_note: bool,
+    /// 代码编辑器是否常显书签列（默认开）。
+    /// 开：即使零书签也留出一列（空行悬停出淡书签、点击即加）；关：回到「有书签才出列」，
+    /// 零书签不留宽，已有书签照旧显示。即时生效：编辑器 render 权威同步点同步内核
+    /// `set_gutter_marker_column`。
+    #[serde(default = "default_bookmark_column")]
+    pub bookmark_column: bool,
     /// 是否启用代码折叠（2026-10-27 起开关移到设置页；默认开）。
     /// 即时生效：编辑器 render 权威同步点把设置值同步到 `shared.show_folds` →
     /// `sync_fold` 重跑（install / set_folding(false)）。
@@ -78,6 +84,7 @@ impl Default for Editor {
         Self {
             show_line_numbers: default_show_line_numbers(),
             bookmark_hover_note: default_bookmark_hover_note(),
+            bookmark_column: default_bookmark_column(),
             show_folds: default_show_folds(),
             indent_folding: default_indent_folding(),
             fold_open_keywords: default_fold_open_keywords(),
@@ -103,6 +110,11 @@ fn default_show_line_numbers() -> bool {
 
 /// 书签悬停说明默认开（用户原始要求：「鼠标位于当前行时显示信息」）
 fn default_bookmark_hover_note() -> bool {
+    true
+}
+
+/// 书签列常显默认开（与 VS Code 的 glyph margin 同口径：空行也能悬停加书签）
+fn default_bookmark_column() -> bool {
     true
 }
 

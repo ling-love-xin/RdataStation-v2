@@ -111,6 +111,8 @@ pub enum Slot {
     EditorShowLineNumbers,
     /// 书签悬停说明（标量布尔，默认开；设在设置页，编辑器 render 同步）。
     EditorBookmarkHoverNote,
+    /// 书签列常显（标量布尔，默认开；关掉后零书签不留宽，有书签仍显示）。
+    EditorBookmarkColumn,
     /// 【2026-10-27】代码折叠开关（标量布尔，默认开；设在设置页，编辑器 render 同步）。
     EditorShowFolds,
     /// 【2026-10-28】基于缩进的折叠开关（标量布尔，默认开；设在设置页，编辑器 render 同步）。
@@ -253,6 +255,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "appearance.theme_mode" => Slot::AppearanceThemeMode,
         "editor.show_line_numbers" => Slot::EditorShowLineNumbers,
         "editor.bookmark_hover_note" => Slot::EditorBookmarkHoverNote,
+        "editor.bookmark_column" => Slot::EditorBookmarkColumn,
         "editor.show_folds" => Slot::EditorShowFolds,
         "editor.indent_folding" => Slot::EditorIndentFolds,
         "editor.fold_open_keywords" => Slot::EditorFoldOpenKeywords,
@@ -356,6 +359,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::AppearanceThemeMode => KindTag::Enum,
         Slot::EditorShowLineNumbers
         | Slot::EditorBookmarkHoverNote
+        | Slot::EditorBookmarkColumn
         | Slot::EditorDefaultHardTabs
         | Slot::EditorShowFolds
         | Slot::EditorIndentFolds

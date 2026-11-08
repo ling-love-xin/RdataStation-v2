@@ -356,3 +356,65 @@ gpui-pre 0.3.11 起 `text_system()` 返回 `&Arc<WindowTextSystem>` → E0308，
 headless 经验：正文编辑要走 `editor.read(cx).focus_handle(cx)` + `focus` 再 `cx.simulate_input("\n")`；
 `simulate_keystrokes("enter")` 和面板自己的 `focus_self` 都到不了内核 `EditorState`（前者没焦点、
 后者是异步切 tab），文本不会变——用例里成了「前提不成立」的假失败。
+
+### 15.7 代码编辑器常显书签列（+ 设置可关；用户选定「改内核」方案）
+
+**问题**（用户报「查看数据」打开的编辑器没有书签位置）：书签列宽度由「当前有没有书签」决定，
+不是由「这份文档支不支持书签」决定——`element.rs:800` 原为
+`let has_column = !gutter_markers.is_empty()`，`:805` 零标记 → `column_width = px(0.)`。
+零宽列既不报 hover 也不吞点击（点击落到行号），所以「查看数据」那类**未命名文档**
+（`workbench/src/view.rs:491` `OpenRequest::untitled`，`bookmark_path()` 为 `None` →
+`load_bookmarks` 早退，`bookmarks.rs:28`）永远零书签 → 永远没有那一列。
+普通 `.sql` 只是此前存过书签，才「看起来一直有」。
+
+**决策**：用户明确选「改内核让 code-editor 常显」，并追加「这块可以在设置中关闭」——
+原先「我们不动内核」的约束由用户本轮亲自放开。
+
+**内核**（vendor/gpui-base，两文件）：
+
+1. `state.rs`：新增 `gutter_marker_column: bool`（默认 `true`，`Default` 初始化处补一行）+
+   `pub fn set_gutter_marker_column(show, cx)`（值不变直接 return，不 notify）+
+   `pub(crate) fn shows_gutter_column(&self) -> bool`：
+   有标记任何模式都出列；零标记时只有 `gutter_marker_column && matches!(mode, CodeEditor)` 才留空列。
+   `set_gutter_markers` 的 doc 原写着「空列表…行号栏也不为标记留宽」，同步改写。
+2. `element.rs`：三处判据统一走 `shows_gutter_column()`——`:802` 的 `has_column`、`:1850`
+   的 `line_number_width + GUTTER_MARKER_HITBOX_WIDTH`；另把 `:836` 的早退从
+   「markers 空就 return」收紧为「markers 空 **且** 列宽 0 才 return」——否则常显列
+   没有行映射，空行既不出悬停淡书签也不上报点击，列就成了摆设。
+
+**设置链路**（照 `editor.bookmark_hover_note` 的模板，五处 + 模型）：
+
+| 位置 | 改动 |
+| --- | --- |
+| `settings/src/model/editor.rs` | 字段 `bookmark_column: bool`（`#[serde(default)]`）+ `default_bookmark_column() -> true` + `Default` |
+| `settings/src/registry/entries/editor.rs` | 登记 `editor.bookmark_column`（label「常显书签列」，Bool，默认 true，`Immediate`，`Entry::Page` 即设置页自动出项） |
+| `settings/src/registry/mod.rs` | `Slot::EditorBookmarkColumn` + `slot_for` 映射 + `slot_kind` 归 Bool 组 |
+| `settings/src/service/mod.rs` | `value_by_key` 读分支 + `apply_by_key` 的 editor 域分支 |
+| `settings/src/service/editor.rs` | `apply_slot` 分支 + `bookmark_column(cx)` / `set_bookmark_column(on, cx)`（改 global → `persist` → `refresh_windows`） |
+
+**宿主**（crates/editor，三处）：`host/mod.rs` 加 `editor_bookmark_column_or_default`（无全局回退
+`true`）+ 面板缓存字段 `show_bookmark_column`（**初值取内核默认 `true`**——若初值取设置值，
+「设置为关」时缓存与设置相等，render 永不调用内核 setter）；`host/render.rs` 在行号开关同款
+同步块里比对后调 `set_gutter_marker_column`。
+
+**语义**：关闭 ≠ 隐藏书签。关闭只是回到「有书签才出列」（`shows_gutter_column` 首行仍按
+`!gutter_markers.is_empty()` 放行），已有书签照旧显示，`Ctrl+Shift+B` / `F8` / `Shift+F8`
+不受影响。环境代价：代码编辑器行号整体右移一列 `GUTTER_MARKER_HITBOX_WIDTH = px(18.)`
+（`element.rs:58`），折叠图标随之右移（`:845` 的 x 由 `line_number_width` 推）。
+
+**验证**：
+
+- `cargo check -p rds-editor --all-targets -j 1` → exit 0（含 vendor / settings 重编）。
+- `view::tests::bookmarks` → 4 passed（相机口径不变）。
+- `rds-editor --lib -- --test-threads=1` → **761 passed / 3 failed / 1 ignored**。第 3 条是
+  `view::tests::results_a::the_result_header_sorts_from_its_arrow`（`editor-result-th-1` 无坐标），
+  **来自 `crates/result_panel` 的在途未提交改动**（`grid/fit.rs` / `grid/header.rs` / `ui.rs` 同时被改，
+  `header.rs` 把 early-return 分支的 `debug_selector` 挪走）：把本轮内核判据临时回退成原式重跑，
+  该条**仍失败**，故与本次改动无关。
+- `cargo test -p rds-settings` → 33 passed / 1 failed：`tests::invalid_locale_is_rejected`
+  断言「初始 locale = Zh」，但 `SettingsService::init` 会 `load_settings()` 读本机配置，
+  本机存的是 `en` → **环境性既有失败**，与本轮无关。
+
+**未覆盖**：列宽属布局层，headless 下没有可断言的接缝（`gutter_markers()` 只反映数据不反映宽度），
+常显效果靠人工验收：打开任一 `.sql`（无书签）与「查看数据」文档，行号左侧应有一列空白槽，
+悬停出淡书签、点一下即加书签；设置页关掉「常显书签列」后，那列在零书签时消失。

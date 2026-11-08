@@ -797,7 +797,9 @@ impl<M: InputModeKind> TextElement<M> {
         window: &mut Window,
         cx: &mut App,
     ) -> GutterMarkerLayout {
-        let has_column = !self.state.read(cx).gutter_markers.is_empty();
+        // 列是否存在由 state 决定（代码编辑器默认常显，零标记也留一列；
+        // 设置可关回「有标记才出列」）。
+        let has_column = self.state.read(cx).shows_gutter_column();
         let marker_column_x = origin_x;
         let top = bounds.origin.y + last_layout.visible_top;
         // No markers means no column: a zero-width hitbox neither reports a hover
@@ -829,7 +831,9 @@ impl<M: InputModeKind> TextElement<M> {
         };
 
         let state = self.state.read(cx);
-        if state.gutter_markers.is_empty() {
+        // 列不存在（宽度 0）才早退：标记为空但列常显时仍要登记行映射，
+        // 否则空行既不出悬停淡书签、也不上报点击（列就成了摆设）。
+        if state.gutter_markers.is_empty() && layout.column_width == px(0.) {
             return layout;
         }
         layout.markers = state
@@ -1841,9 +1845,9 @@ impl<M: InputModeKind> TextElement<M> {
         }
 
         // Gutter markers get a column of their own to the left of the fold icons.
-        // Nothing marked means nothing reserved: an editor that never sets markers
-        // keeps the exact width it had.
-        if !state.gutter_markers.is_empty() {
+        // 代码编辑器默认常显（零标记也留位，空行可悬停加书签）；关掉开关才回到
+        // 「有标记才留宽」。
+        if state.shows_gutter_column() {
             line_number_width += GUTTER_MARKER_HITBOX_WIDTH;
         }
 

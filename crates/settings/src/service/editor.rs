@@ -26,6 +26,12 @@ pub(crate) fn apply_slot(
             };
             SettingsService::set_bookmark_hover_note(on, cx);
         }
+        Slot::EditorBookmarkColumn => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_bookmark_column(on, cx);
+        }
         Slot::EditorShowFolds => {
             let Some(on) = value.as_bool() else {
                 return false;
@@ -178,6 +184,22 @@ impl SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.editor.bookmark_hover_note = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+    /// 读取「常显书签列」开关（`EditorHostPanel::render` 渲染权威同步点读取）。
+    pub fn bookmark_column(cx: &App) -> bool {
+        cx.global::<Settings>().editor.bookmark_column
+    }
+    /// 常显书签列开关：更新 global → 持久化 → 立即重绘所有窗口。
+    ///
+    /// 即时生效靠 `refresh_windows`：下一帧 `EditorHostPanel::render` 读到新值，
+    /// 与面板内缓存比较后同步内核 `set_gutter_marker_column`（关掉后零书签不留宽）。
+    pub fn set_bookmark_column(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.bookmark_column = on;
         }
         persist(&cx.global::<Settings>().clone());
         cx.refresh_windows();
