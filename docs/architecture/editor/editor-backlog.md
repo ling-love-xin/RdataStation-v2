@@ -879,6 +879,23 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 也没有诊断——它们的候选/诊断必须来自语言服务，而 `ports/editor_lsp.rs:77-86 language_for()` 对
 `EditorMode::Analysis` 直接返回 `None`（`mode != General → None`），所以分析模式一个会话都拿不到。
 
+### 已经在跑的部分（服务本体，**不要重做**）
+
+“Python LSP 还没开发”是错觉——`plugin-prototype-design.md` 的第四刀（宿主起真 server）已交付并
+记 ✅。逐项核过源码：
+
+| 能力 | 位置 | 状态 |
+| --- | --- | --- |
+| 起 server：`python -m jedi_language_server`、后台 `initialize`（15s 超时）、失败记原因不重试 | `ports/editor_lsp.rs:371-395` / `:216-244` | ✅ |
+| 生命周期：按需启动 / 空闲回收 / 手动启停 / 崩溃拦截（四态） | `ports/editor_lsp.rs:196-276`，工作台 1s 一拍 `workbench/src/view.rs:2547-2564` | ✅ |
+| 协议客户端：`initialize` / `didOpen` / `didChange` / `didClose` / `shutdown` | `lsp/client.rs:275-394` | ✅ |
+| provider：补全 / hover / code action（都按 `(client, uri)` 构造，**同一 client 可复用**） | `lsp/bridge.rs:48` / `:106` / `:178` | ✅ |
+| 通用模式 `.py` 文档全链路：didOpen → provider 装配 → 事件认领 → 诊断进内核 | `view/host/session.rs:571-610`、`exec/pump.rs:57-87`、`results/errors.rs:18` | ✅ |
+| 生产装配真的调了 | `workbench/src/view.rs:209-210` `editor_lsp::attach(&editor_service)` | ✅ |
+
+**因此 §15.17 的手不是“造服务”，只是“把已有的会话接到单元上”**：provider 不需要新类型，
+`LspSession` 只需要一个单元级 uri，`client` 由所有单元共用。
+
 ### 已核事实（方案依据，全部本仓源码）
 
 | 事实 | 位置 |
