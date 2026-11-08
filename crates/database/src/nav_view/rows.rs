@@ -748,10 +748,11 @@ impl NavView {
             .child(nav_disclosure(true, !collapsed, muted))
             .child(
                 div()
-                    // 组名左锚、按内容宽取宽（上限 `NAV_NAME_MAX_W`）：横向画布落地后
-                    // 行内不再用 `flex_1` 把后续信息推到画布右缘（那会让它们在默认视口外）。
-                    // 组名实际 2–5 汉字，健康度 / 计数 / 批量按钮紧随其后即贴住组名。
-                    .flex_none()
+                    // 组名左锚、按内容宽取宽（上限 `NAV_NAME_MAX_W`）：不设 `flex_none`，
+                    // 让它在空间不足时能被压缩并触发省略号——否则窄面板里组名会把
+                    // 右侧批量图标挤出容器（`overflow_hidden` 只裁掉文字、不会让位）。
+                    // 剩余空间由后面的弹性占位吃掉，所以这里**不要** `flex_1`
+                    // （那会把健康度 / 计数一起推到行右缘）。
                     .max_w(rems(ui::NAV_NAME_MAX_W))
                     .min_w_0()
                     .overflow_hidden()
@@ -797,6 +798,10 @@ impl NavView {
                 );
                 health
             })
+            // 弹性占位：把后面的三个批量图标顶到行右缘，且**不吃**组名宽度
+            // （组名按内容宽、健康度紧随组名，两者都在左侧）。
+            // 间距不变：占位只在剩余空间里生长，空间不足时先缩回 0。
+            .child(div().flex_1().min_w_0())
             // 「连接组内所有数据库」：批量把该组里未连接的连接逐条后台建连。
             // 单个连接的语义是「只连那一个库」；这里给**组**一个批量入口
             // （组 = 同一批业务库的集合，DBeaver 的组连接同款）。
@@ -893,9 +898,10 @@ impl NavView {
                         }
                     }),
             )
-            // 全折叠：一键折叠 / 展开全部同层分组（v5）。
-            // 命中区按行高上限取 24×24（`w_6 h_6`）：旧写法 10×10 不仅难点中，
-            // 而且 `⇅` 字形漏写 `text_xs`，以 16px 字号渲染进 10px 盒必然溢出。
+            // 收起 / 展开**本组**已展开的成员（不改其它分组，也不折叠组头本身）。
+            // 旧实现取的是 `nav.groups` 里**全部分组**的 id 做全局折叠，挂在单个分组头上语义越界。
+            // 现在的口径：组内存在任何展开项（连接根或其子树，key = `conn_id` 或 `conn_id/...`）
+            // 就全部收起；否则展开本组成员的第一层（子树仍保持收起，展开由用户逐级点）。
             .child(
                 Button::new(format!("nav-group-foldall-{group_id}"))
                     .ghost()
@@ -907,26 +913,26 @@ impl NavView {
                     )
                     .on_click({
                         let entity = entity.clone();
+                        // 闭包 move 自己的拷贝，不动原 `gid`（后面拖排序还要用它）。
+                        let gid_fold = gid.clone();
+                        let ungrouped_fold = is_ungrouped;
                         move |_, _, app: &mut App| {
                             entity.update(app, |this, cx| {
-                                let ids: Vec<String> = this
-                                    .nav
-                                    .borrow()
-                                    .groups
-                                    .iter()
-                                    .map(|g| g.id.clone())
-                                    .collect();
+                                // 成员口径与批量连接一致：未分组走 `ungrouped_order`。
+                                let members: Vec<String> = {
+                                    let view = this.nav.borrow();
+                                    if ungrouped_fold {
+                                        view.ungrouped_order.clone()
+                                    } else {
+                                        view.group_order
+                                            .get(&gid_fold)
+                                            .cloned()
+                                            .unwrap_or_default()
+                                    }
+                                };
                                 {
                                     let mut view = this.nav.borrow_mut();
-                                    let all_collapsed = !ids.is_empty()
-                                        && ids.iter().all(|id| view.collapsed_groups.contains(id));
-                                    if all_collapsed {
-                                        view.collapsed_groups.clear();
-                                    } else {
-                                        for id in ids {
-                                            view.collapsed_groups.insert(id);
-                                        }
-                                    }
+                                    toggle_fold_members(&mut view.expanded, &members);
                                 }
                                 cx.notify();
                             });
@@ -1722,7 +1728,9 @@ impl NavView {
                         })
                         .child(
                             div()
-                                .flex_none()
+                                // 名称左锚、按内容宽取宽（上限 `NAV_NAME_MAX_W`），但**可收缩**：
+                                // `flex_none` 会让它在窄面板里顶住不让位，右侧徽标被挤出容器。
+                                // 收缩后交给 `text_ellipsis()` 出省略号，全名走 hover 卡。
                                 .max_w(rems(ui::NAV_NAME_MAX_W))
                                 .min_w_0()
                                 .overflow_hidden()
@@ -1767,6 +1775,9 @@ impl NavView {
                 // 行尾操作 overlay（现仅失败连接的重试）：仅 hover / 选中显，无失败时不挂。
                 // 需求③：归在归属域列**之前**（归属域置最右），操作按钮与名称更近。
                 .children(ops)
+                // 弹性占位：把归属域列（G / P / GP）顶到行右缘，名称与统计串仍贴左侧。
+                // 归属域列的右偏移也是行尾 overlay 的锚点（见 `ops_right`），两者同源、不会错位。
+                .child(div().flex_1().min_w_0())
                 .when(scope_visible, |s| {
                     // 归属域列置最右（需求③）：固定宽度右对齐列；短码不是自解释的，
                     // hover 卡给一句人话（§2.3）。
@@ -3610,5 +3621,33 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             );
         }
         block
+    }
+}
+
+/// 收起 / 展开**某一组**的成员展开态。
+///
+/// 口径：只看 `members`（该组的连接 id 列表），绝不遍历其它分组——旧实现取 `nav.groups`
+/// 的全部 id 做全局折叠，挂在单个分组头上语义越界。
+/// 判定：组内存在任一展开项（连接根 `conn_id` 或其子树 `conn_id/...`）就全部收起；
+/// 否则展开本组成员的第一层（子树仍收起，逐级展开留给用户点）。
+///
+/// 返回 `true` 表示本次执行的是「收起」。
+pub(super) fn toggle_fold_members(
+    expanded: &mut std::collections::HashSet<String>,
+    members: &[String],
+) -> bool {
+    let is_member = |key: &String| {
+        members
+            .iter()
+            .any(|m| key == m || key.starts_with(&format!("{m}/")))
+    };
+    if expanded.iter().any(is_member) {
+        expanded.retain(|key| !is_member(key));
+        true
+    } else {
+        for m in members {
+            expanded.insert(m.clone());
+        }
+        false
     }
 }

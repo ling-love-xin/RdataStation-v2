@@ -3090,3 +3090,34 @@ mod scroll_axis_contract {
         );
     }
 }
+
+/// 「收起本组」只动本组成员：其它分组的展开项必须原样保留。
+///
+/// 对应旧实现的反面：旧版取 `nav.groups` 里**全部**分组 id 做全局折叠，
+/// 任何一个分组头的按钮都能把全部组一起折叠/展开（语义越界）。
+#[test]
+fn toggle_fold_members_only_touches_its_own_group() {
+    let mut expanded: HashSet<String> = ["A", "A/shop", "A/shop/public", "B", "B/shop"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+
+    let folded = super::rows::toggle_fold_members(&mut expanded, &["A".to_string()]);
+    assert!(folded, "组内已有展开项时应执行收起");
+    assert_eq!(
+        expanded,
+        ["B", "B/shop"].into_iter().map(str::to_string).collect(),
+        "只收 A 组（含 `A/...` 子树键），B 组一行不动"
+    );
+
+    let folded = super::rows::toggle_fold_members(&mut expanded, &["A".to_string()]);
+    assert!(!folded, "组内无展开项时应执行展开");
+    assert_eq!(
+        expanded,
+        ["A", "B", "B/shop"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        "展开只补成员第一层（A 自身），不连带其子树"
+    );
+}
