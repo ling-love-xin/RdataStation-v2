@@ -630,6 +630,12 @@ pub struct InputBaseState<M: InputModeKind> {
     /// 指针一动（`on_mouse_move`）就让位给 hover 说明；标记集合变化也作废
     /// （`set_gutter_markers`），避免 pin 到一行已经没有说明的位置。
     pub(super) gutter_note_pin: Option<usize>,
+    /// 悬停说明的「进入计时」：指针停在标记列某一行时的行号与进入时刻。
+    ///
+    /// 内核靠它实现悬停延迟——指针**刚**移到某行时不立刻弹说明，只有同一行累计停满
+    /// `GUTTER_NOTE_HOVER_DELAY` 才画（贴边划过一串行不会连弹一串气泡）。指针离开
+    /// 标记列或换行即重置（`set_gutter_hover_row`）。
+    pub(super) gutter_hover_note_since: Option<(usize, std::time::Instant)>,
     /// What a consumer projected, kept verbatim so that resolution never
     /// consumes its own output: resolving in place would fill the unset
     /// colours once and then never see them as unset again, which is the same
@@ -1127,6 +1133,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             gutter_markers: Vec::new(),
             gutter_marker_column: true,
             gutter_note_pin: None,
+            gutter_hover_note_since: None,
             projected_editor_style: InputEditorStyle::default(),
             accessibility: None,
             scrollbar_renderer: None,
@@ -13046,6 +13053,29 @@ impl<M: InputModeKind> InputBaseState<M> {
     /// 当前 pin 的行（buffer 0 基）；供应用与用例读取。
     pub fn gutter_note_pin(&self) -> Option<usize> {
         self.gutter_note_pin
+    }
+
+    /// 记录指针当前停在标记列的哪一行（`None` = 已离开标记列）。元素层每次指针移动调用。
+    ///
+    /// 换行或离开都会**重置计时**：悬停说明要"停住"才出现，划过不弹。行没变时什么都不做，
+    /// 所以不会因每帧重复调用而反复重绘。
+    pub(crate) fn set_gutter_hover_row(&mut self, row: Option<usize>, cx: &mut Context<Self>) {
+        let next = row.map(|row| (row, std::time::Instant::now()));
+        let changed = match (self.gutter_hover_note_since, next) {
+            (Some((was, _)), Some((is, _))) => was != is,
+            (None, None) => false,
+            _ => true,
+        };
+        if !changed {
+            return;
+        }
+        self.gutter_hover_note_since = next;
+        cx.notify();
+    }
+
+    /// 悬停说明的进入计时（行号 + 进入时刻）；供元素层判断延迟是否已满。
+    pub(crate) fn gutter_hover_note_since(&self) -> Option<(usize, std::time::Instant)> {
+        self.gutter_hover_note_since
     }
 
     /// 设置代码编辑器是否常显书签列（默认开）。

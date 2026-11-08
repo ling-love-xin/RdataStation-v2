@@ -14,7 +14,7 @@ use gpui::{
 };
 use ropey::Rope;
 use smallvec::SmallVec;
-use std::{cell::Cell, ops::Range, rc::Rc};
+use std::{ops::Range, rc::Rc, time::Duration};
 
 use crate::{
     Scrollbar,
@@ -67,6 +67,11 @@ const GUTTER_NOTE_POPOVER_PADDING_X: Pixels = px(6.);
 const GUTTER_NOTE_POPOVER_PADDING_Y: Pixels = px(3.);
 /// 悬停说明气泡的最大宽度：超出按字符截断并补省略号。
 const GUTTER_NOTE_POPOVER_MAX_WIDTH: Pixels = px(420.);
+/// 悬停说明的延迟：指针在同一行停满这么久才弹气泡。
+///
+/// 与 VS Code / DBeaver 的行号栏说明同体感：贴边划过一串行不会连弹一串气泡，
+/// 停住看才出现。跳转 pin（`gutter_note_pin`）不受此延迟约束，落地即显示。
+const GUTTER_NOTE_HOVER_DELAY: Duration = Duration::from_millis(300);
 /// Space between the gutter decoration strip and the line numbers.
 const GUTTER_DECORATION_GAP: Pixels = px(4.);
 /// Height of the pill an empty gutter decoration paints on a line boundary.
@@ -742,8 +747,6 @@ struct GutterMarkerLayout {
     fold_notes: Vec<(usize, Bounds<Pixels>)>,
     /// The note popover under the pointer: shaped text, its rect, and its colours.
     hover_note: Option<HoverNote>,
-    /// Row the pointer was on at the last paint, to repaint only when it changes.
-    last_hovered_row: Rc<Cell<Option<usize>>>,
 }
 
 /// A note shown under the pointer, laid out at prepaint time.
@@ -778,6 +781,24 @@ fn gutter_hovered_row(
         return None;
     }
     gutter_row_from_y(window.mouse_position().y, top, line_height)
+}
+
+/// Whether the pointer has stayed on `row` long enough for its note to pop up.
+///
+/// `since` is the "entered this row at" record kept by the state; a different row means the
+/// countdown restarted, so the timer only survives an unchanged row. Time is passed in rather
+/// than read inside, which is what makes the delay testable without sleeping.
+fn gutter_note_hover_ready(
+    since: Option<(usize, std::time::Instant)>,
+    row: usize,
+    now: std::time::Instant,
+) -> bool {
+    match since {
+        Some((since_row, entered_at)) => {
+            since_row == row && now.saturating_duration_since(entered_at) >= GUTTER_NOTE_HOVER_DELAY
+        }
+        None => false,
+    }
 }
 
 impl<M: InputModeKind> TextElement<M> {
@@ -827,7 +848,6 @@ impl<M: InputModeKind> TextElement<M> {
             markers: Vec::new(),
             fold_notes: Vec::new(),
             hover_note: None,
-            last_hovered_row: Rc::new(Cell::new(None)),
         };
 
         let state = self.state.read(cx);
@@ -887,12 +907,13 @@ impl<M: InputModeKind> TextElement<M> {
         // Only markers that carry text (a note, not a bare bookmark) qualify.
         // 指针不在标记列上时退回到应用 pin 的「刚跳到的行」：书签管理器「跳转」/ F8
         // 落地后常显该行说明，不必再手动悬停（指针一动 pin 即失效，见 state）。
-        let note_row = gutter_hovered_row(&layout.marker_hitbox, top, last_layout.line_height, window)
-            .or_else(|| {
-                state
-                    .gutter_note_pin()
-                    .and_then(|line| layout.rows.iter().position(|buffer_line| *buffer_line == line))
-            });
+        // 两种来源口径不同：hover 要停满 `GUTTER_NOTE_HOVER_DELAY` 才显示（划过不弹），
+        // pin 是「刚跳过来」，落地即显示、不等延迟。
+        let hovered_now = gutter_hovered_row(&layout.marker_hitbox, top, last_layout.line_height, window);
+        let pinned_row = state
+            .gutter_note_pin()
+            .and_then(|line| layout.rows.iter().position(|buffer_line| *buffer_line == line));
+        let note_row = hovered_now.or(pinned_row);
         if let Some(note_row) = note_row {
             let note = layout
                 .rows
@@ -913,6 +934,19 @@ impl<M: InputModeKind> TextElement<M> {
                         .map(|(_, _, note)| note.clone())
                 });
             if let Some(note) = note {
+                // hover 来的说明要等延迟：同一行停满 `GUTTER_NOTE_HOVER_DELAY` 才弹。
+                // 未到点就不画并申请下一帧（指针不动时没有鼠标事件，只能靠帧推进计时）；
+                // 到点那一帧画出后就不再申请，帧自然停。pin 来的说明不等延迟。
+                if hovered_now == Some(note_row)
+                    && !gutter_note_hover_ready(
+                        state.gutter_hover_note_since(),
+                        note_row,
+                        std::time::Instant::now(),
+                    )
+                {
+                    window.request_animation_frame();
+                    return layout;
+                }
                 let text_style = window.text_style().clone();
                 let font_size = text_style.font_size.to_pixels(window.rem_size());
                 // Truncate by a conservative per-character width so a long note
@@ -982,22 +1016,22 @@ impl<M: InputModeKind> TextElement<M> {
         );
 
         // Pointer moves do not repaint the input: repaint when the pointed row changes,
-        // which is what makes the faint hint follow the pointer.
+        // which is what makes the faint hint follow the pointer. The row is recorded in the
+        // state rather than in a per-frame cell, because the note delay needs the enter time
+        // to survive frames (a fresh `Rc<Cell<_>>` every layout would reset it each frame).
         {
+            let state = self.state.clone();
             let hitbox = marker_layout.marker_hitbox.clone();
             let top = marker_layout.top;
             let line_height = marker_layout.line_height;
-            let last_hovered = marker_layout.last_hovered_row.clone();
-            let entity_id = self.state.entity_id();
             window.on_mouse_event(move |_: &MouseMoveEvent, phase, window, cx| {
                 if !phase.bubble() {
                     return;
                 }
                 let row = gutter_hovered_row(&hitbox, top, line_height, window);
-                if row != last_hovered.get() {
-                    last_hovered.set(row);
-                    cx.notify(entity_id);
-                }
+                state.update(cx, |state, cx| {
+                    state.set_gutter_hover_row(row, cx);
+                });
             });
         }
 
@@ -4601,6 +4635,37 @@ mod tests {
         AppContext as _, Context, EntityInputHandler as _, ListAlignment, ListOffset, ListState,
         Render, TestAppContext, VisualTestContext, div, list, prelude::FluentBuilder as _,
     };
+
+    #[test]
+    fn gutter_note_shows_only_after_the_pointer_rests_on_the_row() {
+        use std::time::{Duration, Instant};
+
+        let entered = Instant::now();
+        // 同一行：不足 300ms 不显示，满 300ms 显示。
+        assert!(!gutter_note_hover_ready(
+            Some((3, entered)),
+            3,
+            entered + Duration::from_millis(0)
+        ));
+        assert!(!gutter_note_hover_ready(
+            Some((3, entered)),
+            3,
+            entered + Duration::from_millis(299)
+        ));
+        assert!(gutter_note_hover_ready(
+            Some((3, entered)),
+            3,
+            entered + Duration::from_millis(300)
+        ));
+        // 换了行：计时重新开始，哪怕早就过了 300ms 也不显示别的行。
+        assert!(!gutter_note_hover_ready(
+            Some((3, entered)),
+            4,
+            entered + Duration::from_secs(5)
+        ));
+        // 指针不在标记列上：没有计时起点，不显示。
+        assert!(!gutter_note_hover_ready(None, 3, entered));
+    }
 
     #[test]
     fn line_number_column_stays_at_three_digits_then_grows_up_to_seven() {

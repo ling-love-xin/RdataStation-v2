@@ -267,7 +267,7 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 | ~~中~~ | ~~书签行号漂移不校正~~ | 回放：sidecar 行号**会**随编辑平移（方案 A 已实现，`8234474b`；本轮补端到端用例） | `view/host/bookmarks.rs:149`（`adjust_bookmarks_for_edit`） |
 | 中 | 分析模式逐单元补全未装 provider | 装配：cell 编辑器只建实例不装 provider | ✅ **本轮已修（补全），见 15.8**。原证据：`view/host/notebook.rs:44-49`（`EditorState::new(..).language(..)` + `set_value`，无 completion / diagnostics）；`completion::install` 仅两处主编辑器（`view/host/mod.rs:633`、`view/host/session.rs:498`）。**逐单元 diagnostics 仍未做**，见 15.8 末尾 |
 | 中 | 标签方案 B（结构化 `tags`）/ C（全局 Tag System） | 数据层：现只有 A「说明即标签」 | §十二 |
-| ~~低~~ | ~~跳转后自动弹说明~~ / hover 300ms 延迟 | ✅ **自动弹出已修（2026-11-08）**：内核加「跳转 pin」（`set_gutter_note_pin`），`jump_to_line` 把落地行 pin 给内核，指针不动也显示该行说明，见 §15.10。**仍未做**：hover 300ms 延迟（当帧计算改为「计时 + 连续请求帧」，路径已在 §15.10 记明） | 原证据：`jump_to_line` 不回传行号；`gutter_hovered_row` 当帧计算 |
+| ~~低~~ | ~~跳转后自动弹说明~~ / ~~hover 300ms 延迟~~ | ✅ **两条都已修（2026-11-08）**：跳转后自动弹说明 = 内核「跳转 pin」（`set_gutter_note_pin`，`jump_to_line` 落地即 pin 给内核），见 §15.10；hover 300ms 延迟 = 内核 `gutter_hover_note_since` 跨帧计时 + `request_animation_frame` 推帧，见 §15.13 | 原证据：`jump_to_line` 不回传行号；`gutter_hovered_row` 当帧计算 |
 | 低 | 修饰符高亮未映射（readonly / deprecated） | 渲染：主题侧无对应 token | `view/highlight.rs:217` |
 | ~~低~~ | ~~脚本执行超时不可配~~ | ✅ **本轮已修（2026-11-08）**：设置项 `editor.env_timeout_ms`（默认 60000，1000–3600000）+ 超时随 `ScriptRequest::timeout_ms` 进执行线程，见 §15.9 | 原证据：无 `editor.env_timeout`；`ports/editor_env.rs` 只有写死常量 |
 | 低 | R 内核单元占位（只有语言标签） | 执行端：无 R 解释器 | `notebook/cell.rs:49` |
@@ -558,10 +558,10 @@ headless 经验：正文编辑要走 `editor.read(cx).focus_handle(cx)` + `focus
   `notebook_win::analysis_cell_renders_multiple_output_blocks`、
   `results_a::the_result_header_sorts_from_its_arrow`）
 
-**仍未做：hover 300ms 延迟（同一条的后半）**。实现路径已确认，但代价与本次不同：
-延迟要 (a) 在事件路径记录"同一行的进入时刻"（跨帧记忆，内核有 `last_hovered_row: Rc<Cell<..>>`
-先例可循）；(b) 到 300ms 时没有鼠标事件，必须在渲染里 `window.request_animation_frame()`
-连续申请帧（一次悬停约 18 帧）才能弹出。这是纯体感优化、与 pin 无耦合，留作独立一项。
+**同一条后半：hover 300ms 延迟 —— 已做（2026-11-08，§15.13）**。原判「代价不同、留作
+独立一项」的两点都已落地：跨帧记忆放进了 state（`gutter_hover_note_since`），到点那一帧靠
+`window.request_animation_frame()` 推进。**内核单测跑不了的老结论已被推翻**——vendor 不在
+workspace members 但可以复制成独立副本跑（口径见 §15.13）。
 
 ### 15.11 文档漂移逐条处置（2026-11-08，闭合 §15.2 五条 + 顺手两条）
 
@@ -632,3 +632,70 @@ headless 经验：正文编辑要走 `editor.read(cx).focus_handle(cx)` + `focus
 
 **没有做的**：没有继续把 `construct.rs` 的 `new` 拆成小函数，也没有动 `render.rs`（848）/ `session.rs`（782）
 ——那属于改方法结构，不是无损搬家，需要单独决策。
+
+## 15.13 hover 300ms 延迟（2026-11-08，闭合 §15.10 后半）
+
+**语义**（两个入口口径不同，别再混）：
+
+| 来源 | 触发 | 是否等 300ms |
+| --- | --- | --- |
+| pin | 书签管理器双击「跳转」/ `F8`·`Shift+F8` 落到带说明书签 | **不等**，落地即显示；指针一动即让位 |
+| hover | 指针停在行号右侧标记列某行上 | **要等**，同一行停满 300ms 才弹 |
+
+**为什么必须把计时放进 state**：上一版 hover 靠 `GutterMarkerLayout::last_hovered_row`
+（`Rc<Cell<Option<usize>>>`）自查"行变没变"，但那个 `Rc` 是**每帧 layout 新建**的，只记得住
+"上一帧的行"，记不住"这一行从什么时候开始停"。计时跨帧存活只能落到 state：
+
+- `vendor/gpui-base/src/input/base/state.rs`
+  - 字段 `gutter_hover_note_since: Option<(usize, std::time::Instant)>`（紧接 `gutter_note_pin`）
+  - `set_gutter_hover_row(row: Option<usize>, cx)`：换行或离开即重置计时；**行没变不 notify**
+    （所以每帧重复调用不会自激重绘）
+  - `gutter_hover_note_since() -> Option<(usize, Instant)>`（`pub(crate)`）
+- `vendor/gpui-base/src/input/base/element.rs`
+  - 常量 `GUTTER_NOTE_HOVER_DELAY = Duration::from_millis(300)`（紧接
+    `GUTTER_NOTE_POPOVER_MAX_WIDTH`）
+  - 纯函数 `gutter_note_hover_ready(since, row, now) -> bool`：行相同且已满 300ms。
+    **时间从外部传入**——这是它能被单测覆盖的关键（不必 sleep）
+  - `layout_gutter_markers` 拆成 `hovered_now`（指针当前行）与 `pinned_row`（pin 行），
+    `note_row = hovered_now.or(pinned_row)`；说明来自 hover 且未满延迟时
+    `window.request_animation_frame()` + `return layout`（本帧不画，下一帧继续判断；到点画出后
+    不再申请，帧自然停）
+  - `paint_gutter_markers` 的鼠标回调改为 `state.update(cx, |s, cx| s.set_gutter_hover_row(row, cx))`，
+    `GutterMarkerLayout::last_hovered_row` 字段与 `use std::cell::Cell` 一并删除
+
+**代价**：一次悬停最多多画约 18 帧（60Hz × 0.3s）。停住后不再申请帧，稳态零开销；
+划过的行因计时不断重置而始终不弹，正是要的体感。
+
+**vendor 单测怎么跑（推翻了「跑不了」的老结论）**：`gpui-base` 是 `[patch.crates-io]` 的 path 目标，
+不是 workspace member，`cargo test -p gpui-base` 会报 `requires dev-dependencies and is not a member
+of the workspace`；`--manifest-path vendor/gpui-base/Cargo.toml` 又报 `believes it's in a workspace
+when it's not`。可行口径是**复制成独立副本**，两个坑都在这儿：
+
+1. 在副本 `Cargo.toml` 末尾加空的 `[workspace]`，让它脱离父 workspace；
+2. 副本里有个 `include_str!("../../../../README.md")`，按相对层级它要落在副本的
+   **上上级目录**——把副本放在 `.rds/tmp/gpui-base-probe` 时就在 `.rds/` 放一份占位 `README.md`；
+3. 必须带 `--features test-support`（`crate::test_support` 与 `TestAppContext` 都在该 feature 后）。
+
+命令形态（`--target-dir` 必须隔离，别污染主 target）：
+
+```powershell
+Copy-Item -LiteralPath vendor\gpui-base -Destination .rds\tmp\gpui-base-probe -Recurse -Force
+Add-Content -LiteralPath .rds\tmp\gpui-base-probe\Cargo.toml -Value "`n[workspace]`n"
+cargo test --manifest-path .rds\tmp\gpui-base-probe\Cargo.toml --lib -j 1 `
+  --target-dir .rds\tmp\gb-target --features test-support -- gutter
+```
+
+**验证**：
+
+- 新内核用例 `input::element::tests::gutter_note_shows_only_after_the_pointer_rests_on_the_row` → ok
+  （0ms/299ms 不显示、300ms 显示、换行后即使过了 5s 也不显示、无计时起点不显示）
+- 同批 gutter 相关内核用例 **11 passed / 0 failed**（探针副本内实测）
+- `cargo check -p gpui-base --lib -j 1` → exit 0，零 warning
+- `cargo check -p rds-editor --all-targets -j 1` → exit 0
+- `cargo test -p rds-editor --lib -- --test-threads=1` → **764 passed / 3 failed / 1 ignored**
+  （与 §15.10/§15.12 基线逐条一致，说明内核行为改动未打断任何编辑器用例）
+- `cargo build -j 1 -p rds-app` → exit 0（3m58s）
+
+**未覆盖**：延迟本身是体感项，只有人工能判"300ms 是否偏慢/偏快"；自动化只钉住了判定函数与
+"换行即重置"的语义。`gpui-base --all-targets` 仍会挂在 bench `text_view_scroll`
+（缺 `gpui_fast_platform`），与本轮改动无关，属该 bench 的老问题。
