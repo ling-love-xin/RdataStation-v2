@@ -84,6 +84,20 @@ pub fn group_by_values(values: &[String]) -> Vec<(String, usize)> {
     groups
 }
 
+/// 【R3 分组页】多列分组内核：一个键 = 各列取值的有序元组（`NULL` 独立成组，同
+/// [`group_by_values`]）。保留首现顺序，排序由调用方决定（见 `panel/tabs.rs::arrange_groups`）。
+pub fn group_by_tuples(rows: &[Vec<String>]) -> Vec<(Vec<String>, usize)> {
+    let mut groups: Vec<(Vec<String>, usize)> = Vec::new();
+    for key in rows {
+        if let Some((_, count)) = groups.iter_mut().find(|(k, _)| *k == *key) {
+            *count += 1;
+        } else {
+            groups.push((key.clone(), 1));
+        }
+    }
+    groups
+}
+
 /// 【B5】数值分组键归一化：有限整数写成整数字面量（`2.0` → `"2"`），避免与 `2` 被拆成两组；
 /// 非整数 / 超大整数用标准浮点文本。`NaN` / `Infinity` 不进入本路径（事实帧数值族不含它们）。
 pub(crate) fn number_group_key(value: f64) -> String {

@@ -36,7 +36,7 @@ use crate::column_browser::ColumnBrowserDelegate;
 use crate::error_card::ErrorCard;
 use crate::export;
 use crate::grid::{ResultGridDelegate, ResultStatus, ResultToolbar};
-use crate::ports::{Presentation, ResultActionQueue, RightTab, StatsItem, StatsMode};
+use crate::ports::{GroupSort, Presentation, ResultActionQueue, RightTab, StatsItem, StatsMode};
 use crate::script_card::ScriptCard;
 use crate::sets::ResultSetTab;
 use workbench_shell::model::ColumnAnnotation;
@@ -226,6 +226,13 @@ pub struct ResultPanel {
     /// 【R2 计算页】聚合口径（数值 / 字符串）。对齐 DBeaver Calc 的
     /// `aggregateAsStrings` CHECK：字符串口径下 MIN/MAX 走字典序，AVG/SUM 不出值。
     pub(crate) stats_mode: StatsMode,
+    /// 【R3 分组页】额外分组列集合（数据列序；空 = 只用当前选中列）。
+    /// 点选加入 / 再点移除（顺序即分组键的拼接顺序，用户可感知地决定「按 A 再按 B」）。
+    pub(crate) group_columns: Vec<usize>,
+    /// 【R3 分组页】分组结果排序口径
+    pub(crate) group_sort: GroupSort,
+    /// 【R3 分组页】仅重复：只保留行数 > 1 的分组
+    pub(crate) group_duplicates_only: bool,
     /// 【并排对比】对比栏的投影（编辑器 `sync_compare_grid` 时经
     /// [`Self::set_compare_projection`] 写入；render 期只读）
     pub(crate) compare_active: usize,

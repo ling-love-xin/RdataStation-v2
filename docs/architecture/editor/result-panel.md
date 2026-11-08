@@ -2154,6 +2154,70 @@ SUM/AVG 对字符串累计不成立）。
 - Metadata 页 / 引用页的真实内容（R4）
 - 页内工具条无更多动作可放：320px 窄栏里标题 + 一个动作已接近饱和，再加会截断标题
 
+### 8.42 R3 第一步：分组页配置化（多列 / 排序 / 仅重复）
+
+DBeaver 的分组面板动作由 `GroupingAction` 扩展点驱动，配置来自 `GroupingConfigDialog`
+（分组列树 + 每列一个聚合函数 + 排序 + 仅重复）。本仓先落**分组键与结果组织**三件事；
+每列聚合函数仍走计算页（R2 已覆盖，重复实现会两处打架）。
+
+#### 8.42.1 落地内容
+
+| 能力 | DBeaver 对应 | 本仓落点 |
+| --- | --- | --- |
+| 多列分组 | `GroupingConfigDialog` 的分组列集合 | `group_columns: Vec<usize>`（工具条下拉勾选，顺序 = 键拼接顺序） |
+| 排序 | 分组结果的排序配置 | `GroupSort{Value, CountDesc}` + `arrange_groups` |
+| 仅重复 | 同名选项（只留出现 > 1 次的组） | `group_duplicates_only` |
+| 每列聚合函数 | `GroupingConfigDialog` 的聚合列 | **不做**：计算页已有（§8.40） |
+
+#### 8.42.2 数据层
+
+- `grid/stats.rs::group_by_tuples(rows: &[Vec<String>])`：元组键分组内核，保留首现顺序
+- `grid/text.rs::group_by_columns_for(&[usize])`：0 列 = 空；1 列直接走 `group_by_for`
+  （保留内存档原生数值键归一化，`"1"` 与 `"1.0"` 不会被拆成两组）；多列统一字符串口径
+  ——跨列混排时按原生长度归一化没有意义，DBeaver 的多列分组键也是按各列显示文本拼的，
+  代价是多列下 `2.0` 与 `2` 会分成两组（已登记）
+- `panel/tabs.rs::arrange_groups`：先过滤再排序；`CountDesc` 同数按值序兜底，保证同一份
+  数据每次渲染顺序一致（否则 UI 会随统计重算跳动）
+
+#### 8.42.3 UI
+
+分组页工具条（§8.41 的统一容器）右侧三个动作：
+
+| 控件 id | 文案 | 行为 |
+| --- | --- | --- |
+| `editor-result-group-columns` | 「列」（`DropdownButton` 勾选式多选） | `ToggleGroupColumn`（隐藏列不进分组键） |
+| `editor-result-group-sort` | 「按值」/「按计数」 | `SetGroupSort` |
+| `editor-result-group-dup` | 「仅重复」（toggle） | `SetGroupDuplicatesOnly` |
+
+标题「按 A + B 分组 · N 组」；多列时行内容按「 | 」连接。三条请求都是**纯面板视图状态**
+（不落盘、不影响取数），与计算页那四条同机制。
+
+#### 8.42.4 新增测试
+
+- `arrange_groups_sorts_and_filters`：按值序 / 按计数降序（同数按值序兜底）/ 仅重复 /
+  多列元组比较
+- `right_panel_pages_share_the_toolbar_shape` 的分组段扩成断言三个动作都可见
+
+**验证**：`rds-result-panel --lib` **249 passed**（原 248 + 1）。
+
+#### 8.42.5 仍未做
+
+- 分组列集合的跨会话持久化（DBeaver 写 `IDialogSettings`，本仓无对应偏好项）
+- 每组展开看行（DBeaver 分组树可展开）；本仓是平列表 + 计数
+- 分组列顺序的可视化调整（本仓按勾选顺序固定，不开拖拽）
+
+### 8.43 订正：「Metadata 面板」本仓已合并进列浏览器页
+
+此前多份交接把「本仓缺 Metadata 页」记成 R4 缺口。逐行核过后订正：
+`panel/sidebars.rs::render_browser_tab`（`:241-295`）已在列浏览器页底部输出
+**来源表 / 来源列 / 注释 / 驱动类型 / 可空 / 默认值**六项——正是 DBeaver
+`MetaDataPanel` 的内容（`MetaDataPanel.java:217-302`：属性树 + 额外 `Description` 列）。
+
+差异只在**呈现形态**：DBeaver 是一座属性树（每列一行 + Description 列），本仓是
+「列清单表 + 选中列明细」。本仓右栏固定 320px，把六项摊成列必然挤，故保留合并形态。
+于是 R4 实际只剩两件：**References 页**（需要外键元数据，引擎侧尚无该端口）+ Metadata 页的
+「生成 DDL」动作（本仓无 DDL 生成端口）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

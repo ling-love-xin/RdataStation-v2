@@ -209,6 +209,10 @@ impl ResultPanel {
             // 【R2 计算页】默认全集（与 DBeaver `loadDefaultFunctions` 同口径：默认函数全上）
             stats_items: crate::ports::StatsItem::ALL.to_vec(),
             stats_mode: crate::ports::StatsMode::Numeric,
+            // 【R3 分组页】默认不额外选列（只用当前选中列）、按值序、不筛重复
+            group_columns: Vec::new(),
+            group_sort: crate::ports::GroupSort::Value,
+            group_duplicates_only: false,
             compare_active: 0,
             compare_toolbar: None,
             compare_status: None,

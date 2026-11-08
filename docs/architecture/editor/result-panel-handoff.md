@@ -660,6 +660,31 @@ R3 / R4 / R5。
 **验证**：panel **248**（原 247 + 1）/ guard **4** / shell **14** passed；
 `cargo check -p rds-editor` 通过。
 
+### 2.33 2026-11-09（R3 第一步：分组页多列 / 排序 / 仅重复 + Metadata 订正）
+
+`result-panel.md` §8.42 / §8.43 是完整证据。
+
+**分组页配置化**（纯面板视图状态，不落盘）：
+- 新增 `group_columns: Vec<usize>`（空 = 退回当前选中列）/ `group_sort: GroupSort` /
+  `group_duplicates_only: bool`
+- 数据层：`grid/stats.rs::group_by_tuples` + `grid/text.rs::group_by_columns_for`
+  （1 列保留原生数值键归一化，多列统一字符串口径）
+- 视图层：`panel/tabs.rs::arrange_groups`（先过滤再排序，`CountDesc` 同数按值序兜底）
+- 三条请求：`ToggleGroupColumn` / `SetGroupSort` / `SetGroupDuplicatesOnly`
+- 工具条三个动作 id：`editor-result-group-columns` / `-sort` / `-dup`
+
+**踩坑**：`arrange_groups` 一开始插在 `impl ResultPanel` 块内（缩进顶格也合法），成了关联
+函数，`render_group_tab` 里的裸调用与 `panel::tests` 的调用都报 E0425；移到文件级并在测试
+模块显式 `use super::tabs::arrange_groups` 才通。
+
+**Metadata 订正**：本仓并不缺 Metadata 面板——`render_browser_tab`（`sidebars.rs:241-295`）
+已输出来源表 / 来源列 / 注释 / 驱动类型 / 可空 / 默认值，等于把 DBeaver 的
+`MetaDataPanel` 合并进了列浏览器页。R4 实际只剩 References（缺外键元数据端口）与
+「生成 DDL」动作（无 DDL 端口）。
+
+**验证**：panel **249**（原 248 + 1）/ guard **4** / shell **14** passed；
+`cargo check -p rds-editor` 通过。
+
 ---
 
 

@@ -310,6 +310,19 @@ impl EditorHostPanel {
                 self.result_panel
                     .update(cx, |p, cx| p.set_stats_mode(mode, cx));
             }
+            // 【R3 分组页】纯面板视图状态：不落盘、不影响取数
+            ResultRequest::ToggleGroupColumn(column) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.toggle_group_column(column, cx));
+            }
+            ResultRequest::SetGroupSort(sort) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.set_group_sort(sort, cx));
+            }
+            ResultRequest::SetGroupDuplicatesOnly(on) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.set_group_duplicates_only(on, cx));
+            }
         }
     }
 

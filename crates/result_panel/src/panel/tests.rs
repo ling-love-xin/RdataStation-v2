@@ -7,7 +7,8 @@ use super::sidebar_width_anim;
 use super::tabs::stat_value;
 use crate::column_browser::filter_browser_columns;
 use crate::grid::stats::ColumnStats;
-use crate::ports::{RightTab, StatsItem, StatsMode};
+use super::tabs::arrange_groups;
+use crate::ports::{GroupSort, RightTab, StatsItem, StatsMode};
 use gpui_kit::Pixels;
 use gpui_kit::px;
 
@@ -488,6 +489,41 @@ fn stats_tab_renders_toolbar_header_and_rows(cx: &mut gpui_kit::TestAppContext) 
     );
 }
 
+/// 【R3】分组排序 / 「仅重复」的纯函数口径（不依赖渲染）
+#[test]
+fn arrange_groups_sorts_and_filters() {
+    let mut groups = vec![
+        (vec!["b".to_string()], 1usize),
+        (vec!["a".to_string()], 3),
+        (vec!["c".to_string()], 1),
+    ];
+    // 按值序
+    arrange_groups(&mut groups, GroupSort::Value, false);
+    assert_eq!(
+        groups.iter().map(|(key, _)| key[0].as_str()).collect::<Vec<_>>(),
+        ["a", "b", "c"]
+    );
+
+    // 按计数降序：热点在前，同数按值序兜底（b 在 c 前）
+    arrange_groups(&mut groups, GroupSort::CountDesc, false);
+    assert_eq!(groups[0], (vec!["a".to_string()], 3));
+    assert_eq!(groups[1], (vec!["b".to_string()], 1));
+    assert_eq!(groups[2], (vec!["c".to_string()], 1));
+
+    // 仅重复：只留行数 > 1 的组
+    arrange_groups(&mut groups, GroupSort::CountDesc, true);
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0], (vec!["a".to_string()], 3));
+
+    // 多列键按元组字典序比较（先比第一列，再比第二列）
+    let mut multi = vec![
+        (vec!["a".to_string(), "2".to_string()], 1usize),
+        (vec!["a".to_string(), "1".to_string()], 2),
+    ];
+    arrange_groups(&mut multi, GroupSort::Value, false);
+    assert_eq!(multi[0].0, vec!["a".to_string(), "1".to_string()]);
+}
+
 /// 【R1/R2 测试壳】空面板 + 两列网格（`id` / `amount`，含一个 NULL 值）。
 /// `ResultPanel` 没有标准 `Render`（自定义 `render(&self, cx)`，宿主手动调），
 /// 所以包一层 `PanelHost` 实体转发；`selected_col` 预置第 2 列，计算 / 分组页才有作用列。
@@ -585,15 +621,19 @@ fn right_panel_pages_share_the_toolbar_shape(cx: &mut gpui_kit::TestAppContext) 
         "值详情工具条应与计算页同高 28px，实际 {value_toolbar_h}px"
     );
 
-    // 2) 分组：工具条在（标题里带组数），无动作
+    // 2) 分组：工具条 + 三个动作（列下拉 / 排序 / 仅重复）
     cx.update(|_, app| {
         panel.update(app, |p, cx| p.set_right_tab(RightTab::Group, cx))
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    assert!(
-        visible("editor-result-group-toolbar", cx),
-        "分组页工具条应渲染可见"
-    );
+    for id in [
+        "editor-result-group-toolbar",
+        "editor-result-group-columns",
+        "editor-result-group-sort",
+        "editor-result-group-dup",
+    ] {
+        assert!(visible(id, cx), "分组页元素 {id} 应渲染可见");
+    }
 
     // 3) 执行SQL：工具条 + 复制
     cx.update(|_, app| {

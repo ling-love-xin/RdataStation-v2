@@ -237,6 +237,41 @@ impl ResultGridDelegate {
         group_by_values(&self.column_values(column))
     }
 
+    /// 【R3】分组页：按一组列分组（每列先取整列可见行值，再按行号拼元组）。
+    ///
+    /// - 0 列 = 空（UI 侧用当前选中列兜底）
+    /// - 1 列：直接走 [`Self::group_by_for`]，保留内存档原生数值键归一化（`"1"` 与 `"1.0"`
+    ///   不会被拆成两组）
+    /// - 多列：统一字符串口径。跨列混排时按原生长度归一化没有意义，DBeaver 的多列分组键
+    ///   也是按各列显示文本拼的；代价是数值列在多列组合下 `2.0` / `2` 会分成两组
+    pub fn group_by_columns_for(&self, columns: &[usize]) -> Vec<(Vec<String>, usize)> {
+        match columns {
+            [] => Vec::new(),
+            [only] => self
+                .group_by_for(*only)
+                .into_iter()
+                .map(|(value, count)| (vec![value], count))
+                .collect(),
+            _ => {
+                let per_col: Vec<Vec<String>> = columns
+                    .iter()
+                    .map(|column| self.column_values(*column))
+                    .collect();
+                // 各列长度同源（都按 `view_len` 取），取最小值防御越界
+                let rows_count = per_col.iter().map(|values| values.len()).min().unwrap_or(0);
+                let rows: Vec<Vec<String>> = (0..rows_count)
+                    .map(|row_ix| {
+                        per_col
+                            .iter()
+                            .map(|values| values[row_ix].clone())
+                            .collect()
+                    })
+                    .collect();
+                crate::grid::stats::group_by_tuples(&rows)
+            }
+        }
+    }
+
     /// 这一行拼成 TSV（**视图行序**：复制的是用户看着的那一行，不是数据行序）；
     /// 本地行同样参与整行 TSV 复制（#28-B1 拍板 D7）。
     pub(crate) fn row_text(&self, row_ix: usize) -> String {

@@ -190,6 +190,12 @@ pub enum ResultRequest {
     ResetStatsItems,
     /// 切换聚合口径（对齐 `aggregateAsStrings` CHECK：影响 MIN/MAX 的比较方式）
     SetStatsMode(StatsMode),
+    /// 【R3 分组页】切换分组列集合里的某一列（点选加入 / 再点移除；空集合 = 用当前选中列）
+    ToggleGroupColumn(usize),
+    /// 【R3 分组页】分组结果排序口径（按值 / 按计数）
+    SetGroupSort(GroupSort),
+    /// 【R3 分组页】「仅重复」：只保留行数 > 1 的分组（对齐 DBeaver 分组面板同名选项）
+    SetGroupDuplicatesOnly(bool),
 }
 
 /// 【R2】计算页的统计项（对齐 DBeaver Calc 的可配置聚合函数集
@@ -257,6 +263,34 @@ impl StatsMode {
         match self {
             Self::Numeric => Self::Text,
             Self::Text => Self::Numeric,
+        }
+    }
+}
+
+/// 【R3 分组页】分组结果排序口径（对齐 DBeaver 分组面板的排序配置）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GroupSort {
+    /// 按分组键字典序升序（默认；未排序的首现顺序也接近这个直觉）
+    #[default]
+    Value,
+    /// 按组内行数降序（同数按值序兜底，避免每次重算顺序抖）
+    CountDesc,
+}
+
+impl GroupSort {
+    /// 另一个口径（按钮 toggle 用）
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Value => Self::CountDesc,
+            Self::CountDesc => Self::Value,
+        }
+    }
+
+    /// 按钮文案（右侧窄栏只放得下 3 个字）
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Value => "按值",
+            Self::CountDesc => "按计数",
         }
     }
 }

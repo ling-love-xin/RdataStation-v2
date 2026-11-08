@@ -16,7 +16,7 @@ use crate::grid::cell::{
     ViewerMode, classify_value, hex_to_bytes, image_format_of, json_tree_items,
 };
 use crate::grid::{ResultGridDelegate, ResultStatus, ResultToolbar};
-use crate::ports::{Presentation, ResultRequest, RightTab, StatsItem, StatsMode};
+use crate::ports::{GroupSort, Presentation, ResultRequest, RightTab, StatsItem, StatsMode};
 use crate::script_card::ScriptCard;
 use crate::sets::ResultSetTab;
 use crate::store::ColumnKind;
@@ -211,6 +211,35 @@ impl ResultPanel {
             return;
         }
         self.stats_mode = mode;
+        cx.notify();
+    }
+
+    /// 【R3 分组页】切换某个额外分组列：已在集合里则移除，不在则追加到末尾
+    /// （追加顺序即分组键的拼接顺序——用户能感知地决定「按 A 再按 B」）
+    pub fn toggle_group_column(&mut self, column: usize, cx: &mut Context<Self>) {
+        if let Some(ix) = self.group_columns.iter().position(|c| *c == column) {
+            self.group_columns.remove(ix);
+        } else {
+            self.group_columns.push(column);
+        }
+        cx.notify();
+    }
+
+    /// 【R3 分组页】切换分组结果排序口径（按值 / 按计数）
+    pub fn set_group_sort(&mut self, sort: GroupSort, cx: &mut Context<Self>) {
+        if self.group_sort == sort {
+            return;
+        }
+        self.group_sort = sort;
+        cx.notify();
+    }
+
+    /// 【R3 分组页】切换「仅重复」（只留行数 > 1 的分组）
+    pub fn set_group_duplicates_only(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.group_duplicates_only == on {
+            return;
+        }
+        self.group_duplicates_only = on;
         cx.notify();
     }
 

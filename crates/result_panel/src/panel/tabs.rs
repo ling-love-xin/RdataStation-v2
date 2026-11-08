@@ -20,7 +20,7 @@ use crate::grid::cell::{
     HEX_DUMP_BYTES_PER_LINE, ViewerMode, classify_value, hex_lines, hex_to_bytes,
 };
 use crate::grid::stats::{ColumnStats, fmt_grouped, text_minmax};
-use crate::ports::{ResultActionQueue, ResultRequest, StatsItem, StatsMode};
+use crate::ports::{GroupSort, ResultActionQueue, ResultRequest, StatsItem, StatsMode};
 #[cfg(test)]
 use crate::ports::RightTab;
 use crate::store::ColumnKind;
@@ -610,29 +610,120 @@ impl ResultPanel {
             .into_any_element()
     }
 
-    /// 【右栏】分组页（DBeaver「分组」）：按选中列本地 groupby 计数。
+    /// 【右栏】分组页（DBeaver「分组」）：按一组列本地 groupby 计数。
     ///
-    /// 作用列口径同计算页：网格选中格优先，清单选中列兜底。
-    /// 纯函数 `group_by_count`（保留首现顺序，NULL 独立成组）；大表口径是
-    /// 下发 GROUP BY 重查（见 §8.8），本地页只服务中小结果集的即时分组。
+    /// 【R3】分组键列 = 工具条下拉里勾选的列集合（空 = 网格选中格优先、清单选中列兜底）；
+    /// 支持多列组合、排序口径（按值 / 按计数）与「仅重复」筛选。大表口径是下发
+    /// GROUP BY 重查（见 §8.8），本地页只服务中小结果集的即时分组。
     pub(crate) fn render_group_tab(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let muted = theme.colors.muted_foreground;
         let grid = self.grid.read(cx);
         let delegate = grid.delegate();
-        let Some(data_col) = self.inspect_column(delegate) else {
-            return self.sidebar_empty("选中一个数据列查看分组", cx);
+
+        // 【R3】分组键列：显式选择的列集合优先（顺序即拼接顺序）；集合空 = 退回当前选中列
+        let cols: Vec<usize> = if self.group_columns.is_empty() {
+            match self.inspect_column(delegate) {
+                Some(column) => vec![column],
+                None => return self.sidebar_empty("选中一个数据列查看分组", cx),
+            }
+        } else {
+            self.group_columns
+                .iter()
+                .copied()
+                .filter(|column| *column < delegate.columns().len())
+                .collect()
         };
-        // 【P2-2】列级访问器：只取目标列取值，不再 `visible_rows()` 物化整行矩阵
-        let groups = delegate.group_by_for(data_col);
-        let name = delegate
-            .columns()
-            .get(data_col)
-            .cloned()
-            .unwrap_or_else(|| "列".to_string());
+        if cols.is_empty() {
+            return self.sidebar_empty("选中一个数据列查看分组", cx);
+        }
+        let mut groups = delegate.group_by_columns_for(&cols);
+        arrange_groups(&mut groups, self.group_sort, self.group_duplicates_only);
+        let names: Vec<String> = cols
+            .iter()
+            .map(|column| {
+                delegate
+                    .columns()
+                    .get(*column)
+                    .cloned()
+                    .unwrap_or_else(|| "列".to_string())
+            })
+            .collect();
+        let title = format!("按 {} 分组 · {} 组", names.join(" + "), groups.len());
+
+        // 动作一：分组列下拉（勾选式多选；隐藏列不进分组键）
+        let all_names = delegate.columns().to_vec();
+        let hidden: Vec<bool> = (0..all_names.len())
+            .map(|column| delegate.is_hidden_column(column))
+            .collect();
+        let columns_menu = {
+            let queue = self.queue.clone();
+            let selected = cols.clone();
+            DropdownButton::new("editor-result-group-columns")
+                .xsmall()
+                .button(
+                    Button::new("editor-result-group-columns-btn")
+                        .ghost()
+                        .xsmall()
+                        .debug_selector(|| "editor-result-group-columns".to_string())
+                        .icon(IconName::Table2)
+                        .label("列"),
+                )
+                .dropdown_menu(move |menu, _window, _app| {
+                    let mut menu = menu;
+                    for (column, name) in all_names.iter().enumerate() {
+                        if hidden.get(column).copied().unwrap_or(false) {
+                            continue;
+                        }
+                        let queue = queue.clone();
+                        let checked = selected.contains(&column);
+                        menu = menu.item(
+                            PopupMenuItem::new(name.clone())
+                                .checked(checked)
+                                .on_click(move |_, _window, app| {
+                                    queue.request(ResultRequest::ToggleGroupColumn(column), app);
+                                }),
+                        );
+                    }
+                    menu
+                })
+                .into_any_element()
+        };
+        // 动作二：排序口径 toggle（按值 / 按计数）
+        let sort_button = {
+            let queue = self.queue.clone();
+            let next = self.group_sort.toggled();
+            Button::new("editor-result-group-sort")
+                .ghost()
+                .xsmall()
+                .debug_selector(|| "editor-result-group-sort".to_string())
+                .label(self.group_sort.label())
+                .tooltip("切换分组结果的排序口径".to_string())
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::SetGroupSort(next), app);
+                })
+                .into_any_element()
+        };
+        // 动作三：仅重复（只留行数 > 1 的分组）
+        let duplicates_on = self.group_duplicates_only;
+        let duplicates_button = {
+            let queue = self.queue.clone();
+            Button::new("editor-result-group-dup")
+                .ghost()
+                .xsmall()
+                .debug_selector(|| "editor-result-group-dup".to_string())
+                .label("仅重复")
+                .toggled(duplicates_on)
+                .tooltip("只显示出现多于一次的分组".to_string())
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::SetGroupDuplicatesOnly(!duplicates_on), app);
+                })
+                .into_any_element()
+        };
+
         let rows_el: Vec<AnyElement> = groups
             .iter()
-            .map(|(value, count)| {
+            .map(|(values, count)| {
                 div()
                     .h_flex()
                     .items_center()
@@ -645,7 +736,7 @@ impl ResultPanel {
                             .flex_1()
                             .min_w_0()
                             .text_ellipsis()
-                            .child(SharedString::from(value.clone())),
+                            .child(SharedString::from(values.join(" | "))),
                     )
                     .child(div().text_xs().text_color(muted).child(count.to_string()))
                     .into_any_element()
@@ -657,8 +748,8 @@ impl ResultPanel {
             .debug_selector(|| "editor-result-group-tab".to_string())
             .child(self.panel_toolbar(
                 "editor-result-group-toolbar",
-                SharedString::from(format!("按「{name}」分组 · {} 组", groups.len())),
-                Vec::new(),
+                SharedString::from(title),
+                vec![columns_menu, sort_button, duplicates_button],
                 cx,
             ))
             .child(
@@ -739,6 +830,24 @@ impl ResultPanel {
             .text_color(cx.theme().colors.muted_foreground)
             .child(SharedString::from(text))
             .into_any_element()
+    }
+}
+
+/// 【R3 分组页】分组结果排序 + 「仅重复」筛选（纯函数，便于单测）。
+///
+/// 先过滤再排序（避免为要丢掉的组白排）；`CountDesc` 同数按值序兜底，
+/// 保证同一份数据每次渲染顺序一致（否则 UI 会随统计重算跳动）。
+pub(crate) fn arrange_groups(
+    groups: &mut Vec<(Vec<String>, usize)>,
+    sort: GroupSort,
+    duplicates_only: bool,
+) {
+    if duplicates_only {
+        groups.retain(|(_, count)| *count > 1);
+    }
+    match sort {
+        GroupSort::Value => groups.sort_by(|a, b| a.0.cmp(&b.0)),
+        GroupSort::CountDesc => groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0))),
     }
 }
 
