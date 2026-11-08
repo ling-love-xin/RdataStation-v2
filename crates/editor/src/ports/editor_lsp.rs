@@ -4,7 +4,8 @@
 //!
 //! editor 侧只声明端口契约（`crate::lsp::LspPort`：文档 → 会话 + 按 `uri` 认领事件 + `wants`），
 //! **真正起 LSP server 的是宿主**。本模块就是那个宿主实现：按需探测 Python 环境、spawn
-//! `python -m jedi_language_server`（v1 候选），后台完成 `initialize` 握手（不阻塞主线程）。
+//! `jedi-language-server`（PATH 上的 console script，回退 `python -m jedi_language_server`；
+//! v1 候选），后台完成 `initialize` 握手（不阻塞主线程）。
 //!
 //! ## 生命周期（第五刀：「状态栏 LSP 管理器」）
 //!
@@ -366,9 +367,27 @@ pub fn attach(editor: &EditorShared) -> Rc<WorkbenchLsp> {
 
 /// 探测 Python 环境并 spawn jedi-language-server，返回「连接 + 事件接收端」
 ///
+/// 两个入口依次试：
+/// ① PATH 上的 `jedi-language-server` console script——0.4x 起包内**没有 `__main__`**，
+///    `python -m jedi_language_server` 会直接报 "No module named ...__main__"；
+/// ② 回退 `python -m jedi_language_server`（兼容带 `__main__` 的旧版本）。
+/// 只有 ① 的 `NotFound` 才回退；其它 spawn 错误直接报（避免掩盖真问题）。
+///
 /// stderr 丢 `Stdio::null()`：LSP server 的日志不读会填满管道卡死进程；v1 不要它的日志
 /// （要排障时改成后台线程 drain）。
 fn spawn_server() -> Result<(LspHandle, Receiver<LspEvent>), String> {
+    let mut script = std::process::Command::new("jedi-language-server");
+    script
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    match spawn_wired(script) {
+        Ok(pair) => return Ok(pair),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(format!("启动 LSP server（jedi-language-server）失败：{err}")),
+    }
+
+    // 回退：老版本（包内有 `__main__`）仍可用 `python -m` 起。
     let resolved = editor_env::resolve("python").map_err(|e| format!("Python 环境不可用：{e}"))?;
     let mut command = std::process::Command::new(&resolved.command);
     command
@@ -378,19 +397,21 @@ fn spawn_server() -> Result<(LspHandle, Receiver<LspEvent>), String> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("启动 LSP server（{}）失败：{e}", resolved.command))?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or("无法获取子进程 stdin（spawn 后即被占用）")?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or("无法获取子进程 stdout（spawn 后即被占用）")?;
-    // `LspClient` 只拿 stdin / stdout；`child` 句柄 drop 不杀进程（Windows 语义），
-    // server 进程靠 `shutdown` / 关闭写侧（EOF）自行退出——无孤儿由编辑器侧 `Drop` 兜底。
+    spawn_wired(command).map_err(|e| format!("启动 LSP server（{}）失败：{e}", resolved.command))
+}
+
+/// spawn 并接管 stdin / stdout；`child` 句柄 drop 不杀进程（Windows 语义），
+/// server 靠 `shutdown` / 关闭写侧（EOF）自行退出——无孤儿由编辑器侧 `Drop` 兜底。
+fn spawn_wired(
+    mut command: std::process::Command,
+) -> std::io::Result<(LspHandle, Receiver<LspEvent>)> {
+    let mut child = command.spawn()?;
+    let stdin = child.stdin.take().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::Other, "无法获取子进程 stdin（spawn 后即被占用）")
+    })?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::Other, "无法获取子进程 stdout（spawn 后即被占用）")
+    })?;
     Ok(crate::lsp::LspClient::from_process(stdin, stdout))
 }
 

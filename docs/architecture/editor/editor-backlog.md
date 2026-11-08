@@ -921,16 +921,28 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 
 ### 必须实测的风险（动手前先验，不靠推断）
 
-0. **本机当前没有 jedi-language-server**（2026-11-09 实测）：`where python` 命中的三个解释器
-   （沙箱 runtime 3.x、`C:\Users\sling\AppData\Local\Python\pythoncore-3.14-64`、uv 的
-   `cpython-3.12.14`）逐个 `import jedi_language_server` **全部失败**（`ModuleNotFoundError`）。
-   所以这一条改动就算接完，**本机真机也只能看到"如实无服务"**（状态栏会显示启动失败原因）。
-   要真机验收必须先装（`uv pip install jedi-language-server` 或用户自己的 venv）。这条不写清，
-   很容易变成"改完了但没人能验证"。
-1. **jedi-language-server 是否真能同时接多个 `untitled:` 文档**：机制上 LSP 支持（`did_open` 多 uri），
-   但本仓从未在一条连接上开过两份 `untitled:` 文档，jedi 对无路径文档的解析行为未知。**先做一次
-   手工探针**（起 server、`did_open` 两个 `untitled:Rds-*`、各发一次补全请求）再改代码——探针依赖
-   上面第 0 条（装了才能验）。
+0. **环境已就绪（2026-11-09 实测；原“本机没有 jedi”的结论已作废）**：`jedi-language-server`
+   0.47.0 装在 `D:\python-UV\lsp`（uv venv，基于 cpython-3.12.14；`UV_CACHE_DIR=D:\python-UV\cache`，
+   **产物不落用户目录**）。`D:\python-UV\` 本来就在用户 PATH 里、且该目录**没有 `python.exe`**
+   （只有 uv / uvx / ruff / jj / fossil / uvw），所以把 `jedi-language-server.exe` 复制进去后
+   `Get-Command jedi-language-server` 命中 `D:\python-UV\jedi-language-server.exe`，
+   **既按 PATH 设计走，也不劫持全局 `python`**。
+   **顺带查出一个真 bug**：0.47.0 的包**没有 `__main__`**，`python -m jedi_language_server` 直接报
+   `No module named jedi_language_server.__main__`；原 `spawn_server` 硬编码这一方式，**装了也起不来**。
+   已改为**优先 PATH 上的 console script、仅 `NotFound` 才回退 `python -m`**（`ports/editor_lsp.rs`
+   的 `spawn_server` + 新增 `spawn_wired`），编译通过、应用已重启。
+   遗留一条未改：**脚本执行 / `resolve("python")` 仍会解析到用户目录的 3.14 shim**（venv 的
+   `Scripts` 不在 PATH 的 `python` 名位）；LSP 走 console script 不受影响，Python **单元执行**
+   仍用系统 python。
+1. **多 `untitled:` 文档：已实测通过**（2026-11-09，脚本 `.rds/tmp/lsp_probe.py`）：一条连接
+   `did_open` 两个 `untitled:Rds-doc-1-c{1,2}`，`os.` 返回 457 条、`jso` 返回 `json` 1 条。
+   服务端 capabilities 实测：completion / hover / definition / codeAction / signatureHelp /
+   documentHighlight / documentSymbol / references / rename / executeCommand / workspaceSymbol。
+   **注意 `signatureHelp` 我方接不上**：`vendor/gpui-base/src/input/editor/lsp/mod.rs:39-56` 的
+   `Lsp` 只有 6 个槽位（completion / code_action / hover / definition / document_color /
+   semantic_tokens）+ `show_document`，没有签名帮助槽位，v1 不接。
+   另：`.py` 通用模式的 **F12 跳定义没接 LSP**（`session.rs:471-495` 只装补全 / hover / code action，
+   `install_definition` 只在 SQL 分支）——属通用模式的独立缺口，不在 A1 范围。
 2. **单元内坐标是否需要换算**：不需要——单元是独立内核实例，LSP 返回的 range 就是单元正文坐标，
    直接进该单元的 `DiagnosticSet`（与"文档行号偏移"无关，这一点此前被误判过）。
 3. **R / Julia 不在本方案内**：`editor_env::resolve` 目前只解析 Python；R 服务还要先定"是否真要
