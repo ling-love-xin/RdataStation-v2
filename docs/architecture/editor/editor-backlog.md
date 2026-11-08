@@ -1061,6 +1061,86 @@ KernelSpec { id: "ks:python3", display_name: "Python 3 (ipykernel)", language: P
 - **R / Julia 仍不亮**：本机没装 R / IJulia，逻辑已就绪——装上 IRkernel / IJulia、kernelspec 一出现即可用，不必再改码。
 - signatureHelp 仍接不上（vendor `Lsp` 无该槽位）；**A1（Python/R/Julia 单元的语言服务）仍未开工**，与本轮无耦合。
 
+## 15.19 P0 三条真 bug 修复（2026-11-09，**已实现**）
+
+§16 盘点里判为「用起来就是错的」级别的三条，本轮逐条修完。三条的共同点是**都不是缺功能，
+而是错的**：单元跑完永远停在「执行中」、复制单元两个共用正文、波浪线在没跑过的单元上复活。
+
+### B1 跨文档回执抢食 → 单元永久停在「执行中」
+
+**机制**（行号为本轮改动前的状态）：多面板共享同一执行队列。`view/host/exec/pump.rs:246/248`
+每拍先 `drain_script_notes` 再 `drain_cell_notes`，两个都是**全取**
+（`exec/queue.rs:281/:290` 的 `queue.drain(..).collect()`）；取完之后视图层才判
+`if note.document != self.document { continue; }`（`view/host/notebook.rs:692`、
+`view/host/env.rs:188`）。回执此时已经离开队列，`continue` 就是**丢失**——归属面板的单元
+再也等不到结论，永久 Running。
+
+**SQL 主通道早就修过同一个坑**：`pump.rs:250-251` 的原注释写着「多面板共享同一执行队列：
+只取本文档回执…否则空闲面板的泵会抢先 drain 走别的文档结论并丢弃」，实现是
+`shared/exec.rs:134` 的 `drain_exec_for` → `channel.drain_for(document)`。**单元与脚本两条
+回执通道从没接上这个口径**。
+
+**修法**（无新状态、无新通道）：
+
+| 位置 | 改动 |
+| --- | --- |
+| `exec/queue.rs` | 新增 `drain_cell_notes_for(&DocumentId)` / `drain_script_notes_for(&DocumentId)`，共用私有 `drain_matching<T,F>`（`pop_front` 搬运句柄，**不 clone** 大结果，非本轮条目按原顺序 `push_back`） |
+| `shared/notebook.rs` / `shared/exec.rs` | 各加一层同名包装，与既有 `drain_exec_for` 同口径 |
+| `view/host/notebook.rs::drain_cell_notes` | 换 `drain_cell_notes_for(&self.document)`，删掉「非本文档 continue」的兜底分支 |
+| `view/host/env.rs::drain_script_notes` | 同上（脚本通道一并修） |
+
+**用例**：`exec::queue::tests::draining_by_document_leaves_other_documents_in_the_queue` +
+`draining_scripts_by_document_also_keeps_foreign_notes`。都走产品入口（`ExecQueue::new` +
+真队列，把两条不同文档的回执同时塞进去）：断言 A 的泵只拿到自己的两条、**B 的那条仍在队列**、
+随后 B 的泵能取到。区分性：旧实现只有全取入口 `drain_cell_notes()`，这两条断言无法成立。
+
+### B2 复制单元 id 冲突 → 两个单元共用正文
+
+**机制**：`format!("{}-copy", original.id)` 是常数，连点两次「复制单元」都产出 `c1-copy`；
+`ensure_cell_editor` 见 id 已存在直接 `return`，第二个副本**没有编辑器实例**，两个单元按 id
+取到同一个实例、键入串到第一个里。
+
+**修法**：已占用就退到 `c1-copy-2`、`-3`…（`while state.cells.iter().any(|cell| cell.id == copy_id)`，
+`view/host/notebook.rs::notebook_duplicate_cell`）。插入位置仍是 `pos + 1`，所以连点两次后
+顺序是 `[first, first-copy-2, first-copy]`。
+
+**用例**：`view::tests::notebook_win::cell_copy_ids_are_unique_and_convert_or_delete_clears_error_marks`
+（连点两次 → 断言三个 id 互不相同且顺序如上）。区分性：旧实现第二次仍是 `first-copy`。
+
+### B3 转换 / 删除后错误线复活
+
+**机制**：`cell_error_marks` 只在两处清——**重跑**（`notebook_run_cell` 的重跑分支）与
+**回执成功**（`drain_cell_notes` 的 Done 分支）。`notebook_delete_cell` 与
+`notebook_convert_cell` 都不碰它。于是：SQL 单元跑失败（正文有红波浪线）→ 转 Markdown
+（输出清空、该单元根本没再跑过）→ 再转回 SQL → 重建诊断时又把旧位点读回来，**波浪线原地复活**。
+删除更直接：单元没了、id 还在 map 里（长会话里是一份只增不减的残留）。
+
+**修法**：删除与转换各加一行 `self.cell_error_marks.remove(id)`。
+
+**用例**：同 B2 那条的第二段（直接往 `cell_error_marks` 塞一条 `ExecMark` → 转类型 → 断言
+`contains_key` 为 false；再塞一条 → 删除 → 同样为 false）。区分性：旧实现两处 `remove` 都不存在。
+
+### 验证（本轮实测，逐项）
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo check -p rds-editor --lib -j 1` | exit 0，3.45 s，0 warning |
+| `cargo check -p rds-editor --all-targets -j 1` | exit 0 |
+| `cargo test -p rds-editor --lib -- exec::queue::tests --test-threads=1` | **2 passed / 0 failed**（774 filtered）= 三条 bug 的队列级断言单独通过 |
+| `cargo test -p rds-editor --lib -- --test-threads=1` | **772 passed / 3 failed / 1 ignored**（30.34 s，总数 776）；3 条失败与基线逐字一致（`legacy::opening_an_analysis_document_builds_a_cell_editor_per_cell`、`notebook_win::analysis_cell_renders_multiple_output_blocks`、`results_a::the_result_header_sorts_from_its_arrow`），归因见 `docs/architecture/ui/gpui-kit-0.9.0-upgrade-report.md` §12。新增 4 条（本轮 3 + §15.18 的 1）全部通过 |
+| `cargo build -j 1 -p rds-app` | exit 0 |
+| 重启后 `panic` / `ERROR` 行数 | 0 |
+
+### 已知边界
+
+- **B1 的视图层没有跨文档窗口用例**：`view/tests/mod.rs::open_panel` 借用 `&mut TestAppContext`
+  并返回 `&mut VisualTestContext`，同一测试里开不了第二个面板。所以 B1 的证明停在队列层
+  （产品入口 + 真队列），视图层两处换调用由代码审查兜住。要补窗口级证据得先给 helper 加一个
+  不还回 `VisualTestContext` 的变体，属于测试设施改造，本轮没做。
+- **`drain_cell_notes` / `drain_script_notes`（全取版）保留**：`view/host` 已不再调它们，但
+  `ExecQueue` 上仍留着一个全取入口给「所有面板都要收尾」的场景（用例 `draining_*` 用它断言
+  队列真的空了）。若确认无人再用，下一轮可删。
+
 ## 16. 遗留总账（2026-11-09 全量盘点）
 
 **盘点口径**：文档声明（§一 ~ §15）+ 代码内 `TODO|FIXME|未接线|暂不支持|暂不|遗留|待接线`
@@ -1119,7 +1199,7 @@ KernelSpec { id: "ks:python3", display_name: "Python 3 (ipykernel)", language: P
 
 | 项 | 现状 |
 | --- | --- |
-| `cargo test -p rds-editor --lib -- --test-threads=1` | **768 passed / 3 failed / 1 ignored**（2026-11-09 §15.16 后；§15.18 内核改造后复测一致，只是用例总数 +1、新增那条通过）。三条固定失败：`view/tests/legacy.rs:58`（渲染树找不到 `editor-nb-cell-source-c1`）、`view/tests/notebook_win.rs:347`（多输出块）、`view/tests/results_a.rs:290`（表头排序箭头）——归因见 `../ui/gpui-kit-0.9.0-upgrade-report.md` §12（观察层口径，非产品缺失） |
+| `cargo test -p rds-editor --lib -- --test-threads=1` | **772 passed / 3 failed / 1 ignored**（总数 776，2026-11-09 §15.19 后；较 §15.16 的 768 多了 4 条新用例：§15.18 内核兼容 1 条 + §15.19 三条 bug 各 1 条，全部通过）。三条固定失败：`view/tests/legacy.rs:58`（渲染树找不到 `editor-nb-cell-source-c1`）、`view/tests/notebook_win.rs:347`（多输出块）、`view/tests/results_a.rs:290`（表头排序箭头）——归因见 `../ui/gpui-kit-0.9.0-upgrade-report.md` §12（观察层口径，非产品缺失） |
 | `ui-todo.md` §五 V-1 … V-8 | **8 项全 ⬜**（V-1 对话框关闭残影 / V-2 右 Dock 草稿行 / V-3 导航树虚拟行 / V-4 列类型警示行 / V-5 标题栏折叠还原 / V-6 书签图标在 gutter 最左 / V-7 有说明折叠行箭头常显+横线 / V-8 悬停说明气泡）。判的是"画面有没有"，自动化观察层读不到，只能人工目视 |
 | `cargo check --workspace` | 不通过：`windows` crate `STATUS_STACK_BUFFER_OVERRUN`（环境限制，只用 `-p` 单 crate） |
 | `cargo check -p gpui-base --all-targets` | 必失败：bench `text_view_scroll` 缺 `gpui_fast_platform`（只用 `--lib`） |
@@ -1132,7 +1212,7 @@ KernelSpec { id: "ks:python3", display_name: "Python 3 (ipykernel)", language: P
 | 外部线在途 | `git status --short` 除本模块外有三条线：① insight 线 `docs/architecture/insight/prototypes/eda/eda.html`（M）+ 6 个未跟踪（`insight-correlation-l1-spec.md`、`col-bool/col-date/col-num/col-text/eda-by-type.html`）；② 导航树线 `crates/database/src/nav_view/{rows,chrome,nav_view,tests}.rs`（M）；③ 结果面板统计线 `crates/result_panel/src/{ports,grid/stats,panel/data,panel/lifecycle}.rs`（M，只加了 `StatsItem` 模型与字段、消费端未接，曾一度拦住 `rds-editor` 编译） | 一律不碰；被他们拦门禁时等其改完再重跑，不改别人的文件 |
 | 结果面板遗留 | 维护在 `result-panel-handoff.md` §2.4，本模块不重复；剩余缺口是**渲染期尚未消费事实档** | 跨 crate，归结果面板线 |
 
-### 16.7 本轮（2026-11-08 ~ 11-09）已闭合 13 项，别重复立项
+### 16.7 本轮（2026-11-08 ~ 11-09）已闭合 17 项，别重复立项
 
 | 项 | 落点 |
 | --- | --- |
@@ -1150,5 +1230,8 @@ KernelSpec { id: "ks:python3", display_name: "Python 3 (ipykernel)", language: P
 | `save_cell_update` 死代码删除（§16.1 A4） | §15.16 |
 | 目录快照代际 → 切连接不必等敲键（§16.1 A2） | §15.16（闭合 §15.15 未覆盖 2） |
 | kernelspec 内核发现（对齐 Jupyter 的 C 层） | §15.18 |
+| B1 跨文档回执抢食（单元/脚本通道按文档取） | §15.19 |
+| B2 复制单元 id 冲突 | §15.19 |
+| B3 转换/删除后错误线复活 | §15.19 |
 
 
