@@ -14,11 +14,17 @@
 //!
 //! ## 落点与后续
 //!
-//! 本模块只做 client 核心（进程 I/O + 请求/响应关联 + 通知分发）+ provider bridge
-//! （[`bridge`]：把请求转发给语言服务的 `CompletionProvider` 实现 + 诊断翻译纯函数，
-//! 挂在 `EditorState::lsp_mut()` 上）。其余 hover / definition 等 provider 槽位暂未实现，
-//! 宿主轮询 [`LspEvent`] 把 `publishDiagnostics` 合并进内核诊断（`DiagnosticSet` 已有
+//! 本模块做 client 核心（进程 I/O + 请求/响应关联 + 通知分发）+ provider bridge
+//! （[`bridge`]：把请求转发给语言服务的 completion / hover / definition / showDocument，
+//! 挂在 `EditorState::lsp_mut()` 的对应槽位上），诊断翻译是纯函数——宿主轮询 [`LspEvent`]
+//! 把 `publishDiagnostics` 合并进内核诊断（`DiagnosticSet` 已有
 //! `From<lsp_types::Diagnostic>`，可直接 extend）。
+//!
+//! 槽位现状（都在用，别再当"暂未实现"）：completion / hover / definition /
+//! showDocument 经 [`bridge`] 转发；hover 是**单槽**，语言服务可用走
+//! [`bridge::LspHoverProvider`]、SQL 模式走自研 [`sql_hover`]，二者互斥（二选一）。
+//! `document_color`、`sql_code_action`（槽位可挂多个）、`semantic_tokens` 是 SQL 自研
+//! 实现，不经 LSP 转发。
 
 pub mod bridge;
 pub mod client;

@@ -6,8 +6,9 @@
 //! 的笔记本持有器里，动作（新增 / 删除 / 上移下移 / 复制 / 运行）是面板
 //! （`EditorHostPanel`）的方法——渲染函数拿到面板实体，按钮点击转发给面板。
 //!
-//! 单元正文在这个骨架切片里按**纯文本**渲染（编辑内核复用属后续；任务书风险条款
-//! 记了「单元编辑器 = 内核实例复用 + ElementId 业务键」，不是本切片）。类型徽标两条
+//! 单元正文是**逐单元的内核编辑器实例**（`cell_editors`：键 = `cell_id`，面板在事件路径
+//! 创建并缓存，render 只读）；拿不到实例时才退化成纯文本（`when_none` 分支）——纯文本
+//! 不是默认形态。类型徽标两条
 //! 语义：**颜色** = 可执行性（SQL = 主色 / 文本 = 次级色），**形状** = 语言
 //! （SQL = `SELECT` 徽标 / 文本 = `M↓` 徽标，见 [`badge`]）。
 //!
@@ -519,7 +520,8 @@ fn execution_source_menu(
     }
 }
 
-/// 单元正文（本切片按纯文本渲染；编辑内核复用属后续）
+/// 单元正文的纯文本退化内容（**只在面板还没建出该单元的内核编辑器实例时**用：
+/// 正常路径是 `when_some(cell_editors.get(..))` 渲染 `EditorState`，见 [`cell_card`]）
 fn cell_body_text(cell: &Cell) -> String {
     if cell.body.trim().is_empty() {
         if cell.language.is_executable() {

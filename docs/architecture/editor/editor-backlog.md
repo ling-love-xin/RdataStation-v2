@@ -54,7 +54,7 @@ P1 边界（已实现，勿当缺口）：`SELECT *` 只展开实体表；表达
 
 | 项 | 现状 | 影响 / 处置 |
 | --- | --- | --- |
-| origin/main 推送 | ✅ 已推送（2026-10-28）：44 个 commit 同步（0 领先 0 落后），含内核能力释放 / A 方案 / cell 菜单 / 结果集 tab 一致化等 | 完成 |
+| origin/main 推送 | ⚠️ **本地领先 71 个提交、未推送**（2026-11-08 复核：`git rev-list --left-right --count origin/main...main` = `0	71`，`origin/main` 停在 `9ce3c98e`）。旧记录「已推送，0 领先 0 落后（44 个）」已过期 | 用户口径：只做本地合并，推送另行安排（见 `../ui/gpui-kit-0.9.0-upgrade-report.md` §0） |
 | insight 线未提交（外部线） | 2026-11-08 复核：未提交只剩 `docs/architecture/insight/**`（1 处修改 + 6 个未跟踪），`crates/insight/*` / `plugin/*` 均已落库 | ✅ **不再阻塞**：`cargo test -p rds-workbench --lib --no-run` exit 0（2.07s，已编过）；用例本次未跑 |
 | Cargo.lock 未提交改动 | 2026-11-08 复核 `git status` 不含 Cargo.lock | ✅ 已无改动 |
 
@@ -177,7 +177,7 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 
 ## 九、未决项（不编造，记录现状）
 
-- ~~AGENTS.md 标「GPUI-kit 0.8.x」而 vendor / 代码按 0.7.1~~：✅ **已闭合**（2026-11-08 核实）——`Cargo.toml` 为 `gpui-kit = "0.8.1"`，`Cargo.lock` 的 gpui-kit / gpui-base / gpui-component 均 **0.8.1**、gpui-pre **0.3.10**，`vendor/{gpui-base,gpui-component}` 同为 0.8.1；AGENTS.md 的「0.8.x」是正确口径
+- ~~AGENTS.md 标「GPUI-kit 0.8.x」而 vendor / 代码按 0.7.1~~：✅ **口径已升到 0.9.0（2026-11-08 复核）**——`Cargo.toml` / `Cargo.lock` / `vendor/{gpui-base,gpui-component}` 全为 **0.9.0**、`gpui-pre` **0.3.11**（`../ui/gpui-kit-0.9.0-upgrade-report.md` §2）；`Cargo.toml` 用 `gpui-kit = { version = "0.9.0", features = ["gpui-fast"] }`。AGENTS.md 的「GPUI-kit 0.8.x」已同步改为 0.9.x；其「本地索引覆盖 0.7.1–0.8.0」逐版本枚举**未能从仓库内证实**（索引属工具侧），故未动该句
 - 执行上下文模型（DBeaver per-context 独立连接）：讨论定稿未开工（0.2.4 不实现，见 `../connection/execution-context-model.md`）
 - ~~列宽持久化~~：✅ 已交付（2026-11-08，落会话 `result_column_widths`，受 `result_panel.persist_column_widths` 开关控制）
 - analyze 路径结果无列类型/注释（`ResultSet` 无类型字段，已知边界）
@@ -277,7 +277,7 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 | 已排除 | 不可见字符替换字形 | 内核 `RangeDecorationStyle` 无 replacement 字形 | §六（⛔ 不硬做） |
 | 已排除 | 三通道 `尚未接入 / 尚未注册外部源` 文案 | 设计如此（宿主没注入端口就如实报不可用） | `exec/channel.rs:59/278`、`view/host/render.rs:555` |
 
-### 15.2 文档漂移（声明仍写「未实现」，调用链已闭合）
+### 15.2 文档漂移（声明仍写「未实现」，调用链已闭合）—— ✅ 已全部修（2026-11-08，逐条处置见 §15.11）
 
 | 位置 | 旧声明 | 实际情况 |
 | --- | --- | --- |
@@ -561,6 +561,30 @@ headless 经验：正文编辑要走 `editor.read(cx).focus_handle(cx)` + `focus
 延迟要 (a) 在事件路径记录"同一行的进入时刻"（跨帧记忆，内核有 `last_hovered_row: Rc<Cell<..>>`
 先例可循）；(b) 到 300ms 时没有鼠标事件，必须在渲染里 `window.request_animation_frame()`
 连续申请帧（一次悬停约 18 帧）才能弹出。这是纯体感优化、与 pin 无耦合，留作独立一项。
+
+### 15.11 文档漂移逐条处置（2026-11-08，闭合 §15.2 五条 + 顺手两条）
+
+判定方法：每一条都先回到**当前源码**确认「声明」与「实际」是否还差，差的才改——
+不照抄 §15.2 的旧描述（那份表本身是上一轮写的，也可能已经跟着漂）。
+
+| # | 位置 | 旧声明 | 处置 |
+| --- | --- | --- | --- |
+| 1 | `crates/editor/src/lsp/mod.rs` 模块文档 | 「其余 hover / definition 等 provider 槽位暂未实现」 | **已改**。所有槽位都在挂载：completion / hover / definition / showDocument 经 `lsp/bridge.rs`（`install_completion` `:309`、`install_hover` `:322`、`install_definition` `:337`、`install_show_document` `:355`），`document_color`（`:141`）、`sql_code_action`（`:189`，槽位可多挂）、`semantic_tokens`（`view/highlight.rs:301`）是 SQL 自研不经 LSP。新文写清「hover 是单槽、LSP 转发与 SQL 自研二选一」，避免下次又被读成"没实现" |
+| 2 | `crates/editor/src/view/analysis.rs` 模块文档 | 「单元正文按纯文本渲染，编辑内核复用属后续」 | **已改**。正文是逐单元内核编辑器：`analysis.rs:63` 的 `cell_editors: &HashMap<String, Entity<EditorState>>`，`:273` `when_some(cell_editor, ..)` 渲染 `Editor`，`:260` `when_none` 才是纯文本退化。新文明确「纯文本不是默认形态」 |
+| 3 | 同上 `cell_body_text` 文档注释（原 `:522`） | 「本切片按纯文本渲染；编辑内核复用属后续」 | **已改**为「只在面板还没建出该单元内核实例时用的退化内容」，并指向正常路径 `cell_card` |
+| 4 | `crates/editor/src/view/host/notebook.rs::ensure_cell_editor` | `【遗留 #10】` | **已改**：编号删掉（#10 已交付，函数内已用「【15.1 第 4 条】」指向 backlog 真实条目），只留函数语义 |
+| 5 | §五（本文）origin/main 行 | 「✅ 已推送（2026-10-28）：44 个 commit 同步（0 领先 0 落后）」 | **已改**：实测 `git rev-list --left-right --count origin/main...main` = `0	71`，`origin/main` 停在 `9ce3c98e`。改为「本地领先 71、未推送」并注明用户口径（只做本地合并） |
+| 6 | §九（本文）首条 | 「全链 0.8.1、gpui-pre 0.3.10，AGENTS.md 正确」 | **已改**为 0.9.0 / gpui-pre 0.3.11 口径（依据 `../ui/gpui-kit-0.9.0-upgrade-report.md` §2 的 vendor / lock 实测） |
+| 7 | `AGENTS.md` L5 | 「GPUI-kit 0.8.x」 | **已改**为「当前 vendor 为 `0.9.0`，即 `GPUI-kit 0.9.x`」。**未动**L7 的「全部源码（0.7.1/0.7.2/0.7.3/0.8.0）已本地索引」——索引覆盖属 MCP 工具侧事实，仓库内无从证实，不猜 |
+
+**没有改的东西**（避免下次重复判断）：`view/signature_help.rs:17`「DBeaver 式完整目录留给后续」
+仍属 §15.3 的待复核项（C5 函数手册 + #54 目录注入是否已覆盖该措辞，未定论）；`§九` 其余
+未决项（执行上下文模型 / analyze 无列类型 / 函数手册 URL / `annotate_types` Unknown）复核后
+**仍然成立**，原样保留。
+
+验证：`cargo check -p rds-editor --all-targets -j 1` → exit 0（只动注释与文档，无行为变化）；
+`rds-editor --lib` 不重跑（本轮无代码语义改动，上一次全量即 §15.10 的 764/3/1）。
+
 
 
 
