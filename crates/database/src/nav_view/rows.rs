@@ -748,7 +748,11 @@ impl NavView {
             .child(nav_disclosure(true, !collapsed, muted))
             .child(
                 div()
-                    .flex_1()
+                    // 组名左锚、按内容宽取宽（上限 `NAV_NAME_MAX_W`）：横向画布落地后
+                    // 行内不再用 `flex_1` 把后续信息推到画布右缘（那会让它们在默认视口外）。
+                    // 组名实际 2–5 汉字，健康度 / 计数 / 批量按钮紧随其后即贴住组名。
+                    .flex_none()
+                    .max_w(rems(ui::NAV_NAME_MAX_W))
                     .min_w_0()
                     .overflow_hidden()
                     .text_xs()
@@ -1173,7 +1177,10 @@ impl NavView {
             .child(div().w_2p5().flex_none())
             .child(
                 div()
-                    .flex_1()
+                    // 左锚（同分组头组名口径）：按内容宽取宽、上限 `NAV_NAME_MAX_W`，
+                    // 后面的 `∈ 主组名` 紧跟其后而不是被推到画布右缘。
+                    .flex_none()
+                    .max_w(rems(ui::NAV_NAME_MAX_W))
                     .min_w_0()
                     .overflow_hidden()
                     .text_xs()
@@ -1679,11 +1686,11 @@ impl NavView {
                 .child({
                     // 名称槽（方案③）：整块交给 hover 卡做 trigger——名称被 `text_ellipsis()`
                     // 截断后这是唯一的「看全」通道，卡本身不占排版宽。
-                    // trigger 外层拿 flex_1 + min_w_0 + overflow_hidden（见
-                    // `primitives::nav_name_hover_card`），所以内层改 `w_full()` 填满那个槽；
-                    // 除宽度口径外其余样式与改动前逐项相同。
+                    // 横向画布落地后 trigger 是 `flex_none + min_w/max_w`（见
+                    // `primitives::nav_name_hover_card`），宽度按内容取，所以内层**不能**用
+                    // `w_full()`（auto 宽容器里 100% 成环）；名称自身带上限 `NAV_NAME_MAX_W`
+                    // 才能触发省略号。
                     let name_body = div()
-                        .w_full()
                         .min_w_0()
                         .overflow_hidden()
                         .h_flex()
@@ -1715,6 +1722,8 @@ impl NavView {
                         })
                         .child(
                             div()
+                                .flex_none()
+                                .max_w(rems(ui::NAV_NAME_MAX_W))
                                 .min_w_0()
                                 .overflow_hidden()
                                 .text_xs()
@@ -2438,7 +2447,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     .into_any_element(),
                 // 建框晚一帧（render_nav 建框在列表渲染前）：空帧给占位，避免闪缩。
                 None => div()
-                    .flex_1()
+                    .flex_none()
+                    .max_w(rems(ui::NAV_NAME_MAX_W))
                     .min_w_0()
                     .text_xs()
                     .text_color(fg)
@@ -2450,9 +2460,12 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             // （删除线不穿透内层 Div，R2 风险在纯函数层闭环）。
             let title_fg = if staged_hit { staged_drop } else { fg };
             let title_el = div()
-                .flex_1()
-                // 名称是行主语：给下限，不再允许被注释/统计槽压到 0（见 `ui::NAV_NAME_MIN_W`）。
+                // 名称左锚（横向画布落地后）：按内容宽取宽、上限 `NAV_NAME_MAX_W`，
+                // 注释 / 统计串 / 计数徽标紧跟其后而不再被 `flex_1` 推到画布右缘。
+                // 下限仍为 `NAV_NAME_MIN_W`：注释副标可缩，但名称绝不被压到 0。
+                .flex_none()
                 .min_w(rems(ui::NAV_NAME_MIN_W))
+                .max_w(rems(ui::NAV_NAME_MAX_W))
                 .overflow_hidden()
                 .text_xs()
                 .when(staged_hit, |s| s.line_through())
@@ -3483,7 +3496,10 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             .child(nav_icon(kind_icon, ui::ICON_SIZE_SM, muted))
             .child(
                 div()
-                    .flex_1()
+                    // 左锚（同树行口径）：按内容宽取宽、上限 `NAV_NAME_MAX_W`，
+                    // 类别 / 归属元信息紧跟名称，不被推到画布右缘。
+                    .flex_none()
+                    .max_w(rems(ui::NAV_NAME_MAX_W))
                     .min_w_0()
                     .overflow_hidden()
                     .text_xs()

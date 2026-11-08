@@ -195,6 +195,19 @@ pub const NAV_COMMENT_SUBLINE_W: f32 = 8.0;
 /// （`StatisticsNavigatorNodeRenderer.java:213-215`），名称永不被挤。
 pub const NAV_NAME_MIN_W: f32 = 5.0;
 
+/// 导航行名称槽**最大宽**（24rem ≈ 384px ≈ 30 个汉字 @text_xs）。
+///
+/// 横向滚动落地后名称不再被视口宽钉死，但也不许长名把行推到无限宽：超过即省略，
+/// 全名仍由 hover 卡兜底。与 `NAV_NAME_MIN_W` 一起构成名称槽的上下限，
+/// 行内其它信息（注释 / 统计 / 归属域）紧跟名称之后左锚排列（行内不再做右对齐）。
+pub const NAV_NAME_MAX_W: f32 = 24.0;
+/// 导航树**画布宽**（30rem ≈ 480px）：横向滚动的内容宽。
+///
+/// 虚拟列表每行宽度取自列表元素自身 bounds（`vendor/gpui-base/src/virtual_list.rs:624-635`），
+/// 所以行宽 = 画布宽。画布宽于视口时靠外层横向滚动看全（DBeaver 的 `SWT.H_SCROLL` 同构，
+/// `DatabaseNavigatorTree.java:327`），而不是像旧实现那样把每行钉死在视口宽。
+pub const NAV_TREE_CANVAS_W: f32 = 30.0;
+
 // ===== 控件与图标（rem 基准） =====
 
 /// 小控件高度（搜索框、工具栏控件；1.625rem ≈ 26px）

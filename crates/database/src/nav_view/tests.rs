@@ -22,7 +22,7 @@ use property::PropertyKind;
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime};
 // 窗口级验收要用的两个 trait（显式导入，不通配：`use gpui_kit::*` 会把 `test` 宏带进来）。
-use gpui_kit::{AppContext as _, Focusable as _, ParentElement as _, Pixels, Styled as _};
+use gpui_kit::{AppContext as _, Focusable as _, ParentElement as _, Pixels, Styled as _, point, px};
 
 /// 定位验收用的最小宿主：只回答定位路径真会问到的两件事（是否已连 / 项目根）。
 ///
@@ -825,6 +825,59 @@ fn nav_tree_rows_are_laid_out_by_the_virtual_list(cx: &mut gpui_kit::TestAppCont
         "行高分级：连接行（{}rem）＞ 对象行（{}rem）",
         super::ui::NAV_ROW_CONNECTION,
         super::ui::NAV_ROW_TREE
+    );
+}
+
+/// 契约：横向画布落地后，滚树的竖向滚轮**不得**把整片树横向推走。
+///
+/// 树区现在是两层（`chrome.rs`：视口 `overflow_x_scroll` + 画布 `min_w(NAV_TREE_CANVAS_W)`）。
+/// 视口上若不挂 `restrict_scroll_to_axis`，gpui 会把竖向滚轮的 y 重映射成 x
+/// （`gpui-pre-0.3.11/src/style.rs:207-216`），滚一次树整片树就横移一次。
+/// 库层行为由 `mod scroll_axis_contract` 钉，这条钉的是**真实装配**（走 `open_nav_view`）。
+#[gpui_kit::test]
+fn tree_vertical_wheel_does_not_drift_the_horizontal_shell(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let (view, cx) = open_nav_view(cx, conn);
+    cx.update(|_window, cx| {
+        seed_reveal_state(
+            &view.read(cx),
+            conn,
+            "shop",
+            "public",
+            vec![table_node(conn, "shop", "public", "customers")],
+            None,
+        );
+        let mut state = view.read(cx).nav.borrow_mut();
+        state.expanded.clear();
+        state.expanded.insert(conn.to_string());
+    });
+    redraw(cx);
+    let row = cx.debug_bounds("nav-row-conn").expect("连接行应被画出");
+    cx.simulate_event(gpui_kit::ScrollEvent {
+        position: row.center(),
+        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-60.))),
+        ..Default::default()
+    });
+    redraw(cx);
+    let offset_x = cx.update(|_window, cx| view.read(cx).tree_scroll_x.offset().x);
+    assert_eq!(
+        offset_x,
+        px(0.),
+        "竖向滚轮不得把树横向推走（视口的 restrict_scroll_to_axis 掉了？）"
+    );
+
+    // 反向：横向手势要真能推动视口（画布 30rem 比面板宽，必产生横向溢出）。
+    cx.simulate_event(gpui_kit::ScrollEvent {
+        position: row.center(),
+        delta: gpui_kit::ScrollDelta::Pixels(point(px(-60.), px(0.))),
+        ..Default::default()
+    });
+    redraw(cx);
+    let offset_x = cx.update(|_window, cx| view.read(cx).tree_scroll_x.offset().x);
+    assert!(
+        offset_x < px(0.),
+        "横向手势应把树推到画布右侧（实际 x={:?}）",
+        offset_x
     );
 }
 
@@ -2888,4 +2941,147 @@ fn search_signature_flips_on_mode_and_corpus_flags(cx: &mut gpui_kit::TestAppCon
         .unwrap();
     assert!(!definitions.5);
     assert!(definitions.6, "签名应纳入搜定义标志");
+}
+
+/// 契约：**外层只开横向溢出时，竖轮不得把树横向推走**（横向画布装配的硬前提）。
+///
+/// `chrome.rs` 的树区是「视口 `overflow_x_scroll` + 画布 `min_w(NAV_TREE_CANVAS_W)`」两层，
+/// 纵向滚动仍归虚拟列表自己（内层 `overflow_scroll` + `lock_scroll_axis`，见
+/// `vendor/gpui-base/src/virtual_list.rs:196-212`）。要钉死的是 gpui 的滚轮路由：
+/// - 不挂 `restrict_scroll_to_axis` 时，竖向滚轮的 y 被**重映射**成 x
+///   （`gpui-pre-0.3.11/src/style.rs:207-216`），滚树的同时整片树会横向漂移；
+/// - 挂上之后：竖轮只动内层 y，横向手势只动外层 x。内层锁不锁轴都同此结论。
+///
+/// 用两层普通 div 复刻基座形状（不引虚拟列表）：
+/// - outer：180×200，`overflow_x_scroll` + `track_scroll`（可横滚）
+/// - canvas：`w_full().min_w(360.)`（比视口宽，制造横向溢出）
+/// - inner：`size_full().overflow_scroll()` + 可选 `lock_scroll_axis()`，内含 900px 高的内容
+///   （纵向可滚、横向不可滚——与 `v_virtual_list` 的 `item_bounds` 钉宽同效）
+mod scroll_axis_contract {
+    use gpui_kit::base::InteractiveElementExt as _;
+    use gpui_kit::{
+        Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollDelta,
+        ScrollEvent, ScrollHandle, StatefulInteractiveElement as _, Styled as _, VisualTestContext,
+        Window, point, px,
+    };
+
+    struct Shell {
+        lock_inner: bool,
+        restrict_outer: bool,
+        outer: ScrollHandle,
+        inner: ScrollHandle,
+    }
+
+    impl Render for Shell {
+        fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let inner = gpui_kit::div()
+                .id("axis-inner")
+                .size_full()
+                .overflow_scroll()
+                .track_scroll(&self.inner)
+                .child(gpui_kit::div().h(px(900.)).w_full());
+            let inner = if self.lock_inner {
+                inner.lock_scroll_axis()
+            } else {
+                inner
+            };
+            let outer = gpui_kit::div()
+                .id("axis-outer")
+                .w(px(180.))
+                .h(px(200.))
+                .overflow_x_scroll()
+                .track_scroll(&self.outer);
+            let outer = if self.restrict_outer {
+                outer.restrict_scroll_to_axis()
+            } else {
+                outer
+            };
+            outer.child(
+                gpui_kit::div()
+                    .id("axis-canvas")
+                    .w_full()
+                    .min_w(px(360.))
+                    .h_full()
+                    .child(inner),
+            )
+        }
+    }
+
+    fn draw(cx: &mut VisualTestContext) {
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+    }
+
+    fn wheel(cx: &mut VisualTestContext, dx: f32, dy: f32) {
+        cx.simulate_event(ScrollEvent {
+            position: point(px(90.), px(60.)),
+            delta: ScrollDelta::Pixels(point(px(dx), px(dy))),
+            ..Default::default()
+        });
+        draw(cx);
+    }
+
+    #[gpui_kit::test]
+    fn vertical_wheel_stays_on_the_tree_in_both_inner_modes(cx: &mut gpui_kit::TestAppContext) {
+        for lock_inner in [true, false] {
+            cx.update(gpui_kit::init);
+            let outer = ScrollHandle::new();
+            let inner = ScrollHandle::new();
+            let (_shell, cx) = cx.add_window_view(|_, _| Shell {
+                lock_inner,
+                restrict_outer: true,
+                outer: outer.clone(),
+                inner: inner.clone(),
+            });
+            draw(cx);
+            wheel(cx, 0., -60.);
+            assert_eq!(
+                outer.offset().x.as_f32(),
+                0.0,
+                "挂 restrict 后竖轮不得推动外层 x（lock_inner={lock_inner}）"
+            );
+            assert_eq!(
+                inner.offset().y.as_f32(),
+                -60.0,
+                "竖轮应完整作用在树本身上（lock_inner={lock_inner}）"
+            );
+
+            inner.set_offset(point(px(0.), px(0.)));
+            outer.set_offset(point(px(0.), px(0.)));
+            draw(cx);
+            wheel(cx, -60., 0.);
+            assert_eq!(
+                outer.offset().x.as_f32(),
+                -60.0,
+                "横向手势应驱动外层横滚（lock_inner={lock_inner}）"
+            );
+            assert_eq!(
+                inner.offset().y.as_f32(),
+                0.0,
+                "横向手势不得带动树纵向滚动（lock_inner={lock_inner}）"
+            );
+        }
+    }
+
+    #[gpui_kit::test]
+    fn without_restriction_vertical_wheel_drifts_the_shell(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let outer = ScrollHandle::new();
+        let inner = ScrollHandle::new();
+        let (_shell, cx) = cx.add_window_view(|_, _| Shell {
+            lock_inner: true,
+            restrict_outer: false,
+            outer: outer.clone(),
+            inner: inner.clone(),
+        });
+        draw(cx);
+        wheel(cx, 0., -60.);
+        // 这条钉的是「为什么必须挂 restrict」：不挂时同一个竖轮把外层 x 推到 -60。
+        assert_eq!(
+            outer.offset().x.as_f32(),
+            -60.0,
+            "未挂 restrict 时 gpui 会把竖轮的 y 重映射到外层 x（这是必须挂 restrict 的原因）"
+        );
+    }
 }

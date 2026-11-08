@@ -795,6 +795,9 @@ pub struct NavView {
     state_dirty: RefCell<NavStateDirty>,
     /// 树区滚动句柄（虚拟列表自带滚动；「滚到眼前」类需求走它，见导航开发方案 §2.5 S5）。
     list_scroll: Rc<VirtualListScrollHandle>,
+    /// 树区**横向**滚动句柄：画布宽于视口时由外层横向滚动看全（`NAV_TREE_CANVAS_W`）。
+    /// 纵向滚动不在这里——那仍归虚拟列表自己的 `list_scroll`。
+    tree_scroll_x: gpui_kit::ScrollHandle,
     /// 正在轮询预热进度的后台任务（避免重复启动）。
     warm_poll: Option<Task<()>>,
     /// 正在轮询导航加载结果的后台任务（避免重复启动；`&self` 路径也要访问）。
@@ -838,6 +841,7 @@ impl NavView {
             prefix_debounce: RefCell::new(None),
             state_dirty: RefCell::new(NavStateDirty::default()),
             list_scroll: Rc::new(VirtualListScrollHandle::new()),
+            tree_scroll_x: gpui_kit::ScrollHandle::new(),
             warm_poll: None,
             nav_pump: RefCell::new(None),
             nav_search_focus_pending: false,

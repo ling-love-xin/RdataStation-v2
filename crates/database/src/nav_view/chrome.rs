@@ -8,6 +8,7 @@ use super::PreparedStaged;
 use super::*;
 use crate::nav::capability::NavOp;
 use crate::nav::family_profile;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::toolbar::Toolbar;
 
@@ -1962,19 +1963,43 @@ impl NavView {
         let sizes = self.nav_row_sizes(window.rem_size(), cx);
         let entity = cx.entity();
         let scroll = self.list_scroll.clone();
+        let scroll_x = self.tree_scroll_x.clone();
+        // 树区 = 视口（可横向滚动）+ 画布（定宽）。虚拟列表每行宽度取自列表元素自身
+        // bounds（`vendor/gpui-base/src/virtual_list.rs:624-635`），所以行宽 = 画布宽，
+        // 画布宽于面板时靠外层横向滚动看全——DBeaver 的 `SWT.H_SCROLL` 同构
+        // （`DatabaseNavigatorTree.java:327`），而不是像旧实现那样把每行钉死在视口宽。
+        //
+        // `restrict_scroll_to_axis` 必须挂：外层只有横向溢出，gpui 会把竖向滚轮的 y 重映射
+        // 成 x（`gpui-pre-0.3.11/src/style.rs:207-216`），实测未挂时滚树会同时把整片树横向
+        // 推移 -60px；挂上后「竖轮只滚树、横轮只滚 x」。
         body.child(
             div().flex_1().min_h_0().w_full().child(
-                v_virtual_list(
-                    entity,
-                    "nav-tree-rows",
-                    sizes,
-                    move |this, range: std::ops::Range<usize>, _window, cx| {
-                        range
-                            .map(|ix| this.render_nav_row(ix, cx))
-                            .collect::<Vec<AnyElement>>()
-                    },
-                )
-                .track_scroll(&scroll),
+                div()
+                    .id("nav-tree-viewport")
+                    .size_full()
+                    .overflow_x_scroll()
+                    .restrict_scroll_to_axis()
+                    .track_scroll(&scroll_x)
+                    .horizontal_scrollbar(&scroll_x)
+                    .child(
+                        div()
+                            .h_full()
+                            .w_full()
+                            .min_w(rems(ui::NAV_TREE_CANVAS_W))
+                            .child(
+                                v_virtual_list(
+                                    entity,
+                                    "nav-tree-rows",
+                                    sizes,
+                                    move |this, range: std::ops::Range<usize>, _window, cx| {
+                                        range
+                                            .map(|ix| this.render_nav_row(ix, cx))
+                                            .collect::<Vec<AnyElement>>()
+                                    },
+                                )
+                                .track_scroll(&scroll),
+                            ),
+                    ),
             ),
         )
     }
