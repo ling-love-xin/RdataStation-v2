@@ -190,6 +190,13 @@ pub struct EditorShared {
     /// 纯数据（`Vec<String>`），可跨扫描工作线程 `Arc` 传递。
     pub(crate) catalog_snapshots:
         Rc<RefCell<std::collections::HashMap<crate::model::DocumentId, Arc<Catalog>>>>,
+    /// 【2026-11-09】目录快照代际：`set_catalog_snapshot` / `retain_catalog_snapshots`
+    /// **真的改了内容**才 +1。宿主泵每拍用同一份 `Arc` 重复推（`Arc::ptr_eq` 相等即
+    /// 不涨）；切连接 / 切 Schema 会拿到另一份目录 → 涨。
+    ///
+    /// 用途：面板在 render 权威同步点比这个值，变了就重建逐单元诊断——否则切连接后
+    /// 已有的单元波浪线要等用户下一次敲键或执行才按新快照刷新（§15.15 未覆盖 2）。
+    pub(crate) catalog_revision: Rc<std::cell::Cell<u64>>,
     /// 【#54 C6/C7】跳转定义目标解析端口（宿主注入；未注入 = 内核走默认文档内移动）
     pub(crate) show_document_port: Rc<RefCell<Option<ShowDocumentPort>>>,
     /// 【书签】每文档一份书签（与 sidecar 同一数据源：`file_meta::Bookmark`）。
@@ -227,6 +234,7 @@ impl Clone for EditorShared {
             kernel_port: self.kernel_port.clone(),
             receipts: self.receipts.clone(),
             catalog_snapshots: self.catalog_snapshots.clone(),
+            catalog_revision: self.catalog_revision.clone(),
             show_document_port: self.show_document_port.clone(),
             show_folds: self.show_folds.clone(),
             indent_folding: self.indent_folding.clone(),
@@ -277,6 +285,7 @@ impl EditorShared {
             kernel_port: Rc::new(RefCell::new(None)),
             receipts: Rc::new(RefCell::new(Vec::new())),
             catalog_snapshots: Rc::new(RefCell::new(std::collections::HashMap::new())),
+            catalog_revision: Rc::new(std::cell::Cell::new(0)),
             show_document_port: Rc::new(RefCell::new(None)),
             show_folds: Rc::new(std::cell::Cell::new(true)),
             indent_folding: Rc::new(std::cell::Cell::new(true)),
@@ -386,6 +395,7 @@ mod tests {
     };
     use crate::model::DocumentId;
     use crate::session::Session;
+    use std::sync::Arc;
 
     fn notebook(doc: &DocumentId) -> (EditorShared, NotebookState) {
         let shared = EditorShared::new();
@@ -567,6 +577,78 @@ mod tests {
         assert!(
             shared.catalog_snapshot_for(&doc_b).is_none(),
             "b.sql 已关闭 → 残留快照被清"
+        );
+    }
+
+    /// 单表目录（代际用例用；与上面测试里的局部闭包同构）
+    fn catalog_arc(name: &str) -> Arc<crate::completion::Catalog> {
+        std::sync::Arc::new(crate::completion::Catalog {
+            objects: vec![crate::completion::Candidate {
+                label: name.to_string(),
+                kind: crate::completion::CandidateKind::Table,
+                detail: None,
+            }],
+            columns: vec![],
+            truncated: false,
+        })
+    }
+
+    /// 【2026-11-09 / §16.1 A2】目录快照代际只在内容真的变时推进
+    ///
+    /// 宿主泵每 1 秒用**同一份 `Arc`** 重复推一次（幂等覆盖）；代际要是每拍都涨，
+    /// 面板就会每秒整批重建一遍逐单元诊断——那是白跑。所以这里钉两件事：
+    /// 同值重复推不动、真换目录 / 真删条目才动。
+    #[test]
+    fn catalog_revision_only_moves_when_the_snapshot_really_changes() {
+        let shared = EditorShared::new();
+        let doc = DocumentId::new("a.sql");
+        let first = catalog_arc("t_a");
+        assert_eq!(shared.catalog_revision(), 0, "初始代际 0");
+
+        shared.set_catalog_snapshot(&doc, Some(first.clone()));
+        let after_first = shared.catalog_revision();
+        assert!(after_first > 0, "首次注入要推进代际");
+
+        shared.set_catalog_snapshot(&doc, Some(first));
+        assert_eq!(
+            shared.catalog_revision(),
+            after_first,
+            "同一份 Arc 重复推（宿主 1s 一拍）不动代际"
+        );
+
+        shared.set_catalog_snapshot(&doc, Some(catalog_arc("t_b")));
+        assert!(
+            shared.catalog_revision() > after_first,
+            "换成另一份目录（切连接 / 切 Schema）要推进代际"
+        );
+
+        let before_remove = shared.catalog_revision();
+        shared.set_catalog_snapshot(&doc, None);
+        assert!(
+            shared.catalog_revision() > before_remove,
+            "清掉条目（目录未载好）要推进代际"
+        );
+
+        let before_noop = shared.catalog_revision();
+        shared.set_catalog_snapshot(&doc, None);
+        assert_eq!(
+            shared.catalog_revision(),
+            before_noop,
+            "本来就没有条目时推 None 不动代际"
+        );
+
+        shared.set_catalog_snapshot(&doc, Some(catalog_arc("t_a")));
+        let before_empty_retain = shared.catalog_revision();
+        shared.retain_catalog_snapshots(&[doc.clone()]);
+        assert_eq!(
+            shared.catalog_revision(),
+            before_empty_retain,
+            "retain 没真删东西不动代际"
+        );
+        shared.retain_catalog_snapshots(&[]);
+        assert!(
+            shared.catalog_revision() > before_empty_retain,
+            "retain 真删了条目（关文档）要推进代际"
         );
     }
 }

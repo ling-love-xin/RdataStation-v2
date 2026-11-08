@@ -408,6 +408,9 @@ pub struct EditorHostPanel {
     /// 【遗留】通用模式 Markdown 文档的渲染态：true = 显示渲染视图（TextView::markdown），
     /// false = 源码编辑器（默认）。仅对 `ScriptFileType::Markdown` 生效；非 markdown 文档忽略。
     pub(crate) markdown_preview: bool,
+    /// 【2026-11-09】最近一次比对过的目录快照代际（render 权威同步点缓存）：
+    /// 与 `shared.catalog_revision()` 不等就整批重建逐单元诊断。
+    pub(crate) catalog_revision: u64,
 }
 
 pub mod bookmarks;

@@ -244,16 +244,27 @@ impl EditorShared {
         doc: &crate::model::DocumentId,
         catalog: Option<Arc<Catalog>>,
     ) {
-        match catalog {
-            Some(catalog) => {
-                self.catalog_snapshots
-                    .borrow_mut()
-                    .insert(doc.clone(), catalog);
+        let changed = {
+            let mut snapshots = self.catalog_snapshots.borrow_mut();
+            match catalog {
+                Some(catalog) => match snapshots.insert(doc.clone(), catalog.clone()) {
+                    // 同一个 `Arc` = 宿主泵这一拍推的还是那份目录（常见情形，不涨代际）
+                    Some(previous) => !Arc::ptr_eq(&previous, &catalog),
+                    None => true,
+                },
+                None => snapshots.remove(doc).is_some(),
             }
-            None => {
-                self.catalog_snapshots.borrow_mut().remove(doc);
-            }
+        };
+        if changed {
+            self.catalog_revision
+                .set(self.catalog_revision.get().wrapping_add(1));
         }
+    }
+
+    /// 【2026-11-09】目录快照代际（每次内容真的变了才 +1）。面板在 render 权威同步点
+    /// 比这个值：变了就重建逐单元诊断，切连接 / 切 Schema 后不必等下一次敲键。
+    pub fn catalog_revision(&self) -> u64 {
+        self.catalog_revision.get()
     }
 
     /// 【#54 B】取某文档的目录快照（无条目 = 未注入，该文档扫描不参与语义诊断）
@@ -265,7 +276,15 @@ impl EditorShared {
     /// 现存文档 id 传进来——关闭文档的目录快照不积内存；文档 id 不复用，残留本
     /// 无害，关一个清一个更干净）
     pub fn retain_catalog_snapshots(&self, alive: &[crate::model::DocumentId]) {
-        let mut snapshots = self.catalog_snapshots.borrow_mut();
-        snapshots.retain(|doc, _| alive.contains(doc));
+        let removed = {
+            let mut snapshots = self.catalog_snapshots.borrow_mut();
+            let before = snapshots.len();
+            snapshots.retain(|doc, _| alive.contains(doc));
+            before - snapshots.len()
+        };
+        if removed > 0 {
+            self.catalog_revision
+                .set(self.catalog_revision.get().wrapping_add(1));
+        }
     }
 }

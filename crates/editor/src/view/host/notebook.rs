@@ -132,6 +132,18 @@ impl EditorHostPanel {
         });
     }
 
+    /// 【2026-11-09】重建**全部**单元的诊断（目录快照变了就整批刷）
+    ///
+    /// 触发点在 render 权威同步点（`shared.catalog_revision()` 变化 → `cx.defer`）。
+    /// 切连接 / 切 Schema 后宿主 1s 一拍推新快照，这里跟上——否则已有单元的语义
+    /// 波浪线要等用户下一次敲键或执行才刷新（§15.15 未覆盖 2）。
+    pub(crate) fn rebuild_all_cell_diagnostics(&self, cx: &mut Context<Self>) {
+        // 逐个走同一个入口（三源合并只在一处），不另写一套批量逻辑。
+        for id in self.cell_editors.keys() {
+            self.rebuild_cell_diagnostics(id, cx);
+        }
+    }
+
     /// 取本文档的笔记状态（渲染用快照）
     pub(crate) fn notebook_state(&self) -> crate::cell::NotebookState {
         self.shared.notebook_state(&self.document)

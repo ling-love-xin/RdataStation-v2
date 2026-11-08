@@ -506,3 +506,107 @@ fn a_failing_cell_run_marks_its_own_cell_and_a_successful_rerun_clears_it(
         "重跑成功后上一次的执行错误必须清掉（不留过期波浪线）"
     );
 }
+
+// ===== 【§16.1 A2】目录快照变更 → 不必等敲键 =====
+
+/// 一份两单元的 `.rdsnote`：c1 引用表 `t_old`（词法干净），c2 不引用任何表
+fn analysis_note_referencing_a_table() -> &'static str {
+    r###"{"version":1,"session":{"id":"default","default_connection":null,"env":null},"cells":[
+        {"id":"c1","kind":"sql","body":"select * from t_old;"},
+        {"id":"c2","kind":"sql","body":"select 1;"}]}"###
+}
+
+/// 目录快照（只给一张表的目录就够：语义段只关心表/列在不在）
+fn catalog_with_one_table(name: &str) -> std::sync::Arc<crate::completion::Catalog> {
+    std::sync::Arc::new(crate::completion::Catalog {
+        objects: vec![crate::completion::Candidate {
+            label: name.to_string(),
+            kind: crate::completion::CandidateKind::Table,
+            detail: None,
+        }],
+        columns: vec![(
+            name.to_string(),
+            "id".to_string(),
+            Some("INTEGER".to_string()),
+        )],
+        truncated: false,
+    })
+}
+
+/// 【A2】目录快照一变（切连接 / 切 Schema），已有单元的语义诊断跟着刷新
+///
+/// 区分性：旧实现只在「敲键 / 执行」时重建，这里**一次都不敲**——只换快照 + 渲一帧，
+/// 若没有 render 权威同步点那条重建，c1 会一直挂着旧目录的结论（这里会红）。
+#[gpui_kit::test]
+fn a_new_catalog_snapshot_refreshes_cell_diagnostics_without_typing(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::file(
+            r"D:\notes\catalog_rev.rdsnote",
+            analysis_note_referencing_a_table(),
+            EditorMode::Analysis,
+        ))
+        .id()
+        .clone();
+    // 目录里有 t_old：c1 的引用能解析，语义段无话可说
+    shared.set_catalog_snapshot(&id, Some(catalog_with_one_table("t_old")));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_cell_editors(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.run_until_parked();
+
+    // 有 `unknown_table` 这条 code 的诊断数（语义层专属，词法层不产这个 code）
+    let unknown_tables_of = |cx: &mut gpui_kit::VisualTestContext, cell_id: &str| {
+        let editor = cx.update(|_window, cx| {
+            panel
+                .read(cx)
+                .cell_editors
+                .get(cell_id)
+                .cloned()
+                .expect("单元编辑器实例要存在")
+        });
+        cx.update(|_window, cx| {
+            editor.update(cx, |state, _| {
+                state
+                    .diagnostics()
+                    .map(|set| {
+                        set.range(0..usize::MAX)
+                            .filter(|entry| {
+                                entry
+                                    .diagnostic
+                                    .code
+                                    .as_ref()
+                                    .is_some_and(|code| code.as_ref() == "unknown_table")
+                            })
+                            .count()
+                    })
+                    .unwrap_or(0)
+            })
+        })
+    };
+
+    assert_eq!(
+        unknown_tables_of(cx, "c1"),
+        0,
+        "目录里有 t_old：不该报未知表"
+    );
+    assert_eq!(unknown_tables_of(cx, "c2"), 0, "c2 不引用表，本就干净");
+
+    // 换成不含 t_old 的目录（等价于切到了别的连接 / Schema）：不敲键，只让面板重绘一帧
+    // （真实入口里「切连接」的那次点击本身就会 `cx.notify()`，这里如实模拟那次重绘）
+    shared.set_catalog_snapshot(&id, Some(catalog_with_one_table("t_new")));
+    cx.update(|_window, cx| panel.update(cx, |_panel, cx| cx.notify()));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.run_until_parked();
+
+    assert!(
+        unknown_tables_of(cx, "c1") >= 1,
+        "目录换成不含 t_old 的那一份后，c1 的未知表诊断要在不敲键的情况下出现"
+    );
+    assert_eq!(
+        unknown_tables_of(cx, "c2"),
+        0,
+        "整批重建只针对引用了表的单元，c2 依旧干净"
+    );
+}

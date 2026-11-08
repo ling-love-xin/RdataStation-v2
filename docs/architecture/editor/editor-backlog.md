@@ -795,6 +795,76 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 3. 结果卡片的「定位」按钮仍只作用于主编辑器路径（`jump_to_error_site`）；单元的诊断目前
    只画波浪线、不做跳转（单元里位置本来就在眼前，跳转需求未出现）。
 
+## 15.16 §16.1 的 A4 / A2 落地（2026-11-09）
+
+按 §16.1 里 assistant 自排的顺序（A4 → A2 → A1）推进，本条收口前两项。A1 需要先定会话成本
+口径（每单元一份 server 会话 vs 每文档一份会话 + 虚拟 URI 多文档），不擅自开工。
+
+### A4 删 `save_cell_update` 死代码
+
+**问题**：`ports/result_service.rs` 的 `save_cell_update`（原 `:105-158`）拼单条 `UPDATE … WHERE`
+逐格改；T2a 批量提交（`CommitPending` → `submit_pending_changes`）落地后全仓零调用方，只留一条
+注释自述"遗留的单格更新路径"——读代码的人会误以为单格编辑还走这条路。
+
+**改法**：删方法体与 `:144` 那句注释；模块文档首行清单里的"单元格回写与结果导出"改成
+"结果导出"，并补一段口径：**单格回写不在这里**，要恢复单格编辑请接 T2a 批量提交链，不要再拼
+单条 `UPDATE`。
+
+**验证**：`cargo check -p rds-editor --lib -j 1` → exit 0（7.80s），零 warning；全仓
+`grep save_cell_update` → 0 命中。
+
+### A2 目录快照代际 → 切连接不必等敲键
+
+**问题**（§15.15 未覆盖 2）：`rebuild_cell_diagnostics` 每次重建都现取目录快照，但**触发点只有
+"单元正文变化"和"执行回执"**。切连接 / 切 Schema 后，宿主泵把新目录推给 `EditorShared`，已有
+单元的语义波浪线却要等用户下一次敲键或执行才按新目录算。
+
+**为什么是代际计数而不是订阅**：`EditorShared` 是 `Rc` 句柄，没有"文档激活 / 绑连"事件流（绑定
+发生在 editor 侧、跨 crate 不推事件），加一套订阅是架构级改动。而宿主泵
+（`ports/editor_catalog.rs::pump`）本来就每 1 秒推一拍快照，**"快照真的变了"这个事实只有 shared
+自己知道**——那就让它记一个代际，面板在既有的 render 权威同步点上比对（与行号/书签列/软换行/
+自动闭合等十余个设置同步点完全同款），零内核改动、零跨 crate 订阅。
+
+**改法**：
+
+| 位置 | 改动 |
+| --- | --- |
+| `shared/mod.rs` | 新字段 `catalog_revision: Rc<Cell<u64>>`（紧邻 `catalog_snapshots`；Clone / `new` 各一行） |
+| `shared/env_lsp.rs::set_catalog_snapshot` | 用 `Arc::ptr_eq` 判"内容真变化"才 +1——宿主泵 1s 一拍推的是同一份 `Arc`，相等即不涨（否则面板每秒整批重建一遍） |
+| `shared/env_lsp.rs::catalog_revision`（新增） | 读代际 |
+| `shared/env_lsp.rs::retain_catalog_snapshots` | 只在实际删了条目（关文档）时才 +1 |
+| `view/host/mod.rs` + `construct.rs` | 面板缓存字段 `catalog_revision: u64`（最近一次比对过的代际） |
+| `view/host/render.rs` | 权威同步点：代际不等 → 更新缓存 → `cx.defer` 重建（**不在 render 里直接写内核**，同单元 Change 回调那条理由） |
+| `view/host/notebook.rs::rebuild_all_cell_diagnostics`（新增） | 遍历 `cell_editors` 逐个走同一个 `rebuild_cell_diagnostics`——三源合并只在一处，不另写批量逻辑；非笔记模式 `cell_editors` 为空 → 安全空转 |
+| `view/tests/legacy.rs` | 新用例 `a_new_catalog_snapshot_refreshes_cell_diagnostics_without_typing`：目录先含 `t_old`（c1 干净）→ 换成只含 `t_new` 的一份 → **不敲键**，只渲一帧 → c1 出现 `unknown_table` 诊断，c2 仍干净 |
+| `shared/mod.rs`（单测） | 新用例 `catalog_revision_only_moves_when_the_snapshot_really_changes`：同一份 `Arc` 重复推不涨 / 换目录涨 / 清条目涨 / 空推不涨 / `retain` 没真删不涨 |
+
+**区分性**：旧实现在这条用例上必红——不敲键就没有任何重建触发点。实测把 render 里那段同步点
+临时改成 `if false && …`，该用例立刻红（0 passed / 1 failed），恢复后绿。
+
+**验证**：
+
+- `cargo check -p rds-editor --lib -j 1` → exit 0，零 warning；`--all-targets -j 1` → exit 0（42.77s）
+- 定向：`catalog_revision_only_moves_when_the_snapshot_really_changes` → 1 passed；
+  `a_new_catalog_snapshot_refreshes_cell_diagnostics_without_typing` → 1 passed
+- `cargo test -p rds-editor --lib -- --test-threads=1` → **768 passed / 3 failed / 1 ignored**
+  （= §15.15 基线 766 + 本轮 2 条；三条失败仍是 `legacy.rs:58` / `notebook_win.rs:347` /
+  `results_a.rs:290` 那三条固定失败）
+
+**未覆盖（如实记录）**：
+
+1. **重建发生在"面板下一次重绘"**：render 是权威同步点，所以快照变了而面板一帧都不重绘时不会
+   自发重建。真实路径里"切连接"的那次点击本身就会 `cx.notify()`（`notebook_switch_connection`
+   末尾），切 Tab / 任何交互也同样触发，所以实际感知是"点完就刷"。1s 泵的静默推快照本身不产生
+   重绘——这是本条与"订阅式即时刷新"的差别，选择它是为了零跨 crate 订阅（见上文理由）。
+2. **只覆盖"目录快照变了"**：`sql_dialect_for_document` 的方言变化若不同时伴随目录变化（同一连接
+   换方言这类极端组合），仍要等下一次敲键。把方言纳入代际是同一模式的第二条计数，等真出现再补。
+3. **主编辑器不在本条范围**：主编辑器语义诊断走 `submit_scan`，文本不变就不重扫；切连接后主编辑器
+   的未知表波浪线同样要等敲键。要同一口径需把代际也接到 `submit_scan` 的触发条件上（另一条接线）。
+4. **1 秒粒度**：宿主泵一拍 1s，所以"切完连接"到"快照到达 shared"最坏 1s（与语义诊断本身晚一拍
+   同一哲学）。
+
+
 ## 16. 遗留总账（2026-11-09 全量盘点）
 
 **盘点口径**：文档声明（§一 ~ §15）+ 代码内 `TODO|FIXME|未接线|暂不支持|暂不|遗留|待接线`
@@ -810,9 +880,9 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 | # | 项 | 证据 | 现在的影响 | 处置 |
 | --- | --- | --- | --- | --- |
 | A1 | **per-cell 语言服务会话**（分析模式的单元补全/诊断） | `ports/editor_lsp.rs:25-27`「v1 只服务 Python（`.py`）；分析模式（`.rdsnote`）暂不服务；Markdown 留后」；主编辑器装 provider 只在 `view/host/mod.rs` / `session.rs` 两处 | Python / R / Julia 单元没有补全与诊断；`choose_completion` 对 `Analysis` 仍可能把 LSP provider 装到主 state（笔记模式无人调用，无害但无用） | 一条改动同时收口三笔账：§15.8 未做 2、§15.14 未覆盖（语言面）、§15.15 未覆盖 1。需虚拟 URI + 每单元一份会话，**架构级，但不需要产品决定**——只要接受"每单元一个 server 会话"的资源成本 |
-| A2 | **连接变更未订阅** | §15.15 未覆盖 2；`rebuild_cell_diagnostics` 每次现取快照，但触发点是敲键/执行 | 切连接 / 切 Schema 后，已有单元的语义诊断要下一次敲键或执行才按新快照刷新 | 订阅连接事件 → 主动重建全部单元。工作量小，属接线 |
+| A2 | **连接变更未订阅** | §15.15 未覆盖 2；`rebuild_cell_diagnostics` 每次现取快照，但触发点是敲键/执行 | 切连接 / 切 Schema 后，已有单元的语义诊断要下一次敲键或执行才按新快照刷新 | **已修（§15.16，2026-11-09）**：不订阅，改「目录快照代际 + render 权威同步点」——同一份 `Arc` 重复推不涨，真换目录才涨，面板重绘时整批重建 |
 | A3 | **折叠候选双算未合并** | §15.3 第 1 条：前台 `sync_fold`（`fold::install`，全文）与后台 scan（`fold::spans`，全文）各算一次，后者每编辑一拍 | 纯 CPU 重复，未见卡顿；合并会改候选刷新时机（后台成为唯一来源），属行为变更 | **有意推迟**，等折叠区人工验收（`ui-todo.md` V-6/V-7）确认后再动 |
-| A4 | `save_cell_update` 死代码 | `ports/result_service.rs:105`，全仓 `grep save_cell_update` 仅 1 命中（定义本身），零调用方；注释自述「遗留的单格更新路径（无调用方；T2a 批量提交已取代它）」 | 无运行时影响；留着会误导"单格更新还走这条路" | 直接删（含 `:144` 那句注释）。若哪天要恢复单格编辑，是重新接 T2a 批量链，不是复活这条 |
+| A4 | `save_cell_update` 死代码 | `ports/result_service.rs:105`，全仓 `grep save_cell_update` 仅 1 命中（定义本身），零调用方；注释自述「遗留的单格更新路径（无调用方；T2a 批量提交已取代它）」 | 无运行时影响；留着会误导"单格更新还走这条路" | **已删（§15.16，2026-11-09）**；模块文档改为"单格回写不在这里，要恢复请接 T2a 批量链" |
 | A5 | `inline_completion` 置灰（B1 预留） | §八 B1：设置项 `disabled` + 默认关 + hint「能力已预留」；内核 `CompletionProvider::inline_completion()` 默认返回空 | 用户看到开关但点不动（刻意的） | **放开 `disabled` 时必须同步接 provider**，否则从"刻意的灰"变成"静默失效" |
 
 ### 16.2 需你拍板（产品口径 / 成本量级 / 架构取舍）
@@ -853,7 +923,7 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 
 | 项 | 现状 |
 | --- | --- |
-| `cargo test -p rds-editor --lib -- --test-threads=1` | **766 passed / 3 failed / 1 ignored**。三条固定失败：`view/tests/legacy.rs:58`（渲染树找不到 `editor-nb-cell-source-c1`）、`view/tests/notebook_win.rs:347`（多输出块）、`view/tests/results_a.rs:290`（表头排序箭头）——归因见 `../ui/gpui-kit-0.9.0-upgrade-report.md` §12（观察层口径，非产品缺失） |
+| `cargo test -p rds-editor --lib -- --test-threads=1` | **768 passed / 3 failed / 1 ignored**（2026-11-09 §15.16 后）。三条固定失败：`view/tests/legacy.rs:58`（渲染树找不到 `editor-nb-cell-source-c1`）、`view/tests/notebook_win.rs:347`（多输出块）、`view/tests/results_a.rs:290`（表头排序箭头）——归因见 `../ui/gpui-kit-0.9.0-upgrade-report.md` §12（观察层口径，非产品缺失） |
 | `ui-todo.md` §五 V-1 … V-8 | **8 项全 ⬜**（V-1 对话框关闭残影 / V-2 右 Dock 草稿行 / V-3 导航树虚拟行 / V-4 列类型警示行 / V-5 标题栏折叠还原 / V-6 书签图标在 gutter 最左 / V-7 有说明折叠行箭头常显+横线 / V-8 悬停说明气泡）。判的是"画面有没有"，自动化观察层读不到，只能人工目视 |
 | `cargo check --workspace` | 不通过：`windows` crate `STATUS_STACK_BUFFER_OVERRUN`（环境限制，只用 `-p` 单 crate） |
 | `cargo check -p gpui-base --all-targets` | 必失败：bench `text_view_scroll` 缺 `gpui_fast_platform`（只用 `--lib`） |
@@ -863,10 +933,10 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 | 项 | 现状（2026-11-09 实测） | 处置 |
 | --- | --- | --- |
 | origin/main 未推送 | `git rev-list --left-right --count origin/main...main` = `0	106`（本地领先 **106** 个提交，`origin/main` 停在 `9ce3c98e`）。旧记录「71」已过期 | 用户口径：只做本地合并，推送另行安排 |
-| 外部线在途 | `git status --short` 只剩 insight 线：`docs/architecture/insight/prototypes/eda/eda.html`（M）+ 6 个未跟踪（`insight-correlation-l1-spec.md`、`col-bool/col-date/col-num/col-text/eda-by-type.html`） | 一律不碰。此前记录的 `crates/database/src/nav_view/{rows,tests}.rs` 已被他人提交 |
+| 外部线在途 | `git status --short` 除本模块外有三条线：① insight 线 `docs/architecture/insight/prototypes/eda/eda.html`（M）+ 6 个未跟踪（`insight-correlation-l1-spec.md`、`col-bool/col-date/col-num/col-text/eda-by-type.html`）；② 导航树线 `crates/database/src/nav_view/{rows,chrome,nav_view,tests}.rs`（M）；③ 结果面板统计线 `crates/result_panel/src/{ports,grid/stats,panel/data,panel/lifecycle}.rs`（M，只加了 `StatsItem` 模型与字段、消费端未接，曾一度拦住 `rds-editor` 编译） | 一律不碰；被他们拦门禁时等其改完再重跑，不改别人的文件 |
 | 结果面板遗留 | 维护在 `result-panel-handoff.md` §2.4，本模块不重复；剩余缺口是**渲染期尚未消费事实档** | 跨 crate，归结果面板线 |
 
-### 16.7 本轮（2026-11-08 ~ 11-09）已闭合，别重复立项
+### 16.7 本轮（2026-11-08 ~ 11-09）已闭合 12 项，别重复立项
 
 | 项 | 落点 |
 | --- | --- |
@@ -881,5 +951,7 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 | 分析模式逐单元补全 | §15.8（原 §15.1 第 4 条） |
 | 逐单元诊断（词法/语义） | §15.14 |
 | 单元执行错误进单元诊断 + 快照每次现取 | §15.15（闭合 §15.14 未覆盖 1、2） |
+| `save_cell_update` 死代码删除（§16.1 A4） | §15.16 |
+| 目录快照代际 → 切连接不必等敲键（§16.1 A2） | §15.16（闭合 §15.15 未覆盖 2） |
 
 

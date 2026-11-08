@@ -93,6 +93,19 @@ impl Render for EditorHostPanel {
                 state.set_smart_indent(want_smart_indent, window, cx);
             });
         }
+        // 【2026-11-09】目录快照代际：主机泵每拍重复推同一份 `Arc`（代际不动），
+        // 切连接 / 切 Schema 才拿到另一份目录（代际 +1）。变了就整批重建逐单元诊断，
+        // 否则已有单元的语义波浪线要等下一次敲键或执行才刷新。
+        //
+        // 这里是**与上面十余个设置同步点同款**的做法：render 是权威同步点，值变化才写内核。
+        // 试过 `cx.defer` 挪出渲染栈（更"纯"），但渲染周期里排的 defer 在 `window.draw`
+        // 下不会被摊平（headless 用例实测），只能直接同步。代价可忽略：诊断集合只有
+        // `clear` + `push`，重建量 = 每个 SQL 单元一次，且只在代际变化的那一帧。
+        let catalog_revision = self.shared.catalog_revision();
+        if self.catalog_revision != catalog_revision {
+            self.catalog_revision = catalog_revision;
+            self.rebuild_all_cell_diagnostics(cx);
+        }
         let (bg, primary, muted) = {
             let theme = cx.theme();
             (

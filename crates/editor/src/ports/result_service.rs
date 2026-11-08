@@ -4,7 +4,11 @@
 //! - SQL 过滤（拼接 WHERE 重新查询）
 //! - DuckDB 深度分析（针对临时表）
 //! - 临时表创建与句柄获取
-//! - 单元格回写与结果导出
+//! - 结果导出
+//!
+//! **单格回写不在这里**：曾有一条 `save_cell_update`（拼 UPDATE 语句逐格改），
+//! T2a 批量提交落地后已无调用方，2026-11-09 删除。要恢复单格编辑请接 T2a 的
+//! 批量提交链，不要再拼单条 UPDATE。
 //!
 //! **洞察不属于本模块**。列画像 / 质量评分 / 规则 / 表探查 / Schema 洞察
 //! 归 `crates/insight`，统一从 `insight::InsightService` 进入
@@ -100,61 +104,6 @@ impl ResultService {
         rows: &[Vec<serde_json::Value>],
     ) -> Result<String, CoreError> {
         engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(columns, rows)
-    }
-
-    pub async fn save_cell_update(
-        conn_id: String,
-        table_name: &str,
-        column_name: &str,
-        new_value: &serde_json::Value,
-        row_identity: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<(usize, String), CoreError> {
-        use engine::connection_manager;
-        use engine::services::sql_service::{SqlExecuteOptions, SqlService, value_to_sql};
-
-        let set_clause = format!("`{}` = {}", column_name, value_to_sql(new_value));
-
-        let where_parts: Vec<String> = row_identity
-            .iter()
-            .filter(|(k, _)| *k != column_name)
-            .map(|(col, val)| format!("`{}` = {}", col, value_to_sql(val)))
-            .collect();
-
-        if where_parts.is_empty() {
-            return Err(CoreError::common(shared::error::CommonError::General(
-                "无法构建 WHERE 条件：行标识数据为空".to_string(),
-            )));
-        }
-
-        let sql = format!(
-            "UPDATE `{}` SET {} WHERE {}",
-            table_name,
-            set_clause,
-            where_parts.join(" AND ")
-        );
-
-        let manager = connection_manager::get_connection_manager();
-        let service = SqlService::new(manager.clone());
-        let opts = SqlExecuteOptions {
-            channel: None,
-            record_history: false,
-            use_transaction: true,
-            timeout_ms: Some(10000),
-            use_cache: false,
-            // 遗留的单格更新路径（无调用方；T2a 批量提交已取代它）：不接 schema 上下文
-            schema: None,
-            lineage: None,
-        };
-
-        let result = service.execute(Some(conn_id), &sql, opts).await?;
-        let affected = match result.result.affected_rows {
-            Some(n) => n,
-            None => {
-                tracing::warn!("数据库未返回 affected_rows，UPDATE 影响行数未知");
-                0
-            }
-        };
-        Ok((affected as usize, format!("成功更新 {} 行", affected)))
     }
 
     pub fn export_result(

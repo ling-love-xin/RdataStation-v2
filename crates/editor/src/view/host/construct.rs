@@ -624,6 +624,7 @@ impl EditorHostPanel {
             cell_editors: std::collections::HashMap::new(),
             _cell_editor_subs: std::collections::HashMap::new(),
             markdown_preview: false,
+            catalog_revision: 0,
         };
         // 【LSP】建面板即向宿主要一次服务（有 → didOpen + 挂 provider；无 → 如实不接）
         panel.sync_lsp_session(cx);
