@@ -1915,10 +1915,12 @@ impl NavView {
         let entity = cx.entity();
         let scroll = self.list_scroll.clone();
         let scroll_x = self.tree_scroll_x.clone();
-        // 树区 = 视口（可横向滚动）+ 画布（定宽）。虚拟列表每行宽度取自列表元素自身
-        // bounds（`vendor/gpui-base/src/virtual_list.rs:624-635`），所以行宽 = 画布宽，
-        // 画布宽于面板时靠外层横向滚动看全——DBeaver 的 `SWT.H_SCROLL` 同构
-        // （`DatabaseNavigatorTree.java:327`），而不是像旧实现那样把每行钉死在视口宽。
+        // 树区 = 视口（可横向滚动）+ 画布（下界 = `NAV_TREE_CANVAS_W`，与左栏起步宽同源）。
+        // 虚拟列表每行宽度取自列表元素自身 bounds（`vendor/gpui-base/src/virtual_list.rs:624-635`），
+        // 所以行宽 = `max(视口宽, 画布下界)`：面板处于正常宽度时行宽就是面板宽，行内右对齐
+        // （分组批量图标 / 归属域列）贴面板右缘并跟随面板拖拽；面板被拖得比起步宽更窄时
+        // 才横向溢出、靠外层横向滚动看全——DBeaver 的 `SWT.H_SCROLL` 同构
+        // （`DatabaseNavigatorTree.java:327`）。
         //
         // `restrict_scroll_to_axis` 必须挂：外层只有横向溢出，gpui 会把竖向滚轮的 y 重映射
         // 成 x（`gpui-pre-0.3.11/src/style.rs:207-216`），实测未挂时滚树会同时把整片树横向

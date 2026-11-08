@@ -199,12 +199,17 @@ pub const NAV_NAME_MIN_W: f32 = 5.0;
 /// 全名仍由 hover 卡兜底。与 `NAV_NAME_MIN_W` 一起构成名称槽的上下限，
 /// 行内其它信息（注释 / 统计 / 归属域）紧跟名称之后左锚排列（行内不再做右对齐）。
 pub const NAV_NAME_MAX_W: f32 = 24.0;
-/// 导航树**画布宽**（30rem ≈ 480px）：横向滚动的内容宽。
+/// 导航树**画布宽**（18rem ≈ 288px @16 基准）：横向滚动的内容宽**下界**。
 ///
 /// 虚拟列表每行宽度取自列表元素自身 bounds（`vendor/gpui-base/src/virtual_list.rs:624-635`），
-/// 所以行宽 = 画布宽。画布宽于视口时靠外层横向滚动看全（DBeaver 的 `SWT.H_SCROLL` 同构，
-/// `DatabaseNavigatorTree.java:327`），而不是像旧实现那样把每行钉死在视口宽。
-pub const NAV_TREE_CANVAS_W: f32 = 30.0;
+/// 所以行宽 = `max(视口宽, 画布下界)`。下界取**左栏起步宽**（`LEFT_DOCK_WIDTH`）同源：
+/// 面板没被拖到起步宽以下时行宽就等于面板宽，行内右对齐（批量图标 / 归属域列）贴面板右缘
+/// 并跟随面板拖拽；只有面板被拖得更窄时才横向溢出、出现底部横条（DBeaver 的
+/// `SWT.H_SCROLL` 同构，`DatabaseNavigatorTree.java:327`）。
+///
+/// 早先取 30rem 时行宽被顶到 480px，面板窄于 480px 就会让右对齐点落在视口外、
+/// 拖面板也不动——右对齐看起来「失效」，故下界收到起步宽这一档。
+pub const NAV_TREE_CANVAS_W: f32 = 18.0;
 
 // ===== 控件与图标（rem 基准） =====
 
