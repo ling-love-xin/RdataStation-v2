@@ -32,7 +32,7 @@ use gpui_kit::*;
 
 use crate::cell::{Cell, CellLanguage, CellState, NotebookState, Output};
 use crate::connection::ConnectionOption;
-use crate::view::editor_menu::{editor_context_menu_entries, menu_from_entries};
+use crate::view::editor_menu::{editor_context_menu_entries, menu_from_entries, MenuExec};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -282,7 +282,9 @@ fn cell_card(
                               cx: &mut App| {
                             let entries = {
                                 let state = editor_entity.read(cx);
-                                editor_context_menu_entries(state)
+                                // 分析单元不接主执行链（单元运行走笔记本自己的入口，
+                                // 能力表也禁止通信），所以执行项在这里一律不出现
+                                editor_context_menu_entries(state, MenuExec::Hidden)
                             };
                             menu_from_entries(entries)
                         };

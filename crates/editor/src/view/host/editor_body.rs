@@ -13,7 +13,7 @@ use crate::channel::{self, ExecChannel};
 use crate::execution::ExecTarget;
 use crate::model::{EditorMode, ReadOnly};
 // 【下移】结果放置 / 下发原料定义已随结果存储搬到 rds-result-panel（经 crate::store 重导出）
-use crate::view::editor_menu::{editor_context_menu_entries, menu_from_entries};
+use crate::view::editor_menu::{editor_context_menu_entries, menu_from_entries, MenuExec};
 
 use super::*;
 impl EditorHostPanel {
@@ -50,6 +50,18 @@ impl EditorHostPanel {
             // - 可编辑（非只读/未禁用）→ 剪切/粘贴可用；有选区 → 复制/剪切可用；
             // - 挂了 definition / code action provider → 显示对应项。
             // 菜单项纯函数化（`editor_context_menu_entries`）便于 headless 断言顺序与禁用态。
+            // 执行项的能力位由宿主判定（内核 `EditorState` 不知道文档模式）：
+            // SQL 模式（能力表允许通信）→ 出现；通道/连接没就绪 → 置灰（灰的原因
+            // 由状态栏与执行提示解释，不在菜单里猜）。
+            let exec = if self.execution_allowed() {
+                if self.channel_ready().is_ok() {
+                    MenuExec::Ready
+                } else {
+                    MenuExec::Unavailable
+                }
+            } else {
+                MenuExec::Hidden
+            };
             let editor_entity = self.editor.clone();
             let context_menu = move |_menu: gpui_kit::component::native_menu::NativeMenu,
                                      _window: &mut Window,
@@ -58,7 +70,7 @@ impl EditorHostPanel {
                 // 块结束即释放 `cx` 上的不可变借用），再翻译成菜单
                 let entries = {
                     let state = editor_entity.read(cx);
-                    editor_context_menu_entries(state)
+                    editor_context_menu_entries(state, exec)
                 };
                 menu_from_entries(entries)
             };
