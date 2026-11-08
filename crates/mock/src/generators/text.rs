@@ -218,6 +218,3 @@ pub(crate) fn generate_from_template(template: &str, rng: &mut StdRng) -> String
     result
 }
 
-#[cfg(test)]
-mod tests;
-

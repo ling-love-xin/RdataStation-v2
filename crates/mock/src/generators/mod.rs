@@ -4,6 +4,11 @@ mod numeric;
 mod datetime;
 mod text;
 
+// 生成器用例（拆目录时从原单文件的内联 `mod tests` 提出来，必须在这里声明回来，
+// 否则文件成了孤儿：测试不参与编译，`cargo test -p rds-mock --lib` 只报模块找不到）
+#[cfg(test)]
+mod tests;
+
 // 导入辅助函数
 use numeric::*;
 use datetime::*;

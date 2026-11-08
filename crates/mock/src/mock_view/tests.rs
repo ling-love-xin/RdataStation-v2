@@ -6086,13 +6086,11 @@ fn column_dialog_shows_type_mismatch_warning(cx: &mut TestAppContext) {
     for _ in 0..4 {
         draw(cx);
     }
-    // 把表配置生成器换成产数值的方法（与所选 Varchar 不匹配）
-    let numeric_specs = generator_catalog::specs_in(GeneratorCategory::Numeric);
-    let int_spec = numeric_specs.first().unwrap();
-    let int_gen = generator_catalog::default_of(int_spec.name).unwrap();
+    // 把「所选类型」从 Varchar 改成 Integer，生成器保持不动 —— 改类型不自动换生成器，
+    // 这条路径才会产出类型与所选类型不一致（换生成器那条路径会顺带同步类型）
     cx.update(|window, cx| {
         detail.update(cx, |view, cx| {
-            view.apply_generator_config_to_draft(id, int_gen, None, window, cx);
+            view.select_column_type(ColumnDataType::Integer, cx);
         });
         window.draw(cx).clear(cx);
     });

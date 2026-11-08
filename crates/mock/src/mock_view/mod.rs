@@ -79,7 +79,7 @@ use workbench_shell::tree;
 
 use crate::MockEngine;
 use crate::generator_catalog::{self, GeneratorCategory, GeneratorSpec, ParamField, ParamKind};
-use crate::history::{self, HistoryAction, RunRecord};
+use crate::history::{HistoryAction, RunRecord};
 use crate::models::{
     ColumnDataType, ColumnDef, ColumnDependency, GeneratorConfig, Locale, MockExportFormat,
     ReferenceDomain, ScenarioTemplate, TemplateTable, UserGenerator,

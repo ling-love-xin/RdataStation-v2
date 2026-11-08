@@ -246,13 +246,7 @@ impl MockDetailView {
                                             move |_, _, app| {
                                                 let chosen = candidate.clone();
                                                 view.update(app, |view, cx| {
-                                                    if let Some(draft) = view.draft.as_mut() {
-                                                        draft.type_label =
-                                                            column_type_label(&chosen);
-                                                        draft.def.data_type = chosen;
-                                                        draft.confidence = "manual".to_string();
-                                                    }
-                                                    cx.notify();
+                                                    view.select_column_type(chosen.clone(), cx);
                                                 });
                                             },
                                         ),
@@ -703,6 +697,20 @@ impl MockDetailView {
         cx.defer_in(window, |view, window, cx| {
             view.rebuild_params(window, cx);
         });
+        cx.notify();
+    }
+
+    /// 类型下拉的选中动作：只改「所选类型」，不换生成器。
+    ///
+    /// 改类型不自动换生成器是设计（用户可能只是改列定义），产出与所选不一致时
+    /// 由 render 里的 `type_mismatch` 在参数区顶部出警示行；抽成方法是为了让 UI 回调
+    /// 与用例走同一个入口，而不是各自复制一份写回逻辑。
+    pub(crate) fn select_column_type(&mut self, data_type: ColumnDataType, cx: &mut Context<Self>) {
+        if let Some(draft) = self.draft.as_mut() {
+            draft.type_label = column_type_label(&data_type);
+            draft.def.data_type = data_type;
+            draft.confidence = "manual".to_string();
+        }
         cx.notify();
     }
 

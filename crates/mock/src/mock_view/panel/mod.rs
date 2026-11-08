@@ -197,8 +197,11 @@ impl MockJobWatch {
 }
 
 /// 交给后台执行器的一件事（读与写共用一条路径）。
+///
+/// `pub(crate)` 而不用私有：`spawn_history` 声明成 `pub(crate)` 却收私有类型会触发
+/// `private_interfaces` 警告（`panel/history.rs` 的入参面）。
 #[derive(Clone)]
-enum HistoryTask {
+pub(crate) enum HistoryTask {
     /// 读快照（历史 + 模板）
     List,
     /// 删一条历史后读回

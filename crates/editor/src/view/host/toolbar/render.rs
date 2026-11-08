@@ -41,7 +41,13 @@ impl EditorHostPanel {
         // 档位统一）。Small 档是 min_h_8(32px)，editor 按原型 2.25rem 定高覆盖；
         // Small 档 p_1=4px 内距，恢复原型水平 8px（px_2 覆盖）。底部边框随外层
         // 滚动容器走（2026-10-28），避免横向滚动时边框跟着内容一起滚。
-        tracing::info!("【Toolbar埋点】使用 gpui-kit Toolbar 组件渲染编辑器工具栏");
+        //
+        // 埋点只在**首次**渲染打一条：render 每次重绘都会进来，光标闪烁每 0.5s 就要出帧，
+        // 每帧一条 info 会把日志刷满（`Once` 不占运行时成本，也不再随重绘重复写盘）。
+        static TOOLBAR_TRACE: std::sync::Once = std::sync::Once::new();
+        TOOLBAR_TRACE.call_once(|| {
+            tracing::info!("【Toolbar埋点】使用 gpui-kit Toolbar 组件渲染编辑器工具栏");
+        });
         let mut toolbar = Toolbar::new("editor-toolbar")
             .small()
             .h(rems(ui::EDITOR_TOOLBAR_HEIGHT))
