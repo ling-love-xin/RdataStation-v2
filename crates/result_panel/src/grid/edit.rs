@@ -2,6 +2,7 @@
 //! `cancel_edit` / 编辑框渲染）+ 提交值类型校验。
 
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::table::TableState;
 use gpui_kit::component::tooltip::Tooltip;
@@ -191,6 +192,20 @@ impl ResultGridDelegate {
         true
     }
 
+    /// 【类型感知】按给定值直接提交（布尔列的双态控件用）：先把值写进编辑态，
+    /// 再走**同一条** [`Self::commit_edit`] 通道——类型校验、脏格投影、冲突回执、
+    /// 撤销栈全都不另开路径。
+    ///
+    /// 返回 `false` = 校验没过（编辑态与红框保留，与手敲 Enter 被拒的表现一致）。
+    pub fn commit_edit_as(&mut self, value: impl Into<String>) -> bool {
+        let Some(edit) = &mut self.editing else {
+            return false;
+        };
+        edit.value = value.into();
+        edit.error = None;
+        self.commit_edit()
+    }
+
     /// 编辑框输入值同步（`InputEvent::Change` 时由宿主调；不区分“谁发的”）。
     /// 输入一变化就清掉上次的提交错误——用户已经动手改，红框该撤。
     pub fn sync_edit_value(&mut self, value: String) {
@@ -230,7 +245,67 @@ impl ResultGridDelegate {
         col_ix: usize,
         window: &mut Window,
         cx: &mut Context<TableState<Self>>,
-    ) -> impl IntoElement {
+    ) -> AnyElement {
+        // 【类型感知】布尔列：双态按钮。点一下即定值提交——布尔只有两个值，要求
+        // “敲完再按 Enter”是多余的一步；提交仍走 `commit_edit_as` → 同一条校验 / 钩子
+        // 通道，脏格、冲突回执、撤销栈的表现与手敲一致。宿主没注入编辑框实体也能用
+        // （这段不碰 `InputState`，所以放在 expect 之前）。
+        if self.column_kind(col_ix) == ColumnKind::Boolean {
+            let theme = cx.theme();
+            let edit_bg = if self.row_is_local(row_ix) {
+                product_tokens::get(cx).result_local_row_background(theme)
+            } else {
+                theme.colors.background
+            };
+            let current = self
+                .editing()
+                .map(|edit| edit.value.to_ascii_lowercase())
+                .unwrap_or_default();
+            let is_true = matches!(current.as_str(), "true" | "t" | "1" | "yes");
+            let is_false = matches!(current.as_str(), "false" | "f" | "0" | "no");
+            let table = cx.entity().clone();
+            let true_button = Button::new(SharedString::from(format!(
+                "editor-result-bool-true-{row_ix}-{col_ix}"
+            )))
+            .label("true")
+            .ghost()
+            .toggled(is_true)
+            .on_click({
+                let table = table.clone();
+                move |_, _, cx| {
+                    table.update(cx, |state, cx| {
+                        state.delegate_mut().commit_edit_as("true");
+                        cx.notify();
+                    });
+                }
+            });
+            let false_button = Button::new(SharedString::from(format!(
+                "editor-result-bool-false-{row_ix}-{col_ix}"
+            )))
+            .label("false")
+            .ghost()
+            .toggled(is_false)
+            .on_click({
+                let table = table.clone();
+                move |_, _, cx| {
+                    table.update(cx, |state, cx| {
+                        state.delegate_mut().commit_edit_as("false");
+                        cx.notify();
+                    });
+                }
+            });
+            return div()
+                .id(format!("editor-result-edit-cell-{row_ix}-{col_ix}"))
+                .size_full()
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .bg(edit_bg)
+                .child(true_button)
+                .child(false_button)
+                .into_any_element();
+        }
         let state = self.edit_input.clone().expect("宿主必注入编辑框实体");
         // 幂等一次性：首次渲染时同步初值（`set_value` **不发** `InputEvent::Change`，
         // 不会把“用户改了才做”的副作用重跑一遍）。
@@ -286,6 +361,7 @@ impl ResultGridDelegate {
                     .tooltip(move |window, cx| Tooltip::new(message.clone()).build(window, cx))
             })
             .child(input)
+            .into_any_element()
     }
 }
 /// 【类型感知】按列类型校验编辑值（提交前调用；空 / `NULL` 一律放行——清掉

@@ -2415,6 +2415,42 @@ fn local_row_edit_commit_branches_to_local_hook() {
     assert!(seen.borrow().is_empty(), "原值 == 新值不写本地快照");
 }
 
+/// 【类型感知编辑】布尔列走双态按钮：定值即提交，且**同一条** `commit_edit` 通道——
+/// 变更集钩子收到原值/新值、编辑态清空；非法值仍被校验挡住并保留编辑态（红框提示）。
+#[test]
+fn boolean_edit_commits_through_the_same_channel() {
+    use crate::store::ColumnType;
+    let mut grid = grid_with(&[&["1", "yes"]]);
+    grid.set_editable(true);
+    // 数据列 1（组件列 2，name）标成 boolean；列 0 不带类型
+    grid.set_column_types(vec![None, Some(ColumnType::parse("boolean"))]);
+
+    let seen = Rc::new(std::cell::RefCell::new(Vec::<(
+        usize,
+        usize,
+        String,
+        String,
+    )>::new()));
+    let seen_for_hook = seen.clone();
+    grid.set_commit_edit_hook(Rc::new(move |row, col, orig, edited| {
+        seen_for_hook.borrow_mut().push((row, col, orig, edited));
+    }));
+
+    assert!(grid.begin_edit(0, 2), "布尔数据列可进入编辑");
+    assert!(grid.commit_edit_as("true"), "双态定值即提交");
+    assert_eq!(
+        seen.borrow().as_slice(),
+        &[(0, 1, "yes".to_string(), "true".to_string())],
+        "钩子收到 原值 yes → 新值 true，走的是变更集通道"
+    );
+    assert!(!grid.is_editing(0, 2), "提交后编辑态清空");
+
+    // 非布尔值：双态按钮本身不会发，但外部调用也要挡住（校验是唯一闸口）
+    assert!(grid.begin_edit(0, 2));
+    assert!(!grid.commit_edit_as("maybe"), "非法值被校验拒绝");
+    assert!(grid.is_editing(0, 2), "被拒后编辑态保留（红框提示）");
+}
+
 /// 转置锚定本地行时从本地快照取值（#28-B1 拍板 D2：转置纳入本地行）。
 #[test]
 fn transpose_reads_local_row_cells_when_anchored_to_local() {
