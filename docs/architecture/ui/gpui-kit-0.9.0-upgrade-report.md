@@ -306,6 +306,164 @@ test view::tests::core::folding_candidates_are_fed_after_the_gutter_restored ...
 2. main 工作区（`D:\RdataStation\RDS\RdataStation-v2`）的 `target/` 是按 0.8.1 建的，ff 之后
    第一次构建要全量重编（Rust 侧依赖树换了一大批），不是回归。
 
+## 12. 并入证明与主分支验证（2026-11-08）
+
+这一节回答两个问题：「分支的变动真的都进 main 了吗」「进 main 之后能用吗」。
+两个问题都不接受"看起来一样"，所以下面全是可重跑的判据与观测值。
+
+### 12.1 提交级包含关系（最硬的一条）
+
+```
+$ git merge-base --is-ancestor chore/deps-patch-batch-2026-11 main ; echo $?
+0                                        # 分支是 main 的祖先
+$ git rev-list --count main..chore/deps-patch-batch-2026-11
+0                                        # 分支里没有 main 之外的提交
+$ git rev-list --count chore/deps-patch-batch-2026-11..main
+1                                        # main 只多一个提交
+$ git diff --stat chore/deps-patch-batch-2026-11 main
+ docs/architecture/ui/gpui-kit-0.9.0-upgrade-report.md | 4 ++--
+```
+
+唯一的差异是并入之后补的文档订正（`07f9b939`）。**这不是内容相似，是提交级包含**：
+分支的每个提交都能在 main 的历史里点到。
+
+### 12.2 并入的提交清单（19 条）
+
+`git log --reverse --oneline 5675df1e..95997ebb`：
+
+| # | 提交 | 内容 |
+| --- | --- | --- |
+| 1 | `e128bb38` | gpui-kit 0.9.0 + gpui-fast |
+| 2 | `df3b06d9` | 记录 gpui-kit 迁移 |
+| 3 | `d3f67006` | duckdb `=1.10506.1`，删 reqwest 死声明 |
+| 4 | `fc64334f` | 记录 DuckDB 1.5.6 |
+| 5 | `22618516` | sqlglot-rust 0.11.1（补 CTAS 两字段） |
+| 6 | `ae1b2b40` | 记录 sqlglot 升级 |
+| 7 | `222418f6` | 12 个补丁版本批次 |
+| 8 | `74939175` | 记录补丁批次 + 释放度盘点 |
+| 9 | `ee98915b` | 记录 gpui-fast 回归（6 条待定性） |
+| 10 | `99a5c4e4` | sqlglot 能力释放 + 设置开关 |
+| 11 | `e7185e6e` | 记录能力释放与设置域 |
+| 12 | `6f101b9a` | 定性 6 条失败，结论适合开启 |
+| 13 | `0c9080fe` | hover 类型行接通 + 转译提示 |
+| 14 | `d1e9261a` | 接线 3→6、压后项侧记 |
+| 15 | `6966555a` | 列级血缘设计 |
+| 16 | `dce9433d` | **书签列/折叠说明 patch 移植到 0.9.0** |
+| 17 | `7c12d7e8` | 同步 rebase 后现状 |
+| 18 | `5dd88ef5` | 记录二次 rebase 与并入 |
+| 19 | `95997ebb` | 补跑 rds-mock，修正账目 |
+
+并入之后 main 侧另有 `07f9b939`（移植脚本归档 + 诊断产物标注）。
+
+### 12.3 分支独占文件：rebase 前 vs 并入后逐字节比对
+
+比对对象是 **rebase 前的分支 tip `a82123c0`**（不是 main，免得把 main 自己的改动算成差异）。
+29 个分支独占文件里，**25 个与 rebase 前逐字节一致**，5 个有差异且每一处都能归因：
+
+| 文件 | 差异 | 归因 |
+| --- | --- | --- |
+| `vendor/.../input/base/element.rs` | +448 / −10 | 书签列 + 折叠说明 patch 移植（rebase 曾把这段丢干净过） |
+| `vendor/.../input/base/state.rs` | +91 | 同上（`GutterMarker` 状态与点击回报） |
+| `crates/editor/src/view/host/session.rs` | +57 | rebase 前分支基座更旧，这些是 main 在中间 26 个提交里的改动 |
+| `docs/architecture/dependencies/dependency-strategy.md` | +36 | 并入后补的 §4.1 |
+| `docs/architecture/editor/editor-prototype-design.md` | 2± | 并入后按实测回填 |
+
+一致的 25 个里包括 `Cargo.toml` / `Cargo.lock` / `.cargo/config.toml` / `tools/fetch-duckdb.sh` /
+`crates/sql/src/builder.rs` / `analysis.rs` 与 3 个 `settings/sql_analysis.rs`——即**四个包的落地配置与
+新增代码面 rebase 一次没丢**。
+
+### 12.4 四个核心包的落地事实（直接读 main HEAD 的文件）
+
+| 位置 | 观测值 |
+| --- | --- |
+| 根 `Cargo.toml` | `gpui-kit = { version = "0.9.0", features = ["gpui-fast"] }` |
+| | `duckdb = { version = "=1.10506.1", features = ["appender-arrow"] }` |
+| | `arrow = "58.4.0"`、`sqlglot-rust = "=0.11.1"` |
+| | `[patch.crates-io]` → `vendor/gpui-base`、`vendor/gpui-component` |
+| `Cargo.lock` | gpui-kit / gpui-base / gpui-component 均 `0.9.0`；gpui-fast `0.1.13`；gpui-pre `0.3.11`；duckdb `1.10506.1`；sqlglot-rust `0.11.1` |
+| `.cargo/config.toml` | `DUCKDB_LIB_DIR = { value = "third_party/duckdb/1.5.6", relative = true }` |
+| `vendor/gpui-base/Cargo.toml` | `version = "0.9.0"`；`vendor/gpui-component/Cargo.toml` 同 |
+| `third_party/duckdb/1.5.6/` | dll 36,697,896 / h 298,229 / hpp 2,177,251 / lib 1,998,226 / extension.h 135,845 |
+| dll SHA256 | `7E90BDEF028D57B45490D6F53530E3C012A5D9ABDC4C6723449200663DC84ED0` |
+| 书签 patch 符号（`element.rs`） | `GutterMarkerKind` 12、`layout_gutter_markers` 2、`paint_gutter_markers` 2、`GUTTER_BOOKMARK_NOTE_SVG` 3、`report_gutter_marker_click` 1、`fold_note_rows` 6 |
+| 书签 patch 符号（`state.rs`） | `GutterMarker` 12、`set_gutter_markers` 3、`gutter_markers` 9 |
+| sqlglot CTAS | `builder.rs` 中 `with_data` / `with_properties` 各 2 处（两个 `CreateTableStatement` 构造） |
+| sqlglot 设置域 | `settings/src/{model,registry/entries,service}/sql_analysis.rs` 三件套齐 |
+
+### 12.5 12 个补丁批次：12/12 命中
+
+`Cargo.lock` 里每个目标版本都在（同一包名的其它版本是传递依赖，不是漏升）：
+tokio 1.54.1、tokio-util 0.7.20、serde_json 1.0.154、thiserror 2.0.21（另有 1.0.69 供旧依赖）、
+uuid 1.29.1、encoding_rs 0.8.44、flate2 1.1.11、bigdecimal 0.4.11、jupyter-protocol 2.0.3、
+rand 0.10.3（另有 0.8.8 / 0.9.5）、similar 3.2.1（另有 2.7.0）、winresource 0.1.34。
+根 manifest 的声明与 lock 一致。
+
+### 12.6 主分支冷编 + 冒烟（`target/` 被清空过，等于从零）
+
+```
+cargo build -p rds-app -j 2
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12m 56s
+    error 0 行、warning 0 行
+```
+
+- `target\debug\duckdb.dll` = **36,697,896 B**（与 1.5.6 那份同尺寸，build script 自动拷到 exe 同级），
+  运行时查找路径成立；`target\debug\rds-app.exe` 存在。
+- `rds-app.exe` 跑 **20 秒**：**49 行日志、panic 0 / ERROR 0 / WARN 0**，启动链路走完
+  （旧数据迁移 19 项 → 数据根 → 全局系统库 → 日志系统 → 导航动作 → 左栏标签 → `gpui::window` 起窗）。
+
+### 12.7 全量测试：142 目标 / 3794 passed / 10 failed / 49 ignored
+
+```
+cargo test --workspace -j 1 --no-fail-fast
+```
+
+**10 条失败 = 9 条既有基线 + 1 条工作树未提交改动引起**：
+
+| # | 用例 | 归属 |
+| --- | --- | --- |
+| 1–2 | `legacy.rs:58` 单元源不是内核编辑器、`notebook_win.rs:347` 输出块未渲染 | 升级前基线既有 |
+| 3–4 | `version_dialog_lists_rows_and_shows_actions_after_selection`、`index_repair_dialog_groups_rows_and_shows_inline_actions` | gpui-fast 观察层（`debug_bounds` 读上一帧） |
+| 5 | `clicking_the_title_row_collapses_and_restores` | 同上 |
+| 6 | `nav_tree_rows_are_laid_out_by_the_virtual_list` | 同上 |
+| 7 | `right_sidebar_alone_renders_draft_row`（`missing ElementId`） | 保留绘制模式下未重建子树 |
+| 8 | `an_open_request_lands_in_a_sql_editor_tab` | gpui-fast 观察层 |
+| 9 | `no_new_hardcoded_color_or_pixel` | main `44040e21` 的 `result_panel` 裸 px，分支没碰该目录 |
+| 10 | `support::scan::tests::the_scan_uses_the_fold_keywords_it_was_given` | **工作树里 `crates/editor/src/support/scan.rs` 的未提交改动**（该用例在并入前是绿的） |
+
+### 12.8 定向验证（比总数更能定位责任）
+
+| 范围 | 结果 | 说明 |
+| --- | --- | --- |
+| `rds-engine --lib` | **219 / 0** | 真开 DuckDB（内存库、临时表、分析、联邦会话），1.5.6 运行可用 |
+| `rds-sql --lib` | **206 / 0** | sqlglot-rust 0.11.1 解析 + `analysis` 11 条 |
+| `rds-settings --lib` | **34 / 0** | `sql_analysis` 设置域 |
+| `rds-mock --lib` | **243 / 0** | 补丁批次后的 mock 引擎 |
+| `rds-editor --lib` | 757 / 3 / 1 ignored | 3 条中 2 条是基线，1 条是工作树改动 |
+| 书签行为 | `bookmarks_project_into_gutter_markers` / `gutter_click_toggles_bookmark_and_shift_opens_note` / `bookmark_hover_note_setting_off_strips_note` 全 **ok**，另有 `folding_candidates_are_fed_after_the_gutter_restored` ok | 移植后的点击切换 + 悬停说明真的跑通 |
+
+### 12.9 这次验证的边界（写清楚，不假装覆盖）
+
+- 本次全量跑在工作树上，包含 6 个未提交改动（`scan.rs`、`view/host/exec/scan.rs`、
+  `vendor/gpui-base/src/{test_support,text/node}.rs` 等）——第 10 条失败由此产生。
+- **真机目视 5 项仍未做**：对话框关闭无残影、右 Dock 草稿行、导航虚拟列表行、列类型警示行、
+  标题栏折叠还原；书签列的视觉位置（是否在行号左侧、折叠说明下划线位置、悬停气泡）也没肉眼确认。
+- 全文只有一条"已知且未修"的红：`rds-ui-guard` 的裸 px，归属 main 侧 `result_panel`。
+
+### 12.10 复现命令
+
+```powershell
+# 包含关系
+git merge-base --is-ancestor chore/deps-patch-batch-2026-11 main; $LASTEXITCODE
+git rev-list --count main..chore/deps-patch-batch-2026-11
+git diff --stat chore/deps-patch-batch-2026-11 main
+# 逐字节比对分支独占文件
+git diff --quiet a82123c0 95997ebb -- Cargo.toml Cargo.lock .cargo/config.toml
+# 冷编 + 冒烟
+cargo build -p rds-app -j 2
+# 全量（串行；-j 2 会触发 rustc 栈溢出）
+cargo test --workspace -j 1 --no-fail-fast
+```
+
 
 
 
