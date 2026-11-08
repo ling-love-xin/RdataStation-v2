@@ -422,9 +422,39 @@ fn view_layer_has_no_raw_size_literals() {
             "editor/view/host/panel_traits.rs",
             include_str!("../../editor/src/view/host/panel_traits.rs"),
         ),
+        // 2026-11-08 二次拆分：view/dialogs.rs → view/dialogs/ 目录（九个文件里 `picker_tests.rs`
+        // 是测试代码，不入扫描）。同 split 纪律：拆出来的每一块都要登记，否则契约会漏扫。
         (
-            "editor/view/dialogs.rs",
-            include_str!("../../editor/src/view/dialogs.rs"),
+            "editor/view/dialogs/mod.rs",
+            include_str!("../../editor/src/view/dialogs/mod.rs"),
+        ),
+        (
+            "editor/view/dialogs/analysis_sql.rs",
+            include_str!("../../editor/src/view/dialogs/analysis_sql.rs"),
+        ),
+        (
+            "editor/view/dialogs/bind.rs",
+            include_str!("../../editor/src/view/dialogs/bind.rs"),
+        ),
+        (
+            "editor/view/dialogs/bookmarks.rs",
+            include_str!("../../editor/src/view/dialogs/bookmarks.rs"),
+        ),
+        (
+            "editor/view/dialogs/confirm.rs",
+            include_str!("../../editor/src/view/dialogs/confirm.rs"),
+        ),
+        (
+            "editor/view/dialogs/connection_picker.rs",
+            include_str!("../../editor/src/view/dialogs/connection_picker.rs"),
+        ),
+        (
+            "editor/view/dialogs/schema_picker.rs",
+            include_str!("../../editor/src/view/dialogs/schema_picker.rs"),
+        ),
+        (
+            "editor/view/dialogs/value_preview.rs",
+            include_str!("../../editor/src/view/dialogs/value_preview.rs"),
         ),
         (
             "editor/view/widgets/status_bar.rs",
@@ -881,9 +911,39 @@ fn ui_sources_have_no_raw_color_literals() {
             "editor/view/host/panel_traits.rs",
             include_str!("../../editor/src/view/host/panel_traits.rs"),
         ),
+        // 2026-11-08 二次拆分：view/dialogs.rs → view/dialogs/ 目录（九个文件里 `picker_tests.rs`
+        // 是测试代码，不入扫描）。同 split 纪律：拆出来的每一块都要登记，否则契约会漏扫。
         (
-            "editor/view/dialogs.rs",
-            include_str!("../../editor/src/view/dialogs.rs"),
+            "editor/view/dialogs/mod.rs",
+            include_str!("../../editor/src/view/dialogs/mod.rs"),
+        ),
+        (
+            "editor/view/dialogs/analysis_sql.rs",
+            include_str!("../../editor/src/view/dialogs/analysis_sql.rs"),
+        ),
+        (
+            "editor/view/dialogs/bind.rs",
+            include_str!("../../editor/src/view/dialogs/bind.rs"),
+        ),
+        (
+            "editor/view/dialogs/bookmarks.rs",
+            include_str!("../../editor/src/view/dialogs/bookmarks.rs"),
+        ),
+        (
+            "editor/view/dialogs/confirm.rs",
+            include_str!("../../editor/src/view/dialogs/confirm.rs"),
+        ),
+        (
+            "editor/view/dialogs/connection_picker.rs",
+            include_str!("../../editor/src/view/dialogs/connection_picker.rs"),
+        ),
+        (
+            "editor/view/dialogs/schema_picker.rs",
+            include_str!("../../editor/src/view/dialogs/schema_picker.rs"),
+        ),
+        (
+            "editor/view/dialogs/value_preview.rs",
+            include_str!("../../editor/src/view/dialogs/value_preview.rs"),
         ),
         (
             "editor/view/widgets/status_bar.rs",
