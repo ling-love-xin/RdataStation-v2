@@ -1141,6 +1141,88 @@ KernelSpec { id: "ks:python3", display_name: "Python 3 (ipykernel)", language: P
   `ExecQueue` 上仍留着一个全取入口给「所有面板都要收尾」的场景（用例 `draining_*` 用它断言
   队列真的空了）。若确认无人再用，下一轮可删。
 
+## 15.20 A1：Python 单元的语言服务接线（2026-11-09，**已实现**）
+
+§15.17 把接线清单与三条必须先实测的风险写清楚了，但一行代码都没动（当时判为「方案就绪、未开工」）。
+本轮按 §15.17 的口径落地，**只做 Python 单元**（R / Julia 仍卡在 §16.2 B3 的拍板）。
+
+### 开工前的三条复核结论（本轮实测，不再重做）
+
+| 原判为「必须实测的风险」 | 实测结论 | 依据 |
+| --- | --- | --- |
+| 单元正文没有磁盘文件，jedi 会不会拒绝服务 | **不会**。`untitled:Rds-doc-1-c1`、`untitled:Rds-doc-1-c2` 两个虚拟 uri 各自 `didOpen` / 补全都正常应答（`os.` 返回 457 条） | `.rds/tmp/lsp_probe.py` 两轮实测 |
+| 是否要给每个单元起一个 server | **不用**。一条连接服务多份虚拟文档即可，事件按 uri 认领 | 同上（同一次探测里两个 uri 并行） |
+| 单元内坐标要不要换算 | **不用**。单元是独立内核实例，服务端返回的 range 就是该单元正文坐标 | 探测返回的 range 与单元内行列一致 |
+
+所以本轮没有引入影子文件系统、没有 per-cell server、没有坐标换算——这三条被 §15.17 标为
+「必须实测」的假设都不成立，省掉了最贵的那部分。
+
+### 改动清单（8 文件）
+
+| 位置 | 改动 |
+| --- | --- |
+| `lsp/host.rs` | `trait LspPort` 加两个**带默认实现**的方法：`cell_service(&DocumentId, cell_id) -> Option<LspSession>`（默认 `None`）、`drain_for_uri(&str) -> Vec<LspEvent>`（默认空）。默认值保证既有假端口与全部旧用例零改动，未实现的宿主 = 「单元级语言服务如实没有」 |
+| `ports/editor_lsp.rs` | 新增纯函数 `cell_language_for(CellLanguage)`（**只 Python → `"python"`**）与 `uri_for_cell(document, cell_id)` = `untitled:Rds-<doc>-<cell>`；把 `service()` 那套门（`init_failed` 收尾 → `blocked` 判 → `ensure_started` → `is_initialized`）抽成私有 `ready_client()`，文档级 / 单元级共用一份口径；`drain_for` 的认领逻辑抽成 `drain_claimed(uri)`；新增 `needs_service`（`.py` 文档 **或** 含 Python 单元的分析笔记）与 `has_python_cell`；`active_document_count` 改走 `needs_service`；`impl LspPort` 补 `cell_service` / `drain_for_uri` |
+| `shared/env_lsp.rs` | 新增 `lsp_cell_service(document, cell_id)` 与 `drain_lsp_events_for_uri(uri)`（未接端口分别为 `None` / 空） |
+| `view/cell_diagnostics.rs` | `apply(state, found, exec, lsp, cx)` 加第四参：`clear` 一趟后依次 push「语法」（Error）、「执行」（Error）、**「语言服务」**（severity 取服务端值、`None` 按 Warning、range 原样） |
+| `view/host/mod.rs` | 新字段 `cell_lsp: HashMap<String, CellLsp>`（与文档级 `lsp` 并列） |
+| `view/host/construct.rs` | 初始化 `cell_lsp: HashMap::new()` |
+| `view/host/notebook.rs` | 新增 `struct CellLsp { session, version, diagnostics, providers_installed }`；`ensure_cell_editor` 的 Change 订阅改走统一入口 `on_cell_text_changed`（Python 单元一并 defer）；`rebuild_cell_diagnostics` 改**三源**；新增 `sync_cell_lsp` / `install_cell_providers` / `uninstall_cell_providers` / `on_cell_text_changed` / `drain_cell_lsp`；删除 / 转换单元时 `did_close` + 移出 map |
+| `view/host/exec/pump.rs` | 每拍（60 ms）在 `drain_cell_notes` 之后调 `drain_cell_lsp` |
+
+### 三处关键判据（都是踩过才知道）
+
+1. **`wants()` 必须认「含 Python 单元的分析笔记」**。`active_document_count` 决定服务起不起，
+   `wants` 决定泵要不要继续轮询。两者任一漏掉「只有一份 Python 单元笔记」这种情况，结果都是
+   服务刚起就被 `reap_if_idle` 回收、泵因「文档不想要」退出、重启后单元永远接不回来。
+   `active_document_count` 里若在 `docs.documents()` 的借用期内再叫 `needs_service()`（它再借一次
+   `editor.service()`）会 E0502，所以先收集 `Vec<DocumentId>` 再逐个判。
+2. **`drain_cell_lsp` 里对 `self.cell_lsp.iter_mut()` 循环内部调 `self.shared.drain_lsp_events_for_uri()`**
+   属两个不同字段的分离借用，可行；但 `rebuild_cell_diagnostics`（借 `&self` 全体）必须挪到循环之后。
+3. **有 Python 单元就必须有泵在跑**：单元可能是文档打开后才加的，而建面板那次 `sync_lsp_session`
+   里还没有单元（那时 `lsp_wants` 为 false、泵没起）。所以 `ensure_cell_editor` 的 Python 分支
+   末尾补一次 `ensure_exec_pump(cx)`。
+
+另外两条沿用既有纪律：单元 Change 订阅里**绝不 update 本实体**（一律 `cx.defer` 回面板）；
+SQL 词法源保持「补全能力开着」的门控，Python 的语言服务诊断**不受**该门控连坐（诊断不该被
+补全档位限制）。
+
+### 用例（4 条，全绿）
+
+| 用例 | 断什么 | 区分性 |
+| --- | --- | --- |
+| `ports::editor_lsp::tests::cell_language_for_only_python_cells` | 只有 Python → `"python"`，Sql/Markdown/R/Julia → `None` | 旧实现没有这个函数 |
+| `ports::editor_lsp::tests::uri_for_cell_is_distinct_per_cell_and_never_collides_with_document` | 同文档两单元不同 uri、不同文档同名单元不同 uri、与文档级 uri 不相等 | 若 uri 不按单元区分，第二、三断言直接红 |
+| `view::tests::notebook_lsp::only_python_cells_get_a_language_service_session` | 加 SQL + Python 各一单元后：Python 在 `cell_lsp` 里且 `providers_installed == true`；SQL 不在 | 旧实现 `cell_lsp` 字段都不存在 |
+| `view::tests::notebook_lsp::cell_lsp_diagnostics_land_in_the_cell_and_survive_a_rebuild` | 假端口按单元 uri 推一条诊断 → 单元诊断集合里出现源「语言服务」；再走一次 `on_cell_text_changed`（重建）后**仍在** | 若 `rebuild` 三条源各写一遍 `clear`，第二次断言必红 |
+
+视图层两条用假 `LspPort`（只对单元给会话、`drain_for_uri` 只交出自己的事件），不碰真
+`jedi-language-server`——验的是面板接线，协议侧已有 `lsp_probe*.py` 实测。
+
+### 验证（本轮实测，逐项）
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo check -p rds-editor --lib -j 1` | exit 0（首轮 E0609 `new.session.uri` 已修，复检 1m23s） |
+| `cargo test -p rds-editor --lib -- view::tests::notebook_lsp --test-threads=1` | **2 passed / 0 failed** |
+| `cargo test -p rds-editor --lib -- --test-threads=1` | **776 passed / 3 failed / 1 ignored**（23.80 s，总数 780 = 基线 772 + 本轮 4）；3 条失败与基线逐字一致（`legacy::opening_an_analysis_document_builds_a_cell_editor_per_cell`、`notebook_win::analysis_cell_renders_multiple_output_blocks`、`results_a::the_result_header_sorts_from_its_arrow`），归因见 `docs/architecture/ui/gpui-kit-0.9.0-upgrade-report.md` §12 |
+| `cargo build -j 1 -p rds-app` | 见下「构建」段 |
+| 重启后 `panic` / `ERROR` 行数 | 见下「构建」段 |
+
+### 仍是边界（如实）
+
+- **R / Julia 单元不接**：`cell_language_for` 只认 Python。R / Julia 要先过 §16.2 B3（要不要真做），
+  且本机没装 R / IJulia，接了也无法验收。
+- **signatureHelp 接不上**：vendor `input/editor/lsp/mod.rs:39-56` 的 `Lsp` 只有 completion /
+  code_action / hover / definition / document_color / semantic_tokens 六个槽位 + `show_document`，
+  没有签名帮助槽位。要接得改 vendor 内核。
+- **通用模式 `.py` 的 F12 跳定义仍未接 LSP**：`install_definition` 只在 SQL 分支
+  （`view/host/session.rs`），属独立缺口，与本轮 A1 无关。
+- **没有「当前连接切了、语言服务诊断要不要跟着变」的窗口用例**：Python 单元的诊断来自
+  jedi，与数据库目录快照无关，A2 那条口径（目录代际）只作用于 SQL 词法源。
+- **单元级 `did_close` 只在删除 / 转换 / 会话失效时发**；面板整体关闭时没有显式 `did_close`
+  （server 侧残留由 server 被 `reap_if_idle` 回收时整体 shutdown 兜住）。
+
 ## 16. 遗留总账（2026-11-09 全量盘点）
 
 **盘点口径**：文档声明（§一 ~ §15）+ 代码内 `TODO|FIXME|未接线|暂不支持|暂不|遗留|待接线`
