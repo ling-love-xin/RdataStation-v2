@@ -226,7 +226,10 @@ impl ResultPanel {
         let filter = div()
             .h_flex()
             .items_center()
-            .gap_1()
+            // 列间无间距：DBeaver `filterComposite` 是 `GridLayout(compactMode ? 4 : 5, false)`
+            // + `horizontalSpacing = 0` + `verticalSpacing = 0`
+            // （`ResultSetFilterPanel.java:174-179`），列与列紧贴，只靠控件自身宽度分离。
+            // 此前 `gap_1`(4px) 多出四条 4px 缝，比 DBeaver 松一档。
             .flex_1()
             .min_w_0()
             .bg(theme.colors.background)
@@ -238,43 +241,15 @@ impl ResultPanel {
             // 再补 1px 内距才等价于它的 2px，总量 24px 才对得上。
             .p(ui::HAIRLINE)
             .debug_selector(|| "editor-result-filter".to_string())
-            .when(!self.filter_expanded, |row| {
-                let run_queue = self.queue.clone();
-                row.child(
-                    div().flex_1().min_w_0().child(
-                        // 【2026-11-08 高度对齐】Input 默认 Medium 档 = 32px，在 40px 工具栏里
-                        // 上下只剩 4px，且与同排 `Toolbar` XSmall 的 24px 按钮差 8px 高。
-                        // 降到 `small`（24px）后一行控件同档；字号随之 12px → 14px（更好读）。
-                        //
-                        // 【DBeaver 对齐 2026-11-08 三次】档位 Small → XSmall：
-                        // DBeaver 筛选文本控件被 `MIN_FILTER_TEXT_HEIGHT = 20` 钉在 20px
-                        // （`ResultSetFilterPanel.java:103`），本仓 Small 档是 24px，
-                        // 高出一档；XSmall 的 `input_h` 正是 `h_5` = 20px，
-                        // 与 DBeaver 逐像素相等。
-                        //
-                        // 【DBeaver 对齐】`appearance(false)` 让出 bg / rounded / 焦点环：
-                        // 那圈边框现在由外层容器画（DBeaver 内部文本框本身无边框），
-                        // 否则两层描边会叠成双框。焦点靠 caret 指示，与 DBeaver 的
-                        // StyledText 一致（它那圈框也不随 focus 变色）。
-                        Input::new(&self.filter_input)
-                            .xsmall()
-                            .appearance(false)
-                            .suffix(
-                                Button::new("editor-result-filter-run")
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::Play)
-                                    .debug_selector(|| "editor-result-filter-run".to_string())
-                                    .tooltip(
-                                        "用 select * from (原SQL) where 词 重查（替换当前结果集）",
-                                    )
-                                    .on_click(move |_, _window, app| {
-                                        run_queue.request(ResultRequest::RunFilterAsQuery, app);
-                                    }),
-                            ),
-                    ),
-                )
-            })
+            // 第 2 列：展开切换，放在文本列**左侧**。DBeaver 的 `FilterExpandPanel` 正是
+            // `GridLayout(5)` 的第 2 列（`ResultSetFilterPanel.java:186`），`GridData` 为
+            // `HORIZONTAL_ALIGN_BEGINNING | FILL_VERTICAL` + `widthHint = 图标宽 + 4`
+            // （`:1303-1306`）；它非 hover 时画灰度图、hover 才画实图（`:1309-1317`）。
+            // 本仓用 `Button::ghost()` 的常规 hover 底表达同一语义（「平时不抢眼，
+            // 指过去才亮」）；灰度/实图双份资源要自定义绘制入口，P1 不做。
+            //
+            // 这一列不随 `filter_expanded` 分支：展开态下工具栏只剩它（点它收起），
+            // 与 DBeaver 展开后工具条只剩图标钮同理。
             .child({
                 let expand_queue = self.queue.clone();
                 Button::new("editor-result-filter-expand")
@@ -291,6 +266,50 @@ impl ResultPanel {
                     .on_click(move |_, _window, app| {
                         expand_queue.request(ResultRequest::ToggleFilterExpand, app);
                     })
+            })
+            .when(!self.filter_expanded, |row| {
+                let run_queue = self.queue.clone();
+                row
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            // 【2026-11-08 高度对齐】Input 默认 Medium 档 = 32px，在 40px 工具栏里
+                            // 上下只剩 4px，且与同排 `Toolbar` XSmall 的 24px 按钮差 8px 高。
+                            // 降到 `small`（24px）后一行控件同档；字号随之 12px → 14px（更好读）。
+                            //
+                            // 【DBeaver 对齐 2026-11-08 三次】档位 Small → XSmall：
+                            // DBeaver 筛选文本控件被 `MIN_FILTER_TEXT_HEIGHT = 20` 钉在 20px
+                            // （`ResultSetFilterPanel.java:103`），本仓 Small 档是 24px，
+                            // 高出一档；XSmall 的 `input_h` 正是 `h_5` = 20px，
+                            // 与 DBeaver 逐像素相等。
+                            //
+                            // 【DBeaver 对齐】`appearance(false)` 让出 bg / rounded / 焦点环：
+                            // 那圈边框现在由外层容器画（DBeaver 内部文本框本身无边框），
+                            // 否则两层描边会叠成双框。焦点靠 caret 指示，与 DBeaver 的
+                            // StyledText 一致（它那圈框也不随 focus 变色）。
+                            //
+                            // 【DBeaver 对齐 2026-11-08 四次】执行钮从 `.suffix` 拆成独立一列：
+                            // DBeaver 的 `ExecutePanel` 是文本列**右侧的独立列**
+                            // （`GridLayout(5)` 第 4 列，`ResultSetFilterPanel.java:174/209`），
+                            // 不在文本框内部；且 `Textarea`（P3 要换的多行框）**没有 suffix 槽**，
+                            // 提前改成一列，P3 时才不必再搬一次。
+                            Input::new(&self.filter_input)
+                                .xsmall()
+                                .appearance(false),
+                        ),
+                    )
+                    .child(
+                        // 第 4 列：执行。DBeaver 同列是 `ExecutePanel`（`ToolItemPanel` 子类，
+                        // `heightHint = MIN_FILTER_TEXT_HEIGHT`，`:1351`），紧贴文本列右侧。
+                        Button::new("editor-result-filter-run")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Play)
+                            .debug_selector(|| "editor-result-filter-run".to_string())
+                            .tooltip("用 select * from (原SQL) where 词 重查（替换当前结果集）")
+                            .on_click(move |_, _window, app| {
+                                run_queue.request(ResultRequest::RunFilterAsQuery, app);
+                            }),
+                    )
             })
             .when(
                 !self.filter_text.trim().is_empty() && !self.filter_expanded,
