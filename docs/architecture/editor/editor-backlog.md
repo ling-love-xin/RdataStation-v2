@@ -1206,8 +1206,8 @@ SQL 词法源保持「补全能力开着」的门控，Python 的语言服务诊
 | `cargo check -p rds-editor --lib -j 1` | exit 0（首轮 E0609 `new.session.uri` 已修，复检 1m23s） |
 | `cargo test -p rds-editor --lib -- view::tests::notebook_lsp --test-threads=1` | **2 passed / 0 failed** |
 | `cargo test -p rds-editor --lib -- --test-threads=1` | **776 passed / 3 failed / 1 ignored**（23.80 s，总数 780 = 基线 772 + 本轮 4）；3 条失败与基线逐字一致（`legacy::opening_an_analysis_document_builds_a_cell_editor_per_cell`、`notebook_win::analysis_cell_renders_multiple_output_blocks`、`results_a::the_result_header_sorts_from_its_arrow`），归因见 `docs/architecture/ui/gpui-kit-0.9.0-upgrade-report.md` §12 |
-| `cargo build -j 1 -p rds-app` | 见下「构建」段 |
-| 重启后 `panic` / `ERROR` 行数 | 见下「构建」段 |
+| `cargo build -j 1 -p rds-app` | **exit 101 × 5**，报错全在并行线（`crates/workbench/src/panels/property_panel/sections.rs:190` 的 `E0423 cannot initialize a tuple struct which contains private fields`——`Pixels(theme.font_size * ui::PROPERTY_GENERAL_LABEL_WIDTH)` 撞 `gpui-fast-0.1.13/src/geometry.rs:2689` 私有字段；同目录还有 `E0425` 与 `sections.rs:211` / `render.rs:36` 未用变量 warning）。**rds-editor 侧零错误**（`--lib` 与本轮全部用例已先行通过）。按纪律未动他人文件，间隔 120 / 150 / 200 s 重试四次均未消失 |
+| 重启后 `panic` / `ERROR` 行数 | **未执行**：没有含 A1 的 exe 可启，应用仍是上一轮 pid（`app_run_*19.log` 不存在） |
 
 ### 仍是边界（如实）
 
@@ -1222,6 +1222,10 @@ SQL 词法源保持「补全能力开着」的门控，Python 的语言服务诊
   jedi，与数据库目录快照无关，A2 那条口径（目录代际）只作用于 SQL 词法源。
 - **单元级 `did_close` 只在删除 / 转换 / 会话失效时发**；面板整体关闭时没有显式 `did_close`
   （server 侧残留由 server 被 `reap_if_idle` 回收时整体 shutdown 兜住）。
+- **本轮的 A1 没有应用内验收**：`rds-app` 全量构建被并行线的 `property_panel` 拆分挡住（见上表），
+  所以「真 `jedi-language-server` 下敲 `os.` 出补全 / 未定义变量出波浪线 / hover 出类型」这三条
+  **只有假端口窗口用例的证明，没有真机证据**。下一步要么等并行线构建通过后重启，要么单独构建
+  一个只含 editor 的探针。
 
 ## 16. 遗留总账（2026-11-09 全量盘点）
 
