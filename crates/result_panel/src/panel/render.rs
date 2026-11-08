@@ -7,7 +7,6 @@ use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::PopupMenuItem;
-use gpui_kit::component::switch::Switch;
 use gpui_kit::component::toolbar::ToolbarGroup;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -187,8 +186,11 @@ impl ResultPanel {
         // 【B15】本地筛选框：只作用于视图层，不重查数据库；输入走 300ms 防抖
         // （`on_filter_input`），有词时给一个 ✕ 清除；「下发源库」开关开着时应用
         // 筛选会重查（入队，结果落新结果集）。
-        // 【1.3 对齐】下发源库 / 注释两个 Switch 从筛选组拆出，交给工具栏右段
+        // 【1.3 对齐】下发源库 / 注释两个开关从筛选组拆出，交给工具栏右段
         // Toolbar 统一容器（与对比 / 分析 / 复制同基线），筛选组只留输入与清除。
+        // 【DBeaver 对齐 2026-11-08】两个开关改**图标 toggle**（按下态 = 开）：
+        // DBeaver 那条筛选条用的是 CHECK `ToolItem`，界面上没有任何带文字标签的
+        // 开关/按钮；等价改造见下方 `pushdown` / `comments` 的构造注释。
         // 【1.2】筛选框升级：常态 180px 输入框内嵌 ▶ 运行（RunFilterAsQuery，
         // 用 `select * from (原SQL) where 词` 替换当前结果集重查）；展开按钮
         // （Maximize2）打开顶宽筛选条（filter_expanded，输入框移到工具栏下方全宽）。
@@ -260,26 +262,41 @@ impl ResultPanel {
             .into_any_element();
 
         // 【B15】「下发源库」开关：开着时应用筛选会重查（拼 WHERE 到原查询）
+        // 【DBeaver 对齐 2026-11-08】不再用 `Switch`：DBeaver 那条筛选条上的等价物是带
+        // 按下态的 CHECK `ToolItem`（`ResultSetFilterPanel.java:356` 的
+        // `openFindReplaceButton`），不是开关。这里改为图标 toggle（`toggled` = 按下态）
+        // + tooltip，保住「按下即开」的可读性，又不让一个开关占掉一整段文字宽度。
         let pushdown = {
             let queue = self.queue.clone();
-            Switch::new("editor-result-pushdown")
-                .checked(self.pushdown)
-                .label("下发源库")
-                .on_click(move |checked, _window, app| {
-                    let open = *checked;
-                    queue.request(ResultRequest::SetPushdown { open }, app);
+            let checked = self.pushdown;
+            Button::new("editor-result-pushdown")
+                .ghost()
+                .small()
+                .toggled(checked)
+                .icon(IconName::DatabaseZap)
+                .tooltip("下发源库：开着时应用筛选会拼 WHERE 重查源库")
+                .debug_selector(|| "editor-result-pushdown".to_string())
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::SetPushdown { open: !checked }, app);
                 })
                 .into_any_element()
         };
         // 列注释开关（对齐 DBeaver：列浏览器里显示列注释）
         let comments = {
             let queue = self.queue.clone();
-            Switch::new("editor-result-show-comments")
-                .checked(self.show_column_comments)
-                .label("注释")
-                .on_click(move |checked, _window, app| {
-                    let open = *checked;
-                    queue.request(ResultRequest::SetShowColumnComments { open }, app);
+            let checked = self.show_column_comments;
+            Button::new("editor-result-show-comments")
+                .ghost()
+                .small()
+                .toggled(checked)
+                .icon(IconName::FileText)
+                .tooltip("显示列注释（列头第二行）")
+                .debug_selector(|| "editor-result-show-comments".to_string())
+                .on_click(move |_, _window, app| {
+                    queue.request(
+                        ResultRequest::SetShowColumnComments { open: !checked },
+                        app,
+                    );
                 })
                 .into_any_element()
         };
@@ -306,15 +323,20 @@ impl ResultPanel {
         });
 
         // 【T2a-7】批量提交/回滚对（参考 DBeaver）：有**待提交**变更才摆；提交中置灰
+        // 【DBeaver 对齐 2026-11-08】去掉文字标签改图标 + tooltip（计数进 tooltip）：
+        // DBeaver 那条工具条上没有带文字标签的按钮；待提交条数只在有变更时才存在，
+        // 悬停一眼能看到确数，不再用文字撑宽度。
         let commit = (self.pending_changes > 0).then(|| {
             let queue = self.queue.clone();
             let submitting = self.committing;
+            let pending = self.pending_changes;
             let commit_btn = Button::new("editor-result-commit")
                 .ghost()
                 .small()
                 .debug_selector(|| "editor-result-commit".to_string())
                 .disabled(submitting)
-                .label(format!("提交变更 ({})", self.pending_changes))
+                .icon(IconName::Save)
+                .tooltip(format!("提交 {pending} 项变更到源库"))
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::CommitPending, app);
                 });
@@ -323,7 +345,8 @@ impl ResultPanel {
                 .ghost()
                 .small()
                 .debug_selector(|| "editor-result-discard".to_string())
-                .label("撤销变更")
+                .icon(IconName::RotateCcw)
+                .tooltip("撤销全部未提交变更（回滚本地改动）")
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::RollbackPending, app);
                 });
@@ -348,7 +371,8 @@ impl ResultPanel {
                 .ghost()
                 .small()
                 .debug_selector(|| "editor-result-copy".to_string())
-                .label("复制")
+                .icon(IconName::Copy)
+                .tooltip("复制整份结果为 TSV（含表头）")
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::CopyTsv, app);
                 })
@@ -601,7 +625,8 @@ impl ResultPanel {
                         .ghost()
                         .small()
                         .debug_selector(|| "editor-result-analysis".to_string())
-                        .label("⚗ 分析"),
+                        .icon(IconName::Sigma)
+                        .tooltip("分析当前结果（对已抓行跑聚合）"),
                 )
                 .dropdown_menu(move |menu, _window, _app| {
                     let mut menu = menu;

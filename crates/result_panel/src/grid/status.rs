@@ -255,8 +255,9 @@ pub struct ResultPane {
 /// - 右段纯按钮序列 → `toolbar::Toolbar` 组件（统一容器 + a11y；按钮已是标准 Button /
 ///   DropdownButton，经 `.contents()` 挂入，保留各自 ghost/small 外观）
 /// - 左段 = SQL 预览 + 本地筛选（非按钮内容，Toolbar child 只收 Sizable，走外层 content）
-/// - 【1.3 对齐】下发源库 / 注释两个 Switch 也收进右段 Toolbar（统一容器管高度与
-///   基线，避免 Switch 默认档与按钮小号高度不一致导致的错位）
+/// - 【1.3 对齐】下发源库 / 注释两个开关也收进右段 Toolbar（统一容器管高度与
+///   基线，避免开关默认档与按钮小号高度不一致导致的错位）；DBeaver 对齐后两者
+///   已改成图标 toggle（按钮本体在 `panel/render.rs` 构造，这里只负责容器分组）
 /// - 执行信息（行数/耗时/失败/血缘/连接…）**不在工具栏**：移入状态栏（见
 ///   `render_status_row` 的 `memory` / `affected_rows` 参数）——用户口径：执行信息归结果集状态栏
 /// - 导出 / 刷新同样移入状态栏（左动作组系统段），工具栏不再摆
@@ -307,16 +308,38 @@ pub fn render_toolbar(
         .child(
             // 右段：纯按钮序列 → Toolbar 组件（统一容器 + a11y 语义；contents 槽收
             // AnyElement，按钮保留 ghost/small 外观；顺序照原型 §2.4 右段：
-            // ⌕ 筛选（左段）· 下发源库 / 注释 switch · ⧉ 对比 · 提交变更 · ⚗ 分析 ▾ ·
-            // 复制；导出 ▾ / ⟳ 刷新已移状态栏系统段）
+            // ⌕ 筛选（左段）· 下发源库 / 注释（图标 toggle）· ⧉ 对比 · 提交/撤销 ·
+            // Σ 分析 ▾ · 复制；导出 ▾ / ⟳ 刷新已移状态栏系统段）
+            //
+            // 【DBeaver 对齐 2026-11-08】组间补一条竖分隔线：DBeaver 的筛选条用
+            // `UIUtils.createToolBarSeparator`（`ResultSetFilterPanel.java:354`）把
+            // 「筛选/开关」与「其它动作」分开，视觉上不靠间距硬撑。这里同样只用
+            // 1px 线（`ui::HAIRLINE`）+ 24px 高（两端各留 8px，比撑满 40px 更接近
+            // DBeaver 的观感）；只有两组都非空时才插，避免空段留一条孤线。
             Toolbar::new("editor-result-toolbar-actions")
                 .xsmall()
-                .contents(
-                    [pushdown, comments, compare, commit, analysis, copy]
+                .contents({
+                    let mut contents: Vec<AnyElement> = [pushdown, comments]
                         .into_iter()
                         .flatten()
-                        .collect::<Vec<_>>(),
-                ),
+                        .collect();
+                    let actions: Vec<AnyElement> = [compare, commit, analysis, copy]
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                    if !contents.is_empty() && !actions.is_empty() {
+                        contents.push(
+                            div()
+                                .w(ui::HAIRLINE)
+                                .h(rems(1.5))
+                                .flex_none()
+                                .bg(theme.colors.border)
+                                .into_any_element(),
+                        );
+                    }
+                    contents.extend(actions);
+                    contents
+                }),
         )
         .into_any_element()
 }

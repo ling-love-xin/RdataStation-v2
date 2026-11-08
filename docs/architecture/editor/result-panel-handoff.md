@@ -346,6 +346,44 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 
 **未做的一项**：DBeaver 拖动时在落点画插入标记（`TabFolderReorder` 的 DnD 反馈），我们只有指针跟手的小胶囊；要做需要重写 TabBar 的绝对定位层，本轮判定代价高于收益。这是四项里唯一明确留下的差异。
 
+### 2.23 2026-11-08（工具栏按 DBeaver 收形：纯图标 + 图标 toggle + 竖分隔）
+
+用户「工具栏也可以对齐，我已经目测过了，标题的高度基本没有问题了」——标签条 32px 已验收，
+本轮只收工具栏形态、**高度 40px 不动**。两个形态细节由用户「按照你的建议继续即可」确认：
+右段纯图标 + tooltip、两个开关改图标 toggle。
+
+**DBeaver 取证**：`ResultSetFilterPanel.java`（结果集那条工具栏的真身，不是另起一行）——
+`:171`/`:192` 左段是多行筛选文本框占满宽；`:315` 右段 `ToolBar(SWT.HORIZONTAL|SWT.RIGHT)` 里
+只有 4 个纯图标 ToolItem（`:319` 清除▾ / `:330` 自定义▾ / `:343` 历史后退▾ / `:348` 前进▾ /
+`:356` 查找替换 = `SWT.CHECK` 按下态 switch）；分组靠 `:354` 的 `createToolBarSeparator`。
+**整条没有带文字标签的按钮，也没有 switch**；提交/导出/刷新不在这一行。
+
+**落地**（`panel/render.rs` + `grid/status.rs`）：
+
+| 项 | 改前 | 改后 |
+| --- | --- | --- |
+| 右段按钮 | `提交变更 (N)` / `撤销变更` / `复制` / `⚗ 分析` 带文字 | 纯图标 + tooltip：`Save`（计数进 tooltip）/ `RotateCcw` / `Copy` / `Sigma`；对比保持 `Columns2` |
+| 两个开关 | `Switch`「下发源库」「注释」 | `.ghost().small().toggled(..).icon(..).tooltip(..)`（`DatabaseZap` / `FileText`）。`Button::on_click` 不给新值 → 闭包捕获当前 bool 取反；请求载荷（`SetPushdown` / `SetShowColumnComments`）不变 |
+| 分组 | 只有 `gap` | 两组之间 1px 竖线 `w(ui::HAIRLINE).h(rems(1.5)).bg(theme.colors.border)`，**两组都非空才插**。不用 `separator::Separator::vertical()`：它渲染成 `absolute().h_full()`（`separator.rs:80-84`），进 `Toolbar::contents` 流式槽会定位到外层祖先 |
+| 高度 | 40px（§8.28） | **不动**（用户已验收；压缩会碰「虚拟列表裁剪丢 Input 焦点链」那条风险） |
+
+功能与摆放条件一律不变：SQL 预览仍最左（保留 `SQL: <前 60 字>` 文字——它是信息位不是按钮标签）；
+对比仍 `tabs.len() >= 2`、提交/撤销仍 `pending_changes > 0`（提交中置灰）、分析仍 `analysis_items` 非空。
+`debug_selector` 全保留，`editor-result-pushdown` / `editor-result-show-comments` 是本轮**新加**（原先
+`Switch` 侧没有）。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **240 passed / 0 failed**（测试集合未变）；
+`cargo check -p rds-result-panel` Finished 0 warning；`cargo test -p rds-ui-guard` = 4 passed
+（未动 `ui.rs` 常量，BASELINE 不变）。
+
+`cargo test -p rds-editor --lib` = 764 passed / 3 failed / 1 ignored。新增的那条
+`results_a::the_result_header_sorts_from_its_arrow`（`editor-result-th-1 应登记坐标`）经 A/B 归因
+**非本轮引入**（把本轮两文件 `git stash` 后单跑同样 FAILED）；另两条是升级报告 §7 的基线失败。
+当时工作树另有并行线未完成改动（`crates/editor/src/ports/editor_exec/` 迁移中），本轮不动它。
+
+**未验证（需真窗口）**：六个图标 + 一条竖线挤在 40px 行里是否过密；`Save`/`Sigma`/`DatabaseZap`
+的语义是否一眼可读（靠 tooltip 兜底）；小图标上 `ComponentTooltip` 的延迟与位置。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

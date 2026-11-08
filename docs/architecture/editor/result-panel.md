@@ -1493,6 +1493,54 @@ enum 类 `Select` 需要"值 → 显示"映射来源，当前拿不到枚举定�
 **副作用（承接 §8.30，仍未处理）**：`RESULT_PANE_HEIGHT` 仍是 `20.0`（320px），标签条从 24 抬到
 32 后网格少了 8px（26px 行高下约少 1/3 行），是否抬到 340 待用户反馈。
 
+### 8.32 结果集工具栏按 DBeaver 收形（纯图标 + 图标 toggle + 竖分隔，2026-11-08）
+
+**指令（用户原话）**：「工具栏也可以对齐，我已经目测过了，标题的高度基本没有问题了」——
+即标签条 32px（§8.30）已验收，本轮只收工具栏形态，**不动高度**。两个形态细节由用户确认
+「按照你的建议继续即可」：右段按钮走**纯图标 + tooltip**，两个开关走**图标 toggle**。
+
+**DBeaver 取证**（本地竞品仓 `D:\RdataStation\RDS\dbeaver-ref`）：结果集那条工具栏的真身是
+`plugins\org.jkiss.dbeaver.ui.editors.data\src\org\jkiss\dbeaver\ui\controls\resultset\ResultSetFilterPanel.java`：
+
+- `:171` `filterComposite`（占宽）+ `:192` 多行 `TextViewer`：左段就是**一个筛选文本框**，占满宽。
+- `:315` `filterToolbar = new ToolBar(this, SWT.HORIZONTAL|SWT.RIGHT)`，`:316`
+  `GridData.HORIZONTAL_ALIGN_BEGINNING | VERTICAL_ALIGN_CENTER`：右段是紧贴文本框的**纯图标**
+  ToolBar，只有 4 个 ToolItem——`:319` 清除筛选（`SWT.NO_FOCUS|SWT.DROP_DOWN`）、`:330` 自定义筛选
+  （同）、`:343` 筛选历史后退▾、`:348` 前进▾，`:356` 查找替换（`SWT.CHECK|SWT.NO_FOCUS`，
+  **按下态 toggle**）。分组靠 `:354` 的 `UIUtils.createToolBarSeparator`（`:340` 还有一处被注释掉）。
+- 整条**没有一个带文字标签的按钮，也没有 switch**；提交/导出/刷新这类业务动作不在这一行
+  （走右键菜单 / 状态栏）。
+
+**对照与落地**：
+
+| 维度 | DBeaver | 本仓改前 | 本轮改后 |
+| --- | --- | --- | --- |
+| 右段按钮形态 | 纯图标 + tooltip（`ToolItem` 自带） | `Button`：对比/分析/复制部分带图标，`提交变更 (N)` / `撤销变更` / `复制` / `⚗ 分析` 带文字 | 全部**纯图标 + tooltip**：对比 `Columns2`、提交 `Save`（计数进 tooltip「提交 N 项变更到源库」）、撤销 `RotateCcw`、分析 `Sigma`、复制 `Copy` |
+| 二元开关 | CHECK `ToolItem`（图标 + 按下态） | `Switch`「下发源库」「注释」各占一整块（轨道 + 文字） | **图标 toggle** `Button`：`.ghost().small().toggled(..).icon(..).tooltip(..)`（下发源库 `DatabaseZap`、注释 `FileText`）。点击回调里自己翻转（`Button::on_click` 不给新值，闭包捕获当前 bool 取反）；`SetPushdown` / `SetShowColumnComments` 的请求载荷不变 |
+| 分组 | `UIUtils.createToolBarSeparator` 竖线 | 只有 `gap` | 开关组与动作组之间插一条 1px 竖线：`w(ui::HAIRLINE).h(rems(1.5)).bg(theme.colors.border)`，**两组都非空才插**（避免空段留孤线）。不用 `separator::Separator::vertical()`：它渲染成 `absolute().h_full()`（`vendor/gpui-component/src/separator.rs:80-84`），塞进 `Toolbar::contents` 的流式槽位会定位到外层祖先，故按同一语义自画 1px 线 |
+| 高度 | SWT ToolBar 天然紧凑（约 24px） | 40px（`ui::RESULT_TOOLBAR_HEIGHT`，§8.28 定的） | **不动**——用户已验收当前高度；本轮的收形靠「去文字 + 去开关轨道 + 加竖线」实现，靠压缩高度反而会碰 §8.28 记录的「编辑行被虚拟列表裁剪丢 Input 焦点链」风险 |
+
+**范围不变（只改形态，不改任何功能与摆放条件）**：SQL 预览仍在最左（保留 `SQL: <前 60 字>` 文字，
+它是「一眼看查询」的信息位，不是按钮标签）；筛选框 / 展开态不变；对比仍只在 `tabs.len() >= 2` 摆；
+提交+撤销对仍只在 `pending_changes > 0` 摆、提交中仍置灰；分析仍只在 `analysis_items` 非空摆。
+`debug_selector` 全部原样保留（`editor-result-pushdown` / `editor-result-show-comments` 是**新加**的，
+原先 `Switch` 侧没有）。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **240 passed / 0 failed**（与改前一致，测试集合没动）；
+`cargo check -p rds-result-panel` Finished、0 warning；`cargo test -p rds-ui-guard` = 4 passed
+（未新增 `ui.rs` 常量，BASELINE 不动）。
+
+`cargo test -p rds-editor --lib` = 764 passed / **3 failed** / 1 ignored。其中
+`view::tests::results_a::the_result_header_sorts_from_its_arrow`（`editor-result-th-1 应登记坐标`）
+经 A/B 归因**不是本轮引入**：把本轮两个文件 `git stash` 后单跑同样 FAILED。另两条
+（`legacy::opening_an_analysis_document_builds_a_cell_editor_per_cell`、
+`notebook_win::analysis_cell_renders_multiple_output_blocks`）是升级报告 §7 登记的基线失败。
+工作树当时另有并行线未完成改动（`crates/editor/src/ports/editor_exec/` 迁移中），故不在本轮修。
+
+**未验证（需真窗口）**：纯图标状态下右段整体观感（六个图标 + 一条竖线挤在 40px 行里是否过密）；
+`IconName` 语义是否一眼可读（`Save` 表「提交」、`Sigma` 表「分析」、`DatabaseZap` 表「下发源库」
+都需要靠 tooltip 兜底）；`ComponentTooltip` 在这排小图标上的延迟/位置。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
