@@ -865,6 +865,60 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
    同一哲学）。
 
 
+## 15.17 A1 剩余：Python 单元的语言服务（接线方案，**未开工**）
+
+**先纠正一处口径**：§16.1 的 A1 曾被写成"per-cell 语言服务会话（分析模式的单元补全/诊断）"，
+容易读成"单元的补全还没做"。实际**SQL 那一半已经交付**：
+
+- 补全：`view/host/notebook.rs:48-62`（`uses_local_sql_completion()` + `completion_enabled` 门控，
+  `crate::view::completion::install` 装到单元自己的内核），回归用例
+  `view/tests/legacy.rs:66 sql_cells_of_a_note_get_the_completion_provider`（SQL 单元装、文本单元不装）
+- 诊断：§15.14 / §15.15（词法 + 语义 + 执行错误三源合一，`view/cell_diagnostics.rs`）
+
+**真正缺的是非 SQL 单元**：`CellLanguage::{Python, R, Julia}`（`notebook/cell.rs:88-98`）既没有补全
+也没有诊断——它们的候选/诊断必须来自语言服务，而 `ports/editor_lsp.rs:77-86 language_for()` 对
+`EditorMode::Analysis` 直接返回 `None`（`mode != General → None`），所以分析模式一个会话都拿不到。
+
+### 已核事实（方案依据，全部本仓源码）
+
+| 事实 | 位置 |
+| --- | --- |
+| 会话就是「共用一个 client + 本文档 uri + 语言 id」三件套，没有别的状态 | `lsp/host.rs:39-46 LspSession{client, uri, language_id}` |
+| 端口三个方法：`service(文档)` / `drain_for(文档)` / `wants(文档)`，全以 **DocumentId** 为键 | `lsp/host.rs:49-65` |
+| 一个常驻 server 已经同时服务多份文档，事件按 `uri` 认领 | `ports/editor_lsp.rs:92-119`（`uri_for` / `claim_events`） |
+| `didOpen` / `didClose` 由**面板**发，不是宿主 | `view/host/session.rs:584-597` |
+| 服务是否该被回收只看「有没有 `.py` 文档」 | `ports/editor_lsp.rs:186-193 active_document_count` |
+| 单元诊断只能一处重建（内核集合只有 `clear` + `push`） | `view/cell_diagnostics.rs:68 apply(state, found, exec, cx)` |
+| 内核诊断类型可直接从 `lsp_types::Diagnostic` 转 | `lsp/mod.rs:19-21` 注释（`DiagnosticSet: From<lsp_types::Diagnostic>`） |
+
+### 接线清单（6 处，落点已定）
+
+| # | 位置 | 改动 |
+| --- | --- | --- |
+| 1 | `lsp/host.rs` | 端口加两个**带默认实现**的方法：`cell_service(&DocumentId, cell_id) -> Option<LspSession>`（默认 `None`）、`drain_for_uri(&str) -> Vec<LspEvent>`（默认空）。默认值保证现有 `FakePort`（`:190`）与测试零改动 |
+| 2 | `ports/editor_lsp.rs` | `language_for` 加单元分支：`Analysis` 时按**单元语言**判（Python → `python`）；新增 `uri_for_cell(document, cell_id)` = `untitled:Rds-<doc>-c<cell>`；`drain_for` 的实现抽成 `drain_for_uri(uri)` 复用；`active_document_count` 改为「`.py` 文档 **或** 含 Python 单元的分析文档」（否则 server 会在需要它时被回收） |
+| 3 | `view/host/notebook.rs` | 面板新字段 `cell_lsp: HashMap<String, CellLsp{ session, version }>`；`ensure_cell_editor` 之后 `sync_cell_lsp(cell)`：`did_open(uri, language_id, 单元正文)` + 装 `LspCompletionProvider` / `LspHoverProvider`；Change 回调里 `did_change(uri, version, 正文)`（session 与 version 通过 `Rc<RefCell<…>>` 共享给订阅闭包）；删单元 / 关文档时 `did_close` |
+| 4 | `view/cell_diagnostics.rs` | `apply` 加第四参 `lsp: &[lsp_types::Diagnostic]`：来源标「语言服务」，与词法/语义（「语法」）、执行（「执行」）在同一趟 `clear` + push 里合并 |
+| 5 | `view/host/notebook.rs::rebuild_cell_diagnostics` | 现取 `cell_lsp` 里该单元最新一批 LSP 诊断，传给 `apply` 第四参；非 Python 单元传空 |
+| 6 | 事件泵 | 沿用现有面板泵：`drain_for_uri(cell_uri)` → 转 `Diagnostic` → 存 `cell_lsp` → `rebuild_cell_diagnostics` |
+
+### 必须实测的风险（动手前先验，不靠推断）
+
+1. **jedi-language-server 是否真能同时接多个 `untitled:` 文档**：机制上 LSP 支持（`did_open` 多 uri），
+   但本仓从未在一条连接上开过两份 `untitled:` 文档，jedi 对无路径文档的解析行为未知。**先做一次
+   手工探针**（起 server、`did_open` 两个 `untitled:Rds-*`、各发一次补全请求）再改代码。
+2. **单元内坐标是否需要换算**：不需要——单元是独立内核实例，LSP 返回的 range 就是单元正文坐标，
+   直接进该单元的 `DiagnosticSet`（与"文档行号偏移"无关，这一点此前被误判过）。
+3. **R / Julia 不在本方案内**：`editor_env::resolve` 目前只解析 Python；R 服务还要先定"是否真要
+   R 内核单元"（§16.2 B 组待拍板）。
+
+### 验收口径（若批准）
+
+- 假端口用例：Python 单元装补全 provider、文本/SQL 单元不装；LSP 诊断进单元且**敲键后不清失**
+  （与词法诊断合并正确）、非 Python 单元不受影响。
+- 真机：`.rdsnote` 里 Python 单元敲 `import os` 后 `os.` 出补全；故意写未定义名字看是否有波浪线。
+- 未装 `jedi-language-server` 的环境必须**如实无服务**（不假装、不 panic）。
+
 ## 16. 遗留总账（2026-11-09 全量盘点）
 
 **盘点口径**：文档声明（§一 ~ §15）+ 代码内 `TODO|FIXME|未接线|暂不支持|暂不|遗留|待接线`
@@ -879,7 +933,7 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 
 | # | 项 | 证据 | 现在的影响 | 处置 |
 | --- | --- | --- | --- | --- |
-| A1 | **per-cell 语言服务会话**（分析模式的单元补全/诊断） | `ports/editor_lsp.rs:25-27`「v1 只服务 Python（`.py`）；分析模式（`.rdsnote`）暂不服务；Markdown 留后」；主编辑器装 provider 只在 `view/host/mod.rs` / `session.rs` 两处 | Python / R / Julia 单元没有补全与诊断；`choose_completion` 对 `Analysis` 仍可能把 LSP provider 装到主 state（笔记模式无人调用，无害但无用） | 一条改动同时收口三笔账：§15.8 未做 2、§15.14 未覆盖（语言面）、§15.15 未覆盖 1。需虚拟 URI + 每单元一份会话，**架构级，但不需要产品决定**——只要接受"每单元一个 server 会话"的资源成本 |
+| A1 | **per-cell 语言服务会话**（分析模式的单元补全/诊断） | `ports/editor_lsp.rs:25-27`「v1 只服务 Python（`.py`）；分析模式（`.rdsnote`）暂不服务；Markdown 留后」；主编辑器装 provider 只在 `view/host/mod.rs` / `session.rs` 两处 | **SQL 单元那半已交付**（§15.8 补全 + §15.14/15.15 诊断）；缺的是 Python / R / Julia 单元的会话 | 剩余部分见 **§15.17**（接线清单 6 处 + 3 条需先实测的风险）；R / Julia 还要先过 §16.2 的 B 组拍板 |
 | A2 | **连接变更未订阅** | §15.15 未覆盖 2；`rebuild_cell_diagnostics` 每次现取快照，但触发点是敲键/执行 | 切连接 / 切 Schema 后，已有单元的语义诊断要下一次敲键或执行才按新快照刷新 | **已修（§15.16，2026-11-09）**：不订阅，改「目录快照代际 + render 权威同步点」——同一份 `Arc` 重复推不涨，真换目录才涨，面板重绘时整批重建 |
 | A3 | **折叠候选双算未合并** | §15.3 第 1 条：前台 `sync_fold`（`fold::install`，全文）与后台 scan（`fold::spans`，全文）各算一次，后者每编辑一拍 | 纯 CPU 重复，未见卡顿；合并会改候选刷新时机（后台成为唯一来源），属行为变更 | **有意推迟**，等折叠区人工验收（`ui-todo.md` V-6/V-7）确认后再动 |
 | A4 | `save_cell_update` 死代码 | `ports/result_service.rs:105`，全仓 `grep save_cell_update` 仅 1 命中（定义本身），零调用方；注释自述「遗留的单格更新路径（无调用方；T2a 批量提交已取代它）」 | 无运行时影响；留着会误导"单格更新还走这条路" | **已删（§15.16，2026-11-09）**；模块文档改为"单格回写不在这里，要恢复请接 T2a 批量链" |
