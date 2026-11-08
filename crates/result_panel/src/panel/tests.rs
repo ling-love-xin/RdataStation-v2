@@ -247,7 +247,7 @@ fn rendered_ui_elements_survive(cx: &mut gpui_kit::TestAppContext) {
         "筛选区外框应为 24px（Input.xsmall 20 + 边框 1 与内距 1 各两道，对齐 DBeaver 的 2+20+2），实际 {filter_height}px"
     );
 
-    // 2) 展开筛选条：两内嵌按钮（左=展开 / 右=运行）随条出现
+    // 2) 展开筛选条：两列按钮（左=收起 / 右=运行）+ 多行输入框随条出现
     cx.update(|_, app| panel.update(app, |p, cx| p.toggle_filter_expand(cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
     for id in [
@@ -260,6 +260,21 @@ fn rendered_ui_elements_survive(cx: &mut gpui_kit::TestAppContext) {
             "展开筛选条元素 {id} 应渲染可见（回退检查）"
         );
     }
+
+    // 2.5) 展开条高度 = 5 行（P3 把筛选框换成多行 `Textarea` 的落点）。
+    //      DBeaver 展开是 `gd.heightHint = getLineHeight() * 5`
+    //      （`togglePanelExpand`，`ResultSetFilterPanel.java:1320-1327`）；本仓行高常量
+    //      20px（`input.rs:543` 的 `Rems(1.25)`）→ 控件 100px + 容器 `py_1` 上下 8px
+    //      + 下边框 1px = 109px。给区间不给精确值：只钉「真的变成 5 行」——
+    //      若这里量到 20~30px，说明多行控件的高度没生效（那是静默的形态回退）。
+    let expand_bar = cx
+        .debug_bounds("editor-result-filter-expand-bar")
+        .expect("展开条应带 debug_selector 才量得到");
+    let expand_h = f32::from(expand_bar.size.height);
+    assert!(
+        (100.0..=115.0).contains(&expand_h),
+        "展开条应容纳 5 行（≈109px），实际 {expand_h}px"
+    );
 
     // 3) SQL 预览弹窗：open 出现 / close 消失
     cx.update(|window, app| {

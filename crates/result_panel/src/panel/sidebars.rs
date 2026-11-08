@@ -10,7 +10,7 @@ use gpui_kit::base::StyledExt as _;
 /// 开合，与 vendor sidebar 组件同款机制）。
 use gpui_kit::base::animation::{EffectTransition, ease_in_out_cubic};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::Input;
+use gpui_kit::component::input::Textarea;
 use gpui_kit::component::list::List;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tab::{Tab, TabBar};
@@ -639,41 +639,58 @@ impl ResultPanel {
             .text_xs()
             .debug_selector(|| "editor-result-filter-expand-bar".to_string())
             .child(
-                div().flex_1().min_w_0().child(
-                    // 【2026-10-28 微调（纠正）】输入框内两个内嵌组件：
-                    // **最左侧 = 展开**（prefix：Maximize2，点击收起筛选条，标识本框为
-                    // 展开态）；**最右侧 = 运行**（suffix：▶，wrapped 重查）；
-                    // 输入框无边框（bordered(false)，与工具栏融为搜索条风格）。
-                    Input::new(&self.filter_input)
-                        .bordered(false)
-                        // 【2026-11-08】与工具栏筛选框同档：展开条原先 32px + py_1 = 40px 高，
-                        // 回到工具栏时高度会跳一下；两处必须同档。
-                        // 【2026-11-08 三次】工具栏那边降到 XSmall 20px（对齐 DBeaver 的
-                        // `MIN_FILTER_TEXT_HEIGHT`，`ResultSetFilterPanel.java:103`），这里跟随。
-                        .xsmall()
-                        .prefix(
-                            Button::new("editor-result-filter-expand-toggle")
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Maximize2)
-                                .debug_selector(|| "editor-result-filter-expand-toggle".to_string())
-                                .tooltip("收起筛选条（回到工具栏输入框）")
-                                .on_click(move |_, _window, app| {
-                                    collapse_queue.request(ResultRequest::ToggleFilterExpand, app);
-                                }),
-                        )
-                        .suffix(
-                            Button::new("editor-result-filter-expand-run")
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Play)
-                                .debug_selector(|| "editor-result-filter-expand-run".to_string())
-                                .tooltip("用 select * from (原SQL) where 词 重查（替换当前结果集）")
-                                .on_click(move |_, _window, app| {
-                                    run_queue.request(ResultRequest::RunFilterAsQuery, app);
-                                }),
+                // 【P3】列布局：`Textarea` **没有 prefix / suffix 槽**（`textarea.rs` 只暴露
+                // token / h / appearance / bordered / context_menu / on_paste 等，全文无
+                // 插入槽），所以展开 / 执行两个钮改成同一行的兄弟元素 —— 与 DBeaver 的
+                // `GridLayout(5)` 一致：展开列在文本**左**、执行列在文本**右**
+                // （`ResultSetFilterPanel.java:174/186/209`）。此前靠 `Input` 的 prefix/suffix
+                // 内嵌，在多行控件上做不到。
+                div()
+                    .h_flex()
+                    .items_center()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        Button::new("editor-result-filter-expand-toggle")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Maximize2)
+                            .debug_selector(|| "editor-result-filter-expand-toggle".to_string())
+                            .tooltip("收起筛选条（回到工具栏输入框）")
+                            .on_click(move |_, _window, app| {
+                                collapse_queue.request(ResultRequest::ToggleFilterExpand, app);
+                            }),
+                    )
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            // 输入框无边框（bordered(false)，与工具栏融为搜索条风格）。
+                            Textarea::new(&self.filter_input)
+                                .bordered(false)
+                                // 【2026-11-08】与工具栏筛选框同档：展开条原先 32px + py_1
+                                // = 40px 高，回到工具栏时高度会跳一下；两处必须同档。
+                                // 【2026-11-08 三次】工具栏那边降到 XSmall 20px（对齐 DBeaver 的
+                                // `MIN_FILTER_TEXT_HEIGHT`，`ResultSetFilterPanel.java:103`），跟随。
+                                //
+                                // 【P3】展开态正是 DBeaver 的 5 行：`getLineHeight() * 5`
+                                // （`togglePanelExpand`，`:1320-1327`）。行高常量 `Rems(1.25)`
+                                // = 20px（`input.rs:543`），故 `.h(rems(6.25))` = 100px = 5×20，
+                                // 与 DBeaver 的五倍 `MIN_FILTER_TEXT_HEIGHT` 逐像素相等。
+                                // 内容不足 5 行时下方留白，与 DBeaver 的固定 `heightHint` 一致。
+                                .h(rems(6.25))
+                                .xsmall(),
                         ),
-                ),
+                    )
+                    .child(
+                        Button::new("editor-result-filter-expand-run")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Play)
+                            .debug_selector(|| "editor-result-filter-expand-run".to_string())
+                            .tooltip("用 select * from (原SQL) where 词 重查（替换当前结果集）")
+                            .on_click(move |_, _window, app| {
+                                run_queue.request(ResultRequest::RunFilterAsQuery, app);
+                            }),
+                    ),
             )
             .when(!self.filter_text.trim().is_empty(), |row| {
                 row.child(

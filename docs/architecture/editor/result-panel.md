@@ -1916,6 +1916,98 @@ fn render_header(&mut self, _window: &mut Window, cx: &mut Context<TableState<Se
 **验证**：两个主题 JSON 严格解析（`json.load`）通过并回读两值；`rds-workbench-shell --lib` **14 passed**、
 `rds-result-panel --lib` **242 passed**、`rds-ui-guard` **4 passed**。
 
+### 8.39 工具栏组件逐档对齐 DBeaver（P0 尺寸档 / P1 列序 / P3 多行框）
+
+用户第 5 次指出工具栏未对齐并授权「逐步对齐」。本轮把「工具栏组件构成」拆成三档落地，
+每档一次提交、每档单独跑门禁。
+
+#### 8.39.1 总高：不是「无法量测」，是可算的 30px
+
+此前曾下结论「DBeaver 源码里没有工具栏总高常量、32px 只是推导」——**错**。它没有**单个**常量，
+但由四圈 margin 加一个显式行高撑出来（均在 `ResultSetFilterPanel.java`）：
+
+| 来源 | 值 | 行号 |
+| --- | --- | --- |
+| 外层 `marginHeight` | 3 | `:164` |
+| `filterComposite` `marginHeight` | 2 | `:175` |
+| `MIN_FILTER_TEXT_HEIGHT`（行高，同时是展开 / 执行 / 历史三面板的 `heightHint`） | 20 | `:103`、`:1067`、`:1304`、`:1351` |
+| `filterComposite` `marginHeight` | 2 | `:175` |
+| 外层 `marginHeight` | 3 | `:164` |
+
+合计 **3 + 2 + 20 + 2 + 3 = 30px**。本仓 `RESULT_TOOLBAR_HEIGHT` 由 `2.0`（32px）改为
+**`1.875`（30px）**。工具栏从此**不再与标签条（32px）等高** —— 这是 DBeaver 的原生关系：
+筛选条本来就比它上方的 TabFolder 矮。
+
+#### 8.39.2 尺寸档：控件 24px → 20px（本仓真有这个档）
+
+`Size::input_h` 的映射（`vendor/gpui-component/src/sizing.rs:281-289`）：
+`Large h_11` / `Medium h_8`(32) / `Small h_6`(24) / **`XSmall h_5`(20)**。
+DBeaver 的 20px 正是 `XSmall`，本仓此前用 `Small`，正好高一档。
+
+共 15 处 `.small()` → `.xsmall()`：工具栏的筛选框 / 执行 / 展开 / 清除，展开条的展开 / 运行 /
+清除 / 收起，右段 pushdown / comments / compare / commit / discard / copy / analysis
+（`DropdownButton` 与其内 `Button` 各一次）。
+
+筛选容器补 `.p(ui::HAIRLINE)`：DBeaver 那圈框线由 `paintControl` 画、**不占布局**，
+「框到内容」只有 2px；本仓边框占 1px 布局，再补 1px 内距才等价 → 容器 **24px**，
+与 DBeaver 的 `2 + 20 + 2` 逐段相等。
+
+#### 8.39.3 列序：`GridLayout(5)` + `horizontalSpacing = 0`
+
+DBeaver 的 `filterComposite` 是 `GridLayout(compactMode ? 4 : 5, false)`，`horizontalSpacing = 0`
+（`:174-179`），五列横排：**活动对象 / 展开 / 文本 / 执行 / 历史**（`:184-214`）。
+
+本仓改为 **`[展开][文本][执行][清除]`** 紧排（去掉 `gap_1` 的四条 4px 缝）：
+
+- 展开钮从行尾移到文本列**左侧**（DBeaver 第 2 列 `FilterExpandPanel`，`:186/:1303-1306`），
+  且不随 `filter_expanded` 分支：展开态下工具栏只剩它（点它收起）
+- 执行钮从 `Input.suffix` 拆成**独立列**（DBeaver 第 4 列 `ExecutePanel`，`:209/:1351`）
+- 清除钮留在末位：DBeaver 的 ERASE 在右列 ToolBar 首位，但本仓右段是「结果集动作」而非
+  「筛选动作」，两组语义不同，不机械搬移
+
+#### 8.39.4 多行控件：`TextViewer(SWT.MULTI)` → `Textarea`
+
+DBeaver 的筛选输入是 `TextViewer(SWT.MULTI)`（`:192`），常态 1 行、展开 5 行
+（`gd.heightHint = getLineHeight() * (filterExpanded ? 5 : 1)`，`:1320-1327`）。
+
+本仓换成 `Textarea`（`TextareaState`），高度由 `.h()` 决定（多行分支 `input.rs:794-797`
+走 `h_auto()` + `height`，故 `.h()` 精确生效）：
+
+- 行高常量 `LINE_HEIGHT = Rems(1.25)` = **20px**（`input.rs:543`）—— 天然等于
+  `MIN_FILTER_TEXT_HEIGHT`
+- 工具栏常态 `.h(rems(1.25))` = 1 行；展开条 `.h(rems(6.25))` = **100px** = 5 行
+- `submit_on_enter(true)`：多行框回车默认插换行（`state.rs:1618` 的
+  `is_multi_line && !submit_on_enter` 分支），但筛选词是单行语义，换行会让拼出的 WHERE
+  带 `\n` → 关掉后回车只发 Submit（本仓未订阅），交互与改造前一致
+
+**`Textarea` 没有 prefix / suffix 槽**（`textarea.rs` 只暴露 token / h / appearance /
+bordered / context_menu / on_paste 等，全文无插入槽），所以展开条的展开 / 运行两个钮改为
+同一行的兄弟元素（`[展开][文本][运行]`），与 DBeaver 的列布局一致。
+
+#### 8.39.5 三条哨兵断言
+
+| 断言 | 位置 | 值 |
+| --- | --- | --- |
+| 筛选区外框高 | `panel/tests.rs` | 26 → **24px** |
+| 工具栏高 | `grid/tests.rs` | 32 → **30px** |
+| 展开条高（新增） | `panel/tests.rs` | **100~115px**（≈109，钉「真的 5 行」；退回 1 行即红） |
+
+量绝对像素而不是比值：档位、边框、内距、行高任一改动都会先红。
+
+#### 8.39.6 仍未对齐（P2，未开工）
+
+DBeaver 右列 ToolBar 有五个 `ToolItem`（`:315-379`）：ERASE / FILTER（筛选设置下拉）/
+分隔 / RS_BACK / RS_FORWARD（结果集前后跳，带历史菜单）/ FIND_REPLACE。
+本仓缺其中三个**功能**：筛选历史下拉、筛选设置对话框、查找替换浮层（P2 范围）；
+`RS_BACK/FORWARD` 本仓用标签页替代，机制不同，不算缺口。
+
+此外本仓的「展开」仍是右栏另起一条，而非「输入框就地变 5 行」—— 保留该形态是用户早前
+确认的功能（「展开顶宽 + wrapped 重查 + 右栏执行 SQL 页签」），属**有意保留的产品差异**。
+
+**验证**：`rds-result-panel --lib` **242 passed**、`rds-ui-guard` **4 passed**、
+`rds-workbench-shell --lib` **14 passed**；三档提交 `a4574c83`（P0）、`4f8acd47`（P1）、
+P3 与本文档同一提交。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

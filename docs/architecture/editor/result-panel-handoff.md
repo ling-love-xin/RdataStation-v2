@@ -574,6 +574,38 @@ datetime #5CA259 / numeric #C0C0FF / string #D0D0D0）。全表见 `result-panel
 
 **验证**：两个主题 JSON 严格解析回读通过；shell **14** / panel **242** / guard **4** passed。
 
+### 2.30 2026-11-09（工具栏组件逐档对齐 DBeaver：P0 尺寸档 / P1 列序 / P3 多行框）
+
+`result-panel.md` §8.39 是完整证据，这里只留接手要点。
+
+**关键推翻**：此前写「DBeaver 工具栏总高无常量、32px 只是推导」是错的。它没有**单个**常量，
+但四圈 margin + 一个显式行高就撑出确定值：外层 `marginHeight 3`（`:164`）+ `filterComposite`
+`marginHeight 2`（`:175`）+ `MIN_FILTER_TEXT_HEIGHT 20`（`:103`）+ `2` + `3` = **30px**。
+本仓 `RESULT_TOOLBAR_HEIGHT` `2.0` → **`1.875`**，工具栏与标签条（32px）**不再等高**。
+
+**三档改动**：
+
+1. **P0 尺寸档**（`a4574c83`）：15 处 `.small()` → `.xsmall()`（`Size::input_h` 的 `XSmall = h_5`
+   = 20px，`sizing.rs:281-289`）；筛选容器补 `.p(ui::HAIRLINE)`（DBeaver 框线不占布局，本仓边框占 1px，
+   再垫 1px 才等价）→ 容器 24px；两条量像素断言同步 26→24（panel）/ 32→30（grid）。
+2. **P1 列序**（`4f8acd47`）：`[展开][文本][执行][清除]` 紧排、去 `gap_1`（DBeaver
+   `GridLayout(5)` + `horizontalSpacing = 0`，`:174-179`）；展开钮从行尾移文本列左侧且不随展开分支；
+   执行钮从 `Input.suffix` 拆成独立列（也顺便为 P3 铺路——`Textarea` 没有 suffix 槽）。
+   清除钮留末位是有意偏离：DBeaver 的 ERASE 在右列 ToolBar，本仓右段是结果集动作，语义不同。
+3. **P3 多行框**（与本节同一提交）：`Entity<InputState>` → `Entity<TextareaState>`（`data.rs`）、
+   `TextareaState::new` + `set_submit_on_enter(true, cx)`（`lifecycle.rs`）、
+   渲染处 `Textarea::new(..).xsmall().appearance(false).h(rems(1.25))`（工具栏 1 行）与
+   `.h(rems(6.25))`（展开条 5 行，100px）。行高常量 `LINE_HEIGHT = Rems(1.25)` = 20px
+   （`input.rs:543`）正好等于 `MIN_FILTER_TEXT_HEIGHT`，故 5 行 = 5×20 逐像素相等。
+   展开条原来靠 `Input` 的 prefix/suffix 内嵌两个钮，`Textarea` 两个槽都没有 → 改成同行兄弟元素。
+
+**新增哨兵**：`panel/tests.rs` 展开条高断言 **100~115px**（≈109；退回 1 行就红）。
+
+**仍未做**：筛选历史下拉 / 筛选设置对话框 / 查找替换浮层（P2）；「展开」仍是右栏另起一条
+（用户早前确认的功能，非缺口）。
+
+**验证**：panel **242** / guard **4** / shell **14** passed。
+
 ---
 
 
@@ -600,7 +632,7 @@ datetime #5CA259 / numeric #C0C0FF / string #D0D0D0）。全表见 `result-panel
 ## 5. 常用锚点（行号随近期提交微移，以现场 grep 为准）
 
 - `panel/`：`mod.rs`（门面 + pub 面 re-export：`GridPayload` / `ExportCtx` / `ResultSyncInput` / `ResultPanel` / `AnalysisItem`）；`render.rs` 主 `render` 组装；`sidebars.rs` `render_vertical_bar`（左缘竖条：网格/文本/记录/上一行/下一行）/ `render_right_edge_bar`（右缘竖条，页签图标区）/ `render_right_sidebar`（横 tab 只显激活页签）/ `render_browser_tab` / `render_filter_expand_bar`（展开条：左=展开右=运行无边框）+ `sidebar_width_anim` / `next_right_edge_state` 纯函数；`tabs.rs` `render_value_tab` / `render_stats_tab` / `render_group_tab` / `render_reference_tab`（backlog 空态）/ `render_exec_sql_tab` + `kv_row` / `fmt_stat` / `right_tab_from_index`；`dialog.rs` `render_sql_dialog`（SQL 预览弹窗浮层）；`events.rs` `toggle_value_sidebar`（三态）/ `toggle_transpose` / `open_sql_dialog` / `close_sql_dialog`（事件路径，需 window）+ `reorder_by` 纯函数；`lifecycle.rs` `new` / `sync`（投影同步）；`tests.rs` 尾部 `rendered_ui_elements_survive`（渲染断言防回退，见 §2.10）。
-- `ui.rs`：`RESULT_VERTICAL_BAR_WIDTH`（2.25）/ `RESULT_SIDEBAR_RIGHT_WIDTH`（20.0）/ `RESULT_STATUS_BAR_HEIGHT`（1.5）/ `RESULT_TOOLBAR_HEIGHT`（2.0，与 `RESULT_TABS_HEIGHT` 同高）/ `RESULT_TOOLBAR_PADDING`（`px(3.)`，水平内距，对齐 DBeaver `marginWidth = 3`）。
+- `ui.rs`：`RESULT_VERTICAL_BAR_WIDTH`（2.25）/ `RESULT_SIDEBAR_RIGHT_WIDTH`（20.0）/ `RESULT_STATUS_BAR_HEIGHT`（1.5）/ `RESULT_TOOLBAR_HEIGHT`（**1.875 = 30px，比标签条 2.0 矮一档**，对齐 DBeaver `3+2+20+2+3`）/ `RESULT_TOOLBAR_PADDING`（`px(3.)`，水平内距，对齐 DBeaver `marginWidth = 3`）。
 - `ports.rs`：`ResultRequest` 全集（含 #7 / §2.9 新增变体 `RunFilterAsQuery` / `ToggleFilterExpand` / `OpenSqlDialog` / `CloseSqlDialog`；`ToggleSqlPreview` 已删）+ `ResultActionQueue`（`request` / `set_panel` / `push` / `drain`）。
 - `grid/`：`delegate.rs` `ResultGridDelegate`（TableDelegate 主体实现 + 钩子类型 + RESULT_GRID_CONTEXT 等常量）；`cell.rs` `render_td` / `header.rs` `render_th` / `menu.rs` `context_menu`（trait 方法不可分块 → 顶层自由函数 + `table_impl.rs` 薄转发）；`status.rs` `render_status_row`（三项新签名）/ `ResultToolbar` / `ResultStatus` / `ResultControls` / `ResultPane`；`text.rs` `format_cell_text` / `view_rows.rs` `text_presentation` 指纹缓存 / `stats.rs` 列统计 / `edit.rs` 行编辑 / `tests.rs`（全量测试迁入）。
 - `store/`：`store.rs` `ResultStore`（按文档分槽，多结果集 sets(document) + TabBar 标签；事实档 A2 未接线）+ `entry.rs` / `fact.rs`。

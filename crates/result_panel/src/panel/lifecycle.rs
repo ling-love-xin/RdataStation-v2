@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 
 use gpui_kit::base::TreeState;
-use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::list::ListState;
 use gpui_kit::component::table::{TableEvent, TableState};
 use gpui_kit::*;
@@ -25,8 +25,19 @@ impl ResultPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>, queue: ResultActionQueue) -> Self {
         // 【B15】本地筛选框：输入变化走防抖（原型 §5.5 的 300ms），到点才重算视图行序
         let filter_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx);
+            // 【P3】多行控件：DBeaver 的筛选输入是 `TextViewer(SWT.MULTI)`
+            // （`ResultSetFilterPanel.java:192`），常态 1 行高、展开 5 行
+            // （`togglePanelExpand` 的 `gd.heightHint = getLineHeight() * (expanded ? 5 : 1)`，
+            // `:1320-1327`）。本仓对应组件是 `Textarea`，高度由渲染处的 `.h()` 决定
+            // （多行分支 `input.rs:794-797` 走 `h_auto()` + `height`）。
+            //
+            // `submit_on_enter(true)`：多行控件的回车默认插入换行（`state.rs:1618` 的
+            // `is_multi_line && !submit_on_enter` 分支），但筛选词是单行语义，换行会让
+            // 拼出的 WHERE 带 `\n`。关掉后回车只发 Submit 事件，本仓未订阅该事件，
+            // 交互与改造前的单行框一致。
+            let mut state = TextareaState::new(window, cx);
             state.set_placeholder("筛选当前结果…", window, cx);
+            state.set_submit_on_enter(true, cx);
             state
         });
         let filter_sub = cx.subscribe_in(

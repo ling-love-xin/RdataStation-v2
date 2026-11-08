@@ -246,7 +246,8 @@ pub struct ResultPanel {
     pub(crate) editable: bool,
 
     // 【B15】本地筛选框（视图层自洽：防抖 + 清除 + 统计回填都在面板内）
-    pub(crate) filter_input: Entity<InputState>,
+    /// 【P3】多行控件：DBeaver 的筛选输入是 `TextViewer(SWT.MULTI)`，不是单行框
+    pub(crate) filter_input: Entity<TextareaState>,
     pub(crate) filter_text: String,
     /// 防抖版本号（连打时任务被取代，只有最后一次到点）
     pub(crate) filter_version: u64,

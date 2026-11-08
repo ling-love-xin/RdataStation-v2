@@ -6,7 +6,7 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
-use gpui_kit::component::input::Input;
+use gpui_kit::component::input::{Input, Textarea};
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::toolbar::ToolbarGroup;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -292,9 +292,17 @@ impl ResultPanel {
                             // （`GridLayout(5)` 第 4 列，`ResultSetFilterPanel.java:174/209`），
                             // 不在文本框内部；且 `Textarea`（P3 要换的多行框）**没有 suffix 槽**，
                             // 提前改成一列，P3 时才不必再搬一次。
-                            Input::new(&self.filter_input)
+                            // 【P3】换成多行控件 + 固定 1 行高。DBeaver 的 `filtersTextViewer`
+                            // 是 `TextViewer(SWT.MULTI)`（`ResultSetFilterPanel.java:192`），
+                            // 常态被 `gd.heightHint = getLineHeight() * 1` 钉在 1 行
+                            // （`togglePanelExpand`，`:1320-1327`）。
+                            // 本仓 `Textarea` 的行高是常量 `LINE_HEIGHT = Rems(1.25)` = 20px
+                            // （`input.rs:543`），所以 `.h(rems(1.25))` 就是 1 行、且与
+                            // `MIN_FILTER_TEXT_HEIGHT = 20` 逐像素相等；容器仍 24px。
+                            Textarea::new(&self.filter_input)
                                 .xsmall()
-                                .appearance(false),
+                                .appearance(false)
+                                .h(rems(1.25)),
                         ),
                     )
                     .child(
