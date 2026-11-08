@@ -984,6 +984,83 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 3. **不需要改同步模式**：既有 `LspClient::did_change`（`lsp/client.rs:368`，全量 `contentChanges`）可直接复用，
    不必为 `change: 2` 另做增量合并（jupyter-lsp 的 `apply_change` 不引入）。
 
+## 15.18 对齐 Jupyter：内核按 kernelspec 启动（2026-11-09，**已实现**）
+
+### 口径
+
+用户原话「希望可以对齐 Jupyter」。把「接入 Jupyter」按 A–E 五层算过账后的结论是：
+**A（内核协议 ZeroMQ 四通道）早已接上，C（kernelspec 标准）才是缺的那层**。没接 C 的可见
+后果只有一个但很硬：**R / Julia 单元永远是灰的**（旧 `registry.rs` 把 `ready:false` 写死），
+并且 Python 单元会跑在 PATH 上那个 3.14 shim 而不是装了 ipykernel 的 venv。接 C 一次解决三件事：
+R/Julia 亮、Python 跑对解释器、与机器上已有 Jupyter 共用同一套 kernelspec。
+
+**不做**：B（Jupyter Server：要分发并常驻 Python 守护进程 + 管 token/端口/WS 多路复用，只买到
+「生命周期托管」而这层自写更可控）；D（内嵌 JupyterLab：`crates/kernel/src/lib.rs:4` 明写 GPUI
+无 DOM）；E（nbformat / `.ipynb` 读写：等 ipynb 口径拍板）。
+
+### 落点（内核侧 3 文件 + editor 侧 4 处）
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/kernel/src/registry.rs` | 全文重写：`KernelLaunch{argv,env,interrupt_mode}`（`ipykernel()` / `placeholder()` / `is_launchable()`）、`KernelInterruptMode{Message,Signal}`、`probe_python()`（**一次子进程**同时拿 `sys.executable` / `sys.prefix` / `find_spec('ipykernel')`）、`kernelspec_data_dirs()`、`scan_kernelspecs()`、`spec_from_kernelspec()`、`detect_kernels()` 双路（kernelspec 优先 + 旧探测兜底）。kernelspec 条目 id = **`ks:<kernel_name>`**（命名空间，不撞旧探测 id）；6 个单测 |
+| `crates/kernel/src/lib.rs` | 导出 `KernelInterruptMode` / `KernelLaunch` |
+| `crates/kernel/src/session.rs` | `spawn(python)` 变薄包装（转调 `spawn_spec`，保住既有调用点与集成测试）；新增 `spawn_spec(launch, kernel_name)`；`run_kernel_launch` 按 argv 模板拼命令（`{connection_file}` 替换 + `env` + stdin/stdout/stderr 全 null）；`ConnectionInfo.kernel_name` 参数化 |
+| `crates/editor/src/shared/notebook.rs` | `ensure_kernel(cmd)` 保留（内部转 `KernelLaunch::ipykernel`）；新增 `ensure_kernel_spec(&spec)`；二者共用私有 `ensure_kernel_with` |
+| `crates/editor/src/view/host/notebook.rs`（`run_kernel_cell`） | 原来「resolve 拿 id → 再回查 spec 取 `command`」改成直接用 resolve 返回的**条目本身**。回查会把 `launch` 丢掉，只剩下一条可执行路径，R / Julia 就起不来 |
+| `crates/editor/src/notebook/kernel.rs` | 测试辅助补 `launch`；新增 `legacy_explicit_id_falls_back_after_kernelspec_takeover` |
+| `crates/editor/src/ports/editor_kernels.rs` | 测试构造补 `launch` |
+
+### 三条硬约束的落实
+
+1. **不落用户目录**：解释器 / venv / uv 缓存全在 D 盘；connection file 仍走 `std::env::temp_dir()`
+   （`session.rs` 既有行为不变）。
+2. **按 PATH 设计**：`kernelspec_data_dirs()` 里补了 `jupyter --paths --json` 报的 data 目录。
+   必须补的原因在依赖源码里：`jupyter-zmq-client-1.0.1` 的 `dirs.rs:60` / `:115` 明确留着
+   TODO「Use the `sys.prefix` from python」，**venv 的 `<prefix>/share/jupyter` 不在默认扫描范围内**
+   ——本机 `jupyter` 命令原本不存在、`%APPDATA%\jupyter\kernels` 也不存在，直接扫会得到**空表**。
+   补法沿用 jedi 那次的手法：`D:\python-UV\lsp\Scripts\jupyter.exe` 复制到 `D:\python-UV\jupyter.exe`
+   （`D:\python-UV\` 已在用户 PATH，目录里没有 `python.exe`，不劫持全局解释器）。实测
+   `jupyter --paths --json` → `data: ["D:\\python-UV\\lsp\\share\\jupyter", "C:\\Users\\sling\\AppData\\Roaming\\jupyter"]`。
+3. **不另造 LSP**：内核侧只提供 provider 接口 + `lsp-types` 数据模型（`DiagnosticSet: From<lsp_types::Diagnostic>`），
+   client / 起进程 / 生命周期由 `crates/editor/src/lsp/` 承担（已交付，本轮未改）。
+
+### 裸 `"python"` 的绝对化（关键坑）
+
+`uv pip install ipykernel` 生成的 `kernel.json` 里 `argv[0]` 是**裸 `"python"`**，按它启动会跑到
+PATH 上那个 3.14 shim。`spec_from_kernelspec()` 的规则：`argv[0]` 无路径分隔符 → 用该 spec
+所属环境（由 `<prefix>/share/jupyter` 反推 `<prefix>`）的解释器**绝对化**；绝对路径不存在 →
+`ready=false` + note「内核启动命令不存在（环境可能已删除）」。本机实测 `detect_kernels()`：
+
+```
+KernelSpec { id: "ks:python3", display_name: "Python 3 (ipykernel)", language: Python,
+  command: "D:\\python-UV\\lsp\\Scripts\\python.exe", ready: true, note: None,
+  launch: KernelLaunch {
+    argv: ["D:\\python-UV\\lsp\\Scripts\\python.exe", "-m", "ipykernel_launcher", "-f", "{connection_file}"],
+    env: [], interrupt_mode: Message } }
+```
+
+### 验证（本轮实测，逐项）
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo check -p rds-kernel --lib --tests -j 1` | exit 0，0 warning |
+| `cargo test -p rds-kernel -- --test-threads=1` | **9 passed / 0 failed / 2 ignored**（ignored = 需真内核） |
+| 同上再加 `--ignored`、`RDS_KERNEL_PYTHON=D:\python-UV\lsp\Scripts\python.exe` | **2 passed / 0 failed**，15.61 s（真起内核 → 握手 → 执行 → 富输出 → error 回传） |
+| `cargo check -p rds-editor --lib -j 1` / `--all-targets -j 1` | 均 exit 0（工作区重新变绿） |
+| `cargo test -p rds-editor --lib -- --test-threads=1` | **768 passed / 3 failed / 1 ignored**（基线三条固定失败）；新用例通过。同轮另有一条 `exec::execution::tests::queue::cancel_right_after_submit_still_targets_the_job_connection` 偶发失败，单独复跑 3 次全过 → 判偶发，不归因本轮 |
+
+### 已知限制（记录在案，不是遗漏）
+
+- **`interrupt_mode = "signal"` 未落地**：IRkernel 声明 signal，但 Windows 没有给子进程投递 SIGINT
+  的标准方式，硬杀会丢内核态，所以 `Interrupt` 仍走 control 通道 `InterruptRequest`。已在
+  `session.rs` 模块文档标注为已知限制。
+- **旧内核 id 的兼容**：`ks:` 接管后旧探测 id（`python` / `python-venv` / `r` / `julia`）不再产出。
+  `default_kernel` 失效会静默降级（`resolve_kernel` 第 2 步，早就如此）；**单元级显式
+  `ExecutionSource::Kernel("python")` 现在退化为「同语言第一个可用内核」**，不再把老笔记的单元
+  永久卡在「内核不在注册表里」（新用例钉住）。带 `ks:` 前缀的 id 查不到仍如实报错。
+- **R / Julia 仍不亮**：本机没装 R / IJulia，逻辑已就绪——装上 IRkernel / IJulia、kernelspec 一出现即可用，不必再改码。
+- signatureHelp 仍接不上（vendor `Lsp` 无该槽位）；**A1（Python/R/Julia 单元的语言服务）仍未开工**，与本轮无耦合。
+
 ## 16. 遗留总账（2026-11-09 全量盘点）
 
 **盘点口径**：文档声明（§一 ~ §15）+ 代码内 `TODO|FIXME|未接线|暂不支持|暂不|遗留|待接线`
@@ -1042,7 +1119,7 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 
 | 项 | 现状 |
 | --- | --- |
-| `cargo test -p rds-editor --lib -- --test-threads=1` | **768 passed / 3 failed / 1 ignored**（2026-11-09 §15.16 后）。三条固定失败：`view/tests/legacy.rs:58`（渲染树找不到 `editor-nb-cell-source-c1`）、`view/tests/notebook_win.rs:347`（多输出块）、`view/tests/results_a.rs:290`（表头排序箭头）——归因见 `../ui/gpui-kit-0.9.0-upgrade-report.md` §12（观察层口径，非产品缺失） |
+| `cargo test -p rds-editor --lib -- --test-threads=1` | **768 passed / 3 failed / 1 ignored**（2026-11-09 §15.16 后；§15.18 内核改造后复测一致，只是用例总数 +1、新增那条通过）。三条固定失败：`view/tests/legacy.rs:58`（渲染树找不到 `editor-nb-cell-source-c1`）、`view/tests/notebook_win.rs:347`（多输出块）、`view/tests/results_a.rs:290`（表头排序箭头）——归因见 `../ui/gpui-kit-0.9.0-upgrade-report.md` §12（观察层口径，非产品缺失） |
 | `ui-todo.md` §五 V-1 … V-8 | **8 项全 ⬜**（V-1 对话框关闭残影 / V-2 右 Dock 草稿行 / V-3 导航树虚拟行 / V-4 列类型警示行 / V-5 标题栏折叠还原 / V-6 书签图标在 gutter 最左 / V-7 有说明折叠行箭头常显+横线 / V-8 悬停说明气泡）。判的是"画面有没有"，自动化观察层读不到，只能人工目视 |
 | `cargo check --workspace` | 不通过：`windows` crate `STATUS_STACK_BUFFER_OVERRUN`（环境限制，只用 `-p` 单 crate） |
 | `cargo check -p gpui-base --all-targets` | 必失败：bench `text_view_scroll` 缺 `gpui_fast_platform`（只用 `--lib`） |
@@ -1055,7 +1132,7 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 | 外部线在途 | `git status --short` 除本模块外有三条线：① insight 线 `docs/architecture/insight/prototypes/eda/eda.html`（M）+ 6 个未跟踪（`insight-correlation-l1-spec.md`、`col-bool/col-date/col-num/col-text/eda-by-type.html`）；② 导航树线 `crates/database/src/nav_view/{rows,chrome,nav_view,tests}.rs`（M）；③ 结果面板统计线 `crates/result_panel/src/{ports,grid/stats,panel/data,panel/lifecycle}.rs`（M，只加了 `StatsItem` 模型与字段、消费端未接，曾一度拦住 `rds-editor` 编译） | 一律不碰；被他们拦门禁时等其改完再重跑，不改别人的文件 |
 | 结果面板遗留 | 维护在 `result-panel-handoff.md` §2.4，本模块不重复；剩余缺口是**渲染期尚未消费事实档** | 跨 crate，归结果面板线 |
 
-### 16.7 本轮（2026-11-08 ~ 11-09）已闭合 12 项，别重复立项
+### 16.7 本轮（2026-11-08 ~ 11-09）已闭合 13 项，别重复立项
 
 | 项 | 落点 |
 | --- | --- |
@@ -1072,5 +1149,6 @@ per-cell 语言服务会话，与补全同一笔欠账（§15.8 未做 2）。
 | 单元执行错误进单元诊断 + 快照每次现取 | §15.15（闭合 §15.14 未覆盖 1、2） |
 | `save_cell_update` 死代码删除（§16.1 A4） | §15.16 |
 | 目录快照代际 → 切连接不必等敲键（§16.1 A2） | §15.16（闭合 §15.15 未覆盖 2） |
+| kernelspec 内核发现（对齐 Jupyter 的 C 层） | §15.18 |
 
 
