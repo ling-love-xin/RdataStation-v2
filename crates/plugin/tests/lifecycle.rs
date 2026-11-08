@@ -37,6 +37,11 @@ impl Drop for TempDir {
 ///
 /// `marker` 写进清单注释里：改它就能让内容 hash 变化（测 needs_reload）。
 fn write_plugin(dir: &Path, id: &str, marker: &str) {
+    write_plugin_with_contributes(dir, id, marker, "");
+}
+
+/// 同 [`write_plugin`]，额外拼一段贡献点声明（注册表用例用）。
+fn write_plugin_with_contributes(dir: &Path, id: &str, marker: &str, contributes: &str) {
     let plugin_dir = dir.join(id);
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::write(
@@ -55,6 +60,8 @@ rdatastation = ">=0.1"
 entry = "main.js"
 
 # {marker}
+
+{contributes}
 "#
         ),
     )
@@ -247,6 +254,41 @@ async fn a_plugin_whose_directory_name_disagrees_with_the_manifest_stays_in_the_
         "列表行应带上目录名不一致的原因：{:?}",
         entry.error
     );
+}
+
+/// 两个插件声明同一个命令 id：注册表必须报冲突，卸载其中一个后恢复。
+#[tokio::test]
+async fn a_contribution_id_conflict_between_plugins_is_reported() {
+    let dir = TempDir::new("contrib-conflict");
+    let manager = PluginManager::new(dir.0.clone());
+    manager.init().await.unwrap();
+
+    let command = r#"[[contributes.commands]]
+id = "shared.cmd"
+title = "共享命令"
+"#;
+    write_plugin_with_contributes(&dir.0, "com.example.a", "v1", command);
+    write_plugin_with_contributes(&dir.0, "com.example.b", "v1", command);
+    manager
+        .load_plugin_from_dir(&dir.0.join("com.example.a"))
+        .await
+        .unwrap();
+    manager
+        .load_plugin_from_dir(&dir.0.join("com.example.b"))
+        .await
+        .unwrap();
+
+    let error = manager.contributions().unwrap_err().to_string();
+    assert!(error.contains("命令贡献点 id 冲突"), "{error}");
+    assert!(error.contains("shared.cmd"), "{error}");
+    assert!(error.contains("com.example.a"), "{error}");
+    assert!(error.contains("com.example.b"), "{error}");
+
+    manager.uninstall_plugin("com.example.a").await.unwrap();
+    let registry = manager.contributions().unwrap();
+    assert_eq!(registry.commands().len(), 1);
+    assert_eq!(registry.commands()[0].id, "shared.cmd");
+    assert_eq!(registry.commands()[0].plugin_id, "com.example.b");
 }
 
 /// 热插拔：空目录 → 摆插件（出现）→ 删目录（消失）→ 改清单（变化置重载）。

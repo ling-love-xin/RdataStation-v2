@@ -21,6 +21,7 @@
 //! 依赖方向：plugin → engine → shared。
 
 pub mod checksums;
+pub mod contributes;
 pub mod dependency;
 pub mod events;
 pub mod installer;
@@ -33,6 +34,7 @@ pub mod permission;
 pub mod render;
 pub mod runtime;
 
+pub use contributes::*;
 pub use dependency::*;
 pub use events::*;
 pub use manager::*;

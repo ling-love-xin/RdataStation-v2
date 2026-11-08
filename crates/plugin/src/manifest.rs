@@ -304,6 +304,31 @@ fn manifest_error(message: impl Into<String>) -> CoreError {
     CoreError::common(CommonError::General(message.into()))
 }
 
+/// 贡献点 id / 设置键：与插件 id 同一套字符规则，但错误文案带字段名。
+fn validate_contribution_id(field: &str, id: &str) -> Result<(), CoreError> {
+    paths::validate_plugin_id(id).map_err(|_| {
+        manifest_error(format!(
+            "{field} 不合法：{id:?}（只允许字母/数字/./_/-，不以 . 开头，且不能为空）"
+        ))
+    })
+}
+
+/// 设置项 `type` 只认 JSON 基础类型，且 `default` 必须与之匹配。
+///
+/// 宿主表单要按 `type` 选控件；类型与默认值不一致时（例如 `type = "number"` +
+/// `default = "8"`），渲染出来就是空的或错的，必须在清单期拒绝。
+fn setting_default_matches(setting_type: &str, default: &serde_json::Value) -> bool {
+    match setting_type {
+        "boolean" => default.is_boolean(),
+        "string" => default.is_string(),
+        "number" => default.is_number(),
+        "integer" => default.as_i64().is_some() || default.as_u64().is_some(),
+        "array" => default.is_array(),
+        "object" => default.is_object(),
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PluginCapabilities {
     #[serde(default)]
@@ -503,6 +528,7 @@ impl PluginManifest {
         self.validate_asset_paths()?;
         self.validate_api()?;
         self.validate_methods()?;
+        self.validate_contributes()?;
         Ok(())
     }
 
@@ -559,6 +585,80 @@ impl PluginManifest {
                 )));
             }
         }
+        Ok(())
+    }
+
+    /// 贡献点静态校验：id 形态、同清单内不重复、面板位置、设置默认值类型。
+    ///
+    /// 跨插件的 id 冲突由 [`crate::contributes::ContributionRegistry`] 负责 —— 清单
+    /// 只知道自己，看不到别人装了什么。
+    fn validate_contributes(&self) -> Result<(), CoreError> {
+        let mut command_ids = std::collections::HashSet::new();
+        for command in &self.contributes.commands {
+            validate_contribution_id("contributes.commands[].id", &command.id)?;
+            if command.title.trim().is_empty() {
+                return Err(manifest_error(format!(
+                    "contributes.commands[].title 不能为空：{}",
+                    command.id
+                )));
+            }
+            if !command_ids.insert(&command.id) {
+                return Err(manifest_error(format!(
+                    "contributes.commands[].id 重复：{}",
+                    command.id
+                )));
+            }
+        }
+
+        let mut panel_ids = std::collections::HashSet::new();
+        for panel in &self.contributes.panels {
+            validate_contribution_id("contributes.panels[].id", &panel.id)?;
+            if panel.title.trim().is_empty() {
+                return Err(manifest_error(format!(
+                    "contributes.panels[].title 不能为空：{}",
+                    panel.id
+                )));
+            }
+            if !matches!(panel.location.as_str(), "left" | "right" | "center") {
+                return Err(manifest_error(format!(
+                    "contributes.panels[].location 只允许 left / right / center，收到 {:?}（面板 {}）",
+                    panel.location, panel.id
+                )));
+            }
+            if !panel_ids.insert(&panel.id) {
+                return Err(manifest_error(format!(
+                    "contributes.panels[].id 重复：{}",
+                    panel.id
+                )));
+            }
+        }
+
+        let mut setting_keys = std::collections::HashSet::new();
+        for setting in &self.contributes.settings {
+            validate_contribution_id("contributes.settings[].key", &setting.key)?;
+            if !matches!(
+                setting.setting_type.as_str(),
+                "boolean" | "string" | "number" | "integer" | "array" | "object"
+            ) {
+                return Err(manifest_error(format!(
+                    "contributes.settings[].type 只允许 boolean/string/number/integer/array/object，收到 {:?}（{}）",
+                    setting.setting_type, setting.key
+                )));
+            }
+            if !setting_default_matches(&setting.setting_type, &setting.default) {
+                return Err(manifest_error(format!(
+                    "contributes.settings[].default 与 type 不一致：{} = {:?}（type = {:?}）",
+                    setting.key, setting.default, setting.setting_type
+                )));
+            }
+            if !setting_keys.insert(&setting.key) {
+                return Err(manifest_error(format!(
+                    "contributes.settings[].key 重复：{}",
+                    setting.key
+                )));
+            }
+        }
+
         Ok(())
     }
 
@@ -1822,5 +1922,98 @@ display_name = "H2"
         )
         .unwrap();
         assert!(legacy.contributes.drivers[0].url_template.is_none());
+    }
+
+    /// 生成一份仅用于贡献点校验的最小清单。
+    fn contributes_toml(contributes: &str) -> String {
+        format!(
+            r#"
+[plugin]
+id = "com.example.contributes"
+name = "Contributes"
+version = "1.0.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[capabilities.frontend]
+entry = "main.js"
+
+{contributes}
+"#
+        )
+    }
+
+    fn parse_contributes_error(contributes: &str) -> String {
+        let path = write_temp_toml(&contributes_toml(contributes));
+        let error = ManifestParser::parse(&path).unwrap_err().to_string();
+        let _ = std::fs::remove_file(&path);
+        error
+    }
+
+    #[test]
+    fn contributes_validation_rejects_duplicate_command_ids() {
+        let error = parse_contributes_error(
+            r#"[[contributes.commands]]
+id = "dup.cmd"
+title = "一"
+
+[[contributes.commands]]
+id = "dup.cmd"
+title = "二"
+"#,
+        );
+        assert!(error.contains("contributes.commands[].id 重复"), "{error}");
+    }
+
+    #[test]
+    fn contributes_validation_rejects_an_unknown_panel_location() {
+        let error = parse_contributes_error(
+            r#"[[contributes.panels]]
+id = "my.panel"
+title = "面板"
+location = "sidebar"
+"#,
+        );
+        assert!(
+            error.contains("location 只允许 left / right / center"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn contributes_validation_rejects_a_setting_type_mismatch() {
+        let error = parse_contributes_error(
+            r#"[[contributes.settings]]
+key = "my.limit"
+type = "number"
+default = "8"
+"#,
+        );
+        assert!(error.contains("default 与 type 不一致"), "{error}");
+    }
+
+    #[test]
+    fn contributes_validation_rejects_an_unknown_setting_type() {
+        let error = parse_contributes_error(
+            r#"[[contributes.settings]]
+key = "my.mode"
+type = "select"
+default = "a"
+"#,
+        );
+        assert!(error.contains("type 只允许"), "{error}");
+    }
+
+    #[test]
+    fn contributes_validation_rejects_an_invalid_command_id() {
+        let error = parse_contributes_error(
+            r#"[[contributes.commands]]
+id = "bad id"
+title = "空格不合法"
+"#,
+        );
+        assert!(error.contains("不合法"), "{error}");
     }
 }

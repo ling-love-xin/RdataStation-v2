@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use shared::error::{CommonError, CoreError, PluginError};
 
+use super::contributes::ContributionRegistry;
 use super::manifest::{ManifestParser, PluginManifest};
 use crate::sidecar::factory::register_sidecar_drivers;
 use crate::sidecar::supervisor::SidecarSupervisor;
@@ -1150,6 +1151,24 @@ impl PluginManager {
             .read()
             .map(|map| map.values().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// 汇总当前已成功加载插件的贡献点。
+    ///
+    /// 加载失败 / 校验失败的插件不参与：它们的清单不可信，不能把命令或面板
+    /// 挂到宿主上。跨插件 id 冲突返回错误，宿主据此提示用户而不是静默让后装的
+    /// 插件覆盖先装的。
+    pub fn contributions(&self) -> Result<ContributionRegistry, CoreError> {
+        let loaded = self
+            .loaded_plugins
+            .read()
+            .map_err(|_| lock_err("loaded_plugins"))?;
+        ContributionRegistry::build(
+            loaded
+                .values()
+                .filter(|plugin| plugin.status.error_reason().is_none())
+                .map(|plugin| &plugin.manifest),
+        )
     }
 
     /// 获取 WASM 管理器引用（仅 `wasm` feature 下存在；宿主接入 wasm 渲染轨用）

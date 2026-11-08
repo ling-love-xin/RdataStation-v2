@@ -227,10 +227,10 @@ default_port = 9999
 | `[permissions]` `sidecar` / `driver` / `frontend` / `wasm` | — | 声明与展示口径（不门控，见 §2.4） |
 | `permissions.credentials` | — | `"database"` = 明确声明会收到数据库密码 |
 | `permissions.host` | — | 反向 Host API 点分 glob（如 `secrets.read.*`），**运行时默认拒绝** |
-| `[[contributes.commands]]` | — | `id` / `title` / `category` / `icon` / `shortcut`（登记与展示未落地，P4） |
-| `[[contributes.panels]]` | — | `id` / `title` / `location` / `icon` / `order`（面板注册未落地，P4） |
+| `[[contributes.commands]]` | — | `id` / `title` / `category` / `icon` / `shortcut`；`id` 全局唯一、`title` 非空（**已进静态注册表；命令面板未接，P4**） |
+| `[[contributes.panels]]` | — | `id` / `title` / `location` / `icon` / `order`；`location` 只认 `left` / `right` / `center`（**已进静态注册表；Dock 面板未接，P4**） |
 | `[[contributes.drivers]]` | — | `id` / `display_name` / `default_port` / `connection_schema` / `url_template` / `features` |
-| `[[contributes.settings]]` | — | `key` / `type` / `default` / `label` / `description` |
+| `[[contributes.settings]]` | — | `key` 全局唯一；`type` 只认 `boolean` / `string` / `number` / `integer` / `array` / `object`，且 `default` 必须与 `type` 一致（**已进静态注册表；设置页未接，P4**） |
 | `contributes.menus` | — | 目前是不限结构的 JSON 值，宿主不消费 |
 | `[[dependencies]]` | — | `id` / `version`；用于卸载前的依赖检查 |
 
