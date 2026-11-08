@@ -32,6 +32,7 @@ use crate::view::LeftPanel;
 use analytics_resource::resource_view::ResourcesPanel;
 use database::nav_view::NavView;
 use plugin::PluginInfo;
+use plugin::PluginKind;
 use plugin::wasm::PluginState;
 use scratchpad::ScratchpadView;
 
@@ -398,10 +399,18 @@ impl ListDelegate for PluginListDelegate {
             _ => cx.theme().colors.muted_foreground,
         };
 
-        // 启用/停用按钮（行尾）
+        // 启用/停用按钮（行尾）。清单都没解析出来的目录没有可激活的运行时：
+        // 给一个禁用的说明按钮，别让用户点了「启用」却什么都没有发生。
         let entity = self.entity.clone();
         let action_id = id.clone();
-        let button = if active {
+        let button = if p.kind == PluginKind::Unknown {
+            Button::new(SharedString::from(format!("plugin-{id}-broken")))
+                .ghost()
+                .with_size(Size::XSmall)
+                .label("无法启用")
+                .tooltip("插件清单损坏，请先修复清单或直接卸载")
+                .disabled(true)
+        } else if active {
             Button::new(SharedString::from(format!("plugin-{id}-disable")))
                 .ghost()
                 .with_size(Size::XSmall)

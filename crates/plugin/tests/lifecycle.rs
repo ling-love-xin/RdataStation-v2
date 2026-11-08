@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rds_plugin::events::{PluginEvent, get_event_manager};
-use rds_plugin::manager::{PluginDiff, PluginManager};
+use rds_plugin::manager::{PluginDiff, PluginInfo, PluginManager};
 
 /// 一次性临时安装目录（Drop 时清掉，不留 .rds/tmp 外的过程产物）
 struct TempDir(PathBuf);
@@ -128,6 +128,123 @@ async fn load_rejects_a_package_whose_checksums_no_longer_match() {
             .unwrap_or("")
             .contains("完整性校验失败"),
         "列表行应带上失败原因：{:?}",
+        entry.error
+    );
+}
+
+/// 清单解析失败时，目录仍要留在列表里并带错误原因。
+///
+/// 这类目录连 `PluginManifest` 都建不出来，以前直接 `return Err`，面板列表里
+/// 没有这一行；用户只能去磁盘上猜哪个目录坏了。
+#[tokio::test]
+async fn a_plugin_with_a_broken_manifest_stays_in_the_list_with_the_reason() {
+    let dir = TempDir::new("broken-manifest");
+    let manager = PluginManager::new(dir.0.clone());
+    manager.init().await.unwrap();
+
+    let broken = dir.0.join("com.example.broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join("plugin.toml"), "this is not = [valid toml").unwrap();
+
+    let err = manager
+        .load_plugin_from_dir(&broken)
+        .await
+        .expect_err("清单解析失败不应加载成功");
+    assert!(!format!("{err}").is_empty());
+
+    let listed = manager.list_plugins().unwrap();
+    let entry = listed
+        .iter()
+        .find(|p| p.id == "com.example.broken")
+        .expect("解析失败的包应仍出现在列表里");
+    assert_eq!(entry.state, rds_plugin::wasm::PluginState::Error);
+    assert!(
+        entry.error.as_deref().is_some_and(|e| !e.is_empty()),
+        "列表行应带上解析失败原因：{:?}",
+        entry.error
+    );
+}
+
+/// 坏包也得能从面板卸载：按目录名删掉，并从错误行列表里消失。
+#[tokio::test]
+async fn a_package_with_a_broken_manifest_can_be_uninstalled_by_its_directory_name() {
+    let dir = TempDir::new("broken-uninstall");
+    let manager = PluginManager::new(dir.0.clone());
+    manager.init().await.unwrap();
+
+    let broken = dir.0.join("com.example.broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join("plugin.toml"), "this is not = [valid toml").unwrap();
+    manager.load_plugin_from_dir(&broken).await.unwrap_err();
+
+    let ids = |plugins: Vec<PluginInfo>| plugins.into_iter().map(|p| p.id).collect::<Vec<_>>();
+    assert!(ids(manager.list_plugins().unwrap()).contains(&"com.example.broken".to_string()));
+
+    manager
+        .uninstall_plugin("com.example.broken")
+        .await
+        .expect("坏包应能按目录名卸载");
+    assert!(!broken.exists(), "卸载后目录应被删除");
+    assert!(
+        !ids(manager.list_plugins().unwrap()).contains(&"com.example.broken".to_string()),
+        "卸载后不该再留下错误行"
+    );
+}
+
+/// 坏包不能被“启用”：没有可激活的运行时，持久标记也不该被翻成启用。
+#[tokio::test]
+async fn enable_is_refused_for_a_plugin_with_a_broken_manifest() {
+    let dir = TempDir::new("broken-enable");
+    let manager = PluginManager::new(dir.0.clone());
+    manager.init().await.unwrap();
+
+    let broken = dir.0.join("com.example.broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join("plugin.toml"), "this is not = [valid toml").unwrap();
+    manager.load_plugin_from_dir(&broken).await.unwrap_err();
+
+    let err = manager
+        .enable_plugin("com.example.broken")
+        .await
+        .expect_err("清单损坏的包不应启用成功");
+    assert!(
+        format!("{err}").contains("清单损坏"),
+        "启用失败应点明清单损坏：{err}"
+    );
+}
+
+/// 目录名与清单 id 不一致时，按目录名留一行错误，面板才能按 id 删对目录。
+#[tokio::test]
+async fn a_plugin_whose_directory_name_disagrees_with_the_manifest_stays_in_the_list() {
+    let dir = TempDir::new("dir-name-mismatch");
+    let manager = PluginManager::new(dir.0.clone());
+    manager.init().await.unwrap();
+
+    write_plugin(&dir.0, "com.example.declared", "v1");
+    let actual = dir.0.join("com.example.alias");
+    std::fs::rename(dir.0.join("com.example.declared"), &actual).unwrap();
+
+    let err = manager
+        .load_plugin_from_dir(&actual)
+        .await
+        .expect_err("目录名与清单 id 不一致不应加载成功");
+    assert!(
+        format!("{err}").contains("目录名与清单 id 不一致"),
+        "错误信息应点明目录名不一致：{err}"
+    );
+
+    let listed = manager.list_plugins().unwrap();
+    let entry = listed
+        .iter()
+        .find(|p| p.id == "com.example.alias")
+        .expect("目录名不一致的包应仍出现在列表里");
+    assert_eq!(entry.state, rds_plugin::wasm::PluginState::Error);
+    assert!(
+        entry
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("目录名与清单 id 不一致")),
+        "列表行应带上目录名不一致的原因：{:?}",
         entry.error
     );
 }

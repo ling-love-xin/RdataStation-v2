@@ -175,7 +175,9 @@
   `manager::load_plugin_from_dir` 在清单 / 目录名校验后调 `checksums::verify_package`，
   带该文件的包装好之后被改也会被拦住；不带该文件的老包与开发目录照旧放行。
   校验失败时插件以 `LoadStatus::LoadFailed` 留在会话缓存与列表里（不是静默跳过），
-  面板能看到原因并直接卸载；`signature.json`（签名与签发者信任链）未实现。加载期不重算未列入 `checksums.json` 的
+  面板能看到原因并直接卸载。清单解析失败 / 插件 id 非法 / 目录名与清单 id 不一致的目录同样
+  以 `PluginKind::Unknown` 的错误行留在列表（原因写进 `PluginInfo.error`），可按目录名卸载；
+  手删目录后下一次热插拔扫描会清掉该错误行。`signature.json`（签名与签发者信任链）未实现。加载期不重算未列入 `checksums.json` 的
   文件哈希——完整性范围仍以该文件的清单为准。
 
 ## 8. 既有示例包的对齐建议

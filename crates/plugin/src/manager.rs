@@ -45,6 +45,8 @@ pub enum PluginKind {
     Sidecar,
     /// 面板 / 命令 / 设置扩展（D1 的「独立扩展宿主进程」形态；P3/P4 落地前只记状态）
     Frontend,
+    /// 清单解析 / id / 目录名校验失败，形态无法判定（只用于把坏包留在列表里）
+    Unknown,
 }
 
 /// 热插拔扫描快照里的一项（`scan_and_diff_plugins` 的 diff 基准）
@@ -152,6 +154,11 @@ pub struct PluginManager {
     install_dir: PathBuf,
     /// 安装态缓存（id → LoadedPlugin）
     loaded_plugins: RwLock<HashMap<String, LoadedPlugin>>,
+    /// 清单解析 / id / 目录名校验失败的目录（目录名 → 原因）。
+    ///
+    /// 这些目录连 `PluginManifest` 都建不出来，进不了 `loaded_plugins`；单独记一份，
+    /// 面板才看得到坏包、并能按目录名卸载（否则只能手删目录）。
+    failed_loads: RwLock<HashMap<String, String>>,
     /// 会话态索引（id → kind；决定 activate 走哪条运行时）
     plugin_index: Arc<RwLock<HashMap<String, PluginKind>>>,
     /// 热插拔扫描快照（id → 清单 hash；`scan_and_diff_plugins` 与上次扫描对比用）
@@ -197,6 +204,7 @@ impl PluginManager {
             plugin_dirs: RwLock::new(Vec::new()),
             install_dir,
             loaded_plugins: RwLock::new(HashMap::new()),
+            failed_loads: RwLock::new(HashMap::new()),
             plugin_index: Arc::new(RwLock::new(HashMap::new())),
             scan_snapshot: RwLock::new(HashMap::new()),
             needs_reload: RwLock::new(Vec::new()),
@@ -354,6 +362,29 @@ impl PluginManager {
         Ok(loaded)
     }
 
+    /// 记下「连清单都没读出来」的坏目录，供面板展示 / 卸载。
+    ///
+    /// 目录名先过 [`validate_plugin_id`]：面板的卸载按钮按 id 拼 `install_dir/<id>`，
+    /// 不合法的目录名既不能安全删、也不该出现在可操作列表里。
+    fn record_failed_load(&self, plugin_dir: &Path, error: &CoreError) {
+        let Some(name) = plugin_dir.file_name().and_then(|n| n.to_str()) else {
+            return;
+        };
+        if validate_plugin_id(name).is_err() {
+            return;
+        }
+        if let Ok(mut map) = self.failed_loads.write() {
+            map.insert(name.to_string(), format!("{error}"));
+        }
+    }
+
+    /// 成功加载后清掉同名的历史失败记录（修好清单 / 目录名后不该再显示错误行）。
+    fn clear_failed_load(&self, id: &str) {
+        if let Ok(mut map) = self.failed_loads.write() {
+            map.remove(id);
+        }
+    }
+
     /// 从目录加载单个插件（解析清单、校验、入缓存；**不启动运行时**）。
     ///
     /// 清单 `plugin.id` 由第三方给出，进 `install_path` / 索引前必须先过
@@ -361,24 +392,37 @@ impl PluginManager {
     pub async fn load_plugin_from_dir(&self, plugin_dir: &Path) -> Result<LoadedPlugin, CoreError> {
         let manifest_path = plugin_dir.join("plugin.toml");
         if !manifest_path.exists() {
-            return Err(CoreError::common(CommonError::General(format!(
+            let err = CoreError::common(CommonError::General(format!(
                 "Plugin manifest not found at {}",
                 manifest_path.display()
-            ))));
+            )));
+            self.record_failed_load(plugin_dir, &err);
+            return Err(err);
         }
 
-        let manifest = ManifestParser::parse(&manifest_path)?;
-        validate_plugin_id(&manifest.plugin.id).map_err(|e| {
-            CoreError::common(CommonError::General(format!(
+        let manifest = match ManifestParser::parse(&manifest_path) {
+            Ok(manifest) => manifest,
+            Err(e) => {
+                self.record_failed_load(plugin_dir, &e);
+                return Err(e);
+            }
+        };
+        if let Err(e) = validate_plugin_id(&manifest.plugin.id) {
+            let err = CoreError::common(CommonError::General(format!(
                 "插件 id 不合法（拼路径前必须校验）: {}",
                 e
-            )))
-        })?;
+            )));
+            self.record_failed_load(plugin_dir, &err);
+            return Err(err);
+        }
 
         // 目录名必须等于清单 id（见 `layout` 模块文档）：热插拔 diff 按目录名索引、
         // 卸载按 id 删 `install_dir/<id>`，不一致会出现「加载成功但 diff 认不出、
         // 卸载删不到目录」。
-        crate::layout::validate_dir_name(plugin_dir, &manifest.plugin.id)?;
+        crate::layout::validate_dir_name(plugin_dir, &manifest.plugin.id).map_err(|e| {
+            self.record_failed_load(plugin_dir, &e);
+            e
+        })?;
 
         // 运行期完整性：带 `checksums.json` 的包在加载时再校验一遍。安装期校验的是
         // 解压产物，装好之后仍可能被改（热插拔直接拷目录、用户手改文件），只验安装期
@@ -386,9 +430,16 @@ impl PluginManager {
         //
         // 形态判定提到校验之前：校验失败也要把插件留在缓存里（`LoadFailed`），
         // 否则面板列表里根本没有这一行，用户既看不到原因、也无法从面板卸载坏包。
-        let kind = self.detect_plugin_kind(&manifest)?;
+        let kind = match self.detect_plugin_kind(&manifest) {
+            Ok(kind) => kind,
+            Err(e) => {
+                self.record_failed_load(plugin_dir, &e);
+                return Err(e);
+            }
+        };
         if let Err(e) = crate::checksums::verify_package(&manifest, plugin_dir) {
             let plugin_id = manifest.plugin.id.clone();
+            self.clear_failed_load(&plugin_id);
             let failed = LoadedPlugin {
                 id: plugin_id.clone(),
                 manifest,
@@ -405,6 +456,7 @@ impl PluginManager {
         }
 
         let plugin_id = manifest.plugin.id.clone();
+        self.clear_failed_load(&plugin_id);
         let loaded_plugin = LoadedPlugin {
             id: plugin_id.clone(),
             manifest,
@@ -476,6 +528,10 @@ impl PluginManager {
             PluginKind::Wasm => self.activate_wasm(id),
             PluginKind::Sidecar => self.activate_sidecar(id).await,
             PluginKind::Frontend => Ok(()),
+            // 失败目录只进列表、不进形态索引；走到这里说明索引被写坏了
+            PluginKind::Unknown => Err(CoreError::common(CommonError::Internal(format!(
+                "无法判定插件形态（清单未成功解析）: {id}"
+            )))),
         };
 
         let mut map = self
@@ -626,6 +682,8 @@ impl PluginManager {
                     .await;
             }
             PluginKind::Frontend => {}
+            // 解析失败的目录没有运行时实例，停用是空操作
+            PluginKind::Unknown => {}
         }
 
         let mut map = self
@@ -734,6 +792,8 @@ impl PluginManager {
             .write()
             .map_err(|_| lock_err("loaded_plugins"))?
             .remove(id);
+        // 坏包目录也走同一条卸载路径，清掉失败记录（否则面板会留下一条幽灵错误行）
+        self.clear_failed_load(id);
 
         // 6. 事件
         crate::events::emit_plugin_uninstalled(id);
@@ -763,6 +823,18 @@ impl PluginManager {
 
     /// 启用插件（与 [`Self::disable_plugin`] 对称）：持久标记 + 若已加载则重新激活。
     pub async fn enable_plugin(&self, id: &str) -> Result<(), CoreError> {
+        // 坏包只以错误行留在列表里，没有可激活的运行时；先拒绝并说清原因，
+        // 不要把 DB 标记翻成启用却什么都没发生（面板上也别给「启用」）。
+        if self
+            .failed_loads
+            .read()
+            .map_err(|_| lock_err("failed_loads"))?
+            .contains_key(id)
+        {
+            return Err(CoreError::common(CommonError::Internal(format!(
+                "插件清单损坏，无法启用（请先修复或卸载）: {id}"
+            ))));
+        }
         if let Some(db) = engine::migration::get_global_db_manager() {
             db.update_plugin_enabled_by_code(id, true).await?;
         }
@@ -887,6 +959,8 @@ impl PluginManager {
         // 消失：停用 + 移出运行时索引（unload_plugin 不碰磁盘，目录已没了也安全）；
         // 顺带清掉该插件的重载标记（插件都没了，提示重载没有意义）
         for id in &diff.removed {
+            // 坏目录被手动删掉时也要清掉错误行（它本来就不在形态索引里）
+            self.clear_failed_load(id);
             if self
                 .plugin_index
                 .read()
@@ -1031,6 +1105,35 @@ impl PluginManager {
                     error: lp.status.error_reason().map(str::to_string),
                 });
             }
+        }
+
+        // 连清单都没读出来的坏目录：没有 PluginManifest，只能按目录名合成一行，
+        // 状态固定 Error，错误原因来自加载期记录。跳过已成功加载的同名条目。
+        let failed = self
+            .failed_loads
+            .read()
+            .map_err(|_| lock_err("failed_loads"))?;
+        for (id, reason) in failed.iter() {
+            if plugins.iter().any(|p| &p.id == id) {
+                continue;
+            }
+            plugins.push(PluginInfo {
+                id: id.clone(),
+                name: id.clone(),
+                version: "未知".to_string(),
+                kind: PluginKind::Unknown,
+                metadata: PluginMetadata {
+                    id: id.clone(),
+                    name: id.clone(),
+                    version: "未知".to_string(),
+                    plugin_type: PluginType::Analytics,
+                    description: String::new(),
+                    author: String::new(),
+                    entry_point: String::new(),
+                },
+                state: PluginState::Error,
+                error: Some(reason.clone()),
+            });
         }
 
         Ok(plugins)
