@@ -16,23 +16,24 @@ use gpui_kit::*;
 use super::cell::{blob_summary, cell_display_text, clip_cell_display};
 use super::delegate::{CELL_DISPLAY_LIMIT, ResultGridDelegate};
 use crate::store::ColumnKind;
+use crate::ui::{
+    RESULT_FIT_BADGE_PADDING as BADGE_H_PADDING, RESULT_FIT_CELL_PADDING as CELL_H_PADDING,
+    RESULT_FIT_HEADER_GAP as HEADER_GAP,
+};
 
 /// 采样行数上限（对齐 dbdelve `FITTED_ROWS = 200` / cellar 前 200 行 / tusk 首行 cap）：
 /// 只看前 200 个**视图行**（筛选排序之后看着的那些），不是全部数据行——一列 10 万行全测
 /// 会把双击变成一次可感知的卡顿，而第 201 行更宽的概率低到不值得付这个代价。
 pub(crate) const FIT_SAMPLE_ROWS: usize = 200;
 
-/// 单元格自身左右内边距（`render_td` 的 `px_2` = 8px × 2）。
-///
-/// 组件还会再加 `table_cell_padding()`（Medium = 8px × 2），两层都要算：只算一层的话
-/// 文字正好压在余量里被省略号吃掉，双击就成了“点了个寂寞”。
-const CELL_H_PADDING: Pixels = px(16.);
-
-/// 表头 `main_row` 的 `gap_1`（badge / 列名 / 排序箭头 / 筛选 ▽ 之间）
-const HEADER_GAP: Pixels = px(4.);
-
-/// 类型 badge 的 `px_1`（4px × 2）
-const BADGE_H_PADDING: Pixels = px(8.);
+// 三档几何进 `crate::ui`（结构尺寸单一来源，本文件不留裸 px）：
+// `CELL_H_PADDING` = 单元格自身左右内边距（`render_td` 的 `px_2`，合计 16px）；
+// `HEADER_GAP` = 表头 `main_row` 的 `gap_1`（badge / 列名 / 排序箭头 / 筛选 ▽ 之间，4px）；
+// `BADGE_H_PADDING` = 类型 badge 的 `px_1` 左右合计（8px）。
+//
+// 为什么都要算：组件还会按 `RESULT_TABLE_SIZE`（= XSmall 档，左右各 4px）再加 8px，
+// 两层合起来才是肉眼看到的余量——少算一层，文字正好压在余量里被省略号吃掉，
+// 双击就成了“点了个寂寞”。
 
 /// 双击列头分隔线：这一列按内容该多宽（`None` = 这一列不自适应）
 pub(crate) fn fit_column(
@@ -109,7 +110,7 @@ fn header_width(
         widths.push(measure(window, "▽", font, color, font_size));
     }
     let gaps = HEADER_GAP * widths.len().saturating_sub(1) as f32;
-    widths.into_iter().fold(px(0.), |sum, width| sum + width) + gaps
+    widths.into_iter().fold(Pixels::ZERO, |sum, width| sum + width) + gaps
 }
 
 /// 单元格块宽：前 [`FIT_SAMPLE_ROWS`] 个视图行里最宽的**展示串**，加单元格内边距
@@ -128,7 +129,7 @@ fn cells_width(
 ) -> Pixels {
     let kind = delegate.column_kind(col_ix);
     let rows = delegate.view_total().min(FIT_SAMPLE_ROWS);
-    let mut widest = px(0.);
+    let mut widest = Pixels::ZERO;
     for row_ix in 0..rows {
         let raw = delegate.cell(row_ix, col_ix);
         // 与 `render_td` 同口径：二进制列画摘要，其余走「JSON 美化 / 类型格式化 → 裁剪」
@@ -158,7 +159,7 @@ fn cells_width(
 /// `shape_line` 遇到换行符会 panic：单行单元格里换行被当空白，测宽等价替换成空格。
 fn measure(window: &Window, text: &str, font: &Font, color: Hsla, font_size: Pixels) -> Pixels {
     if text.is_empty() {
-        return px(0.);
+        return Pixels::ZERO;
     }
     let flattened;
     let text = if text.bytes().any(|b| b == b'\n' || b == b'\r' || b == b'\t') {

@@ -102,6 +102,18 @@ pub const RESULT_TABLE_SIZE: ComponentSize = ComponentSize::XSmall;
 /// 结果网格列最小宽（64px）
 pub const RESULT_COLUMN_MIN_WIDTH: Pixels = px(64.);
 
+/// 列宽自适应（`grid/fit.rs`）：单元格自身左右内边距合计（`render_td` 的 `px_2`）。
+///
+/// 组件还会按 [`RESULT_TABLE_SIZE`]（XSmall 档，左右各 4px）再加 8px——两层合起来才是
+/// 肉眼看到的余量。下面三档原先散在 `fit.rs` 里，按「结构尺寸进常量表」收上来。
+pub const RESULT_FIT_CELL_PADDING: Pixels = px(16.);
+
+/// 列宽自适应：表头 `main_row` 的 `gap_1`（badge / 列名 / 排序箭头 / 筛选 ▽ 之间）
+pub const RESULT_FIT_HEADER_GAP: Pixels = px(4.);
+
+/// 列宽自适应：类型 badge 的 `px_1` 左右合计
+pub const RESULT_FIT_BADGE_PADDING: Pixels = px(8.);
+
 /// 结果网格单元格 / 表头悬停全文的最大宽度（24rem = 384px）。
 ///
 /// 悬停提示跟着鼠标走，比这更宽就会被窗口边缘截掉；超出的部分**折行**（长 JSON / 长文本
