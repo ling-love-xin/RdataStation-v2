@@ -106,6 +106,55 @@ pub(super) fn strip_nav_scope_prefix(name: &str) -> String {
     name.to_string()
 }
 
+/// 行名「全名」hover 卡：名称被 `text_ellipsis()` 截断后唯一的看全通道。
+///
+/// 为什么需要（2026-11-08 取证）：连接行名称可用宽度只有 ≈7rem——行内固定槽位
+/// （内距 + 展开槽 + 徽标 + 行尾操作 + 归属域列 + gap）已吃掉 7.275rem。DBeaver 的对应机制
+/// 是树自带 `SWT.H_SCROLL`（`DatabaseNavigatorTree.java:327`，超长不省略）+ JFace tooltip
+/// （`DatabaseNavigatorToolTipSupport.java:24-37`，受 `navigator.show.tooltips` 开关）；
+/// 我们没有横向滚动（`v_virtual_list` 把每行宽度钉死为列表可视宽，见 `virtual_list.rs:376-379`），
+/// 所以「看全名」只能靠 tooltip 兜底。
+///
+/// 延迟与徽标卡 / 归属域卡同为 300ms：鼠标扫过整棵树时不闪。
+/// `trigger_style` 固定为 `flex_1 + min_w_0 + overflow_hidden`——调用方的行内标题槽就是这个语义，
+/// 卡片锚点跟随整块标题而非文字本身；被包进去的 trigger 自身须用 `w_full()` 填满该槽。
+pub(super) fn nav_name_hover_card(
+    id: SharedString,
+    trigger: impl IntoElement + 'static,
+    title: String,
+    detail: Vec<String>,
+) -> impl IntoElement {
+    use gpui_kit::component::hover_card::HoverCard;
+    HoverCard::new(id)
+        .open_delay(std::time::Duration::from_millis(300))
+        .trigger_style(
+            gpui_kit::StyleRefinement::default()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden(),
+        )
+        .trigger(trigger)
+        .content(move |_, _window, cx| {
+            let fg = cx.theme().colors.foreground;
+            let muted = cx.theme().colors.muted_foreground;
+            let mut body = div()
+                .v_flex()
+                .gap(rems(0.125))
+                .max_w(rems(24.0))
+                .text_xs()
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(fg)
+                        .child(title.clone()),
+                );
+            for line in detail.iter() {
+                body = body.child(div().text_color(muted).child(line.clone()));
+            }
+            body
+        })
+}
+
 pub(super) fn nav_badge_hover_card(
     id: SharedString,
     trigger: impl IntoElement + 'static,

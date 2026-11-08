@@ -1409,13 +1409,29 @@ impl NavView {
 
         // 徽标 hover 卡：类型 / 状态 / 驱动的完整事实（gpui-kit 0.7.1 无通用 `.tooltip` 扩展，
         // 故用 `HoverCard` 承载；行内仍只显颜色 + 形状）。
+        //
+        // `type_label` 提到块外：名称 hover 卡的副行也要用（见下方 `name_card_detail`），
+        // 只在 render 时算一次，类型文案两处同源。
+        let type_label = nav_type_label(
+            &type_id,
+            type_from_catalog
+                .as_ref()
+                .map(|(name, cat)| (name.as_str(), cat.as_str())),
+        );
+        // 名称 hover 卡的副行：类型 + 主机。行内已被简称胶囊 / 主机副标压缩，卡里给完整说法。
+        let name_card_detail = {
+            let mut lines = vec![format!("类型：{type_label}")];
+            if let Some(host) = conn.host.as_deref().filter(|h| !h.is_empty()) {
+                lines.push(match conn.port {
+                    Some(port) => format!("主机：{host}:{port}"),
+                    None => format!("主机：{host}"),
+                });
+            }
+            lines
+        };
         let badge = {
-            let type_label = nav_type_label(
-                &type_id,
-                type_from_catalog
-                    .as_ref()
-                    .map(|(name, cat)| (name.as_str(), cat.as_str())),
-            );
+            let type_label = type_label.clone();
+
             let status_label = badge_status.label();
             let driver_label = driver_name
                 .clone()
@@ -1513,19 +1529,33 @@ impl NavView {
         // 行尾操作：`+` 加标签 · `✎` 编辑 · 失败连接另带 `⟳ 重试`（仅 hover / 选中显；
         // 连接 / 断开走右键菜单）。
         //
+        // 2026-11-08 改 overlay（方案①）：这组按钮以前是 flex 流里的常驻槽（两个 1.25rem
+        // 图标按钮 + gap ≈ 2.625rem），在 203px 宽的面板里吃掉 17% 的名称宽度——而它只在
+        // hover / 选中时才看得见。现在绝对定位贴住行尾右侧（左边界 = 归属域列左边），
+        // 退出排版流：名称区永久多 2.625rem，显隐也不再引起左右跳动。
+        // 底色取行底色（选中 = `list_active`，悬停 = `list_hover`）：overlay 会压在名称尾部，
+        // 不上底色的话被压住的文字会从按钮缝里透出来。
+        //
         // 隐藏用 `invisible()` 而不是 `opacity(0)`：两者的区别在命中测试——
         // `Visibility::Hidden` 的元素既不绘制也不登记 hitbox，`opacity(0)` 的元素
         // **仍能点到**（鼠标滑到行尾空白就可能误触发加标签 / 打开编辑对话框）。
-        // 槽位宽度两种写法一样常驻，所以 hover 时不会左右跳动。
+        // absolute 元素即使可见也不占排版宽，所以不再靠「槽位常驻」防抖动。
         let ops = {
             let entity = cx.entity();
             let host = self.host.clone();
             let cid = conn_id.clone();
+            // overlay 右偏移：归属域列可见时贴住它的左缘，关闭时贴行尾。
+            let ops_right = if scope_visible { scope_col } else { 0.0 };
             let mut ops = div()
                 .h_flex()
                 .items_center()
                 .gap_0p5()
-                .flex_none()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right(rems(ops_right))
+                .px_1()
+                .bg(if selected { selected_bg } else { hover })
                 .when(!selected, |s| s.invisible())
                 .group_hover("nav-conn-row", |s| s.visible());
             // 失败连接：行尾「重试」按钮（与右键「连接」同一动作：重新建连并加载）。
@@ -1690,9 +1720,14 @@ impl NavView {
                 ))
                 .group("nav-conn-row")
                 .child(badge)
-                .child(
-                    div()
-                        .flex_1()
+                .child({
+                    // 名称槽（方案③）：整块交给 hover 卡做 trigger——名称被 `text_ellipsis()`
+                    // 截断后这是唯一的「看全」通道，卡本身不占排版宽。
+                    // trigger 外层拿 flex_1 + min_w_0 + overflow_hidden（见
+                    // `primitives::nav_name_hover_card`），所以内层改 `w_full()` 填满那个槽；
+                    // 除宽度口径外其余样式与改动前逐项相同。
+                    let name_body = div()
+                        .w_full()
                         .min_w_0()
                         .overflow_hidden()
                         .h_flex()
@@ -1755,8 +1790,15 @@ impl NavView {
                         })
                         // 失败连接：错误摘要放进名称容器（紧跟名称/host），
                         // 行尾操作（`+` 新建标签 / `✎` 编辑）因此不随错误状态左右移动、保持对齐。
-                        .when_some(err_summary, |s, e| s.child(e)),
-                )
+                        .when_some(err_summary, |s, e| s.child(e));
+                    nav_name_hover_card(
+                        SharedString::from(format!("nav-conn-name-{}::{}", scope_key, conn.id)),
+                        name_body.into_any_element(),
+                        conn_base_name.clone(),
+                        name_card_detail,
+                    )
+                    .into_any_element()
+                })
                 // 行尾操作组（`+` 加标签 / `✎` 编辑）：仅 hover / 选中显。
                 // 需求③：归在归属域列**之前**（归属域置最右），操作按钮与名称更近。
                 .child(ops)
@@ -2462,9 +2504,46 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     title_fg,
                     staged_hit,
                 ));
+            // 目录行 / 列行的全名卡（方案③，2026-11-08）：这两类行被挤掉得最狠——
+            // 目录行吃满缩进（`TREE_BASE_PADDING + depth × TREE_INDENT`，深一层就多 14px），
+            // 列行右侧还常驻类型 / PK/FK 列。行内不显的细节（列的真实类型 + 约束）由卡补。
+            // 表 / 视图走下面的富卡（类型 + 约行数 + 注释 + 连接），其它种类不挂——
+            // 与表 / 视图同一 300ms 口径，鼠标扫过整棵树时不闪。
+            let detail_extra: Option<Vec<String>> = match &node.kind {
+                NavNodeKind::Catalog => Some(vec![
+                    "目录".to_string(),
+                    format!("连接：{n_conn_label}"),
+                ]),
+                NavNodeKind::Schema => Some(vec![
+                    "Schema".to_string(),
+                    format!("连接：{n_conn_label}"),
+                ]),
+                NavNodeKind::Folder(_) => Some(vec![
+                    "文件夹".to_string(),
+                    format!("连接：{n_conn_label}"),
+                ]),
+                NavNodeKind::Column {
+                    data_type,
+                    nullable,
+                    primary,
+                    foreign,
+                } => {
+                    let mut lines = vec![format!("类型：{data_type}")];
+                    let mut traits: Vec<&str> = Vec::new();
+                    if *primary {
+                        traits.push("主键");
+                    }
+                    if *foreign {
+                        traits.push("外键");
+                    }
+                    traits.push(if *nullable { "可空" } else { "非空" });
+                    lines.push(format!("约束：{}", traits.join(" / ")));
+                    lines.push(format!("连接：{n_conn_label}"));
+                    Some(lines)
+                }
+                _ => None,
+            };
             // 表 / 视图名 hover 卡（2026-10-28 实现）：类型 + 约行数 + 注释 + 归属连接。
-            // 只挂对象行不挂连接 / 目录 / 列——鼠标扫过整棵树时不至于弹层乱闪
-            // （与徽标 hover 卡同一 300ms 延迟口径，见 `primitives::nav_badge_hover_card`）。
             // 待提交删除态不挂：行已是删除线弱色，弹卡没有增量信息。
             if !staged_hit && matches!(&node.kind, NavNodeKind::Table { .. } | NavNodeKind::View) {
                 let hover_id = SharedString::from(format!("nav-node-hover::{}", node.key));
@@ -2515,6 +2594,18 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         )
                     })
                     .into_any_element()
+            } else if !staged_hit {
+                if let Some(detail) = detail_extra {
+                    nav_name_hover_card(
+                        SharedString::from(format!("nav-node-name-hover::{}", node.key)),
+                        title_el.into_any_element(),
+                        node.name.clone(),
+                        detail,
+                    )
+                    .into_any_element()
+                } else {
+                    title_el.into_any_element()
+                }
             } else {
                 title_el.into_any_element()
             }
