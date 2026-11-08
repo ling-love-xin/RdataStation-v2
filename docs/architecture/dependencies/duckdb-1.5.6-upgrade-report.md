@@ -1,6 +1,9 @@
 # DuckDB 1.5.5 → 1.5.6 升级报告（duckdb crate 1.10505.0 → 1.10506.1）
 
 > 日期：2026-11-08 · 分支：`upgrade/duckdb-1.5.6`（在 `upgrade/gpui-kit-0.9.0` 之上叠放，可独立 rebase 到 main）
+> **现状（2026-11-08 收尾）**：已随 `chore/deps-patch-batch-2026-11` 并入本地 `main`（`46bb8cd8`），
+> `origin/main` 未推送；隔离工作区 `...-upgrade` 已删。验证账目见
+> `docs/architecture/ui/gpui-kit-0.9.0-upgrade-report.md` §12（`rds-engine --lib` 219/0 真开 DuckDB）。
 > 关联：`duckdb-linking.md`（动态链接设计）· `dependency-strategy.md`（版本记录）· `duckdb-2.0-gpui-kit-0.8.1-upgrade-assessment.md`（2.0 线成本）
 
 ## 1. 结论
@@ -94,9 +97,13 @@ Removing zip v6.0.0 / crossterm v0.28.1 / crossterm_winapi v0.9.1
 
 ## 8. 复现步骤
 
+> 下面的 `$wt` 是当时的一次性隔离工作区，**2026-11-08 已删**（62.36 GB）。现在主工作区
+> `D:\RdataStation\RDS\RdataStation-v2` 的 `third_party/duckdb/1.5.6/` 已就位，直接在主工作区跑即可；
+> 若另开 worktree，把 `$wt` 换成新路径，并且**必须手工放置库文件**（`third_party/duckdb/*/` 在 `.gitignore`）。
+
 ```powershell
 # 1) 取库（Windows，无 bash 时）
-$wt = "D:\RdataStation\RDS\RdataStation-v2-upgrade"
+$wt = "D:\RdataStation\RDS\RdataStation-v2"   # 或你新建的 worktree 路径
 Invoke-WebRequest -Uri "https://ghproxy.net/https://github.com/duckdb/duckdb/releases/download/v1.5.6/libduckdb-windows-amd64.zip" -OutFile "$wt\.rds\tmp\d6.zip"
 Expand-Archive -LiteralPath "$wt\.rds\tmp\d6.zip" -DestinationPath "$wt\third_party\duckdb\1.5.6" -Force
 # 2) 三处成对：根 Cargo.toml（=1.10506.1）/ .cargo/config.toml（1.5.6）/ tools/fetch-duckdb.sh（默认 1.5.6）

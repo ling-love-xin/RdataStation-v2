@@ -35,3 +35,31 @@
 3. 设置页 → 数据源导航 →「类型简称映射…」：改简称后连接名 / 徽标同步
 4. 草稿箱：初始框提示「搜索文件名或文件夹名」，打开搜索面板后查询框提示「搜索文件内容」
 5. **T-1**：设置 → 外观 →「标签栏最大宽度」选 120px → 标签立即变窄、文字省略、✕ 完整；「标签栏样式」切 下划线/胶囊 → 标签条形态即变
+
+## 五、待人工目视验收（gpui-kit 0.9.0 + gpui-fast 并入后，2026-11-08）
+
+> 背景：`chore/deps-patch-batch-2026-11` 已并入本地 `main`（见
+> `docs/architecture/ui/gpui-kit-0.9.0-upgrade-report.md` §12）。自动化侧 **142 目标 / 3794 passed /
+> 10 failed**，其中 9 条是基线、1 条来自工作树未提交改动；剩下这 8 项只有**肉眼**能判，
+> 因为它们要判的是"画面有没有"，而 gpui-fast 的保留绘制模式恰恰会让 `cx.debug_bounds(..)` 这类
+> 断言读不到真实画面（详见该报告 §7 / §9）。
+>
+> 跑法：`target\debug\rds-app.exe` 起应用，**重点走编辑器模块**（书签 / 折叠）与四个对话框位。
+> 全部通过 → 本节整表删除（同时删掉报告 §12.9 里对应的"未做"说明），不留悬空条目；
+> 任一项不过 → 把现象记到表里的「结果」列，再按归属分派（gpui-fast 观察层 / 内核移植 / 业务侧）。
+
+| 状态 | 编号 | 检查项 | 通过判据 | 关联证据 |
+|---|---|---|---|---|
+| ⬜ | V-1 | 分析资源对话框关闭后无残影 | 打开版本对话框 / 索引修复对话框后点关闭：背景编辑器与导航栏立即重绘干净，无半透明残留、无旧图层压字（`rds-analytics-resource --test dialog_window` 对应两条用例红在 `debug_bounds` 观察层） | `version_dialog_lists_rows_and_shows_actions_after_selection`、`index_repair_dialog_groups_rows_and_shows_inline_actions` |
+| ⬜ | V-2 | 右 Dock 单独存在时草稿行出现 | 只留右 Dock（关掉中间编辑器/结果区）：草稿箱出现 `mock-draft-open` 那一行且可点开 | `rds-workbench --test mock_panel_probe` 的 `right_sidebar_alone_renders_draft_row` |
+| ⬜ | V-3 | 导航树虚拟列表行真的画出 | 数据导航树滚动/展开：对象行逐行可见，不出现"有高度但空白"的条带 | `nav_view::tests::nav_tree_rows_are_laid_out_by_the_virtual_list` |
+| ⬜ | V-4 | 列类型不匹配警示行可见 | 打开列编辑对话框并造出类型冲突：警示行出现且文案可读（不是高度占了但没字） | `rds-analytics-resource` 的 `column_dialog_shows_type_mismatch_warning` |
+| ⬜ | V-5 | 标题栏折叠后正文可还原 | 连接对话框点标题行折叠 → 正文收起；再点一次 → 正文完整回来 | `header_interaction::clicking_the_title_row_collapses_and_restores` |
+| ⬜ | V-6 | 书签图标在行号栏最左侧 | 有书签的行：书签图标贴在 gutter 最左，行号整体右移一列；无书签的编辑器行号栏宽度不变、不吞行号点击 | `element.rs` 的 `GutterMarkerLayout.column_width`、`marker_column_x = origin_x` |
+| ⬜ | V-7 | 有说明的折叠行：箭头常显 + 下方一道横线 | 带说明的折叠行箭头**常显**（不受 hover 影响），箭头下方 9×1.5 的横线可见；无说明的可折叠行仍只在 hover / 当前行 / 已折叠时显箭头 | `GUTTER_FOLD_NOTE_UNDERLINE_WIDTH 9` / `HEIGHT 1.5`、`FoldIconLayout.fold_note_rows` |
+| ⬜ | V-8 | 书签悬停说明气泡 | 指针停在有说明的书签行 → 该行下方、书签列右侧浮出淡色气泡（长文本截断带 `…`）；设置里关掉 `editor.bookmark_hover_note` 后气泡不再出现 | `bookmark_hover_note_setting_off_strips_note`（自动化已绿，视觉未验） |
+
+**已由自动化覆盖、不需要肉眼重复的部分**：书签投影 / 单击切换 / Shift 弹说明三条用例已绿
+（`bookmarks_project_into_gutter_markers`、`gutter_click_toggles_bookmark_and_shift_opens_note`、
+`bookmark_hover_note_setting_off_strips_note`），折叠候选回灌也已绿
+（`folding_candidates_are_fed_after_the_gutter_restored`）。

@@ -145,8 +145,9 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 分支 `chore/deps-patch-batch-2026-11` rebase 到 main（`a569df57` 一次、`5675df1e` 又一次——
 中间 main 又落了折叠末行与清技术债 2 个 commit，与本分支改动面零重叠，二次 rebase 17/17 无冲突），
 随后补了一个移植 commit「把 main 的书签列 / 折叠说明 patch 移植到 gpui-kit 0.9.0 内核」
-（hash 随 rebase 重写，以标题为准；并入时 `dce9433d`），最后 `--ff-only` 并入 main
-（HEAD 与分支同为 `7c12d7e8`，无 merge commit）。
+（hash 随 rebase 重写，以标题为准；并入时 `dce9433d`），之后又补了两次文档账目提交，分支 tip 到
+`95997ebb`，最后 `--ff-only` 并入 main（main 与分支同指针，无 merge commit）。收尾提交（移植脚本归档、
+验证记录）在 main 上是 `46bb8cd8`。
 
 rebase 顺带暴露的一个坑（值得记住）：vendor 目录是**整目录替换**，main 在这两个
 vendor 上还叠着私有 patch。rebase 时若对冲突文件取「我们的 0.9.0」，git 会把对方的 patch
@@ -175,6 +176,14 @@ vendor 上还叠着私有 patch。rebase 时若对冲突文件取「我们的 0.
 `database-navigator-test-report-2026-10-03` / `property-test-report-2026-10-03` / `editor-dev-plan` §0
 历史条目 / `editor-architecture.md` 的踩坑条目 / `gpui-kit-0.8.0-upgrade-report` —— 那些写的是
 「当时在 1.5.5 上实测出的事实」，改版本号会把历史记录改成假话。
+
+**收尾状态（2026-11-08）**：只做**本地**合并，`origin/main` **未推送**（远端仍是旧状态，需要对外同步
+时另跑 `git push origin main`）。隔离工作区 `D:\RdataStation\RDS\RdataStation-v2-upgrade` 已删（释放
+62.36 GB `target` + 0.35 GB `.rds`），`duckdb` 库文件已手工放入主工作区（`third_party/duckdb/*/` 在
+`.gitignore`，ff 不会带走）。主分支冷编 12m56s（0 error 0 warning）+ 20 秒冒烟 0 panic，
+全量测试 **142 目标 / 3794 passed / 10 failed**（9 条基线 + 1 条工作树未提交改动），
+证明与验证的原始账目见 `docs/architecture/ui/gpui-kit-0.9.0-upgrade-report.md` §12；
+**需要肉眼判的 8 项登记在 `docs/architecture/ui/ui-todo.md` §五（V-1 ~ V-8）**。
 
 ## 5. 关键依赖与约束
 

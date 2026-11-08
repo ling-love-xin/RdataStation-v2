@@ -1,6 +1,9 @@
 # GPUI-kit 0.8.1 → 0.9.0 升级 + gpui-fast 启用报告
 
-> 分支 `upgrade/gpui-kit-0.9.0`（worktree `D:\RdataStation\RDS\RdataStation-v2-upgrade`），基线 `9ce3c98e`，2026-11-08。
+> **现状（2026-11-08 收尾）**：已并入本地 `main`（`46bb8cd8`，无 merge commit），隔离工作区
+> `D:\RdataStation\RDS\RdataStation-v2-upgrade` 已删除；`origin/main` **未推送**（用户决定只做本地合并）。
+> 本文写作时的分支是 `upgrade/gpui-kit-0.9.0`，基线 `9ce3c98e`，2026-11-08。
+> 并入证明与主分支验证见 §12；人工目视项登记在 `docs/architecture/ui/ui-todo.md` §五。
 > 与本文同批提交的代码：根 `Cargo.toml`、`vendor/gpui-base`、`vendor/gpui-component`、`crates/app/build.rs`、`Cargo.lock`。
 > 上一版参考：`docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md`（0.8.1 过程见其 §9）。
 
@@ -447,6 +450,7 @@ cargo test --workspace -j 1 --no-fail-fast
   `vendor/gpui-base/src/{test_support,text/node}.rs` 等）——第 10 条失败由此产生。
 - **真机目视 5 项仍未做**：对话框关闭无残影、右 Dock 草稿行、导航虚拟列表行、列类型警示行、
   标题栏折叠还原；书签列的视觉位置（是否在行号左侧、折叠说明下划线位置、悬停气泡）也没肉眼确认。
+  这 8 项已登记为 `docs/architecture/ui/ui-todo.md` 的 **V-1 ~ V-8**（含通过判据），由用户手工跑编辑器模块验收。
 - 全文只有一条"已知且未修"的红：`rds-ui-guard` 的裸 px，归属 main 侧 `result_panel`。
 
 ### 12.10 复现命令
@@ -463,6 +467,16 @@ cargo build -p rds-app -j 2
 # 全量（串行；-j 2 会触发 rustc 栈溢出）
 cargo test --workspace -j 1 --no-fail-fast
 ```
+
+### 12.11 合并去向与保留物
+
+- **只做本地合并**：`main` 已包含全部 19 个提交；`origin/main` **未推送**，远端仍是旧状态。
+  需要对外同步时再单独执行 `git push origin main`。
+- 五个本地分支保留作回退/追溯（都是 ref，不占工作区）：`chore/deps-patch-batch-2026-11 @95997ebb`、
+  `backup/pre-rebase-2026-11-08 @a82123c0`、`upgrade/gpui-kit-0.9.0 @c6e60a18`、
+  `upgrade/duckdb-1.5.6 @152ff599`、`upgrade/sqlglot-rust-0.11.1 @d318eafa`。
+- `third_party/duckdb/1.5.5/`（dll 36,724,520 B）暂留；代码与配置已全部指向 1.5.6，确认稳定后可删。
+- 移植脚本 `tools/_archive/port_gutter.py`（gitignore 区）保留，供将来再移植 vendor patch 复用。
 
 
 

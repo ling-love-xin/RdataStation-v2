@@ -1,6 +1,8 @@
 # sqlglot-rust 0.10.33 → 0.11.1 升级报告
 
 > 日期：2026-11-08 · 分支：`upgrade/sqlglot-rust-0.11.1`（叠在 `upgrade/duckdb-1.5.6` 之上，可独立 rebase）
+> **现状（2026-11-08 收尾）**：已随 `chore/deps-patch-batch-2026-11` 并入本地 `main`（`46bb8cd8`），
+> `origin/main` 未推送；`rds-sql --lib` 实测 206/0（含 `analysis` 11 条）。
 > 关联：`dependency-strategy.md` §4 / §5 / R4 例外表 · 接入点唯一：`crates/sql`（`rds-sql`）
 
 ## 1. 结论
@@ -91,13 +93,15 @@
 
 ## 7. 复现与回滚
 
+> `$wt` 是当时的一次性隔离工作区，**2026-11-08 已删**；现在直接在本地 `main`
+> （`D:\RdataStation\RDS\RdataStation-v2`）复现即可。
+
 ```powershell
-$wt = "D:\RdataStation\RDS\RdataStation-v2-upgrade"
 # 升级
 #  根 Cargo.toml：sqlglot-rust = "=0.11.1"
 cargo update -p sqlglot-rust --precise 0.11.1
 #  builder.rs 两处 CreateTableStatement 补 with_properties / with_data
-cargo test -p rds-sql -j 2      # 应得 195 + 10
+cargo test -p rds-sql -j 2      # 当前实测 206 / 0（含 analysis 11 条，2026-11-08）
 cargo check -p rds-app -j 2     # 应得 0 error 0 warning
 ```
 
