@@ -885,12 +885,18 @@ impl<M: InputModeKind> TextElement<M> {
 
         // The note under the pointer is shaped here so paint only has to draw it.
         // Only markers that carry text (a note, not a bare bookmark) qualify.
-        let hovered_row =
-            gutter_hovered_row(&layout.marker_hitbox, top, last_layout.line_height, window);
-        if let Some(hovered_row) = hovered_row {
+        // 指针不在标记列上时退回到应用 pin 的「刚跳到的行」：书签管理器「跳转」/ F8
+        // 落地后常显该行说明，不必再手动悬停（指针一动 pin 即失效，见 state）。
+        let note_row = gutter_hovered_row(&layout.marker_hitbox, top, last_layout.line_height, window)
+            .or_else(|| {
+                state
+                    .gutter_note_pin()
+                    .and_then(|line| layout.rows.iter().position(|buffer_line| *buffer_line == line))
+            });
+        if let Some(note_row) = note_row {
             let note = layout
                 .rows
-                .get(hovered_row)
+                .get(note_row)
                 .copied()
                 .and_then(|buffer_line| {
                     layout
@@ -942,7 +948,7 @@ impl<M: InputModeKind> TextElement<M> {
                     bounds: Bounds::new(
                         point(
                             note_x,
-                            top + last_layout.line_height * hovered_row as f32
+                            top + last_layout.line_height * note_row as f32
                                 + (last_layout.line_height - note_height).half(),
                         ),
                         size(note_width, note_height),

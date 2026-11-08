@@ -244,6 +244,11 @@ impl EditorHostPanel {
     }
 
     /// 【书签】把光标移到指定行（1 起 → 内核 0 起；书签管理器「跳转」用）
+    ///
+    /// 跳转后把该行说明 pin 给内核（`set_gutter_note_pin`）：指针没动也能看到刚跳到的
+    /// 书签写了什么，不必再把鼠标移到行号栏。只有**带说明**的书签才 pin——纯书签
+    /// （`label == 行号`）没有可显示的文本，pin 了也不出气泡。设置里关掉「悬停显示
+    /// 说明」时应用下发空 `note`，内核判据同 hover，自然不弹。指针一动内核即让位。
     pub(crate) fn jump_to_line(
         &mut self,
         line_1: usize,
@@ -253,8 +258,16 @@ impl EditorHostPanel {
         let target_0 = line_1.saturating_sub(1);
         // `Position` 是 lsp-types 的 (line, character)，字段为 `u32`；行号在 u32 范围内
         let target_0 = u32::try_from(target_0).unwrap_or(0);
+        // 判据与 gutter 标记一致：`label != 行号` 才算「有说明」
+        let pin = self
+            .shared
+            .bookmarks(&self.document)
+            .iter()
+            .find(|b| b.line == line_1 && b.label != b.line.to_string())
+            .map(|_| line_1.saturating_sub(1));
         self.editor.update(cx, |state, cx| {
             state.set_cursor_position(Position::new(target_0, 0), window, cx);
+            state.set_gutter_note_pin(pin, cx);
         });
         cx.notify();
     }

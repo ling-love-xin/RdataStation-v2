@@ -42,9 +42,9 @@ gpui-base（4 文件）：
 
 | 文件 | 变更点 |
 | --- | --- |
-| `src/input/base/state.rs` | `LineDelta` 结构体 + `last_edit_delta` 字段/初始化 + `take_last_edit_delta()` + `record_edit_delta()`（三处 `adjust_folds_for_edit` 之后各插一行）+ `cursor_count()` / `cursor_offsets()` + `add_cursor_above/below` 由 `pub(super)` 提为 `pub` + `add_cursor_above_line` / `add_cursor_below_line` / `collapse_cursors` / `select_columnar_block` + 两处折叠候选保护（`set_fold_candidates` 空则跳过、`update_fold_candidates_for_edit` 空增量跳过） |
+| `src/input/base/state.rs` | `LineDelta` 结构体 + `last_edit_delta` 字段/初始化 + `take_last_edit_delta()` + `record_edit_delta()`（三处 `adjust_folds_for_edit` 之后各插一行）+ `cursor_count()` / `cursor_offsets()` + `add_cursor_above/below` 由 `pub(super)` 提为 `pub` + `add_cursor_above_line` / `add_cursor_below_line` / `collapse_cursors` / `select_columnar_block` + 两处折叠候选保护（`set_fold_candidates` 空则跳过、`update_fold_candidates_for_edit` 空增量跳过） + **gutter 说明跳转 pin**（2026-11-08，`editor-backlog.md` §15.10）：`gutter_note_pin` 字段 + `set_gutter_note_pin` / `gutter_note_pin()` + `on_mouse_move` 开头清 pin + `set_gutter_markers` 变化清 pin |
 | `src/input/editor/display_map/display_map.rs` | 新增 `has_fold_candidates()` |
-| `src/input/base/element.rs` | `editor_gutter_bounds` 改为 `let bounds = ...; bounds` 形式 |
+| `src/input/base/element.rs` | `editor_gutter_bounds` 改为 `let bounds = ...; bounds` 形式；`layout_gutter_markers` 的说明气泡行改为 `gutter_hovered_row(..).or(pin 在可视行里的位置)`（跳转后常显说明，见 `editor-backlog.md` §15.10） |
 | `src/resizable/resize_handle.rs` | `HANDLE_PADDING`：`px(4.)` → `px(2.)`（分割条更细） |
 
 gpui-component（7 文件）：

@@ -168,6 +168,64 @@ fn bookmark_hover_note_setting_off_strips_note(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 跳转到有说明的书签后，说明应常显（不必再把鼠标移到行号栏）。
+///
+/// 钉的是接线：`jump_to_line` 要把它自己算出的行 pin 给内核（`set_gutter_note_pin`）。
+/// 只 `set_cursor_position` 的话内核不知道「刚跳到哪行」，说明就只能靠鼠标悬停——
+/// 这正是遗留清单里「`jump_to_line` 不回传行号」那一段。
+/// 反向断言：纯书签（`label == 行号`，没有说明文本）不 pin，pin 了也弹不出东西。
+#[gpui_kit::test]
+fn jumping_to_a_bookmarked_line_pins_its_note(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let dir = temp_dir("bookmark_pin");
+    let path = dir.join("pin.sql");
+    std::fs::write(&path, "select 1\nselect 2\nselect 3").expect("写盘");
+    let shared = EditorShared::new();
+    let id = crate::persist::open_file(&shared, &path, EditorMode::Sql)
+        .expect("打开")
+        .id()
+        .clone();
+
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-bookmark-pin");
+    let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 第 3 行：带说明书签；第 2 行：gutter 单击加出来的纯书签（说明 = 行号）
+    cx.update(|window, cx| {
+        panel.update(cx, |p, cx| {
+            p.apply_bookmark_label(3, "第三行说明".to_string(), window, cx);
+            p.on_gutter_marker_click(1, false, window, cx);
+        });
+    });
+    let bookmarks = shared.bookmarks(&id);
+    assert!(
+        bookmarks
+            .iter()
+            .any(|b| b.line == 3 && b.label == "第三行说明"),
+        "前提：第 3 行带说明"
+    );
+    assert!(
+        bookmarks
+            .iter()
+            .any(|b| b.line == 2 && b.label == "2"),
+        "前提：第 2 行只有书签，没有说明，实际 {bookmarks:?}"
+    );
+
+    // 跳到有说明的行：pin 到该行（1 起 3 → 内核 0 基 2）
+    cx.update(|window, cx| panel.update(cx, |p, cx| p.jump_to_line(3, window, cx)));
+    let pin = cx.update(|_window, cx| panel.read(cx).editor.read(cx).gutter_note_pin());
+    assert_eq!(pin, Some(2), "跳到第 3 行应把该行 pin 给内核");
+
+    // 跳到纯书签行：没有说明文本，不 pin
+    cx.update(|window, cx| panel.update(cx, |p, cx| p.jump_to_line(2, window, cx)));
+    let pin = cx.update(|_window, cx| panel.read(cx).editor.read(cx).gutter_note_pin());
+    assert_eq!(pin, None, "纯书签行没有说明可弹，不应 pin");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// 文本编辑后书签行号跟随平移（方案 A：内核编辑行增量）。
 ///
 /// 钉的是**接线**：`support/bookmark.rs::adjust_for_edit` 的用例只证明算法，

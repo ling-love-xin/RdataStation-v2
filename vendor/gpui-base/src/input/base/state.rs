@@ -624,6 +624,12 @@ pub struct InputBaseState<M: InputModeKind> {
     /// 开：代码编辑器即使零标记也留出一列（空行悬停出淡书签、点击即加标记）；
     /// 关：回到「有标记才出列」——零标记不留宽，已有标记照旧显示。
     pub(super) gutter_marker_column: bool,
+    /// 跳转 pin：应用最近一次「跳到某行」的行（buffer 0 基）。
+    ///
+    /// 指针没停在标记列上时，内核用它给该行常显说明——跳转后不必再手动悬停。
+    /// 指针一动（`on_mouse_move`）就让位给 hover 说明；标记集合变化也作废
+    /// （`set_gutter_markers`），避免 pin 到一行已经没有说明的位置。
+    pub(super) gutter_note_pin: Option<usize>,
     /// What a consumer projected, kept verbatim so that resolution never
     /// consumes its own output: resolving in place would fill the unset
     /// colours once and then never see them as unset again, which is the same
@@ -1120,6 +1126,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             editor_style: InputEditorStyle::default(),
             gutter_markers: Vec::new(),
             gutter_marker_column: true,
+            gutter_note_pin: None,
             projected_editor_style: InputEditorStyle::default(),
             accessibility: None,
             scrollbar_renderer: None,
@@ -2970,6 +2977,12 @@ impl<M: InputModeKind> InputBaseState<M> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // 指针一动：跳转 pin 的说明让位给 hover 说明（否则两份说明争同一行的位置）。
+        // 放在任何早退分支之前——鼠标离开输入区也算「动了」。
+        if self.gutter_note_pin.take().is_some() {
+            cx.notify();
+        }
+
         // `last_bounds` is moved by the scroll offset; `input_bounds` is the visible area.
         let within_bounds = self.input_bounds.contains(&event.position);
 
@@ -13011,7 +13024,28 @@ impl<M: InputModeKind> InputBaseState<M> {
             return;
         }
         self.gutter_markers = markers;
+        // 标记集合变了：pin 的行可能已经没有说明（说明被改、被删），作废它
+        self.gutter_note_pin = None;
         cx.notify();
+    }
+
+    /// 设置「跳转后常显说明」的行（buffer 0 基；`None` 清除）。
+    ///
+    /// 语义：该行若有带说明的 gutter 标记，指针不在标记列上也画出说明气泡——
+    /// 跳转（书签管理器「跳转」、`F8` 上下一个书签）落地后用户立刻看到该行写了什么，
+    /// 不必再把鼠标移到行号栏。指针一动就让位给 hover 说明（`on_mouse_move` 清空）。
+    /// 设置里关掉「悬停显示说明」时应用下发的是空 `note`，内核自然不弹（判据同 hover）。
+    pub fn set_gutter_note_pin(&mut self, line: Option<usize>, cx: &mut Context<Self>) {
+        if self.gutter_note_pin == line {
+            return;
+        }
+        self.gutter_note_pin = line;
+        cx.notify();
+    }
+
+    /// 当前 pin 的行（buffer 0 基）；供应用与用例读取。
+    pub fn gutter_note_pin(&self) -> Option<usize> {
+        self.gutter_note_pin
     }
 
     /// 设置代码编辑器是否常显书签列（默认开）。

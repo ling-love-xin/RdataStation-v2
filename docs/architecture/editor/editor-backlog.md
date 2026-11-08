@@ -201,7 +201,7 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 | 中 | **折叠末行收起（统一 `end+1`）** | 内核 `fold_map.rs::rebuild` 只藏 `[start+1, end-1]`（首末行都强制可见），所以 `SELECT (` 折起来后 `)` 还挂着、`SELECT / a / b` 折起来 `b` 还挂着。用户口径：**不动内核**，在候选侧加一——`crates/editor/src/support/fold.rs` 的 `FoldSpan.end_line` 记**块真实末行**，`kernel_end_line()` 统一返回 `end_line + 1`，`view/fold.rs::to_kernel` 走它：内核因此藏 `[start+1, end]`，**两类块都只留首行**（`(`…`)` / `CASE`…`END` / 多行注释 / 缩进块最后一条内容行一起收起，对齐 VS Code）。缩进块末行恰是文档最后一行时也安全（内核 `rebuild` 越界兜底、`line_start_offset(end+1)` 落回文本末尾）。另：同起始行只发一条并留**范围最大**者（内核 `set_candidates` 的 `dedup_by_key(start_line)` 只留一个，否则折一次能收几行取决于排序） | ✅ 已实现并人工验收（2026-11-08 用户回「ok，没有问题了」；`3cdf651f`） |
 | 中 | 书签行号漂移不校正 | **已在 `8234474b` 实现，本轮只校准记录**：`view/host/bookmarks.rs::adjust_bookmarks_for_edit` 在 `InputEvent::Change` 里 `take_last_edit_delta`（vendor 私有 patch）→ `support/bookmark.rs::adjust_for_edit` 按「区前不动 / 区内锚到首行 / 区后整体平移」改书签并回写 sidecar；本轮补端到端用例 `bookmarks_follow_an_inserted_line`，并修掉 `bookmarks.rs:61` 那句已过时的「暂不校正」注释。原证据（`:61` 注释）已不成立 | ✅ 已实现（记录已校准） |
 | 中 | 标签方案 B / C | 现只有 A「说明即标签」（`#tag` 约定，schema 与 sidecar 零变更）；B = 结构化 `tags: Vec<String>`（需 schema + sidecar 迁移）、C = 全局 Tag System（远期） | 待排期 |
-| 低 | 行内悬停信息 + 设置开关 | 用户口径「跳转后鼠标位于当前行时显示信息，设置可关闭」。已交付部分：指针停在有说明书签 / 折叠行时出说明气泡，设置 `editor.bookmark_hover_note` 可关（随 gutter 5 项，`8234474b`）。仍缺：**跳转到书签后自动弹出**说明——`jump_to_line` 只定位光标，不回传「刚跳到哪一行」，要做需给跳转动作加事件回传；另 hover 气泡目前无 300ms 延迟（`gutter_hovered_row` 按当前指针位置当帧计算，加延迟要给 input 挂计时器） | 部分已实现，自动弹出与延迟待排期 |
+| 低 | 行内悬停信息 + 设置开关 | 用户口径「跳转后鼠标位于当前行时显示信息，设置可关闭」。已交付：指针停在有说明书签 / 折叠行时出说明气泡，设置 `editor.bookmark_hover_note` 可关（随 gutter 5 项，`8234474b`）；**跳转后自动弹出已实现（2026-11-08，`set_gutter_note_pin`，见 §15.10）**——书签管理器双击与 F8 落地即显示该行说明，指针一动不动也可见。仍缺：hover 气泡无 300ms 延迟（`gutter_hovered_row` 当帧计算，实现路径见 §15.10 末） | 自动弹出已交付；延迟待排期 |
 | 低 | 书签交互无自动化测试 | headless 下对话框按钮点击分发不可靠（`simulate_click` 单独跑能中、全套跑中不了），只断言 `debug_bounds`；双击 / 编辑 / 删除靠人工验收；gutter 的 hover 淡色与图标像素亦无自动断言 | 已知限制 |
 
 ## 十三、SQL 三执行通道（2026-11-08 核证）
@@ -267,7 +267,7 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 | ~~中~~ | ~~书签行号漂移不校正~~ | 回放：sidecar 行号**会**随编辑平移（方案 A 已实现，`8234474b`；本轮补端到端用例） | `view/host/bookmarks.rs:149`（`adjust_bookmarks_for_edit`） |
 | 中 | 分析模式逐单元补全未装 provider | 装配：cell 编辑器只建实例不装 provider | ✅ **本轮已修（补全），见 15.8**。原证据：`view/host/notebook.rs:44-49`（`EditorState::new(..).language(..)` + `set_value`，无 completion / diagnostics）；`completion::install` 仅两处主编辑器（`view/host/mod.rs:633`、`view/host/session.rs:498`）。**逐单元 diagnostics 仍未做**，见 15.8 末尾 |
 | 中 | 标签方案 B（结构化 `tags`）/ C（全局 Tag System） | 数据层：现只有 A「说明即标签」 | §十二 |
-| 低 | 跳转后自动弹说明 / hover 300ms 延迟 | 事件回传：`jump_to_line` 不回传行号 | §十二（`gutter_hovered_row` 当帧计算） |
+| ~~低~~ | ~~跳转后自动弹说明~~ / hover 300ms 延迟 | ✅ **自动弹出已修（2026-11-08）**：内核加「跳转 pin」（`set_gutter_note_pin`），`jump_to_line` 把落地行 pin 给内核，指针不动也显示该行说明，见 §15.10。**仍未做**：hover 300ms 延迟（当帧计算改为「计时 + 连续请求帧」，路径已在 §15.10 记明） | 原证据：`jump_to_line` 不回传行号；`gutter_hovered_row` 当帧计算 |
 | 低 | 修饰符高亮未映射（readonly / deprecated） | 渲染：主题侧无对应 token | `view/highlight.rs:217` |
 | ~~低~~ | ~~脚本执行超时不可配~~ | ✅ **本轮已修（2026-11-08）**：设置项 `editor.env_timeout_ms`（默认 60000，1000–3600000）+ 超时随 `ScriptRequest::timeout_ms` 进执行线程，见 §15.9 | 原证据：无 `editor.env_timeout`；`ports/editor_env.rs` 只有写死常量 |
 | 低 | R 内核单元占位（只有语言标签） | 执行端：无 R 解释器 | `notebook/cell.rs:49` |
@@ -515,6 +515,53 @@ headless 经验：正文编辑要走 `editor.read(cx).focus_handle(cx)` + `focus
 红——`src/panels/overview.rs`（上一轮工作台概览卡片新增）没登记进尺寸 / 颜色两份契约清单，
 等于这两份契约对该文件静默失效。已在两处清单各补一条登记；补后 `ui_contract` 9 passed
 （同时证明 overview.rs 无裸色值、无裸尺寸字面量）。
+
+### 15.10 跳转后自动弹书签说明（15.1 第 3 条已修一半）
+
+**问题本体**：内核的 gutter 说明气泡只在「指针停在书签列上」时画——
+`vendor/gpui-base/src/input/base/element.rs::layout_gutter_markers` 里
+`gutter_hovered_row(&layout.marker_hitbox, ..)` 用当帧 `window.mouse_position()` 算命中行，
+命中且该行 `note` 非空才 shape 出气泡。而 `jump_to_line` 只 `set_cursor_position`，
+内核不知道"刚跳到哪一行"——于是从书签管理器双击跳转、或 `F8` / `Shift+F8` 循环跳转后，
+用户看不到自己刚落到的那条说明写了什么，必须把鼠标移到行号栏再悬停一次。
+
+**改法：给内核加一个「跳转 pin」（应用设定、指针一动即让位）**。三处，约 30 行：
+
+| 层 | 位置 | 改动 |
+| --- | --- | --- |
+| 内核状态 | `vendor/gpui-base/src/input/base/state.rs` | 新字段 `gutter_note_pin: Option<usize>`（buffer 0 基）+ `set_gutter_note_pin(Option<usize>)` + `gutter_note_pin()` 读取器；`set_gutter_markers` 内容变化时清 pin（标记变了，pin 的行可能已无说明） |
+| 内核渲染 | `vendor/gpui-base/src/input/base/element.rs::layout_gutter_markers` | `note_row = gutter_hovered_row(..) 的结果.or_else(pin 在该帧可视行里的位置)`；气泡的 y / 文本查找都改用 `note_row`，绘制不变 |
+| 让位 | 同上 `state.rs::on_mouse_move` | 函数**开头**（任何早退分支之前）`if self.gutter_note_pin.take().is_some() { cx.notify() }`——鼠标一动就交给 hover 逻辑，两份说明不争同一行位置 |
+| 应用 | `crates/editor/src/view/host/bookmarks.rs::jump_to_line` | 算出"该行是否有说明"（判据与 gutter 标记一致：`label != 行号`）→ `set_cursor_position` 之后 `set_gutter_note_pin(line_1 - 1)` |
+
+**覆盖的两个入口**（都汇到 `jump_to_line`，实测确认）：
+`open_bookmark_manager` 的 `on_jump` 回调（`view/host/bookmarks.rs:368`，双击列表行）、
+`jump_to_bookmark`（`F8` / `Shift+F8`，同文件 `:243`）。
+
+**为什么不给 `jump_to_line` 加返回值**：原证据写的是「不回传行号」，但真正的缺口不在返回值——
+调用方本来就知道自己要跳的行。缺的是「内核拿这个行没有用来显示说明」。所以修法是把行交给内核
+（pin），而不是把行回传给一个已经有行号的人。
+
+**尊重既有设置**：`editor.bookmark_hover_note` 关闭时 `push_gutter_markers` 下发空 `note`，
+内核判据要求 `!note.is_empty()`（与 hover 同一处），所以 pin 也只画书签不弹说明——两处口径一致。
+
+**验证**：
+
+- `cargo check -p rds-editor --all-targets -j 1` → exit 0（vendor 改动联动重编，27s）
+- 新用例 `view::tests::bookmarks::jumping_to_a_bookmarked_line_pins_its_note` → ok：
+  第 3 行带说明、第 2 行纯书签 → 跳 3 行 pin = `Some(2)`；再跳 2 行 pin = `None`（无说明不 pin）
+- `bookmarks_follow_an_inserted_line` 回归 → ok（标记刷新清 pin 的路径没打断编辑平移）
+- `rds-editor --lib -- --test-threads=1` → **764 passed / 3 failed / 1 ignored**
+  （= §15.9 基线 763 + 本轮新增 1 条；三条失败仍是既有基线
+  `legacy::opening_an_analysis_document_builds_a_cell_editor_per_cell`、
+  `notebook_win::analysis_cell_renders_multiple_output_blocks`、
+  `results_a::the_result_header_sorts_from_its_arrow`）
+
+**仍未做：hover 300ms 延迟（同一条的后半）**。实现路径已确认，但代价与本次不同：
+延迟要 (a) 在事件路径记录"同一行的进入时刻"（跨帧记忆，内核有 `last_hovered_row: Rc<Cell<..>>`
+先例可循）；(b) 到 300ms 时没有鼠标事件，必须在渲染里 `window.request_animation_frame()`
+连续申请帧（一次悬停约 18 帧）才能弹出。这是纯体感优化、与 pin 无耦合，留作独立一项。
+
 
 
 
