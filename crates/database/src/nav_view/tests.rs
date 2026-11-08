@@ -806,6 +806,11 @@ fn nav_tree_rows_are_laid_out_by_the_virtual_list(cx: &mut gpui_kit::TestAppCont
             state.expanded.insert(key.to_string());
         }
     });
+    // 播种是直接改 `nav` 里的 `RefCell`（不经事件路径），视图不会被标脏；
+    // `draw` 只重绘脏元素，所以必须显式 `notify` 一次，否则量到的是**首帧缓存**
+    // （那时 `children` / `expanded` 还是空的，只有分组头 + 连接行两行）。
+    redraw(cx);
+    view.update(cx, |_, cx| cx.notify());
     redraw(cx);
     let header = cx.debug_bounds("nav-row-group").expect("分组头应被画出");
     let conn_row = cx.debug_bounds("nav-row-conn").expect("连接行应被画出");
