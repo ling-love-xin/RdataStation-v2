@@ -108,16 +108,18 @@ pub(super) fn strip_nav_scope_prefix(name: &str) -> String {
 
 /// 行名「全名」hover 卡：名称被 `text_ellipsis()` 截断后唯一的看全通道。
 ///
-/// 为什么需要（2026-11-08 取证）：连接行名称可用宽度只有 ≈7rem——行内固定槽位
-/// （内距 + 展开槽 + 徽标 + 行尾操作 + 归属域列 + gap）已吃掉 7.275rem。DBeaver 的对应机制
-/// 是树自带 `SWT.H_SCROLL`（`DatabaseNavigatorTree.java:327`，超长不省略）+ JFace tooltip
-/// （`DatabaseNavigatorToolTipSupport.java:24-37`，受 `navigator.show.tooltips` 开关）；
-/// 我们没有横向滚动（`v_virtual_list` 把每行宽度钉死为列表可视宽，见 `virtual_list.rs:376-379`），
-/// 所以「看全名」只能靠 tooltip 兜底。
+/// 为什么需要（2026-11-08 取证）：连接行名称槽只有 ≈12.6rem（18rem 面板扣掉行内固定槽
+/// ——内距 0.5 + 展开槽 0.625 + 徽标 1.125 + 归属域列 2.4 + 3 处 gap 0.75 = 5.4rem）；
+/// 对象行更紧（缩进 + 注释副标 ≤8rem + 统计串），深 4 层的表行曾算到名称 0 宽。
+/// DBeaver 的对应机制是树自带 `SWT.H_SCROLL`（`DatabaseNavigatorTree.java:327`，超长不省略，
+/// item 宽随内容增长）+ JFace tooltip（`DatabaseNavigatorToolTipSupport.java:24-37`，
+/// 受 `navigator.show.tooltips` 开关）；我们没有横向滚动（`v_virtual_list` 把每行宽度钉死为
+/// 列表可视宽，见 `virtual_list.rs:363-382`），所以「看全名」只能靠 tooltip 兜底。
 ///
 /// 延迟与徽标卡 / 归属域卡同为 300ms：鼠标扫过整棵树时不闪。
-/// `trigger_style` 固定为 `flex_1 + min_w_0 + overflow_hidden`——调用方的行内标题槽就是这个语义，
-/// 卡片锚点跟随整块标题而非文字本身；被包进去的 trigger 自身须用 `w_full()` 填满该槽。
+/// `trigger_style` 固定为 `flex_1 + min_w(NAV_NAME_MIN_W) + overflow_hidden`——调用方的行内
+/// 标题槽就是这个语义（名称有下限、附加信息让位），卡片锚点跟随整块标题而非文字本身；
+/// 被包进去的 trigger 自身须用 `w_full()` 填满该槽。
 pub(super) fn nav_name_hover_card(
     id: SharedString,
     trigger: impl IntoElement + 'static,
@@ -130,7 +132,7 @@ pub(super) fn nav_name_hover_card(
         .trigger_style(
             gpui_kit::StyleRefinement::default()
                 .flex_1()
-                .min_w_0()
+                .min_w(rems(ui::NAV_NAME_MIN_W))
                 .overflow_hidden(),
         )
         .trigger(trigger)

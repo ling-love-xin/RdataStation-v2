@@ -188,6 +188,12 @@ pub const NAV_ERR_SUMMARY_W: f32 = 6.5;
 pub const NAV_HOST_SUBLINE_W: f32 = 6.0;
 /// 对象行注释副标最大宽（8rem ≈ 128px；超出省略，属性面板看全量）。
 pub const NAV_COMMENT_SUBLINE_W: f32 = 8.0;
+/// 导航行名称槽**最小宽**（5rem ≈ 80px ≈ 6–7 个汉字 @text_xs）：名称是行的主语，
+/// 行内附加信息（注释副标 / 统计串）必须先让位——否则注释 `flex_none` 会把
+/// `flex_1`（basis 0%）的名称压到 0（深 4 层的表行 + 注释 + 统计已算到 −1.05rem）。
+/// 参照 DBeaver：附加信息由 `paintNodeDetails` 自绘在 item 右端，且窄行直接不画
+/// （`StatisticsNavigatorNodeRenderer.java:213-215`），名称永不被挤。
+pub const NAV_NAME_MIN_W: f32 = 5.0;
 
 // ===== 控件与图标（rem 基准） =====
 

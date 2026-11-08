@@ -91,6 +91,7 @@ fn ui_size_constants_match_design() {
         ),
         (SCRATCHPAD_ROW_CHIPS, 26.0, "草稿箱内联新建行的模板 chip 块"),
         (TREE_INDENT, 14.0, "树缩进步长"),
+        (NAV_NAME_MIN_W, 80.0, "导航行名称槽最小宽"),
         (PANEL_HEADER_HEIGHT, 36.0, "面板头高度"),
         (CONTROL_HEIGHT_MD, 32.0, "标准控件高"),
         (CONTROL_HEIGHT_SM, 26.0, "小控件高"),

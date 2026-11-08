@@ -2411,7 +2411,11 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         let comment_subline: Option<Div> =
             comment_subline_text(&inline, &node.kind, node.comment.as_deref()).map(|comment| {
                 div()
-                    .flex_none()
+                    // 注释是附加信息，名称才是主语：允许收缩（`flex_shrink(1)`），
+                    // 空间紧时先截注释、把宽度让给名称；面板宽时照常完整显示。
+                    // 旧写法 `flex_none`（即 shrink 0）会让 8rem 的上限无条件占位——
+                    // 深 4 层的表行 + 注释 + 统计串已算到 −1.05rem，名称被压成 0。
+                    .flex_shrink(1.0)
                     .min_w_0()
                     .max_w(rems(ui::NAV_COMMENT_SUBLINE_W))
                     .overflow_hidden()
@@ -2491,7 +2495,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             let title_fg = if staged_hit { staged_drop } else { fg };
             let title_el = div()
                 .flex_1()
-                .min_w_0()
+                // 名称是行主语：给下限，不再允许被注释/统计槽压到 0（见 `ui::NAV_NAME_MIN_W`）。
+                .min_w(rems(ui::NAV_NAME_MIN_W))
                 .overflow_hidden()
                 .text_xs()
                 .when(staged_hit, |s| s.line_through())
@@ -2561,7 +2566,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     .trigger_style(
                         gpui_kit::StyleRefinement::default()
                             .flex_1()
-                            .min_w_0()
+                            // 与 `title_el` 同一口径：名称槽有下限，卡不把名称挤没。
+                            .min_w(rems(ui::NAV_NAME_MIN_W))
                             .overflow_hidden(),
                     )
                     .trigger(title_el)
