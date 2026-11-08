@@ -1,5 +1,6 @@
 //! panel/ 全量单元测试
 
+use super::clamp_right_sidebar_width;
 use super::next_right_edge_state;
 use super::reorder_by;
 use super::right_tab_from_index;
@@ -53,6 +54,96 @@ fn sidebar_width_anim_first_frame_and_directions() {
     assert_eq!(to, px(0.));
     // 类型约束（Pixels 参与计算，编译期校验）
     let _: (Pixels, Pixels) = sidebar_width_anim(2, true, full);
+}
+
+/// 【R5 可拖分栏】宽度夹取：`dx` 向右为正（右栏变窄），结果恒在 `crate::ui` 的上下限内
+#[test]
+fn right_sidebar_width_clamps_between_ui_limits() {
+    let min = px(crate::ui::RESULT_SIDEBAR_RIGHT_MIN_WIDTH * 16.0);
+    let max = px(crate::ui::RESULT_SIDEBAR_RIGHT_MAX_WIDTH * 16.0);
+    let default = px(crate::ui::RESULT_SIDEBAR_RIGHT_WIDTH * 16.0);
+    // 小幅向右拖（变窄）/ 向左拖（变宽）都按位移精确换算
+    assert_eq!(clamp_right_sidebar_width(default, 40.0), px(280.));
+    assert_eq!(clamp_right_sidebar_width(default, -40.0), px(360.));
+    // 拖过头：夹在下限 / 上限
+    assert_eq!(clamp_right_sidebar_width(default, 9999.0), min);
+    assert_eq!(clamp_right_sidebar_width(default, -9999.0), max);
+    // 已在边界上再往同向拖：保持边界，不反向越界
+    assert_eq!(clamp_right_sidebar_width(min, 10.0), min);
+    assert_eq!(clamp_right_sidebar_width(max, -10.0), max);
+}
+
+/// 【R5 可拖分栏】拖拽请求改宽度 → 夹取 + 关掉开合补间；点开关重新打开补间
+#[gpui_kit::test]
+fn resize_request_clamps_width_and_suspends_the_open_animation(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, vcx) = panel_harness(cx);
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    vcx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            // 向左拖 400px：远超上限，应夹到 640px
+            p.resize_right_sidebar(-400.0, cx);
+            assert_eq!(
+                p.right_sidebar_width,
+                px(crate::ui::RESULT_SIDEBAR_RIGHT_MAX_WIDTH * 16.0)
+            );
+            assert!(
+                p.right_sidebar_dragging,
+                "拖拽后应直写宽度（不再重播开合补间）"
+            );
+            // 从上限再向右拖 999px：夹到下限 192px
+            p.resize_right_sidebar(999.0, cx);
+            assert_eq!(
+                p.right_sidebar_width,
+                px(crate::ui::RESULT_SIDEBAR_RIGHT_MIN_WIDTH * 16.0)
+            );
+            // 点开关（三态轮转一次）：开合补间恢复
+            p.toggle_value_sidebar(cx);
+            assert!(
+                !p.right_sidebar_dragging,
+                "点开关后应恢复 160ms 开合补间"
+            );
+        });
+    });
+}
+
+/// 【R5 可拖分栏】拖拽手柄只在**宽展开**时挂载（收起 / 窄展开没有可拖的边）
+#[gpui_kit::test]
+fn resize_handle_mounts_only_when_the_sidebar_is_expanded(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+    let (panel, vcx) = panel_harness(cx);
+    let handle_present = |vcx: &mut gpui_kit::VisualTestContext| -> bool {
+        vcx.update(|window, _| {
+            window
+                .try_find(ElementId::Name(SharedString::from(
+                    "editor-result-right-sidebar-resize",
+                )))
+                .is_some_and(|snap| snap.visible())
+        })
+    };
+    // 默认宽展开（`show_value_sidebar = true`，epoch 0 免动画）：手柄挂在右栏左边缘
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(handle_present(vcx), "宽展开时右栏左边缘应有可拖手柄");
+    // 收起（完全不占宽度）：手柄随右栏内容一起卸载
+    vcx.update(|_, app| panel.update(app, |p, cx| p.toggle_value_sidebar(cx)));
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(!handle_present(vcx), "收起态不应有拖拽手柄");
+    // 窄展开（只显右缘图标条，`show = false`）：仍无手柄
+    vcx.update(|_, app| panel.update(app, |p, cx| p.toggle_value_sidebar(cx)));
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(!handle_present(vcx), "窄展开态不应有拖拽手柄");
+    // 再回宽展开：先把宽度切到「拖拽直写」档，避开 160ms 补间首帧的 0 宽
+    vcx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.toggle_value_sidebar(cx);
+            p.resize_right_sidebar(0.0, cx);
+        });
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(handle_present(vcx), "回到宽展开后手柄应重新挂载");
 }
 
 /// 右侧开关三态循环：收起 → 窄展开 → 宽展开 → 收起；每次点击恰好在三态间轮转

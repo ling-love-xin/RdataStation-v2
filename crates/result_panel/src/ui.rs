@@ -235,6 +235,14 @@ pub const RESULT_VERTICAL_BAR_WIDTH: f32 = 2.25;
 /// （截断交给网格，详情看全）。
 pub const RESULT_SIDEBAR_RIGHT_WIDTH: f32 = 20.0;
 
+/// 【R5 可拖分栏】右栏宽度下限（12rem = 192px）：再窄页内工具条只剩图标、标题无字可显，
+/// 与 DBeaver `setWeights` 不让分栏拖成零的口径一致。
+pub const RESULT_SIDEBAR_RIGHT_MIN_WIDTH: f32 = 12.0;
+
+/// 【R5 可拖分栏】右栏宽度上限（40rem = 640px）：超过就压掉主网格一半视口，
+/// 与 DBeaver 面板最多占半屏的观感一致。
+pub const RESULT_SIDEBAR_RIGHT_MAX_WIDTH: f32 = 40.0;
+
 /// 右栏「计算 / 列浏览器明细」键值行的**标签列宽**（4.5rem = 72px）：
 /// 「最小值 / 来源表 / 默认值」这类最长约四个字，72px 放下不挤值列
 pub const RESULT_SIDEBAR_KV_LABEL_WIDTH: f32 = 4.5;

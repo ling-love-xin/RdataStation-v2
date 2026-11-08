@@ -12,6 +12,7 @@ use gpui_kit::base::animation::{EffectTransition, ease_in_out_cubic};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Textarea;
 use gpui_kit::component::list::List;
+use gpui_kit::component::resizable::{HandleEdge, resize_handle};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size};
@@ -513,8 +514,17 @@ impl ResultPanel {
         // 【侧栏丝滑】右栏收起 / 展开与左栏同法：宽度过渡 + 容器始终挂载（宽 0 不占
         // 空间），页签条与内容按 show 挂载（收起时无焦点残留）。开合由
         // `right_sidebar_epoch` 递增重播动画；首帧（epoch=0）免动画。
-        let full = px(ui::RESULT_SIDEBAR_RIGHT_WIDTH * 16.0);
-        let (from, to) = sidebar_width_anim(self.right_sidebar_epoch, show, full);
+        // 【R5 可拖分栏】宽度 = 面板状态（拖拽可改），不再固定常量；拖拽期直写宽度，
+        // 静止期才走 160ms 开合补间（否则每帧拖拽都重播补间、手柄黏手）。
+        let full = self.right_sidebar_width;
+        let (from, to) = if self.right_sidebar_dragging {
+            (full, full)
+        } else {
+            sidebar_width_anim(self.right_sidebar_epoch, show, full)
+        };
+        // 拖拽期用 1ms（vendor 补间的 progress = elapsed/duration，给 0 会算出 NaN、
+        // 触发 `animated value should be finite` 断言；1ms 且 from==to 即等于直写）
+        let anim_ms = if self.right_sidebar_dragging { 1 } else { 160 };
         let wrapper = div()
             .h_full()
             .flex_none()
@@ -536,8 +546,11 @@ impl ResultPanel {
                         .children(close),
                 )
                 .child(content)
+                // 【R5 可拖分栏】手柄贴右栏**左边缘**（inside Leading）：vendor 的 band
+                // 是绝对定位的细条，不占内容流；宽度改动由拖拽请求回面板状态。
+                .child(self.render_right_sidebar_resize())
             });
-        EffectTransition::new(Duration::from_millis(160))
+        EffectTransition::new(Duration::from_millis(anim_ms))
             .ease(ease_in_out_cubic)
             .width(from, to)
             .apply(
@@ -548,6 +561,48 @@ impl ResultPanel {
                 )),
             )
             .into_any_element()
+    }
+
+    /// 【R5 可拖分栏】右栏左边缘的拖拽手柄。
+    ///
+    /// 用 vendor `resize_handle`（base 拥有 band 的位置 / 光标 / 指针态 / 拖拽载荷，
+    /// 只把「拖了之后改什么」留给调用方）：贴左边缘 `HandleEdge::Leading`，拖拽载荷
+    /// 走 `SidebarResizeDrag`，每帧 `on_drag_move` 取**本次位移增量**发
+    /// `ResizeRightSidebar`（增量口径不依赖绝对坐标，窗口滚动 / 缩放都不会算错）。
+    fn render_right_sidebar_resize(&self) -> AnyElement {
+        let queue = self.queue.clone();
+        resize_handle::<SidebarResizeDrag, SidebarResizeDrag>(
+            "editor-result-right-sidebar-resize",
+            Axis::Horizontal,
+        )
+        .inside(HandleEdge::Leading)
+        .on_drag(SidebarResizeDrag, |drag, position, window, cx| {
+            // 拖拽起始：把按下时的指针 x 写进窗口级元素状态，作为增量口径的基准
+            // （`MouseMoveEvent` 没有 `previous_position`，只能自己记上一次位置）。
+            let last_x = window.use_keyed_state(
+                "editor-result-right-sidebar-drag-x",
+                cx,
+                |_, _| std::cell::Cell::new(position.x),
+            );
+            last_x.update(cx, |cell, _| cell.set(position.x));
+            cx.new(|_| *drag)
+        })
+        .on_drag_move::<SidebarResizeDrag>(move |event, window, app| {
+            let pos = event.event.position.x;
+            let last_x = window.use_keyed_state(
+                "editor-result-right-sidebar-drag-x",
+                app,
+                |_, _| std::cell::Cell::new(pos),
+            );
+            let prev = last_x.read(app).get();
+            last_x.update(app, |cell, _| cell.set(pos));
+            // `Pixels::as_f32`：本帧与上一帧的水平位移（像素）
+            let dx = (pos - prev).as_f32();
+            if dx != 0. {
+                queue.request(ResultRequest::ResizeRightSidebar(dx.round() as i32), app);
+            }
+        })
+        .into_any_element()
     }
 
     /// 【2026-10-28 微调】右缘竖条：页签快捷图标区（列浏览器 / 值详情 / 计算 / 分组 /
@@ -726,6 +781,34 @@ impl ResultPanel {
 /// - `epoch > 0` 且展开：`0 → 全宽`（内容随宽度露出）
 /// - `epoch > 0` 且收起：`全宽 → 0`（宽度平滑收缩）
 /// 每次开合 `toggle_*_sidebar` 递增 epoch，动画 id 拼 epoch → `with_animation` 换 id 重播。
+/// 【R5 可拖分栏】右栏左边缘拖拽的载荷，同时充当拖拽视觉实体。
+///
+/// 宽度变化本身就是反馈（右栏内容实时跟着变宽变窄），所以拖拽时**不跟随光标画
+/// 任何东西**，渲染成空元素即可；载荷因此是纯标记类型（不需要携带起始宽度）。
+#[derive(Clone, Copy, Default)]
+pub(crate) struct SidebarResizeDrag;
+
+impl Render for SidebarResizeDrag {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+/// 【R5 可拖分栏】宽度夹取：`dx` 为本次拖拽的水平位移（像素，向右为正 → 右栏变窄），
+/// 结果夹到 `RESULT_SIDEBAR_RIGHT_MIN_WIDTH..=RESULT_SIDEBAR_RIGHT_MAX_WIDTH`。
+/// 纯函数（便于单测）：上下限都在 `crate::ui` 的单一来源里，rem 按 16px 基准换算。
+pub(crate) fn clamp_right_sidebar_width(current: Pixels, dx: f32) -> Pixels {
+    let min = px(ui::RESULT_SIDEBAR_RIGHT_MIN_WIDTH * 16.0);
+    let max = px(ui::RESULT_SIDEBAR_RIGHT_MAX_WIDTH * 16.0);
+    let mut width = current - px(dx);
+    if width < min {
+        width = min;
+    } else if width > max {
+        width = max;
+    }
+    width
+}
+
 pub(crate) fn sidebar_width_anim(epoch: u64, show: bool, full: Pixels) -> (Pixels, Pixels) {
     let to = if show { full } else { px(0.) };
     let from = if epoch == 0 {

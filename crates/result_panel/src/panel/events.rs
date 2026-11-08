@@ -295,6 +295,19 @@ impl ResultPanel {
         self.edge_bar_visible = edge;
         self.show_value_sidebar = show;
         self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
+        // 【R5 可拖分栏】开合重新走 160ms 补间（拖拽期是直写，见 render_right_sidebar）
+        self.right_sidebar_dragging = false;
+        cx.notify();
+    }
+
+    /// 【R5 可拖分栏】拖右栏左边缘改宽度（`dx` = 本次位移，像素，向右为正 → 变窄）。
+    ///
+    /// 纯视图状态：宽度 clamp 到 `crate::ui` 的上下限后写回；`right_sidebar_dragging`
+    /// 置真让右栏接下来直写宽度（不重播开合补间，否则手柄会黏手）。
+    pub fn resize_right_sidebar(&mut self, dx: f32, cx: &mut Context<Self>) {
+        self.right_sidebar_width =
+            super::sidebars::clamp_right_sidebar_width(self.right_sidebar_width, dx);
+        self.right_sidebar_dragging = true;
         cx.notify();
     }
 

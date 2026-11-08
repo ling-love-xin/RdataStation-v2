@@ -161,6 +161,10 @@ impl EditorHostPanel {
             ResultRequest::ToggleLeftSidebar => self
                 .result_panel
                 .update(cx, |p, cx| p.toggle_left_sidebar(cx)),
+            // 【R5 可拖分栏】右栏左边缘拖拽改宽度：纯面板视图状态（不落盘、不影响取数）
+            ResultRequest::ResizeRightSidebar(dx) => self
+                .result_panel
+                .update(cx, |p, cx| p.resize_right_sidebar(dx as f32, cx)),
             // 【侧栏】清单行眼睛：切换该列隐藏 / 显示（网格是另一实体，
             // update 它安全；面板再 notify 重画列浏览器的隐藏标记）
             ResultRequest::ToggleColumnVisibility(column) => {

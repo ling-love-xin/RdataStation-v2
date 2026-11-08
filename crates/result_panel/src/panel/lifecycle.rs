@@ -213,6 +213,9 @@ impl ResultPanel {
             group_columns: Vec::new(),
             group_sort: crate::ports::GroupSort::Value,
             group_duplicates_only: false,
+            // 【R5 可拖分栏】右栏宽度默认档（拖拽后可改，开合动画以它为满宽）
+            right_sidebar_width: px(crate::ui::RESULT_SIDEBAR_RIGHT_WIDTH * 16.0),
+            right_sidebar_dragging: false,
             compare_active: 0,
             compare_toolbar: None,
             compare_status: None,

@@ -184,6 +184,14 @@ pub struct ResultPanel {
     /// 动画 id 拼 epoch → with_animation 换 id 即重播（与 vendor sidebar 同机制）。
     pub(crate) left_sidebar_epoch: u64,
     pub(crate) right_sidebar_epoch: u64,
+    /// 【R5 可拖分栏】右栏当前宽度（默认 `RESULT_SIDEBAR_RIGHT_WIDTH` = 320px）。
+    /// 拖右栏左边缘的 resize handle 改这个值（clamp 在 ui 的上下限内，见
+    /// `crate::panel::sidebars::clamp_right_sidebar_width`）；开合动画仍以它为「满宽」。
+    pub(crate) right_sidebar_width: Pixels,
+    /// 【R5 可拖分栏】本轮宽度是否由拖拽得来：为真时右栏宽度**直写**（不走 160ms
+    /// 开合补间，否则每帧拖拽都会触发一次补间、手柄黏手）。下一次点开关时清回 false，
+    /// 让开合重新有动画。
+    pub(crate) right_sidebar_dragging: bool,
     /// 【值查看器】JSON 展开树状态（`tree::Tree` 组件承载；选中格变化时事件路径
     /// `rebuild_value_tree` 解析 + `set_items` 重建，render 只摆——JSON 解析不进 render）
     pub(crate) json_tree: Entity<TreeState>,

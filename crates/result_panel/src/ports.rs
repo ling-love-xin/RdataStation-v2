@@ -109,6 +109,10 @@ pub enum ResultRequest {
     ToggleValueSidebar,
     /// 状态栏左端开关：左侧栏（网格 / 文本 / 记录竖条）开合（完全收起 = 不占宽度）
     ToggleLeftSidebar,
+    /// 【R5 可拖分栏】拖右栏左边缘改宽度：`dx` = 本次拖拽的水平位移（像素，向右为正）。
+    /// 面板按「宽度 - dx」更新并 clamp 到 ui 的上下限；纯视图状态，不落盘。
+    /// 取整像素（`ResultRequest` 需要 `Eq`，故不携带 `f32`）。
+    ResizeRightSidebar(i32),
     /// 左栏列浏览器清单行眼睛：切换该列隐藏 / 显示（宿主 update 网格 + 面板）
     ToggleColumnVisibility(usize),
     /// 【P2-3】列浏览器多选批量显隐：把 `columns`（数据列序）整批设为隐藏 / 显示

@@ -2218,6 +2218,79 @@ DBeaver 的分组面板动作由 `GroupingAction` 扩展点驱动，配置来自
 于是 R4 实际只剩两件：**References 页**（需要外键元数据，引擎侧尚无该端口）+ Metadata 页的
 「生成 DDL」动作（本仓无 DDL 生成端口）。
 
+### 8.44 R5 第一步：右栏宽度可拖（对齐 DBeaver `setWeights` 的手感）
+
+#### 8.44.1 DBeaver 侧事实与两条实现路线
+
+`ResultSetViewer.java` 右栏由 `VerticalFolder(SWT.RIGHT)` + `CTabFolder` 装配（`:336-358`），
+尺寸走两处：
+
+- `:1032 setOrientation(...)` —— 面板可停靠在网格**下方或右侧**，可切换
+- `:1033 setWeights(panelWeights)` —— 分栏**可拖**且比例持久化
+
+本仓右栏是「行内固定宽 320px + 宽度动画开合」的 `<h_flex>` 子元素，不在任何
+`ResizablePanelGroup` 里。vendor 0.9.0 给了两条路：
+
+| 路线 | 入口 | 代价 |
+| --- | --- | --- |
+| 组式 | `h_resizable(id)` + `resizable_panel()` | 要把整行换成 `ResizablePanelGroup`，`flex_1` 语义改为像素分配 + 每组 panel 都要 `size_range`；会牵动现有 249 条渲染断言 |
+| 独立手柄（**本轮采用**） | `resize_handle(id, Axis::Horizontal)` | 只加一条贴边手柄，行布局与动画全部不动 |
+
+选后者有 vendor 自己的依据：`gpui-component/src/resizable.rs` 模块注释写明
+「for an edge no `ResizablePanelGroup` owns -- **an application's sidebar, say**.
+What the drag resizes is the caller's」，正是本仓右栏这种「不在 panel group 里的边」。
+
+#### 8.44.2 落点（5 个文件）
+
+| 层 | 改动 |
+| --- | --- |
+| `ports.rs` | `ResizeRightSidebar(i32)`：`dx` = 本次水平位移（向右为正 → 右栏变窄）。取整到 i32 是因为 `ResultRequest` derive 了 `Eq`，`f32` 不满足 |
+| `panel/data.rs` | `right_sidebar_width: Pixels`（默认 320px）+ `right_sidebar_dragging: bool` |
+| `panel/events.rs` | `resize_right_sidebar(dx, cx)`：`clamp_right_sidebar_width` 夹取后写回 + 置 `dragging`；`toggle_value_sidebar` 里清 `dragging`（开合补间恢复） |
+| `panel/sidebars.rs` | 纯函数 `clamp_right_sidebar_width`；`SidebarResizeDrag`（载荷 + 空渲染实体）；`render_right_sidebar_resize()` 挂手柄；`full` 改读 `self.right_sidebar_width`；`anim_ms` 拖拽期 1ms、静止期 160ms |
+| `editor …/results/dispatch.rs` | 转发到 `p.resize_right_sidebar(dx as f32, cx)` |
+
+`ui.rs` 新增两档（f32 形式，不触发 `ui_guard` 的裸 `px(` 计数）：
+`RESULT_SIDEBAR_RIGHT_MIN_WIDTH = 12.0`（192px）、`RESULT_SIDEBAR_RIGHT_MAX_WIDTH = 40.0`（640px）。
+
+手柄形态：`resize_handle::<…>("editor-result-right-sidebar-resize", Axis::Horizontal)`
++ `.inside(HandleEdge::Leading)`（贴右栏**左**边缘）+ `.on_drag(载荷)` + `.on_drag_move`。
+band 由 base 负责（`HANDLE_SIZE = px(1.)` + `HANDLE_PADDING = px(2.)`，edge-hug 3px /
+straddle 5px 命中带宽）、光标 `cursor_col_resize`、`ResizeHandleState{Idle,Hovered,Pressed,Dragging}`
+与指示条外观（`resizable::resize_handle_appearance()`，空闲态只画 hairline）。
+
+#### 8.44.3 四个踩坑（均本轮自修）
+
+1. **`MouseMoveEvent` 没有 `previous_position`**（0.3.11 实测只有 `position` /
+   `pressed_button` / `modifiers`）。位移只能自己攒：`on_drag` 把按下时的 `position.x`
+   写进 `window.use_keyed_state("editor-result-right-sidebar-drag-x", …)` 的
+   `Cell<Pixels>`，`on_drag_move` 读上一帧值、`as_f32()` 算增量、再写回。
+   增量口径不依赖绝对坐标（窗口缩放 / 滚动都不会算错）。
+2. **`f32` 进不了 `ResultRequest`**（枚举 derive `Eq`）。载荷取 `i32`（`dx.round() as i32`）。
+3. **`EffectTransition` 的 duration 不能是 0**：vendor 的 progress = elapsed/duration，
+   0 会算出 NaN 并命中 `animated value should be finite` 断言（真机上是 panic，不只是
+   测试问题）。拖拽期改用 **1ms**，且 `from == to`，视觉即直写。
+4. **`Pixels / Pixels` 可行但会撞 `ui_guard`**：`(pos - prev) / px(1.)` 会新增一处裸
+   `px(1)`（该文件 baseline 2）。改用 `Pixels::as_f32()`（`geometry.rs:2802`）即合规。
+
+#### 8.44.4 新增测试（249 → 252）
+
+- `right_sidebar_width_clamps_between_ui_limits`：小幅位移精确换算（±40px）/ 拖过头夹到
+  192 与 640 / 已在边界再同向拖不反向越界
+- `resize_request_clamps_width_and_suspends_the_open_animation`：拖拽改宽度 → 夹取 +
+  `dragging` 置真；点开关 → `dragging` 清回
+- `resize_handle_mounts_only_when_the_sidebar_is_expanded`：默认宽展开有手柄 → 收起无 →
+  窄展开无 → 再宽展开有（宽展开前把宽度切到「拖拽直写」档，避开 160ms 补间首帧的 0 宽）
+
+#### 8.44.5 本轮未做（登记）
+
+- **布局方向切换**（DBeaver `:1032 setOrientation`：网格下方 vs 右侧）：本仓右栏是
+  `h_flex` 行内子元素，改上下结构要重排根 `v_flex` 与状态栏归属，另作一轮。
+- **比例持久化**（DBeaver `:1033 setWeights`）：列宽走的是 `persist_column_widths` +
+  session 通道，右栏宽度目前只在会话内有效，未进偏好项。
+- **双击复位默认宽度**：DBeaver 无此交互，暂不引入。
+- 手柄 3px / 5px 命中带宽、拖拽时右栏内容的换行与截断观感，仍需真窗口目视（当前不具备条件）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
