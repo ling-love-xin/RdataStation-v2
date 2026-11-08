@@ -548,6 +548,32 @@ ui-guard **4 passed**、workbench-shell **14 passed**。
 **仍未接**：`header.selected.background`（`state.rs:1606` `render_col_wrap`）与 `lines.normal`/`lines.selected`
 （每格网格线，单元格包装层）——组件内部绘制，`TableDelegate` 无槽，要接必须改 vendor。
 
+### 2.29 2026-11-08（深色 resultset 配色其实有整套 DBeaver 覆盖 + 两处修正）
+
+**推翻旧结论**：此前一直按「DBeaver 深色 css 未覆盖 resultset 色，dark 一套只能推导」处理。实读发现
+`dbeaver-ref\plugins\org.jkiss.dbeaver.ui.editors.data\css\e4-dark-data-editor.css`（2023B）**整份覆盖**，
+该插件 `css\` 下只有这一个文件 —— 也就是说**浅色确实没有覆盖**（§2.27 的浅色结论成立），错的只是「深色也没有」。
+覆盖里含 `header.background #394248`、`header.border #696969`（与 `lines.selected` 同值）、`selection #505050/#F4F4F4`、
+`cell.odd #252525`、`cell.modified #963000`、`cell.error #800000`、`lines.normal #1e1e1e`、`header.foreground #E0E0E0`、
+`header.selected.background #5A5A7C`、`null #646464`、数据类型前景（binary #808000 / boolean #808080 /
+datetime #5CA259 / numeric #C0C0FF / string #D0D0D0）。全表见 `result-panel.md` §8.38。
+
+**本轮两处修正**：
+
+1. 深色 `table.head.background` `#181818` → **`#394248`**（原值）。§2.27 的「表头 = widget 档」只在浅色成立。
+2. 新增产品 token `result.header.border`（light `#D4D4D4` 保持现值 / dark **`#696969`** 原值），
+   `table_impl.rs::render_header` 改用它（缺失回退 `colors.border`）。同步把该键写进
+   `ui_guard` 的 `PRODUCT_ROLES` 声明表（漏了会被 `product_tokens_use_declared_role_names` 拦下——本轮真踩到）。
+
+**为什么三个色槽（odd/modified/error）仍不照抄**：DBeaver 深色那几个是纯饱和深色（`#963000`、`#800000`），
+在 `#1F1F1F` 网格上与未改动行几乎分不开；本仓保持按深底可读性取的较浅值，**有意偏离**，已写进 `$comment`。
+要照抄得连前景色和网格线整套换。
+
+**顺带**：筛选区外框去掉 `rounded(theme.radius)` —— `CompositeBorderPainter` 画的是 `drawRectangle` 直角矩形
+（`CompositeBorderPainter.java:34-39`），圆角与 DBeaver 框形不一致。
+
+**验证**：两个主题 JSON 严格解析回读通过；shell **14** / panel **242** / guard **4** passed。
+
 ---
 
 

@@ -1863,6 +1863,59 @@ fn render_header(&mut self, _window: &mut Window, cx: &mut Context<TableState<Se
 （`state.rs:1606`），`lines.normal` / `lines.selected`（**每格**网格线）画在单元格包装层 —— 两处都在组件内部，
 `TableDelegate` 没有对应槽，要接必须改 vendor。
 
+### 8.38 深色 resultset 配色：DBeaver 其实有整套覆盖（推翻旧结论）
+
+**旧结论作废**：`product-tokens.json` 的 `$comment` 与本文档多处写着「DBeaver 这批 resultset colorDefinition
+只有一套浅色值（dark 主题 css 未覆盖），故 dark 一套按亮度比推导」。2026-11-08 实读发现**该文件存在且整份覆盖**：
+
+- 路径：`dbeaver-ref\plugins\org.jkiss.dbeaver.ui.editors.data\css\e4-dark-data-editor.css`（2023B）
+- 该插件 `css\` 目录下**只有这一个** css 文件 —— 所以**浅色确实没有覆盖**（浅色走 `plugin.xml` 默认），
+  §8.36 的「浅色表头 = `COLOR_WIDGET_BACKGROUND`」结论成立；错的只是「深色也没有」这一半。
+
+**深色全覆盖值（原文照抄，`ColorDefinition#org-jkiss-dbeaver-sql-resultset-color-*`）**：
+
+| 槽 | 深色原值 | 本仓现状 |
+| --- | --- | --- |
+| `cell.odd.background` | `#252525` | `#1C2129`（推导） |
+| `cell.modified.background` | `#963000` | `#3A3120`（推导） |
+| `cell.error.background` | `#800000` | `#4A2131`（推导） |
+| `cell.new.background` | `#004000` | — |
+| `cell.deleted.background` | `#400000` | — |
+| `cell.matched.background` | `#8b4513` | — |
+| `selection.background` / `.foreground` | `#505050` / `#F4F4F4` | `#E8846F33` / — |
+| `lines.normal` | `#1e1e1e` | 组件内部（无入口） |
+| `lines.selected` = **`header.border`** | `#696969`（两者同值） | `colors.border` `#3C3C3C` |
+| **`header.background`** | **`#394248`**（蓝灰） | `#181818`（上轮改错） |
+| `header.foreground` | `#E0E0E0` | `#969696` |
+| `header.selected.background` | `#5A5A7C` | 组件内部（无入口） |
+| `null.foreground` | `#646464` | `muted_foreground` |
+| 数据类型前景 | binary `#808000` / boolean `#808080` / datetime `#5CA259` / numeric `#C0C0FF` / string `#D0D0D0` | 本仓按 `role_color` 走，未接这套值 |
+
+#### 8.38.1 修正两处（照抄原值）
+
+1. **深色表头底 `#181818` → `#394248`**（`assets/themes/rds-theme.json` 的 `table.head.background`）。
+   §8.36 的依据「表头 = widget 档」只在**浅色**成立（浅色无 css 覆盖）；深色被 css 明确覆盖成蓝灰，
+   与 chrome 底 `#181818` 不是一个值。上轮把两套都写成 widget 档是**过度概括**，本轮按原值改回。
+2. **表头分隔线按主题分档**：DBeaver 浅色 `header.border` 取系统 `COLOR_WIDGET_DARK_SHADOW`（无常量可抄），
+   深色明确 `#696969`。同一个语义面两套强度不同，只靠 `colors.border` 一个标准字段顶不住 ——
+   新增产品 token `result.header.border`（light `#D4D4D4` = 现值 / dark `#696969` = 原值），
+   访问器 `ProductTokens::result_header_border()` 缺失时回退 `colors.border`。
+
+**为什么深色三槽（odd / modified / error）仍不照抄**：DBeaver 那几个是**纯饱和深色**（`#963000`、`#800000`），
+铺在 `#1F1F1F` 网格上与未改动的行几乎无法区分（它的设计前提是深色网格底更暗、并有自己的前景观）。本仓保持
+按深底可读性取的较浅值，**这是有意偏离、不是照抄漏了**，已写进 `product-tokens.json` 的 `$comment`。
+要改成照抄得整套（含前景色与网格线）一起换，属另一次决定。
+
+#### 8.38.2 筛选区外框去掉圆角
+
+`CompositeBorderPainter.paintControl` 画的是 `gc.drawRectangle(0, 0, w - 1, h - 1)`
+（`CompositeBorderPainter.java:34-39`）—— **直角矩形**，SWT composite 也无圆角。本仓此前挂
+`rounded(theme.radius)` 把四角磨圆了，与 DBeaver 的框形不一致，本轮去掉（`panel/render.rs`）。
+同理，这也解释了为什么 `Input` 要 `.appearance(false)`：那圈圆角是输入框组件自带的，与外框叠成两层形状。
+
+**验证**：两个主题 JSON 严格解析（`json.load`）通过并回读两值；`rds-workbench-shell --lib` **14 passed**、
+`rds-result-panel --lib` **242 passed**、`rds-ui-guard` **4 passed**。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

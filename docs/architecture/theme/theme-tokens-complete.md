@@ -53,7 +53,7 @@
 | 挖空槽 | `#FFFFFF` | `#1F1F1F` | 比 chrome 亮/暗一档，内嵌感 |
 | 弹层 | `#FFFFFF` | `#202020` | `popover`，比内容区高一档 |
 | 状态栏 | `#F3F3F3` | `#181818` | 中性，见 §6 |
-| 表头 / 斑马纹 | `#F8F8F8` / `#FAFAFA` | `#181818` | 结果集表格 |
+| 表头 / 斑马纹 | `#F8F8F8` / `#FAFAFA` | `#394248` / `#252526` | 结果集表格；深色表头是 DBeaver css 原值，见 `result-panel.md` §8.38 |
 
 ---
 
@@ -114,7 +114,7 @@
 | `table.background` / `.hover.background` | `#FFFFFF` / `#F0F0F0` | `#1F1F1F` / `#2A2D2E` |
 | `table.active.background` / `.border` | `#BC534033` / `#BC5340` | `#E8846F33` / `#E8846F` |
 | `table.even.background` | `#FAFAFA` | `#252526CC` |
-| `table.head.background` / `.foreground` | `#F8F8F8` / `#616161` | `#181818` / `#969696` |
+| `table.head.background` / `.foreground` | `#F8F8F8` / `#616161` | `#394248` / `#969696` |
 | `table.foot.background` / `.foreground` | `#F5F5F5` / `#616161` | `#252526CC` / `#969696` |
 | `table.row.border` | `#E1E1E1` | `#3C3C3C33` |
 | `description_list.label.background` / `.foreground` | `#F5F5F5` / `#616161` | `#252526` / `#969696` |

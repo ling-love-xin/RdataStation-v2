@@ -1,5 +1,5 @@
 {
-  "$comment": "RdataStation 产品语义 token（gpui-kit 0.6 固定语义面无法承载的角色）。键名与 rds-theme skill / theme-design 一致；缺失角色由代码回退到语义最接近的标准字段。灰阶骨架对齐 VS Code Dark/Light Modern（2026-10-12）：活动栏与侧栏同底、挖空槽比标题栏亮一档形成内嵌感；品牌强调色（coral）保留。结果集四槽（odd_row / cell.new / cell.modified / cell.error）取 DBeaver 结果集 colorDefinition 默认值（plugin.xml :1166-1207）：斑马 235,245,255、新增 228,255,181、修改 255,228,181、错误 255,128,255；DBeaver 该批 colorDefinition 只有一套浅色值（dark 主题 css 未覆盖），故 dark 一套按深色背景等亮度比推导，非照抄。",
+  "$comment": "RdataStation 产品语义 token（gpui-kit 0.6 固定语义面无法承载的角色）。键名与 rds-theme skill / theme-design 一致；缺失角色由代码回退到语义最接近的标准字段。灰阶骨架对齐 VS Code Dark/Light Modern（2026-10-12）：活动栏与侧栏同底、挖空槽比标题栏亮一档形成内嵌感；品牌强调色（coral）保留。结果集槽取 DBeaver 结果集 colorDefinition 默认值（plugin.xml :1164-1267）：斑马 235,245,255、新增 228,255,181、修改 255,228,181、错误 255,128,255。**深色不是推导值**——DBeaver 深色由 `org.jkiss.dbeaver.ui.editors.data/css/e4-dark-data-editor.css`（2023B，2026-11-08 实读）整份覆盖：odd #252525、modified #963000、error #800000、header.background #394248、header.border #696969（与 lines.selected 同值）。本仓深色四槽仍按深底可读性取较浅值（DBeaver 那几个是纯饱和深色，铺在 #1F1F1F 网格上辨识度低），属有意偏离，非照抄。",
   "light": {
     "activity_bar.background": "#F8F8F8",
     "activity_bar.active_border": "#333333",
@@ -12,7 +12,8 @@
     "result.odd_row.background": "#EBF5FF",
     "result.cell.modified.background": "#FFE4B5",
     "result.cell.error.background": "#FF80FF",
-    "result.local_row_background": "#E4FFB5"
+    "result.local_row_background": "#E4FFB5",
+    "result.header.border": "#D4D4D4"
   },
   "dark": {
     "activity_bar.background": "#181818",
@@ -26,6 +27,7 @@
     "result.odd_row.background": "#1C2129",
     "result.cell.modified.background": "#3A3120",
     "result.cell.error.background": "#4A2131",
-    "result.local_row_background": "#2A3A1E"
+    "result.local_row_background": "#2A3A1E",
+    "result.header.border": "#696969"
   }
 }

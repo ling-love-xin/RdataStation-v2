@@ -99,6 +99,9 @@ const PRODUCT_ROLES: &[&str] = &[
     "result.odd_row.background",
     "result.cell.modified.background",
     "result.cell.error.background",
+    // 表头分隔线：DBeaver 明暗两套强度不同（浅色系统阴影色 / 深色 css 明确 #696969），
+    // 一个标准字段顶不住，见 docs/architecture/editor/result-panel.md §8.38
+    "result.header.border",
 ];
 
 struct Hits {

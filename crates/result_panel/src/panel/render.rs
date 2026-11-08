@@ -214,6 +214,11 @@ impl ResultPanel {
         //
         // 宽度 `flex_1`：DBeaver 左列是 `GridData(FILL_HORIZONTAL)`（`:180`），右列 ToolBar
         // 才是内容宽；此前固定 11.25rem(180px) 撑不满一行，看着"没对齐"。
+        //
+        // 【DBeaver 对齐 2026-11-08 二次】**不加圆角**：`CompositeBorderPainter.paintControl`
+        // 用 `gc.drawRectangle(0, 0, w - 1, h - 1)` 画的是**直角矩形**
+        // （`CompositeBorderPainter.java:34-39`），SWT 的 composite 本身也没有圆角。
+        // 此前挂 `rounded(theme.radius)` 会把四角磨圆，框形与 DBeaver 不一致。
         let theme = cx.theme();
         let filter = div()
             .h_flex()
@@ -224,7 +229,6 @@ impl ResultPanel {
             .bg(theme.colors.background)
             .border_1()
             .border_color(theme.colors.input)
-            .rounded(theme.radius)
             .debug_selector(|| "editor-result-filter".to_string())
             .when(!self.filter_expanded, |row| {
                 let run_queue = self.queue.clone();

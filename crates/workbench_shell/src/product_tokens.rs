@@ -53,6 +53,9 @@ pub struct TokenMap {
     /// 【结果集配色槽】冲突格（提交未写进去）背景，对齐 DBeaver `cell.error.background`。
     #[serde(rename = "result.cell.error.background")]
     pub result_cell_error_background: Option<String>,
+    /// 【结果集配色槽】表头与数据区之间的分隔线，对齐 DBeaver `resultset.color.header.border`。
+    #[serde(rename = "result.header.border")]
+    pub result_header_border: Option<String>,
 }
 
 /// 解析后的产品角色（缺失为 `None`，消费方经访问器回退标准字段）。
@@ -73,6 +76,8 @@ pub struct ProductTokens {
     pub result_cell_modified_background: Option<Hsla>,
     /// 【结果集配色槽】冲突格（提交未写进去）背景。
     pub result_cell_error_background: Option<Hsla>,
+    /// 【结果集配色槽】表头分隔线色。
+    pub result_header_border: Option<Hsla>,
 }
 
 impl ProductTokens {
@@ -91,6 +96,7 @@ impl ProductTokens {
             result_odd_row_background: parse(&map.result_odd_row_background),
             result_cell_modified_background: parse(&map.result_cell_modified_background),
             result_cell_error_background: parse(&map.result_cell_error_background),
+            result_header_border: parse(&map.result_header_border),
         }
     }
 
@@ -173,6 +179,16 @@ impl ProductTokens {
     pub fn result_cell_error_background(&self, theme: &Theme) -> Hsla {
         self.result_cell_error_background
             .unwrap_or_else(|| theme.colors.danger.opacity(0.16))
+    }
+
+    /// 【结果集配色槽】表头与数据区之间的分隔线（DBeaver `resultset.color.header.border`）。
+    ///
+    /// DBeaver 浅色取 `COLOR_WIDGET_DARK_SHADOW`（系统阴影色，无常量可抄），深色由
+    /// `e4-dark-data-editor.css` 明确给 `#696969`（与 `lines.selected` 同值）。这一槽是
+    /// 明暗两套**同一个语义面却不同强度**，所以不能只用一个标准字段顶——资产缺失回退
+    /// `colors.border`（描边槽，观感退回现状）。
+    pub fn result_header_border(&self, theme: &Theme) -> Hsla {
+        self.result_header_border.unwrap_or(theme.colors.border)
     }
 }
 

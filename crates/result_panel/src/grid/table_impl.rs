@@ -88,13 +88,14 @@ impl TableDelegate for ResultGridDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> Stateful<Div> {
+        let border = product_tokens::get(cx).result_header_border(cx.theme());
         div()
             .id("editor-result-header-band")
             // 回归哨兵：边框宽度在 headless 下读不到，只能坐实「这个 hook 真被组件调用了」
             //（不被调用时边框静默缺失，与「组件没这入口」无法区分）
             .debug_selector(|| "editor-result-header-band".to_string())
             .border_b(ui::HAIRLINE)
-            .border_color(cx.theme().colors.border)
+            .border_color(border)
     }
 
     /// 表头单元格（转发到 [`crate::grid::header::render_th`]）
