@@ -61,7 +61,13 @@
 
 - 左侧边栏：Dock 内单 Tab（不可关闭），头部标题 = 当前 panel 名，内容 = 对应 panel 视图
 - 右侧边栏：同上，`set_dock(DockPlacement::Right, ...)` 装配
-- 宽度：左 240px / 右 280px 起步（Dock 窗口级尺寸，`DockLayout::child(..., Some(px(240.)))`），Dock 拖拽调宽
+- 宽度：起步宽取 `ui::LEFT_DOCK_WIDTH`（18rem）/ `ui::RIGHT_DOCK_WIDTH`（20rem），即基准字号下
+  288px / 320px，随界面字号同比例缩放（`font_size × rem`，`view.rs:1524-1528`、`:1642`）。
+  设置面板的 `layout.left_sidebar_width` / `layout.right_sidebar_width` 与起步宽**同源同口径**
+  （存的同样是基准字号下的 px，应用时按字号缩放；默认值由 `ui::*_DOCK_WIDTH × ui::BASE_FONT_SIZE`
+  算出，见 `crates/settings/src/model/layout.rs`）。
+- 拖拽分割线只改当次窗口内的宽度，**不回写设置**（`set_layout_left_sidebar_width` 只有设置面板一处
+  调用点），重启回到设置值 —— 这是既有行为，不是缺陷
 - 默认状态：左侧展开、右侧收起（见 3.2）
 
 ### 2.4 中央编辑区

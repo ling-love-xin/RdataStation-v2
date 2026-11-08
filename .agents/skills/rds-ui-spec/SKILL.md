@@ -60,7 +60,7 @@ div().border_b(ui::HAIRLINE)
 | 活动栏宽 | `ACTIVITY_BAR_WIDTH` | 3.0 → 48 | `w_12` |
 | 活动栏单项 | `ACTIVITY_ITEM_WIDTH` / `_HEIGHT` | 2.75 / 2.5 → 44/40 | `w_11` / `h_10` |
 | 活动栏图标 | `ACTIVITY_ICON_SIZE` | 1.75 → 28 | `size_7` |
-| 边栏起步宽 | `LEFT_DOCK_WIDTH` / `RIGHT_DOCK_WIDTH` | 15 / 17.5 → 240/280 | — |
+| 边栏起步宽 | `LEFT_DOCK_WIDTH` / `RIGHT_DOCK_WIDTH` | 18 / 20 → 288/320 | — |
 | 列表/树行高 | `ROW_HEIGHT` | 1.5 → 24 | `h_6` |
 | 树缩进 | `TREE_INDENT` / `TREE_BASE_PADDING` | 0.875 / 0.5 → 14/8 | — / `pl_2` |
 | 面板头 | `PANEL_HEADER_HEIGHT` | 2.25 → 36 | `h_9` |
@@ -89,7 +89,7 @@ div().border_b(ui::HAIRLINE)
 
 - **标题栏**：高 2.25rem，无窗口标题；logo 1.25rem；挖空槽 1.625rem 高 + 0.875rem 内距；Quick Open 入口 20rem×1.625rem；窗口控制由 `TitleBar` 组件自带
 - **活动栏**：宽 3rem；单项 2.75×2.5rem；激活条 2px（左栏在左、右栏在右）
-- **Dock 边栏**：左 15rem / 右 17.5rem 起步（`set_dock_size`，用户可拖拽）
+- **Dock 边栏**：左 18rem / 右 20rem 起步（`set_dock_size`，用户可拖拽）。设置面板的 `layout.*_sidebar_width` 存的是**基准字号（16px）下的 px**，应用时按 `font_size/16` 缩放——所以 16px 字号下所填即所得，缩小字号时实际宽度同比变小（13px 下 288 → 234）；两者默认值必须同源（`ui::*_DOCK_WIDTH × ui::BASE_FONT_SIZE`），否则首帧会被设置值覆盖成另一个数
 - **状态栏**：中性 chrome 底（`status_bar`）+ `muted_foreground` 文字；左右各一个自绘「完全隐藏 / 恢复」开关（品牌色变体须自绘，见色板 §6）
 - **徽标（计数徽章）**：最小 1.125rem（18px，与 `NAV_BADGE_SIZE` 同档）；内距 3/5px；**圆角 11px 胶囊**；字号 @16 取 `text_sm`（13–14px）；长文本变体圆角 2px；活动栏角标 ≥10–11px（不取 9px）——规格来源 VS Code `countBadge`，见 `docs/architecture/ui/ui-design-spec.md` §4 与 `vscode-ui-design-system.md` §4.5
 - **换算纪律**：以 VS Code（13px 基准）为参照时一律「×16/13≈1.23 → 圆整 4px 网格」，换算依据登记在 `ui.rs` 模块头；11px 元信息字号与 22px 紧凑档**禁止引入**

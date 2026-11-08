@@ -11,7 +11,7 @@ description: RdataStation 工作台五段布局实现规格：标题栏/左右�
 
 ```
 标题栏
-[左活动栏 | 左 Dock(240px) | DockArea 中央编辑区 | 右 Dock(280px) | 右活动栏]
+[左活动栏 | 左 Dock(288px) | DockArea 中央编辑区 | 右 Dock(320px) | 右活动栏]
 状态栏
 ```
 
