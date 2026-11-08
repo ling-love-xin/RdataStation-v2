@@ -162,7 +162,7 @@ cargo check -p gpui-component -j 2
 cargo check -p rds-app -j 2
 ```
 
-诊断产物（不入库）：`.rds/tmp/pristine/`（干净解包）、`.rds/tmp/patches/*.patch`（0.8.1 上的 patch 原文）、`port_base.py` / `port_comp.py`。
+诊断产物（不入库；**随临时工作区清理已删除**）：`.rds/tmp/pristine/`（干净解包）、`.rds/tmp/patches/*.patch`（0.8.1 上的 patch 原文）、`port_base.py` / `port_comp.py`。仅 `port_gutter.py` 保留在 `tools/_archive/`（该目录 gitignore，属本机过程资产）。
 
 ## 9. rebase 到 main 之后：书签列 patch 的二次移植（2026-11-08）
 
@@ -195,7 +195,7 @@ cargo check -p rds-app -j 2
 2. 改用「**只搬新增块 + 锚点替换**」（与 §3 同一个套路）：常量段、两个结构
    （`GutterMarkerLayout` / `HoverNote`）、两个方法（`layout_gutter_markers` /
    `paint_gutter_markers`）按**行号原样**搬过来；9 个接线点用「字符串替换 + `count == expect` 断言」，
-   全部一次通过（脚本 `.rds/tmp/port_gutter.py`）。
+   全部一次通过（脚本 `tools/_archive/port_gutter.py`；临时工作区清理时已移入该归档区）。
 3. **行尾坑**：工作区文件是 CRLF，直接按 `\n` 断言会全部落空（第一次跑 15 处全 0）；脚本必须
    `read → replace("\r\n","\n") → 编辑 → 写回时还原 CRLF`。
 4. 适配 0.9.0 的差异（编译报错逐个消）：`Cell` / `MouseDownEvent` / `TransformationMatrix` 补导入；
