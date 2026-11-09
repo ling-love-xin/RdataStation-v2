@@ -5,18 +5,18 @@
 //!   回头读宿主字段会 panic；
 //! - 选中以宿主的**业务键**为准（跨重算跟随），这里只是渲染锚点；宿主在 render 里
 //!   把自己镜像进列表（`syncing_from_host` 守卫），镜像期间组件回调**不回写**宿主。
+//!
+//! 子模块：[`row`]（行内容：标题高亮 / snippet / 徽章）、[`chrome`]（组头 / 组尾 / 空态）。
 
-use gpui_kit::base::StyledExt as _;
-use gpui_kit::component::empty::{
-    Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
-};
 use gpui_kit::component::list::{ListDelegate, ListItem, ListState};
-use gpui_kit::component::{ActiveTheme, Icon, IconName, IndexPath, Theme};
+use gpui_kit::component::{ActiveTheme, IndexPath};
 use gpui_kit::*;
 
-use crate::quick_open::model::{Action, Group, Mode, Row, markup_segments, match_span};
+use crate::quick_open::model::{Action, Group, Mode, Row};
 use crate::quick_open::palette::QuickOpenPalette;
-use crate::ui;
+
+mod chrome;
+mod row;
 
 /// 行快照 + 选中锚点。
 pub(crate) struct QuickOpenDelegate {
@@ -163,155 +163,6 @@ impl QuickOpenDelegate {
     fn row_at(&self, ix: IndexPath) -> Option<&Row> {
         self.groups.get(ix.section)?.rows.get(ix.row)
     }
-
-    /// 行元素：类型标签 + 标题（命中高亮）+ 「为什么命中」（内容档）+ 右侧归属；
-    /// 内容档多一行 snippet（含命中标记）。
-    ///
-    /// 高度按**档**取（不是按行）：`List` 只量一个样本行、要求同行同高；
-    /// 内容档全部行都带 snippet，整档切两行高。
-    fn row_element(
-        &self,
-        row: &Row,
-        theme: &Theme,
-        pt: &settings::product_tokens::ProductTokens,
-    ) -> ListItem {
-        let muted = theme.colors.muted_foreground;
-        let two_line = self.mode == Mode::FullText;
-        let height = if two_line {
-            ui::QUICK_OPEN_ROW_HEIGHT_FULLTEXT
-        } else {
-            ui::ROW_HEIGHT
-        };
-
-        let mut first = div().h_flex().items_center().w_full().min_w_0().gap_2();
-        first = first.child(
-            div()
-                .flex_none()
-                .text_xs()
-                .text_color(muted)
-                .child(row.kind.label()),
-        );
-        first = first.child(self.title_element(row, theme, pt));
-        if let Some(why) = row.why {
-            first = first.child(
-                div()
-                    .flex_none()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(theme.colors.border)
-                    .px_1()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(why),
-            );
-        }
-        first = first.child(
-            div()
-                .ml_auto()
-                .flex_none()
-                .text_xs()
-                .text_color(muted)
-                .child(row.secondary.clone()),
-        );
-        // 「次级动作」是**选中行专属**的键位提示：只在可定位 / 带次级动作的行 + 它是当前选中时出现。
-        // 不做成行内按钮：`List` 自己管指针与选中，行内可点元素会和它的确认抢事件。
-        // 默认档 ⌥↵ = 在树中定位；Goto 档主动作已是定位，⌥↵ = 打开属性面板。
-        if (row.locate.is_some() || row.secondary_action.is_some())
-            && self.selected_key.as_deref() == Some(row.key.as_str())
-        {
-            let hint = match self.mode {
-                Mode::Goto => "⌥↵ 属性",
-                _ => "⌥↵ 定位",
-            };
-            first = first.child(
-                div()
-                    .flex_none()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(theme.colors.border)
-                    .px_1()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(hint),
-            );
-        }
-
-        let mut content = div().v_flex().w_full().min_w_0().gap_1().child(first);
-        if two_line {
-            content = content.child(self.snippet_element(row, theme, pt, muted));
-        }
-
-        ListItem::new(SharedString::from(format!("qo-row-{}", row.key)))
-            .h(rems(height))
-            .py_0()
-            .px_2()
-            .gap_2()
-            .text_xs()
-            .child(content)
-    }
-
-    /// 标题（含命中高亮）。
-    fn title_element(
-        &self,
-        row: &Row,
-        theme: &Theme,
-        pt: &settings::product_tokens::ProductTokens,
-    ) -> Div {
-        let mut title = div()
-            .h_flex()
-            .items_center()
-            .min_w_0()
-            .overflow_hidden()
-            .text_color(theme.colors.foreground)
-            .text_xs();
-        match match_span(&row.title, &self.needle) {
-            Some((start, end)) if end > start => {
-                title = title
-                    .child(row.title[..start].to_string())
-                    .child(
-                        div()
-                            .rounded_sm()
-                            .bg(pt.search_match_background(theme))
-                            .child(row.title[start..end].to_string()),
-                    )
-                    .child(row.title[end..].to_string());
-            }
-            _ => title = title.child(row.title.clone()),
-        }
-        title
-    }
-
-    /// 第二行：snippet（`<mark>` 切段上色；名称档没有这一行）。
-    fn snippet_element(
-        &self,
-        row: &Row,
-        theme: &Theme,
-        pt: &settings::product_tokens::ProductTokens,
-        muted: Hsla,
-    ) -> Div {
-        let mut line = div()
-            .h_flex()
-            .items_center()
-            .min_w_0()
-            .overflow_hidden()
-            .text_xs()
-            .text_color(muted);
-        if let Some(markup) = row.snippet.as_deref() {
-            for (text, hit) in markup_segments(markup) {
-                line = if hit {
-                    line.child(
-                        div()
-                            .rounded_sm()
-                            .bg(pt.search_match_background(theme))
-                            .child(text),
-                    )
-                } else {
-                    line.child(text)
-                };
-            }
-        }
-        line
-    }
 }
 
 impl ListDelegate for QuickOpenDelegate {
@@ -331,7 +182,7 @@ impl ListDelegate for QuickOpenDelegate {
         ix: IndexPath,
         _window: &mut Window,
         cx: &mut Context<ListState<Self>>,
-    ) -> Option<ListItem> {
+    ) -> Option<Self::Item> {
         let row = self.row_at(ix)?.clone();
         let theme = cx.theme().clone();
         let pt = settings::product_tokens::get(cx);
@@ -344,56 +195,19 @@ impl ListDelegate for QuickOpenDelegate {
         _window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<impl IntoElement> {
-        let group = self.groups.get(section)?;
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let pt = settings::product_tokens::get(cx);
-        let mut head = div()
-            .h_flex()
-            .items_center()
-            .gap_1()
-            .h(rems(ui::QUICK_OPEN_GROUP_HEADER_HEIGHT))
-            .px_2()
-            .text_xs()
-            // 组头文字取 `foreground` 而非 `muted_foreground`：`muted_foreground` 压在
-            // `quick_open.group.header` 底上只有 light 4.32:1 / dark 3.16:1，不到 AA 的 4.5。
-            // 不动底色（改底色会让 dark 与 background 只剩 1.06:1 落差、分区感消失），
-            // 弱化层级改由 `text_xs` + 底色承担 —— 实测 light 10.69:1 / dark 6.8:1。
-            .text_color(theme.colors.foreground)
-            .bg(pt.quick_open_group_header(theme))
-            .child(group.title);
-        // 「搜索中…」等补充：与计数区分开色（info），一眼看出“还没搜完”而不是“没结果”
-        if !group.note.is_empty() {
-            head = head.child(
-                div()
-                    .text_color(theme.colors.info)
-                    .child(group.note.clone()),
-            );
-        }
-        Some(head.child(div().ml_auto().child(format!("{} 条", group.rows.len()))))
+        self.section_header_element(section, &theme, &pt)
     }
 
-    /// 组尾：被截掉的条数（**不静默丢**：告诉用户「还有，但没全显示」）。
     fn render_section_footer(
         &mut self,
         section: usize,
         _window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<impl IntoElement> {
-        let group = self.groups.get(section)?;
-        if group.hidden == 0 {
-            return None;
-        }
-        let theme = cx.theme();
-        Some(
-            div()
-                .h_flex()
-                .items_center()
-                .h(rems(ui::QUICK_OPEN_GROUP_HEADER_HEIGHT))
-                .px_2()
-                .text_xs()
-                .text_color(theme.colors.muted_foreground)
-                .child(format!("还有 {} 条（继续输入缩小范围）", group.hidden)),
-        )
+        let theme = cx.theme().clone();
+        self.section_footer_element(section, &theme)
     }
 
     fn render_empty(
@@ -401,27 +215,7 @@ impl ListDelegate for QuickOpenDelegate {
         _window: &mut Window,
         _cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
-        let (title, hint) = match self.mode {
-            Mode::Command => ("无匹配命令", "删掉 > 前缀回到默认搜索"),
-            Mode::FullText => (
-                "无匹配全文命中",
-                "元数据可能没有注释文本；试试名称搜索，或去掉 # 前缀",
-            ),
-            Mode::Goto => ("无匹配对象", "试试输入表名 / 视图名 / 例程名 / 序列名"),
-            Mode::Default => ("无匹配结果", "试试输入 > 搜命令 · # 搜元数据全文"),
-        };
-        // 空态走标准组件（`gpui-kit-dev` 选型表：空搜索结果 → `empty::Empty`），不再手搓居中列；
-        // 文案仍按档位给「下一步能做什么」。
-        Empty::new().header(
-            EmptyHeader::new()
-                .media(
-                    EmptyMedia::new()
-                        .with_variant(EmptyMediaVariant::Icon)
-                        .child(Icon::new(IconName::Search).size_4()),
-                )
-                .title(EmptyTitle::new().child(title))
-                .description(EmptyDescription::new().child(hint)),
-        )
+        self.empty_element()
     }
 
     /// 组件把选中变化回传（鼠标点击 / 组件内漫游）：以宿主的业务键为准。
