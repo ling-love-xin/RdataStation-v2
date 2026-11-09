@@ -56,6 +56,7 @@ pub type PanelEntity = Entity<EditorHostPanel>;
 /// panic）——实例由面板按引用传进来。
 /// `connections` 是连接列表的内存快照（右下角执行源选择器的数据源；渲染路径可调）
 /// `kernels` 是内核注册表快照（执行源「内核」档的菜单数据源；渲染路径可调）
+/// `md_previews` 是面板持有的「Markdown 单元预览开」集合（键 = cell_id；render 纯读）
 pub fn render(
     cx: &App,
     state: &NotebookState,
@@ -64,6 +65,7 @@ pub fn render(
     cell_editors: &HashMap<String, Entity<EditorState>>,
     connections: &[ConnectionOption],
     kernels: &[rds_kernel::KernelSpec],
+    md_previews: &std::collections::HashSet<String>,
 ) -> impl IntoElement {
     let theme = cx.theme();
     if state.cells.is_empty() {
@@ -85,6 +87,7 @@ pub fn render(
             cell_editors,
             connections,
             kernels,
+            md_previews,
         ));
     }
     // 底部「＋ 插入单元」（列表尾追加；空态另有引导卡）
@@ -93,29 +96,70 @@ pub fn render(
     body.into_any_element()
 }
 
-/// 底部插入行：一个「＋ 插入单元」入口（新增 SQL 单元；类型切换在 ⋮ 菜单里）
+/// 底部插入行：三个快捷入口（语言集合 = [`CellLanguage::offered`]，2026-11-09 拍板
+/// 语言面收敛 Python / Markdown / SQL；此前 Python 单元没有任何创建入口）
 fn add_cell_row(document: &DocumentId, entity: &PanelEntity) -> impl IntoElement {
-    let entity = entity.clone();
-    let document = document.clone();
-    div()
+    let mut row = div()
         .w_full()
         .h_flex()
         .items_center()
         .justify_center()
-        .py_2()
-        .child(
-            Button::new("editor-nb-add-cell")
-                .ghost()
-                .small()
-                .debug_selector(|| "editor-nb-add-cell".to_string())
-                .label("＋ 插入单元")
-                .on_click(move |_, window, app| {
-                    entity.update(app, |panel, cx| {
-                        panel.notebook_add_cell(&document, CellLanguage::Sql, window, cx);
-                    });
-                }),
-        )
-        .into_any_element()
+        .gap_2()
+        .py_2();
+    for language in CellLanguage::offered() {
+        row = row.child(add_cell_button(
+            quick_add_id(*language),
+            quick_add_label(*language),
+            *language,
+            document,
+            entity,
+        ));
+    }
+    row.into_any_element()
+}
+
+/// 快捷入口的稳定 debug id（headless 测试据此断言入口存在）
+fn quick_add_id(language: CellLanguage) -> &'static str {
+    match language {
+        CellLanguage::Sql => "editor-nb-add-sql",
+        CellLanguage::Python => "editor-nb-add-python",
+        CellLanguage::Markdown => "editor-nb-add-text",
+        // R / Julia 不在 offered() 清单里（拍板不提供），到达不了这两臂
+        CellLanguage::R | CellLanguage::Julia => "editor-nb-add",
+    }
+}
+
+/// 快捷入口文案（与空态引导卡同一套词：「文本单元」= Markdown）
+fn quick_add_label(language: CellLanguage) -> &'static str {
+    match language {
+        CellLanguage::Sql => "＋ SQL 单元",
+        CellLanguage::Python => "＋ Python 单元",
+        CellLanguage::Markdown => "＋ 文本单元",
+        CellLanguage::R | CellLanguage::Julia => "＋ 单元",
+    }
+}
+
+/// 新增单元入口按钮（底部插入行与空态引导卡共用）：点击走面板生产入口
+/// `notebook_add_cell`（订阅 / 编辑器实例创建等副作用全被覆盖）
+fn add_cell_button(
+    debug_id: &'static str,
+    label: &'static str,
+    language: CellLanguage,
+    document: &DocumentId,
+    entity: &PanelEntity,
+) -> Button {
+    let entity = entity.clone();
+    let document = document.clone();
+    Button::new(debug_id)
+        .ghost()
+        .small()
+        .debug_selector(move || debug_id.to_string())
+        .label(label)
+        .on_click(move |_, window, app| {
+            entity.update(app, |panel, cx| {
+                panel.notebook_add_cell(&document, language, window, cx);
+            });
+        })
 }
 
 /// 空态引导卡（T2d-6 / 原型 §4.4）：没单元时不是空白，而是告诉用户笔记是什么、从哪开始
@@ -134,6 +178,20 @@ fn empty_state(cx: &App, document: &DocumentId, entity: PanelEntity) -> impl Int
             .on_click(move |_, window, app| {
                 entity.update(app, |panel, cx| {
                     panel.notebook_add_cell(&document, CellLanguage::Sql, window, cx);
+                });
+            })
+    };
+    let add_python = {
+        let entity = entity.clone();
+        let document = document.clone();
+        Button::new("editor-nb-empty-python")
+            .with_variant(ButtonVariant::Secondary)
+            .small()
+            .debug_selector(|| "editor-nb-empty-python".to_string())
+            .label("＋ Python 单元")
+            .on_click(move |_, window, app| {
+                entity.update(app, |panel, cx| {
+                    panel.notebook_add_cell(&document, CellLanguage::Python, window, cx);
                 });
             })
     };
@@ -178,7 +236,7 @@ fn empty_state(cx: &App, document: &DocumentId, entity: PanelEntity) -> impl Int
                     div()
                         .text_xs()
                         .text_color(muted)
-                        .child("笔记由「单元」组成：SQL 单元可执行（结果内联），文本单元做备注。"),
+                        .child("笔记由「单元」组成：SQL / Python 单元可执行（结果内联），文本单元做备注。"),
                 )
                 .child(
                     div()
@@ -186,6 +244,7 @@ fn empty_state(cx: &App, document: &DocumentId, entity: PanelEntity) -> impl Int
                         .items_center()
                         .gap_1()
                         .child(add_sql)
+                        .child(add_python)
                         .child(add_text),
                 ),
         )
@@ -202,10 +261,19 @@ fn cell_card(
     cell_editors: &HashMap<String, Entity<EditorState>>,
     connections: &[ConnectionOption],
     kernels: &[rds_kernel::KernelSpec],
+    md_previews: &std::collections::HashSet<String>,
 ) -> impl IntoElement {
     let badge = badge(theme, cell.language);
-    let run_button = run_button(cell, document, entity);
+    // Markdown 单元没有 ▶ 运行（不可执行），那个位置换成「预览 / 编辑」切换；
+    // 其余语言保持运行按钮
+    let run_button = if cell.language.is_markdown() {
+        md_preview_button(cell, document, entity, md_previews.contains(&cell.id))
+    } else {
+        run_button(cell, document, entity)
+    };
     let menu_button = menu_button(cell, document, entity);
+    // 预览开着 = 正文按渲染态展示（TextView::markdown），不再挂编辑器
+    let md_preview_on = cell.language.is_markdown() && md_previews.contains(&cell.id);
 
     // 【遗留 #10】单元正文的内核编辑器实例（打开 / 新建时由面板建好；
     // 渲染期只读取——没有实体就回退纯文本，不在这里创建）
@@ -253,7 +321,23 @@ fn cell_card(
                 .child(run_button)
                 .child(menu_button),
         )
-        .child(
+        .child(if md_preview_on {
+            // 【Markdown 预览】渲染态：与主编辑器 Markdown 预览同款组件（TextView::markdown），
+            // 高度随内容生长——预览不该被钉在编辑器的固定高里。外层用 debug_selector
+            // （业务键）：headless 测试据此断言预览真的出现（不走 id+test_support——
+            // gpui-fast 下那条观察路径已登记失真，见升级报告 §7 第 5 条）
+            let preview_id = cell.id.clone();
+            div()
+                .w_full()
+                .debug_selector(move || format!("editor-nb-md-preview-{preview_id}"))
+                .px_3()
+                .py_2()
+                .child(TextView::markdown(
+                    format!("editor-nb-md-{}", cell.id),
+                    cell.body.clone(),
+                ))
+                .into_any_element()
+        } else {
             div()
                 .w_full()
                 // 先 `when_none`（吃引用，不 move）再 `when_some`（吃值）：
@@ -301,8 +385,9 @@ fn cell_card(
                                     .context_menu(context_menu),
                             ),
                     )
-                }),
-        )
+                })
+                .into_any_element()
+        })
         .when(!cell.outputs.is_empty(), |card| {
             card.child(output_section(theme, cell))
         })
@@ -731,7 +816,10 @@ fn badge(theme: &gpui_kit::component::Theme, language: CellLanguage) -> impl Int
 }
 
 /// ▶ 运行 / 中断：只有 SQL 单元可执行（Text 单元如实不亮）
-fn run_button(cell: &Cell, document: &DocumentId, entity: &PanelEntity) -> impl IntoElement {
+///
+/// 返回 `AnyElement`（不是 `impl IntoElement`）：cell_card 里要与 Markdown 的
+/// 「预览 / 编辑」切换按钮（[`md_preview_button`]）做同位替换，两分支必须同型。
+fn run_button(cell: &Cell, document: &DocumentId, entity: &PanelEntity) -> AnyElement {
     let running = cell.state == CellState::Running;
     let entity = entity.clone();
     let document = document.clone();
@@ -753,6 +841,34 @@ fn run_button(cell: &Cell, document: &DocumentId, entity: &PanelEntity) -> impl 
                     panel.notebook_run_cell(&document, &id, cx);
                 });
             }
+        })
+        .into_any_element()
+}
+
+/// 【Markdown 预览】「预览 / 编辑」切换（Markdown 单元的 ▶ 运行位替换件）
+///
+/// 开 = 正文按渲染态展示（`TextView::markdown`，与主编辑器 Markdown 预览同款）；
+/// 关 = 回到源码编辑器。状态在面板（`cell_markdown_preview` 集合），本函数只读 `on`
+/// 并把点击转发给面板生产入口。
+fn md_preview_button(
+    cell: &Cell,
+    document: &DocumentId,
+    entity: &PanelEntity,
+    on: bool,
+) -> AnyElement {
+    let entity = entity.clone();
+    let document = document.clone();
+    let id = cell.id.clone();
+    let id_debug = id.clone();
+    Button::new(format!("editor-nb-md-toggle-{id}"))
+        .ghost()
+        .xsmall()
+        .debug_selector(move || format!("editor-nb-md-toggle-{}", cell_kind_key(&id_debug)))
+        .label(if on { "编辑" } else { "预览" })
+        .on_click(move |_, _window, app| {
+            entity.update(app, |panel, cx| {
+                panel.notebook_toggle_cell_preview(&document, &id, cx);
+            });
         })
         .into_any_element()
 }

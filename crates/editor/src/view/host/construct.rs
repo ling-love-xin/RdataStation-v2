@@ -616,6 +616,8 @@ impl EditorHostPanel {
             cell_error_marks: std::collections::HashMap::new(),
             // 【A1】单元级语言服务会话：首次 `sync_cell_lsp` 时按需建立
             cell_lsp: std::collections::HashMap::new(),
+            // 【Markdown 预览】开着的 Markdown 单元集合（视图偏好，不落盘）
+            cell_markdown_preview: std::collections::HashSet::new(),
             _editor_sub: Some(sub),
             _grid_sub: Some(grid_sub),
             _result_panel_sub: Some(result_panel_sub),

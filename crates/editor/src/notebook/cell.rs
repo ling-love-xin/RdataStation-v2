@@ -46,9 +46,10 @@ pub enum CellLanguage {
     Python,
     /// 不可执行：Markdown 备注（原型 §4.4 的「文本单元」）
     Markdown,
-    /// 可执行占位：R 内核（后续接入，先有语言标签）
+    /// 可执行占位：R 内核（**2026-11-09 拍板不提供**：语言面收敛 Python / Markdown / SQL；
+    /// 变体仅为旧 `.rdsnote` 兼容保留——渲染 / 执行链如实降级，不再有创建入口）
     R,
-    /// 可执行占位：Julia 内核
+    /// 可执行占位：Julia 内核（同 R，拍板不提供，仅兼容保留）
     Julia,
 }
 
@@ -114,6 +115,14 @@ impl CellLanguage {
             Self::Python | Self::R | Self::Julia => Some(ExecutionTarget::Kernel),
             Self::Markdown => None,
         }
+    }
+
+    /// 当前提供**创建入口**的单元语言（2026-11-09 拍板：语言面收敛 **Python / Markdown / SQL**）
+    ///
+    /// UI 的新增入口（空态引导卡 / 底部插入行）都从这份清单出；R / Julia 仅为旧文件
+    /// 兼容保留（[`CellLanguage::R`] 注释），不进清单——后续若解禁，改这一处即可。
+    pub fn offered() -> &'static [CellLanguage] {
+        &[Self::Sql, Self::Python, Self::Markdown]
     }
 }
 
@@ -511,6 +520,23 @@ mod tests {
                 "{language:?} 不该吃本地 SQL 目录补全"
             );
         }
+    }
+
+    /// 创建入口的语言面（2026-11-09 拍板：Python / Markdown / SQL）
+    ///
+    /// R / Julia 仍要能从持久化键还原（旧 `.rdsnote` 兼容），但**不进**创建清单——
+    /// 两断言一起钉住「读得进来、造不出去」的口径。
+    #[test]
+    fn offered_languages_are_sql_python_and_markdown_only() {
+        assert_eq!(
+            CellLanguage::offered(),
+            &[CellLanguage::Sql, CellLanguage::Python, CellLanguage::Markdown]
+        );
+        assert!(!CellLanguage::offered().contains(&CellLanguage::R));
+        assert!(!CellLanguage::offered().contains(&CellLanguage::Julia));
+        // 兼容面不受拍板影响：旧文件里的 r / julia 键照常还原
+        assert_eq!(CellLanguage::from_key("r"), CellLanguage::R);
+        assert_eq!(CellLanguage::from_key("julia"), CellLanguage::Julia);
     }
 
     /// 单元状态机：Idle → Running → Done / Error；会话切换 → Stale

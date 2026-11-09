@@ -14,6 +14,11 @@ use super::open_panel;
 
 // ===== 【2d】分析笔记本：窗口级测试 =====
 
+/// 拼 `'static` debug 选择器（`debug_bounds` 要求静态借用；测试进程生命周期内泄漏无妨）
+fn cell_selector(pattern: &str, id: &str) -> &'static str {
+    Box::leak(format!("{pattern}{id}").into_boxed_str())
+}
+
 /// 假执行器：只实现 `run_cell`（单元执行走这一条），记录请求并回成功结论
 pub(crate) struct NotebookRunner {
     pub(crate) seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
@@ -92,11 +97,137 @@ fn analysis_mode_shows_the_empty_state_guide(cx: &mut TestAppContext) {
         cx.update(|_window, cx| panel.read(cx).notebook_state().cells.len()),
         1
     );
+    // 2026-11-09 拍板语言面收敛后，底部插入行是三个快捷入口（SQL / Python / 文本）
     assert!(
-        cx.debug_bounds("editor-nb-add-cell").is_some(),
-        "列表尾有插入入口"
+        cx.debug_bounds("editor-nb-add-sql").is_some(),
+        "列表尾有 SQL 插入入口"
+    );
+    assert!(
+        cx.debug_bounds("editor-nb-add-python").is_some(),
+        "列表尾有 Python 插入入口"
+    );
+    assert!(
+        cx.debug_bounds("editor-nb-add-text").is_some(),
+        "列表尾有文本插入入口"
     );
     cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+/// 【语言面收敛（2026-11-09 拍板：Python / Markdown / SQL）】Python 单元有创建入口：
+/// 空态引导卡带「＋ Python 单元」，走面板生产入口加出来的是带编辑器实例的 Python 单元
+#[gpui_kit::test]
+fn python_cells_have_a_creation_entry(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(NotebookRunner {
+        seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+    }));
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 空态第三个入口在（此前 Python 单元没有任何创建入口）
+    assert!(
+        cx.debug_bounds("editor-nb-empty-python").is_some(),
+        "空态要有 Python 入口"
+    );
+
+    // 与按钮回调同一条路：加一个 Python 单元 → 语言正确 + 编辑器实例就位
+    //（语言服务会话依赖宿主端口，未注入 = 如实没有，不在本用例范围）
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Python, window, cx)
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].language, crate::cell::CellLanguage::Python);
+    let cell_id = cells[0].id.clone();
+    assert!(
+        cx.update(|_window, cx| {
+            panel.read(cx).cell_editors.contains_key(&cell_id)
+        }),
+        "Python 单元要有自己的内核编辑器实例"
+    );
+}
+
+/// 【Markdown 预览】切到渲染态出 TextView 预览、切回源码态消失；非 Markdown 单元无操作
+#[gpui_kit::test]
+fn markdown_cells_can_toggle_preview(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Markdown, window, cx);
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Sql, window, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    let md_id = cells
+        .iter()
+        .find(|cell| cell.language.is_markdown())
+        .expect("有 Markdown 单元")
+        .id
+        .clone();
+    let sql_id = cells
+        .iter()
+        .find(|cell| !cell.language.is_markdown())
+        .expect("有 SQL 单元")
+        .id
+        .clone();
+
+    // 预览前：渲染态不在（编辑器在不另断——`editor-nb-cell-source-*` 的 id+test_support
+    // 观察路径在 gpui-fast 下已登记失真，见升级报告 §7 第 5 条；渲染分支由代码路径覆盖）
+    let preview_sel = cell_selector("editor-nb-md-preview-", &md_id);
+    assert!(cx.debug_bounds(preview_sel).is_none());
+
+    // 与按钮回调同一条路：开预览 → 渲染态出现；面板状态入集
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_toggle_cell_preview(&id, &md_id, cx)
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(cx.debug_bounds(preview_sel).is_some());
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).cell_markdown_preview.contains(&md_id)),
+        "面板状态入集"
+    );
+
+    // SQL 单元走同一入口 = 无操作（预览是 Markdown 专属）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_toggle_cell_preview(&id, &sql_id, cx)
+        })
+    });
+    assert!(
+        cx.update(|_window, cx| !panel.read(cx).cell_markdown_preview.contains(&sql_id)),
+        "SQL 单元不受预览切换影响"
+    );
+
+    // 切回源码态：预览消失、集合清空（编辑器回来的渲染分支由 else 侧代码路径覆盖）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_toggle_cell_preview(&id, &md_id, cx)
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(cx.debug_bounds(preview_sel).is_none());
+    assert!(
+        cx.update(|_window, cx| !panel.read(cx).cell_markdown_preview.contains(&md_id)),
+        "集合清空"
+    );
 }
 
 /// 单元动作（上移 / 下移 / 复制 / 删除 / 转类型）全真实生效

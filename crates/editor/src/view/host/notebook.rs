@@ -428,6 +428,30 @@ impl EditorHostPanel {
         }
     }
 
+    /// 【Markdown 预览】切换单元的 渲染态 ↔ 源码态（非 Markdown 单元 = 无操作）
+    ///
+    /// 状态是视图偏好（面板字段 `cell_markdown_preview`），不写 `.rdsnote`——
+    /// 换台机器打开同一份笔记，预览开关不该跟着走。
+    pub(crate) fn notebook_toggle_cell_preview(
+        &mut self,
+        _document: &DocumentId,
+        id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let is_markdown = self
+            .notebook_state()
+            .cells
+            .iter()
+            .any(|cell| cell.id == id && cell.language.is_markdown());
+        if !is_markdown {
+            return;
+        }
+        if !self.cell_markdown_preview.remove(id) {
+            self.cell_markdown_preview.insert(id.to_string());
+        }
+        cx.notify();
+    }
+
     /// 删除一个单元（按 id；不存在 = 忽略）
     pub(crate) fn notebook_delete_cell(
         &mut self,
@@ -448,6 +472,8 @@ impl EditorHostPanel {
         }
         // 【B3】该单元的错误线也一并清掉：单元都不在了，标记留着只会在 id 复用时复活
         self.cell_error_marks.remove(id);
+        // 【Markdown 预览】同一对收尾：预览状态不跨单元生命周期
+        self.cell_markdown_preview.remove(id);
         cx.notify();
     }
 
@@ -540,6 +566,9 @@ impl EditorHostPanel {
         // 【B3】旧语言的错误线不能留：输出已经清空、也没再跑过，转回原语言时那条波浪线
         // 会原地复活（`cell_error_marks` 只在重跑与回执成功时清，转换路径原先漏了）
         self.cell_error_marks.remove(id);
+        // 【Markdown 预览】预览开关同样不跨转换存活：转换后语言是新语言，旧开关作废
+        //（转成 Markdown 时预览默认关，正文先以源码态呈现）
+        self.cell_markdown_preview.remove(id);
         if let Some(cell) = self.notebook_state().cells.iter().find(|c| c.id == id) {
             let cell = cell.clone();
             self.ensure_cell_editor(&cell, window, cx);

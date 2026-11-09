@@ -366,6 +366,11 @@ pub struct EditorHostPanel {
     /// 会话（分析笔记里每个 Python 单元一条独立 uri）。两者共用同一个 server 连接，
     /// 事件按 uri 认领，互不串台。
     pub(crate) cell_lsp: std::collections::HashMap<String, notebook::CellLsp>,
+    /// 【Markdown 预览】预览开着的 Markdown 单元（键 = 单元 id）
+    ///
+    /// 渲染态/编辑态是**视图偏好**不是文档内容，不进 `.rdsnote`；删单元 / 转类型时
+    /// 一并清掉（与 `cell_error_marks` 同一对收尾），防止 id 复用时预览状态复活。
+    pub(crate) cell_markdown_preview: std::collections::HashSet<String>,
     /// 结果轮询任务句柄（空闲即退出；句柄存活到下一次提交）
     pub(crate) exec_pump: RefCell<Option<Task<()>>>,
     /// 【#17】正在跑的内核单元（同一时间最多一个，与 `has_running` 防并发一致）

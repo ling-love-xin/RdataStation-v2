@@ -102,6 +102,7 @@ impl EditorHostPanel {
             &self.cell_editors,
             &connections,
             &kernels,
+            &self.cell_markdown_preview,
         )
         .into_any_element()
     }
