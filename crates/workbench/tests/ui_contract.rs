@@ -250,13 +250,14 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../src/panels/overview.rs"),
         ),
         // Quick Open（Phase 0：结果区换成 List 组件；后续改动不得回退）
+        // 2026-11-09 S0 拆目录：单文件 → palette/mod.rs + delegate/mod.rs
         (
-            "quick_open/delegate.rs",
-            include_str!("../src/quick_open/delegate.rs"),
+            "quick_open/delegate/mod.rs",
+            include_str!("../src/quick_open/delegate/mod.rs"),
         ),
         (
-            "quick_open/palette.rs",
-            include_str!("../src/quick_open/palette.rs"),
+            "quick_open/palette/mod.rs",
+            include_str!("../src/quick_open/palette/mod.rs"),
         ),
         // 连接对话框模块（M3，#14 已清零；后续改动不得回退）
         // connection_dialog 2026-10-15 下沉为独立 crate：扫描路径指向新位置
@@ -752,12 +753,12 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../src/panels/overview.rs"),
         ),
         (
-            "quick_open/delegate.rs",
-            include_str!("../src/quick_open/delegate.rs"),
+            "quick_open/delegate/mod.rs",
+            include_str!("../src/quick_open/delegate/mod.rs"),
         ),
         (
-            "quick_open/palette.rs",
-            include_str!("../src/quick_open/palette.rs"),
+            "quick_open/palette/mod.rs",
+            include_str!("../src/quick_open/palette/mod.rs"),
         ),
         // connection_dialog 2026-10-15 下沉为独立 crate：扫描路径指向新位置
         // （`crates/connection_dialog/src/components/connection_dialog/`）。
