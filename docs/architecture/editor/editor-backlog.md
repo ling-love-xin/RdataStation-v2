@@ -55,7 +55,7 @@ P1 边界（已实现，勿当缺口）：`SELECT *` 只展开实体表；表达
 
 | 项 | 现状 | 影响 / 处置 |
 | --- | --- | --- |
-| origin/main 推送 | ⚠️ **本地领先 71 个提交、未推送**（2026-11-08 复核：`git rev-list --left-right --count origin/main...main` = `0	71`，`origin/main` 停在 `9ce3c98e`）。旧记录「已推送，0 领先 0 落后（44 个）」已过期 | 用户口径：只做本地合并，推送另行安排（见 `../ui/gpui-kit-0.9.0-upgrade-report.md` §0） |
+| origin/main 推送 | ✅ **已推送（2026-11-10 用户授权）**：`git push origin main` = `9ce3c98e..fb380196`（161 个提交），推送后 `origin/main` 停在 `fb380196`、0 领先 0 落后。此前「只做本地合并、推送另排」的口径由用户本轮解除 | — |
 | insight 线未提交（外部线） | 2026-11-08 复核：未提交只剩 `docs/architecture/insight/**`（1 处修改 + 6 个未跟踪），`crates/insight/*` / `plugin/*` 均已落库 | ✅ **不再阻塞**：`cargo test -p rds-workbench --lib --no-run` exit 0（2.07s，已编过）；用例本次未跑 |
 | Cargo.lock 未提交改动 | 2026-11-08 复核 `git status` 不含 Cargo.lock | ✅ 已无改动 |
 
@@ -1339,7 +1339,7 @@ SQL 词法源保持「补全能力开着」的门控，Python 的语言服务诊
 
 | 项 | 现状（2026-11-09 实测） | 处置 |
 | --- | --- | --- |
-| origin/main 未推送 | `git rev-list --left-right --count origin/main...main` = `0	106`（本地领先 **106** 个提交，`origin/main` 停在 `9ce3c98e`）。旧记录「71」已过期 | 用户口径：只做本地合并，推送另行安排 |
+| origin/main 未推送 | ✅ **已推送（2026-11-10）**：161 个提交上到 `fb380196`，`git rev-list --left-right --count origin/main...main` = `0	0`。旧记录「本地领先 106/150 未推送」已过期；推送前另存过一份本地 bundle（`../rds-main-backup-20261109.bundle`） | — |
 | 外部线在途 | `git status --short` 除本模块外有三条线：① insight 线 `docs/architecture/insight/prototypes/eda/eda.html`（M）+ 6 个未跟踪（`insight-correlation-l1-spec.md`、`col-bool/col-date/col-num/col-text/eda-by-type.html`）；② 导航树线 `crates/database/src/nav_view/{rows,chrome,nav_view,tests}.rs`（M）；③ 结果面板统计线 `crates/result_panel/src/{ports,grid/stats,panel/data,panel/lifecycle}.rs`（M，只加了 `StatsItem` 模型与字段、消费端未接，曾一度拦住 `rds-editor` 编译） | 一律不碰；被他们拦门禁时等其改完再重跑，不改别人的文件 |
 | 结果面板遗留 | 维护在 `result-panel-handoff.md` §2.4，本模块不重复；剩余缺口是**渲染期尚未消费事实档** | 跨 crate，归结果面板线 |
 
