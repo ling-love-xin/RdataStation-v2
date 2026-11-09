@@ -10,6 +10,20 @@ use crate::ui;
 
 use super::QuickOpenDelegate;
 
+/// 统一徽章：行内 `why`、`⌥↵` 次级提示与浮层的档位 chip 共用一套样式
+/// （`border + px_1 + rounded_sm + text_xs + muted`）——三处三种做法的时代结束了。
+pub(crate) fn badge(text: impl Into<SharedString>, theme: &Theme) -> Div {
+    div()
+        .flex_none()
+        .rounded_sm()
+        .border_1()
+        .border_color(theme.colors.border)
+        .px_1()
+        .text_xs()
+        .text_color(theme.colors.muted_foreground)
+        .child(text.into())
+}
+
 impl QuickOpenDelegate {
     /// 行元素：类型标签 + 标题（命中高亮）+ 「为什么命中」（内容档）+ 右侧归属；
     /// 内容档多一行 snippet（含命中标记）。
@@ -40,17 +54,7 @@ impl QuickOpenDelegate {
         );
         first = first.child(self.title_element(row, theme, pt));
         if let Some(why) = row.why {
-            first = first.child(
-                div()
-                    .flex_none()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(theme.colors.border)
-                    .px_1()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(why),
-            );
+            first = first.child(badge(why, theme));
         }
         first = first.child(
             div()
@@ -70,17 +74,7 @@ impl QuickOpenDelegate {
                 Mode::Goto => "⌥↵ 属性",
                 _ => "⌥↵ 定位",
             };
-            first = first.child(
-                div()
-                    .flex_none()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(theme.colors.border)
-                    .px_1()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(hint),
-            );
+            first = first.child(badge(hint, theme));
         }
 
         let mut content = div().v_flex().w_full().min_w_0().gap_1().child(first);

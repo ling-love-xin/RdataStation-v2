@@ -17,6 +17,29 @@ use crate::quick_open::palette::{QuickOpenHost, QuickOpenPalette};
 use crate::ui;
 use crate::view::{WorkbenchView, restore_snapshot};
 
+/// `toggle_quick_open` 入口的三态意图（审计 D11：已开面板按**异档**入口应换档而非关闭）。
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ToggleIntent {
+    /// 关着 → 打开到该档。
+    Open,
+    /// 开着且同一档 → 关闭。
+    Close,
+    /// 开着但异档 → 换到该档（走 `on_opened` 重开边沿：清输入 / 落新档）。
+    Switch,
+}
+
+/// 判定纯函数：`current` = 已打开面板的当前档（`quick_open_mode_pending`），
+/// 面板没打开时传 `None`。
+pub(crate) fn toggle_intent(is_open: bool, current: Option<Mode>, requested: Mode) -> ToggleIntent {
+    if !is_open {
+        ToggleIntent::Open
+    } else if current == Some(requested) {
+        ToggleIntent::Close
+    } else {
+        ToggleIntent::Switch
+    }
+}
+
 impl WorkbenchView {
     /// 标题栏搜索条（点击唤起，`Ctrl+P` 见 commands.rs 绑定）：与快捷键同一入口——
     /// 打开、清空上次输入、聚焦输入框；真正输入在浮层里（单一权威输入）。

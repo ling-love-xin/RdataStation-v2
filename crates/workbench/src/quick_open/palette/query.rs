@@ -10,7 +10,47 @@ use crate::quick_open::model;
 use super::QuickOpenPalette;
 use super::selection::mirror_selection;
 
+/// 档位的前缀字符（Goto 无前缀——只由 `Ctrl+Shift+O` 键位进入，chip 不提供入口）。
+fn mode_prefix(mode: model::Mode) -> &'static str {
+    match mode {
+        model::Mode::Command => ">",
+        model::Mode::FullText => "#",
+        _ => "",
+    }
+}
+
 impl QuickOpenPalette {
+    /// 档位 chip 点击：进入 / 退出一个档位（**词保留**）。
+    ///
+    /// - 目标档 == 当前档 → 退出回默认档（剥前缀；Goto 档同时解除键位锁）；
+    /// - 否则 → 进入目标档（换前缀），并解除可能存在的 Goto 锁（前缀自己管档位）。
+    ///
+    /// `set_value` 不发 `InputEvent::Change`，改完值必须手动 `refresh`。
+    pub(super) fn toggle_mode(
+        &mut self,
+        target: model::Mode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(input) = self.input.clone() else {
+            return;
+        };
+        let raw = input.read(cx).value().to_string();
+        let parsed = model::parse(&raw);
+        let current = self.mode_override.unwrap_or(parsed.mode);
+        if current == target {
+            // 退出：剥掉前缀（Goto 无前缀，词即原文）。
+            input.update(cx, |state, cx| state.set_value(parsed.needle, window, cx));
+        } else {
+            // 进入：换前缀、词保留。
+            let next = format!("{}{}", mode_prefix(target), parsed.needle);
+            input.update(cx, |state, cx| state.set_value(next.as_str(), window, cx));
+        }
+        // 无论进出：解除 Goto 锁（退出要解锁；进入前缀档后档位由前缀接管）。
+        self.mode_override = None;
+        self.refresh(window, cx);
+    }
+
     /// 重算结果并推给列表（输入变化 / 打开 / 回填后调用）。
     ///
     /// 选中按**业务键**跟随：键还在就保留，否则落到第一行（异步回填不抢用户位置）。

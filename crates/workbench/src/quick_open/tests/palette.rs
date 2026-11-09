@@ -366,3 +366,39 @@ fn stale_search_batch_is_dropped_without_side_effects(cx: &mut TestAppContext) {
     // `ord` 不命中两个连接（sales / sales_archive 都不含），若旧批未被丢弃会出现 meta 行
     assert_eq!(rows, 0, "词守卫应丢弃过期批次：{rows}");
 }
+
+/// 档位 chip 常驻可点击：默认档点 `#` 进入全文档（**词保留**），再点退出回默认档。
+#[gpui_kit::test]
+fn mode_chip_clicks_switch_and_exit_modes(cx: &mut TestAppContext) {
+    let _queue_guard = scratchpad::jobs::test_lock();
+    let (_host, _shared, harness, cx) = open_palette(cx);
+
+    cx.simulate_keystrokes("a");
+    cx.simulate_keystrokes("b");
+    cx.simulate_keystrokes("c");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 点 `#` chip：输入变 `#abc`（词保留），全文档批次发出
+    cx.update(|window, cx| window.click("qo-chip-fulltext", cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let (query, fulltext) = cx.update(|_window, cx| {
+        let palette = harness.read(cx).palette.read(cx);
+        (palette.query_text(cx), palette.sent_fulltext())
+    });
+    assert_eq!(query, "#abc", "chip 进入全文档应保留原词");
+    assert_eq!(fulltext, Some(true), "进入后应发 FTS 批次");
+
+    // 再点 `#` chip：退出回默认档（词保留）
+    cx.update(|window, cx| window.click("qo-chip-fulltext", cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let (query, fulltext) = cx.update(|_window, cx| {
+        let palette = harness.read(cx).palette.read(cx);
+        (palette.query_text(cx), palette.sent_fulltext())
+    });
+    assert_eq!(query, "abc", "退出档位应保留原词");
+    assert_eq!(
+        fulltext,
+        Some(false),
+        "退出后键变（档位回名称），应重发名称批次"
+    );
+}

@@ -3,6 +3,7 @@
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::input::{Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
+use gpui_kit::component::{Icon, IconName};
 use gpui_kit::component::list::{List, ListState};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
@@ -76,30 +77,42 @@ impl Render for QuickOpenPalette {
         } else {
             format!("{rows} 条")
         };
-        let mode_chip = match query.mode {
-            model::Mode::Command => Some((">", "命令")),
-            model::Mode::FullText => Some(("#", "元数据全文")),
-            model::Mode::Goto => Some(("⌖", "跳转")),
-            model::Mode::Default => None,
-        };
-
         let mut input_row = div().h_flex().items_center().gap_2();
-        input_row = input_row.child(div().flex_1().min_w_0().child(Input::new(&input)));
-        if let Some((glyph, label)) = mode_chip {
-            input_row = input_row.child(
-                div()
-                    .h_flex()
-                    .flex_none()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .rounded_sm()
-                    .bg(theme.colors.secondary)
-                    .text_xs()
+        input_row = input_row.child(
+            div().flex_1().min_w_0().child(
+                Input::new(&input)
+                    // 搜索语境：左侧图标 + 有内容时的清空按钮（清空走普通编辑路径，
+                    // 会发 Change → 自动刷新，无需自管）。
+                    .prefix(Icon::new(IconName::Search).size_4())
+                    .cleanable(true),
+            ),
+        );
+        // 档位 chip：**常驻**（默认档也显示 `#` / `>` 两枚弱化入口——前缀口诀不再是
+        // 唯一发现途径）；当前档高亮，点击进入 / 退出（词保留，见 `toggle_mode`）。
+        // Goto 档只显示「⌖ 跳转」退出入口（进入 Goto 是 `Ctrl+Shift+O` 键位专属）。
+        let chip_specs: &[(&str, &str, &str, model::Mode)] = if query.mode == model::Mode::Goto {
+            &[("qo-chip-goto", "⌖", "跳转", model::Mode::Goto)]
+        } else {
+            &[
+                ("qo-chip-fulltext", "#", "全文", model::Mode::FullText),
+                ("qo-chip-command", ">", "命令", model::Mode::Command),
+            ]
+        };
+        for (chip_id, glyph, label, chip_mode) in chip_specs {
+            let active = query.mode == *chip_mode;
+            let mut chip = crate::quick_open::delegate::badge(format!("{glyph} {label}"), &theme)
+                .id((*chip_id).to_string())
+                .test_support()
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.toggle_mode(*chip_mode, window, cx)
+                }));
+            if active {
+                chip = chip
                     .text_color(theme.colors.foreground)
-                    .child(glyph)
-                    .child(label),
-            );
+                    .bg(theme.colors.secondary);
+            }
+            input_row = input_row.child(chip);
         }
 
         div()

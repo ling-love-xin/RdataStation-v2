@@ -18,6 +18,8 @@ use crate::quick_open::palette::QuickOpenPalette;
 mod chrome;
 mod row;
 
+pub(crate) use row::badge;
+
 /// 行快照 + 选中锚点。
 pub(crate) struct QuickOpenDelegate {
     groups: Vec<Group>,

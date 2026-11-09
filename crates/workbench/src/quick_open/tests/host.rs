@@ -1,13 +1,30 @@
-//! 宿主侧用例：文件源端到端（真工作线程 + 真文件系统）。
-//!
-//! 后续「toggle 三态判定」等纯函数用例也落在这里（宿主行为面）。
+//! 宿主侧用例：文件源端到端（真工作线程 + 真文件系统）+ toggle 三态纯函数。
 
 use std::time::{Duration, Instant};
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{App, AppContext as _, TestAppContext};
 
+use crate::quick_open::host::{ToggleIntent, toggle_intent};
+use crate::quick_open::model::Mode;
+
 use super::{open_palette_in_project, temp_project};
+
+/// 审计 D11：toggle 三态——关着开、同档关、**异档换**（旧实现是「开着必关」）。
+#[test]
+fn toggle_intent_opens_closes_and_switches() {
+    use ToggleIntent::{Close, Open, Switch};
+
+    // 关着：开
+    assert_eq!(toggle_intent(false, None, Mode::Default), Open);
+    assert_eq!(toggle_intent(false, None, Mode::Goto), Open);
+    // 开着同档：关
+    assert_eq!(toggle_intent(true, Some(Mode::Default), Mode::Default), Close);
+    assert_eq!(toggle_intent(true, Some(Mode::Goto), Mode::Goto), Close);
+    // 开着异档：换（不关闭）
+    assert_eq!(toggle_intent(true, Some(Mode::Default), Mode::Goto), Switch);
+    assert_eq!(toggle_intent(true, Some(Mode::Goto), Mode::Default), Switch);
+}
 
 /// 文件源端到端：打开面板 → 为当前项目排一次扁平清单 → 回填后出「文件」行。
 ///

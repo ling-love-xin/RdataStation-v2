@@ -2313,17 +2313,27 @@ impl WorkbenchView {
     // 入口控件 / 懒创建 / 挂载 / 动作副作用落地在 `quick_open/host.rs`；
     // 这里只留开关（`Shared::quick_open` 是全应用一份的权威）。
 
-    /// 打开 / 关闭 Quick Open（标题栏入口与 `Ctrl+P` 共用默认档；`Ctrl+Shift+O` 开跳转档）。
+    /// 打开 / 关闭 / 换档 Quick Open（标题栏入口与 `Ctrl+P` 共用默认档；`Ctrl+Shift+O` 跳转档）。
     ///
-    /// `mode` 只在**打开边沿**落给浮层；关闭由共享开关统一收口（浮层 Esc / 点遮罩 / 执行完）。
+    /// 三态（审计 D11）：关着 → 打开；开着同档 → 关闭；开着**异档** → 换档不关闭
+    /// （与 VSCode「同键位换档」肌肉记忆一致）。`mode` 只在**打开 / 换档边沿**落给浮层；
+    /// 关闭由共享开关统一收口（浮层 Esc / 点遮罩 / 执行完）。
     /// `pub(crate)`：标题栏入口控件在 `quick_open/host.rs` 点击时回调。
     pub(crate) fn toggle_quick_open(&mut self, mode: Mode, cx: &mut Context<Self>) {
-        let open = !self.shared.quick_open.get();
-        self.shared.quick_open.set(open);
-        tracing::info!(open, mode = ?mode, "【探针】toggle_quick_open：Quick Open 浮层开关");
-        if open {
-            self.quick_open_open_pending = true;
-            self.quick_open_mode_pending = mode;
+        let is_open = self.shared.quick_open.get();
+        let current = is_open.then_some(self.quick_open_mode_pending);
+        let intent = crate::quick_open::host::toggle_intent(is_open, current, mode);
+        tracing::info!(?intent, mode = ?mode, "【探针】toggle_quick_open：Quick Open 浮层开关");
+        match intent {
+            crate::quick_open::host::ToggleIntent::Open
+            | crate::quick_open::host::ToggleIntent::Switch => {
+                self.shared.quick_open.set(true);
+                self.quick_open_open_pending = true;
+                self.quick_open_mode_pending = mode;
+            }
+            crate::quick_open::host::ToggleIntent::Close => {
+                self.shared.quick_open.set(false);
+            }
         }
         cx.notify();
     }
