@@ -4,7 +4,8 @@
 > `editor-impl-taskbook.md` 或对应提交。更新时同步任务板（#37 等）与
 > 本仓 git 提交链。状态字段：`待排期` / `已批准` / `进行中` / `下期` / `已关闭`。
 > 最后盘点：2026-11-09（逐单元补全/诊断/执行错误三条闭合后重排全量遗留，见 §16
-> 「遗留总账」；§15.14 / §15.15 为本轮改法记录）。
+> 「遗留总账」；§15.14 / §15.15 为本轮改法记录）；2026-11-10 增 §15.21
+> （语言面收敛批：Python 创建入口 / Markdown 预览 / .py F12 / 脚本解释器统一）。
 
 ## 一、结果网格（DBeaver 表格能力分期）
 
@@ -1228,6 +1229,49 @@ SQL 词法源保持「补全能力开着」的门控，Python 的语言服务诊
   再查 `D:\python-UV\jedi-language-server.exe` 能否被拉起（`PATHEXT` 与 console script 两个坑
   见 §15.18 与 `d754fa64`）。
 
+## 15.21 语言面收敛批（2026-11-10，已实现）
+
+**拍板**：用户定「目前只做 python、markdown、sql」——分析单元语言面收敛为
+**Python / Markdown / SQL**，R / Julia 不做（§16.2 B3 就此关闭：变体仅为旧 `.rdsnote`
+兼容保留，渲染 / 执行链如实降级，不再有创建入口）。本批顺带落了两条快赢
+（.py 转到定义、脚本解释器统一），都属拍板语言面的收尾。
+
+| # | 项 | 问题（改前事实） | 改法 | 落点 |
+| --- | --- | --- | --- | --- |
+| 1 | **Python 创建入口** | UI 上**没有任何入口能造出 Python 单元**：底部「＋ 插入单元」直接加 SQL，空态只有 SQL / 文本，转换只做 SQL↔Markdown——Python 单元只能靠旧文件或测试造出来（§15.20 装的服务因此一个用户都碰不到） | 底部插入行改**三个快捷入口**（SQL / Python / 文本，集合出自 `CellLanguage::offered()` 这一份权威清单）；空态引导卡补「＋ Python 单元」 | `notebook/cell.rs`（`offered()` + R/Julia 注释）、`view/analysis.rs` |
+| 2 | **Markdown 单元预览** | Markdown 单元只有源码编辑器（固定高、无渲染态）——「备注」语言看不到排版效果 | Markdown 单元的 ▶ 运行位换「预览 / 编辑」切换按钮；预览开 = 正文按 `TextView::markdown` 渲染（与主编辑器预览同款，高度随内容）；状态在面板 `cell_markdown_preview`（视图偏好，不落 `.rdsnote`），删除 / 转类型时清掉 | `view/analysis.rs`、`view/host/{mod,construct,notebook,editor_body}.rs` |
+| 3 | **.py 通用模式 F12** | `install_definition` 只在 SQL 分支挂（自研语义层）；`.py` 走 LSP 分支但没有 definition 转发器——通用模式的「转到定义」名不副实 | bridge 新增 `LspDefinitionProvider`（与补全 / hover / code action 同构：后台线程 `textDocument/definition`，`Location[]`/`LocationLink[]` 统一解析，null / 坏值 = 空）；Lsp 分支挂载 | `lsp/bridge.rs`、`view/host/session.rs` |
+| 4 | **脚本解释器统一** | `SystemEnvPort` 对 Python 只按 PATH 候选探测（本机会命中用户目录的 3.14 shim）——而分析单元已随 kernelspec 走 venv 绝对路径（§15.18），**两条 Python 执行线各跑各的** | Python 内置环境**优先内核注册表**：`python_command_from_kernelspecs`（`ks:` 命名空间优先、必须 ready 且命令非空）挑出的解释器先探测，不行回落 python→py 候选；展示命令 = 实际解析成功的那个 | `ports/editor_env.rs` |
+
+**用例（6 条，全过）**：`offered_languages_are_sql_python_and_markdown_only`（含 R/Julia
+读得进、造不出）、`python_cells_have_a_creation_entry`（空态入口 + 生产入口加出带编辑器
+实例的 Python 单元）、`markdown_cells_can_toggle_preview`（开 → `editor-nb-md-preview-*`
+渲染态出现 + 面板入集；SQL 单元走同入口无操作；关 → 消失 + 清集）、
+`definition_request_maps_locations_to_links` / `definition_links_pass_through_and_null_is_empty`
+（假 server 全链路 + 纯解析）、`python_command_prefers_ready_kernelspec_entries`（ks: 优先 /
+不 ready 不挑 / 空命令不挑 / 全不可用回 None）。
+
+**验证**：`cargo check -p rds-editor --all-targets -j 1` → 0 错误 0 警告；
+`cargo test -p rds-editor --lib -- --test-threads=1` → **782 passed / 3 failed / 1 ignored**
+（3 条失败与 §16.5 基线逐条一致，非本批引入）；`cargo check -p rds-workbench --lib -j 1`
+→ exit 0（跨 crate 无破坏）。
+
+**踩坑**：新用例最初断言 `editor-nb-cell-source-*`（div 的 id + test_support 观察路径）——
+正是 §16.5 那两条固定失败的已知失真路径（gpui-fast 观察层，升级报告 §7 第 5 条）。
+改为 `debug_selector`（Button / div 都支持，走的是可靠注册表）后全绿。**后续新用例
+一律走 `debug_selector`，别用 `id+test_support` 断言渲染存在性**，直到观察层迁移那轮做完。
+
+**边界（如实）**：
+1. F12 的目标若在**别的文件**（如 stdlib 源码）：show_document handler 不认的 scheme 落回
+   内核默认（当前文档内移动），无副作用——打开外部源码文件是宿主职责，不在本批。
+2. 解释器统一只覆盖 **Python 内置环境**；R / Rustc 维持 PATH 探测（R 已拍板不做；Rustc 无
+   kernelspec 概念）。`detect_kernelspecs_for_python` 在 `cfg!(test)` 下短路成空表——探测
+   结果依机器而异，测试只锁挑选逻辑。
+3. Markdown 预览是**显式切换**（按钮），不是 Jupyter 的「失焦即渲染」——后者要焦点跟踪，
+   属另一档交互改造；`.rdsnote` 不存预览开关（换机不跟着走）。
+4. 并行线在途：Quick Open 批次① 已由并行会话提交（`37597ac2`）、S0 目录 rename 在途——
+   本批全程未碰 `quick_open` 任何文件。
+
 ## 16. 遗留总账（2026-11-09 全量盘点）
 
 **盘点口径**：文档声明（§一 ~ §15）+ 代码内 `TODO|FIXME|未接线|暂不支持|暂不|遗留|待接线`
@@ -1242,7 +1286,7 @@ SQL 词法源保持「补全能力开着」的门控，Python 的语言服务诊
 
 | # | 项 | 证据 | 现在的影响 | 处置 |
 | --- | --- | --- | --- | --- |
-| A1 | **per-cell 语言服务会话**（分析模式的单元补全/诊断） | `ports/editor_lsp.rs:25-27`「v1 只服务 Python（`.py`）；分析模式（`.rdsnote`）暂不服务；Markdown 留后」；主编辑器装 provider 只在 `view/host/mod.rs` / `session.rs` 两处 | **SQL 单元那半已交付**（§15.8 补全 + §15.14/15.15 诊断）；缺的是 Python / R / Julia 单元的会话 | 剩余部分见 **§15.17**（接线清单 6 处 + 3 条需先实测的风险）；R / Julia 还要先过 §16.2 的 B 组拍板 |
+| A1 | **per-cell 语言服务会话**（分析模式的单元补全/诊断） | `ports/editor_lsp.rs:25-27`「v1 只服务 Python（`.py`）；分析模式（`.rdsnote`）暂不服务；Markdown 留后」；主编辑器装 provider 只在 `view/host/mod.rs` / `session.rs` 两处 | **SQL 单元那半已交付**（§15.8 补全 + §15.14/15.15 诊断）；**Python 单元已交付**（§15.20）；R / Julia 随 §16.2 B3 拍板**不做**（2026-11-09 语言面收敛 Python / Markdown / SQL） | **剩余清零**：R / Julia 不做即无剩余；Markdown 单元无需语言服务（无 server，备注语义） |
 | A2 | **连接变更未订阅** | §15.15 未覆盖 2；`rebuild_cell_diagnostics` 每次现取快照，但触发点是敲键/执行 | 切连接 / 切 Schema 后，已有单元的语义诊断要下一次敲键或执行才按新快照刷新 | **已修（§15.16，2026-11-09）**：不订阅，改「目录快照代际 + render 权威同步点」——同一份 `Arc` 重复推不涨，真换目录才涨，面板重绘时整批重建 |
 | A3 | **折叠候选双算未合并** | §15.3 第 1 条：前台 `sync_fold`（`fold::install`，全文）与后台 scan（`fold::spans`，全文）各算一次，后者每编辑一拍 | 纯 CPU 重复，未见卡顿；合并会改候选刷新时机（后台成为唯一来源），属行为变更 | **有意推迟**，等折叠区人工验收（`ui-todo.md` V-6/V-7）确认后再动 |
 | A4 | `save_cell_update` 死代码 | `ports/result_service.rs:105`，全仓 `grep save_cell_update` 仅 1 命中（定义本身），零调用方；注释自述「遗留的单格更新路径（无调用方；T2a 批量提交已取代它）」 | 无运行时影响；留着会误导"单格更新还走这条路" | **已删（§15.16，2026-11-09）**；模块文档改为"单格回写不在这里，要恢复请接 T2a 批量链" |
@@ -1254,7 +1298,7 @@ SQL 词法源保持「补全能力开着」的门控，Python 的语言服务诊
 | --- | --- | --- | --- | --- |
 | B1 | 标签方案 B（结构化 `tags: Vec<String>`）/ C（全局 Tag System） | §十二：现只有 A「说明即标签」（`#tag` 约定，schema / sidecar 零变更） | 数据层：B 要 schema + sidecar 迁移；C 是远期系统 | 走 B 还是维持 A？C 是否进路线图 |
 | B2 | 修饰符高亮（readonly / deprecated） | `view/highlight.rs:217`（`token_modifiers: Vec::new()` + 注释「暂不用：主题侧也未映射」） | 三处同时缺：内核 `decode_semantic_tokens` 不消费 `token_modifiers_bitset`；主题无 modifier token；SQL 词法没把 readonly/deprecated 判为独立 type | 值不值得改 vendor 内核 + 扩主题？**先得定"SQL 里哪些 token 算 readonly/deprecated"**（现在没有这个概念） |
-| B3 | R 内核单元（只有语言标签） | `notebook/cell.rs:49` | 执行端：无 R 解释器接线 | 要不要真做？与 Python 内核（已通）成本量级不同 |
+| B3 | ~~R 内核单元（只有语言标签）~~ | `notebook/cell.rs` | — | **✅ 已拍板（2026-11-09）：不做**。单元语言面收敛 **Python / Markdown / SQL**：R / Julia 变体仅为旧 `.rdsnote` 兼容保留（渲染 / 执行链如实降级），不再有创建入口（`CellLanguage::offered()` 是唯一权威清单）。落地见 §15.21 |
 | B4 | `view/host/` 继续降到 500 行内 | 实测（2026-11-09）：`render.rs` 833 / `session.rs` 759 / `notebook.rs` 715 / `toolbar/render.rs` 648 / `construct.rs` 633 / `mod.rs` 632 / `format.rs` 561 | 都是"单一职责但行数大"，再降必须拆方法体（改结构，不是无损搬运） | 接受到哪一档？还是维持现状（拆分纪律已证明无损搬运的空间已用尽） |
 | B5 | 高亮 token 自定义 A+B | §十一：三层全硬编码，无配置入口；内核 `HighlightStyleResolver` 支持包一层用户覆盖 resolver（可行） | 配置层：无入口 | 是否立项（scope 级匹配已明确不做） |
 | B6 | 分析笔记的环境维度不可改 | `view/host/notebook.rs:380`「环境维度暂不在此菜单改（分析环境跟随通用模式解释器）」 | 菜单只有连接/会话级动作 | 分析笔记要不要独立环境选择（= 又一个 per-cell/每笔记的执行上下文问题） |
@@ -1286,7 +1330,7 @@ SQL 词法源保持「补全能力开着」的门控，Python 的语言服务诊
 
 | 项 | 现状 |
 | --- | --- |
-| `cargo test -p rds-editor --lib -- --test-threads=1` | **772 passed / 3 failed / 1 ignored**（总数 776，2026-11-09 §15.19 后；较 §15.16 的 768 多了 4 条新用例：§15.18 内核兼容 1 条 + §15.19 三条 bug 各 1 条，全部通过）。三条固定失败：`view/tests/legacy.rs:58`（渲染树找不到 `editor-nb-cell-source-c1`）、`view/tests/notebook_win.rs:347`（多输出块）、`view/tests/results_a.rs:290`（表头排序箭头）——归因见 `../ui/gpui-kit-0.9.0-upgrade-report.md` §12（观察层口径，非产品缺失） |
+| `cargo test -p rds-editor --lib -- --test-threads=1` | **782 passed / 3 failed / 1 ignored**（总数 786，2026-11-10 §15.21 后；= §15.20 基线 776 + 本批 6 例全过：语言面 1 + Python 入口 1 + Markdown 预览 1 + definition 2 + 解释器挑选 1）。三条固定失败：`view/tests/legacy.rs:58`（渲染树找不到 `editor-nb-cell-source-c1`）、`view/tests/notebook_win.rs`（多输出块）、`view/tests/results_a.rs`（表头排序箭头）——归因见 `../ui/gpui-kit-0.9.0-upgrade-report.md` §7 第 5 条（gpui-fast 观察层口径，非产品缺失） |
 | `ui-todo.md` §五 V-1 … V-8 | **8 项全 ⬜**（V-1 对话框关闭残影 / V-2 右 Dock 草稿行 / V-3 导航树虚拟行 / V-4 列类型警示行 / V-5 标题栏折叠还原 / V-6 书签图标在 gutter 最左 / V-7 有说明折叠行箭头常显+横线 / V-8 悬停说明气泡）。判的是"画面有没有"，自动化观察层读不到，只能人工目视 |
 | `cargo check --workspace` | 不通过：`windows` crate `STATUS_STACK_BUFFER_OVERRUN`（环境限制，只用 `-p` 单 crate） |
 | `cargo check -p gpui-base --all-targets` | 必失败：bench `text_view_scroll` 缺 `gpui_fast_platform`（只用 `--lib`） |
