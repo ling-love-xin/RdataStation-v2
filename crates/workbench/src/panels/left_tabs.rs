@@ -682,11 +682,33 @@ impl PluginPanel {
         });
     }
 
+    /// 只读快照：中央插件管理页与左 Dock 共用同一份会话清单，
+    /// 避免管理页自己再拉一份、两份各自过期。
+    pub(crate) fn plugins_snapshot(&self) -> Vec<PluginInfo> {
+        self.plugins.borrow().clone()
+    }
+
+    pub(crate) fn contributions_snapshot(&self) -> HashMap<String, ContributionCounts> {
+        self.contributions.borrow().clone()
+    }
+
+    pub(crate) fn progress_text(&self) -> Option<String> {
+        self.progress.borrow().clone()
+    }
+
+    pub(crate) fn error_text(&self) -> Option<String> {
+        self.error.borrow().clone()
+    }
+
+    pub(crate) fn notice_text(&self) -> Option<String> {
+        self.notice.borrow().clone()
+    }
+
     /// 重新拉取插件清单（后台执行 `list_plugins`，回主线程写状态）。
     ///
     /// `clear_error`：下拉成功时是否清掉已有错误。操作路径传 `false`——否则一次
     /// 失败的操作会被随后成功的 `list_plugins` 把错误文案擦掉，用户看不到原因。
-    fn refresh_plugins(&self, cx: &mut Context<Self>, clear_error: bool) {
+    pub(crate) fn refresh_plugins(&self, cx: &mut Context<Self>, clear_error: bool) {
         if self.loading.get() {
             // 刷新是一次异步快照读取：期间来的事件可能读不到最新清单，记一个补刷。
             self.refresh_again.set(true);
@@ -734,7 +756,7 @@ impl PluginPanel {
     ///
     /// 冲突拒绝时清单本身没变：等冲突方卸载后，热插拔扫描不会把它当成「新增 / 变化」
     /// 自动重试，所以必须给用户一个显式入口，否则只能重启应用才恢复。
-    fn retry_plugin(&self, id: String, cx: &mut Context<Self>) {
+    pub(crate) fn retry_plugin(&self, id: String, cx: &mut Context<Self>) {
         if panel_busy(&self.progress) {
             return;
         }
@@ -778,7 +800,7 @@ impl PluginPanel {
 
     /// 启停插件（`enable_plugin` / `disable_plugin` 依赖 tokio 上下文：DB 异步锁 +
     /// sidecar 进程停启）。经全局 runtime 句柄在后台 `block_on`，完成后回主线程刷新。
-    fn set_plugin_enabled(&self, id: String, enabled: bool, cx: &mut Context<Self>) {
+    pub(crate) fn set_plugin_enabled(&self, id: String, enabled: bool, cx: &mut Context<Self>) {
         let Some(handle) = plugin::runtime_handle().cloned() else {
             self.error.replace(Some("插件运行时未初始化".to_string()));
             cx.notify();
@@ -833,7 +855,7 @@ impl PluginPanel {
     ///
     /// 依赖检查 / 停进程 / 删目录 / 清登记全在 `manager::uninstall_plugin` 里；
     /// 被其他插件依赖时会返回带引用者清单的错误，这里只需展示。
-    fn uninstall_plugin(&self, id: String, cx: &mut Context<Self>) {
+    pub(crate) fn uninstall_plugin(&self, id: String, cx: &mut Context<Self>) {
         let Some(handle) = plugin::runtime_handle().cloned() else {
             self.error.replace(Some("插件运行时未初始化".to_string()));
             cx.notify();
@@ -875,7 +897,7 @@ impl PluginPanel {
     }
 
     /// 选一个插件包文件（`.zip` / `.tar.gz`）安装。
-    fn pick_package_file(&self, cx: &mut Context<Self>) {
+    pub(crate) fn pick_package_file(&self, cx: &mut Context<Self>) {
         let Some(path) = rfd::FileDialog::new()
             .set_title("选择插件包")
             .add_filter("插件包", &["zip", "gz"])
@@ -887,7 +909,7 @@ impl PluginPanel {
     }
 
     /// 选一个插件目录（含 `plugin.toml`）导入（开发目录 / 解压后的包）。
-    fn pick_package_dir(&self, cx: &mut Context<Self>) {
+    pub(crate) fn pick_package_dir(&self, cx: &mut Context<Self>) {
         let Some(path) = rfd::FileDialog::new()
             .set_title("选择插件目录（含 plugin.toml）")
             .pick_folder()
@@ -901,7 +923,7 @@ impl PluginPanel {
     ///
     /// 热插拔只把「清单变了」记进 `pending_reloads`，不自动热更正在运行的插件；
     /// 没有这个入口，用户改完插件文件只能重启应用才生效，`pending_reloads` 也永远没人消费。
-    fn reload_plugins(&self, cx: &mut Context<Self>) {
+    pub(crate) fn reload_plugins(&self, cx: &mut Context<Self>) {
         let Some(handle) = plugin::runtime_handle().cloned() else {
             self.error.replace(Some("插件运行时未初始化".to_string()));
             cx.notify();
@@ -1089,7 +1111,7 @@ fn plugin_state_label(state: PluginState) -> (&'static str, &'static str) {
 }
 
 /// 卸载确认框正文（纯函数，便于单测）：说清删什么、留什么、什么情况会被拒。
-fn uninstall_confirm_description(name: &str, id: &str) -> String {
+pub(crate) fn uninstall_confirm_description(name: &str, id: &str) -> String {
     format!(
         "将删除插件「{name}」（{id}）的安装目录，并停掉它正在运行的进程。\n\
          插件的用户数据（plugin-data/{id}）会保留。\n\
@@ -1108,6 +1130,18 @@ impl Render for PluginPanel {
             .tooltip("刷新插件清单")
             .on_click(move |_, _window, cx| {
                 let _ = entity.update(cx, |this, cx| this.refresh_plugins(cx, true));
+            });
+
+        // 「管理」入口：左 Dock 只做紧凑清单，搜索 / 筛选 / 详情 / 安装都去中央管理页。
+        // 走 `Shared::open_plugin_manager` 宿主回调（与属性面板同形），不在窄栏里再造一份。
+        let manager_shared = self.shared.clone();
+        let manager_btn = Button::new("plugin-open-manager")
+            .ghost()
+            .icon(IconName::Settings)
+            .with_size(Size::XSmall)
+            .tooltip("打开插件管理页（搜索、筛选、详情与安装）")
+            .on_click(move |_, window, cx| {
+                manager_shared.show_plugin_manager(window, cx);
             });
 
         // 清单有变更（热插拔检测到 manifest hash 变化）时才出现：重载是用户明确动作，
@@ -1232,6 +1266,7 @@ impl Render for PluginPanel {
                     )
                     .child(install_file_btn)
                     .child(install_dir_btn)
+                    .child(manager_btn)
                     .child(refresh_btn),
             )
             // 变更提示单独一行（240px 头部塞不下第四个控件），按钮即「重载」动作

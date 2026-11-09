@@ -211,6 +211,30 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../src/panels/left_tabs.rs"),
         ),
         (
+            "panels/plugin_manager/mod.rs",
+            include_str!("../src/panels/plugin_manager/mod.rs"),
+        ),
+        (
+            "panels/plugin_manager/render.rs",
+            include_str!("../src/panels/plugin_manager/render.rs"),
+        ),
+        (
+            "panels/plugin_manager/cards.rs",
+            include_str!("../src/panels/plugin_manager/cards.rs"),
+        ),
+        (
+            "panels/plugin_manager/detail.rs",
+            include_str!("../src/panels/plugin_manager/detail.rs"),
+        ),
+        (
+            "panels/plugin_manager/widgets.rs",
+            include_str!("../src/panels/plugin_manager/widgets.rs"),
+        ),
+        (
+            "panels/plugin_manager/tests.rs",
+            include_str!("../src/panels/plugin_manager/tests.rs"),
+        ),
+        (
             "panels/right_tabs.rs",
             include_str!("../src/panels/right_tabs.rs"),
         ),
@@ -745,6 +769,30 @@ fn ui_sources_have_no_raw_color_literals() {
         (
             "panels/left_tabs.rs",
             include_str!("../src/panels/left_tabs.rs"),
+        ),
+        (
+            "panels/plugin_manager/mod.rs",
+            include_str!("../src/panels/plugin_manager/mod.rs"),
+        ),
+        (
+            "panels/plugin_manager/render.rs",
+            include_str!("../src/panels/plugin_manager/render.rs"),
+        ),
+        (
+            "panels/plugin_manager/cards.rs",
+            include_str!("../src/panels/plugin_manager/cards.rs"),
+        ),
+        (
+            "panels/plugin_manager/detail.rs",
+            include_str!("../src/panels/plugin_manager/detail.rs"),
+        ),
+        (
+            "panels/plugin_manager/widgets.rs",
+            include_str!("../src/panels/plugin_manager/widgets.rs"),
+        ),
+        (
+            "panels/plugin_manager/tests.rs",
+            include_str!("../src/panels/plugin_manager/tests.rs"),
         ),
         (
             "panels/right_tabs.rs",
@@ -1318,6 +1366,7 @@ fn shared_fields_are_whitelisted() {
         "nav_panel",
         "notice",
         "open_mock_detail",
+        "open_plugin_manager",
         "open_property",
         "pending_insight_compare",
         "pending_insight_target",

@@ -43,6 +43,7 @@ mod left_tabs;
 mod metadata_search;
 /// 工作台 tab 顶部的「业务数据概览」卡片（数据：`services::overview`）
 mod overview;
+mod plugin_manager;
 mod project_picker;
 mod property_panel;
 mod resources;
@@ -56,6 +57,7 @@ pub use database::model::PropertyRequest;
 pub use editor::EditorPanel;
 pub use left_tabs::{DatabaseNavPanel, PluginPanel, ResourcePanelTab, ScratchPanel};
 pub use metadata_search::{MetadataSearchHostPanel, focus_metadata_search_tab};
+pub use plugin_manager::{PluginManagerPanel, focus_plugin_manager_tab};
 pub use project_picker::ProjectPickerPanel;
 pub use property_panel::{PropertyHostPanel, focus_property_tab};
 pub use right::RightSidebarPanel;

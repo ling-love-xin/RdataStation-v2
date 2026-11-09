@@ -17,7 +17,7 @@ use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_kit::component::dialog::{Dialog, DialogButtonProps, DialogContent};
 use gpui_kit::component::dock::{
-    DockArea, DockLayout, DockPlacement, DockSkin, PanelStyle, panel_handle,
+    DockArea, DockLayout, DockPlacement, DockSkin, PanelId, PanelStyle, panel_handle,
 };
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
@@ -38,8 +38,8 @@ use crate::commands::{
 use crate::components::editor_host::WorkbenchEditorHost;
 use crate::panels::{
     ArchivePanel, DatabaseNavPanel, EditorPanel, HistoryPanelTab, InsightPanelTab, MockPanelTab,
-    PluginPanel, ProjectActionRequest, PropertyRequest, QueryRequest, ResourcePanelTab,
-    RightSidebarPanel, ScratchPanel, Shared, SidebarPanel,
+    PluginManagerPanel, PluginPanel, ProjectActionRequest, PropertyRequest, QueryRequest,
+    ResourcePanelTab, RightSidebarPanel, ScratchPanel, Shared, SidebarPanel,
 };
 use crate::quick_open::model::Mode;
 use crate::quick_open::palette::QuickOpenPalette;
@@ -77,6 +77,8 @@ pub struct WorkbenchView {
     left_scratch_tab: Option<Entity<ScratchPanel>>,
     left_resource_tab: Option<Entity<ResourcePanelTab>>,
     left_plugin_tab: Option<Entity<PluginPanel>>,
+    /// 插件管理页（中央常驻 tab，单实例；左 Dock「管理」按钮打开 / 聚焦）。
+    plugin_manager: Option<Entity<PluginManagerPanel>>,
     right_insight_tab: Option<Entity<InsightPanelTab>>,
     right_mock_tab: Option<Entity<MockPanelTab>>,
     right_history_tab: Option<Entity<HistoryPanelTab>>,
@@ -279,6 +281,7 @@ impl WorkbenchView {
             left_scratch_tab: None,
             left_resource_tab: None,
             left_plugin_tab: None,
+            plugin_manager: None,
             right_insight_tab: None,
             right_mock_tab: None,
             right_history_tab: None,
@@ -1346,6 +1349,56 @@ impl WorkbenchView {
                     panel.update(cx, |panel, cx| panel.show_properties(request, cx));
                 },
             ));
+        }
+
+        // 插件管理页（中央常驻 tab，单实例）：左 Dock 插件面板「管理」按钮打开 / 聚焦。
+        // 面板实体由本视图强持有，关 tab 后再次点击仍能挂回同一实体（搜索/筛选状态不丢）。
+        {
+            let plugin_manager = self
+                .left_plugin_tab
+                .clone()
+                .map(|left| cx.new(|cx| PluginManagerPanel::new(left, cx)));
+            self.plugin_manager = plugin_manager.clone();
+            if let Some(panel) = plugin_manager {
+                let area_for_pm = area.clone();
+                let panel_for_open = panel.clone();
+                *shared.open_plugin_manager.borrow_mut() =
+                    Some(Rc::new(move |window: &mut Window, cx: &mut App| {
+                        let id = PanelId::from(panel_for_open.entity_id());
+                        // 已在任一区域（用户可能把 tab 拖到别处）就只聚焦，不能再 add：
+                        // `add_panel_inner` 对已在树中的 panel 会再插一个 tab 节点。
+                        let present = area_for_pm.update(cx, |area, cx| {
+                            let held = [
+                                DockPlacement::Center,
+                                DockPlacement::Left,
+                                DockPlacement::Right,
+                                DockPlacement::Bottom,
+                            ]
+                            .into_iter()
+                            .any(|placement| {
+                                area.layout(placement)
+                                    .is_some_and(|tree| tree.contains_panel(id))
+                            });
+                            if held {
+                                area.select_panel(id, window, cx);
+                            }
+                            held
+                        });
+                        if !present {
+                            let handle = panel_handle(panel_for_open.clone());
+                            area_for_pm.update(cx, |area, cx| {
+                                area.add_panel_view(
+                                    handle,
+                                    DockPlacement::Center,
+                                    None,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        }
+                        crate::panels::focus_plugin_manager_tab(&panel_for_open, window, cx);
+                    }));
+            }
         }
 
         // M7：宿主命令——打开某张表 / 草稿的详情 tab（面板「查看详情」与结果表清单调用）。

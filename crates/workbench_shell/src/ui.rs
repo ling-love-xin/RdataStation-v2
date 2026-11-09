@@ -67,6 +67,15 @@ pub const LEFT_DOCK_WIDTH: f32 = 18.0;
 /// 2026-10-29 由 18rem 调大，契约测试 `ui_size_constants_match_design` 锚定）
 pub const RIGHT_DOCK_WIDTH: f32 = 20.0;
 
+// ===== 插件管理页（rem 基准） =====
+
+/// 插件管理页右侧详情栏宽度（21.25rem = 340px，与原型右侧固定栏一致）。
+pub const PLUGIN_MANAGER_DETAIL_WIDTH: f32 = 21.25;
+/// 插件管理页搜索框宽度（18.75rem = 300px，与原型 toolbar 搜索框一致）。
+pub const PLUGIN_MANAGER_SEARCH_WIDTH: f32 = 18.75;
+/// 插件管理页卡片最小高度（10.5rem = 168px；原型按详情信息量定高，不照抄 Zed 的 110px）。
+pub const PLUGIN_CARD_MIN_HEIGHT: f32 = 10.5;
+
 // ===== 标题栏元素（rem 基准） =====
 
 /// 软件图标尺寸（1.25rem = 20px）

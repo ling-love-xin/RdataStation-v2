@@ -783,6 +783,15 @@ Uninstalled ──install──▶ Installed ──load──▶ Loaded ──ac
 > 明细（只列非零类别）。注册表此前只有 `contributions()` 测试调用、宿主零消费，
 > 现在第一次被真实消费；声明可见，但命令仍不能执行、面板 / 设置仍未进宿主界面。
 >
+> **2026-11-10 进展（第八刀，中央插件管理页）**：左 Dock 插件面板页头加「管理」入口，
+> 中央开常驻 tab。页面落成 `crates/workbench/src/panels/plugin_manager/` 目录模块
+> （`mod` / `render` / `cards` / `detail` / `widgets` / `tests` 六文件），
+> **不再把管理页内容追加进 `panels/left_tabs.rs`**；数据面复用 `Entity<PluginPanel>`
+> 的只读快照与动作转发（清单 / 贡献点 / 后台任务 / 操作互斥只有一份），
+> 左栏刷新经 `cx.observe` 自动重绘。页面含统计 / 反馈 / 待重载横幅 / 搜索 +
+> 四档筛选 / 两列卡片 / 340px 详情栏；筛选刻意不含「可更新」（当前无市场/远程索引），
+> 「项目引用」因 Rust 侧暂无可读的引用者查询而如实占位。详见 `plugin-manager-ui.md`。
+>
 > **仍未接**：`LeftPanel`/`RightPanel` → `PanelId`、
 > Quick Open 命令合并、设置页外部登记项渲染、未注册 id 占位面板、`project_resources` 对账与图标 resolver。
 

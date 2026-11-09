@@ -381,6 +381,11 @@ pub struct Shared {
     pub property_panel: Rc<RefCell<Option<WeakEntity<PropertyHostPanel>>>>,
     /// 打开 / 聚焦属性 tab 的宿主命令（`show_properties` 调用；需要窗口——面板创建要加进中央 Dock）。
     pub open_property: Rc<RefCell<Option<Rc<dyn Fn(PropertyRequest, &mut Window, &mut App)>>>>,
+    /// 打开 / 聚焦「插件管理」中央 tab 的宿主命令（左 Dock 插件面板「管理」按钮调用）。
+    ///
+    /// 与 `open_property` 同形：面板创建 / `add_panel_view` 需要 `Window`，
+    /// 因此走宿主回调；管理页实体由 `WorkbenchView` 持有，关 tab 后可再次挂回。
+    pub open_plugin_manager: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
     /// 搜索结果标签页（「搜索: query」，中央 Dock 独立 tab，2026-10-10 VSCode 对齐）：
     /// 全局数据源——`ScratchpadHost::show_search_results` 写这里，标签页每帧从这里读。
     pub scratchpad_search: Rc<RefCell<Option<ScratchpadSearchView>>>,
@@ -458,6 +463,7 @@ impl Shared {
             driver_catalog: Rc::new(RefCell::new(HashMap::new())),
             property_panel: Rc::new(RefCell::new(None)),
             open_property: Rc::new(RefCell::new(None)),
+            open_plugin_manager: Rc::new(RefCell::new(None)),
             scratchpad_search: Rc::new(RefCell::new(None)),
             search_results_panel: Rc::new(RefCell::new(None)),
             search_results_dismissed: Rc::new(RefCell::new(false)),
@@ -668,6 +674,16 @@ impl Shared {
     pub fn show_properties(&self, request: PropertyRequest, window: &mut Window, cx: &mut App) {
         if let Some(open) = self.open_property.borrow().clone() {
             open(request, window, cx);
+        }
+    }
+
+    /// 打开 / 聚焦插件管理页（左 Dock「管理」按钮调用）。
+    ///
+    /// 与 `show_properties` 同口径：面板实体由宿主持有，面板被 tab ✕ 关闭后
+    /// 仍可经同一回调重新挂回中央 Dock。
+    pub fn show_plugin_manager(&self, window: &mut Window, cx: &mut App) {
+        if let Some(open) = self.open_plugin_manager.borrow().clone() {
+            open(window, cx);
         }
     }
 

@@ -25,6 +25,7 @@
 | `plugin-dev-plan.md` | **做什么、做到哪**：现状盘点 / 决策 D1–D6 / 与既有设计的优劣势 / 阶段 P0–P5 / 验收 / 风险 | **动手前必读**；改动清单在 §5.1 |
 | `plugin-prototype-design.md` | **长什么样**：进程与信任边界 / 清单字段 / `rds` API 面 / 激活时机 / 贡献点映射 / 示例插件 / Q7–Q10 定案依据 | 写插件、写宿主侧注册表、评审形态时 |
 | `plugin-layout.md` | **目录怎么摆**：一个插件一个目录的内部布局、入口解析（多平台）、路径白名单、打包与版本规则 | 写插件包 / 改加载·安装·卸载逻辑时 |
+| `plugin-manager-ui.md` | **管理页怎么落地**：`panels/plugin_manager/` 六文件职责、数据面复用、左 Dock 入口与中央常驻 tab、尺寸/契约、已知缺口 | 改插件管理页 / 新增页内区块时 |
 | `plugin-user-guide.md` | **怎么用**：面向使用者的入口与操作、面向作者的从零写一个插件 | 交付/试用/写插件时 |
 | `prototype/*.html` | **可交互形态稿**（五张，含插件入口） | 评审界面时；索引见 `prototype/README.md` |
 
@@ -227,6 +228,16 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 名称/版本/状态徽标（已激活/已加载/已停用/出错）+ 刷新 + 启用/停用操作。
 数据面 = 全局 `PluginManager`；`manager::runtime_handle` 把宿主 tokio runtime 句柄
 注入全局（enable/disable 依赖 tokio 上下文），面板事件回调在后台 `block_on` 执行不阻塞 UI。
+
+**中央插件管理页已落地**（2026-11-10）：左 Dock 页头加「管理」入口，中央开常驻 tab。
+页面按 `crates/workbench/src/panels/plugin_manager/` 六文件目录模块落地（`mod` / `render` /
+`cards` / `detail` / `widgets` / `tests`），**不再往 `panels/left_tabs.rs` 追加内容**。
+管理页不复制数据面：通过 `Entity<PluginPanel>` 的只读快照 + 动作转发复用左栏清单、贡献点
+计数、后台任务与操作互斥；左栏刷新经 `cx.observe` 自动重绘管理页。页面含统计 / 反馈 /
+待重载横幅 / 搜索 + 四档筛选 / 两列卡片 / 340px 详情栏；筛选不含「可更新」（无市场/远程索引），
+「项目引用」一段因 Rust 侧暂无只读查询接口而如实占位。`cargo check -p rds-workbench --lib`
+0 error；`cargo test -p rds-workbench --lib plugin_manager` 7 passed；
+`cargo test -p rds-workbench --test ui_contract` 10 passed。详见 `plugin-manager-ui.md`。
 
 **安装 / 导入插件包入口已接上面板**（2026-10-16）：工具栏加「安装插件」（文件对话框，
 `.zip` / `.tar.gz`）与「从目录」（选含 `plugin.toml` 的目录）两个入口，都走
