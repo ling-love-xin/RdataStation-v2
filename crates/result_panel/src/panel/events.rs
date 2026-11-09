@@ -243,6 +243,17 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【R3 分组页】清空分组列集合（对齐 DBeaver `ClearGroupingAction`；该动作在
+    /// DBeaver 里只在分组列非空时可用，这里同口径：空集合直接 return 不 notify）。
+    /// 清空后分组页回落到「网格选中格 / 清单选中列」兜底列，而不是空态
+    pub fn clear_group_columns(&mut self, cx: &mut Context<Self>) {
+        if self.group_columns.is_empty() {
+            return;
+        }
+        self.group_columns.clear();
+        cx.notify();
+    }
+
     /// 【1.2】筛选框展开 / 收起（点击筛选组展开按钮 / 展开条收起按钮触发）
     pub fn toggle_filter_expand(&mut self, cx: &mut Context<Self>) {
         self.filter_expanded = !self.filter_expanded;

@@ -223,6 +223,10 @@ pub enum ResultRequest {
     SetGroupSort(GroupSort),
     /// 【R3 分组页】「仅重复」：只保留行数 > 1 的分组（对齐 DBeaver 分组面板同名选项）
     SetGroupDuplicatesOnly(bool),
+    /// 【R3 分组页】清空分组列集合（对齐 DBeaver `ClearGroupingAction`：工具条图标动作，
+    /// 且只有分组列非空时才可用）。本仓清空后回落到「当前选中列兜底」，DBeaver 是回到
+    /// 空态（见 result-panel.md §8.49）
+    ClearGroupColumns,
 }
 
 /// 【保存值】待落盘的内容：面板算字节与默认文件名，宿主只选路径 + 写盘。

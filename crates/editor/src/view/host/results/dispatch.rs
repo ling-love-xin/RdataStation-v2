@@ -348,6 +348,10 @@ impl EditorHostPanel {
                 self.result_panel
                     .update(cx, |p, cx| p.set_group_duplicates_only(on, cx));
             }
+            ResultRequest::ClearGroupColumns => {
+                self.result_panel
+                    .update(cx, |p, cx| p.clear_group_columns(cx));
+            }
         }
     }
 

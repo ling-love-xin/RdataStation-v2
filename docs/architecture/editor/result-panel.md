@@ -2213,7 +2213,8 @@ DBeaver 的分组面板动作由 `GroupingAction` 扩展点驱动，配置来自
 - 每组展开看行（DBeaver 的分组结果是**另一条查询的结果集**，不是原结果集的行树）；
   本仓是平列表 + 计数
 - 分组列顺序的可视化调整（本仓按勾选顺序固定，不开拖拽；DBeaver 走
-  `GroupingResultsDecorator.java:161-171 dropColumns` 接收拖放）
+  `GroupingResultsDecorator.java:161-215 dropColumns` 接收拖放，落点列索引见
+  `getOverColumnIndex:219-224`，最终 `GroupingColumnsContainer.moveColumns:126`——实测见 §8.49.1）
 
 ### 8.43 订正：「Metadata 面板」本仓已合并进列浏览器页
 
@@ -2607,7 +2608,78 @@ straddle 5px 命中带宽）、光标 `cursor_col_resize`、`ResizeHandleState{I
 
 - 表档（batches 已释放）、含被删行、含 NULL 的数值列，在多列分组下仍按显示文本 → 仍可能
   把 `2` 与 `2.0` 拆组。这是本仓「拿不到原生值」的边界（DBeaver 无此问题：分组下推到数据库）。
-- 分组页其余三件未动：分组列集合跨会话持久化、每组展开看行、分组列顺序可拖拽。
+- 分组页其余三件的处置见 §8.49.5（R3 结项）。
+
+### 8.49 R3 第三步：分组页「清空分组列」+ R3 剩余项定性结项
+
+#### 8.49.1 DBeaver 侧事实（逐行核对）
+
+分组面板工具条动作全集见 `GroupingPanel.fillToolBar`（`:164-176`，按顺序）：
+
+| DBeaver 动作 | 出处 | 本仓对应 |
+| --- | --- | --- |
+| `DefaultSortingAction` | `:165-167`（`MODE_FORCE_TEXT` 强制文字显示） | 排序按钮（按值 / 按计数） |
+| `DuplicatesOnlyAction` | `:168` | 「仅重复」 |
+| `EditColumnsAction` | `:170` | 「列」下拉勾选（配置对话框的降级形态，见 §8.42） |
+| `DeleteColumnAction` | `:171` | 勾选取消（本仓无「当前选中分组列」概念，不单列动作） |
+| `ClearGroupingAction` | `:173` | **本轮新增**「清空分组列」 |
+| 扩展动作 | `:178-184`（`GroupingRegistry.getGroupingDescriptors()`） | 本仓无分组注册表，不做 |
+
+`ClearGroupingAction`（`panel/grouping/action/ClearGroupingAction.java`）：文案
+`ResultSetMessages.controls_resultset_grouping_clear`、图标 `UIIcon.CLEAN`（`:27-32`）；
+`isEnabled()` = `!getGroupAttributes().isEmpty()`（`:34-37`）；`run()` =
+`clearGrouping()` + `getController().updatePanelActions()`（`:40-43`）。
+`GroupingResultsContainer.clearGrouping()`（`:198-209`）：`clearData(true)` →
+`clearDataFilter(false)` → `resetHistory()` → `setGroupingQuery(null)` →
+`setGroupingAttributes(null)` → 切 `EmptyPresentation` —— **回到空态**。
+
+**「分组列顺序可调」的真实入口（同时结掉 §8.42.5 第三条遗留）**：
+`GroupingResultsDecorator.registerDragAndDrop`（`:96-217`）把**分组结果网格的列头**注册成拖放目标，
+`dropColumns`（`:161-215`）分两种语义：
+- 拖入的是已在分组里的列（`attrBindingIndex >= 0`，`:170-176`）→ 记为 `movedBindingsIndexes`，
+  落点列索引由 `getOverColumnIndex`（`:219-224`，`spreadsheet.getColumnIndex(event.x, event.y)`）
+  给出，再 `container.getColumnsContainer().moveColumns(overColumnIndex, movedBindingsIndexes)`
+  （`:191`）→ `GroupingColumnsContainer.moveColumns(int, List<Integer>)`（`:126`）——**这就是排序**；
+- 拖入新列 → `addGroupingAttributes`（`:195`）；`DROP_COPY` 时先弹 `GroupingConfigDialog`
+  （`:198-208`）确认聚合函数，再 `rebuildGrouping()`（`:210`）。
+
+即：DBeaver 没有上移 / 下移按钮，顺序完全由「把列头拖到另一个位置」决定。
+
+#### 8.49.2 本仓落法
+
+| 层 | 落点 |
+| --- | --- |
+| 端口 | `crates/result_panel/src/ports.rs` `ResultRequest::ClearGroupColumns`（接在 `SetGroupDuplicatesOnly` 之后） |
+| 面板状态 | `panel/events.rs::clear_group_columns`：空集合直接 return（对齐 `isEnabled()` 口径），否则清空 + `cx.notify()` |
+| 视图 | `panel/tabs.rs::render_group_tab` 第 4 个动作：`Button::new("editor-result-group-clear")` + `IconName::CircleX` + `.disabled(空集合)` + tooltip「清空分组列」 |
+| 宿主 | `crates/editor/src/view/host/results/dispatch.rs` 转发到面板 |
+
+图标取自 `use gpui_kit::assets::IconName`（asset 全集），`icons/circle-x.svg` 在
+`gpui-kit-assets-0.9.0/default-icons.txt`（内嵌的 106 个默认图标）里，能正常渲染；
+`eraser.svg` / `broom.svg` 不在该清单，故未选。
+
+#### 8.49.3 偏离
+
+DBeaver 清空后回空态；本仓没有「无分组键」态（`group_columns` 为空 = 网格选中格 / 清单选中列
+兜底），所以清空后仍显示单列分组结果。
+
+#### 8.49.4 验证
+
+- `cargo check -p rds-result-panel -p rds-editor` 通过（0 error / 0 warning）。
+- `cargo test -p rds-result-panel --lib` = **259 passed / 0 failed**（258 + 1 新测
+  `clear_group_columns_drops_explicit_selection`，钉「两次勾选按序累计 → 清空归零 → 空集合再清空幂等」）。
+- 渲染用例 `right_panel_pages_share_the_toolbar_shape` 的分组页断言补 `editor-result-group-clear`。
+- `cargo test -p rds-ui-guard`（不带 `--lib`）= **4 passed**。
+
+#### 8.49.5 R3 结项
+
+原登记的三条「分组页遗留」全部有了实测结论，R3 到此收口：
+
+| 原遗留项 | 实测结论 | 处置 |
+| --- | --- | --- |
+| 分组列集合跨会话持久化 | `GroupingPanel.loadSettings/saveSettings`（`:114-120`）空实现；只有「仅重复」「默认排序」走 preference（§8.42.5） | **不是 DBeaver 行为**，不做不算偏离 |
+| 每组展开看行 | DBeaver 的分组结果是另一条 `GROUP BY` 查询的结果集（§8.48.1），不是原结果集的行树 | **不是对齐项**，DBeaver 本身也没有「组内明细」 |
+| 分组列顺序可调 | 唯一入口是分组结果网格的列头拖放（§8.49.1） | 本仓 `DataTable` 无列头拖放入口，需自建 DnD 层；成本 / 收益不划算，**登记不做** |
 
 ## 8. 协作纪律
 

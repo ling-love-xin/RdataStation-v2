@@ -737,6 +737,38 @@ fn arrange_groups_sorts_and_filters() {
     assert_eq!(multi[0].0, vec!["a".to_string(), "1".to_string()]);
 }
 
+/// 【R3】清空分组列：对齐 DBeaver `ClearGroupingAction`（分组列非空才可用；
+/// 清空后回到「选中列兜底」而不是空态）。这里钉状态与幂等，按钮存在性由
+/// 渲染用例断言。
+#[gpui_kit::test]
+fn clear_group_columns_drops_explicit_selection(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.toggle_group_column(0, cx);
+            p.toggle_group_column(2, cx);
+        })
+    });
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).group_columns.clone()),
+        vec![0, 2],
+        "两次勾选应按顺序累计显式分组列"
+    );
+
+    cx.update(|_, app| panel.update(app, |p, cx| p.clear_group_columns(cx)));
+    assert!(
+        cx.update(|_, app| panel.read(app).group_columns.clone())
+            .is_empty(),
+        "清空后显式分组列应归零（分组页回落选中列兜底）"
+    );
+
+    // 幂等：空集合再清空不改变状态（对应 DBeaver 动作在空集合时不可用）
+    cx.update(|_, app| panel.update(app, |p, cx| p.clear_group_columns(cx)));
+    assert!(cx.update(|_, app| panel.read(app).group_columns.clone()).is_empty());
+}
+
 /// 【R1/R2 测试壳】空面板 + 两列网格（`id` / `amount`，含一个 NULL 值）。
 /// `ResultPanel` 没有标准 `Render`（自定义 `render(&self, cx)`，宿主手动调），
 /// 所以包一层 `PanelHost` 实体转发；`selected_col` 预置第 2 列，计算 / 分组页才有作用列。
@@ -839,7 +871,7 @@ fn right_panel_pages_share_the_toolbar_shape(cx: &mut gpui_kit::TestAppContext) 
         "值详情工具条应与计算页同高 28px，实际 {value_toolbar_h}px"
     );
 
-    // 2) 分组：工具条 + 三个动作（列下拉 / 排序 / 仅重复）
+    // 2) 分组：工具条 + 四个动作（列下拉 / 排序 / 仅重复 / 清空分组列）
     cx.update(|_, app| {
         panel.update(app, |p, cx| p.set_right_tab(RightTab::Group, cx))
     });
@@ -849,6 +881,7 @@ fn right_panel_pages_share_the_toolbar_shape(cx: &mut gpui_kit::TestAppContext) 
         "editor-result-group-columns",
         "editor-result-group-sort",
         "editor-result-group-dup",
+        "editor-result-group-clear",
     ] {
         assert!(visible(id, cx), "分组页元素 {id} 应渲染可见");
     }

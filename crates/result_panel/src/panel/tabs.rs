@@ -786,6 +786,24 @@ impl ResultPanel {
                 .into_any_element()
         };
 
+        // 动作四：清空分组列（对齐 DBeaver `ClearGroupingAction`：图标动作，
+        // 只在有显式分组列时可用；清空后回到「选中列兜底」）
+        let clear_button = {
+            let queue = self.queue.clone();
+            let enabled = !self.group_columns.is_empty();
+            Button::new("editor-result-group-clear")
+                .ghost()
+                .xsmall()
+                .debug_selector(|| "editor-result-group-clear".to_string())
+                .icon(IconName::CircleX)
+                .disabled(!enabled)
+                .tooltip("清空分组列".to_string())
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::ClearGroupColumns, app);
+                })
+                .into_any_element()
+        };
+
         let rows_el: Vec<AnyElement> = groups
             .iter()
             .map(|(values, count)| {
@@ -814,7 +832,7 @@ impl ResultPanel {
             .child(self.panel_toolbar(
                 "editor-result-group-toolbar",
                 SharedString::from(title),
-                vec![columns_menu, sort_button, duplicates_button],
+                vec![columns_menu, sort_button, duplicates_button, clear_button],
                 cx,
             ))
             .child(
