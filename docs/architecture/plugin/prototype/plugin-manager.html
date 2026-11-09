@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RdataStation · 插件管理面板原型（参考 Zed Extensions）</title>
+<!--
+  ============================================================================
+  RdataStation v2 · 插件系统 M9 · 插件管理面板原型
+  ============================================================================
+
+  这是什么
+    一版「插件管理」页面的形态稿。中央页参考 Zed `extensions_ui` 的 Extensions 页面：
+    单页承载、搜索、三档筛选、分类 chips、固定高度卡片；右侧补 RDS 需要的详情栏
+    （基本信息 / 贡献点 / 权限 / 项目引用 / 运行状态）。左侧仍是 240px Dock 的快速管理列表，
+    它只做「看一眼 + 启停」，搜索、安装与详情都收进中央页。
+
+  参考的 Zed 源码（main 分支，2026-10 取）
+    crates/extensions_ui/src/extensions_ui.rs
+      - 页面头 Headline("Extensions") + Install Dev Extension
+      - 搜索框 + 三档 ToggleButtonGroup（All / Installed / Not Installed）
+      - 分类筛选行（Themes / Languages / Language Servers / ...）
+      - uniform_list + ExtensionCard
+    crates/extensions_ui/src/components/extension_card.rs
+      - 卡片固定 110px 高、p_3、gap_2、rounded_md
+      - 标题行：名称 + 版本 + 已安装版本 + provides chips + 右侧最多 3 个按钮
+      - 第二行描述 + Downloads；第三行作者 + 仓库链接 + PopoverMenu
+      - 按钮语义：Install / Upgrade / Configure / Uninstall / Rebuild
+
+  与真实现 / 与 Zed 的差异（不要把本稿当规格）
+    1. Zed 是纯市场页（远程索引 + 下载量）；RDS 当前只有本地已装插件，没有市场。
+       因此三档改为「全部 / 已启用 / 已停用 / 出错 / 可更新」，没有 Not Installed 档。
+    2. Zed 的卡片不含详情；RDS 把详情放右侧固定栏，因为贡献点、权限、项目引用、
+       运行状态这四块放不进一张 110px 卡片。
+    3. 卡片高度取 auto / min-height 168px，是为了容纳贡献点 chips 与底部操作行；
+       Zed 的 110px 在本稿里放不下。
+    4. 稿里的「升级 / 重新构建 / 签名 / 市场」是形态演示；当前已实现的安装链只有
+       ZIP / TAR.GZ / 目录 + 清单校验 + 入口存在性 + 可选 checksums.json。
+    5. 稿里 UI 插件显示「已激活」，真实实现中扩展宿主运行时尚未接线（P4），
+       详情里已用「注册表已加载 · 执行接线未落地」区分。
+
+  尺寸出处
+    标题栏 2.25rem=36 · 活动栏 3rem=48 · 左 Dock 15rem=240 · 面板头 2.25rem=36 ·
+    列表行 1.5rem=24 · 小控件 1.625rem=26 · 细线 1px；状态栏取 1.5rem 只为比例接近。
+
+  色值出处
+    assets/themes/rds-theme.json（RDS Dark / RDS Light）+ assets/themes/product-tokens.json。
+    没有随手挑的颜色；左 Dock 的 activity_bar.background 取产品 token。
+
+  点击指南
+    ① 搜索框 / 筛选段 / 分类 chips → 卡片与计数实时变化
+    ② 点卡片或左 Dock 行 → 右侧详情切换
+    ③ 「停用 / 启用」「升级」「重试」→ 卡片与详情同步，计数重算
+    ④ 「安装插件」→ 安装弹层；「卸载」→ 确认弹层
+    ⑤ 右上「☾ / ☀」→ 明暗两套真实 token 对照
+  ============================================================================
+-->
+<!-- 资源拆到同名目录：plugin-manager/styles/ 与 plugin-manager/scripts/；仍是相对路径、无网络、双击入口即开。 -->
+<link rel="stylesheet" href="plugin-manager/styles/tokens.css">
+<link rel="stylesheet" href="plugin-manager/styles/shell.css">
+<link rel="stylesheet" href="plugin-manager/styles/page.css">
+<link rel="stylesheet" href="plugin-manager/styles/detail.css">
+<link rel="stylesheet" href="plugin-manager/styles/overlays.css">
+
+</head>
+<body>
+
+<div class="proto-bar">
+  <div class="left">
+    <span class="dot"></span>
+    <span>RdataStation · 插件管理面板 · 评审稿</span>
+    <span class="muted">参考 Zed Extensions</span>
+  </div>
+  <div class="right">
+    <span class="muted">2026-11-10 · 形态稿，不是产品代码</span>
+    <button id="theme-toggle" title="切换明暗">☀ 亮色</button>
+  </div>
+</div>
+
+<div class="app">
+  <!-- 标题栏 -->
+  <header class="title-bar">
+    <div class="logo">R</div>
+    <div class="project-slot"><span>项目</span><b>示例项目 / 销售分析</b></div>
+    <div class="quick-open"><span>搜索文件、表或命令</span><span class="kbd">Ctrl P</span></div>
+    <div class="win-controls"><i>─</i><i>□</i><i>✕</i></div>
+  </header>
+
+  <div class="workspace">
+    <!-- 左活动栏 -->
+    <nav class="activity-bar" aria-label="活动栏">
+      <button class="activity-btn" title="草稿箱">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3h9l3 3v15H6z"/><path d="M15 3v4h4"/><path d="M9 12h6M9 16h6"/></svg>
+      </button>
+      <button class="activity-btn" title="数据库导航">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></svg>
+      </button>
+      <button class="activity-btn" title="资源分析">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 16v-5M12 16V7M16 16v-8"/></svg>
+      </button>
+      <button class="activity-btn active" title="插件">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 4v3M16 4v3"/><path d="M6 7h12v5a6 6 0 0 1-12 0z"/><path d="M12 12v6"/><path d="M9 18h6"/></svg>
+      </button>
+      <div class="activity-spacer"></div>
+      <button class="activity-btn" title="设置">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/></svg>
+      </button>
+    </nav>
+
+    <!-- 左 Dock：快速管理 -->
+    <aside class="dock" aria-label="插件快速管理">
+      <div class="dock-head">
+        <span class="title">插件</span>
+        <button class="icon-btn" data-install-open title="安装插件">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <button class="icon-btn" data-refresh title="刷新列表">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 11a8 8 0 1 0-2.3 6.7"/><path d="M20 5v6h-6"/></svg>
+        </button>
+      </div>
+      <div class="dock-list" id="dock-list"></div>
+      <div class="dock-foot">
+        <span>快速启停 · 详情在中央页</span>
+        <span class="spacer"></span>
+        <span id="dock-reload">2 待重载</span>
+      </div>
+    </aside>
+
+    <!-- 中央插件管理页 -->
+    <main class="plugin-page">
+      <div class="page-head">
+        <div class="page-title">
+          <h1>插件管理</h1>
+          <p>驱动、面板、命令与设置都从同一份清单声明；管理界面始终由宿主渲染。</p>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-primary" data-install-open>↓ 安装插件</button>
+          <button class="btn" data-import-dir>从目录导入</button>
+          <button class="btn icon-only" data-refresh title="刷新">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 1 0-2.3 6.7"/><path d="M20 5v6h-6"/></svg>
+          </button>
+          <button class="btn icon-only" data-page-more title="更多">⋯</button>
+        </div>
+      </div>
+
+      <div class="page-stats" id="stats"></div>
+
+      <div class="toolbar">
+        <div class="toolbar-row">
+          <label class="search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/></svg>
+            <input id="search" type="search" placeholder="搜索插件名、ID、作者或描述" autocomplete="off">
+            <span class="kbd">/</span>
+          </label>
+          <div class="segmented" id="tabs"></div>
+          <div class="toolbar-spacer"></div>
+          <select class="sort-select" id="sort" title="排序">
+            <option value="default">默认顺序</option>
+            <option value="name">按名称</option>
+            <option value="update">可更新优先</option>
+            <option value="error">出错优先</option>
+          </select>
+        </div>
+        <div class="kinds" id="kinds"></div>
+      </div>
+
+      <div class="body-grid">
+        <section class="list-col">
+          <div id="reload-banner" class="reload-banner">
+            <span>2 个插件文件有变更，重载后生效</span>
+            <span class="spacer"></span>
+            <button class="btn btn-tint" data-reload>重载</button>
+            <button class="btn btn-ghost" data-reload-later>稍后</button>
+          </div>
+          <div id="plugin-grid" class="plugin-grid"></div>
+        </section>
+        <aside id="plugin-detail" class="detail-panel"></aside>
+      </div>
+    </main>
+
+    <!-- 右活动栏 -->
+    <nav class="activity-bar right-activity" aria-label="右侧活动栏">
+      <button class="activity-btn" title="洞察">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3a6 6 0 0 1 6 6c0 2.2-1.2 3.6-2 4.8V17h-8v-3.2C7.2 12.6 6 11.2 6 9a6 6 0 0 1 6-6z"/><path d="M9 20h6"/></svg>
+      </button>
+      <button class="activity-btn" title="Mock 生成">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 6h14v12H5z"/><path d="M5 10h14M9 10v8M13 14h3"/></svg>
+      </button>
+      <button class="activity-btn" title="历史">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 5v5h5"/><path d="M12 8v5l3 2"/></svg>
+      </button>
+      <div class="activity-spacer"></div>
+      <button class="activity-btn" title="设置">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/></svg>
+      </button>
+    </nav>
+  </div>
+
+  <!-- 状态栏 -->
+  <footer class="status-bar">
+    <div class="left">
+      <span class="item">« 完全隐藏</span>
+      <span class="item">插件运行时 · <b>sidecar 3</b> · 扩展宿主未启动</span>
+    </div>
+    <span class="spacer"></span>
+    <div class="right">
+      <span class="item">Java 17</span>
+      <span class="item">Python 3.11</span>
+      <span class="item">UTF-8</span>
+    </div>
+  </footer>
+</div>
+
+<!-- 弹层 -->
+<div id="dialog" class="dialog-backdrop hidden" aria-hidden="true">
+  <div class="dialog">
+    <div class="dialog-head">
+      <h3 id="dlg-title">安装插件</h3>
+      <button class="icon-btn" data-dialog-close title="关闭">✕</button>
+    </div>
+    <div class="dialog-body" id="dlg-body"></div>
+    <div class="dialog-foot" id="dlg-foot"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast" aria-live="polite"></div>
+
+<!-- 底部说明：与既有原型 README 的「本稿演示了什么」约定对齐 -->
+<section class="proto-notes">
+  <h2>本稿演示了什么</h2>
+  <div class="cols">
+    <div>
+      <h3>从 Zed 借来的骨架</h3>
+      <ul>
+        <li>单页承载 + 搜索框 + 三档筛选 + 分类 chips</li>
+        <li>固定操作位的卡片：名称/版本/chips 在三行内闭合</li>
+        <li>按钮语义按状态分支，而不是一组常驻按钮</li>
+      </ul>
+    </div>
+    <div>
+      <h3>RDS 的差异与取舍</h3>
+      <ul>
+        <li>驱动轨与界面扩展放进同一张列表；分类用贡献点而非插件类型</li>
+        <li>右侧详情承载贡献点、权限、项目引用、运行状态四区</li>
+        <li>左 Dock 保留 240px 快速启停，中央页负责搜索 / 安装 / 详情</li>
+      </ul>
+    </div>
+    <div>
+      <h3>刻意没画 / 未实现</h3>
+      <ul>
+        <li>插件市场、下载量、评分与远程索引</li>
+        <li>签名信任链（<code>signature.json</code>）、发布流程</li>
+        <li>扩展宿主运行时与命令执行的真正接线（P4）</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<script src="plugin-manager/scripts/data.js"></script>
+<script src="plugin-manager/scripts/helpers.js"></script>
+<script src="plugin-manager/scripts/view-list.js"></script>
+<script src="plugin-manager/scripts/view-detail.js"></script>
+<script src="plugin-manager/scripts/view-dock.js"></script>
+<script src="plugin-manager/scripts/actions.js"></script>
+<script src="plugin-manager/scripts/dialogs.js"></script>
+<script src="plugin-manager/scripts/events.js"></script>
+<script src="plugin-manager/scripts/bootstrap.js"></script>
+
+</body>
+</html>

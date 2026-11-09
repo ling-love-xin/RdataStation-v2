@@ -4,7 +4,7 @@
 // 用法：  node check-prototypes.mjs
 //
 // 对每个 *.html 做三件事：
-//   ① 语法：抽出 <script> 交 vm.Script 解析 —— 抓未闭合字符串/括号
+//   ① 语法：抽出内联或同目录外链 <script> 交 vm.Script 解析 —— 抓未闭合字符串/括号
 //   ② 加载：用最小 DOM 桩真跑一遍 —— 抓"启动即抛"（取不到元素、拼错 id、握手炸掉）
 //   ③ 交互：按每个原型写好的探针点几下 —— 抓"点了没反应"（data-* 名拼错、分支走空）
 //
@@ -144,6 +144,51 @@ const PROBES = {
     assert(rt.rows.length === 3, `region 维度应为 3 行，实为 ${rt.rows.length}`);
   },
 
+  "plugin-manager.html": (dom) => {
+    const grid = () => dom.byId.get("plugin-grid");
+    const detail = () => dom.byId.get("plugin-detail");
+    const cardById = (id) => grid().children.find(c => c.dataset && c.dataset.select === id);
+
+    assert(grid().children.length === 8, `启动应渲染 8 张插件卡，实为 ${grid().children.length}`);
+    assert(detail().innerHTML.includes("Oracle JDBC Driver"), "启动未渲染默认详情");
+
+    // 状态筛选 → 只留两张停用卡
+    dom.fire("click", probeTarget({ filter: "disabled" }));
+    assert(grid().children.length === 2, `筛选「已停用」应为 2 张，实为 ${grid().children.length}`);
+
+    dom.fire("click", probeTarget({ filter: "all" }));
+    dom.fire("click", probeTarget({ kind: "driver" }));
+    assert(grid().children.length === 2, `筛选「驱动」应为 2 张，实为 ${grid().children.length}`);
+
+    dom.fire("click", probeTarget({ kind: "all" }));
+    const search = dom.byId.get("search");
+    search.value = "table-board";
+    search.dispatch("input");
+    assert(grid().children.length === 1, `搜索 table-board 应只剩 1 张，实为 ${grid().children.length}`);
+
+    // 清空搜索并选中被项目引用的插件 → 详情必须给出对账信息
+    search.value = "";
+    search.dispatch("input");
+    dom.fire("click", probeTarget({ select: "com.example.table-board" }));
+    assert(detail().innerHTML.includes("表大小看板"), "选中后详情未切换");
+    assert(detail().innerHTML.includes("引用了它贡献的面板"), "被项目引用的插件缺少对账提示");
+
+    // 启用后详情状态应变化
+    dom.fire("click", probeTarget({ toggle: "com.example.table-board" }));
+    assert(detail().innerHTML.includes("已加载"), "启用后详情状态没有变化");
+
+    // 升级卡片 → 版本与可更新标记同时更新
+    dom.fire("click", probeTarget({ upgrade: "rds.driver.oracle" }));
+    const oracle = cardById("rds.driver.oracle");
+    assert(oracle && oracle.innerHTML.includes("v0.2.6"), "升级后卡片版本没有更新");
+
+    // 卸载弹层 → 标题必须带上插件名
+    dom.fire("click", probeTarget({ uninstall: "com.example.export" }));
+    const dlgTitle = dom.byId.get("dlg-title");
+    assert(dlgTitle && dlgTitle.textContent.includes("卸载") && dlgTitle.textContent.includes("导出助手"),
+      "卸载没有打开确认弹层：" + (dlgTitle ? dlgTitle.textContent : "（无 dlg-title）"));
+  },
+
   "plugin-entry.html": (dom) => {
     const detail = dom.byId.get("detail");
     const listEl = dom.byId.get("list");
@@ -217,52 +262,94 @@ const PROBES = {
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
 /* --------------------------------------------------------------- 主流程 ---- */
+// 支持两种稿子：
+//   ① 单文件稿：<style> + <script> 内联
+//   ② 目录稿：入口 .html + 同目录 styles/*.css + scripts/*.js（相对路径，file:// 可直接打开）
+// 目录稿的脚本按页面里的顺序拼接后一起解析 / 试跑；CSS 只用于明暗 token 断言。
+function readLocal(ref, kind) {
+  if (/^(https?:)?\/\//.test(ref)) throw new Error(`${kind} 不能引用网络资源：${ref}`);
+  return readFileSync(join(HERE, ref.replace(/^\.\//, "")), "utf8");
+}
+
+function readPrototype(file) {
+  const html = readFileSync(join(HERE, file), "utf8");
+  const scripts = [];
+  const css = [];
+  let m;
+
+  const scriptRe = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+  while ((m = scriptRe.exec(html))) {
+    const src = (m[1].match(/\bsrc\s*=\s*["']([^"']+)["']/i) || [])[1];
+    scripts.push(src ? readLocal(src, "script") : m[2]);
+  }
+
+  const styleRe = /<style\b[^>]*>([\s\S]*?)<\/style>/gi;
+  while ((m = styleRe.exec(html))) css.push(m[1]);
+
+  const linkRe = /<link\b[^>]*>/gi;
+  while ((m = linkRe.exec(html))) {
+    if (!/\brel\s*=\s*["']stylesheet["']/i.test(m[0])) continue;
+    const href = (m[0].match(/\bhref\s*=\s*["']([^"']+)["']/i) || [])[1];
+    if (href) css.push(readLocal(href, "stylesheet"));
+  }
+
+  return { html, scripts: scripts.join("\n\n"), css: css.join("\n") };
+}
+
 const files = readdirSync(HERE).filter(f => f.endsWith(".html")).sort();
 if (!files.length) { console.error("目录里没有 .html 原型"); process.exit(1); }
 
 let bad = 0;
 for (const f of files) {
-  const html = readFileSync(join(HERE, f), "utf8");
-  const open = html.lastIndexOf("<script>");
-  const close = html.lastIndexOf("</script>");
   const problems = [];
   let dom = null;
+  let html = "";
+  let css = "";
 
-  if (open < 0 || close < 0) problems.push("找不到内联 <script> 块");
-  else {
-    const src = html.slice(open + "<script>".length, close);
+  try {
+    const res = readPrototype(f);
+    html = res.html;
+    css = res.css;
+    const src = res.scripts;
 
-    try { new vm.Script(src, { filename: f }); }
-    catch (e) { problems.push("语法错误：" + e.message); }
+    if (!src.trim()) problems.push("找不到脚本（内联或同目录外链）");
+    else {
+      try { new vm.Script(src, { filename: f }); }
+      catch (e) { problems.push("语法错误：" + e.message); }
 
-    if (!problems.length) {
-      const errs = [];
-      const orig = console.error;
-      console.error = (...a) => errs.push("console.error: " + a.join(" "));
-      dom = installDom();
-      try {
-        new vm.Script(src, { filename: f }).runInContext(dom.ctx, { timeout: 4000 });
-      } catch (e) {
-        problems.push("加载期抛错：" + (e && e.message ? e.message : String(e)));
-      } finally {
-        console.error = orig;
+      if (!problems.length) {
+        const errs = [];
+        const orig = console.error;
+        console.error = (...a) => errs.push("console.error: " + a.join(" "));
+        dom = installDom();
+        try {
+          new vm.Script(src, { filename: f }).runInContext(dom.ctx, { timeout: 4000 });
+        } catch (e) {
+          problems.push("加载期抛错：" + (e && e.message ? e.message : String(e)));
+        } finally {
+          console.error = orig;
+        }
+        problems.push(...errs);
       }
-      problems.push(...errs);
     }
+  } catch (e) {
+    problems.push("读取失败：" + (e && e.message ? e.message : String(e)));
+  }
 
-    // 交互探针
-    if (!problems.length && dom) {
-      const probe = PROBES[f];
-      if (!probe) problems.push("没有为它写交互探针（新增原型请在 PROBES 里登记）");
-      else {
-        try { probe(dom); }
-        catch (e) { problems.push("交互探针失败：" + e.message); }
-      }
+  // 交互探针
+  if (!problems.length && dom) {
+    const probe = PROBES[f];
+    if (!probe) problems.push("没有为它写交互探针（新增原型请在 PROBES 里登记）");
+    else {
+      try { probe(dom); }
+      catch (e) { problems.push("交互探针失败：" + e.message); }
     }
   }
 
   if (!/lang="zh-CN"/.test(html)) problems.push('缺 lang="zh-CN"');
-  if (!/data-theme="dark"/.test(html) || !/data-theme="light"/.test(html)) problems.push("缺明暗两套 token");
+  if (!/data-theme="dark"/.test(html) || !/data-theme="light"/.test(html + "\n" + css)) {
+    problems.push("缺明暗两套 token");
+  }
 
   if (problems.length) {
     bad += 1;

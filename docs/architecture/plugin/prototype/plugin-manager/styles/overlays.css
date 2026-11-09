@@ -1,0 +1,52 @@
+@charset "utf-8";
+/* 弹层 / Toast。 */
+  /* ---------------------------------------------------------------- 弹层 / Toast */
+  .dialog-backdrop {
+    position: fixed; inset: 0; z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--overlay);
+    backdrop-filter: blur(2px);
+  }
+  .dialog-backdrop.hidden { display: none; }
+  .dialog {
+    width: 500px; max-width: calc(100vw - 48px);
+    background: var(--elevated); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .dialog-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 14px; border-bottom: 1px solid var(--border-soft);
+  }
+  .dialog-head h3 { margin: 0; flex: 1; color: var(--text-strong); font-size: 14px; font-weight: 600; }
+  .dialog-body { padding: 14px; font-size: 12px; line-height: 1.65; color: var(--muted); }
+  .dialog-body .drop {
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+    padding: 22px; margin-bottom: 10px;
+    border: 1px dashed var(--border); border-radius: 6px;
+    background: var(--panel); color: var(--muted);
+  }
+  .dialog-body .drop b { color: var(--text); font-size: 13px; }
+  .dialog-body .mono-note {
+    margin-top: 8px; padding: 8px 9px; border-radius: 4px;
+    background: var(--panel); border: 1px solid var(--border-soft);
+    color: var(--muted); font-size: 10.5px; line-height: 1.6;
+  }
+  .dialog-foot {
+    display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+    padding: 10px 14px; border-top: 1px solid var(--border-soft); background: var(--chrome);
+  }
+  .toast {
+    position: fixed; left: 50%; bottom: 44px; z-index: 1200;
+    transform: translate(-50%, 12px);
+    max-width: 560px;
+    padding: 9px 13px;
+    background: var(--elevated); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    box-shadow: var(--shadow);
+    font-size: 12px;
+    opacity: 0; pointer-events: none;
+    transition: opacity .16s ease, transform .16s ease;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
