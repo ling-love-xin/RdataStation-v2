@@ -2204,9 +2204,16 @@ DBeaver 的分组面板动作由 `GroupingAction` 扩展点驱动，配置来自
 
 #### 8.42.5 仍未做
 
-- 分组列集合的跨会话持久化（DBeaver 写 `IDialogSettings`，本仓无对应偏好项）
-- 每组展开看行（DBeaver 分组树可展开）；本仓是平列表 + 计数
-- 分组列顺序的可视化调整（本仓按勾选顺序固定，不开拖拽）
+- 分组列集合的跨会话持久化。**订正**：原写「DBeaver 写 `IDialogSettings`」未核实到实证——
+  `GroupingPanel.loadSettings()` / `saveSettings()`（`GroupingPanel.java:114-120`）都只取出
+  一个 `"groups"` section 就结束，函数体为空；分组面板真正走 preference 的只有「仅重复」
+  与「默认排序」（`GroupingResultsContainer.java:231-232` 读
+  `RS_GROUPING_SHOW_DUPLICATES_ONLY`、`:250` 读 `RS_GROUPING_DEFAULT_SORTING`）。分组列
+  集合本处未见持久化，是否另有存取路径本轮未核实，故本仓不做不算偏离
+- 每组展开看行（DBeaver 的分组结果是**另一条查询的结果集**，不是原结果集的行树）；
+  本仓是平列表 + 计数
+- 分组列顺序的可视化调整（本仓按勾选顺序固定，不开拖拽；DBeaver 走
+  `GroupingResultsDecorator.java:161-171 dropColumns` 接收拖放）
 
 ### 8.43 订正：「Metadata 面板」本仓已合并进列浏览器页
 
