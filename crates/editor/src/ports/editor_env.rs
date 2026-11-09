@@ -95,25 +95,46 @@ impl SystemEnvPort {
         let mut envs = Vec::with_capacity(BUILTIN_ENVS.len());
         let mut installed = HashMap::new();
         for (id, kind, candidates, args) in BUILTIN_ENVS {
-            // 按优先级探测候选命令：第一个能报出版本的 = 实际可用命令（Windows 的
-            // `python` Store 桩会失败，回退 `py`）。没装 = 命令不可达 / 非零退出。
-            let probe = candidates
-                .iter()
-                .find_map(|candidate| probe_version(candidate).map(|v| (*candidate, v)));
+            // 【解释器统一（2026-11-09 拍板语言面收敛 Python / Markdown / SQL）】
+            // Python 内置环境优先用**内核注册表**的解释器：分析单元跑哪个 Python
+            // （kernelspec 探测、绝对路径、装了 ipykernel 的环境），通用模式脚本就跑
+            // 哪个——两条执行线不再各挑各的（PATH 上的 python 可能是与内核环境无关
+            // 的解释器）。其余语言维持原候选序。
+            let kernel_first = if *kind == EnvKind::Python {
+                python_command_from_kernelspecs(&detect_kernelspecs_for_python())
+            } else {
+                None
+            };
+            // 先试内核解释器，不行再按优先级探测 PATH 候选：第一个能报出版本的 =
+            // 实际可用命令（Windows 的 `python` Store 桩会失败，回退 `py`）。
+            let mut probe = kernel_first
+                .as_deref()
+                .and_then(|command| probe_version(command).map(|v| (command.to_string(), v)));
+            if probe.is_none() {
+                probe = candidates
+                    .iter()
+                    .find_map(|candidate| probe_version(candidate).map(|v| ((*candidate).to_string(), v)));
+            }
             let version = probe.as_ref().map(|(_, v)| v.clone());
             installed.insert(id.to_string(), probe.is_some());
-            if let Some((command, _)) = probe {
+            if let Some((command, _)) = &probe {
                 remember_resolved(
                     id,
                     command,
                     &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
                 );
             }
+            // 展示命令 = 实际解析成功的那个（venv 绝对路径 / python / py）：
+            // 环境选择器与执行器说同一句话，不撒谎
+            let display_command = probe
+                .as_ref()
+                .map(|(command, _)| command.clone())
+                .unwrap_or_else(|| candidates[0].to_string());
             envs.push(Environment {
                 id: id.to_string(),
                 name: kind.label().to_string(),
                 kind: *kind,
-                command: candidates[0].to_string(),
+                command: display_command,
                 args: args.iter().map(|s| s.to_string()).collect(),
                 version,
                 // 内置环境 = 系统探测，管理环境 modal 不提供增删改
@@ -331,8 +352,9 @@ pub fn attach(editor: &EditorShared) {
 /// 解析环境定义（命令 + 参数；未探测 / 未注册 = 如实拒绝，不猜）
 ///
 /// 执行器（`EngineQueryRunner::run_script`）用它把 `env_id` 翻译成可执行命令。
-/// 命令是**探测成功的那一个**（见 [`SystemEnvPort::new`]）：python Store 桩回退 py，
-/// 执行就用 py，而不是明知会失败的 python；自定义环境 = 用户填的路径。
+/// 命令是**探测成功的那一个**（见 [`SystemEnvPort::new`]）：Python 优先内核注册表的
+/// 解释器（与分析单元同源，见 [`python_command_from_kernelspecs`]），PATH 候选兜底
+/// （python Store 桩回退 py）；自定义环境 = 用户填的路径。
 pub fn resolve(env_id: &str) -> Result<ResolvedEnv, String> {
     if let Some(map) = RESOLVED_ENVS.get() {
         if let Ok(map) = map.lock() {
@@ -345,6 +367,37 @@ pub fn resolve(env_id: &str) -> Result<ResolvedEnv, String> {
         }
     }
     Err(format!("执行环境不可用：{env_id}（未安装或未探测）"))
+}
+
+/// 纯逻辑（可测）：从内核注册表条目里挑 Python 内置环境该用的解释器
+///
+/// 优先 `ks:` 命名空间的 kernelspec 条目（命令是**绝对路径**，来自装了 ipykernel 的
+/// venv / conda 环境——分析模式的 Python 单元就跑在它上面），没有再认旧探测条目
+/// （同样是探测出的路径）。要求 `ready`（kernelspec 命令存在 / 装了 ipykernel）且
+/// 命令非空——不 ready 的条目拿过来只会把「脚本起不来」换一种报法。
+fn python_command_from_kernelspecs(specs: &[rds_kernel::KernelSpec]) -> Option<String> {
+    let is_usable_python = |spec: &rds_kernel::KernelSpec| {
+        spec.language == rds_kernel::KernelLanguage::Python
+            && spec.ready
+            && !spec.command.is_empty()
+    };
+    specs
+        .iter()
+        .find(|spec| spec.id.starts_with("ks:") && is_usable_python(spec))
+        .or_else(|| specs.iter().find(|spec| is_usable_python(spec)))
+        .map(|spec| spec.command.clone())
+}
+
+/// 启动装配期取一次内核注册表（一次目录扫描 + 一次探测子进程，与 jedi LSP 装配同量级）
+///
+/// 单测里短路成**空表**：探测结果依机器而异（有没有 kernelspec、装没装 ipykernel），
+/// 测试只锁 [`python_command_from_kernelspecs`] 的挑选逻辑，不锁机器状态——否则
+/// 「本机有没有装 ipykernel」会直接决定单测红绿。
+fn detect_kernelspecs_for_python() -> Vec<rds_kernel::KernelSpec> {
+    if cfg!(test) {
+        return Vec::new();
+    }
+    rds_kernel::detect_kernels()
 }
 
 /// 脚本执行的核心（async）：spawn + stdin 写代码 + 并发收输出 + 超时杀进程树
@@ -476,14 +529,71 @@ mod tests {
     use engine::persistence::script_env_store::ScriptEnvStore;
 
     use super::{
-        BUILTIN_ENVS, RESOLVED_ENVS, SystemEnvPort, parse_version_line, remember_resolved, resolve,
+        BUILTIN_ENVS, RESOLVED_ENVS, SystemEnvPort, parse_version_line,
+        python_command_from_kernelspecs, remember_resolved, resolve,
     };
+    use rds_kernel::{KernelLanguage, KernelLaunch, KernelSpec};
 
     fn temp_db(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("rds_sysenv_{tag}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir.join("global.db")
+    }
+
+    /// 【解释器统一（2026-11-09 拍板）】Python 内置环境从内核注册表挑解释器的口径：
+    /// `ks:` 命名空间优先、必须 ready 且命令非空；全不可用 → None（回落 PATH 候选）
+    #[test]
+    fn python_command_prefers_ready_kernelspec_entries() {
+        let spec = |id: &str, language, command: &str, ready: bool| KernelSpec {
+            id: id.to_string(),
+            display_name: id.to_string(),
+            language,
+            command: command.to_string(),
+            ready,
+            note: None,
+            launch: KernelLaunch::placeholder(),
+        };
+
+        // ks: 的 ready Python 可用 → 取它（其它语言 / 非 ks 条目不抢）
+        let specs = vec![
+            spec("ks:python3", KernelLanguage::Python, r"D:\venv\Scripts\python.exe", true),
+            spec("ks:ir", KernelLanguage::R, "R", true),
+            spec("ks:julia", KernelLanguage::Julia, "julia", true),
+        ];
+        assert_eq!(
+            python_command_from_kernelspecs(&specs).as_deref(),
+            Some(r"D:\venv\Scripts\python.exe"),
+            "kernelspec 的 ready Python 优先"
+        );
+
+        // ks: 条目不 ready（环境已删）→ 不挑它；旧探测条目 ready → 兜底挑旧条目
+        let specs = vec![
+            spec("ks:python3", KernelLanguage::Python, r"D:\gone\python.exe", false),
+            spec("python", KernelLanguage::Python, r"D:\real\python.exe", true),
+        ];
+        assert_eq!(
+            python_command_from_kernelspecs(&specs).as_deref(),
+            Some(r"D:\real\python.exe"),
+            "ks: 不可用时回退旧探测条目"
+        );
+
+        // 命令为空（不该出现，防呆）与全不可用 → None（with_store 回落 python/py 候选）
+        assert_eq!(
+            python_command_from_kernelspecs(&[spec("ks:python3", KernelLanguage::Python, "", true)]),
+            None,
+            "空命令不挑"
+        );
+        assert_eq!(
+            python_command_from_kernelspecs(&[spec(
+                "ks:python3",
+                KernelLanguage::Python,
+                "python",
+                false
+            )]),
+            None,
+            "不 ready 不挑（PATH 候选兜底）"
+        );
     }
 
     /// 建池 + 开店（建池在自建 runtime 里，开店在离开 async 上下文之后）
