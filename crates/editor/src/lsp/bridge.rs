@@ -35,8 +35,8 @@ use gpui_kit::component::input::{
 };
 use gpui_kit::*;
 use lsp_types::{
-    CodeAction, CompletionContext, CompletionResponse, Diagnostic, Hover, OneOf, Position,
-    WorkspaceEdit,
+    CodeAction, CompletionContext, CompletionResponse, Diagnostic, GotoDefinitionResponse, Hover,
+    LocationLink, OneOf, Position, WorkspaceEdit,
 };
 
 use super::client::LspClient;
@@ -135,6 +135,83 @@ impl HoverProvider for LspHoverProvider {
 
 /// hover 请求的超时：与补全同档（语言服务偶发慢启动）
 const HOVER_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// 【F12】把请求转发给语言服务的 definition provider（无状态：可随时建、可共享）
+///
+/// 与补全 / hover / code action 同构：后台线程走 `textDocument/definition`，把响应
+/// （`Location[]` 或 `LocationLink[]`）统一解析回 `Vec<LocationLink>`。挂上后内核自动
+/// 获得「悬停下划线 + Ctrl+Click」与键盘跳转；目标在**别的文件**（如 stdlib 源码）时，
+/// 内核 `go_to_definition` 会先问 `show_document` handler，宿主不认的 scheme 落回
+/// 内核默认（当前文档内移动）——如实无副作用，不猜。
+pub struct LspDefinitionProvider {
+    client: Arc<LspClient>,
+    document_uri: String,
+}
+
+impl LspDefinitionProvider {
+    pub fn new(client: Arc<LspClient>, document_uri: impl Into<String>) -> Self {
+        Self {
+            client,
+            document_uri: document_uri.into(),
+        }
+    }
+}
+
+impl DefinitionProvider for LspDefinitionProvider {
+    fn definitions(
+        &self,
+        text: &Rope,
+        offset: usize,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Vec<LocationLink>>> {
+        let position = text.offset_to_position(offset);
+        let client = Arc::clone(&self.client);
+        let uri = self.document_uri.clone();
+        // `LspClient::call` 是同步阻塞：放后台线程跑，别卡 UI
+        cx.background_spawn(async move { request_definitions(&client, &uri, position) })
+    }
+}
+
+/// definition 请求的超时：与补全 / hover 同档
+const DEFINITION_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// 纯逻辑（可测）：发 definition 请求并解析响应（**阻塞**；生产在后台线程跑）
+fn request_definitions(
+    client: &LspClient,
+    uri: &str,
+    position: Position,
+) -> Result<Vec<LocationLink>> {
+    let result = client.call(
+        "textDocument/definition",
+        build_hover_params(uri, position),
+        DEFINITION_TIMEOUT,
+    )?;
+    Ok(parse_definition_links(result))
+}
+
+/// 纯逻辑（可测）：definition 响应（`null` / `Location[]` / `LocationLink[]`）→
+/// `Vec<LocationLink>`
+///
+/// `Location` 翻译时 `origin_selection_range = None`：服务端没给符号区间，内核不画
+/// 悬停下划线，只出 Ctrl+Click hitbox 与键盘跳转。解析失败按「无定义」处理（空数组），
+/// 不让一次坏响应把跳转链路 panic 掉。
+fn parse_definition_links(result: serde_json::Value) -> Vec<LocationLink> {
+    match serde_json::from_value::<Option<GotoDefinitionResponse>>(result) {
+        Ok(Some(lsp_types::GotoDefinitionResponse::Array(locations))) => locations
+            .into_iter()
+            .map(|location| LocationLink {
+                origin_selection_range: None,
+                target_range: location.range,
+                target_selection_range: location.range,
+                target_uri: location.uri,
+            })
+            .collect(),
+        Ok(Some(lsp_types::GotoDefinitionResponse::Link(links))) => links,
+        // `null`（无定义）与解析失败：如实空
+        _ => Vec::new(),
+    }
+}
 
 /// 纯逻辑（可测）：组 `textDocument/hover` 请求参数（与补全共用同一位置编码）
 fn build_hover_params(uri: &str, position: Position) -> serde_json::Value {
@@ -369,7 +446,8 @@ mod tests {
 
     use super::{
         LspClient, build_completion_params, build_hover_params, diagnostics_from_params,
-        is_trigger_char, request_completions, request_hover,
+        is_trigger_char, parse_definition_links, request_completions, request_definitions,
+        request_hover,
     };
     use crate::lsp::{LspReader, LspWriter};
 
@@ -679,5 +757,65 @@ mod tests {
     fn diagnostics_params_rejects_garbage() {
         let params = serde_json::json!({ "diagnostics": "not-an-array" });
         assert!(diagnostics_from_params(&params).is_err());
+    }
+
+    /// 【F12】definition 请求全链路：发 `textDocument/definition`，`Location[]` 响应
+    /// 翻译成 `LocationLink`（origin = None：服务端没给符号区间，内核不画下划线）
+    #[test]
+    fn definition_request_maps_locations_to_links() {
+        let (recv_rx, reply_tx, client) = harness();
+        let position = lsp_types::Position::new(0, 4);
+
+        let client_for_thread = client.clone();
+        let handle = std::thread::spawn(move || {
+            request_definitions(&client_for_thread, "file:///b.py", position)
+        });
+
+        let (req_id, req) = next_request(&recv_rx, "textDocument/definition");
+        assert_eq!(req["params"]["textDocument"]["uri"], "file:///b.py");
+
+        let reply = serde_json::json!({
+            "jsonrpc": "2.0", "id": req_id,
+            "result": [
+                {
+                    "uri": "file:///lib/os.py",
+                    "range": { "start": { "line": 10, "character": 4 }, "end": { "line": 10, "character": 8 } }
+                }
+            ]
+        });
+        reply_tx
+            .send(crate::lsp::frame::encode(
+                &serde_json::to_vec(&reply).unwrap(),
+            ))
+            .unwrap();
+
+        let links = handle.join().expect("definition 线程应结束").expect("应成功");
+        assert_eq!(links.len(), 1);
+        let link = &links[0];
+        assert!(link.origin_selection_range.is_none(), "Location 响应没有符号区间");
+        assert_eq!(link.target_uri.as_str(), "file:///lib/os.py");
+        assert_eq!(link.target_selection_range.start.line, 10);
+        assert_eq!(link.target_range.start.character, 4);
+    }
+
+    /// 【F12】definition 响应解析的另两档：`LocationLink[]` 原样透传；null / 坏值 = 空
+    #[test]
+    fn definition_links_pass_through_and_null_is_empty() {
+        // LocationLink[] 透传（origin_selection_range 保留）
+        let links = parse_definition_links(serde_json::json!([
+            {
+                "originSelectionRange": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 3 } },
+                "targetUri": "file:///b.py",
+                "targetRange": { "start": { "line": 2, "character": 0 }, "end": { "line": 2, "character": 6 } },
+                "targetSelectionRange": { "start": { "line": 2, "character": 0 }, "end": { "line": 2, "character": 6 } }
+            }
+        ]));
+        assert_eq!(links.len(), 1);
+        assert!(links[0].origin_selection_range.is_some(), "Link 响应带符号区间");
+        assert_eq!(links[0].target_selection_range.start.line, 2);
+
+        // null（无定义）与解析失败：如实空，不 panic
+        assert!(parse_definition_links(serde_json::Value::Null).is_empty());
+        assert!(parse_definition_links(serde_json::json!("not-a-definition")).is_empty());
     }
 }

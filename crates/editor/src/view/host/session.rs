@@ -492,6 +492,16 @@ impl EditorHostPanel {
                             session.uri.clone(),
                         )),
                     );
+                    // 【F12】跳转定义也走同一会话：转发 `textDocument/definition`。目标在
+                    // 本文档 → 内核默认移动光标；目标在别的文件（如 stdlib 源码）→
+                    // show_document handler 不认的 scheme 同样落回默认，如实无副作用。
+                    crate::lsp::bridge::install_definition(
+                        state,
+                        std::rc::Rc::new(crate::lsp::bridge::LspDefinitionProvider::new(
+                            session.client.clone(),
+                            session.uri.clone(),
+                        )),
+                    );
                 }
             }
             crate::lsp::CompletionChoice::Sql => {
