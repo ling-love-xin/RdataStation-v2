@@ -775,6 +775,14 @@ Uninstalled ──install──▶ Installed ──load──▶ Loaded ──ac
 > `PluginEvent::PluginChanged`（同一插件进入 `needs_reload` 时只发一次），面板订阅后
 > 立即显示「重载 N」；此前只写内存标记不发事件，列表订阅了也看不到变更提示。
 >
+> **2026-10-16 进展（第七刀，贡献点计数）**：新增
+> `PluginManager::contribution_counts()`——命令 / 面板 / 设置从 `ContributionRegistry`
+> 计数，驱动从已加载清单计数（驱动不在注册表里，不能因此显示 0），返回
+> `plugin_id → ContributionCounts`。面板刷新时与清单一起拉取，行首状态前显示「贡献 N」，
+> 悬停 0.3s 用 `hover_card::HoverCard` 展开 `命令 2 · 面板 1 · 设置 1 · 驱动 1`
+> 明细（只列非零类别）。注册表此前只有 `contributions()` 测试调用、宿主零消费，
+> 现在第一次被真实消费；声明可见，但命令仍不能执行、面板 / 设置仍未进宿主界面。
+>
 > **仍未接**：`LeftPanel`/`RightPanel` → `PanelId`、
 > Quick Open 命令合并、设置页外部登记项渲染、未注册 id 占位面板、`project_resources` 对账与图标 resolver。
 

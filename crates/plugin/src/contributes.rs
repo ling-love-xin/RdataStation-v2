@@ -20,6 +20,38 @@ use shared::error::{CommonError, CoreError};
 
 use crate::manifest::{ContributesCommand, ContributesPanel, ContributesSetting, PluginManifest};
 
+/// 单个插件的贡献点数量（面板行提示用）。
+///
+/// 前三类来自 [`ContributionRegistry`]，驱动不在注册表里（驱动由
+/// `sidecar::factory` 消费），由清单直接计数，避免「驱动型插件显示 0 贡献」。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContributionCounts {
+    pub commands: usize,
+    pub panels: usize,
+    pub settings: usize,
+    pub drivers: usize,
+}
+
+impl ContributionCounts {
+    /// 从清单直接统计（加载成功但尚未建注册表时也可用）。
+    pub fn from_manifest(manifest: &PluginManifest) -> Self {
+        Self {
+            commands: manifest.contributes.commands.len(),
+            panels: manifest.contributes.panels.len(),
+            settings: manifest.contributes.settings.len(),
+            drivers: manifest.contributes.drivers.len(),
+        }
+    }
+
+    pub fn total(&self) -> usize {
+        self.commands + self.panels + self.settings + self.drivers
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.total() == 0
+    }
+}
+
 /// 贡献点类别（三张表各自命名空间，同名字符串互不冲突）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContributionKind {

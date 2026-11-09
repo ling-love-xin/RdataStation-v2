@@ -17,6 +17,7 @@ use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl
 use gpui_kit::component::empty::{
     Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
 };
+use gpui_kit::component::hover_card::HoverCard;
 use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::{ActiveTheme, IconName, IndexPath, Sizable, Size};
@@ -24,13 +25,16 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Duration;
 
 use crate::view::LeftPanel;
 
 use analytics_resource::resource_view::ResourcesPanel;
 use database::nav_view::NavView;
+use plugin::ContributionCounts;
 use plugin::PluginInfo;
 use plugin::PluginKind;
 use plugin::wasm::PluginState;
@@ -352,6 +356,8 @@ struct PluginListDelegate {
     plugins: Rc<RefCell<Vec<PluginInfo>>>,
     /// 面板当前进行中的操作（`Some` 即忙：行内启停 / 卸载 / 重试一并置灰）
     progress: Rc<RefCell<Option<String>>>,
+    /// 每个插件的贡献点计数（刷新时随清单一起更新；行上显示「贡献 N」）
+    contributions: Rc<RefCell<HashMap<String, ContributionCounts>>>,
     /// PluginPanel 实体引用（用于调用 set_plugin_enabled）
     entity: Entity<PluginPanel>,
     /// 行数缓存（渲染期同步）
@@ -362,11 +368,13 @@ impl PluginListDelegate {
     fn new(
         plugins: Rc<RefCell<Vec<PluginInfo>>>,
         progress: Rc<RefCell<Option<String>>>,
+        contributions: Rc<RefCell<HashMap<String, ContributionCounts>>>,
         entity: Entity<PluginPanel>,
     ) -> Self {
         Self {
             plugins,
             progress,
+            contributions,
             entity,
             len: 0,
         }
@@ -396,6 +404,7 @@ impl ListDelegate for PluginListDelegate {
         let id = p.id.clone();
         let name = p.name.clone();
         let version = p.version.clone();
+        let counts = self.contributions.borrow().get(&id).copied();
         let active = p.state == PluginState::Active;
         let error = p.error.clone();
         let (state_text, state_color) = plugin_state_label(p.state);
@@ -405,6 +414,27 @@ impl ListDelegate for PluginListDelegate {
             "danger" => cx.theme().colors.danger,
             _ => cx.theme().colors.muted_foreground,
         };
+        // 行上只放总数，明细进悬停卡片：240px 面板塞不下「命令 2 · 面板 1 · 设置 1」。
+        // 驱动型插件同样有贡献（驱动不在注册表里，但仍算插件声明）。
+        let contribution_hint = counts.filter(|counts| !counts.is_empty()).map(|counts| {
+            let muted = cx.theme().colors.muted_foreground;
+            HoverCard::new(ElementId::Name(SharedString::from(format!(
+                "plugin-{id}-contributions"
+            ))))
+            .open_delay(Duration::from_millis(300))
+            .trigger(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(SharedString::from(format!("贡献 {}", counts.total()))),
+            )
+            .content(move |_, _, cx| {
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().colors.foreground)
+                    .child(SharedString::from(contribution_breakdown(counts)))
+            })
+        });
 
         // 启用/停用按钮（行尾）。清单都没解析出来的目录没有可激活的运行时：
         // 给「重试」而不是「启用」——修好清单或卸载冲突插件后，重试是唯一不重启的恢复入口。
@@ -515,12 +545,15 @@ impl ListDelegate for PluginListDelegate {
                         .gap_2()
                         .child(
                             div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_ellipsis()
                                 .text_xs()
                                 .text_color(cx.theme().colors.foreground)
                                 .child(SharedString::from(format!("{name}  v{version}"))),
                         )
                         .child(div().text_xs().text_color(state_color).child(state_text))
-                        .child(div().flex_1())
+                        .when_some(contribution_hint, |row, hint| row.child(hint))
                         .child(button),
                 )
                 .child(
@@ -599,6 +632,8 @@ pub struct PluginPanel {
     notice: Rc<RefCell<Option<String>>>,
     /// 安装进行中的提示（`Some` 即忙：按钮置灰、防重复触发；完成后清空）
     progress: Rc<RefCell<Option<String>>>,
+    /// 每个插件的贡献点计数（与 `plugins` 同一次刷新更新）
+    contributions: Rc<RefCell<HashMap<String, ContributionCounts>>>,
     /// 插件列表状态（懒创建）
     plugins_list: Rc<RefCell<Option<Entity<ListState<PluginListDelegate>>>>>,
 }
@@ -614,6 +649,7 @@ impl PluginPanel {
             error: Rc::new(RefCell::new(None)),
             notice: Rc::new(RefCell::new(None)),
             progress: Rc::new(RefCell::new(None)),
+            contributions: Rc::new(RefCell::new(HashMap::new())),
             plugins_list: Rc::new(RefCell::new(None)),
         };
         this.refresh_plugins(cx, true);
@@ -660,9 +696,14 @@ impl PluginPanel {
         self.refresh_again.set(false);
         let weak = cx.entity().downgrade();
         let _ = cx.spawn(async move |_this, cx| {
-            // list_plugins 是同步快照读取；放进后台线程避免任何潜在 I/O 阻塞 UI
+            // list_plugins 是同步快照读取；放进后台线程避免任何潜在 I/O 阻塞 UI。
+            // 贡献点计数是展示用的补充信息：注册表异常（理论上已被加载期冲突检查挡住）
+            // 不该让整个清单刷新失败，失败时按空计数处理。
             let outcome = plugin::get_plugin_manager()
-                .map(|mgr| mgr.list_plugins())
+                .map(|mgr| {
+                    let counts = mgr.contribution_counts().unwrap_or_default();
+                    mgr.list_plugins().map(|items| (items, counts))
+                })
                 .transpose();
             let _ = weak.update(cx, |this, cx| {
                 this.loading.set(false);
@@ -670,8 +711,9 @@ impl PluginPanel {
                     Ok(None) => {
                         this.error.replace(Some("插件运行时未初始化".to_string()));
                     }
-                    Ok(Some(items)) => {
+                    Ok(Some((items, counts))) => {
                         this.plugins.replace(items);
+                        this.contributions.replace(counts);
                         if clear_error {
                             this.error.replace(None);
                         }
@@ -976,6 +1018,24 @@ fn panel_busy(progress: &Rc<RefCell<Option<String>>>) -> bool {
     progress.borrow().is_some()
 }
 
+/// 贡献点明细（纯函数，便于单测）：只列非零类别，驱动也算贡献。
+fn contribution_breakdown(counts: ContributionCounts) -> String {
+    let mut parts = Vec::new();
+    if counts.commands > 0 {
+        parts.push(format!("命令 {}", counts.commands));
+    }
+    if counts.panels > 0 {
+        parts.push(format!("面板 {}", counts.panels));
+    }
+    if counts.settings > 0 {
+        parts.push(format!("设置 {}", counts.settings));
+    }
+    if counts.drivers > 0 {
+        parts.push(format!("驱动 {}", counts.drivers));
+    }
+    parts.join(" · ")
+}
+
 /// 插件行第二行文案（纯函数，便于单测）：无错误时只显示 id；
 /// 出错时把原因接在后面（`id · 原因：…`），面板行高固定 3rem，放不下第三行。
 fn plugin_row_subtitle(id: &str, error: Option<&str>) -> String {
@@ -1101,9 +1161,10 @@ impl Render for PluginPanel {
             let panel_entity = cx.entity();
             let plugins = Rc::clone(&self.plugins);
             let progress = Rc::clone(&self.progress);
+            let contributions = Rc::clone(&self.contributions);
             let list = cx.new(move |cx| {
                 ListState::new(
-                    PluginListDelegate::new(plugins, progress, panel_entity),
+                    PluginListDelegate::new(plugins, progress, contributions, panel_entity),
                     window,
                     cx,
                 )
@@ -1295,11 +1356,27 @@ impl ComponentPanel for PluginPanel {
 #[cfg(test)]
 mod tests {
     use super::{
-        event_touches_plugin_list, install_receipt, panel_busy, plugin_row_subtitle,
-        uninstall_confirm_description,
+        contribution_breakdown, event_touches_plugin_list, install_receipt, panel_busy,
+        plugin_row_subtitle, uninstall_confirm_description,
     };
     use plugin::events::PluginEvent;
     use plugin::wasm::PluginState;
+
+    /// 贡献点明细只列非零类别；驱动也算贡献（驱动不在注册表里，但仍是插件声明）。
+    #[test]
+    fn contribution_breakdown_lists_only_nonzero_kinds() {
+        let counts = plugin::ContributionCounts {
+            commands: 2,
+            panels: 0,
+            settings: 1,
+            drivers: 1,
+        };
+        assert_eq!(contribution_breakdown(counts), "命令 2 · 设置 1 · 驱动 1");
+        assert_eq!(
+            contribution_breakdown(plugin::ContributionCounts::default()),
+            ""
+        );
+    }
 
     /// 忙碌标记只看 progress 文本是否在：空 = 可操作，有文案 = 其它入口全部拒绝。
     /// 安装 / 重载 / 启停 / 卸载共用这一个标记，不能各自维护一套。

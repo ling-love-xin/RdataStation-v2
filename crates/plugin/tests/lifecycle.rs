@@ -369,6 +369,56 @@ title = "共享命令"
     assert!(row.error.is_none());
 }
 
+/// 按插件统计贡献点：命令 / 面板 / 设置来自注册表，驱动来自清单。
+///
+/// 宿主面板据此显示「贡献 N」；驱动型插件不能因为驱动不在注册表里就显示 0。
+#[tokio::test]
+async fn contribution_counts_cover_all_four_kinds_per_plugin() {
+    let dir = TempDir::new("contrib-counts");
+    let manager = PluginManager::new(dir.0.clone());
+    manager.init().await.unwrap();
+
+    let contributes = r#"
+[[contributes.commands]]
+id = "count.cmd.a"
+title = "命令 A"
+
+[[contributes.commands]]
+id = "count.cmd.b"
+title = "命令 B"
+
+[[contributes.panels]]
+id = "count.panel"
+title = "面板"
+location = "left"
+
+[[contributes.settings]]
+key = "count.setting"
+type = "boolean"
+default = false
+
+[[contributes.drivers]]
+id = "count.driver"
+display_name = "计数驱动"
+"#;
+    write_plugin_with_contributes(&dir.0, "com.example.counts", "v1", contributes);
+    manager
+        .load_plugin_from_dir(&dir.0.join("com.example.counts"))
+        .await
+        .unwrap();
+
+    let counts = manager.contribution_counts().unwrap();
+    assert_eq!(counts.len(), 1, "只应有加载成功的插件");
+    let counts = counts
+        .get("com.example.counts")
+        .expect("加载成功的插件必须有计数");
+    assert_eq!(counts.commands, 2);
+    assert_eq!(counts.panels, 1);
+    assert_eq!(counts.settings, 1);
+    assert_eq!(counts.drivers, 1);
+    assert_eq!(counts.total(), 5);
+}
+
 /// 注册表输出按插件 id 排序，不受加载顺序（`HashMap` 遍历顺序）影响。
 #[tokio::test]
 async fn contributions_are_sorted_by_plugin_id() {

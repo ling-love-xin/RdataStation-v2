@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use shared::error::{CommonError, CoreError, PluginError};
 
-use super::contributes::ContributionRegistry;
+use super::contributes::{ContributionCounts, ContributionRegistry};
 use super::manifest::{ManifestParser, PluginManifest};
 use crate::sidecar::factory::register_sidecar_drivers;
 use crate::sidecar::supervisor::SidecarSupervisor;
@@ -1264,6 +1264,43 @@ impl PluginManager {
             .collect();
         manifests.sort_by(|a, b| a.plugin.id.cmp(&b.plugin.id));
         ContributionRegistry::build(manifests)
+    }
+
+    /// 按插件统计贡献点数量（命令 / 面板 / 设置来自注册表，驱动来自清单）。
+    ///
+    /// 面板用它在行上显示「贡献 N」：此前注册表虽已建好，但宿主完全没消费，
+    /// 用户看不出一个插件到底声明了什么。加载失败的插件不在结果里（清单不可信）。
+    pub fn contribution_counts(&self) -> Result<HashMap<String, ContributionCounts>, CoreError> {
+        let registry = self.contributions()?;
+        let mut counts: HashMap<String, ContributionCounts> = HashMap::new();
+        for command in registry.commands() {
+            counts
+                .entry(command.plugin_id.clone())
+                .or_default()
+                .commands += 1;
+        }
+        for panel in registry.panels() {
+            counts.entry(panel.plugin_id.clone()).or_default().panels += 1;
+        }
+        for setting in registry.settings() {
+            counts
+                .entry(setting.plugin_id.clone())
+                .or_default()
+                .settings += 1;
+        }
+
+        let loaded = self
+            .loaded_plugins
+            .read()
+            .map_err(|_| lock_err("loaded_plugins"))?;
+        for plugin in loaded
+            .values()
+            .filter(|plugin| plugin.status.error_reason().is_none())
+        {
+            counts.entry(plugin.id.clone()).or_default().drivers +=
+                plugin.manifest.contributes.drivers.len();
+        }
+        Ok(counts)
     }
 
     /// 获取 WASM 管理器引用（仅 `wasm` feature 下存在；宿主接入 wasm 渲染轨用）

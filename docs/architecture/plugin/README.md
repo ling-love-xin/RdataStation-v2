@@ -183,17 +183,22 @@ disable / uninstall 全部改用 by-code 接口（此前按安装 uuid 更新，
 面板同一时间只允许一个安装 / 重载 / 启停 / 卸载 / 重试操作：进行中头部按钮与行内按钮
 一并置灰，方法入口也拒绝重入，避免安装中卸载同一 `plugins/<id>`、连点启停交错；
 安装回执四种文案（保持停用 / 激活失败 / 已安装并启用 / 兜底）；
-变更提示 + 「重载 N」按钮消费 `pending_reloads`。`cargo test -p rds-plugin` **224** 单测 + **80** 集成全绿
-（`lifecycle` 15 条）；`cargo test -p rds-store --lib` **162 passed / 2 ignored**。
+变更提示 + 「重载 N」按钮消费 `pending_reloads`；
+插件行首显示「贡献 N」（命令 / 面板 / 设置来自注册表，驱动来自清单），悬停展开
+`命令 2 · 面板 1 · 驱动 1` 明细——注册表第一次被宿主真实消费，用户能看出插件声明了什么。
+`cargo test -p rds-plugin` **224** 单测 + **81** 集成全绿
+（`lifecycle` 16 条）；`cargo test -p rds-workbench --lib panels::left_tabs::tests` **6 passed**；
+`cargo test -p rds-store --lib` **162 passed / 2 ignored**。
 
 **P3（wasm host function 面）未开始**（当前 wasm 插件拿不到任何宿主能力，与「默认拒绝」一致）；
 **P4 插件面板与安装链已落地（2026-10-16）**——列表 / 状态徽标 / 空态 / 安装包 / 从目录 / 刷新 /
 重载 N / 启停 / 卸载，安装链含依赖对账与加载期完整性复核；**贡献点注册表模型已落地**
 （`contributes::ContributionRegistry`：三张表合并、跨插件 id 冲突在**第二个插件加载期**即拒绝
 并以错误行留在列表、清单期 id / 面板位置 / 设置类型校验，`PluginManager::contributions()`
-按插件 id 稳定排序查询；失败行可经 `retry_load_plugin` 重试恢复）；**宿主接线仅完成
-面板生命周期事件刷新**（列表随热插拔 / 安装 / 卸载 / 启停自动重拉），其余未开始
-（`CommandRegistry` 接 Quick Open、`PanelRegistry` 接左右 Dock、设置外部登记项、
+按插件 id 稳定排序查询；失败行可经 `retry_load_plugin` 重试恢复）；**宿主接线已完成
+面板生命周期事件刷新**（列表随热插拔 / 安装 / 卸载 / 启停自动重拉）**与贡献点计数展示**
+（`PluginManager::contribution_counts()` 消费注册表 + 清单驱动，面板行「贡献 N」+ 悬停明细），
+其余未开始（`CommandRegistry` 接 Quick Open、`PanelRegistry` 接左右 Dock、设置外部登记项、
 `project_resources` 对账、插件图标 resolver）；**P5（分发与签名）未开始**。
 
 HTTP 旧路径（`client.rs` + 旧 `manager.rs`）已删除，`rds-plugin` 不再依赖 `reqwest`。
