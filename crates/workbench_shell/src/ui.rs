@@ -81,8 +81,6 @@ pub const TITLE_SLOT_PADDING_X: f32 = 0.875;
 pub const QUICK_OPEN_ENTRY_WIDTH: f32 = 20.0;
 /// Quick Open 入口高度（1.75rem ≈ 28px，随标题栏调高）
 pub const QUICK_OPEN_ENTRY_HEIGHT: f32 = 1.75;
-/// Quick Open 入口水平内边距（0.625rem = 10px）
-pub const QUICK_OPEN_ENTRY_PADDING_X: f32 = 0.625;
 /// Quick Open 弹层宽度（35rem = 560px）
 pub const QUICK_OPEN_PANEL_WIDTH: f32 = 35.0;
 /// Quick Open 弹层距窗口顶部距离（2.625rem ≈ 42px）
@@ -424,6 +422,9 @@ pub const PROPERTY_STATUS_DOT_SIZE: f32 = 0.625;
 pub const PROPERTY_CARD_MIN_WIDTH: f32 = 4.5;
 /// 关键信息 label 列宽（5.5rem = 88px；值与 label 各占半栏对齐）
 pub const PROPERTY_KEY_LABEL_WIDTH: f32 = 5.5;
+/// General 横排网格 label 列宽（8rem = 128px；Form::horizontal label 左/值右，
+/// 对齐 DBeaver 属性面板 General 布局）
+pub const PROPERTY_GENERAL_LABEL_WIDTH: f32 = 8.0;
 /// 子项类别左栏宽（10.5rem = 168px；类别 rail 定宽，右侧内容列吃剩余）
 pub const PROPERTY_CAT_RAIL_WIDTH: f32 = 10.5;
 /// 子项类别行高（1.75rem = 28px；行内含计数徽标，比普通行高一档）

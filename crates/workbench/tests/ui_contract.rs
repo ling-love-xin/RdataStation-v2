@@ -220,8 +220,24 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../src/panels/metadata_search.rs"),
         ),
         (
-            "panels/property_panel.rs",
-            include_str!("../src/panels/property_panel.rs"),
+            "panels/property_panel/mod.rs",
+            include_str!("../src/panels/property_panel/mod.rs"),
+        ),
+        (
+            "panels/property_panel/render.rs",
+            include_str!("../src/panels/property_panel/render.rs"),
+        ),
+        (
+            "panels/property_panel/sections.rs",
+            include_str!("../src/panels/property_panel/sections.rs"),
+        ),
+        (
+            "panels/property_panel/data_page.rs",
+            include_str!("../src/panels/property_panel/data_page.rs"),
+        ),
+        (
+            "panels/property_panel/cells.rs",
+            include_str!("../src/panels/property_panel/cells.rs"),
         ),
         (
             "panels/search_results.rs",
@@ -706,8 +722,24 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../src/panels/metadata_search.rs"),
         ),
         (
-            "panels/property_panel.rs",
-            include_str!("../src/panels/property_panel.rs"),
+            "panels/property_panel/mod.rs",
+            include_str!("../src/panels/property_panel/mod.rs"),
+        ),
+        (
+            "panels/property_panel/render.rs",
+            include_str!("../src/panels/property_panel/render.rs"),
+        ),
+        (
+            "panels/property_panel/sections.rs",
+            include_str!("../src/panels/property_panel/sections.rs"),
+        ),
+        (
+            "panels/property_panel/data_page.rs",
+            include_str!("../src/panels/property_panel/data_page.rs"),
+        ),
+        (
+            "panels/property_panel/cells.rs",
+            include_str!("../src/panels/property_panel/cells.rs"),
         ),
         (
             "panels/search_results.rs",
