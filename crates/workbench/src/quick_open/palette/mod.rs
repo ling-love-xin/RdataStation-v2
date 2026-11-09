@@ -11,36 +11,37 @@
 //! 状态归属：
 //! - `Shared::quick_open` = 开关（全应用一份：标题栏、设置页互斥、命令都读它）；
 //! - 本实体 = 输入 / 结果 / 选中锚点 / 防抖与回填任务 / 元数据命中缓存。
+//!
+//! 子模块（同一类型跨文件拆 `impl` 块，字段只在本文件声明）：
+//! - [`query`]：输入 → 查询（`refresh` 权威重算点）；
+//! - [`search`]：元数据搜索的防抖发送 / 批次守卫 / 回填泵；
+//! - [`files`]：草稿箱文件源（清单请求与快照）；
+//! - [`selection`]：业务键选中 / ↑↓ 漫游 / 宿主 → 列表镜像；
+//! - [`render`]：实体懒装配与整块渲染。
 
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::Duration;
 
-use gpui_kit::TestSupportExt as _;
-use gpui_kit::base::StyledExt as _;
-use gpui_kit::component::input::{Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
-use gpui_kit::component::list::{List, ListState};
-use gpui_kit::component::{ActiveTheme, IndexPath};
+use gpui_kit::component::input::InputState;
+use gpui_kit::component::list::ListState;
 use gpui_kit::*;
 
-use crate::commands::QuickOpenLocate;
 use crate::panels::Shared;
 use crate::quick_open::delegate::QuickOpenDelegate;
 use crate::quick_open::model::{self, Action};
-use crate::ui;
+
+mod files;
+mod query;
+mod render;
+mod search;
+mod selection;
+
+use files::FilesSnapshot;
 
 /// 宿主动作端口：执行一条结果（副作用语义在宿主一侧）。
 pub(crate) trait QuickOpenHost: 'static {
     /// `keep_open` = Shift+↵ / Ctrl+点击（保留面板）。
     fn execute(&self, action: Action, keep_open: bool, window: &mut Window, cx: &mut App);
-}
-
-/// 文件源快照（键 = 项目根：切项目后旧快照不匹配，不会显示别的项目的文件）。
-struct FilesSnapshot {
-    root: PathBuf,
-    files: Vec<model::FileObject>,
-    /// 后台因 [上限](scratchpad::jobs::FLAT_FILE_LIMIT) 截断过（行上要说「没全列」）。
-    truncated: bool,
 }
 
 /// Quick Open 浮层。
@@ -130,17 +131,8 @@ impl QuickOpenPalette {
     }
 
     /// 关闭（Esc / 点遮罩 / 执行完）：只改共享开关，宿主与状态栏读同一份。
-    fn close(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn close(&mut self, cx: &mut Context<Self>) {
         self.shared.quick_open.set(false);
-        cx.notify();
-    }
-
-    /// 委托回传的选中变化（鼠标点击 / 组件漫游）。
-    pub(crate) fn set_selection(&mut self, key: Option<String>, cx: &mut Context<Self>) {
-        if self.selected_key == key {
-            return;
-        }
-        self.selected_key = key;
         cx.notify();
     }
 
@@ -192,7 +184,7 @@ impl QuickOpenPalette {
     ///
     /// 与 `confirm` 分开而不是把它塞进 `Row.action`：同一行有两个动作（默认档 ↵ 属性 /
     /// ⌥↵ 定位；Goto 档 ↵ 定位 / ⌥↵ 属性），挤进一个字段执行侧就得猜“用户按的是哪个键”。
-    fn confirm_locate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn confirm_locate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.selected_key.clone() else {
             return;
         };
@@ -223,42 +215,12 @@ impl QuickOpenPalette {
         self.close(cx);
     }
 
-    /// 懒创建输入框与结果列表（首帧渲染；两者都需要 `&mut Window`）。
-    fn ensure_entities(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.input.is_none() {
-            let input = cx.new(|cx| {
-                InputState::new(window, cx).placeholder("搜索对象、命令…（> 命令 · # 全文）")
-            });
-            self._input_sub = Some(cx.subscribe_in(
-                &input,
-                window,
-                |this, _, event: &InputEvent, window, cx| match event {
-                    InputEvent::Change => this.refresh(window, cx),
-                    InputEvent::PressEnter { shift, .. } => {
-                        // ↵ 打开并关闭；Shift+↵ 保留面板（Ctrl+↵ 的后台打开待编辑器支持）。
-                        let keep_open = *shift;
-                        this.confirm(keep_open, window, cx);
-                    }
-                    _ => {}
-                },
-            ));
-            self.input = Some(input);
-        }
-        if self.list.is_none() {
-            let palette = cx.entity().downgrade();
-            let list = cx.new(|cx| {
-                ListState::new(QuickOpenDelegate::new(palette), window, cx).selectable(true)
-            });
-            self.list = Some(list);
-        }
-    }
-
     /// 上一帧遗留的打开待办（清输入 → 刷新 → 聚焦）。
     ///
     /// 「打开」是**权威的刷新边沿**，不等输入框的 `Change`：
     /// 空输入也要出默认分组（连接 / 文件 / 命令）——否则打开后结果区是空的，
     /// 看起来像「搜不到」；而且文件清单的请求就挂在这一跳上。
-    fn consume_pending_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn consume_pending_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut opened = false;
         if self.pending_open {
             self.pending_open = false;
@@ -280,299 +242,6 @@ impl QuickOpenPalette {
                 let handle = input.read(cx).focus_handle(cx);
                 handle.focus(window, cx);
             }
-        }
-    }
-
-    /// 重算结果并推给列表（输入变化 / 打开 / 回填后调用）。
-    ///
-    /// 选中按**业务键**跟随：键还在就保留，否则落到第一行（异步回填不抢用户位置）。
-    fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(input), Some(list)) = (self.input.clone(), self.list.clone()) else {
-            return;
-        };
-        // 模式锁定：Goto 档只取文本作词，`>` / `#` 前缀不切档；默认档照常解析前缀。
-        let raw = input.read(cx).value();
-        let query = match self.mode_override {
-            Some(mode) => model::Query {
-                mode,
-                needle: model::parse(&raw).needle,
-            },
-            None => model::parse(&raw),
-        };
-        let connections: Vec<(String, String)> = self
-            .shared
-            .connections
-            .borrow()
-            .iter()
-            .map(|c| (c.name.clone(), c.driver.clone()))
-            .collect();
-        let sources = model::Sources {
-            connections: &connections,
-            meta: &self.meta,
-            meta_searching: self.searching,
-            files: self.visible_files(),
-            files_note: self.files_note(),
-        };
-        // 占位文案随档位切换（Goto 只描述可跳转对象类别；默认档提示前缀命令）。
-        let placeholder = match query.mode {
-            model::Mode::Goto => "跳转到对象（表 · 视图 · 例程 · 序列 · 触发器）",
-            _ => "搜索对象、命令…（> 命令 · # 全文）",
-        };
-        input.update(cx, |state, cx| {
-            state.set_placeholder(placeholder, window, cx)
-        });
-        let groups = model::build_groups(&query, &sources);
-        let selected = self
-            .selected_key
-            .clone()
-            .filter(|key| {
-                groups
-                    .iter()
-                    .any(|group| group.rows.iter().any(|row| &row.key == key))
-            })
-            .or_else(|| {
-                groups
-                    .iter()
-                    .flat_map(|group| group.rows.iter())
-                    .map(|row| row.key.clone())
-                    .next()
-            });
-        self.selected_key = selected.clone();
-        list.update(cx, |state, cx| {
-            state.delegate_mut().set_groups(
-                groups,
-                query.needle.clone(),
-                query.mode,
-                selected.clone(),
-                cx,
-            );
-            let target = selected
-                .as_deref()
-                .and_then(|key| state.delegate().index_of(key));
-            mirror_selection(state, target, window, cx);
-        });
-        // 元数据：词变了才防抖发一次
-        self.schedule_search(&query, cx);
-        // 文件：只在打开后拿一次（不跟词走）
-        self.schedule_file_list(cx);
-        cx.notify();
-    }
-
-    /// 当前项目根对应的文件清单（切项目 / 未打开项目时为空）。
-    fn visible_files(&self) -> &[model::FileObject] {
-        let Some(root) = self.shared.project_root() else {
-            return &[];
-        };
-        self.files
-            .as_ref()
-            .filter(|snapshot| snapshot.root == root)
-            .map(|snapshot| snapshot.files.as_slice())
-            .unwrap_or(&[])
-    }
-
-    /// 文件组的组头补充（清单被后台截断时要说清「没全列」）。
-    fn files_note(&self) -> String {
-        let Some(root) = self.shared.project_root() else {
-            return String::new();
-        };
-        match self.files.as_ref().filter(|snapshot| snapshot.root == root) {
-            Some(snapshot) if snapshot.truncated => format!(
-                "文件较多，只列前 {} 个（继续输入缩小范围）",
-                scratchpad::jobs::FLAT_FILE_LIMIT
-            ),
-            _ => String::new(),
-        }
-    }
-
-    /// 给后台排一次**扁平文件清单**（每次打开一次；结果由泵回填）。
-    ///
-    /// 与元数据搜索的关键差别：文件源**不分档、不跟词走**（过滤是本地的事），
-    /// 所以不需要防抖，也不需要随输入重发——只在“打开”这个边沿拿一次。
-    fn schedule_file_list(&mut self, _cx: &mut Context<Self>) {
-        let Some(root) = self.shared.project_root() else {
-            // 未打开项目：草稿箱是项目级能力（不留上一个项目的行）。
-            self.files = None;
-            self.files_requested_for = None;
-            return;
-        };
-        if self.files_pending || self.files_requested_for.as_deref() == Some(root.as_path()) {
-            return;
-        }
-        self.files_requested_for = Some(root.clone());
-        self.files_pending = true;
-        scratchpad::jobs::enqueue_flatten_files(&root);
-    }
-
-    /// 给后台排一次跨连接索引搜索（防抖 150ms；**单字符不发**）。
-    fn schedule_search(&mut self, query: &model::Query, cx: &mut Context<Self>) {
-        if !query.async_ready() {
-            return;
-        }
-        if self.sent_query.as_deref() == Some(query.needle.as_str()) {
-            return;
-        }
-        let targets: Vec<database::nav_jobs::SearchTarget> = self
-            .shared
-            .connections
-            .borrow()
-            .iter()
-            .map(|c| database::nav_jobs::SearchTarget {
-                conn_id: c.id.clone(),
-                label: c.name.clone(),
-                driver: c.driver.clone(),
-            })
-            .collect();
-        let project_root = self
-            .shared
-            .project_root()
-            .map(|p| p.to_string_lossy().to_string());
-        let needle = query.needle.clone();
-        // 档位：`#` 走内容档（FTS，注释 / 数据类型），其余走名称档。
-        // 名称档**只查前缀段**：引擎按 `mode` 单段查询（`StartsWith` 不再做「前缀优先 + 中缀兜底」），
-        // 依据 `store::persistence::metadata_cache::search_index` 的分支。
-        let kind = match query.mode {
-            model::Mode::FullText => database::nav_jobs::SearchKind::FullText,
-            _ => database::nav_jobs::SearchKind::Name,
-        };
-        self.sent_query = Some(needle.clone());
-        self.searching = true;
-        let executor = cx.background_executor().clone();
-        let weak = cx.entity().downgrade();
-        // 序号守卫：每次发送自增 `seq`，回填时序号与词都要对上（任一对不上即丢弃）。
-        // 注意**同词不会重发**：上面 `sent_query` 只比词，所以换档（`#` ↔ 无前缀）或连接目标变化
-        // 都不会触发重搜——这是已知语义缺口（见 `quick-open-implementation-audit.md` D1），
-        // 不是「防抖窗口内的重排会重发」的旧行为。
-        let seq = self.search_seq + 1;
-        self.search_seq += 1;
-        // 防抖：句柄被下一枚替换即取消（`Task` drop = 取消）
-        let task = cx.spawn(async move |_this, cx| {
-            executor
-                .timer(Duration::from_millis(ui::QUICK_OPEN_SEARCH_DEBOUNCE_MS))
-                .await;
-            let _ = weak.update(cx, |_this, _cx| {
-                database::nav_jobs::enqueue_search(
-                    database::nav_jobs::SearchConsumer::QuickOpen,
-                    seq,
-                    kind,
-                    &needle,
-                    // 快速打开（Quick Open）：无 `.*` / `Aa` 开关，走默认关。
-                    false,
-                    false,
-                    // D11：无匹配模式 / 注释 / 定义开关，走默认前缀、不搜语料。
-                    database::nav_jobs::NameMatchMode::StartsWith,
-                    false,
-                    false,
-                    project_root.as_deref(),
-                    targets,
-                );
-            });
-        });
-        self.debounce = Some(task);
-    }
-
-    /// 启动结果回填泵（构造时一次；关闭期间降频空转，视图销毁即退出）。
-    fn ensure_pump(&mut self, cx: &mut Context<Self>) {
-        if self.pump.is_some() {
-            return;
-        }
-        let weak = cx.entity().downgrade();
-        let executor = cx.background_executor().clone();
-        let task = cx.spawn(async move |_this, cx| {
-            loop {
-                match weak.update(cx, |this, _| this.shared.quick_open.get()) {
-                    Ok(open) => {
-                        // 开着时勤取（元数据正在回填），关着时降频空转
-                        let wait = if open { 60 } else { 400 };
-                        executor.timer(Duration::from_millis(wait)).await;
-                        if open {
-                            let _ = weak.update(cx, |this, cx| this.pump_results(cx));
-                        }
-                    }
-                    // 视图已销毁：退出任务（否则会永远空转）
-                    Err(_) => return,
-                }
-            }
-        });
-        self.pump = Some(task);
-    }
-
-    /// 取走元数据搜索结果 + 文件清单（过期批次丢弃；不碰 UI，只置脏标记）。
-    ///
-    /// `pub(crate)`：定位的窗口级测试直接调它（键位与泵的定时器各自已有覆盖），
-    /// 免得测一个业务逻辑还要跟 60ms 的轮询时钟赛跑。
-    pub(crate) fn pump_results(&mut self, cx: &mut Context<Self>) {
-        let results =
-            database::nav_jobs::drain_search_results(database::nav_jobs::SearchConsumer::QuickOpen);
-        let lists = scratchpad::jobs::drain_file_lists();
-        if results.is_empty() && lists.is_empty() {
-            return;
-        }
-        let current = self
-            .input
-            .as_ref()
-            .map(|input| model::parse(&input.read(cx).value()).needle)
-            .unwrap_or_default();
-        let mut changed = false;
-        for result in results {
-            // 过期批次：序号不是最新（同词重排后重发）或词已被改（收尾交给当前词）。
-            if result.seq != self.search_seq || result.query != current {
-                continue;
-            }
-            self.searching = false;
-            self.meta = result.hits.iter().filter_map(model::meta_object).collect();
-            changed = true;
-        }
-        for payload in lists {
-            self.files_pending = false;
-            // 无论收不收（可能是上一个项目的在途结果），都要重算一次：
-            // 收下的换掉旧清单，丢掉的会触发下一次 refresh 去取当前项目的。
-            changed = true;
-            if self.files_requested_for.as_deref() != Some(payload.project_root.as_path()) {
-                continue;
-            }
-            match payload.files {
-                Some(files) => {
-                    self.files = Some(FilesSnapshot {
-                        root: payload.project_root,
-                        files: files.iter().map(model::file_object).collect(),
-                        truncated: payload.truncated,
-                    });
-                }
-                // 读盘失败（原因已记日志）：保留上一份，清掉请求标记以便下次重试。
-                None => self.files_requested_for = None,
-            }
-        }
-        if changed {
-            self.rows_dirty = true;
-            cx.notify();
-        }
-    }
-
-    /// ↑↓：在结果上漫游（焦点在输入框，键盘由本视图接住）。
-    fn move_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(list) = self.list.clone() else {
-            return;
-        };
-        let mut moved: Option<String> = None;
-        list.update(cx, |state, cx| {
-            let from = state
-                .selected_index()
-                .or_else(|| state.delegate().first_index());
-            let Some(from) = from else {
-                return;
-            };
-            let Some(target) = state.delegate().step_index(from, delta) else {
-                return;
-            };
-            state.delegate_mut().begin_host_sync();
-            state.set_selected_index(Some(target), window, cx);
-            state.delegate_mut().end_host_sync();
-            moved = state.delegate().selected_key();
-            state.scroll_to_selected_item(window, cx);
-        });
-        if let Some(key) = moved {
-            self.selected_key = Some(key);
-            cx.notify();
         }
     }
 
@@ -625,151 +294,5 @@ impl QuickOpenPalette {
     #[cfg(test)]
     pub(crate) fn sent_query(&self) -> Option<String> {
         self.sent_query.clone()
-    }
-}
-
-/// 把宿主的选中镜像进列表（只在真的不一致时才动）。
-///
-/// 镜像期间组件回调**不回写**本视图（`begin_host_sync` / `end_host_sync` 守卫）：
-/// 镜像常发生在渲染期，回写就是「更新正在被更新的实体」。
-fn mirror_selection(
-    state: &mut ListState<QuickOpenDelegate>,
-    target: Option<IndexPath>,
-    window: &mut Window,
-    cx: &mut Context<ListState<QuickOpenDelegate>>,
-) {
-    if state.selected_index() == target {
-        return;
-    }
-    state.delegate_mut().begin_host_sync();
-    state.set_selected_index(target, window, cx);
-    state.delegate_mut().end_host_sync();
-    state.scroll_to_selected_item(window, cx);
-}
-
-impl Render for QuickOpenPalette {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.shared.quick_open.get() {
-            return div().into_any_element();
-        }
-        self.ensure_entities(window, cx);
-        self.consume_pending_open(window, cx);
-
-        let theme = cx.theme().clone();
-        let input = self.input.clone().expect("input lazy init");
-        let list = self.list.clone().expect("list lazy init");
-        // 与 `refresh` 同一口径：Goto 档锁定模式，前缀不切档。
-        let raw = input.read(cx).value();
-        let query = match self.mode_override {
-            Some(mode) => model::Query {
-                mode,
-                needle: model::parse(&raw).needle,
-            },
-            None => model::parse(&raw),
-        };
-        let rows = list.read(cx).delegate().row_count();
-        // 词长达不到本档门槛：本地源照常，这里给还差几个字的提示。
-        let hint_right = if !query.needle.is_empty() && !query.async_ready() {
-            let short = query.min_len().saturating_sub(query.needle.chars().count());
-            format!("再输入 {short} 个字符开始搜索元数据")
-        } else if self.searching {
-            "元数据搜索中…".to_string()
-        } else {
-            format!("{rows} 条")
-        };
-        let mode_chip = match query.mode {
-            model::Mode::Command => Some((">", "命令")),
-            model::Mode::FullText => Some(("#", "元数据全文")),
-            model::Mode::Goto => Some(("⌖", "跳转")),
-            model::Mode::Default => None,
-        };
-
-        let mut input_row = div().h_flex().items_center().gap_2();
-        input_row = input_row.child(div().flex_1().min_w_0().child(Input::new(&input)));
-        if let Some((glyph, label)) = mode_chip {
-            input_row = input_row.child(
-                div()
-                    .h_flex()
-                    .flex_none()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .rounded_sm()
-                    .bg(theme.colors.secondary)
-                    .text_xs()
-                    .text_color(theme.colors.foreground)
-                    .child(glyph)
-                    .child(label),
-            );
-        }
-
-        div()
-            .absolute()
-            .inset_0()
-            .flex()
-            .justify_center()
-            // 遮罩与前景是**兄弟**：点遮罩空白才关闭；点在面板上 `mouse_down` 不再冒泡到
-            // 遮罩层（兄弟不冒泡），否则按下即把面板关掉，随后的 `click` 确认就失效了。
-            .child(
-                div()
-                    .id("qo-overlay")
-                    .test_support()
-                    .absolute()
-                    .inset_0()
-                    .bg(theme.colors.overlay)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| this.close(cx)),
-                    ),
-            )
-            .child(
-                div()
-                    // 示意 v5：面板水平居中、顶部距标题栏 42px。
-                    // 命中面板矩形内时遮挡后方遮罩 hitbox：否则遮罩 `on_mouse_down`
-                    // 会把面板关掉、随后的行 `click` 落空（鼠标确认失效，Enter 不受影响）。
-                    .relative()
-                    .occlude()
-                    .mt(rems(ui::QUICK_OPEN_PANEL_TOP))
-                    .w(rems(ui::QUICK_OPEN_PANEL_WIDTH))
-                    .max_h(rems(ui::QUICK_OPEN_PANEL_MAX_HEIGHT))
-                    .v_flex()
-                    .gap_2()
-                    .p_3()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(theme.colors.border)
-                    .bg(theme.colors.popover)
-                    .shadow_lg()
-                    .child(input_row)
-                    .child(List::new(&list).max_h(rems(ui::QUICK_OPEN_LIST_MAX_HEIGHT)))
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .h(rems(ui::QUICK_OPEN_HINT_HEIGHT))
-                            .border_t_1()
-                            .border_color(theme.colors.border)
-                            .px_1()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child("↑↓ 选择 · ↵ 打开 · Shift+↵ 保留面板 · Esc 关闭")
-                            .child(div().ml_auto().child(hint_right)),
-                    ),
-            )
-            // 键盘：焦点在输入框里，单行 Input 不处理 ↑↓ / Esc（会 propagate），
-            // 因此这三个 Action 在浮层根上接住；Enter 由输入框事件给出（含 Shift 三态）。
-            .on_action(
-                cx.listener(|this, _: &MoveUp, window, cx| this.move_selection(-1, window, cx)),
-            )
-            .on_action(
-                cx.listener(|this, _: &MoveDown, window, cx| this.move_selection(1, window, cx)),
-            )
-            .on_action(cx.listener(|this, _: &Escape, _window, cx| this.close(cx)))
-            .on_action(
-                cx.listener(|this, _: &QuickOpenLocate, window, cx| {
-                    this.confirm_locate(window, cx)
-                }),
-            )
-            .into_any_element()
     }
 }
