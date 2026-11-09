@@ -437,18 +437,23 @@ VSCode 语义：**前缀只认输入的第一个字符**，切换「搜索域」
 
 ## 19. 实现位置映射表（设计决策 → 代码 / 文档）
 
-| 设计决策 | 落点 |
+> **2026-11-10 回写**（重构 S0–S5 后）：映射表改为「符号 → 文件」，不再写行号
+> （行号随重构漂移，见 `quick-open-structure-redesign.md` §7.4）。
+> 纯逻辑（解析 / 评分 / 分组 / 命令目录）在 `crates/editor/src/quick_open/`；
+> 浮层与宿主在 `crates/workbench/src/quick_open/`（palette / delegate / host 三目录）。
+
+| 设计决策 | 落点（符号 → 文件） |
 | --- | --- |
-| 入口（标题栏居中、点击唤起） | `crates/workbench/src/view.rs` → `render_title_bar` |
-| 面板几何（35rem / 顶 42px / 最大 420px） | `crates/workbench/src/view.rs` → `render_quick_open`；常量 `crates/workbench_shell/src/ui.rs` |
-| 模式与前缀（`>` / `#` / `@`） | `crates/workbench/src/view.rs` → `quick_open_results`（现）/ 目标模块 `quick_open/` |
-| 结果区组件化（List + ListDelegate） | 目标：`crates/workbench/src/quick_open/`（新模块） |
-| Action（Up / Down / Confirm / Close） | `crates/workbench/src/commands.rs` + app 层绑定（`crates/app/src/main.rs`） |
-| `Ctrl+P` 开关 | `crates/app/src/main.rs`（`ToggleQuickOpen`）+ `crates/workbench/src/view.rs`（`on_action`） |
-| **元数据名称档**（跨连接索引搜索） | `crates/database/src/nav_jobs.rs`（`enqueue_search` / `drain_search_results`）+ `crates/database/src/cache.rs`（`search_index`）+ 目标消费者分流 |
-| **元数据全文档**（FTS5） | `crates/engine/src/persistence/metadata_cache.rs`（`rebuild_fts_schema` 写侧，**已接线** / `search_fts` / `FtsSearchResult`）+ 跨连接执行同名称档 |
-| 元数据命中动作（属性面板） | `crates/database/src/nav_view.rs`（`nav_search_hit_property` 已有对象 → `PropertyRef` 的映射，可复用） |
-| 草稿箱文件源 | `crates/scratchpad/`（现有树 / 搜索通道；扁平清单待定 Q5） |
-| 连接源 | `Shared::connections`（`crates/workbench/src/panels/shared.rs`） |
-| 组头 / 命中底色 token | `crates/workbench_shell/src/product_tokens.rs`（`quick_open.group.header` / `search.match.background`） |
+| 入口（标题栏居中、点击唤起） | `render_quick_open_entry` → `workbench/src/quick_open/host.rs` |
+| 面板几何（35rem / 顶 42px / 列表高） | `QuickOpenPalette::render` → `workbench/src/quick_open/palette/render.rs`；常量 `QUICK_OPEN_*` → `workbench_shell/src/ui.rs` |
+| 模式与前缀（`>` / `#`；Goto 键位档） | `parse` / `Mode` → `editor/src/quick_open/model/types.rs`；chip 切档 `toggle_mode` → `palette/query.rs` |
+| 档位 chip（常驻可点击） | `toggle_mode` → `palette/query.rs`；渲染 → `palette/render.rs`；徽章 `badge` → `delegate/row.rs` |
+| 结果区组件化（List + ListDelegate） | `QuickOpenDelegate` → `workbench/src/quick_open/delegate/{mod,row,chrome}.rs` |
+| 键位（↑↓ / ↵ / Esc / ⌥↵ / Ctrl+P / Ctrl+Shift+O） | app 层绑定 → `crates/app/src/main.rs`；浮层接线 → `palette/render.rs`；三态开关 `toggle_intent` → `quick_open/host.rs` |
+| **元数据名称档 / 全文档**（跨连接搜索） | `enqueue_search` / `drain_search_results` / `SearchResult` → `database/src/nav_jobs/{worker,hits}.rs`；引擎侧 `search_index` / `search_fts` → `store/src/persistence/metadata_cache.rs`；防抖与批次键 `SearchKey` → `palette/search.rs` |
+| 元数据命中动作（属性面板 / 回树定位） | `execute_quick_open_action` → `quick_open/host.rs`；双动作 `confirm_locate` → `palette/mod.rs` |
+| 草稿箱文件源 | 扁平清单 `enqueue_flatten_files` → `scratchpad::jobs`；快照与请求 → `palette/files.rs` |
+| 连接源 | `Shared::connections` → `workbench/src/panels/shared.rs` |
+| 组头 / 命中底色 token | `quick_open.group.header` / `search.match.background` → `workbench_shell/src/product_tokens.rs` |
+| 空态组件 | `render_empty` → `delegate/chrome.rs`（`empty::Empty`） |
 | 布局总览与入口承诺 | `docs/architecture/layout/layout-design.md` §2.1 / §3.3 |

@@ -250,14 +250,47 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../src/panels/overview.rs"),
         ),
         // Quick Open（Phase 0：结果区换成 List 组件；后续改动不得回退）
-        // 2026-11-09 S0 拆目录：单文件 → palette/mod.rs + delegate/mod.rs
+        // 2026-11-09 重构 S0–S5：单文件 → 目录（palette / delegate / host）。
+        // 登记按目录**逐文件**列出（include_str 漏一个就静默放过那个文件的裸值）。
         (
             "quick_open/delegate/mod.rs",
             include_str!("../src/quick_open/delegate/mod.rs"),
         ),
         (
+            "quick_open/delegate/chrome.rs",
+            include_str!("../src/quick_open/delegate/chrome.rs"),
+        ),
+        (
+            "quick_open/delegate/row.rs",
+            include_str!("../src/quick_open/delegate/row.rs"),
+        ),
+        (
+            "quick_open/host.rs",
+            include_str!("../src/quick_open/host.rs"),
+        ),
+        (
             "quick_open/palette/mod.rs",
             include_str!("../src/quick_open/palette/mod.rs"),
+        ),
+        (
+            "quick_open/palette/files.rs",
+            include_str!("../src/quick_open/palette/files.rs"),
+        ),
+        (
+            "quick_open/palette/query.rs",
+            include_str!("../src/quick_open/palette/query.rs"),
+        ),
+        (
+            "quick_open/palette/render.rs",
+            include_str!("../src/quick_open/palette/render.rs"),
+        ),
+        (
+            "quick_open/palette/search.rs",
+            include_str!("../src/quick_open/palette/search.rs"),
+        ),
+        (
+            "quick_open/palette/selection.rs",
+            include_str!("../src/quick_open/palette/selection.rs"),
         ),
         // 连接对话框模块（M3，#14 已清零；后续改动不得回退）
         // connection_dialog 2026-10-15 下沉为独立 crate：扫描路径指向新位置
@@ -757,8 +790,40 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../src/quick_open/delegate/mod.rs"),
         ),
         (
+            "quick_open/delegate/chrome.rs",
+            include_str!("../src/quick_open/delegate/chrome.rs"),
+        ),
+        (
+            "quick_open/delegate/row.rs",
+            include_str!("../src/quick_open/delegate/row.rs"),
+        ),
+        (
+            "quick_open/host.rs",
+            include_str!("../src/quick_open/host.rs"),
+        ),
+        (
             "quick_open/palette/mod.rs",
             include_str!("../src/quick_open/palette/mod.rs"),
+        ),
+        (
+            "quick_open/palette/files.rs",
+            include_str!("../src/quick_open/palette/files.rs"),
+        ),
+        (
+            "quick_open/palette/query.rs",
+            include_str!("../src/quick_open/palette/query.rs"),
+        ),
+        (
+            "quick_open/palette/render.rs",
+            include_str!("../src/quick_open/palette/render.rs"),
+        ),
+        (
+            "quick_open/palette/search.rs",
+            include_str!("../src/quick_open/palette/search.rs"),
+        ),
+        (
+            "quick_open/palette/selection.rs",
+            include_str!("../src/quick_open/palette/selection.rs"),
         ),
         // connection_dialog 2026-10-15 下沉为独立 crate：扫描路径指向新位置
         // （`crates/connection_dialog/src/components/connection_dialog/`）。
@@ -1304,6 +1369,47 @@ fn highlight_token_names_resolve_in_the_theme_asset() {
             THEME.matches(&needle).count(),
             2,
             "`{name}` 应在明暗两套主题的 `highlight.syntax` 里各声明一次"
+        );
+    }
+}
+
+/// Quick Open 结构预算门禁（重构 S5，见 quick-open-structure-redesign.md §8）：
+/// 生产文件 ≤ 300 行、测试文件 ≤ 400 行。
+///
+/// 防止单文件再长回 700 行——新增文件先想清楚职责；超预算时拆文件而不是调阈值。
+#[test]
+fn quick_open_files_stay_within_size_budget() {
+    let production: &[(&str, &str)] = &[
+        ("mod.rs", include_str!("../src/quick_open/mod.rs")),
+        ("host.rs", include_str!("../src/quick_open/host.rs")),
+        ("delegate/mod.rs", include_str!("../src/quick_open/delegate/mod.rs")),
+        ("delegate/chrome.rs", include_str!("../src/quick_open/delegate/chrome.rs")),
+        ("delegate/row.rs", include_str!("../src/quick_open/delegate/row.rs")),
+        ("palette/mod.rs", include_str!("../src/quick_open/palette/mod.rs")),
+        ("palette/files.rs", include_str!("../src/quick_open/palette/files.rs")),
+        ("palette/query.rs", include_str!("../src/quick_open/palette/query.rs")),
+        ("palette/render.rs", include_str!("../src/quick_open/palette/render.rs")),
+        ("palette/search.rs", include_str!("../src/quick_open/palette/search.rs")),
+        ("palette/selection.rs", include_str!("../src/quick_open/palette/selection.rs")),
+    ];
+    for (name, src) in production {
+        let lines = src.lines().count();
+        assert!(
+            lines <= 300,
+            "quick_open/{name} 有 {lines} 行，超生产预算 300——按职责拆文件"
+        );
+    }
+    let tests: &[(&str, &str)] = &[
+        ("tests/mod.rs", include_str!("../src/quick_open/tests/mod.rs")),
+        ("tests/palette.rs", include_str!("../src/quick_open/tests/palette.rs")),
+        ("tests/goto.rs", include_str!("../src/quick_open/tests/goto.rs")),
+        ("tests/host.rs", include_str!("../src/quick_open/tests/host.rs")),
+    ];
+    for (name, src) in tests {
+        let lines = src.lines().count();
+        assert!(
+            lines <= 400,
+            "quick_open/{name} 有 {lines} 行，超测试预算 400——按档位拆用例文件"
         );
     }
 }

@@ -5,6 +5,22 @@
 > `workbench_shell/src/ui.rs` 的未提交 diff 只动了属性面板常量，不影响本文引用的 Quick Open 常量）。
 > 撰写日：2026-11-09。
 
+## 落地记录（2026-11-10 更新）
+
+本审计的整理建议已按批落地（每批一 commit，`37597ac2..` 起）：
+
+| 项 | 状态 | 落点 |
+| --- | --- | --- |
+| D1 同词换档不重搜（P1） | ✅ 已修 | `palette/search.rs` `SearchKey{fulltext, needle, targets}`；回归用例 `same_word_mode_change_researches` |
+| D5 searching 卡死 | ✅ 已修 | `schedule_search` 提前 return 复位；用例 `searching_resets_when_word_drops_below_threshold` |
+| **新发现**：默认档被 `mode_override=Some(Default)` 锁死，`>` / `#` 前缀切档整体失效（审计时未抓到，由 D1 回归用例暴露） | ✅ 已修 | `on_opened` 改为仅 Goto 锁档 |
+| D2 名称档口径 | ✅ 已拍板 | **认下「前缀」为产品口径**（2026-11-09），文档与注释已回写；加「包含」档留待用户反馈驱动 |
+| D6 组头文案 / D9 注释债 / D14① 空态 / D8① 入口宽度 | ✅ 已修 | 批次①（commit 37597ac2） |
+| D11 异档入口只关不换 | ✅ 已修 | `toggle_intent` 三态纯函数 + 单测 → `quick_open/host.rs` |
+| 档位发现性（A5） | ✅ 已修 | chip 常驻可点击（默认档也显示 `#` / `>` 入口）→ `palette/{query,render}.rs`；徽章统一 `delegate::badge` |
+| D3 / D4 / D10 / D13 / D15 | ⏳ 未动 | 见 §10 批次 ⑤⑦⑧⑨，另行排期 |
+| S0–S5 结构重构 | ✅ 已执行 | 见 `quick-open-structure-redesign.md`；行数门禁已上（生产 ≤300 / 测试 ≤400）→ `ui_contract.rs` |
+
 ## 0. 为什么要这份文档
 
 已有的三份文档主体形成于 2026-09-19（`quick-open-prototype-design.md` / `quick-open-dev-plan.md` /

@@ -2,6 +2,14 @@
 
 > 本文只做**结构设计**，不含行为改动；行为缺陷与文档差异见
 > `quick-open-implementation-audit.md`。基线 `main` @ `6868db72`。
+>
+> **✅ 2026-11-10：S0–S5 已全部执行**（commits `9f6d856b`..`39078efd`，批 6/7 的行为
+> 修复与交互改造叠加在拆分后的结构上）。目标结构落地情况与 §2 的差异：
+> - `palette/` 六文件 + `delegate/` 三文件 + `host.rs` 与设计一致；
+> - 测试目录多一个 `palette/testing.rs`（测试访问器从 `palette/mod.rs` 拆出，
+>   保持 mod.rs ≤300 行预算）；
+> - 行数门禁（§8 建议项）已上：`ui_contract.rs::quick_open_files_stay_within_size_budget`
+>   （生产 ≤300 / 测试 ≤400），并做过反向验证（植入 `px(7.)` 确认变红）。
 
 ## 0. 结论
 

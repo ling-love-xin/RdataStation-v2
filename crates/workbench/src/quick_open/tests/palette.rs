@@ -396,9 +396,5 @@ fn mode_chip_clicks_switch_and_exit_modes(cx: &mut TestAppContext) {
         (palette.query_text(cx), palette.sent_fulltext())
     });
     assert_eq!(query, "abc", "退出档位应保留原词");
-    assert_eq!(
-        fulltext,
-        Some(false),
-        "退出后键变（档位回名称），应重发名称批次"
-    );
+    assert_eq!(fulltext, Some(false), "退出后键变，应重发名称批次");
 }
