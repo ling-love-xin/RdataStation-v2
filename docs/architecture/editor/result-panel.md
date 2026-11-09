@@ -2173,9 +2173,11 @@ DBeaver 的分组面板动作由 `GroupingAction` 扩展点驱动，配置来自
 
 - `grid/stats.rs::group_by_tuples(rows: &[Vec<String>])`：元组键分组内核，保留首现顺序
 - `grid/text.rs::group_by_columns_for(&[usize])`：0 列 = 空；1 列直接走 `group_by_for`
-  （保留内存档原生数值键归一化，`"1"` 与 `"1.0"` 不会被拆成两组）；多列统一字符串口径
-  ——跨列混排时按原生长度归一化没有意义，DBeaver 的多列分组键也是按各列显示文本拼的，
-  代价是多列下 `2.0` 与 `2` 会分成两组（已登记）
+  （保留内存档原生数值键归一化，`"1"` 与 `"1.0"` 不会被拆成两组）；多列**逐列各自取键**
+  ——能走事实档原生数值的列用归一化键，其余列用显示文本。**订正**：本段原写「DBeaver 的
+  多列分组键也是按各列显示文本拼的，代价是多列下 `2.0` 与 `2` 会分成两组」属未实证推断，
+  DBeaver 实际把分组下推成 SQL `GROUP BY`（按列值比较），见 §8.48.1；本仓的多列口径已于
+  §8.48 改为逐列归一化
 - `panel/tabs.rs::arrange_groups`：先过滤再排序；`CountDesc` 同数按值序兜底，保证同一份
   数据每次渲染顺序一致（否则 UI 会随统计重算跳动）
 
@@ -2537,6 +2539,68 @@ straddle 5px 命中带宽）、光标 `cursor_col_resize`、`ResizeHandleState{I
 - 默认名不取列名（偏离 2），如需对齐 DBeaver 需先定列名清洗规则。
 - 「写回结果集」（`SaveValueAction` + 自动应用值）本仓不支持，属结构性缺口。
 - 320px 窄栏下三按钮（标记 / 复制 / 保存）是否挤，真窗口目视待做。
+
+### 8.48 R3 第二步：多列分组下数值列键归一化（订正 §8.42.2 的错误推断）
+
+#### 8.48.1 DBeaver 侧事实（逐行核对，同时订正 §8.42.2）
+
+- 分组面板只管动作与配置：`GroupingPanel.java:164-176 fillToolBar` 依次挂排序、仅重复、
+  编辑列、删除列、清空分组，再追加扩展点动作（`:178-184`）。
+- **真正执行分组在 `GroupingResultsContainer.rebuildGrouping()`（`:211-272`）**：取分组列属性
+  （`:235 getGroupAttributes`，元素是 `SQLGroupingAttribute`）、构造
+  `SQLGroupingQueryGenerator`（`:237-245`，参数含方言 / 语法管理器 / 分组属性 / 聚合函数 /
+  是否仅重复）、`dataContainer.setGroupingQuery(…)`（`:246`）交给内部第二个
+  `ResultSetViewer` 执行（`:271 setDataFilter`）。
+- `SQLGroupingQueryGenerator.generateGroupingQuery`（`org.jkiss.dbeaver.model.sql`，`:80`）
+  拼 `"\nGROUP BY "`（`:166`），逐列 `groupAttributes.get(i).prepareSqlString(subqueryAlias)`
+  （`:167-172`）；仅重复走 `HAVING COUNT(...) > 1`（`:174-179`）；默认排序按聚合别名下推
+  （`GroupingResultsContainer.java:250-265`）。
+- **结论**：DBeaver 的分组键就是**数据库侧的列值**，前端不参与键构造。§8.42.2 原写
+  「DBeaver 的多列分组键也是按各列显示文本拼的」属未实证推断，本轮订正——数据库里
+  `DOUBLE 2.0` 与 `2` 是同一个值，根本不存在拆组。
+
+#### 8.48.2 本仓落法（对齐列值口径）
+
+- **缺陷**：多列分组此前一律走 `column_values`（显示矩阵文本），数值列 `2.0` 与 `2` 拆成两组；
+  单列早已通过 `number_group_key` 归一化，两条路径口径不一致。
+- **改动**：把单列的原生键循环抽成私有 `column_group_keys(column) -> Option<Vec<String>>`；
+  `group_by_for` 变为 `match self.column_group_keys(column)`（`Some` 走 `group_by_values(&keys)`，
+  `None` 走 `column_values`），`group_by_columns_for` 多列分支逐列
+  `self.column_group_keys(*column).unwrap_or_else(|| self.column_values(*column))`。
+  其余（各列取最小长度、按行号拼元组、交给 `stats::group_by_tuples`）不变。
+
+| 回退条件（返回 `None` → 该列用显示文本） | 理由 |
+| --- | --- |
+| 非 `FactKind::Int \| Float` 列 | 无原生数值可比；文本列本就按字符串等值 |
+| 无事实档 / 表档 batches 已释放 | 取不到原生值（与 `column_stats_for` 同源） |
+| 存在被删行 | 矩阵行与事实帧行号不再一一对应 |
+| 该列出现 NULL 或取不到原生值 | 避免原生键与文本键混排，整列统一口径 |
+
+- **行覆盖口径（本轮自查修掉的 bug）**：原生键必须与 `column_values` 一样**跳过本地行**
+  （`let Some(data_ix) = self.data_row(view_ix) else { continue; }`）。初版用 `?` 整列返回
+  `None`，会让原生键列与文本列行数不同 → 多列元组按行号错位。doc 注释已写明该约束：
+  后续若改 `column_values` 的跳过规则，必须同步改 `column_group_keys`。
+
+#### 8.48.3 落点
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/grid/text.rs` | `group_by_for` 改走 `column_group_keys`；新增私有 `column_group_keys`（含回退条件与行覆盖口径注释）；`group_by_columns_for` 多列分支逐列取原生键、两处 doc 注释重写 |
+| `crates/result_panel/src/grid/tests.rs` | 新增 `group_by_columns_normalizes_numeric_keys_beside_text_columns` |
+
+#### 8.48.4 验证
+
+- `cargo check -p rds-result-panel` 通过（0 error / 0 warning）。
+- `cargo test -p rds-result-panel --lib` = **258 passed / 0 failed**（257 + 1）。
+- `cargo test -p rds-ui-guard`（不带 `--lib`）= **4 passed**。
+- 新测钉住两条：Float64 `[2.0, 2.0, 3.0]` + 文本列，矩阵首列写 `"2"` / `"2.0"` / `"3"`
+  → 多列分组得 `[("2","a")×2, ("3","b")×1]`；同一份矩阵**无事实档**仍得 3 组（老口径对照）。
+
+#### 8.48.5 仍未做 / 口径边界
+
+- 表档（batches 已释放）、含被删行、含 NULL 的数值列，在多列分组下仍按显示文本 → 仍可能
+  把 `2` 与 `2.0` 拆组。这是本仓「拿不到原生值」的边界（DBeaver 无此问题：分组下推到数据库）。
+- 分组页其余三件未动：分组列集合跨会话持久化、每组展开看行、分组列顺序可拖拽。
 
 ## 8. 协作纪律
 

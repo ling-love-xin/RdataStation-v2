@@ -205,45 +205,54 @@ impl ResultGridDelegate {
     /// `"1"` 与 `"1.0"` 被字符串等值拆成两组）；文本 / 二进制 / 其他族、表档（batches 已
     /// 释放）、无事实档回退显示矩阵的字符串等值口径。
     pub fn group_by_for(&self, column: usize) -> Vec<(String, usize)> {
-        // 被删行存在时原生键分支同样回退矩阵口径（与 [`Self::column_stats_for`] 同理由）。
+        match self.column_group_keys(column) {
+            // 原生键可用：直接按归一化键计数（不碰矩阵文本）
+            Some(keys) => group_by_values(&keys),
+            None => group_by_values(&self.column_values(column)),
+        }
+    }
+
+    /// 【B5 / R3】某列的原生数值分组键：`Some` = 该列可走事实档原生口径（整数统一写成
+    /// 整数字面量，`"1"` 与 `"1.0"` 不拆组）；`None` = 回退矩阵文本口径。
+    ///
+    /// 回退条件与 [`Self::column_stats_for`] 同源：非 Int / Float 列、无事实档（表档 batches
+    /// 已释放）、存在被删行（矩阵与事实帧行号不再一一对应）、该列出现 NULL 或取不到原生值
+    /// （避免原生键与文本键混排）。
+    ///
+    /// 行覆盖口径必须与 [`Self::column_values`] 一致（跳过本地行 / 被删行），否则多列分组时
+    /// 原生键列与文本列长度不同、元组会按行号错位。
+    fn column_group_keys(&self, column: usize) -> Option<Vec<String>> {
         let has_deleted = self
             .local
             .as_ref()
             .is_some_and(|set| set.deleted_count() > 0);
-        if !has_deleted {
-            if let Some(frame) = self.fact.as_ref() {
-                if let Ok(FactKind::Int | FactKind::Float) = frame.column_kind(column) {
-                    let mut keys: Vec<String> = Vec::with_capacity(self.view_len());
-                    let mut native = true;
-                    for view_ix in 0..self.view_len() {
-                        let Some(data_ix) = self.data_row(view_ix) else {
-                            continue;
-                        };
-                        match frame.column_number(data_ix, column) {
-                            Some(number) => keys.push(number_group_key(number)),
-                            // NULL / 取不到原生数值：整列回退矩阵，避免原生键与文本键混排。
-                            None => {
-                                native = false;
-                                break;
-                            }
-                        }
-                    }
-                    if native {
-                        return group_by_values(&keys);
-                    }
-                }
-            }
+        if has_deleted {
+            return None;
         }
-        group_by_values(&self.column_values(column))
+        let frame = self.fact.as_ref()?;
+        if !matches!(frame.column_kind(column), Ok(FactKind::Int | FactKind::Float)) {
+            return None;
+        }
+        let mut keys: Vec<String> = Vec::with_capacity(self.view_len());
+        for view_ix in 0..self.view_len() {
+            // 本地行没有底层数据行：与 `column_values` 同口径跳过
+            let Some(data_ix) = self.data_row(view_ix) else {
+                continue;
+            };
+            keys.push(number_group_key(frame.column_number(data_ix, column)?));
+        }
+        Some(keys)
     }
 
-    /// 【R3】分组页：按一组列分组（每列先取整列可见行值，再按行号拼元组）。
+    /// 【R3】分组页：按一组列分组（每列先取整列可见行键，再按行号拼元组）。
     ///
     /// - 0 列 = 空（UI 侧用当前选中列兜底）
     /// - 1 列：直接走 [`Self::group_by_for`]，保留内存档原生数值键归一化（`"1"` 与 `"1.0"`
     ///   不会被拆成两组）
-    /// - 多列：统一字符串口径。跨列混排时按原生长度归一化没有意义，DBeaver 的多列分组键
-    ///   也是按各列显示文本拼的；代价是数值列在多列组合下 `2.0` / `2` 会分成两组
+    /// - 多列：**逐列**各自取键——能走事实档原生数值（内存档 Int / Float 且无被删行 / 无 NULL）
+    ///   的列用归一化键（`2.0` 与 `2` 同组），其余列用显示文本；拼元组后交给
+    ///   [`crate::grid::stats::group_by_tuples`]。DBeaver 多列分组同样按「列值」比较，
+    ///   数值列不会因为显示文本不同而拆组
     pub fn group_by_columns_for(&self, columns: &[usize]) -> Vec<(Vec<String>, usize)> {
         match columns {
             [] => Vec::new(),
@@ -255,7 +264,10 @@ impl ResultGridDelegate {
             _ => {
                 let per_col: Vec<Vec<String>> = columns
                     .iter()
-                    .map(|column| self.column_values(*column))
+                    .map(|column| {
+                        self.column_group_keys(*column)
+                            .unwrap_or_else(|| self.column_values(*column))
+                    })
                     .collect();
                 // 各列长度同源（都按 `view_len` 取），取最小值防御越界
                 let rows_count = per_col.iter().map(|values| values.len()).min().unwrap_or(0);

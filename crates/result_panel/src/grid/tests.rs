@@ -2709,6 +2709,58 @@ fn group_by_fact_normalizes_integer_keys() {
     );
 }
 
+/// 【R3 多列归一化】多列分组里数值列同样按原生值取键：`2.0` 与 `2` 不会被拆成两组，
+/// 与单列 [`ResultGridDelegate::group_by_for`] 同口径；文本列仍按显示文本。
+#[test]
+fn group_by_columns_normalizes_numeric_keys_beside_text_columns() {
+    let fact = fact_frame(
+        &["price", "name"],
+        vec![
+            Arc::new(Float64Array::from(vec![
+                Some(2.0),
+                Some(2.0),
+                Some(3.0),
+            ])),
+            Arc::new(StringArray::from(vec![Some("a"), Some("a"), Some("b")])),
+        ],
+    );
+    let mut grid = ResultGridDelegate::empty("尚未执行");
+    grid.set_data(
+        vec!["price".to_string(), "name".to_string()],
+        vec![
+            vec!["2".to_string(), "a".to_string()],
+            // 同一数值的另一种显示文本：纯文本口径下会被拆成两组
+            vec!["2.0".to_string(), "a".to_string()],
+            vec!["3".to_string(), "b".to_string()],
+        ],
+    );
+    grid.set_fact(Some(fact));
+    assert_eq!(
+        grid.group_by_columns_for(&[0, 1]),
+        vec![
+            (vec!["2".to_string(), "a".to_string()], 2),
+            (vec!["3".to_string(), "b".to_string()], 1),
+        ],
+        "数值列按原生值归一化，文本列按显示文本"
+    );
+
+    // 对照：同一份矩阵没有事实档时按文本等值分组，`2` / `2.0` 各自成组（老口径）
+    let mut plain = ResultGridDelegate::empty("尚未执行");
+    plain.set_data(
+        vec!["price".to_string(), "name".to_string()],
+        vec![
+            vec!["2".to_string(), "a".to_string()],
+            vec!["2.0".to_string(), "a".to_string()],
+            vec!["3".to_string(), "b".to_string()],
+        ],
+    );
+    assert_eq!(
+        plain.group_by_columns_for(&[0, 1]).len(),
+        3,
+        "无事实档无法归一化：2 与 2.0 各自成组"
+    );
+}
+
 /// 【B5】内存档数值列排序走原生数值比较（回归保护：事实档存在时排序仍正确）。
 #[test]
 fn sort_fact_orders_native_numeric() {

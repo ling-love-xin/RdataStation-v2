@@ -41,7 +41,7 @@
 
 ```powershell
 $env:RUST_MIN_STACK='268435456'; cd D:\RdataStation\RDS\RdataStation-v2
-cargo test -p rds-result-panel --lib    # 基线：257 passed / 0 failed（含 rendered_ui_elements_survive 防回退）
+cargo test -p rds-result-panel --lib    # 基线：258 passed / 0 failed（含 rendered_ui_elements_survive 防回退）
 cargo test -p rds-settings --lib        # 基线：35 passed / 0 failed
 cargo test -p rds-ui-guard              # 基线：4 passed / 0 failed（含 no_new_hardcoded_color_or_pixel）
 cargo test -p rds-workbench-shell --lib # 基线：14 passed / 0 failed
@@ -802,6 +802,29 @@ R3 / R4 / R5。
 
 **仍未做**：external editor、列名当默认名、「写回结果集」通道、320px 窄栏三按钮拥挤度目视。
 
+### 2.38 R3 第二步：多列分组下数值列键归一化
+
+多列分组里数值列 `2.0` 与 `2` 被拆成两组，本轮改为逐列取原生归一化键。全文见
+`result-panel.md §8.48`，接手要点：
+
+- **订正**：`§8.42.2` 原写「DBeaver 多列分组键按各列显示文本拼」是未实证推断。DBeaver 的
+  分组是**下推 SQL**：`GroupingResultsContainer.rebuildGrouping()`（`:211-272`）→
+  `SQLGroupingQueryGenerator.generateGroupingQuery`（`SQLGroupingQueryGenerator.java:80`）拼
+  `GROUP BY`（`:166`）逐列 `prepareSqlString`（`:167-172`），仅重复走 `HAVING COUNT(...) > 1`
+  （`:174-179`），再交内部第二个 `ResultSetViewer` 执行。键 = 数据库列值，前端不参与。
+- **落点**：`grid/text.rs` 抽私有 `column_group_keys(column) -> Option<Vec<String>>`，
+  `group_by_for` 与 `group_by_columns_for` 多列分支共用；`None` 时回退 `column_values`。
+- **回退条件**（四个）：非 Int/Float 列 / 无事实档（表档已 release）/ 存在被删行 /
+  该列出现 NULL 或取不到原生值。
+- **行覆盖口径（易错）**：原生键必须与 `column_values` 一样跳过本地行，否则原生键列与文本列
+  长度不同 → 多列元组按行号错位。初版用 `?` 整列返回 `None` 已经踩到，已改为 `continue`。
+  **后续若改 `column_values` 的跳过规则，必须同步改 `column_group_keys`**。
+- **边界**：表档 / 有删行 / 含 NULL 的数值列在多列分组下仍按显示文本，仍可能拆组（本仓拿不到
+  原生值的边界，DBeaver 无此问题）。
+
+**验证**：`cargo check -p rds-result-panel` 0 error / 0 warning；panel **258 passed**
+（257 + 1：`group_by_columns_normalizes_numeric_keys_beside_text_columns`）/ guard **4**。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）
@@ -818,7 +841,7 @@ R3 / R4 / R5。
 
 ## 4. 接手指引（新会话建议顺序）
 
-1. 先重跑 §1.3 四条验证命令，确认基线（尤其 **257 passed / 0 failed**）落地。
+1. 先重跑 §1.3 四条验证命令，确认基线（尤其 **258 passed / 0 failed**）落地。
 2. 处理 §2.1 提交待办：先 `git status` / `git diff` 摘本线 hunk，与并行线协调后统一提交类型样式渲染消费（settings 三文件 + grid.rs + host.rs + workbench view.rs）。
 3. 知悉 §2.2 外线阻塞（settings 契约测试）与 §1.3 契约测试既有失败，不替并行线补。
 4. 按 §2.4 优先级推进功能遗留（P0（注释与文档漂移）/ P1（分页·行号跳转·列宽落盘）/ P2（hex 翻页·图片预览·列浏览器多选）已交付；剩余见 §2.4 表，开工前先按模块惯例说理解、列方案）。
@@ -829,7 +852,7 @@ R3 / R4 / R5。
 - `panel/`：`mod.rs`（门面 + pub 面 re-export：`GridPayload` / `ExportCtx` / `ResultSyncInput` / `ResultPanel` / `AnalysisItem`）；`render.rs` 主 `render` 组装；`sidebars.rs` `render_vertical_bar`（左缘竖条：网格/文本/记录/上一行/下一行）/ `render_right_edge_bar`（右缘竖条，页签图标区）/ `render_right_sidebar`（横 tab 只显激活页签）/ `render_browser_tab` / `render_filter_expand_bar`（展开条：左=展开右=运行无边框）+ `sidebar_width_anim` / `next_right_edge_state` / `clamp_right_sidebar_width` / `clamp_right_sidebar_height` 纯函数 + **R5** `SidebarResizeDrag` / `render_right_sidebar_resize`（`resize_handle` 独立手柄，id `editor-result-right-sidebar-resize`，横排 Horizontal / 竖排 Vertical）；`tabs.rs` `render_value_tab`（值页工具条右段 = 位置标记 + 复制 + **保存值** `editor-result-value-save`）/ `render_stats_tab` / `render_group_tab` / `render_reference_tab`（backlog 空态）/ `render_exec_sql_tab` + **保存值** `value_payload(kind, value, row, col)`（纯函数，形态→字节+默认名）/ `ResultPanel::selected_value_payload` + `kv_row` / `fmt_stat` / `right_tab_from_index` + `panel_toolbar`（28px 页内工具条公用件）；`dialog.rs` `render_sql_dialog`（SQL 预览弹窗浮层）；`events.rs` `toggle_value_sidebar`（三态）/ `resize_right_sidebar`（拖拽改宽度 / 竖排改高度）/ **R5** `toggle_vertical_layout`（方向切换，清拖拽标记）/ `end_right_sidebar_resize` / `set_right_sidebar_width_px`/ `toggle_transpose` / `open_sql_dialog` / `close_sql_dialog`（事件路径，需 window）+ `reorder_by` 纯函数；`lifecycle.rs` `new` / `sync`（投影同步）；`tests.rs` 尾部 `rendered_ui_elements_survive`（渲染断言防回退，见 §2.10）。
 - `ui.rs`：`RESULT_VERTICAL_BAR_WIDTH`（2.25）/ `RESULT_SIDEBAR_RIGHT_WIDTH`（20.0）+ **R5** `RESULT_SIDEBAR_RIGHT_MIN_WIDTH`（12.0 = 192px）/ `RESULT_SIDEBAR_RIGHT_MAX_WIDTH`（40.0 = 640px，均 f32，避裸 `px(`）/ **R5 方向切换** `RESULT_SIDEBAR_RIGHT_HEIGHT`（15.0 = 240px）/ `RESULT_SIDEBAR_RIGHT_MIN_HEIGHT`（8.0 = 128px）/ `RESULT_SIDEBAR_RIGHT_MAX_HEIGHT`（32.0 = 512px）/ `RESULT_STATUS_BAR_HEIGHT`（1.5）/ `RESULT_TOOLBAR_HEIGHT`（**1.875 = 30px，比标签条 2.0 矮一档**，对齐 DBeaver `3+2+20+2+3`）/ `RESULT_PANEL_TOOLBAR_HEIGHT`（**1.75 = 28px，右栏页内工具条，必须等于 vendor `toolbar.rs:242-259` XSmall 档的 `min_h_7`**）/ `RESULT_TOOLBAR_PADDING`（`px(3.)`，水平内距，对齐 DBeaver `marginWidth = 3`）。
 - `ports.rs`：`ResultRequest` 全集（含 #7 / §2.9 新增变体 `RunFilterAsQuery` / `ToggleFilterExpand` / `OpenSqlDialog` / `CloseSqlDialog`；`ToggleSqlPreview` 已删）+ **§2.37** `SaveValue` 变体 / `ValuePayload { bytes, default_name }` + `ResultActionQueue`（`request` / `set_panel` / `push` / `drain`）。
-- `grid/`：`delegate.rs` `ResultGridDelegate`（TableDelegate 主体实现 + 钩子类型 + RESULT_GRID_CONTEXT 等常量）；`cell.rs` `render_td` / `header.rs` `render_th` / `menu.rs` `context_menu`（trait 方法不可分块 → 顶层自由函数 + `table_impl.rs` 薄转发）；`status.rs` `render_status_row`（三项新签名）/ `ResultToolbar` / `ResultStatus` / `ResultControls` / `ResultPane`；`text.rs` `format_cell_text` / `view_rows.rs` `text_presentation` 指纹缓存 / `stats.rs` 列统计 / `edit.rs` 行编辑 / `tests.rs`（全量测试迁入）。
+- `grid/`：`delegate.rs` `ResultGridDelegate`（TableDelegate 主体实现 + 钩子类型 + RESULT_GRID_CONTEXT 等常量）；`cell.rs` `render_td` / `header.rs` `render_th` / `menu.rs` `context_menu`（trait 方法不可分块 → 顶层自由函数 + `table_impl.rs` 薄转发）；`status.rs` `render_status_row`（三项新签名）/ `ResultToolbar` / `ResultStatus` / `ResultControls` / `ResultPane`；`text.rs` `format_cell_text` / `column_values`（按视图行序取列，跳过本地行与被删行）/ **§2.38** `column_group_keys`（原生数值分组键，回退口径必须与 `column_values` 一致）/ `group_by_for` / `group_by_columns_for`（多列逐列取原生键）/ `view_rows.rs` `text_presentation` 指纹缓存 / `stats.rs` 列统计 + `group_by_values` / `group_by_tuples` / `number_group_key` / `edit.rs` 行编辑 / `tests.rs`（全量测试迁入）。
 - `store/`：`store.rs` `ResultStore`（按文档分槽，多结果集 sets(document) + TabBar 标签；事实档 A2 未接线）+ `entry.rs` / `fact.rs`。
 - `export/`：`mod.rs` 门面 + `formats.rs` / `encode.rs` / `table_name.rs`（editor 侧 `pub use result_panel::export::*` 通配，全 pub 面保持）。
 
