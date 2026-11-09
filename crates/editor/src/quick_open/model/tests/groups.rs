@@ -1,127 +1,14 @@
-//! 本模块的单元用例。
+//! 分组装配：三源行映射 / 组头与截断 / 命令目录。
 
 use crate::model::EditorMode;
-use crate::quick_open::commands::command_rows;
-
-use super::*;
-use crate::quick_open::commands::command_specs;
+use crate::quick_open::commands::{command_rows, command_specs};
+use crate::quick_open::model::{
+    Action, MetaObject, RowKind, Sources, build_groups, filter_ranked, match_span, meta_object,
+    parse,
+};
 use property::PropertyKind;
 
-#[test]
-fn parse_reads_mode_from_first_char_only() {
-    assert_eq!(parse("order").mode, Mode::Default);
-    assert_eq!(parse("order").needle, "order");
-    assert_eq!(parse(">新建").mode, Mode::Command);
-    assert_eq!(parse(">新建").needle, "新建");
-    assert_eq!(parse("> 新建 查询 ").needle, "新建 查询");
-    assert_eq!(parse("#渠道").mode, Mode::FullText);
-    // 前缀不是首字符 → 当普通词
-    assert_eq!(parse("订单 > 明细").mode, Mode::Default);
-    assert_eq!(parse("   >撤销").mode, Mode::Command);
-    // 全角符号不当前缀（输入法误触发防护）
-    assert_eq!(parse("＞撤销").mode, Mode::Default);
-}
-
-#[test]
-fn async_ready_threshold_depends_on_mode() {
-    // 名称档（默认）：≥ 2 字（中文按字符计数，不按字节）
-    assert!(!parse("o").async_ready());
-    assert!(parse("or").async_ready());
-    assert!(parse("订单").async_ready());
-    // 内容档（`#`）：trigram 下 ≥ 3 字（2 字不足一个 trigram，必无命中）
-    assert!(!parse("#渠").async_ready());
-    assert!(!parse("#渠道").async_ready());
-    assert!(parse("#渠道与").async_ready());
-    // 命令档不发元数据搜索
-    assert!(!parse(">新建").async_ready());
-    assert!(!parse(">").async_ready());
-    // 门槛自描述（UI 用它算“还差几个字”）
-    assert_eq!(parse("o").min_len(), 2);
-    assert_eq!(parse("#渠").min_len(), 3);
-}
-
-#[test]
-fn match_span_reports_byte_range_and_tolerates_non_ascii_case() {
-    assert_eq!(match_span("order_items", "items"), Some((6, 11)));
-    assert_eq!(match_span("OrderItems", "order"), Some((0, 5)));
-    assert_eq!(match_span("订单明细", "明细"), Some((6, 12)));
-    assert_eq!(match_span("orders", ""), Some((0, 0)));
-    assert_eq!(match_span("orders", "zzz"), None);
-    // 非 ASCII 大小写折叠后长度变化 → 放弃定位
-    assert_eq!(match_span("İstanbul", "istanbul"), None);
-}
-
-#[test]
-fn rank_prefers_exact_then_prefix_then_word_start_then_substring() {
-    let ranked = |needle: &str| {
-        filter_ranked(
-            ["order_items", "pre_order", "order", "order_id"]
-                .iter()
-                .map(|t| Row {
-                    key: (*t).to_string(),
-                    kind: RowKind::Command,
-                    title: (*t).to_string(),
-                    match_text: (*t).to_string(),
-                    secondary: String::new(),
-                    snippet: None,
-                    why: None,
-                    locate: None,
-                    action: Action::OpenSettings,
-                    secondary_action: None,
-                })
-                .collect(),
-            needle,
-        )
-        .into_iter()
-        .map(|r| r.title)
-        .collect::<Vec<_>>()
-    };
-    assert_eq!(
-        ranked("order"),
-        vec!["order", "order_id", "order_items", "pre_order"]
-    );
-    // 词首档：`items` 只命中 order_items（下划线之后）
-    assert_eq!(ranked("items"), vec!["order_items"]);
-    // 空词 → 全部保留（排序退化为长度 + 字典序）
-    assert_eq!(ranked("").len(), 4);
-}
-
-fn conns() -> Vec<(String, String)> {
-    vec![
-        ("营销分析（生产）".to_string(), "postgres".to_string()),
-        ("分析库".to_string(), "duckdb".to_string()),
-    ]
-}
-
-/// 造一条索引命中（真实形状：`database::nav_jobs::SearchHit`）。
-fn hit(object_type: &str, name: &str, parent: Option<&str>) -> database::nav_jobs::SearchHit {
-    database::nav_jobs::SearchHit {
-        conn_id: "P_conn".to_string(),
-        conn_label: "营销分析（生产）".to_string(),
-        driver: "postgres".to_string(),
-        object_type: object_type.to_string(),
-        object_name: name.to_string(),
-        parent_name: parent.map(|p| p.to_string()),
-        catalog: Some("main".to_string()),
-        schema: Some("public".to_string()),
-        snippet: None,
-        hit_source: database::nav_jobs::HitSource::Name,
-    }
-}
-
-/// 造一份草稿箱文件（真实形状：`scratchpad::FlatFile` 经 `file_object` 映射）。
-fn draft(relative_path: &str) -> FileObject {
-    let (folder, name) = match relative_path.rsplit_once('/') {
-        Some((dir, name)) => (dir.to_string(), name.to_string()),
-        None => (String::new(), relative_path.to_string()),
-    };
-    file_object(&scratchpad::FlatFile {
-        relative_path: relative_path.to_string(),
-        folder,
-        name,
-        path: std::path::PathBuf::from("C:/proj/scratchpad").join(relative_path),
-    })
-}
+use super::{conns, draft, hit};
 
 #[test]
 fn build_groups_filters_and_drops_empty_groups() {
@@ -374,29 +261,6 @@ fn fulltext_rows_keep_content_hits_and_tag_the_reason() {
     assert_eq!(rows[0].rows[0].why, Some("名称"));
 }
 
-#[test]
-fn markup_segments_splits_highlight_marks() {
-    assert_eq!(
-        markup_segments("a<mark>渠道</mark>b"),
-        vec![
-            ("a".to_string(), false),
-            ("渠道".to_string(), true),
-            ("b".to_string(), false)
-        ]
-    );
-    assert_eq!(markup_segments("plain"), vec![("plain".to_string(), false)]);
-    assert_eq!(
-        markup_segments("<mark>x</mark>"),
-        vec![("x".to_string(), true)]
-    );
-    assert!(markup_segments("").is_empty());
-    // 不闭会的标记退化为普通文本（不 panic）
-    assert_eq!(
-        markup_segments("a<mark>b"),
-        vec![("a".to_string(), false), ("b".to_string(), false)]
-    );
-}
-
 /// 渲染上限：单组 ≤ 8 行、总计 ≤ 50 行；被截的条数落在 `hidden` 上（组尾显示）。
 #[test]
 fn groups_are_capped_and_report_what_was_hidden() {
@@ -489,103 +353,4 @@ fn command_ids_and_row_keys_are_stable_and_unique() {
             spec.id
         );
     }
-}
-
-/// Goto 档：只出元数据一组、列不上屏；主动作 = 回树定位，次级动作 = 属性面板。
-#[test]
-fn goto_mode_lists_only_metadata_and_drops_columns() {
-    let objects: Vec<MetaObject> = [
-        hit("table", "orders", None),
-        hit("column", "order_id", Some("orders")),
-        hit("view", "v_report", None),
-        hit("routine", "fn_x", None),
-    ]
-    .iter()
-    .filter_map(meta_object)
-    .collect();
-    let groups = build_groups(
-        &Query {
-            mode: Mode::Goto,
-            needle: String::new(),
-        },
-        &Sources {
-            meta: &objects,
-            ..Default::default()
-        },
-    );
-    assert_eq!(groups.len(), 1, "Goto 只出元数据一组");
-    assert_eq!(
-        groups[0].title,
-        "跳转到对象（表 · 视图 · 例程 · 序列 · 触发器 · 模式）"
-    );
-    assert!(
-        groups[0].rows.iter().all(|r| r.kind != RowKind::Column),
-        "列是从属细节，不进 Goto 档"
-    );
-    for row in &groups[0].rows {
-        match &row.action {
-            Action::RevealMetadata(_) => {}
-            other => panic!("Goto 主动作应是回树定位，实际 {other:?}"),
-        }
-        match &row.secondary_action {
-            Some(Action::ShowProperties(_)) => {}
-            other => panic!("Goto 次级应是属性面板，实际 {other:?}"),
-        }
-    }
-}
-
-/// Goto 排序：限定名 ignoreCase 字典序；折叠后并列按类别序兜底（表 → 视图 → 例程 → 序列）。
-#[test]
-fn goto_sort_ignorecase_dictionary_with_category_tiebreak() {
-    let objects: Vec<MetaObject> = [
-        hit("table", "zebra", None),
-        hit("view", "Apple", None),
-        hit("table", "apple", None),
-        hit("sequence", "seq_x", None),
-    ]
-    .iter()
-    .filter_map(meta_object)
-    .collect();
-    let groups = build_groups(
-        &Query {
-            mode: Mode::Goto,
-            needle: String::new(),
-        },
-        &Sources {
-            meta: &objects,
-            ..Default::default()
-        },
-    );
-    let titles: Vec<String> = groups[0].rows.iter().map(|r| r.title.clone()).collect();
-    assert_eq!(
-        titles,
-        vec![
-            "public.apple",
-            "public.Apple",
-            "public.seq_x",
-            "public.zebra"
-        ],
-        "折叠后 apple 与 Apple 并列，类别兜底表先于视图；其余按字典序"
-    );
-}
-
-/// Goto 档渲染上限 1000：超出条数记在组尾 `hidden`，不静默丢。
-#[test]
-fn goto_caps_at_one_thousand_and_reports_hidden() {
-    let objects: Vec<MetaObject> = (0..1001)
-        .map(|i| meta_object(&hit("table", &format!("t_{i:04}"), None)))
-        .flatten()
-        .collect();
-    let groups = build_groups(
-        &Query {
-            mode: Mode::Goto,
-            needle: String::new(),
-        },
-        &Sources {
-            meta: &objects,
-            ..Default::default()
-        },
-    );
-    assert_eq!(groups[0].rows.len(), 1000, "Goto 单组上限 1000 行");
-    assert_eq!(groups[0].hidden, 1, "被截的 1 条要记下来（组尾提示）");
 }
