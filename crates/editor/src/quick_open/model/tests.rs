@@ -257,7 +257,10 @@ fn meta_rows_come_first_and_carry_properties_request() {
         },
     );
     // 元数据排在连接 / 命令之前
-    assert_eq!(groups[0].title, "元数据（表 · 视图 · 列）");
+    assert_eq!(
+        groups[0].title,
+        "元数据（表 · 视图 · 列 · 例程 · 序列 · 触发器 · 模式）"
+    );
     assert_eq!(groups[0].rows.len(), 2, "`order` 只命中表与列两行");
     // 表行标题是 `schema.name`，列行是 `父表.列`
     assert!(groups[0].rows.iter().any(|r| r.title == "public.orders"));
@@ -345,7 +348,7 @@ fn fulltext_rows_keep_content_hits_and_tag_the_reason() {
             ..Default::default()
         },
     );
-    assert_eq!(rows[0].title, "元数据全文（注释 / 定义）");
+    assert_eq!(rows[0].title, "元数据全文（注释）");
     let row = &rows[0].rows[0];
     assert_eq!(row.title, "public.orders");
     assert!(
@@ -513,7 +516,7 @@ fn goto_mode_lists_only_metadata_and_drops_columns() {
     assert_eq!(groups.len(), 1, "Goto 只出元数据一组");
     assert_eq!(
         groups[0].title,
-        "跳转到对象（表 · 视图 · 例程 · 序列 · 触发器）"
+        "跳转到对象（表 · 视图 · 例程 · 序列 · 触发器 · 模式）"
     );
     assert!(
         groups[0].rows.iter().all(|r| r.kind != RowKind::Column),

@@ -22,5 +22,5 @@ pub use types::*;
 
 // `LIKE` 通配符转义与 FTS5 `MATCH` 词清洗**不在这里**：
 // - `LIKE` 的转义已在写侧（`engine::persistence::MetadataCacheOps::like_escape`，带单测）；
-// - FTS 的词清洗归 Phase 1 接线的 `search_fts`（现状是 `format!("{}*", q)` 裸拼，
-//   会被用户输入里的 `"` / `*` / `NEAR` 破坏语法）——修在它自己的 crate，避免两处各写一套。
+// - FTS 的词清洗已落在 `search_fts` 内部（走 `fts_match_query`：拆词逐词加引号、末词前缀，
+//   如 `"含渠道"*`；单测在同文件），本模块不重复实现，避免两处各写一套。

@@ -26,7 +26,7 @@ pub fn build_groups(q: &Query, sources: &Sources<'_>) -> Vec<Group> {
                 ""
             };
             non_empty(
-                "元数据全文（注释 / 定义）",
+                "元数据全文（注释）",
                 fulltext_rows(sources.meta, &q.needle),
                 note,
             )
@@ -40,7 +40,7 @@ pub fn build_groups(q: &Query, sources: &Sources<'_>) -> Vec<Group> {
                 ""
             };
             non_empty(
-                "跳转到对象（表 · 视图 · 例程 · 序列 · 触发器）",
+                "跳转到对象（表 · 视图 · 例程 · 序列 · 触发器 · 模式）",
                 goto_rows(sources.meta, &q.needle),
                 note,
             )
@@ -55,7 +55,7 @@ pub fn build_groups(q: &Query, sources: &Sources<'_>) -> Vec<Group> {
                 ""
             };
             groups.extend(non_empty(
-                "元数据（表 · 视图 · 列）",
+                "元数据（表 · 视图 · 列 · 例程 · 序列 · 触发器 · 模式）",
                 filter_ranked(meta_rows(sources.meta), &q.needle),
                 note,
             ));

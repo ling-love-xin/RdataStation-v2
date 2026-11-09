@@ -427,7 +427,9 @@ impl QuickOpenPalette {
             .project_root()
             .map(|p| p.to_string_lossy().to_string());
         let needle = query.needle.clone();
-        // 档位：`#` 走内容档（FTS，注释 / 数据类型），其余走名称档（中缀 LIKE）。
+        // 档位：`#` 走内容档（FTS，注释 / 数据类型），其余走名称档。
+        // 名称档**只查前缀段**：引擎按 `mode` 单段查询（`StartsWith` 不再做「前缀优先 + 中缀兜底」），
+        // 依据 `store::persistence::metadata_cache::search_index` 的分支。
         let kind = match query.mode {
             model::Mode::FullText => database::nav_jobs::SearchKind::FullText,
             _ => database::nav_jobs::SearchKind::Name,
@@ -436,8 +438,10 @@ impl QuickOpenPalette {
         self.searching = true;
         let executor = cx.background_executor().clone();
         let weak = cx.entity().downgrade();
-        // S1-① 序号守卫：防抖窗口内的重排（开关 / 连接目标变化）会重发同词，
-        // 回填时以序号为准，词判据兜底。
+        // 序号守卫：每次发送自增 `seq`，回填时序号与词都要对上（任一对不上即丢弃）。
+        // 注意**同词不会重发**：上面 `sent_query` 只比词，所以换档（`#` ↔ 无前缀）或连接目标变化
+        // 都不会触发重搜——这是已知语义缺口（见 `quick-open-implementation-audit.md` D1），
+        // 不是「防抖窗口内的重排会重发」的旧行为。
         let seq = self.search_seq + 1;
         self.search_seq += 1;
         // 防抖：句柄被下一枚替换即取消（`Task` drop = 取消）

@@ -7,8 +7,11 @@
 //!   把自己镜像进列表（`syncing_from_host` 守卫），镜像期间组件回调**不回写**宿主。
 
 use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::empty::{
+    Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
+};
 use gpui_kit::component::list::{ListDelegate, ListItem, ListState};
-use gpui_kit::component::{ActiveTheme, IndexPath, Theme};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, IndexPath, Theme};
 use gpui_kit::*;
 
 use crate::quick_open::model::{Action, Group, Mode, Row, markup_segments, match_span};
@@ -396,9 +399,8 @@ impl ListDelegate for QuickOpenDelegate {
     fn render_empty(
         &mut self,
         _window: &mut Window,
-        cx: &mut Context<ListState<Self>>,
+        _cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
         let (title, hint) = match self.mode {
             Mode::Command => ("无匹配命令", "删掉 > 前缀回到默认搜索"),
             Mode::FullText => (
@@ -408,16 +410,18 @@ impl ListDelegate for QuickOpenDelegate {
             Mode::Goto => ("无匹配对象", "试试输入表名 / 视图名 / 例程名 / 序列名"),
             Mode::Default => ("无匹配结果", "试试输入 > 搜命令 · # 搜元数据全文"),
         };
-        div()
-            .v_flex()
-            .items_center()
-            .gap_1()
-            .py_6()
-            .text_xs()
-            .text_color(theme.colors.muted_foreground)
-            .child(div().text_color(theme.colors.foreground).child(title))
-            .child(hint)
-            .into_any_element()
+        // 空态走标准组件（`gpui-kit-dev` 选型表：空搜索结果 → `empty::Empty`），不再手搓居中列；
+        // 文案仍按档位给「下一步能做什么」。
+        Empty::new().header(
+            EmptyHeader::new()
+                .media(
+                    EmptyMedia::new()
+                        .with_variant(EmptyMediaVariant::Icon)
+                        .child(Icon::new(IconName::Search).size_4()),
+                )
+                .title(EmptyTitle::new().child(title))
+                .description(EmptyDescription::new().child(hint)),
+        )
     }
 
     /// 组件把选中变化回传（鼠标点击 / 组件内漫游）：以宿主的业务键为准。

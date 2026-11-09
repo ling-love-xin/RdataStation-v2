@@ -1893,7 +1893,7 @@ impl WorkbenchView {
             .h_flex()
             .items_center()
             .gap_2()
-            .w_80()
+            .w(rems(ui::QUICK_OPEN_ENTRY_WIDTH))
             .h(rems(ui::QUICK_OPEN_ENTRY_HEIGHT))
             .px_2()
             .rounded_sm()
