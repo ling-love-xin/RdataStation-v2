@@ -70,8 +70,9 @@ pub(crate) struct QuickOpenPalette {
     files_requested_for: Option<PathBuf>,
     /// 有清单请求在途。
     files_pending: bool,
-    /// 已发给后台的搜索词（**只在词变时发**；回填时据此丢弃过期批次）。
-    sent_query: Option<String>,
+    /// 已发给后台的搜索批次键（词 / 档位 / 目标连接任一变化才重发；回填时词与序号双守卫
+    /// 丢弃过期批次——见 [`search::SearchKey`]，审计 D1 修复）。
+    sent_key: Option<search::SearchKey>,
     /// 元数据搜索中（组头显示「搜索中…」）。
     searching: bool,
     /// 回填后有新数据、待 render 重建行（泵线程拿不到 `Window`）。
@@ -101,7 +102,7 @@ impl QuickOpenPalette {
             files: None,
             files_requested_for: None,
             files_pending: false,
-            sent_query: None,
+            sent_key: None,
             searching: false,
             rows_dirty: false,
             debounce: None,
@@ -120,7 +121,10 @@ impl QuickOpenPalette {
     pub(crate) fn on_opened(&mut self, mode: model::Mode, cx: &mut Context<Self>) {
         self.pending_open = true;
         self.focus_pending = true;
-        self.mode_override = Some(mode);
+        // 只有 Goto 锁档（本档内 `>` / `#` 前缀不切档）；Default 置 `None` = 前缀照常解析。
+        // 曾有实现无条件 `Some(mode)`，默认档被锁死成 Default——`>` / `#` 前缀切档整体失效
+        // （前缀被剥掉当词、组头不变，静默错档）。由 D1 回归用例暴露。
+        self.mode_override = (mode == model::Mode::Goto).then_some(mode);
         self.selected_key = None;
         // 文件清单每次打开重取一次（面板关着的时候草稿可能被外部改过）；
         // 在途时不置位——否则一次打开会发两份清单，后到的那份白算。
@@ -226,7 +230,7 @@ impl QuickOpenPalette {
             self.pending_open = false;
             opened = true;
             self.meta.clear();
-            self.sent_query = None;
+            self.sent_key = None;
             self.searching = false;
             if let Some(input) = self.input.clone() {
                 input.update(cx, |state, cx| state.set_value("", window, cx));
@@ -290,9 +294,38 @@ impl QuickOpenPalette {
         self.searching
     }
 
-    /// 测试只读访问器：已发给后台的搜索词（`None` = 一次都没发）。
+    /// 测试只读访问器：已发批次的搜索词（`None` = 一次都没发）。
     #[cfg(test)]
     pub(crate) fn sent_query(&self) -> Option<String> {
-        self.sent_query.clone()
+        self.sent_key.as_ref().map(|key| key.needle.clone())
+    }
+
+    /// 测试只读访问器：已发批次的档（`true` = 全文 FTS；Goto 与 Default 同为名称档）。
+    #[cfg(test)]
+    pub(crate) fn sent_fulltext(&self) -> Option<bool> {
+        self.sent_key.as_ref().map(|key| key.fulltext)
+    }
+
+    /// 测试只读访问器：最新已发批次的序号（伪造回填批次时对齐用）。
+    #[cfg(test)]
+    pub(crate) fn search_seq(&self) -> u64 {
+        self.search_seq
+    }
+
+    /// 测试辅助：程序化设输入值并刷新。
+    ///
+    /// `set_value` 不发 `InputEvent::Change`，须手动 `refresh`——这与「档位 chip 点击」
+    /// 走的是同一条路径（headless 下 `#` 键无法经 keystroke 模拟）。
+    #[cfg(test)]
+    pub(crate) fn test_set_query(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(input) = self.input.clone() {
+            input.update(cx, |state, cx| state.set_value(text, window, cx));
+        }
+        self.refresh(window, cx);
     }
 }

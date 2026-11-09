@@ -267,3 +267,102 @@ fn metadata_search_starts_only_from_two_chars(cx: &mut TestAppContext) {
     assert!(searching, "两字符应进入「搜索中」");
     assert_eq!(sent.as_deref(), Some("sa"), "发的应是当前词");
 }
+
+/// 审计 D1 回归：**同词换档必须重发**。
+///
+/// 旧实现 `sent_query` 只以词为键——`#渠道` 与 `渠道` 判为同一批，FTS 从未发出，
+/// `#` 档拿到的是名称档旧命中「换皮上屏」（组头变了、行上 `why` 全错）。
+#[gpui_kit::test]
+fn same_word_mode_change_researches(cx: &mut TestAppContext) {
+    let _queue_guard = scratchpad::jobs::test_lock();
+    let (_host, _shared, harness, cx) = open_palette(cx);
+
+    // `abc`：名称档批次（≥2 字达标）
+    cx.simulate_keystrokes("abc");
+    let (searching, sent, fulltext) = cx.update(|_window, cx| {
+        let palette = harness.read(cx).palette.read(cx);
+        (palette.searching(), palette.sent_query(), palette.sent_fulltext())
+    });
+    assert!(searching, "三字符应进入「搜索中」");
+    assert_eq!(sent.as_deref(), Some("abc"));
+    assert_eq!(fulltext, Some(false), "默认档走名称档");
+
+    // 以 `#abc` 重设输入：词仍是 `abc`，但档位变全文——必须作为**新批次**重发
+    // （FTS，三字满足 trigram 门槛）。旧实现只比词，这一步的 FTS 会被拦下。
+    // （走 `set_value` + `refresh` 程序化路径：与档位 chip 点击同路——headless 下
+    //   `#` 键无法经 keystroke 模拟，单行 Input 也不处理 Home 行首插入。）
+    let palette = cx.update(|_window, cx| harness.read(cx).palette.clone());
+    cx.update(|window, cx| {
+        palette.update(cx, |palette, cx| palette.test_set_query("#abc", window, cx))
+    });
+    let (searching, sent, fulltext) = cx.update(|_window, cx| {
+        let palette = harness.read(cx).palette.read(cx);
+        (palette.searching(), palette.sent_query(), palette.sent_fulltext())
+    });
+    assert_eq!(sent.as_deref(), Some("abc"), "词没变");
+    assert_eq!(
+        fulltext,
+        Some(true),
+        "同词换档必须重发为 FTS 批次（D1：旧实现只比词、被拦截）"
+    );
+    assert!(searching, "新批次在途");
+}
+
+/// 审计 D5 回归：词长跌回门槛之下时「搜索中」要收掉。
+///
+/// 旧实现 `schedule_search` 的 `!async_ready` 提前 return 不清标志，叠加过期批次
+/// 丢弃路径也不清，提示行会永久停在「元数据搜索中…」。
+#[gpui_kit::test]
+fn searching_resets_when_word_drops_below_threshold(cx: &mut TestAppContext) {
+    let _queue_guard = scratchpad::jobs::test_lock();
+    let (_host, _shared, harness, cx) = open_palette(cx);
+
+    cx.simulate_keystrokes("sa");
+    let searching = cx.update(|_window, cx| harness.read(cx).palette.read(cx).searching());
+    assert!(searching, "两字符应进入「搜索中」");
+
+    cx.simulate_keystrokes("backspace");
+    let (searching, sent) = cx.update(|_window, cx| {
+        let palette = harness.read(cx).palette.read(cx);
+        (palette.searching(), palette.sent_query())
+    });
+    assert!(
+        !searching,
+        "退格回单字符：没有可等的批次，提示要收掉（D5）"
+    );
+    assert_eq!(
+        sent.as_deref(),
+        Some("sa"),
+        "已发批次键不清（防同键重发），清的只是提示"
+    );
+}
+
+/// 审计空白点：过期批次（词已变 / 序号过旧）被泵丢弃时，不得污染当前状态。
+#[gpui_kit::test]
+fn stale_search_batch_is_dropped_without_side_effects(cx: &mut TestAppContext) {
+    let _queue_guard = scratchpad::jobs::test_lock();
+    let (_host, _shared, harness, cx) = open_palette(cx);
+
+    cx.simulate_keystrokes("or");
+    let palette = cx.update(|_window, cx| harness.read(cx).palette.clone());
+    let seq = cx.update(|_window, cx| palette.read(cx).search_seq());
+    assert_eq!(seq, 1, "第一批已排队（防抖后才真正发出，序号同步自增）");
+
+    // 词已改成 `ord`（第二批在途）：推一批「词 = or」的旧结果 → 必须整批丢弃
+    cx.simulate_keystrokes("d");
+    let seq = cx.update(|_window, cx| palette.read(cx).search_seq());
+    database::nav_jobs::push_search_results_for_test(
+        database::nav_jobs::SearchConsumer::QuickOpen,
+        database::nav_jobs::SearchResult {
+            consumer: database::nav_jobs::SearchConsumer::QuickOpen,
+            seq,
+            query: "or".to_string(),
+            searched: 1,
+            hits: vec![table_hit()],
+        },
+    );
+    cx.update(|_window, cx| palette.update(cx, |palette, cx| palette.pump_results(cx)));
+    let rows = cx.update(|_window, cx| palette.read(cx).row_count(cx));
+    // `ord` 不命中两个连接（sales / sales_archive 都不含），若旧批未被丢弃会出现 meta 行
+    assert_eq!(rows, 0, "词守卫应丢弃过期批次：{rows}");
+}

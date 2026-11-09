@@ -14,13 +14,29 @@ use crate::ui;
 use super::QuickOpenPalette;
 use super::files::FilesSnapshot;
 
+/// 一次后台搜索的发送键：**词、档位、目标连接清单任一变化都构成新批次**。
+///
+/// 审计 D1 修复（2026-11-09）：此前 `sent_query` 只以词为键，同词换档（`#` ↔ 无前缀）
+/// 不重发——`#` 档会把名称档的旧命中「换皮上屏」（组头变了、`why` 全错）；
+/// 连接集合新增 / 重排同理。键里存 `fulltext` 而非 `Mode`：Goto 与 Default 的
+/// 发送参数完全相同（同为名称档），互相切换**不该**重发。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct SearchKey {
+    /// `true` = 内容档（FTS）；`false` = 名称档（前缀，2026-11-09 产品口径）。
+    pub(super) fulltext: bool,
+    /// 搜索词（已剥前缀与首尾空白）。
+    pub(super) needle: String,
+    /// 目标连接 id（有序全量快照；顺序参与比较——重排影响 per-conn 命中数）。
+    pub(super) targets: Vec<String>,
+}
+
 impl QuickOpenPalette {
     /// 给后台排一次跨连接索引搜索（防抖 150ms；**单字符不发**）。
     pub(super) fn schedule_search(&mut self, query: &model::Query, cx: &mut Context<Self>) {
         if !query.async_ready() {
-            return;
-        }
-        if self.sent_query.as_deref() == Some(query.needle.as_str()) {
+            // 词低于门槛：不会发新批次，在途旧批到达时也会被「词守卫」丢弃——
+            // 「搜索中」提示要在这里收掉，否则永久卡死（审计 D5）。
+            self.searching = false;
             return;
         }
         let targets: Vec<database::nav_jobs::SearchTarget> = self
@@ -34,6 +50,15 @@ impl QuickOpenPalette {
                 driver: c.driver.clone(),
             })
             .collect();
+        let key = SearchKey {
+            fulltext: matches!(query.mode, model::Mode::FullText),
+            needle: query.needle.clone(),
+            targets: targets.iter().map(|t| t.conn_id.clone()).collect(),
+        };
+        if self.sent_key.as_ref() == Some(&key) {
+            // 同键批次在途：不重发（`searching` 保持到回填）。
+            return;
+        }
         let project_root = self
             .shared
             .project_root()
@@ -41,19 +66,17 @@ impl QuickOpenPalette {
         let needle = query.needle.clone();
         // 档位：`#` 走内容档（FTS，注释 / 数据类型），其余走名称档。
         // 名称档**只查前缀段**：引擎按 `mode` 单段查询（`StartsWith` 不再做「前缀优先 + 中缀兜底」），
-        // 依据 `store::persistence::metadata_cache::search_index` 的分支。
+        // 依据 `store::persistence::metadata_cache::search_index` 的分支——2026-11-09 拍板为产品口径。
         let kind = match query.mode {
             model::Mode::FullText => database::nav_jobs::SearchKind::FullText,
             _ => database::nav_jobs::SearchKind::Name,
         };
-        self.sent_query = Some(needle.clone());
+        self.sent_key = Some(key);
         self.searching = true;
         let executor = cx.background_executor().clone();
         let weak = cx.entity().downgrade();
         // 序号守卫：每次发送自增 `seq`，回填时序号与词都要对上（任一对不上即丢弃）。
-        // 注意**同词不会重发**：上面 `sent_query` 只比词，所以换档（`#` ↔ 无前缀）或连接目标变化
-        // 都不会触发重搜——这是已知语义缺口（见 `quick-open-implementation-audit.md` D1），
-        // 不是「防抖窗口内的重排会重发」的旧行为。
+        // 键变了（词 / 档 / 目标）就重发；同键不重发。
         let seq = self.search_seq + 1;
         self.search_seq += 1;
         // 防抖：句柄被下一枚替换即取消（`Task` drop = 取消）
