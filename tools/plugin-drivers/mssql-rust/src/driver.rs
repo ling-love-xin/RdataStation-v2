@@ -4,12 +4,13 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use futures_util::TryStreamExt as _;
 use rds_driver_sidecar::{
     Canonical, Driver, DriverError, ExecuteRequest, MetaColumn, MetaIndex, MetaObject,
     MetaObjectDetail, MetaSchema, Page, SessionInfo,
 };
 use serde_json::Value;
-use tiberius::{AuthMethod, Client, Config, EncryptionLevel, Query};
+use tiberius::{AuthMethod, Client, Config, EncryptionLevel, Query, QueryItem};
 use tokio::net::TcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
@@ -134,24 +135,36 @@ impl Driver for MssqlDriver {
             .map_err(|err| DriverError::sql(err.to_string()))?
             .unwrap_or_default()
             .to_vec();
-        let results = stream
-            .into_results()
-            .await
-            .map_err(|err| DriverError::sql(err.to_string()))?;
 
-        let defs: Vec<_> = columns.iter().map(types::column_def).collect();
-        let rows: Vec<Vec<Value>> = results
-            .into_iter()
-            .next()
-            .unwrap_or_default()
-            .iter()
-            .map(types::convert_row)
-            .collect();
-
+        // 逐行消费而不是 `into_results`：前者不会把整张结果集压进内存，`has_more`
+        // 也就是「第一个结果集真的还有下一行」而不是事后按总数推算。TDS 没有服务端
+        // 游标，剩余行仍会被读空（否则连接里会留未消费的 token，影响下一次查询），
+        // 但只保留第一个结果集的前 `max_rows` 行。
         let max_rows = if req.max_rows == 0 { 1000 } else { req.max_rows };
-        let total = rows.len();
-        let mut page = Page::rows(defs, rows.into_iter().take(max_rows).collect());
-        page.has_more = total > max_rows;
+        let defs: Vec<_> = columns.iter().map(types::column_def).collect();
+        let mut rows: Vec<Vec<Value>> = Vec::with_capacity(max_rows.min(1024));
+        let mut has_more = false;
+        while let Some(item) = stream
+            .try_next()
+            .await
+            .map_err(|err| DriverError::sql(err.to_string()))?
+        {
+            // 多语句 SQL 只取第一个结果集，与 `into_results().next()` 的旧口径一致。
+            let QueryItem::Row(row) = item else {
+                continue;
+            };
+            if row.result_index() != 0 {
+                continue;
+            }
+            if rows.len() < max_rows {
+                rows.push(types::convert_row(&row));
+            } else {
+                has_more = true;
+            }
+        }
+
+        let mut page = Page::rows(defs, rows);
+        page.has_more = has_more;
         Ok(page)
     }
 
