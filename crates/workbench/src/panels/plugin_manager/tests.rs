@@ -7,10 +7,11 @@ use plugin::{
 };
 
 use super::widgets::{
-    DriverChainLevel, PluginFilter, contribution_summary, filtered_plugins, plugin_backend_label,
-    plugin_diagnostics, plugin_driver_chain, plugin_driver_registration_label, plugin_driver_stats,
-    plugin_driver_stats_label, plugin_kind_label, plugin_receives_database_credentials,
-    plugin_state_is_active, plugin_state_label, plugin_stats, plugin_uninstall_block_reason,
+    DriverChainLevel, PluginFilter, contribution_summary, driver_id_conflicts, filtered_plugins,
+    plugin_backend_label, plugin_diagnostics, plugin_driver_chain, plugin_driver_registration_label,
+    plugin_driver_stats, plugin_driver_stats_label, plugin_kind_label,
+    plugin_receives_database_credentials, plugin_state_is_active, plugin_state_label, plugin_stats,
+    plugin_uninstall_block_reason,
 };
 
 fn info(name: &str, id: &str, state: PluginState, description: &str) -> PluginInfo {
@@ -288,6 +289,64 @@ fn driver_stats_separate_missing_registration_from_unknown() {
     let stats = plugin_driver_stats(std::slice::from_ref(&no_drivers));
     assert!(!stats.unknown);
     assert_eq!(plugin_driver_stats_label(stats), "驱动 0");
+}
+
+#[test]
+fn duplicate_driver_ids_across_enabled_plugins_are_reported() {
+    let mut jdbc = info("Oracle JDBC", "rds.driver.oracle", PluginState::Active, "");
+    jdbc.drivers = vec![PluginDriverSummary {
+        id: "oracle".to_string(),
+        display_name: "Oracle Database".to_string(),
+        default_port: Some(1521),
+        category: None,
+    }];
+    // 登记表读到了、但两行都没写进去：这里只验冲突，不让 `unknown` 干扰文案。
+    jdbc.registered_drivers = Some(Vec::new());
+    let mut rust = info(
+        "Oracle Rust",
+        "rds.driver.oracle-rust",
+        PluginState::Active,
+        "",
+    );
+    rust.drivers = vec![PluginDriverSummary {
+        id: "oracle".to_string(),
+        display_name: "Oracle Database (Rust)".to_string(),
+        default_port: Some(1521),
+        category: None,
+    }];
+    rust.registered_drivers = Some(Vec::new());
+
+    let both = vec![jdbc.clone(), rust.clone()];
+    let conflicts = driver_id_conflicts(&both);
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].driver_id, "oracle");
+    assert_eq!(
+        conflicts[0].plugins,
+        vec!["rds.driver.oracle", "rds.driver.oracle-rust"]
+    );
+
+    let stats = plugin_driver_stats(&both);
+    assert_eq!(stats.conflicts, 1);
+    assert_eq!(
+        plugin_driver_stats_label(stats),
+        "驱动 0/2 已登记 · 1 个驱动 id 冲突"
+    );
+
+    let chain = plugin_driver_chain(&both);
+    assert_eq!(chain.conflicts.len(), 1);
+    assert_eq!(chain.steps[1].level, DriverChainLevel::Bad);
+    assert_eq!(
+        chain.bottleneck.as_deref(),
+        Some(
+            "卡在：驱动 id 冲突（oracle 由 rds.driver.oracle、rds.driver.oracle-rust 同时声明），先停用或卸载其中一个插件。"
+        )
+    );
+
+    // 停用一侧后不再冲突：停用插件不参与驱动注册。
+    let mut off = rust;
+    off.state = PluginState::Inactive;
+    let conflicts = driver_id_conflicts(&[jdbc, off]);
+    assert!(conflicts.is_empty());
 }
 
 #[test]

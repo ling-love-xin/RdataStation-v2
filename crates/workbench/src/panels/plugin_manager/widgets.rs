@@ -8,6 +8,7 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::{Sizable, Size};
 use gpui_kit::{App, ClipboardItem, SharedString, Window};
+use std::collections::BTreeMap;
 
 use plugin::ContributionCounts;
 use plugin::PluginInfo;
@@ -92,6 +93,46 @@ pub(crate) struct PluginDriverStats {
     pub registered: usize,
     /// 有插件声明了驱动、但这次没读到登记表（`registered_drivers == None`）。
     pub unknown: bool,
+    /// 同一驱动 id 被多个**启用中**插件声明（加载期会拒绝，两个插件都不可用）。
+    pub conflicts: usize,
+}
+
+/// 一个驱动 id 被多个启用插件声明的冲突。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DriverIdConflict {
+    pub driver_id: String,
+    pub plugins: Vec<String>,
+}
+
+/// 找出被多个启用中插件同时贡献的驱动 id。
+///
+/// 只看 `Active` / `Loaded`：停用的插件不参与注册，不会触发加载期冲突；把它算进来
+/// 会让用户看到「冲突」却找不到该停用谁。
+pub(crate) fn driver_id_conflicts(plugins: &[PluginInfo]) -> Vec<DriverIdConflict> {
+    let mut owners: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for plugin in plugins {
+        if !plugin_state_is_active(plugin.state) {
+            continue;
+        }
+        for driver in &plugin.drivers {
+            owners
+                .entry(driver.id.as_str())
+                .or_default()
+                .push(plugin.id.as_str());
+        }
+    }
+    owners
+        .into_iter()
+        .filter(|(_, owners)| owners.len() > 1)
+        .map(|(driver_id, mut owners)| {
+            owners.sort_unstable();
+            owners.dedup();
+            DriverIdConflict {
+                driver_id: driver_id.to_string(),
+                plugins: owners.into_iter().map(str::to_string).collect(),
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn plugin_driver_stats(plugins: &[PluginInfo]) -> PluginDriverStats {
@@ -114,6 +155,7 @@ pub(crate) fn plugin_driver_stats(plugins: &[PluginInfo]) -> PluginDriverStats {
             None => {}
         }
     }
+    stats.conflicts = driver_id_conflicts(plugins).len();
     stats
 }
 
@@ -122,13 +164,19 @@ pub(crate) fn plugin_driver_stats_label(stats: PluginDriverStats) -> String {
     if stats.declared == 0 {
         return "驱动 0".to_string();
     }
-    if stats.unknown {
-        return format!(
+    let base = if stats.unknown {
+        format!(
             "驱动 {}/{} 已登记 · 状态未知",
             stats.registered, stats.declared
-        );
+        )
+    } else {
+        format!("驱动 {}/{} 已登记", stats.registered, stats.declared)
+    };
+    if stats.conflicts > 0 {
+        format!("{base} · {} 个驱动 id 冲突", stats.conflicts)
+    } else {
+        base
     }
-    format!("驱动 {}/{} 已登记", stats.registered, stats.declared)
 }
 
 /// 驱动链路某一步的健康度。
@@ -152,6 +200,8 @@ pub(crate) struct DriverChainStep {
 pub(crate) struct PluginDriverChain {
     pub steps: Vec<DriverChainStep>,
     pub bottleneck: Option<String>,
+    /// 同时被多个启用插件贡献的驱动 id（加载期会拒绝，需先移除其中一个）。
+    pub conflicts: Vec<DriverIdConflict>,
 }
 
 /// 把「清单声明 → 激活 → 写 drivers 表 → 下拉可见」这条链摊成可判定的四步。
@@ -159,6 +209,7 @@ pub(crate) struct PluginDriverChain {
 /// 四个事实全部来自 `PluginInfo` 的缓存快照，不额外查库；`unknown` 表示本次没读到
 /// `global.db`，此时第三步是「警告」而不是「未写入」，不能把读不到当成失败。
 pub(crate) fn plugin_driver_chain(plugins: &[PluginInfo]) -> PluginDriverChain {
+    let conflicts = driver_id_conflicts(plugins);
     let mut declared = 0usize;
     let mut active = 0usize;
     let mut registered = 0usize;
@@ -206,8 +257,12 @@ pub(crate) fn plugin_driver_chain(plugins: &[PluginInfo]) -> PluginDriverChain {
         },
         DriverChainStep {
             label: "插件启用",
-            detail: format!("{active} 个驱动在启用插件内"),
-            level: if active > 0 {
+            detail: if conflicts.is_empty() {
+                format!("{active} 个驱动在启用插件内")
+            } else {
+                format!("{active} 个驱动在启用插件内 · {} 个 id 冲突", conflicts.len())
+            },
+            level: if active > 0 && conflicts.is_empty() {
                 DriverChainLevel::Ok
             } else {
                 DriverChainLevel::Bad
@@ -256,6 +311,21 @@ pub(crate) fn plugin_driver_chain(plugins: &[PluginInfo]) -> PluginDriverChain {
         Some("卡在：没有任何插件声明驱动。".to_string())
     } else if active == 0 {
         Some("卡在：声明了驱动的插件都未启用。".to_string())
+    } else if !conflicts.is_empty() {
+        let detail = conflicts
+            .iter()
+            .map(|conflict| {
+                format!(
+                    "{} 由 {} 同时声明",
+                    conflict.driver_id,
+                    conflict.plugins.join("、")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("；");
+        Some(format!(
+            "卡在：驱动 id 冲突（{detail}），先停用或卸载其中一个插件。"
+        ))
     } else if unknown {
         Some("卡在：本次没读到 global.db 的 drivers 表。".to_string())
     } else if present == 0 {
@@ -276,7 +346,11 @@ pub(crate) fn plugin_driver_chain(plugins: &[PluginInfo]) -> PluginDriverChain {
         None
     };
 
-    PluginDriverChain { steps, bottleneck }
+    PluginDriverChain {
+        steps,
+        bottleneck,
+        conflicts,
+    }
 }
 
 /// 按筛选档 + 搜索词过滤，并按名称排序（纯函数，单测覆盖）。
