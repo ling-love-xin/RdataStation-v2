@@ -171,6 +171,12 @@ impl PluginManagerPanel {
             .update(cx, |panel, cx| panel.set_plugin_enabled(id, false, cx));
     }
 
+    /// 批量启用 / 停用当前清单里符合状态的插件（与单插件动作共用同一把忙碌锁）。
+    pub(crate) fn set_all_plugins_enabled(&self, enabled: bool, cx: &mut Context<Self>) {
+        self.plugin_panel
+            .update(cx, |panel, cx| panel.bulk_set_plugin_enabled(enabled, cx));
+    }
+
     pub(crate) fn plugin_entity(&self) -> Entity<PluginPanel> {
         self.plugin_panel.clone()
     }

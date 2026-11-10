@@ -15,6 +15,6 @@ mod render;
 pub use panel::PluginPanel;
 pub(crate) use pure::uninstall_confirm_description;
 pub(super) use pure::{
-    contribution_breakdown, event_touches_plugin_list, install_receipt, panel_busy,
-    plugin_row_subtitle, plugin_state_label,
+    bulk_toggle_includes, contribution_breakdown, event_touches_plugin_list, install_receipt,
+    panel_busy, plugin_row_subtitle, plugin_state_label,
 };

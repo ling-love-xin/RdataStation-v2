@@ -78,6 +78,15 @@ RDS 当前没有市场或远程索引，保留该档会变成永远空空如也�
 再 `list_plugins`，不再只重读清单。否则登记状态只在启停 / 加载等生命周期动作里刷新，
 用户手动刷新后仍会长期停在「登记状态未知」；同步失败只记日志，不拦清单刷新。
 
+**批量启停（2026-11-11）**：统计行右侧给「启用全部已停用（N）」与「停用全部已启用（N）」
+两个入口，插件一多或冲突告警需要一次停多个时不用逐个点。归批的状态由纯函数
+`bulk_toggle_includes` 判定：启用只碰 `Inactive`，停用只碰 `Active` / `Loaded`；
+`Error` 两边都不碰（没有可停的运行时，且启用前得先修清单或解冲突）。
+停用全部走确认框（会一次性改变所有驱动的下拉可见性），插件目录与 `plugin-data` 保留。
+整批只占一个后台任务并按顺序执行，单个失败不中断，结束后统一报
+「已启用 X 个 / 停用 X 个，失败 Y 个：<id>: <原因>」；失败文案写在 `error` 位，
+随后的清单刷新传 `clear_error=false`，不会被成功刷新擦掉。
+
 **驱动可见性（2026-11-10）**：`plugin::PluginInfo` 新增 `drivers: Vec<PluginDriverSummary>`，
 由清单 `[[contributes.drivers]]` 直接派生（id / display_name / default_port / category），
 管理页在卡片上加驱动 chips（每个 chip 直接标「已登记 / 已登记 · 已停用 / 未登记」），
@@ -206,14 +215,18 @@ cargo test  -p rds-workbench --test ui_contract
 `ui_contract` 10 个契约测试全绿。本模块 0 warning（余下 2 条为
 `property_panel` 既存未用变量）。
 
+2026-11-11 复测（批量启停）：`cargo check -p rds-workbench --lib` 0 error；
+`cargo test -p rds-workbench --lib` 62 passed（新增 `bulk_toggle_skips_states_it_cannot_change`）；
+`cargo test -p rds-workbench --test ui_contract` 10 passed。
+
 ---
 
 ## 7. 已知缺口（不当成已完成）
 
 | 项 | 状态 |
 | --- | --- |
-| 只读的「谁引用了某插件」查询 | 查询接口已有（`DependencyManager::check_dependents`）；详情栏尚未接线，当前为如实占位 |
-| 市场 / 远程索引 / 可更新档 | 未引入；筛选四档不含「可更新」 |
-| 面板徽标区分「DB 停用」与「未加载」 | 未做；当前沿用左栏状态语义 |
+| 只读的「谁引用了某插件」查询 | 已完成（2026-11-10）：详情栏「依赖关系」段双向接线（`dependencies` / `dependents`），`Some(空)` 显示「无」、`None` 显示「未知」 |
+| 市场 / 远程索引 / 可更新档 | 未引入；筛选五档不含「可更新」 |
+| 面板徽标区分「DB 停用」与「未加载」 | 未做；根因是 `PluginInfo` 没有 `is_enabled` 字段，DB 权威启停状态不进会话快照 |
 | `schema_version` / `plugins.updated_at` 索引 | 未拍板 |
 | 左 Dock 三个薄壳（`DatabaseNavPanel` / `ScratchPanel` / `ResourcePanelTab`）拆分 | 已完成（2026-11-10）：`panels/left_tabs/` 目录（`mod` / `database_nav` / `scratch` / `resources` / `tests` + `plugin_tab/` 五文件子目录） |

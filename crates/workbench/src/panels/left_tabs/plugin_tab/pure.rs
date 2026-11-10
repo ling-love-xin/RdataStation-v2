@@ -78,6 +78,18 @@ pub(crate) fn plugin_state_label(state: PluginState) -> (&'static str, &'static 
     }
 }
 
+/// 批量启停该不该动这个插件（纯函数，便于单测）。
+///
+/// 「启用全部」只碰 `Inactive`：`Error` 得先修清单 / 解冲突，`Active` 不用重复激活。
+/// 「停用全部」只碰 `Active` / `Loaded`：`Error` 没有可停的运行时，`Inactive` 已经停着。
+pub(crate) fn bulk_toggle_includes(state: PluginState, enabling: bool) -> bool {
+    if enabling {
+        state == PluginState::Inactive
+    } else {
+        matches!(state, PluginState::Active | PluginState::Loaded)
+    }
+}
+
 /// 卸载确认框正文（纯函数，便于单测）：说清删什么、留什么、什么情况会被拒。
 pub(crate) fn uninstall_confirm_description(name: &str, id: &str) -> String {
     format!(

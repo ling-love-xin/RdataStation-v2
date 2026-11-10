@@ -1,5 +1,6 @@
 //! 插件管理页整页骨架：标题行 / 统计 / 反馈 / 筛选 / 滚动卡片区 / 右侧详情。
 
+use gpui_kit::base::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyTitle};
 use gpui_kit::component::input::Input;
@@ -7,7 +8,7 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::toolbar::Toolbar;
-use gpui_kit::component::{ActiveTheme, IconName, Sizable, Size};
+use gpui_kit::component::{ActiveTheme, IconName, Sizable, Size, WindowExt as _};
 use gpui_kit::{Context, Div, FontWeight, IntoElement, SharedString, Window, div, rems};
 
 use super::widgets::{
@@ -117,6 +118,66 @@ impl PluginManagerPanel {
                 })
                 .child(driver_stats_label),
         );
+        // 批量入口放在统计行右侧：用户看到「已停用 N」时，下一步通常就是把这批拉起来。
+        // 停用全部会一次性改变所有驱动可见性，必须先确认；启用全部只碰 Inactive，无需确认。
+        let busy = snapshot.progress.is_some();
+        let stats_row = stats_row
+            .child(div().flex_1())
+            .child(
+                Button::new("plugin-manager-enable-all")
+                    .ghost()
+                    .label(SharedString::from(format!(
+                        "启用全部已停用（{}）",
+                        stats.disabled
+                    )))
+                    .with_size(Size::XSmall)
+                    .tooltip("启用并激活当前所有已停用的插件")
+                    .disabled(busy || stats.disabled == 0)
+                    .on_click({
+                        let manager = cx.entity();
+                        move |_, _, app| {
+                            let _ = manager.update(app, |this, cx| {
+                                this.set_all_plugins_enabled(true, cx)
+                            });
+                        }
+                    }),
+            )
+            .child(
+                Button::new("plugin-manager-disable-all")
+                    .ghost()
+                    .label(SharedString::from(format!(
+                        "停用全部已启用（{}）",
+                        stats.enabled
+                    )))
+                    .with_size(Size::XSmall)
+                    .tooltip("停用当前所有已启用插件（会先确认）")
+                    .disabled(busy || stats.enabled == 0)
+                    .on_click({
+                        let manager = cx.entity();
+                        let count = stats.enabled;
+                        move |_, window, app| {
+                            let manager = manager.clone();
+                            window.open_alert_dialog(app, move |alert, _window, _cx| {
+                                let manager = manager.clone();
+                                alert
+                                    .confirm()
+                                    .title("停用全部已启用插件")
+                                    .description(SharedString::from(format!(
+                                        "将停用 {count} 个已启用插件，驱动会立即从连接下拉中移除。\n\
+                                         插件目录与 plugin-data 都会保留，可随时重新启用。"
+                                    )))
+                                    .ok_text("停用全部")
+                                    .cancel_text("取消")
+                                    .on_ok(move |_window, _cx, cx| {
+                                        let _ = manager.update(cx, |this, cx| {
+                                            this.set_all_plugins_enabled(false, cx)
+                                        });
+                                        true
+                                    })
+                            });
+                        }
+                    }),
+            );
 
         // 驱动链路：把「插件在、下拉空」的四段成败摊开，卡点写在同一行。
         let chain = plugin_driver_chain(&snapshot.plugins);

@@ -1,7 +1,7 @@
 use super::super::*;
 
 use super::delegate::PluginListDelegate;
-use super::{event_touches_plugin_list, install_receipt, panel_busy};
+use super::{bulk_toggle_includes, event_touches_plugin_list, install_receipt, panel_busy};
 
 /// 插件 tab：已装插件清单（名称 / 版本 / 状态）+ 刷新 + 启用 / 停用 / 卸载。
 ///
@@ -277,6 +277,85 @@ impl PluginPanel {
                         this.notice.replace(None);
                     }
                 };
+                this.refresh_plugins(cx, false);
+            });
+        });
+    }
+
+    /// 批量启停：对当前清单里符合状态的插件逐个执行 `enable_plugin` / `disable_plugin`。
+    ///
+    /// 与单插件动作共用 `panel_busy` 互斥；整批只占一个后台任务，避免逐个 `cx.spawn`
+    /// 造成顺序不确定（冲突插件启用后能否成功，取决于前一个是否已真正停掉）。
+    /// 单个失败不中断整批，最后统一报「N 个成功、M 个失败」并保留失败原因。
+    pub(crate) fn bulk_set_plugin_enabled(&self, enabled: bool, cx: &mut Context<Self>) {
+        let Some(handle) = plugin::runtime_handle().cloned() else {
+            self.error.replace(Some("插件运行时未初始化".to_string()));
+            cx.notify();
+            return;
+        };
+        let Some(mgr) = plugin::get_plugin_manager().cloned() else {
+            self.error.replace(Some("插件运行时未初始化".to_string()));
+            cx.notify();
+            return;
+        };
+        if panel_busy(&self.progress) {
+            return;
+        }
+
+        let ids: Vec<String> = self
+            .plugins
+            .borrow()
+            .iter()
+            .filter(|plugin| bulk_toggle_includes(plugin.state, enabled))
+            .map(|plugin| plugin.id.clone())
+            .collect();
+        let action = if enabled { "启用" } else { "停用" };
+        if ids.is_empty() {
+            self.error.replace(None);
+            self.notice.replace(Some(format!("没有需要{action}的插件")));
+            cx.notify();
+            return;
+        }
+
+        self.progress
+            .replace(Some(format!("正在{action} {} 个插件…", ids.len())));
+        self.error.replace(None);
+        self.notice.replace(None);
+        cx.notify();
+
+        let weak = cx.entity().downgrade();
+        let _ = cx.spawn(async move |_this, cx| {
+            let (succeeded, failures) = handle.block_on(async {
+                let mut succeeded = 0usize;
+                let mut failures = Vec::new();
+                for id in ids {
+                    let outcome = if enabled {
+                        mgr.enable_plugin(&id).await
+                    } else {
+                        mgr.disable_plugin(&id).await
+                    };
+                    match outcome {
+                        Ok(()) => succeeded += 1,
+                        Err(error) => failures.push(format!("{id}: {error}")),
+                    }
+                }
+                (succeeded, failures)
+            });
+            let _ = weak.update(cx, |this, cx| {
+                this.progress.replace(None);
+                if failures.is_empty() {
+                    this.error.replace(None);
+                    this.notice
+                        .replace(Some(format!("已{action} {succeeded} 个插件")));
+                } else {
+                    // 失败原因放在 error 位：随后 refresh_plugins 传 false，不会被清单刷新擦掉。
+                    this.error.replace(Some(format!(
+                        "{action} {succeeded} 个，失败 {} 个：{}",
+                        failures.len(),
+                        failures.join("；")
+                    )));
+                    this.notice.replace(None);
+                }
                 this.refresh_plugins(cx, false);
             });
         });
