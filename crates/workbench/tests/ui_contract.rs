@@ -223,8 +223,24 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../src/panels/left_tabs/resources.rs"),
         ),
         (
-            "panels/left_tabs/plugin_tab.rs",
-            include_str!("../src/panels/left_tabs/plugin_tab.rs"),
+            "panels/left_tabs/plugin_tab/mod.rs",
+            include_str!("../src/panels/left_tabs/plugin_tab/mod.rs"),
+        ),
+        (
+            "panels/left_tabs/plugin_tab/delegate.rs",
+            include_str!("../src/panels/left_tabs/plugin_tab/delegate.rs"),
+        ),
+        (
+            "panels/left_tabs/plugin_tab/panel.rs",
+            include_str!("../src/panels/left_tabs/plugin_tab/panel.rs"),
+        ),
+        (
+            "panels/left_tabs/plugin_tab/pure.rs",
+            include_str!("../src/panels/left_tabs/plugin_tab/pure.rs"),
+        ),
+        (
+            "panels/left_tabs/plugin_tab/render.rs",
+            include_str!("../src/panels/left_tabs/plugin_tab/render.rs"),
         ),
         (
             "panels/left_tabs/tests.rs",
@@ -803,8 +819,24 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../src/panels/left_tabs/resources.rs"),
         ),
         (
-            "panels/left_tabs/plugin_tab.rs",
-            include_str!("../src/panels/left_tabs/plugin_tab.rs"),
+            "panels/left_tabs/plugin_tab/mod.rs",
+            include_str!("../src/panels/left_tabs/plugin_tab/mod.rs"),
+        ),
+        (
+            "panels/left_tabs/plugin_tab/delegate.rs",
+            include_str!("../src/panels/left_tabs/plugin_tab/delegate.rs"),
+        ),
+        (
+            "panels/left_tabs/plugin_tab/panel.rs",
+            include_str!("../src/panels/left_tabs/plugin_tab/panel.rs"),
+        ),
+        (
+            "panels/left_tabs/plugin_tab/pure.rs",
+            include_str!("../src/panels/left_tabs/plugin_tab/pure.rs"),
+        ),
+        (
+            "panels/left_tabs/plugin_tab/render.rs",
+            include_str!("../src/panels/left_tabs/plugin_tab/render.rs"),
         ),
         (
             "panels/left_tabs/tests.rs",

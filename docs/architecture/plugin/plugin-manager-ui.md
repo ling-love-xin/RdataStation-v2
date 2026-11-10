@@ -8,8 +8,9 @@
 
 ## 1. 为什么是目录模块
 
-`panels/left_tabs/` 目录已承载草稿箱 / 数据库导航 / 资源 / 插件四个左栏面板（每个面板一个文件，
-共约 1500 行；拆分前是单文件 `panels/left_tabs.rs`）。
+`panels/left_tabs/` 目录已承载草稿箱 / 数据库导航 / 资源 / 插件四个左栏面板（每个面板一个文件或子目录，
+共约 1500 行；拆分前是单文件 `panels/left_tabs.rs`）。其中插件面板再按职责拆成
+`left_tabs/plugin_tab/`（`mod` / `delegate` / `panel` / `pure` / `render`，机械切分、零行为变更）。
 插件管理页是**中央整页**，包含页头、统计、反馈、筛选、两列卡片、右侧详情栏，
 若继续追加入 `left_tabs/` 的任一左栏文件，会把一个「左 Dock 面板文件」变成跨承载的混合体。
 
@@ -25,7 +26,7 @@ crates/workbench/src/panels/plugin_manager/
 └── tests.rs    纯函数单测（不渲染窗口）
 ```
 
-新增页内区块时按职责落到上述文件；**不要**再往 `left_tabs/plugin_tab.rs` 加管理页内容。
+新增页内区块时按职责落到上述文件；**不要**再往 `left_tabs/plugin_tab/` 加管理页内容。
 
 ---
 
@@ -138,4 +139,4 @@ cargo test  -p rds-workbench --test ui_contract
 | 市场 / 远程索引 / 可更新档 | 未引入；筛选四档不含「可更新」 |
 | 面板徽标区分「DB 停用」与「未加载」 | 未做；当前沿用左栏状态语义 |
 | `schema_version` / `plugins.updated_at` 索引 | 未拍板 |
-| 左 Dock 三个薄壳（`DatabaseNavPanel` / `ScratchPanel` / `ResourcePanelTab`）拆分 | 已完成（2026-11-10）：`panels/left_tabs/` 目录，六个文件（`mod` / `database_nav` / `scratch` / `resources` / `plugin_tab` / `tests`） |
+| 左 Dock 三个薄壳（`DatabaseNavPanel` / `ScratchPanel` / `ResourcePanelTab`）拆分 | 已完成（2026-11-10）：`panels/left_tabs/` 目录（`mod` / `database_nav` / `scratch` / `resources` / `tests` + `plugin_tab/` 五文件子目录） |

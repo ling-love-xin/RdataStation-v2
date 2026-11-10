@@ -231,8 +231,9 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 
 **中央插件管理页已落地**（2026-11-10）：左 Dock 页头加「管理」入口，中央开常驻 tab。
 页面按 `crates/workbench/src/panels/plugin_manager/` 六文件目录模块落地（`mod` / `render` /
-`cards` / `detail` / `widgets` / `tests`），**不再往 `panels/left_tabs/plugin_tab.rs` 追加内容**。
-左 Dock 四面板本身也已从单文件 `left_tabs.rs` 拆成 `panels/left_tabs/` 目录（2026-11-10）。
+`cards` / `detail` / `widgets` / `tests`），**不再往 `panels/left_tabs/plugin_tab/` 追加内容**。
+左 Dock 四面板本身也已从单文件 `left_tabs.rs` 拆成 `panels/left_tabs/` 目录（2026-11-10）；
+插件面板再拆为 `panels/left_tabs/plugin_tab/{mod,delegate,panel,pure,render}.rs`（机械切分、零行为变更）。
 管理页不复制数据面：通过 `Entity<PluginPanel>` 的只读快照 + 动作转发复用左栏清单、贡献点
 计数、后台任务与操作互斥；左栏刷新经 `cx.observe` 自动重绘管理页。页面含统计 / 反馈 /
 待重载横幅 / 搜索 + 四档筛选 / 两列卡片 / 340px 详情栏；筛选不含「可更新」（无市场/远程索引），

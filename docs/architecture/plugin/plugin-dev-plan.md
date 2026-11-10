@@ -1177,7 +1177,7 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 - 验证：rds-plugin 全量 196 lib + 71 集成全绿；插件包已重装（壳带新能力）。
 
 **插件入口面板**（2026-10-22，P4 一期）：
-- `crates/workbench/src/panels/left_tabs.rs` PluginPanel（现为 `left_tabs/plugin_tab.rs`）：占位 → 已装插件列表
+- `crates/workbench/src/panels/left_tabs.rs` PluginPanel（现为 `left_tabs/plugin_tab/` 目录模块）：占位 → 已装插件列表
   （`plugin::manager::list_plugins`，会话态 `Rc<RefCell<Vec<PluginInfo>>>`，事件路径刷新；
   创建时订阅 `plugin::events` 生命周期事件，热插拔 / 安装 / 卸载 / 启停自动重拉，⟳ 为手动兜底）；
   行 = 名称 v版本 + 状态徽标（Active/Loaded/Inactive/Error 语义色）+ 启用/停用 `Button::ghost`；
