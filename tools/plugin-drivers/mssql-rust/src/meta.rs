@@ -3,10 +3,10 @@
 use std::collections::BTreeMap;
 
 use rds_driver_sidecar::{
-    normalize_kind, DriverError, MetaColumn, MetaIndex, MetaObject, MetaObjectDetail, MetaSchema,
+    DriverError, MetaColumn, MetaIndex, MetaObject, MetaObjectDetail, MetaSchema, normalize_kind,
 };
 
-use crate::driver::{canonical_for_type, query_rows, MssqlClient};
+use crate::driver::{MssqlClient, canonical_for_type, query_rows};
 
 pub async fn server_info(client: &mut MssqlClient) -> (Option<String>, String) {
     let rows = query_rows(
@@ -99,7 +99,10 @@ pub async fn object_detail(
     let kind = object_kind(client, schema, name).await;
     let mut columns = columns(client, &qualified).await?;
     mark_primary_key(client, &qualified, &mut columns).await?;
-    let indexes = indexes(client, &qualified).await.unwrap_or_default();
+    let index_count = indexes(client, &qualified)
+        .await
+        .map(|list| list.len() as u32)
+        .ok();
     let row_count = if kind == "table" {
         table_row_count(client, &qualified).await?
     } else {
@@ -107,7 +110,7 @@ pub async fn object_detail(
     };
 
     let mut detail = MetaObjectDetail::new(name, kind, columns);
-    detail.indexes = indexes;
+    detail.indexes = index_count;
     detail.row_count = row_count;
     Ok(detail)
 }
@@ -194,17 +197,17 @@ async fn mark_primary_key(
         vec![qualified.to_string()],
     )
     .await?;
-    let pk: Vec<&str> = rows.iter().filter_map(|row| row.get::<&str, _>(0)).collect();
+    let pk: Vec<&str> = rows
+        .iter()
+        .filter_map(|row| row.get::<&str, _>(0))
+        .collect();
     for column in columns.iter_mut() {
         column.is_pk = Some(pk.iter().any(|name| *name == column.name));
     }
     Ok(())
 }
 
-async fn indexes(
-    client: &mut MssqlClient,
-    qualified: &str,
-) -> Result<Vec<MetaIndex>, DriverError> {
+async fn indexes(client: &mut MssqlClient, qualified: &str) -> Result<Vec<MetaIndex>, DriverError> {
     let rows = query_rows(
         client,
         "SELECT i.name, i.is_unique, c.name, ic.key_ordinal \

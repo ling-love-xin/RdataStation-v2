@@ -60,7 +60,9 @@ impl Driver for MssqlDriver {
                 .map_err(|err| DriverError::connect(format!("设置 TCP_NODELAY 失败：{err}")))?;
             Client::connect(config, tcp.compat_write())
                 .await
-                .map_err(|err| DriverError::connect(format!("SQL Server 登录失败：{err}")))
+                .map_err(|err| {
+                    DriverError::connect(format!("SQL Server 登录失败：{err}{}", login_hint(params)))
+                })
         };
         let client = tokio::time::timeout(Duration::from_secs(timeout), connect)
             .await
@@ -279,6 +281,19 @@ pub fn option_str<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
     params.get(key).and_then(Value::as_str).filter(|s| !s.is_empty())
 }
 
+/// 登录失败时补一句「下一步怎么办」：真机上集成认证常报
+/// `SEC_E_NO_CREDENTIALS`，只回协议错误用户看不出该填什么。
+fn login_hint(params: &Value) -> &'static str {
+    let integrated = option_str(params, "username")
+        .or_else(|| option_str(params, "user"))
+        .is_none();
+    if integrated {
+        "（当前按 Windows 集成认证连接，进程没有可用的域凭据；请填写 SQL 认证的用户名/密码）"
+    } else {
+        "（请检查用户名、密码，以及实例是否启用了 SQL 登录）"
+    }
+}
+
 fn bind_params(query: &mut Query<'static>, params: &[Value]) {
     for param in params {
         match param {
@@ -415,6 +430,17 @@ mod tests {
         assert!(returns_rows("SELECT 1"));
         assert!(returns_rows("with x as (select 1) select * from x"));
         assert!(returns_rows("EXEC sp_who"));
+    }
+
+    #[test]
+    fn login_hint_points_at_sql_auth_or_credentials() {
+        let integrated = login_hint(&json!({"host": "127.0.0.1"}));
+        assert!(integrated.contains("集成认证"));
+        assert!(integrated.contains("用户名/密码"));
+
+        let sql_auth = login_hint(&json!({"username": "sa", "password": "x"}));
+        assert!(sql_auth.contains("检查用户名、密码"));
+        assert!(!sql_auth.contains("集成认证"));
     }
 
     #[tokio::test]

@@ -50,8 +50,9 @@ pub struct MetaIndex {
 pub struct MetaObjectDetail {
     pub object: MetaObjectRef,
     pub columns: Vec<MetaColumn>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub indexes: Vec<MetaIndex>,
+    /// 索引**个数**（协议面只给个数，明细另走 `Database::list_indexes`）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexes: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub row_count: Option<u64>,
 }
@@ -70,7 +71,7 @@ impl MetaObjectDetail {
                 kind: kind.into(),
             },
             columns,
-            indexes: Vec::new(),
+            indexes: None,
             row_count: None,
         }
     }

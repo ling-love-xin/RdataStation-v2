@@ -35,6 +35,8 @@
 //! 3. **3000 行**：大结果必须走 **Arrow 附件**（> 200 行还内联就违反 §4.2.1.2），
 //!    行数对得上，且在宿主侧解得成 `RecordBatch`（承载方式对消费方不可见）。
 //! 4. **取消**：`query.cancel` 之后那条在跑的查询要以 `-32004` 收场，而且要**真的停**。
+//!    取消是**可选能力**（§4.4）：`driver.describe` 未声明 `cancel` 的驱动跳过这一条，
+//!    界面按「没能停下来」如实提示（真库驱动确实可能没有中断 API）。
 //! 5. **无孤儿**：宿主关掉 stdin 之后对端必须自己退（§4.2.1 的协议级约定）——
 //!    这条不满足的话，宿主崩溃时会在用户机器上留下后台进程。
 //! 6. **导航面**（P2）：`meta.catalogs` / `meta.schemas` / `meta.objects` / `meta.object_detail` /
@@ -224,18 +226,31 @@ async fn a_big_result_arrives_as_arrow_batches() {
 #[tokio::test]
 async fn cancelling_stops_a_running_query() {
     let (mut supervisor, session_id) = connect("conformance.cancel").await;
+    let driver = SessionDriver::new(
+        supervisor
+            .session_conn(&session_id)
+            .expect("会话应当有连接"),
+        &session_id,
+    );
+    // 取消是**可选能力**（§4.4）：没声明 `cancel` 的驱动，界面会如实提示
+    // 「没能停下来」，这里就不该拿「必须真的中断」去判它不合格。
+    let descriptor = driver
+        .describe(&env_or("RDS_SIDECAR_DRIVER", "fixture"))
+        .await
+        .expect("driver.describe 应当答得出来");
+    if !descriptor.supports("cancel") {
+        println!("  跳过：该驱动未声明 cancel 能力（取消由界面如实提示）");
+        supervisor
+            .shutdown_all(Instant::now(), Duration::from_secs(10))
+            .await;
+        return;
+    }
     let sql = env_or("RDS_SIDECAR_SQL_SLOW", "select hold_ms=5000");
     let slow = slow_seconds();
     let request = QueryRequest::new("conformance-cancel", &sql);
 
     let started = Instant::now();
     let (result, ()) = {
-        let driver = SessionDriver::new(
-            supervisor
-                .session_conn(&session_id)
-                .expect("会话应当有连接"),
-            &session_id,
-        );
         tokio::join!(driver.execute(&request), async {
             tokio::time::sleep(Duration::from_millis(300)).await;
             if let Err(e) = driver.cancel(&request.request_id).await {
