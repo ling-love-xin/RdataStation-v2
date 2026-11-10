@@ -54,15 +54,80 @@ crates/workbench/src/panels/plugin_manager/
 | 统计行 | 全部 / 已启用 / 已停用 / 出错 | `render.rs` + `widgets::plugin_stats` |
 | 反馈条 | 错误 > 进行中 > 成功回执（三选一） | `render.rs` |
 | 重载横幅 | 待重载数量 +「立即重载」 | `render.rs` |
-| 筛选条 | 搜索 `Input` + 四档分段 `TabBar` + 「共 N 个」 | `render.rs`；筛选/搜索纯函数在 `widgets.rs` |
+| 筛选条 | 搜索 `Input` + 五档分段 `TabBar` + 「共 N 个」 | `render.rs`；筛选/搜索纯函数在 `widgets.rs` |
 | 主体左 | 两列卡片网格，奇数行补空位 | `cards.rs` |
-| 主体右 | 340px 详情栏：基本信息 / 贡献点 / 运行状态 / 管理动作 | `detail.rs` |
+| 主体右 | 340px 详情栏：基本信息 / 贡献点 / 驱动 / 依赖关系 / 权限 / 运行状态 / 管理动作 | `detail.rs` |
 
-筛选四档为 `全部 / 已启用 / 已停用 / 出错`——**没有**原型里的「可更新」：
+筛选五档为 `全部 / 已启用 / 已停用 / 出错 / 含驱动`——**没有**原型里的「可更新」：
 RDS 当前没有市场或远程索引，保留该档会变成永远空空如也的死入口。
+「含驱动」不按启用状态筛，排障时先定位驱动、再看它为什么没进下拉；搜索词同时匹配
+驱动 id / 显示名 / 分类（用户记不住 `rds.driver.oracle-rust` 这类插件包名）。
 
-详情栏「项目引用」一段目前是**如实占位**：Rust 侧只有 `uninstall_plugin`
-拒绝卸载时返回引用者清单，没有只读的「谁引用了该插件」查询接口。
+**依赖关系（2026-11-10）**：详情栏「依赖关系」段分两向——「本插件依赖」来自清单
+`dependencies`；「被其他插件依赖」来自 `DependencyManager::all_dependents`
+（遍历 `global.db` 插件表的 `manifest_json`，一次算全量反向索引）。
+`PluginInfo` 新增 `dependencies: Vec<String>` 与 `dependents: Option<Vec<String>>`；
+缓存与 `registered_drivers` 同口径（`None` = 全局库未初始化，`Some(空)` = 确实没有），
+在 `resync_sidecar_driver_rows` 里刷新，`list_plugins` 只读缓存、不碰异步库。
+卸载时的拒绝判断仍走实时 `check_dependents`，与这里展示的缓存是同一条实现
+（`check_dependents` 现在是 `all_dependents` 的一行查表）。
+反向依赖已知非空时，卡片与详情栏的「卸载」按钮直接禁用并在 tooltip 列出依赖者；
+缓存未知时不前置拦截，仍由卸载时的实时检查兜底（不把「没读到」当成「没人依赖」）。
+
+**驱动可见性（2026-11-10）**：`plugin::PluginInfo` 新增 `drivers: Vec<PluginDriverSummary>`，
+由清单 `[[contributes.drivers]]` 直接派生（id / display_name / default_port / category），
+管理页在卡片上加驱动 chips（每个 chip 直接标「已登记 / 已登记 · 已停用 / 未登记」），
+详情栏加「驱动」段。这样不用点进详情就能看出「插件在、下拉里有没有」。驱动段只做展示，不改登记链路；
+登记仍由 `driver_decl::resync_driver_rows` 写 `global.db` 的 `drivers` 表。
+另：`backend.runtime = "rust"` 的原生 sidecar 在部署期**不再解析解释器**
+（可执行文件就是插件自带的 agent），因此不会再被
+`RuntimeResolver::resolve` 判成 `COMMON_NOT_SUPPORTED` 而清掉驱动行。
+
+**贡献点明细（2026-11-10）**：`PluginInfo` 新增 `contribution_items: Vec<PluginContributionSummary>`
+（`kind` / `id` / `label` / `detail`），由清单派生：命令取 `category` + `shortcut`，面板取 `location`，
+设置取 `type` + `default`（JSON 串）。详情栏在「贡献点」摘要行下逐条列出；驱动不进这个列表，
+仍由「驱动」段单独展示——`ContributionRegistry` 本身也不收录驱动。
+
+**权限段（2026-11-10）**：详情栏五组 chips 分别对应清单 `[permissions]` 的
+`sidecar`（进程）/ `driver`（数据面）/ `frontend`（前端）/ `wasm`（沙箱）/ `host`（Host API）。
+`credentials = "database"` 时用 `warning` 色显式提示「会接收数据库密码（仅用于建立连接）」；
+`host` 非空时补一行「默认拒绝：声明只表示申请，不等于已放行」。
+按 `manifest.rs` 的口径，`sidecar` / `driver` 是**展示与告警轨、不门控**；`host` 默认拒绝，
+需要用户逐项放行。空清单显示「清单未声明权限。」
+
+**驱动登记状态（2026-11-10）**：清单声明 ≠ 下拉可见。`PluginInfo` 再增
+`registered_drivers: Option<Vec<PluginDriverRegistration{ id, enabled }>>`：
+`None` 表示本次没读到全局库（文案「登记状态未知」），`Some(空)` 才是确实一行都没登记。
+快照由 `PluginManager` 在 `resync_sidecar_driver_rows` 成功后从 `global.db.get_all_drivers()`
+筛 `driver_kind='sidecar'` 缓存，`list_plugins` 纯读缓存，不在同步路径碰异步库。
+详情栏每条驱动显示「已登记 / 已登记 · 已停用 / 未登记」，颜色依次 success / warning / danger；
+这样「插件显示已启用、下拉却没有」时，可直接定位是登记缺失而不是驱动实现缺失。
+页头统计行另加一格「驱动 N/M 已登记」（`plugin_driver_stats`）：
+声明了驱动却一个都没登记、或本次读不到登记表时用 `warning` 色，下拉为空时第一眼就能看到。
+这一格只读缓存，不做额外查询。
+
+统计行下新增**驱动链路**（`plugin_driver_chain`，纯函数）：
+`清单声明 → 插件启用 → 写入 drivers 表 → 连接下拉` 四段各自带状态点与计数，
+并在末尾给出当前卡点（无驱动声明 / 插件未启用 / 登记表未读取 / 驱动行未写入 /
+行已写入但全部停用（激活失败，看插件错误与 `sidecar.log`） / 部分不可用）。
+第三段会分开数「行已写入」与「行可用」：`enabled = false` 的行不算可用，也不报成「没写入」。
+四段全部由 `PluginInfo` 快照推导，不查库；「读不到登记表」只降为警告，不判成失败。
+预览页的链路条同步改成按 `PLUGINS` 现算，切换插件启停后四段计数会跟着变。
+
+**文件与日志入口（2026-11-10）**：`PluginInfo` 增 `install_path: Option<PathBuf>`
+（`plugin.toml` 所在目录；wasm 运行时列表不回报磁盘路径 → `None`；坏目录按
+`paths::plugin_dir(id)` 兜底，路径不存在也给 `None`）。详情栏「管理动作」下补两枚按钮：
+「目录」用 `opener::open` 在文件管理器打开安装目录，「日志」打开
+`paths::plugin_cache_dir(id)/sidecar.log`。日志文件不存在（驱动从未启动）时按钮禁用并
+在 tooltip 写明原因，不做点了没反应的死按钮；打开失败写进顶部 notice，不占用 error 段。
+日志路径由 `plugin::sidecar_log_path(id)` 提供，与 sidecar 启动时 stderr 落点同一口径。
+同一行还有「复制诊断」：`plugin_diagnostics` 把插件 id / 状态 / 错误 / 运行形态 / 安装目录 /
+日志路径 / 每个驱动的登记结果拼成纯文本写入剪贴板，省去让用户逐段截图。
+
+独立预览页：`prototype/plugin-manager-preview.html`（单文件、无网络、双击即开），
+在管理页形态上额外画了「驱动链路」条与连接对话框下拉演示；详情栏已与 GPUI 同步
+「运行形态 / 贡献点 / 依赖关系 / 权限 / 驱动登记状态」五段，状态栏按
+`已登记/声明` 汇总驱动，用于先评审前端。
 
 ---
 

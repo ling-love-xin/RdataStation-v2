@@ -10,7 +10,10 @@ use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::{ActiveTheme, IconName, Sizable, Size};
 use gpui_kit::{Context, Div, FontWeight, IntoElement, Window, div, rems};
 
-use super::widgets::{filtered_plugins, plugin_stats};
+use super::widgets::{
+    DriverChainLevel, filtered_plugins, plugin_driver_chain, plugin_driver_stats,
+    plugin_driver_stats_label, plugin_stats,
+};
 use super::*;
 use crate::ui;
 
@@ -19,6 +22,8 @@ impl PluginManagerPanel {
         let theme = cx.theme().clone();
         let snapshot = self.snapshot(cx);
         let stats = plugin_stats(&snapshot.plugins);
+        let driver_stats = plugin_driver_stats(&snapshot.plugins);
+        let driver_stats_label = plugin_driver_stats_label(driver_stats);
         let filter = self.filter();
         let query = self.query();
         let filtered = filtered_plugins(&snapshot.plugins, filter, &query);
@@ -101,6 +106,67 @@ impl PluginManagerPanel {
             .child(format!("已启用 {}", stats.enabled))
             .child(format!("已停用 {}", stats.disabled))
             .child(format!("出错 {}", stats.error));
+        // 驱动登记为 0 时用 warning 色：插件在、下拉却空，就是这一格。
+        let drivers_missing = driver_stats.declared > 0 && driver_stats.registered == 0;
+        let stats_row = stats_row.child(
+            div()
+                .text_color(if drivers_missing || driver_stats.unknown {
+                    theme.colors.warning
+                } else {
+                    theme.colors.muted_foreground
+                })
+                .child(driver_stats_label),
+        );
+
+        // 驱动链路：把「插件在、下拉空」的四段成败摊开，卡点写在同一行。
+        let chain = plugin_driver_chain(&snapshot.plugins);
+        let mut chain_row = div()
+            .h_flex()
+            .items_center()
+            .flex_wrap()
+            .gap_2()
+            .px_4()
+            .py_2()
+            .border_b(ui::HAIRLINE)
+            .border_color(theme.colors.border)
+            .text_xs()
+            .child(
+                div()
+                    .text_color(theme.colors.muted_foreground)
+                    .child("驱动链路"),
+            );
+        for (index, step) in chain.steps.iter().enumerate() {
+            if index > 0 {
+                chain_row =
+                    chain_row.child(div().text_color(theme.colors.muted_foreground).child("→"));
+            }
+            let tone = match step.level {
+                DriverChainLevel::Ok => theme.colors.success,
+                DriverChainLevel::Warn => theme.colors.warning,
+                DriverChainLevel::Bad => theme.colors.danger,
+            };
+            chain_row = chain_row.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .py_1()
+                    .rounded(theme.radius)
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .child(div().size_1p5().rounded_full().bg(tone))
+                    .child(step.label)
+                    .child(
+                        div()
+                            .text_color(theme.colors.muted_foreground)
+                            .child(step.detail.clone()),
+                    ),
+            );
+        }
+        if let Some(bottleneck) = chain.bottleneck.clone() {
+            chain_row = chain_row.child(div().text_color(theme.colors.warning).child(bottleneck));
+        }
 
         // 操作反馈：错误 > 进行中 > 成功回执（同一时刻只显示一条，避免三行挤在一起）。
         let feedback = if let Some(error) = snapshot.error.as_deref() {
@@ -252,6 +318,7 @@ impl PluginManagerPanel {
             .bg(theme.colors.background)
             .child(header)
             .child(stats_row)
+            .child(chain_row)
             .children(feedback)
             .children(reload_banner)
             .child(toolbar)

@@ -11,7 +11,9 @@ use gpui_kit::*;
 use plugin::wasm::PluginState;
 
 use super::widgets::{
-    contribution_summary, plugin_action_buttons, plugin_kind_label, plugin_state_label,
+    contribution_summary, plugin_action_buttons, plugin_backend_label,
+    plugin_driver_registration_label, plugin_file_buttons, plugin_kind_label,
+    plugin_receives_database_credentials, plugin_state_label,
 };
 use super::{PluginManagerPanel, PluginSnapshot};
 use crate::ui;
@@ -101,6 +103,7 @@ impl PluginManagerPanel {
                             .item("名称", plugin.name.clone(), 1)
                             .item("版本", plugin.version.clone(), 1)
                             .item("类型", plugin_kind_label(plugin.kind), 1)
+                            .item("运行形态", plugin_backend_label(&plugin), 1)
                             .item("作者", plugin.metadata.author.clone(), 1)
                             .item(
                                 "入口",
@@ -128,8 +131,330 @@ impl PluginManagerPanel {
                             .child(contribution_summary(
                                 snapshot.contributions.get(&plugin.id),
                             )),
+                    )
+                    .when(
+                        !plugin.contribution_items.is_empty(),
+                        |section| {
+                            section.child(div().v_flex().gap_1().children(
+                                plugin.contribution_items.iter().map(|item| {
+                                    div()
+                                        .v_flex()
+                                        .gap_0p5()
+                                        .child(
+                                            div()
+                                                .h_flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .px_2()
+                                                        .py_0p5()
+                                                        .rounded(theme.radius)
+                                                        .border_1()
+                                                        .border_color(theme.colors.border)
+                                                        .text_xs()
+                                                        .text_color(theme.colors.foreground)
+                                                        .child(item.kind.clone()),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex_1()
+                                                        .min_w_0()
+                                                        .text_sm()
+                                                        .text_color(theme.colors.foreground)
+                                                        .text_ellipsis()
+                                                        .child(item.label.clone()),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.colors.muted_foreground)
+                                                .child(match item.detail.as_deref() {
+                                                    Some(detail) => {
+                                                        format!("{} · {}", item.id, detail)
+                                                    }
+                                                    None => item.id.clone(),
+                                                }),
+                                        )
+                                }),
+                            ))
+                        },
                     ),
             )
+            .child(
+                div()
+                    .v_flex()
+                    .gap_2()
+                    .p_4()
+                    .border_b(ui::HAIRLINE)
+                    .border_color(theme.colors.border)
+                    .child(section_title("驱动", &theme))
+                    .child({
+                        let mut block = div().v_flex().gap_2();
+                        if plugin.drivers.is_empty() {
+                            block = block.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.muted_foreground)
+                                    .child("此插件没有声明数据库驱动。"),
+                            );
+                        } else {
+                            block = block
+                                .child(div().v_flex().gap_2().children(
+                                    plugin.drivers.iter().map(|driver| {
+                                        let status_label =
+                                            plugin_driver_registration_label(&plugin, &driver.id);
+                                        let status_color = match status_label {
+                                            "已登记" => theme.colors.success,
+                                            "已登记 · 已停用" => theme.colors.warning,
+                                            "未登记" => theme.colors.danger,
+                                            _ => theme.colors.muted_foreground,
+                                        };
+                                        div()
+                                            .v_flex()
+                                            .gap_0p5()
+                                            .child(
+                                                div()
+                                                    .h_flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .text_color(theme.colors.foreground)
+                                                            .child(driver.display_name.clone()),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(
+                                                                theme.colors.muted_foreground,
+                                                            )
+                                                            .child(driver.id.clone()),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .px_2()
+                                                            .py_0p5()
+                                                            .rounded(theme.radius)
+                                                            .border_1()
+                                                            .border_color(status_color)
+                                                            .text_xs()
+                                                            .text_color(status_color)
+                                                            .child(status_label),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme.colors.muted_foreground)
+                                                    .child(format!(
+                                                        "默认端口 {} · 分类 {}",
+                                                        driver
+                                                            .default_port
+                                                            .map(|port| port.to_string())
+                                                            .unwrap_or_else(|| "—".to_string()),
+                                                        driver
+                                                            .category
+                                                            .clone()
+                                                            .unwrap_or_else(|| {
+                                                                "relational".to_string()
+                                                            }),
+                                                    )),
+                                            )
+                                    }),
+                                ))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.colors.muted_foreground)
+                                        .child("「已登记」表示 global.db 的 drivers 表已有此行（连接对话框下拉可见）；「未登记」时先看上方运行状态与失败原因。"),
+                                );
+                        }
+                        block
+                    }),
+            )
+            .child({
+                let mut section = div()
+                    .v_flex()
+                    .gap_2()
+                    .p_4()
+                    .border_b(ui::HAIRLINE)
+                    .border_color(theme.colors.border)
+                    .child(section_title("依赖关系", &theme));
+
+                // 上游：本插件声明需要谁（清单 dependencies）
+                section = section.child(
+                    div()
+                        .v_flex()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.colors.muted_foreground)
+                                .child("本插件依赖"),
+                        )
+                        .when(plugin.dependencies.is_empty(), |group| {
+                            group.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.muted_foreground)
+                                    .child("未声明依赖。"),
+                            )
+                        })
+                        .when(!plugin.dependencies.is_empty(), |group| {
+                            group.child(div().h_flex().flex_wrap().gap_1().children(
+                                plugin.dependencies.iter().map(|dependency| {
+                                    div()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded(theme.radius)
+                                        .border_1()
+                                        .border_color(theme.colors.border)
+                                        .text_xs()
+                                        .text_color(theme.colors.foreground)
+                                        .child(dependency.clone())
+                                }),
+                            ))
+                        }),
+                );
+
+                // 下游：谁依赖本插件（卸载检查同一份反向索引）
+                section = section.child(
+                    div()
+                        .v_flex()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.colors.muted_foreground)
+                                .child("被其他插件依赖"),
+                        )
+                        .child(match plugin.dependents.as_deref() {
+                            None => div()
+                                .text_xs()
+                                .text_color(theme.colors.muted_foreground)
+                                .child("未查询（全局库未初始化，卸载前仍会实时检查）。")
+                                .into_any_element(),
+                            Some([]) => div()
+                                .text_xs()
+                                .text_color(theme.colors.muted_foreground)
+                                .child("没有其他插件依赖它。")
+                                .into_any_element(),
+                            Some(dependents) => div()
+                                .h_flex()
+                                .flex_wrap()
+                                .gap_1()
+                                .children(dependents.iter().map(|dependent| {
+                                    div()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded(theme.radius)
+                                        .border_1()
+                                        .border_color(theme.colors.warning)
+                                        .text_xs()
+                                        .text_color(theme.colors.warning)
+                                        .child(dependent.clone())
+                                }))
+                                .into_any_element(),
+                        })
+                        .when(
+                            plugin.dependents.as_deref().is_some_and(|d| !d.is_empty()),
+                            |group| {
+                                group.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.colors.muted_foreground)
+                                        .child("卸载前需先卸载依赖它的插件。"),
+                                )
+                            },
+                        ),
+                );
+
+                section
+            })
+            .child({
+                let permissions = &plugin.permissions;
+                let mut groups: Vec<(&str, Vec<String>)> = Vec::new();
+                if !permissions.sidecar.is_empty() {
+                    groups.push(("进程", permissions.sidecar.clone()));
+                }
+                if !permissions.driver.is_empty() {
+                    groups.push(("数据面", permissions.driver.clone()));
+                }
+                if !permissions.frontend.is_empty() {
+                    groups.push(("前端", permissions.frontend.clone()));
+                }
+                if !permissions.wasm.is_empty() {
+                    groups.push(("沙箱", permissions.wasm.clone()));
+                }
+                if !permissions.host.is_empty() {
+                    groups.push(("Host API", permissions.host.clone()));
+                }
+                let has_any = !groups.is_empty() || permissions.credentials.is_some();
+
+                div()
+                    .v_flex()
+                    .gap_2()
+                    .p_4()
+                    .border_b(ui::HAIRLINE)
+                    .border_color(theme.colors.border)
+                    .child(section_title("权限", &theme))
+                    .when(!has_any, |section| {
+                        section.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.colors.muted_foreground)
+                                .child("清单未声明权限。"),
+                        )
+                    })
+                    .children(groups.into_iter().map(|(label, values)| {
+                        div()
+                            .v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.muted_foreground)
+                                    .child(label),
+                            )
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .flex_wrap()
+                                    .children(values.into_iter().map(|value| {
+                                        div()
+                                            .px_2()
+                                            .py_0p5()
+                                            .rounded(theme.radius)
+                                            .border_1()
+                                            .border_color(theme.colors.border)
+                                            .text_xs()
+                                            .text_color(theme.colors.foreground)
+                                            .child(value)
+                                    })),
+                            )
+                    }))
+                    .when(plugin_receives_database_credentials(&plugin), |section| {
+                        section.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.colors.warning)
+                                .child("会接收数据库密码（仅用于建立连接）。"),
+                        )
+                    })
+                    .when(!permissions.host.is_empty(), |section| {
+                        section.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.colors.muted_foreground)
+                                .child("Host API 默认拒绝：声明只表示申请，不等于已放行。"),
+                        )
+                    })
+            })
             .child(
                 div()
                     .v_flex()
@@ -165,12 +490,6 @@ impl PluginManagerPanel {
                                         .child(error.to_string()),
                                 )
                             }),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child("项目引用：只读查询（DependencyManager::check_dependents）已存在，详情栏尚未接线，暂不展示。"),
                     ),
             )
             .child(
@@ -190,6 +509,11 @@ impl PluginManagerPanel {
                                 busy,
                                 self.plugin_entity(),
                             )),
+                    )
+                    .child(
+                        div().h_flex().flex_wrap().items_center().gap_1().children(
+                            plugin_file_buttons("detail", &plugin, self.plugin_entity()),
+                        ),
                     )
                     .child(Separator::horizontal().color(theme.colors.border))
                     .child(

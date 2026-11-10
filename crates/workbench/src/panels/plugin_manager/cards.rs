@@ -9,8 +9,8 @@ use plugin::wasm::PluginState;
 
 use super::PluginManagerPanel;
 use super::widgets::{
-    contribution_summary, plugin_action_buttons, plugin_kind_label, plugin_state_label,
-    select_button,
+    contribution_summary, plugin_action_buttons, plugin_backend_label,
+    plugin_driver_registration_label, plugin_state_label, select_button,
 };
 use crate::ui;
 
@@ -115,17 +115,48 @@ impl PluginManagerPanel {
                             .gap_2()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child(plugin_kind_label(plugin.kind))
+                            .child(plugin_backend_label(plugin))
                             .child("·")
                             .child(contribution_summary(snapshot.contributions.get(&plugin.id))),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_1()
-                            .children(plugin_action_buttons("card", plugin, busy, panel.clone())),
                     );
+
+                if !plugin.drivers.is_empty() {
+                    card = card.child(div().h_flex().items_center().gap_1().flex_wrap().children(
+                        plugin.drivers.iter().map(|driver| {
+                            let status = plugin_driver_registration_label(plugin, &driver.id);
+                            let status_color = match status {
+                                "已登记" => theme.colors.success,
+                                "已登记 · 已停用" => theme.colors.warning,
+                                "未登记" => theme.colors.danger,
+                                _ => theme.colors.muted_foreground,
+                            };
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_1()
+                                .px_2()
+                                .py_0p5()
+                                .rounded(theme.radius)
+                                .border_1()
+                                .border_color(theme.colors.border)
+                                .text_xs()
+                                .child(
+                                    div()
+                                        .text_color(theme.colors.foreground)
+                                        .child(driver.display_name.clone()),
+                                )
+                                .child(div().text_color(status_color).child(status))
+                        }),
+                    ));
+                }
+
+                card = card.child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .children(plugin_action_buttons("card", plugin, busy, panel.clone())),
+                );
 
                 if selected {
                     card = card.border_color(theme.colors.primary);
