@@ -8,7 +8,7 @@ use gpui_kit::component::separator::Separator;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::{ActiveTheme, IconName, Sizable, Size};
-use gpui_kit::{Context, Div, FontWeight, IntoElement, Window, div, rems};
+use gpui_kit::{Context, Div, FontWeight, IntoElement, SharedString, Window, div, rems};
 
 use super::widgets::{
     DriverChainLevel, filtered_plugins, plugin_driver_chain, plugin_driver_stats,
@@ -166,6 +166,24 @@ impl PluginManagerPanel {
         }
         if let Some(bottleneck) = chain.bottleneck.clone() {
             chain_row = chain_row.child(div().text_color(theme.colors.warning).child(bottleneck));
+        }
+        // 冲突时直接给出「停用」入口：加载期冲突会让两个插件都不可用，用户必须
+        // 停掉其中一个才能恢复；只写「请先停用」而不给按钮，等于让用户自己去找。
+        for conflict in &chain.conflicts {
+            for plugin_id in &conflict.plugins {
+                let id = plugin_id.clone();
+                let manager = cx.entity();
+                chain_row = chain_row.child(
+                    Button::new(SharedString::from(format!("plugin-chain-disable-{plugin_id}")))
+                        .ghost()
+                        .label(SharedString::from(format!("停用 {plugin_id}")))
+                        .with_size(Size::Small)
+                        .on_click(move |_, _, app| {
+                            let _ = manager
+                                .update(app, |this, cx| this.disable_plugin(id.clone(), cx));
+                        }),
+                );
+            }
         }
 
         // 操作反馈：错误 > 进行中 > 成功回执（同一时刻只显示一条，避免三行挤在一起）。

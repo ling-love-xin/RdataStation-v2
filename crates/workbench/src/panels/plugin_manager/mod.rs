@@ -165,6 +165,12 @@ impl PluginManagerPanel {
             .update(cx, |panel, cx| panel.reload_plugins(cx));
     }
 
+    /// 从驱动冲突告警直接停用某个插件（避免用户还要去列表里找）。
+    pub(crate) fn disable_plugin(&self, id: String, cx: &mut Context<Self>) {
+        self.plugin_panel
+            .update(cx, |panel, cx| panel.set_plugin_enabled(id, false, cx));
+    }
+
     pub(crate) fn plugin_entity(&self) -> Entity<PluginPanel> {
         self.plugin_panel.clone()
     }
