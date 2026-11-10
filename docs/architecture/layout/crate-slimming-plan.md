@@ -33,7 +33,7 @@
 | 文件 | 行数 | 性质（已读文件头实证） |
 | --- | --- | --- |
 | engine/persistence/metadata_cache.rs | 5166 | **纯逻辑**（rusqlite 元数据缓存：指纹路径/池/读写/迁移，无 GPUI） |
-| workbench/src/view/{mod,lifecycle,workspace,dock,actions,status,render}.rs | 7 文件，最大 753 | **渲染装配宿主**（v5 布局：标题栏/活动栏/DockArea/状态栏/Quick Open 弹层；2026-10-15 已目录化，原 3243 行单文件） |
+| workbench/src/view/{mod,lifecycle,workspace,dock,actions,status,render}.rs | 7 文件，最大 771 | **渲染装配宿主**（v5 布局：标题栏/活动栏/DockArea/状态栏/Quick Open 弹层；2026-11-10 已目录化，原 3243 行单文件） |
 | insight/src/model.rs | 2713 | **纯逻辑视图模型**（types 已独立 mod；本文件为面板 Tab/目标/四态/列画像，不持色值可单测） |
 | project/src/ui.rs | 2708 | **渲染 + 宿主注入**（选择器/项目菜单/设置/对话框，ProjectUiHost 端口） |
 | connection_dialog/.../helpers.rs | 2535 | **UI 函数散集**（68 个 pub(crate) 项：图标/头部/过滤/表单/驱动元数据/策略，六组用途混杂，文件头 `use super::*`） |
@@ -59,7 +59,7 @@
 4. **行数大 ≠ 需要拆**：editor 49,607 行但 top 文件仅 655（core/exec/language/notebook/support/ports/
    quick_open 目录化健康）；result_panel 15,733 / plugin 15,001 同样已拆散。**拆分的判据是单文件体积**
    与职责混杂度，不是 crate 总行数。
-5. **workbench 的 `view.rs` 已拆成 `view/` 目录（2026-10-15，3243 → 7 文件、最大 753）**：
+5. **workbench 的 `view.rs` 已拆成 `view/` 目录（2026-11-10，3243 → 7 文件、最大 771）**：
    原「唯一巨型装配宿主」现已按构造/面板装配/Dock/设置与 Quick Open/状态栏/Render 分区；
    装配核心仍在 `view/mod.rs` 与 `view/workspace.rs`。
 
@@ -76,7 +76,7 @@ connection connector.rs 1140 / shared error.rs 1175 / scratchpad jobs.rs 1124。
 4. 测试随迁到对应子模块；`#[cfg(test)] mod tests` 不跨文件（避免 `use super::*` 引入外部宏）。
 
 ### 模式 B：渲染分区（GPUI 视图）
-适用：workbench `view/`（**已完成**，2026-10-15）/ project ui.rs 2708 / connection_dialog helpers.rs 2535。
+适用：workbench `view/`（**已完成**，2026-11-10）/ project ui.rs 2708 / connection_dialog helpers.rs 2535。
 
 方法（约束来自 gpui-kit 规范，`gpui-kit-dev/SKILL.md`）：
 1. **只移动代码，不重写控件**：组件选型 / 颜色（`cx.theme().colors.*`）/ 动效（`with_animation`）
@@ -102,7 +102,7 @@ connection connector.rs 1140 / shared error.rs 1175 / scratchpad jobs.rs 1124。
 | # | 文件面 | 性质 | 方法 | 预估 |
 | --- | --- | --- | --- | --- |
 | **P3** | engine/persistence/metadata_cache.rs 5166 | 纯逻辑 | 模式 A：拆 5–6 子模块（指纹路径 / 池 / 读写 / 失效 / 迁移），`persistence/mod.rs` 重导 | 单文件 5166→<1200；engine lib 测试（3270 行 tests）全绿 |
-| **P4** | workbench/src/view/（已拆分，2026-11-10） | 渲染装配 | 模式 B：按 v5 区块拆成 `{mod,lifecycle,workspace,dock,actions,status,render}.rs`，最大 753；`Render` 与 `init_workspace` 仍在 `view/` | 已完成；workbench lib 52 + `ui_contract` 10 全绿 |
+| **P4** | workbench/src/view/（已拆分，2026-11-10） | 渲染装配 | 模式 B：按 v5 区块拆成 `{mod,lifecycle,workspace,dock,actions,status,render}.rs`，最大 771；`Render` 与 `init_workspace` 仍在 `view/` | 已完成；workbench lib 52 + `ui_contract` 10 全绿 |
 | **P5** | insight model.rs 2713 + jobs.rs 1449 | 纯逻辑 | 模式 A：model 再拆（面板视图模型 / 阈值与文案 / 列画像视图模型）；jobs 保持（结构已清晰，仅评估） | model 2713→<1200；insight lib 测试全绿 |
 | **P6** | project/src/ui.rs 2708 | 渲染 + 端口 | 模式 B：按对话框/选择器/菜单/设置拆 3–4 文件，`ProjectUiHost` 端口不动 | ui.rs 2708→<1200 |
 | **P7** | connection_dialog/.../helpers.rs 2535 | UI 函数散集 | 模式 B：按用途六组拆 4–5 文件（icons_input / headers / filters / forms / driver_meta / policy），`helpers/mod.rs` 重导 | 单文件 2535→各 <600 |
