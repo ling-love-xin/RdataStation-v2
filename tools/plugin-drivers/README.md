@@ -10,7 +10,7 @@ Java / Python 解释器由宿主 `crates/plugin/src/runtime.rs` 三级查找；R
 
 ```
 tools/plugin-drivers/
-├── oracle-jdbc/            # rds.driver.oracle：通用 JDBC 壳 + ojdbc11（+ h2 无证书验证）
+├── oracle-jdbc/            # rds.driver.oracle：通用 JDBC 壳 + ojdbc11（+ h2 无证书验证；默认不安装）
 ├── postgres-py/            # rds.driver.postgres-py：Python DB-API 壳 + psycopg（用户环境）
 ├── rust-core/              # crate rds-driver-sidecar：Rust 驱动共享协议内核（帧 / 错误码 / Page / meta）
 ├── oracle-rust/            # crate rds-driver-oracle：Oracle 原生驱动源码（oracle-rs）
@@ -23,8 +23,19 @@ tools/plugin-drivers/
 ## 使用
 
 ```powershell
+# 默认装 postgres-py + oracle-rust + mssql-rust
 powershell -ExecutionPolicy Bypass -File tools\plugin-drivers\install.ps1
+
+# 只预检、不动任何文件
+powershell -ExecutionPolicy Bypass -File tools\plugin-drivers\install.ps1 -DryRun -SkipRust
+
+# 回退到 JDBC 版 Oracle（会与 oracle-rust 的驱动 id `oracle` 撞车，不能同时启用）
+powershell -ExecutionPolicy Bypass -File tools\plugin-drivers\install.ps1 -WithJdbcOracle
 ```
+
+> **Oracle 只装一版**：`rds.driver.oracle`（JDBC）与 `rds.driver.oracle-rust` 都向宿主贡献
+> 驱动 id `oracle`。两个都装会被加载期跨插件冲突检测拒绝，所以 install 默认只装 Rust 版；
+> JDBC 版必须显式 `-WithJdbcOracle`，且装之前先把 `rds.driver.oracle` 目录移出 `.rds/plugins`。
 
 产物原则：驱动 jar / 壳 jar / Rust 驱动二进制不入库（各包 `.gitignore` 忽略 `lib/`、`bin/`），
 全部由脚本运行时组装（Maven Central 下载 + 壳构建 + `cargo build --release`）。

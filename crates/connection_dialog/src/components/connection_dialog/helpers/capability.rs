@@ -145,10 +145,11 @@ pub(crate) fn policy_summary(config: Option<&str>) -> String {
 
 /// 该数据库类型下是否有**可用驱动**（决定类型能否被选中）。
 ///
-/// 类型目录与驱动目录是两层：`data_source_types` 里有条目不代表能用——当前只内置
-/// MySQL / PostgreSQL / SQLite / DuckDB 四个驱动，其余类型（MariaDB / Oracle /
-/// SQL Server / ClickHouse…）需等驱动插件能力开放。没有可用驱动的类型：
-/// 类型树置灰并标注「暂无驱动」，且 `select_type` 拒绝切换（避免“选了类型却存不了”）。
+/// 类型目录与驱动目录是两层：`data_source_types` 里有条目不代表能用——内置驱动只有
+/// MySQL / PostgreSQL / SQLite / DuckDB；Oracle / SQL Server 由 Rust sidecar 插件提供，
+/// 是否可用取决于对应插件是否安装并成功登记驱动。没有可用驱动的类型（如尚未提供插件的
+/// MariaDB / ClickHouse）：类型树置灰并标注「暂无驱动」，且 `select_type` 拒绝切换
+/// （避免“选了类型却存不了”）。
 pub(crate) fn type_has_driver(drivers: &[Driver], type_id: &str) -> bool {
     drivers.iter().any(|d| d.enabled && d.type_id == type_id)
 }
