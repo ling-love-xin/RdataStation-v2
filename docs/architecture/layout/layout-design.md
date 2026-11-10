@@ -136,11 +136,11 @@
 
 | 设计决策 | 实现位置 |
 | --- | --- |
-| 五段布局 / 标题栏 / 活动栏 | `crates/workbench/src/view.rs`（`WorkbenchView::render_title_bar` / `render_activity_bar` / `init_workspace`） |
-| 左右侧边栏（Dock 装配与三模式） | `crates/workbench/src/view.rs` `init_workspace`（`set_dock` / `toggle_dock` / `remove_dock`） |
-| panel 枚举 | `crates/workbench/src/view.rs`（`LeftPanel` / `RightPanel` / `SidebarMode`） |
+| 五段布局 / 标题栏 / 活动栏 | `crates/workbench/src/view/`：`dock.rs`（`render_title_bar` / `render_left_activity_bar` / `render_right_activity_bar`）、`workspace.rs`（`init_workspace`） |
+| 左右侧边栏（Dock 装配与三模式） | `crates/workbench/src/view/workspace.rs` `init_workspace`（`set_dock` / `toggle_dock` / `remove_dock`）+ `view/dock.rs`（`apply_left_mode` / `apply_right_mode`） |
+| panel 枚举 | `crates/workbench/src/view/mod.rs`（重导 `workbench_shell::model` 的 `LeftPanel` / `RightPanel` / `SidebarMode`） |
 | 面板实现与模块划分 | `crates/workbench/src/panels/`：`mod.rs`（`SidebarPanel` 装配 + 面板协议）/ `nav.rs`（M4 导航）/ `scratchpad_panel.rs`（M5 草稿箱）/ `editor.rs`（编辑区 + 属性面板宿主 + 连接对话框宿主）/ `right.rs`（`RightSidebarPanel`）/ `shared.rs`（`Shared`）。**对外路径 `crate::panels::X` 由 `mod.rs` 重导保持稳定**；`scratchpad_panel.rs` 带 `_panel` 后缀以避免遮蔽 `scratchpad` crate。拆分依据、边界规则、跨模块耦合审计与后续调整见 `panels-modules.md` |
-| Quick Open 与命令 | `crates/workbench/src/commands.rs` + 标题栏入口（view.rs） |
+| Quick Open 与命令 | `crates/workbench/src/commands.rs` + 标题栏入口（`view/dock.rs`）+ Quick Open 开关（`view/actions.rs::toggle_quick_open`） |
 | 设置入口（活动栏 ⚙） | `crates/settings`（视图 + `OpenSettings` 命令），workbench 只保留触发按钮 |
 | 主题加载 / 切换 | `crates/app/src/main.rs`（`watch_dir`）+ `crates/settings`（外观节切换命令） |
 | 主题资产 | `assets/themes/rds-theme.json`（+ product-tokens.json） |

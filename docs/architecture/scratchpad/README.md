@@ -86,7 +86,7 @@
 | `crates/workbench/src/panels/shared.rs`（`Shared`） | 跨面板共享态：`request_open_in_editor` / `take_open_in_editor`（打开草稿）、`scratchpad_search`（搜索结果）、`scratchpad_pump_request`（轮询印接力）、`scratchpad_store`（元数据级操作） |
 | `crates/workbench/src/panels/mod.rs`（`SidebarPanel`） | 左 Dock 装配：持 `Entity<ScratchpadView>`，`LeftPanel::Draft` 分支转发渲染 |
 | `crates/workbench/src/commands.rs`、`crates/workbench_shell/src/ui.rs` | `scratchpad` key context 动作；`SCRATCHPAD_GROUP_MAX_HEIGHT` / `SCRATCHPAD_EMPTY_ICON_SIZE` 等尺寸常量（外壳 crate，经 `crate::ui` 重导） |
-| `crates/workbench/src/view.rs`（`WorkbenchView`） | 宿主：消费 `Shared::take_open_in_editor()` → `open_in_editor`（同路径只激活；草稿带 `file_meta` 绑定时**预选连接**）；持「执行回执→元数据回写」泵 |
+| `crates/workbench/src/view/lifecycle.rs`（`WorkbenchView`） | 宿主：消费 `Shared::take_open_in_editor()` → `open_in_editor`（同路径只激活；草稿带 `file_meta` 绑定时**预选连接**）；持「执行回执→元数据回写」泵 |
 | `crates/workbench/src/services/scratchpad_meta.rs` | 执行回执 → 草稿元数据回写（Phase C-2 后半）：1 s 一拍，`draft_targets` 只留模块内草稿，`store.update_file_meta` 同步写（K1c），失败进状态栏 |
 | `crates/app/src/main.rs` | 快捷键绑定（`ctrl-a` / `f2` / `delete` / `escape` / `↑↓` / `enter` / `ctrl-n`，context = `scratchpad`） |
 | `crates/scratchpad/README.md` | crate 入口（特点提炼，不复述设计） |

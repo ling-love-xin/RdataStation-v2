@@ -194,7 +194,7 @@ paths::assets_dir()      // 随包只读资源（主题 / 图标）——**不**
 | 设计决策 | 实现位置 |
 | --- | --- |
 | 唯一路径解析点 | `crates/paths/src/lib.rs`（新增 crate：`home/config_dir/data_dir/log_dir/temp_dir/extensions_dir`） |
-| 随包只读资源（`assets/`） | `crates/paths/src/lib.rs`（`assets_dir`）；消费方 `crates/app/src/main.rs`（主题目录）、`crates/workbench/src/view.rs`（标题栏图标）；打包见 `tools/package-release.sh` |
+| 随包只读资源（`assets/`） | `crates/paths/src/lib.rs`（`assets_dir`）；消费方 `crates/app/src/main.rs`（主题目录）、`crates/workbench/src/view/dock.rs`（标题栏图标）；打包见 `tools/package-release.sh` |
 | 进程临时目录重定向 | `crates/app/src/main.rs`（启动最早处设 `TEMP`/`TMPDIR`） |
 | 设置路径 | `crates/settings/src/lib.rs` |
 | 全局数据 / 密钥库 | `crates/engine/src/migration/global_init.rs`、`crates/engine/src/persistence/*`、`crates/shared/src/crypto.rs` |

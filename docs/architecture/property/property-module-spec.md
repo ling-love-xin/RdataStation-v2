@@ -296,7 +296,7 @@ pub struct PropertySection {
 | `PropertyRef` / `PropertyRequest` / `property_ref_of`（保留） | `crates/database/src/model.rs` |
 | 属性加载入队 / 结果类型 | `crates/database/src/nav_jobs.rs` |
 | tab 化描述驱动渲染（三部分布局，§16） | `crates/workbench/src/panels/property_panel.rs::render_property_panel`（`PropertyHostPanel`，中央 Dock 独立 tab） |
-| 属性面板中央 tab 装配 / 聚焦（`open_property` 回调，2026-10-09） | `crates/workbench/src/view.rs::init_workspace` + `crates/workbench/src/panels/shared.rs` |
+| 属性面板中央 tab 装配 / 聚焦（`open_property` 回调，2026-10-09） | `crates/workbench/src/view/workspace.rs::init_workspace` + `crates/workbench/src/panels/shared.rs` |
 | Quick Open 打开属性 | `crates/workbench/src/quick_open/model.rs`（`ShowProperties`，类型不变） |
 | 属性行描述符化 + 编辑控件渲染（网格单元，§16） | `crates/workbench/src/panels/property_panel.rs::render_property_cell` |
 | 属性编辑提交（`setPropertyValue` 对齐；SQL 由 provider 生成） | `crates/database/src/property_panel.rs::apply_property_edit` |

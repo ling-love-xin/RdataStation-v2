@@ -80,7 +80,7 @@
 | SQL 语义着色 | `crates/editor/src/view/highlight.rs`（✅ `TokenClass → 主题词汇`，颜色由主题解析） |
 | 折叠（候选纯函数 / 喂内核） | `crates/editor/src/fold.rs`（✅ 纯函数：括号组 / `CASE`·`BEGIN`·`IF` → `END` / 多行注释与字面量；档位与词法边界都在模块头）+ `crates/editor/src/view/fold.rs`（✅ 喂候选：构造一次 + 每次文本变更后重喂） |
 | Action / 快捷键 | `crates/editor/src/commands.rs` + `crates/app/src/main.rs` |
-| 中央区装配 | `crates/workbench/src/view.rs::init_workspace` |
+| 中央区装配 | `crates/workbench/src/view/workspace.rs::init_workspace` |
 | SQL 执行 / 事务 / 取消 | `crates/engine/src/services/sql_service.rs` |
 | 历史存储 | `crates/engine/src/persistence/history_store.rs` |
 | 格式化 / 转译 / 执行计划 | `crates/engine/src/sql/{formatter.rs, script.rs, transpiler.rs, explain.rs}`（✅ B10 三个都接线了）：格式化与转译共用 **`script.rs`** 的“切分 → 逐条改写 → 原位回填”（区间外一个字节不动）；转译**先切分再逐条**（整篇 `transpile` 对脚本会静默丢语句）；执行计划的前缀按方言生成。编辑器侧的“改哪一段 / 光标去哪”分别在 `crates/editor/src/{format.rs, translate.rs}` |

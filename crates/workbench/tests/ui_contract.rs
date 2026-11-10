@@ -137,7 +137,13 @@ fn ui_size_constants_match_design() {
 #[test]
 fn view_layer_has_no_raw_size_literals() {
     let sources: &[(&str, &str)] = &[
-        ("view.rs", include_str!("../src/view.rs")),
+        ("view/mod.rs", include_str!("../src/view/mod.rs")),
+        ("view/lifecycle.rs", include_str!("../src/view/lifecycle.rs")),
+        ("view/workspace.rs", include_str!("../src/view/workspace.rs")),
+        ("view/dock.rs", include_str!("../src/view/dock.rs")),
+        ("view/actions.rs", include_str!("../src/view/actions.rs")),
+        ("view/status.rs", include_str!("../src/view/status.rs")),
+        ("view/render.rs", include_str!("../src/view/render.rs")),
         ("panels/mod.rs", include_str!("../src/panels/mod.rs")),
         (
             "panels/project_picker.rs",
@@ -733,7 +739,13 @@ fn has_literal_px(src: &str) -> bool {
 #[test]
 fn ui_sources_have_no_raw_color_literals() {
     let sources: &[(&str, &str)] = &[
-        ("workbench/view.rs", include_str!("../src/view.rs")),
+        ("workbench/view/mod.rs", include_str!("../src/view/mod.rs")),
+        ("workbench/view/lifecycle.rs", include_str!("../src/view/lifecycle.rs")),
+        ("workbench/view/workspace.rs", include_str!("../src/view/workspace.rs")),
+        ("workbench/view/dock.rs", include_str!("../src/view/dock.rs")),
+        ("workbench/view/actions.rs", include_str!("../src/view/actions.rs")),
+        ("workbench/view/status.rs", include_str!("../src/view/status.rs")),
+        ("workbench/view/render.rs", include_str!("../src/view/render.rs")),
         ("panels/mod.rs", include_str!("../src/panels/mod.rs")),
         (
             "panels/project_picker.rs",

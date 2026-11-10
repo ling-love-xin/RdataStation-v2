@@ -167,7 +167,7 @@ graph LR
 | workbench 侧桥接与装配 | `crates/workbench/src/components/project_host.rs` |
 | 会话类型与解析 | `crates/project/src/ui.rs`（`OpenProject`）、`crates/workbench/src/services/project_session.rs`（`resolve`） |
 | 共享状态字段 | `crates/workbench/src/panels/`（`Shared::{project, project_ui, editor_*}`） |
-| 标题栏项目槽 + 菜单 | `crates/workbench/src/view.rs`（`render_title_bar`；`Button::dropdown_menu` + `project::ui::build_project_menu`） |
+| 标题栏项目槽 + 菜单 | `crates/workbench/src/view/dock.rs`（`render_title_bar`；`Button::dropdown_menu` + `project::ui::build_project_menu`） |
 | 菜单规格（顺序 / 文案 / 可用性） | `crates/project/src/ui.rs`（`project_menu_entries` 纯函数 + `attach_project_menu_handler`） |
 | 窗口测试 | `crates/project/src/ui/tests.rs` |
 | 视图测试规范 | `.agents/skills/gpui-kit-dev/SKILL.md`（「窗口测试」一节） |

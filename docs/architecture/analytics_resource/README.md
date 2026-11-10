@@ -115,7 +115,7 @@ crates/analytics_resource/src/
 | 工具栏规则（搜索 / 筛选 / 排序） | `src/filter/mod.rs`（纯函数 + 单测；五个排序键，比原始时间戳 / 字节数，缺值排最后；`search_haystack` = 显示名 / 别名 / 来源表 / 标签名 / 尾部） |
 | 详情属性面板（内容层） | `src/detail_view/`：`mod.rs` 装配、`header.rs` 头部、`banners.rs` 提示、`body_sections.rs` 分区、`actions.rs` 动作区、`rows.rs` 属性行、`tag_preview.rs` 标签预览 |
 | 归档 / 取回 / 草稿选择 / 版本历史 / 索引修复 / 回收站 / 标签 / 分组 / 重命名对话框 | `src/dialogs/{archive,checkout,pick,version,index_repair,trash,tag,group,rename,conflict,version_diff}`；已目录化的四者统一形态：`mod.rs` 类型与状态、`open.rs` 入口、`render.rs`（或 `fields.rs` / `menu.rs`）渲染件、`tests.rs` 外置用例 |
-| 详情面板的落点（右 Dock 档位） | `crates/workbench/src/panels/right.rs`（`RightPanel::Archive`）、`crates/workbench/src/view.rs` |
+| 详情面板的落点（右 Dock 档位） | `crates/workbench/src/panels/right.rs`（`RightPanel::Archive`）、`crates/workbench/src/view/workspace.rs` |
 | 呈现层（索引行 → 面板快照） | `src/present/`（`snapshot.rs` 快照、`rows.rs` 行、`detail.rs` 详情、`versions.rs` 版本行、`trash.rs` 回收站行、`repair.rs` 修复行、`format.rs` 时间与体积文案） |
 | 内容预览（前 20 行 / 仅元信息） | `src/preview.rs`（纯函数 + 常量单一来源）、`crates/workbench/src/services/resource_jobs.rs::load_previews` |
 | 索引修复对话框 | `src/dialogs/index_repair/`（`mod.rs` 三分组与行模型、`open.rs` 入口、`render.rs` 条目行） |
@@ -124,7 +124,7 @@ crates/analytics_resource/src/
 | 左 Dock 装配（面板实体 + 渲染转发） | `crates/workbench/src/panels/resources.rs` |
 | 取数后台任务（列表 + 索引健康 + 版本数） | `crates/workbench/src/services/resource_jobs.rs` |
 | 宿主端口实现 | `src/resource_host/`（`mod.rs` 结构体与薄委托、`archive_actions.rs`、`detail_actions.rs`、`delete_actions.rs`、`group_actions.rs`、`misc_actions.rs`、`helpers.rs`）；workbench 侧桥接在 `crates/workbench/src/components/resource_host.rs` |
-| 编辑器只读来源（三重守卫之二） | `crates/editor/src/persist.rs`、`crates/workbench/src/panels/shared.rs`、`crates/workbench/src/view.rs` |
+| 编辑器只读来源（三重守卫之二） | `crates/editor/src/persist.rs`、`crates/workbench/src/panels/shared.rs`、`crates/workbench/src/view/` |
 | 尺寸常量 | `src/ui.rs`（16 项；不在 `workbench/ui.rs`——依赖方向不允许视图反读 workbench） |
 | 历史内容保留设置项（`resources.keep_versions`） | `crates/settings/src/{model,registry,lib}.rs`；接线在 `crates/workbench/src/{components/resource_host.rs,panels/resources.rs}` 与 `services/resource_jobs.rs::open_service` |
 | 默认排序设置项（`resources.default_sort`） | `crates/settings/src/{model,registry,lib}.rs`；写口 `resource_host::remember_sort` |

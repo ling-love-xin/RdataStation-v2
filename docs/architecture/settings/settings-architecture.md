@@ -255,7 +255,7 @@ graph TD
 | 页面形态与行规格 | `docs/architecture/settings/settings-prototype-design.md` §3/§4 |
 | 页面实现 | `crates/settings/src/settings_page.rs`（新）；`settings_view.rs` 退役 |
 | 尺寸常量 | `crates/workbench_shell/src/ui.rs`（5 个 `SETTINGS_*`，原型 §7） |
-| 宿主窗口装配与互斥 | `crates/workbench/src/view.rs::open_settings`（`cx.open_window(TitleBar::window_options())` + 存活检测；原 overlay 版 `render_settings_panel` 与 `settings_open` 开关已随窗口化退役） |
+| 宿主窗口装配与互斥 | `crates/workbench/src/view/actions.rs::open_settings`（`cx.open_window(TitleBar::window_options())` + 存活检测；原 overlay 版 `render_settings_panel` 与 `settings_open` 开关已随窗口化退役） |
 | 命令 | `crates/settings/src/commands.rs`（`OpenSettings` 已有；`ToggleThemeMode` 待接线或删除） |
 | 登记表落地 | 表格在本文 §6；实现侧以 `model/` 字段 + `service/` 方法为准，契约测试负责两者一致 |
 | 僵尸项裁撤 | `crates/settings/src/model/`（对应域文件删字段）+ `settings_view.rs`（同轮删字段与行） |

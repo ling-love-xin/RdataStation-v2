@@ -71,13 +71,13 @@ RDS 当前没有市场或远程索引，保留该档会变成永远空空如也�
 ```text
 左 Dock 插件面板页头「管理」按钮（plugin-open-manager）
   → Shared::show_plugin_manager(window, cx)
-  → Shared::open_plugin_manager 回调（WorkbenchView::init_workspace 装配）
+  → Shared::open_plugin_manager 回调（WorkbenchView::init_workspace 装配，现于 `crates/workbench/src/view/workspace.rs`）
   → DockArea::add_panel_view(panel_handle(panel), DockPlacement::Center, …)
   → focus_plugin_manager_tab(&panel, window, cx)
 ```
 
 - **单实例**：面板实体在 `WorkbenchView::init_workspace` 创建一次，由
-  `WorkbenchView::plugin_manager: Option<Entity<PluginManagerPanel>>` 强持有。
+  `WorkbenchView::plugin_manager: Option<Entity<PluginManagerPanel>>` 强持有（字段仍在 `view/mod.rs`）。
   打开回调先按 `PanelId` 在 Center / Left / Right / Bottom 四个区域查 `contains_panel`：
   已存在则 `DockArea::select_panel` 只聚焦，**不再** `add_panel_view`——否则
   `add_panel_inner` 会在 tab 组里再插一个指向同一实体的节点。

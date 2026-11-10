@@ -148,7 +148,7 @@ Linux 系统依赖只有**一份清单**（`tools/install-linux-deps.sh`），CI
 | DuckDB 预编译库获取 | `tools/fetch-duckdb.sh`（CI 以 `GH_PROXY=` 直连 GitHub） |
 | 随包资源目录解析 | `crates/paths/src/lib.rs`（`assets_dir`） |
 | 主题目录消费 | `crates/app/src/main.rs`（`paths::assets_dir()/themes`） |
-| 标题栏图标消费 | `crates/workbench/src/view.rs`（`paths::assets_dir()/icons/32x32.png`） |
+| 标题栏图标消费 | `crates/workbench/src/view/dock.rs`（`paths::assets_dir()/icons/32x32.png`） |
 | Windows 图标嵌入 exe | `crates/app/build.rs`（`winresource`） |
 | Windows 开发期拷贝 `duckdb.dll` | `crates/engine/build.rs` |
 | 打包产物不入库 | `.gitignore`（`/dist/`） |

@@ -521,7 +521,7 @@ sequenceDiagram
 | `DETAIL_PANEL_DEFAULT_WIDTH` | 20.0 | 320 | 详情面板默认宽（接入右侧 Dock 时落） | ⬜ |
 | `ARCHIVE_STATUS_BAR_HEIGHT` | 1.5 | 24 | 底部状态行（当前复用 `ROW_HEIGHT`；语义独立命名待接） | ⬜ |
 
-> **契约测试现状**：`crates/workbench/tests/ui_contract.rs` 扫的是**显式文件清单**（workbench `view.rs` / `panels/` + connection_dialog + editor 视图），**不含本 crate 视图**——本文档与 `ui.rs` 的一致性目前靠评审 + 单测；若要纳入契约测试，得先给它加一个跳 crate 的扫描入口。
+> **契约测试现状**：`crates/workbench/tests/ui_contract.rs` 扫的是**显式文件清单**（workbench `view/` / `panels/` + connection_dialog + editor 视图），**不含本 crate 视图**——本文档与 `ui.rs` 的一致性目前靠评审 + 单测；若要纳入契约测试，得先给它加一个跳 crate 的扫描入口。
 
 ### 7.1 对话框宽度（`Dialog::w` 只能收 `Pixels` → 用 `cx.theme().font_size * N`）
 

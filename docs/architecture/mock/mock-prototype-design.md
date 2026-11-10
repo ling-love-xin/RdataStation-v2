@@ -8,9 +8,9 @@
 
 | 项 | 取值 | 来源 |
 | --- | --- | --- |
-| 落位（管理表） | 右侧 Dock 面板（`RightPanel::Mock`），与洞察 / 历史共用 Dock 槽位 | `crates/workbench/src/view.rs` |
+| 落位（管理表） | 右侧 Dock 面板（`RightPanel::Mock`），与洞察 / 历史共用 Dock 槽位 | `crates/workbench/src/view/workspace.rs` |
 | 面板宽度 | `ui::RIGHT_DOCK_WIDTH` = 17.5rem（280px）**起步**，用户可**拖拽调宽**（`DockSkin` 为每个 placement 都画了 resize 抓手：`resize-handle-right` + `ResizePanel` 拖动改 Dock 尺寸） | `crates/workbench_shell/src/ui.rs`、`gpui-component/src/dock/dock.rs` |
-| 落位（这张表的设计） | **中央编辑区 tab**「Mock · {目标表}」（`MockDetailView` 加入编辑区 tab 组） | `crates/workbench/src/view.rs` |
+| 落位（这张表的设计） | **中央编辑区 tab**「Mock · {目标表}」（`MockDetailView` 加入编辑区 tab 组） | `crates/workbench/src/view/workspace.rs` |
 | 面板头 | Dock 的 `ComponentPanel::title/tab_name`（高度 `ui::PANEL_HEADER_HEIGHT` = 2.25rem） | 同上 |
 | 视图归属 | **随 mock crate**（`crates/mock/src/mock_view.rs`，与 `project::ui` / `settings_view` 同例） | 架构 §3 / 决策 D11 |
 | 视内尺寸 | 视图局部常量（`NUM_INPUT_WIDTH` 5rem / `PARAM_INPUT_WIDTH` 9rem / `FIELD_LIST_MAX_HEIGHT` 16rem / `PREVIEW_MIN_HEIGHT` 10rem / `PREVIEW_ROW_NUMBER_WIDTH` 48px） | `crates/mock/src/ui.rs` |

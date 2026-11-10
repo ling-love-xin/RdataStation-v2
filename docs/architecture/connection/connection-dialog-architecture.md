@@ -57,7 +57,7 @@ flowchart TB
 | 视图 | └ `helpers.rs` | 图标、Select 赋值、原型卡片/只读行、URL 重拼、作用域标签、尺寸常量（`GAP_*` / `LABEL_W` / `BADGE_*` / `PROJECT_W` / `DRIVER_W` / `TAB_BODY_H` / `STAGING_H` / `ROW_H`） |
 | 视图 | └ `project_picker.rs` | 项目下拉项 `ProjectItem`（项目名 + 路径双列、搜索、末项「＋ 新增项目」） |
 | 视图 | `crates/workbench/src/panels/`（`EditorPanel` / `Shared`） | 入口（`request_new_connection` / `request_edit_connection`）、项目下拉订阅（`ensure_dialog_subscription`）、宿主重绘桥、面板级共享状态（含 `project_new_request`） |
-| 视图 | `crates/workbench/src/view.rs`（`WorkbenchView`） | 对话框层挂载（`Root::render_dialog_layer`）、观察编辑面板（通知级联） |
+| 视图 | `crates/workbench/src/view/`（`WorkbenchView`） | 宿主渲染（`view/render.rs`）与编辑面板观察（`view/workspace.rs::cx.observe(editor)`）；对话框层由 `Root` 自动挂载 |
 | 服务 | `crates/workbench/src/services/data_source_service.rs` | CRUD / 测试连接 / 同名检查 / 作用域路由 / 摘要解析（`parse_url_host_port_db`） |
 | 服务 | `crates/workbench/src/services/workspace_loader.rs` | 列表可见性合并（全局 + 项目侧）、运行态 `connected` 填充、删除路由 |
 | 服务 | `crates/workbench/src/services/connection_service.rs` | 会话生命周期（connect / close / 列表 / 元数据路径）、隧道登记与回收 |
@@ -648,7 +648,7 @@ flowchart LR
 | 草稿快照与暂存方法 | `connection_dialog/staging.rs`（`ConnectionDraft` + `staging_*`） |
 | 快捷键 Action | `crates/workbench/src/commands.rs` + `crates/app/src/main.rs` |
 | 入口与宿主重绘桥 | `crates/workbench/src/panels/`（`EditorPanel::{request_new_connection, request_edit_connection}`、`Shared::{host_redraw, notify_host}`） |
-| 对话框层挂载与通知级联 | `crates/workbench/src/view.rs`（`Root::render_dialog_layer`、`cx.observe(editor)`） |
+| 对话框宿主渲染与通知级联 | `crates/workbench/src/view/render.rs`（宿主 `render`）+ `view/workspace.rs`（`cx.observe(editor)`） |
 | 连接 CRUD / 测试 / 作用域路由 | `crates/workbench/src/services/data_source_service.rs` |
 | 列表可见性与运行态 | `crates/workbench/src/services/workspace_loader.rs` |
 | 会话与隧道登记 | `crates/workbench/src/services/connection_service.rs` + `crates/connection/src/chain.rs` |
@@ -662,7 +662,7 @@ flowchart LR
 | Layout 稳定与性能标记 | `render.rs`（两列行高 `DIALOG_BODY_HEIGHT` + 侧栏 / Tab 内容区三向夹住；`meta_refreshed` 字段）；尺寸常量登记在 `crates/workbench_shell/src/ui.rs` |
 | 编辑回读的驱动定位（目录时序） | `connection_dialog/state.rs`（`pending_driver_value` + `replay_pending_driver_locator`）、`render.rs`（`refresh_meta` 之后重放） |
 | 渲染状态矩阵 / 编辑回填测试 | `crates/workbench/tests/connection_render_matrix.rs`、`connection_edit_backfill.rs` |
-| 项目栏下拉与新增项目入口 | `connection_dialog/project_picker.rs`（`ProjectItem`）、`state.rs::handle_project_confirm`、`render.rs::subscribe_project_confirm`、`panels/editor.rs::ensure_dialog_subscription`、`view.rs`（消费 `project_new_request`） |
+| 项目栏下拉与新增项目入口 | `connection_dialog/project_picker.rs`（`ProjectItem`）、`state.rs::handle_project_confirm`、`render.rs::subscribe_project_confirm`、`panels/editor.rs::ensure_dialog_subscription`、`view/render.rs`（消费 `project_new_request`） |
 | 项目侧连接解析（编辑回读 / 导航连接） | `services/data_source_service.rs::get_with_project`、`connection_dialog/state.rs::load_for_edit`、`services/nav_runtime.rs::load_entry(_with)` |
 | 用户使用指南 | `docs/architecture/connection/connection-user-guide.md` |
 
@@ -832,7 +832,7 @@ flowchart LR
 | # | 关闭方式 | 验证 |
 | --- | --- | --- |
 | 15（🟡） | **Tab 条 / 分段控件 / 开关为自绘**：迁到 `TabBar::underline()`（Tab 条，Small）/ `TabBar::segmented()`（作用域三态，Small：与原型 HTML 的 24–26px 分段等高）/ `Switch`（DuckDB 加速 + 策略覆盖，默认 36×20）；两处开关接 `form_disabled`；策略开关回调改 `set_policy_override(policy_type, want)`（组件传请求值）；可见下标映射提为纯函数 `dialog_tab_defs` / `visible_tab_index`（决策 #84/#85） | `helpers::dialog_tabs_hide_network_for_file_db_and_map_visible_index`；窗口回归：`connection_dialog_ui` 4 / `connection_type_driver` 7 / `connection_staging` 6 / `dialog_host_layer` 4 全绿（组件带 spring 动画，headless 渲染无异常） |
-| 14（⚪） | **连接对话框存量裸 `px(...)`**：`min_w(px(0.))` → `min_w(rems(0.))`（16 处）、`.px(rems(…))` → `px_1/2/3()`（5 处，值相等）、图标 → `rems(ui::ICON_SIZE_SM)`、色条 → `ui::TREE_ACTIVE_BAR`、新增 `DIALOG_STATUS_DOT_SIZE` / `DIALOG_CHIP_RADIUS`；`ui_contract` 尺寸契约扫描扩到对话框 6 文件（决策 #88） | `ui_contract` 5 项全绿（`view.rs` / `panels/` / 对话框模块一起扫描） |
+| 14（⚪） | **连接对话框存量裸 `px(...)`**：`min_w(px(0.))` → `min_w(rems(0.))`（16 处）、`.px(rems(…))` → `px_1/2/3()`（5 处，值相等）、图标 → `rems(ui::ICON_SIZE_SM)`、色条 → `ui::TREE_ACTIVE_BAR`、新增 `DIALOG_STATUS_DOT_SIZE` / `DIALOG_CHIP_RADIUS`；`ui_contract` 尺寸契约扫描扩到对话框 6 文件（决策 #88） | `ui_contract` 5 项全绿（`view/` / `panels/` / 对话框模块一起扫描） |
 | 17（⚪） | **下标参与 ElementId**：驱动属性 `prop-del-{key}`、暂存行 `draft-{saved_id \| new-i}`、策略覆盖 `policy-{policy_type}`（不再与分组标题共用 `sec-`）（决策 #86） | 编译期 + 现有窗口回归（渲染路径全覆盖） |
 | 18（⚪） | **`project_path` 无渲染点**：明确为数据载体（下拉写入，保存 / 测试 / 快照 / 分组同步读取），删除无意义的 `set_placeholder` 与「手动输入路径…」残留注释（决策 #87） | 编译期 + `connection_project_picker` 6 项 / `connection_dialog_ui` 4 项回归 |
 | 29（⚪） | **首次使用引导缺失**：常规 Tab 顶部引导条（五步流程 + 快捷键 + 草稿不丢的说明），仅“未选类型 + 名称/地址都空”时出现，选完类型自动消失（决策 #90 同轮） | 窗口回归（渲染不 panic）；USIT 清单 V 段 |
@@ -956,7 +956,7 @@ flowchart LR
 | 9 | ⚪ | **部分关闭（2026-09-13）**：宿主消费分支的“标记 → 动作”映射与“只消费一次”已由 `Shared::take_project_action_request` + 单测覆盖（含同帧竞态）。**残留**：“真的把目标对话框开起来”那一段（依赖窗口与宿主管线）仍需 `WorkbenchView` 可测试化 | 该路径的剩余局部只能手动验证 | 待 `WorkbenchView` 可测试化（需服务注入桥）后补窗口测试 |
 | 10 | ⚪ | 原型 HTML 为手工维护的示意稿 | 与实现存在漂移风险（需人工同步）。**2026-09-13 已同步一轮**：Tab 改下划线、作用域改浅底分段、开关改组件尺寸、新增结果行（分级 + 详情 / 复制）与首次引导条，**删掉早就撤下的内联协议链**（决策 #72 漏同步）；顶部加“非权威”声明 + 同步戳（决策号），漂移从此可被发现 | 以 `connection-prototype-design.md` 为权威，HTML 仅作视觉参考；根治（从实现截图 / 渲染基线生成）仍需平台工作 |
 | 11 | ⚪→🚫 | 类型树**不可折叠**（分类平铺）。实测种子目录：relational 5 / file-based 1 / analytics 2（nosql 2 条 `enabled=0` → 整类不显示）＝**3 分类 + 8 项** | —（**判定：不做**，理由见决策 #91：侧栏已固定高度 + 内部滚动，折叠的交互与状态成本不抵收益） | **三选项（待拍板）**：**① 维持现状**（推荐）；**② 上折叠**——必须同时满足三条规则：搜索命中**自动展开**该分类、选中类型所在分类**始终可见**、默认全展开且折叠态不落库（ElementId 用独立命名空间 `type-cat:{id}`）；成本 ≈60–80 行 + 3 个测试（折叠集合纯函数单测 + 窗口测试：折叠后不渲染 / 搜索自动展开 / 选中分类不被折）+ 原型与 HTML 同步；**③ 替代：分类头吸顶（sticky）**——不引入点击与状态，类型变多时滚动中不迷失；需先核实 0.6.1 滚动容器是否支持 pinned header，不支持则退为“滚动时顶部常驻当前分类名”。**重评触发**：类型 > 15 项或分类 > 6（驱动插件生态） |
-| 12 | ⚪ | UI 尺寸常量化**只覆盖本模块**（`ui-constraints.md` 三阶段迁移第一阶段） | 其他模块仍写字面量；**注**：`view.rs` / `panels/` 已清零，尺寸契约已把连接对话框一并扫描（决策 #88），剩下的欠债在其他模块（设置 / 项目 / 导航） | 按 `ui-constraints.md` §迁移计划推进（属各模块自身工作，不在连接模块范围内） |
+| 12 | ⚪ | UI 尺寸常量化**只覆盖本模块**（`ui-constraints.md` 三阶段迁移第一阶段） | 其他模块仍写字面量；**注**：`view/` / `panels/` 已清零，尺寸契约已把连接对话框一并扫描（决策 #88），剩下的欠债在其他模块（设置 / 项目 / 导航） | 按 `ui-constraints.md` §迁移计划推进（属各模块自身工作，不在连接模块范围内） |
 | 13 | ⚪→部分✅ | **状态矩阵渲染冒烟已补（2026-09-17）**：引导条出现 / 消失 / 复现、五 Tab 降级渲染、作用域三态、结果行四级、暂存区固定高度回归（`connection_render_matrix`）；仍缺 UI 图像回归基线 / 大数据量性能基准 / fuzz | 关键状态不再可能“无人触碰”；余下缺口不影响主链路 | 图像回归 / 性能基准 / fuzz 归平台级排期 |
 | 14 | ⚪→✅ | ~~连接对话框仍有存量裸 `px(...)`~~（**已关闭**：模块内 `px(...)` 清零 + `ui_contract` 尺寸契约扫描扩到对话框 6 文件，见决策 #88） | — | — |
 | 15 | 🟡→✅ | ~~**Tab 条 / 分段控件 / 开关为自绘**~~（**已关闭**：迁到 `TabBar::underline()` / `TabBar::segmented()` / `Switch`，开关接 `form_disabled`，可见下标映射提为纯函数，见决策 #84/#85） | — | — |
