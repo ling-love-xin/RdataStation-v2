@@ -35,7 +35,8 @@ powershell -ExecutionPolicy Bypass -File tools\plugin-drivers\install.ps1 -WithJ
 
 > **Oracle 只装一版**：`rds.driver.oracle`（JDBC）与 `rds.driver.oracle-rust` 都向宿主贡献
 > 驱动 id `oracle`。两个都装会被加载期跨插件冲突检测拒绝，所以 install 默认只装 Rust 版；
-> JDBC 版必须显式 `-WithJdbcOracle`，且装之前先把 `rds.driver.oracle` 目录移出 `.rds/plugins`。
+> `-WithJdbcOracle` 时只装 JDBC 版、不装 Rust 版。两版互斥：开关与目标目录里已有版本冲突时
+> 脚本直接拒绝，需先把另一版目录移出 `.rds/plugins` 再重试。
 
 产物原则：驱动 jar / 壳 jar / Rust 驱动二进制不入库（各包 `.gitignore` 忽略 `lib/`、`bin/`），
 全部由脚本运行时组装（Maven Central 下载 + 壳构建 + `cargo build --release`）。

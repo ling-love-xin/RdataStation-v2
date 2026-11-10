@@ -1,9 +1,9 @@
 ﻿# rds 驱动插件包安装脚本：组装 postgres-py / oracle-rust / mssql-rust 并安装到 RDS_HOME/plugins。
 #
 # 用法：powershell -ExecutionPolicy Bypass -File tools\plugin-drivers\install.ps1 [-WithJdbcOracle] [-SkipOjdbc] [-SkipRust] [-RustDebug] [-DryRun]
-#   -WithJdbcOracle：额外安装 JDBC 版 Oracle（rds.driver.oracle）。**默认不装**：
-#                    它与 oracle-rust 都贡献驱动 id `oracle`，同时安装会在加载期被跨插件
-#                    冲突检测拒绝（两个插件都不可用）。只有要回到 JDBC 实现时才显式打开。
+#   -WithJdbcOracle：改装 JDBC 版 Oracle（rds.driver.oracle），**不进 Rust 版**。默认装
+#                    Rust 版 Oracle：两版都贡献驱动 id `oracle`，同时安装会在加载期被
+#                    跨插件冲突检测拒绝（两个插件都不可用）。
 #   -SkipOjdbc：跳过 ojdbc 下载（离线环境；只装已就绪的 jar，oracle 插件仍可装但缺驱动）
 #   -SkipRust：跳过两个 Rust 原生驱动的 cargo 构建（只装已有 bin/win-x64/agent.exe）
 #   -RustDebug：Rust 驱动按 debug 档构建（默认 release）
@@ -35,14 +35,22 @@ $dist = Join-Path $tools "plugin-drivers"
 $homePlugins = if ($PluginsDir) { [IO.Path]::GetFullPath($PluginsDir) } else { Join-Path $root ".rds\plugins" }
 
 # 冲突预检放在任何构建 / 下载之前：目标目录里的 Rust 版 Oracle 与 JDBC 版贡献同一个
-# 驱动 id `oracle`，同时存在会让加载期直接拒绝两者。想回退到 JDBC 必须先手动移走
-# rds.driver.oracle-rust 目录，脚本不替用户删。
-if ($WithJdbcOracle -and (Test-Path -LiteralPath (Join-Path $homePlugins 'rds.driver.oracle-rust'))) {
-    $conflictDir = Join-Path $homePlugins 'rds.driver.oracle-rust'
+# 驱动 id `oracle`，共存会让加载期直接拒绝两者。两版互斥：默认装 Rust 版，`-WithJdbcOracle`
+# 只装 JDBC 版；发现另一版已在目标目录时直接拒绝，脚本不替用户删。
+$rustOracleDir = Join-Path $homePlugins 'rds.driver.oracle-rust'
+$jdbcOracleDir = Join-Path $homePlugins 'rds.driver.oracle'
+if ($WithJdbcOracle -and (Test-Path -LiteralPath $rustOracleDir)) {
     if ($DryRun) {
-        Write-Output "[DryRun] 检测到冲突：$conflictDir 已存在，实际安装会被拒绝"
+        Write-Output "[DryRun] 检测到冲突：$rustOracleDir 已存在，实际安装会被拒绝"
     } else {
-        throw "拒绝安装：$conflictDir 已存在，与 JDBC 版 Oracle 的驱动 id 撞车。请先移走该目录再重试。"
+        throw "拒绝安装：$rustOracleDir 已存在，与 JDBC 版 Oracle 的驱动 id 撞车。请先移走该目录再重试。"
+    }
+}
+if ((-not $WithJdbcOracle) -and (Test-Path -LiteralPath $jdbcOracleDir)) {
+    if ($DryRun) {
+        Write-Output "[DryRun] 检测到冲突：$jdbcOracleDir 已存在，默认安装 Rust 版会被拒绝"
+    } else {
+        throw "拒绝安装：$jdbcOracleDir 已存在（JDBC 版 Oracle），与默认安装的 Rust 版驱动 id 撞车。请先移走该目录，或改用 -WithJdbcOracle 只装 JDBC 版。"
     }
 }
 
@@ -138,13 +146,15 @@ if (-not $SkipRust) {
 # ---- 4. 安装到 RDS_HOME/plugins ----
 # 注意：安装目录名 = manifest 里的 plugin.id（卸载用 paths::plugin_dir(id) 拼路径，
 # 目录名与 id 不一致会导致卸载找不到目录）；源码目录是短名，安装目标用点分 id。
+# Oracle 两版互斥：JDBC 与 Rust 版都贡献驱动 id `oracle`，一次只能装其中一版。
 $targets = @(
     @{ src = "postgres-py"; id = "rds.driver.postgres-py" },
-    @{ src = "oracle-rust-plugin"; id = "rds.driver.oracle-rust" },
     @{ src = "mssql-rust-plugin"; id = "rds.driver.mssql-rust" }
 )
 if ($WithJdbcOracle) {
     $targets = @(@{ src = "oracle-jdbc"; id = "rds.driver.oracle" }) + $targets
+} else {
+    $targets = @($targets[0], @{ src = "oracle-rust-plugin"; id = "rds.driver.oracle-rust" }, $targets[1])
 }
 if (-not $DryRun) {
     New-Item -ItemType Directory -Force -Path $homePlugins | Out-Null
