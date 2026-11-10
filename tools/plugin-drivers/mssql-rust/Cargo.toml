@@ -1,0 +1,29 @@
+[package]
+name = "rds-driver-mssql"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "RdataStation SQL Server 原生 Rust 驱动 sidecar"
+
+[[bin]]
+name = "rds-mssql-sidecar"
+path = "src/main.rs"
+
+[dependencies]
+rds-driver-sidecar = { path = "../rust-core" }
+tiberius = { version = "0.12.1", default-features = false, features = ["tds73", "rustls", "sql-browser-tokio", "chrono", "rust_decimal", "winauth"] }
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+base64 = "0.22"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "net", "time"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+futures-util = "0.3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
+[workspace]

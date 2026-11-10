@@ -1,0 +1,26 @@
+[package]
+name = "rds-driver-oracle"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "RdataStation Oracle 原生 Rust 驱动 sidecar"
+
+[[bin]]
+name = "rds-oracle-sidecar"
+path = "src/main.rs"
+
+[dependencies]
+rds-driver-sidecar = { path = "../rust-core" }
+oracle-rs = "0.1.7"
+async-trait = "0.1"
+base64 = "0.22"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
+[workspace]

@@ -1,0 +1,18 @@
+[package]
+name = "rds-driver-sidecar"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "RDS Rust 原生数据库驱动 sidecar 共享协议内核（stdio 帧 + JSON-RPC + Arrow IPC）"
+
+# 独立 crate：避免被上层 RdataStation-v2 workspace 吸附
+[workspace]
+
+[dependencies]
+arrow = "58.4.0"
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "rt-multi-thread", "sync", "time"] }

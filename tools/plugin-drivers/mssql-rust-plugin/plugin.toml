@@ -1,0 +1,38 @@
+# SQL Server 原生 Rust 驱动插件：独立 sidecar（rds-mssql-sidecar），不依赖 JVM / Python。
+# 驱动二进制不入库（.gitignore 忽略 bin/），由 build.ps1 构建后复制到 bin/win-x64/agent.exe。
+# 许可：驱动实现与 tiberius（MIT）一致。
+
+[plugin]
+id = "rds.driver.mssql-rust"
+name = "SQL Server Native Driver (Rust)"
+version = "0.1.0"
+publisher = "rds"
+description = "SQL Server 原生 Rust 驱动（TDS 协议直连，无 JVM / ODBC 依赖）"
+license = "MIT"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "sidecar"
+runtime = "rust"
+executable = "bin/agent"
+transport = "framed"
+protocol = "rds-driver/1"
+platforms = ["win-x64"]
+max_instances = 1
+
+# sidecar 轨：起子进程 + 连网络 + 读自己的数据目录 + 接收数据库凭据
+[permissions]
+sidecar = ["spawn.child_process", "net.connect", "fs.read_plugin_data", "credentials.database"]
+driver = ["driver.query", "driver.metadata", "driver.transaction"]
+credentials = "database"
+
+[capabilities.driver]
+concurrency = "serial"
+
+[[contributes.drivers]]
+id = "mssql"
+display_name = "SQL Server (Rust)"
+default_port = 1433
+features = ["schemas", "transactions"]

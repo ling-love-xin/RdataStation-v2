@@ -1,14 +1,23 @@
-﻿# rds 驱动插件包安装脚本：组装 oracle-jdbc / postgres-py 并安装到 RDS_HOME/plugins。
+﻿# rds 驱动插件包安装脚本：组装 oracle-jdbc / postgres-py / oracle-rust / mssql-rust 并安装到 RDS_HOME/plugins。
 #
-# 用法：powershell -ExecutionPolicy Bypass -File tools\plugin-drivers\install.ps1 [-SkipOjdbc]
+# 用法：powershell -ExecutionPolicy Bypass -File tools\plugin-drivers\install.ps1 [-SkipOjdbc] [-SkipRust] [-RustDebug]
 #   -SkipOjdbc：跳过 ojdbc 下载（离线环境；只装已就绪的 jar，oracle 插件仍可装但缺驱动）
+#   -SkipRust：跳过两个 Rust 原生驱动的 cargo 构建（只装已有 bin/win-x64/agent.exe）
+#   -RustDebug：Rust 驱动按 debug 档构建（默认 release）
 #
-# 产物原则：仓库不存驱动 jar / 壳 jar（.gitignore），全部运行时组装：
+# 产物原则：仓库不存驱动 jar / 壳 jar / 驱动二进制（.gitignore），全部运行时组装：
 #   - Java 壳：tools/rds-jdbc-shell/build.ps1 构建 → 复制
 #   - H2：从 Maven Central 下载（无证书验证用）
 #   - ojdbc11：从 Maven Central 下载（Oracle 官方坐标；OTN 许可，见 oracle-jdbc/README.md）
 #   - Python 壳：源码已在 postgres-py/ 内（无需下载）
+#   - Rust 驱动：cargo build → 复制到 <包>/bin/win-x64/agent.exe
 # 安装目标：<RDS_HOME>/plugins/<manifest-id>（RDS_HOME 开发期 = 仓库根/.rds，见 crates/paths）
+
+param(
+    [switch]$SkipOjdbc,
+    [switch]$SkipRust,
+    [switch]$RustDebug
+)
 
 $ErrorActionPreference = "Stop"
 $root = "D:\RdataStation\RDS\RdataStation-v2"
@@ -71,14 +80,34 @@ if (-not $SkipOjdbc) {
     Write-Output "已跳过 ojdbc 下载（-SkipOjdbc）：oracle 插件仍可安装，真连 Oracle 需手动放入 ojdbc jar"
 }
 
-# ---- 3. 安装到 RDS_HOME/plugins ----
+# ---- 3. 构建两个 Rust 原生驱动 ----
+if (-not $SkipRust) {
+    $rustPackages = @("oracle-rust-plugin", "mssql-rust-plugin")
+    foreach ($pkg in $rustPackages) {
+        $build = Join-Path $dist "$pkg\build.ps1"
+        if (-not (Test-Path -LiteralPath $build)) { throw "未找到 Rust 驱动构建脚本：$build" }
+        $buildArgs = @()
+        if ($RustDebug) { $buildArgs += "-Debug" }
+        try {
+            & $build @buildArgs
+        } catch {
+            throw "Rust 驱动构建失败：$pkg / $($_.Exception.Message)"
+        }
+    }
+} else {
+    Write-Output "已跳过 Rust 驱动构建（-SkipRust）：要求各包 bin/win-x64/agent.exe 已就绪"
+}
+
+# ---- 4. 安装到 RDS_HOME/plugins ----
 # 注意：安装目录名 = manifest 里的 plugin.id（卸载用 paths::plugin_dir(id) 拼路径，
 # 目录名与 id 不一致会导致卸载找不到目录）；源码目录是短名，安装目标用点分 id。
 $homePlugins = Join-Path $root ".rds\plugins"
 New-Item -ItemType Directory -Force -Path $homePlugins | Out-Null
 $targets = @(
     @{ src = "oracle-jdbc"; id = "rds.driver.oracle" },
-    @{ src = "postgres-py"; id = "rds.driver.postgres-py" }
+    @{ src = "postgres-py"; id = "rds.driver.postgres-py" },
+    @{ src = "oracle-rust-plugin"; id = "rds.driver.oracle-rust" },
+    @{ src = "mssql-rust-plugin"; id = "rds.driver.mssql-rust" }
 )
 foreach ($t in $targets) {
     $src = Join-Path $dist $t.src
@@ -91,4 +120,4 @@ foreach ($t in $targets) {
     Write-Output "已安装：$dst"
 }
 
-Write-Output "---- 插件包安装完成。宿主启动后扫描 .rds/plugins 即加载两个驱动。----"
+Write-Output "---- 插件包安装完成。宿主启动后扫描 .rds/plugins 即加载四个驱动。----"
