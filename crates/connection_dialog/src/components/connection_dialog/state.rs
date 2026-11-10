@@ -689,8 +689,8 @@ impl<H: 'static> ConnectionDialogState<H> {
     /// 侧栏选择数据库类型：更新选中、刷新 Header 驱动选项（该类型启用驱动、短名显示）
     /// 并默认选中第一个驱动。
     ///
-    /// 类型下**无可用驱动**时拒绝切换并在结果行给出原因：当前只内置四个驱动，
-    /// 其余类型选了也保存不了（驱动 id 解析不到 → `collect` 返回 None）。
+    /// 类型下**无可用驱动**时拒绝切换并在结果行给出原因：驱动既可以内置，也可以由
+    /// 驱动插件登记；没有登记的驱动 id 解析不到，选了也保存不了。
     pub fn select_type(&self, type_id: &str, window: &mut Window, cx: &mut App) {
         if !type_has_driver(&self.drivers.borrow(), type_id) {
             let name = self
@@ -703,7 +703,7 @@ impl<H: 'static> ConnectionDialogState<H> {
             *self.result.borrow_mut() = Some(ResultLine::new(
                 ResultLevel::Error,
                 format!(
-                    "「{name}」暂无可用驱动：当前版本只内置 MySQL / PostgreSQL / SQLite / DuckDB，其余类型待驱动插件能力开放"
+                    "「{name}」暂无可用驱动：请先在插件管理页安装并启用对应驱动插件；若已安装，检查该驱动是否登记成功（插件详情里的「驱动」段）"
                 ),
             ));
             return;
