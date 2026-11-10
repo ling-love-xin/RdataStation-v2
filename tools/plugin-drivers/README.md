@@ -46,7 +46,25 @@ cargo test --manifest-path tools/plugin-drivers/mssql-rust/Cargo.toml
 - 插件包只放清单和二进制；`build.ps1` 编 release 并复制为 `bin/win-x64/agent.exe`，
   宿主 `layout::resolve_executable` 按平台子目录解析。
 - 能力边界：两个驱动都声明 `cancel = false`（无法中断在飞查询），
-  `tx.*` 走真实语句；未在真实实例上验收，当前口径 = 编译 + 协议单测。
+  `tx.*` 走真实语句。
+- 真机口径（2026-11-10）：
+  - **Oracle 已验收**：`sidecar_conformance` 对 `192.168.3.138:1521/XEPDB1` 6/6（含 3000 行分页）；
+    `crates/plugin/tests/rust_driver_wiring.rs` 另有「真实安装目录 → `PluginManager` 激活 →
+    supervisor 开会话 → 真库查询」用例（设置 `RDS_TEST_ORACLE_URL` 时执行），并在同一用例里
+    用新的 `PluginRuntimeLoop::tick_once` 复现宿主启动首拍，验证「重启后自动加载 + 激活、
+    `drivers.enabled` 回到 1」——即下拉能看到驱动的完整启动链路。
+  - **SQL Server 未验收**：`192.168.3.138:1433` 可连、实例 `ling` 已确认，但项目内没有可用的
+    登录口令。已把 `D:\data\datasoure\天马数据源信息\db_info\General\.dbeaver` 的
+    `credentials-config.json` 按 DBeaver 固定密钥解出：8 条凭据全是 PostgreSQL / MySQL，
+    7 条 SQL Server 数据源（全部指向内网 `172.18.x`）一条口令都没保存；`cmdkey` / ODBC /
+    DBeaver 日志也没有 SQL Server 凭据。用其中同名的 `ling/ling` 试 `192.168.3.138` 仍
+    返回 `18456 state 1`。Windows 集成认证在当前进程不可用（Rust 侧 `SEC_E_NO_CREDENTIALS`，
+    .NET 侧 `Cannot generate SSPI context`）。代码与协议单测通过，真库验收等凭据。
+  - **SQL Server 验收命令已备好**：拿到口令后设
+    `$env:RDS_TEST_MSSQL_URL='mssql://user:pass@192.168.3.138:1433/master'`，再跑
+    `cargo test -p rds-plugin --test rust_driver_wiring -j 1 -- --nocapture --test-threads=1`；
+    未设变量时该用例跳过，不会把「缺凭据」伪装成通过。登录失败时驱动会补中文下一步提示
+    （填 SQL 认证用户名/密码，或检查实例是否启用 SQL 登录），不再只回协议错误。
 
 ## 指定自己的驱动 jar（driver_jars）
 
