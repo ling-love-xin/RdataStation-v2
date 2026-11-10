@@ -83,7 +83,7 @@ impl PluginManagerPanel {
                     .ghost()
                     .icon(IconName::RefreshCw)
                     .with_size(Size::Small)
-                    .tooltip("重新读取插件清单")
+                    .tooltip("重新同步驱动登记并读取插件清单")
                     .on_click({
                         let manager = cx.entity();
                         move |_, _, app| {

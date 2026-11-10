@@ -12,9 +12,9 @@ impl Render for PluginPanel {
             .ghost()
             .icon(IconName::RefreshCw)
             .with_size(Size::XSmall)
-            .tooltip("刷新插件清单")
+            .tooltip("刷新插件清单与驱动登记")
             .on_click(move |_, _window, cx| {
-                let _ = entity.update(cx, |this, cx| this.refresh_plugins(cx, true));
+                let _ = entity.update(cx, |this, cx| this.refresh_driver_registration(cx));
             });
 
         // 「管理」入口：左 Dock 只做紧凑清单，搜索 / 筛选 / 详情 / 安装都去中央管理页。

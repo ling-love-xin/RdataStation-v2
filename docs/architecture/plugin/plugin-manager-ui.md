@@ -74,6 +74,10 @@ RDS 当前没有市场或远程索引，保留该档会变成永远空空如也�
 反向依赖已知非空时，卡片与详情栏的「卸载」按钮直接禁用并在 tooltip 列出依赖者；
 缓存未知时不前置拦截，仍由卸载时的实时检查兜底（不把「没读到」当成「没人依赖」）。
 
+**手动刷新（2026-11-10）**：页头与左栏的刷新按钮改为先 `resync_sidecar_driver_rows`
+再 `list_plugins`，不再只重读清单。否则登记状态只在启停 / 加载等生命周期动作里刷新，
+用户手动刷新后仍会长期停在「登记状态未知」；同步失败只记日志，不拦清单刷新。
+
 **驱动可见性（2026-11-10）**：`plugin::PluginInfo` 新增 `drivers: Vec<PluginDriverSummary>`，
 由清单 `[[contributes.drivers]]` 直接派生（id / display_name / default_port / category），
 管理页在卡片上加驱动 chips（每个 chip 直接标「已登记 / 已登记 · 已停用 / 未登记」），

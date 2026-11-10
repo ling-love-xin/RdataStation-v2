@@ -95,6 +95,17 @@ impl PluginPanel {
         self.notice.borrow().clone()
     }
 
+    /// 展示一条轻量操作回执（打开目录 / 日志失败等）。
+    ///
+    /// 与异步动作共用 `error > progress > notice` 的展示位；这里只写 notice，
+    /// 避免一个非业务失败把 `error` 段长期占住。
+    pub(crate) fn show_notice(&self, message: String, cx: &mut Context<Self>) {
+        self.error.replace(None);
+        self.progress.replace(None);
+        self.notice.replace(Some(message));
+        cx.notify();
+    }
+
     /// 重新拉取插件清单（后台执行 `list_plugins`，回主线程写状态）。
     ///
     /// `clear_error`：下拉成功时是否清掉已有错误。操作路径传 `false`——否则一次
@@ -139,6 +150,35 @@ impl PluginPanel {
                 if this.refresh_again.replace(false) {
                     this.refresh_plugins(cx, false);
                 }
+            });
+        });
+    }
+
+    /// 手动刷新：先把插件声明的驱动行重新同步进 `global.db`，再重读清单。
+    ///
+    /// 驱动登记状态只在生命周期动作里刷新；用户手动点「刷新」时若不重算，管理页会
+    /// 长期停在「登记状态未知」。同步本身失败只记日志，不拦清单刷新。
+    pub(crate) fn refresh_driver_registration(&self, cx: &mut Context<Self>) {
+        let Some(handle) = plugin::runtime_handle().cloned() else {
+            self.refresh_plugins(cx, true);
+            return;
+        };
+        let Some(mgr) = plugin::get_plugin_manager().cloned() else {
+            self.refresh_plugins(cx, true);
+            return;
+        };
+        if panel_busy(&self.progress) {
+            return;
+        }
+        self.progress.replace(Some("正在同步驱动登记…".to_string()));
+        cx.notify();
+
+        let weak = cx.entity().downgrade();
+        let _ = cx.spawn(async move |_this, cx| {
+            handle.block_on(async { mgr.resync_sidecar_driver_rows().await });
+            let _ = weak.update(cx, |this, cx| {
+                this.progress.replace(None);
+                this.refresh_plugins(cx, true);
             });
         });
     }

@@ -147,7 +147,7 @@ impl PluginManagerPanel {
 
     pub(crate) fn refresh(&self, cx: &mut Context<Self>) {
         self.plugin_panel
-            .update(cx, |panel, cx| panel.refresh_plugins(cx, true));
+            .update(cx, |panel, cx| panel.refresh_driver_registration(cx));
     }
 
     pub(crate) fn install_file(&self, cx: &mut Context<Self>) {
