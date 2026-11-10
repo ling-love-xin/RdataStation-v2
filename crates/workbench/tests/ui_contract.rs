@@ -207,8 +207,28 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../../database/src/nav_view/dnd.rs"),
         ),
         (
-            "panels/left_tabs.rs",
-            include_str!("../src/panels/left_tabs.rs"),
+            "panels/left_tabs/mod.rs",
+            include_str!("../src/panels/left_tabs/mod.rs"),
+        ),
+        (
+            "panels/left_tabs/database_nav.rs",
+            include_str!("../src/panels/left_tabs/database_nav.rs"),
+        ),
+        (
+            "panels/left_tabs/scratch.rs",
+            include_str!("../src/panels/left_tabs/scratch.rs"),
+        ),
+        (
+            "panels/left_tabs/resources.rs",
+            include_str!("../src/panels/left_tabs/resources.rs"),
+        ),
+        (
+            "panels/left_tabs/plugin_tab.rs",
+            include_str!("../src/panels/left_tabs/plugin_tab.rs"),
+        ),
+        (
+            "panels/left_tabs/tests.rs",
+            include_str!("../src/panels/left_tabs/tests.rs"),
         ),
         (
             "panels/plugin_manager/mod.rs",
@@ -767,8 +787,28 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../../database/src/nav_view/dnd.rs"),
         ),
         (
-            "panels/left_tabs.rs",
-            include_str!("../src/panels/left_tabs.rs"),
+            "panels/left_tabs/mod.rs",
+            include_str!("../src/panels/left_tabs/mod.rs"),
+        ),
+        (
+            "panels/left_tabs/database_nav.rs",
+            include_str!("../src/panels/left_tabs/database_nav.rs"),
+        ),
+        (
+            "panels/left_tabs/scratch.rs",
+            include_str!("../src/panels/left_tabs/scratch.rs"),
+        ),
+        (
+            "panels/left_tabs/resources.rs",
+            include_str!("../src/panels/left_tabs/resources.rs"),
+        ),
+        (
+            "panels/left_tabs/plugin_tab.rs",
+            include_str!("../src/panels/left_tabs/plugin_tab.rs"),
+        ),
+        (
+            "panels/left_tabs/tests.rs",
+            include_str!("../src/panels/left_tabs/tests.rs"),
         ),
         (
             "panels/plugin_manager/mod.rs",

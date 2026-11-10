@@ -1,6 +1,6 @@
 //! 右 dock 模块面板（真面板化）：洞察 / Mock 生成 / 历史 / 存档详情。
 //!
-//! 与左 dock（`left_tabs.rs`）同构：每个模块 = 独立 dock tab，内容仍是各 crate
+//! 与左 dock（`left_tabs/`）同构：每个模块 = 独立 dock tab，内容仍是各 crate
 //! 自持视图（`InsightView` / `MockPanel` / `HistoryView` / `render_detail`），
 //! 本文件只做薄壳 + 面板协议。`set_active` 把活动栏高亮同步回 `Shared::active_right`。
 

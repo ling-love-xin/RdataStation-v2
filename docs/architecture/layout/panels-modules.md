@@ -163,7 +163,7 @@
 | 后台任务正例（迁移目标形态） | `crates/workbench/src/services/scratchpad_jobs.rs`、`nav_jobs.rs` |
 | M6 资产库面板装配（crate 内视图 + 宿主端口 + 后台取数） | `panels/resources.rs`、`components/resource_host.rs`、`services/resource_jobs.rs` |
 | 工作台 tab 业务数据概览卡片（后台取数 + 纯读渲染） | `panels/overview.rs`（渲染）、`services/overview.rs`（取数）、`panels/editor.rs`（宿主字段与任务） |
-| 插件管理页（中央常驻 tab，目录模块 + 复用左栏数据面） | `panels/plugin_manager/{mod,render,cards,detail,widgets,tests}.rs`；入口见 `panels/left_tabs.rs` 与 `view.rs` |
+| 插件管理页（中央常驻 tab，目录模块 + 复用左栏数据面） | `panels/plugin_manager/{mod,render,cards,detail,widgets,tests}.rs`；入口见 `panels/left_tabs/plugin_tab.rs` 与 `view.rs` |
 
 ## 7. 工作台 tab 的「业务数据概览」卡片（2026-11-08）
 

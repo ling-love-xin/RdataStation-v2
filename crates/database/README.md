@@ -60,7 +60,7 @@ pub use model::{NavPath, NavSource};
 
 ## 接线关系
 
-- **workbench → database**：workbench 消费 `nav_view` 实体（`panels/left_tabs.rs` / `panels/mod.rs`）+ `navigator_service`（经 `nav_jobs` 入队）；`panels/property_panel.rs`（`PropertyHostPanel`）经 `Shared` 桥请求属性；Quick Open `ShowProperties` 构造 `PropertyRequest`（`data: None`，数据页懒加载）。
+- **workbench → database**：workbench 消费 `nav_view` 实体（`panels/left_tabs/database_nav.rs` / `panels/mod.rs`）+ `navigator_service`（经 `nav_jobs` 入队）；`panels/property_panel.rs`（`PropertyHostPanel`）经 `Shared` 桥请求属性；Quick Open `ShowProperties` 构造 `PropertyRequest`（`data: None`，数据页懒加载）。
 - **database → property（rds-property）**：`load_properties` 是数据生产者（通用骨架取数 + provider 分派），provider（`property_providers/`）实现 `PropertyProvider` trait；渲染方（workbench）只消费 `ObjectProperties`，三方互不依赖视图。
 - **database → engine**：驱动内省走 `MetadataBrowser`；L2 缓存与分组 / 标签落库走 `engine::persistence`；`engine` 不回依赖本 crate。
 

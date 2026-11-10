@@ -1,7 +1,7 @@
 //! 工作台 Dock 面板（Round 20 / 真面板化）
 //!
 //! DockArea 布局系统接入后，原侧边栏/内容区拆为独立面板实体：
-//! - 左 dock 4 个模块 tab：`left_tabs.rs`（数据库导航 / 草稿箱 / 资产库 / 插件）；
+//! - 左 dock 4 个模块 tab：`left_tabs/`（数据库导航 / 草稿箱 / 资产库 / 插件，每个面板一个文件）；
 //! - 右 dock 4 个模块 tab：`right_tabs.rs`（洞察 / Mock 生成 / 历史 / 存档详情）；
 //!   每个模块 = 独立 dock tab（薄壳面板持有各 crate 自持视图），dock 自动生成
 //!   tab 条 → 同面切换 / 拖拽分栏；活动栏点击经宿主 `select_*_panel` 切 tab，

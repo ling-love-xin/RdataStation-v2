@@ -786,11 +786,13 @@ Uninstalled ──install──▶ Installed ──load──▶ Loaded ──ac
 > **2026-11-10 进展（第八刀，中央插件管理页）**：左 Dock 插件面板页头加「管理」入口，
 > 中央开常驻 tab。页面落成 `crates/workbench/src/panels/plugin_manager/` 目录模块
 > （`mod` / `render` / `cards` / `detail` / `widgets` / `tests` 六文件），
-> **不再把管理页内容追加进 `panels/left_tabs.rs`**；数据面复用 `Entity<PluginPanel>`
+> **不再把管理页内容追加进 `panels/left_tabs/`**；左 Dock 四面板本身也已从 `left_tabs.rs` 拆成
+> 目录（`mod` / `database_nav` / `scratch` / `resources` / `plugin_tab` / `tests`，2026-11-10）；
+> 数据面复用 `Entity<PluginPanel>`
 > 的只读快照与动作转发（清单 / 贡献点 / 后台任务 / 操作互斥只有一份），
 > 左栏刷新经 `cx.observe` 自动重绘。页面含统计 / 反馈 / 待重载横幅 / 搜索 +
 > 四档筛选 / 两列卡片 / 340px 详情栏；筛选刻意不含「可更新」（当前无市场/远程索引），
-> 「项目引用」因 Rust 侧暂无可读的引用者查询而如实占位。详见 `plugin-manager-ui.md`。
+> 「项目引用」因详情栏尚未接线（只读查询 `DependencyManager::check_dependents` 已存在）而如实占位。详见 `plugin-manager-ui.md`。
 >
 > **仍未接**：`LeftPanel`/`RightPanel` → `PanelId`、
 > Quick Open 命令合并、设置页外部登记项渲染、未注册 id 占位面板、`project_resources` 对账与图标 resolver。
@@ -1175,7 +1177,7 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 - 验证：rds-plugin 全量 196 lib + 71 集成全绿；插件包已重装（壳带新能力）。
 
 **插件入口面板**（2026-10-22，P4 一期）：
-- `crates/workbench/src/panels/left_tabs.rs` PluginPanel：占位 → 已装插件列表
+- `crates/workbench/src/panels/left_tabs.rs` PluginPanel（现为 `left_tabs/plugin_tab.rs`）：占位 → 已装插件列表
   （`plugin::manager::list_plugins`，会话态 `Rc<RefCell<Vec<PluginInfo>>>`，事件路径刷新；
   创建时订阅 `plugin::events` 生命周期事件，热插拔 / 安装 / 卸载 / 启停自动重拉，⟳ 为手动兜底）；
   行 = 名称 v版本 + 状态徽标（Active/Loaded/Inactive/Error 语义色）+ 启用/停用 `Button::ghost`；

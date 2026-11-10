@@ -170,7 +170,7 @@ impl PluginManagerPanel {
                         div()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("项目引用：当前 Rust 侧尚未提供只读的「谁引用了该插件」查询，暂不在此展示。"),
+                            .child("项目引用：只读查询（DependencyManager::check_dependents）已存在，详情栏尚未接线，暂不展示。"),
                     ),
             )
             .child(
