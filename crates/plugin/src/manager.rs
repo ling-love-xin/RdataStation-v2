@@ -897,6 +897,12 @@ impl PluginManager {
             .cloned()
             .ok_or_else(|| not_found(id))?;
 
+        // 激活即「这个包能跑」的承诺：声明的入口（backend.executable / wasm / 前端模块）
+        // 必须在包里真实存在。部署与拉起是**按需**的（首个会话才 spawn），不做这道守门时
+        // 缺可执行文件的坏包会被标成 Active，用户要等到第一次连库才看到莫名其妙的启动失败。
+        // 与安装期 `check_declared_entries` 同一口径，但激活时再查一次：目录可能被外部改过。
+        crate::layout::check_declared_entries(&loaded.manifest, &loaded.install_path)?;
+
         register_sidecar_drivers(
             Arc::clone(&self.sidecar),
             &loaded.manifest,

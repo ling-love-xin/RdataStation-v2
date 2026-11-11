@@ -106,6 +106,10 @@ impl Deployment {
 
         let mut command = backend.command(plugin_dir)?;
         let runtime_note = match backend.runtime {
+            // 原生 Rust sidecar 自己就是可执行文件，不存在「解释器」这一步；
+            // 清单仍用 `runtime = "rust"` 表达语言，不能拿去走 java/python 的解析器，
+            // 否则会给一个完全合法的插件报 `not_supported` 并阻断加载。
+            Some(crate::manifest::BackendRuntime::Rust) => None,
             Some(runtime) => {
                 let resolved = crate::runtime::RuntimeResolver::global().resolve(runtime)?;
                 command.program = resolved.interpreter;
@@ -1227,6 +1231,47 @@ concurrency = "serial"
         assert_eq!(deployment.spec.max_instances, 1);
         assert!(deployment.command.program.ends_with("bin/agent"));
         assert!(deployment.command.args.is_empty());
+    }
+
+    /// 原生 Rust sidecar 不需要解释器：`runtime = "rust"` 必须直接部署成功，
+    /// 不能把它送进 java/python 的解释器解析器（否则插件会被判成不支持而加载失败）。
+    #[test]
+    fn deployment_accepts_rust_runtime_without_resolving_an_interpreter() {
+        let manifest: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "rds.driver.oracle-rust"
+name = "Oracle Rust"
+version = "1.0.0"
+publisher = "rds"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "sidecar"
+executable = "bin/win-x64/agent.exe"
+runtime = "rust"
+max_instances = 1
+
+[[contributes.drivers]]
+id = "oracle"
+display_name = "Oracle"
+
+[capabilities.driver]
+concurrency = "serial"
+"#,
+        )
+        .unwrap();
+        let deployment =
+            Deployment::from_manifest(&manifest, Path::new("plugins/rds.driver.oracle-rust"))
+                .expect("原生 sidecar 不应要求解释器")
+                .expect("sidecar 形态应当有部署信息");
+        assert!(
+            deployment.command.program.ends_with("bin/win-x64/agent.exe"),
+            "program 应保持插件自带可执行文件，而不是解释器路径"
+        );
+        assert!(deployment.runtime_note.is_none());
     }
 
     /// 用户自定驱动 jar：部署期校验存在性，存在的经 `RDS_DRIVER_JARS` 环境变量交给 Java 壳。
