@@ -102,6 +102,10 @@ service 层新增 `PluginManager::is_loaded` 判定，只在有运行实例时�
 只走一处；激活失败原样返回，不再「写库成功 + `let _ =` 吞掉 activate 错误」。
 只有 manager 未初始化（宿主尚未接入）时，service 才退化为只写全局登记。
 
+**卸载后不留幽灵重载（2026-11-11）**：`PluginManager::uninstall_plugin` 成功后同时清
+`needs_reload` 与扫描快照。否则面板会继续提示「重载」一个已删除的插件，下一轮扫描还会把
+同一次卸载当成新的「消失」再报一遍。
+
 **三个生命周期入口的边界（2026-11-11）**：卸载相关的动作不再都叫「卸载」，按影响面区分：
 
 | 入口 | 运行时 | `global.db` 登记 | 插件目录 |
@@ -294,7 +298,7 @@ cargo test  -p rds-workbench --test ui_contract
 2026-11-11 复测（停用依赖保护）：`cargo check -p rds-workbench --lib` 0 error，
 `cargo test -p rds-workbench --lib` 64 passed，`ui_contract` 10 passed；
 `cargo check -p rds-plugin` 0 error，`cargo test -p rds-plugin --test lifecycle`
-（`--test-threads=1`）22 passed（新增 `disable_rejects_a_plugin_with_a_dependent`：
+（`--test-threads=1`）23 passed（新增 `disable_rejects_a_plugin_with_a_dependent`：
 base + child 清单依赖后，manager 与 `PluginService` 两条停用入口都返回
 `DeactivationFailed` 并列出 child；`PluginService::uninstall_plugin` 同样返回
 `UninstallFailed`，被拒后 DB 仍保持 `is_enabled=1`、登记行也还在。新增
@@ -309,7 +313,9 @@ base + child 清单依赖后，manager 与 `PluginService` 两条停用入口都
 `scan_activates_a_plugin_whose_dependency_arrives_in_the_same_scan`：同一次扫描新增的
 base 与 child 能一起激活，证明「先登记全部、再统一激活」不受目录遍历顺序影响。新增
 `service_uninstall_removes_registration_but_keeps_directory`：service 卸载只删 `global.db`
-登记行、保留磁盘目录；同时补 `is_loaded` 在卸载前后的断言）。另设独立测试进程
+登记行、保留磁盘目录；同时补 `is_loaded` 在卸载前后的断言。新增
+`uninstall_clears_pending_reload_and_scan_snapshot`：卸载后 `pending_reloads` 为空，
+下一轮扫描不再重复报 `removed`；旧实现两条断言都会失败）。另设独立测试进程
 `service_lifecycle`（初始化全局管理器）：sidecar 二进制缺失时 service 启用必须返回错误，
 旧实现会写库后把 `activate` 失败吞成 `Ok`，该用例 1 passed。
 
