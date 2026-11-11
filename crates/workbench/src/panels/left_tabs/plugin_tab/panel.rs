@@ -1,7 +1,10 @@
 use super::super::*;
 
 use super::delegate::PluginListDelegate;
-use super::{bulk_toggle_includes, event_touches_plugin_list, install_receipt, panel_busy};
+use super::{
+    bulk_retry_includes, bulk_toggle_includes, event_touches_plugin_list, install_receipt,
+    panel_busy,
+};
 
 /// 插件 tab：已装插件清单（名称 / 版本 / 状态）+ 刷新 + 启用 / 停用 / 卸载。
 ///
@@ -351,6 +354,77 @@ impl PluginPanel {
                     // 失败原因放在 error 位：随后 refresh_plugins 传 false，不会被清单刷新擦掉。
                     this.error.replace(Some(format!(
                         "{action} {succeeded} 个，失败 {} 个：{}",
+                        failures.len(),
+                        failures.join("；")
+                    )));
+                    this.notice.replace(None);
+                }
+                this.refresh_plugins(cx, false);
+            });
+        });
+    }
+
+    /// 批量重试所有出错插件：用于「停掉冲突方后，另一个仍停在 Error」的场景。
+    ///
+    /// 冲突拒绝发生在清单没变的情况下，热插拔扫描不会自动重试；逐个点卡片又太慢。
+    /// 整批与启停共用 `panel_busy` 互斥，单个失败不中断，最后统一报失败原因。
+    pub(crate) fn bulk_retry_failed_plugins(&self, cx: &mut Context<Self>) {
+        let Some(handle) = plugin::runtime_handle().cloned() else {
+            self.error.replace(Some("插件运行时未初始化".to_string()));
+            cx.notify();
+            return;
+        };
+        let Some(mgr) = plugin::get_plugin_manager().cloned() else {
+            self.error.replace(Some("插件运行时未初始化".to_string()));
+            cx.notify();
+            return;
+        };
+        if panel_busy(&self.progress) {
+            return;
+        }
+
+        let ids: Vec<String> = self
+            .plugins
+            .borrow()
+            .iter()
+            .filter(|plugin| bulk_retry_includes(plugin.state))
+            .map(|plugin| plugin.id.clone())
+            .collect();
+        if ids.is_empty() {
+            self.error.replace(None);
+            self.notice.replace(Some("没有需要重试的插件".to_string()));
+            cx.notify();
+            return;
+        }
+
+        self.progress
+            .replace(Some(format!("正在重试 {} 个出错插件…", ids.len())));
+        self.error.replace(None);
+        self.notice.replace(None);
+        cx.notify();
+
+        let weak = cx.entity().downgrade();
+        let _ = cx.spawn(async move |_this, cx| {
+            let (succeeded, failures) = handle.block_on(async {
+                let mut succeeded = 0usize;
+                let mut failures = Vec::new();
+                for id in ids {
+                    match mgr.retry_load_plugin(&id).await {
+                        Ok(_) => succeeded += 1,
+                        Err(error) => failures.push(format!("{id}: {error}")),
+                    }
+                }
+                (succeeded, failures)
+            });
+            let _ = weak.update(cx, |this, cx| {
+                this.progress.replace(None);
+                if failures.is_empty() {
+                    this.error.replace(None);
+                    this.notice
+                        .replace(Some(format!("已重试并加载 {succeeded} 个插件")));
+                } else {
+                    this.error.replace(Some(format!(
+                        "重试 {succeeded} 个，仍失败 {} 个：{}",
                         failures.len(),
                         failures.join("；")
                     )));

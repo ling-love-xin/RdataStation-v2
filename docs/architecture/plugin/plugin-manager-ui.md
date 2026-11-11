@@ -78,14 +78,16 @@ RDS 当前没有市场或远程索引，保留该档会变成永远空空如也�
 再 `list_plugins`，不再只重读清单。否则登记状态只在启停 / 加载等生命周期动作里刷新，
 用户手动刷新后仍会长期停在「登记状态未知」；同步失败只记日志，不拦清单刷新。
 
-**批量启停（2026-11-11）**：统计行右侧给「启用全部已停用（N）」与「停用全部已启用（N）」
-两个入口，插件一多或冲突告警需要一次停多个时不用逐个点。归批的状态由纯函数
-`bulk_toggle_includes` 判定：启用只碰 `Inactive`，停用只碰 `Active` / `Loaded`；
-`Error` 两边都不碰（没有可停的运行时，且启用前得先修清单或解冲突）。
+**批量动作（2026-11-11）**：统计行右侧给「启用全部已停用（N）」「停用全部已启用（N）」，
+出错数大于 0 时再出现「重试全部出错（N）」，插件一多或冲突告警需要一次处理多个时不用逐个点。
+归批的状态由纯函数判定：启用只碰 `Inactive`，停用只碰 `Active` / `Loaded`，重试只碰 `Error`；
+`Error` 不参与启停（没有可停的运行时，且启用前得先修清单或解冲突）。
 停用全部走确认框（会一次性改变所有驱动的下拉可见性），插件目录与 `plugin-data` 保留。
 整批只占一个后台任务并按顺序执行，单个失败不中断，结束后统一报
-「已启用 X 个 / 停用 X 个，失败 Y 个：<id>: <原因>」；失败文案写在 `error` 位，
+「已启用 X 个 / 停用 X 个 / 已重试并加载 X 个，失败 Y 个：<id>: <原因>」；失败文案写在 `error` 位，
 随后的清单刷新传 `clear_error=false`，不会被成功刷新擦掉。
+批量重试针对的是「冲突方停掉后另一个仍停在 Error」：冲突拒绝发生在清单未变时，
+热插拔扫描不会自动重试，必须显式再解析一次清单。
 
 **驱动可见性（2026-11-10）**：`plugin::PluginInfo` 新增 `drivers: Vec<PluginDriverSummary>`，
 由清单 `[[contributes.drivers]]` 直接派生（id / display_name / default_port / category），
@@ -215,8 +217,8 @@ cargo test  -p rds-workbench --test ui_contract
 `ui_contract` 10 个契约测试全绿。本模块 0 warning（余下 2 条为
 `property_panel` 既存未用变量）。
 
-2026-11-11 复测（批量启停）：`cargo check -p rds-workbench --lib` 0 error；
-`cargo test -p rds-workbench --lib` 62 passed（新增 `bulk_toggle_skips_states_it_cannot_change`）；
+2026-11-11 复测（批量动作）：`cargo check -p rds-workbench --lib` 0 error；
+`cargo test -p rds-workbench --lib` 62 passed（`bulk_actions_skip_states_they_cannot_change` 同时覆盖启停与重试的状态面）；
 `cargo test -p rds-workbench --test ui_contract` 10 passed。
 
 ---

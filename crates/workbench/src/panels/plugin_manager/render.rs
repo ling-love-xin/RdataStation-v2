@@ -121,7 +121,7 @@ impl PluginManagerPanel {
         // 批量入口放在统计行右侧：用户看到「已停用 N」时，下一步通常就是把这批拉起来。
         // 停用全部会一次性改变所有驱动可见性，必须先确认；启用全部只碰 Inactive，无需确认。
         let busy = snapshot.progress.is_some();
-        let stats_row = stats_row
+        let mut stats_row = stats_row
             .child(div().flex_1())
             .child(
                 Button::new("plugin-manager-enable-all")
@@ -141,7 +141,30 @@ impl PluginManagerPanel {
                             });
                         }
                     }),
-            )
+            );
+        // 出错行单独给批量重试：冲突方停掉后，另一个插件不会因清单未变而自动恢复。
+        if stats.error > 0 {
+            stats_row = stats_row.child(
+                Button::new("plugin-manager-retry-all")
+                    .ghost()
+                    .label(SharedString::from(format!(
+                        "重试全部出错（{}）",
+                        stats.error
+                    )))
+                    .with_size(Size::XSmall)
+                    .tooltip("重新解析清单并加载所有出错插件；结果仍失败时保留原因")
+                    .disabled(busy)
+                    .on_click({
+                        let manager = cx.entity();
+                        move |_, _, app| {
+                            let _ = manager.update(app, |this, cx| {
+                                this.retry_all_failed_plugins(cx)
+                            });
+                        }
+                    }),
+            );
+        }
+        let stats_row = stats_row
             .child(
                 Button::new("plugin-manager-disable-all")
                     .ghost()

@@ -90,6 +90,13 @@ pub(crate) fn bulk_toggle_includes(state: PluginState, enabling: bool) -> bool {
     }
 }
 
+/// 重试全部只碰 `Error`：其它状态没有可重试的加载失败。
+///
+/// 与启停分开成独立判定，避免以后调整「启用全部」的状态面时误把出错行也带进来。
+pub(crate) fn bulk_retry_includes(state: PluginState) -> bool {
+    state == PluginState::Error
+}
+
 /// 卸载确认框正文（纯函数，便于单测）：说清删什么、留什么、什么情况会被拒。
 pub(crate) fn uninstall_confirm_description(name: &str, id: &str) -> String {
     format!(

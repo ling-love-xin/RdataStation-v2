@@ -177,6 +177,12 @@ impl PluginManagerPanel {
             .update(cx, |panel, cx| panel.bulk_set_plugin_enabled(enabled, cx));
     }
 
+    /// 批量重试当前所有出错插件（停掉冲突方后，另一个仍停在 Error 的场景）。
+    pub(crate) fn retry_all_failed_plugins(&self, cx: &mut Context<Self>) {
+        self.plugin_panel
+            .update(cx, |panel, cx| panel.bulk_retry_failed_plugins(cx));
+    }
+
     pub(crate) fn plugin_entity(&self) -> Entity<PluginPanel> {
         self.plugin_panel.clone()
     }

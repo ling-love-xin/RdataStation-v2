@@ -1,6 +1,6 @@
 use super::plugin_tab::{
-    bulk_toggle_includes, contribution_breakdown, event_touches_plugin_list, install_receipt,
-    panel_busy, plugin_row_subtitle, uninstall_confirm_description,
+    bulk_retry_includes, bulk_toggle_includes, contribution_breakdown, event_touches_plugin_list,
+    install_receipt, panel_busy, plugin_row_subtitle, uninstall_confirm_description,
 };
 use plugin::events::PluginEvent;
 use plugin::wasm::PluginState;
@@ -106,7 +106,7 @@ fn install_receipt_tells_the_truth_about_enabled_state() {
 /// 批量启停只碰该碰的状态：启用全部不能把出错插件也硬拉起来，停用全部不能
 /// 把本就停用 / 出错的插件再算一遍。`Loaded` 是「已加载未激活」，属于可停用面。
 #[test]
-fn bulk_toggle_skips_states_it_cannot_change() {
+fn bulk_actions_skip_states_they_cannot_change() {
     for state in [
         PluginState::Active,
         PluginState::Loaded,
@@ -122,6 +122,11 @@ fn bulk_toggle_skips_states_it_cannot_change() {
             bulk_toggle_includes(state, false),
             matches!(state, PluginState::Active | PluginState::Loaded),
             "停用全部：{state:?}"
+        );
+        assert_eq!(
+            bulk_retry_includes(state),
+            state == PluginState::Error,
+            "重试全部：{state:?}"
         );
     }
 }
