@@ -451,6 +451,10 @@ pub(crate) fn render_th(
         .size_full()
         .min_w_0()
         .justify_center()
+        // 与early-return 分支同一个探针选择器：数据列（带列名 / 带列头菜单）也要能被用例
+        // 读到整格几何——接列头菜单时这里漏挂过，`editor/src/view/tests/results_a.rs`
+        // 的「表头右端真点击」随即取不到坐标（`editor-result-th-1` 恒为 None）。
+        .debug_selector(move || format!("editor-result-th-{col_ix}"))
         .child(main_row)
         .when_some(comment_line, |head, line| head.child(line));
     head.id(("editor-result-th", col_ix))
