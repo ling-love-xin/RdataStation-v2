@@ -883,6 +883,16 @@ impl PluginManager {
             .write()
             .map_err(|_| lock_err("loaded_plugins"))?
             .remove(id);
+        // 卸载后清掉待重载标记与扫描快照：否则面板还会提示重载一个已删除的插件，
+        // 下一轮扫描也会把它当成「又一次消失」。
+        self.needs_reload
+            .write()
+            .map_err(|_| lock_err("needs_reload"))?
+            .retain(|plugin_id| plugin_id != id);
+        self.scan_snapshot
+            .write()
+            .map_err(|_| lock_err("scan_snapshot"))?
+            .remove(id);
         // 坏包目录也走同一条卸载路径，清掉失败记录（否则面板会留下一条幽灵错误行）
         self.clear_failed_load(id);
 

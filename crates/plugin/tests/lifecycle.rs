@@ -872,6 +872,33 @@ async fn service_uninstall_removes_registration_but_keeps_directory() {
     );
 }
 
+/// 卸载要清掉待重载标记与扫描快照：已删除的插件不该再提示重载，
+/// 下一轮扫描也不该把它当成「又一次消失」。
+#[tokio::test]
+async fn uninstall_clears_pending_reload_and_scan_snapshot() {
+    let dir = TempDir::new("uninstallpending");
+    let manager = Arc::new(PluginManager::new(dir.0.clone()));
+    manager.init().await.unwrap();
+
+    let id = "com.example.uninstallpending";
+    write_plugin(&dir.0, id, "v1");
+    manager.scan_and_diff_plugins().await.unwrap();
+
+    // 模拟运行中清单被换过：置 needs_reload
+    write_plugin(&dir.0, id, "v2");
+    manager.scan_and_diff_plugins().await.unwrap();
+    assert_eq!(manager.pending_reloads(), vec![id]);
+
+    manager.uninstall_plugin(id).await.unwrap();
+    assert!(manager.pending_reloads().is_empty());
+
+    let diff = manager.scan_and_diff_plugins().await.unwrap();
+    assert!(
+        diff.removed.is_empty(),
+        "卸载已经处理过消失，快照应同步清掉: {diff:?}"
+    );
+}
+
 /// 卸载 id 不合法（拼路径前的安全校验）必须被拒，不能碰磁盘。
 #[tokio::test]
 async fn uninstall_rejects_an_unsafe_id() {
