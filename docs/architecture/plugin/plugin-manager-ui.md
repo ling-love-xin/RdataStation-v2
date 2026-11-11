@@ -92,6 +92,18 @@ RDS 当前没有市场或远程索引，保留该档会变成永远空空如也�
 `PluginService::disable_plugin` 是另一条直接写库的入口，同样在停用前查一遍反向依赖，
 被拒时不改 `is_enabled`。面板仍在点击前拦，是为了不让用户先看到成功提示或等一次异步往返。
 
+**三个生命周期入口的边界（2026-11-11）**：卸载相关的动作不再都叫「卸载」，按影响面区分：
+
+| 入口 | 运行时 | `global.db` 登记 | 插件目录 |
+| --- | --- | --- | --- |
+| `PluginManager::{enable,disable}_plugin` | 启用尝试激活、停用先停运行时 | 写 `is_enabled` | 不动 |
+| `PluginManager::unload_plugin` | 只卸运行时、移出索引 | 不动（启停状态保留） | 不动 |
+| `PluginManager::uninstall_plugin` | 先停运行时 | 依赖检查通过后删登记行 | 删目录，保留 `plugin-data/<id>/` |
+| `PluginService::uninstall_plugin` | 先停用并卸运行时 | 依赖检查通过后删登记行 | **不删**，磁盘卸载必须走 manager |
+
+所以 `unload` 之后如果登记仍是启用，下次扫描会重新激活；要让插件长期不启动，
+应走 `disable_plugin`。`PluginService::uninstall_plugin` 只是登记层入口，不替代磁盘卸载。
+
 **启用依赖保护（2026-11-11）**：`PluginManager::enable_plugin` 与
 `PluginService::enable_plugin` 在写 `is_enabled=1` 前先 `resolve_dependencies`；
 声明的依赖缺失（`missing`）或已安装但未启用（`to_install`）时返回
