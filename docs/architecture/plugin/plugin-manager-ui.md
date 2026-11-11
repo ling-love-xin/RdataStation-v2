@@ -255,7 +255,8 @@ cargo test  -p rds-workbench --test ui_contract
 2026-11-11 复测（停用依赖保护）：`cargo check -p rds-workbench --lib` 0 error，
 `cargo test -p rds-workbench --lib` 64 passed，`ui_contract` 10 passed；
 `cargo check -p rds-plugin` 0 error，`cargo test -p rds-plugin --test lifecycle`
-（`--test-threads=1`）16 passed。`disable_plugin` 的实时检查没有改变既有停用用例的预期。
+（`--test-threads=1`）17 passed（新增 `disable_rejects_a_plugin_with_a_dependent`：
+base + child 清单依赖后，停用 base 返回 `DeactivationFailed` 并列出 child）。
 
 ---
 

@@ -526,6 +526,42 @@ async fn list_reports_running_plugins_as_active() {
     assert_eq!(state_of(&manager), PluginState::Active);
 }
 
+/// 停用被依赖的插件：API 入口自己查反向依赖并拒绝，不依赖面板缓存。
+///
+/// 面板缓存可能过期（插件刚装上 / 刚改清单 / 其它调用方直接走 manager），
+/// 所以 `disable_plugin` 必须在写 `is_enabled` 前拦一次。
+#[tokio::test]
+async fn disable_rejects_a_plugin_with_a_dependent() {
+    // 守卫读的是 global.db 的反向依赖；测试里得先初始化全局库，
+    // 否则 `get_global_db_manager()` 为 None，只会测到「没有库就不拦」。
+    engine::migration::initialize_global_system()
+        .await
+        .expect("初始化全局库");
+    let dir = TempDir::new("disableguard");
+    let manager = PluginManager::new(dir.0.clone());
+    manager.init().await.unwrap();
+
+    write_plugin(&dir.0, "com.example.base", "v1");
+    write_plugin_with_contributes(
+        &dir.0,
+        "com.example.child",
+        "v1",
+        r#"[[dependencies]]
+id = "com.example.base"
+version = "^1.0.0"
+"#,
+    );
+    manager.scan_and_diff_plugins().await.unwrap();
+
+    let err = manager
+        .disable_plugin("com.example.base")
+        .await
+        .expect_err("被其他插件依赖的插件不应允许停用");
+    let message = format!("{err}");
+    assert!(message.contains("被以下插件依赖"), "{message}");
+    assert!(message.contains("com.example.child"), "{message}");
+}
+
 /// 磁盘卸载：目录删除 + 索引清理 + PluginUninstalled 事件。
 #[tokio::test]
 async fn uninstall_removes_dir_and_index_and_emits() {
