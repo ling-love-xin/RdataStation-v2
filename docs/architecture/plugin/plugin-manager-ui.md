@@ -97,6 +97,11 @@ RDS 当前没有市场或远程索引，保留该档会变成永远空空如也�
 service 层新增 `PluginManager::is_loaded` 判定，只在有运行实例时才调 `deactivate` / `unload`，
 并把失败原样返回；此前用 `let _ =` 吞掉错误，可能在进程未停干净时就删掉登记行。
 
+**service 启用交给 manager（2026-11-11）**：`PluginService::enable_plugin` 在 manager 已初始化时
+直接调用 `PluginManager::enable_plugin`，坏包（`failed_loads`）、依赖复核、写库、激活与事件
+只走一处；激活失败原样返回，不再「写库成功 + `let _ =` 吞掉 activate 错误」。
+只有 manager 未初始化（宿主尚未接入）时，service 才退化为只写全局登记。
+
 **三个生命周期入口的边界（2026-11-11）**：卸载相关的动作不再都叫「卸载」，按影响面区分：
 
 | 入口 | 运行时 | `global.db` 登记 | 插件目录 |
@@ -304,7 +309,9 @@ base + child 清单依赖后，manager 与 `PluginService` 两条停用入口都
 `scan_activates_a_plugin_whose_dependency_arrives_in_the_same_scan`：同一次扫描新增的
 base 与 child 能一起激活，证明「先登记全部、再统一激活」不受目录遍历顺序影响。新增
 `service_uninstall_removes_registration_but_keeps_directory`：service 卸载只删 `global.db`
-登记行、保留磁盘目录；同时补 `is_loaded` 在卸载前后的断言）。
+登记行、保留磁盘目录；同时补 `is_loaded` 在卸载前后的断言）。另设独立测试进程
+`service_lifecycle`（初始化全局管理器）：sidecar 二进制缺失时 service 启用必须返回错误，
+旧实现会写库后把 `activate` 失败吞成 `Ok`，该用例 1 passed。
 
 ---
 
