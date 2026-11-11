@@ -74,15 +74,18 @@ RDS 当前没有市场或远程索引，保留该档会变成永远空空如也�
 反向依赖已知非空时，卡片与详情栏的「卸载」按钮直接禁用并在 tooltip 列出依赖者；
 「停用」按钮同样置灰并在 tooltip 说明「停用会让谁失效」，不让用户点下去才被拒绝；
 依赖段末也同时提示「停用会让它们立即失效；卸载前需先卸载依赖方」。
-缓存未知时不前置拦截，仍由卸载时的实时检查兜底（不把「没读到」当成「没人依赖」）。
+缓存已知非空时前置拦截；缓存未知（`None`）不拦，但 `PluginManager::disable_plugin`
+自己会实时查一遍反向依赖，不会把「没读到」当成「没人依赖」。
 
 **停用依赖保护（2026-11-11）**：停用同样会让依赖方立即失去驱动。左栏卡片、详情栏
 与管理页冲突卡点的单插件停用，以及「停用全部已启用」，都先读同一份 `dependents`
 缓存：单插件被依赖时拒绝并写清「被谁依赖、先处理依赖方」；批量停用时只要选中集合里
 有任意一个被依赖就整批拒绝，并列出被拦截的 id，避免出现「停了一半、状态更难判断」。
-`dependents = None` 时不拦（与卸载同口径）。注意：拦截目前只在面板动作入口，
-`PluginManager::disable_plugin` 本身仍未查依赖，非面板调用仍可能绕过；根治需在该方法
-里接 `check_dependents`。
+`dependents = None` 时面板不拦（与卸载同口径）。
+**API 层同口径（2026-11-11）**：`PluginManager::disable_plugin` 在写 `is_enabled` 之前
+也调 `DependencyManager::check_dependents`，非空直接返回 `PluginError::DeactivationFailed`
+并列出依赖者；面板缓存过期或非面板调用（自动停用、脚本、其它 feature）都绕不过去。
+面板仍在点击前拦，是为了不让用户先看到成功提示或等一次异步往返。
 
 **手动刷新（2026-11-10）**：页头与左栏的刷新按钮改为先 `resync_sidecar_driver_rows`
 再 `list_plugins`，不再只重读清单。否则登记状态只在启停 / 加载等生命周期动作里刷新，
@@ -247,6 +250,11 @@ cargo test  -p rds-workbench --test ui_contract
 （新增 `driver_registry_rows_join_declarations_with_registration_state`：四态 × 冲突 + 排序）；
 `cargo test -p rds-workbench --test ui_contract` 10 passed。
 
+2026-11-11 复测（停用依赖保护）：`cargo check -p rds-workbench --lib` 0 error，
+`cargo test -p rds-workbench --lib` 64 passed，`ui_contract` 10 passed；
+`cargo check -p rds-plugin` 0 error，`cargo test -p rds-plugin --test lifecycle`
+（`--test-threads=1`）16 passed。`disable_plugin` 的实时检查没有改变既有停用用例的预期。
+
 ---
 
 ## 7. 已知缺口（不当成已完成）
@@ -256,6 +264,6 @@ cargo test  -p rds-workbench --test ui_contract
 | 只读的「谁引用了某插件」查询 | 已完成（2026-11-10）：详情栏「依赖关系」段双向接线（`dependencies` / `dependents`），`Some(空)` 显示「无」、`None` 显示「未知」 |
 | 市场 / 远程索引 / 可更新档 | 未引入；筛选五档不含「可更新」 |
 | 面板徽标区分「DB 停用」与「未加载」 | 未做；根因是 `PluginInfo` 没有 `is_enabled` 字段，DB 权威启停状态不进会话快照 |
-| 停用被依赖插件 | 面板侧已拦截（2026-11-11）：单插件与批量停用都会按 `dependents` 缓存拒绝；`PluginManager::disable_plugin` 本身仍未查依赖，非面板调用可绕过 |
+| 停用被依赖插件 | 已完成（2026-11-11）：面板单插件 / 批量先按缓存拦截，`PluginManager::disable_plugin` 再实时 `check_dependents`，API 与非面板调用同样拒绝 |
 | `schema_version` / `plugins.updated_at` 索引 | 未拍板 |
 | 左 Dock 三个薄壳（`DatabaseNavPanel` / `ScratchPanel` / `ResourcePanelTab`）拆分 | 已完成（2026-11-10）：`panels/left_tabs/` 目录（`mod` / `database_nav` / `scratch` / `resources` / `tests` + `plugin_tab/` 五文件子目录） |

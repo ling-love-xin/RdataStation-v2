@@ -839,6 +839,22 @@ impl PluginManager {
     /// 权威状态 = global.db `plugin_store.is_enabled`（启动扫描 / 未来插件面板按它决定
     /// 要不要激活）。**运行中禁用 = 立刻停用**（sidecar 分支会停进程），不是等下次启动。
     pub async fn disable_plugin(&self, id: &str) -> Result<(), CoreError> {
+        // 停用被依赖的插件会让依赖方立即失去驱动；面板侧已做前置拦截，但这里
+        // 是权威入口（自动停用 / 其它调用方），必须自己查一遍，不能只靠 UI。
+        if let Some(db) = engine::migration::get_global_db_manager() {
+            let dependents = crate::dependency::DependencyManager::new(db)
+                .check_dependents(id)
+                .await?;
+            if !dependents.is_empty() {
+                return Err(CoreError::plugin(PluginError::DeactivationFailed {
+                    plugin_id: id.to_string(),
+                    reason: format!(
+                        "被以下插件依赖，请先停用或卸载它们: {}",
+                        dependents.join(", ")
+                    ),
+                }));
+            }
+        }
         if let Some(db) = engine::migration::get_global_db_manager() {
             // 运行时身份是清单 id（= code），不是安装实例 uuid；按 id 写会 0 行命中
             db.update_plugin_enabled_by_code(id, false).await?;
