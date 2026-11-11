@@ -100,10 +100,11 @@ RDS 当前没有市场或远程索引，保留该档会变成永远空空如也�
 `activate_plugin` 也复用同一道判定：重试、热插拔等不经 `enable_plugin` 的路径，
 依赖未就绪时状态落到 `ActivationFailed`，不会停在 `Loaded` / `Active`。
 
-**重试补登记（2026-11-11）**：`retry_load_plugin` 遇到 DB 无登记行时，先确认依赖就绪再补登记；
-依赖未就绪时只把状态落 `ActivationFailed` 并返回错误，不再先写一行 `is_enabled=1`、
-再被激活守卫拒绝。热插拔扫描不套这道前置（新增插件可能先于依赖被扫到，前置会永久漏扫），
-该入口的自动补登记仍会发生。
+**补登记与热插拔（2026-11-11）**：`retry_load_plugin` 遇到 DB 无登记行时，先确认依赖就绪再补登记；
+依赖未就绪时只把状态落 `ActivationFailed` 并返回错误，不再先写一行 `is_enabled=1`。
+`scan_and_diff_plugins` 改成两阶段：先把本轮新增插件全部加载并登记，再统一校验依赖并激活。
+依赖未就绪的新增插件登记为停用，不再留下「已启用但从未激活」的假行；第二阶段如果依赖已补齐
+（例如底座与本插件在同一次扫描里新增），再把该行翻回启用并激活。显式重试仍是「依赖就绪才登记」。
 
 **手动刷新（2026-11-10）**：页头与左栏的刷新按钮改为先 `resync_sidecar_driver_rows`
 再 `list_plugins`，不再只重读清单。否则登记状态只在启停 / 加载等生命周期动作里刷新，
@@ -271,7 +272,7 @@ cargo test  -p rds-workbench --test ui_contract
 2026-11-11 复测（停用依赖保护）：`cargo check -p rds-workbench --lib` 0 error，
 `cargo test -p rds-workbench --lib` 64 passed，`ui_contract` 10 passed；
 `cargo check -p rds-plugin` 0 error，`cargo test -p rds-plugin --test lifecycle`
-（`--test-threads=1`）19 passed（新增 `disable_rejects_a_plugin_with_a_dependent`：
+（`--test-threads=1`）21 passed（新增 `disable_rejects_a_plugin_with_a_dependent`：
 base + child 清单依赖后，manager 与 `PluginService` 两条停用入口都返回
 `DeactivationFailed` 并列出 child；`PluginService::uninstall_plugin` 同样返回
 `UninstallFailed`，被拒后 DB 仍保持 `is_enabled=1`、登记行也还在。新增
@@ -281,7 +282,10 @@ base + child 清单依赖后，manager 与 `PluginService` 两条停用入口都
 `activation_rejects_a_plugin_with_a_missing_dependency`：`activate_plugin` 与
 `retry_load_plugin` 在依赖缺失时都返回 `DependencyMissing`，状态落
 `ActivationFailed` 而不是 `Loaded` / `Active`；并断言被拒后 DB 没有留下
-自动补登记的 `is_enabled=1` 行。
+自动补登记的 `is_enabled=1` 行。新增 `hot_plug_registers_unready_plugin_as_disabled`：
+热插拔新增的 child 缺依赖时仍补登记，但 `is_enabled` 保持 0，状态说明失败原因。新增
+`scan_activates_a_plugin_whose_dependency_arrives_in_the_same_scan`：同一次扫描新增的
+base 与 child 能一起激活，证明「先登记全部、再统一激活」不受目录遍历顺序影响）。
 
 ---
 
@@ -294,6 +298,6 @@ base + child 清单依赖后，manager 与 `PluginService` 两条停用入口都
 | 面板徽标区分「DB 停用」与「未加载」 | 未做；根因是 `PluginInfo` 没有 `is_enabled` 字段，DB 权威启停状态不进会话快照 |
 | 停用被依赖插件 | 已完成（2026-11-11）：面板单插件 / 批量先按缓存拦截，`PluginManager::disable_plugin` 与 `PluginService::disable_plugin` 再实时 `check_dependents`，API 与非面板调用同样拒绝 |
 | 启用 / 激活依赖未就绪的插件 | 已完成（2026-11-11）：manager / service 两条启用入口在写库前 `resolve_dependencies`；`activate_plugin` 对重试、热插拔等旁路再兜一层，未就绪时不标 Active |
-| 自动补登记留下假启用行 | 部分完成（2026-11-11）：`retry_load_plugin` 在补登记前先校验依赖，未就绪时不写库；热插拔扫描仍会先补登记（顺序敏感，前置会漏扫），激活失败后暂时保留该行 |
+| 自动补登记留下假启用行 | 已完成（2026-11-11）：`retry_load_plugin` 补登记前先校验依赖；热插拔扫描改为「先登记全部、再统一校验并激活」，依赖未就绪的新增插件登记为停用，同批依赖补齐后再翻回启用 |
 | `schema_version` / `plugins.updated_at` 索引 | 未拍板 |
 | 左 Dock 三个薄壳（`DatabaseNavPanel` / `ScratchPanel` / `ResourcePanelTab`）拆分 | 已完成（2026-11-10）：`panels/left_tabs/` 目录（`mod` / `database_nav` / `scratch` / `resources` / `tests` + `plugin_tab/` 五文件子目录） |
