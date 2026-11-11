@@ -51,6 +51,8 @@ pub struct PluginManagerPanel {
     filter: Rc<Cell<PluginFilter>>,
     /// 当前选中插件 id（右栏详情来源；`None` 时回退到筛选结果第一条）。
     selected: Rc<RefCell<Option<String>>>,
+    /// 是否展开「驱动登记总表」（默认收起，避免常驻占掉卡片区高度）。
+    show_driver_registry: bool,
     /// 观察左 Dock 插件面板：刷新 / 动作回执 / 事件刷新都会 notify 本页。
     _plugin_sub: Option<Subscription>,
 }
@@ -76,6 +78,7 @@ impl PluginManagerPanel {
             _search_sub: None,
             filter: Rc::new(Cell::new(PluginFilter::All)),
             selected: Rc::new(RefCell::new(None)),
+            show_driver_registry: false,
             _plugin_sub: Some(_plugin_sub),
         }
     }
@@ -106,6 +109,12 @@ impl PluginManagerPanel {
 
     pub(crate) fn set_filter(&self, filter: PluginFilter, cx: &mut Context<Self>) {
         self.filter.set(filter);
+        cx.notify();
+    }
+
+    /// 展开 / 收起「驱动登记总表」（状态留在面板，不在 render 里现算）。
+    pub(crate) fn toggle_driver_registry(&mut self, cx: &mut Context<Self>) {
+        self.show_driver_registry = !self.show_driver_registry;
         cx.notify();
     }
 

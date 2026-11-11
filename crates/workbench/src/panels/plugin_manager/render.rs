@@ -12,8 +12,9 @@ use gpui_kit::component::{ActiveTheme, IconName, Sizable, Size, WindowExt as _};
 use gpui_kit::{Context, Div, FontWeight, IntoElement, SharedString, Window, div, rems};
 
 use super::widgets::{
-    DriverChainLevel, filtered_plugins, plugin_driver_chain, plugin_driver_stats,
-    plugin_driver_stats_label, plugin_stats,
+    driver_registry_rows, filtered_plugins, plugin_driver_chain, plugin_driver_stats,
+    plugin_driver_stats_label, plugin_state_is_active, plugin_stats, DriverChainLevel,
+    DriverRegistryStatus,
 };
 use super::*;
 use crate::ui;
@@ -204,6 +205,7 @@ impl PluginManagerPanel {
 
         // 驱动链路：把「插件在、下拉空」的四段成败摊开，卡点写在同一行。
         let chain = plugin_driver_chain(&snapshot.plugins);
+        let registry_rows = driver_registry_rows(&snapshot.plugins);
         let mut chain_row = div()
             .h_flex()
             .items_center()
@@ -269,6 +271,103 @@ impl PluginManagerPanel {
                 );
             }
         }
+        // 登记总表默认收起：链路行已经给出总体成败，明细留给「哪个 id、哪个插件、登记成什么样」。
+        if !registry_rows.is_empty() {
+            chain_row = chain_row.child(
+                Button::new("plugin-manager-driver-registry")
+                    .ghost()
+                    .label(SharedString::from(if self.show_driver_registry {
+                        "收起登记明细".to_string()
+                    } else {
+                        format!("登记明细（{}）", registry_rows.len())
+                    }))
+                    .with_size(Size::XSmall)
+                    .tooltip("按驱动 id 查看每个插件在 drivers 表的真实登记状态")
+                    .on_click({
+                        let manager = cx.entity();
+                        move |_, _, app| {
+                            let _ = manager.update(app, |this, cx| this.toggle_driver_registry(cx));
+                        }
+                    }),
+            );
+        }
+
+        let registry_table = (self.show_driver_registry && !registry_rows.is_empty()).then(|| {
+            div()
+                .v_flex()
+                .gap_1()
+                .px_4()
+                .py_2()
+                .border_b(ui::HAIRLINE)
+                .border_color(theme.colors.border)
+                .text_xs()
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_3()
+                        .py_1()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(div().flex_1().child("驱动"))
+                        .child(div().flex_1().child("显示名"))
+                        .child(div().flex_1().child("插件"))
+                        .child(div().flex_none().child("登记状态")),
+                )
+                .children(registry_rows.iter().map(|row| {
+                    let tone = match row.status {
+                        DriverRegistryStatus::Registered => theme.colors.success,
+                        DriverRegistryStatus::Disabled | DriverRegistryStatus::Unknown => {
+                            theme.colors.warning
+                        }
+                        DriverRegistryStatus::Unregistered => theme.colors.danger,
+                    };
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_3()
+                        .py_1()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .child(row.driver_id.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .child(row.display_name.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .text_color(if plugin_state_is_active(row.plugin_state) {
+                                    theme.colors.foreground
+                                } else {
+                                    theme.colors.muted_foreground
+                                })
+                                .child(row.plugin_id.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .h_flex()
+                                .items_center()
+                                .gap_1()
+                                .child(div().size_1p5().rounded_full().bg(tone))
+                                .child(row.status.label())
+                                .children(row.conflict.then(|| {
+                                    div()
+                                        .text_color(theme.colors.danger)
+                                        .child("· id 冲突")
+                                })),
+                        )
+                }))
+        });
 
         // 操作反馈：错误 > 进行中 > 成功回执（同一时刻只显示一条，避免三行挤在一起）。
         let feedback = if let Some(error) = snapshot.error.as_deref() {
@@ -421,6 +520,7 @@ impl PluginManagerPanel {
             .child(header)
             .child(stats_row)
             .child(chain_row)
+            .children(registry_table)
             .children(feedback)
             .children(reload_banner)
             .child(toolbar)

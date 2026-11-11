@@ -137,6 +137,15 @@ RDS 当前没有市场或远程索引，保留该档会变成永远空空如也�
 点一下就走 `PluginPanel::set_plugin_enabled(.., false)`，不用用户再去列表里找。停用的插件
 不参与判定，避免「看到冲突却不知道该停谁」。
 
+**驱动登记总表（2026-11-11）**：链路行尾新增「登记明细（N）」按钮，默认收起；
+展开后按「驱动 id → 插件 id」列出每个插件声明的每个驱动：驱动 id、显示名、
+插件 id、登记状态（已登记 / 已登记 · 已停用 / 未登记 / 登记状态未知），
+被多个启用插件重复声明的行尾追加「· id 冲突」。数据全部来自 `PluginInfo`
+的快照（`driver_registry_rows` 纯函数），不额外查库；`registered_drivers = None`
+仍显示「登记状态未知」，不降级成「未登记」。复用同一行解决三个问题：
+哪个驱动由谁声明、登记行是否启用、是否撞车；不再需要逐个插件点详情。
+插件未启用时插件 id 用弱化色，与卡片区状态口径一致。
+
 **文件与日志入口（2026-11-10）**：`PluginInfo` 增 `install_path: Option<PathBuf>`
 （`plugin.toml` 所在目录；wasm 运行时列表不回报磁盘路径 → `None`；坏目录按
 `paths::plugin_dir(id)` 兜底，路径不存在也给 `None`）。详情栏「管理动作」下补两枚按钮：
@@ -219,6 +228,11 @@ cargo test  -p rds-workbench --test ui_contract
 
 2026-11-11 复测（批量动作）：`cargo check -p rds-workbench --lib` 0 error；
 `cargo test -p rds-workbench --lib` 62 passed（`bulk_actions_skip_states_they_cannot_change` 同时覆盖启停与重试的状态面）；
+`cargo test -p rds-workbench --test ui_contract` 10 passed。
+
+2026-11-11 复测（驱动登记总表）：`cargo check -p rds-workbench --lib` 0 error；
+`cargo test -p rds-workbench --lib` 63 passed
+（新增 `driver_registry_rows_join_declarations_with_registration_state`：四态 × 冲突 + 排序）；
 `cargo test -p rds-workbench --test ui_contract` 10 passed。
 
 ---

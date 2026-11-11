@@ -159,6 +159,78 @@ pub(crate) fn plugin_driver_stats(plugins: &[PluginInfo]) -> PluginDriverStats {
     stats
 }
 
+/// 一个驱动在全局库 `drivers` 表里的真实登记状态。
+///
+/// 清单声明只说明「插件想贡献什么」，这里回答的是「登记表里有没有这一行、行是否启用」。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DriverRegistryStatus {
+    Registered,
+    Disabled,
+    Unregistered,
+    Unknown,
+}
+
+impl DriverRegistryStatus {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Registered => "已登记",
+            Self::Disabled => "已登记 · 已停用",
+            Self::Unregistered => "未登记",
+            Self::Unknown => "登记状态未知",
+        }
+    }
+}
+
+fn driver_registry_status(plugin: &PluginInfo, driver_id: &str) -> DriverRegistryStatus {
+    let Some(rows) = plugin.registered_drivers.as_deref() else {
+        return DriverRegistryStatus::Unknown;
+    };
+    match rows.iter().find(|row| row.id == driver_id) {
+        Some(row) if row.enabled => DriverRegistryStatus::Registered,
+        Some(_) => DriverRegistryStatus::Disabled,
+        None => DriverRegistryStatus::Unregistered,
+    }
+}
+
+/// 登记总表的一行：一个插件声明的一个驱动，及其在 `drivers` 表的真实状态。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DriverRegistryRow {
+    pub driver_id: String,
+    pub display_name: String,
+    pub plugin_id: String,
+    pub plugin_state: PluginState,
+    pub status: DriverRegistryStatus,
+    /// 该驱动 id 同时被多个启用插件声明（加载期会拒绝）。
+    pub conflict: bool,
+}
+
+/// 按「驱动 id → 插件 id」展开登记总表，供管理页一眼看出谁声明了、谁没登记、谁撞车。
+///
+/// 不额外查库：状态全部来自 `PluginInfo.registered_drivers` 缓存；`None` 仍是「未知」，
+/// 不能降级成「未登记」。
+pub(crate) fn driver_registry_rows(plugins: &[PluginInfo]) -> Vec<DriverRegistryRow> {
+    let conflicts = driver_id_conflicts(plugins);
+    let mut rows: BTreeMap<(String, String), DriverRegistryRow> = BTreeMap::new();
+    for plugin in plugins {
+        for driver in &plugin.drivers {
+            let conflict = conflicts.iter().any(|conflict| {
+                conflict.driver_id == driver.id
+                    && conflict.plugins.iter().any(|id| id == &plugin.id)
+            });
+            rows.entry((driver.id.clone(), plugin.id.clone()))
+                .or_insert_with(|| DriverRegistryRow {
+                    driver_id: driver.id.clone(),
+                    display_name: driver.display_name.clone(),
+                    plugin_id: plugin.id.clone(),
+                    plugin_state: plugin.state,
+                    status: driver_registry_status(plugin, &driver.id),
+                    conflict,
+                });
+        }
+    }
+    rows.into_values().collect()
+}
+
 /// 页头那一条统计文案。`unknown` 只在真读不到登记表时出现，不冒充「未登记」。
 pub(crate) fn plugin_driver_stats_label(stats: PluginDriverStats) -> String {
     if stats.declared == 0 {
@@ -435,14 +507,7 @@ pub(crate) fn plugin_driver_registration_label(
     plugin: &PluginInfo,
     driver_id: &str,
 ) -> &'static str {
-    let Some(rows) = plugin.registered_drivers.as_deref() else {
-        return "登记状态未知";
-    };
-    match rows.iter().find(|row| row.id == driver_id) {
-        Some(row) if row.enabled => "已登记",
-        Some(_) => "已登记 · 已停用",
-        None => "未登记",
-    }
+    driver_registry_status(plugin, driver_id).label()
 }
 
 /// 是否声明了「会接收数据库密码」的凭据权限（详情栏要显式告警）。

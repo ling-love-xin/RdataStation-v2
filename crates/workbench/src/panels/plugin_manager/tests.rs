@@ -7,11 +7,12 @@ use plugin::{
 };
 
 use super::widgets::{
-    DriverChainLevel, PluginFilter, contribution_summary, driver_id_conflicts, filtered_plugins,
-    plugin_backend_label, plugin_diagnostics, plugin_driver_chain, plugin_driver_registration_label,
-    plugin_driver_stats, plugin_driver_stats_label, plugin_kind_label,
-    plugin_receives_database_credentials, plugin_state_is_active, plugin_state_label, plugin_stats,
-    plugin_uninstall_block_reason,
+    contribution_summary, driver_id_conflicts, driver_registry_rows, filtered_plugins,
+    plugin_backend_label, plugin_diagnostics, plugin_driver_chain,
+    plugin_driver_registration_label, plugin_driver_stats, plugin_driver_stats_label,
+    plugin_kind_label, plugin_receives_database_credentials, plugin_state_is_active,
+    plugin_state_label, plugin_stats, plugin_uninstall_block_reason, DriverChainLevel,
+    DriverRegistryStatus, PluginFilter,
 };
 
 fn info(name: &str, id: &str, state: PluginState, description: &str) -> PluginInfo {
@@ -460,6 +461,93 @@ fn uninstall_blocks_only_when_dependents_are_known() {
         plugin_uninstall_block_reason(&plugin).as_deref(),
         Some("被 rds.insight.sales、rds.mock.orders 依赖，需先卸载它们")
     );
+}
+
+#[test]
+fn driver_registry_rows_join_declarations_with_registration_state() {
+    let mut oracle = info(
+        "Oracle 驱动",
+        "rds.driver.oracle-rust",
+        PluginState::Active,
+        "",
+    );
+    oracle.drivers = vec![PluginDriverSummary {
+        id: "oracle".to_string(),
+        display_name: "Oracle Database (Rust)".to_string(),
+        default_port: Some(1521),
+        category: None,
+    }];
+    oracle.registered_drivers = Some(vec![PluginDriverRegistration {
+        id: "oracle".to_string(),
+        enabled: true,
+    }]);
+
+    // 同一驱动 id 的第二个启用插件：总表要显示两行，并给两行都标冲突。
+    let mut duplicate = info(
+        "Oracle 旧版",
+        "rds.driver.oracle-copy",
+        PluginState::Active,
+        "",
+    );
+    duplicate.drivers = vec![PluginDriverSummary {
+        id: "oracle".to_string(),
+        display_name: "Oracle Database (JDBC)".to_string(),
+        default_port: Some(1521),
+        category: None,
+    }];
+    duplicate.registered_drivers = Some(Vec::new());
+
+    let mut mssql = info(
+        "SQL Server",
+        "rds.driver.mssql-rust",
+        PluginState::Loaded,
+        "",
+    );
+    mssql.drivers = vec![PluginDriverSummary {
+        id: "mssql".to_string(),
+        display_name: "SQL Server (Rust)".to_string(),
+        default_port: Some(1433),
+        category: None,
+    }];
+    mssql.registered_drivers = Some(vec![PluginDriverRegistration {
+        id: "mssql".to_string(),
+        enabled: false,
+    }]);
+
+    let mut postgres = info(
+        "PostgreSQL",
+        "rds.driver.postgres-py",
+        PluginState::Inactive,
+        "",
+    );
+    postgres.drivers = vec![PluginDriverSummary {
+        id: "postgresql".to_string(),
+        display_name: "PostgreSQL".to_string(),
+        default_port: Some(5432),
+        category: None,
+    }];
+    // 没读到全局库：状态是未知，不是未登记
+    postgres.registered_drivers = None;
+
+    let rows = driver_registry_rows(&[oracle, duplicate, mssql, postgres]);
+    assert_eq!(rows.len(), 4);
+    // 先按驱动 id、再按插件 id 排序
+    assert_eq!(rows[0].driver_id, "mssql");
+    assert_eq!(rows[1].driver_id, "oracle");
+    assert_eq!(rows[1].plugin_id, "rds.driver.oracle-copy");
+    assert_eq!(rows[2].plugin_id, "rds.driver.oracle-rust");
+    assert_eq!(rows[3].driver_id, "postgresql");
+
+    let oracle_row = &rows[2];
+    assert_eq!(oracle_row.status, DriverRegistryStatus::Registered);
+    assert!(oracle_row.conflict);
+    let duplicate_row = &rows[1];
+    assert_eq!(duplicate_row.status, DriverRegistryStatus::Unregistered);
+    assert!(duplicate_row.conflict);
+    assert_eq!(rows[0].status, DriverRegistryStatus::Disabled);
+    assert!(!rows[0].conflict);
+    assert_eq!(rows[3].status, DriverRegistryStatus::Unknown);
+    assert!(!rows[3].conflict);
 }
 
 #[test]
