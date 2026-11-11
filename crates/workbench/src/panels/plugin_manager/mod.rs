@@ -34,6 +34,8 @@ mod render;
 mod tests;
 mod widgets;
 
+pub(crate) use widgets::plugin_disable_block_reason;
+
 /// 插件管理页：中央 Dock 独立 tab（与属性面板 / 搜索结果同级）。
 pub struct PluginManagerPanel {
     /// 左 Dock 插件面板实体：清单 / 贡献点 / 后台动作的唯一数据面。

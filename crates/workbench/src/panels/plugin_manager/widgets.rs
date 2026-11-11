@@ -588,6 +588,21 @@ pub(crate) fn plugin_uninstall_block_reason(plugin: &PluginInfo) -> Option<Strin
     Some(format!("被 {} 依赖，需先卸载它们", dependents.join("、")))
 }
 
+/// 停用被拦截的原因（有插件依赖它时返回说明；未读到依赖表时**不拦**）。
+///
+/// 停用不会从磁盘删除插件，但会让依赖方立即失去驱动；与卸载一样先要求处理依赖方。
+/// `dependents = None` 时不能当成「没人依赖」而误拦，交给调用方按未知处理。
+pub(crate) fn plugin_disable_block_reason(plugin: &PluginInfo) -> Option<String> {
+    let dependents = plugin.dependents.as_deref()?;
+    if dependents.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "被 {} 依赖，停用会让它们立即失效；请先停用或卸载依赖方",
+        dependents.join("、")
+    ))
+}
+
 /// 卡片 / 详情栏共用的管理动作按钮。
 ///
 /// `scope` 用来区分卡片与详情栏的同名 `ElementId`（同屏两处都渲染时不能撞 id）。

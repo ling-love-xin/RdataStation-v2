@@ -74,6 +74,14 @@ RDS 当前没有市场或远程索引，保留该档会变成永远空空如也�
 反向依赖已知非空时，卡片与详情栏的「卸载」按钮直接禁用并在 tooltip 列出依赖者；
 缓存未知时不前置拦截，仍由卸载时的实时检查兜底（不把「没读到」当成「没人依赖」）。
 
+**停用依赖保护（2026-11-11）**：停用同样会让依赖方立即失去驱动。左栏卡片、详情栏
+与管理页冲突卡点的单插件停用，以及「停用全部已启用」，都先读同一份 `dependents`
+缓存：单插件被依赖时拒绝并写清「被谁依赖、先处理依赖方」；批量停用时只要选中集合里
+有任意一个被依赖就整批拒绝，并列出被拦截的 id，避免出现「停了一半、状态更难判断」。
+`dependents = None` 时不拦（与卸载同口径）。注意：拦截目前只在面板动作入口，
+`PluginManager::disable_plugin` 本身仍未查依赖，非面板调用仍可能绕过；根治需在该方法
+里接 `check_dependents`。
+
 **手动刷新（2026-11-10）**：页头与左栏的刷新按钮改为先 `resync_sidecar_driver_rows`
 再 `list_plugins`，不再只重读清单。否则登记状态只在启停 / 加载等生命周期动作里刷新，
 用户手动刷新后仍会长期停在「登记状态未知」；同步失败只记日志，不拦清单刷新。
@@ -245,5 +253,6 @@ cargo test  -p rds-workbench --test ui_contract
 | 只读的「谁引用了某插件」查询 | 已完成（2026-11-10）：详情栏「依赖关系」段双向接线（`dependencies` / `dependents`），`Some(空)` 显示「无」、`None` 显示「未知」 |
 | 市场 / 远程索引 / 可更新档 | 未引入；筛选五档不含「可更新」 |
 | 面板徽标区分「DB 停用」与「未加载」 | 未做；根因是 `PluginInfo` 没有 `is_enabled` 字段，DB 权威启停状态不进会话快照 |
+| 停用被依赖插件 | 面板侧已拦截（2026-11-11）：单插件与批量停用都会按 `dependents` 缓存拒绝；`PluginManager::disable_plugin` 本身仍未查依赖，非面板调用可绕过 |
 | `schema_version` / `plugins.updated_at` 索引 | 未拍板 |
 | 左 Dock 三个薄壳（`DatabaseNavPanel` / `ScratchPanel` / `ResourcePanelTab`）拆分 | 已完成（2026-11-10）：`panels/left_tabs/` 目录（`mod` / `database_nav` / `scratch` / `resources` / `tests` + `plugin_tab/` 五文件子目录） |

@@ -5,6 +5,7 @@ use super::{
     bulk_retry_includes, bulk_toggle_includes, event_touches_plugin_list, install_receipt,
     panel_busy,
 };
+use crate::panels::plugin_manager::plugin_disable_block_reason;
 
 /// 插件 tab：已装插件清单（名称 / 版本 / 状态）+ 刷新 + 启用 / 停用 / 卸载。
 ///
@@ -250,6 +251,22 @@ impl PluginPanel {
         if panel_busy(&self.progress) {
             return;
         }
+        // 停用被依赖的插件会让依赖方立即失去驱动，且没有任何回调提醒；和卸载一样
+        // 先要求处理依赖方。依赖表未知（None）时不拦，避免把「读不到」误判成「有依赖」。
+        if !enabled {
+            let blocked = self
+                .plugins
+                .borrow()
+                .iter()
+                .find(|plugin| plugin.id == id)
+                .and_then(plugin_disable_block_reason);
+            if let Some(reason) = blocked {
+                self.error.replace(Some(format!("不能停用 {id}：{reason}")));
+                self.notice.replace(None);
+                cx.notify();
+                return;
+            }
+        }
         let action = if enabled { "启用" } else { "停用" };
         self.progress.replace(Some(format!("正在{action} {id}…")));
         self.error.replace(None);
@@ -303,6 +320,30 @@ impl PluginPanel {
         };
         if panel_busy(&self.progress) {
             return;
+        }
+        // 批量停用同样不能让依赖方静默失效：只要选中集合里有一个被依赖，就整批拒绝，
+        // 并把被拦截的 id 与依赖方列出来，避免「部分停用后状态更难判断」。
+        if !enabled {
+            let blocked: Vec<String> = self
+                .plugins
+                .borrow()
+                .iter()
+                .filter(|plugin| bulk_toggle_includes(plugin.state, false))
+                .filter_map(|plugin| {
+                    plugin_disable_block_reason(plugin)
+                        .map(|reason| format!("{}（{reason}）", plugin.id))
+                })
+                .collect();
+            if !blocked.is_empty() {
+                self.error.replace(Some(format!(
+                    "有 {} 个插件被依赖，未停用：{}",
+                    blocked.len(),
+                    blocked.join("；")
+                )));
+                self.notice.replace(None);
+                cx.notify();
+                return;
+            }
         }
 
         let ids: Vec<String> = self

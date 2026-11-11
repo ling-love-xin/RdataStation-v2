@@ -8,7 +8,7 @@ use plugin::{
 
 use super::widgets::{
     contribution_summary, driver_id_conflicts, driver_registry_rows, filtered_plugins,
-    plugin_backend_label, plugin_diagnostics, plugin_driver_chain,
+    plugin_backend_label, plugin_diagnostics, plugin_disable_block_reason, plugin_driver_chain,
     plugin_driver_registration_label, plugin_driver_stats, plugin_driver_stats_label,
     plugin_kind_label, plugin_receives_database_credentials, plugin_state_is_active,
     plugin_state_label, plugin_stats, plugin_uninstall_block_reason, DriverChainLevel,
@@ -460,6 +460,30 @@ fn uninstall_blocks_only_when_dependents_are_known() {
     assert_eq!(
         plugin_uninstall_block_reason(&plugin).as_deref(),
         Some("被 rds.insight.sales、rds.mock.orders 依赖，需先卸载它们")
+    );
+}
+
+#[test]
+fn disable_blocks_only_when_dependents_are_known() {
+    let mut plugin = info(
+        "Oracle 驱动",
+        "rds.driver.oracle",
+        PluginState::Active,
+        "Oracle 连接",
+    );
+    // 没读到依赖表：不拦，保持与卸载同一口径
+    assert_eq!(plugin_disable_block_reason(&plugin), None);
+    // 读到了、确实没人依赖
+    plugin.dependents = Some(Vec::new());
+    assert_eq!(plugin_disable_block_reason(&plugin), None);
+    // 已知有依赖者：停用前置拦住，并说明先处理依赖方
+    plugin.dependents = Some(vec![
+        "rds.insight.sales".to_string(),
+        "rds.mock.orders".to_string(),
+    ]);
+    assert_eq!(
+        plugin_disable_block_reason(&plugin).as_deref(),
+        Some("被 rds.insight.sales、rds.mock.orders 依赖，停用会让它们立即失效；请先停用或卸载依赖方")
     );
 }
 
