@@ -294,5 +294,6 @@ base + child 清单依赖后，manager 与 `PluginService` 两条停用入口都
 | 面板徽标区分「DB 停用」与「未加载」 | 未做；根因是 `PluginInfo` 没有 `is_enabled` 字段，DB 权威启停状态不进会话快照 |
 | 停用被依赖插件 | 已完成（2026-11-11）：面板单插件 / 批量先按缓存拦截，`PluginManager::disable_plugin` 与 `PluginService::disable_plugin` 再实时 `check_dependents`，API 与非面板调用同样拒绝 |
 | 启用 / 激活依赖未就绪的插件 | 已完成（2026-11-11）：manager / service 两条启用入口在写库前 `resolve_dependencies`；`activate_plugin` 对重试、热插拔等旁路再兜一层，未就绪时不标 Active |
+| 自动补登记留下假启用行 | 部分完成（2026-11-11）：`retry_load_plugin` 在补登记前先校验依赖，未就绪时不写库；热插拔扫描仍会先补登记（顺序敏感，前置会漏扫），激活失败后暂时保留该行 |
 | `schema_version` / `plugins.updated_at` 索引 | 未拍板 |
 | 左 Dock 三个薄壳（`DatabaseNavPanel` / `ScratchPanel` / `ResourcePanelTab`）拆分 | 已完成（2026-11-10）：`panels/left_tabs/` 目录（`mod` / `database_nav` / `scratch` / `resources` / `tests` + `plugin_tab/` 五文件子目录） |
