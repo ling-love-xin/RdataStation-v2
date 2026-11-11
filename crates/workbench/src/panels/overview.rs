@@ -63,7 +63,11 @@ pub(crate) fn render_overview_cards(
     let connections_value: SharedString = if loading {
         "…".into()
     } else {
-        counts.map(|c| c.connections).unwrap_or(0).to_string().into()
+        counts
+            .map(|c| c.connections)
+            .unwrap_or(0)
+            .to_string()
+            .into()
     };
     let connections_note: SharedString = match counts {
         Some(c) => format!("已连接 {} 个", c.connected).into(),
@@ -143,12 +147,7 @@ pub(crate) fn render_overview_cards(
                 .cloned()
                 .collect::<Vec<_>>()
                 .join(" · ");
-            root = root.child(
-                div()
-                    .text_xs()
-                    .text_color(theme.colors.warning)
-                    .child(text),
-            );
+            root = root.child(div().text_xs().text_color(theme.colors.warning).child(text));
         }
     }
 

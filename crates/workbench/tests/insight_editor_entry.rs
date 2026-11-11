@@ -81,10 +81,7 @@ fn the_editor_column_port_points_the_insight_panel_at_the_source(cx: &mut TestAp
             !view.read(cx).probe_confirm_open(),
             "右栏不该为源目标开探查确认窗"
         );
-        assert!(
-            view.read(cx).target().is_none(),
-            "确认前右栏不落目标"
-        );
+        assert!(view.read(cx).target().is_none(), "确认前右栏不落目标");
         let queued = shared
             .pending_insight_target
             .borrow()

@@ -2,8 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{App, AppContext as _, TestAppContext};
+use gpui_kit::TestAppContext;
 
 use crate::quick_open::host::{ToggleIntent, toggle_intent};
 use crate::quick_open::model::Mode;

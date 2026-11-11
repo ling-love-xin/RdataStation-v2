@@ -14,7 +14,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
     Render, Styled as _, TestAppContext, VisualTestContext, Window, div,

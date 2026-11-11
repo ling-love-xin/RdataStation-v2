@@ -33,7 +33,6 @@ impl PropertyHostPanel {
         // Change 事件把输入值写回 self.filter → render 时过滤 rows / sections。
         if self.filter_input.borrow().is_none() {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder("过滤属性…"));
-            let filter = self.filter.clone();
             let sub = cx.subscribe_in(
                 &input,
                 window,

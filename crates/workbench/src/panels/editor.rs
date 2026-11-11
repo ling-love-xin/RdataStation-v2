@@ -140,7 +140,11 @@ impl EditorPanel {
     /// 真正起后台任务：阻塞读库放 `background_executor`，回填在主线程。
     ///
     /// 连接数与连接状态直接从 `Shared` 克隆一份过去（背景线程不能碰 `Rc<RefCell<..>>`）。
-    fn spawn_overview(&mut self, project: Option<(String, std::path::PathBuf)>, cx: &mut Context<Self>) {
+    fn spawn_overview(
+        &mut self,
+        project: Option<(String, std::path::PathBuf)>,
+        cx: &mut Context<Self>,
+    ) {
         let flags: Vec<bool> = self
             .shared
             .connections

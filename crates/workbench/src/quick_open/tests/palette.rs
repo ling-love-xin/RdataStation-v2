@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{App, AppContext as _, KeyBinding, TestAppContext};
+use gpui_kit::{KeyBinding, TestAppContext};
 
 use crate::commands::QuickOpenLocate;
 use crate::quick_open::model::Action;

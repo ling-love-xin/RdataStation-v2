@@ -83,11 +83,9 @@ fn metadata_counts(root: &Path) -> Result<(usize, usize), String> {
     if !db.is_file() {
         return Err("项目库未初始化：缺 .RSmeta/project.db".to_string());
     }
-    let conn = rusqlite::Connection::open_with_flags(
-        &db,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(|e| format!("打开项目库失败：{e}"))?;
+    let conn =
+        rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| format!("打开项目库失败：{e}"))?;
 
     let count = |table: &str| -> Result<usize, String> {
         let sql = format!("SELECT COUNT(*) FROM \"{table}\"");
@@ -158,10 +156,8 @@ mod tests {
 
         {
             let conn = rusqlite::Connection::open(meta.join("project.db")).expect("open sqlite");
-            conn.execute_batch(
-                "CREATE TABLE tables (id TEXT); CREATE TABLE columns (id TEXT);",
-            )
-            .expect("create tables");
+            conn.execute_batch("CREATE TABLE tables (id TEXT); CREATE TABLE columns (id TEXT);")
+                .expect("create tables");
             conn.execute_batch(
                 "INSERT INTO tables (id) VALUES ('t1'), ('t2');
                  INSERT INTO columns (id) VALUES ('c1'), ('c2'), ('c3');",

@@ -472,8 +472,9 @@ pub fn save_scratchpad(
     let dir = root.join("scratchpad").join("mock");
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建 {} 失败: {e}", dir.display()))?;
     let dir_text = dir.to_string_lossy().to_string();
-    let path = MockEngine::save_to_scratchpad(&info.temp_table_name, &info.table_name, format, &dir_text)
-        .map_err(|e| format!("保存到草稿箱失败: {e}"))?;
+    let path =
+        MockEngine::save_to_scratchpad(&info.temp_table_name, &info.table_name, format, &dir_text)
+            .map_err(|e| format!("保存到草稿箱失败: {e}"))?;
     Ok(format!("已保存到草稿箱：{path}"))
 }
 

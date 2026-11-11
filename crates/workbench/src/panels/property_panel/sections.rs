@@ -208,7 +208,6 @@ impl PropertyHostPanel {
         filter: &str,
         theme: &Theme,
     ) -> Div {
-        let muted = theme.colors.muted_foreground;
         let needle = filter.to_lowercase();
         // filter 过滤：sections 里任一 row 的 label/value 包含 needle 才保留该 section。
         let filtered: Vec<&PropertySection> = props
