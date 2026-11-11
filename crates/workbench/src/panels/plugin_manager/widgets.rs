@@ -614,6 +614,11 @@ pub(crate) fn plugin_action_buttons(
 ) -> Vec<Button> {
     let id = plugin.id.clone();
     let active = plugin_state_is_active(plugin.state);
+    let disable_reason = plugin_disable_block_reason(plugin);
+    let disable_hint = match &disable_reason {
+        Some(reason) => reason.clone(),
+        None => "停用后本会话立即停止运行（进程停用），下次启动不再激活".to_string(),
+    };
     let action_id = id.clone();
     let action = if plugin.kind == PluginKind::Unknown {
         Button::new(SharedString::from(format!("plugin-{scope}-{id}-retry")))
@@ -636,8 +641,8 @@ pub(crate) fn plugin_action_buttons(
             .ghost()
             .with_size(Size::XSmall)
             .label("停用")
-            .tooltip("停用后本会话立即停止运行（进程停用），下次启动不再激活")
-            .disabled(busy)
+            .tooltip(disable_hint.clone())
+            .disabled(busy || disable_reason.is_some())
             .on_click({
                 let entity = entity.clone();
                 move |_, _window, app| {
