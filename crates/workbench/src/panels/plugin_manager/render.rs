@@ -344,13 +344,41 @@ impl PluginManagerPanel {
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .text_ellipsis()
+                                .h_flex()
+                                .items_center()
+                                .gap_1()
                                 .text_color(if plugin_state_is_active(row.plugin_state) {
                                     theme.colors.foreground
                                 } else {
                                     theme.colors.muted_foreground
                                 })
-                                .child(row.plugin_id.clone()),
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_ellipsis()
+                                        .child(row.plugin_id.clone()),
+                                )
+                                .child({
+                                    let manager = cx.entity();
+                                    let plugin_id = row.plugin_id.clone();
+                                    Button::new(SharedString::from(format!(
+                                        "registry-select-{}",
+                                        row.plugin_id
+                                    )))
+                                    .ghost()
+                                    .label("查看")
+                                    .with_size(Size::XSmall)
+                                    .tooltip("在右侧打开该插件详情")
+                                    .on_click(
+                                        move |_, _, app| {
+                                            let id = plugin_id.clone();
+                                            let _ = manager.update(app, |this, cx| {
+                                                this.select(id, cx);
+                                            });
+                                        },
+                                    )
+                                }),
                         )
                         .child(
                             div()
@@ -361,9 +389,7 @@ impl PluginManagerPanel {
                                 .child(div().size_1p5().rounded_full().bg(tone))
                                 .child(row.status.label())
                                 .children(row.conflict.then(|| {
-                                    div()
-                                        .text_color(theme.colors.danger)
-                                        .child("· id 冲突")
+                                    div().text_color(theme.colors.danger).child("· id 冲突")
                                 })),
                         )
                 }))
