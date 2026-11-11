@@ -7,7 +7,7 @@ use engine::persistence::global_db::GlobalDatabaseManager;
 use engine::persistence::plugin_store::Plugin;
 use serde::{Deserialize, Serialize};
 use shared::error::{CoreError, PluginError};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -252,25 +252,52 @@ impl DependencyManager {
     /// 检查插件是否被其他插件依赖（2026-10-15：遍历全部插件解析 manifest_json，
     /// 此前直接返回空 Vec）
     pub async fn check_dependents(&self, plugin_id: &str) -> Result<Vec<String>, CoreError> {
-        let all_plugins = self.db_manager.get_all_plugins().await?;
-        let mut dependents = Vec::new();
+        Ok(self
+            .all_dependents()
+            .await?
+            .remove(plugin_id)
+            .unwrap_or_default())
+    }
 
-        for plugin in all_plugins {
-            if plugin.code == plugin_id {
+    /// 一次算全量反向依赖：`被依赖插件 id -> 依赖者 id 列表`。
+    ///
+    /// 管理页要同时显示所有插件的「项目引用」，逐个调 `check_dependents` 会各扫一遍
+    /// 插件表；这里扫一遍即可。读不出来（解析失败的清单）直接跳过——不猜依赖。
+    pub async fn all_dependents(&self) -> Result<HashMap<String, Vec<String>>, CoreError> {
+        let all_plugins = self.db_manager.get_all_plugins().await?;
+        Ok(collect_dependents(
+            all_plugins
+                .into_iter()
+                .map(|plugin| (plugin.code, plugin.manifest_json)),
+        ))
+    }
+}
+
+/// 从 `(插件 id, 清单 JSON)` 算出反向依赖表（纯函数，便于单测）。
+///
+/// 解析不出清单的条目直接跳过——展示层宁可少说，不能编造依赖。
+fn collect_dependents(
+    plugins: impl IntoIterator<Item = (String, Option<String>)>,
+) -> HashMap<String, Vec<String>> {
+    let mut dependents: HashMap<String, Vec<String>> = HashMap::new();
+    for (code, manifest_json) in plugins {
+        let Some(mj) = manifest_json else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_str::<PluginManifest>(&mj) else {
+            continue;
+        };
+        for dependency in &manifest.dependencies {
+            if dependency.id == code {
                 continue;
             }
-
-            if let Some(mj) = &plugin.manifest_json {
-                if let Ok(manifest) = serde_json::from_str::<PluginManifest>(mj) {
-                    if manifest.dependencies.iter().any(|d| d.id == plugin_id) {
-                        dependents.push(plugin.code.clone());
-                    }
-                }
-            }
+            dependents
+                .entry(dependency.id.clone())
+                .or_default()
+                .push(code.clone());
         }
-
-        Ok(dependents)
     }
+    dependents
 }
 
 /// 依赖状态
@@ -297,4 +324,57 @@ impl DependencyStatus {
 pub struct DependencyCheckResult {
     pub plugin_id: String,
     pub dependencies: Vec<(String, DependencyStatus)>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_dependents;
+
+    fn manifest(id: &str, depends_on: &[&str]) -> Option<String> {
+        let dependencies: Vec<serde_json::Value> = depends_on
+            .iter()
+            .map(|dep| serde_json::json!({ "id": dep, "version": "1.0" }))
+            .collect();
+        Some(
+            serde_json::json!({
+                "plugin": {
+                    "id": id,
+                    "name": id,
+                    "version": "1.0",
+                    "publisher": "rds",
+                    "engines": { "rdatastation": ">=0.2" },
+                },
+                "dependencies": dependencies,
+            })
+            .to_string(),
+        )
+    }
+
+    #[test]
+    fn reverse_index_collects_each_dependent_once() {
+        let map = collect_dependents(vec![
+            (
+                "app-a".to_string(),
+                manifest("app-a", &["driver-x", "app-b"]),
+            ),
+            ("app-b".to_string(), manifest("app-b", &["driver-x"])),
+            ("driver-x".to_string(), manifest("driver-x", &[])),
+        ]);
+        assert_eq!(
+            map.get("driver-x"),
+            Some(&vec!["app-a".to_string(), "app-b".to_string()])
+        );
+        assert_eq!(map.get("app-b"), Some(&vec!["app-a".to_string()]));
+        assert!(!map.contains_key("app-a"));
+    }
+
+    #[test]
+    fn self_dependency_and_broken_manifest_are_ignored() {
+        let map = collect_dependents(vec![
+            ("self".to_string(), manifest("self", &["self"])),
+            ("broken".to_string(), Some("{ not json".to_string())),
+            ("missing-manifest".to_string(), None),
+        ]);
+        assert!(map.is_empty(), "{map:?}");
+    }
 }

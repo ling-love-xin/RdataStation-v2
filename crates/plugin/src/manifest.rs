@@ -479,6 +479,11 @@ pub struct ContributesDriver {
     pub url_template: Option<String>,
     #[serde(default)]
     pub features: Vec<String>,
+    /// 数据库族目录（`data_source_types.category`）分类：插件驱动行落库时用；
+    /// 不写 = `relational`。只认 `relational` / `file-based` / `analytics` / `nosql`
+    /// 四个值——连接对话框的类型树按这四类分节，别的值会让该族在树里不可见。
+    #[serde(default)]
+    pub category: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -555,6 +560,17 @@ impl PluginManifest {
                     "contributes.drivers[].connection_schema",
                     schema,
                 )?;
+            }
+            if let Some(category) = &driver.category {
+                let known = ["relational", "file-based", "analytics", "nosql"];
+                if !known.contains(&category.as_str()) {
+                    return Err(manifest_error(format!(
+                        "contributes.drivers[{}].category = {category:?} 不在类型树的四个分类里 \
+                         （{}）——别的值会让该数据库族在连接对话框里不可见",
+                        driver.id,
+                        known.join(" / ")
+                    )));
+                }
             }
         }
         Ok(())
@@ -694,8 +710,8 @@ impl PluginManifest {
                 }
                 if let Some(runtime) = backend.runtime {
                     match runtime {
-                        // Rust 运行时通常配 sidecar 原生进程；声明了就当解释器解析（PATH 里的
-                        // rustc/cargo 也能起驱动），形态约束宽松 —— 不支持的组合留给进程启动报错。
+                        // Rust 运行时配 sidecar 原生进程：程序本身就是可执行文件，
+                        // 部署期不再解析解释器（见 supervisor::Deployment::from_manifest）。
                         BackendRuntime::Rust => {}
                         // interpreter_args 只对 script 形态有意义；sidecar 形态拼上去会
                         // 把脚本路径当参数塞给原生进程，属于清单写错，当场拒绝。

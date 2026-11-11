@@ -23,6 +23,7 @@
 pub mod checksums;
 pub mod contributes;
 pub mod dependency;
+pub mod driver_decl;
 pub mod events;
 pub mod installer;
 pub mod layout;

@@ -355,15 +355,31 @@ fn descriptor_for(
     // 一串文件名字面量。插件图标归插件列表/详情 UI（P4，需要宿主 icon resolver），
     // 语义见 `docs/architecture/plugin/plugin-layout.md`。
 
-    // 标准五件套 + 可选文件路径；**都不标必填**（理由见模块文档）
-    let fields = [
+    // 标准四件套 + 文件型驱动才有的路径字段；**都不标必填**（理由见模块文档）。
+    //
+    // 文件路径不往网络库的表单里塞：Oracle / SQL Server 上出现「文件路径」是明显的错配
+    // （清单目前没有「本驱动是文件型」的声明字段，先按驱动 id 的白名单判定）。
+    let mut fields = vec![
         ("host", "主机", DriverFieldType::Text),
         ("port", "端口", DriverFieldType::Number),
-        ("database", "数据库", DriverFieldType::Text),
+        (
+            "database",
+            if driver.id.eq_ignore_ascii_case("oracle") {
+                "服务名/数据库"
+            } else {
+                "数据库"
+            },
+            DriverFieldType::Text,
+        ),
         ("username", "用户名", DriverFieldType::Text),
         ("password", "口令", DriverFieldType::Password),
-        ("file_path", "文件路径", DriverFieldType::File),
     ];
+    if matches!(
+        driver.id.to_ascii_lowercase().as_str(),
+        "sqlite" | "duckdb" | "access" | "file"
+    ) {
+        fields.push(("file_path", "文件路径", DriverFieldType::File));
+    }
     for (key, label, field_type) in fields {
         let mut field = DriverField {
             key: key.to_string(),
@@ -439,18 +455,12 @@ features = ["transactions", "cancel"]
             vec!["transactions".to_string(), "cancel".to_string()]
         );
 
-        // 表单字段：五件套 + 文件路径，都不标必填；端口带默认值
+        // 表单字段：网络库四件套（主机 / 端口 / 库 / 用户 / 口令），都不标必填；端口带默认值。
+        // 文件路径只给文件型驱动，SQL Server 上不该出现。
         let keys: Vec<&str> = descriptor.fields.iter().map(|f| f.key.as_str()).collect();
         assert_eq!(
             keys,
-            vec![
-                "host",
-                "port",
-                "database",
-                "username",
-                "password",
-                "file_path"
-            ]
+            vec!["host", "port", "database", "username", "password"]
         );
         assert!(descriptor.fields.iter().all(|f| !f.required));
         let port = descriptor

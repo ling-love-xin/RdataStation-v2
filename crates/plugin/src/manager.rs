@@ -29,7 +29,9 @@ use serde::{Deserialize, Serialize};
 use shared::error::{CommonError, CoreError, PluginError};
 
 use super::contributes::{ContributionCounts, ContributionRegistry};
-use super::manifest::{ManifestParser, PluginManifest};
+use super::manifest::{
+    BackendKind, BackendRuntime, ManifestParser, PluginManifest, PluginPermissions,
+};
 use crate::sidecar::factory::register_sidecar_drivers;
 use crate::sidecar::supervisor::SidecarSupervisor;
 #[cfg(feature = "wasm")]
@@ -70,6 +72,98 @@ pub struct PluginDiff {
     pub changed: Vec<String>,
 }
 
+/// 一个插件声明的驱动（管理页展示用，不参与运行时注册）。
+///
+/// 只带展示必需字段：驱动 id 是否进入 `drivers` 表由加载链路决定，
+/// UI 不能凭这个结构推断「已可用」。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PluginDriverSummary {
+    pub id: String,
+    pub display_name: String,
+    pub default_port: Option<u16>,
+    pub category: Option<String>,
+}
+
+impl PluginDriverSummary {
+    fn from_manifest(manifest: &PluginManifest) -> Vec<Self> {
+        manifest
+            .contributes
+            .drivers
+            .iter()
+            .map(|driver| Self {
+                id: driver.id.clone(),
+                display_name: driver.display_name.clone(),
+                default_port: driver.default_port,
+                category: driver.category.clone(),
+            })
+            .collect()
+    }
+}
+
+/// 一个驱动在 `global.db` 的 `drivers` 表里的真实登记状态。
+///
+/// 清单声明 ≠ 已可用：插件未激活、驱动行被清理、或加载失败时，连接对话框都看不到它。
+/// 管理页把这份缓存快照与清单并排展示，用户不必再去翻日志判断「到底登记没有」。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PluginDriverRegistration {
+    pub id: String,
+    pub enabled: bool,
+}
+
+/// 一条清单贡献点的展示摘要（管理页详情栏用）。
+///
+/// 只保留「用户能看懂的一条」所需字段：类别、id、标题、附加说明。
+/// 权限 / 驱动各自有独立结构，不塞进这里。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PluginContributionSummary {
+    pub kind: String,
+    pub id: String,
+    pub label: String,
+    pub detail: Option<String>,
+}
+
+impl PluginContributionSummary {
+    fn from_manifest(manifest: &PluginManifest) -> Vec<Self> {
+        let mut items = Vec::new();
+        for command in &manifest.contributes.commands {
+            let mut parts = Vec::new();
+            if let Some(category) = &command.category {
+                parts.push(format!("分类 {category}"));
+            }
+            if let Some(shortcut) = &command.shortcut {
+                parts.push(format!("快捷键 {shortcut}"));
+            }
+            items.push(Self {
+                kind: "命令".to_string(),
+                id: command.id.clone(),
+                label: command.title.clone(),
+                detail: (!parts.is_empty()).then(|| parts.join(" · ")),
+            });
+        }
+        for panel in &manifest.contributes.panels {
+            items.push(Self {
+                kind: "面板".to_string(),
+                id: panel.id.clone(),
+                label: panel.title.clone(),
+                detail: Some(format!("位置 {}", panel.location)),
+            });
+        }
+        for setting in &manifest.contributes.settings {
+            items.push(Self {
+                kind: "设置".to_string(),
+                id: setting.key.clone(),
+                label: setting.label.clone().unwrap_or_else(|| setting.key.clone()),
+                detail: Some(format!(
+                    "{} · 默认 {}",
+                    setting.setting_type,
+                    serde_json::to_string(&setting.default).unwrap_or_else(|_| "—".to_string())
+                )),
+            });
+        }
+        items
+    }
+}
+
 /// 插件信息（会话态展示用）
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginInfo {
@@ -84,6 +178,33 @@ pub struct PluginInfo {
     /// 面板只显示状态徽标时，用户看不到「为什么出错」；把失败原因带出来，
     /// 才能在 240px 窄面板里一行说明（完整日志仍以 tracing 为准）。
     pub error: Option<String>,
+    /// 清单里声明的驱动（管理页展示「这个插件贡献了哪些数据库驱动」）。
+    pub drivers: Vec<PluginDriverSummary>,
+    /// 本次会话缓存里这些驱动的真实登记状态（`drivers` 表的 `driver_kind='sidecar'` 子集）。
+    ///
+    /// `None` = 本次刷新没读到全局库，具体「未登记」无法判定；`Some(空)` 才是真的一个都没登记。
+    pub registered_drivers: Option<Vec<PluginDriverRegistration>>,
+    /// `[backend]` 的形态与运行时语言；wasm / 坏包没有清单时为空。
+    ///
+    /// 详情栏用它说明「原生 sidecar 不需要解释器」这类差异，避免用户把
+    /// `Rust` 插件当成「缺 Java/Python」。
+    pub backend_kind: Option<BackendKind>,
+    pub runtime: Option<BackendRuntime>,
+    /// 清单声明的权限（展示与告警轨，不门控；掉权限时用户至少能看见）。
+    pub permissions: PluginPermissions,
+    /// 清单里的命令 / 面板 / 设置条目（驱动单独在 `drivers`）。
+    pub contribution_items: Vec<PluginContributionSummary>,
+    /// 插件安装目录（`plugin.toml` 所在目录）。
+    ///
+    /// 管理页据此提供「打开插件目录」；wasm 运行时列表不回报磁盘路径，故可能为空。
+    /// 坏目录也带上路径（用户要能手动清理），而不是只有 id。
+    pub install_path: Option<PathBuf>,
+    /// 本插件声明依赖的其他插件 id（清单 `dependencies`）。
+    pub dependencies: Vec<String>,
+    /// 依赖本插件的其他插件 id（全局库反向索引快照）。
+    ///
+    /// `None` = 没读到全局库，无法判定；`Some(空)` = 读过且没有任何插件依赖它。
+    pub dependents: Option<Vec<String>>,
 }
 
 /// 已加载的插件（安装态记录；原 loader.rs 的 `LoadedPlugin` 并入）
@@ -166,6 +287,17 @@ pub struct PluginManager {
     scan_snapshot: RwLock<HashMap<String, ScanEntry>>,
     /// 清单已变化、等待重载的插件（VS Code 口径：更新不热生效，重启 / 手动重载后生效）
     needs_reload: RwLock<Vec<String>>,
+    /// `drivers` 表里 sidecar 行的最近一次快照（id → enabled）。
+    ///
+    /// `None` = 还没成功读过全局库；`Some(空)` = 读过且确实没有插件驱动行。
+    /// 只在 `resync_sidecar_driver_rows` 成功后刷新；`list_plugins` 纯读这份缓存，
+    /// 不在同步路径里碰异步数据库。
+    registered_drivers: RwLock<Option<HashMap<String, bool>>>,
+    /// 反向依赖快照（被依赖插件 id → 依赖者 id 列表）。
+    ///
+    /// 与 `registered_drivers` 同口径：`None` = 没读到全局库，`Some(空)` = 读过且无依赖。
+    /// 在 `resync_sidecar_driver_rows` 里顺带刷新，`list_plugins` 只读缓存。
+    dependents: RwLock<Option<HashMap<String, Vec<String>>>>,
 }
 
 impl Default for PluginManager {
@@ -209,6 +341,8 @@ impl PluginManager {
             plugin_index: Arc::new(RwLock::new(HashMap::new())),
             scan_snapshot: RwLock::new(HashMap::new()),
             needs_reload: RwLock::new(Vec::new()),
+            registered_drivers: RwLock::new(None),
+            dependents: RwLock::new(None),
         }
     }
 
@@ -300,6 +434,22 @@ impl PluginManager {
             },
             state: PluginState::Inactive,
             error: None,
+            drivers: PluginDriverSummary::from_manifest(&manifest),
+            registered_drivers: self.driver_registrations(&manifest),
+            backend_kind: manifest.backend.as_ref().map(|backend| backend.kind),
+            runtime: manifest
+                .backend
+                .as_ref()
+                .and_then(|backend| backend.runtime),
+            permissions: manifest.permissions.clone(),
+            contribution_items: PluginContributionSummary::from_manifest(&manifest),
+            install_path: Some(path.to_path_buf()),
+            dependencies: manifest
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.id.clone())
+                .collect(),
+            dependents: self.dependents_of(&manifest.plugin.id),
         }))
     }
 
@@ -406,6 +556,23 @@ impl PluginManager {
         manifests.push(candidate);
         // HashMap 遍历顺序不稳定；按插件 id 排一下，冲突文案里的「先声明者」才可复现。
         manifests.sort_by(|a, b| a.plugin.id.cmp(&b.plugin.id));
+        // 驱动 id 也是全局唯一键（连接对话框按 id 选驱动），但 `ContributionRegistry`
+        // 只登记 commands / panels / settings —— 不在这里挡，两个插件会都显示「已加载」，
+        // 后加载者把先加载者的 `drivers` 行与工厂槽位覆盖掉。
+        let mut driver_sources: HashMap<&str, &str> = HashMap::new();
+        for manifest in &manifests {
+            for driver in &manifest.contributes.drivers {
+                if let Some(previous) =
+                    driver_sources.insert(driver.id.as_str(), manifest.plugin.id.as_str())
+                    && previous != manifest.plugin.id.as_str()
+                {
+                    return Err(CoreError::common(CommonError::General(format!(
+                        "插件加载被拒绝：驱动 id `{}` 已被插件 `{previous}` 占用，`{}` 不能重复声明",
+                        driver.id, manifest.plugin.id
+                    ))));
+                }
+            }
+        }
         ContributionRegistry::build(manifests).map_err(|error| {
             CoreError::common(CommonError::General(format!("插件加载被拒绝：{error}")))
         })?;
@@ -441,6 +608,12 @@ impl PluginManager {
             )));
             self.record_failed_load(plugin_dir, &err);
             return Err(err);
+        }
+        // 驱动 id 撞内置：表 upsert 与运行时注册都会覆盖内置驱动，加载期就拒
+        //（与贡献点跨插件冲突同一风格：错误行留列表，修清单可重试）。
+        if let Err(e) = crate::driver_decl::check_builtin_collisions(&manifest) {
+            self.record_failed_load(plugin_dir, &e);
+            return Err(e);
         }
 
         // 目录名必须等于清单 id（见 `layout` 模块文档）：热插拔 diff 按目录名索引、
@@ -509,6 +682,10 @@ impl PluginManager {
             .write()
             .map_err(|_| lock_err("loaded_plugins"))?
             .insert(plugin_id, loaded_plugin.clone());
+
+        // 加载即同步驱动行（enabled=0 的置灰行）：热插拔只 load 不 activate 的目录
+        // 也要在连接对话框里出现；激活成功后 activate_plugin 会再同步一次翻成 enabled
+        self.resync_sidecar_driver_rows().await;
 
         Ok(loaded_plugin)
     }
@@ -618,26 +795,30 @@ impl PluginManager {
             )))),
         };
 
-        let mut map = self
-            .loaded_plugins
-            .write()
-            .map_err(|_| lock_err("loaded_plugins"))?;
-        match &result {
-            Ok(()) => {
-                if let Some(p) = map.get_mut(id) {
-                    p.status = LoadStatus::Active;
+        {
+            let mut map = self
+                .loaded_plugins
+                .write()
+                .map_err(|_| lock_err("loaded_plugins"))?;
+            match &result {
+                Ok(()) => {
+                    if let Some(p) = map.get_mut(id) {
+                        p.status = LoadStatus::Active;
+                    }
                 }
-            }
-            Err(e) => {
-                if let Some(p) = map.get_mut(id) {
-                    p.status = LoadStatus::ActivationFailed(e.to_string());
+                Err(e) => {
+                    if let Some(p) = map.get_mut(id) {
+                        p.status = LoadStatus::ActivationFailed(e.to_string());
+                    }
+                    return Err(e.clone());
                 }
-                return Err(e.clone());
             }
         }
-        drop(map);
+        // 守卫已随块结束释放（async Send 分析不吃 drop()，只认作用域边界）
 
         crate::events::emit_plugin_activated(id);
+        // 状态已翻转（Active）再同步驱动行：行上的 enabled 跟随激活态
+        self.resync_sidecar_driver_rows().await;
         Ok(())
     }
 
@@ -770,17 +951,131 @@ impl PluginManager {
             PluginKind::Unknown => {}
         }
 
-        let mut map = self
-            .loaded_plugins
-            .write()
-            .map_err(|_| lock_err("loaded_plugins"))?;
-        if let Some(p) = map.get_mut(id) {
-            p.status = LoadStatus::Loaded;
+        {
+            let mut map = self
+                .loaded_plugins
+                .write()
+                .map_err(|_| lock_err("loaded_plugins"))?;
+            if let Some(p) = map.get_mut(id) {
+                p.status = LoadStatus::Loaded;
+            }
         }
-        drop(map);
+        // 守卫已随块结束释放（async Send 分析不吃 drop()，只认作用域边界）
 
         crate::events::emit_plugin_deactivated(id);
+        // 停用后行要置灰（enabled=0），状态翻转后再同步
+        self.resync_sidecar_driver_rows().await;
         Ok(())
+    }
+
+    /// 把「当前所有已加载插件声明的驱动」全量重算进 global.db 的 `drivers` 表
+    ///（连接对话框驱动目录的唯一数据源；`driver_decl` 模块头有背景）。
+    ///
+    /// 失败只记日志：可见性同步不该反过来拦生命周期操作；全局库未初始化时
+    ///（测试宿主 / 启动早期）`driver_decl::resync_driver_rows` 自己保守放行。
+    pub async fn resync_sidecar_driver_rows(&self) {
+        let entries: Vec<(String, crate::manifest::PluginManifest, bool)> = {
+            let Ok(loaded) = self.loaded_plugins.read() else {
+                return;
+            };
+            loaded
+                .iter()
+                .map(|(id, lp)| {
+                    (
+                        id.clone(),
+                        lp.manifest.clone(),
+                        matches!(lp.status, LoadStatus::Active),
+                    )
+                })
+                .collect()
+        };
+        match crate::driver_decl::resync_driver_rows(&entries).await {
+            Ok((written, deleted)) => {
+                if written > 0 || deleted > 0 {
+                    tracing::info!("插件驱动行同步：写 {written} 行，清理 {deleted} 行");
+                }
+            }
+            Err(e) => {
+                tracing::warn!("插件驱动行同步失败（连接对话框可能看不到插件驱动）：{e}")
+            }
+        }
+        // 驱动行同步失败也要刷新：登记状态 / 反向依赖都是「展示事实」，
+        // 不能因为另一个写库动作失败就长期停在「未知」。
+        self.refresh_registered_driver_cache().await;
+        self.refresh_dependents_cache().await;
+    }
+
+    /// 从 `global.db` 的 `drivers` 表刷新 sidecar 行缓存（失败保留上一份快照）。
+    async fn refresh_registered_driver_cache(&self) {
+        let Some(db) = engine::migration::get_global_db_manager() else {
+            return;
+        };
+        match db.get_all_drivers().await {
+            Ok(rows) => {
+                let snapshot: HashMap<String, bool> = rows
+                    .into_iter()
+                    .filter(|driver| driver.driver_kind == "sidecar")
+                    .map(|driver| (driver.id, driver.enabled))
+                    .collect();
+                if let Ok(mut cache) = self.registered_drivers.write() {
+                    *cache = Some(snapshot);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("读取已登记插件驱动失败（管理页登记状态可能过期）：{e}");
+            }
+        }
+    }
+
+    /// 刷新反向依赖快照（全局库不可用 / 读取失败时保留上一份）。
+    async fn refresh_dependents_cache(&self) {
+        let Some(db) = engine::migration::get_global_db_manager() else {
+            return;
+        };
+        match crate::dependency::DependencyManager::new(db)
+            .all_dependents()
+            .await
+        {
+            Ok(snapshot) => {
+                if let Ok(mut cache) = self.dependents.write() {
+                    *cache = Some(snapshot);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("读取插件反向依赖失败（管理页「项目引用」可能过期）：{e}");
+            }
+        }
+    }
+
+    /// 该插件的反向依赖（`None` = 全局库未初始化，无法判定）。
+    fn dependents_of(&self, plugin_id: &str) -> Option<Vec<String>> {
+        let cache = self.dependents.read().ok()?;
+        let cache = cache.as_ref()?;
+        Some(cache.get(plugin_id).cloned().unwrap_or_default())
+    }
+
+    /// 清单声明驱动与登记缓存按 id 对齐（未登记的驱动不出现在结果里）。
+    fn driver_registrations(
+        &self,
+        manifest: &PluginManifest,
+    ) -> Option<Vec<PluginDriverRegistration>> {
+        let cache = self.registered_drivers.read().ok()?;
+        let cache = cache.as_ref()?;
+        Some(
+            manifest
+                .contributes
+                .drivers
+                .iter()
+                .filter_map(|driver| {
+                    cache
+                        .get(&driver.id)
+                        .map(|enabled| PluginDriverRegistration {
+                            id: driver.id.clone(),
+                            enabled: *enabled,
+                        })
+                })
+                .collect(),
+        )
     }
 
     /// 卸载插件：先停用，再从运行时 / 缓存 / 索引移除。
@@ -898,6 +1193,8 @@ impl PluginManager {
 
         // 6. 事件
         crate::events::emit_plugin_uninstalled(id);
+        // 卸载后清掉它留下的驱动行（全量重算会把不在存活集合里的 sidecar 行删掉）
+        self.resync_sidecar_driver_rows().await;
         Ok(())
     }
 
@@ -1301,15 +1598,28 @@ impl PluginManager {
                     )))
                 })?
                 .into_iter()
-                .map(|(meta, state)| PluginInfo {
-                    id: meta.id.clone(),
-                    name: meta.name.clone(),
-                    version: meta.version.clone(),
-                    kind: PluginKind::Wasm,
-                    metadata: meta,
-                    state,
-                    // Extism 侧只保存状态枚举，没有错误文本；wasm 失败原因仍看日志。
-                    error: None,
+                .map(|(meta, state)| {
+                    let dependents = self.dependents_of(&meta.id);
+                    PluginInfo {
+                        id: meta.id.clone(),
+                        name: meta.name.clone(),
+                        version: meta.version.clone(),
+                        kind: PluginKind::Wasm,
+                        metadata: meta,
+                        state,
+                        // Extism 侧只保存状态枚举，没有错误文本；wasm 失败原因仍看日志。
+                        error: None,
+                        // wasm 清单不声明驱动（驱动必须走 sidecar/script 形态）。
+                        drivers: Vec::new(),
+                        registered_drivers: None,
+                        backend_kind: Some(BackendKind::Wasm),
+                        runtime: None,
+                        permissions: PluginPermissions::default(),
+                        contribution_items: Vec::new(),
+                        install_path: None,
+                        dependencies: Vec::new(),
+                        dependents,
+                    }
                 })
                 .collect();
             plugins.extend(wasm_plugins);
@@ -1347,6 +1657,24 @@ impl PluginManager {
                     },
                     state: lp.status.session_state(),
                     error: lp.status.error_reason().map(str::to_string),
+                    drivers: PluginDriverSummary::from_manifest(&lp.manifest),
+                    registered_drivers: self.driver_registrations(&lp.manifest),
+                    backend_kind: lp.manifest.backend.as_ref().map(|backend| backend.kind),
+                    runtime: lp
+                        .manifest
+                        .backend
+                        .as_ref()
+                        .and_then(|backend| backend.runtime),
+                    permissions: lp.manifest.permissions.clone(),
+                    contribution_items: PluginContributionSummary::from_manifest(&lp.manifest),
+                    install_path: Some(lp.install_path.clone()),
+                    dependencies: lp
+                        .manifest
+                        .dependencies
+                        .iter()
+                        .map(|dependency| dependency.id.clone())
+                        .collect(),
+                    dependents: self.dependents_of(&lp.manifest.plugin.id),
                 });
             }
         }
@@ -1377,6 +1705,19 @@ impl PluginManager {
                 },
                 state: PluginState::Error,
                 error: Some(reason.clone()),
+                drivers: Vec::new(),
+                registered_drivers: None,
+                backend_kind: None,
+                runtime: None,
+                permissions: PluginPermissions::default(),
+                contribution_items: Vec::new(),
+                install_path: {
+                    let dir = paths::plugin_dir(id);
+                    dir.exists().then_some(dir)
+                },
+                // 清单都没读出来，声明依赖无从谈起；反向依赖仍按目录名查一次。
+                dependencies: Vec::new(),
+                dependents: self.dependents_of(id),
             });
         }
 
@@ -1473,6 +1814,13 @@ pub static PLUGIN_MANAGER: OnceLock<Arc<PluginManager>> = OnceLock::new();
 /// UI 线程不在 tokio 里，由 `init_plugin_manager` 把宿主 runtime 句柄存到这里，
 /// 插件面板的事件回调在后台 executor 里 `handle.block_on(...)` 执行（不阻塞 UI）。
 pub static PLUGIN_RUNTIME_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
+
+/// sidecar stderr 日志路径（与 [`crate::sidecar::process::SpawnSpec`] 同一口径）。
+///
+/// 管理页「查看 sidecar 日志」用它；日志可能还没产生（驱动从未启动过），调用方先判存在。
+pub fn sidecar_log_path(plugin_id: &str) -> PathBuf {
+    paths::plugin_cache_dir(plugin_id).join(crate::sidecar::process::SIDECAR_LOG_NAME)
+}
 
 /// 宿主注入 tokio runtime 句柄（`init_plugin_manager` 内部调用；重复注入忽略）。
 pub fn set_runtime_handle(handle: tokio::runtime::Handle) {

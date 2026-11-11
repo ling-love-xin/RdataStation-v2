@@ -35,6 +35,7 @@ pub mod metadata_identity;
 pub mod metadata_identity_registry;
 pub mod navigator_state;
 pub mod network_store;
+pub mod plugin_driver_store;
 pub mod plugin_store;
 pub mod project_connection_store;
 pub mod project_db;
