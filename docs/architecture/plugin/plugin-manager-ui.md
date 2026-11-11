@@ -92,6 +92,12 @@ RDS 当前没有市场或远程索引，保留该档会变成永远空空如也�
 `PluginService::disable_plugin` 是另一条直接写库的入口，同样在停用前查一遍反向依赖，
 被拒时不改 `is_enabled`。面板仍在点击前拦，是为了不让用户先看到成功提示或等一次异步往返。
 
+**启用依赖保护（2026-11-11）**：`PluginManager::enable_plugin` 与
+`PluginService::enable_plugin` 在写 `is_enabled=1` 前先 `resolve_dependencies`；
+声明的依赖缺失（`missing`）或已安装但未启用（`to_install`）时返回
+`PluginError::DependencyMissing`，一次列出所有未就绪的 `id@version`，且不改库。
+这样不会出现「管理页显示已启用、实际激活却缺底座」的假成功。
+
 **手动刷新（2026-11-10）**：页头与左栏的刷新按钮改为先 `resync_sidecar_driver_rows`
 再 `list_plugins`，不再只重读清单。否则登记状态只在启停 / 加载等生命周期动作里刷新，
 用户手动刷新后仍会长期停在「登记状态未知」；同步失败只记日志，不拦清单刷新。
@@ -258,10 +264,13 @@ cargo test  -p rds-workbench --test ui_contract
 2026-11-11 复测（停用依赖保护）：`cargo check -p rds-workbench --lib` 0 error，
 `cargo test -p rds-workbench --lib` 64 passed，`ui_contract` 10 passed；
 `cargo check -p rds-plugin` 0 error，`cargo test -p rds-plugin --test lifecycle`
-（`--test-threads=1`）17 passed（新增 `disable_rejects_a_plugin_with_a_dependent`：
+（`--test-threads=1`）18 passed（新增 `disable_rejects_a_plugin_with_a_dependent`：
 base + child 清单依赖后，manager 与 `PluginService` 两条停用入口都返回
 `DeactivationFailed` 并列出 child；`PluginService::uninstall_plugin` 同样返回
-`UninstallFailed`，被拒后 DB 仍保持 `is_enabled=1`、登记行也还在）。
+`UninstallFailed`，被拒后 DB 仍保持 `is_enabled=1`、登记行也还在。新增
+`enable_rejects_a_plugin_with_a_missing_dependency`：只装 child、其声明的 base
+不存在时，manager 与 service 两条启用入口都返回 `DependencyMissing` 并列出
+`base@^1.0.0`，被拒后 `is_enabled` 仍为 0）。
 
 ---
 
@@ -273,5 +282,6 @@ base + child 清单依赖后，manager 与 `PluginService` 两条停用入口都
 | 市场 / 远程索引 / 可更新档 | 未引入；筛选五档不含「可更新」 |
 | 面板徽标区分「DB 停用」与「未加载」 | 未做；根因是 `PluginInfo` 没有 `is_enabled` 字段，DB 权威启停状态不进会话快照 |
 | 停用被依赖插件 | 已完成（2026-11-11）：面板单插件 / 批量先按缓存拦截，`PluginManager::disable_plugin` 与 `PluginService::disable_plugin` 再实时 `check_dependents`，API 与非面板调用同样拒绝 |
+| 启用依赖未就绪的插件 | 已完成（2026-11-11）：manager / service 两条启用入口在写库前 `resolve_dependencies`，缺失或未启用的依赖一次列出并拒绝，不改 `is_enabled` |
 | `schema_version` / `plugins.updated_at` 索引 | 未拍板 |
 | 左 Dock 三个薄壳（`DatabaseNavPanel` / `ScratchPanel` / `ResourcePanelTab`）拆分 | 已完成（2026-11-10）：`panels/left_tabs/` 目录（`mod` / `database_nav` / `scratch` / `resources` / `tests` + `plugin_tab/` 五文件子目录） |

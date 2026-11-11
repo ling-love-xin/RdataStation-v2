@@ -940,6 +940,37 @@ impl PluginManager {
                 "插件清单损坏，无法启用（请先修复或卸载）: {id}"
             ))));
         }
+            // 启用前确认声明依赖已安装且已启用：否则 DB 会先翻成启用，
+            // 实际激活却缺底座（依赖方随后报错，用户只看到「已启用」）。
+            let manifest = self
+                .loaded_plugins
+                .read()
+                .map_err(|_| lock_err("loaded_plugins"))?
+                .get(id)
+                .map(|p| p.manifest.clone());
+            if let Some(manifest) = manifest {
+                let resolution = crate::dependency::DependencyManager::new(db)
+                    .resolve_dependencies(&manifest)
+                    .await?;
+                let mut blocked: Vec<String> = resolution
+                    .to_install
+                    .iter()
+                    .chain(resolution.missing.iter())
+                    .map(|d| format!("{}@{}", d.id, d.version))
+                    .collect();
+                blocked.sort();
+                blocked.dedup();
+                if !blocked.is_empty() {
+                    return Err(CoreError::plugin(PluginError::DependencyMissing {
+                        plugin_id: id.to_string(),
+                        dep_code: String::new(),
+                        dep_version: format!(
+                            "以下依赖未安装或未启用，请先处理: {}",
+                            blocked.join(", ")
+                        ),
+                    }));
+                }
+            }
         if let Some(db) = engine::migration::get_global_db_manager() {
             db.update_plugin_enabled_by_code(id, true).await?;
         }

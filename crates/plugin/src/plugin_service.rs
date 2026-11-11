@@ -6,6 +6,7 @@
 
 use crate::events::*;
 use crate::manager::get_plugin_manager;
+use crate::manifest::PluginManifest;
 use engine::persistence::global_db::GlobalDatabaseManager;
 use engine::persistence::plugin_store::{
     Plugin, PluginDependency, PluginGlobalConfig, ProjectPluginConfig, ProjectUsedPlugin,
@@ -186,6 +187,37 @@ impl PluginService {
             return Err(CoreError::plugin(PluginError::not_found(
                 plugin_code.to_string(),
             )));
+        }
+
+        // 与 manager 同口径：依赖未安装 / 未启用时不要把 DB 翻成启用，
+        // 否则界面显示「已启用」但插件实际上缺底座。
+        if let Some(json) = plugin.as_ref().and_then(|p| p.manifest_json.as_deref()) {
+            let manifest: PluginManifest = serde_json::from_str(json).map_err(|e| {
+                CoreError::plugin(PluginError::InvalidManifest {
+                    reason: format!("插件 {plugin_code} 的清单无法解析: {e}"),
+                })
+            })?;
+            let resolution = crate::dependency::DependencyManager::new(self.global_db)
+                .resolve_dependencies(&manifest)
+                .await?;
+            let mut blocked: Vec<String> = resolution
+                .to_install
+                .iter()
+                .chain(resolution.missing.iter())
+                .map(|d| format!("{}@{}", d.id, d.version))
+                .collect();
+            blocked.sort();
+            blocked.dedup();
+            if !blocked.is_empty() {
+                return Err(CoreError::plugin(PluginError::DependencyMissing {
+                    plugin_id: plugin_code.to_string(),
+                    dep_code: String::new(),
+                    dep_version: format!(
+                        "以下依赖未安装或未启用，请先处理: {}",
+                        blocked.join(", ")
+                    ),
+                }));
+            }
         }
 
         self.global_db

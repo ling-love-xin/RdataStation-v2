@@ -593,6 +593,60 @@ version = "^1.0.0"
     );
 }
 
+/// 启用被依赖插件：依赖未安装时拒绝，且不把 DB 翻成启用。
+#[tokio::test]
+async fn enable_rejects_a_plugin_with_a_missing_dependency() {
+    if engine::migration::get_global_db_manager().is_none() {
+        engine::migration::initialize_global_system()
+            .await
+            .expect("初始化全局库");
+    }
+    let dir = TempDir::new("enableguard");
+    let manager = PluginManager::new(dir.0.clone());
+    manager.init().await.unwrap();
+
+    write_plugin_with_contributes(
+        &dir.0,
+        "com.example.enableguard-child",
+        "v1",
+        r#"[[dependencies]]
+id = "com.example.enableguard-base"
+version = "^1.0.0"
+"#,
+    );
+    manager.scan_and_diff_plugins().await.unwrap();
+    // 先停用，才能验证「启用被拒」不会把 is_enabled 翻回来。
+    manager
+        .disable_plugin("com.example.enableguard-child")
+        .await
+        .unwrap();
+
+    let err = manager
+        .enable_plugin("com.example.enableguard-child")
+        .await
+        .expect_err("依赖缺失的插件不应允许启用");
+    let message = format!("{err}");
+    assert!(message.contains("missing dependencies"), "{message}");
+    assert!(
+        message.contains("com.example.enableguard-base@^1.0.0"),
+        "{message}"
+    );
+
+    let db = engine::migration::get_global_db_manager().expect("全局库已初始化");
+    let service = PluginService::new(db);
+    let err = service
+        .enable_plugin("com.example.enableguard-child")
+        .await
+        .expect_err("service 启用入口同样不能绕过依赖检查");
+    assert!(format!("{err}").contains("com.example.enableguard-base"));
+    let row = service
+        .get_plugin_by_code("com.example.enableguard-child")
+        .await
+        .unwrap()
+        .expect("child 已登记");
+    assert!(!row.is_enabled, "被拒的启用不能把 is_enabled 改成 1");
+}
+
 /// 磁盘卸载：目录删除 + 索引清理 + PluginUninstalled 事件。
 #[tokio::test]
 async fn uninstall_removes_dir_and_index_and_emits() {
