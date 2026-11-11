@@ -950,8 +950,20 @@ impl PluginManager {
             Some(db) => match db.get_plugin_by_code(id).await {
                 Ok(Some(plugin)) => plugin.is_enabled,
                 Ok(None) => {
-                    // 目录直接拷进来的插件没有登记行：重试成功后补登记，
-                    // 否则之后的停用 / 卸载按 code 写库命中 0 行，重启按「无记录=启用」复活。
+                    // 目录直接拷进来的插件没有登记行：补登记前先确认依赖就绪，
+                    // 否则会先写一行 is_enabled=1，再被 activate_plugin 拒绝，留下假启用。
+                    if let Err(e) = self.ensure_dependencies_ready(&loaded.manifest).await {
+                        let mut map = self
+                            .loaded_plugins
+                            .write()
+                            .map_err(|_| lock_err("loaded_plugins"))?;
+                        if let Some(p) = map.get_mut(id) {
+                            p.status = LoadStatus::ActivationFailed(e.to_string());
+                        }
+                        return Err(e);
+                    }
+                    // 重试成功后补登记，否则之后的停用 / 卸载按 code 写库命中 0 行，
+                    // 重启按「无记录=启用」复活。
                     if let Err(e) = crate::installer::register_manifest(
                         &loaded.manifest,
                         &loaded.install_path,

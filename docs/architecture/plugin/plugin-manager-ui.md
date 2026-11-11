@@ -100,6 +100,11 @@ RDS 当前没有市场或远程索引，保留该档会变成永远空空如也�
 `activate_plugin` 也复用同一道判定：重试、热插拔等不经 `enable_plugin` 的路径，
 依赖未就绪时状态落到 `ActivationFailed`，不会停在 `Loaded` / `Active`。
 
+**重试补登记（2026-11-11）**：`retry_load_plugin` 遇到 DB 无登记行时，先确认依赖就绪再补登记；
+依赖未就绪时只把状态落 `ActivationFailed` 并返回错误，不再先写一行 `is_enabled=1`、
+再被激活守卫拒绝。热插拔扫描不套这道前置（新增插件可能先于依赖被扫到，前置会永久漏扫），
+该入口的自动补登记仍会发生。
+
 **手动刷新（2026-11-10）**：页头与左栏的刷新按钮改为先 `resync_sidecar_driver_rows`
 再 `list_plugins`，不再只重读清单。否则登记状态只在启停 / 加载等生命周期动作里刷新，
 用户手动刷新后仍会长期停在「登记状态未知」；同步失败只记日志，不拦清单刷新。
@@ -275,7 +280,8 @@ base + child 清单依赖后，manager 与 `PluginService` 两条停用入口都
 `base@^1.0.0`，被拒后 `is_enabled` 仍为 0）。新增
 `activation_rejects_a_plugin_with_a_missing_dependency`：`activate_plugin` 与
 `retry_load_plugin` 在依赖缺失时都返回 `DependencyMissing`，状态落
-`ActivationFailed` 而不是 `Loaded` / `Active`。
+`ActivationFailed` 而不是 `Loaded` / `Active`；并断言被拒后 DB 没有留下
+自动补登记的 `is_enabled=1` 行。
 
 ---
 

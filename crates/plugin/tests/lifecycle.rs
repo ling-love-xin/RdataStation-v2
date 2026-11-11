@@ -703,6 +703,18 @@ version = "^1.0.0"
         .await
         .expect_err("重试也不能绕过依赖检查");
     assert!(format!("{err}").contains("com.example.activateguard-base"));
+
+    // 补登记不能先于依赖检查发生：否则 DB 会留下 is_enabled=1 的行，用户只看到「已启用」。
+    let service =
+        PluginService::new(engine::migration::get_global_db_manager().expect("全局库已初始化"));
+    assert!(
+        service
+            .get_plugin_by_code("com.example.activateguard-child")
+            .await
+            .unwrap()
+            .is_none(),
+        "激活被拒后不应留下自动补登记的启用行"
+    );
 }
 
 /// 磁盘卸载：目录删除 + 索引清理 + PluginUninstalled 事件。
