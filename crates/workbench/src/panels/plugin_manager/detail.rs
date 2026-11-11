@@ -1,10 +1,12 @@
 //! 插件管理页右侧详情栏（基本信息 / 贡献点 / 运行状态 / 危险区）。
 
+use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::separator::Separator;
-use gpui_kit::component::{ActiveTheme, Theme};
+use gpui_kit::component::{ActiveTheme, Sizable, Size, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -34,6 +36,14 @@ impl PluginManagerPanel {
                 .find(|plugin| plugin.id == id)
                 .cloned()
         });
+        // 依赖项只有装着的插件才能跳详情；没装时按钮置灰并说明原因，
+        // 比让用户点一下发现没反应（或去搜索框里猜）更直接。
+        let installed_ids: Vec<String> = snapshot
+            .plugins
+            .iter()
+            .map(|plugin| plugin.id.clone())
+            .collect();
+        let detail_manager = cx.entity();
 
         let mut pane = div()
             .v_flex()
@@ -306,15 +316,28 @@ impl PluginManagerPanel {
                         .when(!plugin.dependencies.is_empty(), |group| {
                             group.child(div().h_flex().flex_wrap().gap_1().children(
                                 plugin.dependencies.iter().map(|dependency| {
-                                    div()
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded(theme.radius)
-                                        .border_1()
-                                        .border_color(theme.colors.border)
-                                        .text_xs()
-                                        .text_color(theme.colors.foreground)
-                                        .child(dependency.clone())
+                                    let installed = installed_ids.contains(dependency);
+                                    let id = dependency.clone();
+                                    let manager = detail_manager.clone();
+                                    Button::new(SharedString::from(format!(
+                                        "detail-dependency-{}-{dependency}",
+                                        plugin.id
+                                    )))
+                                    .ghost()
+                                    .label(dependency.clone())
+                                    .with_size(Size::XSmall)
+                                    .disabled(!installed)
+                                    .tooltip(if installed {
+                                        "在右侧打开该插件详情"
+                                    } else {
+                                        "插件未安装，无法打开"
+                                    })
+                                    .on_click(move |_, _, app| {
+                                        let id = id.clone();
+                                        let _ = manager.update(app, |this, cx| {
+                                            this.select(id.clone(), cx);
+                                        });
+                                    })
                                 }),
                             ))
                         }),
@@ -347,15 +370,28 @@ impl PluginManagerPanel {
                                 .flex_wrap()
                                 .gap_1()
                                 .children(dependents.iter().map(|dependent| {
-                                    div()
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded(theme.radius)
-                                        .border_1()
-                                        .border_color(theme.colors.warning)
-                                        .text_xs()
-                                        .text_color(theme.colors.warning)
-                                        .child(dependent.clone())
+                                    let installed = installed_ids.contains(dependent);
+                                    let id = dependent.clone();
+                                    let manager = detail_manager.clone();
+                                    Button::new(SharedString::from(format!(
+                                        "detail-dependent-{}-{dependent}",
+                                        plugin.id
+                                    )))
+                                    .ghost()
+                                    .label(dependent.clone())
+                                    .with_size(Size::XSmall)
+                                    .disabled(!installed)
+                                    .tooltip(if installed {
+                                        "在右侧打开该插件详情"
+                                    } else {
+                                        "插件未安装，无法打开"
+                                    })
+                                    .on_click(move |_, _, app| {
+                                        let id = id.clone();
+                                        let _ = manager.update(app, |this, cx| {
+                                            this.select(id.clone(), cx);
+                                        });
+                                    })
                                 }))
                                 .into_any_element(),
                         })
