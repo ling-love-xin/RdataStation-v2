@@ -80,13 +80,15 @@ async fn service_enable_propagates_activation_failure() {
     let manager: &Arc<PluginManager> = get_plugin_manager().expect("管理器已初始化");
     manager.scan_and_diff_plugins().await.unwrap();
     assert!(manager.is_loaded("com.example.serviceenablefail"));
-    assert!(matches!(
-        manager
-            .get_loaded_plugin("com.example.serviceenablefail")
-            .unwrap()
-            .status,
-        LoadStatus::ActivationFailed(_)
-    ));
+    let status = manager
+        .get_loaded_plugin("com.example.serviceenablefail")
+        .unwrap()
+        .status
+        .clone();
+    assert!(
+        matches!(status, LoadStatus::ActivationFailed(_)),
+        "激活失败应回写状态，实际是 {status:?}"
+    );
 
     let db = engine::migration::get_global_db_manager().expect("全局库已初始化");
     let service = PluginService::new(db);
