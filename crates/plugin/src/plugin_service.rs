@@ -210,6 +210,21 @@ impl PluginService {
             )));
         }
 
+        // 与 `PluginManager::disable_plugin` 同口径：service 也是权威写库入口，
+        // 不能因为调用方不是面板就跳过反向依赖检查，否则依赖方会静默失效。
+        let dependents = crate::dependency::DependencyManager::new(self.global_db)
+            .check_dependents(plugin_code)
+            .await?;
+        if !dependents.is_empty() {
+            return Err(CoreError::plugin(PluginError::DeactivationFailed {
+                plugin_id: plugin_code.to_string(),
+                reason: format!(
+                    "被以下插件依赖，请先停用或卸载它们: {}",
+                    dependents.join(", ")
+                ),
+            }));
+        }
+
         // 先停用插件
         if let Some(manager) = get_plugin_manager() {
             let _ = manager.deactivate_plugin(plugin_code).await;

@@ -87,7 +87,8 @@ RDS 当前没有市场或远程索引，保留该档会变成永远空空如也�
 **API 层同口径（2026-11-11）**：`PluginManager::disable_plugin` 在写 `is_enabled` 之前
 也调 `DependencyManager::check_dependents`，非空直接返回 `PluginError::DeactivationFailed`
 并列出依赖者；面板缓存过期或非面板调用（自动停用、脚本、其它 feature）都绕不过去。
-面板仍在点击前拦，是为了不让用户先看到成功提示或等一次异步往返。
+`PluginService::disable_plugin` 是另一条直接写库的入口，同样在停用前查一遍反向依赖，
+被拒时不改 `is_enabled`。面板仍在点击前拦，是为了不让用户先看到成功提示或等一次异步往返。
 
 **手动刷新（2026-11-10）**：页头与左栏的刷新按钮改为先 `resync_sidecar_driver_rows`
 再 `list_plugins`，不再只重读清单。否则登记状态只在启停 / 加载等生命周期动作里刷新，
@@ -256,7 +257,8 @@ cargo test  -p rds-workbench --test ui_contract
 `cargo test -p rds-workbench --lib` 64 passed，`ui_contract` 10 passed；
 `cargo check -p rds-plugin` 0 error，`cargo test -p rds-plugin --test lifecycle`
 （`--test-threads=1`）17 passed（新增 `disable_rejects_a_plugin_with_a_dependent`：
-base + child 清单依赖后，停用 base 返回 `DeactivationFailed` 并列出 child）。
+base + child 清单依赖后，manager 与 `PluginService` 两条入口停用 base 都返回
+`DeactivationFailed` 并列出 child，且被拒后 DB 仍保持 `is_enabled=1`）。
 
 ---
 
@@ -267,6 +269,6 @@ base + child 清单依赖后，停用 base 返回 `DeactivationFailed` 并列出
 | 只读的「谁引用了某插件」查询 | 已完成（2026-11-10）：详情栏「依赖关系」段双向接线（`dependencies` / `dependents`），`Some(空)` 显示「无」、`None` 显示「未知」 |
 | 市场 / 远程索引 / 可更新档 | 未引入；筛选五档不含「可更新」 |
 | 面板徽标区分「DB 停用」与「未加载」 | 未做；根因是 `PluginInfo` 没有 `is_enabled` 字段，DB 权威启停状态不进会话快照 |
-| 停用被依赖插件 | 已完成（2026-11-11）：面板单插件 / 批量先按缓存拦截，`PluginManager::disable_plugin` 再实时 `check_dependents`，API 与非面板调用同样拒绝 |
+| 停用被依赖插件 | 已完成（2026-11-11）：面板单插件 / 批量先按缓存拦截，`PluginManager::disable_plugin` 与 `PluginService::disable_plugin` 再实时 `check_dependents`，API 与非面板调用同样拒绝 |
 | `schema_version` / `plugins.updated_at` 索引 | 未拍板 |
 | 左 Dock 三个薄壳（`DatabaseNavPanel` / `ScratchPanel` / `ResourcePanelTab`）拆分 | 已完成（2026-11-10）：`panels/left_tabs/` 目录（`mod` / `database_nav` / `scratch` / `resources` / `tests` + `plugin_tab/` 五文件子目录） |

@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use rds_plugin::events::{PluginEvent, get_event_manager};
 use rds_plugin::manager::{PluginDiff, PluginInfo, PluginManager};
+use rds_plugin::PluginService;
 
 /// 一次性临时安装目录（Drop 时清掉，不留 .rds/tmp 外的过程产物）
 struct TempDir(PathBuf);
@@ -560,6 +561,21 @@ version = "^1.0.0"
     let message = format!("{err}");
     assert!(message.contains("被以下插件依赖"), "{message}");
     assert!(message.contains("com.example.child"), "{message}");
+
+    // service 是另一条写库入口，同样不能绕过依赖守卫；被拒后 DB 必须保持启用。
+    let db = engine::migration::get_global_db_manager().expect("全局库已初始化");
+    let service = PluginService::new(db);
+    let err = service
+        .disable_plugin("com.example.base")
+        .await
+        .expect_err("service 入口也不应允许停用被依赖插件");
+    assert!(format!("{err}").contains("com.example.child"));
+    let row = service
+        .get_plugin_by_code("com.example.base")
+        .await
+        .unwrap()
+        .expect("base 已登记");
+    assert!(row.is_enabled, "被拒的停用不能把 is_enabled 改成 0");
 }
 
 /// 磁盘卸载：目录删除 + 索引清理 + PluginUninstalled 事件。
