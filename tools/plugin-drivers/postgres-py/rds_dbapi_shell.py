@@ -23,7 +23,11 @@ v1 内置两种驱动适配（DB-API 2.0 统一接口，execute 全库共用）�
 - url_override 优先 → url_template 模板替换 → driver 兜底拼 URL
   （sqlite 用 file_path / :memory:；postgresql 用 postgresql://host:port/db）
 
-内联结果 v1：上限 200 行 / 256 KiB，超出截断 + truncated + notice（Arrow 第二期）。
+结果承载（对齐宿主 §4.2.1.2 阈值）：
+- 小结果（≤ 200 行且 ≤ 256 KiB）内联 JSON；
+- 大结果走 **Arrow IPC stream 附件**（JSON 头带 attachments，紧跟 N 个 0x02 帧），
+  需要 pyarrow（pip install pyarrow）；pyarrow 不可用时**优雅降级**为截断 + notice，
+  不假装支持（describe 的 capabilities.arrow 如实反映）。
 """
 
 import json
@@ -35,9 +39,18 @@ import threading
 
 PROTOCOL_VERSION = 1
 KIND_JSON = 0x01
+KIND_ARROW = 0x02
 MAX_FRAME = 64 * 1024 * 1024
 INLINE_MAX_ROWS = 200
 INLINE_MAX_BYTES = 256 * 1024
+# Arrow 附件切帧大小（对齐宿主 fixture 的 32 KiB：让跨帧重组真实发生）
+ARROW_FRAME_CHUNK = 32 * 1024
+
+# pyarrow 可选依赖：大结果 Arrow 附件的唯一依赖；没有则降级截断（见模块头）
+try:
+    import pyarrow as _PA
+except ImportError:
+    _PA = None
 
 # 错误码（对齐 RpcErrorCode -32001…-32009）
 ERR_DRIVER_NOT_SUPPORTED = -32001
@@ -87,6 +100,27 @@ class FrameIO:
             self._w.write(struct.pack(">I", total))
             self._w.write(bytes([KIND_JSON]))
             self._w.write(payload)
+            self._w.flush()
+
+    def write_frame(self, kind, payload):
+        """裸帧写出（锁内单帧）。"""
+        total = 5 + len(payload)
+        self._w.write(struct.pack(">I", total))
+        self._w.write(bytes([kind]))
+        self._w.write(payload)
+
+    def write_with_arrow(self, text, chunks):
+        """JSON 响应头 + N 个 Arrow 分片，**一把锁**写完。
+
+        必须原子：头与分片之间若插入别的 JSON 帧（如 query.cancel 的响应），
+        宿主 router 的附件装配会错位（头声明 frames=N，下一个帧却不是 0x02）→ Issue。
+        分片数与信封 attachments[].frames 一致（由 `_arrow_page` 同源切出）。
+        """
+        payload = text.encode("utf-8")
+        with self._lock:
+            self.write_frame(KIND_JSON, payload)
+            for chunk in chunks:
+                self.write_frame(KIND_ARROW, chunk)
             self._w.flush()
 
     def _read_exact(self, n):
@@ -207,7 +241,7 @@ class Session:
             "transactions": True,
             "cancel": True,
             "cursor": False,
-            "arrow": False,  # v1 未接 Arrow 附件
+            "arrow": _PA is not None,  # pyarrow 在场才承诺 Arrow 附件（没说 = 不支持）
         }
         return {
             "id": self.driver_id,
@@ -255,44 +289,56 @@ class Session:
                     page["affected_rows"] = affected
                 cur.close()
                 return page
-            # 查询：内联阈值
+            # 查询：先取满 limit 再决定承载（v1 全量入内存；流式游标二期）
             columns = [{"name": d[0], "type_raw": d[1] or "TEXT", "nullable": True}
                        for d in (cur.description or [])]
             rows = []
-            read = 0
-            byte_budget = INLINE_MAX_BYTES
-            byte_truncated = False
-            row_truncated = False
-            while True:
-                if read >= limit:
-                    row_truncated = True
-                    break
+            while len(rows) < limit:
                 row = cur.fetchone()
                 if row is None:
                     break
-                obj = {}
-                for i, col in enumerate(columns):
-                    obj[col["name"]] = _to_json(row[i])
-                encoded = json.dumps(obj, ensure_ascii=False)
-                if byte_budget >= 0:
-                    byte_budget -= len(encoded.encode("utf-8"))
-                    if byte_budget < 0:
-                        byte_truncated = True
-                        break
-                rows.append(obj)
-                read += 1
+                rows.append(row)
             cur.close()
-            truncated = row_truncated or byte_truncated
-            notices = []
-            if byte_truncated:
-                notices.append("结果超过内联上限（256 KiB），已截断；Arrow 附件 v1 未接入，请缩小查询范围")
+            row_truncated = len(rows) >= limit
+
+            # 承载决策（§4.2.1.2）：≤ 200 行且 ≤ 256 KiB 才内联；超限走 Arrow 附件
+            objs = None
+            if len(rows) <= INLINE_MAX_ROWS:
+                objs = [_row_obj(row, columns) for row in rows]
+                inline_bytes = sum(
+                    len(json.dumps(o, ensure_ascii=False).encode("utf-8")) for o in objs)
+            else:
+                inline_bytes = INLINE_MAX_BYTES + 1  # 行数超限，直接进大结果分支
+            if len(rows) <= INLINE_MAX_ROWS and inline_bytes <= INLINE_MAX_BYTES:
+                return {
+                    "columns": columns,
+                    "row_count": len(rows),
+                    "rows": objs,
+                    "has_more": False,
+                    "truncated": row_truncated,
+                    "notices": [],
+                }
+            if _PA is not None:
+                return _arrow_page(columns, rows, row_truncated)
+            # 降级：pyarrow 未安装 → 截断到内联上限（v1 行为），notice 给出可读指引
+            keep = objs if objs is not None else [_row_obj(r, columns) for r in rows]
+            keep = keep[:INLINE_MAX_ROWS]
+            budget = INLINE_MAX_BYTES
+            out = []
+            for o in keep:
+                cost = len(json.dumps(o, ensure_ascii=False).encode("utf-8"))
+                if budget - cost < 0:
+                    break
+                budget -= cost
+                out.append(o)
             return {
                 "columns": columns,
-                "row_count": read,
-                "rows": rows,
+                "row_count": len(out),
+                "rows": out,
                 "has_more": False,
-                "truncated": truncated,
-                "notices": notices,
+                "truncated": True,
+                "notices": ["结果超过内联上限且未安装 pyarrow（pip install pyarrow），"
+                            "已截断；安装后自动改走 Arrow 附件"],
             }
         except Exception as e:
             # 取消语义：标记已记 + 错误里带 interrupt/cancel 字样 → 取消；否则 SQL 错
@@ -306,9 +352,15 @@ class Session:
 
     def meta_catalogs(self):
         if self.kind == "postgresql":
-            # PG 单库无 catalog 维度：导航用 schema 层即可，catalogs 给空（宿主会跳过）
-            return {"catalogs": []}
-        return {"catalogs": []}
+            # PG 的 catalog 就是数据库；一条连接只看一个库 → 当前库名
+            # （第一层不能空：宿主导航从这层起步）
+            try:
+                row = self.conn.execute("SELECT current_database()").fetchone()
+                return {"catalogs": [row[0]] if row and row[0] else []}
+            except Exception as e:
+                raise RpcError(ERR_SQL_ERROR, f"meta.catalogs 失败：{e}")
+        # sqlite：无 catalog 概念，把 schema 名当 catalog 回（对齐原生 rusqlite 驱动）
+        return {"catalogs": ["main"]}
 
     def meta_schemas(self, catalog):
         try:
@@ -467,6 +519,115 @@ def _to_json(v):
     return str(v)
 
 
+def _row_obj(row, columns):
+    """元组行 → 内联 JSON 的对象行（列名为键，与协议一致）。"""
+    return {col["name"]: _to_json(row[i]) for i, col in enumerate(columns)}
+
+
+class ArrowPage:
+    """execute 的 Arrow 承载结果：信封 dict + 已切好的分片；由 worker 原子写出。"""
+
+    def __init__(self, envelope, chunks):
+        self.envelope = envelope
+        self.chunks = chunks
+
+
+# ---- Arrow 兼容子集（宿主 §4.5：little-endian / LargeUtf8 / Timestamp(us,UTC) / rds.* 元数据）----
+
+def _arrow_field(col):
+    """DB-API 的 type_raw → Arrow 字段（带 rds.* 类型映射元数据）。
+
+    兼容子集口径：字符串一律 large_string（64 位 offset）、二进制 large_binary、
+    时间戳 timestamp(us, UTC)、日期 date32；DECIMAL/NUMERIC 收敛为 float64（精度取舍
+    记在注释——DB-API 侧拿不到可靠 scale，v1 不做 decimal128）。
+    """
+    raw = (col["type_raw"] or "TEXT").upper()
+    if "INT" in raw:
+        typ, canonical = _PA.int64(), "INTEGER"
+    elif any(k in raw for k in ("REAL", "FLOA", "DOUB", "DEC", "NUM", "MONEY")):
+        typ, canonical = _PA.float64(), "FLOAT"
+    elif "BOOL" in raw:
+        typ, canonical = _PA.bool_(), "BOOLEAN"
+    elif any(k in raw for k in ("BLOB", "BIN", "BYTEA")):
+        typ, canonical = _PA.large_binary(), "BINARY"
+    elif "TIMESTAMP" in raw or "DATETIME" in raw:
+        typ, canonical = _PA.timestamp("us", tz="UTC"), "TIMESTAMP"
+    elif "DATE" in raw:
+        typ, canonical = _PA.date32(), "DATE"
+    else:
+        typ, canonical = _PA.large_string(), "TEXT"
+    metadata = {
+        "rds.type_raw": col["type_raw"] or "TEXT",
+        "rds.canonical": canonical,
+        "rds.nullable": "true",
+    }
+    return _PA.field(col["name"], typ, nullable=True, metadata=metadata)
+
+
+def _arrow_column(rows, i, field):
+    """一列的值 → Arrow 数组；类型对不上（sqlite 动态类型：TEXT 列里放数字很常见）
+    时整列退化为 large_string，rds.type_raw 元数据保留原类型供上层识别。"""
+    import datetime as _dt
+    from decimal import Decimal
+
+    canonical = field.metadata[b"rds.canonical"].decode() if field.metadata else "TEXT"
+    vals = []
+    for row in rows:
+        v = row[i]
+        if v is None:
+            vals.append(None)
+        elif canonical == "FLOAT" and isinstance(v, Decimal):
+            vals.append(float(v))
+        elif canonical == "TIMESTAMP" and isinstance(v, _dt.datetime) \
+                and v.tzinfo is None:
+            vals.append(v.replace(tzinfo=_dt.timezone.utc))  # naive 视作 UTC
+        else:
+            vals.append(v)
+    try:
+        return _PA.array(vals, type=field.type)
+    except Exception:
+        return None  # 调用方整列退化
+
+
+def _arrow_page(columns, rows, truncated):
+    """大结果页：Arrow IPC stream（自带 schema）切成 32 KiB 分片 + 信封。"""
+    schema = _PA.schema([_arrow_field(c) for c in columns])
+    arrays = []
+    for i in range(len(columns)):
+        field = schema.field(i)
+        arr = _arrow_column(rows, i, field)
+        if arr is None:
+            # 整列退化：值全部字符串化，字段类型同步换（schema 与数组必须一致）
+            fallback = _PA.array(
+                [None if r[i] is None else str(r[i]) for r in rows],
+                type=_PA.large_string())
+            metadata = dict(field.metadata or {})
+            metadata[b"rds.canonical"] = b"TEXT"
+            schema = schema.set(i, _PA.field(
+                field.name, _PA.large_string(), nullable=True, metadata=metadata))
+            arr = fallback
+        arrays.append(arr)
+    table = _PA.Table.from_arrays(arrays, schema=schema)
+    sink = _PA.BufferOutputStream()
+    writer = _PA.ipc.new_stream(sink, schema)
+    writer.write_table(table)
+    writer.close()
+    data = sink.getvalue().to_pybytes()
+    chunks = [data[j:j + ARROW_FRAME_CHUNK]
+              for j in range(0, len(data), ARROW_FRAME_CHUNK)] or [b""]
+    envelope = {
+        "columns": columns,
+        "row_count": len(rows),
+        "affected_rows": None,
+        "has_more": False,
+        "cursor_id": None,
+        "truncated": truncated,
+        "notices": [],
+        "attachments": [{"id": 0, "kind": "arrow-ipc-stream", "frames": len(chunks)}],
+    }
+    return ArrowPage(envelope, chunks)
+
+
 class Server:
     def __init__(self):
         self.io = FrameIO()
@@ -523,7 +684,13 @@ class Server:
                 return
             try:
                 result = self._dispatch(method, params)
-                self.io.write(self._response(rid, result))
+                if isinstance(result, ArrowPage):
+                    # 大结果：JSON 头（带 attachments）+ Arrow 分片，一把锁原子写出
+                    head = json.dumps({"jsonrpc": "2.0", "id": rid, "result": result.envelope},
+                                      ensure_ascii=False)
+                    self.io.write_with_arrow(head, result.chunks)
+                else:
+                    self.io.write(self._response(rid, result))
             except Exception as e:
                 self.io.write(self._error(rid, self._code_of(e), str(e)))
 
@@ -571,7 +738,7 @@ class Server:
                              params.get("params") or [], params.get("max_rows"), params.get("timeout_ms"))
         if method == "query.fetch":
             raise RpcError(ERR_DRIVER_NOT_SUPPORTED,
-                           "query.fetch 需要驱动游标能力（v1 内联结果，第二期接 Arrow 附件）")
+                           "query.fetch 需要驱动游标能力（当前一次性取全页：内联或 Arrow 附件）")
         raise RpcError(-32601, f"方法不存在：{method}")
 
     def _cancel(self, params):
