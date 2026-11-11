@@ -573,6 +573,22 @@ pub(crate) fn plugin_diagnostics(plugin: &PluginInfo) -> String {
             ));
         }
     }
+    lines.push(format!(
+        "本插件依赖：{}",
+        if plugin.dependencies.is_empty() {
+            "无".to_string()
+        } else {
+            plugin.dependencies.join("、")
+        }
+    ));
+    lines.push(format!(
+        "被依赖：{}",
+        match plugin.dependents.as_deref() {
+            Some([]) => "无".to_string(),
+            Some(dependents) => dependents.join("、"),
+            None => "未知（全局库未初始化）".to_string(),
+        }
+    ));
     lines.join("\n")
 }
 

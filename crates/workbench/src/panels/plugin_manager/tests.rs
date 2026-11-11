@@ -593,6 +593,8 @@ fn diagnostics_report_carries_state_paths_and_driver_registration() {
         default_port: Some(1521),
         category: None,
     }];
+    plugin.dependencies = vec!["rds.insight.sales".to_string()];
+    plugin.dependents = Some(vec!["rds.mock.orders".to_string()]);
 
     let report = plugin_diagnostics(&plugin);
     assert!(report.contains("rds.driver.oracle"), "{report}");
@@ -600,6 +602,8 @@ fn diagnostics_report_carries_state_paths_and_driver_registration() {
     assert!(report.contains("错误：解释器未解析"), "{report}");
     assert!(report.contains("安装目录：未上报"), "{report}");
     assert!(report.contains("sidecar.log"), "{report}");
+    assert!(report.contains("本插件依赖：rds.insight.sales"), "{report}");
+    assert!(report.contains("被依赖：rds.mock.orders"), "{report}");
     assert!(
         report.contains("Oracle Database（oracle）· 已登记 · 默认端口 1521"),
         "{report}"
