@@ -70,7 +70,9 @@ RDS 当前没有市场或远程索引，保留该档会变成永远空空如也�
 缓存与 `registered_drivers` 同口径（`None` = 全局库未初始化，`Some(空)` = 确实没有），
 在 `resync_sidecar_driver_rows` 里刷新，`list_plugins` 只读缓存、不碰异步库。
 卸载时的拒绝判断仍走实时 `check_dependents`，与这里展示的缓存是同一条实现
-（`check_dependents` 现在是 `all_dependents` 的一行查表）。
+（`check_dependents` 现在是 `all_dependents` 的一行查表）；`PluginManager::uninstall_plugin`
+与 `PluginService::uninstall_plugin` 两条入口都先查反向依赖，被依赖时分别返回
+`UninstallFailed`，不会先删目录或登记行。
 反向依赖已知非空时，卡片与详情栏的「卸载」按钮直接禁用并在 tooltip 列出依赖者；
 「停用」按钮同样置灰并在 tooltip 说明「停用会让谁失效」，不让用户点下去才被拒绝；
 依赖段末也同时提示「停用会让它们立即失效；卸载前需先卸载依赖方」。
@@ -257,8 +259,9 @@ cargo test  -p rds-workbench --test ui_contract
 `cargo test -p rds-workbench --lib` 64 passed，`ui_contract` 10 passed；
 `cargo check -p rds-plugin` 0 error，`cargo test -p rds-plugin --test lifecycle`
 （`--test-threads=1`）17 passed（新增 `disable_rejects_a_plugin_with_a_dependent`：
-base + child 清单依赖后，manager 与 `PluginService` 两条入口停用 base 都返回
-`DeactivationFailed` 并列出 child，且被拒后 DB 仍保持 `is_enabled=1`）。
+base + child 清单依赖后，manager 与 `PluginService` 两条停用入口都返回
+`DeactivationFailed` 并列出 child；`PluginService::uninstall_plugin` 同样返回
+`UninstallFailed`，被拒后 DB 仍保持 `is_enabled=1`、登记行也还在）。
 
 ---
 

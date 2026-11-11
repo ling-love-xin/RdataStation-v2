@@ -576,6 +576,21 @@ version = "^1.0.0"
         .unwrap()
         .expect("base 已登记");
     assert!(row.is_enabled, "被拒的停用不能把 is_enabled 改成 0");
+
+    // 登记行卸载同样要查依赖，否则会留下引用 base 的孤儿 child。
+    let err = service
+        .uninstall_plugin("com.example.base")
+        .await
+        .expect_err("service 卸载登记不应允许被依赖插件");
+    assert!(format!("{err}").contains("com.example.child"));
+    assert!(
+        service
+            .get_plugin_by_code("com.example.base")
+            .await
+            .unwrap()
+            .is_some(),
+        "被拒的卸载不能删掉登记行"
+    );
 }
 
 /// 磁盘卸载：目录删除 + 索引清理 + PluginUninstalled 事件。

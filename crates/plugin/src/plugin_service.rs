@@ -252,6 +252,18 @@ impl PluginService {
             )));
         }
 
+        // 与磁盘卸载同口径：删登记行会让依赖方的清单引用变成孤儿，
+        // 被依赖时先拒绝，别等服务层把 plugins 表里的行删掉才暴露。
+        let dependents = crate::dependency::DependencyManager::new(self.global_db)
+            .check_dependents(plugin_code)
+            .await?;
+        if !dependents.is_empty() {
+            return Err(CoreError::plugin(PluginError::UninstallFailed {
+                plugin_id: plugin_code.to_string(),
+                reason: format!("被以下插件依赖，请先卸载它们: {}", dependents.join(", ")),
+            }));
+        }
+
         // 先停用和卸载
         if let Some(manager) = get_plugin_manager() {
             let _ = manager.deactivate_plugin(plugin_code).await;
