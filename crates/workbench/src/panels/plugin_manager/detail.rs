@@ -335,7 +335,7 @@ impl PluginManagerPanel {
                             None => div()
                                 .text_xs()
                                 .text_color(theme.colors.muted_foreground)
-                                .child("未查询（全局库未初始化，卸载前仍会实时检查）。")
+                                .child("未查询（全局库未初始化，停用 / 卸载前无法前置检查）。")
                                 .into_any_element(),
                             Some([]) => div()
                                 .text_xs()
@@ -366,7 +366,7 @@ impl PluginManagerPanel {
                                     div()
                                         .text_xs()
                                         .text_color(theme.colors.muted_foreground)
-                                        .child("卸载前需先卸载依赖它的插件。"),
+                                        .child("停用会让它们立即失效；卸载前需先卸载依赖它的插件。"),
                                 )
                             },
                         ),
