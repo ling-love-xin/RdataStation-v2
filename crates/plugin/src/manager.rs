@@ -968,6 +968,7 @@ impl PluginManager {
                         &loaded.manifest,
                         &loaded.install_path,
                         db,
+                        true,
                     )
                     .await
                     {
@@ -1094,7 +1095,9 @@ impl PluginManager {
             }
         }
 
-        // 新增：加载 + 激活（DB 未禁用才激活）
+        // 新增：先加载并登记全部，再统一激活——依赖可能也在本轮新增，
+        // 边扫边激活会因目录遍历顺序把后到的依赖判成缺失。
+        let mut pending_activation = Vec::new();
         for id in &diff.added {
             let loaded = match self.load_plugin_from_dir(&self.install_dir.join(id)).await {
                 Ok(loaded) => loaded,
@@ -1103,34 +1106,77 @@ impl PluginManager {
                     continue;
                 }
             };
-            let enabled = match engine::migration::get_global_db_manager() {
+            let (enabled, newly_registered) = match engine::migration::get_global_db_manager() {
                 Some(db) => match db.get_plugin_by_code(id).await {
-                    Ok(Some(p)) => p.is_enabled,
+                    Ok(Some(p)) => (p.is_enabled, false),
                     Ok(None) => {
                         // 目录直接拷进来的插件没有登记行：先补登记，否则停用/卸载按 code
                         // 写库命中 0 行，重启后又按「DB 无记录 = 启用」复活。
-                        if let Err(e) = crate::installer::register_manifest(
+                        // 依赖未就绪时登记为停用：先写 is_enabled=1 再被 activate 拒绝，
+                        // 用户会看到「已启用」而运行时从未成功；第二阶段依赖补齐再翻回启用。
+                        let ready = self
+                            .ensure_dependencies_ready(&loaded.manifest)
+                            .await
+                            .is_ok();
+                        let registered = match crate::installer::register_manifest(
                             &loaded.manifest,
                             &loaded.install_path,
                             db,
+                            ready,
                         )
                         .await
                         {
-                            tracing::warn!(plugin_id = %id, error = %e, "热插拔登记失败");
-                        }
-                        true
+                            Ok(_) => true,
+                            Err(e) => {
+                                tracing::warn!(plugin_id = %id, error = %e, "热插拔登记失败");
+                                false
+                            }
+                        };
+                        (ready, registered)
                     }
                     Err(e) => {
                         tracing::warn!(plugin_id = %id, error = %e, "读取插件登记失败，按启用处理");
-                        true
+                        (true, false)
                     }
                 },
-                None => true,
+                None => (true, false),
             };
-            if enabled {
-                if let Err(e) = self.activate_plugin(id).await {
-                    tracing::warn!(plugin_id = %id, error = %e, "热插拔激活失败");
+            if enabled || newly_registered {
+                pending_activation.push((id.clone(), newly_registered, loaded.manifest.clone()));
+            }
+        }
+        // 第二阶段：所有新增行都落库后再校验依赖并激活，依赖解析能看到本轮新增的底座。
+        for (id, newly_registered, manifest) in pending_activation {
+            if let Err(e) = self.ensure_dependencies_ready(&manifest).await {
+                {
+                    let mut map = self
+                        .loaded_plugins
+                        .write()
+                        .map_err(|_| lock_err("loaded_plugins"))?;
+                    if let Some(p) = map.get_mut(&id) {
+                        p.status = LoadStatus::ActivationFailed(e.to_string());
+                    }
                 }
+                // 刚登记的行保持停用，不能留下「已启用但从未激活」的假状态。
+                if newly_registered {
+                    if let Some(db) = engine::migration::get_global_db_manager() {
+                        if let Err(db_err) = db.update_plugin_enabled_by_code(&id, false).await {
+                            tracing::warn!(plugin_id = %id, error = %db_err, "撤回热插拔启用失败");
+                        }
+                    }
+                }
+                tracing::warn!(plugin_id = %id, error = %e, "热插拔激活失败");
+                continue;
+            }
+            if newly_registered {
+                if let Some(db) = engine::migration::get_global_db_manager() {
+                    if let Err(e) = db.update_plugin_enabled_by_code(&id, true).await {
+                        tracing::warn!(plugin_id = %id, error = %e, "补登记转启用失败");
+                    }
+                }
+            }
+            if let Err(e) = self.activate_plugin(&id).await {
+                tracing::warn!(plugin_id = %id, error = %e, "热插拔激活失败");
             }
         }
 

@@ -128,7 +128,8 @@ impl PluginInstaller {
             self.swap_dir_into_place(&package_root, &final_install_path)?;
 
             // 5. 注册到数据库
-            let plugin = register_manifest(&manifest, &final_install_path, db_manager).await?;
+            let plugin =
+                register_manifest(&manifest, &final_install_path, db_manager, true).await?;
 
             // 6. 清理临时解压目录（如果是从压缩包解压的）
             if format != PluginPackageFormat::Directory {
@@ -496,6 +497,7 @@ pub(crate) async fn register_manifest(
     manifest: &PluginManifest,
     install_path: &Path,
     db_manager: &'static GlobalDatabaseManager,
+    is_enabled: bool,
 ) -> Result<Plugin, CoreError> {
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -534,7 +536,7 @@ pub(crate) async fn register_manifest(
         plugin_type,
         manifest_json: Some(serde_json::to_string(manifest)?),
         install_path: install_path.to_string_lossy().to_string(),
-        is_enabled: true,
+        is_enabled,
         is_builtin: false,
         installed_at: now.clone(),
         updated_at: now,

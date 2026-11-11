@@ -717,6 +717,97 @@ version = "^1.0.0"
     );
 }
 
+/// 热插拔自动补登记不能留下假启用：依赖未就绪时登记为停用，状态说明原因。
+#[tokio::test]
+async fn hot_plug_registers_unready_plugin_as_disabled() {
+    if engine::migration::get_global_db_manager().is_none() {
+        engine::migration::initialize_global_system()
+            .await
+            .expect("初始化全局库");
+    }
+    let dir = TempDir::new("scanguard");
+    let manager = PluginManager::new(dir.0.clone());
+    manager.init().await.unwrap();
+
+    write_plugin_with_contributes(
+        &dir.0,
+        "com.example.scanguard-child",
+        "v1",
+        r#"[[dependencies]]
+id = "com.example.scanguard-base"
+version = "^1.0.0"
+"#,
+    );
+
+    let diff = manager.scan_and_diff_plugins().await.unwrap();
+    assert_eq!(diff.added, vec!["com.example.scanguard-child"]);
+
+    let loaded = manager
+        .get_loaded_plugin("com.example.scanguard-child")
+        .expect("热插拔应加载插件");
+    assert!(
+        matches!(loaded.status, LoadStatus::ActivationFailed(_)),
+        "依赖缺失时应说明激活失败原因"
+    );
+
+    let service =
+        PluginService::new(engine::migration::get_global_db_manager().expect("全局库已初始化"));
+    let row = service
+        .get_plugin_by_code("com.example.scanguard-child")
+        .await
+        .unwrap()
+        .expect("热插拔仍要补登记，否则停用 / 卸载命中 0 行");
+    assert!(!row.is_enabled, "依赖未就绪的插件不能登记成已启用");
+}
+
+/// 同一次扫描里新增的底座和依赖方要一起激活：先登记全部，再统一解析依赖。
+#[tokio::test]
+async fn scan_activates_a_plugin_whose_dependency_arrives_in_the_same_scan() {
+    if engine::migration::get_global_db_manager().is_none() {
+        engine::migration::initialize_global_system()
+            .await
+            .expect("初始化全局库");
+    }
+    let dir = TempDir::new("scanbatch");
+    let manager = PluginManager::new(dir.0.clone());
+    manager.init().await.unwrap();
+
+    write_plugin(&dir.0, "com.example.scanbatch-aa-base", "v1");
+    write_plugin_with_contributes(
+        &dir.0,
+        "com.example.scanbatch-zz-child",
+        "v1",
+        r#"[[dependencies]]
+id = "com.example.scanbatch-aa-base"
+version = "^1.0.0"
+"#,
+    );
+
+    manager.scan_and_diff_plugins().await.unwrap();
+
+    for id in [
+        "com.example.scanbatch-aa-base",
+        "com.example.scanbatch-zz-child",
+    ] {
+        assert!(
+            matches!(
+                manager.get_loaded_plugin(id).unwrap().status,
+                LoadStatus::Active
+            ),
+            "{id} 应与底座一起激活"
+        );
+    }
+
+    let service =
+        PluginService::new(engine::migration::get_global_db_manager().expect("全局库已初始化"));
+    let row = service
+        .get_plugin_by_code("com.example.scanbatch-zz-child")
+        .await
+        .unwrap()
+        .expect("child 已登记");
+    assert!(row.is_enabled, "依赖就绪后应保持启用");
+}
+
 /// 磁盘卸载：目录删除 + 索引清理 + PluginUninstalled 事件。
 #[tokio::test]
 async fn uninstall_removes_dir_and_index_and_emits() {
