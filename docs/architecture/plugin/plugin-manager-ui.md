@@ -92,14 +92,19 @@ RDS 当前没有市场或远程索引，保留该档会变成永远空空如也�
 `PluginService::disable_plugin` 是另一条直接写库的入口，同样在停用前查一遍反向依赖，
 被拒时不改 `is_enabled`。面板仍在点击前拦，是为了不让用户先看到成功提示或等一次异步往返。
 
+**运行时停不下来不写库（2026-11-11）**：`PluginManager::disable_plugin` 改为先停运行时、
+再写 `is_enabled=false`；停用失败时保持启用，不出现「DB 已停用、进程还在跑」。
+service 层新增 `PluginManager::is_loaded` 判定，只在有运行实例时才调 `deactivate` / `unload`，
+并把失败原样返回；此前用 `let _ =` 吞掉错误，可能在进程未停干净时就删掉登记行。
+
 **三个生命周期入口的边界（2026-11-11）**：卸载相关的动作不再都叫「卸载」，按影响面区分：
 
 | 入口 | 运行时 | `global.db` 登记 | 插件目录 |
 | --- | --- | --- | --- |
-| `PluginManager::{enable,disable}_plugin` | 启用尝试激活、停用先停运行时 | 写 `is_enabled` | 不动 |
+| `PluginManager::{enable,disable}_plugin` | 启用尝试激活、停用先停运行时 | 运行时停稳后才写 `is_enabled` | 不动 |
 | `PluginManager::unload_plugin` | 只卸运行时、移出索引 | 不动（启停状态保留） | 不动 |
 | `PluginManager::uninstall_plugin` | 先停运行时 | 依赖检查通过后删登记行 | 删目录，保留 `plugin-data/<id>/` |
-| `PluginService::uninstall_plugin` | 先停用并卸运行时 | 依赖检查通过后删登记行 | **不删**，磁盘卸载必须走 manager |
+| `PluginService::uninstall_plugin` | `is_loaded` 时先 `unload`，失败即返回 | 运行时卸干净后才删登记行 | **不删**，磁盘卸载必须走 manager |
 
 所以 `unload` 之后如果登记仍是启用，下次扫描会重新激活；要让插件长期不启动，
 应走 `disable_plugin`。`PluginService::uninstall_plugin` 只是登记层入口，不替代磁盘卸载。
@@ -284,7 +289,7 @@ cargo test  -p rds-workbench --test ui_contract
 2026-11-11 复测（停用依赖保护）：`cargo check -p rds-workbench --lib` 0 error，
 `cargo test -p rds-workbench --lib` 64 passed，`ui_contract` 10 passed；
 `cargo check -p rds-plugin` 0 error，`cargo test -p rds-plugin --test lifecycle`
-（`--test-threads=1`）21 passed（新增 `disable_rejects_a_plugin_with_a_dependent`：
+（`--test-threads=1`）22 passed（新增 `disable_rejects_a_plugin_with_a_dependent`：
 base + child 清单依赖后，manager 与 `PluginService` 两条停用入口都返回
 `DeactivationFailed` 并列出 child；`PluginService::uninstall_plugin` 同样返回
 `UninstallFailed`，被拒后 DB 仍保持 `is_enabled=1`、登记行也还在。新增
@@ -297,7 +302,9 @@ base + child 清单依赖后，manager 与 `PluginService` 两条停用入口都
 自动补登记的 `is_enabled=1` 行。新增 `hot_plug_registers_unready_plugin_as_disabled`：
 热插拔新增的 child 缺依赖时仍补登记，但 `is_enabled` 保持 0，状态说明失败原因。新增
 `scan_activates_a_plugin_whose_dependency_arrives_in_the_same_scan`：同一次扫描新增的
-base 与 child 能一起激活，证明「先登记全部、再统一激活」不受目录遍历顺序影响）。
+base 与 child 能一起激活，证明「先登记全部、再统一激活」不受目录遍历顺序影响。新增
+`service_uninstall_removes_registration_but_keeps_directory`：service 卸载只删 `global.db`
+登记行、保留磁盘目录；同时补 `is_loaded` 在卸载前后的断言）。
 
 ---
 
