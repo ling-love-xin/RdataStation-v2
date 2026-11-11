@@ -15,7 +15,23 @@ use shared::error::CoreError;
 ///
 /// 必须在应用启动时调用，且只能调用一次。
 /// 创建 SQLite 连接池和 DuckDB 长连接。
+///
+/// 并发安全：检查「已装好」→ 建管理器（**真的打开** sqlite / duckdb 文件）→
+/// `install_global_db_manager` 之间必须互斥。没有这道门时，同一进程里并发进入
+/// （多个 `#[tokio::test]`、或宿主并发初始化）会各自打开同一个 `analytics.duckdb`，
+/// 后到者拿不到文件句柄（`os error 32`，另一个程序正在使用此文件）。
+/// 生产只调一次，但测试里多个用例共用一个进程，必须按「只初始化一次」的语义走。
 pub async fn initialize_global_system() -> Result<(), CoreError> {
+    /// 初始化互斥门（进程级）：持锁期间重查一次，晚到者直接复用已装好的管理器。
+    static INIT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    let _guard = INIT_LOCK.lock().await;
+
+    // 双检：等锁期间可能已被前一个调用者装好（含进程重启后已被宿主装好的情形）。
+    if crate::persistence::get_global_db_manager().is_some() {
+        return Ok(());
+    }
+
     // 内置驱动注册（DriverRegistry）：测试连接 / 连接路由都从这里取工厂。
     // 必须在任何连接尝试前完成——曾漏掉这一步，导致真机「测试连接」报
     // `CONN_DRIVER_NOT_FOUND: Driver 'sqlite' not found in registry`（注册表为空）。
