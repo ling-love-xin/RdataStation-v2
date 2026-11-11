@@ -782,6 +782,7 @@ mod tests {
                 column_count: 3,
                 index_count: 1,
                 constraint_count: 1,
+                row_count: None,
             },
             counts,
             candidates: &[],

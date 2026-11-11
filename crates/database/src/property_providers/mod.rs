@@ -687,5 +687,13 @@ pub(crate) fn stats_cards(input: &ProviderInput) -> Vec<OverviewCard> {
             delta: None,
         });
     }
+    if let Some(rows) = input.stats.row_count {
+        cards.push(OverviewCard {
+            label: "行数".to_string(),
+            value: rows.to_string(),
+            unit: String::new(),
+            delta: None,
+        });
+    }
     cards
 }

@@ -7,7 +7,7 @@ use shared::models::{QueryResult, Value};
 // persistence::metadata_cache 与 driver 两侧共用，此处重导出保持路径不变。
 pub use shared::meta::{
     ColumnDetail, ConstraintDetail, ForeignKeyRef, IndexDetail, NodeDetail, NodeInfo,
-    SchemaObjectKind, SchemaObjects,
+    SchemaObjectKind, SchemaObjects, TableFacts,
 };
 
 /// 元数据浏览器 trait
@@ -388,6 +388,20 @@ pub trait Database: Send + Sync {
         _table: &str,
     ) -> Result<Vec<ConstraintDetail>, CoreError> {
         Ok(vec![])
+    }
+
+    /// 表的**汇总事实**：索引个数与行数估计。
+    ///
+    /// 只有能一次给出这些数的驱动才实现（sidecar 的 `meta.object_detail` 就是这种）；
+    /// 原生驱动继续用 `list_indexes` 的明细长度。默认 `None` = 该驱动没有这条通道，
+    /// 上层回退到明细计数，不把「不知道」当成 0。
+    async fn table_facts(
+        &self,
+        _catalog: &str,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Option<TableFacts>, CoreError> {
+        Ok(None)
     }
 
     /// 列举存储过程

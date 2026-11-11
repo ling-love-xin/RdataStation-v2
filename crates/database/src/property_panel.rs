@@ -112,12 +112,21 @@ pub async fn load_properties(
     let mut routine_source: Option<String> = None;
     let mut ddl_text: Option<String> = None;
     let mut data: Option<TableDataPage> = None;
+    let mut facts = engine::driver::traits::TableFacts::default();
 
     match ref_.kind {
         PropertyKind::Table | PropertyKind::View => {
             columns = metadata
                 .list_columns(&ref_.conn_id, &catalog, &schema, &ref_.name)
                 .await?;
+            // sidecar 的索引明细恒不支持（`list_indexes` 报 NotSupported），但
+            // `meta.object_detail` 带了索引个数与行数——先走这条通道，拿不到再回退明细长度。
+            if let Ok(Some(found)) = metadata
+                .table_facts(&ref_.conn_id, &catalog, &schema, &ref_.name)
+                .await
+            {
+                facts = found;
+            }
             if ref_.kind == PropertyKind::Table {
                 indexes = metadata
                     .list_indexes(&ref_.conn_id, &catalog, &schema, &ref_.name)
@@ -193,8 +202,12 @@ pub async fn load_properties(
     // （旧调用方 / 测试直接传类型名）。
     let stats = ProviderStats {
         column_count: columns.len(),
-        index_count: indexes.len(),
+        index_count: facts
+            .index_count
+            .map(|n| n as usize)
+            .unwrap_or(indexes.len()),
         constraint_count: constraints.len(),
+        row_count: facts.row_count,
     };
     let provider = global_registry().provider(type_id.unwrap_or(driver), ref_.kind);
 
@@ -539,6 +552,22 @@ fn fallback_overview(
         cards.push(property::OverviewCard {
             label: "列".into(),
             value: stats.column_count.to_string(),
+            unit: String::new(),
+            delta: None,
+        });
+    }
+    if stats.index_count > 0 {
+        cards.push(property::OverviewCard {
+            label: "索引".into(),
+            value: stats.index_count.to_string(),
+            unit: String::new(),
+            delta: None,
+        });
+    }
+    if let Some(rows) = stats.row_count {
+        cards.push(property::OverviewCard {
+            label: "行数".into(),
+            value: rows.to_string(),
             unit: String::new(),
             delta: None,
         });

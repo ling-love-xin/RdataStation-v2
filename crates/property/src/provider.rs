@@ -38,6 +38,9 @@ pub struct ProviderStats {
     pub column_count: usize,
     pub index_count: usize,
     pub constraint_count: usize,
+    /// 驱动给出的行数估计（sidecar 的 `meta.object_detail`）；`None` = 该驱动没给。
+    /// **不要拿 0 当「空表」**——0 与「不知道」在属性面板上是两回事。
+    pub row_count: Option<u64>,
 }
 
 /// 属性源上下文（provider 组装属性行 / 洞察 / 类别的输入）。

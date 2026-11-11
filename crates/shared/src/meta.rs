@@ -102,6 +102,17 @@ pub struct IndexDetail {
     pub comment: Option<String>,
 }
 
+/// 表的汇总事实（属性面板用）。
+///
+/// 与 [`IndexDetail`] 的分工：那个是**明细**（每条索引的列与唯一性），这个是
+/// **计数与规模**。桥接驱动（sidecar）只给得出后者（`meta.object_detail`）。
+/// 两个 `Option` 都表示「该驱动没给」，调用方回退到自己的计数，**不要把 `None` 当 0**。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct TableFacts {
+    pub index_count: Option<u32>,
+    pub row_count: Option<u64>,
+}
+
 /// 约束详情
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ConstraintDetail {

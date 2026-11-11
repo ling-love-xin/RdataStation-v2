@@ -3,7 +3,7 @@ use std::sync::Arc;
 use engine::connection_manager::ConnectionManager;
 use engine::driver::traits::{
     ColumnDetail, ConstraintDetail, DynDatabase, IndexDetail, NodeInfo, SchemaObjectKind,
-    SchemaObjects,
+    SchemaObjects, TableFacts,
 };
 use shared::error::{ConnectionError, CoreError};
 
@@ -218,6 +218,18 @@ impl MetadataService {
             return browser.get_constraints(catalog, schema, table).await;
         }
         db.list_constraints(catalog, Some(schema), table).await
+    }
+
+    /// 表汇总（索引个数 / 行数估计）。驱动没这条通道时返回 `None`，调用方回退明细计数。
+    pub async fn table_facts(
+        &self,
+        conn_id: &str,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Result<Option<TableFacts>, CoreError> {
+        let db = self.database_for(conn_id, catalog).await?;
+        db.table_facts(catalog, Some(schema), table).await
     }
 
     pub async fn list_procedures(

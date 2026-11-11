@@ -42,7 +42,6 @@ use super::method;
 use super::proto::RpcErrorCode;
 use super::supervisor::SidecarSupervisor;
 use shared::models::ArrowBatch;
-
 /// 查询类调用的传输超时。
 ///
 /// **故意给得长**：查询长短该由 SQL 自己的 `timeout_ms` 与用户的「取消」决定，
@@ -769,7 +768,7 @@ use tokio_util::sync::CancellationToken;
 
 use engine::driver::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, DynDatabase, IndexDetail,
-    MetadataBrowser, NodeDetail, NodeInfo, SchemaObjectKind, Transaction,
+    MetadataBrowser, NodeDetail, NodeInfo, SchemaObjectKind, TableFacts, Transaction,
 };
 use shared::error::{CommonError, ConnectionError, CoreError, DatabaseError, PluginError};
 use shared::models::{QueryResult, Value as SharedValue};
@@ -1281,6 +1280,28 @@ impl Database for SidecarDatabase {
         _table: &str,
     ) -> Result<Vec<ConstraintDetail>, CoreError> {
         Err(self.no_index_detail("约束"))
+    }
+
+    /// 属性面板的索引数 / 行数：`meta.object_detail` 本来就带这两项，
+    /// **不要再让它去走 `list_indexes`**（那条线对 sidecar 恒不支持，面板会显示 0）。
+    async fn table_facts(
+        &self,
+        catalog: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Option<TableFacts>, CoreError> {
+        let conn = self.connection()?;
+        let schema = self.wire_schema(schema);
+        SessionDriver::new(&conn, &self.session_id)
+            .meta_object_detail(catalog, &schema, table)
+            .await
+            .map(|detail| {
+                Some(TableFacts {
+                    index_count: detail.indexes,
+                    row_count: detail.row_count,
+                })
+            })
+            .map_err(|e| self.map_error(method::META_OBJECT_DETAIL, e))
     }
 
     async fn ping(&self) -> Result<(), CoreError> {

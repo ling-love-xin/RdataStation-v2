@@ -99,6 +99,6 @@ pub use standard_pool::{StandardPool, StandardPoolBuilder, StandardPoolConfig, S
 pub use traits::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, DbPool, DynDatabase, ForeignKeyRef,
     IndexDetail, MetadataBrowser, NodeDetail, NodeInfo, PoolStatus, SchemaObjectKind,
-    SchemaObjects, Transaction,
+    SchemaObjects, TableFacts, Transaction,
 };
 pub use utils::{build_connection_url, parse_driver_id, validate_driver_config};
