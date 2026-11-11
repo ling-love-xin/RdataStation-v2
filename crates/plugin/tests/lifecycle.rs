@@ -11,9 +11,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rds_plugin::events::{PluginEvent, get_event_manager};
-use rds_plugin::manager::{PluginDiff, PluginInfo, PluginManager};
 use rds_plugin::PluginService;
+use rds_plugin::events::{PluginEvent, get_event_manager};
+use rds_plugin::manager::{LoadStatus, PluginDiff, PluginInfo, PluginManager};
 
 /// 一次性临时安装目录（Drop 时清掉，不留 .rds/tmp 外的过程产物）
 struct TempDir(PathBuf);
@@ -535,9 +535,12 @@ async fn list_reports_running_plugins_as_active() {
 async fn disable_rejects_a_plugin_with_a_dependent() {
     // 守卫读的是 global.db 的反向依赖；测试里得先初始化全局库，
     // 否则 `get_global_db_manager()` 为 None，只会测到「没有库就不拦」。
-    engine::migration::initialize_global_system()
-        .await
-        .expect("初始化全局库");
+    // 全局库是进程级单例：同文件其他守卫用例可能已初始化，重复调用会报错。
+    if engine::migration::get_global_db_manager().is_none() {
+        engine::migration::initialize_global_system()
+            .await
+            .expect("初始化全局库");
+    }
     let dir = TempDir::new("disableguard");
     let manager = PluginManager::new(dir.0.clone());
     manager.init().await.unwrap();
@@ -645,6 +648,61 @@ version = "^1.0.0"
         .unwrap()
         .expect("child 已登记");
     assert!(!row.is_enabled, "被拒的启用不能把 is_enabled 改成 1");
+}
+
+/// 激活是所有运行时的共同入口：重试 / 热插拔绕过 `enable_plugin` 时也不能激活成功。
+#[tokio::test]
+async fn activation_rejects_a_plugin_with_a_missing_dependency() {
+    if engine::migration::get_global_db_manager().is_none() {
+        engine::migration::initialize_global_system()
+            .await
+            .expect("初始化全局库");
+    }
+    let dir = TempDir::new("activateguard");
+    let manager = PluginManager::new(dir.0.clone());
+    manager.init().await.unwrap();
+
+    write_plugin_with_contributes(
+        &dir.0,
+        "com.example.activateguard-child",
+        "v1",
+        r#"[[dependencies]]
+id = "com.example.activateguard-base"
+version = "^1.0.0"
+"#,
+    );
+    manager
+        .load_plugin_from_dir(&dir.0.join("com.example.activateguard-child"))
+        .await
+        .unwrap();
+
+    let err = manager
+        .activate_plugin("com.example.activateguard-child")
+        .await
+        .expect_err("依赖缺失时不能激活");
+    let message = format!("{err}");
+    assert!(message.contains("missing dependencies"), "{message}");
+    assert!(
+        message.contains("com.example.activateguard-base@^1.0.0"),
+        "{message}"
+    );
+    assert!(
+        matches!(
+            manager
+                .get_loaded_plugin("com.example.activateguard-child")
+                .unwrap()
+                .status,
+            LoadStatus::ActivationFailed(_)
+        ),
+        "激活被拒后状态必须是 ActivationFailed，不能停在 Loaded / Active"
+    );
+
+    // retry 走的是「加载 → 补登记 → 直接激活」，不经过 enable_plugin，同样要拦住。
+    let err = manager
+        .retry_load_plugin("com.example.activateguard-child")
+        .await
+        .expect_err("重试也不能绕过依赖检查");
+    assert!(format!("{err}").contains("com.example.activateguard-base"));
 }
 
 /// 磁盘卸载：目录删除 + 索引清理 + PluginUninstalled 事件。

@@ -97,6 +97,8 @@ RDS 当前没有市场或远程索引，保留该档会变成永远空空如也�
 声明的依赖缺失（`missing`）或已安装但未启用（`to_install`）时返回
 `PluginError::DependencyMissing`，一次列出所有未就绪的 `id@version`，且不改库。
 这样不会出现「管理页显示已启用、实际激活却缺底座」的假成功。
+`activate_plugin` 也复用同一道判定：重试、热插拔等不经 `enable_plugin` 的路径，
+依赖未就绪时状态落到 `ActivationFailed`，不会停在 `Loaded` / `Active`。
 
 **手动刷新（2026-11-10）**：页头与左栏的刷新按钮改为先 `resync_sidecar_driver_rows`
 再 `list_plugins`，不再只重读清单。否则登记状态只在启停 / 加载等生命周期动作里刷新，
@@ -264,13 +266,16 @@ cargo test  -p rds-workbench --test ui_contract
 2026-11-11 复测（停用依赖保护）：`cargo check -p rds-workbench --lib` 0 error，
 `cargo test -p rds-workbench --lib` 64 passed，`ui_contract` 10 passed；
 `cargo check -p rds-plugin` 0 error，`cargo test -p rds-plugin --test lifecycle`
-（`--test-threads=1`）18 passed（新增 `disable_rejects_a_plugin_with_a_dependent`：
+（`--test-threads=1`）19 passed（新增 `disable_rejects_a_plugin_with_a_dependent`：
 base + child 清单依赖后，manager 与 `PluginService` 两条停用入口都返回
 `DeactivationFailed` 并列出 child；`PluginService::uninstall_plugin` 同样返回
 `UninstallFailed`，被拒后 DB 仍保持 `is_enabled=1`、登记行也还在。新增
 `enable_rejects_a_plugin_with_a_missing_dependency`：只装 child、其声明的 base
 不存在时，manager 与 service 两条启用入口都返回 `DependencyMissing` 并列出
-`base@^1.0.0`，被拒后 `is_enabled` 仍为 0）。
+`base@^1.0.0`，被拒后 `is_enabled` 仍为 0）。新增
+`activation_rejects_a_plugin_with_a_missing_dependency`：`activate_plugin` 与
+`retry_load_plugin` 在依赖缺失时都返回 `DependencyMissing`，状态落
+`ActivationFailed` 而不是 `Loaded` / `Active`。
 
 ---
 
@@ -282,6 +287,6 @@ base + child 清单依赖后，manager 与 `PluginService` 两条停用入口都
 | 市场 / 远程索引 / 可更新档 | 未引入；筛选五档不含「可更新」 |
 | 面板徽标区分「DB 停用」与「未加载」 | 未做；根因是 `PluginInfo` 没有 `is_enabled` 字段，DB 权威启停状态不进会话快照 |
 | 停用被依赖插件 | 已完成（2026-11-11）：面板单插件 / 批量先按缓存拦截，`PluginManager::disable_plugin` 与 `PluginService::disable_plugin` 再实时 `check_dependents`，API 与非面板调用同样拒绝 |
-| 启用依赖未就绪的插件 | 已完成（2026-11-11）：manager / service 两条启用入口在写库前 `resolve_dependencies`，缺失或未启用的依赖一次列出并拒绝，不改 `is_enabled` |
+| 启用 / 激活依赖未就绪的插件 | 已完成（2026-11-11）：manager / service 两条启用入口在写库前 `resolve_dependencies`；`activate_plugin` 对重试、热插拔等旁路再兜一层，未就绪时不标 Active |
 | `schema_version` / `plugins.updated_at` 索引 | 未拍板 |
 | 左 Dock 三个薄壳（`DatabaseNavPanel` / `ScratchPanel` / `ResourcePanelTab`）拆分 | 已完成（2026-11-10）：`panels/left_tabs/` 目录（`mod` / `database_nav` / `scratch` / `resources` / `tests` + `plugin_tab/` 五文件子目录） |

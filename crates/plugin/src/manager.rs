@@ -532,12 +532,62 @@ impl PluginManager {
         Ok(info)
     }
 
+    /// 依赖未就绪（缺失 / 已装未启用）时拒绝继续，一次列出所有 `id@version`。
+    ///
+    /// 启用（写 `is_enabled` 前）与激活（真正拉起运行时前）共用这一道判定：
+    /// 前者防止 DB 先翻成启用造成假成功，后者兜住重试 / 热插拔等不经 `enable_plugin` 的路径。
+    async fn ensure_dependencies_ready(&self, manifest: &PluginManifest) -> Result<(), CoreError> {
+        let Some(db) = engine::migration::get_global_db_manager() else {
+            return Ok(());
+        };
+        let resolution = crate::dependency::DependencyManager::new(db)
+            .resolve_dependencies(manifest)
+            .await?;
+        let mut blocked: Vec<String> = resolution
+            .to_install
+            .iter()
+            .chain(resolution.missing.iter())
+            .map(|d| format!("{}@{}", d.id, d.version))
+            .collect();
+        blocked.sort();
+        blocked.dedup();
+        if blocked.is_empty() {
+            return Ok(());
+        }
+        Err(CoreError::plugin(PluginError::DependencyMissing {
+            plugin_id: manifest.plugin.id.clone(),
+            dep_code: String::new(),
+            dep_version: format!("以下依赖未安装或未启用，请先处理: {}", blocked.join(", ")),
+        }))
+    }
+
     /// 激活插件：
     ///
     /// - `Wasm`：读 wasm 字节 → 加载进 Extism 运行时 → 调 `activate` 钩子（幂等）；
     /// - `Sidecar`：部署到 supervisor 并把声明的驱动注册进 `DriverRegistry`（幂等覆盖）；
     /// - `Frontend`：只更新状态（扩展宿主进程是 P3/P4 的事，现在没有运行时）。
     pub async fn activate_plugin(&self, id: &str) -> Result<(), CoreError> {
+        // 激活是所有运行时的共同入口（启用、重试、热插拔都走到这里），
+        // 依赖未就绪时不能把状态标成 Active——否则列表看起来正常、实际缺底座。
+        let manifest = self
+            .loaded_plugins
+            .read()
+            .map_err(|_| lock_err("loaded_plugins"))?
+            .get(id)
+            .map(|p| p.manifest.clone());
+        if let Some(manifest) = manifest {
+            if let Err(e) = self.ensure_dependencies_ready(&manifest).await {
+                let mut map = self
+                    .loaded_plugins
+                    .write()
+                    .map_err(|_| lock_err("loaded_plugins"))?;
+                if let Some(p) = map.get_mut(id) {
+                    p.status = LoadStatus::ActivationFailed(e.to_string());
+                }
+                return Err(e);
+            }
+        }
+
         // 状态机：先置 Activating，结果回填 Active / ActivationFailed
         {
             let mut map = self
@@ -940,6 +990,7 @@ impl PluginManager {
                 "插件清单损坏，无法启用（请先修复或卸载）: {id}"
             ))));
         }
+        if let Some(db) = engine::migration::get_global_db_manager() {
             // 启用前确认声明依赖已安装且已启用：否则 DB 会先翻成启用，
             // 实际激活却缺底座（依赖方随后报错，用户只看到「已启用」）。
             let manifest = self
@@ -949,29 +1000,8 @@ impl PluginManager {
                 .get(id)
                 .map(|p| p.manifest.clone());
             if let Some(manifest) = manifest {
-                let resolution = crate::dependency::DependencyManager::new(db)
-                    .resolve_dependencies(&manifest)
-                    .await?;
-                let mut blocked: Vec<String> = resolution
-                    .to_install
-                    .iter()
-                    .chain(resolution.missing.iter())
-                    .map(|d| format!("{}@{}", d.id, d.version))
-                    .collect();
-                blocked.sort();
-                blocked.dedup();
-                if !blocked.is_empty() {
-                    return Err(CoreError::plugin(PluginError::DependencyMissing {
-                        plugin_id: id.to_string(),
-                        dep_code: String::new(),
-                        dep_version: format!(
-                            "以下依赖未安装或未启用，请先处理: {}",
-                            blocked.join(", ")
-                        ),
-                    }));
-                }
+                self.ensure_dependencies_ready(&manifest).await?;
             }
-        if let Some(db) = engine::migration::get_global_db_manager() {
             db.update_plugin_enabled_by_code(id, true).await?;
         }
         if self
