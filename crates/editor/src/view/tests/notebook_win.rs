@@ -577,7 +577,12 @@ fn analysis_cell_renders_multiple_output_blocks(cx: &mut TestAppContext) {
     });
     state.cells = vec![cell];
     shared.set_notebook_state(&id, state);
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    // 0.9 起手动 `draw` 只重放保留帧：窗口不脏时面板不重建（输出块登记不进观测表）。
+    // 先 `refresh` 把窗口置脏再出帧（等价于 `TestWindowExt::render_frame`）。
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
 
     // 四条输出块按序渲染（try_find：不在树里返回 None，隐藏/被裁也算 in-tree）
     for ix in 0..4 {

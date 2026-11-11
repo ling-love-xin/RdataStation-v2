@@ -66,7 +66,13 @@ fn harness(cx: &mut TestAppContext) -> &mut VisualTestContext {
 }
 
 fn draw(cx: &mut VisualTestContext) {
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    // 0.9 起 `draw` 只重放保留帧：窗口不脏时连对话框层都不重建（实测：状态换了行还是旧的）。
+    // 先 `refresh` 把窗口置脏，再出帧——等价于 `TestWindowExt::render_frame`，
+    // 也正是生产里「输入 / notify / 动效帧」把窗口弄脏后重绘的那条路。
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
 }
 
 fn archive_seed(conflict: Option<ArchiveConflict>) -> ArchiveDialogSeed {

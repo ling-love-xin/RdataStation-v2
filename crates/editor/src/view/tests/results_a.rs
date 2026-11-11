@@ -283,7 +283,12 @@ fn the_result_header_sorts_from_its_arrow(cx: &mut TestAppContext) {
         width: gpui_kit::px(900.),
         height: gpui_kit::px(700.),
     });
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    // 0.9 起手动 `draw` 只重放保留帧：窗口不脏时结果面板不重建（表头坐标登记不进来）。
+    // 先 `refresh` 把窗口置脏再出帧（等价于 `TestWindowExt::render_frame`）。
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
 
     // `debug_selector` 只是给用例找坐标（`.id(...)` 不登记坐标）
     for slot in ["editor-result-th-0", "editor-result-th-1"] {

@@ -1040,11 +1040,15 @@ mod header_interaction {
     }
 
     /// 推时钟 + 出帧直到组件内 spring 收敛（headless 下时钟不会自己走）。
+    ///
+    /// 每帧都先 `window.refresh()`：0.9 起手动 `draw` 只重放保留帧，窗口不脏时
+    /// 元素树（含观测快照）不重建，`find` 会读到上一帧的事实。
     fn settle_reveal(cx: &mut VisualTestContext) {
         for _ in 0..60 {
             cx.update(|window, cx| {
                 cx.background_executor()
                     .advance_clock(std::time::Duration::from_millis(16));
+                window.refresh();
                 window.draw(cx).clear(cx);
             });
         }
@@ -1065,6 +1069,9 @@ mod header_interaction {
             }
         });
         cx.update(|window, cx| window.draw(cx).clear(cx));
+        // 首次展开也走组件内 spring：headless 下首帧只是起点（高度从 0 起），
+        // 不推时钟就断言「正文可见」等于要求它一帧到位。
+        settle_reveal(cx);
 
         let row_id = ElementId::Name(SharedString::from("conn-sec-probe"));
         let body_id = ElementId::Name(SharedString::from("conn-sec-body-probe"));

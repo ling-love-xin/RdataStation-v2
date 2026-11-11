@@ -243,7 +243,13 @@ fn right_sidebar_alone_renders_draft_row(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     cx.update(|_, app| shared.open_right_panel(RightPanel::Mock, app));
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    // 单独渲染侧栏时没有宿主重绘桥（`host_redraw` 为 None），`notify_host` 是空操作；
+    // 0.9 起手动 `draw` 也只重放保留帧，所以这里自己把窗口置脏再出帧
+    //（等价于 `TestWindowExt::render_frame`），与生产里宿主 notify 后同一帧口径。
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
 
     let draft = snap(cx, "mock-draft-open");
     assert!(

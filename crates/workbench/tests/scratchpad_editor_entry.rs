@@ -83,8 +83,13 @@ fn an_open_request_lands_in_a_sql_editor_tab(cx: &mut TestAppContext) {
 
     // 草稿箱发起打开（生产里由 `ScratchpadHost::open_in_editor` 落到同一个槽）
     cx.update(|_, _| shared.request_open_in_editor(draft.clone()));
-    // 渲染一帧：宿主 render 消费请求（生产里由宿主重绘桥 defer 到下一帧）
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    // 渲染一帧：宿主 render 消费请求（生产里由宿主重绘桥 defer 到下一帧）。
+    // 0.9 起手动 `draw` 只重放保留帧，窗口不脏时宿主 render 不会重走——
+    // 先 `refresh` 置脏再出帧（等价于 `TestWindowExt::render_frame`）。
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
 
     assert!(
         cx.update(|_, _| shared.take_open_in_editor()).is_none(),

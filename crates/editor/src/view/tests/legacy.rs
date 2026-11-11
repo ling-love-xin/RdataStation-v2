@@ -36,7 +36,12 @@ fn opening_an_analysis_document_builds_a_cell_editor_per_cell(cx: &mut TestAppCo
     let (panel, cx) = open_panel(cx, &shared, &id);
     // 单元编辑器在事件路径建（生产=on_added_to；测试窗口没挂 Dock，手动走同一入口）
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_cell_editors(window, cx)));
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    // 0.9 起手动 `draw` 只重放保留帧：窗口不脏时面板不重建，新元素登记不进观测表。
+    // 先 `refresh` 把窗口置脏再出帧（等价于 `TestWindowExt::render_frame`）。
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
 
     let mut ids = cx.update(|_window, cx| {
         panel
