@@ -784,6 +784,18 @@ impl PluginManager {
     }
 
     /// 卸载插件：先停用，再从运行时 / 缓存 / 索引移除。
+    /// 该插件当前是否有运行时实例（在插件索引里）。
+    ///
+    /// service 层只应在有实例时调 `deactivate_plugin` / `unload_plugin`：只有登记行、
+    /// 没有实例时这些调用会返回 not_found，旧代码用 `let _ =` 吞掉，反而掩盖真正的
+    /// 停用失败（DB 已被改成停用，进程却还活着）。
+    pub fn is_loaded(&self, id: &str) -> bool {
+        self.plugin_index
+            .read()
+            .map(|index| index.contains_key(id))
+            .unwrap_or(false)
+    }
+
     pub async fn unload_plugin(&self, id: &str) -> Result<(), CoreError> {
         // 形态判定只在 wasm 轨需要（sidecar / frontend 的卸载统一走 deactivate）。
         // cfg(not(wasm)) 时不读 `kind`，避免 unused variable。
@@ -842,12 +854,7 @@ impl PluginManager {
         }
 
         // 2. 停用（sidecar 分支会先停进程 —— 进程停干净了，目录才删得掉）
-        if self
-            .plugin_index
-            .read()
-            .map_err(|_| lock_err("plugin_index"))?
-            .contains_key(id)
-        {
+        if self.is_loaded(id) {
             self.deactivate_plugin(id).await?;
         }
 
@@ -905,17 +912,14 @@ impl PluginManager {
                 }));
             }
         }
+        // 先停运行时，再写停用标记：停不下来时保持 enabled，避免
+        // DB 已显示停用、进程却还在跑。
+        if self.is_loaded(id) {
+            self.deactivate_plugin(id).await?;
+        }
         if let Some(db) = engine::migration::get_global_db_manager() {
             // 运行时身份是清单 id（= code），不是安装实例 uuid；按 id 写会 0 行命中
             db.update_plugin_enabled_by_code(id, false).await?;
-        }
-        if self
-            .plugin_index
-            .read()
-            .map_err(|_| lock_err("plugin_index"))?
-            .contains_key(id)
-        {
-            self.deactivate_plugin(id).await?;
         }
         crate::events::emit_plugin_disabled(id);
         Ok(())

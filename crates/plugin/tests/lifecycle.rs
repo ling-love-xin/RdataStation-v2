@@ -818,12 +818,14 @@ async fn uninstall_removes_dir_and_index_and_emits() {
     write_plugin(&dir.0, "com.example.bye", "v1");
     manager.scan_and_diff_plugins().await.unwrap();
     assert!(dir.0.join("com.example.bye").exists());
+    assert!(manager.is_loaded("com.example.bye"));
 
     // 订阅必须在动作前（broadcast 不重放订阅前的旧消息）
     let mut rx = get_event_manager().subscribe();
     manager.uninstall_plugin("com.example.bye").await.unwrap();
 
     assert!(!dir.0.join("com.example.bye").exists(), "插件目录要删掉");
+    assert!(!manager.is_loaded("com.example.bye"));
     assert!(manager.get_loaded_plugin("com.example.bye").is_none());
     let event = recv_matching(
         &mut rx,
@@ -833,6 +835,41 @@ async fn uninstall_removes_dir_and_index_and_emits() {
 
     // 卸载后重复卸载：目录已不存在也幂等成功（VS Code 卸载已卸载扩展同样无操作）
     manager.uninstall_plugin("com.example.bye").await.unwrap();
+}
+
+/// service 层只删登记、不删目录；运行时存在与否不能影响这条边界。
+#[tokio::test]
+async fn service_uninstall_removes_registration_but_keeps_directory() {
+    if engine::migration::get_global_db_manager().is_none() {
+        engine::migration::initialize_global_system()
+            .await
+            .expect("初始化全局库");
+    }
+    let dir = TempDir::new("serviceuninstall");
+    let manager = PluginManager::new(dir.0.clone());
+    manager.init().await.unwrap();
+    write_plugin(&dir.0, "com.example.serviceuninstall", "v1");
+    manager.scan_and_diff_plugins().await.unwrap();
+
+    let db = engine::migration::get_global_db_manager().expect("全局库已初始化");
+    let service = PluginService::new(db);
+    service
+        .uninstall_plugin("com.example.serviceuninstall")
+        .await
+        .unwrap();
+
+    assert!(
+        dir.0.join("com.example.serviceuninstall").exists(),
+        "service 卸载只删登记，不删磁盘目录"
+    );
+    assert!(
+        service
+            .get_plugin_by_code("com.example.serviceuninstall")
+            .await
+            .unwrap()
+            .is_none(),
+        "登记行应已删除"
+    );
 }
 
 /// 卸载 id 不合法（拼路径前的安全校验）必须被拒，不能碰磁盘。

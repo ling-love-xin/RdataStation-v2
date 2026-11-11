@@ -257,9 +257,12 @@ impl PluginService {
             }));
         }
 
-        // 先停用插件
+        // 先停用插件，再写库：停不下来时不要把 is_enabled 改成 0。
+        // 只有登记行、没有运行实例时 deactivate 会返回 not_found，故先问 is_loaded。
         if let Some(manager) = get_plugin_manager() {
-            let _ = manager.deactivate_plugin(plugin_code).await;
+            if manager.is_loaded(plugin_code) {
+                manager.deactivate_plugin(plugin_code).await?;
+            }
         }
 
         self.global_db
@@ -296,10 +299,12 @@ impl PluginService {
             }));
         }
 
-        // 先停用和卸载
+        // 先卸运行时，再删登记：卸载失败时不要把登记行删掉，留下“进程还在、
+        // 管理页却看不见”的孤儿插件。unload 内部已经会 deactivate。
         if let Some(manager) = get_plugin_manager() {
-            let _ = manager.deactivate_plugin(plugin_code).await;
-            let _ = manager.unload_plugin(plugin_code).await;
+            if manager.is_loaded(plugin_code) {
+                manager.unload_plugin(plugin_code).await?;
+            }
         }
 
         self.global_db.delete_plugin_by_code(plugin_code).await?;
