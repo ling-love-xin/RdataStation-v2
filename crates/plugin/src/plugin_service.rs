@@ -220,15 +220,17 @@ impl PluginService {
             }
         }
 
+        // 管理器已初始化时交给它统一处理：坏包（failed_loads）、依赖复核、写库、
+        // 激活与事件都在 manager 一处，避免 service 先写库、再把激活失败吞掉。
+        if let Some(manager) = get_plugin_manager() {
+            return manager.enable_plugin(plugin_code).await;
+        }
+
+        // 管理器未初始化（宿主尚未接入，见 README D7）：只写全局登记。
         self.global_db
             .update_plugin_enabled_by_code(plugin_code, true)
             .await?;
         emit_plugin_enabled(plugin_code);
-
-        // 尝试激活插件（管理器未初始化时跳过 —— 宿主尚未接入，见 README D7）
-        if let Some(manager) = get_plugin_manager() {
-            let _ = manager.activate_plugin(plugin_code).await;
-        }
 
         Ok(())
     }
