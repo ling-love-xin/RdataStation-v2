@@ -144,6 +144,12 @@ pub async fn load_properties(
     let catalog = ref_.catalog.clone().unwrap_or_default();
     let schema = ref_.schema.clone().unwrap_or_default();
 
+    // 门控输入是**驱动级**声明（不是族）：同一族的 sqlx / 原生实现差别照原样体现。
+    // 先算门控再取数：驱动明确给不出的维度**不发请求**（省一次注定失败的 RPC，
+    // 也避免把"通道不支持"写成日志噪声）。
+    let declared = metadata.declared_capabilities(&ref_.conn_id).await;
+    let gates = MetadataGates::resolve(db_type, declared.as_deref());
+
     // ── ① 通用取数（驱动无关，失败降级不影响主面板） ──────────────────────
     let mut columns: Vec<engine::driver::traits::ColumnDetail> = Vec::new();
     // 失败不再 `.unwrap_or_default()`：错误要进分区原因（置灰），不是变成「0 条」。
@@ -169,28 +175,34 @@ pub async fn load_properties(
                 facts = found;
             }
             if ref_.kind == PropertyKind::Table {
-                indexes = match metadata
-                    .list_indexes(&ref_.conn_id, &catalog, &schema, &ref_.name)
-                    .await
-                {
-                    Ok(v) => Fetched::ok(v),
-                    Err(e) => Fetched::failed(e),
-                };
-                constraints = match metadata
-                    .list_constraints(&ref_.conn_id, &catalog, &schema, &ref_.name)
+                if gates.index_detail.is_supported() {
+                    indexes = match metadata
+                        .list_indexes(&ref_.conn_id, &catalog, &schema, &ref_.name)
+                        .await
+                    {
+                        Ok(v) => Fetched::ok(v),
+                        Err(e) => Fetched::failed(e),
+                    };
+                }
+                if gates.constraint_detail.is_supported() {
+                    constraints = match metadata
+                        .list_constraints(&ref_.conn_id, &catalog, &schema, &ref_.name)
+                        .await
+                    {
+                        Ok(v) => Fetched::ok(v),
+                        Err(e) => Fetched::failed(e),
+                    };
+                }
+            }
+            if gates.ddl_source.is_supported() {
+                ddl_text = match metadata
+                    .get_table_ddl(&ref_.conn_id, &catalog, &schema, &ref_.name)
                     .await
                 {
                     Ok(v) => Fetched::ok(v),
                     Err(e) => Fetched::failed(e),
                 };
             }
-            ddl_text = match metadata
-                .get_table_ddl(&ref_.conn_id, &catalog, &schema, &ref_.name)
-                .await
-            {
-                Ok(v) => Fetched::ok(v),
-                Err(e) => Fetched::failed(e),
-            };
         }
         PropertyKind::Column => {
             let parent = ref_.parent.clone().unwrap_or_default();
@@ -428,9 +440,6 @@ pub async fn load_properties(
     // ── ③ 类别内容合并：categories 声明顺序 + 骨架取数内容 ────────────────
     let qualified = qualify(ref_);
     let caps = super::property_providers::caps_for(db_type);
-    // 门控输入是**驱动级**声明（不是族）：同一族的 sqlx / 原生实现差别照原样体现。
-    let declared = metadata.declared_capabilities(&ref_.conn_id).await;
-    let gates = MetadataGates::resolve(db_type, declared.as_deref());
     let mut sections: Vec<PropertySection> = Vec::new();
     for cat in categories {
         // 骨架不提供内容（产品未实现该类别 / 对象类型不适用）→ 保留 provider 原样。
