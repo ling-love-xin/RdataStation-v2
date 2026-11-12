@@ -12,11 +12,13 @@ Java / Python 解释器由宿主 `crates/plugin/src/runtime.rs` 三级查找；R
 tools/plugin-drivers/
 ├── oracle-jdbc/            # rds.driver.oracle：通用 JDBC 壳 + ojdbc11（+ h2 无证书验证；默认不安装）
 ├── postgres-py/            # rds.driver.postgres-py：Python DB-API 壳 + psycopg（用户环境）
-├── rust-core/              # crate rds-driver-sidecar：Rust 驱动共享协议内核（帧 / 错误码 / Page / meta）
+├── rust-core/              # crate rds-driver-sidecar：Rust 驱动共享协议内核（帧 / 错误码 / Page / meta / 多驱动路由）
 ├── oracle-rust/            # crate rds-driver-oracle：Oracle 原生驱动源码（oracle-rs）
 ├── mssql-rust/             # crate rds-driver-mssql：SQL Server 原生驱动源码（tiberius）
+├── sqlx-rust/              # crate rds-driver-sqlx：MySQL + PostgreSQL 的 sqlx 实现（一个进程两个 driver id）
 ├── oracle-rust-plugin/     # rds.driver.oracle-rust：Rust 驱动插件包（plugin.toml + bin/）
 ├── mssql-rust-plugin/      # rds.driver.mssql-rust：Rust 驱动插件包（plugin.toml + bin/）
+├── sqlx-rust-plugin/       # rds.driver.sqlx：Rust 驱动插件包（contributions: mysql / postgres）
 └── install.ps1             # 构建壳 / 下载驱动 jar / 构建 Rust 驱动 / 安装到 RDS_HOME/plugins/<manifest-id>
 ```
 
@@ -44,8 +46,9 @@ powershell -ExecutionPolicy Bypass -File tools\plugin-drivers\install.ps1 -WithJ
 
 ## Rust 原生驱动轨
 
-- 协议内核 `rust-core` 提供帧编解码、错误码、Page / Arrow、`Driver` trait 与 `serve` 主循环；
-  驱动 crate 只实现 `Driver`，不重复协议代码。
+- 协议内核 `rust-core` 提供帧编解码、错误码、Page / Arrow、`Driver` trait 与主循环；
+  驱动 crate 只实现 `Driver`，不重复协议代码。一个进程要供多个 driver id 时用
+  `serve_many(vec![as_sidecar(A), as_sidecar(B)], …)`（`mysql` / `postgres` 这么用）。
 - 单元测试（无需真实数据库）：
 
 ```powershell
@@ -53,6 +56,7 @@ $env:CARGO_TARGET_DIR = "D:\RdataStation\RDS\RdataStation-v2\.rds\target-gf"
 cargo test --manifest-path tools/plugin-drivers/rust-core/Cargo.toml
 cargo test --manifest-path tools/plugin-drivers/oracle-rust/Cargo.toml
 cargo test --manifest-path tools/plugin-drivers/mssql-rust/Cargo.toml
+cargo test --manifest-path tools/plugin-drivers/sqlx-rust/Cargo.toml
 ```
 
 - 插件包只放清单和二进制；每个包自己的 `build.ps1`（如

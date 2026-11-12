@@ -1,0 +1,56 @@
+[package]
+name = "rds-driver-sqlx"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "RdataStation MySQL / PostgreSQL 的 sqlx 驱动实现（插件侧，一个进程供两个 driver id）"
+
+[[bin]]
+name = "rds-sqlx-sidecar"
+path = "src/main.rs"
+
+[dependencies]
+# 协议内核（帧 / JSON-RPC / Arrow / 多驱动路由）。一个进程两个驱动靠它的 `serve_many`。
+rds-driver-sidecar = { path = "../rust-core" }
+# 与内核 sqlx 实现共用同一批元数据 SQL 常量（`rds-driver-sql` 零第三方依赖），
+# 不抄第二份：抄了必然漂移，见 crates/driver-sql/src/lib.rs 头部。
+rds-driver-sql = { path = "../../../crates/driver-sql" }
+# sqlx 的 feature 拆分与内核 Cargo.toml 保持一致（`chrono` / `uuid` / `json` 那几族
+# 走 `sqlx-postgres` / `sqlx-mysql` 直开）。这里没有 rusqlite，理论上可以写在 sqlx 行上，
+# 但保持同一份写法，避免「插件与内核解码表不一样」这种最难查的差异。
+sqlx = { version = "0.9.0", default-features = false, features = [
+    "mysql",
+    # MySQL 8 的 caching_sha2_password 在非 TLS 连接上要用服务端公钥加密口令；
+    # 缺了它报 `RSA auth backend disabled`（同内核注释）。
+    "mysql-rsa",
+    "postgres",
+    "runtime-tokio",
+    "tls-native-tls",
+    "bigdecimal",
+] }
+sqlx-postgres = { version = "0.9.0", default-features = false, features = [
+    "chrono",
+    "bigdecimal",
+    "uuid",
+    "json",
+] }
+sqlx-mysql = { version = "0.9.0", default-features = false, features = [
+    "chrono",
+    "bigdecimal",
+    "uuid",
+    "json",
+] }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "time"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
+# 插件是独立构建单元：不进仓库 workspace（同 mssql-rust / oracle-rust）。
+[workspace]

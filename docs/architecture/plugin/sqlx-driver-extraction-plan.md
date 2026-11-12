@@ -191,7 +191,7 @@ features = ["tree", "health_check", "transactions", "sql_autocomplete", "schema_
 | --- | --- | --- | --- |
 | D0 | 方案评审 + 三态/置灰底座落地 | — | 置灰方案 §7 全绿 |
 | D1 | 抽 `crates/driver-sql`（纯 SQL 常量 + wire 核心），内核 4 驱动改依赖 | D0 | 全仓 `cargo test-all` 不降 ✅ 已落地（§7.1） |
-| D2 | 新建 `tools/plugin-drivers/sqlx-rust`（sidecar 二进制）：mysql + postgres 两个驱动实现，复用 D1 | D1 | 真机查询 3000 行 + 取消 + 事务 |
+| D2 | 新建 `tools/plugin-drivers/sqlx-rust`（sidecar 二进制）：mysql + postgres 两个驱动实现，复用 D1 | D1 | 代码已落地（§7.2，含协议冒烟）；真机 3000 行 + 取消 + 事务待端点确认 |
 | D3 | 删内核 sqlx 实现 + `engine` 的 sqlx 依赖与 `pg_probe` + 两个 pool | D2 | `cargo tree -p <app>` 无 sqlx；老连接走插件可用 |
 | D4 | 迁移（`drivers` 两行处置）+ 连接 id 兼容 + 默认驱动 + 缺失驱动文案 | D3 | 老项目连接列表无孤儿行 |
 | D5 | `apply_lan_tls_default` 重新推导 + settings 文案修正 | D3 | TLS 真机两档 |
@@ -224,6 +224,64 @@ features = ["tree", "health_check", "transactions", "sql_autocomplete", "schema_
 **验证**：`cargo test -p rds-driver-sql` 8/8 通过；`cargo test -p rds-driver --lib` 97 passed / 22 ignored（忽略数与搬前一致，端点用例）；`cargo check --workspace`、`cargo test-all` 通过。
 
 **没做的事（如实记录）**：`sql_gen::create_table_ddl`（PG 的 DDL 合成）**没搬**——它吃 `TableInfo` 等驱动模型，且插件侧 DDL 合成属于 D2 的活；D1 只搬「字符串与纯函数」，避免为了搬而提前重构模型。
+
+### 7.2 D2 落地记录（代码已落地，真机验收待端点）
+
+**① 协议内核加多驱动支持**（`tools/plugin-drivers/rust-core`）
+
+一个插件进程供两个 driver id，需要把 `Driver` 的 `type Session` 擦掉：
+
+| 改动 | 内容 |
+| --- | --- |
+| `AnySession` | `Box<dyn Any + Send>`，多驱动进程按 driver id 各存各的会话类型 |
+| `SidecarDriver` | 对象安全版 `Driver`（`BoxFuture` 方法），`impl<D: Driver> SidecarDriver for D`，业务侧不用手写 |
+| `as_sidecar` / `serve_many` | `serve_many(Vec<Box<dyn SidecarDriver>>, …)`；`serve` 保留原签名，内部就是「一个驱动」的特例 —— 会话管理代码只有一份 |
+| 启动期校验 | 空驱动集、同 id 撞车都在起进程时拒绝（路由必须唯一） |
+| `SessionEntry.driver` | 会话记住自己属于第几个驱动，`routed()` 不靠猜 |
+
+**一个设计坑（已解）**：`send_result` / `send_error` 若挂成 `Server` 的 `&self` 方法，`&Server`
+会跨 await 存活 → 编译器要求 `Server: Sync` → 进而逼所有驱动的 `Session: Sync`（Oracle /
+MSSQL 的会话未必满足）。改成**自由函数**后 `Server` 只需 `Send`，`Session` 约束不变（仍只 `Send`）。
+
+**② 新插件 crate**：`tools/plugin-drivers/sqlx-rust`（包名 `rds-driver-sqlx`，自带空 `[workspace]`）
+
+| 文件 | 内容 |
+| --- | --- |
+| `src/main.rs` | `serve_many(vec![as_sidecar(MysqlDriver), as_sidecar(PostgresDriver)], stdin, stdout)` |
+| `src/config.rs` | 宿主 `DriverConnectionConfig` JSON → DSN：`url_override` 优先、`options` 补缺（同名不重复追加）、userinfo/path 按段转义、PG `ssl-mode` 归一为 sqlx 认的小写枚举；错误消息里的口令一律 `***` |
+| `src/values.rs` | 单元格→文本（沿用内核 `sqlx_cell_as_text!` 同一条试探链）、类型名→`Canonical`、`returns_rows` 入口分流、`map_error`（带 sqlstate） |
+| `src/mysql.rs` / `src/pg.rs` | 两个 `Driver` 实现：单连接会话、查询超时（默认 15s）/ 建连超时（默认 10s）、`BEGIN/COMMIT/ROLLBACK`、catalogs/schemas/objects/object_detail |
+
+**关键取舍（都写进了代码注释）**
+
+| 取舍 | 原因 |
+| --- | --- |
+| 时间列按 `Page` 能解析的写法输出（`%Y-%m-%dT%H:%M:%S%.6fZ` 等） | 内核那份进 Arrow 不经 `parse_timestamp_micros`，写 `+00` 也行；插件走 `Page`，写成 `+00` 会被判 NULL —— 那是另一种「时间列静默变 NULL」 |
+| `DECIMAL` / `NUMERIC` / `MONEY` → `Canonical::Text` | 协议白名单里没有 Decimal 物理类型；映射 `Float` 会把 `numeric(38,10)` 静默舍成 f64。文本保住每一位，等 R2 加 `DECIMAL` canonical 再改回数值 |
+| 解不出的单元格写 `<无法解码：类型>` 而不是 NULL | 「库里有值、界面空白」与真 NULL 不可区分是最难查的形态 |
+| `has_more` 显式置位（多取一行判断） | 截断不能让行凭空消失（否则看着像「查询只返回了 1000 行」） |
+| 能力面只声明协议真能做到的 | 索引/约束明细、DDL 原文、触发器、例程源码、序列在 sidecar 协议里**没有通道**（`rust-core` 直接回「不支持」）；声明了就是骗宿主，属性分区会「有内容但永远是 0」 |
+| `cancel = false` | 协议是「置标记 + 查完再看」，不能真中断在飞查询（R1 不扩协议） |
+
+**插件包**：`tools/plugin-drivers/sqlx-rust-plugin/`（`plugin.toml` id `rds.driver.sqlx`，两条
+`[[contributes.drivers]]` = `mysql` / `postgres`，驱动 id 沿用内核零迁移；`build.ps1` 产
+`bin/win-x64/agent.exe`，二进制不入库）。
+
+**验证**
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test`（`rust-core`） | 9/9 通过（含新增 `two_drivers_in_one_process_route_by_driver_id`：两个不同会话类型的驱动，`initialize` 报两个 id、`driver.describe` 各报各的、`query.execute` 各出各的数据、未知 id 回 `-32001`） |
+| `cargo check`（`mssql-rust` / `oracle-rust`） | 均 `Finished` —— SDK 改动**没有**打断既有插件 |
+| `cargo test`（`sqlx-rust`） | 8/8 通过（DSN 拼装 / 转义 / ssl-mode 归一 / 脱敏 / 超时默认 / 两套类型映射 / `returns_rows`） |
+| 协议冒烟（`.rds/tmp/sqlx_smoke.py`，不连库） | `initialize` 回 `["mysql","postgres"]`；两个 `session.open` 连不上时回 `-32009` 且 URL 已脱敏；未知 driver 回 `-32001`；`shutdown` 正常退出 |
+
+**没做 / 待做（如实记录）**
+
+1. **真机验收未做**：本机是否有可连的 MySQL / PG 端点还没确认（真机口径 = 真查询 3000 行 + 取消 + 事务）。
+2. 插件里的「单元格→文本」与内核 `sqlx_cell_as_text!` **临时重复**，D3 删内核 sqlx 实现时内核那份随之消失，不会长期并存。
+3. `get_table_ddl` / `list_indexes` / `list_constraints` 在协议与线格式里都没有位置（R1），对应属性分区置灰。
+4. 端口/加密默认值不自己发明：TLS 决策仍归宿主（`append_ssl_params` / `apply_lan_tls_default`，D5），插件只用拿到的 URL 与 `options`。
 
 ---
 
