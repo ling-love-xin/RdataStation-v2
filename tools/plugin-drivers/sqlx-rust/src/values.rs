@@ -280,6 +280,20 @@ mod tests {
         assert_eq!(pg_canonical("INET"), Canonical::Text);
     }
 
+    /// 精确十进制的**尾零口径**：`numeric(p,4)` 的 `1234.5600` 必须原样出 `1234.5600`，
+    /// 不能被抹成 `1234.56`（也不能舍成浮点）。
+    ///
+    /// 本条从内核 `engine/tests/type_decode_fidelity.rs` 迁来（D3 删掉内核 sqlx 实现后，
+    /// 那条 `sqlx_postgres_decodes_...` 用例随之删除；官方驱动走 `dscale` 另有一份断言）。
+    /// 这里钉的是「插件把 `BigDecimal` 转展示文本」这一步：sqlx-postgres 解出的
+    /// `BigDecimal` 保留了列的小数位，`to_string()` 必须原样带出。
+    #[test]
+    fn numeric_keeps_trailing_zeros_as_text() {
+        let v: sqlx::types::BigDecimal = "1234.5600".parse().expect("合法 numeric");
+        assert_eq!(v.to_string(), "1234.5600", "尾零是列精度的一部分，不能抹掉");
+        assert_eq!(pg_canonical("NUMERIC(10,4)"), Canonical::Text, "先按文本承载");
+    }
+
     #[test]
     fn returns_rows_skips_comments_and_leading_parens() {
         assert!(returns_rows("SELECT 1"));

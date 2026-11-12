@@ -200,7 +200,8 @@ features = ["tree", "health_check", "transactions", "sql_autocomplete", "schema_
 | D3 | 删内核 sqlx 实现 + `engine` 的 sqlx 依赖与 `pg_probe` + 两个 pool | D2 | `cargo tree -p <app>` 无 sqlx；老连接走插件可用 |
 | D4 | 迁移（`drivers` 两行处置）+ 连接 id 兼容 + 默认驱动 + 缺失驱动文案 | D3 | 老项目连接列表无孤儿行 ✅ 已落地（§7.4） |
 | D5 | `apply_lan_tls_default` 重新推导 + settings 文案修正 | D3 | TLS 真机两档 → 代码 + 单测落地（§7.5），真机档因磁盘满待补 |
-| D6 | 测试重指：`type_decode_fidelity`（sqlx 数值口径 `1234.5600` 迁插件）、`mysql_rsa_auth_probe`、`error_location` 6 驱动 → 4 驱动 | D3 | 全部用例有归属，无静默删除 |
+| D6 | 测试重指：`type_decode_fidelity`（sqlx 数值口径 `1234.5600` 迁插件）、`mysql_rsa_auth_probe`、`error_location` 6 驱动 → 4 驱动 | D3 | 全部用例有归属，无静默删除 ✅ 已落地（§7.6），并挖出 D7 缺陷 |
+| D7 | `mysql_native` 连接模型对齐（单连接直连，修「切 schema 不生效」） | D3/D6 | `editor_exec_real` T2c-1 在 MySQL 上转绿 |
 
 ### 7.1 D1 落地记录（已完成）
 
@@ -510,6 +511,51 @@ DELETE FROM drivers WHERE id IN ('mysql','postgres') AND driver_kind = 'native';
 `builder.ssl_opts(Some(SslOpts))`（「关 TLS」可能实际尝试 TLS，`native/mysql_native.rs:119-137`，
 单测 `tls_request_becomes_ssl_opts` 甚至断言「空请求也可构造」）—— 这一条与 `lan_disable_tls`
 无关（后者走 URL、且已把 `mysql_native` 排除），属**另一个独立缺陷**，未纳入本刀，需单独立项。
+
+### 7.6 D6 落地记录（测试重指 + 真机复验，顺带挖出一个真缺陷）
+
+**1) `official_driver_real` 两处**（D3 后它们还在按「内核有 sqlx」写）：
+
+* `declared_driver_properties_..._rejected` 的第 ③ 步拿同族 sqlx 驱动做「未知键被静默忽略」的
+  对照。现在先用 `driver_is_registered(id)` 查注册表：插件没装（内核只有 4 条官方驱动）→
+  `⏭️ 如实跳过`，不假装通过，也不把「内核本不该注册它」判成失败；装了 → 照旧跑对照。
+* `pg_server_tls_capability_diagnostic` 的判据原来是「sqlx `?sslmode=require`」，同样没了。
+  改成选判据：插件在 → `postgres`（无争议）；插件不在 → `postgres_native`，且在输出里
+  **标注结论有歧义**（失败可能是服务端没开 TLS，也可能是我方连接器）。判据驱动自己连不上时
+  记「未覆盖」而不是判红——诊断项不该变成新的失败源。
+
+**2) 尾零口径迁到插件**：内核 `type_decode_fidelity` 里那条
+`sqlx_postgres_decodes_numeric_temporal_json_and_uuid` 已随实现删除，它钉的
+`numeric(p,4)` → `1234.5600` 现在由插件单测
+`values::tests::numeric_keeps_trailing_zeros_as_text` 承接（`BigDecimal::to_string()` 必须原样
+带出列精度，不能抹成 `1234.56`、也不能折成浮点）。插件单测 10/10。
+
+**3) 真机复验结果（2026-11-13，`192.168.3.138`）**
+
+| 套件 | 结果 |
+| --- | --- |
+| `official_driver_real` | 5/5 ✅ —— `mysql_native` / `postgres_native` 驱动 id 当 scheme 可连、声明属性下发后可用、`require` 加密可用（MySQL）/ 不可用（PG 服务端未开 TLS，如实记录）、`verify-full` 如实失败、UI 旧初值被拒 |
+| `connection_type_driver` / `connection_template` / `connection_render_matrix` | 9 / 2 / 6 ✅ |
+| engine 5 套（`error_location` / `read_only_flag` / `zero_row_columns` / `result_rows` / `type_decode_fidelity`） | 4 / 2 / 2 / 2 / 2 ✅（SQLite / DuckDB 未设路径，按设计跳过） |
+| `editor_exec_real` | ❌ **1 红**，见下 |
+
+**4) D6 挖出的真缺陷（→ D7）**：`editor_exec_real` 的 T2c-1「切 schema 真影响执行」在
+`mysql_native` 上**连续 3 次稳定失败**：切到库 `rds_schema_probe_<pid>` 后不写限定名的
+`SELECT count(*) FROM rds_inside_<pid>` 报
+`Table 'mysql.rds_inside_<pid>' doesn't exist` —— `USE` 没生效。
+
+根因（代码实证）：D3 删掉的 sqlx MySQL 驱动是**单连接直连**模型（
+`conn: Arc<Mutex<Option<...>>>`，其注释明写「池化设计在 PG 真机上反复撞空闲连接被网络层静默
+丢弃 / 验证挂 TCP 半开」，用户已拍板摒弃池）；而 `mysql_native` 用 `mysql_async::Pool`
+（max 10 / min 0），`db.query("USE ...")` 只落在池里某一条连接上，紧随其后的用户语句从池里
+取到的可能是另一条 —— 会话级 `USE` 本来就不跟着语句走。PG 侧没事，因为 `postgres_native`
+是 `Arc<Mutex<Client>>` 单连接。
+
+这不是测试写错，是**行为回退**（DBeaver 的 Main 连接也是单连接模型）：单独立一刀 D7 修，
+不在 D6 里混改驱动。
+
+**D6 没做的**：`mysql_rsa_auth_probe`（D3 已删文件）的主题由插件 `sqlx` 的 `mysql-rsa`
+feature（`sqlx-rust/Cargo.toml:25`）+ D2 真机 12 项 × 2 承接，没有在插件侧新写一个等价探针。
 
 ---
 
