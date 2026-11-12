@@ -174,8 +174,35 @@ pub enum ConflictContext {
     },
 }
 
+/// 作业通道的包装：投递失败必须**同时**归还 `pending` 与给出失败回执。
+///
+/// 原来各处是 `pending.fetch_add` + `let _ = tx.send(..)`：worker 一旦退出，send 静默失败、
+/// pending 永不归零，面板会一直转圈且日志里什么都没有。包一层后不必改 20 处投递点，
+/// 失败语义集中在这里收口。
+pub(crate) struct JobSender {
+    inner: Sender<Job>,
+}
+
+impl JobSender {
+    fn send(&self, job: Job) -> Result<(), mpsc::SendError<Job>> {
+        let result = self.inner.send(job);
+        if result.is_err() {
+            // `get_or_init` 期间不会投递，所以此刻 JOBS 必然已就绪。
+            if let Some(jobs) = JOBS.get() {
+                jobs.pending.fetch_sub(1, Ordering::SeqCst);
+                *lock(&jobs.op_result) = Some(OpOutcome::Failed {
+                    action: "资源作业",
+                    reason: "后台作业线程已退出，请重启应用后重试".to_string(),
+                });
+            }
+            tracing::error!("资源作业通道已断开：worker 退出或从未启动");
+        }
+        result
+    }
+}
+
 pub(crate) struct Jobs {
-    pub(crate) tx: Sender<Job>,
+    pub(crate) tx: JobSender,
     /// 排队 + 执行中的作业数（面板据它决定是否继续轮询）。
     pub(crate) pending: AtomicUsize,
     /// 快照槽：**只保留最新一份**——面板呈现的是"当前状态"，旧快照没有回放价值。
@@ -199,12 +226,15 @@ static JOBS: OnceLock<Jobs> = OnceLock::new();
 pub(crate) fn jobs() -> &'static Jobs {
     JOBS.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<Job>();
-        std::thread::Builder::new()
+        if let Err(error) = std::thread::Builder::new()
             .name("rds-resource-jobs".to_string())
             .spawn(move || worker(rx))
-            .expect("failed to spawn resource jobs worker");
+        {
+            // 不 panic：spawn 失败时 rx 随闭包销毁，后续 send 由 JobSender 统一回执失败。
+            tracing::error!(error = %error, "资源作业线程启动失败");
+        }
         Jobs {
-            tx,
+            tx: JobSender { inner: tx },
             pending: AtomicUsize::new(0),
             result: Mutex::new(None),
             op_result: Mutex::new(None),
@@ -224,10 +254,35 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 fn worker(rx: mpsc::Receiver<Job>) {
     // tokio 运行时随工作线程存活；项目库打开与 store 调用都要它。
     let Ok(rt) = tokio::runtime::Runtime::new() else {
+        tracing::error!("资源作业线程无法创建 tokio 运行时，通道随即关闭");
         return;
     };
     while let Ok(job) = rx.recv() {
-        match job {
+        // 单个作业 panic 不能带走整个 worker：否则 rx 被丢弃，此后所有动作静默失效。
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            handle_job(&rt, job);
+        }));
+        if let Err(payload) = outcome {
+            let reason = if let Some(text) = payload.downcast_ref::<&str>() {
+                (*text).to_string()
+            } else if let Some(text) = payload.downcast_ref::<String>() {
+                text.clone()
+            } else {
+                "未知 panic".to_string()
+            };
+            tracing::error!(reason = %reason, "资源作业处理时 panic（worker 继续存活）");
+            *lock(&jobs().op_result) = Some(OpOutcome::Failed {
+                action: "资源作业",
+                reason: format!("后台处理异常：{reason}"),
+            });
+        }
+        jobs().pending.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// 单个作业的分发（被 `worker` 的 `catch_unwind` 包住）。
+fn handle_job(rt: &tokio::runtime::Runtime, job: Job) {
+    match job {
             Job::Refresh(job) => {
                 let result = rt.block_on(run_refresh(&job));
                 *lock(&jobs().result) = Some(result);
@@ -346,8 +401,6 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 refresh_after_op(&rt, job.project_root, false);
             }
         }
-        jobs().pending.fetch_sub(1, Ordering::SeqCst);
-    }
 }
 
 #[cfg(test)]
