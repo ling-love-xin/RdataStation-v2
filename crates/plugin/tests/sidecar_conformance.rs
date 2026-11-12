@@ -27,6 +27,8 @@
 //! | `RDS_SIDECAR_EXPECT_ROWS` | `3000` | 上面那条查询应当回来的行数 |
 //! | `RDS_SIDECAR_SQL_SLOW` | `select hold_ms=5000` | 慢查询（**必须能跑 ≥ 5 秒**） |
 //! | `RDS_SIDECAR_SLOW_SECONDS` | `5` | 上面那条查询的时长（取消要在它结束之前生效） |
+//! | `RDS_SIDECAR_CATALOG` | 第一个 catalog | 导航面要验的 catalog（可选覆盖） |
+//! | `RDS_SIDECAR_SCHEMA` | 第一个 schema | 导航面要验的 schema（**指定了就必须验到对象详情**） |
 //!
 //! # 检查项（也就是"你的 sidecar 要满足什么"）
 //!
@@ -41,7 +43,10 @@
 //!    这条不满足的话，宿主崩溃时会在用户机器上留下后台进程。
 //! 6. **导航面**（P2）：`meta.catalogs` / `meta.schemas` / `meta.objects` / `meta.object_detail` /
 //!    `meta.routine_source` 要答得出来，而且形状对（第一层不能空、表要说得出列与原始类型、
-//!    例程源码是字符串或 `null`）。库是空的也算过 —— 那时只验「方法答得出来」，并打印说明。
+//!    例程源码是字符串或 `null`）。库是空的也算过 —— 那时只验「方法答得出来」，并打印说明；
+//!    但用 `RDS_SIDECAR_SCHEMA` 指定了 schema 时，空 schema 直接判失败（否则一条从未跑过
+//!    的 `meta.object_detail` 路径会借「空库合法」的名义混进全绿报告，Oracle 的 `DEVUSER`
+//!    就是这么盖过去的：0 个对象）。
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -84,6 +89,24 @@ fn expect_rows() -> usize {
     env_or("RDS_SIDECAR_EXPECT_ROWS", "3000")
         .parse()
         .expect("RDS_SIDECAR_EXPECT_ROWS 应当是数字")
+}
+
+/// 可选：显式指定导航面要验的 catalog / schema。
+///
+/// 不指定时沿用「第一个 catalog + 第一个 schema」的老口径。那个口径有个盲区：
+/// 当第一个 schema 恰好是空的（Oracle 的 `DEVUSER` 就是 0 个对象），
+/// `meta.object_detail` 与例程源码会被静默跳过，于是「导航面 6/6 全绿」其实
+/// 一次详情都没真跑过。指定了就当作承诺——见下面空对象的处理。
+fn override_catalog() -> Option<String> {
+    std::env::var("RDS_SIDECAR_CATALOG")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+fn override_schema() -> Option<String> {
+    std::env::var("RDS_SIDECAR_SCHEMA")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
 }
 
 fn slow_seconds() -> u64 {
@@ -327,11 +350,21 @@ async fn answers_the_metadata_methods() {
         !catalogs.is_empty(),
         "导航第一层不能是空的：拿不出 catalog 概念的库，请把 schema 名当 catalog 回"
     );
-    let catalog = catalogs[0].clone();
+    let catalog = match override_catalog() {
+        Some(name) => {
+            println!("  指定 catalog：{name}（列表里有：{catalogs:?}）");
+            name
+        }
+        None => catalogs[0].clone(),
+    };
     println!("  catalog：{catalogs:?}");
 
     // ② schema 层：声明了就给得出来；没声明就是单层库，宿主会把 catalog 当 schema 传
-    let schema = if descriptor.supports("schemas") {
+    let schema_overridden = override_schema();
+    let schema = if let Some(name) = schema_overridden.clone() {
+        println!("  指定 schema：{name}（不取 schema[0]）");
+        name
+    } else if descriptor.supports("schemas") {
         let schemas = driver.meta_schemas(&catalog).await.expect("meta.schemas");
         assert!(
             !schemas.is_empty(),
@@ -368,6 +401,18 @@ async fn answers_the_metadata_methods() {
     }
 
     let Some(array) = objects.iter().find(|o| o.kind.is_table_like()) else {
+        if let Some(name) = schema_overridden {
+            // 指定了 schema 就是承诺「这个 schema 下应当验得到详情」：空着等于没验到，
+            // 不能让一份全绿的报告替一个从未跑过的路径背书。
+            let mut supervisor = supervisor;
+            supervisor
+                .shutdown_all(Instant::now(), Duration::from_secs(10))
+                .await;
+            panic!(
+                "RDS_SIDECAR_SCHEMA={name} 指定了 schema，但它下面没有表 / 视图——\
+                 meta.object_detail 这条路没验到，不能算过"
+            );
+        }
         println!("  这个 schema 里没有表 / 视图：详情与源码两项跳过（空库是合法状态）");
         let mut supervisor = supervisor;
         supervisor

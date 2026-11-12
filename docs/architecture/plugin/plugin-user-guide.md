@@ -413,6 +413,22 @@ cargo test -p rds-plugin --test sidecar_conformance -- --nocapture
 加上 `--nocapture` 会把你这边实际答出来的 catalog / schema / 对象数 / 首列的列名与类型打出来，
 照着看就知道卡在哪一环。库是空的也算过 —— 那时只验「方法答得出来」并打印说明。
 
+但「第一个 schema 恰好是空的」会让 `meta.object_detail` 与例程源码被静默跳过，
+于是全绿其实没验到详情（Oracle 的 `DEVUSER` 就是这样，0 个对象）。要真验对象详情，
+用 `RDS_SIDECAR_SCHEMA` 指定一个确实有对象的 schema（必要时配 `RDS_SIDECAR_CATALOG`）：
+
+```sh
+RDS_SIDECAR_SCHEMA=SYS RDS_SIDECAR_CATALOG=XEPDB1 \
+RDS_SIDECAR_BIN=./rds-oracle-sidecar RDS_SIDECAR_DRIVER=oracle \
+RDS_SIDECAR_PARAMS='{"host":"…","port":1521,"database":"XEPDB1","username":"…","password":"…"}' \
+RDS_SIDECAR_SQL_BIG='SELECT LEVEL AS id, 1 AS nm FROM dual CONNECT BY LEVEL <= 3000' \
+RDS_SIDECAR_SQL_SLOW='SELECT 1 FROM dual' \
+cargo test -p rds-plugin --test sidecar_conformance -- --nocapture
+```
+
+**指定了就当作承诺**：被 `RDS_SIDECAR_SCHEMA` 选中的 schema 拿不出表 / 视图时，第 6 条直接判失败
+（而不是像默认口径那样跳过），免得一条从未跑过的详情路径混进全绿报告。
+
 **导航要用的 `meta.*`（P2）**：五件 —— `meta.catalogs` / `meta.schemas` / `meta.objects` /
 `meta.object_detail` / `meta.routine_source`。少一件，导航树或属性面板就少一块。三条最容易踩的：
 

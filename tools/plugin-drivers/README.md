@@ -79,8 +79,10 @@ cargo test --manifest-path tools/plugin-drivers/mssql-rust/Cargo.toml
     `oracle_plugin_serves_a_real_query` 通过。**注意它的导航面是「空库合法通过」**：
     conformance 取 `schema[0] = DEVUSER`，而 `DEVUSER` 下 0 个对象，所以
     `meta.object_detail` / 例程源码两项被跳过——这只证明方法面答得出来，**不等于**
-    对象详情路径被真机覆盖。补验办法：直接查有对象的 schema（`SYS` 下有 100 个对象），
-    2026-11-12 用只读探测跑过 4 个（2–10 列、行数估计 0/16/3、exit 0、随后的 `ping` 正常）。
+    对象详情路径被真机覆盖。补验办法：`RDS_SIDECAR_SCHEMA=SYS RDS_SIDECAR_CATALOG=XEPDB1`
+    再跑一次自检（`SYS` 下 100 个对象），2026-11-12 实测 6/6 且详情真验到
+    （首对象 10 列、索引 0、行数 0）。自检已加硬约束：**指定了 schema 却拿不出表 / 视图
+    就判失败**，不再静默跳过（反向验证过：`RDS_SIDECAR_SCHEMA=DEVUSER` → 5 passed / 1 failed）。
   - **SQL Server 已验收（2026-11-12）**：`192.168.3.138:1433` 是 SQL Server 2025 RTM
     （`17.0.1000.7`，Standard Developer Edition）的**默认实例**（`ling` 是 `@@SERVERNAME`，
     不是命名实例），SQL Server 验证 + 用户 `sa`；`mssql_plugin_serves_a_real_query` 走真实
