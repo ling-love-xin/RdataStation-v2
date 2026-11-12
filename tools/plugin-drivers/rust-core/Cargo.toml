@@ -12,6 +12,7 @@ description = "RDS Rust 原生数据库驱动 sidecar 共享协议内核（stdio
 arrow = "58.4.0"
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

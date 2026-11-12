@@ -12,6 +12,11 @@ pub enum ErrorCode {
     ProtocolVersionMismatch,
     ResourceLimit,
     ConnectFailed,
+    /// JSON-RPC 标准「内部错误」（-32603，不属于驱动号段）：驱动自己把某次提取
+    /// 踩炸了（典型是 `unwrap` panic），已由主循环的 panic 隔离接住。
+    /// 语义上要跟「SQL 写错」「连不上库」分开：这是驱动的 bug，重试或换对象
+    /// 可能就过去了，换驱动版本才是根治。
+    Internal,
 }
 
 impl ErrorCode {
@@ -26,6 +31,7 @@ impl ErrorCode {
             Self::ProtocolVersionMismatch => -32007,
             Self::ResourceLimit => -32008,
             Self::ConnectFailed => -32009,
+            Self::Internal => -32603,
         }
     }
 
@@ -40,6 +46,7 @@ impl ErrorCode {
             Self::ProtocolVersionMismatch => "protocol_version_mismatch",
             Self::ResourceLimit => "resource_limit",
             Self::ConnectFailed => "connect_failed",
+            Self::Internal => "internal",
         }
     }
 }
@@ -79,6 +86,11 @@ impl DriverError {
 
     pub fn unsupported(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::CapabilityDenied, message)
+    }
+
+    /// 驱动内部错误（-32603）：只该由主循环的 panic 隔离产出。
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Internal, message)
     }
 
     pub fn with_sqlstate(mut self, sqlstate: impl Into<String>) -> Self {

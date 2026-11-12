@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
+use std::panic::AssertUnwindSafe;
 
 use async_trait::async_trait;
+use futures_util::FutureExt as _;
 use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -119,7 +121,30 @@ where
         let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
         let has_id = !id.is_null();
 
-        let outcome = server.dispatch(&method, &params, &mut writer).await;
+        // panic 隔离：驱动里任何一处 `unwrap` 踩炸，只把这个请求变成
+        // -32603 内部错误，进程继续服务下一条请求。
+        //
+        // 不隔离的代价是实测过的：2026-11-12 MSSQL 真机 `meta.object_detail`
+        // 里 `sys.columns.precision` 是 tinyint 却按 `i16` 取，tiberius 的
+        // `Row::get` 内部 unwrap panic，进程 exit 101 —— 宿主只看到
+        // 「帧 I/O 失败：early eof」，同一实例上所有会话一起断，且没法定位
+        // 是哪个对象、哪一列炸的。
+        //
+        // `AssertUnwindSafe` 是必须的：`dispatch` 借了 `&mut self` 与
+        // `&mut writer`，跨 panic 边界时编译器无法证明安全。panic 之后
+        // 会话表可能停在半更新状态，这是「宁可让一个会话看病、也不让整条
+        // 进程死」的取舍；真出问题时 stderr 仍留有默认 panic hook 打印的
+        // 位置与原值，可用于修根因。
+        let outcome = AssertUnwindSafe(server.dispatch(&method, &params, &mut writer))
+            .catch_unwind()
+            .await;
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(panic) => Err(DriverError::internal(format!(
+                "{method} 触发驱动内部 panic（已隔离，进程继续）：{}",
+                panic_message(panic.as_ref())
+            ))),
+        };
         match outcome {
             Ok(Dispatch::Result(result)) => {
                 if has_id {
@@ -164,6 +189,17 @@ where
             }
         }
     }
+}
+
+/// 把 `catch_unwind` 接住的载荷翻成一句可进日志 / 错误消息的话。
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        return (*text).to_string();
+    }
+    if let Some(text) = payload.downcast_ref::<String>() {
+        return text.clone();
+    }
+    "panic 载荷不是字符串".to_string()
 }
 
 enum Dispatch {
@@ -542,6 +578,11 @@ mod tests {
             _schema: &str,
             name: &str,
         ) -> Result<MetaObjectDetail, DriverError> {
+            // 测试用：模拟「某列类型按错 Rust 类型取 → unwrap 踩炸」。
+            // 真机上的同款事故见 `a_panicking_request_is_isolated_*` 的注释。
+            if name == "PANIC" {
+                panic!("测试用 panic：对象名是 PANIC");
+            }
             Ok(MetaObjectDetail::new(
                 name,
                 "table",
@@ -695,6 +736,69 @@ mod tests {
             schema.field(2).data_type(),
             &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
         );
+
+        drop(writer);
+        drop(reader);
+        server.await.unwrap().unwrap();
+    }
+
+    /// 一个请求把驱动踩炸，只该让这个请求失败，不该把进程带走。
+    ///
+    /// 这条钉的是真机上发生过的事故：MSSQL 的 `meta.object_detail` 把
+    /// `sys.columns.precision`（tinyint）按 `i16` 取，tiberius 内部 unwrap
+    /// panic，进程 exit 101；宿主只看到 `帧 I/O 失败：early eof`，同一实例
+    /// 上所有会话一起断，而且完全不知道是哪个对象、哪一列炸的。
+    #[tokio::test]
+    async fn a_panicking_request_is_isolated_and_the_process_keeps_serving() {
+        let (server_io, client_io) = tokio::io::duplex(1024 * 1024);
+        let (server_rx, server_tx) = tokio::io::split(server_io);
+        let (client_rx, client_tx) = tokio::io::split(client_io);
+        let server = tokio::spawn(async move { serve(FakeDriver, server_rx, server_tx).await });
+        let mut writer = FrameWriter::new(client_tx);
+        let mut reader = FrameReader::new(client_rx);
+
+        request_json(
+            &mut writer,
+            1,
+            "session.open",
+            json!({"session_id": "s1", "driver_id": "fake", "params": {"rows": 3}}),
+        )
+        .await;
+        let opened = read_json(&mut reader).await;
+        assert!(opened.get("result").is_some(), "开会话应成功：{opened}");
+
+        // 这一条会让驱动 panic。
+        request_json(
+            &mut writer,
+            2,
+            "meta.object_detail",
+            json!({"session_id": "s1", "schema": "public", "object": "PANIC"}),
+        )
+        .await;
+        let panicked = read_json(&mut reader).await;
+        assert_eq!(panicked["id"], 2);
+        assert_eq!(panicked["error"]["code"], -32603, "panic 应转成内部错误：{panicked}");
+        let message = panicked["error"]["message"].as_str().unwrap_or_default();
+        assert!(message.contains("meta.object_detail"), "错误消息要点名方法：{message}");
+        assert!(message.contains("panic"), "错误消息要说清是 panic：{message}");
+
+        // 进程还活着，同一条连接上的下一条请求照常。
+        request_json(&mut writer, 3, "ping", json!({})).await;
+        let pong = read_json(&mut reader).await;
+        assert_eq!(pong["id"], 3);
+        assert_eq!(pong["result"]["pong"], true, "panic 之后进程应继续服务：{pong}");
+
+        // 会话也仍然可用：换个正常对象就能查到详情。
+        request_json(
+            &mut writer,
+            4,
+            "meta.object_detail",
+            json!({"session_id": "s1", "schema": "public", "object": "t1"}),
+        )
+        .await;
+        let detail = read_json(&mut reader).await;
+        assert_eq!(detail["id"], 4);
+        assert_eq!(detail["result"]["object"]["name"], "t1", "会话应仍可用：{detail}");
 
         drop(writer);
         drop(reader);

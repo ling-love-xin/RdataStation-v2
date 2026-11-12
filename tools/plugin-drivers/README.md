@@ -62,13 +62,25 @@ cargo test --manifest-path tools/plugin-drivers/mssql-rust/Cargo.toml
   `.rds/target-gf/debug/plugins/<id>/bin/...`），否则跑的还是旧二进制。
 - 能力边界：两个驱动都声明 `cancel = false`（无法中断在飞查询），
   `tx.*` 走真实语句。
+- 协议内核的 panic 隔离（2026-11-12）：`rust-core` 的 `serve` 用 `catch_unwind`
+  把**单个请求**的 panic 转成 `-32603 internal`（`ErrorCode::Internal`），进程
+  继续服务下一条请求。不隔离的代价是实测过的：MSSQL 导航面一次 `unwrap` 踩炸 →
+  sidecar exit 101 → 宿主只看到 `帧 I/O 失败：early eof` → 同一实例上所有会话
+  一起断，且无从知道是哪个对象炸的。宿主侧 `RpcErrorCode` 不含 -32603，会走
+  `RouterEvent::UnknownError`（`raw_code` + message 原样透传，不猜语义）。
+  回归证据：`rust-core` 的
+  `a_panicking_request_is_isolated_and_the_process_keeps_serving`。
 - 真机口径（2026-11-12）：
   - **Oracle 已验收**：`sidecar_conformance` 对 `192.168.3.138:1521/XEPDB1` 6/6（含 3000 行分页）；
     `crates/plugin/tests/rust_driver_wiring.rs` 另有「真实安装目录 → `PluginManager` 激活 →
     supervisor 开会话 → 真库查询」用例（设置 `RDS_TEST_ORACLE_URL` 时执行），并在同一用例里
     用新的 `PluginRuntimeLoop::tick_once` 复现宿主启动首拍，验证「重启后自动加载 + 激活、
     `drivers.enabled` 回到 1」——即下拉能看到驱动的完整启动链路。2026-11-12 复跑
-    `oracle_plugin_serves_a_real_query` 通过。
+    `oracle_plugin_serves_a_real_query` 通过。**注意它的导航面是「空库合法通过」**：
+    conformance 取 `schema[0] = DEVUSER`，而 `DEVUSER` 下 0 个对象，所以
+    `meta.object_detail` / 例程源码两项被跳过——这只证明方法面答得出来，**不等于**
+    对象详情路径被真机覆盖。补验办法：直接查有对象的 schema（`SYS` 下有 100 个对象），
+    2026-11-12 用只读探测跑过 4 个（2–10 列、行数估计 0/16/3、exit 0、随后的 `ping` 正常）。
   - **SQL Server 已验收（2026-11-12）**：`192.168.3.138:1433` 是 SQL Server 2025 RTM
     （`17.0.1000.7`，Standard Developer Edition）的**默认实例**（`ling` 是 `@@SERVERNAME`，
     不是命名实例），SQL Server 验证 + 用户 `sa`；`mssql_plugin_serves_a_real_query` 走真实
