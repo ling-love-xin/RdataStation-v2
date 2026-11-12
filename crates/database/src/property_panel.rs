@@ -11,6 +11,7 @@
 
 use crate::metadata_service::MetadataService;
 use crate::model::{NavSource, PropertyRef};
+use crate::property_providers::gates::MetadataGates;
 use crate::property_providers::global_registry;
 use crate::table_data::{self, TableDataRequest};
 use engine::driver::traits::SchemaObjectKind;
@@ -19,6 +20,45 @@ use property::{
     PropertyTable, PropertyTargetRef, ProviderInput, ProviderStats, TableDataPage,
 };
 use shared::error::CoreError;
+
+/// 骨架一次取数的结果：值 + 失败原因。
+///
+/// 「值 + 错误」两者都要留着：只留值会把 `Err(NotSupported)` 吞成 0 条（旧行为），
+/// 只留错误则拿不到"支持但为空"这个合法状态。
+#[derive(Debug, Default)]
+struct Fetched<T> {
+    value: T,
+    error: Option<String>,
+}
+
+impl<T> Fetched<T> {
+    fn ok(value: T) -> Self {
+        Self {
+            value,
+            error: None,
+        }
+    }
+}
+
+impl<T: Default> Fetched<T> {
+    fn failed(e: impl std::fmt::Display) -> Self {
+        Self {
+            value: T::default(),
+            error: Some(e.to_string()),
+        }
+    }
+}
+
+/// 骨架分区的产出：要显示的标签（带计数）+ 内容或置灰。
+enum SectionFill {
+    Content(PropertyTable),
+    Unavailable(String),
+}
+
+struct SectionOutcome {
+    label: String,
+    fill: SectionFill,
+}
 
 /// 只读文本行（DBeaver 只读属性；id 取显示名）。
 fn row(label: &str, value: impl Into<String>) -> PropertyRow {
@@ -106,11 +146,12 @@ pub async fn load_properties(
 
     // ── ① 通用取数（驱动无关，失败降级不影响主面板） ──────────────────────
     let mut columns: Vec<engine::driver::traits::ColumnDetail> = Vec::new();
-    let mut indexes: Vec<engine::driver::traits::IndexDetail> = Vec::new();
-    let mut constraints: Vec<engine::driver::traits::ConstraintDetail> = Vec::new();
+    // 失败不再 `.unwrap_or_default()`：错误要进分区原因（置灰），不是变成「0 条」。
+    let mut indexes: Fetched<Vec<engine::driver::traits::IndexDetail>> = Fetched::default();
+    let mut constraints: Fetched<Vec<engine::driver::traits::ConstraintDetail>> = Fetched::default();
     let mut column_detail: Option<engine::driver::traits::ColumnDetail> = None;
-    let mut routine_source: Option<String> = None;
-    let mut ddl_text: Option<String> = None;
+    let mut routine_source: Fetched<Option<String>> = Fetched::default();
+    let mut ddl_text: Fetched<Option<String>> = Fetched::default();
     let mut data: Option<TableDataPage> = None;
     let mut facts = engine::driver::traits::TableFacts::default();
 
@@ -128,20 +169,28 @@ pub async fn load_properties(
                 facts = found;
             }
             if ref_.kind == PropertyKind::Table {
-                indexes = metadata
+                indexes = match metadata
                     .list_indexes(&ref_.conn_id, &catalog, &schema, &ref_.name)
                     .await
-                    .unwrap_or_default();
-                constraints = metadata
+                {
+                    Ok(v) => Fetched::ok(v),
+                    Err(e) => Fetched::failed(e),
+                };
+                constraints = match metadata
                     .list_constraints(&ref_.conn_id, &catalog, &schema, &ref_.name)
                     .await
-                    .unwrap_or_default();
+                {
+                    Ok(v) => Fetched::ok(v),
+                    Err(e) => Fetched::failed(e),
+                };
             }
-            ddl_text = metadata
+            ddl_text = match metadata
                 .get_table_ddl(&ref_.conn_id, &catalog, &schema, &ref_.name)
                 .await
-                .ok()
-                .flatten();
+            {
+                Ok(v) => Fetched::ok(v),
+                Err(e) => Fetched::failed(e),
+            };
         }
         PropertyKind::Column => {
             let parent = ref_.parent.clone().unwrap_or_default();
@@ -152,7 +201,7 @@ pub async fn load_properties(
         }
         PropertyKind::Routine => {
             // 例程种类未知：先按过程取，未命中再按函数取（`PropertyRef` 不带种类）。
-            routine_source = metadata
+            routine_source = match metadata
                 .get_routine_source(
                     &ref_.conn_id,
                     &catalog,
@@ -161,10 +210,12 @@ pub async fn load_properties(
                     SchemaObjectKind::Procedure,
                 )
                 .await
-                .ok()
-                .flatten();
-            if routine_source.is_none() {
-                routine_source = metadata
+            {
+                Ok(v) => Fetched::ok(v),
+                Err(e) => Fetched::failed(e),
+            };
+            if routine_source.value.is_none() && routine_source.error.is_none() {
+                routine_source = match metadata
                     .get_routine_source(
                         &ref_.conn_id,
                         &catalog,
@@ -173,8 +224,10 @@ pub async fn load_properties(
                         SchemaObjectKind::Function,
                     )
                     .await
-                    .ok()
-                    .flatten();
+                {
+                    Ok(v) => Fetched::ok(v),
+                    Err(e) => Fetched::failed(e),
+                };
             }
         }
         _ => {}
@@ -205,8 +258,8 @@ pub async fn load_properties(
         index_count: facts
             .index_count
             .map(|n| n as usize)
-            .unwrap_or(indexes.len()),
-        constraint_count: constraints.len(),
+            .unwrap_or(indexes.value.len()),
+        constraint_count: constraints.value.len(),
         row_count: facts.row_count,
     };
     let provider = global_registry().provider(type_id.unwrap_or(driver), ref_.kind);
@@ -362,10 +415,10 @@ pub async fn load_properties(
                 db_type,
                 &source,
                 &columns,
-                &indexes,
-                &constraints,
-                &routine_source,
-                &ddl_text,
+                &indexes.value,
+                &constraints.value,
+                &routine_source.value,
+                &ddl_text.value,
             ),
             fallback_overview(ref_, &title, &object_type, &source, &stats),
             fallback_categories(),
@@ -375,9 +428,13 @@ pub async fn load_properties(
     // ── ③ 类别内容合并：categories 声明顺序 + 骨架取数内容 ────────────────
     let qualified = qualify(ref_);
     let caps = super::property_providers::caps_for(db_type);
+    // 门控输入是**驱动级**声明（不是族）：同一族的 sqlx / 原生实现差别照原样体现。
+    let declared = metadata.declared_capabilities(&ref_.conn_id).await;
+    let gates = MetadataGates::resolve(db_type, declared.as_deref());
     let mut sections: Vec<PropertySection> = Vec::new();
     for cat in categories {
-        let table = sections_of(
+        // 骨架不提供内容（产品未实现该类别 / 对象类型不适用）→ 保留 provider 原样。
+        let Some(out) = sections_of(
             ref_.kind,
             cat.id,
             &qualified,
@@ -387,16 +444,26 @@ pub async fn load_properties(
             &routine_source,
             &ddl_text,
             &caps,
-        )
-        .map(|s| s.table)
-        .unwrap_or(cat.table);
-        sections.push(PropertySection {
-            id: cat.id,
-            label: cat.label,
-            table,
-            // 可用性跟着类别声明走（骨架合并只换内容、不换可用性）。
-            availability: cat.availability,
-        });
+            &gates,
+        ) else {
+            sections.push(cat);
+            continue;
+        };
+        match out.fill {
+            // 有内容：可用性跟着类别声明走（provider 自己的置灰理由优先保留）。
+            SectionFill::Content(table) => sections.push(PropertySection {
+                id: cat.id,
+                label: out.label,
+                table,
+                availability: cat.availability,
+            }),
+            // 骨架判定「驱动给不出」→ 覆盖为置灰，原因用驱动/通道口径。
+            SectionFill::Unavailable(reason) => sections.push(PropertySection::unsupported(
+                cat.id,
+                out.label,
+                reason,
+            )),
+        }
     }
 
     Ok(ObjectProperties {
@@ -411,59 +478,159 @@ pub async fn load_properties(
 }
 
 /// 骨架分区内容（列 / 索引 / 约束 / DDL / 源码——按类别 id 提供）。
+///
+/// 返回 `None` = 骨架对这个类别**没有内容也没有结论**（产品未实现 / 对象类型不适用），
+/// 调用方保留 provider 的声明（隐藏式语义不变）。
+///
+/// 置灰（`Unavailable`）只在两种情况下出现，且都不允许写成"暂无数据"：
+/// 1. 该驱动**没有声明**这条元数据能力（`meta_*` 键缺席）——驱动级缺口；
+/// 2. 声明了但取数报错——通道缺口（原因里带底层错误）。
 #[allow(clippy::too_many_arguments)]
 fn sections_of(
     kind: PropertyKind,
     page: PageId,
     qualified: &str,
     columns: &[engine::driver::traits::ColumnDetail],
-    indexes: &[engine::driver::traits::IndexDetail],
-    constraints: &[engine::driver::traits::ConstraintDetail],
-    routine_source: &Option<String>,
-    ddl_text: &Option<String>,
+    indexes: &Fetched<Vec<engine::driver::traits::IndexDetail>>,
+    constraints: &Fetched<Vec<engine::driver::traits::ConstraintDetail>>,
+    routine_source: &Fetched<Option<String>>,
+    ddl_text: &Fetched<Option<String>>,
     caps: &super::property_providers::DriverCapabilities,
-) -> Option<PropertySection> {
+    gates: &MetadataGates,
+) -> Option<SectionOutcome> {
+    let outcome = |label: String, fill: SectionFill| Some(SectionOutcome { label, fill });
     match page {
-        PageId::Columns => Some(PropertySection::available(
-            PageId::Columns,
+        PageId::Columns => outcome(
             format!("列 ({})", columns.len()),
-            columns_table(columns, caps),
-        )),
-        PageId::Indexes => Some(PropertySection::available(
-            PageId::Indexes,
-            format!("索引 ({})", indexes.len()),
-            indexes_table(indexes),
-        )),
-        PageId::Constraints => Some(PropertySection::available(
-            PageId::Constraints,
-            format!("约束 ({})", constraints.len()),
-            constraints_table(constraints),
-        )),
+            SectionFill::Content(columns_table(columns, caps)),
+        ),
+        PageId::Indexes => Some(indexes_section(indexes, gates)),
+        PageId::Constraints => Some(constraints_section(constraints, gates)),
         PageId::Ddl => {
-            if let Some(text) = ddl_text {
-                Some(PropertySection::available(
-                    PageId::Ddl,
-                    "DDL（源版）",
-                    text_table("DDL", text),
-                ))
-            } else if kind == PropertyKind::Table {
-                // 取不到源（PostgreSQL 无 SHOW CREATE 等价物）→ 目录信息合成。
-                let composed =
-                    crate::sql_gen::create_table_ddl(qualified, columns, constraints, indexes);
-                Some(PropertySection::available(
-                    PageId::Ddl,
-                    "DDL（合成）",
-                    text_table("DDL", &composed),
-                ))
-            } else {
-                None
+            ddl_section(kind, qualified, columns, indexes, constraints, ddl_text, gates)
+        }
+        PageId::Source => {
+            if let Some(reason) = gates.routine_source.reason() {
+                // 例程源码属"驱动给不出"（SQLite/DuckDB 没有例程对象；插件未实现）。
+                return outcome("源码".to_string(), SectionFill::Unavailable(reason.to_string()));
+            }
+            match (&routine_source.value, &routine_source.error) {
+                (Some(text), _) => outcome(
+                    "源码".to_string(),
+                    SectionFill::Content(text_table("源码", text)),
+                ),
+                (None, Some(err)) => outcome(
+                    "源码".to_string(),
+                    SectionFill::Unavailable(format!("源码取数失败：{err}")),
+                ),
+                (None, None) => None,
             }
         }
-        PageId::Source => routine_source.as_ref().map(|text| {
-            PropertySection::available(PageId::Source, "源码", text_table("源码", text))
-        }),
         _ => None,
     }
+}
+
+/// 「索引」分区：先看驱动声明，再看取数结果。
+fn indexes_section(
+    indexes: &Fetched<Vec<engine::driver::traits::IndexDetail>>,
+    gates: &MetadataGates,
+) -> SectionOutcome {
+    if let Some(reason) = gates.index_detail.reason() {
+        return SectionOutcome {
+            label: "索引".to_string(),
+            fill: SectionFill::Unavailable(reason.to_string()),
+        };
+    }
+    match &indexes.error {
+        Some(err) => SectionOutcome {
+            label: "索引".to_string(),
+            fill: SectionFill::Unavailable(format!("索引取数失败：{err}")),
+        },
+        None => SectionOutcome {
+            label: format!("索引 ({})", indexes.value.len()),
+            fill: SectionFill::Content(indexes_table(&indexes.value)),
+        },
+    }
+}
+
+/// 「约束」分区：同 [`indexes_section`]。
+fn constraints_section(
+    constraints: &Fetched<Vec<engine::driver::traits::ConstraintDetail>>,
+    gates: &MetadataGates,
+) -> SectionOutcome {
+    if let Some(reason) = gates.constraint_detail.reason() {
+        return SectionOutcome {
+            label: "约束".to_string(),
+            fill: SectionFill::Unavailable(reason.to_string()),
+        };
+    }
+    match &constraints.error {
+        Some(err) => SectionOutcome {
+            label: "约束".to_string(),
+            fill: SectionFill::Unavailable(format!("约束取数失败：{err}")),
+        },
+        None => SectionOutcome {
+            label: format!("约束 ({})", constraints.value.len()),
+            fill: SectionFill::Content(constraints_table(&constraints.value)),
+        },
+    }
+}
+
+/// 「DDL」分区：源版 > 合成 > 置灰。视图没有合成器，所以视图在无源版时只能置灰。
+#[allow(clippy::too_many_arguments)]
+fn ddl_section(
+    kind: PropertyKind,
+    qualified: &str,
+    columns: &[engine::driver::traits::ColumnDetail],
+    indexes: &Fetched<Vec<engine::driver::traits::IndexDetail>>,
+    constraints: &Fetched<Vec<engine::driver::traits::ConstraintDetail>>,
+    ddl_text: &Fetched<Option<String>>,
+    gates: &MetadataGates,
+) -> Option<SectionOutcome> {
+    // 真拿到源版就显示（数据比声明更权威）。
+    if let Some(text) = ddl_text.value.as_ref() {
+        return Some(SectionOutcome {
+            label: "DDL（源版）".to_string(),
+            fill: SectionFill::Content(text_table("DDL", text)),
+        });
+    }
+    // 声明支持、但取数报错：不许静默降级成合成（会让用户以为这就是库里的原文）。
+    if let Some(err) = ddl_text.error.as_ref() {
+        return Some(SectionOutcome {
+            label: "DDL".to_string(),
+            fill: SectionFill::Unavailable(format!("源版 DDL 取数失败：{err}")),
+        });
+    }
+    // 到这里 = 没拿到源版。合成只对表有意义（视图定义吃不到 `create_table_ddl`）。
+    if kind == PropertyKind::Table && gates.ddl_compose.is_supported() {
+        // 索引明细不可用时合成器拿到空索引——DDL 里就少掉索引定义。这是「合成」的
+        // 已知局限（分区标签已写明「合成」），比拿不到索引明细就整块置灰更有用。
+        let idx: &[engine::driver::traits::IndexDetail] = if gates.index_detail.is_supported() {
+            &indexes.value
+        } else {
+            &[]
+        };
+        let composed = crate::sql_gen::create_table_ddl(
+            qualified,
+            columns,
+            &constraints.value,
+            idx,
+        );
+        return Some(SectionOutcome {
+            label: "DDL（合成）".to_string(),
+            fill: SectionFill::Content(text_table("DDL", &composed)),
+        });
+    }
+    // 既无源版也不能合成 → 置灰；原因按"哪个更根本"给（源版缺席优先）。
+    let reason = gates
+        .ddl_source
+        .reason()
+        .or_else(|| gates.ddl_compose.reason())
+        .unwrap_or("该对象类型没有可用的 DDL 来源（视图无源版时不做合成）");
+    Some(SectionOutcome {
+        label: "DDL".to_string(),
+        fill: SectionFill::Unavailable(reason.to_string()),
+    })
 }
 
 /// 未注册 provider 时的通用属性行（fallback，保留原行为）。
@@ -835,22 +1002,117 @@ mod tests {
         assert!(labels.contains(&"驱动"));
     }
 
-    /// DDL 合成验证：PG 表无源版时由骨架按目录信息合成（源版优先）。
+    /// DDL 合成验证：无源版时由骨架按目录信息合成（源版优先）。
     #[test]
     fn sections_of_ddl_composes_when_no_source() {
-        let s = super::sections_of(
+        let idx = Fetched::<Vec<engine::driver::traits::IndexDetail>>::default();
+        let con = Fetched::<Vec<engine::driver::traits::ConstraintDetail>>::default();
+        let none_text = Fetched::<Option<String>>::default();
+        let out = super::sections_of(
             PropertyKind::Table,
             PageId::Ddl,
             "public.t",
             &[],
-            &[],
-            &[],
-            &None,
-            &None,
+            &idx,
+            &con,
+            &Fetched::<Option<String>>::default(),
+            &none_text,
             &crate::property_providers::DriverCapabilities::default(),
+            &MetadataGates::all_supported(),
+        )
+        .expect("表应产出 DDL 分区");
+        assert_eq!(out.label, "DDL（合成）");
+        assert!(matches!(out.fill, super::SectionFill::Content(_)));
+    }
+
+    /// 声明缺席 → 索引分区置灰且原因点明缺的是哪个键（不是「0 条」）。
+    #[test]
+    fn indexes_section_greys_when_driver_declares_nothing() {
+        let idx = Fetched::<Vec<engine::driver::traits::IndexDetail>>::default();
+        let gates = MetadataGates::from_keys(&[]);
+        let out = super::indexes_section(&idx, &gates);
+        assert_eq!(out.label, "索引", "置灰分区不带计数");
+        match out.fill {
+            super::SectionFill::Unavailable(reason) => {
+                assert!(reason.contains("meta_index_detail"), "原因：{reason}")
+            }
+            super::SectionFill::Content(_) => panic!("声明缺席必须置灰，不能显示 (0)"),
+        }
+    }
+
+    /// 声明了但取数报错（如 sidecar 通道缺口）→ 置灰 + 底层原因，不吞成空表。
+    #[test]
+    fn indexes_section_reports_fetch_error() {
+        let idx = Fetched::<Vec<engine::driver::traits::IndexDetail>>::failed(
+            "不支持的索引/约束明细",
         );
-        assert!(s.is_some(), "PG 表无源版时合成 DDL");
-        assert_eq!(s.unwrap().label, "DDL（合成）");
+        let out = super::indexes_section(&idx, &MetadataGates::all_supported());
+        match out.fill {
+            super::SectionFill::Unavailable(reason) => {
+                assert!(reason.contains("取数失败"), "原因：{reason}");
+                assert!(reason.contains("不支持的索引"), "要带底层错误：{reason}");
+            }
+            super::SectionFill::Content(_) => panic!("取数失败不能显示空表"),
+        }
+    }
+
+    /// 声明支持且取数为空 → 这是「这张表真的没有索引」，保留 `(0)`。
+    #[test]
+    fn indexes_section_keeps_zero_when_driver_supports() {
+        let idx = Fetched::<Vec<engine::driver::traits::IndexDetail>>::ok(vec![]);
+        let out = super::indexes_section(&idx, &MetadataGates::all_supported());
+        assert_eq!(out.label, "索引 (0)");
+        assert!(matches!(out.fill, super::SectionFill::Content(_)));
+    }
+
+    /// 视图无源版 DDL：没有合成器 → 置灰（而不是给个空 DDL 页签）。
+    #[test]
+    fn ddl_section_greys_view_without_source() {
+        let idx = Fetched::<Vec<engine::driver::traits::IndexDetail>>::default();
+        let con = Fetched::<Vec<engine::driver::traits::ConstraintDetail>>::default();
+        let none_text = Fetched::<Option<String>>::default();
+        let gates = MetadataGates::from_keys(&["meta_ddl_compose".to_string()]);
+        let out = super::ddl_section(
+            PropertyKind::View,
+            "public.v",
+            &[],
+            &idx,
+            &con,
+            &none_text,
+            &gates,
+        )
+        .expect("视图应产出 DDL 分区（置灰而非隐藏）");
+        assert_eq!(out.label, "DDL");
+        match out.fill {
+            super::SectionFill::Unavailable(reason) => {
+                assert!(reason.contains("源版 DDL"), "原因：{reason}")
+            }
+            super::SectionFill::Content(_) => panic!("视图没有合成器，不能给合成内容"),
+        }
+    }
+
+    /// 源版取数失败时**不**退化成合成：否则用户会把合成结果当成库里的原文。
+    #[test]
+    fn ddl_section_does_not_compose_after_source_failure() {
+        let idx = Fetched::<Vec<engine::driver::traits::IndexDetail>>::default();
+        let con = Fetched::<Vec<engine::driver::traits::ConstraintDetail>>::default();
+        let failed = Fetched::<Option<String>>::failed("SHOW CREATE 超时");
+        let out = super::ddl_section(
+            PropertyKind::Table,
+            "public.t",
+            &[],
+            &idx,
+            &con,
+            &failed,
+            &MetadataGates::all_supported(),
+        )
+        .expect("表应产出 DDL 分区");
+        match out.fill {
+            super::SectionFill::Unavailable(reason) => {
+                assert!(reason.contains("取数失败"), "原因：{reason}")
+            }
+            super::SectionFill::Content(_) => panic!("源版失败不能静默合成"),
+        }
     }
 
     /// 列字段增强（2026-10-24）：列表按能力位裁剪——pg / mysql 追加「标识 / 排序规则」列，

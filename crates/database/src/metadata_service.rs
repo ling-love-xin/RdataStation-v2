@@ -116,6 +116,32 @@ impl MetadataService {
         Ok(supported)
     }
 
+    /// 该连接所属驱动**声明**的能力键（`drivers.capabilities` 的同源值）。
+    ///
+    /// 属性面板据此区分「驱动给不出」（置灰）与「这张表真的没有」（`(0)`）。
+    ///
+    /// 解析顺序：
+    /// 1. 内置声明——`engine::driver::registry::get_driver(driver_id)` 的
+    ///    `capability_keys()`（与 `declaration.rs` 落库的那份是同一个来源）；
+    /// 2. 插件 / 桥接驱动——全局库 `drivers.capabilities`（`plugin/src/driver_decl.rs` 落库）；
+    /// 3. 都取不到 → `None`（调用方退回族默认，不误灰）。
+    pub async fn declared_capabilities(&self, conn_id: &str) -> Option<Vec<String>> {
+        let driver_id = self
+            .manager
+            .get_connection_info(&conn_id.to_string())
+            .await?
+            .driver_id?;
+        if let Some(d) = engine::driver::registry::get_driver(&driver_id) {
+            return Some(d.capability_keys());
+        }
+        let global = engine::migration::global_init::get_global_db_manager()?;
+        let row = global.get_driver(&driver_id).await.ok().flatten()?;
+        let text = row.capabilities?;
+        // 列里存的是 JSON 字符串数组（`declaration.rs::json_string_array`）；解析失败
+        // 说明数据坏了——返回 `None`（退回族默认），不把坏数据当成"什么都不支持"。
+        serde_json::from_str(&text).ok()
+    }
+
     pub async fn list_schemas(
         &self,
         conn_id: &str,

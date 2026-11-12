@@ -102,12 +102,21 @@ return null;   // 不支持 = null，而不是空集合
 Support<T> = Supported(T) | Empty | NotSupported(&'static str)
 ```
 
-落地方式二选一（**待评审选一个**）：
+落地方式二选一（**已在 2026-11-12 拍板**）：
 
-- **A（最小改动）**：trait 方法签名不动，新增 `MetadataBrowser::supports(key) -> bool` + `MetadataService::capability(conn_id, key) -> CapState`；分区是否可用只看能力位，取数仍 `unwrap_or_default()`。
-- **B（更彻底）**：trait 改为 `Result<Option<Vec<T>>>`（`None` = 不支持），`MetadataService` 原样透传；能力位只做**前置**判断，兜底仍以实际返回为准。
+- **A（最小改动）**：trait 方法签名不动，能力位做**前置**判定，分区可用性由骨架填。
+- **B（更彻底）**：trait 改为 `Result<Option<Vec<T>>>`（`None` = 不支持），`MetadataService` 原样透传。
 
-> 建议 **B**：能力位会漂移（插件清单写了 `meta_index_detail` 但实现没跟上），三态里"实际返回优先"能自我纠偏；代价是改 trait 签名 + 6 个驱动 + sidecar 桥 + 调用点（约 10 处）。
+> **决定：A（改良版），不采用 B。** 落地形态 = 「驱动声明（`drivers.capabilities` 的 `meta_*` 键）× 运行时 `Err`」两级判定：
+>
+> 1. 声明缺席 → 置灰 + 原因（驱动给不出）；
+> 2. 声明在场但 `list_*` / `get_table_ddl` 报 `Err` → 置灰 + 原因带底层错误（通道缺口）；
+> 3. 声明在场且返回空 → `(0)`（这是"这张表真的没有"）。
+>
+> 为什么放弃 B：`Option<Vec<T>>` 的信息量在这套判定里是**重复的**——声明已经回答了"这个驱动给不给得出"，`Err` 已经回答了"这次取数成不成功"，只剩"声明支持却返回空"这一种状态，而那正是合法的"真的没有"（B 的 `Some(vec![])` 与之同义）。代价则是改 5 个 trait 方法 + 12 个覆写 + `SchemaObjects` + sidecar 桥 + 约 10 处调用点，且 `introspect_schema_objects` 的默认实现要跟着改（它内部 `?` 链式调用这些方法）。
+>
+> 残留缺口（要写清，别当已解决）：驱动**声明支持、实现却漏了**（返回 `Ok(vec![])`）时仍会显示 `(0)`。这不是静默降级——声明与实现的错位由 §7 G-8 的守卫测试（声明 ↔ 覆写清单）盯，而不是靠运行时三态兜。
+
 
 ### 4.3 模型与渲染
 
@@ -127,11 +136,17 @@ Availability = Available | Unsupported(reason: String)
 
 ### 4.4 门控输入从"族"改为"族默认 × 驱动声明"
 
-`property_providers::DriverCapabilities`（`:373`）现在是**族级硬编码**（`DriverCapabilities::mysql()` / `::pg()` …）。改动：
+`property_providers::DriverCapabilities` 是**族级硬编码**（`DriverCapabilities::mysql()` / `::pg()` …），保留它管两件事：列展示裁剪、类别是否存在。
 
-1. 保留族级默认（新增数据库仍是"填一份 caps"）；
-2. `ProviderInput` 增 `driver_caps: &DriverCaps`（来自 `drivers.capabilities` 实际行）；
-3. provider 只填默认，骨架用 `driver_caps` 覆盖 → 同族两个驱动可以显示不同页签状态，**provider 零改动**。
+驱动级判定另起一份（2026-11-12 已落地 `property_providers/gates.rs`）：
+
+| 部件 | 职责 |
+| --- | --- |
+| `MetadataService::declared_capabilities(conn_id)` | 取该连接所属驱动的能力键：内置走 `registry::get_driver(id).capability_keys()`（与入库的 `drivers.capabilities` 同源），插件走全局库 `drivers.capabilities`；都拿不到 → `None` |
+| `MetadataGates::resolve(db_type, declared)` | `Some(keys)` → 严格按声明；`None` → 族默认（"不知道"不误灰） |
+| `MetadataGates` 五个维度 | `index_detail` / `constraint_detail` / `ddl_source` / `ddl_compose` / `routine_source` |
+
+`ProviderInput` **没有**加 `driver_caps`：门控在骨架（`property_panel`）里算，provider 只声明"有哪些类别"，两者经 `sections` 合并时对齐——provider 仍然零感知，新增驱动只填 provider 的默认。
 
 ### 4.5 谁来写这些位
 
@@ -163,15 +178,16 @@ Availability = Available | Unsupported(reason: String)
 
 ## 7. 验收清单（评审后细化成用例名）
 
-| # | 场景 | 断言 | 落点 |
-| --- | --- | --- | --- |
-| G-1 | 内核 MySQL（`mysql_native`）表属性 | 索引/约束/DDL 三页 `Available`，内容非空 | `crates/workbench/tests/official_driver_real.rs` 扩 |
-| G-2 | sidecar 驱动（mssql 或 oracle）表属性 | 索引/约束页 `Unsupported(原因)` 且**页签仍在**；不出现「索引 (0)」 | `crates/plugin/tests/meta_bridge_real_process.rs` 扩 |
-| G-3 | SQLite 表属性 | 序列/例程页按能力位置灰（不是消失） | `crates/database` 单测 |
-| G-4 | 同族两驱动切换 | 同一张表在两个驱动下页签集合可不同，provider 零改动 | `property_providers` 单测 + 契约测试 |
-| G-5 | `Stage::NotBuilt` 键 | 仍不产出页签（隐藏式未被推翻） | `capability::tests::not_built_keys_are_claimed_by_nobody` 扩 |
-| G-6 | 能力位与实现不一致 | 位声明支持但取数返回不支持 → 以实际返回为准并置灰 | 单测（三态 B） |
-| G-7 | 能力位来源可查 | hover 文案含键名 + 来源 + 同步时间 | UI 契约测试 |
+| # | 场景 | 断言 | 落点 | 状态 |
+| --- | --- | --- | --- | --- |
+| G-1 | 内核 MySQL（`mysql_native`）表属性 | **索引页置灰**（缺 `meta_index_detail`，如实反映它没有 `list_indexes` 覆写）；约束/DDL 两页 `Available` 且非空 | `crates/workbench/tests/official_driver_real.rs` 扩 | 待真机 |
+| G-2 | sidecar 驱动（mssql 或 oracle）表属性 | 索引/约束页 `Unsupported(原因)` 且**页签仍在**；不出现「索引 (0)」 | `crates/plugin/tests/meta_bridge_real_process.rs` 扩 | 待真机 |
+| G-3 | SQLite 表属性 | 例程源码按能力位置灰（不是消失）；索引/约束/DDL 源版可用 | `crates/database` 单测 | **已过**（`nav_property_real` + `gates` 单测） |
+| G-4 | 同族两驱动切换 | 同一张表在两驱动下分区可用性可不同，provider 零改动 | `gates.rs` 单测 | **已过**（`metadata_plane_diverges_inside_a_family`） |
+| G-5 | `Stage::NotBuilt` 键 | 仍不产出页签（隐藏式未被推翻） | `capability::tests::not_built_keys_are_claimed_by_nobody` | **已过** |
+| G-6 | 声明支持但取数报错 | 置灰且原因带底层错误，**不**显示 `(0)`、**不**静默合成 | `property_panel::tests::indexes_section_reports_fetch_error` / `ddl_section_does_not_compose_after_source_failure` | **已过** |
+| G-7 | 能力位来源可查 | hover 文案含键名 + 来源 + 同步时间 | UI 契约测试 | 未做（留痕轮） |
+| G-8 | 声明 ↔ 实现一致 | 声明了 `meta_index_detail` 的驱动必须有 `list_indexes` 覆写（目前靠 `metadata_plane_diverges_inside_a_family` 逐条钉死已知分叉） | `driver` 单测 | **部分**（只钉了两条已知分叉，无通用反射） |
 
 **D10 口径**：以上每条都必须有可复现用例名登记进能力字典的 `acceptance`，否则标"未验收"。
 
@@ -180,7 +196,8 @@ Availability = Available | Unsupported(reason: String)
 ## 8. 不做 / 待定
 
 - **不做**：权限页、依赖页、分区页的内容接入（`CapSet` 里仍是 `false`，继续隐藏）；敏感列脱敏（用户已明确不做）。
+- **未接门控（已知）**：导航树的「触发器 / 序列」文件夹仍固定显示（2026-10-08 用户拍板），所以 `mysql_native` 的触发器文件夹、`sqlite` 的触发器文件夹、`duckdb` 的序列文件夹现在是"点开是空"——能力位已能判定，但空态文案尚未接（留给导航轮）。属性面板的列分区也不按 `meta_column_ordinal` / `meta_fk_target` 裁剪列（当前按族 caps 裁剪）。
 - **待定**：
-  - Q1 三态用 A 还是 B（§4.2）；
-  - Q2 `meta_ddl_source` 是否要独立成键，还是复用一个 `meta_ddl` + `source_kind` 字段；
+  - Q1 ~~三态用 A 还是 B~~ → **已定 A（改良版）**，见 §4.2；
+  - Q2 `meta_ddl_source` 是否要独立成键，还是复用一个 `meta_ddl` + `source_kind` 字段（现按独立键落了）；
   - Q3 结果集面（`supportsResultSetLimit/Scroll/Ordering`）是否本批一起做，还是留给结果集网格批次。

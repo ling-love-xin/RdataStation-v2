@@ -11,6 +11,7 @@
 //! 布局：`docs/architecture/property/property-module-spec.md` §16（本目录为 §16.2）。
 
 pub mod duckdb;
+pub mod gates;
 pub mod mysql;
 pub mod pg;
 pub mod sqlite;
