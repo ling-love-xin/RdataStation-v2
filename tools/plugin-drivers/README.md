@@ -55,28 +55,44 @@ cargo test --manifest-path tools/plugin-drivers/oracle-rust/Cargo.toml
 cargo test --manifest-path tools/plugin-drivers/mssql-rust/Cargo.toml
 ```
 
-- 插件包只放清单和二进制；`build.ps1` 编 release 并复制为 `bin/win-x64/agent.exe`，
-  宿主 `layout::resolve_executable` 按平台子目录解析。
+- 插件包只放清单和二进制；每个包自己的 `build.ps1`（如
+  `mssql-rust-plugin/build.ps1`）编 release 并复制为 `bin/win-x64/agent.exe`，
+  宿主 `layout::resolve_executable` 按平台子目录解析。改完驱动源码后
+  **三处副本要保持一致**（`<包>/bin/...`、`.rds/plugins/<id>/bin/...`、
+  `.rds/target-gf/debug/plugins/<id>/bin/...`），否则跑的还是旧二进制。
 - 能力边界：两个驱动都声明 `cancel = false`（无法中断在飞查询），
   `tx.*` 走真实语句。
-- 真机口径（2026-11-10）：
+- 真机口径（2026-11-12）：
   - **Oracle 已验收**：`sidecar_conformance` 对 `192.168.3.138:1521/XEPDB1` 6/6（含 3000 行分页）；
     `crates/plugin/tests/rust_driver_wiring.rs` 另有「真实安装目录 → `PluginManager` 激活 →
     supervisor 开会话 → 真库查询」用例（设置 `RDS_TEST_ORACLE_URL` 时执行），并在同一用例里
     用新的 `PluginRuntimeLoop::tick_once` 复现宿主启动首拍，验证「重启后自动加载 + 激活、
-    `drivers.enabled` 回到 1」——即下拉能看到驱动的完整启动链路。
-  - **SQL Server 未验收**：`192.168.3.138:1433` 可连、实例 `ling` 已确认，但项目内没有可用的
-    登录口令。已把 `D:\data\datasoure\天马数据源信息\db_info\General\.dbeaver` 的
-    `credentials-config.json` 按 DBeaver 固定密钥解出：8 条凭据全是 PostgreSQL / MySQL，
-    7 条 SQL Server 数据源（全部指向内网 `172.18.x`）一条口令都没保存；`cmdkey` / ODBC /
-    DBeaver 日志也没有 SQL Server 凭据。用其中同名的 `ling/ling` 试 `192.168.3.138` 仍
-    返回 `18456 state 1`。Windows 集成认证在当前进程不可用（Rust 侧 `SEC_E_NO_CREDENTIALS`，
-    .NET 侧 `Cannot generate SSPI context`）。代码与协议单测通过，真库验收等凭据。
-  - **SQL Server 验收命令已备好**：拿到口令后设
-    `$env:RDS_TEST_MSSQL_URL='mssql://user:pass@192.168.3.138:1433/master'`，再跑
-    `cargo test -p rds-plugin --test rust_driver_wiring -j 1 -- --nocapture --test-threads=1`；
-    未设变量时该用例跳过，不会把「缺凭据」伪装成通过。登录失败时驱动会补中文下一步提示
-    （填 SQL 认证用户名/密码，或检查实例是否启用 SQL 登录），不再只回协议错误。
+    `drivers.enabled` 回到 1」——即下拉能看到驱动的完整启动链路。2026-11-12 复跑
+    `oracle_plugin_serves_a_real_query` 通过。
+  - **SQL Server 已验收（2026-11-12）**：`192.168.3.138:1433` 是 SQL Server 2025 RTM
+    （`17.0.1000.7`，Standard Developer Edition）的**默认实例**（`ling` 是 `@@SERVERNAME`，
+    不是命名实例），SQL Server 验证 + 用户 `sa`；`mssql_plugin_serves_a_real_query` 走真实
+    安装目录 → 激活 → supervisor 开会话 → `select 1 as n` 回一列一行，通过。此前九次
+    `18456 state 1` 是缺口令所致，不是网络或加密问题；Windows 集成认证在此环境不可用
+    （Rust 侧 `SEC_E_NO_CREDENTIALS`，.NET 侧 `Cannot generate SSPI context`）。
+  - **SQL Server 导航面已验收（2026-11-12）**：`sidecar_conformance` 对真机 **6/6 全过**
+    （catalog `master/model/msdb/tempdb`、schema `dbo/guest/INFORMATION_SCHEMA/sys`、
+    对象 8 个、`MSreplication_options` 6 列 / 索引 0 / 行数估计 3）。
+    首次跑时第 6 条把整个 sidecar 打死（宿主侧只见 `帧 I/O 失败：early eof`），
+    手动发帧抓 stderr 才看到真因：`sys.columns.precision` / `scale` 是 tinyint，
+    `meta.rs` 按 `i16` 取，tiberius 的 `Row::get` 内部 unwrap 时 panic
+    （`cannot interpret U8(Some(0)) as an i16 value`，exit 101），改按 `u8` 取后恢复。
+    **教训**：单个元数据查询的 panic 会连坐同一实例上的所有会话，元数据提取一律
+    只认列的真实类型；宿主侧不会告诉你哪个对象炸的，得自己收 sidecar stderr。
+  - **真机凭据与端点档案在本机 `.rds/local/`（不入库）**：`test-env.ps1` 是纯 ASCII 的
+    dot-source 脚本，注入 `RDS_TEST_ORACLE_URL` / `RDS_TEST_MSSQL_URL`（含口令）；
+    `real-hosts.md` 记录端点 / 版本 / 库清单 / 验证记录 / 历史失败，不含口令明文。
+    两者都在 `.rds/` 下，被仓库根 `.gitignore` 的 `/.rds/` 整目录忽略，`git status` 看不到。
+  - **验收命令**：先 `. .rds/local/test-env.ps1`，再跑
+    `cargo test -j 1 -p rds-plugin --test rust_driver_wiring -- --nocapture --test-threads=1`；
+    未设变量的用例会自己跳过，不会把「缺凭据」伪装成通过。`-j 1` 必须写在 `--` 之前
+    （写到后面会变成测试二进制的未知参数）。登录失败时驱动会补中文下一步提示
+    （填 SQL 认证用户名/密码，或检查实例是否启用 SQL 登录）。
 
 ## 指定自己的驱动 jar（driver_jars）
 
