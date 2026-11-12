@@ -42,6 +42,7 @@ use workbench::commands::{
 };
 
 mod assets;
+mod theme_pack;
 
 fn main() {
     // 0. Windows 控制台输出代码页切到 UTF-8（cp65001）：tracing stderr / eprintln! 的
@@ -209,7 +210,7 @@ fn run_app() {
             // 开发期回退仓库的 `assets/`（编译期路径在用户机上不存在，不能只认它）。
             let themes_dir = paths::assets_dir().join("themes");
             load_theme_assets(&themes_dir, cx);
-            attach_rds_theme(cx);
+            attach_rds_theme(&themes_dir, cx);
             // 2b. 产品语义 token（gpui-kit 固定语义面之外的角色）。
             attach_product_tokens(&themes_dir, cx);
 
@@ -218,7 +219,7 @@ fn run_app() {
             //    因此这里必须**重应用设置里的字号**，否则热更新会把用户的字号档位打回默认。
             let themes_dir_watch = themes_dir.clone();
             let _ = ThemeRegistry::watch_dir(themes_dir, cx, move |cx| {
-                attach_rds_theme(cx);
+                attach_rds_theme(&themes_dir_watch, cx);
                 attach_product_tokens(&themes_dir_watch, cx);
                 let mode = SettingsService::theme_mode(cx);
                 SettingsService::set_theme_mode(mode, None, cx);
@@ -634,8 +635,30 @@ fn validate_theme_color_keys(
     }
 }
 
-/// 加载产品语义 token（`assets/themes/product-tokens.json`）为 GPUI global。
+/// 加载产品语义 token（默认 `assets/themes/product-tokens.json`）为 GPUI global。
+///
+/// 设了 `RDS_THEME_PACK` 时优先读包内的 `product-tokens.json`：产品 token 只按明暗模式
+/// 解析、没有主题维度，只换主题文件会让活动栏底色 / Quick Open 组头 / 搜索命中底 /
+/// 结果集四槽残留上一包的色值（静默不一致），所以换包必须两个文件一起换。
 fn attach_product_tokens(themes_dir: &std::path::Path, cx: &mut App) {
+    if let Some(pack) = theme_pack::selected(themes_dir) {
+        let pack_path = pack.product_tokens_file();
+        if pack_path.exists() {
+            match settings::product_tokens::apply_from_path(&pack_path, cx) {
+                Ok(()) => return,
+                Err(e) => eprintln!(
+                    "[startup] 主题包 {} 产品 token 不可用：{e}（回退现役 product-tokens.json）",
+                    pack.id
+                ),
+            }
+        } else {
+            eprintln!(
+                "[startup] 主题包 {} 缺 product-tokens.json（{}）——产品槽会残留现役包的值",
+                pack.id,
+                pack_path.display()
+            );
+        }
+    }
     let path = themes_dir.join("product-tokens.json");
     if let Err(e) = settings::product_tokens::apply_from_path(&path, cx) {
         eprintln!("[startup] {e}（回退标准字段）");
@@ -646,7 +669,26 @@ fn attach_product_tokens(themes_dir: &std::path::Path, cx: &mut App) {
 ///
 /// `Theme::change` 只应用 `light_theme` / `dark_theme` 字段所指配置，而主题目录中
 /// 的自定义主题不会自动写入这两个字段，需按名字显式接入；未注册时保持当前主题。
-fn attach_rds_theme(cx: &mut App) {
+///
+/// 顺序：设了 `RDS_THEME_PACK=<id>` 就走 `assets/themes/packs/<id>/theme.json`
+/// （opt-in，按 `mode` 取，不依赖主题名）；没设或包不可用则回落现役
+/// `RDS Light` / `RDS Dark` —— 默认行为零变化。
+fn attach_rds_theme(themes_dir: &std::path::Path, cx: &mut App) {
+    if let Some(pack) = theme_pack::selected(themes_dir) {
+        match pack.load_pair() {
+            Ok((light, dark)) => {
+                let theme = cx.global_mut::<Theme>();
+                theme.light_theme = std::rc::Rc::new(light);
+                theme.dark_theme = std::rc::Rc::new(dark);
+                eprintln!("[startup] 主题包 {} 已接入（{}）", pack.id, pack.dir.display());
+                return;
+            }
+            Err(e) => eprintln!(
+                "[startup] 主题包 {} 不可用：{e}（回退现役 RDS Light / RDS Dark）",
+                pack.id
+            ),
+        }
+    }
     let (light, dark) = {
         let registry = ThemeRegistry::global(cx);
         (

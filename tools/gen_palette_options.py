@@ -878,8 +878,22 @@ BUILTIN_NOTE = """> 三条都是本机源码实测（2026-11-12），不是推�
 
 建议节奏：内置 **2 个包**（默认 RDS + 1 个中国风），其余当可选包；要上第 3 个包之前，先把 `ProductTokenSet` 升级成“按包解析”，否则每多一包就多一处“看着只换了一半”的静默不一致。
 
-> 这一节说的“包”已经按 §4.1 生成好了（8 个包，每个 = 主题文件 + 产品 token 文件），
-> 拷进 `assets/themes/` 就能被 `load_theme_assets` 认到；剩下的只是“选哪包 + 改解析口径”。
+> 这一节说的“包”已经按 §4.1 生成好了（8 个包，每个 = 主题文件 + 产品 token 文件，运行时副本在
+> `assets/themes/packs/<id>/`）；剩下的只是“选哪包 + 改解析口径”。
+
+**试切换（opt-in，默认完全不变）**
+
+- 入口：环境变量 `RDS_THEME_PACK=<包 id>`，例如 `qinghua`、`zhusha`、`mopin`。
+  不设 / 设成 `rds` / `default` → 走现役 `rds-theme.json` + `product-tokens.json`，行为零变化。
+- 代码：`crates/app/src/theme_pack.rs`（选包 + 按 `mode` 读出一对配置，不依赖主题名）；
+  `main.rs` 的 `attach_rds_theme` / `attach_product_tokens` 在设了变量时优先读包，包不可用则
+  打一行 `[startup]` 日志并回落现役主题，不 panic、不阻塞启动。
+- 为什么必须「主题 + 产品 token 一起换」：产品 token 只按明暗模式解析、没有主题维度，
+  只换主题会让活动栏底色 / Quick Open 组头 / 搜索命中底 / 结果集四槽残留默认珊瑚包的值。
+- 自检：`cargo test -p rds-app theme_pack` —— 断言每个出厂包都能读出 Light+Dark、字号 16、
+  140 键、13 个产品角色齐全（包缺文件 / 少键会直接失败）。
+- **还没做的**：主题选择 UI 与设置持久化（现在只有环境变量）；`ProductTokenSet` 仍是
+  “按模式”的单例，多包**并存**切换需要先升级成按包解析。
 """
 
 
@@ -943,17 +957,18 @@ def build_md(total_checks, total_fail):
     lines.append(MAPPING + "\n")
 
     lines.append(f"### {sec}.1 已生成的包文件（140 键，可直接落地）\n")
-    lines.append("每个包 = 一个 Light + 一个 Dark + 一套产品 token（13 角色），全部落在 "
-                 "`docs/architecture/theme/palette-candidates/`：\n")
-    lines.append("| 包 | 主题文件 | 产品 token |")
+    lines.append("每个包 = 一个 Light + 一个 Dark + 一套产品 token（13 角色）。同一份内容有两处副本："
+                 "`docs/architecture/theme/palette-candidates/`（可读复审用）与 "
+                 "`assets/themes/packs/<id>/`（运行时目录，`theme.json` + `product-tokens.json`）：\n")
+    lines.append("| 包 | docs 复审副本 | 运行时目录 |")
     lines.append("| --- | --- | --- |")
     for s in SCHEMES:
-        lines.append(f"| {s['cn']} `{s['id']}` | `{s['id']}-theme.json` | `{s['id']}-product-tokens.json` |")
+        lines.append(f"| {s['cn']} `{s['id']}` | `{s['id']}-theme.json` / `{s['id']}-product-tokens.json` "
+                     f"| `assets/themes/packs/{s['id']}/` |")
     lines.append("")
-    lines.append("> 为什么放 `docs/` 而不是 `assets/themes/`：`load_theme_assets` 会扫 "
-                 "`assets/themes/*.json` 并把所有 `themes[]` 全量注册，候选一旦放进去就等于"
-                 "「没采纳先上线」。采纳某包时，把这两个文件改名为 `rds-<id>-theme.json` / "
-                 "`rds-<id>-product-tokens.json` 再拷进 `assets/themes/`。\n")
+    lines.append("> 为什么放子目录：`ThemeRegistry::reload` 与 `load_theme_assets` 都只扫第一层 `*.json`，"
+                 "`packs/` 子目录天然不注册——候选包不会出现在主题列表里，也不影响默认行为。"
+                 "启用方式见 §5 的「试切换」。\n")
 
     lines.append(f"### {sec}.2 生成与校验\n")
     lines.append("- 生成：`python tools/gen_theme_packs.py` —— 从本文件 `SCHEMES` 的角色值展开 140 键 + 13 个产品角色，"

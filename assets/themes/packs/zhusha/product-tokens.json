@@ -1,0 +1,33 @@
+{
+  "$comment": "「朱砂」主题包的产品语义 token（13 角色）。换包时必须与主题文件同步替换，否则活动栏底色 / Quick Open 组头 / 搜索命中底 / 结果集槽会残留默认珊瑚包的值。",
+  "light": {
+    "activity_bar.background": "#F2ECE4",
+    "activity_bar.active_border": "#2A241D",
+    "activity_bar.icon.active": "#2A241D",
+    "activity_bar.icon.inactive": "#5C4E40",
+    "title_bar.slot.background": "#FCFAF6",
+    "quick_open.group.header": "#EAE2D5",
+    "search.match.background": "#FBEFC8",
+    "staged.drop": "#8E1B12",
+    "result.odd_row.background": "#F4EEE3",
+    "result.cell.modified.background": "#FBE6CF",
+    "result.cell.error.background": "#F6DDDA",
+    "result.local_row_background": "#E7F0DF",
+    "result.header.border": "#D6C8B6"
+  },
+  "dark": {
+    "activity_bar.background": "#110F0C",
+    "activity_bar.active_border": "#EDE7E0",
+    "activity_bar.icon.active": "#EDE7E0",
+    "activity_bar.icon.inactive": "#98897A",
+    "title_bar.slot.background": "#171410",
+    "quick_open.group.header": "#332C25",
+    "search.match.background": "#4A3A12",
+    "staged.drop": "#FF6B6B",
+    "result.odd_row.background": "#241F18",
+    "result.cell.modified.background": "#3D2C15",
+    "result.cell.error.background": "#3A1C1A",
+    "result.local_row_background": "#2A3320",
+    "result.header.border": "#332C25"
+  }
+}

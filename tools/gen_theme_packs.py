@@ -24,6 +24,7 @@ import pathlib
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
 OUT_DIR = ROOT / "docs/architecture/theme/palette-candidates"
+ASSET_DIR = ROOT / "assets/themes/packs"
 
 _spec = importlib.util.spec_from_file_location("gpo", HERE / "gen_palette_options.py")
 gpo = importlib.util.module_from_spec(_spec)
@@ -334,7 +335,8 @@ def build_pack(scheme):
         "$comment": (
             f"候选主题包「{scheme['cn']} {scheme['name']}」：一 Light + 一 Dark + 一套产品 token。"
             "由 tools/gen_theme_packs.py 从 docs/architecture/theme/palette-options.md 的色板角色展开为 140 键；"
-            "对比度由 tools/audit_theme_packs.py 校验。未采纳前不要放进 assets/themes/（放进去会被启动期自动注册）。"
+            "对比度由 tools/audit_theme_packs.py 校验。运行时副本在 assets/themes/packs/<id>/（子目录，"
+            "不会被 ThemeRegistry 自动注册），用环境变量 RDS_THEME_PACK=<id> 启用。"
         ),
         "themes": themes,
     }
@@ -359,10 +361,20 @@ def main():
         total_keys = n_keys
         p1 = OUT_DIR / f"{scheme['id']}-theme.json"
         p2 = OUT_DIR / f"{scheme['id']}-product-tokens.json"
-        p1.write_text(json.dumps(theme_json, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        p2.write_text(json.dumps(product_json, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        theme_txt = json.dumps(theme_json, ensure_ascii=False, indent=2) + "\n"
+        prod_txt = json.dumps(product_json, ensure_ascii=False, indent=2) + "\n"
+        p1.write_text(theme_txt, encoding="utf-8")
+        p2.write_text(prod_txt, encoding="utf-8")
+
+        # 运行时副本：assets/themes/packs/<id>/{theme.json, product-tokens.json}
+        # （子目录不会被 ThemeRegistry::reload / load_theme_assets 扫到，默认不生效）
+        adir = ASSET_DIR / scheme["id"]
+        adir.mkdir(parents=True, exist_ok=True)
+        (adir / "theme.json").write_text(theme_txt, encoding="utf-8")
+        (adir / "product-tokens.json").write_text(prod_txt, encoding="utf-8")
+
         print(f"{scheme['id']:15s} 140键 {n_keys}  产品角色 {len(product_json['light'])}"
-              f"  -> {p1.name} / {p2.name}")
+              f"  -> docs/{p1.name} + assets/themes/packs/{scheme['id']}/")
     if ADJUST_LOG:
         print("\n语法补充名对比度微调（chart 色 -> 达标色）:")
         for lab, old, new, rr in ADJUST_LOG:
