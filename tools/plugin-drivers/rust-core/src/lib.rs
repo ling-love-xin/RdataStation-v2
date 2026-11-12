@@ -20,4 +20,4 @@ pub use meta::{
     normalize_kind, MetaColumn, MetaIndex, MetaObject, MetaObjectDetail, MetaSchema,
 };
 pub use page::{Canonical, ColumnDef, ExecuteRequest, Page, SessionInfo};
-pub use server::{serve, Driver};
+pub use server::{as_sidecar, serve, serve_many, AnySession, Driver, SidecarDriver};

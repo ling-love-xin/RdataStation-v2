@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 
 use async_trait::async_trait;
+use futures_util::future::BoxFuture;
 use futures_util::FutureExt as _;
 use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -63,28 +64,245 @@ pub trait Driver: Send + Sync + 'static {
     }
 }
 
-struct SessionEntry<S> {
-    session: S,
+/// 类型擦除后的会话（`Box<dyn Any + Send>`），多驱动进程用它装各驱动的 `Session`。
+///
+/// 只有一个驱动时也会经过它（`serve` 就是 `serve_many` 的单驱动特例），
+/// 这样两条路径的会话管理代码**只有一份**，不会出现「单驱动版能用、多驱动版忘了改」。
+pub struct AnySession(Box<dyn std::any::Any + Send>);
+
+impl AnySession {
+    fn new<S: Send + 'static>(session: S) -> Self {
+        Self(Box::new(session))
+    }
+
+    fn downcast_mut<S: 'static>(&mut self) -> Option<&mut S> {
+        self.0.downcast_mut::<S>()
+    }
+
+    fn into_inner<S: 'static>(self) -> Option<S> {
+        self.0.downcast::<S>().ok().map(|boxed| *boxed)
+    }
+}
+
+/// 类型擦除后的驱动。`impl<D: Driver> SidecarDriver for D`，业务侧不用手写这个 trait。
+///
+/// 为什么要擦：sidecar 进程按**插件**起（一个 `plugin.toml` 一个可执行文件），而一个插件
+/// 可以贡献多个 driver id（例如 sqlx 轨一个进程供 `mysql` 与 `postgres`）。宿主协议本来
+/// 就是按 `session.open` 里的 `driver_id` 路由的，`initialize` 也回 `driver_ids` 列表，
+/// 多驱动是同一条协议的自然形态；只有 `Driver` trait 的 `type Session` 让「一个进程一个
+/// 驱动」成了事实上的限制。
+pub trait SidecarDriver: Send + Sync + 'static {
+    fn driver_id(&self) -> &'static str;
+    fn display_name(&self) -> &'static str;
+    fn identifier_quote(&self) -> Option<&'static str>;
+
+    fn open<'a>(&'a self, params: &'a Value) -> BoxFuture<'a, Result<(AnySession, SessionInfo), DriverError>>;
+    fn close<'a>(&'a self, session: AnySession) -> BoxFuture<'a, ()>;
+    fn ping<'a>(&'a self, session: &'a mut AnySession) -> BoxFuture<'a, Result<(), DriverError>>;
+    fn execute<'a>(
+        &'a self,
+        session: &'a mut AnySession,
+        req: ExecuteRequest,
+    ) -> BoxFuture<'a, Result<Page, DriverError>>;
+
+    fn begin<'a>(&'a self, session: &'a mut AnySession) -> BoxFuture<'a, Result<(), DriverError>>;
+    fn commit<'a>(&'a self, session: &'a mut AnySession) -> BoxFuture<'a, Result<(), DriverError>>;
+    fn rollback<'a>(&'a self, session: &'a mut AnySession) -> BoxFuture<'a, Result<(), DriverError>>;
+
+    fn catalogs<'a>(&'a self, session: &'a mut AnySession) -> BoxFuture<'a, Result<Vec<String>, DriverError>>;
+    fn schemas<'a>(&'a self, session: &'a mut AnySession) -> BoxFuture<'a, Result<Vec<MetaSchema>, DriverError>>;
+    fn objects<'a>(
+        &'a self,
+        session: &'a mut AnySession,
+        schema: String,
+    ) -> BoxFuture<'a, Result<Vec<MetaObject>, DriverError>>;
+    fn object_detail<'a>(
+        &'a self,
+        session: &'a mut AnySession,
+        schema: String,
+        name: String,
+    ) -> BoxFuture<'a, Result<MetaObjectDetail, DriverError>>;
+}
+
+/// 把任意 [`Driver`] 擦进 [`SidecarDriver`]。
+pub fn as_sidecar<D: Driver>(driver: D) -> Box<dyn SidecarDriver> {
+    Box::new(driver)
+}
+
+impl<D: Driver> SidecarDriver for D {
+    fn driver_id(&self) -> &'static str {
+        Driver::driver_id(self)
+    }
+
+    fn display_name(&self) -> &'static str {
+        Driver::display_name(self)
+    }
+
+    fn identifier_quote(&self) -> Option<&'static str> {
+        Driver::identifier_quote(self)
+    }
+
+    fn open<'a>(&'a self, params: &'a Value) -> BoxFuture<'a, Result<(AnySession, SessionInfo), DriverError>> {
+        Box::pin(async move {
+            let (session, info) = Driver::open(self, params).await?;
+            Ok((AnySession::new(session), info))
+        })
+    }
+
+    fn close<'a>(&'a self, session: AnySession) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            if let Some(session) = session.into_inner::<D::Session>() {
+                Driver::close(self, session).await;
+            }
+        })
+    }
+
+    fn ping<'a>(&'a self, session: &'a mut AnySession) -> BoxFuture<'a, Result<(), DriverError>> {
+        Box::pin(async move {
+            let session = session_of::<D::Session>(session, Driver::driver_id(self), "session.ping")?;
+            Driver::ping(self, session).await
+        })
+    }
+
+    fn execute<'a>(
+        &'a self,
+        session: &'a mut AnySession,
+        req: ExecuteRequest,
+    ) -> BoxFuture<'a, Result<Page, DriverError>> {
+        Box::pin(async move {
+            let session =
+                session_of::<D::Session>(session, Driver::driver_id(self), "query.execute")?;
+            Driver::execute(self, session, req).await
+        })
+    }
+
+    fn begin<'a>(&'a self, session: &'a mut AnySession) -> BoxFuture<'a, Result<(), DriverError>> {
+        Box::pin(async move {
+            let session = session_of::<D::Session>(session, Driver::driver_id(self), "tx.begin")?;
+            Driver::begin(self, session).await
+        })
+    }
+
+    fn commit<'a>(&'a self, session: &'a mut AnySession) -> BoxFuture<'a, Result<(), DriverError>> {
+        Box::pin(async move {
+            let session = session_of::<D::Session>(session, Driver::driver_id(self), "tx.commit")?;
+            Driver::commit(self, session).await
+        })
+    }
+
+    fn rollback<'a>(&'a self, session: &'a mut AnySession) -> BoxFuture<'a, Result<(), DriverError>> {
+        Box::pin(async move {
+            let session = session_of::<D::Session>(session, Driver::driver_id(self), "tx.rollback")?;
+            Driver::rollback(self, session).await
+        })
+    }
+
+    fn catalogs<'a>(&'a self, session: &'a mut AnySession) -> BoxFuture<'a, Result<Vec<String>, DriverError>> {
+        Box::pin(async move {
+            let session = session_of::<D::Session>(session, Driver::driver_id(self), "meta.catalogs")?;
+            Driver::catalogs(self, session).await
+        })
+    }
+
+    fn schemas<'a>(&'a self, session: &'a mut AnySession) -> BoxFuture<'a, Result<Vec<MetaSchema>, DriverError>> {
+        Box::pin(async move {
+            let session = session_of::<D::Session>(session, Driver::driver_id(self), "meta.schemas")?;
+            Driver::schemas(self, session).await
+        })
+    }
+
+    fn objects<'a>(
+        &'a self,
+        session: &'a mut AnySession,
+        schema: String,
+    ) -> BoxFuture<'a, Result<Vec<MetaObject>, DriverError>> {
+        Box::pin(async move {
+            let session = session_of::<D::Session>(session, Driver::driver_id(self), "meta.objects")?;
+            Driver::objects(self, session, &schema).await
+        })
+    }
+
+    fn object_detail<'a>(
+        &'a self,
+        session: &'a mut AnySession,
+        schema: String,
+        name: String,
+    ) -> BoxFuture<'a, Result<MetaObjectDetail, DriverError>> {
+        Box::pin(async move {
+            let session =
+                session_of::<D::Session>(session, Driver::driver_id(self), "meta.object_detail")?;
+            Driver::object_detail(self, session, &schema, &name).await
+        })
+    }
+}
+
+/// 会话类型对不上 = 请求路由错了驱动（同一个进程里有多个驱动时的编程错误），按内部错误报。
+fn session_of<'s, S: 'static>(
+    session: &'s mut AnySession,
+    driver_id: &str,
+    method: &str,
+) -> Result<&'s mut S, DriverError> {
+    session.downcast_mut::<S>().ok_or_else(|| {
+        DriverError::internal(format!(
+            "{method} 的会话类型与驱动 {driver_id} 不匹配（会话被路由到了别的驱动）"
+        ))
+    })
+}
+
+struct SessionEntry {
+    /// `Server::drivers` 的下标 —— 会话记住自己属于哪个驱动，路由不靠猜。
+    driver: usize,
+    session: AnySession,
     info: SessionInfo,
 }
 
-struct Server<D: Driver> {
-    driver: D,
-    sessions: HashMap<String, SessionEntry<D::Session>>,
+struct Server {
+    drivers: Vec<Box<dyn SidecarDriver>>,
+    sessions: HashMap<String, SessionEntry>,
     cancelled: HashSet<String>,
 }
 
-/// 跑 sidecar 主循环。返回 `Ok(())` 只表示 stdin 干净 EOF（宿主已退出）。
+/// 跑**单驱动** sidecar 主循环（既有插件用这条路径，行为不变）。
+///
+/// 返回 `Ok(())` 只表示 stdin 干净 EOF（宿主已退出）。
 pub async fn serve<D, R, W>(driver: D, reader: R, writer: W) -> Result<(), String>
 where
     D: Driver,
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    serve_many(vec![as_sidecar(driver)], reader, writer).await
+}
+
+/// 跑**多驱动** sidecar 主循环：一个进程按 `driver_id` 供多个数据库。
+///
+/// 这是 `serve` 的推广形态 —— `serve` 就是「一个驱动」的特例，会话管理代码只有一份。
+pub async fn serve_many<R, W>(
+    drivers: Vec<Box<dyn SidecarDriver>>,
+    reader: R,
+    writer: W,
+) -> Result<(), String>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    if drivers.is_empty() {
+        return Err("至少要有 1 个驱动".to_string());
+    }
+    {
+        // 同一进程里两个驱动撞同一个 id，路由就没法有确定答案 —— 起进程时就拒绝。
+        let mut seen = HashSet::new();
+        for driver in &drivers {
+            if !seen.insert(driver.driver_id()) {
+                return Err(format!("同一个进程里有两个驱动都声称是 {}", driver.driver_id()));
+            }
+        }
+    }
+
     let mut reader = FrameReader::new(reader);
     let mut writer = FrameWriter::new(writer);
     let mut server = Server {
-        driver,
+        drivers,
         sessions: HashMap::new(),
         cancelled: HashSet::new(),
     };
@@ -106,8 +324,7 @@ where
         let request: Value = match serde_json::from_slice(&frame.payload) {
             Ok(value) => value,
             Err(err) => {
-                server
-                    .send_error(&mut writer, Value::Null, -32700, &format!("parse error: {err}"), None)
+                send_error(&mut writer, Value::Null, -32700, &format!("parse error: {err}"), None)
                     .await
                     .map_err(|e| format!("写错误响应失败：{e}"))?;
                 continue;
@@ -148,16 +365,14 @@ where
         match outcome {
             Ok(Dispatch::Result(result)) => {
                 if has_id {
-                    server
-                        .send_result(&mut writer, id, result)
+                    send_result(&mut writer, id, result)
                         .await
                         .map_err(|e| format!("写响应失败：{e}"))?;
                 }
             }
             Ok(Dispatch::Shutdown(result)) => {
                 if has_id {
-                    server
-                        .send_result(&mut writer, id, result)
+                    send_result(&mut writer, id, result)
                         .await
                         .map_err(|e| format!("写关机响应失败：{e}"))?;
                 }
@@ -181,8 +396,7 @@ where
             Err(err) => {
                 if has_id {
                     let data = err.to_json()["data"].clone();
-                    server
-                        .send_error(&mut writer, id, err.code.code(), &err.message, Some(data))
+                    send_error(&mut writer, id, err.code.code(), &err.message, Some(data))
                         .await
                         .map_err(|e| format!("写错误响应失败：{e}"))?;
                 }
@@ -208,47 +422,63 @@ enum Dispatch {
     Shutdown(Value),
 }
 
-impl<D: Driver> Server<D> {
+/// 写响应 / 写错误是**自由函数**而不是 `Server` 的方法：它们要在 `serve` 主循环里被
+/// `await`，若挂成 `&self` 方法，`&Server` 就会跨 await 存活 —— 而 `Server` 里装着
+/// 各驱动的会话（`Box<dyn Any + Send>`，天然不 `Sync`），一条 `&Server` 跨 await 就要求
+/// `Server: Sync`，多驱动支持会被迫给所有驱动的 `Session` 加 `Sync` 约束（Oracle /
+/// MSSQL 的会话未必满足）。自由函数只借 `writer`，`Server` 只需要 `Send`。
+async fn send_result<W: AsyncWrite + Unpin>(
+    writer: &mut FrameWriter<W>,
+    id: Value,
+    result: Value,
+) -> Result<(), std::io::Error> {
+    let payload = serde_json::to_vec(&json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result,
+    }))
+    .map_err(std::io::Error::other)?;
+    writer.write_frame(KIND_JSON, &payload).await
+}
+
+async fn send_error<W: AsyncWrite + Unpin>(
+    writer: &mut FrameWriter<W>,
+    id: Value,
+    code: i64,
+    message: &str,
+    data: Option<Value>,
+) -> Result<(), std::io::Error> {
+    let mut error = json!({ "code": code, "message": message });
+    if let Some(data) = data {
+        error["data"] = data;
+    }
+    let payload = serde_json::to_vec(&json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": error,
+    }))
+    .map_err(std::io::Error::other)?;
+    writer.write_frame(KIND_JSON, &payload).await
+}
+
+impl Server {
     async fn close_all(&mut self) {
-        for (_, entry) in self.sessions.drain() {
-            self.driver.close(entry.session).await;
+        let sessions = std::mem::take(&mut self.sessions);
+        for (_, entry) in sessions {
+            let driver = &*self.drivers[entry.driver];
+            driver.close(entry.session).await;
         }
     }
 
-    async fn send_result<W: AsyncWrite + Unpin>(
-        &self,
-        writer: &mut FrameWriter<W>,
-        id: Value,
-        result: Value,
-    ) -> Result<(), std::io::Error> {
-        let payload = serde_json::to_vec(&json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": result,
-        }))
-        .map_err(std::io::Error::other)?;
-        writer.write_frame(KIND_JSON, &payload).await
-    }
-
-    async fn send_error<W: AsyncWrite + Unpin>(
-        &self,
-        writer: &mut FrameWriter<W>,
-        id: Value,
-        code: i64,
-        message: &str,
-        data: Option<Value>,
-    ) -> Result<(), std::io::Error> {
-        let mut error = json!({ "code": code, "message": message });
-        if let Some(data) = data {
-            error["data"] = data;
-        }
-        let payload = serde_json::to_vec(&json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": error,
-        }))
-        .map_err(std::io::Error::other)?;
-        writer.write_frame(KIND_JSON, &payload).await
+    /// 取「会话 + 它所属的驱动」。两个字段分别借，绕开 `&mut self` 的整借冲突。
+    fn routed<'s>(&'s mut self, session_id: &str) -> Result<(&'s dyn SidecarDriver, &'s mut SessionEntry), DriverError> {
+        let drivers = &self.drivers;
+        let sessions = &mut self.sessions;
+        let entry = sessions.get_mut(session_id).ok_or_else(|| {
+            DriverError::new(ErrorCode::SessionNotFound, format!("会话不存在：{session_id}"))
+        })?;
+        let driver: &dyn SidecarDriver = &*drivers[entry.driver];
+        Ok((driver, entry))
     }
 
     async fn dispatch<W: AsyncWrite + Unpin>(
@@ -270,9 +500,10 @@ impl<D: Driver> Server<D> {
                         ),
                     ));
                 }
+                let ids: Vec<&'static str> = self.drivers.iter().map(|d| d.driver_id()).collect();
                 Ok(Dispatch::Result(json!({
                     "protocol": PROTOCOL_VERSION,
-                    "driver_ids": [self.driver.driver_id()],
+                    "driver_ids": ids,
                     "runtime": { "kind": "rust" },
                 })))
             }
@@ -280,13 +511,13 @@ impl<D: Driver> Server<D> {
             "shutdown" => Ok(Dispatch::Shutdown(json!({ "ok": true }))),
             "driver.describe" => {
                 let session_id = require_str(params, "session_id")?;
-                let entry = self.session(&session_id)?;
+                let (driver, entry) = self.routed(&session_id)?;
                 let descriptor = json!({
-                    "driver_id": self.driver.driver_id(),
-                    "display_name": self.driver.display_name(),
+                    "driver_id": driver.driver_id(),
+                    "display_name": driver.display_name(),
                     "server_version": entry.info.server_version.clone(),
                     "capabilities": entry.info.capabilities_json(),
-                    "identifier_quote": self.driver.identifier_quote(),
+                    "identifier_quote": driver.identifier_quote(),
                     "default_schema": entry.info.default_schema.clone(),
                 });
                 Ok(Dispatch::Result(descriptor))
@@ -294,19 +525,27 @@ impl<D: Driver> Server<D> {
             "session.open" => {
                 let session_id = require_str(params, "session_id")?;
                 let driver_id = require_str(params, "driver_id")?;
-                if driver_id != self.driver.driver_id() {
-                    return Err(DriverError::new(
-                        ErrorCode::DriverNotSupported,
-                        format!(
-                            "驱动 id 不匹配：请求 {driver_id}，本进程只提供 {}",
-                            self.driver.driver_id()
-                        ),
-                    ));
-                }
+                let idx = self
+                    .drivers
+                    .iter()
+                    .position(|d| d.driver_id() == driver_id)
+                    .ok_or_else(|| {
+                        DriverError::new(
+                            ErrorCode::DriverNotSupported,
+                            format!("驱动 id 不匹配：请求 {driver_id}，本进程提供不了"),
+                        )
+                    })?;
                 let conn = params.get("params").cloned().unwrap_or_else(|| json!({}));
-                let (session, info) = self.driver.open(&conn).await?;
+                let (session, info) = self.drivers[idx].open(&conn).await?;
                 let version = info.server_version.clone();
-                self.sessions.insert(session_id.clone(), SessionEntry { session, info });
+                self.sessions.insert(
+                    session_id.clone(),
+                    SessionEntry {
+                        driver: idx,
+                        session,
+                        info,
+                    },
+                );
                 Ok(Dispatch::Result(json!({
                     "session_id": session_id,
                     "server_version": version,
@@ -317,15 +556,14 @@ impl<D: Driver> Server<D> {
                 let Some(entry) = self.sessions.remove(&session_id) else {
                     return Err(DriverError::new(ErrorCode::SessionNotFound, format!("会话不存在：{session_id}")));
                 };
-                self.driver.close(entry.session).await;
+                let driver = &*self.drivers[entry.driver];
+                driver.close(entry.session).await;
                 Ok(Dispatch::Result(json!({})))
             }
             "session.ping" => {
                 let session_id = require_str(params, "session_id")?;
-                let entry = self.sessions.get_mut(&session_id).ok_or_else(|| {
-                    DriverError::new(ErrorCode::SessionNotFound, format!("会话不存在：{session_id}"))
-                })?;
-                self.driver.ping(&mut entry.session).await?;
+                let (driver, entry) = self.routed(&session_id)?;
+                driver.ping(&mut entry.session).await?;
                 Ok(Dispatch::Result(json!({})))
             }
             "query.execute" => {
@@ -346,11 +584,8 @@ impl<D: Driver> Server<D> {
                         return Err(DriverError::protocol("query.execute 的 params 必须是数组"));
                     }
                 };
-                let entry = self.sessions.get_mut(&session_id).ok_or_else(|| {
-                    DriverError::new(ErrorCode::SessionNotFound, format!("会话不存在：{session_id}"))
-                })?;
-                let page = self
-                    .driver
+                let (driver, entry) = self.routed(&session_id)?;
+                let page = driver
                     .execute(
                         &mut entry.session,
                         ExecuteRequest {
@@ -376,30 +611,24 @@ impl<D: Driver> Server<D> {
             }
             "tx.begin" | "tx.commit" | "tx.rollback" => {
                 let session_id = require_str(params, "session_id")?;
-                let entry = self.sessions.get_mut(&session_id).ok_or_else(|| {
-                    DriverError::new(ErrorCode::SessionNotFound, format!("会话不存在：{session_id}"))
-                })?;
+                let (driver, entry) = self.routed(&session_id)?;
                 match method {
-                    "tx.begin" => self.driver.begin(&mut entry.session).await?,
-                    "tx.commit" => self.driver.commit(&mut entry.session).await?,
-                    _ => self.driver.rollback(&mut entry.session).await?,
+                    "tx.begin" => driver.begin(&mut entry.session).await?,
+                    "tx.commit" => driver.commit(&mut entry.session).await?,
+                    _ => driver.rollback(&mut entry.session).await?,
                 }
                 Ok(Dispatch::Result(json!({})))
             }
             "meta.catalogs" => {
                 let session_id = require_str(params, "session_id")?;
-                let entry = self.sessions.get_mut(&session_id).ok_or_else(|| {
-                    DriverError::new(ErrorCode::SessionNotFound, format!("会话不存在：{session_id}"))
-                })?;
-                let catalogs = self.driver.catalogs(&mut entry.session).await?;
+                let (driver, entry) = self.routed(&session_id)?;
+                let catalogs = driver.catalogs(&mut entry.session).await?;
                 Ok(Dispatch::Result(json!({ "catalogs": catalogs })))
             }
             "meta.schemas" => {
                 let session_id = require_str(params, "session_id")?;
-                let entry = self.sessions.get_mut(&session_id).ok_or_else(|| {
-                    DriverError::new(ErrorCode::SessionNotFound, format!("会话不存在：{session_id}"))
-                })?;
-                let schemas = self.driver.schemas(&mut entry.session).await?;
+                let (driver, entry) = self.routed(&session_id)?;
+                let schemas = driver.schemas(&mut entry.session).await?;
                 Ok(Dispatch::Result(json!({ "schemas": schemas })))
             }
             "meta.objects" => {
@@ -407,10 +636,8 @@ impl<D: Driver> Server<D> {
                 let schema = optional_str(params, "schema")
                     .or_else(|| optional_str(params, "catalog"))
                     .unwrap_or_default();
-                let entry = self.sessions.get_mut(&session_id).ok_or_else(|| {
-                    DriverError::new(ErrorCode::SessionNotFound, format!("会话不存在：{session_id}"))
-                })?;
-                let objects = self.driver.objects(&mut entry.session, &schema).await?;
+                let (driver, entry) = self.routed(&session_id)?;
+                let objects = driver.objects(&mut entry.session, schema).await?;
                 Ok(Dispatch::Result(json!({ "objects": objects })))
             }
             "meta.object_detail" => {
@@ -421,21 +648,13 @@ impl<D: Driver> Server<D> {
                 let name = optional_str(params, "object")
                     .or_else(|| optional_str(params, "name"))
                     .ok_or_else(|| DriverError::protocol("meta.object_detail 缺少 object/name"))?;
-                let entry = self.sessions.get_mut(&session_id).ok_or_else(|| {
-                    DriverError::new(ErrorCode::SessionNotFound, format!("会话不存在：{session_id}"))
-                })?;
-                let detail = self.driver.object_detail(&mut entry.session, &schema, &name).await?;
+                let (driver, entry) = self.routed(&session_id)?;
+                let detail = driver.object_detail(&mut entry.session, schema, name).await?;
                 Ok(Dispatch::Result(serde_json::to_value(detail).unwrap_or_else(|_| json!({}))))
             }
             "meta.routine_source" => Ok(Dispatch::Result(Value::Null)),
             other => Err(DriverError::protocol(format!("未实现的方法：{other}"))),
         }
-    }
-
-    fn session(&self, session_id: &str) -> Result<&SessionEntry<D::Session>, DriverError> {
-        self.sessions.get(session_id).ok_or_else(|| {
-            DriverError::new(ErrorCode::SessionNotFound, format!("会话不存在：{session_id}"))
-        })
     }
 
     fn encode_page(&self, page: Page) -> Result<Dispatch, DriverError> {
@@ -746,7 +965,7 @@ mod tests {
     ///
     /// 这条钉的是真机上发生过的事故：MSSQL 的 `meta.object_detail` 把
     /// `sys.columns.precision`（tinyint）按 `i16` 取，tiberius 内部 unwrap
-    /// panic，进程 exit 101；宿主只看到 `帧 I/O 失败：early eof`，同一实例
+    /// panic，进程 exit 101；宿主只看到「帧 I/O 失败：early eof」，同一实例
     /// 上所有会话一起断，而且完全不知道是哪个对象、哪一列炸的。
     #[tokio::test]
     async fn a_panicking_request_is_isolated_and_the_process_keeps_serving() {
@@ -799,6 +1018,124 @@ mod tests {
         let detail = read_json(&mut reader).await;
         assert_eq!(detail["id"], 4);
         assert_eq!(detail["result"]["object"]["name"], "t1", "会话应仍可用：{detail}");
+
+        drop(writer);
+        drop(reader);
+        server.await.unwrap().unwrap();
+    }
+
+    /// 另一个驱动：会话类型与 `FakeSession` 完全不同，用来钉「按 driver_id 路由」。
+    struct OtherDriver;
+
+    struct OtherSession {
+        tag: String,
+    }
+
+    #[async_trait]
+    impl Driver for OtherDriver {
+        type Session = OtherSession;
+
+        fn driver_id(&self) -> &'static str {
+            "other"
+        }
+        fn display_name(&self) -> &'static str {
+            "Other Driver"
+        }
+        async fn open(&self, _params: &Value) -> Result<(Self::Session, SessionInfo), DriverError> {
+            Ok((
+                OtherSession { tag: "from-other".to_string() },
+                SessionInfo {
+                    server_version: Some("OtherDB 2.0".to_string()),
+                    default_schema: None,
+                    capabilities: BTreeMap::new(),
+                },
+            ))
+        }
+        async fn close(&self, _session: Self::Session) {}
+        async fn ping(&self, _session: &mut Self::Session) -> Result<(), DriverError> {
+            Ok(())
+        }
+        async fn execute(&self, session: &mut Self::Session, _req: ExecuteRequest) -> Result<Page, DriverError> {
+            Ok(Page::rows(
+                vec![ColumnDef::new("who", "TEXT", false, Canonical::Text)],
+                vec![vec![json!(session.tag)]],
+            ))
+        }
+    }
+
+    /// 一个进程供两个驱动：`initialize` 回两个 id，会话按 `session.open` 的
+    /// `driver_id` 各进各的类型擦除槽位，互不串线。
+    #[tokio::test]
+    async fn two_drivers_in_one_process_route_by_driver_id() {
+        let (server_io, client_io) = tokio::io::duplex(1024 * 1024);
+        let (server_rx, server_tx) = tokio::io::split(server_io);
+        let (client_rx, client_tx) = tokio::io::split(client_io);
+        let server = tokio::spawn(async move {
+            serve_many(
+                vec![as_sidecar(FakeDriver), as_sidecar(OtherDriver)],
+                server_rx,
+                server_tx,
+            )
+            .await
+        });
+        let mut writer = FrameWriter::new(client_tx);
+        let mut reader = FrameReader::new(client_rx);
+
+        request_json(&mut writer, 1, "initialize", json!({"protocol": 1})).await;
+        let init = read_json(&mut reader).await;
+        let ids: Vec<&str> = init["result"]["driver_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["fake", "other"], "初始化应报出全部驱动 id：{init}");
+
+        // 两个会话：一个 fake（有 rows 参数）、一个 other。
+        request_json(&mut writer, 2, "session.open", json!({
+            "session_id": "s-fake", "driver_id": "fake", "params": {"rows": 2}
+        })).await;
+        let ok = read_json(&mut reader).await;
+        assert!(ok.get("result").is_some(), "fake 会话应能打开：{ok}");
+
+        request_json(&mut writer, 3, "session.open", json!({
+            "session_id": "s-other", "driver_id": "other", "params": {}
+        })).await;
+        let ok = read_json(&mut reader).await;
+        assert!(ok.get("result").is_some(), "other 会话应能打开：{ok}");
+
+        // 描述各报各的版本与能力，说明 describe 也是按会话路由的。
+        request_json(&mut writer, 4, "driver.describe", json!({"session_id": "s-fake"})).await;
+        let fake_desc = read_json(&mut reader).await;
+        assert_eq!(fake_desc["result"]["driver_id"], "fake");
+        assert_eq!(fake_desc["result"]["server_version"], "FakeDB 1.0");
+
+        request_json(&mut writer, 5, "driver.describe", json!({"session_id": "s-other"})).await;
+        let other_desc = read_json(&mut reader).await;
+        assert_eq!(other_desc["result"]["driver_id"], "other");
+        assert_eq!(other_desc["result"]["server_version"], "OtherDB 2.0");
+
+        // 两个会话各执行一条：数据来自各自驱动，说明会话槽位没串。
+        request_json(&mut writer, 6, "query.execute", json!({
+            "session_id": "s-fake", "request_id": "r1", "sql": "SELECT", "max_rows": 10
+        })).await;
+        let fake_page = read_json(&mut reader).await;
+        assert_eq!(fake_page["result"]["row_count"], 2);
+        assert_eq!(fake_page["result"]["columns"][0]["name"], "id");
+
+        request_json(&mut writer, 7, "query.execute", json!({
+            "session_id": "s-other", "request_id": "r2", "sql": "SELECT", "max_rows": 10
+        })).await;
+        let other_page = read_json(&mut reader).await;
+        assert_eq!(other_page["result"]["columns"][0]["name"], "who");
+        assert_eq!(other_page["result"]["rows"][0]["who"], "from-other");
+
+        // 不认识的 id：明确报驱动不支持，不是「随便挑一个」。
+        request_json(&mut writer, 8, "session.open", json!({
+            "session_id": "s-nope", "driver_id": "nope", "params": {}
+        })).await;
+        let nope = read_json(&mut reader).await;
+        assert_eq!(nope["error"]["code"], -32001, "未知驱动应报 driver_not_supported：{nope}");
 
         drop(writer);
         drop(reader);
