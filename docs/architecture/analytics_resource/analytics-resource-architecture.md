@@ -1,5 +1,8 @@
 # 资产库 / 分析存档模块（M6）· 设计理念与架构
 
+> ⚠️ **阶段快照（2026-11-12 回写）**：本文记录当时的设计与进度，正文里的测试数、迁移编号、待办状态**已过时**（027 / 028 / 029 已被时间线 / 语义 / 谱系占用，A6 顺延 030）。当前实现以 `crates/analytics_resource/README.md` 与 `D:\RdataStation\RDS\M6-终审问题清单-2026-11-12.md` 为准。
+
+
 > 状态：**设计定稿（2026-09-15）；Phase 0–3 主体与 Phase 2 前七刀已落地**——领域类型、本体层、迁移 020 + 新列接入、归档→取回→再归档闭环 + 变更事件、索引修复、面板与详情、五个对话框（含回收站）、项目级回收站（P0.8 已上提中性化）、历史保留 / 默认排序 / 分组折叠三个设置项均可用；124 单测 + 27 窗口测试全绿，逐项证据见 `analytics-resource-dev-plan.md` §0。
 > 仍待：批量标签 / 分组（Phase 2）、头部可编辑、默认分组、`analytics_recycle_bin` 表的物理删除（现为“弃用 + 空置”）。
 > 前置：v1 蓝本 `v1/backend/src/core/persistence/analytics_resource_store/` + `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v2 现状见 `analytics-resource-dev-plan.md` §1。

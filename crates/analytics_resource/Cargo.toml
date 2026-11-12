@@ -40,8 +40,8 @@ duckdb.workspace = true
 thiserror.workspace = true
 # 资源对比 job（P2-b 下沉 `jobs.rs`：版本 diff 的 unified patch，workspace 级依赖）
 similar.workspace = true
-# 草稿来源判定（P2-b 下沉 `jobs.rs`：`MODULE_DIR_NAME` / `ORIGIN_SCRATCHPAD`）
-scratchpad.workspace = true
+# 2026-11-12 分层收口：草稿箱候选由宿主经 ResourceHostBackend 注入，
+# 本 crate 不再依赖 scratchpad（见 src/resource_host/mod.rs 的字符串约定）。
 # 默认分组 / 历史保留策略 / 默认排序（P2-b 下沉 `resource_host.rs`：事件路径读设置）
 settings.workspace = true
 # 洞察取样来源（P2-b 下沉 `resource_host.rs`：`SampleSource` 类型，打开数据文件/远端引用）

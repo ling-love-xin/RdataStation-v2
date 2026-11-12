@@ -1,5 +1,8 @@
 # 资产库 / 分析存档模块 · 使用手册（M6）
 
+> ⚠️ **阶段快照（2026-11-12 回写）**：本文记录当时的设计与进度，正文里的测试数、迁移编号、待办状态**已过时**（027 / 028 / 029 已被时间线 / 语义 / 谱系占用，A6 顺延 030）。当前实现以 `crates/analytics_resource/README.md` 与 `D:\RdataStation\RDS\M6-终审问题清单-2026-11-12.md` 为准。
+
+
 > 读者：产品 / 测试 / 使用者。设计理念与原理见 `analytics-resource-architecture.md`；
 > 视觉与交互规格见 `analytics-resource-prototype-design.md`；任务与逐轮记录见 `analytics-resource-dev-plan.md`。
 > **第一次接触先看一页看懂**：`analytics-resource-showcase.html`（视觉版）/ `analytics-resource-showcase.md`（可贴版）。

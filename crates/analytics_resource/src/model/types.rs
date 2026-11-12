@@ -7,8 +7,9 @@ use super::*;
 
 /// 归档请求：上游（草稿箱 / 本地文件选择）发起，M6 只收**路径 + 元数据**。
 ///
-/// 刻意不接收 `ScratchpadStore` 之类的上游类型——依赖方向是 `scratchpad → analytics_resource`，
-/// M6 不认识草稿箱的内部结构（架构 §6.1）。
+/// 刻意不接收 `ScratchpadStore` 之类的上游类型——依赖方向是
+/// `workbench / app → analytics_resource → engine, shared`；草稿箱候选由宿主注入，
+/// M6 不认识草稿箱的内部结构（架构 §6.1；2026-11-12 分层收口）。
 #[derive(Debug, Clone)]
 pub struct ArchiveRequest {
     /// 源文件绝对路径（草稿箱内或系统任意位置）。
@@ -113,7 +114,7 @@ pub struct CheckoutRequest {
     /// 工作副本的**绝对**目标路径。
     ///
     /// 由调用方（草稿箱）给出，而不是 M6 拼 `scratchpad/`：M6 不认识上游模块的目录结构，
-    /// 只知道自己的 `resources/`（依赖方向 `scratchpad → analytics_resource`）。
+    /// 只知道自己的 `resources/`（依赖方向 `workbench → analytics_resource → engine, shared`）。
     pub dest_path: PathBuf,
 }
 

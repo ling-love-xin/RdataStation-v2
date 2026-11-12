@@ -17,14 +17,12 @@
 // 为什么重导出而不是再登记一份：面板头 / 行高 / 图标档 / 固定描边必须与 M4 导航、M5 草稿箱一致，
 // 镜像两份会在任一侧调整时静默错位（连接对话框、洞察、设置都已在用外壳那一份）。
 pub use workbench_shell::ui::{
-    CONTROL_HEIGHT_SM, HAIRLINE, ICON_SIZE_SM, NAV_GROUP_BAR_WIDTH as GROUP_BAR_WIDTH,
+    CONTROL_HEIGHT_SM, HAIRLINE, NAV_GROUP_BAR_WIDTH as GROUP_BAR_WIDTH,
     PANEL_HEADER_HEIGHT, ROW_HEIGHT,
 };
 
 // ===== 本 crate 自有尺寸 =====
 
-/// 空态大图标（3.0rem = 48px）。
-pub const ARCHIVE_EMPTY_ICON_SIZE: f32 = 3.0;
 /// 徽标高（1.125rem = 18px；小字号 + 上下留白，不撑破行高）。
 pub const ARCHIVE_BADGE_HEIGHT: f32 = 1.125;
 /// 详情面板的标签列宽（5.5rem = 88px；固定宽 + 值列弹性，避免长短标签抖动布局）。

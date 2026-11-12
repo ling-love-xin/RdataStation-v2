@@ -31,13 +31,17 @@ impl RowScope {
 }
 
 /// 存档种类：决定**本体存在哪**，进而决定复现强度（架构 §2.2）。
+///
+/// 2026-11-12 口径修正：`Analysis` 并不具备「靠定义重建数据」的能力——
+/// `definition_sql` 全仓只被登记与算指纹，**从不执行**；它的本体与 `File` 一样是
+/// `resources/` 下的受管文件快照。因此种类只描述「形态」，不承诺重建能力。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum ArchiveKind {
     /// 受管文件：本体在 `{项目}/resources/`，归档后只读（第一期唯一落地的种类）。
     #[default]
     File,
-    /// 分析表：本体在 `{项目}/.RSmeta/analytics.duckdb`，靠定义重建（第二期）。
+    /// 分析表：本体同样是受管文件快照，额外登记定义 / 列结构指纹；**定义不执行、不重建数据**。
     Analysis,
     /// 远端表引用：本体不在本机，失效风险最高（不承诺，见架构 §2.2）。
     TableRef,
@@ -82,10 +86,13 @@ impl ArchiveKind {
     }
 
     /// 复现强度：由种类派生，**不落库**（架构 §2.2）。
+    ///
+    /// 2026-11-12 降级：`Analysis` 与 `File` 同级（都是内容冻结的受管文件）。
+    /// 曾经把它标成 `Medium` 并承诺「定义冻结，数据可重建」，但定义从不执行、
+    /// 数据也不会重建——对一个主打消除误解的模块，界面不该承诺做不到的事。
     pub fn strength(self) -> ReproductionStrength {
         match self {
-            Self::File => ReproductionStrength::Strong,
-            Self::Analysis => ReproductionStrength::Medium,
+            Self::File | Self::Analysis => ReproductionStrength::Strong,
             Self::TableRef => ReproductionStrength::Weak,
         }
     }
@@ -97,14 +104,15 @@ impl std::fmt::Display for ArchiveKind {
     }
 }
 
-/// 复现强度：界面必须常显（"这东西半年后还打不打得开"）——原型 §1 原则 1。
+/// 复现强度：回答「这东西半年后还打不打得开」（原型 §1 原则 1）。
+///
+/// 只保留能被现有实现兑现的两档：**本体是否冻结在本项目内**。
+/// 分析表不再单列中档——它的定义只是元信息，不构成第三种复现能力。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReproductionStrength {
-    /// 内容冻结，重跑得同解（`File`）。
+    /// 内容冻结在本项目，重跑得同解（`File` / `Analysis`）。
     Strong,
-    /// 定义冻结，数据可重建（`Analysis`）。
-    Medium,
-    /// 只记"当时指向哪"（`TableRef`）。
+    /// 只记"当时指向哪"，本体不在本项目（`TableRef`）。
     Weak,
 }
 
