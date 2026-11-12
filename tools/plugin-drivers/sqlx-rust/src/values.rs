@@ -138,11 +138,27 @@ pub(crate) fn map_error(err: sqlx::Error) -> DriverError {
         .as_database_error()
         .map(|db| db.message().to_string())
         .unwrap_or_else(|| err.to_string());
-    let mut mapped = DriverError::sql(message);
+    let mut mapped = DriverError::sql(friendly_message(message));
     if let Some(state) = sqlstate {
         mapped = mapped.with_sqlstate(state);
     }
     mapped
+}
+
+/// PostgreSQL 服务端 `lc_messages` 不是 UTF-8 时，错误消息体是**服务端本地编码**，
+/// sqlx 解不出来，只能报「Postgres returned a non-UTF-8 string for its error message」——
+/// 真实原因（最常见就是认证失败）被整条吞掉，界面上只剩一句协议层抱怨。
+///
+/// 真机实测：`192.168.3.138:5432` 用错口令时就是这样（`sslmode=require` 才进得到认证阶段）。
+/// 这里在保留原文的同时补一句「往哪看」，否则用户拿到的信息量为零。
+pub(crate) fn friendly_message(message: String) -> String {
+    if message.contains("non-UTF-8 string") {
+        return format!(
+            "{message}（PostgreSQL 服务端 lc_messages 不是 UTF-8，错误内容无法解码；\
+             最常见的原因是认证失败，真实原因见服务端日志）"
+        );
+    }
+    message
 }
 
 /// 这条语句会不会返回行集（决定走 fetch 还是走 execute 拿 `affected_rows`）。
@@ -240,5 +256,23 @@ mod tests {
         assert!(!returns_rows("UPDATE t SET a = 1"));
         assert!(!returns_rows("CREATE TABLE t (id int)"));
         assert!(!returns_rows(""));
+    }
+
+    #[test]
+    fn non_utf8_server_error_gets_a_hint_instead_of_a_bare_protocol_complaint() {
+        let raw = "encountered unexpected or invalid data: Postgres protocol error \
+                   (reading ErrorResponse): Postgres returned a non-UTF-8 string for its error message."
+            .to_string();
+        let friendly = friendly_message(raw);
+        assert!(friendly.contains("lc_messages"), "要告诉用户往哪看：{friendly}");
+        assert!(
+            friendly.contains("认证失败"),
+            "最常见的真实原因要写出来：{friendly}"
+        );
+        // 普通消息原样返回，不能给所有错误都加一行噪音。
+        assert_eq!(
+            friendly_message("relation \"x\" does not exist".to_string()),
+            "relation \"x\" does not exist"
+        );
     }
 }

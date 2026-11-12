@@ -276,6 +276,23 @@ MSSQL 的会话未必满足）。改成**自由函数**后 `Server` 只需 `Send
 | `cargo test`（`sqlx-rust`） | 8/8 通过（DSN 拼装 / 转义 / ssl-mode 归一 / 脱敏 / 超时默认 / 两套类型映射 / `returns_rows`） |
 | 协议冒烟（`.rds/tmp/sqlx_smoke.py`，不连库） | `initialize` 回 `["mysql","postgres"]`；两个 `session.open` 连不上时回 `-32009` 且 URL 已脱敏；未知 driver 回 `-32001`；`shutdown` 正常退出 |
 
+**真机探测（2026-11-12，凭据待补）**
+
+`192.168.3.138` 上 3306 / 5432 **都开着**，但 `.rds/local/real-hosts.md` 只登记了 Oracle
+（1521）与 SQL Server（1433）两套账号。用 Oracle 那套 `devuser` 试了一轮，只能证明
+「通路与协议对」，证明不了功能：
+
+| 端点 | 结果 | 结论 |
+| --- | --- | --- |
+| `mysql://…@192.168.3.138:3306` | `1045 (28000): Access denied for user 'devuser'@'192.168.3.29'` | TCP / 握手 / 认证流程全部走通，**账号不对** |
+| `postgres://…@192.168.3.138:5432/postgres` | 非 TLS → `os error 10054`（服务端 RST） | 该实例**要求 TLS** |
+| 同上 + `sslmode=require` | `Postgres returned a non-UTF-8 string for its error message` | 已进认证阶段；服务端 locale 非 UTF-8，真实原因（认证失败）读不出来 |
+
+顺带落一个产品修正（本刀一起提交）：`values::friendly_message` 对这种「非 UTF-8 错误消息」
+补一句「服务端 `lc_messages` 不是 UTF-8，最常见是认证失败，真实原因见服务端日志」——
+否则界面上只剩一句协议层抱怨，用户拿到的信息量为零（用例
+`non_utf8_server_error_gets_a_hint_instead_of_a_bare_protocol_complaint` 钉住）。
+
 **没做 / 待做（如实记录）**
 
 1. **真机验收未做**：本机是否有可连的 MySQL / PG 端点还没确认（真机口径 = 真查询 3000 行 + 取消 + 事务）。
