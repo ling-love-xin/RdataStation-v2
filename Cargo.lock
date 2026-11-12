@@ -8326,7 +8326,6 @@ dependencies = [
  "rds-engine",
  "rds-insight",
  "rds-paths",
- "rds-scratchpad",
  "rds-settings",
  "rds-shared",
  "rds-tag",

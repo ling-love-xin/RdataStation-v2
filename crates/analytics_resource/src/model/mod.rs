@@ -3,11 +3,15 @@
 mod affordance;
 mod kind;
 mod promoted_from;
+mod semantics;
+mod timeline;
 mod types;
 
 pub use affordance::*;
 pub use kind::*;
 pub use promoted_from::*;
+pub use semantics::*;
+pub use timeline::*;
 pub use types::*;
 
 #[cfg(test)]
@@ -42,9 +46,11 @@ mod tests {
     #[test]
     fn strength_is_derived_from_kind() {
         assert_eq!(ArchiveKind::File.strength(), ReproductionStrength::Strong);
+        // 2026-11-12：analysis 档不再单列「中复现强度」——definition_sql 从不执行，
+        // 本体与 File 同样是受管文件快照，只能兑现「内容冻结」这一档。
         assert_eq!(
             ArchiveKind::Analysis.strength(),
-            ReproductionStrength::Medium
+            ReproductionStrength::Strong
         );
         assert_eq!(ArchiveKind::TableRef.strength(), ReproductionStrength::Weak);
     }

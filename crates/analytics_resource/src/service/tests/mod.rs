@@ -16,6 +16,13 @@ pub(super) const PAYLOAD_MODE_MIGRATION_SQL: &str =
 pub(super) const TAG_LINK_FK_MIGRATION_SQL: &str = include_str!(
     "../../../../store/migrations/project_meta/024_analytics_resource_tags_drop_tag_fk.sql"
 );
+/// 资产履历事件表（时间线）：服务层会写事件，测试库不跑这段就会 "no such table"。
+/// 时间线（027）+ 业务断言 / 效力（028）合并跑：测试库结构须与生产库一致。
+pub(super) const TIMELINE_MIGRATION_SQL: &str = concat!(
+    include_str!("../../../../store/migrations/project_meta/027_analytics_resource_timeline.sql"),
+    include_str!("../../../../store/migrations/project_meta/028_analytics_resource_semantics.sql"),
+    include_str!("../../../../store/migrations/project_meta/029_analytics_resource_refs.sql")
+);
 
 /// 测试服务：默认给「保留 n 份」（大多数用例只关心份数）。
 ///
@@ -25,8 +32,7 @@ pub(super) async fn test_service(keep_versions: u32) -> (ArchiveService, PathBuf
 }
 
 pub(super) async fn test_service_with(keep_versions: KeepVersions) -> (ArchiveService, PathBuf) {
-    let dir = std::env::temp_dir().join(format!("rds_archive_{}", uuid::Uuid::new_v4().simple()));
-    fs::create_dir_all(&dir).await.expect("create temp project");
+    let dir = crate::tests::temp_project_dir("archive");
     let pool = Arc::new(
         ProjectSqlitePool::new(dir.join("project.db"), 2)
             .await
@@ -45,6 +51,9 @@ pub(super) async fn test_service_with(keep_versions: KeepVersions) -> (ArchiveSe
         inner
             .execute_batch(TAG_LINK_FK_MIGRATION_SQL)
             .expect("migration 024");
+        inner
+            .execute_batch(TIMELINE_MIGRATION_SQL)
+            .expect("migration 027");
     }
     // 全局标签库注入本测试独立路径（避免共享进程级隔离根 → 跨测试同名标签冲突）。
     let store = AnalyticsResourceStore::new_for_test(pool, dir.join("global.db"));
@@ -85,6 +94,8 @@ async fn write_draft(dir: &std::path::Path, name: &str, content: &[u8]) -> PathB
 mod archive;
 mod checkout;
 mod reference;
+mod semantics;
+mod timeline;
 mod trash;
 mod versions;
 
