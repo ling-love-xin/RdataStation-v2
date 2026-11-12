@@ -482,7 +482,14 @@ impl<H: 'static> ConnectionDialogState<H> {
         // 不一致就清地址与凭据，避免 Oracle 驱动配 mysql:// 地址。
         if !d.type_id.trim().is_empty() {
             if let Some(driver) = self.resolve_driver(&driver_value) {
-                self.reset_stale_endpoint(&driver, window, cx);
+                if self.reset_stale_endpoint(&driver, window, cx) {
+                    // 快照同步清掉，否则关闭对话框时又把旧地址写回 connection_drafts。
+                    if let Some(slot) = self.drafts.borrow_mut().get_mut(idx) {
+                        slot.url.clear();
+                        slot.user.clear();
+                        slot.pass.clear();
+                    }
+                }
             }
         }
         set_select_value(&self.scope, &d.scope, window, cx);
