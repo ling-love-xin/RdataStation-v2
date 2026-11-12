@@ -26,6 +26,7 @@ pub mod registry;
 pub mod service;
 pub mod settings_page;
 pub mod skeleton;
+pub mod theme_pack;
 
 // 持久化与进程级快照已下沉到 `persistence`；以下 re-export 保持 `settings::*` 公共路径不变。
 pub use persistence::{
@@ -45,6 +46,7 @@ pub use workbench_shell::product_tokens;
 pub use service::{SettingsService, value_by_key};
 pub use service::{install_insight_memory_limit_sink, install_log_level_sink};
 pub use service::install_sql_analysis_sink;
+pub use service::install_theme_pack_sink;
 
 #[allow(unused_imports)]
 use crate::model::{
@@ -337,6 +339,35 @@ mod tests {
                 shared::i18n::Locale::Zh,
                 "拒绝后值不变"
             );
+        });
+    }
+
+    /// 主题方案（包）：默认是现役 `rds`；值域只认内置包，未登记的 id 被拒绝且值不变。
+    ///
+    /// 为什么只验“拒绝”不验“接受”：接受会写盘，同进程并行的写盘用例共享隔离数据根
+    /// （见 `out_of_range_font_size_is_rejected` 的注释），会把别的用例的落盘值带歪。
+    #[gpui_kit::test]
+    fn theme_pack_value_domain_is_enforced(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            SettingsService::init(cx);
+            assert_eq!(
+                SettingsService::theme_pack(cx),
+                crate::theme_pack::DEFAULT_PACK,
+                "默认必须是现役主题（不偷偷换皮）"
+            );
+            assert!(crate::theme_pack::is_builtin("qinghua"), "青花在内置可选");
+            let before = SettingsService::theme_pack(cx);
+            let ok = SettingsService::apply_by_key(
+                "appearance.theme_pack",
+                SettingValue::Text("no-such-pack".to_string()),
+                None,
+                cx,
+            );
+            assert!(!ok, "未登记的包必须拒绝");
+            assert_eq!(SettingsService::theme_pack(cx), before, "拒绝后值不变");
+            // 目录穿越的 id 也不能靠“已登记”蒙过去。
+            assert!(!crate::theme_pack::is_builtin("../x"));
         });
     }
 

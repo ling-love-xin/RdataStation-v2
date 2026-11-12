@@ -46,6 +46,15 @@ description: RdataStation 主题系统：明暗配色 token 对照、产品语�
 - 加载：app 启动 `ThemeRegistry::watch_dir(themes_dir, cx, on_load)`（热更新）
 - 切换：`Theme::change(mode, window, cx)`；命令 `ToggleThemeMode` 在 `crates/settings`，经 `SettingsService` 即时生效并持久化
 
+## 主题方案（包）
+
+- 一包 = 一个 Light + 一个 Dark + 一套产品 token，落在 `assets/themes/packs/<id>/`（子目录，registry 只扫第一层 json，不会注册）。
+- 值域：`crates/settings/src/theme_pack.rs::BUILTIN`（当前 `rds` = 现役、`qinghua`）；默认 `rds`，行为与历史一致。
+- 选择：设置页「外观 → 主题方案」（`appearance.theme_pack`）→ `settings::install_theme_pack_sink`
+  → `crates/app/src/main.rs::apply_theme_pack_state` 重装「主题 + 产品 token」（只换一半会残留上一包的语义色）。
+- 临时覆盖：环境变量 `RDS_THEME_PACK=<id>`（优先于设置值、不落盘，试色 / CI 用）。
+- 审包：`python tools/audit_theme_packs.py`（`theme_audit.py` 只审现役两套，路径硬编码）。
+
 ## 产品语义 token 消费（已落地）
 
 0.6.1 / 0.7.0 / 0.7.1 的语义面（`SemanticThemeTokens` / `ColorTokens`）是**固定 18 角色**（`ColorTokens` 0.7.0/0.7.1 均 18 项；`SemanticThemeTokens` 23 项，2026-10-02 实测 0.7.0、2026-10-11 复核 0.7.1），装不下上表产品角色；因此落到独立资产 + 独立加载设施：

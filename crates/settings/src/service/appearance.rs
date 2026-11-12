@@ -1,4 +1,6 @@
 //! 外观设置项的写入处理（`apply_slot`，由 `SettingsService::apply_by_key` 分发）与读写访问器。
+use std::sync::RwLock;
+
 use gpui_kit::App;
 use gpui_kit::component::Theme;
 use gpui_kit::px;
@@ -8,6 +10,27 @@ use crate::SettingsService;
 use crate::model::{AppearanceMode, Settings};
 use crate::persistence::persist;
 use crate::registry::{SettingValue, Slot};
+
+/// 主题方案（包）变更的副作用出口。
+///
+/// 为什么用 sink 而不是在设置层直接装包：包资产（`assets/themes/packs/<id>/`）与
+/// `Theme` 装配属于**装配层**知识（主题目录从哪来、产品 token 怎么一起换），
+/// 设置在 `crates/settings` 里只该管“值”。由 `crates/app/src/main.rs` 注册一次
+/// （`apply_theme_pack_state`），未注册时（测试 / 无主题目录的宿主）只落盘不报错。
+static THEME_PACK_SINK: RwLock<Option<fn(&mut App)>> = RwLock::new(None);
+
+/// 注册主题方案变更出口（装配层调用一次；重复注册以最后一次为准）。
+pub fn install_theme_pack_sink(sink: fn(&mut App)) {
+    if let Ok(mut guard) = THEME_PACK_SINK.write() {
+        *guard = Some(sink);
+    }
+}
+
+fn notify_theme_pack(cx: &mut App) {
+    if let Some(sink) = THEME_PACK_SINK.read().ok().and_then(|guard| *guard) {
+        sink(cx);
+    }
+}
 
 /// 本域 slot 的标量写入处理；返回 `false` 表示拒绝（值形态不符 / 复合值 / 无法解析）。
 pub(crate) fn apply_slot(
@@ -72,6 +95,16 @@ pub(crate) fn apply_slot(
             }
             persist(&cx.global::<Settings>().clone());
             // 落盘后由 workbench 的 `on_settings_changed` 装配到 DockSkin。
+        }
+        Slot::AppearanceThemePack => {
+            let Some(id) = value.as_text() else {
+                return false;
+            };
+            // 只认内置包（页面只给这几档；设置文件被手改坏时拒绝，不猜）。
+            if !crate::theme_pack::is_builtin(id) {
+                return false;
+            }
+            SettingsService::set_theme_pack(id, cx);
         }
         _ => return false,
     }
@@ -169,6 +202,26 @@ impl SettingsService {
     /// 读取当前界面语言（默认中文）。
     pub fn locale(cx: &App) -> shared::i18n::Locale {
         shared::i18n::Locale::from_code(&cx.global::<Settings>().appearance.locale)
+    }
+    /// 读取当前主题包 id（默认 `"rds"` = 现役主题）。
+    ///
+    /// 注意：这是**落盘值**；试切换用环境变量 `RDS_THEME_PACK` 时实际生效的是环境变量，
+    /// 优先级判定在装配层（`crates/app/src/theme_pack.rs::selected`）。
+    pub fn theme_pack(cx: &App) -> String {
+        cx.global::<Settings>().appearance.theme_pack.clone()
+    }
+    /// 设置并持久化主题包，再经 [`install_theme_pack_sink`] 让装配层即时重装。
+    ///
+    /// 换包必须「主题 + 产品 token」一起换：产品 token 只按明暗模式解析、没有主题维度，
+    /// 只换主题会让活动栏底色 / Quick Open 组头 / 搜索命中底 / 结果集四槽残留上一包的值。
+    pub fn set_theme_pack(id: &str, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.appearance.theme_pack = id.to_string();
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        notify_theme_pack(cx);
     }
     /// 设置并持久化界面语言，即时生效：更新 global → 写 settings.json →
     /// 同步 `shared::i18n` 全局语言（`tr()` 查表基准）→ 刷新所有窗口（全 UI 文案即时切换）。

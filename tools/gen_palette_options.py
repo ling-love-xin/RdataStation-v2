@@ -868,32 +868,33 @@ MAPPING = """| 角色（本文件） | 对应 140 token 键 | 备注 |
 BUILTIN_NOTE = """> 三条都是本机源码实测（2026-11-12），不是推测。
 
 1. **加载端本来就支持多主题**：`crates/app/src/main.rs::load_theme_assets` 扫 `assets/themes/*.json`，把每个文件里的 `themes[]` 全部注册进 `ThemeRegistry`（`product-tokens.json` / `theme-keys.json` 除外）。所以多套主题**文件本身就能被加载**，不用改加载逻辑。
-2. **切换端只有一对明暗槽**：`Theme` 只有 `light_theme` / `dark_theme` 两个字段，`Theme::change(mode)` 只按模式应用这一对（`vendor/gpui-component/src/theme/mod.rs:388-406`，注释明确“调用方换过 `light_theme`/`dark_theme` 后，即便 mode 不变，change 也会重新应用”）；而 `attach_rds_theme` 目前按名字**硬编码** `"RDS Light"` / `"RDS Dark"`（`main.rs:649-661`）。换另一套 = 同时替换这两个字段再 `change`，API 支持，但要新增“主题包”概念与选择 UI。
+2. **切换端只有一对明暗槽**：`Theme` 只有 `light_theme` / `dark_theme` 两个字段，`Theme::change(mode)` 只按模式应用这一对（`vendor/gpui-component/src/theme/mod.rs:388-406`，注释明确“调用方换过 `light_theme`/`dark_theme` 后，即便 mode 不变，change 也会重新应用”）。装配层已按「包」补上这一层：`attach_rds_theme` 先按包取（`assets/themes/packs/<id>/theme.json`，按 `mode` 取一对、**不依赖主题名**）替换两槽，取不到才按名字回落 `"RDS Light"` / `"RDS Dark"`；缺口是“选择维度”，不是切换 API。
 3. **产品 token 没有主题维度**：`assets/themes/product-tokens.json` 只有 `light` / `dark` 两个映射，按模式解析成一个全局（`crates/workbench_shell/src/product_tokens.rs:17-59`）。换第二套主题后，活动栏底色、Quick Open 组头、搜索命中底、结果集四个高亮槽**仍是珊瑚那套的值** —— 表面只换了一半，且不报错。
 
 **结论**：内置可以，但先定两条规矩 ——
 
 - 主题以**包**为单位：一包 = 一个 Light + 一个 Dark + 一套产品 token，不做散装单套；
-- 包名对外后**不能再改**：`attach_rds_theme` 与设置持久化都按名字查，改名等于用户配置失效。
+- 包 **id** 对外后不能再改（设置按 id 落盘、目录按 id 找，改名等于用户配置失效）；
+  包内主题**名**可以随便改：装配按 `mode` 取，不查名字。
 
 建议节奏：内置 **2 个包**（默认 RDS + 1 个中国风），其余当可选包；要上第 3 个包之前，先把 `ProductTokenSet` 升级成“按包解析”，否则每多一包就多一处“看着只换了一半”的静默不一致。
 
-> 这一节说的“包”已经按 §4.1 生成好了（8 个包，每个 = 主题文件 + 产品 token 文件，运行时副本在
-> `assets/themes/packs/<id>/`）；剩下的只是“选哪包 + 改解析口径”。
+> 这一节说的「包」已经按 §4.1 生成好并接进装配层（8 个包，运行时副本在 `assets/themes/packs/<id>/`；
+> 设置页只开 `rds` 与 `qinghua` 两档）。
 
-**试切换（opt-in，默认完全不变）**
+**怎么切换（默认完全不变）**
 
-- 入口：环境变量 `RDS_THEME_PACK=<包 id>`，例如 `qinghua`、`zhusha`、`mopin`。
-  不设 / 设成 `rds` / `default` → 走现役 `rds-theme.json` + `product-tokens.json`，行为零变化。
-- 代码：`crates/app/src/theme_pack.rs`（选包 + 按 `mode` 读出一对配置，不依赖主题名）；
-  `main.rs` 的 `attach_rds_theme` / `attach_product_tokens` 在设了变量时优先读包，包不可用则
-  打一行 `[startup]` 日志并回落现役主题，不 panic、不阻塞启动。
+- 常态入口：设置页「外观 → 主题方案」，落盘 `appearance.theme_pack`，默认 `rds`（= 现役主题）。
+  内置两档：`rds`（RDS 经典）、`qinghua`（青花）；其余 6 包留在 `assets/themes/packs/` 不提供入口。
+- 临时覆盖：环境变量 `RDS_THEME_PACK=<包 id>`，优先级高于设置值、不落盘（试色 / CI 用）。
+- 代码：值域 `crates/settings/src/theme_pack.rs::BUILTIN`（登记表选项与写入校验同源）；
+  装配 `crates/app/src/theme_pack.rs`（按 `mode` 取一对，不依赖主题名）+ `main.rs::apply_theme_pack_state`；
+  变更出口 `settings::install_theme_pack_sink`（设置页改完即时重装「主题 + 产品 token」）。
 - 为什么必须「主题 + 产品 token 一起换」：产品 token 只按明暗模式解析、没有主题维度，
   只换主题会让活动栏底色 / Quick Open 组头 / 搜索命中底 / 结果集四槽残留默认珊瑚包的值。
-- 自检：`cargo test -p rds-app theme_pack` —— 断言每个出厂包都能读出 Light+Dark、字号 16、
-  140 键、13 个产品角色齐全（包缺文件 / 少键会直接失败）。
-- **还没做的**：主题选择 UI 与设置持久化（现在只有环境变量）；`ProductTokenSet` 仍是
-  “按模式”的单例，多包**并存**切换需要先升级成按包解析。
+- 自检：`cargo test -p rds-settings theme_pack`（值域：默认 `rds`、未登记 id 被拒）+
+  `cargo test -p rds-app theme_pack`（每个出厂包都能读出 Light+Dark、字号 16、140 键、13 个产品角色）。
+- **还没做的**：第 3 个包之前把 `ProductTokenSet` 升级为“按包解析”；真机截图核验未做。
 """
 
 
@@ -968,7 +969,7 @@ def build_md(total_checks, total_fail):
     lines.append("")
     lines.append("> 为什么放子目录：`ThemeRegistry::reload` 与 `load_theme_assets` 都只扫第一层 `*.json`，"
                  "`packs/` 子目录天然不注册——候选包不会出现在主题列表里，也不影响默认行为。"
-                 "启用方式见 §5 的「试切换」。\n")
+                 "启用方式见 §5「怎么切换」。\n")
 
     lines.append(f"### {sec}.2 生成与校验\n")
     lines.append("- 生成：`python tools/gen_theme_packs.py` —— 从本文件 `SCHEMES` 的角色值展开 140 键 + 13 个产品角色，"
@@ -1028,11 +1029,12 @@ def build_md(total_checks, total_fail):
                  "41 个语法名覆盖与着色对比度。")
     lines.append("- 选中底 / 文本选区按 `clamp_alpha` 上限（0.2 / 0.3）给值，超限会被 schema 静默压缩。")
     lines.append("- **未做的**：真机截图比对（明暗各一张全界面）；`tools/theme_audit.py` 仍硬编码 "
-                 "`RDS Light` / `RDS Dark` 与现役资产路径，接包文件要么改脚本参数要么用它跑根因；"
-                 "多包并存时的切换 / 回滚未验；没改视图代码，故未跑 `cargo test -p rds-ui-guard`。")
-    lines.append("- 落地某套时的完整步骤：把包文件拷进 `assets/themes/` → 改 `attach_rds_theme` 与产品 token 的解析口径 → "
-                 "`python tools/theme_audit.py`（0 不达标）→ `python tools/gen_theme_preview.py` → "
-                 "真机明暗切换核对 → 更新 `theme-tokens-complete.md`。\n")
+                 "`RDS Light` / `RDS Dark` 与现役资产路径（审包要走 `audit_theme_packs.py`）；"
+                 "第 3 个包之前 `ProductTokenSet` 仍是“按模式”单例（多包**并存**切换需先升级）；"
+                 "主题包的更换只在单进程内即时生效，回滚 = 再选回 `rds`。")
+    lines.append("- 落地某套时的完整步骤：包目录放进 `assets/themes/packs/<id>/` → 在 `settings::theme_pack::BUILTIN` "
+                 "加一档 → `python tools/audit_theme_packs.py`（0 不达标）→ 设置页选中该档 "
+                 "→ 真机明暗切换核对 → 更新 `theme-tokens-complete.md`。\n")
     return "\n".join(lines)
 
 
