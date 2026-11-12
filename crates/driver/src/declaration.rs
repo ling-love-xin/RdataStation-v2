@@ -483,12 +483,15 @@ mod tests {
     fn every_declaration_targets_a_seeded_family() {
         let conn = test_db();
         let decls = declarations();
-        assert!(decls.len() >= 6, "内置驱动声明应有 6 条：{decls:#?}");
+        assert!(
+            decls.len() >= 4,
+            "内置驱动声明应有 4 条（每族一条官方实现）：{decls:#?}"
+        );
 
+        // `mysql` / `postgres` 不在表内：这两个 id 由 sidecar 插件（`rds.driver.sqlx`）
+        // 贡献声明，内核声明器不再 upsert 它们（见 sqlx-driver-extraction-plan.md D3/D4）。
         let expected: HashMap<&str, &str> = [
-            ("mysql", "mysql"),
             ("mysql_native", "mysql"),
-            ("postgres", "postgresql"),
             ("postgres_native", "postgresql"),
             ("sqlite", "sqlite"),
             ("duckdb", "duckdb"),
@@ -697,7 +700,7 @@ mod tests {
     /// `key/label/type/required/placeholder`，`options[]` 目前无消费者）。
     #[test]
     fn config_schema_carries_what_the_view_reads() {
-        use crate::registry::{duckdb_driver, mysql_driver, sqlite_driver};
+        use crate::registry::{duckdb_driver, mysql_native_driver, sqlite_driver};
 
         let check = |d: &DriverDescriptor| {
             let json: Value =
@@ -725,15 +728,17 @@ mod tests {
             assert!(json.get("options").and_then(|o| o.as_array()).is_some());
         };
 
-        check(&mysql_driver());
+        check(&mysql_native_driver());
         check(&sqlite_driver());
         check(&duckdb_driver());
 
-        // 有下拉选项的驱动：`options[].values` 要带上，否则选项就丢了
-        let json: Value = serde_json::from_str(&config_schema_json(&mysql_driver())).expect("json");
+        // 有下拉选项的驱动：`options[].values` 要带上，否则选项就丢了。
+        // （D3 之后带 Select 选项的内置驱动只剩 sqlite 的「打开模式」——mysql 的 ssl-mode
+        //  下拉随 sqlx 实现一起进了插件清单。）
+        let json: Value = serde_json::from_str(&config_schema_json(&sqlite_driver())).expect("json");
         let values = json["options"][0]["values"]
             .as_array()
             .expect("select 的 values");
-        assert!(values.iter().any(|v| v == "VERIFY_IDENTITY"), "{json}");
+        assert!(values.iter().any(|v| v == "rwc"), "{json}");
     }
 }

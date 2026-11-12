@@ -19,17 +19,18 @@
 //! | `INET` / `CIDR` | `family u8, netmask u8, is_cidr u8, len u8, addr[len]` | `postgres-protocol-0.6.12/src/types/mod.rs::inet_from_sql`（family：2=IPv4、3=IPv6） |
 //! | `POINT` | `x f64, y f64` | 同文件 `point_from_sql` |
 //!
-//! ## 为什么也接 sqlx 那一侧
+//! ## 与 sqlx 插件共用同一份解析
 //!
 //! sqlx 对 `inet` / `point` **没有**解码器（`ipnetwork` feature 才管 `inet`，还要多一个
 //! 依赖；`point` 完全没有），而字节格式是同一套 —— 解析写在 `crates/driver-sql`
-//! 一份，两个驱动 + sqlx 插件共用，免得「同一个库两个驱动、两套格式化」。
+//! 一份，内核官方驱动与 sqlx 插件共用，免得「同一个库两个驱动、两套格式化」。
+//! （D3 之后 sqlx 实现在插件里，本文件只把这份解析挂到 tokio-postgres 的 `FromSql` 上。）
 //!
 //! ## 格式口径（与 PG 文本输出对齐，逐条都有真机断言）
 //!
 //! * `NUMERIC`：按 `dscale` 出小数位（`1234.56` 就是 `1234.56`，不补成 `1234.5600`）；
-//!   `NaN` / `Infinity` / `-Infinity` 按 PG 的写法。**注**：sqlx 那条路走
-//!   `BigDecimal::to_string()`，标度会多带（它按 base-10000 分组拼），两条路的值相等、
+//!   `NaN` / `Infinity` / `-Infinity` 按 PG 的写法。**注**：sqlx 插件那条路走
+//!   `BigDecimal::to_string()`，标度会多带（它按 base-10000 分组拼），两边值相等、
 //!   写法可能差尾零 —— 真机用例各按各的口径断言。
 //! * `INTERVAL`：`N year(s)` / `N mon(s)` / `N day(s)` + `HH:MM:SS[.ffffff]`，各段自带符号
 //!   （PG 会在时间前补 `+`，我们不打；对混合符号的区间两者文字略不同、值相同）。
@@ -37,8 +38,8 @@
 //!   只打地址（与 `inet_out` 一致）。
 //! * `POINT`：`(x,y)`。
 
-// 纯解码实现在 `crates/driver-sql/src/wire.rs`（内核两个 PG 驱动 + sqlx 插件共用一份）；
-// 这里只 re-export，并把它们挂到两条后端的 trait 上。
+// 纯解码实现在 `crates/driver-sql/src/wire.rs`（内核官方 PG 驱动 + sqlx 插件共用一份）；
+// 这里只 re-export，并把它挂到 `tokio_postgres::types::FromSql` 上。
 pub use rds_driver_sql::wire::{
     array_literal, inet_to_text, interval_parts_to_text, interval_to_text, numeric_to_text,
     point_to_text,
@@ -53,17 +54,16 @@ const OID_INET: u32 = 869;
 /// `POINT` 的 OID。
 const OID_POINT: u32 = 600;
 
-/// 给四类各生成一个「解出来就是文本」的包装类型，并把两侧后端的 trait 都接上：
-/// tokio-postgres（Official 驱动）走 `FromSql`，sqlx 走 `Type` + `Decode`。
+/// 给四类各生成一个「解出来就是文本」的包装类型，并挂到 tokio-postgres 的 `FromSql`
+/// 上（官方 `postgres_native` 驱动靠它取 `PgNumeric` / `PgInterval` / `PgInet` / `PgPoint`）。
 ///
-/// `Format` 两种都要认：sqlx 对**它认识的**类型一律要二进制（我们这几类它认识 OID，
-/// 只是没有解码器），但它也可能按文本回（例如服务端强制文本格式时）——文本本来就
-/// 是人能看的，直接用。
+/// 只认二进制格式：tokio-postgres 对这几类按我们声明的类型取参数时发的是二进制
+/// （文本格式走不到这里，也就不用管）。
 macro_rules! pg_wire_type {
     ($name:ident, $oid:expr, $parse:path, $doc:literal) => {
         #[doc = $doc]
         ///
-        /// 解出来就是展示文本（出口层这几类一律是文本，与 `sqlx_cell_as_text!` 同口径）。
+        /// 解出来就是展示文本（出口层这几类一律是文本）。
         #[derive(Debug, Clone, PartialEq, Eq)]
         pub struct $name(pub String);
 
@@ -80,30 +80,6 @@ macro_rules! pg_wire_type {
             }
         }
 
-        impl sqlx::Type<sqlx::Postgres> for $name {
-            fn type_info() -> sqlx::postgres::PgTypeInfo {
-                sqlx::postgres::PgTypeInfo::with_oid(sqlx::postgres::types::Oid($oid))
-            }
-
-            fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
-                ty.oid() == Some(sqlx::postgres::types::Oid($oid))
-            }
-        }
-
-        impl<'r> sqlx::Decode<'r, sqlx::Postgres> for $name {
-            fn decode(
-                value: sqlx::postgres::PgValueRef<'r>,
-            ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
-                match value.format() {
-                    // 文本格式本来就是展示文本（服务端已按它的口径排好）
-                    sqlx::postgres::PgValueFormat::Text => {
-                        let text = std::str::from_utf8(value.as_bytes()?)?;
-                        Ok(Self(text.to_string()))
-                    }
-                    sqlx::postgres::PgValueFormat::Binary => Ok(Self($parse(value.as_bytes()?)?)),
-                }
-            }
-        }
     };
 }
 
@@ -123,7 +99,7 @@ pg_wire_type!(
     PgInet,
     OID_INET,
     inet_to_text,
-    "`INET` / `CIDR` 的 wire 解码（sqlx 侧要 `ipnetwork` feature，我们直接解）。"
+    "`INET` / `CIDR` 的 wire 解码（sqlx 侧要开 `ipnetwork` feature，我们直接解）。"
 );
 pg_wire_type!(
     PgPoint,

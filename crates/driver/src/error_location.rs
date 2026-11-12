@@ -29,14 +29,6 @@
 
 use shared::error::ErrorLocation;
 
-/// PostgreSQL（sqlx 驱动）：从协议字段取，**不解析文本**。
-pub fn postgres_from_sqlx(err: &sqlx::Error) -> Option<ErrorLocation> {
-    let pg = err
-        .as_database_error()?
-        .try_downcast_ref::<sqlx::postgres::PgDatabaseError>()?;
-    from_pg_fields(pg.schema(), pg.table(), pg.column(), pg.constraint())
-}
-
 /// PostgreSQL（Official 驱动）：同上，走 `tokio_postgres::DbError`。
 pub fn postgres_from_tokio(err: &tokio_postgres::Error) -> Option<ErrorLocation> {
     let db = err.as_db_error()?;

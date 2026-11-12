@@ -596,38 +596,34 @@ mod tests {
         }
     }
 
-    /// 同族两驱动的元数据面分叉必须**显式记录**，不能靠散文（矩阵文档里曾写过
-    /// "4 族全支持"，实测不是）。
+    /// 官方实现**只声明它真做了的**元数据面：声明与实现不能两张皮。
     ///
-    /// 当前实测（2026-11-12）：
-    /// * `mysql` 有 `list_indexes` 覆写；`mysql_native` 没有 → 索引明细缺席；
-    /// * `postgres` 无 `get_table_ddl` 覆写 → 源版 DDL 缺席，`postgres_native` 同。
-    ///
-    /// 修好实现后请把断言跟着改（红的这条就是提醒）。
+    /// 历史：这条原来比较同族两个实现（`mysql`(sqlx) vs `mysql_native`）。D3 把 sqlx
+    /// 实现整体搬到 sidecar 插件后，内核每族只剩一条官方实现 —— 那对比较对象不存在了，
+    /// 同族分叉的等价断言现在落在插件侧（`driver.describe` 的 `capabilities`，见
+    /// `sqlx-driver-extraction-plan.md` §7.2 的真机验收表）。
     #[test]
-    fn metadata_plane_diverges_inside_a_family() {
-        use crate::registry::{mysql_driver, mysql_native_driver, postgres_driver};
+    fn native_drivers_declare_only_what_they_implement() {
+        use crate::registry::{mysql_native_driver, postgres_native_driver};
 
         fn has(keys: &[String], k: &str) -> bool {
             keys.iter().any(|x| x == k)
         }
 
-        let sqlx_mysql = mysql_driver().capability_keys();
-        assert!(has(&sqlx_mysql, "meta_index_detail"));
         let native_mysql = mysql_native_driver().capability_keys();
+        assert!(has(&native_mysql, "meta_constraint_detail"));
         assert!(
             !has(&native_mysql, "meta_index_detail"),
             "mysql_native 已补上 list_indexes？补上后把它加回声明并改这条断言"
         );
-        assert!(has(&native_mysql, "meta_constraint_detail"));
 
-        let sqlx_pg = postgres_driver().capability_keys();
+        let native_pg = postgres_native_driver().capability_keys();
         assert!(
-            !has(&sqlx_pg, "meta_ddl_source"),
+            !has(&native_pg, "meta_ddl_source"),
             "PG 没有 SHOW CREATE 等价物，源版 DDL 只能合成"
         );
-        assert!(has(&sqlx_pg, "meta_ddl_compose"));
-        assert!(has(&sqlx_pg, "meta_sequences") && has(&sqlx_pg, "meta_triggers"));
+        assert!(has(&native_pg, "meta_ddl_compose"));
+        assert!(has(&native_pg, "meta_sequences") && has(&native_pg, "meta_triggers"));
     }
 
     /// 驱动 id → 运行时能力原型（与各驱动 `meta()` 里的 `..DataSourceMeta::xxx()` 同一份）。
@@ -654,8 +650,8 @@ mod tests {
         crate::AutoDriverRegistrar::register_builtin_drivers();
         let declarations = crate::DriverRegistry::all_descriptors();
         assert!(
-            declarations.len() >= 6,
-            "内置驱动声明应至少 6 条，实得 {}（内置驱动发现器没注册？）",
+            declarations.len() >= 4,
+            "内置驱动声明应至少 4 条（每族一条官方实现），实得 {}（内置驱动发现器没注册？）",
             declarations.len()
         );
 
@@ -708,13 +704,13 @@ mod tests {
     /// 网络型驱动三个都该有，文件型一个都不该有。
     #[test]
     fn network_keys_are_derived_from_the_booleans() {
-        use crate::registry::{duckdb_driver, mysql_driver, sqlite_driver};
+        use crate::registry::{duckdb_driver, mysql_native_driver, sqlite_driver};
 
-        let mysql = mysql_driver().capability_keys();
+        let mysql = mysql_native_driver().capability_keys();
         for key in ["ssh_tunnel", "ssl_tls", "proxy"] {
             assert!(
                 mysql.iter().any(|k| k == key),
-                "mysql 应派生 {key}：{mysql:?}"
+                "mysql_native 应派生 {key}：{mysql:?}"
             );
         }
         for d in [sqlite_driver(), duckdb_driver()] {
@@ -728,7 +724,7 @@ mod tests {
         }
 
         // 不重复：派生只在显式声明里没有该键时补一次
-        let mut doubled = mysql_driver();
+        let mut doubled = mysql_native_driver();
         doubled.capabilities.push("ssl_tls".to_string());
         let keys = doubled.capability_keys();
         assert_eq!(

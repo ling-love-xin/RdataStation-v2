@@ -30,13 +30,9 @@ futures.workspace = true
 async-trait.workspace = true
 
 # ===== 数据库驱动（native 实现） =====
-sqlx.workspace = true
-# 仅为在**后端 crate** 上开类型解码 features（`chrono` / `uuid` / `json`）：
-# sqlx crate 的同名 feature 带 `sqlx-sqlite?/…` 弱引用，会把 sqlx-sqlite 拉进版本解析，
-# 与 rusqlite 0.40 的 libsqlite3-sys 声明同一个 `links = "sqlite3"` 而冲突（交集为空）。
-# 代码里**不使用**这两个 crate，只借 feature 合并；详见根 `Cargo.toml` 的注记。
-sqlx-postgres.workspace = true
-sqlx-mysql.workspace = true
+# D3（2026-11-12）：sqlx 实现与 sqlx 依赖（含「只为后端 crate 合并 chrono/uuid/json
+# features」的那三个）一起删除 —— 内核不再有 sqlx 代码路径，`cargo tree -p rds-engine`
+# 里不该再出现 sqlx。量化验收见 `sqlx-driver-extraction-plan.md` §5/§7。
 rusqlite.workspace = true
 mysql_async.workspace = true
 tokio-postgres.workspace = true

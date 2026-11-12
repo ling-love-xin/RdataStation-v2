@@ -40,9 +40,7 @@
 
 use rds_engine::driver::Database;
 use rds_engine::driver::native::duckdb::DuckDbDatabase;
-use rds_engine::driver::native::mysql::MySqlDatabase;
 use rds_engine::driver::native::mysql_native::MySqlNativeDatabase;
-use rds_engine::driver::native::postgres::PostgresDatabase;
 use rds_engine::driver::native::postgres_native::PostgresNativeDatabase;
 use rds_engine::driver::native::sqlite::SqliteDatabase;
 
@@ -59,44 +57,6 @@ async fn assert_read_only<D: Database>(db: &D, driver: &str, sql: &str) {
         Some(true),
         "{driver}: `{sql}` 的 is_read_only 应为 Some(true)（出口层按它分「返回行 / 影响行」）"
     );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn postgres_reports_read_only() {
-    let Ok(url) = std::env::var("RDS_TEST_PG_URL") else {
-        eprintln!("⏭️  未设 RDS_TEST_PG_URL，跳过");
-        return;
-    };
-    println!("\n=== PostgreSQL（sqlx）===");
-    let db = PostgresDatabase::new(&url).await.expect("连上 PG(sqlx)");
-    assert_read_only(&db, "PG(sqlx)", "SELECT 1").await;
-    assert_read_only(&db, "PG(sqlx)", "SHOW search_path").await;
-
-    println!("\n=== PostgreSQL（Official）===");
-    let db = PostgresNativeDatabase::new(&url)
-        .await
-        .expect("连上 PG(Official)");
-    assert_read_only(&db, "PG(Official)", "SELECT 1").await;
-    assert_read_only(&db, "PG(Official)", "SHOW search_path").await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn mysql_reports_read_only() {
-    let Ok(url) = std::env::var("RDS_TEST_MYSQL_URL") else {
-        eprintln!("⏭️  未设 RDS_TEST_MYSQL_URL，跳过");
-        return;
-    };
-    println!("\n=== MySQL（sqlx）===");
-    let db = MySqlDatabase::new(&url).await.expect("连上 MySQL(sqlx)");
-    assert_read_only(&db, "MySQL(sqlx)", "SELECT 1").await;
-    assert_read_only(&db, "MySQL(sqlx)", "SHOW TABLES").await;
-
-    println!("\n=== MySQL（Official）===");
-    let db = MySqlNativeDatabase::new(&url)
-        .await
-        .expect("连上 MySQL(Official)");
-    assert_read_only(&db, "MySQL(Official)", "SELECT 1").await;
-    assert_read_only(&db, "MySQL(Official)", "SHOW TABLES").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

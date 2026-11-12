@@ -178,7 +178,7 @@ fn unwrap_segment_error(
 /// 把包装痕迹从**驱动给的原因文本**里摘掉
 ///
 /// 结构化字段（`sql` / `position`）上面已经还原了，这里管的是自由文本：不是所有驱动都把
-/// 「出错点」放在结构化字段里——MySQL 走 sqlx 时会把出错点附近的**原文**贴进消息
+/// 「出错点」放在结构化字段里——MySQL 会把出错点附近的**原文**贴进消息
 /// （`near 'order\n) AS rds_segment LIMIT 1000 OFFSET 0' at line 2`），而那段原文正是我们发出去的
 /// 包装文本。用户没写过 `rds_segment`，让他照着自己看不见的东西找错，只会以为是我们发错了
 /// （真机反馈：`select * from order` 的报错里冒出 `rds_segment`）。

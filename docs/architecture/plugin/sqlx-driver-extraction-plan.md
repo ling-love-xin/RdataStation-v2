@@ -339,6 +339,80 @@ MSSQL 的会话未必满足）。改成**自由函数**后 `Server` 只需 `Send
 
 ---
 
+### 7.3 D3 落地记录（代码已剥离，编译全绿；真机复验待做）
+
+**删了什么（逐条可对账）**：机械删除由 `.rds/tmp/d3_strip.py` 执行（锚点唯一才动手，每步打印删行数），
+不是手撕 diff。
+
+| 位置 | 删掉的内容 |
+| --- | --- |
+| `driver/src/native/{mysql,postgres,mysql_pool,postgres_pool}.rs` | 4 个文件整体（81 KB + 82 KB + 3.4 KB + 3.8 KB） |
+| `driver/src/registry/descriptors.rs` | `mysql_driver()` + `postgres_driver()` 两个工厂，203 行；原位留一段说明指向插件清单 |
+| `driver/src/factory.rs` | `MySqlDriverFactory` + `PostgresDriverFactory` 两个 impl 块，150 行（连带 3 条只为它们存在的 `use`） |
+| `driver/src/utils.rs` | `sqlx_cell_as_text!` 宏 + `sqlx_value_is_null`，78 行 |
+| `driver/src/error_location.rs` | `postgres_from_sqlx`，8 行（`postgres_from_tokio` 保留） |
+| `driver/src/native/pg_wire.rs` | `impl sqlx::Type` + `impl sqlx::Decode`，24 行；只留 `tokio_postgres::types::FromSql` 与 re-export |
+| `engine/src/bin/pg_probe.rs`、`engine/tests/mysql_rsa_auth_probe.rs` | 两个文件整体 —— 前者是 sqlx 专用的临时探针（其端点已登记进 `.rds/local/`），后者的主题（MySQL 8+ 明文信道 RSA 认证）已由插件（`mysql-rsa` feature）+ D2 真机验收覆盖 |
+| `engine/tests/{read_only_flag_from_real_servers,zero_row_columns_reach_query_result,result_rows_reach_the_temp_table,type_decode_fidelity,error_location_from_real_errors}.rs` | 各删 2 条 `use` + 2 条 sqlx 用例（6 驱动 → 4 驱动），共 10 条用例 |
+
+**顺手必须改的配套**（不改就编不过，逐条都已改）：
+
+1. `native/mod.rs` 去掉 4 行 `mod`；
+2. `lib.rs` / `registry/mod.rs` 的导出各去掉两个工厂/两个描述符工厂；`registry/mod.rs` 的
+   `DriverFactory` 文档示例从 `mysql_driver()` + `MySqlDatabase` 换成 `mysql_native_driver()` +
+   `MySqlNativeDatabase`（示例不能指向不存在的实现）；
+3. `loader.rs::builtin_factories()` 从 6 工厂降到 4，文档表同样补一句「`mysql`/`postgres` 由插件贡献」；
+4. `driver/Cargo.toml` 删 `sqlx` / `sqlx-postgres` / `sqlx-mysql` / `bigdecimal` / `num-traits`；
+   `engine/Cargo.toml` 删 `sqlx` / `sqlx-postgres` / `sqlx-mysql`（含「只为合并 features」那两条）；
+   **根 `Cargo.toml` 也删**了 `sqlx` / `sqlx-postgres` / `sqlx-mysql` 三条 workspace 定义 ——
+   留着它们等于把剥离掉的内核又长回来（插件有自己的 Cargo.toml 与 Cargo.lock，版本钉在那边）；
+5. 三处测试断言随事实改：
+   * `capability.rs::metadata_plane_diverges_inside_a_family` → 改名
+     `native_drivers_declare_only_what_they_implement`：同族两个实现已经不在内核，
+     比较对象消失；改成守「官方实现只声明它真做了的」（`mysql_native` 无索引明细、
+     `postgres_native` 无源版 DDL），同族分叉的等价断言落到插件侧 `driver.describe`；
+   * `capability.rs::declared_capabilities_and_runtime_bits_agree` 的 `>= 6` → `>= 4`；
+   * `capability.rs::network_keys_are_derived_from_the_booleans`、
+     `declaration.rs::{every_declaration_targets_a_seeded_family,config_schema_carries_what_the_view_reads}`
+     里的 `mysql_driver()` 换成 `mysql_native_driver()`；后者原来断言 MySQL 的
+     `ssl-mode=VERIFY_IDENTITY` 下拉，现在带 `Select` 能力的内置驱动只剩 sqlite 的
+     「打开模式」，断言改到 `rwc`。
+
+**一处守卫的外延（需要评审确认）**：`dependency_citations_match_lock.rs` 原来只读根
+`Cargo.lock`，而 `crates/` 里仍有按 sqlx 源码立论的结论（`property_spec` 的「静默忽略未知键」、
+`url_params` 的 TLS 参数词汇）。sqlx 从根锁里消失后这些引用会变成「lock 里没有这个 crate」。
+本刀的处理是**把插件 lock 一起读**（`tools/plugin-drivers/*/Cargo.lock`，根锁优先），
+引用照旧钉版本、钉的是「真正使用它的那份锁」；扫描根仍只扫 `crates/**`（`tools/` 侧尚未纳入，
+见 §8 那条待评审项）。
+
+**验证（2026-11-12）**：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo check -p rds-driver --all-targets` | ✅ 通过（无 warning） |
+| `cargo check -p rds-engine --all-targets` | ✅ 通过 |
+| `cargo check --workspace --all-targets -j 2` | ✅ 通过（`-j 2` 是必须的：默认并发在本机 32 GB 内存下会 OOM，见下面「环境坑」） |
+| `cargo tree -p rds-driver` / `cargo tree -p rds-app` | ✅ 无 `sqlx` / `sqlx-mysql` / `sqlx-postgres`（全 workspace `Cargo.lock` 里 sqlx 家族 0 条，连带掉 233 行：crc / dotenvy / etcetera / futures-intrusive / hashlink / tokio-stream 等只为 sqlx 存在的包） |
+| `cargo test -p rds-driver --lib` | ✅ 90 passed / 0 failed / 8 ignored（含改过的 `capability` 三条、`declaration` 两条、`auto_register`、`property_spec`） |
+| `cargo test -p rds-engine --test dependency_citations_match_lock --test acceptance_evidence_is_real` | ✅ 1 passed / 2 passed |
+
+**环境坑（记一笔）**：`cargo check --workspace --all-targets` 默认并发在本机直接
+`memory allocation of 2097152 bytes failed` + `StackOverflowException`（rustc 进程 OOM，
+退出码 `-1073741571`）。加 `-j 2` 即通过 —— 与 `.cargo/config.toml` 的 `test-all`（`-j 2`）
+同一个原因，全仓编译验证请一律带 `-j 2`。
+
+**D3 没做的（如实记录）**：
+
+1. **真机复验未做**：本刀只证明「编译与单测」，还没在 192.168.3.138 上重跑
+   `official_driver_real` / `editor_exec_real`（验收口径 S-3「老连接走插件仍可用」要等
+   D4 的 `drivers` 行处置之后才有完整链路）；
+2. `drivers` 表里 `mysql` / `postgres` 两行的处置、默认驱动换人、缺失驱动文案 → D4；
+3. `apply_lan_tls_default` 的重推与 settings 文案 → D5；
+4. `type_decode_fidelity` 的 `1234.5600` 尾零口径断言迁到插件侧、`error_location` 由 6 驱动
+   收缩后补齐 → D6（本刀只删了 sqlx 那一半，没有新增插件侧断言）。
+
+---
+
 ## 8. 验收清单
 
 | # | 断言 | 落点 |
