@@ -27,6 +27,7 @@ members = [
     "crates/workbench_shell",
     "crates/result_panel", "crates/file-meta",
     "crates/notification",
+    "crates/driver-sql",
     # 全工作区 UI 契约守门（纯源码/资产扫描，零产品依赖 → 不受单 crate 编译状态影响）
     "crates/ui_guard",
 ]
@@ -79,6 +80,10 @@ rds-sql = { path = "crates/sql", package = "rds-sql" }
 rds-store = { path = "crates/store", package = "rds-store" }
 # 驱动层（Database/Transaction/Stream trait + 注册发现 + 连接池 + native 实现，engine 瘦身第三刀抽取）
 rds-driver = { path = "crates/driver", package = "rds-driver" }
+# 驱动侧纯数据层（元数据 SQL 常量 / PG wire 解码 / 枚举码→文案），**零依赖**：
+# 内核 4 个原生驱动与 sqlx 插件二进制（`tools/plugin-drivers/sqlx-rust`）共用一份，
+# 见 docs/architecture/plugin/sqlx-driver-extraction-plan.md §7-D1
+rds-driver-sql = { path = "crates/driver-sql", package = "rds-driver-sql" }
 # 结果集面板（DBeaver Data Editor 方向）：结果域视图 + 结果存储独立成 crate，
 # 依赖方向 result_panel → {engine, gpui-kit, workbench_shell}，editor 依赖它、它不反向依赖 editor
 notification = { path = "crates/notification", package = "rds-notification" }

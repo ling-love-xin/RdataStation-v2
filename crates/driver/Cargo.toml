@@ -13,6 +13,8 @@ paths.workspace = true
 connection.workspace = true
 # 存储层：驱动声明同步与全局库管理器（declaration.rs）+ DuckDB 连接默认参数（native duckdb）
 rds-store.workspace = true
+# 驱动侧纯数据层：元数据 SQL 常量 / PG wire 解码 / 枚举码→文案（零依赖，插件共用一份）
+rds-driver-sql.workspace = true
 
 # ===== 分析引擎 =====
 duckdb.workspace = true

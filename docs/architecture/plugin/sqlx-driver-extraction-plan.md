@@ -4,7 +4,7 @@
 >
 > **前置**：`driver-capability-gating-plan.md`（能力置灰底座）必须先落，否则插件驱动的能力缺口会静默成「索引 (0)」。
 >
-> **状态**：方案稿，待评审；**不改代码**。
+> **状态**：方案稿；D0（置灰底座）与 **D1（抽 `crates/driver-sql`）已落地**，D2 起未开始。分刀与落地记录见 §7。
 
 ---
 
@@ -67,7 +67,7 @@
 
 | 方案 | 做法 | 代价 |
 | --- | --- | --- |
-| **A（推荐）** | 新建 workspace 成员 `crates/driver-sql`：只放**纯字符串 / 纯函数**（`PG_LIST_*` / `MY_*` SQL 常量、`columns_from_detail_rows`、`create_table_ddl` 复用、`pg_wire` 的 wire 解码核心）。内核 4 驱动与插件二进制都 path 依赖它 | 一次搬家；插件跨 workspace path 依赖需实测 cargo 是否接受（**未验证**） |
+| **A（推荐，已选）** | 新建 workspace 成员 `crates/driver-sql`：只放**纯字符串 / 纯函数**（`PG_LIST_*` / `MY_*` SQL 常量、`pg_wire` 的 wire 解码核心、枚举码→文案）。内核 4 驱动与插件二进制都 path 依赖它 | 一次搬家；插件跨 workspace path 依赖**已实测 cargo 接受**（见 §7.1） |
 | B | 复制一份进插件仓库 | 零结构改动，但两份元数据 SQL 必然漂移（本仓 2026-09-21 刚收敛过） |
 | C | 插件只拿 `rust-core`，SQL 常量由插件自己写 | 同上，且更散 |
 
@@ -190,12 +190,40 @@ features = ["tree", "health_check", "transactions", "sql_autocomplete", "schema_
 | 刀 | 内容 | 前置 | 验收 |
 | --- | --- | --- | --- |
 | D0 | 方案评审 + 三态/置灰底座落地 | — | 置灰方案 §7 全绿 |
-| D1 | 抽 `crates/driver-sql`（纯 SQL 常量 + wire 核心），内核 4 驱动改依赖 | D0 | 全仓 `cargo test-all` 不降 |
+| D1 | 抽 `crates/driver-sql`（纯 SQL 常量 + wire 核心），内核 4 驱动改依赖 | D0 | 全仓 `cargo test-all` 不降 ✅ 已落地（§7.1） |
 | D2 | 新建 `tools/plugin-drivers/sqlx-rust`（sidecar 二进制）：mysql + postgres 两个驱动实现，复用 D1 | D1 | 真机查询 3000 行 + 取消 + 事务 |
 | D3 | 删内核 sqlx 实现 + `engine` 的 sqlx 依赖与 `pg_probe` + 两个 pool | D2 | `cargo tree -p <app>` 无 sqlx；老连接走插件可用 |
 | D4 | 迁移（`drivers` 两行处置）+ 连接 id 兼容 + 默认驱动 + 缺失驱动文案 | D3 | 老项目连接列表无孤儿行 |
 | D5 | `apply_lan_tls_default` 重新推导 + settings 文案修正 | D3 | TLS 真机两档 |
 | D6 | 测试重指：`type_decode_fidelity`（sqlx 数值口径 `1234.5600` 迁插件）、`mysql_rsa_auth_probe`、`error_location` 6 驱动 → 4 驱动 | D3 | 全部用例有归属，无静默删除 |
+
+### 7.1 D1 落地记录（已完成）
+
+**新 crate**：`crates/driver-sql`（包名 `rds-driver-sql`，**零第三方依赖**，连 `shared` 都不引 —— 这样插件二进制 path 依赖它不会把内核依赖树拖进去）。
+
+| 模块 | 内容 |
+| --- | --- |
+| `meta_sql` | 10 个元数据 SQL 常量：4 个 `*_TABLE_DETAIL_SQL`（PG / MySQL / DuckDB，共用一份列序契约文档）、`PG_LIST_CATALOGS/SCHEMAS/TABLES SQL`、`PG_CURRENT_DATABASE_SQL`、`PG_LIST_INDEXES_SQL`、`PG_LIST_CONSTRAINTS_SQL`、`MY_LIST_CONSTRAINTS_SQL` |
+| `wire` | PG 二进制 wire → 文本的 6 个纯函数（`numeric_to_text` / `interval_to_text` / `interval_parts_to_text` / `array_literal` / `inet_to_text` / `point_to_text`）+ 原 5 个单测（整块搬来，不是重写） |
+| `codes` | `split_csv` / `pg_constraint_kind` / `pg_fk_action`（枚举码→文案）+ 3 个新单测（含 `pg_fk_action(' ') == None` 这条口径） |
+
+**内核只做 re-export，调用点零改动**：`crates/driver/src/utils.rs` 用 `pub use rds_driver_sql::{codes, meta_sql}` 重新导出常量与三个函数；`crates/driver/src/native/pg_wire.rs` 保留 OID 常量与 `pg_wire_type!` 生成的 `PgNumeric/PgInterval/PgInet/PgPoint`（`FromSql` + `sqlx::Type`/`Decode`），六个纯函数改为 re-export。既有 `utils::PG_LIST_TABLES_SQL` / `pg_wire::numeric_to_text` 等引用**一行都不用改**。
+
+**有意留在内核的**（判定标准：插件二进制用得上吗？用不上就不搬）：
+
+| 留着的东西 | 原因 |
+| --- | --- |
+| `columns_from_detail_rows` | 吃 `QueryResult` + `crate::ColumnDetail`（驱动模型）。等 D2 真做插件时再看是否要把「列序契约 → 结构体」也提纯 |
+| `batch_to_string_rows` / `create_statement` | 吃 `shared::models::QueryResult` + arrow；**插件走 Arrow batch，根本不用 `QueryResult`**，搬过去是给插件加无用依赖 |
+| `sqlx_cell_as_text!` / `sqlx_value_is_null` | 吃 `sqlx::Row`，随 sqlx 实现一起走（D3 删） |
+| `build_connection_url` / `with_database_in_url` / `database_from_url` | 依赖 `connection::url`（`encode_userinfo`）。插件按自己的配置拼 URL，不需要内核那套 |
+| `DUCK_TABLE_DETAIL_SQL` 的使用方（duckdb native） | SQL 文本已进 `driver-sql`，但执行/映射留在内核 |
+
+**§3 的「未验证」风险已实测解除**：在 `.rds/tmp/pathdep-probe` 建了一个自带空 `[workspace]` 的独立 crate，path 依赖 `crates/driver-sql`（主 workspace 成员），`cargo run` 正常输出 `620 0`（读到 `PG_LIST_INDEXES_SQL` 长度与 `numeric_to_text` 结果）。说明**插件可以按 §4.1 的 `plugin.toml` 形态直接 path 依赖 `crates/driver-sql`**，不需要把 SQL 复制进插件。
+
+**验证**：`cargo test -p rds-driver-sql` 8/8 通过；`cargo test -p rds-driver --lib` 97 passed / 22 ignored（忽略数与搬前一致，端点用例）；`cargo check --workspace`、`cargo test-all` 通过。
+
+**没做的事（如实记录）**：`sql_gen::create_table_ddl`（PG 的 DDL 合成）**没搬**——它吃 `TableInfo` 等驱动模型，且插件侧 DDL 合成属于 D2 的活；D1 只搬「字符串与纯函数」，避免为了搬而提前重构模型。
 
 ---
 

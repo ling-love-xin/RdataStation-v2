@@ -8460,6 +8460,7 @@ dependencies = [
  "postgres-native-tls",
  "rand 0.10.3",
  "rds-connection",
+ "rds-driver-sql",
  "rds-paths",
  "rds-shared",
  "rds-store",
@@ -8480,6 +8481,10 @@ dependencies = [
  "uuid",
  "x509-parser",
 ]
+
+[[package]]
+name = "rds-driver-sql"
+version = "0.2.8"
 
 [[package]]
 name = "rds-editor"
