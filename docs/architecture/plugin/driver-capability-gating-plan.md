@@ -76,21 +76,23 @@ return null;   // 不支持 = null，而不是空集合
 | **功能键**（现有 15 键） | `driver/src/capability.rs` + `drivers.capabilities` | 连接对话框「能力」Tab、能力矩阵对比。**本次不动** |
 | **元数据面能力位**（新增） | 同一列 `drivers.capabilities`，新键 | 属性分区置灰的输入 |
 
-新增键（初稿 9 条，按分区可再收）：
+新增键（9 条；**内核 6 驱动现状已按 2026-11-12 的代码实测校正**，不再是"按族推"）：
 
-| 键 | 中文 | DBeaver 对应 | 内核 6 驱动现状 | sidecar 现状 |
+| 键 | 中文 | DBeaver 对应 | 内核 6 驱动现状（实测） | sidecar 现状 |
 | --- | --- | --- | --- | --- |
-| `meta_index_detail` | 索引明细 | `supportsIndexes` | 4 族全支持 | **不支持**（报 Err） |
-| `meta_constraint_detail` | 约束明细 | `supportsReferentialIntegrity` | 4 族全支持 | **不支持**（报 Err） |
-| `meta_ddl_source` | 源版 DDL | （DBeaver 无独立位，按驱动实现） | MySQL `SHOW CREATE`；PG/SQLite/DuckDB 无 → 合成 | **不支持**（协议无方法） |
-| `meta_ddl_compose` | 合成 DDL | — | 全部（`sql_gen::create_table_ddl`） | 需要宿主侧合成（`meta.object_detail` 够用） |
-| `meta_routine_source` | 例程源码 | `supportsStoredCode` | PG/MySQL 支持；SQLite/DuckDB 不适用 | 支持（`meta.routine_source`） |
-| `meta_sequences` | 序列 | — | PG/DuckDB/MySQL 支持；SQLite 无 | 取决于插件 |
-| `meta_triggers` | 触发器 | — | 4 族支持 | 取决于 `meta.objects` 覆盖 |
-| `meta_fk_target` | 列级外键目标 | `supportsReferentialIntegrity` | 4 族支持 | **不支持**（线格式无字段） |
-| `meta_column_ordinal` | 列序号 | — | 4 族支持 | **不支持**（填 0） |
+| `meta_index_detail` | 索引明细 | `supportsIndexes` | 5/6 支持（`mysql`/`postgres`/`postgres_native`/`sqlite`/`duckdb` 有覆写）；**`mysql_native` 无 `list_indexes` 覆写**，`get_indexes` 转到 trait 默认空实现 | **不支持**（报 Err） |
+| `meta_constraint_detail` | 约束明细 | `supportsReferentialIntegrity` | 6/6 支持 | **不支持**（报 Err） |
+| `meta_ddl_source` | 源版 DDL | （DBeaver 无独立位，按驱动实现） | `mysql`/`mysql_native`（`SHOW CREATE`）、`sqlite`（`sqlite_master.sql`）、`duckdb`（`duckdb_tables().sql`）；**PG 两个实现都给不出** | **不支持**（协议无方法） |
+| `meta_ddl_compose` | 合成 DDL | — | 6/6（`sql_gen::create_table_ddl`） | 需要宿主侧合成（`meta.object_detail` 够用） |
+| `meta_routine_source` | 例程源码 | `supportsStoredCode` | MySQL/PG 两实现支持；`sqlite`/`duckdb` 不适用 | 支持（`meta.routine_source`） |
+| `meta_sequences` | 序列 | — | PG 两实现支持；`mysql`/`mysql_native` 无此对象（恒空）；**`duckdb` 有序列对象但无 `list_sequences` 覆写**（真缺口）；`sqlite` 无 | 取决于插件 |
+| `meta_triggers` | 触发器 | — | PG 两实现 + `mysql`（`introspect_schema_objects` 直查 `information_schema.triggers`）；**`mysql_native` 与 `sqlite` 无覆写**（真缺口）；`duckdb` 不支持 `CREATE TRIGGER` | 取决于 `meta.objects` 覆盖 |
+| `meta_fk_target` | 列级外键目标 | `supportsReferentialIntegrity` | 6/6（`references` 有值；复合外键的"目标是哪列"按各 SQL 说明保守处理） | **不支持**（线格式无字段） |
+| `meta_column_ordinal` | 列序号 | — | 6/6（1 基） | **不支持**（填 0） |
 
 > 说明：`meta_ddl_compose` 不是"驱动能力"而是"产品能力"——只要拿到列/约束/索引，宿主就能合成。它单独成键是为了让 UI 能区分「源版不可用但合成可用」与「两个都不可用」。
+>
+> 落码状态（2026-11-12）：9 个键已进 `CAPABILITY_DICTIONARY`（24 键），6 个内核驱动已按上表**逐驱动**声明；`capability::tests::metadata_plane_diverges_inside_a_family` 把「`mysql_native` 缺索引明细 / PG 缺源版 DDL」这两条分叉钉成断言，修好实现时测试会红着提醒改声明。
 
 ### 4.2 取数三态（把"不支持"传上来）
 

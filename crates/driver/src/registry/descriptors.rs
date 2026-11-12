@@ -415,6 +415,19 @@ pub fn mysql_driver() -> DriverDescriptor {
             "health_check".to_string(),
             "transactions".to_string(),
             "sql_autocomplete".to_string(),
+            // 元数据面（属性分区置灰的输入，见 `capability.rs` 的 `meta_*` 段）：
+            // 索引明细有覆写（`native/mysql.rs:628`）；源版 DDL 走 `SHOW CREATE`；
+            // 触发器虽无 `list_triggers` 覆写，但 `introspect_schema_objects`
+            // （`native/mysql.rs:915-943`）真查 `information_schema.triggers`，
+            // 导航给得出 → 声明。MySQL 无独立序列对象，故不声明 `meta_sequences`。
+            "meta_index_detail".to_string(),
+            "meta_constraint_detail".to_string(),
+            "meta_ddl_source".to_string(),
+            "meta_ddl_compose".to_string(),
+            "meta_routine_source".to_string(),
+            "meta_triggers".to_string(),
+            "meta_fk_target".to_string(),
+            "meta_column_ordinal".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string(), "ssl".to_string()])
         // 不声明属性默认值：sqlx 认的键里没有一条我们要改默认
@@ -500,6 +513,17 @@ pub fn postgres_driver() -> DriverDescriptor {
             "transactions".to_string(),
             "sql_autocomplete".to_string(),
             "schema_browser".to_string(),
+            // 元数据面：PG **没有** `SHOW CREATE TABLE` 等价物 → 不声明 `meta_ddl_source`，
+            // DDL 只能由宿主 `sql_gen` 合成（`meta_ddl_compose`）。索引/约束明细、序列、
+            // 触发器、例程源码都有覆写（`native/postgres.rs:725/734/910/951/983`）。
+            "meta_index_detail".to_string(),
+            "meta_constraint_detail".to_string(),
+            "meta_ddl_compose".to_string(),
+            "meta_routine_source".to_string(),
+            "meta_sequences".to_string(),
+            "meta_triggers".to_string(),
+            "meta_fk_target".to_string(),
+            "meta_column_ordinal".to_string(),
         ])
         .with_supported_auth_types(vec![
             "password".to_string(),
@@ -582,6 +606,16 @@ pub fn sqlite_driver() -> DriverDescriptor {
             "health_check".to_string(),
             "transactions".to_string(),
             "sql_autocomplete".to_string(),
+            // 元数据面：源版 DDL 来自 `sqlite_master.sql`（`native/sqlite.rs:1179`）。
+            // **不声明** `meta_routine_source`（SQLite 无存储过程）、`meta_sequences`、
+            // `meta_triggers`（`list_triggers` 没有覆写，导航会得到空文件夹——真缺口，
+            // 让消费方置灰说明，不假装支持）。
+            "meta_index_detail".to_string(),
+            "meta_constraint_detail".to_string(),
+            "meta_ddl_source".to_string(),
+            "meta_ddl_compose".to_string(),
+            "meta_fk_target".to_string(),
+            "meta_column_ordinal".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string()])
         // 声明层面**不带默认属性**（有意）：属性现在真生效了（驱动侧 PRAGMA，见
@@ -625,6 +659,16 @@ pub fn duckdb_driver() -> DriverDescriptor {
             "schema_browser".to_string(),
             "analytics".to_string(),
             "federation".to_string(),
+            // 元数据面：源版 DDL 来自 `duckdb_tables()` / `duckdb_views()` 的 `sql` 列
+            // （`native/duckdb.rs:1002`）。**不声明** `meta_routine_source`（无独立例程，
+            // 见 `supports_triggers` 附近的说明）；`list_sequences` / `list_triggers`
+            // 都没有覆写（DuckDB 有序列对象，这是真缺口——键缺席让消费方置灰）。
+            "meta_index_detail".to_string(),
+            "meta_constraint_detail".to_string(),
+            "meta_ddl_source".to_string(),
+            "meta_ddl_compose".to_string(),
+            "meta_fk_target".to_string(),
+            "meta_column_ordinal".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string()])
         // 同 SQLite：属性真生效（驱动侧 `SET`，见 `native/duckdb.rs::plan_connection`），
@@ -679,6 +723,17 @@ pub fn mysql_native_driver() -> DriverDescriptor {
             "health_check".to_string(),
             "transactions".to_string(),
             "sql_autocomplete".to_string(),
+            // 元数据面：约束明细 / 源版 DDL / 例程源码 / 外键目标 / 列序号都有
+            // （`native/mysql_native.rs:710/782/857`，列字段走 `utils::MY_TABLE_DETAIL_SQL`）。
+            // **索引明细缺席**：本实现没有 `list_indexes` 覆写，`get_indexes` 转到的是
+            // trait 默认空实现（`traits.rs:374`）——缺口如实声明，不假装支持。
+            // **触发器缺席**：同样没有 `introspect_schema_objects` / `list_triggers` 覆写。
+            "meta_constraint_detail".to_string(),
+            "meta_ddl_source".to_string(),
+            "meta_ddl_compose".to_string(),
+            "meta_routine_source".to_string(),
+            "meta_fk_target".to_string(),
+            "meta_column_ordinal".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string(), "ssl".to_string()])
         // mysql_async **不忽略未知参数**（`UrlError::UnknownParameter`），只声明它认的：
@@ -752,6 +807,17 @@ pub fn postgres_native_driver() -> DriverDescriptor {
             "transactions".to_string(),
             "sql_autocomplete".to_string(),
             "schema_browser".to_string(),
+            // 元数据面：与 sqlx 版同源（同一份 `PG_*` SQL）——索引/约束明细、序列、
+            // 触发器、例程源码都有覆写（`native/postgres_native.rs:794/827/926/935/943`）；
+            // PG 同样没有源版 DDL，只声明合成。
+            "meta_index_detail".to_string(),
+            "meta_constraint_detail".to_string(),
+            "meta_ddl_compose".to_string(),
+            "meta_routine_source".to_string(),
+            "meta_sequences".to_string(),
+            "meta_triggers".to_string(),
+            "meta_fk_target".to_string(),
+            "meta_column_ordinal".to_string(),
         ])
         .with_supported_auth_types(vec![
             "password".to_string(),
