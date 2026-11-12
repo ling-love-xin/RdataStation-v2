@@ -235,3 +235,48 @@ async fn t138_reference_trash_cycles_without_touching_source() {
     let _ = fs::remove_dir_all(&dir).await;
     let _ = fs::remove_file(&outside).await;
 }
+
+/// 2026-11-12 A3 回归：同一外部源重复引用要在**预检阶段**给出可读提示，
+/// 而不是漏到 020 的唯一索引、报一句裸 `insert` 错误。
+/// 旧实现按 `req.rel_path`（相对）查重，库里却存源绝对路径，预检永远查不到。
+#[tokio::test]
+async fn t157_duplicate_reference_is_rejected_by_precheck() {
+    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let outside = std::env::temp_dir().join(format!(
+        "ref_dup_{}.csv",
+        uuid::Uuid::new_v4().simple()
+    ));
+    fs::write(&outside, b"a,b\n1,2\n")
+        .await
+        .expect("write external source");
+
+    let first = service
+        .archive(reference_req(&outside, "data/big.csv"))
+        .await
+        .expect("first reference archive");
+    assert_eq!(
+        first.file_rel_path,
+        outside.to_string_lossy().replace('\\', "/"),
+        "回执给的就是真实入库键"
+    );
+
+    // 换个相对路径也不该让用户以为能再登记一份引用。
+    let reason = match service
+        .archive(reference_req(&outside, "data/renamed.csv"))
+        .await
+    {
+        Ok(_) => panic!("同一外部源不应被重复登记"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        reason.contains("目标路径已被存档"),
+        "预检要给出可读的冲突提示，实得：{reason}"
+    );
+    assert!(
+        !reason.to_lowercase().contains("unique") && !reason.to_lowercase().contains("constraint"),
+        "不该漏到数据库唯一索引：{reason}"
+    );
+
+    let _ = fs::remove_dir_all(&dir).await;
+    let _ = fs::remove_file(&outside).await;
+}

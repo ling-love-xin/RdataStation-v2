@@ -2,6 +2,24 @@
 
 use super::*;
 use crate::model::*;
+use std::path::Path;
+
+/// `file_rel_path` 的登记键：**预检、写入、回执三处唯一的口径来源**。
+///
+/// - `copy`：`resources/` 下的相对路径（搬运前定好，失败即中止）；
+/// - `reference`：规范化后的源绝对路径（本体留原位）。
+///
+/// 2026-11-12 收口：023 迁移后 reference 把源绝对路径同时写进 `file_rel_path`
+/// 与 `source_path`，这是为了复用 020 的局部唯一索引拦住「同一外部源被引用两次」。
+/// 不改成 NULL 是刻意的——改了要回填存量行、且 `global/distribute` 以「该列非空」
+/// 判脚本档，收益只是概念整洁。现在把一字段两义**封装进这一个函数**：
+/// 两列恒等，任何新增代码都只经它算键，不再各写一份字符串处理。
+fn registration_key(mode: PayloadMode, rel_path: &str, source_path: &Path) -> String {
+    match mode {
+        PayloadMode::Copy => rel_path.to_string(),
+        PayloadMode::Reference => source_path.to_string_lossy().replace('\\', "/"),
+    }
+}
 
 impl ArchiveService {
     /// 归档：首次归档（`existing_resource_id = None`）或再归档（取回后改完再归档）。
@@ -39,15 +57,18 @@ impl ArchiveService {
 
     /// 首次归档：copy 模式本体复制 + 写索引行；reference 模式只登记元数据（本体留原位）。
     ///
-    /// 冲突检查两模式同一条（`find_archive_by_rel_path`）：reference 的 `file_rel_path`
-    /// 存源绝对路径，唯一索引天然防"同一源被归档两次"（一个源一份引用）。
+    /// 冲突检查两模式共用 `registration_key` 算出的**实际入库键**：reference 下它是
+    /// 规范化的源绝对路径。旧实现按 `req.rel_path`（相对）查重，而库里存的是绝对路径，
+    /// 预检永远查不到，重复引用只能撞 020 唯一索引报一句裸 `insert` 错误。
     async fn archive_new(
         &self,
         req: ArchiveRequest,
         content_hash: String,
         file_size: Option<i64>,
     ) -> Result<ArchiveOutcome, CoreError> {
-        if let Some(existing) = self.store.find_archive_by_rel_path(&req.rel_path).await? {
+        let mode = req.payload_mode;
+        let registered_rel = registration_key(mode, &req.rel_path, &req.source_path);
+        if let Some(existing) = self.store.find_archive_by_rel_path(&registered_rel).await? {
             return Err(service_err(
                 "archive",
                 &format!(
@@ -56,14 +77,6 @@ impl ArchiveService {
                 ),
             ));
         }
-
-        let mode = req.payload_mode;
-        // reference 模式的"登记路径"：源绝对路径（本体留原位）。
-        // copy 模式：`resources/` 相对路径（搬运前定好，失败即中止）。
-        let registered_rel = match mode {
-            PayloadMode::Copy => req.rel_path.clone(),
-            PayloadMode::Reference => req.source_path.to_string_lossy().replace('\\', "/"),
-        };
 
         if mode == PayloadMode::Copy {
             self.payload
@@ -84,18 +97,23 @@ impl ArchiveService {
                     .map(|rows| rows.clamp(0, i32::MAX as i64) as i32)
             }),
             column_count: req.analysis.as_ref().map(|f| f.column_count()),
-            file_rel_path: registered_rel,
+            file_rel_path: registered_rel.clone(),
             payload_mode: mode,
-            // reference 模式记录源绝对路径；copy 模式为 None。
-            source_path: (mode == PayloadMode::Reference)
-                .then(|| req.source_path.to_string_lossy().replace('\\', "/")),
+            // reference 与登记键同源（两列恒等，避免再出现两种写法）；copy 为 None。
+            source_path: (mode == PayloadMode::Reference).then(|| registered_rel.clone()),
             file_size,
             binding: req.binding.clone(),
             // 作用域为派生只读量：数据住项目库 → project（架构 §4.3）。
             scope: "project".to_string(),
         };
 
-        let resource = match self.store.insert_archive(input).await {
+        // 登记行与「已归档」履历同一事务：不会出现时间线说归档了、列表里却没有。
+        let archived_detail = format!("归档登记：{}", req.name);
+        let resource = match self
+            .store
+            .insert_archive_with_event(input, Some(&archived_detail))
+            .await
+        {
             Ok(resource) => resource,
             Err(error) => {
                 // 回滚本体（copy 模式）：宁可回到"文件还在草稿箱"，也不要"副本留了、记录没有"。
@@ -122,7 +140,8 @@ impl ArchiveService {
             resource_id: resource.id,
             version: resource.version,
             content_hash,
-            file_rel_path: req.rel_path,
+            // 回执给真实入库键：reference 下就是外部源路径，用户看到的与库里一致。
+            file_rel_path: registered_rel,
             created_new_version: true,
             notes,
         })
@@ -183,11 +202,11 @@ impl ArchiveService {
             }
         };
         if copy_result.is_none() {
-            tracing::warn!(
-                resource_id,
-                version = current.version,
-                "再归档时旧内容副本未落（本体缺失？）"
-            );
+            // 旧内容没留下副本就继续覆盖，这一版将永远找不回来——中止，交给索引修复。
+            return Err(service_err(
+                "re_archive",
+                "当前内容未能留成历史副本（本体缺失？），已中止再归档以免丢失旧内容",
+            ));
         }
 
         let snapshot = serde_json::to_string(&current).map_err(|e| {
@@ -196,29 +215,69 @@ impl ArchiveService {
                 reason: e.to_string(),
             })
         })?;
-        let snapshot_id = self
-            .store
-            .save_resource_version(resource_id, current.version, &snapshot)
-            .await?;
 
-        // copy：用工作区源覆盖 `resources/` 副本（源保留——它是工作副本）。
-        // reference：不覆盖源（本体在外部，M6 不动它），只更新指纹 / 规模 / 版本。
-        if mode == PayloadMode::Copy {
-            self.payload
-                .replace_payload(&req.source_path, &rel_path)
-                .await?;
-        }
+        // 新内容先落同卷暂存：此刻本体仍是旧内容，后面任何失败都不会污染它。
+        // reference 不覆盖本体（源在外部），只更新指纹 / 规模 / 版本，故无需暂存。
+        let staged = if mode == PayloadMode::Copy {
+            Some(
+                self.payload
+                    .stage_payload(&req.source_path, &rel_path)
+                    .await?,
+            )
+        } else {
+            None
+        };
 
-        let updated = self
+        // 快照 + 索引 +1 + 履历事件同一事务：要么三件一起成立，要么一起回滚。
+        let committed = self
             .store
-            .update_archive_content(
+            .commit_new_version(
                 resource_id,
+                current.version,
+                &snapshot,
                 &content_hash,
-                &snapshot_id,
                 file_size,
                 analysis,
+                crate::model::TimelineEventKind::Updated,
+                Some(&format!(
+                    "内容指纹变化，v{} → v{}",
+                    current.version,
+                    current.version + 1
+                )),
             )
-            .await?;
+            .await;
+        let updated = match committed {
+            Ok(value) => value,
+            Err(error) => {
+                if let Some(path) = &staged {
+                    self.payload.discard_staged(path).await;
+                }
+                return Err(error);
+            }
+        };
+
+        if let Some(path) = &staged {
+            if let Err(error) = self.payload.commit_staged(path, &rel_path).await {
+                // 索引已提交、本体未落地：暂存文件保留作恢复凭据，时间线留一条醒目异常；
+                // indexer 下次扫描会报 ContentChanged，不会静默过去。
+                tracing::error!(
+                    error = %error,
+                    staged = %path.display(),
+                    resource_id,
+                    "再归档：索引已提交但本体替换失败，暂存文件保留待恢复"
+                );
+                self.record_timeline(
+                    resource_id,
+                    Some(updated.version),
+                    crate::model::TimelineEventKind::Validated,
+                    Some(&format!("新内容未落地，暂存文件保留：{}", path.display())),
+                    Some(&content_hash),
+                )
+                .await;
+                return Err(error);
+            }
+            self.payload.discard_staged(path).await;
+        }
 
         self.prune_copies(resource_id, req.keep_versions).await;
 

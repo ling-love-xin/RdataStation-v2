@@ -1,12 +1,7 @@
 use super::*;
 
 fn temp_project(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "rds_payload_{tag}_{}",
-        uuid::Uuid::new_v4().simple()
-    ));
-    std::fs::create_dir_all(&dir).expect("create temp project");
-    dir
+    crate::tests::temp_project_dir(&format!("payload_{tag}"))
 }
 
 fn cleanup(dir: &Path) {
@@ -451,4 +446,45 @@ fn safe_segment_rejects_traversal() {
     assert!(safe_segment("a/b").is_err());
     assert!(safe_segment(".hidden").is_err());
     assert!(safe_segment("  ").is_err());
+}
+
+/// 2026-11-12 暂存重放：stage 必须留下可反查 `rel` 的 sidecar，commit 成功后
+/// tmp 与 meta 都要清掉——否则刷新会把已提交的内容又重放一次覆盖本体。
+#[tokio::test]
+async fn staging_roundtrip_writes_sidecar_and_cleans_up_on_commit() {
+    let project = temp_project("staging");
+    let store = PayloadStore::new(&project);
+    store.ensure_dir().await.expect("ensure dir");
+    let source = project.join("draft.sql");
+    std::fs::write(&source, b"select 1;\n").expect("write source");
+
+    let staged = store
+        .stage_payload(&source, "reports/dau.sql")
+        .await
+        .expect("stage");
+    assert!(staged.is_file(), "暂存内容应在同卷暂存区");
+    assert!(
+        staged.with_extension("meta").is_file(),
+        "sidecar 必须落地，否则崩溃后无法重放"
+    );
+    let listed = store.list_staged();
+    assert_eq!(listed.len(), 1, "只应发现这一份暂存");
+    assert_eq!(listed[0].rel, "reports/dau.sql");
+    assert_eq!(listed[0].staged, staged);
+
+    store
+        .commit_staged(&staged, "reports/dau.sql")
+        .await
+        .expect("commit staged");
+    let dest = store.resources_dir().join("reports/dau.sql");
+    assert_eq!(std::fs::read(&dest).expect("read dest"), b"select 1;\n");
+    assert!(!staged.exists(), "rename 成功后 tmp 不应残留");
+    assert!(!staged.with_extension("meta").exists(), "meta 不应残留");
+    assert!(store.list_staged().is_empty(), "不应再有可重放内容");
+
+    // Windows 只读属性会让临时目录删不掉（这个测试自己造的脏，自己清）。
+    let mut perms = std::fs::metadata(&dest).expect("meta").permissions();
+    perms.set_readonly(false);
+    std::fs::set_permissions(&dest, perms).expect("clear readonly");
+    cleanup(&project);
 }
