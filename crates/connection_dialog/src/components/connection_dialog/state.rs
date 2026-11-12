@@ -708,7 +708,17 @@ impl<H: 'static> ConnectionDialogState<H> {
             ));
             return;
         }
+        let previous_type = self.selected_type.borrow().clone();
         *self.selected_type.borrow_mut() = type_id.to_string();
+        let first_driver = enabled_drivers_of_type(&self.drivers.borrow(), type_id)
+            .first()
+            .cloned();
+        // 换类型 = 换协议：旧 URI 的 scheme / 端口 / 库名都属于上一种库，先清掉再套新默认值。
+        if previous_type != type_id {
+            if let Some(driver) = first_driver.as_ref() {
+                self.reset_stale_endpoint(driver, window, cx);
+            }
+        }
         // 规则 1（决策 #110）：新建文件型连接时地址默认 = 当前项目根（地址=本项目）。
         // 仅文件型（SQLite / DuckDB）适用——网络型的 URI 没有「本项目」语义；已填值不覆盖。
         if crate::services::data_source_service::is_file_db_driver(type_id)
@@ -720,9 +730,7 @@ impl<H: 'static> ConnectionDialogState<H> {
             }
         }
         self.refresh_driver_items(window, cx);
-        let first = enabled_drivers_of_type(&self.drivers.borrow(), type_id)
-            .first()
-            .map(|d| driver_short_name(&d.name));
+        let first = first_driver.as_ref().map(|d| driver_short_name(&d.name));
         match first {
             Some(name) => {
                 set_select_value(&self.driver, &name, window, cx);
@@ -760,6 +768,39 @@ impl<H: 'static> ConnectionDialogState<H> {
         if !still_valid {
             set_select_value(&self.driver, "", window, cx);
         }
+    }
+
+    /// 类型 / 驱动切换后，若现有 URI 的 scheme 与新驱动模板不一致，清掉地址与凭据。
+    ///
+    /// 实例：MySQL 草稿切 Oracle 后 URI 仍是 `mysql://…:3306/mysql`，端口与库名都是
+    /// 上一种库的，保存后会拿 Oracle 驱动去连 MySQL 地址。返回是否发生了重置。
+    pub(crate) fn reset_stale_endpoint(
+        &self,
+        driver: &Driver,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let url = self.url.read(cx).value().trim().to_string();
+        if url.is_empty()
+            || url_matches_driver_template(&url, driver.url_template.as_deref())
+        {
+            return false;
+        }
+        self.url
+            .update(cx, |s, cx| s.set_value(String::new(), window, cx));
+        self.user
+            .update(cx, |s, cx| s.set_value(String::new(), window, cx));
+        self.pass
+            .update(cx, |s, cx| s.set_value(String::new(), window, cx));
+        *self.fields_synced_for.borrow_mut() = None;
+        *self.result.borrow_mut() = Some(ResultLine::new(
+            ResultLevel::Info,
+            format!(
+                "已切换到「{}」，地址与凭据已按新驱动重置",
+                driver_short_name(&driver.name)
+            ),
+        ));
+        true
     }
 
     /// 解析下拉当前值对应的驱动：优先当前类型的启用驱动，其次全量目录
@@ -1468,12 +1509,39 @@ impl ClonedDialogState {
     }
 }
 
+/// URI 的 scheme 是否与驱动清单模板一致。
+///
+/// 无法判定时返回 true（保留原值）：URI 不是 `scheme://` 形式，或驱动没声明 `url_template`。
+/// `postgres` / `postgresql`、`mssql` / `sqlserver` 是同一族的两套写法，按一致处理。
+pub(crate) fn url_matches_driver_template(url: &str, template: Option<&str>) -> bool {
+    let Some(current) = url
+        .split_once("://")
+        .map(|(scheme, _)| scheme.trim().to_ascii_lowercase())
+    else {
+        return true;
+    };
+    let Some(expected) = template
+        .and_then(|t| t.split_once("://"))
+        .map(|(scheme, _)| scheme.trim().to_ascii_lowercase())
+    else {
+        return true;
+    };
+    current == expected
+        || matches!(
+            (current.as_str(), expected.as_str()),
+            ("postgres", "postgresql")
+                | ("postgresql", "postgres")
+                | ("mssql", "sqlserver")
+                | ("sqlserver", "mssql")
+        )
+}
+
 #[cfg(test)]
 mod tests {
     // 不通配导入（`super::*` 会把 gpui 的 `test` 宏带入作用域）；需用到的类型显式引入。
     use super::{
         AuthConfig, ConnectionDialogState, ConnectionDraft, ConnectionScope, Driver, Environment,
-        NetworkConfig, ResultLevel,
+        NetworkConfig, ResultLevel, url_matches_driver_template,
     };
     use std::path::PathBuf;
     use std::rc::Rc;
@@ -1494,6 +1562,31 @@ mod tests {
         ) -> impl IntoElement {
             div().size_full()
         }
+    }
+
+    #[test]
+    fn stale_uri_scheme_is_detected_against_the_driver_template() {
+        assert!(
+            !url_matches_driver_template(
+                "mysql://root@192.168.3.138:3306/mysql",
+                Some("oracle://{username}:{password}@{host}:{port}/{database}")
+            ),
+            "MySQL URI 不能挂到 Oracle 驱动下"
+        );
+        assert!(url_matches_driver_template(
+            "oracle://scott@db:1521/XEPDB1",
+            Some("oracle://{username}:{password}@{host}:{port}/{database}")
+        ));
+        // 同族别名与无法判定的形态都保留原值。
+        assert!(url_matches_driver_template(
+            "postgres://u@h:5432/db",
+            Some("postgresql://{user}:{password}@{host}:{port}/{database}")
+        ));
+        assert!(url_matches_driver_template(
+            "mysql://u@h:3306/db",
+            None
+        ));
+        assert!(url_matches_driver_template("/tmp/app.sqlite", None));
     }
 
     fn auth_cfg(id: &str, name: &str) -> AuthConfig {

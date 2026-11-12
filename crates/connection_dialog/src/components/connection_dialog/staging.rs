@@ -478,6 +478,13 @@ impl<H: 'static> ConnectionDialogState<H> {
             d.driver_id.clone()
         };
         self.set_driver_by_value(&d.type_id, &driver_value, window, cx);
+        // 旧草稿可能带着上一种库的 URI（切类型时曾未重置）。载入时按当前驱动再校一次，
+        // 不一致就清地址与凭据，避免 Oracle 驱动配 mysql:// 地址。
+        if !d.type_id.trim().is_empty() {
+            if let Some(driver) = self.resolve_driver(&driver_value) {
+                self.reset_stale_endpoint(&driver, window, cx);
+            }
+        }
         set_select_value(&self.scope, &d.scope, window, cx);
         set_select_value(&self.ssl_mode, &d.ssl_mode, window, cx);
         set_select_value(
