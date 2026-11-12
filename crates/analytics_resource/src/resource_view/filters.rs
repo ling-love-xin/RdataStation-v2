@@ -5,6 +5,8 @@ use super::*;
 impl ResourcesPanel {
     /// 宿主推送数据（事件路径调用；面板不自己取数）。
     pub fn set_snapshot(&mut self, snapshot: ResourcesSnapshot, cx: &mut Context<Self>) {
+        // 断言搜索索引随快照整份替换：它是筛选器里的派生数据，留着上一轮的会搜到已删的口径。
+        self.filter.assertion_index = snapshot.assertion_index.clone();
         self.snapshot = snapshot;
         // 标签被删后清掉悬空条件（否则列表会“什么都没匹配”，而菜单上的勾还在）——
         // 与选中 / 多选的悬空清理同一个道理，但条件在筛选器里，所以在推送时先清。
@@ -20,7 +22,11 @@ impl ResourcesPanel {
     }
     /// 换一套筛选条件（新建 / 清空走这里）。
     pub fn set_filter(&mut self, filter: ResourcesFilter, cx: &mut Context<Self>) {
+        // 断言索引不随筛选条件一起被丢掉：它是快照下发的派生数据，整份替换 filter
+        // 会让它变空，语义搜索要等下一次刷新才恢复（用户看到的是「搜口径没反应」）。
+        let assertion_index = std::mem::take(&mut self.filter.assertion_index);
         self.filter = filter;
+        self.filter.assertion_index = assertion_index;
         self.refresh_view_rows(cx);
         cx.notify();
     }

@@ -39,6 +39,11 @@ pub struct DraftCandidate {
     pub display_name: String,
     /// 来源连接（草稿 `file_meta` 的首选连接：显式绑定优先，其次最近执行用过的那条）。
     pub connection_id: Option<String>,
+    /// 草稿条目上已有的标签名（归档继承用）。
+    ///
+    /// 由宿主在扫描草稿时一并预取：M6 不认识草稿箱的存储类型，但归档对话框需要
+    /// 「能带就带」地把标签预填进来。宿主读不到时给空即可，不阻断归档。
+    pub tags: Vec<String>,
 }
 
 /// 打开对话框所需的全部信息（宿主在事件路径备好）。
@@ -291,6 +296,7 @@ mod tests {
             rel_path: name.to_string(),
             display_name: name.trim_end_matches(".sql").to_string(),
             connection_id: None,
+            tags: Vec::new(),
         }
     }
 

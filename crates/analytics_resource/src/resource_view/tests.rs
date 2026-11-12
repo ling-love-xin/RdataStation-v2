@@ -342,6 +342,8 @@ fn counts_line_hides_zero_buckets() {
 /// 构造一条详情：只写与判定相关的字段，其余取最小可用值。
 fn detail(kind: ArchiveKind, status: ArchiveStatus, payload: Option<&str>) -> ArchiveDetail {
     ArchiveDetail {
+        assertion: None,
+        lifecycle: Default::default(),
         id: "ar_1".to_string(),
         name: "订单".to_string(),
         alias: None,

@@ -243,6 +243,7 @@ fn snapshot(rows: Vec<ArchiveRow>, read_only: bool) -> ResourcesSnapshot {
         .collect();
     ResourcesSnapshot {
         rows,
+        assertion_index: Default::default(),
         global_rows: Vec::new(),
         counts,
         read_only,
@@ -255,6 +256,8 @@ fn snapshot(rows: Vec<ArchiveRow>, read_only: bool) -> ResourcesSnapshot {
 /// 一行 → 详情（窗口用例只关心动作要用的那几个字段）。
 fn detail_for(row: &ArchiveRow) -> ArchiveDetail {
     ArchiveDetail {
+        assertion: None,
+        lifecycle: Default::default(),
         id: row.id.clone(),
         name: row.name.clone(),
         alias: None,

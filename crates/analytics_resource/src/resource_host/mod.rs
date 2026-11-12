@@ -51,10 +51,10 @@ pub(crate) use crate::resource_view::{GroupOption, ResourcesHost};
 
 pub(crate) use crate::jobs as resource_jobs;
 
-/// 草稿箱条目 / 来源判定（P2-b 下沉后 analytics_resource 直接依赖 scratchpad；全路径引用）。
-
-/// 草稿扫描深度：与草稿箱自己的遍历上限同档（再深就不是"随手归档"的场景了）。
-const DRAFT_SCAN_DEPTH: u32 = 4;
+// 草稿箱在本项目里的目录名 / 来源标记：只是字符串约定，不为此反向依赖 scratchpad crate。
+// 值须与 `scratchpad::MODULE_DIR_NAME` / `ORIGIN_SCRATCHPAD` 保持一致（2026-11-12 分层收口）。
+pub(crate) const SCRATCHPAD_DIR: &str = "scratchpad";
+pub(crate) const ORIGIN_SCRATCHPAD: &str = "scratchpad";
 
 /// 资产库宿主的 workbench 能力面（P2-b 下沉引入，与 `ResourcesHost` 方向相反）：
 ///
@@ -72,10 +72,13 @@ pub trait ResourceHostBackend: 'static {
     fn project_root(&self) -> Option<PathBuf>;
     /// 项目只读（只读时归档 / 取回 / 改标签都被拒）。
     fn read_only(&self) -> bool;
-    /// 草稿箱存储 + 运行时（宿主侧读：M6 不认识草稿箱的内部结构）。
-    fn scratchpad_store(
-        &self,
-    ) -> Result<(scratchpad::ScratchpadStore, tokio::runtime::Runtime), String>;
+    /// 草稿箱里可归档的文件（**宿主侧读，返回本 crate 自有的视图模型**）。
+    ///
+    /// 2026-11-12 分层收口：原来这里返回 `ScratchpadStore` + `Runtime`，等于让
+    /// `analytics_resource` 反向依赖上游类型、自己在事件路径里遍历草稿树。
+    /// 现在宿主负责扫描与标签预取，M6 只收 `Vec<DraftCandidate>`——依赖方向回到
+    /// `workbench → analytics_resource`，上游补依赖也不会成环。
+    fn draft_candidates(&self) -> Result<Vec<DraftCandidate>, String>;
     /// 刷新资源面板（入队一次取数 + drain，下一帧列表更新）。
     fn refresh_resources(&self, cx: &mut App);
     /// 编辑器只读打开（打开动作由事件路径做——它才有窗口；成功后请求宿主重绘）。
@@ -143,6 +146,9 @@ fn archive_seed(
         allow_reference,
         default_mode: PayloadMode::DEFAULT,
         source_abs_path,
+        // 断言预填需要读项目库（异步），宿主事件路径不做 I/O；首次归档从空开始，
+        // 取回后再归档的预填留给后续批次（当前由服务层保留上一次断言，不会丢）。
+        assertion: None,
     };
     (seed, resolved)
 }
@@ -165,6 +171,7 @@ fn submit_archive(
     root: &Path,
     read_only: bool,
     request: ArchiveRequest,
+    assertion: Option<crate::model::ArchiveAssertion>,
     backend: &Rc<dyn ResourceHostBackend>,
     cx: &mut App,
 ) {
@@ -177,47 +184,10 @@ fn submit_archive(
         request,
         keep_versions,
         analysis_probe,
+        assertion,
     );
     backend.refresh_resources(cx);
     say(backend, "资产库：正在归档…", cx);
-}
-
-/// 把草稿树压平成可归档的候选（只收文件：目录只是组织方式）。
-fn flatten_drafts(
-    entries: &[scratchpad::ScratchpadEntry],
-    file_meta: &std::collections::HashMap<String, scratchpad::FileMeta>,
-    store: &scratchpad::ScratchpadStore,
-    out: &mut Vec<DraftCandidate>,
-) {
-    for entry in entries {
-        match entry.kind {
-            scratchpad::ScratchpadEntryKind::File => {
-                // `relative_path_of` 同时把内部/隐藏路径挡在门外（与草稿箱自身的 API 同一守卫）。
-                let Some(rel) = store.relative_path_of(&entry.path) else {
-                    continue;
-                };
-                let connection_id = file_meta
-                    .get(&rel)
-                    .and_then(|meta| meta.preferred_connection())
-                    .map(str::to_string);
-                out.push(DraftCandidate {
-                    abs_path: entry.path.clone(),
-                    rel_path: rel,
-                    display_name: entry
-                        .name
-                        .rsplit_once('.')
-                        .map(|(stem, _)| stem.to_string())
-                        .unwrap_or_else(|| entry.name.clone()),
-                    connection_id,
-                });
-            }
-            scratchpad::ScratchpadEntryKind::Folder => {
-                if let Some(children) = entry.children.as_ref() {
-                    flatten_drafts(children, file_meta, store, out);
-                }
-            }
-        }
-    }
 }
 
 /// 宿主桥：动作转发到 `ResourceHostBackend`（workbench 能力面；无自有状态）。

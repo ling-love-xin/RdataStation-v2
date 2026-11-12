@@ -116,7 +116,7 @@ pub(super) fn request_checkout(host: &ResourceHost, detail: &ArchiveDetail, wind
         }
         // 目标目录 = 草稿箱模块目录（取回产出的是一份**草稿**；目录名取自 crate 常量，
         // 不在宿主里再写一次字面量）。
-        let target_dir = root.join(scratchpad::MODULE_DIR_NAME);
+        let target_dir = root.join(crate::resource_host::SCRATCHPAD_DIR);
         let extension = detail
             .payload_rel_path
             .as_deref()
@@ -258,7 +258,7 @@ pub(super) fn accept_reference_current(host: &ResourceHost, detail: &ArchiveDeta
             existing_resource_id: Some(detail.id.clone()),
         };
         let keep_versions = host.backend.keep_versions(cx);
-        resource_jobs::enqueue_archive(root, host.read_only(), request, keep_versions, false);
+        resource_jobs::enqueue_archive(root, host.read_only(), request, keep_versions, false, None);
         host.backend.refresh_resources(cx);
         host.notice("资产库：正在接受当前内容并生成新版本…", cx);
 }

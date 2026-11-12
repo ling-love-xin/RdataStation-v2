@@ -19,6 +19,8 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
         folders: folders_by_resource,
         group_dictionary,
         previews,
+        assertions,
+        lifecycles,
         read_only,
         now,
     } = inputs;
@@ -70,22 +72,26 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
                 name: group.name.clone(),
             })
             .collect();
-        details.insert(
-            resource.id.clone(),
-            to_detail(
-                resource,
-                row.status,
-                history_count,
-                recent,
-                DetailExtras {
-                    tags: row.tags.clone(),
-                    group,
-                    group_id: folder_id,
-                    groups,
-                    preview,
-                },
-            ),
+        let mut detail = to_detail(
+            resource,
+            row.status,
+            history_count,
+            recent,
+            DetailExtras {
+                tags: row.tags.clone(),
+                group,
+                group_id: folder_id,
+                groups,
+                preview,
+            },
         );
+        // 业务断言与效力随快照下发：详情面板只读，不在渲染期查库。
+        detail.assertion = assertions.get(&resource.id).cloned();
+        detail.lifecycle = lifecycles
+            .get(&resource.id)
+            .copied()
+            .unwrap_or_default();
+        details.insert(resource.id.clone(), detail);
         rows.push(row);
     }
 
@@ -113,6 +119,10 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
 
     ResourcesSnapshot {
         rows,
+        assertion_index: assertions
+            .iter()
+            .map(|(id, assertion)| (id.clone(), assertion_search_text(assertion)))
+            .collect(),
         global_rows,
         counts,
         read_only,

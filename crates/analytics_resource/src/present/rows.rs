@@ -24,6 +24,9 @@ pub struct SnapshotInputs<'a> {
     pub group_dictionary: Vec<GroupOption>,
     /// 内容预览（宿主读完推来；缺项 = 没读到 / 不预览 → 「仅元信息」）。
     pub previews: &'a PreviewMap,
+    /// 业务断言 / 效力：一次查完（与标签、分组同一纪律，避免详情区 N+1）。
+    pub assertions: std::collections::HashMap<String, crate::model::ArchiveAssertion>,
+    pub lifecycles: std::collections::HashMap<String, crate::model::Lifecycle>,
     pub read_only: bool,
     pub now: DateTime<Utc>,
 }

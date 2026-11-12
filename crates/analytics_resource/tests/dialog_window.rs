@@ -99,6 +99,7 @@ fn archive_seed(conflict: Option<ArchiveConflict>) -> ArchiveDialogSeed {
         allow_reference: true,
         default_mode: PayloadMode::DEFAULT,
         source_abs_path: Some("D:\\work\\月报.sql".to_string()),
+        assertion: None,
     }
 }
 
@@ -122,6 +123,7 @@ fn draft(rel: &str, connection: Option<&str>) -> DraftCandidate {
             .trim_end_matches(".sql")
             .to_string(),
         connection_id: connection.map(str::to_string),
+        tags: Vec::new(),
     }
 }
 
@@ -395,6 +397,7 @@ fn version_seed() -> VersionDialogSeed {
             // v1 的副本已被保留策略裁掉：它仍要列出来（行上标"副本缺失"）。
             version_row(1, false, false),
         ],
+        timeline: vec![],
     }
 }
 

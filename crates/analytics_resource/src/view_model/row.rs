@@ -118,6 +118,8 @@ impl ArchiveCounts {
 #[derive(Debug, Clone, Default)]
 pub struct ResourcesSnapshot {
     pub rows: Vec<ArchiveRow>,
+    /// 业务断言搜索索引（随快照一并下发，宿主推快照时同步进筛选器）。
+    pub assertion_index: std::collections::HashMap<String, String>,
     /// 全局实例行（§13）：与 `rows` 分开存——全局行不参与项目标签 / 分组 / 异常扫描，
     /// 面板按「实例」维度拼接展示（`InstanceFilter`）。
     pub global_rows: Vec<ArchiveRow>,

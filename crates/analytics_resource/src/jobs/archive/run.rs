@@ -49,6 +49,23 @@ pub(crate) async fn run_archive(job: &ArchiveJob) -> OpOutcome {
     };
     match service.archive(request.clone()).await {
         Ok(outcome) => {
+            // 业务断言是附属项：写失败不撤销已成功的归档（本体与登记都已成立），
+            // 但必须**同时**打日志与写进回执——只打日志等于用户以为口径存上了，
+            // 而本模块对「附属项失败」的既定口径就是「失败不回滚、但要说清」。
+            let mut notes = outcome.notes;
+            if let Some(assertion) = &job.assertion {
+                if let Err(error) = service
+                    .set_assertion(&outcome.resource_id, assertion.clone())
+                    .await
+                {
+                    tracing::warn!(
+                        error = %error,
+                        resource_id = %outcome.resource_id,
+                        "业务断言写入失败（归档本身已成功）"
+                    );
+                    notes.push(format!("业务断言未保存：{error}（可在归档后补填）"));
+                }
+            }
             // 首次归档才给撤销凭据：再归档的"撤销"是版本回退（服务层也会挡），不在这条路上。
             let undo = job
                 .request
@@ -65,7 +82,7 @@ pub(crate) async fn run_archive(job: &ArchiveJob) -> OpOutcome {
                 version: outcome.version,
                 rel_path: outcome.file_rel_path,
                 undo,
-                notes: outcome.notes,
+                notes,
             }
         }
         Err(error) => OpOutcome::Failed {

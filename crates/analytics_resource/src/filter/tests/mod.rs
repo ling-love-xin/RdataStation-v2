@@ -186,11 +186,22 @@ fn search_fields_list_covers_what_the_haystack_really_matches() {
     let haystack = super::search_haystack(&row);
 
     // 与 `SEARCH_FIELDS` 一一对应（顺序即清单顺序）。
+    // 前五项走行的匹配面；「业务口径」走筛选器上的断言索引（不走 haystack）。
     let probes = ["dau_report", "月报", "财务报表", "dwd.dwd_orders", "1.2 kb"];
-    assert_eq!(super::SEARCH_FIELDS.len(), probes.len());
+    assert_eq!(super::SEARCH_FIELDS.len(), probes.len() + 1);
     for (field, probe) in super::SEARCH_FIELDS.iter().zip(probes) {
         assert!(haystack.contains(probe), "{field} 应可被搜到（{probe}）");
     }
+    let mut filter = super::ResourcesFilter {
+        query: "自然日".to_string(),
+        ..Default::default()
+    };
+    filter.assertion_index.insert(
+        "ar_1".to_string(),
+        "日活 自然日内去重登录用户 2026Q3".to_string(),
+    );
+    assert!(filter.matches(&row), "业务口径应可被搜到");
+    assert_eq!(super::SEARCH_FIELDS[5], "业务口径");
 }
 
 /// 空态副文案：搜不到时告知能搜哪些字段，纯筛选无匹配时改指筛选。
