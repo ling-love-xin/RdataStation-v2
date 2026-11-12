@@ -635,11 +635,7 @@ impl PropertyProvider for PgRoutineProvider {
     }
 
     fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
-        vec![PropertySection {
-            id: PageId::Source,
-            label: "源码".into(),
-            table: empty_table(),
-        }]
+        vec![PropertySection::available(PageId::Source, "源码", empty_table())]
     }
 
     fn apply_edit_sql(

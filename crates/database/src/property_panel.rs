@@ -394,6 +394,8 @@ pub async fn load_properties(
             id: cat.id,
             label: cat.label,
             table,
+            // 可用性跟着类别声明走（骨架合并只换内容、不换可用性）。
+            availability: cat.availability,
         });
     }
 
@@ -422,45 +424,43 @@ fn sections_of(
     caps: &super::property_providers::DriverCapabilities,
 ) -> Option<PropertySection> {
     match page {
-        PageId::Columns => Some(PropertySection {
-            id: PageId::Columns,
-            label: format!("列 ({})", columns.len()),
-            table: columns_table(columns, caps),
-        }),
-        PageId::Indexes => Some(PropertySection {
-            id: PageId::Indexes,
-            label: format!("索引 ({})", indexes.len()),
-            table: indexes_table(indexes),
-        }),
-        PageId::Constraints => Some(PropertySection {
-            id: PageId::Constraints,
-            label: format!("约束 ({})", constraints.len()),
-            table: constraints_table(constraints),
-        }),
+        PageId::Columns => Some(PropertySection::available(
+            PageId::Columns,
+            format!("列 ({})", columns.len()),
+            columns_table(columns, caps),
+        )),
+        PageId::Indexes => Some(PropertySection::available(
+            PageId::Indexes,
+            format!("索引 ({})", indexes.len()),
+            indexes_table(indexes),
+        )),
+        PageId::Constraints => Some(PropertySection::available(
+            PageId::Constraints,
+            format!("约束 ({})", constraints.len()),
+            constraints_table(constraints),
+        )),
         PageId::Ddl => {
             if let Some(text) = ddl_text {
-                Some(PropertySection {
-                    id: PageId::Ddl,
-                    label: "DDL（源版）".to_string(),
-                    table: text_table("DDL", text),
-                })
+                Some(PropertySection::available(
+                    PageId::Ddl,
+                    "DDL（源版）",
+                    text_table("DDL", text),
+                ))
             } else if kind == PropertyKind::Table {
                 // 取不到源（PostgreSQL 无 SHOW CREATE 等价物）→ 目录信息合成。
                 let composed =
                     crate::sql_gen::create_table_ddl(qualified, columns, constraints, indexes);
-                Some(PropertySection {
-                    id: PageId::Ddl,
-                    label: "DDL（合成）".to_string(),
-                    table: text_table("DDL", &composed),
-                })
+                Some(PropertySection::available(
+                    PageId::Ddl,
+                    "DDL（合成）",
+                    text_table("DDL", &composed),
+                ))
             } else {
                 None
             }
         }
-        PageId::Source => routine_source.as_ref().map(|text| PropertySection {
-            id: PageId::Source,
-            label: "源码".to_string(),
-            table: text_table("源码", text),
+        PageId::Source => routine_source.as_ref().map(|text| {
+            PropertySection::available(PageId::Source, "源码", text_table("源码", text))
         }),
         _ => None,
     }
@@ -586,14 +586,14 @@ fn fallback_overview(
 
 /// 未注册 provider 时的通用类别（fallback：仅 General；未实现类别隐藏式不产出）。
 fn fallback_categories() -> Vec<PropertySection> {
-    vec![PropertySection {
-        id: PageId::General,
-        label: "通用".to_string(),
-        table: PropertyTable {
+    vec![PropertySection::available(
+        PageId::General,
+        "通用",
+        PropertyTable {
             headers: Vec::new(),
             rows: Vec::new(),
         },
-    }]
+    )]
 }
 
 /// 应用属性编辑（DBeaver `setPropertyValue` 对齐，2026-10-09）。

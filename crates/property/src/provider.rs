@@ -217,19 +217,48 @@ mod tests {
     use crate::descriptor::PageId;
     use crate::model::PropertyTable;
 
-    /// 分区构造辅助（struct 字面量语义；隐藏式后无灰置分支，2026-10-24）。
+    /// 分区构造辅助：可用分区 + 空表。
     #[test]
     fn section_with_empty_table_has_no_rows() {
-        let c = PropertySection {
-            id: PageId::Privileges,
-            label: "权限".to_string(),
-            table: PropertyTable {
+        let c = PropertySection::available(
+            PageId::Privileges,
+            "权限",
+            PropertyTable {
                 headers: Vec::new(),
                 rows: Vec::new(),
             },
-        };
+        );
         assert!(c.table.headers.is_empty());
         assert!(c.table.rows.is_empty());
+        assert!(c.availability.is_available());
+    }
+
+    /// 置灰分区必须带原因，且与「可用但为空」不可混淆（DBeaver 三态语义，
+    /// `GenericTableBase.supportsIndexes()` 为假时 null ≠ 空集合）。
+    #[test]
+    fn unsupported_section_carries_reason() {
+        let c = PropertySection::unsupported(
+            PageId::Indexes,
+            "索引",
+            "当前驱动（mysql·插件）未提供索引明细通道",
+        );
+        assert!(!c.availability.is_available());
+        assert!(c.table.rows.is_empty());
+        assert!(c.table.headers.is_empty());
+        assert_eq!(
+            c.unavailable_reason(),
+            Some("当前驱动（mysql·插件）未提供索引明细通道")
+        );
+
+        let ok = PropertySection::available(
+            PageId::Indexes,
+            "索引",
+            PropertyTable {
+                headers: vec!["名称".into()],
+                rows: Vec::new(),
+            },
+        );
+        assert_eq!(ok.unavailable_reason(), None);
     }
 
     /// Select 候选访问器：按 key 命中；缺失返回 None。

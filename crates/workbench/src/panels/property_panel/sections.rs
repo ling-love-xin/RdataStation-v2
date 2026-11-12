@@ -210,11 +210,14 @@ impl PropertyHostPanel {
     ) -> Div {
         let needle = filter.to_lowercase();
         // filter 过滤：sections 里任一 row 的 label/value 包含 needle 才保留该 section。
+        // 置灰分区（`Availability::Unsupported`）不参与文本过滤——否则搜索一下
+        // 「索引」就会因为「没有行可匹配」而整条消失，用户看不到原因。
         let filtered: Vec<&PropertySection> = props
             .sections
             .iter()
             .filter(|s| {
-                needle.is_empty()
+                s.unavailable_reason().is_some()
+                    || needle.is_empty()
                     || s.table
                         .rows
                         .iter()
@@ -283,7 +286,14 @@ impl PropertyHostPanel {
     ) -> Div {
         let muted = theme.colors.muted_foreground;
         let active_border = theme.colors.sidebar_accent;
-        let count = s.table.rows.len();
+        // 置灰分区：计数徽标换成「—」，并挂一个「不可用」尾标 —— 计数位不显示
+        // 0，否则「驱动给不出」会被读成「这个表真的没有索引」。
+        let unavailable = s.unavailable_reason().is_some();
+        let badge = if unavailable {
+            "—".to_string()
+        } else {
+            s.table.rows.len().to_string()
+        };
 
         // 按钮本体：id 用类别名（业务键，provider 增删类别时焦点 / hover 态不串位）。
         let btn = Button::new(format!("property-cat-{}", s.label))
@@ -308,12 +318,21 @@ impl PropertyHostPanel {
                     cx.notify();
                 });
             }))
+            .when(unavailable, |el| {
+                el.child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(muted)
+                        .child("不可用"),
+                )
+            })
             .child(
                 div()
                     .flex_none()
                     .text_xs()
                     .text_color(muted)
-                    .child(count.to_string()),
+                    .child(badge),
             );
         tab
     }
@@ -325,6 +344,9 @@ impl PropertyHostPanel {
     /// （等宽 + 复制 + 长行折行不截断），其余类别走通用表格（列 / 索引 / 约束）。
     /// 区分的是**分区展示形态**而非对象类型，`sections` 遍历 / 零分支原则不变。
     pub(crate) fn render_category_section(&self, s: &PropertySection, theme: &Theme) -> Div {
+        if let Some(reason) = s.unavailable_reason() {
+            return self.render_unavailable_section(s, reason, theme);
+        }
         if matches!(s.id, PageId::Ddl | PageId::Source) {
             return self.render_text_section(s, theme);
         }
@@ -386,6 +408,40 @@ impl PropertyHostPanel {
             );
         }
         section
+    }
+
+    /// 置灰分区：**产品有这个页签、当前驱动给不出数据**。
+    ///
+    /// 只画标题（灰）+ 原因，不画表头 / 不画「（无）」——空集合与「不支持」在
+    /// 视觉上必须可区分（对齐 DBeaver 不支持时 `supportsIndexes()` 为假、直接不读
+    /// 缓存，而不是返回一个空列表让 UI 显示 0 条）。
+    pub(crate) fn render_unavailable_section(
+        &self,
+        s: &PropertySection,
+        reason: &str,
+        theme: &Theme,
+    ) -> Div {
+        let muted = theme.colors.muted_foreground;
+        let border = theme.colors.border;
+        div()
+            .v_flex()
+            .w_full()
+            .gap_1()
+            .p_2()
+            .rounded_md()
+            .border_1()
+            .border_color(border)
+            .bg(theme.colors.background)
+            .child(
+                div()
+                    .pt_1()
+                    .pb_1()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(muted)
+                    .child(format!("{}（不可用）", s.label)),
+            )
+            .child(div().text_xs().text_color(muted).child(reason.to_string()))
     }
 
     /// 长文本段落（DDL / 源码）：等宽代码块 + 复制按钮，长行折行不截断——

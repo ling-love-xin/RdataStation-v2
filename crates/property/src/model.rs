@@ -75,17 +75,89 @@ pub struct PropertyTable {
     pub rows: Vec<Vec<String>>,
 }
 
+/// 分区可用性：**产品已实现**该页签、但**当前驱动给不出来** → 置灰并说明原因。
+///
+/// 与 2026-10-24 拍板的「隐藏式」严格分工：
+///
+/// * **产品未实现**（能力字典 `Stage::NotBuilt`，如权限 / 依赖 / 分区）→ 不产出
+///   页签，连 `PropertySection` 都没有，不走本枚举；
+/// * **产品已实现、驱动不支持**（如插件驱动没有 `meta.indexes` 通道）→ 产出分区但
+///   置灰，`reason` 必须写清「为什么不行」。
+///
+/// 这样「不支持」与「真的为空」在 UI 上不可混淆（对齐 DBeaver
+/// `GenericTableBase.supportsIndexes()` 为假时返回 `null`、而非空集合的三态语义）。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Availability {
+    /// 可用（默认）
+    #[default]
+    Available,
+    /// 置灰；`reason` 是给用户看的可读原因（不允许空串）
+    Unsupported(String),
+}
+
+impl Availability {
+    pub fn is_available(&self) -> bool {
+        matches!(self, Self::Available)
+    }
+
+    /// 不可用原因（可用时为 `None`）。
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Available => None,
+            Self::Unsupported(reason) => Some(reason.as_str()),
+        }
+    }
+}
+
 /// 子实体分区（带页 id，供描述模型映射「页 → 内容」）。
 ///
 /// 2026-10-24 展示策略拍板：**未实现类别不产出**（隐藏式，对齐 DBeaver 只显示有内容
 /// 页签的呈现语义）——能力接线位只留在 `database::property_providers::DriverCapabilities`
-/// （`Some(false)` 声明 + 注释），不进入 `sections`；`sections` 里的分区全部可用，
-/// 故不再有 `enabled` 字段。
+/// （`Some(false)` 声明 + 注释），不进入 `sections`。
+///
+/// `availability` 不是那个被删掉的 `enabled`：它只表达「产品有这个页签、驱动给不出
+/// 数据」，`Available` 是绝大多数分区的常态（`Ddl` / `Source` 放弃合成、`Indexes` /
+/// `Constraints` 缺通道时才置 `Unsupported`）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PropertySection {
     pub id: PageId,
     pub label: String,
     pub table: PropertyTable,
+    pub availability: Availability,
+}
+
+impl PropertySection {
+    /// 可用分区（最常见形态）。
+    pub fn available(id: PageId, label: impl Into<String>, table: PropertyTable) -> Self {
+        Self {
+            id,
+            label: label.into(),
+            table,
+            availability: Availability::Available,
+        }
+    }
+
+    /// 置灰分区：原因写「驱动 / 通道」层面的限制，不写「暂无数据」。
+    pub fn unsupported(
+        id: PageId,
+        label: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            id,
+            label: label.into(),
+            table: PropertyTable {
+                headers: Vec::new(),
+                rows: Vec::new(),
+            },
+            availability: Availability::Unsupported(reason.into()),
+        }
+    }
+
+    /// 置灰原因（可用时为 `None`）；渲染层据此决定灰化与原因文案。
+    pub fn unavailable_reason(&self) -> Option<&str> {
+        self.availability.reason()
+    }
 }
 
 /// 表数据预览的一列（名称 + 类型）。
