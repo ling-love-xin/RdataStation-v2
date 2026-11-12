@@ -232,7 +232,44 @@ def main():
         return 1
     print("  无")
     print(f"\n{len(rows)} 个包 × 明暗全部通过")
+
+    # 分层强度（信息项）：同一屏里相邻表面必须能分开，否则层级只能靠描边。
+    # 用相对亮度差 ΔL 度量（不做多色感知换算，只用于抓「几乎同色」）。
+    SURFACES = [
+        ("background", "sidebar.background", "内容区 / chrome"),
+        ("background", "table.head.background", "内容区 / 表头"),
+        ("background", "list.even.background", "内容区 / 斑马行"),
+        ("background", "list.hover.background", "内容区 / 悬停行"),
+        ("sidebar.background", "status_bar.background", "chrome / 状态栏"),
+        ("sidebar.background", "button.background", "chrome / 中性按钮"),
+        ("button.background", "button.hover.background", "按钮 / 按钮 hover"),
+        ("sidebar.background", "sidebar.accent.background", "chrome / 选中行"),
+        ("popover.background", "background", "弹层 / 内容区"),
+    ]
+    print("\n=== 分层强度（ΔL，信息项：< 0.004 视为几乎同色，靠描边区分）===")
+    weak_total = 0
+    for tp in packs:
+        data = json.loads(tp.read_text(encoding="utf-8"))
+        pack = tp.name.replace("-theme.json", "")
+        notes = []
+        for theme in data["themes"]:
+            c = theme["colors"]
+            for a, b, why in SURFACES:
+                dl = abs(tools_lum(c[a]) - tools_lum(c[b]))
+                if dl < 0.004:
+                    weak_total += 1
+                    notes.append(f"{theme['mode']}/{why} ΔL={dl:.4f}")
+        print(f"  {pack:16s} " + ("几乎同色: " + "; ".join(notes) if notes else "全部可分"))
+    print(f"  合计 {weak_total} 处几乎同色（默认包亦然，属既有设计口径，仅供核对）")
     return 0
+
+
+def tools_lum(hexstr):
+    """相对亮度（与 theme_audit / gen_palette_options 同算法）。"""
+    h = hexstr.lstrip("#")[:6]
+    c = [int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
+    lin = [x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4 for x in c]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
 
 
 if __name__ == "__main__":

@@ -974,9 +974,13 @@ def build_md(total_checks, total_fail):
     lines.append("- 生成：`python tools/gen_theme_packs.py` —— 从本文件 `SCHEMES` 的角色值展开 140 键 + 13 个产品角色，"
                  "派生的键（button 系列、scrollbar、`base.*` light 变体、语法补充名）在脚本里显式推导。")
     lines.append("- 校验：`python tools/audit_theme_packs.py` —— 复用 `tools/theme_audit.py` 的 schema 键集合 / 52 对 / "
-                 "9 对产品 / 41 个语法名口径，逐包逐模式跑。")
+                 "9 对产品 / 41 个语法名口径，逐包逐模式跑；另打印「分层强度」ΔL（信息项，用来抓按钮 hover 这类"
+                 "「按下去没反应」的表面）。")
     lines.append("- 当前结果：**8 包 × 明暗全部通过**（140/140 键、主题对照 0 不达标、产品对照 0 不达标、"
-                 "41 个语法名 0 未覆盖、语法着色 0 不达标）。\n")
+                 "41 个语法名 0 未覆盖、语法着色 0 不达标）。")
+    lines.append("- 分层强度里仍有 27 处 ΔL < 0.004，全部是有意为之：浅色「弹层 = 内容区」（靠阴影/描边抬升）、"
+                 "深色「状态栏 = chrome」（VS Code 同口径）、深色「内容区 vs chrome / 斑马行」只差 0.002–0.004"
+                 "（近黑墨那套为 0，页面层级全靠描边，是 §2 明说的代价）。\n")
 
     lines.append(f"### {sec}.3 与现役资产的有意差异\n")
     lines.append("`audit_theme_packs.py` 会把「现役资产里同值、候选里拉开（通道差 ≥ 4）」的组逐条列出，"

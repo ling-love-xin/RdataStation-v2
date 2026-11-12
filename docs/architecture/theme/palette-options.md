@@ -1,6 +1,6 @@
 # RdataStation 主题色板候选（8 套 · 明暗）
 
-> 状态：**候选方案，未落地**（不改 `assets/themes/`）。生成于 2026-11-12 15:50，由 `python tools/gen_palette_options.py` 输出本文件与 `palette-options.html`。
+> 状态：**候选方案，未落地**（不改 `assets/themes/`）。生成于 2026-11-12 15:53，由 `python tools/gen_palette_options.py` 输出本文件与 `palette-options.html`。
 > 色值权威性：本文件是候选色板的唯一来源；采纳某套后再并入 `theme-tokens-complete.md` 与 `rds-theme.json`。
 > 验证口径：WCAG 2.x，正文/控件文字 ≥ 4.5:1、非文本 ≥ 3:1；单套单模式 58 项，8 套 × 明暗共 928 项，**928 项达标**。
 
@@ -857,8 +857,9 @@
 ### 4.2 生成与校验
 
 - 生成：`python tools/gen_theme_packs.py` —— 从本文件 `SCHEMES` 的角色值展开 140 键 + 13 个产品角色，派生的键（button 系列、scrollbar、`base.*` light 变体、语法补充名）在脚本里显式推导。
-- 校验：`python tools/audit_theme_packs.py` —— 复用 `tools/theme_audit.py` 的 schema 键集合 / 52 对 / 9 对产品 / 41 个语法名口径，逐包逐模式跑。
+- 校验：`python tools/audit_theme_packs.py` —— 复用 `tools/theme_audit.py` 的 schema 键集合 / 52 对 / 9 对产品 / 41 个语法名口径，逐包逐模式跑；另打印「分层强度」ΔL（信息项，用来抓按钮 hover 这类「按下去没反应」的表面）。
 - 当前结果：**8 包 × 明暗全部通过**（140/140 键、主题对照 0 不达标、产品对照 0 不达标、41 个语法名 0 未覆盖、语法着色 0 不达标）。
+- 分层强度里仍有 27 处 ΔL < 0.004，全部是有意为之：浅色「弹层 = 内容区」（靠阴影/描边抬升）、深色「状态栏 = chrome」（VS Code 同口径）、深色「内容区 vs chrome / 斑马行」只差 0.002–0.004（近黑墨那套为 0，页面层级全靠描边，是 §2 明说的代价）。
 
 ### 4.3 与现役资产的有意差异
 

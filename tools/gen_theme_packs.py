@@ -249,10 +249,13 @@ def derived(r, mode):
     e = dict(r)
     e["chart_1"], e["chart_2"], e["chart_3"], e["chart_4"], e["chart_5"] = r["chart"]
     e["fg_active"] = r["fg"] if mode == "light" else mix(r["fg"], "#FFFFFF", 0.55)
-    # 中性按钮：浅色取状态栏底、深色取表头底（在 chrome 上略抬一档）
+    # 中性按钮：浅色取状态栏底、深色取表头底（在 chrome 上略抬一档）。
+    # hover/active 从按钮自身派生而不是复用 hover：部分色板的 status 与 hover 几乎同亮度，
+    # 直接拿 hover 当按钮 hover 会让按钮按下去「没有反应」（分层强度自检抓过这一点）。
     e["button"] = r["status"] if mode == "light" else r["head"]
-    e["button_hover"] = r["hover"] if mode == "light" else mix(r["head"], r["fg"], 0.10)
-    e["button_active"] = (mix(r["hover"], "#000000", 0.10) if mode == "light"
+    e["button_hover"] = (mix(r["status"], "#000000", 0.05) if mode == "light"
+                         else mix(r["head"], r["fg"], 0.10))
+    e["button_active"] = (mix(r["status"], "#000000", 0.11) if mode == "light"
                           else mix(r["head"], r["fg"], 0.22))
     e["scrollbar_track"] = alpha(r["content"], 0.0)
     e["scroll_thumb"] = alpha(mix(r["chrome"], r["fg"], 0.42), 0.9)
