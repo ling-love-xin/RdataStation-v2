@@ -62,6 +62,20 @@ cargo test --manifest-path tools/plugin-drivers/mssql-rust/Cargo.toml
   `.rds/target-gf/debug/plugins/<id>/bin/...`），否则跑的还是旧二进制。
 - 能力边界：两个驱动都声明 `cancel = false`（无法中断在飞查询），
   `tx.*` 走真实语句。
+- **Oracle 元数据 SQL 一律用绑定变量**（2026-11-12，硬约束）：`owner` / 对象名
+  **不许拼进 SQL 文本**，一律 `owner = :1 AND table_name = :2` 传 `Value::String`
+  （见 `oracle-rust/src/meta.rs` 六处）。理由是实测的：Oracle 按 SQL **文本**做硬解析，
+  名字一变就是一条新语句，字典视图一次硬解析 3–4 秒——属性面板每打开一个新对象都卡
+  3–4 秒，连续几十次之后服务端直接把会话踢掉。改绑定变量后同一个 100 对象全量探测：
+  只有第一条（首次 prepare）2.4 秒，其余全部毫秒级。**改回拼接就等于把这 3–4 秒/对象
+  重新加回来**。标识符（不能用绑定变量的场合）才走 `types::quote_literal`。
+- **元数据路径要能自愈**（2026-11-12）：`oracle-rs` 那条连接在连着跑几十条字典查询
+  之后会被服务端关掉（实测第 ~82 个对象报 `Oracle closed the connection without
+  providing error details`），此后每个 `meta.*` 都是 `connection closed unexpectedly`。
+  `query.execute` 一直有「失败 → `reconnect()` → 返回原错误」；`meta.catalogs/schemas/
+  objects/object_detail` 现在也补了同一条策略（失败 → 重连 → 原样重试一次）。实测：
+  断连那个对象退回 `indexes=None`，**下一个对象起恢复正常**。辅助查询（主键 / 索引 /
+  行数）失败不再静默——写 stderr 并注明对象名，否则会被误读成「这表没索引」。
 - 协议内核的 panic 隔离（2026-11-12）：`rust-core` 的 `serve` 用 `catch_unwind`
   把**单个请求**的 panic 转成 `-32603 internal`（`ErrorCode::Internal`），进程
   继续服务下一条请求。不隔离的代价是实测过的：MSSQL 导航面一次 `unwrap` 踩炸 →

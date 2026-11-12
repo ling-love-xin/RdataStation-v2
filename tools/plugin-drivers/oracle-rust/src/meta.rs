@@ -5,7 +5,7 @@ use rds_driver_sidecar::{
     DriverError, MetaColumn, MetaIndex, MetaObject, MetaObjectDetail, MetaSchema, normalize_kind,
 };
 
-use crate::types::{quote_literal, sql_error};
+use crate::types::sql_error;
 
 pub async fn current_schema(conn: &Connection, fallback: &str) -> String {
     let sql = "SELECT SYS_CONTEXT('USERENV','CURRENT_SCHEMA') FROM DUAL";
@@ -25,8 +25,7 @@ pub async fn current_schema(conn: &Connection, fallback: &str) -> String {
 /// `catalog → schema → object` 三层都给得出：这里回当前数据库名（`DB_NAME`，
 /// 单实例只有一项），schema 层再走 `all_users`。拿不到 `DB_NAME` 时退回服务名，
 /// 两者都拿不到才回空（空会把导航第一层整层空掉，属于最后手段）。
-pub async fn catalogs(conn: &Connection) -> Result<Vec<String>, DriverError> {
-    let sql =
+pub async fn catalogs(conn: &Connection) -> Result<Vec<String>, DriverError> {    let sql =
         "SELECT SYS_CONTEXT('USERENV','DB_NAME'), SYS_CONTEXT('USERENV','SERVICE_NAME') FROM DUAL";
     let result = conn.query(sql, &[]).await.map_err(sql_error)?;
     let row = result.rows.first();
@@ -61,14 +60,18 @@ pub async fn schemas(conn: &Connection) -> Result<Vec<MetaSchema>, DriverError> 
 }
 
 pub async fn objects(conn: &Connection, schema: &str) -> Result<Vec<MetaObject>, DriverError> {
-    let owner = quote_literal(&schema.to_uppercase());
-    let sql = format!(
-        "SELECT object_name, object_type FROM all_objects \
-         WHERE owner = {owner} AND object_type IN \
-         ('TABLE','VIEW','MATERIALIZED VIEW','PROCEDURE','FUNCTION','SEQUENCE','TRIGGER') \
-         ORDER BY object_name"
-    );
-    let result = conn.query(&sql, &[]).await.map_err(sql_error)?;
+    // 用绑定变量，不把 schema 名拼进 SQL 文本：Oracle 按 SQL 文本硬解析，
+    // 每换一个名字就是一条新语句（真机实测字典视图一次硬解析 3–4 秒，连续几十条
+    // 之后服务端还会直接把会话踢掉）。文本固定 + 绑定值才能命中 oracle-rs 的
+    // statement cache。
+    let sql = "SELECT object_name, object_type FROM all_objects \
+               WHERE owner = :1 AND object_type IN \
+               ('TABLE','VIEW','MATERIALIZED VIEW','PROCEDURE','FUNCTION','SEQUENCE','TRIGGER') \
+               ORDER BY object_name";
+    let result = conn
+        .query(sql, &[Value::String(schema.to_uppercase())])
+        .await
+        .map_err(sql_error)?;
     let mut out = Vec::new();
     for row in &result.rows {
         let Some(name) = row.get_string(0) else {
@@ -96,17 +99,25 @@ pub async fn object_detail(
     schema: &str,
     name: &str,
 ) -> Result<MetaObjectDetail, DriverError> {
-    let owner = quote_literal(&schema.to_uppercase());
-    let object = quote_literal(&name.to_uppercase());
+    let owner_name = schema.to_uppercase();
+    let object_name = name.to_uppercase();
 
     // 不查 `data_default`：它是 LONG，oracle-rs 解析该列会让整条查询返回 0 行。
-    let sql = format!(
-        "SELECT column_name, data_type, nullable, data_precision, data_scale, \
-         data_length, char_length \
-         FROM all_tab_columns WHERE owner = {owner} AND table_name = {object} \
-         ORDER BY column_id"
-    );
-    let result = conn.query(&sql, &[]).await.map_err(sql_error)?;
+    // 同样用绑定变量（理由见 `objects`）：对象名一变就是新 SQL，硬解析代价 3–4 秒。
+    let sql = "SELECT column_name, data_type, nullable, data_precision, data_scale, \
+               data_length, char_length \
+               FROM all_tab_columns WHERE owner = :1 AND table_name = :2 \
+               ORDER BY column_id";
+    let result = conn
+        .query(
+            sql,
+            &[
+                Value::String(owner_name.clone()),
+                Value::String(object_name.clone()),
+            ],
+        )
+        .await
+        .map_err(sql_error)?;
     let mut columns = Vec::new();
     for row in &result.rows {
         let Some(col_name) = row.get_string(0) else {
@@ -138,14 +149,24 @@ pub async fn object_detail(
         });
     }
 
-    mark_primary_key(conn, &owner, &object, &mut columns).await;
+    mark_primary_key(conn, &owner_name, &object_name, &mut columns).await;
     // 协议只给索引个数（明细走 Database::list_indexes），这里只数不塞明细。
-    let index_count = indexes(conn, &owner, &object)
-        .await
-        .map(|list| list.len() as u32)
-        .ok();
-    let kind = object_kind(conn, &owner, &object).await;
-    let row_count = table_row_count(conn, &schema.to_uppercase(), &name.to_uppercase()).await;
+    // 取不到就把 `None` 交给宿主（界面显示「未知」），但把原因写进 stderr：
+    // 真机上线前这条一直静默，结果「连接被服务端关掉」被当成「这表没索引」。
+    let index_count = match indexes(conn, &owner_name, &object_name).await {
+        Ok(list) => Some(list.len() as u32),
+        Err(error) => {
+            eprintln!("[rds-oracle-sidecar] 取索引个数失败（{object_name}）：{error}");
+            None
+        }
+    };
+    let kind = object_kind(conn, &owner_name, &object_name).await;
+    // 只有表才给行数：视图没有统计信息，精确数一遍的代价见 `table_row_count` 的注释。
+    let row_count = if kind == "table" {
+        table_row_count(conn, &owner_name, &object_name).await
+    } else {
+        None
+    };
 
     let mut detail = MetaObjectDetail::new(name, &kind, columns);
     detail.indexes = index_count;
@@ -153,33 +174,32 @@ pub async fn object_detail(
     Ok(detail)
 }
 
-/// 行数：先取 `all_tables.num_rows`（统计信息，可能滞后）；新表没有统计信息时
-/// 退回精确 `COUNT(*)`。协议口径是「估计值」，但属性面板显示 `None` 不如给个数。
+/// 行数：只取 `all_tables.num_rows`（统计信息），**不做精确 `COUNT(*)`**。
+///
+/// 真机教训（2026-11-12）：原实现在统计信息为空时退回精确 `COUNT(*)`，结果在
+/// `SYS.ALL_ANALYTIC_VIEW_HIERS` 上跑了 60 秒还没回来（字典视图的 COUNT 要全量
+/// 物化内部 join），属性面板打开一个对象就挂死。协议口径本来就是**估计值**，
+/// 没有统计信息时给 `None`（界面显示「未知」）远好过在交互路径上跑无上限全表扫描。
+/// 只有表才走这里；视图在 `all_tables` 里没有条目，本来也给不出行数。
 async fn table_row_count(conn: &Connection, owner: &str, table: &str) -> Option<u64> {
-    let owner_lit = quote_literal(owner);
-    let table_lit = quote_literal(table);
-    let sql = format!(
-        "SELECT num_rows FROM all_tables WHERE owner = {owner_lit} AND table_name = {table_lit}"
-    );
-    if let Ok(ok) = conn.query(&sql, &[]).await
-        && let Some(count) = ok
-            .rows
-            .first()
-            .and_then(|row| row.get(0))
-            .and_then(int_value)
-            .and_then(|n| u64::try_from(n).ok())
-    {
-        return Some(count);
-    }
-    let ident = |raw: &str| raw.replace('"', "\"\"");
-    let count_sql = format!(
-        "SELECT COUNT(*) FROM \"{}\".\"{}\"",
-        ident(owner),
-        ident(table)
-    );
-    conn.query(&count_sql, &[])
+    let sql = "SELECT num_rows FROM all_tables WHERE owner = :1 AND table_name = :2";
+    let result = match conn
+        .query(
+            sql,
+            &[
+                Value::String(owner.to_string()),
+                Value::String(table.to_string()),
+            ],
+        )
         .await
-        .ok()?
+    {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("[rds-oracle-sidecar] 取行数失败（{table}）：{error}");
+            return None;
+        }
+    };
+    result
         .rows
         .first()
         .and_then(|row| row.get(0))
@@ -195,10 +215,17 @@ fn int_value(value: &Value) -> Option<i64> {
 }
 
 async fn object_kind(conn: &Connection, owner: &str, object: &str) -> String {
-    let sql = format!(
-        "SELECT object_type FROM all_objects WHERE owner = {owner} AND object_name = {object}"
-    );
-    match conn.query(&sql, &[]).await {
+    let sql = "SELECT object_type FROM all_objects WHERE owner = :1 AND object_name = :2";
+    match conn
+        .query(
+            sql,
+            &[
+                Value::String(owner.to_string()),
+                Value::String(object.to_string()),
+            ],
+        )
+        .await
+    {
         Ok(result) => result
             .rows
             .first()
@@ -249,13 +276,24 @@ fn canonical_name(data_type: &str) -> &'static str {
 }
 
 async fn mark_primary_key(conn: &Connection, owner: &str, table: &str, columns: &mut [MetaColumn]) {
-    let sql = format!(
-        "SELECT cc.column_name FROM all_constraints c, all_cons_columns cc \
-         WHERE c.owner = {owner} AND c.table_name = {table} AND c.constraint_type = 'P' \
-         AND cc.owner = c.owner AND cc.constraint_name = c.constraint_name"
-    );
-    let Ok(result) = conn.query(&sql, &[]).await else {
-        return;
+    let sql = "SELECT cc.column_name FROM all_constraints c, all_cons_columns cc \
+               WHERE c.owner = :1 AND c.table_name = :2 AND c.constraint_type = 'P' \
+               AND cc.owner = c.owner AND cc.constraint_name = c.constraint_name";
+    let result = match conn
+        .query(
+            sql,
+            &[
+                Value::String(owner.to_string()),
+                Value::String(table.to_string()),
+            ],
+        )
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("[rds-oracle-sidecar] 取主键失败（{table}）：{error}");
+            return;
+        }
     };
     let pk: Vec<String> = result
         .rows
@@ -280,14 +318,21 @@ async fn indexes(
     owner: &str,
     table: &str,
 ) -> Result<Vec<MetaIndex>, DriverError> {
-    let sql = format!(
-        "SELECT i.index_name, i.uniqueness, c.column_name \
-         FROM all_indexes i, all_ind_columns c \
-         WHERE i.table_owner = {owner} AND i.table_name = {table} \
-         AND c.index_owner = i.owner AND c.index_name = i.index_name \
-         ORDER BY i.index_name, c.column_position"
-    );
-    let result = conn.query(&sql, &[]).await.map_err(sql_error)?;
+    let sql = "SELECT i.index_name, i.uniqueness, c.column_name \
+               FROM all_indexes i, all_ind_columns c \
+               WHERE i.table_owner = :1 AND i.table_name = :2 \
+               AND c.index_owner = i.owner AND c.index_name = i.index_name \
+               ORDER BY i.index_name, c.column_position";
+    let result = conn
+        .query(
+            sql,
+            &[
+                Value::String(owner.to_string()),
+                Value::String(table.to_string()),
+            ],
+        )
+        .await
+        .map_err(sql_error)?;
     let mut grouped: BTreeMap<String, MetaIndex> = BTreeMap::new();
     for row in &result.rows {
         let Some(name) = row.get_string(0) else {
