@@ -63,6 +63,8 @@ pub enum DriverError {
     },
     /// 对端报的错误码我们不认识（对端比我们新）。
     UnknownCode { raw_code: i32, message: String },
+    /// 对端内核兜住了一次 panic（`-32603`）：**进程没死，这条请求可以重试**。
+    Internal { message: String },
     /// 调用没在时限内回来（**该请求已被放弃**，对端若之后才回会报成 Issue）。
     Timeout { method: String },
     /// 连接没了（进程崩溃 / 收摊）。
@@ -105,6 +107,12 @@ impl DriverError {
         )
     }
 
+    /// 驱动内核内部出错（`-32603`）：请求被隔离、进程还活着，界面该给「重试」而不是
+    /// 「连接坏了」或「驱动不支持」。
+    pub fn is_internal(&self) -> bool {
+        matches!(self, Self::Internal { .. })
+    }
+
     /// 转成 [`CallError`] 的对应形态（同 crate 的其它层也要用：supervisor 报的是 `CallError`）。
     pub(crate) fn from_call(method: &str, error: CallError) -> Self {
         match error {
@@ -120,6 +128,7 @@ impl DriverError {
             CallError::RpcUnknownCode { raw_code, message } => {
                 Self::UnknownCode { raw_code, message }
             }
+            CallError::RpcInternal { message } => Self::Internal { message },
             CallError::Timeout { .. } => Self::Timeout {
                 method: method.to_string(),
             },
@@ -145,6 +154,9 @@ impl std::fmt::Display for DriverError {
             },
             Self::UnknownCode { raw_code, message } => {
                 write!(f, "驱动报错（未知码 {raw_code}）：{message}")
+            }
+            Self::Internal { message } => {
+                write!(f, "驱动内部出错（该请求已隔离，可重试）：{message}")
             }
             Self::Timeout { method } => write!(f, "{method} 超时（该请求已放弃）"),
             Self::Disconnected { reason } => write!(f, "连接已断开：{reason}"),
@@ -714,6 +726,17 @@ mod tests {
         );
         assert!(matches!(unknown, DriverError::UnknownCode { raw_code, .. } if raw_code == -32099));
 
+        // `-32603` 必须有独立形态：它表示「这条请求炸了、进程还活着」，
+        // 而不是「对端给了个我们不认识的码」。
+        let internal = DriverError::from_call(
+            method::QUERY_EXECUTE,
+            CallError::RpcInternal {
+                message: "panicked at src/meta.rs:159".into(),
+            },
+        );
+        assert!(internal.is_internal() && !internal.is_sql_error());
+        assert!(internal.to_string().contains("可重试"));
+
         let gone = DriverError::from_call(
             method::QUERY_EXECUTE,
             CallError::Disconnected {
@@ -1022,6 +1045,13 @@ impl SidecarDatabase {
                     source: message,
                 })
             }
+            // `-32603` 不是 SQL 错、也不是断线：sidecar 内核把这条请求的 panic
+            // 兜住了、进程还在。按插件执行失败报，并明说可以重试。
+            DriverError::Internal { message } => CoreError::plugin(PluginError::ExecutionFailed {
+                plugin_id: db_type,
+                function: method::QUERY_EXECUTE.to_string(),
+                reason: format!("驱动内部出错（该请求已隔离，可重试）：{message}"),
+            }),
             DriverError::Timeout { method } => CoreError::database(DatabaseError::query(
                 sql,
                 format!("{method} 超时（该请求已放弃，对端若之后才回会报成 Issue）"),

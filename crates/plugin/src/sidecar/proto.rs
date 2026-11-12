@@ -452,11 +452,21 @@ pub fn should_inline_json(row_count: usize, byte_len: usize) -> bool {
     row_count <= INLINE_JSON_MAX_ROWS && byte_len <= INLINE_JSON_MAX_BYTES
 }
 
+/// sidecar 内核把**单个请求的 panic** 转成的错误码（`-32603`，JSON-RPC 标准
+/// `internal error`）。
+///
+/// 它**不属于**上面的驱动号段 `-32001…-32009`：这是 `rust-core` 的 `serve` 用
+/// `catch_unwind` 兜住驱动的 bug 后给宿主的消息（见 `tools/plugin-drivers/README.md`），
+/// 语义是「这条请求炸了、进程还活着、可以重试」。放进驱动号段会让「驱动不支持」
+/// 与「驱动自己崩了」混成同一类，UI 就没法区分该置灰还是该提示重试。
+pub const JSONRPC_INTERNAL_CODE: i32 = -32603;
+
 /// 协议错误码（挂在 JSON-RPC `error.code` 上，dev-plan §4.2.2）。
 ///
 /// ⚠️ **号段纪律**：参考实现（`Rdata-Sidecar`）按模块切段（JDBC -32000~-32019、
 /// LSP -32020~-32039、Connectors -32040~-32059）。本段 -32001…-32009 是**驱动**的；
-/// 扩展宿主（JS）上线后要**另起一段**，不要挤进这里。
+/// 扩展宿主（JS）上线后要**另起一段**，不要挤进这里。`-32603` 见
+/// [`JSONRPC_INTERNAL_CODE`]，它走另一条（内核内部错误）路径。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RpcErrorCode {
     DriverNotSupported,

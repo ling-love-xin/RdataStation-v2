@@ -80,10 +80,13 @@ cargo test --manifest-path tools/plugin-drivers/mssql-rust/Cargo.toml
   把**单个请求**的 panic 转成 `-32603 internal`（`ErrorCode::Internal`），进程
   继续服务下一条请求。不隔离的代价是实测过的：MSSQL 导航面一次 `unwrap` 踩炸 →
   sidecar exit 101 → 宿主只看到 `帧 I/O 失败：early eof` → 同一实例上所有会话
-  一起断，且无从知道是哪个对象炸的。宿主侧 `RpcErrorCode` 不含 -32603，会走
-  `RouterEvent::UnknownError`（`raw_code` + message 原样透传，不猜语义）。
-  回归证据：`rust-core` 的
-  `a_panicking_request_is_isolated_and_the_process_keeps_serving`。
+  一起断，且无从知道是哪个对象炸的。宿主侧 `RpcErrorCode` **不收** `-32603`
+  （它是 JSON-RPC 标准码，不属于驱动号段 `-32001…-32009`）：`conn.rs` 看到
+  `proto::JSONRPC_INTERNAL_CODE` 就走独立的 `CallError::RpcInternal` →
+  `DriverError::Internal`，界面文案是「驱动内部出错（该请求已隔离，可重试）」，
+  既不混进「未知错误码」，也不冒充「连接失败」。回归证据：`rust-core` 的
+  `a_panicking_request_is_isolated_and_the_process_keeps_serving` +
+  `rds-plugin` 的 `call_errors_map_to_typed_driver_errors`。
 - 真机口径（2026-11-12）：
   - **Oracle 已验收**：`sidecar_conformance` 对 `192.168.3.138:1521/XEPDB1` 6/6（含 3000 行分页）；
     `crates/plugin/tests/rust_driver_wiring.rs` 另有「真实安装目录 → `PluginManager` 激活 →

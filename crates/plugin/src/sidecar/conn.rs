@@ -35,8 +35,8 @@ use tokio::task::JoinHandle;
 
 use super::method;
 use super::proto::{
-    Frame, FrameIoError, PROTOCOL_VERSION, RpcErrorCode, check_protocol_version, read_frame,
-    write_frame,
+    Frame, FrameIoError, JSONRPC_INTERNAL_CODE, PROTOCOL_VERSION, RpcErrorCode,
+    check_protocol_version, read_frame, write_frame,
 };
 use super::router::{Router, RouterEvent};
 // `CallOutcome.attachments` 是公开字段，它的类型得能被调用方写出来
@@ -65,6 +65,11 @@ pub enum CallError {
     },
     /// 对端返回的错误码我们不认识（对端比我们新）。
     RpcUnknownCode { raw_code: i32, message: String },
+    /// 对端内核把**这条请求的 panic** 兜住了（`-32603`）：进程还活着，请求可以重试。
+    ///
+    /// 与 `RpcUnknownCode` 分开是必要的——「未知码」只会被当成陌生错误透传，
+    /// 而这条应当提示「驱动内部出错」，语义不同。
+    RpcInternal { message: String },
     /// 超时 —— **该请求已被放弃**；迟到的响应会变成 [`ConnEvent::Issue`]。
     Timeout { method: String, after: Duration },
     /// 连接断了（对端退出 / 管道关闭）。
@@ -81,6 +86,9 @@ impl fmt::Display for CallError {
             Self::Rpc { code, message, .. } => write!(f, "RPC 错误 {code}：{message}"),
             Self::RpcUnknownCode { raw_code, message } => {
                 write!(f, "RPC 错误（未知码 {raw_code}）：{message}")
+            }
+            Self::RpcInternal { message } => {
+                write!(f, "驱动内部出错（该请求已被隔离，可重试）：{message}")
             }
             Self::Timeout { method, after } => {
                 write!(f, "调用 {method} 超时（{:?}）", after)
@@ -515,7 +523,14 @@ fn dispatch(
                 message,
             } => {
                 if let Some(reply) = pending.remove(&id) {
-                    let _ = reply.send(Err(CallError::RpcUnknownCode { raw_code, message }));
+                    // `-32603` 有确切语义（内核兜住的单请求 panic），不能与「未知码」
+                    // 混在一起，否则界面只能显示「未知错误码」。
+                    let error = if raw_code == JSONRPC_INTERNAL_CODE {
+                        CallError::RpcInternal { message }
+                    } else {
+                        CallError::RpcUnknownCode { raw_code, message }
+                    };
+                    let _ = reply.send(Err(error));
                 }
             }
             RouterEvent::Notification { method, params } => {
