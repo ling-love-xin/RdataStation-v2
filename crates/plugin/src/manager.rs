@@ -55,10 +55,15 @@ pub enum PluginKind {
 /// 热插拔扫描快照里的一项（`scan_and_diff_plugins` 的 diff 基准）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanEntry {
-    /// 清单版本（当前只用于占位，变化判定走 manifest_hash）
+    /// 清单版本（变化判定走 manifest_hash；这里留着供面板 / 排障对照）
     pub version: String,
     /// `plugin.toml` 内容 hash（换版本 / 改能力 / 改权限都会变）
     pub manifest_hash: u64,
+    /// 清单声明的外部载荷（`[backend] driver_jars` 的绝对路径，文件或目录）。
+    ///
+    /// 存进快照是为了**不必每个 tick 重新解析清单**：清单 hash 没变时这份列表必然
+    /// 没变，直接复用即可（解析 TOML + 全量校验比读一次文件贵得多，5 秒一轮不值得）。
+    pub driver_jars: Vec<String>,
     /// 插件目录里**载荷文件**的指纹（长度 + 修改时间，见 `payload_fingerprint`）。
     ///
     /// 只看 `plugin.toml` 是不够的：重编 `agent.exe`、换 wasm、更新 py 脚本时清单一个
@@ -345,6 +350,37 @@ fn path_is_under(path: &Path, root: &Path) -> bool {
     let root = normalize(root);
     let root = root.trim_end_matches('/');
     child == root || child.starts_with(&format!("{root}/"))
+}
+
+/// 从清单文件取「版本 + 声明的外部 jar」。
+///
+/// 清单坏了解析不出来就给空——坏包会走自己的错误路径，扫描不该跟着炸。
+fn manifest_side(manifest_path: &Path) -> (String, Vec<String>) {
+    match crate::manifest::ManifestParser::parse(manifest_path) {
+        Ok(parsed) => (
+            parsed.plugin.version.clone(),
+            parsed.backend.map(|backend| backend.driver_jars).unwrap_or_default(),
+        ),
+        Err(_) => (String::new(), Vec::new()),
+    }
+}
+
+/// 扫描每个插件时决定「版本 + 外部 jar」从哪来：快照里清单 hash 相同就直接复用，
+/// 否则读文件解析。
+///
+/// 抽成自由函数是为了让这条捷径能被单测直接钉住（传一个不存在的清单路径 + 相同
+/// hash 的快照条目，若实现偷偷解析文件就会拿到空值）。
+fn resolve_manifest_side(
+    previous: Option<&ScanEntry>,
+    manifest_hash: u64,
+    manifest_path: &Path,
+) -> (String, Vec<String>) {
+    match previous {
+        Some(prev) if prev.manifest_hash == manifest_hash => {
+            (prev.version.clone(), prev.driver_jars.clone())
+        }
+        _ => manifest_side(manifest_path),
+    }
 }
 
 /// 插件**载荷**的指纹：插件目录内文件 + 清单声明的外部 jar，都按
@@ -1469,6 +1505,15 @@ impl PluginManager {
     /// - 目录消失 → 停用（含停 sidecar 进程）+ 移出运行时索引
     /// - 清单内容变化 → 置 `needs_reload`，**不热生效**（VS Code 口径：更新要重载）
     pub async fn scan_and_diff_plugins(&self) -> Result<PluginDiff, CoreError> {
+        // 读快照算 diff（快照只读、不跨 await 持锁：std RwLockGuard 非 Send，
+        // 跨 await 会让 tokio::spawn 的循环 future 不 Send）。
+        // 提前到扫描之前读：扫描时要靠它判断「清单没变，可以复用上次解析结果」。
+        let snapshot = self
+            .scan_snapshot
+            .read()
+            .map_err(|_| lock_err("scan_snapshot"))?
+            .clone();
+
         let mut disk: HashMap<String, ScanEntry> = HashMap::new();
         if !self.install_dir.as_os_str().is_empty() && self.install_dir.exists() {
             let entries = std::fs::read_dir(&self.install_dir).map_err(|e| {
@@ -1496,32 +1541,22 @@ impl PluginManager {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 std::hash::Hasher::write(&mut hasher, &bytes);
                 let manifest_hash = hasher.finish();
-                // 清单能解析时把 `backend.driver_jars` 一并纳入载荷指纹：那些 jar 在
-                // 插件目录**外**（清单写的是绝对路径），换 jar 时目录与清单都不动。
-                // 清单坏了解析不出来就当没有——坏包会走自己的错误路径，扫描不该跟着炸。
-                let driver_jars = crate::manifest::ManifestParser::parse(&manifest_path)
-                    .ok()
-                    .and_then(|parsed| parsed.backend)
-                    .map(|backend| backend.driver_jars)
-                    .unwrap_or_default();
+                // 清单 hash 没变就复用上次解析出来的版本与外部 jar：内容相同 ⇒
+                // `driver_jars` 必然相同，没必要每个 tick 重新解析 TOML 再全量校验
+                // （5 秒一轮 × 每个插件，纯浪费）。清单变了才真读一遍。
+                let (version, driver_jars) =
+                    resolve_manifest_side(snapshot.get(&id), manifest_hash, &manifest_path);
                 disk.insert(
                     id,
                     ScanEntry {
-                        version: String::new(),
+                        version,
                         manifest_hash,
                         payload_hash: payload_fingerprint(&entry.path(), &driver_jars),
+                        driver_jars,
                     },
                 );
             }
         }
-
-        // 读快照算 diff（快照只读、不跨 await 持锁：std RwLockGuard 非 Send，
-        // 跨 await 会让 tokio::spawn 的循环 future 不 Send）
-        let snapshot = self
-            .scan_snapshot
-            .read()
-            .map_err(|_| lock_err("scan_snapshot"))?
-            .clone();
 
         let mut diff = PluginDiff::default();
         let mut payload_changed: Vec<String> = Vec::new();
@@ -2138,6 +2173,90 @@ mod tests {
             std::fs::create_dir_all(parent).unwrap();
         }
         std::fs::write(path, content).unwrap();
+    }
+
+    /// Java 运行时 + 声明两个外部 jar 的最小合法清单
+    const MANIFEST_WITH_JARS: &str = r#"
+[plugin]
+id = "ext.demo"
+name = "Demo"
+version = "1.2.3"
+publisher = "me"
+description = "demo"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "script"
+runtime = "java"
+executable = "lib/shell.jar"
+interpreter_args = ["-jar"]
+driver_jars = ["D:/drivers/a.jar", "C:\\extra\\mysql"]
+
+[permissions]
+sidecar = ["spawn.child_process", "net.connect"]
+
+[capabilities.driver]
+concurrency = "serial"
+
+[[contributes.drivers]]
+id = "demo"
+display_name = "Demo Database"
+default_port = 1521
+url_template = "jdbc:demo://{host}:{port}"
+"#;
+
+    /// 清单能解析出「版本 + 外部 jar」；不存在 / 坏清单给空，不 panic。
+    #[test]
+    fn manifest_side_reads_version_and_external_jars() {
+        let dir = TempDir::new("manifest-side");
+        let manifest = dir.0.join("plugin.toml");
+        write(&manifest, MANIFEST_WITH_JARS);
+
+        let (version, jars) = manifest_side(&manifest);
+        if version.is_empty() {
+            // 夹具清单必须真的能过 validate，否则整条测试变成「空对空」
+            let err = crate::manifest::ManifestParser::parse(&manifest).unwrap_err();
+            panic!("夹具清单没通过校验：{err}");
+        }
+        assert_eq!(version, "1.2.3", "版本要来自清单，不是空串");
+        assert_eq!(jars.len(), 2, "外部 jar 要按清单原样取出");
+
+        assert_eq!(
+            manifest_side(&dir.0.join("missing.toml")),
+            (String::new(), Vec::new()),
+            "清单不存在时给空"
+        );
+        let broken = dir.0.join("broken.toml");
+        write(&broken, "[this is not toml");
+        assert_eq!(
+            manifest_side(&broken),
+            (String::new(), Vec::new()),
+            "坏清单给空（坏包走自己的错误路径）"
+        );
+    }
+
+    /// 快照里清单 hash 相同 → 直接复用，**不碰文件**。
+    ///
+    /// 证明方式：清单路径指向不存在的文件——若实现偷偷去解析，拿到的就是空值。
+    #[test]
+    fn same_manifest_hash_reuses_the_snapshot_without_parsing() {
+        let prev = ScanEntry {
+            version: "9.9.9".to_string(),
+            manifest_hash: 42,
+            driver_jars: vec!["D:/drivers/prev.jar".to_string()],
+            payload_hash: 7,
+        };
+        let missing = Path::new("D:/rds-no-such-dir/plugin.toml");
+
+        let (version, jars) = resolve_manifest_side(Some(&prev), 42, missing);
+        assert_eq!(version, "9.9.9", "清单没变就该复用快照里的版本");
+        assert_eq!(jars, vec!["D:/drivers/prev.jar".to_string()]);
+
+        // hash 不同 → 必须真解析（路径不存在，所以拿到空值）
+        let (version, jars) = resolve_manifest_side(Some(&prev), 43, missing);
+        assert!(version.is_empty() && jars.is_empty(), "清单变了要重新解析");
     }
 
     /// 目录内文件换了 → 指纹变；同样的目录再算一次 → 指纹稳定（排序生效）。
