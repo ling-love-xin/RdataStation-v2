@@ -1868,6 +1868,13 @@ pub async fn init_plugin_manager(install_dir: PathBuf) -> Result<(), CoreError> 
         ))
     })?;
 
+    // 首轮扫描同步完成再拉起循环：连接对话框在窗口首帧就会读 `drivers` 行，
+    // 若等后台 tick，可能先读到空目录 / `enabled=0`，显示「暂无驱动」。
+    // 扫描失败不阻断启动：运行时循环下一拍还会重试。
+    if let Err(e) = manager.scan_and_diff_plugins().await {
+        tracing::warn!(error = %e, "插件首轮扫描失败（由运行时循环下一拍重试）");
+    }
+
     crate::sidecar::runtime::PluginRuntimeLoop::new(manager, crate::sidecar::runtime::RUNTIME_TICK)
         .spawn(); // 句柄 drop 即 detach（任务生命周期随 tokio runtime，宿主退出即停）
 

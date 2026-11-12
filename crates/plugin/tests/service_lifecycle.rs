@@ -78,7 +78,8 @@ async fn service_enable_propagates_activation_failure() {
         .expect("初始化全局插件管理器");
 
     let manager: &Arc<PluginManager> = get_plugin_manager().expect("管理器已初始化");
-    manager.scan_and_diff_plugins().await.unwrap();
+    // 首轮扫描在 init 内同步完成：窗口首帧读 drivers 表前，插件已加载/激活并写行。
+    // 这里不再显式 scan，直接断言插件已经进运行时索引。
     assert!(manager.is_loaded("com.example.serviceenablefail"));
     let status = manager
         .get_loaded_plugin("com.example.serviceenablefail")

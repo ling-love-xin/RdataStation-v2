@@ -102,6 +102,11 @@ service 层新增 `PluginManager::is_loaded` 判定，只在有运行实例时�
 只走一处；激活失败原样返回，不再「写库成功 + `let _ =` 吞掉 activate 错误」。
 只有 manager 未初始化（宿主尚未接入）时，service 才退化为只写全局登记。
 
+**启动首轮扫描先于首帧（2026-11-11）**：`init_plugin_manager` 在设置全局管理器后先同步跑一次
+`scan_and_diff_plugins`，再拉起运行时循环。连接对话框在窗口首帧就会读 `global.db` 的 `drivers`
+行；若等后台 tick，首次打开可能先读到空目录 / `enabled=0`，显示「暂无驱动」。扫描失败只记日志，
+循环下一拍仍会重试，不阻断启动。
+
 **卸载后不留幽灵重载（2026-11-11）**：`PluginManager::uninstall_plugin` 成功后同时清
 `needs_reload` 与扫描快照。否则面板会继续提示「重载」一个已删除的插件，下一轮扫描还会把
 同一次卸载当成新的「消失」再报一遍。
