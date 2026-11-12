@@ -65,8 +65,9 @@ cargo test --manifest-path tools/plugin-drivers/sqlx-rust/Cargo.toml
   **三处副本要保持一致**（`<包>/bin/...`、`.rds/plugins/<id>/bin/...`、
   `.rds/target-gf/debug/plugins/<id>/bin/...`），否则跑的还是旧二进制。
 - **换了新二进制，宿主会自己重启那个插件**（2026-11-12）：热插拔扫描不只看
-  `plugin.toml` 的内容 hash，也看插件目录里载荷文件的指纹（相对路径 + 长度 +
-  纳秒修改时间）。只换 `agent.exe`、清单一个字节不动时，扫描在 5 秒内认出
+  `plugin.toml` 的内容 hash，也看**载荷指纹**——插件目录里每个文件的相对路径 + 长度 +
+  纳秒修改时间，加上清单 `[backend] driver_jars` 声明的**外部 jar / 目录**（那些在插件
+  目录之外，路径是绝对路径）。只换 `agent.exe`、清单一个字节不动时，扫描在 5 秒内认出
   「壳没变、载荷变了」，自动 `deactivate → activate` 该插件（别的插件不受影响）：
   旧进程被停、旧会话如实作废，下一个连接用的就是新二进制。**不用重启宿主，也不用
   手动点重载**。两个现实约束：① Windows 上运行中的 exe 不能直接覆盖

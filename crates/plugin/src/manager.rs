@@ -347,7 +347,12 @@ fn path_is_under(path: &Path, root: &Path) -> bool {
     child == root || child.starts_with(&format!("{root}/"))
 }
 
-/// 插件目录里**载荷文件**的指纹：递归收集 (相对路径, 长度, 修改时间) 再汇总成 hash。
+/// 插件**载荷**的指纹：插件目录内文件 + 清单声明的外部 jar，都按
+/// (标识, 长度, 纳秒修改时间) 汇总成 hash。
+///
+/// 为什么要带外部路径：清单的 `backend.driver_jars` 是**绝对路径**（用户自己下载的
+/// JDBC 包，不塞进插件目录），换 jar 时插件目录与 `plugin.toml` 都不动。只管目录的话
+/// 这种更新检测不到，运行中的 Java 壳会一直用已加载的旧 jar。
 ///
 /// 为什么不用内容 hash：扫描是每 5 秒一轮的后台动作，3 MB 的 exe 每轮读一遍纯属浪费；
 /// (长度, 修改时间) 已经覆盖真实更新方式——重编覆盖、重装、换文件、删文件都会变，
@@ -356,13 +361,23 @@ fn path_is_under(path: &Path, root: &Path) -> bool {
 /// 边界（写在这里免得后人误以为它是全保真）：
 /// - 用保留时间戳的工具覆盖（`robocopy /COPY:T`、`git checkout` 保时间）指纹不变，
 ///   那种情况仍要手动重载；
-/// - 只比对「同一个插件目录内部」，目录整体被替换成另一份（长度与时间都恰好相同）
-///   属于低概率巧合，忽略；
+/// - 目录整体被替换成另一份（长度与时间都恰好相同）属于低概率巧合，忽略；
 /// - 遍历失败的子目录直接跳过（正在写入的目录下一轮再算）。
-fn payload_fingerprint(dir: &Path) -> u64 {
+fn payload_fingerprint(dir: &Path, extra_paths: &[String]) -> u64 {
     use std::hash::Hasher;
 
-    fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, u64, u128)>, depth: usize) {
+    fn mtime_nanos(meta: &std::fs::Metadata) -> u128 {
+        // 纳秒粒度：同一秒内两次写入、且长度恰好相同的覆盖（比如只改一个字符）
+        // 也能被认出来；秒级粒度在这种场景下会漏判。
+        meta.modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    }
+
+    /// `prefix` 让外部路径的文件与目录内文件不会撞名（`ext:<路径>#`）
+    fn walk(dir: &Path, root: &Path, prefix: &str, out: &mut Vec<(String, u64, u128)>, depth: usize) {
         // 深度兜底：插件包约定是浅目录，异常深的树（被人塞了 node_modules 之类）
         // 不必每 5 秒全部 stat 一遍
         if depth > 6 {
@@ -377,27 +392,33 @@ fn payload_fingerprint(dir: &Path) -> u64 {
                 continue;
             };
             if meta.is_dir() {
-                walk(&path, root, out, depth + 1);
+                walk(&path, root, prefix, out, depth + 1);
                 continue;
             }
             let rel = path
                 .strip_prefix(root)
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_else(|_| path.to_string_lossy().to_string());
-            // 修改时间取纳秒粒度：同一秒内两次写入、且长度恰好相同的覆盖（比如只改
-            // 一个字符）也能被认出来；秒级粒度在这种场景下会漏判。
-            let mtime_nanos = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            out.push((rel, meta.len(), mtime_nanos));
+            out.push((format!("{prefix}{rel}"), meta.len(), mtime_nanos(&meta)));
         }
     }
 
     let mut files = Vec::new();
-    walk(dir, dir, &mut files, 0);
+    walk(dir, dir, "", &mut files, 0);
+    for raw in extra_paths {
+        let path = Path::new(raw);
+        match std::fs::metadata(path) {
+            // 目录（清单允许写 `/drivers/mysql` 这种目录）→ 递归计入其中每个文件，
+            // 否则「往目录里加/换一个 jar」也检测不到
+            Ok(meta) if meta.is_dir() => {
+                walk(path, path, &format!("ext:{raw}#"), &mut files, 0)
+            }
+            Ok(meta) => files.push((format!("ext:{raw}"), meta.len(), mtime_nanos(&meta))),
+            // 不存在的也记一条：这样「后来才放进去」的 jar 也能被认出来。
+            // 注意部署期本就要求路径存在（不存在报可读错误），这里只是兜底。
+            Err(_) => files.push((format!("ext-missing:{raw}"), 0, 0)),
+        }
+    }
     // 路径排序：`read_dir` 顺序不保证稳定，不排序会让同一份目录算出不同指纹
     files.sort();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1475,12 +1496,20 @@ impl PluginManager {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 std::hash::Hasher::write(&mut hasher, &bytes);
                 let manifest_hash = hasher.finish();
+                // 清单能解析时把 `backend.driver_jars` 一并纳入载荷指纹：那些 jar 在
+                // 插件目录**外**（清单写的是绝对路径），换 jar 时目录与清单都不动。
+                // 清单坏了解析不出来就当没有——坏包会走自己的错误路径，扫描不该跟着炸。
+                let driver_jars = crate::manifest::ManifestParser::parse(&manifest_path)
+                    .ok()
+                    .and_then(|parsed| parsed.backend)
+                    .map(|backend| backend.driver_jars)
+                    .unwrap_or_default();
                 disk.insert(
                     id,
                     ScanEntry {
                         version: String::new(),
                         manifest_hash,
-                        payload_hash: payload_fingerprint(&entry.path()),
+                        payload_hash: payload_fingerprint(&entry.path(), &driver_jars),
                     },
                 );
             }
@@ -2077,4 +2106,122 @@ pub async fn init_plugin_manager(install_dir: PathBuf) -> Result<(), CoreError> 
         .spawn(); // 句柄 drop 即 detach（任务生命周期随 tokio runtime，宿主退出即停）
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 一次性临时目录（Drop 清掉，不留过程产物）
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("rds-payload-fp-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// 写文件并保证「长度不同」：纳秒 mtime 已经能区分同长度覆盖，
+    /// 但测试里用不同长度可以让断言不依赖文件系统的时间戳精度。
+    fn write(path: &Path, content: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, content).unwrap();
+    }
+
+    /// 目录内文件换了 → 指纹变；同样的目录再算一次 → 指纹稳定（排序生效）。
+    #[test]
+    fn directory_payload_change_moves_the_fingerprint() {
+        let dir = TempDir::new("dir");
+        write(&dir.0.join("agent.exe"), "v1");
+        let before = payload_fingerprint(&dir.0, &[]);
+        assert_eq!(
+            before,
+            payload_fingerprint(&dir.0, &[]),
+            "同一份目录两次结果必须一致（read_dir 顺序不稳定，靠排序收敛）"
+        );
+
+        write(&dir.0.join("agent.exe"), "v2-longer");
+        assert_ne!(
+            before,
+            payload_fingerprint(&dir.0, &[]),
+            "目录内载荷变了必须反映到指纹上"
+        );
+    }
+
+    /// 清单声明的外部 jar 换了 → 指纹变（这是 `driver_jars` 的场景：
+    /// jar 在插件目录外，换它时目录与清单都不动）。
+    #[test]
+    fn external_jar_is_part_of_the_payload() {
+        let dir = TempDir::new("ext-file");
+        write(&dir.0.join("plugin.toml"), "[plugin]");
+        let jar = dir.0.join("drivers").join("ojdbc11.jar");
+        write(&jar, "jar-v1");
+        let jars = vec![jar.to_string_lossy().to_string()];
+
+        let before = payload_fingerprint(&dir.0, &jars);
+        assert_eq!(before, payload_fingerprint(&dir.0, &jars));
+
+        write(&jar, "jar-v2-longer");
+        assert_ne!(
+            before,
+            payload_fingerprint(&dir.0, &jars),
+            "外部 jar 更新后指纹必须变（否则 Java 壳一直用旧 jar）"
+        );
+
+        // 不声明 jar 时，同样的目录算出来是另一个值（外部内容不参与）
+        assert_ne!(before, payload_fingerprint(&dir.0, &[]));
+    }
+
+    /// 外部路径「先不存在、后放进去」也要能被认出来（部署期会校验存在，
+    /// 但用户手动补 jar 是真实场景）。
+    #[test]
+    fn external_jar_appearing_later_changes_the_fingerprint() {
+        let dir = TempDir::new("ext-appear");
+        write(&dir.0.join("plugin.toml"), "[plugin]");
+        let jar = dir.0.join("drivers").join("late.jar");
+        let jars = vec![jar.to_string_lossy().to_string()];
+
+        let missing = payload_fingerprint(&dir.0, &jars);
+        write(&jar, "now-here");
+        assert_ne!(missing, payload_fingerprint(&dir.0, &jars));
+    }
+
+    /// 清单允许把外部路径写成**目录**（`driver_jars = ["D:/drivers/mysql"]`），
+    /// 目录里加 / 换 jar 同样要反映到指纹上。
+    #[test]
+    fn external_directory_contents_are_walked() {
+        let dir = TempDir::new("ext-dir");
+        write(&dir.0.join("plugin.toml"), "[plugin]");
+        let ext = dir.0.join("drivers");
+        let jars = vec![ext.to_string_lossy().to_string()];
+
+        // 目录还没建：记 missing
+        let empty = payload_fingerprint(&dir.0, &jars);
+
+        write(&ext.join("mysql-connector.jar"), "a");
+        let one = payload_fingerprint(&dir.0, &jars);
+        assert_ne!(empty, one, "外部目录出现后指纹要变");
+
+        write(&ext.join("mysql-connector.jar"), "a-longer");
+        assert_ne!(one, payload_fingerprint(&dir.0, &jars), "目录内文件换掉要变");
+
+        write(&ext.join("extra.jar"), "b");
+        assert_ne!(
+            one,
+            payload_fingerprint(&dir.0, &jars),
+            "目录里新增一个 jar 也要变"
+        );
+    }
 }
