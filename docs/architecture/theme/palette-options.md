@@ -1,6 +1,6 @@
 # RdataStation 主题色板候选（8 套 · 明暗）
 
-> 状态：**候选方案，未落地**（不改 `assets/themes/`）。生成于 2026-11-12 15:14，由 `python tools/gen_palette_options.py` 输出本文件与 `palette-options.html`。
+> 状态：**候选方案，未落地**（不改 `assets/themes/`）。生成于 2026-11-12 15:25，由 `python tools/gen_palette_options.py` 输出本文件与 `palette-options.html`。
 > 色值权威性：本文件是候选色板的唯一来源；采纳某套后再并入 `theme-tokens-complete.md` 与 `rds-theme.json`。
 > 验证口径：WCAG 2.x，正文/控件文字 ≥ 4.5:1、非文本 ≥ 3:1；单套单模式 58 项，8 套 × 明暗共 928 项，**928 项达标**。
 
@@ -837,6 +837,44 @@
 | `search` / `quick` | 产品 token `search.match.background` / `quick_open.group.header` | 命中底 / 分组头 |
 | `overlay` | `overlay` | 模态遮罩 + Quick Open 遮罩共用（无 scrim 键） |
 
+### 4.1 已生成的包文件（140 键，可直接落地）
+
+每个包 = 一个 Light + 一个 Dark + 一套产品 token（13 角色），全部落在 `docs/architecture/theme/palette-candidates/`：
+
+| 包 | 主题文件 | 产品 token |
+| --- | --- | --- |
+| 珊瑚石墨 `coral-graphite` | `coral-graphite-theme.json` | `coral-graphite-product-tokens.json` |
+| 石板深蓝 `slate-azure` | `slate-azure-theme.json` | `slate-azure-product-tokens.json` |
+| 暖纸赭石 `warm-umber` | `warm-umber-theme.json` | `warm-umber-product-tokens.json` |
+| 松林青绿 `forest-teal` | `forest-teal-theme.json` | `forest-teal-product-tokens.json` |
+| 近黑墨 `ink-oled` | `ink-oled-theme.json` | `ink-oled-product-tokens.json` |
+| 青花 `qinghua` | `qinghua-theme.json` | `qinghua-product-tokens.json` |
+| 朱砂 `zhusha` | `zhusha-theme.json` | `zhusha-product-tokens.json` |
+| 墨金 `mopin` | `mopin-theme.json` | `mopin-product-tokens.json` |
+
+> 为什么放 `docs/` 而不是 `assets/themes/`：`load_theme_assets` 会扫 `assets/themes/*.json` 并把所有 `themes[]` 全量注册，候选一旦放进去就等于「没采纳先上线」。采纳某包时，把这两个文件改名为 `rds-<id>-theme.json` / `rds-<id>-product-tokens.json` 再拷进 `assets/themes/`。
+
+### 4.2 生成与校验
+
+- 生成：`python tools/gen_theme_packs.py` —— 从本文件 `SCHEMES` 的角色值展开 140 键 + 13 个产品角色，派生的键（button 系列、scrollbar、`base.*` light 变体、语法补充名）在脚本里显式推导。
+- 校验：`python tools/audit_theme_packs.py` —— 复用 `tools/theme_audit.py` 的 schema 键集合 / 52 对 / 9 对产品 / 41 个语法名口径，逐包逐模式跑。
+- 当前结果：**8 包 × 明暗全部通过**（140/140 键、主题对照 0 不达标、产品对照 0 不达标、41 个语法名 0 未覆盖、语法着色 0 不达标）。
+
+### 4.3 与现役资产的有意差异
+
+`audit_theme_packs.py` 会把「现役资产里同值、候选里拉开（通道差 ≥ 4）」的组逐条列出，当前 **9 组**（8 条说明：表头文字在明暗两套各出现一次），均为有意区分：
+
+| 现役同值的组 | 候选里的区别 | 为什么 |
+| --- | --- | --- |
+| `table.head.foreground` 与其余次要文字（明、暗各 1 组） | 表头文字用 `head_fg`（略深/略亮一档） | 表头要在一眼扫视里压过单元格 |
+| `chart.3` 与主色 | 图表第 3 系列保留原珊瑚 `#BC5340` | 换品牌主色时，数据系列色不跟着漂 |
+| `slider.background` / `switch.background` 与 `border` | 取 `input_border`（描边更实） | 控件轨道需要比分割线更明确 |
+| 状态栏 / 按钮 / 分组底 / `muted.background` | 分别取 `status` / `button` / `group` / `hover` | 现役资产挤在同一个 `#F3F3F3`，候选按层次拆开 |
+| `table.foot.background` 与斑马行（暗） | 表尾取 `group`（比斑马行退一档） | 表尾是汇总带，不该和行底同色 |
+| 按钮 hover 与 `muted.background`（暗） | 按钮 hover 由 `head` 派生，`muted.background` 取 `hover` | 按钮是控件、muted 块是容器，层级不同 |
+| **`sidebar.foreground`（暗，现役取正文 `#CCCCCC`）** | 取 `muted` | 侧栏文字明暗统一走「次要文字」；若想更接近现役，把 `gen_theme_packs.py` 里该键改成 `fg` 重跑即可（对比度仍达标） |
+| `switch.thumb.background` 与 `fg_active`（暗） | 滑块取近白，激活标签略灰 | 滑块要压在 `input_border` 轨道上，必须更亮 |
+
 ## 5. 内置多主题：现在能做到哪一步
 
 > 三条都是本机源码实测（2026-11-12），不是推测。
@@ -851,6 +889,9 @@
 - 包名对外后**不能再改**：`attach_rds_theme` 与设置持久化都按名字查，改名等于用户配置失效。
 
 建议节奏：内置 **2 个包**（默认 RDS + 1 个中国风），其余当可选包；要上第 3 个包之前，先把 `ProductTokenSet` 升级成“按包解析”，否则每多一包就多一处“看着只换了一半”的静默不一致。
+
+> 这一节说的“包”已经按 §4.1 生成好了（8 个包，每个 = 主题文件 + 产品 token 文件），
+> 拷进 `assets/themes/` 就能被 `load_theme_assets` 认到；剩下的只是“选哪包 + 改解析口径”。
 
 
 ## 6. 选型建议
@@ -870,7 +911,7 @@
 
 ## 7. 验证与边界
 
-- 对比度：单套单模式 58 项 × 明暗 × 8 套，含正文、次要文字、表头、主色三态、语义四色三态、图表 5 系列、涨跌、产品槽 6 个、选中态合成、语法 6 个代表名。
+- 两层校验：色卡页按**角色口径**验 58 项/模式（正文、次要文字、表头、主色三态、语义四色三态、图表 5 系列、涨跌、产品槽 6 个、选中态合成、语法 6 个代表名）；`audit_theme_packs.py` 按**包文件口径**再验 140/140 覆盖、52 对主题对比度、9 对产品对比度、41 个语法名覆盖与着色对比度。
 - 选中底 / 文本选区按 `clamp_alpha` 上限（0.2 / 0.3）给值，超限会被 schema 静默压缩。
-- **未做的**：140 键逐项展开（`button.*`、`scrollbar.*`、`base.*` 等由角色推导，尚未生成 JSON）；41 个语法高亮名只核了 6 个代表名；未上真机截图比对；未验证多包并存时的切换与回滚。
-- 落地某套时的完整步骤：扩 140 键 → `python tools/theme_audit.py`（0 不达标）→ `python tools/gen_theme_preview.py` → 真机明暗切换核对 → 更新 `theme-tokens-complete.md`。
+- **未做的**：真机截图比对（明暗各一张全界面）；`tools/theme_audit.py` 仍硬编码 `RDS Light` / `RDS Dark` 与现役资产路径，接包文件要么改脚本参数要么用它跑根因；多包并存时的切换 / 回滚未验；没改视图代码，故未跑 `cargo test -p rds-ui-guard`。
+- 落地某套时的完整步骤：把包文件拷进 `assets/themes/` → 改 `attach_rds_theme` 与产品 token 的解析口径 → `python tools/theme_audit.py`（0 不达标）→ `python tools/gen_theme_preview.py` → 真机明暗切换核对 → 更新 `theme-tokens-complete.md`。

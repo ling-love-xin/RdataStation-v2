@@ -64,7 +64,7 @@
 <body>
 <h1>RdataStation 主题色板候选 · 8 套（明 / 暗）</h1>
 <p class="sub">
-  由 <code>tools/gen_palette_options.py</code> 生成（2026-11-12 15:14）—— 色值与对比度同源，改色后重跑即可。<br>
+  由 <code>tools/gen_palette_options.py</code> 生成（2026-11-12 15:25）—— 色值与对比度同源，改色后重跑即可。<br>
   角色口径对齐 <code>assets/themes/rds-theme.json</code> 的 140 token 语义切片；对比度按 WCAG 2.x（正文 4.5:1、非文本 3:1），
   与 <code>tools/theme_audit.py</code> 同算法。合计 928 项配对，928 项达标。
 </p>
@@ -933,7 +933,9 @@
   读法：每套左 Light、右 Dark，各带一张 mini IDE 样张（标题栏 / 活动栏 / 侧栏 / 编辑器 / 结果集 / 状态栏），
   用来看 chrome 与内容区的分档、选中态、表头与斑马纹是否成立；色块区是可直接抄用的角色值。<br>
   选中底（α 0.2）与文本选区（α 0.3）是按 gpui-kit <code>clamp_alpha</code> 上限给的，超过会被静默压缩，表现为「选中看不见」。<br>
-  语义色是「实心底 + 高对比文字」：浅色模式深底白字、深色模式亮底极深字，与现役资产同口径。
+  语义色是「实心底 + 高对比文字」：浅色模式深底白字、深色模式亮底极深字，与现役资产同口径。<br>
+  落地：每套已展开成 140 键的包文件（<code>docs/architecture/theme/palette-candidates/</code>，主题 + 产品 token 成对），
+  由 <code>tools/gen_theme_packs.py</code> 生成、<code>tools/audit_theme_packs.py</code> 校验（8 包 × 明暗 0 不达标）。
 </p>
 </body>
 </html>

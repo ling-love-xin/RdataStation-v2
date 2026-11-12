@@ -828,7 +828,9 @@ def build_html():
   读法：每套左 Light、右 Dark，各带一张 mini IDE 样张（标题栏 / 活动栏 / 侧栏 / 编辑器 / 结果集 / 状态栏），
   用来看 chrome 与内容区的分档、选中态、表头与斑马纹是否成立；色块区是可直接抄用的角色值。<br>
   选中底（α 0.2）与文本选区（α 0.3）是按 gpui-kit <code>clamp_alpha</code> 上限给的，超过会被静默压缩，表现为「选中看不见」。<br>
-  语义色是「实心底 + 高对比文字」：浅色模式深底白字、深色模式亮底极深字，与现役资产同口径。
+  语义色是「实心底 + 高对比文字」：浅色模式深底白字、深色模式亮底极深字，与现役资产同口径。<br>
+  落地：每套已展开成 140 键的包文件（<code>docs/architecture/theme/palette-candidates/</code>，主题 + 产品 token 成对），
+  由 <code>tools/gen_theme_packs.py</code> 生成、<code>tools/audit_theme_packs.py</code> 校验（8 包 × 明暗 0 不达标）。
 </p>
 </body>
 </html>
@@ -875,6 +877,9 @@ BUILTIN_NOTE = """> 三条都是本机源码实测（2026-11-12），不是推�
 - 包名对外后**不能再改**：`attach_rds_theme` 与设置持久化都按名字查，改名等于用户配置失效。
 
 建议节奏：内置 **2 个包**（默认 RDS + 1 个中国风），其余当可选包；要上第 3 个包之前，先把 `ProductTokenSet` 升级成“按包解析”，否则每多一包就多一处“看着只换了一半”的静默不一致。
+
+> 这一节说的“包”已经按 §4.1 生成好了（8 个包，每个 = 主题文件 + 产品 token 文件），
+> 拷进 `assets/themes/` 就能被 `load_theme_assets` 认到；剩下的只是“选哪包 + 改解析口径”。
 """
 
 
@@ -936,6 +941,42 @@ def build_md(total_checks, total_fail):
     lines.append("采纳任意一套时，按这张表把角色值铺到 `assets/themes/rds-theme.json`；"
                  "新增/改色后跑 `python tools/theme_audit.py` 与 `cargo test -p rds-ui-guard`。\n")
     lines.append(MAPPING + "\n")
+
+    lines.append(f"### {sec}.1 已生成的包文件（140 键，可直接落地）\n")
+    lines.append("每个包 = 一个 Light + 一个 Dark + 一套产品 token（13 角色），全部落在 "
+                 "`docs/architecture/theme/palette-candidates/`：\n")
+    lines.append("| 包 | 主题文件 | 产品 token |")
+    lines.append("| --- | --- | --- |")
+    for s in SCHEMES:
+        lines.append(f"| {s['cn']} `{s['id']}` | `{s['id']}-theme.json` | `{s['id']}-product-tokens.json` |")
+    lines.append("")
+    lines.append("> 为什么放 `docs/` 而不是 `assets/themes/`：`load_theme_assets` 会扫 "
+                 "`assets/themes/*.json` 并把所有 `themes[]` 全量注册，候选一旦放进去就等于"
+                 "「没采纳先上线」。采纳某包时，把这两个文件改名为 `rds-<id>-theme.json` / "
+                 "`rds-<id>-product-tokens.json` 再拷进 `assets/themes/`。\n")
+
+    lines.append(f"### {sec}.2 生成与校验\n")
+    lines.append("- 生成：`python tools/gen_theme_packs.py` —— 从本文件 `SCHEMES` 的角色值展开 140 键 + 13 个产品角色，"
+                 "派生的键（button 系列、scrollbar、`base.*` light 变体、语法补充名）在脚本里显式推导。")
+    lines.append("- 校验：`python tools/audit_theme_packs.py` —— 复用 `tools/theme_audit.py` 的 schema 键集合 / 52 对 / "
+                 "9 对产品 / 41 个语法名口径，逐包逐模式跑。")
+    lines.append("- 当前结果：**8 包 × 明暗全部通过**（140/140 键、主题对照 0 不达标、产品对照 0 不达标、"
+                 "41 个语法名 0 未覆盖、语法着色 0 不达标）。\n")
+
+    lines.append(f"### {sec}.3 与现役资产的有意差异\n")
+    lines.append("`audit_theme_packs.py` 会把「现役资产里同值、候选里拉开（通道差 ≥ 4）」的组逐条列出，"
+                 "当前 **9 组**（8 条说明：表头文字在明暗两套各出现一次），均为有意区分：\n")
+    lines.append("| 现役同值的组 | 候选里的区别 | 为什么 |")
+    lines.append("| --- | --- | --- |")
+    lines.append("| `table.head.foreground` 与其余次要文字（明、暗各 1 组） | 表头文字用 `head_fg`（略深/略亮一档） | 表头要在一眼扫视里压过单元格 |")
+    lines.append("| `chart.3` 与主色 | 图表第 3 系列保留原珊瑚 `#BC5340` | 换品牌主色时，数据系列色不跟着漂 |")
+    lines.append("| `slider.background` / `switch.background` 与 `border` | 取 `input_border`（描边更实） | 控件轨道需要比分割线更明确 |")
+    lines.append("| 状态栏 / 按钮 / 分组底 / `muted.background` | 分别取 `status` / `button` / `group` / `hover` | 现役资产挤在同一个 `#F3F3F3`，候选按层次拆开 |")
+    lines.append("| `table.foot.background` 与斑马行（暗） | 表尾取 `group`（比斑马行退一档） | 表尾是汇总带，不该和行底同色 |")
+    lines.append("| 按钮 hover 与 `muted.background`（暗） | 按钮 hover 由 `head` 派生，`muted.background` 取 `hover` | 按钮是控件、muted 块是容器，层级不同 |")
+    lines.append("| **`sidebar.foreground`（暗，现役取正文 `#CCCCCC`）** | 取 `muted` | 侧栏文字明暗统一走「次要文字」；若想更接近现役，把 `gen_theme_packs.py` 里该键改成 `fg` 重跑即可（对比度仍达标） |")
+    lines.append("| `switch.thumb.background` 与 `fg_active`（暗） | 滑块取近白，激活标签略灰 | 滑块要压在 `input_border` 轨道上，必须更亮 |")
+    lines.append("")
     lines.append(f"## {sec + 1}. 内置多主题：现在能做到哪一步\n")
     lines.append(BUILTIN_NOTE + "\n")
 
@@ -962,13 +1003,17 @@ def build_md(total_checks, total_fail):
 
     sec += 1
     lines.append(f"## {sec}. 验证与边界\n")
-    lines.append(f"- 对比度：单套单模式 {per_mode} 项 × 明暗 × {n_all} 套，含正文、次要文字、表头、主色三态、"
-                 "语义四色三态、图表 5 系列、涨跌、产品槽 6 个、选中态合成、语法 6 个代表名。")
+    lines.append(f"- 两层校验：色卡页按**角色口径**验 {per_mode} 项/模式（正文、次要文字、表头、主色三态、"
+                 "语义四色三态、图表 5 系列、涨跌、产品槽 6 个、选中态合成、语法 6 个代表名）；"
+                 "`audit_theme_packs.py` 按**包文件口径**再验 140/140 覆盖、52 对主题对比度、9 对产品对比度、"
+                 "41 个语法名覆盖与着色对比度。")
     lines.append("- 选中底 / 文本选区按 `clamp_alpha` 上限（0.2 / 0.3）给值，超限会被 schema 静默压缩。")
-    lines.append("- **未做的**：140 键逐项展开（`button.*`、`scrollbar.*`、`base.*` 等由角色推导，尚未生成 JSON）；"
-                 "41 个语法高亮名只核了 6 个代表名；未上真机截图比对；未验证多包并存时的切换与回滚。")
-    lines.append("- 落地某套时的完整步骤：扩 140 键 → `python tools/theme_audit.py`（0 不达标）→ "
-                 "`python tools/gen_theme_preview.py` → 真机明暗切换核对 → 更新 `theme-tokens-complete.md`。\n")
+    lines.append("- **未做的**：真机截图比对（明暗各一张全界面）；`tools/theme_audit.py` 仍硬编码 "
+                 "`RDS Light` / `RDS Dark` 与现役资产路径，接包文件要么改脚本参数要么用它跑根因；"
+                 "多包并存时的切换 / 回滚未验；没改视图代码，故未跑 `cargo test -p rds-ui-guard`。")
+    lines.append("- 落地某套时的完整步骤：把包文件拷进 `assets/themes/` → 改 `attach_rds_theme` 与产品 token 的解析口径 → "
+                 "`python tools/theme_audit.py`（0 不达标）→ `python tools/gen_theme_preview.py` → "
+                 "真机明暗切换核对 → 更新 `theme-tokens-complete.md`。\n")
     return "\n".join(lines)
 
 

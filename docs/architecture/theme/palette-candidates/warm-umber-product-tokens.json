@@ -1,0 +1,33 @@
+{
+  "$comment": "「暖纸赭石」主题包的产品语义 token（13 角色）。换包时必须与主题文件同步替换，否则活动栏底色 / Quick Open 组头 / 搜索命中底 / 结果集槽会残留默认珊瑚包的值。",
+  "light": {
+    "activity_bar.background": "#F4EEE5",
+    "activity_bar.active_border": "#332B22",
+    "activity_bar.icon.active": "#332B22",
+    "activity_bar.icon.inactive": "#6B5C4B",
+    "title_bar.slot.background": "#FEFCF8",
+    "quick_open.group.header": "#E9E1D4",
+    "search.match.background": "#FDF0C8",
+    "staged.drop": "#B3301F",
+    "result.odd_row.background": "#F3EEE3",
+    "result.cell.modified.background": "#FFE6C8",
+    "result.cell.error.background": "#FBE0DC",
+    "result.local_row_background": "#E7F0DA",
+    "result.header.border": "#D9CDBB"
+  },
+  "dark": {
+    "activity_bar.background": "#141210",
+    "activity_bar.active_border": "#EDEAE4",
+    "activity_bar.icon.active": "#EDEAE4",
+    "activity_bar.icon.inactive": "#9B8E7D",
+    "title_bar.slot.background": "#1B1815",
+    "quick_open.group.header": "#332C25",
+    "search.match.background": "#4A3A12",
+    "staged.drop": "#FF8A7A",
+    "result.odd_row.background": "#241F18",
+    "result.cell.modified.background": "#3D2C16",
+    "result.cell.error.background": "#3F1D18",
+    "result.local_row_background": "#2A3320",
+    "result.header.border": "#38312A"
+  }
+}
