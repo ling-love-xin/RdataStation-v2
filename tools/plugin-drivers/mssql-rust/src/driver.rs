@@ -219,6 +219,15 @@ impl Driver for MssqlDriver {
     ) -> Result<MetaObjectDetail, DriverError> {
         meta::object_detail(&mut session.client, schema, name).await
     }
+
+    async fn routine_source(
+        &self,
+        session: &mut Self::Session,
+        schema: &str,
+        name: &str,
+    ) -> Result<Option<String>, DriverError> {
+        meta::routine_source(&mut session.client, schema, name).await
+    }
 }
 
 pub fn build_config(params: &Value) -> Result<Config, DriverError> {

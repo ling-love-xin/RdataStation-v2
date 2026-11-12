@@ -395,6 +395,23 @@ impl Driver for OracleDriver {
             }
         }
     }
+
+    async fn routine_source(
+        &self,
+        session: &mut Self::Session,
+        schema: &str,
+        name: &str,
+    ) -> Result<Option<String>, DriverError> {
+        match crate::meta::routine_source(&session.conn, schema, name).await {
+            Ok(value) => Ok(value),
+            Err(first) => {
+                if session.reconnect().await.is_err() {
+                    return Err(first);
+                }
+                crate::meta::routine_source(&session.conn, schema, name).await
+            }
+        }
+    }
 }
 
 fn build_config(params: &Value) -> Result<Config, DriverError> {

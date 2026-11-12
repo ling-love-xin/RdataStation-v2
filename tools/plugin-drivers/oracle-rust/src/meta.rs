@@ -313,6 +313,47 @@ async fn mark_primary_key(conn: &Connection, owner: &str, table: &str, columns: 
     }
 }
 
+/// 例程源码（`meta.routine_source`）：Oracle 的源码正文在 `ALL_SOURCE`，一行一条源文件行。
+///
+/// 绑定变量同理——`ALL_SOURCE` 也是字典视图，把 owner/名字拼进 SQL 文本会重复硬解析。
+/// 只认 `PROCEDURE` / `FUNCTION`：协议点名的就是这两类；`PACKAGE` 与 `PACKAGE BODY`
+/// 不在这里混进来，否则同名包体会把过程源码拼到一块。
+pub async fn routine_source(
+    conn: &Connection,
+    schema: &str,
+    name: &str,
+) -> Result<Option<String>, DriverError> {
+    let sql = "SELECT text FROM all_source \
+               WHERE owner = :1 AND name = :2 AND type IN ('PROCEDURE','FUNCTION') \
+               ORDER BY type, line";
+    let result = conn
+        .query(
+            sql,
+            &[
+                Value::String(schema.to_uppercase()),
+                Value::String(name.to_uppercase()),
+            ],
+        )
+        .await
+        .map_err(sql_error)?;
+    if result.rows.is_empty() {
+        // 查不到 ≠ 出错：私有无权限的对象、非源码对象都落在这里，界面留空即可。
+        return Ok(None);
+    }
+    let mut source = String::new();
+    for row in &result.rows {
+        let Some(line) = row.get_string(0) else {
+            continue;
+        };
+        source.push_str(line);
+        // `ALL_SOURCE.TEXT` 自带换行；万一某些版本没有，补一个，避免整段黏成一行。
+        if !line.ends_with('\n') {
+            source.push('\n');
+        }
+    }
+    Ok(Some(source))
+}
+
 async fn indexes(
     conn: &Connection,
     owner: &str,

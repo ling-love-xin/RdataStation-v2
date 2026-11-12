@@ -65,7 +65,19 @@ cargo test --manifest-path tools/plugin-drivers/sqlx-rust/Cargo.toml
   **三处副本要保持一致**（`<包>/bin/...`、`.rds/plugins/<id>/bin/...`、
   `.rds/target-gf/debug/plugins/<id>/bin/...`），否则跑的还是旧二进制。
 - 能力边界：两个驱动都声明 `cancel = false`（无法中断在飞查询），
-  `tx.*` 走真实语句。
+  `tx.*` 走真实语句。这条不是偷懒：`oracle-rs 0.1.7` 与 `tiberius 0.12.3` 都只定义了
+  BREAK / ATTENTION 协议常量，**没有公开的 cancel API**（`oracle-rs` 只有服务端发
+  break 时的解析分支，`tiberius` 只有 `AttentionSignal` 常量）。要真中断得等上游开口子。
+- **`meta.*` 不许在内核里留硬编码桩**（2026-11-12，硬约束）：`rust-core/src/server.rs`
+  曾经把 `meta.routine_source` 直接写成 `Ok(Dispatch::Result(Value::Null))`，于是
+  **所有 Rust 驱动的例程源码面板永远是空的**，而自检只看「null 是合法答案」照样全绿
+  —— 假绿比报错更难发现。现在请求路由到 `Driver::routine_source`（默认 `Ok(None)`，
+  「查不到」与「不支持」都表达成 null），各驱动真去查：Oracle 走 `all_source`
+  （`type IN ('PROCEDURE','FUNCTION')`，按 `line` 拼回正文），SQL Server 走
+  `sys.sql_modules.definition`（`type IN ('P','FN','IF','TF')`，视图不进例程通道）。
+  实测（2026-11-12）：Oracle `XEPDB1 / MDSYS` 下 `ELOCATION_EDGE_LINK_LEVEL`、SQL Server
+  `master / dbo` 下 `sp_MScleanupmergepublisher` 都从「对端说没有」变成「拿得到」。
+  **新增任何 `meta.*` 时先看内核那条 match 是不是还在返回常量**——那是桩，不是实现。
 - **Oracle 元数据 SQL 一律用绑定变量**（2026-11-12，硬约束）：`owner` / 对象名
   **不许拼进 SQL 文本**，一律 `owner = :1 AND table_name = :2` 传 `Value::String`
   （见 `oracle-rust/src/meta.rs` 六处）。理由是实测的：Oracle 按 SQL **文本**做硬解析，

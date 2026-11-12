@@ -115,6 +115,31 @@ pub async fn object_detail(
     Ok(detail)
 }
 
+/// 例程源码（`meta.routine_source`）：SQL Server 的定义正文在 `sys.sql_modules.definition`。
+///
+/// 只认存储过程与函数（`P` / `FN` / `IF` / `TF`）——视图也有 `sql_modules` 记录，
+/// 但协议这里问的是例程，混进视图定义会让源码面板显示错东西。
+pub async fn routine_source(
+    client: &mut MssqlClient,
+    schema: &str,
+    name: &str,
+) -> Result<Option<String>, DriverError> {
+    let rows = query_rows(
+        client,
+        "SELECT m.definition FROM sys.sql_modules m \
+         JOIN sys.objects o ON o.object_id = m.object_id \
+         JOIN sys.schemas s ON s.schema_id = o.schema_id \
+         WHERE s.name = @P1 AND o.name = @P2 AND o.type IN ('P','FN','IF','TF')",
+        vec![schema.to_string(), name.to_string()],
+    )
+    .await?;
+    // 查不到 ≠ 出错：加密对象（WITH ENCRYPTION）本来就是 null，界面留空。
+    Ok(rows
+        .first()
+        .and_then(|row| row.get::<&str, _>(0))
+        .map(str::to_string))
+}
+
 async fn object_kind(client: &mut MssqlClient, schema: &str, name: &str) -> String {
     let rows = query_rows(
         client,

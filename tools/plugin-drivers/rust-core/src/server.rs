@@ -62,6 +62,20 @@ pub trait Driver: Send + Sync + 'static {
     ) -> Result<MetaObjectDetail, DriverError> {
         Err(DriverError::unsupported("该驱动未实现对象详情"))
     }
+
+    /// 例程源码（`meta.routine_source`）。
+    ///
+    /// 默认 `Ok(None)`：**没有源码是合法答案**，不是错误 —— 驱动把「查不到」与
+    /// 「不支持」都表达成 `null`，界面据此把源码区留空，不需要报错。
+    /// 真去查了但失败（断连、权限）才该 `Err`，让用户看见原因。
+    async fn routine_source(
+        &self,
+        _session: &mut Self::Session,
+        _schema: &str,
+        _name: &str,
+    ) -> Result<Option<String>, DriverError> {
+        Ok(None)
+    }
 }
 
 /// 类型擦除后的会话（`Box<dyn Any + Send>`），多驱动进程用它装各驱动的 `Session`。
@@ -122,6 +136,12 @@ pub trait SidecarDriver: Send + Sync + 'static {
         schema: String,
         name: String,
     ) -> BoxFuture<'a, Result<MetaObjectDetail, DriverError>>;
+    fn routine_source<'a>(
+        &'a self,
+        session: &'a mut AnySession,
+        schema: String,
+        name: String,
+    ) -> BoxFuture<'a, Result<Option<String>, DriverError>>;
 }
 
 /// 把任意 [`Driver`] 擦进 [`SidecarDriver`]。
@@ -232,6 +252,19 @@ impl<D: Driver> SidecarDriver for D {
             let session =
                 session_of::<D::Session>(session, Driver::driver_id(self), "meta.object_detail")?;
             Driver::object_detail(self, session, &schema, &name).await
+        })
+    }
+
+    fn routine_source<'a>(
+        &'a self,
+        session: &'a mut AnySession,
+        schema: String,
+        name: String,
+    ) -> BoxFuture<'a, Result<Option<String>, DriverError>> {
+        Box::pin(async move {
+            let session =
+                session_of::<D::Session>(session, Driver::driver_id(self), "meta.routine_source")?;
+            Driver::routine_source(self, session, &schema, &name).await
         })
     }
 }
@@ -652,7 +685,22 @@ impl Server {
                 let detail = driver.object_detail(&mut entry.session, schema, name).await?;
                 Ok(Dispatch::Result(serde_json::to_value(detail).unwrap_or_else(|_| json!({}))))
             }
-            "meta.routine_source" => Ok(Dispatch::Result(Value::Null)),
+            "meta.routine_source" => {
+                let session_id = require_str(params, "session_id")?;
+                let schema = optional_str(params, "schema")
+                    .or_else(|| optional_str(params, "catalog"))
+                    .unwrap_or_default();
+                let name = optional_str(params, "object")
+                    .or_else(|| optional_str(params, "name"))
+                    .ok_or_else(|| DriverError::protocol("meta.routine_source 缺少 object/name"))?;
+                let (driver, entry) = self.routed(&session_id)?;
+                // 拿不到就是 null（合法答案），不是错误 —— 之前这里被硬编码成 null，
+                // 于是所有 Rust 驱动的源码面板永远是空的，自检也绿着。
+                Ok(Dispatch::Result(match driver.routine_source(&mut entry.session, schema, name).await? {
+                    Some(source) => Value::String(source),
+                    None => Value::Null,
+                }))
+            }
             other => Err(DriverError::protocol(format!("未实现的方法：{other}"))),
         }
     }
@@ -818,6 +866,20 @@ mod tests {
                 }],
             ))
         }
+
+        // 测试用：`P_WITH_SRC` 拿得到源码，其它例程一律 null（模拟加密对象 / 无权限）。
+        async fn routine_source(
+            &self,
+            _session: &mut Self::Session,
+            schema: &str,
+            name: &str,
+        ) -> Result<Option<String>, DriverError> {
+            if name == "P_WITH_SRC" {
+                Ok(Some(format!("CREATE OR REPLACE PROCEDURE {schema}.{name} IS BEGIN NULL; END;")))
+            } else {
+                Ok(None)
+            }
+        }
     }
 
     async fn request_json(writer: &mut FrameWriter<tokio::io::WriteHalf<tokio::io::DuplexStream>>, id: u64, method: &str, params: Value) {
@@ -850,6 +912,58 @@ mod tests {
         request_json(&mut writer, 2, "ping", json!({})).await;
         let pong = read_json(&mut reader).await;
         assert_eq!(pong["result"]["pong"], true);
+
+        drop(writer);
+        drop(reader);
+        server.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn routine_source_returns_text_or_null_but_never_a_stub() {
+        let (server_io, client_io) = tokio::io::duplex(1024 * 1024);
+        let (server_rx, server_tx) = tokio::io::split(server_io);
+        let (client_rx, client_tx) = tokio::io::split(client_io);
+        let server = tokio::spawn(async move { serve(FakeDriver, server_rx, server_tx).await });
+        let mut writer = FrameWriter::new(client_tx);
+        let mut reader = FrameReader::new(client_rx);
+
+        request_json(&mut writer, 1, "initialize", json!({"protocol": 1})).await;
+        let _ = read_json(&mut reader).await;
+        request_json(
+            &mut writer,
+            2,
+            "session.open",
+            json!({"session_id": "s1", "driver_id": "fake"}),
+        )
+        .await;
+        let open = read_json(&mut reader).await;
+        assert_eq!(open["result"]["session_id"], "s1");
+
+        // 驱动真给了源码就该原样回传字符串（不是 null，也不是包一层对象）。
+        request_json(
+            &mut writer,
+            3,
+            "meta.routine_source",
+            json!({"session_id": "s1", "schema": "demo", "object": "P_WITH_SRC"}),
+        )
+        .await;
+        let with_src = read_json(&mut reader).await;
+        let text = with_src["result"]
+            .as_str()
+            .expect("源码应当是字符串而不是对象/数组");
+        assert!(text.contains("CREATE OR REPLACE PROCEDURE demo.P_WITH_SRC"));
+
+        // 驱动说没有 → null 是合法答案，不能变成错误。
+        request_json(
+            &mut writer,
+            4,
+            "meta.routine_source",
+            json!({"session_id": "s1", "schema": "demo", "object": "P_NO_SRC"}),
+        )
+        .await;
+        let no_src = read_json(&mut reader).await;
+        assert!(no_src.get("error").is_none(), "拿不到源码不算错误");
+        assert!(no_src["result"].is_null(), "拿不到源码就是 null");
 
         drop(writer);
         drop(reader);
