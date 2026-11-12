@@ -53,7 +53,8 @@ description: RdataStation 主题系统：明暗配色 token 对照、产品语�
 - 选择：设置页「外观 → 主题方案」（`appearance.theme_pack`）→ `settings::install_theme_pack_sink`
   → `crates/app/src/main.rs::apply_theme_pack_state` 重装「主题 + 产品 token」（只换一半会残留上一包的语义色）。
 - 临时覆盖：环境变量 `RDS_THEME_PACK=<id>`（优先于设置值、不落盘，试色 / CI 用）。
-- 审包：`python tools/audit_theme_packs.py`（`theme_audit.py` 只审现役两套，路径硬编码）。
+- 审包：`python tools/theme_audit.py --theme assets/themes/packs/<id>/theme.json`（产品 token 自动取同目录；
+  `--strict` 让不达标变成退出码 1）。批量审 8 包用 `python tools/audit_theme_packs.py`。
 
 ## 产品语义 token 消费（已落地）
 

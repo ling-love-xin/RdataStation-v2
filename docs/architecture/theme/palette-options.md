@@ -1,6 +1,6 @@
 # RdataStation 主题色板候选（8 套 · 明暗）
 
-> 状态：**候选方案，未落地**（不改 `assets/themes/`）。生成于 2026-11-12 16:25，由 `python tools/gen_palette_options.py` 输出本文件与 `palette-options.html`。
+> 状态：**候选方案，未落地**（不改 `assets/themes/`）。生成于 2026-11-13 06:12，由 `python tools/gen_palette_options.py` 输出本文件与 `palette-options.html`。
 > 色值权威性：本文件是候选色板的唯一来源；采纳某套后再并入 `theme-tokens-complete.md` 与 `rds-theme.json`。
 > 验证口径：WCAG 2.x，正文/控件文字 ≥ 4.5:1、非文本 ≥ 3:1；单套单模式 58 项，8 套 × 明暗共 928 项，**928 项达标**。
 
@@ -929,5 +929,7 @@
 
 - 两层校验：色卡页按**角色口径**验 58 项/模式（正文、次要文字、表头、主色三态、语义四色三态、图表 5 系列、涨跌、产品槽 6 个、选中态合成、语法 6 个代表名）；`audit_theme_packs.py` 按**包文件口径**再验 140/140 覆盖、52 对主题对比度、9 对产品对比度、41 个语法名覆盖与着色对比度。
 - 选中底 / 文本选区按 `clamp_alpha` 上限（0.2 / 0.3）给值，超限会被 schema 静默压缩。
-- **未做的**：真机截图比对（明暗各一张全界面）；`tools/theme_audit.py` 仍硬编码 `RDS Light` / `RDS Dark` 与现役资产路径（审包要走 `audit_theme_packs.py`）；第 3 个包之前 `ProductTokenSet` 仍是“按模式”单例（多包**并存**切换需先升级）；主题包的更换只在单进程内即时生效，回滚 = 再选回 `rds`。
+- **未做的**：真机截图比对（明暗各一张全界面）；第 3 个包之前 `ProductTokenSet` 仍是“按模式”单例（多包**并存**切换需先升级）；主题包的更换只在单进程内即时生效，回滚 = 再选回 `rds`。
+- 审计脚本已可指定文件：`python tools/theme_audit.py --theme <任意主题文件> [--product <产品 token>] [--strict]`（`--theme` 指到包内 `theme.json` 时，产品 token 默认取同目录；`--strict` 让不达标变成退出码 1，CI 可用）。
+- **现役资产的一处既有缺陷**：`RDS Dark` 的 `table.head.foreground` `#969696` 压在 `table.head.background` `#394248` 上只有 **3.47:1**（正文档要 4.5），`python tools/theme_audit.py` 单跑现役即可复现；候选 8 包同一对是 5.29–9.77，已没这个洞。修现役只需把该文字提亮到 `#B0B0B0`（4.73:1，表头底不变）或把表头底压到 `#2A3138`+文字 `#A6A6A6`（5.41:1）——都会改变默认暗色外观，故未擅自动，待拍板。
 - 落地某套时的完整步骤：包目录放进 `assets/themes/packs/<id>/` → 在 `settings::theme_pack::BUILTIN` 加一档 → `python tools/audit_theme_packs.py`（0 不达标）→ 设置页选中该档 → 真机明暗切换核对 → 更新 `theme-tokens-complete.md`。

@@ -1,10 +1,36 @@
-# 一次性审计脚本：RDS 主题资产 token 覆盖率 + WCAG 对比度实测
-# 用法: python tools/theme_audit.py
+# 主题资产审计：140 键覆盖率 + WCAG 对比度 + 语法着色 + 产品语义 token
+#
+# 用法：
+#   python tools/theme_audit.py                             # 现役 assets/themes/rds-theme.json（默认，行为不变）
+#   python tools/theme_audit.py --theme <主题文件>          # 任意主题文件（含包）：按 mode 取明暗，不查主题名
+#   python tools/theme_audit.py --theme assets/themes/packs/qinghua/theme.json   # 产品 token 自动取同目录
+#   python tools/theme_audit.py --theme <f> --product <p>   # 显式指定产品 token
+#   python tools/theme_audit.py --strict                    # 有不达标项时退出码 1（CI 用；默认只报告）
+import argparse
 import json, re, pathlib
+import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "vendor/gpui-component/src/theme/schema.rs"
-THEME = ROOT / "assets/themes/rds-theme.json"
+DEFAULT_THEME = ROOT / "assets/themes/rds-theme.json"
+DEFAULT_PRODUCT = ROOT / "assets/themes/product-tokens.json"
+
+_parser = argparse.ArgumentParser(description="主题资产审计：键覆盖 + 对比度 + 语法着色")
+_parser.add_argument("--theme", help="主题 JSON 路径（默认现役 rds-theme.json；包文件同样适用）")
+_parser.add_argument(
+    "--product",
+    help="产品 token JSON 路径（默认现役；指定 --theme 时默认取该文件同目录的 product-tokens.json）",
+)
+_parser.add_argument("--strict", action="store_true", help="有不达标项时退出码 1")
+_args = _parser.parse_args()
+
+THEME = pathlib.Path(_args.theme) if _args.theme else DEFAULT_THEME
+if _args.product:
+    PRODUCT = pathlib.Path(_args.product)
+elif _args.theme:
+    PRODUCT = THEME.parent / "product-tokens.json"
+else:
+    PRODUCT = DEFAULT_PRODUCT
 
 # 1) 从 schema.rs 抽取 ThemeConfigColors 的全部 JSON 键名
 src = SCHEMA.read_text(encoding="utf-8")
@@ -15,15 +41,19 @@ schema_keys = re.findall(r'#\[serde\(rename = "([^"]+)"\)\]', body)
 schema_keys = list(dict.fromkeys(schema_keys))
 print(f"[schema] ThemeConfigColors 可配键总数: {len(schema_keys)}")
 
-# 2) 读取主题资产
+# 2) 读取主题资产（按 mode 取明暗，不依赖主题名——包内主题可以随便改名）
 data = json.loads(THEME.read_text(encoding="utf-8"))
-themes = {t["name"]: t for t in data["themes"]}
+by_mode = {t.get("mode"): t for t in data["themes"]}
+MODES = [(m, by_mode[m]) for m in ("light", "dark") if m in by_mode]
+if len(MODES) != 2:
+    raise SystemExit(f"{THEME} 需要 light/dark 两套，实际只有 {sorted(by_mode)}")
+print("[theme] " + str(THEME) + " -> " + " / ".join(t["name"] for _, t in MODES))
 
-for name in ("RDS Light", "RDS Dark"):
-    colors = themes[name]["colors"]
+for mode, theme in MODES:
+    colors = theme["colors"]
     missing = [k for k in schema_keys if k not in colors]
     unknown = [k for k in colors if k not in schema_keys]
-    print(f"\n=== {name} ===")
+    print(f"\n=== {theme['name']} ({mode}) ===")
     print(f"已定义 {len(colors)} / {len(schema_keys)}  缺失 {len(missing)}  未知键 {len(unknown)}")
     print("缺失:")
     for k in missing:
@@ -113,9 +143,9 @@ PAIRS = [
 
 print("\n\n=== 对比度实测 (WCAG) ===")
 problems = []
-for name in ("RDS Light", "RDS Dark"):
-    c = themes[name]["colors"]
-    print(f"\n--- {name} ---")
+for mode, theme in MODES:
+    c = theme["colors"]
+    print(f"\n--- {theme['name']} ({mode}) ---")
     for fg, bg, need in PAIRS:
         if fg not in c or bg not in c:
             print(f"  {fg:32s} on {bg:28s}  [缺 token，走 gpui-kit 默认]")
@@ -123,7 +153,7 @@ for name in ("RDS Light", "RDS Dark"):
         r = ratio(c[fg], c[bg])
         flag = "OK " if r >= need else "FAIL"
         if r < need:
-            problems.append((name, fg, bg, round(r, 2), need))
+            problems.append((theme["name"], fg, bg, round(r, 2), need))
         print(f"  {flag} {r:5.2f}:1 (需 {need})  {fg} on {bg}")
 
 print("\n=== 不达标汇总 ===")
@@ -134,19 +164,18 @@ if not problems:
 
 # 4) clamp_alpha 影响：list/table active、selection 会被强制降 alpha
 print("\n=== clamp_alpha 影响 (schema 强制 alpha<=0.2/0.3) ===")
-for name in ("RDS Light", "RDS Dark"):
-    c = themes[name]["colors"]
+for mode, theme in MODES:
+    c = theme["colors"]
     for k in ("list.active.background", "table.active.background", "selection.background"):
         if k in c:
             v = c[k]
             a = 1.0 if len(v.lstrip("#")) <= 6 else int(v.lstrip("#")[6:8], 16) / 255
-            print(f"  {name:11s} {k:26s} {v}  alpha={a:.2f} -> 渲染时被压到 0.2/0.3")
+            print(f"  {theme['name']:14s} {k:26s} {v}  alpha={a:.2f} -> 渲染时被压到 0.2/0.3")
 
 
 # 5) 产品语义 token（assets/themes/product-tokens.json）
 # ⚠️ 这 9 个角色**不在** schema 的 140 键内（由 workbench_shell 单独加载为 GPUI global），
 #    上面的覆盖率检查管不到它们；文件缺失 = 整块回退标准字段。此处补对比度校验。
-PRODUCT = ROOT / "assets/themes/product-tokens.json"
 pdata = json.loads(PRODUCT.read_text(encoding="utf-8"))
 
 # (前景, 背景, 阈值, 依据) —— 阈值 3.0 = WCAG 1.4.11 非文本对比（图标 / 描边）；4.5 = 正文 AA
@@ -164,12 +193,12 @@ PRODUCT_PAIRS = [
 
 print("\n\n=== 产品语义 token 对比度（product-tokens.json）===")
 pproblems = []
-for name, mode in (("RDS Light", "light"), ("RDS Dark", "dark")):
+for mode, theme in MODES:
     roles = pdata.get(mode, {})
     # 产品角色优先（同名覆盖主题字段），缺失的回退到主题资产的字段
-    merged = dict(themes[name]["colors"])
+    merged = dict(theme["colors"])
     merged.update(roles)
-    print(f"\n--- {name} ---  已定义角色 {len(roles)} 个")
+    print(f"\n--- {theme['name']} ({mode}) ---  角色文件 {PRODUCT.name}  已定义角色 {len(roles)} 个")
     for fg, bg, need, why in PRODUCT_PAIRS:
         if fg not in merged or bg not in merged:
             print(f"  [缺 token] {fg} on {bg}  （{why}）")
@@ -177,7 +206,7 @@ for name, mode in (("RDS Light", "light"), ("RDS Dark", "dark")):
         r = ratio(merged[fg], merged[bg])
         flag = "OK " if r >= need else "FAIL"
         if r < need:
-            pproblems.append((name, fg, bg, round(r, 2), need, why))
+            pproblems.append((theme["name"], fg, bg, round(r, 2), need, why))
         print(f"  {flag} {r:5.2f}:1 (需 {need})  {fg} on {bg}   [{why}]")
 
 print("\n=== 产品 token 不达标汇总 ===")
@@ -201,8 +230,9 @@ hl_names = re.findall(r'"([^"]+)"', m.group(1))
 print("\n\n=== 语法高亮（highlight.syntax）===")
 print(f"[registry] HIGHLIGHT_NAMES 合法名总数: {len(hl_names)}")
 hl_problems = []
-for name in ("RDS Light", "RDS Dark"):
-    hl = themes[name]["highlight"]
+for mode, theme in MODES:
+    name = theme["name"]
+    hl = theme["highlight"]
     syn = hl["syntax"]
     editor_bg = hl["editor.background"]
     unknown = [k for k in syn if k not in hl_names]
@@ -253,3 +283,9 @@ for p in hl_problems:
     print(" ", p)
 if not hl_problems:
     print("  无")
+
+# 7) 退出码：默认只报告（历史行为不变）；--strict 时把“有任何不达标”变成失败。
+total = len(problems) + len(pproblems) + len(hl_problems)
+print(f"\n=== 总览 ===\n  主题对照 {len(problems)} 不达标 · 产品 token {len(pproblems)} · 语法 {len(hl_problems)}")
+if _args.strict and total:
+    sys.exit(1)

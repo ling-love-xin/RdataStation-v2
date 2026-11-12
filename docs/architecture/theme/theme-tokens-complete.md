@@ -277,6 +277,7 @@ vendor/gpui-component/src/status_bar.rs:92-95
 
 ```bash
 python tools/theme_audit.py                      # 覆盖率 + 对比度（含产品 token + 语法高亮）+ clamp_alpha 合规
+python tools/theme_audit.py --theme assets/themes/packs/<id>/theme.json   # 同上口径审某个主题包（产品 token 取同目录；--strict 让不达标变成退出码 1）
 python tools/gen_theme_preview.py                # 由主题资产重新生成色卡预览页
 python tools/gen_theme_keys.py                   # gpui-kit 升级后重建键名白名单（assets/themes/theme-keys.json）
 cargo test -p rds-workbench --test ui_contract   # 尺寸/裸色值契约 + highlight token 契约（仅 workbench）
