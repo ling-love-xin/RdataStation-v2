@@ -312,6 +312,148 @@ SCHEMES = [
                         "number": "#93D4A8", "type": "#62D2D8", "function": "#E6D79C"},
         },
     },
+    # ---------- 中国风 ----------
+    {
+        "id": "qinghua",
+        "name": "Qinghua",
+        "cn": "青花",
+        "tag": "瓷白 + 钴蓝",
+        "style": "cn",
+        "position": "瓷白底 + 青花钴蓝主色，暗色转「夜青花」（墨青底 + 月白蓝）。传统色里蓝与白最克制的搭配，接近数据库工具本身的冷静气质。",
+        "fit": "想要“东方但不过分装饰”的内置中国风首选；info 让位给青瓷绿（#17607A），否则会和钴蓝主色读成同一个蓝。",
+        "light": {
+            "content": "#FCFDFE", "chrome": "#EEF3F7", "status": "#E6EDF3",
+            "popover": "#FFFFFF", "group": "#F1F6FA", "head": "#E9F0F6",
+            "head_fg": "#3E5468", "zebra": "#F6F9FC", "hover": "#E5EEF6",
+            "fg": "#1E2A35", "muted": "#4C6073", "subtle": "#7A8FA2",
+            "border": "#C5D5E2", "input_border": "#A2B7C8", "row_border": "#D7E4EE",
+            "accent": "#1B4B8A", "accent_on": "#FFFFFF",
+            "success": "#2C6B45", "success_on": "#FFFFFF",
+            "warning": "#8A5E0D", "warning_on": "#FFFFFF",
+            "danger": "#A83325", "danger_on": "#FFFFFF",
+            "info": "#17607A", "info_on": "#FFFFFF",
+            "chart": ["#2A5FA8", "#1E7F7A", "#B2532A", "#7C6A16", "#7B4E86"],
+            "up": "#2C6B45", "down": "#A83325", "grid": "#D7E4EE",
+            "odd": "#EAF1F8", "modified": "#FBEBD5", "error_cell": "#F9E3E6",
+            "local_row": "#E6F1E7", "search": "#FDF1CB", "quick": "#E3EBF4",
+            "overlay": "#00000073",
+            "syntax": {"comment": "#34675A", "keyword": "#14417F", "string": "#9B2C17",
+                        "number": "#1C6047", "type": "#1B6072", "function": "#6B4E12"},
+        },
+        "dark": {
+            "content": "#131A24", "chrome": "#0E141C", "status": "#0E141C",
+            "popover": "#1A232E", "group": "#111822", "head": "#1F2C3A",
+            "head_fg": "#A9BDCE", "zebra": "#17202B", "hover": "#1E2A36",
+            "fg": "#C7D5E2", "muted": "#8CA0B2", "subtle": "#65798A",
+            "border": "#2A3947", "input_border": "#3D4F60", "row_border": "#2A3947",
+            "accent": "#6FA9E8", "accent_on": "#07131F",
+            "success": "#7FD0A6", "success_on": "#062016",
+            "warning": "#E7BE5E", "warning_on": "#241B04",
+            "danger": "#FF8873", "danger_on": "#2A0D09",
+            "info": "#6EC9D8", "info_on": "#052027",
+            "chart": ["#7BAAD9", "#5FC7BE", "#E09A6A", "#C7B35E", "#B896C9"],
+            "up": "#7FD0A6", "down": "#FF8873", "grid": "#2A3947",
+            "odd": "#141D27", "modified": "#332714", "error_cell": "#3A1B1E",
+            "local_row": "#17291F", "search": "#4A3C0E", "quick": "#24313F",
+            "overlay": "#00000099",
+            "syntax": {"comment": "#7FA593", "keyword": "#8FB6E8", "string": "#DFA07C",
+                        "number": "#9CC79A", "type": "#72C4D2", "function": "#DCCB8C"},
+        },
+    },
+    {
+        "id": "zhusha",
+        "name": "Zhusha Ink",
+        "cn": "朱砂",
+        "tag": "朱砂 + 宣纸 / 徽墨",
+        "style": "cn",
+        "position": "宣纸暖底 + 朱砂主色，暗色转「徽墨」（墨底 + 提亮朱砂）。朱砂传统上用于印章与批注，正好对应工作台里的“强调 + 标记”。",
+        "fit": "最有辨识度的一套中国风：朱砂与危险红同族，danger 已压到绛色（浅 #8E1B12 / 深 #FF6B6B），靠明度而非色相区分；表单校验场景要在真机上确认一眼能分清。",
+        "light": {
+            "content": "#FCFAF6", "chrome": "#F2ECE4", "status": "#EBE4D8",
+            "popover": "#FFFDFA", "group": "#F1EBE1", "head": "#EDE6DA",
+            "head_fg": "#4A3A2C", "zebra": "#F8F4EC", "hover": "#EFE7DA",
+            "fg": "#2A241D", "muted": "#5C4E40", "subtle": "#83725F",
+            "border": "#D6C8B6", "input_border": "#B5A38A", "row_border": "#E4D9C8",
+            "accent": "#A33A22", "accent_on": "#FFFFFF",
+            "success": "#2C6B45", "success_on": "#FFFFFF",
+            "warning": "#8A5E0D", "warning_on": "#FFFFFF",
+            "danger": "#8E1B12", "danger_on": "#FFFFFF",
+            "info": "#1F5570", "info_on": "#FFFFFF",
+            "chart": ["#2A5A85", "#1F6E63", "#B4432C", "#7A6A1A", "#7B4066"],
+            "up": "#2C6B45", "down": "#8E1B12", "grid": "#E4D9C8",
+            "odd": "#F4EEE3", "modified": "#FBE6CF", "error_cell": "#F6DDDA",
+            "local_row": "#E7F0DF", "search": "#FBEFC8", "quick": "#EAE2D5",
+            "overlay": "#1A120A73",
+            "syntax": {"comment": "#3B6B4E", "keyword": "#16406E", "string": "#8F2A18",
+                        "number": "#1E5A41", "type": "#1D5E6B", "function": "#6A4D12"},
+        },
+        "dark": {
+            "content": "#171410", "chrome": "#110F0C", "status": "#110F0C",
+            "popover": "#201B16", "group": "#14110D", "head": "#2A241D",
+            "head_fg": "#B3A492", "zebra": "#1C1813", "hover": "#25201A",
+            "fg": "#D6CABA", "muted": "#98897A", "subtle": "#726558",
+            "border": "#332C25", "input_border": "#463D33", "row_border": "#332C25",
+            "accent": "#E2735B", "accent_on": "#1A0B07",
+            "success": "#93D2A4", "success_on": "#0A2112",
+            "warning": "#E5BE6A", "warning_on": "#241B04",
+            "danger": "#FF6B6B", "danger_on": "#2A0D0D",
+            "info": "#8CC7E0", "info_on": "#071C26",
+            "chart": ["#8AAED6", "#5FC6C2", "#E2735B", "#C7B35E", "#CE93A8"],
+            "up": "#93D2A4", "down": "#FF6B6B", "grid": "#332C25",
+            "odd": "#241F18", "modified": "#3D2C15", "error_cell": "#3A1C1A",
+            "local_row": "#2A3320", "search": "#4A3A12", "quick": "#332C25",
+            "overlay": "#00000099",
+            "syntax": {"comment": "#87A07A", "keyword": "#8FB4E8", "string": "#DFA07C",
+                        "number": "#9CC79A", "type": "#7FC6C0", "function": "#DCCB8C"},
+        },
+    },
+    {
+        "id": "mopin",
+        "name": "Ink Gold",
+        "cn": "墨金",
+        "tag": "墨 + 缃金",
+        "style": "cn",
+        "position": "宣纸底 + 墨色文字 + 缃金主色，暗色是真正的墨黑 + 提亮金。金只出现在主色与强调条上，不做大面积铺色。",
+        "fit": "想要“深色为主、金线点睛”的内置中国风；warning 已改成赭橙（#A6511B / #E98A5A），否则会和金色主色读成同一个暖色。",
+        "light": {
+            "content": "#FAF9F5", "chrome": "#F1EEE7", "status": "#E9E6DD",
+            "popover": "#FEFDFB", "group": "#F0EDE5", "head": "#ECE9E0",
+            "head_fg": "#4A4436", "zebra": "#F7F6F0", "hover": "#EDEAE1",
+            "fg": "#262419", "muted": "#58523F", "subtle": "#7E7862",
+            "border": "#D0CABB", "input_border": "#ADA68F", "row_border": "#E0DACB",
+            "accent": "#825F10", "accent_on": "#FFFFFF",
+            "success": "#2C6B45", "success_on": "#FFFFFF",
+            "warning": "#A6511B", "warning_on": "#FFFFFF",
+            "danger": "#A0301F", "danger_on": "#FFFFFF",
+            "info": "#1E5573", "info_on": "#FFFFFF",
+            "chart": ["#2F5F8C", "#1F6E63", "#B07A1E", "#8E5A2C", "#6E4A86"],
+            "up": "#2C6B45", "down": "#A0301F", "grid": "#E0DACB",
+            "odd": "#F2F0E8", "modified": "#FBE8CF", "error_cell": "#F7DEDA",
+            "local_row": "#E8F1DF", "search": "#FAEFC4", "quick": "#E8E3D6",
+            "overlay": "#1A160A73",
+            "syntax": {"comment": "#4A6B3A", "keyword": "#254E7A", "string": "#93301C",
+                        "number": "#1F5A42", "type": "#1E5C68", "function": "#7A5A10"},
+        },
+        "dark": {
+            "content": "#12110E", "chrome": "#0C0B09", "status": "#0C0B09",
+            "popover": "#1B1916", "group": "#0F0E0B", "head": "#26231C",
+            "head_fg": "#B0A68F", "zebra": "#171510", "hover": "#201D17",
+            "fg": "#D3CBBA", "muted": "#948A78", "subtle": "#6E6659",
+            "border": "#302B22", "input_border": "#433C30", "row_border": "#302B22",
+            "accent": "#D9B45A", "accent_on": "#14100A",
+            "success": "#93D2A4", "success_on": "#0A2112",
+            "warning": "#E98A5A", "warning_on": "#241303",
+            "danger": "#FF7E72", "danger_on": "#2A0E0B",
+            "info": "#8CC7E0", "info_on": "#071C26",
+            "chart": ["#8AAED6", "#5FC6C2", "#D9B45A", "#E09A6A", "#C194D6"],
+            "up": "#93D2A4", "down": "#FF7E72", "grid": "#302B22",
+            "odd": "#1D1B16", "modified": "#3A2E13", "error_cell": "#3A1D1A",
+            "local_row": "#29331F", "search": "#4A3C10", "quick": "#2A2620",
+            "overlay": "#00000099",
+            "syntax": {"comment": "#8A9B6E", "keyword": "#95B8E0", "string": "#DFA07C",
+                        "number": "#9CC79A", "type": "#7FC6C0", "function": "#DCCB8C"},
+        },
+    },
 ]
 
 
@@ -515,6 +657,10 @@ css = """
   .chk td, .chk th { padding:2px 4px; text-align:left; border-bottom:1px solid rgba(128,128,128,.22); }
   .ok { color:#7BD88F; } .bad { color:#FF7A7A; font-weight:600; }
   .note { font-size:11px; color:#8a8a8a; line-height:1.8; border-top:1px solid #333; padding-top:14px; margin-top:8px; }
+  .grp { margin:26px 0 12px; border-top:1px solid #3c3c3c; padding-top:14px; }
+  .grp-h { font-size:15px; color:#fff; font-weight:600; display:flex; gap:8px; align-items:baseline; margin:0; }
+  .grp-h span { font-size:11px; color:#8a8a8a; font-weight:400; }
+  .grp-d { font-size:11px; color:#8f8f8f; margin:4px 0 2px; line-height:1.6; }
 """
 
 
@@ -604,8 +750,28 @@ def panel_html(s, mode):
 </div>"""
 
 
+STYLES = {
+    "modern": ("现代中性", "中性 / 冷 / 暖灰骨架 + 各自主色，按使用场景选；品牌色可保持不变"),
+    "cn": ("中国风", "传统色系：青花钴蓝、朱砂、墨金；瓷白 / 宣纸 / 墨底，明暗成对"),
+}
+
+
+def scheme_style(s):
+    return s.get("style", "modern")
+
+
+def scheme_block(s):
+    return f"""
+<div class="scheme">
+  <div class="scheme-head"><h2>{s["cn"]}</h2><span style="font-size:12px;color:#bdbdbd">{s["name"]}</span>
+    <span class="tag">{s["tag"]}</span><span class="id">{s["id"]}</span></div>
+  <div class="pos">{s["position"]}</div>
+  <div class="fit">{s["fit"]}</div>
+  <div class="cols">{panel_html(s, "light")}{panel_html(s, "dark")}</div>
+</div>"""
+
+
 def build_html():
-    blocks = []
     summary_rows = []
     total_checks = 0
     total_fail = 0
@@ -618,20 +784,24 @@ def build_html():
         total_checks += n_l * 2
         total_fail += bad_l + bad_d
         summary_rows.append(
-            f'<tr><td><b>{s["cn"]}</b><br><span class="hx" style="font-size:10px;color:#8a8a8a">{s["name"]}</span></td>'
+            f'<tr><td>{STYLES[scheme_style(s)][0]}</td>'
+            f'<td><b>{s["cn"]}</b><br><span class="hx" style="font-size:10px;color:#8a8a8a">{s["name"]}</span></td>'
             f'<td>{s["tag"]}</td>'
             f'<td><span class="hx">{s["light"]["accent"]}</span> / <span class="hx">{s["dark"]["accent"]}</span></td>'
             f'<td class="hx">{s["light"]["content"]} / {s["dark"]["content"]}</td>'
             f'<td>{"全部达标" if bad_l + bad_d == 0 else f"{bad_l + bad_d} 项不达标"}</td></tr>'
         )
-        blocks.append(f"""
-<div class="scheme">
-  <div class="scheme-head"><h2>{s["cn"]}</h2><span style="font-size:12px;color:#bdbdbd">{s["name"]}</span>
-    <span class="tag">{s["tag"]}</span><span class="id">{s["id"]}</span></div>
-  <div class="pos">{s["position"]}</div>
-  <div class="fit">{s["fit"]}</div>
-  <div class="cols">{panel_html(s, "light")}{panel_html(s, "dark")}</div>
-</div>""")
+
+    blocks = []
+    for style, (label, desc) in STYLES.items():
+        group = [s for s in SCHEMES if scheme_style(s) == style]
+        if not group:
+            continue
+        blocks.append(
+            f'<div class="grp"><h2 class="grp-h">{label}<span>{len(group)} 套 · 明暗成对</span></h2>'
+            f'<p class="grp-d">{desc}</p></div>'
+        )
+        blocks.extend(scheme_block(s) for s in group)
 
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     html = f"""<!DOCTYPE html>
@@ -639,18 +809,18 @@ def build_html():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RdataStation 主题色板候选 · 5 套明暗色卡</title>
+<title>RdataStation 主题色板候选 · {len(SCHEMES)} 套明暗色卡</title>
 <style>{css}</style>
 </head>
 <body>
-<h1>RdataStation 主题色板候选 · 5 套（明 / 暗）</h1>
+<h1>RdataStation 主题色板候选 · {len(SCHEMES)} 套（明 / 暗）</h1>
 <p class="sub">
   由 <code>tools/gen_palette_options.py</code> 生成（{now}）—— 色值与对比度同源，改色后重跑即可。<br>
   角色口径对齐 <code>assets/themes/rds-theme.json</code> 的 140 token 语义切片；对比度按 WCAG 2.x（正文 4.5:1、非文本 3:1），
   与 <code>tools/theme_audit.py</code> 同算法。合计 {total_checks} 项配对，{total_checks - total_fail} 项达标。
 </p>
 <table class="sum">
-  <tr><th>方案</th><th>定位</th><th>主色 明 / 暗</th><th>内容区 明 / 暗</th><th>对比度</th></tr>
+  <tr><th>风格</th><th>方案</th><th>定位</th><th>主色 明 / 暗</th><th>内容区 明 / 暗</th><th>对比度</th></tr>
   {"".join(summary_rows)}
 </table>
 {"".join(blocks)}
@@ -693,55 +863,85 @@ MAPPING = """| 角色（本文件） | 对应 140 token 键 | 备注 |
 | `overlay` | `overlay` | 模态遮罩 + Quick Open 遮罩共用（无 scrim 键） |"""
 
 
+BUILTIN_NOTE = """> 三条都是本机源码实测（2026-11-12），不是推测。
+
+1. **加载端本来就支持多主题**：`crates/app/src/main.rs::load_theme_assets` 扫 `assets/themes/*.json`，把每个文件里的 `themes[]` 全部注册进 `ThemeRegistry`（`product-tokens.json` / `theme-keys.json` 除外）。所以多套主题**文件本身就能被加载**，不用改加载逻辑。
+2. **切换端只有一对明暗槽**：`Theme` 只有 `light_theme` / `dark_theme` 两个字段，`Theme::change(mode)` 只按模式应用这一对（`vendor/gpui-component/src/theme/mod.rs:388-406`，注释明确“调用方换过 `light_theme`/`dark_theme` 后，即便 mode 不变，change 也会重新应用”）；而 `attach_rds_theme` 目前按名字**硬编码** `"RDS Light"` / `"RDS Dark"`（`main.rs:649-661`）。换另一套 = 同时替换这两个字段再 `change`，API 支持，但要新增“主题包”概念与选择 UI。
+3. **产品 token 没有主题维度**：`assets/themes/product-tokens.json` 只有 `light` / `dark` 两个映射，按模式解析成一个全局（`crates/workbench_shell/src/product_tokens.rs:17-59`）。换第二套主题后，活动栏底色、Quick Open 组头、搜索命中底、结果集四个高亮槽**仍是珊瑚那套的值** —— 表面只换了一半，且不报错。
+
+**结论**：内置可以，但先定两条规矩 ——
+
+- 主题以**包**为单位：一包 = 一个 Light + 一个 Dark + 一套产品 token，不做散装单套；
+- 包名对外后**不能再改**：`attach_rds_theme` 与设置持久化都按名字查，改名等于用户配置失效。
+
+建议节奏：内置 **2 个包**（默认 RDS + 1 个中国风），其余当可选包；要上第 3 个包之前，先把 `ProductTokenSet` 升级成“按包解析”，否则每多一包就多一处“看着只换了一半”的静默不一致。
+"""
+
+
 def build_md(total_checks, total_fail):
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     per_mode = total_checks // (len(SCHEMES) * 2)
+    n_all = len(SCHEMES)
+    groups = [(st, [s for s in SCHEMES if scheme_style(s) == st]) for st in STYLES]
+    groups = [(st, g) for st, g in groups if g]
     lines = []
-    lines.append("# RdataStation 主题色板候选（5 套 · 明暗）\n")
+    lines.append(f"# RdataStation 主题色板候选（{n_all} 套 · 明暗）\n")
     lines.append(
         f"> 状态：**候选方案，未落地**（不改 `assets/themes/`）。生成于 {now}，"
         "由 `python tools/gen_palette_options.py` 输出本文件与 `palette-options.html`。\n"
         "> 色值权威性：本文件是候选色板的唯一来源；采纳某套后再并入 "
         "`theme-tokens-complete.md` 与 `rds-theme.json`。\n"
         f"> 验证口径：WCAG 2.x，正文/控件文字 ≥ 4.5:1、非文本 ≥ 3:1；"
-        f"单套单模式 {per_mode} 项，5 套 × 明暗共 {total_checks} 项，**{total_checks - total_fail} 项达标**。\n"
+        f"单套单模式 {per_mode} 项，{n_all} 套 × 明暗共 {total_checks} 项，**{total_checks - total_fail} 项达标**。\n"
     )
-    lines.append("## 1. 五套方案一览\n")
-    lines.append("| 方案 | 定位 | 主色（明 / 暗） | 内容区（明 / 暗） | 适用 |")
-    lines.append("| --- | --- | --- | --- | --- |")
+    lines.append("## 1. 方案一览\n")
+    lines.append("| 风格 | 方案 | 定位 | 主色（明 / 暗） | 内容区（明 / 暗） | 适用 |")
+    lines.append("| --- | --- | --- | --- | --- | --- |")
     for s in SCHEMES:
         lines.append(
-            f"| **{s['cn']}** `{s['name']}` | {s['tag']} | `{s['light']['accent']}` / `{s['dark']['accent']}` "
+            f"| {STYLES[scheme_style(s)][0]} | **{s['cn']}** `{s['name']}` | {s['tag']} "
+            f"| `{s['light']['accent']}` / `{s['dark']['accent']}` "
             f"| `{s['light']['content']}` / `{s['dark']['content']}` | {s['fit']} |"
         )
     lines.append("")
 
-    for idx, s in enumerate(SCHEMES, 2):
-        rl = expand(s["light"], "light")
-        rd = expand(s["dark"], "dark")
-        bad = [c for c in checks(rl, "light") if c[3] < c[4]] + [c for c in checks(rd, "dark") if c[3] < c[4]]
-        lines.append(f"## {idx}. {s['cn']} `{s['name']}` — {s['tag']}\n")
-        lines.append(f"{s['position']}\n")
-        lines.append(f"**适用**：{s['fit']}\n")
-        for gname, items in ROLE_GROUPS:
-            lines.append(f"**{gname}**\n")
-            lines.append("| 角色 | Light | Dark |")
-            lines.append("| --- | --- | --- |")
-            for key, lab in items:
-                lines.append(f"| {lab} | `{value(rl, key)}` | `{value(rd, key)}` |")
-            lines.append("")
-        if bad:
-            lines.append(f"**对比度**：不达标 {len(bad)} 项 —— " + "；".join(
-                f"{c[0]} {c[3]:.2f}:1（需 {c[4]}）" for c in bad
-            ) + "\n")
-        else:
-            lines.append(f"**对比度**：明暗各 {per_mode} 项全部达标（明细见 `palette-options.html`）。\n")
+    sec = 2
+    for style, group in groups:
+        label = STYLES[style][0]
+        lines.append(f"## {sec}. {label}（{len(group)} 套）\n")
+        lines.append(f"{STYLES[style][1]}。\n")
+        for sub, s in enumerate(group, 1):
+            rl = expand(s["light"], "light")
+            rd = expand(s["dark"], "dark")
+            bad = [c for c in checks(rl, "light") if c[3] < c[4]] + [c for c in checks(rd, "dark") if c[3] < c[4]]
+            lines.append(f"### {sec}.{sub} {s['cn']} `{s['name']}` — {s['tag']}\n")
+            lines.append(f"{s['position']}\n")
+            lines.append(f"**适用**：{s['fit']}\n")
+            for gname, items in ROLE_GROUPS:
+                lines.append(f"**{gname}**\n")
+                lines.append("| 角色 | Light | Dark |")
+                lines.append("| --- | --- | --- |")
+                for key, lab in items:
+                    lines.append(f"| {lab} | `{value(rl, key)}` | `{value(rd, key)}` |")
+                lines.append("")
+            if bad:
+                lines.append(f"**对比度**：不达标 {len(bad)} 项 —— " + "；".join(
+                    f"{c[0]} {c[3]:.2f}:1（需 {c[4]}）" for c in bad
+                ) + "\n")
+            else:
+                lines.append(f"**对比度**：明暗各 {per_mode} 项全部达标（明细见 `palette-options.html`）。\n")
+        sec += 1
 
-    lines.append("## 7. 角色 → 140 token 落地映射\n")
+    lines.append(f"## {sec}. 角色 → 140 token 落地映射\n")
     lines.append("采纳任意一套时，按这张表把角色值铺到 `assets/themes/rds-theme.json`；"
                  "新增/改色后跑 `python tools/theme_audit.py` 与 `cargo test -p rds-ui-guard`。\n")
     lines.append(MAPPING + "\n")
-    lines.append("## 8. 选型建议\n")
+    lines.append(f"## {sec + 1}. 内置多主题：现在能做到哪一步\n")
+    lines.append(BUILTIN_NOTE + "\n")
+
+    sec += 2
+    lines.append(f"## {sec}. 选型建议\n")
+    lines.append("**现代中性**：")
     lines.append("1. **默认 → 珊瑚石墨**：现役资产就是它的近似版，迁移只需微调，品牌资产零改动。")
     lines.append("2. **要「数据库工具」专业感 → 石板深蓝**：与 DataGrip / TablePlus 的心智一致，"
                  "注意 `info` 已改成青，别和主色蓝混用。")
@@ -751,12 +951,22 @@ def build_md(total_checks, total_fail):
                  "必须保持该套配色表里的明度差，否则在深底上会读成同一个绿。")
     lines.append("5. **低光 / OLED / 无障碍 → 近黑墨**：暗色纯黑省电，亮色是高对比版；"
                  "代价是 chrome 与内容区无灰度差，层级全靠描边。\n")
-    lines.append("## 9. 验证与边界\n")
-    lines.append(f"- 对比度：单套单模式 {per_mode} 项 × 明暗 × 5 套，含正文、次要文字、表头、主色三态、语义四色三态、"
-                 "图表 5 系列、涨跌、产品槽 6 个、选中态合成、语法 6 个代表名。")
+    lines.append("**中国风**：")
+    lines.append("6. **内置首选 → 青花**：蓝白最克制，与“数据库工作台”的冷静气质不冲突；info 换青瓷绿后语义仍清楚。")
+    lines.append("7. **要辨识度 → 朱砂**：一眼记住，但朱砂与危险红同族，danger 已压到绛色；"
+                 "表单校验、删除确认这类场景要真机确认能分辨。")
+    lines.append("8. **要“深色为主 + 金线点睛” → 墨金**：warning 已改成赭橙；"
+                 "金只做强调，不要铺大面积（大面积金色会压掉数据本身的颜色区分度）。")
+    lines.append("9. **不建议一次内置 8 套**：每多一包 QA 成本 ×N（140 键 × 2 模式 + 41 个语法名 + 11 个产品角色 + 真机截图），"
+                 "且会稀释品牌识别；先上 2 包，其余留在可选包。\n")
+
+    sec += 1
+    lines.append(f"## {sec}. 验证与边界\n")
+    lines.append(f"- 对比度：单套单模式 {per_mode} 项 × 明暗 × {n_all} 套，含正文、次要文字、表头、主色三态、"
+                 "语义四色三态、图表 5 系列、涨跌、产品槽 6 个、选中态合成、语法 6 个代表名。")
     lines.append("- 选中底 / 文本选区按 `clamp_alpha` 上限（0.2 / 0.3）给值，超限会被 schema 静默压缩。")
     lines.append("- **未做的**：140 键逐项展开（`button.*`、`scrollbar.*`、`base.*` 等由角色推导，尚未生成 JSON）；"
-                 "41 个语法高亮名只核了 6 个代表名；未上真机截图比对。")
+                 "41 个语法高亮名只核了 6 个代表名；未上真机截图比对；未验证多包并存时的切换与回滚。")
     lines.append("- 落地某套时的完整步骤：扩 140 键 → `python tools/theme_audit.py`（0 不达标）→ "
                  "`python tools/gen_theme_preview.py` → 真机明暗切换核对 → 更新 `theme-tokens-complete.md`。\n")
     return "\n".join(lines)
