@@ -99,7 +99,8 @@ impl Driver for PostgresDriver {
     }
 
     async fn close(&self, session: Self::Session) {
-        let _ = session.conn.close().await;
+        // 同 mysql.rs：关闭限时 5 秒，等不到就放弃（否则 `shutdown` 会把进程拖死）。
+        let _ = tokio::time::timeout(Duration::from_secs(5), session.conn.close()).await;
     }
 
     async fn ping(&self, session: &mut Self::Session) -> Result<(), DriverError> {
@@ -229,6 +230,15 @@ impl Driver for PostgresDriver {
 async fn run_query(session: &mut PostgresSession, req: ExecuteRequest) -> Result<Page, DriverError> {
     let sql = req.sql;
     if !returns_rows(&sql) {
+        if req.params.is_empty() {
+            // 无参数的 DDL / 工具命令走简易协议：`VACUUM`、`REINDEX` 这类命令在
+            // 扩展协议（隐式事务块）里会被 PG 直接拒绝，简单查询才能跑。
+            let result = sqlx::raw_sql(sqlx::AssertSqlSafe(sql.as_str()))
+                .execute(&mut session.conn)
+                .await
+                .map_err(map_error)?;
+            return Ok(Page::affected(result.rows_affected()));
+        }
         let query = bind_params(sqlx::query(sqlx::AssertSqlSafe(sql.as_str())), &req.params)?;
         let result = query.execute(&mut session.conn).await.map_err(map_error)?;
         return Ok(Page::affected(result.rows_affected()));
@@ -259,8 +269,11 @@ async fn run_query(session: &mut PostgresSession, req: ExecuteRequest) -> Result
 }
 
 /// 事务语句只有三条字面量，签名钉成 `&'static str`（同 mysql.rs 的理由）。
+///
+/// 走简易协议：PG 的事务控制命令在扩展协议里能跑，但与 MySQL 侧保持同一条通道，
+/// 少一种「两个驱动行为不同」的可能。
 async fn exec_statement(conn: &mut PgConnection, sql: &'static str) -> Result<(), DriverError> {
-    sqlx::query(sql)
+    sqlx::raw_sql(sql)
         .execute(&mut *conn)
         .await
         .map_err(map_error)?;

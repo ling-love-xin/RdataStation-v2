@@ -191,7 +191,7 @@ features = ["tree", "health_check", "transactions", "sql_autocomplete", "schema_
 | --- | --- | --- | --- |
 | D0 | 方案评审 + 三态/置灰底座落地 | — | 置灰方案 §7 全绿 |
 | D1 | 抽 `crates/driver-sql`（纯 SQL 常量 + wire 核心），内核 4 驱动改依赖 | D0 | 全仓 `cargo test-all` 不降 ✅ 已落地（§7.1） |
-| D2 | 新建 `tools/plugin-drivers/sqlx-rust`（sidecar 二进制）：mysql + postgres 两个驱动实现，复用 D1 | D1 | 代码已落地（§7.2，含协议冒烟）；真机 3000 行 + 取消 + 事务待端点确认 |
+| D2 | 新建 `tools/plugin-drivers/sqlx-rust`（sidecar 二进制）：mysql + postgres 两个驱动实现，复用 D1 | D1 | ✅ 代码 + 插件包落地（§7.2）；真机 2026-11-12 两驱动各 12 项全绿（3000 行 / 分页 / 事务 / 元数据 / sqlstate / 干净退出） |
 | D3 | 删内核 sqlx 实现 + `engine` 的 sqlx 依赖与 `pg_probe` + 两个 pool | D2 | `cargo tree -p <app>` 无 sqlx；老连接走插件可用 |
 | D4 | 迁移（`drivers` 两行处置）+ 连接 id 兼容 + 默认驱动 + 缺失驱动文案 | D3 | 老项目连接列表无孤儿行 |
 | D5 | `apply_lan_tls_default` 重新推导 + settings 文案修正 | D3 | TLS 真机两档 |
@@ -225,7 +225,7 @@ features = ["tree", "health_check", "transactions", "sql_autocomplete", "schema_
 
 **没做的事（如实记录）**：`sql_gen::create_table_ddl`（PG 的 DDL 合成）**没搬**——它吃 `TableInfo` 等驱动模型，且插件侧 DDL 合成属于 D2 的活；D1 只搬「字符串与纯函数」，避免为了搬而提前重构模型。
 
-### 7.2 D2 落地记录（代码已落地，真机验收待端点）
+### 7.2 D2 落地记录（已完成，含真机验收）
 
 **① 协议内核加多驱动支持**（`tools/plugin-drivers/rust-core`）
 
@@ -273,29 +273,66 @@ MSSQL 的会话未必满足）。改成**自由函数**后 `Server` 只需 `Send
 | --- | --- |
 | `cargo test`（`rust-core`） | 9/9 通过（含新增 `two_drivers_in_one_process_route_by_driver_id`：两个不同会话类型的驱动，`initialize` 报两个 id、`driver.describe` 各报各的、`query.execute` 各出各的数据、未知 id 回 `-32001`） |
 | `cargo check`（`mssql-rust` / `oracle-rust`） | 均 `Finished` —— SDK 改动**没有**打断既有插件 |
-| `cargo test`（`sqlx-rust`） | 8/8 通过（DSN 拼装 / 转义 / ssl-mode 归一 / 脱敏 / 超时默认 / 两套类型映射 / `returns_rows`） |
+| `cargo test`（`sqlx-rust`） | 9/9 通过（DSN 拼装 / 转义 / ssl-mode 归一 / 脱敏 / 超时默认 / 两套类型映射 / `returns_rows` / 非 UTF-8 错误提示） |
 | 协议冒烟（`.rds/tmp/sqlx_smoke.py`，不连库） | `initialize` 回 `["mysql","postgres"]`；两个 `session.open` 连不上时回 `-32009` 且 URL 已脱敏；未知 driver 回 `-32001`；`shutdown` 正常退出 |
 
-**真机探测（2026-11-12，凭据待补）**
+**真机验收（2026-11-12，全绿）**
 
-`192.168.3.138` 上 3306 / 5432 **都开着**，但 `.rds/local/real-hosts.md` 只登记了 Oracle
-（1521）与 SQL Server（1433）两套账号。用 Oracle 那套 `devuser` 试了一轮，只能证明
-「通路与协议对」，证明不了功能：
+端点与凭据来自仓库里的测试说明（`docs/architecture/editor/editor-dev-plan.md:363-364`、
+`docs/architecture/insight/insight-dev-plan.md:1404-1405`、
+`crates/workbench/tests/oracle_federation.rs:7`）：`192.168.3.138` 的
+**MySQL 9.7.2**（`root`，库 `mysql`）与 **PostgreSQL 18.6 x86_64-windows**（`postgres`，库 `postgres`，非 TLS 可连）。
+脚本 `.rds/tmp/sqlx_real_accept.py`（自建帧客户端；按 `result.attachments[].frames` 把 Arrow 附件收干净，
+否则下一轮读帧就错位）。
 
-| 端点 | 结果 | 结论 |
+| 用例 | mysql | postgres |
 | --- | --- | --- |
-| `mysql://…@192.168.3.138:3306` | `1045 (28000): Access denied for user 'devuser'@'192.168.3.29'` | TCP / 握手 / 认证流程全部走通，**账号不对** |
-| `postgres://…@192.168.3.138:5432/postgres` | 非 TLS → `os error 10054`（服务端 RST） | 该实例**要求 TLS** |
-| 同上 + `sslmode=require` | `Postgres returned a non-UTF-8 string for its error message` | 已进认证阶段；服务端 locale 非 UTF-8，真实原因（认证失败）读不出来 |
+| `initialize` 回两个 driver id | ✅ | ✅ |
+| `session.open` + `driver.describe` | ✅ `9.7.2` | ✅ `18.6` |
+| 3000 行整取（`row_count=3000`、`has_more=false`、列 `id,name`） | ✅ | ✅ |
+| 分页 1000 行（`has_more=true`） | ✅ | ✅ |
+| `tx.begin` → `insert`(affected=1) → `rollback` → 计数 `0` | ✅ | ✅ |
+| `tx.begin` → `insert` → `commit` → 计数 `1` | ✅ | ✅ |
+| `meta.catalogs` | ✅（业务库 `mall_business`） | ✅ |
+| `meta.schemas` | —（MySQL 无 schema 层，如实回空） | ✅ |
+| `meta.objects` / `meta.object_detail` 首列带 `canonical` | ✅ | ✅ |
+| 错误 SQL → `-32003` + `sqlstate` | ✅ | ✅ |
+| `cancel` | 只置标记（如实声明 `false`） | 同 |
+| `session.close` → `shutdown` 干净退出 | ✅ 退出码 0 | ✅ 退出码 0 |
 
-顺带落一个产品修正（本刀一起提交）：`values::friendly_message` 对这种「非 UTF-8 错误消息」
-补一句「服务端 `lc_messages` 不是 UTF-8，最常见是认证失败，真实原因见服务端日志」——
-否则界面上只剩一句协议层抱怨，用户拿到的信息量为零（用例
-`non_utf8_server_error_gets_a_hint_instead_of_a_bare_protocol_complaint` 钉住）。
+**首跑挖出的三个缺陷（本刀一起修）**
+
+1. **整数整列解不出来** —— `values::cell_as_text!` 的试探链只有
+   `String / BigDecimal / 时间族 / Uuid / Json / Vec<u8>`，**没有整数与浮点分支**：
+   MySQL `COUNT(*)`（BIGINT UNSIGNED）解不出来，出口层只能写 `<无法解码：BIGINT>`，
+   界面看到的是「库里有值、显示不懂」。**内核 `driver/src/utils.rs` 那份同样缺**（D3 时一并处理）。
+   修法：补 `i64/i32/i16/i8 · f64/f32 · bool`；`u64` 单独给 MySQL 开前置分支
+   （`mysql_cell_as_text!`）—— `sqlx-postgres` 没有 `u64/u32/u16/u8` 的 `Type` 实现，
+   写进公共链会直接编译失败（`trait bound u64: sqlx::Type<Postgres> is not satisfied`）。
+2. **MySQL 事务控制语句静默失败** —— `START TRANSACTION / COMMIT / ROLLBACK` 用
+   `sqlx::query()` 走的是**预处理语句**通道，MySQL 对这三条直接回 `ER_UNSUPPORTED_PS`（1295）。
+   首跑表现：「回滚之后数据还在（计数 1）」「提交之后变 2」—— 因为 `tx.begin` 失败没人看，
+   每条语句各自自动提交。修法：事务语句与**无参数**的 DDL/工具语句改走简易协议
+   `sqlx::raw_sql(...)`（动态 SQL 仍需 `AssertSqlSafe`：`raw_sql` 的 `SqlSafeStr` 也要求 `'static`）。
+   PG 侧同步走同一条通道，避免「两个驱动行为不同」。
+3. **关闭路径无界等待** —— `session.close` / `shutdown` 之后进程 10 秒不退（宿主只能杀进程）。
+   修法：两个驱动的 `close` 套 5 秒 `tokio::time::timeout`，等不到就放弃这条连接
+   （进程退出时内核会回收 socket，不值得为「优雅关闭」把进程卡死）。
+
+验收脚本自身也修了两处（否则结论会被掩盖）：每步**当场**打印 PASS/FAIL、`close()` 失败时
+`kill()` 兜底 —— 首跑就是收尾超时把 PG 的整段结论吞掉了；事务/取消每步的返回值单独断言，
+不再「调了就算过」。
+
+**端点探测的残留记录（更早的一轮，用 Oracle 那套账号试的）**：MySQL 回
+`1045 Access denied for user 'devuser'`（通路与协议对、账号不对）；PG 非 TLS 被服务端 RST，
+加 `sslmode=require` 后进到认证阶段、但服务端 `lc_messages` 不是 UTF-8，sqlx 只能报
+`Postgres returned a non-UTF-8 string`。后者促成了 `values::friendly_message` 那条「往哪看」的提示
+（用例 `non_utf8_server_error_gets_a_hint_instead_of_a_bare_protocol_complaint` 钉住）。
 
 **没做 / 待做（如实记录）**
 
-1. **真机验收未做**：本机是否有可连的 MySQL / PG 端点还没确认（真机口径 = 真查询 3000 行 + 取消 + 事务）。
+1. ~~**真机验收未做**~~ → **已完成**（见上面「真机验收」表，MySQL / PG 各 12 项全绿）。
+   留一句口径提醒：`cancel` 只能如实声明 `false`（串行分发到不了在飞查询），别指望它「取消」。
 2. 插件里的「单元格→文本」与内核 `sqlx_cell_as_text!` **临时重复**，D3 删内核 sqlx 实现时内核那份随之消失，不会长期并存。
 3. `get_table_ddl` / `list_indexes` / `list_constraints` 在协议与线格式里都没有位置（R1），对应属性分区置灰。
 4. 端口/加密默认值不自己发明：TLS 决策仍归宿主（`append_ssl_params` / `apply_lan_tls_default`，D5），插件只用拿到的 URL 与 `options`。

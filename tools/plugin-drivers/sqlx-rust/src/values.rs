@@ -38,6 +38,24 @@ macro_rules! cell_as_text {
             Some(v)
         } else if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::BigDecimal>, _>(idx) {
             Some(v.to_string())
+        } else if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(idx) {
+            // 整数族必须显式列出来。真机实测（2026-11-12）：`COUNT(*)` 是 BIGINT，
+            // 试探链里没有整数分支时整格解不出来，出口层只能写「<无法解码：BIGINT>」——
+            // 「库里有值、界面看不懂」。无符号在 MySQL 侧另有前置分支（见
+            // `mysql_cell_as_text!`），公共链不能写 `u64`：sqlx-postgres 没有它的 `Type`。
+            Some(v.to_string())
+        } else if let Ok(Some(v)) = row.try_get::<Option<i32>, _>(idx) {
+            Some(v.to_string())
+        } else if let Ok(Some(v)) = row.try_get::<Option<i16>, _>(idx) {
+            Some(v.to_string())
+        } else if let Ok(Some(v)) = row.try_get::<Option<i8>, _>(idx) {
+            Some(v.to_string())
+        } else if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(idx) {
+            Some(v.to_string())
+        } else if let Ok(Some(v)) = row.try_get::<Option<f32>, _>(idx) {
+            Some(v.to_string())
+        } else if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(idx) {
+            Some(v.to_string())
         } else if let Ok(Some(v)) =
             row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx)
         {
@@ -66,6 +84,25 @@ macro_rules! cell_as_text {
 }
 
 pub(crate) use cell_as_text;
+
+/// MySQL 专用：`BIGINT UNSIGNED` 先按 `u64` 试一次，再走公共链。
+///
+/// 为什么不能塞进公共链：`sqlx-postgres` **没有** `u64`/`u32`/`u16`/`u8` 的 `Type`
+/// 实现，公共链里写 `try_get::<Option<u64>>` 会直接编译失败
+/// （`trait bound u64: sqlx::Type<Postgres> is not satisfied`）。所以无符号只在 MySQL
+/// 侧开一条前置分支：`COUNT(*)`、`BIGINT UNSIGNED` 列在真机上就是这么解出来的。
+macro_rules! mysql_cell_as_text {
+    ($row:expr, $idx:expr) => {{
+        use sqlx::Row as _;
+        if let Ok(Some(v)) = $row.try_get::<Option<u64>, _>($idx) {
+            Some(v.to_string())
+        } else {
+            $crate::values::cell_as_text!($row, $idx)
+        }
+    }};
+}
+
+pub(crate) use mysql_cell_as_text;
 
 /// 该单元格在**协议层**是不是 NULL —— 与「类型解不出来」区分开。
 pub(crate) fn cell_is_null<R: sqlx::Row>(row: &R, idx: usize) -> bool

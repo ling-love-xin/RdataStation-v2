@@ -19,7 +19,7 @@ use serde_json::Value;
 use sqlx::{Column as _, Connection as _, MySqlConnection, Row as _, TypeInfo as _};
 
 use crate::config::{redact_url, ConnConfig};
-use crate::values::{cell_as_text, cell_is_null, map_error, mysql_canonical, returns_rows};
+use crate::values::{cell_is_null, map_error, mysql_canonical, mysql_cell_as_text, returns_rows};
 
 /// 系统库不进导航（与内核同口径：`information_schema` / `mysql` /
 /// `performance_schema` / `sys`）。MySQL 的 database 即 schema，所以过滤在这里。
@@ -118,7 +118,12 @@ impl Driver for MysqlDriver {
     }
 
     async fn close(&self, session: Self::Session) {
-        let _ = session.conn.close().await;
+        // 关闭必须限时：连接可能停在半开的协议状态（服务端已 RST / 事务中断 /
+        // 查询被中断后 socket 还挂着），无界等待会把 `session.close` 与整个
+        // `shutdown` 一起拖住 —— 真机实测（2026-11-12，MySQL 9.7.2）：宿主发完
+        // `shutdown` 进程 10 秒不退，supervisor 只能杀进程。5 秒等不到就放弃这条
+        // 连接：进程退出时内核会回收 socket，不值得为优雅关闭把进程卡死。
+        let _ = tokio::time::timeout(Duration::from_secs(5), session.conn.close()).await;
     }
 
     async fn ping(&self, session: &mut Self::Session) -> Result<(), DriverError> {
@@ -239,8 +244,18 @@ async fn run_query(session: &mut MysqlSession, req: ExecuteRequest) -> Result<Pa
     let sql = req.sql;
     if !returns_rows(&sql) {
         // DML / DDL：批读拿不到 `rows_affected`，必须走 execute。
-        // `AssertSqlSafe` 是 sqlx 0.9 对「运行时拼出来的 SQL」的显式放行（内核同写法）：
-        // 语句来自用户的 SQL 编辑器，本来就不是编译期字面量。
+        if req.params.is_empty() {
+            // 无参数的多是工具类语句（DDL / SET / LOCK / TRUNCATE…），其中一批
+            // MySQL 在 PS 协议下直接拒绝（`ER_UNSUPPORTED_PS` 1295），简易协议最稳。
+            let result = sqlx::raw_sql(sqlx::AssertSqlSafe(sql.as_str()))
+                .execute(&mut session.conn)
+                .await
+                .map_err(map_error)?;
+            return Ok(Page::affected(result.rows_affected()));
+        }
+        // 带参数才需要 PS（`raw_sql` 不支持绑定）。`AssertSqlSafe` 是 sqlx 0.9 对
+        // 「运行时拼出来的 SQL」的显式放行（内核同写法）：语句来自用户的 SQL 编辑器，
+        // 本来就不是编译期字面量。
         let query = bind_params(sqlx::query(sqlx::AssertSqlSafe(sql.as_str())), &req.params)?;
         let result = query
             .execute(&mut session.conn)
@@ -277,8 +292,13 @@ async fn run_query(session: &mut MysqlSession, req: ExecuteRequest) -> Result<Pa
 
 /// 事务语句只有三条字面量，签名钉成 `&'static str`：sqlx 0.9 的静态 SQL 检查
 /// 要的就是这个生命周期，动态拼的语句走 `AssertSqlSafe`（见 `run_query`）。
+///
+/// **必须走简易协议（`raw_sql`），不能用预处理语句**：MySQL 不允许
+/// `START TRANSACTION` / `COMMIT` / `ROLLBACK` 走 PS 协议（`ER_UNSUPPORTED_PS` 1295），
+/// 用 `sqlx::query()` 发出去会直接 Err。真机实测（2026-11-12，MySQL 9.7.2）：
+/// 那样 `tx.begin` 悄悄失败，每条语句各自自动提交，测出来是「回滚之后数据还在」。
 async fn exec_statement(conn: &mut MySqlConnection, sql: &'static str) -> Result<(), DriverError> {
-    sqlx::query(sql)
+    sqlx::raw_sql(sql)
         .execute(&mut *conn)
         .await
         .map_err(map_error)?;
@@ -306,7 +326,7 @@ fn decode_row(row: &sqlx::mysql::MySqlRow, columns: &[ColumnDef]) -> Vec<Value> 
             if cell_is_null(row, idx) {
                 return Value::Null;
             }
-            match cell_as_text!(row, idx) {
+            match mysql_cell_as_text!(row, idx) {
                 Some(text) => Value::String(text),
                 // 解不出来**不能**折成 NULL（那样「库里有值」在界面上就是空白格）：
                 // 显式给一个可读的占位，类型名带上，用户知道该报哪个驱动 bug。
