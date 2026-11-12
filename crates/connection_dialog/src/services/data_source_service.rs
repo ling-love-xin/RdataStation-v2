@@ -1260,8 +1260,17 @@ fn test_failure_message(e: &CoreError) -> String {
             shared::error::ConnectionError::NotFound(_) => {
                 "连接不存在：该连接可能已被删除，请刷新导航树后重试"
             }
-            shared::error::ConnectionError::DriverNotFound { .. } => {
-                "驱动未安装或未注册：到「驱动目录」检查该驱动的安装状态"
+            shared::error::ConnectionError::DriverNotFound { driver } => {
+                // D4（2026-11-12）：`mysql` / `postgres` 的实现已剥离为 sidecar 插件，
+                // 内核只带 sqlite / duckdb / mysql_native / postgres_native。这里给出
+                // **能操作**的去向，而不是让人对着「驱动未注册」猜。
+                if matches!(driver.as_str(), "mysql" | "postgres") {
+                    "该驱动由插件 rds.driver.sqlx 提供（内核不再内置）：到「插件管理」安装并启用\
+                     「MySQL / PostgreSQL (sqlx) Drivers」；不想装插件就改选同族的官方实现\
+                     （MySQL (Official) / PostgreSQL (Official)）"
+                } else {
+                    "驱动未安装或未注册：到「插件管理」检查该驱动所属插件是否已安装并启用"
+                }
             }
             shared::error::ConnectionError::NoActiveConnection => {
                 "没有活动连接：请先连接目标数据源"
@@ -1693,7 +1702,16 @@ mod tests {
             driver: "no_such".into(),
         });
         let msg = test_failure_message(&drv);
-        assert!(msg.contains("驱动目录"), "{msg}");
+        assert!(msg.contains("插件管理"), "{msg}");
+
+        // D4：`mysql` / `postgres` 的实现已剥离到 sidecar 插件 —— 提示要点明**插件**与
+        // 同族官方实现这条退路，而不是只说「驱动未注册」。
+        let retired = CoreError::Connection(ConnectionError::DriverNotFound {
+            driver: "mysql".into(),
+        });
+        let msg = test_failure_message(&retired);
+        assert!(msg.contains("rds.driver.sqlx"), "{msg}");
+        assert!(msg.contains("MySQL (Official)"), "{msg}");
 
         // 非连接域：只保留明细（CoreError Display 带错误码前缀），不硬套 hint。
         let common = CoreError::Common(CommonError::General("generic boom".into()));

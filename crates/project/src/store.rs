@@ -721,6 +721,12 @@ pub async fn check_project_missing_drivers(
         if !enabled.contains(&driver.id) {
             continue;
         }
+        // 插件驱动（`driver_kind = 'sidecar'`）不按「驱动文件装没装」判：它由插件本身提供，
+        // 停用/卸载时 `drivers` 行会被删掉（`plugin_driver_store::prune_stale_plugin_driver_rows`），
+        // 走这里只会得到「缺失驱动 MySQL (sqlx)，下载地址为空」这种无从操作的假警报。
+        if driver.driver_kind == "sidecar" {
+            continue;
+        }
         if driver.driver_kind != "native" {
             let version = driver.version.as_deref().unwrap_or("0.0.0");
             let installed = global_db

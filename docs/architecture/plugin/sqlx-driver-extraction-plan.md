@@ -413,6 +413,50 @@ MSSQL 的会话未必满足）。改成**自由函数**后 `Server` 只需 `Send
 
 ---
 
+### 7.4 D4 落地记录（迁移 + 默认驱动 + 缺失驱动文案）
+
+**1) `drivers` 两行处置 —— 删除，不是置灰**（迁移 `029_retire_kernel_sqlx_drivers.sql`）：
+
+```sql
+DELETE FROM drivers WHERE id IN ('mysql','postgres') AND driver_kind = 'native';
+```
+
+* 为什么删：插件激活时会按同 id 重新 upsert（`driver_kind='sidecar'`、`enabled` 跟随插件启停），
+  删掉不会丢东西；留 `enabled=0` 反而会留一个「已停用」的幽灵实现，且 `enabled` 的两套语义
+  （归用户 / 归插件）会打架。
+* 为什么带 `driver_kind='native'`：插件已装过的机器上这两行可能已被 upsert 成 `sidecar`，
+  那时它是**活的插件行**，删它等于抹掉用户的驱动配置。
+* `data_source_types` 的 `mysql` / `postgresql` 族行**保留**（驱动行外键 + 类型下拉的唯一来源）。
+
+**2) 默认驱动换人（用户可见行为变化）**：连接对话框默认取该类型下第一个启用驱动
+（`enabled_drivers_of_type(...).first()`），删掉 `mysql` 后 MySQL 族默认变成 `mysql_native`，
+`postgres` → `postgres_native`。TLS 词汇随之变化（见 §4.4），**发布说明必须写这一条**。
+
+**3) 项目种子同步收缩**：`project_connection_store::seed_default_drivers` 从 6 个 id 降到 4 个
+（`mysql_native` / `postgres_native` / `sqlite` / `duckdb`）。老项目里已存在的 `mysql` /
+`postgres` 两行留着不动 —— 插件装好后行会回来，那两行正好是「本项目允许该插件驱动」的开关。
+
+**4) 缺失驱动文案**：
+
+* 测试连接失败提示（`connection_dialog::test_failure_message`）对 `DriverNotFound` 现在会看
+  驱动 id：`mysql` / `postgres` 直接点明「由插件 `rds.driver.sqlx` 提供，到「插件管理」安装启用；
+  不想装就改选同族官方实现」，其余 id 给通用去向（插件管理页）。
+* 顺手修一个 D3 引出的假警报：`project::store::check_project_missing_drivers` 原来把
+  `driver_kind != 'native'` 一律当「驱动文件没装」去查 `driver_files`，而插件行（`sidecar`）
+  永远查不到 —— 结果是每个项目自检都报「缺失驱动 MySQL (sqlx)，下载地址为空」。现在跳过
+  `sidecar` 行：插件驱动的存亡由插件管理负责，卸载时行会被 prune。
+
+**验证**：`cargo check -p rds-store -p rds-project -p rds-connection_dialog --all-targets`、
+`cargo test -p rds-store --lib`、`cargo test -p rds-connection_dialog --lib`、全仓
+`cargo check --workspace --all-targets -j 2` 均为绿；真机复验（装/不装插件两态）与 D5 的
+`apply_lan_tls_default` 一起做。
+
+**D4 没做的**：真机两态复验（本机 `192.168.3.138` 上装插件后跑 `official_driver_real` /
+`editor_exec_real`）；`global_connections` 里 `driver_id='mysql'` 的老连接没有做批量迁移
+（按 §4.1 的 id 沿用方案，插件装上即可用，不需要改数据）。
+
+---
+
 ## 8. 验收清单
 
 | # | 断言 | 落点 |
