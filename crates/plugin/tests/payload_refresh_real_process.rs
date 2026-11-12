@@ -122,6 +122,20 @@ async fn replaced_binary_restarts_the_plugin_and_drops_the_old_process() {
         );
     }
 
+    // 模拟用户用完：关掉会话但进程还活着（实例不因会话归零立刻消失）。
+    // 「有活动会话时换载荷」是另一条用例（`payload_change_waits_for_active_sessions`），
+    // 那条验的是「不擅自断」；这条验「没人用的时候换载荷会真的重启」。
+    {
+        let supervisor = manager.sidecar_supervisor();
+        let mut sup = supervisor.lock().await;
+        sup.close_session("s1", Instant::now()).await.unwrap();
+        assert_eq!(
+            sup.session_count_of("test.payload.fixture"),
+            0,
+            "关掉会话后该插件应当没有活动会话"
+        );
+    }
+
     // 换载荷：**重命名**旧 exe 再放新的，不直接覆盖。
     // Windows 上运行中的 exe 不允许被覆盖（ERROR_SHARING_VIOLATION），但允许改名——
     // 这也正是人手动更新插件时唯一可行的姿势（先改名腾位置，再放新文件）。
@@ -155,6 +169,89 @@ async fn replaced_binary_restarts_the_plugin_and_drops_the_old_process() {
 
     // 新会话走的是新文件：靶子还能正常应答
     open_fixture_session(&manager, "test.payload.fixture", "s2").await;
+
+    let supervisor = manager.sidecar_supervisor();
+    let mut sup = supervisor.lock().await;
+    sup.shutdown_all(Instant::now(), Duration::from_secs(10))
+        .await;
+}
+
+/// 有活动会话时**不许**擅自重启。
+///
+/// 重启会真的停进程，那个插件上的会话连同正在跑的查询一起作废。用户不知道
+/// 二进制被换了，只会看到查询莫名断了。所以这类插件先退回「待重载」提示，
+/// 等会话归零后由下一轮扫描自己补上重启。
+#[tokio::test]
+async fn payload_change_waits_for_active_sessions() {
+    let dir = TempDir::new("busy");
+    let manager = Arc::new(PluginManager::new(dir.0.clone()));
+    manager.init().await.unwrap();
+
+    write_sidecar_plugin(&dir.0, "test.payload.busy");
+    let diff = manager.scan_and_diff_plugins().await.unwrap();
+    assert_eq!(diff.added, vec!["test.payload.busy"]);
+
+    // 用户正在用这个插件
+    open_fixture_session(&manager, "test.payload.busy", "busy-1").await;
+
+    let exe = dir.0.join("test.payload.busy").join("bin").join("win-x64").join("agent.exe");
+    std::fs::rename(&exe, exe.with_extension("exe.old")).expect("运行中的 exe 应当允许改名");
+    std::fs::copy(fixture_bin(), &exe).unwrap();
+
+    let diff = manager.scan_and_diff_plugins().await.unwrap();
+    assert!(
+        diff.reloaded.is_empty(),
+        "有活动会话时不该自动重启，实际重启了 {:?}",
+        diff.reloaded
+    );
+    assert_eq!(
+        diff.changed,
+        vec!["test.payload.busy"],
+        "应当退回「待重载」，让面板给出提示"
+    );
+
+    // 这一轮什么都没断：进程还在，会话的连接还拿得到
+    {
+        let supervisor = manager.sidecar_supervisor();
+        let sup = supervisor.lock().await;
+        assert_eq!(
+            sup.session_count_of("test.payload.busy"),
+            1,
+            "会话应当还挂着（没被静默断掉）"
+        );
+        assert!(
+            sup.session_conn("busy-1").is_some(),
+            "正在用的连接不该被断"
+        );
+    }
+
+    // 用户自己关掉连接 → 下一轮扫描把重启补上
+    {
+        let supervisor = manager.sidecar_supervisor();
+        let mut sup = supervisor.lock().await;
+        sup.close_session("busy-1", Instant::now()).await.unwrap();
+    }
+    let diff = manager.scan_and_diff_plugins().await.unwrap();
+    assert_eq!(
+        diff.reloaded,
+        vec!["test.payload.busy"],
+        "会话结束后应当补上自动重启，而不是一直等用户手动点"
+    );
+    {
+        let supervisor = manager.sidecar_supervisor();
+        let sup = supervisor.lock().await;
+        assert!(
+            sup.instances_of("test.payload.busy").is_empty(),
+            "补做后旧实例应当停掉"
+        );
+        assert!(
+            sup.session_conn("busy-1").is_none(),
+            "作废的会话不该还能发查询"
+        );
+    }
+
+    // 补做之后开的会话走新文件
+    open_fixture_session(&manager, "test.payload.busy", "busy-2").await;
 
     let supervisor = manager.sidecar_supervisor();
     let mut sup = supervisor.lock().await;

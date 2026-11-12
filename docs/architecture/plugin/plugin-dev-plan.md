@@ -700,7 +700,8 @@ Uninstalled ──install──▶ Installed ──load──▶ Loaded ──ac
   3. 更新（清单 hash 变化）→ 置 `needs_reload`，**重启 / 手动重载生效**，不热更新运行中插件
      （清单可能改了能力 / 权限 / 依赖，需要人确认）；
   4. 只换载荷（`plugin.toml` 没变、目录里的 `agent.exe` / wasm / 脚本变了）→ **自动重启该插件**，
-     不需要人介入，也不重启宿主（见 §4.8.2，2026-11-12 落地）。
+     不需要人介入，也不重启宿主（见 §4.8.2，2026-11-12 落地）；但**该插件上有活动会话时先不重启**，
+     退回待重载、会话结束后自动补上（2026-11-13 补，理由见 §4.8.2）。
 
 #### 4.8.2 热插拔（目录即插件）
 
@@ -725,6 +726,12 @@ Uninstalled ──install──▶ Installed ──load──▶ Loaded ──ac
     重新激活），记进 `PluginDiff::reloaded`；重启失败才退回 `needs_reload`，不允许悄悄
     留在旧镜像上。Windows 上运行中的 exe 不能直接覆盖，更新姿势是先把旧的改名再放新的
     （`crates/plugin/tests/payload_refresh_real_process.rs` 就是照这个姿势验的）。
+  - **有活动会话时不重启**（2026-11-13 补）：`supervisor::session_count_of(plugin_id)` 不为 0
+    就先不动——重启是**真的停进程**，那个插件上的会话连同正在跑的查询一起作废，用户不会知道
+    是二进制被换了，只会看到查询莫名断。这类插件记进 `pending_payload_restart` 并退回
+    `needs_reload`（面板照样提示「有变更」，手动重载是用户的显式选择），之后每轮扫描检查：
+    会话一归零就自动补做重启、记 `reloaded` 并撤掉提示。代价是「一直连着就一直不换」，
+    想要立刻生效得手动重载——这个取舍是刻意的：不擅自断人比早几分钟换二进制重要。
 - `reload_plugins()` = VS Code「Reload Window」：停全部已激活 → 清 `needs_reload` →
   **清扫描快照**（否则 diff 判「无变化」会空转）→ 重扫全部重新加载激活。
 

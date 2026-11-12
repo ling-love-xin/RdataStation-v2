@@ -304,6 +304,12 @@ pub struct PluginManager {
     scan_snapshot: RwLock<HashMap<String, ScanEntry>>,
     /// 清单已变化、等待重载的插件（VS Code 口径：更新不热生效，重启 / 手动重载后生效）
     needs_reload: RwLock<Vec<String>>,
+    /// 载荷已更新、但因**该插件上有活动会话**而暂缓自动重启的插件。
+    ///
+    /// 自动重启会真的停进程，那个插件上所有会话都会断开——用户可能正在跑一条长查询，
+    /// 静默断掉比晚几分钟换二进制糟得多。这类插件先记在这里，之后每轮扫描检查：
+    /// 会话一旦归零就自动补上重启，不需要用户手动点重载。
+    pending_payload_restart: RwLock<std::collections::HashSet<String>>,
     /// `drivers` 表里 sidecar 行的最近一次快照（id → enabled）。
     ///
     /// `None` = 还没成功读过全局库；`Some(空)` = 读过且确实没有插件驱动行。
@@ -494,6 +500,7 @@ impl PluginManager {
             plugin_index: Arc::new(RwLock::new(HashMap::new())),
             scan_snapshot: RwLock::new(HashMap::new()),
             needs_reload: RwLock::new(Vec::new()),
+            pending_payload_restart: RwLock::new(std::collections::HashSet::new()),
             registered_drivers: RwLock::new(None),
             dependents: RwLock::new(None),
         }
@@ -1692,9 +1699,59 @@ impl PluginManager {
         // 载荷变化（清单没变）：自动重启这一个插件，让它换上新二进制 / wasm / 脚本。
         // 这是「重编驱动后运行中的 sidecar 还在跑旧镜像」的正解：不重启宿主、不断别的插件。
         // 没在跑的插件不用动——本轮快照会更新成新指纹，下次启用时加载的就是新载荷。
+        // 上一轮因为「有活动会话」暂缓的载荷更新：会话一归零就补上，不用用户手动点重载。
+        // 先补历史、再处理本轮新发现的：补完的重启会记进 `diff.reloaded`，下面跳过它，
+        // 避免同一插件在一轮里被重启两次。
+        let queued: Vec<String> = match self.pending_payload_restart.read() {
+            Ok(pending) => pending.iter().cloned().collect(),
+            Err(_) => Vec::new(),
+        };
+        for id in queued {
+            if !self.is_loaded(&id) {
+                // 已停用 / 已卸载：待办作废
+                self.forget_pending_restart(&id);
+                continue;
+            }
+            if self.sidecar.lock().await.session_count_of(&id) > 0 {
+                continue;
+            }
+            match self.restart_plugin(&id).await {
+                Ok(()) => {
+                    tracing::info!(plugin_id = %id, "会话已结束，插件载荷更新补上自动重启");
+                    self.forget_pending_restart(&id);
+                    diff.reloaded.push(id);
+                }
+                Err(e) => {
+                    tracing::warn!(plugin_id = %id, error = %e, "载荷更新后自动重启失败，转为待重载");
+                    self.forget_pending_restart(&id);
+                    diff.changed.push(id);
+                }
+            }
+        }
+
         for id in payload_changed {
+            // 上面补做时已经重启过的，不再重复
+            if diff.reloaded.contains(&id) {
+                continue;
+            }
             if !self.is_loaded(&id) {
                 tracing::debug!(plugin_id = %id, "插件未加载，载荷变化只更新指纹");
+                continue;
+            }
+            // 该插件上还有活动会话就不擅自重启：重启会真的停进程，那些会话全部作废。
+            // 用户可能正在跑一条长查询，静默断掉比晚几分钟换二进制糟得多——记进待办，
+            // 会话归零后由下一轮扫描自动补上（面板同时给出「有变更」提示做兜底）。
+            let busy_sessions = self.sidecar.lock().await.session_count_of(&id);
+            if busy_sessions > 0 {
+                tracing::info!(
+                    plugin_id = %id,
+                    sessions = busy_sessions,
+                    "插件有新载荷但还有活动会话，暂缓自动重启"
+                );
+                if let Ok(mut pending) = self.pending_payload_restart.write() {
+                    pending.insert(id.clone());
+                }
+                diff.changed.push(id);
                 continue;
             }
             match self.restart_plugin(&id).await {
@@ -1847,6 +1904,13 @@ impl PluginManager {
             .map_err(|_| lock_err("needs_reload"))?
             .retain(|p| p != id);
         Ok(())
+    }
+
+    /// 把某个插件从「待补做自动重启」里摘掉（重启成功 / 失败 / 插件已卸载都走这里）。
+    fn forget_pending_restart(&self, id: &str) {
+        if let Ok(mut pending) = self.pending_payload_restart.write() {
+            pending.remove(id);
+        }
     }
 
     /// 列出所有已加载插件（wasm 从运行时取，sidecar / frontend 从安装态缓存 + 形态索引组装）

@@ -1117,6 +1117,17 @@ impl SidecarSupervisor {
         self.registry.instances_of(plugin_id)
     }
 
+    /// 某个插件上当前挂着的会话总数（跨它的全部实例）。
+    ///
+    /// 自动重启载荷前先问这一句：不为 0 说明有人在用这个插件，擅自重启会把
+    /// 那些会话（连同正在跑的查询）一起断掉。
+    pub fn session_count_of(&self, plugin_id: &str) -> usize {
+        self.instances_of(plugin_id)
+            .iter()
+            .map(|instance| instance.session_count())
+            .sum()
+    }
+
     /// 某个实例的对端自述（`initialize` 的返回；诊断用）。
     pub fn greeting_of(&self, plugin_id: &str, index: usize) -> Option<&Value> {
         self.instances
