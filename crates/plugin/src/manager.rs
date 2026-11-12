@@ -313,6 +313,28 @@ fn lock_err(what: &str) -> CoreError {
     )))
 }
 
+/// `path` 是否在 `root` 目录下（Windows 盘符 / 大小写不敏感；其他平台按原样比较）。
+///
+/// 只用于「幽灵登记行」清理：`install_path` 是历史字符串，盘符大小写可能已变
+/// （旧行写的是 `D:\RdataStation\Rds\...`），不能用 `Path::starts_with` 直接判。
+fn path_is_under(path: &Path, root: &Path) -> bool {
+    let normalize = |p: &Path| {
+        let text = p.to_string_lossy().replace('\\', "/");
+        #[cfg(windows)]
+        {
+            text.to_lowercase()
+        }
+        #[cfg(not(windows))]
+        {
+            text.to_string()
+        }
+    };
+    let child = normalize(path);
+    let root = normalize(root);
+    let root = root.trim_end_matches('/');
+    child == root || child.starts_with(&format!("{root}/"))
+}
+
 /// 插件不存在的统一错误
 fn not_found(id: &str) -> CoreError {
     CoreError::common(CommonError::Internal(format!("Plugin {id} not found")))
@@ -1517,6 +1539,8 @@ impl PluginManager {
                 .map_err(|_| lock_err("needs_reload"))?
                 .retain(|p| p != id);
         }
+        // 兜底：目录在管理器启动前就被删掉的行从没进过快照，`diff.removed` 覆盖不到。
+        self.prune_missing_registrations().await;
 
         // 变化：置 needs_reload（更新不热生效，VS Code 口径），UI 层读它提示重载。
         // 每次**新进入**待重载集合时发一条事件：面板订阅后能立刻看到「重载 N」，
@@ -1544,6 +1568,53 @@ impl PluginManager {
             .write()
             .map_err(|_| lock_err("scan_snapshot"))? = disk;
         Ok(diff)
+    }
+
+    /// 清理「目录已不存在」的插件登记行（`plugins` 表）。
+    ///
+    /// `diff.removed` 只覆盖「上一轮快照里出现过、这一轮消失」的目录；如果目录在管理器
+    /// 启动前就被删掉，它从没进过快照，登记行会永久留在 `plugins` 表——旧
+    /// `rds.driver.oracle` 就是这种：目录不存在、`is_enabled` 仍为 1，面板还会把它当成
+    /// 一个可启用插件。这里按 `install_path` 兜底，只处理安装根目录下、磁盘确实不存在、
+    /// 且当前未加载的非内置行；目录存在但清单坏掉的行不碰（那是「可修复」而不是「已消失」）。
+    async fn prune_missing_registrations(&self) {
+        let Some(db) = engine::migration::get_global_db_manager() else {
+            return;
+        };
+        let plugins = match db.get_all_plugins().await {
+            Ok(plugins) => plugins,
+            Err(e) => {
+                tracing::warn!(error = %e, "读取插件登记失败，跳过幽灵行清理");
+                return;
+            }
+        };
+        for plugin in plugins {
+            if plugin.is_builtin || plugin.install_path.trim().is_empty() {
+                continue;
+            }
+            let path = PathBuf::from(&plugin.install_path);
+            if !path_is_under(&path, &self.install_dir) || path.exists() {
+                continue;
+            }
+            // 仍在运行时缓存里的先交给 `diff.removed` 的 unload 分支，下一轮再清登记。
+            if self
+                .loaded_plugins
+                .read()
+                .map(|map| map.contains_key(&plugin.code))
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            if let Err(e) = db.delete_plugin_by_code(&plugin.code).await {
+                tracing::warn!(plugin_id = %plugin.code, error = %e, "清理幽灵插件登记失败");
+            } else {
+                tracing::info!(
+                    plugin_id = %plugin.code,
+                    install_path = %plugin.install_path,
+                    "清理目录已缺失的插件登记"
+                );
+            }
+        }
     }
 
     /// 待重载插件列表（P4 插件面板 / 状态栏据此提示「重启生效」）

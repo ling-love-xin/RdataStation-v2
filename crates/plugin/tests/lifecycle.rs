@@ -899,6 +899,37 @@ async fn uninstall_clears_pending_reload_and_scan_snapshot() {
     );
 }
 
+/// 目录在管理器启动前就被删掉时，`diff.removed` 看不到它；扫描兜底要清掉登记行，
+/// 否则面板会留下一个「已启用但目录不存在」的幽灵插件。
+#[tokio::test]
+async fn scan_prunes_registration_for_missing_install_dir() {
+    if engine::migration::get_global_db_manager().is_none() {
+        engine::migration::initialize_global_system()
+            .await
+            .expect("初始化全局库");
+    }
+    let dir = TempDir::new("ghostprune");
+    let manager = Arc::new(PluginManager::new(dir.0.clone()));
+    manager.init().await.unwrap();
+
+    let id = "com.example.ghostprune";
+    write_plugin(&dir.0, id, "v1");
+    manager.scan_and_diff_plugins().await.unwrap();
+    let db = engine::migration::get_global_db_manager().expect("全局库已初始化");
+    assert!(
+        db.get_plugin_by_code(id).await.unwrap().is_some(),
+        "首轮扫描应登记"
+    );
+
+    // 目录整个消失（模拟用户手动删除 / 外部安装器清理），下一轮扫描不能只 unload。
+    std::fs::remove_dir_all(dir.0.join(id)).unwrap();
+    manager.scan_and_diff_plugins().await.unwrap();
+    assert!(
+        db.get_plugin_by_code(id).await.unwrap().is_none(),
+        "目录已缺失的登记行应被清掉"
+    );
+}
+
 /// 卸载 id 不合法（拼路径前的安全校验）必须被拒，不能碰磁盘。
 #[tokio::test]
 async fn uninstall_rejects_an_unsafe_id() {
