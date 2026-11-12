@@ -951,8 +951,16 @@ impl ConnectionService {
         Ok(Some(out))
     }
 
-    /// 未配置 SSL 档案 + LAN / 本机 + sqlx 驱动（`mysql` / `postgres`）时，
-    /// 在 URL 上显式关闭 TLS——规避 sqlx 默认 `sslmode=prefer` 在这些目标上的握手卡顿。
+    /// 未配置 SSL 档案 + LAN / 本机直连时，给**默认会先试 TLS**的驱动显式关掉 TLS，
+    /// 规避握手卡顿（D5，2026-11-12 按各客户端库的真实默认重推过）。
+    ///
+    /// 目标集合按「客户端库默认值」定，不是按数据库族：
+    ///
+    /// | 驱动 | 客户端库 | 默认 | 要不要关 |
+    /// | --- | --- | --- | --- |
+    /// | `mysql` / `postgres`（插件 `rds.driver.sqlx`） | sqlx 0.9 | `sslmode=prefer` | **要**（读 URL 参数） |
+    /// | `postgres_native` | tokio-postgres 0.7.18 | `SslMode::Prefer`（`config.rs:255`） | **要**（读 `sslmode`） |
+    /// | `mysql_native` | mysql_async 0.37.1 | `ssl_opts: None`（= 不加密，`opts/mod.rs:1206`） | **不要**：它不认 `ssl-mode`，`Opts::from_url` 对未知参数直接 `Err(UnknownParameter)`（`opts/mod.rs:2048`），加了反而连不上 |
     ///
     /// 仅在「无网络方式或 `Direct`」时生效；SSH / 代理 / SSL 档案一律不动。
     fn apply_lan_tls_default(
@@ -960,8 +968,8 @@ impl ConnectionService {
         db_type: &str,
         network_method: Option<&ConnectionMethod>,
     ) -> String {
-        let is_sqlx = matches!(db_type, "mysql" | "postgres");
-        if !is_sqlx || !settings::connection_defaults().lan_disable_tls {
+        let prefers_tls = matches!(db_type, "mysql" | "postgres" | "postgres_native");
+        if !prefers_tls || !settings::connection_defaults().lan_disable_tls {
             return url;
         }
         let direct = match network_method {
@@ -971,10 +979,11 @@ impl ConnectionService {
         if !direct || !is_lan_url(&url) {
             return url;
         }
-        let (key, param) = if db_type == "postgres" {
-            ("sslmode=", "sslmode=disable")
-        } else {
+        let (key, param) = if db_type == "mysql" {
             ("ssl-mode=", "ssl-mode=DISABLED")
+        } else {
+            // tokio-postgres 只认小写 `sslmode=disable|prefer|require`（`config.rs:584-590`）。
+            ("sslmode=", "sslmode=disable")
         };
         if url.to_ascii_lowercase().contains(key) {
             return url;
@@ -1383,12 +1392,13 @@ mod tests {
     }
 
     #[test]
-    fn lan_tls_default_only_touches_sqlx_direct_lan() {
+    fn lan_tls_default_follows_which_drivers_actually_prefer_tls() {
         let apply = |url: &str, db: &str| {
             ConnectionService::apply_lan_tls_default(url.to_string(), db, None)
         };
 
-        // sqlx + LAN：追加关闭 TLS 参数。
+        // 默认会先试 TLS 的三条：插件 mysql（sqlx `ssl-mode`）、插件 postgres 与官方 PG
+        //（都读 `sslmode`）——LAN 直连追加关闭参数。
         assert_eq!(
             apply("mysql://root:pw@192.168.3.138:3306/mysql", "mysql"),
             "mysql://root:pw@192.168.3.138:3306/mysql?ssl-mode=DISABLED"
@@ -1397,19 +1407,27 @@ mod tests {
             apply("postgres://u:p@10.0.0.5:5432/db", "postgres"),
             "postgres://u:p@10.0.0.5:5432/db?sslmode=disable"
         );
+        assert_eq!(
+            apply("postgres://u:p@10.0.0.5:5432/db", "postgres_native"),
+            "postgres://u:p@10.0.0.5:5432/db?sslmode=disable"
+        );
         // 已带 `?param=` 时用 `&` 追加。
         assert_eq!(
             apply(
                 "postgres://u:p@10.0.0.5:5432/db?application_name=x",
-                "postgres"
+                "postgres_native"
             ),
             "postgres://u:p@10.0.0.5:5432/db?application_name=x&sslmode=disable"
         );
-        // 原生驱动 / 公网 / 已有同名参数：不动。
+
+        // `mysql_native`（mysql_async）默认就不加密，且它**不认** `ssl-mode`：
+        // `Opts::from_url` 对未知参数直接报 `UnknownParameter`，加了会连不上。
         assert_eq!(
-            apply("postgres://u:p@10.0.0.5:5432/db", "postgres_native"),
-            "postgres://u:p@10.0.0.5:5432/db"
+            apply("mysql://root:pw@192.168.3.138:3306/mysql", "mysql_native"),
+            "mysql://root:pw@192.168.3.138:3306/mysql"
         );
+
+        // 公网 / 已有同名参数 / 文件型：不动。
         assert_eq!(
             apply("mysql://u:p@8.8.8.8:3306/db", "mysql"),
             "mysql://u:p@8.8.8.8:3306/db"
@@ -1420,6 +1438,10 @@ mod tests {
                 "postgres"
             ),
             "postgres://u:p@10.0.0.5:5432/db?sslmode=require"
+        );
+        assert_eq!(
+            apply("sqlite://D:\\data\\x.db", "sqlite"),
+            "sqlite://D:\\data\\x.db"
         );
     }
 }

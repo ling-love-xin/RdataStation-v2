@@ -34,7 +34,7 @@ pub fn entries() -> Vec<SettingSpec> {
             group: "connection",
             group_label: None,
             label: "LAN 直连 TLS",
-            hint: "LAN / 本机直连时显式关闭 TLS（规避 sqlx 默认 prefer 的握手卡顿）；公网不受影响",
+            hint: "LAN / 本机直连时显式关闭 TLS（sqlx 与 tokio-postgres 默认都先试 TLS，握手会卡）；公网不受影响，mysql_async（MySQL Official）本就不加密、不受此开关影响",
             hint_inline: true,
             kind: SettingKind::BoolPair {
                 on: "关 TLS",
@@ -44,7 +44,8 @@ pub fn entries() -> Vec<SettingSpec> {
             default_json: "true",
             effect: SettingEffect::NextUse,
             entry: SettingEntry::Page,
-            consumer: "workbench/src/services/connection_service.rs::apply_lan_tls_default",
+            consumer:
+                "connection_dialog/src/services/connection_service/runtime.rs::apply_lan_tls_default",
             composite: false,
             disabled: false,
         },

@@ -145,7 +145,12 @@ features = ["tree", "health_check", "transactions", "sql_autocomplete", "schema_
 
 `connection_dialog/src/services/connection_service/runtime.rs:958-985` 硬编码 `matches!(db_type, "mysql" | "postgres")`（规避 sqlx 默认 `sslmode=prefer` 在 LAN 目标的握手卡顿）。删驱动后这段永不生效。
 
-**必做**：按新驱动重新推导——`mysql_async` 与 `tokio-postgres` 的默认 TLS 行为要分别确认后决定是否补等价逻辑，并把 `settings/src/registry/entries/connection.rs:47` 里那条 `consumer` 文案同步改掉（它指向的函数已不再消费该开关）。
+**必做**：按新驱动重新推导——`mysql_async` 与 `tokio-postgres` 的默认 TLS 行为要分别确认后决定
+是否补等价逻辑，并把 `settings/src/registry/entries/connection.rs:47` 里那条 `consumer` 文案同步改掉
+（它指向的函数已不再消费该开关）。
+
+→ **已处置（D5，见 §7.5）**：`tokio-postgres` 默认 `Prefer`，所以这段对 `postgres_native` **不是**
+死代码；`mysql_async` 默认不加密且不认 `ssl-mode`，故从目标集合里排除。
 
 ### 4.6 族归一表
 
@@ -193,8 +198,8 @@ features = ["tree", "health_check", "transactions", "sql_autocomplete", "schema_
 | D1 | 抽 `crates/driver-sql`（纯 SQL 常量 + wire 核心），内核 4 驱动改依赖 | D0 | 全仓 `cargo test-all` 不降 ✅ 已落地（§7.1） |
 | D2 | 新建 `tools/plugin-drivers/sqlx-rust`（sidecar 二进制）：mysql + postgres 两个驱动实现，复用 D1 | D1 | ✅ 代码 + 插件包落地（§7.2）；真机 2026-11-12 两驱动各 12 项全绿（3000 行 / 分页 / 事务 / 元数据 / sqlstate / 干净退出） |
 | D3 | 删内核 sqlx 实现 + `engine` 的 sqlx 依赖与 `pg_probe` + 两个 pool | D2 | `cargo tree -p <app>` 无 sqlx；老连接走插件可用 |
-| D4 | 迁移（`drivers` 两行处置）+ 连接 id 兼容 + 默认驱动 + 缺失驱动文案 | D3 | 老项目连接列表无孤儿行 |
-| D5 | `apply_lan_tls_default` 重新推导 + settings 文案修正 | D3 | TLS 真机两档 |
+| D4 | 迁移（`drivers` 两行处置）+ 连接 id 兼容 + 默认驱动 + 缺失驱动文案 | D3 | 老项目连接列表无孤儿行 ✅ 已落地（§7.4） |
+| D5 | `apply_lan_tls_default` 重新推导 + settings 文案修正 | D3 | TLS 真机两档 → 代码 + 单测落地（§7.5），真机档因磁盘满待补 |
 | D6 | 测试重指：`type_decode_fidelity`（sqlx 数值口径 `1234.5600` 迁插件）、`mysql_rsa_auth_probe`、`error_location` 6 驱动 → 4 驱动 | D3 | 全部用例有归属，无静默删除 |
 
 ### 7.1 D1 落地记录（已完成）
@@ -454,6 +459,57 @@ DELETE FROM drivers WHERE id IN ('mysql','postgres') AND driver_kind = 'native';
 **D4 没做的**：真机两态复验（本机 `192.168.3.138` 上装插件后跑 `official_driver_real` /
 `editor_exec_real`）；`global_connections` 里 `driver_id='mysql'` 的老连接没有做批量迁移
 （按 §4.1 的 id 沿用方案，插件装上即可用，不需要改数据）。
+
+### 7.5 D5 落地记录（`apply_lan_tls_default` 按真实默认值重推）
+
+**1) 先取证，再改代码**（全部读本地 registry 源码，不靠记忆）：
+
+| 客户端库 | 默认 | 证据 |
+| --- | --- | --- |
+| `tokio-postgres 0.7.18`（`postgres_native`） | `SslMode::Prefer`（先试 TLS，服务端不支持再回落） | `src/config.rs:255` `ssl_mode: SslMode::Prefer`；`:344` 文档 `Defaults to prefer` |
+| 同上，URL 参数 | 只认小写 `sslmode=disable\|prefer\|require` | `src/config.rs:584-590`（其它值报 `InvalidValue("sslmode")`） |
+| `mysql_async 0.37.1`（`mysql_native`） | `ssl_opts: None`（= 不加密） | `src/opts/mod.rs:1206` |
+| 同上，URL 参数 | 只认 `require_ssl` / `verify_ca` / `verify_identity` / `built_in_roots` 等，**未知参数直接报错** | `:1999` `require_ssl`；`:2048` `else { return Err(UrlError::UnknownParameter) }` |
+| `sqlx 0.9`（插件 `mysql` / `postgres`） | `sslmode=prefer`（MySQL 用 `ssl-mode`，PG 用 `sslmode`），读 URL | 插件侧 `sqlx-rust/src/config.rs` 把宿主 URL 原样交给 sqlx |
+
+**2) 结论：目标集合不是「数据库族」，而是「客户端库默认先试 TLS 的那些驱动」**
+
+| 驱动 | 默认 | 本刀处置 |
+| --- | --- | --- |
+| `postgres_native` | prefer | **新增**：LAN 直连追加 `sslmode=disable`（此前它被单测明确断言「不动」，是错的） |
+| `postgres` / `mysql`（插件 sqlx） | prefer | 保留原行为（`sslmode=disable` / `ssl-mode=DISABLED`） |
+| `mysql_native` | 明文 | **排除**：既不需要关（本来就不加密），也**不能**加 —— mysql_async 对未知 URL 参数返回 `UnknownParameter`，加 `ssl-mode=DISABLED` 等于把连接弄坏 |
+
+`runtime.rs::apply_lan_tls_default` 里的 `matches!` 从 `("mysql" | "postgres")` 改成
+`("mysql" | "postgres" | "postgres_native")`，参数键按驱动分派（`mysql` → `ssl-mode`，
+其余 → `sslmode`），注释里附上上面这张证据表与两个「为什么」。
+
+**3) 单测随事实改写**：`lan_tls_default_only_touches_sqlx_direct_lan` →
+`lan_tls_default_follows_which_drivers_actually_prefer_tls`。原来断言「`postgres_native` 不被改动」
+的那条反过来了，并补三条反向用例：`mysql_native` **必须不被改动**（附 `UnknownParameter` 理由）、
+公网地址不动、`sqlite` 不动。
+
+**4) settings 三处文案同步**：
+
+* `settings/src/registry/entries/connection.rs`：`hint` 从「规避 sqlx 默认 prefer 的握手卡顿」
+  改成「sqlx 与 tokio-postgres 默认都先试 TLS……mysql_async（MySQL Official）本就不加密、
+  不受此开关影响」；`consumer` 从已迁走的 `workbench/src/services/connection_service.rs`
+  改成真实的 `connection_dialog/src/services/connection_service/runtime.rs::apply_lan_tls_default`。
+* `settings/src/model/connection.rs`：`lan_disable_tls` 的字段文档同口径改写，点明它管哪三条驱动、
+  为什么不管 `mysql_native`。
+
+**验证**：`cargo test -p rds-connection-dialog -p rds-settings --lib` 全绿（68 / 36）；
+`cargo check -p rds-connection-dialog -p rds-settings --all-targets` 无 warning。
+真机档（`official_driver_real` 走 `ConnectRequest.network_method=None`，正好踩到
+`apply_lan_tls_default`）本次**未跑成**：编译 `rds-workbench` 测试目标时磁盘写满
+（`failed to build archive ... os error 112`，D 盘仅剩 1.5 GB），清理 `target/debug/incremental`
+（31.7 GB 纯增量缓存）的操作在等你确认，因此「`postgres_native` + 追加 `sslmode=disable` 真机可连」
+这条还是待验状态，留给 D6 与本机清理一起做。
+
+**D5 没做的**：`mysql_native` 收到结构化 `TlsRequest{mode: Disable}` 时仍会
+`builder.ssl_opts(Some(SslOpts))`（「关 TLS」可能实际尝试 TLS，`native/mysql_native.rs:119-137`，
+单测 `tls_request_becomes_ssl_opts` 甚至断言「空请求也可构造」）—— 这一条与 `lan_disable_tls`
+无关（后者走 URL、且已把 `mysql_native` 排除），属**另一个独立缺陷**，未纳入本刀，需单独立项。
 
 ---
 
