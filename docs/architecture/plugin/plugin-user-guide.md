@@ -429,6 +429,15 @@ cargo test -p rds-plugin --test sidecar_conformance -- --nocapture
 **指定了就当作承诺**：被 `RDS_SIDECAR_SCHEMA` 选中的 schema 拿不出表 / 视图时，第 6 条直接判失败
 （而不是像默认口径那样跳过），免得一条从未跑过的详情路径混进全绿报告。
 
+再往下还有一层：默认口径拿「第一个类表对象」验详情，对象一换就换靶子，出问题不好复现。
+`RDS_SIDECAR_OBJECT` 可以点名要验哪个对象，**指定即承诺**——`meta.objects` 里找不到它就直接判失败：
+
+```sh
+RDS_SIDECAR_SCHEMA=SYS RDS_SIDECAR_CATALOG=XEPDB1 RDS_SIDECAR_OBJECT=ALL_CAPTURE \
+RDS_SIDECAR_BIN=./rds-oracle-sidecar RDS_SIDECAR_DRIVER=oracle … \
+cargo test -p rds-plugin --test sidecar_conformance -- --nocapture
+```
+
 **导航要用的 `meta.*`（P2）**：五件 —— `meta.catalogs` / `meta.schemas` / `meta.objects` /
 `meta.object_detail` / `meta.routine_source`。少一件，导航树或属性面板就少一块。三条最容易踩的：
 

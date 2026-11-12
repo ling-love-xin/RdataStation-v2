@@ -29,6 +29,7 @@
 //! | `RDS_SIDECAR_SLOW_SECONDS` | `5` | 上面那条查询的时长（取消要在它结束之前生效） |
 //! | `RDS_SIDECAR_CATALOG` | 第一个 catalog | 导航面要验的 catalog（可选覆盖） |
 //! | `RDS_SIDECAR_SCHEMA` | 第一个 schema | 导航面要验的 schema（**指定了就必须验到对象详情**） |
+//! | `RDS_SIDECAR_OBJECT` | 第一个类表对象 | 拿哪个对象验 `meta.object_detail`（**指定了就必须在 `meta.objects` 里找到**） |
 //!
 //! # 检查项（也就是"你的 sidecar 要满足什么"）
 //!
@@ -105,6 +106,17 @@ fn override_catalog() -> Option<String> {
 
 fn override_schema() -> Option<String> {
     std::env::var("RDS_SIDECAR_SCHEMA")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// 可选：显式指定拿哪个对象验 `meta.object_detail`。
+///
+/// 不指定时取「第一个类表对象」——这个口径在真库上会随对象排序漂移：同一份驱动，
+/// 换一个 schema 或加一个对象，验的就是另一个对象，出了问题也不好复现。指定名字
+/// 就有稳定靶子；**指定即承诺**：对象不在 `meta.objects` 里直接判失败。
+fn override_object() -> Option<String> {
+    std::env::var("RDS_SIDECAR_OBJECT")
         .ok()
         .filter(|s| !s.trim().is_empty())
 }
@@ -400,33 +412,56 @@ async fn answers_the_metadata_methods() {
         println!("  ⚠️ 报了导航摆不下的类别（宿主会跳过并记日志）：{unmappable:?}");
     }
 
-    let Some(array) = objects.iter().find(|o| o.kind.is_table_like()) else {
-        if let Some(name) = schema_overridden {
-            // 指定了 schema 就是承诺「这个 schema 下应当验得到详情」：空着等于没验到，
-            // 不能让一份全绿的报告替一个从未跑过的路径背书。
-            let mut supervisor = supervisor;
-            supervisor
-                .shutdown_all(Instant::now(), Duration::from_secs(10))
-                .await;
-            panic!(
-                "RDS_SIDECAR_SCHEMA={name} 指定了 schema，但它下面没有表 / 视图——\
-                 meta.object_detail 这条路没验到，不能算过"
-            );
+    // 挑哪个对象验详情：指定了就用它（指定即承诺，找不到不能算过）；
+    // 没指定才退回「第一个类表对象」的老口径。
+    let target = match override_object().as_deref() {
+        Some(requested) => match objects
+            .iter()
+            .find(|o| o.name.eq_ignore_ascii_case(requested))
+        {
+            Some(object) => object,
+            None => {
+                let mut supervisor = supervisor;
+                supervisor
+                    .shutdown_all(Instant::now(), Duration::from_secs(10))
+                    .await;
+                panic!(
+                    "RDS_SIDECAR_OBJECT={requested} 指定了对象，但 {catalog} / {schema} 下没有它——\
+                     这里拿不到对象，meta.object_detail 就没法按名字验，不能算过"
+                );
+            }
+        },
+        None => {
+            let Some(object) = objects.iter().find(|o| o.kind.is_table_like()) else {
+                if let Some(name) = schema_overridden {
+                    // 指定了 schema 就是承诺「这个 schema 下应当验得到详情」：空着等于没验到，
+                    // 不能让一份全绿的报告替一个从未跑过的路径背书。
+                    let mut supervisor = supervisor;
+                    supervisor
+                        .shutdown_all(Instant::now(), Duration::from_secs(10))
+                        .await;
+                    panic!(
+                        "RDS_SIDECAR_SCHEMA={name} 指定了 schema，但它下面没有表 / 视图——\
+                         meta.object_detail 这条路没验到，不能算过"
+                    );
+                }
+                println!("  这个 schema 里没有表 / 视图：详情与源码两项跳过（空库是合法状态）");
+                let mut supervisor = supervisor;
+                supervisor
+                    .shutdown_all(Instant::now(), Duration::from_secs(10))
+                    .await;
+                return;
+            };
+            object
         }
-        println!("  这个 schema 里没有表 / 视图：详情与源码两项跳过（空库是合法状态）");
-        let mut supervisor = supervisor;
-        supervisor
-            .shutdown_all(Instant::now(), Duration::from_secs(10))
-            .await;
-        return;
     };
 
     // ④ 详情：对象身份要回声，列必须带原始类型（属性面板与类型归一化都靠它）
     let detail = driver
-        .meta_object_detail(&catalog, &schema, &array.name)
+        .meta_object_detail(&catalog, &schema, &target.name)
         .await
         .expect("meta.object_detail");
-    assert_eq!(detail.object.name, array.name, "详情要把对象身份回声回来");
+    assert_eq!(detail.object.name, target.name, "详情要把对象身份回声回来");
     assert!(!detail.columns.is_empty(), "表要说得出列（空表也有列）");
     assert!(
         detail.columns.iter().all(|c| !c.type_raw.is_empty()),
@@ -434,7 +469,7 @@ async fn answers_the_metadata_methods() {
     );
     println!(
         "  {} 有 {} 列（首列 {} {}）；索引 {:?}；行数估计 {:?}",
-        array.name,
+        target.name,
         detail.columns.len(),
         detail.columns[0].name,
         detail.columns[0].type_raw,
