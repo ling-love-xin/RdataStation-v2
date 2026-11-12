@@ -48,12 +48,16 @@ paths::extensions_dir()  // home/extensions
 paths::assets_dir()      // 随包只读资源（主题 / 图标）——**不**在 home 下，见 §3.1
 ```
 
-**默认值规则**：`RDS_HOME` 未设时 = **可执行文件所在目录**（即软件的安装目录；开发运行时即 `target/debug/`）：
+**默认值规则**：
 
-- 一切生成物都在这个目录下，随软件装到哪就跟到哪，**不碰 C 盘**（除非软件本身装在 C 盘，那时用 `RDS_HOME` 覆盖）
-- 启动先探测可写性：不可写（如装在 `Program Files`）→ 回退 `%LOCALAPPDATA%/RdataStation` 并在日志里明确提示
-- **开发注意**：从 `target/debug` 运行时数据落在 `target/` 内，`cargo clean` 会连数据一起清掉；
-  开发期间要保留就设 `RDS_HOME=<repo>/.rds`（该目录已在忽略规则中）
+1. **debug 构建**：可执行文件位于 `<repo>/.rds/target*/debug/` 时，优先 = **该 `.rds`**（`HomeOrigin::DevRepo`）。
+   `.cargo/config.toml` 的 `RDS_HOME=.rds` 只对 `cargo run` / `cargo test` 的子进程生效；
+   直接双击 `.rds/target-gf/debug/rds-app.exe` 不会带这个变量，旧规则会落到 exe 同级的
+   `data/` / `plugins/`，于是「装到仓库 `.rds/plugins` 的插件」在界面里看不到。
+   现在 debug 构建按 exe 路径向上找 `.rds` 祖先，与 `cargo run` 保持同一数据根。
+2. **release 构建**：`RDS_HOME` 未设时 = **可执行文件所在目录**（即软件的安装目录）。
+   - 一切生成物都在这个目录下，随软件装到哪就跟到哪，**不碰 C 盘**（除非软件本身装在 C 盘，那时用 `RDS_HOME` 覆盖）
+   - 启动先探测可写性：不可写（如装在 `Program Files`）→ 回退 `%LOCALAPPDATA%/RdataStation` 并在日志里明确提示
 
 > 为什么不默认放"用户项目目录"：`<用户项目>/{project.sqlite, analysis.duckdb}` 是**用户资产**，
 > 归 M1 项目会话管理（已在项目根下）；而 settings / global.sqlite / 密钥库是**应用资产**，

@@ -33,6 +33,7 @@ concurrency = "serial"
 
 [[contributes.drivers]]
 id = "oracle"
-display_name = "Oracle Database (Rust)"
+display_name = "Oracle Database"
 default_port = 1521
+url_template = "oracle://{username}:{password}@{host}:{port}/{database}"
 features = ["schemas", "transactions"]

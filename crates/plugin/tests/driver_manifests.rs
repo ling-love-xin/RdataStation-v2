@@ -42,6 +42,26 @@ fn all_packaged_driver_manifests_parse_and_validate() {
             !drivers[0].display_name.is_empty(),
             "{dir} 的驱动要有显示名"
         );
+
+        // Rust 轨驱动走 sidecar 凭据（不是 URL 模板也行）：连接对话框必须看到认证方法，
+        // 显示名不能带 `(Rust)` 后缀（对话框短名会把它截成「Rust」）。
+        if matches!(dir, "oracle-rust-plugin" | "mssql-rust-plugin") {
+            let row = rds_plugin::driver_decl::derive_row(&manifest, &drivers[0], true);
+            assert_eq!(
+                row.supported_auth_types, r#"["password"]"#,
+                "{dir} 的认证方法应由 credentials=database 派生"
+            );
+            assert!(
+                !drivers[0].display_name.contains("(Rust)"),
+                "{dir} 的显示名不应带运行时后缀：{}",
+                drivers[0].display_name
+            );
+            let template = drivers[0]
+                .url_template
+                .as_deref()
+                .unwrap_or_else(|| panic!("{dir} 应声明 url_template"));
+            assert!(template.contains("{host}") && template.contains("{password}"));
+        }
     }
 }
 

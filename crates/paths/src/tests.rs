@@ -161,6 +161,21 @@ fn test_build_is_isolated_from_the_product_root() {
     );
 }
 
+#[test]
+fn dev_exe_under_dot_rds_finds_the_repo_data_root() {
+    #[cfg(debug_assertions)]
+    {
+        let exe = std::path::Path::new(r"D:\repo\.rds\target-gf\debug\rds-app.exe");
+        assert_eq!(
+            crate::repo_home_from_exe(exe),
+            Some(std::path::PathBuf::from(r"D:\repo\.rds"))
+        );
+        // 普通 target/debug 不在 .rds 下，应交给安装目录规则
+        let plain = std::path::Path::new(r"D:\repo\target\debug\rds-app.exe");
+        assert_eq!(crate::repo_home_from_exe(plain), None);
+    }
+}
+
 /// `pin_root` 在数据根已经解析过之后必须**拒绝**，不能假装成功。
 #[test]
 fn pin_root_is_rejected_after_resolution() {

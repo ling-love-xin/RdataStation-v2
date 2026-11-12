@@ -496,9 +496,17 @@ impl<H: 'static> ConnectionDialogState<H> {
                         &url_now,
                     );
                     set_input_value(&host_input, h.unwrap_or_default(), window, cx);
+                    // URL 没带端口时用驱动声明的默认端口：切类型后不会残留上一种库的端口
+                    // （实例：MySQL 草稿切 Oracle，端口仍显示 3306）。
+                    let port_fallback = current_driver
+                        .as_ref()
+                        .and_then(|d| d.default_port)
+                        .map(|port| port.to_string());
                     set_input_value(
                         &port_input,
-                        p.map(|v| v.to_string()).unwrap_or_default(),
+                        p.map(|v| v.to_string())
+                            .or(port_fallback)
+                            .unwrap_or_default(),
                         window,
                         cx,
                     );

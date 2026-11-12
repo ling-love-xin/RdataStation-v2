@@ -33,6 +33,7 @@ concurrency = "serial"
 
 [[contributes.drivers]]
 id = "mssql"
-display_name = "SQL Server (Rust)"
+display_name = "SQL Server"
 default_port = 1433
+url_template = "mssql://{username}:{password}@{host}:{port}/{database}"
 features = ["schemas", "transactions"]

@@ -349,6 +349,12 @@ fn descriptor_for(
     if let Some(template) = &driver.url_template {
         descriptor = descriptor.with_url_template(template.clone());
     }
+    // 认证方法：清单声明了数据库凭据（或 URL 模板里带用户名/口令占位符）时，
+    // 连接对话框的「认证方法」下拉必须有 password 这一项，否则会显示「驱动未声明认证方法」。
+    let auth_types = crate::driver_decl::declared_auth_types(manifest, driver);
+    if !auth_types.is_empty() {
+        descriptor = descriptor.with_supported_auth_types(auth_types);
+    }
     // `manifest.plugin.icon` **不往驱动描述符里塞**：descriptor.icon 的消费方
     // （连接对话框类型列表）把它当**字符徽标**直接渲染（内置族是 🐬/🐘 这类 emoji），
     // 而清单的 icon 是插件包内的相对资源路径（`media/icon.svg`）——塞进去只会显示
@@ -475,6 +481,40 @@ features = ["transactions", "cancel"]
             .find(|f| f.key == "password")
             .expect("应当有口令字段");
         assert!(matches!(password.field_type, DriverFieldType::Password));
+    }
+
+    #[test]
+    fn descriptor_declares_auth_when_manifest_grants_database_credentials() {
+        let manifest: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "com.example.creds"
+name = "Creds Driver"
+version = "1.0.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "sidecar"
+executable = "bin/agent"
+
+[permissions]
+credentials = "database"
+
+[[contributes.drivers]]
+id = "credssl"
+display_name = "Cred DB"
+default_port = 5432
+"#,
+        )
+        .unwrap();
+        let descriptor = descriptor_for(&manifest, &manifest.contributes.drivers[0]);
+        assert_eq!(
+            descriptor.supported_auth_types,
+            vec!["password".to_string()]
+        );
     }
 
     #[test]

@@ -161,6 +161,24 @@ service 层新增 `PluginManager::is_loaded` 判定，只在有运行实例时�
 （可执行文件就是插件自带的 agent），因此不会再被
 `RuntimeResolver::resolve` 判成 `COMMON_NOT_SUPPORTED` 而清掉驱动行。
 
+**驱动行内容（2026-11-12）**：连接对话框暴露过三处接入细节，均已按「清单是真相源」处理：
+
+- **显示名**：清单 `display_name` 不再带 `(Rust)` 后缀。对话框的驱动短名取括号内后缀
+  （`helpers::driver_short_name`），单驱动插件带上后缀只会显示成「Rust」；
+  多驱动靠后缀区分的内置驱动不受影响。
+- **认证方法**：`driver_decl::declared_auth_types` 同时认两条声明——
+  `url_template` 含 `{user}`/`{username}` + `{password}`，或
+  `[permissions] credentials = "database"`。只看模板会让「凭据走 sidecar 参数」的插件
+  在对话框里显示「驱动未声明认证方法」。`descriptor_for` 用同一函数填
+  `DriverDescriptor::supported_auth_types`，保证注册期与落库期口径一致。
+- **URL 模板**：Oracle / SQL Server 清单补上
+  `oracle://{username}:{password}@{host}:{port}/{database}` /
+  `mssql://{username}:{password}@{host}:{port}/{database}`；表单占位符与认证方法都由它派生。
+
+**首轮扫描（2026-11-12）**：`init_plugin_manager` 在设置全局管理器后、spawn 运行时循环前
+同步跑一次 `scan_and_diff_plugins`，连接对话框首次打开就能读到已激活插件写下的驱动行，
+不再依赖运行时循环的第一拍。
+
 **贡献点明细（2026-11-10）**：`PluginInfo` 新增 `contribution_items: Vec<PluginContributionSummary>`
 （`kind` / `id` / `label` / `detail`），由清单派生：命令取 `category` + `shortcut`，面板取 `location`，
 设置取 `type` + `default`（JSON 串）。详情栏在「贡献点」摘要行下逐条列出；驱动不进这个列表，

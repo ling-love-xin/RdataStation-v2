@@ -730,6 +730,9 @@ impl<H: 'static> ConnectionDialogState<H> {
             }
             None => set_select_value(&self.driver, "", window, cx),
         }
+        // 切类型后强制下一次 render 重跑 URI → 字段同步：否则 (驱动 id, URI) 未变时
+        // 会沿用上一种库的端口（实例：MySQL 3306 残留到 Oracle）。
+        *self.fields_synced_for.borrow_mut() = None;
     }
 
     /// 按当前选中类型刷新驱动下拉选项（短名）；未选类型时置空（提示先在左侧选类型）。
@@ -821,6 +824,8 @@ impl<H: 'static> ConnectionDialogState<H> {
             }
             None => set_select_value(&self.driver, "", window, cx),
         }
+        // 驱动变了：下一次 render 必须重新从 URI 解析 host/port/database。
+        *self.fields_synced_for.borrow_mut() = None;
         hit
     }
 

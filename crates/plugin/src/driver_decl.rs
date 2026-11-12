@@ -58,10 +58,7 @@ pub fn check_builtin_collisions(manifest: &PluginManifest) -> Result<(), CoreErr
     Err(CoreError::common(CommonError::general(format!(
         "插件 {} 声明的驱动 id {:?} 与内置驱动冲突（内置：{:?}）；\
          换一个驱动 id（如 {:?}-jdbc）再装",
-        manifest.plugin.id,
-        clashes,
-        builtins,
-        clashes[0]
+        manifest.plugin.id, clashes, builtins, clashes[0]
     ))))
 }
 
@@ -88,7 +85,16 @@ fn form_fields(driver: &ContributesDriver) -> Value {
     }
 
     // 字段按惯例顺序排（host → port → database → user → password → file → 其余按出现序）
-    let canonical = ["host", "port", "database", "user", "username", "password", "file_path", "file"];
+    let canonical = [
+        "host",
+        "port",
+        "database",
+        "user",
+        "username",
+        "password",
+        "file_path",
+        "file",
+    ];
     let mut ordered: Vec<String> = canonical
         .iter()
         .filter(|c| placeholders.iter().any(|p| p == *c))
@@ -128,22 +134,42 @@ fn form_fields(driver: &ContributesDriver) -> Value {
     json!({ "fields": fields, "options": [] })
 }
 
+/// 清单声明的认证方法。
+///
+/// 两个来源都算数：`url_template` 里有 `{user}`/`{username}` + `{password}`（表单凭据嵌在 URL 里），
+/// 或 `[permissions] credentials = "database"`（驱动壳自己接收凭据，不经过 URL 模板）。
+/// 只看模板会让「凭据走 sidecar 参数」的插件在连接对话框里显示「驱动未声明认证方法」。
+pub(crate) fn declared_auth_types(
+    manifest: &PluginManifest,
+    driver: &ContributesDriver,
+) -> Vec<String> {
+    let template = driver.url_template.as_deref().unwrap_or("");
+    let template_has_login = (template.contains("{user}") || template.contains("{username}"))
+        && template.contains("{password}");
+    let declares_database_credentials = manifest
+        .permissions
+        .credentials
+        .as_deref()
+        .is_some_and(|credentials| credentials.eq_ignore_ascii_case("database"));
+    if template_has_login || declares_database_credentials {
+        vec!["password".to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
 /// 一个清单驱动 → 一行插件驱动声明。
 ///
 /// `type_id`（数据库族）取驱动 id：常见族（oracle / postgresql…）内置声明已播种，
 /// `ensure_plugin_family` 的 OR IGNORE 不会动它们；生僻族按驱动 id 建行，
 /// 分类用清单 `category`（默认 relational，manifest 校验已卡四个合法值）。
-pub fn derive_row(manifest: &PluginManifest, driver: &ContributesDriver, active: bool) -> PluginDriverRow {
-    let auth = {
-        let t = driver.url_template.as_deref().unwrap_or("");
-        let has_user = t.contains("{user}") || t.contains("{username}");
-        let has_password = t.contains("{password}");
-        if has_user && has_password {
-            json!(["password"]).to_string()
-        } else {
-            json!([] as [&str; 0]).to_string()
-        }
-    };
+pub fn derive_row(
+    manifest: &PluginManifest,
+    driver: &ContributesDriver,
+    active: bool,
+) -> PluginDriverRow {
+    let auth = serde_json::to_string(&declared_auth_types(manifest, driver))
+        .unwrap_or_else(|_| "[]".to_string());
     PluginDriverRow {
         id: driver.id.clone(),
         type_id: driver.id.clone(),
@@ -176,14 +202,13 @@ pub async fn resync_driver_rows(
     }
     let keep: Vec<String> = rows.iter().map(|r| r.id.clone()).collect();
 
-    let sqlite = db
-        .sqlite_pool()
-        .acquire()
-        .await
-        .map_err(|e| CoreError::common(CommonError::general(format!("取全局库连接失败：{e}"))))?;
-    let conn = sqlite.inner().map_err(|e| {
-        CoreError::common(CommonError::general(format!("全局库连接不可用：{e}")))
-    })?;
+    let sqlite =
+        db.sqlite_pool().acquire().await.map_err(|e| {
+            CoreError::common(CommonError::general(format!("取全局库连接失败：{e}")))
+        })?;
+    let conn = sqlite
+        .inner()
+        .map_err(|e| CoreError::common(CommonError::general(format!("全局库连接不可用：{e}"))))?;
     use engine::persistence::plugin_driver_store as store;
     let mut written = 0usize;
     for row in &rows {
@@ -275,13 +300,9 @@ mod tests {
     #[test]
     fn fields_follow_url_template_placeholders() {
         let driver = oracle_like_driver();
-        let schema: Value =
-            serde_json::from_str(&form_fields(&driver).to_string()).unwrap();
+        let schema: Value = serde_json::from_str(&form_fields(&driver).to_string()).unwrap();
         let fields = schema["fields"].as_array().unwrap().clone();
-        let keys: Vec<&str> = fields
-            .iter()
-            .map(|f| f["key"].as_str().unwrap())
-            .collect();
+        let keys: Vec<&str> = fields.iter().map(|f| f["key"].as_str().unwrap()).collect();
         assert_eq!(keys, vec!["host", "port", "database"]);
         // port 有 default_port → required=false + default=1521
         let port = &fields[1];
@@ -307,11 +328,40 @@ mod tests {
     #[test]
     fn user_placeholder_marks_password_auth() {
         let mut driver = oracle_like_driver();
-        driver.url_template = Some("postgresql://{user}:{password}@{host}:{port}/{database}".into());
+        driver.url_template =
+            Some("postgresql://{user}:{password}@{host}:{port}/{database}".into());
         let manifest = manifest_with_driver(driver);
         let row = derive_row(&manifest, &manifest.contributes.drivers[0], false);
         assert_eq!(row.supported_auth_types, r#"["password"]"#);
         assert!(!row.enabled, "未激活插件的行应当置灰");
+    }
+
+    #[test]
+    fn database_credentials_grant_marks_password_auth_without_template() {
+        let manifest: crate::manifest::PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "rds.driver.credonly"
+name = "Credential Only"
+version = "1.0.0"
+publisher = "rds"
+[plugin.engines]
+rdatastation = ">=0.1"
+[backend]
+kind = "sidecar"
+executable = "bin/agent"
+[permissions]
+credentials = "database"
+[[contributes.drivers]]
+id = "credonly"
+display_name = "Credential Only DB"
+default_port = 1521
+"#,
+        )
+        .expect("清单应当能解析");
+        manifest.validate().expect("清单应当合法");
+        let row = derive_row(&manifest, &manifest.contributes.drivers[0], true);
+        assert_eq!(row.supported_auth_types, r#"["password"]"#);
     }
 
     #[test]

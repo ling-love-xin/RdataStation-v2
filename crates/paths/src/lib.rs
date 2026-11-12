@@ -88,6 +88,13 @@ pub enum HomeOrigin {
     EnvHome,
     /// 可执行文件所在目录（默认规则 = 安装目录）。
     ExecutableDir,
+    /// **开发构建（debug）**：仓库根的 `.rds/`。
+    ///
+    /// 为什么需要：`cargo run` 由 `.cargo/config.toml` 注入 `RDS_HOME=.rds`，但直接双击
+    /// `target/debug/rds-app.exe` 时没有这个变量，旧规则会落到 exe 同级的 `data/` / `plugins/`，
+    /// 于是「装到仓库 `.rds/plugins` 的插件」在界面里看不到。debug 构建优先认仓库 `.rds`，
+    /// 与 `cargo run` 保持同一数据根；release 构建仍按安装目录解析。
+    DevRepo,
     /// `RDS_HOME` / 安装目录都不可写，回退平台本地数据目录。
     FallbackLocalAppData,
     /// **测试构建**：隔离到进程专属临时目录（见 `docs/architecture/runtime/data-paths.md` §5），
@@ -100,6 +107,7 @@ impl HomeOrigin {
         match self {
             Self::EnvHome => "环境变量 RDS_HOME",
             Self::ExecutableDir => "可执行文件所在目录（安装目录）",
+            Self::DevRepo => "开发构建：仓库根 .rds",
             Self::FallbackLocalAppData => "安装目录不可写，回退平台本地数据目录",
             Self::TestRoot => "测试构建的隔离数据根",
         }
@@ -415,6 +423,13 @@ fn resolve_home() -> (PathBuf, HomeOrigin) {
         }
     }
 
+    #[cfg(debug_assertions)]
+    if let Some(candidate) = dev_repo_home() {
+        if probe_writable(&candidate) {
+            return (candidate, HomeOrigin::DevRepo);
+        }
+    }
+
     if let Some(dir) = executable_dir() {
         if probe_writable(&dir) {
             return (dir, HomeOrigin::ExecutableDir);
@@ -428,6 +443,25 @@ fn resolve_home() -> (PathBuf, HomeOrigin) {
     let fallback = fallback_home();
     eprintln!("[paths] 数据根回退到 {}", fallback.display());
     (fallback, HomeOrigin::FallbackLocalAppData)
+}
+
+/// 开发构建的仓库数据根：可执行文件位于 `<repo>/.rds/target*/debug/` 时，取那个 `.rds`。
+///
+/// 只在 debug 构建参与解析（见 [`HomeOrigin::DevRepo`]）；release 不会走到这里。
+/// 不烘焙 `CARGO_MANIFEST_DIR`：从临时 worktree 构建时那个路径是 worktree 自己的 `.rds`，
+/// 反而会看到一套空数据根——按 exe 路径向上找 `.rds` 才始终指向真正被 cargo 使用的仓库根。
+#[cfg(debug_assertions)]
+fn dev_repo_home() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    repo_home_from_exe(&exe)
+}
+
+/// 从可执行文件路径找最近的 `.rds` 祖先（纯函数，便于单测）。
+#[cfg(debug_assertions)]
+fn repo_home_from_exe(exe: &Path) -> Option<PathBuf> {
+    exe.ancestors()
+        .find(|ancestor| ancestor.file_name().is_some_and(|name| name == ".rds"))
+        .map(Path::to_path_buf)
 }
 
 /// 可执行文件所在目录 = 安装目录。

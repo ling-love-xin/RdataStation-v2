@@ -42,16 +42,25 @@ fn plugin_dir(package_id: &str) -> PathBuf {
     plugin_root().join(package_id)
 }
 
-/// 从 `drivers` 表读一行（id, driver_kind, enabled, default_port）。
-async fn read_driver_row(id: &str) -> Option<(String, String, bool, Option<i64>)> {
+/// 从 `drivers` 表读一行（id, driver_kind, enabled, default_port, name, auth, config_schema）。
+async fn read_driver_row(
+    id: &str,
+) -> Option<(String, String, bool, Option<i64>, String, Option<String>, String)> {
     use engine::persistence::driver_store::Driver;
 
     let db = engine::migration::get_global_db_manager().expect("全局库应当已初始化");
     let drivers: Vec<Driver> = db.get_all_drivers().await.expect("读 drivers 表应当成功");
-    drivers
-        .into_iter()
-        .find(|d| d.id == id)
-        .map(|d| (d.id, d.driver_kind, d.enabled, d.default_port.map(i64::from)))
+    drivers.into_iter().find(|d| d.id == id).map(|d| {
+        (
+            d.id,
+            d.driver_kind,
+            d.enabled,
+            d.default_port.map(i64::from),
+            d.name,
+            d.supported_auth_types,
+            d.config_schema,
+        )
+    })
 }
 
 #[tokio::test]
@@ -95,6 +104,17 @@ async fn rust_drivers_activate_and_land_enabled_in_the_drivers_table() {
     assert_eq!(oracle.1, "sidecar", "oracle 行应归插件所有");
     assert!(oracle.2, "Oracle 插件已激活，行必须 enabled=1（否则下拉不显示）");
     assert_eq!(oracle.3, Some(1521));
+    assert_eq!(oracle.4, "Oracle Database", "显示名不应带 (Rust) 后缀");
+    assert_eq!(
+        oracle.5.as_deref(),
+        Some(r#"["password"]"#),
+        "credentials=database 应派生 password 认证方法"
+    );
+    assert!(
+        oracle.6.contains("\"key\":\"host\"") && oracle.6.contains("\"key\":\"password\""),
+        "config_schema 应带 host/password 字段：{}",
+        oracle.6
+    );
 
     let mssql = read_driver_row("mssql")
         .await
@@ -102,6 +122,8 @@ async fn rust_drivers_activate_and_land_enabled_in_the_drivers_table() {
     assert_eq!(mssql.1, "sidecar", "mssql 行应归插件所有");
     assert!(mssql.2, "SQL Server 插件已激活，行必须 enabled=1");
     assert_eq!(mssql.3, Some(1433));
+    assert_eq!(mssql.4, "SQL Server");
+    assert_eq!(mssql.5.as_deref(), Some(r#"["password"]"#));
 
     // 停用一侧，验证行随插件状态翻灰（而不是永远留在 enabled=1）
     manager
