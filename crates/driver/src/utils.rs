@@ -618,6 +618,39 @@ pub fn schema_context_sql(schema: &str, flavor: SqlFlavor) -> Option<String> {
     }
 }
 
+/// 【T2c-1】把 schema 绑定**恢复成连接默认**的语句（解绑时用；纯函数可测）
+///
+/// 为什么需要它：`SET search_path` / `USE` 都是**会话级**状态，不解绑就会残留——
+/// 用户点了「默认」之后，未限定名仍解析到上一个 schema（实测：解绑后本该报
+/// 「表不存在」，却查到了旧 schema 里的表）。方言映射：
+///
+/// - PostgreSQL：`RESET search_path`（回到角色 / 库的默认值，不需要知道默认是什么）；
+/// - MySQL：`` USE `库名` ``（MySQL 没有「恢复默认库」语句，默认库只能从 URL 的库段取）；
+/// - DuckDB / SQLite：暂无 schema 与会话语义的对齐（不注入）。
+pub fn default_schema_reset_sql(db_type: &str, url: &str) -> Option<String> {
+    let flavor = flavor_from_db_type(db_type)?;
+    match flavor {
+        SqlFlavor::PostgreSql => Some("RESET search_path".to_string()),
+        SqlFlavor::MySql => {
+            let path = url.split(['?', '#']).next()?.split("://").nth(1)?;
+            let db = path.split('/').nth(1)?.trim();
+            if db.is_empty() {
+                return None;
+            }
+            Some(format!("USE `{}`", db.replace('`', "``")))
+        }
+        SqlFlavor::DuckDb | SqlFlavor::Sqlite => None,
+    }
+}
+
+/// 这句 SQL 是不是在改**会话的默认 schema**（`USE`）——驱动据此把握手/执行过的
+/// 会话状态记下来，在换到池里另一条连接时补上（见 `mysql_native` 的 `session_sql`）。
+pub fn is_session_schema_statement(sql: &str) -> bool {
+    let t = sql.trim_start();
+    let head = t.get(..4).unwrap_or("");
+    head.eq_ignore_ascii_case("use ") || head.eq_ignore_ascii_case("use\t")
+}
+
 /// 1 基的**字符**位置（数据库常这么报）→ SQL 里的**字节**偏移
 ///
 /// PG 协议的 `position` 字段就是「第 1 个字符是 1、按字符数」；而编辑器内核按字节收
@@ -868,7 +901,10 @@ mod read_only_tests {
 
 #[cfg(test)]
 mod schema_context_tests {
-    use super::{SqlFlavor, flavor_from_db_type, schema_context_sql};
+    use super::{
+        SqlFlavor, default_schema_reset_sql, flavor_from_db_type, is_session_schema_statement,
+        schema_context_sql,
+    };
 
     /// 【T2c-1】方言归类：驱动 id 前缀 → 方言族；不认识的驱动不硬猜。
     #[test]
@@ -887,6 +923,47 @@ mod schema_context_tests {
         // 不认识的驱动（JDBC 等）：宁可不注入也不发一句不认的 SET。
         assert_eq!(flavor_from_db_type("jdbc:postgresql"), None);
         assert_eq!(flavor_from_db_type(""), None);
+    }
+
+    /// 【T2c-1】解绑要能把会话状态**恢复成连接默认**：绑定是会话级的，会残留。
+    #[test]
+    fn default_schema_reset_maps_per_flavor() {
+        // PG：不需要知道默认是什么，`RESET` 回到角色 / 库的默认。
+        assert_eq!(
+            default_schema_reset_sql(
+                "postgres_native",
+                "postgres://u:p@h:5432/postgres?sslmode=disable"
+            )
+            .as_deref(),
+            Some("RESET search_path")
+        );
+        // MySQL：没有「恢复默认库」语句，默认库取 URL 的库段（查询串要剥掉）。
+        assert_eq!(
+            default_schema_reset_sql("mysql_native", "mysql://root:pw@h:3306/mall?ssl-mode=DISABLED")
+                .as_deref(),
+            Some("USE `mall`")
+        );
+        assert_eq!(
+            default_schema_reset_sql("mysql", "mysql://u:p@h:3306/db").as_deref(),
+            Some("USE `db`")
+        );
+        // 没写库段 → 无从恢复，宁可不发也不要发一句错的。
+        assert_eq!(default_schema_reset_sql("mysql_native", "mysql://u:p@h:3306"), None);
+        // 文件型 / 不认识的驱动：不注入。
+        assert_eq!(default_schema_reset_sql("sqlite", "sqlite://D:\\x.db"), None);
+        assert_eq!(default_schema_reset_sql("jdbc:postgresql", "jdbc:postgresql://h/db"), None);
+    }
+
+    /// 【T2c-1】「改会话默认 schema」的语句判定：驱动据此记下会话状态。
+    #[test]
+    fn session_schema_statements_are_recognized() {
+        assert!(is_session_schema_statement("USE `mall`"));
+        assert!(is_session_schema_statement("  use mall"));
+        assert!(is_session_schema_statement("USE\tmall"));
+        // 前缀相近但不是 `USE`：不能误判（否则会把随便一句记成会话状态）。
+        assert!(!is_session_schema_statement("USER"));
+        assert!(!is_session_schema_statement("SELECT 'use x'"));
+        assert!(!is_session_schema_statement("UPDATE t SET a = 1"));
     }
 
     /// 【T2c-1】会话上下文语句按方言映射；SQLite 无 schema 概念不注入。

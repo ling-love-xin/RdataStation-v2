@@ -201,7 +201,7 @@ features = ["tree", "health_check", "transactions", "sql_autocomplete", "schema_
 | D4 | 迁移（`drivers` 两行处置）+ 连接 id 兼容 + 默认驱动 + 缺失驱动文案 | D3 | 老项目连接列表无孤儿行 ✅ 已落地（§7.4） |
 | D5 | `apply_lan_tls_default` 重新推导 + settings 文案修正 | D3 | TLS 真机两档 → 代码 + 单测落地（§7.5），真机档因磁盘满待补 |
 | D6 | 测试重指：`type_decode_fidelity`（sqlx 数值口径 `1234.5600` 迁插件）、`mysql_rsa_auth_probe`、`error_location` 6 驱动 → 4 驱动 | D3 | 全部用例有归属，无静默删除 ✅ 已落地（§7.6），并挖出 D7 缺陷 |
-| D7 | `mysql_native` 连接模型对齐（单连接直连，修「切 schema 不生效」） | D3/D6 | `editor_exec_real` T2c-1 在 MySQL 上转绿 |
+| D7 | `mysql_native` 会话级 schema 失效（池换连接 / 引擎虚拟键静默跳过 / 解绑残留，三处根因） | D3/D6 | `editor_exec_real` T2c-1 MySQL + PG 双绿 ✅ 已落地（§7.7） |
 
 ### 7.1 D1 落地记录（已完成）
 
@@ -556,6 +556,73 @@ DELETE FROM drivers WHERE id IN ('mysql','postgres') AND driver_kind = 'native';
 
 **D6 没做的**：`mysql_rsa_auth_probe`（D3 已删文件）的主题由插件 `sqlx` 的 `mysql-rsa`
 feature（`sqlx-rust/Cargo.toml:25`）+ D2 真机 12 项 × 2 承接，没有在插件侧新写一个等价探针。
+
+### 7.7 D7 落地记录（`mysql_native` 会话级 schema 失效：三处根因 + 真机转绿）
+
+**1) 根因不是一个，是三个（真机取证后修正 D6 的单因判断）**
+
+| # | 根因 | 证据 |
+| --- | --- | --- |
+| R-1 | `mysql_native` 是**池**（`pool.get_conn()` 每次可能换连接），而 `USE` 是**连接级**状态 | 真机：切库后未限定名报 `Table 'mysql.t' doesn't exist`；`show processlist` 上 10 条连接共用，`USE` 只落在其中一条 |
+| R-2 | 引擎拿**虚拟键** `"active"` 去查 `db_type`，查不到 → `unwrap_or_default()` 得空串 → 方言判不出 → **静默跳过上下文** | `sql_service.rs` 里 `db_type_of(&conn_key)` 的 key 可能是 `DEFAULT_CONN_KEY`；真连接 id 是 `conn_key_for(&conn_id)` 给的 `tx_key`（那行原本在 schema 块之后） |
+| R-3 | **解绑语义缺失**：`SET search_path` / `USE` 都会残留，引擎在 `schema = None` 时什么都不发 | 真机：`set_schema(None)` 后未限定名仍命中所选 schema（本该报「表不存在」）；PG 侧同样中招 → **不是驱动单侧问题** |
+
+R-2 是 PG 也失败的原因（同一条链路），也是用户最反感的「静默降级」形态：判不出方言就
+当没这回事。D7 把它改成 `tracing::warn!`（带 conn key 与 db_type），不再无声无息。
+
+**2) 驱动侧（`crates/driver/src/native/mysql_native.rs`）——选「会话重放」而不是重写单连接**
+
+失败 SQL 只有 `USE` 会撞 1295：`execute_writing` 走 `exec_drop`（**prepared**），MySQL 对
+prepared 里的 `USE` 直接回 `ERROR 1295: This command is not supported in the prepared
+statement protocol yet`（D6 阶段没暴露是因为上下文压根没发出去）。
+
+- 结构体加 `session_sql: Arc<Mutex<Option<String>>>`（最后一次成功的 `USE` 原文）；
+- `replay_session_sql(...)`：**每次拿到连接先补上**这条会话状态（池换连接也不丢）；
+  `query` / `query_with_params` / `query_with_cancel` / `begin_transaction` 四处取连接后调用；
+- `run_session_statement(...)`：`USE` 走**文本协议**（`query_drop`）并记成会话状态，
+  影响行数如实报 0；三条执行路径（含事务内 `MySqlTransaction::query`）都短路到它；
+- 事务结构体加同一个 `Arc`，事务内发的 `USE` 提交后主连接也沿用；
+- 删掉 D3 后无人使用的 `from_pool` / `from_pool_with_config`。
+
+为什么没改成「单连接直连」：那要重写事务/取消/超时三条路径（1300 行的驱动），风险与收益
+不成比例；会话重放把「池 + 会话状态」这对矛盾用 1 次额外往返解掉，行为与单连接一致。
+
+**3) 引擎侧（`crates/engine/src/services/sql_service.rs`）**
+
+- 方言识别改用**真实连接 id**（`tx_key` 前移），不再拿 `"active"` 去查；
+- 判不出方言 / 查不到连接信息时 `tracing::warn!`（保留「不注入」的结果，但不再无声）；
+- `SqlService` 新增 `session_schemas: Mutex<HashMap<String, String>>`：记每条连接**已应用**的
+  会话 schema；`schema = None` 且曾经绑过时发一句**恢复默认**的语句
+  （`utils::default_schema_reset_sql`：PG `RESET search_path`；MySQL 从 URL 库段拼
+  `` USE `库名` ``；DuckDB/SQLite 不注入）；
+- 上下文**真落上了**才记账（失败不记，下次还会再发）。
+
+**4) 测试重指（`crates/workbench/tests/editor_exec_real.rs`）**
+
+`TARGETS` 里 `mysql` / `postgres` 两条 sqlx 目标由插件贡献，插件没装时不再记成
+「连不上」（那是把「没装」误报成故障）——新增 `driver_is_registered(id)`，未注册就
+`⏭️ 驱动未注册（插件没装），如实跳过`。
+
+**5) 真机复验（2026-11-13，`192.168.3.138`）**
+
+| 用例 | 结果 |
+| --- | --- |
+| `editor_exec_real` 整支（MySQL + PG 真机） | **3 passed / 0 failed** |
+| MySQL `mysql_native` 14 项（查询/批量/中断/事务/错误定位/执行计划/分段×2/影响行数/下发×2/历史/超时/切 schema） | 全 ✅ |
+| PG `postgres_native` 同组 | 全 ✅（含「切 schema 真影响执行」） |
+| `mysql` / `postgres`（sqlx） | ⏭️ 如实跳过（插件未装） |
+| `rds-driver` lib 单测 | **92 passed**（含新增 `default_schema_reset_maps_per_flavor`、`session_schema_statements_are_recognized`） |
+| 全仓 `cargo check --workspace --all-targets -j 2` | 绿 |
+| `rds-engine` lib + `transaction_affinity` | **219 + 12 passed** |
+
+顺带修掉 D4 留下的一条**陈旧断言**：`global_init.rs` 的启动接线回归里
+`sync.written >= 6` 还是剥离前的口径（D4 之后内核只剩 4 条），会让这条本该守「启动调到
+同步」的用例变成「数驱动」。改为 `>= 4` 并注明缘由。
+
+**D7 没做的**：`mysql_native` 收到 `TlsRequest{mode: Disable}` 仍构造 `SslOpts`（等于
+「关 TLS 却尝试 TLS」）这个独立缺陷不在本刀（不改原生驱动既有行为），需单独立项；
+「装插件 / 不装插件」两态真机复验（老连接 `driver_id='mysql'` 的两种行为）仍需插件包
+`bin/win-x64/agent.exe` 构建后才能跑。
 
 ---
 
