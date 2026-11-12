@@ -64,6 +64,15 @@ cargo test --manifest-path tools/plugin-drivers/sqlx-rust/Cargo.toml
   宿主 `layout::resolve_executable` 按平台子目录解析。改完驱动源码后
   **三处副本要保持一致**（`<包>/bin/...`、`.rds/plugins/<id>/bin/...`、
   `.rds/target-gf/debug/plugins/<id>/bin/...`），否则跑的还是旧二进制。
+- **换了新二进制，宿主会自己重启那个插件**（2026-11-12）：热插拔扫描不只看
+  `plugin.toml` 的内容 hash，也看插件目录里载荷文件的指纹（相对路径 + 长度 +
+  纳秒修改时间）。只换 `agent.exe`、清单一个字节不动时，扫描在 5 秒内认出
+  「壳没变、载荷变了」，自动 `deactivate → activate` 该插件（别的插件不受影响）：
+  旧进程被停、旧会话如实作废，下一个连接用的就是新二进制。**不用重启宿主，也不用
+  手动点重载**。两个现实约束：① Windows 上运行中的 exe 不能直接覆盖
+  （`ERROR_SHARING_VIOLATION`），要先把旧的改名（`agent.exe` → `agent.exe.old`）
+  再放新的——扫描认这种替换；② 用保留时间戳的工具覆盖（`robocopy /COPY:T` 之类）
+  指纹不会变，那种情况仍需手动重载。
 - 能力边界：两个驱动都声明 `cancel = false`（无法中断在飞查询），
   `tx.*` 走真实语句。这条不是偷懒：`oracle-rs 0.1.7` 与 `tiberius 0.12.3` 都只定义了
   BREAK / ATTENTION 协议常量，**没有公开的 cancel API**（`oracle-rs` 只有服务端发

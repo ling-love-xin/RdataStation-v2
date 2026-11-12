@@ -494,6 +494,46 @@ async fn hot_plug_adds_removes_and_marks_reload() {
     assert!(manager.pending_reloads().is_empty());
 }
 
+/// 载荷变化（清单没变）：自动重启该插件，**不**进待重载清单。
+///
+/// 真实场景：重编 sidecar 的 `agent.exe`、换 wasm、改 py 脚本——`plugin.toml`
+/// 一个字节都没变。旧实现只看清单 hash，判「无变化」，运行中的插件一直跑旧镜像，
+/// 必须重连或重启宿主才换新。这里钉住「认出载荷变化 → 自己重启 → 状态仍是 Active」。
+#[tokio::test]
+async fn payload_change_restarts_plugin_without_asking_for_reload() {
+    let dir = TempDir::new("payload");
+    let manager = Arc::new(PluginManager::new(dir.0.clone()));
+    manager.init().await.unwrap();
+
+    write_plugin(&dir.0, "com.example.payload", "v1");
+    manager.scan_and_diff_plugins().await.unwrap();
+    assert_eq!(
+        manager.get_loaded_plugin("com.example.payload").unwrap().status,
+        LoadStatus::Active
+    );
+
+    // 只改载荷文件，清单原样
+    let payload = dir.0.join("com.example.payload").join("main.js");
+    std::fs::write(&payload, "// v2 payload（只换内容，不动清单）").unwrap();
+    let diff = manager.scan_and_diff_plugins().await.unwrap();
+    assert_eq!(diff.reloaded, vec!["com.example.payload"]);
+    assert!(
+        diff.changed.is_empty(),
+        "载荷变化应该自动重启，不该要求人工重载"
+    );
+    assert!(manager.pending_reloads().is_empty());
+    // 重启 = 停用 + 激活，终态必须是 Active（不能停在 Loaded 装成「已启动」）
+    assert_eq!(
+        manager.get_loaded_plugin("com.example.payload").unwrap().status,
+        LoadStatus::Active
+    );
+
+    // 再扫一轮不该重复报「刚重启过」：快照已更新成新指纹
+    let diff = manager.scan_and_diff_plugins().await.unwrap();
+    assert!(diff.reloaded.is_empty());
+    assert_eq!(diff, PluginDiff::default());
+}
+
 /// 面板读 `list_plugins`：运行中的插件必须报 `Active`。
 ///
 /// 此前 sidecar / frontend 分支一律写死 `Inactive`，面板把正在跑的插件显示成「已停用」，

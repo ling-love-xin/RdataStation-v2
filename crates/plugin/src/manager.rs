@@ -59,6 +59,13 @@ pub struct ScanEntry {
     pub version: String,
     /// `plugin.toml` 内容 hash（换版本 / 改能力 / 改权限都会变）
     pub manifest_hash: u64,
+    /// 插件目录里**载荷文件**的指纹（长度 + 修改时间，见 `payload_fingerprint`）。
+    ///
+    /// 只看 `plugin.toml` 是不够的：重编 `agent.exe`、换 wasm、更新 py 脚本时清单一个
+    /// 字节都没变，旧快照会判「无变化」，运行中的 sidecar 就一直跑着旧镜像——实测
+    /// 2026-11-12 重编两个驱动后，已连接的 Oracle/MSSQL 会话仍走旧二进制，只能重连
+    /// 或重启宿主。有了这个指纹，扫描能发现「壳没变、载荷变了」。
+    pub payload_hash: u64,
 }
 
 /// 一次热插拔扫描的结果（供运行时循环打日志 / 后续插件面板提示）
@@ -70,6 +77,11 @@ pub struct PluginDiff {
     pub removed: Vec<String>,
     /// 清单变化、置 `needs_reload` 的插件（VS Code 口径：不热生效）
     pub changed: Vec<String>,
+    /// 只有载荷变了（清单没变）、已**自动重启**的插件。
+    ///
+    /// 与 `changed` 分开记：`changed` 是「要人点一下重载」，这个是「已经自己换好了」。
+    /// 重启失败时该 id 会退回 `changed`，仍然需要人工重载。
+    pub reloaded: Vec<String>,
 }
 
 /// 一个插件声明的驱动（管理页展示用，不参与运行时注册）。
@@ -333,6 +345,68 @@ fn path_is_under(path: &Path, root: &Path) -> bool {
     let root = normalize(root);
     let root = root.trim_end_matches('/');
     child == root || child.starts_with(&format!("{root}/"))
+}
+
+/// 插件目录里**载荷文件**的指纹：递归收集 (相对路径, 长度, 修改时间) 再汇总成 hash。
+///
+/// 为什么不用内容 hash：扫描是每 5 秒一轮的后台动作，3 MB 的 exe 每轮读一遍纯属浪费；
+/// (长度, 修改时间) 已经覆盖真实更新方式——重编覆盖、重装、换文件、删文件都会变，
+/// 且只做 stat、不读内容。
+///
+/// 边界（写在这里免得后人误以为它是全保真）：
+/// - 用保留时间戳的工具覆盖（`robocopy /COPY:T`、`git checkout` 保时间）指纹不变，
+///   那种情况仍要手动重载；
+/// - 只比对「同一个插件目录内部」，目录整体被替换成另一份（长度与时间都恰好相同）
+///   属于低概率巧合，忽略；
+/// - 遍历失败的子目录直接跳过（正在写入的目录下一轮再算）。
+fn payload_fingerprint(dir: &Path) -> u64 {
+    use std::hash::Hasher;
+
+    fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, u64, u128)>, depth: usize) {
+        // 深度兜底：插件包约定是浅目录，异常深的树（被人塞了 node_modules 之类）
+        // 不必每 5 秒全部 stat 一遍
+        if depth > 6 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                walk(&path, root, out, depth + 1);
+                continue;
+            }
+            let rel = path
+                .strip_prefix(root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| path.to_string_lossy().to_string());
+            // 修改时间取纳秒粒度：同一秒内两次写入、且长度恰好相同的覆盖（比如只改
+            // 一个字符）也能被认出来；秒级粒度在这种场景下会漏判。
+            let mtime_nanos = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            out.push((rel, meta.len(), mtime_nanos));
+        }
+    }
+
+    let mut files = Vec::new();
+    walk(dir, dir, &mut files, 0);
+    // 路径排序：`read_dir` 顺序不保证稳定，不排序会让同一份目录算出不同指纹
+    files.sort();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for (rel, len, mtime) in &files {
+        hasher.write(rel.as_bytes());
+        hasher.write_u64(*len);
+        hasher.write_u128(*mtime);
+    }
+    hasher.finish()
 }
 
 /// 插件不存在的统一错误
@@ -1400,11 +1474,13 @@ impl PluginManager {
                 // 变化判定用内容 hash：换版本 / 改能力 / 改权限都会触发
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 std::hash::Hasher::write(&mut hasher, &bytes);
+                let manifest_hash = hasher.finish();
                 disk.insert(
                     id,
                     ScanEntry {
                         version: String::new(),
-                        manifest_hash: hasher.finish(),
+                        manifest_hash,
+                        payload_hash: payload_fingerprint(&entry.path()),
                     },
                 );
             }
@@ -1419,11 +1495,18 @@ impl PluginManager {
             .clone();
 
         let mut diff = PluginDiff::default();
+        let mut payload_changed: Vec<String> = Vec::new();
         for (id, entry) in &disk {
             match snapshot.get(id) {
                 None => diff.added.push(id.clone()),
+                // 清单变了优先（可能同时改了能力 / 权限 / 载荷）：清单变化要人工重载确认
                 Some(prev) if prev.manifest_hash != entry.manifest_hash => {
                     diff.changed.push(id.clone())
+                }
+                // 壳没变、载荷变了：重编 exe / 换 wasm / 改 py 脚本就是这一种，
+                // 先记下来，等本轮 diff 收尾时自动重启（只有它不需要人工介入）。
+                Some(prev) if prev.payload_hash != entry.payload_hash => {
+                    payload_changed.push(id.clone())
                 }
                 Some(_) => {}
             }
@@ -1542,6 +1625,27 @@ impl PluginManager {
         // 兜底：目录在管理器启动前就被删掉的行从没进过快照，`diff.removed` 覆盖不到。
         self.prune_missing_registrations().await;
 
+        // 载荷变化（清单没变）：自动重启这一个插件，让它换上新二进制 / wasm / 脚本。
+        // 这是「重编驱动后运行中的 sidecar 还在跑旧镜像」的正解：不重启宿主、不断别的插件。
+        // 没在跑的插件不用动——本轮快照会更新成新指纹，下次启用时加载的就是新载荷。
+        for id in payload_changed {
+            if !self.is_loaded(&id) {
+                tracing::debug!(plugin_id = %id, "插件未加载，载荷变化只更新指纹");
+                continue;
+            }
+            match self.restart_plugin(&id).await {
+                Ok(()) => {
+                    tracing::info!(plugin_id = %id, "插件载荷已更新，已自动重启该插件");
+                    diff.reloaded.push(id);
+                }
+                // 重启失败不能悄悄留在旧镜像上：退回 needs_reload，面板至少能提示
+                Err(e) => {
+                    tracing::warn!(plugin_id = %id, error = %e, "载荷更新后自动重启失败，转为待重载");
+                    diff.changed.push(id);
+                }
+            }
+        }
+
         // 变化：置 needs_reload（更新不热生效，VS Code 口径），UI 层读它提示重载。
         // 每次**新进入**待重载集合时发一条事件：面板订阅后能立刻看到「重载 N」，
         // 不必等用户手动刷新；同一插件在未重载前不再重复发（扫描每 5s 一轮）。
@@ -1656,6 +1760,29 @@ impl PluginManager {
 
         // 重新扫描整个安装目录并加载 + 激活
         self.scan_and_diff_plugins().await
+    }
+
+    /// 重启单个插件：停用（含停该插件全部 sidecar 进程）→ 重新激活。
+    ///
+    /// 触发场景是「清单没变、载荷变了」：重编 `agent.exe`、换 wasm、改 py 脚本。
+    /// 旧行为下运行中的 sidecar 会一直用旧内存镜像，只有重连或重启宿主才换新；
+    /// 现在由 [`Self::scan_and_diff_plugins`] 检测到后调这里。
+    ///
+    /// 与 [`Self::reload_plugins`] 的区别是**只碰这一个插件**：别的插件进程、别的
+    /// 连接会话完全不受影响。代价是该插件上已打开的会话会断（进程真的停了），
+    /// 这正是「换成新二进制」应有的代价，不额外弹提示。
+    pub async fn restart_plugin(&self, id: &str) -> Result<(), CoreError> {
+        if !self.is_loaded(id) {
+            return Err(not_found(id));
+        }
+        self.deactivate_plugin(id).await?;
+        self.activate_plugin(id).await?;
+        // 已经吃到新版本，之前挂着的重载提示可以撤掉
+        self.needs_reload
+            .write()
+            .map_err(|_| lock_err("needs_reload"))?
+            .retain(|p| p != id);
+        Ok(())
     }
 
     /// 列出所有已加载插件（wasm 从运行时取，sidecar / frontend 从安装态缓存 + 形态索引组装）
