@@ -1,7 +1,7 @@
 //! 版本对话框：打开入口与行/动作条的装配。
 
 use super::*;
-use super::render::{action_bar, header_line, version_line};
+use super::render::{action_bar, header_line, timeline_section, version_line};
 
 /// 打开版本历史对话框（宿主入口）。
 ///
@@ -42,6 +42,8 @@ pub fn open_version_dialog_with(
     );
     let name = seed.name.clone();
     let current_version = seed.current_version;
+    // 履历是纯展示数据：闭包外 clone 一份，render 期不碰数据库（渲染零 I/O）。
+    let timeline = seed.timeline.clone();
 
     window.open_dialog(cx, move |dialog, _window, cx| {
         let theme = cx.theme();
@@ -111,6 +113,11 @@ pub fn open_version_dialog_with(
                     .overflow_y_scrollbar()
                     .into_any_element(),
             );
+
+        // 履历放在版本表与动作栏之间：先看内容怎么变，再看经历过什么，最后才是动作。
+        if !timeline.is_empty() {
+            body = body.child(timeline_section(theme, &timeline));
+        }
 
         if let Some(row) = state.selected_row() {
             body = body.child(action_bar(

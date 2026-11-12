@@ -286,3 +286,102 @@ pub(super) fn action_bar(
         .child(div().text_xs().text_color(muted).child(hint))
 }
 
+/// 履历区一次列多少条（版本行永久保留，事件还会随动作增长）。
+const MAX_TIMELINE_ROWS: usize = 30;
+
+/// 资产履历区：版本节点 + 事件节点，时间倒序纯展示（不可点、不写状态）。
+///
+/// 用行而不是表格：履历的说明长度不定（口径变更可能是一整句话），固定列宽会把它截断。
+/// 颜色只走主题 token；效力 / 异常类事件用 warning 强调，不做常驻装饰。
+pub(super) fn timeline_section(theme: &Theme, rows: &[crate::model::TimelineRow]) -> Div {
+    let shown = rows.len().min(MAX_TIMELINE_ROWS);
+    let mut list = div()
+        .v_flex()
+        .w_full()
+        .gap_1()
+        .border_t(ui::HAIRLINE)
+        .border_color(theme.colors.border)
+        .pt_2()
+        .child(
+            div()
+                .h_flex()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.foreground)
+                        .child("资产履历"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(format!("共 {} 条", rows.len())),
+                ),
+        );
+
+    for row in rows.iter().take(shown) {
+        let title_color = if row.is_state_change {
+            theme.colors.warning
+        } else {
+            theme.colors.foreground
+        };
+        list = list.child(
+            div()
+                .h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_3()
+                .px_2()
+                .py_1()
+                .text_xs()
+                .child(
+                    div()
+                        .w(rems(ui::VERSION_COL_TIME))
+                        .flex_none()
+                        .text_ellipsis()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(row.time_label.clone()),
+                )
+                .child(
+                    div()
+                        .w(rems(ui::VERSION_COL_VERSION))
+                        .flex_none()
+                        .text_ellipsis()
+                        .text_color(title_color)
+                        .child(row.title.clone()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_ellipsis()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(row.detail.clone()),
+                ),
+        );
+    }
+
+    if rows.len() > shown {
+        list = list.child(
+            div()
+                .w_full()
+                .px_2()
+                .py_1()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(format!(
+                    "还有 {} 条更早的履历未列出（一次最多列 {MAX_TIMELINE_ROWS} 条）",
+                    rows.len() - shown
+                )),
+        );
+    }
+    list
+}
+

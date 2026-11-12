@@ -10,7 +10,7 @@ use similar::TextDiff;
 
 use crate::dialogs::version::{VersionAction, VersionDialogSeed};
 use crate::dialogs::version_diff::VersionDiffSeed;
-use crate::present::build_version_rows;
+use crate::present::{build_timeline_rows, build_version_rows};
 use crate::{AnalyticsResource, ArchiveService, KeepVersions};
 
 use super::{Job, OpOutcome, free_dest, jobs, open_service};
@@ -94,12 +94,44 @@ pub(crate) async fn load_versions(job: &VersionsJob) -> Result<VersionRows, Stri
         })
         .unwrap_or(false);
 
+    // 履历事件与版本行一起在工作线程上取（渲染期零 I/O）。
+    // 老库没有事件表时不能让整个对话框打不开：履历为空仍可看版本，只是没有动作记录。
+    let mut events = service
+        .store()
+        .get_resource_events(&job.resource_id)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(error = %error, "读取资产履历失败，时间线只显示版本节点");
+            Vec::new()
+        });
+    // 谱系关系并入同一条时间线：内存里归一成事件节点，呈现层无需认识第二种数据源。
+    for reference in service
+        .store()
+        .get_refs(&job.resource_id)
+        .await
+        .unwrap_or_default()
+    {
+        events.push(crate::model::TimelineEvent {
+            id: format!("ref-{}-{}", reference.from_id, reference.to_id),
+            resource_id: job.resource_id.clone(),
+            version: None,
+            kind: crate::model::TimelineEventKind::Superseded,
+            detail: Some(format!(
+                "谱系 · {} → {}",
+                reference.from_id, reference.to_id
+            )),
+            content_hash: None,
+            occurred_at: reference.created_at,
+        });
+    }
+
     Ok(VersionRows {
         resource_id: job.resource_id.clone(),
         seed: VersionDialogSeed {
             name: current.name.clone(),
             current_version: current.version,
             rows: build_version_rows(&current, &versions, &copies, payload_ok),
+            timeline: build_timeline_rows(&current, &versions, &events),
         },
     })
 }
@@ -240,7 +272,7 @@ pub(crate) async fn run_version_action(job: &VersionActionJob) -> OpOutcome {
                 .and_then(|ext| ext.to_str())
                 .map(|ext| format!(".{ext}"))
                 .unwrap_or_default();
-            let dir = job.project_root.join(scratchpad::MODULE_DIR_NAME);
+            let dir = job.project_root.join(crate::resource_host::SCRATCHPAD_DIR);
             let dest =
                 free_dest(&dir.join(format!("{}（v{version} 工作副本）{extension}", job.name)));
             match service
