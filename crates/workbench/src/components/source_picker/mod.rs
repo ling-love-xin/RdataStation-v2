@@ -37,6 +37,7 @@ use workbench_shell::model::ConnectionItem;
 use crate::panels::Shared;
 use crate::ui;
 
+mod db;
 mod group;
 mod node;
 mod render;
@@ -44,6 +45,7 @@ mod rows;
 mod search;
 mod state;
 
+pub use db::{catalog_level, db_rows, schema_rows, table_rows, CatalogLevel, ConnBrief, DbCache};
 pub use group::{group_of, grouped, SourceGroup};
 pub use node::{ArchiveScope, NodeId, NodeKind, Row, TempScope, MAX_DEPTH};
 pub use render::{render_rows, RowAction};
@@ -92,15 +94,12 @@ pub struct TableCandidate {
 /// `result_set` 留给结果集二次分析（形态未定，仅枚举留位，不预载字段）。
 pub struct PickerState {
     tab: SourceKind,
-    // ① 已连接库三层浏览
+    // ① 已连接库（懒加载树：每个分支各自展开，缓存按 NodeId 记）
     conns: Vec<ConnectionItem>,
-    selected_conn: Option<String>,
-    catalogs: Vec<String>,
-    selected_catalog: Option<usize>,
-    schemas: Vec<String>,
-    selected_schema: Option<usize>,
-    tables: Vec<TableCandidate>,
-    selected_table: Option<usize>,
+    /// 各层已加载的结果（空结果也记，见 `db.rs` 模块文档末段）
+    db_cache: DbCache,
+    /// 选中的库表 `(连接 id, 表候选)`——树里选的是节点，这里落成确认用的表定位
+    selected_db: Option<(String, TableCandidate)>,
     // ② 草稿箱
     drafts: Vec<(String, PathBuf)>, // (相对路径, 绝对路径)
     selected_draft: Option<usize>,
@@ -125,13 +124,8 @@ impl PickerState {
         Self {
             tab: initial_tab,
             conns,
-            selected_conn: None,
-            catalogs: Vec::new(),
-            selected_catalog: None,
-            schemas: Vec::new(),
-            selected_schema: None,
-            tables: Vec::new(),
-            selected_table: None,
+            db_cache: DbCache::new(),
+            selected_db: None,
             drafts,
             selected_draft: None,
             analysis_tables: analysis,
@@ -145,7 +139,7 @@ impl PickerState {
     /// 当前来源是否已选好目标（确认按钮可用性）。
     pub fn has_target(&self) -> bool {
         match self.tab {
-            SourceKind::Connected => self.selected_table.is_some(),
+            SourceKind::Connected => self.selected_db.is_some(),
             SourceKind::Scratchpad => self.selected_draft.is_some(),
             SourceKind::Analysis => self.selected_analysis.is_some(),
             SourceKind::External => self.external.is_some(),
@@ -156,10 +150,13 @@ impl PickerState {
     /// 当前选中目标的一句话描述（确认按钮文案用）。
     pub fn selected_label(&self) -> Option<String> {
         match self.tab {
-            SourceKind::Connected => self
-                .selected_table
-                .and_then(|i| self.tables.get(i))
-                .map(|t| t.name.clone()),
+            SourceKind::Connected => self.selected_db.as_ref().map(|(_, t)| {
+                if t.schema.is_empty() {
+                    t.name.clone()
+                } else {
+                    format!("{} · {}", t.schema, t.name)
+                }
+            }),
             SourceKind::Scratchpad => self
                 .selected_draft
                 .and_then(|i| self.drafts.get(i))
@@ -190,12 +187,7 @@ impl PickerState {
 
     /// ① 已连接库选中的表（`(连接 id, 表候选)`）。
     pub fn picked_table(&self) -> Option<(String, TableCandidate)> {
-        let conn_id = self.selected_conn.clone()?;
-        let table = self
-            .selected_table
-            .and_then(|i| self.tables.get(i))?
-            .clone();
-        Some((conn_id, table))
+        self.selected_db.clone()
     }
 
     /// ② 草稿箱选中的文件 `(相对路径, 绝对路径)`。
@@ -524,176 +516,147 @@ pub fn open_source_picker(
     });
 }
 
-/// ① 已连接库三层浏览（连接 → catalog → schema → 表）。
+/// ① 已连接库（懒加载树：连接 → schema / catalog → 表）。
 ///
-/// 用 `Button::ghost().toggled()` 做单选行：自带 hover / 焦点 / 键盘激活，
-/// 不手搓 `div().on_click()`（对齐 gpui-kit-dev 组件选型）。
+/// 行的深度与标签在**加载时**定好（`db::catalog_level` / `db::schema_rows` / `db::table_rows`），
+/// 这里只把「已加载的部分」交给共用行渲染器；展开时才 introspect——I/O 走事件路径，
+/// render 仍是纯读（`TreeState` 折叠 + `db_rows` 拍平都不碰连接）。
 fn render_connected(
     s: &PickerState,
     state: &Rc<RefCell<PickerState>>,
     shared: &Shared,
     cx: &mut App,
 ) -> AnyElement {
-    let muted = cx.theme().colors.muted_foreground;
-    let mut list = div()
-        .v_flex()
-        .w_full()
-        .gap_1()
-        .max_h(rems(ui::VIS_DIALOG_LIST_MAX_H))
-        .overflow_y_scrollbar();
-
-    // —— 连接层 ——
-    for conn in s.conns.iter() {
-        let selected = s.selected_conn.as_deref() == Some(conn.id.as_str());
-        let host = conn.host.as_deref().unwrap_or("");
-        let label = if host.is_empty() {
-            format!("{} — {}", conn.name, conn.driver)
-        } else {
-            format!("{} — {} ({})", conn.name, conn.driver, host)
-        };
-        list = list.child(
-            Button::new(ElementId::Name(SharedString::from(format!(
-                "source-picker-conn-{}",
-                conn.id
-            ))))
-            .ghost()
-            .label(SharedString::from(label))
-            .toggled(selected)
-            .on_click({
-                let state = state.clone();
-                let shared = shared.clone();
-                let conn_id = conn.id.clone();
-                move |_, window, _app| {
-                    let mut s = state.borrow_mut();
-                    s.selected_conn = Some(conn_id.clone());
-                    s.catalogs = query_catalogs(
-                        &conn_id,
-                        shared.project.borrow().as_ref().map(|p| p.root.clone()),
-                    );
-                    s.selected_catalog = None;
-                    s.schemas.clear();
-                    s.selected_schema = None;
-                    s.tables.clear();
-                    s.selected_table = None;
-                    s.note = None;
-                    window.refresh();
-                }
-            }),
-        );
-    }
     if s.conns.is_empty() {
-        list = list.child(
-            div()
-                .text_xs()
-                .text_color(muted)
-                .child("请先连接一个数据源"),
-        );
+        let muted = cx.theme().colors.muted_foreground;
+        return div()
+            .text_xs()
+            .text_color(muted)
+            .child("请先连接一个数据源")
+            .into_any_element();
     }
 
-    // —— catalog 层 ——
-    if let Some(sel_c) = s.selected_catalog {
-        for (i, catalog) in s.catalogs.iter().enumerate() {
-            let selected = sel_c == i;
-            let label = format!("◈ {catalog}");
-            list = list.child(
-                Button::new(ElementId::Name(SharedString::from(format!(
-                    "source-picker-cat-{i}-{}",
-                    catalog
-                ))))
-                .ghost()
-                .label(SharedString::from(label))
-                .toggled(selected)
-                .on_click({
-                    let state = state.clone();
-                    let shared = shared.clone();
-                    let catalog = catalog.clone();
-                    let conn_id = s.selected_conn.clone().unwrap_or_default();
-                    move |_, window, _app| {
-                        let mut s = state.borrow_mut();
-                        s.selected_catalog = Some(i);
-                        s.schemas = query_schemas(
-                            &conn_id,
-                            &catalog,
-                            shared.project.borrow().as_ref().map(|p| p.root.clone()),
-                        );
-                        s.selected_schema = None;
-                        s.tables.clear();
-                        s.selected_table = None;
-                        s.note = None;
-                        window.refresh();
+    let briefs: Vec<ConnBrief<'_>> = s
+        .conns
+        .iter()
+        .map(|c| ConnBrief {
+            id: c.id.as_str(),
+            name: c.name.as_str(),
+            driver: c.driver.as_str(),
+            host: c.host.as_deref().unwrap_or(""),
+        })
+        .collect();
+    let rows = db_rows(&briefs, &s.db_cache);
+
+    let on_toggle: RowAction = {
+        let state = state.clone();
+        let shared = shared.clone();
+        Rc::new(move |id: &NodeId, window: &mut Window| {
+            // 先切展开态让视觉立即响应，再按需加载（只在「展开」时问连接层）
+            let expanding = !state.borrow().tree.is_expanded(id);
+            state.borrow_mut().tree.toggle(id);
+            window.refresh();
+            if expanding {
+                load_db_layer(&state, &shared, id, window);
+            }
+        })
+    };
+
+    let on_select: RowAction = {
+        let state = state.clone();
+        Rc::new(move |id: &NodeId, window: &mut Window| {
+            // 只有表可确认；组 / 连接 / catalog / schema 走到这里是分派问题，忽略
+            let NodeId::DbTable {
+                conn,
+                catalog,
+                schema,
+                table,
+            } = id
+            else {
+                return;
+            };
+            let mut s = state.borrow_mut();
+            s.selected_db = Some((
+                conn.clone(),
+                TableCandidate {
+                    name: table.clone(),
+                    catalog: catalog.clone(),
+                    schema: schema.clone(),
+                },
+            ));
+            s.tree.select(Some(id.clone()));
+            s.note = None;
+            window.refresh();
+        })
+    };
+
+    render_rows(&rows, &s.tree, on_toggle, on_select, cx)
+}
+
+/// 展开某一层时的按需 introspect。
+///
+/// 深度规则在这里落地（与 `db.rs` 模块文档一致）：
+/// - 连接：先问 catalog；只有一个就**跳过 catalog 行**，继续问它的 schema（无 schema 层则直接问表）；
+/// - catalog（多库才会出现）：把各 schema 的表汇总成第 3 层，schema 折进标签；
+/// - schema：只问它自己的表。
+///
+/// 缓存命中（含「空结果」）直接返回，所以同一层只会 introspect 一次。
+fn load_db_layer(
+    state: &Rc<RefCell<PickerState>>,
+    shared: &Shared,
+    id: &NodeId,
+    window: &mut Window,
+) {
+    if state.borrow().db_cache.is_loaded(id) {
+        return;
+    }
+    let project_root = shared.project.borrow().as_ref().map(|p| p.root.clone());
+
+    let rows = match id {
+        NodeId::Conn(conn) => {
+            let catalogs = query_catalogs(conn, project_root.clone());
+            match catalog_level(conn, &catalogs, 2) {
+                CatalogLevel::None => Vec::new(),
+                CatalogLevel::Many(rows) => rows,
+                CatalogLevel::Single(catalog) => {
+                    let schemas = query_schemas(conn, &catalog, project_root.clone());
+                    if schemas.is_empty() {
+                        // 驱动无独立 schema 层（MySQL 口径）：表直接挂第 2 层
+                        let tables = query_tables(conn, &catalog, "", project_root);
+                        table_rows(conn, &catalog, "", &tables, 2)
+                    } else {
+                        schema_rows(conn, &catalog, &schemas, 2)
                     }
-                }),
-            );
+                }
+            }
         }
-    }
-
-    // —— schema 层（空 = 无独立 schema 层，直接进表层）——
-    for (i, schema) in s.schemas.iter().enumerate() {
-        let selected = s.selected_schema == Some(i);
-        let label = format!("▸ {schema}");
-        list = list.child(
-            Button::new(ElementId::Name(SharedString::from(format!(
-                "source-picker-sch-{i}-{}",
-                schema
-            ))))
-            .ghost()
-            .label(SharedString::from(label))
-            .toggled(selected)
-            .on_click({
-                let state = state.clone();
-                let shared = shared.clone();
-                let schema = schema.clone();
-                let conn_id = s.selected_conn.clone().unwrap_or_default();
-                let catalog = s
-                    .catalogs
-                    .get(s.selected_catalog.unwrap_or(0))
-                    .cloned()
-                    .unwrap_or_default();
-                move |_, window, _app| {
-                    let mut s = state.borrow_mut();
-                    s.selected_schema = Some(i);
-                    s.tables = query_tables(
-                        &conn_id,
-                        &catalog,
-                        &schema,
-                        shared.project.borrow().as_ref().map(|p| p.root.clone()),
-                    );
-                    s.selected_table = None;
-                    s.note = None;
-                    window.refresh();
+        NodeId::DbCatalog { conn, catalog } => {
+            let schemas = query_schemas(conn, catalog, project_root.clone());
+            let tables = if schemas.is_empty() {
+                query_tables(conn, catalog, "", project_root)
+            } else {
+                let mut all = Vec::new();
+                for schema in &schemas {
+                    all.extend(query_tables(conn, catalog, schema, project_root.clone()));
                 }
-            }),
-        );
-    }
+                all
+            };
+            // 第 3 层放表，schema 折进标签（`schema · 表`）
+            table_rows(conn, catalog, "", &tables, 3)
+        }
+        NodeId::DbSchema {
+            conn,
+            catalog,
+            schema,
+        } => {
+            let tables = query_tables(conn, catalog, schema, project_root);
+            table_rows(conn, catalog, schema, &tables, 3)
+        }
+        _ => return,
+    };
 
-    // —— 表层（选中 schema 或无 schema 层选中 catalog 后）——
-    for (i, table) in s.tables.iter().enumerate() {
-        let selected = s.selected_table == Some(i);
-        let label = if table.schema.is_empty() {
-            table.name.clone()
-        } else {
-            format!("{} · {}", table.schema, table.name)
-        };
-        list = list.child(
-            Button::new(ElementId::Name(SharedString::from(format!(
-                "source-picker-tab-{i}-{}",
-                table.name
-            ))))
-            .ghost()
-            .label(SharedString::from(label))
-            .toggled(selected)
-            .on_click({
-                let state = state.clone();
-                move |_, window, _app| {
-                    let mut s = state.borrow_mut();
-                    s.selected_table = Some(i);
-                    s.note = None;
-                    window.refresh();
-                }
-            }),
-        );
-    }
-    list.into_any_element()
+    state.borrow_mut().db_cache.put(id.clone(), rows);
+    window.refresh();
 }
 
 /// ② 草稿箱文件树（可折叠；展开态纯内存，随对话框关闭丢弃）。

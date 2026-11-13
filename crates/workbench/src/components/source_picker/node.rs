@@ -17,12 +17,22 @@ pub const MAX_DEPTH: u8 = 3;
 /// 刻意不用下标：数据库增删后 `selected_table: usize` 这类索引会指向错行。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum NodeId {
+    /// 已连接的数据库（`conn_id`）
+    Conn(String),
     /// 数据库表：`conn + catalog + schema + table`（`schema` 允许空串，对齐导航侧口径）
     DbTable {
         conn: String,
         catalog: String,
         schema: String,
         table: String,
+    },
+    /// 数据库 catalog（PG 的 database；MySQL 侧无此层时不会出现）
+    DbCatalog { conn: String, catalog: String },
+    /// 数据库 schema
+    DbSchema {
+        conn: String,
+        catalog: String,
+        schema: String,
     },
     /// 文件：草稿箱相对路径 / 外部文件绝对路径 / 资产库归档文件
     Path(String),
@@ -60,12 +70,19 @@ impl NodeId {
     /// 而业务键必须稳定可比（§04「ElementId 随状态变化就会丢焦点」）。
     pub fn key(&self) -> String {
         match self {
+            Self::Conn(id) => format!("conn/{id}"),
             Self::DbTable {
                 conn,
                 catalog,
                 schema,
                 table,
             } => format!("db/{conn}/{catalog}/{schema}/{table}"),
+            Self::DbCatalog { conn, catalog } => format!("db-catalog/{conn}/{catalog}"),
+            Self::DbSchema {
+                conn,
+                catalog,
+                schema,
+            } => format!("db-schema/{conn}/{catalog}/{schema}"),
             Self::Path(p) => format!("path/{p}"),
             Self::AnalysisTable { scope, table } => {
                 let lib = match scope {
@@ -109,7 +126,7 @@ impl NodeKind {
 }
 
 /// 一行树。由各数据源产出，三个根共用同一套渲染。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Row {
     pub id: NodeId,
     pub depth: u8,
