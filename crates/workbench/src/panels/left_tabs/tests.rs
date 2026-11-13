@@ -1,6 +1,7 @@
 use super::plugin_tab::{
     bulk_retry_includes, bulk_toggle_includes, contribution_breakdown, event_touches_plugin_list,
-    install_receipt, panel_busy, plugin_row_subtitle, uninstall_confirm_description,
+    install_receipt, panel_busy, plugin_row_subtitle, recompute_checksums_description,
+    uninstall_confirm_description,
 };
 use plugin::events::PluginEvent;
 use plugin::wasm::PluginState;
@@ -144,4 +145,22 @@ fn uninstall_prompt_states_what_is_deleted_kept_and_blocked() {
         "必须说明用户数据保留：{text}"
     );
     assert!(text.contains("依赖"), "必须说明被依赖时会被拒：{text}");
+}
+
+/// 重算校验是全仓唯一会**放宽**校验的入口，确认框必须把「承认 ≠ 修复」讲明白，
+/// 否则用户会以为它是在「修好被改坏的包」。
+#[test]
+fn recompute_checksums_prompt_says_it_endorses_the_current_bytes() {
+    let text = recompute_checksums_description("Oracle JDBC", "rds.driver.oracle");
+    assert!(text.contains("Oracle JDBC"), "{text}");
+    assert!(text.contains("rds.driver.oracle"), "{text}");
+    assert!(text.contains("checksums.json"), "要说清动的是哪个文件：{text}");
+    assert!(
+        text.contains("不会再报") && text.contains("哈希"),
+        "必须写明「之后不再报哈希不符」：{text}"
+    );
+    assert!(
+        text.contains("换过 jar") && text.contains("改过脚本"),
+        "必须限定适用场景（换过 jar / 改过脚本）：{text}"
+    );
 }

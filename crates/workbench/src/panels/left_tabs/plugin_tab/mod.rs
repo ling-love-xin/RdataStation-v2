@@ -13,6 +13,7 @@ mod pure;
 mod render;
 
 pub use panel::PluginPanel;
+pub(crate) use pure::recompute_checksums_description;
 pub(crate) use pure::uninstall_confirm_description;
 pub(super) use pure::{
     bulk_retry_includes, bulk_toggle_includes, contribution_breakdown, event_touches_plugin_list,

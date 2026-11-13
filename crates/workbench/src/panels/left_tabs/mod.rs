@@ -50,6 +50,7 @@ mod scratch;
 
 pub use database_nav::DatabaseNavPanel;
 pub use plugin_tab::PluginPanel;
+pub(crate) use plugin_tab::recompute_checksums_description;
 pub(crate) use plugin_tab::uninstall_confirm_description;
 pub use resources::ResourcePanelTab;
 pub use scratch::ScratchPanel;

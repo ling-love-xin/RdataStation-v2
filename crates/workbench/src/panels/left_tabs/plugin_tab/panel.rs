@@ -521,6 +521,62 @@ impl PluginPanel {
         });
     }
 
+    /// 按当前字节重算某个已安装插件的 `checksums.json`。
+    ///
+    /// 这是「载荷变过、重启前校验被拒」的对侧入口：用户自己换了 jar / 改了脚本，
+    /// 旧哈希必然对不上，重算一次就是「按现在的字节承认」。
+    ///
+    /// 语义是**承认不是修复**——包被改过之后重算就洗白了，所以界面必须弹确认
+    /// （见 `plugin_file_buttons`），留痕里也会多一行 `recompute_checksums`。
+    pub(crate) fn regenerate_checksums(&self, id: String, cx: &mut Context<Self>) {
+        let Some(handle) = plugin::runtime_handle().cloned() else {
+            self.error.replace(Some("插件运行时未初始化".to_string()));
+            cx.notify();
+            return;
+        };
+        let Some(mgr) = plugin::get_plugin_manager().cloned() else {
+            self.error.replace(Some("插件运行时未初始化".to_string()));
+            cx.notify();
+            return;
+        };
+        // 要读全量文件算哈希，与安装 / 启停互斥（否则可能算到一半包被换掉）
+        if panel_busy(&self.progress) {
+            return;
+        }
+        self.progress
+            .replace(Some(format!("正在重算 {id} 的校验清单…")));
+        self.error.replace(None);
+        self.notice.replace(None);
+        cx.notify();
+
+        let weak = cx.entity().downgrade();
+        let _ = cx.spawn(async move |_this, cx| {
+            let outcome = handle.block_on(async { mgr.regenerate_checksums(&id).await });
+            let _ = weak.update(cx, |this, cx| {
+                this.progress.replace(None);
+                match outcome {
+                    Ok(tally) => {
+                        this.error.replace(None);
+                        let external = if tally.external > 0 {
+                            format!("，另有 {} 个包外文件", tally.external)
+                        } else {
+                            String::new()
+                        };
+                        this.notice.replace(Some(format!(
+                            "已重算 {id} 的校验清单（{} 项{external}）",
+                            tally.files
+                        )));
+                    }
+                    Err(e) => {
+                        this.error.replace(Some(format!("{e}")));
+                        this.notice.replace(None);
+                    }
+                };
+                this.refresh_plugins(cx, false);
+            });
+        });
+    }
+
     /// 选一个插件包文件（`.zip` / `.tar.gz`）安装。
     pub(crate) fn pick_package_file(&self, cx: &mut Context<Self>) {
         let Some(path) = rfd::FileDialog::new()

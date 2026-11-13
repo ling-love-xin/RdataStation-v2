@@ -91,6 +91,36 @@ pub struct PluginDiff {
     pub reloaded: Vec<String>,
 }
 
+/// 一次 `checksums.json` 重算的条目数（界面回显用）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChecksumTally {
+    /// 包内文件数（相对路径条目）
+    pub files: usize,
+    /// 包外文件数（`driver_jars` 展开后的绝对路径条目；没有外部件时为 0）
+    pub external: usize,
+}
+
+impl ChecksumTally {
+    /// 从生成的文档里数条目——不重新遍历目录，避免「数出来的」与「写进去的」不一致。
+    fn from_document(text: &str) -> Result<Self, CoreError> {
+        let value: serde_json::Value = serde_json::from_str(text).map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "重算结果不是合法 JSON（内部错误）：{e}"
+            )))
+        })?;
+        Ok(Self {
+            files: value
+                .get("files")
+                .and_then(|v| v.as_object())
+                .map_or(0, |m| m.len()),
+            external: value
+                .get("external_files")
+                .and_then(|v| v.as_object())
+                .map_or(0, |m| m.len()),
+        })
+    }
+}
+
 /// 一个插件声明的驱动（管理页展示用，不参与运行时注册）。
 ///
 /// 只带展示必需字段：驱动 id 是否进入 `drivers` 表由加载链路决定，
@@ -1997,6 +2027,62 @@ impl PluginManager {
         self.restart_plugin(id).await.map_err(|e| format!("{e}"))
     }
 
+    /// 按当前字节重算某个已安装插件的 `checksums.json`。
+    ///
+    /// 场景：装完之后用户换了 jar / 改了脚本。旧哈希必然对不上，之后任何一次
+    /// 「载荷变化 → 重启前校验」都会被拒。没有这条入口，他只能去跑外部的
+    /// `rds-plugin-checksums`；这里是「我改完了，按现在的字节重算」。
+    ///
+    /// **语义是承认当前字节，不是修复**：被改过的包重算之后校验就过了。所以界面必须
+    /// 给确认，这里也留痕（`action = "recompute_checksums"`）——事后能看出谁在什么时候
+    /// 重算过。
+    ///
+    /// 只碰安装目录 `install_dir/<id>`：源码目录归 `tools/plugin-drivers/pack.ps1`，
+    /// 宿主不去写用户的工作区。
+    pub async fn regenerate_checksums(&self, id: &str) -> Result<ChecksumTally, CoreError> {
+        let result = self.regenerate_checksums_inner(id).await;
+        crate::operation_audit::record_result("ui", "recompute_checksums", id, &result, None)
+            .await;
+        result
+    }
+
+    async fn regenerate_checksums_inner(&self, id: &str) -> Result<ChecksumTally, CoreError> {
+        validate_plugin_id(id).map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "插件 id 不合法（拼路径前必须校验）: {e}"
+            )))
+        })?;
+        let dir = self.install_dir.join(id);
+        if !dir.is_dir() {
+            return Err(not_found(id));
+        }
+        let manifest = ManifestParser::parse(&dir.join("plugin.toml"))?;
+        let dir_for_task = dir.clone();
+        // 哈希要读全文件（含几百 MB 的驱动 jar），放阻塞线程
+        let text = tokio::task::spawn_blocking(move || {
+            checksums::generate_package(&manifest, &dir_for_task)
+        })
+        .await
+        .map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "重算 checksums.json 的任务没能跑完：{e}"
+            )))
+        })??;
+
+        let tally = ChecksumTally::from_document(&text)?;
+        let target = dir.join(checksums::CHECKSUMS_FILE);
+        std::fs::write(&target, text.as_bytes()).map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "写 {} 失败：{e}",
+                target.display()
+            )))
+        })?;
+        // 不碰 `pending_payload_restart` / 扫描快照：重算只改这份清单的字节，重启节奏仍由
+        // 载荷指纹决定。用户换过 jar 时指纹本来就变了，下一轮扫描会「先校验（这次能过）→
+        // 重启」，新二进制才会上线；把待重启集合清掉反而会让新 jar 一直不生效。
+        Ok(tally)
+    }
+
     /// 列出所有已加载插件（wasm 从运行时取，sidecar / frontend 从安装态缓存 + 形态索引组装）
     pub fn list_plugins(&self) -> Result<Vec<PluginInfo>, CoreError> {
         let mut plugins = Vec::new();
@@ -2489,6 +2575,85 @@ url_template = "jdbc:demo://{host}:{port}"
             one,
             payload_fingerprint(&dir.0, &jars),
             "目录里新增一个 jar 也要变"
+        );
+    }
+
+    /// script 形态（python）的最小合法清单：重算用例不需要真驱动，只要能解析并遍历目录。
+    const MANIFEST_PY: &str = r#"
+[plugin]
+id = "rds.demo.regen"
+name = "Regen Demo"
+version = "0.1.0"
+publisher = "me"
+description = "demo"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "script"
+runtime = "python"
+executable = "main.py"
+
+[permissions]
+sidecar = ["spawn.child_process", "net.connect"]
+
+[capabilities.driver]
+concurrency = "serial"
+
+[[contributes.drivers]]
+id = "regen"
+display_name = "Regen DB"
+default_port = 1234
+url_template = "regen://{host}:{port}"
+"#;
+
+    /// 重算的唯一用途：改过的载荷要能被重新承认，而不是被旧哈希永远挡住。
+    #[tokio::test]
+    async fn regenerate_checksums_rebaselines_a_changed_payload() {
+        let dir = TempDir::new("regen");
+        let plugin_dir = dir.0.join("rds.demo.regen");
+        write(&plugin_dir.join("plugin.toml"), MANIFEST_PY);
+        write(&plugin_dir.join("main.py"), "print('v1')\n");
+
+        let manifest =
+            crate::manifest::ManifestParser::parse(&plugin_dir.join("plugin.toml")).unwrap();
+        // 先按 v1 落一份清单，并确认它能过校验
+        let text = checksums::generate_package(&manifest, &plugin_dir).unwrap();
+        std::fs::write(plugin_dir.join(checksums::CHECKSUMS_FILE), text).unwrap();
+        checksums::verify_package(&manifest, &plugin_dir).expect("v1 应当通过校验");
+
+        // 改载荷：旧清单必须拒（否则这条用例什么都没验）
+        write(&plugin_dir.join("main.py"), "print('v2-changed')\n");
+        assert!(
+            checksums::verify_package(&manifest, &plugin_dir).is_err(),
+            "改过的载荷不该还能过校验"
+        );
+
+        let manager = PluginManager::new(dir.0.clone());
+        let tally = manager
+            .regenerate_checksums("rds.demo.regen")
+            .await
+            .expect("重算应当成功");
+        assert_eq!(tally.files, 2, "包内两项：plugin.toml + main.py");
+        assert_eq!(tally.external, 0, "没有外部 jar 时不列 external_files");
+
+        // 重算之后再校验：现在应当认出 v2 的字节
+        checksums::verify_package(&manifest, &plugin_dir).expect("重算后应当通过校验");
+    }
+
+    /// 目录不存在时如实报「找不到」，不能默默写一份空的清单。
+    #[tokio::test]
+    async fn regenerate_checksums_reports_missing_plugin() {
+        let dir = TempDir::new("regen-missing");
+        let manager = PluginManager::new(dir.0.clone());
+        let error = manager
+            .regenerate_checksums("rds.demo.nope")
+            .await
+            .expect_err("不存在的插件必须报错");
+        assert!(
+            format!("{error}").contains("not found"),
+            "错误要说清是哪个插件找不到：{error}"
         );
     }
 }

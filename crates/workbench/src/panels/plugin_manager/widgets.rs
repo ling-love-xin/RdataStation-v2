@@ -16,7 +16,9 @@ use plugin::PluginKind;
 use plugin::manifest::BackendRuntime;
 use plugin::wasm::PluginState;
 
-use super::super::left_tabs::{PluginPanel, uninstall_confirm_description};
+use super::super::left_tabs::{
+    PluginPanel, recompute_checksums_description, uninstall_confirm_description,
+};
 
 /// 状态筛选档（对齐原型 toolbar 的五档里去掉「可更新」——RDS 没有市场 / 远程索引）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -738,15 +740,19 @@ pub(crate) fn plugin_action_buttons(
 pub(crate) fn plugin_file_buttons(
     scope: &str,
     plugin: &PluginInfo,
+    busy: bool,
     entity: gpui_kit::Entity<PluginPanel>,
 ) -> Vec<Button> {
     let dir_path = plugin.install_path.clone();
+    // 「目录存在」同时决定「打开目录」与「重算校验」是否可用：没有安装目录，
+    // 后者也会在 manager 层被 `not_found` 拒掉，提前禁掉比点完报错好。
+    let dir_usable = dir_path.as_ref().is_some_and(|path| path.exists());
     let dir_hint = match dir_path.as_ref() {
         Some(path) if path.exists() => format!("在文件管理器打开：{}", path.display()),
         Some(path) => format!("安装目录已不存在：{}", path.display()),
         None => "该插件不上报安装目录（wasm 运行时）".to_string(),
     };
-    let dir_disabled = !dir_path.as_ref().is_some_and(|path| path.exists());
+    let dir_disabled = !dir_usable;
 
     let log_path = plugin::sidecar_log_path(&plugin.id);
     let log_exists = log_path.exists();
@@ -835,7 +841,52 @@ pub(crate) fn plugin_file_buttons(
         }
     });
 
-    vec![dir_button, log_button, copy_diagnostics_button]
+    // 「重算校验」：这个包里的字节被谁改过之后，按现状承认一次。
+    // 与「目录 / 日志 / 复制诊断」同属排障工具，但它是唯一会**放宽**校验的动作，
+    // 所以必须走确认框（正文写明「承认 ≠ 修复」），并在留痕里留 `recompute_checksums`。
+    let regen_id = plugin.id.clone();
+    let regen_name = plugin.name.clone();
+    let regen_button = Button::new(SharedString::from(format!(
+        "plugin-{scope}-{}-recompute-checksums",
+        plugin.id
+    )))
+    .ghost()
+    .with_size(Size::XSmall)
+    .label("重算校验")
+    .tooltip("按当前目录内容重写 checksums.json（换过 jar / 改过脚本、重启时被「哈希不符」拒了之后用）")
+    .disabled(busy || !dir_usable)
+    .on_click({
+        let entity = entity.clone();
+        move |_, window, app| {
+            let entity = entity.clone();
+            let id = regen_id.clone();
+            let description = recompute_checksums_description(&regen_name, &id);
+            window.open_alert_dialog(app, move |alert, _window, _cx| {
+                let entity = entity.clone();
+                let id = id.clone();
+                alert
+                    .confirm()
+                    .title("重算完整性校验")
+                    .description(SharedString::from(description.clone()))
+                    .ok_text("重算")
+                    .cancel_text("取消")
+                    .on_ok(move |_window, _cx, cx| {
+                        let _ = entity.update(cx, |panel, cx| {
+                            panel.regenerate_checksums(id.clone(), cx);
+                        });
+                        true
+                    })
+            });
+            app.stop_propagation();
+        }
+    });
+
+    vec![
+        dir_button,
+        log_button,
+        copy_diagnostics_button,
+        regen_button,
+    ]
 }
 
 /// 详情按钮（卡片右上角 / 列表行均可复用；`on_select` 由渲染层注入）。
@@ -898,6 +949,7 @@ pub(crate) fn operation_action_label(action: &str) -> String {
         "enable" => "启用".to_string(),
         "disable" => "停用".to_string(),
         "reload" => "重载".to_string(),
+        "recompute_checksums" => "重算校验".to_string(),
         "missing_driver" => "缺驱动被拒".to_string(),
         "declare_sync" => "声明同步".to_string(),
         "capability_change" => "能力位变化".to_string(),

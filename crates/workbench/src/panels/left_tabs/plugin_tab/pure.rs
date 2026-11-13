@@ -105,3 +105,15 @@ pub(crate) fn uninstall_confirm_description(name: &str, id: &str) -> String {
          若其他插件声明依赖它，卸载会被拒绝并列出引用者。确定卸载？"
     )
 }
+
+/// 重算校验确认框正文（纯函数，便于单测）。
+///
+/// 必须把「承认 ≠ 修复」写在正文里：重算之后，任何人改过的文件都被当成原始状态，
+/// 之后再也不会报「哈希不符」。这是唯一一条会把校验这件事洗白的入口。
+pub(crate) fn recompute_checksums_description(name: &str, id: &str) -> String {
+    format!(
+        "将按「{name}」（{id}）当前目录里的实际内容重写 checksums.json。\n\
+         这会承认现在的文件就是原始状态：如果这个包被改过，重算之后不会再报「哈希不符」。\n\
+         只在你确实换过 jar / 改过脚本时使用。确定重算？"
+    )
+}

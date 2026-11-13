@@ -649,6 +649,7 @@ fn operation_action_labels_cover_the_actions_d8_writes() {
         ("enable", "启用"),
         ("disable", "停用"),
         ("reload", "重载"),
+        ("recompute_checksums", "重算校验"),
         ("missing_driver", "缺驱动被拒"),
         ("declare_sync", "声明同步"),
         ("capability_change", "能力位变化"),

@@ -548,7 +548,7 @@ impl PluginManagerPanel {
                     )
                     .child(
                         div().h_flex().flex_wrap().items_center().gap_1().children(
-                            plugin_file_buttons("detail", &plugin, self.plugin_entity()),
+                            plugin_file_buttons("detail", &plugin, busy, self.plugin_entity()),
                         ),
                     )
                     .child(Separator::horizontal().color(theme.colors.border))
