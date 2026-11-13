@@ -74,6 +74,9 @@ cargo test --manifest-path tools/plugin-drivers/sqlx-rust/Cargo.toml
   但**那个插件上还有活动会话时不重启**（2026-11-13）：先退回「待重载」提示，等会话都
   关掉后由下一轮扫描自己补上——免得你正在跑查询时连接被静默断掉。代价是会话一直不断
   就一直不换，想立刻生效就手动点「重载」。
+  包里有 `checksums.json` 时**先核对哈希**：对不上就不重启（文件拷坏了 / 被改过），退回
+  待重载并指出哪个文件不符。发布包应当带这个文件（P5 打包流程生成），开发目录可不带——
+  没有它照常自动重启。
   两个现实约束：① Windows 上运行中的 exe 不能直接覆盖
   （`ERROR_SHARING_VIOLATION`），要先把旧的改名（`agent.exe` → `agent.exe.old`）
   再放新的——扫描认这种替换；② 用保留时间戳的工具覆盖（`robocopy /COPY:T` 之类）

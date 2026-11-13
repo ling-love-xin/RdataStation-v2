@@ -258,3 +258,61 @@ async fn payload_change_waits_for_active_sessions() {
     sup.shutdown_all(Instant::now(), Duration::from_secs(10))
         .await;
 }
+
+/// 随包 `checksums.json` 不符时不许自动重启。
+///
+/// 载荷指纹只 stat（相对路径 + 长度 + 修改时间），不读内容——拷了半截、被写坏的
+/// 文件同样「看起来变了」。直接重启等于把坏字节当新版本拉起来，只能等加载时失败。
+/// 这里用手写的 `checksums.json`（哈希全 0，格式合法但与文件不符）反证：
+/// 校验不过就不重启、退回待重载。
+#[tokio::test]
+async fn bad_checksums_blocks_automatic_restart() {
+    let dir = TempDir::new("checksums");
+    let manager = Arc::new(PluginManager::new(dir.0.clone()));
+    manager.init().await.unwrap();
+
+    let plugin_dir = write_sidecar_plugin(&dir.0, "test.payload.checksums");
+    // 作者签发的哈希故意写错：64 位十六进制，格式合法，内容对不上
+    let zeros = "0".repeat(64);
+    std::fs::write(
+        plugin_dir.join("checksums.json"),
+        format!(
+            r#"{{"algorithm":"sha256","files":{{"plugin.toml":"{zeros}","bin/win-x64/agent.exe":"{zeros}"}}}}"#
+        ),
+    )
+    .unwrap();
+
+    let diff = manager.scan_and_diff_plugins().await.unwrap();
+    assert_eq!(diff.added, vec!["test.payload.checksums"]);
+    assert!(
+        diff.changed.is_empty(),
+        "首次加载不涉及载荷重启，不该有变更提示：{:?}",
+        diff.changed
+    );
+
+    let exe = plugin_dir.join("bin").join("win-x64").join("agent.exe");
+    std::fs::rename(&exe, exe.with_extension("exe.old")).expect("运行中的 exe 应当允许改名");
+    std::fs::copy(fixture_bin(), &exe).unwrap();
+
+    // 没有任何活动会话（这条不受上一刀的保护影响），本该直接重启 ——
+    // 唯一能拦住它的是随包哈希不符。
+    let diff = manager.scan_and_diff_plugins().await.unwrap();
+    assert!(
+        diff.reloaded.is_empty(),
+        "哈希不符时不该自动重启，实际重启了 {:?}",
+        diff.reloaded
+    );
+    assert_eq!(
+        diff.changed,
+        vec!["test.payload.checksums"],
+        "应当退回待重载"
+    );
+    {
+        let supervisor = manager.sidecar_supervisor();
+        let sup = supervisor.lock().await;
+        assert!(
+            sup.instances_of("test.payload.checksums").is_empty(),
+            "被拦下的插件不该有进程在跑"
+        );
+    }
+}

@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use shared::error::{CommonError, CoreError, PluginError};
 
+use super::checksums;
 use super::contributes::{ContributionCounts, ContributionRegistry};
 use super::manifest::{
     BackendKind, BackendRuntime, ManifestParser, PluginManifest, PluginPermissions,
@@ -1715,14 +1716,14 @@ impl PluginManager {
             if self.sidecar.lock().await.session_count_of(&id) > 0 {
                 continue;
             }
-            match self.restart_plugin(&id).await {
+            match self.restart_after_payload_verify(&id).await {
                 Ok(()) => {
                     tracing::info!(plugin_id = %id, "会话已结束，插件载荷更新补上自动重启");
                     self.forget_pending_restart(&id);
                     diff.reloaded.push(id);
                 }
-                Err(e) => {
-                    tracing::warn!(plugin_id = %id, error = %e, "载荷更新后自动重启失败，转为待重载");
+                Err(reason) => {
+                    tracing::warn!(plugin_id = %id, error = %reason, "补做重启失败，转为待重载");
                     self.forget_pending_restart(&id);
                     diff.changed.push(id);
                 }
@@ -1754,14 +1755,14 @@ impl PluginManager {
                 diff.changed.push(id);
                 continue;
             }
-            match self.restart_plugin(&id).await {
+            match self.restart_after_payload_verify(&id).await {
                 Ok(()) => {
                     tracing::info!(plugin_id = %id, "插件载荷已更新，已自动重启该插件");
                     diff.reloaded.push(id);
                 }
-                // 重启失败不能悄悄留在旧镜像上：退回 needs_reload，面板至少能提示
-                Err(e) => {
-                    tracing::warn!(plugin_id = %id, error = %e, "载荷更新后自动重启失败，转为待重载");
+                // 校验不过 / 重启失败都不能悄悄留在旧镜像上：退回 needs_reload，面板至少能提示
+                Err(reason) => {
+                    tracing::warn!(plugin_id = %id, error = %reason, "载荷更新未能自动生效，转为待重载");
                     diff.changed.push(id);
                 }
             }
@@ -1911,6 +1912,43 @@ impl PluginManager {
         if let Ok(mut pending) = self.pending_payload_restart.write() {
             pending.remove(id);
         }
+    }
+
+    /// 载荷变化后、重启之前，先按随包 `checksums.json` 核一遍哈希。
+    ///
+    /// 载荷指纹只 stat（相对路径 + 长度 + 修改时间），不读内容——拷了半截、被别的
+    /// 进程写坏的文件同样会「看起来变了」。直接重启等于把那些字节当新版本拉起来，
+    /// 只能等加载时才失败，而失败原因（哈希不对）在这一步就能说清楚。
+    ///
+    /// 没有 `checksums.json` 的目录（开发目录、老包）直接放行：这是安装期就定下的兼容口径
+    /// （`checksums::verify_package` 见文件不存在即 `Ok`）。哈希要读全文件，放阻塞线程跑。
+    async fn verify_payload_checksums(&self, id: &str) -> Result<(), String> {
+        let manifest = self
+            .loaded_plugins
+            .read()
+            .map_err(|_| "loaded_plugins".to_string())?
+            .get(id)
+            .map(|plugin| plugin.manifest.clone());
+        // 没加载过就没什么可重启的，交给调用方的 is_loaded 判断
+        let Some(manifest) = manifest else {
+            return Ok(());
+        };
+        let dir = self.install_dir.join(id);
+        match tokio::task::spawn_blocking(move || checksums::verify_package(&manifest, &dir)).await
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(format!("随包完整性校验未通过：{e}")),
+            // 任务被取消 / 线程 panic：不当作校验通过
+            Err(e) => Err(format!("随包完整性校验没能跑完：{e}")),
+        }
+    }
+
+    /// 载荷变化的统一入口：先校验随包哈希，再重启。
+    ///
+    /// 校验不过就不重启（返回原因），由调用方退回待重载——不让坏字节上线。
+    async fn restart_after_payload_verify(&self, id: &str) -> Result<(), String> {
+        self.verify_payload_checksums(id).await?;
+        self.restart_plugin(id).await.map_err(|e| format!("{e}"))
     }
 
     /// 列出所有已加载插件（wasm 从运行时取，sidecar / frontend 从安装态缓存 + 形态索引组装）

@@ -732,6 +732,11 @@ Uninstalled ──install──▶ Installed ──load──▶ Loaded ──ac
     `needs_reload`（面板照样提示「有变更」，手动重载是用户的显式选择），之后每轮扫描检查：
     会话一归零就自动补做重启、记 `reloaded` 并撤掉提示。代价是「一直连着就一直不换」，
     想要立刻生效得手动重载——这个取舍是刻意的：不擅自断人比早几分钟换二进制重要。
+  - **重启前先核随包哈希**（2026-11-13 补）：载荷指纹只 stat、不读内容，拷半截或被写坏的
+    文件同样「看起来变了」。有 `checksums.json` 时先跑一遍 `checksums::verify_package`
+    （与安装期同一函数，`spawn_blocking` 里算 sha256），不通过就**不重启**、退回
+    `needs_reload` 并在日志里指出哪个文件对不上；没有该文件的目录（开发目录、老包）直接放行，
+    与安装期口径一致。补做 `pending_payload_restart` 时同样先校验（文件可能又被改坏）。
 - `reload_plugins()` = VS Code「Reload Window」：停全部已激活 → 清 `needs_reload` →
   **清扫描快照**（否则 diff 判「无变化」会空转）→ 重扫全部重新加载激活。
 
