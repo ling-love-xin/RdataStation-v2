@@ -79,6 +79,8 @@ cargo test --manifest-path tools/plugin-drivers/sqlx-rust/Cargo.toml
   没有它照常自动重启。
   打包时用 `cargo run -p rds-plugin --bin rds-plugin-checksums -- <插件目录>` 生成：
   包内文件 + `driver_jars` 声明的外部 jar 都会被算进去（`external_files` 一节）。
+  `install.ps1` 装完每个包会自动跑一次（优先用已编译的 `rds-plugin-checksums.exe`，
+  没有再退回 `cargo run`）；没有外部 jar 的包不会写 `external_files` 键，旧宿主也能认。
   注意带 `external_files` 的包要配新版宿主——旧版不认这个键，会把整份文件判成非法 JSON。
   两个现实约束：① Windows 上运行中的 exe 不能直接覆盖
   （`ERROR_SHARING_VIOLATION`），要先把旧的改名（`agent.exe` → `agent.exe.old`）

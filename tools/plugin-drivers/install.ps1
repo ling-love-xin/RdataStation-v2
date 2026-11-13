@@ -147,6 +147,47 @@ if (-not $SkipRust) {
 # 注意：安装目录名 = manifest 里的 plugin.id（卸载用 paths::plugin_dir(id) 拼路径，
 # 目录名与 id 不一致会导致卸载找不到目录）；源码目录是短名，安装目标用点分 id。
 # Oracle 两版互斥：JDBC 与 Rust 版都贡献驱动 id `oracle`，一次只能装其中一版。
+
+# 生成 checksums.json 的工具：优先用已编译的二进制（快），没有就退回 `cargo run`。
+# 两者都没有时跳过——缺该文件不阻断加载（老包兼容口径），只是少一层完整性。
+function Get-ChecksumTool {
+    $candidates = @(
+        (Join-Path $root ".rds\target-gf\debug\rds-plugin-checksums.exe"),
+        (Join-Path $root ".rds\target-gf\release\rds-plugin-checksums.exe"),
+        (Join-Path $root "target\debug\rds-plugin-checksums.exe"),
+        (Join-Path $root "target\release\rds-plugin-checksums.exe")
+    ) | Where-Object { Test-Path -LiteralPath $_ }
+    if ($candidates) {
+        return @{ exe = ($candidates | Select-Object -First 1) }
+    }
+    if (Get-Command cargo -ErrorAction SilentlyContinue) {
+        return @{ cargo = $true }
+    }
+    return $null
+}
+
+# 装的字节就是校验对象：复制完再在**目标目录**生成，源码目录不会多出未跟踪文件。
+function New-PackageChecksums([string]$dir, $tool) {
+    if (-not $tool) {
+        Write-Output "跳过 checksums.json（未找到 rds-plugin-checksums，也没有 cargo）：$dir"
+        return
+    }
+    if ($tool.exe) {
+        & $tool.exe $dir
+        if ($LASTEXITCODE -ne 0) { throw "生成 checksums.json 失败：$dir" }
+        return
+    }
+    Push-Location $root
+    try {
+        & cargo run -q -p rds-plugin --bin rds-plugin-checksums -- $dir
+        if ($LASTEXITCODE -ne 0) { throw "生成 checksums.json 失败：$dir" }
+    } finally {
+        Pop-Location
+    }
+}
+
+$checksumTool = Get-ChecksumTool
+
 $targets = @(
     @{ src = "postgres-py"; id = "rds.driver.postgres-py" },
     @{ src = "mssql-rust-plugin"; id = "rds.driver.mssql-rust" }
@@ -163,7 +204,7 @@ foreach ($t in $targets) {
     $src = Join-Path $dist $t.src
     $dst = Join-Path $homePlugins $t.id
     if ($DryRun) {
-        Write-Output "[DryRun] 将安装 $src → $dst"
+        Write-Output "[DryRun] 将安装 $src → $dst，并在安装后生成 checksums.json"
         continue
     }
     if (Test-Path -LiteralPath $dst) {
@@ -171,6 +212,7 @@ foreach ($t in $targets) {
         Remove-Item -Recurse -Force -LiteralPath $dst
     }
     Copy-Item -Recurse -LiteralPath $src -Destination $dst
+    New-PackageChecksums $dst $checksumTool
     Write-Output "已安装：$dst"
 }
 

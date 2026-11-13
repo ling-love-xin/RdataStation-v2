@@ -416,12 +416,26 @@ pub fn generate_package(
         }
     }
 
-    let document = serde_json::json!({
-        "algorithm": SUPPORTED_ALGORITHM,
-        "files": files,
-        "external_files": external_files,
-    });
-    serde_json::to_string_pretty(&document)
+    // 没有外部件时**不输出** `external_files` 键：旧版宿主是 `deny_unknown_fields`，
+    // 多一个空键就会把整份文件判成非法 JSON。空表与"不写"在这里等价。
+    let mut document = serde_json::Map::new();
+    document.insert(
+        "algorithm".to_string(),
+        serde_json::Value::String(SUPPORTED_ALGORITHM.to_string()),
+    );
+    document.insert(
+        "files".to_string(),
+        serde_json::to_value(&files)
+            .map_err(|e| checksum_error(format!("序列化文件表失败：{e}")))?,
+    );
+    if !external_files.is_empty() {
+        document.insert(
+            "external_files".to_string(),
+            serde_json::to_value(&external_files)
+                .map_err(|e| checksum_error(format!("序列化外部文件表失败：{e}")))?,
+        );
+    }
+    serde_json::to_string_pretty(&serde_json::Value::Object(document))
         .map_err(|e| checksum_error(format!("序列化 {CHECKSUMS_FILE} 失败：{e}")))
 }
 
@@ -870,5 +884,10 @@ executable = "bin/agent"
             "生成时不该列嵌套残留：{files:?}"
         );
         assert!(files.keys().any(|key| key == "lib/real.jar"), "{files:?}");
+        // 没有外部件时不写 external_files 键：旧宿主 deny_unknown_fields 会拒绝多出来的键
+        assert!(
+            parsed.get("external_files").is_none(),
+            "无外部件时不该输出 external_files：{json}"
+        );
     }
 }
