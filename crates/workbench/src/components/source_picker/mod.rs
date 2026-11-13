@@ -39,9 +39,11 @@ use crate::ui;
 
 mod group;
 mod node;
+mod search;
 
 pub use group::{group_of, grouped, SourceGroup};
 pub use node::{NodeId, NodeKind, Row, TempScope, MAX_DEPTH};
+pub use search::{rank, search, HitRank, SearchOutcome, SEARCH_LIMIT};
 
 /// 来源种类（统一内核；各消费方按 `PickerConfig.kinds` 裁剪显示）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
