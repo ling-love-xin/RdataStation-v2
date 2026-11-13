@@ -235,6 +235,14 @@ fn archive_from_insight(shared: &Shared, panel: &Entity<InsightView>, key: &str,
             },
             keep_versions,
             false,
+            // 洞察快照自动带出业务断言：源表名 + 画像口径 + 生成月份，
+            // 免得归档后再补口径（这一步正是「数字资产积累」最容易漏的上下文）。
+            Some(analytics_resource::model::ArchiveAssertion {
+                metric_name: Some(name.clone()),
+                definition: Some("洞察画像快照（结果集列分布与规则集）".to_string()),
+                time_window: Some(chrono::Utc::now().format("%Y-%m").to_string()),
+                ..Default::default()
+            }),
         );
         let _ = cx.update(|cx| {
             shared2.refresh_resources(cx);

@@ -5,6 +5,8 @@ use crate::model::{ArchiveKind, ArchiveStatus, PayloadMode, RowScope};
 
 fn detail(status: ArchiveStatus, kind: ArchiveKind) -> ArchiveDetail {
     ArchiveDetail {
+        assertion: None,
+        lifecycle: Default::default(),
         id: "ar_1".to_string(),
         name: "dau_report".to_string(),
         alias: None,

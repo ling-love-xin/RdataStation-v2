@@ -2,6 +2,103 @@
 
 use super::*;
 
+/// 需要随资源行一起清掉的关联表（关联列都是 `resource_id`）。
+///
+/// 2026-11-12 补齐：旧版只清 `folder` / `tags`，漏了 `versions`（**带外键**，
+/// 项目库 `foreign_keys=ON` 时会把 `DELETE FROM analytics_resources` 直接拒掉，
+/// 表现为「删不掉」）、`recycle_bin`，以及 027–029 的断言 / 效力 / 谱系三张表。
+/// `events` 刻意不在此列：履历要留痕（撤销归档本身就是可追溯事件），
+/// 只在「清空回收站」时按保留期清理已无资源行的老事件。
+const LINKED_TABLES: [&str; 6] = [
+    "analytics_resource_folder",
+    "analytics_resource_tags",
+    "analytics_resource_versions",
+    "analytics_recycle_bin",
+    "analytics_resource_assertions",
+    "analytics_resource_lifecycle",
+];
+
+/// 老库 / 未跑全量迁移的测试库可能没有 027–029 的表：跳过而不是让整个删除失败。
+fn table_exists(conn: &rusqlite::Connection, name: &str) -> Result<bool, CoreError> {
+    match conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        rusqlite::params![name],
+        |_| Ok(()),
+    ) {
+        Ok(()) => Ok(true),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+        Err(error) => Err(persistence_err("table_exists", error)),
+    }
+}
+
+fn delete_links_for(conn: &rusqlite::Connection, id: &str) -> Result<(), CoreError> {
+    for table in LINKED_TABLES {
+        if !table_exists(conn, table)? {
+            continue;
+        }
+        conn.execute(
+            &format!("DELETE FROM {table} WHERE resource_id = ?1"),
+            rusqlite::params![id],
+        )
+        .map_err(|e| persistence_err("delete_links", e))?;
+    }
+    delete_refs_for(conn, "from_id = ?1 OR to_id = ?1", rusqlite::params![id])?;
+    Ok(())
+}
+
+fn delete_links_for_deleted(conn: &rusqlite::Connection) -> Result<(), CoreError> {
+    let deleted = "resource_id IN (SELECT id FROM analytics_resources WHERE deleted_at IS NOT NULL)";
+    for table in LINKED_TABLES {
+        if !table_exists(conn, table)? {
+            continue;
+        }
+        conn.execute(&format!("DELETE FROM {table} WHERE {deleted}"), [])
+            .map_err(|e| persistence_err("delete_links", e))?;
+    }
+    delete_refs_for(
+        conn,
+        "from_id IN (SELECT id FROM analytics_resources WHERE deleted_at IS NOT NULL) \
+         OR to_id IN (SELECT id FROM analytics_resources WHERE deleted_at IS NOT NULL)",
+        [],
+    )?;
+    Ok(())
+}
+
+/// 谱系表有两个方向的资源 id，单独清。
+fn delete_refs_for<P: rusqlite::Params>(
+    conn: &rusqlite::Connection,
+    predicate: &str,
+    params: P,
+) -> Result<(), CoreError> {
+    if !table_exists(conn, "analytics_resource_refs")? {
+        return Ok(());
+    }
+    conn.execute(
+        &format!("DELETE FROM analytics_resource_refs WHERE {predicate}"),
+        params,
+    )
+    .map_err(|e| persistence_err("delete_refs", e))?;
+    Ok(())
+}
+
+/// 履历保留期：只在用户主动「清空回收站」时收掉 **已无资源行且超过 365 天** 的孤儿事件。
+///
+/// 不按时间删存活资源的事件；`datetime()` 解析不了的历史值会得 NULL、条件为假，
+/// 宁可留着也不误删。
+fn purge_expired_orphan_events(conn: &rusqlite::Connection) -> Result<(), CoreError> {
+    if !table_exists(conn, "analytics_resource_events")? {
+        return Ok(());
+    }
+    conn.execute(
+        "DELETE FROM analytics_resource_events \
+         WHERE datetime(occurred_at) < datetime('now', '-365 days') \
+           AND resource_id NOT IN (SELECT id FROM analytics_resources)",
+        [],
+    )
+    .map_err(|e| persistence_err("purge_events", e))?;
+    Ok(())
+}
+
 impl AnalyticsResourceStore {
     /// 软删：标记 `deleted_at`（移入回收站的索引侧动作）。
     ///
@@ -116,23 +213,17 @@ impl AnalyticsResourceStore {
             .map_err(|e| persistence_err("begin_immediate", e))?;
 
         let result = (|| -> Result<usize, CoreError> {
-            for table in ["analytics_resource_folder", "analytics_resource_tags"] {
-                inner
-                    .execute(
-                        &format!(
-                            "DELETE FROM {table} WHERE resource_id IN \
-                             (SELECT id FROM analytics_resources WHERE deleted_at IS NOT NULL)"
-                        ),
-                        [],
-                    )
-                    .map_err(|e| persistence_err("delete", e))?;
-            }
-            inner
+            delete_links_for_deleted(inner)?;
+            let count = inner
                 .execute(
                     "DELETE FROM analytics_resources WHERE deleted_at IS NOT NULL",
                     [],
                 )
-                .map_err(|e| persistence_err("delete", e))
+                .map_err(|e| persistence_err("delete", e))?;
+            // 清空回收站是用户主动动作：顺手收掉过期孤儿履历，不让 027 无外键的
+            // 留痕策略变成只增不减的垃圾堆积。
+            purge_expired_orphan_events(inner)?;
+            Ok(count)
         })();
 
         match result {
@@ -151,9 +242,11 @@ impl AnalyticsResourceStore {
 
     /// 真要删行的那一步（`in_trash` 决定删软删行还是存活行）。
     ///
-    /// **关联先清、同一事务**：`analytics_resource_folder` / `analytics_resource_tags` 是
-    /// `resource_id` 上的外键且没有 `ON DELETE CASCADE`，而项目库开了 `foreign_keys=ON`
-    /// ——不先清关联，`DELETE FROM analytics_resources` 会直接被外键拒掉（表现为“删不掉”）。
+    /// **关联先清、同一事务**：`analytics_resource_folder` / `analytics_resource_tags`
+    /// / `analytics_resource_versions` 是 `resource_id` 上的外键且没有 `ON DELETE CASCADE`，
+    /// 而项目库开了 `foreign_keys=ON`——不先清关联，`DELETE FROM analytics_resources`
+    /// 会直接被外键拒掉（表现为“删不掉”）。完整表清单见 [`LINKED_TABLES`]；
+    /// 履历事件刻意保留，只在「清空回收站」时按保留期清理孤儿。
     async fn delete_row_with_links(&self, id: &str, in_trash: bool) -> Result<(), CoreError> {
         let conn = self.get_conn().await?;
         let inner = conn.inner()?;
@@ -162,14 +255,7 @@ impl AnalyticsResourceStore {
             .map_err(|e| persistence_err("begin_immediate", e))?;
 
         let result = (|| -> Result<(), CoreError> {
-            for table in ["analytics_resource_folder", "analytics_resource_tags"] {
-                inner
-                    .execute(
-                        &format!("DELETE FROM {table} WHERE resource_id = ?"),
-                        rusqlite::params![id],
-                    )
-                    .map_err(|e| persistence_err("delete", e))?;
-            }
+            delete_links_for(inner, id)?;
             let guard = if in_trash {
                 "AND deleted_at IS NOT NULL"
             } else {

@@ -15,13 +15,14 @@ use tokio::sync::broadcast;
 use shared::error::{CoreError, StorageError};
 
 use crate::model::{
-    ArchiveKind, ChangeReason, KeepVersions, PayloadMode, ResourcesChanged,
+    ArchiveKind, ChangeReason, KeepVersions, PayloadMode, ResourcesChanged, TimelineEventKind,
 };
 use crate::payload::PayloadStore;
 use crate::{AnalyticsResource, AnalyticsResourceStore};
 
 pub mod archive;
 pub mod checkout;
+pub mod semantics;
 pub mod trash;
 
 /// 历史内容副本默认保留份数（设置项 `resources.keep_versions`，架构 §5.2）。
@@ -71,6 +72,27 @@ impl ArchiveService {
         };
         if let Err(e) = self.payload.prune_version_copies(resource_id, keep).await {
             tracing::warn!(error = %e, resource_id, "裁剪历史内容副本失败");
+        }
+    }
+
+    /// 写一条资产履历（迁移 027 的事件表）。
+    ///
+    /// 失败**不回滚主动作**：履历少一条可以事后补，把一次成功的归档整个撤销反而更糟；
+    /// 但必须打日志——静默漏记会让几个月后的追溯凭空断一截。
+    async fn record_timeline(
+        &self,
+        resource_id: &str,
+        version: Option<i32>,
+        kind: TimelineEventKind,
+        detail: Option<&str>,
+        content_hash: Option<&str>,
+    ) {
+        if let Err(error) = self
+            .store
+            .record_event(resource_id, version, kind, detail, content_hash)
+            .await
+        {
+            tracing::warn!(error = %error, resource_id, "资产履历事件写入失败");
         }
     }
 

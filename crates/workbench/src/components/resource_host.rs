@@ -10,12 +10,12 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use analytics_resource::dialogs::pick::DraftCandidate;
 use analytics_resource::model::KeepVersions;
 use analytics_resource::resource_host::ResourceHostBackend;
 use analytics_resource::resource_view::{GroupOption, ResourcesHost};
 use gpui_kit::App;
 use insight::SampleSource;
-use tokio::runtime::Runtime;
 
 use crate::panels::Shared;
 
@@ -39,8 +39,67 @@ impl ResourceHostBackend for WorkbenchResourceBackend {
         self.shared.project_ui.borrow().read_only
     }
 
-    fn scratchpad_store(&self) -> Result<(scratchpad::ScratchpadStore, Runtime), String> {
-        self.shared.scratchpad_store()
+    /// 草稿箱候选：扫描、来源连接与标签预取都在宿主侧完成，只把 M6 自有的
+    /// `DraftCandidate` 交给资产库（2026-11-12 分层收口：trait 不再返回上游存储类型）。
+    fn draft_candidates(&self) -> Result<Vec<DraftCandidate>, String> {
+        use std::collections::HashMap;
+
+        use scratchpad::{FileMeta, ScratchpadEntry, ScratchpadEntryKind, ScratchpadStore};
+
+        fn flatten(
+            entries: &[ScratchpadEntry],
+            file_meta: &HashMap<String, FileMeta>,
+            store: &ScratchpadStore,
+            out: &mut Vec<DraftCandidate>,
+        ) {
+            for entry in entries {
+                match entry.kind {
+                    ScratchpadEntryKind::File => {
+                        // `relative_path_of` 同时把内部 / 隐藏路径挡在门外。
+                        let Some(rel) = store.relative_path_of(&entry.path) else {
+                            continue;
+                        };
+                        let connection_id = file_meta
+                            .get(&rel)
+                            .and_then(|meta| meta.preferred_connection())
+                            .map(str::to_string);
+                        // 标签继承是「能带就带」：读失败只给空，不阻断归档。
+                        let tags = store
+                            .tags_of_entry(&rel)
+                            .map(|tags| tags.into_iter().map(|t| t.name).collect())
+                            .unwrap_or_default();
+                        out.push(DraftCandidate {
+                            abs_path: entry.path.clone(),
+                            rel_path: rel,
+                            display_name: entry
+                                .name
+                                .rsplit_once('.')
+                                .map(|(stem, _)| stem.to_string())
+                                .unwrap_or_else(|| entry.name.clone()),
+                            connection_id,
+                            tags,
+                        });
+                    }
+                    ScratchpadEntryKind::Folder => {
+                        if let Some(children) = entry.children.as_ref() {
+                            flatten(children, file_meta, store, out);
+                        }
+                    }
+                }
+            }
+        }
+
+        let (store, runtime) = self.shared.scratchpad_store()?;
+        let entries = runtime
+            .block_on(store.list_local_entries(4))
+            .map_err(|e| format!("读草稿箱失败：{e}"))?;
+        let file_meta = runtime
+            .block_on(store.load_config())
+            .map(|config| config.file_meta)
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        flatten(&entries, &file_meta, &store, &mut out);
+        Ok(out)
     }
 
     fn refresh_resources(&self, cx: &mut App) {

@@ -32,6 +32,14 @@ impl ArchiveService {
             }
         }
         self.emit(ChangeReason::CheckedOut, Some(resource.id.clone()));
+        self.record_timeline(
+            &resource.id,
+            Some(resource.version),
+            crate::model::TimelineEventKind::CheckedOut,
+            Some(&format!("取回为工作副本：{}", req.dest_path.display())),
+            None,
+        )
+        .await;
 
         Ok(CheckoutOutcome {
             resource_id: resource.id,
@@ -95,42 +103,70 @@ impl ArchiveService {
             });
         }
 
-        // 与再归档同序：先把当前内容留副本、写快照行，再覆盖本体，最后动索引。
-        self.payload
+        // 与再归档同一顺序（P0-1）：旧内容留副本 → 历史副本进暂存 → 索引事务 → 替换本体。
+        if self
+            .payload
             .store_version_copy(resource_id, current.version, &rel_path)
-            .await?;
+            .await?
+            .is_none()
+        {
+            return Err(service_err(
+                "restore",
+                "当前内容未能留成历史副本，已中止还原以免丢失当前版本",
+            ));
+        }
         let snapshot = serde_json::to_string(&current).map_err(|e| {
             CoreError::storage(StorageError::Serialization {
                 format: "JSON".to_string(),
                 reason: e.to_string(),
             })
         })?;
-        let snapshot_id = self
-            .store
-            .save_resource_version(resource_id, current.version, &snapshot)
-            .await?;
+        // `stage_payload` 会重新检查副本是否还在：等价于原来「副本在查到与写回之间消失」的守卫。
+        let staged = self.payload.stage_payload(&copy, &rel_path).await?;
 
-        if !self
-            .payload
-            .restore_version_copy(resource_id, version, &rel_path)
-            .await?
-        {
-            // 副本在“查到”与“写回”之间消失（并发裁剪 / 外部删除）：说清，不静默降级。
-            return Err(service_err(
-                "restore",
-                &format!("v{version} 的内容副本在写回前消失，还原中止"),
-            ));
-        }
-
-        let updated = self
+        let committed = self
             .store
             // 版本还原：只换内容与体积；分析表的定义 / 规模保持原位不动
-            // （还原旧内容不等于把“这份东西是什么”改回去——那要走再归档）。
-            .update_archive_content(resource_id, &copy_hash, &snapshot_id, file_size, None)
-            .await?;
+            // （还原旧内容不等于把「这份东西是什么」改回去——那要走再归档）。
+            .commit_new_version(
+                resource_id,
+                current.version,
+                &snapshot,
+                &copy_hash,
+                file_size,
+                None,
+                crate::model::TimelineEventKind::Restored,
+                Some(&format!("从 v{version} 的副本生成新版本")),
+            )
+            .await;
+        let updated = match committed {
+            Ok(value) => value,
+            Err(error) => {
+                self.payload.discard_staged(&staged).await;
+                return Err(error);
+            }
+        };
+
+        if let Err(error) = self.payload.commit_staged(&staged, &rel_path).await {
+            tracing::error!(
+                error = %error,
+                staged = %staged.display(),
+                resource_id,
+                "历史还原：索引已提交但本体替换失败，暂存文件保留待恢复"
+            );
+            self.record_timeline(
+                resource_id,
+                Some(updated.version),
+                crate::model::TimelineEventKind::Validated,
+                Some(&format!("还原内容未落地，暂存文件保留：{}", staged.display())),
+                Some(&copy_hash),
+            )
+            .await;
+            return Err(error);
+        }
+        self.payload.discard_staged(&staged).await;
 
         self.prune_copies(resource_id, None).await;
-
         self.emit(ChangeReason::Restored, Some(resource_id.to_string()));
 
         Ok(ArchiveOutcome {
@@ -172,6 +208,14 @@ impl ArchiveService {
             ));
         }
         self.emit(ChangeReason::CheckedOut, Some(resource.id.clone()));
+        self.record_timeline(
+            &resource.id,
+            Some(version),
+            crate::model::TimelineEventKind::CheckedOut,
+            Some(&format!("取回 v{version} 的内容副本为草稿")),
+            None,
+        )
+        .await;
 
         Ok(CheckoutOutcome {
             resource_id: resource.id,

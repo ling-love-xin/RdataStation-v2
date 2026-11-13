@@ -354,6 +354,15 @@ impl ArchiveService {
         }
 
         self.emit(ChangeReason::Undone, Some(undo.resource_id.clone()));
+        // 撤销会硬删资源行，但履历必须留下：这条正是「它曾经存在过」的证据。
+        self.record_timeline(
+            &undo.resource_id,
+            Some(resource.version),
+            crate::model::TimelineEventKind::Undone,
+            Some("撤销归档（登记行已删除）"),
+            None,
+        )
+        .await;
         Ok(())
     }
 

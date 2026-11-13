@@ -2,6 +2,7 @@
 
 use super::*;
 use super::fields::{field_label, group_picker, hint_line, mode_picker, readonly_block};
+use gpui_kit::component::scroll::ScrollableElement as _;
 
 /// 打开归档确认对话框（宿主入口）。
 ///
@@ -31,6 +32,10 @@ pub fn open_archive_dialog_with(
         keep_versions,
         group_id,
         mode,
+        assertion_metric,
+        assertion_definition,
+        assertion_window,
+        assertion_conclusion,
     } = inputs;
     let on_submit = Rc::new(on_submit);
     // 分组名单只在开窗时取一份：分组是单层的，一份列表就是这个对话框的生命周期里真实可选项。
@@ -50,6 +55,10 @@ pub fn open_archive_dialog_with(
         let keep_versions = keep_versions.clone();
         let group_id = group_id.clone();
         let mode = mode.clone();
+        let assertion_metric = assertion_metric.clone();
+        let assertion_definition = assertion_definition.clone();
+        let assertion_window = assertion_window.clone();
+        let assertion_conclusion = assertion_conclusion.clone();
         let on_submit = on_submit.clone();
         Rc::new(move |cx: &mut App| -> bool {
             let inputs = ArchiveDialogInputs {
@@ -59,6 +68,10 @@ pub fn open_archive_dialog_with(
                 keep_versions: keep_versions.clone(),
                 group_id: group_id.clone(),
                 mode: mode.clone(),
+                assertion_metric: assertion_metric.clone(),
+                assertion_definition: assertion_definition.clone(),
+                assertion_window: assertion_window.clone(),
+                assertion_conclusion: assertion_conclusion.clone(),
             };
             let Some(result) = submit_archive(&inputs, cx) else {
                 return false;
@@ -128,7 +141,30 @@ pub fn open_archive_dialog_with(
             })
             .when_some(keep_note, |this, note| {
                 this.child(hint_line(&note, theme.colors.muted_foreground))
-            });
+            })
+            // 业务断言（选填）：默认空、不打断归档；填了才进资产履历与语义检索。
+            .child(
+                div()
+                    .h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_2()
+                    .pt_1()
+                    .border_t(ui::HAIRLINE)
+                    .border_color(theme.colors.border)
+                    .child(div().text_xs().text_color(theme.colors.foreground).child("业务断言（选填）")),
+            )
+            .child(hint_line("写清口径，半年后才知道这个数是什么意思；取回后再归档会保留上次口径", theme.colors.muted_foreground))
+            .child(field_label(theme, "指标名"))
+            .child(Input::new(&assertion_metric))
+            .child(field_label(theme, "口径定义"))
+            .child(Input::new(&assertion_definition))
+            .child(field_label(theme, "业务时间窗"))
+            .child(Input::new(&assertion_window))
+            .child(field_label(theme, "结论摘要"))
+            .child(Input::new(&assertion_conclusion))
+            .max_h(rems(22.))
+            .overflow_y_scrollbar();
 
         dialog
             .title("归档为存档")

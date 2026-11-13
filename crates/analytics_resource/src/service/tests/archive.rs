@@ -286,7 +286,16 @@ async fn t106_rearchive_changed_content_bumps_version_and_keeps_copy() {
 
     assert!(second.created_new_version);
     assert_eq!(second.version, 2, "内容变了版本 +1");
-    assert!(!copy.exists(), "再归档同样是移动");
+    // copy 档（2026-10-13 裁决）：再归档同样**不搬走**工作副本。
+    // 旧实现走 `replace_payload → archive_in` 的 move 语义把草稿移走了，与首次归档的 copy
+    // 口径自相矛盾；P0-1 改走「暂存 → 索引事务 → 原子替换」后草稿保留为工作副本。
+    assert!(copy.exists(), "再归档同样是 copy：草稿保留为工作副本");
+    let draft_content = fs::read(&copy).await.expect("read copy");
+    assert_eq!(
+        draft_content.as_slice(),
+        b"select 22;",
+        "工作副本内容不被再归档改动"
+    );
 
     let payload = service.payload().resources_dir().join("dau.sql");
     assert_eq!(

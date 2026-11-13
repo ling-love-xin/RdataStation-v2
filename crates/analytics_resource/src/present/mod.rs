@@ -52,16 +52,63 @@ mod trash;
 mod rows;
 mod detail;
 mod versions;
+mod timeline;
 mod repair;
 mod snapshot;
 
 pub use self::format::{format_size, format_scale, format_relative_time, format_timestamp, tail_for};
-pub use self::trash::{TrashSnapshot, build_trash_snapshot, entity_trash_row, reference_trash_rows, FolderMemberships};
-pub use self::rows::{SnapshotInputs, to_row, tag_chips, tag_options};
+pub use self::trash::{build_trash_snapshot, entity_trash_row, reference_trash_rows, FolderMemberships};
+pub use self::rows::{SnapshotInputs, to_row, tag_options};
 pub use self::detail::{DetailExtras, to_detail};
 pub use self::versions::{build_version_rows};
+pub use self::timeline::{build_timeline_rows};
 pub use self::repair::{build_repair_rows};
 pub use self::snapshot::{build_snapshot};
+
+/// 业务断言 → 可搜文本（小写）：只进搜索匹配面，**不显示**在行上。
+///
+/// 与 `search_haystack` 的字段拼接口径一致：字段之间留空格，避免跨字段偶然连缀出假命中。
+pub fn assertion_search_text(assertion: &crate::model::ArchiveAssertion) -> String {
+    [
+        assertion.question.as_deref(),
+        assertion.metric_key.as_deref(),
+        assertion.metric_name.as_deref(),
+        assertion.definition.as_deref(),
+        assertion.assumptions.as_deref(),
+        assertion.time_window.as_deref(),
+        assertion.conclusion.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_lowercase()
+}
+
+#[cfg(test)]
+mod search_text_tests {
+    use super::assertion_search_text;
+    use crate::model::ArchiveAssertion;
+
+    #[test]
+    fn assertion_text_is_lowercase_and_covers_definition() {
+        let assertion = ArchiveAssertion {
+            metric_name: Some("DAU".to_string()),
+            definition: Some("自然日内去重登录用户".to_string()),
+            time_window: Some("2026Q3".to_string()),
+            ..Default::default()
+        };
+        let text = assertion_search_text(&assertion);
+        assert!(text.contains("dau"));
+        assert!(text.contains("自然日内去重登录用户"));
+        assert!(text.contains("2026q3"));
+    }
+
+    #[test]
+    fn empty_assertion_yields_empty_text() {
+        assert_eq!(assertion_search_text(&ArchiveAssertion::default()), "");
+    }
+}
 
 #[cfg(test)]
 mod tests;

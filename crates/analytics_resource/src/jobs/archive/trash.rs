@@ -70,7 +70,7 @@ pub(crate) async fn load_trash(job: &TrashListJob) -> Result<TrashDialogSeed, St
 /// 认不出的代号原样显示（宁可见生，不可编一个名字）。
 fn module_label(origin: &str) -> String {
     match origin {
-        scratchpad::ORIGIN_SCRATCHPAD => "草稿箱".to_string(),
+        crate::resource_host::ORIGIN_SCRATCHPAD => "草稿箱".to_string(),
         other => other.to_string(),
     }
 }

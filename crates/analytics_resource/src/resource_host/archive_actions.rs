@@ -164,7 +164,7 @@ fn draft_archive_request(
         analysis: None,
         binding: ArchiveBinding {
             // 归档凭证的"出处"：草稿相对路径（带模块前缀，与文档口径一致）
-            promoted_from: Some(format!("{}/{}", scratchpad::MODULE_DIR_NAME, draft.rel_path)),
+            promoted_from: Some(format!("{}/{}", SCRATCHPAD_DIR, draft.rel_path)),
             source_connection_id: draft.connection_id.clone(),
             source_table: None,
         },
@@ -187,12 +187,8 @@ fn open_archive_for_draft(
     window: &mut Window,
     cx: &mut App,
 ) {
-    // 归档继承（规格 §7.4）：草稿条目标签预填进归档对话框，用户可改可删；
-    // 读标签失败不阻断归档（继承是"能带就带"）。
-    let inherited_tags = scratchpad::ScratchpadStore::new(root.to_path_buf())
-        .tags_of_entry(&draft.rel_path)
-        .map(|tags| tags.into_iter().map(|t| t.name).collect())
-        .unwrap_or_default();
+    // 归档继承（规格 §7.4）：标签已由宿主在扫描草稿时预取，用户可改可删。
+    let inherited_tags = draft.tags.clone();
     let kind = archive_kind_for(&draft.abs_path);
     let source_abs = draft.abs_path.to_string_lossy().to_string();
     let (seed, resolved_rel) = archive_seed(
@@ -212,8 +208,9 @@ fn open_archive_for_draft(
     let root = root.to_path_buf();
     open_archive_dialog(window, cx, seed, move |result, cx| {
         // 数据文件按分析档登记（P4.5）：探测由作业在工作线程上做。
+        let assertion = result.assertion.clone();
         let request = draft_archive_request(&draft, kind, resolved_rel.clone(), result);
-        submit_archive(&root, read_only, request, &backend, cx);
+        submit_archive(&root, read_only, request, assertion, &backend, cx);
     });
 }
 
@@ -234,12 +231,8 @@ fn archive_many(
         if resolved_rel != draft.rel_path {
             renamed += 1;
         }
-        // 归档继承（规格 §7.4）：多选没有标签输入框，草稿条目标签直接带入；
-        // 读标签失败不阻断归档（继承是"能带就带"）。
-        let inherited_tags = scratchpad::ScratchpadStore::new(root.to_path_buf())
-            .tags_of_entry(&draft.rel_path)
-            .map(|tags| tags.into_iter().map(|t| t.name).collect())
-            .unwrap_or_default();
+        // 归档继承（规格 §7.4）：多选没有标签输入框，宿主预取的标签直接带入。
+        let inherited_tags = draft.tags.clone();
         let request = ArchiveRequest {
             source_path: draft.abs_path.clone(),
             rel_path: resolved_rel,
@@ -250,11 +243,7 @@ fn archive_many(
             payload_mode: PayloadMode::Copy,
             analysis: None,
             binding: ArchiveBinding {
-                promoted_from: Some(format!(
-                    "{}/{}",
-                    scratchpad::MODULE_DIR_NAME,
-                    draft.rel_path
-                )),
+                promoted_from: Some(format!("{}/{}", SCRATCHPAD_DIR, draft.rel_path)),
                 source_connection_id: draft.connection_id.clone(),
                 source_table: None,
             },
@@ -271,6 +260,7 @@ fn archive_many(
             request,
             keep_versions,
             analysis_probe,
+            None,
         );
     }
     let mut message = format!("资产库：已提交 {} 个归档…", many.len());
@@ -347,7 +337,7 @@ pub(super) fn request_archive_from_file(host: &ResourceHost, window: &mut Window
             keep_versions: result.keep_versions,
             existing_resource_id: None,
         };
-        submit_archive(&root, read_only, request, &backend, cx);
+        submit_archive(&root, read_only, request, result.assertion.clone(), &backend, cx);
     });
 }
 
@@ -361,6 +351,7 @@ mod tests {
             rel_path: rel.to_string(),
             display_name: rel.trim_end_matches(".sql").to_string(),
             connection_id: None,
+            tags: Vec::new(),
         }
     }
 
@@ -434,6 +425,7 @@ mod tests {
                 group_id: Some("af_reports".to_string()),
                 keep_versions: Some(KeepVersions::Keep(3)),
                 payload_mode: PayloadMode::Copy,
+                assertion: None,
             },
         );
         assert_eq!(
@@ -469,6 +461,7 @@ mod tests {
                 group_id: None,
                 keep_versions: None,
                 payload_mode: PayloadMode::Reference,
+                assertion: None,
             },
         );
         assert_eq!(request.group_id, None, "未分组就是不归组");

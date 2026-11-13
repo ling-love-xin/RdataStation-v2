@@ -28,32 +28,19 @@ impl ResourceHost {
         self.backend.read_only()
     }
 
-    /// 草稿箱里的可归档文件（**宿主侧读**：M6 不认识草稿箱的内部结构）。
+    /// 草稿箱里的可归档文件（**宿主侧扫描，本 crate 只收候选快照**）。
     ///
-    /// 目录列表与配置读取是**元数据级**操作（单次 readdir + 一个小 JSON，K1c 口径），
-    /// 留在事件路径；来源连接取草稿 `file_meta` 的首选连接（显式绑定优先，其次最近执行过的那条）。
+    /// 2026-11-12：不再借宿主的 `ScratchpadStore` 自己遍历草稿树——那会把上游类型
+    /// 拖进 M6 的事件路径。宿主返回 `Vec<DraftCandidate>`（含预取的标签与来源连接），
+    /// 这里只做稳定排序与错误回执。
     pub(super) fn draft_candidates(&self, cx: &mut App) -> Option<Vec<DraftCandidate>> {
-        let (store, runtime) = match self.backend.scratchpad_store() {
-            Ok(pair) => pair,
+        let mut out = match self.backend.draft_candidates() {
+            Ok(candidates) => candidates,
             Err(reason) => {
                 self.notice(format!("资产库：读不到草稿箱（{reason}）"), cx);
                 return None;
             }
         };
-        let entries = match runtime.block_on(store.list_local_entries(DRAFT_SCAN_DEPTH)) {
-            Ok(entries) => entries,
-            Err(error) => {
-                self.notice(format!("资产库：读草稿箱失败（{error}）"), cx);
-                return None;
-            }
-        };
-        // 配置读不到不算错：来源连接只是"能带就带"，不该阻断归档。
-        let file_meta = runtime
-            .block_on(store.load_config())
-            .map(|config| config.file_meta)
-            .unwrap_or_default();
-        let mut out = Vec::new();
-        flatten_drafts(&entries, &file_meta, &store, &mut out);
         out.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
         Some(out)
     }

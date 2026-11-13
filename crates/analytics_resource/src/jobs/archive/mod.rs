@@ -12,6 +12,7 @@ use crate::analysis::AnalysisFacts;
 use crate::dialogs::trash::{ForeignTrash, TrashAction, TrashDialogSeed, TrashRow};
 use crate::payload::PayloadStore;
 use crate::present::{build_trash_snapshot, entity_trash_row, reference_trash_rows};
+use crate::model::ArchiveAssertion;
 use crate::{ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest, KeepVersions};
 
 use super::{Job, OpOutcome, free_dest, jobs, open_service};
@@ -28,6 +29,8 @@ pub(crate) struct ArchiveJob {
     /// 为什么要过作业：探测要连 DuckDB、要读文件——不能在事件路径上做（那会卡 UI）。
     /// 探测失败**降级为文件型**而不是拒归档：文件先安全落进 `resources/` 比"结构没探到就不让归档"重要。
     pub(crate) analysis_probe: bool,
+    /// 用户在归档对话框里填的业务断言（选填；`None` = 一项没填）。
+    pub(crate) assertion: Option<ArchiveAssertion>,
 }
 
 /// 一次取回（检出）任务。
@@ -72,6 +75,7 @@ pub fn enqueue_archive(
     request: ArchiveRequest,
     keep_versions: KeepVersions,
     analysis_probe: bool,
+    assertion: Option<ArchiveAssertion>,
 ) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
     let _ = jobs().tx.send(Job::Archive(ArchiveJob {
@@ -80,6 +84,7 @@ pub fn enqueue_archive(
         request,
         keep_versions,
         analysis_probe,
+        assertion,
     }));
 }
 

@@ -56,6 +56,10 @@ pub struct ArchiveDetail {
     /// 宿主没给预览时也不假装有内容。
     pub preview: Preview,
     pub group: Option<String>,
+    /// 业务断言（口径分区用；`None` = 尚未填写）。
+    pub assertion: Option<crate::model::ArchiveAssertion>,
+    /// 业务效力（与 `status` 的物理完整性正交：文件被改过 ≠ 结论已废弃）。
+    pub lifecycle: crate::model::Lifecycle,
 }
 
 impl ArchiveDetail {

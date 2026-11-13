@@ -440,3 +440,112 @@ async fn t127_batch_trash_reports_partial_progress() {
 }
 
 // ===== File 档 reference 模式（2026-10-13 裁决：两档都做、默认 copy）=====
+
+/// 2026-11-12 终审修复回归：永久删除必须清掉 **全部** 关联表。
+///
+/// 旧版只清 folder / tags，漏了带外键的 `analytics_resource_versions`——项目库
+/// `foreign_keys=ON` 时 `DELETE FROM analytics_resources` 会直接失败（「删不掉」）；
+/// 027–029 的断言 / 效力 / 谱系也会变成只增不减的孤儿。履历事件则刻意保留。
+#[tokio::test]
+async fn t158_purge_clears_versions_semantics_refs_but_keeps_history() {
+    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+
+    let draft = write_draft(&dir, "a.sql", b"select 1;").await;
+    let first = service
+        .archive(archive_req(&draft, "a.sql", None))
+        .await
+        .expect("archive");
+    // 再归档一次：写前快照会往 versions 表落一行（带外键）。
+    let draft2 = write_draft(&dir, "a.sql", b"select 2;").await;
+    service
+        .archive(archive_req(&draft2, "a.sql", Some(&first.resource_id)))
+        .await
+        .expect("re-archive");
+    assert!(
+        !service
+            .store()
+            .get_resource_versions(&first.resource_id)
+            .await
+            .expect("versions")
+            .is_empty(),
+        "前置条件：要有一条版本快照行"
+    );
+
+    service
+        .set_assertion(&first.resource_id, crate::model::ArchiveAssertion {
+            metric_name: Some("日活".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("assertion");
+    service
+        .set_lifecycle(
+            &first.resource_id,
+            crate::model::Lifecycle::Superseded,
+            Some("ar_new"),
+            None,
+        )
+        .await
+        .expect("lifecycle");
+    assert!(
+        !service
+            .store()
+            .get_refs(&first.resource_id)
+            .await
+            .expect("refs")
+            .is_empty(),
+        "前置条件：要有一条谱系"
+    );
+
+    service
+        .store()
+        .soft_delete_archive(&first.resource_id)
+        .await
+        .expect("soft delete");
+    service
+        .store()
+        .purge_deleted_row(&first.resource_id)
+        .await
+        .expect("永久删除不应被外键拦下");
+
+    assert!(
+        service
+            .store()
+            .get_resource_by_id(&first.resource_id)
+            .await
+            .is_err(),
+        "登记行应已删除"
+    );
+    assert!(service
+        .store()
+        .get_resource_versions(&first.resource_id)
+        .await
+        .expect("versions")
+        .is_empty());
+    assert!(service
+        .store()
+        .get_refs(&first.resource_id)
+        .await
+        .expect("refs")
+        .is_empty());
+    assert!(
+        !service
+            .store()
+            .all_assertions()
+            .await
+            .expect("assertions")
+            .contains_key(&first.resource_id),
+        "断言不应留下孤儿"
+    );
+    assert!(
+        !service
+            .store()
+            .get_resource_events(&first.resource_id)
+            .await
+            .expect("events")
+            .is_empty(),
+        "履历刻意保留：它要回答「这条结论曾经存在过」"
+    );
+
+    let _ = fs::remove_dir_all(&dir).await;
+}

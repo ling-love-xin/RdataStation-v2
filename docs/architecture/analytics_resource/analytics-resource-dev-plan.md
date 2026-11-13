@@ -1,5 +1,8 @@
 # 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
 
+> ⚠️ **阶段快照（2026-11-12 回写）**：本文记录当时的设计与进度，正文里的测试数、迁移编号、待办状态**已过时**（027 / 028 / 029 已被时间线 / 语义 / 谱系占用，A6 顺延 030）。当前实现以 `crates/analytics_resource/README.md` 与 `D:\RdataStation\RDS\M6-终审问题清单-2026-11-12.md` 为准。
+
+
 > 状态：**设计定稿（2026-09-15）；Phase 0–3 主体 + Phase 2 前八刀 + UI 收尾与第十一 ~ 十六刀（2026-09-20）已落地**——归档/取回/再归档闭环（**含标签 / 分组 / 别名真的落上**）+ 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、四个设置项、**搜索匹配面（显示名 / 别名 / 标签 / 来源表 / 尾部）**、**拖拽行到分组头**、**重命名显示名与别名（`F2` / 行右键 / 详情头部）**、**详情面板的内容预览**、**默认分组**均可用，**152 单测 + 35 窗口测试全绿**（详见 §0 进度记录；行态口径对齐见第九刀的 V 表） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
 > 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
 > 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）

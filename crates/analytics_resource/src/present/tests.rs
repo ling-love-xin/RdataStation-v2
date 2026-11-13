@@ -296,6 +296,8 @@ fn details_carry_per_kind_size_and_real_history_count() {
     counts.insert("ar_analysis".to_string(), 3);
 
     let snapshot = build_snapshot(SnapshotInputs {
+        assertions: Default::default(),
+        lifecycles: Default::default(),
         resources: &resources,
         global_rows: Vec::new(),
         global_resources: Vec::new(),
@@ -357,6 +359,8 @@ fn detail_carries_recent_version_lines_capped_at_three() {
     );
 
     let snapshot = build_snapshot(SnapshotInputs {
+        assertions: Default::default(),
+        lifecycles: Default::default(),
         resources: &resources,
         global_rows: Vec::new(),
         global_resources: Vec::new(),
@@ -418,6 +422,8 @@ fn snapshot_carries_tags_for_rows_details_and_dictionary() {
     }];
 
     let snapshot = build_snapshot(SnapshotInputs {
+        assertions: Default::default(),
+        lifecycles: Default::default(),
         resources: &resources,
         global_rows: Vec::new(),
         global_resources: Vec::new(),
@@ -457,6 +463,8 @@ fn rows_carry_alias_and_source_table_for_the_search_surface() {
     let resources = vec![alias, table_ref];
 
     let snapshot = build_snapshot(SnapshotInputs {
+        assertions: Default::default(),
+        lifecycles: Default::default(),
         resources: &resources,
         global_rows: Vec::new(),
         global_resources: Vec::new(),
@@ -503,6 +511,8 @@ fn details_carry_group_name_and_preview() {
     );
 
     let snapshot = build_snapshot(SnapshotInputs {
+        assertions: Default::default(),
+        lifecycles: Default::default(),
         resources: &resources,
         global_rows: Vec::new(),
         global_resources: Vec::new(),
@@ -561,6 +571,8 @@ fn snapshot_counts_route_status_before_kind() {
     statuses.insert("ar_5".to_string(), ArchiveStatus::ContentChanged);
 
     let snapshot = build_snapshot(SnapshotInputs {
+        assertions: Default::default(),
+        lifecycles: Default::default(),
         resources: &resources,
         global_rows: Vec::new(),
         global_resources: Vec::new(),

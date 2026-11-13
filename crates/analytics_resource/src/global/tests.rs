@@ -13,6 +13,12 @@ const PAYLOAD_MODE_MIGRATION_SQL: &str =
 const TAG_LINK_FK_MIGRATION_SQL: &str = include_str!(
     "../../../store/migrations/project_meta/024_analytics_resource_tags_drop_tag_fk.sql"
 );
+const TIMELINE_MIGRATION_SQL: &str = concat!(
+    include_str!("../../../store/migrations/project_meta/027_analytics_resource_timeline.sql"),
+    include_str!("../../../store/migrations/project_meta/028_analytics_resource_semantics.sql"),
+    include_str!("../../../store/migrations/project_meta/029_analytics_resource_refs.sql"),
+    include_str!("../../../store/migrations/project_meta/030_analytics_resource_checkouts.sql")
+);
 
 struct TestEnv {
     dir: PathBuf,
@@ -23,7 +29,7 @@ struct TestEnv {
 }
 
 async fn create_test_env() -> TestEnv {
-    let dir = std::env::temp_dir().join(format!("rds_gtest_{}", Uuid::new_v4().simple()));
+    let dir = crate::tests::temp_project_dir("gtest");
     let global_dir = dir.join("global");
     let project_dir = dir.join("project");
     fs::create_dir_all(&global_dir).expect("create global dir");
@@ -60,6 +66,9 @@ async fn create_test_env() -> TestEnv {
         inner
             .execute_batch(TAG_LINK_FK_MIGRATION_SQL)
             .expect("migrate 024");
+        inner
+            .execute_batch(TIMELINE_MIGRATION_SQL)
+            .expect("migrate 027");
     }
 
     // 项目 DuckDB 写连接（独立临时文件）。

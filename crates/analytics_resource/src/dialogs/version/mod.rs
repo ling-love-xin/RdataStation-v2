@@ -37,6 +37,11 @@ pub struct VersionDialogSeed {
     pub current_version: i32,
     /// 版本行（降序，含当前版本那一行）。
     pub rows: Vec<VersionRow>,
+    /// 资产履历（版本节点 + 落库事件，时间倒序）。
+    ///
+    /// 版本行回答「哪一版的内容变了」，履历回答「这条结论经历过什么」——两者互补，
+    /// 单独看版本表答不出归档 / 取回 / 撤销 / 口径变更这些事。
+    pub timeline: Vec<crate::model::TimelineRow>,
 }
 
 /// 动作栏的动作（选中某一行后由用户点出；执行一律回宿主）。

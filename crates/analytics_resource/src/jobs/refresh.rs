@@ -2,6 +2,9 @@
 
 use super::*;
 
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
+
 /// 动作之后补一次取数（同一个 worker 里，见模块头注释）。
 pub(crate) fn refresh_after_op(rt: &tokio::runtime::Runtime, project_root: PathBuf, read_only: bool) {
     let result = rt.block_on(run_refresh(&RefreshJob {
@@ -24,11 +27,90 @@ pub(crate) async fn open_service(
         .await
         .map_err(|e| format!("打开项目库失败：{e}"))?;
     let store = AnalyticsResourceStore::new(manager.sqlite_pool());
+    // 迁移账本按 MAX(version) 跳过，老库 / 跳号场景可能漏建 027–030 的表。
+    // 用与迁移同源的 IF NOT EXISTS 补建一遍；只读项目写不了 DDL 时只告警，不阻断浏览。
+    if let Err(error) = store.ensure_m6_tables().await {
+        tracing::warn!(error = %error, "资产库扩展表自检未通过，语义写入可能失败");
+    }
     let service = ArchiveService::new(project_root, store);
     Ok(match keep_versions {
         Some(keep) => service.with_keep_versions(keep),
         None => service,
     })
+}
+
+/// 业务时间窗是否明显过期：只认文本里出现的四位年份（如 `2026Q3` / `2026-01`）。
+///
+/// 认不出来就当不过期——主动校验宁可少报，也不能凭猜测把正常结论标成失效。
+/// 逐字节滑窗再 `from_utf8`，避免切在中文字符中间 panic。
+fn expired_time_window(window: &str, now_year: i32) -> bool {
+    let bytes = window.as_bytes();
+    if bytes.len() < 4 {
+        return false;
+    }
+    for index in 0..=bytes.len() - 4 {
+        let Some(slice) = bytes.get(index..index + 4) else {
+            continue;
+        };
+        let Ok(text) = std::str::from_utf8(slice) else {
+            continue;
+        };
+        if let Ok(year) = text.parse::<i32>() {
+            if (1900..=2100).contains(&year) {
+                return year < now_year;
+            }
+        }
+    }
+    false
+}
+
+/// 每个项目根只重放一次（刷新在每次动作后都会跑，不能反复覆盖本体）。
+static STAGING_REPLAYED: OnceLock<Mutex<HashSet<std::path::PathBuf>>> = OnceLock::new();
+
+/// 重放上次「索引事务已提交、本体替换失败」留下的暂存内容。
+///
+/// 顺序是「暂存 → 索引提交 → 原子替换」，崩溃或占用会留下 staged 文件：
+/// 此时索引已是新指纹、本体还是旧内容，indexer 只会在下次扫描报 `ContentChanged`，
+/// 用户得手工处理。这里在刷新前做一次**幂等且保守**的补齐：
+/// 只有 staged 的 sha256 与当前登记行的 `content_hash` **完全一致**才替换；
+/// 对不上（索引回滚了 / 用户又改了内容）就丢弃暂存并告警，绝不猜着覆盖。
+pub(super) async fn replay_staging(project_root: &std::path::Path, rows: &[AnalyticsResource]) {
+    {
+        let replayed = STAGING_REPLAYED.get_or_init(Default::default);
+        let mut seen = replayed.lock().unwrap_or_else(|e| e.into_inner());
+        if !seen.insert(project_root.to_path_buf()) {
+            return;
+        }
+    }
+    let payload = PayloadStore::new(project_root);
+    for item in payload.list_staged() {
+        let Some(row) = rows
+            .iter()
+            .find(|row| row.file_rel_path.as_deref() == Some(item.rel.as_str()))
+        else {
+            tracing::warn!(rel = %item.rel, path = %item.staged.display(), "暂存找不到对应登记行，丢弃（新内容需重新归档）");
+            payload.discard_staged(&item.staged).await;
+            continue;
+        };
+        let hash = match payload.content_hash(&item.staged).await {
+            Ok(hash) => hash,
+            Err(error) => {
+                tracing::error!(error = %error, path = %item.staged.display(), "暂存指纹计算失败，保留待下次处理");
+                continue;
+            }
+        };
+        if row.content_hash.as_deref() == Some(hash.as_str()) {
+            match payload.commit_staged(&item.staged, &item.rel).await {
+                Ok(_) => tracing::info!(rel = %item.rel, "已重放暂存内容，本体与索引恢复一致"),
+                Err(error) => {
+                    tracing::error!(error = %error, rel = %item.rel, "暂存重放失败，保留文件并交由索引修复")
+                }
+            }
+        } else {
+            tracing::warn!(rel = %item.rel, "暂存内容与当前登记指纹不符，丢弃（不做猜测覆盖）");
+            payload.discard_staged(&item.staged).await;
+        }
+    }
 }
 
 /// 取行 → 扫描 → 组装快照（工作线程上执行）。
@@ -43,6 +125,9 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
         .list_file_archives()
         .await
         .map_err(|e| format!("读取存档列表失败：{e}"))?;
+    // 先补齐上次「索引已提交、本体未替换」的暂存内容，再扫描——否则 scan 会把这种
+    // 可自动恢复的状态误报成 `ContentChanged` 交给用户手工处理。
+    replay_staging(&job.project_root, &rows).await;
     // 版本数**一次查完**：详情面板的"版本"区要按行给历史条数，逐行查会把一次刷新
     // 变成 N+1 次查询（面板展示的是整个列表）。
     let history_counts = store
@@ -115,7 +200,41 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
     // （全局列表是附加视图，不是项目刷新能否成功的前提）。
     let (global_rows, global_resources) = load_global_rows().await;
 
+    // 业务断言与效力：一次查完（与标签 / 分组同一纪律，避免详情区 N+1）。
+    let assertions = store.all_assertions().await.unwrap_or_else(|error| {
+        tracing::warn!(error = %error, "读取业务断言失败，详情与搜索降级为无断言");
+        Default::default()
+    });
+    let lifecycles = store.all_lifecycles().await.unwrap_or_default();
+
+    // 主动校验：业务时间窗明显过期时留一条醒目履历。刷新是高频动作，
+    // 所以由 store 用 NOT EXISTS 去重——不会每刷一次就往时间线刷一条重复告警。
+    let now_year = Utc::now().format("%Y").to_string().parse::<i32>().unwrap_or(0);
+    for (id, assertion) in &assertions {
+        let Some(window) = assertion.time_window.as_deref() else {
+            continue;
+        };
+        if !expired_time_window(window, now_year) {
+            // 口径已改到未过期的时间窗：撤掉旧告警，别让时间线一直挂着"已过期"。
+            if let Err(error) = store.clear_window_validations(id).await {
+                tracing::warn!(error = %error, resource_id = %id, "清除过期提示失败");
+            }
+            continue;
+        }
+        let version = rows
+            .iter()
+            .find(|row| row.id == *id)
+            .map(|row| row.version)
+            .unwrap_or(1);
+        let detail = format!("业务时间窗「{window}」已过期，请确认结论是否仍适用");
+        if let Err(error) = store.record_validation_if_absent(id, version, &detail).await {
+            tracing::warn!(error = %error, resource_id = %id, "记录时间窗校验事件失败");
+        }
+    }
+
     Ok(build_snapshot(SnapshotInputs {
+        assertions,
+        lifecycles,
         resources: &rows,
         global_rows,
         global_resources,
@@ -263,3 +382,22 @@ pub fn drain_index_scan() -> Option<Result<IndexScanRows, String>> {
     lock(&jobs().index_scan).take()
 }
 
+
+#[cfg(test)]
+mod validation_tests {
+    use super::expired_time_window;
+
+    #[test]
+    fn expired_window_recognizes_year_in_common_formats() {
+        assert!(expired_time_window("2020Q3", 2026));
+        assert!(expired_time_window("统计区间 2024-01 ~ 2024-12", 2026));
+        assert!(!expired_time_window("2026Q3", 2026));
+    }
+
+    #[test]
+    fn unrecognizable_window_never_reports_expiry() {
+        assert!(!expired_time_window("上季度", 2026));
+        assert!(!expired_time_window("", 2026));
+        assert!(!expired_time_window("中文口径说明", 2026));
+    }
+}

@@ -37,6 +37,8 @@ pub fn to_detail(
         ArchiveKind::TableRef => String::new(),
     };
     ArchiveDetail {
+        assertion: None,
+        lifecycle: Default::default(),
         id: resource.id.clone(),
         name: resource.name.clone(),
         alias: resource.alias.clone(),

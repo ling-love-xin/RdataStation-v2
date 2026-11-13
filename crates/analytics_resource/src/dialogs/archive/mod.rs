@@ -68,6 +68,10 @@ pub struct ArchiveDialogSeed {
     /// 与 `source_label` 的区别：后者是"草稿箱：reports/a.sql"这类一句话来路描述，
     /// 不承担路径展示；引用本体留原位，表单要给出可核对的绝对路径。
     pub source_abs_path: Option<String>,
+    /// 已有业务断言（取回后再归档时预填；首次归档为 `None`）。
+    ///
+    /// 选填：不填不影响归档，填了才进全局资产目录 / 才能被认证（见设计补篇 §2 L1）。
+    pub assertion: Option<crate::model::ArchiveAssertion>,
 }
 
 /// 目标占用：不静默覆盖，也不让用户手改路径——由宿主给出确定的改名落点。
@@ -93,6 +97,8 @@ pub struct ArchiveDialogResult {
     pub keep_versions: Option<KeepVersions>,
     /// 用户选定的归档粒度（复制 / 引用）。
     pub payload_mode: PayloadMode,
+    /// 业务断言（`None` = 一项都没填，不落库）。
+    pub assertion: Option<crate::model::ArchiveAssertion>,
 }
 
 /// 表单的输入实体（开窗前建好；测试可复核同一批实体）。
@@ -109,6 +115,18 @@ pub struct ArchiveDialogInputs {
     pub group_id: Rc<std::cell::RefCell<Option<String>>>,
     /// 归档方式选择：与分组同一纪律——状态住共享单元格，builder 每帧从它读。
     pub mode: Rc<std::cell::RefCell<PayloadMode>>,
+    /// 业务断言（选填）：四个短输入，避免一上来就摆一整张表单。
+    pub assertion_metric: Entity<InputState>,
+    pub assertion_definition: Entity<InputState>,
+    pub assertion_window: Entity<InputState>,
+    pub assertion_conclusion: Entity<InputState>,
+}
+
+/// 输入去空白；全空白视为「没填」（不落空串，避免详情面板多一行空值）。
+fn non_empty(value: impl std::fmt::Display) -> Option<String> {
+    // InputState::value() 给的是 SharedString，统一先转文本再去空白。
+    let trimmed = value.to_string().trim().to_string();
+    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 /// 标签输入解析：`,` / `，` / 空白分隔；去空、**去重保序**（顺序是用户敲的，别打乱）。
@@ -174,6 +192,28 @@ pub fn build_inputs(
     }
     let alias = cx.new(|cx| InputState::new(window, cx).placeholder("别名（可空）"));
     let keep_versions = cx.new(|cx| InputState::new(window, cx).placeholder("跟随设置（-1 全留）"));
+
+    let assertion_metric = cx.new(|cx| InputState::new(window, cx).placeholder("指标名（选填）"));
+    let assertion_definition =
+        cx.new(|cx| InputState::new(window, cx).placeholder("口径定义（选填）"));
+    let assertion_window =
+        cx.new(|cx| InputState::new(window, cx).placeholder("业务时间窗，如 2026Q3"));
+    let assertion_conclusion =
+        cx.new(|cx| InputState::new(window, cx).placeholder("一句话结论（选填）"));
+    // 取回后再归档：把上一次的口径带回来，用户只需改变化的那几项。
+    if let Some(existing) = &seed.assertion {
+        for (entity, value) in [
+            (&assertion_metric, existing.metric_name.clone()),
+            (&assertion_definition, existing.definition.clone()),
+            (&assertion_window, existing.time_window.clone()),
+            (&assertion_conclusion, existing.conclusion.clone()),
+        ] {
+            if let Some(value) = value {
+                entity.update(cx, |state, cx| state.set_value(value, window, cx));
+            }
+        }
+    }
+
     ArchiveDialogInputs {
         name,
         alias,
@@ -181,6 +221,10 @@ pub fn build_inputs(
         keep_versions,
         group_id: Rc::new(std::cell::RefCell::new(seed.group_id.clone())),
         mode: Rc::new(std::cell::RefCell::new(seed.default_mode)),
+        assertion_metric,
+        assertion_definition,
+        assertion_window,
+        assertion_conclusion,
     }
 }
 
@@ -200,6 +244,22 @@ pub fn submit_archive(inputs: &ArchiveDialogInputs, cx: &App) -> Option<ArchiveD
         group_id: inputs.group_id.borrow().clone(),
         keep_versions: keep,
         payload_mode: *inputs.mode.borrow(),
+        assertion: {
+            // 四项全空 = 没填断言：不落库、不写口径事件，归档流程与以前完全一致。
+            let candidate = crate::model::ArchiveAssertion {
+                question: None,
+                metric_key: None,
+                metric_name: non_empty(inputs.assertion_metric.read(cx).value()),
+                definition: non_empty(inputs.assertion_definition.read(cx).value()),
+                assumptions: None,
+                time_window: non_empty(inputs.assertion_window.read(cx).value()),
+                conclusion: non_empty(inputs.assertion_conclusion.read(cx).value()),
+                owner: None,
+                confirmed_by: None,
+                confirmed_at: None,
+            };
+            (!candidate.is_empty()).then_some(candidate)
+        },
     })
 }
 

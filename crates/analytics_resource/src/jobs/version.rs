@@ -10,7 +10,7 @@ use similar::TextDiff;
 
 use crate::dialogs::version::{VersionAction, VersionDialogSeed};
 use crate::dialogs::version_diff::VersionDiffSeed;
-use crate::present::build_version_rows;
+use crate::present::{build_timeline_rows, build_version_rows};
 use crate::{AnalyticsResource, ArchiveService, KeepVersions};
 
 use super::{Job, OpOutcome, free_dest, jobs, open_service};
@@ -94,12 +94,75 @@ pub(crate) async fn load_versions(job: &VersionsJob) -> Result<VersionRows, Stri
         })
         .unwrap_or(false);
 
+    // 履历事件与版本行一起在工作线程上取（渲染期零 I/O）。
+    // 老库没有事件表时不能让整个对话框打不开：履历为空仍可看版本，只是没有动作记录。
+    let mut events = service
+        .store()
+        .get_resource_events(&job.resource_id)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(error = %error, "读取资产履历失败，时间线只显示版本节点");
+            Vec::new()
+        });
+    // 谱系关系并入同一条时间线：内存里归一成事件节点，呈现层无需认识第二种数据源。
+    for reference in service
+        .store()
+        .get_refs(&job.resource_id)
+        .await
+        .unwrap_or_default()
+    {
+        events.push(crate::model::TimelineEvent {
+            id: format!("ref-{}-{}", reference.from_id, reference.to_id),
+            resource_id: job.resource_id.clone(),
+            version: None,
+            kind: crate::model::TimelineEventKind::Superseded,
+            detail: Some(format!(
+                "谱系 · {} → {}",
+                reference.from_id, reference.to_id
+            )),
+            content_hash: None,
+            occurred_at: reference.created_at,
+        });
+    }
+
+    // 取回凭据（030）并入时间线：把「从 vN 取回工作副本 → 再归档生成 vM」显式画出来。
+    // 与谱系同一手法——内存里归一成事件节点，呈现层仍只认识一种数据源。
+    for receipt in service
+        .store()
+        .checkouts_for_resource(&job.resource_id)
+        .await
+        .unwrap_or_default()
+    {
+        let (Some(consumed_at), Some(new_version)) =
+            (receipt.consumed_at, receipt.consumed_version)
+        else {
+            continue;
+        };
+        let short = Path::new(&receipt.dest_path)
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| "工作副本".to_string());
+        events.push(crate::model::TimelineEvent {
+            id: format!("rearchived-{}", receipt.dest_path),
+            resource_id: job.resource_id.clone(),
+            version: Some(new_version),
+            kind: crate::model::TimelineEventKind::Rearchived,
+            detail: Some(format!(
+                "从 v{} 取回「{}」后归档，生成 v{}",
+                receipt.from_version, short, new_version
+            )),
+            content_hash: None,
+            occurred_at: consumed_at,
+        });
+    }
+
     Ok(VersionRows {
         resource_id: job.resource_id.clone(),
         seed: VersionDialogSeed {
             name: current.name.clone(),
             current_version: current.version,
             rows: build_version_rows(&current, &versions, &copies, payload_ok),
+            timeline: build_timeline_rows(&current, &versions, &events),
         },
     })
 }
@@ -240,7 +303,7 @@ pub(crate) async fn run_version_action(job: &VersionActionJob) -> OpOutcome {
                 .and_then(|ext| ext.to_str())
                 .map(|ext| format!(".{ext}"))
                 .unwrap_or_default();
-            let dir = job.project_root.join(scratchpad::MODULE_DIR_NAME);
+            let dir = job.project_root.join(crate::resource_host::SCRATCHPAD_DIR);
             let dest =
                 free_dest(&dir.join(format!("{}（v{version} 工作副本）{extension}", job.name)));
             match service
@@ -248,6 +311,15 @@ pub(crate) async fn run_version_action(job: &VersionActionJob) -> OpOutcome {
                 .await
             {
                 Ok(_) => {
+                    // 取回历史版本同样是「取回」：凭此凭据改完再归档也会回到原存档升版，
+                    // 回溯起点就是用户选中的那个历史版本号。
+                    if let Err(error) = service
+                        .store()
+                        .record_checkout(&dest, &job.resource_id, version)
+                        .await
+                    {
+                        tracing::error!(error = %error, "历史版本取回凭据写入失败");
+                    }
                     let shown = dest
                         .strip_prefix(&job.project_root)
                         .map(|rel| rel.to_string_lossy().replace('\\', "/"))

@@ -139,6 +139,11 @@ pub struct ResourcesFilter {
     pub tags: Vec<String>,
     /// 只看需要处理的异常（缺失 / 内容已变），对应状态行的“修复…”场景。
     pub only_issues: bool,
+    /// 业务断言搜索索引：`resource_id → 可搜文本`。
+    ///
+    /// 走旁路而不是给 `ArchiveRow` 加字段：行模型有十几个构造点（含大量窗口测试），
+    /// 而筛选条件在每次快照推送时整份替换，天然适合携带这类派生索引。
+    pub assertion_index: std::collections::HashMap<String, String>,
 }
 
 impl ResourcesFilter {
@@ -210,8 +215,15 @@ impl ResourcesFilter {
     /// 单行是否命中。
     pub fn matches(&self, row: &ArchiveRow) -> bool {
         let query = self.query.trim().to_lowercase();
-        if !query.is_empty() && !search_haystack(row).contains(&query) {
-            return false;
+        if !query.is_empty() {
+            let in_row = search_haystack(row).contains(&query);
+            let in_assertion = self
+                .assertion_index
+                .get(&row.id)
+                .is_some_and(|text| text.contains(&query));
+            if !in_row && !in_assertion {
+                return false;
+            }
         }
         if !self.kinds.is_empty() && !self.kinds.contains(&row.kind) {
             return false;
@@ -230,7 +242,9 @@ impl ResourcesFilter {
 ///
 /// 这份清单与 [`search_haystack`] 是同一件事的两种表达：一份给程序拼串，一份给用户看
 /// （[`no_match_hint`]）。加字段时两边一起改——单测会拦住“清单与实现不同步”。
-pub const SEARCH_FIELDS: [&str; 5] = ["显示名", "别名", "标签", "来源表", "尾部信息"];
+pub const SEARCH_FIELDS: [&str; 6] = [
+    "显示名", "别名", "标签", "来源表", "尾部信息", "业务口径",
+];
 
 /// 无匹配空态的副文案（原型 §5）。
 ///

@@ -32,7 +32,8 @@ impl<'a> IndexRepair<'a> {
         });
 
         self.store
-            .insert_archive(NewArchiveInput {
+            .insert_archive_with_event(
+                NewArchiveInput {
                 resource_type: kind.as_db_str().to_string(),
                 name: display_name,
                 alias: None,
@@ -49,7 +50,9 @@ impl<'a> IndexRepair<'a> {
                 file_size,
                 binding: ArchiveBinding::default(),
                 scope: "project".to_string(),
-            })
+                },
+                Some("索引修复：补登未登记本体"),
+            )
             .await
     }
 
@@ -88,13 +91,19 @@ impl<'a> IndexRepair<'a> {
                 reason: e.to_string(),
             })
         })?;
-        let snapshot_id = self
-            .store
-            .save_resource_version(resource_id, current.version, &snapshot)
-            .await?;
-
+        // 与主归档路径同一纪律（P0-1）：快照 + 索引 +1 + 履历事件同一事务。
+        // 修复动作更要留痕——「这版的指纹为什么变了」正是半年后最容易被问到的问题。
         self.store
-            .update_archive_content(resource_id, &actual_hash, &snapshot_id, actual_size, None)
+            .commit_new_version(
+                resource_id,
+                current.version,
+                &snapshot,
+                &actual_hash,
+                actual_size,
+                None,
+                crate::model::TimelineEventKind::Validated,
+                Some("索引修复：接受本体的当前内容（旧内容已不可得）"),
+            )
             .await
     }
 

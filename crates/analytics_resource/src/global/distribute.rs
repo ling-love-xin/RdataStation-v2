@@ -117,12 +117,19 @@ impl GlobalInstanceStore {
                 quote_ident(name),
                 tmp.to_string_lossy().replace('\\', "/")
             );
-            self.with_duckdb(|conn| {
-                conn.execute_batch(&copy_sql)
-                    .map_err(|e| duckdb_err("distribute_copy_out", &e.to_string()))?;
-                Ok(())
-            })
-            .await?;
+            let copy_result = self
+                .with_duckdb(|conn| {
+                    conn.execute_batch(&copy_sql)
+                        .map_err(|e| duckdb_err("distribute_copy_out", &e.to_string()))?;
+                    Ok(())
+                })
+                .await;
+            // COPY 失败时 `?` 会提前返回，后面那句「用后即删」就执行不到——
+            // 先把可能已生成的半截 parquet 收掉，别往系统临时目录漏文件。
+            if copy_result.is_err() {
+                let _ = std::fs::remove_file(&tmp);
+            }
+            copy_result?;
 
             let create_sql = format!(
                 "CREATE TABLE {} AS SELECT * FROM read_parquet('{}');",

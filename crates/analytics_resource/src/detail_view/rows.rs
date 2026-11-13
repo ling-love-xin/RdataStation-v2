@@ -68,6 +68,29 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
     source.push((HASH_LABEL, short_hash(detail.content_hash.as_deref())));
     sections.push(("来源".to_string(), source));
 
+    // 2.5) 业务口径（选填）：回答「这个数是什么意思」。没填就整区不摆——
+    // 一排「（无）」除了占地方没有信息量（与 `detail_rows` 的空值纪律一致）。
+    if let Some(assertion) = &detail.assertion {
+        let mut semantics: Vec<(&'static str, String)> = Vec::new();
+        for (label, value) in [
+            ("业务问题", assertion.question.as_deref()),
+            ("指标", assertion.metric_name.as_deref()),
+            ("口径定义", assertion.definition.as_deref()),
+            ("过滤与假设", assertion.assumptions.as_deref()),
+            ("业务时间窗", assertion.time_window.as_deref()),
+            ("结论摘要", assertion.conclusion.as_deref()),
+            ("责任人", assertion.owner.as_deref()),
+        ] {
+            if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+                semantics.push((label, value.to_string()));
+            }
+        }
+        semantics.push(("效力", detail.lifecycle.label().to_string()));
+        if semantics.len() > 1 {
+            sections.push(("业务口径".to_string(), semantics));
+        }
+    }
+
     // 3) 版本（**总是出现**：只有 v1 的存档也能打开版本历史看一眼——那个列表里
     //    至少有一行当前版本，而“没有历史”本身就是一条信息）
     let history = if detail.history_label.is_empty() {

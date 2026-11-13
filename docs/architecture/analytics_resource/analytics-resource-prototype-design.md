@@ -1,5 +1,8 @@
 # 资产库 / 分析存档模块（M6）· 原型设计
 
+> ⚠️ **阶段快照（2026-11-12 回写）**：本文记录当时的设计与进度，正文里的测试数、迁移编号、待办状态**已过时**（027 / 028 / 029 已被时间线 / 语义 / 谱系占用，A6 顺延 030）。当前实现以 `crates/analytics_resource/README.md` 与 `D:\RdataStation\RDS\M6-终审问题清单-2026-11-12.md` 为准。
+
+
 > 状态：**设计定稿（原型 v1，2026-09-15）；Phase 0–4 主体已落地（归档/取回/版本/组织/检索/回收站/索引修复 + 五个对话框，162 单测 + 35 窗口测试全绿）；2026-10-13 语义裁决（copy 两档粒度 / TableRef 划掉 / A2 洞察归档）与 T18–T21 洞察联动增量见 §12** · 关联文件：`analytics-resource-prototype.html`（可交互原型）、`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-dev-plan.md`（开发方案）、`analytics-resource-gap-review.md`（2026-10-22 差距清单）
 > 技术栈：gpui-kit 0.7.1（五段布局见 `../layout/layout-design.md`；左 Dock 起步宽 15rem = 240px，右侧详情面板默认 20rem）
 > 前置：v1 蓝本 `v1/frontend/extensions/builtin/analytics-resource/`（**前端仅占位卡片列表**，15 个组件未接线，见 §10）
