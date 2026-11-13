@@ -409,6 +409,15 @@ impl PluginManagerPanel {
                     .collect();
             (rows, log.rows.len(), log.error.clone(), log.loading)
         };
+        // 导出结果（D8e）：按钮点完之后的一句反馈，路径原样给出（用户要能直接去拿文件）
+        let ops_export = {
+            let log = ops_log.borrow();
+            (
+                log.export_note.clone(),
+                log.export_error.clone(),
+                log.exporting,
+            )
+        };
         let ops_count = ops_snapshot.1;
         let ops_row = div()
             .h_flex()
@@ -485,7 +494,36 @@ impl PluginManagerPanel {
                             let _ = manager.update(app, |this, cx| this.load_operations(cx));
                         }
                     }),
-            );
+            )
+            .child(
+                // 导出 JSON（D8e）：排障时把留痕拿走比翻页实用；导出的是**全量**（1000 条上限），
+                // 不是屏幕上那 50 条。按钮不做禁用，靠 `exporting` 状态挡住重复点。
+                Button::new("plugin-manager-ops-export")
+                    .ghost()
+                    .label(SharedString::from(if ops_export.2 {
+                        "导出中…".to_string()
+                    } else {
+                        "导出 JSON".to_string()
+                    }))
+                    .with_size(Size::XSmall)
+                    .tooltip("把最近 1000 条留痕写成 JSON（排障用），落到全局目录的 exports/")
+                    .on_click({
+                        let manager = cx.entity();
+                        move |_, _, app| {
+                            let _ = manager.update(app, |this, cx| this.export_operations(cx));
+                        }
+                    }),
+            )
+            .children(ops_export.0.clone().map(|note| {
+                div()
+                    .text_color(theme.colors.success)
+                    .child(note)
+            }))
+            .children(ops_export.1.clone().map(|error| {
+                div()
+                    .text_color(theme.colors.danger)
+                    .child(error)
+            }));
 
         let ops_table = (self.show_operations()).then(|| {
             let mut table = div()

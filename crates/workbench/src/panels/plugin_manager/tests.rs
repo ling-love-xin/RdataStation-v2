@@ -690,3 +690,43 @@ fn operation_result_filter_keeps_the_right_rows() {
     assert!(fail.iter().all(|row| row.operation.result != "ok"));
 }
 
+// ---------- 导出 JSON（D8e） ----------
+
+#[test]
+fn export_writes_a_self_describing_json_file() {
+    let rows = [
+        row(1, "install", "ok", Some("rds.driver.sqlx"), None, None),
+        row(2, "missing_driver", "fail", None, Some("mysql"), Some("驱动未注册")),
+    ];
+    let dir = std::env::temp_dir().join(format!(
+        "rds-d8e-{}",
+        std::process::id()
+    ));
+    let path = dir.join("driver_operations_test.json");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    super::audit::export_operations_json(&path, &rows).expect("导出应成功");
+
+    let text = std::fs::read_to_string(&path).expect("读回导出文件");
+    let value: serde_json::Value = serde_json::from_str(&text).expect("导出应是合法 JSON");
+    // 自描述：条数 / 上限 / 说明都在，排障的人不必猜格式
+    assert_eq!(value["count"], 2, "{text}");
+    assert_eq!(value["limit"], super::audit::OPERATION_EXPORT_LIMIT);
+    assert!(
+        value["note"].as_str().unwrap_or_default().contains("occurred_at"),
+        "说明里要说清时间列是库内原值：{text}"
+    );
+    // 行内容原样保留（含失败原因与驱动 id）
+    let operations = value["operations"].as_array().expect("operations 数组");
+    assert_eq!(operations.len(), 2);
+    assert_eq!(operations[1]["result"], "fail");
+    assert_eq!(operations[1]["driver_id"], "mysql");
+    assert_eq!(operations[1]["reason"], "驱动未注册");
+    assert_eq!(operations[0]["plugin_id"], "rds.driver.sqlx");
+
+    // 目录不存在时自己建（导出目录可能还没被创建过）
+    assert!(path.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+
