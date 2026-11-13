@@ -167,7 +167,7 @@ DuckDB
     <table>
       <tr><th style="width:34px">步</th><th>改什么</th><th>为什么</th></tr>
       <tr><td>1</td><td>新增 <code>fn group_of(kind) -> Group{Database,DuckDb,File}</code>，只用于 tab 与组标题</td><td>三个根是<b>视图分组</b>，不是新的数据模型；5 个叶子保留</td></tr>
-      <tr><td>2</td><td><code>PickerState</code> 增 <code>expanded: HashSet<NodeId></code> / <code>query: String</code> / <code>selected: Option<NodeId></code> / <code>recent: Vec<NodeId></code></td><td>树态与搜索态必须进状态对象——模态渲染闭包每帧重建 UI</td></tr>
+      <tr><td>2</td><td><code>PickerState</code> 增 <code>expanded: HashSet&lt;NodeId&gt;</code> / <code>query: String</code> / <code>selected: Option&lt;NodeId&gt;</code> / <code>recent: Vec&lt;NodeId&gt;</code></td><td>树态与搜索态必须进状态对象——模态渲染闭包每帧重建 UI</td></tr>
       <tr><td>3</td><td>五处 <code>render_*</code> 合成一个 <code>render_rows(&amp;[Row])</code>，<code>Row</code> 只带 <code>depth / kind / label / meta / selectable</code></td><td>三个根共用一套行渲染；各行数据源各自产出 <code>Row</code></td></tr>
     </table>
     <p style="margin-top:8px"><b><code>has_target()</code></b> 改为按选中节点 kind 判断（<code>Table</code> / <code>File</code> / <code>Temp</code> 可确认，<code>Group</code> / <code>Folder</code> / <code>Conn</code> 不可）。<b><code>confirm_prefix</code> + 选中标签</b> 的现有逻辑不动。</p>
