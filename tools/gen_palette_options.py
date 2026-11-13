@@ -1028,7 +1028,12 @@ def build_md(total_checks, total_fail):
                  "`audit_theme_packs.py` 按**包文件口径**再验 140/140 覆盖、52 对主题对比度、9 对产品对比度、"
                  "41 个语法名覆盖与着色对比度。")
     lines.append("- 选中底 / 文本选区按 `clamp_alpha` 上限（0.2 / 0.3）给值，超限会被 schema 静默压缩。")
-    lines.append("- **未做的**：真机截图比对（明暗各一张全界面）；第 3 个包之前 `ProductTokenSet` 仍是“按模式”单例"
+    lines.append("- **真机核验（2026-11-13 已做一半）**：`cargo build -p rds-app` 后直接跑 `target/debug/rds-app.exe`"
+                 "（dev 期资源目录落在仓库 `assets/`），设置页「外观 → 主题方案」可见 `RDS 经典` / `青花` 两档；"
+                 "点「青花」后界面即时重绘为青花配色、`target/debug/config/settings.json` 落盘 `\"theme_pack\": \"qinghua\"`；"
+                 "再点「深色」界面转暗（实测内容区像素 `#1A232E`，是青花暗色的靛蓝底，不是 RDS Dark 的中性 `#1E1E1E`）。"
+                 "截图存 `.rds/tmp/palette-lab/app_*.png`。**仍需人工过目**：明暗 × 两包的四组合全界面（表格页 / 结果集 / 编辑器）。")
+    lines.append("- **未做的**：第 3 个包之前 `ProductTokenSet` 仍是“按模式”单例"
                  "（多包**并存**切换需先升级）；主题包的更换只在单进程内即时生效，回滚 = 再选回 `rds`。")
     lines.append("- 审计脚本已可指定文件：`python tools/theme_audit.py --theme <任意主题文件> "
                  "[--product <产品 token>] [--strict]`（`--theme` 指到包内 `theme.json` 时，产品 token 默认取同目录；"
