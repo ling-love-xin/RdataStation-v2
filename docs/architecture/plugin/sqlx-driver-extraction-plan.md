@@ -624,6 +624,32 @@ statement protocol yet`（D6 阶段没暴露是因为上下文压根没发出去
 「装插件 / 不装插件」两态真机复验（老连接 `driver_id='mysql'` 的两种行为）仍需插件包
 `bin/win-x64/agent.exe` 构建后才能跑。
 
+### 7.8 D8 后的插件侧实证（2026-11-13，插件包已构建）
+
+**做了什么**：`tools/plugin-drivers/sqlx-rust-plugin/build.ps1` 在本机跑不通（pwsh 7 下
+解析报「字符串缺少终止符」，脚本内容被按 GBK 解码），改用等价命令直接编：
+`$env:CARGO_TARGET_DIR=.rds\target-gf; cargo build --manifest-path tools/plugin-drivers/sqlx-rust/Cargo.toml`
+→ `.rds\target-gf\debug\rds-sqlx-sidecar.exe`（9.7 MB）→ 复制为
+`tools/plugin-drivers/sqlx-rust-plugin/bin/win-x64/agent.exe`（`bin/` 已 gitignore）。
+
+**跑了什么**：`crates/plugin/tests/sidecar_conformance.rs` 换靶子（`RDS_SIDECAR_BIN` = 上面那个 exe），
+两驱动各跑一支真机一致性（`192.168.3.138`）：
+
+| 靶子 | 结果 | 关键事实 |
+| --- | --- | --- |
+| `mysql`（3306，库 `mysql`） | **6 passed** | `driver.describe` 能力 6 项、服务端版本 `9.7.2`；3000 行 → Arrow 1 批；`meta.objects` 7 个；stdin 关掉后自退（`exit_code=0`）；`cancel` 未声明 → 该条按设计跳过 |
+| `postgres`（5432，catalog `warehouse_supply_chain`） | **6 passed** | 能力 7 项、服务端 `PostgreSQL 18.6`；catalog 2 个 / schema 4 个 / 对象 27 个；`dbeaver_pg_render_test` 表 34 列（首列 `id integer`）；3000 行 → Arrow 1 批 |
+
+**顺带修掉验收工具的一处假绿（重要）**：`sidecar_conformance.rs` 判「有没有 schema 层」用的是
+`descriptor.supports("schemas")`——那是**本仓 fixture 的词汇**；真实驱动插件报的是内核能力字典的
+`schema_browser`。于是 PG 永远走「catalog 当 schema」的单层分支，对象 0 个，`object_detail` /
+`routine_source` 两项又被「空库合法」放过去，**schema 层从未被验**。改为两个键都认之后，PG 立刻
+走到 `public` 等 4 个 schema 并验到 27 个对象与 34 列（上面那行就是这么来的）；fixture 与 MySQL
+（不声明 schema 浏览，本来就没有 schema 层）结论不变。
+
+**仍未做**：应用内「装插件 / 不装插件」两态（S-3）——需要 GUI 安装插件后拿老连接
+（`driver_id='mysql'`）真连一次，属界面级验收。
+
 ---
 
 ## 8. 验收清单
