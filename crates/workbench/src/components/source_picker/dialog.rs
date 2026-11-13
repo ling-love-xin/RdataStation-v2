@@ -543,6 +543,12 @@ pub fn open_source_picker(
         config.kinds, conns, drafts, analysis,
     )));
     state.borrow_mut().note = note;
+    // 打开即展开首个根：否则首屏只有三行光秃秃的根，比老的扁平列表更「空」。
+    // 只展开根这一层——连接再展开才触发 introspect（懒加载语义不变）。
+    if let Some((group, _)) = grouped(config.kinds).first() {
+        let root = group_id_row(*group).id;
+        state.borrow_mut().tree.expand(&root);
+    }
 
     let search =
         cx.new(|cx| InputState::new(window, cx).placeholder("搜索表 / 视图 / 文件（Ctrl+F）"));

@@ -7,26 +7,50 @@
 //!   共用原语与 `ui` 常量，不在这里另立一套；
 //! - 颜色一律 `cx.theme()`，没有裸色值。
 //!
-//! 这一刀刻意**不画类型图标**：`scratchpad` crate 的扩展名→图标映射是它私有的，
-//! 在 workbench 侧再复制一份会造成两处漂移。类型图标留给下一刀（需要一个 workbench
-//! 侧的公共映射），当前先保证缩进 / 展开 / 选中 / 禁用 / 面包屑正确。
+//! 这一刀**复用** `scratchpad` 的扩展名→图标映射（`scratchpad_type_icon` 是 `pub`，注释里
+//! 就写明「供 workbench 作 `type_icon` 注入」）：在 workbench 侧再复制一份必然漂移。
+//! 目录 / 表 / 连接用 Lucide 通用图标（`folder` / `table` / `database`），都是本仓
+//! 已经在用的路径（`scratchpad_type_icon` 与它旁边的文件夹注释），不引未验证的名字。
 
 use std::rc::Rc;
 
+use gpui_kit::assets::IconNamed;
 use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{ActiveTheme, Sizable as _};
+use gpui_kit::component::{ActiveTheme, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use workbench_shell::{tree, ui};
 
-use super::node::{NodeId, Row};
+use super::node::{NodeId, NodeKind, Row};
 use super::state::TreeState;
 
 /// 行点击回调。`window` 由回调自己 `refresh()`——渲染层不持有 `App`。
 pub type RowAction = Rc<dyn Fn(&NodeId, &mut Window)>;
+
+/// 图标路径（`IconName` 之外的那一类：`scratchpad` 给的是裸路径）。
+///
+/// 包一层是为了让 `Icon::new(...)` 吃得下——它要的是 `IconNamed`，不是 `&str`。
+struct IconPath(SharedString);
+
+impl IconNamed for IconPath {
+    fn path(self) -> SharedString {
+        self.0
+    }
+}
+
+/// 一行的类型图标：目录 / 连接 / 表 / 临时表给通用标，文件走扩展名映射。
+fn row_icon(row: &Row) -> IconPath {
+    let path = match row.kind {
+        NodeKind::Group | NodeKind::Folder => "icons/folder.svg",
+        NodeKind::Conn => "icons/database.svg",
+        NodeKind::Table | NodeKind::Temp => "icons/table.svg",
+        NodeKind::File => scratchpad::scratchpad_view::scratchpad_type_icon(&row.label),
+    };
+    IconPath(SharedString::from(path))
+}
 
 /// 把可见行画成一个滚动列表。
 ///
@@ -109,6 +133,13 @@ pub fn render_rows(
             tree::disclosure_slot()
         });
 
+        // 类型图标：与标签同一行的词法位置（目录 / 连接 / 表 / 文件），尺寸走 ui 常量
+        el = el.child(
+            Icon::new(row_icon(row))
+                .size(rems(ui::ICON_SIZE_SM))
+                .text_color(muted),
+        );
+
         // 标签用 `Button::ghost()` 而不是裸文本：行是可点元素，必须键盘可达
         // （`track_focus` + `tab_stop` 由 Button 自带；规范 §04 / gpui-kit-dev 组件选型）
         el = el.child(
@@ -183,6 +214,51 @@ fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::super::node::{NodeKind, Row};
+
+    /// 图标选择按 `NodeKind` 分档：目录类同标、连接给库标、表/临时表给表标。
+    /// 文件走扩展名映射（CSV 与 parquet 都是「表」形态，无扩展名才落到通用文件）。
+    #[test]
+    fn icons_follow_the_row_kind() {
+        let folder = Row::new(
+            super::super::node::NodeId::Path("f".into()),
+            1,
+            NodeKind::Folder,
+            "草稿箱",
+        );
+        assert_eq!(super::row_icon(&folder).0.as_ref(), "icons/folder.svg");
+
+        let conn = Row::new(
+            super::super::node::NodeId::Path("c".into()),
+            1,
+            NodeKind::Conn,
+            "mysql_src",
+        );
+        assert_eq!(super::row_icon(&conn).0.as_ref(), "icons/database.svg");
+
+        let table = Row::new(
+            super::super::node::NodeId::Path("t".into()),
+            3,
+            NodeKind::Table,
+            "orders",
+        );
+        assert_eq!(super::row_icon(&table).0.as_ref(), "icons/table.svg");
+
+        let csv = Row::new(
+            super::super::node::NodeId::Path("数据/a.csv".into()),
+            2,
+            NodeKind::File,
+            "a.csv",
+        );
+        assert_eq!(super::row_icon(&csv).0.as_ref(), "icons/table.svg");
+
+        let unknown = Row::new(
+            super::super::node::NodeId::Path("x.zzz".into()),
+            2,
+            NodeKind::File,
+            "x.zzz",
+        );
+        assert_eq!(super::row_icon(&unknown).0.as_ref(), "icons/file.svg");
+    }
 
     /// 只有导航层的三种行可展开；表 / 文件 / 临时表是叶子（否则 chevron 会骗人）。
     #[test]
