@@ -82,6 +82,30 @@ async fn probe<D: Database>(db: &D, label: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn postgres_native_rows_reach_the_temp_table() {
+    let Ok(url) = std::env::var("RDS_TEST_PG_URL") else {
+        eprintln!("⏭️  未设 RDS_TEST_PG_URL，跳过");
+        return;
+    };
+    let db = PostgresNativeDatabase::new(&url)
+        .await
+        .expect("连接 PostgreSQL");
+    probe(&db, "PostgreSQL（官方原生驱动）").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mysql_native_rows_reach_the_temp_table() {
+    let Ok(url) = std::env::var("RDS_TEST_MYSQL_URL") else {
+        eprintln!("⏭️  未设 RDS_TEST_MYSQL_URL，跳过");
+        return;
+    };
+    let db = MySqlNativeDatabase::new(&url)
+        .await
+        .expect("连接 MySQL");
+    probe(&db, "MySQL（官方原生驱动）").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn sqlite_rows_reach_the_temp_table() {
     let Ok(path) = std::env::var("RDS_TEST_SQLITE_PATH") else {
         eprintln!("⏭️  未设 RDS_TEST_SQLITE_PATH，跳过");

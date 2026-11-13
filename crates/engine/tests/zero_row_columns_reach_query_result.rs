@@ -10,6 +10,10 @@
 //! 现在 0 行分支退回 `prepare`（sqlx）/ `prepare`（tokio-postgres）取 statement 的
 //! 列描述，列名与有行时的结果同源（都是驱动对语句的列描述）。
 //!
+//! 覆盖范围：**内核里的官方原生驱动**（`mysql_native` / `postgres_native`）与
+//! SQLite / DuckDB。sqlx 两条驱动（`mysql` / `postgres`）已随插件迁出内核，
+//! 它们的同一结论不在这里验。
+//!
 //! ## 这个文件钉什么
 //!
 //! 对每个真机驱动：执行一个**必然 0 行**、但列结构明确的 SELECT，断言
@@ -50,6 +54,30 @@ async fn probe<D: Database>(db: &D, label: &str) {
     );
 
     println!("✅ {label}: 0 行结果返回列名 {:?}", result.columns);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn postgres_native_zero_row_keeps_columns() {
+    let Ok(url) = std::env::var("RDS_TEST_PG_URL") else {
+        eprintln!("⏭️  未设 RDS_TEST_PG_URL，跳过");
+        return;
+    };
+    let db = PostgresNativeDatabase::new(&url)
+        .await
+        .expect("连接 PostgreSQL");
+    probe(&db, "PostgreSQL（官方原生驱动）").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mysql_native_zero_row_keeps_columns() {
+    let Ok(url) = std::env::var("RDS_TEST_MYSQL_URL") else {
+        eprintln!("⏭️  未设 RDS_TEST_MYSQL_URL，跳过");
+        return;
+    };
+    let db = MySqlNativeDatabase::new(&url)
+        .await
+        .expect("连接 MySQL");
+    probe(&db, "MySQL（官方原生驱动）").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

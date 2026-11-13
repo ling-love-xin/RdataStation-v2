@@ -14,12 +14,15 @@
 //!
 //! | 库 | 语句 | 期望 |
 //! | --- | --- | --- |
-//! | PG（两个驱动） | `SELECT 1` | `Some(true)` |
-//! | PG（两个驱动） | `SHOW search_path`（元信息语句） | `Some(true)` |
-//! | MySQL（两个驱动） | `SELECT 1` | `Some(true)` |
-//! | MySQL（两个驱动） | `SHOW TABLES` | `Some(true)` |
+//! | PG（`postgres_native`） | `SELECT 1` | `Some(true)` |
+//! | PG（`postgres_native`） | `SHOW search_path`（元信息语句） | `Some(true)` |
+//! | MySQL（`mysql_native`） | `SELECT 1` | `Some(true)` |
+//! | MySQL（`mysql_native`） | `SHOW TABLES` | `Some(true)` |
 //! | SQLite | `SELECT 1` / `PRAGMA database_list` | `Some(true)` |
 //! | DuckDB | `SELECT 1` / `EXPLAIN SELECT 1` | `Some(true)` |
+//!
+//! 覆盖范围：**内核里的官方原生驱动**。sqlx 两条驱动（`mysql` / `postgres`）已随插件
+//! 迁出内核，它们的同一结论不在这里验。
 //!
 //! ## 边界（如实说清）
 //!
@@ -57,6 +60,35 @@ async fn assert_read_only<D: Database>(db: &D, driver: &str, sql: &str) {
         Some(true),
         "{driver}: `{sql}` 的 is_read_only 应为 Some(true)（出口层按它分「返回行 / 影响行」）"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn postgres_native_reports_read_only() {
+    let Ok(url) = std::env::var("RDS_TEST_PG_URL") else {
+        eprintln!("⏭️  未设 RDS_TEST_PG_URL，跳过");
+        return;
+    };
+    println!("\n=== PostgreSQL（官方原生驱动）===");
+    let db = PostgresNativeDatabase::new(&url)
+        .await
+        .expect("连接 PostgreSQL");
+    assert_read_only(&db, "postgres_native", "SELECT 1").await;
+    // 元信息语句同样必须是只读：漏判会让它走写路径、丢掉结果集
+    assert_read_only(&db, "postgres_native", "SHOW search_path").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mysql_native_reports_read_only() {
+    let Ok(url) = std::env::var("RDS_TEST_MYSQL_URL") else {
+        eprintln!("⏭️  未设 RDS_TEST_MYSQL_URL，跳过");
+        return;
+    };
+    println!("\n=== MySQL（官方原生驱动）===");
+    let db = MySqlNativeDatabase::new(&url)
+        .await
+        .expect("连接 MySQL");
+    assert_read_only(&db, "mysql_native", "SELECT 1").await;
+    assert_read_only(&db, "mysql_native", "SHOW TABLES").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
