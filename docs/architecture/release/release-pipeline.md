@@ -20,8 +20,12 @@ git tag v0.1.0 && git push origin v0.1.0
 
 | 触发 | 行为 |
 | --- | --- |
-| `push` 标签 `v*` | 建/追加该标签的 Release，产物进 **Release Assets** |
+| `push` 标签 `v*` / `RDS-beta-*` | 先跑 `preflight`（UI 契约 + 标签↔版本号对账），再建/追加该标签的 Release，产物进 **Release Assets** |
 | Actions → Release → Run workflow | 只出**工作流附件**（`upload-artifact`），**不建 Release**——用来试跑矩阵，不污染版本页 |
+
+Release 正文取 `docs/release/notes/<标签名>.md`（手写，口径见 `docs/release/README.md`）；
+文件不存在才回落 GitHub 自动生成（单人直推没有 PR，自动生成只有一条 compare 链接）。
+`RDS-beta-*` 标签发出来的 Release 标 **prerelease**，不抢 Latest。
 
 | 平台 | runner / target | 产物 | 归档内容 |
 | --- | --- | --- | --- |
@@ -53,17 +57,20 @@ git tag v0.1.0 && git push origin v0.1.0
 ## 4. 维护者操作步骤
 
 ```bash
-# 1. 版本号对齐（不一致只会 warning，但产物按 tag 命名，别让它长期漂）
+# 1. 版本号对齐（不一致会**直接红掉 preflight**，不是 warning）
 #    改根 Cargo.toml 的 [workspace.package] version
-# 2. 提交
+# 2. 写发布说明：docs/release/notes/<标签名>.md
+#    草稿素材：pwsh tools/release-notes.ps1 -From <上一个标签> -Head HEAD
+#    （脚本只分组提交标题，句子要按 docs/release/README.md 的口径改写成用户视角）
+# 3. 提交
 git commit -am "Bump version to 0.1.1"
-# 3. 打标签推送（这一步就是发布动作）
+# 4. 打标签推送（这一步就是发布动作）
 git tag v0.1.1
 git push origin main --tags
 ```
 
-发布后校对三件事：Actions 四个 job 全绿 → Release 页有 8 个资产（4 归档 + 4 校验和）→
-下载 Windows 包解压直接跑（不改 PATH、不设环境变量）。
+发布后校对三件事：Actions 的 `preflight` 与四个构建 job 全绿 → Release 页有 8 个资产（4 归档 + 4 校验和）
+且正文是手写说明（不是一条 compare 链接）→ 下载 Windows 包解压直接跑（不改 PATH、不设环境变量）。
 
 ## 5. 平台细节与已知限制
 
@@ -103,15 +110,18 @@ git push origin main --tags
 | 构建被 OOM 杀掉 | 并发链接重型 crate | 保持 `-j 2`；不要为提高速度去掉它 |
 | 手动 Run workflow 之后 Release 页没东西 | 手动触发**不建 Release**（设计如此） | 产物在该次运行的 Artifacts 里；要发布请推标签 |
 | macOS：`fetch-duckdb.sh: line N: ASSET: unbound variable` | macOS 的 `/bin/bash` 是 **3.2**，在 UTF-8 语言环境下会把「`$变量` 紧跟中文」里的多字节字符当成变量名的一部分（bash 5.x 不受影响） | 把紧跟中文的展开写成 `${变量}`；仓库里三个脚本已修，自查：`LC_ALL=C grep -n '[$][A-Za-z_][A-Za-z0-9_]*[^ -~]' tools/*.sh`（无输出即干净） |
-| 版本号与标签不一致的 warning | `[workspace.package] version` 没跟着改 | 改版本号后重打标签 |
+| 版本号与标签不一致 | `[workspace.package] version` 没跟着改 | **preflight 直接红**，改版本号后重打标签（此前只 warning，产物会按标签名出，名字和内容对不上会带到下载页） |
 
 ## 8. 明确不做 / 后续可加
 
 - 代码签名与公证（Windows 证书 / Apple 开发者账号）：**要钱要账号**，与「个人开源项目」现状不符
 - AppImage / deb / rpm / MSI 安装包：当前只发「解压即用」归档
 - macOS universal 二进制、Linux arm64、Windows arm64
-- 自动分类的 changelog（现在用 GitHub 自动生成的 release notes）
 - **已完成**：`push` / PR 上的编译门禁（见 §9，之前列在「后续可加」里）
+- **已完成（2026-11-14）**：发布说明由仓库手写（`docs/release/notes/<标签名>.md`），
+  不再依赖 GitHub 自动生成——单人直推没有 PR，自动生成的正文只有一个 compare 链接
+  （此条之前列在「明确不做」，理由已被实际使用体验推翻）。草稿脚本 `tools/release-notes.ps1`
+  只做分组，不做自动发布
 
 ## 9. 检查工作流（PR 与 main 上的编译门禁）
 
@@ -140,7 +150,10 @@ Linux 系统依赖只有**一份清单**（`tools/install-linux-deps.sh`），CI
 
 | 设计决策 | 实现位置 |
 | --- | --- |
-| 标签触发 + 矩阵构建 + 传 Assets | `.github/workflows/release.yml` |
+| 标签触发 + 矩阵构建 + 传 Assets | `.github/workflows/release.yml`（`build` job） |
+| 发布前置校验（UI 契约 + 标签↔版本号对账） | `.github/workflows/release.yml`（`preflight` job） |
+| 发布说明正文与写作口径 | `docs/release/notes/<标签名>.md`、`docs/release/README.md` |
+| 发布说明草稿（按提交前缀分组） | `tools/release-notes.ps1` |
 | PR / main 编译门禁 | `.github/workflows/ci.yml` |
 | Linux 系统依赖（两份工作流共用） | `tools/install-linux-deps.sh` |
 | 打包（可分发目录 / 归档 / 自检 / 校验和） | `tools/package-release.sh` |
