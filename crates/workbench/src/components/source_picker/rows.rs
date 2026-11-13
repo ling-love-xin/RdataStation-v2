@@ -24,8 +24,16 @@ use super::SourceKind;
 pub fn root_rows(kinds: &[SourceKind]) -> Vec<Row> {
     grouped(kinds)
         .into_iter()
-        .map(|(group, _)| Row::new(group_id(group), 0, NodeKind::Group, group.title()))
+        .map(|(group, _)| group_id_row(group))
         .collect()
+}
+
+/// 单个根的根行（depth 0）。
+///
+/// 三分法主体逐根拼子树时用：`grouped` 一次只能给全部分组，而主体需要
+/// 「根行 + 该根子树」严格交替，否则 `TreeState::flatten` 的「父行在前」假设就破了。
+pub fn group_id_row(group: SourceGroup) -> Row {
+    Row::new(group_id(group), 0, NodeKind::Group, group.title())
 }
 
 /// 根组的稳定身份。用手写前缀而非 `Debug`，避免改枚举名时悄悄改掉身份。

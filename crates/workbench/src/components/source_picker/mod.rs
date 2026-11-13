@@ -1,18 +1,25 @@
-//! 来源选择器（宿主侧通用内核）：从 5 类来源选一个数据目标。
+//! 来源选择器（宿主侧通用内核）：从三分法三根里选一个数据目标。
 //!
 //! 洞察 / 联邦 / 结果集二次分析共用同一套「来源浏览 + 单选」，差异只在
 //! **物化策略**（选中后如何进 DuckDB：洞察→取样来源、联邦→ATTACH/本地加速、
 //! 二次分析→联邦 + 结果集直连），由调用方注入确认回调。
 //!
-//! 来源集合（用户拍板，三个消费方几乎一致）：
-//! ① 已连接数据库的表 —— 连接 → catalog → schema → 表 逐层浏览
-//!    （同步内省：`NavigatorService` 有 L1/L2 缓存，模态内点击粒度小、可接受短暂阻塞；
-//!    首次内省走 `block_on`，与 `visible_databases_dialog` 同款先例）
-//! ② 草稿箱里 duckdb 支持的文件格式（scratchpad store 枚举 + 格式过滤）
-//! ③ DuckDB 分析引擎的内部表（`{项目}/.RSmeta/analytics.duckdb` `information_schema.tables`，
-//!    与 `mock_generator::analysis_tables` 同一查法）
-//! ④ 外部资源管理器中 duckdb 支持的文件（rfd 系统文件对话框，格式过滤）
-//! ⑤ 结果集临时表（**仅结果集二次分析启用**；洞察 / 联邦裁剪掉——当前未实装，枚举留位）
+//! ## 形态（`prototypes/entry/01-source-picker.html` + `06-object-tree.html`）
+//!
+//! tab 不是五个叶子，而是**三个根**（`group::SourceGroup`）：
+//! - **数据库**：驱动 + 连接，SQL 下推；连接在，表就在；
+//! - **DuckDB**：本地 SQL，装临时产物（结果集 / Mock / 插件 / 会话表）；
+//! - **文件**：reader 函数读本机持久物（草稿箱 / 资产库 / 外部文件）。
+//!
+//! 叶子枚举（5 个）保持不动——分组是视图层的纯函数运算（`group::grouped`），
+//! `PickerConfig.kinds` / `confirm_prefix` 都不因此改动。
+//!
+//! ## 选中模型
+//!
+//! 树里选的是**节点**，确认时要的是「哪一类目标 + 定位」，所以状态只留一个
+//! `picked: Option<Picked>`。这样 `current_tab()` 由**选中的东西**决定，而不是由
+//! 「当前停在哪一屏」决定——用户选了草稿再切到数据库 tab，确认按钮仍然说的是草稿
+//! （老实现按 tab 分派，这里会答错）。
 //!
 //! 归属：留在 workbench（三方入口全在宿主侧）。未来出现第二个非 workbench 直接消费者
 //! （独立应用 / editor 就地内嵌）时，整体搬成独立 crate 即可（纯搬文件）。
@@ -21,12 +28,10 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gpui_kit::base::Disableable as _;
-use gpui_kit::base::StyledExt;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::base::{Disableable as _, StyledExt};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme, IconName, WindowExt as _};
+use gpui_kit::component::{ActiveTheme, WindowExt as _};
 use gpui_kit::*;
 
 use database::model::{NavFolder, NavNodeKind, NavPath};
@@ -35,7 +40,6 @@ use scratchpad::ScratchpadEntry;
 use workbench_shell::model::ConnectionItem;
 
 use crate::panels::Shared;
-use crate::ui;
 
 mod db;
 mod group;
@@ -53,14 +57,14 @@ pub use rows::{analysis_table_rows, draft_rows, external_row, root_rows};
 pub use search::{rank, search, HitRank, SearchOutcome, SEARCH_LIMIT};
 pub use state::{TreeState, RECENT_CAP};
 
-/// 来源种类（统一内核；各消费方按 `PickerConfig.kinds` 裁剪显示）。
+/// 来源种类（5 个叶子；分组见 `group::group_of`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
-    /// ① 已连接数据库的表（三层浏览）
+    /// ① 已连接数据库的表
     Connected,
     /// ② 草稿箱里 duckdb 支持的文件
     Scratchpad,
-    /// ③ DuckDB 分析引擎的内部表
+    /// ③ 资产库（原「资源分析」）——`{项目}/.RSmeta/analytics.duckdb` 的内部表
     Analysis,
     /// ④ 外部文件（rfd 系统对话框）
     External,
@@ -69,11 +73,12 @@ pub enum SourceKind {
 }
 
 impl SourceKind {
-    fn label(self) -> &'static str {
+    /// 叶子文案（调试与日志用；tab 上是根标题，不是这个）。
+    pub fn label(self) -> &'static str {
         match self {
             Self::Connected => "已连接数据库",
             Self::Scratchpad => "草稿箱",
-            Self::Analysis => "资源分析",
+            Self::Analysis => "资产库",
             Self::External => "外部文件",
             Self::ResultSet => "结果集",
         }
@@ -81,7 +86,7 @@ impl SourceKind {
 }
 
 /// 表候选（带归属定位，确认时拼限定名）。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TableCandidate {
     pub name: String,
     pub catalog: String,
@@ -89,26 +94,62 @@ pub struct TableCandidate {
     pub schema: String,
 }
 
+/// 选中的目标。树里选的是节点，这里落成「哪一类 + 定位」。
+#[derive(Debug, Clone, PartialEq)]
+pub enum Picked {
+    /// 库表 `(连接 id, 表候选)`
+    Db(String, TableCandidate),
+    /// 草稿文件 `(相对路径, 绝对路径)`
+    Draft(String, PathBuf),
+    /// 资产库分析表（当前只接本项目副本）
+    Analysis(String),
+    /// 外部文件绝对路径
+    External(PathBuf),
+}
+
+impl Picked {
+    /// 这个目标属于哪个叶子（`current_tab()` 的真值来源）。
+    pub fn kind(&self) -> SourceKind {
+        match self {
+            Self::Db(..) => SourceKind::Connected,
+            Self::Draft(..) => SourceKind::Scratchpad,
+            Self::Analysis(..) => SourceKind::Analysis,
+            Self::External(..) => SourceKind::External,
+        }
+    }
+
+    /// 确认按钮上的一句话描述。
+    pub fn label(&self) -> String {
+        match self {
+            Self::Db(_, t) if t.schema.is_empty() => t.name.clone(),
+            Self::Db(_, t) => format!("{} · {}", t.schema, t.name),
+            Self::Draft(rel, _) => rel.clone(),
+            Self::Analysis(t) => t.clone(),
+            Self::External(p) => p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| p.to_string_lossy().to_string()),
+        }
+    }
+}
+
 /// 来源选择状态（模态渲染闭包每次重建 UI，状态持久在这里）。
-///
-/// `result_set` 留给结果集二次分析（形态未定，仅枚举留位，不预载字段）。
 pub struct PickerState {
-    tab: SourceKind,
-    // ① 已连接库（懒加载树：每个分支各自展开，缓存按 NodeId 记）
+    /// 当前激活的根（tab）
+    group: SourceGroup,
+    /// 本次启用的叶子（来自 `PickerConfig.kinds`）
+    kinds: &'static [SourceKind],
+    // ① 数据库（懒加载树：每个分支各自展开，缓存按 NodeId 记）
     conns: Vec<ConnectionItem>,
     /// 各层已加载的结果（空结果也记，见 `db.rs` 模块文档末段）
     db_cache: DbCache,
-    /// 选中的库表 `(连接 id, 表候选)`——树里选的是节点，这里落成确认用的表定位
-    selected_db: Option<(String, TableCandidate)>,
     // ② 草稿箱
     drafts: Vec<(String, PathBuf)>, // (相对路径, 绝对路径)
-    selected_draft: Option<usize>,
-    // ③ 资源分析
+    // ③ 资产库
     analysis_tables: Vec<String>,
-    selected_analysis: Option<usize>,
-    // ④ 外部文件
-    external: Option<PathBuf>,
-    /// 底部提示（加载失败 / 源不可用）
+    /// 选中的目标（唯一真值；其余访问器都从它派生）
+    picked: Option<Picked>,
+    /// 底部提示（加载失败 / 源不可用 / 物化失败回显）
     note: Option<String>,
     /// 树态：展开 / 搜索词 / 选中 / 最近使用（纯内存，随对话框关闭丢弃，见 `state.rs`）
     tree: TreeState,
@@ -116,21 +157,23 @@ pub struct PickerState {
 
 impl PickerState {
     fn new(
+        kinds: &'static [SourceKind],
         conns: Vec<ConnectionItem>,
         drafts: Vec<(String, PathBuf)>,
         analysis: Vec<String>,
-        initial_tab: SourceKind,
     ) -> Self {
+        let group = grouped(kinds)
+            .first()
+            .map(|(g, _)| *g)
+            .unwrap_or(SourceGroup::Database);
         Self {
-            tab: initial_tab,
+            group,
+            kinds,
             conns,
             db_cache: DbCache::new(),
-            selected_db: None,
             drafts,
-            selected_draft: None,
             analysis_tables: analysis,
-            selected_analysis: None,
-            external: None,
+            picked: None,
             note: None,
             tree: TreeState::new(),
         }
@@ -138,39 +181,12 @@ impl PickerState {
 
     /// 当前来源是否已选好目标（确认按钮可用性）。
     pub fn has_target(&self) -> bool {
-        match self.tab {
-            SourceKind::Connected => self.selected_db.is_some(),
-            SourceKind::Scratchpad => self.selected_draft.is_some(),
-            SourceKind::Analysis => self.selected_analysis.is_some(),
-            SourceKind::External => self.external.is_some(),
-            SourceKind::ResultSet => false, // 未实装：不可确认
-        }
+        self.picked.is_some()
     }
 
     /// 当前选中目标的一句话描述（确认按钮文案用）。
     pub fn selected_label(&self) -> Option<String> {
-        match self.tab {
-            SourceKind::Connected => self.selected_db.as_ref().map(|(_, t)| {
-                if t.schema.is_empty() {
-                    t.name.clone()
-                } else {
-                    format!("{} · {}", t.schema, t.name)
-                }
-            }),
-            SourceKind::Scratchpad => self
-                .selected_draft
-                .and_then(|i| self.drafts.get(i))
-                .map(|(rel, _)| rel.clone()),
-            SourceKind::Analysis => self
-                .selected_analysis
-                .and_then(|i| self.analysis_tables.get(i))
-                .cloned(),
-            SourceKind::External => self
-                .external
-                .as_ref()
-                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string())),
-            SourceKind::ResultSet => None,
-        }
+        self.picked.as_ref().map(Picked::label)
     }
 
     /// 写底部提示（供物化策略失败时回显）。
@@ -180,37 +196,52 @@ impl PickerState {
 
     // —— 选中目标访问器（物化策略确认时读取；返回克隆避免借用逃逸）——
 
-    /// 当前来源 Tab（物化策略按来源分派出口）。
+    /// 当前来源（物化策略按来源分派出口）。
+    ///
+    /// 由**选中的目标**决定，不由激活的 tab 决定：选了草稿再切到数据库 tab，
+    /// 确认时仍然按草稿导出（否则会拿错出口）。
     pub fn current_tab(&self) -> SourceKind {
-        self.tab
+        self.picked
+            .as_ref()
+            .map(Picked::kind)
+            .or_else(|| grouped(self.kinds).first().and_then(|(_, m)| m.first().copied()))
+            .unwrap_or(SourceKind::Connected)
     }
 
     /// ① 已连接库选中的表（`(连接 id, 表候选)`）。
     pub fn picked_table(&self) -> Option<(String, TableCandidate)> {
-        self.selected_db.clone()
+        match &self.picked {
+            Some(Picked::Db(conn, table)) => Some((conn.clone(), table.clone())),
+            _ => None,
+        }
     }
 
     /// ② 草稿箱选中的文件 `(相对路径, 绝对路径)`。
     pub fn picked_draft(&self) -> Option<(String, PathBuf)> {
-        self.selected_draft
-            .and_then(|i| self.drafts.get(i))
-            .cloned()
+        match &self.picked {
+            Some(Picked::Draft(rel, abs)) => Some((rel.clone(), abs.clone())),
+            _ => None,
+        }
     }
 
-    /// ③ 资源分析选中的表名。
+    /// ③ 资产库选中的表名。
     pub fn picked_analysis(&self) -> Option<String> {
-        self.selected_analysis
-            .and_then(|i| self.analysis_tables.get(i))
-            .cloned()
+        match &self.picked {
+            Some(Picked::Analysis(t)) => Some(t.clone()),
+            _ => None,
+        }
     }
 
     /// ④ 外部文件选中的绝对路径。
     pub fn picked_external(&self) -> Option<PathBuf> {
-        self.external.clone()
+        match &self.picked {
+            Some(Picked::External(p)) => Some(p.clone()),
+            _ => None,
+        }
     }
 }
 
-/// 对话框配置：标题 + 启用的来源（顺序即 Tab 顺序）+ 确认按钮动作前缀。
+/// 对话框配置：标题 + 启用的叶子（顺序决定根与组内顺序）+ 确认按钮动作前缀。
 #[derive(Debug, Clone, Copy)]
 pub struct PickerConfig {
     pub title: &'static str,
@@ -353,7 +384,7 @@ fn collect_flattened(
     }
 }
 
-/// DuckDB 分析引擎内部表清单（`{项目}/.RSmeta/analytics.duckdb`，无项目读全局分析库）。
+/// 资产库内部表清单（`{项目}/.RSmeta/analytics.duckdb`，无项目读全局分析库）。
 ///
 /// 查法与 `mock_generator::analysis_tables` 一致（`duckdb::Connection::open` + 过滤 `main` schema）。
 fn collect_analysis_tables(project: Option<&project::ui::OpenProject>) -> Vec<String> {
@@ -381,161 +412,28 @@ fn collect_analysis_tables(project: Option<&project::ui::OpenProject>) -> Vec<St
     rows.filter_map(Result::ok).collect()
 }
 
-/// 打开来源选择对话框（宿主侧通用入口）。
-///
-/// 已连接库 / 草稿 / 分析表在打开时一次性预载（都走本地文件或已初始化库，
-/// 量级小，模态内短暂阻塞可接受）；提示行按通用规则生成（无连接 / 无项目 / 分析库空）。
-pub fn open_source_picker(
-    shared: &Shared,
-    config: PickerConfig,
-    strategy: ConfirmStrategy,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let conns = shared
-        .connections
-        .borrow()
-        .iter()
-        .filter(|c| c.connected)
-        .cloned()
-        .collect::<Vec<_>>();
-    let drafts = collect_drafts(shared);
-    let project = shared.project.borrow().clone();
-    let analysis = collect_analysis_tables(project.as_ref());
-    let mut note = None;
-    if conns.is_empty() {
-        note = Some("没有已连接的数据库：先在「连接」里连一个数据源".to_string());
+// —— 树的三个根：行由各数据源给，可见性由 TreeState 折叠 ——
+
+/// 三分法按配置顺序拼接，**深度优先**：
+/// 每根先出根行，紧接它的子树——`TreeState::flatten` 依赖「父行在前、后代紧随」的顺序。
+fn body_rows(s: &PickerState) -> Vec<Row> {
+    let mut out = Vec::new();
+    for (group, _members) in grouped(s.kinds) {
+        out.push(rows::group_id_row(group));
+        match group {
+            SourceGroup::Database => out.extend(db_group_rows(s)),
+            SourceGroup::DuckDb => out.extend(duckdb_group_rows(s)),
+            SourceGroup::File => out.extend(file_group_rows(s)),
+        }
     }
-    if note.is_none() && shared.project.borrow().is_none() {
-        note = Some("未打开项目：草稿箱 / 资源分析不可用".to_string());
-    }
-    if analysis.is_empty() && note.is_none() {
-        note = Some("分析引擎库为空或不可用（可在资源分析里先做一次分析）".to_string());
-    }
-
-    let initial_tab = config
-        .kinds
-        .first()
-        .copied()
-        .unwrap_or(SourceKind::Connected);
-    let state = Rc::new(RefCell::new(PickerState::new(
-        conns,
-        drafts,
-        analysis,
-        initial_tab,
-    )));
-    state.borrow_mut().note = note;
-    let state_build = state.clone();
-    let shared_build = shared.clone();
-    let strategy_build = strategy.clone();
-
-    window.open_dialog(cx, move |dialog, _window, cx| {
-        let s = state_build.borrow();
-
-        // —— 各来源内容（先用 `&mut cx` 渲染：render_external 内部取主题色）——
-        let body = match s.tab {
-            SourceKind::Connected => render_connected(&s, &state_build, &shared_build, cx),
-            SourceKind::Scratchpad => render_scratchpad(&s, &state_build, cx),
-            SourceKind::Analysis => render_analysis(&s, &state_build, cx),
-            SourceKind::External => render_external(&s, &state_build, cx),
-            SourceKind::ResultSet => render_result_set(cx),
-        };
-
-        // 再取主题（cx.theme() 借用 cx；放最后避免与上面 `&mut cx` 冲突）
-        let theme = cx.theme();
-
-        // —— 来源 Tab 条（按配置裁剪显示）——
-        let tabs = config
-            .kinds
-            .iter()
-            .map(|t| Tab::new().label(SharedString::from(t.label())));
-        let tab_bar = TabBar::new(ElementId::Name(SharedString::from("source-picker-tabs")))
-            .underline()
-            .children(tabs)
-            .selected_index(config.kinds.iter().position(|t| *t == s.tab).unwrap_or(0))
-            .on_click({
-                let state = state_build.clone();
-                move |index, window, _app| {
-                    state.borrow_mut().tab = config.kinds[*index];
-                    window.refresh();
-                }
-            });
-
-        let can_confirm = s.has_target();
-        let confirm_label = s
-            .selected_label()
-            .map(|l| format!("{} {}", config.confirm_prefix, l))
-            .unwrap_or_else(|| format!("{}选中目标", config.confirm_prefix));
-
-        let dialog = dialog.title(config.title).child(
-            div()
-                .v_flex()
-                .w_full()
-                .gap_3()
-                .child(tab_bar)
-                .child(body)
-                .child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .w_full()
-                        .gap_2()
-                        .child(if let Some(note) = &s.note {
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_xs()
-                                .text_color(theme.colors.warning)
-                                .child(note.clone())
-                        } else {
-                            div().flex_1()
-                        })
-                        .child(
-                            Button::new(ElementId::Name(SharedString::from(
-                                "source-picker-cancel",
-                            )))
-                            .label("取消")
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
-                        )
-                        .child(
-                            Button::new(ElementId::Name(SharedString::from("source-picker-ok")))
-                                .label(confirm_label)
-                                .disabled(!can_confirm)
-                                .on_click({
-                                    let state = state_build.clone();
-                                    let shared = shared_build.clone();
-                                    let strategy = strategy_build.clone();
-                                    move |_, window, cx| {
-                                        strategy(&shared, &state, window, cx);
-                                    }
-                                }),
-                        ),
-                ),
-        );
-        dialog
-    });
+    out
 }
 
-/// ① 已连接库（懒加载树：连接 → schema / catalog → 表）。
-///
-/// 行的深度与标签在**加载时**定好（`db::catalog_level` / `db::schema_rows` / `db::table_rows`），
-/// 这里只把「已加载的部分」交给共用行渲染器；展开时才 introspect——I/O 走事件路径，
-/// render 仍是纯读（`TreeState` 折叠 + `db_rows` 拍平都不碰连接）。
-fn render_connected(
-    s: &PickerState,
-    state: &Rc<RefCell<PickerState>>,
-    shared: &Shared,
-    cx: &mut App,
-) -> AnyElement {
+/// 数据库根的子树（连接行在 depth 1，其余由缓存给）。
+fn db_group_rows(s: &PickerState) -> Vec<Row> {
     if s.conns.is_empty() {
-        let muted = cx.theme().colors.muted_foreground;
-        return div()
-            .text_xs()
-            .text_color(muted)
-            .child("请先连接一个数据源")
-            .into_any_element();
+        return Vec::new();
     }
-
     let briefs: Vec<ConnBrief<'_>> = s
         .conns
         .iter()
@@ -546,7 +444,89 @@ fn render_connected(
             host: c.host.as_deref().unwrap_or(""),
         })
         .collect();
-    let rows = db_rows(&briefs, &s.db_cache);
+    db_rows(&briefs, &s.db_cache)
+}
+
+/// DuckDB 根的子树：目前只有「结果集」这一叶，且未实装——显式置灰而不是假装可选。
+fn duckdb_group_rows(s: &PickerState) -> Vec<Row> {
+    if !s.kinds.contains(&SourceKind::ResultSet) {
+        return Vec::new();
+    }
+    vec![Row::new(
+        NodeId::Path("duckdb:result-set".to_string()),
+        1,
+        NodeKind::File,
+        "结果集临时表",
+    )
+    .with_meta("未实装")
+    .disabled()]
+}
+
+/// 文件根的子树：草稿箱 / 资产库（本项目段）/ 外部文件。
+///
+/// 资产库的另外两段（本项目归档文件、全局跨项目共享）数据源还没接（`collect_*` 缺），
+/// 所以**不画**——画出来就是假节点（§09：「全局表读不到就必须呈现为不可用」的同一原则）。
+fn file_group_rows(s: &PickerState) -> Vec<Row> {
+    let mut out = Vec::new();
+
+    if s.kinds.contains(&SourceKind::Scratchpad) {
+        let mut row = Row::new(
+            NodeId::Path("file:scratchpad".to_string()),
+            1,
+            NodeKind::Folder,
+            "草稿箱",
+        );
+        if !s.drafts.is_empty() {
+            row = row.with_meta(format!("{} 个文件", s.drafts.len()));
+        }
+        out.push(row);
+        // 文件层 = depth 2（草稿箱是 1）
+        out.extend(draft_rows(2, &s.drafts));
+    }
+
+    if s.kinds.contains(&SourceKind::Analysis) {
+        out.push(Row::new(
+            NodeId::Path("file:archive-project".to_string()),
+            1,
+            NodeKind::Folder,
+            "资产库 · 本项目",
+        ));
+        out.extend(analysis_table_rows(
+            2,
+            &s.analysis_tables,
+            ArchiveScope::Project,
+        ));
+    }
+
+    if s.kinds.contains(&SourceKind::External) {
+        out.push(
+            Row::new(
+                NodeId::Path(PICK_EXTERNAL_KEY.to_string()),
+                1,
+                NodeKind::File,
+                "从磁盘选择文件…",
+            )
+            .with_meta("CSV / Parquet / Excel / JSON"),
+        );
+        if let Some(Picked::External(path)) = &s.picked {
+            out.push(external_row(2, path));
+        }
+    }
+
+    out
+}
+
+/// 外部文件的「动作行」身份：点它开 rfd，不开树（它不是可确认的对象）。
+const PICK_EXTERNAL_KEY: &str = "file:pick-external";
+
+/// 三分法主体：一张树 + 一套回调（三个根共用，行渲染不按根分叉）。
+fn render_body(
+    s: &PickerState,
+    state: &Rc<RefCell<PickerState>>,
+    shared: &Shared,
+    cx: &mut App,
+) -> AnyElement {
+    let rows = body_rows(s);
 
     let on_toggle: RowAction = {
         let state = state.clone();
@@ -565,27 +545,65 @@ fn render_connected(
     let on_select: RowAction = {
         let state = state.clone();
         Rc::new(move |id: &NodeId, window: &mut Window| {
-            // 只有表可确认；组 / 连接 / catalog / schema 走到这里是分派问题，忽略
-            let NodeId::DbTable {
-                conn,
-                catalog,
-                schema,
-                table,
-            } = id
-            else {
-                return;
-            };
-            let mut s = state.borrow_mut();
-            s.selected_db = Some((
-                conn.clone(),
-                TableCandidate {
-                    name: table.clone(),
-                    catalog: catalog.clone(),
-                    schema: schema.clone(),
-                },
-            ));
-            s.tree.select(Some(id.clone()));
-            s.note = None;
+            match id {
+                NodeId::DbTable {
+                    conn,
+                    catalog,
+                    schema,
+                    table,
+                } => {
+                    let mut s = state.borrow_mut();
+                    s.picked = Some(Picked::Db(
+                        conn.clone(),
+                        TableCandidate {
+                            name: table.clone(),
+                            catalog: catalog.clone(),
+                            schema: schema.clone(),
+                        },
+                    ));
+                    s.tree.select(Some(id.clone()));
+                    s.note = None;
+                }
+                NodeId::AnalysisTable { table, .. } => {
+                    let mut s = state.borrow_mut();
+                    s.picked = Some(Picked::Analysis(table.clone()));
+                    s.tree.select(Some(id.clone()));
+                    s.note = None;
+                }
+                NodeId::Path(p) if p == PICK_EXTERNAL_KEY => {
+                    // rfd 是系统模态：阻塞在事件路径里（与老实现同一做法），不在 render
+                    let mut dialog =
+                        rfd::FileDialog::new().set_title("选择数据文件（DuckDB 支持格式）");
+                    for (name, exts) in [
+                        ("CSV", &["csv"][..]),
+                        ("Parquet", &["parquet"]),
+                        ("Excel", &["xlsx", "xls"]),
+                        ("JSON", &["json"]),
+                    ] {
+                        dialog = dialog.add_filter(name, exts);
+                    }
+                    if let Some(path) = dialog.pick_file() {
+                        let mut s = state.borrow_mut();
+                        s.picked = Some(Picked::External(path));
+                        s.note = None;
+                    }
+                }
+                NodeId::Path(p) => {
+                    // 只有草稿文件行能给 Picked::Draft；组行 / 目录行 / 动作行都查不到
+                    let mut s = state.borrow_mut();
+                    let hit = s
+                        .drafts
+                        .iter()
+                        .find(|(rel, _)| rel == p)
+                        .map(|(rel, abs)| (rel.clone(), abs.clone()));
+                    if let Some((rel, abs)) = hit {
+                        s.picked = Some(Picked::Draft(rel, abs));
+                        s.tree.select(Some(id.clone()));
+                        s.note = None;
+                    }
+                }
+                _ => return,
+            }
             window.refresh();
         })
     };
@@ -659,176 +677,195 @@ fn load_db_layer(
     window.refresh();
 }
 
-/// ② 草稿箱文件树（可折叠；展开态纯内存，随对话框关闭丢弃）。
+/// 打开来源选择对话框（宿主侧通用入口）。
 ///
-/// 这是 `render_rows` 的第一个真实消费点：行由 `draft_rows` 造、可见性由 `TreeState`
-/// 折叠、画由共用行渲染器画。选中的行仍然落回 `selected_draft`（索引），
-/// 因为 `picked_draft()` / `has_target()` 是三个消费方共用的对外契约，先不改它。
-fn render_scratchpad(
-    s: &PickerState,
-    state: &Rc<RefCell<PickerState>>,
+/// 已连接库 / 草稿 / 资产库在打开时一次性预载（都走本地文件或已初始化库，量级小，
+/// 模态内短暂阻塞可接受）；连接的表按层懒加载（展开才问）。提示行按通用规则生成。
+pub fn open_source_picker(
+    shared: &Shared,
+    config: PickerConfig,
+    strategy: ConfirmStrategy,
+    window: &mut Window,
     cx: &mut App,
-) -> AnyElement {
-    if s.drafts.is_empty() {
-        let muted = cx.theme().colors.muted_foreground;
-        return div()
-            .text_xs()
-            .text_color(muted)
-            .child("草稿箱里没有 DuckDB 支持的文件（CSV / Parquet / Excel / JSON）")
-            .into_any_element();
+) {
+    let conns = shared
+        .connections
+        .borrow()
+        .iter()
+        .filter(|c| c.connected)
+        .cloned()
+        .collect::<Vec<_>>();
+    let drafts = collect_drafts(shared);
+    let project = shared.project.borrow().clone();
+    let analysis = collect_analysis_tables(project.as_ref());
+    let mut note = None;
+    if conns.is_empty() && config.kinds.contains(&SourceKind::Connected) {
+        note = Some("没有已连接的数据库：先在「连接」里连一个数据源".to_string());
+    }
+    if note.is_none()
+        && shared.project.borrow().is_none()
+        && config
+            .kinds
+            .iter()
+            .any(|k| matches!(k, SourceKind::Scratchpad | SourceKind::Analysis))
+    {
+        note = Some("未打开项目：草稿箱 / 资产库不可用".to_string());
+    }
+    if note.is_none()
+        && config.kinds.contains(&SourceKind::Analysis)
+        && analysis.is_empty()
+    {
+        note = Some("资产库为空或不可用（可先做一次分析）".to_string());
     }
 
-    // 旧 tab 结构下没有「文件根 → 草稿箱」那两行，所以文件层就是第 0 层
-    let rows = draft_rows(0, &s.drafts);
+    let state = Rc::new(RefCell::new(PickerState::new(
+        config.kinds, conns, drafts, analysis,
+    )));
+    state.borrow_mut().note = note;
+    let state_build = state.clone();
+    let shared_build = shared.clone();
+    let strategy_build = strategy.clone();
 
-    let on_toggle: RowAction = {
-        let state = state.clone();
-        Rc::new(move |id: &NodeId, window: &mut Window| {
-            state.borrow_mut().tree.toggle(id);
-            window.refresh();
-        })
-    };
+    window.open_dialog(cx, move |dialog, _window, cx| {
+        let s = state_build.borrow();
+        let groups = grouped(config.kinds);
 
-    let on_select: RowAction = {
-        let state = state.clone();
-        Rc::new(move |id: &NodeId, window: &mut Window| {
-            // 只有文件行可选中；组 / 目录行走到这里说明分派错了，直接忽略
-            let NodeId::Path(rel) = id else { return };
-            let mut s = state.borrow_mut();
-            let Some(index) = s.drafts.iter().position(|(r, _)| r == rel) else {
-                return;
-            };
-            s.selected_draft = Some(index);
-            s.tree.select(Some(id.clone()));
-            s.note = None;
-            window.refresh();
-        })
-    };
+        // —— 主体：三分法一张树（先渲染，再取主题，避免与 &mut cx 冲突）——
+        let body = render_body(&s, &state_build, &shared_build, cx);
 
-    render_rows(&rows, &s.tree, on_toggle, on_select, cx)
-}
-
-/// ③ 资源分析（DuckDB 内部表）。
-fn render_analysis(s: &PickerState, state: &Rc<RefCell<PickerState>>, cx: &mut App) -> AnyElement {
-    let muted = cx.theme().colors.muted_foreground;
-    let mut list = div()
-        .v_flex()
-        .w_full()
-        .gap_1()
-        .max_h(rems(ui::VIS_DIALOG_LIST_MAX_H))
-        .overflow_y_scrollbar();
-    if s.analysis_tables.is_empty() {
-        list = list.child(
-            div()
-                .text_xs()
-                .text_color(muted)
-                .child("分析引擎库为空或不可用（先在资源分析里做一次分析）"),
-        );
-    }
-    for (i, table) in s.analysis_tables.iter().enumerate() {
-        let selected = s.selected_analysis == Some(i);
-        list = list.child(
-            Button::new(ElementId::Name(SharedString::from(format!(
-                "source-picker-analysis-{i}-{}",
-                table
-            ))))
-            .ghost()
-            .label(SharedString::from(table.clone()))
-            .toggled(selected)
+        // —— 根 tab 条 ——
+        let tabs = groups
+            .iter()
+            .map(|(g, _)| Tab::new().label(SharedString::from(g.title())));
+        let tab_bar = TabBar::new(ElementId::Name(SharedString::from("source-picker-tabs")))
+            .underline()
+            .children(tabs)
+            .selected_index(
+                groups
+                    .iter()
+                    .position(|(g, _)| *g == s.group)
+                    .unwrap_or(0),
+            )
             .on_click({
-                let state = state.clone();
-                move |_, window, _app| {
-                    let mut s = state.borrow_mut();
-                    s.selected_analysis = Some(i);
-                    s.note = None;
+                let state = state_build.clone();
+                let groups = groups.clone();
+                move |index, window, _app| {
+                    state.borrow_mut().group = groups[*index].0;
                     window.refresh();
                 }
-            }),
+            });
+
+        let theme = cx.theme();
+        let group_note = s.group.note();
+
+        let can_confirm = s.has_target();
+        let confirm_label = s
+            .selected_label()
+            .map(|l| format!("{} {}", config.confirm_prefix, l))
+            .unwrap_or_else(|| format!("{}选中目标", config.confirm_prefix));
+
+        let dialog = dialog.title(config.title).child(
+            div()
+                .v_flex()
+                .w_full()
+                .gap_3()
+                .child(tab_bar)
+                // 根的一句话说明：回答「怎么读」，不是「是什么」
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(group_note),
+                )
+                .child(body)
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .w_full()
+                        .gap_2()
+                        .child(if let Some(note) = &s.note {
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .text_color(theme.colors.warning)
+                                .child(note.clone())
+                        } else {
+                            div().flex_1()
+                        })
+                        .child(
+                            Button::new(ElementId::Name(SharedString::from(
+                                "source-picker-cancel",
+                            )))
+                            .label("取消")
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(
+                            Button::new(ElementId::Name(SharedString::from("source-picker-ok")))
+                                .label(confirm_label)
+                                .disabled(!can_confirm)
+                                .on_click({
+                                    let state = state_build.clone();
+                                    let shared = shared_build.clone();
+                                    let strategy = strategy_build.clone();
+                                    move |_, window, cx| {
+                                        strategy(&shared, &state, window, cx);
+                                    }
+                                }),
+                        ),
+                ),
+        );
+        dialog
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    // 刻意不用 `use super::*`：会把 gpui 的 `test` 属性宏带进作用域，
+    // `#[test]` 会解析到它自己（recursion limit reached，见 gpui-kit-dev「窗口测试」）
+    use super::{Picked, SourceKind, TableCandidate};
+    use std::path::PathBuf;
+
+    /// 出口派发必须看「选中的东西」，不是「停在哪一屏」：
+    /// 用户选了草稿再切到数据库 tab，确认时仍然按草稿导出。
+    #[test]
+    fn picked_kind_is_the_dispatch_source() {
+        assert_eq!(
+            Picked::Draft("数据/a.parquet".into(), PathBuf::from("C:/p/a.parquet")).kind(),
+            SourceKind::Scratchpad
+        );
+        assert_eq!(Picked::Analysis("orders".into()).kind(), SourceKind::Analysis);
+        assert_eq!(
+            Picked::External(PathBuf::from("C:/data/x.csv")).kind(),
+            SourceKind::External
         );
     }
-    list.into_any_element()
-}
 
-/// ④ 外部文件（rfd 系统对话框）。
-fn render_external(s: &PickerState, state: &Rc<RefCell<PickerState>>, cx: &mut App) -> AnyElement {
-    let muted = cx.theme().colors.muted_foreground;
-    let selected = s.external.clone();
-    let mut list = div()
-        .v_flex()
-        .w_full()
-        .gap_2()
-        .max_h(rems(ui::VIS_DIALOG_LIST_MAX_H))
-        .overflow_y_scrollbar();
-    list = list.child(
-        div()
-            .h_flex()
-            .items_center()
-            .w_full()
-            .gap_2()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_xs()
-                    .text_color(if selected.is_some() {
-                        cx.theme().colors.foreground
-                    } else {
-                        muted
-                    })
-                    .text_ellipsis()
-                    .child(
-                        selected
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_else(|| {
-                                "选择本地文件（CSV / Parquet / Excel / JSON）".to_string()
-                            }),
-                    ),
-            )
-            .child(
-                Button::new(ElementId::Name(SharedString::from("source-picker-browse")))
-                    .ghost()
-                    .icon(IconName::FolderOpen)
-                    .label("浏览…")
-                    .on_click({
-                        let state = state.clone();
-                        move |_, window, _app| {
-                            let mut dialog =
-                                rfd::FileDialog::new().set_title("选择数据文件（DuckDB 支持格式）");
-                            for (name, exts) in [
-                                ("CSV", &["csv"][..]),
-                                ("Parquet", &["parquet"]),
-                                ("Excel", &["xlsx", "xls"]),
-                                ("JSON", &["json"]),
-                            ] {
-                                dialog = dialog.add_filter(name, exts);
-                            }
-                            if let Some(path) = dialog.pick_file() {
-                                let mut s = state.borrow_mut();
-                                s.external = Some(path);
-                                s.note = None;
-                            }
-                            window.refresh();
-                        }
-                    }),
-            ),
-    );
-    list.into_any_element()
-}
+    /// 确认按钮文案：有 schema 时折进标签，与树上的表行标签一致（同一张表在树里和按钮上不能长得不一样）。
+    #[test]
+    fn db_label_matches_the_row_label() {
+        let table = TableCandidate {
+            name: "orders".into(),
+            catalog: "analytics".into(),
+            schema: "sales".into(),
+        };
+        assert_eq!(
+            Picked::Db("c1".into(), table.clone()).label(),
+            "sales · orders"
+        );
 
-/// ⑤ 结果集（未实装）：给未来二次分析留位的占位内容。
-fn render_result_set(cx: &mut App) -> AnyElement {
-    let muted = cx.theme().colors.muted_foreground;
-    div()
-        .v_flex()
-        .w_full()
-        .gap_1()
-        .max_h(rems(ui::VIS_DIALOG_LIST_MAX_H))
-        .overflow_y_scrollbar()
-        .child(
-            div()
-                .text_xs()
-                .text_color(muted)
-                .child("结果集二次分析尚未实装"),
-        )
-        .into_any_element()
+        let no_schema = TableCandidate {
+            name: "orders".into(),
+            catalog: "shop".into(),
+            schema: String::new(),
+        };
+        assert_eq!(Picked::Db("c1".into(), no_schema).label(), "orders");
+    }
+
+    /// 资产库正名（裁决 8）：叶子文案不再叫「资源分析」。
+    #[test]
+    fn analysis_kind_is_renamed_to_archive() {
+        assert_eq!(SourceKind::Analysis.label(), "资产库");
+    }
 }
