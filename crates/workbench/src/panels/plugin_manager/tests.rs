@@ -609,3 +609,84 @@ fn diagnostics_report_carries_state_paths_and_driver_registration() {
         "{report}"
     );
 }
+
+// ---------- 操作记录（D8d） ----------
+
+fn row(
+    id: i64,
+    action: &str,
+    result: &str,
+    plugin: Option<&str>,
+    driver: Option<&str>,
+    reason: Option<&str>,
+) -> engine::persistence::driver_operation_store::DriverOperationRow {
+    use engine::persistence::driver_operation_store::{DriverOperation, DriverOperationRow};
+    let mut op = if result == "ok" {
+        DriverOperation::ok("ui", action)
+    } else {
+        DriverOperation::fail("ui", action, reason.unwrap_or_default())
+    };
+    if let Some(plugin) = plugin {
+        op = op.plugin(plugin);
+    }
+    if let Some(driver) = driver {
+        op = op.driver(driver);
+    }
+    DriverOperationRow {
+        id,
+        occurred_at: format!("2026-11-13 10:0{id}:00"),
+        operation: op,
+        created_at: format!("2026-11-13 10:0{id}:00"),
+    }
+}
+
+#[test]
+fn operation_action_labels_cover_the_actions_d8_writes() {
+    use super::widgets::operation_action_label;
+    for (action, label) in [
+        ("install", "安装"),
+        ("uninstall", "卸载"),
+        ("enable", "启用"),
+        ("disable", "停用"),
+        ("reload", "重载"),
+        ("missing_driver", "缺驱动被拒"),
+        ("declare_sync", "声明同步"),
+        ("capability_change", "能力位变化"),
+    ] {
+        assert_eq!(operation_action_label(action), label, "{action}");
+    }
+    // 未知动作原样露出，不显示成空白（新 action 写进来时不能被藏掉）
+    assert_eq!(operation_action_label("some_new_action"), "some_new_action");
+}
+
+#[test]
+fn operation_target_prefers_plugin_then_driver() {
+    use super::widgets::operation_target;
+    assert_eq!(
+        operation_target(&row(1, "enable", "ok", Some("rds.driver.sqlx"), None, None)),
+        "rds.driver.sqlx"
+    );
+    assert_eq!(
+        operation_target(&row(2, "missing_driver", "fail", None, Some("mysql"), Some("未注册"))),
+        "驱动 mysql"
+    );
+}
+
+#[test]
+fn operation_result_filter_keeps_the_right_rows() {
+    use super::widgets::{filtered_operations, OperationResultFilter};
+    let rows = [
+        row(1, "install", "ok", Some("a"), None, None),
+        row(2, "install", "fail", Some("b"), None, Some("包损坏")),
+        row(3, "missing_driver", "fail", None, Some("mysql"), Some("未注册")),
+    ];
+    let all = filtered_operations(&rows, OperationResultFilter::All);
+    assert_eq!(all.len(), 3);
+    let ok = filtered_operations(&rows, OperationResultFilter::Ok);
+    assert_eq!(ok.len(), 1);
+    assert_eq!(ok[0].id, 1);
+    let fail = filtered_operations(&rows, OperationResultFilter::Fail);
+    assert_eq!(fail.len(), 2, "fail 档必须包含所有非 ok 记录");
+    assert!(fail.iter().all(|row| row.operation.result != "ok"));
+}
+

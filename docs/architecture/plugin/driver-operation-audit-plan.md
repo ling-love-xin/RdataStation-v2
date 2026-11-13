@@ -175,7 +175,7 @@ pub driver_id: Option<String>,
 | D8a | 迁移 030 + store 读写 API + 声明同步/能力位留痕 + 保留策略 + 查询历史 `driver_id` | ✅ 已落地（见文首表） |
 | D8b | 插件生命周期写入点：`install_from_path` / `enable_plugin` / `disable_plugin` / `uninstall_plugin` / `reload_plugins`（失败也要一行 `fail` + `reason`） | ✅ 已落地（见下） |
 | D8c | 缺驱动被拒留痕（`action=missing_driver`，`reason` 指向「由插件 X 提供」） | ✅ 已落地（见下） |
-| D8d | 查看入口：插件管理页「操作记录」栏、驱动能力 Tab「来源 + 最近同步」、历史面板「驱动」列与过滤 | 待做（需 GPUI 视图，先读 `gpui-kit-dev` skill） |
+| D8d | 查看入口：插件管理页「操作记录」栏、驱动能力 Tab「来源 + 最近同步」、历史面板「驱动」列与过滤 | 🟡 第 1 段已落地（见下）；能力 Tab / 历史列待做 |
 | D8e | `driver_operations` 导出 JSON（排障用，方案 §3.5） | 待做 |
 
 **D8b 落地细节（2026-11-13）**
@@ -215,6 +215,23 @@ D8b 的代码路径覆盖，自动化断言目前只有上面那条读回用例�
 **验证**：`rds-engine` lib **220 passed**（+1：`driver_audit::tests::missing_driver_record_is_best_effort`）。
 
 对应验收项：A-5（缺驱动被拒有留痕）代码路径覆盖；A-7、A-8（查看入口）仍未覆盖。
+
+**D8d 第 1 段落地（2026-11-13）：插件管理页「操作记录」栏**
+
+| 项 | 落点 |
+| --- | --- |
+| 数据 | `crates/workbench/src/panels/plugin_manager/audit.rs`：`read_operations(limit)` 读最近 `OPERATION_LOG_LIMIT = 50` 条，走 `global.db` 连接池（后台线程：优先借插件运行时的 tokio handle，退化 `acquire_sync`） |
+| 状态 | `PluginManagerPanel` 加 `ops: Rc<RefCell<OperationLog>>` / `show_operations` / `ops_filter`；读盘在 `cx.background_executor()`，回主线程写状态再 `notify`——render 只读 |
+| 交互 | `render.rs` 在驱动链路行下加一行：`操作记录（N）` 展开按钮 + 结果档 `TabBar`（全部 / 成功 / 被拒）+ 刷新按钮；展开后是五列表格（时间 / 动作 / 结果 / 对象 / 原因） |
+| 文案 | `widgets.rs` 纯函数：`operation_action_label`（未知 action 原样露出，新动作不会被藏成空白）、`operation_target`（插件优先、否则「驱动 id」）、`operation_result_label`（ok→完成、其余→被拒）、`filtered_operations`（内存过滤） |
+| 「不静默」 | 表不存在 → 显示「操作记录读取失败：…（迁移 030 未跑）」，**不**呈现成「0 条」；无记录时文案区分「还没有操作记录」与「当前筛选下没有记录」 |
+
+**验证**：`rds-workbench` lib 全绿（`plugin_manager` 子集 21 passed，含新增 3 条纯函数用例）。
+
+> 第 2 段（未做）：驱动能力 Tab 的「来源（哪个插件）+ 最近同步时间」、历史面板「驱动」列与按驱动过滤。
+> 前者要复用 `driver_operations` 里 `declare_sync` 的最新行，后者要动 `crates/editor` 的历史视图——
+> 两者都不在本段提交里，验收 A-7 仍未闭。
+
 
 
 
