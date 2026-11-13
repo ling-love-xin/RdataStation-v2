@@ -39,12 +39,14 @@ use crate::ui;
 
 mod group;
 mod node;
+mod render;
 mod rows;
 mod search;
 mod state;
 
 pub use group::{group_of, grouped, SourceGroup};
 pub use node::{ArchiveScope, NodeId, NodeKind, Row, TempScope, MAX_DEPTH};
+pub use render::{render_rows, RowAction};
 pub use rows::{analysis_table_rows, draft_rows, external_row, root_rows};
 pub use search::{rank, search, HitRank, SearchOutcome, SEARCH_LIMIT};
 pub use state::{TreeState, RECENT_CAP};
@@ -109,6 +111,8 @@ pub struct PickerState {
     external: Option<PathBuf>,
     /// 底部提示（加载失败 / 源不可用）
     note: Option<String>,
+    /// 树态：展开 / 搜索词 / 选中 / 最近使用（纯内存，随对话框关闭丢弃，见 `state.rs`）
+    tree: TreeState,
 }
 
 impl PickerState {
@@ -134,6 +138,7 @@ impl PickerState {
             selected_analysis: None,
             external: None,
             note: None,
+            tree: TreeState::new(),
         }
     }
 
@@ -691,49 +696,53 @@ fn render_connected(
     list.into_any_element()
 }
 
-/// ② 草稿箱文件列表。
+/// ② 草稿箱文件树（可折叠；展开态纯内存，随对话框关闭丢弃）。
+///
+/// 这是 `render_rows` 的第一个真实消费点：行由 `draft_rows` 造、可见性由 `TreeState`
+/// 折叠、画由共用行渲染器画。选中的行仍然落回 `selected_draft`（索引），
+/// 因为 `picked_draft()` / `has_target()` 是三个消费方共用的对外契约，先不改它。
 fn render_scratchpad(
     s: &PickerState,
     state: &Rc<RefCell<PickerState>>,
     cx: &mut App,
 ) -> AnyElement {
-    let muted = cx.theme().colors.muted_foreground;
-    let mut list = div()
-        .v_flex()
-        .w_full()
-        .gap_1()
-        .max_h(rems(ui::VIS_DIALOG_LIST_MAX_H))
-        .overflow_y_scrollbar();
     if s.drafts.is_empty() {
-        list = list.child(
-            div()
-                .text_xs()
-                .text_color(muted)
-                .child("草稿箱里没有 DuckDB 支持的文件（CSV / Parquet / Excel / JSON）"),
-        );
+        let muted = cx.theme().colors.muted_foreground;
+        return div()
+            .text_xs()
+            .text_color(muted)
+            .child("草稿箱里没有 DuckDB 支持的文件（CSV / Parquet / Excel / JSON）")
+            .into_any_element();
     }
-    for (i, (rel, _abs)) in s.drafts.iter().enumerate() {
-        let selected = s.selected_draft == Some(i);
-        list = list.child(
-            Button::new(ElementId::Name(SharedString::from(format!(
-                "source-picker-draft-{i}-{}",
-                rel
-            ))))
-            .ghost()
-            .label(SharedString::from(rel.clone()))
-            .toggled(selected)
-            .on_click({
-                let state = state.clone();
-                move |_, window, _app| {
-                    let mut s = state.borrow_mut();
-                    s.selected_draft = Some(i);
-                    s.note = None;
-                    window.refresh();
-                }
-            }),
-        );
-    }
-    list.into_any_element()
+
+    // 旧 tab 结构下没有「文件根 → 草稿箱」那两行，所以文件层就是第 0 层
+    let rows = draft_rows(0, &s.drafts);
+
+    let on_toggle: RowAction = {
+        let state = state.clone();
+        Rc::new(move |id: &NodeId, window: &mut Window| {
+            state.borrow_mut().tree.toggle(id);
+            window.refresh();
+        })
+    };
+
+    let on_select: RowAction = {
+        let state = state.clone();
+        Rc::new(move |id: &NodeId, window: &mut Window| {
+            // 只有文件行可选中；组 / 目录行走到这里说明分派错了，直接忽略
+            let NodeId::Path(rel) = id else { return };
+            let mut s = state.borrow_mut();
+            let Some(index) = s.drafts.iter().position(|(r, _)| r == rel) else {
+                return;
+            };
+            s.selected_draft = Some(index);
+            s.tree.select(Some(id.clone()));
+            s.note = None;
+            window.refresh();
+        })
+    };
+
+    render_rows(&rows, &s.tree, on_toggle, on_select, cx)
 }
 
 /// ③ 资源分析（DuckDB 内部表）。

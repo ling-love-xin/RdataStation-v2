@@ -53,6 +53,35 @@ pub enum TempScope {
     Session(String),
 }
 
+impl NodeId {
+    /// 渲染层业务键：同一节点在任何位置都得到同一个串（`ElementId` / 测试锚点）。
+    ///
+    /// 不用下标，也不用 `Debug`：`Debug` 的引号与转义会让 id 随字段内容变形，
+    /// 而业务键必须稳定可比（§04「ElementId 随状态变化就会丢焦点」）。
+    pub fn key(&self) -> String {
+        match self {
+            Self::DbTable {
+                conn,
+                catalog,
+                schema,
+                table,
+            } => format!("db/{conn}/{catalog}/{schema}/{table}"),
+            Self::Path(p) => format!("path/{p}"),
+            Self::AnalysisTable { scope, table } => {
+                let lib = match scope {
+                    ArchiveScope::Project => "project",
+                    ArchiveScope::Global => "global",
+                };
+                format!("analysis/{lib}/{table}")
+            }
+            Self::Temp { scope, table } => match scope {
+                TempScope::Local => format!("temp/local/{table}"),
+                TempScope::Session(owner) => format!("temp/{owner}/{table}"),
+            },
+        }
+    }
+}
+
 /// 行种类。`Group` 是视图分组（三个根 / 资产库三段），`Folder` 是目录层。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NodeKind {
@@ -71,6 +100,11 @@ impl NodeKind {
     /// `File`（草稿 / 外部 / 归档文件）、`Temp`（结果集 / Mock / 插件输出）才是目标。
     pub fn is_confirmable(self) -> bool {
         matches!(self, Self::Table | Self::File | Self::Temp)
+    }
+
+    /// 有没有下一层可展开（§01：`Group` / `Conn` / `Folder` 才有 chevron）。
+    pub fn is_expandable(self) -> bool {
+        matches!(self, Self::Group | Self::Conn | Self::Folder)
     }
 }
 

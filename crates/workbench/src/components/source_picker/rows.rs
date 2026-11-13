@@ -38,11 +38,14 @@ fn group_id(group: SourceGroup) -> NodeId {
     NodeId::Path(key.to_string())
 }
 
-/// 草稿箱子树。`base_depth` = 「草稿箱」那一行所在的深度。
+/// 草稿箱子树。`file_depth` = 文件层所在的深度。
+///
+/// 树里有「文件(0) → 草稿箱(1) → 数据(2) → a.parquet(3)」这一层，草稿箱这一行由数据源
+/// 提供（不是本函数产的），所以文件层深度必须由调用方给，不能用「父行 + 1」推。
 ///
 /// 入参就是 `collect_drafts()` 的产物（相对路径 → 绝对路径，已按格式过滤并递归拍平）。
-pub fn draft_rows(base_depth: u8, drafts: &[(String, PathBuf)]) -> Vec<Row> {
-    debug_assert!(base_depth < MAX_DEPTH, "草稿箱的行不可能已在深度上限上");
+pub fn draft_rows(file_depth: u8, drafts: &[(String, PathBuf)]) -> Vec<Row> {
+    debug_assert!(file_depth <= MAX_DEPTH, "文件层已在深度上限之上");
     let mut tree: Vec<BuildNode> = Vec::new();
     for (rel, _abs) in drafts {
         let segs = normalize_segments(rel);
@@ -51,7 +54,7 @@ pub fn draft_rows(base_depth: u8, drafts: &[(String, PathBuf)]) -> Vec<Row> {
         }
     }
     let mut rows = Vec::new();
-    emit(&tree, base_depth + 1, "", &mut rows);
+    emit(&tree, file_depth, "", &mut rows);
     rows
 }
 
@@ -261,7 +264,7 @@ mod tests {
 
     #[test]
     fn single_file_sits_one_level_below_the_group() {
-        let rows = draft_rows(1, &[draft("a.parquet")]);
+        let rows = draft_rows(2, &[draft("a.parquet")]);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "a.parquet");
         assert_eq!(rows[0].depth, 2);
@@ -277,7 +280,7 @@ mod tests {
 
     #[test]
     fn nested_folder_appears_and_file_gets_breadcrumb() {
-        let rows = draft_rows(1, &[draft("数据\\a.parquet")]);
+        let rows = draft_rows(2, &[draft("数据\\a.parquet")]);
         let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
         assert_eq!(labels, vec!["数据", "a.parquet"]);
         assert_eq!(rows[0].kind, NodeKind::Folder);
@@ -287,7 +290,7 @@ mod tests {
     #[test]
     fn beyond_depth_limit_is_folded_into_one_row() {
         // 草稿箱(1) → 数据(2) → sub(3) 已到上限，文件不能有第 4 层
-        let rows = draft_rows(1, &[draft("数据\\sub\\a.parquet")]);
+        let rows = draft_rows(2, &[draft("数据\\sub\\a.parquet")]);
         let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
         assert_eq!(labels, vec!["数据", "a.parquet"]);
         assert_eq!(rows[1].depth, MAX_DEPTH, "文件压在深度上限那一层");
@@ -301,7 +304,7 @@ mod tests {
 
     #[test]
     fn same_folder_is_reused_across_files() {
-        let rows = draft_rows(1, &[draft("数据\\a.parquet"), draft("数据\\b.parquet")]);
+        let rows = draft_rows(2, &[draft("数据\\a.parquet"), draft("数据\\b.parquet")]);
         let folders: Vec<&Row> = rows
             .iter()
             .filter(|r| r.kind == NodeKind::Folder)
@@ -313,7 +316,7 @@ mod tests {
     #[test]
     fn folders_precede_files_and_order_is_stable() {
         let rows = draft_rows(
-            1,
+            2,
             &[draft("b.parquet"), draft("A\\x.parquet"), draft("a.parquet")],
         );
         let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
@@ -322,7 +325,7 @@ mod tests {
 
     #[test]
     fn both_separators_are_understood() {
-        let rows = draft_rows(1, &[draft("数据/sub/a.parquet")]);
+        let rows = draft_rows(2, &[draft("数据/sub/a.parquet")]);
         let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
         assert_eq!(labels, vec!["数据", "a.parquet"]);
         assert_eq!(
