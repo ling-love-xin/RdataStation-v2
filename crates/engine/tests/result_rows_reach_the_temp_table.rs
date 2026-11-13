@@ -36,9 +36,7 @@
 
 use rds_engine::driver::Database;
 use rds_engine::driver::native::duckdb::DuckDbDatabase;
-use rds_engine::driver::native::mysql::MySqlDatabase;
 use rds_engine::driver::native::mysql_native::MySqlNativeDatabase;
-use rds_engine::driver::native::postgres::PostgresDatabase;
 use rds_engine::driver::native::postgres_native::PostgresNativeDatabase;
 use rds_engine::driver::native::sqlite::SqliteDatabase;
 use rds_engine::services::duckdb_service::{self, DuckDbService};
@@ -84,33 +82,27 @@ async fn probe<D: Database>(db: &D, label: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn postgres_rows_reach_the_temp_table() {
+async fn postgres_native_rows_reach_the_temp_table() {
     let Ok(url) = std::env::var("RDS_TEST_PG_URL") else {
         eprintln!("⏭️  未设 RDS_TEST_PG_URL，跳过");
         return;
     };
-    let db = PostgresDatabase::new(&url).await.expect("连上 PG(sqlx)");
-    probe(&db, "PG(sqlx)").await;
-
     let db = PostgresNativeDatabase::new(&url)
         .await
-        .expect("连上 PG(Official)");
-    probe(&db, "PG(Official)").await;
+        .expect("连接 PostgreSQL");
+    probe(&db, "PostgreSQL（官方原生驱动）").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn mysql_rows_reach_the_temp_table() {
+async fn mysql_native_rows_reach_the_temp_table() {
     let Ok(url) = std::env::var("RDS_TEST_MYSQL_URL") else {
         eprintln!("⏭️  未设 RDS_TEST_MYSQL_URL，跳过");
         return;
     };
-    let db = MySqlDatabase::new(&url).await.expect("连上 MySQL(sqlx)");
-    probe(&db, "MySQL(sqlx)").await;
-
     let db = MySqlNativeDatabase::new(&url)
         .await
-        .expect("连上 MySQL(Official)");
-    probe(&db, "MySQL(Official)").await;
+        .expect("连接 MySQL");
+    probe(&db, "MySQL（官方原生驱动）").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

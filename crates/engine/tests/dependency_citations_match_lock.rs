@@ -12,6 +12,14 @@
 //!
 //! 它**不**校验源码行号（那需要 CARGO_HOME 里的源码，CI 上可能没有）——行号只在人复查时用；
 //! 本测试管的是“版本号对不对”这一层，也就是“要不要重新复查”的扳机。
+//!
+//! ## 为什么还要读插件的 lock（D3，2026-11-12）
+//!
+//! `sqlx` 的实现整体搬到 sidecar 插件后，根 `Cargo.lock` 里**不再有** sqlx 家族（内核一行
+//! sqlx 代码都不剩）。而 `crates/` 里仍按 sqlx 源码立论的结论（`property_spec` 的「静默忽略
+//! 未知键」、`url_params` 的 TLS 参数词汇）**依然成立**——只是客户端库现在由插件消费
+//! （`tools/plugin-drivers/sqlx-rust/Cargo.lock` 才是它真正的版本锁）。所以这里把插件
+//! 的 lock 一并读进来：引用照旧钉版本，钉的是「实际使用它的那份锁」。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -92,10 +100,26 @@ fn citations_in(line: &str) -> Vec<(String, String)> {
 #[test]
 fn cited_dependency_versions_match_the_lockfile() {
     let root = workspace_root();
-    let lock_path = root.join("Cargo.lock");
-    let lock = std::fs::read_to_string(&lock_path)
-        .unwrap_or_else(|e| panic!("读不到 {}：{e}", lock_path.display()));
-    let locked = locked_versions(&lock);
+    let mut lock_paths = vec![root.join("Cargo.lock")];
+    // 独立 workspace 的插件各有自己的 lock：`crates/` 里按 sqlx 源码立论的结论由它们消费。
+    let plugins = root.join("tools").join("plugin-drivers");
+    if let Ok(entries) = std::fs::read_dir(&plugins) {
+        for entry in entries.flatten() {
+            let lock = entry.path().join("Cargo.lock");
+            if lock.is_file() {
+                lock_paths.push(lock);
+            }
+        }
+    }
+
+    let mut locked: BTreeMap<String, String> = BTreeMap::new();
+    for path in &lock_paths {
+        let lock = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("读不到 {}：{e}", path.display()));
+        for (k, v) in locked_versions(&lock) {
+            locked.entry(k).or_insert(v); // 根 lock 优先；同一 crate 多版本时取先出现者
+        }
+    }
 
     let mut files = Vec::new();
     rust_files(&root.join("crates"), &mut files);

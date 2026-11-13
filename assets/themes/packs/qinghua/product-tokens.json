@@ -1,0 +1,33 @@
+{
+  "$comment": "「青花」主题包的产品语义 token（13 角色）。换包时必须与主题文件同步替换，否则活动栏底色 / Quick Open 组头 / 搜索命中底 / 结果集槽会残留默认珊瑚包的值。",
+  "light": {
+    "activity_bar.background": "#EEF3F7",
+    "activity_bar.active_border": "#1E2A35",
+    "activity_bar.icon.active": "#1E2A35",
+    "activity_bar.icon.inactive": "#4C6073",
+    "title_bar.slot.background": "#FCFDFE",
+    "quick_open.group.header": "#E3EBF4",
+    "search.match.background": "#FDF1CB",
+    "staged.drop": "#A83325",
+    "result.odd_row.background": "#EAF1F8",
+    "result.cell.modified.background": "#FBEBD5",
+    "result.cell.error.background": "#F9E3E6",
+    "result.local_row_background": "#E6F1E7",
+    "result.header.border": "#C5D5E2"
+  },
+  "dark": {
+    "activity_bar.background": "#0E141C",
+    "activity_bar.active_border": "#E6ECF2",
+    "activity_bar.icon.active": "#E6ECF2",
+    "activity_bar.icon.inactive": "#8CA0B2",
+    "title_bar.slot.background": "#131A24",
+    "quick_open.group.header": "#24313F",
+    "search.match.background": "#4A3C0E",
+    "staged.drop": "#FF8873",
+    "result.odd_row.background": "#141D27",
+    "result.cell.modified.background": "#332714",
+    "result.cell.error.background": "#3A1B1E",
+    "result.local_row_background": "#17291F",
+    "result.header.border": "#2A3947"
+  }
+}

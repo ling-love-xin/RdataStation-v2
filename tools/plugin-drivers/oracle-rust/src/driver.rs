@@ -335,12 +335,32 @@ impl Driver for OracleDriver {
         Ok(())
     }
 
+    /// 元数据查询也要能自愈：真机上连着跑字典查询（点导航 / 打开属性面板）到
+    /// 几十次之后，`oracle-rs` 那条连接会被服务端关掉，此后每个 `meta.*` 都是
+    /// `connection closed unexpectedly`，直到宿主重启。`query.execute` 早就带重连，
+    /// 这里补同一条策略：失败 → 重连 → 原样重试一次，仍失败才把错误交出去。
     async fn catalogs(&self, session: &mut Self::Session) -> Result<Vec<String>, DriverError> {
-        crate::meta::catalogs(&session.conn).await
+        match crate::meta::catalogs(&session.conn).await {
+            Ok(value) => Ok(value),
+            Err(first) => {
+                if session.reconnect().await.is_err() {
+                    return Err(first);
+                }
+                crate::meta::catalogs(&session.conn).await
+            }
+        }
     }
 
     async fn schemas(&self, session: &mut Self::Session) -> Result<Vec<MetaSchema>, DriverError> {
-        crate::meta::schemas(&session.conn).await
+        match crate::meta::schemas(&session.conn).await {
+            Ok(value) => Ok(value),
+            Err(first) => {
+                if session.reconnect().await.is_err() {
+                    return Err(first);
+                }
+                crate::meta::schemas(&session.conn).await
+            }
+        }
     }
 
     async fn objects(
@@ -348,7 +368,15 @@ impl Driver for OracleDriver {
         session: &mut Self::Session,
         schema: &str,
     ) -> Result<Vec<MetaObject>, DriverError> {
-        crate::meta::objects(&session.conn, schema).await
+        match crate::meta::objects(&session.conn, schema).await {
+            Ok(value) => Ok(value),
+            Err(first) => {
+                if session.reconnect().await.is_err() {
+                    return Err(first);
+                }
+                crate::meta::objects(&session.conn, schema).await
+            }
+        }
     }
 
     async fn object_detail(
@@ -357,7 +385,32 @@ impl Driver for OracleDriver {
         schema: &str,
         name: &str,
     ) -> Result<MetaObjectDetail, DriverError> {
-        crate::meta::object_detail(&session.conn, schema, name).await
+        match crate::meta::object_detail(&session.conn, schema, name).await {
+            Ok(value) => Ok(value),
+            Err(first) => {
+                if session.reconnect().await.is_err() {
+                    return Err(first);
+                }
+                crate::meta::object_detail(&session.conn, schema, name).await
+            }
+        }
+    }
+
+    async fn routine_source(
+        &self,
+        session: &mut Self::Session,
+        schema: &str,
+        name: &str,
+    ) -> Result<Option<String>, DriverError> {
+        match crate::meta::routine_source(&session.conn, schema, name).await {
+            Ok(value) => Ok(value),
+            Err(first) => {
+                if session.reconnect().await.is_err() {
+                    return Err(first);
+                }
+                crate::meta::routine_source(&session.conn, schema, name).await
+            }
+        }
     }
 }
 

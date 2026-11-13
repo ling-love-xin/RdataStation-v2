@@ -395,6 +395,241 @@ impl PluginManagerPanel {
                 }))
         });
 
+        // 操作记录（D8d）：默认收起。这里只做「看得见」——最近 N 条 + 结果过滤 + 刷新。
+        // 失败行必须带原因，所以 `reason` 独占一列，不做省略后再拼提示。
+        let ops_log = self.operations();
+        let ops_filter = self.ops_filter();
+        let ops_snapshot = {
+            let log = ops_log.borrow();
+            // 借用不能跨出这个块（`log` 在块尾释放）：过滤结果先克隆成自有行
+            let rows: Vec<engine::persistence::driver_operation_store::DriverOperationRow> =
+                widgets::filtered_operations(&log.rows, ops_filter)
+                    .into_iter()
+                    .cloned()
+                    .collect();
+            (rows, log.rows.len(), log.error.clone(), log.loading)
+        };
+        // 导出结果（D8e）：按钮点完之后的一句反馈，路径原样给出（用户要能直接去拿文件）
+        let ops_export = {
+            let log = ops_log.borrow();
+            (
+                log.export_note.clone(),
+                log.export_error.clone(),
+                log.exporting,
+            )
+        };
+        let ops_count = ops_snapshot.1;
+        let ops_row = div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .px_4()
+            .py_2()
+            .border_b(ui::HAIRLINE)
+            .border_color(theme.colors.border)
+            .text_xs()
+            .child(
+                Button::new("plugin-manager-operations")
+                    .ghost()
+                    .label(SharedString::from(if self.show_operations() {
+                        "收起操作记录".to_string()
+                    } else if ops_count == 0 {
+                        "操作记录".to_string()
+                    } else {
+                        format!("操作记录（{ops_count}）")
+                    }))
+                    .with_size(Size::XSmall)
+                    .tooltip("安装 / 启停 / 卸载 / 重载 / 缺驱动被拒等动作的留痕")
+                    .on_click({
+                        let manager = cx.entity();
+                        move |_, _, app| {
+                            let _ = manager.update(app, |this, cx| this.toggle_operations(cx));
+                        }
+                    }),
+            )
+            .child(
+                div()
+                    .text_color(theme.colors.muted_foreground)
+                    .child("留痕只为可查，失败原因原样保留")
+            )
+            .child(div().flex_1());
+
+        let ops_filter_ix = widgets::OperationResultFilter::ALL
+            .iter()
+            .position(|item| *item == ops_filter)
+            .unwrap_or(0);
+        let ops_row = ops_row
+            .child(
+                TabBar::new("plugin-manager-ops-filter")
+                    .segmented()
+                    .with_size(Size::XSmall)
+                    .selected_index(ops_filter_ix)
+                    .children(
+                        widgets::OperationResultFilter::ALL
+                            .iter()
+                            .map(|item| Tab::new().label(item.label())),
+                    )
+                    .on_click({
+                        let manager = cx.entity();
+                        move |ix, _window, app| {
+                            if let Some(filter) =
+                                widgets::OperationResultFilter::ALL.get(*ix)
+                            {
+                                let _ = manager.update(app, |this, cx| {
+                                    this.set_ops_filter(*filter, cx)
+                                });
+                            }
+                        }
+                    }),
+            )
+            .child(
+                Button::new("plugin-manager-ops-refresh")
+                    .ghost()
+                    .icon(IconName::RefreshCw)
+                    .with_size(Size::XSmall)
+                    .tooltip("重新读取最近的操作留痕")
+                    .on_click({
+                        let manager = cx.entity();
+                        move |_, _, app| {
+                            let _ = manager.update(app, |this, cx| this.load_operations(cx));
+                        }
+                    }),
+            )
+            .child(
+                // 导出 JSON（D8e）：排障时把留痕拿走比翻页实用；导出的是**全量**（1000 条上限），
+                // 不是屏幕上那 50 条。按钮不做禁用，靠 `exporting` 状态挡住重复点。
+                Button::new("plugin-manager-ops-export")
+                    .ghost()
+                    .label(SharedString::from(if ops_export.2 {
+                        "导出中…".to_string()
+                    } else {
+                        "导出 JSON".to_string()
+                    }))
+                    .with_size(Size::XSmall)
+                    .tooltip("把最近 1000 条留痕写成 JSON（排障用），落到全局目录的 exports/")
+                    .on_click({
+                        let manager = cx.entity();
+                        move |_, _, app| {
+                            let _ = manager.update(app, |this, cx| this.export_operations(cx));
+                        }
+                    }),
+            )
+            .children(ops_export.0.clone().map(|note| {
+                div()
+                    .text_color(theme.colors.success)
+                    .child(note)
+            }))
+            .children(ops_export.1.clone().map(|error| {
+                div()
+                    .text_color(theme.colors.danger)
+                    .child(error)
+            }));
+
+        let ops_table = (self.show_operations()).then(|| {
+            let mut table = div()
+                .v_flex()
+                .gap_1()
+                .px_4()
+                .py_2()
+                .border_b(ui::HAIRLINE)
+                .border_color(theme.colors.border)
+                .text_xs();
+            if let Some(error) = ops_snapshot.2.clone() {
+                // 表不在 / 读不到：直接说清，不呈现成「0 条留痕」
+                table = table.child(
+                    div()
+                        .text_color(theme.colors.warning)
+                        .child(format!("操作记录读取失败：{error}")),
+                );
+            } else if ops_snapshot.3 {
+                table = table.child(
+                    div()
+                        .text_color(theme.colors.muted_foreground)
+                        .child("正在读取操作记录…"),
+                );
+            } else if ops_snapshot.0.is_empty() {
+                table = table.child(
+                    div().text_color(theme.colors.muted_foreground).child(
+                        if ops_count == 0 {
+                            "还没有操作记录（装插件、启停、改驱动之后会出现在这里）"
+                        } else {
+                            "当前筛选下没有记录"
+                        },
+                    ),
+                );
+            } else {
+                table = table.child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_3()
+                        .py_1()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(div().w(rems(14.)).flex_none().child("时间"))
+                        .child(div().w(rems(7.)).flex_none().child("动作"))
+                        .child(div().w(rems(5.)).flex_none().child("结果"))
+                        .child(div().w(rems(18.)).flex_none().child("对象"))
+                        .child(div().flex_1().min_w_0().child("原因 / 说明")),
+                );
+                for row in &ops_snapshot.0 {
+                    let ok = row.operation.result == "ok";
+                    let tone = if ok {
+                        theme.colors.success
+                    } else {
+                        theme.colors.danger
+                    };
+                    table = table.child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_3()
+                            .py_1()
+                            .child(
+                                div()
+                                    .w(rems(14.))
+                                    .flex_none()
+                                    .text_color(theme.colors.muted_foreground)
+                                    .child(row.occurred_at.clone()),
+                            )
+                            .child(
+                                div()
+                                    .w(rems(7.))
+                                    .flex_none()
+                                    .child(widgets::operation_action_label(&row.operation.action)),
+                            )
+                            .child(
+                                div()
+                                    .w(rems(5.))
+                                    .flex_none()
+                                    .text_color(tone)
+                                    .child(widgets::operation_result_label(&row.operation.result)),
+                            )
+                            .child(
+                                div()
+                                    .w(rems(18.))
+                                    .flex_none()
+                                    .min_w_0()
+                                    .text_ellipsis()
+                                    .child(widgets::operation_target(row)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_ellipsis()
+                                    .text_color(if ok {
+                                        theme.colors.muted_foreground
+                                    } else {
+                                        theme.colors.foreground
+                                    })
+                                    .child(row.operation.reason.clone().unwrap_or_default()),
+                            ),
+                    );
+                }
+            }
+            table
+        });
+
         // 操作反馈：错误 > 进行中 > 成功回执（同一时刻只显示一条，避免三行挤在一起）。
         let feedback = if let Some(error) = snapshot.error.as_deref() {
             Some(
@@ -547,6 +782,8 @@ impl PluginManagerPanel {
             .child(stats_row)
             .child(chain_row)
             .children(registry_table)
+            .child(ops_row)
+            .children(ops_table)
             .children(feedback)
             .children(reload_banner)
             .child(toolbar)

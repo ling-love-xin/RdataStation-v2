@@ -115,6 +115,31 @@ pub async fn object_detail(
     Ok(detail)
 }
 
+/// 例程源码（`meta.routine_source`）：SQL Server 的定义正文在 `sys.sql_modules.definition`。
+///
+/// 只认存储过程与函数（`P` / `FN` / `IF` / `TF`）——视图也有 `sql_modules` 记录，
+/// 但协议这里问的是例程，混进视图定义会让源码面板显示错东西。
+pub async fn routine_source(
+    client: &mut MssqlClient,
+    schema: &str,
+    name: &str,
+) -> Result<Option<String>, DriverError> {
+    let rows = query_rows(
+        client,
+        "SELECT m.definition FROM sys.sql_modules m \
+         JOIN sys.objects o ON o.object_id = m.object_id \
+         JOIN sys.schemas s ON s.schema_id = o.schema_id \
+         WHERE s.name = @P1 AND o.name = @P2 AND o.type IN ('P','FN','IF','TF')",
+        vec![schema.to_string(), name.to_string()],
+    )
+    .await?;
+    // 查不到 ≠ 出错：加密对象（WITH ENCRYPTION）本来就是 null，界面留空。
+    Ok(rows
+        .first()
+        .and_then(|row| row.get::<&str, _>(0))
+        .map(str::to_string))
+}
+
 async fn object_kind(client: &mut MssqlClient, schema: &str, name: &str) -> String {
     let rows = query_rows(
         client,
@@ -155,9 +180,14 @@ async fn columns(
             continue;
         };
         let type_name = row.get::<&str, _>(1).unwrap_or("unknown");
+        // `sys.columns` 的列类型：`max_length` 是 smallint，`precision` / `scale` 是 tinyint。
+        // 按 `i16` 取 tinyint 会让 tiberius 的 `Row::get` 在内部 unwrap 时 panic
+        // （`cannot interpret U8(Some(0)) as an i16 value`），进程一死，整条会话连同
+        // 同一实例上的其他连接全部断掉 —— 2026-11-12 真机 `sidecar_conformance`
+        // 第 6 条（导航面）实测复现。tinyint 必须按 `u8` 取。
         let max_length = row.get::<i16, _>(2).unwrap_or(0);
-        let precision = row.get::<i16, _>(3).unwrap_or(0);
-        let scale = row.get::<i16, _>(4).unwrap_or(0);
+        let precision = i16::from(row.get::<u8, _>(3).unwrap_or(0));
+        let scale = i16::from(row.get::<u8, _>(4).unwrap_or(0));
         let is_identity = row.get::<bool, _>(7).unwrap_or(false);
 
         let type_raw = compose_type(type_name, max_length, precision, scale);

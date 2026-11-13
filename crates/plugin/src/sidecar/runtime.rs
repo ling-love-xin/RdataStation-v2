@@ -58,14 +58,20 @@ impl PluginRuntimeLoop {
     /// 分发放在回收之前——先把反向请求答完，再收拾空闲实例，顺序上不会误杀。
     pub async fn tick_once(&self) {
         // 热插拔（目录即插件）：新目录自动加载/激活、目录消失自动停用、
-        // 清单变化置 needs_reload（不热生效）。5s 一拍，无需 watcher。
+        // 清单变化置 needs_reload（不热生效），载荷变化（清单没变）自动重启该插件。
+        // 5s 一拍，无需 watcher。
         match self.manager.scan_and_diff_plugins().await {
             Ok(diff) => {
-                if !diff.added.is_empty() || !diff.removed.is_empty() || !diff.changed.is_empty() {
+                if !diff.added.is_empty()
+                    || !diff.removed.is_empty()
+                    || !diff.changed.is_empty()
+                    || !diff.reloaded.is_empty()
+                {
                     tracing::info!(
                         added = ?diff.added,
                         removed = ?diff.removed,
                         changed = ?diff.changed,
+                        reloaded = ?diff.reloaded,
                         "插件热插拔扫描：目录有变化"
                     );
                 }

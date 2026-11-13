@@ -123,6 +123,33 @@ impl DataSourceService {
         self.drivers.get_available_drivers().await
     }
 
+    /// 驱动「来源 + 最近同步」（D8d / A-8 的前置数据）
+    ///
+    /// 来源不另建表：`driver_operations` 里 `action=declare_sync` 的行就记着
+    /// 「这条驱动声明是谁写的、什么时候写的」——`plugin_id` 为空 = 内核内置，
+    /// 有值 = 该插件贡献。取每个驱动**最新**一条（表里按时间倒序）。
+    ///
+    /// 读不到（表还没建 / global.db 起不来）就返回空表：界面上说「未同步」，
+    /// 比编一个来源出来诚实。
+    pub async fn driver_sources(
+        &self,
+    ) -> Result<Vec<engine::persistence::driver_operation_store::DriverOperationRow>, CoreError>
+    {
+        const DECLARE_ROWS: usize = 300;
+        use engine::persistence::driver_operation_store::{list_operations, DriverOperationFilter};
+
+        let conn = self.global_db.sqlite_pool().acquire().await?;
+        let conn_ref = conn.inner()?;
+        list_operations(
+            conn_ref,
+            &DriverOperationFilter {
+                action: Some("declare_sync".to_string()),
+                limit: Some(DECLARE_ROWS),
+                ..Default::default()
+            },
+        )
+    }
+
     /// 按类型列出驱动
     pub async fn list_drivers_by_type(&self, type_id: &str) -> Result<Vec<Driver>, CoreError> {
         self.global_db.get_drivers_by_type(type_id).await
@@ -1260,8 +1287,17 @@ fn test_failure_message(e: &CoreError) -> String {
             shared::error::ConnectionError::NotFound(_) => {
                 "连接不存在：该连接可能已被删除，请刷新导航树后重试"
             }
-            shared::error::ConnectionError::DriverNotFound { .. } => {
-                "驱动未安装或未注册：到「驱动目录」检查该驱动的安装状态"
+            shared::error::ConnectionError::DriverNotFound { driver } => {
+                // D4（2026-11-12）：`mysql` / `postgres` 的实现已剥离为 sidecar 插件，
+                // 内核只带 sqlite / duckdb / mysql_native / postgres_native。这里给出
+                // **能操作**的去向，而不是让人对着「驱动未注册」猜。
+                if matches!(driver.as_str(), "mysql" | "postgres") {
+                    "该驱动由插件 rds.driver.sqlx 提供（内核不再内置）：到「插件管理」安装并启用\
+                     「MySQL / PostgreSQL (sqlx) Drivers」；不想装插件就改选同族的官方实现\
+                     （MySQL (Official) / PostgreSQL (Official)）"
+                } else {
+                    "驱动未安装或未注册：到「插件管理」检查该驱动所属插件是否已安装并启用"
+                }
             }
             shared::error::ConnectionError::NoActiveConnection => {
                 "没有活动连接：请先连接目标数据源"
@@ -1693,7 +1729,16 @@ mod tests {
             driver: "no_such".into(),
         });
         let msg = test_failure_message(&drv);
-        assert!(msg.contains("驱动目录"), "{msg}");
+        assert!(msg.contains("插件管理"), "{msg}");
+
+        // D4：`mysql` / `postgres` 的实现已剥离到 sidecar 插件 —— 提示要点明**插件**与
+        // 同族官方实现这条退路，而不是只说「驱动未注册」。
+        let retired = CoreError::Connection(ConnectionError::DriverNotFound {
+            driver: "mysql".into(),
+        });
+        let msg = test_failure_message(&retired);
+        assert!(msg.contains("rds.driver.sqlx"), "{msg}");
+        assert!(msg.contains("MySQL (Official)"), "{msg}");
 
         // 非连接域：只保留明细（CoreError Display 带错误码前缀），不硬套 hint。
         let common = CoreError::Common(CommonError::General("generic boom".into()));

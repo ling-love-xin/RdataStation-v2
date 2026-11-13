@@ -37,6 +37,11 @@ impl HotReloadManager {
         self.manager.scan_and_diff_plugins().await
     }
 
+    /// 重启单个插件（停进程 → 重新激活）；载荷更新后由扫描自动调用，也可手动触发。
+    pub async fn restart_plugin(&self, id: &str) -> Result<(), shared::error::CoreError> {
+        self.manager.restart_plugin(id).await
+    }
+
     /// 待重载插件列表（清单已变化、未热生效，需要用户触发重载）。
     pub fn pending_reloads(&self) -> Vec<String> {
         self.manager.pending_reloads()

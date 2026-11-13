@@ -16,6 +16,8 @@
 #   - Python 壳：源码已在 postgres-py/ 内（无需下载）
 #   - Rust 驱动：cargo build → 复制到 <包>/bin/win-x64/agent.exe
 # 安装目标：<RDS_HOME>/plugins/<manifest-id>（RDS_HOME 开发期 = 仓库根/.rds，见 crates/paths）
+# 复制用 robocopy 并排除开发残留（.git / target / __pycache__ 等，与 layout::is_dev_residue 同口径）：
+# 安装目录是只读产物，残留文件进去既不干净，运行期还会被重写、抖动载荷指纹。
 
 param(
     [switch]$WithJdbcOracle,
@@ -147,6 +149,12 @@ if (-not $SkipRust) {
 # 注意：安装目录名 = manifest 里的 plugin.id（卸载用 paths::plugin_dir(id) 拼路径，
 # 目录名与 id 不一致会导致卸载找不到目录）；源码目录是短名，安装目标用点分 id。
 # Oracle 两版互斥：JDBC 与 Rust 版都贡献驱动 id `oracle`，一次只能装其中一版。
+
+# 生成 checksums 的工具与排除清单都在 _checksums.ps1（打包脚本 pack.ps1 也用同一份）：
+# 装的字节就是校验对象，复制完再在**目标目录**生成，源码目录不会多出未跟踪文件。
+. (Join-Path $PSScriptRoot "_checksums.ps1")
+$checksumTool = Get-ChecksumTool
+
 $targets = @(
     @{ src = "postgres-py"; id = "rds.driver.postgres-py" },
     @{ src = "mssql-rust-plugin"; id = "rds.driver.mssql-rust" }
@@ -163,14 +171,22 @@ foreach ($t in $targets) {
     $src = Join-Path $dist $t.src
     $dst = Join-Path $homePlugins $t.id
     if ($DryRun) {
-        Write-Output "[DryRun] 将安装 $src → $dst"
+        Write-Output "[DryRun] 将安装 $src → $dst，并在安装后生成 checksums.json"
         continue
     }
     if (Test-Path -LiteralPath $dst) {
         Write-Output "覆盖安装：$dst"
         Remove-Item -Recurse -Force -LiteralPath $dst
     }
-    Copy-Item -Recurse -LiteralPath $src -Destination $dst
+    # 用 robocopy 而不是 Copy-Item：后者会把 __pycache__ / .git / target 一起搬进安装目录。
+    # 安装目录是只读产物（layout 规则 6），Python 运行期还会重写 __pycache__，载荷指纹跟着变，
+    # 可能触发无谓的自动重启。排除清单与 layout::is_dev_residue 同一套。
+    $rcArgs = @($src, $dst, '/E') + (Get-DevResidueRobocopyArgs)
+    & robocopy @rcArgs | Out-Null
+    # robocopy：0 = 没变化、1-7 = 复制成功（有文件被拷），≥8 才是失败
+    if ($LASTEXITCODE -ge 8) { throw "复制插件目录失败（robocopy $LASTEXITCODE）：$src → $dst" }
+    $ok = New-PackageChecksums $dst $checksumTool
+    if (-not $ok) { Write-Output "未生成 checksums.json（缺 rds-plugin-checksums 与 cargo，跳过）：$dst" }
     Write-Output "已安装：$dst"
 }
 

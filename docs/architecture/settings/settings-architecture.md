@@ -132,6 +132,7 @@ graph TD
 | key | 节 | 类型 | 默认 | 生效 | 消费方 | 入口 | 期次 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `appearance.theme_mode` | 外观 | enum `light`/`dark` | `light` | 即时 | `app/src/main.rs`、`SettingsService::set_theme_mode` | 两者 | ✅ 已落地 |
+| `appearance.theme_pack` | 外观 | enum `rds`/`qinghua`（值域 = `settings::theme_pack::BUILTIN`） | `rds` | 即时 | `crates/app/src/main.rs::apply_theme_pack_state`（经 `install_theme_pack_sink` 重装主题 + 产品 token） | 设置页 | ✅ 已落地（2026-11-12；`RDS_THEME_PACK` 可临时覆盖） |
 | `editor.show_line_numbers` | 编辑器 | bool | `true` | 即时 | `crates/editor/src/view/host.rs::EditorHostPanel`（render 同步 `set_line_number`） | 设置页 | ✅ 已落地（2026-10-24，#48） |
 | `editor.default_tab_size` | 编辑器 | i64（1–16） | `4` | 下次操作 | `crates/editor/src/view/host.rs::apply_editor_defaults`（新建文档） | 设置页 | ✅ 已落地（2026-10-24，#48） |
 | `editor.default_hard_tabs` | 编辑器 | bool | `false` | 下次操作 | `crates/editor/src/view/host.rs::apply_editor_defaults`（新建文档） | 设置页 | ✅ 已落地（2026-10-24，#48） |

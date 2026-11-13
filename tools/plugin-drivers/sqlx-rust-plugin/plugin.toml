@@ -1,0 +1,54 @@
+# MySQL / PostgreSQL 的 sqlx 轨驱动插件：一个 sidecar 进程（rds-sqlx-sidecar）供两个 driver id。
+#
+# 为什么一个进程两个驱动：宿主协议本来就按 `session.open` 的 `driver_id` 路由、
+# `initialize` 回 `driver_ids` 列表（`rust-core::serve_many`），一个插件包带两条驱动
+# 比装两个插件少一份进程与一份启动开销。驱动 id 沿用内核里的 `mysql` / `postgres`
+# （零迁移：连接表、历史记录里的 driver 值不用改）。
+#
+# 驱动二进制不入库（gitignore 忽略 bin/），用 build.ps1 构建后复制到 bin/win-x64/agent.exe。
+# 许可：驱动实现与 sqlx（Apache-2.0 / MIT 双许可）一致。
+
+[plugin]
+id = "rds.driver.sqlx"
+name = "MySQL / PostgreSQL (sqlx) Drivers"
+version = "0.1.0"
+publisher = "rds"
+description = "MySQL 与 PostgreSQL 的 sqlx 实现（同一进程供两个驱动）；能力面按协议如实声明，做不到的属性分区在界面上置灰"
+license = "MIT"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "sidecar"
+runtime = "rust"
+executable = "bin/agent"
+transport = "framed"
+protocol = "rds-driver/1"
+platforms = ["win-x64"]
+max_instances = 1
+
+# sidecar 轨：起子进程 + 连网络 + 读自己的数据目录 + 接收数据库凭据
+[permissions]
+sidecar = ["spawn.child_process", "net.connect", "fs.read_plugin_data", "credentials.database"]
+driver = ["driver.query", "driver.metadata", "driver.transaction"]
+credentials = "database"
+
+[capabilities.driver]
+# 一条会话一条连接，会话内请求串行（等价 DBeaver 的 SingleThreadLock）。
+concurrency = "serial"
+
+[[contributes.drivers]]
+id = "mysql"
+display_name = "MySQL (sqlx)"
+default_port = 3306
+url_template = "mysql://{username}:{password}@{host}:{port}/{database}"
+# MySQL 的 database 即 schema：没有独立 schema 层，所以不声明 `schemas`。
+features = ["transactions"]
+
+[[contributes.drivers]]
+id = "postgres"
+display_name = "PostgreSQL (sqlx)"
+default_port = 5432
+url_template = "postgres://{username}:{password}@{host}:{port}/{database}"
+features = ["schemas", "transactions"]

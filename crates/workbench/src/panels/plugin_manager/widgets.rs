@@ -854,3 +854,82 @@ pub(crate) fn select_button(
             app.stop_propagation();
         })
 }
+
+// ---------------------------------------------------------------------------
+// 操作记录（D8d）：状态 → 文案 / 过滤，纯函数（渲染层只套颜色）
+// ---------------------------------------------------------------------------
+
+/// 结果过滤档（留痕表的 `result` 只有 ok / fail 两值）
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OperationResultFilter {
+    All,
+    Ok,
+    Fail,
+}
+
+impl OperationResultFilter {
+    pub(crate) const ALL: [Self; 3] = [Self::All, Self::Ok, Self::Fail];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::All => "全部",
+            Self::Ok => "成功",
+            Self::Fail => "被拒 / 失败",
+        }
+    }
+
+    pub(crate) fn matches(self, result: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Ok => result == "ok",
+            Self::Fail => result != "ok",
+        }
+    }
+}
+
+/// `action` → 中文标签。
+///
+/// 未知动作原样显示（留痕表是长期表，D8 之后还会有新 action 写进来——
+/// 显示成空白等于把新记录藏起来，宁可露出英文键名）。
+pub(crate) fn operation_action_label(action: &str) -> String {
+    match action {
+        "install" => "安装".to_string(),
+        "uninstall" => "卸载".to_string(),
+        "enable" => "启用".to_string(),
+        "disable" => "停用".to_string(),
+        "reload" => "重载".to_string(),
+        "missing_driver" => "缺驱动被拒".to_string(),
+        "declare_sync" => "声明同步".to_string(),
+        "capability_change" => "能力位变化".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// 这一行「动了谁」：插件优先（插件生命周期），否则驱动，都没有就写作用域。
+pub(crate) fn operation_target(
+    row: &engine::persistence::driver_operation_store::DriverOperationRow,
+) -> String {
+    if let Some(plugin) = row.operation.plugin_id.as_deref() {
+        return plugin.to_string();
+    }
+    if let Some(driver) = row.operation.driver_id.as_deref() {
+        return format!("驱动 {driver}");
+    }
+    row.operation.scope.clone()
+}
+
+/// 结果标签（与 `result` 两个取值一一对应）
+pub(crate) fn operation_result_label(result: &str) -> &'static str {
+    match result {
+        "ok" => "完成",
+        _ => "被拒",
+    }
+}
+
+/// 按结果过滤（行已由 SQL 限行，这里只过内存；保持时间倒序）
+pub(crate) fn filtered_operations<'a>(
+    rows: &'a [engine::persistence::driver_operation_store::DriverOperationRow],
+    filter: OperationResultFilter,
+) -> Vec<&'a engine::persistence::driver_operation_store::DriverOperationRow> {
+    rows.iter().filter(|row| filter.matches(&row.operation.result)).collect()
+}

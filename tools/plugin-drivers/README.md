@@ -12,11 +12,13 @@ Java / Python 解释器由宿主 `crates/plugin/src/runtime.rs` 三级查找；R
 tools/plugin-drivers/
 ├── oracle-jdbc/            # rds.driver.oracle：通用 JDBC 壳 + ojdbc11（+ h2 无证书验证；默认不安装）
 ├── postgres-py/            # rds.driver.postgres-py：Python DB-API 壳 + psycopg（用户环境）
-├── rust-core/              # crate rds-driver-sidecar：Rust 驱动共享协议内核（帧 / 错误码 / Page / meta）
+├── rust-core/              # crate rds-driver-sidecar：Rust 驱动共享协议内核（帧 / 错误码 / Page / meta / 多驱动路由）
 ├── oracle-rust/            # crate rds-driver-oracle：Oracle 原生驱动源码（oracle-rs）
 ├── mssql-rust/             # crate rds-driver-mssql：SQL Server 原生驱动源码（tiberius）
+├── sqlx-rust/              # crate rds-driver-sqlx：MySQL + PostgreSQL 的 sqlx 实现（一个进程两个 driver id）
 ├── oracle-rust-plugin/     # rds.driver.oracle-rust：Rust 驱动插件包（plugin.toml + bin/）
 ├── mssql-rust-plugin/      # rds.driver.mssql-rust：Rust 驱动插件包（plugin.toml + bin/）
+├── sqlx-rust-plugin/       # rds.driver.sqlx：Rust 驱动插件包（contributions: mysql / postgres）
 └── install.ps1             # 构建壳 / 下载驱动 jar / 构建 Rust 驱动 / 安装到 RDS_HOME/plugins/<manifest-id>
 ```
 
@@ -42,10 +44,29 @@ powershell -ExecutionPolicy Bypass -File tools\plugin-drivers\install.ps1 -WithJ
 全部由脚本运行时组装（Maven Central 下载 + 壳构建 + `cargo build --release`）。
 离线环境用 `-SkipOjdbc`；只想复用已编好的 Rust 二进制用 `-SkipRust`。
 
+## 打发布包（zip）
+
+```powershell
+# 打完在 .rds\tmp\packages\<id>-<version>.zip（压缩包根 = plugin.toml 所在层）
+powershell -ExecutionPolicy Bypass -File tools\plugin-drivers\pack.ps1 -Plugin oracle-jdbc
+
+# 指定输出目录 / 文件名
+powershell -ExecutionPolicy Bypass -File tools\plugin-drivers\pack.ps1 -Plugin oracle-jdbc -OutDir D:\dist -Name oracle-1.0.zip
+```
+
+它先把包复制到干净暂存目录（排除 `.git` / `target` / `__pycache__` 等开发残留，与安装器同口径），
+在暂存目录里生成 `checksums.json`，再压缩——源码目录不会多出未跟踪文件，包里的校验清单
+也正好对应"将来装进安装目录的那批字节"。**没有生成工具时直接失败**（不像安装可以跳过：
+发布包缺校验清单等于放弃完整性）。
+
+包内声明了 `driver_jars`（插件目录外的 jar）的，zip 里**不含**那些 jar，分发时要一并给；
+`checksums.json` 已经把它们的哈希算进去了。
+
 ## Rust 原生驱动轨
 
-- 协议内核 `rust-core` 提供帧编解码、错误码、Page / Arrow、`Driver` trait 与 `serve` 主循环；
-  驱动 crate 只实现 `Driver`，不重复协议代码。
+- 协议内核 `rust-core` 提供帧编解码、错误码、Page / Arrow、`Driver` trait 与主循环；
+  驱动 crate 只实现 `Driver`，不重复协议代码。一个进程要供多个 driver id 时用
+  `serve_many(vec![as_sidecar(A), as_sidecar(B)], …)`（`mysql` / `postgres` 这么用）。
 - 单元测试（无需真实数据库）：
 
 ```powershell
@@ -53,30 +74,112 @@ $env:CARGO_TARGET_DIR = "D:\RdataStation\RDS\RdataStation-v2\.rds\target-gf"
 cargo test --manifest-path tools/plugin-drivers/rust-core/Cargo.toml
 cargo test --manifest-path tools/plugin-drivers/oracle-rust/Cargo.toml
 cargo test --manifest-path tools/plugin-drivers/mssql-rust/Cargo.toml
+cargo test --manifest-path tools/plugin-drivers/sqlx-rust/Cargo.toml
 ```
 
-- 插件包只放清单和二进制；`build.ps1` 编 release 并复制为 `bin/win-x64/agent.exe`，
-  宿主 `layout::resolve_executable` 按平台子目录解析。
+- 插件包只放清单和二进制；每个包自己的 `build.ps1`（如
+  `mssql-rust-plugin/build.ps1`）编 release 并复制为 `bin/win-x64/agent.exe`，
+  宿主 `layout::resolve_executable` 按平台子目录解析。改完驱动源码后
+  **三处副本要保持一致**（`<包>/bin/...`、`.rds/plugins/<id>/bin/...`、
+  `.rds/target-gf/debug/plugins/<id>/bin/...`），否则跑的还是旧二进制。
+- **换了新二进制，宿主会自己重启那个插件**（2026-11-12）：热插拔扫描不只看
+  `plugin.toml` 的内容 hash，也看**载荷指纹**——插件目录里每个文件的相对路径 + 长度 +
+  纳秒修改时间，加上清单 `[backend] driver_jars` 声明的**外部 jar / 目录**（那些在插件
+  目录之外，路径是绝对路径）。只换 `agent.exe`、清单一个字节不动时，扫描在 5 秒内认出
+  「壳没变、载荷变了」，自动 `deactivate → activate` 该插件（别的插件不受影响）：
+  旧进程被停、旧会话如实作废，下一个连接用的就是新二进制。**不用重启宿主，也不用
+  手动点重载**。
+  但**那个插件上还有活动会话时不重启**（2026-11-13）：先退回「待重载」提示，等会话都
+  关掉后由下一轮扫描自己补上——免得你正在跑查询时连接被静默断掉。代价是会话一直不断
+  就一直不换，想立刻生效就手动点「重载」。
+  包里有 `checksums.json` 时**先核对哈希**：对不上就不重启（文件拷坏了 / 被改过），退回
+  待重载并指出哪个文件不符。发布包应当带这个文件（P5 打包流程生成），开发目录可不带——
+  没有它照常自动重启。
+  打包时用 `cargo run -p rds-plugin --bin rds-plugin-checksums -- <插件目录>` 生成：
+  包内文件 + `driver_jars` 声明的外部 jar 都会被算进去（`external_files` 一节）。
+  `install.ps1` 装完每个包会自动跑一次（优先用已编译的 `rds-plugin-checksums.exe`，
+  没有再退回 `cargo run`）；没有外部 jar 的包不会写 `external_files` 键，旧宿主也能认。
+  注意带 `external_files` 的包要配新版宿主——旧版不认这个键，会把整份文件判成非法 JSON。
+  两个现实约束：① Windows 上运行中的 exe 不能直接覆盖
+  （`ERROR_SHARING_VIOLATION`），要先把旧的改名（`agent.exe` → `agent.exe.old`）
+  再放新的——扫描认这种替换；② 用保留时间戳的工具覆盖（`robocopy /COPY:T` 之类）
+  指纹不会变，那种情况仍需手动重载。
 - 能力边界：两个驱动都声明 `cancel = false`（无法中断在飞查询），
-  `tx.*` 走真实语句。
-- 真机口径（2026-11-10）：
+  `tx.*` 走真实语句。这条不是偷懒：`oracle-rs 0.1.7` 与 `tiberius 0.12.3` 都只定义了
+  BREAK / ATTENTION 协议常量，**没有公开的 cancel API**（`oracle-rs` 只有服务端发
+  break 时的解析分支，`tiberius` 只有 `AttentionSignal` 常量）。要真中断得等上游开口子。
+- **`meta.*` 不许在内核里留硬编码桩**（2026-11-12，硬约束）：`rust-core/src/server.rs`
+  曾经把 `meta.routine_source` 直接写成 `Ok(Dispatch::Result(Value::Null))`，于是
+  **所有 Rust 驱动的例程源码面板永远是空的**，而自检只看「null 是合法答案」照样全绿
+  —— 假绿比报错更难发现。现在请求路由到 `Driver::routine_source`（默认 `Ok(None)`，
+  「查不到」与「不支持」都表达成 null），各驱动真去查：Oracle 走 `all_source`
+  （`type IN ('PROCEDURE','FUNCTION')`，按 `line` 拼回正文），SQL Server 走
+  `sys.sql_modules.definition`（`type IN ('P','FN','IF','TF')`，视图不进例程通道）。
+  实测（2026-11-12）：Oracle `XEPDB1 / MDSYS` 下 `ELOCATION_EDGE_LINK_LEVEL`、SQL Server
+  `master / dbo` 下 `sp_MScleanupmergepublisher` 都从「对端说没有」变成「拿得到」。
+  **新增任何 `meta.*` 时先看内核那条 match 是不是还在返回常量**——那是桩，不是实现。
+- **Oracle 元数据 SQL 一律用绑定变量**（2026-11-12，硬约束）：`owner` / 对象名
+  **不许拼进 SQL 文本**，一律 `owner = :1 AND table_name = :2` 传 `Value::String`
+  （见 `oracle-rust/src/meta.rs` 六处）。理由是实测的：Oracle 按 SQL **文本**做硬解析，
+  名字一变就是一条新语句，字典视图一次硬解析 3–4 秒——属性面板每打开一个新对象都卡
+  3–4 秒，连续几十次之后服务端直接把会话踢掉。改绑定变量后同一个 100 对象全量探测：
+  只有第一条（首次 prepare）2.4 秒，其余全部毫秒级。**改回拼接就等于把这 3–4 秒/对象
+  重新加回来**。标识符（不能用绑定变量的场合）才走 `types::quote_literal`。
+- **元数据路径要能自愈**（2026-11-12）：`oracle-rs` 那条连接在连着跑几十条字典查询
+  之后会被服务端关掉（实测第 ~82 个对象报 `Oracle closed the connection without
+  providing error details`），此后每个 `meta.*` 都是 `connection closed unexpectedly`。
+  `query.execute` 一直有「失败 → `reconnect()` → 返回原错误」；`meta.catalogs/schemas/
+  objects/object_detail` 现在也补了同一条策略（失败 → 重连 → 原样重试一次）。实测：
+  断连那个对象退回 `indexes=None`，**下一个对象起恢复正常**。辅助查询（主键 / 索引 /
+  行数）失败不再静默——写 stderr 并注明对象名，否则会被误读成「这表没索引」。
+- 协议内核的 panic 隔离（2026-11-12）：`rust-core` 的 `serve` 用 `catch_unwind`
+  把**单个请求**的 panic 转成 `-32603 internal`（`ErrorCode::Internal`），进程
+  继续服务下一条请求。不隔离的代价是实测过的：MSSQL 导航面一次 `unwrap` 踩炸 →
+  sidecar exit 101 → 宿主只看到 `帧 I/O 失败：early eof` → 同一实例上所有会话
+  一起断，且无从知道是哪个对象炸的。宿主侧 `RpcErrorCode` **不收** `-32603`
+  （它是 JSON-RPC 标准码，不属于驱动号段 `-32001…-32009`）：`conn.rs` 看到
+  `proto::JSONRPC_INTERNAL_CODE` 就走独立的 `CallError::RpcInternal` →
+  `DriverError::Internal`，界面文案是「驱动内部出错（该请求已隔离，可重试）」，
+  既不混进「未知错误码」，也不冒充「连接失败」。回归证据：`rust-core` 的
+  `a_panicking_request_is_isolated_and_the_process_keeps_serving` +
+  `rds-plugin` 的 `call_errors_map_to_typed_driver_errors`。
+- 真机口径（2026-11-12）：
   - **Oracle 已验收**：`sidecar_conformance` 对 `192.168.3.138:1521/XEPDB1` 6/6（含 3000 行分页）；
     `crates/plugin/tests/rust_driver_wiring.rs` 另有「真实安装目录 → `PluginManager` 激活 →
     supervisor 开会话 → 真库查询」用例（设置 `RDS_TEST_ORACLE_URL` 时执行），并在同一用例里
     用新的 `PluginRuntimeLoop::tick_once` 复现宿主启动首拍，验证「重启后自动加载 + 激活、
-    `drivers.enabled` 回到 1」——即下拉能看到驱动的完整启动链路。
-  - **SQL Server 未验收**：`192.168.3.138:1433` 可连、实例 `ling` 已确认，但项目内没有可用的
-    登录口令。已把 `D:\data\datasoure\天马数据源信息\db_info\General\.dbeaver` 的
-    `credentials-config.json` 按 DBeaver 固定密钥解出：8 条凭据全是 PostgreSQL / MySQL，
-    7 条 SQL Server 数据源（全部指向内网 `172.18.x`）一条口令都没保存；`cmdkey` / ODBC /
-    DBeaver 日志也没有 SQL Server 凭据。用其中同名的 `ling/ling` 试 `192.168.3.138` 仍
-    返回 `18456 state 1`。Windows 集成认证在当前进程不可用（Rust 侧 `SEC_E_NO_CREDENTIALS`，
-    .NET 侧 `Cannot generate SSPI context`）。代码与协议单测通过，真库验收等凭据。
-  - **SQL Server 验收命令已备好**：拿到口令后设
-    `$env:RDS_TEST_MSSQL_URL='mssql://user:pass@192.168.3.138:1433/master'`，再跑
-    `cargo test -p rds-plugin --test rust_driver_wiring -j 1 -- --nocapture --test-threads=1`；
-    未设变量时该用例跳过，不会把「缺凭据」伪装成通过。登录失败时驱动会补中文下一步提示
-    （填 SQL 认证用户名/密码，或检查实例是否启用 SQL 登录），不再只回协议错误。
+    `drivers.enabled` 回到 1」——即下拉能看到驱动的完整启动链路。2026-11-12 复跑
+    `oracle_plugin_serves_a_real_query` 通过。**注意它的导航面是「空库合法通过」**：
+    conformance 取 `schema[0] = DEVUSER`，而 `DEVUSER` 下 0 个对象，所以
+    `meta.object_detail` / 例程源码两项被跳过——这只证明方法面答得出来，**不等于**
+    对象详情路径被真机覆盖。补验办法：`RDS_SIDECAR_SCHEMA=SYS RDS_SIDECAR_CATALOG=XEPDB1`
+    再跑一次自检（`SYS` 下 100 个对象），2026-11-12 实测 6/6 且详情真验到
+    （首对象 10 列、索引 0、行数 0）。自检已加硬约束：**指定了 schema 却拿不出表 / 视图
+    就判失败**，不再静默跳过（反向验证过：`RDS_SIDECAR_SCHEMA=DEVUSER` → 5 passed / 1 failed）。
+  - **SQL Server 已验收（2026-11-12）**：`192.168.3.138:1433` 是 SQL Server 2025 RTM
+    （`17.0.1000.7`，Standard Developer Edition）的**默认实例**（`ling` 是 `@@SERVERNAME`，
+    不是命名实例），SQL Server 验证 + 用户 `sa`；`mssql_plugin_serves_a_real_query` 走真实
+    安装目录 → 激活 → supervisor 开会话 → `select 1 as n` 回一列一行，通过。此前九次
+    `18456 state 1` 是缺口令所致，不是网络或加密问题；Windows 集成认证在此环境不可用
+    （Rust 侧 `SEC_E_NO_CREDENTIALS`，.NET 侧 `Cannot generate SSPI context`）。
+  - **SQL Server 导航面已验收（2026-11-12）**：`sidecar_conformance` 对真机 **6/6 全过**
+    （catalog `master/model/msdb/tempdb`、schema `dbo/guest/INFORMATION_SCHEMA/sys`、
+    对象 8 个、`MSreplication_options` 6 列 / 索引 0 / 行数估计 3）。
+    首次跑时第 6 条把整个 sidecar 打死（宿主侧只见 `帧 I/O 失败：early eof`），
+    手动发帧抓 stderr 才看到真因：`sys.columns.precision` / `scale` 是 tinyint，
+    `meta.rs` 按 `i16` 取，tiberius 的 `Row::get` 内部 unwrap 时 panic
+    （`cannot interpret U8(Some(0)) as an i16 value`，exit 101），改按 `u8` 取后恢复。
+    **教训**：单个元数据查询的 panic 会连坐同一实例上的所有会话，元数据提取一律
+    只认列的真实类型；宿主侧不会告诉你哪个对象炸的，得自己收 sidecar stderr。
+  - **真机凭据与端点档案在本机 `.rds/local/`（不入库）**：`test-env.ps1` 是纯 ASCII 的
+    dot-source 脚本，注入 `RDS_TEST_ORACLE_URL` / `RDS_TEST_MSSQL_URL`（含口令）；
+    `real-hosts.md` 记录端点 / 版本 / 库清单 / 验证记录 / 历史失败，不含口令明文。
+    两者都在 `.rds/` 下，被仓库根 `.gitignore` 的 `/.rds/` 整目录忽略，`git status` 看不到。
+  - **验收命令**：先 `. .rds/local/test-env.ps1`，再跑
+    `cargo test -j 1 -p rds-plugin --test rust_driver_wiring -- --nocapture --test-threads=1`；
+    未设变量的用例会自己跳过，不会把「缺凭据」伪装成通过。`-j 1` 必须写在 `--` 之前
+    （写到后面会变成测试二进制的未知参数）。登录失败时驱动会补中文下一步提示
+    （填 SQL 认证用户名/密码，或检查实例是否启用 SQL 登录）。
 
 ## 指定自己的驱动 jar（driver_jars）
 

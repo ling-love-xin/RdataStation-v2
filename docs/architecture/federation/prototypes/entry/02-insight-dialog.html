@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>洞察新建 · 取样参数与分析会话</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A84A38'/%3E%3Cpath d='M8 22V12m6 10V8m6 14v-6m6 6V14' stroke='%23fff' stroke-width='2'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --chrome:#181818;--editor:#1F1F1F;--popover:#202020;--surface:#111;
+    --border:#2A2A2A;--border-soft:#232323;--line:#333;
+    --text:#CCCCCC;--muted:#858585;--dim:#6E6E6E;--white:#F2F2F2;
+    --coral:#A84A38;--coral-bright:#C25B46;--coral-soft:#3A2521;
+    --success:#4A9B6B;--warning:#C9A23A;--danger:#D0534A;--info:#4A8BC9;
+    --radius:6px;--mono:"Cascadia Mono","Consolas",monospace;
+    --sans:"Segoe UI","Microsoft YaHei UI",sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:var(--sans);font-size:13px;color:var(--text);background:var(--surface);padding:20px 22px 36px}
+  button{font-family:inherit;font-size:12px;color:var(--text);background:none;border:none;cursor:pointer}
+  button:focus-visible{outline:1px solid var(--coral-bright);outline-offset:1px}
+  input{font-family:inherit;font-size:12px;color:var(--text);background:#181818;border:1px solid var(--border);border-radius:4px;padding:5px 9px}
+  input::placeholder{color:var(--dim)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#3A3A3A;border-radius:5px;border:2px solid transparent;background-clip:content-box}
+
+  .head{display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
+  .mark{width:24px;height:24px;border-radius:6px;background:var(--coral);display:flex;align-items:center;justify-content:center;flex:none}
+  .head h1{font-size:14px;color:var(--white);font-weight:600}
+  .head .tagline{font-size:11px;color:var(--dim)}
+  .head .back{margin-left:auto;font-size:11px;color:var(--muted);text-decoration:none;border-bottom:1px solid var(--line);padding-bottom:1px}
+  .head .back:hover{color:var(--text);border-color:var(--coral-bright)}
+  .lead{font-size:11px;color:var(--dim);line-height:1.6;margin-bottom:10px;max-width:900px}
+
+  .states{display:flex;gap:4px;margin-bottom:12px;padding:3px;background:var(--chrome);border:1px solid var(--border);border-radius:999px;width:fit-content}
+  .states button{padding:5px 12px;border-radius:999px;font-size:11px;color:var(--muted);white-space:nowrap}
+  .states button:hover{background:var(--popover);color:var(--text)}
+  .states button.on{background:var(--coral);color:#fff;font-weight:500}
+
+  .stage{display:flex;gap:18px;align-items:flex-start}
+  .left{flex:1;min-width:0;max-width:700px}
+  .aside{width:300px;flex:none;display:flex;flex-direction:column;gap:10px}
+
+  .dialog{background:var(--editor);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:0 14px 40px rgba(0,0,0,.4)}
+  .dlg-head{display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--border)}
+  .dlg-head b{font-size:13px;color:var(--white);font-weight:600}
+  .dlg-head span{font-size:11px;color:var(--dim)}
+  .dlg-body{padding:12px 14px;display:flex;flex-direction:column;gap:12px}
+
+  .obj{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
+  .obj b{color:var(--text);font-weight:500;font-family:var(--mono);font-size:12px}
+  .obj .from{margin-left:auto;font-size:11px;color:var(--dim)}
+
+  .field{display:flex;flex-direction:column;gap:6px}
+  .flabel{font-size:12px;font-weight:600;color:var(--white);display:flex;align-items:center;gap:6px}
+  .ftag{font-size:10px;font-weight:400;padding:1px 5px;border-radius:3px;background:var(--coral-soft);color:#E1A392;border:1px solid #4A2C25}
+  .fhint{font-size:11px;color:var(--dim);line-height:1.5}
+  .hr{height:1px;background:var(--border-soft)}
+
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{padding:4px 10px;border:1px solid var(--border);border-radius:5px;background:#232323;font-size:11px;color:var(--text)}
+  .chip:hover{background:#2A2A2A}
+  .chip.on{border-color:var(--coral);background:var(--coral-soft);color:#E1A392;font-weight:500}
+  .inline{display:flex;align-items:center;gap:8px;font-size:12px;margin-top:2px}
+  .inline span{color:var(--dim);flex:none}
+  .inline input{flex:1}
+
+  .radios{display:flex;gap:18px;font-size:12px}
+  .radios label{display:flex;align-items:center;gap:6px;cursor:pointer}
+
+  .switch{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border);border-radius:6px;background:#1B1B1B}
+  .switch .txt{display:flex;flex-direction:column;gap:2px}
+  .switch .txt b{font-size:12px;color:var(--white);font-weight:600}
+  .switch .txt span{font-size:11px;color:var(--dim)}
+  .sw{margin-left:auto;width:34px;height:18px;border-radius:9px;background:#3A3A3A;border:1px solid var(--border);position:relative;flex:none;cursor:pointer}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#9A9A9A;transition:left .16s ease}
+  .sw.on{background:var(--coral-soft);border-color:#5A322A}
+  .sw.on::after{left:18px;background:var(--coral-bright)}
+
+  .srcs{border:1px solid var(--border);border-radius:6px;overflow:hidden;background:#1A1A1A}
+  .src{display:grid;grid-template-columns:15px 1fr auto;gap:9px;align-items:center;padding:7px 10px;border-bottom:1px solid var(--border-soft);font-size:12px;cursor:pointer}
+  .src:last-child{border-bottom:none}
+  .src:hover{background:var(--popover)}
+  .src .nm{display:flex;flex-direction:column;gap:1px}
+  .src .nm b{font-weight:500}
+  .src .nm i{font-style:normal;font-size:10px;color:var(--dim)}
+  .pill{font-size:10px;padding:1px 6px;border-radius:3px;border:1px solid var(--border);background:#202020;color:var(--muted);white-space:nowrap}
+  .pill.primary{border-color:#5A322A;background:var(--coral-soft);color:#E1A392}
+  .pill.bad{border-color:#43262A;background:#241618;color:#C98A80}
+  .ico{display:inline-flex;align-items:center;justify-content:center}
+  .ok{color:var(--success)} .warn{color:var(--warning)}
+
+  .note{display:flex;gap:8px;padding:8px 10px;border-radius:6px;font-size:11px;line-height:1.55;border:1px solid var(--border);background:#191919;color:var(--muted)}
+  .note.warn{border-color:#3D3422;background:#1E1A12;color:#CBB27A}
+  .note.info{border-color:#22303D;background:#141A20;color:#8FB4D6}
+  .note b{color:inherit;font-weight:600}
+  .hideme{display:none}
+
+  .dlg-foot{display:flex;align-items:center;gap:8px;padding:9px 14px;border-top:1px solid var(--border);background:#1B1B1B}
+  .grow{flex:1;font-size:11px;color:var(--dim);line-height:1.5}
+  .btn{border:1px solid var(--border);border-radius:var(--radius);padding:5px 11px;background:#232323;font-size:12px}
+  .btn:hover{background:#2A2A2A}
+  .btn.primary{background:var(--coral);border-color:var(--coral);color:#fff;font-weight:500}
+  .btn.primary:hover{background:var(--coral-bright)}
+  .btn.ghost{background:none;border-color:transparent;color:var(--muted)}
+  .btn.ghost:hover{background:var(--popover);color:var(--text)}
+
+  .card{background:var(--chrome);border:1px solid var(--border);border-radius:8px;padding:11px 13px}
+  .card h3{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.6px;margin-bottom:8px}
+  .card ul{list-style:none;display:flex;flex-direction:column;gap:6px}
+  .card li{font-size:11px;color:var(--dim);line-height:1.55;padding-left:11px;position:relative}
+  .card li::before{content:"";position:absolute;left:0;top:7px;width:4px;height:4px;background:#3A3A3A;border-radius:1px}
+  .card li b{color:var(--text);font-weight:500}
+
+  .flow{display:flex;flex-direction:column;gap:6px}
+  .step{display:flex;gap:8px;align-items:flex-start;padding:7px 9px;border:1px solid var(--border);border-radius:5px;background:#1A1A1A}
+  .step .n{width:15px;height:15px;border-radius:3px;background:#2A2A2A;color:var(--muted);font-size:10px;display:flex;align-items:center;justify-content:center;flex:none}
+  .step .t{font-size:11px;color:var(--muted);line-height:1.5}
+  .step .t b{display:block;color:var(--text);font-weight:500;font-size:11px;margin-bottom:1px}
+  .step.fed .n{background:var(--coral-soft);color:#E1A392}
+
+  @media (max-width:1080px){.stage{flex-direction:column}.aside{width:100%;flex-direction:row;flex-wrap:wrap}.aside .card{flex:1 1 250px}.left{max-width:none}}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="mark"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M4 20V10m5 10V4m5 16v-7m5 7V7"/></svg></div>
+  <div><h1>洞察新建 · 取样参数与分析会话</h1></div>
+  <span class="tagline">形态 I：联邦取样 → 搬回本地 tmp_i_</span>
+  <a class="back" href="./00-overview.html">返回总览</a>
+</div>
+<div class="lead">本页设计「② 取多少 + ③ 在哪算」。② 沿用现有探查参数；③ 是新增的一段，默认本地，只有一个开关。三种状态都画出来，避免实现时漏掉门控与代价提示。</div>
+
+<div class="states" id="states">
+  <button class="on" data-state="s-local">A · 默认本地</button>
+  <button data-state="s-fed">B · 联邦可用</button>
+  <button data-state="s-gate">C · 源不足</button>
+</div>
+
+<div class="stage">
+  <div class="left">
+    <div class="dialog">
+      <div class="dlg-head"><b>新建洞察</b><span>取样参数 · 分析会话</span><button style="margin-left:auto" class="btn ghost">✕</button></div>
+
+      <div class="dlg-body">
+        <div class="obj">分析对象 <b>orders</b> <span class="from">mysql_src · analytics · public</span></div>
+
+        <div class="hr"></div>
+
+        <div class="field">
+          <div class="flabel">数据量</div>
+          <div class="chips" id="amount">
+            <button class="chip" data-rows="full">全量</button>
+            <button class="chip on" data-rows="1000">1,000 行</button>
+            <button class="chip" data-rows="500">500 行</button>
+            <button class="chip" data-rows="5000">5,000 行</button>
+            <button class="chip" data-rows="5pct">5%</button>
+            <button class="chip" data-rows="25pct">25%</button>
+          </div>
+          <div class="inline"><span>行数</span><input id="rowinput" value="1000"></div>
+          <div class="fhint">百分比按源表行数折算；全量在前端有二次确认，避免误拉千万行。</div>
+        </div>
+
+        <div class="field">
+          <div class="flabel">采样方式</div>
+          <div class="radios">
+            <label><input type="radio" name="sample" checked><span>顺序取</span></label>
+            <label><input type="radio" name="sample"><span>均匀随机</span></label>
+            <label style="margin-left:auto"><span style="color:var(--dim);font-size:11px">种子</span><input value="42" style="width:64px;margin-left:6px"></label>
+          </div>
+          <div class="fhint">顺序取 = 确定的第 N 行（与表序一致）；均匀随机支持固定种子，保证同一配置可复现。</div>
+        </div>
+
+        <div class="field">
+          <div class="flabel">探查列</div>
+          <div class="radios">
+            <label><input type="radio" name="cols" checked id="colsAll"><span>全部列（8）</span></label>
+            <label><input type="radio" name="cols" id="colsSel"><span>选择列（5）</span></label>
+          </div>
+          <div class="fhint">未选列不出现在 EDA；主按钮文案随列选择变（「分析」/「分析 5 列」）。</div>
+        </div>
+
+        <div class="field">
+          <div class="flabel">过滤条件 <span style="font-weight:400;color:var(--dim);font-size:11px">可选 WHERE</span></div>
+          <input id="where" placeholder="如 status = 'active'">
+          <div class="fhint">条件包在源查询内层：先过滤再取样。联邦时这条 WHERE 在会话里对远端源生效。</div>
+        </div>
+
+        <div class="field">
+          <div class="flabel">规模预估</div>
+          <div class="fhint" id="est">将建分析临时表：1,000 行 × 8 列</div>
+        </div>
+
+        <div class="hr"></div>
+
+        <!-- ③ 分析会话 -->
+        <div class="field">
+          <div class="flabel">分析会话 <span class="ftag">新增</span></div>
+
+          <div class="switch" id="swrow">
+            <div class="txt"><b>用联邦查询（跨源 join，只读）</b><span>挂在同一个分析会话；多个源一次挂载，换主源不重建</span></div>
+            <div class="sw" id="sw" role="switch" aria-checked="false" tabindex="0"></div>
+          </div>
+
+          <div id="fedbody" class="hideme" style="display:flex;flex-direction:column;gap:9px;margin-top:9px">
+            <div class="srcs">
+              <div class="src" data-src="1">
+                <span class="ico ok"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12l5 5L20 6"/></svg></span>
+                <span class="nm"><b>mysql_src</b><i>MySQL · 生产库 · 只读挂载</i></span>
+                <span class="pill primary">主源</span>
+              </div>
+              <div class="src" data-src="1">
+                <span class="ico ok"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12l5 5L20 6"/></svg></span>
+                <span class="nm"><b>pg_src</b><i>PostgreSQL · 仓库库 · 只读挂载</i></span>
+                <span class="pill">已挂载</span>
+              </div>
+              <div class="src" data-bad="1">
+                <span class="ico warn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v1"/></svg></span>
+                <span class="nm"><b>oracle_src</b><i>Oracle · 老账套 · 扩展未安装</i></span>
+                <span class="pill bad">挂载失败</span>
+              </div>
+            </div>
+            <div class="note"><span class="ico"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v.01M11 12h1v5"/></svg></span><span>挂载失败的源不阻断本次分析：查询用到它时才报错并点名。跨源读取<b>非事务一致</b>——各源按各自时刻的数据参与。</span></div>
+            <div class="note warn"><span class="ico"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17l5-6 4 3 6-8 3 4"/></svg></span><span>远端扫描约 <b>120,000</b> 行（两源各一次）。想更省，把数据量降到 1,000 行或加过滤条件。</span></div>
+          </div>
+
+          <div id="fedoff" class="note info" style="display:flex">
+            <span class="ico"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v.01M11 12h1v5"/></svg></span>
+            <span>未启用联邦：只在本地 DuckDB 上对单源结果取样，不挂载其它源。</span>
+          </div>
+
+          <div id="fedgate" class="note warn" style="display:none">
+            <span class="ico"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v1"/></svg></span>
+            <span>只有 <b>1</b> 个可用源（mysql_src）：这里联邦与本地加速是同一件事，本次使用本地 DuckDB。要跨源，请再开启一个「DuckDB 直连」连接。</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="dlg-foot">
+        <div class="grow" id="foot">将建分析临时表：1,000 行 × 8 列</div>
+        <button class="btn ghost">取消</button>
+        <button class="btn primary" id="confirm">分析</button>
+      </div>
+    </div>
+  </div>
+
+  <aside class="aside">
+    <div class="card">
+      <h3>形态 I 的数据流</h3>
+      <div class="flow">
+        <div class="step fed"><span class="n">1</span><span class="t"><b>联邦会话上跑取样 SQL</b>远端源各自扫描，DuckDB 归并</span></div>
+        <div class="step fed"><span class="n">2</span><span class="t"><b>取首批 Arrow batch</b>15s 超时；批次缺失则回退 JSON 打型</span></div>
+        <div class="step"><span class="n">3</span><span class="t"><b>本地建 tmp_i_</b>Arrow 直灌，类型来自 schema</span></div>
+        <div class="step"><span class="n">4</span><span class="t"><b>洞察规则全在本地跑</b>画像 / 直方图 / 相关，引擎零改动</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>为什么搬结果</h3>
+      <ul>
+        <li>洞察的规则、画像、相关全是对<b>本地临时表</b>跑 SQL</li>
+        <li>整链搬到会话 = 重写洞察引擎，收益只是省一次 Arrow 拷贝</li>
+        <li>样本落本地后，宿主换源 / 会话重建，样本仍可用</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>三条硬约束</h3>
+      <ul>
+        <li>开关<b>默认关</b>；洞察是「默认进入」，不该每次先选通道</li>
+        <li>不足 2 个可挂源时开关<b>不出现</b>，只留一行解释</li>
+        <li>会话内表<b>不进</b>全局临时表名单；rm tmp_i_ 仍在本地单例清</li>
+      </ul>
+    </div>
+  </aside>
+</div>
+
+<script>
+(function(){
+  var states=document.getElementById("states");
+  var sw=document.getElementById("sw");
+  var swrow=document.getElementById("swrow");
+  var fedbody=document.getElementById("fedbody");
+  var fedoff=document.getElementById("fedoff");
+  var fedgate=document.getElementById("fedgate");
+  var mode="s-local";
+
+  function paint(){
+    var fed = (mode==="s-fed") && sw.classList.contains("on");
+    fedbody.style.display = fed ? "flex" : "none";
+    fedoff.style.display = (mode==="s-fed" && !sw.classList.contains("on")) ? "flex" : "none";
+    swrow.style.display = mode==="s-gate" ? "none" : "flex";
+    fedgate.style.display = mode==="s-gate" ? "flex" : "none";
+    sw.setAttribute("aria-checked", sw.classList.contains("on") ? "true" : "false");
+    var btn=document.getElementById("confirm");
+    var base = document.getElementById("colsSel").checked ? "分析 5 列" : "分析";
+    btn.textContent = (mode==="s-fed" && sw.classList.contains("on")) ? base + "（联邦）" : base;
+  }
+
+  states.addEventListener("click",function(e){
+    var b=e.target.closest("button[data-state]");
+    if(!b) return;
+    Array.prototype.forEach.call(states.querySelectorAll("button"),function(x){ x.classList.toggle("on", x===b); });
+    mode=b.getAttribute("data-state");
+    if(mode==="s-fed"){ sw.classList.add("on"); }
+    if(mode!=="s-fed"){ sw.classList.remove("on"); }
+    paint();
+  });
+
+  sw.addEventListener("click",function(){ sw.classList.toggle("on"); paint(); });
+  sw.addEventListener("keydown",function(e){
+    if(e.key==="Enter"||e.key===" "){ e.preventDefault(); sw.classList.toggle("on"); paint(); }
+  });
+
+  /* 数据量 chips */
+  var amount=document.getElementById("amount");
+  amount.addEventListener("click",function(e){
+    var c=e.target.closest(".chip");
+    if(!c) return;
+    Array.prototype.forEach.call(amount.querySelectorAll(".chip"),function(x){ x.classList.toggle("on", x===c); });
+    var v=c.getAttribute("data-rows");
+    var map={full:"128431", "1000":"1000", "500":"500", "5000":"5000", "5pct":"6421", "25pct":"32107"};
+    document.getElementById("rowinput").value=map[v]||"1000";
+    estimate();
+  });
+
+  /* 列选择 */
+  document.getElementById("colsAll").addEventListener("change",function(){ paint(); estimate(); });
+  document.getElementById("colsSel").addEventListener("change",function(){ paint(); estimate(); });
+
+  document.getElementById("where").addEventListener("input", estimate);
+  document.getElementById("rowinput").addEventListener("input", estimate);
+
+  function estimate(){
+    var rows=document.getElementById("rowinput").value || "0";
+    var n=(parseInt(rows,10)||0).toLocaleString();
+    var cols=document.getElementById("colsSel").checked ? 5 : 8;
+    var f=(document.getElementById("where").value||"").trim();
+    var txt = (f ? "过滤后取样：" : "将建分析临时表：") + n + " 行 × " + cols + " 列";
+    document.getElementById("est").textContent=txt;
+    document.getElementById("foot").textContent=txt;
+  }
+
+  /* 源行点选切主源 */
+  document.querySelectorAll(".srcs").forEach(function(list){
+    list.addEventListener("click",function(e){
+      var row=e.target.closest(".src");
+      if(!row || row.hasAttribute("data-bad")) return;
+      Array.prototype.forEach.call(list.querySelectorAll(".src"),function(r){
+        var p=r.querySelector(".pill.primary"); if(p){ p.classList.remove("primary"); p.textContent="已挂载"; }
+      });
+      var p=row.querySelector(".pill"); p.classList.add("primary"); p.textContent="主源";
+    });
+  });
+
+  document.getElementById("confirm").addEventListener("click",function(){
+    var b=this; var old=b.textContent; b.textContent="已提交（原型）"; b.disabled=true;
+    setTimeout(function(){ b.textContent=old; b.disabled=false; },1200);
+  });
+
+  paint();
+})();
+</script>
+</body>
+</html>

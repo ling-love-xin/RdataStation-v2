@@ -77,8 +77,7 @@ pub use capability::{
 };
 pub use declaration::{DeclarationSync, DriverDeclaration, sync_driver_declarations};
 pub use factory::{
-    DuckDbDriverFactory, MySqlDriverFactory, MySqlNativeDriverFactory, PostgresDriverFactory,
-    PostgresNativeDriverFactory, SqliteDriverFactory,
+    DuckDbDriverFactory, MySqlNativeDriverFactory, PostgresNativeDriverFactory, SqliteDriverFactory,
 };
 pub use introspection::{IntrospectionLevel, get_level, remove_level, set_level};
 pub use loader::{BuiltinDriverDiscovery, DriverLoader, JdbcDriverDiscovery, WasmDriverDiscovery};

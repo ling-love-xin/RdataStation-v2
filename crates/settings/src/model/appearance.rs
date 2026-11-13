@@ -19,6 +19,13 @@ pub struct Appearance {
     /// 默认 `"tab"`），对应 `TabVariant` 五态；装配期映射后应用到 DockSkin。
     #[serde(default = "default_tab_bar_variant")]
     pub tab_bar_variant: String,
+    /// 主题包 id（默认 `"rds"` = 现役 `RDS Light` / `RDS Dark`）。
+    ///
+    /// 值域见 `crate::theme_pack::BUILTIN`；包 = 一个 Light + 一个 Dark + 一套产品 token，
+    /// 落在 `assets/themes/packs/<id>/`。变更由装配层经 `install_theme_pack_sink` 即时重装
+    /// （换包必须“主题 + 产品 token”一起换，只换一半会留下上一包的语义色）。
+    #[serde(default = "default_theme_pack")]
+    pub theme_pack: String,
 }
 
 impl Default for Appearance {
@@ -29,6 +36,7 @@ impl Default for Appearance {
             locale: default_locale(),
             tab_bar_max_width: default_tab_bar_max_width(),
             tab_bar_variant: default_tab_bar_variant(),
+            theme_pack: default_theme_pack(),
         }
     }
 }
@@ -47,6 +55,10 @@ fn default_tab_bar_max_width() -> f32 {
 
 fn default_tab_bar_variant() -> String {
     "tab".to_string()
+}
+
+fn default_theme_pack() -> String {
+    crate::theme_pack::DEFAULT_PACK.to_string()
 }
 
 /// 编辑器常规设置。

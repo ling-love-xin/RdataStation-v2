@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>对象树 · 复用与规范</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A84A38'/%3E%3Cpath d='M9 8v14h14M9 8h4M9 15h4' stroke='%23fff' stroke-width='1.8' fill='none'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --chrome:#181818;--editor:#1F1F1F;--popover:#202020;--surface:#111;
+    --border:#2A2A2A;--border-soft:#232323;--line:#333;
+    --text:#CCCCCC;--muted:#858585;--dim:#6E6E6E;--white:#F2F2F2;
+    --coral:#A84A38;--coral-bright:#C25B46;
+    --success:#4A9B6B;--warning:#C9A23A;--danger:#D0534A;--info:#4A8BC9;
+    --radius:6px;--mono:"Cascadia Mono","Consolas",monospace;
+    --sans:"Segoe UI","Microsoft YaHei UI",sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:var(--sans);font-size:13px;color:var(--text);background:var(--surface);padding:20px 22px 40px;line-height:1.6}
+  code{font-family:var(--mono);font-size:11px;color:#CBB27A;background:#1B1B1B;border:1px solid var(--border);border-radius:3px;padding:0 4px}
+
+  .head{display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
+  .mark{width:24px;height:24px;border-radius:6px;background:var(--coral);display:flex;align-items:center;justify-content:center;flex:none}
+  .head h1{font-size:14px;color:var(--white);font-weight:600}
+  .head .tagline{font-size:11px;color:var(--dim)}
+  .head .back{margin-left:auto;font-size:11px;color:var(--muted);text-decoration:none;border-bottom:1px solid var(--line);padding-bottom:1px}
+  .head .back:hover{color:var(--text);border-color:var(--coral-bright)}
+  .lead{font-size:11px;color:var(--dim);line-height:1.65;margin-bottom:16px;max-width:960px}
+
+  .cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;max-width:1240px}
+  .card{background:var(--chrome);border:1px solid var(--border);border-radius:8px;padding:13px 15px;min-width:0}
+  .card h2{font-size:12px;color:var(--white);font-weight:600;margin-bottom:9px;display:flex;align-items:center;gap:7px}
+  .card h2 .no{font-family:var(--mono);font-size:10px;color:var(--dim);border:1px solid var(--border);border-radius:3px;padding:0 4px;font-weight:400}
+  .card p{font-size:11px;color:var(--muted);margin-bottom:8px}
+  .card p:last-child{margin-bottom:0}
+  .card p b{color:var(--text);font-weight:500}
+  .wide{grid-column:1/-1}
+
+  table{width:100%;border-collapse:collapse;table-layout:fixed}
+  th,td{font-size:10.5px;text-align:left;padding:5px 6px;border-bottom:1px solid var(--border-soft);vertical-align:top;line-height:1.5}
+  th{color:var(--dim);font-weight:500;white-space:nowrap}
+  td{color:var(--muted)}
+  td code{font-size:10px}
+  tr:last-child td{border-bottom:none}
+  .ok{color:#8FC0A4}
+  .no{color:#C98A83}
+
+  ul{list-style:none;display:flex;flex-direction:column;gap:6px}
+  li{font-size:11px;color:var(--muted);padding-left:12px;position:relative;line-height:1.55}
+  li::before{content:"";position:absolute;left:0;top:7px;width:4px;height:4px;background:#3A3A3A;border-radius:1px}
+  li b{color:var(--text);font-weight:500}
+  li code{font-size:10px}
+
+  .treebox{font-family:var(--mono);font-size:11px;color:var(--muted);background:#1B1B1B;border:1px solid var(--border);border-radius:6px;padding:9px 11px;line-height:1.75;white-space:pre;overflow-x:auto}
+  .treebox .g{color:#E1A392}
+  .treebox .s{color:#6E6E6E}
+
+  .kbd{display:inline-block;font-family:var(--mono);font-size:10px;color:var(--text);border:1px solid var(--border);border-radius:3px;padding:0 4px;background:#202020}
+  .note{display:flex;gap:8px;padding:8px 11px;border-radius:6px;font-size:11px;line-height:1.55;border:1px solid #3D3422;background:#1E1A12;color:#CBB27A;margin-top:9px}
+
+  @media (max-width:980px){.cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="mark"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M9 4v16h10M9 9h4M9 15h4"/></svg></div>
+  <div><h1>对象树 · 复用与规范</h1></div>
+  <span class="tagline">picker 是第 5 个树消费方 · 复用行原语，不复用树组件</span>
+  <a class="back" href="./01-source-picker.html">看交互原型</a>
+</div>
+<div class="lead">你要「复用草稿箱、数据库导航栏那类」，可复用的**不是树控件**，而是外壳里的行原语（激活条 / 展开槽 / 缩进 / 行高预算）。这三个面板的行模型与交互各不相同，外壳已明确不抽通用树组件——picker 同样只借原语。</div>
+
+<div class="cols">
+
+  <div class="card">
+    <h2><span class="no">01</span>三个根各自长成什么树</h2>
+    <div class="treebox">数据库
+  <span class="g">mysql_src</span>            <span class="s">连接（展开才内省）</span>
+    └ <span class="g">analytics</span>          <span class="s">catalog（有独立 schema 的驱动才有）</span>
+        └ <span class="g">orders</span>          <span class="s">表（叶子）</span>
+
+DuckDB
+  <span class="g">结果集</span> tmp_q_          <span class="s">组：本地单例 / 仅会话</span>
+    └ tmp_q_result_8f2a      <span class="s">表（叶子）</span>
+  <span class="g">Mock 数据</span> tmp_m_ / <span class="g">插件输出</span> tmp_p_
+
+文件
+  <span class="g">草稿箱</span> └ 数据 └ *.parquet
+  <span class="g">资产库</span> ├ 归档文件（resources/）
+         └ 分析表（analytics.duckdb · main）
+  <span class="g">外部文件</span> 已引用</div>
+    <p><b>深度上限 3。</b>列不做树节点（否则连到 5 层，弹层宽度不够），列结构放右侧元信息里「查看列结构」。数据库叶子只到表；表下不再展开索引 / 列 / 约束。</p>
+  </div>
+
+  <div class="card">
+    <h2><span class="no">02</span>复用清单（可回链到源码）</h2>
+    <table>
+      <tr><th style="width:132px">符号</th><th style="width:44px">用</th><th>说明</th></tr>
+      <tr><td><code>tree::active_bar</code></td><td class="ok">用</td><td>选中行左侧 2px 条；调用行须 <code>.relative()</code></td></tr>
+      <tr><td><code>tree::disclosure_slot</code></td><td class="ok">用</td><td>10px 展开槽；<b>宽度是缩进算式的一部分，不得改</b></td></tr>
+      <tr><td><code>tree::disclosure_icon</code></td><td class="ok">用</td><td>12px chevron，四个面板已统一</td></tr>
+      <tr><td><code>tree::indent_spacer</code><br><code>tree::indent_rem</code></td><td class="ok">用</td><td>深度缩进；picker 一行一个视口宽度，二选一即可</td></tr>
+      <tr><td><code>tree::count_badge</code></td><td class="ok">用</td><td>搜索命中的计数角标</td></tr>
+      <tr><td><code>tree::RowHeight</code></td><td class="ok">用</td><td>虚拟列表行高预算，估算与渲染成对维护</td></tr>
+      <tr><td><code>ui::TREE_INDENT</code></td><td class="ok">用</td><td>0.875rem 步长，勿手写数字</td></tr>
+      <tr><td><code>tree::Tree</code> / 通用树组件</td><td class="no">不用</td><td>外壳已裁决「这一行长什么样归各面板」，三处行模型互不相同</td></tr>
+    </table>
+    <div class="note"><b>为什么不用 tree::Tree：</b>它是 <code>set_items</code> 整棵替换、不支持增量，且行内复合控件（计数、pill、会话标记）超出它的边界。导航 / 草稿箱 / 资产库全部走 <code>v_virtual_list</code> + 自绘行。</div>
+  </div>
+
+  <div class="card">
+    <h2><span class="no">03</span>搜索规范</h2>
+    <ul>
+      <li><b>跨三个根</b>，不限于当前 tab——记不清它在哪一栏时最有用</li>
+      <li><b>匹配档位</b>（决定排序）：前缀 100 &gt; 子串 70 &gt; 子序列 40（<code>ods</code> 能命中 <code>orders</code>）</li>
+      <li><b>同档内</b>按使用频次（最近用过置顶），再按名称字典序</li>
+      <li><b>结果行</b>带面包屑（<code>数据库 / mysql_src / analytics</code>），点一下即选中，不必先展开树</li>
+      <li><b>最小单位是表 / 视图</b>：不搜列名、不搜分组名、不搜索引（已裁决）</li>
+      <li><b>上限 50 条</b>，超出显示「refine」提示，不做分页</li>
+      <li><b>清空</b>：<span class="kbd">Esc</span> 只清搜索词（与草稿箱 / 资产库的 Esc 语义一致），不清选中</li>
+      <li><b>大小写</b>不敏感；不做拼音首字母匹配（会引入拼音表依赖，收益低）</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="no">04</span>键盘</h2>
+    <table>
+      <tr><th style="width:104px">键</th><th>行为</th></tr>
+      <tr><td><span class="kbd">Ctrl+F</span></td><td>聚焦搜索框</td></tr>
+      <tr><td><span class="kbd">↑</span> <span class="kbd">↓</span></td><td>在当前可见行间移动选中（含搜索结果）</td></tr>
+      <tr><td><span class="kbd">→</span></td><td>展开当前节点 / 进入第一个子节点</td></tr>
+      <tr><td><span class="kbd">←</span></td><td>收起当前节点 / 回到父节点</td></tr>
+      <tr><td><span class="kbd">Enter</span></td><td>确认选中（等价点主按钮）</td></tr>
+      <tr><td><span class="kbd">Esc</span></td><td>有搜索词先清词，否则关闭对话框</td></tr>
+    </table>
+    <p style="margin-top:8px">行本身是 <code>Button::ghost()</code> 而不是自绘 div：直接拿到 <code>track_focus</code> + <code>tab_stop</code>，不必自己补键盘激活；<code>ElementId</code> 用业务键（<code>conn+catalog+schema+table</code> / 相对路径），<b>不用下标</b>，否则增删后焦点会串行。</p>
+  </div>
+
+  <div class="card">
+    <h2><span class="no">05</span>懒加载与预载</h2>
+    <table>
+      <tr><th style="width:96px">根</th><th>策略</th></tr>
+      <tr><td>数据库</td><td>连接行<b>展开时才内省</b>（<code>NavigatorService</code> 有 L1/L2 缓存，首次走 <code>block_on</code>，与现有 <code>render_connected</code> 同款先例）；打开对话框不预载全部连接的表</td></tr>
+      <tr><td>DuckDB</td><td>打开即预载（本地库 + 单例，量级小）；会话表按 owner 过滤</td></tr>
+      <tr><td>文件 · 草稿箱</td><td>打开即 <code>list_local_entries(u32::MAX)</code> 递归拍平（现状 <code>collect_drafts</code> 已这么做）</td></tr>
+      <tr><td>文件 · 资产库</td><td>本项目登记 + <b>全局登记</b>两段并列：归档文件读 M6 登记，分析表读 <code>information_schema.tables</code>（限定 <code>table_schema='main'</code>）；全局段走全局库连接</td></tr>
+    </table>
+    <div class="note"><b>两个实现约束：</b>① <code>WHERE table_schema='main'</code> 不能去掉，否则 <code>temp</code> schema 的临时表混进资产库；② 全局分析库是<b>单写者</b>（<code>GlobalDatabaseManager::duckdb_conn()</code> 持有），picker <b>不得</b>再 <code>Connection::open</code> 一份去列它——现状 <code>collect_analysis_tables</code> 正是直接 open 文件，接全局前必须换通道。</div>
+  </div>
+
+  <div class="card">
+    <h2><span class="no">06</span>与三个现有面板的差异</h2>
+    <table>
+      <tr><th style="width:76px">面板</th><th>展开态</th><th>交互</th></tr>
+      <tr><td>数据源导航 M4</td><td>落库，驱动后台加载</td><td>拖拽 / 右键菜单 / 重命名</td></tr>
+      <tr><td>草稿箱 M5</td><td>纯内存</td><td>搜索 / 命中角标</td></tr>
+      <tr><td>资产库 M6</td><td>落设置</td><td>分组 / 版本 / 标签 / 检出</td></tr>
+      <tr><td class="ok">picker（本条）</td><td class="ok">纯内存，随对话框关闭丢弃</td><td class="ok">单选 + 搜索 + 最近使用</td></tr>
+    </table>
+    <p style="margin-top:8px">picker <b>不做</b>：拖拽、右键菜单、重命名、多选、新建。它是「选一个目标就走」的模态，把面板的管理动作搬进来会变成第二个资产库。</p>
+  </div>
+
+  <div class="card wide">
+    <h2><span class="no">07</span>落地切片（Phase 5 的改法）</h2>
+    <p>现状：<code>PickerState</code> 是<b>扁平索引字段</b>（<code>conns / catalogs / schemas / tables / selected_table / drafts / selected_draft / analysis_tables / selected_analysis</code>），<code>render_*</code> 五个函数各自拼单列列表。改成树只需三步，不动 <code>SourceKind</code>：</p>
+    <table>
+      <tr><th style="width:34px">步</th><th>改什么</th><th>为什么</th></tr>
+      <tr><td>1</td><td>新增 <code>fn group_of(kind) -> Group{Database,DuckDb,File}</code>，只用于 tab 与组标题</td><td>三个根是<b>视图分组</b>，不是新的数据模型；5 个叶子保留</td></tr>
+      <tr><td>2</td><td><code>PickerState</code> 增 <code>expanded: HashSet&lt;NodeId&gt;</code> / <code>query: String</code> / <code>selected: Option&lt;NodeId&gt;</code> / <code>recent: Vec&lt;NodeId&gt;</code></td><td>树态与搜索态必须进状态对象——模态渲染闭包每帧重建 UI</td></tr>
+      <tr><td>3</td><td>五处 <code>render_*</code> 合成一个 <code>render_rows(&amp;[Row])</code>，<code>Row</code> 只带 <code>depth / kind / label / meta / selectable</code></td><td>三个根共用一套行渲染；各行数据源各自产出 <code>Row</code></td></tr>
+    </table>
+    <p style="margin-top:8px"><b><code>has_target()</code></b> 改为按选中节点 kind 判断（<code>Table</code> / <code>File</code> / <code>Temp</code> 可确认，<code>Group</code> / <code>Folder</code> / <code>Conn</code> 不可）。<b><code>confirm_prefix</code> + 选中标签</b> 的现有逻辑不动。</p>
+    <div class="note"><b>没做验证的部分：</b>本页是设计，不是实现。树 + 虚拟列表 + 模态内 <code>block_on</code> 内省的组合有没有卡顿、<code>v_virtual_list</code> 在模态闭包里创建 handle 的生命周期是否可行，都需要在 Phase 5 起头用一个最小窗口用例先钉住（照 <code>visible_databases_dialog</code> 的先例）。</div>
+  </div>
+
+  <div class="card wide">
+    <h2><span class="no">08</span>仍未决</h2>
+    <ul>
+      <li><b>「最近使用」存哪</b>：内存（本会话）还是落设置（跨会话）？落设置要新增一个 key，且要能被「项目已删」清掉。</li>
+      <li><b>全局表的读取通道</b>：见 §09，需先实测「单写者连接 + 只读 ATTACH」是否共存。</li>
+      <li><b>全局与本项目同名时怎么排</b>：<code>G_</code> 前缀已能区分，是否还要在排序上把全局段整体置后，待定。</li>
+    </ul>
+    <p style="margin-top:8px"><b>已裁决（不再讨论）：</b>① 不等 M6 二期，资产库「分析表」直接按 <code>ArchiveKind::Analysis</code> 完整语义（带版本 / 归档态 / 只读）；② 搜索最小单位是表 / 视图，不搜列名。</p>
+  </div>
+
+  <div class="card wide">
+    <h2><span class="no">09</span>全局实例在树里怎么放</h2>
+    <table>
+      <tr><th style="width:88px">事项</th><th>做法 / 依据</th></tr>
+      <tr><td>位置</td><td>文件根 → 资产库 → <code>全局 · 跨项目共享</code>，与本项目两段<b>并列</b>，不混排</td></tr>
+      <tr><td>命名</td><td>全局表带 <code>G_</code> 前缀（全局分析库的连接前缀），树里直接显示，不另加符号</td></tr>
+      <tr><td>语义</td><td><code>项目 → 全局 → 项目</code> 是唯一法定路径，项目之间禁止直传（<code>global/mod.rs:18-19</code>）；分发后在本项目成为副本，改动只影响副本</td></tr>
+      <tr><td>存储拓扑</td><td>全局表 <code>{system}/analytics.duckdb</code>（单写者）+ 全局登记 <code>{system}/global.db</code>（<code>scope='global'</code>）；项目侧是 <code>{项目}/.RSmeta/analytics.duckdb</code></td></tr>
+      <tr><td class="no">硬约束</td><td>全局库是<b>单写者</b>，只能复用 <code>GlobalDatabaseManager::duckdb_conn()</code>；picker <b>不得</b> <code>Connection::open</code> 一份去列它（现状 <code>collect_analysis_tables</code> 正是直接 open）</td></tr>
+      <tr><td class="no">缺口</td><td><code>generate_attach_global_sql</code>（<code>legacy.rs:336</code>，<code>ATTACH '…' AS global</code>）<b>没有生产调用点</b>——本地单例与联邦会话目前都没挂全局库，选中全局表会 <code>table does not exist</code></td></tr>
+      <tr><td>待实测</td><td>全局单写者连接与只读 <code>ATTACH</code> 能否共存；判别动作：同一用例里持有 <code>GlobalDatabaseManager</code> 连接并另开 <code>ATTACH '…' (READ_ONLY)</code>，看是否报锁</td></tr>
+    </table>
+    <div class="note"><b>为什么两段分开而不合并：</b>用户必须一眼看出自己改的是「本项目副本」还是「全局原表」。合并成一个列表后，改错对象是不可逆损失（全局升级路径只允许单向）。</div>
+  </div>
+
+</div>
+</body>
+</html>

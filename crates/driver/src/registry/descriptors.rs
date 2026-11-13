@@ -389,184 +389,15 @@ impl DriverDescriptor {
 }
 
 // =============================================================================
-// 内置驱动描述符工厂（MySQL / PostgreSQL / SQLite / DuckDB）
 // =============================================================================
-
-/// MySQL 驱动描述符
-///
-/// 显示名带实现后缀（`(sqlx)`）是**有意的**：驱动下拉按类型过滤后，显示的是
-/// `driver_short_name()` 抠出的括号内容（`sqlx` / `Official`），不带后缀就没法区分
-/// 同族的两个实现（见 `connection-dev-plan.md` C10）。
-pub fn mysql_driver() -> DriverDescriptor {
-    DriverDescriptor::new("mysql", "MySQL (sqlx)")
-        .with_description("MySQL 关系型数据库")
-        .with_category("relational")
-        .with_target_database("mysql")
-        .with_default_port(3306)
-        .requires_database()
-        .with_ssl_support()
-        .with_ssh_tunnel_support()
-        .with_http_proxy_support()
-        .with_socks_proxy_support()
-        .with_url_template("mysql://{username}:{password}@{host}:{port}/{database}")
-        .with_icon("\u{1F42C}")
-        .with_capabilities(vec![
-            "tree".to_string(),
-            "health_check".to_string(),
-            "transactions".to_string(),
-            "sql_autocomplete".to_string(),
-        ])
-        .with_supported_auth_types(vec!["password".to_string(), "ssl".to_string()])
-        // 不声明属性默认值：sqlx 认的键里没有一条我们要改默认
-        // （`charset` 已是 utf8mb4、statement cache 已是 100，见 `sqlx-mysql-0.9.0/src/options/mod.rs:101`），
-        // 而旧种子那套 MySQL C-API 名（connectTimeout / useCompression / characterEncoding…）
-        // sqlx 会**静默忽略**。TLS 走「连接安全」通道（`url_params::append_ssl_params`），
-        // 不在这里写第二份。
-        .with_field(DriverField {
-            key: "host".to_string(),
-            label: "主机".to_string(),
-            field_type: DriverFieldType::Text,
-            required: true,
-            default_value: Some("localhost".to_string()),
-            placeholder: Some("localhost 或 IP 地址".to_string()),
-        })
-        .with_field(DriverField {
-            key: "port".to_string(),
-            label: "端口".to_string(),
-            field_type: DriverFieldType::Number,
-            required: true,
-            default_value: Some("3306".to_string()),
-            placeholder: None,
-        })
-        .with_field(DriverField {
-            key: "database".to_string(),
-            label: "数据库".to_string(),
-            field_type: DriverFieldType::Text,
-            required: false,
-            default_value: None,
-            placeholder: Some("可选，留空显示所有数据库".to_string()),
-        })
-        .with_field(DriverField {
-            key: "username".to_string(),
-            label: "用户名".to_string(),
-            field_type: DriverFieldType::Text,
-            required: true,
-            default_value: Some("root".to_string()),
-            placeholder: None,
-        })
-        .with_field(DriverField {
-            key: "password".to_string(),
-            label: "密码".to_string(),
-            field_type: DriverFieldType::Password,
-            required: false,
-            default_value: None,
-            placeholder: Some("可选".to_string()),
-        })
-        .with_extra_option(
-            DriverOption::new("ssl_mode", "PREFERRED")
-                .with_label("SSL 模式")
-                .with_type(DriverOptionType::Select {
-                    options: vec![
-                        "DISABLED".to_string(),
-                        "PREFERRED".to_string(),
-                        "REQUIRED".to_string(),
-                        "VERIFY_CA".to_string(),
-                        "VERIFY_IDENTITY".to_string(),
-                    ],
-                })
-                .with_description("SSL 连接模式"),
-        )
-}
-
-/// PostgreSQL 驱动描述符（显示名带实现后缀的理由同 MySQL）
-pub fn postgres_driver() -> DriverDescriptor {
-    DriverDescriptor::new("postgres", "PostgreSQL (sqlx)")
-        .with_description("PostgreSQL 关系型数据库")
-        .with_category("relational")
-        // 族 id 取 `data_source_types.id`（`postgresql`）：驱动目录的 `type_id` 是外键，
-        // 用 `postgres` 会挂不上（同族的两个实现共享这一列，见 `driver/declaration.rs`）
-        .with_target_database("postgresql")
-        .with_default_port(5432)
-        .requires_database()
-        .with_ssl_support()
-        .with_ssh_tunnel_support()
-        .with_http_proxy_support()
-        .with_socks_proxy_support()
-        .with_url_template("postgres://{username}:{password}@{host}:{port}/{database}")
-        .with_icon("\u{1F418}")
-        .with_capabilities(vec![
-            "tree".to_string(),
-            "health_check".to_string(),
-            "transactions".to_string(),
-            "sql_autocomplete".to_string(),
-            "schema_browser".to_string(),
-        ])
-        .with_supported_auth_types(vec![
-            "password".to_string(),
-            "ssl".to_string(),
-            "kerberos".to_string(),
-        ])
-        // sqlx 的键名是**下划线**（`application_name`），旧种子的 camelCase `applicationName`
-        // 会被 sqlx 以 `ignoring unrecognized connect parameter` 警告后丢弃；
-        // 其余旧键（connectTimeout / socketTimeout / keepalivesIdle / statementTimeout）
-        // sqlx 的 URL 解析器同样不认。TLS 走「连接安全」通道，不在这里写第二份。
-        .with_driver_property("application_name", "RdataStation")
-        .with_field(DriverField {
-            key: "host".to_string(),
-            label: "主机".to_string(),
-            field_type: DriverFieldType::Text,
-            required: true,
-            default_value: Some("localhost".to_string()),
-            placeholder: Some("localhost 或 IP 地址".to_string()),
-        })
-        .with_field(DriverField {
-            key: "port".to_string(),
-            label: "端口".to_string(),
-            field_type: DriverFieldType::Number,
-            required: true,
-            default_value: Some("5432".to_string()),
-            placeholder: None,
-        })
-        .with_field(DriverField {
-            key: "database".to_string(),
-            label: "数据库".to_string(),
-            field_type: DriverFieldType::Text,
-            required: true,
-            default_value: Some("postgres".to_string()),
-            placeholder: None,
-        })
-        .with_field(DriverField {
-            key: "username".to_string(),
-            label: "用户名".to_string(),
-            field_type: DriverFieldType::Text,
-            required: true,
-            default_value: Some("postgres".to_string()),
-            placeholder: None,
-        })
-        .with_field(DriverField {
-            key: "password".to_string(),
-            label: "密码".to_string(),
-            field_type: DriverFieldType::Password,
-            required: false,
-            default_value: None,
-            placeholder: Some("可选".to_string()),
-        })
-        .with_extra_option(
-            DriverOption::new("ssl_mode", "prefer")
-                .with_label("SSL 模式")
-                .with_type(DriverOptionType::Select {
-                    options: vec![
-                        "disable".to_string(),
-                        "allow".to_string(),
-                        "prefer".to_string(),
-                        "require".to_string(),
-                        "verify-ca".to_string(),
-                        "verify-full".to_string(),
-                    ],
-                })
-                .with_description("SSL 连接模式"),
-        )
-}
+// 内置驱动描述符工厂（SQLite / DuckDB）
+//
+// `mysql` / `postgres`（原 sqlx 实现）已剥离到 sidecar 插件：驱动 id 不变，声明与能力
+// 由插件清单贡献（`tools/plugin-drivers/sqlx-rust-plugin/plugin.toml` 的
+// `[[contributes.drivers]]`），内核不再为这两个 id 提供工厂与描述符。
+// 保留这段说明而不是留空：查「mysql 驱动声明在哪」的人应当被引到插件，而不是
+// 以为内核漏了。
+// =============================================================================
 
 /// SQLite 驱动描述符（显示名带实现后缀的理由同 MySQL）
 pub fn sqlite_driver() -> DriverDescriptor {
@@ -582,6 +413,16 @@ pub fn sqlite_driver() -> DriverDescriptor {
             "health_check".to_string(),
             "transactions".to_string(),
             "sql_autocomplete".to_string(),
+            // 元数据面：源版 DDL 来自 `sqlite_master.sql`（`native/sqlite.rs:1179`）。
+            // **不声明** `meta_routine_source`（SQLite 无存储过程）、`meta_sequences`、
+            // `meta_triggers`（`list_triggers` 没有覆写，导航会得到空文件夹——真缺口，
+            // 让消费方置灰说明，不假装支持）。
+            "meta_index_detail".to_string(),
+            "meta_constraint_detail".to_string(),
+            "meta_ddl_source".to_string(),
+            "meta_ddl_compose".to_string(),
+            "meta_fk_target".to_string(),
+            "meta_column_ordinal".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string()])
         // 声明层面**不带默认属性**（有意）：属性现在真生效了（驱动侧 PRAGMA，见
@@ -625,6 +466,16 @@ pub fn duckdb_driver() -> DriverDescriptor {
             "schema_browser".to_string(),
             "analytics".to_string(),
             "federation".to_string(),
+            // 元数据面：源版 DDL 来自 `duckdb_tables()` / `duckdb_views()` 的 `sql` 列
+            // （`native/duckdb.rs:1002`）。**不声明** `meta_routine_source`（无独立例程，
+            // 见 `supports_triggers` 附近的说明）；`list_sequences` / `list_triggers`
+            // 都没有覆写（DuckDB 有序列对象，这是真缺口——键缺席让消费方置灰）。
+            "meta_index_detail".to_string(),
+            "meta_constraint_detail".to_string(),
+            "meta_ddl_source".to_string(),
+            "meta_ddl_compose".to_string(),
+            "meta_fk_target".to_string(),
+            "meta_column_ordinal".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string()])
         // 同 SQLite：属性真生效（驱动侧 `SET`，见 `native/duckdb.rs::plan_connection`），
@@ -679,6 +530,17 @@ pub fn mysql_native_driver() -> DriverDescriptor {
             "health_check".to_string(),
             "transactions".to_string(),
             "sql_autocomplete".to_string(),
+            // 元数据面：约束明细 / 源版 DDL / 例程源码 / 外键目标 / 列序号都有
+            // （`native/mysql_native.rs:710/782/857`，列字段走 `utils::MY_TABLE_DETAIL_SQL`）。
+            // **索引明细缺席**：本实现没有 `list_indexes` 覆写，`get_indexes` 转到的是
+            // trait 默认空实现（`traits.rs:374`）——缺口如实声明，不假装支持。
+            // **触发器缺席**：同样没有 `introspect_schema_objects` / `list_triggers` 覆写。
+            "meta_constraint_detail".to_string(),
+            "meta_ddl_source".to_string(),
+            "meta_ddl_compose".to_string(),
+            "meta_routine_source".to_string(),
+            "meta_fk_target".to_string(),
+            "meta_column_ordinal".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string(), "ssl".to_string()])
         // mysql_async **不忽略未知参数**（`UrlError::UnknownParameter`），只声明它认的：
@@ -752,6 +614,17 @@ pub fn postgres_native_driver() -> DriverDescriptor {
             "transactions".to_string(),
             "sql_autocomplete".to_string(),
             "schema_browser".to_string(),
+            // 元数据面：与 sqlx 版同源（同一份 `PG_*` SQL）——索引/约束明细、序列、
+            // 触发器、例程源码都有覆写（`native/postgres_native.rs:794/827/926/935/943`）；
+            // PG 同样没有源版 DDL，只声明合成。
+            "meta_index_detail".to_string(),
+            "meta_constraint_detail".to_string(),
+            "meta_ddl_compose".to_string(),
+            "meta_routine_source".to_string(),
+            "meta_sequences".to_string(),
+            "meta_triggers".to_string(),
+            "meta_fk_target".to_string(),
+            "meta_column_ordinal".to_string(),
         ])
         .with_supported_auth_types(vec![
             "password".to_string(),

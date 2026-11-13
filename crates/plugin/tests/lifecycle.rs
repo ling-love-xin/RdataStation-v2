@@ -494,6 +494,46 @@ async fn hot_plug_adds_removes_and_marks_reload() {
     assert!(manager.pending_reloads().is_empty());
 }
 
+/// 载荷变化（清单没变）：自动重启该插件，**不**进待重载清单。
+///
+/// 真实场景：重编 sidecar 的 `agent.exe`、换 wasm、改 py 脚本——`plugin.toml`
+/// 一个字节都没变。旧实现只看清单 hash，判「无变化」，运行中的插件一直跑旧镜像，
+/// 必须重连或重启宿主才换新。这里钉住「认出载荷变化 → 自己重启 → 状态仍是 Active」。
+#[tokio::test]
+async fn payload_change_restarts_plugin_without_asking_for_reload() {
+    let dir = TempDir::new("payload");
+    let manager = Arc::new(PluginManager::new(dir.0.clone()));
+    manager.init().await.unwrap();
+
+    write_plugin(&dir.0, "com.example.payload", "v1");
+    manager.scan_and_diff_plugins().await.unwrap();
+    assert_eq!(
+        manager.get_loaded_plugin("com.example.payload").unwrap().status,
+        LoadStatus::Active
+    );
+
+    // 只改载荷文件，清单原样
+    let payload = dir.0.join("com.example.payload").join("main.js");
+    std::fs::write(&payload, "// v2 payload（只换内容，不动清单）").unwrap();
+    let diff = manager.scan_and_diff_plugins().await.unwrap();
+    assert_eq!(diff.reloaded, vec!["com.example.payload"]);
+    assert!(
+        diff.changed.is_empty(),
+        "载荷变化应该自动重启，不该要求人工重载"
+    );
+    assert!(manager.pending_reloads().is_empty());
+    // 重启 = 停用 + 激活，终态必须是 Active（不能停在 Loaded 装成「已启动」）
+    assert_eq!(
+        manager.get_loaded_plugin("com.example.payload").unwrap().status,
+        LoadStatus::Active
+    );
+
+    // 再扫一轮不该重复报「刚重启过」：快照已更新成新指纹
+    let diff = manager.scan_and_diff_plugins().await.unwrap();
+    assert!(diff.reloaded.is_empty());
+    assert_eq!(diff, PluginDiff::default());
+}
+
 /// 面板读 `list_plugins`：运行中的插件必须报 `Active`。
 ///
 /// 此前 sidecar / frontend 分支一律写死 `Inactive`，面板把正在跑的插件显示成「已停用」，
@@ -896,6 +936,37 @@ async fn uninstall_clears_pending_reload_and_scan_snapshot() {
     assert!(
         diff.removed.is_empty(),
         "卸载已经处理过消失，快照应同步清掉: {diff:?}"
+    );
+}
+
+/// 目录在管理器启动前就被删掉时，`diff.removed` 看不到它；扫描兜底要清掉登记行，
+/// 否则面板会留下一个「已启用但目录不存在」的幽灵插件。
+#[tokio::test]
+async fn scan_prunes_registration_for_missing_install_dir() {
+    if engine::migration::get_global_db_manager().is_none() {
+        engine::migration::initialize_global_system()
+            .await
+            .expect("初始化全局库");
+    }
+    let dir = TempDir::new("ghostprune");
+    let manager = Arc::new(PluginManager::new(dir.0.clone()));
+    manager.init().await.unwrap();
+
+    let id = "com.example.ghostprune";
+    write_plugin(&dir.0, id, "v1");
+    manager.scan_and_diff_plugins().await.unwrap();
+    let db = engine::migration::get_global_db_manager().expect("全局库已初始化");
+    assert!(
+        db.get_plugin_by_code(id).await.unwrap().is_some(),
+        "首轮扫描应登记"
+    );
+
+    // 目录整个消失（模拟用户手动删除 / 外部安装器清理），下一轮扫描不能只 unload。
+    std::fs::remove_dir_all(dir.0.join(id)).unwrap();
+    manager.scan_and_diff_plugins().await.unwrap();
+    assert!(
+        db.get_plugin_by_code(id).await.unwrap().is_none(),
+        "目录已缺失的登记行应被清掉"
     );
 }
 

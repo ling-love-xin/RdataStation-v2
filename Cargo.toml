@@ -27,6 +27,7 @@ members = [
     "crates/workbench_shell",
     "crates/result_panel", "crates/file-meta",
     "crates/notification",
+    "crates/driver-sql",
     # 全工作区 UI 契约守门（纯源码/资产扫描，零产品依赖 → 不受单 crate 编译状态影响）
     "crates/ui_guard",
 ]
@@ -79,6 +80,10 @@ rds-sql = { path = "crates/sql", package = "rds-sql" }
 rds-store = { path = "crates/store", package = "rds-store" }
 # 驱动层（Database/Transaction/Stream trait + 注册发现 + 连接池 + native 实现，engine 瘦身第三刀抽取）
 rds-driver = { path = "crates/driver", package = "rds-driver" }
+# 驱动侧纯数据层（元数据 SQL 常量 / PG wire 解码 / 枚举码→文案），**零依赖**：
+# 内核 4 个原生驱动与 sqlx 插件二进制（`tools/plugin-drivers/sqlx-rust`）共用一份，
+# 见 docs/architecture/plugin/sqlx-driver-extraction-plan.md §7-D1
+rds-driver-sql = { path = "crates/driver-sql", package = "rds-driver-sql" }
 # 结果集面板（DBeaver Data Editor 方向）：结果域视图 + 结果存储独立成 crate，
 # 依赖方向 result_panel → {engine, gpui-kit, workbench_shell}，editor 依赖它、它不反向依赖 editor
 notification = { path = "crates/notification", package = "rds-notification" }
@@ -135,56 +140,12 @@ anyhow = "1.0"
 # 文本编码转码（editor 2c：磁盘字节 ↔ 内核 Unicode）；已在锁里（其他依赖传递带入），无需新增编译
 encoding_rs = "0.8.44"
 rusqlite = { version = "0.40", features = ["bundled", "chrono", "serde_json"] }
-# 只用 MySQL / Postgres：关闭默认 feature 以移除 `any` 驱动。
-# `any` 会带入 sqlx-sqlite → libsqlite3-sys（声明 links = "sqlite3"），
-# 与 rusqlite 的同名 native 库冲突，导致 rusqlite 无法升级。
-# 改回默认 feature 前请确认 sqlx 与 rusqlite 的 libsqlite3-sys 版本一致。
-#
-# ⚠️ **类型解码 features 不能写在这行**（2026-09-21 实测）：sqlx 0.9 的
-# `chrono` / `time` / `uuid` / `json` 四个 feature 里各带一条 `sqlx-sqlite?/…`
-# 弱引用，实测它会把 `sqlx-sqlite` 拉进**版本解析**，于是撞上同一个
-# `links = "sqlite3"` 冲突（sqlx-sqlite 要 libsqlite3-sys `<0.38`，rusqlite 0.40 要 `^0.38.1`，
-# 交集为空，无解）。它们在 `sqlx-postgres` / `sqlx-mysql` 上**不带**这条弱引用，
-# 因此那四个 feature 走下面的后端 crate 直开（feature 全局合并，效果相同）。
-# 不带 sqlite 弱引用的类型 features（`bigdecimal`）仍可写在这里。
-sqlx = { version = "0.9.0", default-features = false, features = [
-    "mysql",
-    # MySQL 8+ 默认认证插件 `caching_sha2_password` 在**非 TLS** 连接上要求客户端
-    # 用服务端公钥加密口令（RSA）；缺这个 feature，sqlx 直接报
-    # `RSA auth backend disabled`——而本仓对 LAN 直连**默认注入 `ssl-mode=DISABLED`**
-    # （`connection_service::apply_lan_tls_default`），两者相遇就是「MySQL 连不上」。
-    # 只加 `mysql-rsa` 不引入新依赖树（sqlx-mysql 的 `rsa` 分支）。
-    "mysql-rsa",
-    "postgres",
-    "runtime-tokio",
-    "tls-native-tls",
-    # ===== 类型解码（**缺了就是静默 NULL**）=====
-    # sqlx 默认**不解码**这些族的类型：列探测失败 → 整列声明 Utf8 → 解码再失败 →
-    # `.ok().flatten()` 给 None → 出口层看到的是「值就是 NULL」，与「读不出来」不可区分。
-    # 真机实测（PG 19 列 / MySQL 14 列）：numeric(10,2) · timestamptz · date · time ·
-    # interval · jsonb · 数组 · inet · point · uuid 全部静默变 NULL。
-    #
-    # 这几个 crate 都**已在依赖树里**（chrono / bigdecimal / uuid 由工作区其他依赖带入），
-    # 加 features 不新增包；日期侧选 `chrono` 而非 `time`，与仓内既有用法一致。
-    # 未开 `rust_decimal`：`bigdecimal` 无 28 位上限，贴合 PG `numeric` 与 MySQL `DECIMAL` 语义。
-    "bigdecimal",
-] }
-# 见上：`chrono` / `uuid` / `json` 只能在**后端 crate** 上开（sqlx crate 的同名 feature
-# 带 `sqlx-sqlite?/…` 弱引用，会把 sqlx-sqlite 拉进解析并与 rusqlite 冲突）。
-# 这两个依赖只为“开 feature”而存在，代码里不 import；feature 全局合并，`sqlx::postgres::…`
-# 的类型支持由后端 crate 自己提供，所以效果与写在 sqlx 那一行完全相同。
-sqlx-postgres = { version = "0.9.0", default-features = false, features = [
-    "chrono",
-    "bigdecimal",
-    "uuid",
-    "json",
-] }
-sqlx-mysql = { version = "0.9.0", default-features = false, features = [
-    "chrono",
-    "bigdecimal",
-    "uuid",
-    "json",
-] }
+# MySQL / PostgreSQL 的 **sqlx 轨不在本工作区**（D3，2026-11-12 整体剥离成 sidecar 插件）：
+# 版本、features、`Cargo.lock` 都由插件自己钉（`tools/plugin-drivers/sqlx-rust/Cargo.toml`），
+# 内核这边只剩两条官方驱动（`mysql_async` / `tokio-postgres`）。历史上这里曾有 `sqlx` 的
+# `mysql-rsa` feature（LAN 直连默认 `ssl-mode=DISABLED` 时 MySQL 8+ 认证必需）与两条只为
+# 「开类型解码 features」而存在的 `sqlx-postgres` / `sqlx-mysql` —— 它们随实现一起搬进插件，
+# 在那里仍然需要；本工作区再引用 sqlx 就等于把剥离掉的内核又长回来。
 mysql_async = { version = "0.37.1", default-features = false, features = ["native-tls-tls"] }
 tokio-postgres = { version = "0.7.18", features = [
     "with-chrono-0_4",

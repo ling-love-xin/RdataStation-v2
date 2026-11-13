@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>联邦会话 · 源与失败处理</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A84A38'/%3E%3Ccircle cx='11' cy='11' r='4' fill='%23fff'/%3E%3Ccircle cx='21' cy='11' r='4' fill='%23fff'/%3E%3Ccircle cx='11' cy='21' r='4' fill='%23fff'/%3E%3Ccircle cx='21' cy='21' r='4' fill='%23fff'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --chrome:#181818;--editor:#1F1F1F;--popover:#202020;--surface:#111;
+    --border:#2A2A2A;--border-soft:#232323;--line:#333;
+    --text:#CCCCCC;--muted:#858585;--dim:#6E6E6E;--white:#F2F2F2;
+    --coral:#A84A38;--coral-bright:#C25B46;--coral-soft:#3A2521;
+    --success:#4A9B6B;--warning:#C9A23A;--danger:#D0534A;--info:#4A8BC9;
+    --radius:6px;--mono:"Cascadia Mono","Consolas",monospace;
+    --sans:"Segoe UI","Microsoft YaHei UI",sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:var(--sans);font-size:13px;color:var(--text);background:var(--surface);padding:20px 22px 36px}
+  button{font-family:inherit;font-size:12px;color:var(--text);background:none;border:none;cursor:pointer}
+  button:focus-visible{outline:1px solid var(--coral-bright);outline-offset:1px}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#3A3A3A;border-radius:5px;border:2px solid transparent;background-clip:content-box}
+
+  .head{display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
+  .mark{width:24px;height:24px;border-radius:6px;background:var(--coral);display:flex;align-items:center;justify-content:center;flex:none}
+  .head h1{font-size:14px;color:var(--white);font-weight:600}
+  .head .tagline{font-size:11px;color:var(--dim)}
+  .head .back{margin-left:auto;font-size:11px;color:var(--muted);text-decoration:none;border-bottom:1px solid var(--line);padding-bottom:1px}
+  .head .back:hover{color:var(--text);border-color:var(--coral-bright)}
+  .lead{font-size:11px;color:var(--dim);line-height:1.6;margin-bottom:14px;max-width:920px}
+
+  .stage{display:flex;gap:18px;align-items:flex-start}
+  .left{flex:1;min-width:0;max-width:760px}
+  .aside{width:330px;flex:none;display:flex;flex-direction:column;gap:10px}
+
+  .panel{background:var(--editor);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:0 14px 40px rgba(0,0,0,.4)}
+  .phead{padding:12px 14px;border-bottom:1px solid var(--border);background:#1B1B1B;display:flex;flex-direction:column;gap:8px}
+  .phead .title{display:flex;align-items:center;gap:8px}
+  .phead .title b{font-size:13px;color:var(--white);font-weight:600}
+  .phead .title .sp{flex:1}
+  .kw{font-family:var(--mono);font-size:10px;color:var(--dim);padding:1px 5px;border:1px solid var(--border);border-radius:3px;background:#181818}
+  .meta{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .m{border:1px solid var(--border);border-radius:5px;padding:6px 8px;background:#181818}
+  .m .k{font-size:10px;color:var(--dim);margin-bottom:3px}
+  .m .v{font-size:12px;color:var(--text);font-family:var(--mono)}
+  .m .v.hl{color:#E1A392}
+
+  .rows{padding:6px 0}
+  .row{border-bottom:1px solid var(--border-soft)}
+  .row:last-child{border-bottom:none}
+  .rline{display:grid;grid-template-columns:15px 1fr 96px 132px;gap:10px;align-items:center;padding:8px 14px;font-size:12px}
+  .rline:hover{background:var(--popover)}
+  .nm{display:flex;flex-direction:column;gap:2px;min-width:0}
+  .nm b{font-weight:500;display:flex;align-items:center;gap:6px}
+  .nm i{font-style:normal;font-size:10px;color:var(--dim)}
+  .st{display:flex;align-items:center;gap:5px;font-size:11px}
+  .st.ok{color:var(--success)} .st.warn{color:var(--warning)} .st.bad{color:var(--danger)} .st.run{color:var(--info)}
+  .acts{display:flex;justify-content:flex-end;gap:4px}
+  .mini{padding:2px 7px;border:1px solid var(--border);border-radius:4px;background:#232323;font-size:10px;color:var(--text);white-space:nowrap}
+  .mini:hover{background:#2C2C2C}
+  .mini.dis{color:var(--dim);cursor:default;background:transparent;border-color:transparent}
+  .mini.dis:hover{background:transparent}
+  .pill{font-size:10px;padding:1px 5px;border-radius:3px;border:1px solid #5A322A;background:var(--coral-soft);color:#E1A392}
+  .pill.gray{border-color:var(--border);background:#202020;color:var(--muted)}
+
+  .detail{display:none;padding:0 14px 10px 39px}
+  .detail.on{display:block}
+  .why{font-size:11px;line-height:1.65;color:var(--muted);border-left:2px solid #3A2A26;padding-left:9px;margin-bottom:7px}
+  .why b{color:var(--text);font-weight:500}
+  .why .mono{font-family:var(--mono);color:#CBB27A}
+  .fixes{display:flex;gap:6px;flex-wrap:wrap}
+
+  .pfoot{display:flex;align-items:center;gap:8px;padding:9px 14px;border-top:1px solid var(--border);background:#1B1B1B;flex-wrap:wrap}
+  .pfoot .sp{flex:1}
+  .btn{border:1px solid var(--border);border-radius:var(--radius);padding:5px 11px;background:#232323;font-size:12px}
+  .btn:hover{background:#2A2A2A}
+  .btn.small{font-size:11px;padding:4px 9px}
+  .btn.ghost{background:none;border-color:transparent;color:var(--muted)}
+  .btn.ghost:hover{background:var(--popover);color:var(--text)}
+
+  .note{display:flex;gap:8px;padding:8px 12px;border-radius:6px;font-size:11px;line-height:1.55;border:1px solid var(--border);background:#191919;color:var(--muted);margin:10px 14px}
+  .note.warn{border-color:#3D3422;background:#1E1A12;color:#CBB27A}
+  .note b{font-weight:600}
+
+  .card{background:var(--chrome);border:1px solid var(--border);border-radius:8px;padding:11px 13px}
+  .card h3{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.6px;margin-bottom:8px}
+  table{width:100%;border-collapse:collapse;table-layout:fixed}
+  th,td{font-size:10px;text-align:left;padding:5px 4px;border-bottom:1px solid var(--border-soft);vertical-align:top;line-height:1.5}
+  th{color:var(--dim);font-weight:500}
+  td{color:var(--muted)}
+  td:nth-child(2){color:#CBB27A}
+  tr:last-child td{border-bottom:none}
+  .card ul{list-style:none;display:flex;flex-direction:column;gap:6px}
+  .card li{font-size:11px;color:var(--dim);line-height:1.55;padding-left:11px;position:relative}
+  .card li::before{content:"";position:absolute;left:0;top:7px;width:4px;height:4px;background:#3A3A3A;border-radius:1px}
+  .card li b{color:var(--text);font-weight:500}
+
+  @media (max-width:1120px){.stage{flex-direction:column}.aside{width:100%;flex-direction:row;flex-wrap:wrap}.aside .card{flex:1 1 300px}.left{max-width:none}.meta{grid-template-columns:repeat(2,1fr)}.rline{grid-template-columns:15px 1fr 90px;}.rline .acts{grid-column:2/4;justify-content:flex-start}}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="mark"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><circle cx="12" cy="5" r="2.6"/><circle cx="5" cy="18" r="2.6"/><circle cx="19" cy="18" r="2.6"/><path d="M12 8v4M11 11L7 16M13 11l4 5"/></svg></div>
+  <div><h1>联邦会话 · 源与失败处理</h1></div>
+  <span class="tagline">会话按 owner 缓存 · 指纹变化才重建</span>
+  <a class="back" href="./00-overview.html">返回总览</a>
+</div>
+<div class="lead">本页是「共享」落地后最需要新的界面：一条会话里有多个源、多种失败原因，且会话重建会带走临时对象。失败原因必须分类到「用户做什么」，不能只显示错误文本。</div>
+
+<div class="stage">
+  <div class="left">
+    <div class="panel">
+      <div class="phead">
+        <div class="title">
+          <b>联邦会话</b>
+          <span class="kw">owner: doc-2f1a</span>
+          <span class="sp"></span>
+          <span style="font-size:11px;color:var(--dim)">挂载于 09:41 · 会话复用中</span>
+        </div>
+        <div class="meta">
+          <div class="m"><div class="k">源</div><div class="v">3 · 已挂 2</div></div>
+          <div class="m"><div class="k">主源</div><div class="v hl">mysql_src</div></div>
+          <div class="m"><div class="k">会话内表</div><div class="v">2 张</div></div>
+          <div class="m"><div class="k">会话内存</div><div class="v">186 MB</div></div>
+        </div>
+      </div>
+
+      <div class="rows">
+        <!-- 主源 -->
+        <div class="row">
+          <div class="rline">
+            <span style="color:var(--success)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12l5 5L20 6"/></svg></span>
+            <div class="nm"><b>mysql_src <span class="pill">主源</span></b><i>MySQL · analytics · 只读挂载 · 有 Secret</i></div>
+            <span class="st ok">已挂载</span>
+            <div class="acts"><button class="mini dis">设为主源</button><button class="mini">重挂</button></div>
+          </div>
+        </div>
+
+        <!-- 已挂载 -->
+        <div class="row">
+          <div class="rline">
+            <span style="color:var(--success)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12l5 5L20 6"/></svg></span>
+            <div class="nm"><b>pg_src</b><i>PostgreSQL · warehouse · 只读挂载</i></div>
+            <span class="st ok">已挂载</span>
+            <div class="acts"><button class="mini" data-primary="pg">设为主源</button><button class="mini">重挂</button></div>
+          </div>
+        </div>
+
+        <!-- 扩展未安装 -->
+        <div class="row">
+          <div class="rline">
+            <span style="color:var(--warning)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v1"/></svg></span>
+            <div class="nm"><b>oracle_src <span class="pill gray">2 段限定名</span></b><i>Oracle · erp · 需要 oracle_scanner 扩展</i></div>
+            <span class="st warn">扩展未安装</span>
+            <div class="acts"><button class="mini" data-toggle="d-oracle">详情</button><button class="mini" data-retry="oracle">安装并重挂</button></div>
+          </div>
+          <div class="detail" id="d-oracle">
+            <div class="why"><b>原因：</b>会话里没有 <span class="mono">oracle_scanner</span>。<b>处理：</b>从扩展源安装一次后会缓存在扩展目录，之后同会话与后续会话都不再重复安装。<b>注意：</b>Oracle 目前不支持 <span class="mono">READ_ONLY</span> 挂载，写保护靠编辑器侧拦截 + 建议只读账号。</div>
+            <div class="fixes"><button class="mini">从社区源安装</button><button class="mini">改为本地插件</button><button class="mini">用只读账号重连</button></div>
+          </div>
+        </div>
+
+        <!-- 扩展未签名（第三方插件） -->
+        <div class="row">
+          <div class="rline">
+            <span style="color:var(--danger)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg></span>
+            <div class="nm"><b>oracle_vendor <span class="pill gray">本地插件</span></b><i>Oracle · vendor 扫描器 v1.2 · 未签名</i></div>
+            <span class="st bad">扩展未签名</span>
+            <div class="acts"><button class="mini" data-toggle="d-sign">详情</button><button class="mini dis">加载</button></div>
+          </div>
+          <div class="detail" id="d-sign">
+            <div class="why"><b>原因：</b>DuckDB 默认拒绝未签名扩展。要加载本地第三方扫描器，必须在设置里显式允许未签名扩展——这是<b>安全决策</b>，不默认开启。<b>取舍：</b>允许后，任何被放进扩展目录的扩展文件都能被加载。</div>
+            <div class="fixes"><button class="mini">打开设置·扩展安全</button><button class="mini">先签名再加载</button></div>
+          </div>
+        </div>
+
+        <!-- 认证失败 -->
+        <div class="row">
+          <div class="rline">
+            <span style="color:var(--danger)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg></span>
+            <div class="nm"><b>mssql_bi</b><i>SQL Server · bi · 口令已过期</i></div>
+            <span class="st bad">认证失败</span>
+            <div class="acts"><button class="mini" data-toggle="d-auth">详情</button><button class="mini">打开连接</button></div>
+          </div>
+          <div class="detail" id="d-auth">
+            <div class="why"><b>原因：</b>凭据在会话里以 Secret 形式存在，连接串里的口令失效后必须重建 Secret 并重挂。<b>处理：</b>改连接里的口令 → 回到这里「重挂」，不需要重启应用。</div>
+          </div>
+        </div>
+
+        <!-- 挂载中 -->
+        <div class="row">
+          <div class="rline">
+            <span style="color:var(--info)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
+            <div class="nm"><b>pg_archive</b><i>PostgreSQL · archive · 首次挂载</i></div>
+            <span class="st run" id="st-run">挂载中…</span>
+            <div class="acts"><button class="mini dis">设为主源</button><button class="mini dis">重挂</button></div>
+          </div>
+        </div>
+
+        <!-- 驱动不支持 -->
+        <div class="row">
+          <div class="rline">
+            <span style="color:var(--dim)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg></span>
+            <div class="nm"><b>sqlite_dev</b><i>SQLite · 驱动还不能做联邦源</i></div>
+            <span class="st" style="color:var(--dim)">不支持</span>
+            <div class="acts"><button class="mini dis">设为主源</button><button class="mini dis">重挂</button></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="note warn">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v1"/></svg>
+        <span><b>会话重建会带走临时对象</b>：增删源会重建会话，会话内 <span class="kw">tmp_q_</span> 随之消失；结果集会标「表已失效，可重新分析」。改主源<b>不会</b>重建。</span>
+      </div>
+
+      <div class="pfoot">
+        <span style="font-size:11px;color:var(--dim)">只读挂载 · 跨源无事务 · 各源按各自时刻参与</span>
+        <span class="sp"></span>
+        <button class="btn small">刷新全部</button>
+        <button class="btn small">复制会话诊断</button>
+        <button class="btn ghost small">断开</button>
+      </div>
+    </div>
+  </div>
+
+  <aside class="aside">
+    <div class="card">
+      <h3>失败原因 → 用户动作</h3>
+      <table>
+        <tr><th style="width:74px">原因</th><th>判据</th><th>动作</th></tr>
+        <tr><td>未安装</td><td>扩展不在目录</td><td>装一次并重挂</td></tr>
+        <tr><td>未签名</td><td>第三方扩展</td><td>显式允许 / 先签名</td></tr>
+        <tr><td>版本不匹配</td><td>扩展 ABI 不符</td><td>换匹配版本</td></tr>
+        <tr><td>认证失败</td><td>Secret 无效</td><td>改连接后重挂</td></tr>
+        <tr><td>网络不可达</td><td>连接超时</td><td>检查网络/防火墙</td></tr>
+        <tr><td>驱动不支持</td><td>能力清单</td><td>换驱动或改本地方案</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h3>会话生命周期</h3>
+      <ul>
+        <li><b>取用</b>：按 owner + 源指纹命中就复用，不重复 ATTACH</li>
+        <li><b>换主源</b>：只改当前库，<b>不重建</b>（临时对象保住）</li>
+        <li><b>源变化</b>：重建，临时对象消失，需提示</li>
+        <li><b>断开</b>：连接销毁，表随之释放，不逐张 drop</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>读数为什么单独算</h3>
+      <ul>
+        <li>全局临时表名单只统计<b>本地单例</b>的表</li>
+        <li>会话内表不进名单，否则「登记」与「删除」指向不同连接</li>
+        <li>所以会话自己记「表数 / 字节」，显示在这里</li>
+      </ul>
+    </div>
+  </aside>
+</div>
+
+<script>
+(function(){
+  document.querySelectorAll("[data-toggle]").forEach(function(btn){
+    btn.addEventListener("click",function(){
+      var target=document.getElementById(btn.getAttribute("data-toggle"));
+      if(!target) return;
+      var on=target.classList.toggle("on");
+      btn.textContent = on ? "收起" : "详情";
+    });
+  });
+
+  document.querySelectorAll("[data-retry]").forEach(function(btn){
+    btn.addEventListener("click",function(){
+      var line=btn.closest(".rline");
+      var st=line.querySelector(".st");
+      var old=st.textContent;
+      st.textContent="挂载中…"; st.className="st run";
+      btn.disabled=true;
+      setTimeout(function(){
+        st.textContent="已挂载"; st.className="st ok";
+        var detail=document.getElementById("d-oracle"); if(detail) detail.classList.remove("on");
+        btn.textContent="重挂"; btn.disabled=false;
+      },1500);
+    });
+  });
+
+  document.querySelectorAll("[data-primary]").forEach(function(btn){
+    btn.addEventListener("click",function(){
+      document.querySelectorAll(".rline").forEach(function(r){
+        var p=r.querySelector(".pill"); if(p && p.textContent==="主源") p.remove();
+        var b=r.querySelector(".nm b");
+        if(b && b.childNodes.length && b.childNodes[0].nodeType===3){ /* noop */ }
+      });
+      var nm=btn.closest(".rline").querySelector(".nm b");
+      var pill=document.createElement("span"); pill.className="pill"; pill.textContent="主源";
+      nm.appendChild(pill);
+      Array.prototype.forEach.call(document.querySelectorAll("[data-primary]"),function(x){ x.classList.remove("dis"); });
+      btn.classList.add("dis");
+    });
+  });
+})();
+</script>
+</body>
+</html>

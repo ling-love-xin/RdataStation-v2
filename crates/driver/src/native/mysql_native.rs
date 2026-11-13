@@ -105,6 +105,13 @@ fn tls_unsupported(reason: String) -> CoreError {
 /// 元数据浏览通过 `MetadataBrowser` trait 实现，查询 `information_schema`。
 pub struct MySqlNativeDatabase {
     pool: mysql_async::Pool,
+    /// 会话级默认 schema：最后一次成功的 `USE ...`（文本原样）
+    ///
+    /// `USE` 是**连接级**状态，而 `pool.get_conn()` 每次可能给不同连接。只发一次的话，
+    /// 紧随其后的用户语句可能落在另一条连接上，未限定名就回到连接默认库（真机实测：
+    /// 切 schema 后 `SELECT count(*) FROM t` 报 `Table 'mysql.t' doesn't exist`）。
+    /// 所以每拿到一条连接都要把这条状态补上——见 [`replay_session_sql`]。
+    session_sql: Arc<Mutex<Option<String>>>,
     server_version: Option<String>,
     max_connections: usize,
     min_connections: usize,
@@ -170,34 +177,11 @@ impl MySqlNativeDatabase {
         };
         Ok(Self {
             pool,
+            session_sql: Arc::new(Mutex::new(None)),
             server_version,
             max_connections: 10,
             min_connections: 0,
         })
-    }
-
-    /// 从现有连接池创建实例
-    pub fn from_pool(pool: mysql_async::Pool) -> Self {
-        Self {
-            pool,
-            server_version: None,
-            max_connections: 10,
-            min_connections: 0,
-        }
-    }
-
-    /// 从现有连接池及配置创建实例
-    pub fn from_pool_with_config(
-        pool: mysql_async::Pool,
-        max_connections: usize,
-        min_connections: usize,
-    ) -> Self {
-        Self {
-            pool,
-            server_version: None,
-            max_connections,
-            min_connections,
-        }
     }
 }
 
@@ -216,6 +200,47 @@ const MYSQL_NATIVE_QUERY_TIMEOUT: Duration = Duration::from_secs(15);
 /// 只读语句判定：口径表在 [`crate::utils::is_read_only_sql`]（六个驱动共用一份）。
 fn is_read_only_sql(sql: &str) -> bool {
     shared_is_read_only_sql(sql, SqlFlavor::MySql)
+}
+
+/// 把记下的**会话级默认 schema**（最后一次 `USE ...`）补到本次拿到的连接上。
+///
+/// 为什么必须有：`USE` 是连接级状态，而 `pool.get_conn()` 每次可能给不同连接——
+/// 只发一次的话，紧随其后的用户语句可能落在另一条连接上，未限定名回到连接默认库。
+async fn replay_session_sql(
+    session: &Mutex<Option<String>>,
+    conn: &mut mysql_async::Conn,
+) -> Result<(), CoreError> {
+    use mysql_async::prelude::Queryable;
+    let sql = session.lock().await.clone();
+    let Some(sql) = sql else {
+        return Ok(());
+    };
+    conn.query_drop(&sql).await.map_err(|e| {
+        CoreError::database(DatabaseError::Driver {
+            db_type: "mysql_native".to_string(),
+            operation: "session_context".to_string(),
+            source: e.to_string(),
+        })
+    })
+}
+
+/// 跑一句「改会话默认 schema」的语句（`USE ...`），并把它记成当前会话状态。
+///
+/// 必须走**文本协议**（`query_drop`）：MySQL 对 prepared 里的 `USE` 直接回
+/// `ERROR 1295: This command is not supported in the prepared statement protocol yet`
+/// （真机实测。`execute_writing` 用的 `exec_drop` 就是 prepared，所以 `USE` 不能走那儿）。
+async fn run_session_statement(
+    session: &Mutex<Option<String>>,
+    conn: &mut mysql_async::Conn,
+    sql: &str,
+) -> Result<QueryResult, CoreError> {
+    use mysql_async::prelude::Queryable;
+    conn.query_drop(sql)
+        .await
+        .map_err(|e| mysql_native_query_error(sql, &e))?;
+    *session.lock().await = Some(sql.trim().to_string());
+    // `USE` 不改数据：影响行数按 0 如实报（不是「没结果」）
+    Ok(affected_rows_result(0))
 }
 
 /// 写语句（不返回行）跑 `exec_drop`，再从连接上读**真实影响行数**（B5 / P0.6）
@@ -491,6 +516,13 @@ impl Database for MySqlNativeDatabase {
                 source: e.to_string(),
             })
         })?;
+        // 换到池里另一条连接时，会话默认 schema 要补上（见 `session_sql`）
+        replay_session_sql(&self.session_sql, &mut conn).await?;
+
+        // `USE` 只能走文本协议（1295），且要记成会话状态
+        if crate::utils::is_session_schema_statement(sql) {
+            return run_session_statement(&self.session_sql, &mut conn, sql).await;
+        }
 
         // B5 / P0.6：不返回结果集的写语句走 `exec_drop`，拿驱动的真实影响行数
         if !is_read_only && !returns_rows(sql) {
@@ -535,6 +567,10 @@ impl Database for MySqlNativeDatabase {
                 source: e.to_string(),
             })
         })?;
+        replay_session_sql(&self.session_sql, &mut conn).await?;
+        if crate::utils::is_session_schema_statement(sql) {
+            return run_session_statement(&self.session_sql, &mut conn, sql).await;
+        }
 
         let mysql_params: Vec<mysql_async::Value> = params
             .iter()
@@ -591,6 +627,7 @@ impl Database for MySqlNativeDatabase {
         let sql_owned = sql.to_string();
         let sql_for_cancel = sql.to_string();
         let pool = self.pool.clone();
+        let session = self.session_sql.clone();
 
         tokio::select! {
             result = async move {
@@ -603,15 +640,15 @@ impl Database for MySqlNativeDatabase {
                         source: e.to_string(),
                     })
                 })?;
+                replay_session_sql(&session, &mut conn).await?;
+                if crate::utils::is_session_schema_statement(&sql_owned) {
+                    return run_session_statement(&session, &mut conn, &sql_owned).await;
+                }
 
                 // B5 / P0.6：不返回结果集的写语句走 `exec_drop`，拿驱动的真实影响行数
                 if !is_read_only && !returns_rows(&sql_owned) {
-                    return execute_writing(
-                        &mut conn,
-                        &sql_owned,
-                        mysql_async::Params::Empty,
-                    )
-                    .await;
+                    return execute_writing(&mut conn, &sql_owned, mysql_async::Params::Empty)
+                        .await;
                 }
 
                 let mut query_result = conn.query_iter(&sql_owned).await.map_err(|e| {
@@ -655,6 +692,9 @@ impl Database for MySqlNativeDatabase {
                 source: e.to_string(),
             })
         })?;
+        // 事务连接同样要带上会话默认 schema（引擎在事务内发的上下文语句由
+        // `MySqlTransaction::query` 执行；这里补的是「开事务前就绑好的那个」）。
+        replay_session_sql(&self.session_sql, &mut conn).await?;
         conn.query_drop("START TRANSACTION").await.map_err(|e| {
             CoreError::database(DatabaseError::Driver {
                 db_type: "mysql_native".to_string(),
@@ -665,6 +705,7 @@ impl Database for MySqlNativeDatabase {
 
         Ok(Box::new(MySqlNativeTransaction {
             conn: Mutex::new(Some(conn)),
+            session_sql: self.session_sql.clone(),
         }))
     }
 
@@ -884,6 +925,8 @@ impl Database for MySqlNativeDatabase {
 /// Drop 时连接归还池（mysql_async 会自动回滚未提交的事务）。
 pub struct MySqlNativeTransaction {
     conn: Mutex<Option<mysql_async::Conn>>,
+    /// 与所属连接共享的会话状态：事务内发的 `USE` 也要记下（提交后主连接继续沿用）
+    session_sql: Arc<Mutex<Option<String>>>,
 }
 
 #[async_trait::async_trait]
@@ -893,6 +936,11 @@ impl Transaction for MySqlNativeTransaction {
         let mut guard = self.conn.lock().await;
         if let Some(ref mut conn) = *guard {
             let is_read_only = is_read_only_sql(sql);
+
+            // 事务内的 `USE` 同样只能走文本协议（1295），并同步记进会话状态
+            if crate::utils::is_session_schema_statement(sql) {
+                return run_session_statement(&self.session_sql, conn, sql).await;
+            }
 
             // B5 / P0.6：事务内的写语句同样要真实影响行数
             if !is_read_only && !returns_rows(sql) {

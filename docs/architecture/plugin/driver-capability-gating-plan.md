@@ -1,0 +1,203 @@
+# 驱动能力位 × 属性分区置灰（方案 · 待评审）
+
+> **一句话**：同一数据库有两个驱动实现时，能力差异要**如实表达成 UI**——驱动不支持的属性分区**置灰并写明原因**，既不显示「索引 (0)」，也不让它悄悄消失。
+>
+> **状态**：方案稿，待评审；**不改代码**。评审通过后并入 `docs/architecture/property/` 的决策编号体系。
+>
+> **相关**：`sqlx-driver-extraction-plan.md`（本方案是它的前置）、`driver-operation-audit-plan.md`（操作留痕）、`../driver-capability-matrix.md`（能力矩阵现状）。
+
+---
+
+## 1. 验收口径（用户已定）
+
+| # | 口径 | 说明 |
+| --- | --- | --- |
+| 1 | 功能面**对齐 DBeaver** | 只做 DBeaver 有的功能，不额外发明 |
+| 2 | 单驱动不支持 → **对应属性模块置灰** | 保留页签、整块灰化 + 一行原因；不做事后静默降级 |
+| 3 | 不依赖「官方驱动一定比 sqlx 强」这个前提 | 谁缺哪块就灰谁，两个方向都成立 |
+
+这与插件模块既有硬约束一致：`plugin/README.md` §5 #2「**能力必须门控**，未声明的调用返回可读原因，不允许『静默退化』」。
+
+**边界（与 2026-10-24 决策的关系）**：`82c9cd46` 拍板「**隐藏式**」——未实现类别不产出页签，灰置渲染分支与 `enabled` 字段被清理。本方案**不推翻它**，只切一刀：
+
+- **产品未实现**（能力字典 `Stage::NotBuilt`，如 `index_analysis` / `table_editor`）→ 继续**隐藏**（避免假承诺）；
+- **产品已实现、但当前驱动给不出**（如 sidecar 无索引明细、SQLite 无序列）→ **置灰 + 原因**（本方案新增的语义）。
+
+---
+
+## 2. 现状（代码实证）
+
+| # | 位置 | 事实 | 后果 |
+| --- | --- | --- | --- |
+| 1 | `database/src/property_panel.rs:131-144` | `list_indexes(...).unwrap_or_default()` / `list_constraints(...).unwrap_or_default()` / `get_table_ddl(...).ok().flatten()` | `Err(NotSupported)` 被吞成 `Ok(vec![])` → 显示「索引 (0)」「约束 (0)」，DDL 静默改走合成 |
+| 2 | `database/src/property_providers/mod.rs:261-300` | 表级核心页（列 / 索引 / 约束 / DDL / 数据）**无条件产出**，三条元数据页没有任何能力位 | 索引/约束没有"该驱动不支持"的表达位置 |
+| 3 | `database/src/property_providers/mod.rs:334-348`、`:259-260` | `Some(false)` = **不产出**（隐藏式）；渲染层已无灰置分支 | 要置灰就得改回模型（见 §4.3） |
+| 4 | `property/src/model.rs:85` | `PropertySection { id, label, table }` 只有三个字段 | 没有"不可用 / 原因"位 |
+| 5 | `driver/src/native/mod.rs` 头注 | trait 默认实现就是空，「未支持」与「真的没有」分不清 | 三态信息在 trait 层就丢了 |
+| 6 | `plugin/src/sidecar/driver.rs`（`no_index_detail` / `list_indexes` / `list_constraints`） | sidecar **报 `Err`**；`get_table_ddl` 协议无方法；列 `references` / `ordinal` / `is_identity` / `collation` 缺失 | 唯一"老实"的驱动反而被 UI 吞掉，其余静默 |
+| 7 | `driver/src/capability.rs:155-285` | 15 个键里 `index_analysis` / `table_editor` = `Stage::NotBuilt`；`export` / `mock` / `resource` = `Scope::App` | 现有字典是**产品功能键**，没有"索引明细 / 约束明细 / 源版 DDL / 外键目标"这一层 |
+
+**结论**：`drivers.capabilities` 这条通道是通的（内核 descriptors 与插件 `[[contributes.drivers]] features` 都落到同一列），缺的是 **① 元数据面能力位 ② 三态取数 ③ 模型里的不可用态 ④ 渲染分支**。
+
+---
+
+## 3. DBeaver 对照（本地源码实证）
+
+`D:\RdataStation\RDS\dbeaver-ref`：
+
+1. **能力位统一挂在数据源信息上**：`plugins/org.jkiss.dbeaver.model/src/org/jkiss/dbeaver/model/DBPDataSourceInfo.java` 共 18 个 boolean，与本方案相关的是：
+
+| DBeaver 位 | 语义 | 对应我们哪个分区 |
+| --- | --- | --- |
+| `supportsIndexes()` | 能否读索引 | 索引 |
+| `supportsReferentialIntegrity()` | 能否读约束 / 引用完整性 | 约束 |
+| `supportsStoredCode()` | 能否读例程 / 存储代码 | 例程源码（`PageId::Source`） |
+| `supportsTransactions()` / `supportsTransactionsForDDL()` / `supportsSavepoints()` | 事务层次 | 编辑器事务开关（已由能力键 `transactions` 承担） |
+| `supportsBatchUpdates()` / `supportsResultSetLimit` / `Scroll` / `Ordering` | 结果集能力 | 结果集网格（后续批次） |
+| `isReadOnlyData()` / `isReadOnlyMetaData()` | 数据/元数据只读 | 编辑门控（后续批次） |
+
+2. **三态样板**：`plugins/org.jkiss.dbeaver.ext.generic/.../GenericTableBase.java:233-256` ——
+
+```java
+if (getDataSource().getInfo().supportsIndexes()) { ... return cache.getObjects(...); }
+return null;   // 不支持 = null，而不是空集合
+```
+
+**取法**：能力位由**驱动/数据源**回答，模型层用 `null` 表达"不支持"，UI 消费位。我们照抄这个分工，不把能力判断散进 provider。
+
+---
+
+## 4. 设计
+
+### 4.1 能力分两层（不改现有字典的语义）
+
+| 层 | 载体 | 用途 |
+| --- | --- | --- |
+| **功能键**（现有 15 键） | `driver/src/capability.rs` + `drivers.capabilities` | 连接对话框「能力」Tab、能力矩阵对比。**本次不动** |
+| **元数据面能力位**（新增） | 同一列 `drivers.capabilities`，新键 | 属性分区置灰的输入 |
+
+新增键（9 条；**内核 6 驱动现状已按 2026-11-12 的代码实测校正**，不再是"按族推"）：
+
+| 键 | 中文 | DBeaver 对应 | 内核 6 驱动现状（实测） | sidecar 现状 |
+| --- | --- | --- | --- | --- |
+| `meta_index_detail` | 索引明细 | `supportsIndexes` | 5/6 支持（`mysql`/`postgres`/`postgres_native`/`sqlite`/`duckdb` 有覆写）；**`mysql_native` 无 `list_indexes` 覆写**，`get_indexes` 转到 trait 默认空实现 | **不支持**（报 Err） |
+| `meta_constraint_detail` | 约束明细 | `supportsReferentialIntegrity` | 6/6 支持 | **不支持**（报 Err） |
+| `meta_ddl_source` | 源版 DDL | （DBeaver 无独立位，按驱动实现） | `mysql`/`mysql_native`（`SHOW CREATE`）、`sqlite`（`sqlite_master.sql`）、`duckdb`（`duckdb_tables().sql`）；**PG 两个实现都给不出** | **不支持**（协议无方法） |
+| `meta_ddl_compose` | 合成 DDL | — | 6/6（`sql_gen::create_table_ddl`） | 需要宿主侧合成（`meta.object_detail` 够用） |
+| `meta_routine_source` | 例程源码 | `supportsStoredCode` | MySQL/PG 两实现支持；`sqlite`/`duckdb` 不适用 | 支持（`meta.routine_source`） |
+| `meta_sequences` | 序列 | — | PG 两实现支持；`mysql`/`mysql_native` 无此对象（恒空）；**`duckdb` 有序列对象但无 `list_sequences` 覆写**（真缺口）；`sqlite` 无 | 取决于插件 |
+| `meta_triggers` | 触发器 | — | PG 两实现 + `mysql`（`introspect_schema_objects` 直查 `information_schema.triggers`）；**`mysql_native` 与 `sqlite` 无覆写**（真缺口）；`duckdb` 不支持 `CREATE TRIGGER` | 取决于 `meta.objects` 覆盖 |
+| `meta_fk_target` | 列级外键目标 | `supportsReferentialIntegrity` | 6/6（`references` 有值；复合外键的"目标是哪列"按各 SQL 说明保守处理） | **不支持**（线格式无字段） |
+| `meta_column_ordinal` | 列序号 | — | 6/6（1 基） | **不支持**（填 0） |
+
+> 说明：`meta_ddl_compose` 不是"驱动能力"而是"产品能力"——只要拿到列/约束/索引，宿主就能合成。它单独成键是为了让 UI 能区分「源版不可用但合成可用」与「两个都不可用」。
+>
+> 落码状态（2026-11-12）：9 个键已进 `CAPABILITY_DICTIONARY`（24 键），6 个内核驱动已按上表**逐驱动**声明；`capability::tests::metadata_plane_diverges_inside_a_family` 把「`mysql_native` 缺索引明细 / PG 缺源版 DDL」这两条分叉钉成断言，修好实现时测试会红着提醒改声明。
+
+### 4.2 取数三态（把"不支持"传上来）
+
+新增一个显式三态，替代 trait 默认的空 Vec（对应 §2 #5）：
+
+```
+Support<T> = Supported(T) | Empty | NotSupported(&'static str)
+```
+
+落地方式二选一（**已在 2026-11-12 拍板**）：
+
+- **A（最小改动）**：trait 方法签名不动，能力位做**前置**判定，分区可用性由骨架填。
+- **B（更彻底）**：trait 改为 `Result<Option<Vec<T>>>`（`None` = 不支持），`MetadataService` 原样透传。
+
+> **决定：A（改良版），不采用 B。** 落地形态 = 「驱动声明（`drivers.capabilities` 的 `meta_*` 键）× 运行时 `Err`」两级判定：
+>
+> 1. 声明缺席 → 置灰 + 原因（驱动给不出）；
+> 2. 声明在场但 `list_*` / `get_table_ddl` 报 `Err` → 置灰 + 原因带底层错误（通道缺口）；
+> 3. 声明在场且返回空 → `(0)`（这是"这张表真的没有"）。
+>
+> 为什么放弃 B：`Option<Vec<T>>` 的信息量在这套判定里是**重复的**——声明已经回答了"这个驱动给不给得出"，`Err` 已经回答了"这次取数成不成功"，只剩"声明支持却返回空"这一种状态，而那正是合法的"真的没有"（B 的 `Some(vec![])` 与之同义）。代价则是改 5 个 trait 方法 + 12 个覆写 + `SchemaObjects` + sidecar 桥 + 约 10 处调用点，且 `introspect_schema_objects` 的默认实现要跟着改（它内部 `?` 链式调用这些方法）。
+>
+> 残留缺口（要写清，别当已解决）：驱动**声明支持、实现却漏了**（返回 `Ok(vec![])`）时仍会显示 `(0)`。这不是静默降级——声明与实现的错位由 §7 G-8 的守卫测试（声明 ↔ 覆写清单）盯，而不是靠运行时三态兜。
+
+
+### 4.3 模型与渲染
+
+```
+PropertySection {
+    id: PageId,
+    label: String,
+    table: PropertyTable,
+    availability: Availability,   // 新增
+}
+Availability = Available | Unsupported(reason: String)
+```
+
+- **页签保留**，内容区整块灰化 + 一行原因文案（例：「该驱动不支持读取索引明细（sqlx 插件未实现 meta.indexes）」）；
+- 计数标签在不可用时**不显示 `(0)`**，改为「索引」+ 灰化（0 是"真的没有"，不支持是另一回事）；
+- provider `categories()` 仍决定"页签集合与顺序"，`availability` 由**骨架**（`property_panel::load_properties`）按能力位填写——provider 不感知驱动。
+
+### 4.4 门控输入从"族"改为"族默认 × 驱动声明"
+
+`property_providers::DriverCapabilities` 是**族级硬编码**（`DriverCapabilities::mysql()` / `::pg()` …），保留它管两件事：列展示裁剪、类别是否存在。
+
+驱动级判定另起一份（2026-11-12 已落地 `property_providers/gates.rs`）：
+
+| 部件 | 职责 |
+| --- | --- |
+| `MetadataService::declared_capabilities(conn_id)` | 取该连接所属驱动的能力键：内置走 `registry::get_driver(id).capability_keys()`（与入库的 `drivers.capabilities` 同源），插件走全局库 `drivers.capabilities`；都拿不到 → `None` |
+| `MetadataGates::resolve(db_type, declared)` | `Some(keys)` → 严格按声明；`None` → 族默认（"不知道"不误灰） |
+| `MetadataGates` 五个维度 | `index_detail` / `constraint_detail` / `ddl_source` / `ddl_compose` / `routine_source` |
+
+`ProviderInput` **没有**加 `driver_caps`：门控在骨架（`property_panel`）里算，provider 只声明"有哪些类别"，两者经 `sections` 合并时对齐——provider 仍然零感知，新增驱动只填 provider 的默认。
+
+### 4.5 谁来写这些位
+
+| 来源 | 写入路径（已存在） |
+| --- | --- |
+| 内核驱动 | `driver/src/registry/descriptors.rs` 的 `with_capabilities` → `declaration.rs::sync_driver_declarations` upsert |
+| 插件驱动 | `plugin.toml` 的 `[[contributes.drivers]] features` → `plugin/src/driver_decl.rs` 落 `drivers.capabilities`（`:182`） |
+
+两者都进 `drivers` 表同一列，读模型唯一——不需要第二份契约。
+
+---
+
+## 5. 留痕
+
+见 `driver-operation-audit-plan.md`。本方案只需两件事：
+
+1. **能力判定可查**：属性分区灰化时，hover 显示「能力位名称 + 声明来源（代码 / 插件 `<id>`）+ 最后同步时间」；
+2. **判定结果不入日志**（读操作，量大且无审计价值）；**执行侧拒绝要留痕**（如因驱动不支持而拦下的 DDL 操作，写入查询历史，见该文档 §2 缺口 1）。
+
+---
+
+## 6. 与 sqlx 抽出的衔接
+
+顺序：**先落本方案，再抽 sqlx**。理由：抽完之后 `mysql` / `postgres` 由插件提供，它们的 `meta_index_detail` / `meta_constraint_detail` / `meta_ddl_source` 一律为"不支持"；没有置灰底座，这些缺口会静默成「索引 (0)」，与验收口径 2 直接冲突。
+
+置灰底座落地后，sqlx 插件只需在清单里**如实声明**自己有哪些位，UI 自动灰掉其余——抽取变成纯机械工作。
+
+---
+
+## 7. 验收清单（评审后细化成用例名）
+
+| # | 场景 | 断言 | 落点 | 状态 |
+| --- | --- | --- | --- | --- |
+| G-1 | 内核 MySQL（`mysql_native`）表属性 | **索引页置灰**（缺 `meta_index_detail`，如实反映它没有 `list_indexes` 覆写）；约束/DDL 两页 `Available` 且非空 | `crates/workbench/tests/official_driver_real.rs` 扩 | 待真机 |
+| G-2 | sidecar 驱动（mssql 或 oracle）表属性 | 索引/约束页 `Unsupported(原因)` 且**页签仍在**；不出现「索引 (0)」 | `crates/plugin/tests/meta_bridge_real_process.rs` 扩 | 待真机 |
+| G-3 | SQLite 表属性 | 例程源码按能力位置灰（不是消失）；索引/约束/DDL 源版可用 | `crates/database` 单测 | **已过**（`nav_property_real` + `gates` 单测） |
+| G-4 | 同族两驱动切换 | 同一张表在两驱动下分区可用性可不同，provider 零改动 | `gates.rs` 单测 | **已过**（`metadata_plane_diverges_inside_a_family`） |
+| G-5 | `Stage::NotBuilt` 键 | 仍不产出页签（隐藏式未被推翻） | `capability::tests::not_built_keys_are_claimed_by_nobody` | **已过** |
+| G-6 | 声明支持但取数报错 | 置灰且原因带底层错误，**不**显示 `(0)`、**不**静默合成 | `property_panel::tests::indexes_section_reports_fetch_error` / `ddl_section_does_not_compose_after_source_failure` | **已过** |
+| G-7 | 能力位来源可查 | hover 文案含键名 + 来源 + 同步时间 | UI 契约测试 | 未做（留痕轮） |
+| G-8 | 声明 ↔ 实现一致 | 声明了 `meta_index_detail` 的驱动必须有 `list_indexes` 覆写（目前靠 `metadata_plane_diverges_inside_a_family` 逐条钉死已知分叉） | `driver` 单测 | **部分**（只钉了两条已知分叉，无通用反射） |
+
+**D10 口径**：以上每条都必须有可复现用例名登记进能力字典的 `acceptance`，否则标"未验收"。
+
+---
+
+## 8. 不做 / 待定
+
+- **不做**：权限页、依赖页、分区页的内容接入（`CapSet` 里仍是 `false`，继续隐藏）；敏感列脱敏（用户已明确不做）。
+- **未接门控（已知）**：导航树的「触发器 / 序列」文件夹仍固定显示（2026-10-08 用户拍板），所以 `mysql_native` 的触发器文件夹、`sqlite` 的触发器文件夹、`duckdb` 的序列文件夹现在是"点开是空"——能力位已能判定，但空态文案尚未接（留给导航轮）。属性面板的列分区也不按 `meta_column_ordinal` / `meta_fk_target` 裁剪列（当前按族 caps 裁剪）。
+- **待定**：
+  - Q1 ~~三态用 A 还是 B~~ → **已定 A（改良版）**，见 §4.2；
+  - Q2 `meta_ddl_source` 是否要独立成键，还是复用一个 `meta_ddl` + `source_kind` 字段（现按独立键落了）；
+  - Q3 结果集面（`supportsResultSetLimit/Scroll/Ordering`）是否本批一起做，还是留给结果集网格批次。

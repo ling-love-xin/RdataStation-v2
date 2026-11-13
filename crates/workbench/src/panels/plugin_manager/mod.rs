@@ -33,6 +33,7 @@ mod render;
 #[cfg(test)]
 mod tests;
 mod widgets;
+mod audit;
 
 pub(crate) use widgets::plugin_disable_block_reason;
 
@@ -55,6 +56,12 @@ pub struct PluginManagerPanel {
     selected: Rc<RefCell<Option<String>>>,
     /// 是否展开「驱动登记总表」（默认收起，避免常驻占掉卡片区高度）。
     show_driver_registry: bool,
+    /// 操作记录栏（D8d）：最近 N 条 `driver_operations`，只读展示。
+    ops: Rc<RefCell<audit::OperationLog>>,
+    /// 是否展开「操作记录」栏（默认收起）。
+    show_operations: bool,
+    /// 操作记录的结果过滤档（内存过滤，不重新查库）。
+    ops_filter: Rc<Cell<widgets::OperationResultFilter>>,
     /// 观察左 Dock 插件面板：刷新 / 动作回执 / 事件刷新都会 notify 本页。
     _plugin_sub: Option<Subscription>,
 }
@@ -81,6 +88,9 @@ impl PluginManagerPanel {
             filter: Rc::new(Cell::new(PluginFilter::All)),
             selected: Rc::new(RefCell::new(None)),
             show_driver_registry: false,
+            ops: Rc::new(RefCell::new(audit::OperationLog::default())),
+            show_operations: false,
+            ops_filter: Rc::new(Cell::new(widgets::OperationResultFilter::All)),
             _plugin_sub: Some(_plugin_sub),
         }
     }

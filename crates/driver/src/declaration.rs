@@ -32,12 +32,13 @@
 //! 声明与表的漂移由三处测试盯住：本模块的 upsert 幂等/不越权测试、
 //! `capability::tests::declared_capabilities_and_runtime_bits_agree`（键 ↔ 运行时位）。
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
 use crate::DriverRegistry;
 use crate::registry::{DriverDescriptor, DriverFieldType};
 use rds_store::persistence::GlobalDatabaseManager;
+use rds_store::persistence::driver_operation_store::DriverOperation;
 use shared::error::{CoreError, StorageError};
 
 /// `drivers.version` 的声明值。
@@ -104,6 +105,8 @@ impl DriverDeclaration {
 pub struct DeclarationSync {
     /// 写入（插入或按声明列更新）的行数。
     pub written: usize,
+    /// 【D8】写了几行操作留痕（只在真变了 / 首次出现 / 能力位变化时才写）。
+    pub recorded: usize,
     /// 跳过的驱动：`(驱动 id, 原因)`。跳过必留痕——静默少写一行就是这次要消灭的毛病。
     pub skipped: Vec<(String, String)>,
 }
@@ -117,6 +120,8 @@ pub fn upsert_all(
     decls: &[DriverDeclaration],
 ) -> Result<DeclarationSync, CoreError> {
     let mut report = DeclarationSync::default();
+    // 先读旧值：留痕的 `before` 必须是真读到的（读完再 upsert，才有可比的两份）
+    let before_snapshots = snapshot_before(conn, decls)?;
     let mut stmt = conn
         .prepare(
             "INSERT INTO drivers
@@ -169,9 +174,200 @@ pub fn upsert_all(
         ])
         .map_err(|e| storage_err("upsert_driver_declaration", format!("{}: {}", d.id, e)))?;
         report.written += 1;
+
+        // 【D8】留痕：只在**真的变了**（或首次出现）时写一行 —— 幂等的每次启动写 4 行
+        // 会把操作历史冲成噪声，用户翻不到真正的变更。
+        if let Some(after) = DeclSnapshot::read(conn, &d.id)? {
+            let before = before_snapshots.get(d.id.as_str());
+            let changed: Vec<&'static str> = match before {
+                Some(before) => before.changed_columns(&after),
+                None => after.changed_columns(&DeclSnapshot::empty()),
+            };
+            if before.is_none() || !changed.is_empty() {
+                let before_json = before.map(|b| b.to_json(&[]));
+                let after_json = after.to_json(&changed);
+                let op = DriverOperation::ok("runtime", "declare_sync")
+                    .driver(d.id.clone())
+                    .after(after_json);
+                record_audit(conn, if let Some(b) = before_json { op.before(b) } else { op })?;
+                report.recorded += 1;
+            }
+            // 能力键单独再记一行：能力面变了是**用户可见**的（属性模块会跟着置灰/放开）。
+            // 首次出现不算「变化」——那条 declare_sync 已经把全部能力位写进 after 了。
+            if before.is_some() && changed.contains(&"capabilities") {
+                let mut op = DriverOperation::ok("runtime", "capability_change")
+                    .driver(d.id.clone())
+                    .after(after.capabilities_json());
+                if let Some(before) = before {
+                    op = op.before(before.capabilities_json());
+                }
+                record_audit(conn, op)?;
+                report.recorded += 1;
+            }
+        }
     }
 
     Ok(report)
+}
+
+/// 同步前把每行状态读一遍：留痕的 `before` 必须是**真读到的旧值**，不能编。
+fn snapshot_before(conn: &Connection, decls: &[DriverDeclaration]) -> Result<std::collections::HashMap<String, DeclSnapshot>, CoreError> {
+    let mut map = std::collections::HashMap::new();
+    for d in decls {
+        if let Some(snapshot) = DeclSnapshot::read(conn, &d.id)? {
+            map.insert(d.id.clone(), snapshot);
+        }
+    }
+    Ok(map)
+}
+
+/// 写一行操作留痕（表不存在时只告警一次，不影响声明同步本身）
+fn record_audit(conn: &Connection, op: DriverOperation) -> Result<(), CoreError> {
+    use rds_store::persistence::driver_operation_store::{record_operation, table_exists};
+    if !table_exists(conn)? {
+        tracing::warn!(
+            action = %op.action,
+            driver = ?op.driver_id,
+            "driver_operations 表不存在（迁移 030 未跑），本次留痕跳过"
+        );
+        return Ok(());
+    }
+    record_operation(conn, &op)?;
+    Ok(())
+}
+
+/// 一行驱动声明的状态快照（只含判定「变没变」需要的列 + 可读摘要）
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DeclSnapshot {
+    type_id: String,
+    name: String,
+    driver_kind: String,
+    is_file: bool,
+    default_port: Option<i64>,
+    url_template: Option<String>,
+    version: String,
+    config_schema: String,
+    supported_auth_types: Option<String>,
+    capabilities: String,
+    driver_properties: String,
+    enabled: bool,
+}
+
+impl DeclSnapshot {
+    fn empty() -> Self {
+        Self {
+            type_id: String::new(),
+            name: String::new(),
+            driver_kind: String::new(),
+            is_file: false,
+            default_port: None,
+            url_template: None,
+            version: String::new(),
+            config_schema: String::new(),
+            supported_auth_types: None,
+            capabilities: String::new(),
+            driver_properties: String::new(),
+            enabled: true,
+        }
+    }
+
+    fn read(conn: &Connection, id: &str) -> Result<Option<Self>, CoreError> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT type_id, name, driver_kind, is_file, default_port, url_template,
+                        version, config_schema, supported_auth_types, capabilities,
+                        driver_properties, enabled
+                   FROM drivers WHERE id = ?1",
+            )
+            .map_err(|e| storage_err("prepare_decl_snapshot", e.to_string()))?;
+        let row = stmt
+            .query_row(params![id], |row| {
+                Ok(Self {
+                    type_id: row.get(0)?,
+                    name: row.get(1)?,
+                    driver_kind: row.get(2)?,
+                    is_file: row.get(3)?,
+                    default_port: row.get(4)?,
+                    url_template: row.get(5)?,
+                    version: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                    config_schema: row.get(7)?,
+                    supported_auth_types: row.get(8)?,
+                    capabilities: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
+                    driver_properties: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
+                    enabled: row.get(11)?,
+                })
+            })
+            .optional()
+            .map_err(|e| storage_err("read_decl_snapshot", format!("{}: {}", id, e)))?;
+        Ok(row)
+    }
+
+    /// 哪些列变了（列名即 `drivers` 的列名，用户能对上）
+    fn changed_columns(&self, other: &Self) -> Vec<&'static str> {
+        let mut changed = Vec::new();
+        if self.type_id != other.type_id {
+            changed.push("type_id");
+        }
+        if self.name != other.name {
+            changed.push("name");
+        }
+        if self.driver_kind != other.driver_kind {
+            changed.push("driver_kind");
+        }
+        if self.is_file != other.is_file {
+            changed.push("is_file");
+        }
+        if self.default_port != other.default_port {
+            changed.push("default_port");
+        }
+        if self.url_template != other.url_template {
+            changed.push("url_template");
+        }
+        if self.version != other.version {
+            changed.push("version");
+        }
+        if self.config_schema != other.config_schema {
+            changed.push("config_schema");
+        }
+        if self.supported_auth_types != other.supported_auth_types {
+            changed.push("supported_auth_types");
+        }
+        if self.capabilities != other.capabilities {
+            changed.push("capabilities");
+        }
+        if self.driver_properties != other.driver_properties {
+            changed.push("driver_properties");
+        }
+        // `enabled` 归库 / 用户所有，声明同步永远不改它，因此不参与差异判定
+        changed
+    }
+
+    fn capabilities_json(&self) -> String {
+        format!("{{\"capabilities\": {}}}", json_or_string(&self.capabilities))
+    }
+
+    /// 差异摘要（只放可读字段：**不放 config_schema 全文**，那会把行撑成几 KB）
+    fn to_json(&self, changed: &[&str]) -> String {
+        let changed_json = serde_json::to_string(changed).unwrap_or_else(|_| "[]".to_string());
+        format!(
+            "{{\"version\": {}, \"driver_kind\": {}, \"enabled\": {}, \"capabilities\": {}, \"changed\": {}}}",
+            serde_json::to_string(&self.version).unwrap_or_else(|_| "\"\"".to_string()),
+            serde_json::to_string(&self.driver_kind).unwrap_or_else(|_| "\"\"".to_string()),
+            self.enabled,
+            json_or_string(&self.capabilities),
+            changed_json
+        )
+    }
+}
+
+/// 列存的是 JSON 文本时原样嵌入，不是合法 JSON 时按字符串包裹（不让留痕自己写坏）
+fn json_or_string(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
+        trimmed.to_string()
+    } else {
+        serde_json::to_string(trimmed).unwrap_or_else(|_| "\"\"".to_string())
+    }
 }
 
 /// 启动路径：把代码里的驱动声明写回全局库（幂等）。
@@ -197,7 +393,14 @@ pub async fn sync_driver_declarations(
     let conn = sqlite
         .inner()
         .map_err(|e| storage_err("global_sqlite_conn", e.to_string()))?;
-    upsert_all(conn, &decls)
+    let report = upsert_all(conn, &decls)?;
+    // 保留策略（方案 §3.5：1000 条 / 90 天取先到者）随启动清一次；清理失败不影响同步
+    match rds_store::persistence::driver_operation_store::prune_operations(conn, 1000, 90) {
+        Ok(0) => {}
+        Ok(removed) => tracing::info!(removed, "驱动操作留痕超出保留策略，已清理"),
+        Err(error) => tracing::warn!(error = %error, "驱动操作留痕清理失败（不影响声明同步）"),
+    }
+    Ok(report)
 }
 
 /// 一个数据库族（`data_source_types` 行）的代码声明。
@@ -472,8 +675,108 @@ mod tests {
         conn
     }
 
-    fn declarations() -> Vec<DriverDeclaration> {
-        crate::AutoDriverRegistrar::register_builtin_drivers();
+    /// 测试库 + `driver_operations`（留痕用例要真表；其余用例只有 `drivers` 表，
+    /// 顺带守着「留痕表不存在也不影响声明同步」这条）
+    fn test_db_with_audit() -> Connection {
+        let conn = test_db();
+        conn.execute_batch(include_str!(
+            "../../store/migrations/global/030_driver_operations.sql"
+        ))
+        .expect("create driver_operations");
+        conn
+    }
+
+    /// D8 / A-4：首次同步留一行，**幂等的第二次不再写**（否则每次启动灌 4 行噪声）。
+    #[test]
+    fn declare_sync_is_recorded_only_when_something_changed() {
+        use rds_store::persistence::driver_operation_store::{
+            DriverOperationFilter, list_operations,
+        };
+
+        let conn = test_db_with_audit();
+        let decls = declarations();
+
+        let first = upsert_all(&conn, &decls).expect("first upsert");
+        assert_eq!(first.written, decls.len());
+        assert_eq!(
+            first.recorded,
+            decls.len(),
+            "首次同步每个驱动都该留一行「新增」：{first:?}"
+        );
+
+        let second = upsert_all(&conn, &decls).expect("second upsert");
+        assert_eq!(second.written, decls.len(), "upsert 本身仍幂等写入");
+        assert_eq!(second.recorded, 0, "没变就不该再写留痕：{second:?}");
+
+        let rows = list_operations(
+            &conn,
+            &DriverOperationFilter {
+                action: Some("declare_sync".to_string()),
+                limit: Some(100),
+                ..Default::default()
+            },
+        )
+        .expect("list declare_sync");
+        assert_eq!(rows.len(), decls.len());
+        for row in &rows {
+            assert_eq!(row.operation.actor, "runtime");
+            assert_eq!(row.operation.result, "ok");
+            assert!(row.operation.driver_id.is_some());
+            // 首次出现的行没有 before（之前表里没有这条驱动）
+            assert!(row.operation.before_json.is_none());
+            assert!(row.operation.after_json.is_some());
+        }
+        assert!(
+            rows.iter().all(|r| r.operation.after_json.as_deref().unwrap_or("").contains("\"changed\"")),
+            "差异摘要要写清哪些列变了"
+        );
+    }
+
+    /// D8 / A-4：能力键变化额外留一行 `capability_change`（属性模块的置灰/放开跟着它）。
+    #[test]
+    fn capability_change_is_recorded_separately() {
+        use rds_store::persistence::driver_operation_store::{
+            DriverOperationFilter, list_operations,
+        };
+
+        let conn = test_db_with_audit();
+        let decls = declarations();
+        upsert_all(&conn, &decls).expect("seed");
+
+        // 改一个驱动声明的能力串（模拟代码里新增 / 去掉一个能力位）
+        let mut changed = decls
+            .iter()
+            .find(|d| d.id == "sqlite")
+            .cloned()
+            .expect("sqlite");
+        changed.capabilities = "[\"transactions\",\"meta_ddl_compose\"]".to_string();
+        let report = upsert_all(&conn, &[changed]).expect("capability upsert");
+        assert!(report.recorded >= 2, "declare_sync + capability_change 各一行：{report:?}");
+
+        let cap_rows = list_operations(
+            &conn,
+            &DriverOperationFilter {
+                action: Some("capability_change".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("list capability_change");
+        assert_eq!(cap_rows.len(), 1);
+        let row = &cap_rows[0];
+        assert_eq!(row.operation.driver_id.as_deref(), Some("sqlite"));
+        assert!(
+            row.operation.before_json.as_deref().unwrap_or("").contains("transactions"),
+            "要有改动前的能力位：{:?}",
+            row.operation.before_json
+        );
+        assert!(
+            row.operation.after_json.as_deref().unwrap_or("").contains("meta_ddl_compose"),
+            "要有改动后的能力位：{:?}",
+            row.operation.after_json
+        );
+    }
+
+    fn declarations() -> Vec<DriverDeclaration> {        crate::AutoDriverRegistrar::register_builtin_drivers();
         DriverDeclaration::all()
     }
 
@@ -483,12 +786,15 @@ mod tests {
     fn every_declaration_targets_a_seeded_family() {
         let conn = test_db();
         let decls = declarations();
-        assert!(decls.len() >= 6, "内置驱动声明应有 6 条：{decls:#?}");
+        assert!(
+            decls.len() >= 4,
+            "内置驱动声明应有 4 条（每族一条官方实现）：{decls:#?}"
+        );
 
+        // `mysql` / `postgres` 不在表内：这两个 id 由 sidecar 插件（`rds.driver.sqlx`）
+        // 贡献声明，内核声明器不再 upsert 它们（见 sqlx-driver-extraction-plan.md D3/D4）。
         let expected: HashMap<&str, &str> = [
-            ("mysql", "mysql"),
             ("mysql_native", "mysql"),
-            ("postgres", "postgresql"),
             ("postgres_native", "postgresql"),
             ("sqlite", "sqlite"),
             ("duckdb", "duckdb"),
@@ -532,7 +838,9 @@ mod tests {
         let rows_after_first = count("SELECT COUNT(*) FROM drivers");
 
         let second = upsert_all(&conn, &decls).expect("second upsert");
-        assert_eq!(second, first, "第二次结果应与第一次一致（幂等）");
+        // `recorded` 首跑与二跑**按设计不同**（留痕只记真变化），其余字段必须一致
+        assert_eq!(second.written, first.written, "第二次写入行数应与第一次一致（幂等）");
+        assert_eq!(second.skipped, first.skipped, "第二次跳过集合应与第一次一致");
         assert_eq!(
             count("SELECT COUNT(*) FROM drivers"),
             rows_after_first,
@@ -697,7 +1005,7 @@ mod tests {
     /// `key/label/type/required/placeholder`，`options[]` 目前无消费者）。
     #[test]
     fn config_schema_carries_what_the_view_reads() {
-        use crate::registry::{duckdb_driver, mysql_driver, sqlite_driver};
+        use crate::registry::{duckdb_driver, mysql_native_driver, sqlite_driver};
 
         let check = |d: &DriverDescriptor| {
             let json: Value =
@@ -725,15 +1033,17 @@ mod tests {
             assert!(json.get("options").and_then(|o| o.as_array()).is_some());
         };
 
-        check(&mysql_driver());
+        check(&mysql_native_driver());
         check(&sqlite_driver());
         check(&duckdb_driver());
 
-        // 有下拉选项的驱动：`options[].values` 要带上，否则选项就丢了
-        let json: Value = serde_json::from_str(&config_schema_json(&mysql_driver())).expect("json");
+        // 有下拉选项的驱动：`options[].values` 要带上，否则选项就丢了。
+        // （D3 之后带 Select 选项的内置驱动只剩 sqlite 的「打开模式」——mysql 的 ssl-mode
+        //  下拉随 sqlx 实现一起进了插件清单。）
+        let json: Value = serde_json::from_str(&config_schema_json(&sqlite_driver())).expect("json");
         let values = json["options"][0]["values"]
             .as_array()
             .expect("select 的 values");
-        assert!(values.iter().any(|v| v == "VERIFY_IDENTITY"), "{json}");
+        assert!(values.iter().any(|v| v == "rwc"), "{json}");
     }
 }

@@ -28,12 +28,14 @@ use serde::{Deserialize, Serialize};
 
 use shared::error::{CommonError, CoreError, PluginError};
 
+use super::checksums;
 use super::contributes::{ContributionCounts, ContributionRegistry};
 use super::manifest::{
     BackendKind, BackendRuntime, ManifestParser, PluginManifest, PluginPermissions,
 };
 use crate::sidecar::factory::register_sidecar_drivers;
 use crate::sidecar::supervisor::SidecarSupervisor;
+use engine::persistence::driver_operation_store::DriverOperation;
 #[cfg(feature = "wasm")]
 use crate::wasm::ExtismPluginManager;
 use crate::wasm::{PluginMetadata, PluginState, PluginType};
@@ -55,10 +57,22 @@ pub enum PluginKind {
 /// 热插拔扫描快照里的一项（`scan_and_diff_plugins` 的 diff 基准）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanEntry {
-    /// 清单版本（当前只用于占位，变化判定走 manifest_hash）
+    /// 清单版本（变化判定走 manifest_hash；这里留着供面板 / 排障对照）
     pub version: String,
     /// `plugin.toml` 内容 hash（换版本 / 改能力 / 改权限都会变）
     pub manifest_hash: u64,
+    /// 清单声明的外部载荷（`[backend] driver_jars` 的绝对路径，文件或目录）。
+    ///
+    /// 存进快照是为了**不必每个 tick 重新解析清单**：清单 hash 没变时这份列表必然
+    /// 没变，直接复用即可（解析 TOML + 全量校验比读一次文件贵得多，5 秒一轮不值得）。
+    pub driver_jars: Vec<String>,
+    /// 插件目录里**载荷文件**的指纹（长度 + 修改时间，见 `payload_fingerprint`）。
+    ///
+    /// 只看 `plugin.toml` 是不够的：重编 `agent.exe`、换 wasm、更新 py 脚本时清单一个
+    /// 字节都没变，旧快照会判「无变化」，运行中的 sidecar 就一直跑着旧镜像——实测
+    /// 2026-11-12 重编两个驱动后，已连接的 Oracle/MSSQL 会话仍走旧二进制，只能重连
+    /// 或重启宿主。有了这个指纹，扫描能发现「壳没变、载荷变了」。
+    pub payload_hash: u64,
 }
 
 /// 一次热插拔扫描的结果（供运行时循环打日志 / 后续插件面板提示）
@@ -70,6 +84,11 @@ pub struct PluginDiff {
     pub removed: Vec<String>,
     /// 清单变化、置 `needs_reload` 的插件（VS Code 口径：不热生效）
     pub changed: Vec<String>,
+    /// 只有载荷变了（清单没变）、已**自动重启**的插件。
+    ///
+    /// 与 `changed` 分开记：`changed` 是「要人点一下重载」，这个是「已经自己换好了」。
+    /// 重启失败时该 id 会退回 `changed`，仍然需要人工重载。
+    pub reloaded: Vec<String>,
 }
 
 /// 一个插件声明的驱动（管理页展示用，不参与运行时注册）。
@@ -287,6 +306,12 @@ pub struct PluginManager {
     scan_snapshot: RwLock<HashMap<String, ScanEntry>>,
     /// 清单已变化、等待重载的插件（VS Code 口径：更新不热生效，重启 / 手动重载后生效）
     needs_reload: RwLock<Vec<String>>,
+    /// 载荷已更新、但因**该插件上有活动会话**而暂缓自动重启的插件。
+    ///
+    /// 自动重启会真的停进程，那个插件上所有会话都会断开——用户可能正在跑一条长查询，
+    /// 静默断掉比晚几分钟换二进制糟得多。这类插件先记在这里，之后每轮扫描检查：
+    /// 会话一旦归零就自动补上重启，不需要用户手动点重载。
+    pending_payload_restart: RwLock<std::collections::HashSet<String>>,
     /// `drivers` 表里 sidecar 行的最近一次快照（id → enabled）。
     ///
     /// `None` = 还没成功读过全局库；`Some(空)` = 读过且确实没有插件驱动行。
@@ -311,6 +336,142 @@ fn lock_err(what: &str) -> CoreError {
     CoreError::common(CommonError::Internal(format!(
         "Failed to acquire lock on {what}"
     )))
+}
+
+/// `path` 是否在 `root` 目录下（Windows 盘符 / 大小写不敏感；其他平台按原样比较）。
+///
+/// 只用于「幽灵登记行」清理：`install_path` 是历史字符串，盘符大小写可能已变
+/// （旧行写的是 `D:\RdataStation\Rds\...`），不能用 `Path::starts_with` 直接判。
+fn path_is_under(path: &Path, root: &Path) -> bool {
+    let normalize = |p: &Path| {
+        let text = p.to_string_lossy().replace('\\', "/");
+        #[cfg(windows)]
+        {
+            text.to_lowercase()
+        }
+        #[cfg(not(windows))]
+        {
+            text.to_string()
+        }
+    };
+    let child = normalize(path);
+    let root = normalize(root);
+    let root = root.trim_end_matches('/');
+    child == root || child.starts_with(&format!("{root}/"))
+}
+
+/// 从清单文件取「版本 + 声明的外部 jar」。
+///
+/// 清单坏了解析不出来就给空——坏包会走自己的错误路径，扫描不该跟着炸。
+fn manifest_side(manifest_path: &Path) -> (String, Vec<String>) {
+    match crate::manifest::ManifestParser::parse(manifest_path) {
+        Ok(parsed) => (
+            parsed.plugin.version.clone(),
+            parsed.backend.map(|backend| backend.driver_jars).unwrap_or_default(),
+        ),
+        Err(_) => (String::new(), Vec::new()),
+    }
+}
+
+/// 扫描每个插件时决定「版本 + 外部 jar」从哪来：快照里清单 hash 相同就直接复用，
+/// 否则读文件解析。
+///
+/// 抽成自由函数是为了让这条捷径能被单测直接钉住（传一个不存在的清单路径 + 相同
+/// hash 的快照条目，若实现偷偷解析文件就会拿到空值）。
+fn resolve_manifest_side(
+    previous: Option<&ScanEntry>,
+    manifest_hash: u64,
+    manifest_path: &Path,
+) -> (String, Vec<String>) {
+    match previous {
+        Some(prev) if prev.manifest_hash == manifest_hash => {
+            (prev.version.clone(), prev.driver_jars.clone())
+        }
+        _ => manifest_side(manifest_path),
+    }
+}
+
+/// 插件**载荷**的指纹：插件目录内文件 + 清单声明的外部 jar，都按
+/// (标识, 长度, 纳秒修改时间) 汇总成 hash。
+///
+/// 为什么要带外部路径：清单的 `backend.driver_jars` 是**绝对路径**（用户自己下载的
+/// JDBC 包，不塞进插件目录），换 jar 时插件目录与 `plugin.toml` 都不动。只管目录的话
+/// 这种更新检测不到，运行中的 Java 壳会一直用已加载的旧 jar。
+///
+/// 为什么不用内容 hash：扫描是每 5 秒一轮的后台动作，3 MB 的 exe 每轮读一遍纯属浪费；
+/// (长度, 修改时间) 已经覆盖真实更新方式——重编覆盖、重装、换文件、删文件都会变，
+/// 且只做 stat、不读内容。
+///
+/// 边界（写在这里免得后人误以为它是全保真）：
+/// - 用保留时间戳的工具覆盖（`robocopy /COPY:T`、`git checkout` 保时间）指纹不变，
+///   那种情况仍要手动重载；
+/// - 目录整体被替换成另一份（长度与时间都恰好相同）属于低概率巧合，忽略；
+/// - 遍历失败的子目录直接跳过（正在写入的目录下一轮再算）。
+fn payload_fingerprint(dir: &Path, extra_paths: &[String]) -> u64 {
+    use std::hash::Hasher;
+
+    fn mtime_nanos(meta: &std::fs::Metadata) -> u128 {
+        // 纳秒粒度：同一秒内两次写入、且长度恰好相同的覆盖（比如只改一个字符）
+        // 也能被认出来；秒级粒度在这种场景下会漏判。
+        meta.modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    }
+
+    /// `prefix` 让外部路径的文件与目录内文件不会撞名（`ext:<路径>#`）
+    fn walk(dir: &Path, root: &Path, prefix: &str, out: &mut Vec<(String, u64, u128)>, depth: usize) {
+        // 深度兜底：插件包约定是浅目录，异常深的树（被人塞了 node_modules 之类）
+        // 不必每 5 秒全部 stat 一遍
+        if depth > 6 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                walk(&path, root, prefix, out, depth + 1);
+                continue;
+            }
+            let rel = path
+                .strip_prefix(root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| path.to_string_lossy().to_string());
+            out.push((format!("{prefix}{rel}"), meta.len(), mtime_nanos(&meta)));
+        }
+    }
+
+    let mut files = Vec::new();
+    walk(dir, dir, "", &mut files, 0);
+    for raw in extra_paths {
+        let path = Path::new(raw);
+        match std::fs::metadata(path) {
+            // 目录（清单允许写 `/drivers/mysql` 这种目录）→ 递归计入其中每个文件，
+            // 否则「往目录里加/换一个 jar」也检测不到
+            Ok(meta) if meta.is_dir() => {
+                walk(path, path, &format!("ext:{raw}#"), &mut files, 0)
+            }
+            Ok(meta) => files.push((format!("ext:{raw}"), meta.len(), mtime_nanos(&meta))),
+            // 不存在的也记一条：这样「后来才放进去」的 jar 也能被认出来。
+            // 注意部署期本就要求路径存在（不存在报可读错误），这里只是兜底。
+            Err(_) => files.push((format!("ext-missing:{raw}"), 0, 0)),
+        }
+    }
+    // 路径排序：`read_dir` 顺序不保证稳定，不排序会让同一份目录算出不同指纹
+    files.sort();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for (rel, len, mtime) in &files {
+        hasher.write(rel.as_bytes());
+        hasher.write_u64(*len);
+        hasher.write_u128(*mtime);
+    }
+    hasher.finish()
 }
 
 /// 插件不存在的统一错误
@@ -341,6 +502,7 @@ impl PluginManager {
             plugin_index: Arc::new(RwLock::new(HashMap::new())),
             scan_snapshot: RwLock::new(HashMap::new()),
             needs_reload: RwLock::new(Vec::new()),
+            pending_payload_restart: RwLock::new(std::collections::HashSet::new()),
             registered_drivers: RwLock::new(None),
             dependents: RwLock::new(None),
         }
@@ -1135,6 +1297,13 @@ impl PluginManager {
     ///
     /// **保留 `plugin-data/<id>/`**：插件数据可能含连接 / 凭据，卸载不删用户数据。
     pub async fn uninstall_plugin(&self, id: &str) -> Result<(), CoreError> {
+        let result = self.uninstall_plugin_inner(id).await;
+        // 【D8b】卸载（含「被依赖拒绝」「目录删不掉」）都留痕
+        crate::operation_audit::record_result("ui", "uninstall", id, &result, None).await;
+        result
+    }
+
+    async fn uninstall_plugin_inner(&self, id: &str) -> Result<(), CoreError> {
         validate_plugin_id(id).map_err(|e| {
             CoreError::common(CommonError::General(format!(
                 "插件 id 不合法（拼路径前必须校验）: {e}"
@@ -1209,6 +1378,13 @@ impl PluginManager {
     /// 权威状态 = global.db `plugin_store.is_enabled`（启动扫描 / 未来插件面板按它决定
     /// 要不要激活）。**运行中禁用 = 立刻停用**（sidecar 分支会停进程），不是等下次启动。
     pub async fn disable_plugin(&self, id: &str) -> Result<(), CoreError> {
+        let result = self.disable_plugin_inner(id).await;
+        // 【D8b】停用（含「被依赖拒绝」）留痕
+        crate::operation_audit::record_result("ui", "disable", id, &result, None).await;
+        result
+    }
+
+    async fn disable_plugin_inner(&self, id: &str) -> Result<(), CoreError> {
         // 停用被依赖的插件会让依赖方立即失去驱动；面板侧已做前置拦截，但这里
         // 是权威入口（自动停用 / 其它调用方），必须自己查一遍，不能只靠 UI。
         if let Some(db) = engine::migration::get_global_db_manager() {
@@ -1308,6 +1484,13 @@ impl PluginManager {
 
     /// 启用插件（与 [`Self::disable_plugin`] 对称）：持久标记 + 若已加载则重新激活。
     pub async fn enable_plugin(&self, id: &str) -> Result<(), CoreError> {
+        let result = self.enable_plugin_inner(id).await;
+        // 【D8b】启用（含「坏包」「依赖没就绪」）留痕
+        crate::operation_audit::record_result("ui", "enable", id, &result, None).await;
+        result
+    }
+
+    async fn enable_plugin_inner(&self, id: &str) -> Result<(), CoreError> {
         // 坏包只以错误行留在列表里，没有可激活的运行时；先拒绝并说清原因，
         // 不要把 DB 标记翻成启用却什么都没发生（面板上也别给「启用」）。
         if self
@@ -1352,6 +1535,15 @@ impl PluginManager {
     /// - 目录消失 → 停用（含停 sidecar 进程）+ 移出运行时索引
     /// - 清单内容变化 → 置 `needs_reload`，**不热生效**（VS Code 口径：更新要重载）
     pub async fn scan_and_diff_plugins(&self) -> Result<PluginDiff, CoreError> {
+        // 读快照算 diff（快照只读、不跨 await 持锁：std RwLockGuard 非 Send，
+        // 跨 await 会让 tokio::spawn 的循环 future 不 Send）。
+        // 提前到扫描之前读：扫描时要靠它判断「清单没变，可以复用上次解析结果」。
+        let snapshot = self
+            .scan_snapshot
+            .read()
+            .map_err(|_| lock_err("scan_snapshot"))?
+            .clone();
+
         let mut disk: HashMap<String, ScanEntry> = HashMap::new();
         if !self.install_dir.as_os_str().is_empty() && self.install_dir.exists() {
             let entries = std::fs::read_dir(&self.install_dir).map_err(|e| {
@@ -1378,30 +1570,37 @@ impl PluginManager {
                 // 变化判定用内容 hash：换版本 / 改能力 / 改权限都会触发
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 std::hash::Hasher::write(&mut hasher, &bytes);
+                let manifest_hash = hasher.finish();
+                // 清单 hash 没变就复用上次解析出来的版本与外部 jar：内容相同 ⇒
+                // `driver_jars` 必然相同，没必要每个 tick 重新解析 TOML 再全量校验
+                // （5 秒一轮 × 每个插件，纯浪费）。清单变了才真读一遍。
+                let (version, driver_jars) =
+                    resolve_manifest_side(snapshot.get(&id), manifest_hash, &manifest_path);
                 disk.insert(
                     id,
                     ScanEntry {
-                        version: String::new(),
-                        manifest_hash: hasher.finish(),
+                        version,
+                        manifest_hash,
+                        payload_hash: payload_fingerprint(&entry.path(), &driver_jars),
+                        driver_jars,
                     },
                 );
             }
         }
 
-        // 读快照算 diff（快照只读、不跨 await 持锁：std RwLockGuard 非 Send，
-        // 跨 await 会让 tokio::spawn 的循环 future 不 Send）
-        let snapshot = self
-            .scan_snapshot
-            .read()
-            .map_err(|_| lock_err("scan_snapshot"))?
-            .clone();
-
         let mut diff = PluginDiff::default();
+        let mut payload_changed: Vec<String> = Vec::new();
         for (id, entry) in &disk {
             match snapshot.get(id) {
                 None => diff.added.push(id.clone()),
+                // 清单变了优先（可能同时改了能力 / 权限 / 载荷）：清单变化要人工重载确认
                 Some(prev) if prev.manifest_hash != entry.manifest_hash => {
                     diff.changed.push(id.clone())
+                }
+                // 壳没变、载荷变了：重编 exe / 换 wasm / 改 py 脚本就是这一种，
+                // 先记下来，等本轮 diff 收尾时自动重启（只有它不需要人工介入）。
+                Some(prev) if prev.payload_hash != entry.payload_hash => {
+                    payload_changed.push(id.clone())
                 }
                 Some(_) => {}
             }
@@ -1517,6 +1716,79 @@ impl PluginManager {
                 .map_err(|_| lock_err("needs_reload"))?
                 .retain(|p| p != id);
         }
+        // 兜底：目录在管理器启动前就被删掉的行从没进过快照，`diff.removed` 覆盖不到。
+        self.prune_missing_registrations().await;
+
+        // 载荷变化（清单没变）：自动重启这一个插件，让它换上新二进制 / wasm / 脚本。
+        // 这是「重编驱动后运行中的 sidecar 还在跑旧镜像」的正解：不重启宿主、不断别的插件。
+        // 没在跑的插件不用动——本轮快照会更新成新指纹，下次启用时加载的就是新载荷。
+        // 上一轮因为「有活动会话」暂缓的载荷更新：会话一归零就补上，不用用户手动点重载。
+        // 先补历史、再处理本轮新发现的：补完的重启会记进 `diff.reloaded`，下面跳过它，
+        // 避免同一插件在一轮里被重启两次。
+        let queued: Vec<String> = match self.pending_payload_restart.read() {
+            Ok(pending) => pending.iter().cloned().collect(),
+            Err(_) => Vec::new(),
+        };
+        for id in queued {
+            if !self.is_loaded(&id) {
+                // 已停用 / 已卸载：待办作废
+                self.forget_pending_restart(&id);
+                continue;
+            }
+            if self.sidecar.lock().await.session_count_of(&id) > 0 {
+                continue;
+            }
+            match self.restart_after_payload_verify(&id).await {
+                Ok(()) => {
+                    tracing::info!(plugin_id = %id, "会话已结束，插件载荷更新补上自动重启");
+                    self.forget_pending_restart(&id);
+                    diff.reloaded.push(id);
+                }
+                Err(reason) => {
+                    tracing::warn!(plugin_id = %id, error = %reason, "补做重启失败，转为待重载");
+                    self.forget_pending_restart(&id);
+                    diff.changed.push(id);
+                }
+            }
+        }
+
+        for id in payload_changed {
+            // 上面补做时已经重启过的，不再重复
+            if diff.reloaded.contains(&id) {
+                continue;
+            }
+            if !self.is_loaded(&id) {
+                tracing::debug!(plugin_id = %id, "插件未加载，载荷变化只更新指纹");
+                continue;
+            }
+            // 该插件上还有活动会话就不擅自重启：重启会真的停进程，那些会话全部作废。
+            // 用户可能正在跑一条长查询，静默断掉比晚几分钟换二进制糟得多——记进待办，
+            // 会话归零后由下一轮扫描自动补上（面板同时给出「有变更」提示做兜底）。
+            let busy_sessions = self.sidecar.lock().await.session_count_of(&id);
+            if busy_sessions > 0 {
+                tracing::info!(
+                    plugin_id = %id,
+                    sessions = busy_sessions,
+                    "插件有新载荷但还有活动会话，暂缓自动重启"
+                );
+                if let Ok(mut pending) = self.pending_payload_restart.write() {
+                    pending.insert(id.clone());
+                }
+                diff.changed.push(id);
+                continue;
+            }
+            match self.restart_after_payload_verify(&id).await {
+                Ok(()) => {
+                    tracing::info!(plugin_id = %id, "插件载荷已更新，已自动重启该插件");
+                    diff.reloaded.push(id);
+                }
+                // 校验不过 / 重启失败都不能悄悄留在旧镜像上：退回 needs_reload，面板至少能提示
+                Err(reason) => {
+                    tracing::warn!(plugin_id = %id, error = %reason, "载荷更新未能自动生效，转为待重载");
+                    diff.changed.push(id);
+                }
+            }
+        }
 
         // 变化：置 needs_reload（更新不热生效，VS Code 口径），UI 层读它提示重载。
         // 每次**新进入**待重载集合时发一条事件：面板订阅后能立刻看到「重载 N」，
@@ -1546,6 +1818,53 @@ impl PluginManager {
         Ok(diff)
     }
 
+    /// 清理「目录已不存在」的插件登记行（`plugins` 表）。
+    ///
+    /// `diff.removed` 只覆盖「上一轮快照里出现过、这一轮消失」的目录；如果目录在管理器
+    /// 启动前就被删掉，它从没进过快照，登记行会永久留在 `plugins` 表——旧
+    /// `rds.driver.oracle` 就是这种：目录不存在、`is_enabled` 仍为 1，面板还会把它当成
+    /// 一个可启用插件。这里按 `install_path` 兜底，只处理安装根目录下、磁盘确实不存在、
+    /// 且当前未加载的非内置行；目录存在但清单坏掉的行不碰（那是「可修复」而不是「已消失」）。
+    async fn prune_missing_registrations(&self) {
+        let Some(db) = engine::migration::get_global_db_manager() else {
+            return;
+        };
+        let plugins = match db.get_all_plugins().await {
+            Ok(plugins) => plugins,
+            Err(e) => {
+                tracing::warn!(error = %e, "读取插件登记失败，跳过幽灵行清理");
+                return;
+            }
+        };
+        for plugin in plugins {
+            if plugin.is_builtin || plugin.install_path.trim().is_empty() {
+                continue;
+            }
+            let path = PathBuf::from(&plugin.install_path);
+            if !path_is_under(&path, &self.install_dir) || path.exists() {
+                continue;
+            }
+            // 仍在运行时缓存里的先交给 `diff.removed` 的 unload 分支，下一轮再清登记。
+            if self
+                .loaded_plugins
+                .read()
+                .map(|map| map.contains_key(&plugin.code))
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            if let Err(e) = db.delete_plugin_by_code(&plugin.code).await {
+                tracing::warn!(plugin_id = %plugin.code, error = %e, "清理幽灵插件登记失败");
+            } else {
+                tracing::info!(
+                    plugin_id = %plugin.code,
+                    install_path = %plugin.install_path,
+                    "清理目录已缺失的插件登记"
+                );
+            }
+        }
+    }
+
     /// 待重载插件列表（P4 插件面板 / 状态栏据此提示「重启生效」）
     pub fn pending_reloads(&self) -> Vec<String> {
         self.needs_reload
@@ -1559,6 +1878,30 @@ impl PluginManager {
     ///
     /// 调用的前提是用户明确触发了重载命令；插件内部更新不自动走到这里。
     pub async fn reload_plugins(&self) -> Result<PluginDiff, CoreError> {
+        let result = self.reload_plugins_inner().await;
+        // 【D8b】全量重载是用户显式动作：记一行，`reason` 写清这次动了什么
+        let reason = match &result {
+            Ok(diff) => Some(format!(
+                "重载完成：新增 {} / 消失 {} / 清单变化 {} / 自动重启 {}",
+                diff.added.len(),
+                diff.removed.len(),
+                diff.changed.len(),
+                diff.reloaded.len()
+            )),
+            Err(error) => Some(error.to_string()),
+        };
+        let mut op = match &result {
+            Ok(_) => DriverOperation::ok("ui", "reload"),
+            Err(error) => DriverOperation::fail("ui", "reload", error.to_string()),
+        };
+        if let Some(reason) = reason {
+            op = op.reason(reason);
+        }
+        crate::operation_audit::record(op).await;
+        result
+    }
+
+    async fn reload_plugins_inner(&self) -> Result<PluginDiff, CoreError> {
         let ids: Vec<String> = self
             .plugin_index
             .read()
@@ -1585,6 +1928,73 @@ impl PluginManager {
 
         // 重新扫描整个安装目录并加载 + 激活
         self.scan_and_diff_plugins().await
+    }
+
+    /// 重启单个插件：停用（含停该插件全部 sidecar 进程）→ 重新激活。
+    ///
+    /// 触发场景是「清单没变、载荷变了」：重编 `agent.exe`、换 wasm、改 py 脚本。
+    /// 旧行为下运行中的 sidecar 会一直用旧内存镜像，只有重连或重启宿主才换新；
+    /// 现在由 [`Self::scan_and_diff_plugins`] 检测到后调这里。
+    ///
+    /// 与 [`Self::reload_plugins`] 的区别是**只碰这一个插件**：别的插件进程、别的
+    /// 连接会话完全不受影响。代价是该插件上已打开的会话会断（进程真的停了），
+    /// 这正是「换成新二进制」应有的代价，不额外弹提示。
+    pub async fn restart_plugin(&self, id: &str) -> Result<(), CoreError> {
+        if !self.is_loaded(id) {
+            return Err(not_found(id));
+        }
+        self.deactivate_plugin(id).await?;
+        self.activate_plugin(id).await?;
+        // 已经吃到新版本，之前挂着的重载提示可以撤掉
+        self.needs_reload
+            .write()
+            .map_err(|_| lock_err("needs_reload"))?
+            .retain(|p| p != id);
+        Ok(())
+    }
+
+    /// 把某个插件从「待补做自动重启」里摘掉（重启成功 / 失败 / 插件已卸载都走这里）。
+    fn forget_pending_restart(&self, id: &str) {
+        if let Ok(mut pending) = self.pending_payload_restart.write() {
+            pending.remove(id);
+        }
+    }
+
+    /// 载荷变化后、重启之前，先按随包 `checksums.json` 核一遍哈希。
+    ///
+    /// 载荷指纹只 stat（相对路径 + 长度 + 修改时间），不读内容——拷了半截、被别的
+    /// 进程写坏的文件同样会「看起来变了」。直接重启等于把那些字节当新版本拉起来，
+    /// 只能等加载时才失败，而失败原因（哈希不对）在这一步就能说清楚。
+    ///
+    /// 没有 `checksums.json` 的目录（开发目录、老包）直接放行：这是安装期就定下的兼容口径
+    /// （`checksums::verify_package` 见文件不存在即 `Ok`）。哈希要读全文件，放阻塞线程跑。
+    async fn verify_payload_checksums(&self, id: &str) -> Result<(), String> {
+        let manifest = self
+            .loaded_plugins
+            .read()
+            .map_err(|_| "loaded_plugins".to_string())?
+            .get(id)
+            .map(|plugin| plugin.manifest.clone());
+        // 没加载过就没什么可重启的，交给调用方的 is_loaded 判断
+        let Some(manifest) = manifest else {
+            return Ok(());
+        };
+        let dir = self.install_dir.join(id);
+        match tokio::task::spawn_blocking(move || checksums::verify_package(&manifest, &dir)).await
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(format!("随包完整性校验未通过：{e}")),
+            // 任务被取消 / 线程 panic：不当作校验通过
+            Err(e) => Err(format!("随包完整性校验没能跑完：{e}")),
+        }
+    }
+
+    /// 载荷变化的统一入口：先校验随包哈希，再重启。
+    ///
+    /// 校验不过就不重启（返回原因），由调用方退回待重载——不让坏字节上线。
+    async fn restart_after_payload_verify(&self, id: &str) -> Result<(), String> {
+        self.verify_payload_checksums(id).await?;
+        self.restart_plugin(id).await.map_err(|e| format!("{e}"))
     }
 
     /// 列出所有已加载插件（wasm 从运行时取，sidecar / frontend 从安装态缓存 + 形态索引组装）
@@ -1879,4 +2289,206 @@ pub async fn init_plugin_manager(install_dir: PathBuf) -> Result<(), CoreError> 
         .spawn(); // 句柄 drop 即 detach（任务生命周期随 tokio runtime，宿主退出即停）
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 一次性临时目录（Drop 清掉，不留过程产物）
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("rds-payload-fp-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// 写文件并保证「长度不同」：纳秒 mtime 已经能区分同长度覆盖，
+    /// 但测试里用不同长度可以让断言不依赖文件系统的时间戳精度。
+    fn write(path: &Path, content: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, content).unwrap();
+    }
+
+    /// Java 运行时 + 声明两个外部 jar 的最小合法清单
+    const MANIFEST_WITH_JARS: &str = r#"
+[plugin]
+id = "ext.demo"
+name = "Demo"
+version = "1.2.3"
+publisher = "me"
+description = "demo"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "script"
+runtime = "java"
+executable = "lib/shell.jar"
+interpreter_args = ["-jar"]
+driver_jars = ["D:/drivers/a.jar", "C:\\extra\\mysql"]
+
+[permissions]
+sidecar = ["spawn.child_process", "net.connect"]
+
+[capabilities.driver]
+concurrency = "serial"
+
+[[contributes.drivers]]
+id = "demo"
+display_name = "Demo Database"
+default_port = 1521
+url_template = "jdbc:demo://{host}:{port}"
+"#;
+
+    /// 清单能解析出「版本 + 外部 jar」；不存在 / 坏清单给空，不 panic。
+    #[test]
+    fn manifest_side_reads_version_and_external_jars() {
+        let dir = TempDir::new("manifest-side");
+        let manifest = dir.0.join("plugin.toml");
+        write(&manifest, MANIFEST_WITH_JARS);
+
+        let (version, jars) = manifest_side(&manifest);
+        if version.is_empty() {
+            // 夹具清单必须真的能过 validate，否则整条测试变成「空对空」
+            let err = crate::manifest::ManifestParser::parse(&manifest).unwrap_err();
+            panic!("夹具清单没通过校验：{err}");
+        }
+        assert_eq!(version, "1.2.3", "版本要来自清单，不是空串");
+        assert_eq!(jars.len(), 2, "外部 jar 要按清单原样取出");
+
+        assert_eq!(
+            manifest_side(&dir.0.join("missing.toml")),
+            (String::new(), Vec::new()),
+            "清单不存在时给空"
+        );
+        let broken = dir.0.join("broken.toml");
+        write(&broken, "[this is not toml");
+        assert_eq!(
+            manifest_side(&broken),
+            (String::new(), Vec::new()),
+            "坏清单给空（坏包走自己的错误路径）"
+        );
+    }
+
+    /// 快照里清单 hash 相同 → 直接复用，**不碰文件**。
+    ///
+    /// 证明方式：清单路径指向不存在的文件——若实现偷偷去解析，拿到的就是空值。
+    #[test]
+    fn same_manifest_hash_reuses_the_snapshot_without_parsing() {
+        let prev = ScanEntry {
+            version: "9.9.9".to_string(),
+            manifest_hash: 42,
+            driver_jars: vec!["D:/drivers/prev.jar".to_string()],
+            payload_hash: 7,
+        };
+        let missing = Path::new("D:/rds-no-such-dir/plugin.toml");
+
+        let (version, jars) = resolve_manifest_side(Some(&prev), 42, missing);
+        assert_eq!(version, "9.9.9", "清单没变就该复用快照里的版本");
+        assert_eq!(jars, vec!["D:/drivers/prev.jar".to_string()]);
+
+        // hash 不同 → 必须真解析（路径不存在，所以拿到空值）
+        let (version, jars) = resolve_manifest_side(Some(&prev), 43, missing);
+        assert!(version.is_empty() && jars.is_empty(), "清单变了要重新解析");
+    }
+
+    /// 目录内文件换了 → 指纹变；同样的目录再算一次 → 指纹稳定（排序生效）。
+    #[test]
+    fn directory_payload_change_moves_the_fingerprint() {
+        let dir = TempDir::new("dir");
+        write(&dir.0.join("agent.exe"), "v1");
+        let before = payload_fingerprint(&dir.0, &[]);
+        assert_eq!(
+            before,
+            payload_fingerprint(&dir.0, &[]),
+            "同一份目录两次结果必须一致（read_dir 顺序不稳定，靠排序收敛）"
+        );
+
+        write(&dir.0.join("agent.exe"), "v2-longer");
+        assert_ne!(
+            before,
+            payload_fingerprint(&dir.0, &[]),
+            "目录内载荷变了必须反映到指纹上"
+        );
+    }
+
+    /// 清单声明的外部 jar 换了 → 指纹变（这是 `driver_jars` 的场景：
+    /// jar 在插件目录外，换它时目录与清单都不动）。
+    #[test]
+    fn external_jar_is_part_of_the_payload() {
+        let dir = TempDir::new("ext-file");
+        write(&dir.0.join("plugin.toml"), "[plugin]");
+        let jar = dir.0.join("drivers").join("ojdbc11.jar");
+        write(&jar, "jar-v1");
+        let jars = vec![jar.to_string_lossy().to_string()];
+
+        let before = payload_fingerprint(&dir.0, &jars);
+        assert_eq!(before, payload_fingerprint(&dir.0, &jars));
+
+        write(&jar, "jar-v2-longer");
+        assert_ne!(
+            before,
+            payload_fingerprint(&dir.0, &jars),
+            "外部 jar 更新后指纹必须变（否则 Java 壳一直用旧 jar）"
+        );
+
+        // 不声明 jar 时，同样的目录算出来是另一个值（外部内容不参与）
+        assert_ne!(before, payload_fingerprint(&dir.0, &[]));
+    }
+
+    /// 外部路径「先不存在、后放进去」也要能被认出来（部署期会校验存在，
+    /// 但用户手动补 jar 是真实场景）。
+    #[test]
+    fn external_jar_appearing_later_changes_the_fingerprint() {
+        let dir = TempDir::new("ext-appear");
+        write(&dir.0.join("plugin.toml"), "[plugin]");
+        let jar = dir.0.join("drivers").join("late.jar");
+        let jars = vec![jar.to_string_lossy().to_string()];
+
+        let missing = payload_fingerprint(&dir.0, &jars);
+        write(&jar, "now-here");
+        assert_ne!(missing, payload_fingerprint(&dir.0, &jars));
+    }
+
+    /// 清单允许把外部路径写成**目录**（`driver_jars = ["D:/drivers/mysql"]`），
+    /// 目录里加 / 换 jar 同样要反映到指纹上。
+    #[test]
+    fn external_directory_contents_are_walked() {
+        let dir = TempDir::new("ext-dir");
+        write(&dir.0.join("plugin.toml"), "[plugin]");
+        let ext = dir.0.join("drivers");
+        let jars = vec![ext.to_string_lossy().to_string()];
+
+        // 目录还没建：记 missing
+        let empty = payload_fingerprint(&dir.0, &jars);
+
+        write(&ext.join("mysql-connector.jar"), "a");
+        let one = payload_fingerprint(&dir.0, &jars);
+        assert_ne!(empty, one, "外部目录出现后指纹要变");
+
+        write(&ext.join("mysql-connector.jar"), "a-longer");
+        assert_ne!(one, payload_fingerprint(&dir.0, &jars), "目录内文件换掉要变");
+
+        write(&ext.join("extra.jar"), "b");
+        assert_ne!(
+            one,
+            payload_fingerprint(&dir.0, &jars),
+            "目录里新增一个 jar 也要变"
+        );
+    }
 }

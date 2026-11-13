@@ -11,6 +11,7 @@
 //! 布局：`docs/architecture/property/property-module-spec.md` §16（本目录为 §16.2）。
 
 pub mod duckdb;
+pub mod gates;
 pub mod mysql;
 pub mod pg;
 pub mod sqlite;
@@ -39,6 +40,23 @@ pub fn global_registry() -> &'static ProviderRegistry {
 /// 只读文本行（provider 属性行辅助）。
 pub(crate) fn row(label: &str, value: impl Into<String>) -> PropertyRow {
     PropertyRow::read_only(label, value)
+}
+
+/// 可用分区骨架（空表；内容由 `property_panel::sections_of` 按类别 id 回填）。
+pub(crate) fn core_section(id: PageId, label: &str) -> PropertySection {
+    PropertySection::available(id, label, empty_table())
+}
+
+/// 可用分区（「项 / 值」两列表格，连接级认证 / 网络 / 环境分节用）。
+pub(crate) fn kv_section(id: PageId, label: &str, rows: Vec<Vec<String>>) -> PropertySection {
+    PropertySection::available(
+        id,
+        label,
+        PropertyTable {
+            headers: vec!["项".into(), "值".into()],
+            rows,
+        },
+    )
 }
 
 /// 可编辑属性行（id = 提交映射 SQL 的键）。
@@ -186,14 +204,7 @@ pub(crate) fn connection_meta_sections(input: &ProviderInput) -> Vec<PropertySec
                 ]);
             }
         }
-        v.push(PropertySection {
-            id: PageId::Auth,
-            label: "认证".into(),
-            table: PropertyTable {
-                headers: vec!["项".into(), "值".into()],
-                rows,
-            },
-        });
+        v.push(kv_section(PageId::Auth, "认证", rows));
     }
     // 网络：档案名 + 类型。
     if let Some(r) = input.count("network_ref") {
@@ -208,14 +219,7 @@ pub(crate) fn connection_meta_sections(input: &ProviderInput) -> Vec<PropertySec
                     rows.push(vec!["网络类型".into(), t.to_string()]);
                 }
             }
-            v.push(PropertySection {
-                id: PageId::Network,
-                label: "网络".into(),
-                table: PropertyTable {
-                    headers: vec!["项".into(), "值".into()],
-                    rows,
-                },
-            });
+            v.push(kv_section(PageId::Network, "网络", rows));
         }
     }
     // 环境：名称 + 标识色 + 策略覆盖标记。
@@ -236,14 +240,7 @@ pub(crate) fn connection_meta_sections(input: &ProviderInput) -> Vec<PropertySec
                     rows.push(vec!["策略覆盖".into(), p.to_string()]);
                 }
             }
-            v.push(PropertySection {
-                id: PageId::Environment,
-                label: "环境".into(),
-                table: PropertyTable {
-                    headers: vec!["项".into(), "值".into()],
-                    rows,
-                },
-            });
+            v.push(kv_section(PageId::Environment, "环境", rows));
         }
     }
     v
@@ -260,31 +257,11 @@ pub(crate) fn connection_meta_sections(input: &ProviderInput) -> Vec<PropertySec
 /// （caps 注释说明未来接入点），不进 `sections`；渲染层不再有灰置分支。
 pub(crate) fn table_categories(caps: &DriverCapabilities) -> Vec<PropertySection> {
     let mut v = vec![
-        PropertySection {
-            id: PageId::Columns,
-            label: "列".into(),
-            table: empty_table(),
-        },
-        PropertySection {
-            id: PageId::Indexes,
-            label: "索引".into(),
-            table: empty_table(),
-        },
-        PropertySection {
-            id: PageId::Constraints,
-            label: "约束".into(),
-            table: empty_table(),
-        },
-        PropertySection {
-            id: PageId::Ddl,
-            label: "DDL".into(),
-            table: empty_table(),
-        },
-        PropertySection {
-            id: PageId::Data,
-            label: "数据".into(),
-            table: empty_table(),
-        },
+        core_section(PageId::Columns, "列"),
+        core_section(PageId::Indexes, "索引"),
+        core_section(PageId::Constraints, "约束"),
+        core_section(PageId::Ddl, "DDL"),
+        core_section(PageId::Data, "数据"),
     ];
     v.extend(section_list(
         &caps.table,
@@ -302,21 +279,9 @@ pub(crate) fn table_categories(caps: &DriverCapabilities) -> Vec<PropertySection
 /// 视图级类别：可用核心（列 / DDL / 数据）+ 按能力位声明的已实现类别。
 pub(crate) fn view_categories(caps: &DriverCapabilities) -> Vec<PropertySection> {
     let mut v = vec![
-        PropertySection {
-            id: PageId::Columns,
-            label: "列".into(),
-            table: empty_table(),
-        },
-        PropertySection {
-            id: PageId::Ddl,
-            label: "DDL".into(),
-            table: empty_table(),
-        },
-        PropertySection {
-            id: PageId::Data,
-            label: "数据".into(),
-            table: empty_table(),
-        },
+        core_section(PageId::Columns, "列"),
+        core_section(PageId::Ddl, "DDL"),
+        core_section(PageId::Data, "数据"),
     ];
     v.extend(section_list(&caps.view, &[("权限", PageId::Privileges)]));
     v
@@ -337,11 +302,7 @@ fn section_list(caps: &CapSet, decls: &[(&'static str, PageId)]) -> Vec<Property
     let mut v = Vec::new();
     for (label, id) in decls {
         if caps.get(*id) == Some(true) {
-            v.push(PropertySection {
-                id: *id,
-                label: (*label).to_string(),
-                table: empty_table(),
-            });
+            v.push(core_section(*id, label));
         }
     }
     v
@@ -354,9 +315,7 @@ fn section_list(caps: &CapSet, decls: &[(&'static str, PageId)]) -> Vec<Property
 #[derive(Debug, Clone, Default)]
 pub struct CapSet {
     map: std::collections::HashMap<PageId, bool>,
-}
-
-impl CapSet {
+}impl CapSet {
     fn set(mut self, id: PageId, enabled: bool) -> Self {
         self.map.insert(id, enabled);
         self

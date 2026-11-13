@@ -76,19 +76,20 @@ mod tests {
 
         let drivers = DriverRegistry::all_driver_ids();
         assert!(!drivers.is_empty());
-        // 必须覆盖种子 `drivers.id`（global/008 + 013）：驱动目录里的 id 要能在注册表解析，
-        // 否则测试连接 / 连接路由报 `CONN_DRIVER_NOT_FOUND`（真机踩过：启动漏调注册）。
-        for id in [
-            "mysql",
-            "mysql_native",
-            "postgres",
-            "postgres_native",
-            "sqlite",
-            "duckdb",
-        ] {
+        // 内核只注册**每族一条官方实现**（D3 之后）。种子 `drivers.id`（global/008 + 013）
+        // 里另有 `mysql` / `postgres` 两行，它们的实现在 sidecar 插件里（`rds.driver.sqlx`），
+        // 由插件加载时贡献，不走这里的注册表 —— 那两行的处置（含未安装插件时的文案）见
+        // `sqlx-driver-extraction-plan.md` D4。
+        for id in ["mysql_native", "postgres_native", "sqlite", "duckdb"] {
             assert!(
                 drivers.iter().any(|d| d == id),
                 "内置驱动未注册：{id}（已注册：{drivers:?}）"
+            );
+        }
+        for id in ["mysql", "postgres"] {
+            assert!(
+                !drivers.iter().any(|d| d == id),
+                "内核不应再注册 {id}：实现已剥离到插件（注册了说明剥离没做干净）：{drivers:?}"
             );
         }
     }

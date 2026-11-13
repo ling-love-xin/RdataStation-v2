@@ -334,6 +334,7 @@ sidecar 的代价要提前知道：它**自己拿得到凭据**（清单里必�
 | 权限被拒 | sidecar 调用未声明的 host method 会在运行时被拒，错误里带缺哪一项 |
 | 大结果没回来 | 确认 `initialize` 的 `protocol = 1`、`driver.describe` 的 `capabilities`；>200 行 / 256 KiB 必须走 Arrow 附件 |
 | 命令 / 面板没数据 | 前端轨未实现（P4）；插件**没有**命令贡献与自定义面板，宿主只有内置的插件列表面板 |
+| 换了驱动二进制要不要重启宿主 | **不用**。扫描比对载荷指纹——插件目录里每个文件的相对路径 + 长度 + 纳秒修改时间，加上清单 `[backend] driver_jars` 声明的外部 jar / 目录（Java 壳的 JDBC 包常在插件目录外）。只换载荷、清单没动时 5 秒内自动重启该插件（`deactivate → activate`），旧进程停、旧会话如实作废，下一个连接用新的，其余插件不受影响。**该插件上还有活动会话时不重启**：先退回「待重载」提示，等会话都关掉后由下一轮扫描自己补上——不会在你正跑查询时把连接断掉。**包里有 `checksums.json` 时先核对哈希**：对不上就不重启（说明文件拷坏了 / 被改过），退回待重载并指出哪个文件不符；没有该文件的老包与开发目录照常自动重启。三个约束：Windows 上运行中的 exe 不能直接覆盖，要先把旧的改名再放新的；用保留时间戳的工具覆盖（`robocopy /COPY:T`）指纹不变，那种情况仍需手动重载；会话一直不断就一直不换，想立刻生效就手动点「重载」 |
 
 ### 2.7 发布前检查清单
 
@@ -412,6 +413,31 @@ cargo test -p rds-plugin --test sidecar_conformance -- --nocapture
 同一个文件里还有**第 6 条**（导航面：`meta.*` 五件答得出来且形状对）= P2 的退出标准。
 加上 `--nocapture` 会把你这边实际答出来的 catalog / schema / 对象数 / 首列的列名与类型打出来，
 照着看就知道卡在哪一环。库是空的也算过 —— 那时只验「方法答得出来」并打印说明。
+
+但「第一个 schema 恰好是空的」会让 `meta.object_detail` 与例程源码被静默跳过，
+于是全绿其实没验到详情（Oracle 的 `DEVUSER` 就是这样，0 个对象）。要真验对象详情，
+用 `RDS_SIDECAR_SCHEMA` 指定一个确实有对象的 schema（必要时配 `RDS_SIDECAR_CATALOG`）：
+
+```sh
+RDS_SIDECAR_SCHEMA=SYS RDS_SIDECAR_CATALOG=XEPDB1 \
+RDS_SIDECAR_BIN=./rds-oracle-sidecar RDS_SIDECAR_DRIVER=oracle \
+RDS_SIDECAR_PARAMS='{"host":"…","port":1521,"database":"XEPDB1","username":"…","password":"…"}' \
+RDS_SIDECAR_SQL_BIG='SELECT LEVEL AS id, 1 AS nm FROM dual CONNECT BY LEVEL <= 3000' \
+RDS_SIDECAR_SQL_SLOW='SELECT 1 FROM dual' \
+cargo test -p rds-plugin --test sidecar_conformance -- --nocapture
+```
+
+**指定了就当作承诺**：被 `RDS_SIDECAR_SCHEMA` 选中的 schema 拿不出表 / 视图时，第 6 条直接判失败
+（而不是像默认口径那样跳过），免得一条从未跑过的详情路径混进全绿报告。
+
+再往下还有一层：默认口径拿「第一个类表对象」验详情，对象一换就换靶子，出问题不好复现。
+`RDS_SIDECAR_OBJECT` 可以点名要验哪个对象，**指定即承诺**——`meta.objects` 里找不到它就直接判失败：
+
+```sh
+RDS_SIDECAR_SCHEMA=SYS RDS_SIDECAR_CATALOG=XEPDB1 RDS_SIDECAR_OBJECT=ALL_CAPTURE \
+RDS_SIDECAR_BIN=./rds-oracle-sidecar RDS_SIDECAR_DRIVER=oracle … \
+cargo test -p rds-plugin --test sidecar_conformance -- --nocapture
+```
 
 **导航要用的 `meta.*`（P2）**：五件 —— `meta.catalogs` / `meta.schemas` / `meta.objects` /
 `meta.object_detail` / `meta.routine_source`。少一件，导航树或属性面板就少一块。三条最容易踩的：

@@ -60,6 +60,11 @@ pub struct HistoryRecord {
     ///
     /// 与 `channel`/`sources` 同一演进方式：老记录没有这一项，读回来是 `None`。
     pub lineage: Option<String>,
+    /// 【D8】这条语句是**哪个驱动**跑的（`drivers.id`，如 `mysql` / `mysql_native`）
+    ///
+    /// `db_type` 只回答「哪个族的库」，同族两条实现（内置 / 插件）在历史里分不清 ——
+    /// 把 sqlx 抽成插件后这是常态。老记录没有这一项，读回来是 `None`。
+    pub driver_id: Option<String>,
 }
 
 impl HistoryRecord {
@@ -91,6 +96,7 @@ impl HistoryRecord {
             channel: None,
             sources: None,
             lineage: None,
+            driver_id: None,
         }
     }
 
@@ -166,6 +172,11 @@ impl HistoryRecord {
 pub struct HistoryFilter {
     /// 数据库类型筛选
     pub db_type: Option<String>,
+    /// 驱动实现筛选（`mysql_native` / 插件提供的 `mysql` …；`None` = 全部）
+    ///
+    /// 【D8d / A-7】同一族可能有「官方原生」与「插件」两条实现：只看库类型
+    /// 分不出语句到底是哪条驱动跑的，而用户排查「插件停用后行为变了」正需要这一维。
+    pub driver_id: Option<String>,
     /// 连接 ID 筛选
     pub connection_id: Option<String>,
     /// 只显示成功的记录
@@ -195,6 +206,12 @@ impl HistoryFilter {
     /// 设置连接 ID 筛选
     pub fn with_connection_id(mut self, connection_id: String) -> Self {
         self.connection_id = Some(connection_id);
+        self
+    }
+
+    /// 设置驱动实现筛选（D8d / A-7）
+    pub fn with_driver_id(mut self, driver_id: String) -> Self {
+        self.driver_id = Some(driver_id);
         self
     }
 
@@ -237,6 +254,14 @@ impl HistoryFilter {
         // 连接 ID 筛选
         if let Some(ref conn_id) = self.connection_id {
             if record.connection_id != *conn_id {
+                return false;
+            }
+        }
+
+        // 驱动实现筛选（D8d / A-7）：老记录没有 driver_id（`None`），
+        // 选了具体驱动就把它们排除——这正是「这条到底哪条驱动跑的」要的答案。
+        if let Some(ref driver_id) = self.driver_id {
+            if record.driver_id.as_deref() != Some(driver_id.as_str()) {
                 return false;
             }
         }
@@ -693,6 +718,7 @@ impl HistoryStore {
             channel: extract_string(json, "channel"),
             sources: extract_string(json, "sources"),
             lineage: extract_string(json, "lineage"),
+            driver_id: extract_string(json, "driver_id"),
             timestamp: extract_u64(json, "timestamp").unwrap_or(0),
             duration_ms: extract_u64(json, "duration_ms").unwrap_or(0),
             success: extract_bool(json, "success").unwrap_or(false),
@@ -756,6 +782,14 @@ impl HistoryStore {
                 result.push_str(&format!(
                     "    \"lineage\": \"{}\",\n",
                     Self::escape_json(lineage)
+                ));
+            }
+
+            // 【D8】哪个驱动跑的（`db_type` 只到族，同族两条实现靠它区分）
+            if let Some(ref driver_id) = record.driver_id {
+                result.push_str(&format!(
+                    "    \"driver_id\": \"{}\",\n",
+                    Self::escape_json(driver_id)
                 ));
             }
 
@@ -865,6 +899,8 @@ pub struct SqlHistoryRecord {
     pub sources: Option<String>,
     /// 【B5 余项】血缘（结果怎么来的；老记录为 `None`）
     pub lineage: Option<String>,
+    /// 【D8】执行它的驱动 id（`drivers.id`；老记录为 `None`）
+    pub driver_id: Option<String>,
     pub executed_at: chrono::DateTime<chrono::Utc>,
     pub duration_ms: Option<u64>,
     pub success: Option<bool>,
@@ -904,6 +940,8 @@ pub struct SqlHistoryEntry {
     /// 【B5 余项】血缘（`原查询` / `下发筛选` / `排序下发` / `本地分析`…；提交方在
     /// `ExecTarget::lineage()` 统一取）——历史列表要能回答“这行结果怎么来的”
     pub lineage: Option<String>,
+    /// 【D8】跑这条语句的**驱动 id**（执行路径从连接信息拿；不知道就空着，不编）
+    pub driver_id: Option<String>,
 }
 
 /// 保存 SQL 历史（写入全局存储）
@@ -936,6 +974,7 @@ pub fn save_sql_history_into(
     record.channel = entry.channel.clone();
     record.sources = entry.sources.clone();
     record.lineage = entry.lineage.clone();
+    record.driver_id = entry.driver_id.clone();
     if entry.success {
         record.mark_success(entry.elapsed_ms);
     } else {
@@ -976,6 +1015,7 @@ fn to_public_record(r: &HistoryRecord) -> SqlHistoryRecord {
         channel: r.channel.clone(),
         sources: r.sources.clone(),
         lineage: r.lineage.clone(),
+        driver_id: r.driver_id.clone(),
         executed_at: chrono::DateTime::from_timestamp((r.timestamp / 1000) as i64, 0)
             .unwrap_or_else(chrono::Utc::now),
         duration_ms: Some(r.duration_ms),
@@ -1162,6 +1202,43 @@ mod tests {
         assert!(results[0].sql.contains("orders"));
     }
 
+    /// 【D8d / A-7】按驱动实现筛选：同族两条实现要能分开，老记录（无 driver_id）不冒充任一条
+    #[test]
+    fn history_filter_branches_by_driver_implementation() {
+        let mut native = HistoryRecord::new(
+            "SELECT * FROM users".to_string(),
+            "mysql".to_string(),
+            "conn-1".to_string(),
+        );
+        native.driver_id = Some("mysql_native".to_string());
+
+        let mut plugin = HistoryRecord::new(
+            "SELECT * FROM orders".to_string(),
+            "mysql".to_string(),
+            "conn-2".to_string(),
+        );
+        plugin.driver_id = Some("mysql".to_string());
+
+        let legacy = HistoryRecord::new(
+            "SELECT * FROM legacy".to_string(),
+            "mysql".to_string(),
+            "conn-3".to_string(),
+        );
+
+        let filter = HistoryFilter::new().with_driver_id("mysql_native".to_string());
+        assert!(filter.matches(&native));
+        assert!(!filter.matches(&plugin), "插件实现不能被原生筛选命中");
+        assert!(!filter.matches(&legacy), "老记录没有 driver_id，不能冒充任一条");
+
+        let filter = HistoryFilter::new().with_driver_id("mysql".to_string());
+        assert!(filter.matches(&plugin));
+        assert!(!filter.matches(&native));
+
+        // 不设驱动筛选时三条都在
+        let filter = HistoryFilter::new();
+        assert!(filter.matches(&native) && filter.matches(&plugin) && filter.matches(&legacy));
+    }
+
     #[test]
     fn test_history_store_search() {
         let mut store = HistoryStore::new(PathBuf::from("/tmp/test_history.json"));
@@ -1283,6 +1360,7 @@ mod sql_history_entry_tests {
             channel: None,
             sources: None,
             lineage: None,
+            driver_id: None,
         };
 
         save_sql_history_into(&mut store, "SELECT 1", &entry).expect("save history");
@@ -1314,6 +1392,7 @@ mod sql_history_entry_tests {
             channel: Some("accelerated".to_string()),
             sources: None,
             lineage: None,
+            driver_id: None,
         };
         save_sql_history_into(&mut store, "SELECT 1", &entry).expect("save");
         let record = &store.get_records(None)[0];
@@ -1363,6 +1442,7 @@ mod sql_history_entry_tests {
             channel: Some("federated".to_string()),
             sources: Some("mysql_src, pg_warehouse".to_string()),
             lineage: None,
+            driver_id: None,
         };
         save_sql_history_into(&mut store, "SELECT 1", &entry).expect("save");
 
@@ -1395,6 +1475,7 @@ mod sql_history_entry_tests {
             channel: Some("source".to_string()),
             sources: None,
             lineage: Some("下发筛选".to_string()),
+            driver_id: None,
         };
         save_sql_history_into(&mut store, "SELECT 1", &entry).expect("save");
 
@@ -1430,6 +1511,59 @@ mod sql_history_entry_tests {
         let _ = std::fs::remove_file(path);
     }
 
+    /// 【D8 / A-6】驱动 id 必须能落库读回：同族两条实现（`mysql` 插件 / `mysql_native` 内置）
+    /// 在历史里靠它区分；老记录没有这一项 → `None`，不能当成解析失败。
+    #[test]
+    fn the_driver_id_round_trips() {
+        let (mut store, path) = temp_store("driver_id");
+        let entry = SqlHistoryEntry {
+            conn_id: Some("conn-1".to_string()),
+            db_type: Some("mysql".to_string()),
+            elapsed_ms: 7,
+            success: true,
+            error_message: None,
+            rows_returned: Some(1),
+            rows_affected: None,
+            channel: Some("source".to_string()),
+            sources: None,
+            lineage: None,
+            driver_id: Some("mysql_native".to_string()),
+        };
+
+        save_sql_history_into(&mut store, "SELECT 1", &entry).expect("save history");
+        let record = &store.get_records(None)[0];
+        assert_eq!(record.driver_id.as_deref(), Some("mysql_native"));
+
+        // 写盘 → 重读：驱动 id 不能只活在内存里
+        let mut reloaded = HistoryStore::new(path.clone());
+        reloaded.load().expect("load");
+        assert_eq!(
+            reloaded.get_records(None)[0].driver_id.as_deref(),
+            Some("mysql_native"),
+            "驱动 id 要能跨进程读回"
+        );
+
+        // 老记录（没有 driver_id 字段）读回来是 `None`，不是解析失败
+        let legacy = r#"[{
+  "id": "old-3",
+  "sql": "SELECT 4",
+  "db_type": "mysql",
+  "connection_id": "conn-1",
+  "timestamp": 1,
+  "duration_ms": 3,
+  "success": true
+}]"#;
+        std::fs::write(&path, legacy).expect("写老格式");
+        reloaded.load().expect("读老格式");
+        assert_eq!(
+            reloaded.get_records(None)[0].driver_id,
+            None,
+            "老记录没有驱动 id = 不知道，不编一个"
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
     #[test]
     fn write_entry_records_rows_affected() {
         let (mut store, path) = temp_store("write");
@@ -1444,6 +1578,7 @@ mod sql_history_entry_tests {
             channel: None,
             sources: None,
             lineage: None,
+            driver_id: None,
         };
 
         save_sql_history_into(&mut store, "UPDATE t SET x = 1", &entry).expect("save history");
@@ -1469,6 +1604,7 @@ mod sql_history_entry_tests {
             channel: None,
             sources: None,
             lineage: None,
+            driver_id: None,
         };
 
         save_sql_history_into(&mut store, "SELECT nope FROM t", &entry).expect("save history");
@@ -1503,6 +1639,7 @@ mod sql_history_entry_tests {
             channel: None,
             sources: None,
             lineage: None,
+            driver_id: None,
         };
         let sql = format!("SELECT '{}' AS 中文列", "很长很长的中文注释".repeat(20));
         save_sql_history_into(&mut store, &sql, &entry).expect("save history");

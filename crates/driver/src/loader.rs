@@ -93,17 +93,16 @@ impl BuiltinDriverDiscovery {
     ///
     /// | Registry key    | 驱动实现               |
     /// |-----------------|-----------------------|
-    /// | mysql           | sqlx::MySql           |
     /// | mysql_native    | mysql_async           |
-    /// | postgres        | sqlx::Postgres        |
     /// | postgres_native | tokio-postgres        |
     /// | sqlite          | rusqlite              |
     /// | duckdb          | duckdb-rs             |
+    ///
+    /// `mysql` / `postgres`（原 sqlx 实现）**不在**此列：它们由 sidecar 插件贡献
+    /// （`rds.driver.sqlx`），驱动 id 不变，宿主按插件声明建会话。
     pub fn builtin_factories() -> Vec<Arc<dyn DriverFactory>> {
         vec![
-            Arc::new(crate::factory::MySqlDriverFactory),
             Arc::new(crate::factory::MySqlNativeDriverFactory),
-            Arc::new(crate::factory::PostgresDriverFactory),
             Arc::new(crate::factory::PostgresNativeDriverFactory),
             Arc::new(crate::factory::SqliteDriverFactory),
             Arc::new(crate::factory::DuckDbDriverFactory),

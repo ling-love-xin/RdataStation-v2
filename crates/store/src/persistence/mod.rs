@@ -20,6 +20,7 @@ pub mod connection_draft_store;
 pub mod connection_org_store;
 pub mod connection_store;
 pub mod driver_catalog;
+pub mod driver_operation_store;
 pub mod driver_store;
 pub mod env_store;
 pub mod global_db;

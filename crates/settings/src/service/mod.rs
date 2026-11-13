@@ -32,6 +32,8 @@ mod startup;
 pub use insight::install_insight_memory_limit_sink;
 pub use logging::install_log_level_sink;
 pub use sql_analysis::install_sql_analysis_sink;
+// 主题方案（包）变更出口：装配层接“重装主题 + 产品 token”。
+pub use appearance::install_theme_pack_sink;
 
 /// 主题模式的文本形态（落盘值，与 `registry` 的枚举选项同源）。
 pub(crate) fn theme_mode_text(mode: AppearanceMode) -> String {
@@ -72,6 +74,7 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::AppearanceTabBarVariant => {
             SettingValue::Text(settings.appearance.tab_bar_variant.clone())
         }
+        Slot::AppearanceThemePack => SettingValue::Text(settings.appearance.theme_pack.clone()),
         Slot::EditorShowLineNumbers => SettingValue::Bool(settings.editor.show_line_numbers),
         Slot::EditorBookmarkHoverNote => SettingValue::Bool(settings.editor.bookmark_hover_note),
         Slot::EditorBookmarkColumn => SettingValue::Bool(settings.editor.bookmark_column),
@@ -322,7 +325,8 @@ impl SettingsService {
             | Slot::AppearanceFontSize
             | Slot::AppearanceLocale
             | Slot::AppearanceTabBarMaxWidth
-            | Slot::AppearanceTabBarVariant => appearance::apply_slot(slot, value, window, cx),
+            | Slot::AppearanceTabBarVariant
+            | Slot::AppearanceThemePack => appearance::apply_slot(slot, value, window, cx),
             Slot::EditorShowLineNumbers
             | Slot::EditorBookmarkHoverNote
             | Slot::EditorBookmarkColumn

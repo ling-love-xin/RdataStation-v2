@@ -27,6 +27,12 @@ pub struct TransactionStatusResult {
 /// - SQL 历史记录
 pub struct SqlService {
     manager: Arc<ConnectionManager>,
+    /// 【T2c-1】每条连接**已应用**的会话 schema（`None` = 连接默认）
+    ///
+    /// `SET search_path` / `USE` 都是会话级状态：绑定后不解绑就残留。这里记住「上一个
+    /// 是什么」，解绑（`schema = None`）时才发得出一条恢复语句——否则用户点了「默认」，
+    /// 未限定名仍解析到上一个 schema（真机实测：本该报「表不存在」却查到了旧 schema 的表）。
+    session_schemas: std::sync::Mutex<std::collections::HashMap<String, String>>,
 }
 
 /// SQL 执行结果
@@ -178,7 +184,7 @@ fn unwrap_segment_error(
 /// 把包装痕迹从**驱动给的原因文本**里摘掉
 ///
 /// 结构化字段（`sql` / `position`）上面已经还原了，这里管的是自由文本：不是所有驱动都把
-/// 「出错点」放在结构化字段里——MySQL 走 sqlx 时会把出错点附近的**原文**贴进消息
+/// 「出错点」放在结构化字段里——MySQL 会把出错点附近的**原文**贴进消息
 /// （`near 'order\n) AS rds_segment LIMIT 1000 OFFSET 0' at line 2`），而那段原文正是我们发出去的
 /// 包装文本。用户没写过 `rds_segment`，让他照着自己看不见的东西找错，只会以为是我们发错了
 /// （真机反馈：`select * from order` 的报错里冒出 `rds_segment`）。
@@ -282,7 +288,33 @@ fn is_word_byte(text: &str, index: usize) -> bool {
 impl SqlService {
     /// 创建新的 SQL 服务
     pub fn new(manager: Arc<ConnectionManager>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            session_schemas: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// 【T2c-1】该连接上一次应用过的会话 schema（`None` = 从未绑定 / 已恢复默认）
+    fn applied_schema(&self, conn_key: &str) -> Option<String> {
+        self.session_schemas
+            .lock()
+            .ok()?
+            .get(conn_key)
+            .cloned()
+    }
+
+    /// 【T2c-1】记下/清除「该连接已应用的会话 schema」
+    fn remember_schema(&self, conn_key: &str, schema: Option<&str>) {
+        if let Ok(mut map) = self.session_schemas.lock() {
+            match schema {
+                Some(schema) => {
+                    map.insert(conn_key.to_string(), schema.to_string());
+                }
+                None => {
+                    map.remove(conn_key);
+                }
+            }
+        }
     }
 
     /// 执行一句：**查询只取第一段**（`limit` 行），写语句走原来的路（B5b）
@@ -376,6 +408,13 @@ impl SqlService {
         channel: Option<&str>,
         lineage: Option<&str>,
     ) {
+        // 【D8】驱动 id：同族两条实现（内置 / 插件）在历史里必须分得清 —— 取运行时连接
+        // 登记的 `driver_id`，取不到就留空（不知道就不编）。
+        let driver_id = self
+            .manager
+            .get_connection_info(&conn_key.to_string())
+            .await
+            .and_then(|info| info.driver_id);
         let entry = SqlHistoryEntry {
             conn_id: conn_id.map(str::to_string),
             db_type: self.db_type_of(conn_key).await,
@@ -388,6 +427,7 @@ impl SqlService {
             lineage: lineage.map(str::to_string),
             // 源库档没有“参与源清单”（那是联邦档的事；联邦不走这条路径）
             sources: None,
+            driver_id,
         };
         if let Err(e) = history_store::save_sql_history(sql, &entry) {
             tracing::error!(error = %e, "Failed to save SQL history");
@@ -511,14 +551,56 @@ impl SqlService {
         // 方言映射（PG `SET search_path` / MySQL `USE` / DuckDB `USE`；SQLite 无此概念）。
         // 与用户语句同连接（非事务 = 主连接 `db`；事务 = 事务连接，见下），且**不进历史**
         // （是管道不是用户意图）。方言识别用运行时连接的 `db_type`；不认识的驱动不注入。
-        let schema_context: Option<String> =
-            if let Some(schema) = options.schema.as_deref().filter(|s| !s.trim().is_empty()) {
-                let db_type = self.db_type_of(&conn_key).await.unwrap_or_default();
-                crate::driver::utils::flavor_from_db_type(&db_type)
-                    .and_then(|flavor| crate::driver::utils::schema_context_sql(schema, flavor))
-            } else {
-                None
-            };
+        //
+        // 事务键用**真实连接 id**：拿 “active” 这种虚拟键去查 `db_type` 会查不到，方言
+        // 判不出来 → 上下文被静默跳过（这条路径曾经就是这么坏掉的，两种官方驱动都中）。
+        let tx_key = self.conn_key_for(&conn_id).await?;
+        let desired_schema = options
+            .schema
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let applied_schema = self.applied_schema(&tx_key);
+        let schema_context: Option<String> = match desired_schema {
+            Some(schema) => match self.db_type_of(&tx_key).await {
+                Some(db_type) => match crate::driver::utils::flavor_from_db_type(&db_type) {
+                    Some(flavor) => crate::driver::utils::schema_context_sql(schema, flavor),
+                    None => {
+                        tracing::warn!(
+                            conn = %tx_key,
+                            db_type = %db_type,
+                            schema,
+                            "方言判不出来，跳过 schema 上下文（未限定名会落到连接默认）"
+                        );
+                        None
+                    }
+                },
+                None => {
+                    tracing::warn!(
+                        conn = %tx_key,
+                        schema,
+                        "查不到该连接的 db_type，跳过 schema 上下文"
+                    );
+                    None
+                }
+            },
+            // 解绑：会话状态会残留，只有**曾经绑过**才需要发一句恢复默认
+            None if applied_schema.is_some() => {
+                match self.manager.get_connection_info(&tx_key).await {
+                    Some(info) => crate::driver::utils::default_schema_reset_sql(
+                        &info.db_type, &info.url,
+                    ),
+                    None => {
+                        tracing::warn!(
+                            conn = %tx_key,
+                            "查不到连接信息，解绑时无法恢复默认 schema"
+                        );
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
 
         // ---- B4：事务路由 ----
         // ① 会话里**已经有事务** → 这条语句必须走事务对象（同一物理连接，架构 §12 #2 的会话亲和）；
@@ -528,7 +610,6 @@ impl SqlService {
         // 事务用**真实连接 id**（未绑定时解析成当前活动连接）：拿 “active” 这种虚拟键去开事务，
         // 引擎会报 `Connection 'active' not found`（真机上踩过——缓存/取消令牌可以按虚拟键归档，
         // 事务不行，它要拿 id 去找连接）。
-        let tx_key = self.conn_key_for(&conn_id).await?;
         let in_transaction = self.manager.has_transaction(&tx_key).await;
         let auto_begin = options.use_transaction && !is_ddl && !in_transaction;
         if auto_begin {
@@ -546,6 +627,8 @@ impl SqlService {
             if let Some(context) = schema_context.as_deref() {
                 if let Some(result) = self.manager.query_in_transaction(&tx_key, context).await {
                     result?;
+                    // 上下文真落上了才记：失败时不记，下次还会再发
+                    self.remember_schema(&tx_key, desired_schema);
                 }
             }
             // 【B4 余项】事务内语句的超时：驱动 `Transaction` trait 只有 query/commit/rollback
@@ -595,6 +678,8 @@ impl SqlService {
             // T2c-1：非事务路径——schema 上下文落在主连接 `db` 上（与用户语句同连接）。
             if let Some(context) = schema_context.as_deref() {
                 db.query(context).await?;
+                // 上下文真落上了才记（解绑发的恢复语句同样记：记为「默认」）
+                self.remember_schema(&tx_key, desired_schema);
             }
             run_plain(&self.manager, &db, sql, options.timeout_ms, &conn_key).await
         };

@@ -345,7 +345,9 @@ mod tests {
         let first = sync_startup_state(&manager).await;
         let sync = first.drivers.expect("驱动声明同步应成功");
         assert!(sync.skipped.is_empty(), "不应有跳过：{sync:?}");
-        assert!(sync.written >= 6, "内置驱动至少 6 条：{sync:?}");
+        // D4 之后内核只剩 4 条官方驱动（sqlx 的 `mysql` / `postgres` 归插件所有，D3 已剥离；
+        // 这里的 `6` 是剥离前的旧口径，会让这条本该守「启动接线」的用例变成「数驱动」）。
+        assert!(sync.written >= 4, "内置驱动至少 4 条：{sync:?}");
 
         // 与代码里的声明逐列比对（族 id 尤其重要：`postgres*` 的族是 `postgresql`）
         let expected = crate::driver::DriverDeclaration::all();

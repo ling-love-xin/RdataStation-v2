@@ -25,6 +25,8 @@ pub(crate) fn record_accel_history(
             channel: Some(crate::channel::ExecChannel::Accelerated.code().to_string()),
             sources: None,
             lineage: lineage.map(str::to_string),
+            // 【D8】加速档的语句是 **DuckDB 引擎**跑的；源库的库种仍在 `db_type`
+            driver_id: Some("duckdb".to_string()),
         },
         Err(error) => SqlHistoryEntry {
             conn_id: Some(source.conn_id.clone()),
@@ -37,6 +39,7 @@ pub(crate) fn record_accel_history(
             channel: Some(crate::channel::ExecChannel::Accelerated.code().to_string()),
             sources: None,
             lineage: lineage.map(str::to_string),
+            driver_id: Some("duckdb".to_string()),
         },
     };
     if let Err(error) = history_store::save_sql_history(sql, &entry) {

@@ -13,6 +13,8 @@ paths.workspace = true
 connection.workspace = true
 # 存储层：驱动声明同步与全局库管理器（declaration.rs）+ DuckDB 连接默认参数（native duckdb）
 rds-store.workspace = true
+# 驱动侧纯数据层：元数据 SQL 常量 / PG wire 解码 / 枚举码→文案（零依赖，插件共用一份）
+rds-driver-sql.workspace = true
 
 # ===== 分析引擎 =====
 duckdb.workspace = true
@@ -25,14 +27,9 @@ futures.workspace = true
 async-trait.workspace = true
 
 # ===== 数据库驱动（native 实现） =====
-# 与 engine 同策略：声明 sqlx-postgres / sqlx-mysql 而非 sqlx 的 sqlite feature，
-# 避免与 rusqlite 的 libsqlite3-sys `links = "sqlite3"` 冲突（详见 engine Cargo.toml 注记）。
-sqlx.workspace = true
-sqlx-postgres.workspace = true
-# DECIMAL/NUMERIC 直取 Decimal128 用（与 sqlx-mysql/pg 同版本 0.4.10）
-bigdecimal.workspace = true
-num-traits.workspace = true
-sqlx-mysql.workspace = true
+# D3（2026-11-12）：sqlx 实现已剥离到 sidecar 插件（`tools/plugin-drivers/sqlx-rust`），
+# 本 crate 不再依赖 sqlx / sqlx-mysql / sqlx-postgres / bigdecimal / num-traits。
+# 内核每族只留一条官方驱动：rusqlite / duckdb-rs / mysql_async / tokio-postgres。
 rusqlite.workspace = true
 mysql_async.workspace = true
 tokio-postgres.workspace = true

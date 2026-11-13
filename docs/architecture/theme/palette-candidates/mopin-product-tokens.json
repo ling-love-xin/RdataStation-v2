@@ -1,0 +1,33 @@
+{
+  "$comment": "「墨金」主题包的产品语义 token（13 角色）。换包时必须与主题文件同步替换，否则活动栏底色 / Quick Open 组头 / 搜索命中底 / 结果集槽会残留默认珊瑚包的值。",
+  "light": {
+    "activity_bar.background": "#F1EEE7",
+    "activity_bar.active_border": "#262419",
+    "activity_bar.icon.active": "#262419",
+    "activity_bar.icon.inactive": "#58523F",
+    "title_bar.slot.background": "#FAF9F5",
+    "quick_open.group.header": "#E8E3D6",
+    "search.match.background": "#FAEFC4",
+    "staged.drop": "#A0301F",
+    "result.odd_row.background": "#F2F0E8",
+    "result.cell.modified.background": "#FBE8CF",
+    "result.cell.error.background": "#F7DEDA",
+    "result.local_row_background": "#E8F1DF",
+    "result.header.border": "#D0CABB"
+  },
+  "dark": {
+    "activity_bar.background": "#0C0B09",
+    "activity_bar.active_border": "#EBE8E0",
+    "activity_bar.icon.active": "#EBE8E0",
+    "activity_bar.icon.inactive": "#948A78",
+    "title_bar.slot.background": "#12110E",
+    "quick_open.group.header": "#2A2620",
+    "search.match.background": "#4A3C10",
+    "staged.drop": "#FF7E72",
+    "result.odd_row.background": "#1D1B16",
+    "result.cell.modified.background": "#3A2E13",
+    "result.cell.error.background": "#3A1D1A",
+    "result.local_row_background": "#29331F",
+    "result.header.border": "#302B22"
+  }
+}

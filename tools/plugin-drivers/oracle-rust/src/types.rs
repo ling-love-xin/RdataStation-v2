@@ -203,7 +203,12 @@ pub fn sql_error(err: impl std::fmt::Display) -> DriverError {
     DriverError::sql(err.to_string())
 }
 
-/// 把标识符/字面量拼进元数据 SQL 时，先做最小转义（元数据名来自数据库本身）。
+/// 把标识符/字面量拼进 SQL 时的最小转义（元数据名来自数据库本身）。
+///
+/// 元数据查询已全部改成绑定变量（Oracle 按 SQL 文本硬解析，拼名字等于每个对象
+/// 一条新语句），这里暂时没有调用者；留着是为了「确实需要拼标识符」的场景
+/// （标识符不能用绑定变量），别把转义规则再发明一遍。
+#[allow(dead_code)]
 pub fn quote_literal(raw: &str) -> String {
     format!("'{}'", raw.replace('\'', "''"))
 }

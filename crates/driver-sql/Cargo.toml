@@ -1,0 +1,10 @@
+[package]
+name = "rds-driver-sql"
+version.workspace = true
+edition.workspace = true
+description = "驱动侧纯数据层：元数据 SQL 常量 / PG wire 解码 / 枚举码→文案（内核原生驱动与 sqlx 插件共用一份）"
+
+[dependencies]
+# 有意**零依赖**（连 shared 都不引）：这样 `tools/plugin-drivers/*` 的独立 workspace
+# 可以 path 依赖本 crate，却不会把内核的依赖树（arrow / duckdb / gpui …）拖进插件。
+# 加依赖前先问一句：插件二进制用得上吗？用不上就别加。

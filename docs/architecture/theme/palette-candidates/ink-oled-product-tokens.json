@@ -1,0 +1,33 @@
+{
+  "$comment": "「近黑墨」主题包的产品语义 token（13 角色）。换包时必须与主题文件同步替换，否则活动栏底色 / Quick Open 组头 / 搜索命中底 / 结果集槽会残留默认珊瑚包的值。",
+  "light": {
+    "activity_bar.background": "#F0F0F0",
+    "activity_bar.active_border": "#141414",
+    "activity_bar.icon.active": "#141414",
+    "activity_bar.icon.inactive": "#474747",
+    "title_bar.slot.background": "#FFFFFF",
+    "quick_open.group.header": "#E2E2E2",
+    "search.match.background": "#FFF0B0",
+    "staged.drop": "#A31B1B",
+    "result.odd_row.background": "#EDF3FA",
+    "result.cell.modified.background": "#FFE7CC",
+    "result.cell.error.background": "#FFDDE4",
+    "result.local_row_background": "#E5F5D9",
+    "result.header.border": "#ADADAD"
+  },
+  "dark": {
+    "activity_bar.background": "#000000",
+    "activity_bar.active_border": "#F7F7F7",
+    "activity_bar.icon.active": "#F7F7F7",
+    "activity_bar.icon.inactive": "#A6A6A6",
+    "title_bar.slot.background": "#000000",
+    "quick_open.group.header": "#262626",
+    "search.match.background": "#4A3800",
+    "staged.drop": "#FF8A80",
+    "result.odd_row.background": "#101820",
+    "result.cell.modified.background": "#33260F",
+    "result.cell.error.background": "#33151C",
+    "result.local_row_background": "#152513",
+    "result.header.border": "#3A3A3A"
+  }
+}

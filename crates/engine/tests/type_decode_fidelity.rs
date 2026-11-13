@@ -1,36 +1,45 @@
 //! 真机回归：出口层「值/结果族」的类型解码保真度。
 //!
+//! ## 本文件管谁（D3 之后）
+//!
+//! 只管**内核的两条官方驱动**：`postgres_native`（tokio-postgres）与 `mysql_native`
+//! （mysql_async）。`postgres` / `mysql`（原 sqlx 实现）已剥离到 sidecar 插件
+//! （`tools/plugin-drivers/sqlx-rust`），那边同一个主题由插件自己的验收脚本钉住
+//! （2026-11-12 真机 12 项 × 2 全绿，见 `sqlx-driver-extraction-plan.md` §7.2）。
+//! 原先本文件里那两条 `sqlx_*` 用例随实现一起删除——留着它们只会让「内核还有 sqlx」
+//! 这个错觉多活一轮。
+//!
 //! ## 为什么要单开一个文件
 //!
-//! 2026-09-21 实测发现：四个网络驱动（`postgres` / `mysql` 走 sqlx，`postgres_native` 走
-//! tokio-postgres，`mysql_native` 走 mysql_async）里，**三个**会把「库里明明有值」的列
-//! 静默交成 NULL。两个独立成因叠在一起：
+//! 2026-09-21 实测发现：网络驱动里**三个**会把「库里明明有值」的列静默交成 NULL。
+//! 两个独立成因叠在一起：
 //!
-//! 1. **sqlx 的类型解码 features 没开**（`chrono` / `bigdecimal` / `uuid` / `json`）：
+//! 1. **客户端库的类型解码 features 没开**（`chrono` / `bigdecimal` / `uuid` / `json`）：
 //!    参数化类型根本没有 `Decode` 实现；
 //! 2. **转换器的解码链里没试这些类型**：探测表只有
 //!    `bool / i32 / i64 / f32 / f64 / Vec<u8> / String`，于是 `numeric` · 时间 · `jsonb`
 //!    · UUID 全部落进 `.ok().flatten()` → `None` → 出口层看到的是「值就是 NULL」。
 //!
-//! 实测修复前：PG(sqlx) 19 列里 12 列静默 NULL、PG(Official) 11 列、MySQL(sqlx) 5 列。
+//! 实测修复前：PG(Official) 19 列里 11 列静默 NULL；MySQL(sqlx) 5 列。
 //!
 //! ## 本文件钉什么
 //!
 //! 「**库里非空 → 出口不得为 NULL**」，逐类型断言，含一个刻意保留的**精度断言**
-//! （`numeric(10,2)` 的 `1234.56` 必须以文本 `"1234.5600"` 出来 —— 不进浮点）。
+//! （`numeric(10,2)` 的 `1234.56` 必须以 `dscale` 口径的 `"1234.56"` 出来 —— 不进浮点）。
 //!
 //! ## 第二批（2026-09-21）：PG 那五类不再交 NULL
 //!
 //! | 库 | 类型 | 之前 | 现在 |
 //! | --- | --- | --- | --- |
-//! | PG（两个驱动） | `interval` | 空白格 | sqlx 走 `PgInterval`、Official 解 wire（`driver::native::pg_wire`）→ `1 day 02:03:04` |
-//! | PG（两个驱动） | 数组（`int4[]` / `text[]` …） | 空白格 | 解出 `Vec<T>` 后按 PG 数组字面量拼（元素含逗号时按规矩加引号） |
-//! | PG（两个驱动） | `inet` / `point` | 空白格 | 两个驱动**共用一份 wire 解码** → `192.168.3.138` / `(1.5,-2.25)` |
+//! | PG(Official) | `interval` | 空白格 | 解 wire（`driver::native::pg_wire`）→ `1 day 02:03:04` |
+//! | PG(Official) | 数组（`int4[]` / `text[]` …） | 空白格 | 解出 `Vec<T>` 后按 PG 数组字面量拼（元素含逗号时按规矩加引号） |
+//! | PG(Official) | `inet` / `point` | 空白格 | 内核官方驱动与插件**共用一份 wire 解码** → `192.168.3.138` / `(1.5,-2.25)` |
 //! | PG(Official) | `numeric` | 空白格（`postgres-types` 0.2.x 没有任何 decimal feature） | 自己解 base-10000 的 wire 格式 → `1234.56` |
 //!
-//! **口径提醒**：`numeric` 两条路**值相等、写法可能差尾零** —— sqlx 那条走
-//! `BigDecimal::to_string()`（按 4 位组拼，`numeric(10,2)` 出 `1234.5600`），Official 那条
-//! 按 `dscale` 出 `1234.56`。两个值都对，下面各按各的口径断言（有意不掩盖这个差异）。
+//! **口径提醒**：`numeric` 两条实现**值相等、写法可能差尾零** —— sqlx 插件那条走
+//! `BigDecimal::to_string()`（按 4 位组拼，`numeric(10,2)` 出 `1234.5600`），内核官方那条
+//! 按 `dscale` 出 `1234.56`。两个值都对；插件侧的尾零口径由插件单测断言，本文件只钉
+//! 官方这条。
 //!
 //! ## 仍不保证的（没有解码器，也没打算自己写）
 //!
@@ -50,9 +59,7 @@ use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
 use arrow::util::display::array_value_to_string;
 use rds_engine::driver::Database;
-use rds_engine::driver::native::mysql::MySqlDatabase;
 use rds_engine::driver::native::mysql_native::MySqlNativeDatabase;
-use rds_engine::driver::native::postgres::PostgresDatabase;
 use rds_engine::driver::native::postgres_native::PostgresNativeDatabase;
 
 /// 该列第 0 行的展示值（`None` = 出口判为 SQL NULL）。
@@ -81,12 +88,12 @@ fn assert_not_null(batch: &RecordBatch, cols: &[&str]) {
     assert!(
         missing.is_empty(),
         "这些列在库里非空，出口却是 NULL：{missing:?}\n\
-         —— 检查①根 Cargo.toml 的 sqlx 类型解码 features（chrono/bigdecimal/uuid/json）\n\
-         —— 检查②驱动转换器的解码链是否还只试 String"
+         —— 检查客户端的类型解码 features 是否开着（chrono / bigdecimal / uuid / json）\n\
+         —— 检查驱动转换器的解码链是否还只试 String"
     );
 }
 
-/// PostgreSQL 共用的那批列（sqlx 与 Official 两个驱动跑同一条 SQL）。
+/// PostgreSQL 那批列（官方驱动跑这条 SQL；插件侧另有一份自己的用例）。
 const PG_SQL: &str = r#"SELECT
     1::int2 AS i2, 1::int4 AS i4, 1::int8 AS i8, true AS flag,
     1.5::float4 AS f4, 1.5::float8 AS f8,
@@ -101,16 +108,16 @@ const PG_SQL: &str = r#"SELECT
     '192.168.3.138'::inet AS ip,
     '(1.5,-2.25)'::point AS pt"#;
 
-/// 两个 PG 驱动都该解的列。
+/// 官方 PG 驱动都该解的列。
 ///
-/// 2026-09-21 第二批之前，`num`（Official 读不出）与 `iv` / `arr` / `tarr` / `ip` / `pt`
-/// （两个驱动都读不出）都不在这张表里 —— 现在两类缺口都补上了，所以它们进来了。
+/// 2026-09-21 第二批之前，`num`（读不出）与 `iv` / `arr` / `tarr` / `ip` / `pt`
+/// 都不在这张表里 —— 现在两类缺口都补上了，所以它们进来了。
 const PG_COMMON: &[&str] = &[
     "i2", "i4", "i8", "flag", "f4", "f8", "ts", "d", "t", "j", "b", "vc", "txt", "u", "num", "iv",
     "arr", "tarr", "ip", "pt",
 ];
 
-/// 五类的**具体文本**（两个驱动共用口径，`num` 单独断言：两条路写法差尾零）。
+/// 五类的**具体文本**（官方驱动口径；sqlx 插件的 `num` 尾零写法由插件单测钉住）。
 fn assert_pg_extras(batch: &RecordBatch) {
     assert_eq!(
         cell(batch, "iv").as_deref(),
@@ -140,32 +147,6 @@ fn assert_pg_extras(batch: &RecordBatch) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn sqlx_postgres_decodes_numeric_temporal_json_and_uuid() {
-    let Ok(url) = std::env::var("RDS_TEST_PG_URL") else {
-        eprintln!("⏭️  未设 RDS_TEST_PG_URL，跳过");
-        return;
-    };
-    let db = PostgresDatabase::new(&url).await.expect("连上 PG");
-    let r = db.query(PG_SQL).await.expect("查询成功");
-    let batch = r.batches.first().expect("应有 batches");
-
-    assert_not_null(batch, PG_COMMON);
-
-    // 精度：numeric(10,2) 必须以**文本**出来，原样保留标度（不进浮点）
-    assert_eq!(
-        cell(batch, "num").as_deref(),
-        Some("1234.5600"),
-        "numeric 必须原样保留标度（走 BigDecimal::to_string，不过 f64）"
-    );
-    // int2 归 Int32 档且要真取到值（曾经是 Int32 列 + NULL 值）
-    assert_eq!(cell(batch, "i2").as_deref(), Some("1"));
-    // bytea 仍是 Binary，不被当成文本
-    assert!(format!("{:?}", batch.column(11).data_type()).starts_with("Binary"));
-    // PG 那五类的具体文本（sqlx 那条路）
-    assert_pg_extras(batch);
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn official_postgres_decodes_temporal_json_and_uuid() {
     let Ok(url) = std::env::var("RDS_TEST_PG_URL") else {
         eprintln!("⏭️  未设 RDS_TEST_PG_URL，跳过");
@@ -192,29 +173,6 @@ const MYSQL_SQL: &str = r#"SELECT
     NOW() AS ts_dt, CURDATE() AS d, CURTIME() AS t,
     CAST('{"a":1}' AS JSON) AS j, X'FF' AS bin2,
     'abcd' AS vc, TRUE AS flag"#;
-
-#[tokio::test(flavor = "multi_thread")]
-async fn sqlx_mysql_decodes_decimal_temporal_and_json() {
-    let Ok(url) = std::env::var("RDS_TEST_MYSQL_URL") else {
-        eprintln!("⏭️  未设 RDS_TEST_MYSQL_URL，跳过");
-        return;
-    };
-    let db = MySqlDatabase::new(&url).await.expect("连上 MySQL");
-    let r = db.query(MYSQL_SQL).await.expect("查询成功");
-    let batch = r.batches.first().expect("应有 batches");
-
-    assert_not_null(
-        batch,
-        &[
-            "tiny", "small", "medium", "big", "num", "dbl", "ts_dt", "d", "t", "j", "bin2", "vc",
-            "flag",
-        ],
-    );
-    // DECIMAL 走 BigDecimal 原样出文本（曾经的形态是「Float64 列 + NULL 值」）
-    assert_eq!(cell(batch, "num").as_deref(), Some("1234.56"));
-    // 非法 UTF-8 的字节仍走 Binary，不被当成文本
-    assert_eq!(cell(batch, "bin2").as_deref().is_some(), true);
-}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn official_mysql_decodes_decimal_and_temporal() {

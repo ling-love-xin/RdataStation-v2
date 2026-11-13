@@ -1,9 +1,11 @@
 // 注意：不通配导入（`super::*` 会把 gpui 的 `test` 宏带入作用域）。
 use super::{
-    DriverDerived, address_field, address_label, address_placeholder, app_level_capabilities,
+    DriverDerived, DriverSource, address_field, address_label, address_placeholder,
+    app_level_capabilities,
     auth_config_values, auth_field_specs, build_auth_config_json, build_network_config_json,
     capability_rows, conn_display_name, create_new_db_file, default_new_scope, dialog_row_height,
     dialog_tab_defs, driver_auth_types, driver_capabilities, driver_form_fields, driver_short_name,
+    driver_source_text, driver_sources_from_rows,
     enabled_drivers_of_type, field_spec, find_driver_by_value, first_selectable_type,
     is_secret_field, network_config_values, network_field_specs, new_db_file_suggested_name,
     policy_summary, policy_type_from_label, policy_type_label, property_note, result_needs_detail,
@@ -13,6 +15,7 @@ use super::{
 };
 use connection::model::ConnectionScope;
 use connection::model::DataSourceSaveInput;
+use engine::persistence::driver_operation_store::{DriverOperation, DriverOperationRow};
 use engine::persistence::driver_store::{DataSourceType, Driver};
 
 fn driver(id: &str, type_id: &str, name: &str, enabled: bool) -> Driver {
@@ -812,6 +815,84 @@ fn capability_rows_exclude_app_level_features() {
     assert!(app.contains(&"数据导出".to_string()), "{app:?}");
     assert!(app.contains(&"Mock 生成".to_string()));
     assert!(app.contains(&"资源分析".to_string()));
+}
+
+/// 造一条 `declare_sync` 留痕行（`plugin` 为空 = 内核内置写的声明）
+fn declare_row(id: &str, plugin: Option<&str>, at: &str) -> DriverOperationRow {
+    let mut op = DriverOperation::ok("declaration", "declare_sync").driver(id);
+    if let Some(plugin) = plugin {
+        op = op.plugin(plugin);
+    }
+    DriverOperationRow {
+        id: 0,
+        occurred_at: at.to_string(),
+        operation: op,
+        created_at: at.to_string(),
+    }
+}
+
+/// 驱动来源 = `declare_sync` 留痕里**每个驱动最新一条**：同一驱动多行只认最新（表本身按时间
+/// 倒序），没有 `driver_id` 的行跳过（那类行是能力位变化等，不说明“谁提供的驱动”）。
+#[test]
+fn driver_sources_keep_only_the_newest_declare_row_per_driver() {
+    let rows = vec![
+        declare_row("mysql_native", None, "2026-11-13 10:00:00"),
+        declare_row("mysql", Some("rds-driver-sqlx"), "2026-11-13 09:30:00"),
+        declare_row("mysql_native", None, "2026-11-12 09:00:00"),
+        declare_row("postgres_native", None, "2026-11-13 08:00:00"),
+    ];
+    let sources = driver_sources_from_rows(&rows);
+    assert_eq!(sources.len(), 3, "三个驱动各一条：{sources:?}");
+
+    let native = sources.get("mysql_native").expect("内核驱动应有来源");
+    assert_eq!(native.plugin_id, None, "内核内置驱动不带插件 id");
+    assert_eq!(
+        native.synced_at, "2026-11-13 10:00:00",
+        "同一驱动的多行只保留最新一条"
+    );
+
+    let plugin = sources.get("mysql").expect("插件驱动应有来源");
+    assert_eq!(plugin.plugin_id.as_deref(), Some("rds-driver-sqlx"));
+    assert_eq!(plugin.synced_at, "2026-11-13 09:30:00");
+
+    // 没有 driver_id 的行不参与来源归属
+    let mut no_driver = DriverOperation::ok("declaration", "capability_change");
+    no_driver.driver_id = None;
+    let rows = vec![DriverOperationRow {
+        id: 0,
+        occurred_at: "2026-11-13 11:00:00".to_string(),
+        operation: no_driver,
+        created_at: String::new(),
+    }];
+    assert!(driver_sources_from_rows(&rows).is_empty());
+
+    // 空表：不造来源
+    assert!(driver_sources_from_rows(&[]).is_empty());
+}
+
+/// 来源文案三档：内核内置 / 插件贡献 / 没记录（**不编**来源，如实说“尚未同步”）
+#[test]
+fn driver_source_text_names_kernel_plugin_and_missing() {
+    let kernel = DriverSource {
+        plugin_id: None,
+        synced_at: "2026-11-13 10:00:00".to_string(),
+    };
+    let plugin = DriverSource {
+        plugin_id: Some("rds-driver-sqlx".to_string()),
+        synced_at: "2026-11-13 09:30:00".to_string(),
+    };
+    assert_eq!(
+        driver_source_text(Some(&kernel)),
+        "来源：内核内置 · 最近同步 2026-11-13 10:00:00"
+    );
+    assert_eq!(
+        driver_source_text(Some(&plugin)),
+        "来源：插件 rds-driver-sqlx · 最近同步 2026-11-13 09:30:00"
+    );
+    assert_eq!(
+        driver_source_text(None),
+        "来源：本次启动尚未同步（重开应用或刷新插件清单后可查）"
+    );
 }
 
 #[test]

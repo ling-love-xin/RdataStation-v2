@@ -757,10 +757,15 @@ mod tests {
     }
 
     /// 每个内置驱动都要有规格：新增驱动忘了表态时在这里红，而不是等用户连不上才发觉。
+    ///
+    /// 注：表里仍有 `mysql` / `postgres` 两条规格，但它们**不再对应内核驱动** —— 那是
+    /// sqlx 插件的属性面（宿主拿它给插件驱动标「由驱动应用 / 静默忽略」，与插件侧
+    /// `values`/`config` 的键一致）。所以这里只要求注册表里的驱动都被覆盖，不反过来
+    /// 要求「表里每条都必须是内置驱动」。
     #[test]
     fn every_builtin_driver_is_covered() {
         let ids = builtin_drivers();
-        assert!(ids.len() >= 6, "内置驱动应至少 6 个：{ids:?}");
+        assert!(ids.len() >= 4, "内核内置驱动应至少 4 个：{ids:?}");
         for id in &ids {
             assert!(
                 spec_of(id).is_some(),

@@ -297,6 +297,8 @@ pub(crate) fn record_federation_history(
             channel: Some(ExecChannel::Federated.code().to_string()),
             sources,
             lineage: lineage.map(str::to_string),
+            // 【D8】联邦档的语句是 **DuckDB 引擎**跑的（源库只读挂载）；源库的库种仍在 `db_type`
+            driver_id: Some("duckdb".to_string()),
         },
         Err(error) => SqlHistoryEntry {
             conn_id: Some(plan.owner.clone()),
@@ -309,6 +311,7 @@ pub(crate) fn record_federation_history(
             channel: Some(ExecChannel::Federated.code().to_string()),
             sources,
             lineage: lineage.map(str::to_string),
+            driver_id: Some("duckdb".to_string()),
         },
     };
     if let Err(error) = history_store::save_sql_history(sql, &entry) {

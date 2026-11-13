@@ -264,6 +264,15 @@ fn connect_error_from_driver(
                 reason: format!("驱动报错（未知码 {raw_code}）：{message}"),
             })
         }
+        // `-32603`：sidecar 内核兜住了驱动的一次 panic。连接本身没问题，
+        // 按「插件执行失败」报，别让用户误以为库连不上。
+        DriverError::Internal { message } => {
+            CoreError::plugin(PluginError::ExecutionFailed {
+                plugin_id: plugin_id.to_string(),
+                function: "driver.describe".to_string(),
+                reason: format!("驱动内部出错（该请求已隔离，可重试）：{message}"),
+            })
+        }
         DriverError::Timeout { .. } => CoreError::connection(ConnectionError::Timeout {
             conn_id: session_id.to_string(),
             duration_ms: SESSION_RPC_TIMEOUT.as_millis() as u64,

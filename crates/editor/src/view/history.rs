@@ -88,6 +88,8 @@ pub struct HistoryView {
     filter_success: Option<bool>,
     /// 库类型筛选（`None` = 全部）
     filter_db_type: Option<String>,
+    /// 驱动实现筛选（`None` = 全部；D8d / A-7）
+    filter_driver_id: Option<String>,
     /// 已加载到第几条（「加载更多」从此处继续）
     offset: usize,
     /// 上一页是否满页（满页 = 还有更多可加载）
@@ -128,6 +130,7 @@ impl HistoryView {
             keyword: String::new(),
             filter_success: None,
             filter_db_type: None,
+            filter_driver_id: None,
             offset: 0,
             has_more: false,
             selected: HashSet::new(),
@@ -188,6 +191,32 @@ impl HistoryView {
         self.reload(cx);
     }
 
+    /// 设置驱动实现筛选（`None` = 全部；D8d / A-7）
+    pub fn set_driver_filter(&mut self, driver_id: Option<String>, cx: &mut Context<Self>) {
+        if self.filter_driver_id == driver_id {
+            return;
+        }
+        self.filter_driver_id = driver_id;
+        self.offset = 0;
+        self.selected.clear();
+        self.reload(cx);
+    }
+
+    /// 当前可选的驱动实现（取自已载入的行；用于筛选菜单候选）
+    ///
+    /// 历史是分页读取的，候选只能来自「已经看到的记录」——这比硬编码一份驱动清单诚实：
+    /// 插件驱动是用户自己装的，谁也不知道装了哪些。
+    pub fn driver_candidates(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .items
+            .iter()
+            .filter_map(|item| item.driver_id.clone())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
     /// 勾选 / 取消一条（批量删除的选择集）
     pub fn toggle_select(&mut self, id: String, cx: &mut Context<Self>) {
         if !self.selected.remove(&id) {
@@ -232,11 +261,12 @@ impl HistoryView {
         self.selected.len()
     }
 
-    /// 当前筛选条件（关键词 + 库类型 + 成败 → 面板端查询条件）
+    /// 当前筛选条件（关键词 + 库类型 + 驱动实现 + 成败 → 面板端查询条件）
     fn query(&self) -> HistoryQuery {
         HistoryQuery {
             keyword: (!self.keyword.trim().is_empty()).then(|| self.keyword.trim().to_string()),
             db_type: self.filter_db_type.clone(),
+            driver_id: self.filter_driver_id.clone(),
             success: self.filter_success,
         }
     }
@@ -429,6 +459,41 @@ impl Render for HistoryView {
                     menu
                 })
         };
+        // 驱动实现筛选（D8d / A-7）：同一族可能同时有原生与插件两条驱动，库类型分不出来。
+        // 候选来自「已载入的行」——插件驱动是用户自己装的，硬编码清单必然过期。
+        let driver_label = self
+            .filter_driver_id
+            .as_deref()
+            .map(|driver| format!("驱动：{driver}"))
+            .unwrap_or_else(|| "驱动：全部".to_string());
+        let driver_candidates = self.driver_candidates();
+        let driver_button = {
+            let entity = cx.entity();
+            Button::new("history-driver-filter")
+                .ghost()
+                .small()
+                .label(driver_label)
+                .dropdown_menu(move |menu, _, _| {
+                    let mut menu = menu.item(PopupMenuItem::new("全部驱动").on_click({
+                        let entity = entity.clone();
+                        move |_, _, app| {
+                            entity.update(app, |view, cx| view.set_driver_filter(None, cx));
+                        }
+                    }));
+                    for driver in &driver_candidates {
+                        let entity = entity.clone();
+                        let id = driver.clone();
+                        menu = menu.item(PopupMenuItem::new(driver.clone()).on_click(
+                            move |_, _, app| {
+                                entity.update(app, |view, cx| {
+                                    view.set_driver_filter(Some(id.clone()), cx);
+                                });
+                            },
+                        ));
+                    }
+                    menu
+                })
+        };
         let remove_selected = {
             let entity = cx.entity();
             let n = self.selected_count();
@@ -448,6 +513,7 @@ impl Render for HistoryView {
             .py_0p5()
             .child(success_bar)
             .child(db_button)
+            .child(driver_button)
             .when(self.selected_count() > 0, |row| row.child(remove_selected));
 
         // 列表：一行 = 预览 +（时间 · 耗时 · 行数 · 来源），失败的行把原因带出来。
@@ -611,6 +677,10 @@ pub fn history_meta(item: &HistoryItem) -> String {
     if let Some(source) = &item.source_text {
         parts.push(source.clone());
     }
+    // 【D8d / A-7】驱动实现跟在库类型后面：`MYSQL · 驱动 mysql_native`
+    if let Some(driver) = &item.driver_text {
+        parts.push(driver.clone());
+    }
     if let Some(sources) = &item.sources_text {
         parts.push(sources.clone());
     }
@@ -644,9 +714,11 @@ mod tests {
             duration_text: "12 ms".to_string(),
             rows_text: Some("返回 1 行".to_string()),
             source_text: Some("MYSQL".to_string()),
+            driver_text: None,
             sources_text: None,
             lineage_text: None,
             db_type: Some("mysql".to_string()),
+            driver_id: None,
             error: None,
             conn_id: None,
         }

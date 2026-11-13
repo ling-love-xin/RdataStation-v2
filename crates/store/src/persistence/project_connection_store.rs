@@ -654,19 +654,17 @@ impl ProjectConnectionStore {
         Ok(drivers)
     }
 
-    /// 为新项目种子 4 个内置 Native 驱动
+    /// 为新项目种子内置 Native 驱动
+    ///
+    /// 只种**内核自带**的 4 条（每族一条官方实现）。`mysql` / `postgres` 两个 id 的实现已
+    /// 剥离到 sidecar 插件（D3，`rds.driver.sqlx`）：项目里提前种子它们只会得到两条指向
+    /// 不存在驱动的行，插件装上之后的启用状态由插件行自己决定（`drivers.enabled` 跟随
+    /// 插件启停，`project_drivers` 只是本项目的开关）。
     pub async fn seed_default_drivers(&self) -> Result<(), CoreError> {
         // 驱动 ID 与 Registry key 严格对齐
-        //   008 迁移: mysql, postgres, sqlite, duckdb（sqlx/rusqlite/duckdb-rs）
         //   013 迁移: mysql_native, postgres_native（官方原生驱动）
-        let defaults = [
-            "mysql",
-            "mysql_native",
-            "postgres",
-            "postgres_native",
-            "sqlite",
-            "duckdb",
-        ];
+        //   008 迁移: sqlite, duckdb
+        let defaults = ["mysql_native", "postgres_native", "sqlite", "duckdb"];
         for driver_id in defaults {
             if !self.is_driver_enabled(driver_id).await? {
                 self.enable_driver(driver_id).await?;

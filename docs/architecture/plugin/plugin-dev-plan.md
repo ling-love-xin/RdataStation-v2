@@ -697,19 +697,46 @@ Uninstalled ──install──▶ Installed ──load──▶ Loaded ──ac
   1. 卸载安全 = **依赖反向索引**：被其他插件引用（`dependency.rs::check_dependents`，遍历 DB 全部
      插件解析 manifest 找引用者）→ **拒绝卸载**并列出引用者；
   2. 卸载**保留 `plugin-data/<id>/`**（可能含连接 / 凭据），UI 给 checkbox 默认保留；
-  3. 更新（清单 hash 变化）→ 置 `needs_reload`，**重启 / 手动重载生效**，不热更新运行中插件。
+  3. 更新（清单 hash 变化）→ 置 `needs_reload`，**重启 / 手动重载生效**，不热更新运行中插件
+     （清单可能改了能力 / 权限 / 依赖，需要人确认）；
+  4. 只换载荷（`plugin.toml` 没变、目录里的 `agent.exe` / wasm / 脚本变了）→ **自动重启该插件**，
+     不需要人介入，也不重启宿主（见 §4.8.2，2026-11-12 落地）；但**该插件上有活动会话时先不重启**，
+     退回待重载、会话结束后自动补上（2026-11-13 补，理由见 §4.8.2）。
 
 #### 4.8.2 热插拔（目录即插件）
 
 - **不做 watcher**：挂在运行时循环的 5s tick 做目录 diff（`scan_and_diff_plugins`）——
   安装 / 手动拷贝都是低频动作，5s 足够；省掉 watcher 的递归监听与平台差异。
-- 判定基准 = `install_dir/<id>/plugin.toml` 的**内容 hash**（换版本 / 改能力 / 改权限都触发）：
+- 判定基准两项：`install_dir/<id>/plugin.toml` 的**内容 hash**（换版本 / 改能力 / 改权限都触发）
+  与**载荷指纹**（插件目录里每个文件的相对路径 + 长度 + 纳秒修改时间，加上清单
+  `[backend] driver_jars` 声明的外部 jar / 目录；只 stat 不读内容）。后者是 2026-11-12 补的：
+  只看清单会把「重编 exe、清单没动」判成无变化，运行中的 sidecar 一直跑旧内存镜像。
+  外部路径必须一起算——JDBC 包按约定放插件目录之外、清单写绝对路径，换 jar 时目录与
+  清单都不动；不管它，Java 壳会一直用已加载的旧 jar。
+  清单解析只在**清单 hash 变化**时做一次：`ScanEntry` 里存了解的版本与 `driver_jars`，
+  hash 没变就直接复用（内容相同 ⇒ 两者必然相同），避免 5 秒一轮 × 每个插件重复解 TOML
+  再全量校验。
   - 新目录 → 解析清单 → 加载 + 激活（DB 未禁用才激活）；DB 里没有该 code 的登记行时
     （目录直接拷进 `plugins/`，没走安装器）**先补一条登记**——否则停用 / 卸载按 code 写库
     命中 0 行，重启后又按「无记录 = 启用」复活；
   - 目录消失 → 停用（含停 sidecar 进程）+ 移出运行时索引 + 清该插件的重载标记；
   - 清单变化 → 置 `needs_reload`（插件面板读 `pending_reloads()` 显示「N 个插件文件有变更」
-    + 「重载 N」按钮，点它走 `reload_plugins()`；不点就重启生效）。
+    + 「重载 N」按钮，点它走 `reload_plugins()`；不点就重启生效）；
+  - 只有载荷变化 → `PluginManager::restart_plugin(id)`（停用含停该插件全部 sidecar 进程 →
+    重新激活），记进 `PluginDiff::reloaded`；重启失败才退回 `needs_reload`，不允许悄悄
+    留在旧镜像上。Windows 上运行中的 exe 不能直接覆盖，更新姿势是先把旧的改名再放新的
+    （`crates/plugin/tests/payload_refresh_real_process.rs` 就是照这个姿势验的）。
+  - **有活动会话时不重启**（2026-11-13 补）：`supervisor::session_count_of(plugin_id)` 不为 0
+    就先不动——重启是**真的停进程**，那个插件上的会话连同正在跑的查询一起作废，用户不会知道
+    是二进制被换了，只会看到查询莫名断。这类插件记进 `pending_payload_restart` 并退回
+    `needs_reload`（面板照样提示「有变更」，手动重载是用户的显式选择），之后每轮扫描检查：
+    会话一归零就自动补做重启、记 `reloaded` 并撤掉提示。代价是「一直连着就一直不换」，
+    想要立刻生效得手动重载——这个取舍是刻意的：不擅自断人比早几分钟换二进制重要。
+  - **重启前先核随包哈希**（2026-11-13 补）：载荷指纹只 stat、不读内容，拷半截或被写坏的
+    文件同样「看起来变了」。有 `checksums.json` 时先跑一遍 `checksums::verify_package`
+    （与安装期同一函数，`spawn_blocking` 里算 sha256），不通过就**不重启**、退回
+    `needs_reload` 并在日志里指出哪个文件对不上；没有该文件的目录（开发目录、老包）直接放行，
+    与安装期口径一致。补做 `pending_payload_restart` 时同样先校验（文件可能又被改坏）。
 - `reload_plugins()` = VS Code「Reload Window」：停全部已激活 → 清 `needs_reload` →
   **清扫描快照**（否则 diff 判「无变化」会空转）→ 重扫全部重新加载激活。
 

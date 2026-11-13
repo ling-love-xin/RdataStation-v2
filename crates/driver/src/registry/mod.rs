@@ -19,8 +19,8 @@ use shared::error::CoreError;
 pub use config::DriverConnectionConfig;
 pub use descriptors::{
     DriverDescriptor, DriverField, DriverFieldType, DriverKind, DriverOption, DriverOptionType,
-    duckdb_driver, get_all_drivers, get_driver, mysql_driver, mysql_native_driver, postgres_driver,
-    postgres_native_driver, sqlite_driver,
+    duckdb_driver, get_all_drivers, get_driver, mysql_native_driver, postgres_native_driver,
+    sqlite_driver,
 };
 
 /// 动态数据库类型
@@ -33,17 +33,17 @@ pub type DynDatabase = Arc<dyn Database + Send + Sync>;
 /// # 示例
 ///
 /// ```ignore
-/// pub struct MySqlDriverFactory;
+/// pub struct MySqlNativeDriverFactory;
 ///
-/// impl DriverFactory for MySqlDriverFactory {
+/// impl DriverFactory for MySqlNativeDriverFactory {
 ///     fn descriptor(&self) -> DriverDescriptor {
-///         mysql_driver()
+///         mysql_native_driver()
 ///     }
 ///
 ///     fn create(&self, config: DriverConnectionConfig) -> Pin<Box<dyn Future<Output = Result<DynDatabase, CoreError>> + Send>> {
 ///         Box::pin(async move {
 ///             let url = config.to_url()?;
-///             let db = MySqlDatabase::new(&url).await?;
+///             let db = MySqlNativeDatabase::new(&url).await?;
 ///             Ok(Arc::new(db))
 ///         })
 ///     }

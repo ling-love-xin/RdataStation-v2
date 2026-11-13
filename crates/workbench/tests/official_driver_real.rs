@@ -185,10 +185,20 @@ fn declared_driver_properties_connect_and_ui_fabricated_keys_are_rejected() {
             ),
         }
 
-        // ③ 对照：同一对键交给**同族的 sqlx 驱动** → 静默忽略、连接照常
+        // ③ 对照：同一对键交给**同族的 sqlx 插件驱动** → 静默忽略、连接照常
         //    （这就是 `driver-capability-matrix` §2.1 那张「未知参数」表的真机形态：
-        //    同一个键一个报错、一个无声）
+        //    同一个键一个报错、一个无声）。
+        //
+        // D3 之后 sqlx 不再是内核驱动：只有装了插件（`rds.driver.sqlx`）的机器上这条
+        // 对照才成立。因此先看注册表里有没有这个 id —— 没有就**如实跳过**，不假装通过，
+        // 也不把「内核本不该注册它」变成失败（插件侧的静默忽略另有单测 + D2 真机覆盖）。
         let sqlx_driver = driver.strip_suffix("_native").unwrap_or(driver);
+        if !driver_is_registered(sqlx_driver) {
+            eprintln!(
+                "⏭️  {sqlx_driver}：插件未安装（注册表无此 id），第 ③ 步对照未覆盖"
+            );
+            continue;
+        }
         match connect_via_record(&rt, sqlx_driver, &url, None, Some(fabricated)) {
             Ok((_, db)) => {
                 query_one(&rt, &db).expect("sqlx 忽略未知属性后应能查询");
@@ -203,6 +213,14 @@ fn declared_driver_properties_connect_and_ui_fabricated_keys_are_rejected() {
     if checked == 0 {
         eprintln!("⚠️  未设 RDS_TEST_MYSQL_URL / RDS_TEST_PG_URL，本项未覆盖（不算失败）");
     }
+}
+
+/// 注册表里当前有没有这个驱动 id（内核只注册 4 条官方驱动；`mysql` / `postgres`
+/// 由插件 `rds.driver.sqlx` 贡献，装了才有）。
+fn driver_is_registered(id: &str) -> bool {
+    engine::driver::DriverRegistry::all_descriptors()
+        .iter()
+        .any(|d| d.id == id)
 }
 
 /// 从**驱动声明**取该驱动声明的属性默认值（JSON 对象文本）。
@@ -293,8 +311,12 @@ fn official_driver_tls_require_connects_and_verify_is_real() {
 
 /// 诊断：真机 PG 到底有没有开 TLS（决定上面 `require` 的失败是服务端能力还是我们的缺陷）。
 ///
-/// 判据用 **sqlx 驱动 + `?sslmode=require`**——这条路子的 TLS 参数支持无争议
-/// （`PgSslMode` 五档就在 URL 上），若它也失败，就是服务端没启 TLS。
+/// 判据优先用**插件 sqlx 驱动**（`postgres`）+ `?sslmode=require`——这条路子的 TLS 参数支持
+/// 无争议（`PgSslMode` 三档就在 URL 上），若它也失败，就是服务端没启 TLS。
+///
+/// D3 之后 `postgres` 不再内置，所以插件没装时退到 `postgres_native` 自测；那时结论是
+/// **有歧义**的（失败可能是服务端、也可能是我方连接器），输出里如实标注，不当判据用。
+///
 /// 不拿 `SHOW ssl` / `SELECT current_setting('ssl')` 当判据：那两个查询在 sqlx 驱动里
 /// 只填 `batches`（`rows` / `total_rows` 为空，是既有实现的取舍），读值先要解 Arrow，
 /// 而且 `SHOW` 实测连行都不回。
@@ -307,15 +329,31 @@ fn pg_server_tls_capability_diagnostic() {
     engine::driver::AutoDriverRegistrar::auto_register();
     let rt = runtime();
 
-    let plain = route(&rt, "postgres", &url);
-    assert!(plain.is_ok(), "明文连接应可用（既有真机套件同路径）");
+    let (judge, unambiguous) = if driver_is_registered("postgres") {
+        ("postgres", true)
+    } else {
+        eprintln!("⏭️  插件 sqlx 驱动未安装，判据退到 postgres_native（结论有歧义，仅记录）");
+        ("postgres_native", false)
+    };
 
-    let with_tls = route(&rt, "postgres", &format!("{url}?sslmode=require"));
-    match with_tls {
-        Ok(_) => eprintln!("ℹ️  真机 PG **支持** TLS（sqlx sslmode=require 连上了）"),
-        Err(e) => {
-            eprintln!("ℹ️  真机 PG **未启用** TLS（sqlx sslmode=require 也失败：{e}）——本项未覆盖")
+    let plain = route(&rt, judge, &url);
+    // 判据自己先得能用：连不上就没资格判服务端能力（此时按「未覆盖」记录，不判红）。
+    if let Err(e) = plain {
+        eprintln!("⚠️  判据驱动 {judge} 明文连接失败（{e}）——本项未覆盖");
+        return;
+    }
+    eprintln!("ℹ️  {judge}：明文连接可用（判据驱动自身可用）");
+
+    let with_tls = route(&rt, judge, &format!("{url}?sslmode=require"));
+    match (with_tls, unambiguous) {
+        (Ok(_), _) => eprintln!("ℹ️  真机 PG **支持** TLS（{judge} sslmode=require 连上了）"),
+        (Err(e), true) => {
+            eprintln!("ℹ️  真机 PG **未启用** TLS（{judge} sslmode=require 也失败：{e}）——本项未覆盖")
         }
+        (Err(e), false) => eprintln!(
+            "⚠️  {judge} sslmode=require 失败（{e}）——插件未装，无法区分「服务端没开 TLS」\
+             与「我方连接器问题」"
+        ),
     }
 }
 

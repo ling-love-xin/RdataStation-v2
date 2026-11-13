@@ -33,9 +33,7 @@
 
 use rds_engine::driver::Database;
 use rds_engine::driver::native::duckdb::DuckDbDatabase;
-use rds_engine::driver::native::mysql::MySqlDatabase;
 use rds_engine::driver::native::mysql_native::MySqlNativeDatabase;
-use rds_engine::driver::native::postgres::PostgresDatabase;
 use rds_engine::driver::native::postgres_native::PostgresNativeDatabase;
 use rds_engine::driver::native::sqlite::SqliteDatabase;
 use shared::error::{CoreError, DatabaseError, ErrorLocation};
@@ -166,17 +164,6 @@ async fn pg_cases(db: &dyn Database, t: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn postgres_errors_carry_location() {
-    let Ok(url) = std::env::var("RDS_TEST_PG_URL") else {
-        eprintln!("⏭️  未设 RDS_TEST_PG_URL，跳过");
-        return;
-    };
-    println!("\n=== PostgreSQL（sqlx，协议字段）===");
-    let db = PostgresDatabase::new(&url).await.expect("连上 PG");
-    pg_cases(&db, "rds_err_loc_pg").await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn official_postgres_errors_carry_location() {
     let Ok(url) = std::env::var("RDS_TEST_PG_URL") else {
         eprintln!("⏭️  未设 RDS_TEST_PG_URL，跳过");
@@ -255,17 +242,6 @@ async fn mysql_cases(db: &dyn Database, t: &str, schema: &str, with_fk_error: bo
     assert_no_loc("MySQL 语法错", &loc, "语法错没有对象");
 
     drop_probe(db, t, &parent).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn mysql_errors_carry_location() {
-    let Ok(url) = std::env::var("RDS_TEST_MYSQL_URL") else {
-        eprintln!("⏭️  未设 RDS_TEST_MYSQL_URL，跳过");
-        return;
-    };
-    println!("\n=== MySQL（sqlx，消息解析）===");
-    let db = MySqlDatabase::new(&url).await.expect("连上 MySQL");
-    mysql_cases(&db, "rds_err_loc_my", "mysql", false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

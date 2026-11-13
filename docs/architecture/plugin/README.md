@@ -27,6 +27,9 @@
 | `plugin-layout.md` | **目录怎么摆**：一个插件一个目录的内部布局、入口解析（多平台）、路径白名单、打包与版本规则 | 写插件包 / 改加载·安装·卸载逻辑时 |
 | `plugin-manager-ui.md` | **管理页怎么落地**：`panels/plugin_manager/` 六文件职责、数据面复用、左 Dock 入口与中央常驻 tab、尺寸/契约、已知缺口 | 改插件管理页 / 新增页内区块时 |
 | `plugin-user-guide.md` | **怎么用**：面向使用者的入口与操作、面向作者的从零写一个插件 | 交付/试用/写插件时 |
+| `driver-capability-gating-plan.md` | **驱动能力位 × 属性分区置灰**：能力位清单（对齐 DBeaver `DBPDataSourceInfo`）、三态取数、`PropertySection` 不可用态、门控输入从族改驱动 | 改属性面板 / 接新驱动 / 能力差异显露时 |
+| `sqlx-driver-extraction-plan.md` | **sqlx 驱动抽为插件**：边界与共享代码切分、驱动 id 与迁移策略、协议缺口、分刀计划 | 动手抽 sqlx 前必读 |
+| `driver-operation-audit-plan.md` | **操作留痕与可查看**：`driver_operations` 表、写入点清单、查询历史补 `driver_id`、查看入口 | 改插件/驱动生命周期、补审计时 |
 | `prototype/*.html` | **可交互形态稿**（五张，含插件入口） | 评审界面时；索引见 `prototype/README.md` |
 
 `../ui/`、`../theme/`、`../layout/` 仍是**视觉与尺寸的权威**；本文档集不定义新的视觉原语。

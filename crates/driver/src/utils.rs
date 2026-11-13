@@ -2,281 +2,22 @@ use super::registry::DriverConnectionConfig;
 use shared::error::{ConnectionError, CoreError};
 use shared::models::QueryResult;
 
-/// 把一个**非文本族**的单元格解成展示文本：`numeric` / 时间 / UUID / JSON。
-///
-/// ## 为什么需要它
-///
-/// sqlx / tokio-postgres 的四个转换器都靠「按值试探」定列型，试探表只有
-/// `bool / i32 / i64 / f32 / f64 / Vec<u8> / String`。`numeric` · `timestamptz` · `date` ·
-/// `time` · `uuid` · `jsonb` **一个都不在表里**：试探全失败 → 整列声明 `Utf8` →
-/// 解码时又只试 `String` → 再失败 → `.ok().flatten()` 给 `None` → **出口层看到的是
-/// 「值就是 NULL」**，与「这格本来就是 NULL」不可区分。
-///
-/// 真机实测（PG 19 列 / MySQL 14 列）：金额 · 时间 · JSON · 数组 · inet · point · uuid
-/// 全部静默变 NULL。
-///
-/// ## 口径
-///
-/// * **一律产出文本，不进浮点**：`numeric(10,2)` 走 `BigDecimal::to_string()` 原样保留精度。
-///   金额过一遍 `f64` 会变成「看起来像数据错误的显示错误」。
-/// * **顺序有意义**：先 `String`（真文本列最快命中）→ 精确数值 → 时间族
-///   （`NaiveDateTime` → `DateTime<Utc>` → `NaiveDate` → `NaiveTime`：`timestamptz`
-///   只能按带时区解、`timestamp` 只能按无时区解）→ UUID → JSON → 最后才把字节 lossy 成文本。
-/// * **写成宏而不是函数**：`sqlx::Row::try_get` 可用的解码类型挂在 `R::Database` 上，
-///   泛型函数里无法对「任意 R」成立。宏仍然只有一份定义。
-///
-/// 返回 `None` 表示这个驱动确实解不出来（自定义类型 / 几何 / 网络地址…）。调用方
-/// **不能把它悄悄当 NULL**，要留痕（各转换器里的 `undecodable` 计数 + `warn`）。
-#[macro_export]
-macro_rules! sqlx_cell_as_text {
-    ($row:expr, $idx:expr) => {{
-        use sqlx::Row as _;
-        let row = $row;
-        let idx = $idx;
-        if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
-            Some(v)
-        } else if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::BigDecimal>, _>(idx) {
-            Some(v.to_string())
-        } else if let Ok(Some(v)) =
-            row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx)
-        {
-            Some(v.format("%Y-%m-%d %H:%M:%S%.f").to_string())
-        } else if let Ok(Some(v)) =
-            row.try_get::<Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>>, _>(idx)
-        {
-            Some(v.format("%Y-%m-%d %H:%M:%S%.f+00").to_string())
-        } else if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveDate>, _>(idx) {
-            Some(v.format("%Y-%m-%d").to_string())
-        } else if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveTime>, _>(idx) {
-            Some(v.format("%H:%M:%S%.f").to_string())
-        } else if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::Uuid>, _>(idx) {
-            Some(v.to_string())
-        } else if let Ok(Some(v)) =
-            row.try_get::<Option<sqlx::types::Json<serde_json::Value>>, _>(idx)
-        {
-            Some(v.0.to_string())
-        } else if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(idx) {
-            Some(String::from_utf8_lossy(&v).into_owned())
-        } else {
-            None
-        }
-    }};
-}
+// `sqlx_cell_as_text!` / `sqlx_value_is_null` 已随内核 sqlx 实现一起删除
+// （D3，2026-11-12）：它们只服务 sqlx 的两个后端，官方驱动各有自己的取文本路径
+// （`mysql_native.rs` / `postgres_native.rs`）。等价逻辑现在在插件里
+// （`tools/plugin-drivers/sqlx-rust/src/values.rs`），并且补了整数/浮点分支。
 
-/// 该单元格在**协议层**是不是 NULL —— 与「类型解不出来」区分开。
-///
-/// 为什么需要区分：转换器解不出来时只能往数组里塞 `None`，而 `None` 与真实 SQL NULL
-/// 在 Arrow 里长得一模一样。调用方据此决定要不要留痕（`tracing::warn!`），否则
-/// 「库里明明有值、界面却是空白格」就成了一个没有来源的现象。
-///
-/// 泛型只要求 `Row + ColumnIndex`，不涉及 `Decode` / `Type` 约束，因此两种后端都成立。
-pub fn sqlx_value_is_null<R: sqlx::Row>(row: &R, index: usize) -> bool
-where
-    usize: sqlx::ColumnIndex<R>,
-{
-    use sqlx::ValueRef as _;
-    row.try_get_raw(index)
-        .map(|value| value.is_null())
-        .unwrap_or(true)
-}
-
-/// PostgreSQL：列出某表的列（两个 PG 驱动共用）。
-///
-/// **列序是本模块的契约**（三个 `*_TABLE_DETAIL_SQL` 必须一致，`columns_from_detail_rows` 按它取值）：
-/// `0 列名 / 1 类型 / 2 可空(YES|NO) / 3 序号(1 基) / 4 主键标记(PRI|空) / 5 默认值 / 6 注释 / 7 引用表 / 8 引用列 / 9 外键标记(1|空，**含复合外键**) / 10 标识标记(1|空) / 11 标识生成方式 / 12 排序规则`。
-///
-/// 10..=12 为 2026-10-24 列字段增强新增（属性面板「标识 / 排序规则」列）：
-/// PG 用 `attidentity` + `attcollation`（`pg_collation.collname`），MySQL 用
-/// `EXTRA` 含 `auto_increment` + `COLLATION_NAME`；DuckDB 无这两个概念，用空
-/// 串占位**保持列序契约对齐**（`columns_from_detail_rows` 按位取值，缺列会错位）。
-///
-/// **PG 的这三条不吃 `catalog` 参数**：一条连接只绑一个库，内省只能在当前库里做
-/// （跨库浏览要靠「按库另开连接」，见 `get_catalogs` 的说明）。
-///
-/// 一次取齐属性面板要的东西：列名 / 类型 / 可空 / 主键标记 / 默认值 / 注释，
-/// 外加 2026-09-21 补的 **`ordinal_position`** 与**单列外键的引用目标**
-/// （`referential_constraints` 只含外键，所以不会把主键误认成引用；
-/// 复合外键用 `COUNT(*) = 1` 挡掉 —— 那时的配对要按列序做，留给约束分区）。
-pub const PG_TABLE_DETAIL_SQL: &str = "\
-            SELECT a.attname, \
-                   format_type(a.atttypid, a.atttypmod), \
-                   CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END, \
-                   a.attnum::text AS attnum, \
-                   CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_index i \
-                                      WHERE i.indrelid = c.oid AND i.indisprimary \
-                                        AND a.attnum = ANY (i.indkey)) \
-                        THEN 'PRI' ELSE '' END AS column_key, \
-                   pg_catalog.pg_get_expr(ad.adbin, ad.adrelid), \
-                   COALESCE(pg_catalog.col_description(c.oid, a.attnum), ''), \
-                   COALESCE((SELECT rc.relname \
-                               FROM pg_catalog.pg_constraint con \
-                               JOIN pg_catalog.pg_class rc ON rc.oid = con.confrelid \
-                              WHERE con.conrelid = c.oid AND con.contype = 'f' \
-                                AND array_length(con.conkey, 1) = 1 \
-                                AND con.conkey[1] = a.attnum \
-                              LIMIT 1), '') AS ref_table, \
-                   COALESCE((SELECT ra.attname \
-                               FROM pg_catalog.pg_constraint con \
-                               JOIN pg_catalog.pg_attribute ra \
-                                 ON ra.attrelid = con.confrelid AND ra.attnum = con.confkey[1] \
-                              WHERE con.conrelid = c.oid AND con.contype = 'f' \
-                                AND array_length(con.conkey, 1) = 1 \
-                                AND con.conkey[1] = a.attnum \
-                              LIMIT 1), '') AS ref_column, \
-                   CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_constraint con \
-                                      WHERE con.conrelid = c.oid AND con.contype = 'f' \
-                                        AND a.attnum = ANY (con.conkey)) \
-                        THEN '1' ELSE '' END AS is_fk, \
-                   CASE WHEN a.attidentity <> '' THEN '1' ELSE '' END AS is_identity, \
-                   CASE a.attidentity WHEN 'd' THEN 'BY DEFAULT' WHEN 'a' THEN 'ALWAYS' \
-                        ELSE '' END AS identity_generation, \
-                   CASE WHEN a.attcollation <> 0::oid THEN \
-                        (SELECT coll.collname FROM pg_catalog.pg_collation coll \
-                          WHERE coll.oid = a.attcollation) ELSE '' END AS collation \
-              FROM pg_catalog.pg_class c \
-              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
-              JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid \
-              LEFT JOIN pg_catalog.pg_attrdef ad ON ad.adrelid = c.oid AND ad.adnum = a.attnum \
-             WHERE n.nspname = $1 AND c.relname = $2 \
-               AND a.attnum > 0 AND NOT a.attisdropped \
-             ORDER BY a.attnum";
-
-/// PostgreSQL：列出**服务器上可连接的库**（两个 PG 驱动共用）。
-///
-/// 为什么不是 `current_database()`：那样导航里只看得到一个库，用户以为别的库不见了
-/// （实测端点上就有两个库）。别的库里有什么要**另开一条连到那个库的连接**才看得到 ——
-/// 见 `MetadataBrowser::catalog_is_connection_scoped` 与
-/// `ConnectionManager::get_scoped_connection`。
-///
-/// `datallowconn` 挡掉不允许连接的库，`datistemplate` 挡掉模板库（`template0` / `template1`）——
-/// 它们连上去也没有用户对象。
-pub const PG_LIST_CATALOGS_SQL: &str = "\
-            SELECT datname FROM pg_catalog.pg_database \
-             WHERE datallowconn AND NOT datistemplate \
-             ORDER BY datname";
-
-/// PostgreSQL：这条连接绑的库（跨库判断用；结果由 `ConnectionManager` 按连接缓存，只查一次）。
-pub const PG_CURRENT_DATABASE_SQL: &str = "SELECT current_database()::text AS datname";
-
-/// PostgreSQL：列出用户 schema（两个 PG 驱动共用）。
-///
-/// 为什么不用 `information_schema.schemata`：它把 `pg_toast*` / `pg_temp_*` 一起列出来
-/// （真机实测：28 个 schema 里 26 个是这类噪音，用户只关心剩下的 1-2 个），而且它是
-/// 几十路 JOIN 的视图。`pg_` 前缀是 PG 保留给系统的（`pg_catalog` / `pg_toast` / `pg_temp_N`），
-/// 按业界惯例（DBeaver 同口径）一律不显示。
-pub const PG_LIST_SCHEMAS_SQL: &str = "\
-            SELECT n.nspname FROM pg_catalog.pg_namespace n \
-             WHERE n.nspname <> 'information_schema' \
-               AND n.nspname NOT LIKE 'pg\\_%' \
-               AND pg_catalog.has_schema_privilege(n.oid, 'USAGE') \
-             ORDER BY n.nspname";
-
-/// PostgreSQL：列出某 schema 下的对象（两个 PG 驱动共用）。
-///
-/// 为什么不用 `information_schema.tables`：**物化视图（`relkind = 'm'`）与外部表（`'f'`）
-/// 根本不在它里面**（真机实测：物化视图在导航里完全看不到），它也不含分区表（`'p'`）。
-/// 走 `pg_class` 一次拿全，顺带快得多（没有那几十路 JOIN）。
-///
-/// `relkind` → 展示类型的映射：`r` 普通表 / `p` 分区表 / `f` 外部表 → `BASE TABLE`；
-/// `v` 视图与 `m` **物化视图**都 → `VIEW`（我们的导航把物化视图并入「视图」，见
-/// `docs/architecture/references/README.md` 的对照口径）。
-///
-/// 第 3/4 列（S3-② 分区/继承折叠）：`parent_name` = `pg_inherits` 的父表（单继承，
-/// 一个子表至多一条记录，JOIN 不放大行数）；`is_partition` = `c.relispartition`
-/// （PG 10+，小于该版本的本列恒为 `false`，折叠退化为「不区分分区/继承」）。
-pub const PG_LIST_TABLES_SQL: &str = "\
-            SELECT c.relname, \
-                   CASE c.relkind \
-                        WHEN 'v' THEN 'VIEW' \
-                        WHEN 'm' THEN 'VIEW' \
-                        ELSE 'BASE TABLE' END AS table_type, \
-                   p.relname AS parent_name, \
-                   c.relispartition AS is_partition \
-              FROM pg_catalog.pg_class c \
-              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
-              LEFT JOIN pg_catalog.pg_inherits i ON i.inhrelid = c.oid \
-              LEFT JOIN pg_catalog.pg_class p ON p.oid = i.inhparent \
-             WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'v', 'm', 'f') \
-             ORDER BY c.relname";
-
-/// MySQL：列出某表的列（两个 MySQL 驱动共用）。
-///
-/// 列序契约见 [`PG_TABLE_DETAIL_SQL`]。
-///
-/// 与 PG 的差别：`key_column_usage` 自己就有 `referenced_table_name` /
-/// `referenced_column_name`，不必绕 `referential_constraints` 那圈 JOIN；
-/// 复合外键同样用「本约束只涉及一列」挡掉 —— **与 PG 同口径**，所以四个网络驱动
-/// 交出来的 `references` 语义一致。
-pub const MY_TABLE_DETAIL_SQL: &str = "\
-            SELECT c.column_name, c.data_type, c.is_nullable, CAST(c.ordinal_position AS CHAR) AS ordinal_position, c.column_key, \
-                   c.column_default, c.column_comment, \
-                   COALESCE((SELECT kcu.referenced_table_name \
-                               FROM information_schema.key_column_usage kcu \
-                              WHERE kcu.table_schema = c.table_schema AND kcu.table_name = c.table_name \
-                                AND kcu.column_name = c.column_name AND kcu.referenced_table_name IS NOT NULL \
-                                AND (SELECT COUNT(*) FROM information_schema.key_column_usage k2 \
-                                      WHERE k2.constraint_schema = kcu.constraint_schema \
-                                        AND k2.constraint_name = kcu.constraint_name) = 1 \
-                              LIMIT 1), '') AS ref_table, \
-                   COALESCE((SELECT kcu.referenced_column_name \
-                               FROM information_schema.key_column_usage kcu \
-                              WHERE kcu.table_schema = c.table_schema AND kcu.table_name = c.table_name \
-                                AND kcu.column_name = c.column_name AND kcu.referenced_column_name IS NOT NULL \
-                                AND (SELECT COUNT(*) FROM information_schema.key_column_usage k2 \
-                                      WHERE k2.constraint_schema = kcu.constraint_schema \
-                                        AND k2.constraint_name = kcu.constraint_name) = 1 \
-                              LIMIT 1), '') AS ref_column, \
-                   CASE WHEN EXISTS (SELECT 1 FROM information_schema.key_column_usage kcu \
-                                      WHERE kcu.table_schema = c.table_schema \
-                                        AND kcu.table_name = c.table_name \
-                                        AND kcu.column_name = c.column_name \
-                                        AND kcu.referenced_table_name IS NOT NULL) \
-                        THEN '1' ELSE '' END AS is_fk, \
-                   CASE WHEN c.extra LIKE '%auto_increment%' THEN '1' ELSE '' END AS is_identity, \
-                   CASE WHEN c.extra LIKE '%auto_increment%' THEN 'AUTO_INCREMENT' \
-                        ELSE '' END AS identity_generation, \
-                   COALESCE(c.collation_name, '') AS collation \
-              FROM information_schema.columns c \
-             WHERE c.table_schema = ? AND c.table_name = ? \
-             ORDER BY c.ordinal_position";
-
-/// DuckDB：列出某表的列。
-///
-/// 列序契约见 [`PG_TABLE_DETAIL_SQL`]。三处 DuckDB 专有（都是真机探针问出来的）：
-///
-/// * 注释列在 `information_schema.columns` 里叫 **`COLUMN_COMMENT`**（不叫 `comment`，
-///   写 `c.comment` 直接是 `Binder Error`）；
-/// * 主键只存在于 `duckdb_constraints()`，且列名列是**列表**，所以用 `list_contains` 判在不在；
-/// * 外键目标列也是列表，必须 `array_to_string` 化开（`row.get::<String>` 对列表列报
-///   `Invalid column type List`）。
-///
-/// 复合外键用 `len(...) = 1` 挡掉（同 PG / MySQL 口径）。
-pub const DUCK_TABLE_DETAIL_SQL: &str = "\
-            SELECT c.column_name, c.data_type, c.is_nullable, CAST(c.ordinal_position AS VARCHAR) AS ordinal_position, \
-                   CASE WHEN EXISTS (SELECT 1 FROM duckdb_constraints() k \
-                                      WHERE k.table_name = c.table_name \
-                                        AND k.constraint_type = 'PRIMARY KEY' \
-                                        AND list_contains(k.constraint_column_names, c.column_name)) \
-                        THEN 'PRI' ELSE '' END AS column_key, \
-                   c.column_default, COALESCE(c.column_comment, '') AS column_comment, \
-                   COALESCE((SELECT k.referenced_table FROM duckdb_constraints() k \
-                              WHERE k.table_name = c.table_name AND k.constraint_type = 'FOREIGN KEY' \
-                                AND list_contains(k.constraint_column_names, c.column_name) \
-                                AND len(k.constraint_column_names) = 1 LIMIT 1), '') AS ref_table, \
-                   COALESCE((SELECT array_to_string(k.referenced_column_names, ',') \
-                               FROM duckdb_constraints() k \
-                              WHERE k.table_name = c.table_name AND k.constraint_type = 'FOREIGN KEY' \
-                                AND list_contains(k.constraint_column_names, c.column_name) \
-                                AND len(k.constraint_column_names) = 1 LIMIT 1), '') AS ref_column, \
-                   CASE WHEN EXISTS (SELECT 1 FROM duckdb_constraints() k \
-                                      WHERE k.table_name = c.table_name \
-                                        AND k.constraint_type = 'FOREIGN KEY' \
-                                        AND list_contains(k.constraint_column_names, c.column_name)) \
-                        THEN '1' ELSE '' END AS is_fk, \
-                   '' AS is_identity, '' AS identity_generation, '' AS collation \
-              FROM information_schema.columns c \
-             WHERE c.table_schema = 'main' AND c.table_name = ? \
-             ORDER BY c.ordinal_position";
+// ===== 元数据面：SQL 常量与纯函数已抽到 `crates/driver-sql`（与 sqlx 插件共用一份）=====
+//
+// 这里只 re-export：既有的 `utils::PG_LIST_TABLES_SQL` / `utils::split_csv` 等调用点
+// 一行都不用改，同时保证「内核原生驱动」与「sqlx 插件二进制」拿到的是同一份文本。
+// 抄第二份必然漂移（本仓 2026-09-21 刚把七份 `is_read_only_sql` 收敛成一份）。
+pub use rds_driver_sql::codes::{pg_constraint_kind, pg_fk_action, split_csv};
+pub use rds_driver_sql::meta_sql::{
+    DUCK_TABLE_DETAIL_SQL, MY_LIST_CONSTRAINTS_SQL, MY_TABLE_DETAIL_SQL, PG_CURRENT_DATABASE_SQL,
+    PG_LIST_CATALOGS_SQL, PG_LIST_CONSTRAINTS_SQL, PG_LIST_INDEXES_SQL, PG_LIST_SCHEMAS_SQL,
+    PG_LIST_TABLES_SQL, PG_TABLE_DETAIL_SQL,
+};
 
 /// 按**约定列序**（见 [`PG_TABLE_DETAIL_SQL`]）把表详情的结果读成列详情。
 ///
@@ -316,76 +57,6 @@ pub fn columns_from_detail_rows(result: &QueryResult) -> Vec<crate::ColumnDetail
         })
         .collect()
 }
-
-/// MySQL：列出某表的约束（两个 MySQL 驱动共用，勿抄第二份）。
-///
-/// 三张 `information_schema` 表各管一段：`TABLE_CONSTRAINTS`（有哪些约束）→
-/// `KEY_COLUMN_USAGE`（涉及哪些列、引用谁）→ `REFERENTIAL_CONSTRAINTS`（更新 / 删除
-/// 规则）。`GROUP_CONCAT(... ORDER BY ORDINAL_POSITION)` 把组合约束的列按**声明顺序**
-/// 拼回一个字符串 —— 组合主键的顺序有意义，不能靠聚合的默认顺序。
-pub const MY_LIST_CONSTRAINTS_SQL: &str = "\
-            SELECT tc.CONSTRAINT_NAME AS cname, tc.CONSTRAINT_TYPE AS ctype, \
-                   COALESCE(GROUP_CONCAT(kcu.COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION), '') AS cols, \
-                   COALESCE(kcu.REFERENCED_TABLE_NAME, '') AS ref_table, \
-                   COALESCE(GROUP_CONCAT(kcu.REFERENCED_COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION), '') AS ref_cols, \
-                   COALESCE(rc.UPDATE_RULE, '') AS upd, COALESCE(rc.DELETE_RULE, '') AS del \
-              FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc \
-              LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu \
-                ON kcu.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA \
-               AND kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME \
-               AND kcu.TABLE_SCHEMA = tc.TABLE_SCHEMA AND kcu.TABLE_NAME = tc.TABLE_NAME \
-              LEFT JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc \
-                ON rc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA \
-               AND rc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME \
-             WHERE tc.TABLE_SCHEMA = ? AND tc.TABLE_NAME = ? \
-             GROUP BY tc.CONSTRAINT_NAME, tc.CONSTRAINT_TYPE, kcu.REFERENCED_TABLE_NAME, \
-                      rc.UPDATE_RULE, rc.DELETE_RULE \
-             ORDER BY tc.CONSTRAINT_NAME";
-
-/// PostgreSQL：列出某表的索引（两个 PG 驱动共用，勿抄第二份）。
-///
-/// 用 `pg_catalog` 而不是 `information_schema`：后者没有 `indisprimary` 与索引方法
-/// （btree / hash / gin / gist / brin）。布尔列在 SQL 里 `::text` —— 批读路径按
-/// `StringArray` 取，混一个 BooleanArray 会让整列 downcast 落空。
-pub const PG_LIST_INDEXES_SQL: &str = "\
-            SELECT i.relname AS index_name, \
-                   ix.indisunique::text, ix.indisprimary::text, \
-                   COALESCE(am.amname, '') AS method, \
-                   COALESCE((SELECT string_agg(a.attname, ',' ORDER BY k.ord) \
-                             FROM unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord) \
-                             JOIN pg_catalog.pg_attribute a \
-                               ON a.attrelid = ix.indrelid AND a.attnum = k.attnum), '') AS cols \
-              FROM pg_catalog.pg_index ix \
-              JOIN pg_catalog.pg_class i ON i.oid = ix.indexrelid \
-              JOIN pg_catalog.pg_class t ON t.oid = ix.indrelid \
-              JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace \
-              LEFT JOIN pg_catalog.pg_am am ON am.oid = i.relam \
-             WHERE n.nspname = $1 AND t.relname = $2 \
-             ORDER BY i.relname";
-
-/// PostgreSQL：列出某表的约束（两个 PG 驱动共用）。
-///
-/// `conkey` / `confkey` 是 `int2[]`，用 `unnest ... WITH ORDINALITY` 按**列序**拼回名字
-/// （组合主键的顺序有意义，不能靠 `string_agg` 的默认顺序）。`confupdtype` /
-/// `confdeltype` 的 `' '`（空格）表示没写 ON UPDATE/DELETE，由 `pg_fk_action` 归 None。
-pub const PG_LIST_CONSTRAINTS_SQL: &str = "\
-            SELECT c.conname, c.contype::text, \
-                   COALESCE((SELECT string_agg(a.attname, ',' ORDER BY k.ord) \
-                             FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord) \
-                             JOIN pg_catalog.pg_attribute a \
-                               ON a.attrelid = c.conrelid AND a.attnum = k.attnum), '') AS cols, \
-                   COALESCE(rc.relname, '') AS ref_table, \
-                   COALESCE((SELECT string_agg(a.attname, ',' ORDER BY k.ord) \
-                             FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord) \
-                             JOIN pg_catalog.pg_attribute a \
-                               ON a.attrelid = c.confrelid AND a.attnum = k.attnum), '') AS ref_cols, \
-                   c.confupdtype::text, c.confdeltype::text \
-              FROM pg_catalog.pg_constraint c \
-              JOIN pg_catalog.pg_class t ON t.oid = c.conrelid \
-              JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace \
-              LEFT JOIN pg_catalog.pg_class rc ON rc.oid = c.confrelid \
-             WHERE n.nspname = $1 AND t.relname = $2 \
-             ORDER BY c.conname";
 
 /// 结果批次读成 `Vec<Vec<String>>`（**每列都渲染成字符串**）。
 ///
@@ -510,43 +181,6 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
-}
-
-/// 逗号分隔的列名 → `Vec<String>`（SQL 侧 `string_agg` 的产物）。
-pub fn split_csv(text: &str) -> Vec<String> {
-    text.split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-/// `pg_constraint.contype` → 展示用名称。
-pub fn pg_constraint_kind(code: &str) -> String {
-    match code {
-        "p" => "PRIMARY KEY",
-        "f" => "FOREIGN KEY",
-        "u" => "UNIQUE",
-        "c" => "CHECK",
-        "x" => "EXCLUDE",
-        other => other,
-    }
-    .to_string()
-}
-
-/// `confupdtype` / `confdeltype` → 规则名。
-///
-/// `' '`（空格）是 PG 的「没写 ON UPDATE/DELETE」——**不是空串**，漏了它每个外键
-/// 都会多出一对空的规则行。
-pub fn pg_fk_action(code: &str) -> Option<String> {
-    match code {
-        "a" => Some("NO ACTION".to_string()),
-        "r" => Some("RESTRICT".to_string()),
-        "c" => Some("CASCADE".to_string()),
-        "n" => Some("SET NULL".to_string()),
-        "d" => Some("SET DEFAULT".to_string()),
-        _ => None,
-    }
 }
 
 /// 构建数据库连接URL
@@ -984,6 +618,39 @@ pub fn schema_context_sql(schema: &str, flavor: SqlFlavor) -> Option<String> {
     }
 }
 
+/// 【T2c-1】把 schema 绑定**恢复成连接默认**的语句（解绑时用；纯函数可测）
+///
+/// 为什么需要它：`SET search_path` / `USE` 都是**会话级**状态，不解绑就会残留——
+/// 用户点了「默认」之后，未限定名仍解析到上一个 schema（实测：解绑后本该报
+/// 「表不存在」，却查到了旧 schema 里的表）。方言映射：
+///
+/// - PostgreSQL：`RESET search_path`（回到角色 / 库的默认值，不需要知道默认是什么）；
+/// - MySQL：`` USE `库名` ``（MySQL 没有「恢复默认库」语句，默认库只能从 URL 的库段取）；
+/// - DuckDB / SQLite：暂无 schema 与会话语义的对齐（不注入）。
+pub fn default_schema_reset_sql(db_type: &str, url: &str) -> Option<String> {
+    let flavor = flavor_from_db_type(db_type)?;
+    match flavor {
+        SqlFlavor::PostgreSql => Some("RESET search_path".to_string()),
+        SqlFlavor::MySql => {
+            let path = url.split(['?', '#']).next()?.split("://").nth(1)?;
+            let db = path.split('/').nth(1)?.trim();
+            if db.is_empty() {
+                return None;
+            }
+            Some(format!("USE `{}`", db.replace('`', "``")))
+        }
+        SqlFlavor::DuckDb | SqlFlavor::Sqlite => None,
+    }
+}
+
+/// 这句 SQL 是不是在改**会话的默认 schema**（`USE`）——驱动据此把握手/执行过的
+/// 会话状态记下来，在换到池里另一条连接时补上（见 `mysql_native` 的 `session_sql`）。
+pub fn is_session_schema_statement(sql: &str) -> bool {
+    let t = sql.trim_start();
+    let head = t.get(..4).unwrap_or("");
+    head.eq_ignore_ascii_case("use ") || head.eq_ignore_ascii_case("use\t")
+}
+
 /// 1 基的**字符**位置（数据库常这么报）→ SQL 里的**字节**偏移
 ///
 /// PG 协议的 `position` 字段就是「第 1 个字符是 1、按字符数」；而编辑器内核按字节收
@@ -1234,7 +901,10 @@ mod read_only_tests {
 
 #[cfg(test)]
 mod schema_context_tests {
-    use super::{SqlFlavor, flavor_from_db_type, schema_context_sql};
+    use super::{
+        SqlFlavor, default_schema_reset_sql, flavor_from_db_type, is_session_schema_statement,
+        schema_context_sql,
+    };
 
     /// 【T2c-1】方言归类：驱动 id 前缀 → 方言族；不认识的驱动不硬猜。
     #[test]
@@ -1253,6 +923,47 @@ mod schema_context_tests {
         // 不认识的驱动（JDBC 等）：宁可不注入也不发一句不认的 SET。
         assert_eq!(flavor_from_db_type("jdbc:postgresql"), None);
         assert_eq!(flavor_from_db_type(""), None);
+    }
+
+    /// 【T2c-1】解绑要能把会话状态**恢复成连接默认**：绑定是会话级的，会残留。
+    #[test]
+    fn default_schema_reset_maps_per_flavor() {
+        // PG：不需要知道默认是什么，`RESET` 回到角色 / 库的默认。
+        assert_eq!(
+            default_schema_reset_sql(
+                "postgres_native",
+                "postgres://u:p@h:5432/postgres?sslmode=disable"
+            )
+            .as_deref(),
+            Some("RESET search_path")
+        );
+        // MySQL：没有「恢复默认库」语句，默认库取 URL 的库段（查询串要剥掉）。
+        assert_eq!(
+            default_schema_reset_sql("mysql_native", "mysql://root:pw@h:3306/mall?ssl-mode=DISABLED")
+                .as_deref(),
+            Some("USE `mall`")
+        );
+        assert_eq!(
+            default_schema_reset_sql("mysql", "mysql://u:p@h:3306/db").as_deref(),
+            Some("USE `db`")
+        );
+        // 没写库段 → 无从恢复，宁可不发也不要发一句错的。
+        assert_eq!(default_schema_reset_sql("mysql_native", "mysql://u:p@h:3306"), None);
+        // 文件型 / 不认识的驱动：不注入。
+        assert_eq!(default_schema_reset_sql("sqlite", "sqlite://D:\\x.db"), None);
+        assert_eq!(default_schema_reset_sql("jdbc:postgresql", "jdbc:postgresql://h/db"), None);
+    }
+
+    /// 【T2c-1】「改会话默认 schema」的语句判定：驱动据此记下会话状态。
+    #[test]
+    fn session_schema_statements_are_recognized() {
+        assert!(is_session_schema_statement("USE `mall`"));
+        assert!(is_session_schema_statement("  use mall"));
+        assert!(is_session_schema_statement("USE\tmall"));
+        // 前缀相近但不是 `USE`：不能误判（否则会把随便一句记成会话状态）。
+        assert!(!is_session_schema_statement("USER"));
+        assert!(!is_session_schema_statement("SELECT 'use x'"));
+        assert!(!is_session_schema_statement("UPDATE t SET a = 1"));
     }
 
     /// 【T2c-1】会话上下文语句按方言映射；SQLite 无 schema 概念不注入。

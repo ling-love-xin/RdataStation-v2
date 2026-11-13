@@ -101,6 +101,14 @@ const TARGETS: [Target; 6] = [
     },
 ];
 
+/// 注册表里当前有没有这个驱动 id（内核只注册 4 条官方驱动；`mysql` / `postgres`
+/// 由插件 `rds.driver.sqlx` 贡献，装了才有）。
+fn driver_is_registered(id: &str) -> bool {
+    engine::driver::DriverRegistry::all_descriptors()
+        .iter()
+        .any(|d| d.id == id)
+}
+
 /// 建连并设为活动连接（返回 conn_id；失败返回 None 并打印原因）
 async fn connect_active(
     manager: &Arc<ConnectionManager>,
@@ -345,6 +353,15 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
     // 全遮住——MySQL 的 `mysql-rsa` 缺失就是这类
     let mut failed_to_connect: Vec<String> = Vec::new();
     for target in TARGETS {
+        // 内核只注册 4 条官方驱动；`mysql` / `postgres` 由插件 `rds.driver.sqlx` 贡献。
+        // 插件没装时如实跳过——不能记成「连不上」（那是把「没装」误报成故障）。
+        if !driver_is_registered(target.driver) {
+            eprintln!(
+                "⏭️  {}：驱动未注册（插件没装），如实跳过",
+                target.driver
+            );
+            continue;
+        }
         let Ok(value) = std::env::var(target.env) else {
             eprintln!("⏭️  {}：未设 {} ，跳过", target.driver, target.env);
             continue;

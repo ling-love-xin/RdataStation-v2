@@ -27,6 +27,9 @@
 //! | `RDS_SIDECAR_EXPECT_ROWS` | `3000` | 上面那条查询应当回来的行数 |
 //! | `RDS_SIDECAR_SQL_SLOW` | `select hold_ms=5000` | 慢查询（**必须能跑 ≥ 5 秒**） |
 //! | `RDS_SIDECAR_SLOW_SECONDS` | `5` | 上面那条查询的时长（取消要在它结束之前生效） |
+//! | `RDS_SIDECAR_CATALOG` | 第一个 catalog | 导航面要验的 catalog（可选覆盖） |
+//! | `RDS_SIDECAR_SCHEMA` | 第一个 schema | 导航面要验的 schema（**指定了就必须验到对象详情**） |
+//! | `RDS_SIDECAR_OBJECT` | 第一个类表对象 | 拿哪个对象验 `meta.object_detail`（**指定了就必须在 `meta.objects` 里找到**） |
 //!
 //! # 检查项（也就是"你的 sidecar 要满足什么"）
 //!
@@ -41,7 +44,10 @@
 //!    这条不满足的话，宿主崩溃时会在用户机器上留下后台进程。
 //! 6. **导航面**（P2）：`meta.catalogs` / `meta.schemas` / `meta.objects` / `meta.object_detail` /
 //!    `meta.routine_source` 要答得出来，而且形状对（第一层不能空、表要说得出列与原始类型、
-//!    例程源码是字符串或 `null`）。库是空的也算过 —— 那时只验「方法答得出来」，并打印说明。
+//!    例程源码是字符串或 `null`）。库是空的也算过 —— 那时只验「方法答得出来」，并打印说明；
+//!    但用 `RDS_SIDECAR_SCHEMA` 指定了 schema 时，空 schema 直接判失败（否则一条从未跑过
+//!    的 `meta.object_detail` 路径会借「空库合法」的名义混进全绿报告，Oracle 的 `DEVUSER`
+//!    就是这么盖过去的：0 个对象）。
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -84,6 +90,35 @@ fn expect_rows() -> usize {
     env_or("RDS_SIDECAR_EXPECT_ROWS", "3000")
         .parse()
         .expect("RDS_SIDECAR_EXPECT_ROWS 应当是数字")
+}
+
+/// 可选：显式指定导航面要验的 catalog / schema。
+///
+/// 不指定时沿用「第一个 catalog + 第一个 schema」的老口径。那个口径有个盲区：
+/// 当第一个 schema 恰好是空的（Oracle 的 `DEVUSER` 就是 0 个对象），
+/// `meta.object_detail` 与例程源码会被静默跳过，于是「导航面 6/6 全绿」其实
+/// 一次详情都没真跑过。指定了就当作承诺——见下面空对象的处理。
+fn override_catalog() -> Option<String> {
+    std::env::var("RDS_SIDECAR_CATALOG")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+fn override_schema() -> Option<String> {
+    std::env::var("RDS_SIDECAR_SCHEMA")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// 可选：显式指定拿哪个对象验 `meta.object_detail`。
+///
+/// 不指定时取「第一个类表对象」——这个口径在真库上会随对象排序漂移：同一份驱动，
+/// 换一个 schema 或加一个对象，验的就是另一个对象，出了问题也不好复现。指定名字
+/// 就有稳定靶子；**指定即承诺**：对象不在 `meta.objects` 里直接判失败。
+fn override_object() -> Option<String> {
+    std::env::var("RDS_SIDECAR_OBJECT")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
 }
 
 fn slow_seconds() -> u64 {
@@ -327,15 +362,32 @@ async fn answers_the_metadata_methods() {
         !catalogs.is_empty(),
         "导航第一层不能是空的：拿不出 catalog 概念的库，请把 schema 名当 catalog 回"
     );
-    let catalog = catalogs[0].clone();
+    let catalog = match override_catalog() {
+        Some(name) => {
+            println!("  指定 catalog：{name}（列表里有：{catalogs:?}）");
+            name
+        }
+        None => catalogs[0].clone(),
+    };
     println!("  catalog：{catalogs:?}");
 
     // ② schema 层：声明了就给得出来；没声明就是单层库，宿主会把 catalog 当 schema 传
-    let schema = if descriptor.supports("schemas") {
+    //
+    // 能力键有两套词汇：本仓 fixture 用协议自己的 `schemas`，真实驱动插件用内核能力
+    // 字典的 `schema_browser`（`descriptors.rs` 与 `sqlx-rust` 都这么写）。只认前者会让
+    // 真实插件的 schema 层**永远不被验**——PG 那次就是按「catalog 当 schema」跑，对象 0 个，
+    // 详情/源码两项还被「空库合法」放过去了。两个键都认。
+    let schema_capability =
+        descriptor.supports("schemas") || descriptor.supports("schema_browser");
+    let schema_overridden = override_schema();
+    let schema = if let Some(name) = schema_overridden.clone() {
+        println!("  指定 schema：{name}（不取 schema[0]）");
+        name
+    } else if schema_capability {
         let schemas = driver.meta_schemas(&catalog).await.expect("meta.schemas");
         assert!(
             !schemas.is_empty(),
-            "声明了 schemas 能力，却一个 schema 也给不出（导航会在这一层空掉）"
+            "声明了 schema 浏览能力，却一个 schema 也给不出（导航会在这一层空掉）"
         );
         println!(
             "  schema：{:?}",
@@ -343,7 +395,7 @@ async fn answers_the_metadata_methods() {
         );
         schemas[0].name.clone()
     } else {
-        println!("  驱动没声明 schemas：按单层库验（schema := catalog）");
+        println!("  驱动没声明 schema 浏览能力：按单层库验（schema := catalog）");
         catalog.clone()
     };
 
@@ -367,21 +419,56 @@ async fn answers_the_metadata_methods() {
         println!("  ⚠️ 报了导航摆不下的类别（宿主会跳过并记日志）：{unmappable:?}");
     }
 
-    let Some(array) = objects.iter().find(|o| o.kind.is_table_like()) else {
-        println!("  这个 schema 里没有表 / 视图：详情与源码两项跳过（空库是合法状态）");
-        let mut supervisor = supervisor;
-        supervisor
-            .shutdown_all(Instant::now(), Duration::from_secs(10))
-            .await;
-        return;
+    // 挑哪个对象验详情：指定了就用它（指定即承诺，找不到不能算过）；
+    // 没指定才退回「第一个类表对象」的老口径。
+    let target = match override_object().as_deref() {
+        Some(requested) => match objects
+            .iter()
+            .find(|o| o.name.eq_ignore_ascii_case(requested))
+        {
+            Some(object) => object,
+            None => {
+                let mut supervisor = supervisor;
+                supervisor
+                    .shutdown_all(Instant::now(), Duration::from_secs(10))
+                    .await;
+                panic!(
+                    "RDS_SIDECAR_OBJECT={requested} 指定了对象，但 {catalog} / {schema} 下没有它——\
+                     这里拿不到对象，meta.object_detail 就没法按名字验，不能算过"
+                );
+            }
+        },
+        None => {
+            let Some(object) = objects.iter().find(|o| o.kind.is_table_like()) else {
+                if let Some(name) = schema_overridden {
+                    // 指定了 schema 就是承诺「这个 schema 下应当验得到详情」：空着等于没验到，
+                    // 不能让一份全绿的报告替一个从未跑过的路径背书。
+                    let mut supervisor = supervisor;
+                    supervisor
+                        .shutdown_all(Instant::now(), Duration::from_secs(10))
+                        .await;
+                    panic!(
+                        "RDS_SIDECAR_SCHEMA={name} 指定了 schema，但它下面没有表 / 视图——\
+                         meta.object_detail 这条路没验到，不能算过"
+                    );
+                }
+                println!("  这个 schema 里没有表 / 视图：详情与源码两项跳过（空库是合法状态）");
+                let mut supervisor = supervisor;
+                supervisor
+                    .shutdown_all(Instant::now(), Duration::from_secs(10))
+                    .await;
+                return;
+            };
+            object
+        }
     };
 
     // ④ 详情：对象身份要回声，列必须带原始类型（属性面板与类型归一化都靠它）
     let detail = driver
-        .meta_object_detail(&catalog, &schema, &array.name)
+        .meta_object_detail(&catalog, &schema, &target.name)
         .await
         .expect("meta.object_detail");
-    assert_eq!(detail.object.name, array.name, "详情要把对象身份回声回来");
+    assert_eq!(detail.object.name, target.name, "详情要把对象身份回声回来");
     assert!(!detail.columns.is_empty(), "表要说得出列（空表也有列）");
     assert!(
         detail.columns.iter().all(|c| !c.type_raw.is_empty()),
@@ -389,7 +476,7 @@ async fn answers_the_metadata_methods() {
     );
     println!(
         "  {} 有 {} 列（首列 {} {}）；索引 {:?}；行数估计 {:?}",
-        array.name,
+        target.name,
         detail.columns.len(),
         detail.columns[0].name,
         detail.columns[0].type_raw,

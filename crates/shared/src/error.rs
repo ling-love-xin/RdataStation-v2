@@ -1065,7 +1065,15 @@ impl fmt::Display for ConnectionError {
                 write!(f, "Connection '{}' not found", conn_id)
             }
             ConnectionError::DriverNotFound { driver } => {
-                write!(f, "Driver '{}' not found in registry", driver)
+                // D4（2026-11-12）：`mysql` / `postgres` 这类驱动的实现已剥离到插件，
+                // 「registry 里没有」不再等于「驱动忘了注册」——把去向写进明细，让不经过
+                // 连接对话框的错误出口（导航树 / 日志面板）也能被人看懂。
+                write!(
+                    f,
+                    "Driver '{}' not found in registry — plugin-provided drivers must be \
+                     installed and enabled in Plugin Manager",
+                    driver
+                )
             }
             ConnectionError::NoActiveConnection => {
                 write!(f, "No active connection")

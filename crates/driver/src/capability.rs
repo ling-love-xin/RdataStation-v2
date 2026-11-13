@@ -152,7 +152,7 @@ pub struct CapabilitySpec {
 }
 
 /// 能力字典（与代码里的驱动声明一致；新增键请同时更新各驱动声明）。
-pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
+pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 24] = [
     CapabilitySpec {
         key: "tree",
         label: "数据库导航",
@@ -250,6 +250,89 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
         label: "资源分析",
         stage: Stage::Ready,
         scope: Scope::App,
+        meta_bit: None,
+        acceptance: Acceptance::unverified(),
+    },
+    // ↓ 九个**元数据面能力位**（2026-11-12 引入，方案见
+    // `docs/architecture/plugin/driver-capability-gating-plan.md` §4.1）。
+    //
+    // 它们**不映射** [`MetaBit`]：这里问的不是"运行时开关开没开"，而是"这条取数通道
+    // 在这个驱动里有没有真实现"。消费方是属性面板的分区（索引 / 约束 / DDL / 源码）
+    // 与导航的序列 / 触发器文件夹：**键在** = 该驱动真给得出；**键缺席** = 对应页签
+    // 置灰并给原因（`property::Availability::Unsupported`），不再把缺口显示成「0 条」。
+    //
+    // 声明一律按**实测代码**给，不按数据库族推导——同族两个实现的分叉正在这些键上
+    // （`mysql_native` 没有 `list_indexes` 覆写、`postgres` 没有源版 DDL）。
+    // 全部 `unverified()`：置灰门控本身还没真机用例，按 D10 不标已验收。
+    CapabilitySpec {
+        key: "meta_index_detail",
+        label: "索引明细",
+        stage: Stage::Ready,
+        scope: Scope::Driver,
+        meta_bit: None,
+        acceptance: Acceptance::unverified(),
+    },
+    CapabilitySpec {
+        key: "meta_constraint_detail",
+        label: "约束明细",
+        stage: Stage::Ready,
+        scope: Scope::Driver,
+        meta_bit: None,
+        acceptance: Acceptance::unverified(),
+    },
+    CapabilitySpec {
+        key: "meta_ddl_source",
+        label: "源版 DDL",
+        stage: Stage::Ready,
+        scope: Scope::Driver,
+        meta_bit: None,
+        acceptance: Acceptance::unverified(),
+    },
+    CapabilitySpec {
+        key: "meta_ddl_compose",
+        label: "合成 DDL",
+        stage: Stage::Ready,
+        scope: Scope::Driver,
+        meta_bit: None,
+        acceptance: Acceptance::unverified(),
+    },
+    CapabilitySpec {
+        key: "meta_routine_source",
+        label: "例程源码",
+        stage: Stage::Ready,
+        scope: Scope::Driver,
+        meta_bit: None,
+        acceptance: Acceptance::unverified(),
+    },
+    CapabilitySpec {
+        key: "meta_sequences",
+        label: "序列",
+        stage: Stage::Ready,
+        scope: Scope::Driver,
+        meta_bit: None,
+        acceptance: Acceptance::unverified(),
+    },
+    CapabilitySpec {
+        key: "meta_triggers",
+        label: "触发器",
+        stage: Stage::Ready,
+        scope: Scope::Driver,
+        meta_bit: None,
+        acceptance: Acceptance::unverified(),
+    },
+    CapabilitySpec {
+        key: "meta_fk_target",
+        label: "列外键目标",
+        stage: Stage::Ready,
+        scope: Scope::Driver,
+        meta_bit: None,
+        acceptance: Acceptance::unverified(),
+    },
+    CapabilitySpec {
+        key: "meta_column_ordinal",
+        label: "列序号",
+        stage: Stage::Ready,
+        scope: Scope::Driver,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
     },
@@ -488,6 +571,61 @@ mod tests {
         assert!(!Acceptance::unverified().verified);
     }
 
+    /// 元数据面能力位不得成为「死键」：每个 `meta_*` 键至少要被一个驱动真声明。
+    ///
+    /// 反过来说，字典里不允许出现"谁都不支持"的键——那种键在能力矩阵里是一行
+    /// 永远打不上勾的空行，读者会以为是缺陷。
+    #[test]
+    fn meta_keys_are_declared_by_at_least_one_driver() {
+        crate::AutoDriverRegistrar::register_builtin_drivers();
+        let descriptors = crate::DriverRegistry::all_descriptors();
+        for spec in CAPABILITY_DICTIONARY
+            .iter()
+            .filter(|s| s.key.starts_with("meta_"))
+        {
+            let declared_by: Vec<&str> = descriptors
+                .iter()
+                .filter(|d| d.capability_keys().iter().any(|k| k == spec.key))
+                .map(|d| d.id.as_str())
+                .collect();
+            assert!(
+                !declared_by.is_empty(),
+                "{} 没有任何驱动声明（死键）",
+                spec.key
+            );
+        }
+    }
+
+    /// 官方实现**只声明它真做了的**元数据面：声明与实现不能两张皮。
+    ///
+    /// 历史：这条原来比较同族两个实现（`mysql`(sqlx) vs `mysql_native`）。D3 把 sqlx
+    /// 实现整体搬到 sidecar 插件后，内核每族只剩一条官方实现 —— 那对比较对象不存在了，
+    /// 同族分叉的等价断言现在落在插件侧（`driver.describe` 的 `capabilities`，见
+    /// `sqlx-driver-extraction-plan.md` §7.2 的真机验收表）。
+    #[test]
+    fn native_drivers_declare_only_what_they_implement() {
+        use crate::registry::{mysql_native_driver, postgres_native_driver};
+
+        fn has(keys: &[String], k: &str) -> bool {
+            keys.iter().any(|x| x == k)
+        }
+
+        let native_mysql = mysql_native_driver().capability_keys();
+        assert!(has(&native_mysql, "meta_constraint_detail"));
+        assert!(
+            !has(&native_mysql, "meta_index_detail"),
+            "mysql_native 已补上 list_indexes？补上后把它加回声明并改这条断言"
+        );
+
+        let native_pg = postgres_native_driver().capability_keys();
+        assert!(
+            !has(&native_pg, "meta_ddl_source"),
+            "PG 没有 SHOW CREATE 等价物，源版 DDL 只能合成"
+        );
+        assert!(has(&native_pg, "meta_ddl_compose"));
+        assert!(has(&native_pg, "meta_sequences") && has(&native_pg, "meta_triggers"));
+    }
+
     /// 驱动 id → 运行时能力原型（与各驱动 `meta()` 里的 `..DataSourceMeta::xxx()` 同一份）。
     fn prototype(driver_id: &str) -> Option<DataSourceMeta> {
         Some(match driver_id {
@@ -512,8 +650,8 @@ mod tests {
         crate::AutoDriverRegistrar::register_builtin_drivers();
         let declarations = crate::DriverRegistry::all_descriptors();
         assert!(
-            declarations.len() >= 6,
-            "内置驱动声明应至少 6 条，实得 {}（内置驱动发现器没注册？）",
+            declarations.len() >= 4,
+            "内置驱动声明应至少 4 条（每族一条官方实现），实得 {}（内置驱动发现器没注册？）",
             declarations.len()
         );
 
@@ -566,13 +704,13 @@ mod tests {
     /// 网络型驱动三个都该有，文件型一个都不该有。
     #[test]
     fn network_keys_are_derived_from_the_booleans() {
-        use crate::registry::{duckdb_driver, mysql_driver, sqlite_driver};
+        use crate::registry::{duckdb_driver, mysql_native_driver, sqlite_driver};
 
-        let mysql = mysql_driver().capability_keys();
+        let mysql = mysql_native_driver().capability_keys();
         for key in ["ssh_tunnel", "ssl_tls", "proxy"] {
             assert!(
                 mysql.iter().any(|k| k == key),
-                "mysql 应派生 {key}：{mysql:?}"
+                "mysql_native 应派生 {key}：{mysql:?}"
             );
         }
         for d in [sqlite_driver(), duckdb_driver()] {
@@ -586,7 +724,7 @@ mod tests {
         }
 
         // 不重复：派生只在显式声明里没有该键时补一次
-        let mut doubled = mysql_driver();
+        let mut doubled = mysql_native_driver();
         doubled.capabilities.push("ssl_tls".to_string());
         let keys = doubled.capability_keys();
         assert_eq!(
