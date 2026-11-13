@@ -25,6 +25,20 @@ fn transaction_error(operation: &str, state: TransactionState, reason: &str) -> 
     })
 }
 
+/// 「缺驱动」的可读原因（D8c 留痕用）
+///
+/// 要点名驱动 id，也要说清**去向**：D4 之后内核只剩 `mysql_native` /
+/// `postgres_native` / `sqlite` / `duckdb` 四条官方驱动，`mysql` / `postgres` 这类
+/// sqlx 实现已归插件。具体是哪个插件引擎侧看不到（`drivers` 表没有 provider 列、
+/// 插件声明也不在引擎进程里），所以这里只说「去插件管理装/启用」，由插件管理页
+/// 给出真名——宁可少写，也不编一个 id 出来。
+pub fn missing_driver_reason(driver_id: &str) -> String {
+    format!(
+        "驱动 '{driver_id}' 未注册：内核只内置 mysql_native / postgres_native / sqlite / duckdb；\
+         该驱动若由插件提供，请到插件管理安装并启用对应插件"
+    )
+}
+
 /// 连接类型枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Type)]
 pub enum ConnectionType {
@@ -173,11 +187,22 @@ impl ConnectionManager {
         let driver_id = &config.driver;
 
         // 从 DriverRegistry 获取驱动工厂
-        let factory = DriverRegistry::get(driver_id).ok_or_else(|| {
-            CoreError::connection(ConnectionError::DriverNotFound {
-                driver: driver_id.clone(),
-            })
-        })?;
+        let factory = match DriverRegistry::get(driver_id) {
+            Some(f) => f,
+            None => {
+                // 【D8c】缺驱动被拒要留痕：老连接在「插件没装 / 被停用」后就是这个死法，
+                // 而 D4 之后 `mysql` / `postgres` 已经由插件贡献——不记下来，用户只会
+                // 看到一句「连不上」，无从知道该去装什么。
+                crate::services::driver_audit::record_missing_driver(
+                    driver_id,
+                    missing_driver_reason(driver_id),
+                )
+                .await;
+                return Err(CoreError::connection(ConnectionError::DriverNotFound {
+                    driver: driver_id.clone(),
+                }));
+            }
+        };
 
         // 使用工厂创建数据库连接
         let db = factory.create(config.clone()).await?;
@@ -727,11 +752,20 @@ impl ConnectionManager {
             .ok_or_else(|| CoreError::connection(ConnectionError::NotFound(conn_id.clone())))?;
 
         let driver_id = config.driver.clone();
-        let factory = DriverRegistry::get(&driver_id).ok_or_else(|| {
-            CoreError::connection(ConnectionError::DriverNotFound {
-                driver: driver_id.clone(),
-            })
-        })?;
+        let factory = match DriverRegistry::get(&driver_id) {
+            Some(f) => f,
+            None => {
+                // 【D8c】重连同样会因为「插件被停用/卸载」而缺驱动，这条也要留痕
+                crate::services::driver_audit::record_missing_driver(
+                    &driver_id,
+                    missing_driver_reason(&driver_id),
+                )
+                .await;
+                return Err(CoreError::connection(ConnectionError::DriverNotFound {
+                    driver: driver_id,
+                }));
+            }
+        };
 
         let base_backoff_ms: u64 = 100;
         let max_retries: u32 = 3;

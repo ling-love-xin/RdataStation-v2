@@ -8,6 +8,7 @@
 //! - `result_types`：结果集类型（自 result_service 抽取，随 workbench 轮次归属确认）
 
 pub mod connection_probe;
+pub mod driver_audit;
 pub mod duckdb_service;
 pub mod execution_service;
 pub mod result_types;

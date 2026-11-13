@@ -174,7 +174,7 @@ pub driver_id: Option<String>,
 | --- | --- | --- |
 | D8a | 迁移 030 + store 读写 API + 声明同步/能力位留痕 + 保留策略 + 查询历史 `driver_id` | ✅ 已落地（见文首表） |
 | D8b | 插件生命周期写入点：`install_from_path` / `enable_plugin` / `disable_plugin` / `uninstall_plugin` / `reload_plugins`（失败也要一行 `fail` + `reason`） | ✅ 已落地（见下） |
-| D8c | 缺驱动被拒留痕（`action=missing_driver`，`reason` 指向「由插件 X 提供」） | 待做 |
+| D8c | 缺驱动被拒留痕（`action=missing_driver`，`reason` 指向「由插件 X 提供」） | ✅ 已落地（见下） |
 | D8d | 查看入口：插件管理页「操作记录」栏、驱动能力 Tab「来源 + 最近同步」、历史面板「驱动」列与过滤 | 待做（需 GPUI 视图，先读 `gpui-kit-dev` skill） |
 | D8e | `driver_operations` 导出 JSON（排障用，方案 §3.5） | 待做 |
 
@@ -192,13 +192,29 @@ pub driver_id: Option<String>,
 `operation_audit::tests::recorded_operations_land_in_the_table` 真起一次 `global.db`
 （顺带把迁移 030 走一遍）后读回「启用 ok + 停用 fail 且原因可读」两行。
 
-> ⚠️ 环境注记：验证时工作树里 `crates/plugin/src/checksums.rs` 有并行线未完成的改动
-> （`walk_files` 改了签名但 `checksums.rs:220` 的调用点未同步，整个 crate 编不过）。
-> 我**未改**那处代码：把它原样备份到 `.rds/tmp/d8b-checksums.wip.rs`（sha256 前后一致），
-> 用 `git checkout` 临时还原 HEAD 版本跑编译与测试，跑完立即原样拷回。那处改完后本刀
-> 的验证应重跑一遍。
+> ⚠️ 环境注记（已消解）：本刀验证时工作树里 `crates/plugin/src/checksums.rs` 有并行线
+> **未完成**的改动（`walk_files` 改了签名、`checksums.rs:220` 的调用点未同步，整个 crate
+> 编不过）。我**未改**那处代码，而是把它原样备份到 `.rds/tmp/d8b-checksums.wip.rs`
+> （sha256 前后一致），临时还原 HEAD 版本跑编译与测试，跑完拷回。随后并行线自己把调用点
+> 补完（`a4bc70d8`），在**真实工作树**上重跑 `rds-plugin` lib 已是 **248 passed**——
+> 外包 `checksums.rs` 已不再是本刀的干扰项。
 
 对应验收项：A-1（安装留痕）、A-2（安装失败留痕）、A-3（启停/卸载/重载留痕）由
 D8b 的代码路径覆盖，自动化断言目前只有上面那条读回用例；A-5、A-7、A-8 仍未覆盖。
+
+**D8c 落地细节（2026-11-13）**
+
+| 项 | 落点 |
+| --- | --- |
+| 留痕辅助 | `crates/engine/src/services/driver_audit.rs`：`record_missing_driver(driver_id, reason)`，与 D8a/D8b 同口径（best-effort、表不在只告警、`actor=runtime`） |
+| 写入点 | `ConnectionManager::create_connection_with_registry`（新建/首次连接）与 `reconnect_connection`（打开已有连接、断线重连）。两处原来都是 `ok_or_else`，改成 `match` 后**先留痕再返回**原错误——错误本身一字不改，调用方行为不变 |
+| `reason` | `missing_driver_reason(driver_id)`：点名驱动 id + 说清「内核只内置 mysql_native / postgres_native / sqlite / duckdb，该驱动若由插件提供请到插件管理安装并启用」 |
+| 未做（取舍） | **没有**写出具体 provider 插件 id：引擎进程看不到插件声明，`drivers` 表也没有 provider 列（D4 的插件驱动行只带驱动自身信息）。要写「由 rds.driver.sqlx 提供」得让引擎去读插件清单——那是复制插件侧解析逻辑，不值当。D8d 的插件管理页本来就有清单，映射放那儿做 |
+| 不记的地方 | `scan_and_diff_plugins` 之类的每 tick 循环、以及在一次请求里会重复命中的内部路径一律不记（噪声 > 价值） |
+
+**验证**：`rds-engine` lib **220 passed**（+1：`driver_audit::tests::missing_driver_record_is_best_effort`）。
+
+对应验收项：A-5（缺驱动被拒有留痕）代码路径覆盖；A-7、A-8（查看入口）仍未覆盖。
+
 
 
