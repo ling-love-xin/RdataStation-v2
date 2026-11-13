@@ -107,10 +107,22 @@ pub fn db_type_to_secret_type(db_type: &str) -> Option<&'static str> {
 /// 先按原名试一次（族 id 与旧数据占多数，免一次库读），未命中再查驱动目录
 /// （[`engine::persistence::driver_catalog::type_id_of`]）；目录不在位时按原名结论返回。
 pub fn secret_type_of(db_type: &str) -> Option<&'static str> {
+    secret_type_of_with(db_type, engine::persistence::driver_catalog::type_id_of)
+}
+
+/// [`secret_type_of`] 的本体：驱动目录查找做成注入点。
+///
+/// 拆出来是为了让单测能**不依赖本机全局库**地钉住回退分支——目录可用与否由环境决定
+/// （`<data>/system/global.db` 是否存在、里面有没有驱动行），把一个环境状态写进断言
+/// 就会变成「本机跑绿、换台机器就红」的假契约。
+fn secret_type_of_with<F>(db_type: &str, lookup: F) -> Option<&'static str>
+where
+    F: FnOnce(&str) -> Option<String>,
+{
     if let Some(t) = db_type_to_secret_type(db_type) {
         return Some(t);
     }
-    let family = engine::persistence::driver_catalog::type_id_of(db_type)?;
+    let family = lookup(db_type)?;
     db_type_to_secret_type(&family)
 }
 
@@ -365,14 +377,32 @@ mod tests {
     }
 
     /// 驱动 id → Secret 类型的归一：族 id 走快路径，未命中（驱动 id / 未知值）查驱动目录。
-    /// 本单测环境没有全局库（目录不在位）→ 只有快路径生效，且**不 panic**。
+    ///
+    /// 回退分支用注入的查找函数钉死：真实目录查的是 `<data>/system/global.db`，
+    /// 那份库在测试里是**进程间共享的遗留产物**（别的用例跑过就可能有驱动行），
+    /// 拿它当断言前提会随跑序变红。
     #[test]
     fn test_secret_type_of_falls_back_to_driver_catalog() {
+        // 快路径：不读库，与环境无关
         assert_eq!(secret_type_of("postgresql"), Some("POSTGRES"));
         assert_eq!(secret_type_of("MYSQL"), Some("MYSQL"));
         // 目录不可用：`mysql_native` 无法归一 → None（调用方不注册，且不会静默注册错类型）
-        assert_eq!(secret_type_of("mysql_native"), None);
-        assert_eq!(secret_type_of("oracle"), None);
+        assert_eq!(secret_type_of_with("mysql_native", |_| None), None);
+        assert_eq!(secret_type_of_with("oracle", |_| None), None);
+        // 目录可用：按驱动所属族归一（这才是回退分支的正向契约）
+        assert_eq!(
+            secret_type_of_with("mysql_native", |_| Some("mysql".to_string())),
+            Some("MYSQL")
+        );
+        assert_eq!(
+            secret_type_of_with("postgres_native", |_| Some("postgres".to_string())),
+            Some("POSTGRES")
+        );
+        // 目录给出的是本地文件族：仍不映射——sqlite / duckdb 没有 Secret 类型
+        assert_eq!(
+            secret_type_of_with("sqlite_native", |_| Some("sqlite".to_string())),
+            None
+        );
     }
 
     #[test]
