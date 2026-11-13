@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>联邦查询公共入口 · 入口原型</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A84A38'/%3E%3Cpath d='M8 11h6v4H8zM8 18h6v4H8zM18 15h6v7h-6z' fill='%23fff'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --chrome:#181818; --editor:#1F1F1F; --popover:#202020;
+    --border:#2A2A2A; --border-soft:#232323; --surface:#141414;
+    --text:#CCCCCC; --muted:#858585; --dim:#6E6E6E; --white:#F2F2F2;
+    --coral:#A84A38; --coral-bright:#C25B46; --coral-soft:#3A2521;
+    --success:#4A9B6B; --warning:#C9A23A; --danger:#D0534A; --info:#4A8BC9;
+    --radius:6px;
+    --mono:"Cascadia Mono","Consolas",monospace;
+    --sans:"Segoe UI","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{
+    font-family:var(--sans);font-size:13px;color:var(--text);background:var(--surface);
+    min-width:940px;padding:20px 24px 40px;
+  }
+  button{font-family:inherit;font-size:12px;color:var(--text);background:transparent;border:none;cursor:pointer;}
+  button:focus-visible{outline:1px solid var(--coral-bright);outline-offset:1px;}
+  select,input{font-family:inherit;color:var(--text);background:var(--editor);border:1px solid var(--border);border-radius:4px;}
+  input::placeholder{color:var(--dim);}
+  ::-webkit-scrollbar{width:10px;height:10px;}
+  ::-webkit-scrollbar-thumb{background:#3A3A3A;border-radius:5px;border:2px solid transparent;background-clip:content-box;}
+
+  /* ===== 顶部：品牌 + 屏切换 ===== */
+  .top{display:flex;align-items:flex-start;gap:16px;margin-bottom:18px;flex-wrap:wrap;}
+  .brand{display:flex;align-items:center;gap:10px;}
+  .brand-mark{width:26px;height:26px;border-radius:6px;background:var(--coral);display:flex;align-items:center;justify-content:center;}
+  .brand-text{display:flex;flex-direction:column;gap:1px;}
+  .brand-text b{font-size:13px;color:var(--white);font-weight:600;letter-spacing:.2px;}
+  .brand-text span{font-size:11px;color:var(--dim);}
+  .screens{margin-left:auto;display:flex;gap:4px;padding:3px;background:var(--chrome);border:1px solid var(--border);border-radius:999px;}
+  .screens button{padding:5px 12px;border-radius:999px;color:var(--muted);font-size:12px;white-space:nowrap;}
+  .screens button:hover{background:var(--popover);color:var(--text);}
+  .screens button.on{background:var(--coral);color:#fff;font-weight:500;}
+
+  .stage{display:flex;gap:20px;align-items:flex-start;}
+  .screen-host{flex:1;min-width:0;}
+
+  /* ===== 通用：窗口壳 ===== */
+  .win{background:var(--chrome);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:0 16px 48px rgba(0,0,0,.45);}
+  .win-bar{height:34px;display:flex;align-items:center;gap:8px;padding:0 12px;background:#151515;border-bottom:1px solid var(--border);}
+  .win-bar .dots{display:flex;gap:5px;}
+  .win-bar .dot{width:8px;height:8px;border-radius:50%;background:#333;}
+  .win-bar .name{font-size:11px;color:var(--dim);letter-spacing:.4px;}
+  .win-bar .right{margin-left:auto;display:flex;gap:2px;}
+  .icon-btn{width:26px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:4px;color:var(--muted);}
+  .icon-btn:hover{background:var(--popover);color:var(--text);}
+
+  /* ===== 对话框 ===== */
+  .dialog{max-width:660px;margin:0 auto;background:var(--editor);border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+  .dlg-head{display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border);}
+  .dlg-title{font-size:13px;font-weight:600;color:var(--white);}
+  .dlg-sub{margin-left:8px;font-size:11px;color:var(--dim);}
+  .dlg-body{padding:14px 16px;display:flex;flex-direction:column;gap:14px;max-height:520px;overflow-y:auto;}
+  .dlg-foot{padding:10px 16px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px;background:#1B1B1B;}
+  .dlg-foot .spacer{flex:1;}
+
+  .btn{border:1px solid var(--border);border-radius:var(--radius);padding:5px 12px;background:#232323;color:var(--text);}
+  .btn:hover{background:#2A2A2A;}
+  .btn-primary{background:var(--coral);border-color:var(--coral);color:#fff;font-weight:500;}
+  .btn-primary:hover{background:var(--coral-bright);}
+  .btn-ghost{background:transparent;border-color:transparent;color:var(--muted);}
+  .btn-ghost:hover{background:var(--popover);color:var(--text);}
+
+  /* ===== 段落标题 ===== */
+  .field{display:flex;flex-direction:column;gap:6px;}
+  .field-label{font-size:12px;font-weight:600;color:var(--white);display:flex;align-items:center;gap:6px;}
+  .field-label .tag{font-size:10px;font-weight:400;padding:1px 5px;border-radius:3px;background:var(--coral-soft);color:#E1A392;border:1px solid #4A2C25;}
+  .field-hint{font-size:11px;color:var(--dim);line-height:1.5;}
+  .hr{height:1px;background:var(--border-soft);}
+
+  /* ===== 来源 tab ===== */
+  .tabs{display:flex;gap:2px;padding:2px;background:#1A1A1A;border:1px solid var(--border-soft);border-radius:6px;}
+  .tabs button{flex:1;padding:5px 8px;border-radius:4px;font-size:12px;color:var(--muted);}
+  .tabs button:hover{background:var(--popover);color:var(--text);}
+  .tabs button.on{background:#2A2A2A;color:var(--white);font-weight:500;}
+
+  /* ===== 表格 ===== */
+  .tbl{border:1px solid var(--border);border-radius:6px;overflow:hidden;}
+  .tbl-head,.tbl-row{display:grid;grid-template-columns:18px 1.4fr 1fr 76px;align-items:center;gap:10px;padding:7px 10px;}
+  .tbl-head{background:#1A1A1A;font-size:11px;color:var(--dim);border-bottom:1px solid var(--border-soft);}
+  .tbl-row{border-bottom:1px solid var(--border-soft);font-size:12px;cursor:pointer;}
+  .tbl-row:last-child{border-bottom:none;}
+  .tbl-row:hover{background:var(--popover);}
+  .tbl-row.on{background:#262020;}
+  .radio-dot{width:11px;height:11px;border-radius:50%;border:1px solid #4A4A4A;display:inline-block;}
+  .tbl-row.on .radio-dot{border-color:var(--coral-bright);background:var(--coral);box-shadow:0 0 0 2px rgba(194,91,70,.18);}
+  .mono{font-family:var(--mono);font-size:11px;color:var(--muted);}
+
+  /* ===== 开关 ===== */
+  .switch-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:#1B1B1B;}
+  .switch-row .txt{display:flex;flex-direction:column;gap:2px;}
+  .switch-row .txt b{font-size:12px;color:var(--white);font-weight:600;}
+  .switch-row .txt span{font-size:11px;color:var(--dim);}
+  .sw{margin-left:auto;width:34px;height:18px;border-radius:9px;background:#3A3A3A;position:relative;flex:none;cursor:pointer;border:1px solid var(--border);}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#9A9A9A;transition:left .16s ease,background .16s ease;}
+  .sw.on{background:var(--coral-soft);border-color:#5A322A;}
+  .sw.on::after{left:18px;background:var(--coral-bright);}
+
+  /* ===== 源清单 ===== */
+  .src-list{border:1px solid var(--border);border-radius:6px;overflow:hidden;background:#1A1A1A;}
+  .src-row{display:grid;grid-template-columns:16px 1fr auto;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--border-soft);font-size:12px;}
+  .src-row:last-child{border-bottom:none;}
+  .src-row .nm{display:flex;flex-direction:column;gap:1px;min-width:0;}
+  .src-row .nm b{font-weight:500;color:var(--text);}
+  .src-row .nm .sub{font-size:10px;color:var(--dim);}
+  .state{display:flex;align-items:center;gap:5px;font-size:11px;white-space:nowrap;}
+  .state.ok{color:var(--success);}
+  .state.warn{color:var(--warning);}
+  .state.bad{color:var(--danger);}
+  .pill{font-size:10px;padding:1px 6px;border-radius:3px;border:1px solid var(--border);color:var(--muted);background:#202020;white-space:nowrap;}
+  .pill.primary{border-color:#5A322A;color:#E1A392;background:var(--coral-soft);}
+
+  .note{display:flex;gap:8px;padding:8px 10px;border-radius:6px;font-size:11px;line-height:1.5;border:1px solid var(--border);background:#191919;color:var(--muted);}
+  .note.warn{border-color:#3D3422;background:#1E1A12;color:#CBB27A;}
+  .note.info{border-color:#22303D;background:#141A20;color:#8FB4D6;}
+  .note .ico{flex:none;margin-top:1px;}
+
+  /* ===== 工具栏（屏 3） ===== */
+  .toolbar{display:flex;align-items:center;gap:6px;padding:8px 12px;border-bottom:1px solid var(--border);background:#1B1B1B;}
+  .toolbar .spacer{flex:1;}
+  .run-btn{display:flex;align-items:center;gap:5px;padding:4px 10px;border:1px solid var(--border);border-radius:4px;background:#242424;font-size:12px;}
+  .run-btn:hover{background:#2C2C2C;}
+  .chan{display:flex;align-items:center;gap:5px;padding:3px 8px;border:1px solid #5A322A;border-radius:4px;background:var(--coral-soft);color:#E1A392;font-size:12px;cursor:pointer;}
+  .chan:hover{border-color:var(--coral-bright);}
+  .srcbtn{display:flex;align-items:center;gap:5px;padding:3px 8px;border:1px solid var(--border);border-radius:4px;background:#232323;color:var(--text);font-size:12px;cursor:pointer;}
+  .srcbtn:hover{background:#2A2A2A;}
+  .conn-slot{display:flex;align-items:center;gap:6px;padding:3px 8px;border-radius:4px;background:#232323;border:1px solid var(--border);font-size:11px;color:var(--muted);}
+  .conn-slot .live{width:6px;height:6px;border-radius:50%;background:var(--success);}
+
+  /* 下拉菜单 */
+  .menu-wrap{position:relative;}
+  .menu{position:absolute;top:calc(100% + 6px);right:0;min-width:260px;background:var(--popover);border:1px solid var(--border);border-radius:6px;box-shadow:0 12px 32px rgba(0,0,0,.5);z-index:20;overflow:hidden;display:none;}
+  .menu.open{display:block;}
+  .mi{display:flex;align-items:center;gap:8px;padding:7px 10px;font-size:12px;color:var(--text);width:100%;text-align:left;}
+  .mi:hover{background:#2A2A2A;}
+  .mi.on{background:#2A2A2A;}
+  .mi .check{margin-left:auto;color:var(--coral-bright);}
+  .mi.disabled{color:var(--dim);cursor:default;}
+  .mi.disabled:hover{background:transparent;}
+  .mi-sep{height:1px;background:var(--border-soft);}
+  .mi-label{padding:6px 10px 2px;font-size:10px;color:var(--dim);letter-spacing:.5px;}
+
+  /* ===== 结果集工具条（屏 4） ===== */
+  .resultbar{display:flex;align-items:center;gap:6px;padding:6px 12px;border-bottom:1px solid var(--border);background:#191919;font-size:11px;color:var(--muted);}
+  .resultbar .spacer{flex:1;}
+  .chip{display:flex;align-items:center;gap:4px;padding:2px 7px;border:1px solid var(--border);border-radius:3px;background:#202020;font-size:11px;color:var(--muted);}
+  .chip.fed{border-color:#5A322A;color:#E1A392;background:var(--coral-soft);}
+
+  .sqlbox{border:1px solid var(--border);border-radius:6px;background:#131313;padding:10px 12px;font-family:var(--mono);font-size:12px;line-height:1.65;color:#CFCFCF;white-space:pre-wrap;}
+  .sqlbox .kw{color:#C9A23A;}
+  .sqlbox .tb{color:#8FB4D6;}
+  .sqlbox .ph{color:var(--coral-bright);}
+
+  /* ===== 右侧说明 ===== */
+  .aside{width:290px;flex:none;display:flex;flex-direction:column;gap:12px;}
+  .card{background:var(--chrome);border:1px solid var(--border);border-radius:8px;padding:12px 14px;}
+  .card h3{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.6px;margin-bottom:8px;}
+  .card ul{list-style:none;display:flex;flex-direction:column;gap:7px;}
+  .card li{font-size:11px;color:var(--dim);line-height:1.55;padding-left:12px;position:relative;}
+  .card li::before{content:"";position:absolute;left:0;top:7px;width:4px;height:4px;border-radius:1px;background:#3A3A3A;}
+  .card li b{color:var(--text);font-weight:500;}
+  .legend{display:flex;flex-wrap:wrap;gap:10px;font-size:11px;color:var(--dim);}
+  .legend span{display:flex;align-items:center;gap:5px;}
+  .sq{width:8px;height:8px;border-radius:2px;display:inline-block;}
+
+  .screen{display:none;}
+  .screen.on{display:block;}
+  .cap{margin-top:10px;font-size:11px;color:var(--dim);line-height:1.6;}
+
+  @media (max-width:1120px){
+    .stage{flex-direction:column;}
+    .aside{width:100%;flex-direction:row;flex-wrap:wrap;}
+    .aside .card{flex:1 1 240px;}
+  }
+  @media (max-width:980px){
+    body{min-width:0;padding:14px 12px 30px;}
+    .screens{margin-left:0;width:100%;overflow-x:auto;}
+    .tbl-head,.tbl-row{grid-template-columns:18px 1fr 92px;}
+    .tbl-head span:nth-child(3),.tbl-row span:nth-child(3){display:none;}
+    .toolbar{flex-wrap:wrap;}
+  }
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div class="brand">
+    <div class="brand-mark">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6"><rect x="3" y="4" width="7" height="5" rx="1"/><rect x="3" y="15" width="7" height="5" rx="1"/><rect x="14" y="9" width="7" height="11" rx="1"/></svg>
+    </div>
+    <div class="brand-text"><b>联邦查询 · 公共入口</b><span>RdataStation · 原型 v1（2026-11-13）</span></div>
+  </div>
+  <div class="screens" id="screens">
+    <button class="on" data-screen="s1">1 · 洞察（现状）</button>
+    <button data-screen="s2">2 · 洞察 + 联邦</button>
+    <button data-screen="s3">3 · 编辑器通道</button>
+    <button data-screen="s4">4 · 结果集二次分析</button>
+  </div>
+</div>
+
+<div class="stage">
+  <div class="screen-host">
+
+    <!-- ============ 屏 1：洞察新建（现状基线） ============ -->
+    <section class="screen on" id="s1">
+      <div class="win">
+        <div class="win-bar">
+          <div class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+          <span class="name">洞察 · 新建分析</span>
+          <div class="right">
+            <button class="icon-btn" title="关闭">✕</button>
+          </div>
+        </div>
+        <div class="dialog" style="border:none;border-radius:0;max-width:100%;">
+          <div class="dlg-head">
+            <span class="dlg-title">新建洞察</span>
+            <span class="dlg-sub">来源单选 · 默认本地 DuckDB</span>
+            <span style="flex:1"></span>
+            <button class="icon-btn" id="close1" title="关闭">✕</button>
+          </div>
+          <div class="dlg-body">
+            <div class="field">
+              <div class="field-label">来源</div>
+              <div class="tabs" data-group="tabs1">
+                <button class="on">已连接的数据库</button>
+                <button>草稿箱</button>
+                <button>分析表</button>
+                <button>外部文件</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <div class="tbl">
+                <div class="tbl-head"><span></span><span>表</span><span>库 · Schema</span><span style="text-align:right">行数</span></div>
+                <div class="tbl-row on"><span class="radio-dot"></span><span>orders</span><span class="mono">analytics · public</span><span class="mono" style="text-align:right">128,431</span></div>
+                <div class="tbl-row"><span class="radio-dot"></span><span>customers</span><span class="mono">analytics · public</span><span class="mono" style="text-align:right">32,880</span></div>
+                <div class="tbl-row"><span class="radio-dot"></span><span>order_items</span><span class="mono">analytics · public</span><span class="mono" style="text-align:right">512,006</span></div>
+                <div class="tbl-row"><span class="radio-dot"></span><span>regions</span><span class="mono">warehouse · dim</span><span class="mono" style="text-align:right">1,204</span></div>
+              </div>
+              <div class="field-hint">来源只决定「从哪取一份样本」；取样后在本地 DuckDB 建分析临时表（<span class="mono">tmp_i_</span>）。</div>
+            </div>
+
+            <div class="hr"></div>
+
+            <div class="field">
+              <div class="field-label">数据量</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                <button class="btn" data-chip="amount">全量</button>
+                <button class="btn" data-chip="amount" style="border-color:var(--coral);color:#E1A392;background:var(--coral-soft);">1,000 行</button>
+                <button class="btn" data-chip="amount">5,000 行</button>
+                <button class="btn" data-chip="amount">5%</button>
+                <button class="btn" data-chip="amount">25%</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <div class="field-label">采样方式</div>
+              <div style="display:flex;gap:18px;font-size:12px;">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="radio" name="s1-sample" checked><span>顺序取</span></label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="radio" name="s1-sample"><span>均匀随机</span></label>
+              </div>
+              <div class="field-hint">顺序取 = 确定的第 N 行；均匀随机支持固定种子复现。</div>
+            </div>
+
+            <div class="field">
+              <div class="field-label">过滤条件 <span style="font-weight:400;color:var(--dim);font-size:11px;">可选 WHERE</span></div>
+              <input type="text" placeholder="如 status = 'active'" style="width:100%;padding:6px 10px;font-size:12px;">
+              <div class="field-hint">条件包在源查询内层，先过滤再取样。</div>
+            </div>
+          </div>
+          <div class="dlg-foot">
+            <button class="btn btn-ghost" id="cancel1">取消</button>
+            <div class="spacer"></div>
+            <span style="font-size:11px;color:var(--dim);margin-right:4px;">将建分析临时表：1,000 行 × 6 列</span>
+            <button class="btn btn-primary" id="ok1">分析</button>
+          </div>
+        </div>
+      </div>
+      <div class="cap">现状：单一来源、无会话概念。取样走「源库连接」或本地 DuckDB；两者都不是联邦会话。</div>
+    </section>
+
+    <!-- ============ 屏 2：洞察 + 联邦开关 ============ -->
+    <section class="screen" id="s2">
+      <div class="win">
+        <div class="win-bar">
+          <div class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+          <span class="name">洞察 · 新建分析（联邦升级）</span>
+          <div class="right"><button class="icon-btn" title="关闭">✕</button></div>
+        </div>
+        <div class="dialog" style="border:none;border-radius:0;max-width:100%;">
+          <div class="dlg-head">
+            <span class="dlg-title">新建洞察</span>
+            <span class="dlg-sub">来源单选 · 默认本地 · 可选联邦</span>
+            <span style="flex:1"></span>
+            <button class="icon-btn" title="关闭">✕</button>
+          </div>
+          <div class="dlg-body">
+            <div class="field">
+              <div class="field-label">来源</div>
+              <div class="tabs" data-group="tabs2">
+                <button class="on">已连接的数据库</button>
+                <button>草稿箱</button>
+                <button>分析表</button>
+                <button>外部文件</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <div class="tbl">
+                <div class="tbl-head"><span></span><span>跨源查询（自定义）</span><span>涉及源</span><span style="text-align:right">代价</span></div>
+                <div class="tbl-row on"><span class="radio-dot"></span><span>orders ⋈ regions（跨源）</span><span class="mono">mysql_src · pg_src</span><span class="mono" style="text-align:right">~120k 行</span></div>
+                <div class="tbl-row"><span class="radio-dot"></span><span>orders</span><span class="mono">mysql_src</span><span class="mono" style="text-align:right">128,431</span></div>
+              </div>
+              <div class="field-hint">联邦时「来源」= 一条跨源只读查询；样本仍落本地分析临时表。</div>
+            </div>
+
+            <div class="hr"></div>
+
+            <div class="field">
+              <div class="field-label">分析会话 <span class="tag">新增</span></div>
+              <div class="switch-row">
+                <div class="txt">
+                  <b>用联邦查询（跨源 join，只读）</b>
+                  <span>挂在同一个分析会话上；多个源一次挂载，换主源不重建</span>
+                </div>
+                <div class="sw on" data-switch="fed2" role="switch" aria-checked="true" tabindex="0"></div>
+              </div>
+
+              <div id="fed2-body" style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">
+                <div class="src-list">
+                  <div class="src-row">
+                    <span style="color:var(--success);">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12l5 5L20 6"/></svg>
+                    </span>
+                    <div class="nm"><b>mysql_src</b><span class="sub">MySQL · 生产库 · 只读挂载</span></div>
+                    <span class="pill primary">主源</span>
+                  </div>
+                  <div class="src-row">
+                    <span style="color:var(--success);">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12l5 5L20 6"/></svg>
+                    </span>
+                    <div class="nm"><b>pg_src</b><span class="sub">PostgreSQL · 仓库库 · 只读挂载</span></div>
+                    <span class="state ok">已挂载</span>
+                  </div>
+                  <div class="src-row">
+                    <span style="color:var(--warning);">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v1"/></svg>
+                    </span>
+                    <div class="nm"><b>oracle_src</b><span class="sub">Oracle · 老账套 · 扩展未安装</span></div>
+                    <span class="state warn">挂载失败</span>
+                  </div>
+                </div>
+
+                <div class="note">
+                  <span class="ico">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v.01M11 12h1v5h1"/></svg>
+                  </span>
+                  <span>挂载失败的源不阻断：查询里用到它时才报错，并点名源。<span class="mono">oracle_src</span> 需要先安装扫描器扩展。<br>跨源读取非事务一致——各源按各自时刻的数据参与。</span>
+                </div>
+
+                <div class="note warn">
+                  <span class="ico">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17l5-6 4 3 6-8 3 4"/></svg>
+                  </span>
+                  <span>代价预估：本次取样将在远端扫描约 <b style="color:#CBB27A">120,000</b> 行（两源各一次扫描）。需要更小样本请把数据量降到 1,000 行。</span>
+                </div>
+              </div>
+
+              <div id="fed2-off" class="note info" style="display:none;">
+                <span class="ico">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v.01M11 12h1v5h1"/></svg>
+                </span>
+                <span>未启用联邦：本次只在本地 DuckDB 上对单源结果取样，不挂载其它源。</span>
+              </div>
+
+              <div id="fed2-gate" class="note warn" style="display:none;">
+                <span class="ico">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v1"/></svg>
+                </span>
+                <span>只有 <b style="color:#CBB27A">1</b> 个可用源（<span class="mono">mysql_src</span>）：联邦与本地加速在这里是同一件事，本次使用本地 DuckDB。要跨源，请在连接设置里再开启一个「DuckDB 直连」。</span>
+              </div>
+            </div>
+
+            <div class="hr"></div>
+
+            <div class="field">
+              <div class="field-label">数据量</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                <button class="btn" data-chip="amount">全量</button>
+                <button class="btn" data-chip="amount" style="border-color:var(--coral);color:#E1A392;background:var(--coral-soft);">1,000 行</button>
+                <button class="btn" data-chip="amount">5%</button>
+              </div>
+            </div>
+          </div>
+          <div class="dlg-foot">
+            <button class="btn btn-ghost" id="cancel2">取消</button>
+            <span style="font-size:11px;color:var(--dim);margin-left:4px;">门控：3 个源可用（≥ 2）</span>
+            <div class="spacer"></div>
+            <span style="font-size:11px;color:var(--dim);margin-right:4px;">联邦取样 → 本地 tmp_i_</span>
+            <button class="btn btn-primary" id="ok2">分析（联邦）</button>
+          </div>
+        </div>
+      </div>
+      <div class="cap">③ 是高级选项，默认关；打开才展开源清单 / 主源 / 代价 / 一致性说明。不足 2 源时开关不出现，只留一行解释。</div>
+    </section>
+
+    <!-- ============ 屏 3：编辑器执行位置 ============ -->
+    <section class="screen" id="s3">
+      <div class="win">
+        <div class="win-bar">
+          <div class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+          <span class="name">SQL 编辑器 · 执行位置（对照）</span>
+          <div class="right"><button class="icon-btn" title="关闭">✕</button></div>
+        </div>
+
+        <div class="toolbar">
+          <button class="run-btn">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M6 4l14 8-14 8z"/></svg>
+            执行
+          </button>
+          <button class="run-btn" style="padding:4px 7px;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></svg>
+          </button>
+          <div class="spacer"></div>
+
+          <div class="menu-wrap">
+            <button class="srcbtn" data-menu="menu-src">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="7" height="5" rx="1"/><rect x="3" y="15" width="7" height="5" rx="1"/><rect x="14" y="9" width="7" height="11" rx="1"/></svg>
+              源清单 3 · 2 已挂
+            </button>
+            <div class="menu" id="menu-src">
+              <div class="mi-label">汇总</div>
+              <div class="mi disabled">联邦会话 · 3 个源 · 2 已挂载 · 主源 mysql_src</div>
+              <div class="mi-sep"></div>
+              <div class="mi-label">源</div>
+              <div class="mi disabled"><span style="color:var(--success)">●</span> mysql_src · MySQL · 主源</div>
+              <div class="mi disabled"><span style="color:var(--success)">●</span> pg_src · PostgreSQL</div>
+              <div class="mi disabled"><span style="color:var(--warning)">●</span> oracle_src · Oracle · 扩展未安装</div>
+              <div class="mi-sep"></div>
+              <div class="mi-label">动作</div>
+              <button class="mi">刷新全部源</button>
+              <button class="mi">把 pg_src 设为主源</button>
+              <button class="mi">重挂 oracle_src</button>
+            </div>
+          </div>
+
+          <div class="menu-wrap">
+            <button class="chan" data-menu="menu-chan">
+              <span class="chan-label">联邦</span>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            <div class="menu" id="menu-chan">
+              <button class="mi"><span>源库</span><span style="margin-left:auto;font-size:10px;color:var(--dim)">实时 · 可写 · 有事务</span></button>
+              <button class="mi"><span>本地加速</span><span style="margin-left:auto;font-size:10px;color:var(--dim)">只读 · 单源</span></button>
+              <button class="mi on"><span>联邦</span><span class="check">✓</span></button>
+            </div>
+          </div>
+
+          <div class="conn-slot"><span class="live"></span>mysql_src · analytics</div>
+          <button class="icon-btn" title="只读锁">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/></svg>
+          </button>
+        </div>
+
+        <div style="padding:12px 14px;background:var(--editor);">
+          <div class="sqlbox"><span class="kw">SELECT</span> o.order_id, o.amount, r.region
+<span class="kw">FROM</span> <span class="tb">orders</span> o                      <span style="color:var(--dim)">-- 主源，未限定名</span>
+<span class="kw">JOIN</span> <span class="tb">pg_src.public.regions</span> r <span style="color:var(--dim)">-- 跨源，限定名</span>
+  <span class="kw">ON</span> o.region_id = r.id
+<span class="kw">WHERE</span> o.amount &gt; 100;</div>
+          <div class="legend" style="margin-top:10px;">
+            <span><span class="sq" style="background:var(--coral)"></span>联邦档：工具栏固定显示「源清单 ▾」</span>
+            <span><span class="sq" style="background:var(--success)"></span>只读挂载 · 无事务语义</span>
+            <span><span class="sq" style="background:var(--warning)"></span>未限定名只在主源解析</span>
+          </div>
+        </div>
+      </div>
+      <div class="cap">编辑器是「每次执行的三档显式选择」；只有联邦档才出现源清单入口。这三档与屏 2 的开关取同一个会话。</div>
+    </section>
+
+    <!-- ============ 屏 4：结果集二次分析 ============ -->
+    <section class="screen" id="s4">
+      <div class="win">
+        <div class="win-bar">
+          <div class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+          <span class="name">结果集 · DuckDB 二次分析</span>
+          <div class="right"><button class="icon-btn" title="关闭">✕</button></div>
+        </div>
+
+        <div class="resultbar">
+          <span class="chip">结果集 3 · 20,000 行</span>
+          <span class="chip fam">血缘：原查询 orders</span>
+          <span class="spacer"></span>
+          <button class="srcbtn" data-menu="menu-ana">
+            分析
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+        </div>
+        <div class="menu" id="menu-ana" style="position:static;display:none;border:none;border-radius:0;border-bottom:1px solid var(--border);">
+          <button class="mi">计数行数</button>
+          <button class="mi">按「status」分组计数</button>
+          <button class="mi">按「region」分组计数</button>
+          <div class="mi-sep"></div>
+          <button class="mi on">自定义分析 SQL…</button>
+        </div>
+
+        <div class="dialog" style="border:none;border-radius:0;max-width:100%;">
+          <div class="dlg-head">
+            <span class="dlg-title">自定义分析 SQL</span>
+            <span class="dlg-sub">基于结果集已抓取的行</span>
+            <span style="flex:1"></span>
+            <button class="icon-btn" title="关闭">✕</button>
+          </div>
+          <div class="dlg-body">
+            <div class="field">
+              <div class="field-label">分析 SQL</div>
+              <div class="sqlbox"><span class="kw">SELECT</span> a.status, r.region, <span class="kw">count</span>(*) <span class="kw">AS</span> n
+<span class="kw">FROM</span> <span class="ph">{table}</span> a                <span style="color:var(--dim)">-- 结果集表（会话内）</span>
+<span class="kw">JOIN</span> <span class="tb">pg_src.dim.regions</span> r   <span style="color:var(--dim)">-- 跨源补充维度</span>
+  <span class="kw">ON</span> a.region_id = r.id
+<span class="kw">GROUP BY</span> 1, 2 <span class="kw">ORDER BY</span> 3 <span class="kw">DESC</span></div>
+              <div class="field-hint"><span class="mono">{table}</span> 是当前结果集建成的临时表；有事实档时按 Arrow schema 直灌（类型保真），否则回退显示矩阵猜型。</div>
+            </div>
+
+            <div class="hr"></div>
+
+            <div class="field">
+              <div class="field-label">分析会话 <span class="tag">新增</span></div>
+              <div class="switch-row">
+                <div class="txt">
+                  <b>用联邦查询（把这批数据放进分析会话）</b>
+                  <span>表与分析 SQL 在同一会话；新建的结果是新的结果集</span>
+                </div>
+                <div class="sw on" data-switch="fed4" role="switch" aria-checked="true" tabindex="0"></div>
+              </div>
+              <div id="fed4-body" style="margin-top:10px;display:flex;flex-direction:column;gap:10px;">
+                <div class="src-list">
+                  <div class="src-row">
+                    <span style="color:var(--success);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12l5 5L20 6"/></svg></span>
+                    <div class="nm"><b>pg_src</b><span class="sub">PostgreSQL · 仓库库 · 只读挂载</span></div>
+                    <span class="pill primary">主源</span>
+                  </div>
+                  <div class="src-row">
+                    <span style="color:var(--success);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12l5 5L20 6"/></svg></span>
+                    <div class="nm"><b>mysql_src</b><span class="sub">MySQL · 生产库 · 只读挂载</span></div>
+                    <span class="state ok">已挂载</span>
+                  </div>
+                </div>
+                <div class="note">
+                  <span class="ico"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v.01M11 12h1v5h1"/></svg></span>
+                  <span>临时表建在联邦会话里：源清单变化会重建会话，会话内的 <span class="mono">tmp_q_</span> 随之消失——结果集会标「表已失效，可重新分析」。</span>
+                </div>
+              </div>
+              <div id="fed4-off" class="note info" style="display:none;">
+                <span class="ico"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v.01M11 12h1v5h1"/></svg></span>
+                <span>未启用联邦：表与分析 SQL 都在本地 DuckDB，只能引用本地表。</span>
+              </div>
+            </div>
+
+            <div class="note info">
+              <span class="ico"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h10M4 18h7"/></svg></span>
+              <span>不重跑源库：数据是当前结果集已抓到的 20,000 行（另有 0 行超出上限未参与）。原结果一行不动。</span>
+            </div>
+          </div>
+          <div class="dlg-foot">
+            <button class="btn btn-ghost" id="cancel4">取消</button>
+            <div class="spacer"></div>
+            <span style="font-size:11px;color:var(--dim);margin-right:4px;">落新结果集 · 标记「分析」</span>
+            <button class="btn btn-primary" id="ok4">分析</button>
+          </div>
+        </div>
+      </div>
+      <div class="cap">二次分析是「同会话」：结果集表与分析 SQL 都在联邦会话里，这样用户 SQL 才能跨源 join。本地档逐字不变。</div>
+    </section>
+
+  </div>
+
+  <!-- ============ 右侧说明 ============ -->
+  <aside class="aside">
+    <div class="card">
+      <h3>三个决策点</h3>
+      <ul>
+        <li><b>① 分析对象</b>：表 / 文件 / 结果集，单选（沿用 source_picker）</li>
+        <li><b>② 数据量</b>：行数 / 百分比 / 过滤 / 种子（沿用 ProbeConfig）</li>
+        <li><b>③ 会话</b>：默认本地 DuckDB，可选「用联邦查询」</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>为什么 ③ 默认关</h3>
+      <ul>
+        <li>洞察与二次分析是<b>默认进入</b>，不是通道选择；多加一次必答项只会拖慢常规分析</li>
+        <li>联邦有真实代价：首次要装扩展、每源一次 ATTACH、远端扫描</li>
+        <li>不足 2 个可挂源时，开关<b>不出现</b>（而不是灰显）</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>共享的是什么</h3>
+      <ul>
+        <li><b>会话</b>（按 conn_id 缓存），不是一条全局连接</li>
+        <li>同一 owner 的编辑器 / 洞察 / 结果集分析共用一个会话</li>
+        <li>ATTACH 与扩展 LOAD 从「每次」降到「每 owner 一次」</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>边界</h3>
+      <ul>
+        <li>外部源只读；本地临时对象可用</li>
+        <li>不做跨源写 / 跨源事务 / 快照一致</li>
+        <li>挂不上的源不阻断，查询用到时才报错并点名</li>
+      </ul>
+    </div>
+  </aside>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---- 屏切换 ---- */
+  var screens = document.getElementById("screens");
+  screens.addEventListener("click", function(e){
+    var btn = e.target.closest("button[data-screen]");
+    if(!btn) return;
+    Array.prototype.forEach.call(screens.querySelectorAll("button"), function(b){ b.classList.toggle("on", b === btn); });
+    Array.prototype.forEach.call(document.querySelectorAll(".screen"), function(s){
+      s.classList.toggle("on", s.id === btn.getAttribute("data-screen"));
+    });
+    var g = document.getElementById("gate-demo");
+    if(g) g.style.display = btn.getAttribute("data-screen") === "s2" ? "block" : "none";
+  });
+
+  /* ---- 来源 tab ---- */
+  Array.prototype.forEach.call(document.querySelectorAll(".tabs"), function(group){
+    group.addEventListener("click", function(e){
+      var btn = e.target.closest("button");
+      if(!btn || !group.contains(btn)) return;
+      Array.prototype.forEach.call(group.querySelectorAll("button"), function(b){ b.classList.toggle("on", b === btn); });
+    });
+  });
+
+  /* ---- 表格行单选 ---- */
+  Array.prototype.forEach.call(document.querySelectorAll(".tbl"), function(tbl){
+    tbl.addEventListener("click", function(e){
+      var row = e.target.closest(".tbl-row");
+      if(!row) return;
+      Array.prototype.forEach.call(tbl.querySelectorAll(".tbl-row"), function(r){ r.classList.toggle("on", r === row); });
+    });
+  });
+
+  /* ---- 数据量 chips ---- */
+  Array.prototype.forEach.call(document.querySelectorAll("[data-chip]"), function(btn){
+    btn.addEventListener("click", function(){
+      var sib = btn.parentElement.querySelectorAll("[data-chip]");
+      Array.prototype.forEach.call(sib, function(b){
+        b.style.borderColor = "";
+        b.style.color = "";
+        b.style.background = "";
+      });
+      btn.style.borderColor = "var(--coral)";
+      btn.style.color = "#E1A392";
+      btn.style.background = "var(--coral-soft)";
+    });
+  });
+
+  /* ---- 开关：联邦 --*/
+  function bindSwitch(id, bodyId, offId){
+    var sw = document.querySelector('[data-switch="' + id + '"]');
+    var body = document.getElementById(bodyId);
+    var off = document.getElementById(offId);
+    if(!sw || !body) return;
+    function apply(){
+      var on = sw.classList.contains("on");
+      sw.setAttribute("aria-checked", on ? "true" : "false");
+      body.style.display = on ? "flex" : "none";
+      if(off) off.style.display = on ? "none" : "flex";
+    }
+    sw.addEventListener("click", function(){ sw.classList.toggle("on"); apply(); });
+    sw.addEventListener("keydown", function(e){
+      if(e.key === "Enter" || e.key === " "){ e.preventDefault(); sw.classList.toggle("on"); apply(); }
+    });
+    apply();
+  }
+  bindSwitch("fed2", "fed2-body", "fed2-off");
+  bindSwitch("fed4", "fed4-body", "fed4-off");
+
+  /* 演示：点已挂载的源行可切换主源 */
+  Array.prototype.forEach.call(document.querySelectorAll(".src-list"), function(list){
+    list.addEventListener("click", function(e){
+      var row = e.target.closest(".src-row");
+      if(!row) return;
+      if(row.querySelector(".state.warn")) return;
+      Array.prototype.forEach.call(list.querySelectorAll(".src-row"), function(r){
+        var p = r.querySelector(".pill.primary"); if(p) p.remove();
+        var s = r.querySelector(".state"); if(s) s.remove();
+      });
+      var span = document.createElement("span");
+      span.className = "pill primary";
+      span.textContent = "主源";
+      row.appendChild(span);
+    });
+  });
+
+  /* ---- 下拉菜单 ---- */
+  function closeAllMenus(except){
+    Array.prototype.forEach.call(document.querySelectorAll(".menu"), function(m){
+      if(m !== except){
+        m.classList.remove("open");
+        if(m.id === "menu-ana") m.style.display = "none";
+      }
+    });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("[data-menu]"), function(btn){
+    btn.addEventListener("click", function(e){
+      e.stopPropagation();
+      var menu = document.getElementById(btn.getAttribute("data-menu"));
+      if(!menu) return;
+      var willOpen = !menu.classList.contains("open");
+      closeAllMenus(menu);
+      menu.classList.toggle("open", willOpen);
+      if(e.currentTarget.closest(".resultbar")){
+        menu.style.position = "static";
+        menu.style.display = willOpen ? "block" : "none";
+      }
+    });
+  });
+  document.addEventListener("click", function(){ closeAllMenus(null); });
+  Array.prototype.forEach.call(document.querySelectorAll(".menu"), function(m){
+    m.addEventListener("click", function(e){ e.stopPropagation(); });
+  });
+
+  /* ---- 菜单项点击：选中态 + 关闭 ---- */
+  Array.prototype.forEach.call(document.querySelectorAll(".menu"), function(menu){
+    menu.addEventListener("click", function(e){
+      var mi = e.target.closest(".mi");
+      if(!mi || mi.classList.contains("disabled")) return;
+      if(menu.id === "menu-chan"){
+        Array.prototype.forEach.call(menu.querySelectorAll(".mi"), function(b){
+          b.classList.remove("on");
+          var c = b.querySelector(".check"); if(c) c.remove();
+        });
+        mi.classList.add("on");
+        var chk = document.createElement("span"); chk.className = "check"; chk.textContent = "✓";
+        mi.appendChild(chk);
+        var pill = document.querySelector('[data-menu="menu-chan"]');
+        var label = mi.firstElementChild ? mi.firstElementChild.textContent : "联邦";
+        var lbl = pill ? pill.querySelector(".chan-label") : null;
+        if(lbl) lbl.textContent = label;
+      }
+      if(menu.id === "menu-ana"){
+        Array.prototype.forEach.call(menu.querySelectorAll(".mi"), function(b){ b.classList.remove("on"); });
+        mi.classList.add("on");
+      }
+    });
+  });
+
+  /* ---- 按钮反馈（原型里不做真实提交） ---- */
+  ["ok1","ok2","ok4"].forEach(function(id){
+    var btn = document.getElementById(id);
+    if(!btn) return;
+    btn.addEventListener("click", function(){
+      var old = btn.textContent;
+      btn.textContent = "已完成（原型）";
+      btn.disabled = true;
+      setTimeout(function(){ btn.textContent = old; btn.disabled = false; }, 1200);
+    });
+  });
+  ["cancel1","cancel2","cancel4"].forEach(function(id){
+    var btn = document.getElementById(id);
+    if(!btn) return;
+    btn.addEventListener("click", function(){
+      var old = btn.textContent;
+      btn.textContent = "已取消（原型）";
+      setTimeout(function(){ btn.textContent = old; }, 1000);
+    });
+  });
+
+  /* ---- 演示态切换：门控不足两源 ---- */
+  var gateBtn = document.createElement("button");
+  gateBtn.id = "gate-demo";
+  gateBtn.className = "btn";
+  gateBtn.style.cssText = "position:fixed;left:24px;bottom:16px;z-index:30;border-color:#3D3422;color:#CBB27A;background:#1E1A12;display:none;";
+  gateBtn.textContent = "演示：只有 1 个源";
+  document.body.appendChild(gateBtn);
+  gateBtn.addEventListener("click", function(){
+    var sw = document.querySelector('[data-switch="fed2"]');
+    var row = sw ? sw.closest(".switch-row") : null;
+    var body = document.getElementById("fed2-body");
+    var off = document.getElementById("fed2-off");
+    var gate = document.getElementById("fed2-gate");
+    if(!row || !body || !off || !gate) return;
+    var single = gateBtn.getAttribute("data-single") === "1";
+    if(!single){
+      row.style.display = "none"; body.style.display = "none"; off.style.display = "none"; gate.style.display = "flex";
+      gateBtn.setAttribute("data-single", "1");
+      gateBtn.textContent = "演示：3 个源可用";
+    } else {
+      row.style.display = "flex"; off.style.display = "flex"; gate.style.display = "none";
+      gateBtn.setAttribute("data-single", "0");
+      gateBtn.textContent = "演示：只有 1 个源";
+    }
+  });
+  gateBtn.setAttribute("data-single", "0");
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>结果集二次分析 · 同会话</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A84A38'/%3E%3Cpath d='M7 8h18M7 14h18M7 20h9M7 26h13' stroke='%23fff' stroke-width='2'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --chrome:#181818;--editor:#1F1F1F;--popover:#202020;--surface:#111;
+    --border:#2A2A2A;--border-soft:#232323;--line:#333;
+    --text:#CCCCCC;--muted:#858585;--dim:#6E6E6E;--white:#F2F2F2;
+    --coral:#A84A38;--coral-bright:#C25B46;--coral-soft:#3A2521;
+    --success:#4A9B6B;--warning:#C9A23A;--danger:#D0534A;--info:#4A8BC9;
+    --radius:6px;--mono:"Cascadia Mono","Consolas",monospace;
+    --sans:"Segoe UI","Microsoft YaHei UI",sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:var(--sans);font-size:13px;color:var(--text);background:var(--surface);padding:20px 22px 36px}
+  button{font-family:inherit;font-size:12px;color:var(--text);background:none;border:none;cursor:pointer}
+  button:focus-visible{outline:1px solid var(--coral-bright);outline-offset:1px}
+  input{font-family:inherit;font-size:12px;color:var(--text);background:#181818;border:1px solid var(--border);border-radius:4px;padding:5px 9px}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#3A3A3A;border-radius:5px;border:2px solid transparent;background-clip:content-box}
+
+  .head{display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
+  .mark{width:24px;height:24px;border-radius:6px;background:var(--coral);display:flex;align-items:center;justify-content:center;flex:none}
+  .head h1{font-size:14px;color:var(--white);font-weight:600}
+  .head .tagline{font-size:11px;color:var(--dim)}
+  .head .back{margin-left:auto;font-size:11px;color:var(--muted);text-decoration:none;border-bottom:1px solid var(--line);padding-bottom:1px}
+  .head .back:hover{color:var(--text);border-color:var(--coral-bright)}
+  .lead{font-size:11px;color:var(--dim);line-height:1.6;margin-bottom:10px;max-width:900px}
+
+  .states{display:flex;gap:4px;margin-bottom:12px;padding:3px;background:var(--chrome);border:1px solid var(--border);border-radius:999px;width:fit-content}
+  .states button{padding:5px 12px;border-radius:999px;font-size:11px;color:var(--muted)}
+  .states button:hover{background:var(--popover);color:var(--text)}
+  .states button.on{background:var(--coral);color:#fff;font-weight:500}
+
+  .stage{display:flex;gap:18px;align-items:flex-start}
+  .left{flex:1;min-width:0;max-width:720px}
+  .aside{width:300px;flex:none;display:flex;flex-direction:column;gap:10px}
+
+  .panel{background:var(--editor);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:0 14px 40px rgba(0,0,0,.4)}
+  .pbar{display:flex;align-items:center;gap:6px;padding:7px 12px;background:#191919;border-bottom:1px solid var(--border);font-size:11px;color:var(--muted);flex-wrap:wrap}
+  .pbar .sp{flex:1}
+  .chip{display:flex;align-items:center;gap:4px;padding:2px 7px;border:1px solid var(--border);border-radius:3px;background:#202020;font-size:10px;color:var(--muted)}
+  .chip.fed{border-color:#5A322A;color:#E1A392;background:var(--coral-soft)}
+  .ana-btn{display:flex;align-items:center;gap:5px;padding:3px 9px;border:1px solid var(--border);border-radius:4px;background:#232323;font-size:12px}
+
+  .menu{border-bottom:1px solid var(--border);background:var(--popover);display:none}
+  .menu.on{display:block}
+  .mi{display:flex;align-items:center;gap:8px;padding:7px 12px;font-size:12px;width:100%;text-align:left;color:var(--text)}
+  .mi:hover{background:#2A2A2A}
+  .mi.on{background:#2A2A2A}
+  .mi .k{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--dim)}
+  .mi-sep{height:1px;background:var(--border-soft)}
+
+  .tablewrap{max-height:150px;overflow:hidden}
+  .tr{display:grid;grid-template-columns:56px 1fr 90px 74px;gap:8px;padding:5px 12px;font-size:11px;border-bottom:1px solid var(--border-soft)}
+  .tr.h{color:var(--dim);background:#1A1A1A;font-size:10px}
+  .mono{font-family:var(--mono);font-size:10px;color:var(--muted)}
+  .fade{height:26px;background:linear-gradient(transparent,#1F1F1F);margin-top:-26px;position:relative}
+
+  .dlg{background:#1D1D1D;border-top:1px solid var(--border);padding:12px 14px;display:flex;flex-direction:column;gap:12px}
+  .dlg-head{display:flex;align-items:center;gap:8px}
+  .dlg-head b{font-size:13px;color:var(--white);font-weight:600}
+  .dlg-head span{font-size:11px;color:var(--dim)}
+  .x{margin-left:auto;color:var(--muted);width:22px;height:20px;border-radius:4px}
+  .x:hover{background:var(--popover);color:var(--text)}
+
+  .field{display:flex;flex-direction:column;gap:6px}
+  .flabel{font-size:12px;font-weight:600;color:var(--white);display:flex;align-items:center;gap:6px}
+  .ftag{font-size:10px;font-weight:400;padding:1px 5px;border-radius:3px;background:var(--coral-soft);color:#E1A392;border:1px solid #4A2C25}
+  .fhint{font-size:11px;color:var(--dim);line-height:1.55}
+  .hr{height:1px;background:var(--border-soft)}
+
+  .sql{border:1px solid var(--border);border-radius:6px;background:#131313;padding:10px 12px;font-family:var(--mono);font-size:12px;line-height:1.7;white-space:pre-wrap;color:#CFCFCF}
+  .kw{color:#C9A23A}.tb{color:#8FB4D6}.ph{color:var(--coral-bright)}
+
+  .switch{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border);border-radius:6px;background:#1B1B1B}
+  .switch .txt{display:flex;flex-direction:column;gap:2px}
+  .switch .txt b{font-size:12px;color:var(--white);font-weight:600}
+  .switch .txt span{font-size:11px;color:var(--dim)}
+  .sw{margin-left:auto;width:34px;height:18px;border-radius:9px;background:#3A3A3A;border:1px solid var(--border);position:relative;flex:none;cursor:pointer}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#9A9A9A;transition:left .16s ease}
+  .sw.on{background:var(--coral-soft);border-color:#5A322A}
+  .sw.on::after{left:18px;background:var(--coral-bright)}
+
+  .srcs{border:1px solid var(--border);border-radius:6px;overflow:hidden;background:#1A1A1A}
+  .src{display:grid;grid-template-columns:15px 1fr auto;gap:9px;align-items:center;padding:7px 10px;border-bottom:1px solid var(--border-soft);font-size:12px}
+  .src:last-child{border-bottom:none}
+  .src .nm{display:flex;flex-direction:column;gap:1px}
+  .src .nm b{font-weight:500}
+  .src .nm i{font-style:normal;font-size:10px;color:var(--dim)}
+  .pill{font-size:10px;padding:1px 6px;border-radius:3px;border:1px solid var(--border);background:#202020;color:var(--muted)}
+  .pill.primary{border-color:#5A322A;background:var(--coral-soft);color:#E1A392}
+  .ok{color:var(--success)}
+
+  .note{display:flex;gap:8px;padding:8px 10px;border-radius:6px;font-size:11px;line-height:1.55;border:1px solid var(--border);background:#191919;color:var(--muted)}
+  .note.warn{border-color:#3D3422;background:#1E1A12;color:#CBB27A}
+  .note.info{border-color:#22303D;background:#141A20;color:#8FB4D6}
+  .note b{font-weight:600}
+
+  .dfoot{display:flex;align-items:center;gap:8px;padding:9px 14px;border-top:1px solid var(--border);background:#1B1B1B}
+  .grow{flex:1;font-size:11px;color:var(--dim);line-height:1.5}
+  .btn{border:1px solid var(--border);border-radius:var(--radius);padding:5px 11px;background:#232323;font-size:12px}
+  .btn:hover{background:#2A2A2A}
+  .btn.primary{background:var(--coral);border-color:var(--coral);color:#fff;font-weight:500}
+  .btn.primary:hover{background:var(--coral-bright)}
+  .btn.ghost{background:none;border-color:transparent;color:var(--muted)}
+  .btn.ghost:hover{background:var(--popover);color:var(--text)}
+
+  .card{background:var(--chrome);border:1px solid var(--border);border-radius:8px;padding:11px 13px}
+  .card h3{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.6px;margin-bottom:8px}
+  .card ul{list-style:none;display:flex;flex-direction:column;gap:6px}
+  .card li{font-size:11px;color:var(--dim);line-height:1.55;padding-left:11px;position:relative}
+  .card li::before{content:"";position:absolute;left:0;top:7px;width:4px;height:4px;background:#3A3A3A;border-radius:1px}
+  .card li b{color:var(--text);font-weight:500}
+  .flow{display:flex;flex-direction:column;gap:5px}
+  .step{display:flex;gap:8px;align-items:flex-start;padding:7px 9px;border:1px solid var(--border);border-radius:5px;background:#1A1A1A}
+  .step .n{width:15px;height:15px;border-radius:3px;background:#2A2A2A;color:var(--muted);font-size:10px;display:flex;align-items:center;justify-content:center;flex:none}
+  .step .t{font-size:11px;color:var(--muted);line-height:1.5}
+  .step .t b{display:block;color:var(--text);font-weight:500;font-size:11px;margin-bottom:1px}
+  .step.fed .n{background:var(--coral-soft);color:#E1A392}
+
+  @media (max-width:1100px){.stage{flex-direction:column}.aside{width:100%;flex-direction:row;flex-wrap:wrap}.aside .card{flex:1 1 240px}.left{max-width:none}}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="mark"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M3 12h6l3-7 4 14 3-7h2"/></svg></div>
+  <div><h1>结果集二次分析 · 同会话</h1></div>
+  <span class="tagline">形态 II：表与分析 SQL 都在联邦会话</span>
+  <a class="back" href="./00-overview.html">返回总览</a>
+</div>
+<div class="lead">本页设计结果集「分析 ▾」全链路：菜单四项、自定义 SQL、事实档与降级档、20,000 行上限、会话段三态、会话失效后的恢复入口。区别于洞察：这里<b>不搬结果</b>，表建在会话里，否则用户 SQL 无法跨源 join。</div>
+
+<div class="states" id="states">
+  <button class="on" data-state="s-local">A · 默认本地</button>
+  <button data-state="s-fed">B · 联邦可用</button>
+  <button data-state="s-gate">C · 源不足</button>
+</div>
+
+<div class="stage">
+  <div class="left">
+    <div class="panel">
+      <div class="pbar">
+        <span class="chip">结果集 3</span>
+        <span class="chip">20,000 行</span>
+        <span class="chip">0 行超出上限</span>
+        <span class="chip">血缘：orders</span>
+        <span class="sp"></span>
+        <button class="ana-btn" id="anaBtn">分析
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+      </div>
+
+      <div class="menu on" id="menu">
+        <button class="mi" data-kind="count">计数行数<span class="k">SELECT count(*) FROM {table}</span></button>
+        <button class="mi" data-kind="group">按「status」分组计数<span class="k">GROUP BY status</span></button>
+        <button class="mi" data-kind="group">按「region」分组计数<span class="k">GROUP BY region</span></button>
+        <div class="mi-sep"></div>
+        <button class="mi on" data-kind="custom">自定义分析 SQL…<span class="k">可跨源</span></button>
+      </div>
+
+      <div class="tablewrap">
+        <div class="tr h"><span>order_id</span><span>customer</span><span>amount</span><span>status</span></div>
+        <div class="tr"><span class="mono">100238</span><span>杭州云栈</span><span class="mono">1,280.00</span><span>paid</span></div>
+        <div class="tr"><span class="mono">100239</span><span>宁波海川</span><span class="mono">640.50</span><span>paid</span></div>
+        <div class="tr"><span class="mono">100240</span><span>苏州格物</span><span class="mono">2,300.00</span><span>refund</span></div>
+        <div class="tr"><span class="mono">100241</span><span>合肥明远</span><span class="mono">98.00</span><span>paid</span></div>
+      </div>
+      <div class="fade"></div>
+
+      <div class="dlg">
+        <div class="dlg-head">
+          <b>自定义分析 SQL</b><span>基于结果集已抓取的行</span>
+          <button class="x">✕</button>
+        </div>
+
+        <div class="field">
+          <div class="flabel">分析 SQL</div>
+          <div class="sql"><span class="kw">SELECT</span> a.status, r.region, <span class="kw">count</span>(*) <span class="kw">AS</span> n
+<span class="kw">FROM</span> <span class="ph">{table}</span> a                <span style="color:var(--dim)">-- 结果集表</span>
+<span class="kw">JOIN</span> <span class="tb">pg_src.dim.regions</span> r   <span style="color:var(--dim)">-- 跨源维度</span>
+  <span class="kw">ON</span> a.region_id = r.id
+<span class="kw">GROUP BY</span> 1, 2 <span class="kw">ORDER BY</span> 3 <span class="kw">DESC</span></div>
+          <div class="fhint"><span class="mono">{table}</span> 由执行层替换为当前结果集临时表；也接受 <span class="mono">result_temp</span> 别名。只允许只读 SELECT，DDL/DML 会被拒。</div>
+        </div>
+
+        <div class="field">
+          <div class="flabel">事实档</div>
+          <div class="fhint">有 Arrow 事实档 → 按 schema 直灌，类型保真（decimal / timestamp 不退化）；没有（如联邦来源的结果）→ 回退显示矩阵猜型，并在结果上标注「降级档」。</div>
+        </div>
+
+        <div class="hr"></div>
+
+        <div class="field">
+          <div class="flabel">分析会话 <span class="ftag">新增</span></div>
+          <div class="switch" id="swrow">
+            <div class="txt"><b>用联邦查询（把这批数据放进分析会话）</b><span>表与分析 SQL 在同一会话；产出是新的结果集</span></div>
+            <div class="sw" id="sw" role="switch" aria-checked="false" tabindex="0"></div>
+          </div>
+
+          <div id="fedbody" style="display:none;flex-direction:column;gap:9px;margin-top:9px">
+            <div class="srcs">
+              <div class="src">
+                <span class="ok"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12l5 5L20 6"/></svg></span>
+                <span class="nm"><b>pg_src</b><i>PostgreSQL · 仓库库 · 只读挂载</i></span>
+                <span class="pill primary">主源</span>
+              </div>
+              <div class="src">
+                <span class="ok"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12l5 5L20 6"/></svg></span>
+                <span class="nm"><b>mysql_src</b><i>MySQL · 生产库 · 只读挂载</i></span>
+                <span class="pill">已挂载</span>
+              </div>
+            </div>
+            <div class="note"><span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v.01M11 12h1v5"/></svg></span><span>临时表建在联邦会话里：源清单变化会重建会话，会话内 <span class="mono">tmp_q_</span> 随之消失，结果集条目会标「表已失效，可重新分析」。</span></div>
+          </div>
+
+          <div id="fedoff" class="note info" style="display:flex">
+            <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v.01M11 12h1v5"/></svg></span>
+            <span>未启用联邦：表与分析 SQL 都在本地 DuckDB，只能引用本地表。</span>
+          </div>
+
+          <div id="fedgate" class="note warn" style="display:none">
+            <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v1"/></svg></span>
+            <span>只有 <b>1</b> 个可用源：跨源 join 不可用，本次在本地 DuckDB 上分析。</span>
+          </div>
+        </div>
+
+        <div class="note info">
+          <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h10M4 18h7"/></svg></span>
+          <span><b>不重跑源库</b>：数据是当前结果集已抓到的 20,000 行；上限之外的行不参与（这里 0 行）。原结果一行不动，分析产出落新结果集，标题「分析」并带血缘。</span>
+        </div>
+      </div>
+
+      <div class="dfoot">
+        <div class="grow" id="foot">本地 DuckDB · 只读 SELECT · 产出新结果集</div>
+        <button class="btn ghost">取消</button>
+        <button class="btn primary" id="run">分析</button>
+      </div>
+    </div>
+  </div>
+
+  <aside class="aside">
+    <div class="card">
+      <h3>形态 II 的数据流</h3>
+      <div class="flow">
+        <div class="step"><span class="n">1</span><span class="t"><b>取当前结果集批次</b>≤ 20,000 行，超出丢弃并记数</span></div>
+        <div class="step fed"><span class="n">2</span><span class="t"><b>Arrow 直灌到会话</b>表在联邦会话内，命名 tmp_q_</span></div>
+        <div class="step fed"><span class="n">3</span><span class="t"><b>分析 SQL 在同一会话执行</b>可 join 远端挂载的源</span></div>
+        <div class="step"><span class="n">4</span><span class="t"><b>产出新结果集</b>标题「分析」，带血缘、单项可再分析</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>为什么同会话</h3>
+      <ul>
+        <li>用户 SQL 要跨源 join，表不在源所在连接就看不见</li>
+        <li>会话里建表与查询共用同一批挂载，不再二次 ATTACH</li>
+        <li>本地档逐字不变：仍是单例 + <span style="font-family:var(--mono)">tmp_q_</span></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>缺信息就会出错的地方</h3>
+      <ul>
+        <li>会话重建 → 表消失：必须给「重新分析」入口，不能只报错</li>
+        <li>降级档要不静默：结果上标「类型由显示值推断」</li>
+        <li>超上限的行要能被看见：<span style="font-family:var(--mono)">dropped_rows</span> 显示在工具条</li>
+      </ul>
+    </div>
+  </aside>
+</div>
+
+<script>
+(function(){
+  var mode="s-local";
+  var sw=document.getElementById("sw");
+  var swrow=document.getElementById("swrow");
+  var fedbody=document.getElementById("fedbody");
+  var fedoff=document.getElementById("fedoff");
+  var fedgate=document.getElementById("fedgate");
+  var foot=document.getElementById("foot");
+  var run=document.getElementById("run");
+
+  function paint(){
+    var onFed = mode==="s-fed" && sw.classList.contains("on");
+    swrow.style.display = mode==="s-gate" ? "none" : "flex";
+    fedbody.style.display = onFed ? "flex" : "none";
+    fedoff.style.display = (mode==="s-fed" && !onFed) ? "flex" : "none";
+    fedgate.style.display = mode==="s-gate" ? "flex" : "none";
+    foot.textContent = onFed ? "联邦会话 · 只读 SELECT · 产出新结果集（会话内表）" : "本地 DuckDB · 只读 SELECT · 产出新结果集";
+    run.textContent = onFed ? "分析（联邦）" : "分析";
+  }
+
+  document.getElementById("states").addEventListener("click",function(e){
+    var b=e.target.closest("button[data-state]"); if(!b) return;
+    Array.prototype.forEach.call(this.querySelectorAll("button"),function(x){ x.classList.toggle("on", x===b); });
+    mode=b.getAttribute("data-state");
+    if(mode==="s-fed") sw.classList.add("on"); else sw.classList.remove("on");
+    paint();
+  });
+  sw.addEventListener("click",function(){ sw.classList.toggle("on"); paint(); });
+  sw.addEventListener("keydown",function(e){ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); sw.classList.toggle("on"); paint(); } });
+
+  var anaBtn=document.getElementById("anaBtn");
+  anaBtn.addEventListener("click",function(){ document.getElementById("menu").classList.toggle("on"); });
+
+  document.getElementById("menu").addEventListener("click",function(e){
+    var mi=e.target.closest(".mi"); if(!mi) return;
+    Array.prototype.forEach.call(this.querySelectorAll(".mi"),function(x){ x.classList.toggle("on", x===mi); });
+    var kind=mi.getAttribute("data-kind");
+    var sql=document.querySelector(".sql");
+    if(kind==="count"){ sql.innerHTML='<span class="kw">SELECT</span> <span class="kw">count</span>(*) <span class="kw">AS</span> <span class="ph">"行数"</span>\n<span class="kw">FROM</span> <span class="ph">{table}</span>'; }
+    if(kind==="group"){ sql.innerHTML='<span class="kw">SELECT</span> <span class="ph">"status"</span>, <span class="kw">count</span>(*) <span class="kw">AS</span> <span class="ph">"行数"</span>\n<span class="kw">FROM</span> <span class="ph">{table}</span>\n<span class="kw">GROUP BY</span> 1 <span class="kw">ORDER BY</span> 2 <span class="kw">DESC</span>'; }
+    if(kind==="custom"){ sql.innerHTML='<span class="kw">SELECT</span> a.status, r.region, <span class="kw">count</span>(*) <span class="kw">AS</span> n\n<span class="kw">FROM</span> <span class="ph">{table}</span> a\n<span class="kw">JOIN</span> <span class="tb">pg_src.dim.regions</span> r\n  <span class="kw">ON</span> a.region_id = r.id\n<span class="kw">GROUP BY</span> 1, 2 <span class="kw">ORDER BY</span> 3 <span class="kw">DESC</span>'; }
+    document.getElementById("menu").classList.remove("on");
+  });
+
+  run.addEventListener("click",function(){
+    var b=this; var old=b.textContent; b.textContent="已提交（原型）"; b.disabled=true;
+    setTimeout(function(){ b.textContent=old; b.disabled=false; },1200);
+  });
+
+  paint();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>来源选择器 · 对象树与搜索</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A84A38'/%3E%3Cpath d='M11 7v9h10M11 7h3M11 16h3' stroke='%23fff' stroke-width='2' fill='none'/%3E%3Ccircle cx='11' cy='7' r='2.4' fill='%23fff'/%3E%3Ccircle cx='11' cy='16' r='2.4' fill='%23fff'/%3E%3Ccircle cx='21' cy='16' r='2.4' fill='%23fff'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --chrome:#181818;--editor:#1F1F1F;--popover:#202020;--surface:#111;
+    --border:#2A2A2A;--border-soft:#232323;--line:#333;
+    --text:#CCCCCC;--muted:#858585;--dim:#6E6E6E;--white:#F2F2F2;
+    --coral:#A84A38;--coral-bright:#C25B46;--coral-soft:#3A2521;
+    --success:#4A9B6B;--warning:#C9A23A;--danger:#D0534A;--info:#4A8BC9;
+    --radius:6px;--mono:"Cascadia Mono","Consolas",monospace;
+    --sans:"Segoe UI","Microsoft YaHei UI",sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:var(--sans);font-size:13px;color:var(--text);background:var(--surface);padding:20px 22px 36px}
+  button{font-family:inherit;font-size:12px;color:var(--text);background:none;border:none;cursor:pointer;text-align:left}
+  button:focus-visible{outline:1px solid var(--coral-bright);outline-offset:0}
+  input{font-family:inherit;font-size:12px;color:var(--text);background:#181818;border:1px solid var(--border);border-radius:4px;padding:5px 8px;outline:none;width:100%}
+  input:focus{border-color:#54403A}
+  input::placeholder{color:var(--dim)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#3A3A3A;border-radius:5px;border:2px solid transparent;background-clip:content-box}
+
+  .head{display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
+  .mark{width:24px;height:24px;border-radius:6px;background:var(--coral);display:flex;align-items:center;justify-content:center;flex:none}
+  .head h1{font-size:14px;color:var(--white);font-weight:600}
+  .head .tagline{font-size:11px;color:var(--dim)}
+  .head .back{margin-left:auto;font-size:11px;color:var(--muted);text-decoration:none;border-bottom:1px solid var(--line);padding-bottom:1px}
+  .head .back:hover{color:var(--text);border-color:var(--coral-bright)}
+  .lead{font-size:11px;color:var(--dim);line-height:1.6;margin-bottom:14px;max-width:960px}
+
+  .stage{display:flex;gap:16px;align-items:flex-start}
+  .left{flex:1;min-width:0;max-width:760px}
+  .aside{width:310px;flex:none;display:flex;flex-direction:column;gap:10px}
+
+  .dlg{background:var(--editor);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:0 14px 40px rgba(0,0,0,.4)}
+  .dlg-head{display:flex;align-items:center;gap:8px;padding:10px 13px;border-bottom:1px solid var(--border)}
+  .dlg-head b{font-size:13px;color:var(--white);font-weight:600}
+  .dlg-head span{font-size:11px;color:var(--dim)}
+  .dlg-head .x{margin-left:auto;width:22px;height:20px;border-radius:4px;color:var(--muted);text-align:center}
+  .dlg-head .x:hover{background:var(--popover);color:var(--text)}
+
+  .tabs{display:flex;gap:2px;padding:5px 9px 0;border-bottom:1px solid var(--border);background:#1B1B1B}
+  .tabs button{position:relative;padding:5px 11px 7px;font-size:12px;color:var(--muted)}
+  .tabs button:hover{color:var(--text)}
+  .tabs button.on{color:var(--white);font-weight:500}
+  .tabs button.on::after{content:"";position:absolute;left:7px;right:7px;bottom:-1px;height:2px;background:var(--coral-bright)}
+
+  .searchbar{display:flex;align-items:center;gap:6px;padding:7px 12px;border-bottom:1px solid var(--border-soft);background:#1B1B1B}
+  .searchbar .ico{color:var(--dim);flex:none;display:flex}
+  .searchbar .hint{font-size:10px;color:var(--dim);flex:none;font-family:var(--mono);padding:1px 4px;border:1px solid var(--border);border-radius:3px}
+
+  .main{display:flex;min-height:300px;max-height:400px}
+  .treewrap{flex:1;min-width:0;overflow-y:auto;padding:4px 0}
+  .metawrap{width:212px;flex:none;border-left:1px solid var(--border);background:#1B1B1B;padding:10px 11px;overflow-y:auto}
+
+  /* 树行：槽(10px)+图标+名称+计数 —— 与导航栏/草稿箱同一套原语 */
+  .r{display:flex;align-items:stretch;position:relative;height:26px;cursor:pointer}
+  .r:hover{background:var(--popover)}
+  .r.sel{background:#262020}
+  .r.sel .bar{position:absolute;left:0;top:2px;bottom:2px;width:2px;background:var(--coral-bright);border-radius:2px}
+  .r .pad{flex:none}
+  .r .chev{width:10px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--dim)}
+  .r .chev.open svg{transform:rotate(90deg)}
+  .r .chev svg{transition:transform .12s ease}
+  .r .ic{width:13px;flex:none;display:flex;align-items:center;color:var(--muted);margin-right:5px}
+  .r .nm{flex:1;min-width:0;display:flex;align-items:center;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .r .meta{flex:none;font-family:var(--mono);font-size:10px;color:var(--dim);margin-left:8px}
+  .r.grp .nm{color:var(--white);font-weight:500}
+  .r.dim .nm{color:var(--muted)}
+  .r .hl{color:#E1A392}
+  .r.sep{border-top:1px solid var(--border-soft);margin-top:3px}
+
+  .res .nm{flex-direction:column;align-items:flex-start;gap:0;line-height:1.25}
+  .res .nm b{font-weight:400;font-size:12px}
+  .res .nm small{font-size:10px;color:var(--dim);font-family:var(--mono)}
+
+  .empty{padding:26px 14px;text-align:center;font-size:12px;color:var(--dim);line-height:1.7}
+  .empty b{display:block;color:var(--muted);font-weight:500;margin-bottom:3px}
+
+  .meta h4{font-size:12px;color:var(--white);font-weight:600;margin-bottom:2px;word-break:break-all}
+  .meta .sub{font-size:10px;color:var(--dim);margin-bottom:9px;font-family:var(--mono);word-break:break-all}
+  .kv{display:flex;flex-direction:column;gap:6px;margin-bottom:11px}
+  .kv .k{font-size:10px;color:var(--dim);margin-bottom:1px}
+  .kv .v{font-size:11px;color:var(--text);line-height:1.4;word-break:break-all}
+  .tagline{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px}
+  .tg{font-size:9px;padding:1px 5px;border-radius:3px;border:1px solid var(--border);background:#202020;color:var(--muted)}
+  .tg.w{border-color:#3D3422;background:#1E1A12;color:#CBB27A}
+  .tg.g{border-color:#26452F;background:#14201A;color:#8FC0A4}
+  .metabtn{width:100%;text-align:center;border:1px solid var(--border);border-radius:4px;padding:4px;font-size:10px;color:var(--muted);background:#232323}
+  .metabtn:hover{background:#2A2A2A;color:var(--text)}
+
+  .dlg-foot{display:flex;align-items:center;gap:8px;padding:9px 13px;border-top:1px solid var(--border);background:#1B1B1B}
+  .note{flex:1;font-size:11px;color:var(--dim);line-height:1.45}
+  .note.warn{color:var(--warning)}
+  .btn{border:1px solid var(--border);border-radius:var(--radius);padding:5px 11px;background:#232323;font-size:12px;text-align:center}
+  .btn:hover{background:#2A2A2A}
+  .btn.primary{background:var(--coral);border-color:var(--coral);color:#fff;font-weight:500}
+  .btn.primary:hover{background:var(--coral-bright)}
+  .btn.primary:disabled{background:#3A2A26;border-color:#3A2A26;color:#8A6A62;cursor:not-allowed}
+  .btn.ghost{background:none;border-color:transparent;color:var(--muted)}
+  .btn.ghost:hover{background:var(--popover);color:var(--text)}
+
+  .card{background:var(--chrome);border:1px solid var(--border);border-radius:8px;padding:11px 12px}
+  .card h3{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.5px;margin-bottom:8px}
+  .card ul{list-style:none;display:flex;flex-direction:column;gap:6px}
+  .card li{font-size:11px;color:var(--dim);line-height:1.55;padding-left:11px;position:relative}
+  .card li::before{content:"";position:absolute;left:0;top:7px;width:4px;height:4px;background:#3A3A3A;border-radius:1px}
+  .card li b{color:var(--text);font-weight:500}
+
+  @media (max-width:1080px){
+    .stage{flex-direction:column}.aside{width:100%;flex-direction:row;flex-wrap:wrap}.aside .card{flex:1 1 280px}.left{max-width:none}
+    .main{flex-direction:column;max-height:none}.metawrap{width:auto;border-left:none;border-top:1px solid var(--border)}
+  }
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="mark"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M8 3v7h7M8 3h3M8 10h3"/><circle cx="8" cy="3" r="1.8"/><circle cx="8" cy="10" r="1.8"/><circle cx="15" cy="10" r="1.8"/><path d="M15 10v6h5"/><circle cx="20" cy="16" r="1.8"/></svg></div>
+  <div><h1>来源选择器 · 对象树与搜索</h1></div>
+  <span class="tagline">结构靠树定位 · 名字靠搜索直达 · 右侧回答「这是什么」</span>
+  <a class="back" href="./00-overview.html">返回总览</a>
+</div>
+<div class="lead">三个根不变，但每个根内改成<b>可折叠的树</b>（与数据源导航、草稿箱同一套行原语），顶部一条跨根搜索，右侧常驻元信息。树解决「我知道在哪」，搜索解决「我知道叫什么」——这两件必须同时给。</div>
+
+<div class="stage">
+  <div class="left">
+    <div class="dlg">
+      <div class="dlg-head">
+        <b>新建洞察</b><span>选择分析对象</span>
+        <button class="x">✕</button>
+      </div>
+
+      <div class="tabs" id="tabs">
+        <button class="on" data-tab="db">数据库</button>
+        <button data-tab="duck">DuckDB</button>
+        <button data-tab="file">文件</button>
+      </div>
+
+      <div class="searchbar">
+        <span class="ico"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="10.5" cy="10.5" r="6"/><path d="M15.5 15.5l5 5"/></svg></span>
+        <input id="q" placeholder="搜索表 / 文件 / 资产，跨三个根（试试 orders、parquet、tmp_q）">
+        <span class="hint">Ctrl+F</span>
+      </div>
+
+      <div class="main">
+        <div class="treewrap" id="tree"></div>
+        <div class="metawrap"><div class="meta" id="meta"></div></div>
+      </div>
+
+      <div class="dlg-foot">
+        <div class="note" id="note">已选 1 个目标</div>
+        <button class="btn ghost">取消</button>
+        <button class="btn primary" id="ok">分析 orders</button>
+      </div>
+    </div>
+  </div>
+
+  <aside class="aside">
+    <div class="card">
+      <h3>搜索与树的分工</h3>
+      <ul>
+        <li><b>树</b>：知道在哪，看同层还有什么、谁和谁同级</li>
+        <li><b>搜索</b>：知道叫什么，跨根扁平出结果，每行带面包屑</li>
+        <li><b>最小单位是表 / 视图</b>，不搜列名，也不搜分组名</li>
+        <li><b>最近</b>：重复使用的对象置顶，省掉再从树里找一遍</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>右侧为什么常驻</h3>
+      <ul>
+        <li>选中即回答「<b>这是什么、多大、能不能用</b>」</li>
+        <li>可见范围（本机 / 仅会话）在这里讲清，避免选了才报错</li>
+        <li>资产类对象标「已归档 · 只读」，与草稿文件区分</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>资产为什么挂在「文件」下</h3>
+      <ul>
+        <li>归档本体在 <span style="font-family:var(--mono)">resources/</span>（文件）与 <span style="font-family:var(--mono)">analytics.duckdb</span>（库文件）</li>
+        <li>两者都是<b>本机磁盘上的持久物</b>，与草稿同类；DuckDB 那栏装的是<b>临时产物</b></li>
+        <li>与左侧「资产库」面板同一实体：面板管生命周期，这里只是选它来分析</li>
+        <li><b>全局实例</b>（<span style="font-family:var(--mono)">{system}/analytics.duckdb</span>）同组，标注「跨项目」——它是项目之间<b>唯一法定</b>的传递通道</li>
+      </ul>
+    </div>
+  </aside>
+</div>
+
+<script>
+(function(){
+  var ICO={
+    chev:'<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 6l6 6-6 6"/></svg>',
+    conn:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="6" rx="6" ry="2.6"/><path d="M6 6v12c0 1.4 2.7 2.6 6 2.6s6-1.2 6-2.6V6"/></svg>',
+    catalog:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16"/></svg>',
+    schema:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 7l4-3 4 3 4-3 4 3"/><rect x="4" y="10" width="16" height="10" rx="2"/></svg>',
+    table:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="5" width="16" height="14" rx="1.6"/><path d="M4 10h16M4 14.5h16M10 10v9"/></svg>',
+    temp:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="7.5"/><path d="M12 8v4.5l3 2"/></svg>',
+    folder:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 7a2 2 0 012-2h4l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>',
+    file:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/></svg>',
+    asset:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>',
+    gasset:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.5 3 2.5 13 0 16M12 4c-2.5 3-2.5 13 0 16"/></svg>',
+    rs:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M4 11h16M9 11v7"/></svg>'
+  };
+
+  var TREES={
+    db:[{id:"c1",n:"mysql_src",k:"conn",d:0,m:"mysql · 10.0.1.20",c:[
+      {id:"cat1",n:"analytics",k:"catalog",d:1,m:"catalog",c:[
+        {id:"t1",n:"orders",k:"table",d:2,m:"128,431 行",v:"MySQL · analytics · 主键 id · 12 列"},
+        {id:"t2",n:"customers",k:"table",d:2,m:"32,880 行",v:"MySQL · analytics · 8 列"},
+        {id:"v1",n:"orders_by_region",k:"table",d:2,m:"视图",v:"MySQL · 视图 · 不支持下推聚合"}
+      ]}]},
+      {id:"c2",n:"pg_src",k:"conn",d:0,m:"postgres · 10.0.1.31",c:[
+        {id:"s2",n:"warehouse",k:"schema",d:1,m:"schema",c:[
+          {id:"t3",n:"fact_sales",k:"table",d:2,m:"4,201,338 行",v:"PostgreSQL · warehouse · 24 列"}
+        ]}]},
+      {id:"c3",n:"oracle_src",k:"conn",d:0,m:"oracle · 10.0.2.7 · 需 2 段限定名",c:[]}]
+  ,
+    duct:[]
+  };
+  // DuckDB / 文件两棵树分开写，避免上面过长
+  TREES.duck=[
+    {id:"g_rs",n:"结果集",k:"group",d:0,m:"tmp_q_ · 2",v:"引擎临时表 · 随结果集 / 会话生死",c:[
+      {id:"q1",n:"tmp_q_result_8f2a",k:"temp",d:1,m:"20,000 行",v:"本地单例 · 本机任何入口可引用"},
+      {id:"q2",n:"tmp_q_result_31c7",k:"temp",d:1,m:"12,400 行",v:"联邦会话 doc-2f1a · 仅该会话可见"}
+    ]},
+    {id:"g_mock",n:"Mock 数据",k:"group",d:0,m:"tmp_m_ · 1",v:"引擎临时表",c:[
+      {id:"m1",n:"tmp_m_mock_users",k:"temp",d:1,m:"50,000 行",v:"本机 · Mock 生成器产出"}
+    ]},
+    {id:"g_plugin",n:"插件输出",k:"group",d:0,m:"tmp_p_ · 1",v:"引擎临时表",c:[
+      {id:"p1",n:"tmp_p_plugin_out",k:"temp",d:1,m:"—",v:"本机 · 第三方插件产出的表"}
+    ]}
+  ];
+  TREES.file=[
+    {id:"g_draft",n:"草稿箱",k:"group",d:0,m:"3 个文件",v:"应用管理 · 相对路径 · 长期可追溯",c:[
+      {id:"f_d",n:"数据",k:"folder",d:1,m:"3",c:[
+        {id:"s1",n:"orders_2026Q1.parquet",k:"file",d:2,m:"18.4 MB",v:"草稿箱/数据 · parquet · 与项目同生命周期"},
+        {id:"s2",n:"region_map.csv",k:"file",d:2,m:"2.1 MB",v:"草稿箱/数据 · csv"},
+        {id:"s3",n:"customer_snapshot.json",k:"file",d:2,m:"640 KB",v:"草稿箱/数据 · json"}
+      ]}]},
+    {id:"g_asset",n:"资产库",k:"group",d:0,m:"6 · 只读",v:"已归档 · 带版本与分组 · 与左侧资产库面板同一实体",c:[
+      {id:"a1",n:"本项目 · 归档文件",k:"group",d:1,m:"2 · resources/",c:[
+        {id:"r1",n:"2026Q1_完成订单.parquet",k:"asset",d:2,m:"v3",v:"已归档 · 本体 {项目}/resources/ · 只读 · 可检出为草稿副本"},
+        {id:"r2",n:"区域映射表.csv",k:"asset",d:2,m:"v1",v:"已归档 · 只读"}
+      ]},
+      {id:"a2",n:"本项目 · 分析表",k:"group",d:1,m:"2 · analytics.duckdb",c:[
+        {id:"r3",n:"sales_summary",k:"asset",d:2,m:"v2",v:"分析表 · 本体 {项目}/.RSmeta/analytics.duckdb · 靠定义重建 · 只读"},
+        {id:"r4",n:"dim_region",k:"asset",d:2,m:"v1",v:"分析表 · 只读"}
+      ]},
+      {id:"a3",n:"全局 · 跨项目共享",k:"group",d:1,m:"2 · G_",c:[
+        {id:"r5",n:"G_sales_summary",k:"gasset",d:2,m:"共享",v:"全局 · 本体 {system}/analytics.duckdb · 由项目升级而来 · 跨项目唯一法定通道"},
+        {id:"r6",n:"G_region_dim",k:"gasset",d:2,m:"共享",v:"全局 · 只读 · 分发给任意项目后成为该项目副本"}
+      ]}]},
+    {id:"g_ext",n:"外部文件",k:"group",d:0,m:"1",v:"一次性引用 · 文件可能被移走",c:[
+      {id:"e1",n:"orders_dump.parquet",k:"file",d:1,m:"D:\\data\\2026",v:"外部 · 不复制 · 只记路径，文件没了要重选"}
+    ]}
+  ];
+
+  var RECENT=[
+    {id:"t1",n:"orders",scope:"数据库 / mysql_src / analytics",k:"table",m:"128,431 行",v:"MySQL · analytics · 12 列"},
+    {id:"s1",n:"orders_2026Q1.parquet",scope:"文件 / 草稿箱 / 数据",k:"file",m:"18.4 MB",v:"草稿箱 · parquet"},
+    {id:"q1",n:"tmp_q_result_8f2a",scope:"DuckDB / 结果集",k:"temp",m:"20,000 行",v:"本地单例 · 本机可见"}
+  ];
+
+  var state={tab:"db",q:"",sel:null,expanded:{c1:true,cat1:true,g_rs:true,g_asset:true,g_draft:true}};
+
+  var treeEl=document.getElementById("tree");
+  var metaEl=document.getElementById("meta");
+  var noteEl=document.getElementById("note");
+  var okEl=document.getElementById("ok");
+  var qEl=document.getElementById("q");
+
+  function depthPad(d){ return '<span class="pad" style="width:'+(d*14)+'px"></span>'; }
+  function rowHTML(node,isRes){
+    var open=!!state.expanded[node.id];
+    var hasC=node.c&&node.c.length;
+    var sel=state.sel&&state.sel.id===node.id;
+    var chev='<span class="chev'+(open?" open":"")+'">'+(hasC?ICO.chev:'')+'</span>';
+    var icon='<span class="ic">'+(ICO[node.k]||ICO.file)+'</span>';
+    var cls="r"+(isRes?" res":"")+(node.k==="group"?" grp":"")+(sel?" sel":"");
+    var body=isRes
+      ? '<span class="nm"><b>'+node.n+'</b><small>'+(node.scope||"")+'</small></span>'
+      : '<span class="nm">'+node.n+'</span>';
+    return '<button class="'+cls+'" data-id="'+node.id+'" data-k="'+node.k+'">'+
+      (sel?'<span class="bar"></span>':'')+depthPad(node.d||0)+chev+icon+body+
+      '<span class="meta">'+(node.m||"")+'</span></button>';
+  }
+
+  function renderTree(){
+    var html="";
+    var list=TREES[state.tab];
+    html+='<div class="r grp sep" style="height:22px"><span class="chev"></span><span class="ic">'+ICO.asset+'</span><span class="nm" style="font-size:11px;color:var(--muted)">最近使用</span></div>';
+    RECENT.forEach(function(n){ html+=rowHTML({id:n.id,n:n.n,k:n.k,d:0,m:n.m,scope:n.scope},true); });
+    html+='<div class="r sep" style="height:1px"></div>';
+    each(list,function(node){
+      html+=rowHTML(node,false);
+      if(state.expanded[node.id]&&node.c) node.c.forEach(function(ch){
+        html+=rowHTML(ch,false);
+        if(state.expanded[ch.id]&&ch.c) ch.c.forEach(function(g){ html+=rowHTML(g,false); });
+      });
+    });
+    treeEl.innerHTML=html;
+  }
+
+  function each(list,fn){ list.forEach(function(n){ fn(n); }); }
+
+  function findNode(id){
+    var hit=null;
+    Object.keys(TREES).forEach(function(k){
+      (function walk(list){ list.forEach(function(n){ if(n.id===id) hit=n; if(n.c) walk(n.c); }); })(TREES[k]);
+    });
+    if(!hit) RECENT.forEach(function(n){ if(n.id===id) hit={id:n.id,n:n.n,k:n.k,m:n.m,v:n.v,d:0}; });
+    return hit;
+  }
+
+  function flattenAll(){
+    var out=[];
+    Object.keys(TREES).forEach(function(root){
+      var rn={db:"数据库",duck:"DuckDB",file:"文件"}[root];
+      (function walk(list,path){ list.forEach(function(n){
+        out.push({id:n.id,n:n.n,k:n.k,m:n.m,v:n.v,d:0,scope:rn+" / "+path.join(" / ")});
+        if(n.c) walk(n.c,path.concat(n.n));
+      }); })(TREES[root],[]);
+    });
+    return out;
+  }
+
+  function score(text,q){
+    var t=text.toLowerCase(), s=q.toLowerCase();
+    if(t.startsWith(s)) return 100;
+    if(t.indexOf(s)>=0) return 70;
+    // 子序列：orders → ods
+    var i=0; for(var j=0;j<t.length&&i<s.length;j++) if(t[j]===s[i]) i++;
+    return i===s.length?40:0;
+  }
+
+  function renderSearch(){
+    var q=state.q.trim();
+    if(!q){ renderTree(); return; }
+    var hits=flattenAll().map(function(n){ return {n:n,s:score(n.n,q)}; }).filter(function(x){ return x.s>0; })
+      .sort(function(a,b){ return b.s-a.s || a.n.n.localeCompare(b.n.n); });
+    if(!hits.length){
+      treeEl.innerHTML='<div class="empty"><b>没有匹配的对象</b>换个词试试：表名片段、文件名后缀、或路径里的一段</div>';
+      return;
+    }
+    var html='<div class="r grp sep" style="height:22px"><span class="chev"></span><span class="ic">'+ICO.chev+'</span><span class="nm" style="font-size:11px;color:var(--muted)">'+hits.length+' 个结果 · 跨三个根</span></div>';
+    hits.forEach(function(h){ html+=rowHTML({id:h.n.id,n:h.n.n,k:h.n.k,d:0,m:h.n.m,scope:h.n.scope},true); });
+    treeEl.innerHTML=html;
+  }
+
+  function renderMeta(){
+    if(!state.sel){ metaEl.innerHTML='<h4 style="color:var(--dim);font-size:12px;font-weight:400">未选择对象</h4><div class="sub">在左侧点一个表或文件</div>'; return; }
+    var n=findNode(state.sel.id)||state.sel;
+    var kindName={conn:"连接",catalog:"catalog",schema:"schema",table:"表",folder:"目录",file:"文件",asset:"已归档资产",gasset:"全局资产",temp:"临时表",group:"分组"}[n.k]||"—";
+    var tags='<span class="tg">'+kindName+'</span>';
+    if(n.k==="temp") tags+='<span class="tg w">临时 · 会失效</span>';
+    if(n.k==="asset") tags+='<span class="tg g">只读 · 已归档</span>';
+    if(n.k==="gasset") tags+='<span class="tg g">跨项目 · 只读</span>';
+    var rows="";
+    rows+=kv("位置",(state.sel.scope||n.v||"—"));
+    rows+=kv("规模",n.m||"—");
+    if(n.k==="temp"){
+      var sess=n.v&&n.v.indexOf("会话")>=0;
+      rows+=kv("可见范围",sess?"仅联邦会话 doc-2f1a":"本机（本地单例）");
+      rows+=kv("寿命",sess?"会话重建即消失":"随结果集关闭而清理");
+    }
+    if(n.k==="asset"){
+      rows+=kv("怎么读","DuckDB reader / 本地 SQL");
+      rows+=kv("持久性","已归档，只读，带版本；检出会生成草稿副本");
+    }
+    if(n.k==="gasset"){
+      rows+=kv("怎么读","全局分析库（单写者连接）");
+      rows+=kv("共享语义","项目 → 全局 → 项目是唯一法定路径；项目之间不直传");
+      rows+=kv("落到本项目","分发后成为本项目副本，改动只影响副本");
+    }
+    if(n.k==="file"){
+      rows+=kv("怎么读","DuckDB reader 函数");
+      rows+=kv("持久性","草稿箱内，随项目");
+    }
+    if(n.k==="table") rows+=kv("怎么读","驱动 SQL 下推（可做联邦源）");
+    metaEl.innerHTML='<h4>'+n.n+'</h4><div class="sub">'+(n.id||"")+'</div><div class="tagline">'+tags+'</div><div class="kv">'+rows+'</div>'+
+      '<button class="metabtn">查看列结构</button>';
+  }
+  function kv(k,v){ return '<div><div class="k">'+k+'</div><div class="v">'+v+'</div></div>'; }
+
+  function refreshFoot(){
+    if(!state.sel){ noteEl.className="note"; noteEl.textContent="还没有选目标"; okEl.disabled=true; okEl.textContent="分析选中目标"; return; }
+    var n=findNode(state.sel.id)||state.sel;
+    var isSess=n.v&&n.v.indexOf("会话")>=0;
+    noteEl.className="note"+(isSess?" warn":"");
+    noteEl.textContent=isSess?"该表只在本会话可见；会话重建后会失效":"已选 1 个目标";
+    okEl.disabled=false;
+    okEl.textContent="分析 "+n.n;
+  }
+
+  function select(id,scope){
+    state.sel={id:id,scope:scope};
+    renderTree(); if(state.q.trim()) renderSearch();
+    renderMeta(); refreshFoot();
+  }
+
+  treeEl.addEventListener("click",function(e){
+    var b=e.target.closest("button[data-id]"); if(!b) return;
+    var id=b.getAttribute("data-id");
+    var node=findNode(id);
+    if(node&&node.c&&node.c.length&&!state.q.trim()){ state.expanded[id]=!state.expanded[id]; }
+    var scope=null;
+    if(b.classList.contains("res")) scope=b.querySelector("small")?b.querySelector("small").textContent:null;
+    select(id,scope);
+  });
+
+  qEl.addEventListener("input",function(){ state.q=this.value; renderSearch(); });
+  qEl.addEventListener("keydown",function(e){
+    if(e.key==="Escape"){ this.value=""; state.q=""; renderTree(); }
+  });
+
+  document.getElementById("tabs").addEventListener("click",function(e){
+    var b=e.target.closest("button[data-tab]"); if(!b) return;
+    state.tab=b.getAttribute("data-tab");
+    Array.prototype.forEach.call(this.querySelectorAll("button[data-tab]"),function(x){ x.classList.toggle("on",x===b); });
+    state.q=""; qEl.value="";
+    renderTree(); renderMeta(); refreshFoot();
+  });
+
+  okEl.addEventListener("click",function(){
+    var old=this.textContent; this.textContent="已提交（原型）"; this.disabled=true;
+    setTimeout(function(){ okEl.textContent=old; okEl.disabled=false; },1200);
+  });
+
+  function tabName(k){ return {db:"数据库",duck:"DuckDB",file:"文件"}[k]; }
+
+  renderTree(); renderMeta(); refreshFoot();
+})();
+</script>
+</body>
+</html>

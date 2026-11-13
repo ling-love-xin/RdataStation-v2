@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SQL 编辑器 · 执行位置三档</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A84A38'/%3E%3Cpath d='M9 8l-5 8 5 8M23 8l5 8-5 8M19 6l-6 20' stroke='%23fff' stroke-width='2' fill='none'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --chrome:#181818;--editor:#1F1F1F;--popover:#202020;--surface:#111;
+    --border:#2A2A2A;--border-soft:#232323;--line:#333;
+    --text:#CCCCCC;--muted:#858585;--dim:#6E6E6E;--white:#F2F2F2;
+    --coral:#A84A38;--coral-bright:#C25B46;--coral-soft:#3A2521;
+    --success:#4A9B6B;--warning:#C9A23A;--danger:#D0534A;--info:#4A8BC9;
+    --radius:6px;--mono:"Cascadia Mono","Consolas",monospace;
+    --sans:"Segoe UI","Microsoft YaHei UI",sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:var(--sans);font-size:13px;color:var(--text);background:var(--surface);padding:20px 22px 36px}
+  button{font-family:inherit;font-size:12px;color:var(--text);background:none;border:none;cursor:pointer}
+  button:focus-visible{outline:1px solid var(--coral-bright);outline-offset:1px}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#3A3A3A;border-radius:5px;border:2px solid transparent;background-clip:content-box}
+
+  .head{display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
+  .mark{width:24px;height:24px;border-radius:6px;background:var(--coral);display:flex;align-items:center;justify-content:center;flex:none}
+  .head h1{font-size:14px;color:var(--white);font-weight:600}
+  .head .tagline{font-size:11px;color:var(--dim)}
+  .head .back{margin-left:auto;font-size:11px;color:var(--muted);text-decoration:none;border-bottom:1px solid var(--line);padding-bottom:1px}
+  .head .back:hover{color:var(--text);border-color:var(--coral-bright)}
+  .lead{font-size:11px;color:var(--dim);line-height:1.6;margin-bottom:14px;max-width:920px}
+
+  .stage{display:flex;gap:18px;align-items:flex-start}
+  .left{flex:1;min-width:0}
+  .aside{width:330px;flex:none;display:flex;flex-direction:column;gap:10px}
+
+  .win{background:var(--chrome);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:0 14px 40px rgba(0,0,0,.4)}
+  .winbar{height:32px;display:flex;align-items:center;gap:8px;padding:0 11px;background:#151515;border-bottom:1px solid var(--border)}
+  .dots{display:flex;gap:4px}
+  .dot{width:8px;height:8px;border-radius:50%;background:#333}
+  .winbar .nm{font-size:11px;color:var(--dim);font-family:var(--mono)}
+  .tabsbar{margin-left:auto;display:flex;gap:1px}
+  .tabsbar button{padding:4px 10px;font-size:11px;color:var(--muted);border-radius:4px 4px 0 0}
+  .tabsbar button.on{background:var(--editor);color:var(--text)}
+
+  .toolbar{display:flex;align-items:center;gap:6px;padding:8px 11px;border-bottom:1px solid var(--border);background:#1B1B1B;flex-wrap:wrap}
+  .tb{display:flex;align-items:center;gap:5px;padding:4px 9px;border:1px solid var(--border);border-radius:4px;background:#242424;font-size:12px}
+  .tb:hover{background:#2C2C2C}
+  .sp{flex:1}
+  .chan{display:flex;align-items:center;gap:5px;padding:4px 9px;border-radius:4px;font-size:12px;border:1px solid var(--border);background:#242424}
+  .chan.fed{border-color:#5A322A;background:var(--coral-soft);color:#E1A392}
+  .srcbtn{display:flex;align-items:center;gap:5px;padding:4px 9px;border:1px solid var(--border);border-radius:4px;background:#242424;font-size:12px}
+  .srcbtn:hover{background:#2C2C2C}
+  .conn{display:flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--border);border-radius:4px;background:#242424;font-size:11px;color:var(--muted)}
+  .live{width:6px;height:6px;border-radius:50%;background:var(--success)}
+  .lock{width:24px;height:22px;border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--muted)}
+  .lock:hover{background:var(--popover);color:var(--text)}
+
+  .menu-wrap{position:relative}
+  .menu{position:absolute;top:calc(100% + 5px);right:0;min-width:300px;background:var(--popover);border:1px solid var(--border);border-radius:6px;box-shadow:0 12px 34px rgba(0,0,0,.55);z-index:20;overflow:hidden;display:none}
+  .menu.open{display:block}
+  .mi{display:flex;align-items:flex-start;gap:8px;padding:7px 11px;font-size:12px;width:100%;text-align:left}
+  .mi:hover{background:#2A2A2A}
+  .mi.on{background:#2A2A2A}
+  .mi .col{display:flex;flex-direction:column;gap:1px;min-width:0}
+  .mi .col b{font-size:12px;font-weight:500}
+  .mi .col i{font-style:normal;font-size:10px;color:var(--dim)}
+  .mi .chk{margin-left:auto;color:var(--coral-bright);flex:none}
+  .mi-sep{height:1px;background:var(--border-soft)}
+  .mi-label{padding:6px 11px 2px;font-size:10px;color:var(--dim);letter-spacing:.5px}
+  .mi.dis{color:var(--dim);cursor:default}
+  .mi.dis:hover{background:transparent}
+
+  .code{padding:12px 14px;background:var(--editor);font-family:var(--mono);font-size:12px;line-height:1.75;white-space:pre-wrap;color:#CFCFCF;border-bottom:1px solid var(--border)}
+  .kw{color:#C9A23A}.tb{color:#8FB4D6}.cm{color:var(--dim)}
+  .status{display:flex;align-items:center;gap:7px;padding:8px 14px;font-size:11px;background:#1B1B1B}
+  .status.err{color:#C98A80;background:#231618}
+  .status.ok{color:#8FC0A4}
+  .status.warn{color:#CBB27A;background:#1E1A12}
+  .status .sp{flex:1}
+
+  .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:11px;color:var(--dim);padding:10px 14px;background:#181818}
+  .legend span{display:flex;align-items:center;gap:5px}
+  .sq{width:8px;height:8px;border-radius:2px;display:inline-block}
+
+  .card{background:var(--chrome);border:1px solid var(--border);border-radius:8px;padding:11px 13px}
+  .card h3{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.6px;margin-bottom:8px}
+  table{width:100%;border-collapse:collapse;table-layout:fixed}
+  th,td{font-size:10px;text-align:left;padding:5px 5px;border-bottom:1px solid var(--border-soft);vertical-align:top;line-height:1.45}
+  th{color:var(--dim);font-weight:500}
+  td:first-child{color:var(--muted)}
+  td b{color:var(--text);font-weight:500}
+  tr:last-child td{border-bottom:none}
+  .card ul{list-style:none;display:flex;flex-direction:column;gap:6px}
+  .card li{font-size:11px;color:var(--dim);line-height:1.55;padding-left:11px;position:relative}
+  .card li::before{content:"";position:absolute;left:0;top:7px;width:4px;height:4px;background:#3A3A3A;border-radius:1px}
+  .card li b{color:var(--text);font-weight:500}
+  .note{display:flex;gap:8px;padding:8px 10px;border-radius:6px;font-size:11px;line-height:1.55;border:1px solid var(--border);background:#191919;color:var(--muted)}
+  .note.warn{border-color:#3D3422;background:#1E1A12;color:#CBB27A}
+
+  @media (max-width:1100px){.stage{flex-direction:column}.aside{width:100%;flex-direction:row;flex-wrap:wrap}.aside .card{flex:1 1 300px}}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="mark"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M8 7l-5 9 5 9M16 7l5 9-5 9"/></svg></div>
+  <div><h1>SQL 编辑器 · 执行位置三档</h1></div>
+  <span class="tagline">按执行通道显式选择 · 源清单仅在联邦档出现</span>
+  <a class="back" href="./00-overview.html">返回总览</a>
+</div>
+<div class="lead">编辑器与洞察/分析的区别在<b>决策粒度</b>：这里是「每次执行」选一次通道，所以常驻工具栏；洞察/分析是「一次作业」的默认值，所以放在确认对话框里。两者取同一个会话。</div>
+
+<div class="stage">
+  <div class="left">
+    <div class="win">
+      <div class="winbar">
+        <div class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+        <span class="nm">未命名-2 · 2.sql</span>
+        <div class="tabsbar"><button class="on">1.sql</button><button>2.sql</button></div>
+      </div>
+
+      <div class="toolbar">
+        <button class="tb">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M6 4l14 8-14 8z"/></svg>
+          执行
+        </button>
+        <button class="tb">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></svg>
+        </button>
+        <div class="sp"></div>
+
+        <div class="menu-wrap" id="srcWrap" style="display:none">
+          <button class="srcbtn" id="srcBtn">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="7" height="5" rx="1"/><rect x="3" y="15" width="7" height="5" rx="1"/><rect x="14" y="9" width="7" height="11" rx="1"/></svg>
+            源清单 · 3 源 / 2 挂
+          </button>
+          <div class="menu" id="srcMenu">
+            <div class="mi-label">汇总</div>
+            <div class="mi dis"><span class="col"><b>联邦会话</b><i>3 个源 · 2 已挂载 · 主源 mysql_src</i></span></div>
+            <div class="mi-sep"></div>
+            <div class="mi-label">源</div>
+            <div class="mi dis"><span class="col" style="margin-left:2px"><b><span style="color:var(--success)">●</span> mysql_src</b><i>MySQL · 主源 · 只读挂载</i></span><span class="pill" style="font-size:10px;color:#E1A392">主源</span></div>
+            <div class="mi dis"><span class="col" style="margin-left:2px"><b><span style="color:var(--success)">●</span> pg_src</b><i>PostgreSQL · 已挂载</i></span></div>
+            <div class="mi dis"><span class="col" style="margin-left:2px"><b><span style="color:var(--warning)">●</span> oracle_src</b><i>Oracle · 扩展未安装，挂载失败</i></span><span style="font-size:10px;color:#C98A80">失败</span></div>
+            <div class="mi-sep"></div>
+            <div class="mi-label">动作</div>
+            <button class="mi"><span class="col"><b>刷新全部源</b><i>重挂全部，保持主源</i></span></button>
+            <button class="mi"><span class="col"><b>把 pg_src 设为主源</b><i>只改 USE，不重建会话</i></span></button>
+            <button class="mi"><span class="col"><b>重挂 oracle_src</b><i>需要先安装扫描器扩展</i></span></button>
+          </div>
+        </div>
+
+        <div class="menu-wrap">
+          <button class="chan fed" id="chanBtn">
+            <span id="chanLabel">联邦</span>
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div class="menu" id="chanMenu">
+            <button class="mi" data-chan="source">
+              <span class="col"><b>源库</b><i>实时 · 可写 · 有事务</i></span>
+              <span class="chk" style="display:none">✓</span>
+            </button>
+            <button class="mi" data-chan="accel">
+              <span class="col"><b>本地加速</b><i>只读 · 单源 · 需要扩展</i></span>
+              <span class="chk" style="display:none">✓</span>
+            </button>
+            <button class="mi on" data-chan="fed">
+              <span class="col"><b>联邦</b><i>只读 · 多源 · 非事务一致</i></span>
+              <span class="chk">✓</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="conn"><span class="live"></span>mysql_src · analytics</div>
+        <button class="lock" id="lockBtn" title="只读">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/></svg>
+        </button>
+      </div>
+
+      <div class="code"><span class="kw">SELECT</span> o.order_id, o.amount, r.region
+<span class="kw">FROM</span> <span class="tb">orders</span> o                      <span class="cm">-- 主源，未限定名</span>
+<span class="kw">JOIN</span> <span class="tb">pg_src.dim.regions</span> r    <span class="cm">-- 跨源，两段限定名</span>
+  <span class="kw">ON</span> o.region_id = r.id
+<span class="kw">WHERE</span> o.amount &gt; 100;</div>
+
+      <div class="status ok" id="status">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12l5 5L20 6"/></svg>
+        <span id="statusText">联邦 · 2 源参与 · 返回 412 行 · 1.8s</span>
+        <span class="sp"></span>
+        <span style="color:var(--dim)">只读锁 · 写语句被拒</span>
+      </div>
+
+      <div class="legend">
+        <span><span class="sq" style="background:var(--coral)"></span>联邦档：工具栏固定显示「源清单」</span>
+        <span><span class="sq" style="background:var(--success)"></span>只读挂载 · 无事务</span>
+        <span><span class="sq" style="background:var(--warning)"></span>未限定名只在主源解析</span>
+      </div>
+    </div>
+  </div>
+
+  <aside class="aside">
+    <div class="card">
+      <h3>三档对照</h3>
+      <table>
+        <tr><th style="width:52px"></th><th>源库</th><th>本地加速</th><th>联邦</th></tr>
+        <tr><td>写</td><td>可写</td><td>只读</td><td>只读</td></tr>
+        <tr><td>事务</td><td>有</td><td>无</td><td>无</td></tr>
+        <tr><td>源数</td><td>1</td><td>1</td><td>≥2</td></tr>
+        <tr><td>表在</td><td>源库</td><td>本地 DuckDB</td><td>会话</td></tr>
+        <tr><td>成本</td><td>重连</td><td>装 + LOAD</td><td>装 + ATTACH</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h3>源清单为什么只在联邦档</h3>
+      <ul>
+        <li>源库 / 本地加速都只有<b>一个源</b>，没有「清单」可管</li>
+        <li>联邦的清单是<b>全量</b>：所有开了联邦开关的连接，不能增删，只能刷新 / 设主源 / 重挂</li>
+        <li>这一条是现有代码事实（工具栏按通道挂载源清单）</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>门控与拒绝</h3>
+      <ul>
+        <li>联邦档不可用：&lt;2 个可挂源；菜单项置灰并写原因</li>
+        <li>驱动不能挂：原因点名「驱动还不能做联邦源」</li>
+        <li>联邦档写语句：执行前拒绝，不发给远端</li>
+      </ul>
+    </div>
+    <div class="note warn">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v1"/></svg>
+      <span>切换通道<b>不清空</b>会话：联邦 → 源库再切回来，挂载与临时对象仍在；只有源清单变化才重建。</span>
+    </div>
+  </aside>
+</div>
+
+<script>
+(function(){
+  var srcWrap=document.getElementById("srcWrap");
+  var srcBtn=document.getElementById("srcBtn");
+  var srcMenu=document.getElementById("srcMenu");
+  var chanBtn=document.getElementById("chanBtn");
+  var chanMenu=document.getElementById("chanMenu");
+  var chanLabel=document.getElementById("chanLabel");
+  var status=document.getElementById("status");
+  var statusText=document.getElementById("statusText");
+
+  function closeAll(except){
+    [chanMenu,srcMenu].forEach(function(m){ if(m!==except) m.classList.remove("open"); });
+  }
+
+  srcBtn.addEventListener("click",function(e){ e.stopPropagation(); var open=!srcMenu.classList.contains("open"); closeAll(srcMenu); srcMenu.classList.toggle("open",open); });
+  chanBtn.addEventListener("click",function(e){ e.stopPropagation(); var open=!chanMenu.classList.contains("open"); closeAll(chanMenu); chanMenu.classList.toggle("open",open); });
+  document.addEventListener("click",function(){ closeAll(null); });
+  srcMenu.addEventListener("click",function(e){ e.stopPropagation(); });
+  chanMenu.addEventListener("click",function(e){ e.stopPropagation(); });
+
+  chanMenu.addEventListener("click",function(e){
+    var mi=e.target.closest(".mi"); if(!mi) return;
+    var chan=mi.getAttribute("data-chan");
+    Array.prototype.forEach.call(chanMenu.querySelectorAll(".mi"),function(x){
+      x.classList.toggle("on", x===mi);
+      var c=x.querySelector(".chk"); if(c) c.style.display = (x===mi) ? "" : "none";
+    });
+    chanLabel.textContent = chan==="fed" ? "联邦" : (chan==="accel" ? "本地加速" : "源库");
+    chanBtn.classList.toggle("fed", chan==="fed");
+    srcWrap.style.display = chan==="fed" ? "" : "none";
+    srcMenu.classList.remove("open");
+    if(chan==="fed"){ status.className="status ok"; statusText.textContent="联邦 · 2 源参与 · 返回 412 行 · 1.8s"; }
+    if(chan==="accel"){ status.className="status warn"; statusText.textContent="本地加速 · 单源快照，数据可能非最新；写语句被拒"; }
+    if(chan==="source"){ status.className="status ok"; statusText.textContent="源库 · 实时读取，可写；执行在源库连接上"; }
+  });
+
+  document.getElementById("lockBtn").addEventListener("click",function(){
+    status.className="status err";
+    statusText.textContent="联邦通道只读：检测到 UPDATE / INSERT，已在提交前拒绝（未发往远端）";
+  });
+
+  document.querySelectorAll(".menu").forEach(function(m){
+    m.addEventListener("click",function(e){
+      if(e.target.closest(".mi.dis")) return;
+      if(m.id==="srcMenu"){ m.classList.remove("open"); }
+    });
+  });
+})();
+</script>
+</body>
+</html>
