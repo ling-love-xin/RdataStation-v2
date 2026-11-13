@@ -37,6 +37,10 @@ use workbench_shell::model::ConnectionItem;
 use crate::panels::Shared;
 use crate::ui;
 
+mod group;
+
+pub use group::{group_of, grouped, SourceGroup};
+
 /// 来源种类（统一内核；各消费方按 `PickerConfig.kinds` 裁剪显示）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
