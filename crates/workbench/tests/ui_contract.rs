@@ -273,6 +273,10 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../src/panels/plugin_manager/widgets.rs"),
         ),
         (
+            "panels/plugin_manager/audit.rs",
+            include_str!("../src/panels/plugin_manager/audit.rs"),
+        ),
+        (
             "panels/plugin_manager/tests.rs",
             include_str!("../src/panels/plugin_manager/tests.rs"),
         ),
@@ -873,6 +877,10 @@ fn ui_sources_have_no_raw_color_literals() {
         (
             "panels/plugin_manager/widgets.rs",
             include_str!("../src/panels/plugin_manager/widgets.rs"),
+        ),
+        (
+            "panels/plugin_manager/audit.rs",
+            include_str!("../src/panels/plugin_manager/audit.rs"),
         ),
         (
             "panels/plugin_manager/tests.rs",
