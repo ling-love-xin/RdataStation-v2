@@ -48,9 +48,10 @@ pub(crate) use crate::ui::{
     DIALOG_ROW_HEIGHT as ROW_H, DIALOG_STAGING_HEIGHT as STAGING_H, GAP_LG, GAP_MD, GAP_SM,
 };
 
-/// Header 标签列宽（rem）：刚好容纳两字标签（名称 / 备注 / 驱动 / 地址），
-/// 不让标签与控件之间留下过大的空白（真机反馈：间距过大）。
-pub(crate) const LABEL_W: f32 = 1.75;
+/// Header 标签列宽（rem）：按最长标签「驱动类型」（4 字）定，其余标签（名称 / 备注 / 地址）
+/// 共享同一列宽，保证各行控件起点对齐——这正是这列存在的目的；只给长标签加宽会让驱动行的
+/// Select 比其它行靠右，视觉磕绊比标签后的留白更明显。
+pub(crate) const LABEL_W: f32 = 3.25;
 
 /// Header 统一标签列（固定宽度，保证各行标签左对齐，减少视觉磕绊）。
 pub(crate) fn header_label(theme: &Theme, text: &'static str) -> Div {
