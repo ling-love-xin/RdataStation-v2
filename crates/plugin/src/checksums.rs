@@ -128,7 +128,8 @@ pub fn verify_package(manifest: &PluginManifest, plugin_dir: &Path) -> Result<()
         }
 
         // 安装时会被跳过的开发残留：列了也装不进去，等于是给"完整性"一个假承诺。
-        if layout::is_residue_key(&key) {
+        // 按**任意一层**判断：`lib/__pycache__/x.pyc` 同样不会进安装目录。
+        if is_residue_path(&key) {
             problems.push(format!(
                 "{key} 属于安装时跳过的开发残留目录，不应列入 {CHECKSUMS_FILE}"
             ));
@@ -216,7 +217,7 @@ pub fn verify_package(manifest: &PluginManifest, plugin_dir: &Path) -> Result<()
                         ));
                     }
                 } else if path.is_dir() {
-                    for file in walk_files(&path)? {
+                    for file in walk_files(&path, false)? {
                         if !listed_externals.iter().any(|listed| same_file(listed, &file)) {
                             problems.push(format!(
                                 "缺少外部校验项：{}（driver_jars 声明的目录下每个文件都要列出来）",
@@ -316,8 +317,25 @@ fn same_file(left: &Path, right: &Path) -> bool {
     }
 }
 
+/// 键里**任意一层**落在开发残留（目录 / 未段文件）里吗。
+///
+/// 安装时 `installer::copy_dir` 是按目录名逐层跳的，`lib/__pycache__/x.pyc` 这种
+/// 嵌套残留同样不会被复制。只看首段（`layout::is_residue_key`）会把它当正常文件，
+/// 校验通过、复制却丢掉——完整性又变成假承诺。
+fn is_residue_path(key: &str) -> bool {
+    let segments: Vec<&str> = key.split('/').collect();
+    let last = segments.len().saturating_sub(1);
+    segments
+        .iter()
+        .enumerate()
+        .any(|(index, name)| layout::is_dev_residue(name, index != last))
+}
+
 /// 递归列出目录下的普通文件（不跟随符号链接，避免环）。
-fn walk_files(dir: &Path) -> Result<Vec<PathBuf>, CoreError> {
+///
+/// `skip_dev_residue`：遇到开发残留目录直接不进（包内遍历用；外部 `driver_jars`
+/// 目录照常全量列，那里不该有残留、也不该替作者猜）。
+fn walk_files(dir: &Path, skip_dev_residue: bool) -> Result<Vec<PathBuf>, CoreError> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(current) = stack.pop() {
@@ -331,6 +349,13 @@ fn walk_files(dir: &Path) -> Result<Vec<PathBuf>, CoreError> {
             let file_type = entry.file_type().map_err(|e| {
                 checksum_error(format!("读取 {} 的类型失败：{e}", path.display()))
             })?;
+            if skip_dev_residue {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if layout::is_dev_residue(&name, file_type.is_dir()) {
+                    continue;
+                }
+            }
             if file_type.is_dir() {
                 stack.push(path);
             } else if file_type.is_file() {
@@ -354,7 +379,7 @@ pub fn generate_package(
     plugin_dir: &Path,
 ) -> Result<String, CoreError> {
     let mut files = std::collections::BTreeMap::new();
-    for file in walk_files(plugin_dir)? {
+    for file in walk_files(plugin_dir, true)? {
         let relative = file.strip_prefix(plugin_dir).map_err(|_| {
             checksum_error(format!(
                 "内部错误：遍历出的路径不在插件目录内：{}",
@@ -362,7 +387,7 @@ pub fn generate_package(
             ))
         })?;
         let key = normalized_key(relative);
-        if key.is_empty() || key == CHECKSUMS_FILE || layout::is_residue_key(&key) {
+        if key.is_empty() || key == CHECKSUMS_FILE || is_residue_path(&key) {
             continue;
         }
         files.insert(key, sha256_of(&file)?);
@@ -380,7 +405,7 @@ pub fn generate_package(
             if path.is_file() {
                 external_files.insert(declared.clone(), sha256_of(&path)?);
             } else if path.is_dir() {
-                for file in walk_files(&path)? {
+                for file in walk_files(&path, false)? {
                     external_files.insert(file.display().to_string(), sha256_of(&file)?);
                 }
             } else {
@@ -799,5 +824,51 @@ driver_jars = [{list}]
         let text = format!("{err}");
         assert!(text.contains("缺少外部校验项"), "{text}");
         assert!(text.contains("postgresql.jar"), "{text}");
+    }
+
+    /// 残留判断要按任意一层：安装器按目录名逐层跳，嵌套 `__pycache__` 也不会被复制。
+    #[test]
+    fn rejects_nested_dev_residue_entries() {
+        let dir = TempDir::new("nested-residue");
+        write(dir.path(), "plugin.toml", "stub");
+        write(dir.path(), "lib/__pycache__/mod.cpython-313.pyc", "bytecode");
+        write_checksums(
+            dir.path(),
+            serde_json::json!({
+                "plugin.toml": digest(dir.path(), "plugin.toml"),
+                "lib/__pycache__/mod.cpython-313.pyc": digest(dir.path(), "lib/__pycache__/mod.cpython-313.pyc"),
+            }),
+        );
+
+        let err = verify_package(&manifest(""), dir.path()).unwrap_err();
+        let text = format!("{err}");
+        assert!(text.contains("开发残留"), "{text}");
+        assert!(text.contains("lib/__pycache__"), "{text}");
+    }
+
+    #[test]
+    fn generated_checksums_skip_nested_dev_residue() {
+        let temp = TempDir::new("gen-nested-residue");
+        let plugin = temp.path().join("plugin");
+        write(&plugin, "plugin.toml", "stub");
+        write(&plugin, "bin/agent", "binary");
+        write(&plugin, "lib/__pycache__/mod.cpython-313.pyc", "bytecode");
+        write(&plugin, "lib/real.jar", "jar");
+
+        let m = manifest(
+            r#"
+[backend]
+kind = "sidecar"
+executable = "bin/agent"
+"#,
+        );
+        let json = generate_package(&m, &plugin).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let files = parsed["files"].as_object().unwrap();
+        assert!(
+            !files.keys().any(|key| key.contains("__pycache__")),
+            "生成时不该列嵌套残留：{files:?}"
+        );
+        assert!(files.keys().any(|key| key == "lib/real.jar"), "{files:?}");
     }
 }
