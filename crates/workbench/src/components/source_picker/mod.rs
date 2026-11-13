@@ -39,11 +39,13 @@ use crate::ui;
 
 mod group;
 mod node;
+mod rows;
 mod search;
 mod state;
 
 pub use group::{group_of, grouped, SourceGroup};
-pub use node::{NodeId, NodeKind, Row, TempScope, MAX_DEPTH};
+pub use node::{ArchiveScope, NodeId, NodeKind, Row, TempScope, MAX_DEPTH};
+pub use rows::{analysis_table_rows, draft_rows, external_row, root_rows};
 pub use search::{rank, search, HitRank, SearchOutcome, SEARCH_LIMIT};
 pub use state::{TreeState, RECENT_CAP};
 

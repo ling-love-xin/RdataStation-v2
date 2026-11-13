@@ -26,8 +26,22 @@ pub enum NodeId {
     },
     /// 文件：草稿箱相对路径 / 外部文件绝对路径 / 资产库归档文件
     Path(String),
+    /// 资产库分析表：身份是「哪个库 + 表名」（§09 全局段与本项目段并列，
+    /// 表名本身带 `G_` 前缀，不另加符号）
+    AnalysisTable { scope: ArchiveScope, table: String },
     /// DuckDB 临时表：`scope` 决定「本机可见」还是「仅会话可见」
     Temp { scope: TempScope, table: String },
+}
+
+/// 资产库分析表所在的分析库。
+///
+/// `Project` = `{项目}/.RSmeta/analytics.duckdb`；`Global` = `{system}/analytics.duckdb`
+/// （单写者，登记在 `{system}/global.db`）。两段在树里并列不混排：用户必须一眼看出
+/// 自己改的是本项目副本还是全局原表。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArchiveScope {
+    Project,
+    Global,
 }
 
 /// 临时表的可见范围——正是结果集条目必须用 pill 标注的那件事。
@@ -164,6 +178,22 @@ mod tests {
             table: "tmp_q_result_1".into(),
         };
         assert_ne!(local, session, "同名表在两个作用域不能撞身份");
+    }
+
+    #[test]
+    fn analysis_table_identity_includes_scope() {
+        let project = NodeId::AnalysisTable {
+            scope: ArchiveScope::Project,
+            table: "orders".into(),
+        };
+        let global = NodeId::AnalysisTable {
+            scope: ArchiveScope::Global,
+            table: "orders".into(),
+        };
+        assert_ne!(
+            project, global,
+            "同名分析表分属「本项目副本」与「全局原表」，不能撞身份"
+        );
     }
 
     #[test]

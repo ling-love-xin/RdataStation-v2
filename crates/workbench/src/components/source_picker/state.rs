@@ -13,7 +13,7 @@
 use std::collections::HashSet;
 
 use super::node::{NodeId, NodeKind, Row};
-use super::search::{search, SEARCH_LIMIT};
+use super::search::search;
 
 /// 最近使用保留条数（README：置顶 3–5 条）
 pub const RECENT_CAP: usize = 5;
@@ -160,6 +160,7 @@ impl TreeState {
 mod tests {
     use super::*;
     use crate::components::source_picker::node::TempScope;
+    use crate::components::source_picker::search::SEARCH_LIMIT;
 
     fn group(label: &str, depth: u8) -> Row {
         Row::new(NodeId::Path(label.into()), depth, NodeKind::Group, label)
