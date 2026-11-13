@@ -577,7 +577,36 @@ pub(crate) async fn register_manifest(
 /// 「来源检查 + 目录 + 库 + 安装器」一次收拢，宿主只交一个用户选中的路径。
 pub async fn install_from_path(package_path: &Path) -> Result<Plugin, CoreError> {
     let install_root = paths::plugins_dir();
-    prepare_install(package_path, &install_root)?;
+    let result = install_from_path_inner(package_path, &install_root).await;
+
+    // 【D8b / A-1、A-2】装成功与装失败都留一行（失败带可读原因）
+    match &result {
+        Ok(plugin) => {
+            let after = format!(
+                "{{\"code\": {}, \"version\": {}}}",
+                serde_json::to_string(&plugin.code).unwrap_or_else(|_| "\"\"".into()),
+                serde_json::to_string(&plugin.version).unwrap_or_else(|_| "\"\"".into())
+            );
+            crate::operation_audit::record_result("ui", "install", &plugin.code, &result, Some(after))
+                .await;
+        }
+        Err(_) => {
+            // 失败时拿不到插件 code（包可能都没解开）：用包文件名当标识，别写空
+            let label = package_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| package_path.display().to_string());
+            crate::operation_audit::record_result("ui", "install", &label, &result, None).await;
+        }
+    }
+    result
+}
+
+async fn install_from_path_inner(
+    package_path: &Path,
+    install_root: &Path,
+) -> Result<Plugin, CoreError> {
+    prepare_install(package_path, install_root)?;
 
     let db_manager = engine::migration::get_global_db_manager().ok_or_else(|| {
         CoreError::common(CommonError::general(
@@ -585,7 +614,7 @@ pub async fn install_from_path(package_path: &Path) -> Result<Plugin, CoreError>
         ))
     })?;
 
-    PluginInstaller::new(install_root)
+    PluginInstaller::new(install_root.to_path_buf())
         .install_package(package_path, db_manager)
         .await
 }

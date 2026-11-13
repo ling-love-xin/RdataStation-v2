@@ -173,10 +173,32 @@ pub driver_id: Option<String>,
 | 刀 | 内容 | 状态 |
 | --- | --- | --- |
 | D8a | 迁移 030 + store 读写 API + 声明同步/能力位留痕 + 保留策略 + 查询历史 `driver_id` | ✅ 已落地（见文首表） |
-| D8b | 插件生命周期写入点：`install_from_path` / `enable_plugin` / `disable_plugin` / `uninstall_plugin` / `reload_plugins`（失败也要一行 `fail` + `reason`） | 待做 |
+| D8b | 插件生命周期写入点：`install_from_path` / `enable_plugin` / `disable_plugin` / `uninstall_plugin` / `reload_plugins`（失败也要一行 `fail` + `reason`） | ✅ 已落地（见下） |
 | D8c | 缺驱动被拒留痕（`action=missing_driver`，`reason` 指向「由插件 X 提供」） | 待做 |
 | D8d | 查看入口：插件管理页「操作记录」栏、驱动能力 Tab「来源 + 最近同步」、历史面板「驱动」列与过滤 | 待做（需 GPUI 视图，先读 `gpui-kit-dev` skill） |
 | D8e | `driver_operations` 导出 JSON（排障用，方案 §3.5） | 待做 |
 
-对应验收项：A-1～A-3、A-5、A-7、A-8 仍未覆盖；A-4、A-6 已由 D8a 覆盖。
+**D8b 落地细节（2026-11-13）**
+
+| 项 | 落点 |
+| --- | --- |
+| 留痕辅助 | `crates/plugin/src/operation_audit.rs`：`record(op)` 取 `global.db` 连接、校验表在不在、写入；**best-effort**——写失败只 `warn`，不把已成功的操作变失败。`record_result(...)` 把 `Ok/Err` 直接翻成 `result=ok/fail`（`Err` 的原因进 `reason`） |
+| 安装 | `installer::install_from_path` 拆 `install_from_path_inner`：成功记 `install + ok`（`after_json` 带 code / version）；失败记 `install + fail`，标识用**包文件名**（失败时可能连清单都没解出来） |
+| 启停 / 卸载 | `manager::{enable,disable,uninstall}_plugin` 各拆 `_inner`：成功与拒绝（被依赖、坏包、依赖没就绪）都留一行 |
+| 重载 | `manager::reload_plugins`（拆 `_inner`）：`reason` 写「新增 x / 消失 x / 清单变化 x / 自动重启 x」的计数 |
+| `actor` 口径 | 用户从界面点的（装/启/停/卸/重载）记 `ui`；热插拔扫描循环**不记**（每 tick 会刷噪声） |
+
+**验证**：`rds-plugin` lib **247 passed**，其中
+`operation_audit::tests::recorded_operations_land_in_the_table` 真起一次 `global.db`
+（顺带把迁移 030 走一遍）后读回「启用 ok + 停用 fail 且原因可读」两行。
+
+> ⚠️ 环境注记：验证时工作树里 `crates/plugin/src/checksums.rs` 有并行线未完成的改动
+> （`walk_files` 改了签名但 `checksums.rs:220` 的调用点未同步，整个 crate 编不过）。
+> 我**未改**那处代码：把它原样备份到 `.rds/tmp/d8b-checksums.wip.rs`（sha256 前后一致），
+> 用 `git checkout` 临时还原 HEAD 版本跑编译与测试，跑完立即原样拷回。那处改完后本刀
+> 的验证应重跑一遍。
+
+对应验收项：A-1（安装留痕）、A-2（安装失败留痕）、A-3（启停/卸载/重载留痕）由
+D8b 的代码路径覆盖，自动化断言目前只有上面那条读回用例；A-5、A-7、A-8 仍未覆盖。
+
 

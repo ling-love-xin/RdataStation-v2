@@ -382,15 +382,26 @@ default_port = 1521
     #[test]
     fn builtin_collision_is_rejected_with_named_ids() {
         let mut driver = oracle_like_driver();
-        driver.id = "postgres".into(); // 内置 sqlx 驱动
+        // 内置驱动（D3 之后内核只剩官方那 4 条；`postgres` / `mysql` 已归插件所有，
+        // 插件贡献它们**不算**冲突——那正是 `rds.driver.sqlx` 的活法）
+        driver.id = "postgres_native".into();
         let manifest = manifest_with_driver(driver);
         let err = check_builtin_collisions(&manifest).unwrap_err().to_string();
-        assert!(err.contains("postgres"), "错误应点名冲突 id：{err}");
+        assert!(err.contains("postgres_native"), "错误应点名冲突 id：{err}");
         assert!(err.contains("rds.driver.test"));
 
         // 不撞的放行
         let ok = manifest_with_driver(oracle_like_driver());
         assert!(check_builtin_collisions(&ok).is_ok());
+
+        // 与 sqlx 驱动的 id（`postgres`）不再冲突：它已由插件贡献
+        let mut driver = oracle_like_driver();
+        driver.id = "postgres".into();
+        let manifest = manifest_with_driver(driver);
+        assert!(
+            check_builtin_collisions(&manifest).is_ok(),
+            "`postgres` 已归插件所有，不该再判成与内置冲突"
+        );
     }
 
     #[test]

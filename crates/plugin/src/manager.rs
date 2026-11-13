@@ -35,6 +35,7 @@ use super::manifest::{
 };
 use crate::sidecar::factory::register_sidecar_drivers;
 use crate::sidecar::supervisor::SidecarSupervisor;
+use engine::persistence::driver_operation_store::DriverOperation;
 #[cfg(feature = "wasm")]
 use crate::wasm::ExtismPluginManager;
 use crate::wasm::{PluginMetadata, PluginState, PluginType};
@@ -1296,6 +1297,13 @@ impl PluginManager {
     ///
     /// **保留 `plugin-data/<id>/`**：插件数据可能含连接 / 凭据，卸载不删用户数据。
     pub async fn uninstall_plugin(&self, id: &str) -> Result<(), CoreError> {
+        let result = self.uninstall_plugin_inner(id).await;
+        // 【D8b】卸载（含「被依赖拒绝」「目录删不掉」）都留痕
+        crate::operation_audit::record_result("ui", "uninstall", id, &result, None).await;
+        result
+    }
+
+    async fn uninstall_plugin_inner(&self, id: &str) -> Result<(), CoreError> {
         validate_plugin_id(id).map_err(|e| {
             CoreError::common(CommonError::General(format!(
                 "插件 id 不合法（拼路径前必须校验）: {e}"
@@ -1370,6 +1378,13 @@ impl PluginManager {
     /// 权威状态 = global.db `plugin_store.is_enabled`（启动扫描 / 未来插件面板按它决定
     /// 要不要激活）。**运行中禁用 = 立刻停用**（sidecar 分支会停进程），不是等下次启动。
     pub async fn disable_plugin(&self, id: &str) -> Result<(), CoreError> {
+        let result = self.disable_plugin_inner(id).await;
+        // 【D8b】停用（含「被依赖拒绝」）留痕
+        crate::operation_audit::record_result("ui", "disable", id, &result, None).await;
+        result
+    }
+
+    async fn disable_plugin_inner(&self, id: &str) -> Result<(), CoreError> {
         // 停用被依赖的插件会让依赖方立即失去驱动；面板侧已做前置拦截，但这里
         // 是权威入口（自动停用 / 其它调用方），必须自己查一遍，不能只靠 UI。
         if let Some(db) = engine::migration::get_global_db_manager() {
@@ -1469,6 +1484,13 @@ impl PluginManager {
 
     /// 启用插件（与 [`Self::disable_plugin`] 对称）：持久标记 + 若已加载则重新激活。
     pub async fn enable_plugin(&self, id: &str) -> Result<(), CoreError> {
+        let result = self.enable_plugin_inner(id).await;
+        // 【D8b】启用（含「坏包」「依赖没就绪」）留痕
+        crate::operation_audit::record_result("ui", "enable", id, &result, None).await;
+        result
+    }
+
+    async fn enable_plugin_inner(&self, id: &str) -> Result<(), CoreError> {
         // 坏包只以错误行留在列表里，没有可激活的运行时；先拒绝并说清原因，
         // 不要把 DB 标记翻成启用却什么都没发生（面板上也别给「启用」）。
         if self
@@ -1856,6 +1878,30 @@ impl PluginManager {
     ///
     /// 调用的前提是用户明确触发了重载命令；插件内部更新不自动走到这里。
     pub async fn reload_plugins(&self) -> Result<PluginDiff, CoreError> {
+        let result = self.reload_plugins_inner().await;
+        // 【D8b】全量重载是用户显式动作：记一行，`reason` 写清这次动了什么
+        let reason = match &result {
+            Ok(diff) => Some(format!(
+                "重载完成：新增 {} / 消失 {} / 清单变化 {} / 自动重启 {}",
+                diff.added.len(),
+                diff.removed.len(),
+                diff.changed.len(),
+                diff.reloaded.len()
+            )),
+            Err(error) => Some(error.to_string()),
+        };
+        let mut op = match &result {
+            Ok(_) => DriverOperation::ok("ui", "reload"),
+            Err(error) => DriverOperation::fail("ui", "reload", error.to_string()),
+        };
+        if let Some(reason) = reason {
+            op = op.reason(reason);
+        }
+        crate::operation_audit::record(op).await;
+        result
+    }
+
+    async fn reload_plugins_inner(&self) -> Result<PluginDiff, CoreError> {
         let ids: Vec<String> = self
             .plugin_index
             .read()

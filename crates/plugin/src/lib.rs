@@ -29,6 +29,7 @@ pub mod installer;
 pub mod layout;
 pub mod manager;
 pub mod manifest;
+pub(crate) mod operation_audit;
 pub mod permission;
 // 渲染计算服务（wasm 轨）：随 `wasm` feature 门控（默认不编译，见 Cargo.toml 注释）
 #[cfg(feature = "wasm")]
