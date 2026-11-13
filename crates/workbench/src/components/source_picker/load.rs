@@ -156,7 +156,12 @@ fn collect_flattened(
 
 /// 资产库内部表清单（`{项目}/.RSmeta/analytics.duckdb`，无项目读全局分析库）。
 ///
-/// 查法与 `mock_generator::analysis_tables` 一致（`duckdb::Connection::open` + 过滤 `main` schema）。
+/// 查法与 `mock_generator::analysis_tables` 一致（`information_schema` + 过滤 `main` schema），
+/// 但**连接必须只读**（`ProjectDatabaseManager::open_read_only` 同款策略）：
+/// - 分析库是 DuckDB 单写者模型，写连接该由 `ProjectDatabaseManager` 独持；
+///   只读连接不拿写锁，可与项目主写连接并发——picker 只是**列名字**，没有写理由；
+/// - 反过来说，用可写模式打开一个**尚不存在**的分析库会把它**创建出来**（DuckDB 建库语义）：
+///   打开一次来源选择器就在项目里平白多一个空的 `analytics.duckdb`，那是副作用，不是查询。
 pub(super) fn collect_analysis_tables(project: Option<&project::ui::OpenProject>) -> Vec<String> {
     let path = project
         .map(|p| p.root.clone())
@@ -167,7 +172,10 @@ pub(super) fn collect_analysis_tables(project: Option<&project::ui::OpenProject>
     let Some(path) = path else {
         return Vec::new();
     };
-    let Ok(conn) = duckdb::Connection::open(&path) else {
+    let Ok(config) = duckdb::Config::default().access_mode(duckdb::AccessMode::ReadOnly) else {
+        return Vec::new();
+    };
+    let Ok(conn) = duckdb::Connection::open_with_flags(&path, config) else {
         return Vec::new();
     };
     let mut stmt = match conn.prepare(
