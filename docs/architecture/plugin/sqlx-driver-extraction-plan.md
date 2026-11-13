@@ -650,6 +650,27 @@ statement protocol yet`（D6 阶段没暴露是因为上下文压根没发出去
 **仍未做**：应用内「装插件 / 不装插件」两态（S-3）——需要 GUI 安装插件后拿老连接
 （`driver_id='mysql'`）真连一次，属界面级验收。
 
+### 7.9 合入 main（2026-11-13，`dac96583`）
+
+| 项 | 结果 |
+| --- | --- |
+| 合并方式 | 独立 worktree 里合（主工作树有并行线的未提交改动，不能在原地切分支）；`main 独有 8` vs `feat 独有 60`，非快进 |
+| 冲突面 | 两侧改动文件集**只交集 `Cargo.lock`**（main 85 文件、feat 193 文件）；实际自动合并成功，无手工解冲突 |
+| 合并后 lock | `name = "sqlx` 0 条、1217 个包；`cargo metadata` 全量解析通过 |
+| 编译 | `rds-analytics-resource`（main 侧新 crate）在剥离后的驱动层之上编译通过；`rds-workbench --lib` 绿（38.4 s）；`rds-connection-dialog` lib **70 passed**；`cargo tree -p rds-app` 无 `sqlx` |
+| 分支 | 合并后删除 `feat/capability-gating`（`git branch -d`，非强制），`main` 现 `dac96583`，领先 `origin/main` 71 个提交（**未 push**，等指示） |
+
+**一个不是合并引入的阻塞（如实记）**：`cargo check --workspace --all-targets -j 2` 在
+`crates/workbench/src/panels/left_tabs/tests.rs` 报 `recompute_checksums_description` 未在作用域
+——那是并行线**未提交**的半成品（tests 里加了调用，`pure.rs` 侧的定义还在别的改动里）。
+可核对：合并提交里 `left_tabs/tests.rs` 与 `plugin_tab/pure.rs` **都不含**这个符号，所以与本次
+合并无关；等并行线提交后 `--all-targets` 会恢复全绿。
+
+**S-1 的措辞需要修正（本次实证）**：`cargo tree -p rds-app` 里仍有 `bigdecimal v0.4.11`，
+但它经 `fake v5.1.0` ← `rds-mock` 进来，**两个父提交都有这条链**，与 sqlx 无关
+（D3 删的是 driver / engine 自己那份）。S-1 应写成「无 `sqlx*`；`bigdecimal` 只允许经 mock 的
+`fake` 进入」。
+
 ---
 
 ## 8. 验收清单
