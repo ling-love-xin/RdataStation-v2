@@ -27,8 +27,62 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  # 发布前置校验：打标签后**先**把「标签与版本号对不上」「UI 契约红了」这类问题挡在
+  # 编译之前。理由：release 构建是 240 分钟预算的重活，等它跑完四十分钟才发现版本号
+  # 漂了，等于白烧一轮云端机时。`rds-ui-guard` 是纯源码扫描（1.5 秒级），不吃 GPUI。
+  preflight:
+    name: 发布前置校验
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      # `.cargo/config.toml` 把 TEMP 钉到仓库内 `.rds/tmp`，全新检出里没有这个目录
+      - name: 预建 TEMP 目录
+        run: mkdir -p .rds/tmp
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: UI 契约守门
+        run: cargo test -p rds-ui-guard
+
+      # 版本漂移在发布路径上是**硬错误**，不是警告：产物按标签命名，名字和内容对不上
+      # 会一路带到下载页（旧口径只发 warning，见 docs/architecture/release/release-pipeline.md §7）
+      - name: 标签与版本号对账
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          TAG="${GITHUB_REF_NAME}"
+          case "$TAG" in
+            RDS-beta-*) EXPECTED="RDS-beta-$CARGO_VERSION" ;;
+            v*)         EXPECTED="v$CARGO_VERSION" ;;
+            *)          echo "::error::标签格式不认识：$TAG（只认 v* 与 RDS-beta-*）"; exit 1 ;;
+          esac
+          if [ "$TAG" != "$EXPECTED" ]; then
+            echo "::error::标签 $TAG 与 Cargo.toml 的版本 $CARGO_VERSION 不一致（应为 $EXPECTED）：先改版本号再打标签"
+            exit 1
+          fi
+
+      # 发布说明缺失只警告、不拦：Release 正文会回落到 GitHub 自动生成，
+      # 但手写说明是本仓的默认口径（docs/release/README.md），缺了要在日志里看得见
+      - name: 发布说明存在性
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          NOTES="docs/release/notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$NOTES" ]; then
+            echo "发布说明：$NOTES"
+          else
+            echo "::warning::未找到 $NOTES，Release 正文将回落为 GitHub 自动生成（只有一个 compare 链接）"
+          fi
+
   build:
     name: ${{ matrix.name }}
+    needs: preflight
     runs-on: ${{ matrix.os }}
     # 首次运行要编整个工作区（含 gpui 视图层与驱动栈）；`-j 2`（见下）下留足余量
     timeout-minutes: 240
@@ -59,6 +113,24 @@ jobs:
       - name: 预建 TEMP 目录
         shell: bash
         run: mkdir -p .rds/tmp
+
+      # 发布说明：本仓手写 `docs/release/notes/<标签名>.md`（口径见 docs/release/README.md）。
+      # 有就整篇用它，没有才回落到 GitHub 自动生成——自动生成只汇总 PR 与 issue，
+      # 单人直推的仓库拿到的正文只有一个 `**Full Changelog**` 链接。
+      - name: 解析发布说明
+        id: notes
+        shell: bash
+        run: |
+          NOTES="docs/release/notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$NOTES" ]; then
+            echo "path=$NOTES" >> "$GITHUB_OUTPUT"
+            echo "has=true" >> "$GITHUB_OUTPUT"
+            echo "发布说明：$NOTES"
+          else
+            echo "path=" >> "$GITHUB_OUTPUT"
+            echo "has=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::未找到 $NOTES，回落为 GitHub 自动生成"
+          fi
 
       # 系统依赖清单是**一份**（`tools/install-linux-deps.sh`，CI 工作流共用同一份）：
       # gpui 的 Linux 后端要 wayland / xkbcommon / xcb / fontconfig，bindgen 要 libclang，
@@ -100,7 +172,8 @@ jobs:
               *)          VERSION="$TAG" ;;
             esac
             if [ "$TAG" != "RDS-beta-$CARGO_VERSION" ] && [ "$TAG" != "v$CARGO_VERSION" ]; then
-              echo "::warning::标签 $TAG 与 Cargo.toml 的版本 $CARGO_VERSION 不一致，产物按标签命名"
+              echo "::error::标签 $TAG 与 Cargo.toml 的版本 $CARGO_VERSION 不一致（preflight 应已拦下，这里是兜底）"
+              exit 1
             fi
           else
             # 手动试跑：没有标签，用 Cargo.toml 的版本
@@ -141,14 +214,17 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # 矩阵各跑各的、各自上传：action 第一次跑建 Release，其余追加 Assets
+      # 矩阵各跑各的、各自上传：action 第一次跑建 Release，其余追加 Assets。
+      # 正文优先用手写的 notes 文件；beta 标签标成 prerelease，免得抢走 Latest。
       - name: 上传到 Release Assets
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
+          body_path: ${{ steps.notes.outputs.path }}
+          generate_release_notes: ${{ steps.notes.outputs.has != 'true' }}
+          prerelease: ${{ startsWith(github.ref_name, 'RDS-beta-') }}
           files: |
             dist/*.zip
             dist/*.sha256
           fail_on_unmatched_files: true
-          generate_release_notes: true
