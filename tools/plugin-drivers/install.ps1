@@ -16,6 +16,8 @@
 #   - Python 壳：源码已在 postgres-py/ 内（无需下载）
 #   - Rust 驱动：cargo build → 复制到 <包>/bin/win-x64/agent.exe
 # 安装目标：<RDS_HOME>/plugins/<manifest-id>（RDS_HOME 开发期 = 仓库根/.rds，见 crates/paths）
+# 复制用 robocopy 并排除开发残留（.git / target / __pycache__ 等，与 layout::is_dev_residue 同口径）：
+# 安装目录是只读产物，残留文件进去既不干净，运行期还会被重写、抖动载荷指纹。
 
 param(
     [switch]$WithJdbcOracle,
@@ -211,7 +213,19 @@ foreach ($t in $targets) {
         Write-Output "覆盖安装：$dst"
         Remove-Item -Recurse -Force -LiteralPath $dst
     }
-    Copy-Item -Recurse -LiteralPath $src -Destination $dst
+    # 用 robocopy 而不是 Copy-Item：后者会把 __pycache__ / .git / target 一起搬进安装目录。
+    # 安装目录是只读产物（layout 规则 6），Python 运行期还会重写 __pycache__，载荷指纹跟着变，
+    # 可能触发无谓的自动重启。排除清单与 layout::is_dev_residue 同一套。
+    $rcArgs = @(
+        $src, $dst, '/E',
+        '/XD', '.git', '.svn', '.hg', '.rds', '.idea', '.vscode', 'target', 'node_modules',
+        '__pycache__', '.pytest_cache', '.mypy_cache',
+        '/XF', '.DS_Store', 'Thumbs.db',
+        '/NFL', '/NDL', '/NJH', '/NJS', '/NP'
+    )
+    & robocopy @rcArgs | Out-Null
+    # robocopy：0 = 没变化、1-7 = 复制成功（有文件被拷），≥8 才是失败
+    if ($LASTEXITCODE -ge 8) { throw "复制插件目录失败（robocopy $LASTEXITCODE）：$src → $dst" }
     New-PackageChecksums $dst $checksumTool
     Write-Output "已安装：$dst"
 }
