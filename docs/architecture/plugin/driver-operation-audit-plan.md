@@ -4,7 +4,7 @@
 >
 > **参考的既有设计**（用户点名）：`drivers` / `driver_files` / `plugins` 三张表的登记形状、`query_history` 的载荷、`connection_audit`（A1）的规划。
 >
-> **状态**：地基已落地（D8a，见 §7）；生命周期写入点与查看入口待做（D8b 起）。
+> **状态**：D8a～D8d 已落地（地基、生命周期写入点、缺驱动留痕、四处查看入口，见 §7）；剩 D8e（导出 JSON）待做。
 
 > **D8a 落地了什么（2026-11-13）**
 >
@@ -175,7 +175,7 @@ pub driver_id: Option<String>,
 | D8a | 迁移 030 + store 读写 API + 声明同步/能力位留痕 + 保留策略 + 查询历史 `driver_id` | ✅ 已落地（见文首表） |
 | D8b | 插件生命周期写入点：`install_from_path` / `enable_plugin` / `disable_plugin` / `uninstall_plugin` / `reload_plugins`（失败也要一行 `fail` + `reason`） | ✅ 已落地（见下） |
 | D8c | 缺驱动被拒留痕（`action=missing_driver`，`reason` 指向「由插件 X 提供」） | ✅ 已落地（见下） |
-| D8d | 查看入口：插件管理页「操作记录」栏、驱动能力 Tab「来源 + 最近同步」、历史面板「驱动」列与过滤 | 🟡 第 1、2 段已落地（操作记录栏 + 历史驱动列/过滤）；能力 Tab 待做 |
+| D8d | 查看入口：插件管理页「操作记录」栏、驱动能力 Tab「来源 + 最近同步」、历史面板「驱动」列与过滤 | ✅ 三段均已落地（见下） |
 | D8e | `driver_operations` 导出 JSON（排障用，方案 §3.5） | 待做 |
 
 **D8b 落地细节（2026-11-13）**
@@ -200,7 +200,8 @@ pub driver_id: Option<String>,
 > 外包 `checksums.rs` 已不再是本刀的干扰项。
 
 对应验收项：A-1（安装留痕）、A-2（安装失败留痕）、A-3（启停/卸载/重载留痕）由
-D8b 的代码路径覆盖，自动化断言目前只有上面那条读回用例；A-5、A-7、A-8 仍未覆盖。
+D8b 的代码路径覆盖，自动化断言目前只有上面那条读回用例；A-5 由 D8c 覆盖；
+A-7（历史面板驱动列/过滤）、A-8（来源 + 最近同步）已由 D8d 第 2、3 段闭。
 
 **D8c 落地细节（2026-11-13）**
 
@@ -228,9 +229,7 @@ D8b 的代码路径覆盖，自动化断言目前只有上面那条读回用例�
 
 **验证**：`rds-workbench` lib 全绿（`plugin_manager` 子集 21 passed，含新增 3 条纯函数用例）。
 
-> 第 2 段（未做）：驱动能力 Tab 的「来源（哪个插件）+ 最近同步时间」、历史面板「驱动」列与按驱动过滤。
-> 前者要复用 `driver_operations` 里 `declare_sync` 的最新行，后者要动 `crates/editor` 的历史视图——
-> 两者都不在本段提交里，验收 A-7 仍未闭。
+> 第 2、3 段见下：历史面板「驱动」列与过滤（`acb362ff`）、驱动能力 Tab 的「来源 + 最近同步」（`6329a472`）。
 
 **D8d 第 2 段落地（2026-11-13）：历史面板「驱动」列与按驱动过滤（A-7）**
 
@@ -244,6 +243,39 @@ D8b 的代码路径覆盖，自动化断言目前只有上面那条读回用例�
 **验证**：`rds-store` lib 19 passed（含新增 `history_filter_branches_by_driver_implementation`：
 原生 / 插件 / 老记录三条互不冒充）、`rds-editor` lib **786 passed**（含新增
 `driver_implementation_reaches_the_list_item`）。
+
+**D8d 第 3 段落地（2026-11-13，`6329a472`）：驱动能力 Tab「来源 + 最近同步」**
+
+| 项 | 落点 |
+| --- | --- |
+| 数据来源 | **不另建表**：`driver_operations` 的 `action=declare_sync` 行本来就记着「谁在什么时候写的这条声明」（`plugin_id` 空 = 内核内置，有值 = 该插件贡献） |
+| 读法 | `crates/connection_dialog/src/services/data_source_service.rs::driver_sources()`：`action=declare_sync` / `limit=300`（`list_operations`）；读不到返回错误，由调用方降级为空表 |
+| 归并 | `helpers/capability.rs::driver_sources_from_rows`：表按时间倒序，**先到先得**——每个驱动只留最新一条；没有 `driver_id` 的行跳过 |
+| 文案 | `driver_source_text` 三档：「来源：插件 `<id>` · 最近同步 `<t>`」/「来源：内核内置 · 最近同步 `<t>`」/「来源：本次启动尚未同步（重开应用或刷新插件清单后可查）」——**没记录就不编来源** |
+| 缓存与注入 | `state.rs` 字段 `driver_sources`，在 `refresh_meta` 里与驱动目录**同批**读（`meta_refreshed` 每次打开入口重置 → 每开一次对话框重读一次）；`driver_source(&str)` 访问器；`render.rs` 能力 Tab 在 hint 下、chips 上一行渲染，render 只读缓存不查库 |
+
+**验证**：`rds-connection-dialog` lib **70 passed**（+2 纯函数用例：同一驱动多行只留最新 /
+无 `driver_id` 的行不参与 / 空表不造来源；三档文案逐字对齐）；全仓
+`cargo check --workspace --all-targets -j 2` 绿。
+
+**顺带补回 D3 丢掉的真机覆盖（同一批提交后另作一刀）**
+
+D3 删 sqlx 测试时，三个 engine 真机套件的 `use` 被重指到原生驱动，但**用例体没跟着补**，
+于是 `MySqlNativeDatabase` / `PostgresNativeDatabase` 变成未用 import（`cargo check` 的
+三条 `unused_imports` 警告就是这么来的）——MySQL / PostgreSQL 的覆盖**静默消失**。
+
+| 套件 | 补回的用例 |
+| --- | --- |
+| `read_only_flag_from_real_servers.rs` | `postgres_native_reports_read_only`（`SELECT 1` + `SHOW search_path`）、`mysql_native_reports_read_only`（`SELECT 1` + `SHOW TABLES`） |
+| `result_rows_reach_the_temp_table.rs` | `postgres_native_rows_reach_the_temp_table`、`mysql_native_rows_reach_the_temp_table`（3 行进表、3 行查回） |
+| `zero_row_columns_reach_query_result.rs` | `postgres_native_zero_row_keeps_columns`、`mysql_native_zero_row_keeps_columns`（0 行仍返回 `["x","y"]`） |
+
+文件头部的覆盖表同步改成「官方原生驱动」，并注明 sqlx 两条已随插件迁出内核、不在文件内验。
+
+**验证（真机 `192.168.3.138`，`.rds/local/test-env.ps1`）**：三套件各 4 passed
+（MySQL 3306 / PG 5432 走的都是内核原生驱动；SQLite / DuckDB 因未设路径按设计跳过），
+`cargo check -p rds-engine --tests` 无警告。
+
 
 
 
