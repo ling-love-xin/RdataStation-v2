@@ -26,7 +26,7 @@
 //! 运行期校验（安装后目录是只读产物，由文件系统权限与卸载流程保证）。
 
 use std::collections::BTreeSet;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -55,6 +55,16 @@ struct RawChecksums {
     #[serde(default = "default_algorithm")]
     algorithm: String,
     files: std::collections::BTreeMap<String, String>,
+    /// 插件目录**之外**的随包文件：绝对路径 → sha256。
+    ///
+    /// 典型是 `[backend] driver_jars` 声明的 JDBC 包——它们按约定放在插件目录外面，
+    /// 包内的 `files` 覆盖不到；换 jar 时载荷指纹能认出变化，但「坏 jar / 拷了半截」
+    /// 只有这里有哈希才能发现。
+    ///
+    /// **可选**：不写就只核包内（旧包、开发目录照旧）。写了之后必须把
+    /// `driver_jars` 声明的外部文件覆盖完整，否则完整性是假承诺。
+    #[serde(default)]
+    external_files: std::collections::BTreeMap<String, String>,
 }
 
 fn default_algorithm() -> String {
@@ -156,6 +166,69 @@ pub fn verify_package(manifest: &PluginManifest, plugin_dir: &Path) -> Result<()
         }
     }
 
+    // 插件目录**之外**的随包件（`[backend] driver_jars` 这类）：只认绝对路径的文件。
+    // 目录不直接列哈希（没有"目录哈希"这回事），要求把里面每个文件单独列出来。
+    let listed_externals: Vec<PathBuf> = raw
+        .external_files
+        .keys()
+        .map(|key| PathBuf::from(key))
+        .collect();
+    for (declared, expected) in &raw.external_files {
+        let path = PathBuf::from(declared);
+        if !path.is_absolute() {
+            problems.push(format!("外部文件必须是绝对路径：{declared}"));
+            continue;
+        }
+        let expected = expected.trim();
+        if expected.len() != 64 || !expected.chars().all(|c| c.is_ascii_hexdigit()) {
+            problems.push(format!(
+                "{declared}：哈希必须是 64 位十六进制（当前 {expected:?}）"
+            ));
+            continue;
+        }
+        match std::fs::metadata(&path) {
+            Ok(meta) if meta.is_file() => {
+                let actual = sha256_of(&path)?;
+                if !actual.eq_ignore_ascii_case(expected) {
+                    problems.push(format!(
+                        "外部文件哈希不匹配：{declared}（清单 {}，实际 {actual}）",
+                        expected.to_ascii_lowercase()
+                    ));
+                }
+            }
+            Ok(_) => problems.push(format!(
+                "外部路径不是普通文件（目录请把里面每个文件单独列出）：{declared}"
+            )),
+            Err(_) => problems.push(format!("外部文件不存在：{declared}")),
+        }
+    }
+
+    // 声明了 `external_files` 就必须覆盖完整：少列一个，那句"完整性"就是假的。
+    // 没声明（旧包 / 开发目录）不做这个要求——只有清单声明了外部依赖的老包不该因此装不上。
+    if !raw.external_files.is_empty() {
+        if let Some(backend) = &manifest.backend {
+            for declared in &backend.driver_jars {
+                let path = PathBuf::from(declared);
+                if path.is_file() {
+                    if !listed_externals.iter().any(|listed| same_file(listed, &path)) {
+                        problems.push(format!(
+                            "缺少外部校验项：{declared}（driver_jars 声明的外部 jar 必须列进 external_files）"
+                        ));
+                    }
+                } else if path.is_dir() {
+                    for file in walk_files(&path)? {
+                        if !listed_externals.iter().any(|listed| same_file(listed, &file)) {
+                            problems.push(format!(
+                                "缺少外部校验项：{}（driver_jars 声明的目录下每个文件都要列出来）",
+                                file.display()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if problems.is_empty() {
         return Ok(());
     }
@@ -227,6 +300,104 @@ fn relative_key(plugin_dir: &Path, resolved: &Path) -> Result<String, CoreError>
         ))
     })?;
     Ok(normalized_key(relative))
+}
+
+/// 判断两个路径是否指向同一个文件。
+///
+/// Windows 上大小写、相对写法、`\` 与 `/` 的差异都能让人写出"看起来一样"的两条路径，
+/// 直接字符串比会误判成「没覆盖」；文件都在就 canonicalize 后再比。
+fn same_file(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// 递归列出目录下的普通文件（不跟随符号链接，避免环）。
+fn walk_files(dir: &Path) -> Result<Vec<PathBuf>, CoreError> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let entries = std::fs::read_dir(&current)
+            .map_err(|e| checksum_error(format!("读取目录 {} 失败：{e}", current.display())))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| {
+                checksum_error(format!("读取目录 {} 的目录项失败：{e}", current.display()))
+            })?;
+            let path = entry.path();
+            let file_type = entry.file_type().map_err(|e| {
+                checksum_error(format!("读取 {} 的类型失败：{e}", path.display()))
+            })?;
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if file_type.is_file() {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// 生成一份 `checksums.json`：包内文件 + `[backend] driver_jars` 的外部文件。
+///
+/// 覆盖口径与 [`verify_package`] 对齐：包内按相对路径、跳过安装时会丢掉的开发残留、
+/// 跳过 `checksums.json` 自身（哈希无法自指）；外部按绝对路径逐个文件列（目录形式
+/// 递归展开）。外部路径不存在直接报错——生成一份「列了不存在」的文件等于给校验埋雷。
+///
+/// 打包流程里调这个函数，产物原样写进插件目录根即可。
+pub fn generate_package(
+    manifest: &PluginManifest,
+    plugin_dir: &Path,
+) -> Result<String, CoreError> {
+    let mut files = std::collections::BTreeMap::new();
+    for file in walk_files(plugin_dir)? {
+        let relative = file.strip_prefix(plugin_dir).map_err(|_| {
+            checksum_error(format!(
+                "内部错误：遍历出的路径不在插件目录内：{}",
+                file.display()
+            ))
+        })?;
+        let key = normalized_key(relative);
+        if key.is_empty() || key == CHECKSUMS_FILE || layout::is_residue_key(&key) {
+            continue;
+        }
+        files.insert(key, sha256_of(&file)?);
+    }
+
+    let mut external_files = std::collections::BTreeMap::new();
+    if let Some(backend) = &manifest.backend {
+        for declared in &backend.driver_jars {
+            let path = PathBuf::from(declared);
+            if !path.is_absolute() {
+                return Err(checksum_error(format!(
+                    "driver_jars 必须是绝对路径，无法生成校验项：{declared}"
+                )));
+            }
+            if path.is_file() {
+                external_files.insert(declared.clone(), sha256_of(&path)?);
+            } else if path.is_dir() {
+                for file in walk_files(&path)? {
+                    external_files.insert(file.display().to_string(), sha256_of(&file)?);
+                }
+            } else {
+                return Err(checksum_error(format!(
+                    "driver_jars 指向的路径不存在，无法生成校验项：{declared}"
+                )));
+            }
+        }
+    }
+
+    let document = serde_json::json!({
+        "algorithm": SUPPORTED_ALGORITHM,
+        "files": files,
+        "external_files": external_files,
+    });
+    serde_json::to_string_pretty(&document)
+        .map_err(|e| checksum_error(format!("序列化 {CHECKSUMS_FILE} 失败：{e}")))
 }
 
 /// 统一成 POSIX `/` 形式的比较键。
@@ -480,5 +651,153 @@ executable = "bin/agent"
             text.contains("开发残留") && text.contains("target/debug/junk"),
             "{text}"
         );
+    }
+
+    /// 插件目录外的 JDBC 包：在 TempDir 根下建 `lib/`，与插件目录平级。
+    fn external_jar(temp: &Path, name: &str) -> PathBuf {
+        let lib = temp.join("lib");
+        std::fs::create_dir_all(&lib).unwrap();
+        let jar = lib.join(name);
+        std::fs::write(&jar, "jar-bytes").unwrap();
+        jar
+    }
+
+    /// 带 `driver_jars` 的清单（TOML 里用单引号写 Windows 绝对路径，避免转义）
+    fn manifest_with_jars(jars: &[&Path]) -> PluginManifest {
+        let list = jars
+            .iter()
+            .map(|jar| format!("'{}'", jar.display()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        manifest_with(
+            "",
+            &format!(
+                r#"
+[backend]
+kind = "script"
+runtime = "java"
+executable = "bin/agent"
+driver_jars = [{list}]
+"#
+            ),
+        )
+    }
+
+    fn write_checksums_document(dir: &Path, document: serde_json::Value) {
+        write(dir, CHECKSUMS_FILE, &document.to_string());
+    }
+
+    #[test]
+    fn generated_checksums_round_trip_with_external_jars() {
+        let temp = TempDir::new("gen-roundtrip");
+        let plugin = temp.path().join("plugin");
+        write(&plugin, "plugin.toml", "stub");
+        write(&plugin, "bin/agent", "binary");
+        let jar = external_jar(temp.path(), "postgresql.jar");
+
+        let m = manifest_with_jars(&[&jar]);
+        let json = generate_package(&m, &plugin).unwrap();
+        write(&plugin, CHECKSUMS_FILE, &json);
+        // 生成的东西必须自己先过关
+        verify_package(&m, &plugin).unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let externals = parsed["external_files"].as_object().unwrap();
+        assert_eq!(externals.len(), 1, "外部 jar 应当被列进 external_files");
+        assert!(
+            externals.keys().any(|key| key.ends_with("postgresql.jar")),
+            "{externals:?}"
+        );
+    }
+
+    #[test]
+    fn generated_checksums_walk_external_directories() {
+        let temp = TempDir::new("gen-dir");
+        let plugin = temp.path().join("plugin");
+        write(&plugin, "plugin.toml", "stub");
+        write(&plugin, "bin/agent", "binary");
+        let lib = temp.path().join("jdbc");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("a.jar"), "a").unwrap();
+        std::fs::write(lib.join("b.jar"), "b").unwrap();
+
+        let m = manifest_with_jars(&[&lib]);
+        let json = generate_package(&m, &plugin).unwrap();
+        write(&plugin, CHECKSUMS_FILE, &json);
+        verify_package(&m, &plugin).unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed["external_files"].as_object().unwrap().len(),
+            2,
+            "目录下的每个 jar 都要单独列出来"
+        );
+    }
+
+    #[test]
+    fn tampered_external_jar_is_reported() {
+        let temp = TempDir::new("gen-tamper");
+        let plugin = temp.path().join("plugin");
+        write(&plugin, "plugin.toml", "stub");
+        write(&plugin, "bin/agent", "binary");
+        let jar = external_jar(temp.path(), "postgresql.jar");
+
+        let m = manifest_with_jars(&[&jar]);
+        let json = generate_package(&m, &plugin).unwrap();
+        write(&plugin, CHECKSUMS_FILE, &json);
+        verify_package(&m, &plugin).unwrap();
+
+        // 有人换掉了 jar（或拷了半截）
+        std::fs::write(&jar, "not-the-same-jar").unwrap();
+        let err = verify_package(&m, &plugin).unwrap_err();
+        let text = format!("{err}");
+        assert!(text.contains("外部文件哈希不匹配"), "{text}");
+        assert!(text.contains("postgresql.jar"), "{text}");
+    }
+
+    #[test]
+    fn external_relative_path_is_rejected() {
+        let dir = TempDir::new("ext-relative");
+        write(dir.path(), "plugin.toml", "stub");
+        write_checksums_document(
+            dir.path(),
+            serde_json::json!({
+                "algorithm": "sha256",
+                "files": { "plugin.toml": digest(dir.path(), "plugin.toml") },
+                "external_files": { "lib/x.jar": "0".repeat(64) },
+            }),
+        );
+
+        let err = verify_package(&manifest(""), dir.path()).unwrap_err();
+        assert!(format!("{err}").contains("外部文件必须是绝对路径"), "{err}");
+    }
+
+    /// 声明了 `external_files` 却不覆盖 `driver_jars`：等于给完整性一个假承诺。
+    #[test]
+    fn declared_external_files_must_cover_driver_jars() {
+        let temp = TempDir::new("ext-coverage");
+        let plugin = temp.path().join("plugin");
+        write(&plugin, "plugin.toml", "stub");
+        write(&plugin, "bin/agent", "binary");
+        let jar = external_jar(temp.path(), "postgresql.jar");
+        let other = external_jar(temp.path(), "unrelated.jar");
+
+        let m = manifest_with_jars(&[&jar]);
+        write_checksums_document(
+            &plugin,
+            serde_json::json!({
+                "algorithm": "sha256",
+                "files": {
+                    "plugin.toml": digest(&plugin, "plugin.toml"),
+                    "bin/agent": digest(&plugin, "bin/agent"),
+                },
+                "external_files": { other.display().to_string(): digest(temp.path(), "lib/unrelated.jar") },
+            }),
+        );
+
+        let err = verify_package(&m, &plugin).unwrap_err();
+        let text = format!("{err}");
+        assert!(text.contains("缺少外部校验项"), "{text}");
+        assert!(text.contains("postgresql.jar"), "{text}");
     }
 }

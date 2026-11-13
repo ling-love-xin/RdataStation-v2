@@ -77,6 +77,9 @@ cargo test --manifest-path tools/plugin-drivers/sqlx-rust/Cargo.toml
   包里有 `checksums.json` 时**先核对哈希**：对不上就不重启（文件拷坏了 / 被改过），退回
   待重载并指出哪个文件不符。发布包应当带这个文件（P5 打包流程生成），开发目录可不带——
   没有它照常自动重启。
+  打包时用 `cargo run -p rds-plugin --bin rds-plugin-checksums -- <插件目录>` 生成：
+  包内文件 + `driver_jars` 声明的外部 jar 都会被算进去（`external_files` 一节）。
+  注意带 `external_files` 的包要配新版宿主——旧版不认这个键，会把整份文件判成非法 JSON。
   两个现实约束：① Windows 上运行中的 exe 不能直接覆盖
   （`ERROR_SHARING_VIOLATION`），要先把旧的改名（`agent.exe` → `agent.exe.old`）
   再放新的——扫描认这种替换；② 用保留时间戳的工具覆盖（`robocopy /COPY:T` 之类）

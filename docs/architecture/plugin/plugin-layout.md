@@ -62,9 +62,37 @@
   "files": {
     "plugin.toml": "<64 位十六进制>",
     "bin/agent": "<64 位十六进制>"
+  },
+  "external_files": {
+    "D:/drivers/oracle/ojdbc11.jar": "<64 位十六进制>"
   }
 }
 ```
+
+`external_files`（2026-11-13）覆盖**插件目录之外**的随包件，典型是清单
+`[backend] driver_jars` 声明的 JDBC 包——它们按约定放在插件目录外，`files` 管不到。
+取值规则：
+
+- 键必须是**绝对路径**（相对路径直接拒绝），值是文件 sha256；只收普通文件，
+  目录没有「目录哈希」，由生成工具把里面每个文件单独列出来；
+- **声明了就不许漏**：`external_files` 非空时，`driver_jars` 声明的每个外部 jar、
+  目录下每个文件都必须被覆盖，少一个就报「缺少外部校验项」——否则完整性是假承诺；
+- **不声明则完全不要求**：旧包、开发目录不受影响（兼容口径：没声明 = 作者没承诺核外部件）；
+- 外部 jar 还没放到位时校验会失败，这属于「包不完整」，放好 jar 后重新安装 / 重载即可。
+
+生成工具（打包流程用）：
+
+```text
+cargo run -p rds-plugin --bin rds-plugin-checksums -- <插件目录>
+```
+
+遍历包内文件（跳过开发残留与 `checksums.json` 自身）算 sha256，`driver_jars` 的外部文件 /
+目录一并展开，写到 `<插件目录>/checksums.json`；外部路径不存在直接报错，不会生成一份
+「列了不存在」的文件。
+
+> **旧宿主兼容**：`checksums.json` 的结构是 `deny_unknown_fields`，旧版宿主不认识
+> `external_files`，会把整份文件判成非法 JSON、插件加载失败。带 `external_files` 的包
+> 必须配新版宿主；只有 `files` 的包两边都能用。
 
 - **时机**：安装期（`installer::validate_plugin` → `crates/plugin/src/checksums.rs::verify_package`），
   对解压产物 / 源目录校验，**复制目录之前**；装进去的字节和校验过的是同一份。
@@ -157,7 +185,8 @@
 | 相对路径形态（五字段） | 解析清单时 | `manifest::PluginManifest::validate_asset_paths` |
 | 目录名 = id | 加载时 | `manager::load_plugin_from_dir` → `layout::validate_dir_name` |
 | 入口存在性 | 安装时（复制前，对解压产物） | `installer::validate_plugin` → `layout::check_declared_entries` |
-| 随包哈希 + 覆盖率 | 安装时（复制前） | `installer::validate_plugin` → `checksums::verify_package` |
+| 随包哈希 + 覆盖率 | 安装时（复制前）与加载时 | `installer::validate_plugin` / `manager::load_plugin_from_dir` → `checksums::verify_package`（包内 + `external_files` 外部件） |
+| 载荷变化重启前复核 | 热插拔重启 / 会话结束后补做重启 | `manager::restart_after_payload_verify` → 同上 |
 | 开发残留不落盘 | 安装时（复制） | `installer::copy_dir` → `layout::is_dev_residue`；入口落其中则 `validate_plugin` 拒绝 |
 | wasm 入口解析 | 激活时 | `manager::activate_wasm` → `layout::resolve_asset` |
 | 多平台可执行解析 | 部署时 | `manifest::PluginBackend::resolve_executable` → `layout::resolve_executable` |

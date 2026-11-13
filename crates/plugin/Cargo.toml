@@ -63,3 +63,9 @@ paths = { workspace = true, features = ["test-support"] }
 [[bin]]
 name = "rds-sidecar-fixture"
 path = "tests/fixture/sidecar.rs"
+
+# 打包流程用：为一个插件目录生成 checksums.json（包内文件 + driver_jars 外部 jar）。
+# 不进宿主发布（发布只编 `-p rds-app`），只在打包机上 `cargo run -p rds-plugin --bin ...`。
+[[bin]]
+name = "rds-plugin-checksums"
+path = "src/bin/gen_checksums.rs"
