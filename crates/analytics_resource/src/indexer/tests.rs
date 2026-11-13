@@ -15,7 +15,8 @@ const PAYLOAD_MODE_MIGRATION_SQL: &str =
 const TIMELINE_MIGRATION_SQL: &str = concat!(
     include_str!("../../../store/migrations/project_meta/027_analytics_resource_timeline.sql"),
     include_str!("../../../store/migrations/project_meta/028_analytics_resource_semantics.sql"),
-    include_str!("../../../store/migrations/project_meta/029_analytics_resource_refs.sql")
+    include_str!("../../../store/migrations/project_meta/029_analytics_resource_refs.sql"),
+    include_str!("../../../store/migrations/project_meta/030_analytics_resource_checkouts.sql")
 );
 
 /// 建好临时项目 + 三段迁移 + 归档服务；修复器借用服务里的本体层与索引层。

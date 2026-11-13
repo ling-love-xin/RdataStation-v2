@@ -19,6 +19,8 @@ pub enum TimelineEventKind {
     Updated,
     /// 取回（检出）出工作副本。
     CheckedOut,
+    /// 取回的工作副本再归档、回到原存档生成新版本（030 取回凭据合成的可回溯节点）。
+    Rearchived,
     /// 从历史版本还原（用旧内容生成新版本）。
     Restored,
     /// 撤销归档。
@@ -47,6 +49,7 @@ impl TimelineEventKind {
             Self::Archived => "archived",
             Self::Updated => "updated",
             Self::CheckedOut => "checked_out",
+            Self::Rearchived => "rearchived",
             Self::Restored => "restored",
             Self::Undone => "undone",
             Self::Trashed => "trashed",
@@ -65,6 +68,7 @@ impl TimelineEventKind {
             "archived" => Self::Archived,
             "updated" => Self::Updated,
             "checked_out" => Self::CheckedOut,
+            "rearchived" => Self::Rearchived,
             "restored" => Self::Restored,
             "undone" => Self::Undone,
             "trashed" => Self::Trashed,
@@ -84,6 +88,7 @@ impl TimelineEventKind {
             Self::Archived => "归档",
             Self::Updated => "再归档 · 新版本",
             Self::CheckedOut => "取回（检出）",
+            Self::Rearchived => "取回后再归档 · 升版",
             Self::Restored => "从历史还原",
             Self::Undone => "撤销归档",
             Self::Trashed => "移入回收站",

@@ -175,4 +175,26 @@ mod tests {
         assert!(flagged.is_state_change);
         assert!(flagged.detail.contains("日活口径"));
     }
+
+    /// 030 取回凭据合成的回溯节点：用户能在时间线上直接看到「从 vN 取回 → 生成 vM」。
+    #[test]
+    fn rearchived_event_shows_the_checkout_to_version_chain() {
+        let event = TimelineEvent {
+            id: "rearchived-/p/scratchpad/dau.sql".to_string(),
+            resource_id: "ar_1".to_string(),
+            version: Some(2),
+            kind: TimelineEventKind::Rearchived,
+            detail: Some("从 v1 取回「dau.sql」后归档，生成 v2".to_string()),
+            content_hash: None,
+            occurred_at: Utc::now() - chrono::Duration::hours(1),
+        };
+        let rows = build_timeline_rows(&resource(2), &[], &[event]);
+        let row = rows
+            .iter()
+            .find(|row| row.key.contains("rearchived"))
+            .expect("回溯节点应在时间线上");
+        assert_eq!(row.title, "取回后再归档 · 升版");
+        assert!(row.detail.contains("从 v1 取回"));
+        assert!(row.detail.contains("生成 v2"));
+    }
 }

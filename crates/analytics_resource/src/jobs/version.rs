@@ -125,6 +125,37 @@ pub(crate) async fn load_versions(job: &VersionsJob) -> Result<VersionRows, Stri
         });
     }
 
+    // 取回凭据（030）并入时间线：把「从 vN 取回工作副本 → 再归档生成 vM」显式画出来。
+    // 与谱系同一手法——内存里归一成事件节点，呈现层仍只认识一种数据源。
+    for receipt in service
+        .store()
+        .checkouts_for_resource(&job.resource_id)
+        .await
+        .unwrap_or_default()
+    {
+        let (Some(consumed_at), Some(new_version)) =
+            (receipt.consumed_at, receipt.consumed_version)
+        else {
+            continue;
+        };
+        let short = Path::new(&receipt.dest_path)
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| "工作副本".to_string());
+        events.push(crate::model::TimelineEvent {
+            id: format!("rearchived-{}", receipt.dest_path),
+            resource_id: job.resource_id.clone(),
+            version: Some(new_version),
+            kind: crate::model::TimelineEventKind::Rearchived,
+            detail: Some(format!(
+                "从 v{} 取回「{}」后归档，生成 v{}",
+                receipt.from_version, short, new_version
+            )),
+            content_hash: None,
+            occurred_at: consumed_at,
+        });
+    }
+
     Ok(VersionRows {
         resource_id: job.resource_id.clone(),
         seed: VersionDialogSeed {
@@ -280,6 +311,15 @@ pub(crate) async fn run_version_action(job: &VersionActionJob) -> OpOutcome {
                 .await
             {
                 Ok(_) => {
+                    // 取回历史版本同样是「取回」：凭此凭据改完再归档也会回到原存档升版，
+                    // 回溯起点就是用户选中的那个历史版本号。
+                    if let Err(error) = service
+                        .store()
+                        .record_checkout(&dest, &job.resource_id, version)
+                        .await
+                    {
+                        tracing::error!(error = %error, "历史版本取回凭据写入失败");
+                    }
                     let shown = dest
                         .strip_prefix(&job.project_root)
                         .map(|rel| rel.to_string_lossy().replace('\\', "/"))

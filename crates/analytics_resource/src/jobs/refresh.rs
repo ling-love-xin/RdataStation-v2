@@ -27,6 +27,11 @@ pub(crate) async fn open_service(
         .await
         .map_err(|e| format!("打开项目库失败：{e}"))?;
     let store = AnalyticsResourceStore::new(manager.sqlite_pool());
+    // 迁移账本按 MAX(version) 跳过，老库 / 跳号场景可能漏建 027–030 的表。
+    // 用与迁移同源的 IF NOT EXISTS 补建一遍；只读项目写不了 DDL 时只告警，不阻断浏览。
+    if let Err(error) = store.ensure_m6_tables().await {
+        tracing::warn!(error = %error, "资产库扩展表自检未通过，语义写入可能失败");
+    }
     let service = ArchiveService::new(project_root, store);
     Ok(match keep_versions {
         Some(keep) => service.with_keep_versions(keep),

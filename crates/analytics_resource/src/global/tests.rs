@@ -16,7 +16,8 @@ const TAG_LINK_FK_MIGRATION_SQL: &str = include_str!(
 const TIMELINE_MIGRATION_SQL: &str = concat!(
     include_str!("../../../store/migrations/project_meta/027_analytics_resource_timeline.sql"),
     include_str!("../../../store/migrations/project_meta/028_analytics_resource_semantics.sql"),
-    include_str!("../../../store/migrations/project_meta/029_analytics_resource_refs.sql")
+    include_str!("../../../store/migrations/project_meta/029_analytics_resource_refs.sql"),
+    include_str!("../../../store/migrations/project_meta/030_analytics_resource_checkouts.sql")
 );
 
 struct TestEnv {

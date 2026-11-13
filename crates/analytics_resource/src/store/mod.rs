@@ -16,10 +16,12 @@ use crate::helpers;
 use crate::model::*;
 use self::rows::*;
 
+pub mod checkout_receipt;
 pub mod folder;
 pub mod refs;
 pub mod resource;
 pub mod rows;
+pub mod schema_guard;
 pub mod semantics;
 pub mod tag;
 pub mod timeline;
