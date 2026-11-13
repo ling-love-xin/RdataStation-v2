@@ -54,12 +54,19 @@ pub struct HistoryItem {
     pub rows_text: Option<String>,
     /// 来源文案（库类型；没有就不显示）
     pub source_text: Option<String>,
+    /// 驱动文案（`驱动 mysql_native`；老记录没有这一项就不显示）
+    pub driver_text: Option<String>,
     /// 【联邦】参与源文案（`源 mysql_src, pg_warehouse`；不是联邦档就没有这一项）
     pub sources_text: Option<String>,
     /// 【B5 余项】血缘文案（`原查询` / `下发筛选` / `本地分析`…；老记录没有这一项）
     pub lineage_text: Option<String>,
     /// 库类型原始值（**筛选输入**：`source_text` 是格式化文本，不能拿它匹配）
     pub db_type: Option<String>,
+    /// 跑这条语句的驱动实现（`mysql_native` / 插件提供的 `mysql`…；老记录为 `None`）
+    ///
+    /// 【D8d / A-7】同一族可能同时有原生与插件两条驱动：只显示库类型时，
+    /// 「切了实现之后哪些语句换了行为」这个问题在历史里看不出来。
+    pub driver_id: Option<String>,
     /// 失败原因（成功为 `None`）
     pub error: Option<String>,
     /// 当时绑定的连接（重放时带过去；`None` = 跟随当前连接）
@@ -96,6 +103,8 @@ pub struct HistoryQuery {
     pub keyword: Option<String>,
     /// 库类型（`sqlite` / `mysql` / …；`None` = 全部）
     pub db_type: Option<String>,
+    /// 驱动实现（`mysql_native` / 插件提供的 `mysql`…；`None` = 全部）
+    pub driver_id: Option<String>,
     /// 成败筛选（`None` = 全部；`Some(true)` = 只看成功；`Some(false)` = 只看失败）
     pub success: Option<bool>,
 }
@@ -109,6 +118,9 @@ pub fn query(q: &HistoryQuery, limit: usize, offset: usize) -> Result<Vec<Histor
     }
     if let Some(ref db_type) = q.db_type {
         filter = filter.with_db_type(db_type.clone());
+    }
+    if let Some(ref driver_id) = q.driver_id {
+        filter = filter.with_driver_id(driver_id.clone());
     }
     match q.success {
         Some(true) => filter = filter.success_only(),
@@ -145,9 +157,11 @@ pub fn item_from(record: &SqlHistoryRecord, now: DateTime<Utc>) -> HistoryItem {
         duration_text: duration_text(record.duration_ms.unwrap_or(0)),
         rows_text: rows_text(record.rows_returned, record.rows_affected),
         source_text: source_text(record.db_type.as_deref(), record.channel.as_deref()),
+        driver_text: driver_text(record.driver_id.as_deref()),
         sources_text: sources_text(record.channel.as_deref(), record.sources.as_deref()),
         lineage_text: record.lineage.clone(),
         db_type: record.db_type.clone(),
+        driver_id: record.driver_id.clone(),
         error: record.error_message.clone(),
         conn_id: record.conn_id.clone(),
     }
@@ -235,6 +249,15 @@ pub fn source_text(db_type: Option<&str>, channel: Option<&str>) -> Option<Strin
     Some(text)
 }
 
+/// 驱动文案（`驱动 mysql_native`）
+///
+/// 【D8d / A-7】与 `source_text`（库类型）并列：库类型说「哪种数据库」，
+/// 这行说「哪条驱动跑的那句」。空 / 老记录 → `None`，由渲染层决定不显示。
+pub fn driver_text(driver_id: Option<&str>) -> Option<String> {
+    let driver_id = driver_id.map(str::trim).filter(|text| !text.is_empty())?;
+    Some(format!("驱动 {driver_id}"))
+}
+
 /// 通道后缀（源库档不缀：那是默认档，缀上去只是噪音）
 fn channel_mark(channel: Option<&str>) -> Option<&'static str> {
     match crate::channel::ExecChannel::from_code(channel?) {
@@ -277,7 +300,8 @@ pub fn thousands(value: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        HistoryItem, duration_text, item_from, preview_text, rows_text, source_text, sources_text,
+        HistoryItem, driver_text, duration_text, item_from, preview_text, rows_text, source_text,
+        sources_text,
         time_text,
     };
     use chrono::{Duration, TimeZone as _, Utc};
@@ -382,8 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn source_text_is_the_database_kind() {
-        assert_eq!(source_text(Some("mysql"), None).as_deref(), Some("MYSQL"));
+    fn source_text_is_the_database_kind() {        assert_eq!(source_text(Some("mysql"), None).as_deref(), Some("MYSQL"));
         assert_eq!(source_text(Some("  "), None).as_deref(), None);
         assert_eq!(source_text(None, None).as_deref(), None);
         // 【B13】通道是第二个维度：源库档不缀（默认档缀上去只是噪音）
@@ -431,5 +454,25 @@ mod tests {
         assert!(item.failed(), "失败要能被列表标出来");
         assert_eq!(item.error.as_deref(), Some("no such column: nope"));
         assert_eq!(item.rows_text, None);
+    }
+
+    /// 【D8d / A-7】驱动实现要能出现在行上、也要能作为筛选键
+    #[test]
+    fn driver_implementation_reaches_the_list_item() {
+        let mut native = record("SELECT 1");
+        native.driver_id = Some("mysql_native".to_string());
+        let item = item_from(&native, native.executed_at);
+        assert_eq!(item.driver_id.as_deref(), Some("mysql_native"));
+        assert_eq!(item.driver_text.as_deref(), Some("驱动 mysql_native"));
+
+        // 老记录没有 driver_id：不给驱动文案，也不给筛选键（不编一个出来）
+        let mut legacy = record("SELECT 1");
+        legacy.driver_id = None;
+        let item = item_from(&legacy, legacy.executed_at);
+        assert_eq!(item.driver_id, None);
+        assert_eq!(item.driver_text, None);
+
+        assert_eq!(driver_text(Some(" mysql ")), Some("驱动 mysql".to_string()));
+        assert_eq!(driver_text(Some("  ")), None);
     }
 }

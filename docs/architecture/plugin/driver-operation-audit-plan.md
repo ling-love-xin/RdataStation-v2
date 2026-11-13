@@ -175,7 +175,7 @@ pub driver_id: Option<String>,
 | D8a | 迁移 030 + store 读写 API + 声明同步/能力位留痕 + 保留策略 + 查询历史 `driver_id` | ✅ 已落地（见文首表） |
 | D8b | 插件生命周期写入点：`install_from_path` / `enable_plugin` / `disable_plugin` / `uninstall_plugin` / `reload_plugins`（失败也要一行 `fail` + `reason`） | ✅ 已落地（见下） |
 | D8c | 缺驱动被拒留痕（`action=missing_driver`，`reason` 指向「由插件 X 提供」） | ✅ 已落地（见下） |
-| D8d | 查看入口：插件管理页「操作记录」栏、驱动能力 Tab「来源 + 最近同步」、历史面板「驱动」列与过滤 | 🟡 第 1 段已落地（见下）；能力 Tab / 历史列待做 |
+| D8d | 查看入口：插件管理页「操作记录」栏、驱动能力 Tab「来源 + 最近同步」、历史面板「驱动」列与过滤 | 🟡 第 1、2 段已落地（操作记录栏 + 历史驱动列/过滤）；能力 Tab 待做 |
 | D8e | `driver_operations` 导出 JSON（排障用，方案 §3.5） | 待做 |
 
 **D8b 落地细节（2026-11-13）**
@@ -231,6 +231,20 @@ D8b 的代码路径覆盖，自动化断言目前只有上面那条读回用例�
 > 第 2 段（未做）：驱动能力 Tab 的「来源（哪个插件）+ 最近同步时间」、历史面板「驱动」列与按驱动过滤。
 > 前者要复用 `driver_operations` 里 `declare_sync` 的最新行，后者要动 `crates/editor` 的历史视图——
 > 两者都不在本段提交里，验收 A-7 仍未闭。
+
+**D8d 第 2 段落地（2026-11-13）：历史面板「驱动」列与按驱动过滤（A-7）**
+
+| 项 | 落点 |
+| --- | --- |
+| 筛选口径 | `crates/store/src/persistence/history_store.rs`：`HistoryFilter` 加 `driver_id` + `with_driver_id`；`matches` 里 `record.driver_id == Some(id)`——**老记录（无 driver_id）不冒充任一条** |
+| 数据贯通 | `crates/editor/src/support/history.rs`：`HistoryQuery` 加 `driver_id`（透传进 `HistoryFilter`）；`HistoryItem` 加 `driver_id` 与 `driver_text`（`驱动 mysql_native`），`item_from` 填值 |
+| 行内展示 | `crates/editor/src/view/history.rs` 的 `history_meta`：驱动文案排在库类型之后（`MYSQL · 驱动 mysql_native`） |
+| 交互 | 筛选行加「驱动：全部 / <id>」下拉（`Button + dropdown_menu`，与既有「库：…」同款）；候选来自**已载入的行**（插件驱动是用户自己装的，硬编码清单必然过期）；`set_driver_filter` 换筛即回第一页并重查 |
+
+**验证**：`rds-store` lib 19 passed（含新增 `history_filter_branches_by_driver_implementation`：
+原生 / 插件 / 老记录三条互不冒充）、`rds-editor` lib **786 passed**（含新增
+`driver_implementation_reaches_the_list_item`）。
+
 
 
 

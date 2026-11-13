@@ -172,6 +172,11 @@ impl HistoryRecord {
 pub struct HistoryFilter {
     /// 数据库类型筛选
     pub db_type: Option<String>,
+    /// 驱动实现筛选（`mysql_native` / 插件提供的 `mysql` …；`None` = 全部）
+    ///
+    /// 【D8d / A-7】同一族可能有「官方原生」与「插件」两条实现：只看库类型
+    /// 分不出语句到底是哪条驱动跑的，而用户排查「插件停用后行为变了」正需要这一维。
+    pub driver_id: Option<String>,
     /// 连接 ID 筛选
     pub connection_id: Option<String>,
     /// 只显示成功的记录
@@ -201,6 +206,12 @@ impl HistoryFilter {
     /// 设置连接 ID 筛选
     pub fn with_connection_id(mut self, connection_id: String) -> Self {
         self.connection_id = Some(connection_id);
+        self
+    }
+
+    /// 设置驱动实现筛选（D8d / A-7）
+    pub fn with_driver_id(mut self, driver_id: String) -> Self {
+        self.driver_id = Some(driver_id);
         self
     }
 
@@ -243,6 +254,14 @@ impl HistoryFilter {
         // 连接 ID 筛选
         if let Some(ref conn_id) = self.connection_id {
             if record.connection_id != *conn_id {
+                return false;
+            }
+        }
+
+        // 驱动实现筛选（D8d / A-7）：老记录没有 driver_id（`None`），
+        // 选了具体驱动就把它们排除——这正是「这条到底哪条驱动跑的」要的答案。
+        if let Some(ref driver_id) = self.driver_id {
+            if record.driver_id.as_deref() != Some(driver_id.as_str()) {
                 return false;
             }
         }
@@ -1181,6 +1200,43 @@ mod tests {
         let results = store.filter_records(&filter, None);
         assert_eq!(results.len(), 1);
         assert!(results[0].sql.contains("orders"));
+    }
+
+    /// 【D8d / A-7】按驱动实现筛选：同族两条实现要能分开，老记录（无 driver_id）不冒充任一条
+    #[test]
+    fn history_filter_branches_by_driver_implementation() {
+        let mut native = HistoryRecord::new(
+            "SELECT * FROM users".to_string(),
+            "mysql".to_string(),
+            "conn-1".to_string(),
+        );
+        native.driver_id = Some("mysql_native".to_string());
+
+        let mut plugin = HistoryRecord::new(
+            "SELECT * FROM orders".to_string(),
+            "mysql".to_string(),
+            "conn-2".to_string(),
+        );
+        plugin.driver_id = Some("mysql".to_string());
+
+        let legacy = HistoryRecord::new(
+            "SELECT * FROM legacy".to_string(),
+            "mysql".to_string(),
+            "conn-3".to_string(),
+        );
+
+        let filter = HistoryFilter::new().with_driver_id("mysql_native".to_string());
+        assert!(filter.matches(&native));
+        assert!(!filter.matches(&plugin), "插件实现不能被原生筛选命中");
+        assert!(!filter.matches(&legacy), "老记录没有 driver_id，不能冒充任一条");
+
+        let filter = HistoryFilter::new().with_driver_id("mysql".to_string());
+        assert!(filter.matches(&plugin));
+        assert!(!filter.matches(&native));
+
+        // 不设驱动筛选时三条都在
+        let filter = HistoryFilter::new();
+        assert!(filter.matches(&native) && filter.matches(&plugin) && filter.matches(&legacy));
     }
 
     #[test]
