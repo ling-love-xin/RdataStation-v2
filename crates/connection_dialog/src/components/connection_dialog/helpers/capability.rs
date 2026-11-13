@@ -80,6 +80,56 @@ pub(crate) fn app_level_capabilities() -> Vec<String> {
         .collect()
 }
 
+/// 一条驱动的「来源 + 最近同步」（D8d）
+///
+/// 来源取自 `driver_operations` 的 `declare_sync` 行：`plugin_id` 为空 = 内核内置，
+/// 有值 = 该插件贡献。**不另建表**——留痕表本来就记着「谁在什么时候写的声明」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DriverSource {
+    /// `None` = 内核内置驱动；`Some(id)` = 该插件贡献
+    pub plugin_id: Option<String>,
+    /// 最近一次声明同步的时间（库里是 `occurred_at`，直接展示，不做二次格式化）
+    pub synced_at: String,
+}
+
+/// `declare_sync` 留痕行 → 「驱动 id → 来源」（**表里按时间倒序，先到先得**）
+///
+/// 只取每个驱动最新一条：更早的行说明的是「以前是什么样」，界面要的是当前来源。
+pub(crate) fn driver_sources_from_rows(
+    rows: &[engine::persistence::driver_operation_store::DriverOperationRow],
+) -> std::collections::HashMap<String, DriverSource> {
+    let mut sources = std::collections::HashMap::new();
+    for row in rows {
+        let Some(driver_id) = row.operation.driver_id.as_deref() else {
+            continue;
+        };
+        sources
+            .entry(driver_id.to_string())
+            .or_insert_with(|| DriverSource {
+                plugin_id: row.operation.plugin_id.clone(),
+                synced_at: row.occurred_at.clone(),
+            });
+    }
+    sources
+}
+
+/// 来源行文案（能力 Tab 顶部的说明）
+///
+/// 没有记录时**不编**：写「本次启动尚未同步」，让用户知道该重开或刷新，
+/// 而不是看到一个假的内核/插件归属。
+pub(crate) fn driver_source_text(source: Option<&DriverSource>) -> String {
+    match source {
+        Some(source) => {
+            let origin = match source.plugin_id.as_deref() {
+                Some(plugin) => format!("插件 {plugin}"),
+                None => "内核内置".to_string(),
+            };
+            format!("来源：{origin} · 最近同步 {}", source.synced_at)
+        }
+        None => "来源：本次启动尚未同步（重开应用或刷新插件清单后可查）".to_string(),
+    }
+}
+
 /// 解析驱动声明的认证方法（`drivers.supported_auth_types`，JSON 数组）。
 ///
 /// UI 的「认证方法」下拉即以此为准（数据源：驱动表）；驱动未声明 → 空列表（下拉置灰）。

@@ -726,8 +726,19 @@ impl<H: 'static> ConnectionDialogState<H> {
                     };
                     // 应用级功能单独一句：它们与驱动无关，混进矩阵会被读成“该驱动不支持”
                     let app_level = app_level_capabilities();
+                    // 【D8d】来源 + 最近同步：取自 `driver_operations` 的 declare_sync 最新行，
+                    // 与驱动目录同批读进缓存（render 只读，不查库）。没有记录就如实写「尚未同步」。
+                    let source_text = current_driver
+                        .as_ref()
+                        .map(|driver| driver_source_text(state.driver_source(&driver.id).as_ref()));
                     let mut capability_tab = div().v_flex().gap_2()
                         .child(div().text_xs().text_color(theme.colors.muted_foreground).child(hint))
+                        .children(source_text.map(|text| {
+                            div()
+                                .text_xs()
+                                .text_color(theme.colors.muted_foreground)
+                                .child(text)
+                        }))
                         .child(chips);
                     if !app_level.is_empty() {
                         capability_tab = capability_tab.child(
@@ -1993,7 +2004,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                         .items_center()
                         .gap(rems(GAP_LG))
                         .min_w(rems(0.))
-                        .child(header_label_state(theme, tr("驱动"), missing_driver))
+                        .child(header_label_state(theme, tr("驱动类型"), missing_driver))
                         .child(
                             div()
                                 .w(rems(DRIVER_W))

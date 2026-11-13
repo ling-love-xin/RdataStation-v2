@@ -123,6 +123,33 @@ impl DataSourceService {
         self.drivers.get_available_drivers().await
     }
 
+    /// 驱动「来源 + 最近同步」（D8d / A-8 的前置数据）
+    ///
+    /// 来源不另建表：`driver_operations` 里 `action=declare_sync` 的行就记着
+    /// 「这条驱动声明是谁写的、什么时候写的」——`plugin_id` 为空 = 内核内置，
+    /// 有值 = 该插件贡献。取每个驱动**最新**一条（表里按时间倒序）。
+    ///
+    /// 读不到（表还没建 / global.db 起不来）就返回空表：界面上说「未同步」，
+    /// 比编一个来源出来诚实。
+    pub async fn driver_sources(
+        &self,
+    ) -> Result<Vec<engine::persistence::driver_operation_store::DriverOperationRow>, CoreError>
+    {
+        const DECLARE_ROWS: usize = 300;
+        use engine::persistence::driver_operation_store::{list_operations, DriverOperationFilter};
+
+        let conn = self.global_db.sqlite_pool().acquire().await?;
+        let conn_ref = conn.inner()?;
+        list_operations(
+            conn_ref,
+            &DriverOperationFilter {
+                action: Some("declare_sync".to_string()),
+                limit: Some(DECLARE_ROWS),
+                ..Default::default()
+            },
+        )
+    }
+
     /// 按类型列出驱动
     pub async fn list_drivers_by_type(&self, type_id: &str) -> Result<Vec<Driver>, CoreError> {
         self.global_db.get_drivers_by_type(type_id).await

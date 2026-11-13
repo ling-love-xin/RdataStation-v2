@@ -401,6 +401,10 @@ pub struct ConnectionDialogState<H: 'static> {
     /// 驱动派生数据缓存（表单字段 / 能力 / 认证方法）；由 `driver_derived()` 按需刷新，
     /// 避免渲染期每帧解析声明 JSON（§6 决策 #67）。
     pub(crate) driver_derived: Rc<RefCell<DriverDerived>>,
+    /// 驱动「来源 + 最近同步」（D8d）：`driver id → DriverSource`，来自 `driver_operations`
+    /// 的 `declare_sync` 最新行。与驱动目录一起在 `refresh_meta` 里读一次，render 只读它。
+    pub(crate) driver_sources:
+        Rc<RefCell<std::collections::HashMap<String, DriverSource>>>,
     /// 编辑回读时**未能当场定位**的驱动值（记录的 `db_type` / `driver_id`）。
     ///
     /// `open` → `load_for_edit` 发生在驱动目录加载（首帧 `refresh_meta`）**之前**，

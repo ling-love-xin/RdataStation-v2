@@ -196,6 +196,7 @@ impl<H: 'static> ConnectionDialogState<H> {
             fields_synced_for: Rc::new(RefCell::new(None)),
             url_placeholder_for: Rc::new(RefCell::new(String::new())),
             driver_derived: Rc::new(RefCell::new(DriverDerived::default())),
+            driver_sources: Rc::new(RefCell::new(std::collections::HashMap::new())),
             pending_driver_value: Rc::new(RefCell::new(None)),
             // 分组卡「＋ 新建分组」输入行（与 mod.rs 字段声明对应）。
             group_new_open: Rc::new(Cell::new(false)),
@@ -252,7 +253,11 @@ impl<H: 'static> ConnectionDialogState<H> {
                 *self.drivers.borrow_mut() = drivers;
                 self.refresh_driver_items(window, cx);
             }
-            // 项目分组目录（项目级：需要当前项目根；未打开项目为空列表）。
+            // 驱动来源 + 最近同步（D8d）：与驱动目录同批读，render 只读缓存。
+            // 读不到就留空表——能力 Tab 会显示「本次启动尚未同步」，不编来源。
+            if let Ok(rows) = rt.block_on(service.driver_sources()) {
+                *self.driver_sources.borrow_mut() = driver_sources_from_rows(&rows);
+            }            // 项目分组目录（项目级：需要当前项目根；未打开项目为空列表）。
             let root = self.project_path.read(cx).value().trim().to_string();
             let groups = service.list_groups(if root.is_empty() {
                 None
@@ -832,6 +837,11 @@ impl<H: 'static> ConnectionDialogState<H> {
         let fresh = DriverDerived::resolve(driver);
         *self.driver_derived.borrow_mut() = fresh.clone();
         fresh
+    }
+
+    /// 某个驱动的来源 + 最近同步（D8d）；没记录 → `None`（界面写「尚未同步」，不编来源）
+    pub(crate) fn driver_source(&self, driver_id: &str) -> Option<DriverSource> {
+        self.driver_sources.borrow().get(driver_id).cloned()
     }
 
     /// 按驱动值（短名 / 完整名 / 驱动 id）选中驱动，并保证类型与下拉选项一致
