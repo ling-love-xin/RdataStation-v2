@@ -88,6 +88,37 @@ impl TreeState {
         self.selected = id;
     }
 
+    /// 上下键（§04）：在**可见**行里移动选中，只停在可确认的行
+    /// （组 / 连接 / 目录跳过——它们点了是展开，不是选中）。
+    ///
+    /// 到头了返回 `false` 且不动选中：让焦点从末尾「跳回开头」是更常见的选择，
+    /// 但那会让「一直按住 ↓」变成循环滚动，反而不好定位；这里选择停在边界。
+    pub fn step_selection(&mut self, rows: &[Row], forward: bool) -> bool {
+        let targets: Vec<NodeId> = self
+            .visible_rows(rows)
+            .iter()
+            .filter(|r| r.is_confirmable())
+            .map(|r| r.id.clone())
+            .collect();
+        if targets.is_empty() {
+            return false;
+        }
+        let current = self
+            .selected
+            .as_ref()
+            .and_then(|id| targets.iter().position(|t| t == id));
+        let next = match current {
+            Some(i) if forward => i + 1,
+            Some(i) => i.saturating_sub(1),
+            None => 0,
+        };
+        if next >= targets.len() {
+            return false;
+        }
+        self.select(Some(targets[next].clone()));
+        true
+    }
+
     // ---- 最近使用 ------------------------------------------------------
 
     pub fn recent(&self) -> &[NodeId] {
@@ -321,6 +352,45 @@ mod tests {
         st.set_query("order");
         let visible: Vec<&str> = st.visible_rows(&rows).iter().map(|r| r.label.as_str()).collect();
         assert_eq!(visible, vec!["order_items", "orders"], "最近用过的排前；Folder 不参与");
+    }
+
+    /// 上下键只停在可确认行：组 / 连接 / 目录一律跳过。
+    #[test]
+    fn arrow_keys_skip_navigation_rows() {
+        let rows = db_rows();
+        let mut st = TreeState::new();
+        for r in &rows[..3] {
+            st.expand(&r.id); // 数据库 / mysql / analytics 全展开
+        }
+        assert!(st.step_selection(&rows, true), "从无选中开始，落到第一张可确认的表");
+        assert_eq!(st.selected(), Some(&rows[3].id), "orders：跳过组、连接、目录");
+
+        assert!(!st.step_selection(&rows, true), "后面只有收起的 pg 子树，走到底不动");
+        assert_eq!(st.selected(), Some(&rows[3].id));
+
+        st.expand(&rows[4].id); // 展开 pg
+        assert!(st.step_selection(&rows, true), "pg 展开后能落到 events");
+        assert_eq!(st.selected(), Some(&rows[5].id));
+
+        assert!(st.step_selection(&rows, false), "↑ 回到 orders");
+        assert_eq!(st.selected(), Some(&rows[3].id));
+    }
+
+    /// 搜索态下 ↑↓ 走的是命中列表，不是整棵树。
+    #[test]
+    fn arrow_keys_follow_search_hits() {
+        let rows = db_rows();
+        let mut st = TreeState::new();
+        st.set_query("o"); // 命中 orders / pg… 逐个确认
+        let hits: Vec<NodeId> = st
+            .visible_rows(&rows)
+            .iter()
+            .filter(|r| r.is_confirmable())
+            .map(|r| r.id.clone())
+            .collect();
+        assert!(!hits.is_empty());
+        assert!(st.step_selection(&rows, true));
+        assert_eq!(st.selected(), Some(&hits[0]));
     }
 
     #[test]

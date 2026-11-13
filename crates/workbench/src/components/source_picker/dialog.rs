@@ -1,15 +1,22 @@
-//! 对话框外壳：根 tab、三分法主体（一棵树）、底部栏。
+﻿//! 对话框外壳：根 tab、三分法主体（一棵树）、搜索框、键盘、最近使用、底部栏。
 //!
-//! 为什么从 `mod.rs` 挪出来：这是「一个模态长什么样」的全部代码，
+//! 为什么从 `mod.rs` 挪出来：这是「一个模态长什么样 + 怎么被操作」的全部代码，
 //! 与状态 / 行模型 / 数据访问无关。混在一起时 `mod.rs` 永远是全模块最胖的文件。
+//!
+//! 为什么是一个 `Render` 实体而不是一段闭包：搜索框的 `InputState` 需要订阅
+//! `InputEvent::Change` 才能把词写进树态，而订阅要求 `Context<T>`；
+//! `open_dialog` 的 builder 只给 `&mut App`。抬成实体后订阅、焦点句柄、键盘回调
+//! 都有地方挂，`open_source_picker` 退化成「预载数据 + 装配 + 打开」。
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::button::Button;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme, WindowExt as _};
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::{ActiveTheme, Sizable as _};
 use gpui_kit::*;
 
 use crate::panels::Shared;
@@ -20,6 +27,7 @@ use super::load::{collect_analysis_tables, collect_drafts, load_db_layer};
 use super::node::{ArchiveScope, NodeId, NodeKind, Row};
 use super::render::{render_rows, RowAction};
 use super::rows::{analysis_table_rows, draft_rows, external_row, group_id_row};
+use super::state::TreeState;
 use super::{ConfirmStrategy, Picked, PickerConfig, PickerState, SourceKind, TableCandidate};
 
 /// 外部文件的「动作行」身份：点它开 rfd，不是可确认的对象。
@@ -127,14 +135,34 @@ fn file_group_rows(s: &PickerState) -> Vec<Row> {
     out
 }
 
+/// 最近使用：把 `NodeId` 映射回行（还没在树上展开也能点）。
+///
+/// 命中不到就跳过——权限变更 / 文件被删之后，最近使用里的东西可能已经不存在了，
+/// 这时候画一个点不动的行只会误导。
+fn recent_rows(rows: &[Row], tree: &TreeState) -> Vec<Row> {
+    if tree.is_searching() {
+        return Vec::new();
+    }
+    tree.recent()
+        .iter()
+        .filter_map(|id| rows.iter().find(|r| &r.id == id))
+        .map(|r| {
+            let mut row = r.clone();
+            row.depth = 0;
+            row.breadcrumb = None;
+            row
+        })
+        .collect()
+}
+
 /// 三分法主体：一张树 + 一套回调（三个根共用，行渲染不按根分叉）。
 fn render_body(
-    s: &PickerState,
+    rows: &[Row],
     state: &Rc<RefCell<PickerState>>,
     shared: &Shared,
     cx: &mut App,
 ) -> AnyElement {
-    let rows = body_rows(s);
+    let tree = state.borrow().tree.clone();
 
     let on_toggle: RowAction = {
         let state = state.clone();
@@ -216,7 +244,261 @@ fn render_body(
         })
     };
 
-    render_rows(&rows, &s.tree, on_toggle, on_select, cx)
+    render_rows(rows, &tree, on_toggle, on_select, cx)
+}
+
+/// 最近使用区块：单独一条渲染（≤5 行，不会真的滚），行点击只改选中。
+fn recent_block(rows: Vec<Row>, state: &Rc<RefCell<PickerState>>, cx: &mut App) -> AnyElement {
+    let tree = state.borrow().tree.clone();
+    let on_toggle: RowAction = Rc::new(|_, _| {});
+    let on_select: RowAction = {
+        let state = state.clone();
+        Rc::new(move |id: &NodeId, window: &mut Window| {
+            state.borrow_mut().tree.select(Some(id.clone()));
+            window.refresh();
+        })
+    };
+    render_rows(&rows, &tree, on_toggle, on_select, cx)
+}
+
+/// 对话框视图：持有树态、搜索框、焦点与订阅。
+struct PickerShell {
+    state: Rc<RefCell<PickerState>>,
+    shared: Shared,
+    config: PickerConfig,
+    strategy: ConfirmStrategy,
+    search: Entity<InputState>,
+    focus_handle: FocusHandle,
+    /// 搜索框订阅句柄（仅持有；drop 即退订）
+    _search_sub: Subscription,
+}
+
+impl PickerShell {
+    fn new(
+        state: Rc<RefCell<PickerState>>,
+        shared: Shared,
+        config: PickerConfig,
+        strategy: ConfirmStrategy,
+        search: Entity<InputState>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let focus_handle = cx.focus_handle();
+        let state_for_sub = state.clone();
+        // 用户敲字 → 写树态 → 重绘。程序化写值（Esc 清空）不发事件，那条路径自己写树态。
+        let search_sub = cx.subscribe(&search, move |_this, input, ev: &InputEvent, cx| {
+            if matches!(ev, InputEvent::Change) {
+                let text = input.read(cx).value().to_string();
+                state_for_sub.borrow_mut().tree.set_query(text);
+                cx.notify();
+            }
+        });
+        Self {
+            state,
+            shared,
+            config,
+            strategy,
+            search,
+            focus_handle,
+            _search_sub: search_sub,
+        }
+    }
+}
+
+impl Render for PickerShell {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let state = self.state.clone();
+        let shared = self.shared.clone();
+        let strategy = self.strategy.clone();
+        let config = self.config;
+        let search = self.search.clone();
+        let focus_handle = self.focus_handle.clone();
+
+        let rows = body_rows(&state.borrow());
+        let recent = recent_rows(&rows, &state.borrow().tree);
+        let truncated = state.borrow().tree.search_progress(&rows);
+        let body = render_body(&rows, &state, &shared, cx);
+        let recent_el = recent_block(recent.clone(), &state, cx);
+
+        let colors = cx.theme().colors;
+        let groups = grouped(config.kinds);
+        let tab_index = groups
+            .iter()
+            .position(|(g, _)| *g == state.borrow().group)
+            .unwrap_or(0);
+        let (group_note, can_confirm, confirm_label, note) = {
+            let s = state.borrow();
+            (
+                s.group.note(),
+                s.has_target(),
+                s.selected_label()
+                    .map(|l| format!("{} {}", config.confirm_prefix, l))
+                    .unwrap_or_else(|| format!("{}选中目标", config.confirm_prefix)),
+                s.note.clone(),
+            )
+        };
+
+        let tabs = groups
+            .iter()
+            .map(|(g, _)| Tab::new().label(SharedString::from(g.title())));
+        let tab_bar = TabBar::new(ElementId::Name(SharedString::from("source-picker-tabs")))
+            .underline()
+            .children(tabs)
+            .selected_index(tab_index)
+            .on_click({
+                let state = state.clone();
+                let groups = groups.clone();
+                move |index, window, _cx: &mut App| {
+                    state.borrow_mut().group = groups[*index].0;
+                    window.refresh();
+                }
+            });
+
+        // —— 键盘（§04）：焦点挂在根容器上，内部控件的事件冒泡上来 ——
+        let on_key = {
+            let state = state.clone();
+            let shared = shared.clone();
+            let strategy = strategy.clone();
+            let search = search.clone();
+            let rows = rows.clone();
+            move |ev: &KeyDownEvent, window: &mut Window, cx: &mut App| {
+                let key = ev.keystroke.key.as_str();
+                let ctrl = ev.keystroke.modifiers.control || ev.keystroke.modifiers.platform;
+                match key {
+                    // Ctrl+F：焦点交给搜索框
+                    "f" if ctrl => {
+                        let handle = search.read(cx).focus_handle(cx);
+                        window.focus(&handle, cx);
+                    }
+                    "up" => {
+                        state.borrow_mut().tree.step_selection(&rows, false);
+                        window.refresh();
+                    }
+                    "down" => {
+                        state.borrow_mut().tree.step_selection(&rows, true);
+                        window.refresh();
+                    }
+                    // → 展开当前行（叶子无反应）
+                    "right" => {
+                        let id = state.borrow().tree.selected().cloned();
+                        if let Some(id) = id {
+                            let expandable = rows
+                                .iter()
+                                .find(|r| r.id == id)
+                                .map(|r| r.kind.is_expandable())
+                                .unwrap_or(false);
+                            if expandable {
+                                state.borrow_mut().tree.expand(&id);
+                                load_db_layer(&state, &shared, &id, window);
+                                window.refresh();
+                            }
+                        }
+                    }
+                    // ← 收起当前行（选中不变：选中行暂时不可见是允许的）
+                    "left" => {
+                        let id = state.borrow().tree.selected().cloned();
+                        if let Some(id) = id {
+                            state.borrow_mut().tree.collapse(&id);
+                            window.refresh();
+                        }
+                    }
+                    "enter" => {
+                        if state.borrow().has_target() {
+                            if let Some(id) = state.borrow().tree.selected().cloned() {
+                                state.borrow_mut().tree.push_recent(id);
+                            }
+                            strategy(&shared, &state, window, cx);
+                        }
+                    }
+                    // Esc：有搜索词先清词（不清选中，§03），没词才关对话框
+                    "escape" => {
+                        if state.borrow().tree.is_searching() {
+                            state.borrow_mut().tree.clear_query();
+                            window.refresh();
+                            search.update(cx, |input, cx| input.set_value("", window, cx));
+                        } else {
+                            window.close_dialog(cx);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        };
+
+        let mut root = div()
+            .v_flex()
+            .w_full()
+            .gap_2()
+            .track_focus(&focus_handle)
+            .on_key_down(on_key)
+            .child(tab_bar)
+            // 根的一句话说明：回答「怎么读」，不是「是什么」
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(colors.muted_foreground)
+                    .child(group_note),
+            )
+            .child(Input::new(&self.search).small());
+
+        if let Some((shown, total)) = truncated {
+            root = root.child(
+                div()
+                    .text_xs()
+                    .text_color(colors.muted_foreground)
+                    .child(format!(
+                        "命中 {total} 个，只显示前 {shown} 个；再输入几个字缩小范围"
+                    )),
+            );
+        }
+        if !recent.is_empty() {
+            root = root
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(colors.muted_foreground)
+                        .child("最近使用"),
+                )
+                .child(recent_el);
+        }
+
+        root.child(body).child(
+            div()
+                .h_flex()
+                .items_center()
+                .w_full()
+                .gap_2()
+                .child(match note {
+                    Some(note) => div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(colors.warning)
+                        .child(note),
+                    None => div().flex_1(),
+                })
+                .child(
+                    Button::new(ElementId::Name(SharedString::from("source-picker-cancel")))
+                        .label("取消")
+                        .on_click(|_, window, cx| window.close_dialog(cx)),
+                )
+                .child(
+                    Button::new(ElementId::Name(SharedString::from("source-picker-ok")))
+                        .label(confirm_label)
+                        .disabled(!can_confirm)
+                        .on_click({
+                            let state = state.clone();
+                            let shared = shared.clone();
+                            let strategy = strategy.clone();
+                            move |_, window, cx| {
+                                if let Some(id) = state.borrow().tree.selected().cloned() {
+                                    state.borrow_mut().tree.push_recent(id);
+                                }
+                                strategy(&shared, &state, window, cx);
+                            }
+                        }),
+                ),
+        )
+    }
 }
 
 /// 打开来源选择对话框（宿主侧通用入口）。
@@ -261,100 +543,25 @@ pub fn open_source_picker(
         config.kinds, conns, drafts, analysis,
     )));
     state.borrow_mut().note = note;
-    let state_build = state.clone();
-    let shared_build = shared.clone();
-    let strategy_build = strategy.clone();
 
-    window.open_dialog(cx, move |dialog, _window, cx| {
-        let s = state_build.borrow();
-        let groups = grouped(config.kinds);
-
-        // —— 主体：三分法一张树（先渲染，再取主题，避免与 &mut cx 冲突）——
-        let body = render_body(&s, &state_build, &shared_build, cx);
-
-        // —— 根 tab 条 ——
-        let tabs = groups
-            .iter()
-            .map(|(g, _)| Tab::new().label(SharedString::from(g.title())));
-        let tab_bar = TabBar::new(ElementId::Name(SharedString::from("source-picker-tabs")))
-            .underline()
-            .children(tabs)
-            .selected_index(
-                groups
-                    .iter()
-                    .position(|(g, _)| *g == s.group)
-                    .unwrap_or(0),
-            )
-            .on_click({
-                let state = state_build.clone();
-                let groups = groups.clone();
-                move |index, window, _app| {
-                    state.borrow_mut().group = groups[*index].0;
-                    window.refresh();
-                }
-            });
-
-        let theme = cx.theme();
-        let group_note = s.group.note();
-
-        let can_confirm = s.has_target();
-        let confirm_label = s
-            .selected_label()
-            .map(|l| format!("{} {}", config.confirm_prefix, l))
-            .unwrap_or_else(|| format!("{}选中目标", config.confirm_prefix));
-
-        let dialog = dialog.title(config.title).child(
-            div()
-                .v_flex()
-                .w_full()
-                .gap_3()
-                .child(tab_bar)
-                // 根的一句话说明：回答「怎么读」，不是「是什么」
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.colors.muted_foreground)
-                        .child(group_note),
-                )
-                .child(body)
-                .child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .w_full()
-                        .gap_2()
-                        .child(if let Some(note) = &s.note {
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_xs()
-                                .text_color(theme.colors.warning)
-                                .child(note.clone())
-                        } else {
-                            div().flex_1()
-                        })
-                        .child(
-                            Button::new(ElementId::Name(SharedString::from(
-                                "source-picker-cancel",
-                            )))
-                            .label("取消")
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
-                        )
-                        .child(
-                            Button::new(ElementId::Name(SharedString::from("source-picker-ok")))
-                                .label(confirm_label)
-                                .disabled(!can_confirm)
-                                .on_click({
-                                    let state = state_build.clone();
-                                    let shared = shared_build.clone();
-                                    let strategy = strategy_build.clone();
-                                    move |_, window, cx| {
-                                        strategy(&shared, &state, window, cx);
-                                    }
-                                }),
-                        ),
-                ),
-        );
-        dialog
+    let search =
+        cx.new(|cx| InputState::new(window, cx).placeholder("搜索表 / 视图 / 文件（Ctrl+F）"));
+    let shell = cx.new(|cx| {
+        PickerShell::new(
+            state.clone(),
+            shared.clone(),
+            config,
+            strategy.clone(),
+            search.clone(),
+            cx,
+        )
     });
+
+    // 打开即聚焦，键盘能直接用（否则要先点一下树）
+    let handle = shell.read(cx).focus_handle.clone();
+    window.open_dialog(cx, {
+        let shell = shell.clone();
+        move |dialog, _window, _cx| dialog.title(config.title).child(shell.clone())
+    });
+    window.focus(&handle, cx);
 }
