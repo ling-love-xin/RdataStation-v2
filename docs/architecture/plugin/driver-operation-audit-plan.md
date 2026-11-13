@@ -4,7 +4,7 @@
 >
 > **参考的既有设计**（用户点名）：`drivers` / `driver_files` / `plugins` 三张表的登记形状、`query_history` 的载荷、`connection_audit`（A1）的规划。
 >
-> **状态**：D8a～D8d 已落地（地基、生命周期写入点、缺驱动留痕、四处查看入口，见 §7）；剩 D8e（导出 JSON）待做。
+> **状态**：D8a～D8e 已全部落地（地基、生命周期写入点、缺驱动留痕、四处查看入口、导出 JSON，见 §7）。
 
 > **D8a 落地了什么（2026-11-13）**
 >
@@ -176,7 +176,7 @@ pub driver_id: Option<String>,
 | D8b | 插件生命周期写入点：`install_from_path` / `enable_plugin` / `disable_plugin` / `uninstall_plugin` / `reload_plugins`（失败也要一行 `fail` + `reason`） | ✅ 已落地（见下） |
 | D8c | 缺驱动被拒留痕（`action=missing_driver`，`reason` 指向「由插件 X 提供」） | ✅ 已落地（见下） |
 | D8d | 查看入口：插件管理页「操作记录」栏、驱动能力 Tab「来源 + 最近同步」、历史面板「驱动」列与过滤 | ✅ 三段均已落地（见下） |
-| D8e | `driver_operations` 导出 JSON（排障用，方案 §3.5） | 待做 |
+| D8e | `driver_operations` 导出 JSON（排障用，方案 §3.5） | ✅ 已落地（见下） |
 
 **D8b 落地细节（2026-11-13）**
 
@@ -275,6 +275,22 @@ D3 删 sqlx 测试时，三个 engine 真机套件的 `use` 被重指到原生�
 **验证（真机 `192.168.3.138`，`.rds/local/test-env.ps1`）**：三套件各 4 passed
 （MySQL 3306 / PG 5432 走的都是内核原生驱动；SQLite / DuckDB 因未设路径按设计跳过），
 `cargo check -p rds-engine --tests` 无警告。
+
+**D8e 落地（2026-11-13）：留痕导出 JSON**
+
+| 项 | 落点 |
+| --- | --- |
+| 入口 | 插件管理页「操作记录」栏新增 `导出 JSON` 按钮（`plugin-manager-ops-export`），紧邻刷新；`exporting` 时按钮文案变「导出中…」，靠状态挡重复点 |
+| 读什么 | **重新读一遍**而不是导出屏幕上那 50 条：`OPERATION_EXPORT_LIMIT = 1000`（= 表保留上限，再大必然读不全）。读 + 写都在 `background_executor()` 上，回主线程只写状态 |
+| 写哪里 | `crates/workbench/src/panels/plugin_manager/audit.rs::export_dir()` = 全局目录 `exports/`（与 `query_export` 的 `results/` 并列，**不往仓库/工作目录写**）；文件名 `driver_operations_<unix秒>.json` |
+| 文件形状 | 自描述：`{exported_at_unix, count, limit, note, operations[]}`。`note` 说明「时间列是库内 `occurred_at` 原值、`before_json`/`after_json` 是动作前后状态的 JSON 文本、未做二次解析」——二次解析再序列化会丢掉“原始到底写了什么” |
+| 反馈 | 成功 → 绿色「已导出 N 条 → <绝对路径>」（路径原样给，用户能直接去拿）；失败 → 红色「导出失败：<原因>」。**不静默**：按钮点完没反应等于没做 |
+
+**验证**：`rds-workbench` lib **68 passed**（+1 `export_writes_a_self_describing_json_file`：
+真写一个临时文件再读回，断言 `count` / `limit` / `note` 与行内容（`result`、`driver_id`、
+`reason`、`plugin_id`）原样保留，并覆盖「导出目录不存在时自建」）；全仓
+`cargo check --workspace --all-targets -j 2` 绿、无警告。
+
 
 
 
