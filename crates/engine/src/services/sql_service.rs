@@ -408,6 +408,13 @@ impl SqlService {
         channel: Option<&str>,
         lineage: Option<&str>,
     ) {
+        // 【D8】驱动 id：同族两条实现（内置 / 插件）在历史里必须分得清 —— 取运行时连接
+        // 登记的 `driver_id`，取不到就留空（不知道就不编）。
+        let driver_id = self
+            .manager
+            .get_connection_info(&conn_key.to_string())
+            .await
+            .and_then(|info| info.driver_id);
         let entry = SqlHistoryEntry {
             conn_id: conn_id.map(str::to_string),
             db_type: self.db_type_of(conn_key).await,
@@ -420,6 +427,7 @@ impl SqlService {
             lineage: lineage.map(str::to_string),
             // 源库档没有“参与源清单”（那是联邦档的事；联邦不走这条路径）
             sources: None,
+            driver_id,
         };
         if let Err(e) = history_store::save_sql_history(sql, &entry) {
             tracing::error!(error = %e, "Failed to save SQL history");

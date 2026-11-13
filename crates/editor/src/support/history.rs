@@ -292,6 +292,7 @@ mod tests {
             channel: None,
             sources: None,
             lineage: None,
+            driver_id: None,
             executed_at: Utc.with_ymd_and_hms(2026, 9, 17, 6, 0, 0).unwrap(),
             duration_ms: Some(12),
             success: Some(true),

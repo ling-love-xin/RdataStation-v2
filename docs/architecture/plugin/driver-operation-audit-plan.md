@@ -4,7 +4,22 @@
 >
 > **参考的既有设计**（用户点名）：`drivers` / `driver_files` / `plugins` 三张表的登记形状、`query_history` 的载荷、`connection_audit`（A1）的规划。
 >
-> **状态**：方案稿，待评审；**不改代码**。
+> **状态**：地基已落地（D8a，见 §7）；生命周期写入点与查看入口待做（D8b 起）。
+
+> **D8a 落地了什么（2026-11-13）**
+>
+> | 项 | 落点 | 验证 |
+> | --- | --- | --- |
+> | `driver_operations` 表 | `crates/store/migrations/global/030_driver_operations.sql`（含三支索引；`project_id` 按 Q1 定案**单列**） | 迁移由 `include_dir!` 自动装载 |
+> | 读写 API | `crates/store/src/persistence/driver_operation_store.rs`：`record_operation` / `list_operations` / `latest_operation` / `prune_operations` / `table_exists` | 该模块 7 条单测 |
+> | 声明同步留痕 | `driver/src/declaration.rs::upsert_all`：只在**真变了**或首次出现时写 `declare_sync`；能力键变化额外写 `capability_change`（带 before/after 的能力位） | `declare_sync_is_recorded_only_when_something_changed`、`capability_change_is_recorded_separately` |
+> | 保留策略 | `sync_driver_declarations` 启动时 `prune_operations(1000, 90)` | `prune_keeps_the_newest_rows` |
+> | 查询留痕补 `driver_id` | `HistoryRecord` / `SqlHistoryRecord` / `SqlHistoryEntry` 三处 + 手写 JSON 读写；引擎 `record_history` 从连接信息取 | `the_driver_id_round_trips`（含老 JSON 读回 `None`） |
+>
+> 口径修正（实测得出，写进代码注释）：**首次出现不产 `capability_change`** —— 那条
+> `declare_sync` 的 `after_json` 已含全部能力位；否则首装会一个驱动写两行。
+> 「幂等」也不再要求两条 `DeclarationSync` 完全相等（`recorded` 首跑与二跑按设计不同）。
+
 
 ---
 
@@ -147,6 +162,21 @@ pub driver_id: Option<String>,
 
 ## 6. 待定
 
-- Q1 `project_id` 是否单列（现在塞 `before_json`）。
+- Q1 `project_id` 是否单列 → **已定案（D8a）：单列**（迁移 030 里就是 `project_id TEXT`）。
 - Q2 `connection_audit`（A1）与本表是否合并成一张 `operations`（类型字段区分）——合并的好处是"一个入口看全部操作"，坏处是迁移历史计划。
 - Q3 查询留痕的"强制记录 / 仅本地"（环境策略 ⑥）落到 `driver_operations` 还是继续走 `query_history`；建议**继续走 `query_history`**，本表只放状态变更类操作，避免一张表两种量级。
+
+---
+
+## 7. 落地进度
+
+| 刀 | 内容 | 状态 |
+| --- | --- | --- |
+| D8a | 迁移 030 + store 读写 API + 声明同步/能力位留痕 + 保留策略 + 查询历史 `driver_id` | ✅ 已落地（见文首表） |
+| D8b | 插件生命周期写入点：`install_from_path` / `enable_plugin` / `disable_plugin` / `uninstall_plugin` / `reload_plugins`（失败也要一行 `fail` + `reason`） | 待做 |
+| D8c | 缺驱动被拒留痕（`action=missing_driver`，`reason` 指向「由插件 X 提供」） | 待做 |
+| D8d | 查看入口：插件管理页「操作记录」栏、驱动能力 Tab「来源 + 最近同步」、历史面板「驱动」列与过滤 | 待做（需 GPUI 视图，先读 `gpui-kit-dev` skill） |
+| D8e | `driver_operations` 导出 JSON（排障用，方案 §3.5） | 待做 |
+
+对应验收项：A-1～A-3、A-5、A-7、A-8 仍未覆盖；A-4、A-6 已由 D8a 覆盖。
+
