@@ -372,15 +372,22 @@ async fn answers_the_metadata_methods() {
     println!("  catalog：{catalogs:?}");
 
     // ② schema 层：声明了就给得出来；没声明就是单层库，宿主会把 catalog 当 schema 传
+    //
+    // 能力键有两套词汇：本仓 fixture 用协议自己的 `schemas`，真实驱动插件用内核能力
+    // 字典的 `schema_browser`（`descriptors.rs` 与 `sqlx-rust` 都这么写）。只认前者会让
+    // 真实插件的 schema 层**永远不被验**——PG 那次就是按「catalog 当 schema」跑，对象 0 个，
+    // 详情/源码两项还被「空库合法」放过去了。两个键都认。
+    let schema_capability =
+        descriptor.supports("schemas") || descriptor.supports("schema_browser");
     let schema_overridden = override_schema();
     let schema = if let Some(name) = schema_overridden.clone() {
         println!("  指定 schema：{name}（不取 schema[0]）");
         name
-    } else if descriptor.supports("schemas") {
+    } else if schema_capability {
         let schemas = driver.meta_schemas(&catalog).await.expect("meta.schemas");
         assert!(
             !schemas.is_empty(),
-            "声明了 schemas 能力，却一个 schema 也给不出（导航会在这一层空掉）"
+            "声明了 schema 浏览能力，却一个 schema 也给不出（导航会在这一层空掉）"
         );
         println!(
             "  schema：{:?}",
@@ -388,7 +395,7 @@ async fn answers_the_metadata_methods() {
         );
         schemas[0].name.clone()
     } else {
-        println!("  驱动没声明 schemas：按单层库验（schema := catalog）");
+        println!("  驱动没声明 schema 浏览能力：按单层库验（schema := catalog）");
         catalog.clone()
     };
 
