@@ -150,44 +150,9 @@ if (-not $SkipRust) {
 # 目录名与 id 不一致会导致卸载找不到目录）；源码目录是短名，安装目标用点分 id。
 # Oracle 两版互斥：JDBC 与 Rust 版都贡献驱动 id `oracle`，一次只能装其中一版。
 
-# 生成 checksums.json 的工具：优先用已编译的二进制（快），没有就退回 `cargo run`。
-# 两者都没有时跳过——缺该文件不阻断加载（老包兼容口径），只是少一层完整性。
-function Get-ChecksumTool {
-    $candidates = @(
-        (Join-Path $root ".rds\target-gf\debug\rds-plugin-checksums.exe"),
-        (Join-Path $root ".rds\target-gf\release\rds-plugin-checksums.exe"),
-        (Join-Path $root "target\debug\rds-plugin-checksums.exe"),
-        (Join-Path $root "target\release\rds-plugin-checksums.exe")
-    ) | Where-Object { Test-Path -LiteralPath $_ }
-    if ($candidates) {
-        return @{ exe = ($candidates | Select-Object -First 1) }
-    }
-    if (Get-Command cargo -ErrorAction SilentlyContinue) {
-        return @{ cargo = $true }
-    }
-    return $null
-}
-
-# 装的字节就是校验对象：复制完再在**目标目录**生成，源码目录不会多出未跟踪文件。
-function New-PackageChecksums([string]$dir, $tool) {
-    if (-not $tool) {
-        Write-Output "跳过 checksums.json（未找到 rds-plugin-checksums，也没有 cargo）：$dir"
-        return
-    }
-    if ($tool.exe) {
-        & $tool.exe $dir
-        if ($LASTEXITCODE -ne 0) { throw "生成 checksums.json 失败：$dir" }
-        return
-    }
-    Push-Location $root
-    try {
-        & cargo run -q -p rds-plugin --bin rds-plugin-checksums -- $dir
-        if ($LASTEXITCODE -ne 0) { throw "生成 checksums.json 失败：$dir" }
-    } finally {
-        Pop-Location
-    }
-}
-
+# 生成 checksums 的工具与排除清单都在 _checksums.ps1（打包脚本 pack.ps1 也用同一份）：
+# 装的字节就是校验对象，复制完再在**目标目录**生成，源码目录不会多出未跟踪文件。
+. (Join-Path $PSScriptRoot "_checksums.ps1")
 $checksumTool = Get-ChecksumTool
 
 $targets = @(
@@ -216,17 +181,12 @@ foreach ($t in $targets) {
     # 用 robocopy 而不是 Copy-Item：后者会把 __pycache__ / .git / target 一起搬进安装目录。
     # 安装目录是只读产物（layout 规则 6），Python 运行期还会重写 __pycache__，载荷指纹跟着变，
     # 可能触发无谓的自动重启。排除清单与 layout::is_dev_residue 同一套。
-    $rcArgs = @(
-        $src, $dst, '/E',
-        '/XD', '.git', '.svn', '.hg', '.rds', '.idea', '.vscode', 'target', 'node_modules',
-        '__pycache__', '.pytest_cache', '.mypy_cache',
-        '/XF', '.DS_Store', 'Thumbs.db',
-        '/NFL', '/NDL', '/NJH', '/NJS', '/NP'
-    )
+    $rcArgs = @($src, $dst, '/E') + (Get-DevResidueRobocopyArgs)
     & robocopy @rcArgs | Out-Null
     # robocopy：0 = 没变化、1-7 = 复制成功（有文件被拷），≥8 才是失败
     if ($LASTEXITCODE -ge 8) { throw "复制插件目录失败（robocopy $LASTEXITCODE）：$src → $dst" }
-    New-PackageChecksums $dst $checksumTool
+    $ok = New-PackageChecksums $dst $checksumTool
+    if (-not $ok) { Write-Output "未生成 checksums.json（缺 rds-plugin-checksums 与 cargo，跳过）：$dst" }
     Write-Output "已安装：$dst"
 }
 

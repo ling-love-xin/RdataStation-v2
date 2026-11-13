@@ -89,7 +89,8 @@ cargo run -p rds-plugin --bin rds-plugin-checksums -- <插件目录>
 遍历包内文件（跳过开发残留与 `checksums.json` 自身）算 sha256，`driver_jars` 的外部文件 /
 目录一并展开，写到 `<插件目录>/checksums.json`；外部路径不存在直接报错，不会生成一份
 「列了不存在」的文件。没有外部件时**不输出** `external_files` 键（空表与不写等价，旧宿主
-才认）。`tools/plugin-drivers/install.ps1` 装完每个包会自动跑一次。
+才认）。`tools/plugin-drivers/install.ps1` 装完每个包会自动跑一次；`pack.ps1` 打 zip 发布包时
+在干净暂存目录里跑一次（包根 = `plugin.toml` 所在层，源码目录不留未跟踪文件）。
 
 > **旧宿主兼容**：`checksums.json` 的结构是 `deny_unknown_fields`，旧版宿主不认识
 > `external_files`，会把整份文件判成非法 JSON、插件加载失败。带 `external_files` 的包

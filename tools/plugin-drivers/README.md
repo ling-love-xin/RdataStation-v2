@@ -44,6 +44,24 @@ powershell -ExecutionPolicy Bypass -File tools\plugin-drivers\install.ps1 -WithJ
 全部由脚本运行时组装（Maven Central 下载 + 壳构建 + `cargo build --release`）。
 离线环境用 `-SkipOjdbc`；只想复用已编好的 Rust 二进制用 `-SkipRust`。
 
+## 打发布包（zip）
+
+```powershell
+# 打完在 .rds\tmp\packages\<id>-<version>.zip（压缩包根 = plugin.toml 所在层）
+powershell -ExecutionPolicy Bypass -File tools\plugin-drivers\pack.ps1 -Plugin oracle-jdbc
+
+# 指定输出目录 / 文件名
+powershell -ExecutionPolicy Bypass -File tools\plugin-drivers\pack.ps1 -Plugin oracle-jdbc -OutDir D:\dist -Name oracle-1.0.zip
+```
+
+它先把包复制到干净暂存目录（排除 `.git` / `target` / `__pycache__` 等开发残留，与安装器同口径），
+在暂存目录里生成 `checksums.json`，再压缩——源码目录不会多出未跟踪文件，包里的校验清单
+也正好对应"将来装进安装目录的那批字节"。**没有生成工具时直接失败**（不像安装可以跳过：
+发布包缺校验清单等于放弃完整性）。
+
+包内声明了 `driver_jars`（插件目录外的 jar）的，zip 里**不含**那些 jar，分发时要一并给；
+`checksums.json` 已经把它们的哈希算进去了。
+
 ## Rust 原生驱动轨
 
 - 协议内核 `rust-core` 提供帧编解码、错误码、Page / Arrow、`Driver` trait 与主循环；
