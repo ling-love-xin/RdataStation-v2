@@ -4,7 +4,11 @@
 //! 但扩展不是插件的一种——没有目录、没有清单、没有贡献点，装了就是进程内 dlopen。
 //! 所以这里只**读** engine 给的清单，不复制一份数据模型。
 //!
-//! 只做「看得见」这一件事：装 / 撤 / 校验是后续动作，先把「对不上」摊出来。
+//! 只摊开「对不上」，并给「没登记过」这一类两条出口：登记 / 移出
+//!
+//! 其余三种偏差（登记有磁盘没 / 内核不一致 / DuckDB 没认出）不动手：它们各自需要
+//! 先知道「用户本来想怎么办」，自动处理代价不对称。扩展目录里躺着一个没登记的文件
+//! 才是真正要当场决断的那个——`autoload_known_extensions = true` 下它已经有执行权。
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -15,7 +19,8 @@ use gpui_kit::component::{IconName, Sizable, Size, Theme};
 use gpui_kit::*;
 
 use engine::duckdb::extensions::{
-    ExtensionDrift, ExtensionEntry, ExtensionInventory, inventory,
+    ExtensionDrift, ExtensionEntry, ExtensionInventory, ReconcileAction, inventory,
+    reconcile_extension,
 };
 
 use crate::ui;
@@ -28,6 +33,12 @@ pub(crate) struct ExtensionBoard {
     pub loading: bool,
     /// 是否已经读过一次（决定「首次展开时自动读」）
     pub loaded: bool,
+    /// 已经点过一次「移出」、等第二次确认的扩展名
+    pub pending_discard: Option<String>,
+    /// 正在处置中的扩展名（一次只放行一个，避免同一行被连点）
+    pub busy: Option<String>,
+    /// 最近一次处置结果（true = 成功）
+    pub notice: Option<(bool, String)>,
 }
 
 /// 偏差的视觉等级（纯函数：具体颜色在 render 里取，这里只表达「多严重」）
@@ -141,6 +152,58 @@ impl super::PluginManagerPanel {
     pub(crate) fn show_extensions(&self) -> bool {
         self.show_extensions
     }
+
+    /// 认领一个「没登记过」的扩展（登记进 `duckdb_extensions`，来源记本地文件）
+    pub(crate) fn adopt_extension(&self, name: String, cx: &mut Context<Self>) {
+        self.run_reconcile(ReconcileAction::Adopt, name, cx);
+    }
+
+    /// 第一次点「移出」：只置一个待确认标记，不动文件
+    pub(crate) fn request_discard(&self, name: String, cx: &mut Context<Self>) {
+        self.extensions.borrow_mut().pending_discard = Some(name);
+        self.extensions.borrow_mut().notice = None;
+        cx.notify();
+    }
+
+    /// 第二次点「确认移出」：删掉磁盘上那个文件
+    pub(crate) fn confirm_discard(&self, name: String, cx: &mut Context<Self>) {
+        self.extensions.borrow_mut().pending_discard = None;
+        self.run_reconcile(ReconcileAction::Discard, name, cx);
+    }
+
+    /// 处置动作统一入口：后台执行，回主线程写状态，然后立刻重读清单
+    ///
+    /// 三步都不能省：读盘 + 写库 + 删文件都在后台（`render` 不碰 I/O）；
+    /// 结果落到 `notice` 让用户看得见；重读是因为登记和删除都会改变这一行的偏差。
+    fn run_reconcile(&self, action: ReconcileAction, name: String, cx: &mut Context<Self>) {
+        let board: Rc<RefCell<ExtensionBoard>> = self.extensions.clone();
+        {
+            let mut state = board.borrow_mut();
+            if state.busy.is_some() {
+                return;
+            }
+            state.busy = Some(name.clone());
+            state.notice = None;
+        }
+        cx.notify();
+
+        let _ = cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { reconcile_extension(action, &name) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                let mut state = this.extensions.borrow_mut();
+                state.busy = None;
+                state.notice = Some(match result {
+                    Ok(outcome) => (true, outcome.message),
+                    Err(error) => (false, error),
+                });
+                drop(state);
+                this.load_extensions(cx);
+            });
+        });
+    }
 }
 
 /// 整块渲染（头部可折叠条 + 展开后的表）
@@ -232,6 +295,18 @@ pub(super) fn render_extensions(
                     .child(format!("引擎扩展清单读取失败：{error}")),
             );
         }
+        // 处置结果：成功走 success，失败走 danger——不能都染成同一个颜色
+        if let Some((ok, text)) = board.notice.clone() {
+            body = body.child(
+                div()
+                    .text_color(if ok {
+                        theme.colors.success
+                    } else {
+                        theme.colors.danger
+                    })
+                    .child(SharedString::from(text)),
+            );
+        }
         for note in board.inventory.notes.clone() {
             body = body.child(
                 div()
@@ -260,7 +335,15 @@ pub(super) fn render_extensions(
                     .unwrap_or(u8::MAX)
             });
             for entry in rows {
-                body = body.child(render_extension_row(entry, theme));
+                let confirming = board.pending_discard.as_deref() == Some(entry.name.as_str());
+                let busy = board.busy.as_deref() == Some(entry.name.as_str());
+                body = body.child(render_extension_row(
+                    entry,
+                    theme,
+                    &manager,
+                    confirming,
+                    busy,
+                ));
             }
         }
         body
@@ -269,7 +352,13 @@ pub(super) fn render_extensions(
     div().v_flex().child(header).children(body)
 }
 
-fn render_extension_row(entry: &ExtensionEntry, theme: &Theme) -> impl IntoElement {
+fn render_extension_row(
+    entry: &ExtensionEntry,
+    theme: &Theme,
+    manager: &Entity<super::PluginManagerPanel>,
+    confirming: bool,
+    busy: bool,
+) -> impl IntoElement {
     let (status_text, status_color) = match &entry.drift {
         Some(drift) => {
             let color = match drift_tone(drift) {
@@ -330,6 +419,63 @@ fn render_extension_row(entry: &ExtensionEntry, theme: &Theme) -> impl IntoEleme
                 .child(SharedString::from(error)),
         );
     }
+
+    // 只给「没登记过」的行装动作：别的偏差要按各自的原因处置，不是一个按钮能解决的
+    if entry.drift.as_ref() == Some(&ExtensionDrift::UnregisteredOnDisk) {
+        if busy {
+            row = row.child(
+                div()
+                    .flex_none()
+                    .text_color(theme.colors.muted_foreground)
+                    .child(SharedString::from("处理中…".to_string())),
+            );
+        } else {
+            let adopt_name = entry.name.clone();
+            let adopt_manager = manager.clone();
+            row = row.child(
+                Button::new(SharedString::from(format!("ext-adopt-{}", entry.name)))
+                    .ghost()
+                    .label("登记")
+                    .with_size(Size::XSmall)
+                    .tooltip("承认这个文件就是我要的：登记进表并记下指纹")
+                    .on_click(move |_, _, app| {
+                        let name = adopt_name.clone();
+                        let _ = adopt_manager.update(app, |this, cx| {
+                            this.adopt_extension(name.clone(), cx)
+                        });
+                    }),
+            );
+
+            let discard_name = entry.name.clone();
+            let discard_manager = manager.clone();
+            row = row.child(
+                Button::new(SharedString::from(format!("ext-discard-{}", entry.name)))
+                    .ghost()
+                    .label(if confirming { "确认移出" } else { "移出" })
+                    .with_size(Size::XSmall)
+                    .tooltip(if confirming {
+                        "再点一次就删掉磁盘上的这个文件"
+                    } else {
+                        "删掉磁盘上的这个扩展文件（会要求再点一次确认）"
+                    })
+                    .on_click(move |_, _, app| {
+                        let name = discard_name.clone();
+                        let _ = discard_manager.update(app, |this, cx| {
+                            // 两次点击分两个方法：第一次只置标记，第二次才删文件
+                            let already_armed =
+                                this.extensions.borrow().pending_discard.as_deref()
+                                    == Some(name.as_str());
+                            if already_armed {
+                                this.confirm_discard(name.clone(), cx);
+                            } else {
+                                this.request_discard(name.clone(), cx);
+                            }
+                        });
+                    }),
+            );
+        }
+    }
+
     row
 }
 

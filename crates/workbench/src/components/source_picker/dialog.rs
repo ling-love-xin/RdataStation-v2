@@ -336,18 +336,44 @@ impl PickerShell {
         config: PickerConfig,
         strategy: ConfirmStrategy,
         search: Entity<InputState>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
         let state_for_sub = state.clone();
+        let shared_for_sub = shared.clone();
+        let strategy_for_sub = strategy.clone();
         // 用户敲字 → 写树态 → 重绘。程序化写值（Esc 清空）不发事件，那条路径自己写树态。
-        let search_sub = cx.subscribe(&search, move |_this, input, ev: &InputEvent, cx| {
-            if matches!(ev, InputEvent::Change) {
-                let text = input.read(cx).value().to_string();
-                state_for_sub.borrow_mut().tree.set_query(text);
-                cx.notify();
-            }
-        });
+        //
+        // **Enter 必须走这里**：单行 Input 绑了 enter 且会自己处理（`gpui-base` 的
+        // `KeyBinding::new("enter"…)`），而 gpui 的绑定先于 `on_key_down` 派发
+        // （`gpui-pre/src/window.rs:6412-6427`），一旦被输入框接住就不再往下冒泡——
+        // 所以根上的 `on_key_down("enter")` 在搜索框聚焦时**永远收不到**。实测口径
+        // 见本仓 `quick_open/palette/render.rs:171-172` 的注释（那里的 Enter 也是
+        // 由输入框事件给出的）。缺了这段，「敲完搜索词直接回车」什么都不会发生。
+        let search_sub = cx.subscribe_in(
+            &search,
+            window,
+            move |_this, input, ev: &InputEvent, window, cx| match ev {
+                InputEvent::Change => {
+                    let text = input.read(cx).value().to_string();
+                    state_for_sub.borrow_mut().tree.set_query(text);
+                    cx.notify();
+                }
+                // 只认「不带修饰的 Enter」：Shift/Ctrl+Enter 在输入框里是换行/提交变体，
+                // 选源对话框没有这两种语义，忽略比乱猜安全。
+                InputEvent::PressEnter { secondary, shift } if !secondary && !shift => {
+                    let armed = state_for_sub.borrow().has_target();
+                    if armed {
+                        if let Some(id) = state_for_sub.borrow().tree.selected().cloned() {
+                            state_for_sub.borrow_mut().tree.push_recent(id);
+                        }
+                        strategy_for_sub(&shared_for_sub, &state_for_sub, window, cx);
+                    }
+                }
+                _ => {}
+            },
+        );
         Self {
             state,
             shared,
@@ -615,6 +641,7 @@ pub fn open_source_picker(
             config,
             strategy.clone(),
             search.clone(),
+            window,
             cx,
         )
     });
