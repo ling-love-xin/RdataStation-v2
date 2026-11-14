@@ -301,9 +301,22 @@ async fn write_records(actor: &str, loaded: &LoadedExtension) -> Result<(), Stri
         row.state = "mismatch".to_string();
     }
 
+    let incomplete = loaded.install_path.is_none();
     upsert_extension(conn, &row).map_err(|e| e.to_string())?;
 
-    let op = ExtensionOperation::ok(actor, "load")
+    // leave 一条可回溯的痕迹：装下来的记 `install`，本来就在的记 `load`
+    let op = if incomplete {
+        ExtensionOperation::fail(
+            actor,
+            "load",
+            "拿不到 install_path，登记不完整（duckdb_extensions 未报该扩展）",
+        )
+    } else if loaded.freshly_installed {
+        ExtensionOperation::ok(actor, "install")
+    } else {
+        ExtensionOperation::ok(actor, "load")
+    };
+    let op = op
         .extension(&loaded.name)
         .build(&loaded.kernel_version, &loaded.platform);
     record_operation(conn, &op).map_err(|e| e.to_string())?;
