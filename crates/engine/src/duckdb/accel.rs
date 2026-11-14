@@ -109,11 +109,19 @@ impl AccelKind {
         }
     }
 
-    /// 扩展从哪个仓库装（`None` = 官方仓库；L2 是社区扩展，必须 `INSTALL … FROM community`）
-    pub(crate) fn extension_repository(self) -> Option<&'static str> {
+    /// 该源所需的扩展**能力**（统一入口 `extensions::ensure` 的入参）
+    ///
+    /// 与 [`Self::extension`] 的分工：那个给的是扩展**文件名**（`ATTACH … (TYPE …)` 与
+    /// 门控要用），这个给的是「我要什么能力」（准入与登记要用）。两者现在一一对应，
+    /// 但只有能力这一层能容纳「同一能力换实现」而不改调用点。
+    pub(crate) fn ability(self) -> Option<super::extensions::ExtensionAbility> {
+        use super::extensions::ExtensionAbility;
         match self {
-            Self::Oracle => Some("community"),
-            _ => None,
+            Self::MySql => Some(ExtensionAbility::FederationMysql),
+            Self::PostgreSql => Some(ExtensionAbility::FederationPostgres),
+            Self::Sqlite => Some(ExtensionAbility::FederationSqlite),
+            Self::DuckDb => None,
+            Self::Oracle => Some(ExtensionAbility::FederationOracle),
         }
     }
 
@@ -515,9 +523,7 @@ pub fn ensure_session(source: &AccelSource) -> Result<Arc<AccelSession>, String>
     super::manager::DuckDBManager::configure_connection(&conn)
         .map_err(|error| format!("配置本地分析连接失败：{error}"))?;
 
-    if let Some(extension) = source.kind.extension()
-        && let Err(reason) = install_and_load(&conn, source.kind, extension)
-    {
+    if let Err(reason) = ensure_extension(&conn, source.kind) {
         return Err(reason);
     }
 
@@ -549,29 +555,35 @@ pub fn ensure_session(source: &AccelSource) -> Result<Arc<AccelSession>, String>
     Ok(session)
 }
 
-/// 装 + 加载一个扩展（失败原因里带上“离线怎么办”）
-fn install_and_load(conn: &Connection, kind: AccelKind, extension: &str) -> Result<(), String> {
-    let reason = match conn.execute_batch(&install_sql(kind, extension)) {
-        Ok(()) => return Ok(()),
-        Err(error) => format!(
-            "本地加速需要 DuckDB 扩展 {extension}，安装失败：{error}（首次需要能访问 DuckDB 扩展源；离线时请先把扩展放进 {}）",
-            paths::extensions_dir().display()
-        ),
-    };
-    if let Ok(mut failures) = EXTENSION_FAILURES.lock() {
-        failures.insert(kind, reason.clone());
-    }
-    tracing::warn!(kind = kind.label(), "加速扩展不可用：{reason}");
-    Err(reason)
-}
-
-/// 装扩展的 SQL（**L2 要从社区仓库装**：`INSTALL oracle_scanner FROM community`）
+/// 确保该源需要的扩展已就绪（统一走 [`super::extensions::ensure`]）
 ///
-/// `pub(crate)`：联邦会话装同一批扩展（别在两处各写一份）
-pub(crate) fn install_sql(kind: AccelKind, extension: &str) -> String {
-    match kind.extension_repository() {
-        Some(repository) => format!("INSTALL {extension} FROM {repository}; LOAD {extension}"),
-        None => format!("INSTALL {extension}; LOAD {extension}"),
+/// 以前这里自己拼 `INSTALL … ; LOAD …` 且**每次建会话都跑一遍**（已装的只是被 DuckDB
+/// 内部跳过，仍要一次 SQL 往返）。统一后顺序变成「先 LOAD，缺文件才 INSTALL」，顺带
+/// 把「装了什么」写进登记表。
+///
+/// 失败仍记进 `EXTENSION_FAILURES`（渲染路径要能纯内存读出「不可用」）。
+pub(crate) fn ensure_extension(conn: &Connection, kind: AccelKind) -> Result<(), String> {
+    // DuckDB 文件源不需要扩展（内核自带能力）
+    let Some(ability) = kind.ability() else {
+        return Ok(());
+    };
+    match super::extensions::ensure(conn, ability) {
+        Ok(loaded) => {
+            // 登记是 best-effort：写不进去不影响已经能用的扩展
+            super::extensions::record_best_effort("runtime", &loaded);
+            if let Ok(mut failures) = EXTENSION_FAILURES.lock() {
+                failures.remove(&kind);
+            }
+            Ok(())
+        }
+        Err(error) => {
+            let reason = format!("本地加速需要{}，加载失败：{error}", ability.label());
+            if let Ok(mut failures) = EXTENSION_FAILURES.lock() {
+                failures.insert(kind, reason.clone());
+            }
+            tracing::warn!(kind = kind.label(), "加速扩展不可用：{reason}");
+            Err(reason)
+        }
     }
 }
 

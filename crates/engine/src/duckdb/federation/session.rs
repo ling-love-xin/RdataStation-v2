@@ -41,7 +41,7 @@ use once_cell::sync::Lazy;
 use shared::error::CoreError;
 use shared::models::QueryResult;
 
-use super::super::accel::{AccelKind, install_sql, mount_lock, run_sql_on, scrub_credentials};
+use super::super::accel::{AccelKind, mount_lock, run_sql_on, scrub_credentials};
 use super::super::manager::DuckDBManager;
 use super::registry::{FederatedSource, MountState, MountedSource, SessionSnapshot};
 
@@ -93,12 +93,12 @@ impl FederatedSession {
 
         // 装扩展与一批 ATTACH 串行（`INSTALL` 写目录、`LOAD` 是连接级，都要独占）
         let _mount = mount_lock();
-        let mut installed: HashSet<&'static str> = HashSet::new();
+        // 同一批源可能重复要同一个扩展（如两个 MySQL 源）：按**种类**去重，
+        // 而不是按扩展名——`ensure` 已经幂等，这里只省重复的登记与日志
+        let mut ensured: HashSet<AccelKind> = HashSet::new();
         for source in sources {
-            if let Some(extension) = source.kind.extension()
-                && installed.insert(extension)
-            {
-                install_and_load(&conn, source.kind, extension)?;
+            if ensured.insert(source.kind) {
+                crate::duckdb::accel::ensure_extension(&conn, source.kind)?;
             }
         }
 
@@ -346,17 +346,6 @@ fn open_configured() -> Result<Connection, String> {
     DuckDBManager::configure_connection(&conn)
         .map_err(|error| format!("配置联邦分析连接失败：{error}"))?;
     Ok(conn)
-}
-
-/// 装 + 加载一个扩展（失败原因里带上“离线怎么办”；L2 要从社区仓库装）
-fn install_and_load(conn: &Connection, kind: AccelKind, extension: &str) -> Result<(), String> {
-    conn.execute_batch(&install_sql(kind, extension))
-        .map_err(|error| {
-            format!(
-                "联邦需要 DuckDB 扩展 {extension}，安装失败：{error}（首次需要能访问 DuckDB 扩展源；离线时请先把扩展放进 {}）",
-                paths::extensions_dir().display()
-            )
-        })
 }
 
 /// 挂载前把凭据建成本连接的 Secret（L2 的唯一入口；L1 没有 Secret，直接过）
