@@ -72,6 +72,7 @@
 5. **4 条待拍板**（设计文档 §9 剩余）：洞察联邦开关显示条件（推荐仅 ≥2 源）、远端扫描代价是否进确认框、Oracle 第三方插件是否走 `allow_unsigned_extensions`、二次分析默认档是否记住上次（推荐 `Local`）。另 `owner` 是否保持 `conn_id`（§1 #4）。
 6. **原型 README 自列 5 处未画**：首次挂载进度与取消、扩展安装进度与设置页、洞察样本会话重建失效提示条、联邦档写语句被拒对话框、结果集「表已失效可重新分析」条目态。
 7. **合并**：分支未 rebase 到 `main`、未合并、未推送。合并前需处理工作区里他方未提交的 10 项（未提交文件清单见 `git status`），合并用 `--no-ff`。
+8. **全量测试当前跑不起来（与本分支无关）**：工作区里有另一摊**在途**改动（DuckDB 扩展管理：`crates/engine/src/duckdb/extensions/`、`crates/store/migrations/global/031_duckdb_extensions.sql`、`crates/store/src/persistence/extension_store.rs`、`persistence/mod.rs` 新增 `pub mod extension_store;`），其中 `extension_store.rs:353-360` 有借用错误（`values.push(&name)` 把对局部绑定的引用塞进 `Vec<&dyn ToSql>`，E0597），`rds-store` 编译失败 → `cargo test -p rds-workbench --lib` 无法执行。**本分支 14 刀的 `cargo check` 与 65 项 picker 测试都跑在这批改动落地之前，是当时真实通过的**；等对方编译通再补一次全量。
 
 ## 5. 关键事实（免重查，均本轮实读）
 
