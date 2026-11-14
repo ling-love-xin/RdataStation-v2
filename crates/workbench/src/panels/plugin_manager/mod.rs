@@ -29,6 +29,7 @@ use widgets::PluginFilter;
 
 mod cards;
 mod detail;
+mod extensions;
 mod render;
 #[cfg(test)]
 mod tests;
@@ -62,6 +63,10 @@ pub struct PluginManagerPanel {
     show_operations: bool,
     /// 操作记录的结果过滤档（内存过滤，不重新查库）。
     ops_filter: Rc<Cell<widgets::OperationResultFilter>>,
+    /// 引擎扩展清单（DuckDB 扩展：登记 / 自报 / 磁盘三方对照）。事件路径写，render 只读。
+    extensions: Rc<RefCell<extensions::ExtensionBoard>>,
+    /// 是否展开「引擎扩展」区（默认收起）。
+    show_extensions: bool,
     /// 观察左 Dock 插件面板：刷新 / 动作回执 / 事件刷新都会 notify 本页。
     _plugin_sub: Option<Subscription>,
 }
@@ -91,6 +96,8 @@ impl PluginManagerPanel {
             ops: Rc::new(RefCell::new(audit::OperationLog::default())),
             show_operations: false,
             ops_filter: Rc::new(Cell::new(widgets::OperationResultFilter::All)),
+            extensions: Rc::new(RefCell::new(extensions::ExtensionBoard::default())),
+            show_extensions: false,
             _plugin_sub: Some(_plugin_sub),
         }
     }

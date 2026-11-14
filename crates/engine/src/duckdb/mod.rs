@@ -12,7 +12,11 @@
 //! - `temp_table/` 临时表域（temp_table + analysis 分析用临时表生命周期）
 //! - `search/` 全文检索（fts）
 //! - `snapshot/` 快照与备份
-//! - `extension/` DuckDB 扩展插件接口（plugin）
+//! - `extension/` DuckDB 扩展插件接口（plugin，历史遗留：`PluginManager` 零生产调用，
+//!   只有自身测试在用——待下一刀清理）
+//! - `extensions/` DuckDB 扩展的**准入与登记**（2026-11-14 新增）。与 2026-09-19 删掉的
+//!   `extensions.rs` 不是一回事：那个是零调用的 `ExtensionManager` 空壳，这个接的是三个
+//!   真实调用点（本地加速 / 联邦会话 / XLSX 导出），并把「装了什么」写进 global.sqlite
 //!
 //! 目录化只移动代码不重写逻辑；各目录 `mod.rs` 通配重导出 + 顶层 `pub use` 传导，
 //! 外部 `engine::duckdb::X` 路径（含 `file_probe` / `file_reader` / `import_export` /
@@ -26,6 +30,7 @@ pub mod accel;
 mod executor;
 mod explain;
 mod extension;
+pub mod extensions;
 pub mod federation;
 mod manager;
 mod metrics;

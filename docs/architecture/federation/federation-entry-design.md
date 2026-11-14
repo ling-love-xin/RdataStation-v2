@@ -121,11 +121,11 @@ AnalysisSession =
   - **已知缺口**：`generate_attach_global_sql`（`federation/legacy.rs:336`）**没有生产调用点**，本地单例与联邦会话目前都没挂全局库，选中全局表会 `table does not exist`。补这一步前先实测「单写者连接 + 只读 ATTACH」能否共存。
 - **必须保留的一处区分**：本地档 `tmp_q_` 本机可见，联邦档 `tmp_q_` 只在会话可见、会话重建即失效；列表用 pill 标注可见范围，否则用户会得到 `table does not exist`。
 
-**对象树与搜索**：三个根内都是可折叠树（现状 `render_connected` 是单列逐层追加），深度上限 3，列不做节点（改到右侧元信息）。结构与名字是两条路径：树解决「我知道在哪」，跨根搜索解决「我知道叫什么」（匹配档位：前缀 > 子串 > 子序列）。**搜索最小单位是表 / 视图，不搜列名**（用户裁决）。复用 `workbench_shell::tree` 的行原语（`active_bar` / `disclosure_slot` / `disclosure_icon` / `indent_*` / `RowHeight`）与 `ui::TREE_INDENT`，**不复用 `tree::Tree`**——外壳已裁决「这一行长什么样归各面板」，picker 是第 5 个消费方。详见 `prototypes/entry/06-object-tree.html`。
+**对象树与搜索**：三个根内都是可折叠树（现状 `render_connected` 是单列逐层追加），深度上限 3，列不做节点（改到右侧元信息）。结构与名字是两条路径：树解决「我知道在哪」，跨根搜索解决「我知道叫什么」（匹配档位：前缀 > 子串 > 子序列）。**搜索最小单位是表 / 视图，不搜列名**（用户裁决）。复用 `workbench_shell::tree` 的行原语（`active_bar` / `disclosure_slot` / `disclosure_icon` / `indent_*` / `RowHeight`）与 `ui::TREE_INDENT`，**不复用 `tree::Tree`**——外壳已裁决「这一行长什么样归各面板」，picker 是第 5 个消费方。详见 `docs/architecture/federation/prototypes/entry/06-object-tree.html`。
 
 - 编辑器：三档常驻工具栏（现有），不改；
 - 洞察 / 二次分析：③ 是确认对话框里的**高级选项**，默认关；打开才展开「源清单摘要 + 主源 + 门控原因 + 远端扫描代价」。
-- 原型：`docs/architecture/federation/prototypes/entry-prototype.html`。
+- 原型：`docs/architecture/federation/prototypes/entry/`（索引见该目录 `README.md`；本阶段主图是 `01-source-picker.html` 与 `06-object-tree.html`）。
 
 ## 5. Oracle 第三方插件 ATTACH（预留契约）
 

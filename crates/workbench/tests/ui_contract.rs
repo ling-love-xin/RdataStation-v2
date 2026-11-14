@@ -280,6 +280,16 @@ fn view_layer_has_no_raw_size_literals() {
             "panels/plugin_manager/tests.rs",
             include_str!("../src/panels/plugin_manager/tests.rs"),
         ),
+        // audit.rs 在 2026-11 加进来时漏了这两份清单（扫描是静态 include_str!，
+        // 漏登等于对该文件静默失效），2026-11-14 补登。
+        (
+            "panels/plugin_manager/audit.rs",
+            include_str!("../src/panels/plugin_manager/audit.rs"),
+        ),
+        (
+            "panels/plugin_manager/extensions.rs",
+            include_str!("../src/panels/plugin_manager/extensions.rs"),
+        ),
         (
             "panels/right_tabs.rs",
             include_str!("../src/panels/right_tabs.rs"),
@@ -885,6 +895,16 @@ fn ui_sources_have_no_raw_color_literals() {
         (
             "panels/plugin_manager/tests.rs",
             include_str!("../src/panels/plugin_manager/tests.rs"),
+        ),
+        // audit.rs 在 2026-11 加进来时漏了这两份清单（扫描是静态 include_str!，
+        // 漏登等于对该文件静默失效），2026-11-14 补登。
+        (
+            "panels/plugin_manager/audit.rs",
+            include_str!("../src/panels/plugin_manager/audit.rs"),
+        ),
+        (
+            "panels/plugin_manager/extensions.rs",
+            include_str!("../src/panels/plugin_manager/extensions.rs"),
         ),
         (
             "panels/right_tabs.rs",

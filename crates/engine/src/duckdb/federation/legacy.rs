@@ -8,8 +8,14 @@
 //! 3. **单会话单用途**：与 `accel.rs` 那套“一源一条专用连接 + `USE` + 旁路回执”
 //!    不是一个模型（那里才是执行侧真正在用的）。
 //!
-//! 保留原因：它还有调用方与测试（`generate_attach_global_sql` / 物化语句生成等），
-//! 按仓库习惯**标“已被取代”而不静默删**；等 `session.rs` 覆盖完四类源与物化路径后一并退役。
+//! 保留原因：物化语句生成等仍有生产调用方，按仓库习惯**标“已被取代”而不静默删**；
+//! 等 `session.rs` 覆盖完四类源与物化路径后一并退役。
+//!
+//! **实测更正（2026-11-14）**：`generate_attach_global_sql`（本模块 `:336`）**没有生产
+//! 调用方**——全 `crates/` 只 4 处引用，除定义外是模块文档、单测与一处测试夹具自拼同款；
+//! 全仓 `ATTACH ... AS global` 也都在本模块内。所以「SQL 里直接查全局表」当前必然
+//! `table does not exist`（三条执行面都没挂全局库，见
+//! `docs/architecture/federation/federation-entry-handoff.md` §4）。
 
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use std::collections::HashMap;

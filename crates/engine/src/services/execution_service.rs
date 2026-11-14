@@ -329,20 +329,21 @@ fn copy_table_to_file(
     })
 }
 
-/// 确保 `excel` 扩展能用：先 `LOAD`（离线路径），不得已才 `INSTALL`（联网一次）
+/// 确保 `excel` 扩展能用（统一走 `duckdb::extensions::ensure`）
 ///
-/// 与本地加速那套（`accel::install_and_load`）同一取舍：失败原因里必须带**扩展目录**，
-/// 否则用户只看得到一句“Extension not found”，不知道该把文件放哪。
+/// 与本地加速、联邦会话是**同一个准入入口**：先 `LOAD`（离线路径），缺文件才 `INSTALL`
+/// （联网一次）；失败原因里带扩展目录，否则用户只看得到一句 “Extension not found”，
+/// 不知道该把文件放哪。
 fn ensure_excel_extension(conn: &duckdb::Connection) -> Result<(), CoreError> {
-    if conn.execute_batch("LOAD excel").is_ok() {
-        return Ok(());
-    }
-    conn.execute_batch("INSTALL excel; LOAD excel").map_err(|e| {
+    use crate::duckdb::extensions::{ExtensionAbility, ensure, record_best_effort};
+
+    let loaded = ensure(conn, ExtensionAbility::Excel).map_err(|reason| {
         CoreError::common(CommonError::General(format!(
-            "XLSX 导出需要 DuckDB 的 excel 扩展，安装失败：{e}（首次需要能访问 DuckDB 扩展源；离线时请先把 excel.duckdb_extension 放进 {}）",
-            crate::duckdb::DuckDBManager::extensions_dir().display()
+            "XLSX 导出需要 DuckDB 的 excel 扩展：{reason}"
         )))
-    })
+    })?;
+    record_best_effort("runtime", &loaded);
+    Ok(())
 }
 
 #[cfg(test)]
