@@ -1,11 +1,11 @@
 # 联邦查询公共入口 · 交接说明
 
 > 用途：原会话的上下文即将丢弃，本文件让新会话**不必重新调查**就能接着干。
-> 更新时间：2026-11-14。仓库 `D:\RdataStation\RDS\RdataStation-v2`，分支 **`feat/federation-entry`**（基于 `c8eb6f86`，14 个提交，**未 rebase / 未合并 / 未推送**）。
+> 更新时间：2026-11-14。仓库 `D:\RdataStation\RDS\RdataStation-v2`，分支 **`main`**（`feat/federation-entry` 已以 `--no-ff` 合并为 `f87ff9d3` 并删除，保险 tag `pre-merge-federation-entry` → `d38d5572`）。`main` 领先 `origin/main` 22 个提交，**未推送**。
 
 ## 0. 一句话现状
 
-方案与 6 份原型**已进 main**；来源选择器的 Phase 5 改造**已在分支上落 14 刀**（全部在 `crates/workbench/src/components/source_picker/`，`cargo check` 零告警、picker 65 项测试全过）。**卡点不在代码，在执行侧**：资产库剩下的「本项目归档文件」「全局共享」两段都缺执行支持，画出来就是「能选不能执行」。
+方案与 6 份原型**已进 main**；来源选择器 Phase 5 的 **14 刀已全部进 main**（`crates/workbench/src/components/source_picker/`，10 文件约 2850 行，`cargo check` 零告警、全量 138 项测试通过）。**卡点不在代码，在执行侧**：资产库剩下的「本项目归档文件」「全局共享」两段都缺执行支持，画出来就是「能选不能执行」。
 
 ## 1. 已定裁决（不要再问，直接执行）
 
@@ -67,12 +67,16 @@
    - **洞察结构上取不到全局表**：取样按 `conn_id` 下推（`insight/jobs/table.rs:312-320` → `schema_report_view(conn_id, …)`；`insight_engine_internal/profile.rs:12` 原话「源库表先取样再探查……这里既没有也不需要源库连接信息」）。全局表没有 conn_id → 形态 I 不可达。
    - 结论：至少需 A（内存单例）+ B（联邦会话）两条；洞察仍需改形态 II 或造伪 conn_id。
 2. **资产库剩余两段的取舍（待用户拍板）**：拆 `SourceKind::AnalysisGlobal` 按入口裁剪（`PickerConfig.kinds` 本就支持）/ 先做 A+B 再画段 / 冻结全局段。**本项目归档文件段同理**：`Picked` 只有 `Db/Draft/Analysis/External` 四变体，三个消费方只认这四个，新增目标类型＝能选不能执行。
-3. **需要人工跑起来验的三件事**（headless 测不出）：① 打开后直接按 `↓` 是否有反应；② 点进搜索框敲字后 `Esc` 是清词还是关窗（Input 的 escape action 与根 `on_key_down` 谁先，未确证）；③ 最近使用块选中后是否真出现、点它能否点亮确认按钮。**第 14 刀新增**：大列表（>60 行）虚拟视口的滚轮与滚动条是否正常（`VirtualList` 用内部滚动句柄，未接 `track_scroll`）。
+3. **键盘语义已由源码定案（不必再人工试 Esc/↓）**，只剩三件真要手测的：
+   - 键位派发顺序实测：**key binding 先于 `on_key_down` 派发**（`gpui-pre-0.3.11/src/window.rs:6412-6427` 先跑 `match_result.bindings`，被接住即 `return`；`finish_dispatch_key_event`（`:6484`）里的 `dispatch_key_down_up_event` 才跑监听）。单行 Input 绑了 `escape/up/down/left/right/pageup/pagedown/tab`（`vendor/gpui-base/src/input/base/state.rs:265-301`），但**单行模式不处理 ↑↓/Esc，会 propagate**（本仓 `quick_open/palette/render.rs:171-172` 的注释即此口径，那里正是把 `MoveUp/MoveDown/Escape` 挂在浮层根上接住）。
+   - **Enter 是例外**：输入框自己处理并转成 `InputEvent::PressEnter { secondary, shift }`（枚举在 `state.rs:137-147`）。所以根上的 `on_key_down("enter")` 在搜索框聚焦时**永远收不到**——这就是实测到的「敲完搜索词回车没反应」。**已在 `dialog.rs` 修**：`PickerShell::new` 改收 `window`，订阅从 `cx.subscribe` 换成 `cx.subscribe_in`，在 `InputEvent::PressEnter`（仅无修饰）里 `push_recent` + 调 `strategy`。
+   - 仍需手测（headless 测不到）：① 最近使用块选中后是否真出现、点它能否点亮确认按钮；② 大列表（>60 行）虚拟视口的滚轮与滚动条（`VirtualList` 用内部滚动句柄，未接 `track_scroll`）；③ 打开后焦点是否真落在搜索框（`window.focus(&handle, cx)` 两参，headless 无法断言真实焦点）。
 4. **视觉验收从未做过**（助手无法看 UI）：行高 24px 内放 `Button::ghost().small()` 是否挤、面包屑是否过长、元信息是否该折叠。
 5. **4 条待拍板**（设计文档 §9 剩余）：洞察联邦开关显示条件（推荐仅 ≥2 源）、远端扫描代价是否进确认框、Oracle 第三方插件是否走 `allow_unsigned_extensions`、二次分析默认档是否记住上次（推荐 `Local`）。另 `owner` 是否保持 `conn_id`（§1 #4）。
 6. **原型 README 自列 5 处未画**：首次挂载进度与取消、扩展安装进度与设置页、洞察样本会话重建失效提示条、联邦档写语句被拒对话框、结果集「表已失效可重新分析」条目态。
-7. **合并**：分支未 rebase 到 `main`、未合并、未推送。合并前需处理工作区里他方未提交的 10 项（未提交文件清单见 `git status`），合并用 `--no-ff`。
-8. **全量测试当前跑不起来（与本分支无关）**：工作区里有另一摊**在途**改动（DuckDB 扩展管理：`crates/engine/src/duckdb/extensions/`、`crates/store/migrations/global/031_duckdb_extensions.sql`、`crates/store/src/persistence/extension_store.rs`、`persistence/mod.rs` 新增 `pub mod extension_store;`），其中 `extension_store.rs:353-360` 有借用错误（`values.push(&name)` 把对局部绑定的引用塞进 `Vec<&dyn ToSql>`，E0597），`rds-store` 编译失败 → `cargo test -p rds-workbench --lib` 无法执行。**本分支 14 刀的 `cargo check` 与 65 项 picker 测试都跑在这批改动落地之前，是当时真实通过的**；等对方编译通再补一次全量。
+7. **合并已完成**：`f87ff9d3`（`--no-ff`，零冲突），分支 `feat/federation-entry` 已删（was `d38d5572`）。合并走的是临时 worktree `.rds/tmp/wt-merge-main`（主工作区当时被他方未提交改动挡住，不能切分支），合并前打 tag `pre-merge-federation-entry`。**注意**：合并把并行会话在该分支上的 3 个提交（`65e439d3` DuckDB 扩展准入三处 / `fcf0ff7a` 痕迹区分 / `d38d5572` 插件页三方对照）一并带入 main——它们提交在本分支上，按分支合并必然同行。
+8. **全量测试已解除阻塞并跑通**：他方在途改动（DuckDB 扩展管理的 `extension_store.rs` E0597 等）已由其自己修好，`cargo test -p rds-workbench --lib` 现在 **138 passed / 0 failed**（picker 65 项在内），`cargo check` 零告警。
+9. **一处归属问题（仅记录，不建议动历史）**：Enter 修复的代码落在 `c70d6cd3`（并行会话「给没登记的 DuckDB 扩展两条出口」）里，而非独立提交——他们用 `commit -a` 把当时工作区里我这份未提交的 `dialog.rs` 一并卷走了。内容无误、main 上已生效；若要拆成独立提交需改写他方提交，风险大于收益，**不做**。
 
 ## 5. 关键事实（免重查，均本轮实读）
 
@@ -81,6 +85,7 @@
 - `state.rs:142` `visible_rows<'a>(&self, rows: &'a [Row]) -> Vec<&'a Row>`（**返回引用**，虚拟列表回调要 `'static` 时必须先落成自有 `Vec<Row>`）。
 - `db.rs` 的 `DbCache` 深度规则：连接(1) → 单 catalog 时 schema(2) → 表(3)；多 catalog 时 catalog(2) → 表(3) 且 schema 折进标签；无 schema 层时表挂(2)。
 - `collect_analysis_tables` 走 `ProjectDatabaseManager::analysis_db_path(&root)`，无项目回落 `global_analysis_db_path()`；SQL `WHERE table_schema='main'`（**限定不能去**，否则 `temp` schema 进入）；连接改 `Config::default().access_mode(AccessMode::ReadOnly)` + `open_with_flags`（照 `driver/src/native/duckdb.rs:250-258`）。
+- 键盘：`dialog.rs` 的 `PickerShell::new(state, shared, config, strategy, search, window, cx)`——因为 Enter 必须订阅 `InputEvent::PressEnter`（`cx.subscribe_in`），而订阅要 `window`。↑↓←→/Esc 仍由根 `on_key_down` 接（单行 Input 会 propagate），这个分工是本轮实测定下来的，别改回「全都靠 on_key_down」。
 
 ### 资产库 / M6
 - `crates/analytics_resource/src/model/kind.rs`：`RowScope{Project,Global}` `:7-13`；`ArchiveKind{File,Analysis,TableRef}` `:36-44`（`File` 本体 `{项目}/resources/`）；`label()` `:55-61`。
