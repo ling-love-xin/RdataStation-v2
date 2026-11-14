@@ -30,7 +30,7 @@ pub mod accel;
 mod executor;
 mod explain;
 mod extension;
-pub(crate) mod extensions;
+pub mod extensions;
 pub mod federation;
 mod manager;
 mod metrics;

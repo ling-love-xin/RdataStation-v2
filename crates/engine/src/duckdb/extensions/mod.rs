@@ -32,6 +32,10 @@ use std::path::{Path, PathBuf};
 use duckdb::Connection;
 use sha2::{Digest, Sha256};
 
+mod inventory;
+
+pub use inventory::{ExtensionDrift, ExtensionEntry, ExtensionInventory, inventory};
+
 /// 「我需要某个能力」——调用点只需要说这个，不用记扩展叫什么
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExtensionAbility {

@@ -771,6 +771,10 @@ impl PluginManagerPanel {
                 .into_any_element()
         };
 
+        // `render_detail_pane` 的返回类型把 `cx` 的可变借用捕获住了（edition 2024），
+        // 之后再借一次 `cx` 就是 E0502——所以在调它之前先把整页要用的句柄取好。
+        let extension_manager = cx.entity();
+
         let detail = self.render_detail_pane(&snapshot, selected_id.as_deref(), cx);
 
         div()
@@ -784,6 +788,11 @@ impl PluginManagerPanel {
             .children(registry_table)
             .child(ops_row)
             .children(ops_table)
+            .child(super::extensions::render_extensions(
+                self,
+                &theme,
+                extension_manager,
+            ))
             .children(feedback)
             .children(reload_banner)
             .child(toolbar)
