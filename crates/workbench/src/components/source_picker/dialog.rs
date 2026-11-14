@@ -15,9 +15,12 @@ use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::v_virtual_list;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::{ActiveTheme, Sizable as _};
 use gpui_kit::*;
+
+use workbench_shell::ui;
 
 use crate::panels::Shared;
 
@@ -25,7 +28,7 @@ use super::db::{db_rows, ConnBrief};
 use super::group::{grouped, SourceGroup};
 use super::load::{collect_analysis_tables, collect_drafts, load_db_layer};
 use super::node::{ArchiveScope, NodeId, NodeKind, Row};
-use super::render::{render_rows, RowAction};
+use super::render::{needs_virtual_list, render_rows, row_element, virtual_viewport_rem, RowAction};
 use super::rows::{analysis_table_rows, draft_rows, external_row, group_id_row};
 use super::state::TreeState;
 use super::{ConfirmStrategy, Picked, PickerConfig, PickerState, SourceKind, TableCandidate};
@@ -156,11 +159,16 @@ fn recent_rows(rows: &[Row], tree: &TreeState) -> Vec<Row> {
 }
 
 /// 三分法主体：一张树 + 一套回调（三个根共用，行渲染不按根分叉）。
+///
+/// 行数超过阈值时切虚拟视口：大库（深层 schema 展开）能有上千行，整段铺开等于
+/// 一帧建上千个元素（行里还有 Button 与 Icon）。短列表仍走普通列表——对话框
+/// 跟着内容长高的观感不变。
 fn render_body(
     rows: &[Row],
     state: &Rc<RefCell<PickerState>>,
     shared: &Shared,
-    cx: &mut App,
+    window: &mut Window,
+    cx: &mut Context<PickerShell>,
 ) -> AnyElement {
     let tree = state.borrow().tree.clone();
 
@@ -244,7 +252,55 @@ fn render_body(
         })
     };
 
-    render_rows(rows, &tree, on_toggle, on_select, cx)
+    let visible_refs = tree.visible_rows(rows);
+    if !needs_virtual_list(visible_refs.len()) {
+        return render_rows(rows, &tree, on_toggle, on_select, cx);
+    }
+
+    // 虚拟视口：`visible_rows` 给的是 `Vec<&Row>`（借用入参），而视口回调要求 `'static`，
+    // 所以先落成自有行；展开态与选中态也**先取成朴素布尔**再交进回调——回调里不能再借
+    // `PickerState`（那时借用生命周期与 `Rc<RefCell>` 会撞双借用 panic）。
+    let flags: Rc<Vec<(bool, bool)>> = Rc::new(
+        visible_refs
+            .iter()
+            .map(|row| (tree.is_expanded(&row.id), tree.selected() == Some(&row.id)))
+            .collect(),
+    );
+    let visible: Rc<Vec<Row>> = Rc::new(visible_refs.into_iter().cloned().collect());
+    let sizes = workbench_shell::tree::row_sizes(visible.len(), window.rem_size(), |_| {
+        workbench_shell::tree::RowHeight::new(ui::ROW_HEIGHT)
+    });
+
+    let toggle = on_toggle.clone();
+    let select = on_select.clone();
+    let build_rows = visible.clone();
+    let build_flags = flags.clone();
+    let list = v_virtual_list(
+        cx.entity().clone(),
+        "source-picker-tree",
+        sizes,
+        move |_this, range, _window, cx| {
+            range
+                .map(|i| {
+                    row_element(
+                        &build_rows[i],
+                        build_flags[i].0,
+                        build_flags[i].1,
+                        &toggle,
+                        &select,
+                        cx,
+                    )
+                })
+                .collect::<Vec<AnyElement>>()
+        },
+    );
+
+    div()
+        .w_full()
+        .h(rems(virtual_viewport_rem(visible.len())))
+        .overflow_hidden()
+        .child(list)
+        .into_any_element()
 }
 
 /// 最近使用区块：单独一条渲染（≤5 行，不会真的滚），行点击只改选中。
@@ -305,7 +361,7 @@ impl PickerShell {
 }
 
 impl Render for PickerShell {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.state.clone();
         let shared = self.shared.clone();
         let strategy = self.strategy.clone();
@@ -316,7 +372,7 @@ impl Render for PickerShell {
         let rows = body_rows(&state.borrow());
         let recent = recent_rows(&rows, &state.borrow().tree);
         let truncated = state.borrow().tree.search_progress(&rows);
-        let body = render_body(&rows, &state, &shared, cx);
+        let body = render_body(&rows, &state, &shared, window, cx);
         let recent_el = recent_block(recent.clone(), &state, cx);
 
         let colors = cx.theme().colors;
