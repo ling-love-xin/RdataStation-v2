@@ -87,6 +87,7 @@ fn target(value: &str, name: &str, column: usize) -> ContextTarget {
         frozen: false,
         hidden_columns: 0,
         insight: false,
+        analyze: false,
         table: None,
         column_filter_active: false,
         column_values: Vec::new(),
@@ -1441,6 +1442,7 @@ fn column_menu_is_the_column_level_subset() {
         frozen: false,
         hidden_columns: 0,
         insight: false,
+        analyze: false,
         table: None,
         column_filter_active: false,
         column_values: Vec::new(),
@@ -1494,8 +1496,7 @@ fn column_browser_menu_is_local_column_subset() {
 
 /// 清单菜单条件项：排序生效 → 取消排序；有隐藏列 → 显示全部列；冻结中 → 文案反向。
 #[test]
-fn column_browser_menu_shows_conditional_items() {
-    let mut target = target("", "name", 2);
+fn column_browser_menu_shows_conditional_items() {    let mut target = target("", "name", 2);
     target.frozen = true;
     target.hidden_columns = 2;
     target.sort_active = true;
@@ -1504,6 +1505,50 @@ fn column_browser_menu_shows_conditional_items() {
     assert!(labels.contains(&"取消冻结此列"));
     assert!(labels.contains(&"显示全部列"));
     assert!(labels.contains(&"取消排序「name」"));
+}
+
+/// 【结果集二次分析】右键菜单的整表入口：`analyze` 才摆，文案带行数；
+/// 与「洞察此列」同组（insight 也在时不自带分隔线）
+#[test]
+fn context_menu_shows_analyze_result_set_only_when_available() {
+    let mut t = target("1", "id", 1);
+    let labels_of = |t: &ContextTarget| -> Vec<String> {
+        context_menu_items(t)
+            .iter()
+            .map(|i| i.label.clone())
+            .collect()
+    };
+
+    // 没有钩子（`analyze = false`）→ 不摆（能力没有就不给入口）
+    assert!(!labels_of(&t).iter().any(|l| l.contains("分析此结果集")));
+
+    t.analyze = true;
+    let items = context_menu_items(&t);
+    let analyze_item = items
+        .iter()
+        .find(|i| i.label.contains("分析此结果集"))
+        .expect("有入口时要摆这一项");
+    assert_eq!(analyze_item.label, "分析此结果集（2 行 · 洞察）");
+    assert!(matches!(
+        analyze_item.action,
+        ContextAction::AnalyzeResultSet
+    ));
+    assert!(analyze_item.separator_before, "insight 不在时自带分隔线");
+
+    // 「洞察此列」也在时并入同一组（不再插分隔线）
+    t.insight = true;
+    let items = context_menu_items(&t);
+    let analyze_item = items
+        .iter()
+        .find(|i| i.label.contains("分析此结果集"))
+        .expect("两项都在");
+    assert!(!analyze_item.separator_before);
+
+    // 列头 / 清单菜单只做列级动作：整表入口不出现在这两处
+    let head = column_menu_items(&t);
+    assert!(!head.iter().any(|i| i.label.contains("分析此结果集")));
+    let browser = column_browser_menu_items(&t);
+    assert!(!browser.iter().any(|i| i.label.contains("分析此结果集")));
 }
 
 /// 清单菜单动作归属：本地动作直接映射到对应 `ContextAction`，列号不串位。
@@ -1546,6 +1591,7 @@ fn column_menu_shows_conditional_items() {
         frozen: true,
         hidden_columns: 2,
         insight: true,
+        analyze: false,
         table: Some("t_user".to_string()),
         column_filter_active: false,
         column_values: Vec::new(),
@@ -1576,6 +1622,7 @@ fn column_menu_lists_distinct_values_and_clear_only_when_active() {
         frozen: false,
         hidden_columns: 0,
         insight: false,
+        analyze: false,
         table: None,
         column_filter_active: false,
         column_values: vec![

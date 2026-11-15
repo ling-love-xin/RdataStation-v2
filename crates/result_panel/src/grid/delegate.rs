@@ -95,6 +95,12 @@ pub type SortDownHook = Rc<dyn Fn(&str, bool, &mut App)>;
 /// 与「按值筛选」同一种分工：**网格只负责说“用户点了谁”**。
 pub type InsightColumnHook = Rc<dyn Fn(&str, &mut App)>;
 
+/// 【结果集二次分析】「分析此结果集」的钩子（宿主接出口时面板才注入）。
+///
+/// 不带参数：整份结果是**面板与宿主的共同真值**（行数据在结果条目里），网格不该
+/// 把 10 万行再拷一遍去传参。宿主自己按当前活动结果物化 → 送洞察。
+pub type AnalyzeResultSetHook = Rc<dyn Fn(&mut App)>;
+
 /// 【遗留 #7】「查看完整值」的钩子（面板注入）：值 / 列名 / 数据列下标 / 视图行。
 /// 弹层是宿主的事（对话框生命周期归宿主），网格只负责发意图。
 pub type PreviewValueHook = Rc<dyn Fn(String, String, usize, usize, &mut App)>;
@@ -177,6 +183,8 @@ pub struct ResultGridDelegate {
     pub(crate) on_sort_down: Option<SortDownHook>,
     /// 【M8】「洞察此列」的钩子（宿主接端口时面板才注入）
     pub(crate) on_insight_column: Option<InsightColumnHook>,
+    /// 【结果集二次分析】「分析此结果集」的钩子（宿主接端口时面板才注入）
+    pub(crate) on_analyze_result_set: Option<AnalyzeResultSetHook>,
     /// 【遗留 #7】「查看完整值」的钩子（面板注入）
     /// 【遗留 #7】「查看完整值」的钩子（面板注入）：值 / 列名 / 数据列下标 / 视图行
     pub(crate) on_preview_value: Option<PreviewValueHook>,
@@ -556,6 +564,24 @@ impl ResultGridDelegate {
     /// 【M8】测试用：入口现在该不该出现（钩子在 + 这份结果可洞察）
     pub fn insight_available(&self) -> bool {
         self.on_insight_column.is_some() && self.insight_available
+    }
+
+    /// 【结果集二次分析】注入「分析此结果集」钩子（宿主接了出口时面板构造一次）
+    pub fn set_analyze_result_set_hook(&mut self, hook: AnalyzeResultSetHook) {
+        self.on_analyze_result_set = Some(hook);
+    }
+
+    /// 【结果集二次分析】测试用：钩子装上了吗
+    pub fn has_analyze_result_set_hook(&self) -> bool {
+        self.on_analyze_result_set.is_some()
+    }
+
+    /// 【结果集二次分析】入口现在该不该出现：钩子在 + 视图里有行。
+    ///
+    /// 不看 `insight_available`（那要求结果绑定连接）：整份结果物化成 `tmp_q_` 是
+    /// **本地动作**，与结果来自哪条连接无关——本地拼出来的结果也能再分析。
+    pub fn analyze_result_set_available(&self) -> bool {
+        self.on_analyze_result_set.is_some() && self.view_len() > 0
     }
 
     /// 【B14】注入「排序下发」钩子（面板构造时一次）

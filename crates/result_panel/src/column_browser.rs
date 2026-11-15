@@ -212,6 +212,8 @@ impl ListDelegate for ColumnBrowserDelegate {
             frozen,
             hidden_columns: delegate.hidden_count(),
             insight: false,
+            // 列浏览器清单只做列级动作（整表入口不在这一处）
+            analyze: false,
             table: None,
             column_filter_active: false,
             column_values: Vec::new(),
