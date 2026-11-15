@@ -196,9 +196,9 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
     // 读量上限由 `preview` 模块的常量定——面板说“前 20 行”，就由同一处决定读多少。
     let previews = load_previews(&payload, &rows).await;
 
-    // 全局实例行（§13 展示层）：全局登记读失败 / 全局库未初始化都不弄砸项目刷新
-    // （全局列表是附加视图，不是项目刷新能否成功的前提）。
-    let (global_rows, global_resources) = load_global_rows().await;
+    // 全局实例行（§13 展示层）+ 全局存档的使用面：全局登记读失败 / 全局库未初始化
+    // 都不弄砸项目刷新（全局视图是附加信息，不是项目刷新能否成功的前提）。
+    let (global_rows, global_resources, dispatch_usage) = load_global_view().await;
 
     // 业务断言与效力：一次查完（与标签 / 分组同一纪律，避免详情区 N+1）。
     let assertions = store.all_assertions().await.unwrap_or_else(|error| {
@@ -246,24 +246,38 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
         folders: &folders_by_resource,
         group_dictionary,
         previews: &previews,
+        dispatch_usage: &dispatch_usage,
         read_only: job.read_only,
         now: Utc::now(),
     }))
 }
 
-/// 读全局实例行（§13 展示层；工作线程上执行）。
+/// 读全局视图（§13 展示层；工作线程上执行）：全局实例行 + 全局存档的使用面。
 ///
 /// 全局登记读失败 / 全局系统库未初始化（`get_global_db_manager` 为空）时返回空表：
-/// 全局列表是**附加视图**，不参与项目刷新成败。
-async fn load_global_rows() -> (Vec<ArchiveRow>, Vec<AnalyticsResource>) {
+/// 全局视图是**附加信息**，不参与项目刷新成败。回执表读失败同理——降级成"没有
+/// 使用面"，而不是让整块全局列表也跟着消失（两次读共用一个 store，只租一次连接）。
+async fn load_global_view() -> (
+    Vec<ArchiveRow>,
+    Vec<AnalyticsResource>,
+    std::collections::HashMap<String, crate::global::DispatchUsage>,
+) {
     use crate::global::{GlobalInstanceStore, list_global_resources, to_global_rows};
     let Ok(store) = GlobalInstanceStore::production().await else {
-        return (Vec::new(), Vec::new());
+        return Default::default();
     };
-    match list_global_resources(&store) {
+    let (rows, resources) = match list_global_resources(&store) {
         Ok(list) => (to_global_rows(&list, Utc::now()), list),
         Err(_) => (Vec::new(), Vec::new()),
-    }
+    };
+    let usage = match store.dispatch_usage_all().await {
+        Ok(usage) => usage,
+        Err(error) => {
+            tracing::warn!(error = %error, "读取分发回执失败，全局详情降级为无使用面");
+            Default::default()
+        }
+    };
+    (rows, resources, usage)
 }
 
 /// 读内容预览（工作线程上执行）：只给可预览的行读开头。

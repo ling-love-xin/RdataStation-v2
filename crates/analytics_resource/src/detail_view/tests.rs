@@ -33,6 +33,7 @@ fn detail(status: ArchiveStatus, kind: ArchiveKind) -> ArchiveDetail {
         group: None,
         // 预览缺省 = 仅元信息（各用例需要时用结构体更新语法盖掉）。
         preview: crate::preview::Preview::default(),
+        dispatch_label: String::new(),
     }
 }
 
@@ -41,6 +42,34 @@ fn short_hash_truncates_and_tolerates_missing() {
     assert_eq!(short_hash(Some("0123456789abcdef0123")), "0123456789ab");
     assert_eq!(short_hash(None), "—");
     assert_eq!(short_hash(Some("")), "—");
+}
+
+/// 全局行的「使用」摘要只在使用过时出现一行；项目行（空串）不多画一行。
+#[test]
+fn dispatch_row_appears_only_when_the_global_has_been_used() {
+    let mut used = detail(ArchiveStatus::Normal, ArchiveKind::File);
+    used.scope = RowScope::Global;
+    used.dispatch_label = "2 个项目在用 · 最近 v3 · 累计 5 次分发 · 最近 2026-11-14".to_string();
+
+    let rows = detail_rows(&used);
+    assert_eq!(rows[0].0, "基本信息", "摘要进基本信息区");
+    let usage = rows[0]
+        .1
+        .iter()
+        .find(|(label, _)| *label == "使用")
+        .map(|(_, value)| value.as_str());
+    assert_eq!(
+        usage,
+        Some("2 个项目在用 · 最近 v3 · 累计 5 次分发 · 最近 2026-11-14"),
+        "全局行的使用面要摆出来"
+    );
+
+    // 项目行没有这一行：空串不产生行（与其它空值同一纪律）。
+    let project = detail(ArchiveStatus::Normal, ArchiveKind::File);
+    assert!(
+        !detail_rows(&project)[0].1.iter().any(|(label, _)| *label == "使用"),
+        "项目行不该有「使用」行"
+    );
 }
 
 #[test]

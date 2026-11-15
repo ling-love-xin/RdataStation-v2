@@ -60,6 +60,11 @@ pub struct ArchiveDetail {
     pub assertion: Option<crate::model::ArchiveAssertion>,
     /// 业务效力（与 `status` 的物理完整性正交：文件被改过 ≠ 结论已废弃）。
     pub lifecycle: crate::model::Lifecycle,
+    /// 全局行的使用面摘要，如 "2 个项目在用（最近 v3，累计 5 次分发，最近 2026-11-14）"。
+    ///
+    /// 空 = 不显示这一行：项目行没有「被谁用过」这个概念（它的来源在 `promoted_from`），
+    /// 全局行没人分发过也不该占一行。
+    pub dispatch_label: String,
 }
 
 impl ArchiveDetail {

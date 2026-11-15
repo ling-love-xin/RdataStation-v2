@@ -281,6 +281,56 @@ impl GlobalInstanceStore {
 
     // ==================== 分发内部 ====================
 
+    /// 全部全局存档的使用面（按全局名聚合，一次查完）。
+    ///
+    /// 详情区要给每个全局面板行显示一行摘要，逐行查会变成 N+1；这里一次
+    /// `GROUP BY global_name` 拿全表，调用方按名字取。
+    pub async fn dispatch_usage_all(
+        &self,
+    ) -> Result<std::collections::HashMap<String, DispatchUsage>, CoreError> {
+        self.with_sqlite(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT global_name,
+                           count(*)                         AS project_count,
+                           max(version)                     AS latest_version,
+                           sum(dispatch_count)              AS total_dispatches,
+                           max(last_distributed_at)         AS last_distributed_at
+                    FROM analytics_resource_dispatch
+                    GROUP BY global_name
+                    "#,
+                )
+                .map_err(sqlite_err("prepare_dispatch_usage_all"))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i32>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                })
+                .map_err(sqlite_err("query_dispatch_usage_all"))?;
+            let mut out = std::collections::HashMap::new();
+            for row in rows {
+                let (name, project_count, latest_version, total_dispatches, last) =
+                    row.map_err(sqlite_err("read_dispatch_usage_all"))?;
+                out.insert(
+                    name,
+                    DispatchUsage {
+                        project_count: usize::try_from(project_count).unwrap_or(usize::MAX),
+                        latest_version,
+                        total_dispatches,
+                        last_distributed_at: last,
+                    },
+                );
+            }
+            Ok(out)
+        })
+    }
+
     /// 某全局存档被哪些项目用过（按最近分发倒序）。
     ///
     /// 回答两个业务问题：「删掉这个全局资源之前，有项目依赖它吗？」「它被用到第几版？」

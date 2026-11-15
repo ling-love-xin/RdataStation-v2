@@ -116,6 +116,21 @@ pub struct DispatchRecord {
     pub last_distributed_at: String,
 }
 
+/// 一个全局存档的**使用面**（回执按全局名聚合后的结果，供详情区显示一行摘要）。
+///
+/// 只回答四个值：几个项目在用、最近分发到第几版、累计分发多少次、最近一次什么时候。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DispatchUsage {
+    /// 用它的项目数（回执行数，同一项目的改名分发算不同目标）。
+    pub project_count: usize,
+    /// 最近一次分发时的全局版本。
+    pub latest_version: i32,
+    /// 累计分发次数。
+    pub total_dispatches: i64,
+    /// 最近一次分发时间（SQLite 原始串 `YYYY-MM-DD HH:MM:SS`）。
+    pub last_distributed_at: String,
+}
+
 /// 冲突撞在目标实例的**哪一层**（三查的结论：登记 / 物理表 / 原件）。
 ///
 /// 这个结论必须带进冲突框：三查都可能命中，但用户要做的事不一样——

@@ -27,6 +27,9 @@ pub struct SnapshotInputs<'a> {
     /// 业务断言 / 效力：一次查完（与标签、分组同一纪律，避免详情区 N+1）。
     pub assertions: std::collections::HashMap<String, crate::model::ArchiveAssertion>,
     pub lifecycles: std::collections::HashMap<String, crate::model::Lifecycle>,
+    /// 全局存档的使用面（按全局名聚合，一次查完）：只有全局行详情才画一行摘要。
+    /// 全局库未初始化 / 读失败时为空表——附加信息，不影响项目刷新。
+    pub dispatch_usage: &'a std::collections::HashMap<String, crate::global::DispatchUsage>,
     pub read_only: bool,
     pub now: DateTime<Utc>,
 }

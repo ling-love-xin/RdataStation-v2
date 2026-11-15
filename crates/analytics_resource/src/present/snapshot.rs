@@ -21,6 +21,7 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
         previews,
         assertions,
         lifecycles,
+        dispatch_usage,
         read_only,
         now,
     } = inputs;
@@ -83,6 +84,8 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
                 group_id: folder_id,
                 groups,
                 preview,
+                // 项目行没有「被谁用过」这回事：它的来源在 `promoted_from`。
+                dispatch_label: String::new(),
             },
         );
         // 业务断言与效力随快照下发：详情面板只读，不在渲染期查库。
@@ -112,6 +115,8 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
                     group_id: None,
                     groups: Vec::new(),
                     preview,
+                    // 全局行才有的那一行「谁在用」：没人用过给空串（详情不画空行）。
+                    dispatch_label: dispatch_detail_label(dispatch_usage.get(&resource.name)),
                 },
             ),
         );
@@ -130,4 +135,25 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
         tags: tag_dictionary,
         groups: group_dictionary,
     }
+}
+
+/// 全局行的使用面摘要；没人用过（或没有回执表）给空串——详情不画那一行。
+///
+/// 时间只取 SQLite 原始串的**日期**部分：这行回答的是「最近什么时候用过」，
+/// 精确到秒没有信息增量，还会把行拉长。
+pub fn dispatch_detail_label(usage: Option<&crate::global::DispatchUsage>) -> String {
+    let Some(usage) = usage else {
+        return String::new();
+    };
+    if usage.project_count == 0 {
+        return String::new();
+    }
+    let date = usage
+        .last_distributed_at
+        .get(..10)
+        .unwrap_or(&usage.last_distributed_at);
+    format!(
+        "{} 个项目在用 · 最近 v{} · 累计 {} 次分发 · 最近 {}",
+        usage.project_count, usage.latest_version, usage.total_dispatches, date
+    )
 }

@@ -17,6 +17,8 @@ pub struct DetailExtras {
     pub groups: Vec<DetailGroupOption>,
     /// 内容预览。
     pub preview: Preview,
+    /// 全局行的使用面摘要（项目行与没人用过的全局行给空串 → 详情不画那一行）。
+    pub dispatch_label: String,
 }
 /// 单行 → 详情快照（详情面板只读，格式化在这里做完）。
 ///
@@ -80,6 +82,7 @@ pub fn to_detail(
         group: extras.group,
         // 内容预览（原型 §3.1）：宿主读完推来，装配层只负责搬（缺项 = 仅元信息）。
         preview: extras.preview,
+        dispatch_label: extras.dispatch_label,
     }
 }
 

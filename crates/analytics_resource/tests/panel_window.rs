@@ -288,6 +288,8 @@ fn detail_for(row: &ArchiveRow) -> ArchiveDetail {
             lines: vec!["select 1".to_string(), "from dual".to_string()],
             truncated: false,
         },
+        // 窗口用例不测使用面：空串 → 详情不多画那一行。
+        dispatch_label: String::new(),
     }
 }
 

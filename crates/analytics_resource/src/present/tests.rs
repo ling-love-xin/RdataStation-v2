@@ -3,6 +3,7 @@ use super::{
     VersionCounts, build_repair_rows, build_snapshot, build_trash_snapshot, build_version_rows,
     format_relative_time, format_scale, format_size, format_timestamp, tail_for,
 };
+use super::snapshot::dispatch_detail_label;
 use crate::dialogs::index_repair::RepairGroup;
 use crate::model::{ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES};
 use crate::store::rows::{AnalyticsResource, ResourceVersion};
@@ -295,6 +296,8 @@ fn details_carry_per_kind_size_and_real_history_count() {
     let mut counts = VersionCounts::new();
     counts.insert("ar_analysis".to_string(), 3);
 
+    // 项目行没有使用面（回执只对全局行有意义）：给空表就让 `dispatch_label` 保持空串。
+    let dispatch_usage = std::collections::HashMap::<String, crate::global::DispatchUsage>::new();
     let snapshot = build_snapshot(SnapshotInputs {
         assertions: Default::default(),
         lifecycles: Default::default(),
@@ -309,6 +312,7 @@ fn details_carry_per_kind_size_and_real_history_count() {
         folders: empty_folders(),
         group_dictionary: Vec::new(),
         previews: empty_previews(),
+        dispatch_usage: &dispatch_usage,
         read_only: false,
         now,
     });
@@ -327,6 +331,32 @@ fn details_carry_per_kind_size_and_real_history_count() {
 
     let table_ref = snapshot.details.get("ar_ref").expect("引用型详情");
     assert_eq!(table_ref.size_label, "", "引用型不给体积（不假装有值）");
+}
+
+/// 全局行的「使用」摘要：有人用过给一行、没人用过给空串（详情不画空行）。
+#[test]
+fn dispatch_label_summarizes_only_used_globals() {
+    use crate::global::DispatchUsage;
+
+    assert_eq!(dispatch_detail_label(None), "", "没有回执表 → 不画这一行");
+    assert_eq!(
+        dispatch_detail_label(Some(&DispatchUsage::default())),
+        "",
+        "零项目 = 没人用过"
+    );
+
+    let usage = DispatchUsage {
+        project_count: 2,
+        latest_version: 3,
+        total_dispatches: 5,
+        last_distributed_at: "2026-11-14 09:12:33".to_string(),
+    };
+    let label = dispatch_detail_label(Some(&usage));
+    assert!(label.contains("2 个项目在用"), "{label}");
+    assert!(label.contains("v3"), "{label}");
+    assert!(label.contains("5 次分发"), "{label}");
+    assert!(label.contains("2026-11-14"), "取日期段：{label}");
+    assert!(!label.contains("09:12"), "秒级时间不进摘要：{label}");
 }
 
 /// 详情「版本」区的最近 3 条：装配层按上限裁、体积口径与行一致、时间用绝对时间。
@@ -358,6 +388,7 @@ fn detail_carries_recent_version_lines_capped_at_three() {
             .collect(),
     );
 
+    let dispatch_usage = std::collections::HashMap::<String, crate::global::DispatchUsage>::new();
     let snapshot = build_snapshot(SnapshotInputs {
         assertions: Default::default(),
         lifecycles: Default::default(),
@@ -372,6 +403,7 @@ fn detail_carries_recent_version_lines_capped_at_three() {
         folders: empty_folders(),
         group_dictionary: Vec::new(),
         previews: empty_previews(),
+        dispatch_usage: &dispatch_usage,
         read_only: false,
         now,
     });
@@ -421,6 +453,7 @@ fn snapshot_carries_tags_for_rows_details_and_dictionary() {
         count: 1,
     }];
 
+    let dispatch_usage = std::collections::HashMap::<String, crate::global::DispatchUsage>::new();
     let snapshot = build_snapshot(SnapshotInputs {
         assertions: Default::default(),
         lifecycles: Default::default(),
@@ -435,6 +468,7 @@ fn snapshot_carries_tags_for_rows_details_and_dictionary() {
         folders: empty_folders(),
         group_dictionary: Vec::new(),
         previews: empty_previews(),
+        dispatch_usage: &dispatch_usage,
         read_only: false,
         now,
     });
@@ -462,6 +496,7 @@ fn rows_carry_alias_and_source_table_for_the_search_surface() {
     table_ref.source_table = Some("dwd.dwd_orders".to_string());
     let resources = vec![alias, table_ref];
 
+    let dispatch_usage = std::collections::HashMap::<String, crate::global::DispatchUsage>::new();
     let snapshot = build_snapshot(SnapshotInputs {
         assertions: Default::default(),
         lifecycles: Default::default(),
@@ -476,6 +511,7 @@ fn rows_carry_alias_and_source_table_for_the_search_surface() {
         folders: empty_folders(),
         group_dictionary: Vec::new(),
         previews: empty_previews(),
+        dispatch_usage: &dispatch_usage,
         read_only: false,
         now,
     });
@@ -510,6 +546,7 @@ fn details_carry_group_name_and_preview() {
         },
     );
 
+    let dispatch_usage = std::collections::HashMap::<String, crate::global::DispatchUsage>::new();
     let snapshot = build_snapshot(SnapshotInputs {
         assertions: Default::default(),
         lifecycles: Default::default(),
@@ -527,6 +564,7 @@ fn details_carry_group_name_and_preview() {
             name: "报表".to_string(),
         }],
         previews: &previews,
+        dispatch_usage: &dispatch_usage,
         read_only: false,
         now,
     });
@@ -570,6 +608,7 @@ fn snapshot_counts_route_status_before_kind() {
     statuses.insert("ar_4".to_string(), ArchiveStatus::Missing);
     statuses.insert("ar_5".to_string(), ArchiveStatus::ContentChanged);
 
+    let dispatch_usage = std::collections::HashMap::<String, crate::global::DispatchUsage>::new();
     let snapshot = build_snapshot(SnapshotInputs {
         assertions: Default::default(),
         lifecycles: Default::default(),
@@ -584,6 +623,7 @@ fn snapshot_counts_route_status_before_kind() {
         folders: empty_folders(),
         group_dictionary: Vec::new(),
         previews: empty_previews(),
+        dispatch_usage: &dispatch_usage,
         read_only: true,
         now,
     });

@@ -45,6 +45,11 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
     if !detail.archived_label.is_empty() {
         basic.push(("归档时间", detail.archived_label.clone()));
     }
+    // 全局行才有的「使用面」：这个全局存档被哪些项目用过（回执聚合）。
+    // 项目行与没人用过时为空串 → 不产生这一行。
+    if !detail.dispatch_label.is_empty() {
+        basic.push(("使用", detail.dispatch_label.clone()));
+    }
     sections.push(("基本信息".to_string(), basic));
 
     // 2) 来源（归档凭证的"出处"：回答这结论是用什么数据得出的）

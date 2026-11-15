@@ -369,6 +369,7 @@ fn detail(kind: ArchiveKind, status: ArchiveStatus, payload: Option<&str>) -> Ar
         tags: Vec::new(),
         group: None,
         preview: crate::preview::Preview::default(),
+        dispatch_label: String::new(),
     }
 }
 
