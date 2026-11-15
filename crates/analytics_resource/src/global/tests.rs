@@ -611,3 +611,70 @@ async fn g011_oversized_script_is_rejected_before_reading() {
 
     let _ = fs::remove_dir_all(&env.dir);
 }
+
+/// 分发要在全局侧留回执：谁用过、用到第几版。
+///
+/// 项目侧登记只记「我来自哪」，全局侧原本完全不知道「我被谁用过」——于是
+/// 「删掉这个全局资源之前，有项目依赖它吗」没有依据。这里钉两件事：分发成功
+/// 即记一条；同一目标反复覆盖分发只累加次数，不另起一行。
+#[tokio::test]
+async fn g012_distribute_leaves_a_receipt_on_the_global_side() {
+    let env = create_test_env().await;
+    let script = env.dir.join("note.md");
+    fs::write(&script, "# 初稿\n").expect("write md");
+    let req = promote_req("dispatch_note", &script, PromoteKind::Script);
+    env.store.promote(&req).await.expect("promote script");
+
+    let project_conn = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    env.store
+        .distribute(&project_conn, &env.project_root, "dispatch_note", None)
+        .await
+        .expect("distribute");
+
+    let receipts = env
+        .store
+        .dispatched_projects("dispatch_note")
+        .await
+        .expect("receipts");
+    assert_eq!(receipts.len(), 1, "一次分发收口成一行：{receipts:?}");
+    let receipt = &receipts[0];
+    assert_eq!(receipt.target_name, "dispatch_note");
+    assert_eq!(receipt.version, 1, "回执要记分发时的全局版本");
+    assert_eq!(receipt.shape, DistributeShape::File);
+    assert_eq!(receipt.dispatch_count, 1);
+    assert!(
+        receipt.project_root.ends_with("project"),
+        "记的是目标项目根，实际 {}",
+        receipt.project_root
+    );
+    assert!(
+        !receipt.project_root.contains('\\'),
+        "项目根要规范化成 /，实际 {}",
+        receipt.project_root
+    );
+
+    // 覆盖分发一次：同一目标仍是一行，次数 +1。
+    env.store
+        .distribute_overwrite(&project_conn, &env.project_root, "dispatch_note", None)
+        .await
+        .expect("overwrite distribute");
+    let receipts = env
+        .store
+        .dispatched_projects("dispatch_note")
+        .await
+        .expect("receipts after overwrite");
+    assert_eq!(receipts.len(), 1, "重复分发不另起行：{receipts:?}");
+    assert_eq!(receipts[0].dispatch_count, 2, "次数要累加");
+
+    // 从没被分发过的全局存档：零行，而不是报错。
+    assert!(
+        env.store
+            .dispatched_projects("never_used")
+            .await
+            .expect("empty receipts")
+            .is_empty(),
+        "零行是「没人用过」这个事实，不是错误"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}

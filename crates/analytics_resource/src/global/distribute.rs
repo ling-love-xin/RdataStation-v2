@@ -173,6 +173,18 @@ impl GlobalInstanceStore {
             .map_err(InstanceOpError::Core)?
         };
 
+        // 落好了再记账：全局侧要看得到「我被哪些项目用过、用到第几版」。
+        // 记失败不回滚分发（回执是附属记录，与履历事件同语义）。
+        self.record_dispatch(
+            &global_id,
+            name,
+            &target_name,
+            project_root,
+            shape.version,
+            shape.shape,
+        )
+        .await;
+
         Ok(shape)
     }
 
@@ -268,6 +280,114 @@ impl GlobalInstanceStore {
     }
 
     // ==================== 分发内部 ====================
+
+    /// 某全局存档被哪些项目用过（按最近分发倒序）。
+    ///
+    /// 回答两个业务问题：「删掉这个全局资源之前，有项目依赖它吗？」「它被用到第几版？」
+    /// 零行 = 只提升过、从没被分发（不是错误，是「全球库里有、没人用」这个事实）。
+    pub async fn dispatched_projects(
+        &self,
+        global_name: &str,
+    ) -> Result<Vec<DispatchRecord>, CoreError> {
+        self.with_sqlite(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT project_root, target_name, version, shape, dispatch_count,
+                           first_distributed_at, last_distributed_at
+                    FROM analytics_resource_dispatch
+                    WHERE global_name = ?1
+                    ORDER BY last_distributed_at DESC
+                    "#,
+                )
+                .map_err(sqlite_err("prepare_dispatched_projects"))?;
+            let rows = stmt
+                .query_map(rusqlite::params![global_name], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i32>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                    ))
+                })
+                .map_err(sqlite_err("query_dispatched_projects"))?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (project_root, target_name, version, shape, dispatch_count, first, last) =
+                    row.map_err(sqlite_err("read_dispatched_project"))?;
+                out.push(DispatchRecord {
+                    project_root,
+                    target_name,
+                    version,
+                    // 写入端只会写 'table' / 'file'；脏值按表型处理而不是丢行。
+                    shape: if shape == "file" {
+                        DistributeShape::File
+                    } else {
+                        DistributeShape::Table
+                    },
+                    dispatch_count,
+                    first_distributed_at: first,
+                    last_distributed_at: last,
+                });
+            }
+            Ok(out)
+        })
+    }
+
+    /// 写一条分发回执（全局侧记账：这个全局存档被哪个项目用过、用到第几版）。
+    ///
+    /// 失败只记日志、不回滚分发：回执是附属记录（与 `record_timeline` 同语义），
+    /// 少一条只影响「被谁用过」的可见性，不影响项目侧已经落好的内容。
+    ///
+    /// 项目身份取**项目根路径**（规范化 `\` → `/`）：`distribute` 的入参里只有它，
+    /// 不为了记账去改一整串签名；同一项目的路径稳定，聚合键仍然成立。
+    async fn record_dispatch(
+        &self,
+        global_id: &str,
+        global_name: &str,
+        target_name: &str,
+        project_root: &Path,
+        version: i32,
+        shape: DistributeShape,
+    ) {
+        let root = project_root.to_string_lossy().replace('\\', "/");
+        let shape = match shape {
+            DistributeShape::Table => "table",
+            DistributeShape::File => "file",
+        };
+        let result = self.with_sqlite(|conn| {
+            conn.execute(
+                r#"
+                INSERT INTO analytics_resource_dispatch
+                    (id, global_id, global_name, project_root, target_name, version, shape)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                ON CONFLICT(global_id, project_root, target_name) DO UPDATE SET
+                    global_name = excluded.global_name,
+                    version = excluded.version,
+                    shape = excluded.shape,
+                    dispatch_count = analytics_resource_dispatch.dispatch_count + 1,
+                    last_distributed_at = CURRENT_TIMESTAMP
+                "#,
+                rusqlite::params![
+                    uuid::Uuid::new_v4().simple().to_string(),
+                    global_id,
+                    global_name,
+                    root,
+                    target_name,
+                    version,
+                    shape,
+                ],
+            )
+            .map_err(sqlite_err("record_dispatch"))?;
+            Ok(())
+        });
+        if let Err(error) = result {
+            tracing::warn!(error = %error, global_name, "分发回执写入失败");
+        }
+    }
 
 }
 

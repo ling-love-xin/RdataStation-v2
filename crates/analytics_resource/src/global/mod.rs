@@ -97,6 +97,25 @@ pub enum DistributeShape {
     File,
 }
 
+/// 一条分发回执（全局侧视角：这个全局存档被哪个项目用过、用到第几版）。
+///
+/// 项目侧登记只回答「我来自哪」；「我被谁用过」只能由全局侧记，见迁移 033。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DispatchRecord {
+    /// 目标项目根（规范化：`\` → `/`）。
+    pub project_root: String,
+    /// 目标侧名（改名分发时与全局名不同）。
+    pub target_name: String,
+    /// 最近一次分发时的全局版本。
+    pub version: i32,
+    /// 分发形态。
+    pub shape: DistributeShape,
+    /// 累计分发次数（同一目标重复覆盖分发会累加，不另起行）。
+    pub dispatch_count: i64,
+    pub first_distributed_at: String,
+    pub last_distributed_at: String,
+}
+
 /// 冲突撞在目标实例的**哪一层**（三查的结论：登记 / 物理表 / 原件）。
 ///
 /// 这个结论必须带进冲突框：三查都可能命中，但用户要做的事不一样——
@@ -314,6 +333,17 @@ impl GlobalInstanceStore {
                     reason: e.to_string(),
                 })
             })?;
+        // 分发回执表（033）：生产环境由全局迁移 runner 建，测试库要自己补齐，
+        // 否则「记回执」这一步在测试里会静默失败（只 warn），用例就测不到东西。
+        sqlite
+            .execute_batch(GLOBAL_MIGRATION_033_SQL)
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "analytics_resources_global".to_string(),
+                    operation: "migrate_033".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
         // 格式守门（2026-11-01）：DuckDB 能打开 SQLite 格式的同名文件（内置 SQLite 存储后端），
         // 所以必须先断格式，不能只靠 open 成功与否判断。
         shared::duckdb_open::assert_native_format(&duckdb_path).map_err(|e| {
@@ -349,6 +379,8 @@ pub(crate) use self::sql::{duckdb_err, file_read_expr, quote_ident, sqlite_err};
 
 pub(crate) const GLOBAL_MIGRATION_026_SQL: &str =
     include_str!("../../../store/migrations/global/026_analytics_resource_global.sql");
+pub(crate) const GLOBAL_MIGRATION_033_SQL: &str =
+    include_str!("../../../store/migrations/global/033_analytics_resource_dispatch.sql");
 
 #[cfg(test)]
 mod tests;
