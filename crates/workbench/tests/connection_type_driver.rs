@@ -94,6 +94,7 @@ fn driver(id: &str, type_id: &str, name: &str, enabled: bool) -> Driver {
         capabilities: None,
         driver_properties: None,
         enabled,
+        plugin_code: None,
     }
 }
 

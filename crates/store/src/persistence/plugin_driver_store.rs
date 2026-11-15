@@ -4,8 +4,9 @@
 //! 激活只注册进运行时 `DriverRegistry`——两个世界没桥，插件驱动在新建连接界面不可见
 //! （2026-11-10 核查结论）。本模块是桥的 SQL 侧：
 //!
-//! - **归属标记 = `driver_kind = 'sidecar'`**：内置驱动声明（`declaration.rs`）从不写
-//!   这个值，所以「sidecar 行的集合」就是「插件行的集合」，不需要归属列；
+//! - **归属两层**：`driver_kind = 'sidecar'` 区分「插件行 vs 内置行」（内置声明
+//!   `declaration.rs` 从不写这个值）；`plugin_code`（迁移 032）再区分「哪个插件」——
+//!   后者是插件页与驱动下拉之间的对账键，同族两个实现并列时靠它分清来源；
 //! - 行内容（config_schema / url_template / default_port …）由插件侧派生
 //!   （`crates/plugin/src/driver_decl.rs`），本层只认 `PluginDriverRow`；
 //! - `enabled` 的所有权与内置声明不同：内置 upsert **不**碰冲突行的 `enabled`（归库/用户），
@@ -32,6 +33,9 @@ fn storage_err(operation: &str, reason: String) -> CoreError {
 pub struct PluginDriverRow {
     /// 驱动 id（= 运行时 `DriverRegistry` 的注册键 = `contributes.drivers[].id`）
     pub id: String,
+    /// 声明这个驱动的插件 code（= `plugins.code` = 清单 `[plugin] id`）。
+    /// 落库后驱动下拉能标「来自哪个插件」，插件页也能反查「这个驱动登记到哪」。
+    pub plugin_code: String,
     /// 数据库族 id（`data_source_types.id` 外键；族不存在时先 [`ensure_plugin_family`]）
     pub type_id: String,
     pub name: String,
@@ -59,8 +63,8 @@ pub fn upsert_plugin_driver_row(conn: &Connection, row: &PluginDriverRow) -> Res
         "INSERT INTO drivers
              (id, type_id, name, driver_kind, is_file, default_port, url_template,
               version, config_schema, supported_auth_types, capabilities,
-              driver_properties, enabled)
-         VALUES (?1, ?2, ?3, 'sidecar', 0, ?4, ?5, ?6, ?7, ?8, ?9, '{}', ?10)
+              driver_properties, enabled, plugin_code)
+         VALUES (?1, ?2, ?3, 'sidecar', 0, ?4, ?5, ?6, ?7, ?8, ?9, '{}', ?10, ?11)
          ON CONFLICT(id) DO UPDATE SET
              type_id = excluded.type_id,
              name = excluded.name,
@@ -73,7 +77,8 @@ pub fn upsert_plugin_driver_row(conn: &Connection, row: &PluginDriverRow) -> Res
              supported_auth_types = excluded.supported_auth_types,
              capabilities = excluded.capabilities,
              driver_properties = excluded.driver_properties,
-             enabled = excluded.enabled",
+             enabled = excluded.enabled,
+             plugin_code = excluded.plugin_code",
         params![
             row.id,
             row.type_id,
@@ -85,6 +90,7 @@ pub fn upsert_plugin_driver_row(conn: &Connection, row: &PluginDriverRow) -> Res
             row.supported_auth_types,
             row.capabilities,
             row.enabled as i64,
+            row.plugin_code,
         ],
     )
     .map_err(|e| storage_err("upsert_plugin_driver_row", e.to_string()))?;
@@ -96,19 +102,21 @@ pub fn upsert_plugin_driver_row(conn: &Connection, row: &PluginDriverRow) -> Res
 /// 插件驱动常对应既有族（oracle / postgresql…）；没有对应族时按插件声明的
 /// `category`（默认 relational）建一行，图标留空（插件图标是资源路径，这里是
 /// emoji 字符位，塞路径会显示文件名）。
+/// 返回 `true` = 这次真的插进了一行（族是新的）；`false` = 该族已存在（含内置声明播种的），零改动。
 pub fn ensure_plugin_family(
     conn: &Connection,
     family_id: &str,
     name: &str,
     category: &str,
-) -> Result<(), CoreError> {
-    conn.execute(
-        "INSERT OR IGNORE INTO data_source_types (id, name, category, icon, enabled)
-         VALUES (?1, ?2, ?3, NULL, 1)",
-        params![family_id, name, category],
-    )
-    .map_err(|e| storage_err("ensure_plugin_family", e.to_string()))?;
-    Ok(())
+) -> Result<bool, CoreError> {
+    let inserted = conn
+        .execute(
+            "INSERT OR IGNORE INTO data_source_types (id, name, category, icon, enabled)
+             VALUES (?1, ?2, ?3, NULL, 1)",
+            params![family_id, name, category],
+        )
+        .map_err(|e| storage_err("ensure_plugin_family", e.to_string()))?;
+    Ok(inserted > 0)
 }
 
 /// 清理陈旧的插件驱动行：`driver_kind='sidecar'` 且 id 不在存活集合里的删除。
@@ -165,6 +173,7 @@ mod tests {
                 config_schema TEXT NOT NULL, supported_auth_types TEXT,
                 capabilities TEXT, driver_properties TEXT,
                 enabled BOOLEAN DEFAULT 1,
+                plugin_code TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);",
         )
         .expect("create tables");
@@ -183,6 +192,7 @@ mod tests {
             supported_auth_types: r#"["password"]"#.to_string(),
             capabilities: r#"["transactions","cancel"]"#.to_string(),
             enabled,
+            plugin_code: "rds.driver.oracle-rust".to_string(),
         }
     }
 
@@ -194,6 +204,15 @@ mod tests {
         // 幂等：同一行再 upsert 不报错、不翻倍
         upsert_plugin_driver_row(&conn, &sample_row("oracle", true)).unwrap();
         assert_eq!(list_plugin_driver_ids(&conn).unwrap(), vec!["oracle"]);
+        // 归属列落库：驱动下拉靠它标「来自哪个插件」
+        let plugin_code: Option<String> = conn
+            .query_row(
+                "SELECT plugin_code FROM drivers WHERE id='oracle'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(plugin_code.as_deref(), Some("rds.driver.oracle-rust"));
     }
 
     #[test]

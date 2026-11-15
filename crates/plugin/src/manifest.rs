@@ -466,6 +466,14 @@ pub struct ContributesPanel {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContributesDriver {
     pub id: String,
+    /// 数据库族 id（`data_source_types.id`）。族与实现是两层：一个族可以有多个驱动实现
+    /// （如 `oracle` 族下同时有 Rust 原生版与 JDBC 版），用户在下拉里选一个。
+    ///
+    /// 不写 = 回落到 `id`：老清单（族名恰好等于驱动 id 的包）行为完全不变。
+    /// 写了 = `drivers.type_id` 与 `DriverDescriptor::target_database` 都用它，
+    /// 插件驱动的 id 因此可以自由命名，不必再与族名相同。
+    #[serde(default)]
+    pub type_id: Option<String>,
     pub display_name: String,
     #[serde(default)]
     pub default_port: Option<u16>,
@@ -484,6 +492,24 @@ pub struct ContributesDriver {
     /// 四个值——连接对话框的类型树按这四类分节，别的值会让该族在树里不可见。
     #[serde(default)]
     pub category: Option<String>,
+}
+
+impl ContributesDriver {
+    /// 落库与注册期共用的族取值（单一真源）。
+    ///
+    /// 声明了 `type_id` 就用它——先 `trim` 再转小写：`type_id` 是 `data_source_types.id`
+    /// 的外键，大小写或首尾空白不一致会在同一族里造出两个 id，用户在连接对话框会看到
+    /// 两个「MySQL」。没写、或写了个纯空白，才回落为驱动 id（老清单行为不变）。
+    ///
+    /// **只规范化族，不动驱动 id**：id 是注册键、也是连接记录里的取值，改大小写会让
+    /// 存量连接对不上。
+    pub fn effective_type_id(&self) -> String {
+        self.type_id
+            .as_deref()
+            .map(|family| family.trim().to_ascii_lowercase())
+            .filter(|family| !family.is_empty())
+            .unwrap_or_else(|| self.id.clone())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

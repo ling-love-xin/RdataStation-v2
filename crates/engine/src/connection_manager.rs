@@ -187,8 +187,20 @@ impl ConnectionManager {
         let driver_id = &config.driver;
 
         // 从 DriverRegistry 获取驱动工厂
-        let factory = match DriverRegistry::get(driver_id) {
-            Some(f) => f,
+        // 先按实现 id 直查，再按族回退：插件被停用 / 卸载后，同族的内置实现仍能接住。
+        // 只有两级都落空才算「缺驱动」——回退成功不该被记成缺失，否则审计会把
+        // 一条本来能开的连接报成「该去装插件」。
+        let factory = match DriverRegistry::resolve_family(driver_id) {
+            Some((resolved_id, f)) => {
+                if resolved_id != *driver_id {
+                    tracing::warn!(
+                        requested = %driver_id,
+                        resolved = %resolved_id,
+                        "驱动未注册，已按同族回退（插件可能已停用或卸载）"
+                    );
+                }
+                f
+            }
             None => {
                 // 【D8c】缺驱动被拒要留痕：老连接在「插件没装 / 被停用」后就是这个死法，
                 // 而 D4 之后 `mysql` / `postgres` 已经由插件贡献——不记下来，用户只会
@@ -434,12 +446,24 @@ impl ConnectionManager {
             database
         ));
 
-        let factory =
-            crate::driver::DriverRegistry::get(&scoped_config.driver).ok_or_else(|| {
-                CoreError::database(DatabaseError::DriverNotFound {
+        // 跨库浏览另开的这条连接与主连接同一个驱动，缺实现时同样按族回退
+        let factory = match crate::driver::DriverRegistry::resolve_family(&scoped_config.driver) {
+            Some((resolved_id, f)) => {
+                if resolved_id != scoped_config.driver {
+                    tracing::warn!(
+                        requested = %scoped_config.driver,
+                        resolved = %resolved_id,
+                        "跨库浏览：驱动未注册，已按同族回退"
+                    );
+                }
+                f
+            }
+            None => {
+                return Err(CoreError::database(DatabaseError::DriverNotFound {
                     db_type: scoped_config.driver.clone(),
-                })
-            })?;
+                }));
+            }
+        };
         let db: DynDatabase = factory.create(scoped_config).await?;
         self.scoped.write().await.insert(key, db.clone());
         tracing::info!(conn_id = %conn_id, database = %database, "跨库浏览：已另开一条连到该库的连接");
@@ -752,8 +776,18 @@ impl ConnectionManager {
             .ok_or_else(|| CoreError::connection(ConnectionError::NotFound(conn_id.clone())))?;
 
         let driver_id = config.driver.clone();
-        let factory = match DriverRegistry::get(&driver_id) {
-            Some(f) => f,
+        // 重连同样按族回退：插件在会话期间被停用，不该让这条连接永久断掉
+        let factory = match DriverRegistry::resolve_family(&driver_id) {
+            Some((resolved_id, f)) => {
+                if resolved_id != driver_id {
+                    tracing::warn!(
+                        requested = %driver_id,
+                        resolved = %resolved_id,
+                        "重连：驱动未注册，已按同族回退"
+                    );
+                }
+                f
+            }
             None => {
                 // 【D8c】重连同样会因为「插件被停用/卸载」而缺驱动，这条也要留痕
                 crate::services::driver_audit::record_missing_driver(

@@ -160,9 +160,10 @@ pub(crate) fn declared_auth_types(
 
 /// 一个清单驱动 → 一行插件驱动声明。
 ///
-/// `type_id`（数据库族）取驱动 id：常见族（oracle / postgresql…）内置声明已播种，
-/// `ensure_plugin_family` 的 OR IGNORE 不会动它们；生僻族按驱动 id 建行，
-/// 分类用清单 `category`（默认 relational，manifest 校验已卡四个合法值）。
+/// `type_id`（数据库族）取清单声明的 `type_id`，未声明时回落为驱动 id（老包零变化）：
+/// 常见族（oracle / postgresql…）内置声明已播种，`ensure_plugin_family` 的 OR IGNORE
+/// 不会动它们；生僻族按声明的族建行，分类用清单 `category`（默认 relational，
+/// manifest 校验已卡四个合法值）。
 pub fn derive_row(
     manifest: &PluginManifest,
     driver: &ContributesDriver,
@@ -172,7 +173,12 @@ pub fn derive_row(
         .unwrap_or_else(|_| "[]".to_string());
     PluginDriverRow {
         id: driver.id.clone(),
-        type_id: driver.id.clone(),
+        // 归属：清单 `[plugin] id` 就是插件 code（`plugins.code`），落库后驱动下拉能标来源。
+        plugin_code: manifest.plugin.id.clone(),
+        // 族与实现分层：声明了 `type_id` 就用它，没声明才回落为 id（老包行为不变）。
+        // 与注册期（`sidecar/factory.rs::descriptor_for`）共用同一取值——两边各算一份，
+        // 同一份清单在库里和注册表里就会有两个不同的族。
+        type_id: driver.effective_type_id(),
         name: driver.display_name.clone(),
         default_port: driver.default_port.map(i64::from),
         url_template: driver.url_template.clone(),
@@ -214,7 +220,16 @@ pub async fn resync_driver_rows(
     for row in &rows {
         // 族先行（OR IGNORE：oracle/postgresql 等既有族零改动）
         let category = manifest_category(entries, &row.id).unwrap_or("relational");
-        store::ensure_plugin_family(conn, &row.type_id, &row.name, category)?;
+        // 新族是插件声明的结果，不是内置族——留痕，用户问「这个族哪来的」时有据可查。
+        // 这里**不拒绝**未知族：社区扩展必须允许自带新族，拒绝会让它装不上。
+        if store::ensure_plugin_family(conn, &row.type_id, &row.name, category)? {
+            tracing::info!(
+                family = %row.type_id,
+                name = %row.name,
+                category,
+                "插件声明了新数据库族，已在族目录登记"
+            );
+        }
         store::upsert_plugin_driver_row(conn, row)?;
         written += 1;
     }
@@ -248,6 +263,10 @@ mod tests {
         }
         if let Some(t) = &driver.url_template {
             extra.push_str(&format!("url_template = {t:?}\n"));
+        }
+        // 族也要进 TOML：helper 是手工拼的，漏一个字段就等于没测到
+        if let Some(family) = &driver.type_id {
+            extra.push_str(&format!("type_id = {family:?}\n"));
         }
         if !driver.features.is_empty() {
             let list = driver
@@ -288,6 +307,8 @@ mod tests {
     fn oracle_like_driver() -> ContributesDriver {
         ContributesDriver {
             id: "my-oracle".into(),
+            // 未声明族 → 回落为 id（老包语义）
+            type_id: None,
             display_name: "My Oracle".into(),
             default_port: Some(1521),
             connection_schema: None,
@@ -295,6 +316,20 @@ mod tests {
             features: vec!["transactions".into(), "cancel".into()],
             category: None,
         }
+    }
+
+    #[test]
+    fn declared_type_id_is_normalised_before_it_becomes_a_family_id() {
+        let mut driver = oracle_like_driver();
+        // 大小写 / 首尾空白不一致会在库里造出两个族，规范化后落到同一个
+        driver.type_id = Some("  Oracle ".into());
+        assert_eq!(driver.effective_type_id(), "oracle");
+        // 纯空白等同没声明 → 回落为驱动 id
+        driver.type_id = Some("   ".into());
+        assert_eq!(driver.effective_type_id(), "my-oracle");
+        // 未声明同样回落（老包语义）
+        driver.type_id = None;
+        assert_eq!(driver.effective_type_id(), "my-oracle");
     }
 
     #[test]
@@ -369,14 +404,29 @@ default_port = 1521
         let manifest = manifest_with_driver(oracle_like_driver());
         let row = derive_row(&manifest, &manifest.contributes.drivers[0], true);
         assert_eq!(row.id, "my-oracle");
-        assert_eq!(row.type_id, "my-oracle"); // 族 = 驱动 id（既有族 OR IGNORE 不动）
+        assert_eq!(row.type_id, "my-oracle"); // 未声明族 → 回落为驱动 id（老包语义不变）
         assert_eq!(row.name, "My Oracle");
+        // 归属列填的是清单 `[plugin] id`，不是驱动 id——两者在测试里不同，能钉住取值来源
+        assert_eq!(row.plugin_code.as_str(), manifest.plugin.id.as_str());
         assert_eq!(row.default_port, Some(1521));
         assert_eq!(row.version, "0.2.0");
         assert_eq!(row.capabilities, r#"["transactions","cancel"]"#);
         // 模板没有 {user} → 无认证面
         assert_eq!(row.supported_auth_types, "[]");
         assert!(row.enabled);
+    }
+
+    #[test]
+    fn declared_type_id_separates_family_from_implementation() {
+        // 同族多实现：实现 id 可以自由命名（如 JDBC 版与原生版共存），族由清单声明。
+        // 这条钉住「族 ≠ 实现」——没有它，装第二个同族驱动会派生出一个不存在的族。
+        let mut driver = oracle_like_driver();
+        driver.id = "oracle-jdbc-dev".into();
+        driver.type_id = Some("oracle".into());
+        let manifest = manifest_with_driver(driver);
+        let row = derive_row(&manifest, &manifest.contributes.drivers[0], true);
+        assert_eq!(row.id, "oracle-jdbc-dev"); // 注册键 = 实现 id
+        assert_eq!(row.type_id, "oracle"); // 族 = 清单声明
     }
 
     #[test]

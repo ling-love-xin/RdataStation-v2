@@ -155,6 +155,25 @@ impl DriverRegistry {
             .and_then(|registry| registry.read().ok().and_then(|reg| reg.get(id).cloned()))
     }
 
+    /// 按「实现 id → 族」两级解析驱动工厂。
+    ///
+    /// 先按 id 直查（用户明确选中的那套实现）；查不到再把入参当作**族名**，
+    /// 在同族已注册的实现里挑一个。
+    ///
+    /// 为什么要这一步：连接记录里的 `driver` / `driver_id` 可能指向一套已被停用或
+    /// 卸载的插件驱动，而同族的内置实现仍在注册表里——那时应当回退，而不是直接报
+    /// 「驱动不存在」，把一条本来能开的连接变成打不开。
+    ///
+    /// 返回 `(实际命中的 id, 工厂)`；命中 id 与入参不同即说明发生了回退，调用方应记日志。
+    pub fn resolve_family(driver_id: &str) -> Option<(String, Arc<dyn DriverFactory>)> {
+        if let Some(factory) = Self::get(driver_id) {
+            return Some((driver_id.to_string(), factory));
+        }
+        let registry = DRIVER_REGISTRY.get()?;
+        let reg = registry.read().ok()?;
+        first_in_family(&reg, driver_id)
+    }
+
     /// 获取所有已注册驱动的描述符
     ///
     /// # Returns
@@ -241,5 +260,55 @@ impl DriverRegistry {
                 reg.clear();
             }
         }
+    }
+}
+
+/// 在**同族**的已注册实现里挑一个。
+///
+/// 按 id 字典序取第一个：`HashMap` 的遍历顺序不定，不排序会让同一份数据每次挑到
+/// 不同的实现（用户会看到「今天走 A 驱动、明天走 B 驱动」）。
+///
+/// 族的权威字段是 `DriverDescriptor::target_database`——内置 4 个驱动都显式写了，
+/// 插件驱动的族由清单 `type_id` 喂进来；**不要按 id 字符串前缀猜**。
+fn first_in_family(
+    reg: &HashMap<String, Arc<dyn DriverFactory>>,
+    family: &str,
+) -> Option<(String, Arc<dyn DriverFactory>)> {
+    reg.iter()
+        .filter(|(_, factory)| factory.descriptor().target_database.as_deref() == Some(family))
+        .min_by_key(|(id, _)| (*id).clone())
+        .map(|(id, factory)| (id.clone(), Arc::clone(factory)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 只放两个内置实现（`mysql_native` 族 `mysql`、`sqlite` 族 `sqlite`）。
+    /// 用局部 map 而不是全局注册表，避免测试之间互相污染。
+    fn sample_registry() -> HashMap<String, Arc<dyn DriverFactory>> {
+        let mut map: HashMap<String, Arc<dyn DriverFactory>> = HashMap::new();
+        map.insert(
+            "mysql_native".to_string(),
+            Arc::new(crate::factory::MySqlNativeDriverFactory),
+        );
+        map.insert(
+            "sqlite".to_string(),
+            Arc::new(crate::factory::SqliteDriverFactory),
+        );
+        map
+    }
+
+    #[test]
+    fn family_picks_an_implementation_within_the_same_family() {
+        let reg = sample_registry();
+        // 只给族名 → 回退到同族的实现
+        let (id, _) = first_in_family(&reg, "mysql").expect("mysql 族应当有实现");
+        assert_eq!(id, "mysql_native");
+        // 族名与实现同名时也不冲突（sqlite 既是族也是实现 id）
+        let (id, _) = first_in_family(&reg, "sqlite").expect("sqlite 族");
+        assert_eq!(id, "sqlite");
+        // 不存在的族不凭空造工厂
+        assert!(first_in_family(&reg, "no_such_family_at_all").is_none());
     }
 }

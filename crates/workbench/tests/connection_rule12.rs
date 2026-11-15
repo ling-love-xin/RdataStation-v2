@@ -52,6 +52,7 @@ fn driver(id: &str, type_id: &str, kind: &str, is_file: bool) -> Driver {
         capabilities: None,
         driver_properties: None,
         enabled: true,
+        plugin_code: None,
     }
 }
 

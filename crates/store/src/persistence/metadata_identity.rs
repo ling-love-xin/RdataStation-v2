@@ -21,6 +21,7 @@
 //! 见 `docs/architecture/connection/connection-dialog-architecture.md` §3.6。
 
 use sha2::{Digest, Sha256};
+use std::sync::OnceLock;
 
 /// 缓存格式版本：缓存结构变更时 +1，指纹随之变化 → 旧缓存自然分池（按约定不删除）。
 pub const CACHE_FORMAT_VERSION: u32 = 1;
@@ -133,7 +134,7 @@ impl ConnectionIdentity {
         Some(format!(
             "v{}|{}|{}|user:{}",
             self.format_version,
-            self.type_id.trim().to_ascii_lowercase(),
+            driver_family(&self.type_id),
             authority,
             normalize_segment(self.principal.as_deref())
         ))
@@ -152,6 +153,68 @@ impl ConnectionIdentity {
     pub fn cache_file_name(&self) -> Option<String> {
         self.fingerprint().as_deref().map(cache_file_name)
     }
+}
+
+/// 驱动**族**归一口径：缓存身份只回答「是不是同一个物理库」，同一族的多种实现
+/// （内置官方实现 / sidecar 插件 / 已退役的旧实现）必须落在同一指纹上。
+///
+/// 背景（2026-11-15 真机回归）：D3 / D4 把 sqlx 实现剥离成 sidecar 插件，内置驱动 id
+/// 由 `mysql` / `postgres` 改名 `mysql_native` / `postgres_native`。旧口径把**驱动实现
+/// id** 原样写进 canonical（`v1|mysql|net:…`），改名即换指纹 → 换缓存文件 → 用户已有的
+/// 完整 L2 缓存全部读不到，展开退回 L3 实时内省。真机指纹变化：
+///
+/// | 连接 | 旧 id | 旧指纹 | 新 id | 新指纹 |
+/// | --- | --- | --- | --- | --- |
+/// | MySQL | `mysql` | `439cdbba942f1c99` | `mysql_native` | `8712861e2c2f5b96` |
+/// | PostgreSQL | `postgres` | `a4ba0a563d0233d4` | `postgres_native` | `a4329bc00db1e446` |
+///
+/// 两个旧文件（500 KB / 600 KB）当时仍留在磁盘上，只是没人再打开它们。
+///
+/// **不升 `format_version`**：归一口径对齐「族」以后，`mysql` / `postgres` 两条老记录的
+/// 指纹回到旧值，历史缓存当场复用；升版本会让所有族（含 `sqlite` / `duckdb`）一起换代，
+/// 反而把本来完好的缓存全部作废。
+fn driver_family(type_id: &str) -> String {
+    resolve_family_with(type_id, FAMILY_RESOLVER.get().copied())
+}
+
+/// 宿主注入的族解析器（实现 id → 族）。
+///
+/// 只在**硬编码表未覆盖**的新实现上生效——表内命中的映射已经写进过磁盘上的指纹，
+/// 改一个字节就是一次全量缓存作废（见上文实测表）。
+static FAMILY_RESOLVER: OnceLock<fn(&str) -> Option<String>> = OnceLock::new();
+
+/// 由宿主在启动时注入族解析器（实现 id → 族，内存查驱动注册表，不读盘）。
+///
+/// 为什么需要它：同族的第二个驱动实现（如同一族的 SQLx 版）不在硬编码表里。
+/// 若让实现 id 原样进指纹，同一个物理库换一套实现就换一个缓存文件——
+/// 那正是「换驱动就退回实时内省」的成因。有了它，新实现自动与同族旧实现共享 L2 缓存。
+///
+/// **幂等**：重复注入只保留第一次。
+pub fn install_family_resolver(resolver: fn(&str) -> Option<String>) {
+    let _ = FAMILY_RESOLVER.set(resolver);
+}
+
+/// 三级族解析（纯函数，便于单测）。
+///
+/// 1. **历史契约优先**：表内命中的结果已固化在磁盘指纹里，永不改动；
+/// 2. **新实现走注入解析器**：与同族旧实现共享缓存；
+/// 3. **兜底**：实现 id 与族名一致（`sqlite` / `duckdb` / `mssql` / `oracle` 属于此类）。
+fn resolve_family_with(type_id: &str, resolver: Option<fn(&str) -> Option<String>>) -> String {
+    let id = type_id.trim().to_ascii_lowercase();
+    match id.as_str() {
+        "mysql" | "mysql_native" => return "mysql".to_string(),
+        // `postgresql` 是 sidecar 插件（`rds.driver.postgres-py`）声明的 id，与
+        // `postgres` / `postgres_native` 是同一族。
+        "postgres" | "postgres_native" | "postgresql" => return "postgres".to_string(),
+        _ => {}
+    }
+    if let Some(family) = resolver.and_then(|resolve| resolve(id.as_str())) {
+        let family = family.trim().to_ascii_lowercase();
+        if !family.is_empty() {
+            return family;
+        }
+    }
+    id
 }
 
 /// 缓存文件名约定（与 [`ConnectionIdentity::fingerprint`] 配对使用）。
@@ -630,6 +693,79 @@ mod tests {
         assert_eq!(
             normalize_file_path_with(r"\\server\share\app.db", false),
             "//server/share/app.db"
+        );
+    }
+
+    /// 2026-11-15 真机回归：驱动**实现 id** 不得参与缓存身份。
+    ///
+    /// D3 / D4 之后内置驱动 id 由 `mysql` / `postgres` 改名 `mysql_native` /
+    /// `postgres_native`。旧口径把实现 id 原样写进 canonical，于是**同一物理库只是
+    /// 换了实现就换了 `meta_{fp}.sqlite`**，用户已经扫好的 L2 缓存当场读不到
+    /// （真机：MySQL `439cdbba…`→`8712861e…`、PG `a4ba0a56…`→`a4329bc0…`）。
+    #[test]
+    fn family_resolution_prefers_historical_table_over_resolver() {
+        // 硬编码表命中时，注入的解析器不得改写结果——改写就等于作废磁盘上已有的指纹
+        fn claims_postgresql(_impl_id: &str) -> Option<String> {
+            Some("postgresql".to_string())
+        }
+        assert_eq!(
+            resolve_family_with("postgres_native", Some(claims_postgresql)),
+            "postgres",
+            "历史契约优先：postgres_native 必须仍是 postgres，不能被解析器改成 postgresql"
+        );
+        assert_eq!(
+            resolve_family_with("mysql_native", Some(claims_postgresql)),
+            "mysql"
+        );
+    }
+
+    #[test]
+    fn family_resolution_lets_new_implementations_join_their_family() {
+        // 同族的第二套驱动（表里没有）交给解析器 → 与旧实现共享 L2 缓存
+        fn resolve(impl_id: &str) -> Option<String> {
+            (impl_id == "mysql-sqlx").then(|| "mysql".to_string())
+        }
+        assert_eq!(resolve_family_with("mysql-sqlx", Some(resolve)), "mysql");
+        // 解析器不认识 → 兜底为规范化后的实现 id（与今天行为一致）
+        assert_eq!(resolve_family_with("mystery", Some(resolve)), "mystery");
+        // 没有注入（单测进程 / 早期启动）→ 行为与今天完全相同
+        assert_eq!(resolve_family_with("mysql-sqlx", None), "mysql-sqlx");
+    }
+
+    #[test]
+    fn driver_implementations_share_fingerprint_within_family() {
+        let mysql_legacy = network("mysql", "db.internal", Some(3306), None, "orders", "-", "app_ro");
+        let mysql_native =
+            network("mysql_native", "db.internal", Some(3306), None, "orders", "-", "app_ro");
+        assert_eq!(
+            mysql_legacy.fingerprint(),
+            mysql_native.fingerprint(),
+            "mysql 与 mysql_native 必须同指纹（同一物理库、同一族）"
+        );
+
+        let pg_legacy =
+            network("postgres", "db.internal", Some(5432), None, "orders", "-", "app_ro");
+        let pg_native =
+            network("postgres_native", "db.internal", Some(5432), None, "orders", "-", "app_ro");
+        let pg_plugin =
+            network("postgresql", "db.internal", Some(5432), None, "orders", "-", "app_ro");
+        assert_eq!(pg_legacy.fingerprint(), pg_native.fingerprint());
+        assert_eq!(
+            pg_legacy.fingerprint(),
+            pg_plugin.fingerprint(),
+            "sidecar 插件声明的 postgresql 也属于 postgres 族"
+        );
+
+        // 族归一不得把库类型抹平：跨族仍必须是不同身份。
+        assert_ne!(mysql_legacy.fingerprint(), pg_legacy.fingerprint());
+        // 老记录的 canonical 必须回到归一后的形状（否则历史缓存无法复用）。
+        assert_eq!(
+            mysql_legacy.canonical_string().unwrap(),
+            "v1|mysql|net:db.internal:3306/orders/-|user:app_ro"
+        );
+        assert_eq!(
+            mysql_native.canonical_string().unwrap(),
+            "v1|mysql|net:db.internal:3306/orders/-|user:app_ro"
         );
     }
 

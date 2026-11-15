@@ -1,0 +1,14 @@
+-- 032 驱动行的「来自哪个插件」（2026-11-15）
+--
+-- 为什么现在加：`drivers` 表此前只有 `driver_kind`（native / sidecar）区分内置与插件，
+-- 但「哪一行属于哪个插件」只存在于运行时（`plugin_index` → 清单 `contributes.drivers`），
+-- 或在 `plugins.manifest_json` 里（每次反查要解析 JSON）。结果是驱动态只能显示驱动名，
+-- 用户看不出它与插件页哪个包对应——同族两个实现并列时（PostgreSQL 插件版 + 内置版）尤其分不清。
+--
+-- 语义：
+--   NULL   内置驱动（`driver/declaration.rs` 播种，没有插件来源）
+--   非空   插件 code（= `plugins.code` = 清单 `[plugin] id`，如 `rds.driver.oracle-rust`）
+--
+-- 写入点唯一：`plugin_driver_store::upsert_plugin_driver_row`（插件激活 / 目录扫描时重算）。
+-- 内置声明的 upsert 不碰这一列，冲突时也不会把插件写的值覆盖成 NULL。
+ALTER TABLE drivers ADD COLUMN plugin_code TEXT;

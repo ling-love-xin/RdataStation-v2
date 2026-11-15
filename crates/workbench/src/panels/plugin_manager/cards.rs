@@ -121,6 +121,9 @@ impl PluginManagerPanel {
                     );
 
                 if !plugin.drivers.is_empty() {
+                    // 插件短码与新建数据源对话框的下拉标签同源（`shared::utils::string::plugin_short_code`）：
+                    // 卡片上前缀同一个短码，用户才能把「这条驱动」对上「下拉里是哪一项」。
+                    let plugin_code = shared::utils::string::plugin_short_code(&plugin.id);
                     card = card.child(div().h_flex().items_center().gap_1().flex_wrap().children(
                         plugin.drivers.iter().map(|driver| {
                             let status = plugin_driver_registration_label(plugin, &driver.id);
@@ -144,6 +147,11 @@ impl PluginManagerPanel {
                                     div()
                                         .text_color(theme.colors.foreground)
                                         .child(driver.display_name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(theme.colors.muted_foreground)
+                                        .child(format!("· {plugin_code}")),
                                 )
                                 .child(div().text_color(status_color).child(status))
                         }),

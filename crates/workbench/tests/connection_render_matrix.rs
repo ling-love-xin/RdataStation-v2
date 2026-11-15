@@ -360,6 +360,7 @@ fn driver(
         capabilities: None,
         driver_properties: None,
         enabled,
+        plugin_code: None,
     }
 }
 

@@ -30,11 +30,21 @@ fn probe_sql(driver: &str) -> Option<&'static str> {
 pub async fn test_connection(config: DriverConnectionConfig) -> Result<TestResult, CoreError> {
     let started = Instant::now();
 
-    let factory = DriverRegistry::get(&config.driver).ok_or_else(|| {
-        CoreError::connection(ConnectionError::DriverNotFound {
-            driver: config.driver.clone(),
-        })
-    })?;
+    // 与 `DataSourceRouter::route` 同一条口径：先按实现 id 直查，再按族回退。
+    // 「测试连接」与「真连」若走两套解析，会出现测试通过、保存后打不开的错位。
+    let (resolved_id, factory) =
+        DriverRegistry::resolve_family(&config.driver).ok_or_else(|| {
+            CoreError::connection(ConnectionError::DriverNotFound {
+                driver: config.driver.clone(),
+            })
+        })?;
+    if resolved_id != config.driver {
+        tracing::warn!(
+            requested = %config.driver,
+            resolved = %resolved_id,
+            "测试连接：驱动未注册，已按同族回退"
+        );
+    }
 
     // 独立会话：create 返回的 db 在函数退出即 drop，不会进入连接池/管理器。
     let db = factory.create(config.clone()).await?;

@@ -204,7 +204,8 @@ pub(crate) fn type_has_driver(drivers: &[Driver], type_id: &str) -> bool {
     drivers.iter().any(|d| d.enabled && d.type_id == type_id)
 }
 
-/// 按下拉显示值定位驱动：驱动 id → 完整名 → 短名（兼容回读、旧草稿与手输值）。
+/// 按下拉显示值定位驱动：菜单标签 → 驱动 id → 完整名 → 短名
+/// （兼容回读、旧草稿与手输值；旧草稿存的是短名，新下拉存的是带来源后缀的标签）。
 pub(crate) fn find_driver_by_value<'a>(drivers: &'a [Driver], value: &str) -> Option<&'a Driver> {
     let v = value.trim();
     if v.is_empty() {
@@ -212,7 +213,8 @@ pub(crate) fn find_driver_by_value<'a>(drivers: &'a [Driver], value: &str) -> Op
     }
     drivers
         .iter()
-        .find(|d| d.id == v)
+        .find(|d| driver_menu_label(d) == v)
+        .or_else(|| drivers.iter().find(|d| d.id == v))
         .or_else(|| drivers.iter().find(|d| d.name == v))
         .or_else(|| {
             drivers

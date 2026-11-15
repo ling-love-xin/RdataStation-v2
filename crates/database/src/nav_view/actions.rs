@@ -2275,7 +2275,7 @@ impl NavView {
         let host = self.host.clone();
         let manager = engine::get_connection_manager().clone();
 
-        let _ = cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |_this, cx| {
             let mut outcomes: Vec<StagedCommitOutcome> = Vec::new();
             for (_cid, entries) in groups {
                 for entry in entries {
@@ -2364,6 +2364,6 @@ impl NavView {
                 host.notice(staged_commit_summary(ok, &failed), cx);
                 cx.notify();
             });
-        });
+        }).detach();
     }
 }

@@ -129,7 +129,7 @@ impl Render for PluginPanel {
 
         div()
             .v_flex()
-            .w_full()
+            .size_full()
             .gap_1()
             .pl_2()
             .pr_2()

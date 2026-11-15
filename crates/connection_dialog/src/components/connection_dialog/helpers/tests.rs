@@ -4,7 +4,8 @@ use super::{
     app_level_capabilities,
     auth_config_values, auth_field_specs, build_auth_config_json, build_network_config_json,
     capability_rows, conn_display_name, create_new_db_file, default_new_scope, dialog_row_height,
-    dialog_tab_defs, driver_auth_types, driver_capabilities, driver_form_fields, driver_short_name,
+    dialog_tab_defs, driver_auth_types, driver_capabilities, driver_form_fields, driver_menu_label,
+    driver_short_name, plugin_short_code,
     driver_source_text, driver_sources_from_rows,
     enabled_drivers_of_type, field_spec, find_driver_by_value, first_selectable_type,
     is_secret_field, network_config_values, network_field_specs, new_db_file_suggested_name,
@@ -35,6 +36,7 @@ fn driver(id: &str, type_id: &str, name: &str, enabled: bool) -> Driver {
         capabilities: None,
         driver_properties: None,
         enabled,
+        plugin_code: None,
     }
 }
 
@@ -727,6 +729,47 @@ fn short_name_strips_type_prefix() {
     assert_eq!(driver_short_name("native"), "native");
     assert_eq!(driver_short_name("MySQL ()"), "MySQL ()");
     assert_eq!(driver_short_name("  sqlx  "), "sqlx");
+}
+
+#[test]
+fn driver_menu_label_marks_source() {
+    // 内置驱动（plugin_code = None）：短名 + 内置
+    let native = driver("postgres_native", "postgresql", "PostgreSQL (Official)", true);
+    assert_eq!(driver_menu_label(&native), "Official · 内置");
+
+    // 插件驱动：短名 + 插件短码（去掉 `rds.driver.` 前缀）
+    let mut plugin = driver("postgresql", "postgresql", "PostgreSQL", true);
+    plugin.plugin_code = Some("rds.driver.postgres-py".into());
+    assert_eq!(driver_menu_label(&plugin), "PostgreSQL · postgres-py");
+
+    // 同族两个实现靠来源区分——这正是加归属列的直接动机
+    assert_ne!(driver_menu_label(&native), driver_menu_label(&plugin));
+}
+
+#[test]
+fn plugin_short_code_strips_scope_prefix() {
+    assert_eq!(plugin_short_code("rds.driver.oracle-rust"), "oracle-rust");
+    assert_eq!(plugin_short_code("plain"), "plain");
+    assert_eq!(plugin_short_code("  spaced.code  "), "code");
+}
+
+#[test]
+fn driver_lookup_accepts_menu_label() {
+    let mut plugin = driver("postgresql", "postgresql", "PostgreSQL", true);
+    plugin.plugin_code = Some("rds.driver.postgres-py".into());
+    let drivers = vec![
+        driver("postgres_native", "postgresql", "PostgreSQL (Official)", true),
+        plugin,
+    ];
+    // 新下拉存的是带来源后缀的标签；旧草稿存短名，两条路径都要能回读
+    assert_eq!(
+        find_driver_by_value(&drivers, "PostgreSQL · postgres-py").map(|d| d.id.as_str()),
+        Some("postgresql")
+    );
+    assert_eq!(
+        find_driver_by_value(&drivers, "Official").map(|d| d.id.as_str()),
+        Some("postgres_native")
+    );
 }
 
 #[test]

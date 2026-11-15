@@ -398,7 +398,7 @@ impl NavView {
         let executor = cx.background_executor().clone();
         let metadata =
             crate::metadata_service::MetadataService::new(engine::get_connection_manager().clone());
-        let _ = cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |_this, cx| {
             // 执行用的副本（`conn_id` 外层还要用：回 UI 线程刷新）。
             let exec_conn = conn_id.clone();
             let result = executor
@@ -418,6 +418,6 @@ impl NavView {
                     host.notice(format!("重命名失败: {e}"), cx);
                 }
             });
-        });
+        }).detach();
     }
 }

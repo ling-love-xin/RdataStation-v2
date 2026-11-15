@@ -130,7 +130,7 @@ impl super::PluginManagerPanel {
         }
         cx.notify();
 
-        let _ = cx.spawn(async move |this, cx| {
+        cx.spawn(async move |this, cx| {
             let loaded = cx
                 .background_executor()
                 .spawn(async move { read_operations(OPERATION_LOG_LIMIT) })
@@ -152,7 +152,7 @@ impl super::PluginManagerPanel {
                 drop(log);
                 cx.notify();
             });
-        });
+        }).detach();
     }
 
     pub(crate) fn operations(&self) -> Rc<RefCell<OperationLog>> {
@@ -196,7 +196,7 @@ impl super::PluginManagerPanel {
         }
         cx.notify();
 
-        let _ = cx.spawn(async move |this, cx| {
+        cx.spawn(async move |this, cx| {
             let written = cx
                 .background_executor()
                 .spawn(async move {
@@ -230,6 +230,6 @@ impl super::PluginManagerPanel {
                 drop(log);
                 cx.notify();
             });
-        });
+        }).detach();
     }
 }

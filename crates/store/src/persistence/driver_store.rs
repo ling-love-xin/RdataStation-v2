@@ -39,6 +39,10 @@ pub struct Driver {
     pub capabilities: Option<String>,
     pub driver_properties: Option<String>,
     pub enabled: bool,
+    /// 声明这个驱动的插件 code（`plugins.code`，如 `rds.driver.oracle-rust`）。
+    /// 内置驱动为 `None`；迁移 032 之前写入的插件行也为 `NULL`（下次插件扫描时补齐）。
+    #[serde(default)]
+    pub plugin_code: Option<String>,
 }
 
 /// 本机已安装的外部驱动文件注册信息
@@ -99,7 +103,8 @@ pub fn get_driver(conn: &Connection, id: &str) -> Result<Option<Driver>, CoreErr
         .prepare(
             "SELECT id, type_id, name, driver_kind, is_file, default_port,
                     url_template, download_url, download_checksum, version,
-                    config_schema, supported_auth_types, capabilities, driver_properties, enabled
+                    config_schema, supported_auth_types, capabilities, driver_properties, enabled,
+                    plugin_code
              FROM drivers WHERE id = ?1",
         )
         .map_err(|e| storage_err("prepare_get_driver", e.to_string()))?;
@@ -121,6 +126,7 @@ pub fn get_driver(conn: &Connection, id: &str) -> Result<Option<Driver>, CoreErr
             capabilities: row.get(12)?,
             driver_properties: row.get(13)?,
             enabled: row.get::<_, i32>(14)? != 0,
+            plugin_code: row.get(15)?,
         })
     })
     .optional()
@@ -148,7 +154,8 @@ pub fn get_all_drivers(conn: &Connection) -> Result<Vec<Driver>, CoreError> {
         .prepare(
             "SELECT id, type_id, name, driver_kind, is_file, default_port,
                     url_template, download_url, download_checksum, version,
-                    config_schema, supported_auth_types, capabilities, driver_properties, enabled
+                    config_schema, supported_auth_types, capabilities, driver_properties, enabled,
+                    plugin_code
              FROM drivers ORDER BY name",
         )
         .map_err(|e| storage_err("prepare_get_all_drivers", e.to_string()))?;
@@ -171,6 +178,7 @@ pub fn get_all_drivers(conn: &Connection) -> Result<Vec<Driver>, CoreError> {
                 capabilities: row.get(12)?,
                 driver_properties: row.get(13)?,
                 enabled: row.get::<_, i32>(14)? != 0,
+                plugin_code: row.get(15)?,
             })
         })
         .map_err(|e| storage_err("query_all_drivers", e.to_string()))?
@@ -186,7 +194,8 @@ pub fn get_drivers_by_type(conn: &Connection, type_id: &str) -> Result<Vec<Drive
         .prepare(
             "SELECT id, type_id, name, driver_kind, is_file, default_port,
                     url_template, download_url, download_checksum, version,
-                    config_schema, supported_auth_types, capabilities, driver_properties, enabled
+                    config_schema, supported_auth_types, capabilities, driver_properties, enabled,
+                    plugin_code
              FROM drivers WHERE type_id = ?1 AND enabled = 1 ORDER BY name",
         )
         .map_err(|e| storage_err("prepare_get_drivers_by_type", e.to_string()))?;
@@ -209,6 +218,7 @@ pub fn get_drivers_by_type(conn: &Connection, type_id: &str) -> Result<Vec<Drive
                 capabilities: row.get(12)?,
                 driver_properties: row.get(13)?,
                 enabled: row.get::<_, i32>(14)? != 0,
+                plugin_code: row.get(15)?,
             })
         })
         .map_err(|e| storage_err("query_drivers_by_type", e.to_string()))?

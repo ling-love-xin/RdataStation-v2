@@ -339,11 +339,16 @@ fn descriptor_for(
     manifest: &crate::manifest::PluginManifest,
     driver: &crate::manifest::ContributesDriver,
 ) -> DriverDescriptor {
+    // 族与实现分层：`id` 是注册键，族取清单声明的 `type_id`，没声明才回落为 id。
+    // 同族的多个实现（如同一族的原生版与 JDBC 版）靠族共享图标 / 密钥类型 / 分组。
+    // 取值必须与落库侧（`driver_decl.rs::derive_row`）同源，否则库里的族和注册表里的族
+    // 会是两个值，建连时的族回退就查不到东西。
+    let family = driver.effective_type_id();
     let mut descriptor = DriverDescriptor::new_external(
         driver.id.clone(),
         driver.display_name.clone(),
         DriverKind::Sidecar,
-        driver.id.clone(),
+        family,
     )
     .with_description(format!(
         "由插件 {} 提供的驱动（sidecar 进程）",

@@ -35,11 +35,20 @@ impl DataSourceRouter {
     pub async fn route(config: DriverConnectionConfig) -> Result<DynDatabase, CoreError> {
         let driver_id = &config.driver;
 
-        let factory = DriverRegistry::get(driver_id).ok_or_else(|| {
+        // 先按实现 id 直查，再按族回退：连接记录指向的插件驱动可能已被停用 / 卸载，
+        // 但同族的内置实现还在——那时应当接住这条连接，而不是报「驱动不存在」。
+        let (resolved_id, factory) = DriverRegistry::resolve_family(driver_id).ok_or_else(|| {
             CoreError::connection(ConnectionError::DriverNotFound {
                 driver: driver_id.clone(),
             })
         })?;
+        if resolved_id != *driver_id {
+            tracing::warn!(
+                requested = %driver_id,
+                resolved = %resolved_id,
+                "驱动未注册，已按同族回退（插件可能已停用或卸载）"
+            );
+        }
 
         factory.create(config).await
     }

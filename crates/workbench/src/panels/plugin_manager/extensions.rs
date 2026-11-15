@@ -124,7 +124,7 @@ impl super::PluginManagerPanel {
         }
         cx.notify();
 
-        let _ = cx.spawn(async move |this, cx| {
+        cx.spawn(async move |this, cx| {
             let loaded = cx
                 .background_executor()
                 .spawn(async move { inventory() })
@@ -146,7 +146,7 @@ impl super::PluginManagerPanel {
                 drop(state);
                 cx.notify();
             });
-        });
+        }).detach();
     }
 
     pub(crate) fn show_extensions(&self) -> bool {
@@ -187,7 +187,7 @@ impl super::PluginManagerPanel {
         }
         cx.notify();
 
-        let _ = cx.spawn(async move |this, cx| {
+        cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move { reconcile_extension(action, &name) })
@@ -202,7 +202,7 @@ impl super::PluginManagerPanel {
                 drop(state);
                 this.load_extensions(cx);
             });
-        });
+        }).detach();
     }
 }
 

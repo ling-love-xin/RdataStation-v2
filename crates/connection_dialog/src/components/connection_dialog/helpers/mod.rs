@@ -238,6 +238,25 @@ pub(crate) fn driver_short_name(name: &str) -> String {
     trimmed.to_string()
 }
 
+/// 下拉选项标签：驱动短名 + 来源（`内置` / 插件短码）。
+///
+/// 为什么加来源：同一族可以有多个实现（`postgresql` 族下插件版与内置版短名
+/// 都接近 "PostgreSQL"），只看短名分不清哪个来自插件、哪个是内核自带。
+/// 归属列 `plugin_code`（迁移 032）是真源：`None` = 内置，`Some(code)` = 该插件声明。
+pub(crate) fn driver_menu_label(driver: &Driver) -> String {
+    let short = driver_short_name(&driver.name);
+    match driver.plugin_code.as_deref() {
+        Some(code) if !code.trim().is_empty() => format!("{short} · {}", plugin_short_code(code)),
+        _ => format!("{short} · 内置"),
+    }
+}
+
+/// 插件 code 的显示短码：`rds.driver.postgres-py` → `postgres-py`。
+///
+/// 实现收敛在 `shared::utils::string`（插件管理页的驱动标签也用它）：两处显示的短码
+/// 必须是同一个词，否则「插件声明的驱动」与「下拉里的驱动」还是对不上号。
+pub(crate) use shared::utils::string::plugin_short_code;
+
 /// 解析驱动声明的属性默认值（`drivers.driver_properties`：SQL 对象 → **按键排序**的键值列表）。
 ///
 /// 空 / 非法 JSON / 空键 → 空列表（**不造默认值**）：属性页的默认值必须来自驱动声明

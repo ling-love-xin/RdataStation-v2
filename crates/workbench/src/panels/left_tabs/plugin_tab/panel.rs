@@ -57,7 +57,7 @@ impl PluginPanel {
     fn subscribe_events(cx: &mut Context<Self>) {
         let weak = cx.entity().downgrade();
         let mut receiver = plugin::events::get_event_manager().subscribe();
-        let _ = cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |_this, cx| {
             loop {
                 match receiver.recv().await {
                     Ok(event) => {
@@ -74,7 +74,7 @@ impl PluginPanel {
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
-        });
+        }).detach();
     }
 
     /// 只读快照：中央插件管理页与左 Dock 共用同一份会话清单，
@@ -123,7 +123,7 @@ impl PluginPanel {
         self.loading.set(true);
         self.refresh_again.set(false);
         let weak = cx.entity().downgrade();
-        let _ = cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |_this, cx| {
             // list_plugins 是同步快照读取；放进后台线程避免任何潜在 I/O 阻塞 UI。
             // 贡献点计数是展示用的补充信息：注册表异常（理论上已被加载期冲突检查挡住）
             // 不该让整个清单刷新失败，失败时按空计数处理。
@@ -133,13 +133,16 @@ impl PluginPanel {
                     mgr.list_plugins().map(|items| (items, counts))
                 })
                 .transpose();
-            let _ = weak.update(cx, |this, cx| {
+            let updated = weak.update(cx, |this, cx| {
                 this.loading.set(false);
                 match outcome {
                     Ok(None) => {
                         this.error.replace(Some("插件运行时未初始化".to_string()));
                     }
                     Ok(Some((items, counts))) => {
+                        // 【诊断】与 `list_plugins` 的快照日志配对：数据侧非空而这里不打印，
+                        // 就说明回写没到面板（实体已销毁 / future 未跑完）。
+                        tracing::info!(count = items.len(), "插件面板清单已回填");
                         this.plugins.replace(items);
                         this.contributions.replace(counts);
                         if clear_error {
@@ -155,7 +158,11 @@ impl PluginPanel {
                     this.refresh_plugins(cx, false);
                 }
             });
-        });
+            // 回写失败原被 `let _ =` 吞掉：面板实体已销毁时清单会永远停在空且无任何痕迹。
+            if updated.is_err() {
+                tracing::warn!("插件面板清单回写失败：面板实体已销毁");
+            }
+        }).detach();
     }
 
     /// 手动刷新：先把插件声明的驱动行重新同步进 `global.db`，再重读清单。
@@ -178,13 +185,13 @@ impl PluginPanel {
         cx.notify();
 
         let weak = cx.entity().downgrade();
-        let _ = cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |_this, cx| {
             handle.block_on(async { mgr.resync_sidecar_driver_rows().await });
             let _ = weak.update(cx, |this, cx| {
                 this.progress.replace(None);
                 this.refresh_plugins(cx, true);
             });
-        });
+        }).detach();
     }
 
     /// 重试一个加载失败的插件（错误行上的「重试」）。
@@ -211,7 +218,7 @@ impl PluginPanel {
         cx.notify();
 
         let weak = cx.entity().downgrade();
-        let _ = cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |_this, cx| {
             let outcome = handle.block_on(async { mgr.retry_load_plugin(&id).await });
             let _ = weak.update(cx, |this, cx| {
                 this.progress.replace(None);
@@ -230,7 +237,7 @@ impl PluginPanel {
                 };
                 this.refresh_plugins(cx, false);
             });
-        });
+        }).detach();
     }
 
     /// 启停插件（`enable_plugin` / `disable_plugin` 依赖 tokio 上下文：DB 异步锁 +
@@ -274,7 +281,7 @@ impl PluginPanel {
         cx.notify();
 
         let weak = cx.entity().downgrade();
-        let _ = cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |_this, cx| {
             // block_on 跑在 gpui 后台线程（cx.spawn 的 executor），不阻塞 UI 线程
             let outcome = if enabled {
                 handle.block_on(async { mgr.enable_plugin(&id).await })
@@ -299,7 +306,7 @@ impl PluginPanel {
                 };
                 this.refresh_plugins(cx, false);
             });
-        });
+        }).detach();
     }
 
     /// 批量启停：对当前清单里符合状态的插件逐个执行 `enable_plugin` / `disable_plugin`。
@@ -368,7 +375,7 @@ impl PluginPanel {
         cx.notify();
 
         let weak = cx.entity().downgrade();
-        let _ = cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |_this, cx| {
             let (succeeded, failures) = handle.block_on(async {
                 let mut succeeded = 0usize;
                 let mut failures = Vec::new();
@@ -402,7 +409,7 @@ impl PluginPanel {
                 }
                 this.refresh_plugins(cx, false);
             });
-        });
+        }).detach();
     }
 
     /// 批量重试所有出错插件：用于「停掉冲突方后，另一个仍停在 Error」的场景。
@@ -445,7 +452,7 @@ impl PluginPanel {
         cx.notify();
 
         let weak = cx.entity().downgrade();
-        let _ = cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |_this, cx| {
             let (succeeded, failures) = handle.block_on(async {
                 let mut succeeded = 0usize;
                 let mut failures = Vec::new();
@@ -473,7 +480,7 @@ impl PluginPanel {
                 }
                 this.refresh_plugins(cx, false);
             });
-        });
+        }).detach();
     }
 
     /// 卸载插件（磁盘删除，保留 `plugin-data` 用户数据）。
@@ -502,7 +509,7 @@ impl PluginPanel {
         cx.notify();
 
         let weak = cx.entity().downgrade();
-        let _ = cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |_this, cx| {
             let outcome = handle.block_on(async { mgr.uninstall_plugin(&id).await });
             let _ = weak.update(cx, |this, cx| {
                 this.progress.replace(None);
@@ -518,7 +525,7 @@ impl PluginPanel {
                 };
                 this.refresh_plugins(cx, false);
             });
-        });
+        }).detach();
     }
 
     /// 按当前字节重算某个已安装插件的 `checksums.json`。
@@ -550,7 +557,7 @@ impl PluginPanel {
         cx.notify();
 
         let weak = cx.entity().downgrade();
-        let _ = cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |_this, cx| {
             let outcome = handle.block_on(async { mgr.regenerate_checksums(&id).await });
             let _ = weak.update(cx, |this, cx| {
                 this.progress.replace(None);
@@ -574,7 +581,7 @@ impl PluginPanel {
                 };
                 this.refresh_plugins(cx, false);
             });
-        });
+        }).detach();
     }
 
     /// 选一个插件包文件（`.zip` / `.tar.gz`）安装。
@@ -624,7 +631,7 @@ impl PluginPanel {
         cx.notify();
 
         let weak = cx.entity().downgrade();
-        let _ = cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |_this, cx| {
             let outcome = handle.block_on(async { mgr.reload_plugins().await });
             let _ = weak.update(cx, |this, cx| {
                 this.progress.replace(None);
@@ -641,7 +648,7 @@ impl PluginPanel {
                 };
                 this.refresh_plugins(cx, false);
             });
-        });
+        }).detach();
     }
 
     /// 安装 / 导入插件包。解包、校验、复制都是磁盘操作（大包可达数十 MB）：
@@ -674,7 +681,7 @@ impl PluginPanel {
         let work = cx.background_executor().spawn(async move {
             handle.block_on(async { plugin::installer::install_from_path(&package_path).await })
         });
-        let _ = cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |_this, cx| {
             let outcome = work.await;
             let _ = weak.update(cx, |this, cx| {
                 this.progress.replace(None);
@@ -701,7 +708,7 @@ impl PluginPanel {
                 };
                 this.refresh_plugins(cx, false);
             });
-        });
+        }).detach();
     }
 }
 

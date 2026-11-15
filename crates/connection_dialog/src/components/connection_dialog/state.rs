@@ -735,7 +735,9 @@ impl<H: 'static> ConnectionDialogState<H> {
             }
         }
         self.refresh_driver_items(window, cx);
-        let first = first_driver.as_ref().map(|d| driver_short_name(&d.name));
+        let first = first_driver
+            .as_ref()
+            .map(|d| driver_menu_label(d));
         match first {
             Some(name) => {
                 set_select_value(&self.driver, &name, window, cx);
@@ -759,7 +761,7 @@ impl<H: 'static> ConnectionDialogState<H> {
         } else {
             enabled_drivers_of_type(&self.drivers.borrow(), &type_id)
                 .iter()
-                .map(|d| SharedString::from(driver_short_name(&d.name)))
+                .map(|d| SharedString::from(driver_menu_label(d)))
                 .collect()
         };
         let current = self.driver.read(cx).selected_value().cloned();
@@ -868,7 +870,7 @@ impl<H: 'static> ConnectionDialogState<H> {
         }
         match &hit {
             Some(d) => {
-                let short = driver_short_name(&d.name);
+                let short = driver_menu_label(d);
                 set_select_value(&self.driver, &short, window, cx);
                 // 驱动变了 → 认证方法选项跟着重建（与 render 的每帧检测互为兵兵）。
                 self.refresh_auth_method_items(&short, window, cx);
@@ -940,7 +942,7 @@ impl<H: 'static> ConnectionDialogState<H> {
             let (tid, value) = {
                 let drivers = self.drivers.borrow();
                 find_driver_by_value(&drivers, &did)
-                    .map(|d| (d.type_id.clone(), driver_short_name(&d.name)))
+                    .map(|d| (d.type_id.clone(), driver_menu_label(d)))
                     .unwrap_or((String::new(), did.clone()))
             };
             // 首帧之前调用时驱动目录为空（`refresh_meta` 还没跑）→ 定位必然失败；
@@ -1667,6 +1669,7 @@ mod tests {
                     capabilities: None,
                     driver_properties: None,
                     enabled: true,
+                    plugin_code: None,
                 },
                 // 文件型：sqlite
                 Driver {
@@ -1685,6 +1688,7 @@ mod tests {
                     capabilities: None,
                     driver_properties: None,
                     enabled: true,
+                    plugin_code: None,
                 },
             ];
         });

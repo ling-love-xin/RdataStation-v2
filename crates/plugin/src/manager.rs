@@ -593,6 +593,45 @@ impl PluginManager {
         Ok(discovered_plugins)
     }
 
+    /// 清单里「插件入口」是哪一项（详情面板「入口」字段的取值来源）。
+    ///
+    /// 优先级：`[backend].executable`（sidecar / script 真正跑的那个程序）→
+    /// `[capabilities.wasm].entry`（进程内沙箱）→ `[capabilities.frontend].entry`。
+    /// 三者都没有就返回空串——界面显示 `—`，**不编一条路径出来**。
+    fn manifest_entry_point(manifest: &PluginManifest) -> String {
+        fn clean(value: Option<&str>) -> Option<String> {
+            value
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        }
+        clean(
+            manifest
+                .backend
+                .as_ref()
+                .and_then(|backend| backend.executable.as_deref()),
+        )
+        .or_else(|| {
+            clean(
+                manifest
+                    .capabilities
+                    .wasm
+                    .as_ref()
+                    .map(|wasm| wasm.entry.as_str()),
+            )
+        })
+        .or_else(|| {
+            clean(
+                manifest
+                    .capabilities
+                    .frontend
+                    .as_ref()
+                    .map(|frontend| frontend.entry.as_str()),
+            )
+        })
+        .unwrap_or_default()
+    }
+
     /// 尝试发现单个插件：读 `<dir>/plugin.toml`，解析清单并判定形态。
     ///
     /// 目录里没有 `plugin.toml` 视为「不是插件」，返回 `None`（不报错，容忍同目录其他文件）。
@@ -622,7 +661,7 @@ impl PluginManager {
                 },
                 description: manifest.plugin.description.clone(),
                 author: manifest.plugin.publisher.clone(),
-                entry_point: String::new(),
+                entry_point: Self::manifest_entry_point(&manifest),
             },
             state: PluginState::Inactive,
             error: None,
@@ -1071,7 +1110,9 @@ impl PluginManager {
             plugin_type: PluginType::Tool,
             description: m.description.clone(),
             author: m.publisher.clone(),
-            entry_point: String::new(),
+            // wasm 路径已经解析过 `capabilities.wasm.entry`，这里直接用同一个值，
+            // 不再走一遍 `manifest_entry_point`（两者必然一致，但少一次分支）。
+            entry_point: wasm_entry.clone(),
         };
 
         self.wasm_manager
@@ -2085,6 +2126,15 @@ impl PluginManager {
 
     /// 列出所有已加载插件（wasm 从运行时取，sidecar / frontend 从安装态缓存 + 形态索引组装）
     pub fn list_plugins(&self) -> Result<Vec<PluginInfo>, CoreError> {
+        // 【诊断】面板显示「全部 0」时先用这条区分「数据侧空」与「UI 侧空」：
+        // 形态索引与已加载清单必须同长；只在其中一侧有时就是加载路径漏登记。
+        tracing::info!(
+            index_len = self.plugin_index.read().map(|i| i.len()).unwrap_or(usize::MAX),
+            loaded_len = self.loaded_plugins.read().map(|l| l.len()).unwrap_or(usize::MAX),
+            failed_len = self.failed_loads.read().map(|f| f.len()).unwrap_or(usize::MAX),
+            "list_plugins 快照：形态索引 / 已加载 / 加载失败"
+        );
+
         let mut plugins = Vec::new();
 
         // wasm：运行时里真实存在、且还在形态索引里的（仅 `wasm` feature 下才有运行时）
@@ -2155,7 +2205,7 @@ impl PluginManager {
                         plugin_type: PluginType::Analytics,
                         description: m.description.clone(),
                         author: m.publisher.clone(),
-                        entry_point: String::new(),
+                        entry_point: Self::manifest_entry_point(&lp.manifest),
                     },
                     state: lp.status.session_state(),
                     error: lp.status.error_reason().map(str::to_string),
@@ -2203,6 +2253,7 @@ impl PluginManager {
                     plugin_type: PluginType::Analytics,
                     description: String::new(),
                     author: String::new(),
+                    // 清单没读出来，入口本就未知——保持空串（界面显示 `—`），不按目录名编一个。
                     entry_point: String::new(),
                 },
                 state: PluginState::Error,
@@ -2440,6 +2491,92 @@ display_name = "Demo Database"
 default_port = 1521
 url_template = "jdbc:demo://{host}:{port}"
 "#;
+
+    /// 「入口」字段的取值顺序：后端可执行 → wasm 入口 → 前端入口 → 空。
+    ///
+    /// 详情面板曾长期显示 `—`：四处构造 `PluginInfo` 里 `entry_point` 全是 `String::new()`，
+    /// 从没读过清单。这条测试钉住「读清单」这一个口径。
+    #[test]
+    fn entry_point_follows_backend_then_wasm_then_frontend() {
+        let dir = TempDir::new("entry-point");
+        let path = dir.0.join("plugin.toml");
+
+        // 1. 后端可执行优先（sidecar / script 都是它）
+        write(
+            &path,
+            r#"
+[plugin]
+id = "ext.entry"
+name = "Entry"
+version = "0.1.0"
+publisher = "me"
+description = "demo"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "sidecar"
+executable = "bin/agent"
+"#,
+        );
+        let manifest = ManifestParser::parse(&path).unwrap();
+        assert_eq!(PluginManager::manifest_entry_point(&manifest), "bin/agent");
+
+        // 2. 没有后端可执行时取 wasm 入口
+        write(
+            &path,
+            r#"
+[plugin]
+id = "ext.entry"
+name = "Entry"
+version = "0.1.0"
+publisher = "me"
+description = "demo"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "wasm"
+
+[capabilities.wasm]
+entry = "plugin.wasm"
+"#,
+        );
+        let manifest = ManifestParser::parse(&path).unwrap();
+        assert_eq!(
+            PluginManager::manifest_entry_point(&manifest),
+            "plugin.wasm"
+        );
+
+        // 3. 只有前端入口时取 frontend。
+        //    「三者全空」在 validate 层就被挡住（Manifest must declare at least one runtime form），
+        //    所以空串分支只有「清单没读出来」那条路径会走到——那条路径不构造 manifest，
+        //    也就不会调这个函数（`entry_point` 直接给空串并带注释）。
+        write(
+            &path,
+            r#"
+[plugin]
+id = "ext.entry"
+name = "Entry"
+version = "0.1.0"
+publisher = "me"
+description = "demo"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[capabilities.frontend]
+entry = "ui/index.html"
+"#,
+        );
+        let manifest = ManifestParser::parse(&path).unwrap();
+        assert_eq!(
+            PluginManager::manifest_entry_point(&manifest),
+            "ui/index.html"
+        );
+    }
 
     /// 清单能解析出「版本 + 外部 jar」；不存在 / 坏清单给空，不 panic。
     #[test]

@@ -81,6 +81,14 @@ fn main() {
         paths::home().display(),
         paths::home_origin().label()
     );
+    // 0c. 元数据缓存指纹的族解析：同族的第二个驱动实现（如某一族的 SQLx 版）不在
+    //     硬编码表里，不注入就会按实现 id 进指纹 → 同一物理库换一套实现即换一个缓存
+    //     文件，展开退回实时内省。解析器**在调用时才查注册表**，所以放这里早于驱动
+    //     注册也无妨。表内命中的历史映射不经过它（否则会把已修好的缓存再作废一次）。
+    engine::persistence::metadata_identity::install_family_resolver(|impl_id| {
+        engine::driver::DriverRegistry::get(impl_id)
+            .and_then(|factory| factory.descriptor().target_database)
+    });
     engine::logging::startup::record(
         tracing::Level::INFO,
         format!(

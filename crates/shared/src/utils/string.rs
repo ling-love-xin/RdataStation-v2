@@ -29,9 +29,18 @@ pub fn tsv_row(cells: &[String]) -> String {
     line
 }
 
+/// 插件 code 的展示短码（去掉作用域前缀，只留最后一段）
+///
+/// `rds.driver.postgres-py` → `postgres-py`。
+/// 插件管理页的驱动标签与新建数据源对话框的驱动下拉共用它——这样「哪个插件给的驱动」
+/// 在两边是同一个词，用户能靠它对上号（完整 code 留给详情面板）。
+pub fn plugin_short_code(code: &str) -> String {
+    code.rsplit('.').next().unwrap_or(code).trim().to_string()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{tsv_cell, tsv_row};
+    use super::{plugin_short_code, tsv_cell, tsv_row};
 
     /// 只有破坏 TSV 形状的三种字符才加引号
     #[test]
@@ -59,5 +68,15 @@ mod tests {
             "1\t\"two\tcells\"\tplain\t\"say \"\"hi\"\"\""
         );
         assert!(tsv_row(&[]).is_empty());
+    }
+
+    /// 插件短码只留最后一段；无前缀时原样（去空白）
+    #[test]
+    fn plugin_short_code_keeps_last_segment() {
+        assert_eq!(plugin_short_code("rds.driver.postgres-py"), "postgres-py");
+        assert_eq!(plugin_short_code("rds.driver.oracle-rust"), "oracle-rust");
+        assert_eq!(plugin_short_code("plain"), "plain");
+        assert_eq!(plugin_short_code("  spaced.code  "), "code");
+        assert_eq!(plugin_short_code(""), "");
     }
 }
