@@ -51,8 +51,10 @@ fn accelerated_channel_runs_sql_on_a_real_duckdb_file() {
         "orders",
     )
     .expect("加速档计划");
-    let prepared =
-        PreparedMounts::accelerated(AccelSource::new("C_kernel_accel", "duckdb", file.to_str().unwrap()).expect("组装源"));
+    let prepared = PreparedMounts::accelerated(
+        MountSpec::duckdb_file(&file),
+        AccelSource::new("C_kernel_accel", "duckdb", file.to_str().unwrap()).expect("组装源"),
+    );
     let handle = kernel::open(&plan, &prepared).expect("加速档开盘");
     assert_eq!(handle.channel_label(), "accelerated");
     let result = handle.run("select count(*) as n from orders").expect("加速档执行");
@@ -77,8 +79,16 @@ fn federated_channel_joins_two_real_sources() {
     )
     .expect("联邦档计划");
     let prepared = PreparedMounts::federated(vec![
-        FederatedSource::new("C_fed_a", "fed_a", "duckdb", a.to_str().unwrap()).expect("组装源 A"),
-        FederatedSource::new("C_fed_b", "fed_b", "duckdb", b.to_str().unwrap()).expect("组装源 B"),
+        (
+            MountSpec::duckdb_file(&a),
+            FederatedSource::new("C_fed_a", "fed_a", "duckdb", a.to_str().unwrap())
+                .expect("组装源 A"),
+        ),
+        (
+            MountSpec::duckdb_file(&b),
+            FederatedSource::new("C_fed_b", "fed_b", "duckdb", b.to_str().unwrap())
+                .expect("组装源 B"),
+        ),
     ]);
     let handle = kernel::open(&plan, &prepared).expect("联邦档开盘");
     assert_eq!(handle.channel_label(), "federated");

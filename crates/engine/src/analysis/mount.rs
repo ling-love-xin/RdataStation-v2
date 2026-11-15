@@ -1,4 +1,4 @@
-//! 分析内核 · 「源 → 挂载计划」的唯一翻译点。
+﻿//! 分析内核 · 「源 → 挂载计划」的唯一翻译点。
 //!
 //! 目的：编辑器、洞察、结果集二次分析过去各自把「用户选的源」翻译成引擎能挂的东西
 //! （编辑器拼 `FederatedPlan` / 加速档拼 `AccelSource`、洞察翻 `SampleSource`），三份
@@ -22,7 +22,15 @@ use super::channel::AnalysisChannel;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MountSpec {
     /// 驱动连接（L1）：只读挂载。`conn_id` 必须是**当前可连**的 id（`ConnRef::Live`）。
-    SqlConnection { conn_id: String },
+    ///
+    /// `alias` 是 SQL 里写 `<别名>.<schema>.<表>` 用的名字：编辑器侧由连接名生成并做重名
+    /// 消解（`federation.rs` 的 `sanitize_alias` + 排序），这里把它带进计划，
+    /// 免得「计划的源」和「实际 ATTACH 的别名」两处各算一套。
+    SqlConnection {
+        conn_id: String,
+        /// `None` = 交给 `FederatedSource` 自己定（它要求显式别名，所以实际总会填）
+        alias: Option<String>,
+    },
     /// 本地 DuckDB 文件（项目分析库 / 全局库 / 已归档的 duckdb）。
     DuckDbFile { path: PathBuf },
     /// 已经在某个 DuckDB 实例里的表（结果集 / 先前物化的会话表）。
@@ -33,6 +41,15 @@ impl MountSpec {
     pub fn sql_connection(conn_id: impl Into<String>) -> Self {
         Self::SqlConnection {
             conn_id: conn_id.into(),
+            alias: None,
+        }
+    }
+
+    /// 带别名的连接源（编辑器侧生成别名后走这条）。
+    pub fn sql_connection_as(conn_id: impl Into<String>, alias: impl Into<String>) -> Self {
+        Self::SqlConnection {
+            conn_id: conn_id.into(),
+            alias: Some(alias.into()),
         }
     }
 
@@ -47,10 +64,18 @@ impl MountSpec {
         }
     }
 
+    /// 显式别名（只有连接源可能有；文件源用文件名、表源用 catalog）。
+    pub fn alias(&self) -> Option<&str> {
+        match self {
+            Self::SqlConnection { alias, .. } => alias.as_deref(),
+            _ => None,
+        }
+    }
+
     /// 挂载点的身份键：用于去重（同一条连接 / 同一个文件 / 同一张表只挂一次）。
     fn dedup_key(&self) -> String {
         match self {
-            Self::SqlConnection { conn_id } => format!("conn:{conn_id}"),
+            Self::SqlConnection { conn_id, .. } => format!("conn:{conn_id}"),
             Self::DuckDbFile { path } => format!("file:{}", path.display()),
             Self::DuckDbTable { catalog, schema } => format!("table:{catalog}.{schema}"),
         }
@@ -58,11 +83,13 @@ impl MountSpec {
 
     /// 该源在会话里的名字（`primary` 校验用）。
     ///
-    /// 连接 = 连接 id（`federation` 侧按 id 建 alias）；文件 = 文件主干名（`ATTACH` 后
-    /// catalog 默认取 stem）；表 = 它所在的 catalog。
+    /// 连接 = 显式别名优先、否则连接 id；文件 = 文件主干名（`ATTACH` 后 catalog 默认取
+    /// stem）；表 = 它所在的 catalog。
     fn owner_name(&self) -> &str {
         match self {
-            Self::SqlConnection { conn_id } => conn_id,
+            Self::SqlConnection { conn_id, alias } => {
+                alias.as_deref().filter(|a| !a.is_empty()).unwrap_or(conn_id)
+            }
             Self::DuckDbTable { catalog, .. } => catalog,
             Self::DuckDbFile { path } => path
                 .file_stem()
@@ -87,6 +114,17 @@ pub struct SessionPlan {
     pub primary: Option<String>,
     /// 面板标题 / 快照来源用的可读名。
     pub label: String,
+    /// 组装过程中「哪些源没进来、为什么」——宿主拼出来的说明，内核原样带走，
+    /// 供结果区小字 / 日志使用（例如「连接 X 拿不到运行时连接串，未参与」）。
+    pub notes: Vec<String>,
+}
+
+impl SessionPlan {
+    /// 附上宿主给的说明（不改变源清单，只带文案）。
+    pub fn with_notes(mut self, notes: Vec<String>) -> Self {
+        self.notes = notes;
+        self
+    }
 }
 
 /// 源 → 计划。`label` 由调用方给（只有入口知道该叫什么：表名 / 文件名 / 用户点的那一行）。
@@ -111,6 +149,7 @@ pub fn plan_for(
                 mounts: Vec::new(),
                 primary: None,
                 label,
+                notes: Vec::new(),
             })
         }
         AnalysisChannel::Accelerated => {
@@ -140,6 +179,7 @@ pub fn plan_for(
                 // 单源会话只有一个 catalog，不需要 primary（给了也不认）
                 primary: None,
                 label,
+                notes: Vec::new(),
             })
         }
         AnalysisChannel::Federated { owner } => {
@@ -175,6 +215,7 @@ pub fn plan_for(
                 mounts: deduped,
                 primary: primary.map(str::to_string),
                 label,
+                notes: Vec::new(),
             })
         }
     }
@@ -324,6 +365,58 @@ mod tests {
         // primary 用文件主干名比较（ATTACH 后 catalog 默认取 stem）
         let mounts = vec![MountSpec::duckdb_file(r"D:\data\an.duckdb")];
         assert_eq!(mounts[0].owner_name_for_test(), "an");
+    }
+
+    #[test]
+    fn alias_wins_over_conn_id_for_primary() {
+        // 编辑器按连接名生成别名；primary 校验认别名（SQL 里写的是别名）
+        let plan = plan_for(
+            &federated(),
+            &[MountSpec::sql_connection_as("conn-1", "sales")],
+            Some("sales"),
+            "t",
+        )
+        .unwrap();
+        assert_eq!(plan.primary.as_deref(), Some("sales"));
+    }
+
+    #[test]
+    fn primary_by_conn_id_is_rejected_when_alias_is_explicit() {
+        // 有别名时连接 id 不再是 catalog 名：按 id 给 primary 会指向不存在的 catalog
+        let err = plan_for(
+            &federated(),
+            &[MountSpec::sql_connection_as("conn-1", "sales")],
+            Some("conn-1"),
+            "t",
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("primary=conn-1"));
+    }
+
+    #[test]
+    fn same_connection_with_two_aliases_counts_once() {
+        // 一条连接只能挂一次（第二次 ATTACH 会撞同一个 catalog），别名不同也算重复
+        let mounts = vec![
+            MountSpec::sql_connection_as("conn-1", "a1"),
+            MountSpec::sql_connection_as("conn-1", "a2"),
+        ];
+        let plan = plan_for(&federated(), &mounts, None, "t").unwrap();
+        assert_eq!(plan.mounts.len(), 1);
+    }
+
+    #[test]
+    fn notes_pass_through_untouched() {
+        let notes = vec!["连接 X 拿不到运行时连接串，未参与".to_string()];
+        let plan = plan_for(&federated(), &single_conn(), None, "t")
+            .unwrap()
+            .with_notes(notes.clone());
+        assert_eq!(plan.notes, notes);
+    }
+
+    #[test]
+    fn accelerated_plan_has_empty_notes_by_default() {
+        let plan = plan_for(&AnalysisChannel::Accelerated, &single_conn(), None, "t").unwrap();
+        assert!(plan.notes.is_empty());
     }
 
     impl MountSpec {

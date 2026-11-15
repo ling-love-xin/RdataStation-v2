@@ -4,18 +4,11 @@
 //! 不解密口令**）：
 //! - **宿主**负责把「连接 id → 运行时连接串」组装成 `AccelSource` / `FederatedSource`
 //!   （凭据只在这一步出现）；
-//! - **内核**只负责「哪一档 → 拿哪条会话」，不碰凭据、不碰 I/O 之外的决策。
+//! - **内核**只负责「哪一档 → 拿哪条会话」，不碰凭据，也不替宿主决定别名。
 //!
-//! 所以 `open` 收 `PreparedMounts`（宿主已组装的源），而不是自己去查连接：
-//! 这样内核可单测、不引入连接库依赖，也保住「引擎不读连接库」这条边界。
-//!
-//! 三档映射：
-//!
-//! | 通道 | 会话 | 说明 |
-//! | --- | --- | --- |
-//! | `Source` | `None` | 驱动执行，内核不给会话（给了反而会误以为要挂载） |
-//! | `Accelerated` | `accel::ensure_session(&AccelSource)` | 单源，按源 id 缓存 |
-//! | `Federated` | `session::ensure_session(owner, &[FederatedSource], primary)` | 多源 |
+//! 所以 `PreparedMounts` 里的每一条都**带着它对应的 `MountSpec`**，而不是一串裸源：
+//! 「计划说要挂 A（别名 a1）」和「宿主给的源别名是 a2」必须当场对上账，否则查询会在
+//! 一条名字不对的 catalog 上跑，报的还是「表不存在」这种误导性错误。
 
 use std::sync::Arc;
 
@@ -27,15 +20,25 @@ use crate::duckdb::federation::registry::FederatedSource;
 use crate::duckdb::federation::session::{self, FederatedSession};
 
 use super::channel::AnalysisChannel;
-use super::mount::SessionPlan;
+use super::mount::{MountSpec, SessionPlan};
 
-/// 宿主已组装好的源。**顺序必须与 `SessionPlan.mounts` 一致**（`open` 会校验数量）。
-#[derive(Debug, Default)]
+/// 一条联邦源：计划里的挂载键 + 宿主组装出来的源。
+pub struct PreparedFederated {
+    pub mount: MountSpec,
+    pub source: FederatedSource,
+}
+
+/// 一条加速源：计划里的挂载键 + 宿主组装出来的源。
+pub struct PreparedAccel {
+    pub mount: MountSpec,
+    pub source: AccelSource,
+}
+
+/// 宿主已组装好的源。**顺序必须与 `SessionPlan.mounts` 一致**（`open` 逐条比对挂载键）。
+#[derive(Default)]
 pub struct PreparedMounts {
-    /// 联邦档用：每条连接一个源（`FederatedSource` 里有凭据，Debug 已脱敏）。
-    pub federated: Vec<FederatedSource>,
-    /// 加速档用：恰好一条源的会话。
-    pub accel: Option<AccelSource>,
+    federated: Vec<PreparedFederated>,
+    accel: Option<PreparedAccel>,
 }
 
 impl PreparedMounts {
@@ -44,16 +47,19 @@ impl PreparedMounts {
         Self::default()
     }
 
-    pub fn accelerated(source: AccelSource) -> Self {
+    pub fn accelerated(mount: MountSpec, source: AccelSource) -> Self {
         Self {
             federated: Vec::new(),
-            accel: Some(source),
+            accel: Some(PreparedAccel { mount, source }),
         }
     }
 
-    pub fn federated(sources: Vec<FederatedSource>) -> Self {
+    pub fn federated(entries: Vec<(MountSpec, FederatedSource)>) -> Self {
         Self {
-            federated: sources,
+            federated: entries
+                .into_iter()
+                .map(|(mount, source)| PreparedFederated { mount, source })
+                .collect(),
             accel: None,
         }
     }
@@ -69,6 +75,16 @@ pub enum SessionHandle {
     None,
     Accelerated(Arc<AccelSession>),
     Federated(Arc<FederatedSession>),
+}
+
+impl std::fmt::Debug for SessionHandle {
+    /// 手写 `Debug`：两种会话都握着一把 `Connection`（不可推导），且连接串里有口令；
+    /// 这里只报档位，不打印任何源信息。
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionHandle")
+            .field("channel", &self.channel_label())
+            .finish()
+    }
 }
 
 impl SessionHandle {
@@ -101,16 +117,6 @@ impl SessionHandle {
     }
 }
 
-impl std::fmt::Debug for SessionHandle {
-    /// 手写 `Debug`：两种会话都握着一把 `Connection`（不可推导），且连接串里有口令；
-    /// 这里只报档位与是否有会话，不打印任何源信息。
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SessionHandle")
-            .field("channel", &self.channel_label())
-            .finish()
-    }
-}
-
 /// 按计划拿会话（唯一收口点）。
 pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHandle, CoreError> {
     match &plan.channel {
@@ -128,10 +134,15 @@ pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHand
                     "本地加速档只接受一条源：收到联邦源清单，请改用联邦通道".to_string(),
                 ));
             }
-            let source = prepared.accel.as_ref().ok_or_else(|| {
+            let prepared_accel = prepared.accel.as_ref().ok_or_else(|| {
                 invalid("本地加速档缺预组装源：宿主没有为计划里的源准备 AccelSource".to_string())
             })?;
-            let session = accel::ensure_session(source).map_err(invalid)?;
+            let expected = plan
+                .mounts
+                .first()
+                .ok_or_else(|| invalid("本地加速档的计划没有源".to_string()))?;
+            check_same_mount(expected, &prepared_accel.mount, "本地加速")?;
+            let session = accel::ensure_session(&prepared_accel.source).map_err(invalid)?;
             Ok(SessionHandle::Accelerated(session))
         }
         AnalysisChannel::Federated { owner } => {
@@ -148,11 +159,45 @@ pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHand
                     prepared.federated.len()
                 )));
             }
-            let session = session::ensure_session(owner, &prepared.federated, plan.primary.as_deref())
+            // 逐条对账：既防顺序错位，也防别名被宿主悄悄改掉
+            for (index, (expected, given)) in plan.mounts.iter().zip(&prepared.federated).enumerate() {
+                check_same_mount(expected, &given.mount, &format!("第 {} 个源", index + 1))?;
+                check_alias(expected, &given.source)?;
+            }
+            let sources: Vec<FederatedSource> = prepared
+                .federated
+                .iter()
+                .map(|entry| entry.source.clone())
+                .collect();
+            let session = session::ensure_session(owner, &sources, plan.primary.as_deref())
                 .map_err(invalid)?;
             Ok(SessionHandle::Federated(session))
         }
     }
+}
+
+/// 计划里的挂载键必须与宿主给的挂载键**完全一致**（同一种源 + 同一个身份）。
+fn check_same_mount(expected: &MountSpec, given: &MountSpec, who: &str) -> Result<(), CoreError> {
+    if expected == given {
+        return Ok(());
+    }
+    Err(invalid(format!(
+        "{who}：计划要挂 {expected:?}，宿主给的却是 {given:?}"
+    )))
+}
+
+/// 连接源的别名必须与计划一致：别名就是 SQL 里 `ATTACH` 后能看到的 catalog 名。
+fn check_alias(expected: &MountSpec, source: &FederatedSource) -> Result<(), CoreError> {
+    let Some(alias) = expected.alias() else {
+        return Ok(());
+    };
+    if alias == source.alias {
+        return Ok(());
+    }
+    Err(invalid(format!(
+        "别名对不上：计划写 {alias}，宿主给的是 {}（SQL 里的限定名会落到错 catalog）",
+        source.alias
+    )))
 }
 
 fn invalid(message: String) -> CoreError {
@@ -169,6 +214,32 @@ mod tests {
 
     fn source_plan() -> crate::analysis::mount::SessionPlan {
         plan_for(&AnalysisChannel::Source, &[], None, "orders").unwrap()
+    }
+
+    fn accel_plan() -> crate::analysis::mount::SessionPlan {
+        plan_for(
+            &AnalysisChannel::Accelerated,
+            &[MountSpec::sql_connection("c1")],
+            None,
+            "t",
+        )
+        .unwrap()
+    }
+
+    fn fed_plan(mounts: Vec<MountSpec>) -> crate::analysis::mount::SessionPlan {
+        plan_for(
+            &AnalysisChannel::Federated {
+                owner: "c1".into(),
+            },
+            &mounts,
+            None,
+            "t",
+        )
+        .unwrap()
+    }
+
+    fn duckdb_source(conn_id: &str, alias: &str) -> FederatedSource {
+        FederatedSource::new(conn_id, alias, "duckdb", r"D:\x.duckdb").expect("组装源")
     }
 
     #[test]
@@ -189,77 +260,102 @@ mod tests {
     #[test]
     fn source_plan_rejects_prepared_sources() {
         let accel = AccelSource::new("c1", "duckdb", r"D:\x.duckdb").expect("组装源");
-        let err = open(&source_plan(), &PreparedMounts::accelerated(accel)).unwrap_err();
+        let err = open(
+            &source_plan(),
+            &PreparedMounts::accelerated(MountSpec::sql_connection("c1"), accel),
+        )
+        .unwrap_err();
         assert!(format!("{err}").contains("不该带任何预组装源"));
     }
 
     #[test]
     fn accelerated_plan_without_prepared_source_errors() {
-        let plan = plan_for(
-            &AnalysisChannel::Accelerated,
-            &[MountSpec::sql_connection("c1")],
-            None,
-            "t",
-        )
-        .unwrap();
-        let err = open(&plan, &PreparedMounts::none()).unwrap_err();
+        let err = open(&accel_plan(), &PreparedMounts::none()).unwrap_err();
         assert!(format!("{err}").contains("缺预组装源"));
     }
 
     #[test]
     fn accelerated_plan_rejects_federated_sources() {
-        let plan = plan_for(
-            &AnalysisChannel::Accelerated,
-            &[MountSpec::sql_connection("c1")],
-            None,
-            "t",
-        )
-        .unwrap();
-        let source = FederatedSource::new("c1", "c1", "duckdb", r"D:\x.duckdb").expect("组装源");
-        let err = open(&plan, &PreparedMounts::federated(vec![source])).unwrap_err();
+        let entries = vec![(
+            MountSpec::sql_connection("c1"),
+            duckdb_source("c1", "c1"),
+        )];
+        let err = open(&accel_plan(), &PreparedMounts::federated(entries)).unwrap_err();
         assert!(format!("{err}").contains("只接受一条源"));
     }
 
     #[test]
     fn federated_plan_rejects_accel_source() {
-        let plan = plan_for(
-            &AnalysisChannel::Federated {
-                owner: "c1".into(),
-            },
-            &[MountSpec::sql_connection("c1")],
-            None,
-            "t",
-        )
-        .unwrap();
+        let plan = fed_plan(vec![MountSpec::sql_connection("c1")]);
         let accel = AccelSource::new("c1", "duckdb", r"D:\x.duckdb").expect("组装源");
-        let err = open(&plan, &PreparedMounts::accelerated(accel)).unwrap_err();
+        let err = open(
+            &plan,
+            &PreparedMounts::accelerated(MountSpec::sql_connection("c1"), accel),
+        )
+        .unwrap_err();
         assert!(format!("{err}").contains("只接受联邦源清单"));
     }
 
     #[test]
     fn federated_plan_checks_source_count() {
         // 计划 2 个源，宿主只给了 1 个 → 会话里少一个源，查询必「表不见了」
-        let plan = plan_for(
-            &AnalysisChannel::Federated {
-                owner: "c1".into(),
-            },
-            &[
-                MountSpec::sql_connection("c1"),
-                MountSpec::sql_connection("c2"),
-            ],
-            None,
-            "t",
-        )
-        .unwrap();
-        let source = FederatedSource::new("c1", "c1", "duckdb", r"D:\x.duckdb").expect("组装源");
-        let err = open(&plan, &PreparedMounts::federated(vec![source])).unwrap_err();
+        let plan = fed_plan(vec![
+            MountSpec::sql_connection("c1"),
+            MountSpec::sql_connection("c2"),
+        ]);
+        let entries = vec![(
+            MountSpec::sql_connection("c1"),
+            duckdb_source("c1", "c1"),
+        )];
+        let err = open(&plan, &PreparedMounts::federated(entries)).unwrap_err();
         assert!(format!("{err}").contains("计划 2 个，宿主给了 1 个"));
     }
 
     #[test]
-    fn session_handle_labels_cover_three_channels() {
+    fn federated_plan_detects_mount_mismatch() {
+        // 计划第 1 个是连接，宿主第 1 个给了文件 → 顺序或源类型错了，必须当场拒
+        let plan = fed_plan(vec![
+            MountSpec::sql_connection("c1"),
+            MountSpec::sql_connection("c2"),
+        ]);
+        let entries = vec![
+            (
+                MountSpec::duckdb_file(r"D:\a.duckdb"),
+                duckdb_source("c1", "c1"),
+            ),
+            (
+                MountSpec::sql_connection("c2"),
+                duckdb_source("c2", "c2"),
+            ),
+        ];
+        let err = open(&plan, &PreparedMounts::federated(entries)).unwrap_err();
+        assert!(format!("{err}").contains("第 1 个源"));
+    }
+
+    #[test]
+    fn federated_plan_detects_alias_mismatch() {
+        // 计划要求别名 sales，宿主给的是 s1 → 限定名会落到错 catalog
+        let plan = plan_for(
+            &AnalysisChannel::Federated {
+                owner: "c1".into(),
+            },
+            &[MountSpec::sql_connection_as("c1", "sales")],
+            None,
+            "t",
+        )
+        .unwrap();
+        let entries = vec![(
+            MountSpec::sql_connection_as("c1", "sales"),
+            duckdb_source("c1", "s1"),
+        )];
+        let err = open(&plan, &PreparedMounts::federated(entries)).unwrap_err();
+        assert!(format!("{err}").contains("别名对不上"));
+    }
+
+    #[test]
+    fn session_handle_none_reports_source_channel() {
         // 三档各一种句柄，标签与 executor 的 channel 字段同词
         assert_eq!(SessionHandle::None.channel_label(), "source");
-        assert!(SessionHandle::None.has_session() == false);
+        assert!(!SessionHandle::None.has_session());
     }
 }
