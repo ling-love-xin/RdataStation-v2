@@ -423,6 +423,25 @@ Windows 上 DuckDB 一个文件只允许一个连接句柄（`store/src/persiste
 **仍未做**：多源下的「每源各取一份」目前是**逐页惰性取样**（不是一次全取）；持久表的
 可视化列表与资源归档入口。
 
+**缺口清单（2026-11-15 复核，逐条有据）**：
+
+1. **联邦会话取样原语没有产品入口**：`sample_federated_sources` 全仓只有
+   `crates/insight/tests/federated_sample.rs` 调用（grep 实测）。多源 UI 走的是
+   `sample_source_to_analysis_table` 逐源路径，"一次挂 N 源再各取一份"的联邦能力
+   在产品面上不可达；`SampleSet::federated_toggle` 也还没有开关控件。
+2. **结果集不会自己产生**：`tmp_q_` 只在用户点「分析此结果集 / 持久化为项目表」时物化
+   （`editor/src/view/host/results/sort.rs:67`），普通查询结果只在内存里。所以选择器
+   「结果集」段在没人点过这两个动作前是空的——这是设计如此，不是缺陷；但「结果集都能
+   在洞察里再分析」目前只能从**结果面板菜单**进，洞察对话框主动裁剪掉了结果集档
+   （`INSIGHT_KINDS` 不含 `ResultSet`）。
+3. **持久表只有状态栏回显**：落库成功后告知表名，没有列表页/管理入口，「进资源归档」
+   没有入口设计。
+4. **多源标签页的点击路径没有 headless 用例**：`select_source` 是直接调用测的
+   （`switching_source_tabs_reuses_the_sample_it_already_has`），`TabBar::on_click` 那条
+   回调没被测试覆盖。
+5. **多源确认窗口只问一份的口径**：探查配置只在第一份上问用户，后续标签页沿用
+   `last_probe_config`；用户无法为不同来源设不同采样规则（当前刻意如此，若产品要改需重设计）。
+
 
 
 
