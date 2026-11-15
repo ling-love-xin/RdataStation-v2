@@ -187,6 +187,24 @@
 
   <div class="aside">
     <div class="card">
+      <h3>执行联邦前的确认（新增）</h3>
+      <p style="margin:0 0 8px;color:var(--dim)">联邦<b>不许丢数据</b>，所以这里没有「采样 / 限制行数」的选项——只交代这次要扫多少。</p>
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:9px 10px;font-size:11px;line-height:1.7">
+        将跨 <b>2 个源</b>全部扫描：库方预估约 <b>120,000</b> 行（估算，实际可能更多）。<br>
+        全量参与，<b>不截断、不采样</b>——慢就慢在等待上，别错在结果上。<br>
+        想更快：在 SQL 里加过滤或收窄源清单。
+        <div style="display:flex;gap:8px;margin-top:9px">
+          <span style="padding:3px 10px;border-radius:5px;background:var(--coral);color:#1b1210;font-weight:600">执行</span>
+          <span style="padding:3px 10px;border-radius:5px;border:1px solid var(--border);color:var(--dim)">回编辑器改 SQL</span>
+        </div>
+      </div>
+      <ul style="margin:9px 0 0">
+        <li><b>估不出来就不编数字</b>：行数未知时写「执行时才知道」，不塞一个假预估。</li>
+        <li><b>零可用源</b>：先提示「先挂上一个源」，而不是点了执行才发现空转。</li>
+        <li><b>进度</b>：执行后状态条给「已扫描 N / 预估 M」与已用时，<b>不设超时自动收窄</b>。</li>
+      </ul>
+    </div>
+    <div class="card">
       <h3>从 04 保留的细节（别丢）</h3>
       <ul>
         <li><b>三档对照</b>（能跨源 / 能写 / 建会话）仍放在通道下拉的说明里，不重画。</li>
