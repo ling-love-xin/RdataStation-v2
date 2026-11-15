@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>编辑器联邦档 · 选中即展开数据对象并可加源</title>
+<style>
+  :root{
+    --bg:#141414;--chrome:#181818;--panel:#1E1E1E;--popover:#202020;
+    --border:#2A2A2A;--border-soft:#242424;
+    --text:#CFCFCF;--muted:#8A8A8A;--dim:#6E6E6E;--white:#F2F2F2;
+    --coral:#A84A38;--coral-soft:#3A2521;--coral-text:#E1A392;
+    --ok:#4A9B6B;--warn:#C9A23A;--bad:#D0534A;--info:#4A8BC9;
+    --mono:"Cascadia Mono","Consolas",monospace;
+    --sans:"Segoe UI","Microsoft YaHei UI",sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:var(--sans);font-size:13px;color:var(--text);background:var(--bg);padding:22px 24px 40px}
+  button{font-family:inherit;font-size:12px;color:var(--text);background:none;border:none;cursor:pointer}
+  .head{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .mark{width:24px;height:24px;border-radius:6px;background:var(--coral);display:flex;align-items:center;justify-content:center}
+  h1{font-size:14px;color:var(--white);font-weight:600}
+  .tagline{font-size:11px;color:var(--dim)}
+  .lead{font-size:11.5px;color:var(--muted);line-height:1.7;max-width:1040px;margin-bottom:16px}
+  .lead b{color:var(--text)}
+  .stage{display:flex;gap:16px;align-items:flex-start}
+  .workarea{flex:1;min-width:0;max-width:940px;border:1px solid var(--border);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 16px 44px rgba(0,0,0,.45)}
+  .aside{width:320px;flex:none;display:flex;flex-direction:column;gap:10px}
+
+  /* 编辑器工具栏 */
+  .top{height:40px;display:flex;align-items:center;gap:10px;padding:0 12px;background:var(--chrome);border-bottom:1px solid var(--border);font-size:11px;color:var(--dim)}
+  .seg{display:flex;border:1px solid var(--border);border-radius:5px;overflow:hidden}
+  .seg span{padding:3px 10px;font-size:11px;color:var(--muted);border-right:1px solid var(--border)}
+  .seg span:last-child{border-right:none}
+  .seg .on{background:var(--coral-soft);color:var(--coral-text)}
+  .sp{flex:1}
+  .tbtn{font-size:11px;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 9px;background:#232323}
+  .tbtn.hi{border-color:#5A322A;background:var(--coral-soft);color:var(--coral-text)}
+  .badge{font-size:10px;color:var(--warn);border:1px solid #3D3422;background:#201B12;border-radius:3px;padding:1px 6px}
+
+  .body{display:flex;flex:1;min-height:430px}
+  .editor{flex:1;min-width:0;padding:14px;display:flex;flex-direction:column;gap:10px}
+  .sql{font-family:var(--mono);font-size:11.5px;color:#B9B9B9;line-height:1.85;background:#1B1B1B;border:1px solid var(--border-soft);border-radius:5px;padding:10px 12px}
+  .sql .kw{color:var(--coral-text)}
+  .note{font-size:11px;color:var(--dim);line-height:1.7}
+  .note code{font-family:var(--mono);color:#CBB27A;font-size:10.5px}
+  .warnbox{font-size:11px;line-height:1.6;color:#CBB27A;border:1px solid #3D3422;background:#1E1A12;border-radius:5px;padding:8px 10px}
+
+  /* 右侧：数据对象（联邦档下自动展开） */
+  .picker{width:372px;flex:none;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column}
+  .ph{padding:9px 12px 8px;border-bottom:1px solid var(--border);background:#1B1B1B;display:flex;flex-direction:column;gap:7px}
+  .ph-row{display:flex;align-items:center;gap:8px}
+  .ph-row b{font-size:12px;color:var(--white)}
+  .ph-row .tag{font-size:9.5px;color:var(--coral-text);border:1px solid #5A322A;background:var(--coral-soft);border-radius:3px;padding:1px 5px}
+  .search{display:flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:5px;background:#191919;padding:5px 8px;font-size:11px;color:var(--dim)}
+  .list{flex:1;overflow:auto;padding:4px 0}
+  .grp{padding:7px 12px 4px;font-size:10.5px;color:var(--dim);display:flex;align-items:center;gap:6px}
+  .grp .cnt{font-family:var(--mono);font-size:10px;color:#5C5C5C}
+  .row{display:grid;grid-template-columns:14px 1fr auto;gap:8px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--border-soft)}
+  .row:hover{background:var(--popover)}
+  .row .nm b{font-size:12px;color:var(--text);font-weight:500}
+  .row .nm i{display:block;font-style:normal;font-size:10px;color:var(--dim);margin-top:2px}
+  .row .tail{display:flex;align-items:center;gap:6px}
+  .pill{font-size:9.5px;padding:1px 5px;border-radius:3px;border:1px solid var(--border);color:var(--muted);background:#202020}
+  .pill.ok{border-color:#2F4638;background:#17231B;color:var(--ok)}
+  .pill.warn{border-color:#3D3422;background:#201B12;color:var(--warn)}
+  .pill.bad{border-color:#46262A;background:#231A1B;color:var(--bad)}
+  .go{font-size:10.5px;border:1px solid var(--border);border-radius:4px;padding:2px 8px;background:#232323}
+  .why{padding:0 12px 8px 34px;font-size:10.5px;color:var(--muted);line-height:1.65}
+  .why b{color:var(--text)}
+  .foot{border-top:1px solid var(--border);padding:7px 12px;background:#191919;display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--muted)}
+  .foot .sp{flex:1}
+
+  /* 加源弹层（复用 01 的连接树） */
+  .popover{margin:8px 12px;border:1px solid var(--border);border-radius:7px;background:var(--popover);box-shadow:0 12px 30px rgba(0,0,0,.5)}
+  .pop-h{padding:8px 10px;border-bottom:1px solid var(--border);font-size:11px;color:var(--text);display:flex;align-items:center;gap:6px}
+  .pop-h code{font-family:var(--mono);font-size:10px;color:var(--dim)}
+  .pop-b{padding:6px 4px 8px}
+  .trow{padding:5px 10px;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:8px}
+  .trow:hover{background:#242424;color:var(--text)}
+  .trow .box{width:11px;height:11px;border:1px solid #4A4A4A;border-radius:2px}
+  .trow .box.on{border-color:var(--coral);background:var(--coral)}
+  .pop-f{padding:7px 10px;border-top:1px solid var(--border);display:flex;align-items:center;gap:6px;font-size:10px;color:var(--dim)}
+  .pop-f .sp{flex:1}
+  .btn-primary{font-size:11px;color:#F7EDE9;background:var(--coral);border:1px solid #8B3B2C;border-radius:5px;padding:4px 10px}
+
+  .card{background:var(--chrome);border:1px solid var(--border);border-radius:8px;padding:11px 13px}
+  .card h3{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.5px;margin-bottom:8px}
+  .card ul{list-style:none;display:flex;flex-direction:column;gap:7px}
+  .card li{font-size:11px;color:var(--dim);line-height:1.65;padding-left:11px;position:relative}
+  .card li::before{content:"";position:absolute;left:0;top:7px;width:4px;height:4px;background:#3A3A3A;border-radius:1px}
+  .card li b{color:var(--text);font-weight:500}
+  code{font-family:var(--mono);font-size:10.5px;color:#CBB27A}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="mark"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M4 6h16M4 12h10M4 18h6"/><circle cx="18" cy="16" r="3"/></svg></div>
+  <div><h1>编辑器 · 联邦档与数据对象联动</h1></div>
+  <span class="tagline">选中「联邦」→ 右侧数据对象自动展开，可直接加源</span>
+</div>
+<div class="lead">
+  通道切换本身就是「我要用哪些源来算」的声明。所以选到<b>联邦</b>时右侧自动展开数据对象（不是弹窗），工具栏多出<b>加源</b>，加源复用 01 的连接树与多选。反过来，切回「源库 / 本地加速」时面板<b>不收起</b>——用户可能还想拿它选分析对象，只是面板顶部会说明「当前通道只用一个源」。
+</div>
+
+<div class="stage">
+  <div class="workarea">
+    <div class="top">
+      <span>执行通道</span>
+      <div class="seg"><span>源库</span><span>本地加速</span><span class="on">联邦</span></div>
+      <span class="badge">1 个源未挂载</span>
+      <span class="sp"></span>
+      <button class="tbtn hi">加源</button>
+      <button class="tbtn">重挂</button>
+    </div>
+
+    <div class="body">
+      <div class="editor">
+        <div class="sql"><span class="kw">select</span> c.region, <span class="kw">sum</span>(o.amount) <span class="kw">as</span> gmv<br>
+<span class="kw">from</span> mysql_src.orders o<br>
+<span class="kw">join</span> pg_src.customers c <span class="kw">on</span> o.customer_id = c.id<br>
+<span class="kw">group by</span> c.region;</div>
+        <div class="warnbox"><b>oracle_src 没挂上</b>：会话里没有 <code>oracle_scanner</code> 扩展。装一次后会缓存在扩展目录，同会话与后续会话都不再重复安装；也可以先用只读账号连 PG 侧的对应表。</div>
+        <div class="note">跨源无事务、各源按各自时刻参与；改主源不会重建会话，<b>增删源会</b>——会话内的 <code>tmp_q_</code> 随之消失。</div>
+      </div>
+
+      <div class="picker">
+        <div class="ph">
+          <div class="ph-row"><b>数据对象</b><span class="tag">联邦 3 源</span><span class="sp"></span><span class="cnt" style="font-family:var(--mono);font-size:10px;color:var(--dim)">186 MB</span></div>
+          <div class="search"><span>⌕</span><span>在已挂载的源里查表</span></div>
+        </div>
+
+        <div class="list">
+          <div class="grp">本次联邦会话<span class="sp" style="flex:1"></span><span class="cnt">3 源</span></div>
+          <div class="row">
+            <span style="color:var(--ok)">●</span>
+            <div class="nm"><b>mysql_src</b><i>MySQL · analytics · 只读挂载</i></div>
+            <div class="tail"><span class="pill ok">已挂载</span><button class="go">主源</button></div>
+          </div>
+          <div class="row">
+            <span style="color:var(--ok)">●</span>
+            <div class="nm"><b>pg_src</b><i>PostgreSQL · warehouse · 只读挂载</i></div>
+            <div class="tail"><span class="pill ok">已挂载</span><button class="go">设为主源</button></div>
+          </div>
+          <div class="row">
+            <span style="color:var(--bad)">●</span>
+            <div class="nm"><b>oracle_src</b><i>Oracle · erp · 需要 oracle_scanner</i></div>
+            <div class="tail"><span class="pill bad">扩展未安装</span><button class="go">详情</button></div>
+          </div>
+          <div class="why"><b>原因：</b>会话里没有 oracle_scanner。<b>处理：</b>装一次即缓存；Oracle 不支持 READ_ONLY 挂载，写保护靠编辑器拦截 + 建议只读账号。</div>
+
+          <div class="grp">可加入本次分析<span class="sp" style="flex:1"></span><span class="cnt">来自 01 连接树</span></div>
+          <div class="row">
+            <span style="color:var(--dim)">◇</span>
+            <div class="nm"><b>订单明细 · 11-15</b><i>项目分析库表 · 可作联邦源挂本地文件</i></div>
+            <div class="tail"><span class="pill">分析库表</span><button class="go">加入</button></div>
+          </div>
+          <div class="row">
+            <span style="color:var(--dim)">◇</span>
+            <div class="nm"><b>月度经营快照</b><i>资产 · 最新 v3 · 只读 · 参与分析一律取最新版本</i></div>
+            <div class="tail"><span class="pill">资产 v3</span><button class="go">加入</button></div>
+          </div>
+          <div class="row">
+            <span style="color:var(--dim)">◇</span>
+            <div class="nm"><b>tmp_q_result_8f2a</b><i>临时结果集 · 本会话可见</i></div>
+            <div class="tail"><span class="pill">临时结果集</span><button class="go">加入</button></div>
+          </div>
+
+          <!-- 加源弹层：复用 01 -->
+          <div class="popover">
+            <div class="pop-h">加源 <code>复用 01 连接树 · 多选</code></div>
+            <div class="pop-b">
+              <div class="trow"><span class="box on"></span>mysql_src <span style="color:var(--dim)">· analytics</span></div>
+              <div class="trow"><span class="box on"></span>pg_src <span style="color:var(--dim)">· warehouse</span></div>
+              <div class="trow"><span class="box"></span>oracle_src <span style="color:var(--dim)">· 扩展缺失，加入前会提示</span></div>
+              <div class="trow"><span class="box"></span>mssql_src <span style="color:var(--dim)">· bi</span></div>
+            </div>
+            <div class="pop-f"><span>新增 1 个源会重建会话，会话内临时表将失效</span><span class="sp"></span><button class="btn-primary">加入并重挂</button></div>
+          </div>
+        </div>
+
+        <div class="foot"><span>会话 09:41 挂载 · 复用中</span><span class="sp"></span><span>复制诊断</span><span>断开</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="aside">
+    <div class="card">
+      <h3>从 04 保留的细节（别丢）</h3>
+      <ul>
+        <li><b>三档对照</b>（能跨源 / 能写 / 建会话）仍放在通道下拉的说明里，不重画。</li>
+        <li><b>门控</b>：没有任何可用源时「联邦」置灰，悬浮给出原因，而不是选中后报错。</li>
+        <li><b>只读拒绝</b>：联邦档下写语句由编辑器拦截并给出「跨源无事务」的解释，不落到执行层。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>展开规则（避免抢屏）</h3>
+      <ul>
+        <li><b>首次切到联邦</b>自动展开一次，右 Dock 若被结果占满则自动让位（面板以 tab 形式出现，不覆盖结果）。</li>
+        <li>用户手动收起后，本次会话内<b>不再自动抢</b>；状态点仍留在工具栏上（未挂载时变黄）。</li>
+        <li>切回源库 / 本地加速<b>不收起</b>面板，只在面板顶部说明「当前通道只用一个源」。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>加源为什么复用 01</h3>
+      <p>「有哪些连接、哪些表能挂」这件事只有一个出处（<code>source_picker</code> 的取数）。工具栏的「加源」只是把同一个树以弹层形式调起来，不另写一份清单。</p>
+    </div>
+    <div class="card">
+      <h3>失败原因与动作</h3>
+      <p>来自原型 05 的部分在这里保留：行上给状态、行下给原因与可做的动作。区别是它只出现在<b>出问题的那一行</b>，没有失败时不占版面。</p>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

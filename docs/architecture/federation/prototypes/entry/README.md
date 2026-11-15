@@ -6,13 +6,15 @@
 
 | 文件 | 对应模块 | 覆盖的子功能与状态 |
 | --- | --- | --- |
-| `00-overview.html` | 总览 | 四屏串联：洞察现状 → 洞察+联邦 → 编辑器通道 → 结果集分析 |
+| `10-model-and-index.html` | 总览 | 三段模型（源 → 分析中的表 → 资产）、对象分类表（身份 / 通道 / 生命周期 / 可做）、页面索引、待核对问题 |
 | `01-source-picker.html` | `workbench/src/components/source_picker.rs` | 三分法 tab + 可折叠对象树 + 跨根搜索 + 最近使用 + 右侧元信息 + 可见范围标注 |
 | `02-insight-dialog.html` | `insight_new_dialog.rs` + `insight/src/service/persistence.rs` | 取样参数（数据量 / 采样方式 / 种子 / 探查列 / 过滤 / 规模预估）+ 会话段三态（默认本地 / 联邦可用 / 源不足） |
-| `03-result-analysis.html` | `result_panel/src/analysis.rs` + `editor/src/ports/result_service.rs` | 分析菜单四项、自定义 SQL 与 `{table}` 替换、事实档 / 降级档、20,000 行上限与超出计数、会话三态、会话失效提示 |
-| `04-editor-channel.html` | `editor/src/view/host/toolbar` + `editor/src/ports/editor_channels.rs` | 三档执行位置、源清单仅在联邦档可见、三档对照、门控、只读拒绝 |
-| `05-session-panel.html` | `engine/src/duckdb/federation/{session,registry}.rs` | 会话头（owner / 源数 / 主源 / 会话内表 / 内存）、7 种源状态、失败原因 → 用户动作、生命周期、会话内表读数 |
 | `06-object-tree.html` | `workbench_shell/src/tree.rs` + `ui.rs` | 树的层级规则、复用 / 不复用清单、搜索排序档位、键盘、懒加载、与 M4/M5/M6 的差异、Phase 5 落地切片 |
+| `07-analysis-sources-panel.html` | 右侧公共选择器面板 | 全部可参与分析对象的一处分览：搜索直达、行标化身与通道、分组（连接 / 项目分析库 / 资产 / 结果集 / 洞察产物）、失效态、工作集、会话状态条与清理 |
+| `08-result-analyze-dialog.html` | `result_panel` 分析入口 | 结果集 → 先命名（默认 `tmp_q_`）+ 去向（临时 / 留在项目分析库）；升级为资产不在此处 |
+| `09-editor-federated-entry.html` | `editor` 工具栏执行通道 | 选中「联邦」自动展开 07、工具栏「加源」复用 01 的连接树、挂载失败的行内原因与动作 |
+
+> 已删除：`00-overview.html`（由 `10` 取代）、`03-result-analysis.html`（并入 `08`）、`04-editor-channel.html`（并入 `09`）、`05-session-panel.html`（并入 `07`）。仍有效的细节写在对应新页的说明卡里，不另存副本。
 
 ## 来源分类：根 3 / 叶 5
 

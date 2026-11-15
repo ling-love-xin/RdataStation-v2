@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>数据对象 · 原型总览与概念模型</title>
+<style>
+  :root{
+    --bg:#141414;--chrome:#181818;--panel:#1E1E1E;--popover:#202020;
+    --border:#2A2A2A;--border-soft:#242424;
+    --text:#CFCFCF;--muted:#8A8A8A;--dim:#6E6E6E;--white:#F2F2F2;
+    --coral:#A84A38;--coral-soft:#3A2521;--coral-text:#E1A392;
+    --ok:#4A9B6B;--warn:#C9A23A;--bad:#D0534A;--info:#4A8BC9;
+    --mono:"Cascadia Mono","Consolas",monospace;
+    --sans:"Segoe UI","Microsoft YaHei UI",sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:var(--sans);font-size:13px;color:var(--text);background:var(--bg);padding:24px 26px 44px;max-width:1180px}
+  a{color:inherit}
+  button{font-family:inherit}
+  .head{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+  .mark{width:24px;height:24px;border-radius:6px;background:var(--coral);display:flex;align-items:center;justify-content:center;flex:none}
+  h1{font-size:15px;color:var(--white);font-weight:600}
+  .tagline{font-size:11px;color:var(--dim)}
+  .lead{font-size:11.5px;color:var(--muted);line-height:1.75;max-width:960px;margin-bottom:18px}
+  .lead b{color:var(--text);font-weight:600}
+
+  h2{font-size:11px;color:var(--muted);letter-spacing:.5px;font-weight:600;margin:20px 0 9px}
+  h2 .n{font-family:var(--mono);color:#5C5C5C;margin-right:6px}
+
+  /* 三段模型 */
+  .model{display:grid;grid-template-columns:1fr 46px 1fr 46px 1fr;gap:0;align-items:stretch}
+  .layer{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:11px 12px}
+  .layer .lt{font-size:11px;color:var(--white);font-weight:600;display:flex;align-items:center;gap:6px}
+  .layer .ls{font-size:10px;color:var(--dim);margin:4px 0 8px;line-height:1.6}
+  .layer ul{list-style:none;display:flex;flex-direction:column;gap:5px}
+  .layer li{font-size:11px;color:var(--muted);line-height:1.6;padding-left:10px;position:relative}
+  .layer li::before{content:"";position:absolute;left:0;top:7px;width:3px;height:3px;background:#3A3A3A}
+  .layer li b{color:var(--text);font-weight:500}
+  .arrow{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:9.5px;color:var(--dim);text-align:center;line-height:1.3}
+  .arrow .ln{color:var(--coral-text);font-size:13px}
+
+  /* 分类表 */
+  table{width:100%;border-collapse:collapse;table-layout:fixed;background:var(--panel);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  th,td{font-size:10.5px;text-align:left;padding:7px 9px;border-bottom:1px solid var(--border-soft);vertical-align:top;line-height:1.55}
+  th{color:var(--dim);font-weight:500;background:#1B1B1B;border-bottom:1px solid var(--border)}
+  td{color:var(--muted)}
+  td b{color:var(--text);font-weight:500}
+  tr:last-child td{border-bottom:none}
+  .k{font-family:var(--mono);font-size:10px;color:#CBB27A}
+  .tag{font-size:9.5px;border:1px solid var(--border);border-radius:3px;padding:1px 5px;color:var(--muted);white-space:nowrap}
+  .tag.ok{border-color:#2F4638;background:#17231B;color:var(--ok)}
+  .tag.warn{border-color:#3D3422;background:#201B12;color:var(--warn)}
+  .tag.coral{border-color:#5A322A;background:var(--coral-soft);color:var(--coral-text)}
+
+  /* 页面索引 */
+  .pages{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:10px}
+  .pg{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+  .pg .pt{display:flex;align-items:baseline;gap:6px}
+  .pg .pt b{font-size:12px;color:var(--white);font-weight:600}
+  .pg .pt .no{font-family:var(--mono);font-size:10px;color:#5C5C5C}
+  .pg .pt .sp{flex:1}
+  .pg p{font-size:10.5px;color:var(--dim);line-height:1.6}
+  .pg .lnk{font-size:10.5px;color:var(--coral-text);text-decoration:none;border-bottom:1px solid #4A2F28;align-self:flex-start}
+  .pg .lnk:hover{color:#F0BBA9}
+
+  /* 待核对 */
+  .asks{display:flex;flex-direction:column;gap:8px}
+  .ask{display:grid;grid-template-columns:24px 1fr;gap:9px;background:var(--panel);border:1px solid var(--border);border-radius:7px;padding:9px 11px}
+  .ask .no{font-family:var(--mono);font-size:11px;color:var(--coral-text)}
+  .ask b{font-size:11.5px;color:var(--text);font-weight:500}
+  .ask p{font-size:10.5px;color:var(--dim);line-height:1.65;margin-top:3px}
+  .ask .rec{font-size:10px;color:#8FA9C4;margin-top:4px}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="mark"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M8 6h8M7 8l4 8M17 8l-4 8"/></svg></div>
+  <div><h1>数据对象 · 原型总览</h1></div>
+  <span class="tagline">先核对模型，再看三页界面</span>
+</div>
+<div class="lead">
+  这套原型的核心只有一句：<b>「分析中用到哪些表」和「被管理起来的成果」是两层，之间只有一条单向升级路</b>。下面的三段模型是判断任何一页界面是否越界（把资产当工作区表、或把临时表当成果）的依据。
+</div>
+
+<h2><span class="n">01</span>三段模型</h2>
+<div class="model">
+  <div class="layer">
+    <div class="lt">源 <span class="tag">外部</span></div>
+    <div class="ls">数据在别人那里，我们只有读的权利。</div>
+    <ul>
+      <li><b>源库表</b><br>连接里的表，按连接 / 库 / 表定位</li>
+      <li><b>文件</b><br>本地 parquet / csv 等，按路径定位</li>
+      <li><b>全局分析库表</b><br><span class="k">data/system/analytics.duckdb</span></li>
+    </ul>
+  </div>
+  <div class="arrow"><span class="ln">→</span><span>只读引用<br>不占空间</span></div>
+
+  <div class="layer">
+    <div class="lt">分析中的表 <span class="tag coral">本机</span></div>
+    <div class="ls">为了算这一次而存在，可以随时丢。</div>
+    <ul>
+      <li><b>结果集</b> <span class="k">tmp_q_</span><br>查询 / 二次分析物化，会话级</li>
+      <li><b>洞察产物</b> <span class="k">tmp_i_</span><br>按采样口径取出的子集</li>
+      <li><b>项目分析库表</b><br>落库的分析结果，长期可分析、可删</li>
+    </ul>
+  </div>
+  <div class="arrow"><span class="ln">→</span><span>升级<br>单向</span></div>
+
+  <div class="layer">
+    <div class="lt">资产 <span class="tag ok">受管</span></div>
+    <div class="ls">有版本、只读、名字不带前缀。</div>
+    <ul>
+      <li><b>本体</b><br>分析库里的持久表，或已加载的文件</li>
+      <li><b>参与分析</b><br>只读，且<b>只取最新版本</b></li>
+      <li><b>要用旧版本</b><br>先在资产管理里回退</li>
+      <li><b>不做快照</b><br>读资产 = 直读本体，不复制副本</li>
+    </ul>
+  </div>
+</div>
+
+<h2><span class="n">02</span>对象分类：界面上每一行长什么样</h2>
+<table>
+  <tr><th style="width:118px">对象</th><th style="width:150px">身份（在库里是什么）</th><th style="width:104px">通道标签</th><th style="width:150px">生命周期</th><th>可做</th></tr>
+  <tr>
+    <td><b>源库表</b></td>
+    <td><span class="k">conn_id + 库 + 表</span></td>
+    <td>→ 源库</td>
+    <td>不受我们控制</td>
+    <td>分析 · 加入工作集 · 作联邦源</td>
+  </tr>
+  <tr>
+    <td><b>文件</b></td>
+    <td><span class="k">绝对路径</span></td>
+    <td>→ DuckDB 文件</td>
+    <td>文件在就在</td>
+    <td>分析 · 加入工作集 · 作联邦源</td>
+  </tr>
+  <tr>
+    <td><b>结果集</b></td>
+    <td><span class="k">tmp_q_*</span>（进程单例）</td>
+    <td>→ 进程 DuckDB</td>
+    <td>会话重建即消失（标「已失效」）</td>
+    <td>分析 · 落库 · 清理</td>
+  </tr>
+  <tr>
+    <td><b>洞察产物</b></td>
+    <td><span class="k">tmp_i_*</span>（进程单例）</td>
+    <td>→ 进程 DuckDB</td>
+    <td>同上</td>
+    <td>再分析 · 清理</td>
+  </tr>
+  <tr>
+    <td><b>项目分析库表</b></td>
+    <td>项目 <span class="k">.RSmeta/analytics.duckdb</span> 里的表</td>
+    <td>→ 本地分析库</td>
+    <td>长期，用户删</td>
+    <td>分析 · 升级为资产 · 删除</td>
+  </tr>
+  <tr>
+    <td><b>资产</b></td>
+    <td>登记行 <span class="k">analytics_resources</span> + 版本</td>
+    <td>→ 资产 <span class="tag coral">vN</span></td>
+    <td>由资产模块管（版本 / 回收站）</td>
+    <td><b>只能读</b>：分析 · 查看版本（跳资产）</td>
+  </tr>
+</table>
+
+<h2><span class="n">03</span>页面索引（00 / 03 / 04 / 05 已被下列页面取代并删除）</h2>
+<div class="pages">
+  <div class="pg">
+    <div class="pt"><span class="no">01</span><b>源选择器</b><span class="sp"></span><span class="tag ok">已实现</span></div>
+    <p>三根树（连接 / DuckDB / 文件）+ 多选。继续作为对话框使用，取数与行身份被 07 复用。</p>
+  </div>
+  <div class="pg">
+    <div class="pt"><span class="no">02</span><b>洞察对话框</b><span class="sp"></span><span class="tag ok">已实现</span></div>
+    <p>六类来源 + 多选 + 去重 + 1 / ≥2 源分流。02 本身不改。</p>
+  </div>
+  <div class="pg">
+    <div class="pt"><span class="no">03</span><b>结果集分析</b><span class="sp"></span><span class="tag">已并入 08 · 原页删除</span></div>
+    <p>入口保留在结果集工具栏；对话框改成「先命名、再定去向」。仍有效的细节（自定义 SQL / 20000 行上限 / 失效提示）已写进 08 的说明卡。</p>
+  </div>
+  <div class="pg">
+    <div class="pt"><span class="no">04</span><b>编辑器通道</b><span class="sp"></span><span class="tag">已并入 09 · 原页删除</span></div>
+    <p>三档通道不变；选「联邦」时联动右侧面板。三档对照 / 门控 / 只读拒绝已写进 09 的说明卡。</p>
+  </div>
+  <div class="pg">
+    <div class="pt"><span class="no">05</span><b>会话面板</b><span class="sp"></span><span class="tag">已并入 07 · 原页删除</span></div>
+    <p>整页诊断太重；源的 7 种状态与失败原因压进 07 的行内与底部状态条，内存读数进了面板头。</p>
+  </div>
+  <div class="pg">
+    <div class="pt"><span class="no">06</span><b>对象树</b><span class="sp"></span><span class="tag ok">已实现</span></div>
+    <p>三根树的规格，继续作为 01 的树形依据。</p>
+  </div>
+  <div class="pg" style="border-color:#4A2F28;background:#201A18">
+    <div class="pt"><span class="no">07</span><b>数据对象 · 公共选择器</b><span class="sp"></span><span class="tag coral">新增</span></div>
+    <p>右侧常驻面板：搜索即定位、行标化身与通道、工作集、会话状态条、清理。</p>
+    <a class="lnk" href="./07-analysis-sources-panel.html">打开 07</a>
+  </div>
+  <div class="pg" style="border-color:#4A2F28;background:#201A18">
+    <div class="pt"><span class="no">08</span><b>结果集分析对话框</b><span class="sp"></span><span class="tag coral">新增</span></div>
+    <p>先命名、再选「临时 / 留在分析库」；升级为资产是之后在 07 行上做的另一个动作。</p>
+    <a class="lnk" href="./08-result-analyze-dialog.html">打开 08</a>
+  </div>
+  <div class="pg" style="border-color:#4A2F28;background:#201A18">
+    <div class="pt"><span class="no">09</span><b>编辑器联邦档联动</b><span class="sp"></span><span class="tag coral">新增</span></div>
+    <p>选中联邦自动展开数据对象；工具栏「加源」复用 01 的连接树。</p>
+    <a class="lnk" href="./09-editor-federated-entry.html">打开 09</a>
+  </div>
+</div>
+
+<h2><span class="n">04</span>需要你核对的五个点</h2>
+<div class="asks">
+  <div class="ask"><span class="no">A</span><div>
+    <b>源库表要不要进「数据对象」列表？</b>
+    <p>它会占据大量行（14 个连接）。我按「进，但标外部引用、连接分组默认收起、展开才拉表清单」处理。</p>
+    <div class="rec">我的建议：进。否则用户找源表还得回左侧导航树。</div>
+  </div></div>
+  <div class="ask"><span class="no">B</span><div>
+    <b>资产行要不要显示版本徽标？</b>
+    <p>我按「显示最新 vN」处理，且不给版本选择，回退只在资产模块做。</p>
+    <div class="rec">我的建议：显示。否则「我读的是哪一版」无从判断。</div>
+  </div></div>
+  <div class="ask"><span class="no">C</span><div>
+    <b>工作集有没有上限？</b>
+    <p>多源洞察一次挂 N 个源，N 越大首次取样越慢（是一次全取）。原型没设上限。</p>
+    <div class="rec">我的建议：软上限 8，超过时在「分析已选」旁提示代价，不硬拦。</div>
+  </div></div>
+  <div class="ask"><span class="no">D</span><div>
+    <b>哪些对象允许「清理」？</b>
+    <p>我按：临时表（<span class="k">tmp_q_</span>/<span class="k">tmp_i_</span>）与分析库表可删；资产<b>不可删</b>，只能去资产模块走回收站。</p>
+    <div class="rec">我的建议：保持这条边界，别在分析侧给资产删除入口。</div>
+  </div></div>
+  <div class="ask"><span class="no">E</span><div>
+    <b>「升级为资产」放在哪？</b>
+    <p>候选：① 07 行内动作；② 资产管理面板的新建入口；③ 两处都有，行内是快捷方式。</p>
+    <div class="rec">我的建议：两处都有，但只保留一份实现（行内只是带着对象跳过去）。</div>
+  </div></div>
+</div>
+
+</body>
+</html>
