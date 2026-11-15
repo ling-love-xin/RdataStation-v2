@@ -41,13 +41,55 @@ pub fn open_for_result_set(label: &str) -> Result<SessionHandle, CoreError> {
     kernel::open(&plan, &PreparedMounts::none())
 }
 
+/// **默认物化口径**：结果集的行 → 进程单例里的 `tmp_q_` 临时表（建表即登记）。
+///
+/// 为什么默认是临时表（用户口径「默认临时、可直接物化成持久表、后续可能进归档」）：
+/// - 结果集是**过程产物**，多数看过就丢；临时表带 TTL / 上限 / 按来源清理，
+///   不占项目库、不产生「项目里冒出几十张分析表」的债务；
+/// - 持久化是**显式升级**：用户选择「存到项目分析库」才落盘，落盘后才会进入
+///   资产库归档的视野（归档针对的是持久物，不是会话内存）。
+///
+/// 这一层只做临时档；持久档（`{项目}/.RSmeta/analytics.duckdb` 建表 + 追加）需要
+/// 一条引擎侧的「临时表 → 文件库」写入原语，`mock` crate 里现有一份
+/// （`MockEngine::write_temp_table_to_database`），但方向不能反（engine 不依赖 mock），
+/// 所以那份逻辑要下沉成引擎原语后才能接，见 `federation-kernel-design.md` §9。
+pub fn materialize_rows(
+    columns: &[String],
+    rows: &[Vec<serde_json::Value>],
+) -> Result<String, CoreError> {
+    DuckDbService::create_duckdb_temp_table(columns, rows)
+}
+
 fn invalid(message: String) -> CoreError {
     CoreError::common(CommonError::General(message))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{list_result_sets, open_for_result_set};
+    use super::{list_result_sets, materialize_rows, open_for_result_set};
+
+    #[test]
+    fn materialized_result_set_is_a_registered_tmp_q_table() {
+        let columns = vec!["a".to_string(), "b".to_string()];
+        let rows = vec![
+            vec![serde_json::json!(1), serde_json::json!("x")],
+            vec![serde_json::json!(2), serde_json::json!("y")],
+        ];
+        let table = materialize_rows(&columns, &rows).expect("默认物化为临时表");
+        assert!(table.starts_with("tmp_q_"), "实际 {table}");
+        // 物化完就在列表里可见（选择器的数据来源就是这张表清单）
+        assert!(list_result_sets().expect("列表").contains(&table));
+        // 真读：行数对得上
+        let handle = open_for_result_set("结果集").expect("句柄");
+        let result = handle
+            .run(&format!("SELECT count(*) FROM {table}"))
+            .expect("查询");
+        assert_eq!(result.rows.len(), 1);
+        // 收尾（单例是进程级的，别留给别的用例）
+        handle
+            .run(&format!("DROP TABLE IF EXISTS {table}"))
+            .expect("删表");
+    }
 
     #[test]
     fn result_set_channel_is_the_process_singleton() {
