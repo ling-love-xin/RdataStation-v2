@@ -81,6 +81,55 @@ impl SampleSource {
     }
 }
 
+/// 一次洞察分析要看的**一组来源**（联邦 / 多源取样的落点）。
+///
+/// 为什么另起一个类型而不把 `Vec` 塞进 `SampleSource`：单源是绝大多数入口的现状
+/// （导航树点一张表），把「一个源」和「一组源」混成一个类型会让每个入口都去判断
+/// 「我这是不是只有一个」，而它们根本不该关心这件事。
+///
+/// **本段的取样语义（口径已定）**：多源 = **每源各取一份样本**，各出一张 `tmp_i_` 表，
+/// 不做跨源 join——取样是**取数据**，关联是**分析**。联邦会话真正被用来做 join 的情形
+/// 留给「按 SQL 分析」那条链，不在这里。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SampleSet {
+    /// 会话 owner（联邦档按它取会话；空 owner 一律不建会话，见
+    /// `engine::analysis::channel::AnalysisChannel::from_toggle`）
+    pub owner: String,
+    /// 来源清单（至少 1 个；空清单 = 调用方的错，服务层会拒）
+    pub sources: Vec<SampleSource>,
+    /// 用户是否打开了「联邦 / 多源」开关
+    ///
+    /// 注意它**不是**「一定要建联邦会话」：口径是「开关 + ≥2 源 + 有 owner」才升级
+    /// （`from_toggle` 只升不降）；否则仍按单源走，行为与今天完全一致。
+    pub federated_toggle: bool,
+}
+
+impl SampleSet {
+    pub fn new(owner: impl Into<String>, sources: Vec<SampleSource>) -> Self {
+        Self {
+            owner: owner.into(),
+            sources,
+            federated_toggle: false,
+        }
+    }
+
+    /// 打开 / 关闭多源开关（链式，便于入口一行写完）
+    pub fn with_federated(mut self, on: bool) -> Self {
+        self.federated_toggle = on;
+        self
+    }
+
+    /// 这次分析该走哪个执行通道（通道判定只此一处，避免各入口各判一次）
+    pub fn channel(&self) -> engine::analysis::channel::AnalysisChannel {
+        engine::analysis::channel::AnalysisChannel::from_toggle(
+            engine::analysis::channel::AnalysisChannel::ProcessDuckDb,
+            self.federated_toggle,
+            self.sources.len(),
+            &self.owner,
+        )
+    }
+}
+
 /// 面板当前指向的分析目标。
 ///
 /// 只装**定位信息**（临时表名 / 连接 ID / 列名），不装数据：洞察不自己取数（D20），

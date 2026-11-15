@@ -108,6 +108,45 @@ pub async fn sample_source_to_analysis_table(
     }
 }
 
+/// 一组来源的取样：**每源各取一份样本，各出一张表**（多源 / 联邦场景的落点）。
+///
+/// 口径（已定）：取样是「取数据」，关联是「分析」。所以这里**不做跨源 join**，
+/// 也不把多源塞进一条会话——每个源走它自己该走的那条路（源库连接 → 驱动取数；
+/// DuckDB 可读 → 进程内存单例），各自建出登记版 `tmp_i_` 表。
+///
+/// 返回值按**输入顺序**逐项对应：`(label, table)`。中途失败整体失败（前面已经建好的表
+/// 留给 TTL 去收——回滚多张已登记表会让错误路径更难懂，而 TTL 本来就是它们的归宿）。
+///
+/// 通道判定走 [`crate::model::SampleSet::channel`]（`from_toggle` 只升不降）：
+/// 开关关 / 单源 / 无 owner 三种情况都仍是今天的行为。
+pub async fn sample_set_to_analysis_tables(
+    set: &crate::model::SampleSet,
+    config: &crate::model::ProbeConfig,
+) -> Result<Vec<(String, String)>, CoreError> {
+    if set.sources.is_empty() {
+        return Err(CoreError::common(CommonError::General(
+            "这次分析没有来源：至少要有一个可取样来源".to_string(),
+        )));
+    }
+    // 通道现在判定，但**只有单源路径在跑**：联邦会话取样要先把「源连接 → 挂载」接上
+    // （需要合并连接清单解析 Live id，见 engine `classify_conn`）。明确报「尚未接入」
+    // 而不是悄悄退回逐源——用户打开了开关，就不该看到他不知道的降级。
+    let channel = set.channel();
+    if matches!(channel, engine::analysis::channel::AnalysisChannel::Federated { .. }) {
+        return Err(CoreError::common(CommonError::General(format!(
+            "多源联邦取样尚未接入（{} 个来源）：本段先按「每源各取一份」逐源取样，\
+             联邦会话取样在挂载接线后开放",
+            set.sources.len()
+        ))));
+    }
+    let mut landed = Vec::with_capacity(set.sources.len());
+    for source in &set.sources {
+        let table = sample_source_to_analysis_table(source, config).await?;
+        landed.push((source.label.clone(), table));
+    }
+    Ok(landed)
+}
+
 /// 构造发给**源库连接**的取样 SQL（LIMIT / WHERE / 列投影由源库执行）。
 ///
 /// `subset` = 确认窗口的列选择（C4：未选列不在 EDA 上存在——不投影就不进临时表）；
@@ -592,5 +631,89 @@ mod tests {
             sql.starts_with("SELECT \"id\" FROM (SELECT * FROM orders) AS rds_sample LIMIT 5"),
             "DuckDB LIMIT 路径应投影列：{sql}"
         );
+    }
+
+    /// 多源取样（口径 = 每源各取一份）：两个来源 → 两张**不同**的登记版 `tmp_i_` 表，
+    /// 顺序与标签严格对应输入。
+    #[tokio::test]
+    async fn a_sample_set_lands_one_registered_table_per_source() {
+        let set = crate::model::SampleSet::new(
+            "C_insight_multi",
+            vec![
+                SampleSource::on_duckdb("SELECT 1 AS a", "源一"),
+                SampleSource::on_duckdb("SELECT 2 AS b", "源二"),
+            ],
+        );
+        let landed = sample_set_to_analysis_tables(
+            &set,
+            &config(
+                ProbeAmount::RowCount(10),
+                ProbeColumns::All,
+                None,
+                None,
+            ),
+        )
+        .await
+        .expect("多源取样");
+
+        assert_eq!(landed.len(), 2, "每源一份，不做合并：{landed:?}");
+        assert_eq!(landed[0].0, "源一");
+        assert_eq!(landed[1].0, "源二");
+        assert!(landed[0].1.starts_with("tmp_i_"), "实际 {}", landed[0].1);
+        assert!(landed[1].1.starts_with("tmp_i_"), "实际 {}", landed[1].1);
+        assert_ne!(
+            landed[0].1, landed[1].1,
+            "两次取样必须各自建表（同描述也不撞名）"
+        );
+    }
+
+    /// 空来源清单是可读错误，不是「静默成功返回空」。
+    #[tokio::test]
+    async fn an_empty_sample_set_is_rejected() {
+        let set = crate::model::SampleSet::new("C_insight_multi", Vec::new());
+        let err = sample_set_to_analysis_tables(
+            &set,
+            &config(ProbeAmount::RowCount(1), ProbeColumns::All, None, None),
+        )
+        .await
+        .expect_err("空来源必须拒");
+        assert!(err.to_string().contains("至少要有一个"), "{err}");
+    }
+
+    /// 打开多源开关（≥2 源 + 有 owner）→ 通道会升级成 `Federated`，
+    /// 而本段还没有联邦会话取样：必须是**可读的未接入错误**，不能让用户以为取样降级了。
+    #[tokio::test]
+    async fn federated_toggle_reports_not_wired_instead_of_silently_degrading() {
+        let set = crate::model::SampleSet::new(
+            "C_insight_multi",
+            vec![
+                SampleSource::on_duckdb("SELECT 1 AS a", "源一"),
+                SampleSource::on_duckdb("SELECT 2 AS b", "源二"),
+            ],
+        )
+        .with_federated(true);
+        // 通道判定先钉住：这组输入确实会升级
+        assert!(matches!(
+            set.channel(),
+            engine::analysis::channel::AnalysisChannel::Federated { .. }
+        ));
+        let err = sample_set_to_analysis_tables(
+            &set,
+            &config(ProbeAmount::RowCount(1), ProbeColumns::All, None, None),
+        )
+        .await
+        .expect_err("联邦档尚未接入");
+        assert!(err.to_string().contains("尚未接入"), "{err}");
+
+        // 单源即便打开开关也不该升级（`from_toggle` 只升不降的既有口径）
+        let single = crate::model::SampleSet::new(
+            "C_insight_multi",
+            vec![SampleSource::on_duckdb("SELECT 1 AS a", "源一")],
+        )
+        .with_federated(true);
+        assert!(matches!(
+            single.channel(),
+            engine::analysis::channel::AnalysisChannel::ProcessDuckDb
+        ));
     }
 }
