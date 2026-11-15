@@ -7,7 +7,9 @@
 //! 留到下一步；先把清单与分组口径钉住，避免一次改太多分不清是哪层出的问题。
 
 use gpui_kit::base::StyledExt;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
@@ -41,9 +43,23 @@ impl DataObjectsTab {
         cx.notify();
     }
 
+    /// 勾 / 取消一个对象进工作集（存 `key`，不存行号：列表会重排）。
+    fn toggle_picked(&self, key: &str, cx: &mut Context<Self>) {
+        let mut picked = self.shared.data_object_picked.borrow_mut();
+        if let Some(pos) = picked.iter().position(|k| k == key) {
+            picked.remove(pos);
+        } else {
+            picked.push(key.to_string());
+        }
+        drop(picked);
+        cx.notify();
+    }
+
     fn render_body(&self, cx: &Context<Self>) -> Div {
         let objects = self.shared.data_objects.borrow().clone();
+        let picked = self.shared.data_object_picked.borrow().clone();
         let colors = cx.theme().colors;
+        let entity = cx.entity();
 
         let header = div()
             .h_flex()
@@ -64,8 +80,24 @@ impl DataObjectsTab {
                 div()
                     .text_xs()
                     .text_color(colors.muted_foreground)
-                    .child(format!("{} 个", objects.len())),
+                    .child(format!("{} 个 · 已选 {}", objects.len(), picked.len())),
             );
+        let header = if picked.is_empty() {
+            header
+        } else {
+            let shared = self.shared.clone();
+            let entity_for_clear = entity.clone();
+            header.child(
+                Button::new("data-objects-clear")
+                    .ghost()
+                    .label("清空已选")
+                    .on_click(move |_, _, cx| {
+                        shared.data_object_picked.borrow_mut().clear();
+                        // 回调拿到的是 `&mut App`：通知要落到本面板实体上，不能裸调
+                        entity_for_clear.update(cx, |_, cx| cx.notify());
+                    }),
+            )
+        };
 
         let mut list = div()
             .v_flex()
@@ -94,6 +126,26 @@ impl DataObjectsTab {
             } else {
                 colors.danger
             };
+            let is_picked = picked.iter().any(|k| k == &object.key);
+            // 只有能用的对象能进工作集：失效行点进去只会在分析时炸
+            let pick_button = if object.can_analyze() {
+                let key = object.key.clone();
+                let entity = entity.clone();
+                Some(
+                    Button::new(SharedString::from(format!(
+                        "data-object-pick-{}",
+                        object.key
+                    )))
+                    .ghost()
+                    .label(if is_picked { "已选" } else { "加入" })
+                    .on_click(move |_, _, cx| {
+                        let key = key.clone();
+                        entity.update(cx, |tab, cx| tab.toggle_picked(&key, cx));
+                    }),
+                )
+            } else {
+                None
+            };
             list = list.child(
                 div()
                     .h_flex()
@@ -103,6 +155,10 @@ impl DataObjectsTab {
                     .py_2()
                     .border_b_1()
                     .border_color(colors.border)
+                    // 已选的行给一道左侧色条：一屏几十行时靠它扫得到
+                    .when(is_picked, |el| {
+                        el.border_l_2().border_color(colors.primary)
+                    })
                     // 失效行压暗：仍然看得见，但别让人以为能直接点
                     .opacity(if object.can_analyze() { 1.0 } else { 0.55 })
                     .child(
@@ -136,7 +192,8 @@ impl DataObjectsTab {
                             .flex_none()
                             .text_color(state_color)
                             .child(object.state.label()),
-                    ),
+                    )
+                    .children(pick_button),
             );
         }
 

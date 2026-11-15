@@ -286,6 +286,10 @@ pub struct Shared {
     /// 由事件路径刷新（面板打开 / 用户点刷新），渲染只读——`collect` 里有读盘与
     /// 查库，放进 render 就会每帧 I/O（gpui-kit-dev 明令禁止）。
     pub data_objects: Rc<RefCell<Vec<crate::components::data_objects::Object>>>,
+    /// 数据对象工作集：已挑进本次分析的对象的身份（`Object::key`）。
+    ///
+    /// 存 key 而不是行号：清单会随刷新重排，行号一做增删就错位（同 `ElementId` 业务键的道理）。
+    pub data_object_picked: Rc<RefCell<Vec<String>>>,
     pub notice: Rc<RefCell<Option<String>>>,
     /// 导航元数据缓存失效戳：宿主 / 项目宿主 / Mock 宿主只递增（`invalidate_nav_cache`），
     /// 缓存数据本身由 `EditorPanel` 自持——外部不再直接读写别家的缓存。
@@ -436,6 +440,7 @@ impl Shared {
             })),
             connections: Rc::new(RefCell::new(connections)),
             data_objects: Rc::new(RefCell::new(Vec::new())),
+            data_object_picked: Rc::new(RefCell::new(Vec::new())),
             notice: Rc::new(RefCell::new(notice)),
             nav_cache_epoch: Rc::new(Cell::new(0)),
             nav_panel: Rc::new(RefCell::new(None)),
