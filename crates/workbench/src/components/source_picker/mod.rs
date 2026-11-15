@@ -60,7 +60,13 @@ pub use dialog::open_source_picker;
 pub use group::{group_of, grouped, SourceGroup};
 pub use node::{ArchiveScope, NodeId, NodeKind, Row, TempScope, MAX_DEPTH};
 pub use render::{render_rows, RowAction};
-pub use rows::{analysis_table_rows, draft_rows, external_row, root_rows};
+pub use rows::{
+    analysis_table_rows, draft_rows, external_row, insight_sample_rows, is_persistent_table,
+    persistent_table_label, persistent_table_rows, result_set_rows, root_rows,
+    split_persistent_tables,
+};
+/// 取数（面板与对话框共用同一份 I/O，见 `components::data_objects`）
+pub(crate) use load::{analysis_tables_of, collect_drafts};
 pub use search::{rank, search, HitRank, SearchOutcome, SEARCH_LIMIT};
 pub use state::{TreeState, RECENT_CAP};
 

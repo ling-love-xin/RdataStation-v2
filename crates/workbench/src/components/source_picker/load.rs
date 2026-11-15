@@ -111,7 +111,7 @@ fn query_tables(
 }
 
 /// 草稿箱里 duckdb 支持格式的文件（相对路径 + 绝对路径，按相对路径排序）。
-pub(super) fn collect_drafts(shared: &Shared) -> Vec<(String, PathBuf)> {
+pub(crate) fn collect_drafts(shared: &Shared) -> Vec<(String, PathBuf)> {
     let project_borrow = shared.project.borrow();
     let Some(project) = project_borrow.as_ref() else {
         return Vec::new();
@@ -176,7 +176,7 @@ pub(super) fn collect_analysis_tables(project: Option<&project::ui::OpenProject>
 /// 从一台分析库（DuckDB 文件）里读 `main` schema 的表名（只读，失败一律空）。
 ///
 /// 抽成纯路径函数，便于用「造一台库」的方式钉住行为（不依赖打开项目的重对象）。
-pub(super) fn analysis_tables_of(path: &std::path::Path) -> Vec<String> {
+pub(crate) fn analysis_tables_of(path: &std::path::Path) -> Vec<String> {
     let Ok(config) = duckdb::Config::default().access_mode(duckdb::AccessMode::ReadOnly) else {
         return Vec::new();
     };

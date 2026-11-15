@@ -2,6 +2,8 @@
 //! M4：数据库导航宿主桥；M7：Mock 面板宿主桥；M2：日志查看对话框）。
 
 pub mod cache_dialog;
+/// 数据对象清单（面板与来源选择器共用的一层取数与身份规则）
+pub mod data_objects;
 // 连接对话框已下沉 `rds-connection-dialog`（2026-10-15）：此处重导保持
 // `crate::components::connection_dialog::*` 路径不变（editor.rs 等引用点零改动）。
 pub use connection_dialog::components::connection_dialog;
