@@ -262,6 +262,26 @@ workbench 里没有任何字段长期持有 project manager。所以：
 **尚未做（需拍板）**：持久表的**资源归档**入口（用户口径「后续可能会进去」）；
 持久表列表（当前只在状态栏告知表名，没有可视化列表）。
 
+### 8.8 刀 5 后半的两块拼图（`33486848` + `ab514126`）
+
+| commit | 内容 |
+| --- | --- |
+| `33486848` | `analysis::channel::classify_conn(historical_id, live_ids)`：`None`/空白 = 归档行没记来源（不编 id）；在**合并清单**里 = `Live`；记过但不在 = `Historical`。`live_ids` 必须是 `global_connections` + 项目 `connections` 的合并结果（用例钉住 `G_conn_SQLite_Example` / `GP_real_pg_20260912` 都判 `Live`），`analysis::channel` 10 passed |
+| `ab514126` | `materialize::move_sample_to_process_db(handle, session_table, desc)`：会话侧 `COPY … TO parquet` → 单例侧 `create_analysis_temp_table_as(read_parquet)`，落地即登记版 `tmp_i_`；中转文件用完即删；已在单例的表再搬给可读错误。`analysis_kernel_probe` 6 passed |
+
+**为什么这两块是「刀 5 后半」的前置**：
+
+- 联邦取样要先知道「源能不能执行」——归档记录里的连接 id 是**历史值**，只有对合并清单解析成
+  `Live` 才能去建会话（否则就是「点一下没反应 / 报连接不存在」）；
+- 加速 / 联邦档的样本落在**会话**里，洞察下游（EDA / 图表 / 导出）读的是**进程单例**，
+  必须有一个「按需把结果搬过去并登记」的原语，否则「在加速档取样」下游看不见。
+
+**还差的最后一段（需口径确认）**：洞察侧「多源取样」的模型与 SQL 语义——现有
+`SampleSource` 只装一个 `conn_id` + 一条 SQL，联邦档要 ≥2 源。可选方向：
+(a) 每源各取一份样本、各出一张 `tmp_i_`（不做 join）；(b) 一条 SQL 对多源 join；
+(c) 确认框里让用户写跨源 SQL。三条的取样代价与确认窗口文案完全不同，
+**没有拍板前不动 `SampleSource`**（改了会把现有单源路径一起拖下水）。
+
 
 
 
