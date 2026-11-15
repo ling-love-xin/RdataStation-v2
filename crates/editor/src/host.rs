@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use gpui_kit::App;
 use workbench_shell::model::ConnectionItem;
 
-use crate::shared::InsightColumnRequest;
+use crate::shared::{AnalyzeResultSetRequest, InsightColumnRequest};
 
 /// 联邦查询候选（`editor_exec` 的 `federated_plan` 用）。
 ///
@@ -83,6 +83,12 @@ pub trait EditorHost: 'static {
     /// 编辑器只说「这一列 + 产生它的 SQL + 在哪条连接上」（`InsightColumnRequest`），
     /// 翻译成 `insight::SampleSource` 是宿主的事（editor 不依赖 insight crate）。
     fn open_insight_source_column(&self, request: InsightColumnRequest, cx: &mut App);
+
+    /// 【结果集二次分析】右键「分析此结果集」→ 右 Dock 洞察面板。
+    ///
+    /// 编辑器已经**先把整份结果物化成 `tmp_q_` 临时表**（行数据只有编辑器有），
+    /// 这里只交出表名 + 展示名 + 行数；宿主按表名取样即可（同进程内存单例，同连接可见）。
+    fn open_insight_result_set(&self, request: AnalyzeResultSetRequest, cx: &mut App);
 
     /// 导航树定位对象（`rds://navigator/<限定表名>` 跳转定义；复用 Quick Open `⌥↵`
     /// 同款 `request_reveal` 机制，宿主侧只入队，导航面板下一帧消费）。

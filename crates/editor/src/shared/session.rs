@@ -87,6 +87,16 @@ impl EditorShared {
         self.insight_column.borrow().clone()
     }
 
+    /// 【结果集二次分析】注入「分析此结果集」端口（**宿主调用一次**：workbench 接到洞察面板）
+    pub fn attach_analyze_result_set(&self, port: AnalyzeResultSetPort) {
+        *self.analyze_result_set.borrow_mut() = Some(port);
+    }
+
+    /// 【结果集二次分析】「分析此结果集」端口（未注入时右键不摆这一项）
+    pub fn analyze_result_set_port(&self) -> Option<AnalyzeResultSetPort> {
+        self.analyze_result_set.borrow().clone()
+    }
+
     /// 【B8 余项】注入「打开历史面板」端口（由宿主在装配期调用一次）
     pub fn attach_open_history(&self, port: OpenHistoryPort) {
         *self.open_history.borrow_mut() = Some(port);

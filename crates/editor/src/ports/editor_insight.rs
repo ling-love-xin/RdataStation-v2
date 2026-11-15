@@ -26,3 +26,13 @@ pub fn attach(editor: &EditorShared, host: Rc<dyn EditorHost>) {
         host.open_insight_source_column(request, cx);
     }));
 }
+
+/// 【结果集二次分析】注入「分析此结果集」端口（同上，构造期一次）。
+///
+/// 与「洞察此列」分成两个端口而不是一个带枚举的端口：两者的**入参语义不同**
+/// （一个是 SQL + 连接、一个是已物化的表名），合成一个只会让两边都要做防御性判断。
+pub fn attach_result_set(editor: &EditorShared, host: Rc<dyn EditorHost>) {
+    editor.attach_analyze_result_set(Rc::new(move |request, cx| {
+        host.open_insight_result_set(request, cx);
+    }));
+}

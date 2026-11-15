@@ -59,6 +59,24 @@ pub struct InsightColumnRequest {
 /// 【M8】「洞察此列」端口（由宿主注入：workbench 接到右 Dock 洞察面板）
 pub type InsightColumnPort = Rc<dyn Fn(InsightColumnRequest, &mut gpui_kit::App)>;
 
+/// 【结果集二次分析】「分析此结果集」交给**宿主**的请求。
+///
+/// 与 [`InsightColumnRequest`] 的区别：那个让洞察侧拿 SQL 重跑一列样本；这个已经
+/// **把整份结果物化好了**（`tmp_q_` 临时表在进程内存单例里），宿主只需按表名取样。
+/// 所以这里给的是表名 + 展示名 + 行数，不给 SQL、不给行数据。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnalyzeResultSetRequest {
+    /// 物化出来的临时表名（`tmp_q_…`，在 DuckDB 内存单例里）
+    pub table: String,
+    /// 展示用来源（面板副标题 / 快照来源），如「结果 2」
+    pub label: String,
+    /// 这份结果有多少行（宿主提示用；物化后的行数以表为准）
+    pub rows: usize,
+}
+
+/// 【结果集二次分析】「分析此结果集」端口（由宿主注入：workbench 接到右 Dock 洞察面板）
+pub type AnalyzeResultSetPort = Rc<dyn Fn(AnalyzeResultSetRequest, &mut gpui_kit::App)>;
+
 /// 【B8 余项】「打开历史面板」端口（由宿主注入：workbench 接到右 Dock 历史面板）。
 ///
 /// 工具栏「⟲ 历史」按钮点击后经它通知宿主——编辑器不依赖工作台的 Dock。
@@ -136,6 +154,8 @@ pub struct EditorShared {
     pub(crate) export_path: Rc<RefCell<Option<ExportPathPicker>>>,
     /// 【M8】「洞察此列」端口：宿主注入后才有（未接时列头右键不摆这一项）
     pub(crate) insight_column: Rc<RefCell<Option<InsightColumnPort>>>,
+    /// 【结果集二次分析】「分析此结果集」端口：宿主注入后才有（未接时右键不摆这一项）
+    pub(crate) analyze_result_set: Rc<RefCell<Option<AnalyzeResultSetPort>>>,
     /// 【B8 余项】「打开历史面板」端口：宿主注入后才有（未接时工具栏「历史」按钮置灰并给原因）
     pub(crate) open_history: Rc<RefCell<Option<OpenHistoryPort>>>,
     /// 连接列表 / 建连端口：宿主注入后才有（B1；无宿主 = 选择器说“未接入”）
@@ -219,6 +239,7 @@ impl Clone for EditorShared {
             save_path: self.save_path.clone(),
             export_path: self.export_path.clone(),
             insight_column: self.insight_column.clone(),
+            analyze_result_set: self.analyze_result_set.clone(),
             open_history: self.open_history.clone(),
             connections: self.connections.clone(),
             schemas: self.schemas.clone(),
@@ -270,6 +291,7 @@ impl EditorShared {
             save_path: Rc::new(RefCell::new(None)),
             export_path: Rc::new(RefCell::new(None)),
             insight_column: Rc::new(RefCell::new(None)),
+            analyze_result_set: Rc::new(RefCell::new(None)),
             open_history: Rc::new(RefCell::new(None)),
             connections: Rc::new(RefCell::new(None)),
             schemas: Rc::new(RefCell::new(None)),

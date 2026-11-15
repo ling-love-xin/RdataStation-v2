@@ -449,6 +449,9 @@ impl EditorHostPanel {
             let row_action_weak = cx.entity().downgrade();
             // 【M8】宿主没接「洞察此列」端口就不装钩子——菜单据此不摆那一项（能力没有就不给入口）
             let insight_port = shared.insight_column_port();
+            // 【结果集二次分析】同理：宿主没接出口就不装钩子，右键不摆「分析此结果集」
+            let analyze_port = shared.analyze_result_set_port();
+            let analyze_weak = cx.entity().downgrade();
             grid.update(cx, |state, _cx| {
                 state
                     .delegate_mut()
@@ -492,6 +495,13 @@ impl EditorHostPanel {
                                     .update(app, |panel, cx| panel.insight_column(&column, cx));
                             },
                         ));
+                }
+                if analyze_port.is_some() {
+                    state
+                        .delegate_mut()
+                        .set_analyze_result_set_hook(std::rc::Rc::new(move |app: &mut App| {
+                            _ = analyze_weak.update(app, |panel, cx| panel.analyze_result_set(cx));
+                        }));
                 }
                 // 【遗留 #7】「查看完整值」：弹层是宿主的事（对话框生命周期归宿主），
                 // 钩子只把 值 / 列名 / 视图行 带回面板

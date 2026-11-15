@@ -4,6 +4,7 @@
 //! 跨域互调经 `pub(crate)` 方法；字段在 mod.rs 统一 `pub(crate)`。
 
 use super::super::*;
+use crate::ports::editor_exec::convert::cell_json;
 use crate::shared::InsightColumnRequest;
 use crate::store::ResultEntry;
 
@@ -50,6 +51,59 @@ impl EditorHostPanel {
                 connection,
                 label,
             },
+            cx,
+        );
+    }
+
+    /// 【结果集二次分析】「分析此结果集」（右键菜单来的）：**先把整份结果物化成
+    /// `tmp_q_` 临时表**，再把表名交给宿主端口。
+    ///
+    /// 为什么在编辑器里物化而不是宿主里：行数据在结果条目里，编辑器是它的持有者；
+    /// 宿主拿不到 10 万行，让它去读也不可能（结果没落过盘）。
+    ///
+    /// 物化走既有的 `ResultService::create_duckdb_temp_table`（与导出 / 结果集库同一处
+    /// 写路径）：建出来就是**登记在案的 `tmp_q_` 表**，受临时表 TTL 与上限管辖。
+    /// 链式成立的前提：`tmp_q_` 与洞察取样的 `tmp_i_` 同在进程内存单例，同连接可见。
+    pub(crate) fn analyze_result_set(&mut self, cx: &mut Context<Self>) {
+        let Some(port) = self.shared.analyze_result_set_port() else {
+            return;
+        };
+        let Some(entry) = self
+            .shared
+            .results_active(&self.document)
+            .filter(ResultEntry::has_grid)
+        else {
+            self.set_message(Some("分析：当前没有可分析的结果集".to_string()), cx);
+            return;
+        };
+        if entry.rows.is_empty() {
+            self.set_message(Some("分析：这份结果集没有行".to_string()), cx);
+            return;
+        }
+        let label = self.result_set_label();
+        // 网格里存的是字符串行（`NULL` 是字面量）；桥接口径与执行链一致（`cell_json`）
+        let json_rows: Vec<Vec<serde_json::Value>> = entry
+            .rows
+            .iter()
+            .map(|row| row.iter().map(|cell| cell_json(cell)).collect())
+            .collect();
+        let table = match crate::ports::result_service::ResultService::create_duckdb_temp_table(
+            &entry.columns,
+            &json_rows,
+        ) {
+            Ok(table) => table,
+            Err(error) => {
+                self.set_message(Some(format!("分析：物化结果集失败（{error}）")), cx);
+                return;
+            }
+        };
+        let rows = entry.rows.len();
+        self.set_message(
+            Some(format!("已物化结果集为 {table}（{rows} 行），正在打开洞察…")),
+            cx,
+        );
+        port(
+            crate::shared::AnalyzeResultSetRequest { table, label, rows },
             cx,
         );
     }
