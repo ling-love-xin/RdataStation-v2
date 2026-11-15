@@ -4,14 +4,27 @@ use super::*;
 use crate::model::GLOBAL_PREFIX;
 
 impl GlobalInstanceStore {
-    /// 读全局脚本内容表首行（分发重建文件用）。
+    /// 读全局脚本内容表正文（分发重建文件用）。
+    ///
+    /// 这张表由 `promote` 一次 `CREATE TABLE` + 一条 `INSERT` 建起来，恒为一行；
+    /// 这里先数行再取，不用 `LIMIT 1` 静默取首行：表若被改坏（多行 / 空表），
+    /// 旧写法会产出"看着正常、内容不全"的文件，比直接报错难查得多。
     pub(super) async fn read_script_content(&self, name: &str) -> Result<String, CoreError> {
         self.with_duckdb(|conn| {
+            let table = quote_ident(name);
+            let rows: i64 = conn
+                .prepare(&format!("SELECT count(*) FROM {table};"))
+                .map_err(|e| duckdb_err("prepare_script_row_count", &e.to_string()))?
+                .query_row([], |row| row.get(0))
+                .map_err(|e| duckdb_err("count_script_rows", &e.to_string()))?;
+            if rows != 1 {
+                return Err(duckdb_err(
+                    "read_script_rows",
+                    &format!("脚本内容表 {name} 应只有一行，实际 {rows} 行"),
+                ));
+            }
             let mut stmt = conn
-                .prepare(&format!(
-                    "SELECT \"content\" FROM {} LIMIT 1;",
-                    quote_ident(name)
-                ))
+                .prepare(&format!("SELECT \"content\" FROM {table};"))
                 .map_err(|e| duckdb_err("prepare_read_script", &e.to_string()))?;
             stmt.query_row([], |row| row.get::<_, String>(0))
                 .map_err(|e| duckdb_err("read_script_content", &e.to_string()))

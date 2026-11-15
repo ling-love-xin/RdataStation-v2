@@ -493,3 +493,65 @@ async fn g009_overwrite_failure_restores_the_old_content() {
 
     let _ = fs::remove_dir_all(&env.dir);
 }
+
+/// 脚本内容表只该有一行：多于一行时宁可报错，也不能静默取首行，
+/// 否则产出的文件"看着正常、内容不全"，用户与索引都对不上。
+#[tokio::test]
+async fn g010_script_content_with_extra_rows_is_rejected() {
+    let env = create_test_env().await;
+    let script = env.dir.join("report.md");
+    fs::write(&script, "# 初稿\n").expect("write md");
+    let req = promote_req("bad_rows", &script, PromoteKind::Script);
+    env.store.promote(&req).await.expect("promote script");
+
+    // 把表写坏：再插一行（模拟外部误写，或未来改成追加语义却漏了读侧）。
+    env.store
+        .with_duckdb(|conn| {
+            conn.execute(
+                "INSERT INTO bad_rows (\"filename\", \"content\", \"content_hash\") \
+                 VALUES ('work/bad_rows', '# 第二行', 'h2');",
+                duckdb::params![],
+            )
+            .map_err(|e| duckdb_err("test_insert_extra_row", &e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .expect("insert extra row");
+
+    let project_conn = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    let err = env
+        .store
+        .distribute(&project_conn, &env.project_root, "bad_rows", None)
+        .await
+        .expect_err("多行内容表必须被拒绝");
+    assert!(
+        matches!(err, InstanceOpError::Core(_)),
+        "应报存储错误，实际 {err:?}"
+    );
+    assert!(
+        format!("{err:?}").contains("应只有一行"),
+        "错误要说清原因，实际 {err:?}"
+    );
+
+    // 拒绝发生在读内容阶段，项目侧不该留下半成品文件，也不该有登记。
+    assert!(
+        !env.project_root
+            .join("resources")
+            .join("work/bad_rows")
+            .exists(),
+        "被拒绝时不得重建文件"
+    );
+    let pool = &env.project_pool;
+    let conn = pool.acquire().await.expect("acquire");
+    let inner = conn.inner().expect("inner");
+    let registered: i64 = inner
+        .query_row(
+            "SELECT count(*) FROM analytics_resources WHERE name = 'bad_rows'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count rows");
+    assert_eq!(registered, 0, "被拒绝时不落任何项目登记");
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
