@@ -152,7 +152,7 @@ pub fn open_trash_dialog_with(
                                 .show_cancel(true),
                         )
                         .on_ok(move |_, window, cx| {
-                            tracing::info!(count, "【探针】回收站对话框「清空回收站」确认");
+                            
                             state.set_busy(true);
                             state.set_note(Some("正在清空…".to_string()));
                             on_action(TrashAction::Empty, window, cx);

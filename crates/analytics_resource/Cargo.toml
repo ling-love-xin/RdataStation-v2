@@ -11,6 +11,8 @@ shared.workspace = true
 tag.workspace = true
 # 面板共用视图资产（尺寸常量单一来源；依赖方向：feature → shell，见 rds-architecture skill）
 workbench_shell.workspace = true
+# 运行时数据路径唯一解析点（分发中转 parquet 等临时文件不自己拼系统临时目录）
+paths.workspace = true
 
 # ===== 时间 =====
 chrono.workspace = true

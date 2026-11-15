@@ -19,7 +19,7 @@ impl GlobalInstanceStore {
         name: &str,
         target: Option<&str>,
     ) -> Result<DistributeOutcome, InstanceOpError> {
-        tracing::info!(name = %name, target = ?target, "【探针】从全局分发 distribute 进入");
+        
         // 项目侧落库名：未填改名 = 沿用全局名（§13.6 冲突询问「改名」分支才带新名）。
         let target_name = target.unwrap_or(name).to_string();
 
@@ -108,10 +108,17 @@ impl GlobalInstanceStore {
             // 为什么不用 ATTACH：Windows 单句柄限制下，项目连接 ATTACH 全局 DuckDB
             // 文件会撞「文件被占用」（全局写连接由 GlobalDatabaseManager 持有，不能关）。
             // Parquet 是 DuckDB 原生格式，中转确定性、无锁冲突。
-            let tmp = std::env::temp_dir().join(format!(
-                "rds_dist_{}.parquet",
-                uuid::Uuid::new_v4().simple()
-            ));
+            // 中转 parquet 落 `paths::temp_dir()`：运行时数据路径只有一个解析点
+            // （rds-architecture），系统临时目录在只读盘 / 多用户 / 清理策略下不可控。
+            let tmp_dir = paths::temp_dir();
+            std::fs::create_dir_all(&tmp_dir).map_err(|e| {
+                InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                    "创建临时目录失败（{}）：{}",
+                    tmp_dir.display(),
+                    e
+                ))))
+            })?;
+            let tmp = tmp_dir.join(format!("rds_dist_{}.parquet", uuid::Uuid::new_v4().simple()));
             let copy_sql = format!(
                 "COPY {} TO '{}' (FORMAT PARQUET);",
                 quote_ident(name),
@@ -180,7 +187,7 @@ impl GlobalInstanceStore {
         name: &str,
         target: Option<&str>,
     ) -> Result<DistributeOutcome, InstanceOpError> {
-        tracing::info!(name = %name, target = ?target, "【探针】从全局分发 distribute_overwrite 进入（覆盖）");
+        
         let target_name = target.unwrap_or(name).to_string();
 
         // 项目侧旧本体移除（表或文件都删；文件在 resources/ 下，删前先探存在）。

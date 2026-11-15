@@ -11,12 +11,7 @@ impl GlobalInstanceStore {
     /// 3. 全局登记（scope = 'global'，kind = 'analysis'）+ 全局版本快照；
     /// 4. 返回结果（冲突未覆盖时返回 [`InstanceOpError::Conflict`]，由 UI 弹询问）。
     pub async fn promote(&self, req: &PromoteRequest) -> Result<PromoteOutcome, InstanceOpError> {
-        tracing::info!(
-            name = %req.name,
-            kind = ?req.kind,
-            rel_path = ?req.rel_path,
-            "【探针】升级到全局 promote 进入"
-        );
+        
         // ---- 冲突检测（先查登记，再查 DuckDB 表，双保险）----
         let existing: Option<i32> = self.with_sqlite(|conn| {
             conn.query_row(
@@ -129,7 +124,7 @@ impl GlobalInstanceStore {
         &self,
         req: &PromoteRequest,
     ) -> Result<PromoteOutcome, InstanceOpError> {
-        tracing::info!(name = %req.name, "【探针】升级到全局 promote_overwrite 进入（覆盖）");
+        
         self.drop_global_table(&req.name).await?;
         self.with_sqlite(|conn| {
             conn.execute(
