@@ -23,6 +23,16 @@ fn groups_follow_the_prototype_order() {
     }
 }
 
+/// 「有记录、无本体」的三条出路都要写在说明里：回收站 / 把文件放回去重扫 / 删记录。
+/// 少说第三条，用户手上明明有那份文件也会以为只剩「删掉」。
+#[test]
+fn missing_group_hint_names_all_three_ways_out() {
+    let hint = RepairGroup::Missing.hint();
+    for word in ["回收站", "放回", "删记录"] {
+        assert!(hint.contains(word), "说明里缺「{word}」：{hint}");
+    }
+}
+
 #[test]
 fn set_rows_replaces_wholesale_and_busy_is_independent() {
     let state = RepairDialogState::new();

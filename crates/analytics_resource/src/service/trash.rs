@@ -263,7 +263,7 @@ impl ArchiveService {
             return Err(service_err(
                 "untrash",
                 &format!(
-                    "回收站里没有 resources/{rel_path} 的条目：本体已不可恢复，只能删掉这条登记记录"
+                    "回收站里没有 resources/{rel_path} 的条目：本体已不可恢复，只能删掉这条登记记录（若你手上还有这份文件，放回 resources/{rel_path} 后重新扫描索引即可补登）"
                 ),
             ));
         };

@@ -88,7 +88,7 @@ pub(super) fn repair_line(
         RepairGroup::Missing => {
             let resource_id = row.resource_id.clone().unwrap_or_default();
             // 「从回收站还原」：本体当初进了项目级回收站的话，这就是正规的路（不用手搬文件）。
-            // 还原的成败与“为什么不行”都在服务层说（找不到条目会直说只能删记录）。
+            // 还原的成败与“为什么不行”都在服务层说（找不到条目会直说三条出路）。
             let restore = {
                 let state = state.clone();
                 let on_action = on_action.clone();

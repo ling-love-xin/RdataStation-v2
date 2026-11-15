@@ -115,7 +115,7 @@ async fn t128_purge_and_empty_stay_within_our_origin() {
 }
 
 /// 由原相对路径还原（索引修复的「从回收站还原」）：命中就把本体搬回来并复活登记行；
-/// 回收站里没有对应条目时**不静默**，把用户指向仅剩的出口（删记录）。
+/// 回收站里没有对应条目时**不静默**，把用户指向其余两条出路（放回文件后重扫 / 删记录）。
 #[tokio::test]
 async fn t129_restore_by_rel_path_finds_the_entry_or_says_why_not() {
     let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
@@ -150,6 +150,10 @@ async fn t129_restore_by_rel_path_finds_the_entry_or_says_why_not() {
     assert!(
         error.to_string().contains("只能删掉这条登记记录"),
         "错误要指向仅剩的出口：{error}"
+    );
+    assert!(
+        error.to_string().contains("放回"),
+        "还要给出「把文件放回去重扫」这条路，否则用户以为只剩删记录：{error}"
     );
 
     let _ = fs::remove_dir_all(&dir).await;
