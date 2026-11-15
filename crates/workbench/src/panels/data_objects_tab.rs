@@ -37,10 +37,33 @@ impl DataObjectsTab {
     }
 
     /// 重新取一次清单（事件路径）。
+    ///
+    /// 资产那段不走库查询：资产面板实体已经把存活行载在内存里（`view_rows`），
+    /// 这里只做形状翻译。面板还没载过（弱句柄取不到 / 行还空）时资产段就是空——
+    /// 显示「资产面板载过之后可见」，而不是自己开一次连接去查（那是两套真相）。
     pub fn refresh(&self, cx: &mut Context<Self>) {
-        let collected = data_objects::collect(&self.shared);
+        let mut collected = data_objects::collect(&self.shared);
+        collected.assets = self.assets_from_panel(cx);
         *self.shared.data_objects.borrow_mut() = data_objects::objects(&collected);
         cx.notify();
+    }
+
+    /// 从资产面板的已载行取资产（只读；不触发任何加载）
+    fn assets_from_panel(&self, cx: &mut Context<Self>) -> Vec<data_objects::AssetRow> {
+        let Some(weak) = self.shared.resources_panel.borrow().clone() else {
+            return Vec::new();
+        };
+        let Some(panel) = weak.upgrade() else {
+            return Vec::new();
+        };
+        let rows = panel.read(cx).view_rows().to_vec();
+        rows.into_iter()
+            .map(|row| data_objects::AssetRow {
+                version: u32::try_from(row.version).unwrap_or(0),
+                name: row.name,
+                detail: row.tail,
+            })
+            .collect()
     }
 
     /// 勾 / 取消一个对象进工作集（存 `key`，不存行号：列表会重排）。

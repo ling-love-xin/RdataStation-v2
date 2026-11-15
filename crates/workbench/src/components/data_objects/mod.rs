@@ -205,6 +205,15 @@ pub struct SessionSource {
     pub failed: Option<String>,
 }
 
+/// 资产清单里的一行（只读，只给最新版本）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetRow {
+    pub name: String,
+    pub version: u32,
+    /// 资产面板那行尾部字段（行数 / 大小之类），原样带过来，不在这里重算
+    pub detail: String,
+}
+
 /// 一次取数的结果（面板与对话框共用）。
 ///
 /// 连接不在这里列：连接的表要逐层 introspect，属于面板自己的懒加载；
@@ -216,8 +225,8 @@ pub struct Collected {
     pub global_tables: Vec<String>,
     pub result_sets: Vec<String>,
     pub insight_samples: Vec<String>,
-    /// 资产 `(名字, 最新版本)`；空则说明还没接上资产清单
-    pub assets: Vec<(String, u32)>,
+    /// 资产清单（由资产面板的已载行填；空 = 资产面板还没载过）
+    pub assets: Vec<AssetRow>,
     /// 联邦会话里已挂上的源
     pub session_sources: Vec<SessionSource>,
 }
@@ -291,17 +300,20 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
         });
     }
 
-    for (name, version) in &collected.assets {
+    for asset in &collected.assets {
         out.push(Object {
-            key: format!("asset:{name}"),
-            name: name.clone(),
+            key: format!("asset:{}", asset.name),
+            name: asset.name.clone(),
             // 只读 + 最新版本：两件事都写在副标题，避免用户以为能选旧版
-            note: format!("只读 · 最新 v{version}"),
+            note: match asset.detail.is_empty() {
+                true => format!("只读 · 最新 v{}", asset.version),
+                false => format!("只读 · 最新 v{} · {}", asset.version, asset.detail),
+            },
             channel: Channel::Asset,
             life: Life::Managed,
             state: State::Ready,
             group: Group::Assets,
-            version: Some(*version),
+            version: Some(asset.version),
         });
     }
 
@@ -426,7 +438,7 @@ pub fn collect(shared: &Shared) -> Collected {
 #[cfg(test)]
 mod tests {
     // 刻意不用 `use super::*`：会把 gpui 的 `test` 属性宏带进作用域。
-    use super::{objects, Channel, Collected, Group, Life, Object, SessionSource, State};
+    use super::{objects, AssetRow, Channel, Collected, Group, Life, Object, SessionSource, State};
     use std::path::PathBuf;
 
     fn sample() -> Collected {
@@ -440,7 +452,11 @@ mod tests {
             global_tables: vec!["G_月度经营".into()],
             result_sets: vec!["tmp_q_结果_3".into()],
             insight_samples: vec!["tmp_i_orders_sample".into()],
-            assets: vec![("月度经营快照".into(), 3)],
+            assets: vec![AssetRow {
+                name: "月度经营快照".into(),
+                version: 3,
+                detail: "1,204 行 · 18.2 MB".into(),
+            }],
             session_sources: vec![
                 SessionSource {
                     owner: "编辑器 · 分析.sql".into(),
@@ -561,7 +577,11 @@ mod tests {
         let mut c = sample();
         c.analysis_tables = vec!["orders".into()];
         c.global_tables = vec!["orders".into()];
-        c.assets = vec![("orders".into(), 1)];
+        c.assets = vec![AssetRow {
+            name: "orders".into(),
+            version: 1,
+            detail: String::new(),
+        }];
         c.result_sets = vec!["orders".into()];
         let rows = objects(&c);
         let keys: Vec<&str> = rows.iter().map(|o| o.key.as_str()).collect();
