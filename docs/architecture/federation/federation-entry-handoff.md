@@ -227,6 +227,41 @@ workbench 里没有任何字段长期持有 project manager。所以：
 - 因此它属于**需要收敛的脆弱点**（应改为「复用当次已打开的 manager 连接」或加一次可读重试），
   不是「已经坏了」。验证前不要改它的实现。
 
+### 8.7 结果集持久化：全链路已通（`2e5bb575` + `c2084233`）
+
+**两条刀**
+
+| commit | 内容 |
+| --- | --- |
+| `2e5bb575` | engine `promote::persistent_table_name(desc)` → `res_<描述>_<yyyymmddHHMMSS>`；`temp_table::sanitize_description` 改 `pub(crate)` 共用；用例钉住「不落在 `tmp_q_`/`tmp_i_`/`tmp_m_`/`tmp_p_` 任一临时族下」（否则 TTL 30 分钟会把它当临时表清掉），`temp_table::promote` 4 passed |
+| `c2084233` | 菜单项「持久化为项目表（N 行）」→ 编辑器 `persist_result_set` → `EditorHost::persist_result_set` → workbench `result_set_actions::persist_to_project` → `services/persist_jobs`（worker + 单槽 + `WorkbenchView` 0.5s 泵回状态栏）；真库用例 1 passed |
+
+**为什么是「一个物化 + 两个去处」**：`analyze_result_set` 与 `persist_result_set` 共用
+`materialize_active_result_set("分析"/"持久化")`——同一份结果先物化成登记版 `tmp_q_`，
+要么交给洞察取样（临时、随 TTL 走），要么搬进项目分析库（持久）。抽成一处是为了让「空结果 /
+无行 / 物化失败」三条失败口径只有一份。
+
+**搬运原语**：`write_table_across_connections(source, dest, source_table, target_table, Create)`
+（源 `COPY … TO parquet` → 目标 `CREATE TABLE … AS SELECT * FROM read_parquet`）。
+不用 ATTACH 的理由见 §8.6 实测；用 Parquet 而非 CSV 是为了 DECIMAL / 日期 / 带引号文本原样过一遍
+（`tmp_q_probe` 的 `DECIMAL(10,4)` 落库后类型仍是 DECIMAL，已断言）。
+
+**锁顺序（写死一处）**：先锁内存单例（源），再锁项目写连接（目标）。反过来的实现若在别处
+出现，就会与这里凑成死锁；`persist_jobs` 注释里写明了「只此一处同时持两把锁」。
+
+**新实测硬约束**：`persist_result_table` 内部自建 tokio runtime 并 `block_on`，
+**不得在 async 上下文调用**——首次把用例写成 `#[tokio::test]` 直接 panic
+`Cannot start a runtime from within a runtime`；口径是 worker 线程（普通 std 线程）+ 用例 `#[test]`。
+`mock_generator` 那条链（`open_analysis_db` 新开连接）也有同类顺序问题，但它是**按次开关**下的
+并发窗口，见 §8.6 更正后的结论，未改其实现。
+
+**并发窗口的处理**：项目库打开撞锁做 `150ms × 3` 重试（`open_project_manager`），
+仍失败才把「项目分析库正被别的操作占用」交给用户；撞名则提示换描述或删旧表——
+不静默 `Replace`（覆盖别人的持久表不该是顺手的默认）。
+
+**尚未做（需拍板）**：持久表的**资源归档**入口（用户口径「后续可能会进去」）；
+持久表列表（当前只在状态栏告知表名，没有可视化列表）。
+
 
 
 
