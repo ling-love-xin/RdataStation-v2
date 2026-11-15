@@ -153,10 +153,26 @@
 - `third_party/duckdb/1.5.6`（`duckdb.dll` 36.7 MB + `.lib` 2 MB + 头文件）未入库，worktree 缺失 → `build.rs` 找不到库。**解**：从主仓库 robocopy 进去（保持自包含）。
 - 首次全量编译 **8 分 13 秒**（独立 target）。
 
-### 8.4 剩余刀（4–7）与阻点
+### 8.4 剩余刀与阻点
 
-- 刀 4（编辑器接线）：**比我原估的大**——`federation.rs:26-64 federated_plan` 除拼 plan 还做别名生成、重名排序、主源回退、notes 文案；内核 `MountSpec` 目前没有 alias/notes 位。直接删拼装会丢语义。两条路：①把 alias/notes 提进内核（推荐，但要扩 `MountSpec`）；②保持编辑器拼装、只走 `open`（无收益的包装）。**待拍板**。
+- 刀 4-1（`56482c22`）：`MountSpec::SqlConnection` 带可选 `alias`（`sql_connection_as`）；`SessionPlan` 带 `notes`（`with_notes`）；`PreparedMounts` 改为**携带挂载键**（联邦 `Vec<(MountSpec, FederatedSource)>`、加速 `(MountSpec, AccelSource)`）；`open` 逐条比对挂载键并校验别名一致。验证 `analysis::` 49 + probe 3。
+- 刀 4-2（`2361c064`）：编辑器 `federated_session` 改走 `plan_for + open`（新纯函数 `session_plan_for`），保留宿主的别名生成与 notes 文案。验证 `cargo check -p rds-editor --lib` 通过、`cargo test -p rds-editor --lib` **786 passed / 0 failed**。
 - 刀 5（洞察）：受「开关显示条件」未决干扰；`SampleSource` 仍是 conn_id 下推形态，切内核前要先定「洞察拿 plan 还是拿 sample spec」。
-- 刀 6（结果集二次分析）：默认档未决（我倾向 `Accelerated`，因为结果集建表本来就在 DuckDB 里）。
+- 刀 6（结果集二次分析）：默认档按建议取 `Accelerated`（结果集建表本来就在 DuckDB 里），**待你最终点头**。
 - 刀 7（全局表）：A+B / 拆 `AnalysisGlobal` / 冻结 未决。
+
+### 8.5 编译崩溃坑（2026-11-15 新踩）
+
+`cargo check -p rds-editor --lib -j 2` 在编译 `toml` / `windows` 时崩溃：
+`rustc exited with code 0xc0000409 (STATUS_STACK_BUFFER_OVERRUN)`——正是 `.cargo/config.toml` 里
+`RUST_MIN_STACK` 要防的那类，且 `-j 2` 并发下仍会复现。**可用口径**：
+
+```powershell
+$env:CARGO_TARGET_DIR="D:\RdataStation\RDS\target-kernel"
+$env:RUST_MIN_STACK="268435456"   # 显式给，不依赖 config 是否生效
+cargo check -p rds-editor --lib -j 1
+```
+
+`-j 1` + 显式 `RUST_MIN_STACK` 一次通过（6 分 14 秒）。
+
 
