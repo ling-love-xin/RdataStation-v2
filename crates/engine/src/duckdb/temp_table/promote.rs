@@ -121,9 +121,76 @@ fn invalid(message: String) -> CoreError {
     CoreError::common(CommonError::General(message))
 }
 
+/// 跨**实例**搬运：把 `source` 连接里的表写进 `dest` 连接上的表，返回写入行数。
+///
+/// 为什么不能 ATTACH：`tmp_q_` 在**进程内存单例**（in-memory 库，别的 DuckDB 实例根本挂不到它），
+/// 而项目 `analytics.duckdb` 在运行期被 `ProjectDatabaseManager` 按次开关地握着——两边同时
+/// 「另一个程序正在使用此文件」的实测见 `crates/engine/tests/analysis_db_exclusive_probe.rs`。
+/// 于是数据只能**搬运**，两条连接的 SQL 上下文之间靠一个中转文件对接。
+///
+/// 中转格式用 **Parquet**（不是 CSV）：列名与类型（含 Decimal / Timestamp / 嵌套）原样过一遍，
+ /// 不经过 Rust 侧任何值装箱，也不需要在目标库重新推断类型。
+///
+ /// **调用方不得持有 `source` / `dest` 的任何锁**后再调本函数。
+pub fn write_table_across_connections(
+    source: &Connection,
+    dest: &Connection,
+    source_table: &str,
+    target_table: &str,
+    mode: PromoteMode,
+) -> Result<u64, CoreError> {
+    if source_table.trim().is_empty() || target_table.trim().is_empty() {
+        return Err(invalid("源表与目标表名都不能为空".to_string()));
+    }
+    let staging = std::env::temp_dir().join(format!(
+        "rds_promote_{}_{}.parquet",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let staging_sql = staging.to_string_lossy().replace('\'', "''");
+
+    // ① 源连接导出中转文件（DuckDB 内部流式写，不经过 Rust）
+    let export = source.execute_batch(&format!(
+        "COPY (SELECT * FROM {}) TO '{}' (FORMAT PARQUET)",
+        quote_ident(source_table),
+        staging_sql
+    ));
+    if let Err(error) = export {
+        let _ = std::fs::remove_file(&staging);
+        return Err(invalid(format!("导出中转文件失败: {error}")));
+    }
+
+    // ② 目标连接从文件建表（`CREATE OR REPLACE` / `CREATE` 由 mode 决定）
+    let target = quote_ident(target_table);
+    let reader = format!("read_parquet('{staging_sql}')");
+    let create = match mode {
+        PromoteMode::Create => format!("CREATE TABLE {target} AS SELECT * FROM {reader}"),
+        PromoteMode::Replace => {
+            format!("CREATE OR REPLACE TABLE {target} AS SELECT * FROM {reader}")
+        }
+    };
+    let written = (|| -> Result<u64, CoreError> {
+        dest.execute_batch(&create)
+            .map_err(|e| invalid(format!("在目标库建表 {target_table} 失败: {e}")))?;
+        let count = dest
+            .query_row(&format!("SELECT count(*) FROM {target}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(|e| invalid(format!("统计目标表行数失败: {e}")))?;
+        Ok(count.max(0) as u64)
+    })();
+
+    // ③ 清理中转文件（成败都清：留着只会占盘）
+    let _ = std::fs::remove_file(&staging);
+    written
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{promote_with_conn, PromoteMode};
+    use super::{promote_with_conn, write_table_across_connections, PromoteMode};
     use duckdb::Connection;
 
     fn dir(tag: &str) -> std::path::PathBuf {
@@ -176,6 +243,79 @@ mod tests {
         let conn = Connection::open_in_memory().expect("内存库");
         assert!(promote_with_conn(&conn, &db, "", "t", PromoteMode::Create).is_err());
         assert!(promote_with_conn(&conn, &db, "tmp_q_x", "", PromoteMode::Create).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 跨实例搬运：源是内存库（单例的等价物），目标是**另一个打开的文件库**（项目库的等价物）。
+    /// 类型必须原样过去（Parquet 中转的意义就在这）。
+    #[test]
+    fn moves_a_table_across_two_connections_with_types_intact() {
+        let dir = dir("transport");
+        let dest_path = dir.join("analytics.duckdb");
+
+        let source = Connection::open_in_memory().expect("源内存库");
+        source
+            .execute_batch(
+                "CREATE TABLE tmp_q_orders AS SELECT \
+                   CAST(1234.5678 AS DECIMAL(12,4)) AS amount, \
+                   DATE '2026-11-15' AS biz_date, \
+                   'a''b' AS note",
+            )
+            .expect("源表");
+
+        let dest = Connection::open(&dest_path).expect("目标文件库");
+        let written = write_table_across_connections(
+            &source,
+            &dest,
+            "tmp_q_orders",
+            "orders_persisted",
+            PromoteMode::Create,
+        )
+        .expect("跨实例搬运");
+        assert_eq!(written, 1);
+
+        // 列类型跟着过去：Decimal 仍是 Decimal（不是被字符串化成 DOUBLE/TEXT）
+        let ty: String = dest
+            .query_row(
+                "SELECT data_type FROM information_schema.columns \
+                 WHERE table_name = 'orders_persisted' AND column_name = 'amount'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("读列类型");
+        assert!(
+            ty.to_uppercase().starts_with("DECIMAL"),
+            "Decimal 类型应原样保留，实际 {ty}"
+        );
+
+        // 引号与日期原样过一遍
+        let note: String = dest
+            .query_row("SELECT note FROM orders_persisted", [], |row| row.get(0))
+            .expect("读 note");
+        assert_eq!(note, "a'b");
+
+        // Create 撞名被拒；Replace 允许覆盖
+        assert!(write_table_across_connections(
+            &source,
+            &dest,
+            "tmp_q_orders",
+            "orders_persisted",
+            PromoteMode::Create
+        )
+        .is_err());
+        assert_eq!(
+            write_table_across_connections(
+                &source,
+                &dest,
+                "tmp_q_orders",
+                "orders_persisted",
+                PromoteMode::Replace
+            )
+            .expect("覆盖"),
+            1
+        );
+
+        drop(dest);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
