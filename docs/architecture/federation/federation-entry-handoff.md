@@ -206,11 +206,27 @@ ATTACH 失败：挂载目标库失败: IO Error: Cannot open file "...\.RSmeta\a
 - 于是**任何「第二连接 + ATTACH」都写不进项目分析库**——`promote` 原语只适用于「自己拥有的独立文件库」；
 - 唯一可行：经 `ProjectDatabaseManager::duckdb_conn()` 那条既有写连接写，即数据要从内存单例
   **跨库搬运**（`tmp_q_` 读行 → 项目连接写入），不是 ATTACH 复制。
+- 注意「既有写连接」在运行期是**按次开关**（`open_project_store`），所以 ② 的正确形态是：
+  **一次项目库会话内完成「读单例行 → 建表 → 写行」**，而不是先 ATTACH 再指望锁一直可拿。
 
-**顺带浮出的既有疑点（未验证，不与上面结论混写）**：`workbench/src/services/mock_generator.rs` 的
-`open_analysis_db()` / `persist_table_at()` / `append_table_at()` 全是「新开连接写项目库」；若项目打开时
-那条长连接在，这条路按本结论应当失败。`mock/tests/persistence_roundtrip.rs` 只覆盖 SQLite store，
-没有任何用例碰这条路径。**需要一次真机落库验证**（不要在没验证前改它的实现）。
+**关于 mock 落库（`workbench/src/services/mock_generator.rs`）的正确结论**（`crates/workbench/tests/mock_persist_exclusive.rs` 实测）：
+
+```text
+第二连接打开分析库：失败 → IO Error: Cannot open file "...\rds_mock_persist_open_*.RSmeta\analytics.duckdb":
+  另一个程序正在使用此文件，进程无法访问。File is already open in ...(PID 26152)
+```
+
+即 `open_analysis_db` 那一步在「有 manager 活着」时必失败。**但运行期并不是长期持有**：
+全仓 `ProjectDatabaseManager` 的使用都是**按次开关**（`connection_dialog/src/services/data_source_service.rs`
+的 `open_project_store` 每次调用开一个，用完即释放；insight 的 store 同样按次开），
+workbench 里没有任何字段长期持有 project manager。所以：
+
+- mock 落库 / 追加**在常态下可以成功**（我先前「必然失败」的推断过强，此处更正）；
+- 失败条件是**并发窗口**：正好有一次项目库操作（连接保存 / 洞察索引 / 资产操作）持着连接时，
+  `open_analysis_db` 会撞锁报「另一个程序正在使用此文件」；
+- 因此它属于**需要收敛的脆弱点**（应改为「复用当次已打开的 manager 连接」或加一次可读重试），
+  不是「已经坏了」。验证前不要改它的实现。
+
 
 
 
