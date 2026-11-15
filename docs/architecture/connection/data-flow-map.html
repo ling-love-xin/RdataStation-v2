@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RdataStation 数据层关系图：数据库 · 驱动 · 指纹 · 缓存</title>
+<style>
+:root{
+  --bg:#fbfbfa;
+  --surface:#ffffff;
+  --ink:#1b1e22;
+  --ink-2:#4a5058;
+  --ink-3:#7a828c;
+  --line:#dcdfe4;
+  --line-strong:#b9c0c8;
+  --accent:#2f6f9f;
+  --accent-soft:#eaf1f6;
+  --danger:#b3392b;
+  --danger-soft:#fbeeec;
+  --ok:#357a55;
+  --ok-soft:#ecf5ef;
+  --code:#eef0f2;
+  --mono:"JetBrains Mono","Cascadia Code",Consolas,ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#15181c;
+    --surface:#1c2026;
+    --ink:#e7eaee;
+    --ink-2:#a8b0ba;
+    --ink-3:#78818c;
+    --line:#2c3238;
+    --line-strong:#3e454d;
+    --accent:#79b3d8;
+    --accent-soft:#1e2b34;
+    --danger:#e08379;
+    --danger-soft:#2c1f1d;
+    --ok:#7ec2a0;
+    --ok-soft:#1b2620;
+    --code:#232830;
+  }
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--ink);
+  font:14px/1.65 system-ui,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+}
+.wrap{max-width:1120px;margin:0 auto;padding:40px 24px 72px}
+header{border-bottom:1px solid var(--line-strong);padding-bottom:20px;margin-bottom:32px}
+h1{font-size:24px;line-height:1.35;margin:0 0 8px;font-weight:650;letter-spacing:.2px}
+.sub{color:var(--ink-2);font-size:13px;margin:0}
+.meta{margin-top:12px;color:var(--ink-3);font-size:12px;font-family:var(--mono)}
+
+h2{font-size:16px;font-weight:650;margin:36px 0 4px;padding-left:10px;border-left:3px solid var(--accent)}
+h2 .idx{font-family:var(--mono);color:var(--ink-3);font-size:12px;margin-right:8px;font-weight:400}
+.lede{color:var(--ink-2);font-size:13px;margin:6px 0 16px;padding-left:12px;max-width:74ch}
+
+/* 域表 */
+table{width:100%;border-collapse:collapse;margin:14px 0 8px;font-size:13px;table-layout:fixed}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--ink-3);font-weight:550;font-size:12px;border-bottom:1px solid var(--line-strong)}
+td code{font-family:var(--mono);font-size:12px;background:var(--code);padding:1px 5px;border-radius:3px}
+th:nth-child(1),td:nth-child(1){width:11%}
+th:nth-child(2),td:nth-child(2){width:16%}
+th:nth-child(3),td:nth-child(3){width:33%}
+th:nth-child(4),td:nth-child(4){width:40%}
+
+/* 层 */
+.layer{
+  background:var(--surface);border:1px solid var(--line);
+  border-radius:6px;padding:16px 18px;margin:0 0 0;
+}
+.layer-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.tag{font-family:var(--mono);font-size:11px;letter-spacing:.4px;text-transform:uppercase;
+  color:var(--accent);background:var(--accent-soft);padding:2px 7px;border-radius:3px}
+.layer-title{font-size:14px;font-weight:600}
+.layer-note{color:var(--ink-3);font-size:12px}
+
+.flow{display:flex;gap:8px;flex-wrap:wrap;align-items:stretch}
+.node{
+  flex:1 1 200px;min-width:180px;background:var(--bg);border:1px solid var(--line);
+  border-radius:5px;padding:9px 11px;
+}
+.node .n-name{font-size:13px;font-weight:600;margin-bottom:3px;display:block}
+.node .n-path{font-family:var(--mono);font-size:11px;color:var(--ink-3);display:block;margin-bottom:4px;word-break:break-all}
+.node .n-desc{font-size:12px;color:var(--ink-2);line-height:1.55}
+.node.bad{border-color:var(--danger);background:var(--danger-soft)}
+.node.good{border-color:var(--ok);background:var(--ok-soft)}
+.node.ghost{background:transparent;border-style:dashed}
+
+.arrow{display:flex;align-items:center;justify-content:center;color:var(--line-strong);
+  font-family:var(--mono);font-size:16px;flex:0 0 22px}
+
+.down{align-self:center;color:var(--line-strong);font-family:var(--mono);font-size:15px;
+  margin:6px 0;display:block;text-align:center;letter-spacing:2px}
+
+/* 故障卡 */
+.case{border:1px solid var(--line);border-left:3px solid var(--danger);border-radius:4px;
+  padding:12px 14px;margin:10px 0;background:var(--surface)}
+.case .c-head{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:6px}
+.case .c-id{font-family:var(--mono);font-size:11px;color:var(--danger);font-weight:600}
+.case .c-title{font-size:13px;font-weight:600}
+.case .c-status{font-family:var(--mono);font-size:11px;padding:1px 6px;border-radius:3px;
+  background:var(--danger-soft);color:var(--danger);border:1px solid transparent}
+.case .c-status.fixed{background:var(--ok-soft);color:var(--ok)}
+.case p{margin:4px 0;font-size:12.5px;color:var(--ink-2)}
+.case code{font-family:var(--mono);font-size:11.5px;background:var(--code);padding:1px 4px;border-radius:3px}
+
+.idx-table{margin-top:8px}
+.idx-table td code{display:inline-block}
+
+footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--line);
+  color:var(--ink-3);font-size:12px}
+
+@media (max-width:720px){
+  .wrap{padding:24px 14px 48px}
+  .flow{flex-direction:column}
+  .arrow{flex:none;transform:rotate(90deg);height:16px}
+  table{table-layout:auto;font-size:12px}
+  th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2),
+  th:nth-child(3),td:nth-child(3),th:nth-child(4),td:nth-child(4){width:auto}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>数据层关系图：数据库 · 驱动 · 指纹 · 缓存 · 全局/项目 · 插件</h1>
+  <p class="sub">本文只画「运行时真实链路」，每个节点标代码位置，便于逐条核对。静态快照，2026-11-15。</p>
+  <p class="meta">仓库 D:\RdataStation\RDS\RdataStation-v2 · 分支 feat/federation-entry · 真机数据根 .rds</p>
+</header>
+
+<h2><span class="idx">00</span>先说结论：域是两条，不是一条</h2>
+<p class="lede">
+缓存目录按连接域分流，全局侧一直有缓存，只是你手上 4 条连接都是 <code>P_</code> / <code>GP_</code> 前缀，所以全部落在项目侧。
+第二个容易被误读的点：<code>GP_</code>（全局＋项目）的连接记录有两份，但它的<strong>缓存落在项目侧</strong>——
+<code>NavSource</code> 把 <code>GP_</code> 判为 <code>Shared</code>，而缓存域映射只把 <code>Global</code> 送去全局目录。因此同一个物理库被 <code>GP_</code> 引用在两个项目里会各扫一份。
+</p>
+
+<table>
+<thead>
+<tr><th>前缀</th><th>作用域</th><th>连接记录落库</th><th>L2 缓存目录</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>G_</code></td>
+  <td>仅全局</td>
+  <td><code>global.db / global_connections</code></td>
+  <td><code>&lt;RDS_HOME&gt;/data/system/global_metadata/</code><br><span class="layer-note">真机：conn_G_conn_SQLite_Example.sqlite、meta_5245bb07154b9192.sqlite</span></td>
+</tr>
+<tr>
+  <td><code>P_</code></td>
+  <td>仅项目</td>
+  <td><code>project.db / connections</code></td>
+  <td><code>{project}/meta/connection_metadata/</code></td>
+</tr>
+<tr>
+  <td><code>GP_</code></td>
+  <td>全局＋项目</td>
+  <td>全局库一行 + 项目库一行（共享引用）</td>
+  <td><code>{project}/meta/connection_metadata/</code><br><span class="layer-note">走项目域，不落全局目录</span></td>
+</tr>
+</tbody>
+</table>
+<p class="lede" style="padding-left:0;font-family:var(--mono);font-size:11.5px;color:var(--ink-3)">
+判定：crates/database/src/model.rs:54 NavSource::from_conn_id（GP_→Shared / G_→Global / 其余→Project）<br>
+映射：crates/store/src/persistence/metadata_cache.rs:90 build_metadata_path（Global→global_metadata；其余→项目 dir）<br>
+取域：crates/database/src/cache.rs:73（只有 Global 走全局，Shared 与 Project 一律项目）
+</p>
+
+<h2><span class="idx">01</span>存储面：四个库 + 两个缓存目录</h2>
+<p class="lede">连接记录、驱动目录、插件登记都在 SQLite；分析明细在 DuckDB；元数据缓存是「每连接一份」的独立 SQLite 文件。</p>
+
+<div class="layer">
+  <div class="layer-head"><span class="tag">disk</span><span class="layer-title">磁盘布局</span><span class="layer-note">以真机为例：RDS_HOME=.rds，项目根 D:/data/A1/A1</span></div>
+  <div class="flow">
+    <div class="node">
+      <span class="n-name">全局库</span>
+      <span class="n-path">.rds/data/system/global.db</span>
+      <span class="n-desc">62.76 MB。持有 <code>global_connections</code>、<code>drivers</code>、<code>plugins</code>、<code>duckdb_extensions</code>、<code>extension_operations</code>。连接对话框驱动下拉的唯一数据源。</span>
+    </div>
+    <div class="node">
+      <span class="n-name">全局分析库</span>
+      <span class="n-path">.rds/data/system/analytics.duckdb</span>
+      <span class="n-desc">0.76 MB。全局侧的 DuckDB 加速 / 联邦目标库。</span>
+    </div>
+    <div class="node">
+      <span class="n-name">项目库</span>
+      <span class="n-path">{project}/.RSmeta/project.db</span>
+      <span class="n-desc">0.58 MB。持有 <code>connections</code>（25 列，<strong>没有 url 列</strong>）、导航展开状态等。</span>
+    </div>
+    <div class="node">
+      <span class="n-name">项目分析库</span>
+      <span class="n-path">{project}/analysis.duckdb</span>
+      <span class="n-desc">项目级 DuckDB；写路径独占，读路径用 READ_ONLY 打开避免单写者锁。</span>
+    </div>
+  </div>
+  <span class="down">↓</span>
+  <div class="flow">
+    <div class="node good">
+      <span class="n-name">全局域 L2</span>
+      <span class="n-path">&lt;RDS_HOME&gt;/data/system/global_metadata/</span>
+      <span class="n-desc">只放 <code>G_</code> 连接：<code>meta_{fp}.sqlite</code> 或回退 <code>conn_{safe}.sqlite</code>。</span>
+    </div>
+    <div class="node good">
+      <span class="n-name">项目域 L2</span>
+      <span class="n-path">{project}/meta/connection_metadata/</span>
+      <span class="n-desc">放 <code>P_</code> 与 <code>GP_</code>：同一物理库在域内共享 <code>meta_{fp}.sqlite</code>，跨域不共享。</span>
+    </div>
+  </div>
+</div>
+
+<h2><span class="idx">02</span>连接记录 → 领域模型</h2>
+<p class="lede">两条表结构一致但是两份数据；<code>driver</code> 与 <code>driver_id</code> 是<strong>两列</strong>，本次事故就出在这里。</p>
+
+<div class="layer">
+  <div class="layer-head"><span class="tag">record</span><span class="layer-title">表 → DataSource</span></div>
+  <div class="flow">
+    <div class="node">
+      <span class="n-name">global_connections</span>
+      <span class="n-path">global.db</span>
+      <span class="n-desc">全局连接行。<code>G_</code> 只此一份；<code>GP_</code> 在这里也有一行「全局定义」。</span>
+    </div>
+    <div class="node">
+      <span class="n-name">connections</span>
+      <span class="n-path">project.db</span>
+      <span class="n-desc"><code>P_</code> 与 <code>GP_</code> 的项目侧行。<code>GP_</code> 因此有两行，两份记录互不同步。</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node">
+      <span class="n-name">DataSource</span>
+      <span class="n-path">crates/connection/src/model.rs:58</span>
+      <span class="n-desc"><code>db_type</code> ← 表的 <code>driver</code> 列；<code>driver_id</code> ← 表的 <code>driver_id</code> 列；<code>password_encrypted</code> 为 AES-256-GCM 密文。</span>
+    </div>
+  </div>
+  <span class="down">↓</span>
+  <div class="flow">
+    <div class="node ghost">
+      <span class="n-name">没有 url 列</span>
+      <span class="n-path">运行时按 host/port/database 现拼</span>
+      <span class="n-desc">所以改驱动 id 不会动 URL；但 URL 是<strong>指纹的输入</strong>，改动 host/port/db 会换缓存，改密码不会。</span>
+    </div>
+  </div>
+</div>
+
+<h2><span class="idx">03</span>驱动面：两条独立的路，只有一个喂建连</h2>
+<p class="lede">
+这是最容易混的一层：<code>drivers</code> 表只喂「连接对话框下拉」，建连走的是内存里的 <code>DriverRegistry</code>。
+表里有行 ≠ 注册表里有实现——两者不同步就是 <code>CONN_DRIVER_NOT_FOUND</code> 的温床。
+</p>
+
+<div class="layer">
+  <div class="layer-head"><span class="tag">builtin</span><span class="layer-title">内置四实现 → 内存注册表</span></div>
+  <div class="flow">
+    <div class="node">
+      <span class="n-name">builtin_factories()</span>
+      <span class="n-path">crates/driver/src/loader.rs:103</span>
+      <span class="n-desc">唯一定义处，只有 4 个：<code>mysql_native</code>(mysql_async) / <code>postgres_native</code>(tokio-postgres) / <code>sqlite</code>(rusqlite) / <code>duckdb</code>(duckdb-rs)。</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node">
+      <span class="n-name">init_driver_manager()</span>
+      <span class="n-path">crates/driver/src/manager.rs:175</span>
+      <span class="n-desc">启动时遍历 builtin_factories 注册。</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node good">
+      <span class="n-name">DriverRegistry</span>
+      <span class="n-path">crates/driver/src/manager.rs:162（OnceLock 进程单例）</span>
+      <span class="n-desc">按 id <strong>精确匹配</strong>，无别名映射（router.rs:36-42 同口径）。</span>
+    </div>
+  </div>
+  <span class="down">↓ 另一条路：插件</span>
+  <div class="layer-head"><span class="tag">plugin</span><span class="layer-title">sidecar 插件 → 内存注册表</span></div>
+  <div class="flow">
+    <div class="node">
+      <span class="n-name">plugin.toml</span>
+      <span class="n-path">.rds/plugins/&lt;id&gt;</span>
+      <span class="n-desc"><code>[[contributes.drivers]]</code> 声明 id。真机三个：<code>mssql</code> / <code>oracle</code> / <code>postgresql</code>。</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node">
+      <span class="n-name">activate_plugin()</span>
+      <span class="n-path">crates/plugin/src/manager.rs:1098</span>
+      <span class="n-desc">激活时调 <code>register_sidecar_drivers</code>；<strong>只有被激活</strong>才注册，停用会 unregister。</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node">
+      <span class="n-name">register_by_factory</span>
+      <span class="n-path">crates/plugin/src/sidecar/factory.rs:322</span>
+      <span class="n-desc">把 <code>SidecarDriverFactory</code> 塞进同一个 <code>DriverRegistry</code>。</span>
+    </div>
+  </div>
+  <span class="down">↓ 展示面（不进建连）</span>
+  <div class="flow">
+    <div class="node ghost">
+      <span class="n-name">drivers 表</span>
+      <span class="n-path">global.db · 真机 7 行</span>
+      <span class="n-desc">由 <code>resync_sidecar_driver_rows</code>（crates/plugin/src/manager.rs:1174）从「已加载插件」全量重算写入，另有内置 4 行。只服务连接对话框的驱动目录与插件页展示。</span>
+    </div>
+  </div>
+</div>
+
+<h2><span class="idx">04</span>建连面：一次点击到底发生什么</h2>
+<p class="lede">生产入口是 <code>ConnectionService::connect_with_type</code>；<code>create_connection_with_registry</code> 只是测试/工具入口，不落库。</p>
+
+<div class="layer">
+  <div class="layer-head"><span class="tag">connect</span><span class="layer-title">从记录到会话</span></div>
+  <div class="flow">
+    <div class="node">
+      <span class="n-name">ConnectionService::connect_with_type</span>
+      <span class="n-path">crates/connection_dialog/src/services/connection_service/runtime.rs:147</span>
+      <span class="n-desc">带持久化、网络链、指纹登记的生产入口。</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node">
+      <span class="n-name">DriverConnectionConfig::new(db_type)</span>
+      <span class="n-path">runtime.rs:900 / 重连 :473</span>
+      <span class="n-desc">查表键是 <code>config.driver</code>，值来自记录的 <code>driver</code> 列——不是 <code>driver_id</code> 列。</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node bad">
+      <span class="n-name">DriverRegistry::get</span>
+      <span class="n-path">crates/engine/src/connection_manager.rs:190</span>
+      <span class="n-desc">查不到 → <code>DriverNotFound</code>（:201）+ <code>record_missing_driver</code> 留痕（D8c）。这一层<strong>没有别名回落</strong>。</span>
+    </div>
+  </div>
+  <span class="down">↓ 成功后</span>
+  <div class="flow">
+    <div class="node good">
+      <span class="n-name">register_identity(conn_id, identity)</span>
+      <span class="n-path">runtime.rs:1036 / data_source_service.rs:1563</span>
+      <span class="n-desc">用 <code>identity_from_url(db_type, url, principal, schema, default_port)</code> 构造身份，写进程内注册表。</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node">
+      <span class="n-name">ConnectionManager</span>
+      <span class="n-path">engine</span>
+      <span class="n-desc">持有 <code>conn_id → Arc&lt;dyn Database&gt;</code>；文件型库按 URL 做别名复用，避免双句柄。</span>
+    </div>
+  </div>
+</div>
+
+<h2><span class="idx">05</span>指纹面：缓存文件名的唯一来源</h2>
+<p class="lede">
+身份 = 驱动族 + 地址 + 主体。三者任一改变都换文件；连接名、密码、SSL 参数都不参与，所以那类改动不会重扫。
+<strong>本次事故的根因就在第一项</strong>：它原本写的是「驱动实现 id」，2026-11-15 已改为「驱动族」。
+</p>
+
+<div class="layer">
+  <div class="layer-head"><span class="tag">identity</span><span class="layer-title">ConnectionIdentity → 文件名</span></div>
+  <div class="flow">
+    <div class="node">
+      <span class="n-name">ConnectionIdentity</span>
+      <span class="n-path">crates/store/src/persistence/metadata_identity.rs</span>
+      <span class="n-desc"><code>type_id</code>（驱动）+ <code>authority</code>（Network{host,port,database,schema} / File{path} / Ephemeral）+ <code>principal</code>（用户名）。</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node good">
+      <span class="n-name">canonical_string()</span>
+      <span class="n-path">:102 · 段值走 driver_family()</span>
+      <span class="n-desc"><code>v1|&lt;族&gt;|net:host:port/db/schema|user:principal</code>。族归一：mysql_native→mysql，postgres_native/postgresql→postgres。</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node">
+      <span class="n-name">fingerprint()</span>
+      <span class="n-path">:143</span>
+      <span class="n-desc">sha256(canonical) 取前 16 位十六进制。</span>
+    </div>
+  </div>
+  <span class="down">↓</span>
+  <div class="flow">
+    <div class="node">
+      <span class="n-name">进程内注册表</span>
+      <span class="n-path">metadata_identity_registry.rs:86 / :110</span>
+      <span class="n-desc"><code>conn_id → fp</code>，<strong>不落盘</strong>，进程重启即空；索引表 <code>metadata_cache_index</code> 另行落盘只作诊断。</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node">
+      <span class="n-name">缓存文件名</span>
+      <span class="n-path">metadata_cache.rs:121</span>
+      <span class="n-desc">已登记 → <code>meta_{fp}.sqlite</code>；未登记/不可共享 → <code>conn_{safe_id}.sqlite</code>。</span>
+    </div>
+  </div>
+</div>
+
+<h2><span class="idx">06</span>缓存面：三级 + 展开链路</h2>
+<p class="lede">L1 是进程内存，L2 是每连接 SQLite，L3 是实时内省（不是缓存）。L1 曾长期无人写入，现已补齐读写。</p>
+
+<div class="layer">
+  <div class="layer-head"><span class="tag">read</span><span class="layer-title">collect_objects 的三级分支</span><span class="layer-note">crates/database/src/navigator_service.rs:965 / :976 / :1041</span></div>
+  <div class="flow">
+    <div class="node good">
+      <span class="n-name">L1 进程内</span>
+      <span class="n-path">CacheManager::instance().metadata_cache()</span>
+      <span class="n-desc">&lt;0.1 ms。表/视图分键；大 schema 不回填（阈值见 CHUNK_THRESHOLD）。日志：<code>collect_objects L1 命中</code>。</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node good">
+      <span class="n-name">L2 每连接 SQLite</span>
+      <span class="n-path">NavCache::open → MetadataCacheManager → MetadataCachePool</span>
+      <span class="n-desc">&lt;5 ms。按指纹文件共享；命中回填 L1 并补 <code>is_schema_complete</code>。</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node">
+      <span class="n-name">L3 实时内省</span>
+      <span class="n-path">MetadataService::introspect_schema_objects</span>
+      <span class="n-desc">10~500 ms，<strong>不是缓存</strong>。日志：<code>collect_objects 实时内省完成</code>。</span>
+    </div>
+  </div>
+  <span class="down">↓ 展开动作</span>
+  <div class="flow">
+    <div class="node">
+      <span class="n-name">toggle_nav_node</span>
+      <span class="n-path">crates/database/src/nav_view/actions.rs:360</span>
+      <span class="n-desc">未建连先 <code>ensure_connected_for_browse</code>（:435，<strong>乐观语义</strong>：派发即返回 true，不阻塞 UI）→ <code>ensure_nav_loaded</code> → <code>mark_nav_state_dirty</code>（:423，无条件写项目库）。</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node">
+      <span class="n-name">nav_jobs worker</span>
+      <span class="n-path">crates/database/src/nav_jobs/worker.rs</span>
+      <span class="n-desc"><code>PER_CONN_CONCURRENCY=1</code>（同连接严格串行）、<code>WARM_START_DELAY=3s</code>（连上后延迟 3 秒预热）、<code>LOAD_GLOBAL_CAP=3</code>。</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node">
+      <span class="n-name">apply_connect_results</span>
+      <span class="n-path">actions.rs:483</span>
+      <span class="n-desc">真连接结果由轮询泵回填；<strong>树在这一刻才出现</strong>——等待期界面没有任何「正在连接」提示。</span>
+    </div>
+  </div>
+</div>
+
+<h2><span class="idx">07</span>三处故障点（本次排查）</h2>
+
+<div class="case">
+  <div class="c-head">
+    <span class="c-id">F1</span>
+    <span class="c-title">驱动 id 断层：记录写 mysql，注册表里只有 mysql_native</span>
+    <span class="c-status fixed">已修（数据）</span>
+  </div>
+  <p>D4 把 sqlx 实现剥离成 sidecar 插件，内置实现改名为 <code>mysql_native</code> / <code>postgres_native</code>，<code>mysql</code> / <code>postgres</code> 这两个 id 变成「由 rds.driver.sqlx 插件贡献」。</p>
+  <p>连接记录里 <code>driver</code> 与 <code>driver_id</code> 两列仍是旧 id，<code>DriverRegistry::get</code> 精确匹配查不到 → <code>CONN_DRIVER_NOT_FOUND</code>。已把 4 行两列改为 <code>mysql_native</code> / <code>postgres_native</code>，备份 <code>project.db.bak-20261115-1054</code>。</p>
+  <p><strong>设计上的欠债</strong>：提示文案里的「去装 rds.driver.sqlx 或用 MySQL (Official)」这条退路只在单测里断言过，界面上用户只看到裸 Display，没走到弹窗（data_source_service.rs:1728-1741）。</p>
+</div>
+
+<div class="case">
+  <div class="c-head">
+    <span class="c-id">F2</span>
+    <span class="c-title">指纹把「驱动实现 id」当身份，换实现即换缓存文件</span>
+    <span class="c-status fixed">已修（代码，待真机验证）</span>
+  </div>
+  <p>改 F1 的 <code>driver</code> 列会连带改指纹：canonical 从 <code>v1|mysql|…</code> 变成 <code>v1|mysql_native|…</code>，文件名从 <code>meta_439cdbba942f1c99</code> 变成 <code>meta_8712861e2c2f5b96</code>。旧缓存（500 KB / 600 KB）还在盘上，只是没人再打开，于是每次展开退回 L3。</p>
+  <p>已加 <code>driver_family()</code> 归一到族，且<strong>不升 format_version</strong>（升了会让 sqlite/duckdb 的完好缓存一起作废）。<code>cargo test -p rds-store --lib -- metadata_identity</code> 22 passed。</p>
+  <p><strong>残留</strong>：今天新建的两个空文件（<code>meta_8712861e2c2f5b96.sqlite</code> 448 KB、<code>meta_a4329bc00db1e446.sqlite</code> 556 KB）会变成孤儿，尚未清理。</p>
+</div>
+
+<div class="case">
+  <div class="c-head">
+    <span class="c-id">F3</span>
+    <span class="c-title">插件页显示「全部 0」，但 drivers 表有 3 行</span>
+    <span class="c-status">未定位</span>
+  </div>
+  <p>数据层是齐的：<code>plugins</code> 3 行（mssql-rust / oracle-rust / postgres-py，均 sidecar、is_enabled=1），<code>drivers</code> 7 行，日志 <code>插件驱动行同步：写 1 → 2 → 3 行</code> 说明 <code>loaded_plugins</code> 有 3 条。</p>
+  <p>但 <code>PluginPanel::plugins_snapshot()</code> 返回空。唯一悬空解释是 <code>PluginPanel::new</code> 首刷的 <code>cx.spawn</code> 回写竞态——<code>weak.update</code> 失败被 <code>let _ =</code> 静默吞掉，没有运行期证据。</p>
+  <p><strong>这条分支和 F1/F2 是同一个根源的另一面</strong>：「表里有行」和「内存里有实现/有快照」不是同一个事实源，缺一道对账。</p>
+</div>
+
+<h2><span class="idx">08</span>代码位置索引</h2>
+<table class="idx-table">
+<thead><tr><th style="width:34%">环节</th><th style="width:66%">位置</th></tr></thead>
+<tbody>
+<tr><td>内置驱动清单</td><td><code>crates/driver/src/loader.rs:103 builtin_factories()</code></td></tr>
+<tr><td>运行时注册表</td><td><code>crates/driver/src/manager.rs:162 OnceLock</code> / <code>:175 init_driver_manager()</code></td></tr>
+<tr><td>精确匹配无别名</td><td><code>crates/driver/src/manager.rs:143</code> / <code>crates/driver/src/router.rs:36-42</code></td></tr>
+<tr><td>插件驱动注册</td><td><code>crates/plugin/src/manager.rs:1098</code> → <code>crates/plugin/src/sidecar/factory.rs:322</code></td></tr>
+<tr><td>插件驱动行同步</td><td><code>crates/plugin/src/manager.rs:1174 resync_sidecar_driver_rows</code></td></tr>
+<tr><td>生产建连入口</td><td><code>crates/connection_dialog/src/services/connection_service/runtime.rs:147</code></td></tr>
+<tr><td>查驱动 + 留痕</td><td><code>crates/engine/src/connection_manager.rs:190 / :201</code></td></tr>
+<tr><td>身份构造</td><td><code>crates/store/src/persistence/metadata_identity.rs:171 identity_from_url</code></td></tr>
+<tr><td>canonical / 指纹</td><td><code>…/metadata_identity.rs:102 canonical_string</code> / <code>:143 fingerprint</code> / <code>:158 cache_file_name</code></td></tr>
+<tr><td>进程内注册表</td><td><code>…/metadata_identity_registry.rs:86 register_identity</code> / <code>:110 identity_fingerprint</code></td></tr>
+<tr><td>缓存路径与域</td><td><code>crates/store/src/persistence/metadata_cache.rs:90 build_metadata_path</code> / <code>:121</code> / <code>:134 open</code></td></tr>
+<tr><td>域判定</td><td><code>crates/database/src/model.rs:54 NavSource::from_conn_id</code></td></tr>
+<tr><td>L2 打开</td><td><code>crates/database/src/cache.rs:54 NavCache::open</code> / <code>:72 open_impl</code></td></tr>
+<tr><td>三级分支</td><td><code>crates/database/src/navigator_service.rs:965 / :976 / :1041</code></td></tr>
+<tr><td>展开动作</td><td><code>crates/database/src/nav_view/actions.rs:360 / :408 / :423 / :426-432 / :483</code></td></tr>
+<tr><td>导航队列</td><td><code>crates/database/src/nav_jobs/worker.rs:27 / :32 / :49</code></td></tr>
+</tbody>
+</table>
+
+<footer>
+  全部结论来自本地代码与真机磁盘核对，未做推断性补全；仍未闭合的两项：F3 的插件页空快照、PG 列解码缺口（postgres_native.rs:451 整列取不到值时不分「无解码器」与「全 NULL」）。
+</footer>
+
+</div>
+</body>
+</html>

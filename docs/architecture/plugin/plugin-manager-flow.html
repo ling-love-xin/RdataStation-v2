@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>插件管理页 · 流程与事实源</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%232f6f5b'/%3E%3Cpath d='M4 4h3v3H4zM4 9h3v3H4zM9 6h3v1H9zM9 11h3v1H9z' fill='%23fff'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f6f7f8;
+    --panel: #ffffff;
+    --line: #d9dee3;
+    --text: #1f2429;
+    --muted: #6b7480;
+    --flow: #2f6f5b;
+    --db: #2c5f8a;
+    --mem: #7a5a1f;
+    --fail: #a33a32;
+    --gap: 4px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16191c;
+      --panel: #1e2327;
+      --line: #2f363c;
+      --text: #e6e9ec;
+      --muted: #9aa4ae;
+      --flow: #6fbfa2;
+      --db: #7cb0dd;
+      --mem: #d6ab6a;
+      --fail: #e08279;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.7 "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  nav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 32px; }
+  nav a {
+    border: 1px solid var(--line); border-radius: 4px;
+    padding: 4px 8px; font-size: 12px; color: var(--muted);
+    text-decoration: none; background: var(--panel);
+  }
+  nav a:hover { color: var(--text); border-color: var(--muted); }
+  section { margin-bottom: 40px; scroll-margin-top: 16px; }
+  h2 {
+    font-size: 15px; font-weight: 600; margin: 0 0 12px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--line);
+  }
+  h2 span { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 8px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--muted); margin-bottom: 16px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: 1px; }
+  /* 流程节点 */
+  .flow { display: flex; flex-direction: column; gap: 0; }
+  .node {
+    background: var(--panel); border: 1px solid var(--line);
+    border-left: 3px solid var(--flow);
+    border-radius: 4px; padding: 8px 12px;
+  }
+  .node.db { border-left-color: var(--db); }
+  .node.mem { border-left-color: var(--mem); }
+  .node.fail { border-left-color: var(--fail); }
+  .node .t { font-size: 13px; font-weight: 600; }
+  .node .d { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .node code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; color: var(--muted); }
+  .arrow { text-align: center; color: var(--muted); font-size: 12px; line-height: 20px; }
+  .arrow small { color: var(--muted); font-size: 11px; margin-left: 4px; }
+  /* 分支 */
+  .branch {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;
+    margin: 8px 0;
+  }
+  .bcard {
+    background: var(--panel); border: 1px solid var(--line);
+    border-top: 2px solid var(--flow); border-radius: 4px; padding: 8px 10px;
+  }
+  .bcard h3 { font-size: 12px; font-weight: 600; margin: 0 0 4px; }
+  .bcard p { font-size: 12px; color: var(--muted); margin: 0; }
+  .bcard.auto { border-top-color: var(--flow); }
+  .bcard.manual { border-top-color: var(--mem); }
+  /* 表格 */
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+  th, td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: var(--panel); font-weight: 600; }
+  td code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; }
+  .t1 th:nth-child(1), .t1 td:nth-child(1) { width: 18%; }
+  .t1 th:nth-child(2), .t1 td:nth-child(2) { width: 26%; }
+  .t1 th:nth-child(3), .t1 td:nth-child(3) { width: 26%; }
+  .t1 th:nth-child(4), .t1 td:nth-child(4) { width: 30%; }
+  .t2 th:nth-child(1), .t2 td:nth-child(1) { width: 16%; }
+  .t2 th:nth-child(2), .t2 td:nth-child(2) { width: 21%; }
+  .t2 th:nth-child(3), .t2 td:nth-child(3) { width: 21%; }
+  .t2 th:nth-child(4), .t2 td:nth-child(4) { width: 21%; }
+  .t2 th:nth-child(5), .t2 td:nth-child(5) { width: 21%; }
+  .t3 th:nth-child(1), .t3 td:nth-child(1) { width: 30%; }
+  .t3 th:nth-child(2), .t3 td:nth-child(2) { width: 70%; }
+  .scroll { overflow-x: auto; }
+  .note {
+    border-left: 3px solid var(--fail); background: var(--panel);
+    border-radius: 4px; padding: 8px 12px; font-size: 12px; margin-top: 12px;
+  }
+  .note b { color: var(--fail); }
+  .ok { color: var(--flow); }
+  .warn { color: var(--mem); }
+  @media (max-width: 720px) {
+    .branch { grid-template-columns: 1fr; }
+    .t1, .t2, .t3 { font-size: 11px; }
+    .wrap { padding: 24px 12px 48px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>插件管理页 · 流程与事实源</h1>
+  <div class="sub">RdataStation-v2 / <code>feat/federation-entry</code> · 全部行号取自当前工作区源码</div>
+
+  <nav>
+    <a href="#s0">00 六个事实源</a>
+    <a href="#s1">01 启动装配</a>
+    <a href="#s2">02 首扫与热插拔</a>
+    <a href="#s3">03 用户操作落点</a>
+    <a href="#s4">04 面板刷新链路</a>
+    <a href="#s5">05 驱动 id 设计</a>
+    <a href="#s6">06 代码索引</a>
+  </nav>
+
+  <div class="legend">
+    <span><i style="background:var(--flow)"></i>流程步骤</span>
+    <span><i style="background:var(--db)"></i>落库</span>
+    <span><i style="background:var(--mem)"></i>进程内内存</span>
+    <span><i style="background:var(--fail)"></i>故障点</span>
+  </div>
+
+  <!-- ===== 00 事实源 ===== -->
+  <section id="s0">
+    <h2>00 六个事实源 <span>「全 0」只可能是其中某一处空</span></h2>
+    <div class="scroll">
+    <table class="t1">
+      <tr><th>事实源</th><th>物理位置</th><th>谁写</th><th>谁读</th></tr>
+      <tr><td>插件登记行</td><td><code>global.db.plugins</code>（3 行）</td><td><code>installer::register_manifest</code></td><td>启停判定、重启后恢复启用态</td></tr>
+      <tr><td>已加载清单</td><td><code>loaded_plugins</code>（内存）</td><td><code>load_plugin_from_dir</code> <code>:873</code></td><td><code>resync_sidecar_driver_rows</code>、<code>list_plugins</code></td></tr>
+      <tr><td>形态索引</td><td><code>plugin_index</code>（内存）</td><td><code>load_plugin_from_dir</code> <code>:868</code></td><td><b><code>list_plugins</code> 唯一的遍历源</b></td></tr>
+      <tr><td>驱动注册表</td><td><code>DriverRegistry</code>（进程内）</td><td><code>register_by_factory</code> <code>factory.rs:322</code></td><td>建连 <code>DriverRegistry::get</code></td></tr>
+      <tr><td>驱动 UI 行</td><td><code>global.db.drivers</code>（7 行）</td><td><code>resync_sidecar_driver_rows</code> <code>:1174</code></td><td>连接对话框下拉</td></tr>
+      <tr><td>面板快照</td><td><code>PluginPanel.plugins</code>（内存）</td><td><code>refresh_plugins</code> <code>panel.rs:143</code></td><td>中间栏 + 左 Dock（同一个字段）</td></tr>
+    </table>
+    </div>
+    <div class="note">
+      面板快照是第 3 项（形态索引）的派生值，不是第 1 项。所以「<b>plugins 表有 3 行</b>」完全不能推出「<b>面板能看到 3 条</b>」——
+      中间隔着 <code>plugin_index</code> 这一跳，而 <code>list_plugins</code> 遍历它时拿不到就返回空 vec，<b>且不返回错误</b>。
+    </div>
+  </section>
+
+  <!-- ===== 01 启动装配 ===== -->
+  <section id="s1">
+    <h2>01 启动装配 <span>单例初始化 + 同步首扫 + 拉起循环</span></h2>
+    <div class="flow">
+      <div class="node"><div class="t">app 启动</div><div class="d">窗口首帧之前</div></div>
+      <div class="arrow">↓</div>
+      <div class="node"><div class="t">init_plugin_manager(install_dir)</div><div class="d"><code>manager.rs:2350</code></div></div>
+      <div class="arrow">↓</div>
+      <div class="node mem"><div class="t">set_runtime_handle</div><div class="d">把宿主 tokio 句柄存进 <code>PLUGIN_RUNTIME_HANDLE</code>，UI 侧跨线程 block_on 要用 <code>:2352</code></div></div>
+      <div class="arrow">↓</div>
+      <div class="node"><div class="t">PluginManager::new + init()</div><div class="d">创建安装目录；<code>:2358</code></div></div>
+      <div class="arrow">↓</div>
+      <div class="node"><div class="t">PLUGIN_MANAGER.set</div><div class="d">OnceLock 单例，重复设会报错 <code>:2361</code></div></div>
+      <div class="arrow">↓ <small>同步等待，失败只 warn 不阻断启动</small></div>
+      <div class="node db"><div class="t">scan_and_diff_plugins().await</div><div class="d">首轮扫描<code>:2370</code> —— 注释明确写「要赶在窗口首帧读 drivers 行之前」</div></div>
+      <div class="arrow">↓</div>
+      <div class="node"><div class="t">PluginRuntimeLoop::new(...).spawn()</div><div class="d">后台循环，句柄 drop 即 detach <code>:2374</code></div></div>
+    </div>
+  </section>
+
+  <!-- ===== 02 热插拔 ===== -->
+  <section id="s2">
+    <h2>02 首扫与热插拔 <span>同一个函数，每 5 秒一次</span></h2>
+    <div class="flow">
+      <div class="node"><div class="t">tick_once()</div><div class="d"><code>runtime.rs:59</code> · 每 <code>RUNTIME_TICK = 5s</code>（<code>:39</code>）</div></div>
+      <div class="arrow">↓</div>
+      <div class="node db"><div class="t">scan_and_diff_plugins()</div><div class="d"><code>manager.rs:1567</code> · 读上次快照 → 扫 <code>install_dir</code> 下每个含 <code>plugin.toml</code> 的目录</div></div>
+      <div class="arrow">↓ <small>算两组哈希</small></div>
+      <div class="node mem"><div class="t">manifest_hash（清单内容）+ payload_hash（载荷指纹）</div><div class="d"><code>:1603</code> / <code>:1614</code> · 清单没变就复用上次解析结果，不每拍重解 TOML</div></div>
+      <div class="arrow">↓</div>
+      <div class="node"><div class="t">与 scan_snapshot 对比，得到四类 diff</div><div class="d"><code>:1621-1642</code></div></div>
+      <div class="branch">
+        <div class="bcard auto">
+          <h3>added · 新目录</h3>
+          <p>load_plugin_from_dir → 写 index + loaded → resync 驱动行 → 校验依赖 → activate。<b>全自动</b>。<code>:1648</code></p>
+        </div>
+        <div class="bcard auto">
+          <h3>reloaded · 载荷变</h3>
+          <p>清单没变但 exe / py / wasm 变了（重编、改脚本）。自动重启该插件。<b>全自动</b>。</p>
+        </div>
+        <div class="bcard manual">
+          <h3>changed · 清单变</h3>
+          <p>版本、能力、权限声明变了 → 只置 <code>needs_reload</code>，<b>不热生效</b>，要人工点重载。</p>
+        </div>
+        <div class="bcard auto">
+          <h3>removed · 目录消失</h3>
+          <p>unload_plugin → 停用 sidecar → 删 index + loaded。<b>全自动</b>。<code>:1740</code></p>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="node"><div class="t">其余三拍固定动作</div><div class="d"><code>drain_events</code> 收反向请求 → <code>dispatch</code> 答完 → <code>sweep_idle</code> 回收 30 分钟空闲实例 → <code>ping_all</code> 心跳判死 <code>:84-92</code></div></div>
+    </div>
+    <div class="note">
+      机制是活的，但<b>从没在真机上被增删触发过</b>：日志里「插件热插拔扫描：目录有变化」一条都没有（冷启动那条路径不打这条日志）。
+      <b>说「支持」是代码事实，说「验证过」是不成立的。</b>
+    </div>
+  </section>
+
+  <!-- ===== 03 用户操作落点 ===== -->
+  <section id="s3">
+    <h2>03 用户操作落在哪几处 <span>一次操作最多要改四个地方</span></h2>
+    <div class="scroll">
+    <table class="t2">
+      <tr><th>动作</th><th>plugins 表</th><th>index / loaded</th><th>DriverRegistry</th><th>drivers 表</th></tr>
+      <tr><td>安装</td><td>register_manifest 写行</td><td>load 时写</td><td>激活时注册</td><td>resync 写</td></tr>
+      <tr><td>启用</td><td><code>is_enabled=1</code></td><td>—</td><td><b>activate → 注册</b></td><td>resync 翻 enabled</td></tr>
+      <tr><td>停用</td><td><code>is_enabled=0</code></td><td>—</td><td><b>unregister</b></td><td>resync 置灰行</td></tr>
+      <tr><td>重载</td><td>—</td><td>重新 load</td><td>重新注册</td><td>resync</td></tr>
+      <tr><td>卸载</td><td>删行</td><td>删 index + loaded</td><td>unregister</td><td>删行</td></tr>
+    </table>
+    </div>
+    <div class="note">
+      <b>驱动进 DriverRegistry 的前提是被激活</b>：<code>activate_plugin</code>（<code>:1098</code>）里才调 <code>register_sidecar_drivers</code>（<code>factory.rs:296</code>）。
+      所以 <code>drivers</code> 表有行 <b>≠</b> registry 有实现 —— 表只喂 UI 下拉，建连查的是 registry。
+      这是「三个事实源不同步」的结构性来源。
+    </div>
+  </section>
+
+  <!-- ===== 04 面板链路 ===== -->
+  <section id="s4">
+    <h2>04 面板刷新链路 <span>F3「全 0」就断在这一跳</span></h2>
+    <div class="flow">
+      <div class="node"><div class="t">PluginPanel::new(shared, cx)</div><div class="d"><code>panel.rs:37</code> · 左 Dock 与中间栏共用这一个实体</div></div>
+      <div class="arrow">↓</div>
+      <div class="node"><div class="t">refresh_plugins(cx, true)</div><div class="d">首刷 <code>:50</code> · 防重入：<code>loading</code> 为真时只置 <code>refresh_again</code> <code>:118</code></div></div>
+      <div class="arrow">↓ <small>cx.spawn 异步</small></div>
+      <div class="node"><div class="t">get_plugin_manager()</div><div class="d"><code>:130</code> · None → 错误文案「插件运行时未初始化」</div></div>
+      <div class="arrow">↓ Some</div>
+      <div class="node mem"><div class="t">mgr.list_plugins()</div><div class="d"><code>:133</code></div></div>
+      <div class="arrow">↓</div>
+      <div class="node fail"><div class="t">for (id, kind) in plugin_index.iter()</div><div class="d"><code>manager.rs:2139</code> · 只有 <code>loaded_plugins.get(id)</code> 有值才 push</div></div>
+      <div class="arrow">↓ <small>index 为空 → 返回空 vec，不报错</small></div>
+      <div class="node"><div class="t">weak.update → this.plugins.replace(items)</div><div class="d"><code>:143</code> · 原为 <code>let _ =</code> 静默吞掉，已改为失败留痕</div></div>
+      <div class="arrow">↓</div>
+      <div class="node mem"><div class="t">plugins_snapshot() 只 clone 这个字段</div><div class="d"><code>:82</code> · 中间栏 <code>PluginManagerPanel::snapshot</code>（<code>mod.rs:106</code>）委托到这里</div></div>
+    </div>
+    <div class="branch" style="margin-top:8px">
+      <div class="bcard manual">
+        <h3>另一条刷新入口：事件订阅</h3>
+        <p><code>subscribe_events</code>（<code>:51</code>）订阅 <code>PluginEvent</code>，除 <code>Custom</code> 外都触发刷新（<code>pure.rs:67</code>）。首扫的 activate 会发 <code>PluginActivated</code>。</p>
+      </div>
+      <div class="bcard manual">
+        <h3>第三条：手动刷新</h3>
+        <p><code>refresh_driver_registration</code>（<code>:165</code>）先 resync 驱动行，再 <code>refresh_plugins(cx, true)</code>。</p>
+      </div>
+    </div>
+    <div class="note">
+      <b>判据已经很窄了</b>：如果 <code>list_plugins 快照</code> 打出 <code>index_len=3</code> 而面板仍空，问题在回写（<code>weak.update</code>）；
+      如果打出 <code>index_len=0 loaded_len=3</code>，问题在登记（<code>plugin_index</code> 漏写）。
+      两种都不会报错、都不会有红字，所以必须靠日志区分。
+    </div>
+  </section>
+
+  <!-- ===== 05 驱动 id 设计 ===== -->
+  <section id="s5">
+    <h2>05 驱动 id 重名该怎么设计 <span>问题不在「争默认」，在清单缺一个字段</span></h2>
+    <div class="scroll">
+    <table class="t3">
+      <tr><th>现状</th><th>说明</th></tr>
+      <tr><td>内置侧：id 与族分开</td><td><code>DriverDescriptor::new("mysql_native", "MySQL (Official)").with_target_database("mysql")</code> —— 注册键 <code>mysql_native</code>，族 <code>mysql</code>。落库后 <code>drivers.id=mysql_native</code>、<code>drivers.type_id=mysql</code>。</td></tr>
+      <tr><td>插件侧：两者被迫合一</td><td><code>ContributesDriver</code> 只有 <code>id</code>（<code>manifest.rs:467</code>，无 <code>type_id</code>），<code>descriptor_for</code> 把同一个 <code>driver.id</code> 同时传给 <code>id</code> 与 <code>target_db</code>（<code>factory.rs:342</code>）。于是「oracle 的 JDBC 版」和「oracle 的 Rust 版」只能抢同一个注册键。</td></tr>
+      <tr><td>结果</td><td>两个插件要提供同一个族时，<b>必然撞注册键</b>，被 <code>check_contribution_conflicts</code> 拒掉；想共存就只能改 id 造出 <code>oracle_rust</code> 这种「假族名」。</td></tr>
+    </table>
+    </div>
+    <div class="flow" style="margin-top:16px">
+      <div class="node"><div class="t">建议①：清单补 type_id</div><div class="d">插件驱动显式声明两个值：<code>id</code> 是全局唯一注册键，<code>type_id</code> 是族，允许与他人共享。缺省时 type_id 回落为 id（向后兼容现有 3 个包）。</div></div>
+      <div class="arrow">↓</div>
+      <div class="node"><div class="t">建议②：连接存「族 + 实现」并带回退</div><div class="d">连接记录里 <code>driver</code> 存族、<code>driver_id</code> 存实现。建连先按实现查 registry；查不到就按族回退到该族已注册的任一实现（内置优先）；仍没有才 DriverNotFound。</div></div>
+      <div class="arrow">↓</div>
+      <div class="node"><div class="t">建议③：族内排序只影响展示，不影响语义</div><div class="d">下拉里内置在前、插件在后，用户选谁就存谁。同族多实现并存不是冲突，是设计意图 —— 默认由排序体现，不由数据决定。</div></div>
+    </div>
+    <div class="note">
+      建议②正是最初那个「mysql 驱动没有注册，打不开库」的根治点：<b>插件没装时不该是错误，而该回退到族内内置实现</b>。
+      目前的做法（把连接记录改成 <code>mysql_native</code>）是改数据绕过，不是修链路。
+    </div>
+  </section>
+
+  <!-- ===== 06 索引 ===== -->
+  <section id="s6">
+    <h2>06 代码索引</h2>
+    <div class="scroll">
+    <table class="t3">
+      <tr><th>位置</th><th>作用</th></tr>
+      <tr><td><code>crates/plugin/src/manager.rs:2350</code></td><td>init_plugin_manager：单例 + 首扫 + 循环</td></tr>
+      <tr><td><code>manager.rs:1567</code></td><td>scan_and_diff_plugins：四类 diff 与加载 / 激活 / 卸载</td></tr>
+      <tr><td><code>manager.rs:868 / :873</code></td><td>load_plugin_from_dir 写 index 与 loaded（相邻两行）</td></tr>
+      <tr><td><code>manager.rs:1174</code></td><td>resync_sidecar_driver_rows：读 loaded 全量重算 drivers 表</td></tr>
+      <tr><td><code>manager.rs:2087</code></td><td>list_plugins：只遍历 plugin_index</td></tr>
+      <tr><td><code>manager.rs:1098</code></td><td>activate_plugin → register_sidecar_drivers</td></tr>
+      <tr><td><code>crates/plugin/src/sidecar/runtime.rs:39 / :59</code></td><td>RUNTIME_TICK 5s / tick_once 五步</td></tr>
+      <tr><td><code>crates/plugin/src/sidecar/factory.rs:296 / :322 / :342</code></td><td>register_sidecar_drivers / register_by_factory / descriptor_for</td></tr>
+      <tr><td><code>crates/plugin/src/manifest.rs:467</code></td><td>ContributesDriver（缺 type_id）</td></tr>
+      <tr><td><code>crates/driver/src/registry/descriptors.rs:230</code></td><td>new_external(id, name, kind, target_db)</td></tr>
+      <tr><td><code>crates/workbench/src/panels/left_tabs/plugin_tab/panel.rs:117</code></td><td>refresh_plugins：拉取与回写</td></tr>
+      <tr><td><code>crates/workbench/src/panels/plugin_manager/mod.rs:106</code></td><td>中间栏 snapshot 委托左 Dock 面板</td></tr>
+    </table>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>
