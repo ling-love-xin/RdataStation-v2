@@ -340,3 +340,52 @@ cargo test -p rds-ui-guard                       # 全工作区守门（4 项，
 8. **键名写错是静默失败**：`ThemeConfigColors` 无 `deny_unknown_fields`，未知键被忽略后该字段回退默认色。
    防法：启动期 `assets/themes/theme-keys.json` 比对（stderr 告警）+ `cargo test -p rds-ui-guard` 编译期校验。
    注意 `base.*` 是**私有**字段（无 `pub`），按 `pub` 提取键名会漏掉 12 个。
+
+---
+
+## 9. 主题方案（包）
+
+一包 = 一个 Light + 一个 Dark（各 140 键）+ 一套产品语义 token（light/dark 各 13 角色）。
+
+**目录与注册**
+
+```
+assets/themes/
+  rds-theme.json            ← 现役，包 id = rds 时用它（默认行为，零变化）
+  product-tokens.json       ← 现役产品 token（同上）
+  packs/<id>/theme.json     ← 候选包（子目录 → 不注册为独立主题）
+  packs/<id>/product-tokens.json
+```
+
+`ThemeRegistry::reload` / `load_theme_assets` 只扫**第一层** `*.json`（`read_dir` + `is_file`，notify 监听也是 `NonRecursive`），
+所以 `packs/` 下的文件不会进主题列表、也不会影响默认外观。
+
+**值域与选择链路**
+
+| 环节 | 位置 |
+| --- | --- |
+| 值域（内置哪几档） | `crates/settings/src/theme_pack.rs`：`PACK_ENV = "RDS_THEME_PACK"`、`DEFAULT_PACK = "rds"`、`BUILTIN = [("rds","RDS 经典"), ("qinghua","青花")]`、`is_builtin` / `label` |
+| 设置项 | `appearance.theme_pack`（`crates/settings/src/registry/entries/appearance.rs`，`SettingKind::Enum(BUILTIN)`，default `"rds"`，Immediate） |
+| 落盘到应用 | `SettingsService::set_theme_pack` → `THEME_PACK_SINK` → `crates/app/src/main.rs::apply_theme_pack_state` |
+| 重装三步 | `attach_rds_theme`（换 `Theme` 的明暗两槽）→ `attach_product_tokens`（换产品角色）→ `set_theme_mode`（重放，会把用户字号也补回去） |
+| 临时覆盖 | 环境变量 `RDS_THEME_PACK=<id>`，优先级高于设置值、**不落盘**（试色 / CI 用） |
+| 解析 | 按 `mode` 取一对，**不依赖主题名**（`crates/app/src/theme_pack.rs::load_pair_from_str`） |
+| 回滚 | 设置改回 `rds`；或删掉 `settings.json` 里的 `appearance.theme_pack`（`#[serde(default)]` 回到 `rds`） |
+
+**产品 token 没有“包维度”，也不需要有**
+
+`ProductTokenSet` 是 `{ light, dark }` 一张表（`crates/workbench_shell/src/product_tokens.rs:196-202`），
+`apply_from_str` 每次**整表替换**（同文件 `221-229`）——所以换包时不会残留上一包的活动栏底色 / Quick Open 组头 /
+搜索命中底 / 结果集四槽。真正的约束是「**换包必须两个文件一起换**」，由 `apply_theme_pack_state` 三步保证；
+包缺 `product-tokens.json` 时 `attach_product_tokens` 会回退现役 `product-tokens.json` 并打 stderr 告警
+（`crates/app/src/main.rs:651-674`），不会静默混色。
+
+**审计**
+
+```bash
+python tools/theme_audit.py --theme assets/themes/packs/<id>/theme.json --strict   # 单包（产品 token 取同目录）
+python tools/audit_theme_packs.py                                                 # 8 包 × 明暗一次跑完
+```
+
+两套口径同源（后者直接 import 前者的 schema 键集合 / 52 对 PAIRS / 9 对产品 / 41 个语法名），不另立标准；
+包级审计额外验 140 键覆盖、跨包主题名不重复、以及「分层强度」ΔL 信息表。

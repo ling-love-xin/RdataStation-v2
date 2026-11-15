@@ -869,7 +869,7 @@ BUILTIN_NOTE = """> 三条都是本机源码实测（2026-11-12），不是推�
 
 1. **加载端本来就支持多主题**：`crates/app/src/main.rs::load_theme_assets` 扫 `assets/themes/*.json`，把每个文件里的 `themes[]` 全部注册进 `ThemeRegistry`（`product-tokens.json` / `theme-keys.json` 除外）。所以多套主题**文件本身就能被加载**，不用改加载逻辑。
 2. **切换端只有一对明暗槽**：`Theme` 只有 `light_theme` / `dark_theme` 两个字段，`Theme::change(mode)` 只按模式应用这一对（`vendor/gpui-component/src/theme/mod.rs:388-406`，注释明确“调用方换过 `light_theme`/`dark_theme` 后，即便 mode 不变，change 也会重新应用”）。装配层已按「包」补上这一层：`attach_rds_theme` 先按包取（`assets/themes/packs/<id>/theme.json`，按 `mode` 取一对、**不依赖主题名**）替换两槽，取不到才按名字回落 `"RDS Light"` / `"RDS Dark"`；缺口是“选择维度”，不是切换 API。
-3. **产品 token 没有主题维度**：`assets/themes/product-tokens.json` 只有 `light` / `dark` 两个映射，按模式解析成一个全局（`crates/workbench_shell/src/product_tokens.rs:17-59`）。换第二套主题后，活动栏底色、Quick Open 组头、搜索命中底、结果集四个高亮槽**仍是珊瑚那套的值** —— 表面只换了一半，且不报错。
+3. **产品 token 没有主题维度**：`assets/themes/product-tokens.json` 只有 `light` / `dark` 两个映射，按模式解析成一个全局（`crates/workbench_shell/src/product_tokens.rs:196-229`，每次 `apply_from_str` 整表替换）。所以换主题必须**连产品 token 一起换**：手工只热替换 `theme.json` 时，活动栏底色、Quick Open 组头、搜索命中底、结果集四个高亮槽仍是上一套的值 —— 表面只换了一半，且不报错。装配层 `apply_theme_pack_state` 已把两者绑在一起（见下）。
 
 **结论**：内置可以，但先定两条规矩 ——
 
@@ -877,7 +877,7 @@ BUILTIN_NOTE = """> 三条都是本机源码实测（2026-11-12），不是推�
 - 包 **id** 对外后不能再改（设置按 id 落盘、目录按 id 找，改名等于用户配置失效）；
   包内主题**名**可以随便改：装配按 `mode` 取，不查名字。
 
-建议节奏：内置 **2 个包**（默认 RDS + 1 个中国风），其余当可选包；要上第 3 个包之前，先把 `ProductTokenSet` 升级成“按包解析”，否则每多一包就多一处“看着只换了一半”的静默不一致。
+建议节奏：内置 **2 个包**（默认 RDS + 1 个中国风），其余当可选包。加一包的成本已经被摊平为三件事：放进 `assets/themes/packs/<id>/`、在 `BUILTIN` 加一档、跑 `audit_theme_packs.py` 到 0 不达标 —— **不需要**改 `ProductTokenSet` 的维度（它每次整表替换，换包不残留），也不需要改装配代码。
 
 > 这一节说的「包」已经按 §4.1 生成好并接进装配层（8 个包，运行时副本在 `assets/themes/packs/<id>/`；
 > 设置页只开 `rds` 与 `qinghua` 两档）。
@@ -894,7 +894,8 @@ BUILTIN_NOTE = """> 三条都是本机源码实测（2026-11-12），不是推�
   只换主题会让活动栏底色 / Quick Open 组头 / 搜索命中底 / 结果集四槽残留默认珊瑚包的值。
 - 自检：`cargo test -p rds-settings theme_pack`（值域：默认 `rds`、未登记 id 被拒）+
   `cargo test -p rds-app theme_pack`（每个出厂包都能读出 Light+Dark、字号 16、140 键、13 个产品角色）。
-- **还没做的**：第 3 个包之前把 `ProductTokenSet` 升级为“按包解析”；真机截图核验未做。
+- **还没做的**：真机四组合全界面人工过目（明暗 × 两包，表格页 / 结果集 / 编辑器）；上第 3 个包不需要先升级
+  `ProductTokenSet`（它整表替换、换包不残留，源码依据见 `theme-tokens-complete.md` §9），但要在设置页多给一档并补一次审计。
 """
 
 
@@ -1033,8 +1034,10 @@ def build_md(total_checks, total_fail):
                  "点「青花」后界面即时重绘为青花配色、`target/debug/config/settings.json` 落盘 `\"theme_pack\": \"qinghua\"`；"
                  "再点「深色」界面转暗（实测内容区像素 `#1A232E`，是青花暗色的靛蓝底，不是 RDS Dark 的中性 `#1E1E1E`）。"
                  "截图存 `.rds/tmp/palette-lab/app_*.png`。**仍需人工过目**：明暗 × 两包的四组合全界面（表格页 / 结果集 / 编辑器）。")
-    lines.append("- **未做的**：第 3 个包之前 `ProductTokenSet` 仍是“按模式”单例"
-                 "（多包**并存**切换需先升级）；主题包的更换只在单进程内即时生效，回滚 = 再选回 `rds`。")
+    lines.append("- **未做的**：真机四组合全界面人工过目（明暗 × 两包，表格页 / 结果集 / 编辑器）；"
+                 "主题包的更换只在单进程内即时生效，回滚 = 再选回 `rds`。"
+                 "加第 3 个包**不需要**升级 `ProductTokenSet`（`light`/`dark` 单表、每次整表替换，换包不残留；"
+                 "源码依据见 `theme-tokens-complete.md` §9）。")
     lines.append("- 审计脚本已可指定文件：`python tools/theme_audit.py --theme <任意主题文件> "
                  "[--product <产品 token>] [--strict]`（`--theme` 指到包内 `theme.json` 时，产品 token 默认取同目录；"
                  "`--strict` 让不达标变成退出码 1，CI 可用）。")

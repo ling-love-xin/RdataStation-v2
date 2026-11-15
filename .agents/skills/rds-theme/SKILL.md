@@ -55,6 +55,9 @@ description: RdataStation 主题系统：明暗配色 token 对照、产品语�
 - 临时覆盖：环境变量 `RDS_THEME_PACK=<id>`（优先于设置值、不落盘，试色 / CI 用）。
 - 审包：`python tools/theme_audit.py --theme assets/themes/packs/<id>/theme.json`（产品 token 自动取同目录；
   `--strict` 让不达标变成退出码 1）。批量审 8 包用 `python tools/audit_theme_packs.py`。
+- **加一包 = 三件事**：目录两份 json 落 `packs/<id>/` → `BUILTIN` 加一档 → 审包到 0 不达标。
+  **不需要**改装配代码，也不需要给产品 token 加"按包"维度：`ProductTokenSet` 是 `{light,dark}` 单表，
+  `apply_from_str` 每次整表替换，换包不会残留上一包的产品槽（依据见 `theme-tokens-complete.md` §9）。
 
 ## 产品语义 token 消费（已落地）
 
