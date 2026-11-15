@@ -176,10 +176,20 @@ impl GlobalInstanceStore {
         Ok(shape)
     }
 
-    /// 覆盖式分发：删项目旧表 / 旧文件 + 软删项目登记，再走 [`distribute`]。
+    /// 覆盖式分发（§13.2 冲突询问「覆盖」分支）：**先把旧内容藏起来**，再走一次无冲突的分发。
     ///
-    /// 覆盖语义（§13.2 冲突询问「覆盖」分支）：项目侧旧本体移除、登记软删，
-    /// 新分发接续项目版本链（version = 旧 max + 1）。
+    /// 覆盖要同时动三处介质——项目 DuckDB 表、`resources/` 文件、项目登记行——三处之间
+    /// 没有共同事务可用。所以不"先删后建"（任何一步失败都会变成「旧内容已消失、新内容
+    /// 没落」），改成每一步都可逆：
+    ///
+    /// 1. 同名表 `ALTER TABLE ... RENAME TO <备份名>`（同库内改名，单语句）；
+    /// 2. 同名文件 `rename` 到 `.RSmeta/overwrite-backup/<uuid>/`（与 `resources/` 同卷）；
+    /// 3. 同名未删登记行软删（记下 id，供回滚复活）；
+    /// 4. 调 [`Self::distribute`]：三查都不再命中旧内容，走正常落库，版本号仍按同名链接续；
+    /// 5. 成功 → 丢弃备份；任一步失败 → 按相反顺序搬回，再抛原始错误。
+    ///
+    /// 最坏情况只留下可清理的备份（备份表名带 `__rds_old_`、备份文件在 `.RSmeta` 下），
+    /// 不会出现「旧内容没了、新内容也没落」。
     pub async fn distribute_overwrite(
         &self,
         project: &ProjectDuckConn,
@@ -187,61 +197,327 @@ impl GlobalInstanceStore {
         name: &str,
         target: Option<&str>,
     ) -> Result<DistributeOutcome, InstanceOpError> {
-        
         let target_name = target.unwrap_or(name).to_string();
 
-        // 项目侧旧本体移除（表或文件都删；文件在 resources/ 下，删前先探存在）。
-        {
-            let mut guard = project.0.lock().await;
-            if let Some(conn) = guard.as_mut() {
-                conn.execute_batch(&format!(
-                    "DROP TABLE IF EXISTS {};",
-                    quote_ident(&target_name)
-                ))
-                .map_err(|e| duckdb_err("drop_project_table", &e.to_string()))?;
-            }
-        }
-        if let Some(rel) = self
-            .with_sqlite(|conn| {
-                Ok(conn
-                    .query_row(
-                        "SELECT file_rel_path FROM analytics_resources WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL ORDER BY version DESC LIMIT 1",
-                        rusqlite::params![name],
-                        |row| row.get::<_, Option<String>>(0),
-                    )
-                    .optional()
-                    .map_err(sqlite_err("read_global_rel"))?)
-            })?
-            .flatten()
-        {
-            let path = project_root.join("resources").join(&rel);
-            if path.exists() {
-                std::fs::remove_file(&path).map_err(|e| {
-                    InstanceOpError::Core(CoreError::common(CommonError::General(format!(
-                        "删除项目旧文件失败（{}）：{}",
-                        path.display(),
-                        e
-                    ))))
-                })?;
-            }
-        }
-        // 软删项目旧登记（按目标名；不清掉旧链，下面 `distribute` 的重名探测会命中未删旧行）。
-        {
-            let pool = project.1.clone();
-            let conn = pool.acquire().await.map_err(InstanceOpError::Core)?;
-            let inner = conn.inner().map_err(InstanceOpError::Core)?;
-            inner
-                .execute(
-                    "UPDATE analytics_resources SET deleted_at = ?1 \
-                     WHERE name = ?2 AND scope = 'project' AND deleted_at IS NULL",
-                    rusqlite::params![Utc::now().to_rfc3339(), target_name],
-                )
-                .map_err(sqlite_err("soft_delete_project"))?;
-        }
-        self.distribute(project, project_root, name, Some(&target_name))
+        // 先确认全局登记在：不存在就不该动项目侧任何东西（藏起来是有代价的动作）。
+        let Some(old_rel) = self.global_rel_for_overwrite(name).await? else {
+            return Err(InstanceOpError::NotFound {
+                name: name.to_string(),
+            });
+        };
+
+        let backup_table = hide_project_table(project, &target_name).await?;
+        let backup_file = match old_rel.as_deref() {
+            Some(rel) => hide_project_file(project_root, rel).await?,
+            None => None,
+        };
+        let hidden_registry = soft_delete_project_registry(project, &target_name).await?;
+
+        match self
+            .distribute(project, project_root, name, Some(&target_name))
             .await
+        {
+            Ok(outcome) => {
+                // 新内容已落库：备份只是清理工作，失败不影响正确性。
+                drop_project_table_if_exists(project, backup_table.as_deref()).await;
+                discard_backup_file(backup_file.as_deref()).await;
+                Ok(outcome)
+            }
+            Err(error) => {
+                // 回滚顺序与藏的顺序相反：登记先复活（成本最低，用户最先生效）。
+                if !hidden_registry.is_empty() {
+                    if let Err(rollback) = restore_project_registry(project, &hidden_registry).await {
+                        tracing::error!(error = %rollback, "覆盖分发回滚：复活登记行失败");
+                    }
+                }
+                if let (Some(rel), Some(backup)) = (old_rel.as_deref(), backup_file.as_deref()) {
+                    if let Err(rollback) = restore_project_file(project_root, rel, backup).await {
+                        tracing::error!(error = %rollback, "覆盖分发回滚：旧文件搬回原位失败");
+                    }
+                }
+                if let Some(backup) = backup_table.as_deref() {
+                    if let Err(rollback) = rename_project_table(project, backup, &target_name).await {
+                        tracing::error!(error = %rollback, "覆盖分发回滚：旧表改名回原位失败");
+                    }
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// 读全局登记的最新 `file_rel_path`（覆盖分发用）。
+    ///
+    /// 返回 `None` = 该名字没登记（覆盖前必须先判断，不然会白藏一遍项目侧内容）；
+    /// `Some(None)` = 登记在但没有重建目标（表型资源）——与「没登记」是两件事。
+    async fn global_rel_for_overwrite(
+        &self,
+        name: &str,
+    ) -> Result<Option<Option<String>>, InstanceOpError> {
+        self.with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT file_rel_path FROM analytics_resources \
+                 WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL \
+                 ORDER BY version DESC LIMIT 1",
+                rusqlite::params![name],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(sqlite_err("read_global_rel_for_overwrite"))
+        })
+        .map_err(InstanceOpError::Core)
     }
 
     // ==================== 分发内部 ====================
 
+}
+
+// ==================== 覆盖式分发的可逆备份（本文件私有）====================
+//
+// 三个介质（项目 DuckDB 表 / resources 文件 / 项目登记行）没有共同事务，
+// 覆盖按「先藏、后换、失败搬回」做——每步都能单独撤回，最坏只留可清理的备份。
+
+/// 备份目录：`{项目}/.RSmeta/overwrite-backup/<uuid>/`。
+///
+/// 必须与 `resources/` 同卷：`rename` 才是原子的，拷到别的盘再删源会留两截状态。
+fn overwrite_backup_dir(project_root: &Path) -> PathBuf {
+    project_root
+        .join(crate::payload::META_DIR_NAME)
+        .join("overwrite-backup")
+}
+
+fn short_uuid() -> String {
+    let raw = uuid::Uuid::new_v4().simple().to_string();
+    raw[..12].to_string()
+}
+
+fn fs_err(path: &Path, op: &str, reason: impl std::fmt::Display) -> CoreError {
+    CoreError::storage(StorageError::Persistence {
+        store: "analytics_resources_payload".to_string(),
+        operation: op.to_string(),
+        reason: format!("{}：{}", path.display(), reason),
+    })
+}
+
+fn project_conn_closed() -> InstanceOpError {
+    InstanceOpError::Core(CoreError::common(CommonError::General(
+        "项目 DuckDB 连接已关闭".to_string(),
+    )))
+}
+
+async fn run_project_ddl(
+    project: &ProjectDuckConn,
+    sql: &str,
+    op: &str,
+) -> Result<(), InstanceOpError> {
+    let mut guard = project.0.lock().await;
+    let Some(conn) = guard.as_mut() else {
+        return Err(project_conn_closed());
+    };
+    conn.execute_batch(sql)
+        .map_err(|e| InstanceOpError::Core(duckdb_err(op, &e.to_string())))
+}
+
+async fn project_table_exists(
+    project: &ProjectDuckConn,
+    name: &str,
+) -> Result<bool, InstanceOpError> {
+    let mut guard = project.0.lock().await;
+    let Some(conn) = guard.as_mut() else {
+        return Err(project_conn_closed());
+    };
+    let count: i64 = conn
+        .prepare("SELECT count(*) FROM information_schema.tables WHERE table_name = ?1")
+        .map_err(|e| duckdb_err("prepare_overwrite_table_exists", &e.to_string()))?
+        .query_row(duckdb::params![name.to_lowercase()], |row| row.get(0))
+        .map_err(|e| duckdb_err("query_overwrite_table_exists", &e.to_string()))?;
+    Ok(count > 0)
+}
+
+/// 把项目侧同名表改名藏起来（返回备份表名；表不存在 → `None`）。
+async fn hide_project_table(
+    project: &ProjectDuckConn,
+    name: &str,
+) -> Result<Option<String>, InstanceOpError> {
+    if !project_table_exists(project, name).await? {
+        return Ok(None);
+    }
+    let backup = format!("{}__rds_old_{}", name, short_uuid());
+    let sql = format!(
+        "ALTER TABLE {} RENAME TO {};",
+        quote_ident(name),
+        quote_ident(&backup)
+    );
+    run_project_ddl(project, &sql, "hide_project_table").await?;
+    Ok(Some(backup))
+}
+
+async fn rename_project_table(
+    project: &ProjectDuckConn,
+    from: &str,
+    to: &str,
+) -> Result<(), InstanceOpError> {
+    let sql = format!(
+        "ALTER TABLE {} RENAME TO {};",
+        quote_ident(from),
+        quote_ident(to)
+    );
+    run_project_ddl(project, &sql, "rename_project_table").await
+}
+
+/// 清理备份表：新内容已落库，删备份失败只记日志（留着不影响正确性）。
+async fn drop_project_table_if_exists(project: &ProjectDuckConn, backup: Option<&str>) {
+    let Some(backup) = backup else {
+        return;
+    };
+    let sql = format!("DROP TABLE IF EXISTS {};", quote_ident(backup));
+    if let Err(error) = run_project_ddl(project, &sql, "drop_backup_table").await {
+        tracing::error!(error = %error, table = %backup, "覆盖分发后清理备份表失败（可手工删除）");
+    }
+}
+
+/// 把项目侧同名文件搬到备份目录（返回备份路径；文件不存在 → `None`）。
+async fn hide_project_file(
+    project_root: &Path,
+    rel: &str,
+) -> Result<Option<PathBuf>, InstanceOpError> {
+    let source = project_root
+        .join(crate::payload::RESOURCES_DIR_NAME)
+        .join(rel);
+    if !source.is_file() {
+        return Ok(None);
+    }
+    let dir = overwrite_backup_dir(project_root).join(short_uuid());
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| InstanceOpError::Core(fs_err(&dir, "hide_create_dir", e)))?;
+    let Some(file_name) = source.file_name() else {
+        return Err(InstanceOpError::Core(fs_err(
+            &source,
+            "hide_file_name",
+            "路径没有文件名",
+        )));
+    };
+    let dest = dir.join(file_name);
+    tokio::fs::rename(&source, &dest)
+        .await
+        .map_err(|e| InstanceOpError::Core(fs_err(&source, "hide_rename", e)))?;
+    Ok(Some(dest))
+}
+
+async fn restore_project_file(
+    project_root: &Path,
+    rel: &str,
+    backup: &Path,
+) -> Result<(), InstanceOpError> {
+    let dest = project_root
+        .join(crate::payload::RESOURCES_DIR_NAME)
+        .join(rel);
+    if let Some(parent) = dest.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| InstanceOpError::Core(fs_err(parent, "restore_create_dir", e)))?;
+    }
+    tokio::fs::rename(backup, &dest)
+        .await
+        .map_err(|e| InstanceOpError::Core(fs_err(backup, "restore_rename", e)))?;
+    // 搬回后把空掉的备份目录收掉（`remove_dir` 只删空目录，非空说明有别的残留，留着更好查）。
+    discard_empty_backup_dirs(backup).await;
+    Ok(())
+}
+
+/// 收掉空的备份目录：先删本批的 `<uuid>/`，再试删 `overwrite-backup/`
+/// （非空（并发的另一批还在用）就留着，`remove_dir` 自己会失败，忽略即可）。
+async fn discard_empty_backup_dirs(backup: &Path) {
+    if let Some(dir) = backup.parent() {
+        let _ = tokio::fs::remove_dir(dir).await;
+        if let Some(root) = dir.parent() {
+            let _ = tokio::fs::remove_dir(root).await;
+        }
+    }
+}
+
+/// 丢掉备份文件与它的备份目录（清理动作，失败只记日志）。
+async fn discard_backup_file(backup: Option<&Path>) {
+    let Some(backup) = backup else {
+        return;
+    };
+    if let Err(error) = tokio::fs::remove_file(backup).await {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            tracing::error!(error = %error, path = %backup.display(), "覆盖分发后清理备份文件失败");
+        }
+    }
+    discard_empty_backup_dirs(backup).await;
+}
+
+/// 软删项目侧同名未删登记行，返回被软删的 id（供失败回滚复活）。
+///
+/// 查 + 改同事务（`BEGIN IMMEDIATE`）：并发分发时不会出现「查到两条、只改到一条」。
+async fn soft_delete_project_registry(
+    project: &ProjectDuckConn,
+    name: &str,
+) -> Result<Vec<String>, InstanceOpError> {
+    let pool = project.1.clone();
+    let conn = pool.acquire().await.map_err(InstanceOpError::Core)?;
+    let inner = conn.inner().map_err(InstanceOpError::Core)?;
+    inner.execute_batch("BEGIN IMMEDIATE").map_err(|e| {
+        InstanceOpError::Core(sqlite_err("begin_overwrite_registry")(e))
+    })?;
+    let result = (|| -> Result<Vec<String>, CoreError> {
+        let ids: Vec<String> = {
+            let mut stmt = inner
+                .prepare(
+                    "SELECT id FROM analytics_resources \
+                     WHERE name = ?1 AND scope = 'project' AND deleted_at IS NULL",
+                )
+                .map_err(sqlite_err("prepare_overwrite_registry"))?;
+            let rows = stmt
+                .query_map(rusqlite::params![name], |row| row.get::<_, String>(0))
+                .map_err(sqlite_err("query_overwrite_registry"))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_err("collect_overwrite_registry"))?
+        };
+        if !ids.is_empty() {
+            let now = Utc::now().to_rfc3339();
+            inner
+                .execute(
+                    "UPDATE analytics_resources SET deleted_at = ?1 \
+                     WHERE name = ?2 AND scope = 'project' AND deleted_at IS NULL",
+                    rusqlite::params![now, name],
+                )
+                .map_err(sqlite_err("soft_delete_overwrite_registry"))?;
+        }
+        Ok(ids)
+    })();
+    match result {
+        Ok(ids) => {
+            inner.execute_batch("COMMIT").map_err(|e| {
+                InstanceOpError::Core(sqlite_err("commit_overwrite_registry")(e))
+            })?;
+            Ok(ids)
+        }
+        Err(error) => {
+            let _ = inner.execute_batch("ROLLBACK");
+            Err(InstanceOpError::Core(error))
+        }
+    }
+}
+
+/// 回滚：把刚软删的登记行复活（按 id 逐个改，不拼 SQL）。
+async fn restore_project_registry(
+    project: &ProjectDuckConn,
+    ids: &[String],
+) -> Result<(), InstanceOpError> {
+    let pool = project.1.clone();
+    let conn = pool.acquire().await.map_err(InstanceOpError::Core)?;
+    let inner = conn.inner().map_err(InstanceOpError::Core)?;
+    for id in ids {
+        inner
+            .execute(
+                "UPDATE analytics_resources SET deleted_at = NULL \
+                 WHERE id = ?1 AND scope = 'project'",
+                rusqlite::params![id],
+            )
+            .map_err(|e| InstanceOpError::Core(sqlite_err("restore_overwrite_registry")(e)))?;
+    }
+    Ok(())
 }

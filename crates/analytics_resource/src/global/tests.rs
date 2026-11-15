@@ -422,3 +422,74 @@ async fn g008_distribute_overwrite_keeps_the_version_chain() {
 
     let _ = fs::remove_dir_all(&env.dir);
 }
+
+/// 覆盖失败时旧内容必须回到原位：覆盖不是「先删后建」，而是「先藏后换、失败搬回」。
+///
+/// 失败注入：把全局表 DROP 掉但保留登记行——脚本分发要在内容表里读正文，
+/// 读不到就必然报错。此时项目侧旧文件、旧登记都必须还在原处，
+/// 备份目录也不能留残骸（否则用户既看不到旧内容，又平白多一堆隐藏文件）。
+#[tokio::test]
+async fn g009_overwrite_failure_restores_the_old_content() {
+    let env = create_test_env().await;
+    let script = env.dir.join("report.md");
+    fs::write(&script, "# 第一版\n").expect("write md");
+    let req = promote_req("ovr_note", &script, PromoteKind::Script);
+    env.store.promote(&req).await.expect("promote script");
+
+    let project_conn = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    let first = env
+        .store
+        .distribute(&project_conn, &env.project_root, "ovr_note", None)
+        .await
+        .expect("first distribute");
+    assert_eq!(first.version, 1);
+    assert_eq!(first.shape, DistributeShape::File);
+
+    let rel = "work/ovr_note";
+    let rebuilt = env.project_root.join("resources").join(rel);
+    assert!(rebuilt.is_file(), "首版文件已重建到 resources/");
+
+    // ---- 注入失败：全局表消失、登记还在 ----
+    env.store
+        .drop_global_table("ovr_note")
+        .await
+        .expect("drop global table");
+
+    let err = env
+        .store
+        .distribute_overwrite(&project_conn, &env.project_root, "ovr_note", None)
+        .await
+        .expect_err("内容表没了，覆盖分发必须失败");
+    assert!(
+        matches!(err, InstanceOpError::Core(_)),
+        "读不到内容表应报存储错误，实际 {err:?}"
+    );
+
+    // 旧文件回到原位，内容仍是第一版。
+    assert!(rebuilt.is_file(), "失败后旧文件必须搬回原位");
+    let content = fs::read_to_string(&rebuilt).expect("read restored file");
+    assert!(content.contains("第一版"), "旧内容不能被清掉");
+
+    // 旧登记仍是活跃行（没被这次失败永久软删）。
+    let pool = &env.project_pool;
+    let conn = pool.acquire().await.expect("acquire");
+    let conn = conn.inner().expect("inner");
+    let active: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM analytics_resources \
+             WHERE name = 'ovr_note' AND scope = 'project' AND deleted_at IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count active rows");
+    assert_eq!(active, 1, "回滚后旧登记仍是活跃行");
+
+    // 备份目录不留残骸。
+    let backup_dir = env
+        .project_root
+        .join(crate::payload::META_DIR_NAME)
+        .join("overwrite-backup");
+    assert!(!backup_dir.exists(), "回滚后不留备份目录");
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
