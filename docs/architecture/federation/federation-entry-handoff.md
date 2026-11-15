@@ -387,6 +387,42 @@ Windows 上 DuckDB 一个文件只允许一个连接句柄（`store/src/persiste
 **仍未做**：多源 UI（选择器多选 + 一次取样多表的展示面）——原语已就位（§8.10），
 缺的是「一次选多个来源、结果怎么呈现」的产品口径；持久表的可视化列表与资源归档入口。
 
+### 8.12 多源取样 UI：选择器多选 + 一个面板的来源标签页
+
+**展示口径（用户拍板方案 2）**：多源 = **一个洞察面板 + 来源标签页**，不是 N 个面板。
+
+**选择器多选（内核能力）**：`PickerConfig.multi`。为假时点一次整体替换（老单选行为不变）；
+为真时点同一行 = 取消，点别的行 = 再加一个。选中真值改成 `Vec<(NodeId, Picked)>`——
+存行 id 是因为树自身只有单选态，渲染要靠它标出「已选」（`render_rows` 多了 `checked` 参数）；
+确认按钮在多选下报「N 个来源」，不再只显示第一个名字。
+
+**面板多源（`InsightTarget::SourceTables { sources, active, table_name }`）**：
+
+- `temp_table()` 恒为空串，各来源样本表由接缝回填 `PanelData::source_samples`（**按来源下标对齐**）；
+  `sample_table()` 多源分支按 `active` 取那一格——共用单槽会在切页时把 A 的表覆盖成 B 的；
+- `target_key` 把整组来源算一个身份（切页不算换目标，否则每切一次就往「已洞察表」集合里插一条）；
+- 标题 = 当前来源名，副标题 = `i/N 来源 · 表名`，标题下方一排 `TabBar::segmented` 来源标签页。
+
+**取样节奏（惰性 + 不重取）**：`select_source(i)` 时
+
+1. 该页已有样本表 → 直接按 `Table{temp_table}` 重算画像（省掉一遍源库查询 + CTAS）；
+2. 没有 → 发多源目标请求，接缝只采样**当前页**那一份，回填 `set_source_sample_at(index, …)`。
+
+取样口径沿用本会话确认过的探查配置（`last_probe_config`）：多源确认时只在第一份上问过
+用户，后续页沿用同一口径，避免「同一个洞察里两份样本规则不同」。
+
+**入口**：洞察对话框多选 → `Picked` 逐个转 `SampleSource` → 按 `SampleSource` 整条去重
+（同一张表被点两次、或项目资产库与洞察产物指到同一张时合成一个）→ 1 个走单源
+`open_insight_source_table`，≥2 个走 `open_insight_source_tables`（`InsightTarget::source_tables`
+少于两源直接返回 `None`，入口在这里退回单源——一个标签页是噪音）。
+
+验证：`rds-insight --lib` **266 passed**（新增：多源目标须两源 / 样本表按下标取不串页 /
+切页时已取过样的一页不重新取样）；`rds-workbench --lib` **145 passed**（新增：单选替换 vs
+多选加减 + 「N 个来源」文案）；`insight_editor_entry` 2、`federated_sample` 2 仍绿。
+
+**仍未做**：多源下的「每源各取一份」目前是**逐页惰性取样**（不是一次全取）；持久表的
+可视化列表与资源归档入口。
+
 
 
 

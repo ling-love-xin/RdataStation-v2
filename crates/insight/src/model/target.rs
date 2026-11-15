@@ -179,6 +179,18 @@ pub enum InsightTarget {
         source: SampleSource,
         table_name: String,
     },
+    /// 多源表探查：**一个面板 + 来源标签页**（多源取样的展示面）。
+    ///
+    /// 与 `SourceTable` 的区别只在「还有别的来源」：`active` 是当前标签页下标，
+    /// 其余解析（取样、画像、下钻）与单源表目标完全同路——切标签页 = 换 `active`。
+    /// 各来源的样本表由接缝侧回填进 `PanelData::source_samples`（按同一顺序对齐），
+    /// 所以本变体自己不装临时表名。
+    SourceTables {
+        sources: Vec<SampleSource>,
+        /// 当前标签页（始终 `< sources.len()`；构造时由 `new` 夹住）
+        active: usize,
+        table_name: String,
+    },
     /// 多列分析
     MultiColumn {
         temp_table: String,
@@ -194,11 +206,55 @@ pub enum InsightTarget {
 }
 
 impl InsightTarget {
+    /// 多源目标（≥2 个来源才值得开标签页；1 个来源的调用方应直接用 `SourceTable`）。
+    ///
+    /// 少于 2 个来源时返回 `None`：让入口立刻看出「这不该走多源路径」，
+    /// 而不是在面板上画一排只有一个的标签。
+    pub fn source_tables(
+        sources: Vec<SampleSource>,
+        table_name: impl Into<String>,
+    ) -> Option<Self> {
+        if sources.len() < 2 {
+            return None;
+        }
+        Some(Self::SourceTables {
+            sources,
+            active: 0,
+            table_name: table_name.into(),
+        })
+    }
+
+    /// 切到第 `index` 个来源（越界返回 `None`；非多源目标也返回 `None`）。
+    pub fn with_active_source(&self, index: usize) -> Option<Self> {
+        match self {
+            InsightTarget::SourceTables {
+                sources, table_name, ..
+            } if index < sources.len() => Some(InsightTarget::SourceTables {
+                sources: sources.clone(),
+                active: index,
+                table_name: table_name.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    /// 多源目标：全部来源 + 当前下标。
+    pub fn multi_sources(&self) -> Option<(&[SampleSource], usize)> {
+        match self {
+            InsightTarget::SourceTables {
+                sources, active, ..
+            } => Some((sources.as_slice(), *active)),
+            _ => None,
+        }
+    }
+
     /// 该目标默认落到哪个 Tab（入口点击后直接切过去）
     pub fn default_tab(&self) -> PanelTab {
         match self {
             InsightTarget::Column { .. } | InsightTarget::SourceColumn { .. } => PanelTab::Column,
-            InsightTarget::Table { .. } | InsightTarget::SourceTable { .. } => PanelTab::Table,
+            InsightTarget::Table { .. }
+            | InsightTarget::SourceTable { .. }
+            | InsightTarget::SourceTables { .. } => PanelTab::Table,
             InsightTarget::MultiColumn { .. } => PanelTab::MultiColumn,
             InsightTarget::Schema { .. } => PanelTab::Schema,
         }
@@ -212,6 +268,11 @@ impl InsightTarget {
             }
             InsightTarget::Table { table_name, .. }
             | InsightTarget::SourceTable { table_name, .. } => table_name.clone(),
+            // 多源：标题给「当前这一份」的来源名，第几份由 detail 报
+            InsightTarget::SourceTables { sources, active, .. } => sources
+                .get(*active)
+                .map(|s| s.label().to_string())
+                .unwrap_or_default(),
             InsightTarget::MultiColumn { columns, .. } => format!("{} 列", columns.len()),
             InsightTarget::Schema { schema, .. } => {
                 schema.clone().unwrap_or_else(|| "全部结构".into())
@@ -241,6 +302,16 @@ impl InsightTarget {
                 }
             }
             InsightTarget::SourceTable { source, .. } => Some(format!("来源 {}", source.label())),
+            // 多源：第几份 / 共几份 + 当前来源的表名（标签页本身只显示来源名）
+            InsightTarget::SourceTables {
+                sources,
+                active,
+                table_name,
+            } => Some(format!(
+                "{}/{} 来源 · {table_name}",
+                active + 1,
+                sources.len()
+            )),
             InsightTarget::MultiColumn { temp_table, .. } => Some(temp_table.clone()),
             InsightTarget::Schema { conn_id, .. } => Some(conn_id.clone()),
         }
@@ -258,6 +329,8 @@ impl InsightTarget {
             | InsightTarget::MultiColumn { temp_table, .. } => temp_table,
             InsightTarget::SourceColumn { .. }
             | InsightTarget::SourceTable { .. }
+            // 多源一样的道理：样本表由接缝按来源下标回填，不装在目标里
+            | InsightTarget::SourceTables { .. }
             | InsightTarget::Schema { .. } => "",
         }
     }
@@ -267,6 +340,7 @@ impl InsightTarget {
         match self {
             InsightTarget::SourceColumn { source, .. }
             | InsightTarget::SourceTable { source, .. } => Some(source),
+            InsightTarget::SourceTables { sources, active, .. } => sources.get(*active),
             _ => None,
         }
     }
@@ -275,7 +349,8 @@ impl InsightTarget {
     pub fn table_name(&self) -> String {
         match self {
             InsightTarget::Table { table_name, .. }
-            | InsightTarget::SourceTable { table_name, .. } => table_name.clone(),
+            | InsightTarget::SourceTable { table_name, .. }
+            | InsightTarget::SourceTables { table_name, .. } => table_name.clone(),
             _ => self.temp_table().to_string(),
         }
     }

@@ -35,6 +35,10 @@ impl super::InsightWorkspacePanel {
                 | InsightTarget::SourceTable { source, .. } => {
                     Some(SharedString::from(format!("来源 {}", source.label())))
                 }
+                // 多源：报当前标签页那一份的来源（切换按钮不显示表名已是既有口径）
+                InsightTarget::SourceTables { sources, active, .. } => sources
+                    .get(*active)
+                    .map(|s| SharedString::from(format!("来源 {}", s.label()))),
                 _ => None,
             });
         let full_title: Option<SharedString> = self
@@ -64,7 +68,10 @@ impl super::InsightWorkspacePanel {
         let is_full = scope == InsightScope::Full;
         let can_switch = matches!(
             self.view.read(cx).target(),
-            Some(InsightTarget::SourceTable { .. }) | Some(InsightTarget::SourceColumn { .. })
+            Some(InsightTarget::SourceTable { .. })
+                | Some(InsightTarget::SourceColumn { .. })
+                // 多源目标同样是源目标（当前标签页那份可以切全量 / 取样）
+                | Some(InsightTarget::SourceTables { .. })
         );
         let scope_btn = Button::new("insight-ws-scope-toggle")
             .ghost()

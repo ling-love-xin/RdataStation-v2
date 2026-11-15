@@ -874,6 +874,29 @@ impl Shared {
         self.queue_workspace_insight(target, cx);
     }
 
+    /// 多源入口（洞察对话框多选）：一个面板 + 来源标签页。
+    ///
+    /// 少于 2 个来源直接退回单源入口——标签页只有一份时只是噪音，行为也和单源一模一样。
+    /// `table_name` 只用于展示（各来源的实际表名在标签页上由 `SampleSource::label` 给出）。
+    pub fn open_insight_source_tables(
+        &self,
+        sources: Vec<insight::SampleSource>,
+        table_name: impl Into<String>,
+        cx: &mut App,
+    ) {
+        let table_name = table_name.into();
+        if let Some(first) = sources.first().cloned().filter(|_| sources.len() == 1) {
+            self.open_insight_source_table(first, table_name, cx);
+            return;
+        }
+        let Some(target) = InsightTarget::source_tables(sources, table_name) else {
+            return;
+        };
+        self.open_right_panel(RightPanel::Insight, cx);
+        self.set_right_insight_target(&target, cx);
+        self.queue_workspace_insight(target, cx);
+    }
+
     /// M8：打开洞察面板并**指向一个 Schema**（导航树右键「结构洞察」）。
     ///
     /// 与 [`Self::open_insight_source_table`] 的区别：那个看**数据**（取样 → 表探查），

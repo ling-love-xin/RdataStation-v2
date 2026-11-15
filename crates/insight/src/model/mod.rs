@@ -250,6 +250,51 @@ mod tests {
         assert_eq!(data.sample_table(&source), Some("tmp_i_sample_1"));
     }
 
+    /// 多源：`source_tables` 少于两份直接拒绝（标签页只有一份是噪音）；
+    /// 切页只改 `active`，`temp_table()` 永远是空串（样本表由接缝按槽位回填）。
+    #[test]
+    fn multi_source_target_requires_two_sources_and_keeps_samples_out() {
+        let a = SampleSource::new("G_1", "SELECT 1", "shop.orders");
+        let b = SampleSource::on_duckdb("SELECT * FROM t", "t");
+
+        assert!(
+            InsightTarget::source_tables(vec![a.clone()], "1 个来源").is_none(),
+            "单来源不该走多源路径"
+        );
+        let target = InsightTarget::source_tables(vec![a.clone(), b.clone()], "2 个来源")
+            .expect("两个来源成立");
+        assert_eq!(target.default_tab(), PanelTab::Table);
+        assert_eq!(target.title(), a.label(), "标题给当前这一份的来源名");
+        assert_eq!(target.detail().as_deref(), Some("1/2 来源 · 2 个来源"));
+        assert_eq!(target.temp_table(), "", "样本表不装在目标里");
+        assert_eq!(target.source(), Some(&a));
+
+        let next = target.with_active_source(1).expect("切到第二份");
+        assert_eq!(next.title(), b.label());
+        assert_eq!(next.source(), Some(&b));
+        assert_eq!(next.detail().as_deref(), Some("2/2 来源 · 2 个来源"));
+        assert!(target.with_active_source(2).is_none(), "越界不给目标");
+    }
+
+    /// 多源按标签页取样本表：第 1 份没取过样时不能拿第 2 份的表顶上。
+    #[test]
+    fn multi_source_sample_table_is_per_index() {
+        let a = SampleSource::new("G_1", "SELECT 1", "a");
+        let b = SampleSource::new("G_2", "SELECT 2", "b");
+        let mut target = InsightTarget::source_tables(vec![a, b], "2 个来源").expect("成立");
+        let mut data = PanelData::default();
+        assert_eq!(data.sample_table(&target), None, "还没取样");
+
+        data.source_samples = vec!["tmp_i_a".into(), String::new()];
+        assert_eq!(data.sample_table(&target), Some("tmp_i_a"));
+        // 切到第二份（还没取过样）→ 不得回落到第一份的表
+        target = target.with_active_source(1).expect("切页");
+        assert_eq!(data.sample_table(&target), None);
+
+        data.source_samples[1] = "tmp_i_b".into();
+        assert_eq!(data.sample_table(&target), Some("tmp_i_b"));
+    }
+
     #[test]
     fn numeric_column_fills_basic_stats() {
         let view = ColumnProfileView::from_domain(&base_stats(ColumnStatsDetail::Numeric(

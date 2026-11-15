@@ -38,17 +38,29 @@ pub struct PanelData {
     /// 面板自己要「接着分析哪张临时表」（保存快照 / 多列 / 下钻）时读它——
     /// 源目标的 `InsightTarget` 里没有临时表名（那是取样之后才知道的事）。
     pub source_sample: Option<String>,
+    /// 多源目标的**逐来源**样本表（顺序与 `InsightTarget::SourceTables.sources` 对齐）。
+    ///
+    /// 切标签页不重新取样：某来源取过一次就留在这里，切回时直接用。
+    pub source_samples: Vec<String>,
 }
 
 impl PanelData {
     /// 当前该分析哪张临时表：源目标读解析出的样本表，其余目标读目标自带的。
     pub fn sample_table<'a>(&'a self, target: &'a InsightTarget) -> Option<&'a str> {
-        match target.source() {
-            Some(_) => self.source_sample.as_deref(),
-            None => {
-                let table = target.temp_table();
-                (!table.is_empty()).then_some(table)
-            }
+        match target {
+            // 多源：按当前标签页取那一份；空串 = 该来源还没取过样
+            InsightTarget::SourceTables { active, .. } => self
+                .source_samples
+                .get(*active)
+                .map(String::as_str)
+                .filter(|t| !t.is_empty()),
+            _ => match target.source() {
+                Some(_) => self.source_sample.as_deref(),
+                None => {
+                    let table = target.temp_table();
+                    (!table.is_empty()).then_some(table)
+                }
+            },
         }
     }
     pub fn as_column(&self) -> Option<&ColumnProfileView> {

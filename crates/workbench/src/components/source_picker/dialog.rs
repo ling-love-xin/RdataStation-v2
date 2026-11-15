@@ -184,8 +184,11 @@ fn file_group_rows(s: &PickerState) -> Vec<Row> {
             )
             .with_meta("CSV / Parquet / Excel / JSON"),
         );
-        if let Some(Picked::External(path)) = &s.picked {
-            out.push(external_row(2, path));
+        // 多选下把已选的外部文件逐个列出来（否则用户加完看不到自己加了几个）
+        for (_, picked) in &s.picked {
+            if let Picked::External(path) = picked {
+                out.push(external_row(2, path));
+            }
         }
     }
 
@@ -225,6 +228,7 @@ fn render_body(
     cx: &mut Context<PickerShell>,
 ) -> AnyElement {
     let tree = state.borrow().tree.clone();
+    let checked_rows: Rc<Vec<NodeId>> = Rc::new(state.borrow().picked_ids());
 
     let on_toggle: RowAction = {
         let state = state.clone();
@@ -251,24 +255,24 @@ fn render_body(
                     table,
                 } => {
                     let mut s = state.borrow_mut();
-                    s.picked = Some(Picked::Db(
+                    let picked = Picked::Db(
                         conn.clone(),
                         TableCandidate {
                             name: table.clone(),
                             catalog: catalog.clone(),
                             schema: schema.clone(),
                         },
-                    ));
-                    s.tree.select(Some(id.clone()));
+                    );
+                    s.toggle(id.clone(), picked);
                     s.note = None;
                 }
                 NodeId::AnalysisTable { scope, table } => {
                     let mut s = state.borrow_mut();
-                    s.picked = Some(match scope {
+                    let picked = match scope {
                         ArchiveScope::Project => Picked::Analysis(table.clone()),
                         ArchiveScope::Global => Picked::AnalysisGlobal(table.clone()),
-                    });
-                    s.tree.select(Some(id.clone()));
+                    };
+                    s.toggle(id.clone(), picked);
                     s.note = None;
                 }
                 // 结果集临时表：只有本机单例里的能做二次分析（会话态的表随会话消失）
@@ -277,14 +281,12 @@ fn render_body(
                     table,
                 } => {
                     let mut s = state.borrow_mut();
-                    s.picked = Some(Picked::ResultSet(table.clone()));
-                    s.tree.select(Some(id.clone()));
+                    s.toggle(id.clone(), Picked::ResultSet(table.clone()));
                     s.note = None;
                 }
                 NodeId::InsightSample(table) => {
                     let mut s = state.borrow_mut();
-                    s.picked = Some(Picked::InsightSample(table.clone()));
-                    s.tree.select(Some(id.clone()));
+                    s.toggle(id.clone(), Picked::InsightSample(table.clone()));
                     s.note = None;
                 }
                 NodeId::Path(p) if p == PICK_EXTERNAL_KEY => {
@@ -301,7 +303,10 @@ fn render_body(
                     }
                     if let Some(path) = dialog.pick_file() {
                         let mut s = state.borrow_mut();
-                        s.picked = Some(Picked::External(path));
+                        // 外部文件是「一次引用一个」：系统文件对话框一次只回一个路径，
+                        // 所以多选下也按追加处理（每选一次加一个来源）
+                        let node = NodeId::Path(path.to_string_lossy().to_string());
+                        s.toggle(node, Picked::External(path));
                         s.note = None;
                     }
                 }
@@ -314,8 +319,7 @@ fn render_body(
                         .find(|(rel, _)| rel == p)
                         .map(|(rel, abs)| (rel.clone(), abs.clone()));
                     if let Some((rel, abs)) = hit {
-                        s.picked = Some(Picked::Draft(rel, abs));
-                        s.tree.select(Some(id.clone()));
+                        s.toggle(id.clone(), Picked::Draft(rel, abs));
                         s.note = None;
                     }
                 }
@@ -327,7 +331,7 @@ fn render_body(
 
     let visible_refs = tree.visible_rows(rows);
     if !needs_virtual_list(visible_refs.len()) {
-        return render_rows(rows, &tree, on_toggle, on_select, cx);
+        return render_rows(rows, &tree, &checked_rows, on_toggle, on_select, cx);
     }
 
     // 虚拟视口：`visible_rows` 给的是 `Vec<&Row>`（借用入参），而视口回调要求 `'static`，
@@ -336,7 +340,12 @@ fn render_body(
     let flags: Rc<Vec<(bool, bool)>> = Rc::new(
         visible_refs
             .iter()
-            .map(|row| (tree.is_expanded(&row.id), tree.selected() == Some(&row.id)))
+            .map(|row| {
+                (
+                    tree.is_expanded(&row.id),
+                    tree.selected() == Some(&row.id) || checked_rows.contains(&row.id),
+                )
+            })
             .collect(),
     );
     let visible: Rc<Vec<Row>> = Rc::new(visible_refs.into_iter().cloned().collect());
@@ -379,6 +388,7 @@ fn render_body(
 /// 最近使用区块：单独一条渲染（≤5 行，不会真的滚），行点击只改选中。
 fn recent_block(rows: Vec<Row>, state: &Rc<RefCell<PickerState>>, cx: &mut App) -> AnyElement {
     let tree = state.borrow().tree.clone();
+    let checked_rows: Rc<Vec<NodeId>> = Rc::new(state.borrow().picked_ids());
     let on_toggle: RowAction = Rc::new(|_, _| {});
     let on_select: RowAction = {
         let state = state.clone();
@@ -387,7 +397,7 @@ fn recent_block(rows: Vec<Row>, state: &Rc<RefCell<PickerState>>, cx: &mut App) 
             window.refresh();
         })
     };
-    render_rows(&rows, &tree, on_toggle, on_select, cx)
+    render_rows(&rows, &tree, &checked_rows, on_toggle, on_select, cx)
 }
 
 /// 对话框视图：持有树态、搜索框、焦点与订阅。
@@ -729,6 +739,7 @@ pub fn open_source_picker(
 
     let state = Rc::new(RefCell::new(PickerState::new(
         config.kinds,
+        config.multi,
         conns,
         drafts,
         analysis,

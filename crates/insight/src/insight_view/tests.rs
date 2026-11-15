@@ -1787,6 +1787,83 @@ fn source_target(name: &str) -> InsightTarget {
     }
 }
 
+/// 多源标签页：**已取过样**的那一页切过去不再取样（按已有表重算画像）；
+/// 没取过样的才发源请求，而且发出去的仍是多源目标（接缝据此回填自己的槽位）。
+#[gpui_kit::test]
+fn switching_source_tabs_reuses_the_sample_it_already_has(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+    let events = crate::test_support::event_sink(&view, cx);
+
+    let multi = InsightTarget::source_tables(
+        vec![
+            crate::SampleSource::on_duckdb("SELECT * FROM a", "a"),
+            crate::SampleSource::on_duckdb("SELECT * FROM b", "b"),
+        ],
+        "2 个来源",
+    )
+    .expect("两个来源");
+
+    cx.update(|_window, cx| {
+        view.update(cx, |view, cx| {
+            // 会话内导航复用：不再弹确认窗口，直接按当前页取数
+            view.set_target_loaded(multi.clone(), cx);
+            // 第一页已有样本表（真实链路里由接缝回填）
+            view.set_source_sample_at(0, "tmp_i_a", cx);
+            // 第二页还没取过样
+            view.set_source_sample_at(1, "", cx);
+        });
+    });
+    events.take();
+
+    // 切到第二页：没样本 → 发多源目标请求（active=1）
+    cx.update(|_window, cx| view.update(cx, |view, cx| view.select_source(1, cx)));
+    assert!(
+        events.borrow().iter().any(|e| matches!(
+            e,
+            InsightEvent::ProfileRequested {
+                target: InsightTarget::SourceTables { active: 1, .. },
+                ..
+            }
+        )),
+        "未取过样的一页应发源请求：{:?}",
+        events.borrow()
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view.active_source()),
+        Some(1),
+        "当前标签页要跟着切"
+    );
+
+    // 第二页也取到样本了；再切回第一页：直接用它的表，不再发源请求
+    cx.update(|_window, cx| view.update(cx, |view, cx| view.set_source_sample_at(1, "tmp_i_b", cx)));
+    events.take();
+    cx.update(|_window, cx| view.update(cx, |view, cx| view.select_source(0, cx)));
+    assert!(
+        events.borrow().iter().any(|e| matches!(
+            e,
+            InsightEvent::ProfileRequested {
+                target: InsightTarget::Table { temp_table, .. },
+                ..
+            } if temp_table == "tmp_i_a"
+        )),
+        "已取过样的一页应按已有表画像：{:?}",
+        events.borrow()
+    );
+    assert!(
+        !events.borrow().iter().any(|e| matches!(
+            e,
+            InsightEvent::ProfileRequested {
+                target: InsightTarget::SourceTables { .. },
+                ..
+            }
+        )),
+        "不该重新取样：{:?}",
+        events.borrow()
+    );
+}
+
+
 /// 全量统计是**两段式**：`request_full` 只发确认请求，不切 scope / 不发画像请求；
 /// 宿主确认后调 `confirm_full` 才真正切换（取消 = 什么都不做）。
 ///

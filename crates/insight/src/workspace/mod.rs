@@ -98,6 +98,17 @@ fn target_key(t: &InsightTarget) -> String {
             source.conn_id().unwrap_or("mem"),
             source.label()
         ),
+        // 多源目标整体是一个身份：切标签页不算换目标（否则每次切都往集合里插一条）
+        InsightTarget::SourceTables {
+            sources, table_name, ..
+        } => format!(
+            "srctables:{}:{table_name}",
+            sources
+                .iter()
+                .map(|s| s.label())
+                .collect::<Vec<_>>()
+                .join("|")
+        ),
         InsightTarget::MultiColumn {
             temp_table,
             columns,
