@@ -282,6 +282,51 @@ workbench 里没有任何字段长期持有 project manager。所以：
 (c) 确认框里让用户写跨源 SQL。三条的取样代价与确认窗口文案完全不同，
 **没有拍板前不动 `SampleSource`**（改了会把现有单源路径一起拖下水）。
 
+### 8.9 刀 7 · 全局分析库作为会话源（方案 B）
+
+**先落一条容易搞错的库口径（用户更正 + 实测头字节，2026-11-15）**：
+
+> 「全局和项目是一致的——分析库都是 duckdb，其他的都是 sqlite。」
+
+| 库 | 路径 | 格式（实测） | 装什么 |
+| --- | --- | --- | --- |
+| 全局分析库 | `<RDS_HOME>/data/system/analytics.duckdb` | DuckDB（头 `94 2d 89 5a 81 6e 8f 0f`，798720B） | 可分析的全局表 |
+| 全局元数据库 | `<RDS_HOME>/data/system/global.db` | SQLite（头 `SQLite format 3`，65810432B） | 连接（`global_connections`）/ 资源归档（`analytics_resources`）/ 规则信任 |
+| 项目分析库 | `<项目>/.RSmeta/analytics.duckdb` | DuckDB | 项目持久表（`res_*`） |
+| 项目元数据库 | `<项目>/.RSmeta/project.db` | SQLite | 连接（`connections`）/ 资源归档 |
+
+首版实现把「全局表」按 `global.db` + sqlite 挂——**这是错的**：
+`open_mounted` 返回 Ok 但随后查询报 `schema/表不存在`，因为挂上的是元数据库。
+现在 `analysis::global::open_global_session` 一律走 `analytics.duckdb` + `duckdb` 驱动；
+`global_db_path()` 保留但标 `#[deprecated]`（只为旧调用点迁移，新代码不用）。
+
+**方案 B 的落点**（`5e8d9b79` + 本节更正）：
+
+- `analysis/global.rs`：`GLOBAL_ALIAS="rds_global"`、`global_analysis_db_path()`、
+  `open_mounted(owner, path, alias, db_type)`（不存在 / 撞锁都给可读原因）、
+  `ensure_alias_attached(session, alias, db_type)`（联邦会话既有约定是「挂不上不阻断」，
+  所以 `open` 成功 ≠ 别名真存在：开完必须核 `duckdb_databases()`，失败时把
+  `MountState::Failed` 的**原话**带出来）、`open_global_session(owner)`；
+- `crates/engine/tests/analysis_global_probe.rs` 4 passed：临时 DuckDB 只读挂载可查 /
+  写被拒 / **真全局分析库**（`RDS_HOME` 直拼路径，因测试运行器把系统目录指到临时根）
+  只读挂载成功 / 路径落点指向 `analytics.duckdb` 而非 `global.db`；
+- 洞察侧：`SampleSource` 增 `global` 标记 + `on_global(table, label)`（SQL 固定拼
+  `SELECT * FROM rds_global."<表>"`），`sample_source_to_analysis_table` 开头走
+  「短命会话 → `materialize_sample` → `move_sample_to_process_db`」，对外仍返回
+  单例上**登记版** `tmp_i_`，下游（EDA / 图表 / 导出）读法与其它来源完全一致；
+- `crates/insight/tests/global_table_sample.rs` 2 passed：自建全局分析库（落点取
+  `get_system_dir()`，即测试根，走生产路径）→ 3 行表取样 → 单例里 `tmp_i_` 3 行；
+  另一条钉住「元数据库不能被当成分析库挂」（SQLite 文件用 duckdb 驱动必失败且要说清哪步）。
+
+**为什么不是方案 A（单例 ATTACH 全局分析库）**：那台库有自己的写入方（全局持久表落库），
+Windows 上 DuckDB 一个文件只允许一个连接句柄（`store/src/persistence/project_db.rs:276-278`），
+单例长命持有就会让写入方撞「另一个程序正在使用此文件」——该失败模式已在
+`analysis_db_exclusive_probe` 真跑过。用户已按此论证选定 B。
+
+**尚未做（下一刀 · B2）**：来源选择器新档 `SourceKind::AnalysisGlobal` + 表清单
+（从 `analytics.duckdb` 读）+ 空态 + 只读文案；以及洞察多源取样把源解析成
+`ConnRef::Live` 后建联邦会话（当前 `Federated` 档仍明确报「尚未接入」）。
+
 
 
 

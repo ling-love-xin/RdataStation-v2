@@ -22,6 +22,12 @@ pub struct SampleSource {
     pub sql: String,
     /// 人类可读的来源描述（面板副标题 / 快照来源）：如「analytics.orders」
     pub label: String,
+    /// 这条来源是不是**全局库里的表**（刀 7 · B）。
+    ///
+    /// 全局库（`<RDS_HOME>/data/system/global.db`）是 **SQLite** 文件、有自己的写入方，
+    /// 所以不能 ATTACH 进进程单例。取样时另开一条**短命会话**只读挂它（别名 `rds_global`），
+    /// 取完把结果搬进单例（`tmp_i_`，建完即登记）——`sql` 里写 `rds_global.<表>`。
+    pub global: bool,
 }
 
 impl SampleSource {
@@ -35,6 +41,7 @@ impl SampleSource {
             conn_id: Some(conn_id.into()),
             sql: sql.into(),
             label: label.into(),
+            global: false,
         }
     }
 
@@ -44,6 +51,20 @@ impl SampleSource {
             conn_id: None,
             sql: sql.into(),
             label: label.into(),
+            global: false,
+        }
+    }
+
+    /// **全局库**里的表（刀 7 · B）：`table` 是裸表名，SQL 由这里拼成
+    /// `SELECT * FROM rds_global.<表>`（别名是内核固定常量，入口不该自己起名）。
+    pub fn on_global(table: impl Into<String>, label: impl Into<String>) -> Self {
+        let table = table.into();
+        let quoted = table.replace('"', "\"\"");
+        Self {
+            conn_id: None,
+            sql: format!("SELECT * FROM rds_global.\"{quoted}\""),
+            label: label.into(),
+            global: true,
         }
     }
 
@@ -67,8 +88,7 @@ impl SampleSource {
         Ok(Self::on_duckdb(
             format!("SELECT * FROM {reader}('{escaped}')"),
             label,
-        ))
-    }
+        ))    }
 
     /// 来源描述（面板副标题与快照 `entity_source` 用它）。
     pub fn label(&self) -> &str {

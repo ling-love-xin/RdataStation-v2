@@ -52,37 +52,42 @@ fn the_mounted_global_db_really_is_read_only() {
 }
 
 /// 真全局库（`<RDS_HOME>/data/system/global.db`）：空闲状态下能只读挂上并读到
-/// `global_connections`。
+/// 真全局**分析**库（`<RDS_HOME>/data/system/analytics.duckdb`）：空闲状态下能只读挂上，
+/// 且 `duckdb_databases()` 里能看到别名。
 ///
 /// 这里**直接从 `RDS_HOME` 环境变量拼路径**，不走 `get_system_dir()`：测试运行器会把
 /// 系统目录指到临时根（实测解析结果是 `.rds/tmp/rds-test-root-*/data/system`），
 /// 走那条路只会验到「不存在的临时库」。测试时显式设 `RDS_HOME` 才会验到真库。
 ///
-/// 为什么允许跳过：若此刻正好有写入方（连接保存 / 归档 / 洞察索引）持有全局库，
-/// DuckDB 会拒绝挂载——那是**已知且必须可读报错**的常态，不该让用例红。
+/// 为什么允许跳过：若此刻正好有写入方持有全局分析库，DuckDB 会拒绝挂载——那是
+/// **已知且必须可读报错**的常态，不该让用例红。
 #[test]
-fn the_real_global_db_opens_read_only_when_idle() {
+fn the_real_global_analysis_db_opens_read_only_when_idle() {
     let Ok(home) = std::env::var("RDS_HOME") else {
-        eprintln!("跳过：未设 RDS_HOME，无法定位真全局库");
+        eprintln!("跳过：未设 RDS_HOME，无法定位真全局分析库");
         return;
     };
     let path = std::path::PathBuf::from(home)
         .join("data")
         .join("system")
-        .join("global.db");
+        .join("analytics.duckdb");
     if !path.exists() {
         eprintln!("跳过：{} 不存在（宿主未初始化）", path.display());
         return;
     }
-    match open_mounted("C_global_real_probe", &path, GLOBAL_ALIAS, "sqlite") {
+    match open_mounted("C_global_real_probe", &path, GLOBAL_ALIAS, "duckdb") {
         Ok(session) => {
+            // 分析库是 DuckDB：用 `duckdb_tables()` 按 database_name 数表，
+            // 证明挂的是这台库（附带库名/表数，不是「表不存在」那种远端报错）。
+            // 注意挂载库里的 `information_schema` 不一定被暴露（实测报 schema 不存在），
+            // 所以这里用系统函数而不是信息模式。
             let result = session
                 .run(&format!(
-                    "select count(*) as n from {GLOBAL_ALIAS}.global_connections"
+                    "select count(*) as n from duckdb_tables() where database_name = '{GLOBAL_ALIAS}'"
                 ))
-                .expect("查真全局库的连接表");
+                .expect("查真全局分析库的表清单");
             assert!(!result.columns.is_empty());
-            eprintln!("真全局库只读挂载成功：{}", path.display());
+            eprintln!("真全局分析库只读挂载成功：{}", path.display());
         }
         Err(error) => {
             let text = error.to_string();
@@ -90,17 +95,21 @@ fn the_real_global_db_opens_read_only_when_idle() {
                 text.contains("正被其他操作占用"),
                 "真库打开失败时必须是「占用」这类可读原因，实际：{text}"
             );
-            eprintln!("跳过（有写入方持有全局库）：{text}");
+            eprintln!("跳过（有写入方持有全局分析库）：{text}");
         }
     }
 }
 
-/// `global_db_path()` 的落点必须与系统目录一致（路径规则只此一处）。
+/// `global_analysis_db_path()` 的落点必须与系统目录一致（路径规则只此一处），
+/// 且**指向 DuckDB 分析库**（不是 SQLite 的 `global.db`）。
 #[test]
-fn global_db_path_follows_the_system_dir() {
+fn global_analysis_db_path_follows_the_system_dir() {
     let system_dir = rds_engine::migration::get_system_dir().expect("系统目录");
-    assert_eq!(
-        rds_engine::analysis::global::global_db_path().expect("全局库路径"),
-        system_dir.join("global.db")
+    let path = rds_engine::analysis::global::global_analysis_db_path().expect("全局分析库路径");
+    assert_eq!(path, system_dir.join("analytics.duckdb"));
+    assert!(
+        !path.to_string_lossy().ends_with("global.db"),
+        "别把元数据库当分析库：{}",
+        path.display()
     );
 }

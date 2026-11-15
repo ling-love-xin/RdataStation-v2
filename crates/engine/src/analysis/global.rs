@@ -1,19 +1,22 @@
-//! 分析内核 · 全局库作为**会话源**（刀 7 方案 B）。
+//! 分析内核 · 全局**分析库**作为会话源（刀 7 方案 B）。
 //!
-//! 为什么不把全局库 ATTACH 进进程内存单例（方案 A）：全局库
-//! （`<RDS_HOME>/data/system/global.db`）有**自己的写入方**（连接保存、资源归档都在写它），
-//! 而 DuckDB 在 Windows 上对同一个文件只允许一个连接句柄
-//! （`store/src/persistence/project_db.rs:276-278` 原文）。单例是进程级长命对象，
-//! 让它持有全局库句柄的那一刻起，那些写入方就会撞
+//! 口径（用户口径 + 实测，2026-11-15）：**分析库一律 DuckDB，其余一律 SQLite**。
+//! 所以「全局表」在 `<RDS_HOME>/data/system/analytics.duckdb` 里；同目录的 `global.db`
+//! 是 SQLite 元数据库（连接 / 资源归档 / 规则信任），递错了地方就查不到可分析的表。
+//!
+//! 为什么不把全局分析库 ATTACH 进进程内存单例（方案 A）：这台库有**自己的写入方**
+//! （全局持久表的落库路径与项目侧同形），而 DuckDB 在 Windows 上对同一个文件只允许
+//! 一个连接句柄（`store/src/persistence/project_db.rs:276-278` 原文）。单例是进程级长命
+//! 对象，让它持有全局分析库句柄的那一刻起，写入方就会撞
 //! 「另一个程序正在使用此文件」——这条失败模式已在 `analysis_db_exclusive_probe` 里真跑过。
 //!
-//! 所以这里走 B：**短命会话 + 只读挂载**。会话按 owner 建，用完即弃；全局库只在这次分析
-//! 期间被读，不改变它的生命周期。
+//! 所以这里走 B：**短命会话 + 只读挂载**。会话按 owner 建，用完即弃；全局分析库只在这次
+//! 分析期间被读，不改变它的生命周期。
 //!
 //! # 边界
 //!
-//! - 只读：全局库在本会话里不可写（这是对的——它是共享系统库，写入走它自己的 manager）；
-//! - 撞锁仍是可能的：会话建立那一刻若全局库正好被某个写入方持着，DuckDB 会拒绝挂载。
+//! - 只读：全局分析库在本会话里不可写（这是对的——写入走它自己的 manager）；
+//! - 撞锁仍是可能的：会话建立那一刻若该库正好被某个写入方持着，DuckDB 会拒绝挂载。
 //!   这不是「可以忽略的小概率」，而是**必须给可读原因**的常态之一（见 [`open_mounted`] 的错误包装）；
 //! - 别名固定 [`GLOBAL_ALIAS`]，SQL 里写 `rds_global.<表>`。
 
@@ -27,15 +30,24 @@ use super::channel::AnalysisChannel;
 use super::kernel::{self, PreparedMounts, SessionHandle};
 use super::mount::{plan_for, MountSpec};
 
-/// 全局库在会话 SQL 里的别名（固定，不让入口自己起名——两处各算一套就会对不上）
+/// 全局分析库在会话 SQL 里的别名（固定，不让入口自己起名——两处各算一套就会对不上）
 pub const GLOBAL_ALIAS: &str = "rds_global";
 
-/// 全局库路径：`engine::migration::get_system_dir()` 是仓库里唯一的系统目录解析点，
-/// 这里不另写一套路径规则。
-pub fn global_db_path() -> Result<PathBuf, CoreError> {
+/// 全局**分析**库路径：`<RDS_HOME>/data/system/analytics.duckdb`。
+///
+/// 路径规则复用 `migration::get_system_dir()`（仓库里唯一的系统目录解析点），这里不另写一套。
+/// 对照表（实测头字节）：
+///
+/// | 库 | 路径 | 格式 | 用途 |
+/// | --- | --- | --- | --- |
+/// | 全局分析库 | `data/system/analytics.duckdb` | DuckDB（`94 2d 89 5a`） | 全局表（可分析数据） |
+/// | 全局元数据库 | `data/system/global.db` | SQLite（`SQLite format 3`） | 连接 / 资源归档 / 规则信任 |
+/// | 项目分析库 | `<项目>/.RSmeta/analytics.duckdb` | DuckDB | 项目持久表 |
+/// | 项目元数据库 | `<项目>/.RSmeta/project.db` | SQLite | 连接 / 资源归档 |
+pub fn global_analysis_db_path() -> Result<PathBuf, CoreError> {
     let dir = crate::migration::get_system_dir()
         .map_err(|e| invalid(format!("解析系统目录失败（RDS_HOME 是否设置？）: {e}")))?;
-    Ok(dir.join("global.db"))
+    Ok(dir.join("analytics.duckdb"))
 }
 
 /// 把任意一个库文件**只读**挂进一条短命联邦会话，返回会话句柄。
@@ -139,19 +151,21 @@ fn ensure_alias_attached(
     )))
 }
 
-/// 打开全局库会话（刀 7 · B1）：读 `<RDS_HOME>/data/system/global.db`，别名 [`GLOBAL_ALIAS`]。
+/// 打开全局分析库会话（刀 7 · B1）：读 `<RDS_HOME>/data/system/analytics.duckdb`，
+/// 别名 [`GLOBAL_ALIAS`]，驱动 **duckdb**（分析库一律 DuckDB）。
 ///
-/// 驱动按 **sqlite**：`global.db` 实测是 SQLite 文件（头部 `SQLite format 3`，2026-11-15 实测）。
-/// 这一条曾经判断错过（按扩展名想当然当成 DuckDB 库），代价是「open 成功、查询报 schema 不存在」。
+/// 曾经挂错过：首版按 `global.db` + sqlite 挂，那是元数据库（SQLite），里面没有可分析的表；
+/// 代价是「open 成功、随后查询报 schema/表不存在」——所以 `open_mounted` 里那道
+/// 「挂上之后核 catalog」的检查留着，不许删。
 pub fn open_global_session(owner: &str) -> Result<SessionHandle, CoreError> {
-    let path = global_db_path()?;
+    let path = global_analysis_db_path()?;
     if !path.exists() {
         return Err(invalid(format!(
-            "全局库未初始化：{}（宿主启动流程还没建它）",
+            "全局分析库未初始化：{}（宿主启动流程还没建它）",
             path.display()
         )));
     }
-    open_mounted(owner, &path, GLOBAL_ALIAS, "sqlite")
+    open_mounted(owner, &path, GLOBAL_ALIAS, "duckdb")
 }
 
 fn invalid(message: String) -> CoreError {

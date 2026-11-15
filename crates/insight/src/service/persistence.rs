@@ -49,6 +49,24 @@ pub async fn sample_source_to_analysis_table(
     source: &SampleSource,
     config: &crate::model::ProbeConfig,
 ) -> Result<String, CoreError> {
+    // 全局库表（刀 7 · B）：全局库是 SQLite 文件、有自己的写入方，不能 ATTACH 进单例。
+    // 所以这条走「短命会话只读挂载 → 会话内取样 → 搬进单例登记版 tmp_i_」：
+    // 下游（EDA / 图表 / 导出）读的仍是进程单例，行为与其它来源一致。
+    if source.global {
+        let session = engine::analysis::global::open_global_session(&source.label)?;
+        let in_session = engine::analysis::materialize::materialize_sample(
+            &session,
+            &source.label,
+            &build_duckdb_sample_sql(source, config),
+        )?;
+        let landed = engine::analysis::materialize::move_sample_to_process_db(
+            &session,
+            &in_session,
+            &source.label,
+        )?;
+        // 会话内的那张随会话丢弃（move 已经把数据搬走）；登记表跟 TTL 走
+        return Ok(landed);
+    }
     match source.conn_id() {
         Some(conn_id) => {
             // 源库路径：Full / RowCount / WHERE 直接拼进发给源库的 SQL；
