@@ -10,14 +10,17 @@
 //! 「计划说要挂 A（别名 a1）」和「宿主给的源别名是 a2」必须当场对上账，否则查询会在
 //! 一条名字不对的 catalog 上跑，报的还是「表不存在」这种误导性错误。
 
-use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
+use duckdb::Connection;
 use shared::error::{CommonError, CoreError};
 use shared::models::QueryResult;
 
 use crate::duckdb::accel::{self, AccelSession, AccelSource};
 use crate::duckdb::federation::registry::FederatedSource;
 use crate::duckdb::federation::session::{self, FederatedSession};
+use crate::services::duckdb_service::DuckDbService;
 
 use super::channel::AnalysisChannel;
 use super::mount::{MountSpec, SessionPlan};
@@ -69,10 +72,18 @@ impl PreparedMounts {
     }
 }
 
-/// 内核交出去的会话句柄。三档各一种，**不含隐藏的第四种**。
+/// 进程内单例上一条 SQL 的「正在跑」标志（`run_sql_on` 要求一个 `AtomicBool`）。
+///
+/// 单例本身是 `Mutex` 串行的，一条连接上不可能有两条 SQL 并发；用**同一个**静态标志
+/// 正是这个事实的写法——不需要按调用方各发一个。
+static PROCESS_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// 内核交出去的会话句柄。四条执行面各一种，**不含隐藏的第五种**。
 pub enum SessionHandle {
     /// 源库直连：没有 DuckDB 会话，SQL 交回驱动。
     None,
+    /// 进程内 DuckDB 单例（导出 / 临时表 / 洞察取样）。
+    ProcessDb(Arc<Mutex<Connection>>),
     Accelerated(Arc<AccelSession>),
     Federated(Arc<FederatedSession>),
 }
@@ -92,6 +103,7 @@ impl SessionHandle {
     pub fn channel_label(&self) -> &'static str {
         match self {
             Self::None => "source",
+            Self::ProcessDb(_) => "process",
             Self::Accelerated(_) => "accelerated",
             Self::Federated(_) => "federated",
         }
@@ -111,6 +123,12 @@ impl SessionHandle {
             Self::None => Err(invalid(
                 "源库直连档没有 DuckDB 会话：SQL 应由驱动执行，不该交给内核".to_string(),
             )),
+            Self::ProcessDb(conn) => {
+                let guard = conn
+                    .lock()
+                    .map_err(|e| invalid(format!("DuckDB 单例锁中毒: {e}")))?;
+                accel::run_sql_on(&guard, &PROCESS_RUNNING, sql)
+            }
             Self::Accelerated(session) => session.run(sql),
             Self::Federated(session) => session.run(sql),
         }
@@ -127,6 +145,15 @@ pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHand
                 ));
             }
             Ok(SessionHandle::None)
+        }
+        AnalysisChannel::ProcessDuckDb => {
+            if !prepared.is_empty() {
+                return Err(invalid(
+                    "进程内 DuckDB 不挂载外部源：要挂源请走本地加速或联邦".to_string(),
+                ));
+            }
+            let conn = DuckDbService::get_or_create_duckdb()?;
+            Ok(SessionHandle::ProcessDb(conn))
         }
         AnalysisChannel::Accelerated => {
             if !prepared.federated.is_empty() {
@@ -354,8 +381,36 @@ mod tests {
 
     #[test]
     fn session_handle_none_reports_source_channel() {
-        // 三档各一种句柄，标签与 executor 的 channel 字段同词
+        // 四条执行面各一种句柄，标签与 executor 的 channel 字段同词
         assert_eq!(SessionHandle::None.channel_label(), "source");
         assert!(!SessionHandle::None.has_session());
+    }
+
+    #[test]
+    fn process_channel_opens_the_process_singleton_and_runs() {
+        let plan = plan_for(&AnalysisChannel::ProcessDuckDb, &[], None, "tmp_i_x").unwrap();
+        let handle = open(&plan, &PreparedMounts::none()).unwrap();
+        assert_eq!(handle.channel_label(), "process");
+        assert!(handle.has_session());
+        // 真跑：这正是洞察取样要的形态（表在单例里、SQL 在单例上执行）
+        handle
+            .run("CREATE OR REPLACE TEMP TABLE _kernel_process_probe(a INT)")
+            .expect("建表");
+        let result = handle
+            .run("SELECT count(*) FROM _kernel_process_probe")
+            .expect("查询");
+        assert_eq!(result.rows.len(), 1, "应有一行 count");
+    }
+
+    #[test]
+    fn process_channel_rejects_mounted_sources() {
+        let plan = plan_for(&AnalysisChannel::ProcessDuckDb, &[], None, "t").unwrap();
+        let accel = AccelSource::new("c1", "duckdb", r"D:\x.duckdb").expect("组装源");
+        let err = open(
+            &plan,
+            &PreparedMounts::accelerated(MountSpec::sql_connection("c1"), accel),
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("不挂载外部源"));
     }
 }

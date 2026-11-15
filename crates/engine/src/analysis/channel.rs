@@ -4,25 +4,29 @@
 //! 在哪跑」：编辑器拼三档、洞察翻 `SampleSource`、加速通道另起一条。本模块只做一件事
 //! ——把这件事**说清楚**，让三处共用同一套词。
 //!
-//! **执行通道是三档，不是两档**（2026-11-15 用户口径澄清，源码佐证如下）：
+//! **执行面是四条，用户能选的是三档**（2026-11-15 用户口径澄清 + 源码核对）：
 //!
-//! | 通道 | 谁执行 | 挂载 | 源码 |
+//! | 执行面 | 谁执行 | 挂载 | 源码 |
 //! | --- | --- | --- | --- |
 //! | `Source` | 源驱动本身 | 不挂 | `editor/src/ports/editor_exec` 源库档 |
-//! | `Accelerated` | 进程内 DuckDB，单源只读挂载 | 1 个源 | `duckdb/accel.rs:508` |
+//! | `ProcessDuckDb` | 进程内 DuckDB 单例 | 不挂（表本就在这个单例里） | `services/duckdb_service.rs:13` |
+//! | `Accelerated` | 专用连接，单源只读挂载 | 1 个源 | `duckdb/accel.rs:508` |
 //! | `Federated` | 按 owner 的联邦会话，多源 | N 个源 | `duckdb/federation/session.rs:498` |
 //!
-//! 早先把 `Source` 与 `Accelerated` 合成一个 `Local` 是错的：加速档要 `ATTACH` 源
-//! （还要为 L2 驱动注册会话级 Secret），源库档则根本不进 DuckDB。
-//!
-//! 只放类型与判定，不碰 I/O：装配（`mount::plan_for`）与开会话（后续切片）另做。
+//! 用户可选的是「源库直连 / 本地加速 / 联邦」三档；`ProcessDuckDb` 不是可选档，而是
+//! **内部底座**——导出、临时表（`tmp_q_` / `tmp_i_`）、洞察取样都跑在它上面
+//! （`insight/src/insight_engine_internal/mod.rs:59-67` 原文「进程级单例…临时表在同一进程内
+//! 全局可见」）。它必须单列：否则「洞察取样跑在哪」又回到各处自己拼。
 
 /// 一次分析跑在哪。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnalysisChannel {
     /// 源库直连：SQL 原样交给驱动执行，**不挂任何源**。
     Source,
-    /// 本地加速：把**一个**源只读挂进进程内 DuckDB（`accel::ensure_session`）。
+    /// 进程内 DuckDB 单例：导出 / 临时表 / 洞察取样。**不挂源**——要读的表
+    /// （结果集 `tmp_q_`、取样 `tmp_i_`）本来就是在这个单例里建的。
+    ProcessDuckDb,
+    /// 本地加速：把**一个**源只读挂进一条专用 DuckDB 连接（`accel::ensure_session`）。
     /// 会话按源连接 id 缓存，所以它同样是「有 owner 的会话」，只是 owner 就是源 id。
     Accelerated,
     /// 显式联邦：按 `owner` 建/取 `FederatedSession`，多个源挂进来。
@@ -31,8 +35,13 @@ pub enum AnalysisChannel {
 }
 
 impl AnalysisChannel {
-    /// 是否要建 DuckDB 会话（源库直连不要）。
+    /// 是否需要**按 owner / 源建的会话**（源库直连与进程单例都不要）。
     pub fn needs_session(&self) -> bool {
+        matches!(self, Self::Accelerated | Self::Federated { .. })
+    }
+
+    /// 是否在 DuckDB 上执行（源库直连不在）。
+    pub fn runs_in_duckdb(&self) -> bool {
         !matches!(self, Self::Source)
     }
 
@@ -48,6 +57,7 @@ impl AnalysisChannel {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Source => "source",
+            Self::ProcessDuckDb => "process",
             Self::Accelerated => "accelerated",
             Self::Federated { .. } => "federated",
         }

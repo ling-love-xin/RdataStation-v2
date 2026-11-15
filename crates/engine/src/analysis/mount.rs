@@ -152,6 +152,22 @@ pub fn plan_for(
                 notes: Vec::new(),
             })
         }
+        AnalysisChannel::ProcessDuckDb => {
+            // 进程单例不挂外部源：结果集 / 取样表本来就在它里面，再挂一遍就是重复
+            if !mounts.is_empty() {
+                return Err(invalid(format!(
+                    "进程内 DuckDB 不挂载外部源：给了 {} 个（要挂源请选本地加速或联邦）",
+                    mounts.len()
+                )));
+            }
+            Ok(SessionPlan {
+                channel: AnalysisChannel::ProcessDuckDb,
+                mounts: Vec::new(),
+                primary: None,
+                label,
+                notes: Vec::new(),
+            })
+        }
         AnalysisChannel::Accelerated => {
             match mounts.len() {
                 0 => {
