@@ -15,6 +15,7 @@
 //! 依赖方向：engine → rds-shared / rds-sql / rds-store / rds-driver / rds-paths / rds-connection；
 //! Feature crates → engine；engine 不得依赖 Feature。
 
+pub mod analysis;
 pub mod cache;
 pub mod connection_manager;
 pub mod csv;
