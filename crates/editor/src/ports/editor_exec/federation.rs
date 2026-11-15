@@ -3,6 +3,10 @@
 use super::*;
 use super::convert::*;
 
+// 公共内核：计划与开会话都收在 `engine::analysis` 里（本文件只保留宿主侧组装）。
+use engine::analysis::kernel::{PreparedMounts, SessionHandle};
+use engine::analysis::mount::{MountSpec, SessionPlan};
+
 impl EngineQueryRunner {
     // ===== 联邦档（B13 第一期后半） =====
 
@@ -165,15 +169,71 @@ impl EngineQueryRunner {
     }
 
     /// 组装源清单 + 取（必要时建立）会话（两件事总是一起做，收口在这里）
+    ///
+    /// 开会话这件事不再由编辑器直接调 `ensure_session`：走内核 `plan_for + open`，
+    /// 让「计划里的源 / 别名 / 主源」与「真正挂上去的东西」在**同一处**对齐。
+    /// 编辑器仍保留自己的组装（别名生成、notes 文案），那属于宿主职责。
     pub(crate) fn federated_session(
         &self,
         connection: Option<&str>,
     ) -> Result<(FederatedPlan, Arc<fed_session::FederatedSession>), String> {
         let plan = self.federated_plan(connection)?;
-        let session =
-            fed_session::ensure_session(&plan.owner, &plan.sources, plan.primary.as_deref())?;
-        Ok((plan, session))
+        let (session_plan, prepared) = session_plan_for(&plan)?;
+        match engine::analysis::kernel::open(&session_plan, &prepared) {
+            Ok(SessionHandle::Federated(session)) => Ok((plan, session)),
+            Ok(other) => Err(format!(
+                "联邦档拿到的不是联邦会话（内核给的档位是 {}）",
+                other.channel_label()
+            )),
+            Err(error) => Err(error.to_string()),
+        }
     }
+}
+
+/// 把宿主的 [`FederatedPlan`] 折成内核的两件东西：计划 + 预组装源。
+///
+/// 纯函数，便于单测；`mounts` 由已组装好的源反推（连接 id + 别名），保证两边同源。
+pub(crate) fn session_plan_for(
+    plan: &FederatedPlan,
+) -> Result<
+    (
+        engine::analysis::mount::SessionPlan,
+        engine::analysis::kernel::PreparedMounts,
+    ),
+    String,
+> {
+    let mounts: Vec<MountSpec> = plan
+        .sources
+        .iter()
+        .map(|source| MountSpec::sql_connection_as(source.conn_id.clone(), source.alias.clone()))
+        .collect();
+    let session_plan = kernel_plan_for(&plan.owner, &mounts, plan.primary.as_deref())
+        .map_err(|error| error.to_string())?;
+    let prepared = PreparedMounts::federated(
+        plan.sources
+            .iter()
+            .cloned()
+            .zip(mounts.iter().cloned())
+            .map(|(source, mount)| (mount, source))
+            .collect(),
+    );
+    Ok((session_plan, prepared))
+}
+
+fn kernel_plan_for(
+    owner: &str,
+    mounts: &[MountSpec],
+    primary: Option<&str>,
+) -> Result<SessionPlan, String> {
+    engine::analysis::mount::plan_for(
+        &engine::analysis::channel::AnalysisChannel::Federated {
+            owner: owner.to_string(),
+        },
+        mounts,
+        primary,
+        owner,
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// 从源记录组装清单（**纯函数**：不碰连接库，便于逐条断言）
