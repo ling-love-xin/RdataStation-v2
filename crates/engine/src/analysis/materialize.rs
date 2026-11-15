@@ -21,6 +21,12 @@
 //! 要把它彻底收进 TTL 体系，出路是给两种会话各加一个 `with_connection(closure)`
 //! 只读借用入口，让内核能调 `temp_table::create_analysis_temp_table_as`。那会动会话
 //! 的公开面，留给「刀 5 接洞察」时按实际需要做。
+//!
+//! 2026-11-15 进展：那个「按实际需要」的落点找到了，但换了个做法——不加借用入口，而是
+//! 在**需要时把结果搬进单例**（[`move_sample_to_process_db`]：会话侧 `COPY … TO parquet`
+//! → 单例侧 `CREATE TABLE AS read_parquet`，建完即登记）。原边界仍在：会话内的表仍不登记；
+//! 搬过来的那张是登记表，跟着 TTL 走。搬运按需触发（洞察要在单例里看样本时才搬），
+//! 不做「每次都搬」——那会把加速档的省内存意义抹掉。
 
 use shared::error::{CommonError, CoreError};
 
@@ -126,6 +132,68 @@ pub fn materialize_sample(
             materialize_in_session(handle, &name, select)
         }
     }
+}
+
+/// 把**会话内**的样本表搬进进程单例，并登记成规范的 `tmp_i_` 表。
+///
+/// 为什么需要这条：加速 / 联邦档的形态 I 只能落在会话自己的 `memory.tmp_i_`（见模块头），
+/// 而洞察的下游（EDA / 图表 / 导出）读的是**进程单例**那台库。两张表在不同实例里，
+/// 名字再像也互相看不见——所以「在加速档取样」这件事，要么下游跟着换连接，
+/// 要么像这里一样把结果搬过来。
+///
+/// 搬运走 SQL 而不是 Rust 值装箱：会话只对外给 `run`（连接藏在私有 `Mutex`），
+/// 所以是「会话侧 `COPY … TO parquet` → 单例侧 `CREATE TABLE AS read_parquet`」，
+/// 类型（DECIMAL / 日期）原样过一遍。Parquet 中转文件是临时文件，用完即删。
+///
+/// 边界：**只搬一张表，不搬「会话」**。会话里的其它中间表仍留在会话侧；
+/// 要清它，仍用 [`drop_materialized`] 对原会话调。
+pub fn move_sample_to_process_db(
+    handle: &SessionHandle,
+    session_table: &str,
+    description: &str,
+) -> Result<String, CoreError> {
+    if let SessionHandle::ProcessDb(_) = handle {
+        return Err(invalid(
+            "这张表已经在进程单例上：无需搬运（直接按裸名使用即可）".to_string(),
+        ));
+    }
+    if !handle.has_session() {
+        return Err(invalid(
+            "源库直连档没有 DuckDB 会话：无从搬运（取样应走驱动拉数）".to_string(),
+        ));
+    }
+    let name = session_table
+        .strip_prefix(&format!("{MATERIALIZE_CATALOG}."))
+        .unwrap_or(session_table);
+    validate_identifier(name)?;
+
+    // 中转文件：唯一名 + 放在系统临时目录；DuckDB 的字符串字面量里反斜杠不转义，
+    // 所以路径统一成正斜杠（Windows 上也认），单引号按 SQL 口径翻倍。
+    let unique = uuid::Uuid::new_v4().simple().to_string();
+    let parquet = std::env::temp_dir().join(format!("rds_sample_{}.parquet", &unique[..12]));
+    let literal = parquet.to_string_lossy().replace('\\', "/").replace('\'', "''");
+
+    handle
+        .run(&format!(
+            "COPY (SELECT * FROM {MATERIALIZE_CATALOG}.{name}) TO '{literal}' (FORMAT PARQUET)"
+        ))
+        .map_err(|e| invalid(format!("导出会话样本到中转文件失败: {e}")))?;
+
+    let landed = {
+        let singleton = crate::services::duckdb_service::DuckDbService::get_or_create_duckdb()
+            .map_err(|e| invalid(format!("取内存分析库失败: {e}")))?;
+        let guard = singleton
+            .lock()
+            .map_err(|e| invalid(format!("DuckDB 单例锁中毒: {e}")))?;
+        crate::duckdb::temp_table::create_analysis_temp_table_as(
+            &guard,
+            &format!("SELECT * FROM read_parquet('{literal}')"),
+            description,
+        )
+    };
+    // 中转文件无论成败都不留：失败时留着只会攒垃圾（排查靠错误信息，不靠这个文件）
+    let _ = std::fs::remove_file(&parquet);
+    landed
 }
 
 /// 丢掉一张物化表（幂等）。`qualified` 接受 `memory.x` 或裸名 `x`。

@@ -134,6 +134,64 @@ fn sample_materialization_creates_a_queryable_table() {
 }
 
 #[test]
+fn session_sample_moves_into_the_process_singleton_and_stays_queryable() {
+    // 刀 5 后半的关键一步：加速档的样本落在**会话**里，而洞察下游读的是**进程单例**。
+    // 两张表在不同实例里，必须在需要时把结果搬过来（COPY → parquet → CTAS）。
+    let file = make_duckdb_file(
+        "mat_move",
+        "orders",
+        "insert into orders values (1, 'a'); insert into orders values (2, 'b');",
+    );
+    let plan = plan_for(
+        &AnalysisChannel::Accelerated,
+        &[MountSpec::duckdb_file(&file)],
+        None,
+        "orders",
+    )
+    .expect("加速档计划");
+    let prepared = PreparedMounts::accelerated(
+        MountSpec::duckdb_file(&file),
+        AccelSource::new("C_kernel_move", "duckdb", file.to_str().unwrap()).expect("组装源"),
+    );
+    let session = kernel::open(&plan, &prepared).expect("加速档开盘");
+    let in_session =
+        materialize_sample(&session, "orders", "select * from orders").expect("形态 I 物化");
+    assert!(in_session.starts_with("memory.tmp_i_"), "实际 {in_session}");
+
+    // 搬进单例：返回的是**登记版** `tmp_i_` 裸名（不带 memory. 前缀）
+    let landed = rds_engine::analysis::materialize::move_sample_to_process_db(
+        &session,
+        &in_session,
+        "orders",
+    )
+    .expect("搬进进程单例");
+    assert!(landed.starts_with("tmp_i_"), "实际 {landed}");
+    assert!(!landed.starts_with("memory."), "单例侧是裸名 {landed}");
+
+    // 单例上必须真的读到 2 行（建表成功 ≠ 数据过来了），且表真被登记
+    let singleton_plan = plan_for(&AnalysisChannel::ProcessDuckDb, &[], None, "orders")
+        .expect("单例计划");
+    let singleton = kernel::open(&singleton_plan, &PreparedMounts::none()).expect("单例开盘");
+    let result = singleton
+        .run(&format!("select count(*) as n from {landed}"))
+        .expect("查登记表");
+    assert!(!result.columns.is_empty(), "登记表应可查");
+
+    // 已在单例上的表不做无意义搬运：这是可读错误，不是静默成功
+    let error = rds_engine::analysis::materialize::move_sample_to_process_db(
+        &singleton, &landed, "orders",
+    )
+    .expect_err("单例表不该再搬");
+    assert!(format!("{error}").contains("无需搬运"));
+
+    // 登记表跟着 TTL 体系：前缀守卫认它，删得掉
+    rds_engine::analysis::materialize::drop_materialized(&singleton, &landed).expect("删除");
+    assert!(singleton
+        .run(&format!("select count(*) as n from {landed}"))
+        .is_err());
+}
+
+#[test]
 fn session_materialization_uses_the_given_name() {
     // 形态 II：结果集二次分析，表名是用户看得见的那张
     let file = make_duckdb_file("mat_named", "orders", "insert into orders values (1, 'a');");
