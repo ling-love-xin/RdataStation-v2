@@ -1,45 +1,52 @@
 //! 分析内核 · 物化（形态 I / II 的唯一实现）。
 //!
 //! 两种形态在装配上完全一样：**在会话里建一张表，内容来自一条 SELECT**。
-//! 差别只在名字与生命周期：
+//! 差别只在名字由谁给：
 //!
-//! - **形态 I（洞察取样）**：表名由 `sample_table_name(seed)` 生成（`tmp_i_` 前缀 + 稳定短哈希），
-//!   同一份源 + 同一份 SQL 重复取样会命中同一张表，便于复用与 TTL 清理；
-//! - **形态 II（结果集二次分析）**：表名由调用方给（用户看得见的那张表），随会话存亡。
+//! - **形态 I（洞察取样）**：名字走仓库既有的临时表规范
+//!   （`temp_table::generate_unique_name(TempTableSource::Insight, 描述)` → `tmp_i_…`），
+//!   不自己拼前缀——TTL / 上限 / 按来源清理全靠那个前缀识别；
+//! - **形态 II（结果集二次分析）**：名字由调用方给（用户看得见的那张表），
+//!   这里只做标识符校验。
 //!
-//! 为什么不做成两个函数：两边的 SQL 语义（`SELECT …` 的来源、下推与否）由**调用方**决定，
-//! 内核只负责「建表这件事怎么建、名字怎么算、什么时候拒绝」。分成两个函数只会让两边
-//! 各写一套 `CREATE TABLE`。
+//! # 已知边界（不装作没有）
+//!
+//! 会话把 `Connection` 藏在私有 `Mutex` 里，只对外给 `run`。所以这一层**只建表**，
+//! 不做 [`temp_table`] 的 TTL 登记（登记需要 `&Connection`）。后果：表随会话存活，
+//! 会话在进程级缓存里长期存在时不会自己消失。清理责任的落点：
+//!
+//! - 会话销毁（`drop_session` / 进程退出）——自动；
+//! - 宿主显式 [`drop_materialized`]——洞察重跑、结果集被丢弃时该调它。
+//!
+//! 要把它彻底收进 TTL 体系，出路是给两种会话各加一个 `with_connection(closure)`
+//! 只读借用入口，让内核能调 `temp_table::create_analysis_temp_table_as`。那会动会话
+//! 的公开面，留给「刀 5 接洞察」时按实际需要做。
 
 use shared::error::{CommonError, CoreError};
 
+use crate::duckdb::temp_table::{generate_unique_name, TempTableSource};
+
 use super::kernel::SessionHandle;
 
-/// 形态 I 的表名前缀（与 `duckdb/temp_table` 的 TTL 口径对齐：`tmp_i_` = 洞察取样）。
-pub const SAMPLE_PREFIX: &str = "tmp_i_";
-
-/// 稳定短哈希（FNV-1a 32 位）：同一份输入每次得到同一个名字，重启后也不变。
-fn short_hash(input: &str) -> u32 {
-    let mut hash: u32 = 0x811c_9dc5;
-    for byte in input.as_bytes() {
-        hash ^= u32::from(*byte);
-        hash = hash.wrapping_mul(0x0100_0193);
-    }
-    hash
-}
-
-/// 形态 I 的表名：`tmp_i_<8 位十六进制>`。
+/// 物化落在 **内存 catalog** 上。
 ///
-/// `seed` 应当是「能唯一标识这份样本」的东西——连接 id / 文件路径 + 取样 SQL，
-/// 不要用时间戳或下标：那样每次取样都会多一张表，TTL 也压不住。
-pub fn sample_table_name(seed: &str) -> String {
-    format!("{SAMPLE_PREFIX}{:08x}", short_hash(seed))
+/// 会话的默认 catalog 指向只读挂载的源，未限定名建表会被 DuckDB 拒（实测：
+/// `Cannot execute statement of type "CREATE" on database "rds_src" which is attached
+/// in read-only mode!`）。所以建表一律写 `memory.<name>`，**返回值也带这个前缀**——
+/// 调用方拿裸名去查会报「表不存在」，限定名的责任在物化这一侧。
+pub const MATERIALIZE_CATALOG: &str = "memory";
+
+/// 形态 I 的表名：走仓库临时表规范（`tmp_i_<描述>_<时间戳>_<随机>`）。
+///
+/// `description` 用「源的可读名」（表名 / 文件名），只保留字母数字下划线。
+pub fn sample_table_name(description: &str) -> String {
+    generate_unique_name(TempTableSource::Insight, description)
 }
 
-/// 表名 / 别名合法性：只允许 `[A-Za-z_][A-Za-z0-9_]*`。
+/// 表名合法性：只允许 `[A-Za-z_][A-Za-z0-9_]*`。
 ///
 /// 这条校验不是洁癖：表名会拼进 `CREATE TABLE {name} AS …`，允许引号 / 空格 / 分号
-/// 就等于把 SQL 注入面开给了「用户给表起名」这个入口。
+/// 就等于把注入面开给了「用户给表起名」这个入口。
 fn validate_identifier(name: &str) -> Result<(), CoreError> {
     if name.is_empty() {
         return Err(invalid("表名不能为空".to_string()));
@@ -59,19 +66,10 @@ fn validate_identifier(name: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
-/// 物化落在 **内存 catalog** 上：会话的默认 catalog 指向只读挂载的源，
-/// 未限定名建表会被 DuckDB 拒（实测 `Cannot execute statement of type "CREATE"
-/// on database "rds_src" which is attached in read-only mode!`）。
-/// 所以建表一律写 `memory.<name>`，返回值也带这个前缀，调用方拿到就能直接查。
-pub const MATERIALIZE_CATALOG: &str = "memory";
-
-/// 在会话里建（或替换）一张表，内容来自 `select_sql`。
+/// 在会话里建（或替换）一张表，内容来自 `select_sql`；返回 `memory.<name>`。
 ///
-/// 用 `CREATE OR REPLACE` 而不是 `CREATE`：同一份样本重复取样是常态（用户来回点），
+/// 用 `CREATE OR REPLACE` 而不是 `CREATE`：同一张表重复物化是常态（用户来回点），
 /// 撞名报错只会把「重复」包装成「失败」。
-///
-/// 返回**带 catalog 前缀的表名**（`memory.<name>`）：默认 catalog 是只读源，
-/// 调用方拿裸名去查会报「表不存在」——这不是调用方的错，是限定名的责任在物化这一侧。
 pub fn materialize_in_session(
     handle: &SessionHandle,
     name: &str,
@@ -95,13 +93,39 @@ pub fn materialize_in_session(
     Ok(format!("{MATERIALIZE_CATALOG}.{name}"))
 }
 
-/// 形态 I 的便捷入口：算好名字再物化。
+/// 形态 I 的便捷入口：按描述生成规范表名再物化。
 pub fn materialize_sample(
     handle: &SessionHandle,
-    seed: &str,
+    description: &str,
     select_sql: &str,
 ) -> Result<String, CoreError> {
-    materialize_in_session(handle, &sample_table_name(seed), select_sql)
+    let name = sample_table_name(description);
+    materialize_in_session(handle, &name, select_sql)
+}
+
+/// 丢掉一张物化表（幂等）。`qualified` 接受 `memory.x` 或裸名 `x`。
+///
+/// 前缀守卫与 `temp_table::drop_temp_table` 同口径：只允许删 `tmp_i_` / `tmp_q_`
+/// （洞察取样 / 查询结果），放开就等于给了一把「传什么名字删什么表」的刀。
+pub fn drop_materialized(handle: &SessionHandle, qualified: &str) -> Result<(), CoreError> {
+    let name = qualified
+        .strip_prefix(&format!("{MATERIALIZE_CATALOG}."))
+        .unwrap_or(qualified);
+    let allowed = ["tmp_i_", "tmp_q_"];
+    if !allowed.iter().any(|prefix| name.starts_with(prefix)) {
+        return Err(invalid(format!(
+            "拒绝删除非临时表：{name}（只允许 {} 前缀）",
+            allowed.join(" / ")
+        )));
+    }
+    // 源库档没有会话：前缀校验照做（守卫不能被「没有会话」这条捷径跳过），之后才是空操作
+    if !handle.has_session() {
+        return Ok(());
+    }
+    handle.run(&format!(
+        "DROP TABLE IF EXISTS {MATERIALIZE_CATALOG}.{name}"
+    ))?;
+    Ok(())
 }
 
 fn invalid(message: String) -> CoreError {
@@ -110,29 +134,24 @@ fn invalid(message: String) -> CoreError {
 
 #[cfg(test)]
 mod tests {
-    use super::{materialize_in_session, materialize_sample, sample_table_name, SAMPLE_PREFIX};
+    use super::{drop_materialized, materialize_in_session, materialize_sample, sample_table_name};
     use crate::analysis::kernel::SessionHandle;
 
     #[test]
-    fn sample_name_is_prefixed_and_stable() {
-        let a = sample_table_name("conn-1|select * from t");
-        let b = sample_table_name("conn-1|select * from t");
-        assert_eq!(a, b);
-        assert!(a.starts_with(SAMPLE_PREFIX));
-        assert_eq!(a.len(), SAMPLE_PREFIX.len() + 8);
+    fn sample_name_follows_the_repo_temp_table_convention() {
+        let name = sample_table_name("orders");
+        assert!(name.starts_with("tmp_i_"), "实际 {name}");
+        assert!(name.contains("orders"), "描述要进名字，便于人在库里认出来");
+        // 每次生成都必须不同：同一秒内建两张也不会撞名（仓库口径：时间戳 + 随机尾巴）
+        assert_ne!(sample_table_name("orders"), sample_table_name("orders"));
     }
 
     #[test]
-    fn sample_name_differs_for_different_seeds() {
-        // 不同连接 / 不同 SQL 必须落不同表，否则样本会互相覆盖
-        assert_ne!(
-            sample_table_name("conn-1|select * from t"),
-            sample_table_name("conn-2|select * from t")
-        );
-        assert_ne!(
-            sample_table_name("conn-1|select * from t"),
-            sample_table_name("conn-1|select * from u")
-        );
+    fn sample_name_sanitizes_description() {
+        let name = sample_table_name("a b;drop table x");
+        assert!(name.starts_with("tmp_i_"));
+        assert!(!name.contains(' '), "空格不应进表名：{name}");
+        assert!(!name.contains(';'), "分号不应进表名：{name}");
     }
 
     #[test]
@@ -142,31 +161,26 @@ mod tests {
     }
 
     #[test]
-    fn name_with_quote_is_rejected() {
-        // 注入面：表名会拼进 CREATE TABLE 语句
-        let err =
-            materialize_in_session(&SessionHandle::None, "t; drop table x", "select 1").unwrap_err();
-        // 源库档先被抓，所以这里换成合法会话后的分支由 identifier 校验挡（见下条）
-        assert!(format!("{err}").contains("没有 DuckDB 会话"));
-    }
-
-    #[test]
     fn identifier_validation_rejects_bad_names() {
-        // 直接测校验函数（不依赖会话）
         assert!(super::validate_identifier("orders_2024").is_ok());
         assert!(super::validate_identifier("_tmp").is_ok());
         assert!(super::validate_identifier("").is_err());
         assert!(super::validate_identifier("1abc").is_err());
         assert!(super::validate_identifier("a b").is_err());
         assert!(super::validate_identifier("a;b").is_err());
-        assert!(super::validate_identifier("tmp_i_0a1b2c3d").is_ok());
     }
 
     #[test]
-    fn materialize_sample_uses_the_sample_name() {
-        // 名字先算出来（源库档会在建表前被拒，这里断言的是名字口径）
-        let name = sample_table_name("seed");
-        assert!(materialize_sample(&SessionHandle::None, "seed", "select 1").is_err());
-        assert!(name.starts_with(SAMPLE_PREFIX));
+    fn materialize_sample_requires_a_session() {
+        assert!(materialize_sample(&SessionHandle::None, "orders", "select 1").is_err());
+    }
+
+    #[test]
+    fn drop_requires_a_temp_prefix() {
+        // 前缀守卫：不能拿它删用户表
+        let err = drop_materialized(&SessionHandle::None, "memory.orders").unwrap_err();
+        assert!(format!("{err}").contains("拒绝删除非临时表"));
+        // 源库档没有会话 → 幂等成功（没什么可删）
+        assert!(drop_materialized(&SessionHandle::None, "memory.tmp_i_x").is_ok());
     }
 }

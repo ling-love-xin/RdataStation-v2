@@ -121,8 +121,7 @@ fn sample_materialization_creates_a_queryable_table() {
     );
     let handle = kernel::open(&plan, &prepared).expect("加速档开盘");
 
-    let seed = format!("{}|select * from orders", file.display());
-    let table = materialize_sample(&handle, &seed, "select * from orders").expect("形态 I 物化");
+    let table = materialize_sample(&handle, "orders", "select * from orders").expect("形态 I 物化");
     // 物化落在内存 catalog：会话默认 catalog 是只读源，裸名建表会被拒
     assert!(table.starts_with("memory.tmp_i_"), "实际表名 {table}");
     // 物化后必须能真的查到行：建表语句跑成功不等于表里真有数据
@@ -131,7 +130,7 @@ fn sample_materialization_creates_a_queryable_table() {
         .expect("查物化表");
     assert!(!count.columns.is_empty(), "物化表应可查");
     // 同一份 seed 重复物化是常态（用户来回点），不能报错
-    materialize_sample(&handle, &seed, "select * from orders").expect("重复物化应覆盖不报错");
+    materialize_sample(&handle, "orders", "select * from orders").expect("重复物化应覆盖不报错");
 }
 
 #[test]
