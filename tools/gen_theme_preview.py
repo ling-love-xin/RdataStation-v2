@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """由主题资产生成色卡预览页 —— 预览与资产同源，改色后重跑即可。
 
-用法: python tools/gen_theme_preview.py
-输入: assets/themes/rds-theme.json
-输出: docs/architecture/theme/theme-preview.html
+用法:
+    python tools/gen_theme_preview.py                       # 现役资产 → docs/architecture/theme/theme-preview.html
+    python tools/gen_theme_preview.py --theme assets/themes/packs/qinghua/theme.json
+                                                            # 包预览 → docs/architecture/theme/packs-preview/qinghua.html
+    python tools/gen_theme_preview.py --theme <file> --out <file>
+
+输入: assets/themes/rds-theme.json（或任意 `{themes:[{name,mode,colors}]}` 文件）
+输出: 见上面的用法；按 `mode` 取明暗，不认主题名（改名不影响）。
 
 配合守门脚本 `tools/theme_audit.py` 使用：先审计，再生成。
 """
 
+import argparse
 import datetime
 import json
 import pathlib
@@ -103,12 +109,19 @@ PAIRS = [
 ]
 
 
-def build_data():
-    doc = json.loads(SRC.read_text(encoding="utf-8"))
-    themes = {t["name"]: t for t in doc["themes"]}
+def build_data(theme_file):
+    doc = json.loads(theme_file.read_text(encoding="utf-8"))
+    # 按 mode 取，不认主题名：候选包的主题名各不相同，改名也不影响预览。
+    by_mode = {}
+    for t in doc["themes"]:
+        by_mode[t.get("mode")] = t
     out = {}
-    for name in ("RDS Light", "RDS Dark"):
-        colors = themes[name]["colors"]
+    for mode in ("light", "dark"):
+        theme = by_mode.get(mode)
+        if theme is None:
+            raise SystemExit(f"{theme_file} 里没有 mode={mode} 的主题")
+        name = theme["name"]
+        colors = theme["colors"]
         groups, used = [], set()
         for gname, match in GROUPS:
             items = [[k, colors[k]] for k in colors if match(k)]
@@ -122,14 +135,15 @@ def build_data():
         for fg, bg in PAIRS:
             if fg in colors and bg in colors:
                 checks.append({"fg": fg, "bg": bg, "r": round(ratio(colors[fg], colors[bg]), 2)})
-        out[name] = {
+        out[mode] = {
+            "name": name,
             "colors": colors,
             "groups": groups,
             "checks": checks,
             "count": len(colors),
-            "highlight": themes[name].get("highlight", {}),
+            "highlight": theme.get("highlight", {}),
         }
-    return out, doc
+    return out
 
 
 TEMPLATE = """<!DOCTYPE html>
@@ -175,7 +189,7 @@ TEMPLATE = """<!DOCTYPE html>
 <body>
 <h1>RdataStation 主题色卡</h1>
 <p class="sub">
-  由 <code>assets/themes/rds-theme.json</code> 自动生成 —— 改色后跑 <code>python tools/gen_theme_preview.py</code> 重新生成。<br>
+  由 <code>__SRC__</code> 自动生成 —— 改色后跑 <code>python tools/gen_theme_preview.py</code> 重新生成。<br>
   生成时间 __NOW__ · 色值权威来源 <code>docs/architecture/theme/theme-tokens-complete.md</code>
 </p>
 <div class="cols" id="cols"></div>
@@ -238,7 +252,7 @@ function panel(name, d, isLight) {
 }
 
 document.getElementById('cols').innerHTML =
-  panel('RDS Light', DATA['RDS Light'], true) + panel('RDS Dark', DATA['RDS Dark'], false);
+  panel(DATA.light.name, DATA.light, true) + panel(DATA.dark.name, DATA.dark, false);
 </script>
 </body>
 </html>
@@ -246,22 +260,58 @@ document.getElementById('cols').innerHTML =
 
 
 def main():
-    data, _doc = build_data()
-    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    html = TEMPLATE.replace("__DATA__", payload).replace(
-        "__NOW__", datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    parser = argparse.ArgumentParser(description="由主题资产生成色卡预览页")
+    parser.add_argument(
+        "--theme",
+        default=str(SRC),
+        help="主题文件（默认 assets/themes/rds-theme.json；可指到 assets/themes/packs/<id>/theme.json）",
     )
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(html, encoding="utf-8")
-    for name in ("RDS Light", "RDS Dark"):
-        d = data[name]
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="输出 html（默认现役出 docs/architecture/theme/theme-preview.html；"
+        "指到包时默认 docs/architecture/theme/packs-preview/<包名>.html）",
+    )
+    args = parser.parse_args()
+
+    src = pathlib.Path(args.theme)
+    if not src.is_absolute():
+        src = ROOT / src
+    if not src.exists():
+        raise SystemExit(f"读不到主题文件：{src}")
+
+    if args.out:
+        out = pathlib.Path(args.out)
+        if not out.is_absolute():
+            out = ROOT / out
+    elif src == SRC:
+        out = OUT
+    else:
+        # 包预览独立落到 packs-preview/，绝不覆盖现役预览页。
+        out = ROOT / "docs/architecture/theme/packs-preview" / (src.parent.name + ".html")
+
+    data = build_data(src)
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    try:
+        src_display = src.relative_to(ROOT).as_posix()
+    except ValueError:
+        src_display = str(src)
+    html = (
+        TEMPLATE.replace("__DATA__", payload)
+        .replace("__SRC__", src_display)
+        .replace("__NOW__", datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(html, encoding="utf-8")
+    for mode in ("light", "dark"):
+        d = data[mode]
         bad = [c for c in d["checks"] if c["r"] < 4.5]
         print(
-            f"{name}: {d['count']} tokens, {len(d['groups'])} 组, "
+            f"{d['name']}: {d['count']} tokens, {len(d['groups'])} 组, "
             f"对比度 {len(d['checks']) - len(bad)}/{len(d['checks'])} 达标"
             + (f" —— 不达标: {bad}" if bad else "")
         )
-    print(f"已生成 {OUT}")
+    print(f"已生成 {out}")
 
 
 if __name__ == "__main__":
