@@ -193,6 +193,18 @@ impl Object {
     }
 }
 
+/// 联邦会话里的一条源（面板「本次会话」段用）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSource {
+    /// 会话主人（文档 / 面板身份）：同一个别名可能在多个会话里同时存在，身份必须带它
+    pub owner: String,
+    pub alias: String,
+    /// 挂上时的说明（表数量之类）
+    pub note: String,
+    /// 挂载失败的原话（引擎侧不翻译，界面也不改写）
+    pub failed: Option<String>,
+}
+
 /// 一次取数的结果（面板与对话框共用）。
 ///
 /// 连接不在这里列：连接的表要逐层 introspect，属于面板自己的懒加载；
@@ -206,8 +218,8 @@ pub struct Collected {
     pub insight_samples: Vec<String>,
     /// 资产 `(名字, 最新版本)`；空则说明还没接上资产清单
     pub assets: Vec<(String, u32)>,
-    /// 联邦会话里已挂上的源 `(名字, 状态描述)`
-    pub session_sources: Vec<(String, Option<String>)>,
+    /// 联邦会话里已挂上的源
+    pub session_sources: Vec<SessionSource>,
 }
 
 impl Collected {
@@ -230,15 +242,19 @@ impl Collected {
 pub fn objects(collected: &Collected) -> Vec<Object> {
     let mut out = Vec::new();
 
-    for (name, why) in &collected.session_sources {
+    for source in &collected.session_sources {
         out.push(Object {
-            key: format!("session:{name}"),
-            name: name.clone(),
-            note: why.clone().unwrap_or_else(|| "已挂载".to_string()),
+            // 身份带 owner：同名别名可能在多个会话里同时存在
+            key: format!("session:{}:{}", source.owner, source.alias),
+            name: source.alias.clone(),
+            note: match &source.failed {
+                Some(reason) => reason.clone(),
+                None => format!("{} · {}", source.owner, source.note),
+            },
             channel: Channel::Federated,
             life: Life::Session,
-            state: match why {
-                Some(why) => State::Failed(why.clone()),
+            state: match &source.failed {
+                Some(reason) => State::Failed(reason.clone()),
                 None => State::Ready,
             },
             group: Group::Session,
@@ -347,8 +363,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
 
 /// 现取一次（面板打开 / 刷新时调）。
 ///
-/// 资产清单与联邦会话源暂由调用方填（两处都要先拿到对应模块的清单入口），
-/// 这里先给出其余全部来源；不猜没有的 API，缺的就是空。
+/// 资产清单暂由调用方填：它要过资产模块的登记层（本项目 `analytics_resources`），
+/// 那套入口还没从这里可达，缺的就是空——不猜一个查询塞进去。
 pub fn collect(shared: &Shared) -> Collected {
     let conn_count = shared
         .connections
@@ -369,6 +385,31 @@ pub fn collect(shared: &Shared) -> Collected {
     let global_tables = engine::analysis::global::global_tables("C_data_objects").unwrap_or_default();
     let result_sets = engine::analysis::result_set::list_result_sets().unwrap_or_default();
     let insight_samples = engine::analysis::result_set::list_insight_samples().unwrap_or_default();
+    // 联邦会话：一次拿全（面板不知道 owner 是谁，`owners()` 正是为这种调用准备的）
+    let session_sources = engine::duckdb::federation::session::owners()
+        .into_iter()
+        .flat_map(|(owner, snapshot)| {
+            let primary = snapshot.primary.clone();
+            snapshot.sources.into_iter().map(move |mounted| {
+                let alias = mounted.alias().to_string();
+                let (note, failed) = match &mounted.state {
+                    engine::duckdb::federation::registry::MountState::Ready { tables } => (
+                        format!("{} 张表 · {}", tables, if primary.as_deref() == Some(alias.as_str()) { "主源" } else { "已挂载" }),
+                        None,
+                    ),
+                    engine::duckdb::federation::registry::MountState::Failed(reason) => {
+                        (String::new(), Some(reason.clone()))
+                    }
+                };
+                SessionSource {
+                    owner: owner.clone(),
+                    alias,
+                    note,
+                    failed,
+                }
+            })
+        })
+        .collect();
 
     Collected {
         conn_count,
@@ -378,14 +419,14 @@ pub fn collect(shared: &Shared) -> Collected {
         result_sets,
         insight_samples,
         assets: Vec::new(),
-        session_sources: Vec::new(),
+        session_sources,
     }
 }
 
 #[cfg(test)]
 mod tests {
     // 刻意不用 `use super::*`：会把 gpui 的 `test` 属性宏带进作用域。
-    use super::{objects, Channel, Collected, Group, Life, Object, State};
+    use super::{objects, Channel, Collected, Group, Life, Object, SessionSource, State};
     use std::path::PathBuf;
 
     fn sample() -> Collected {
@@ -401,8 +442,18 @@ mod tests {
             insight_samples: vec!["tmp_i_orders_sample".into()],
             assets: vec![("月度经营快照".into(), 3)],
             session_sources: vec![
-                ("mysql_src".into(), None),
-                ("oracle_src".into(), Some("扩展未安装".into())),
+                SessionSource {
+                    owner: "编辑器 · 分析.sql".into(),
+                    alias: "mysql_src".into(),
+                    note: "42 张表 · 主源".into(),
+                    failed: None,
+                },
+                SessionSource {
+                    owner: "编辑器 · 分析.sql".into(),
+                    alias: "oracle_src".into(),
+                    note: String::new(),
+                    failed: Some("扩展未安装".into()),
+                },
             ],
         }
     }
@@ -471,6 +522,37 @@ mod tests {
         assert_eq!(failed.group, Group::Session);
         assert_eq!(failed.note, "扩展未安装");
         assert!(!failed.can_analyze());
+    }
+
+    /// 同一个别名挂在两个会话里时，必须能分开（身份带 owner）。
+    ///
+    /// 不带 owner 的话两行 key 一样，工作集里点一个就等于点了两个。
+    #[test]
+    fn same_alias_in_two_sessions_keeps_distinct_identities() {
+        let mut c = sample();
+        c.session_sources = vec![
+            SessionSource {
+                owner: "编辑器 · a.sql".into(),
+                alias: "mysql_src".into(),
+                note: "42 张表 · 主源".into(),
+                failed: None,
+            },
+            SessionSource {
+                owner: "编辑器 · b.sql".into(),
+                alias: "mysql_src".into(),
+                note: "18 张表 · 已挂载".into(),
+                failed: None,
+            },
+        ];
+        let rows = objects(&c);
+        let session_rows: Vec<&Object> =
+            rows.iter().filter(|o| o.group == Group::Session).collect();
+        assert_eq!(session_rows.len(), 2);
+        assert_ne!(session_rows[0].key, session_rows[1].key);
+        // 界面上仍显示同一个别名（用户认的是别名，不是 owner）
+        assert_eq!(session_rows[0].name, "mysql_src");
+        // 主源标记要带在副标题里
+        assert!(session_rows[0].note.contains("主源"));
     }
 
     /// 同一张表在两份分析库里时必须能区分（身份带前缀），否则工作集里会互相顶掉。
