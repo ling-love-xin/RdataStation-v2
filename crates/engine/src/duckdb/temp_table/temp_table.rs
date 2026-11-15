@@ -146,7 +146,10 @@ pub fn generate_unique_name(source: TempTableSource, description: &str) -> Strin
 }
 
 /// 描述里只留字母 / 数字 / 下划线（表名要内联进 SQL，虽有引号也不值得冒险）。
-fn sanitize_description(description: &str) -> String {
+///
+/// 跨模块共用：持久表的命名（`promote::persistent_table_name`）也走同一把尺子——
+/// 两处各写一份清洗规则，迟早会出现「临时表能落、持久表落不了」的同名不同判。
+pub(crate) fn sanitize_description(description: &str) -> String {
     let cleaned: String = description
         .chars()
         .map(|c| {

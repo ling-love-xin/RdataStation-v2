@@ -121,6 +121,24 @@ fn invalid(message: String) -> CoreError {
     CoreError::common(CommonError::General(message))
 }
 
+/// 持久（项目库）表的命名前缀。
+///
+/// **刻意不是 `tmp_` 任何一个来源的前缀**：TTL / 上限 / 按前缀清理只认 `tmp_q_` / `tmp_i_` /
+/// `tmp_m_` / `tmp_p_`，持久表若带上其中任何一个，就会在 30 分钟后被当成临时表清掉。
+pub const PERSIST_PREFIX: &str = "res_";
+
+/// 持久表名：`res_<描述>_<紧凑时间戳>`（口径 = 结果集描述 + 时间戳，**不带随机尾巴**）。
+///
+/// 与临时表名的差别是有意的：
+/// - 不要随机尾巴——持久表是用户可回访的东西，名字要能被人念出来、能在资源树里认出来；
+/// - 同一秒建两张同描述的表会撞名：这时的正确行为是**报错让用户改名**（`PromoteMode::Create`），
+///   而不是悄悄生成第二张长得很像的表。
+pub fn persistent_table_name(description: &str) -> String {
+    let desc = super::temp_table::sanitize_description(description);
+    let stamp = chrono::Local::now().format("%Y%m%d%H%M%S");
+    format!("{PERSIST_PREFIX}{desc}_{stamp}")
+}
+
 /// 跨**实例**搬运：把 `source` 连接里的表写进 `dest` 连接上的表，返回写入行数。
 ///
 /// 为什么不能 ATTACH：`tmp_q_` 在**进程内存单例**（in-memory 库，别的 DuckDB 实例根本挂不到它），
@@ -190,7 +208,28 @@ pub fn write_table_across_connections(
 
 #[cfg(test)]
 mod tests {
-    use super::{promote_with_conn, write_table_across_connections, PromoteMode};
+    use super::{promote_with_conn, persistent_table_name, write_table_across_connections, PromoteMode};
+
+    /// 持久表名：带 `res_` 前缀、清洗非法字符、**不在任何临时表前缀下**（否则会被 TTL 清掉）
+    #[test]
+    fn persistent_names_never_look_like_temp_tables() {
+        let name = persistent_table_name("结果 2 / 订单明细");
+        assert!(name.starts_with("res_"), "{name}");
+        assert!(
+            name.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_'),
+            "只剩字母数字下划线：{name}"
+        );
+        for temp_prefix in ["tmp_q_", "tmp_i_", "tmp_m_", "tmp_p_"] {
+            assert!(
+                !name.starts_with(temp_prefix),
+                "持久表名不能落在临时表前缀下（TTL 会把它当临时表删掉）：{name}"
+            );
+        }
+        // 描述为空时也要给出可用名字（不是 `res__<stamp>` 这种双下划线）
+        let fallback = persistent_table_name("   ");
+        assert!(fallback.starts_with("res_tmp_"), "{fallback}");
+    }
     use duckdb::Connection;
 
     fn dir(tag: &str) -> std::path::PathBuf {
