@@ -23,6 +23,7 @@ const INSIGHT_KINDS: &[SourceKind] = &[
     SourceKind::Connected,
     SourceKind::Scratchpad,
     SourceKind::Analysis,
+    SourceKind::AnalysisGlobal,
     SourceKind::External,
 ];
 
@@ -89,6 +90,16 @@ fn confirm(shared: &Shared, state: &Rc<RefCell<PickerState>>, window: &mut Windo
             let label = format!("analytics.{table}");
             let source =
                 SampleSource::on_duckdb(format!("SELECT * FROM \"{table}\""), label.clone());
+            shared.open_insight_source_table(source, label, cx);
+        }
+        SourceKind::AnalysisGlobal => {
+            let Some(table) = s.picked_analysis_global() else {
+                return;
+            };
+            // 全局分析库是跨项目共用、只读；取样由持久层另开短命会话（`on_global`），
+            // 结果搬进进程单例的登记版 `tmp_i_`，下游读法与其它来源一致。
+            let label = format!("全局 · {table}");
+            let source = SampleSource::on_global(table, label.clone());
             shared.open_insight_source_table(source, label, cx);
         }
         SourceKind::External => {

@@ -323,9 +323,17 @@ Windows 上 DuckDB 一个文件只允许一个连接句柄（`store/src/persiste
 单例长命持有就会让写入方撞「另一个程序正在使用此文件」——该失败模式已在
 `analysis_db_exclusive_probe` 真跑过。用户已按此论证选定 B。
 
-**尚未做（下一刀 · B2）**：来源选择器新档 `SourceKind::AnalysisGlobal` + 表清单
-（从 `analytics.duckdb` 读）+ 空态 + 只读文案；以及洞察多源取样把源解析成
-`ConnRef::Live` 后建联邦会话（当前 `Federated` 档仍明确报「尚未接入」）。
+**B2（本轮已做）**：来源选择器新增第六档 `SourceKind::AnalysisGlobal`（文案「全局分析表」），
+并入文件根，树上与「资产库 · 本项目」**并列两段**（不混排，用户要一眼看出动的是哪一份）；
+表清单来自 `analysis::global::global_tables(owner)`（与取样**同一个**短命会话口径，不会
+「列表有、点下去查不到」）；选中 → `Picked::AnalysisGlobal`（按钮文案 `全局 · <表>`）→
+洞察出口 `SampleSource::on_global`。空态单独提示「全局分析库为空或暂时不可用（它由系统库
+维护；被占用时也会读不到）」，不被项目段的空态掩盖。验证：`analysis_global_probe` 5 passed
+（新增 `global_tables_lists_the_tables_of_the_analysis_db`）、`rds-workbench --lib` 142 passed、
+`rds-engine --lib` 294、`rds-insight --lib` 263。
+
+**仍未做**：洞察多源取样把源解析成 `ConnRef::Live` 后建联邦会话（当前 `Federated` 档仍明确报
+「尚未接入」）；持久表的可视化列表与资源归档入口。
 
 
 

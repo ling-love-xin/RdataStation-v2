@@ -125,6 +125,28 @@ fn file_group_rows(s: &PickerState) -> Vec<Row> {
         ));
     }
 
+    // 全局分析表：与「本项目」并列成第二段，不混排——用户必须一眼看出自己动的是
+    // 跨项目共用的那一份（`{system}/analytics.duckdb`，只读；取样另开短命会话）。
+    if s.kinds.contains(&SourceKind::AnalysisGlobal) {
+        let mut folder = Row::new(
+            NodeId::Path("file:archive-global".to_string()),
+            1,
+            NodeKind::Folder,
+            "资产库 · 全局",
+        );
+        if s.global_tables.is_empty() {
+            folder = folder.with_meta("只读 · 暂无全局表");
+        } else {
+            folder = folder.with_meta(format!("只读 · {} 张表", s.global_tables.len()));
+        }
+        out.push(folder);
+        out.extend(analysis_table_rows(
+            2,
+            &s.global_tables,
+            ArchiveScope::Global,
+        ));
+    }
+
     if s.kinds.contains(&SourceKind::External) {
         out.push(
             Row::new(
@@ -213,9 +235,12 @@ fn render_body(
                     s.tree.select(Some(id.clone()));
                     s.note = None;
                 }
-                NodeId::AnalysisTable { table, .. } => {
+                NodeId::AnalysisTable { scope, table } => {
                     let mut s = state.borrow_mut();
-                    s.picked = Some(Picked::Analysis(table.clone()));
+                    s.picked = Some(match scope {
+                        ArchiveScope::Project => Picked::Analysis(table.clone()),
+                        ArchiveScope::Global => Picked::AnalysisGlobal(table.clone()),
+                    });
                     s.tree.select(Some(id.clone()));
                     s.note = None;
                 }
@@ -619,6 +644,13 @@ pub fn open_source_picker(
     let drafts = collect_drafts(shared);
     let project = shared.project.borrow().clone();
     let analysis = collect_analysis_tables(project.as_ref());
+    // ③-b 全局分析表：只在启用该叶子时去挂（短命会话只读挂
+    // `{system}/analytics.duckdb`；没初始化 / 撞锁都不该让整个对话框开不出来）
+    let global_tables = if config.kinds.contains(&SourceKind::AnalysisGlobal) {
+        engine::analysis::global::global_tables("C_source_picker").unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     // ⑤ 结果集：只有启用该叶子时才查库（它是进程单例里的 `tmp_q_` 表，查不到也不报错）
     let result_sets = if config.kinds.contains(&SourceKind::ResultSet) {
         engine::analysis::result_set::list_result_sets().unwrap_or_default()
@@ -641,6 +673,13 @@ pub fn open_source_picker(
     if note.is_none() && config.kinds.contains(&SourceKind::Analysis) && analysis.is_empty() {
         note = Some("资产库为空或不可用（可先做一次分析）".to_string());
     }
+    // 全局段的空态单独说：它跟「项目里还没有分析」是两件事（一个不该被另一个掩盖）
+    if note.is_none() && config.kinds.contains(&SourceKind::AnalysisGlobal) && global_tables.is_empty()
+    {
+        note = Some(
+            "全局分析库为空或暂时不可用（它由系统库维护；被占用时也会读不到）".to_string(),
+        );
+    }
     if note.is_none() && config.kinds.contains(&SourceKind::ResultSet) && result_sets.is_empty() {
         note = Some("还没有结果集：先跑一次查询，结果集会作为临时表出现在这里".to_string());
     }
@@ -650,6 +689,7 @@ pub fn open_source_picker(
         conns,
         drafts,
         analysis,
+        global_tables,
         result_sets,
     )));
     state.borrow_mut().note = note;

@@ -168,6 +168,27 @@ pub fn open_global_session(owner: &str) -> Result<SessionHandle, CoreError> {
     open_mounted(owner, &path, GLOBAL_ALIAS, "duckdb")
 }
 
+/// 列全局分析库里的表（来源选择器「全局分析表」档的数据源）。
+///
+/// 走的是和取样**同一个**短命会话：列清单与读表用同一套挂载口径，不会出现
+/// 「列表里有、点下去查不到」这种两处口径分叉。
+pub fn global_tables(owner: &str) -> Result<Vec<String>, CoreError> {
+    let session = open_global_session(owner)?;
+    let result = session.run(&format!(
+        "select table_name from duckdb_tables() where database_name = '{GLOBAL_ALIAS}' order by table_name"
+    ))?;
+    let tables = result
+        .rows
+        .iter()
+        .filter_map(|row| row.first())
+        .map(|cell| match cell {
+            shared::models::Value::Text(text) => text.clone(),
+            other => other.to_string(),
+        })
+        .collect();
+    Ok(tables)
+}
+
 fn invalid(message: String) -> CoreError {
     CoreError::common(CommonError::General(message))
 }

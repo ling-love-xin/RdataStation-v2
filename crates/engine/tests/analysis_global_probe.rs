@@ -100,6 +100,25 @@ fn the_real_global_analysis_db_opens_read_only_when_idle() {
     }
 }
 
+/// `global_tables()` 列的是全局分析库里的表（选择器「全局分析表」档的数据源）。
+///
+/// 造在测试根（`get_system_dir()` 的落点）上：走的就是生产路径，不另开测试专用入口。
+#[test]
+fn global_tables_lists_the_tables_of_the_analysis_db() {
+    let dir = rds_engine::migration::get_system_dir().expect("系统目录");
+    std::fs::create_dir_all(&dir).expect("建系统目录");
+    let path = dir.join("analytics.duckdb");
+    let _ = std::fs::remove_file(&path);
+    let conn = duckdb::Connection::open(&path).expect("建全局分析库");
+    conn.execute_batch("create table g_orders(id integer); create table g_customers(id integer);")
+        .expect("写表");
+    drop(conn); // DuckDB 独占文件
+
+    let tables = rds_engine::analysis::global::global_tables("C_global_list_probe")
+        .expect("列全局分析表");
+    assert_eq!(tables, vec!["g_customers".to_string(), "g_orders".to_string()]);
+}
+
 /// `global_analysis_db_path()` 的落点必须与系统目录一致（路径规则只此一处），
 /// 且**指向 DuckDB 分析库**（不是 SQLite 的 `global.db`）。
 #[test]
