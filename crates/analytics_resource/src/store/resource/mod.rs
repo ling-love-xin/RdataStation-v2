@@ -32,18 +32,15 @@ pub(crate) fn qualified_resource_columns(alias: &str) -> String {
 /// `pub(crate)`：回收站与标签查询同样需要读整行，**不得各自再抄一份映射**
 /// （v1 抄了 4 份，加一列就得改 4 处，且 JSON 策略各不相同）。
 pub(crate) fn map_resource_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnalyticsResource> {
-    let config_str: String = row.get(4)?;
-    let config: Value = serde_json::from_str(&config_str).unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "资源 config JSON 解析失败，降级为 null");
-        Value::Null
-    });
-
+    // v1 的 `config` 列是遗留（v2 无消费方），不再逐行解析：原来每读一行都做一次
+    // `serde_json` 解析、坏数据还要打一条 warn——为一个没人看的字段付这个代价不值得。
+    // 列仍在（表结构不动），读出来的值恒为 `null`。
     Ok(AnalyticsResource {
         id: row.get(0)?,
         resource_type: row.get(1)?,
         name: row.get(2)?,
         alias: row.get(3)?,
-        config,
+        config: Value::Null,
         scope: row.get(5)?,
         row_count: row.get::<_, Option<i64>>(6)?.map(|v| v as i32),
         column_count: row.get(7)?,

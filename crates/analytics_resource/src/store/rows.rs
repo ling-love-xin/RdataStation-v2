@@ -6,9 +6,15 @@ use specta::Type;
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct AnalyticsResource {
     pub id: String,
+    /// v1 遗留列（`resource_type`）：权威词表是 `kind`，本字段只被写、不被读。
+    ///
+    /// 留着是因为列在 `analytics_resources` 上且非空；新代码判断种类一律看 `kind`。
     pub resource_type: String,
     pub name: String,
     pub alias: Option<String>,
+    /// v1 遗留列（`config`）：v2 已无消费方，读面恒为 [`Value::Null`]（不再解析 JSON）。
+    ///
+    /// 不删字段是不想为此加一次表迁移；但它不再参与任何判断或展示。
     pub config: Value,
     pub scope: String,
     pub row_count: Option<i32>,

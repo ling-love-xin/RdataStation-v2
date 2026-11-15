@@ -230,14 +230,12 @@ impl ArchiveService {
     }
 }
 
-/// `kind` → `resource_type` 的默认词表（完整收敛待 P0.7：词表应上提到 `shared` 枚举）。
+/// `kind` → `resource_type` 的落库值：两张词表本来就是同一份（`ArchiveKind::as_db_str`）。
+///
+/// v1 的 `resource_type` 是冗余列（权威是 `kind`、只写不读），但列在表上且非空，
+/// 归档时仍要跟着写——用 `kind` 自己的词表，别再维护第二份。
 fn default_resource_type(kind: ArchiveKind) -> String {
-    match kind {
-        ArchiveKind::File => "file",
-        ArchiveKind::Analysis => "analysis",
-        ArchiveKind::TableRef => "table_ref",
-    }
-    .to_string()
+    kind.as_db_str().to_string()
 }
 
 fn service_err(operation: &str, reason: &str) -> CoreError {

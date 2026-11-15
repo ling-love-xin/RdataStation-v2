@@ -433,3 +433,60 @@ async fn t020_alias_is_display_only_and_empty_clears_it() {
 
     cleanup(dir);
 }
+
+/// v1 的 `config` 列是遗留（v2 无消费方）：读面不解析它，读出来恒为 `null`。
+///
+/// 表上已经有 `NOT NULL` + `CHECK (json_valid(config))`，所以库里存的必是合法 JSON——
+/// 这条用例造一行**合法** config，钉住「即便存着值，v2 的读面也不再把它交出来」；
+/// 将来谁想接回去（比如又拿 config 存表配置），这一条会先红。
+#[tokio::test]
+async fn legacy_config_column_never_breaks_a_row_read() {
+    let (store, dir) = create_test_store().await;
+    let id = format!("ar_{}", uuid::Uuid::new_v4().simple());
+    let now = chrono::Utc::now().to_rfc3339();
+    {
+        let conn = store.pool().acquire().await.expect("acquire");
+        conn.inner()
+            .expect("inner")
+            .execute(
+                r#"
+        INSERT INTO analytics_resources (
+            id, resource_type, name, alias, config, scope, row_count, column_count, file_size,
+            version, parent_version_id, parent_resource_id, source_query, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#,
+                rusqlite::params![
+                    &id,
+                    "file",
+                    "legacy_row",
+                    None::<String>,
+                    "{\"legacy\":true}",
+                    "project",
+                    None::<i64>,
+                    None::<i64>,
+                    None::<i64>,
+                    1,
+                    None::<String>,
+                    None::<String>,
+                    None::<String>,
+                    &now,
+                    &now,
+                ],
+            )
+            .expect("insert legacy row");
+    }
+
+    let row = store
+        .get_resource_by_id(&id)
+        .await
+        .expect("坏 config 不该挡住单行读取");
+    assert_eq!(row.name, "legacy_row");
+    assert_eq!(
+        row.config,
+        serde_json::Value::Null,
+        "遗留列不再解析，读出来恒为 null"
+    );
+    assert_eq!(row.resource_type, "file", "v1 列照读（只是没人消费）");
+
+    cleanup(dir);
+}
