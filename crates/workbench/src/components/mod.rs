@@ -18,6 +18,7 @@ pub mod nav_host;
 pub mod object_mask_dialog;
 pub mod project_host;
 pub mod resource_host;
+pub mod result_set_actions;
 pub mod saved_view_dialog;
 pub mod scratchpad_host;
 /// 来源选择器通用内核（洞察 / 联邦 / 结果集二次分析共用；当前洞察首个实装）
