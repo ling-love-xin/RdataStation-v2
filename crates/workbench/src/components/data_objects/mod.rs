@@ -214,6 +214,8 @@ pub struct AssetRow {
     pub version: u32,
     /// 资产面板那行尾部字段（行数 / 大小之类），原样带过来，不在这里重算
     pub detail: String,
+    /// 本体在 `resources/` 下的相对路径（`None` = 引用型 / 旧行没登记）
+    pub payload_rel_path: Option<String>,
 }
 
 /// 一次取数的结果（面板与对话框共用）。
@@ -387,6 +389,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
 pub fn analysis_sources(
     objects: &[Object],
     picked: &[String],
+    assets: &[AssetRow],
+    resources_dir: Option<&std::path::Path>,
 ) -> (Vec<SampleSource>, Vec<String>) {
     let mut sources: Vec<SampleSource> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
@@ -408,6 +412,22 @@ pub fn analysis_sources(
                 format!("SELECT * FROM \"{table}\""),
                 object.name.clone(),
             )),
+            // 资产：本体是 `resources/` 下的受管文件，读它 = 按扩展名交给 DuckDB 读
+            Some(("asset", name)) => {
+                let row = assets.iter().find(|a| a.name == *name);
+                match (row.and_then(|r| r.payload_rel_path.as_ref()), resources_dir) {
+                    (Some(rel), Some(dir)) => {
+                        match SampleSource::duckdb_file(dir.join(rel), object.name.clone()) {
+                            Ok(source) => Some(source),
+                            Err(e) => {
+                                skipped.push(format!("{}（{}）", object.name, e));
+                                continue;
+                            }
+                        }
+                    }
+                    _ => None,
+                }
+            }
             _ => None,
         };
         match source {
@@ -507,6 +527,7 @@ mod tests {
                 name: "月度经营快照".into(),
                 version: 3,
                 detail: "1,204 行 · 18.2 MB".into(),
+                payload_rel_path: Some("assets/月度经营快照.parquet".into()),
             }],
             session_sources: vec![
                 SessionSource {
@@ -632,6 +653,7 @@ mod tests {
             name: "orders".into(),
             version: 1,
             detail: String::new(),
+            payload_rel_path: None,
         }];
         c.result_sets = vec!["orders".into()];
         let rows = objects(&c);
@@ -658,7 +680,7 @@ mod tests {
             "result:tmp_q_结果_3".to_string(),
             "asset:月度经营快照".to_string(),
         ];
-        let (sources, skipped) = super::analysis_sources(&rows, &picked);
+        let (sources, skipped) = super::analysis_sources(&rows, &picked, &c.assets, None);
 
         assert_eq!(sources.len(), 3, "三类可转的来源都要在：{:?}", sources);
         // 项目分析库表在 DuckDB 会话里直接读
@@ -674,7 +696,38 @@ mod tests {
         assert!(skipped[0].contains("资产"), "{skipped:?}");
 
         // 同一张表被两种身份指到：只留一条，别开两个一样的标签页
-        let dup = super::analysis_sources(&rows, &["result:tmp_q_结果_3".into(), "result:tmp_q_结果_3".into()]);
+        let dup = super::analysis_sources(
+            &rows,
+            &["result:tmp_q_结果_3".into(), "result:tmp_q_结果_3".into()],
+            &c.assets,
+            None,
+        );
         assert_eq!(dup.0.len(), 1, "{:?}", dup.0);
+    }
+
+    /// 资产带本体路径 + 给了资源目录时能直接读；缺路径时如实说转不了。
+    #[test]
+    fn assets_become_file_sources_only_when_their_payload_is_known() {
+        let mut c = sample();
+        let rows = objects(&c);
+
+        // 有本体路径：交给 DuckDB 按扩展名选读取器（这里只断言它被收下了）
+        let dir = std::env::temp_dir();
+        let (sources, skipped) = super::analysis_sources(
+            &rows,
+            &["asset:月度经营快照".into()],
+            &c.assets,
+            Some(dir.as_path()),
+        );
+        assert_eq!(sources.len(), 1, "有本体的资产要能分析：{skipped:?}");
+        assert!(sources[0].conn_id.is_none(), "资产读在 DuckDB 上");
+
+        // 没路径（引用型 / 旧行）：不猜，如实跳过
+        c.assets[0].payload_rel_path = None;
+        let (sources, skipped) =
+            super::analysis_sources(&rows, &["asset:月度经营快照".into()], &c.assets, Some(dir.as_path()));
+        assert!(sources.is_empty(), "{sources:?}");
+        assert_eq!(skipped.len(), 1);
+        assert!(skipped[0].contains("资产"), "{skipped:?}");
     }
 }

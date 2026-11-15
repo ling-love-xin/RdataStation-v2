@@ -44,6 +44,8 @@ impl DataObjectsTab {
     pub fn refresh(&self, cx: &mut Context<Self>) {
         let mut collected = data_objects::collect(&self.shared);
         collected.assets = self.assets_from_panel(cx);
+        // 资产行单独存一份：`Object` 只带名字与版本，构造来源还要本体路径
+        *self.shared.data_object_assets.borrow_mut() = collected.assets.clone();
         *self.shared.data_objects.borrow_mut() = data_objects::objects(&collected);
         cx.notify();
     }
@@ -60,6 +62,7 @@ impl DataObjectsTab {
         rows.into_iter()
             .map(|row| data_objects::AssetRow {
                 version: u32::try_from(row.version).unwrap_or(0),
+                payload_rel_path: row.payload_rel_path,
                 name: row.name,
                 detail: row.tail,
             })
@@ -120,8 +123,19 @@ impl DataObjectsTab {
                             // 副作用只在事件路径做：转换是纯函数，开洞察在宿主
                             let objects = shared_for_run.data_objects.borrow().clone();
                             let picked = shared_for_run.data_object_picked.borrow().clone();
-                            let (sources, skipped) =
-                                data_objects::analysis_sources(&objects, &picked);
+                            let assets = shared_for_run.data_object_assets.borrow().clone();
+                            // 资产本体在 `{项目}/resources/` 下：目录由项目根推，不写死路径
+                            let resources_dir = shared_for_run
+                                .project
+                                .borrow()
+                                .as_ref()
+                                .map(|p| p.root.join("resources"));
+                            let (sources, skipped) = data_objects::analysis_sources(
+                                &objects,
+                                &picked,
+                                &assets,
+                                resources_dir.as_deref(),
+                            );
                             if sources.is_empty() {
                                 // 选的全是转不了的类型：别开一个空洞察面板
                                 return;

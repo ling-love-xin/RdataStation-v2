@@ -219,6 +219,7 @@ fn row(id: &str, kind: ArchiveKind, status: ArchiveStatus, version: i32) -> Arch
         updated_epoch: 1_700_000_000,
         archived_epoch: Some(1_700_000_000),
         size_bytes: Some(1_228),
+        payload_rel_path: None,
     }
 }
 
