@@ -124,6 +124,33 @@ pub fn result_set_rows(depth: u8, tables: &[String]) -> Vec<Row> {
     rows
 }
 
+/// DuckDB 「洞察产物」段：进程单例里的 `tmp_i_` 表（**再分析**入口）。
+///
+/// 与结果集分两段而不是混排：`tmp_q_` 是「查询跑出来的」，`tmp_i_` 是「洞察取出来的」，
+/// 用户在树里选的语义不同（前者二次分析自己的结果、后者复查/深挖已有样本）。
+pub fn insight_sample_rows(depth: u8, tables: &[String]) -> Vec<Row> {
+    debug_assert!(depth <= MAX_DEPTH);
+    let mut rows: Vec<Row> = tables
+        .iter()
+        .map(|t| {
+            Row::new(
+                NodeId::InsightSample(t.clone()),
+                depth,
+                NodeKind::Table,
+                t.clone(),
+            )
+            .with_meta("洞察样本")
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        a.label
+            .to_lowercase()
+            .cmp(&b.label.to_lowercase())
+            .then_with(|| a.label.cmp(&b.label))
+    });
+    rows
+}
+
 /// 「外部文件 · 已引用」的单行（一次性引用，文件可能已被移走）。
 pub fn external_row(depth: u8, path: &Path) -> Row {
     debug_assert!(depth <= MAX_DEPTH);

@@ -33,6 +33,19 @@ pub fn list_result_sets() -> Result<Vec<String>, CoreError> {
     TempTableManager::list_by_source(&guard, TempTableSource::Query)
 }
 
+/// 列出洞察产出的临时表（`tmp_i_` 前缀，按名排序）：样本分析的**再分析入口**。
+///
+/// 与 [`list_result_sets`] 同一个取数面（进程单例 + 按前缀查 `information_schema`），
+/// 区别只在来源前缀：`tmp_q_` 是查询结果、`tmp_i_` 是洞察样本（联邦取样搬回来的也在
+/// 这一档）。把这条列出来的意义：**二次产物还能再分析**——样本表不是终点。
+pub fn list_insight_samples() -> Result<Vec<String>, CoreError> {
+    let conn = DuckDbService::get_or_create_duckdb()?;
+    let guard = conn
+        .lock()
+        .map_err(|e| invalid(format!("DuckDB 单例锁中毒: {e}")))?;
+    TempTableManager::list_by_source(&guard, TempTableSource::Insight)
+}
+
 /// 结果集二次分析的会话：进程单例句柄（在它上面直接读 `tmp_q_` 表）。
 ///
 /// `label` 只用于计划的展示名（历史面板 / 日志），不参与执行。
@@ -66,7 +79,7 @@ fn invalid(message: String) -> CoreError {
 
 #[cfg(test)]
 mod tests {
-    use super::{list_result_sets, materialize_rows, open_for_result_set};
+    use super::{list_insight_samples, list_result_sets, materialize_rows, open_for_result_set};
 
     #[test]
     fn materialized_result_set_is_a_registered_tmp_q_table() {
@@ -118,5 +131,37 @@ mod tests {
         handle
             .run(&format!("DROP TABLE IF EXISTS {table}"))
             .expect("删表");
+    }
+
+    /// 洞察产物（`tmp_i_`）要能在「再分析」入口列出来；而且两个列表**互不串**：
+    /// 结果集列表里不该出现样本表，样本列表里也不该出现结果集。
+    #[test]
+    fn insight_samples_and_result_sets_are_two_separate_lists() {
+        let handle = open_for_result_set("洞察产物").expect("拿句柄");
+        let sample =
+            crate::duckdb::generate_unique_name(crate::duckdb::TempTableSource::Insight, "样本");
+        let query = crate::duckdb::generate_unique_name(crate::duckdb::TempTableSource::Query, "rs");
+        handle
+            .run(&format!("CREATE TABLE {sample} AS SELECT 1 AS a"))
+            .expect("建样本表");
+        handle
+            .run(&format!("CREATE TABLE {query} AS SELECT 2 AS b"))
+            .expect("建结果集表");
+
+        let samples = list_insight_samples().expect("样本列表");
+        assert!(samples.contains(&sample), "样本列表应含 {sample}");
+        assert!(!samples.contains(&query), "结果集不该混进样本列表");
+        assert!(samples.iter().all(|t| t.starts_with("tmp_i_")));
+
+        let result_sets = list_result_sets().expect("结果集列表");
+        assert!(result_sets.contains(&query));
+        assert!(!result_sets.contains(&sample), "样本不该混进结果集列表");
+
+        handle
+            .run(&format!("DROP TABLE IF EXISTS {sample}"))
+            .expect("删样本表");
+        handle
+            .run(&format!("DROP TABLE IF EXISTS {query}"))
+            .expect("删结果集表");
     }
 }

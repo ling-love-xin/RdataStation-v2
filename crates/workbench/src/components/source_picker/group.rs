@@ -49,7 +49,8 @@ impl SourceGroup {
 pub fn group_of(kind: SourceKind) -> SourceGroup {
     match kind {
         SourceKind::Connected => SourceGroup::Database,
-        SourceKind::ResultSet => SourceGroup::DuckDb,
+        // 结果集与洞察产物都是引擎里的本地临时表（同一台内存单例），并入 DuckDB 组
+        SourceKind::ResultSet | SourceKind::InsightSample => SourceGroup::DuckDb,
         SourceKind::Analysis
         | SourceKind::AnalysisGlobal
         | SourceKind::Scratchpad
@@ -77,18 +78,19 @@ pub fn grouped(kinds: &[SourceKind]) -> Vec<(SourceGroup, Vec<SourceKind>)> {
 mod tests {
     use super::*;
 
-    const ALL: [SourceKind; 6] = [
+    const ALL: [SourceKind; 7] = [
         SourceKind::Connected,
         SourceKind::Scratchpad,
         SourceKind::Analysis,
         SourceKind::AnalysisGlobal,
         SourceKind::External,
         SourceKind::ResultSet,
+        SourceKind::InsightSample,
     ];
 
     #[test]
     fn every_kind_maps_to_exactly_one_group() {
-        // 穷举 6 个叶子：新增叶子时这里会编译失败，逼着补映射
+        // 穷举 7 个叶子：新增叶子时这里会编译失败，逼着补映射
         for k in ALL {
             let g = group_of(k);
             assert!(matches!(

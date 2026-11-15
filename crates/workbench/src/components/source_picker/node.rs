@@ -41,6 +41,8 @@ pub enum NodeId {
     AnalysisTable { scope: ArchiveScope, table: String },
     /// DuckDB 临时表：`scope` 决定「本机可见」还是「仅会话可见」
     Temp { scope: TempScope, table: String },
+    /// 洞察产物（`tmp_i_`，进程单例）：二次分析的「再分析」入口
+    InsightSample(String),
 }
 
 /// 资产库分析表所在的分析库。
@@ -95,6 +97,7 @@ impl NodeId {
                 TempScope::Local => format!("temp/local/{table}"),
                 TempScope::Session(owner) => format!("temp/{owner}/{table}"),
             },
+            Self::InsightSample(table) => format!("insight-sample/{table}"),
         }
     }
 }

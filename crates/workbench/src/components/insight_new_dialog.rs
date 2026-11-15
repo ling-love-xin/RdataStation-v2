@@ -25,6 +25,7 @@ const INSIGHT_KINDS: &[SourceKind] = &[
     SourceKind::Analysis,
     SourceKind::AnalysisGlobal,
     SourceKind::External,
+    SourceKind::InsightSample,
 ];
 
 /// 打开「新建洞察」对话框（宿主侧入口，`insight_actions` 订阅 `NewInsightRequested` 后调用）。
@@ -100,6 +101,15 @@ fn confirm(shared: &Shared, state: &Rc<RefCell<PickerState>>, window: &mut Windo
             // 结果搬进进程单例的登记版 `tmp_i_`，下游读法与其它来源一致。
             let label = format!("全局 · {table}");
             let source = SampleSource::on_global(table, label.clone());
+            shared.open_insight_source_table(source, label, cx);
+        }
+        SourceKind::InsightSample => {
+            let Some(table) = s.picked_insight_sample() else {
+                return;
+            };
+            // 洞察产物已经在进程单例里：取样即「再取一份」，去重口径与单例读取一致
+            let label = table.clone();
+            let source = SampleSource::on_duckdb(format!("SELECT * FROM \"{table}\""), label.clone());
             shared.open_insight_source_table(source, label, cx);
         }
         SourceKind::External => {

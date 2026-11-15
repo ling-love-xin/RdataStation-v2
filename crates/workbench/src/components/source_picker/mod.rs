@@ -82,6 +82,8 @@ pub enum SourceKind {
     External,
     /// ⑤ 结果集临时表（仅结果集二次分析启用；洞察 / 联邦裁剪掉，当前未实装）
     ResultSet,
+    /// ⑥ 洞察产物（`tmp_i_`，进程单例）：二次分析的「再分析」档
+    InsightSample,
 }
 
 impl SourceKind {
@@ -94,6 +96,7 @@ impl SourceKind {
             Self::AnalysisGlobal => "全局分析表",
             Self::External => "外部文件",
             Self::ResultSet => "结果集",
+            Self::InsightSample => "洞察产物",
         }
     }
 }
@@ -122,6 +125,8 @@ pub enum Picked {
     External(PathBuf),
     /// 结果集临时表（`tmp_q_`，本机单例）：二次分析的入口
     ResultSet(String),
+    /// 洞察产物（`tmp_i_`，本机单例）：再分析的入口（样本表不是终点）
+    InsightSample(String),
 }
 
 impl Picked {
@@ -134,6 +139,7 @@ impl Picked {
             Self::AnalysisGlobal(..) => SourceKind::AnalysisGlobal,
             Self::External(..) => SourceKind::External,
             Self::ResultSet(..) => SourceKind::ResultSet,
+            Self::InsightSample(..) => SourceKind::InsightSample,
         }
     }
 
@@ -147,6 +153,7 @@ impl Picked {
             // 全局表加前缀：按钮上必须能看出「这是全局那份」
             Self::AnalysisGlobal(t) => format!("全局 · {t}"),
             Self::ResultSet(t) => t.clone(),
+            Self::InsightSample(t) => t.clone(),
             Self::External(p) => p
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
@@ -173,6 +180,8 @@ pub struct PickerState {
     global_tables: Vec<String>,
     // ⑤ 结果集（进程单例里的 `tmp_q_` 表）
     result_sets: Vec<String>,
+    /// ⑥ 洞察产物（进程单例里的 `tmp_i_` 表）
+    insight_samples: Vec<String>,
     /// 选中的目标（唯一真值；其余访问器都从它派生）
     picked: Option<Picked>,
     /// 底部提示（加载失败 / 源不可用 / 物化失败回显）
@@ -189,6 +198,7 @@ impl PickerState {
         analysis: Vec<String>,
         global_tables: Vec<String>,
         result_sets: Vec<String>,
+        insight_samples: Vec<String>,
     ) -> Self {
         let group = grouped(kinds)
             .first()
@@ -203,6 +213,7 @@ impl PickerState {
             analysis_tables: analysis,
             global_tables,
             result_sets,
+            insight_samples,
             picked: None,
             note: None,
             tree: TreeState::new(),
@@ -289,6 +300,14 @@ impl PickerState {
             _ => None,
         }
     }
+
+    /// ⑥ 洞察产物选中的临时表名（`tmp_i_`）。
+    pub fn picked_insight_sample(&self) -> Option<String> {
+        match &self.picked {
+            Some(Picked::InsightSample(t)) => Some(t.clone()),
+            _ => None,
+        }
+    }
 }
 
 /// 对话框配置：标题 + 启用的叶子（顺序决定根与组内顺序）+ 确认按钮动作前缀。
@@ -333,6 +352,18 @@ mod tests {
             Picked::External(PathBuf::from("C:/data/x.csv")).kind(),
             SourceKind::External
         );
+        // 洞察产物自成一档：它是「再分析」入口，不是结果集（两者虽同在一台单例里）
+        assert_eq!(
+            Picked::InsightSample("tmp_i_x".into()).kind(),
+            SourceKind::InsightSample
+        );
+    }
+
+    /// 洞察产物的叶子文案要与结果集区分开（两者都来自同一台内存单例）。
+    #[test]
+    fn insight_sample_kind_has_its_own_label() {
+        assert_eq!(SourceKind::InsightSample.label(), "洞察产物");
+        assert_eq!(SourceKind::ResultSet.label(), "结果集");
     }
 
     /// 同一张表在两份分析库里时，按钮文案要让用户看出是哪一份。

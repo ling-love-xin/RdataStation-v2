@@ -360,6 +360,33 @@ Windows 上 DuckDB 一个文件只允许一个连接句柄（`store/src/persiste
 同会话挂上 → 销售 3 行 / 库存 2 行各自落成不同 `tmp_i_`，单例行数与源一致；别名撞名在开
 会话前被拒。`rds-insight --lib` 263 passed。
 
+### 8.11 洞察产物的「再分析」入口 + 资产库两段混排修正
+
+**新增档 `SourceKind::InsightSample`（文案「洞察产物」）**：列进程单例里的 `tmp_i_` 表
+（`engine::analysis::result_set::list_insight_samples`），并入 DuckDB 根，与「结果集」
+分成两段：
+
+- 结果集 `tmp_q_` = 「我刚跑出来的」；洞察产物 `tmp_i_` = 「我已经取过样的」——
+  同名需求下用户在树里选的语义不同，混排会让人选错；
+- 选中 → `Picked::InsightSample` → 洞察出口 `SampleSource::on_duckdb(SELECT * FROM "<表>")`。
+
+意义：**样本表不是终点**。洞察取样（含联邦档搬进单例的那些）产出 `tmp_i_`，现在能直接从
+「新建洞察 → 洞察产物」再取一份继续分析，闭环不再依赖外部入口。
+
+**顺带修的既有缺陷**：`collect_analysis_tables`（「资产库 · 本项目」）在**没打开项目**时会
+退回读全局分析库（`or_else(global_analysis_db_path)`）——B2 加了独立的「资产库 · 全局」段后，
+这条退避会让同一张全局表在两段各出现一次，正好违反「两段并列不混排」。现在无项目即空，
+全局那份只由全局段负责；同时把「读某台分析库的表名」抽成 `analysis_tables_of(path)`
+（纯路径函数），单测钉住两点：只读打开**不会**把不存在的库创建出来、表名按序返回。
+
+验证：`rds-engine --lib` 的 `analysis::result_set` 5 passed（新增
+`insight_samples_and_result_sets_are_two_separate_lists`：两个列表互不串，且样本列表全是
+`tmp_i_` 前缀）；`rds-workbench --lib` **144 passed**（新增 `analysis_tables_are_read_only_and_never_create_the_db`、
+`insight_sample_kind_has_its_own_label`）。
+
+**仍未做**：多源 UI（选择器多选 + 一次取样多表的展示面）——原语已就位（§8.10），
+缺的是「一次选多个来源、结果怎么呈现」的产品口径；持久表的可视化列表与资源归档入口。
+
 
 
 

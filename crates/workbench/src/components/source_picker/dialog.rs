@@ -29,7 +29,10 @@ use super::group::{grouped, SourceGroup};
 use super::load::{collect_analysis_tables, collect_drafts, load_db_layer};
 use super::node::{ArchiveScope, NodeId, NodeKind, Row, TempScope};
 use super::render::{needs_virtual_list, render_rows, row_element, virtual_viewport_rem, RowAction};
-use super::rows::{analysis_table_rows, draft_rows, external_row, group_id_row, result_set_rows};
+use super::rows::{
+    analysis_table_rows, draft_rows, external_row, group_id_row, insight_sample_rows,
+    result_set_rows,
+};
 use super::state::TreeState;
 use super::{ConfirmStrategy, Picked, PickerConfig, PickerState, SourceKind, TableCandidate};
 
@@ -69,24 +72,48 @@ fn db_group_rows(s: &PickerState) -> Vec<Row> {
     db_rows(&briefs, &s.db_cache)
 }
 
-/// DuckDB 根的子树：结果集临时表（`tmp_q_`）。
+/// DuckDB 根的子树：结果集临时表（`tmp_q_`）+ 洞察产物（`tmp_i_`）。
 ///
-/// 列表来自 `engine::analysis::result_set::list_result_sets()`（按前缀查库，权威是库里
-/// 实际表）；没有结果集时给一行**明确说不可用**的提示，而不是画一个点不动的假节点。
+/// 列表来自 `engine::analysis::result_set::{list_result_sets, list_insight_samples}`
+/// （按前缀查库，权威是库里实际表）；为空时给**明确说不可用**的提示行，而不是
+/// 画一个点不动的假节点。两段分开展示：用户在树里选的语义不同（结果集是「我刚跑出来的」，
+/// 洞察产物是「我已经取过样的」）。
 fn duckdb_group_rows(s: &PickerState) -> Vec<Row> {
-    if !s.kinds.contains(&SourceKind::ResultSet) {
-        return Vec::new();
+    let mut out = Vec::new();
+
+    if s.kinds.contains(&SourceKind::ResultSet) {
+        if s.result_sets.is_empty() {
+            out.push(
+                Row::new(
+                    NodeId::Path("duckdb:result-set-empty".to_string()),
+                    1,
+                    NodeKind::File,
+                    "暂无结果集（先跑一次查询）",
+                )
+                .disabled(),
+            );
+        } else {
+            out.extend(result_set_rows(1, &s.result_sets));
+        }
     }
-    if s.result_sets.is_empty() {
-        return vec![Row::new(
-            NodeId::Path("duckdb:result-set-empty".to_string()),
+
+    if s.kinds.contains(&SourceKind::InsightSample) {
+        let mut folder = Row::new(
+            NodeId::Path("duckdb:insight-sample-folder".to_string()),
             1,
-            NodeKind::File,
-            "暂无结果集（先跑一次查询）",
-        )
-        .disabled()];
+            NodeKind::Folder,
+            "洞察产物",
+        );
+        folder = if s.insight_samples.is_empty() {
+            folder.with_meta("暂无（可先做一次洞察）")
+        } else {
+            folder.with_meta(format!("{} 张样本表", s.insight_samples.len()))
+        };
+        out.push(folder);
+        out.extend(insight_sample_rows(2, &s.insight_samples));
     }
-    result_set_rows(1, &s.result_sets)
+
+    out
 }
 
 /// 文件根的子树：草稿箱 / 资产库（本项目段）/ 外部文件。
@@ -251,6 +278,12 @@ fn render_body(
                 } => {
                     let mut s = state.borrow_mut();
                     s.picked = Some(Picked::ResultSet(table.clone()));
+                    s.tree.select(Some(id.clone()));
+                    s.note = None;
+                }
+                NodeId::InsightSample(table) => {
+                    let mut s = state.borrow_mut();
+                    s.picked = Some(Picked::InsightSample(table.clone()));
                     s.tree.select(Some(id.clone()));
                     s.note = None;
                 }
@@ -657,6 +690,12 @@ pub fn open_source_picker(
     } else {
         Vec::new()
     };
+    // ⑥ 洞察产物（`tmp_i_`，同一台单例）：再分析入口的数据源
+    let insight_samples = if config.kinds.contains(&SourceKind::InsightSample) {
+        engine::analysis::result_set::list_insight_samples().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let mut note = None;
     if conns.is_empty() && config.kinds.contains(&SourceKind::Connected) {
         note = Some("没有已连接的数据库：先在「连接」里连一个数据源".to_string());
@@ -683,6 +722,10 @@ pub fn open_source_picker(
     if note.is_none() && config.kinds.contains(&SourceKind::ResultSet) && result_sets.is_empty() {
         note = Some("还没有结果集：先跑一次查询，结果集会作为临时表出现在这里".to_string());
     }
+    if note.is_none() && config.kinds.contains(&SourceKind::InsightSample) && insight_samples.is_empty()
+    {
+        note = Some("还没有洞察产物：先做一次洞察取样，样本表会出现在这里".to_string());
+    }
 
     let state = Rc::new(RefCell::new(PickerState::new(
         config.kinds,
@@ -691,6 +734,7 @@ pub fn open_source_picker(
         analysis,
         global_tables,
         result_sets,
+        insight_samples,
     )));
     state.borrow_mut().note = note;
     // 打开即展开首个根：否则首屏只有三行光秃秃的根，比老的扁平列表更「空」。
