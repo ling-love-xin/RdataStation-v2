@@ -85,14 +85,24 @@ pub async fn sample_source_to_analysis_table(
             sample_from_connection(conn_id, &sql, &source.label).await
         }
         None => {
-            let duckdb = insight_engine::get_or_create_duckdb()?;
-            let conn = duckdb.lock().map_err(|e| {
-                CoreError::common(CommonError::General(format!("DuckDB lock error: {e}")))
-            })?;
-            engine::duckdb::analysis::create_analysis_temp_table_as(
-                &conn,
-                &build_duckdb_sample_sql(source, config),
+            // 走分析内核的「执行面 + 物化」：今天落 `ProcessDuckDb`（进程内存单例），
+            // 与手写 `get_or_create_duckdb()` 完全同一形态，但通道判定收进一处——
+            // 将来洞察开联邦取样时，只要这里换 `from_toggle` 的通道即可，
+            // 取数口径（ProbeConfig）与登记（`tmp_i_`）都不用动。
+            let plan = engine::analysis::mount::plan_for(
+                &engine::analysis::channel::AnalysisChannel::ProcessDuckDb,
+                &[],
+                None,
+                &source.label,
+            )?;
+            let handle = engine::analysis::kernel::open(
+                &plan,
+                &engine::analysis::kernel::PreparedMounts::none(),
+            )?;
+            engine::analysis::materialize::materialize_sample(
+                &handle,
                 "source_sample",
+                &build_duckdb_sample_sql(source, config),
             )
         }
     }
