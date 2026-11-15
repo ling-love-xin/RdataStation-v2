@@ -10,6 +10,8 @@
 //! `Accelerated`（单源加速会话）/ `Federated`（多源联邦会话）。
 
 pub mod channel;
+/// 全局库作为会话源（刀 7 方案 B：短命会话 + 只读挂载，不把全局库 ATTACH 进单例）
+pub mod global;
 pub mod kernel;
 pub mod materialize;
 pub mod mount;
