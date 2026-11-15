@@ -40,11 +40,20 @@
 
 ```rust
 // 4.1 通道：谁在跑、跑在哪儿
+// 【2026-11-15 口径修订】执行通道是**三档**，不是「本地 / 联邦」两档：
+//   Source  = 源库直连，SQL 交给驱动，不进 DuckDB、不挂源
+//   Accelerated = 本地加速，把**一个**源只读挂进进程内 DuckDB（accel::ensure_session，
+//                 按源 id 缓存；L2 驱动在这里注册会话级 Secret）
+//   Federated = 联邦会话，按 owner 多源挂载（federation::ensure_session）
+// 早先把 Source 与 Accelerated 合成一个 Local 是错的（这条由用户 2026-11-15 指正）。
 pub enum AnalysisChannel {
-    Local,                        // 进程级 DuckDB 内存单例（二次分析 / 导出 / 默认洞察）
-    LocalThenFederated { owner: String }, // 本次查询先本地，需要多源才建会话（默认关的开关）
-    Federated { owner: String },  // 显式联邦（编辑器通道 / 开关已开）
+    Source,                       // 源库直连（默认档）
+    Accelerated,                  // 本地加速（单源，accel.rs:508）
+    Federated { owner: String },  // 显式联邦（编辑器联邦档 / 洞察开开关）
 }
+
+// 「用联邦查询」开关是对 base 通道的**升级**，不改变用户选的档：
+// from_toggle(base, on, mountable_sources, owner) → on && ≥2 源 && owner 非空 ? Federated : base
 
 // 4.2 源：内核只认「怎么挂」，不认 UI 语义
 pub enum MountSpec {
@@ -88,23 +97,26 @@ impl SessionHandle {
 
 ### 4.6 三通道各自的调用形态（改完后）
 
-| 通道 | plan 的 mode | 物化 |
+| 通道 | plan 的 channel | 物化 |
 | --- | --- | --- |
-| 编辑器联邦 | `Federated{owner}`（显式） | 不物化（SQL 直接 `session.run`） |
-| 编辑器加速 | `Local`（`accel::ensure_session` 归并进来） | 不物化 |
-| 洞察 | `Local`，开关开时 `LocalThenFederated` | `materialize_sample`（形态 I） |
-| 结果集二次分析 | `Federated{owner}` 或 `Local` | `materialize_in_session`（形态 II） |
+| 编辑器源库档 | `Source`（不挂源） | 不物化（驱动直接执行） |
+| 编辑器联邦档 | `Federated{owner}`（显式） | 不物化（SQL 直接 `session.run`） |
+| 编辑器加速档 | `Accelerated`（`accel::ensure_session`，**单源**） | 不物化 |
+| 洞察 | `Accelerated`，开关开时 `Federated{owner}` | `materialize_sample`（形态 I） |
+| 结果集二次分析 | `Accelerated` 或 `Federated{owner}` | `materialize_in_session`（形态 II） |
+
+> 注意：加速档**不是**「进程级内存单例」那条通道。`accel::ensure_session` 按源连接 id 各建一条会话，凭据随连接串进 `ATTACH`（DuckDB 1.5.5 的 mysql/pg 扫描器不认 Secret，`accel.rs` 注释有实测记录）；进程级单例（`duckdb_service.rs:14`）只服务「不挂任何外部源」的纯本地查询（导出、临时表、二次分析的建表）。
 
 ## 5. 切片（每刀一 commit，每刀 `cargo check` + 该模块测试）
 
 | 刀 | 内容 | 验收 |
 | --- | --- | --- |
 | 0 | 本文 | —— |
-| 1 | `analysis/channel.rs`：`AnalysisChannel` / `SessionMode` 纯类型 + 语义测试（Local/Federated 互斥、owner 非空） | 纯单测 |
-| 2 | `analysis/mount.rs`：`MountSpec` + `plan_for`（源 → 挂载），覆盖 5 叶 × 3 根 | 纯单测（表驱动） |
-| 3 | `analysis/mod.rs`：`AnalysisKernel::open`，把 Local 与 `ensure_session` 收到一处；**不改任何消费方** | 单测 + `engine --lib` 全绿 |
+| 1 | `analysis/channel.rs`：`AnalysisChannel{Source, Accelerated, Federated}` + `ConnRef{Live, Historical}` 纯类型 + 语义测试（三档互斥、owner 非空、开关只做升级） | 纯单测（已落地 `d98ef2c4` + `9395a679`） |
+| 2 | `analysis/mount.rs`：`MountSpec` + `plan_for` 规则（Source 禁挂 / Accelerated 恰 1 源 / Federated 去重 + primary 校验），覆盖 5 叶 × 3 档 | 纯单测（已落地 `80f37c86` + `9395a679`） |
+| 3 | `analysis/mod.rs`：`AnalysisKernel::open`，把三档收口（Source 无会话 / Accelerated→accel / Federated→federation）；**不改任何消费方** | 单测 + `engine --lib` 全绿 |
 | 4 | 编辑器通道切到 `AnalysisKernel::open`（`federation.rs` / `accel_exec.rs` 两处），删掉各自的 plan 拼装 | 编辑器现有 242/277 两条端口测试继续绿 |
-| 5 | 洞察切到 `plan + materialize_sample`；「用联邦查询」开关接管 `LocalThenFederated`（开关仍默认关、仅 ≥2 可挂源时出现） | `insight --lib` 280 + e2e 14 |
+| 5 | 洞察切到 `plan + materialize_sample`；「用联邦查询」开关做 `from_toggle` 升级（仍默认关、仅 ≥2 可挂源时出现） | `insight --lib` 280 + e2e 14 |
 | 6 | 结果集二次分析入口接上（`source_picker` 的 `ResultSet` 解除裁剪），走形态 II | 新用例：建表→SQL→清理 |
 | 7 | 全局表通道 A（内存单例 attach）+ B（联邦会话加源）——**需先拍板**，见 §7 | —— |
 
@@ -122,6 +134,10 @@ impl SessionHandle {
 
 ## 8. 风险
 
-- **两套内存单例**：`execution_service.rs:60/113 → duckdb_service.rs:14` 的进程级单例与 `federation/manager.rs:18` 的 `GLOBAL_DUCKDB` 是两个东西，刀 3 必须明确 Local 指的是前者，不能顺手合并（合并会踩「取消洞察误伤编辑器」那条已实测的坑）。
+- **三套单例 / 会话库**（2026-11-15 修订后口径）：
+  1. 进程级内存单例：`execution_service.rs:60/113 → duckdb_service.rs:14`（纯本地查询、导出、临时表）；
+  2. 加速会话：`duckdb/accel.rs` 的 `accel::ensure_session`（按源 id 缓存，单源只读挂载）；
+  3. 联邦会话：`federation/manager.rs:18` 的 `GLOBAL_DUCKDB` + `session.rs:498 ensure_session`（按 owner 多源）。
+  三者**都不能合并**：合并会踩「取消洞察误伤编辑器」那条已实测的坑（同一连接被两处同时中断）。刀 3 收口时按通道分流，而不是收成一条连接。
 - **物化路径的清理责任**：形态 I 建在本地 `tmp_i_`（TTL/上限现成），形态 II 建在会话里（会话销毁即消失，但用户可见）；两者「表失效」的提示条不同，刀 6 要各自给文案。
 - **不要在刀 4 改编辑器行为**：`ExecChannel` 门控是 UI 事实，内核只接装配，不接管门控。
