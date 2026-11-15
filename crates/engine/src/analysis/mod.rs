@@ -15,4 +15,6 @@ pub mod global;
 pub mod kernel;
 pub mod materialize;
 pub mod mount;
+/// 项目分析库里的持久表（结果集落库产物）的清单与删除口径
+pub mod persistent;
 pub mod result_set;

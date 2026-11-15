@@ -441,7 +441,12 @@ Windows 上 DuckDB 一个文件只允许一个连接句柄（`store/src/persiste
    的表单独折成「持久表（结果集落库）」子段（`rows::split_persistent_tables` +
    `persistent_table_rows`），显示名去掉前缀并把时间戳格式化成
    `描述 · 2026-11-15 10:30:00`（身份仍是库里原名，`NodeId` 不动），新的在前。
-   仍缺：删除 / 重命名 / 「进资源归档」的写入口。
+   仍缺：删除 / 重命名 / 「进资源归档」的写入口。**删除的原语已就位（2026-11-15）**：
+   `engine::analysis::persistent::{list_persistent_tables, drop_persistent_table}`——
+   只碰 `res_` 前缀（守卫在开库之前）、库/表不存在按「没有」处理（幂等）、
+   **真删不是回收站**（要可撤销得先登记进资产库走它的 trash，那是另一层语义）。
+   缺的只是**按钮放哪**：选择器行内动作 / 结果面板菜单 / 资产库面板，三处的交互与
+   失败面不同，尚未定。
 4. **多源标签页的点击路径没有 headless 用例**：`select_source` 是直接调用测的
    （`switching_source_tabs_reuses_the_sample_it_already_has`），`TabBar::on_click` 那条
    回调没被测试覆盖。
