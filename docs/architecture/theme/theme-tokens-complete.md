@@ -20,8 +20,9 @@
 | 6 | 纯黑违反自家规范 | light 语法高亮 `editor.foreground #000000`、`operator #000000` | 改 `#1E1E1E` / `#333333`（`rds-design` 反模式 #10） |
 | 7 | 图表系列色撞车 | `chart.3` 与 `chart.bullish` 同为绿色 | `chart.3` 回归品牌珊瑚，`chart.2` 改青，系列色与涨跌色分离 |
 | 8 | 状态栏配色不可行 | 珊瑚底 + `muted_foreground` 灰字 = **1.08:1** | 改中性 chrome 底，见 §6 |
+| 9 | 暗色表头文字对比度（2026-11-15 补测） | 第 4 行只修了表头底色变浅的那一版；`#969696` on `#394248` 实为 **3.47:1** | 文字提亮到 `#B0B0B0`（**4.73:1**），表头底 `#394248` 不变 |
 
-**结果**：140/140 覆盖、0 未知键、106 项对比度配对 **0 不达标**、`clamp_alpha` 全部落在上限内。
+**结果**：140/140 覆盖、0 未知键、对比度配对 **0 不达标**（2026-11-15 用 `tools/theme_audit.py` 的 52 对口径复核，第 9 行修掉后重跑为 0）、`clamp_alpha` 全部落在上限内。
 
 ---
 
@@ -114,7 +115,7 @@
 | `table.background` / `.hover.background` | `#FFFFFF` / `#F0F0F0` | `#1F1F1F` / `#2A2D2E` |
 | `table.active.background` / `.border` | `#BC534033` / `#BC5340` | `#E8846F33` / `#E8846F` |
 | `table.even.background` | `#FAFAFA` | `#252526CC` |
-| `table.head.background` / `.foreground` | `#F8F8F8` / `#616161` | `#394248` / `#969696` |
+| `table.head.background` / `.foreground` | `#F8F8F8` / `#616161` | `#394248` / `#B0B0B0` |
 | `table.foot.background` / `.foreground` | `#F5F5F5` / `#616161` | `#252526CC` / `#969696` |
 | `table.row.border` | `#E1E1E1` | `#3C3C3C33` |
 | `description_list.label.background` / `.foreground` | `#F5F5F5` / `#616161` | `#252526` / `#969696` |

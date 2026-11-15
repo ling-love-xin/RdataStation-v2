@@ -1038,11 +1038,10 @@ def build_md(total_checks, total_fail):
     lines.append("- 审计脚本已可指定文件：`python tools/theme_audit.py --theme <任意主题文件> "
                  "[--product <产品 token>] [--strict]`（`--theme` 指到包内 `theme.json` 时，产品 token 默认取同目录；"
                  "`--strict` 让不达标变成退出码 1，CI 可用）。")
-    lines.append("- **现役资产的一处既有缺陷**：`RDS Dark` 的 `table.head.foreground` `#969696` 压在 "
-                 "`table.head.background` `#394248` 上只有 **3.47:1**（正文档要 4.5），"
-                 "`python tools/theme_audit.py` 单跑现役即可复现；候选 8 包同一对是 5.29–9.77，已没这个洞。"
-                 "修现役只需把该文字提亮到 `#B0B0B0`（4.73:1，表头底不变）或把表头底压到 `#2A3138`+文字 `#A6A6A6`（5.41:1）"
-                 "——都会改变默认暗色外观，故未擅自动，待拍板。")
+    lines.append("- **现役资产的一处既有缺陷（2026-11-15 已修）**：`RDS Dark` 的 `table.head.foreground` 原为 "
+                 "`#969696`，压在 `table.head.background` `#394248` 上只有 **3.47:1**（正文档要 4.5）；"
+                 "按最小改动方案提亮为 `#B0B0B0`（**4.73:1**，表头底不动），现役重跑 `theme_audit.py --strict` 已 0 不达标。"
+                 "候选 8 包同一对本来就在 5.29–9.77，不含这个洞。")
     lines.append("- 落地某套时的完整步骤：包目录放进 `assets/themes/packs/<id>/` → 在 `settings::theme_pack::BUILTIN` "
                  "加一档 → `python tools/audit_theme_packs.py`（0 不达标）→ 设置页选中该档 "
                  "→ 真机明暗切换核对 → 更新 `theme-tokens-complete.md`。\n")
