@@ -332,8 +332,33 @@ Windows 上 DuckDB 一个文件只允许一个连接句柄（`store/src/persiste
 （新增 `global_tables_lists_the_tables_of_the_analysis_db`）、`rds-workbench --lib` 142 passed、
 `rds-engine --lib` 294、`rds-insight --lib` 263。
 
-**仍未做**：洞察多源取样把源解析成 `ConnRef::Live` 后建联邦会话（当前 `Federated` 档仍明确报
-「尚未接入」）；持久表的可视化列表与资源归档入口。
+**仍未做**：持久表的可视化列表与资源归档入口；洞察「多源开关」的 UI（模型与取样原语均已就位，
+见 §8.10）。
+
+### 8.10 联邦档取样原语（宿主给挂载材料，内核开会话）
+
+`insight::service::persistence::sample_federated_sources(owner, entries, config)`：
+一条联邦会话里逐源取样，每源各出一张**登记版** `tmp_i_`。
+
+分工边界沿用引擎既有铁律（`federation/registry.rs:8`：引擎不读连接库、不解密口令）：
+
+- **宿主**给 `FederatedSampleEntry { mount, source, sql, label }`（`source` 是组装好的
+  `FederatedSource`，`sql` 按**别名**限定 `<别名>.<schema>.<表>`）；
+- **本原语**负责：开会话前的拦截（空清单 / 重复来源 / 别名撞名——撞别名两条源会挂成同一个
+  catalog，SQL 里写哪个名字不可判定）、`plan_for(Federated{owner}) + kernel::open`、
+逐源 `materialize_sample`（会话内 `memory.tmp_i_*` 不登记）→ `move_sample_to_process_db`
+（搬进单例登记版），下游读法不变。
+
+「每源各取一份」的口径不变：联邦会话在这里的价值是**同一批源一次挂上**，不是替用户写 join
+（取样是取数据、关联是分析）。
+
+通用入口 `sample_set_to_analysis_tables` 遇 `Federated` 档改为**指向本原语**（原文
+「请走 sample_federated_sources」），不再说「尚未接入」——它无法自行建会话（没有凭据），
+但也不该假装降级。
+
+验证：`crates/insight/tests/federated_sample.rs` 2 passed——两台本地 DuckDB 文件当两个源，
+同会话挂上 → 销售 3 行 / 库存 2 行各自落成不同 `tmp_i_`，单例行数与源一致；别名撞名在开
+会话前被拒。`rds-insight --lib` 263 passed。
 
 
 

@@ -146,14 +146,15 @@ pub async fn sample_set_to_analysis_tables(
             "这次分析没有来源：至少要有一个可取样来源".to_string(),
         )));
     }
-    // 通道现在判定，但**只有单源路径在跑**：联邦会话取样要先把「源连接 → 挂载」接上
-    // （需要合并连接清单解析 Live id，见 engine `classify_conn`）。明确报「尚未接入」
-    // 而不是悄悄退回逐源——用户打开了开关，就不该看到他不知道的降级。
+    // 通道现在判定。联邦档需要**宿主**把连接记录组装成 `FederatedSource`（凭据只在宿主
+    // 那一步出现，引擎不解密），所以这条通用入口无法自行建会话：明确指向
+    // [`sample_federated_sources`]，而不是悄悄退回逐源——用户打开了开关，就不该看到
+    // 他不知道的降级。
     let channel = set.channel();
     if matches!(channel, engine::analysis::channel::AnalysisChannel::Federated { .. }) {
         return Err(CoreError::common(CommonError::General(format!(
-            "多源联邦取样尚未接入（{} 个来源）：本段先按「每源各取一份」逐源取样，\
-             联邦会话取样在挂载接线后开放",
+            "联邦档取样要先由宿主提供挂载清单（{} 个来源）：请走 sample_federated_sources；\
+             这条逐源入口只适用于源库 / 内存库档",
             set.sources.len()
         ))));
     }
@@ -161,6 +162,118 @@ pub async fn sample_set_to_analysis_tables(
     for source in &set.sources {
         let table = sample_source_to_analysis_table(source, config).await?;
         landed.push((source.label.clone(), table));
+    }
+    Ok(landed)
+}
+
+/// 联邦档取样的一条来源：宿主已组装的源 + 它在会话 SQL 里该用的名字。
+///
+/// 凭据与连接串只在这一层出现（引擎 `federation::registry` 的既有约定是**引擎不读连接库、
+/// 不解密口令**），所以「连接 → 源」这一步永远留在宿主；本模块只负责开会话、取样、搬运。
+pub struct FederatedSampleEntry {
+    /// 计划里的挂载键（连接源要带别名：别名就是挂上后的 catalog 名）
+    pub mount: engine::analysis::mount::MountSpec,
+    /// 宿主组装出来的源
+    pub source: engine::duckdb::federation::registry::FederatedSource,
+    /// 会话内取样 SQL：必须按**别名**限定（`<别名>.<schema>.<表>`）
+    pub sql: String,
+    /// 人类可读标签（面板副标题 / 返回顺序对应）
+    pub label: String,
+}
+
+/// 联邦档取样：一条会话里逐源取样，每源各出一张登记版 `tmp_i_`。
+///
+/// 为什么仍然「每源各取一份」而不是一条跨源 join：取样是取数据，关联是分析（用户口径）。
+/// 联邦会话在这里的价值是**少开 N 条源库连接、同一批源一次挂上**，而不是替用户写 join。
+///
+/// 与会话内取样（加速 / 联邦）的既有口径一致：会话里建 `memory.tmp_i_*`（不登记），
+/// 再 `move_sample_to_process_db` 搬进进程单例的登记版 `tmp_i_*`——下游（EDA / 图表 /
+/// 导出）读的始终是单例，不需要知道这次取样跑在哪个通道上。
+pub async fn sample_federated_sources(
+    owner: &str,
+    entries: Vec<FederatedSampleEntry>,
+    config: &crate::model::ProbeConfig,
+) -> Result<Vec<(String, String)>, CoreError> {
+    if entries.is_empty() {
+        return Err(CoreError::common(CommonError::General(
+            "联邦取样没有来源：至少要有一条可挂的来源".to_string(),
+        )));
+    }
+    // 同一个源挂两次 = 一次重复内省 + 一条多余只读副本；而两条源撞别名会让
+    // 「SQL 里写哪个名字」变得不可判定——两类都在开会话之前拦掉。
+    let mut seen_mounts: Vec<&engine::analysis::mount::MountSpec> = Vec::new();
+    let mut seen_aliases: Vec<&str> = Vec::new();
+    for entry in &entries {
+        if seen_mounts.contains(&&entry.mount) {
+            return Err(CoreError::common(CommonError::General(
+                "联邦取样里有重复来源：同一个库/连接只能挂一次".to_string(),
+            )));
+        }
+        seen_mounts.push(&entry.mount);
+        let alias = entry.source.alias.trim();
+        if alias.is_empty() {
+            return Err(CoreError::common(CommonError::General(
+                "联邦取样里的源缺别名：SQL 无法限定到哪个 catalog".to_string(),
+            )));
+        }
+        if seen_aliases.contains(&alias) {
+            return Err(CoreError::common(CommonError::General(format!(
+                "联邦取样里别名 {alias} 撞名：两条源挂上去会是同一个 catalog"
+            ))));
+        }
+        seen_aliases.push(alias);
+    }
+
+    let channel = engine::analysis::channel::AnalysisChannel::Federated {
+        owner: owner.to_string(),
+    };
+    let mounts: Vec<engine::analysis::mount::MountSpec> =
+        entries.iter().map(|e| e.mount.clone()).collect();
+    let plan = engine::analysis::mount::plan_for(&channel, &mounts, None, owner)
+        .map_err(|e| e)?;
+    if plan.mounts.len() != entries.len() {
+        return Err(CoreError::common(CommonError::General(format!(
+            "计划里的源被去重成 {} 个，宿主给了 {} 个",
+            plan.mounts.len(),
+            entries.len()
+        ))));
+    }
+    let prepared = engine::analysis::kernel::PreparedMounts::federated(
+        entries
+            .iter()
+            .map(|e| (e.mount.clone(), e.source.clone()))
+            .collect(),
+    );
+    let session = engine::analysis::kernel::open(&plan, &prepared)?;
+
+    let mut landed = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        // 复用单源那套取数口径（限 / 过滤 / 列投影 / 采样都在这里，不另写一份）
+        let shape = SampleSource::on_duckdb(entry.sql.clone(), entry.label.clone());
+        let sql = build_duckdb_sample_sql(&shape, config);
+        let in_session = engine::analysis::materialize::materialize_sample(
+            &session,
+            &entry.label,
+            &sql,
+        )
+        .map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "联邦会话里取样「{}」失败：{e}",
+                entry.label
+            )))
+        })?;
+        let table = engine::analysis::materialize::move_sample_to_process_db(
+            &session,
+            &in_session,
+            &entry.label,
+        )
+        .map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "把「{}」搬进分析库失败：{e}",
+                entry.label
+            )))
+        })?;
+        landed.push((entry.label.clone(), table));
     }
     Ok(landed)
 }
@@ -698,10 +811,10 @@ mod tests {
         assert!(err.to_string().contains("至少要有一个"), "{err}");
     }
 
-    /// 打开多源开关（≥2 源 + 有 owner）→ 通道会升级成 `Federated`，
-    /// 而本段还没有联邦会话取样：必须是**可读的未接入错误**，不能让用户以为取样降级了。
+    /// 打开多源开关（≥2 源 + 有 owner）→ 通道会升级成 `Federated`；这条**逐源入口**
+    /// 必须明确指向 `sample_federated_sources`，不能让用户以为取样降级了。
     #[tokio::test]
-    async fn federated_toggle_reports_not_wired_instead_of_silently_degrading() {
+    async fn federated_toggle_points_at_the_host_driven_path() {
         let set = crate::model::SampleSet::new(
             "C_insight_multi",
             vec![
@@ -720,8 +833,8 @@ mod tests {
             &config(ProbeAmount::RowCount(1), ProbeColumns::All, None, None),
         )
         .await
-        .expect_err("联邦档尚未接入");
-        assert!(err.to_string().contains("尚未接入"), "{err}");
+        .expect_err("逐源入口不处理联邦档");
+        assert!(err.to_string().contains("sample_federated_sources"), "{err}");
 
         // 单源即便打开开关也不该升级（`from_toggle` 只升不降的既有口径）
         let single = crate::model::SampleSet::new(
