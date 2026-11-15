@@ -549,3 +549,58 @@ async fn t158_purge_clears_versions_semantics_refs_but_keeps_history() {
 
     let _ = fs::remove_dir_all(&dir).await;
 }
+
+/// 回收站出入要留履历：移入记 `Trashed`、还原记 `Untrashed`。
+///
+/// 少了这两条，「进过回收站又捞回来」在时间线上完全看不见——用户只看到归档与最终
+/// 状态，中间那次危险动作消失。事件不回滚主动作（见 `record_timeline`），所以这里
+/// 断言的是「动作之后履历里有它」，而不是两者同事务。
+#[tokio::test]
+async fn t131_trash_and_restore_leave_timeline_events() {
+    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let draft = write_draft(&dir, "audit.sql", b"select 1;").await;
+    let archived = service
+        .archive(archive_req(&draft, "audit.sql", None))
+        .await
+        .expect("archive");
+
+    let entry = service
+        .move_to_trash(&[archived.resource_id.clone()])
+        .await
+        .expect("trash")
+        .remove(0);
+
+    let events = service
+        .store()
+        .get_resource_events(&archived.resource_id)
+        .await
+        .expect("events after trash");
+    let trashed = events
+        .iter()
+        .find(|event| event.kind == TimelineEventKind::Trashed)
+        .expect("移入回收站要落一条 Trashed 事件");
+    assert_eq!(trashed.version, Some(1), "事件要带当时的版本号");
+    let detail = trashed.detail.as_deref().unwrap_or_default();
+    assert!(
+        detail.contains("resources/"),
+        "事件要写清原位置，实际：{detail}"
+    );
+
+    let restored = service
+        .restore_archive_from_trash(&entry.trash_id)
+        .await
+        .expect("restore");
+    let events = service
+        .store()
+        .get_resource_events(&restored.id)
+        .await
+        .expect("events after restore");
+    assert!(
+        events
+            .iter()
+            .any(|event| event.kind == TimelineEventKind::Untrashed),
+        "还原也要落一条 Untrashed 事件，实际：{events:?}"
+    );
+
+    let _ = fs::remove_dir_all(&dir).await;
+}

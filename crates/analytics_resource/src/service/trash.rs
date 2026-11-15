@@ -58,6 +58,16 @@ impl ArchiveService {
         // 还原 = 复活登记行；永久删除 = 仅删登记行 + 版本元数据（§12.1.1 ③）。
         if mode == PayloadMode::Reference {
             self.store.soft_delete_archive(&resource.id).await?;
+            // 引用型：源文件没动、只软删了登记行。履历同样要记「它被移走过」——
+            // 否则还原之后完全看不出中间进过回收站。
+            self.record_timeline(
+                &resource.id,
+                Some(resource.version),
+                TimelineEventKind::Trashed,
+                Some("移入回收站（引用型：源文件未移动，仅软删登记）"),
+                resource.content_hash.as_deref(),
+            )
+            .await;
             return Ok(TrashArchiveEntry {
                 resource_id: resource.id.clone(),
                 name: resource.name,
@@ -105,6 +115,17 @@ impl ArchiveService {
             return Err(error);
         }
 
+        // 软删成功才记履历：此刻登记行已不可见，事件里把原位置写清，
+        // 还原/审计时能对上「当时它从哪走」。
+        self.record_timeline(
+            &resource.id,
+            Some(resource.version),
+            TimelineEventKind::Trashed,
+            Some(&format!("移入回收站（本体 resources/{rel_path}）")),
+            resource.content_hash.as_deref(),
+        )
+        .await;
+
         Ok(TrashArchiveEntry {
             resource_id: resource.id,
             name: resource.name,
@@ -132,6 +153,14 @@ impl ArchiveService {
             }
             self.store.undelete_archive(resource_id, None).await?;
             self.emit(ChangeReason::Untrashed, Some(record.id.clone()));
+            self.record_timeline(
+                resource_id,
+                Some(record.version),
+                TimelineEventKind::Untrashed,
+                Some("从回收站还原（引用型）"),
+                record.content_hash.as_deref(),
+            )
+            .await;
             return self.store.get_resource_by_id(resource_id).await;
         }
 
@@ -195,6 +224,19 @@ impl ArchiveService {
         }
 
         self.emit(ChangeReason::Untrashed, Some(record.id.clone()));
+        // 避让改名时一并写进履历：用户看到「还原成什么路径」，免得去磁盘上猜。
+        let detail = match new_rel.as_deref() {
+            Some(rel) => format!("从回收站还原（避让改名 resources/{rel}）"),
+            None => "从回收站还原".to_string(),
+        };
+        self.record_timeline(
+            &record.id,
+            Some(record.version),
+            TimelineEventKind::Untrashed,
+            Some(&detail),
+            record.content_hash.as_deref(),
+        )
+        .await;
         self.store.get_resource_by_id(&record.id).await
     }
 
