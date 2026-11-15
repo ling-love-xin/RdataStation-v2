@@ -112,6 +112,8 @@ pub enum Picked {
     Analysis(String),
     /// 外部文件绝对路径
     External(PathBuf),
+    /// 结果集临时表（`tmp_q_`，本机单例）：二次分析的入口
+    ResultSet(String),
 }
 
 impl Picked {
@@ -122,6 +124,7 @@ impl Picked {
             Self::Draft(..) => SourceKind::Scratchpad,
             Self::Analysis(..) => SourceKind::Analysis,
             Self::External(..) => SourceKind::External,
+            Self::ResultSet(..) => SourceKind::ResultSet,
         }
     }
 
@@ -132,6 +135,7 @@ impl Picked {
             Self::Db(_, t) => format!("{} · {}", t.schema, t.name),
             Self::Draft(rel, _) => rel.clone(),
             Self::Analysis(t) => t.clone(),
+            Self::ResultSet(t) => t.clone(),
             Self::External(p) => p
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
@@ -154,6 +158,8 @@ pub struct PickerState {
     drafts: Vec<(String, PathBuf)>, // (相对路径, 绝对路径)
     // ③ 资产库
     analysis_tables: Vec<String>,
+    // ⑤ 结果集（进程单例里的 `tmp_q_` 表）
+    result_sets: Vec<String>,
     /// 选中的目标（唯一真值；其余访问器都从它派生）
     picked: Option<Picked>,
     /// 底部提示（加载失败 / 源不可用 / 物化失败回显）
@@ -168,6 +174,7 @@ impl PickerState {
         conns: Vec<ConnectionItem>,
         drafts: Vec<(String, PathBuf)>,
         analysis: Vec<String>,
+        result_sets: Vec<String>,
     ) -> Self {
         let group = grouped(kinds)
             .first()
@@ -180,6 +187,7 @@ impl PickerState {
             db_cache: DbCache::new(),
             drafts,
             analysis_tables: analysis,
+            result_sets,
             picked: None,
             note: None,
             tree: TreeState::new(),
@@ -247,6 +255,14 @@ impl PickerState {
     pub fn picked_external(&self) -> Option<PathBuf> {
         match &self.picked {
             Some(Picked::External(p)) => Some(p.clone()),
+            _ => None,
+        }
+    }
+
+    /// ⑤ 结果集选中的临时表名（`tmp_q_`）。
+    pub fn picked_result_set(&self) -> Option<String> {
+        match &self.picked {
+            Some(Picked::ResultSet(t)) => Some(t.clone()),
             _ => None,
         }
     }

@@ -17,7 +17,7 @@
 use std::path::{Path, PathBuf};
 
 use super::group::{grouped, SourceGroup};
-use super::node::{ArchiveScope, NodeId, NodeKind, Row, MAX_DEPTH};
+use super::node::{ArchiveScope, NodeId, NodeKind, Row, TempScope, MAX_DEPTH};
 use super::SourceKind;
 
 /// 三个根的组行（depth 0）。顺序与 `grouped` 一致，空组不出现。
@@ -83,6 +83,36 @@ pub fn analysis_table_rows(depth: u8, tables: &[String], scope: ArchiveScope) ->
                 NodeKind::Table,
                 t.clone(),
             )
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        a.label
+            .to_lowercase()
+            .cmp(&b.label.to_lowercase())
+            .then_with(|| a.label.cmp(&b.label))
+    });
+    rows
+}
+
+/// DuckDB 「结果集」段：进程单例里的 `tmp_q_` 表（结果集二次分析的入口）。
+///
+/// 身份用 `NodeId::Temp { scope: Local }`：结果集建在本地单例，本机任何入口都能引用；
+/// 用 `Path` 会与草稿相对路径撞身份（同名时选中态串行）。
+pub fn result_set_rows(depth: u8, tables: &[String]) -> Vec<Row> {
+    debug_assert!(depth <= MAX_DEPTH);
+    let mut rows: Vec<Row> = tables
+        .iter()
+        .map(|t| {
+            Row::new(
+                NodeId::Temp {
+                    scope: TempScope::Local,
+                    table: t.clone(),
+                },
+                depth,
+                NodeKind::Table,
+                t.clone(),
+            )
+            .with_meta("临时表")
         })
         .collect();
     rows.sort_by(|a, b| {
@@ -366,6 +396,27 @@ mod tests {
     fn global_table_keeps_g_prefix_verbatim() {
         let global = analysis_table_rows(3, &["G_orders".to_string()], ArchiveScope::Global);
         assert_eq!(global[0].label, "G_orders", "全局表直接显示 G_ 前缀，不另加符号");
+    }
+
+    #[test]
+    fn result_sets_use_temp_identity_and_stay_sorted() {
+        let rows = result_set_rows(
+            1,
+            &["tmp_q_b".to_string(), "tmp_q_a".to_string()],
+        );
+        let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(labels, vec!["tmp_q_a", "tmp_q_b"]);
+        assert_eq!(rows[0].kind, NodeKind::Table);
+        assert_eq!(rows[0].depth, 1);
+        // 结果集必须能确认（二次分析的入口），且身份不与文件路径混用
+        assert!(rows[0].is_confirmable());
+        assert!(matches!(
+            rows[0].id,
+            NodeId::Temp {
+                scope: TempScope::Local,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -27,9 +27,9 @@ use crate::panels::Shared;
 use super::db::{db_rows, ConnBrief};
 use super::group::{grouped, SourceGroup};
 use super::load::{collect_analysis_tables, collect_drafts, load_db_layer};
-use super::node::{ArchiveScope, NodeId, NodeKind, Row};
+use super::node::{ArchiveScope, NodeId, NodeKind, Row, TempScope};
 use super::render::{needs_virtual_list, render_rows, row_element, virtual_viewport_rem, RowAction};
-use super::rows::{analysis_table_rows, draft_rows, external_row, group_id_row};
+use super::rows::{analysis_table_rows, draft_rows, external_row, group_id_row, result_set_rows};
 use super::state::TreeState;
 use super::{ConfirmStrategy, Picked, PickerConfig, PickerState, SourceKind, TableCandidate};
 
@@ -69,19 +69,24 @@ fn db_group_rows(s: &PickerState) -> Vec<Row> {
     db_rows(&briefs, &s.db_cache)
 }
 
-/// DuckDB 根的子树：目前只有「结果集」这一叶，且未实装——显式置灰而不是假装可选。
+/// DuckDB 根的子树：结果集临时表（`tmp_q_`）。
+///
+/// 列表来自 `engine::analysis::result_set::list_result_sets()`（按前缀查库，权威是库里
+/// 实际表）；没有结果集时给一行**明确说不可用**的提示，而不是画一个点不动的假节点。
 fn duckdb_group_rows(s: &PickerState) -> Vec<Row> {
     if !s.kinds.contains(&SourceKind::ResultSet) {
         return Vec::new();
     }
-    vec![Row::new(
-        NodeId::Path("duckdb:result-set".to_string()),
-        1,
-        NodeKind::File,
-        "结果集临时表",
-    )
-    .with_meta("未实装")
-    .disabled()]
+    if s.result_sets.is_empty() {
+        return vec![Row::new(
+            NodeId::Path("duckdb:result-set-empty".to_string()),
+            1,
+            NodeKind::File,
+            "暂无结果集（先跑一次查询）",
+        )
+        .disabled()];
+    }
+    result_set_rows(1, &s.result_sets)
 }
 
 /// 文件根的子树：草稿箱 / 资产库（本项目段）/ 外部文件。
@@ -211,6 +216,16 @@ fn render_body(
                 NodeId::AnalysisTable { table, .. } => {
                     let mut s = state.borrow_mut();
                     s.picked = Some(Picked::Analysis(table.clone()));
+                    s.tree.select(Some(id.clone()));
+                    s.note = None;
+                }
+                // 结果集临时表：只有本机单例里的能做二次分析（会话态的表随会话消失）
+                NodeId::Temp {
+                    scope: TempScope::Local,
+                    table,
+                } => {
+                    let mut s = state.borrow_mut();
+                    s.picked = Some(Picked::ResultSet(table.clone()));
                     s.tree.select(Some(id.clone()));
                     s.note = None;
                 }
@@ -604,6 +619,12 @@ pub fn open_source_picker(
     let drafts = collect_drafts(shared);
     let project = shared.project.borrow().clone();
     let analysis = collect_analysis_tables(project.as_ref());
+    // ⑤ 结果集：只有启用该叶子时才查库（它是进程单例里的 `tmp_q_` 表，查不到也不报错）
+    let result_sets = if config.kinds.contains(&SourceKind::ResultSet) {
+        engine::analysis::result_set::list_result_sets().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let mut note = None;
     if conns.is_empty() && config.kinds.contains(&SourceKind::Connected) {
         note = Some("没有已连接的数据库：先在「连接」里连一个数据源".to_string());
@@ -620,9 +641,16 @@ pub fn open_source_picker(
     if note.is_none() && config.kinds.contains(&SourceKind::Analysis) && analysis.is_empty() {
         note = Some("资产库为空或不可用（可先做一次分析）".to_string());
     }
+    if note.is_none() && config.kinds.contains(&SourceKind::ResultSet) && result_sets.is_empty() {
+        note = Some("还没有结果集：先跑一次查询，结果集会作为临时表出现在这里".to_string());
+    }
 
     let state = Rc::new(RefCell::new(PickerState::new(
-        config.kinds, conns, drafts, analysis,
+        config.kinds,
+        conns,
+        drafts,
+        analysis,
+        result_sets,
     )));
     state.borrow_mut().note = note;
     // 打开即展开首个根：否则首屏只有三行光秃秃的根，比老的扁平列表更「空」。
