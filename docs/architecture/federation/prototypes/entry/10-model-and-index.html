@@ -120,6 +120,19 @@
   </div>
 </div>
 
+<h2><span class="n">01b</span>数据量口径：只有洞察能采样</h2>
+<div class="card" style="margin-bottom:18px">
+  <p style="margin:0 0 8px">同一条「取数」，三种用途对<b>完整性</b>的要求不一样，界面上必须说清，别让用户以为自己看的是全量。</p>
+  <table>
+    <tr><th style="width:96px">用途</th><th style="width:132px">能不能少行</th><th>口径与代价</th></tr>
+    <tr><td><b>洞察</b></td><td><span class="tag coral">可以采样</span></td><td>本来就是「看一眼分布」：一次全取 <code>LIMIT 500</code> 落到 <span class="k">tmp_i_</span>，采样是它的语义，不是妥协。</td></tr>
+    <tr><td><b>分析</b></td><td><b>不许丢</b></td><td>结果集再分析 / 编辑器 SQL：对<b>这一份结果的全量行</b>做统计，少几万行就不是同一份结果。早期 20,000 行上限已按此口径删除。</td></tr>
+    <tr><td><b>联邦</b></td><td><b>不许丢</b></td><td>跨源 join 一旦截断，结果直接是错的；慢就慢，靠后台挂载 + 进度承担，不靠少读行。</td></tr>
+    <tr><td><b>资产</b></td><td><b>不许丢</b></td><td>只读、只取最新版本；要旧数据先在资产模块回退，不在取数时挑版本。</td></tr>
+  </table>
+  <p style="margin:10px 0 0;color:var(--dim)">实现含义：凡「有可能少行」的地方（当前只有洞察），必须在界面上写明采样行数；凡不该采样的地方，代码里不该出现行数上限。</p>
+</div>
+
 <h2><span class="n">02</span>对象分类：界面上每一行长什么样</h2>
 <table>
   <tr><th style="width:118px">对象</th><th style="width:150px">身份（在库里是什么）</th><th style="width:104px">通道标签</th><th style="width:150px">生命周期</th><th>可做</th></tr>
@@ -179,7 +192,7 @@
   </div>
   <div class="pg">
     <div class="pt"><span class="no">03</span><b>结果集分析</b><span class="sp"></span><span class="tag">已并入 08 · 原页删除</span></div>
-    <p>入口保留在结果集工具栏；对话框改成「先命名、再定去向」。仍有效的细节（自定义 SQL / 20000 行上限 / 失效提示）已写进 08 的说明卡。</p>
+    <p>入口保留在结果集工具栏；对话框改成「先命名、再定去向」。仍有效的细节（自定义 SQL / 不截断的全量物化 / 失效提示）已写进 08 的说明卡。</p>
   </div>
   <div class="pg">
     <div class="pt"><span class="no">04</span><b>编辑器通道</b><span class="sp"></span><span class="tag">已并入 09 · 原页删除</span></div>
