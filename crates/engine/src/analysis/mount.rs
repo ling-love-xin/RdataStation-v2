@@ -1,16 +1,16 @@
 //! 分析内核 · 「源 → 挂载计划」的唯一翻译点。
 //!
 //! 目的：编辑器、洞察、结果集二次分析过去各自把「用户选的源」翻译成引擎能挂的东西
-//! （编辑器拼 `FederatedPlan`、洞察翻 `SampleSource`、加速通道另起一条），三份翻译
-//! 迟早会走样。这里把它收成一处，**只做映射与校验，不做 I/O**——真正 `ATTACH`
-//! 仍由 `duckdb::federation::session::ensure_session` 完成。
+//! （编辑器拼 `FederatedPlan` / 加速档拼 `AccelSource`、洞察翻 `SampleSource`），三份
+//! 翻译迟早会走样。这里把它收成一处，**只做映射与校验，不做 I/O**——真正 `ATTACH`
+//! 仍由 `duckdb::accel`（单源）与 `duckdb::federation::session`（多源）完成。
 //!
-//! 语义前提（方案裁决，见 `federation-entry-design.md`）：
-//! - `Local` = 进程级 DuckDB 内存单例。它**不能** `ATTACH` 别人的连接，所以
-//!   `Local` 计划里的 `mounts` 必须为空；数据库表在 Local 下走驱动取样（不 attach）。
-//! - `Federated` = 按 owner 建/取 `FederatedSession`，源以 `ATTACH` 挂进来；
-//!   一个源都没有时 `ensure_session` 会直接拒（`session.rs:503-507`），所以这里提前报，
-//!   让入口能说人话而不是暴露引擎的兜底文案。
+//! 三档口径（`channel.rs` 模块文档有源码对照）：
+//! - `Source` 源库直连：**不挂任何源**，SQL 交给驱动；带了挂载说明入口拿错档。
+//! - `Accelerated` 本地加速：**恰好一个源**（`accel::ensure_session` 按源 id 缓存），
+//!   且只能是「可挂的连接」或「DuckDB 文件」——已经躺在某个实例里的表（`DuckDbTable`）
+//!   本身就是本地实例的东西，不需要再挂一次。
+//! - `Federated` 联邦：≥1 个源，同连接/同文件/同表去重，`primary` 必须指向已挂源。
 
 use std::path::PathBuf;
 
@@ -56,7 +56,10 @@ impl MountSpec {
         }
     }
 
-    /// 该挂载的主人名（会话里 `ATTACH` 后的 alias 由 session 决定，这里只用于 primary 校验）。
+    /// 该源在会话里的名字（`primary` 校验用）。
+    ///
+    /// 连接 = 连接 id（`federation` 侧按 id 建 alias）；文件 = 文件主干名（`ATTACH` 后
+    /// catalog 默认取 stem）；表 = 它所在的 catalog。
     fn owner_name(&self) -> &str {
         match self {
             Self::SqlConnection { conn_id } => conn_id,
@@ -67,23 +70,26 @@ impl MountSpec {
                 .unwrap_or_default(),
         }
     }
+
+    /// 加速档能不能挂它（见模块文档第 2 条）。
+    fn is_accel_mountable(&self) -> bool {
+        matches!(self, Self::SqlConnection { .. } | Self::DuckDbFile { .. })
+    }
 }
 
 /// 一次分析的完整装配结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionPlan {
     pub channel: AnalysisChannel,
-    /// 要挂进会话的源；`Local` 一律为空（见模块文档）。
+    /// 要挂进会话的源；`Source` 一律为空（见模块文档）。
     pub mounts: Vec<MountSpec>,
-    /// 会话默认 catalog（`ensure_session` 的 `requested_primary`）。
+    /// 会话默认 catalog（`federation::ensure_session` 的 `requested_primary`）。
     pub primary: Option<String>,
     /// 面板标题 / 快照来源用的可读名。
     pub label: String,
 }
 
-/// 源 → 计划。
-///
-/// `label` 由调用方给（只有入口知道该叫什么：表名 / 文件名 / 用户点的那一行）。
+/// 源 → 计划。`label` 由调用方给（只有入口知道该叫什么：表名 / 文件名 / 用户点的那一行）。
 pub fn plan_for(
     channel: &AnalysisChannel,
     mounts: &[MountSpec],
@@ -92,17 +98,46 @@ pub fn plan_for(
 ) -> Result<SessionPlan, CoreError> {
     let label = label.into();
     match channel {
-        AnalysisChannel::Local => {
-            // Local 不下发 ATTACH：有源说明调用方拿错了通道（例如把「多源联邦」当成默认档）
+        AnalysisChannel::Source => {
+            // 源库档不进 DuckDB：有源说明调用方拿错了通道
             if !mounts.is_empty() {
                 return Err(invalid(format!(
-                    "本地通道不能挂载源：{}（联邦请显式选通道）",
+                    "源库直连不挂载任何源：给了 {} 个（要挂载请选本地加速或联邦）",
                     mounts.len()
                 )));
             }
             Ok(SessionPlan {
-                channel: AnalysisChannel::Local,
+                channel: AnalysisChannel::Source,
                 mounts: Vec::new(),
+                primary: None,
+                label,
+            })
+        }
+        AnalysisChannel::Accelerated => {
+            match mounts.len() {
+                0 => {
+                    return Err(invalid(
+                        "本地加速需要一个源：没有源就没有可挂的对象，请改用源库直连".to_string(),
+                    ))
+                }
+                1 => {}
+                n => {
+                    return Err(invalid(format!(
+                        "本地加速是单源会话：给了 {n} 个源，多源请用联邦"
+                    )))
+                }
+            }
+            let mount = &mounts[0];
+            if !mount.is_accel_mountable() {
+                return Err(invalid(format!(
+                    "本地加速不能挂 {}：它已经在某个 DuckDB 实例里，无需再挂",
+                    mount.owner_name()
+                )));
+            }
+            Ok(SessionPlan {
+                channel: AnalysisChannel::Accelerated,
+                mounts: vec![mount.clone()],
+                // 单源会话只有一个 catalog，不需要 primary（给了也不认）
                 primary: None,
                 label,
             })
@@ -164,19 +199,64 @@ mod tests {
         vec![MountSpec::sql_connection("conn-1")]
     }
 
+    // ---- 源库直连档 ----
+
     #[test]
-    fn local_rejects_any_mount() {
-        let err = plan_for(&AnalysisChannel::Local, &single_conn(), None, "t").unwrap_err();
-        assert!(format!("{err}").contains("本地通道不能挂载源"));
+    fn source_rejects_any_mount() {
+        let err = plan_for(&AnalysisChannel::Source, &single_conn(), None, "t").unwrap_err();
+        assert!(format!("{err}").contains("源库直连不挂载任何源"));
     }
 
     #[test]
-    fn local_plan_has_no_mounts_and_no_primary() {
-        let plan = plan_for(&AnalysisChannel::Local, &[], None, "orders").unwrap();
+    fn source_plan_has_no_mounts_and_no_primary() {
+        let plan = plan_for(&AnalysisChannel::Source, &[], None, "orders").unwrap();
         assert!(plan.mounts.is_empty());
         assert!(plan.primary.is_none());
         assert_eq!(plan.label, "orders");
+        assert_eq!(plan.channel, AnalysisChannel::Source);
     }
+
+    // ---- 本地加速档 ----
+
+    #[test]
+    fn accelerated_rejects_zero_mounts() {
+        let err = plan_for(&AnalysisChannel::Accelerated, &[], None, "t").unwrap_err();
+        assert!(format!("{err}").contains("本地加速需要一个源"));
+    }
+
+    #[test]
+    fn accelerated_rejects_two_mounts() {
+        let mounts = vec![
+            MountSpec::sql_connection("conn-1"),
+            MountSpec::sql_connection("conn-2"),
+        ];
+        let err = plan_for(&AnalysisChannel::Accelerated, &mounts, None, "t").unwrap_err();
+        assert!(format!("{err}").contains("单源会话"));
+    }
+
+    #[test]
+    fn accelerated_accepts_one_connection() {
+        let plan = plan_for(&AnalysisChannel::Accelerated, &single_conn(), None, "t").unwrap();
+        assert_eq!(plan.mounts.len(), 1);
+        assert!(plan.primary.is_none());
+        assert_eq!(plan.channel, AnalysisChannel::Accelerated);
+    }
+
+    #[test]
+    fn accelerated_accepts_one_duckdb_file() {
+        let mounts = vec![MountSpec::duckdb_file(r"D:\a\analytics.duckdb")];
+        let plan = plan_for(&AnalysisChannel::Accelerated, &mounts, None, "t").unwrap();
+        assert_eq!(plan.mounts.len(), 1);
+    }
+
+    #[test]
+    fn accelerated_rejects_duckdb_table() {
+        let mounts = vec![MountSpec::duckdb_table("memory", "main")];
+        let err = plan_for(&AnalysisChannel::Accelerated, &mounts, None, "t").unwrap_err();
+        assert!(format!("{err}").contains("不能挂 memory"));
+    }
+
+    // ---- 联邦档 ----
 
     #[test]
     fn federated_rejects_empty_mounts() {
@@ -211,6 +291,14 @@ mod tests {
         ];
         let plan = plan_for(&federated(), &mounts, None, "t").unwrap();
         assert_eq!(plan.mounts.len(), 3);
+    }
+
+    #[test]
+    fn federated_accepts_duckdb_table() {
+        // 结果集二次分析（形态 II）要把结果集表挂进联邦会话，这是被允许的
+        let mounts = vec![MountSpec::duckdb_table("memory", "main")];
+        let plan = plan_for(&federated(), &mounts, None, "t").unwrap();
+        assert_eq!(plan.mounts.len(), 1);
     }
 
     #[test]
