@@ -175,4 +175,42 @@ cargo check -p rds-editor --lib -j 1
 
 `-j 1` + 显式 `RUST_MIN_STACK` 一次通过（6 分 14 秒）。
 
+### 8.6 结果集二次分析：入口链路已通，持久化被实测改路线
+
+**已落地（三刀）**
+
+| commit | 内容 |
+| --- | --- |
+| `d6ee516c` | `engine/src/duckdb/temp_table/promote.rs`：`write_temp_table_to_file_db(db_path, source, target, PromoteMode{Create,Replace})`（ATTACH → CTAS → DETACH），`temp_table::promote` 2 passed |
+| `e7568ffb` | `result_panel/src/grid/menu.rs`：`ContextAction::AnalyzeResultSet` + `ContextTarget.analyze` + delegate `on_analyze_result_set`（`analyze_result_set_available` = 钩子在 + 有行，**不要求绑定连接**），`rds-result-panel` 260 passed |
+| `6c556eff` | 编辑器 `analyze_result_set`（当前结果 → `ResultService::create_duckdb_temp_table` 物化成登记版 `tmp_q_`，网格字符串行经 `cell_json` 桥接）→ `EditorHost::open_insight_result_set` → workbench `result_set_actions::analyze_table`；`rds-editor` 786、`rds-workbench` 140、`insight_editor_entry` 2 passed |
+
+链式再分析的实现依据：`tmp_q_` 与洞察取样的 `tmp_i_` 同在**进程内存单例**，同连接可见，
+所以「分析结果集 → 产出结果集 → 再分析」只需一句 `SELECT * FROM 表`，不需要搬行数据。
+
+**定性陷阱（实测，务必区分）**：`ContextTarget.insight`（洞察此列）要求结果**绑定连接**
+（取样要回源库）；`ContextTarget.analyze`（分析此结果集）**不要求**——物化成 `tmp_q_` 是纯
+本地动作。两者混用会让本地拼出来的结果永远拿不到整表入口。
+
+**持久化（刀 6-②）被真跑改路线**（`ff998df6`，`crates/engine/tests/analysis_db_exclusive_probe.rs`）：
+
+```text
+ATTACH 失败：挂载目标库失败: IO Error: Cannot open file "...\.RSmeta\analytics.duckdb":
+  另一个程序正在使用此文件，进程无法访问。
+  File is already open in ...analysis_db_exclusive_probe.exe (PID 24516)
+经项目连接写表：成功
+```
+
+- 项目写模式打开后，`ProjectDuckdbConnection` 持有一条长连接（`project_db.rs:276-278` 原文：Windows 上
+  DuckDB 对同一文件仅允许一个连接句柄）；
+- 于是**任何「第二连接 + ATTACH」都写不进项目分析库**——`promote` 原语只适用于「自己拥有的独立文件库」；
+- 唯一可行：经 `ProjectDatabaseManager::duckdb_conn()` 那条既有写连接写，即数据要从内存单例
+  **跨库搬运**（`tmp_q_` 读行 → 项目连接写入），不是 ATTACH 复制。
+
+**顺带浮出的既有疑点（未验证，不与上面结论混写）**：`workbench/src/services/mock_generator.rs` 的
+`open_analysis_db()` / `persist_table_at()` / `append_table_at()` 全是「新开连接写项目库」；若项目打开时
+那条长连接在，这条路按本结论应当失败。`mock/tests/persistence_roundtrip.rs` 只覆盖 SQLite store，
+没有任何用例碰这条路径。**需要一次真机落库验证**（不要在没验证前改它的实现）。
+
+
 
