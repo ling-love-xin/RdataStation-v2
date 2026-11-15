@@ -77,6 +77,24 @@ pub struct AnalyzeResultSetRequest {
 /// 【结果集二次分析】「分析此结果集」端口（由宿主注入：workbench 接到右 Dock 洞察面板）
 pub type AnalyzeResultSetPort = Rc<dyn Fn(AnalyzeResultSetRequest, &mut gpui_kit::App)>;
 
+/// 【结果集持久化】「持久化为项目表」交给**宿主**的请求。
+///
+/// 字段与 [`AnalyzeResultSetRequest`] 一致（同一步物化、同一份输入），刻意**不合并成一个类型**：
+/// 两者是同一份结果的两个去向（临时取样 / 持久落库），宿主侧接的也是两个不同面板动作；
+/// 共用一个类型会让「持久化要不要行数」「分析要不要表名」这类演化互相牵连。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistResultSetRequest {
+    /// 物化出来的临时表名（`tmp_q_…`，在 DuckDB 内存单例里）
+    pub table: String,
+    /// 展示用来源，如「结果 2」；也参与持久表名（`res_<描述>_<时间戳>`）
+    pub label: String,
+    /// 这份结果有多少行（提示用；落库行数以表为准）
+    pub rows: usize,
+}
+
+/// 【结果集持久化】「持久化为项目表」端口（由宿主注入：workbench 接后台落库通道）
+pub type PersistResultSetPort = Rc<dyn Fn(PersistResultSetRequest, &mut gpui_kit::App)>;
+
 /// 【B8 余项】「打开历史面板」端口（由宿主注入：workbench 接到右 Dock 历史面板）。
 ///
 /// 工具栏「⟲ 历史」按钮点击后经它通知宿主——编辑器不依赖工作台的 Dock。
@@ -156,6 +174,8 @@ pub struct EditorShared {
     pub(crate) insight_column: Rc<RefCell<Option<InsightColumnPort>>>,
     /// 【结果集二次分析】「分析此结果集」端口：宿主注入后才有（未接时右键不摆这一项）
     pub(crate) analyze_result_set: Rc<RefCell<Option<AnalyzeResultSetPort>>>,
+    /// 【结果集持久化】「持久化为项目表」端口：宿主注入后才有（未接时右键不摆这一项）
+    pub(crate) persist_result_set: Rc<RefCell<Option<PersistResultSetPort>>>,
     /// 【B8 余项】「打开历史面板」端口：宿主注入后才有（未接时工具栏「历史」按钮置灰并给原因）
     pub(crate) open_history: Rc<RefCell<Option<OpenHistoryPort>>>,
     /// 连接列表 / 建连端口：宿主注入后才有（B1；无宿主 = 选择器说“未接入”）
@@ -240,6 +260,7 @@ impl Clone for EditorShared {
             export_path: self.export_path.clone(),
             insight_column: self.insight_column.clone(),
             analyze_result_set: self.analyze_result_set.clone(),
+            persist_result_set: self.persist_result_set.clone(),
             open_history: self.open_history.clone(),
             connections: self.connections.clone(),
             schemas: self.schemas.clone(),
@@ -292,6 +313,7 @@ impl EditorShared {
             export_path: Rc::new(RefCell::new(None)),
             insight_column: Rc::new(RefCell::new(None)),
             analyze_result_set: Rc::new(RefCell::new(None)),
+            persist_result_set: Rc::new(RefCell::new(None)),
             open_history: Rc::new(RefCell::new(None)),
             connections: Rc::new(RefCell::new(None)),
             schemas: Rc::new(RefCell::new(None)),

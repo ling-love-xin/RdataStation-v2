@@ -68,36 +68,9 @@ impl EditorHostPanel {
         let Some(port) = self.shared.analyze_result_set_port() else {
             return;
         };
-        let Some(entry) = self
-            .shared
-            .results_active(&self.document)
-            .filter(ResultEntry::has_grid)
-        else {
-            self.set_message(Some("分析：当前没有可分析的结果集".to_string()), cx);
+        let Some((table, label, rows)) = self.materialize_active_result_set("分析", cx) else {
             return;
         };
-        if entry.rows.is_empty() {
-            self.set_message(Some("分析：这份结果集没有行".to_string()), cx);
-            return;
-        }
-        let label = self.result_set_label();
-        // 网格里存的是字符串行（`NULL` 是字面量）；桥接口径与执行链一致（`cell_json`）
-        let json_rows: Vec<Vec<serde_json::Value>> = entry
-            .rows
-            .iter()
-            .map(|row| row.iter().map(|cell| cell_json(cell)).collect())
-            .collect();
-        let table = match crate::ports::result_service::ResultService::create_duckdb_temp_table(
-            &entry.columns,
-            &json_rows,
-        ) {
-            Ok(table) => table,
-            Err(error) => {
-                self.set_message(Some(format!("分析：物化结果集失败（{error}）")), cx);
-                return;
-            }
-        };
-        let rows = entry.rows.len();
         self.set_message(
             Some(format!("已物化结果集为 {table}（{rows} 行），正在打开洞察…")),
             cx,
@@ -106,6 +79,75 @@ impl EditorHostPanel {
             crate::shared::AnalyzeResultSetRequest { table, label, rows },
             cx,
         );
+    }
+
+    /// 【结果集持久化】把当前结果集落成**项目分析库的正式表**。
+    ///
+    /// 与 [`Self::analyze_result_set`] 共用同一步物化（同一个 `tmp_q_`），差别只在去处：
+    /// 那边拿去当洞察取样来源（临时、随 TTL 走），这边交给宿主播进项目库（持久）。
+    /// 分两步的好处是：真落库在宿主侧的后台线程，编辑器这里只负责「把结果交出去」。
+    pub(crate) fn persist_result_set(&mut self, cx: &mut Context<Self>) {
+        let Some(port) = self.shared.persist_result_set_port() else {
+            return;
+        };
+        let Some((table, label, rows)) = self.materialize_active_result_set("持久化", cx) else {
+            return;
+        };
+        self.set_message(
+            Some(format!("已物化结果集为 {table}（{rows} 行），正在写入项目分析库…")),
+            cx,
+        );
+        port(
+            crate::shared::PersistResultSetRequest { table, label, rows },
+            cx,
+        );
+    }
+
+    /// 把当前结果集物化成登记的 `tmp_q_` 表；失败/无结果时就写消息并返回 `None`。
+    ///
+    /// 抽出来给「分析此结果集」与「持久化为项目表」共用：两次实现会让两条链在「空结果 /
+    /// 无行 / 物化失败」上的口径慢慢分叉，而这两件事本来就是同一份结果的两个去向。
+    fn materialize_active_result_set(
+        &mut self,
+        purpose: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<(String, String, usize)> {
+        let Some(entry) = self
+            .shared
+            .results_active(&self.document)
+            .filter(ResultEntry::has_grid)
+        else {
+            self.set_message(
+                Some(format!("{purpose}：当前没有可{purpose}的结果集")),
+                cx,
+            );
+            return None;
+        };
+        if entry.rows.is_empty() {
+            self.set_message(Some(format!("{purpose}：这份结果集没有行")), cx);
+            return None;
+        }
+        let label = self.result_set_label();
+        // 网格里存的是字符串行（`NULL` 是字面量）；桥接口径与执行链一致（`cell_json`）
+        let json_rows: Vec<Vec<serde_json::Value>> = entry
+            .rows
+            .iter()
+            .map(|row| row.iter().map(|cell| cell_json(cell)).collect())
+            .collect();
+        let rows = entry.rows.len();
+        match crate::ports::result_service::ResultService::create_duckdb_temp_table(
+            &entry.columns,
+            &json_rows,
+        ) {
+            Ok(table) => Some((table, label, rows)),
+            Err(error) => {
+                self.set_message(
+                    Some(format!("{purpose}：物化结果集失败（{error}）")),
+                    cx,
+                );
+                None
+            }
+        }
     }
 
     /// 当前结果集在界面上的名字（「洞察此列」的来源标签：面板副标题 / 快照来源用）

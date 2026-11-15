@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use gpui_kit::App;
 use workbench_shell::model::ConnectionItem;
 
-use crate::shared::{AnalyzeResultSetRequest, InsightColumnRequest};
+use crate::shared::{AnalyzeResultSetRequest, InsightColumnRequest, PersistResultSetRequest};
 
 /// 联邦查询候选（`editor_exec` 的 `federated_plan` 用）。
 ///
@@ -89,6 +89,12 @@ pub trait EditorHost: 'static {
     /// 编辑器已经**先把整份结果物化成 `tmp_q_` 临时表**（行数据只有编辑器有），
     /// 这里只交出表名 + 展示名 + 行数；宿主按表名取样即可（同进程内存单例，同连接可见）。
     fn open_insight_result_set(&self, request: AnalyzeResultSetRequest, cx: &mut App);
+
+    /// 【结果集持久化】右键「持久化为项目表」→ 宿主把 `tmp_q_` 搬进项目分析库。
+    ///
+    /// 与 [`EditorHost::open_insight_result_set`] 同一步物化（编辑器已把整份结果建成
+    /// `tmp_q_` 临时表），差别只在去处：那边是洞察取样（临时），这边是项目库正式表（持久）。
+    fn persist_result_set(&self, request: PersistResultSetRequest, cx: &mut App);
 
     /// 导航树定位对象（`rds://navigator/<限定表名>` 跳转定义；复用 Quick Open `⌥↵`
     /// 同款 `request_reveal` 机制，宿主侧只入队，导航面板下一帧消费）。

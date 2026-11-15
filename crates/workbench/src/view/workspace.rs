@@ -4,6 +4,50 @@
 
 use super::*;
 impl WorkbenchView {
+    /// 启动「结果集落库回执」泵（装配期一次）。
+    ///
+    /// 落库在 worker 线程（[`crate::services::persist_jobs`]），结果槽由这里取走并回状态栏。
+    /// 为什么挂在 `WorkbenchView` 而不是结果面板：用户点完「持久化为项目表」可能立刻切走
+    /// 结果面板——回执却必须到（否则「写了没有」永远没人告诉他们）。
+    ///
+    /// 无任务时每拍只看一眼 `has_pending`（不取槽），有结果就取走；这是**事件路径之外唯一
+    /// 允许的轮询点**（`render` 里不许做这个）。
+    pub(super) fn ensure_persist_pump(&mut self, cx: &mut Context<Self>) {
+        if self.persist_pump.is_some() {
+            return;
+        }
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let task = cx.spawn(async move |_this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_millis(500)).await;
+                let alive = weak
+                    .update(cx, |this, cx| {
+                        let Some(outcome) = crate::services::persist_jobs::take_outcome() else {
+                            return;
+                        };
+                        use crate::services::persist_jobs::PersistOutcome;
+                        match outcome {
+                            PersistOutcome::Done { table, rows, label } => this.shared.say(
+                                format!(
+                                    "已把「{label}」（{rows} 行）持久化为项目表 {table}"
+                                ),
+                                cx,
+                            ),
+                            PersistOutcome::Failed { label, reason } => this
+                                .shared
+                                .say_error(format!("「{label}」持久化失败：{reason}"), cx),
+                        }
+                    })
+                    .is_ok();
+                if !alive {
+                    return;
+                }
+            }
+        });
+        self.persist_pump = Some(task);
+    }
+
     /// 启动「草稿执行回执 → 元数据回写」泵（装配期一次）。
     ///
     /// 编辑器把「哪份文档用了哪个连接」留在 `EditorShared`；这里每秒取一次，只对草稿箱
@@ -371,6 +415,8 @@ impl WorkbenchView {
         self.ensure_scratchpad_meta_pump(cx);
         // #54 B：语义诊断目录快照注入（1 s 一拍；复用补全 L1 目录）。
         self.ensure_catalog_pump(cx);
+        // 结果集落库回执（0.5 s 一拍；worker 槽 → 状态栏）。
+        self.ensure_persist_pump(cx);
 
         // 宿主重绘桥再挂一层：除宿主自身，编辑区也要跟上。
         //

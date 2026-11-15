@@ -132,6 +132,8 @@ pub struct WorkbenchView {
     _editor_status_subs: Vec<Subscription>,
     /// 草稿执行回执 → 元数据回写泵（1 s 一拍；句柄必须被持有，drop 即停）。
     scratchpad_meta_pump: Option<Task<()>>,
+    /// 结果集落库回执泵（0.5 s 一拍；取走 worker 的落库结果并回状态栏。句柄必须被持有）。
+    persist_pump: Option<Task<()>>,
     /// 【#54 B】语义诊断目录快照注入泵（1 s 一拍；句柄必须被持有，drop 即停）。
     /// 复用 [`editor_completion`] 的 L1 目录：补全端口实例由本字段持有，
     /// 泵每拍读「活动文档绑定连接 → 推快照」（见 `services/editor_catalog.rs`）。

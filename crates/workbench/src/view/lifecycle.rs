@@ -157,6 +157,7 @@ impl WorkbenchView {
             editor_hosts: Vec::new(),
             _editor_status_subs: Vec::new(),
             scratchpad_meta_pump: None,
+            persist_pump: None,
             catalog_pump: None,
             editor_completion,
             lsp,

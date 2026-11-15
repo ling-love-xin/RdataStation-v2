@@ -452,6 +452,9 @@ impl EditorHostPanel {
             // 【结果集二次分析】同理：宿主没接出口就不装钩子，右键不摆「分析此结果集」
             let analyze_port = shared.analyze_result_set_port();
             let analyze_weak = cx.entity().downgrade();
+            // 【结果集持久化】同上：宿主没接落库出口就不装钩子，右键不摆「持久化为项目表」
+            let persist_port = shared.persist_result_set_port();
+            let persist_weak = cx.entity().downgrade();
             grid.update(cx, |state, _cx| {
                 state
                     .delegate_mut()
@@ -501,6 +504,14 @@ impl EditorHostPanel {
                         .delegate_mut()
                         .set_analyze_result_set_hook(std::rc::Rc::new(move |app: &mut App| {
                             _ = analyze_weak.update(app, |panel, cx| panel.analyze_result_set(cx));
+                        }));
+                }
+                // 【结果集持久化】同样：宿主没接落库出口（未打开项目）就不装钩子，右键不摆这一项
+                if persist_port.is_some() {
+                    state
+                        .delegate_mut()
+                        .set_persist_result_set_hook(std::rc::Rc::new(move |app: &mut App| {
+                            _ = persist_weak.update(app, |panel, cx| panel.persist_result_set(cx));
                         }));
                 }
                 // 【遗留 #7】「查看完整值」：弹层是宿主的事（对话框生命周期归宿主），

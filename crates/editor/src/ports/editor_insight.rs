@@ -32,7 +32,11 @@ pub fn attach(editor: &EditorShared, host: Rc<dyn EditorHost>) {
 /// 与「洞察此列」分成两个端口而不是一个带枚举的端口：两者的**入参语义不同**
 /// （一个是 SQL + 连接、一个是已物化的表名），合成一个只会让两边都要做防御性判断。
 pub fn attach_result_set(editor: &EditorShared, host: Rc<dyn EditorHost>) {
+    let persist_host = host.clone();
     editor.attach_analyze_result_set(Rc::new(move |request, cx| {
         host.open_insight_result_set(request, cx);
+    }));
+    editor.attach_persist_result_set(Rc::new(move |request, cx| {
+        persist_host.persist_result_set(request, cx);
     }));
 }

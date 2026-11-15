@@ -104,6 +104,17 @@ impl EditorHost for WorkbenchEditorHost {
             cx,
         );
     }
+
+    fn persist_result_set(&self, request: editor::shared::PersistResultSetRequest, cx: &mut App) {
+        // 表已由编辑器物化好（`tmp_q_`，同进程单例）：这里把它交给后台落库通道。
+        // 事件路径上只入队（写库在 worker 线程），结果由工作台泵取后经状态栏告知。
+        crate::components::result_set_actions::persist_to_project(
+            &self.shared,
+            &request.table,
+            &request.label,
+            cx,
+        );
+    }
 }
 
 /// 联邦源清单端口实现：直接读全局 `DataSourceService`（不持 `Shared`，

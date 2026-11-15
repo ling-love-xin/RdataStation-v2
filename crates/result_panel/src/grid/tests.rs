@@ -88,6 +88,7 @@ fn target(value: &str, name: &str, column: usize) -> ContextTarget {
         hidden_columns: 0,
         insight: false,
         analyze: false,
+        persist: false,
         table: None,
         column_filter_active: false,
         column_values: Vec::new(),
@@ -1443,6 +1444,7 @@ fn column_menu_is_the_column_level_subset() {
         hidden_columns: 0,
         insight: false,
         analyze: false,
+        persist: false,
         table: None,
         column_filter_active: false,
         column_values: Vec::new(),
@@ -1544,11 +1546,27 @@ fn context_menu_shows_analyze_result_set_only_when_available() {
         .expect("两项都在");
     assert!(!analyze_item.separator_before);
 
+    // 【结果集持久化】同一份结果的第二个去向：`persist` 才摆，文案带行数
+    assert!(!items.iter().any(|i| i.label.contains("持久化为项目表")));
+    t.persist = true;
+    let items = context_menu_items(&t);
+    let persist_item = items
+        .iter()
+        .find(|i| i.label.contains("持久化为项目表"))
+        .expect("有入口时要摆这一项");
+    assert_eq!(persist_item.label, "持久化为项目表（2 行）");
+    assert!(matches!(
+        persist_item.action,
+        ContextAction::PersistResultSet
+    ));
+
     // 列头 / 清单菜单只做列级动作：整表入口不出现在这两处
     let head = column_menu_items(&t);
     assert!(!head.iter().any(|i| i.label.contains("分析此结果集")));
+    assert!(!head.iter().any(|i| i.label.contains("持久化为项目表")));
     let browser = column_browser_menu_items(&t);
     assert!(!browser.iter().any(|i| i.label.contains("分析此结果集")));
+    assert!(!browser.iter().any(|i| i.label.contains("持久化为项目表")));
 }
 
 /// 清单菜单动作归属：本地动作直接映射到对应 `ContextAction`，列号不串位。
@@ -1592,6 +1610,7 @@ fn column_menu_shows_conditional_items() {
         hidden_columns: 2,
         insight: true,
         analyze: false,
+        persist: false,
         table: Some("t_user".to_string()),
         column_filter_active: false,
         column_values: Vec::new(),
@@ -1623,6 +1642,7 @@ fn column_menu_lists_distinct_values_and_clear_only_when_active() {
         hidden_columns: 0,
         insight: false,
         analyze: false,
+        persist: false,
         table: None,
         column_filter_active: false,
         column_values: vec![

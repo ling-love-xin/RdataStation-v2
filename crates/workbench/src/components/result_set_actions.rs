@@ -33,6 +33,38 @@ pub fn analyze_table(shared: &Shared, table: &str, label: &str, cx: &mut App) {
     shared.open_insight_source_table(source, label.to_string(), cx);
 }
 
+/// 把这份结果**持久化**成项目分析库里的表（`res_<描述>_<时间戳>`）。
+///
+/// 与 [`analyze_table`] 的分工：那个把 `tmp_q_` 当取样来源（临时、随 TTL 走），
+/// 这个把它**落成项目库的正式表**（跨会话、可归档）。
+///
+/// 写库在 worker 线程（见 [`crate::services::persist_jobs`]）：事件路径上只入队，
+/// 结果由工作台泵取后经状态栏告知。
+pub fn persist_to_project(shared: &Shared, table: &str, label: &str, cx: &mut App) {
+    if table.trim().is_empty() {
+        shared.say_error("持久化：目标表名为空", cx);
+        return;
+    }
+    let Some(root) = shared.project_root() else {
+        shared.say_error(
+            "持久化需要打开项目：Mock / 结果集只写项目分析库（{项目}/.RSmeta/analytics.duckdb）",
+            cx,
+        );
+        return;
+    };
+    let request = crate::services::persist_jobs::PersistRequest {
+        project_root: root,
+        source_table: table.to_string(),
+        label: label.to_string(),
+        // 描述参与表名：用结果集的展示名（如「结果 3」），出的名字是 res_结果_3_<时间戳>
+        description: label.to_string(),
+    };
+    match crate::services::persist_jobs::submit(request) {
+        Ok(()) => shared.say(format!("正在把「{label}」写入项目分析库…"), cx),
+        Err(error) => shared.say_error(format!("持久化失败：{error}"), cx),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::select_sql_for_table;

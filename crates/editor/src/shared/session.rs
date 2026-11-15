@@ -97,6 +97,16 @@ impl EditorShared {
         self.analyze_result_set.borrow().clone()
     }
 
+    /// 【结果集持久化】注入「持久化为项目表」端口（**宿主调用一次**：workbench 接落库通道）
+    pub fn attach_persist_result_set(&self, port: PersistResultSetPort) {
+        *self.persist_result_set.borrow_mut() = Some(port);
+    }
+
+    /// 【结果集持久化】「持久化为项目表」端口（未注入时右键不摆这一项）
+    pub fn persist_result_set_port(&self) -> Option<PersistResultSetPort> {
+        self.persist_result_set.borrow().clone()
+    }
+
     /// 【B8 余项】注入「打开历史面板」端口（由宿主在装配期调用一次）
     pub fn attach_open_history(&self, port: OpenHistoryPort) {
         *self.open_history.borrow_mut() = Some(port);

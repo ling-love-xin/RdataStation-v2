@@ -101,6 +101,11 @@ pub type InsightColumnHook = Rc<dyn Fn(&str, &mut App)>;
 /// 把 10 万行再拷一遍去传参。宿主自己按当前活动结果物化 → 送洞察。
 pub type AnalyzeResultSetHook = Rc<dyn Fn(&mut App)>;
 
+/// 【结果集持久化】「持久化为项目表」的钩子（与 [`AnalyzeResultSetHook`] 同形）。
+///
+/// 同一条理由不带参数：整份结果的真值在结果条目里，网格不复制行数据去传参。
+pub type PersistResultSetHook = Rc<dyn Fn(&mut App)>;
+
 /// 【遗留 #7】「查看完整值」的钩子（面板注入）：值 / 列名 / 数据列下标 / 视图行。
 /// 弹层是宿主的事（对话框生命周期归宿主），网格只负责发意图。
 pub type PreviewValueHook = Rc<dyn Fn(String, String, usize, usize, &mut App)>;
@@ -185,6 +190,8 @@ pub struct ResultGridDelegate {
     pub(crate) on_insight_column: Option<InsightColumnHook>,
     /// 【结果集二次分析】「分析此结果集」的钩子（宿主接端口时面板才注入）
     pub(crate) on_analyze_result_set: Option<AnalyzeResultSetHook>,
+    /// 【结果集持久化】「持久化为项目表」的钩子（宿主接了持久化出口时才注入）
+    pub(crate) on_persist_result_set: Option<PersistResultSetHook>,
     /// 【遗留 #7】「查看完整值」的钩子（面板注入）
     /// 【遗留 #7】「查看完整值」的钩子（面板注入）：值 / 列名 / 数据列下标 / 视图行
     pub(crate) on_preview_value: Option<PreviewValueHook>,
@@ -582,6 +589,24 @@ impl ResultGridDelegate {
     /// **本地动作**，与结果来自哪条连接无关——本地拼出来的结果也能再分析。
     pub fn analyze_result_set_available(&self) -> bool {
         self.on_analyze_result_set.is_some() && self.view_len() > 0
+    }
+
+    /// 【结果集持久化】注入「持久化为项目表」钩子（宿主接了持久化出口时面板构造一次）
+    pub fn set_persist_result_set_hook(&mut self, hook: PersistResultSetHook) {
+        self.on_persist_result_set = Some(hook);
+    }
+
+    /// 【结果集持久化】入口现在该不该出现：钩子在 + 视图里有行。
+    ///
+    /// 与「分析此结果集」同一判据；「有没有打开项目」由宿主决定接不接钩子
+    /// （未打开项目时宿主播不了，就不该给一个点了只报错的入口）。
+    pub fn persist_result_set_available(&self) -> bool {
+        self.on_persist_result_set.is_some() && self.view_len() > 0
+    }
+
+    /// 【结果集持久化】测试用：钩子装上了吗
+    pub fn has_persist_result_set_hook(&self) -> bool {
+        self.on_persist_result_set.is_some()
     }
 
     /// 【B14】注入「排序下发」钩子（面板构造时一次）
