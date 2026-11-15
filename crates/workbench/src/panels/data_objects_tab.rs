@@ -110,16 +110,40 @@ impl DataObjectsTab {
         } else {
             let shared = self.shared.clone();
             let entity_for_clear = entity.clone();
-            header.child(
-                Button::new("data-objects-clear")
-                    .ghost()
-                    .label("清空已选")
-                    .on_click(move |_, _, cx| {
-                        shared.data_object_picked.borrow_mut().clear();
-                        // 回调拿到的是 `&mut App`：通知要落到本面板实体上，不能裸调
-                        entity_for_clear.update(cx, |_, cx| cx.notify());
-                    }),
-            )
+            let shared_for_run = self.shared.clone();
+            let entity_for_run = entity.clone();
+            header
+                .child(
+                    Button::new("data-objects-analyze")
+                        .label(format!("分析已选（{}）", picked.len()))
+                        .on_click(move |_, _, cx| {
+                            // 副作用只在事件路径做：转换是纯函数，开洞察在宿主
+                            let objects = shared_for_run.data_objects.borrow().clone();
+                            let picked = shared_for_run.data_object_picked.borrow().clone();
+                            let (sources, skipped) =
+                                data_objects::analysis_sources(&objects, &picked);
+                            if sources.is_empty() {
+                                // 选的全是转不了的类型：别开一个空洞察面板
+                                return;
+                            }
+                            let label = match skipped.is_empty() {
+                                true => format!("{} 个来源", sources.len()),
+                                false => format!("{} 个来源（{} 未包含）", sources.len(), skipped.len()),
+                            };
+                            shared_for_run.open_insight_source_tables(sources, label, cx);
+                            entity_for_run.update(cx, |_, cx| cx.notify());
+                        }),
+                )
+                .child(
+                    Button::new("data-objects-clear")
+                        .ghost()
+                        .label("清空已选")
+                        .on_click(move |_, _, cx| {
+                            shared.data_object_picked.borrow_mut().clear();
+                            // 回调拿到的是 `&mut App`：通知要落到本面板实体上，不能裸调
+                            entity_for_clear.update(cx, |_, cx| cx.notify());
+                        }),
+                )
         };
 
         let mut list = div()

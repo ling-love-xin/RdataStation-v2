@@ -18,6 +18,8 @@
 
 use std::path::PathBuf;
 
+use insight::SampleSource;
+
 use crate::panels::Shared;
 
 use super::source_picker::{
@@ -373,6 +375,55 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
     out
 }
 
+/// 已选对象 → 洞察取样来源（面板「分析已选」的取数口径，**纯函数**）。
+///
+/// 返回 `(来源, 跳过原因)`：能给出**完整取数描述**的对象才转成来源，
+/// 转不了的老实说为什么——「点了没反应」比「说清楚不支持」糟得多。
+///
+/// 目前能转的：项目分析库表 / 全局分析库表 / 结果集 / 洞察产物。
+/// 转不了的：资产（面板只知道名字与版本，不知道本体是表还是文件）、
+/// 文件（草稿行有路径但这里没按扩展名选读取器）、联邦源（别名下是哪张表要等会话快照）。
+/// 这几类都能在 02 对话框里选——那是它们的正路，面板不抢。
+pub fn analysis_sources(
+    objects: &[Object],
+    picked: &[String],
+) -> (Vec<SampleSource>, Vec<String>) {
+    let mut sources: Vec<SampleSource> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+
+    for key in picked {
+        let Some(object) = objects.iter().find(|o| &o.key == key) else {
+            continue;
+        };
+        let source = match key.split_once(':') {
+            Some(("project", table)) => Some(SampleSource::on_duckdb(
+                format!("SELECT * FROM \"{table}\""),
+                format!("analytics.{table}"),
+            )),
+            Some(("global", table)) => {
+                Some(SampleSource::on_global(table, format!("全局 · {table}")))
+            }
+            // 结果集 `tmp_q_` 与洞察产物 `tmp_i_` 都在进程单例里：取样即「再取一份」
+            Some(("result", table)) | Some(("insight", table)) => Some(SampleSource::on_duckdb(
+                format!("SELECT * FROM \"{table}\""),
+                object.name.clone(),
+            )),
+            _ => None,
+        };
+        match source {
+            Some(source) => {
+                // 去重按整条来源（同一张表被两种身份指到时合成一条）
+                if !sources.contains(&source) {
+                    sources.push(source);
+                }
+            }
+            None => skipped.push(format!("{}（{}）", object.name, object.group.title())),
+        }
+    }
+
+    (sources, skipped)
+}
+
 /// 现取一次（面板打开 / 刷新时调）。
 ///
 /// 资产清单暂由调用方填：它要过资产模块的登记层（本项目 `analytics_resources`），
@@ -591,5 +642,39 @@ mod tests {
         assert!(keys.contains(&"result:orders"));
         let unique: std::collections::BTreeSet<&str> = keys.iter().copied().collect();
         assert_eq!(unique.len(), keys.len(), "身份必须全局唯一");
+    }
+
+    /// 「分析已选」：能转的转成来源，转不了的说清原因，不许静默丢。
+    #[test]
+    fn analysis_sources_convert_what_they_can_and_name_what_they_cannot() {
+        let mut c = sample();
+        c.analysis_tables = vec!["orders".into()];
+        c.global_tables = vec!["G_月度经营".into()];
+        c.result_sets = vec!["tmp_q_结果_3".into()];
+        let rows = objects(&c);
+        let picked = vec![
+            "project:orders".to_string(),
+            "global:G_月度经营".to_string(),
+            "result:tmp_q_结果_3".to_string(),
+            "asset:月度经营快照".to_string(),
+        ];
+        let (sources, skipped) = super::analysis_sources(&rows, &picked);
+
+        assert_eq!(sources.len(), 3, "三类可转的来源都要在：{:?}", sources);
+        // 项目分析库表在 DuckDB 会话里直接读
+        assert!(sources[0].sql.contains("\"orders\""));
+        assert_eq!(sources[0].label, "analytics.orders");
+        // 全局库表走 `on_global`（别名由内核拼，入口不起名）
+        assert!(sources[1].sql.starts_with("SELECT * FROM rds_global."));
+        assert!(sources[1].global);
+        // 结果集在进程单例里
+        assert!(sources[2].sql.contains("tmp_q_结果_3"));
+
+        assert_eq!(skipped.len(), 1, "资产转不了要说出来：{skipped:?}");
+        assert!(skipped[0].contains("资产"), "{skipped:?}");
+
+        // 同一张表被两种身份指到：只留一条，别开两个一样的标签页
+        let dup = super::analysis_sources(&rows, &["result:tmp_q_结果_3".into(), "result:tmp_q_结果_3".into()]);
+        assert_eq!(dup.0.len(), 1, "{:?}", dup.0);
     }
 }
