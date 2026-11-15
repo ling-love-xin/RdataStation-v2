@@ -121,9 +121,31 @@ impl ConnRef {
     }
 }
 
+/// 把归档记录里的 `source_connection_id` 解析成 [`ConnRef`]。
+///
+/// **`live_ids` 必须是合并后的连接清单**（`global.db` 的 `global_connections` +
+/// 项目库的 `connections`）：只查其中一处会把「全局连接存在、项目里没有」这种正常情况
+/// 判成 `Historical`，也让 `GP_` 前缀的共享连接在另一侧查不到。这条是从实测纠正来的，
+/// 不是保守写法。
+///
+/// 返回值：
+/// - `None` —— 归档行**没有记录**来源连接（实测唯一那行就是 `NULL`）：无从溯源，
+///   调用方应展示「未记录来源」而不是编一个 id；
+/// - `Some(ConnRef::Live)` —— 确在当前清单里，可以取样 / 建会话；
+/// - `Some(ConnRef::Historical)` —— 记过但已不在清单（连接被删 / 改了名 / 属于别的机器），
+///   只做溯源提示，**不可执行**。
+pub fn classify_conn(historical_id: Option<&str>, live_ids: &[&str]) -> Option<ConnRef> {
+    let id = historical_id.map(str::trim).filter(|id| !id.is_empty())?;
+    if live_ids.iter().any(|live| *live == id) {
+        Some(ConnRef::Live(id.to_string()))
+    } else {
+        Some(ConnRef::Historical(id.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AnalysisChannel, ConnRef};
+    use super::{classify_conn, AnalysisChannel, ConnRef};
 
     #[test]
     fn source_channel_needs_no_session() {
@@ -203,5 +225,38 @@ mod tests {
         let live = ConnRef::Live("conn-1".into());
         assert!(live.is_executable());
         assert_eq!(live.id(), "conn-1");
+    }
+
+    /// 解析必须对**合并后的清单**做：全局库里那条 `G_` 与项目库里那条 `GP_` 都算 `Live`。
+    /// （实测事实：前者只在 `global_connections`，后者只在项目 `connections`。）
+    #[test]
+    fn classify_conn_resolves_against_the_merged_list() {
+        let merged = ["G_conn_SQLite_Example", "GP_real_pg_20260912"];
+        // 全局连接：只出现在 global_connections
+        let global = classify_conn(Some("G_conn_SQLite_Example"), &merged);
+        assert_eq!(
+            global,
+            Some(ConnRef::Live("G_conn_SQLite_Example".into())),
+            "全局连接在合并清单里就是 Live"
+        );
+        assert!(global.expect("有值").is_executable());
+        // 项目里的共享连接：只出现在 connections
+        assert_eq!(
+            classify_conn(Some("GP_real_pg_20260912"), &merged),
+            Some(ConnRef::Live("GP_real_pg_20260912".into()))
+        );
+        // 记过但已不在清单 → 只溯源
+        let gone = classify_conn(Some("P_conn_deleted"), &merged).expect("有值");
+        assert!(!gone.is_executable(), "不在清单里的连接不可执行");
+        assert_eq!(gone.id(), "P_conn_deleted");
+        // 归档行没记录来源（实测那行就是 NULL）→ 不编 id
+        assert_eq!(classify_conn(None, &merged), None);
+        // 空白串与 None 同义（库里有历史脏数据写成空串的情况）
+        assert_eq!(classify_conn(Some("   "), &merged), None);
+        // 两侧都空（项目没有连接、全局也没有）时不会把任何 id 说成 Live
+        assert_eq!(
+            classify_conn(Some("conn-x"), &[]),
+            Some(ConnRef::Historical("conn-x".into()))
+        );
     }
 }
