@@ -176,11 +176,49 @@ pub fn button_label(snapshot: Option<&SourcesSnapshot>) -> String {
     }
 }
 
+/// 执行联邦前的确认框正文（**纯函数**，视图只负责画）
+///
+/// 口径（2026-11-16 拍板）：**联邦不许丢数据**。所以这里的确认不是「要不要采样」的
+/// 选择，而是「这次要扫多少」的交代——用户唯一的干预方式是改 SQL 收窄范围，
+/// 不是让我们替他砍行。行数未知时也要如实说「先扫一遍才知道」，不许编一个数字。
+pub fn federated_confirm_note(ready_sources: usize, rows_hint: Option<u64>) -> String {
+    let base = if ready_sources == 0 {
+        "当前没有可用源：先挂上一个源再执行。".to_string()
+    } else {
+        format!("将跨 {ready_sources} 个源全部扫描：")
+    };
+    let scan = match rows_hint {
+        Some(rows) => format!(
+            "库方预估约 {} 行（估算，实际可能更多）。",
+            group_thousands(rows)
+        ),
+        None => "行数未知，执行时才知道（估不出来不编数字）。".to_string(),
+    };
+    format!(
+        "{base}{scan}全量参与，不截断、不采样——慢就慢在等待上，别错在结果上。\
+         想更快：在 SQL 里加过滤或收窄源清单。"
+    )
+}
+
+/// 千分位（`120000` → `120,000`）：确认框里的数字要一眼读得出来
+fn group_thousands(value: u64) -> String {
+    let digits = value.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        SourceMenuEntry, SourceRow, SourceState, SourcesSnapshot, button_label, menu_entries,
+        SourceMenuEntry, SourceRow, SourceState, SourcesSnapshot, button_label,
+        federated_confirm_note, menu_entries,
     };
     use crate::execution::SourceAction;
 
@@ -230,6 +268,26 @@ mod tests {
         };
         assert!(text.contains("执行一次"), "{text}");
         assert_eq!(button_label(None), "源清单 ▾");
+    }
+
+    /// 联邦确认框：交代扫描量，但**绝不**暗示会截断。
+    #[test]
+    fn federated_confirm_tells_the_scan_size_without_offering_to_drop_rows() {
+        let known = federated_confirm_note(2, Some(120_000));
+        assert!(known.contains("2 个源"), "{known}");
+        assert!(known.contains("120,000 行"), "数字要成组：{known}");
+        assert!(known.contains("不截断"), "{known}");
+        assert!(known.contains("不采样"), "联邦不许采样：{known}");
+        assert!(!known.contains("采样行数"), "别提供采样行数选项：{known}");
+
+        // 估不出来就不编数字
+        let unknown = federated_confirm_note(1, None);
+        assert!(unknown.contains("未知"), "{unknown}");
+        assert!(!unknown.contains("行（估算"), "{unknown}");
+
+        // 没有可用源：先说怎么让它可用，别让人点了执行才发现空转
+        let none = federated_confirm_note(0, Some(10));
+        assert!(none.contains("先挂上一个源"), "{none}");
     }
 
     #[test]
