@@ -142,6 +142,7 @@ impl WorkbenchView {
             right_mock_tab: None,
             right_history_tab: None,
             right_archive_tab: None,
+            right_data_objects_tab: None,
             quick_open_palette: None,
             quick_open_open_pending: false,
             quick_open_mode_pending: Mode::Default,

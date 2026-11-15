@@ -39,6 +39,7 @@ use scratchpad::ScratchpadView;
 use ::editor::shared::EditorShared;
 
 mod editor;
+mod data_objects_tab;
 mod left_tabs;
 mod metadata_search;
 /// 工作台 tab 顶部的「业务数据概览」卡片（数据：`services::overview`）
@@ -54,6 +55,7 @@ mod shared;
 
 // 对外路径保持 `crate::panels::X` 不变：组件层、宿主与集成测试零改动。
 pub use database::model::PropertyRequest;
+pub use data_objects_tab::DataObjectsTab;
 pub use editor::EditorPanel;
 pub use left_tabs::{DatabaseNavPanel, PluginPanel, ResourcePanelTab, ScratchPanel};
 pub use metadata_search::{MetadataSearchHostPanel, focus_metadata_search_tab};

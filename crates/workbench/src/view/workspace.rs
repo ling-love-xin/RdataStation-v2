@@ -402,6 +402,9 @@ impl WorkbenchView {
         self.right_history_tab =
             Some(cx.new(|cx| HistoryPanelTab::new(shared.clone(), history_entity, cx)));
         self.right_archive_tab = Some(cx.new(|cx| ArchivePanel::new(shared.clone(), cx)));
+        // 数据对象面板：构造时取一次清单（事件路径），渲染只读 `Shared::data_objects`
+        self.right_data_objects_tab =
+            Some(cx.new(|cx| crate::panels::DataObjectsTab::new(shared.clone(), cx)));
         // B12：旧“编辑区”的 SQL 框已删；M1 的未保存草稿拦截改看**编辑器的未命名文档**
         // （见 `components/project_host.rs` 的 `EditorBridge`），不再需要 `Shared::editor_clear`。
         // S2：编辑区命令端口——导航 / 草稿箱改调这里，不再直写 `Shared` 的请求字段

@@ -281,6 +281,11 @@ pub struct Shared {
     pub prev_right_sidebar_width: Rc<Cell<f32>>,
     pub selected: Rc<Cell<Option<usize>>>,
     pub connections: Rc<RefCell<Vec<ConnectionItem>>>,
+    /// 数据对象清单缓存（右侧「数据对象」面板与右侧栏共用一次取数结果）。
+    ///
+    /// 由事件路径刷新（面板打开 / 用户点刷新），渲染只读——`collect` 里有读盘与
+    /// 查库，放进 render 就会每帧 I/O（gpui-kit-dev 明令禁止）。
+    pub data_objects: Rc<RefCell<Vec<crate::components::data_objects::Object>>>,
     pub notice: Rc<RefCell<Option<String>>>,
     /// 导航元数据缓存失效戳：宿主 / 项目宿主 / Mock 宿主只递增（`invalidate_nav_cache`），
     /// 缓存数据本身由 `EditorPanel` 自持——外部不再直接读写别家的缓存。
@@ -430,6 +435,7 @@ impl Shared {
                 Some(0)
             })),
             connections: Rc::new(RefCell::new(connections)),
+            data_objects: Rc::new(RefCell::new(Vec::new())),
             notice: Rc::new(RefCell::new(notice)),
             nav_cache_epoch: Rc::new(Cell::new(0)),
             nav_panel: Rc::new(RefCell::new(None)),
