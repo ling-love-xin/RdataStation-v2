@@ -124,3 +124,39 @@
 2. `git log --oneline main..HEAD` + Read `source_picker/{mod,dialog,render}.rs` 拿到当前真实签名。
 3. 读 `prototypes/entry/README.md`（分类映射 + 未画清单）与 `06-object-tree.html` §02 复用清单 + §07 落地切片 + §09 全局实例。
 4. 复查执行侧证据（§4 第 1 条的行号）后再谈全局段。
+
+## 8. 公共内核（分支 `feat/federation-kernel`，隔离 worktree）
+
+> 2026-11-15。**物理隔离**：worktree `D:\RdataStation\RDS\wt-kernel`、分支 `feat/federation-kernel`（基点 `b145f1d7`）、`CARGO_TARGET_DIR=D:\RdataStation\RDS\target-kernel`、数据根 `D:\RdataStation\RDS\home-kernel`（与 `main` 不争 target / 数据文件）。
+
+### 8.1 已落地（新增不接线，main 无消费方受影响）
+
+| commit | 内容 | 验证 |
+| --- | --- | --- |
+| `dc342fd6` | 设计文档 `federation-kernel-design.md`（三段 + 7 刀） | —— |
+| `d98ef2c4` / `9395a679` | 刀 1 `analysis/channel.rs`：`AnalysisChannel{Source, Accelerated, Federated{owner}}` + `ConnRef{Live, Historical}` + `from_toggle` | 27→34 项 |
+| `80f37c86` / `9395a679` | 刀 2 `analysis/mount.rs`：`MountSpec` / `SessionPlan` / `plan_for`（Source 禁挂、Accelerated 恰 1 源且拒 `DuckDbTable`、Federated 去重 + primary 校验） | 同上 |
+| `d5021b49` | 刀 3 `analysis/kernel.rs`：`PreparedMounts` + `SessionHandle{None, Accelerated, Federated}` + `open` | `--lib` 267 全绿 |
+| `b141c607` | 三档**真跑**用例 `tests/analysis_kernel_probe.rs`（真 DuckDB 文件，含跨源 join） | 3 passed |
+
+### 8.2 口径更正（本轮实测，覆盖旧说法）
+
+1. **执行通道是三档**：源库直连（驱动执行、不挂源）/ 本地加速（`accel::ensure_session`，**单源**只读挂载，L2 驱动在此注册会话级 Secret）/ 联邦（`federation::ensure_session`，多源）。早先「Local」把前两档混成一个，已改。
+2. **conn_id 要分两种**：归档资源表**有** `source_connection_id`（`analytics_resource/src/model/kind.rs:136-139`，`Option<String>`，取自草稿 `file_meta.last_connection_id`），但它是**归档当时**的历史 id、可能悬空；洞察取样（`resource_host/detail_actions.rs:84-96`、`insight/jobs/table.rs:312-320`）要的是**当前可连**的 conn。实测：`home-kernel/data/system/global.db` 的 `analytics_resources` **0 行**；`A1\.RSmeta\project.db` 唯一 1 行且该字段 `NULL`。
+3. **全局连接是存在的**：`global.db` 的 `global_connections` **1 行**（`G_conn_SQLite_Example`，driver=sqlite）；项目库 `connections` **14 行**，其中 4 条 `GP_` 前缀共享连接（duckdb / mysql / pg / sqlite）。→ 解析 `ConnRef::Live` 必须对**合并后的清单**（`global_connections` + 项目 `connections`）做，只查一处会把共享连接误判为不可执行。
+4. **三套单例 / 会话库不可合并**：进程级内存单例（`execution_service.rs:60/113 → duckdb_service.rs:14`）、accel 会话（按源 id）、federation 会话（按 owner + `manager.rs:18 GLOBAL_DUCKDB`）。合并会踩「取消洞察误伤编辑器」。
+5. **`engine --lib` 基线**：本轮实测 **267**（旧文档里的 428 是更早、且统计口径不同的数字，别拿它当 lib 基线）。
+
+### 8.3 环境坑（隔离 worktree 专属，已解）
+
+- `.cargo/config.toml` 用 `force=true` 把 `TEMP/TMP/TMPDIR` 钉在 `.rds/tmp`（相对路径）。新 worktree 没有 `.rds` → `link.exe` 报 `LNK1104`。**解**：建 `wt-kernel\.rds\tmp`。
+- `third_party/duckdb/1.5.6`（`duckdb.dll` 36.7 MB + `.lib` 2 MB + 头文件）未入库，worktree 缺失 → `build.rs` 找不到库。**解**：从主仓库 robocopy 进去（保持自包含）。
+- 首次全量编译 **8 分 13 秒**（独立 target）。
+
+### 8.4 剩余刀（4–7）与阻点
+
+- 刀 4（编辑器接线）：**比我原估的大**——`federation.rs:26-64 federated_plan` 除拼 plan 还做别名生成、重名排序、主源回退、notes 文案；内核 `MountSpec` 目前没有 alias/notes 位。直接删拼装会丢语义。两条路：①把 alias/notes 提进内核（推荐，但要扩 `MountSpec`）；②保持编辑器拼装、只走 `open`（无收益的包装）。**待拍板**。
+- 刀 5（洞察）：受「开关显示条件」未决干扰；`SampleSource` 仍是 conn_id 下推形态，切内核前要先定「洞察拿 plan 还是拿 sample spec」。
+- 刀 6（结果集二次分析）：默认档未决（我倾向 `Accelerated`，因为结果集建表本来就在 DuckDB 里）。
+- 刀 7（全局表）：A+B / 拆 `AnalysisGlobal` / 冻结 未决。
+

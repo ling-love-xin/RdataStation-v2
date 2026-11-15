@@ -1,4 +1,4 @@
-# 联邦 / 分析 / 洞察 公共内核 · 设计（Phase 5.5）
+﻿# 联邦 / 分析 / 洞察 公共内核 · 设计（Phase 5.5）
 
 > 分支 `feat/federation-kernel`（worktree `D:\RdataStation\RDS\wt-kernel`，隔离目标目录与数据根）。
 > 本文只定义**内核边界与切片顺序**，不重复 `federation-entry-design.md` 的方案论证。
@@ -123,7 +123,7 @@ impl SessionHandle {
 ## 6. 验收口径
 
 - `cargo check -p rds-engine -p rds-insight -p rds-editor -p rds-workbench --lib` 零告警；
-- `cargo test -p rds-engine --lib`（现基线 428）、`-p rds-insight --lib`（280）、`-p rds-workbench --lib`（138）全绿；
+- `cargo test -p rds-engine --lib`（现基线 267，本轮实测）、`-p rds-insight --lib`（280）、`-p rds-workbench --lib`（138）全绿；
 - 三个通道各留一条端到端用例（真机四库用例沿用 `workbench/tests/{federation_sources,insight_source_real}.rs` 的骨架）。
 
 ## 7. 待拍板（挡在刀 6 / 刀 7 之前）
