@@ -5,3 +5,4 @@
 //! `duckdb::federation::session` 提供（不重造）。
 
 pub mod channel;
+pub mod mount;
