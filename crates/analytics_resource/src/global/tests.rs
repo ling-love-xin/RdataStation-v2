@@ -555,3 +555,59 @@ async fn g010_script_content_with_extra_rows_is_rejected() {
 
     let _ = fs::remove_dir_all(&env.dir);
 }
+
+/// 脚本提升到全局有体积上限：超了就在读内容之前拒绝，并指向「按数据文件归档」。
+///
+/// 上限的作用不是省磁盘，而是不让一段超大文本被整段读进内存、再落成全局库里的一条
+/// 巨型行——脚本承载的是定义（正常几百 KB），16 MiB 已是异常量级。边界取 `>`
+/// 而不是 `>=`：恰好等于上限仍然放行，这里用「上限 + 1 字节」证伪。
+#[tokio::test]
+async fn g011_oversized_script_is_rejected_before_reading() {
+    let env = create_test_env().await;
+    let script = env.dir.join("huge.sql");
+    fs::write(&script, vec![b'a'; (MAX_SCRIPT_BYTES + 1) as usize]).expect("write huge script");
+
+    let err = env
+        .store
+        .promote(&promote_req("huge_script", &script, PromoteKind::Script))
+        .await
+        .expect_err("超过上限必须被拒绝");
+    assert!(
+        matches!(err, InstanceOpError::Core(_)),
+        "应报存储错误，实际 {err:?}"
+    );
+    let text = format!("{err:?}");
+    assert!(
+        text.contains("超过上限"),
+        "错误要说清是体积问题，实际 {text}"
+    );
+    assert!(
+        text.contains("16 MiB"),
+        "错误要给出具体上限值，实际 {text}"
+    );
+    assert!(
+        text.contains("数据文件"),
+        "错误要指出替代路径（按数据文件归档），实际 {text}"
+    );
+
+    // 拒绝发生在读内容之前：全局库里既没有表，也没有登记行。
+    assert!(
+        !env.store.table_exists("huge_script").await.expect("table_exists"),
+        "被拒绝时不得建全局表"
+    );
+    let global_rows: i64 = env
+        .store
+        .with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT count(*) FROM analytics_resources \
+                 WHERE name = 'huge_script' AND scope = 'global'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_err("count_global_rows"))
+        })
+        .expect("count global rows");
+    assert_eq!(global_rows, 0, "被拒绝时不落任何全局登记");
+
+    let _ = fs::remove_dir_all(&env.dir);
+}

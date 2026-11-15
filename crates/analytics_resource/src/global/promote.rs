@@ -77,6 +77,26 @@ impl GlobalInstanceStore {
                 self.table_stats(&req.name).await?
             }
             PromoteKind::Script => {
+                // 先看体积再读内容：整段文本要进内存并落成全局库里的一条巨型行，
+                // 超过上限时按「该当数据文件」处理，别把内存当缓存用。
+                let size = std::fs::metadata(&req.source_abs_path)
+                    .map_err(|e| {
+                        InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                            "读取脚本信息失败（{}）：{}",
+                            req.source_abs_path.display(),
+                            e
+                        ))))
+                    })?
+                    .len();
+                if size > MAX_SCRIPT_BYTES {
+                    return Err(InstanceOpError::Core(CoreError::common(
+                        CommonError::General(format!(
+                            "脚本 {} 有 {size} 字节，超过上限 {} MiB：全局库不承载大文本，请按数据文件归档",
+                            req.rel_path.as_deref().unwrap_or(&req.name),
+                            MAX_SCRIPT_BYTES / (1024 * 1024)
+                        )),
+                    )));
+                }
                 let content = std::fs::read_to_string(&req.source_abs_path).map_err(|e| {
                     InstanceOpError::Core(CoreError::common(CommonError::General(format!(
                         "读取脚本内容失败（{}）：{}",

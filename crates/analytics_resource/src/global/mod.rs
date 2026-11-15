@@ -61,6 +61,13 @@ pub enum PromoteKind {
     Script,
 }
 
+/// 脚本型资源提升到全局的体积上限（16 MiB）。
+///
+/// 脚本在全局库里是一张 `filename/content/content_hash` 三列表的**单行 TEXT**：
+/// 它承载的是定义而不是数据，16 MiB 已是正常脚本（几百 KB）的几十倍。超过就拒绝，
+/// 并指引按数据文件归档——那条路走 `CREATE TABLE AS read_xxx`，不进进程内存。
+pub const MAX_SCRIPT_BYTES: u64 = 16 * 1024 * 1024;
+
 /// 升级结果。
 #[derive(Debug, Clone)]
 pub struct PromoteOutcome {
