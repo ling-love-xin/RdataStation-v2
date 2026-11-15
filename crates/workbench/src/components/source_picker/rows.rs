@@ -94,6 +94,74 @@ pub fn analysis_table_rows(depth: u8, tables: &[String], scope: ArchiveScope) ->
     rows
 }
 
+/// 持久表在界面上的可读名：`res_订单明细_20261115103000` → `订单明细 · 2026-11-15 10:30:00`。
+///
+/// 库里名字必须唯一且可排序，所以带时间戳；但树里给人看的是另一回事——一串时间戳
+/// 挤满一屏，用户认不出哪张是刚才存的那份。**身份仍是库里的原名**（`NodeId` 不动），
+/// 这里只换显示名；解析失败（没时间戳 / 描述为空）就原样回原名，不猜。
+pub fn persistent_table_label(name: &str) -> String {
+    let Some(body) = name.strip_prefix(engine::duckdb::temp_table::promote::PERSIST_PREFIX) else {
+        return name.to_string();
+    };
+    let Some((desc, stamp)) = body.rsplit_once('_') else {
+        return name.to_string();
+    };
+    let desc = desc.trim();
+    if desc.is_empty() || stamp.len() != 14 || !stamp.bytes().all(|b| b.is_ascii_digit()) {
+        return name.to_string();
+    }
+    let (date, time) = stamp.split_at(8);
+    let (y, m, d) = (&date[0..4], &date[4..6], &date[6..8]);
+    let (hh, mm, ss) = (&time[0..2], &time[2..4], &time[4..6]);
+    format!("{desc} · {y}-{m}-{d} {hh}:{mm}:{ss}")
+}
+
+/// 持久表行：身份是库里的原名，显示名走 [`persistent_table_label`]。
+pub fn persistent_table_rows(depth: u8, tables: &[String], scope: ArchiveScope) -> Vec<Row> {
+    debug_assert!(depth <= MAX_DEPTH);
+    let mut rows: Vec<Row> = tables
+        .iter()
+        .map(|t| {
+            Row::new(
+                NodeId::AnalysisTable {
+                    scope,
+                    table: t.clone(),
+                },
+                depth,
+                NodeKind::Table,
+                persistent_table_label(t),
+            )
+            .with_meta("持久表")
+        })
+        .collect();
+    rows.sort_by(|a, b| b.label.cmp(&a.label).then_with(|| a.label.cmp(&b.label)));
+    rows
+}
+
+/// 持久表判定：`res_` 前缀（与 `promote::PERSIST_PREFIX` **同一口径**，不另立常量——
+/// 两处口径分开写，迟早出现「落库叫 res_、列表按别的规则找」的错位）。
+pub fn is_persistent_table(name: &str) -> bool {
+    name.starts_with(engine::duckdb::temp_table::promote::PERSIST_PREFIX)
+}
+
+/// 把项目分析库的表名切成「普通分析表 / 持久表」两份（顺序沿用入参顺序）。
+///
+/// 持久表（结果集落库的产物）与项目自建的分析表在库里同源，但用户对它们的心理模型
+/// 不同：前者是「我存下来的结果集」，后者是「项目本来就有的」。混在一段里，
+/// 一屏 `res_xxx_20261115...` 会把真正想找的分析表挤下去。
+pub fn split_persistent_tables(tables: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut plain = Vec::new();
+    let mut persisted = Vec::new();
+    for name in tables {
+        if is_persistent_table(name) {
+            persisted.push(name.clone());
+        } else {
+            plain.push(name.clone());
+        }
+    }
+    (plain, persisted)
+}
+
 /// DuckDB 「结果集」段：进程单例里的 `tmp_q_` 表（结果集二次分析的入口）。
 ///
 /// 身份用 `NodeId::Temp { scope: Local }`：结果集建在本地单例，本机任何入口都能引用；
@@ -314,6 +382,58 @@ mod tests {
             rel.to_string(),
             PathBuf::from(format!("C:/proj/scratchpad/{rel}")),
         )
+    }
+
+    #[test]
+    fn persistent_tables_are_kept_apart_from_project_analysis_tables() {
+        let tables: Vec<String> = vec![
+            "res_订单明细_20261115103000".into(),
+            "数据修复".into(),
+            "res_月度汇总_20261115091500".into(),
+            "tmp_q_1".into(),
+        ];
+        let (plain, persisted) = split_persistent_tables(&tables);
+        assert_eq!(plain, vec!["数据修复".to_string(), "tmp_q_1".to_string()]);
+        assert_eq!(
+            persisted,
+            vec![
+                "res_订单明细_20261115103000".to_string(),
+                "res_月度汇总_20261115091500".to_string()
+            ],
+            "顺序沿用库里给的顺序，不在这里重排"
+        );
+        // 空表名 / 大小写都不该误判成持久表
+        assert!(!is_persistent_table("RES_订单"));
+        assert!(!is_persistent_table(""));
+        assert!(is_persistent_table("res_"));
+    }
+
+    #[test]
+    fn persistent_table_labels_are_human_readable_but_keep_identity() {
+        assert_eq!(
+            persistent_table_label("res_订单明细_20261115103000"),
+            "订单明细 · 2026-11-15 10:30:00"
+        );
+        // 名字里本身带下划线：按**最后**一段切时间戳，描述保留原样
+        assert_eq!(
+            persistent_table_label("res_结果_2_订单明细_20261115103000"),
+            "结果_2_订单明细 · 2026-11-15 10:30:00"
+        );
+        // 解析不出来就原样回原名，不猜
+        assert_eq!(persistent_table_label("res_订单明细"), "res_订单明细");
+        assert_eq!(persistent_table_label("res__2026111510300"), "res__2026111510300");
+        assert_eq!(persistent_table_label("数据修复"), "数据修复");
+
+        // 身份（NodeId）必须是库里原名，否则确认时反查不到表
+        let rows = persistent_table_rows(3, &["res_订单明细_20261115103000".to_string()], ArchiveScope::Project);
+        assert_eq!(rows[0].label, "订单明细 · 2026-11-15 10:30:00");
+        assert_eq!(
+            rows[0].id,
+            NodeId::AnalysisTable {
+                scope: ArchiveScope::Project,
+                table: "res_订单明细_20261115103000".to_string()
+            }
+        );
     }
 
     #[test]

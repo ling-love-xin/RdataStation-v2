@@ -31,7 +31,7 @@ use super::node::{ArchiveScope, NodeId, NodeKind, Row, TempScope};
 use super::render::{needs_virtual_list, render_rows, row_element, virtual_viewport_rem, RowAction};
 use super::rows::{
     analysis_table_rows, draft_rows, external_row, group_id_row, insight_sample_rows,
-    result_set_rows,
+    persistent_table_rows, result_set_rows, split_persistent_tables,
 };
 use super::state::TreeState;
 use super::{ConfirmStrategy, Picked, PickerConfig, PickerState, SourceKind, TableCandidate};
@@ -145,11 +145,22 @@ fn file_group_rows(s: &PickerState) -> Vec<Row> {
             NodeKind::Folder,
             "资产库 · 本项目",
         ));
-        out.extend(analysis_table_rows(
-            2,
-            &s.analysis_tables,
-            ArchiveScope::Project,
-        ));
+        // 项目分析库里有两类表：项目自建的分析表，与「结果集落库」出来的持久表。
+        // 持久表一多（名字还都带时间戳）就会把真正的分析表挤到下面去，所以单列一段。
+        let (plain, persisted) = split_persistent_tables(&s.analysis_tables);
+        out.extend(analysis_table_rows(2, &plain, ArchiveScope::Project));
+        if !persisted.is_empty() {
+            out.push(
+                Row::new(
+                    NodeId::Path("file:archive-project-persistent".to_string()),
+                    2,
+                    NodeKind::Folder,
+                    "持久表（结果集落库）",
+                )
+                .with_meta(format!("{} 张", persisted.len())),
+            );
+            out.extend(persistent_table_rows(3, &persisted, ArchiveScope::Project));
+        }
     }
 
     // 全局分析表：与「本项目」并列成第二段，不混排——用户必须一眼看出自己动的是

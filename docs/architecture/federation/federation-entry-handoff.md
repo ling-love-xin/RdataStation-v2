@@ -435,7 +435,11 @@ Windows 上 DuckDB 一个文件只允许一个连接句柄（`store/src/persiste
    在洞察里再分析」目前只能从**结果面板菜单**进，洞察对话框主动裁剪掉了结果集档
    （`INSIGHT_KINDS` 不含 `ResultSet`）。
 3. **持久表只有状态栏回显**：落库成功后告知表名，没有列表页/管理入口，「进资源归档」
-   没有入口设计。
+   没有入口设计。**已部分补上（2026-11-15）**：选择器「资产库 · 本项目」段把 `res_` 前缀
+   的表单独折成「持久表（结果集落库）」子段（`rows::split_persistent_tables` +
+   `persistent_table_rows`），显示名去掉前缀并把时间戳格式化成
+   `描述 · 2026-11-15 10:30:00`（身份仍是库里原名，`NodeId` 不动），新的在前。
+   仍缺：删除 / 重命名 / 「进资源归档」的写入口。
 4. **多源标签页的点击路径没有 headless 用例**：`select_source` 是直接调用测的
    （`switching_source_tabs_reuses_the_sample_it_already_has`），`TabBar::on_click` 那条
    回调没被测试覆盖。
