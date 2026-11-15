@@ -94,13 +94,38 @@ pub fn materialize_in_session(
 }
 
 /// 形态 I 的便捷入口：按描述生成规范表名再物化。
+///
+/// **按执行面分派**，因为「样本落在哪」决定了能不能登记：
+///
+/// | 执行面 | 落地 | 登记 |
+/// | --- | --- | --- |
+/// | `ProcessDb`（洞察 / 导出） | 进程单例的 `tmp_i_` 表 | ✅ `create_analysis_temp_table_as`（TTL / 上限现成） |
+/// | `Accelerated` / `Federated` | 会话内的 `memory.tmp_i_` 表 | ❌ 见模块头的已知边界 |
+///
+/// 结果集二次分析这类「表本来就该留在我这条会话里」的消费方才直接用
+/// [`materialize_in_session`]，不要经过这里。
 pub fn materialize_sample(
     handle: &SessionHandle,
     description: &str,
     select_sql: &str,
 ) -> Result<String, CoreError> {
-    let name = sample_table_name(description);
-    materialize_in_session(handle, &name, select_sql)
+    let select = select_sql.trim().trim_end_matches(';').trim_end();
+    if select.is_empty() {
+        return Err(invalid("物化需要一条 SELECT：空 SQL 建不出表".to_string()));
+    }
+    match handle {
+        // 进程单例：走仓库的分析临时表入口，建表即登记（洞察取样就是这个形态）
+        SessionHandle::ProcessDb(conn) => {
+            let guard = conn
+                .lock()
+                .map_err(|e| invalid(format!("DuckDB 单例锁中毒: {e}")))?;
+            crate::duckdb::temp_table::create_analysis_temp_table_as(&guard, select, description)
+        }
+        _ => {
+            let name = sample_table_name(description);
+            materialize_in_session(handle, &name, select)
+        }
+    }
 }
 
 /// 丢掉一张物化表（幂等）。`qualified` 接受 `memory.x` 或裸名 `x`。
@@ -121,6 +146,13 @@ pub fn drop_materialized(handle: &SessionHandle, qualified: &str) -> Result<(), 
     // 源库档没有会话：前缀校验照做（守卫不能被「没有会话」这条捷径跳过），之后才是空操作
     if !handle.has_session() {
         return Ok(());
+    }
+    // 进程单例：走登记版删除，否则登记表会与库里实际张数对不上（K16 ④ 的计数信号就失真）
+    if let SessionHandle::ProcessDb(conn) = handle {
+        let guard = conn
+            .lock()
+            .map_err(|e| invalid(format!("DuckDB 单例锁中毒: {e}")))?;
+        return crate::duckdb::temp_table::drop_analysis_temp_table(&guard, name);
     }
     handle.run(&format!(
         "DROP TABLE IF EXISTS {MATERIALIZE_CATALOG}.{name}"
@@ -168,6 +200,26 @@ mod tests {
         assert!(super::validate_identifier("1abc").is_err());
         assert!(super::validate_identifier("a b").is_err());
         assert!(super::validate_identifier("a;b").is_err());
+    }
+
+    #[test]
+    fn sample_on_the_process_singleton_is_registered() {
+        // 形态 I 的真形态：进程单例上的 tmp_i_ 表，建完即登记（TTL 才认得出它）
+        let plan = crate::analysis::mount::plan_for(
+            &crate::analysis::channel::AnalysisChannel::ProcessDuckDb,
+            &[],
+            None,
+            "orders",
+        )
+        .unwrap();
+        let handle = crate::analysis::kernel::open(&plan, &Default::default()).unwrap();
+        let table = materialize_sample(&handle, "source_sample", "select 1 as a").expect("物化");
+        assert!(table.starts_with("tmp_i_"), "实际 {table}");
+        let result = handle.run(&format!("select count(*) from {table}")).expect("查");
+        assert_eq!(result.rows.len(), 1);
+        // 删除要走登记版：删完再查应报「表不存在」
+        drop_materialized(&handle, &table).expect("删除");
+        assert!(handle.run(&format!("select count(*) from {table}")).is_err());
     }
 
     #[test]
