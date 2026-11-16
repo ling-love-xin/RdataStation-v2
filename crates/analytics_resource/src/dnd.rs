@@ -147,6 +147,7 @@ mod tests {
             status: ArchiveStatus::Normal,
             tail: String::new(),
             source_table: None,
+            analytics_table: None,
             tags: Vec::new(),
             folder_id: folder.map(str::to_string),
             updated_epoch: 0,

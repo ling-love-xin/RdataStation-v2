@@ -59,6 +59,7 @@ pub fn to_row(
         status,
         tail: tail_for(resource, kind, now),
         source_table: resource.source_table.clone(),
+        analytics_table: resource.analytics_table.clone(),
         // 标签**带名字**一起装：筛标签维比 id（名字会改），搜索比名字——一份数据两处用。
         // 详情面板的 chips 也直接用这份（见 `build_snapshot`），不再各算一遍。
         tags: tags

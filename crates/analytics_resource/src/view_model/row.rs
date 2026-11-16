@@ -21,6 +21,11 @@ pub struct ArchiveRow {
     pub status: ArchiveStatus,
     /// 尾部字段（按字段优先级规则拼好，见 [`row_tail`]）。
     pub tail: String,
+    /// 表型存档在 DuckDB 里的**实际表名**（`res_<描述>_<时间戳>`；`None` = 非表型）。
+    ///
+    /// 行上不显示（同样的信息在详情里），但数据对象面板发「升级到全局」时**只拿得到行**、
+    /// 拿不到详情——那边必须有它，否则只能猜名字（见 `data_objects::promote_target`）。
+    pub analytics_table: Option<String>,
     /// 来源表 `schema.table`（引用型必有，其余多缺）。
     ///
     /// 与 `alias` 同理：不在行上显示，只进搜索匹配面——表名常是找存档的线索。

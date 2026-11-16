@@ -61,6 +61,7 @@ pub fn to_global_rows(
                 status: crate::model::ArchiveStatus::Normal,
                 tail,
                 source_table: resource.source_table.clone(),
+                analytics_table: resource.analytics_table.clone(),
                 tags: Vec::new(),
                 folder_id: None,
                 updated_epoch: resource.updated_at.timestamp(),

@@ -21,6 +21,7 @@ fn row(
         status,
         tail: tail.to_string(),
         source_table: None,
+        analytics_table: None,
         tags: Vec::new(),
         folder_id: None,
         // 原始值默认给中性值：只有排序用例关心它们（需要时用结构体更新语法盖掉）。

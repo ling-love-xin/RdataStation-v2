@@ -216,6 +216,10 @@ pub struct AssetRow {
     pub detail: String,
     /// 本体在 `resources/` 下的相对路径（`None` = 引用型 / 旧行没登记）
     pub payload_rel_path: Option<String>,
+    /// 存档库里的行 id：升级到全局时写进 `origin_ref`，作为全局版本的「上游」。
+    pub resource_id: String,
+    /// 表型资产在项目 DuckDB 里的实际表名（`None` = 文件型）。
+    pub analytics_table: Option<String>,
 }
 
 /// 一次取数的结果（面板与对话框共用）。
@@ -515,6 +519,29 @@ pub fn can_persist(object: &Object) -> bool {
     matches!(object.group, Group::ResultSets | Group::InsightProducts) && object.can_analyze()
 }
 
+/// 这一行能不能「升级到全局」。
+///
+/// **只放行资产行**：升级要写全局库、要产生全局版本号，前提是这条对象已经有存档身份
+/// （`resource_id` + 版本 + 本体表名）。会话里的临时表、项目库里没登记的表都没有身份，
+/// 直接升上去会让全局那一版回指不到任何上游——那就成了「凭空多出来的一行」，
+/// 用户以后答不出「这张表是从哪来的」。临时表请先「存为表」，再走资产那条路。
+///
+/// （场景 3 的两段不是设计妥协：临时表在进程单例里，项目库根本打不开它。）
+pub fn can_promote(object: &Object) -> bool {
+    object.group == Group::Assets && object.can_analyze()
+}
+
+/// 按名字取「升级」要用的资产（纯函数）：**没登记表名的行不给升级**。
+///
+/// 本项目先接表型：工作线程要按表名从项目库里整表导出（`source_table`），
+/// 没有表名就无从下手（文件型走本体文件那条路，留待后续批次）。
+/// 缺表名时返回 `None`，由调用方给一句「先在索引修复里认一下本体」。
+pub fn promote_target<'a>(assets: &'a [AssetRow], name: &str) -> Option<&'a AssetRow> {
+    assets
+        .iter()
+        .find(|row| row.name == name && row.analytics_table.is_some())
+}
+
 /// 落库时给人看的名字：去掉临时前缀（`tmp_q_` / `tmp_i_`），别让表名里再出现一层 `tmp_`。
 pub fn persist_label(table: &str) -> String {
     table
@@ -589,7 +616,10 @@ pub fn collect(shared: &Shared) -> Collected {
 #[cfg(test)]
 mod tests {
     // 刻意不用 `use super::*`：会把 gpui 的 `test` 属性宏带进作用域。
-    use super::{objects, AssetRow, Channel, Collected, Group, Life, Object, SessionSource, State};
+    use super::{
+        AssetRow, Channel, Collected, Group, Life, Object, SessionSource, State, can_promote,
+        objects, promote_target,
+    };
     use std::path::PathBuf;
 
     fn sample() -> Collected {
@@ -608,6 +638,9 @@ mod tests {
                 version: 3,
                 detail: "1,204 行 · 18.2 MB".into(),
                 payload_rel_path: Some("assets/月度经营快照.parquet".into()),
+                resource_id: "arp_demo".into(),
+                // 文件型资产：没有表名，`promote_target` 会拒（本项目只接表型）
+                analytics_table: None,
             }],
             session_sources: vec![
                 SessionSource {
@@ -723,6 +756,51 @@ mod tests {
         assert!(session_rows[0].note.contains("主源"));
     }
 
+    /// 升级入口只对**有身份 + 表名已登记**的资产行开放。
+    ///
+    /// 临时表（`tmp_q_`）与项目自建表在项目库里没有存档身份：硬升上去，
+    /// 全局那一版回指不到上游，用户以后答不出「这张表是从哪来的」。
+    /// 临时表要升级，先「存为表」拿到身份（场景 3 的两段）。
+    #[test]
+    fn only_registered_table_assets_can_be_promoted() {
+        let mut c = sample();
+        c.assets = vec![
+            AssetRow {
+                name: "月度经营".into(),
+                version: 2,
+                detail: String::new(),
+                payload_rel_path: None,
+                resource_id: "arp_a".into(),
+                analytics_table: Some("res_月度经营_20261115103000".into()),
+            },
+            AssetRow {
+                name: "报表.pdf".into(),
+                version: 1,
+                detail: String::new(),
+                payload_rel_path: Some("assets/报表.pdf".into()),
+                resource_id: "arp_b".into(),
+                // 文件型资产：有身份但没表名（本项目先只接表型）
+                analytics_table: None,
+            },
+        ];
+        let rows = objects(&c);
+        let find = |name: &str| rows.iter().find(|o| o.name == name).expect("行在");
+
+        // 表型资产：组对 + 表名在 → 给按钮
+        assert!(can_promote(find("月度经营")));
+        assert!(promote_target(&c.assets, "月度经营").is_some());
+        // 文件型资产：组对但没表名 → 面板不给按钮（点了只会弹错）
+        assert!(can_promote(find("报表.pdf")));
+        assert!(promote_target(&c.assets, "报表.pdf").is_none());
+        // 临时表 / 项目自建表：没有存档身份 → 组就不对
+        assert!(!can_promote(find("tmp_q_结果_3")));
+        assert!(!can_promote(
+            rows.iter()
+                .find(|o| o.group == Group::ProjectTables)
+                .expect("项目自建表在")
+        ));
+    }
+
     /// 同一张表在两份分析库里时必须能区分（身份带前缀），否则工作集里会互相顶掉。
     #[test]
     fn identities_are_unique_across_sources() {
@@ -734,6 +812,8 @@ mod tests {
             version: 1,
             detail: String::new(),
             payload_rel_path: None,
+            resource_id: "arp_orders".into(),
+            analytics_table: None,
         }];
         c.result_sets = vec!["orders".into()];
         let rows = objects(&c);

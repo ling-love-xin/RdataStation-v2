@@ -3,9 +3,12 @@
 //! 取数在**事件路径**（构造 / 刷新）跑一次并写进 `Shared::data_objects`，渲染只读缓存——
 //! `collect` 内含读盘与查库，放进 render 就是每帧 I/O（gpui-kit-dev 禁止）。
 //!
-//! 行上三类动作各管一段：勾选进工作集（`toggle_picked`）、会话行菜单（重挂 / 设主源 /
-//! 关会话）、结果集与洞察产物的「存为表」（进项目分析库的持久表，写库在 worker 线程）。
-//! 落库那条是「临时结果集 → 持久表」的唯一入口：面板里只有这两组是已经存在的表。
+//! 行上四类动作各管一段：勾选进工作集（`toggle_picked`）、会话行菜单（重挂 / 设主源 /
+//! 关会话）、结果集与洞察产物的「存为表」（进项目分析库的持久表，写库在 worker 线程）、
+//! 资产行的「升级」（表型存档 → 全局，搬表也在 worker 线程）。
+//!
+//! 前两个是场景 3 的两段，顺序不能颠倒：临时表在进程单例里（项目库打不开它），
+//! 所以先「存为表」拿到存档身份，才谈得上「升级到全局」并留下版本线索。
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -38,6 +41,65 @@ impl DataObjectsTab {
         };
         tab.refresh(cx);
         tab
+    }
+
+    /// 把一条**表型资产**升级到全局（事件路径：只入队，搬表在资源作业线程）。
+    ///
+    /// 前置条件是这一行已经有存档身份：全局那一版要靠 `source_resource_id` /
+    /// `source_version` 回指「A 的哪一条、哪一版」（各层版本各自编号：A 的 v5 → 全局 v1）。
+    /// 临时表与项目库里没登记的表没有身份，面板上不给这个按钮——硬升上去，
+    /// 全局那一版就答不出「这张表是从哪来的」。
+    fn promote_asset(&mut self, name: &str, cx: &mut Context<Self>) {
+        use analytics_resource::global::{PromoteKind, PromoteRequest};
+
+        let Some(root) = self
+            .shared
+            .project
+            .borrow()
+            .as_ref()
+            .map(|project| project.root.clone())
+        else {
+            self.note = Some("升级失败：还没有打开项目".to_string());
+            cx.notify();
+            return;
+        };
+        let assets = self.shared.data_object_assets.borrow().clone();
+        let Some(asset) = data_objects::promote_target(&assets, name) else {
+            // 文件型 / 迁移前没登记表名的老行：说清下一步，不静默点空
+            self.note = Some(
+                "升级失败：这条资产的表名还没登记（多半是迁移前的老行）。\
+                 先在「索引修复」里认一下本体，再升级到全局"
+                    .to_string(),
+            );
+            cx.notify();
+            return;
+        };
+        let table = asset.analytics_table.clone().unwrap_or_default();
+        analytics_resource::jobs::enqueue_promote(
+            root.clone(),
+            PromoteRequest {
+                name: asset.name.clone(),
+                kind: PromoteKind::DataFile,
+                // 源库路径只作说明：真正打开哪个库由作业线程按项目根决定
+                source_abs_path: root
+                    .join(engine::persistence::connection_org_store::RS_META_DIR_NAME)
+                    .join("analytics.duckdb"),
+                rel_path: None,
+                // 表型的指纹产在「导出成 parquet」那一步之后，请求里给空串（未算）
+                content_hash: String::new(),
+                file_size: None,
+                source_resource_id: Some(asset.resource_id.clone()),
+                source_version: Some(i32::try_from(asset.version).unwrap_or(0)),
+                source_table: Some(table),
+                // 一版一张表会随版本数线性增长：按设置里的保留策略裁掉更早的表
+                keep_versions: Some(analytics_resource::model::KeepVersions::from_setting(
+                    settings::SettingsService::keep_versions(cx),
+                )),
+            },
+            false,
+        );
+        self.note = Some(format!("正在把「{}」升级到全局…", asset.name));
+        cx.notify();
     }
 
     /// 执行一个会话动作（重挂 / 设主源 / 关闭会话），结果写进面板底部一行。
@@ -96,6 +158,10 @@ impl DataObjectsTab {
             .map(|row| data_objects::AssetRow {
                 version: u32::try_from(row.version).unwrap_or(0),
                 payload_rel_path: row.payload_rel_path,
+                resource_id: row.id,
+                // 表型才有表名（`kind` 已按表名判过，见 `ArchiveKind::resolve`）。
+                // 行上不显示它，但「升级到全局」需要它——面板只拿得到行，拿不到详情。
+                analytics_table: row.analytics_table,
                 name: row.name,
                 detail: row.tail,
             })
@@ -209,6 +275,9 @@ impl DataObjectsTab {
             .overflow_y_scrollbar()
             .id("data-objects-list");
 
+        // 升级按钮要同时看两件事：这一行是不是资产（有存档身份）、表名登记了没有。
+        // 缺表名的老行不给按钮——给一个点了只弹错的按钮，比不给更糟。
+        let assets = self.shared.data_object_assets.borrow().clone();
         let mut last_group: Option<Group> = None;
         for object in &objects {
             if last_group != Some(object.group) {
@@ -287,6 +356,28 @@ impl DataObjectsTab {
             } else {
                 None
             };
+            // 资产行才给「升级到全局」：那一行已经有存档身份，升上去能回指上游。
+            // 临时表 / 项目自建表先「存为表」——没有登记就没有身份，硬升会丢线索。
+            let promote_button = if data_objects::can_promote(object)
+                && data_objects::promote_target(&assets, &object.name).is_some()
+            {
+                let name = object.name.clone();
+                let entity = entity.clone();
+                Some(
+                    Button::new(SharedString::from(format!(
+                        "data-object-promote-{}",
+                        object.key
+                    )))
+                    .ghost()
+                    .label("升级")
+                    .on_click(move |_, _, cx| {
+                        let name = name.clone();
+                        entity.update(cx, |tab, cx| tab.promote_asset(&name, cx));
+                    }),
+                )
+            } else {
+                None
+            };
             // 结果集 / 洞察产物已经在进程单例里：落库就是整表搬一份。
             // 写库走 worker 线程（`services::persist_jobs`），这里只入队，回执由工作台泵到状态栏。
             let persist_button = if data_objects::can_persist(object) {
@@ -360,6 +451,7 @@ impl DataObjectsTab {
                     )
                     .children(pick_button)
                     .children(persist_button)
+                    .children(promote_button)
                     .children(session_button),
             );
         }
