@@ -324,6 +324,12 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../src/panels/search_results.rs"),
         ),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
+        // 数据对象面板（2026-11-16 补登记）：一直在盘却没进两份契约清单，
+        // 之前它写什么尺寸/颜色都不会被扫到（漏登 = 契约对该文件静默失效）。
+        (
+            "panels/data_objects_tab.rs",
+            include_str!("../src/panels/data_objects_tab.rs"),
+        ),
         // 工作台概览卡片（2026-11-08）：尺寸与颜色同受这两份契约约束
         (
             "panels/overview.rs",
@@ -940,6 +946,12 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../src/panels/search_results.rs"),
         ),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
+        // 数据对象面板（2026-11-16 补登记）：一直在盘却没进两份契约清单，
+        // 之前它写什么尺寸/颜色都不会被扫到（漏登 = 契约对该文件静默失效）。
+        (
+            "panels/data_objects_tab.rs",
+            include_str!("../src/panels/data_objects_tab.rs"),
+        ),
         // 工作台概览卡片（2026-11-08）：尺寸与颜色同受这两份契约约束
         (
             "panels/overview.rs",
@@ -1460,6 +1472,11 @@ fn shared_fields_are_whitelisted() {
         "active_right",
         "conflict_dialog",
         "connections",
+        // 数据对象面板（2026-11-16）：清单缓存 + 工作集身份，属面板 ↔ 宿主的命名槽位，
+        // 不跨特性 crate（宿主只把它们转成 `SampleSource` 交给洞察）。
+        "data_object_assets",
+        "data_object_picked",
+        "data_objects",
         "driver_catalog",
         "editor_bridge",
         "host_redraw",
