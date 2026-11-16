@@ -26,6 +26,7 @@ fn detail(status: ArchiveStatus, kind: ArchiveKind) -> ArchiveDetail {
         content_hash: Some("0123456789abcdef0123".to_string()),
         payload_rel_path: Some("dau.sql".to_string()),
         analytics_table: None,
+        has_definition: false,
         history_label: "1 个历史版本".to_string(),
         recent_versions: Vec::new(),
         groups: Vec::new(),
@@ -171,7 +172,7 @@ fn alerts_only_for_actionable_states() {
 #[test]
 fn kind_labels_are_shared_wording() {
     assert_eq!(kind_label(ArchiveKind::File), "受管文件");
-    assert_eq!(kind_label(ArchiveKind::Analysis), "分析表");
+    assert_eq!(kind_label(ArchiveKind::AnalyticsTable), "分析库表");
     assert_eq!(kind_label(ArchiveKind::TableRef), "远端引用");
 }
 

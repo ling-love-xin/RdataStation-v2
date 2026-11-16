@@ -76,7 +76,6 @@ pub struct TagOption {
 pub struct ArchiveCounts {
     pub total: usize,
     pub archived: usize,
-    pub analysis: usize,
     /// 本体是分析库持久表的行（表型）；与分析表（文件快照）分开计数。
     pub analytics_table: usize,
     pub table_ref: usize,
@@ -92,7 +91,6 @@ impl ArchiveCounts {
             format!("已归档 {}", self.archived),
         ];
         for (count, label) in [
-            (self.analysis, "分析表"),
             (self.analytics_table, "分析库表"),
             (self.table_ref, "引用"),
             (self.missing, "缺失"),

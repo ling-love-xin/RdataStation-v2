@@ -178,7 +178,7 @@ async fn t133_analysis_fingerprint_covers_definition_and_structure_only() {
         row_count: Some(1),
     };
     let mut req = archive_req(&draft, "dau.csv", None);
-    req.kind = ArchiveKind::Analysis;
+    req.kind = ArchiveKind::File;
     req.analysis = Some(facts.clone());
     let first = service.archive(req).await.expect("archive analysis");
     assert_eq!(
@@ -192,7 +192,7 @@ async fn t133_analysis_fingerprint_covers_definition_and_structure_only() {
         .get_resource_by_id(&first.resource_id)
         .await
         .expect("reload");
-    assert_eq!(stored.kind, "analysis");
+    assert_eq!(stored.kind, "file");
     assert_eq!(stored.definition_sql, facts.definition_sql);
     assert_eq!(stored.row_count, Some(1), "行数作为元信息落库");
     assert_eq!(stored.column_count, Some(2));
@@ -209,7 +209,7 @@ async fn t133_analysis_fingerprint_covers_definition_and_structure_only() {
     )
     .await;
     let mut same_schema = archive_req(&draft2, "dau.csv", Some(&first.resource_id));
-    same_schema.kind = ArchiveKind::Analysis;
+    same_schema.kind = ArchiveKind::File;
     same_schema.analysis = Some(AnalysisFacts {
         row_count: Some(3),
         ..facts.clone()
@@ -228,7 +228,7 @@ async fn t133_analysis_fingerprint_covers_definition_and_structure_only() {
     )
     .await;
     let mut changed = archive_req(&draft3, "dau.csv", Some(&first.resource_id));
-    changed.kind = ArchiveKind::Analysis;
+    changed.kind = ArchiveKind::File;
     changed.analysis = Some(AnalysisFacts {
         definition_sql: Some("select id, name, ts from read_csv_auto('dau.csv')".to_string()),
         columns: vec![

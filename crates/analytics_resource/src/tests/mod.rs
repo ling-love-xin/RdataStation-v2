@@ -4,31 +4,8 @@ pub(crate) use std::fs;
 pub(crate) use std::path::PathBuf;
 pub(crate) use std::sync::Arc;
 
-pub(super) const MIGRATION_SQL: &str =
-    include_str!("../../../store/migrations/project_meta/007_analytics_resources.sql");
-
-pub(super) const ARCHIVE_MIGRATION_SQL: &str =
-    include_str!("../../../store/migrations/project_meta/020_analytics_resource_archive.sql");
-
-pub(super) const PAYLOAD_MODE_MIGRATION_SQL: &str =
-    include_str!("../../../store/migrations/project_meta/023_analytics_resource_payload_mode.sql");
-/// 关联表去 tag 外键（标签定义上移全局库，规格 §7.2；跨库无法 FK 约束）。
-pub(super) const TAG_LINK_FK_MIGRATION_SQL: &str = include_str!(
-    "../../../store/migrations/project_meta/024_analytics_resource_tags_drop_tag_fk.sql"
-);
-/// 资产履历事件表（时间线）：服务层会写事件，测试库不跑这段就会 "no such table"。
-/// 时间线（027）+ 业务断言 / 效力（028）合并跑：测试库结构须与生产库一致。
-pub(super) const TIMELINE_MIGRATION_SQL: &str = concat!(
-    include_str!("../../../store/migrations/project_meta/027_analytics_resource_timeline.sql"),
-    include_str!("../../../store/migrations/project_meta/028_analytics_resource_semantics.sql"),
-    include_str!("../../../store/migrations/project_meta/029_analytics_resource_refs.sql"),
-    include_str!("../../../store/migrations/project_meta/030_analytics_resource_checkouts.sql")
-);
-/// 表型本体列（031）：`analytics_table` 非空即表型，`kind` 串仍是 `analysis`。
-/// 测试库不跑这段，行映射就会报 `no such column: analytics_table`。
-pub(super) const ANALYTICS_TABLE_MIGRATION_SQL: &str = include_str!(
-    "../../../store/migrations/project_meta/031_analytics_table_payload.sql"
-);
+// 项目库建表 SQL 统一从 `crate::store::schema_sql` 取：此前这里手抄了一份迁移清单，
+// 加一个迁移要改六处（漏一处只在某个用例里以 no such column 冒出来），见该模块注释。
 
 /// 测试库跑**四段**迁移：007（表结构）+ 020（分析存档新列）+ 023（copy/reference 两档）+
 /// 024（关联表去 tag 外键）。
@@ -93,23 +70,8 @@ pub(super) async fn create_test_store() -> (AnalyticsResourceStore, PathBuf) {
         let conn = pool.acquire().await.expect("acquire connection");
         let inner = conn.inner().expect("get connection");
         inner
-            .execute_batch(MIGRATION_SQL)
-            .expect("run migration 007");
-        inner
-            .execute_batch(ARCHIVE_MIGRATION_SQL)
-            .expect("run migration 020");
-        inner
-            .execute_batch(PAYLOAD_MODE_MIGRATION_SQL)
-            .expect("run migration 023");
-        inner
-            .execute_batch(TAG_LINK_FK_MIGRATION_SQL)
-            .expect("run migration 024");
-        inner
-            .execute_batch(TIMELINE_MIGRATION_SQL)
-            .expect("run migration 027");
-        inner
-            .execute_batch(ANALYTICS_TABLE_MIGRATION_SQL)
-            .expect("run migration 031");
+            .execute_batch(crate::store::schema_sql::PROJECT_MIGRATIONS_SQL)
+            .expect("run analytics_resources migrations");
     }
     // 全局标签库注入本测试独立路径（避免共享进程级隔离根 → 跨测试同名标签冲突）。
     let store = AnalyticsResourceStore::new_for_test(pool, dir.join("global.db"));

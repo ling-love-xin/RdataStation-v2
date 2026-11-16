@@ -32,37 +32,39 @@ impl RowScope {
 
 /// 存档种类：决定**本体存在哪**，进而决定复现强度（架构 §2.2）。
 ///
-/// 2026-11-12 口径修正：`Analysis` 并不具备「靠定义重建数据」的能力——
-/// `definition_sql` 全仓只被登记与算指纹，**从不执行**；它的本体与 `File` 一样是
-/// `resources/` 下的受管文件快照。因此种类只描述「本体在哪」，不承诺重建能力。
+/// 2026-11-12 口径修正：曾经用 `Analysis` 表示「数据文件 + 定义 / 列结构指纹」，但
+/// `definition_sql` 全仓只被登记与算指纹、**从不执行**，它的本体与 `File` 是同一个
+/// （`resources/` 下的受管文件快照）。种类只描述「本体在哪」，不承诺重建能力。
 ///
-/// 2026-11-16 增补 `AnalyticsTable`：**本体是项目/全局分析库（`analytics.duckdb`）
-/// 里的一张持久表**。这类行过去被迫挤在 `analysis` 里（全局分发落项目时就是这么写的），
-/// 导致同一个 `analysis` 串代表两种本体、`payload_path` 只能按文件找本体而静默失败。
-/// 库层 `CHECK` 暂时没扩（见迁移 031 注释），所以**落库串仍写 `analysis`**
-/// （用 [`ArchiveKind::db_write_str`]），真实档位一律经 [`ArchiveKind::resolve`] 还原。
+/// 2026-11-16 收口为两档：`File`（本体是受管文件）与 `AnalyticsTable`（本体是
+/// `analytics.duckdb` 里的持久表）。结构指纹**不再是一档**——它是能力，挂在
+/// `definition_sql` 上，与本体分类正交（同一个文件可以带指纹也可以不带）。
+/// `TableRef` 只留兼容读：历史行仍显示「引用」，但没有新写入点、也不进筛选菜单。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum ArchiveKind {
-    /// 受管文件：本体在 `{项目}/resources/`，归档后只读（第一期唯一落地的种类）。
+    /// 受管文件：本体在 `{项目}/resources/`，归档后只读。
     #[default]
     File,
-    /// 分析表：本体同样是受管文件快照，额外登记定义 / 列结构指纹；**定义不执行、不重建数据**。
-    Analysis,
     /// 分析库表：本体是 `analytics.duckdb` 里的持久表（表名见登记的 `analytics_table`）。
     ///
     /// 内容同样冻结（表在项目/全局库内），所以复现强度与文件档同级；区别只在
     /// 「本体是表不是文件」——取数走 `SampleSource::on_duckdb`，不按路径读。
     AnalyticsTable,
-    /// 远端表引用：本体不在本机，失效风险最高（不承诺，见架构 §2.2）。
+    /// 远端表引用（兼容读）：本体不在本机，失效风险最高（不承诺，见架构 §2.2）。
     TableRef,
 }
 
 impl ArchiveKind {
-    /// 全部种类：顺序即**筛选菜单的候选顺序**与状态行的桶顺序（两处都按它渲染，避免各写一份）。
-    pub const ALL: [Self; 4] = [Self::File, Self::Analysis, Self::AnalyticsTable, Self::TableRef];
+    /// 全部种类（含只读兼容档）：状态行的桶顺序按它走。
+    pub const ALL: [Self; 3] = [Self::File, Self::AnalyticsTable, Self::TableRef];
 
-    /// 界面文案：回答"本体在哪"（`文件` / `分析表` / `分析库表` / `引用`）。
+    /// **筛选菜单的两档**：本体是文件，还是本体是分析库表。
+    ///
+    /// 引用档刻意不进菜单——它没有新写入点，摆一个勾选项只会让人以为还能归档引用。
+    pub const MENU: [Self; 2] = [Self::File, Self::AnalyticsTable];
+
+    /// 界面文案：回答"本体在哪"（`文件` / `分析库表` / `引用`）。
     ///
     /// 与 `resource_view::strength_badge` 的文案刻意分开：那个回答"能不能复现"，
     /// 两者在 `File` 上恰好同词（`已归档` vs `文件`），不要合并——合并后必然要在
@@ -70,7 +72,6 @@ impl ArchiveKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::File => "文件",
-            Self::Analysis => "分析表",
             Self::AnalyticsTable => "分析库表",
             Self::TableRef => "引用",
         }
@@ -83,7 +84,6 @@ impl ArchiveKind {
     pub fn as_db_str(self) -> &'static str {
         match self {
             Self::File => "file",
-            Self::Analysis => "analysis",
             Self::AnalyticsTable => "analytics_table",
             Self::TableRef => "table_ref",
         }
@@ -104,13 +104,12 @@ impl ArchiveKind {
 
     /// 从库值解析：**未知值回退 `File`**。
     ///
+    /// `analysis` 是历史串（本轮之前的数据文件都写它），读成 `File`：
+    /// 它们的本体本来就是受管文件，结构指纹由 `definition_sql` 另外表达。
     /// 回退而非报错是刻意的：将来新增种类时，旧版本读到新行不应整表失败；
     /// 旧行（007 时代、迁移时默认 `file`）也必须能读。
-    /// `analytics_table` 这个串目前不会出现在库里（CHECK 未扩），这里仍认它，
-    /// 是为了将来重建表后无需再改解析。
     pub fn from_db_str(value: &str) -> Self {
         match value {
-            "analysis" => Self::Analysis,
             "analytics_table" => Self::AnalyticsTable,
             "table_ref" => Self::TableRef,
             _ => Self::File,
@@ -120,7 +119,7 @@ impl ArchiveKind {
     /// **真实档位**：`analytics_table` 列非空即为表型，否则按 `kind` 串解释。
     ///
     /// 所有读取面都必须走这里，不要直接 `from_db_str(&row.kind)`——那样会把
-    /// 全局分发落下来的表型行认成「分析表（文件）」，进而按文件路径找本体。
+    /// 全局分发落下来的表型行认成文件，进而按文件路径找本体（找不到就静默失败）。
     pub fn resolve(kind: &str, analytics_table: Option<&str>) -> Self {
         if analytics_table.is_some_and(|name| !name.is_empty()) {
             Self::AnalyticsTable
@@ -136,7 +135,7 @@ impl ArchiveKind {
     /// 数据也不会重建——对一个主打消除误解的模块，界面不该承诺做不到的事。
     pub fn strength(self) -> ReproductionStrength {
         match self {
-            Self::File | Self::Analysis | Self::AnalyticsTable => ReproductionStrength::Strong,
+            Self::File | Self::AnalyticsTable => ReproductionStrength::Strong,
             Self::TableRef => ReproductionStrength::Weak,
         }
     }

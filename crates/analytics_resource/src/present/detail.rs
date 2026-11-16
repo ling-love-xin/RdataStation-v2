@@ -36,7 +36,7 @@ pub fn to_detail(
     // 与行的尾巴同一口径：文件型给体积、分析表/分析库表给规模、引用型不给（不假装有值）。
     let size_label = match kind {
         ArchiveKind::File => format_size(resource.file_size),
-        ArchiveKind::Analysis | ArchiveKind::AnalyticsTable => {
+        ArchiveKind::AnalyticsTable => {
             format_scale(resource.row_count, resource.column_count)
         }
         ArchiveKind::TableRef => String::new(),
@@ -66,6 +66,7 @@ pub fn to_detail(
         content_hash: resource.content_hash.clone(),
         payload_rel_path: resource.file_rel_path.clone(),
         analytics_table: resource.analytics_table.clone(),
+        has_definition: resource.definition_sql.is_some(),
         // 没有历史版本时给空串：`detail_rows` 据此跳过"版本"分区（不产生空行）。
         history_label: if history_count > 0 {
             format!("{history_count} 个历史版本")
@@ -101,13 +102,14 @@ fn detail_version_lines(versions: &[crate::store::rows::ResourceVersion]) -> Vec
         .map(|version| {
             let snapshot =
                 serde_json::from_value::<AnalyticsResource>(version.snapshot.clone()).ok();
-            let size_label = match snapshot.as_ref().map(|record| ArchiveKind::from_db_str(&record.kind)) {
-                Some(ArchiveKind::File) => format_size(snapshot.as_ref().and_then(|r| r.file_size)),
-                Some(ArchiveKind::Analysis) => format_scale(
-                    snapshot.as_ref().and_then(|r| r.row_count),
-                    snapshot.as_ref().and_then(|r| r.column_count),
-                ),
-                _ => String::new(),
+            // 历史版本按**快照里有什么**给标签：记了行数 / 列数就给规模，只记了体积就给
+            // 体积。不按种类分——种类收成两档后，同一档里这两种情况都存在。
+            let size_label = match snapshot.as_ref() {
+                Some(record) if record.row_count.is_some() || record.column_count.is_some() => {
+                    format_scale(record.row_count, record.column_count)
+                }
+                Some(record) => format_size(record.file_size),
+                None => String::new(),
             };
             DetailVersionLine {
                 version: version.version,

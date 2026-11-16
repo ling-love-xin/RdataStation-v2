@@ -17,12 +17,15 @@ impl<'a> IndexRepair<'a> {
             };
             tracked.insert(rel_path);
 
-            // 分析表的本体也在 `resources/` 里，但它的 `content_hash` 是**结构指纹**
+            // 带结构指纹的行本体也在 `resources/` 里，但它的 `content_hash` 是**结构指纹**
             // （定义 + 列结构，行数不进——见 `analysis.rs` 的裁决）：拿字节 sha256 去比
-            // 只会把**每一行分析表都报成“内容已变”**，把「修复…」入口变成噪声。
+            // 只会把**每一行都报成“内容已变”**，把「修复…」入口变成噪声。
             // 结构探测（DuckDB `DESCRIBE`）属 P4.1 的第二半，接上之前这里
-            // **宁可少报、不可误报**：分析表不参与文件级指纹比对（仍参与本体存在性检查）。
-            if ArchiveKind::from_db_str(&row.kind) != ArchiveKind::File {
+            // **宁可少报、不可误报**：这类行不参与文件级指纹比对（仍参与本体存在性检查）。
+            //
+            // 判据是**指纹种类**而不是种类值：2026-11-16 起 `analysis` 并入 `File`，
+            // 按 kind 判会把数据文件全放进字节比对，从而整片误报。
+            if row.definition_sql.is_some() {
                 continue;
             }
             // reference 模式的本体在**源位置**（`source_path`，可能在项目外），不在

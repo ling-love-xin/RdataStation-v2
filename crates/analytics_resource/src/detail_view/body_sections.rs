@@ -50,9 +50,10 @@ pub(super) fn render_body_sections(
                             .xsmall()
                             .label("复制")
                             .text_color(muted)
-                            // 分析表的指纹口径与人不一样（定义 + 结构，行数不算）：
-                            // 就写在指纹那一行的按钮上——那里正是用户会问“这串是什么”的地方。
-                            .tooltip(if detail.kind == ArchiveKind::Analysis {
+                            // 带结构指纹的行口径与普通文件不一样（定义 + 结构，行数不算）：
+                            // 说明就挂在指纹那一行的按钮上——那里正是用户会问“这串是什么”的地方。
+                            // 判据是「有没有指纹」而不是种类：种类收成两档后，指纹是能力不是分类。
+                            .tooltip(if detail.has_definition {
                                 crate::analysis::FINGERPRINT_HINT
                             } else {
                                 "复制完整指纹（展示的是前 12 位）"

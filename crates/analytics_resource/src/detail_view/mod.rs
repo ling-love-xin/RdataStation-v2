@@ -54,7 +54,6 @@ pub fn short_hash(hash: Option<&str>) -> String {
 pub fn kind_label(kind: ArchiveKind) -> &'static str {
     match kind {
         ArchiveKind::File => "受管文件",
-        ArchiveKind::Analysis => "分析表",
         ArchiveKind::AnalyticsTable => "分析库表",
         ArchiveKind::TableRef => "远端引用",
     }

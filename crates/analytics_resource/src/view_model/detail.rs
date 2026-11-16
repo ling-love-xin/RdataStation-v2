@@ -40,6 +40,9 @@ pub struct ArchiveDetail {
     /// 文件型为 `None`。面板上不当作普通属性展示，但「查看统计 / 双击打开」要靠它
     /// 拼取样 SQL——过去拿不到它，于是这类行只能静默失败。
     pub analytics_table: Option<String>,
+    /// 是否带**结构指纹**（`definition_sql` 非空）：指纹口径与普通文件不同（定义 + 列结构，
+    /// 行数不算）。提示文案与指纹 tooltip 都按它分派——种类收成两档后，这件事不再由 `kind` 表达。
+    pub has_definition: bool,
     /// 版本历史摘要，如 "3 个历史版本 · 最近副本完整"。
     pub history_label: String,
     /// 版本区「最近 3 条」明细（数量上限由装配层定，不在这里裁）。

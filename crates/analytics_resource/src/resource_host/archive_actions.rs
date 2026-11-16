@@ -189,7 +189,8 @@ fn open_archive_for_draft(
 ) {
     // 归档继承（规格 §7.4）：标签已由宿主在扫描草稿时预取，用户可改可删。
     let inherited_tags = draft.tags.clone();
-    let kind = archive_kind_for(&draft.abs_path);
+    // 档位一律文件：数据文件「能不能进分析库」由结构化探测决定（作业里做），不是分类。
+    let kind = ArchiveKind::File;
     let source_abs = draft.abs_path.to_string_lossy().to_string();
     let (seed, resolved_rel) = archive_seed(
         root,
@@ -238,8 +239,8 @@ fn archive_many(
             rel_path: resolved_rel,
             name: draft.display_name.clone(),
             alias: None,
-            // 数据文件按分析档登记（P4.5）：探测由作业在工作线程上做。
-            kind: archive_kind_for(&draft.abs_path),
+            // 档位一律文件；能不能进分析库由结构化探测决定（作业在工作线程上做）。
+            kind: ArchiveKind::File,
             payload_mode: PayloadMode::Copy,
             analysis: None,
             binding: ArchiveBinding {
@@ -252,8 +253,9 @@ fn archive_many(
             keep_versions: None,
             existing_resource_id: None,
         };
-        // 探测标志跟着档位走（分析档才连一次 DuckDB）。
-        let analysis_probe = request.kind == ArchiveKind::Analysis && request.analysis.is_none();
+        // 探测标志跟着**来源**走：结构化数据文件才值得连一次 DuckDB。
+        let analysis_probe =
+            request.analysis.is_none() && super::is_structured_payload(&request.source_path);
         resource_jobs::enqueue_archive(
             root.to_path_buf(),
             read_only,
@@ -298,7 +300,7 @@ pub(super) fn request_archive_from_file(host: &ResourceHost, window: &mut Window
         .to_string();
     // 目标相对路径：`rel_path` **相对 `resources/`**（`PayloadStore::resolve` 的口径），
     // 这里只给文件名——本地文件没有草稿相对路径可保留。
-    let kind = archive_kind_for(&source);
+    let kind = ArchiveKind::File;
     let source_abs = source.to_string_lossy().to_string();
     let (seed, resolved_rel) = archive_seed(
         &root,
@@ -452,7 +454,7 @@ mod tests {
         let draft = candidate(r"D:\p\scratchpad\a.sql", "a.sql");
         let request = draft_archive_request(
             &draft,
-            ArchiveKind::Analysis,
+            ArchiveKind::File,
             "a.sql".to_string(),
             ArchiveDialogResult {
                 name: "a".to_string(),
@@ -467,6 +469,6 @@ mod tests {
         assert_eq!(request.group_id, None, "未分组就是不归组");
         assert_eq!(request.keep_versions, None, "留空 = 跟随设置");
         assert_eq!(request.payload_mode, PayloadMode::Reference);
-        assert_eq!(request.kind, ArchiveKind::Analysis);
+        assert_eq!(request.kind, ArchiveKind::File);
     }
 }

@@ -339,34 +339,14 @@ impl GlobalInstanceStore {
                 reason: e.to_string(),
             })
         })?;
+        // 全局库建表 SQL 统一从 `schema_sql` 取：此前 026/033/034 三段在这里手抄，
+        // 加一个迁移就得记着补这一处，见 `store::schema_sql` 的注释。
         sqlite
-            .execute_batch(GLOBAL_MIGRATION_026_SQL)
+            .execute_batch(super::store::schema_sql::GLOBAL_MIGRATIONS_SQL)
             .map_err(|e| {
                 CoreError::storage(StorageError::Persistence {
                     store: "analytics_resources_global".to_string(),
-                    operation: "migrate_026".to_string(),
-                    reason: e.to_string(),
-                })
-            })?;
-        // 分发回执表（033）：生产环境由全局迁移 runner 建，测试库要自己补齐，
-        // 否则「记回执」这一步在测试里会静默失败（只 warn），用例就测不到东西。
-        sqlite
-            .execute_batch(GLOBAL_MIGRATION_033_SQL)
-            .map_err(|e| {
-                CoreError::storage(StorageError::Persistence {
-                    store: "analytics_resources_global".to_string(),
-                    operation: "migrate_033".to_string(),
-                    reason: e.to_string(),
-                })
-            })?;
-        // 表型本体列（034）：与项目库 031 对称。这里是 `ALTER TABLE ADD COLUMN`，
-        // **不能**塞进 `schema_guard` 那种幂等补建（重复 ALTER 会报列已存在）。
-        sqlite
-            .execute_batch(GLOBAL_MIGRATION_034_SQL)
-            .map_err(|e| {
-                CoreError::storage(StorageError::Persistence {
-                    store: "analytics_resources_global".to_string(),
-                    operation: "migrate_034".to_string(),
+                    operation: "migrate_global_schema".to_string(),
                     reason: e.to_string(),
                 })
             })?;
@@ -403,14 +383,6 @@ pub mod sql;
 pub use self::list::{list_global_resources, to_global_rows};
 pub(crate) use self::sql::{duckdb_err, file_read_expr, quote_ident, sqlite_err};
 
-pub(crate) const GLOBAL_MIGRATION_026_SQL: &str =
-    include_str!("../../../store/migrations/global/026_analytics_resource_global.sql");
-pub(crate) const GLOBAL_MIGRATION_033_SQL: &str =
-    include_str!("../../../store/migrations/global/033_analytics_resource_dispatch.sql");
-/// 表型本体与出处的三列（034）：同上，独立库自己补齐，否则全局行映射会报
-/// `no such column: analytics_table`。
-pub(crate) const GLOBAL_MIGRATION_034_SQL: &str =
-    include_str!("../../../store/migrations/global/034_analytics_table_payload.sql");
 
 #[cfg(test)]
 mod tests;

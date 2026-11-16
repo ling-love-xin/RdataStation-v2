@@ -166,7 +166,9 @@ impl ResourcesPanel {
                 let dictionary = self.snapshot.tags.clone();
                 move |menu, _window, _cx| {
                     let mut menu = menu.item(PopupMenuItem::label("种类"));
-                    for kind in ArchiveKind::ALL {
+                    // 只摆两档（`MENU`）：引用档没有新写入点，摆它只会让人以为还能归档引用；
+                    // 历史引用行仍照常显示尾部徽标，只是不能拿它当筛选项。
+                    for kind in ArchiveKind::MENU {
                         let target = panel.clone();
                         let is_checked = kinds.contains(&kind);
                         menu = menu.item(

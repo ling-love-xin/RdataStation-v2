@@ -222,11 +222,11 @@ fn kind_icons_use_three_distinct_shapes() {
     // （枚举由 gpui-kit-assets 的构建脚本按 svg 文件名生成，编译通过即资产存在）。
     let icons = [
         kind_icon(ArchiveKind::File),
-        kind_icon(ArchiveKind::Analysis),
+        kind_icon(ArchiveKind::AnalyticsTable),
         kind_icon(ArchiveKind::TableRef),
     ];
     assert_eq!(icons[0], gpui_kit::assets::IconName::FileText);
-    assert_eq!(icons[1], gpui_kit::assets::IconName::Table);
+    assert_eq!(icons[1], gpui_kit::assets::IconName::Database);
     assert_eq!(icons[2], gpui_kit::assets::IconName::ExternalLink);
     assert!(icons[0] != icons[1] && icons[1] != icons[2] && icons[0] != icons[2]);
 }
@@ -238,8 +238,8 @@ fn strength_badge_follows_kind_and_status() {
         "已归档"
     );
     assert_eq!(
-        strength_badge(ArchiveKind::Analysis, ArchiveStatus::Normal),
-        "分析表"
+        strength_badge(ArchiveKind::AnalyticsTable, ArchiveStatus::Normal),
+        "分析库表"
     );
     assert_eq!(
         strength_badge(ArchiveKind::TableRef, ArchiveStatus::Normal),
@@ -263,7 +263,7 @@ fn badge_tone_marks_weak_strength_as_warning() {
         BadgeTone::Success
     );
     assert_eq!(
-        badge_tone(ArchiveKind::Analysis, ArchiveStatus::Normal),
+        badge_tone(ArchiveKind::AnalyticsTable, ArchiveStatus::Normal),
         BadgeTone::Info
     );
     // `引用`复现强度最弱：必须显眼（warning），不能与"已归档"同为成功色。
@@ -329,14 +329,14 @@ fn counts_line_hides_zero_buckets() {
     let with_issues = ArchiveCounts {
         total: 4,
         archived: 3,
-        analysis: 1,
+        analytics_table: 1,
         missing: 1,
         drifted: 2,
         ..ArchiveCounts::default()
     };
     assert_eq!(
         with_issues.line(),
-        "4 项 · 已归档 3 · 分析表 1 · 缺失 1 · 索引异常 2"
+        "4 项 · 已归档 3 · 分析库表 1 · 缺失 1 · 索引异常 2"
     );
     assert!(with_issues.has_issues());
 }
@@ -365,6 +365,7 @@ fn detail(kind: ArchiveKind, status: ArchiveStatus, payload: Option<&str>) -> Ar
         content_hash: None,
         payload_rel_path: payload.map(str::to_string),
         analytics_table: None,
+        has_definition: false,
         history_label: String::new(),
         recent_versions: Vec::new(),
         groups: Vec::new(),
@@ -402,10 +403,16 @@ fn view_stats_only_for_data_sources_that_can_be_sampled() {
     reference.source_table = Some("public.orders".to_string());
     assert!(can_view_stats(&reference));
 
-    // 分析表：本体是 analytics.duckdb，要 ATTACH + 重建定义——后续批次接前不给入口。
-    assert!(!can_view_stats(&detail(
-        ArchiveKind::Analysis,
+    // 数据文件：扩展名可读（口径只有一处 `engine::duckdb::file_reader_function`）才给入口。
+    assert!(can_view_stats(&detail(
+        ArchiveKind::File,
         ArchiveStatus::Normal,
-        Some("analytics.duckdb")
+        Some("resources/dau.csv")
+    )));
+    // 不是数据文件的受管文件（`.md`）没有可取的数：不给入口。
+    assert!(!can_view_stats(&detail(
+        ArchiveKind::File,
+        ArchiveStatus::Normal,
+        Some("resources/notes.md")
     )));
 }

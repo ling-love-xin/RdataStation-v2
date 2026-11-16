@@ -4,24 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-const BASE_MIGRATION_SQL: &str =
-    include_str!("../../../store/migrations/project_meta/007_analytics_resources.sql");
-const ARCHIVE_MIGRATION_SQL: &str =
-    include_str!("../../../store/migrations/project_meta/020_analytics_resource_archive.sql");
-const PAYLOAD_MODE_MIGRATION_SQL: &str =
-    include_str!("../../../store/migrations/project_meta/023_analytics_resource_payload_mode.sql");
-const TAG_LINK_FK_MIGRATION_SQL: &str = include_str!(
-    "../../../store/migrations/project_meta/024_analytics_resource_tags_drop_tag_fk.sql"
-);
-const TIMELINE_MIGRATION_SQL: &str = concat!(
-    include_str!("../../../store/migrations/project_meta/027_analytics_resource_timeline.sql"),
-    include_str!("../../../store/migrations/project_meta/028_analytics_resource_semantics.sql"),
-    include_str!("../../../store/migrations/project_meta/029_analytics_resource_refs.sql"),
-    include_str!("../../../store/migrations/project_meta/030_analytics_resource_checkouts.sql")
-);
-/// 表型本体列（031）：项目侧结构须与生产一致，否则跨实例用例读全局行也会撞缺列。
-const ANALYTICS_TABLE_MIGRATION_SQL: &str =
-    include_str!("../../../store/migrations/project_meta/031_analytics_table_payload.sql");
+// 项目库建表 SQL 统一从 `crate::store::schema_sql` 取：此前这里手抄了一份迁移清单，
+// 加一个迁移要改六处（漏一处只在某个用例里以 no such column 冒出来），见该模块注释。
 
 struct TestEnv {
     dir: PathBuf,
@@ -58,23 +42,8 @@ async fn create_test_env() -> TestEnv {
         let conn = pool.acquire().await.expect("acquire");
         let inner = conn.inner().expect("inner");
         inner
-            .execute_batch(BASE_MIGRATION_SQL)
-            .expect("migrate 007");
-        inner
-            .execute_batch(ARCHIVE_MIGRATION_SQL)
-            .expect("migrate 020");
-        inner
-            .execute_batch(PAYLOAD_MODE_MIGRATION_SQL)
-            .expect("migrate 023");
-        inner
-            .execute_batch(TAG_LINK_FK_MIGRATION_SQL)
-            .expect("migrate 024");
-        inner
-            .execute_batch(TIMELINE_MIGRATION_SQL)
-            .expect("migrate 027");
-        inner
-            .execute_batch(ANALYTICS_TABLE_MIGRATION_SQL)
-            .expect("migrate 031");
+            .execute_batch(crate::store::schema_sql::PROJECT_MIGRATIONS_SQL)
+            .expect("run analytics_resources migrations");
     }
 
     // 项目 DuckDB 写连接（独立临时文件）。

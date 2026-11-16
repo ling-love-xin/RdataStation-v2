@@ -58,7 +58,7 @@ fn sample() -> Vec<ArchiveRow> {
         row(
             "ar_1",
             "alpha.sql",
-            ArchiveKind::Analysis,
+            ArchiveKind::AnalyticsTable,
             ArchiveStatus::Normal,
             5,
             "12,480 行 × 18 列",
@@ -103,7 +103,7 @@ fn query_matches_alias_tag_name_and_source_table() {
     let mut alias_row = row(
         "ar_1",
         "dau_report.sql",
-        ArchiveKind::Analysis,
+        ArchiveKind::AnalyticsTable,
         ArchiveStatus::Normal,
         1,
         "",
@@ -410,7 +410,7 @@ fn toggle_kind_normalizes_select_all_to_unlimited() {
     let mut filter = ResourcesFilter::default();
 
     filter.toggle_kind(ArchiveKind::File);
-    filter.toggle_kind(ArchiveKind::Analysis);
+    filter.toggle_kind(ArchiveKind::AnalyticsTable);
     assert!(filter.has_kind(ArchiveKind::File));
     assert_eq!(filter.menu_dims(), 2);
     assert!(!filter.is_empty(), "选了两种就是真筛选");

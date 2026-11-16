@@ -6,20 +6,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
 
-const MIGRATION_SQL: &str =
-    include_str!("../../../store/migrations/project_meta/007_analytics_resources.sql");
-const ARCHIVE_MIGRATION_SQL: &str =
-    include_str!("../../../store/migrations/project_meta/020_analytics_resource_archive.sql");
-const PAYLOAD_MODE_MIGRATION_SQL: &str =
-    include_str!("../../../store/migrations/project_meta/023_analytics_resource_payload_mode.sql");
-const TIMELINE_MIGRATION_SQL: &str = concat!(
-    include_str!("../../../store/migrations/project_meta/027_analytics_resource_timeline.sql"),
-    include_str!("../../../store/migrations/project_meta/028_analytics_resource_semantics.sql"),
-    include_str!("../../../store/migrations/project_meta/029_analytics_resource_refs.sql"),
-    include_str!("../../../store/migrations/project_meta/030_analytics_resource_checkouts.sql")
-);
-const ANALYTICS_TABLE_MIGRATION_SQL: &str =
-    include_str!("../../../store/migrations/project_meta/031_analytics_table_payload.sql");
+// 项目库建表 SQL 统一从 `crate::store::schema_sql` 取：此前这里手抄了一份迁移清单，
+// 加一个迁移要改六处（漏一处只在某个用例里以 no such column 冒出来），见该模块注释。
 
 /// 建好临时项目 + 三段迁移 + 归档服务；修复器借用服务里的本体层与索引层。
 async fn test_env() -> (ArchiveService, PathBuf) {
@@ -32,19 +20,9 @@ async fn test_env() -> (ArchiveService, PathBuf) {
     {
         let conn = pool.acquire().await.expect("acquire");
         let inner = conn.inner().expect("inner");
-        inner.execute_batch(MIGRATION_SQL).expect("migration 007");
         inner
-            .execute_batch(ARCHIVE_MIGRATION_SQL)
-            .expect("migration 020");
-        inner
-            .execute_batch(PAYLOAD_MODE_MIGRATION_SQL)
-            .expect("migration 023");
-        inner
-            .execute_batch(TIMELINE_MIGRATION_SQL)
-            .expect("migration 027");
-        inner
-            .execute_batch(ANALYTICS_TABLE_MIGRATION_SQL)
-            .expect("migration 031");
+            .execute_batch(crate::store::schema_sql::PROJECT_MIGRATIONS_SQL)
+            .expect("run analytics_resources migrations");
     }
     let store = AnalyticsResourceStore::new(pool);
     (ArchiveService::new(&dir, store), dir)

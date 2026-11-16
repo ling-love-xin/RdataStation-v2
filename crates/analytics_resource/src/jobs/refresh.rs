@@ -288,7 +288,12 @@ async fn load_global_view() -> (
 async fn load_previews(payload: &PayloadStore, rows: &[AnalyticsResource]) -> PreviewMap {
     let mut previews = PreviewMap::new();
     for row in rows {
-        if ArchiveKind::from_db_str(&row.kind) != ArchiveKind::File {
+        // 表型 / 引用档没有 `resources/` 下的本体文件；带结构指纹的行沿用原口径
+        // （只给元信息、不读文本预览）——种类收成两档后这两件事得分开判。
+        if ArchiveKind::resolve(&row.kind, row.analytics_table.as_deref())
+            != ArchiveKind::File
+            || row.definition_sql.is_some()
+        {
             continue;
         }
         let Some(rel) = row.file_rel_path.as_deref() else {

@@ -129,9 +129,10 @@ pub fn alert_line(detail: &ArchiveDetail) -> Option<String> {
         (ArchiveStatus::Missing, _) => {
             Some("本体缺失：可能被手工删除或移动，可用索引修复还原或删除记录".to_string())
         }
-        // 两类“变了”的原因不同，文案不能合用：文件型是**字节**被改过，
-        // 分析表看的是**定义与列结构**（行数变化不算，见 `analysis.rs` 的裁决 R4）。
-        (ArchiveStatus::ContentChanged, ArchiveKind::Analysis) => Some(format!(
+        // 两类“变了”的原因不同，文案不能合用：普通文件是**字节**被改过；带结构指纹的行
+        // 看的是**定义与列结构**（行数变化不算，见 `analysis.rs` 的裁决 R4）。判据是「有没有
+        // 指纹」，不是种类：种类收成两档后，同一个 `File` 里两种情况都存在。
+        (ArchiveStatus::ContentChanged, _) if detail.has_definition => Some(format!(
             "{}：可接受当前结构（生成新版本）或从历史还原",
             crate::analysis::STRUCTURE_CHANGED_NOTE
         )),

@@ -22,7 +22,6 @@ mod tests {
     fn kind_db_roundtrip() {
         for kind in [
             ArchiveKind::File,
-            ArchiveKind::Analysis,
             ArchiveKind::AnalyticsTable,
             ArchiveKind::TableRef,
         ] {
@@ -41,11 +40,9 @@ mod tests {
             ArchiveKind::resolve("analysis", Some("t_sales")),
             ArchiveKind::AnalyticsTable
         );
-        assert_eq!(
-            ArchiveKind::resolve("analysis", None),
-            ArchiveKind::Analysis
-        );
-        assert_eq!(ArchiveKind::resolve("analysis", Some("")), ArchiveKind::Analysis);
+        // `analysis` 是历史串：它的本体本来就是受管文件，读成 `File`。
+        assert_eq!(ArchiveKind::resolve("analysis", None), ArchiveKind::File);
+        assert_eq!(ArchiveKind::resolve("analysis", Some("")), ArchiveKind::File);
         assert_eq!(ArchiveKind::resolve("file", None), ArchiveKind::File);
         assert_eq!(
             ArchiveKind::resolve("table_ref", None),
@@ -56,7 +53,10 @@ mod tests {
     #[test]
     fn kind_labels_cover_all_kinds_in_menu_order() {
         let labels: Vec<&str> = ArchiveKind::ALL.iter().map(|kind| kind.label()).collect();
-        assert_eq!(labels, vec!["文件", "分析表", "分析库表", "引用"]);
+        assert_eq!(labels, vec!["文件", "分析库表", "引用"]);
+        // 筛选菜单只给两档：引用档没有新写入点，不进菜单（避免"看起来还能归档引用"）。
+        let menu: Vec<&str> = ArchiveKind::MENU.iter().map(|kind| kind.label()).collect();
+        assert_eq!(menu, vec!["文件", "分析库表"]);
     }
 
     #[test]
@@ -69,12 +69,12 @@ mod tests {
     #[test]
     fn strength_is_derived_from_kind() {
         assert_eq!(ArchiveKind::File.strength(), ReproductionStrength::Strong);
-        // 2026-11-12：analysis 档不再单列「中复现强度」——definition_sql 从不执行，
-        // 本体与 File 同样是受管文件快照，只能兑现「内容冻结」这一档。
+        // 表型资产本体是本机库里的表：同样只能兑现「内容冻结」这一档。
         assert_eq!(
-            ArchiveKind::Analysis.strength(),
+            ArchiveKind::AnalyticsTable.strength(),
             ReproductionStrength::Strong
         );
+        assert_eq!(ArchiveKind::TableRef.strength(), ReproductionStrength::Weak);
         // 表型同样内容冻结在库内（表不会自己消失），与文件档同级。
         assert_eq!(
             ArchiveKind::AnalyticsTable.strength(),

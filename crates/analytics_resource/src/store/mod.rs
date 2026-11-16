@@ -22,6 +22,7 @@ pub mod refs;
 pub mod resource;
 pub mod rows;
 pub mod schema_guard;
+pub mod schema_sql;
 pub mod semantics;
 pub mod tag;
 pub mod timeline;

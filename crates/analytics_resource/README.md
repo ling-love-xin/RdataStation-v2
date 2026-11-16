@@ -10,21 +10,33 @@
 
 ## 模块特点
 
-### 1. 两种 kind，本体都是受管文件——2026-11-12 口径修正
+### 1. 两档 kind：本体在「受管文件」或「分析库表」——2026-11-16 收口
 
 | kind | 本体在哪 | 复现强度 | 状态 |
 | --- | --- | --- | --- |
 | `file` | `{项目}/resources/`（**copy 默认**：复制进受管目录 + 只读，草稿箱那份保留为工作副本；**reference**：本体留原位、只存元数据） | **强**：内容冻结，重跑得同解（reference：读源 + 指纹校验） | ✅ 第一期 |
-| `analysis` | 同样是 `{项目}/resources/` 下的受管文件快照，额外登记 `definition_sql` / 列结构指纹 | **强**（与 `file` 同级）：内容冻结 | ✅ 指纹已落；**定义仅作元信息，不执行、不重建数据** |
-| ~~`table_ref`~~ | ~~远端（不在本机）~~ | ~~**弱**~~ | ❌ 划掉：跨文件表引用属编辑器 / 联邦层语义（代码保留兼容读取） |
+| `analytics_table` | **分析库里的持久表**（项目侧 `{项目}/.RSmeta/analytics.duckdb`；全局侧 `<RDS_HOME>/data/system/analytics.duckdb`），表名登记在 `analytics_table` 列 | **强**（与 `file` 同级）：表在库内即冻结；取样走 `SampleSource::on_duckdb`，不按路径读 | ✅ 表名列已落；打开 / 查看统计已通 |
+| ~~`table_ref`~~ | ~~远端（不在本机）~~ | ~~**弱**~~ | ❌ 划掉：跨文件表引用属编辑器 / 联邦层语义（代码保留兼容读取，**不进筛选菜单**） |
 
-> **2026-11-12 降级说明**：旧版本把 `analysis` 标成「中复现强度 / 定义冻结，数据可重建」，
-> 但源码里 `definition_sql` 全仓只被登记与算指纹，**没有任何执行点**，indexer 也跳过非 File 档的
-> 结构比对。对一个主打消除业务误解的模块，界面不能承诺做不到的事。现在 `ArchiveKind::strength()`
-> 只保留能被实现兑现的两档（内容冻结 / 只记指向），`FINGERPRINT_HINT` 也写明「只作登记留痕，
-> 不自动重建或校验」。**若将来要兑现重建，需单独开工并牵动 M8 与 DuckDB 计算层**——那时再升档。
+> **2026-11-16 口径收口**：`analysis` 档不再存在。它的本体一直是 `resources/` 下的受管文件，与
+> `file` 是同一个东西——「数据文件带结构指纹」是**能力**，不是分类，现在由 `definition_sql`
+> 是否非空表达（另有三列 `origin_kind` / `origin_ref` / `structured` 记来源与结构化事实）。
+> 历史行的 `kind = 'analysis'`：读面 `ArchiveKind::from_db_str` 直接读成 `File`（旧库不迁移也不会
+> 认错档），迁移 `project_meta/032`（镜像 `global/035`）再把库里的串归一为 `file`。
+> 结构指纹行仍**不参与字节指纹比对**（`indexer/scan.rs` 按 `definition_sql` 跳过），否则每一行
+> 都会在索引修复里被报成「内容已变」。
+>
+> **库层 `CHECK` 仍是三值**（`file` / `analysis` / `table_ref`）：改它要重建表，而迁移执行器把
+> 整段 SQL 包在一个事务里、`PRAGMA foreign_keys` 在事务内关不掉（见 `031` 迁移注释）。
+> 所以表型资产落库时 `kind` 仍写 `analysis`（`ArchiveKind::db_write_str`），
+> **权威判据是 `analytics_table` 列非空**（`ArchiveKind::resolve`）。
 
-界面上**档位徽标常显**（`已归档` / `分析表` / `引用`）——用户要一眼知道本体在哪；
+> **2026-11-12 降级说明（保留）**：旧版把 `analysis` 标成「定义冻结，数据可重建」，但
+> `definition_sql` 全仓只被登记与算指纹、**没有任何执行点**。对主打消除业务误解的模块，界面不能
+> 承诺做不到的事；`FINGERPRINT_HINT` 写明「只作登记留痕，不自动重建或校验」。将来要兑现重建，
+> 需单独开工并牵动 M8 与 DuckDB 计算层。
+
+界面上**档位徽标常显**（`已归档` / `分析库表` / `引用`）——用户要一眼知道本体在哪；
 徽标只描述形态，不承诺重建能力。
 
 > **File 档归档粒度（2026-10-13 裁决）**：两档都做、默认 copy。copy = 本体复制进 `resources/`（版本冻结、回溯读副本永不失效，草稿箱 = 工作副本 checkout 语义）；reference = 只存元数据（地址 + 文件名 + 指纹 + 版本记录，本体留原位，打开校验指纹，不一致提示"源已变更，快照失效"）。不做真 diff；血缘任何模式都有（`source_path` + `source_fingerprint` + 版本链）；purge 一起清除。
@@ -42,7 +54,7 @@
 > （[`PromotedFrom`](src/model/promoted_from.rs)）：详情「来源」区据此显示「来源草稿」+ 路径、
 > 或「来源全局实例」+ id（前缀是库里的约定，不露给用户）。真要拆成两列时，
 > `global:` 前缀就是可回填的迁移线索（需新迁移 + 改列名清单 + 改 `starts_with("global:")` 断言）。
-| 代码 | 本体文件本身；`analysis` 的 `definition_sql` **只登记留痕、不执行** | 怎么算的 |
+| 代码 | 本体文件本身；带结构指纹的行另有 `definition_sql`（**只登记留痕、不执行**） | 怎么算的 |
 | 内容指纹 | `content_hash`（sha256） | 还是不是当初那份 |
 
 > **来源口径（2026-10-13 裁决）**：草稿箱 = **文件地址 + 文件名**；数据库 = **连接身份指纹 + 表**（复用 `engine::persistence::metadata_identity::ConnectionIdentity::fingerprint`，不新造）。

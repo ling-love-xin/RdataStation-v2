@@ -153,14 +153,14 @@ fn archive_seed(
     (seed, resolved)
 }
 
-/// 归档时按来源选**档位**（P4.5 的核心判定）：扩展名认得出来的数据文件
-/// （CSV / Parquet / Excel / JSON，口径在 `engine::duckdb::file_reader_function`）
-/// 走 `analysis` 档——归档后能洞察、能按配方复算；其余（`.sql` / `.md` …）仍是文件型。
-fn archive_kind_for(path: &std::path::Path) -> ArchiveKind {
-    match engine::duckdb::file_reader_function(&path.to_string_lossy()) {
-        Some(_) => ArchiveKind::Analysis,
-        None => ArchiveKind::File,
-    }
+/// 归档时**要不要连一次 DuckDB 读结构**：扩展名认得出来的数据文件才值得
+/// （CSV / Parquet / Excel / JSON，口径只有一处：`engine::duckdb::file_reader_function`）。
+///
+/// 它**不再决定档位**——档位一律是 `File`。「能不能进分析库」是能力，由结构化探测
+/// 与指纹表达；过去拿它分出一个 `analysis` 档，结果是同一个本体在同一张表里有两种
+/// 写法（本轮收掉）。
+fn is_structured_payload(path: &std::path::Path) -> bool {
+    engine::duckdb::file_reader_function(&path.to_string_lossy()).is_some()
 }
 
 /// 提交一次归档（入队 + 立刻刷新 + 回执）：两条归档入口共用，
@@ -176,8 +176,8 @@ fn submit_archive(
     cx: &mut App,
 ) {
     let keep_versions = backend.keep_versions(cx);
-    // 探测标志跟着档位走：分析档才值得连一次 DuckDB（文件型的指纹是字节 sha256）。
-    let analysis_probe = request.kind == ArchiveKind::Analysis && request.analysis.is_none();
+    // 探测标志跟着**来源**走：结构化数据文件才值得连一次 DuckDB（其余文件的指纹是字节 sha256）。
+    let analysis_probe = request.analysis.is_none() && is_structured_payload(&request.source_path);
     resource_jobs::enqueue_archive(
         root.to_path_buf(),
         read_only,

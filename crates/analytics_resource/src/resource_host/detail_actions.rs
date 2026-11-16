@@ -58,7 +58,9 @@ pub(super) fn request_open(host: &ResourceHost, detail: &ArchiveDetail, _window:
                 }
             }
         }
-        // 分析表（数据文件）**不走编辑器文本**：双击/打开要看的是数据本身。
+        // **数据文件不走编辑器文本**：双击/打开要看的是数据本身；`.sql` / `.md` 这类不是
+        // 数据，仍进编辑器。判定与「查看统计」同一口径——扩展名白名单只有一处
+        // （`engine::duckdb::file_reader_function`），不按种类分。
         //
         // 走洞察的取样入口（与右键「查看统计」同一个）：那边把本体当只读源表读出来
         // （D58：取样 → 临时表），用户能直接看到这张表的形状与数据。
@@ -66,7 +68,12 @@ pub(super) fn request_open(host: &ResourceHost, detail: &ArchiveDetail, _window:
         // 注：原型 P4.4 想要的是“编辑器结果表格（只读）”，那需要编辑器侧先开一个
         // “以结果区打开数据文件”的 API（现在只有“打开文本 + 执行”），属 P4.4 余项；
         // 在此之前“双击能看见数据”这件事由洞察入口承担，比摆一个点了没反应的按钮强。
-        if detail.kind == ArchiveKind::Analysis {
+        if detail
+            .payload_rel_path
+            .as_deref()
+            .and_then(engine::duckdb::file_reader_function)
+            .is_some()
+        {
             match insight::SampleSource::duckdb_file(&path, detail.name.clone()) {
                 Ok(source) => {
                     let name = detail.name.clone();
@@ -122,20 +129,6 @@ pub(super) fn request_view_stats(host: &ResourceHost, detail: &ArchiveDetail, _w
                     insight::SampleSource::new(conn_id.to_string(), sql, detail.name.clone());
                 host.backend
                     .open_insight_source_table(source, detail.name.clone(), cx);
-            }
-            // 分析表（数据文件档）：本体是 `resources/` 下的数据文件，读法与 `File`
-            // 档相同（DuckDB 按扩展名选读取器）。
-            ArchiveKind::Analysis => {
-                let Some(path) = host.payload_path(detail, cx) else {
-                    return;
-                };
-                match insight::SampleSource::duckdb_file(&path, detail.name.clone()) {
-                    Ok(source) => {
-                        host.backend
-                            .open_insight_source_table(source, detail.name.clone(), cx)
-                    }
-                    Err(error) => host.notice(format!("资产库：{error}"), cx),
-                }
             }
             // 表型：本体是项目 `analytics.duckdb` 里的持久表，按登记表名取样
             // （`analytics_table` 列是权威判据，见迁移 031）。

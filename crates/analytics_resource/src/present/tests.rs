@@ -67,7 +67,8 @@ fn row_model(id: &str, kind: &str, file_size: Option<i32>) -> AnalyticsResource 
         source_table: None,
         definition_sql: None,
         archived_at: Some(now),
-        analytics_table: None,
+        // 表型行：`kind` 列仍是 `analysis`（库层 CHECK 未扩），权威判据是 `analytics_table` 列。
+        analytics_table: (kind == "analytics_table").then(|| format!("t_{id}")),
         origin_kind: None,
         origin_ref: None,
         structured: None,
@@ -263,11 +264,11 @@ fn tail_follows_field_priority_per_kind() {
     );
 
     // 分析表型用规模替代大小。
-    let mut analysis = row_model("ar_analysis", "analysis", None);
+    let mut analysis = row_model("ar_analysis", "analytics_table", None);
     analysis.row_count = Some(12480);
     analysis.column_count = Some(18);
     assert_eq!(
-        tail_for(&analysis, ArchiveKind::Analysis, now),
+        tail_for(&analysis, ArchiveKind::AnalyticsTable, now),
         "12,480 行 × 18 列 · 刚刚"
     );
 
@@ -288,7 +289,7 @@ fn details_carry_per_kind_size_and_real_history_count() {
     let now = Utc::now();
     let file = row_model("ar_file", "file", Some(1229));
     let analysis = {
-        let mut row = row_model("ar_analysis", "analysis", None);
+        let mut row = row_model("ar_analysis", "analytics_table", None);
         row.row_count = Some(12480);
         row.column_count = Some(18);
         row
@@ -369,7 +370,7 @@ fn dispatch_label_summarizes_only_used_globals() {
 #[test]
 fn detail_carries_recent_version_lines_capped_at_three() {
     let now = Utc::now();
-    let mut analysis = row_model("ar_analysis", "analysis", None);
+    let mut analysis = row_model("ar_analysis", "analytics_table", None);
     analysis.row_count = Some(12480);
     analysis.column_count = Some(18);
     let resources = vec![analysis.clone()];
@@ -494,7 +495,7 @@ fn snapshot_carries_tags_for_rows_details_and_dictionary() {
 #[test]
 fn rows_carry_alias_and_source_table_for_the_search_surface() {
     let now = Utc::now();
-    let mut alias = row_model("ar_1", "analysis", None);
+    let mut alias = row_model("ar_1", "file", None);
     alias.alias = Some("月报".to_string());
     let mut table_ref = row_model("ar_2", "table_ref", None);
     table_ref.source_table = Some("dwd.dwd_orders".to_string());
@@ -602,7 +603,7 @@ fn snapshot_counts_route_status_before_kind() {
     let now = Utc::now();
     let resources = vec![
         row_model("ar_1", "file", Some(1024)),
-        row_model("ar_2", "analysis", None),
+        row_model("ar_2", "analytics_table", None),
         row_model("ar_3", "table_ref", None),
         row_model("ar_4", "file", Some(10)),
         row_model("ar_5", "file", Some(10)),
@@ -635,7 +636,7 @@ fn snapshot_counts_route_status_before_kind() {
     assert_eq!(snapshot.rows.len(), 5);
     assert_eq!(snapshot.counts.total, 5);
     assert_eq!(snapshot.counts.archived, 1);
-    assert_eq!(snapshot.counts.analysis, 1);
+    assert_eq!(snapshot.counts.analytics_table, 1);
     assert_eq!(snapshot.counts.table_ref, 1);
     assert_eq!(snapshot.counts.missing, 1);
     assert_eq!(snapshot.counts.drifted, 1);

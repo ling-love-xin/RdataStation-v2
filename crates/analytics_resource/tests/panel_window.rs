@@ -231,7 +231,7 @@ fn snapshot(rows: Vec<ArchiveRow>, read_only: bool) -> ResourcesSnapshot {
     for item in &rows {
         match (item.status, item.kind) {
             (ArchiveStatus::Missing, _) => counts.missing += 1,
-            (_, ArchiveKind::Analysis) => counts.analysis += 1,
+            (_, ArchiveKind::AnalyticsTable) => counts.analytics_table += 1,
             (_, ArchiveKind::TableRef) => counts.table_ref += 1,
             _ => counts.archived += 1,
         }
@@ -278,6 +278,7 @@ fn detail_for(row: &ArchiveRow) -> ArchiveDetail {
         content_hash: Some("0123456789abcdef0123".to_string()),
         payload_rel_path: Some(format!("{}.sql", row.id)),
         analytics_table: None,
+        has_definition: false,
         history_label: String::new(),
         tags: Vec::new(),
         group: None,
@@ -422,7 +423,7 @@ fn snapshot_push_drives_rows_selection_and_dangling_cleanup(cx: &mut TestAppCont
                 snapshot(
                     vec![
                         row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 3),
-                        row("ar_2", ArchiveKind::Analysis, ArchiveStatus::Normal, 1),
+                        row("ar_2", ArchiveKind::AnalyticsTable, ArchiveStatus::Normal, 1),
                         row("ar_3", ArchiveKind::TableRef, ArchiveStatus::Normal, 1),
                         row("ar_4", ArchiveKind::File, ArchiveStatus::Missing, 2),
                     ],
@@ -449,7 +450,7 @@ fn snapshot_push_drives_rows_selection_and_dangling_cleanup(cx: &mut TestAppCont
     });
     assert_eq!(counts.total, 4);
     assert_eq!(counts.archived, 1);
-    assert_eq!(counts.analysis, 1);
+    assert_eq!(counts.analytics_table, 1);
     assert_eq!(counts.table_ref, 1);
     assert_eq!(counts.missing, 1);
     assert!(counts.has_issues(), "缺失应给出修复入口");
@@ -486,7 +487,7 @@ fn toolbar_conditions_narrow_rows_and_clear_dangling_selection(cx: &mut TestAppC
                 snapshot(
                     vec![
                         row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 3),
-                        row("ar_2", ArchiveKind::Analysis, ArchiveStatus::Normal, 1),
+                        row("ar_2", ArchiveKind::AnalyticsTable, ArchiveStatus::Normal, 1),
                         row("ar_3", ArchiveKind::File, ArchiveStatus::Missing, 2),
                     ],
                     false,
@@ -538,7 +539,7 @@ fn toolbar_conditions_narrow_rows_and_clear_dangling_selection(cx: &mut TestAppC
     cx.update(|_window, cx| {
         panel.update(cx, |panel, cx| {
             panel.toggle_only_issues(cx);
-            panel.toggle_kind(ArchiveKind::Analysis, cx);
+            panel.toggle_kind(ArchiveKind::AnalyticsTable, cx);
         });
     });
     let ids = cx.update(|_window, cx| {
@@ -572,7 +573,7 @@ fn host_selection_mirrors_into_list_without_reentry(cx: &mut TestAppContext) {
                 snapshot(
                     vec![
                         row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 3),
-                        row("ar_2", ArchiveKind::Analysis, ArchiveStatus::Normal, 1),
+                        row("ar_2", ArchiveKind::AnalyticsTable, ArchiveStatus::Normal, 1),
                         row("ar_3", ArchiveKind::File, ArchiveStatus::Missing, 2),
                     ],
                     false,
@@ -793,7 +794,7 @@ fn clear_search_action_clears_query_only(cx: &mut TestAppContext) {
                 snapshot(
                     vec![
                         row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 3),
-                        row("ar_2", ArchiveKind::Analysis, ArchiveStatus::Normal, 1),
+                        row("ar_2", ArchiveKind::AnalyticsTable, ArchiveStatus::Normal, 1),
                     ],
                     false,
                 ),
@@ -901,7 +902,7 @@ fn sort_click_flips_direction_and_keeps_it_across_fields(cx: &mut TestAppContext
                 snapshot(
                     vec![
                         row("ar_2", ArchiveKind::File, ArchiveStatus::Normal, 2),
-                        row("ar_1", ArchiveKind::Analysis, ArchiveStatus::Normal, 1),
+                        row("ar_1", ArchiveKind::AnalyticsTable, ArchiveStatus::Normal, 1),
                         row("ar_3", ArchiveKind::File, ArchiveStatus::Normal, 8),
                     ],
                     false,
@@ -1136,7 +1137,7 @@ fn no_match_state_renders_and_clear_filter_restores_rows(cx: &mut TestAppContext
                 snapshot(
                     vec![
                         row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 3),
-                        row("ar_2", ArchiveKind::Analysis, ArchiveStatus::Normal, 1),
+                        row("ar_2", ArchiveKind::AnalyticsTable, ArchiveStatus::Normal, 1),
                     ],
                     false,
                 ),
@@ -1352,7 +1353,7 @@ fn search_matches_alias_tag_name_and_source_table(cx: &mut TestAppContext) {
         move |_window, cx| ResourcesPanel::new(host.clone(), cx)
     });
 
-    let mut aliased = row("ar_1", ArchiveKind::Analysis, ArchiveStatus::Normal, 1);
+    let mut aliased = row("ar_1", ArchiveKind::AnalyticsTable, ArchiveStatus::Normal, 1);
     aliased.alias = Some("月报".to_string());
     let mut tagged = row("ar_2", ArchiveKind::File, ArchiveStatus::Normal, 1);
     tagged.tags = vec![ArchiveTagChip {
