@@ -643,6 +643,23 @@ impl DataObjectsTab {
             } else {
                 None
             };
+            // 缺扩展的行：与其只标个警告，给一条能走的路（跳插件管理）
+            let install_button = if object.can_analyze() {
+                None
+            } else {
+                let shared = self.shared.clone();
+                Some(
+                    Button::new(SharedString::from(format!(
+                        "data-object-install-{}",
+                        object.key
+                    )))
+                    .ghost()
+                    .label("装扩展")
+                    .on_click(move |_, window, cx| {
+                        shared.show_plugin_manager(window, cx);
+                    }),
+                )
+            };
             list = list.child(
                 div()
                     // 每一行都要能被 hover 与键盘看清：hover 需要命中的 id，不是样式
@@ -683,10 +700,6 @@ impl DataObjectsTab {
                                     .text_color(colors.foreground)
                                     .child(object.name.clone()),
                             )
-                            // 业务身份走标准 Tag：手写胶囊的圆角、内距、字号各写一遍就会漂
-                            .child(
-                                pill.child(object.pill.clone()),
-                            )
                             .child(
                                 div()
                                     .text_xs()
@@ -694,12 +707,14 @@ impl DataObjectsTab {
                                     .child(object.note.clone()),
                             ),
                     )
+                    // 业务身份走标准 Tag：手写胶囊的圆角、内距、字号各写一遍就会漂
+                    .child(pill.child(object.pill.clone()))
                     .child(
                         div()
                             .text_xs()
                             .flex_none()
                             .text_color(colors.muted_foreground)
-                            .child(object.channel.label()),
+                            .child(format!("→ {}", object.channel.label())),
                     )
                     .child(
                         div()
@@ -709,6 +724,7 @@ impl DataObjectsTab {
                             .child(object.state.label()),
                     )
                     .children(pick_button)
+                    .children(install_button)
                     .children(persist_button)
                     .children(session_button),
             );
