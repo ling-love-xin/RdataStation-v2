@@ -193,39 +193,58 @@ pub(super) fn request_promote_to_global(host: &ResourceHost, detail: &ArchiveDet
             host.notice("资产库：项目为只读模式，不能升级到全局", cx);
             return;
         }
-        // File 档才有本体相对路径；分析表型存档的本体在项目 `analytics.duckdb`，
-        // 数据读取 / 重建路径未接（resource_host.rs::request_open 同注），升级随 M8 后续批次。
-        let Some(rel) = detail.payload_rel_path.as_deref() else {
-            host.notice("资产库：分析表型存档的升级随 M8 后续批次接入", cx);
-            return;
-        };
-        let abs = root.join("resources").join(rel);
-        if !abs.exists() {
-            host.notice(format!("资产库：本体文件不存在（{rel}），无法升级"), cx);
-            return;
-        }
-        // 形态判定：数据文件 → 映射出表；文本脚本 → 内容表；其余（png / zip / docx 这类
-        // 二进制）**不能升级**。加固前一律落到 `PromoteKind::Script` 的 `read_to_string`，
-        // 撞 UTF-8 失败后把 `stream did not contain valid UTF-8` 原样丢给用户。
-        let kind = if is_data_file_ext(&abs) {
-            PromoteKind::DataFile
-        } else if is_text_script_ext(&abs) {
-            PromoteKind::Script
-        } else {
-            let ext = abs
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("（无扩展名）")
-                .to_ascii_lowercase();
-            host.notice(
-                format!(
-                    "资产库：{ext} 这类文件不能升级到全局——全局库只收能读成表的数据文件\
+        // 两种本体：文件（`resources/<rel>`）与分析库里的一张表（表型存档）。
+        // 表型不由这里读数据——工作线程用项目写连接整表导出（`source_table` 只给表名）。
+        let (abs, rel_path, kind, source_table) = match detail.payload_rel_path.as_deref() {
+            Some(rel) => {
+                let abs = root.join("resources").join(rel);
+                if !abs.exists() {
+                    host.notice(format!("资产库：本体文件不存在（{rel}），无法升级"), cx);
+                    return;
+                }
+                // 形态判定：数据文件 → 映射出表；文本脚本 → 内容表；其余（png / zip / docx 这类
+                // 二进制）**不能升级**。加固前一律落到 `PromoteKind::Script` 的 `read_to_string`，
+                // 撞 UTF-8 失败后把 `stream did not contain valid UTF-8` 原样丢给用户。
+                let kind = if is_data_file_ext(&abs) {
+                    PromoteKind::DataFile
+                } else if is_text_script_ext(&abs) {
+                    PromoteKind::Script
+                } else {
+                    let ext = abs
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("（无扩展名）")
+                        .to_ascii_lowercase();
+                    host.notice(
+                        format!(
+                            "资产库：{ext} 这类文件不能升级到全局——全局库只收能读成表的数据文件\
 （csv / tsv / parquet / xlsx / json 等）或文本脚本（sql / py / md 等）。\
 内容是数据的话，另存为 csv 再升级；纯二进制文件请留在项目里，用「分发」或共享目录传。"
-                ),
-                cx,
-            );
-            return;
+                        ),
+                        cx,
+                    );
+                    return;
+                };
+                (abs, Some(rel.to_string()), kind, None)
+            }
+            None => {
+                let Some(table) = detail.analytics_table.as_deref() else {
+                    host.notice(
+                        "资产库：这条存档没有登记本体表名（多半是迁移前的老行）。\
+先在「索引修复」里认一下本体，再升级到全局",
+                        cx,
+                    );
+                    return;
+                };
+                // 源库路径只作说明：真正打开哪个库由工作线程按项目根决定。
+                (
+                    root.join(crate::payload::META_DIR_NAME)
+                        .join("analytics.duckdb"),
+                    None,
+                    PromoteKind::DataFile,
+                    Some(table.to_string()),
+                )
+            }
         };
         resource_jobs::enqueue_promote(
             root,
@@ -233,12 +252,13 @@ pub(super) fn request_promote_to_global(host: &ResourceHost, detail: &ArchiveDet
                 name: detail.name.clone(),
                 kind,
                 source_abs_path: abs,
-                rel_path: Some(rel.to_string()),
+                rel_path,
                 content_hash: detail.content_hash.clone().unwrap_or_default(),
                 file_size: None,
                 // 来源链只记直接上游：全局行靠这两项回指「A 的哪一条、哪一版」。
                 source_resource_id: Some(detail.id.clone()),
                 source_version: Some(detail.version),
+                source_table,
             },
             false,
         );

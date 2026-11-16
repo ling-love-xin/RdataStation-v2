@@ -59,6 +59,13 @@ pub struct PromoteRequest {
     /// 来源：A 的版本号。**各层版本各自编号**——A 的 v5 升级成全局的 v1，
     /// 这里记的是被搬走的那一版 A，不是全局的版本号。
     pub source_version: Option<i32>,
+    /// 本体是项目分析库里的**一张表**时给表名（表型存档升级）。
+    ///
+    /// `Some` 时这份请求不由全局连接直接建表：表在项目库里，必须由项目自己的
+    /// 写连接整表导出（Windows 单句柄，全局连接 `ATTACH` 项目库会撞「文件被占用」，
+    /// 与分发侧同一条限制）。这时 `source_abs_path` 指的是项目分析库文件，
+    /// 只作说明与日志用——真正搬运在 `jobs::global::promote_table_from_project`。
+    pub source_table: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

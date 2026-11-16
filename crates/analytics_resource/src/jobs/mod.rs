@@ -18,7 +18,7 @@
 //! 由索引修复对话框呈现（本模块只把带 id 的两类差异折进行状态）。
 
 mod archive;
-mod global;
+pub(crate) mod global;
 mod index;
 mod rename;
 mod tag;

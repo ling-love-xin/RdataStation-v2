@@ -83,6 +83,8 @@ fn promote_req(name: &str, path: &Path, kind: PromoteKind) -> PromoteRequest {
         // 默认不记来源（这条 helper 只造请求）；要验链的用例自己填。
         source_resource_id: None,
         source_version: None,
+        // 文件型请求：本体是文件，表型用例（g015）自己填表名。
+        source_table: None,
     }
 }
 
@@ -814,6 +816,73 @@ async fn g014_each_global_version_keeps_its_own_table() {
             .expect("probe second"),
         "新版表要真的建出来"
     );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+/// 表型升级（场景 3：联邦临时结果集 → 全局持久表）：本体是项目分析库里的一张表，
+/// 升级必须**整表搬运**——采样一次，「全局 v1 和项目 A 的 v5 是同一份数据」就不成立了。
+///
+/// 顺带钉三件事：来源链指回 A 的 v5；表型行 `structured = 1`（能参与分析）；
+/// 升级只读项目表，不改项目侧数据。
+#[tokio::test]
+async fn g015_table_source_promote_moves_every_row() {
+    let env = create_test_env().await;
+    let project = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    {
+        let mut guard = project.0.lock().await;
+        let conn = guard.as_mut().expect("project conn");
+        conn.execute_batch(
+            "CREATE TABLE daily AS \
+             SELECT i AS id, i * 2 AS amount FROM range(1, 101) r(i);",
+        )
+        .expect("create project table");
+    }
+
+    let req = PromoteRequest {
+        name: "daily_orders".to_string(),
+        // 占位：导出层会把形态改写成 DataFile（表先搬成 parquet 再升级）。
+        kind: PromoteKind::DataFile,
+        source_abs_path: env.project_root.join(".RSmeta/analytics.duckdb"),
+        rel_path: None,
+        content_hash: "hash_daily".to_string(),
+        file_size: None,
+        source_resource_id: Some("arp_a_v5".to_string()),
+        source_version: Some(5),
+        source_table: Some("daily".to_string()),
+    };
+
+    let outcome = crate::jobs::global::promote_table_from_project(&env.store, &project, &req, false)
+        .await
+        .expect("promote table");
+    assert_eq!(outcome.version, 1, "A 的 v5 升级成全局 v1（各层各自编号）");
+    assert_eq!(outcome.row_count, Some(100), "整表搬运，不采样");
+
+    let table = read_global_table(&env, "daily_orders").expect("表名");
+    let (rows, cols) = env.store.table_stats(&table).await.expect("stats");
+    assert_eq!(rows, Some(100), "全局表行数 = 项目表行数");
+    assert_eq!(cols, Some(2));
+
+    // 表型来源也是结构化（能参与分析），来源链只记直接上游那一跳。
+    let list = list_global_resources(&env.store).expect("list");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].structured, Some(1));
+    assert_eq!(list[0].origin_kind.as_deref(), Some("project"));
+    assert!(
+        list[0]
+            .origin_ref
+            .as_deref()
+            .unwrap_or("")
+            .contains("arp_a_v5"),
+        "来源链要指回 A 的 v5：{:?}",
+        list[0].origin_ref
+    );
+
+    // 升级是读，不是迁移：项目侧那张表还在、还是 100 行。
+    let (rows, _) = project_table_stats(&project, "daily")
+        .await
+        .expect("project stats");
+    assert_eq!(rows, Some(100), "升级不动项目侧数据");
 
     let _ = fs::remove_dir_all(&env.dir);
 }

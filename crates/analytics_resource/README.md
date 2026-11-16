@@ -121,6 +121,12 @@
 代价要说清：一版一张表 = 每版一份全量副本，全局库随版本数线性增长；裁剪交给 `KeepVersions`
 那套策略（表型裁剪尚未实现，见「能力状态」）。
 
+**表型存档的升级**（本体是项目分析库里的一张表，而不是文件）走另一条路：入口只给表名
+（`PromoteRequest::source_table`），工作线程用项目写连接 `COPY <表> TO parquet`
+（**不带 LIMIT，整表搬**）→ 再按数据文件升级。绕这一步是因为两个 DuckDB 都是单写者，
+Windows 单句柄下互相 `ATTACH` 会撞「文件被占用」（分发侧同一条限制）。临时 parquet
+用完即删，`COPY` 失败也删；升级是读，项目侧那张表原样留着。
+
 ### 8. 边界与协作
 
 - **归档由上游发起**（草稿箱右键 / 本地文件选择）：M6 **只收 `PathBuf` + 元数据**（`ArchiveRequest`）与宿主预取好的 `DraftCandidate`，不认识 `ScratchpadStore` 等上游类型。依赖方向：`workbench / app → analytics_resource → engine, shared`；2026-11-12 收口后本 crate **不再依赖 scratchpad**（草稿箱扫描与标签预取由 `ResourceHostBackend::draft_candidates` 注入）。
@@ -204,6 +210,7 @@
 | 迁移 020 + 新列接入（写入 + 读取 + 按本体路径查重） | `kind` 过滤的**存储层**入口（面板已能按 kind 筛可见行，SQL 未接，后续刀） |
 | **全局一版一张表**【刀 4】`global/table_name.rs`：升级落 `res_<描述>_<时间戳>`、旧版表保留；`analytics_table` 记实际表名（迁移 `global/036` 给老行回填成资产名，读取面另有 `name` 回退）；升级冲突只剩登记层，覆盖只软删登记；全局表型行打开走 `SampleSource::on_global` | 全局资产的删除入口（现在只有升级与分发，`drop_global_table` 暂无生产调用点）；表型 `KeepVersions` 裁剪 |
 | **来源链**【刀 3】`origin_kind` + `origin_ref` 记**直接上游**那一跳（全局行 `project` + 资源 id/版本；项目行 `global` + 实例/版本），详情「来源」区多一行「上游」；各层版本各自编号 | 整条链的界面浏览（现在靠逐跳往上找） |
+| **表型升级**【刀 5c】本体是项目分析库里一张表的存档也能升级：入口只给表名 → 工作线程 `COPY` 整表出 parquet → 按数据文件升级；`COPY` 不带 LIMIT（不采样），临时文件用完即删，项目侧表原样留着 | — |
 | 行映射从 v1 的 4 份收敛为 1 份；测试库跑齐 007 + 020 | —（测试库现跑齐 007 + 020 + 023 + 024 + 027–030） |
 | 继承缺陷修复：分页除零与负数、`LIKE` 转义、连接嵌套、更新无事务、影响 0 行不报错、`parent_version_id` 语义、JSON 解析双策略、乱码副本名 | — |
 
