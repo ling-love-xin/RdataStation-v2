@@ -250,3 +250,4 @@ cargo test -p rds-editor --lib -- --test-threads=1   # 基线 776 passed / 3 fai
 7. **面板分组按 DuckDB 容器**（已落地：`13b2211d` 改行模型、`814e26ac` 渲染 pill、`f2cfaf6a` 回写原型 07）：本项目分析库 / 全局分析库 / 已挂载的源 / 外部文件 / 临时表五段；资产、项目自建、全局、结果集、草稿降为行内 pill（`Object.pill`）。洞察产物 `tmp_i_` **不进面板**——它是抽取的样，不是全量；要留就在洞察里保留到项目库，落成持久表后再从这里看。`can_persist` 因此收紧到「临时表 + 可用」。
 8. **两处动作语义**：连接行「加载」、表 / 视图行「选用」；洞察弹窗里的连接行只展开不可勾（P7）。面板侧已落地「选用」（`896421f6`）；连接行「加载」与弹层「只展开」随 01 source-picker 的交互口径一起改，未落地。
 9. **面板只承载一个对象**（已落地：`896421f6`）：行上「选用」，再点「洞察此对象」；多源在洞察面板内部按「+」加。软上限 8 只在洞察面板内部生效，面板不再触发。之前「分析已选（N）」的批量路径已删除。
+10. **P8 未定位**：本轮在 `crates/database/src/nav_view` 与 `crates/workbench/src/components/source_picker` 两个候选处都没找到「DuckDB tab 给连接挂 catalog」的代码——picker 的 `group_of`（`components/source_picker/group.rs:49`）里 DuckDB 组只收 `ResultSet` / `InsightSample`，`Analysis` / `AnalysisGlobal` 归「文件」组（同文件 :112 有断言）。要改这条，得先指认实际挂 catalog 的入口（是导航树的 DuckDB 分支，还是编辑器侧栏的 DuckDB 分区）。
