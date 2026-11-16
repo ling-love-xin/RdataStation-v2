@@ -99,6 +99,9 @@ impl ResourcesPanel {
             .flex_none()
             .h(rems(ui::ROW_HEIGHT))
             .h_flex()
+            // 行高 24px，按钮与文字都得竖着居中：不写 items_center 时 flex 默认 stretch，
+            // 文字会顶着上边，和右边高出来的按钮凑成一副没对齐的样子
+            .items_center()
             .justify_between()
             .px_2()
             .border_t(ui::HAIRLINE)
@@ -111,8 +114,10 @@ impl ResourcesPanel {
             )
             .when(has_issues, |bar| {
                 bar.child(
+                    // 默认档按钮 32px 比状态行还高，会把这行撑出上下溢出
                     Button::new("index-repair")
                         .ghost()
+                        .xsmall()
                         .label("修复…")
                         .on_click(move |_, window, cx| host.request_index_repair(window, cx)),
                 )
