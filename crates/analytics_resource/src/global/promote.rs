@@ -139,6 +139,13 @@ impl GlobalInstanceStore {
         // ---- 全局登记（scope = 'global'，记实际表名）+ 版本快照 ----
         let outcome =
             self.register_global(&req.name, &table, next_version, req, row_count, column_count)?;
+        // 一版一张表会随版本线性增长：按保留策略裁掉更早的表（只删内容表，
+        // 登记与版本快照都留）。裁剪失败只记日志，不回滚已经成功的升级。
+        if let Some(keep) = req.keep_versions {
+            if let Err(error) = self.prune_version_tables(&req.name, keep).await {
+                tracing::warn!(error = %error, name = %req.name, "全局历史表裁剪失败");
+            }
+        }
         Ok(outcome)
     }
 

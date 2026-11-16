@@ -94,8 +94,8 @@ impl GlobalInstanceStore {
     /// 调用方要为「删的是哪一版」负责：正常路径不该拿它做版本裁剪，
     /// 那是 `KeepVersions` 的事；这里只服务明确的删除与被注入的失败场景。
     ///
-    /// 目前有两类调用点：脚本内容表写到一半失败时的半成品清理（`promote`），
-    /// 以及将来「删除全局资产」与 `KeepVersions` 表型裁剪的入口。
+    /// 三类调用点：脚本内容表写到一半失败时的半成品清理（`promote`）、
+    /// `KeepVersions` 表型裁剪（`prune_version_tables`），以及将来的「删除全局资产」。
     pub(super) async fn drop_global_table(&self, name: &str) -> Result<(), CoreError> {
         self.with_duckdb(|conn| {
             conn.execute_batch(&format!("DROP TABLE IF EXISTS {};", quote_ident(name)))
@@ -103,6 +103,68 @@ impl GlobalInstanceStore {
             Ok(())
         })
         .await
+    }
+
+    /// 按 `KeepVersions` 裁剪全局同名链的**历史版本表**（只删内容，不删登记与版本快照）。
+    ///
+    /// 语义与项目侧副本裁剪对齐（`payload::versions::prune_version_copies`）：
+    /// **当前版本那张表是「本体」，永远不删**；`keep` 数的是历史版本份数——
+    /// 所以 `MetadataOnly`（= 0）只留当前那一张，`Keep(5)` 留当前 + 最近 5 个历史表。
+    ///
+    /// 删表不删登记：`analytics_table` 仍是档位判据，读取面据此在表不存在时给出
+    /// 「副本已按保留策略清理」的人话，而不是让 DuckDB 抛 Catalog Error。
+    ///
+    /// 单次裁剪失败只记日志：表多留一份只是占空间，升级本身不该因此回滚，
+    /// 下次升级会再裁一遍。
+    pub(super) async fn prune_version_tables(
+        &self,
+        name: &str,
+        keep: crate::model::KeepVersions,
+    ) -> Result<usize, CoreError> {
+        let Some(keep) = keep.limit() else {
+            // `All`：不裁剪，连查询都不做。
+            return Ok(0);
+        };
+        // 同名链全部版本，**含已软删的登记行**：覆盖升级会软删旧登记，但那张旧表还在。
+        let versions: Vec<(i32, Option<String>)> = self.with_sqlite(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT version, analytics_table FROM analytics_resources
+                    WHERE name = ?1 AND scope = 'global'
+                    ORDER BY version DESC
+                    "#,
+                )
+                .map_err(sqlite_err("prepare_prune_versions"))?;
+            let rows = stmt
+                .query_map(rusqlite::params![name], |row| {
+                    Ok((row.get::<_, i32>(0)?, row.get::<_, Option<String>>(1)?))
+                })
+                .map_err(sqlite_err("query_prune_versions"))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_err("collect_prune_versions"))
+        })?;
+
+        let mut removed = 0usize;
+        for (index, (_, table)) in versions.into_iter().enumerate() {
+            // index 0 = 当前版本（本体）；1..=keep = 要留的历史份数。
+            if index <= keep as usize {
+                continue;
+            }
+            let Some(table) = table else {
+                continue;
+            };
+            match self.drop_global_table(&table).await {
+                Ok(()) => removed += 1,
+                Err(error) => tracing::warn!(
+                    error = %error,
+                    table,
+                    name,
+                    "全局历史表裁剪失败（保留策略这一次没生效，下次升级会再裁）"
+                ),
+            }
+        }
+        Ok(removed)
     }
 
     /// 统计全局表行数 / 列数（升级与分发共用；参数是实际表名）。

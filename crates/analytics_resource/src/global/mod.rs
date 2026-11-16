@@ -66,6 +66,12 @@ pub struct PromoteRequest {
     /// 与分发侧同一条限制）。这时 `source_abs_path` 指的是项目分析库文件，
     /// 只作说明与日志用——真正搬运在 `jobs::global::promote_table_from_project`。
     pub source_table: Option<String>,
+    /// 本次升级的历史版本表保留策略（`None` = 不裁剪）。
+    ///
+    /// 一版一张表，全局库随版本数线性增长；这里给 `Some(KeepVersions)` 时，
+    /// 登记成功后按同名链裁掉更早版本的表（**只删内容表，登记与版本快照都留**）。
+    /// 由宿主的设置项驱动（`ResourceHostBackend::keep_versions`）。
+    pub keep_versions: Option<crate::model::KeepVersions>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

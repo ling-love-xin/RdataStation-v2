@@ -73,6 +73,18 @@ impl GlobalInstanceStore {
         // 那列是空的，回退到资产名——那时表名就等于资产名。
         let source_table = global_table.unwrap_or_else(|| name.to_string());
 
+        // 内容表可能已被 `KeepVersions` 裁掉（登记行还在、表没了）。
+        // 不前置检查的话，后面的 `COPY` 会抛 DuckDB 的 Catalog Error，
+        // 用户看不出这是「策略清掉的」而不是「数据坏了」。
+        if !self.table_exists(&source_table).await? {
+            return Err(InstanceOpError::Core(CoreError::common(
+                CommonError::General(format!(
+                    "全局实例「{name}」v{global_version} 的内容表（{source_table}）已被保留策略清理：\
+版本元数据仍在，可在全局面板查看版本链；要这一版的数据，在它的来源项目重新升级一版再分发"
+                )),
+            )));
+        }
+
         // ---- 项目侧重名双保险探测（SQLite 未删登记 + DuckDB 表 + resources 文件）----
         // 与升级侧 `promote` 同口径：登记层与本体层任一命中都按冲突走询问，不静默覆盖。
         // 命中层名一并回传：冲突框要说清是登记、是表、还是文件。

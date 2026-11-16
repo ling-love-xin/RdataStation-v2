@@ -85,6 +85,8 @@ fn promote_req(name: &str, path: &Path, kind: PromoteKind) -> PromoteRequest {
         source_version: None,
         // 文件型请求：本体是文件，表型用例（g015）自己填表名。
         source_table: None,
+        // 默认不裁（用例要看全部版本表）；裁剪用例自己填。
+        keep_versions: None,
     }
 }
 
@@ -850,6 +852,8 @@ async fn g015_table_source_promote_moves_every_row() {
         source_resource_id: Some("arp_a_v5".to_string()),
         source_version: Some(5),
         source_table: Some("daily".to_string()),
+        // 这一步只验搬运与来源链，不裁。
+        keep_versions: None,
     };
 
     let outcome = crate::jobs::global::promote_table_from_project(&env.store, &project, &req, false)
@@ -883,6 +887,110 @@ async fn g015_table_source_promote_moves_every_row() {
         .await
         .expect("project stats");
     assert_eq!(rows, Some(100), "升级不动项目侧数据");
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+/// 同名链的全部版本登记（含软删行）：`(version, analytics_table)`，版本倒序。
+fn read_global_version_tables(env: &TestEnv, name: &str) -> Vec<(i32, Option<String>)> {
+    env.store
+        .with_sqlite(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT version, analytics_table FROM analytics_resources
+                    WHERE name = ?1 AND scope = 'global'
+                    ORDER BY version DESC
+                    "#,
+                )
+                .map_err(sqlite_err("read_global_version_tables"))?;
+            let rows = stmt
+                .query_map(rusqlite::params![name], |row| {
+                    Ok((row.get::<_, i32>(0)?, row.get::<_, Option<String>>(1)?))
+                })
+                .map_err(sqlite_err("read_global_version_tables_rows"))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_err("read_global_version_tables_collect"))
+        })
+        .expect("读版本表")
+}
+
+/// 一版一张表会随版本线性增长，`KeepVersions` 表型裁剪的语义必须与项目侧副本裁剪一致：
+/// **当前版本那张表是本体、永远留**；`keep` 数的是历史份数；登记行与版本快照一条不动。
+/// 内容被清掉之后，分发要给人话而不是 DuckDB 的 Catalog Error。
+#[tokio::test]
+async fn g016_version_table_pruning_keeps_current_and_says_why() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+
+    // 覆盖式连升三版：同名链版本接续，各自一张表。
+    for round in 0..3 {
+        let mut req = promote_req("pruned_orders", &csv, PromoteKind::DataFile);
+        req.content_hash = format!("hash_round_{round}");
+        env.store.promote_overwrite(&req).await.expect("promote");
+    }
+
+    let before = read_global_version_tables(&env, "pruned_orders");
+    assert_eq!(before.len(), 3, "三版三条登记");
+    for (_, table) in &before {
+        let table = table.as_deref().expect("每版都要有表名");
+        assert!(
+            env.store.table_exists(table).await.expect("exists"),
+            "裁剪前每版的表都在：{table}"
+        );
+    }
+
+    // Keep(1)：留当前版 + 最近 1 份历史，删最老那版。
+    let removed = env
+        .store
+        .prune_version_tables("pruned_orders", crate::model::KeepVersions::Keep(1))
+        .await
+        .expect("prune");
+    assert_eq!(removed, 1, "三版留两版");
+
+    let after = read_global_version_tables(&env, "pruned_orders");
+    assert_eq!(after.len(), 3, "登记行一条不删（版本元数据永久保留）");
+    assert!(
+        env.store
+            .table_exists(after[0].1.as_deref().expect("表名"))
+            .await
+            .expect("exists"),
+        "当前版本是本体，必须留"
+    );
+    assert!(
+        env.store
+            .table_exists(after[1].1.as_deref().expect("表名"))
+            .await
+            .expect("exists"),
+        "最近一份历史留着"
+    );
+    assert!(
+        !env.store
+            .table_exists(after[2].1.as_deref().expect("表名"))
+            .await
+            .expect("exists"),
+        "最老那版的内容已清"
+    );
+
+    // 当前版本还能分发。
+    let project = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    env.store
+        .distribute(&project, &env.project_root, "pruned_orders", None)
+        .await
+        .expect("分发当前版本");
+
+    // 最新那版的内容也没了（手工删 / 裁剪边界）时，分发必须说是「策略清掉的」。
+    let current = after[0].1.as_deref().expect("表名").to_string();
+    env.store.drop_global_table(&current).await.expect("drop");
+    let err = env
+        .store
+        .distribute(&project, &env.project_root, "pruned_orders", None)
+        .await
+        .expect_err("没有内容表时分发必须失败");
+    assert!(
+        format!("{err}").contains("保留策略"),
+        "要说是策略清掉的，而不是数据坏了：{err}"
+    );
 
     let _ = fs::remove_dir_all(&env.dir);
 }
