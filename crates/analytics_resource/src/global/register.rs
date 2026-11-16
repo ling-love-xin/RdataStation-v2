@@ -4,7 +4,7 @@ use super::*;
 use crate::model::GLOBAL_PREFIX;
 
 impl GlobalInstanceStore {
-    /// 读全局脚本内容表正文（分发重建文件用）。
+    /// 读全局脚本内容表正文（分发重建文件用）。**参数是实际表名**。
     ///
     /// 这张表由 `promote` 一次 `CREATE TABLE` + 一条 `INSERT` 建起来，恒为一行；
     /// 这里先数行再取，不用 `LIMIT 1` 静默取首行：表若被改坏（多行 / 空表），
@@ -209,36 +209,35 @@ impl GlobalInstanceStore {
     /// 版本号取**同名（`scope = 'global'`）的最大值 + 1**，不过滤 `deleted_at`：
     /// 覆盖路径先软删旧登记，若只看未删行，覆盖就退化成"从 v1 重开"（版本链断掉）。
     /// 登记 id 每次都换新（`arg_<uuid>`）——版本链靠 `name` + `version` 串，不靠 id。
+    /// 版本号与表名由 [`super::promote::GlobalInstanceStore::promote`] 先算好传进来。
+    ///
+    /// 分开的原因是「一版一张表」：表名要带版本兜底、建表要用它，所以版本号必须在
+    /// 建表**之前**确定；登记只是把这几个既成事实写下来，不再自己算一遍。
     pub(super) fn register_global(
         &self,
         name: &str,
+        table: &str,
+        version: i32,
         req: &PromoteRequest,
         row_count: Option<i32>,
         column_count: Option<i32>,
     ) -> Result<PromoteOutcome, InstanceOpError> {
         self.with_sqlite(|conn| {
-            let next_version: i32 = conn
-                .query_row(
-                    "SELECT COALESCE(MAX(version), 0) FROM analytics_resources WHERE name = ?1 AND scope = 'global'",
-                    rusqlite::params![name],
-                    |row| row.get::<_, i32>(0),
-                )
-                .map_err(sqlite_err("next_global_version"))? + 1;
             let id = format!("arg_{}", uuid::Uuid::new_v4().simple());
             let now = Utc::now().to_rfc3339();
-            // 数据文件 / 分析表：本体 = 全局表，重建定义 = 建表 SQL（可复现）。
+            // 重建定义指向**实际表名**（G2 起表名带时间戳，不再是资产名）。
             let definition_sql = match req.kind {
                 PromoteKind::DataFile => file_read_expr(&req.source_abs_path)
                     .map(|expr| {
                         format!(
                             "CREATE TABLE {} AS SELECT * FROM {};",
-                            quote_ident(name),
+                            quote_ident(table),
                             expr
                         )
                     }),
                 PromoteKind::Script => Some(format!(
                     "内容表（方案 A，§13.5）：{}（filename / content / content_hash），分发时重建为 resources/{}",
-                    quote_ident(name),
+                    quote_ident(table),
                     req.rel_path.as_deref().unwrap_or("")
                 )),
             };
@@ -261,12 +260,12 @@ impl GlobalInstanceStore {
                     created_at, updated_at, created_by, deleted_at,
                     kind, content_hash, file_rel_path, readonly, promoted_from,
                     source_connection_id, source_table, definition_sql, archived_at,
-                    payload_mode, source_path, origin_kind, origin_ref
+                    payload_mode, source_path, origin_kind, origin_ref, analytics_table
                 ) VALUES (
                     ?1, ?2, ?3, NULL, 'null', 'global', ?4, ?5, ?6,
                     ?7, NULL, NULL, NULL, ?8, ?8, NULL, NULL,
                     'analysis', ?9, ?10, 1, NULL, NULL, NULL, ?11, ?8,
-                    'copy', ?12, ?13, ?14
+                    'copy', ?12, ?13, ?14, ?15
                 )
                 "#,
                 rusqlite::params![
@@ -276,7 +275,7 @@ impl GlobalInstanceStore {
                     row_count,
                     column_count,
                     req.file_size,
-                    next_version,
+                    version,
                     now,
                     req.content_hash,
                     req.rel_path,
@@ -284,13 +283,17 @@ impl GlobalInstanceStore {
                     req.source_abs_path.to_string_lossy().replace('\\', "/"),
                     origin_kind,
                     origin_ref,
+                    table,
                 ],
             )
             .map_err(sqlite_err("insert_global"))?;
 
             // 全局版本快照（与项目侧 `save_resource_version_on` 同构）。
+            // 快照记下这一版的**实际表名**：历史版本能不能回看，全看这个字段
+            // （表还在库里，名字就写在这里）。
             let snapshot = serde_json::json!({
                 "kind": "analysis",
+                "analytics_table": table,
                 "content_hash": req.content_hash,
                 "row_count": row_count,
                 "column_count": column_count,
@@ -302,14 +305,14 @@ impl GlobalInstanceStore {
             let version_id = format!("argv_{}", uuid::Uuid::new_v4().simple());
             conn.execute(
                 "INSERT INTO analytics_resource_versions (id, resource_id, version, snapshot, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![&version_id, &id, next_version, snapshot, now],
+                rusqlite::params![&version_id, &id, version, snapshot, now],
             )
             .map_err(sqlite_err("insert_global_version"))?;
 
             Ok(PromoteOutcome {
                 resource_id: id,
                 name: name.to_string(),
-                version: next_version,
+                version,
                 row_count,
                 column_count,
                 overwritten: false,

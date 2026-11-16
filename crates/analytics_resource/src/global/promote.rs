@@ -1,18 +1,21 @@
-//! 项目 → 全局升级：冲突双查 + CREATE TABLE AS。
+//! 项目 → 全局升级：一版一张表（G2）+ 登记。
 
 use super::*;
 
 impl GlobalInstanceStore {
     /// 升级（项目 → 全局）：数据文件映射出表 / 脚本内容表，表 + 版本信息进全局。
     ///
-    /// 语义（§13.2 / §13.5）：
-    /// 1. 冲突检测（全局 DuckDB 表 + 全局登记行同名）；
-    /// 2. 建全局表（数据文件 = `CREATE TABLE AS read_xxx`；脚本 = 内容表 + INSERT）；
-    /// 3. 全局登记（scope = 'global'，kind = 'analysis'）+ 全局版本快照；
-    /// 4. 返回结果（冲突未覆盖时返回 [`InstanceOpError::Conflict`]，由 UI 弹询问）。
+    /// 语义（§13.2 / §13.5，2026-11-16 按 G2 改）：
+    /// 1. 冲突检测**只查登记层**——一版一张表、表名带时间戳，全局表同名不再可能，
+    ///    剩下的真冲突只有「同名资产已经有一版」，由调用方决定覆盖还是改名；
+    /// 2. 先算下一版号，再按 `res_<描述>_<时间戳>` 建表（撞名则追加版本号）；
+    /// 3. 全局登记（`scope = 'global'`，`analytics_table` 记实际表名）+ 全局版本快照；
+    /// 4. 返回结果。
+    ///
+    /// **历史版本的表不删**：`analytics_table` 逐版记着各自那张表，这是「回到 v(n-1)
+    /// 看数据」的唯一凭据；裁剪由 `KeepVersions` 那套策略管，不在这里顺手删。
     pub async fn promote(&self, req: &PromoteRequest) -> Result<PromoteOutcome, InstanceOpError> {
-        
-        // ---- 冲突检测（先查登记，再查 DuckDB 表，双保险）----
+        // ---- 冲突检测（登记层；表层不再查）----
         let existing: Option<i32> = self.with_sqlite(|conn| {
             conn.query_row(
                 r#"
@@ -26,30 +29,25 @@ impl GlobalInstanceStore {
             .optional()
             .map_err(sqlite_err("check_global_conflict"))
         })?;
-
-        let table_exists = self.table_exists(&req.name).await?;
-        if table_exists && existing.is_none() {
-            // 全局表在、登记不在：脏状态（索引修复同族）。不静默覆盖，按冲突走询问。
-            return Err(InstanceOpError::Conflict {
-                name: req.name.clone(),
-                field: ConflictField::Table,
-            });
-        }
-        if existing.is_some() && !table_exists {
-            // 登记在、表不在：同属脏状态，冲突路径覆盖时会重建表，安全。
+        if existing.is_some() {
             return Err(InstanceOpError::Conflict {
                 name: req.name.clone(),
                 field: ConflictField::Registry,
             });
         }
-        if existing.is_some() && table_exists {
-            return Err(InstanceOpError::Conflict {
-                name: req.name.clone(),
-                field: ConflictField::RegistryAndTable,
-            });
+
+        // ---- 版本号 + 表名（一版一张表）----
+        let next_version = self
+            .next_global_version(&req.name)
+            .map_err(InstanceOpError::Core)?;
+        let now = Utc::now();
+        let mut table = table_name::version_table_name(&req.name, now);
+        if self.table_exists(&table).await? {
+            // 同一秒内同名升级两次：时间戳撞了，按版本号区分（正常路径走不到）。
+            table = table_name::version_table_name_with_version(&req.name, next_version, now);
         }
 
-        // ---- 建全局表 ----
+        // ---- 建全局表（表名 = `table`，不是资产名）----
         let (row_count, column_count) = match req.kind {
             PromoteKind::DataFile => {
                 let read_expr = file_read_expr(&req.source_abs_path).ok_or_else(|| {
@@ -66,7 +64,7 @@ impl GlobalInstanceStore {
                 })?;
                 let create_sql = format!(
                     "CREATE TABLE {} AS SELECT * FROM {};",
-                    quote_ident(&req.name),
+                    quote_ident(&table),
                     read_expr
                 );
                 self.with_duckdb(|conn| {
@@ -74,7 +72,7 @@ impl GlobalInstanceStore {
                         .map_err(|e| duckdb_err("create_table_from_file", &e.to_string()))
                 })
                 .await?;
-                self.table_stats(&req.name).await?
+                self.table_stats(&table).await?
             }
             PromoteKind::Script => {
                 // 先看体积再读内容：整段文本要进内存并落成全局库里的一条巨型行，
@@ -106,11 +104,11 @@ impl GlobalInstanceStore {
                 })?;
                 let create_sql = format!(
                     "CREATE TABLE {} (\"filename\" TEXT, \"content\" TEXT, \"content_hash\" TEXT);",
-                    quote_ident(&req.name)
+                    quote_ident(&table)
                 );
                 let insert_sql = format!(
                     "INSERT INTO {} (\"filename\", \"content\", \"content_hash\") VALUES (?1, ?2, ?3);",
-                    quote_ident(&req.name)
+                    quote_ident(&table)
                 );
                 self.with_duckdb(|conn| {
                     conn.execute_batch(&create_sql)
@@ -131,21 +129,21 @@ impl GlobalInstanceStore {
             }
         };
 
-        // ---- 全局登记（scope = 'global'）+ 版本快照 ----
-        let outcome = self.register_global(&req.name, req, row_count, column_count)?;
+        // ---- 全局登记（scope = 'global'，记实际表名）+ 版本快照 ----
+        let outcome =
+            self.register_global(&req.name, &table, next_version, req, row_count, column_count)?;
         Ok(outcome)
     }
 
-    /// 覆盖式升级：删掉全局旧表 + 软删旧登记，再走 [`promote`]。
+    /// 覆盖式升级：软删旧登记，再走 [`promote`]。
     ///
-    /// 覆盖语义（§13.2 冲突询问「覆盖」分支）：旧表删除、登记行软删，新升级
-    /// 成为新版本（版本号接续旧链）。
+    /// 覆盖语义（§13.2 冲突询问「覆盖」分支）：**旧表不删**。G2 起一版一张表，
+    /// 旧版本那张表正是「回到上一版看数据」的凭据；删它就等于把历史版本清空，
+    /// 与「可回溯」直接冲突。版本号接续同名链（`next_global_version` 不看 `deleted_at`）。
     pub async fn promote_overwrite(
         &self,
         req: &PromoteRequest,
     ) -> Result<PromoteOutcome, InstanceOpError> {
-        
-        self.drop_global_table(&req.name).await?;
         self.with_sqlite(|conn| {
             conn.execute(
                 r#"
@@ -162,5 +160,4 @@ impl GlobalInstanceStore {
         outcome.overwritten = true;
         Ok(outcome)
     }
-
 }

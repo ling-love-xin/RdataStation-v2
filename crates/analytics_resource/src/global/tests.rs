@@ -86,6 +86,22 @@ fn promote_req(name: &str, path: &Path, kind: PromoteKind) -> PromoteRequest {
     }
 }
 
+/// 读全局最新一版的**实际表名**（G2：`analytics_table` 列，不是资产名）。
+fn read_global_table(env: &TestEnv, name: &str) -> Option<String> {
+    env.store
+        .with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT analytics_table FROM analytics_resources \
+                 WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL \
+                 ORDER BY version DESC LIMIT 1",
+                rusqlite::params![name],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .map_err(sqlite_err("read_global_table"))
+        })
+        .expect("read global table")
+}
+
 #[tokio::test]
 async fn g001_promote_data_file_and_register_global() {
     let env = create_test_env().await;
@@ -98,13 +114,11 @@ async fn g001_promote_data_file_and_register_global() {
     assert_eq!(outcome.row_count, Some(3), "CSV 3 行");
     assert_eq!(outcome.column_count, Some(3), "CSV 3 列");
 
-    // 全局 DuckDB 表真实存在 + 行数一致（经 store 连接验证，Windows 单句柄下
-    // 不能另开文件连接复核）。
-    let (rows, cols) = env
-        .store
-        .table_stats("orders_v1")
-        .await
-        .expect("global stats");
+    // 全局 DuckDB 表真实存在 + 行数一致：表名取自登记行的 `analytics_table`
+    // （G2 起是 `res_<描述>_<时间戳>`，不再等于资产名）。
+    let table = read_global_table(&env, "orders_v1").expect("新升级的行必须登记表名");
+    assert!(table.starts_with("res_orders_v1_"), "一版一张表：{table}");
+    let (rows, cols) = env.store.table_stats(&table).await.expect("global stats");
     assert_eq!(rows, Some(3), "全局表行数 = CSV 行数");
     assert_eq!(cols, Some(3));
 
@@ -116,6 +130,11 @@ async fn g001_promote_data_file_and_register_global() {
     assert_eq!(row.scope, "global");
     assert_eq!(row.kind, "analysis");
     assert_eq!(row.version, 1);
+    assert_eq!(
+        row.analytics_table.as_deref(),
+        Some(table.as_str()),
+        "登记行的表名要和建出来的那张表一致"
+    );
     assert!(
         row.definition_sql
             .as_deref()
@@ -185,10 +204,11 @@ async fn g003_promote_script_content_table() {
     let outcome = env.store.promote(&req).await.expect("promote script");
     assert_eq!(outcome.row_count, Some(1), "内容表固定 1 行（内容聚合）");
 
-    // 全局内容表可读回原文（分发重建依赖它）——经 store 连接验证。
+    // 全局内容表可读回原文（分发重建依赖它）——表名取自登记行（G2 起带时间戳）。
+    let table = read_global_table(&env, "calc_script").expect("内容表名");
     let content = env
         .store
-        .read_script_content("calc_script")
+        .read_script_content(&table)
         .await
         .expect("read content");
     assert!(content.contains("SELECT 1 AS one"), "内容完整入库");
@@ -315,6 +335,9 @@ async fn g006_global_row_missing_returns_not_found() {
 
 /// 冲突回执要说清**撞在哪一层**：三查（登记 / 表 / 文件）都可能命中，
 /// 但用户接下来要做的事不一样，笼统一句"已有同名"帮不上判断。
+///
+/// 2026-11-16（G2）起升级侧只会命中登记层：一版一张表、表名带时间戳，
+/// 「全局表已被同名对象占用」不再是一种可能，剩下的是「同名资产已经有一版」。
 #[tokio::test]
 async fn g007_conflict_reports_which_field_was_hit() {
     let env = create_test_env().await;
@@ -322,7 +345,7 @@ async fn g007_conflict_reports_which_field_was_hit() {
     let req = promote_req("orders_field", &csv, PromoteKind::DataFile);
     env.store.promote(&req).await.expect("first promote");
 
-    // 升级侧：登记与全局表都在 → 双命中。
+    // 升级侧：只有登记层会命中（表层不再是同名判据）。
     let err = env
         .store
         .promote(&req)
@@ -330,7 +353,7 @@ async fn g007_conflict_reports_which_field_was_hit() {
         .expect_err("second promote must conflict");
     match err {
         InstanceOpError::Conflict { field, .. } => {
-            assert_eq!(field, ConflictField::RegistryAndTable, "两查都命中");
+            assert_eq!(field, ConflictField::Registry, "一版一张表后只剩登记层冲突");
         }
         other => panic!("应报 Conflict，实际 {other:?}"),
     }
@@ -428,8 +451,10 @@ async fn g009_overwrite_failure_restores_the_old_content() {
     assert!(rebuilt.is_file(), "首版文件已重建到 resources/");
 
     // ---- 注入失败：全局表消失、登记还在 ----
+    // 表名按登记行取（G2 起表名带时间戳，不再等于资产名）。
+    let table = read_global_table(&env, "ovr_note").expect("登记行必有表名");
     env.store
-        .drop_global_table("ovr_note")
+        .drop_global_table(&table)
         .await
         .expect("drop global table");
 
@@ -483,14 +508,17 @@ async fn g010_script_content_with_extra_rows_is_rejected() {
     env.store.promote(&req).await.expect("promote script");
 
     // 把表写坏：再插一行（模拟外部误写，或未来改成追加语义却漏了读侧）。
+    // 表名按登记行取（G2 起不等于资产名）。
+    let table = read_global_table(&env, "bad_rows").expect("内容表名");
+    let insert_sql = format!(
+        "INSERT INTO {} (\"filename\", \"content\", \"content_hash\") \
+         VALUES ('work/bad_rows', '# 第二行', 'h2');",
+        crate::global::quote_ident(&table)
+    );
     env.store
         .with_duckdb(|conn| {
-            conn.execute(
-                "INSERT INTO bad_rows (\"filename\", \"content\", \"content_hash\") \
-                 VALUES ('work/bad_rows', '# 第二行', 'h2');",
-                duckdb::params![],
-            )
-            .map_err(|e| duckdb_err("test_insert_extra_row", &e.to_string()))?;
+            conn.execute(&insert_sql, duckdb::params![])
+                .map_err(|e| duckdb_err("test_insert_extra_row", &e.to_string()))?;
             Ok(())
         })
         .await
@@ -568,11 +596,24 @@ async fn g011_oversized_script_is_rejected_before_reading() {
         "错误要指出替代路径（按数据文件归档），实际 {text}"
     );
 
-    // 拒绝发生在读内容之前：全局库里既没有表，也没有登记行。
-    assert!(
-        !env.store.table_exists("huge_script").await.expect("table_exists"),
-        "被拒绝时不得建全局表"
-    );
+    // 拒绝发生在读内容之前：全局库里既没有表（按表名前缀查），也没有登记行。
+    let any_table = env
+        .store
+        .with_duckdb(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT count(*) FROM information_schema.tables \
+                     WHERE table_name LIKE 'res_huge_script%'",
+                )
+                .map_err(|e| duckdb_err("prepare_huge_probe", &e.to_string()))?;
+            let count: i64 = stmt
+                .query_row([], |row| row.get(0))
+                .map_err(|e| duckdb_err("query_huge_probe", &e.to_string()))?;
+            Ok(count > 0)
+        })
+        .await
+        .expect("probe tables");
+    assert!(!any_table, "被拒绝时不得建全局表");
     let global_rows: i64 = env
         .store
         .with_sqlite(|conn| {
@@ -714,6 +755,48 @@ async fn g013_origin_chain_points_at_the_immediate_upstream() {
     assert_eq!(
         crate::model::describe(Some(&kind), Some(&reference)),
         format!("全局实例 {} 的 v1", outcome.resource_id)
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+/// G2：一版一张表——同名第二次升级另起一张表，上一版那张**保留**。
+///
+/// 这是「回到上一版看数据」的前提：登记行逐版记着各自的 `analytics_table`，
+/// 表本身不删。覆盖式升级只软删旧登记，不碰旧表。
+#[tokio::test]
+async fn g014_each_global_version_keeps_its_own_table() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    let req = promote_req("versioned_orders", &csv, PromoteKind::DataFile);
+
+    let first = env.store.promote(&req).await.expect("first promote");
+    assert_eq!(first.version, 1);
+    let first_table = read_global_table(&env, "versioned_orders").expect("first table");
+
+    let second = env
+        .store
+        .promote_overwrite(&req)
+        .await
+        .expect("overwrite promote");
+    assert_eq!(second.version, 2, "覆盖接续版本链，不从 v1 重开");
+    assert!(second.overwritten);
+    let second_table = read_global_table(&env, "versioned_orders").expect("second table");
+
+    assert_ne!(first_table, second_table, "一版一张表：两版表名必须不同");
+    assert!(
+        env.store
+            .table_exists(&first_table)
+            .await
+            .expect("probe first"),
+        "旧版表不能被删——那是回看上一版的唯一凭据"
+    );
+    assert!(
+        env.store
+            .table_exists(&second_table)
+            .await
+            .expect("probe second"),
+        "新版表要真的建出来"
     );
 
     let _ = fs::remove_dir_all(&env.dir);

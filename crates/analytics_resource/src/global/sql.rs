@@ -55,7 +55,27 @@ impl GlobalInstanceStore {
         f(guard.as_mut().expect("刚打开过，必为 Some"))
     }
 
-    /// 全局 DuckDB 是否存在同名表（information_schema，DuckDB 标识符规范化为小写）。
+    /// 全局「同名链」的下一版号。
+    ///
+    /// 不过滤 `deleted_at`：覆盖路径会先软删旧登记，只看未删行就让覆盖退化成
+    /// 「从 v1 重开」（版本链断掉）。与项目侧 `register_project_table` 同口径。
+    pub(super) fn next_global_version(&self, name: &str) -> Result<i32, CoreError> {
+        self.with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM analytics_resources WHERE name = ?1 AND scope = 'global'",
+                rusqlite::params![name],
+                |row| row.get::<_, i32>(0),
+            )
+            .map_err(sqlite_err("next_global_version"))
+            .map(|max: i32| max + 1)
+        })
+    }
+
+    /// 全局 DuckDB 里是否存在这张表。
+    ///
+    /// **参数是实际表名，不是资产名**（G2 起两者分开：资产名 `orders`、表名
+    /// `res_orders_20261116…`）。标识符按小写比对：DuckDB 对未加引号的标识符做规范化，
+    /// 我们建表与读取一律加引号，而 `information_schema` 里存原样名。
     pub(super) async fn table_exists(&self, name: &str) -> Result<bool, CoreError> {
         self.with_duckdb(|conn| {
             let mut stmt = conn
@@ -69,6 +89,15 @@ impl GlobalInstanceStore {
         .await
     }
 
+    /// 删掉这张全局表（**参数是实际表名**）。
+    ///
+    /// 调用方要为「删的是哪一版」负责：正常路径不该拿它做版本裁剪，
+    /// 那是 `KeepVersions` 的事；这里只服务明确的删除与被注入的失败场景。
+    ///
+    /// 目前**没有**删除全局资产的入口（只能升级与分发），生产代码里暂无调用点——
+    /// 留着它是给将来的「删除全局资产」与 `KeepVersions` 表型裁剪用，
+    /// 眼下只有测试的失败注入会走到这里。
+    #[allow(dead_code)]
     pub(super) async fn drop_global_table(&self, name: &str) -> Result<(), CoreError> {
         self.with_duckdb(|conn| {
             conn.execute_batch(&format!("DROP TABLE IF EXISTS {};", quote_ident(name)))
@@ -78,7 +107,7 @@ impl GlobalInstanceStore {
         .await
     }
 
-    /// 统计全局表行数 / 列数（升级与分发共用）。
+    /// 统计全局表行数 / 列数（升级与分发共用；参数是实际表名）。
     pub(super) async fn table_stats(&self, name: &str) -> Result<(Option<i32>, Option<i32>), CoreError> {
         self.with_duckdb(|conn| {
             let mut stmt = conn

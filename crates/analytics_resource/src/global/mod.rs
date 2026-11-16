@@ -387,6 +387,7 @@ pub mod list;
 pub mod promote;
 pub mod register;
 pub mod sql;
+pub mod table_name;
 
 pub use self::list::{list_global_resources, to_global_rows};
 pub(crate) use self::sql::{duckdb_err, file_read_expr, quote_ident, sqlite_err};

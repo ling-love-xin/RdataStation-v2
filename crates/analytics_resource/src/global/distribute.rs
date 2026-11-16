@@ -29,7 +29,7 @@ impl GlobalInstanceStore {
                 .query_row(
                     r#"
                     SELECT id, version, kind, content_hash, file_rel_path, definition_sql,
-                           row_count, column_count, file_size
+                           row_count, column_count, file_size, analytics_table
                     FROM analytics_resources
                     WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL
                     ORDER BY version DESC LIMIT 1
@@ -46,6 +46,7 @@ impl GlobalInstanceStore {
                             row.get::<_, Option<i32>>(6)?,
                             row.get::<_, Option<i32>>(7)?,
                             row.get::<_, Option<i64>>(8)?,
+                            row.get::<_, Option<String>>(9)?,
                         ))
                     },
                 )
@@ -63,9 +64,14 @@ impl GlobalInstanceStore {
             _global_rows,
             _global_cols,
             global_size,
+            global_table,
         ) = global_row.ok_or_else(|| InstanceOpError::NotFound {
             name: name.to_string(),
         })?;
+
+        // 源表：G2 起由登记行 `analytics_table` 给出实际表名；老行（迁移 036 之前）
+        // 那列是空的，回退到资产名——那时表名就等于资产名。
+        let source_table = global_table.unwrap_or_else(|| name.to_string());
 
         // ---- 项目侧重名双保险探测（SQLite 未删登记 + DuckDB 表 + resources 文件）----
         // 与升级侧 `promote` 同口径：登记层与本体层任一命中都按冲突走询问，不静默覆盖。
@@ -83,7 +89,7 @@ impl GlobalInstanceStore {
         let shape = if let Some(rel) = rel_path.as_deref() {
             // 脚本内容表 → 重建为文件（File 档）。
             let content = self
-                .read_script_content(name)
+                .read_script_content(&source_table)
                 .await
                 .map_err(InstanceOpError::Core)?;
             write_project_file(project_root, rel, &content, &target_name)
@@ -121,7 +127,7 @@ impl GlobalInstanceStore {
             let tmp = tmp_dir.join(format!("rds_dist_{}.parquet", uuid::Uuid::new_v4().simple()));
             let copy_sql = format!(
                 "COPY {} TO '{}' (FORMAT PARQUET);",
-                quote_ident(name),
+                quote_ident(&source_table),
                 tmp.to_string_lossy().replace('\\', "/")
             );
             let copy_result = self

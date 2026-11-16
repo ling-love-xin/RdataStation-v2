@@ -100,7 +100,28 @@
 - 默认保留最近 5 份**内容副本**，超出只删副本，**版本行永久保留**——界面以"副本缺失"标注，不是错误。
 - 保留策略有两个入口：设置页「资产库 › 历史内容保留」（`resources.keep_versions`：`0` = 只留元数据、`-1` = 全部保留）与归档对话框的「保留历史内容」（本次覆盖，留空 = 跟随设置）。领域类型是 [`KeepVersions`](src/model.rs)；`All` 在裁剪那一步是“不动作”，与 `0`（只留元数据）是两回事。
 
-### 6. 边界与协作
+### 7. 全局实例：一版一张表（G2，2026-11-16）
+
+跨项目只允许「项目 A → 全局 → 项目 B」，**每层版本各自编号**（A 的 v5 升级成全局 v1，再下发成 B 的 v1）。
+
+全局侧按版本铺表：每次升级落一张**新表** `res_<描述>_<yyyymmddHHMMSS>`，历史版本的表**不删**——
+「回到 v3 看数据」才有东西可看。登记行的 `name` 仍是资产名（列表 / 筛选 / 同名链版本号都靠它），
+表名单独记在 `analytics_table` 列（[`global/table_name.rs`](src/global/table_name.rs)）：
+
+| 场景 | 表名从哪来 |
+| --- | --- |
+| 新升级 | `res_<slug>_<时间戳>`；同一秒撞名时追加 `_v<版本>` |
+| 读取（分发 / 打开 / 统计） | 一律按登记行 `analytics_table` 反查 |
+| 迁移 036 之前的老行 | `analytics_table = name`（那时表名就等于资产名），读取面另有 `name` 回退 |
+
+连带的口径变化：**升级冲突只剩登记层**（表名带时间戳，「全局表被同名对象占用」不再可能）；
+**覆盖式升级不再删旧表**（只软删旧登记），版本链按同名接续；全局行的双击 / 查看统计走
+`SampleSource::on_global`（短命会话挂 `rds_global`），因为它的本体在另一个库文件里。
+
+代价要说清：一版一张表 = 每版一份全量副本，全局库随版本数线性增长；裁剪交给 `KeepVersions`
+那套策略（表型裁剪尚未实现，见「能力状态」）。
+
+### 8. 边界与协作
 
 - **归档由上游发起**（草稿箱右键 / 本地文件选择）：M6 **只收 `PathBuf` + 元数据**（`ArchiveRequest`）与宿主预取好的 `DraftCandidate`，不认识 `ScratchpadStore` 等上游类型。依赖方向：`workbench / app → analytics_resource → engine, shared`；2026-11-12 收口后本 crate **不再依赖 scratchpad**（草稿箱扫描与标签预取由 `ResourceHostBackend::draft_candidates` 注入）。
 - 变更事件 `ResourcesChanged { reason, resource_id }`：替代 v1 那个"发了没人听"的无载荷事件；**发/收两端必须同批落地**。
@@ -120,7 +141,7 @@
 | `src/service/` | 编排：`archive.rs`（首次 / 再归档）、`checkout.rs`（取回 / 还原）、`trash.rs`、`semantics.rs`（断言 / 效力门面）、`mod.rs`（标签 / 分组 / 履历埋点） |
 | `src/jobs/` | 后台作业：`mod.rs`（通道 + `catch_unwind` + pending 守恒）、`archive/`、`version.rs`、`index.rs`、`refresh.rs`（快照 + 主动校验 + 暂存重放）、`global.rs`、`rename.rs`、`trash.rs` |
 | `src/indexer/` | 三类孤儿扫描与人工确认修复（`scan.rs` / `repair.rs`） |
-| `src/global/` | 全局实例双库：`register` / `list` / `promote` / `distribute` / `sql` |
+| `src/global/` | 全局实例双库：`register` / `list` / `promote` / `distribute` / `sql` / `table_name`（一版一张表的表名） |
 | `src/present/` · `src/view_model/` | 纯函数呈现层与视图快照（零 I/O 零 GPUI） |
 | `src/resource_view/` · `src/detail_view/` · `src/dialogs/` · `src/resource_host/` | 面板 / 详情 / 对话框 / 宿主动作适配 |
 | `src/filter/` · `src/analysis.rs` · `src/preview.rs` · `src/dnd/` · `src/ui.rs` | 筛选数据层 / 分析表指纹 / 预览 / 拖拽 / 尺寸常量 |
@@ -181,6 +202,8 @@
 | **默认排序 + 分组折叠记忆**【P2.4】`resources.default_sort`（面板里点排序即写回；“默认排序” = 上次用的那个）与 `resources.collapsed_groups`（折叠态，按项目分桶）；两者都是构造期注入 + 用户动作写回（注入不写，避免回声） | —（默认分组已落地；设置架构 §14 Q7 的历史待确认项已关闭） |
 | 回收站语义（项目级一套 + `origin` 归属；软删登记行保归属，永久删除连关联一起清） | 回收站自动清理策略（按时间 / 容量，后续刀） |
 | 迁移 020 + 新列接入（写入 + 读取 + 按本体路径查重） | `kind` 过滤的**存储层**入口（面板已能按 kind 筛可见行，SQL 未接，后续刀） |
+| **全局一版一张表**【刀 4】`global/table_name.rs`：升级落 `res_<描述>_<时间戳>`、旧版表保留；`analytics_table` 记实际表名（迁移 `global/036` 给老行回填成资产名，读取面另有 `name` 回退）；升级冲突只剩登记层，覆盖只软删登记；全局表型行打开走 `SampleSource::on_global` | 全局资产的删除入口（现在只有升级与分发，`drop_global_table` 暂无生产调用点）；表型 `KeepVersions` 裁剪 |
+| **来源链**【刀 3】`origin_kind` + `origin_ref` 记**直接上游**那一跳（全局行 `project` + 资源 id/版本；项目行 `global` + 实例/版本），详情「来源」区多一行「上游」；各层版本各自编号 | 整条链的界面浏览（现在靠逐跳往上找） |
 | 行映射从 v1 的 4 份收敛为 1 份；测试库跑齐 007 + 020 | —（测试库现跑齐 007 + 020 + 023 + 024 + 027–030） |
 | 继承缺陷修复：分页除零与负数、`LIKE` 转义、连接嵌套、更新无事务、影响 0 行不报错、`parent_version_id` 语义、JSON 解析双策略、乱码副本名 | — |
 

@@ -40,7 +40,8 @@ pub(crate) const PROJECT_MIGRATIONS_SQL: &str = concat!(
 
 /// 全局库：全局镜像表与版本表、分发回执、表型本体列、kind 归一。
 ///
-/// 026 全局镜像表 → 033 分发回执 → 034 表型本体列 → 035 kind 归一。
+/// 026 全局镜像表 → 033 分发回执 → 034 表型本体列 → 035 kind 归一
+/// → 036 全局行表名回填（一版一张表）。
 pub(crate) const GLOBAL_MIGRATIONS_SQL: &str = concat!(
     include_str!("../../../store/migrations/global/026_analytics_resource_global.sql"),
     "\n",
@@ -48,5 +49,7 @@ pub(crate) const GLOBAL_MIGRATIONS_SQL: &str = concat!(
     "\n",
     include_str!("../../../store/migrations/global/034_analytics_table_payload.sql"),
     "\n",
-    include_str!("../../../store/migrations/global/035_archive_kind_two_tiers.sql")
+    include_str!("../../../store/migrations/global/035_archive_kind_two_tiers.sql"),
+    "\n",
+    include_str!("../../../store/migrations/global/036_global_version_table_names.sql")
 );
