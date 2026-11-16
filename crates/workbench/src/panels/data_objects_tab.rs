@@ -19,6 +19,7 @@ use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::tag::Tag;
 use gpui_kit::*;
 
 use crate::components::data_objects::{self, Group};
@@ -363,14 +364,11 @@ impl DataObjectsTab {
                                     .text_color(colors.foreground)
                                     .child(object.name.clone()),
                             )
+                            // 业务身份走标准 Tag：手写胶囊的圆角、内距、字号各写一遍就会漂
                             .child(
-                                div()
-                                    .flex_none()
+                                Tag::secondary()
                                     .rounded_full()
-                                    .px_1()
-                                    .bg(colors.list_hover)
-                                    .text_xs()
-                                    .text_color(colors.muted_foreground)
+                                    .flex_none()
                                     .child(object.pill),
                             )
                             .child(
