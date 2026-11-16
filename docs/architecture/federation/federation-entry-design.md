@@ -251,3 +251,4 @@ cargo test -p rds-editor --lib -- --test-threads=1   # 基线 776 passed / 3 fai
 8. **两处动作语义**：连接行「加载」、表 / 视图行「选用」；洞察弹窗里的连接行只展开不可勾（P7）。面板侧已落地「选用」（`896421f6`）；连接行「加载」与弹层「只展开」随 01 source-picker 的交互口径一起改，未落地。
 9. **面板只承载一个对象**（已落地：`896421f6`）：行上「选用」，再点「洞察此对象」；多源在洞察面板内部按「+」加。软上限 8 只在洞察面板内部生效，面板不再触发。之前「分析已选（N）」的批量路径已删除。
 10. **P8 未定位**：本轮在 `crates/database/src/nav_view` 与 `crates/workbench/src/components/source_picker` 两个候选处都没找到「DuckDB tab 给连接挂 catalog」的代码——picker 的 `group_of`（`components/source_picker/group.rs:49`）里 DuckDB 组只收 `ResultSet` / `InsightSample`，`Analysis` / `AnalysisGlobal` 归「文件」组（同文件 :112 有断言）。要改这条，得先指认实际挂 catalog 的入口（是导航树的 DuckDB 分支，还是编辑器侧栏的 DuckDB 分区）。
+11. **联邦与二次分析共用同一份数据对象面板**（2026-11-16 裁决）：右侧只有 `RightPanel::DataObjects` 一个页签、`right_data_objects_tab` 一个实体（`crates/workbench/src/view/mod.rs:87`、`view/dock.rs:166`），联邦会话的源与结果集物化出来的临时表都落在这一份清单里，按容器分五段区分，不另开第二个面板。切换只影响「首次切到联邦时主动展开它一次」，避免用户切了通道却看不见可用的源。
