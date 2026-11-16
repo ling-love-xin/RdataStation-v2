@@ -266,7 +266,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
     // 【结果集二次分析】整表入口：与「洞察此列」同组（都是进洞察），范围是整份结果
     if target.analyze {
         items.push(ContextMenuItem {
-            label: format!("分析此结果集（{} 行 · 洞察）", target.rows),
+            label: format!("分析这份结果集…（{} 行）", target.rows),
             action: ContextAction::AnalyzeResultSet,
             separator_before: !target.insight,
         });
