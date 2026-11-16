@@ -1485,7 +1485,7 @@ fn shared_fields_are_whitelisted() {
         "layout_locked",
         "left_mode",
         "left_mode_before_hidden",
-        "left_open_panels",
+        "left_open_panels", "loaded_files",
         "metadata_search",
         "metadata_search_dismissed",
         "metadata_search_panel",

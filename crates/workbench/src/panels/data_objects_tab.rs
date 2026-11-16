@@ -543,9 +543,19 @@ impl ComponentPanel for DataObjectsTab {
     fn toolbar_buttons(
         &mut self,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<Vec<gpui_kit::component::button::Button>> {
-        None
+        cx: &mut Context<Self>,
+    ) -> Option<Vec<Button>> {
+        // 「加源」是面板唯一往外接数据的入口：只接能直接读的文件，库表由连接下推
+        Some(vec![Button::new("data-objects-add-source")
+            .ghost()
+            .label("加源")
+            .on_click(cx.listener(|this, _, window, cx| {
+                crate::components::data_objects_load::open_load_files_dialog(
+                    &this.shared,
+                    window,
+                    cx,
+                );
+            }))])
     }
 
     fn dropdown_menu(
