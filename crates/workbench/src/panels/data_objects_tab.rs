@@ -112,9 +112,12 @@ impl DataObjectsTab {
     /// 勾 / 取消一个对象进工作集（存 `key`，不存行号：列表会重排）。
     fn toggle_picked(&mut self, key: &str, cx: &mut Context<Self>) {
         let mut picked = self.shared.data_object_picked.borrow_mut();
-        if let Some(pos) = picked.iter().position(|k| k == key) {
-            picked.remove(pos);
+        // 面板只承载**一个**对象：多源在洞察面板里按「+」加。这里若允许攒多选，
+        // 同一个对象会从两处各进一次来源，反而要用户去收拾重复。
+        if picked.len() == 1 && picked[0] == *key {
+            picked.clear();
         } else {
+            picked.clear();
             picked.push(key.to_string());
         }
         drop(picked);
@@ -167,7 +170,7 @@ impl DataObjectsTab {
             header
                 .child(
                     Button::new("data-objects-analyze")
-                        .label(format!("分析已选（{}）", picked.len()))
+                        .label("洞察此对象")
                         .on_click(move |_, _, cx| {
                             // 副作用只在事件路径做：转换是纯函数，开洞察在宿主
                             let objects = shared_for_run.data_objects.borrow().clone();
@@ -250,7 +253,7 @@ impl DataObjectsTab {
                         object.key
                     )))
                     .ghost()
-                    .label(if is_picked { "已选" } else { "加入" })
+                    .label(if is_picked { "已选" } else { "选用" })
                     .on_click(move |_, _, cx| {
                         let key = key.clone();
                         entity.update(cx, |tab, cx| tab.toggle_picked(&key, cx));
