@@ -239,6 +239,17 @@ impl FederatedSession {
         Ok(())
     }
 
+    /// 把一个**外部文件**挂成会话里的视图（数据对象第 ① 类里最便宜的那一档）
+    ///
+    /// 建视图不物化：每次查询重读文件，文件改了结果跟着变——这才是“加载进 DuckDB 实例”
+    /// 的本意，而不是偷偷拷一份（需要拷的只有临时表那一档，见 P4）。
+    pub fn add_file_view(&self, path: &str, alias: &str) -> Result<(), String> {
+        let sql = file_view_sql(path, alias)?;
+        let conn = self.lock().map_err(|error| error.to_string())?;
+        conn.execute_batch(&sql)
+            .map_err(|error| format!("加载文件失败：{error}"))
+    }
+
     /// 会话快照（**界面读这个**：纯内存，渲染路径可调）
     pub fn snapshot(&self) -> SessionSnapshot {
         SessionSnapshot {
@@ -471,6 +482,34 @@ struct CachedFederation {
 ///
 /// 只含源本身（conn_id / 别名 / 种类 / 连接串），**不含主源**：换主源是同一条会话上的
 /// `USE` 切换，不该把会话重建（那会把用户建的本地临时对象一起丢掉）。
+/// 外部文件 → 建视图的 SQL（按扩展名挑 DuckDB 的读取函数）
+///
+/// 只认 DuckDB 能直接读的那几类。excel 要 `excel` 扩展（本机未实测装得上），
+/// 所以这里先把“读不了”的情况变成一句可读原因，而不是等执行时报 SQL 错误。
+pub fn file_view_sql(path: &str, alias: &str) -> Result<String, String> {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let reader = match ext.as_str() {
+        "csv" | "tsv" | "txt" => "read_csv_auto",
+        "parquet" => "read_parquet",
+        "json" | "jsonl" | "ndjson" => "read_json_auto",
+        "xlsx" | "xls" => "read_excel",
+        other => {
+            return Err(format!(
+                "DuckDB 读不了 .{other}：只支持 csv / parquet / json / excel"
+            ));
+        }
+    };
+    let quoted_path = path.replace('\'', "''");
+    let quoted_alias = alias.replace('"', "\"\"");
+    Ok(format!(
+        "CREATE OR REPLACE VIEW \"{quoted_alias}\" AS SELECT * FROM {reader}('{quoted_path}')"
+    ))
+}
+
 pub fn source_fingerprint(sources: &[FederatedSource]) -> String {
     let mut parts: Vec<String> = sources
         .iter()
@@ -600,6 +639,13 @@ pub fn refresh_source(owner: &str, alias: &str) -> Result<(), String> {
 /// 重挂会话里的所有源（界面上「刷新全部」）
 ///
 /// 返回**逐源结果**：失败的源如实带原因（不吞、不合并成一句“部分失败”）。
+/// 把外部文件加载进某个联邦会话（面板「加源」的文件分支走这里）
+pub fn add_file_view(owner: &str, path: &str, alias: &str) -> Result<(), String> {
+    let session = session_for(owner)
+        .ok_or_else(|| "还没有联邦会话：先切到联邦执行一次查询".to_string())?;
+    session.add_file_view(path, alias)
+}
+
 pub fn refresh_all(owner: &str) -> Result<Vec<(String, Result<(), String>)>, String> {
     let session =
         session_for(owner).ok_or_else(|| "还没有联邦会话：先执行一次再刷新源".to_string())?;
@@ -660,9 +706,43 @@ fn apply_requested_primary(session: &FederatedSession, requested: Option<&str>) 
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{FederatedSession, write_refusal};
+    use super::{FederatedSession, file_view_sql, write_refusal};
     use crate::duckdb::federation::registry::{FederatedSource, MountState, MountedSource};
     use std::sync::Arc;
+
+    #[test]
+    fn a_csv_file_becomes_a_view_on_the_session() {
+        let dir = workdir("file_view");
+        let path = dir.join("orders.csv");
+        std::fs::write(&path, "id,name\n1,a\n2,b\n").expect("写 csv");
+
+        let session = FederatedSession::open(&[], None).expect("空源也能开会话");
+        session
+            .add_file_view(path.to_str().expect("路径"), "orders_file")
+            .expect("文件加载成视图");
+        let ok = session.run("SELECT count(*) FROM orders_file").is_ok();
+        assert!(ok, "视图应能查");
+    }
+
+    #[test]
+    fn the_reader_follows_the_extension() {
+        assert!(file_view_sql("/tmp/a.csv", "f").expect("csv").contains("read_csv_auto"));
+        assert!(file_view_sql("/tmp/a.parquet", "f").expect("parquet").contains("read_parquet"));
+        assert!(file_view_sql("/tmp/a.json", "f").expect("json").contains("read_json_auto"));
+        assert!(file_view_sql("/tmp/a.xlsx", "f").expect("excel").contains("read_excel"));
+    }
+
+    #[test]
+    fn an_unreadable_extension_says_why_instead_of_failing_at_query_time() {
+        let error = file_view_sql("/tmp/a.docx", "f").expect_err("docx 读不了");
+        assert!(error.contains("docx"), "{error}");
+    }
+
+    #[test]
+    fn paths_with_quotes_are_escaped() {
+        let sql = file_view_sql("/tmp/it's.csv", "f").expect("csv");
+        assert!(sql.contains("it''s.csv"), "{sql}");
+    }
 
     /// 造一个 DuckDB 文件源（**离线可跑**：duckdb 文件挂载不需要任何扩展）
     fn file_source(dir: &std::path::Path, name: &str, alias: &str, rows: i64) -> FederatedSource {
