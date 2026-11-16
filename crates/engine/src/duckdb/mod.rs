@@ -32,6 +32,7 @@ mod explain;
 mod extension;
 pub mod extensions;
 pub mod federation;
+pub mod file_view;
 mod manager;
 mod metrics;
 mod probe;
