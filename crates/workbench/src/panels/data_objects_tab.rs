@@ -20,6 +20,7 @@ use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::Icon;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::tag::Tag;
@@ -61,6 +62,54 @@ impl DataObjectsTab {
         };
         tab.refresh(cx);
         tab
+    }
+
+    /// 删掉清单里的临时对象（进程内存里的临时表；删了要重跑才有）。
+    ///
+    /// 属于破坏性动作，调用前必须过确认框；这里只管执行与把失败原话留在面板上。
+    fn clear_temp_objects(&mut self, cx: &mut Context<Self>) {
+        let names: Vec<String> = self
+            .shared
+            .data_objects
+            .borrow()
+            .iter()
+            .filter(|object| object.group == Group::TemporaryTables)
+            .map(|object| object.name.clone())
+            .collect();
+        if names.is_empty() {
+            self.note = Some("清单里没有临时对象".to_string());
+            cx.notify();
+            return;
+        }
+        let mut dropped = 0usize;
+        let mut failed: Vec<String> = Vec::new();
+        {
+            let connection = engine::duckdb::DuckDBManager::global();
+            match connection.lock() {
+                Ok(guard) => {
+                    for name in &names {
+                        let Some(source) = data_objects::temp_source_for(name) else {
+                            failed.push(name.clone());
+                            continue;
+                        };
+                        match engine::duckdb::temp_table::drop_temp_table(&guard, source, name) {
+                            Ok(()) => dropped += 1,
+                            // 表已经不在了也算清掉：目标是不留残留
+                            Err(error) => failed.push(format!("{name}：{error}")),
+                        }
+                    }
+                }
+                Err(error) => {
+                    failed.push(format!("拿不到进程库锁：{error}"));
+                }
+            }
+        }
+        self.note = Some(if failed.is_empty() {
+            format!("已清理 {dropped} 个临时对象")
+        } else {
+            format!("清理 {dropped} 个，{} 个没清掉：{}", failed.len(), failed.join("；"))
+        });
+        self.refresh(cx);
     }
 
     /// 收起 / 展开一段（段头 caret 回调）
@@ -390,29 +439,63 @@ impl DataObjectsTab {
                 }),
         );
 
-        // 底部会话条（原型 07 的 sess）：这个文档挂了几源、有几源没挂上
-        let sess_row = match self.session {
-            Some((mounted, total)) if total > 0 => {
+        // 底部会话条（原型 07 的 sess）：这个文档挂了几源、有几源没挂上，
+        // 以及进程里堆着的临时对象清不清
+        let session_text = self
+            .session
+            .filter(|(_, total)| *total > 0)
+            .map(|(mounted, total)| {
                 let unmounted = total.saturating_sub(mounted);
-                Some(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_2()
-                        .px_3()
-                        .py_2()
-                        .border_t_1()
-                        .border_color(colors.border)
-                        .text_xs()
-                        .text_color(colors.muted_foreground)
-                        .child(format!("已挂 {mounted}/{total} 源"))
-                        .when(unmounted > 0, |el| {
-                            el.child(format!("· {unmounted} 个未挂载"))
-                        }),
-                )
-            }
-            _ => None,
-        };
+                match unmounted {
+                    0 => format!("已挂 {mounted}/{total} 源"),
+                    _ => format!("已挂 {mounted}/{total} 源 · {unmounted} 个未挂载"),
+                }
+            });
+        let has_temp = self
+            .shared
+            .data_objects
+            .borrow()
+            .iter()
+            .any(|object| object.group == Group::TemporaryTables);
+        let sess_row = (session_text.is_some() || has_temp).then(|| {
+            let entity_for_clear = entity.clone();
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py_2()
+                .border_t_1()
+                .border_color(colors.border)
+                .text_xs()
+                .text_color(colors.muted_foreground)
+                .when_some(session_text, |el, text| el.child(text))
+                .child(div().flex_1())
+                .when(has_temp, |el| {
+                    el.child(
+                        Button::new("data-objects-clear-temp")
+                            .ghost()
+                            .label("清理临时对象")
+                            .on_click(move |_, window, cx| {
+                                let entity = entity_for_clear.clone();
+                                // 删的是进程内存里的临时表：先问一句，别让人一抬手就没了
+                                window.open_alert_dialog(cx, move |alert, _window, _cx| {
+                                    let entity = entity.clone();
+                                    alert
+                                        .confirm()
+                                        .title("清理临时对象")
+                                        .description("将删掉清单里的临时表。它们在进程内存里，删了要重跑才有；想留就先「存为表」。确定继续？")
+                                        .on_ok(move |_window, _cx, cx| {
+                                            entity.update(cx, |tab, cx| {
+                                                tab.clear_temp_objects(cx);
+                                            });
+                                            true
+                                        })
+                                });
+                            }),
+                    )
+                })
+        });
 
         let mut list = div()
             .v_flex()

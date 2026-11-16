@@ -448,6 +448,21 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// 临时表名反推来源：`drop_temp_table` 会按来源前缀校验，传错来源直接拒。
+///
+/// 前缀不借用字符串常量而逐个 `prefixes()` 比对——前缀改了这里跟着改。
+pub fn temp_source_for(name: &str) -> Option<engine::duckdb::temp_table::TempTableSource> {
+    use engine::duckdb::temp_table::TempTableSource;
+    [
+        TempTableSource::Query,
+        TempTableSource::Insight,
+        TempTableSource::Mock,
+        TempTableSource::Plugin,
+    ]
+    .into_iter()
+    .find(|source| source.prefixes().iter().any(|prefix| name.starts_with(prefix)))
+}
+
 /// 会话行上能做的动作（后端已齐，`engine::duckdb::federation::session`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionAction {
@@ -949,6 +964,18 @@ mod tests {
 }
 
 #[cfg(test)]
+mod temp_source_tests {
+    use super::temp_source_for;
+
+    #[test]
+    fn maps_prefixes_to_sources() {
+        assert_eq!(temp_source_for("tmp_q_orders"), Some(engine::duckdb::temp_table::TempTableSource::Query));
+        assert_eq!(temp_source_for("tmp_i_eda"), Some(engine::duckdb::temp_table::TempTableSource::Insight));
+        assert_eq!(temp_source_for("res_orders_2026"), None);
+    }
+}
+
+#[cfg(test)]
 mod memory_format_tests {
     use super::format_bytes;
 
@@ -960,3 +987,4 @@ mod memory_format_tests {
         assert_eq!(format_bytes(2 * 1024 * 1024 * 1024), "2.0 GB");
     }
 }
+
