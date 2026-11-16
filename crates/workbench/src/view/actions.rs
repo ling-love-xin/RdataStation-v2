@@ -152,14 +152,14 @@ impl WorkbenchView {
     /// 草稿箱文件属性弹窗（右键 → 属性；用户点名 2026-10-10：信息少，走弹窗不走 panel）。
     ///
     /// 读 `Shared::scratchpad_file_info`（草稿箱经端口写入）；宿主用 gpui-kit `Dialog`
-    /// 包一层（内置 overlay / Esc / 遮罩点击关闭），内容只有 6 行键值（`render_scratchpad_file_info_pane`）。
+    /// 包一层（内置 overlay / Esc / 遮罩点击关闭），内容是键值行（`render_scratchpad_file_info_pane`，
+    /// 排版走 `DescriptionList`）。
     pub(super) fn render_scratchpad_file_info_popover(
         &mut self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let view = (*self.shared.scratchpad_file_info.borrow()).clone()?;
-        let theme = cx.theme().clone();
         let shared = self.shared.clone();
         let close = move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
             *shared.scratchpad_file_info.borrow_mut() = None;
@@ -168,12 +168,9 @@ impl WorkbenchView {
         Some(
             Dialog::new(cx)
                 .title(div().child(format!("属性 · {}", view.name)))
-                .content({
-                    let theme = theme.clone();
-                    move |content: DialogContent, window: &mut Window, cx: &mut App| {
-                        let _ = (window, cx);
-                        content.child(render_scratchpad_file_info_pane(&view, &theme))
-                    }
+                .content(move |content: DialogContent, window: &mut Window, cx: &mut App| {
+                    let _ = (window, cx);
+                    content.child(render_scratchpad_file_info_pane(&view))
                 })
                 .button_props(DialogButtonProps::default().show_cancel(false))
                 .on_close(close)

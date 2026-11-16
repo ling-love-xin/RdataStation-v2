@@ -10,6 +10,8 @@ use super::*;
 
 use super::primitives::scratchpad_absolute_time;
 use content_search::view::{SearchHit, SearchView};
+use gpui_kit::component::description_list::DescriptionList;
+use gpui_kit::component::Size;
 
 /// 冲突 Diff 面板的载荷（草稿箱经宿主端口投给中央编辑区）。
 ///
@@ -44,6 +46,11 @@ pub struct ScratchpadFileInfoView {
     pub created_at: Option<String>,
     /// SQL 文件的数据库连接描述（后期分析文件类型实现后填充；现在 `None`）。
     pub db_connection: Option<String>,
+    /// 条目上的活跃标签名（项目库 `scratchpad_tags` 关联，按名称升序）。
+    ///
+    /// 标签是索引、不写文件元数据（规格 §7.3「文件本体不动」），所以这份要从存储带进来，
+    /// 不能指望读 sidecar。没有标签时为空——属性面板据此不画那一行。
+    pub tags: Vec<String>,
 }
 
 /// 把后台搜索任务的载荷转成结果视图（组装 `content_search::view::SearchView`）。
@@ -167,13 +174,10 @@ pub fn render_scratchpad_diff_pane(
 /// 用户点名（2026-10-10）：树行 meta 只留大小，修改/创建时间与连接信息都在这里。
 /// `db_connection` 为后期「SQL 文件连接哪个数据库」预留（分析文件类型实现后填充，
 /// 现在是占位 `—`）。
-pub fn render_scratchpad_file_info_pane(
-    view: &ScratchpadFileInfoView,
-    theme: &gpui_kit::component::Theme,
-) -> Div {
-    let fg = theme.colors.foreground;
-    let muted = theme.colors.muted_foreground;
-
+///
+/// 排版交给 `description_list::DescriptionList`（只读 label/value 列表，DBeaver 属性检查器
+/// 风格）：标签列宽、行高由组件管，与资产库详情同一套键值语言，不再手搓两列 div。
+pub fn render_scratchpad_file_info_pane(view: &ScratchpadFileInfoView) -> Div {
     // RFC3339 → 绝对时间（对齐原型 705-706：修改时间 / 创建时间显示绝对时间戳；
     // 相对时间只用于树行——树行已只留大小，时间全在这里）；缺省显示 `—`。
     let time_label = |ts: &Option<String>| {
@@ -186,7 +190,7 @@ pub fn render_scratchpad_file_info_pane(
         .clone()
         .unwrap_or_else(|| "—".to_string());
 
-    let rows = [
+    let mut rows: Vec<(&'static str, String)> = vec![
         ("类型", view.kind_label.clone()),
         ("路径", view.relative_path.clone()),
         (
@@ -201,28 +205,20 @@ pub fn render_scratchpad_file_info_pane(
         ("创建时间", time_label(&view.created_at)),
         ("数据库连接", db),
     ];
-
-    let mut list = div().v_flex().w_full().gap_0p5();
-    for (label, value) in rows {
-        list = list.child(
-            div()
-                .h_flex()
-                .items_center()
-                .gap_2()
-                .w_full()
-                .text_xs()
-                .child(
-                    div()
-                        .flex_none()
-                        .w(rems(4.5))
-                        .text_color(muted)
-                        .child(label),
-                )
-                .child(div().flex_1().min_w_0().text_color(fg).child(value)),
-        );
+    // 标签只在有条目时出现：一排「（无）」除了占地方没有信息量（与资产详情同一纪律）。
+    if !view.tags.is_empty() {
+        rows.push(("标签", view.tags.join(" · ")));
     }
 
-    list
+    let mut list = DescriptionList::new()
+        .columns(1)
+        .bordered(false)
+        .with_size(Size::Small)
+        .label_width(rems(4.5));
+    for (label, value) in rows {
+        list = list.item(label, value, 1);
+    }
+    div().v_flex().w_full().child(list)
 }
 
 /// 差异行前缀（`similar` 的口径：`+` 新增 / `-` 删除 / 空格原样）。

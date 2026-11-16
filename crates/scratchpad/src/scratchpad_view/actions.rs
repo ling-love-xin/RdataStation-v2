@@ -219,6 +219,14 @@ impl ScratchpadView {
         } else {
             String::new()
         };
+        // 标签是索引（项目库 `scratchpad_tags`），不在文件元数据里——从内存那份按相对路径取。
+        let tags: Vec<String> = self
+            .scratchpad
+            .borrow()
+            .entry_tags
+            .get(&relative)
+            .map(|tags| tags.iter().map(|tag| tag.name.clone()).collect())
+            .unwrap_or_default();
         self.host.show_file_info(
             Some(ScratchpadFileInfoView {
                 relative_path: relative,
@@ -229,6 +237,7 @@ impl ScratchpadView {
                 modified_at,
                 created_at,
                 db_connection: None,
+                tags,
             }),
             cx,
         );
