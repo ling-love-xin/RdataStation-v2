@@ -97,10 +97,21 @@ pub(super) fn request_view_stats(host: &ResourceHost, detail: &ArchiveDetail, _w
                 host.backend
                     .open_insight_source_table(source, detail.name.clone(), cx);
             }
-            // 分析表：本体是项目内的 `analytics.duckdb`，要 ATTACH + 用重建定义取数
-            // （不是“读一个文件”那么简单）——随后续批次接（面板据此也不给入口）。
+            // 分析表（数据文件档）：本体是 `resources/` 下的数据文件，读法与 `File`
+            // 档相同（DuckDB 按扩展名选读取器）。**注意**：这里不吃「项目 analytics.duckdb
+            // 里的持久表」那种本体——那种「表型资产」还没落地（需要新的本体类型 + 登记字段），
+            // 别再按文件名去猜表名。
             ArchiveKind::Analysis => {
-                host.notice("资产库：分析表型存档的洞察随 M8 后续批次接入", cx);
+                let Some(path) = host.payload_path(detail, cx) else {
+                    return;
+                };
+                match insight::SampleSource::duckdb_file(&path, detail.name.clone()) {
+                    Ok(source) => {
+                        host.backend
+                            .open_insight_source_table(source, detail.name.clone(), cx)
+                    }
+                    Err(error) => host.notice(format!("资产库：{error}"), cx),
+                }
             }
         }
 }
