@@ -346,10 +346,9 @@ impl DataObjectsTab {
                     .hover(|s| s.bg(colors.list_hover))
                     .border_b_1()
                     .border_color(colors.border)
-                    // 已选的行给一道左侧色条：一屏几十行时靠它扫得到
-                    .when(is_picked, |el| {
-                        el.border_l_2().border_color(colors.primary)
-                    })
+                    .relative()
+                    // 已选的行给一道左侧色条：走共用原语，别再用 border 挤掉 2px 内距
+                    .when(is_picked, |el| el.child(workbench_shell::tree::active_bar(colors.primary)))
                     // 失效行压暗：仍然看得见，但别让人以为能直接点
                     .opacity(if object.can_analyze() { 1.0 } else { 0.55 })
                     .child(
