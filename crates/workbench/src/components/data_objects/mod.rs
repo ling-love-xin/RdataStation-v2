@@ -227,6 +227,9 @@ pub struct Collected {
     pub global_tables: Vec<String>,
     pub result_sets: Vec<String>,
     pub insight_samples: Vec<String>,
+    /// 「加源」加载进进程单例的文件视图：`(视图名, 原路径)`。视图不物化，
+    /// 所以这里只记名字与出处，面板按它列行
+    pub loaded_files: Vec<(String, String)>,
     /// 资产清单（由资产面板的已载行填；空 = 资产面板还没载过）
     pub assets: Vec<AssetRow>,
     /// 联邦会话里已挂上的源
@@ -243,6 +246,7 @@ impl Collected {
             global_tables: Vec::new(),
             result_sets: Vec::new(),
             insight_samples: Vec::new(),
+            loaded_files: Vec::new(),
             assets: Vec::new(),
             session_sources: Vec::new(),
         }
@@ -364,6 +368,22 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             state: State::Ready,
             group: Group::ExternalFiles,
             pill: "草稿",
+            version: None,
+        });
+    }
+
+    // 已加载进进程单例的文件视图：视图名就是 SQL 里能直接用的那个（`f_<ascii>`），
+    // 文件名放 note，用户才知道它对应哪份文件
+    for (alias, path) in &collected.loaded_files {
+        out.push(Object {
+            key: format!("fileview:{alias}"),
+            name: alias.clone(),
+            note: path.clone(),
+            channel: Channel::File,
+            life: Life::External,
+            state: State::Ready,
+            group: Group::ExternalFiles,
+            pill: "已加载",
             version: None,
         });
     }
@@ -577,6 +597,7 @@ pub fn collect(shared: &Shared) -> Collected {
         global_tables,
         result_sets,
         insight_samples,
+        loaded_files: shared.loaded_files.borrow().clone(),
         assets: Vec::new(),
         session_sources,
     }
@@ -602,6 +623,7 @@ mod tests {
             global_tables: vec!["G_月度经营".into()],
             result_sets: vec!["tmp_q_结果_3".into()],
             insight_samples: vec!["tmp_i_orders_sample".into()],
+            loaded_files: Vec::new(),
             assets: vec![AssetRow {
                 name: "月度经营快照".into(),
                 version: 3,

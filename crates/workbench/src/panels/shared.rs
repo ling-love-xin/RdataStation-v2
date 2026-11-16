@@ -286,6 +286,10 @@ pub struct Shared {
     /// 由事件路径刷新（面板打开 / 用户点刷新），渲染只读——`collect` 里有读盘与
     /// 查库，放进 render 就会每帧 I/O（gpui-kit-dev 明令禁止）。
     pub data_objects: Rc<RefCell<Vec<crate::components::data_objects::Object>>>,
+
+    /// 「加源」加载进进程单例的文件视图：`(视图名, 原路径)`。
+    /// 由事件路径写入（`collect` 读它进面板）；视图不物化，重开进程即失效。
+    pub loaded_files: Rc<RefCell<Vec<(String, String)>>>,
     /// 资产行（面板刷新时一并取：`Objects` 里只有名字与版本，「分析已选」还要本体路径）
     pub data_object_assets: Rc<RefCell<Vec<crate::components::data_objects::AssetRow>>>,
     /// 数据对象工作集：已挑进本次分析的对象的身份（`Object::key`）。
@@ -442,6 +446,7 @@ impl Shared {
             })),
             connections: Rc::new(RefCell::new(connections)),
             data_objects: Rc::new(RefCell::new(Vec::new())),
+            loaded_files: Rc::new(RefCell::new(Vec::new())),
             data_object_assets: Rc::new(RefCell::new(Vec::new())),
             data_object_picked: Rc::new(RefCell::new(Vec::new())),
             notice: Rc::new(RefCell::new(notice)),
