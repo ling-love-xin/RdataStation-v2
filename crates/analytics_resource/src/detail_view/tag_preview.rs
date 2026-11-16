@@ -21,7 +21,8 @@ pub(crate) fn render_tag_section(detail: &ArchiveDetail, actions: Option<&Detail
     }
     for chip in &detail.tags {
         let mut line = Tag::secondary()
-            .with_size(Size::Small)
+            // Small 档字号只有 10px（低于 11px 下限）；chips 独占一行，Medium 的 25px 撑得住
+            .with_size(Size::Medium)
             .gap_1()
             .child(chip.name.clone());
         if let Some(actions) = actions {
@@ -53,24 +54,12 @@ pub(crate) fn render_tag_section(detail: &ArchiveDetail, actions: Option<&Detail
         chips = chips.child(line);
     }
 
-    let mut section = div()
-        .v_flex()
-        .w_full()
-        .gap_1()
-        .child(
-            div()
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(muted)
-                .child("标签"),
-        )
-        .child(chips);
-
+    // 「＋ 标签」跟 chips 排同一行：它展开的是这一行标签，不该另起一行孤零零站在下面
     if let Some(actions) = actions {
         let host = actions.host.clone();
         let resource_id = detail.id.clone();
         let resource_name = detail.name.clone();
-        section = section.child(
+        chips = chips.child(
             Button::new("archive-detail-add-tag")
                 .ghost()
                 .xsmall()
@@ -91,7 +80,18 @@ pub(crate) fn render_tag_section(detail: &ArchiveDetail, actions: Option<&Detail
         );
     }
 
-    section
+    div()
+        .v_flex()
+        .w_full()
+        .gap_1()
+        .child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(muted)
+                .child("标签"),
+        )
+        .child(chips)
 }
 /// 渲染详情面板内容（只读信息区 + 标签分区 + 动作区 + 危险区）。
 /// 头部显示名：可点时是个 ghost 按钮（`F2` 的同一条链路），没宿主 / 不可改时是纯文本。
@@ -114,7 +114,8 @@ pub(crate) fn name_link(detail: &ArchiveDetail, actions: Option<&DetailActions>,
     base.child(
         Button::new("archive-detail-rename")
             .ghost()
-            .xsmall()
+            // `xsmall` 把按钮文案压到 12px，详情标题会跟着矮一档；这里只收行高，不收字号
+            .h(rems(ui::ROW_HEIGHT))
             .debug_selector(|| "archive-detail-rename".to_string())
             .label(detail.name.clone())
             .text_color(foreground)
