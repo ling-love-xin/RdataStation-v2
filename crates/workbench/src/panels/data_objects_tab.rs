@@ -36,6 +36,8 @@ pub struct DataObjectsTab {
     note: Option<String>,
     /// 哪一行的会话动作条展开着：一屏只开一个，跟原型一致
     expanded_session: Option<String>,
+    /// 分组筛选（原型 07 的 6 个 chips）：`None` = 全部
+    filter: Option<Group>,
 }
 
 impl DataObjectsTab {
@@ -45,6 +47,7 @@ impl DataObjectsTab {
             focus_handle: cx.focus_handle(),
             note: None,
             expanded_session: None,
+            filter: None,
         };
         tab.refresh(cx);
         tab
@@ -132,7 +135,14 @@ impl DataObjectsTab {
     }
 
     fn render_body(&self, cx: &Context<Self>) -> Div {
-        let objects = self.shared.data_objects.borrow().clone();
+        let all = self.shared.data_objects.borrow().clone();
+        let total = all.len();
+        // 筛选只改“看得见哪些”，不动工作集：选了某个对象后换个段看，已选仍在
+        let filter = self.filter;
+        let objects: Vec<data_objects::Object> = all
+            .into_iter()
+            .filter(|object| filter.is_none_or(|group| object.group == group))
+            .collect();
         let picked = self.shared.data_object_picked.borrow().clone();
         let colors = cx.theme().colors;
         let entity = cx.entity();
@@ -156,7 +166,7 @@ impl DataObjectsTab {
                 div()
                     .text_xs()
                     .text_color(colors.muted_foreground)
-                    .child(format!("{} 个 · 已选 {}", objects.len(), picked.len())),
+                    .child(format!("{} 个 · 已选 {}", total, picked.len())),
             )
             // 清单会变（连上/断开连接、临时表失效、资产改了版本），面板得有条自己重取的路
             .child({
@@ -218,6 +228,41 @@ impl DataObjectsTab {
                         }),
                 )
         };
+
+        // 分组 chips：五段全展开太长，先收窄到一段再看（原型 07 的 6 个 chip）
+        let mut chips = div()
+            .h_flex()
+            .items_center()
+            .flex_wrap()
+            .gap_1()
+            .px_3()
+            .pb_2();
+        let mut entries: Vec<(Option<Group>, String)> = vec![(None, "全部".to_string())];
+        for group in [
+            Group::MountedSources,
+            Group::ProjectLibrary,
+            Group::GlobalLibrary,
+            Group::ExternalFiles,
+            Group::TemporaryTables,
+        ] {
+            entries.push((Some(group), group.title().to_string()));
+        }
+        for (option, label) in entries {
+            let entity = entity.clone();
+            let active = self.filter == option;
+            chips = chips.child(
+                Button::new(SharedString::from(format!("data-objects-filter-{label}")))
+                    .ghost()
+                    .toggled(active)
+                    .label(label)
+                    .on_click(move |_, _, cx| {
+                        entity.update(cx, |tab, cx| {
+                            tab.filter = option;
+                            cx.notify();
+                        });
+                    }),
+            );
+        }
 
         let mut list = div()
             .v_flex()
@@ -462,6 +507,7 @@ impl DataObjectsTab {
             .min_h_0()
             .pt_2()
             .child(header)
+            .child(chips)
             .child(list)
             .when_some(self.note.clone(), |el, note| {
                 el.child(
