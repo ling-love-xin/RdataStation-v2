@@ -13,7 +13,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
-use gpui_kit::component::menu::PopupMenu;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::*;
 
 use crate::components::data_objects::{self, Group};
@@ -24,6 +24,8 @@ use super::Shared;
 pub struct DataObjectsTab {
     shared: Shared,
     focus_handle: FocusHandle,
+    /// 上一次会话动作的结果（失败原话）；`None` = 没动作过或已恢复
+    note: Option<String>,
 }
 
 impl DataObjectsTab {
@@ -31,9 +33,39 @@ impl DataObjectsTab {
         let tab = Self {
             shared,
             focus_handle: cx.focus_handle(),
+            note: None,
         };
         tab.refresh(cx);
         tab
+    }
+
+    /// 执行一个会话动作（重挂 / 设主源 / 关闭会话），结果写进面板底部一行。
+    ///
+    /// 不吞错误：失败时把引擎原话留在面板上——用户点了没反应是最难查的那种。
+    fn run_session_action(&mut self, action: data_objects::SessionAction, cx: &mut Context<Self>) {
+        use data_objects::SessionAction;
+        let outcome = match action {
+            SessionAction::RefreshSource { owner, alias } => {
+                engine::duckdb::federation::session::refresh_source(&owner, &alias).map(|_| ())
+            }
+            SessionAction::SetPrimary { owner, alias } => {
+                engine::duckdb::federation::session::set_primary(&owner, &alias)
+            }
+            SessionAction::DropSession { owner } => {
+                let dropped = engine::duckdb::federation::session::drop_session(&owner);
+                match dropped {
+                    true => Ok(()),
+                    // 后端返 bool：没这个会话就是没关成，别报成功
+                    false => Err(format!("没有这个会话：{owner}")),
+                }
+            }
+        };
+        self.note = Some(match outcome {
+            Ok(()) => "已更新会话，清单已刷新".to_string(),
+            Err(reason) => format!("操作失败：{reason}"),
+        });
+        // 动作改了会话表清单：重取一次，别让行上的表数停在旧值
+        self.refresh(cx);
     }
 
     /// 重新取一次清单（事件路径）。
@@ -216,6 +248,44 @@ impl DataObjectsTab {
             } else {
                 None
             };
+            // 会话行多一个动作菜单：重挂 / 设主源 / 关会话（后端已有，界面不发明）
+            let session_button = if object.group == Group::Session {
+                let actions = data_objects::session_actions(&object.key, &object.state);
+                if actions.is_empty() {
+                    None
+                } else {
+                    let menu_actions = actions.clone();
+                    let entity = entity.clone();
+                    Some(
+                        Button::new(SharedString::from(format!(
+                            "data-object-session-{}",
+                            object.key
+                        )))
+                        .ghost()
+                        .label("会话")
+                        .dropdown_menu(move |menu, _, _| {
+                            let mut menu = menu;
+                            for action in &menu_actions {
+                                let action = action.clone();
+                                let entity = entity.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(action.label()).on_click(
+                                        move |_, _, cx| {
+                                            let action = action.clone();
+                                            entity.update(cx, |tab, cx| {
+                                                tab.run_session_action(action, cx)
+                                            });
+                                        },
+                                    ),
+                                );
+                            }
+                            menu
+                        }),
+                    )
+                }
+            } else {
+                None
+            };
             list = list.child(
                 div()
                     .h_flex()
@@ -263,7 +333,8 @@ impl DataObjectsTab {
                             .text_color(state_color)
                             .child(object.state.label()),
                     )
-                    .children(pick_button),
+                    .children(pick_button)
+                    .children(session_button),
             );
         }
 
@@ -285,6 +356,18 @@ impl DataObjectsTab {
             .pt_2()
             .child(header)
             .child(list)
+            .when_some(self.note.clone(), |el, note| {
+                el.child(
+                    div()
+                        .px_3()
+                        .py_2()
+                        .border_t_1()
+                        .border_color(colors.border)
+                        .text_xs()
+                        .text_color(colors.muted_foreground)
+                        .child(note),
+                )
+            })
     }
 }
 

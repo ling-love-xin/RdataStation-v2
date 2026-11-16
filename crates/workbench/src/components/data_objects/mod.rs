@@ -377,6 +377,51 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
     out
 }
 
+/// 会话行上能做的动作（后端已齐，`engine::duckdb::federation::session`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionAction {
+    /// 按同一份描述重挂这个源（表清单可能变了）
+    RefreshSource { owner: String, alias: String },
+    /// 换主源：未限定名只在主源里解析
+    SetPrimary { owner: String, alias: String },
+    /// 关掉整个会话（后端没有「断单个源」，别在界面上发明一个）
+    DropSession { owner: String },
+}
+
+impl SessionAction {
+    pub fn label(&self) -> String {
+        match self {
+            Self::RefreshSource { alias, .. } => format!("重挂源：{alias}"),
+            Self::SetPrimary { alias, .. } => format!("设为主源：{alias}"),
+            Self::DropSession { .. } => "关闭这个会话".to_string(),
+        }
+    }
+}
+
+/// 某个会话行可用的动作（**纯函数**）：设为主源只给**可用的**行——
+/// 不可用的源设不成主源（引擎也会拒），与其点一下拿一句报错，不如不给入口。
+pub fn session_actions(key: &str, state: &State) -> Vec<SessionAction> {
+    let Some((owner, alias)) = key
+        .strip_prefix("session:")
+        .and_then(|rest| rest.rsplit_once(':'))
+    else {
+        return Vec::new();
+    };
+    let (owner, alias) = (owner.to_string(), alias.to_string());
+    let mut actions = vec![SessionAction::RefreshSource {
+        owner: owner.clone(),
+        alias: alias.clone(),
+    }];
+    if matches!(state, State::Ready) {
+        actions.push(SessionAction::SetPrimary {
+            owner: owner.clone(),
+            alias,
+        });
+    }
+    actions.push(SessionAction::DropSession { owner });
+    actions
+}
+
 /// 已选对象 → 洞察取样来源（面板「分析已选」的取数口径，**纯函数**）。
 ///
 /// 返回 `(来源, 跳过原因)`：能给出**完整取数描述**的对象才转成来源，
@@ -703,6 +748,37 @@ mod tests {
             None,
         );
         assert_eq!(dup.0.len(), 1, "{:?}", dup.0);
+    }
+
+    /// 会话行动作：可用的行给三个，失败的行不给「设为主源」。
+    #[test]
+    fn session_actions_offer_set_primary_only_for_ready_rows() {
+        let ready = super::session_actions("session:编辑器 · a.sql:mysql_src", &State::Ready);
+        assert_eq!(ready.len(), 3, "{ready:?}");
+        assert!(matches!(ready[1], super::SessionAction::SetPrimary { .. }));
+        // owner 里带冒号（文档名）时也要切得对：按最后一个冒号切
+        match &ready[0] {
+            super::SessionAction::RefreshSource { owner, alias } => {
+                assert_eq!(owner, "编辑器 · a.sql");
+                assert_eq!(alias, "mysql_src");
+            }
+            other => panic!("{other:?}"),
+        }
+
+        let failed = super::session_actions(
+            "session:doc:oracle_src",
+            &State::Failed("ORA-12541".into()),
+        );
+        assert_eq!(failed.len(), 2, "失败行不给设主源：{failed:?}");
+        assert!(
+            !failed
+                .iter()
+                .any(|a| matches!(a, super::SessionAction::SetPrimary { .. })),
+            "{failed:?}"
+        );
+
+        // 非会话行的 key 不该产出动作（防止误把普通表当会话）
+        assert!(super::session_actions("project:orders", &State::Ready).is_empty());
     }
 
     /// 资产带本体路径 + 给了资源目录时能直接读；缺路径时如实说转不了。
