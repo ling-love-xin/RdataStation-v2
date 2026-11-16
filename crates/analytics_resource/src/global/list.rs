@@ -38,7 +38,8 @@ pub fn to_global_rows(
     resources
         .iter()
         .map(|resource| {
-            let kind = crate::model::ArchiveKind::from_db_str(&resource.kind);
+            let kind =
+                crate::model::ArchiveKind::resolve(&resource.kind, resource.analytics_table.as_deref());
             let tail = {
                 let mut parts = Vec::new();
                 if let Some(size) = resource.file_size {

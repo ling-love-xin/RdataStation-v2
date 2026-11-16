@@ -81,7 +81,9 @@ pub fn format_timestamp(when: DateTime<Utc>) -> String {
 pub fn tail_for(resource: &AnalyticsResource, kind: ArchiveKind, now: DateTime<Utc>) -> String {
     let detail = match kind {
         ArchiveKind::File => format_size(resource.file_size),
-        ArchiveKind::Analysis => format_scale(resource.row_count, resource.column_count),
+        ArchiveKind::Analysis | ArchiveKind::AnalyticsTable => {
+            format_scale(resource.row_count, resource.column_count)
+        }
         // 引用型没有可校验的指纹与体积：明说"无指纹"，而不是留空让人以为"还没算"。
         ArchiveKind::TableRef => "无指纹".to_string(),
     };

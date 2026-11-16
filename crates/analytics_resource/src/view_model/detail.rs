@@ -35,6 +35,11 @@ pub struct ArchiveDetail {
     /// 不在面板上展示（原型 §3.1 没有这一行），但**取回**要用它推默认工作副本名
     /// （显示名与扩展名是两回事：显示名可以改成中文，扩展名不行）。
     pub payload_rel_path: Option<String>,
+    /// 本体表名（**表型资产的取数依据**：`kind = AnalyticsTable` 时它是分析库里的表名）。
+    ///
+    /// 文件型为 `None`。面板上不当作普通属性展示，但「查看统计 / 双击打开」要靠它
+    /// 拼取样 SQL——过去拿不到它，于是这类行只能静默失败。
+    pub analytics_table: Option<String>,
     /// 版本历史摘要，如 "3 个历史版本 · 最近副本完整"。
     pub history_label: String,
     /// 版本区「最近 3 条」明细（数量上限由装配层定，不在这里裁）。

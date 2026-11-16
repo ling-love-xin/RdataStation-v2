@@ -77,6 +77,8 @@ pub struct ArchiveCounts {
     pub total: usize,
     pub archived: usize,
     pub analysis: usize,
+    /// 本体是分析库持久表的行（表型）；与分析表（文件快照）分开计数。
+    pub analytics_table: usize,
     pub table_ref: usize,
     pub missing: usize,
     pub drifted: usize,
@@ -91,6 +93,7 @@ impl ArchiveCounts {
         ];
         for (count, label) in [
             (self.analysis, "分析表"),
+            (self.analytics_table, "分析库表"),
             (self.table_ref, "引用"),
             (self.missing, "缺失"),
             (self.drifted, "索引异常"),

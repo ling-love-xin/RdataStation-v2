@@ -52,6 +52,21 @@ pub struct AnalyticsResource {
     pub definition_sql: Option<String>,
     /// 归档时刻（与 `updated_at` 区分）。
     pub archived_at: Option<DateTime<Utc>>,
+
+    // ===== 迁移 031/034 新增：表型本体与出处（取舍见迁移文件注释）=====
+    /// 本体表名——**表型资产的权威判据**（非空即「本体是本项目/全局分析库里的表」）。
+    ///
+    /// `kind` 串暂时仍写 `analysis`（库层 CHECK 未扩：迁移在事务内执行、`foreign_keys`
+    /// 关不掉，重建表要独立窗口），所以**不要直接读 `kind` 下结论**，
+    /// 真实档位一律经 `ArchiveKind::resolve(kind, analytics_table)` 还原。
+    pub analytics_table: Option<String>,
+    /// 出处种类：`scratchpad` / `connection_table` / `temp_table` / `result_set` /
+    /// `archive` / `global`（迁移把旧的 `promoted_from` 两义拆进这里）。
+    pub origin_kind: Option<String>,
+    /// 出处引用（JSON，形状随 `origin_kind` 而定）。
+    pub origin_ref: Option<String>,
+    /// 能否被 DuckDB 直接加载（1 = 结构化数据文件）；归档时探测一次即定。
+    pub structured: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

@@ -38,7 +38,9 @@ impl AnalyticsResourceStore {
                     input.column_count,
                     now,
                     now,
-                    input.kind.as_db_str(),
+                    // 表型资产折回 `analysis` 落库（库层 CHECK 未扩，见迁移 031 注释）；
+                    // 真实档位由 `analytics_table` 列承载，读取面走 `ArchiveKind::resolve`。
+                    input.kind.db_write_str(),
                     &input.content_hash,
                     &input.file_rel_path,
                     &input.binding.promoted_from,

@@ -2,8 +2,34 @@
 
 use super::*;
 
+/// 表型取数的唯一入口（双击打开与「查看统计」共用）。
+///
+/// 表型资产的本体是**分析库里的持久表**，没有文件路径可走——过去这里拿不到
+/// `payload_path` 就静默返回，用户看到的是"点了没反应"。现在按登记表名直接取样：
+/// `SELECT * FROM "<表名>"` 交给洞察侧当只读源表读出来（`on_duckdb` 绑定到当前
+/// 项目分析库，表就在那里）。
+fn open_analytics_table(host: &ResourceHost, detail: &ArchiveDetail, cx: &mut App) {
+    let Some(table) = detail.analytics_table.as_deref() else {
+        host.notice("资产库：这条表型资产没有登记表名，无法取样", cx);
+        return;
+    };
+    let sql = format!("SELECT * FROM {};", crate::global::quote_ident(table));
+    let source = insight::SampleSource::on_duckdb(sql, detail.name.clone());
+    host.backend
+        .open_insight_source_table(source, detail.name.clone(), cx);
+}
+
 pub(super) fn request_open(host: &ResourceHost, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
 
+        // 表型先行：它没有文件本体，不能走下面的 `payload_path`（那样必然静默失败）。
+        if detail.kind == ArchiveKind::AnalyticsTable {
+            open_analytics_table(host, detail, cx);
+            host.notice(
+                format!("资产库：已在洞察面板打开「{}」（取样）——本体仍只读", detail.name),
+                cx,
+            );
+            return;
+        }
         let Some(path) = host.payload_path(detail, cx) else {
             return;
         };
@@ -98,9 +124,7 @@ pub(super) fn request_view_stats(host: &ResourceHost, detail: &ArchiveDetail, _w
                     .open_insight_source_table(source, detail.name.clone(), cx);
             }
             // 分析表（数据文件档）：本体是 `resources/` 下的数据文件，读法与 `File`
-            // 档相同（DuckDB 按扩展名选读取器）。**注意**：这里不吃「项目 analytics.duckdb
-            // 里的持久表」那种本体——那种「表型资产」还没落地（需要新的本体类型 + 登记字段），
-            // 别再按文件名去猜表名。
+            // 档相同（DuckDB 按扩展名选读取器）。
             ArchiveKind::Analysis => {
                 let Some(path) = host.payload_path(detail, cx) else {
                     return;
@@ -113,6 +137,9 @@ pub(super) fn request_view_stats(host: &ResourceHost, detail: &ArchiveDetail, _w
                     Err(error) => host.notice(format!("资产库：{error}"), cx),
                 }
             }
+            // 表型：本体是项目 `analytics.duckdb` 里的持久表，按登记表名取样
+            // （`analytics_table` 列是权威判据，见迁移 031）。
+            ArchiveKind::AnalyticsTable => open_analytics_table(host, detail, cx),
         }
 }
 

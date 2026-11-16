@@ -41,7 +41,8 @@ pub fn to_row(
     folders: &FolderMemberships,
     now: DateTime<Utc>,
 ) -> ArchiveRow {
-    let kind = ArchiveKind::from_db_str(&resource.kind);
+    // 真实档位看 `analytics_table` 列（表型行的 `kind` 串仍是 analysis，见迁移 031）。
+    let kind = ArchiveKind::resolve(&resource.kind, resource.analytics_table.as_deref());
     let status = statuses
         .get(&resource.id)
         .copied()

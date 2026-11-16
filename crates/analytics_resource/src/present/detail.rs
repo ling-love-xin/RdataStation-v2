@@ -31,11 +31,14 @@ pub fn to_detail(
     recent_versions: &[crate::store::rows::ResourceVersion],
     extras: DetailExtras,
 ) -> ArchiveDetail {
-    let kind = ArchiveKind::from_db_str(&resource.kind);
-    // 与行的尾巴同一口径：文件型给体积、分析表型给规模、引用型不给（不假装有值）。
+    // 真实档位看 `analytics_table` 列（表型行的 `kind` 串仍是 analysis，见迁移 031）。
+    let kind = ArchiveKind::resolve(&resource.kind, resource.analytics_table.as_deref());
+    // 与行的尾巴同一口径：文件型给体积、分析表/分析库表给规模、引用型不给（不假装有值）。
     let size_label = match kind {
         ArchiveKind::File => format_size(resource.file_size),
-        ArchiveKind::Analysis => format_scale(resource.row_count, resource.column_count),
+        ArchiveKind::Analysis | ArchiveKind::AnalyticsTable => {
+            format_scale(resource.row_count, resource.column_count)
+        }
         ArchiveKind::TableRef => String::new(),
     };
     ArchiveDetail {
@@ -62,6 +65,7 @@ pub fn to_detail(
         source_table: resource.source_table.clone(),
         content_hash: resource.content_hash.clone(),
         payload_rel_path: resource.file_rel_path.clone(),
+        analytics_table: resource.analytics_table.clone(),
         // 没有历史版本时给空串：`detail_rows` 据此跳过"版本"分区（不产生空行）。
         history_label: if history_count > 0 {
             format!("{history_count} 个历史版本")

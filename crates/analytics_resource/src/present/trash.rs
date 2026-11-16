@@ -76,7 +76,7 @@ pub fn reference_trash_rows(deleted: &[AnalyticsResource]) -> Vec<(DateTime<Utc>
         .iter()
         .filter(|r| PayloadMode::from_db_str(&r.payload_mode) == PayloadMode::Reference)
         .map(|r| {
-            let kind = ArchiveKind::from_db_str(&r.kind);
+            let kind = ArchiveKind::resolve(&r.kind, r.analytics_table.as_deref());
             let original_label = r
                 .source_path
                 .clone()

@@ -359,6 +359,17 @@ impl GlobalInstanceStore {
                     reason: e.to_string(),
                 })
             })?;
+        // 表型本体列（034）：与项目库 031 对称。这里是 `ALTER TABLE ADD COLUMN`，
+        // **不能**塞进 `schema_guard` 那种幂等补建（重复 ALTER 会报列已存在）。
+        sqlite
+            .execute_batch(GLOBAL_MIGRATION_034_SQL)
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "analytics_resources_global".to_string(),
+                    operation: "migrate_034".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
         // 格式守门（2026-11-01）：DuckDB 能打开 SQLite 格式的同名文件（内置 SQLite 存储后端），
         // 所以必须先断格式，不能只靠 open 成功与否判断。
         shared::duckdb_open::assert_native_format(&duckdb_path).map_err(|e| {
@@ -396,6 +407,10 @@ pub(crate) const GLOBAL_MIGRATION_026_SQL: &str =
     include_str!("../../../store/migrations/global/026_analytics_resource_global.sql");
 pub(crate) const GLOBAL_MIGRATION_033_SQL: &str =
     include_str!("../../../store/migrations/global/033_analytics_resource_dispatch.sql");
+/// 表型本体与出处的三列（034）：同上，独立库自己补齐，否则全局行映射会报
+/// `no such column: analytics_table`。
+pub(crate) const GLOBAL_MIGRATION_034_SQL: &str =
+    include_str!("../../../store/migrations/global/034_analytics_table_payload.sql");
 
 #[cfg(test)]
 mod tests;

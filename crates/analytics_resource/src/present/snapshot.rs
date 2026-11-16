@@ -46,6 +46,7 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
             ArchiveStatus::Normal => match row.kind {
                 ArchiveKind::File => counts.archived += 1,
                 ArchiveKind::Analysis => counts.analysis += 1,
+                ArchiveKind::AnalyticsTable => counts.analytics_table += 1,
                 ArchiveKind::TableRef => counts.table_ref += 1,
             },
         }

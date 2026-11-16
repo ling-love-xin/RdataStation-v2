@@ -121,6 +121,10 @@ mod tests {
             source_table: None,
             definition_sql: None,
             archived_at: Some(Utc::now()),
+            analytics_table: None,
+            origin_kind: None,
+            origin_ref: None,
+            structured: None,
         }
     }
 

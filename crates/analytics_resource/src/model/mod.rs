@@ -23,17 +23,40 @@ mod tests {
         for kind in [
             ArchiveKind::File,
             ArchiveKind::Analysis,
+            ArchiveKind::AnalyticsTable,
             ArchiveKind::TableRef,
         ] {
             assert_eq!(ArchiveKind::from_db_str(kind.as_db_str()), kind);
         }
         assert_eq!(ArchiveKind::default(), ArchiveKind::File);
+        // 表型落库折回 `analysis`（020 的 CHECK 只认三档，见迁移 031 注释）。
+        assert_eq!(ArchiveKind::AnalyticsTable.db_write_str(), "analysis");
+        assert_eq!(ArchiveKind::File.db_write_str(), "file");
+    }
+
+    #[test]
+    fn resolve_follows_analytics_table_column_not_kind_string() {
+        // 表型行在库里 `kind` 仍是 `analysis`——只有 `analytics_table` 列能认出它。
+        assert_eq!(
+            ArchiveKind::resolve("analysis", Some("t_sales")),
+            ArchiveKind::AnalyticsTable
+        );
+        assert_eq!(
+            ArchiveKind::resolve("analysis", None),
+            ArchiveKind::Analysis
+        );
+        assert_eq!(ArchiveKind::resolve("analysis", Some("")), ArchiveKind::Analysis);
+        assert_eq!(ArchiveKind::resolve("file", None), ArchiveKind::File);
+        assert_eq!(
+            ArchiveKind::resolve("table_ref", None),
+            ArchiveKind::TableRef
+        );
     }
 
     #[test]
     fn kind_labels_cover_all_kinds_in_menu_order() {
         let labels: Vec<&str> = ArchiveKind::ALL.iter().map(|kind| kind.label()).collect();
-        assert_eq!(labels, vec!["文件", "分析表", "引用"]);
+        assert_eq!(labels, vec!["文件", "分析表", "分析库表", "引用"]);
     }
 
     #[test]
@@ -50,6 +73,11 @@ mod tests {
         // 本体与 File 同样是受管文件快照，只能兑现「内容冻结」这一档。
         assert_eq!(
             ArchiveKind::Analysis.strength(),
+            ReproductionStrength::Strong
+        );
+        // 表型同样内容冻结在库内（表不会自己消失），与文件档同级。
+        assert_eq!(
+            ArchiveKind::AnalyticsTable.strength(),
             ReproductionStrength::Strong
         );
         assert_eq!(ArchiveKind::TableRef.strength(), ReproductionStrength::Weak);

@@ -18,6 +18,8 @@ const TIMELINE_MIGRATION_SQL: &str = concat!(
     include_str!("../../../store/migrations/project_meta/029_analytics_resource_refs.sql"),
     include_str!("../../../store/migrations/project_meta/030_analytics_resource_checkouts.sql")
 );
+const ANALYTICS_TABLE_MIGRATION_SQL: &str =
+    include_str!("../../../store/migrations/project_meta/031_analytics_table_payload.sql");
 
 /// 建好临时项目 + 三段迁移 + 归档服务；修复器借用服务里的本体层与索引层。
 async fn test_env() -> (ArchiveService, PathBuf) {
@@ -40,6 +42,9 @@ async fn test_env() -> (ArchiveService, PathBuf) {
         inner
             .execute_batch(TIMELINE_MIGRATION_SQL)
             .expect("migration 027");
+        inner
+            .execute_batch(ANALYTICS_TABLE_MIGRATION_SQL)
+            .expect("migration 031");
     }
     let store = AnalyticsResourceStore::new(pool);
     (ArchiveService::new(&dir, store), dir)

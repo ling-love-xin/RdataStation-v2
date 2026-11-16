@@ -415,8 +415,16 @@ fn toggle_kind_normalizes_select_all_to_unlimited() {
     assert_eq!(filter.menu_dims(), 2);
     assert!(!filter.is_empty(), "选了两种就是真筛选");
 
-    // 三个全选 = 不限：不能留下"看起来在筛选"的等价条件。
-    filter.toggle_kind(ArchiveKind::TableRef);
+    // 全选 = 不限：不能留下"看起来在筛选"的等价条件。
+    // 按 `ArchiveKind::ALL` 遍历，新增档位时这条用例自动跟着走（不再写死个数）。
+    let pending: Vec<ArchiveKind> = ArchiveKind::ALL
+        .iter()
+        .copied()
+        .filter(|kind| !filter.has_kind(*kind))
+        .collect();
+    for kind in pending {
+        filter.toggle_kind(kind);
+    }
     assert!(filter.kinds.is_empty());
     assert!(filter.is_empty());
     assert!(!filter.has_kind(ArchiveKind::TableRef));

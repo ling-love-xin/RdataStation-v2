@@ -14,7 +14,8 @@ pub(crate) const RESOURCE_COLUMNS: &str = "\
     created_by, deleted_at, \
     kind, content_hash, file_rel_path, readonly, promoted_from, source_connection_id, \
     source_table, definition_sql, archived_at, \
-    payload_mode, source_path";
+    payload_mode, source_path, \
+    analytics_table, origin_kind, origin_ref, structured";
 
 /// 给固定列名加上表别名前缀（`r.id, r.resource_type, …`）。
 ///
@@ -71,6 +72,10 @@ pub(crate) fn map_resource_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Anal
             .and_then(|s| AnalyticsResourceStore::parse_datetime(s).ok()),
         payload_mode: row.get(26)?,
         source_path: row.get(27)?,
+        analytics_table: row.get(28)?,
+        origin_kind: row.get(29)?,
+        origin_ref: row.get(30)?,
+        structured: row.get(31)?,
     })
 }
 

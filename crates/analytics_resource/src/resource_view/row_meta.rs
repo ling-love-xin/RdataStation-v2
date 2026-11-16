@@ -28,6 +28,7 @@ pub fn strength_badge(kind: ArchiveKind, status: ArchiveStatus) -> &'static str 
         ArchiveStatus::Normal => match kind {
             ArchiveKind::File => "已归档",
             ArchiveKind::Analysis => "分析表",
+            ArchiveKind::AnalyticsTable => "分析库表",
             ArchiveKind::TableRef => "引用",
         },
     }
@@ -49,6 +50,7 @@ pub fn badge_tone(kind: ArchiveKind, status: ArchiveStatus) -> BadgeTone {
         (ArchiveStatus::ContentChanged, _) => BadgeTone::Warning,
         (ArchiveStatus::Normal, ArchiveKind::File) => BadgeTone::Success,
         (ArchiveStatus::Normal, ArchiveKind::Analysis) => BadgeTone::Info,
+        (ArchiveStatus::Normal, ArchiveKind::AnalyticsTable) => BadgeTone::Info,
         (ArchiveStatus::Normal, ArchiveKind::TableRef) => BadgeTone::Warning,
     }
 }
@@ -63,6 +65,8 @@ pub(crate) fn kind_icon(kind: ArchiveKind) -> CatalogIcon {
     match kind {
         ArchiveKind::File => CatalogIcon::FileText,
         ArchiveKind::Analysis => CatalogIcon::Table,
+        // 表型刻意换形：它和「分析表（文件快照）」是两种本体，同形会让人以为一样。
+        ArchiveKind::AnalyticsTable => CatalogIcon::Database,
         ArchiveKind::TableRef => CatalogIcon::ExternalLink,
     }
 }
@@ -158,6 +162,8 @@ pub fn can_view_stats(detail: &ArchiveDetail) -> bool {
             detail.source_connection_id.is_some() && detail.source_table.is_some()
         }
         ArchiveKind::Analysis => false,
+        // 表型：本体就是分析库里的表，只要有登记表名就能直接取样。
+        ArchiveKind::AnalyticsTable => detail.analytics_table.is_some(),
     }
 }
 

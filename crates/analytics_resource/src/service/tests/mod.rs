@@ -24,6 +24,9 @@ pub(super) const TIMELINE_MIGRATION_SQL: &str = concat!(
     include_str!("../../../../store/migrations/project_meta/029_analytics_resource_refs.sql"),
     include_str!("../../../../store/migrations/project_meta/030_analytics_resource_checkouts.sql")
 );
+/// 表型本体列（031）：服务层写行时列已存在，测试库不漏这段就不会报缺列。
+pub(super) const ANALYTICS_TABLE_MIGRATION_SQL: &str =
+    include_str!("../../../../store/migrations/project_meta/031_analytics_table_payload.sql");
 
 /// 测试服务：默认给「保留 n 份」（大多数用例只关心份数）。
 ///
@@ -55,6 +58,9 @@ pub(super) async fn test_service_with(keep_versions: KeepVersions) -> (ArchiveSe
         inner
             .execute_batch(TIMELINE_MIGRATION_SQL)
             .expect("migration 027");
+        inner
+            .execute_batch(ANALYTICS_TABLE_MIGRATION_SQL)
+            .expect("migration 031");
     }
     // 全局标签库注入本测试独立路径（避免共享进程级隔离根 → 跨测试同名标签冲突）。
     let store = AnalyticsResourceStore::new_for_test(pool, dir.join("global.db"));

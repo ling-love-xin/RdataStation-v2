@@ -25,6 +25,7 @@ fn detail(status: ArchiveStatus, kind: ArchiveKind) -> ArchiveDetail {
         source_table: None,
         content_hash: Some("0123456789abcdef0123".to_string()),
         payload_rel_path: Some("dau.sql".to_string()),
+        analytics_table: None,
         history_label: "1 个历史版本".to_string(),
         recent_versions: Vec::new(),
         groups: Vec::new(),

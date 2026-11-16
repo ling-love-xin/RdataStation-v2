@@ -24,6 +24,11 @@ pub(super) const TIMELINE_MIGRATION_SQL: &str = concat!(
     include_str!("../../../store/migrations/project_meta/029_analytics_resource_refs.sql"),
     include_str!("../../../store/migrations/project_meta/030_analytics_resource_checkouts.sql")
 );
+/// 表型本体列（031）：`analytics_table` 非空即表型，`kind` 串仍是 `analysis`。
+/// 测试库不跑这段，行映射就会报 `no such column: analytics_table`。
+pub(super) const ANALYTICS_TABLE_MIGRATION_SQL: &str = include_str!(
+    "../../../store/migrations/project_meta/031_analytics_table_payload.sql"
+);
 
 /// 测试库跑**四段**迁移：007（表结构）+ 020（分析存档新列）+ 023（copy/reference 两档）+
 /// 024（关联表去 tag 外键）。
@@ -102,6 +107,9 @@ pub(super) async fn create_test_store() -> (AnalyticsResourceStore, PathBuf) {
         inner
             .execute_batch(TIMELINE_MIGRATION_SQL)
             .expect("run migration 027");
+        inner
+            .execute_batch(ANALYTICS_TABLE_MIGRATION_SQL)
+            .expect("run migration 031");
     }
     // 全局标签库注入本测试独立路径（避免共享进程级隔离根 → 跨测试同名标签冲突）。
     let store = AnalyticsResourceStore::new_for_test(pool, dir.join("global.db"));
