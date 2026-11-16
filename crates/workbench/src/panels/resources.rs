@@ -58,6 +58,9 @@ impl SidebarPanel {
         }
         // 登记弱句柄：右侧「存档详情」要拿它的选中项（宿主级弱句柄，与 mock / insight 同例）。
         *shared.resources_panel.borrow_mut() = Some(panel.downgrade());
+        // 启动即预载一次：数据对象面板的「资产」段读的是这份快照，
+        // 不预载就得等资产面板被打开过才有内容（用户看到的会是「资产为空」的假象）。
+        shared.refresh_resources(cx);
         panel
     }
 

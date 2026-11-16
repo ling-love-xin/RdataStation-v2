@@ -102,7 +102,7 @@ impl DataObjectsTab {
     }
 
     /// 勾 / 取消一个对象进工作集（存 `key`，不存行号：列表会重排）。
-    fn toggle_picked(&self, key: &str, cx: &mut Context<Self>) {
+    fn toggle_picked(&mut self, key: &str, cx: &mut Context<Self>) {
         let mut picked = self.shared.data_object_picked.borrow_mut();
         if let Some(pos) = picked.iter().position(|k| k == key) {
             picked.remove(pos);
@@ -365,6 +365,19 @@ impl DataObjectsTab {
                         .border_color(colors.border)
                         .text_xs()
                         .text_color(colors.muted_foreground)
+                        .child(note),
+                )
+            })
+            // 工作集软上限：只提示代价，不拦（拦下来等于替用户决定要不要等）
+            .when_some(data_objects::picked_limit_note(picked.len()), |el, note| {
+                el.child(
+                    div()
+                        .px_3()
+                        .py_2()
+                        .border_t_1()
+                        .border_color(colors.border)
+                        .text_xs()
+                        .text_color(colors.warning)
                         .child(note),
                 )
             })

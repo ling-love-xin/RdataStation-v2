@@ -377,6 +377,22 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
     out
 }
 
+/// 工作集软上限（**软**：超过只提示代价，不硬拦）。
+///
+/// 多源洞察一次全取各源样本，源越多首次取样越慢；8 是「一次还说清」的量级。
+/// 用户仍可继续加——拦下来等于替他决定要不要等。
+pub const PICKED_SOFT_LIMIT: usize = 8;
+
+/// 超过软上限时的提示（`None` = 没超，不提示）
+pub fn picked_limit_note(count: usize) -> Option<String> {
+    (count > PICKED_SOFT_LIMIT).then(|| {
+        format!(
+            "工作集已有 {count} 个对象（超过 {PICKED_SOFT_LIMIT} 个后首次取样会明显变慢）；\
+             仍可继续加，觉得慢再收窄"
+        )
+    })
+}
+
 /// 会话行上能做的动作（后端已齐，`engine::duckdb::federation::session`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionAction {
@@ -748,6 +764,16 @@ mod tests {
             None,
         );
         assert_eq!(dup.0.len(), 1, "{:?}", dup.0);
+    }
+
+    /// 软上限：8 个不提示，第 9 个才提示；提示里不出现「不能」。
+    #[test]
+    fn soft_limit_warns_without_refusing() {
+        assert!(super::picked_limit_note(8).is_none(), "8 个还算清");
+        let note = super::picked_limit_note(9).expect("第 9 个要提示");
+        assert!(note.contains('9'), "{note}");
+        assert!(note.contains("8"), "要说清分界在哪：{note}");
+        assert!(note.contains("仍可继续加"), "软上限不是硬拦：{note}");
     }
 
     /// 会话行动作：可用的行给三个，失败的行不给「设为主源」。
